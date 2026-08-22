@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
+import { DashboardActivity } from "@/components/DashboardActivity";
 import { StatCard } from "@/components/StatCard";
 import {
   DEMO_ORG,
@@ -35,6 +36,14 @@ export default function DashboardPage() {
         />
         <StatCard label="トライアル残" value="14日" hint="Stripe 契約前" />
       </div>
+
+      <DashboardActivity
+        employees={employees.map((e) => ({
+          id: e.id,
+          displayName: e.displayName,
+          roleLabel: e.roleLabel,
+        }))}
+      />
 
       {employees.length === 0 ? (
         <section className="surface p-6 mt-6 text-center">
