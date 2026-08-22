@@ -6,6 +6,7 @@ export type EmailTemplate =
   | "trial_ending"
   | "billing_receipt"
   | "approval_requested"
+  | "approval_needed"
   | "approval_resolved";
 
 export interface SendEmailInput {
@@ -63,10 +64,7 @@ export async function sendTransactionalEmail(input: SendEmailInput): Promise<{
   return { ok: true, id: data?.id };
 }
 
-export function renderStubHtml(
-  title: string,
-  body: string
-): string {
+export function renderStubHtml(title: string, body: string): string {
   return `<!DOCTYPE html><html lang="ja"><body style="font-family:sans-serif;color:#111;background:#fafafa;padding:24px">
   <div style="max-width:560px;margin:0 auto;background:#fff;border:1px solid #e5e5e5;border-radius:12px;padding:24px">
     <p style="margin:0 0 8px;font-size:12px;color:#737373">AI社員 for Grok Bot</p>

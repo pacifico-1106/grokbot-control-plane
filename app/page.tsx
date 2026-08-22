@@ -50,8 +50,8 @@ export default function LandingPage() {
             <Link href="/signup" className="btn btn-primary">
               14日間トライアルを始める
             </Link>
-            <Link href="/app/approvals" className="btn btn-ghost">
-              承認キューを見る
+            <Link href="/app/employees/new" className="btn btn-ghost">
+              AI社員を雇う流れを見る
             </Link>
           </div>
           <p className="mt-4 text-xs faint">

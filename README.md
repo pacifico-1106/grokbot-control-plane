@@ -10,27 +10,51 @@
 |----|------|
 | Web | Next.js App Router + TypeScript + Tailwind CSS |
 | Auth / DB | Supabase (Auth + Postgres) — supabase/schema.sql |
-| Billing | Stripe Subscriptions（トライアル、カード + customer_balance） |
-| Email | Resend（welcome / trial / billing / approval） |
+| Billing | Stripe Subscriptions（トライアル、カード + customer_balance 注記） |
+| Email | Resend（welcome / approval_needed / trial_ending ほか） |
 
-## ルート
+## 主要ルート
 
-- `/` LP
-- `/signup` トライアルスタブ
-- `/app` ダッシュボード
-- `/app/approvals` `/app/audit` `/app/settings` `/app/billing`
-- `/api/webhooks/stripe` `/api/email` `/api/trial`
+| Path | 内容 |
+|------|------|
+| `/` | LP |
+| `/signup` | トライアル開始 → `/app` |
+| `/app` | ダッシュボード |
+| `/app/employees` | AI社員一覧 |
+| `/app/employees/new` | 日本語 → Draft → 社員証発行（コア） |
+| `/app/approvals` | 要対応・承認キュー |
+| `/app/audit` | 監査タイムライン |
+| `/app/getting-started` | オンボーディング |
+| `/app/integrations` | Managed/BYO + 連携ステータス |
+| `/app/billing` | Stripe Checkout スタブ |
+| `/app/team` | owner/admin チーム |
+| `/api/employees/interpret` | NL → Draft |
+| `/api/employees/issue` | 社員証発行（デモは一度きり秘密） |
+| `/api/billing/checkout` | Checkout Session |
+| `/api/webhooks/stripe` | Webhook 構造 |
+| `/api/gateway/*` | スリム gateway スタブ |
 
-## セットアップ
+## Production checklist
 
-1. package.json の依存関係をインストール
-2. `.env.example` を `.env.local` にコピーし、Supabase / Stripe / Resend / TRIAL_DAYS を設定
-3. スクリプト `dev` で開発、`build` 後 `start` で本番相当
+1. **Env** — `.env.example` を `.env.local` / Vercel にコピーし、`replace_me_*` を実キーへ
+2. **Supabase** — プロジェクト作成 → `supabase/schema.sql` を SQL editor で適用 → Auth 有効化 → 後で RLS ポリシーを追加
+3. **Stripe** — Product/Price 作成 → `STRIPE_PRICE_ID_*` 設定 → Webhook endpoint `https://<domain>/api/webhooks/stripe`
+4. **Resend** — ドメイン認証 → `EMAIL_FROM` を検証済みアドレスに
+5. **Vercel** — Import（vercel.json: nextjs, hnd1）→ env 注入 → デプロイ
+6. **Grok Bot 連携** — パートナー API が使えるまで `/app/integrations` はデモ状態機械
+
+```bash
+bun install
+bun run build
+bun run dev
+```
 
 ## ドキュメント
 
 - `docs/architecture.md`
+- `docs/selection-from-sealith.md`
+- `docs/agent-credential-guide.md`
+- `docs/stripe-billing-notes.md`
 - `docs/copy.md`
-- `supabase/schema.sql`
 
 ダッシュボード UI は Grok Bot 製品クロム寄りのダーク・ニュートラル。
