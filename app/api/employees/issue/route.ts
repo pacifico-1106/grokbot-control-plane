@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import { NextResponse } from "next/server";
+import { requireCapability } from "@/lib/team/demo-actor";
 import { rotateCredential } from "@/lib/bindings";
 import { addRuntimeEmployee, DEMO_ORG } from "@/lib/demo-data";
 import { normalizeAllowedAccounts } from "@/lib/employees/allowed-accounts";
@@ -20,7 +21,15 @@ function issueDemoSecret(): { raw: string; hash: string; prefix: string } {
  * Production: hash into credentials.secret_hash via Supabase admin client.
  */
 export async function POST(req: Request) {
-  const body = (await req.json().catch(() => ({}))) as {
+  const rawBody = (await req.json().catch(() => ({}))) as Record<string, unknown>;
+  const gate = requireCapability(
+    req,
+    "hire_issue_credentials",
+    typeof rawBody.actorMemberId === "string" ? rawBody.actorMemberId : null
+  );
+  if (!gate.ok) return gate.response;
+  const body = rawBody as {
+    actorMemberId?: string | null;
     displayName?: string;
     roleLabel?: string;
     jobDescription?: string;
@@ -98,5 +107,6 @@ export async function POST(req: Request) {
     generation,
     notice:
       "この秘密値は一度だけ表示されます。Grok Bot 側の連携設定に貼り付け、安全に保管してください。employeeId は生涯不変です。",
+    actorId: gate.actor.id,
   });
 }

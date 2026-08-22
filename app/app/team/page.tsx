@@ -1,76 +1,31 @@
 import { AppShell } from "@/components/AppShell";
-import { DEMO_MEMBERS, DEMO_ORG } from "@/lib/demo-data";
+import { TeamClient } from "@/components/TeamClient";
+import { DEMO_ORG, getRuntimeMembers } from "@/lib/demo-data";
 
-const ROLE_HELP = [
-  {
-    role: "オーナー",
-    body: "請求・メンバー権限・AI社員の発行/失効・連携設定を管理します。",
-  },
-  {
-    role: "管理者",
-    body: "AI社員の雇用・承認・監査を運用します。請求の契約変更はオーナーのみ。",
-  },
-];
+export const dynamic = "force-dynamic";
 
 export default function TeamPage() {
+  const members = getRuntimeMembers();
+
   return (
     <AppShell
       title="チーム"
-      subtitle={`${DEMO_ORG.name} · SME 向けシンプル組織`}
+      subtitle={`${DEMO_ORG.name} · 職務＋権限フラグ（admin一択ではない）`}
     >
-      <div className="grid lg:grid-cols-3 gap-4">
-        <section className="surface p-5 lg:col-span-2">
-          <h2 className="text-sm font-medium">メンバー</h2>
-          <ul className="mt-4 divide-y divide-[var(--border-soft)]">
-            {DEMO_MEMBERS.map((m) => (
-              <li
-                key={m.id}
-                className="py-3 flex flex-wrap items-center justify-between gap-2"
-              >
-                <div>
-                  <div className="text-sm">{m.displayName}</div>
-                  <div className="text-xs muted">{m.email}</div>
-                </div>
-                <span className="chip">{m.role}</span>
-              </li>
-            ))}
-          </ul>
-          <div className="mt-5 rounded-lg border border-dashed border-[var(--border)] p-4">
-            <p className="text-sm muted">招待（スタブ）</p>
-            <div className="mt-3 flex flex-wrap gap-2">
-              <input
-                type="email"
-                placeholder="member@example.com"
-                className="flex-1 min-w-[200px] rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm"
-                disabled
-              />
-              <select
-                className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm"
-                disabled
-                defaultValue="admin"
-              >
-                <option value="admin">admin</option>
-                <option value="member">member</option>
-              </select>
-              <button type="button" className="btn btn-primary text-sm" disabled>
-                招待する
-              </button>
-            </div>
-            <p className="mt-2 text-xs faint">
-              Supabase Auth 接続後に有効化。SME では owner / admin が中心です。
-            </p>
-          </div>
-        </section>
-        <section className="surface p-5 space-y-4">
-          <h2 className="text-sm font-medium">権限の考え方</h2>
-          {ROLE_HELP.map((r) => (
-            <div key={r.role}>
-              <div className="text-sm">{r.role}</div>
-              <p className="mt-1 text-xs muted leading-relaxed">{r.body}</p>
-            </div>
-          ))}
-        </section>
-      </div>
+      <p className="mb-4 text-sm muted leading-relaxed max-w-3xl">
+        人間メンバーは「経営・営業・経理…」の職務と、承認・雇い・請求などの権限フラグで分けます。
+        AI社員の社員証とは別レイヤです。デモでは API に{" "}
+        <code className="text-xs">x-member-id</code> を付けると権限チェックが効きます。
+      </p>
+      <TeamClient initialMembers={members} />
+      <section className="surface p-5 mt-4 space-y-2">
+        <h2 className="text-sm font-medium">権限の考え方（短く）</h2>
+        <ul className="text-xs muted space-y-1 leading-relaxed">
+          <li>· 職務チップでパック適用 → チェックで微調整（閲覧のみショートカットあり）</li>
+          <li>· 承認キューは approve_actions、雇い・発行は hire_issue_credentials</li>
+          <li>· 請求は manage_billing（経営寄り）。粗い owner/admin 席は互換用</li>
+        </ul>
+      </section>
     </AppShell>
   );
 }

@@ -33,6 +33,27 @@ export interface AllowedAccount {
 
 export type OrgMemberRole = "owner" | "admin" | "member";
 
+/** JP SME job role presets for human team members (not AI employees). */
+export type HumanJobRole =
+  | "owner"
+  | "sales"
+  | "accounting"
+  | "admin_affairs"
+  | "legal"
+  | "ops_ai"
+  | "custom";
+
+/** Fine-grained human capabilities (beyond coarse owner/admin). */
+export type HumanCapability =
+  | "view_dashboard"
+  | "view_employees"
+  | "view_audit"
+  | "approve_actions"
+  | "manage_spend_limits"
+  | "hire_issue_credentials"
+  | "manage_team"
+  | "manage_billing";
+
 export type SubscriptionStatus =
   | "trialing"
   | "active"
@@ -83,9 +104,19 @@ export interface OrgMember {
   orgId: string;
   email: string;
   displayName: string;
+  /** Coarse org seat (legacy Stripe/Auth mapping). */
   role: OrgMemberRole;
+  /** SME 職務プリセット（営業・経理など）。 */
+  jobRole?: HumanJobRole;
+  /** jobRole=custom のときの自由ラベル。 */
+  jobLabel?: string | null;
+  /** 権限フラグ（職務パックから編集可）。 */
+  capabilities?: HumanCapability[];
   status: "active" | "invited" | "disabled";
 }
+
+/** Product alias — human team member with job role + capability flags. */
+export type HumanMember = OrgMember;
 
 export interface Employee {
   id: string;

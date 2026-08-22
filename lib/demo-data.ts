@@ -148,14 +148,45 @@ export const DEMO_MEMBERS: OrgMember[] = [
     email: "owner@example.com",
     displayName: "山田 太郎",
     role: "owner",
+    jobRole: "owner",
+    jobLabel: null,
+    capabilities: [
+      "view_dashboard",
+      "view_employees",
+      "view_audit",
+      "approve_actions",
+      "manage_spend_limits",
+      "hire_issue_credentials",
+      "manage_team",
+      "manage_billing",
+    ],
     status: "active",
   },
   {
     id: "mem_2",
     orgId: DEMO_ORG.id,
-    email: "admin@example.com",
+    email: "sales@example.com",
     displayName: "佐藤 花子",
     role: "admin",
+    jobRole: "sales",
+    jobLabel: null,
+    capabilities: ["view_dashboard", "view_employees", "approve_actions"],
+    status: "active",
+  },
+  {
+    id: "mem_3",
+    orgId: DEMO_ORG.id,
+    email: "accounting@example.com",
+    displayName: "鈴木 一郎",
+    role: "member",
+    jobRole: "accounting",
+    jobLabel: null,
+    capabilities: [
+      "view_dashboard",
+      "view_audit",
+      "manage_spend_limits",
+      "approve_actions",
+    ],
     status: "active",
   },
 ];
@@ -174,10 +205,44 @@ export const DEMO_SUBSCRIPTION: Subscription = {
 const runtimeEmployees: Employee[] = [...DEMO_EMPLOYEES];
 const runtimeApprovals: ApprovalRequest[] = [...DEMO_APPROVALS];
 const runtimeAudit: AuditEvent[] = [...DEMO_AUDIT];
+const runtimeMembers: OrgMember[] = DEMO_MEMBERS.map((m) => ({
+  ...m,
+  capabilities: [...(m.capabilities ?? [])],
+}));
 let gatewayStatus: GatewayLinkStatus = DEMO_ORG.gatewayStatus;
 
 export function getRuntimeEmployees() {
   return runtimeEmployees;
+}
+
+export function getRuntimeMembers() {
+  return runtimeMembers;
+}
+
+export function getRuntimeMemberById(id: string) {
+  return runtimeMembers.find((m) => m.id === id) ?? null;
+}
+
+export function upsertRuntimeMember(member: OrgMember) {
+  const idx = runtimeMembers.findIndex((m) => m.id === member.id);
+  if (idx >= 0) runtimeMembers[idx] = member;
+  else runtimeMembers.unshift(member);
+  runtimeAudit.unshift({
+    id: `aud_${Date.now()}`,
+    orgId: DEMO_ORG.id,
+    employeeId: null,
+    credentialId: null,
+    action: "member.invited",
+    purpose: null,
+    summary: `チーム更新: ${member.displayName}（${member.jobRole ?? member.role}）`,
+    metadata: {
+      memberId: member.id,
+      jobRole: member.jobRole,
+      capabilities: member.capabilities ?? [],
+    },
+    createdAt: new Date().toISOString(),
+  });
+  return member;
 }
 
 export function getRuntimeApprovals() {
