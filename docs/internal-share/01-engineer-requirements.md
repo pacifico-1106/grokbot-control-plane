@@ -187,10 +187,15 @@ NEXT_PUBLIC_APP_URL=
 
 ---
 
+## 13.5 バインディング・ライフライン（MUST）
+
+`employeeId` 不変・トークンは初回手渡しのみ・再発行は `credentialGeneration++`・破綻は `needs_reauth`（要再連携）で可視化し黙って消さない・gateway は fail-closed。 詳細: [`../binding-lifeline.md`](../binding-lifeline.md)
+
 ## 14. 関連ドキュメント
 
 - 社内: `02-design-brief.md` / `03-sales-enablement.md`
 - 仕様メモ: `../P0-audit-spec.md`
 - 提案1枚: `../proposal-one-pager.md`
 - デモ脚本: `../demo-script-esim-approval.md`
+- バインディング: `../binding-lifeline.md`
 

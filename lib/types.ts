@@ -154,3 +154,49 @@ export interface EmployeePolicyDraft {
   confidence: number;
   source: "rules";
 }
+
+/** Durable Grok Bot ↔ AI-employee binding status (persisted; not session). */
+export type BindingStatus =
+  | "unlinked"
+  | "linked"
+  | "degraded"
+  | "needs_reauth"
+  | "revoked";
+
+/**
+ * Lifeline binding: employeeId is stable forever.
+ * Token reissue bumps credentialGeneration only — never resets employeeId.
+ */
+export interface EmployeeBinding {
+  employeeId: string;
+  orgId: string;
+  grokBotAgentId: string | null;
+  grokBotWorkspaceId: string | null;
+  credentialGeneration: number;
+  /** sha256 stub fingerprint of current credential material (never raw secret). */
+  credentialFingerprint: string | null;
+  status: BindingStatus;
+  lastSuccessAt: string | null;
+  lastError: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type ExecutableDenyCode =
+  | "unbound"
+  | "revoked"
+  | "needs_reauth"
+  | "degraded"
+  | "health_failed"
+  | "not_found";
+
+export interface ExecutableDeny {
+  ok: false;
+  code: ExecutableDenyCode;
+  message: string;
+}
+
+export interface ExecutableAllow {
+  ok: true;
+  binding: EmployeeBinding;
+}

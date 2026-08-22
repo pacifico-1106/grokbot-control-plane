@@ -1,3 +1,4 @@
+import { ensureBindingRow, seedDemoBindings } from "./bindings";
 import type {
   ApprovalRequest,
   AuditEvent,
@@ -200,6 +201,7 @@ export function setGatewayStatus(status: GatewayLinkStatus) {
 
 export function addRuntimeEmployee(employee: Employee, auditSummary: string) {
   runtimeEmployees.unshift(employee);
+  ensureBindingRow(employee.id, employee.orgId);
   runtimeAudit.unshift({
     id: `aud_${Date.now()}`,
     orgId: DEMO_ORG.id,
@@ -244,3 +246,11 @@ export function resolveRuntimeApproval(
   });
   return next;
 }
+
+// DEMO: seed durable bindings for sample employees (in-memory; labeled DEMO).
+seedDemoBindings(
+  runtimeEmployees.map((e) => ({ id: e.id, orgId: e.orgId })),
+  { linkSales: true }
+);
+
+export { countNeedsReauth, listBindingsForOrg, getBinding } from "./bindings";

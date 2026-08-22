@@ -1,0 +1,44 @@
+# Grok Bot ↔ AI社員バインディング — ライフライン仕様
+
+**対象:** Staffpass / AI社員 制御面 × Grok Bot  
+**原則:** バインディングは永続。セッションや Cookie ではない。
+
+## 4 ルール（MUST）
+
+1. **`employeeId` は生涯不変**  
+   AI社員の識別子は発行後ずっと同じ。削除・再雇い以外で ID を付け替えない。
+
+2. **トークン手渡しは初回デリバリのみ**  
+   秘密値（`gb_emp_…`）は発行／再発行時に一度だけ UI に出す。永続化は fingerprint（ハッシュ）と generation。生秘密は保存しない。
+
+3. **再発行は `credentialGeneration++` のみ**  
+   社員証を再発行しても `employeeId`・agent 紐付けは消えない・リセットしない。generation だけが増える。
+
+4. **破綻は可視化、黙って消さない**  
+   ヘルス失敗 → `status=needs_reauth`（UI: **要再連携**）。agent id や binding 行をサイレント削除しない。Managed では `lastSuccessAt` を監視する。
+
+## Fail-closed
+
+ゲートウェイ / tool invoke（`POST /api/gateway/invoke`）は次で拒否（401/403 + `code`）:
+
+- unbound / not_found
+- revoked
+- needs_reauth
+- degraded
+
+## 主要 API
+
+| Method | Path | 内容 |
+|--------|------|------|
+| GET | `/api/employees/[id]/binding` | バインディング JSON |
+| POST | `/api/employees/[id]/link` | agent / workspace 紐付け |
+| POST | `/api/employees/[id]/rotate` | 秘密再発行・generation++ |
+| POST | `/api/employees/[id]/health?forceFail=1` | ヘルス（デモ破綻可） |
+| POST | `/api/gateway/invoke` | fail-closed 実行スタブ |
+
+## データ
+
+- ランタイム: `lib/bindings.ts`（DEMO インメモリ）
+- 永続スキーマ: `supabase/schema.sql` → `employee_bindings`
+
+更新: 2026-08-23

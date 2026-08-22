@@ -2,6 +2,7 @@ import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
 import { DashboardActivity } from "@/components/DashboardActivity";
 import { StatCard } from "@/components/StatCard";
+import { countNeedsReauth } from "@/lib/bindings";
 import {
   DEMO_ORG,
   getGatewayStatus,
@@ -12,16 +13,39 @@ import {
 export const dynamic = "force-dynamic";
 
 export default function DashboardPage() {
-  const employees = getRuntimeEmployees();
-  const pending = getRuntimeApprovals().filter((a) => a.status === "pending")
-    .length;
+  const employees = getRuntimeEmployees() ?? [];
+  const pending = (getRuntimeApprovals() ?? []).filter(
+    (a) => a.status === "pending"
+  ).length;
   const gateway = getGatewayStatus();
+  const reauthCount = countNeedsReauth(DEMO_ORG.id);
 
   return (
     <AppShell
       title="ダッシュボード"
       subtitle={`${DEMO_ORG.name} · トライアル中`}
     >
+      {reauthCount > 0 ? (
+        <div
+          className="mb-4 rounded-lg border px-4 py-3 text-sm flex flex-wrap items-center justify-between gap-3"
+          style={{
+            borderColor: "color-mix(in oklab, var(--warn) 45%, var(--border))",
+            background: "color-mix(in oklab, var(--warn) 10%, transparent)",
+          }}
+          role="alert"
+        >
+          <div>
+            <strong style={{ color: "var(--warn)" }}>要再連携</strong>
+            <span className="muted ml-2 text-xs">
+              {reauthCount} 件の AI社員バインディングが credentials 破綻を検出しています（黙って消していません）。
+            </span>
+          </div>
+          <Link href="/app/integrations" className="btn btn-ghost text-xs px-3 py-1.5">
+            連携を確認
+          </Link>
+        </div>
+      ) : null}
+
       <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3">
         <StatCard
           label="AI社員"
@@ -30,18 +54,22 @@ export default function DashboardPage() {
         />
         <StatCard label="承認待ち" value={String(pending)} hint="要対応" />
         <StatCard
+          label="要再連携"
+          value={String(reauthCount)}
+          hint="binding needs_reauth"
+        />
+        <StatCard
           label="導入モード"
           value={DEMO_ORG.integrationMode === "managed" ? "Managed" : "BYO"}
           hint={`連携: ${gateway}`}
         />
-        <StatCard label="トライアル残" value="14日" hint="Stripe 契約前" />
       </div>
 
       <DashboardActivity
-        employees={(employees ?? []).map((e) => ({
-          id: e.id,
-          displayName: e.displayName ?? "未設定",
-          roleLabel: e.roleLabel ?? "",
+        employees={employees.map((e) => ({
+          id: e?.id ?? "unknown",
+          displayName: e?.displayName ?? "未設定",
+          roleLabel: e?.roleLabel ?? "",
         }))}
       />
 

@@ -160,3 +160,30 @@ create table if not exists gateway_links (
 -- alter table approval_requests enable row level security;
 -- alter table audit_events enable row level security;
 -- alter table subscriptions enable row level security;
+
+-- ---------------------------------------------------------------------------
+-- Durable Grok Bot ↔ AI-employee bindings (lifeline)
+-- employee_id is stable forever; rotate bumps credential_generation only.
+-- Fail-closed: gateway refuses unbound / revoked / needs_reauth.
+-- ---------------------------------------------------------------------------
+create table if not exists employee_bindings (
+  employee_id uuid primary key references employees(id) on delete cascade,
+  org_id uuid not null references orgs(id) on delete cascade,
+  grok_bot_agent_id text,
+  grok_bot_workspace_id text,
+  credential_generation integer not null default 0,
+  credential_fingerprint text,
+  status text not null default 'unlinked'
+    check (status in ('unlinked', 'linked', 'degraded', 'needs_reauth', 'revoked')),
+  last_success_at timestamptz,
+  last_error text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create index if not exists employee_bindings_org_status_idx
+  on employee_bindings (org_id, status);
+
+create index if not exists employee_bindings_needs_reauth_idx
+  on employee_bindings (org_id)
+  where status = 'needs_reauth';

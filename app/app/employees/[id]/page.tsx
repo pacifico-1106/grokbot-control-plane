@@ -1,8 +1,10 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
+import { BindingPanel } from "@/components/employees/BindingPanel";
 import { HireEmployeeClient } from "@/components/employees/HireEmployeeClient";
-import { getRuntimeEmployees } from "@/lib/demo-data";
+import { ensureBindingRow, getBinding } from "@/lib/bindings";
+import { DEMO_ORG, getRuntimeEmployees } from "@/lib/demo-data";
 import {
   APPROVAL_POLICY_LABELS,
   SCOPE_LABELS,
@@ -28,6 +30,10 @@ export default async function EmployeeDetailPage({
 
   const employee = getRuntimeEmployees().find((e) => e.id === id);
   if (!employee) notFound();
+
+  const binding =
+    getBinding(employee.id) ??
+    ensureBindingRow(employee.id, employee.orgId || DEMO_ORG.id);
 
   return (
     <AppShell
@@ -62,25 +68,31 @@ export default async function EmployeeDetailPage({
                 {employee.credentialId ?? "未発行"}
               </dd>
             </div>
+            <div>
+              <dt className="text-xs muted">employeeId（生涯不変）</dt>
+              <dd className="mt-1 font-mono text-xs">{employee.id}</dd>
+            </div>
           </dl>
         </section>
 
         <section className="surface p-5 space-y-3">
           <h2 className="text-sm font-medium">スコープ / 目的</h2>
           <div className="flex flex-wrap gap-2">
-            {employee.scopes.map((s) => (
+            {(employee.scopes ?? []).map((s) => (
               <span key={s} className="chip chip-ok text-[11px]">
                 {SCOPE_LABELS[s as EmployeeScope] ?? s}
               </span>
             ))}
           </div>
           <ul className="mt-3 space-y-1 text-sm muted">
-            {employee.allowedPurposes.map((p) => (
+            {(employee.allowedPurposes ?? []).map((p) => (
               <li key={p}>· {p}</li>
             ))}
           </ul>
         </section>
       </div>
+
+      <BindingPanel employeeId={employee.id} initial={binding} />
     </AppShell>
   );
 }

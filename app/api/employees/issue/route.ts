@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import { NextResponse } from "next/server";
+import { rotateCredential } from "@/lib/bindings";
 import { addRuntimeEmployee, DEMO_ORG } from "@/lib/demo-data";
 import type { ApprovalPolicy, Employee, EmployeeScope } from "@/lib/types";
 
@@ -58,6 +59,11 @@ export async function POST(req: Request) {
   };
 
   addRuntimeEmployee(employee, `${displayName} の社員証を発行`);
+  const { binding, generation } = rotateCredential(
+    employeeId,
+    DEMO_ORG.id,
+    secret.hash
+  );
 
   return NextResponse.json({
     ok: true,
@@ -75,7 +81,9 @@ export async function POST(req: Request) {
       oneTimeSecret: secret.raw,
       secretHash: secret.hash.slice(0, 12) + "…",
     },
+    binding,
+    generation,
     notice:
-      "この秘密値は一度だけ表示されます。Grok Bot 側の連携設定に貼り付け、安全に保管してください。",
+      "この秘密値は一度だけ表示されます。Grok Bot 側の連携設定に貼り付け、安全に保管してください。employeeId は生涯不変です。",
   });
 }

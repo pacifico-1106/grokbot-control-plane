@@ -32,7 +32,8 @@
 | `/api/employees/issue` | 社員証発行（デモは一度きり秘密） |
 | `/api/billing/checkout` | Checkout Session |
 | `/api/webhooks/stripe` | Webhook 構造 |
-| `/api/gateway/*` | スリム gateway スタブ |
+| `/api/gateway/*` | スリム gateway + fail-closed invoke |
+| `/api/employees/[id]/binding` ほか | 永続バインディング link/rotate/health |
 
 ## Production checklist
 
@@ -42,6 +43,7 @@
 4. **Resend** — ドメイン認証 → `EMAIL_FROM` を検証済みアドレスに
 5. **Vercel** — Import（vercel.json: nextjs, hnd1）→ env 注入 → デプロイ
 6. **Grok Bot 連携** — パートナー API が使えるまで `/app/integrations` はデモ状態機械
+7. **バインディング** — `docs/binding-lifeline.md`（employeeId 不変 / generation 再発行 / 要再連携は消さない / fail-closed）
 
 ```bash
 bun install
@@ -56,5 +58,6 @@ bun run dev
 - `docs/agent-credential-guide.md`
 - `docs/stripe-billing-notes.md`
 - `docs/copy.md`
+- `docs/binding-lifeline.md` — employeeId 不変・再発行は generation のみ・要再連携は黙って消さない
 
 ダッシュボード UI は Grok Bot 製品クロム寄りのダーク・ニュートラル。
