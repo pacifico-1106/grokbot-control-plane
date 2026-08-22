@@ -1,50 +1,82 @@
 import {
+  approvalNeededTemplate,
+  trialEndingTemplate,
+  trialStartedTemplate,
+  welcomeTemplate,
+} from "./email-templates";
+import {
   renderStubHtml,
   sendTransactionalEmail,
   type EmailTemplate,
 } from "./resend";
 
-/** High-level helpers used by API routes / stubs */
-
 export async function sendWelcomeEmail(to: string, orgName: string) {
+  const t = welcomeTemplate(orgName);
   return sendTransactionalEmail({
     to,
     template: "welcome",
-    subject: `ようこそ — ${orgName} の AI社員 制御面`,
-    html: renderStubHtml(
-      "ようこそ",
-      `<p>${orgName} 様の制御面を準備しました。</p><p>社員証・承認・監査から始められます。</p>`
-    ),
+    subject: t.subject,
+    html: t.html,
     tags: [{ name: "template", value: "welcome" }],
   });
 }
 
 export async function sendTrialStartedEmail(to: string, trialDays: number) {
+  const t = trialStartedTemplate(trialDays);
   return sendTransactionalEmail({
     to,
     template: "trial_started",
-    subject: `トライアル開始（${trialDays}日間）`,
-    html: renderStubHtml(
-      "トライアル開始",
-      `<p>${trialDays}日間、Business 相当の機能をお試しいただけます。</p>`
-    ),
+    subject: t.subject,
+    html: t.html,
     tags: [{ name: "template", value: "trial_started" }],
+  });
+}
+
+export async function sendTrialEndingEmail(
+  to: string,
+  orgName: string,
+  daysLeft: number
+) {
+  const t = trialEndingTemplate(orgName, daysLeft);
+  return sendTransactionalEmail({
+    to,
+    template: "trial_ending",
+    subject: t.subject,
+    html: t.html,
+    tags: [{ name: "template", value: "trial_ending" }],
+  });
+}
+
+export async function sendApprovalNeededEmail(
+  to: string,
+  summary: string,
+  risk: string
+) {
+  const t = approvalNeededTemplate(summary, risk);
+  return sendTransactionalEmail({
+    to,
+    template: "approval_needed",
+    subject: t.subject,
+    html: t.html,
+    tags: [{ name: "template", value: "approval_needed" }],
   });
 }
 
 export async function sendApprovalNotification(
   to: string,
-  kind: "approval_requested" | "approval_resolved",
-  summary: string
+  kind: "approval_requested" | "approval_resolved" | "approval_needed",
+  summary: string,
+  risk = "medium"
 ) {
-  const template: EmailTemplate = kind;
-  const title =
-    kind === "approval_requested" ? "承認リクエスト" : "承認が解決されました";
+  if (kind === "approval_needed" || kind === "approval_requested") {
+    return sendApprovalNeededEmail(to, summary, risk);
+  }
+  const template: EmailTemplate = "approval_resolved";
   return sendTransactionalEmail({
     to,
     template,
-    subject: `[AI社員] ${title}`,
-    html: renderStubHtml(title, `<p>${summary}</p>`),
+    subject: "[AI社員] 承認が解決されました",
+    html: renderStubHtml("承認が解決されました", `<p>${summary}</p>`),
     tags: [{ name: "template", value: kind }],
   });
 }

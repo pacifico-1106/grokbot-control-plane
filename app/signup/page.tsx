@@ -9,13 +9,9 @@ export default function SignupPage() {
           AI社員を雇い始める
         </h1>
         <p className="mt-3 text-sm muted leading-relaxed">
-          この画面はスタブです。接続後は Supabase Auth で登録し、Resend でウェルカム / トライアル開始メールを送ります。
+          登録後はダッシュボードへ。Resend でウェルカム / トライアル開始メールを送ります（キー未設定時はスタブ）。
         </p>
-        <form
-          action="/api/trial"
-          method="post"
-          className="mt-6 space-y-4"
-        >
+        <form action="/api/trial" method="post" className="mt-6 space-y-4">
           <label className="block text-sm">
             <span className="muted">会社名</span>
             <input
@@ -47,9 +43,14 @@ export default function SignupPage() {
             </select>
           </label>
           <button type="submit" className="btn btn-primary w-full">
-            トライアルを開始（スタブ）
+            トライアルを開始してダッシュボードへ
           </button>
         </form>
+        <ol className="mt-5 space-y-1 text-xs faint list-decimal list-inside">
+          <li>ダッシュボードを開く</li>
+          <li>はじめに のチェックリスト</li>
+          <li>AI社員を雇う</li>
+        </ol>
         <p className="mt-4 text-xs faint">
           すでに開始済みの方は{" "}
           <Link href="/app" className="underline">

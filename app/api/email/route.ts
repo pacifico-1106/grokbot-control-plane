@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import {
-  sendApprovalNotification,
+  sendApprovalNeededEmail,
   sendBillingEmail,
+  sendTrialEndingEmail,
   sendTrialStartedEmail,
   sendWelcomeEmail,
 } from "@/lib/email";
@@ -20,11 +21,12 @@ export async function POST(req: Request) {
     case "trial":
       result = await sendTrialStartedEmail(to, Number(process.env.TRIAL_DAYS || 14));
       break;
-    case "approval_requested":
-      result = await sendApprovalNotification(to, "approval_requested", "デモ承認リクエスト");
+    case "trial_ending":
+      result = await sendTrialEndingEmail(to, "デモ組織", 3);
       break;
-    case "approval_resolved":
-      result = await sendApprovalNotification(to, "approval_resolved", "デモ承認が完了しました");
+    case "approval_needed":
+    case "approval_requested":
+      result = await sendApprovalNeededEmail(to, "デモ承認リクエスト", "high");
       break;
     case "billing":
       result = await sendBillingEmail(to, "お支払いのご案内", "<p>請求スタブです。</p>");

@@ -1,8 +1,36 @@
-/** Domain types for AI社員 control plane */
+/** Domain types for AI社員 control plane (Grok Bot) */
 
 export type IntegrationMode = "managed" | "byo";
 
+export type GatewayLinkStatus = "linked" | "pending" | "disconnected";
+
 export type ApprovalStatus = "pending" | "approved" | "rejected" | "expired";
+
+export type ApprovalPolicy = "auto" | "always_human" | "risk_based";
+
+export type OrgMemberRole = "owner" | "admin" | "member";
+
+export type SubscriptionStatus =
+  | "trialing"
+  | "active"
+  | "past_due"
+  | "canceled"
+  | "incomplete"
+  | "unpaid";
+
+/** Grok Bot–oriented scopes (not Sealith transfer scopes). */
+export type EmployeeScope =
+  | "tools:read"
+  | "tools:invoke"
+  | "mail:draft"
+  | "mail:send"
+  | "files:read"
+  | "files:write"
+  | "browser:use"
+  | "commerce:quote"
+  | "commerce:order"
+  | "audit:append"
+  | "approvals:request";
 
 export type AuditAction =
   | "credential.issued"
@@ -11,15 +39,29 @@ export type AuditAction =
   | "approval.requested"
   | "approval.resolved"
   | "billing.updated"
-  | "email.sent";
+  | "email.sent"
+  | "gateway.link_changed"
+  | "employee.created"
+  | "employee.updated"
+  | "member.invited";
 
 export interface Org {
   id: string;
   name: string;
   integrationMode: IntegrationMode;
+  gatewayStatus: GatewayLinkStatus;
   trialEndsAt: string | null;
   stripeCustomerId: string | null;
   createdAt: string;
+}
+
+export interface OrgMember {
+  id: string;
+  orgId: string;
+  email: string;
+  displayName: string;
+  role: OrgMemberRole;
+  status: "active" | "invited" | "disabled";
 }
 
 export interface Employee {
@@ -27,18 +69,25 @@ export interface Employee {
   orgId: string;
   displayName: string;
   roleLabel: string;
-  status: "active" | "suspended";
+  jobDescription: string;
+  status: "active" | "suspended" | "draft";
+  scopes: EmployeeScope[];
+  allowedPurposes: string[];
+  approvalPolicy: ApprovalPolicy;
+  credentialId: string | null;
+  createdAt: string;
 }
 
 export interface Credential {
   id: string;
   orgId: string;
   employeeId: string;
-  scopes: string[];
+  scopes: EmployeeScope[];
   allowedPurposes: string[];
-  approvalPolicy: "auto" | "always_human" | "risk_based";
+  approvalPolicy: ApprovalPolicy;
   expiresAt: string | null;
   revokedAt: string | null;
+  createdAt: string;
 }
 
 export interface ApprovalRequest {
@@ -67,10 +116,41 @@ export interface AuditEvent {
   createdAt: string;
 }
 
+export interface Subscription {
+  id: string;
+  orgId: string;
+  planKey: "starter" | "business" | "enterprise";
+  status: SubscriptionStatus;
+  stripeSubscriptionId: string | null;
+  trialEndsAt: string | null;
+  currentPeriodEnd: string | null;
+}
+
 export interface BillingPlan {
   id: "starter" | "business" | "enterprise";
   nameJa: string;
   trialDays: number;
-  /** JP: card + bank transfer (customer_balance) documented */
   paymentMethods: Array<"card" | "customer_balance">;
+}
+
+export interface EmployeePolicyDraft {
+  policy: {
+    displayName: string;
+    roleLabel: string;
+    scopes: EmployeeScope[];
+    allowedPurposes: string[];
+    approvalPolicy: ApprovalPolicy;
+    expiresInDays: number;
+  };
+  assumptions: string[];
+  missingFields: Array<"role" | "purpose" | "risk" | "scope">;
+  warnings: Array<
+    | "broad_purpose_access"
+    | "mail_send_requested"
+    | "commerce_order_requested"
+    | "browser_use_requested"
+    | "always_human_recommended"
+  >;
+  confidence: number;
+  source: "rules";
 }
