@@ -33,6 +33,14 @@ export const DEMO_EMPLOYEES: Employee[] = [
     ],
     allowedPurposes: ["sales.outreach", "commerce.quote"],
     approvalPolicy: "risk_based",
+    allowedAccounts: [
+      {
+        service: "google",
+        accountId: "sales-bot@sample-shoji.example",
+        label: "営業用Google",
+        browserRequired: true,
+      },
+    ],
     credentialId: "cred_sales",
     createdAt: new Date(Date.now() - 86400000 * 3).toISOString(),
   },
@@ -215,6 +223,7 @@ export function addRuntimeEmployee(employee: Employee, auditSummary: string) {
       purposes: employee.allowedPurposes,
       approvalPolicy: employee.approvalPolicy,
       spend: employee.spend ?? null,
+      allowedAccounts: employee.allowedAccounts ?? [],
     },
     createdAt: new Date().toISOString(),
   });

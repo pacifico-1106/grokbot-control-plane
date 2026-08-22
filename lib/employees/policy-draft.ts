@@ -1,4 +1,5 @@
 import type { ApprovalPolicy, EmployeePolicyDraft, EmployeeScope, SpendLimits } from "@/lib/types";
+import { hintAllowedAccountsFromText } from "@/lib/employees/allowed-accounts";
 import { DEFAULT_SPEND_LIMITS } from "@/lib/spend-gate";
 
 const ROLE_PROFILES: Array<{
@@ -122,6 +123,21 @@ export function buildEmployeePolicyDraft(rawInput: string): EmployeePolicyDraft 
     ? "発注権限があるため、最初は「常に人間承認」を推奨します。慣れたらリスクベース＋少額上限（例: 1件3,000円）に切り替えできます。初回発注は人間承認のままが安全です。"
     : null;
 
+  const allowedAccounts = hintAllowedAccountsFromText(input);
+  // If browser is in play and text mentions Gmail/Workspace-ish words, keep Google hint even without explicit match above.
+  if (
+    scopes.includes("browser:use") &&
+    /(?:gmail|workspace|グーグル|google)/i.test(input) &&
+    !allowedAccounts.some((a) => a.service === "google")
+  ) {
+    allowedAccounts.push({
+      service: "google",
+      accountId: "",
+      label: "会社Google（要確認）",
+      browserRequired: true,
+    });
+  }
+
   const purposes =
     profile?.purposes ??
     (input
@@ -141,6 +157,15 @@ export function buildEmployeePolicyDraft(rawInput: string): EmployeePolicyDraft 
   if (scopes.includes("commerce:order")) {
     assumptions.push(
       "発注は予算・承認ステップで上限を設定できます。Draft の「常に人間承認」は初期推奨であり、固定ではありません。"
+    );
+  }
+  if (allowedAccounts.length) {
+    assumptions.push(
+      "外部アカウントの候補を職務文から推測しました。実際に使ってよいIDは「予算・承認」ステップで刻んでください。"
+    );
+  } else if (scopes.includes("browser:use")) {
+    assumptions.push(
+      "ブラウザ利用がある場合は、共有PCで混ざるログインを避けるため、許可する外部アカウントIDの登録を推奨します。"
     );
   }
 
@@ -168,6 +193,7 @@ export function buildEmployeePolicyDraft(rawInput: string): EmployeePolicyDraft 
       expiresInDays: extractExpiryDays(input) ?? 30,
       spend,
       spendRecommendation,
+      allowedAccounts,
     },
     assumptions,
     missingFields,

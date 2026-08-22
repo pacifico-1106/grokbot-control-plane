@@ -137,6 +137,37 @@ export async function POST(req: Request) {
     });
   }
 
+  const employee = getRuntimeEmployees().find((e) => e.id === employeeId);
+  const isBrowserUse =
+    (tool || "").toLowerCase().includes("browser") ||
+    (purpose || "").toLowerCase().includes("browser") ||
+    tool === "browser:use";
+
+  const warnings: string[] = [];
+  if (isBrowserUse) {
+    if (!employee?.scopes.includes("browser:use")) {
+      return NextResponse.json(
+        {
+          ok: false,
+          code: "scope_denied",
+          error: "browser_use_scope_required",
+          message: "browser:use スコープがありません",
+        },
+        { status: 403 }
+      );
+    }
+    const accounts = employee.allowedAccounts ?? [];
+    if (!accounts.length) {
+      warnings.push(
+        "allowed_accounts_missing: 許可外部アカウント未設定。ライブセッション照合は不完全なため、ポリシー・監査・Managed確認を併用してください。"
+      );
+    } else {
+      warnings.push(
+        "browser_identity_check_partial: 実行時のブラウザID照合はスタブ段階です。社員証の許可IDと目視／監査で補完します。"
+      );
+    }
+  }
+
   return NextResponse.json({
     ok: true,
     demo: true,
@@ -146,6 +177,10 @@ export async function POST(req: Request) {
     tool,
     purpose,
     result: { pong: true },
-    message: "invoke allowed (binding linked + healthy)",
+    warnings: warnings.length ? warnings : undefined,
+    allowedAccounts: isBrowserUse ? employee?.allowedAccounts ?? [] : undefined,
+    message: warnings.length
+      ? "invoke allowed with browser policy warnings"
+      : "invoke allowed (binding linked + healthy)",
   });
 }

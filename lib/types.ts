@@ -20,6 +20,17 @@ export interface SpendLimits {
   firstOrderRequiresHuman?: boolean;
 }
 
+/** External account the AI employee may use (browser / SNS / SaaS). Flexible — not Google-only. */
+export interface AllowedAccount {
+  /** Free text OR preset key (google, microsoft365, line, x, instagram, facebook, slack, custom, …). */
+  service: string;
+  /** Email, @handle, page id, etc. */
+  accountId: string;
+  label?: string;
+  /** Hint that browser session must match this identity. */
+  browserRequired?: boolean;
+}
+
 export type OrgMemberRole = "owner" | "admin" | "member";
 
 export type SubscriptionStatus =
@@ -88,6 +99,8 @@ export interface Employee {
   approvalPolicy: ApprovalPolicy;
   /** Purchase budget / risk limits (optional until commerce:order). */
   spend?: SpendLimits | null;
+  /** External accounts engraved on the employee badge (shared-PC safe IDs). */
+  allowedAccounts?: AllowedAccount[];
   credentialId: string | null;
   createdAt: string;
 }
@@ -100,6 +113,7 @@ export interface Credential {
   allowedPurposes: string[];
   approvalPolicy: ApprovalPolicy;
   spend?: SpendLimits | null;
+  allowedAccounts?: AllowedAccount[];
   expiresAt: string | null;
   revokedAt: string | null;
   createdAt: string;
@@ -159,6 +173,8 @@ export interface EmployeePolicyDraft {
     spend?: SpendLimits | null;
     /** Soft recommendation shown in hire step 3 (not forced). */
     spendRecommendation?: string | null;
+    /** Suggested / configured external accounts (Google, SNS, etc.). */
+    allowedAccounts?: AllowedAccount[];
   };
   assumptions: string[];
   missingFields: Array<"role" | "purpose" | "risk" | "scope">;
