@@ -99,9 +99,9 @@ export default function DashboardPage() {
               {employees.slice(0, 4).map((e) => (
                 <li
                   key={e.id}
-                  className="flex items-center justify-between rounded-lg border border-[var(--border-soft)] px-3 py-2.5"
+                  className="flex items-center justify-between rounded-lg border border-[var(--border-soft)] px-3 py-2.5 gap-2"
                 >
-                  <div>
+                  <div className="min-w-0">
                     <Link
                       href={`/app/employees/${e.id}`}
                       className="text-sm hover:underline"
@@ -110,7 +110,15 @@ export default function DashboardPage() {
                     </Link>
                     <div className="text-xs muted">{e.roleLabel}</div>
                   </div>
-                  <span className="chip chip-ok">{e.status}</span>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <Link
+                      href={`/app/employees/${e.id}/actions`}
+                      className="text-[11px] muted underline underline-offset-2"
+                    >
+                      ログ
+                    </Link>
+                    <span className="chip chip-ok">{e.status}</span>
+                  </div>
                 </li>
               ))}
             </ul>

@@ -2,9 +2,11 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
 import { BindingPanel } from "@/components/employees/BindingPanel";
+import { EmployeeActionLog } from "@/components/employees/EmployeeActionLog";
 import { HireEmployeeClient } from "@/components/employees/HireEmployeeClient";
 import { ensureBindingRow, getBinding } from "@/lib/bindings";
 import { DEMO_ORG, getRuntimeEmployees } from "@/lib/demo-data";
+import { getEmployeeActionLog } from "@/lib/employee-actions-demo";
 import {
   APPROVAL_POLICY_LABELS,
   SCOPE_LABELS,
@@ -35,6 +37,8 @@ export default async function EmployeeDetailPage({
     getBinding(employee.id) ??
     ensureBindingRow(employee.id, employee.orgId || DEMO_ORG.id);
 
+  const actionEvents = getEmployeeActionLog(employee, binding);
+
   return (
     <AppShell
       title={employee.displayName}
@@ -46,6 +50,12 @@ export default async function EmployeeDetailPage({
         </Link>
         <Link href="/app/employees/new" className="btn btn-ghost text-xs px-3 py-1.5">
           別のAI社員を雇う
+        </Link>
+        <Link
+          href={`/app/employees/${employee.id}/actions`}
+          className="btn btn-ghost text-xs px-3 py-1.5"
+        >
+          詳細ログ
         </Link>
       </div>
 
@@ -93,6 +103,8 @@ export default async function EmployeeDetailPage({
       </div>
 
       <BindingPanel employeeId={employee.id} initial={binding} />
+
+      <EmployeeActionLog events={actionEvents} compact />
     </AppShell>
   );
 }

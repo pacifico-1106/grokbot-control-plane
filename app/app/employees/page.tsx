@@ -41,6 +41,7 @@ export default function EmployeesPage() {
                 <th className="px-4 py-3 font-medium hidden md:table-cell">職務</th>
                 <th className="px-4 py-3 font-medium">承認</th>
                 <th className="px-4 py-3 font-medium">状態</th>
+                <th className="px-4 py-3 font-medium">ログ</th>
               </tr>
             </thead>
             <tbody>
@@ -71,6 +72,14 @@ export default function EmployeesPage() {
                     >
                       {e.status}
                     </span>
+                  </td>
+                  <td className="px-4 py-3">
+                    <Link
+                      href={`/app/employees/${e.id}/actions`}
+                      className="text-xs muted underline underline-offset-2"
+                    >
+                      アクション
+                    </Link>
                   </td>
                 </tr>
               ))}

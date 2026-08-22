@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import {
   getActivityDemo,
@@ -281,6 +282,12 @@ function EmployeeBars({ rows }: { rows: EmployeeActivitySummary[] }) {
                 <div className="text-[11px] muted">
                   承認率 {formatPct(row.approvalRate)}
                 </div>
+                <Link
+                  href={`/app/employees/${row.employeeId}/actions`}
+                  className="text-[11px] muted underline underline-offset-2 hover:text-[var(--text)]"
+                >
+                  詳細ログ
+                </Link>
               </div>
             </div>
             <div
