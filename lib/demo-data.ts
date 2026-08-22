@@ -214,6 +214,7 @@ export function addRuntimeEmployee(employee: Employee, auditSummary: string) {
       scopes: employee.scopes,
       purposes: employee.allowedPurposes,
       approvalPolicy: employee.approvalPolicy,
+      spend: employee.spend ?? null,
     },
     createdAt: new Date().toISOString(),
   });

@@ -6,10 +6,12 @@ import {
   APPROVAL_POLICY_LABELS,
   SCOPE_LABELS,
 } from "@/lib/employees/policy-draft";
+import { DEFAULT_SPEND_LIMITS } from "@/lib/spend-gate";
 import type {
   ApprovalPolicy,
   EmployeePolicyDraft,
   EmployeeScope,
+  SpendLimits,
 } from "@/lib/types";
 
 const EXAMPLES = [
@@ -19,7 +21,13 @@ const EXAMPLES = [
   "購買で発注まで行うが、毎回人間の承認が必要",
 ];
 
-type Step = "describe" | "draft" | "issued";
+const MERCHANT_CHIPS = ["eSIMのみ", "オフィス消耗品", "クラウドSaaS", "指定なし"];
+
+type Step = "describe" | "draft" | "spend" | "issued";
+
+function emptySpend(): SpendLimits {
+  return { ...DEFAULT_SPEND_LIMITS };
+}
 
 export function HireEmployeeClient() {
   const [step, setStep] = useState<Step>("describe");
@@ -34,6 +42,8 @@ export function HireEmployeeClient() {
   const [approvalPolicy, setApprovalPolicy] =
     useState<ApprovalPolicy>("risk_based");
   const [expiresInDays, setExpiresInDays] = useState(30);
+  const [spend, setSpend] = useState<SpendLimits>(emptySpend);
+  const [futureSpendOpen, setFutureSpendOpen] = useState(false);
   const [oneTimeSecret, setOneTimeSecret] = useState<string | null>(null);
   const [issuedEmployeeId, setIssuedEmployeeId] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
@@ -46,6 +56,8 @@ export function HireEmployeeClient() {
         .filter(Boolean),
     [purposes]
   );
+
+  const hasOrderScope = scopes.includes("commerce:order");
 
   async function createDraft() {
     setLoading(true);
@@ -66,6 +78,8 @@ export function HireEmployeeClient() {
       setPurposes(d.policy.allowedPurposes.join(", "));
       setApprovalPolicy(d.policy.approvalPolicy);
       setExpiresInDays(d.policy.expiresInDays);
+      setSpend(d.policy.spend ? { ...DEFAULT_SPEND_LIMITS, ...d.policy.spend } : emptySpend());
+      setFutureSpendOpen(false);
       setStep("draft");
     } catch (e) {
       setError(e instanceof Error ? e.message : "interpret_failed");
@@ -78,6 +92,15 @@ export function HireEmployeeClient() {
     setScopes((cur) =>
       cur.includes(scope) ? cur.filter((s) => s !== scope) : [...cur, scope]
     );
+  }
+
+  function goToSpendOrIssue() {
+    if (!displayName.trim() || !roleLabel.trim() || !scopes.length) {
+      setError("名前・職務・スコープは必須です");
+      return;
+    }
+    setError("");
+    setStep("spend");
   }
 
   async function issueCredential() {
@@ -99,6 +122,7 @@ export function HireEmployeeClient() {
           allowedPurposes: purposeList,
           approvalPolicy,
           expiresInDays,
+          spend: hasOrderScope || futureSpendOpen ? spend : null,
         }),
       });
       const body = await res.json();
@@ -120,14 +144,21 @@ export function HireEmployeeClient() {
     setTimeout(() => setCopied(false), 2000);
   }
 
+  function patchSpend(partial: Partial<SpendLimits>) {
+    setSpend((s) => ({ ...s, ...partial }));
+  }
+
+  const stepsMeta: Array<{ id: Step; label: string }> = [
+    { id: "describe", label: "1. 職務説明" },
+    { id: "draft", label: "2. Draft確認" },
+    { id: "spend", label: "3. 予算・承認" },
+    { id: "issued", label: "4. 発行" },
+  ];
+
   return (
     <div className="space-y-4">
       <ol className="flex flex-wrap gap-2 text-xs">
-        {[
-          { id: "describe", label: "1. 職務を説明" },
-          { id: "draft", label: "2. Draft を確認" },
-          { id: "issued", label: "3. 社員証発行" },
-        ].map((s) => (
+        {stepsMeta.map((s) => (
           <li
             key={s.id}
             className={`chip ${step === s.id ? "chip-ok" : ""}`}
@@ -149,7 +180,7 @@ export function HireEmployeeClient() {
             <h2 className="text-sm font-medium">このAI社員に何を任せますか？</h2>
             <p className="mt-2 text-sm muted leading-relaxed">
               日本語で職務を書くと、最小権限の Draft（スコープ・目的・承認ポリシー）に変換します。
-              確認して確定するまで社員証は発行されません。
+              発注がある場合は、次のステップで予算上限も決められます。確認するまで社員証は発行されません。
             </p>
           </div>
           <textarea
@@ -272,7 +303,7 @@ export function HireEmployeeClient() {
 
           <div className="grid md:grid-cols-2 gap-4">
             <label className="block text-sm">
-              <span className="muted">承認ポリシー</span>
+              <span className="muted">承認ポリシー（全体）</span>
               <select
                 value={approvalPolicy}
                 onChange={(e) =>
@@ -306,10 +337,86 @@ export function HireEmployeeClient() {
             type="button"
             className="btn btn-primary text-sm"
             disabled={loading}
-            onClick={() => void issueCredential()}
+            onClick={goToSpendOrIssue}
           >
-            {loading ? "発行中…" : "確認して社員証を発行"}
+            次へ：予算・承認の補足
           </button>
+        </section>
+      ) : null}
+
+      {step === "spend" ? (
+        <section className="surface p-5 space-y-5">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h2 className="text-sm font-medium">予算・承認（補足ヒアリング）</h2>
+              <p className="mt-2 text-sm muted leading-relaxed">
+                社長が決める「いくらまで自動でよいか」。迷ったら「常に人間承認」のままで大丈夫です。後から変えられます。
+              </p>
+            </div>
+            <button
+              type="button"
+              className="btn btn-ghost text-xs px-3 py-1.5"
+              onClick={() => setStep("draft")}
+            >
+              Draft に戻る
+            </button>
+          </div>
+
+          {draft?.policy.spendRecommendation ? (
+            <p className="rounded-lg border border-[var(--border-soft)] bg-[var(--bg-soft)] px-3 py-2 text-xs text-[var(--warn)] leading-relaxed">
+              推奨: {draft.policy.spendRecommendation}
+            </p>
+          ) : null}
+
+          <p className="rounded-lg border border-[var(--border)] bg-[var(--bg-soft)] px-3 py-2 text-xs muted leading-relaxed">
+            <span className="font-medium text-[var(--text)]">運用ルール: </span>
+            実際の発注・送信は Gateway 経由のみ。Botに直結ツールを載せない。
+            （Staffpass が拒否すれば手は動きません）
+          </p>
+
+          {hasOrderScope ? (
+            <SpendForm
+              approvalPolicy={approvalPolicy}
+              setApprovalPolicy={setApprovalPolicy}
+              spend={spend}
+              patchSpend={patchSpend}
+            />
+          ) : (
+            <div className="rounded-lg border border-[var(--border-soft)] p-4 space-y-3">
+              <button
+                type="button"
+                className="flex w-full items-center justify-between text-left text-sm"
+                onClick={() => setFutureSpendOpen((v) => !v)}
+              >
+                <span className="font-medium">将来の決済委任（任意・折りたたみ）</span>
+                <span className="chip text-[11px]">
+                  {futureSpendOpen ? "閉じる" : "開く"}
+                </span>
+              </button>
+              <p className="text-xs muted leading-relaxed">
+                いまは発注スコープ（commerce:order）がありません。必要になったときのために、予算の考え方だけ先にメモできます。未設定のまま発注スコープを後から足すと、ゲートは fail-closed で人間承認になります。
+              </p>
+              {futureSpendOpen ? (
+                <SpendForm
+                  approvalPolicy={approvalPolicy}
+                  setApprovalPolicy={setApprovalPolicy}
+                  spend={spend}
+                  patchSpend={patchSpend}
+                />
+              ) : null}
+            </div>
+          )}
+
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              className="btn btn-primary text-sm"
+              disabled={loading}
+              onClick={() => void issueCredential()}
+            >
+              {loading ? "発行中…" : "確認して社員証を発行"}
+            </button>
+          </div>
         </section>
       ) : null}
 
@@ -320,6 +427,13 @@ export function HireEmployeeClient() {
           <p className="text-sm muted">
             {roleLabel} · 承認: {APPROVAL_POLICY_LABELS[approvalPolicy]}
           </p>
+          {hasOrderScope || futureSpendOpen ? (
+            <p className="text-xs muted">
+              予算: 1件あたり最大 ¥{spend.maxPerOrderJpy.toLocaleString("ja-JP")}
+              {spend.firstOrderRequiresHuman !== false ? " · 初回は人間承認" : ""}
+              {spend.merchantAllowTip ? ` · ヒント: ${spend.merchantAllowTip}` : ""}
+            </p>
+          ) : null}
           <div className="rounded-lg border border-[var(--warn)]/40 bg-[var(--bg-soft)] p-4">
             <p className="text-xs text-[var(--warn)] font-medium">
               この秘密値は一度だけ表示されます
@@ -362,6 +476,7 @@ export function HireEmployeeClient() {
                 setStep("describe");
                 setDraft(null);
                 setOneTimeSecret(null);
+                setSpend(emptySpend());
                 setPrompt(EXAMPLES[0]);
               }}
             >
@@ -370,6 +485,151 @@ export function HireEmployeeClient() {
           </div>
         </section>
       ) : null}
+    </div>
+  );
+}
+
+function SpendForm({
+  approvalPolicy,
+  setApprovalPolicy,
+  spend,
+  patchSpend,
+}: {
+  approvalPolicy: ApprovalPolicy;
+  setApprovalPolicy: (p: ApprovalPolicy) => void;
+  spend: SpendLimits;
+  patchSpend: (p: Partial<SpendLimits>) => void;
+}) {
+  return (
+    <div className="space-y-4">
+      <fieldset className="space-y-2">
+        <legend className="text-sm muted">購入の承認モード</legend>
+        <label className="flex items-start gap-2 text-sm cursor-pointer">
+          <input
+            type="radio"
+            name="purchaseApproval"
+            className="mt-1"
+            checked={approvalPolicy === "always_human"}
+            onChange={() => setApprovalPolicy("always_human")}
+          />
+          <span>
+            <span className="font-medium">常に人間が承認</span>
+            <span className="block text-xs muted mt-0.5">
+              安心優先。少額でも毎回社長（または管理者）が OK します。
+            </span>
+          </span>
+        </label>
+        <label className="flex items-start gap-2 text-sm cursor-pointer">
+          <input
+            type="radio"
+            name="purchaseApproval"
+            className="mt-1"
+            checked={approvalPolicy === "risk_based"}
+            onChange={() => setApprovalPolicy("risk_based")}
+          />
+          <span>
+            <span className="font-medium">少額は自動（リスクベース）</span>
+            <span className="block text-xs muted mt-0.5">
+              下の上限以内だけ自動。超えたら承認待ち。上限未設定は自動しません。
+            </span>
+          </span>
+        </label>
+      </fieldset>
+
+      <div className="grid md:grid-cols-3 gap-4">
+        <label className="block text-sm">
+          <span className="muted">1件あたり上限（円）</span>
+          <input
+            type="number"
+            min={0}
+            value={spend.maxPerOrderJpy}
+            onChange={(e) =>
+              patchSpend({ maxPerOrderJpy: Number(e.target.value) || 0 })
+            }
+            className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm"
+          />
+          <span className="mt-1 block text-[11px] faint">
+            目安 3,000。0 = 発注禁止（自動不可）
+          </span>
+        </label>
+        <label className="block text-sm">
+          <span className="muted">1日あたり上限（任意）</span>
+          <input
+            type="number"
+            min={0}
+            placeholder="未設定"
+            value={spend.maxPerDayJpy ?? ""}
+            onChange={(e) =>
+              patchSpend({
+                maxPerDayJpy:
+                  e.target.value === "" ? null : Number(e.target.value) || 0,
+              })
+            }
+            className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm"
+          />
+        </label>
+        <label className="block text-sm">
+          <span className="muted">月あたり上限（任意）</span>
+          <input
+            type="number"
+            min={0}
+            placeholder="未設定"
+            value={spend.maxPerMonthJpy ?? ""}
+            onChange={(e) =>
+              patchSpend({
+                maxPerMonthJpy:
+                  e.target.value === "" ? null : Number(e.target.value) || 0,
+              })
+            }
+            className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm"
+          />
+        </label>
+      </div>
+
+      <div>
+        <div className="text-sm muted mb-2">買ってよいもののヒント（任意）</div>
+        <div className="flex flex-wrap gap-2 mb-2">
+          {MERCHANT_CHIPS.map((chip) => (
+            <button
+              key={chip}
+              type="button"
+              className={`chip ${spend.merchantAllowTip === chip ? "chip-ok" : ""}`}
+              onClick={() =>
+                patchSpend({
+                  merchantAllowTip: chip === "指定なし" ? null : chip,
+                })
+              }
+            >
+              {chip}
+            </button>
+          ))}
+        </div>
+        <input
+          value={spend.merchantAllowTip ?? ""}
+          onChange={(e) =>
+            patchSpend({ merchantAllowTip: e.target.value || null })
+          }
+          placeholder="例: 海外渡航用 eSIM のみ"
+          className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm"
+        />
+      </div>
+
+      <label className="flex items-start gap-2 text-sm cursor-pointer">
+        <input
+          type="checkbox"
+          className="mt-1"
+          checked={spend.firstOrderRequiresHuman !== false}
+          onChange={(e) =>
+            patchSpend({ firstOrderRequiresHuman: e.target.checked })
+          }
+        />
+        <span>
+          <span className="font-medium">初回発注は必ず人間承認</span>
+          <span className="block text-xs muted mt-0.5">
+            おすすめ ON。初めての買い物は社長が一度目を通します。
+          </span>
+        </span>
+      </label>
     </div>
   );
 }

@@ -16,7 +16,7 @@ const STEPS = [
   },
   {
     title: "最初の AI社員を雇う",
-    body: "職務を日本語で説明 → Draft 確認 → 社員証を発行。秘密値は一度だけ表示されます。",
+    body: "職務を日本語で説明 → Draft 確認 → 予算・承認の補足 → 社員証発行。秘密値は一度だけ表示されます。実際の発注・送信は Gateway 経由のみ（Botに直結ツールを載せない）。",
     href: "/app/employees/new",
     label: "雇う",
   },
@@ -59,6 +59,26 @@ export default function GettingStartedPage() {
             </Link>
           </section>
         ))}
+
+        <section className="surface p-5 space-y-2">
+          <h2 className="text-sm font-medium">権限を守らせる（自動 / 手動）</h2>
+          <p className="text-sm muted leading-relaxed">
+            実際の発注・送信は Gateway 経由のみ。Botに直結ツールを載せない。
+            社員証・予算・承認は Gateway が fail-closed で強制します。Managed ではツール面の削ぎ落としも当社側の運用です。
+          </p>
+          <p className="text-xs faint">
+            実装・運用の詳細:{" "}
+            <code className="font-mono">docs/enforcement-auto-vs-manual.md</code>
+            {" · "}
+            <code className="font-mono">docs/spend-delegation.md</code>
+          </p>
+          <Link
+            href="/app/integrations"
+            className="btn btn-ghost mt-2 text-xs px-3 py-1.5 inline-flex"
+          >
+            連携・Gateway を確認
+          </Link>
+        </section>
       </div>
     </AppShell>
   );

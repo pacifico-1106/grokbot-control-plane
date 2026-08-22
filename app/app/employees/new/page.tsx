@@ -5,7 +5,7 @@ export default function NewEmployeePage() {
   return (
     <AppShell
       title="AI社員を雇う"
-      subtitle="職務を日本語で説明 → 権限 Draft → 社員証発行"
+      subtitle="職務説明 → Draft確認 → 予算・承認 → 社員証発行"
     >
       <HireEmployeeClient />
     </AppShell>

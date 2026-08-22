@@ -8,6 +8,18 @@ export type ApprovalStatus = "pending" | "approved" | "rejected" | "expired";
 
 export type ApprovalPolicy = "auto" | "always_human" | "risk_based";
 
+/** Per-employee purchase limits (JPY). Fail-closed when order scope present but limits missing. */
+export interface SpendLimits {
+  /** 0 = 発注禁止（自動不可）。未設定扱いは evaluateSpend 側で needs_approval。 */
+  maxPerOrderJpy: number;
+  maxPerDayJpy?: number | null;
+  maxPerMonthJpy?: number | null;
+  /** Free-text tip e.g. "eSIMのみ" / merchant allow hint */
+  merchantAllowTip?: string | null;
+  /** 初回発注は必ず人間承認（default true） */
+  firstOrderRequiresHuman?: boolean;
+}
+
 export type OrgMemberRole = "owner" | "admin" | "member";
 
 export type SubscriptionStatus =
@@ -74,6 +86,8 @@ export interface Employee {
   scopes: EmployeeScope[];
   allowedPurposes: string[];
   approvalPolicy: ApprovalPolicy;
+  /** Purchase budget / risk limits (optional until commerce:order). */
+  spend?: SpendLimits | null;
   credentialId: string | null;
   createdAt: string;
 }
@@ -85,6 +99,7 @@ export interface Credential {
   scopes: EmployeeScope[];
   allowedPurposes: string[];
   approvalPolicy: ApprovalPolicy;
+  spend?: SpendLimits | null;
   expiresAt: string | null;
   revokedAt: string | null;
   createdAt: string;
@@ -141,6 +156,9 @@ export interface EmployeePolicyDraft {
     allowedPurposes: string[];
     approvalPolicy: ApprovalPolicy;
     expiresInDays: number;
+    spend?: SpendLimits | null;
+    /** Soft recommendation shown in hire step 3 (not forced). */
+    spendRecommendation?: string | null;
   };
   assumptions: string[];
   missingFields: Array<"role" | "purpose" | "risk" | "scope">;

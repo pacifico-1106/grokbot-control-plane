@@ -1,4 +1,5 @@
-import type { ApprovalPolicy, EmployeePolicyDraft, EmployeeScope } from "@/lib/types";
+import type { ApprovalPolicy, EmployeePolicyDraft, EmployeeScope, SpendLimits } from "@/lib/types";
+import { DEFAULT_SPEND_LIMITS } from "@/lib/spend-gate";
 
 const ROLE_PROFILES: Array<{
   match: RegExp;
@@ -94,9 +95,10 @@ export function buildEmployeePolicyDraft(rawInput: string): EmployeePolicyDraft 
   const wantsOrder = /(?:発注|注文|購入|決済|order|purchase|buy)/i.test(input);
   const wantsBrowser = /(?:ブラウザ|ウェブ|検索|調べ|browse|research)/i.test(input);
   const wantsWrite = /(?:書込|編集|作成|ファイルを作|write|edit)/i.test(input);
-  const alwaysHuman =
-    /(?:必ず承認|毎回承認|人間が許可|always.?human|要承認のみ)/i.test(input) ||
-    wantsOrder;
+  const explicitAlwaysHuman =
+    /(?:必ず承認|毎回承認|人間が許可|always.?human|要承認のみ)/i.test(input);
+  // Order detected → *suggest* always_human initially (UI may switch to risk_based + limits).
+  const suggestAlwaysHumanForOrder = wantsOrder && !/(?:少額は自動|リスクベース|risk.?based)/i.test(input);
 
   const scopes = unique<EmployeeScope>([
     ...(profile?.scopes ?? DEFAULT_SCOPES),
@@ -108,9 +110,17 @@ export function buildEmployeePolicyDraft(rawInput: string): EmployeePolicyDraft 
     "audit:append",
   ]);
 
-  const approvalPolicy: ApprovalPolicy = alwaysHuman
+  const approvalPolicy: ApprovalPolicy = explicitAlwaysHuman || suggestAlwaysHumanForOrder
     ? "always_human"
     : profile?.approvalPolicy ?? "risk_based";
+
+  const spend: SpendLimits | null = scopes.includes("commerce:order")
+    ? { ...DEFAULT_SPEND_LIMITS }
+    : null;
+
+  const spendRecommendation = scopes.includes("commerce:order")
+    ? "発注権限があるため、最初は「常に人間承認」を推奨します。慣れたらリスクベース＋少額上限（例: 1件3,000円）に切り替えできます。初回発注は人間承認のままが安全です。"
+    : null;
 
   const purposes =
     profile?.purposes ??
@@ -128,6 +138,11 @@ export function buildEmployeePolicyDraft(rawInput: string): EmployeePolicyDraft 
   if (wantsSend) {
     assumptions.push("外部送信は承認ポリシーに従ってゲートします。");
   }
+  if (scopes.includes("commerce:order")) {
+    assumptions.push(
+      "発注は予算・承認ステップで上限を設定できます。Draft の「常に人間承認」は初期推奨であり、固定ではありません。"
+    );
+  }
 
   const warnings: EmployeePolicyDraft["warnings"] = [];
   if (!purposes.length || purposes[0]?.startsWith(input.slice(0, 8))) {
@@ -141,7 +156,7 @@ export function buildEmployeePolicyDraft(rawInput: string): EmployeePolicyDraft 
   const missingFields: EmployeePolicyDraft["missingFields"] = [];
   if (!profile) missingFields.push("role");
   if (!profile) missingFields.push("purpose");
-  if (wantsOrder && approvalPolicy !== "always_human") missingFields.push("risk");
+  // Order + risk_based is OK once spend limits are set in hire step 3 (not a missing field).
 
   return {
     policy: {
@@ -151,6 +166,8 @@ export function buildEmployeePolicyDraft(rawInput: string): EmployeePolicyDraft 
       allowedPurposes: purposes,
       approvalPolicy,
       expiresInDays: extractExpiryDays(input) ?? 30,
+      spend,
+      spendRecommendation,
     },
     assumptions,
     missingFields,

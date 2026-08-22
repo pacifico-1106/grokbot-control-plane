@@ -41,4 +41,11 @@
 - ランタイム: `lib/bindings.ts`（DEMO インメモリ）
 - 永続スキーマ: `supabase/schema.sql` → `employee_bindings`
 
+## 決済委任との関係
+
+発注（`commerce:order`）はバインディングが executable でも、続けて **予算ゲート**（`lib/spend-gate.ts`）を通る。  
+limits 未設定は fail-closed で `needs_approval`。詳細は `docs/spend-delegation.md` と `docs/enforcement-auto-vs-manual.md`。
+
+**実際の発注・送信は Gateway 経由のみ。Botに直結ツールを載せない。**
+
 更新: 2026-08-23

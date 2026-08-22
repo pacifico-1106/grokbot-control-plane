@@ -2,7 +2,8 @@ import { createHash, randomBytes } from "node:crypto";
 import { NextResponse } from "next/server";
 import { rotateCredential } from "@/lib/bindings";
 import { addRuntimeEmployee, DEMO_ORG } from "@/lib/demo-data";
-import type { ApprovalPolicy, Employee, EmployeeScope } from "@/lib/types";
+import { normalizeSpendLimits } from "@/lib/spend-gate";
+import type { ApprovalPolicy, Employee, EmployeeScope, SpendLimits } from "@/lib/types";
 
 export const runtime = "nodejs";
 
@@ -26,6 +27,7 @@ export async function POST(req: Request) {
     allowedPurposes?: string[];
     approvalPolicy?: ApprovalPolicy;
     expiresInDays?: number;
+    spend?: Partial<SpendLimits> | null;
   };
 
   const displayName = (body.displayName || "").trim();
@@ -38,6 +40,10 @@ export async function POST(req: Request) {
   if (!scopes.length) {
     return NextResponse.json({ error: "scopes_required" }, { status: 400 });
   }
+
+  const hasOrder = scopes.includes("commerce:order");
+  // Fail-closed: order scope without usable spend → still persist null so gate needs_approval.
+  const spend = hasOrder ? normalizeSpendLimits(body.spend ?? {}) : null;
 
   const secret = issueDemoSecret();
   const employeeId = `emp_${randomBytes(4).toString("hex")}`;
@@ -54,6 +60,7 @@ export async function POST(req: Request) {
     scopes,
     allowedPurposes: body.allowedPurposes || [],
     approvalPolicy: body.approvalPolicy || "risk_based",
+    spend,
     credentialId,
     createdAt: new Date().toISOString(),
   };
@@ -75,6 +82,7 @@ export async function POST(req: Request) {
       scopes,
       allowedPurposes: body.allowedPurposes || [],
       approvalPolicy: body.approvalPolicy || "risk_based",
+      spend,
       expiresAt: new Date(Date.now() + expiresInDays * 86400000).toISOString(),
       secretHashAlgo: "sha256",
       // Raw secret shown ONCE — never stored plaintext.

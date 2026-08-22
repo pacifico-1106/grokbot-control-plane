@@ -102,6 +102,62 @@ export default async function EmployeeDetailPage({
         </section>
       </div>
 
+      <section className="surface p-5 space-y-3 mt-4">
+        <h2 className="text-sm font-medium">予算・承認（決済委任）</h2>
+        {employee.spend ? (
+          <dl className="grid sm:grid-cols-2 gap-3 text-sm">
+            <div>
+              <dt className="text-xs muted">承認ポリシー</dt>
+              <dd className="mt-1">{APPROVAL_POLICY_LABELS[employee.approvalPolicy]}</dd>
+            </div>
+            <div>
+              <dt className="text-xs muted">1件あたり上限</dt>
+              <dd className="mt-1">
+                ¥{employee.spend.maxPerOrderJpy.toLocaleString("ja-JP")}
+                {employee.spend.maxPerOrderJpy === 0 ? "（発注禁止）" : ""}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-xs muted">日次 / 月次上限</dt>
+              <dd className="mt-1">
+                {employee.spend.maxPerDayJpy != null
+                  ? `¥${employee.spend.maxPerDayJpy.toLocaleString("ja-JP")}`
+                  : "未設定"}
+                {" / "}
+                {employee.spend.maxPerMonthJpy != null
+                  ? `¥${employee.spend.maxPerMonthJpy.toLocaleString("ja-JP")}`
+                  : "未設定"}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-xs muted">初回発注</dt>
+              <dd className="mt-1">
+                {employee.spend.firstOrderRequiresHuman !== false
+                  ? "必ず人間承認"
+                  : "上限内なら自動可"}
+              </dd>
+            </div>
+            {employee.spend.merchantAllowTip ? (
+              <div className="sm:col-span-2">
+                <dt className="text-xs muted">買ってよいもののヒント</dt>
+                <dd className="mt-1">{employee.spend.merchantAllowTip}</dd>
+              </div>
+            ) : null}
+          </dl>
+        ) : employee.scopes.includes("commerce:order") ? (
+          <p className="text-sm text-[var(--warn)]">
+            発注スコープあり・予算未設定 → Gateway は fail-closed で人間承認になります。
+          </p>
+        ) : (
+          <p className="text-sm muted">
+            発注スコープなし。将来の決済委任は雇い直し／権限更新時に設定できます。
+          </p>
+        )}
+        <p className="text-xs faint leading-relaxed">
+          実際の発注・送信は Gateway 経由のみ。Botに直結ツールを載せない。
+        </p>
+      </section>
+
       <BindingPanel employeeId={employee.id} initial={binding} />
 
       <EmployeeActionLog events={actionEvents} compact />
