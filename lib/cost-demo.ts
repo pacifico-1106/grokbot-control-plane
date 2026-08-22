@@ -131,11 +131,8 @@ function rangeBuckets(range: ActivityRange): {
   return {
     buckets: 30,
     baseUnits: 95,
-    labelFor: (i, buckets) => {
-      const d = new Date();
-      d.setUTCDate(d.getUTCDate() - (buckets - 1 - i));
-      return `${d.getUTCMonth() + 1}/${d.getUTCDate()}`;
-    },
+    // Deterministic labels (no wall-clock Date) to avoid SSR/client hydration drift.
+    labelFor: (i) => `${i + 1}日`,
   };
 }
 
@@ -232,8 +229,9 @@ export function getCostDemo(
   if (employeesRows.length > 0) {
     const unitsSum = employeesRows.reduce((s, r) => s + r.units, 0);
     const yenSum = employeesRows.reduce((s, r) => s + r.yen, 0);
-    employeesRows[employeesRows.length - 1].units += usedUnits - unitsSum;
-    employeesRows[employeesRows.length - 1].yen += estimatedOverageYen - yenSum;
+    const last = employeesRows[employeesRows.length - 1];
+    last.units = Math.max(0, last.units + (usedUnits - unitsSum));
+    last.yen = Math.max(0, last.yen + (estimatedOverageYen - yenSum));
   }
 
   return {
@@ -251,5 +249,6 @@ export function getCostDemo(
 }
 
 export function formatYen(n: number): string {
-  return `¥${n.toLocaleString("ja-JP")}`;
+  const v = Number.isFinite(n) ? Math.round(n) : 0;
+  return `¥${v.toLocaleString("ja-JP")}`;
 }

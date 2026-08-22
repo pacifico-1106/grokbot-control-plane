@@ -99,11 +99,8 @@ function rangeConfig(range: ActivityRange): {
   return {
     buckets: 30,
     baseActions: 28,
-    labelFor: (i, buckets) => {
-      const d = new Date();
-      d.setUTCDate(d.getUTCDate() - (buckets - 1 - i));
-      return `${d.getUTCMonth() + 1}/${d.getUTCDate()}`;
-    },
+    // Deterministic labels (no wall-clock Date) to avoid SSR/client hydration drift.
+    labelFor: (i) => `${i + 1}日`,
   };
 }
 

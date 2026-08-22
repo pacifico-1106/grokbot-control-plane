@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   getActivityDemo,
   type ActivityPoint,
@@ -29,7 +29,21 @@ type EmployeeInput = {
 };
 
 function formatPct(rate: number): string {
+  if (!Number.isFinite(rate)) return "—";
   return `${Math.round(rate * 100)}%`;
+}
+
+/** Max that never returns -Infinity / NaN (empty spread / bad values). */
+function safeMax(floor: number, values: number[]): number {
+  let m = floor;
+  for (const v of values) {
+    if (Number.isFinite(v) && v > m) m = v;
+  }
+  return m;
+}
+
+function finiteOr(n: number, fallback = 0): number {
+  return Number.isFinite(n) ? n : fallback;
 }
 
 function AreaLineChart({ series }: { series: ActivityPoint[] }) {
@@ -40,14 +54,14 @@ function AreaLineChart({ series }: { series: ActivityPoint[] }) {
   const innerW = width - padX * 2;
   const innerH = height - padY * 2;
 
-  const maxY = Math.max(
+  const maxY = safeMax(
     1,
-    ...series.map((p) => Math.max(p.actions, p.approvals + p.denies))
+    series.map((p) => Math.max(finiteOr(p.actions), finiteOr(p.approvals) + finiteOr(p.denies)))
   );
 
   const xAt = (i: number) =>
-    padX + (series.length <= 1 ? innerW / 2 : (i / (series.length - 1)) * innerW);
-  const yAt = (v: number) => padY + innerH - (v / maxY) * innerH;
+    padX + (series.length <= 1 ? innerW / 2 : (i / Math.max(1, series.length - 1)) * innerW);
+  const yAt = (v: number) => padY + innerH - (finiteOr(v) / maxY) * innerH;
 
   const actionsPath = series
     .map((p, i) => `${i === 0 ? "M" : "L"} ${xAt(i).toFixed(1)} ${yAt(p.actions).toFixed(1)}`)
@@ -129,7 +143,7 @@ function AreaLineChart({ series }: { series: ActivityPoint[] }) {
         {tickLabels.map(({ p, i }) => (
           <text
             key={`${p.label}-${i}`}
-            x={xAt(i)}
+            x={Number(xAt(i).toFixed(1))}
             y={height - 2}
             textAnchor="middle"
             fill="var(--text-faint)"
@@ -166,11 +180,11 @@ function CostTrendChart({ series }: { series: CostPoint[] }) {
   const padY = 16;
   const innerW = width - padX * 2;
   const innerH = height - padY * 2;
-  const maxY = Math.max(1, ...series.map((p) => p.units));
+  const maxY = safeMax(1, series.map((p) => finiteOr(p.units)));
 
   const xAt = (i: number) =>
-    padX + (series.length <= 1 ? innerW / 2 : (i / (series.length - 1)) * innerW);
-  const yAt = (v: number) => padY + innerH - (v / maxY) * innerH;
+    padX + (series.length <= 1 ? innerW / 2 : (i / Math.max(1, series.length - 1)) * innerW);
+  const yAt = (v: number) => padY + innerH - (finiteOr(v) / maxY) * innerH;
 
   const path = series
     .map((p, i) => `${i === 0 ? "M" : "L"} ${xAt(i).toFixed(1)} ${yAt(p.units).toFixed(1)}`)
@@ -227,7 +241,7 @@ function CostTrendChart({ series }: { series: CostPoint[] }) {
         {tickLabels.map(({ p, i }) => (
           <text
             key={`${p.label}-${i}`}
-            x={xAt(i)}
+            x={Number(xAt(i).toFixed(1))}
             y={height - 2}
             textAnchor="middle"
             fill="var(--text-faint)"
@@ -243,12 +257,18 @@ function CostTrendChart({ series }: { series: CostPoint[] }) {
 }
 
 function EmployeeBars({ rows }: { rows: EmployeeActivitySummary[] }) {
-  const maxActions = Math.max(1, ...rows.map((r) => r.actions));
+  const maxActions = safeMax(1, rows.map((r) => finiteOr(r.actions)));
 
   return (
     <ul className="space-y-3">
+      {rows.length === 0 ? (
+        <li className="text-xs faint">表示できる活動がありません</li>
+      ) : null}
       {rows.map((row) => {
-        const widthPct = Math.round((row.actions / maxActions) * 100);
+        const widthPct = Math.min(
+          100,
+          Math.max(0, Math.round((finiteOr(row.actions) / maxActions) * 100))
+        );
         return (
           <li key={row.employeeId}>
             <div className="flex items-center justify-between gap-3">
@@ -284,7 +304,7 @@ function EmployeeBars({ rows }: { rows: EmployeeActivitySummary[] }) {
 }
 
 function EmployeeCostTable({ rows }: { rows: EmployeeCostRow[] }) {
-  const maxUnits = Math.max(1, ...rows.map((r) => r.units));
+  const maxUnits = safeMax(1, rows.map((r) => finiteOr(r.units)));
 
   return (
     <div className="overflow-x-auto">
@@ -297,8 +317,18 @@ function EmployeeCostTable({ rows }: { rows: EmployeeCostRow[] }) {
           </tr>
         </thead>
         <tbody>
+          {rows.length === 0 ? (
+            <tr>
+              <td colSpan={3} className="py-3 text-xs faint">
+                表示できるコスト内訳がありません
+              </td>
+            </tr>
+          ) : null}
           {rows.map((row) => {
-            const widthPct = Math.round((row.units / maxUnits) * 100);
+            const widthPct = Math.min(
+              100,
+              Math.max(0, Math.round((finiteOr(row.units) / maxUnits) * 100))
+            );
             return (
               <tr
                 key={row.employeeId}
@@ -324,7 +354,7 @@ function EmployeeCostTable({ rows }: { rows: EmployeeCostRow[] }) {
                 <td className="py-2.5 text-right tabular-nums align-top">
                   {row.units.toLocaleString("ja-JP")}
                   <div className="text-[11px] faint">
-                    {Math.round(row.share * 100)}%
+                    {Math.round(finiteOr(row.share) * 100)}%
                   </div>
                 </td>
                 <td className="py-2.5 text-right tabular-nums align-top">
@@ -382,28 +412,43 @@ function Segmented<T extends string>({
   );
 }
 
+const EMPTY_EMPLOYEES: EmployeeInput[] = [];
+
 export function DashboardActivity({
-  employees,
+  employees = EMPTY_EMPLOYEES,
 }: {
-  employees: EmployeeInput[];
+  employees?: EmployeeInput[];
 }) {
   const [range, setRange] = useState<ActivityRange>("week");
   const [tab, setTab] = useState<BoardTab>("activity");
-  const usingSample = employees.length === 0;
+  // Avoid SSR/client chart attribute drift (floats / locale); paint charts after mount.
+  const [chartsReady, setChartsReady] = useState(false);
+  useEffect(() => {
+    setChartsReady(true);
+  }, []);
+
+  const list = Array.isArray(employees) ? employees : EMPTY_EMPLOYEES;
+  const usingSample = list.length === 0;
 
   const activity = useMemo(
-    () => getActivityDemo(range, usingSample ? undefined : employees),
-    [range, employees, usingSample]
+    () => getActivityDemo(range, usingSample ? undefined : list),
+    [range, list, usingSample]
   );
 
   const cost = useMemo(
-    () => getCostDemo(range, usingSample ? undefined : employees),
-    [range, employees, usingSample]
+    () => getCostDemo(range, usingSample ? undefined : list),
+    [range, list, usingSample]
   );
 
   const quotaPct = Math.min(
     100,
-    Math.round((cost.usedUnits / Math.max(1, cost.plan.includedUnits)) * 100)
+    Math.max(
+      0,
+      Math.round(
+        (finiteOr(cost.usedUnits) / Math.max(1, finiteOr(cost.plan.includedUnits, 1))) *
+          100
+      )
+    )
   );
 
   return (
@@ -460,7 +505,11 @@ export function DashboardActivity({
           <div className="mt-5 grid lg:grid-cols-5 gap-6">
             <div className="lg:col-span-3">
               <div className="text-xs muted mb-2">組織合計の推移</div>
-              <AreaLineChart series={activity.series} />
+              {chartsReady ? (
+                <AreaLineChart series={activity.series} />
+              ) : (
+                <div className="h-[180px] rounded-lg bg-[var(--bg-soft)]" aria-hidden />
+              )}
             </div>
             <div className="lg:col-span-2">
               <div className="text-xs muted mb-2">AI社員別</div>
@@ -557,7 +606,11 @@ export function DashboardActivity({
           <div className="mt-5 grid lg:grid-cols-5 gap-6">
             <div className="lg:col-span-3">
               <div className="text-xs muted mb-2">使用量トレンド</div>
-              <CostTrendChart series={cost.series} />
+              {chartsReady ? (
+                <CostTrendChart series={cost.series} />
+              ) : (
+                <div className="h-[160px] rounded-lg bg-[var(--bg-soft)]" aria-hidden />
+              )}
             </div>
             <div className="lg:col-span-2">
               <div className="text-xs muted mb-2">社員別内訳（デモ推計）</div>

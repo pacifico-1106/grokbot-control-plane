@@ -38,10 +38,10 @@ export default function DashboardPage() {
       </div>
 
       <DashboardActivity
-        employees={employees.map((e) => ({
+        employees={(employees ?? []).map((e) => ({
           id: e.id,
-          displayName: e.displayName,
-          roleLabel: e.roleLabel,
+          displayName: e.displayName ?? "未設定",
+          roleLabel: e.roleLabel ?? "",
         }))}
       />
 
