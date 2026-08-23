@@ -1,5 +1,8 @@
 # Staffpass が入ることでセキュリティ説明がどう変わるか
 
+
+> 最新の製品正本は 00 / 01。価格は pricing-sku-catalog。
+
 **読者:** 営業・CS・導入担当  
 **目的:** 「Grok Bot 単体」と「Bot + Staffpass」の差分を一枚で話す
 
