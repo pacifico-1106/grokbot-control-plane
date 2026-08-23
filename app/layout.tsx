@@ -22,9 +22,9 @@ export const viewport: Viewport = {
 };
 
 export const metadata: Metadata = {
-  title: "Staffpass — AI社員の就業規則と日報",
+  title: "Staffpass — Sealith の AI社員 就業規則と日報",
   description:
-    "AIを入れるな。AI社員を雇え。Staffpassは就業規則と日報（制御面）。手足のエージェント基盤は差し替え可能で、まずGrok Botに対応。日本の中小・零細の経営者・幹部向け。",
+    "AIを入れるな。AI社員を雇え。手足のエージェントは強い。足りないのは会社の社員証・承認・台帳。Sealith の Staffpass がそれを埋める。まず Grok Bot（本線）、他は順次。日本の中小・零細の経営者・幹部向け。",
   icons: {
     icon: [
       { url: "/brand/sealith-logo-stripe.svg", type: "image/svg+xml" },
