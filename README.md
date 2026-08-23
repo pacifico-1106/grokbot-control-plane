@@ -28,6 +28,8 @@
 | `/app/approvals` | 要対応・承認キュー |
 | `/app/audit` | 監査タイムライン |
 | `/app/getting-started` | オンボーディング |
+| `/guides/instructions-design` | Instructions 設計ガイド（公開・ログイン不要） |
+| `/app/guides/instructions-design` | 同ガイド（アプリ内） |
 | `/app/integrations` | Managed/BYO + 連携ステータス |
 | `/app/billing` | 請求・Checkout / Portal（キー未設定時スタブ） |
 | `/app/team` | owner/admin チーム |
