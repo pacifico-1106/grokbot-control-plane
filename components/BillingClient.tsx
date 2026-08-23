@@ -11,6 +11,15 @@ import {
   PRICING_PROVISIONAL_NOTE_JA,
   formatYenJa,
 } from "@/lib/billing/plans";
+import {
+  KICKOFF_GROK_BAND_JA,
+  KICKOFF_PACK_LINES,
+  KICKOFF_PACK_NOTE_JA,
+  KICKOFF_PACK_YEN,
+  MANAGED_BUNDLE_NOTE_JA,
+  SUBSIDY_COMING_SOON_JA,
+  SUBSIDY_COMPLIANCE_NOTE_JA,
+} from "@/lib/billing/skus";
 
 const PLANS: Array<{
   id: CheckoutPlanKey;
@@ -22,6 +31,7 @@ const PLANS: Array<{
   overageYen: number;
   onboardingYen?: number;
   onboardingNote?: string;
+  bundleNote?: string;
 }> = [
   {
     id: "starter",
@@ -64,6 +74,7 @@ const PLANS: Array<{
     displayYen: PLAN_DISPLAY_YEN.managed,
     overageYen: PLAN_OVERAGE_YEN.managed,
     onboardingNote: "オンボーディングは月額に含む",
+    bundleNote: MANAGED_BUNDLE_NOTE_JA,
   },
 ];
 
@@ -208,6 +219,9 @@ export function BillingClient({
             {plan.onboardingNote ? (
               <p className="mt-1 text-xs faint">{plan.onboardingNote}</p>
             ) : null}
+            {plan.bundleNote ? (
+              <p className="mt-1 text-xs faint leading-relaxed">{plan.bundleNote}</p>
+            ) : null}
             <ul className="mt-4 space-y-2 text-sm muted">
               {plan.points.map((p) => (
                 <li key={p}>· {p}</li>
@@ -223,6 +237,63 @@ export function BillingClient({
             </button>
           </div>
         ))}
+      </div>
+
+      <div className="mt-6 grid lg:grid-cols-2 gap-4">
+        <div className="surface p-5">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs faint">kickoff_pack</span>
+            <span className="chip text-[10px]">任意</span>
+            <span className="chip text-[10px]">{PRICING_PROVISIONAL_NOTE_JA}</span>
+          </div>
+          <h2 className="mt-1 text-lg font-medium">キックオフパック</h2>
+          <p className="mt-2 text-2xl font-medium tracking-tight">
+            {formatYenJa(KICKOFF_PACK_YEN)}
+            <span className="text-sm font-normal muted"> 一式</span>
+          </p>
+          <p className="mt-2 text-xs muted leading-relaxed">{KICKOFF_PACK_NOTE_JA}</p>
+          <p className="mt-1 text-xs faint leading-relaxed">{KICKOFF_GROK_BAND_JA}</p>
+          <ul className="mt-4 space-y-2 text-sm muted">
+            {KICKOFF_PACK_LINES.map((line) => (
+              <li key={line.key} className="flex justify-between gap-3">
+                <span>· {line.labelJa}</span>
+                <span className="shrink-0 faint">{formatYenJa(line.yen)}</span>
+              </li>
+            ))}
+          </ul>
+          <p className="mt-4 text-xs faint leading-relaxed">
+            Checkout は Stripe Price（`STRIPE_PRICE_ID_KICKOFF_PACK`）設定後に有効化します。キー未設定のあいだは表示のみ（仮決め）。
+          </p>
+          <button
+            type="button"
+            className="btn btn-ghost w-full mt-4 text-sm"
+            disabled={busy === "kickoff"}
+            onClick={() => {
+              setBusy("kickoff");
+              setMessage(
+                "キックオフパックは仮決め表示です。STRIPE_PRICE_ID_KICKOFF_PACK を Dashboard で作成・貼付後に Checkout 配線します（Business 初月は含みません）。"
+              );
+              setBusy(null);
+            }}
+          >
+            仮決め・準備中
+          </button>
+        </div>
+
+        <div className="surface p-5">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs faint">subsidy_*</span>
+            <span className="chip text-[10px]">準備中</span>
+          </div>
+          <h2 className="mt-1 text-lg font-medium">補助金関連パック</h2>
+          <p className="mt-2 text-sm muted leading-relaxed">{SUBSIDY_COMING_SOON_JA}</p>
+          <ul className="mt-4 space-y-2 text-sm muted">
+            <li>· subsidy_2y_business — Business・2年想定</li>
+            <li>· subsidy_2y_managed — Managed・2年想定</li>
+            <li>· year3_extension — 3年目延長</li>
+          </ul>
+          <p className="mt-4 text-xs faint leading-relaxed">{SUBSIDY_COMPLIANCE_NOTE_JA}</p>
+        </div>
       </div>
 
       <div className="mt-4 flex flex-wrap gap-3 items-center">

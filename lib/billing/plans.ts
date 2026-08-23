@@ -4,6 +4,9 @@
  *
  * displayYen / overageYen / onboardingYen are 税別・仮決め／事業確定前.
  * Stripe Dashboard Prices remain the source of truth for Checkout charges.
+ *
+ * Additional SKUs (kickoff_pack / subsidy placeholders / managed bundle note):
+ * see lib/billing/skus.ts and docs/pricing-sku-catalog.md.
  */
 
 export type PlanCode = "starter" | "business" | "managed";

@@ -3,7 +3,7 @@
 Sealith docs/stripe-billing-strategy.md から trial → Checkout → webhook 同期の考え方のみ参照。
 価格表・R2 原価計算・紹介クレジットは移植しない。
 
-**表示額（税別・仮決め）は `lib/billing/plans.ts` / UI / `docs/pricing-model.md`。**
+**表示額（税別・仮決め）は `lib/billing/plans.ts` · `lib/billing/skus.ts` / UI / `docs/pricing-model.md` · `docs/pricing-sku-catalog.md`。**
 **Checkout 実課金は Stripe Dashboard の Price ID（env）が正。** コードに fake `price_…` を書かない。
 
 ## フロー
@@ -46,7 +46,7 @@ DEMO（Supabase `replace_me_*`）では常に許可。メッセージは日本�
 | business | ビジネス | ¥39,800 | 500 | ¥40/件 | ¥150,000 一式 |
 | managed | Managed（Care） | ¥128,000 | 2000 | ¥25/件 | 月額に含む |
 
-詳細は `docs/pricing-model.md`。超過の **Metered Price 配線は P0.5 スタブ**（未実装）。
+詳細は `docs/pricing-model.md` · `docs/pricing-sku-catalog.md`。超過の **Metered Price 配線は P0.5 スタブ**（未実装）。
 
 ## 必要な env
 
@@ -55,6 +55,8 @@ DEMO（Supabase `replace_me_*`）では常に許可。メッセージは日本�
 - `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY`
 - `STRIPE_PRICE_ID_STARTER` / `STRIPE_PRICE_ID_BUSINESS` / `STRIPE_PRICE_ID_MANAGED`
 - `STRIPE_PRICE_ID_BUSINESS_ONBOARDING`（任意・business 一式 one-time）
+- `STRIPE_PRICE_ID_KICKOFF_PACK`（任意・キックオフ一式 ¥398,000・透明3行はカタログ）
+- `STRIPE_PRICE_ID_SUBSIDY_2Y_BUSINESS` / `_SUBSIDY_2Y_MANAGED` / `_YEAR3_EXTENSION`（プレースホルダ・保証表現禁止）
 - `STRIPE_ENABLE_CUSTOMER_BALANCE`（任意・`1` で Checkout に振込系を追加）
 - `BILLING_NOTIFY_EMAIL`（webhook 通知先）
 - `TRIAL_DAYS` / `NEXT_PUBLIC_APP_URL`
@@ -76,13 +78,15 @@ DEMO（Supabase `replace_me_*`）では常に許可。メッセージは日本�
 3. **Product: Staffpass Managed (Care)**
    - Recurring Price: ¥128,000 / month → `STRIPE_PRICE_ID_MANAGED`
    - 導入は月額に含む（別 Price 不要）
-4. **Overage（P0.5・後続）** — Metered Price（starter ¥80 / business ¥40 / managed ¥25 per `gated_confirm_action`）。Usage Records 配線は未実装。作成しても env 未接続でよい。
-5. **Webhook** — `https://<domain>/api/webhooks/stripe`  
+4. **Kickoff Pack（任意）** — One-time ¥398,000 → `STRIPE_PRICE_ID_KICKOFF_PACK`。 透明3行・Grok Pro+/Teams パススルー・**Business 初月を含めない**。 詳細 `docs/pricing-sku-catalog.md`。Checkout 自動追加は未配線（表示のみ可）。
+5. **補助金プレースホルダ** — 金額確定後に Product/Price → `STRIPE_PRICE_ID_SUBSIDY_2Y_BUSINESS` / `_SUBSIDY_2Y_MANAGED` / `_YEAR3_EXTENSION`。 UI は「準備中／保証しない」のみ。
+6. **Overage（P0.5・後続）** — Metered Price（starter ¥80 / business ¥40 / managed ¥25 per `gated_confirm_action`）。Usage Records 配線は未実装。作成しても env 未接続でよい。
+7. **Webhook** — `https://<domain>/api/webhooks/stripe`  
    推奨イベント: `customer.subscription.created|updated|deleted`, `invoice.paid`, `invoice.payment_failed`, `customer.subscription.trial_will_end`, `checkout.session.completed`
-6. **Customer Portal** — Settings → Billing → Customer portal（プラン変更・支払方法・解約）
-7. **customer_balance**（任意）— 銀行振込フローを有効化してから env=1
-8. **Test vs Live** — テストキーで E2E → 本番キーは cutover 最後
-9. **署名秘密** — Webhook signing secret → `STRIPE_WEBHOOK_SECRET`
+8. **Customer Portal** — Settings → Billing → Customer portal（プラン変更・支払方法・解約）
+9. **customer_balance**（任意）— 銀行振込フローを有効化してから env=1
+10. **Test vs Live** — テストキーで E2E → 本番キーは cutover 最後
+11. **署名秘密** — Webhook signing secret → `STRIPE_WEBHOOK_SECRET`
 
 ### API 作成（任意・キーが本物のときのみ）
 

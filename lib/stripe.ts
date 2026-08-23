@@ -69,6 +69,34 @@ export function getBusinessOnboardingPriceId(): string | null {
   return id;
 }
 
+function envPriceId(name: string): string | null {
+  const id = process.env[name];
+  if (!id || id.startsWith("replace_me")) return null;
+  return id;
+}
+
+/**
+ * Optional kickoff pack one-time Price (¥398,000 税別・仮決め).
+ * Not auto-added to plan Checkout — separate optional purchase when wired.
+ * See docs/pricing-sku-catalog.md (transparent 3 lines; no Business M1).
+ */
+export function getKickoffPackPriceId(): string | null {
+  return envPriceId("STRIPE_PRICE_ID_KICKOFF_PACK");
+}
+
+/** Subsidy catalog placeholders — null until Dashboard Price IDs are pasted. */
+export function getSubsidy2yBusinessPriceId(): string | null {
+  return envPriceId("STRIPE_PRICE_ID_SUBSIDY_2Y_BUSINESS");
+}
+
+export function getSubsidy2yManagedPriceId(): string | null {
+  return envPriceId("STRIPE_PRICE_ID_SUBSIDY_2Y_MANAGED");
+}
+
+export function getYear3ExtensionPriceId(): string | null {
+  return envPriceId("STRIPE_PRICE_ID_YEAR3_EXTENSION");
+}
+
 export type CheckoutPlanKey = "starter" | "business" | "managed";
 
 /** Map Stripe subscription.status → our SubscriptionStatus. */
