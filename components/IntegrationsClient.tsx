@@ -88,7 +88,7 @@ export function IntegrationsClient({
         <section className="surface p-5">
           <h2 className="text-sm font-medium">導入モード</h2>
           <p className="mt-2 text-sm muted leading-relaxed">
-            「当社で用意」か「お持ちの Grok Bot を持ち込み」かを選べます。
+            「おまかせ導入」か「今の Grok Bot に載せる」かを選べます。
           </p>
           <div className="mt-4 space-y-3">
             <label className="flex gap-3 rounded-lg border border-[var(--border)] p-3 cursor-pointer">
@@ -100,7 +100,7 @@ export function IntegrationsClient({
                 className="mt-1"
               />
               <div>
-                <div className="text-sm">当社で用意</div>
+                <div className="text-sm">おまかせ導入</div>
                 <p className="text-xs muted mt-1">
                   当社が Grok Bot を用意し、Staffpass（制御）につないだ状態でお渡しします。
                 </p>
@@ -115,7 +115,7 @@ export function IntegrationsClient({
                 className="mt-1"
               />
               <div>
-                <div className="text-sm">持ち込み（BYO）</div>
+                <div className="text-sm">今の Grok Bot に載せる</div>
                 <p className="text-xs muted mt-1">
                   いまお使いのワークスペースを持ち込み。社員証の確認と記録だけをつなぎます。
                 </p>

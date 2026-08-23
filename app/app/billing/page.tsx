@@ -23,7 +23,7 @@ export default async function BillingPage() {
   return (
     <AppShell
       title="請求"
-      subtitle={`トライアル ${TRIAL_DAYS}日 · Stripe Subscriptions`}
+      subtitle={`トライアル ${TRIAL_DAYS}日 · カード / 銀行振込`}
     >
       <div className="surface p-4 mb-4 flex flex-wrap items-center gap-3 text-sm">
         <span className={statusChip}>{entitlements.status}</span>
@@ -67,9 +67,8 @@ export default async function BillingPage() {
           {describeJpPaymentMethods()}
         </p>
         <p className="mt-2 text-xs faint leading-relaxed">
-          フロー: トライアル開始 → Checkout（subscription + trial_period_days・metadata.orgId）→
-          webhook で subscriptions / orgs.stripe_customer_id 同期 → trial_will_end で Resend 通知。
-          振込は Dashboard 設定後（customer_balance + STRIPE_ENABLE_CUSTOMER_BALANCE=1）。
+          流れ: トライアル開始 → お支払い手続き → 契約状態の同期 → 終了前のメール通知。
+          銀行振込は準備が整い次第、お支払い画面に表示されます。
         </p>
       </section>
     </AppShell>

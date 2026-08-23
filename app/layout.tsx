@@ -13,9 +13,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "AI社員 for Grok Bot — 制御面",
+  title: "Staffpass — AI社員（Grok Botで動く）",
   description:
-    "AIを入れるな。AI社員を雇え。社員証・承認・監査で、中小企業が説明できるAI運用を。",
+    "AIを入れるな。AI社員を雇え。権限・承認・記録がついたAI社員を、日本の中小・零細の経営者・幹部向けに。",
 };
 
 export default function RootLayout({

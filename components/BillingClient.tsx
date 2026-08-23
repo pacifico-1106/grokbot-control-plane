@@ -181,9 +181,7 @@ export function BillingClient({
       </div>
 
       <p className="mt-3 text-xs faint leading-relaxed">
-        銀行振込（customer_balance）は Stripe Dashboard で有効化し、環境変数
-        STRIPE_ENABLE_CUSTOMER_BALANCE=1 を設定したあと Checkout に現れます。価格は
-        Dashboard の Product/Price が正です（画面の {"{{…_PRICE}}"} はプレースホルダ）。
+        銀行振込は準備が整い次第、お支払い画面に表示されます。表示価格は契約プランの設定が正です。
       </p>
 
       {message ? (

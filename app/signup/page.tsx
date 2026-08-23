@@ -13,8 +13,8 @@ export default function SignupPage() {
         </h1>
         <p className="mt-3 text-sm muted leading-relaxed">
           {demo
-            ? "デモモードです。キー未設定でもダッシュボードへ進めます。本番では Auth ユーザー＋組織＋オーナーが作成されます。"
-            : "登録後はダッシュボードへ。Supabase Auth でユーザーと組織を作成し、Resend でウェルカムメールを送ります。"}
+            ? "デモモードです。設定がなくてもダッシュボードへ進めます。本番では会社アカウントと管理者を作成します。"
+            : "登録後はダッシュボードへ。会社アカウントを作成し、ウェルカムメールをお送りします。"}
         </p>
         <form action="/api/auth/signup" method="post" className="mt-6 space-y-4">
           <label className="block text-sm">
@@ -57,8 +57,8 @@ export default function SignupPage() {
               className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm"
               defaultValue="managed"
             >
-              <option value="managed">Managed（こちらで Grok Bot を用意）</option>
-              <option value="byo">BYO Grok Bot（持ち込み）</option>
+              <option value="managed">おまかせ導入（こちらで Grok Bot を用意）</option>
+              <option value="byo">今の Grok Bot に載せる（持ち込み）</option>
             </select>
           </label>
           <button type="submit" className="btn btn-primary w-full">
