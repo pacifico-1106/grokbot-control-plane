@@ -1,10 +1,12 @@
 import { NextResponse } from "next/server";
+import { getCurrentOrgId } from "@/lib/auth/session";
 import {
   bindingPublicView,
-  mintOneTimeSecret,
+  getEmployee,
   rotateCredential,
-} from "@/lib/bindings";
-import { DEMO_ORG, getRuntimeEmployees } from "@/lib/demo-data";
+  runtimeModeLabel,
+} from "@/lib/data";
+import { mintOneTimeSecret } from "@/lib/bindings";
 
 export const runtime = "nodejs";
 
@@ -17,21 +19,23 @@ export async function POST(
   ctx: { params: Promise<{ id: string }> }
 ) {
   const { id } = await ctx.params;
-  const employee = getRuntimeEmployees().find((e) => e.id === id);
+  const orgId = await getCurrentOrgId();
+  const employee = await getEmployee(id, orgId);
   if (!employee) {
     return NextResponse.json({ error: "employee_not_found" }, { status: 404 });
   }
 
   try {
     const secret = mintOneTimeSecret();
-    const { binding, generation } = rotateCredential(
+    const { binding, generation } = await rotateCredential(
       id,
-      employee.orgId || DEMO_ORG.id,
+      employee.orgId || orgId || "",
       secret.fingerprint
     );
     return NextResponse.json({
       ok: true,
-      demo: true,
+      demo: runtimeModeLabel() === "demo",
+      mode: runtimeModeLabel(),
       employeeId: id,
       generation,
       binding: bindingPublicView(binding),

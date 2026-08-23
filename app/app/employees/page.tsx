@@ -1,17 +1,20 @@
 import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
-import { DEMO_ORG, getRuntimeEmployees } from "@/lib/demo-data";
+import { getCurrentOrgId } from "@/lib/auth/session";
+import { getOrgMeta, listEmployees } from "@/lib/data";
 import { APPROVAL_POLICY_LABELS } from "@/lib/employees/policy-draft";
 
 export const dynamic = "force-dynamic";
 
-export default function EmployeesPage() {
-  const employees = getRuntimeEmployees();
+export default async function EmployeesPage() {
+  const orgId = await getCurrentOrgId();
+  const employees = await listEmployees(orgId);
+  const org = await getOrgMeta(orgId);
 
   return (
     <AppShell
       title="AI社員"
-      subtitle={`${DEMO_ORG.name} · 社員証付きの職務分掌`}
+      subtitle={`${org.name} · 社員証付きの職務分掌`}
     >
       <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
         <p className="text-sm muted">

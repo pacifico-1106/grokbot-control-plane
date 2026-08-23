@@ -1,10 +1,12 @@
 import { AppShell } from "@/components/AppShell";
-import { getRuntimeAudit } from "@/lib/demo-data";
+import { getCurrentOrgId } from "@/lib/auth/session";
+import { listAuditEvents } from "@/lib/data";
 
 export const dynamic = "force-dynamic";
 
-export default function AuditPage() {
-  const events = getRuntimeAudit();
+export default async function AuditPage() {
+  const orgId = await getCurrentOrgId();
+  const events = await listAuditEvents(orgId);
 
   return (
     <AppShell

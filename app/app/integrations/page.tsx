@@ -1,26 +1,32 @@
 import { AppShell } from "@/components/AppShell";
 import { IntegrationsClient } from "@/components/IntegrationsClient";
-import { ensureBindingRow, getBinding } from "@/lib/bindings";
+import { getCurrentOrgId } from "@/lib/auth/session";
 import {
-  DEMO_ORG,
-  getGatewayStatus,
-  getRuntimeEmployees,
-} from "@/lib/demo-data";
+  ensureBindingRow,
+  getBinding,
+  getGatewayStatusForOrg,
+  getOrgMeta,
+  listEmployees,
+} from "@/lib/data";
 
 export const dynamic = "force-dynamic";
 
-export default function IntegrationsPage() {
-  const employees = getRuntimeEmployees();
-  const bindingRows = employees.map((e) => {
+export default async function IntegrationsPage() {
+  const orgId = await getCurrentOrgId();
+  const org = await getOrgMeta(orgId);
+  const employees = await listEmployees(orgId);
+  const bindingRows = [];
+  for (const e of employees) {
     const binding =
-      getBinding(e.id) ?? ensureBindingRow(e.id, e.orgId || DEMO_ORG.id);
-    return {
+      (await getBinding(e.id)) ??
+      (await ensureBindingRow(e.id, e.orgId || org.id));
+    bindingRows.push({
       employeeId: e.id,
       displayName: e.displayName,
       roleLabel: e.roleLabel,
       binding,
-    };
-  });
+    });
+  }
 
   return (
     <AppShell
@@ -28,8 +34,8 @@ export default function IntegrationsPage() {
       subtitle="Managed / BYO · Grok Bot ゲートウェイ"
     >
       <IntegrationsClient
-        initialStatus={getGatewayStatus()}
-        initialMode={DEMO_ORG.integrationMode}
+        initialStatus={await getGatewayStatusForOrg(orgId)}
+        initialMode={org.integrationMode}
         bindingRows={bindingRows}
       />
       <section className="surface p-5 mt-4">

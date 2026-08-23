@@ -1,10 +1,12 @@
 import { NextResponse } from "next/server";
+import { getCurrentOrgId } from "@/lib/auth/session";
 import {
   bindingPublicView,
   getBinding,
+  getEmployee,
   linkAgent,
-} from "@/lib/bindings";
-import { DEMO_ORG, getRuntimeEmployees } from "@/lib/demo-data";
+  runtimeModeLabel,
+} from "@/lib/data";
 
 export const runtime = "nodejs";
 
@@ -13,7 +15,8 @@ export async function POST(
   ctx: { params: Promise<{ id: string }> }
 ) {
   const { id } = await ctx.params;
-  const employee = getRuntimeEmployees().find((e) => e.id === id);
+  const orgId = await getCurrentOrgId();
+  const employee = await getEmployee(id, orgId);
   if (!employee) {
     return NextResponse.json({ error: "employee_not_found" }, { status: 404 });
   }
@@ -24,14 +27,15 @@ export async function POST(
   };
 
   try {
-    const binding = linkAgent(id, {
-      orgId: employee.orgId || DEMO_ORG.id,
+    const binding = await linkAgent(id, {
+      orgId: employee.orgId || orgId || "",
       grokBotAgentId: body.grokBotAgentId || "",
       grokBotWorkspaceId: body.grokBotWorkspaceId,
     });
     return NextResponse.json({
       ok: true,
-      demo: true,
+      demo: runtimeModeLabel() === "demo",
+      mode: runtimeModeLabel(),
       binding: bindingPublicView(binding),
       message: "Grok Bot エージェントを連携しました（employeeId は不変）",
     });
@@ -58,9 +62,13 @@ export async function GET(
   ctx: { params: Promise<{ id: string }> }
 ) {
   const { id } = await ctx.params;
-  const binding = getBinding(id);
+  const binding = await getBinding(id);
   if (!binding) {
     return NextResponse.json({ error: "binding_not_found" }, { status: 404 });
   }
-  return NextResponse.json({ ok: true, binding: bindingPublicView(binding) });
+  return NextResponse.json({
+    ok: true,
+    binding: bindingPublicView(binding),
+    mode: runtimeModeLabel(),
+  });
 }

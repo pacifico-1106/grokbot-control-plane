@@ -1,6 +1,11 @@
 import { NextResponse } from "next/server";
-import { assertExecutable, getBinding } from "@/lib/bindings";
-import { getRuntimeEmployees } from "@/lib/demo-data";
+import { getCurrentOrgId } from "@/lib/auth/session";
+import {
+  assertExecutable,
+  getBinding,
+  getEmployee,
+  runtimeModeLabel,
+} from "@/lib/data";
 import { evaluateSpend } from "@/lib/spend-gate";
 
 export const runtime = "nodejs";
@@ -47,7 +52,7 @@ export async function POST(req: Request) {
     );
   }
 
-  const decision = assertExecutable(employeeId);
+  const decision = await assertExecutable(employeeId);
   if (!decision.ok) {
     const status =
       decision.code === "not_found" || decision.code === "unbound"
@@ -59,7 +64,7 @@ export async function POST(req: Request) {
         code: decision.code,
         error: decision.code,
         message: decision.message,
-        binding: getBinding(employeeId) ?? null,
+        binding: (await getBinding(employeeId)) ?? null,
       },
       { status }
     );
@@ -68,8 +73,10 @@ export async function POST(req: Request) {
   const tool = body.tool || "tools:ping";
   const purpose = body.purpose || "ops.health";
 
+  const orgId = await getCurrentOrgId();
+
   if (isCommerceOrder(tool, purpose)) {
-    const employee = getRuntimeEmployees().find((e) => e.id === employeeId);
+    const employee = await getEmployee(employeeId, orgId);
     if (!employee) {
       return NextResponse.json(
         {
@@ -125,7 +132,8 @@ export async function POST(req: Request) {
 
     return NextResponse.json({
       ok: true,
-      demo: true,
+      demo: runtimeModeLabel() === "demo",
+      mode: runtimeModeLabel(),
       employeeId,
       agentId: decision.binding.grokBotAgentId,
       generation: decision.binding.credentialGeneration,
@@ -137,7 +145,7 @@ export async function POST(req: Request) {
     });
   }
 
-  const employee = getRuntimeEmployees().find((e) => e.id === employeeId);
+  const employee = await getEmployee(employeeId, orgId);
   const isBrowserUse =
     (tool || "").toLowerCase().includes("browser") ||
     (purpose || "").toLowerCase().includes("browser") ||
@@ -170,7 +178,8 @@ export async function POST(req: Request) {
 
   return NextResponse.json({
     ok: true,
-    demo: true,
+    demo: runtimeModeLabel() === "demo",
+      mode: runtimeModeLabel(),
     employeeId,
     agentId: decision.binding.grokBotAgentId,
     generation: decision.binding.credentialGeneration,

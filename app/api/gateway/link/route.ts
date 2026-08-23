@@ -1,11 +1,18 @@
 import { NextResponse } from "next/server";
-import { getGatewayStatus, setGatewayStatus } from "@/lib/demo-data";
+import { getCurrentOrgId } from "@/lib/auth/session";
+import {
+  getGatewayStatusForOrg,
+  runtimeModeLabel,
+  setGatewayStatusForOrg,
+} from "@/lib/data";
 import type { GatewayLinkStatus, IntegrationMode } from "@/lib/types";
 
 export async function GET() {
+  const orgId = await getCurrentOrgId();
   return NextResponse.json({
-    status: getGatewayStatus(),
+    status: await getGatewayStatusForOrg(orgId),
     machine: ["disconnected", "pending", "linked"],
+    mode: runtimeModeLabel(),
   });
 }
 
@@ -14,17 +21,19 @@ export async function POST(req: Request) {
     action?: "connect" | "disconnect" | "handshake";
     mode?: IntegrationMode;
   };
+  const orgId = await getCurrentOrgId();
   const action = body.action || "connect";
-  let next: GatewayLinkStatus = getGatewayStatus();
+  let next: GatewayLinkStatus = await getGatewayStatusForOrg(orgId);
   if (action === "disconnect") next = "disconnected";
   else if (action === "connect") next = "pending";
   else if (action === "handshake") next = "linked";
-  setGatewayStatus(next);
+  await setGatewayStatusForOrg(next, orgId);
   return NextResponse.json({
     ok: true,
     status: next,
     mode: body.mode || "managed",
-    demo: true,
+    demo: runtimeModeLabel() === "demo",
+    runtimeMode: runtimeModeLabel(),
     message:
       next === "linked"
         ? "Grok Bot へ連携完了（デモ）"

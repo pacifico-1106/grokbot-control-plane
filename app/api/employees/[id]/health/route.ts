@@ -1,12 +1,14 @@
 import { NextResponse } from "next/server";
+import { getCurrentOrgId } from "@/lib/auth/session";
 import {
   bindingPublicView,
   ensureBindingRow,
   getBinding,
+  getEmployee,
   recordHealthFailure,
   recordHealthSuccess,
-} from "@/lib/bindings";
-import { DEMO_ORG, getRuntimeEmployees } from "@/lib/demo-data";
+  runtimeModeLabel,
+} from "@/lib/data";
 
 export const runtime = "nodejs";
 
@@ -20,18 +22,19 @@ export async function POST(
   ctx: { params: Promise<{ id: string }> }
 ) {
   const { id } = await ctx.params;
-  const employee = getRuntimeEmployees().find((e) => e.id === id);
+  const orgId = await getCurrentOrgId();
+  const employee = await getEmployee(id, orgId);
   if (!employee) {
     return NextResponse.json({ error: "employee_not_found" }, { status: 404 });
   }
 
-  ensureBindingRow(id, employee.orgId || DEMO_ORG.id);
+  await ensureBindingRow(id, employee.orgId || orgId || "");
   const url = new URL(req.url);
   const forceFail =
     url.searchParams.get("forceFail") === "1" ||
     url.searchParams.get("forceFail") === "true";
 
-  const before = getBinding(id)!;
+  const before = (await getBinding(id))!;
   if (before.status === "revoked") {
     return NextResponse.json(
       {
@@ -45,10 +48,11 @@ export async function POST(
   }
 
   if (forceFail) {
-    const binding = recordHealthFailure(id, "forced_demo_failure")!;
+    const binding = (await recordHealthFailure(id, "forced_demo_failure"))!;
     return NextResponse.json({
       ok: false,
-      demo: true,
+      demo: runtimeModeLabel() === "demo",
+      mode: runtimeModeLabel(),
       code: "needs_reauth",
       binding: bindingPublicView(binding),
       message: "ヘルス失敗 → 要再連携（バインディングは保持）",
@@ -58,17 +62,19 @@ export async function POST(
   if (!before.grokBotAgentId || before.status === "unlinked") {
     return NextResponse.json({
       ok: false,
-      demo: true,
+      demo: runtimeModeLabel() === "demo",
+      mode: runtimeModeLabel(),
       code: "unbound",
       binding: bindingPublicView(before),
       message: "未連携のためヘルス失敗",
     });
   }
 
-  const binding = recordHealthSuccess(id)!;
+  const binding = (await recordHealthSuccess(id))!;
   return NextResponse.json({
     ok: true,
-    demo: true,
+    demo: runtimeModeLabel() === "demo",
+    mode: runtimeModeLabel(),
     binding: bindingPublicView(binding),
     message: "ヘルス成功",
     lastSuccessAt: binding.lastSuccessAt,

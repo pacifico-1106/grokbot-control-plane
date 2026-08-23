@@ -1,16 +1,19 @@
 import { AppShell } from "@/components/AppShell";
 import { TeamClient } from "@/components/TeamClient";
-import { DEMO_ORG, getRuntimeMembers } from "@/lib/demo-data";
+import { getCurrentOrgId } from "@/lib/auth/session";
+import { getOrgMeta, listMembers } from "@/lib/data";
 
 export const dynamic = "force-dynamic";
 
-export default function TeamPage() {
-  const members = getRuntimeMembers();
+export default async function TeamPage() {
+  const orgId = await getCurrentOrgId();
+  const members = await listMembers(orgId);
+  const org = await getOrgMeta(orgId);
 
   return (
     <AppShell
       title="チーム"
-      subtitle={`${DEMO_ORG.name} · 職務＋権限フラグ（admin一択ではない）`}
+      subtitle={`${org.name} · 職務＋権限フラグ（admin一択ではない）`}
     >
       <p className="mb-4 text-sm muted leading-relaxed max-w-3xl">
         人間メンバーは「経営・営業・経理…」の職務と、承認・雇い・請求などの権限フラグで分けます。

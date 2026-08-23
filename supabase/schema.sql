@@ -1,5 +1,7 @@
 -- AI社員 for Grok Bot — control plane schema (Supabase Postgres)
 -- Apply via Supabase SQL editor or `supabase db push`.
+-- Fresh apply includes production-ready columns + RLS.
+-- Existing projects: also apply supabase/migrations/20260823_production_ready.sql
 
 create extension if not exists "pgcrypto";
 
@@ -27,6 +29,9 @@ create table if not exists org_members (
   display_name text not null default '',
   role text not null default 'member'
     check (role in ('owner', 'admin', 'member')),
+  job_role text not null default 'custom',
+  job_label text,
+  capabilities text[] not null default '{}',
   status text not null default 'active'
     check (status in ('active', 'invited', 'disabled')),
   invited_at timestamptz,
@@ -35,6 +40,8 @@ create table if not exists org_members (
 );
 
 create index if not exists org_members_org_idx on org_members (org_id, role);
+create index if not exists org_members_user_idx on org_members (user_id)
+  where user_id is not null;
 
 -- ---------------------------------------------------------------------------
 -- AI employees + credentials (社員証)
@@ -51,6 +58,8 @@ create table if not exists employees (
   allowed_purposes text[] not null default '{}',
   approval_policy text not null default 'risk_based'
     check (approval_policy in ('auto', 'always_human', 'risk_based')),
+  spend jsonb,
+  allowed_accounts jsonb not null default '[]'::jsonb,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -67,6 +76,8 @@ create table if not exists credentials (
   allowed_purposes text[] not null default '{}',
   approval_policy text not null default 'risk_based'
     check (approval_policy in ('auto', 'always_human', 'risk_based')),
+  spend jsonb,
+  allowed_accounts jsonb not null default '[]'::jsonb,
   expires_at timestamptz,
   revoked_at timestamptz,
   last_used_at timestamptz,
@@ -152,15 +163,6 @@ create table if not exists gateway_links (
   unique (org_id)
 );
 
--- RLS placeholders (enable after Auth wiring)
--- alter table orgs enable row level security;
--- alter table org_members enable row level security;
--- alter table employees enable row level security;
--- alter table credentials enable row level security;
--- alter table approval_requests enable row level security;
--- alter table audit_events enable row level security;
--- alter table subscriptions enable row level security;
-
 -- ---------------------------------------------------------------------------
 -- Durable Grok Bot ↔ AI-employee bindings (lifeline)
 -- employee_id is stable forever; rotate bumps credential_generation only.
@@ -187,3 +189,113 @@ create index if not exists employee_bindings_org_status_idx
 create index if not exists employee_bindings_needs_reauth_idx
   on employee_bindings (org_id)
   where status = 'needs_reauth';
+
+-- ---------------------------------------------------------------------------
+-- RLS: org isolation via org_members.user_id = auth.uid()
+-- Service role bypasses RLS (gateway / admin API).
+-- ---------------------------------------------------------------------------
+create or replace function public.is_org_member(check_org_id uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select exists (
+    select 1
+    from org_members m
+    where m.org_id = check_org_id
+      and m.user_id = auth.uid()
+      and m.status = 'active'
+  );
+$$;
+
+create or replace function public.is_org_admin(check_org_id uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select exists (
+    select 1
+    from org_members m
+    where m.org_id = check_org_id
+      and m.user_id = auth.uid()
+      and m.status = 'active'
+      and m.role in ('owner', 'admin')
+  );
+$$;
+
+alter table orgs enable row level security;
+alter table org_members enable row level security;
+alter table employees enable row level security;
+alter table credentials enable row level security;
+alter table approval_requests enable row level security;
+alter table audit_events enable row level security;
+alter table subscriptions enable row level security;
+alter table gateway_links enable row level security;
+alter table employee_bindings enable row level security;
+
+drop policy if exists orgs_select_member on orgs;
+drop policy if exists orgs_update_admin on orgs;
+create policy orgs_select_member on orgs
+  for select using (public.is_org_member(id));
+create policy orgs_update_admin on orgs
+  for update using (public.is_org_admin(id));
+
+drop policy if exists org_members_select on org_members;
+drop policy if exists org_members_write_admin on org_members;
+create policy org_members_select on org_members
+  for select using (public.is_org_member(org_id));
+create policy org_members_write_admin on org_members
+  for all using (public.is_org_admin(org_id));
+
+drop policy if exists employees_select on employees;
+drop policy if exists employees_write_admin on employees;
+create policy employees_select on employees
+  for select using (public.is_org_member(org_id));
+create policy employees_write_admin on employees
+  for all using (public.is_org_admin(org_id));
+
+drop policy if exists credentials_select on credentials;
+drop policy if exists credentials_write_admin on credentials;
+create policy credentials_select on credentials
+  for select using (public.is_org_member(org_id));
+create policy credentials_write_admin on credentials
+  for all using (public.is_org_admin(org_id));
+
+drop policy if exists approvals_select on approval_requests;
+drop policy if exists approvals_write_member on approval_requests;
+create policy approvals_select on approval_requests
+  for select using (public.is_org_member(org_id));
+create policy approvals_write_member on approval_requests
+  for all using (public.is_org_member(org_id));
+
+drop policy if exists audit_select on audit_events;
+drop policy if exists audit_insert_member on audit_events;
+create policy audit_select on audit_events
+  for select using (public.is_org_member(org_id));
+create policy audit_insert_member on audit_events
+  for insert with check (public.is_org_member(org_id));
+
+drop policy if exists subscriptions_select on subscriptions;
+drop policy if exists subscriptions_write_admin on subscriptions;
+create policy subscriptions_select on subscriptions
+  for select using (public.is_org_member(org_id));
+create policy subscriptions_write_admin on subscriptions
+  for all using (public.is_org_admin(org_id));
+
+drop policy if exists gateway_select on gateway_links;
+drop policy if exists gateway_write_admin on gateway_links;
+create policy gateway_select on gateway_links
+  for select using (public.is_org_member(org_id));
+create policy gateway_write_admin on gateway_links
+  for all using (public.is_org_admin(org_id));
+
+drop policy if exists bindings_select on employee_bindings;
+drop policy if exists bindings_write_admin on employee_bindings;
+create policy bindings_select on employee_bindings
+  for select using (public.is_org_member(org_id));
+create policy bindings_write_admin on employee_bindings
+  for all using (public.is_org_admin(org_id));

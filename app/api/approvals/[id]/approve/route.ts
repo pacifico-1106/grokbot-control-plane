@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { resolveRuntimeApproval } from "@/lib/demo-data";
+import { getCurrentOrgId } from "@/lib/auth/session";
+import { resolveApproval, runtimeModeLabel } from "@/lib/data";
 import { sendApprovalNotification } from "@/lib/email";
 import { requireCapability } from "@/lib/team/demo-actor";
 
@@ -13,7 +14,8 @@ export async function POST(
   if (!gate.ok) return gate.response;
 
   const { id } = await ctx.params;
-  const updated = resolveRuntimeApproval(id, "approved", gate.actor.email);
+  const orgId = await getCurrentOrgId();
+  const updated = await resolveApproval(id, "approved", gate.actor.email, orgId);
   if (!updated) {
     return NextResponse.json({ error: "not_found" }, { status: 404 });
   }
@@ -26,7 +28,8 @@ export async function POST(
   return NextResponse.json({
     ok: true,
     approval: updated,
-    demo: true,
+    demo: runtimeModeLabel() === "demo",
+    mode: runtimeModeLabel(),
     actorId: gate.actor.id,
   });
 }

@@ -1,10 +1,12 @@
 import { NextResponse } from "next/server";
+import { getCurrentOrgId } from "@/lib/auth/session";
 import {
   bindingPublicView,
   ensureBindingRow,
   getBinding,
-} from "@/lib/bindings";
-import { DEMO_ORG, getRuntimeEmployees } from "@/lib/demo-data";
+  getEmployee,
+  runtimeModeLabel,
+} from "@/lib/data";
 
 export const runtime = "nodejs";
 
@@ -13,15 +15,18 @@ export async function GET(
   ctx: { params: Promise<{ id: string }> }
 ) {
   const { id } = await ctx.params;
-  const employee = getRuntimeEmployees().find((e) => e.id === id);
+  const orgId = await getCurrentOrgId();
+  const employee = await getEmployee(id, orgId);
   if (!employee) {
     return NextResponse.json({ error: "employee_not_found" }, { status: 404 });
   }
   const binding =
-    getBinding(id) ?? ensureBindingRow(id, employee.orgId || DEMO_ORG.id);
+    (await getBinding(id)) ??
+    (await ensureBindingRow(id, employee.orgId || orgId || ""));
   return NextResponse.json({
     ok: true,
-    demo: true,
+    demo: runtimeModeLabel() === "demo",
+    mode: runtimeModeLabel(),
     binding: bindingPublicView(binding),
   });
 }

@@ -1,11 +1,12 @@
 import { randomBytes } from "node:crypto";
 import { NextResponse } from "next/server";
+import { getCurrentOrgId } from "@/lib/auth/session";
 import {
-  DEMO_ORG,
-  getRuntimeMemberById,
-  getRuntimeMembers,
-  upsertRuntimeMember,
-} from "@/lib/demo-data";
+  getMemberById,
+  listMembers,
+  runtimeModeLabel,
+  upsertMember,
+} from "@/lib/data";
 import { requireCapability } from "@/lib/team/demo-actor";
 import type {
   HumanCapability,
@@ -17,7 +18,14 @@ import type {
 export const runtime = "nodejs";
 
 export async function GET() {
-  return NextResponse.json({ ok: true, members: getRuntimeMembers(), demo: true });
+  const orgId = await getCurrentOrgId();
+  const members = await listMembers(orgId);
+  return NextResponse.json({
+    ok: true,
+    members,
+    demo: runtimeModeLabel() === "demo",
+    mode: runtimeModeLabel(),
+  });
 }
 
 export async function POST(req: Request) {
@@ -46,10 +54,11 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "capabilities_required" }, { status: 400 });
   }
 
-  const existing = body.id ? getRuntimeMemberById(body.id) : null;
+  const orgId = await getCurrentOrgId();
+  const existing = body.id ? await getMemberById(body.id, orgId) : null;
   const member: OrgMember = {
     id: existing?.id || `mem_${randomBytes(3).toString("hex")}`,
-    orgId: DEMO_ORG.id,
+    orgId: orgId || existing?.orgId || "org_demo",
     email,
     displayName,
     role: body.role || existing?.role || "member",
@@ -59,11 +68,12 @@ export async function POST(req: Request) {
     status: existing?.status || "invited",
   };
 
-  upsertRuntimeMember(member);
+  const saved = await upsertMember(member, orgId);
   return NextResponse.json({
     ok: true,
-    member,
-    demo: true,
+    member: saved,
+    demo: runtimeModeLabel() === "demo",
+    mode: runtimeModeLabel(),
     actorId: gate.actor.id,
   });
 }

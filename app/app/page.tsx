@@ -2,28 +2,32 @@ import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
 import { DashboardActivity } from "@/components/DashboardActivity";
 import { StatCard } from "@/components/StatCard";
-import { countNeedsReauth } from "@/lib/bindings";
+import { getCurrentOrgId } from "@/lib/auth/session";
 import {
-  DEMO_ORG,
-  getGatewayStatus,
-  getRuntimeApprovals,
-  getRuntimeEmployees,
-} from "@/lib/demo-data";
+  countNeedsReauth,
+  getGatewayStatusForOrg,
+  getOrgMeta,
+  listApprovals,
+  listEmployees,
+} from "@/lib/data";
 
 export const dynamic = "force-dynamic";
 
-export default function DashboardPage() {
-  const employees = getRuntimeEmployees() ?? [];
-  const pending = (getRuntimeApprovals() ?? []).filter(
+export default async function DashboardPage() {
+  const orgId = await getCurrentOrgId();
+  const org = await getOrgMeta(orgId);
+  const employees = (await listEmployees(orgId)) ?? [];
+  const approvals = (await listApprovals(orgId)) ?? [];
+  const pending = approvals.filter(
     (a) => a.status === "pending"
   ).length;
-  const gateway = getGatewayStatus();
-  const reauthCount = countNeedsReauth(DEMO_ORG.id);
+  const gateway = await getGatewayStatusForOrg(orgId);
+  const reauthCount = await countNeedsReauth(org.id);
 
   return (
     <AppShell
       title="ダッシュボード"
-      subtitle={`${DEMO_ORG.name} · トライアル中`}
+      subtitle={`${org.name} · トライアル中`}
     >
       {reauthCount > 0 ? (
         <div
@@ -60,7 +64,7 @@ export default function DashboardPage() {
         />
         <StatCard
           label="導入モード"
-          value={DEMO_ORG.integrationMode === "managed" ? "Managed" : "BYO"}
+          value={org.integrationMode === "managed" ? "Managed" : "BYO"}
           hint={`連携: ${gateway}`}
         />
       </div>
@@ -141,7 +145,7 @@ export default function DashboardPage() {
               <p className="mt-4 text-sm muted">要対応はありません。</p>
             ) : (
               <ul className="mt-4 space-y-3">
-                {getRuntimeApprovals()
+                {approvals
                   .filter((a) => a.status === "pending")
                   .slice(0, 3)
                   .map((a) => (
