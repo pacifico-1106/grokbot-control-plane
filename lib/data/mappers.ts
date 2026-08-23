@@ -110,6 +110,7 @@ export type OrgMeta = {
   integrationMode: "managed" | "byo";
   gatewayStatus: GatewayLinkStatus;
   trialEndsAt: string | null;
+  referralCode: string | null;
 };
 
 export function mapOrgRow(row: Record<string, unknown>): OrgMeta {
@@ -119,6 +120,10 @@ export function mapOrgRow(row: Record<string, unknown>): OrgMeta {
     integrationMode: (row.integration_mode as "managed" | "byo") || "managed",
     gatewayStatus: (row.gateway_status as GatewayLinkStatus) || "pending",
     trialEndsAt: row.trial_ends_at != null ? String(row.trial_ends_at) : null,
+    referralCode:
+      row.referral_code != null && String(row.referral_code).trim()
+        ? String(row.referral_code).trim()
+        : null,
   };
 }
 

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getSessionContext } from "@/lib/auth/session";
+import { setOrgReferralCodeIfEmpty } from "@/lib/data/org-context";
 import {
   getOrgStripeCustomerId,
   setOrgStripeCustomerId,
@@ -27,6 +28,8 @@ export const runtime = "nodejs";
 export async function POST(req: Request) {
   const body = (await req.json().catch(() => ({}))) as {
     planKey?: CheckoutPlanKey;
+    referral_code?: string;
+    referralCode?: string;
   };
   const planKey: CheckoutPlanKey =
     body.planKey === "starter"
@@ -34,6 +37,7 @@ export async function POST(req: Request) {
       : body.planKey === "managed"
         ? "managed"
         : "business";
+  const referralRaw = body.referral_code || body.referralCode || "";
   const stripe = getStripe();
   const priceId = getPriceId(planKey);
   const onboardingPriceId =
@@ -52,10 +56,18 @@ export async function POST(req: Request) {
 
   if (!stripe || !priceId) {
     const orgId = sessionCtx.orgId || DEMO_ORG.id;
+    const referralCode = await setOrgReferralCodeIfEmpty(orgId, referralRaw);
+    const metaStub: Record<string, string> = {
+      orgId,
+      org_id: orgId,
+      planKey,
+    };
+    if (referralCode) metaStub.referral_code = referralCode;
     return NextResponse.json({
       ok: true,
       stub: true,
       planKey,
+      referralCode: referralCode || undefined,
       message:
         "Stripe 未設定のため Checkout はスタブです。STRIPE_SECRET_KEY と STRIPE_PRICE_ID_* を設定してください。",
       preview: {
@@ -65,13 +77,13 @@ export async function POST(req: Request) {
         success_url: `${appUrl}/app/billing?checkout=success&plan=${planKey}`,
         cancel_url: `${appUrl}/app/billing?checkout=canceled`,
         client_reference_id: orgId,
-        metadata: { orgId, org_id: orgId, planKey },
+        metadata: metaStub,
         line_items: lineItemsPreview,
         include_business_onboarding:
           planKey === "business" && Boolean(onboardingPriceId),
         subscription_data: {
           trial_period_days: TRIAL_DAYS,
-          metadata: { orgId, org_id: orgId, planKey },
+          metadata: metaStub,
         },
       },
     });
@@ -94,6 +106,7 @@ export async function POST(req: Request) {
 
   const orgId = sessionCtx.orgId || DEMO_ORG.id;
   const email = sessionCtx.email || undefined;
+  const referralCode = await setOrgReferralCodeIfEmpty(orgId, referralRaw);
 
   let customerId = await getOrgStripeCustomerId(orgId);
   if (!customerId) {
@@ -106,7 +119,8 @@ export async function POST(req: Request) {
     await setOrgStripeCustomerId(orgId, customerId);
   }
 
-  const meta = { orgId, org_id: orgId, planKey };
+  const meta: Record<string, string> = { orgId, org_id: orgId, planKey };
+  if (referralCode) meta.referral_code = referralCode;
 
   const line_items: Array<{ price: string; quantity: number }> = [
     { price: priceId, quantity: 1 },

@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 import { createOrgWithOwner } from "@/lib/auth/session";
+import { setOrgReferralCodeIfEmpty } from "@/lib/data/org-context";
+import { DEMO_ORG } from "@/lib/demo-data";
 import { sendTrialStartedEmail, sendWelcomeEmail } from "@/lib/email";
 import { isDemoMode } from "@/lib/mode";
 import { TRIAL_DAYS } from "@/lib/stripe";
@@ -20,6 +22,7 @@ export async function POST(req: Request) {
   let password = "";
   let mode = "managed";
   let displayName = "";
+  let referralCode = "";
 
   if (contentType.includes("application/json")) {
     const body = (await req.json().catch(() => ({}))) as Record<string, string>;
@@ -28,6 +31,7 @@ export async function POST(req: Request) {
     password = String(body.password || "");
     mode = String(body.mode || "managed");
     displayName = String(body.displayName || "").trim();
+    referralCode = String(body.referral_code || body.referralCode || "").trim();
   } else {
     const form = await req.formData();
     orgName = String(form.get("orgName") || "").trim();
@@ -35,6 +39,9 @@ export async function POST(req: Request) {
     password = String(form.get("password") || "");
     mode = String(form.get("mode") || "managed");
     displayName = String(form.get("displayName") || "").trim();
+    referralCode = String(
+      form.get("referral_code") || form.get("referralCode") || ""
+    ).trim();
   }
 
   if (!email) {
@@ -42,6 +49,9 @@ export async function POST(req: Request) {
   }
 
   if (isDemoMode()) {
+    if (referralCode) {
+      await setOrgReferralCodeIfEmpty(DEMO_ORG.id, referralCode);
+    }
     await sendWelcomeEmail(email, orgName || "新しい組織");
     await sendTrialStartedEmail(email, TRIAL_DAYS);
     const url = new URL("/app", req.url);
@@ -65,6 +75,7 @@ export async function POST(req: Request) {
       orgName: orgName || "新しい組織",
       integrationMode: mode === "byo" ? "byo" : "managed",
       displayName: displayName || undefined,
+      referralCode: referralCode || null,
     });
 
     // Establish browser session

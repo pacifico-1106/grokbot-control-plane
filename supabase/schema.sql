@@ -17,6 +17,7 @@ create table if not exists orgs (
     check (gateway_status in ('linked', 'pending', 'disconnected')),
   trial_ends_at timestamptz,
   stripe_customer_id text,
+  referral_code text,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );

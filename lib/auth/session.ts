@@ -119,6 +119,8 @@ export async function createOrgWithOwner(input: {
   orgName: string;
   integrationMode?: "managed" | "byo";
   displayName?: string;
+  /** Optional partner code AIC-XXXX (Kimura stage 2). */
+  referralCode?: string | null;
 }): Promise<{
   userId: string;
   orgId: string;
@@ -145,6 +147,11 @@ export async function createOrgWithOwner(input: {
     Date.now() + trialDays * 86400000
   ).toISOString();
 
+  const referral =
+    input.referralCode != null && String(input.referralCode).trim()
+      ? String(input.referralCode).trim().toUpperCase()
+      : null;
+
   const { data: org, error: orgErr } = await admin
     .from("orgs")
     .insert({
@@ -152,6 +159,7 @@ export async function createOrgWithOwner(input: {
       integration_mode: input.integrationMode || "managed",
       gateway_status: "pending",
       trial_ends_at: trialEnds,
+      ...(referral ? { referral_code: referral } : {}),
     })
     .select("*")
     .single();

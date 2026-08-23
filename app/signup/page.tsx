@@ -61,6 +61,16 @@ export default function SignupPage() {
               <option value="byo">今の Grok Bot に載せる（持ち込み）</option>
             </select>
           </label>
+          <label className="block text-sm">
+            <span className="muted">紹介コード（任意）</span>
+            <input
+              name="referral_code"
+              type="text"
+              placeholder="AIC-XXXX"
+              autoComplete="off"
+              className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm outline-none focus:border-[var(--text-faint)]"
+            />
+          </label>
           <button type="submit" className="btn btn-primary w-full">
             トライアルを開始してダッシュボードへ
           </button>

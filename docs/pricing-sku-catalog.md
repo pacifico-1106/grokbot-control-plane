@@ -5,7 +5,7 @@
 **コード定数:** `lib/billing/plans.ts`（月額プラン）· `lib/billing/skus.ts`（キックオフ／補助金プレースホルダ）  
 **従量メーター:** 常に `gated_confirm_action` のみ。パック SKU と混ぜない。
 
-関連: [`pricing-model.md`](./pricing-model.md) · [`stripe-billing-notes.md`](./stripe-billing-notes.md)
+関連: [`pricing-model.md`](./pricing-model.md) · [`stripe-billing-notes.md`](./stripe-billing-notes.md) · [`partner/referral-tracking.md`](./partner/referral-tracking.md)
 
 ---
 
@@ -113,3 +113,4 @@
 | 2026-08-23 | Kimura | `subsidy_2y_business` / `subsidy_2y_managed` / `year3_extension` — カタログ＋env。保証言語なし |
 | 2026-08-23 | Kimura | Managed コア ¥128,000。任意バンドル包装 ¥168,000 はメモのみ |
 | 2026-08-23 | Kimura | メーターは `gated_confirm_action` のまま。キックオフに Business 初月を入れない |
+| 2026-08-23 | Kimura | 紹介コード thin tracking（`AIC-XXXX` → `orgs.referral_code`）。kickoff+monthly のみ・手動月次・Connect なし → [`partner/referral-tracking.md`](./partner/referral-tracking.md) |

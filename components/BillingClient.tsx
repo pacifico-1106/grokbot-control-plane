@@ -91,6 +91,7 @@ export function BillingClient({
 }: Props) {
   const [busy, setBusy] = useState<string | null>(null);
   const [message, setMessage] = useState("");
+  const [referralCode, setReferralCode] = useState("");
   const searchParams = useSearchParams();
 
   const checkoutBanner = useMemo(() => {
@@ -118,7 +119,10 @@ export function BillingClient({
       const res = await fetch("/api/billing/checkout", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ planKey }),
+        body: JSON.stringify({
+          planKey,
+          referral_code: referralCode.trim() || undefined,
+        }),
       });
       const body = await res.json();
       if (!res.ok) throw new Error(body.message || body.error || "checkout_failed");
@@ -185,6 +189,18 @@ export function BillingClient({
           <span className="muted">{currentStatus || "—"}</span>
         </div>
       )}
+
+      <label className="mb-4 block text-sm max-w-sm">
+        <span className="muted">紹介コード（任意）</span>
+        <input
+          type="text"
+          value={referralCode}
+          onChange={(e) => setReferralCode(e.target.value)}
+          placeholder="AIC-XXXX"
+          autoComplete="off"
+          className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm outline-none focus:border-[var(--text-faint)]"
+        />
+      </label>
 
       <div className="grid lg:grid-cols-3 gap-4">
         {PLANS.map((plan) => (

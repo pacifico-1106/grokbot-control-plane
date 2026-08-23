@@ -14,6 +14,8 @@ export const DEMO_ORG = {
   integrationMode: "managed" as const,
   gatewayStatus: "linked" as GatewayLinkStatus,
   trialEndsAt: new Date(Date.now() + 14 * 86400000).toISOString(),
+  /** Optional partner code (AIC-XXXX); demo memory only. */
+  referralCode: null as string | null,
 };
 
 export const DEMO_EMPLOYEES: Employee[] = [

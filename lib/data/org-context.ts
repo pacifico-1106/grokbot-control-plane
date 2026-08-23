@@ -17,6 +17,7 @@ export async function getOrgMeta(orgId?: string | null): Promise<OrgMeta> {
       integrationMode: DEMO_ORG.integrationMode,
       gatewayStatus: getGatewayStatus(),
       trialEndsAt: DEMO_ORG.trialEndsAt,
+      referralCode: DEMO_ORG.referralCode,
     };
   }
 
@@ -28,6 +29,7 @@ export async function getOrgMeta(orgId?: string | null): Promise<OrgMeta> {
       integrationMode: DEMO_ORG.integrationMode,
       gatewayStatus: DEMO_ORG.gatewayStatus,
       trialEndsAt: DEMO_ORG.trialEndsAt,
+      referralCode: DEMO_ORG.referralCode,
     };
   }
 
@@ -76,4 +78,53 @@ export async function setGatewayStatusForOrg(
     status,
     updated_at: new Date().toISOString(),
   });
+}
+
+/** Normalize optional partner code (AIC-XXXX). Empty → null. */
+export function normalizeReferralCode(
+  raw: string | null | undefined
+): string | null {
+  const t = String(raw || "").trim().toUpperCase();
+  if (!t) return null;
+  return t;
+}
+
+/**
+ * Persist referral_code on org when empty (thin tracking).
+ * DEMO: store on DEMO_ORG in memory. Production: update orgs if currently null.
+ */
+export async function setOrgReferralCodeIfEmpty(
+  orgId: string,
+  raw: string | null | undefined
+): Promise<string | null> {
+  const code = normalizeReferralCode(raw);
+  if (!code) return null;
+
+  if (isDemoMode()) {
+    if (!DEMO_ORG.referralCode) DEMO_ORG.referralCode = code;
+    return DEMO_ORG.referralCode;
+  }
+
+  const admin = createSupabaseAdminClient();
+  if (!admin || !orgId) return code;
+
+  const { data } = await admin
+    .from("orgs")
+    .select("referral_code")
+    .eq("id", orgId)
+    .maybeSingle();
+  const existing = (data as { referral_code?: string | null } | null)
+    ?.referral_code;
+  if (existing && String(existing).trim()) {
+    return String(existing).trim();
+  }
+
+  await admin
+    .from("orgs")
+    .update({
+      referral_code: code,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", orgId);
+  return code;
 }
