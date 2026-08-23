@@ -8,6 +8,10 @@ import {
   normalizeAllowedAccounts,
 } from "@/lib/employees/allowed-accounts";
 import {
+  alwaysHumanMustList,
+  denyDefaultList,
+} from "@/lib/employees/approval-presets";
+import {
   APPROVAL_POLICY_LABELS,
   SCOPE_LABELS,
 } from "@/lib/employees/policy-draft";
@@ -355,6 +359,30 @@ export function HireEmployeeClient() {
               />
             </label>
           </div>
+
+          <details className="rounded-lg border border-[var(--border-soft)] bg-[var(--bg-soft)] px-3 py-2">
+            <summary className="cursor-pointer text-xs font-medium">
+              JP中小向け・必須承認プリセット（Managed初期値）
+            </summary>
+            <p className="mt-2 text-[11px] muted leading-relaxed">
+              人間の職務RBAC（誰が承認ボタンを押せるか）とは別層です。confirm / send
+              はゲートで always_human。propose / draft のみ自動可。
+            </p>
+            <ul className="mt-2 space-y-1 text-[11px] leading-relaxed">
+              {alwaysHumanMustList().map((row) => (
+                <li key={row.tool}>
+                  <span className="font-medium text-[var(--text)]">{row.labelJa}</span>
+                  <span className="muted"> — {row.tool}</span>
+                </li>
+              ))}
+            </ul>
+            <p className="mt-2 text-[11px] muted">
+              禁止デフォルト:{" "}
+              {denyDefaultList()
+                .map((r) => r.labelJa)
+                .join(" / ")}
+            </p>
+          </details>
 
           <button
             type="button"

@@ -68,6 +68,8 @@ export type EmployeeScope =
   | "tools:invoke"
   | "mail:draft"
   | "mail:send"
+  | "calendar:propose"
+  | "calendar:confirm"
   | "files:read"
   | "files:write"
   | "browser:use"
@@ -75,6 +77,40 @@ export type EmployeeScope =
   | "commerce:order"
   | "audit:append"
   | "approvals:request";
+
+/**
+ * Email channel layers — never mix (Ando §2 / Kimura P0).
+ * - human_gmail: 人間の Workspace / Gmail（原則エージェント直操作しない）
+ * - agentmail: AI社員専用 inbox（P0.5 スキーマ/ポリシー予約・本送信は P1）
+ * - staffpass_resend: 制御面システム通知（歓迎・承認依頼・トライアル）
+ */
+export type EmailLayer = "human_gmail" | "agentmail" | "staffpass_resend";
+
+/** P0.5 reservation only — no live AgentMail SDK wiring in P0. */
+export interface AgentMailReservation {
+  employeeId: string;
+  orgId: string;
+  /** Future inbox id from AgentMail provider */
+  inboxId: string | null;
+  status: "reserved" | "provisioning" | "active" | "disabled";
+  layer: "agentmail";
+}
+
+/** Gateway invoke body (fail-closed contract). */
+export interface GatewayInvokeRequest {
+  employeeId?: string;
+  tool: string;
+  /** Required — job purpose key (must be in credential.allowedPurposes when set). */
+  purpose: string;
+  /** Required — correlation id (camelCase or job_id). */
+  jobId?: string;
+  job_id?: string;
+  amountJpy?: number;
+  isFirstOrder?: boolean;
+  spentTodayJpy?: number;
+  spentThisMonthJpy?: number;
+  args?: Record<string, unknown>;
+}
 
 export type AuditAction =
   | "credential.issued"
@@ -206,12 +242,18 @@ export interface EmployeePolicyDraft {
     spendRecommendation?: string | null;
     /** Suggested / configured external accounts (Google, SNS, etc.). */
     allowedAccounts?: AllowedAccount[];
+    /**
+     * Per-tool approval hints from JP SME strict presets (Ando §3).
+     * Distinct from human RBAC (OrgMember.capabilities).
+     */
+    toolApprovalDefaults?: Record<string, ApprovalPolicy | "deny">;
   };
   assumptions: string[];
   missingFields: Array<"role" | "purpose" | "risk" | "scope">;
   warnings: Array<
     | "broad_purpose_access"
     | "mail_send_requested"
+    | "calendar_confirm_requested"
     | "commerce_order_requested"
     | "browser_use_requested"
     | "always_human_recommended"

@@ -96,3 +96,18 @@ Bot に「Stripeを直接叩く」「任意URLにPOST」を与えない。
 - [ ] 管理者に要再連携の見方が伝わっている  
 - [ ] 許可IDと実ブラウザ／SNSログインが一致している（共有PC）  
 
+
+
+---
+
+## 8. Managed 生命線デモ文言（P0 揃え）
+
+営業・導入デモで必ず見せる／言うこと:
+
+> 「この AI社員の ID は一度発行したら変わりません。トークンは最初の手渡しだけ。連携が切れたら画面に **要再連携** と出して、黙って消しません。」
+>
+> 「送信・日程確定・発注は Gateway で必ず人間承認に上げます。空き枠の提案や下書きだけ自動にできます。」
+>
+> 「Bot の道具箱には Staffpass 経由だけを残します。直結のメール送信や決済キーは渡しません。」
+
+実装対応: `docs/binding-lifeline.md` / `POST /api/gateway/invoke`（purpose・jobId・allowlist・confirm/send → needs_approval）。

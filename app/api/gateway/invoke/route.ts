@@ -6,37 +6,25 @@ import {
   getEmployee,
   runtimeModeLabel,
 } from "@/lib/data";
+import {
+  employeeHasToolScope,
+  isForceApprovalTool,
+  resolveGatewayTool,
+} from "@/lib/gateway/tools";
 import { evaluateSpend } from "@/lib/spend-gate";
+import type { GatewayInvokeRequest } from "@/lib/types";
 
 export const runtime = "nodejs";
 
-function isCommerceOrder(tool?: string, purpose?: string): boolean {
-  const t = (tool || "").toLowerCase();
-  const p = (purpose || "").toLowerCase();
-  return (
-    t === "commerce.order" ||
-    t === "commerce:order" ||
-    t.includes("commerce.order") ||
-    p === "commerce.order" ||
-    p === "commerce:order"
-  );
-}
-
 /**
- * Fail-closed tool invoke stub.
- * Requires employeeId (body or x-employee-id) with executable binding.
- * commerce.order → spend gate (missing limits ⇒ needs_approval).
+ * Fail-closed tool invoke (P0 contract).
+ * - purpose + jobId (or job_id) required
+ * - unregistered tools rejected
+ * - confirm / send / order force needs_approval
+ * - AgentMail tools are reserved (P0.5) — no live send
  */
 export async function POST(req: Request) {
-  const body = (await req.json().catch(() => ({}))) as {
-    employeeId?: string;
-    tool?: string;
-    purpose?: string;
-    amountJpy?: number;
-    isFirstOrder?: boolean;
-    spentTodayJpy?: number;
-    spentThisMonthJpy?: number;
-  };
+  const body = (await req.json().catch(() => ({}))) as GatewayInvokeRequest;
   const headerId = req.headers.get("x-employee-id") || undefined;
   const employeeId = (body.employeeId || headerId || "").trim();
 
@@ -52,6 +40,64 @@ export async function POST(req: Request) {
     );
   }
 
+  const purpose = (body.purpose || "").trim();
+  const jobId = (body.jobId || body.job_id || "").trim();
+  const toolRaw = (body.tool || "").trim();
+
+  if (!purpose) {
+    return NextResponse.json(
+      {
+        ok: false,
+        code: "purpose_required",
+        error: "purpose_required",
+        message: "purpose is required on gateway invoke (fail-closed)",
+      },
+      { status: 400 }
+    );
+  }
+
+  if (!jobId) {
+    return NextResponse.json(
+      {
+        ok: false,
+        code: "job_id_required",
+        error: "job_id_required",
+        message: "jobId (or job_id) is required on gateway invoke (fail-closed)",
+      },
+      { status: 400 }
+    );
+  }
+
+  if (!toolRaw) {
+    return NextResponse.json(
+      {
+        ok: false,
+        code: "tool_required",
+        error: "tool_required",
+        message: "tool is required; unregistered tools are rejected",
+      },
+      { status: 400 }
+    );
+  }
+
+  const resolved = resolveGatewayTool(toolRaw);
+  if (!resolved.ok) {
+    return NextResponse.json(
+      {
+        ok: false,
+        code: "unknown_tool",
+        error: "unknown_tool",
+        tool: resolved.tool || toolRaw,
+        message:
+          "unregistered tool rejected (fail-closed). Use allowlisted tools only (e.g. calendar.propose / calendar.confirm, mail.draft / mail.send).",
+      },
+      { status: 403 }
+    );
+  }
+
+  const toolDef = resolved.def;
+  const tool = toolDef.id;
+
   const decision = await assertExecutable(employeeId);
   if (!decision.ok) {
     const status =
@@ -65,105 +111,144 @@ export async function POST(req: Request) {
         error: decision.code,
         message: decision.message,
         binding: (await getBinding(employeeId)) ?? null,
+        purpose,
+        jobId,
+        tool,
       },
       { status }
     );
   }
 
-  const tool = body.tool || "tools:ping";
-  const purpose = body.purpose || "ops.health";
-
   const orgId = await getCurrentOrgId();
+  const employee = await getEmployee(employeeId, orgId);
 
-  if (isCommerceOrder(tool, purpose)) {
-    const employee = await getEmployee(employeeId, orgId);
-    if (!employee) {
-      return NextResponse.json(
-        {
-          ok: false,
-          code: "not_found",
-          error: "employee_not_found",
-          message: "employee not found for spend gate",
-        },
-        { status: 401 }
-      );
-    }
+  if (!employee) {
+    return NextResponse.json(
+      {
+        ok: false,
+        code: "not_found",
+        error: "employee_not_found",
+        message: "employee not found",
+        purpose,
+        jobId,
+        tool,
+      },
+      { status: 401 }
+    );
+  }
 
-    if (!employee.scopes.includes("commerce:order")) {
-      return NextResponse.json(
-        {
-          ok: false,
-          code: "scope_denied",
-          error: "commerce_order_scope_required",
-          message: "commerce:order スコープがありません",
-          spend: { decision: "deny", reason: "scope_denied" },
-        },
-        { status: 403 }
-      );
-    }
+  if (
+    employee.allowedPurposes?.length &&
+    !employee.allowedPurposes.includes(purpose)
+  ) {
+    return NextResponse.json(
+      {
+        ok: false,
+        code: "purpose_denied",
+        error: "purpose_not_allowed",
+        message: `purpose "${purpose}" is not in credential.allowedPurposes`,
+        purpose,
+        jobId,
+        tool,
+        allowedPurposes: employee.allowedPurposes,
+      },
+      { status: 403 }
+    );
+  }
 
-    const amountJpy =
-      body.amountJpy == null ? Number.NaN : Number(body.amountJpy);
-    const spend = evaluateSpend({
-      amountJpy,
-      limits: employee.spend,
-      approvalPolicy: employee.approvalPolicy,
-      isFirstOrder: body.isFirstOrder,
-      spentTodayJpy: body.spentTodayJpy,
-      spentThisMonthJpy: body.spentThisMonthJpy,
-    });
+  if (!employeeHasToolScope(employee.scopes, toolDef)) {
+    return NextResponse.json(
+      {
+        ok: false,
+        code: "scope_denied",
+        error: "scope_required",
+        message: `tool ${tool} requires one of: ${toolDef.requiredScopes.join(", ") || "(none)"}`,
+        purpose,
+        jobId,
+        tool,
+        requiredScopes: toolDef.requiredScopes,
+      },
+      { status: 403 }
+    );
+  }
 
-    if (spend.decision !== "allow") {
+  // AgentMail: P0.5 reservation only — never live-send in P0.
+  if (toolDef.reserved) {
+    return NextResponse.json(
+      {
+        ok: false,
+        code: "tool_reserved",
+        error: "agentmail_p05_reserved",
+        message:
+          "AgentMail is schema/policy-reserved for P0.5; live send/inbox is not implemented in P0. Use mail.draft / mail.send stubs or wait for P1.",
+        purpose,
+        jobId,
+        tool,
+        layer: "agentmail",
+        needs_approval: toolDef.forceNeedsApproval,
+      },
+      { status: 501 }
+    );
+  }
+
+  // confirm / send / order (and force flags) → always needs_approval.
+  const forceApproval =
+    isForceApprovalTool(toolDef) ||
+    employee.approvalPolicy === "always_human";
+
+  if (forceApproval && tool !== "tools.ping" && tool !== "audit.append") {
+    // commerce.order still runs spend gate for richer reason codes.
+    if (tool === "commerce.order") {
+      const amountJpy =
+        body.amountJpy == null ? Number.NaN : Number(body.amountJpy);
+      const spend = evaluateSpend({
+        amountJpy,
+        limits: employee.spend,
+        approvalPolicy: "always_human",
+        isFirstOrder: body.isFirstOrder,
+        spentTodayJpy: body.spentTodayJpy,
+        spentThisMonthJpy: body.spentThisMonthJpy,
+      });
       const status = spend.decision === "deny" ? 403 : 402;
       return NextResponse.json(
         {
           ok: false,
-          code: spend.decision,
+          code: spend.decision === "deny" ? "deny" : "needs_approval",
           error: spend.reason,
           message: spend.message,
+          needs_approval: spend.decision !== "deny",
           spend,
           employeeId,
           tool,
           purpose,
+          jobId,
         },
         { status }
       );
     }
 
-    return NextResponse.json({
-      ok: true,
-      demo: runtimeModeLabel() === "demo",
-      mode: runtimeModeLabel(),
-      employeeId,
-      agentId: decision.binding.grokBotAgentId,
-      generation: decision.binding.credentialGeneration,
-      tool,
-      purpose,
-      spend,
-      result: { ordered: true, amountJpy },
-      message: "commerce.order allowed (spend gate passed)",
-    });
+    return NextResponse.json(
+      {
+        ok: false,
+        code: "needs_approval",
+        error: "needs_approval",
+        message: `${tool} requires human approval (always_human default for confirm/send/order)`,
+        needs_approval: true,
+        employeeId,
+        tool,
+        purpose,
+        jobId,
+        toolKind: toolDef.kind,
+        approvalPolicy: employee.approvalPolicy,
+      },
+      { status: 402 }
+    );
   }
 
-  const employee = await getEmployee(employeeId, orgId);
-  const isBrowserUse =
-    (tool || "").toLowerCase().includes("browser") ||
-    (purpose || "").toLowerCase().includes("browser") ||
-    tool === "browser:use";
-
+  // risk_based employee + mayAuto tools: allow in stub (audit later).
+  // browser.use is force-approval above; leftover soft path for warnings only if ever mayAuto.
   const warnings: string[] = [];
-  if (isBrowserUse) {
-    if (!employee?.scopes.includes("browser:use")) {
-      return NextResponse.json(
-        {
-          ok: false,
-          code: "scope_denied",
-          error: "browser_use_scope_required",
-          message: "browser:use スコープがありません",
-        },
-        { status: 403 }
-      );
-    }
+  if (tool === "browser.use") {
     const accounts = employee.allowedAccounts ?? [];
     if (!accounts.length) {
       warnings.push(
@@ -179,17 +264,29 @@ export async function POST(req: Request) {
   return NextResponse.json({
     ok: true,
     demo: runtimeModeLabel() === "demo",
-      mode: runtimeModeLabel(),
+    mode: runtimeModeLabel(),
     employeeId,
     agentId: decision.binding.grokBotAgentId,
     generation: decision.binding.credentialGeneration,
     tool,
     purpose,
-    result: { pong: true },
+    jobId,
+    toolKind: toolDef.kind,
+    result:
+      tool === "tools.ping"
+        ? { pong: true }
+        : tool === "calendar.propose"
+          ? { proposed: true, slots: [] }
+          : tool === "mail.draft"
+            ? { drafted: true }
+            : tool === "commerce.quote"
+              ? { quoted: true }
+              : { accepted: true },
     warnings: warnings.length ? warnings : undefined,
-    allowedAccounts: isBrowserUse ? employee?.allowedAccounts ?? [] : undefined,
+    allowedAccounts:
+      tool === "browser.use" ? employee.allowedAccounts ?? [] : undefined,
     message: warnings.length
-      ? "invoke allowed with browser policy warnings"
-      : "invoke allowed (binding linked + healthy)",
+      ? "invoke allowed with policy warnings"
+      : `invoke allowed (${tool}; propose/draft/read may auto)`,
   });
 }

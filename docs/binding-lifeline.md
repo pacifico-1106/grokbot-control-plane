@@ -48,4 +48,14 @@ limits 未設定は fail-closed で `needs_approval`。詳細は `docs/spend-del
 
 **実際の発注・送信は Gateway 経由のみ。Botに直結ツールを載せない。**
 
+## Managed 生命線デモ（言い方）
+
+デモ／導入で必ず口に出す3点:
+
+1. **employeeId は生涯同じ** — 社員証を再発行しても ID は付け替えない（generation だけ増える）
+2. **切れても黙って消さない** — ヘルス失敗は UI で **要再連携（needs_reauth）**。binding 行をサイレント削除しない
+3. **手は Gateway の外に出さない** — Bot に直結の送信・発注ツールを載せない。Staffpass が拒否すれば動かない
+
+共有PCの弱点は先に認め、境界を社員証（allowedAccounts 含む）に移したうえで監視する。
+
 更新: 2026-08-23

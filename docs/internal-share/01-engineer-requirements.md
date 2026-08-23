@@ -3,7 +3,7 @@
 **プロダクト仮称:** AI社員 制御面（Grok Bot × 制御プレーン）  
 **リポジトリ:** https://github.com/pacifico-1106/grokbot-control-plane  
 **対象読者:** 実装・レビュー・オンボーディングするエンジニア  
-**ステータス:** 骨格〜本番寄せ実装中（ブラッシュアップ前提の社内ドラフト）  
+**ステータス:** P0 スプリント（A/D 採択反映）— 骨格〜本番寄せ実装中  
 **更新:** 2026-08-23
 
 ---
@@ -11,6 +11,23 @@
 ## 1. プロダクト一文
 
 日本の中小・零細向けに、Grok Bot 上の AI を「社員証・承認・監査付きの AI社員」として運用する制御面 SaaS。モデルや財布は持たず、**許可 → 実行 → 証跡（必要なら承認）** を担う。
+
+### 1.1 用語一行定義（固定）
+
+| 語 | 定義 |
+|----|------|
+| **Staffpass** | 本プロダクト。AI社員の社員証・承認・監査を提供する制御面 SaaS |
+| **制御面** | 許可 → 実行 → 証跡（必要なら承認）のゲート層。LLM や決済財布そのものは持たない |
+| **AI社員** | Org 配下の Employee。実行体は Grok Bot、権限境界は Credential（社員証） |
+
+### 1.2 木村 P0 決定（安藤提案 A / D 採択）
+
+| 提案 | 決定 |
+|------|------|
+| **A** | ツールを提案と確定に二分: `calendar.propose` / `calendar.confirm`、`mail.draft` / `mail.send`。**confirm・send は常に always_human**。propose・draft は auto / risk_based 可。**未登録ツールは fail-closed 拒否**。Gateway invoke に **purpose + jobId（または job_id）必須** |
+| **D** | 企業 DB のデフォルト正本は **Supabase のみ**。Google Drive はファイル／添付のみ。DB 代替にしない。GCP 等は例外顧客のみ |
+
+B〜F（テンプレ3枚 / AgentMail は P0.5予約+P1 / 承認UI第一はダッシュボード / 週次FB）は異論なし・本スプリントでは予約または後続。
 
 ---
 
@@ -31,9 +48,12 @@
 |----|------|------|
 | App | Next.js App Router + TypeScript + Tailwind | Sealith-web と同系統 |
 | Hosting | Vercel | 初弾デプロイ済み／claim 済み想定 |
-| DB / Auth | Supabase (Postgres + Auth) | |
-| Billing | Stripe | クレカ + 銀行振込（`customer_balance` 等 JP 向け） |
-| Email | Resend | 歓迎・承認依頼・トライアル終了など |
+| DB / Auth | **Supabase のみ（デフォルト正本）** | Drive / GCP は DB にしない（決定 D） |
+| Billing | Stripe | **Staffpass SaaS サブスク**（クレカ + 銀行振込）。AI社員の `commerce:order` とは別物 |
+| Email（制御面） | Resend | 歓迎・承認依頼・トライアル終了など（層 C） |
+| Email（AI社員） | AgentMail | **P0.5 スキーマ／ポリシー予約のみ**。本送信・inbox プロビジョニングは P1 |
+| Email（人間） | Gmail / Workspace | 人が読む・決裁。エージェントに丸ごと渡さない（層 A） |
+| ファイル | Google Drive 等 | 添付・共有ドキュメントのみ |
 | 実行エージェント | Grok Bot | Managed（こちらが連携巻き取り）/ BYO（顧客が自前 Bot） |
 
 ローカルメモ（社内）にも P0 仕様あり: `P0-audit-spec.md`
@@ -57,12 +77,23 @@ Org
 - `scopes[]`, `allowedPurposes[]`
 - `approvalPolicy`: `auto` | `always_human` | `risk_based`
 - `expiresAt` / `revokedAt`
-- 実行コンテキスト必須: `purpose`, `jobId`
+- 実行コンテキスト必須: `purpose`, `jobId`（`job_id` 可）
+- スコープ例: `mail:draft` / `mail:send` / `calendar:propose` / `calendar:confirm` / `commerce:order` / `browser:use`
+- 隣接: `allowedAccounts[]`（共有PC向け・サービス可変。browser:use とセット）
 
 ### AuditEvent 原則
 - プロンプト全文・CoT は保存しない
 - 構造化サマリ + 参照 ID のみ
 - attempt / result / deny / approve を残す
+
+### 人間 RBAC と AI 承認プリセットは別層
+
+| 層 | 何を決めるか | 置き場 |
+|----|--------------|--------|
+| **人間チーム RBAC** | 誰が承認ボタンを押せるか・雇えるか・課金を触れるか | `OrgMember.role` / `jobRole` / `capabilities` |
+| **AI社員の承認プリセット** | どのツール／アクションが要承認か | Credential `approvalPolicy` + ツール別デフォルト（Ando §3） |
+
+混同しない。社長が「承認者」でも、AI の `mail.send` は別途 always_human。
 
 ---
 
@@ -73,11 +104,54 @@ Grok Bot / MCP Client
   → Control Plane Gateway（Bearer 社員証）
     → Policy Engine
       → [要承認] Approval Queue
-      → Tool Adapter（許可ツールのみ）
+      → Tool Adapter（許可ツールのみ・未登録拒否）
     → Audit Writer（常時）
 ```
 
 **重要前提:** Grok Bot の実行コンピュータはユーザー配下で共有（画面はエージェント別）。OS 権限では職務分離できない → **制御面が必須**。共有ログインは「環境の能力」であり「職務権限」ではない。
+
+### 5.1 メール3層（絶対に混ぜない）
+
+| 層 | 箱 | 用途 | Staffpass の関わり |
+|----|-----|------|-------------------|
+| **A. Human Gmail** | 社長・実務の Workspace | 顧客折衝・決裁 | 原則エージェント直操作しない |
+| **B. AgentMail** | 企業×Employee 専用 inbox | AI社員の送受信 | 送信はゲート対象。**P0 は予約のみ（P0.5）** |
+| **C. Staffpass Resend** | プロダクト送信ドメイン | 歓迎・承認依頼・トライアル・請求 | 制御面アプリ自身。AI の営業メールに流用しない |
+
+> Resend は Staffpass の通知。AgentMail は AI社員の名刺メール。Gmail は人間の仕事机。
+
+### 5.2 Gateway 契約（P0 固定）
+
+- **Endpoint:** `POST /api/gateway/invoke`
+- **必須:** `employeeId`, `tool`, `purpose`, `jobId`（または `job_id`）
+- **Allowlist:** `lib/gateway/tools.ts`（例: `calendar.propose` / `calendar.confirm` / `mail.draft` / `mail.send` / `commerce.order` …）
+- **未登録ツール:** `403 unknown_tool`（fail-closed）
+- **confirm / send / order:** 常に `402 needs_approval`（always_human デフォルト）
+- **propose / draft / read:** employee ポリシーに応じ auto 可
+- **AgentMail ツール:** `501 tool_reserved`（ライブ統合なし）
+
+### 5.3 承認 must-list（JP SME 厳格・Managed 初期値）
+
+必須承認（`always_human`）: 社外メール送信、日程**確定**、課金・購入、顧客マスタ更新／エクスポート、Drive 社外共有、browser:use、Slack 社外投稿 など。  
+自動可: 空き枠**提案**、メール下書き、社内カレンダー参照、ナレッジ検索、Resend 通知。  
+禁止デフォルト: 許可外アカウント操作、社員証の自己変更、監査ログ削除。
+
+実装: `lib/employees/approval-presets.ts` → hire / policy-draft 初期値。
+
+### 5.4 Won't（約束しない）
+
+- OS 完全分離
+- 学習の絶対停止保証
+- マスキング 100%
+- Drive = DB
+- AgentMail 本送信を P0 で完成させること
+
+### 5.5 Stripe SaaS vs commerce:order
+
+| | Staffpass Stripe | AI社員 commerce:order |
+|--|------------------|----------------------|
+| 誰の金か | 顧客 → Staffpass への SaaS 料金 | 顧客の業務発注・購入 |
+| ゲート | Billing / Subscription | Gateway + spend-gate + 承認 |
 
 ---
 
@@ -102,12 +176,13 @@ Grok Bot / MCP Client
 ## 7. API（方針）
 
 - `POST /api/trial` — トライアル org 発行
-- `POST /api/v1/actions` — ゲート経由実行（本番の核）
-- `GET/POST /api/v1/approvals/*`
-- `GET /api/v1/audit/events` (+ export)
-- `POST /api/webhooks/stripe`
-- `POST /api/email` またはサーバ内 Resend ヘルパ
-- MCP: 将来 `invoke_tool` / `get_job_audit` 等（Sealith MCP の薄い互換ではなく自前契約で可）
+- `POST /api/gateway/invoke` — **ゲート経由実行（P0 の核）**。purpose + jobId 必須、ツール allowlist
+- `GET /api/gateway/health` — 契約ヒント（allowlist / requirePurpose 等）
+- `GET/POST /api/approvals/*`
+- `GET` 監査系 (+ export は P1)
+- `POST /api/webhooks/stripe` — **SaaS サブスク**用（commerce:order ではない）
+- `POST /api/email` またはサーバ内 Resend ヘルパ（層 C のみ）
+- MCP: 将来 `invoke_tool` / `get_job_audit` 等（自前契約）
 
 認証: ダッシュボードは Supabase Auth。エージェント実行は Employee Credential Bearer。
 
@@ -160,8 +235,9 @@ NEXT_PUBLIC_APP_URL=
 
 | Phase | 内容 |
 |-------|------|
-| P0 | 社員証・ゲート・監査・承認最小、LP、trial |
-| P1 | エクスポート、通知（Resend）、チーム、オンボーディング完成 |
+| P0 | 社員証・ゲート契約（propose/confirm・draft/send）・監査・承認プリセット、LP、trial、AgentMail **予約** |
+| P0.5 | AgentMail 契約・スキーマ確定（inbox 1:1）。本送信はまだ |
+| P1 | AgentMail 本送信、エクスポート、Resend 充実、チーム、オンボーディング完成 |
 | P2 | eSIM WorkOrder（決済検証縦）、デモ脚本の本実装 |
 | P3 | SSO、他 Provider、Partner API 連携 |
 
@@ -193,9 +269,12 @@ NEXT_PUBLIC_APP_URL=
 
 ## 14. 関連ドキュメント
 
+- ミニマム1枚: `00-minimum-defaults.md`（A/D 採択後）
 - 社内: `02-design-brief.md` / `03-sales-enablement.md`
 - 仕様メモ: `../P0-audit-spec.md`
 - 提案1枚: `../proposal-one-pager.md`
 - デモ脚本: `../demo-script-esim-approval.md`
 - バインディング: `../binding-lifeline.md`
+- 強制 vs 手動: `../enforcement-auto-vs-manual.md`
+- 安藤対応表（ワークスペース）: `/workspace/docs/staffpass-minimum-map.md`
 

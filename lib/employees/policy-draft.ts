@@ -1,5 +1,9 @@
 import type { ApprovalPolicy, EmployeePolicyDraft, EmployeeScope, SpendLimits } from "@/lib/types";
 import { hintAllowedAccountsFromText } from "@/lib/employees/allowed-accounts";
+import {
+  suggestEmployeeApprovalPolicy,
+  toolApprovalHintsFromPresets,
+} from "@/lib/employees/approval-presets";
 import { DEFAULT_SPEND_LIMITS } from "@/lib/spend-gate";
 
 const ROLE_PROFILES: Array<{
@@ -14,8 +18,15 @@ const ROLE_PROFILES: Array<{
     match: /(?:営業|見積|提案|セールス|sales)/i,
     displayName: "営業AI社員",
     roleLabel: "営業アシスタント",
-    purposes: ["sales.outreach", "commerce.quote"],
-    scopes: ["tools:read", "mail:draft", "commerce:quote", "approvals:request", "audit:append"],
+    purposes: ["sales.outreach", "commerce.quote", "calendar.propose"],
+    scopes: [
+      "tools:read",
+      "mail:draft",
+      "calendar:propose",
+      "commerce:quote",
+      "approvals:request",
+      "audit:append",
+    ],
     approvalPolicy: "risk_based",
   },
   {
@@ -39,7 +50,14 @@ const ROLE_PROFILES: Array<{
     displayName: "採用AI社員",
     roleLabel: "採用アシスタント",
     purposes: ["hr.screening", "hr.schedule"],
-    scopes: ["tools:read", "files:read", "mail:draft", "approvals:request", "audit:append"],
+    scopes: [
+      "tools:read",
+      "files:read",
+      "mail:draft",
+      "calendar:propose",
+      "approvals:request",
+      "audit:append",
+    ],
     approvalPolicy: "always_human",
   },
   {
@@ -93,17 +111,28 @@ export function buildEmployeePolicyDraft(rawInput: string): EmployeePolicyDraft 
   const profile = ROLE_PROFILES.find((p) => p.match.test(input));
 
   const wantsSend = /(?:送信|送る|メールを出す|外部送信|send mail)/i.test(input);
+  const wantsDraftOnly =
+    /(?:下書き|draft)/i.test(input) && !wantsSend;
   const wantsOrder = /(?:発注|注文|購入|決済|order|purchase|buy)/i.test(input);
   const wantsBrowser = /(?:ブラウザ|ウェブ|検索|調べ|browse|research)/i.test(input);
   const wantsWrite = /(?:書込|編集|作成|ファイルを作|write|edit)/i.test(input);
+  const wantsCalendarConfirm =
+    /(?:日程.?確定|予定を入れる|invite|カレンダー.?確定|予定確定|commit.?calendar)/i.test(input);
+  const wantsCalendarPropose =
+    /(?:空き|候補|日程.?提案|カレンダー|schedule|面接枠)/i.test(input) ||
+    wantsCalendarConfirm;
   const explicitAlwaysHuman =
     /(?:必ず承認|毎回承認|人間が許可|always.?human|要承認のみ)/i.test(input);
-  // Order detected → *suggest* always_human initially (UI may switch to risk_based + limits).
-  const suggestAlwaysHumanForOrder = wantsOrder && !/(?:少額は自動|リスクベース|risk.?based)/i.test(input);
+  const preferRiskBased = /(?:少額は自動|リスクベース|risk.?based)/i.test(input);
 
   const scopes = unique<EmployeeScope>([
     ...(profile?.scopes ?? DEFAULT_SCOPES),
-    ...(wantsSend ? (["mail:draft", "mail:send"] as EmployeeScope[]) : []),
+    ...(wantsSend || wantsDraftOnly
+      ? (["mail:draft"] as EmployeeScope[])
+      : []),
+    ...(wantsSend ? (["mail:send"] as EmployeeScope[]) : []),
+    ...(wantsCalendarPropose ? (["calendar:propose"] as EmployeeScope[]) : []),
+    ...(wantsCalendarConfirm ? (["calendar:confirm"] as EmployeeScope[]) : []),
     ...(wantsOrder ? (["commerce:quote", "commerce:order"] as EmployeeScope[]) : []),
     ...(wantsBrowser ? (["browser:use"] as EmployeeScope[]) : []),
     ...(wantsWrite ? (["files:write"] as EmployeeScope[]) : []),
@@ -111,9 +140,12 @@ export function buildEmployeePolicyDraft(rawInput: string): EmployeePolicyDraft 
     "audit:append",
   ]);
 
-  const approvalPolicy: ApprovalPolicy = explicitAlwaysHuman || suggestAlwaysHumanForOrder
-    ? "always_human"
-    : profile?.approvalPolicy ?? "risk_based";
+  // confirm / send / order / browser → always_human default (Ando A + §3).
+  const approvalPolicy: ApprovalPolicy = suggestEmployeeApprovalPolicy({
+    scopes,
+    explicitAlwaysHuman,
+    preferRiskBased,
+  });
 
   const spend: SpendLimits | null = scopes.includes("commerce:order")
     ? { ...DEFAULT_SPEND_LIMITS }
@@ -152,7 +184,16 @@ export function buildEmployeePolicyDraft(rawInput: string): EmployeePolicyDraft 
     assumptions.push("社員証の有効期限は30日後にしています。");
   }
   if (wantsSend) {
-    assumptions.push("外部送信は承認ポリシーに従ってゲートします。");
+    assumptions.push(
+      "mail.send は常に人間承認（always_human）。下書き（mail.draft）のみ自動可。"
+    );
+  }
+  if (wantsCalendarConfirm) {
+    assumptions.push(
+      "calendar.confirm（日程確定）は always_human。提案（calendar.propose）のみ自動可。"
+    );
+  } else if (wantsCalendarPropose) {
+    assumptions.push("カレンダーは提案（propose）まで。確定は別ツールで人間承認が必要です。");
   }
   if (scopes.includes("commerce:order")) {
     assumptions.push(
@@ -174,6 +215,7 @@ export function buildEmployeePolicyDraft(rawInput: string): EmployeePolicyDraft 
     if (!profile) warnings.push("broad_purpose_access");
   }
   if (scopes.includes("mail:send")) warnings.push("mail_send_requested");
+  if (scopes.includes("calendar:confirm")) warnings.push("calendar_confirm_requested");
   if (scopes.includes("commerce:order")) warnings.push("commerce_order_requested");
   if (scopes.includes("browser:use")) warnings.push("browser_use_requested");
   if (approvalPolicy === "always_human") warnings.push("always_human_recommended");
@@ -194,6 +236,7 @@ export function buildEmployeePolicyDraft(rawInput: string): EmployeePolicyDraft 
       spend,
       spendRecommendation,
       allowedAccounts,
+      toolApprovalDefaults: toolApprovalHintsFromPresets(),
     },
     assumptions,
     missingFields,
@@ -208,6 +251,8 @@ export const ALL_SCOPES: EmployeeScope[] = [
   "tools:invoke",
   "mail:draft",
   "mail:send",
+  "calendar:propose",
+  "calendar:confirm",
   "files:read",
   "files:write",
   "browser:use",
@@ -221,7 +266,9 @@ export const SCOPE_LABELS: Record<EmployeeScope, string> = {
   "tools:read": "ツール読取",
   "tools:invoke": "ツール実行",
   "mail:draft": "メール下書き",
-  "mail:send": "メール送信",
+  "mail:send": "メール送信（要承認）",
+  "calendar:propose": "日程提案",
+  "calendar:confirm": "日程確定（要承認）",
   "files:read": "ファイル読取",
   "files:write": "ファイル書込",
   "browser:use": "ブラウザ利用",
