@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { BrandMark } from "@/components/BrandMark";
 import { isDemoMode } from "@/lib/mode";
 
 export default function SignupPage() {
@@ -7,8 +8,9 @@ export default function SignupPage() {
   return (
     <div className="min-h-screen bg-[var(--bg)] text-[var(--text)] flex items-center justify-center px-4">
       <div className="w-full max-w-md surface p-6 md:p-8">
-        <p className="text-xs faint">無料トライアル · 14日</p>
-        <h1 className="mt-2 text-2xl font-medium tracking-tight">
+        <BrandMark size="md" href="/" />
+        <p className="mt-5 text-xs faint">無料トライアル · 14日</p>
+        <h1 className="mt-2 text-2xl font-bold tracking-tight">
           AI社員を雇い始める
         </h1>
         <p className="mt-3 text-sm muted leading-relaxed">

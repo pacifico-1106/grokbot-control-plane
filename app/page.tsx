@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { BrandMark } from "@/components/BrandMark";
 
 const FEATURES = [
   {
@@ -26,10 +27,7 @@ export default function LandingPage() {
   return (
     <div className="min-h-screen bg-[var(--bg)] text-[var(--text)]">
       <header className="mx-auto max-w-5xl px-6 py-5 flex items-center justify-between">
-        <div>
-          <div className="text-xs faint">Staffpass · AI社員（Grok Botで動く）</div>
-          <div className="text-sm font-medium">AI社員 Staffpass</div>
-        </div>
+        <BrandMark size="md" />
         <div className="flex items-center gap-3">
           <Link href="/app" className="btn btn-ghost text-sm">
             ダッシュボード見る
@@ -43,7 +41,7 @@ export default function LandingPage() {
       <main className="mx-auto max-w-5xl px-6 pb-24">
         <section className="pt-16 md:pt-24 max-w-3xl">
           <p className="chip mb-6">経営者・管理者向け</p>
-          <h1 className="text-4xl md:text-5xl font-semibold tracking-tight leading-[1.15]">
+          <h1 className="text-4xl md:text-5xl font-bold tracking-tight leading-[1.15]">
             AIを入れるな。
             <br />
             AI社員を雇え。
@@ -69,25 +67,25 @@ export default function LandingPage() {
         <section className="mt-20 grid md:grid-cols-3 gap-4">
           {FEATURES.map((f) => (
             <div key={f.title} className="surface p-5">
-              <h2 className="text-sm font-medium">{f.title}</h2>
+              <h2 className="text-sm font-semibold">{f.title}</h2>
               <p className="mt-3 text-sm muted leading-relaxed">{f.body}</p>
             </div>
           ))}
         </section>
 
         <section className="mt-16 surface p-6 md:p-8">
-          <h2 className="text-xl font-medium tracking-tight">
+          <h2 className="text-xl font-bold tracking-tight">
             入れ方はふたつ。
           </h2>
           <div className="mt-6 grid md:grid-cols-2 gap-4">
             <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-soft)] p-5">
-              <div className="text-sm font-medium">おまかせ導入</div>
+              <div className="text-sm font-semibold">おまかせ導入</div>
               <p className="mt-2 text-sm muted leading-relaxed">
                 こちらで Grok Bot の環境を用意し、Staffpass につないだ状態でお渡しします。
               </p>
             </div>
             <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-soft)] p-5">
-              <div className="text-sm font-medium">今の Grok Bot に載せる</div>
+              <div className="text-sm font-semibold">今の Grok Bot に載せる</div>
               <p className="mt-2 text-sm muted leading-relaxed">
                 いまお使いの Grok Bot をそのまま。社員証・承認・記録だけを Staffpass につなぎます。
               </p>
@@ -96,7 +94,7 @@ export default function LandingPage() {
         </section>
 
         <section className="mt-16 max-w-2xl">
-          <h2 className="text-xl font-medium">経営者・管理者にとっての要点</h2>
+          <h2 className="text-xl font-bold">経営者・管理者にとっての要点</h2>
           <ul className="mt-4 space-y-3 text-sm muted">
             {BENEFITS.map((line) => (
               <li key={line}>「{line}」</li>
@@ -106,7 +104,8 @@ export default function LandingPage() {
       </main>
 
       <footer className="border-t border-[var(--border)] py-8 text-center text-xs faint">
-        Staffpass · AI社員（Grok Botで動く）
+        <p>Staffpass · AI社員（Grok Botで動く）</p>
+        <p className="mt-2">Sealith by TOKYO307</p>
       </footer>
     </div>
   );

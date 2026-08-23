@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { BrandMark } from "@/components/BrandMark";
 
 const NAV = [
   { href: "/app", label: "ダッシュボード", exact: true },
@@ -32,10 +33,7 @@ export function AppShell({
         style={{ width: "var(--sidebar-w)" }}
       >
         <div className="px-5 py-5 border-b border-[var(--border-soft)]">
-          <Link href="/" className="block">
-            <div className="text-[13px] faint tracking-wide">Grok Bot</div>
-            <div className="text-[15px] font-medium mt-0.5">AI社員 Staffpass</div>
-          </Link>
+          <BrandMark size="sm" href="/" />
         </div>
         <nav className="flex-1 px-3 py-4 space-y-1">
           {NAV.map((item) => {
@@ -57,14 +55,15 @@ export function AppShell({
             );
           })}
         </nav>
-        <div className="px-5 py-4 border-t border-[var(--border-soft)] text-xs faint">
-          当社で用意 / 持ち込み 両対応
+        <div className="px-5 py-4 border-t border-[var(--border-soft)] text-xs faint space-y-1">
+          <div>当社で用意 / 持ち込み 両対応</div>
+          <div>Sealith by TOKYO307</div>
         </div>
       </aside>
       <div className="flex-1 min-w-0 flex flex-col">
         <header className="h-14 border-b border-[var(--border)] px-4 md:px-8 flex items-center justify-between bg-[var(--bg)]/80 backdrop-blur">
           <div>
-            <h1 className="text-[15px] font-medium leading-tight">{title}</h1>
+            <h1 className="text-[15px] font-semibold leading-tight">{title}</h1>
             {subtitle ? (
               <p className="text-xs muted mt-0.5">{subtitle}</p>
             ) : null}
