@@ -24,10 +24,34 @@ const BENEFITS = [
 ];
 
 const AGENTS = [
-  { id: "grok", name: "Grok Bot", status: "available" as const, note: "利用可能" },
-  { id: "jurin", name: "Jurin", status: "soon" as const, note: "Coming soon" },
-  { id: "slot-a", name: "順次追加", status: "slot" as const, note: "順次追加" },
-  { id: "slot-b", name: "順次追加", status: "slot" as const, note: "順次追加" },
+  {
+    id: "grok",
+    name: "Grok Bot",
+    subtitle: null as string | null,
+    status: "available" as const,
+    note: "利用可能",
+  },
+  {
+    id: "chatgpt",
+    name: "ChatGPT",
+    subtitle: "OpenAI",
+    status: "soon" as const,
+    note: "Coming soon",
+  },
+  {
+    id: "claude",
+    name: "Claude",
+    subtitle: "Anthropic",
+    status: "soon" as const,
+    note: "Coming soon",
+  },
+  {
+    id: "jurin",
+    name: "Jurin",
+    subtitle: "AIコンシェル／電話入口",
+    status: "soon" as const,
+    note: "Coming soon",
+  },
 ];
 
 export default function LandingPage() {
@@ -90,35 +114,44 @@ export default function LandingPage() {
               </h2>
             </div>
             <p className="text-sm muted break-words max-w-md">
-              まず Grok Bot に対応。他のエージェント基盤は順次。
+              まず Grok Bot。他は順次。
             </p>
           </div>
 
-          <ul className="mt-6 grid grid-cols-2 md:grid-cols-4 gap-3 list-none p-0 m-0">
+          <ul className="mt-6 grid grid-cols-2 lg:grid-cols-4 gap-3 list-none p-0 m-0">
             {AGENTS.map((agent) => {
               const available = agent.status === "available";
               return (
                 <li
                   key={agent.id}
                   className={[
-                    "rounded-xl border p-4 sm:p-5 min-w-0 flex flex-col gap-2 sm:gap-3",
+                    "rounded-xl border p-4 sm:p-5 min-w-0 flex flex-col gap-2",
                     available
                       ? "border-[var(--border)] bg-[var(--bg-elevated)]"
-                      : "border-[var(--border-soft)] bg-[var(--bg)] opacity-55",
+                      : "border-[var(--border-soft)] bg-[var(--bg)] opacity-55 pointer-events-none select-none",
                   ].join(" ")}
                 >
+                  <div className="min-w-0 flex flex-col gap-0.5">
+                    <span
+                      className={[
+                        "text-sm font-semibold tracking-tight break-words leading-snug",
+                        available ? "text-[var(--text)]" : "text-[var(--text-faint)]",
+                      ].join(" ")}
+                    >
+                      {agent.name}
+                    </span>
+                    {agent.subtitle ? (
+                      <span className="text-[11px] faint break-words leading-snug">
+                        {agent.subtitle}
+                      </span>
+                    ) : null}
+                  </div>
                   <span
                     className={[
-                      "text-sm font-semibold tracking-tight break-words leading-snug",
-                      available ? "text-[var(--text)]" : "text-[var(--text-faint)]",
-                    ].join(" ")}
-                  >
-                    {agent.name}
-                  </span>
-                  <span
-                    className={[
-                      "text-[11px] tracking-wide",
-                      available ? "text-[var(--ok)]" : "text-[var(--text-faint)]",
+                      "mt-auto inline-flex w-fit items-center rounded-full px-2 py-0.5 text-[10px] font-medium tracking-wide",
+                      available
+                        ? "bg-[color-mix(in_srgb,var(--ok)_18%,transparent)] text-[var(--ok)]"
+                        : "bg-[var(--bg-soft)] text-[var(--text-faint)] border border-[var(--border-soft)]",
                     ].join(" ")}
                   >
                     {agent.note}

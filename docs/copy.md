@@ -39,9 +39,10 @@
 ## 対応エージェント（LP）
 
 - 見出し: **対応エージェント**
-- 本文: まず Grok Bot に対応。他のエージェント基盤は順次。
+- 本文: まず Grok Bot。他は順次。
 - Available: Grok Bot
-- Coming soon（グレー）: Jurin ＋ 空スロット「順次追加」（統合済みとは言わない）
+- Coming soon（グレー・非クリック）: ChatGPT（OpenAI）／ Claude（Anthropic）／ Jurin（AIコンシェル／電話入口）
+- 空スロットは置かない（2列モバイル・4列デスクトップ）。統合済みとは言わない。
 - 「Grok専用」は使わない。Bot分割＝境界とも言わない。
 
 ## CTA
