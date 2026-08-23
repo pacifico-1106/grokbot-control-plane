@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { NextResponse } from "next/server";
 import { getCurrentOrgId } from "@/lib/auth/session";
+import { assertBillingAllows } from "@/lib/billing/entitlements";
 import { issueEmployee, runtimeModeLabel } from "@/lib/data";
 import { normalizeAllowedAccounts } from "@/lib/employees/allowed-accounts";
 import { normalizeSpendLimits } from "@/lib/spend-gate";
@@ -61,6 +62,9 @@ export async function POST(req: Request) {
     Date.now() + expiresInDays * 86400000
   ).toISOString();
   const orgId = await getCurrentOrgId();
+
+  const billingGate = await assertBillingAllows(orgId, "hire");
+  if (!billingGate.ok) return billingGate.response;
 
   try {
     const result = await issueEmployee({

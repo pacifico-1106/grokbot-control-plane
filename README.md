@@ -29,12 +29,13 @@
 | `/app/audit` | 監査タイムライン |
 | `/app/getting-started` | オンボーディング |
 | `/app/integrations` | Managed/BYO + 連携ステータス |
-| `/app/billing` | Stripe Checkout スタブ |
+| `/app/billing` | 請求・Checkout / Portal（キー未設定時スタブ） |
 | `/app/team` | owner/admin チーム |
 | `/api/employees/interpret` | NL → Draft |
 | `/api/employees/issue` | 社員証発行（dual-mode） |
-| `/api/billing/checkout` | Checkout Session |
-| `/api/webhooks/stripe` | Webhook 構造 |
+| `/api/billing/checkout` | Checkout Session（org metadata） |
+| `/api/billing/portal` | Customer Portal |
+| `/api/webhooks/stripe` | 購読同期 webhook |
 | `/api/gateway/*` | スリム gateway + fail-closed invoke |
 | `/api/employees/[id]/binding` ほか | 永続バインディング link/rotate/health |
 | `/api/auth/*` | signup / login / logout |
@@ -48,7 +49,7 @@
    - Auth（Email）を有効化
 3. **Env（最後）** — `.env.example` を Vercel / `.env.local` にコピーし、`replace_me_*` を実キーへ  
    （詳細: `docs/production-cutover.md`）
-4. **Stripe** — Product/Price → `STRIPE_PRICE_ID_*` → Webhook `https://<domain>/api/webhooks/stripe`
+4. **Stripe** — Product/Price → `STRIPE_PRICE_ID_*` → Webhook + Portal（`docs/stripe-billing-notes.md`）
 5. **Resend** — ドメイン認証 → `EMAIL_FROM`
 6. **Vercel** — Import（vercel.json: nextjs, hnd1）→ env 注入 → 再デプロイ
 7. **Grok Bot 連携** — パートナー API が使えるまで `/app/integrations` はデモ状態機械

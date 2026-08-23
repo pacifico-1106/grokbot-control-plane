@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { NextResponse } from "next/server";
 import { getCurrentOrgId } from "@/lib/auth/session";
+import { assertBillingAllows } from "@/lib/billing/entitlements";
 import {
   getMemberById,
   listMembers,
@@ -42,6 +43,10 @@ export async function POST(req: Request) {
 
   const gate = requireCapability(req, "manage_team", body.actorMemberId);
   if (!gate.ok) return gate.response;
+
+  const billingOrgId = await getCurrentOrgId();
+  const billingGate = await assertBillingAllows(billingOrgId, "team");
+  if (!billingGate.ok) return billingGate.response;
 
   const email = (body.email || "").trim();
   const displayName = (body.displayName || "").trim();

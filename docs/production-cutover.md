@@ -66,3 +66,32 @@ Gateway / API の **service role クライアントは RLS をバイパス**（�
 - `docs/binding-lifeline.md`
 - `lib/data/*` — dual-mode repository
 - `lib/auth/session.ts` / `middleware.ts`
+
+## Stripe Dashboard（有料 SaaS 切替）
+
+実装は完了済み（Checkout metadata.orgId · webhook upsert · Portal · entitlements soft-gate）。
+**キーと Dashboard 設定は最後。** 価格の実額はここに書かない — Dashboard が正。
+
+### 作成するもの
+
+1. **Product + Price（JPY）**
+   - スターター → Price ID → `STRIPE_PRICE_ID_STARTER`
+   - ビジネス → Price ID → `STRIPE_PRICE_ID_BUSINESS`
+   - 表示名は任意（コード側プレースホルダ: `{{STARTER_PRICE}}` / `{{BUSINESS_PRICE}}`）
+2. **Webhook endpoint**  
+   `https://<YOUR_DOMAIN>/api/webhooks/stripe`  
+   イベント: subscription created/updated/deleted · invoice.paid · invoice.payment_failed · trial_will_end · checkout.session.completed  
+   Signing secret → `STRIPE_WEBHOOK_SECRET`
+3. **Customer Portal** を有効化（支払方法更新・解約・請求書）。アプリは `POST /api/billing/portal`
+4. **（任意）customer_balance / 銀行振込** — Dashboard で有効化後 `STRIPE_ENABLE_CUSTOMER_BALANCE=1`
+5. **API keys** — テストで確認してから Live の `STRIPE_SECRET_KEY` / `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY`
+
+### 動作確認
+
+| モード | 期待 |
+|--------|------|
+| DEMO / replace_me_* | Checkout・Portal・Webhook が stub JSON。雇用・チームは制限なし |
+| Prod + 実キー | Checkout が Stripe へ。webhook が `subscriptions` と `orgs.stripe_customer_id` を更新。past_due/canceled/incomplete で雇用・チームが 402（日本語メッセージ） |
+
+参照: `docs/stripe-billing-notes.md`
+

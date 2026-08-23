@@ -14,6 +14,8 @@ import type {
   OrgMember,
   OrgMemberRole,
   SpendLimits,
+  Subscription,
+  SubscriptionStatus,
 } from "../types";
 
 export function mapEmployeeRow(row: Record<string, unknown>): Employee {
@@ -117,5 +119,22 @@ export function mapOrgRow(row: Record<string, unknown>): OrgMeta {
     integrationMode: (row.integration_mode as "managed" | "byo") || "managed",
     gatewayStatus: (row.gateway_status as GatewayLinkStatus) || "pending",
     trialEndsAt: row.trial_ends_at != null ? String(row.trial_ends_at) : null,
+  };
+}
+
+
+export function mapSubscriptionRow(row: Record<string, unknown>): Subscription {
+  return {
+    id: String(row.id),
+    orgId: String(row.org_id),
+    planKey: (row.plan_key as Subscription["planKey"]) || "business",
+    status: (row.status as SubscriptionStatus) || "trialing",
+    stripeSubscriptionId:
+      row.stripe_subscription_id != null
+        ? String(row.stripe_subscription_id)
+        : null,
+    trialEndsAt: row.trial_ends_at != null ? String(row.trial_ends_at) : null,
+    currentPeriodEnd:
+      row.current_period_end != null ? String(row.current_period_end) : null,
   };
 }

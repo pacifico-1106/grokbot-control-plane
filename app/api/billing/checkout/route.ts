@@ -1,7 +1,14 @@
 import { NextResponse } from "next/server";
+import { getSessionContext } from "@/lib/auth/session";
+import {
+  getOrgStripeCustomerId,
+  setOrgStripeCustomerId,
+} from "@/lib/data/subscriptions";
 import { DEMO_ORG } from "@/lib/demo-data";
+import { isDemoMode } from "@/lib/mode";
 import {
   getAppUrl,
+  getCheckoutPaymentMethodTypes,
   getPriceId,
   getStripe,
   TRIAL_DAYS,
@@ -11,19 +18,23 @@ import {
 export const runtime = "nodejs";
 
 /**
- * Stripe Checkout Session stub.
- * Ready for real keys: creates subscription with trial + JP payment method notes.
+ * Stripe Checkout Session.
+ * DEMO / missing keys → stub JSON. Production → require auth org + Customer.
  */
 export async function POST(req: Request) {
   const body = (await req.json().catch(() => ({}))) as {
     planKey?: CheckoutPlanKey;
   };
-  const planKey: CheckoutPlanKey = body.planKey === "starter" ? "starter" : "business";
+  const planKey: CheckoutPlanKey =
+    body.planKey === "starter" ? "starter" : "business";
   const stripe = getStripe();
   const priceId = getPriceId(planKey);
   const appUrl = getAppUrl();
+  const paymentMethodTypes = getCheckoutPaymentMethodTypes();
+  const sessionCtx = await getSessionContext();
 
   if (!stripe || !priceId) {
+    const orgId = sessionCtx.orgId || DEMO_ORG.id;
     return NextResponse.json({
       ok: true,
       stub: true,
@@ -33,28 +44,69 @@ export async function POST(req: Request) {
       preview: {
         mode: "subscription",
         trial_period_days: TRIAL_DAYS,
-        payment_method_types: ["card", "customer_balance"],
+        payment_method_types: paymentMethodTypes,
         success_url: `${appUrl}/app/billing?checkout=success&plan=${planKey}`,
         cancel_url: `${appUrl}/app/billing?checkout=canceled`,
-        metadata: { orgId: DEMO_ORG.id, planKey },
+        client_reference_id: orgId,
+        metadata: { orgId, org_id: orgId, planKey },
+        subscription_data: {
+          trial_period_days: TRIAL_DAYS,
+          metadata: { orgId, org_id: orgId, planKey },
+        },
       },
     });
   }
 
+  // Production path: require authenticated org
+  if (!isDemoMode()) {
+    if (!sessionCtx.userId || !sessionCtx.orgId) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error: "auth_required",
+          message:
+            "Checkout にはログインと組織が必要です。ログイン後に再度お試しください。",
+        },
+        { status: 401 }
+      );
+    }
+  }
+
+  const orgId = sessionCtx.orgId || DEMO_ORG.id;
+  const email = sessionCtx.email || undefined;
+
+  let customerId = await getOrgStripeCustomerId(orgId);
+  if (!customerId) {
+    const customer = await stripe.customers.create({
+      email,
+      metadata: { orgId, org_id: orgId },
+      name: undefined,
+    });
+    customerId = customer.id;
+    await setOrgStripeCustomerId(orgId, customerId);
+  }
+
+  const meta = { orgId, org_id: orgId, planKey };
+
   const session = await stripe.checkout.sessions.create({
     mode: "subscription",
+    customer: customerId,
+    client_reference_id: orgId,
     success_url: `${appUrl}/app/billing?checkout=success&session_id={CHECKOUT_SESSION_ID}&plan=${planKey}`,
     cancel_url: `${appUrl}/app/billing?checkout=canceled`,
     line_items: [{ price: priceId, quantity: 1 }],
     subscription_data: {
       trial_period_days: TRIAL_DAYS,
-      metadata: { orgId: DEMO_ORG.id, planKey },
+      metadata: meta,
     },
-    metadata: { orgId: DEMO_ORG.id, planKey },
-    // card always; customer_balance for JP bank-transfer style invoicing when enabled in Dashboard
-    payment_method_types: ["card"],
+    metadata: meta,
+    payment_method_types: paymentMethodTypes,
     allow_promotion_codes: false,
   });
 
-  return NextResponse.json({ ok: true, url: session.url, sessionId: session.id });
+  return NextResponse.json({
+    ok: true,
+    url: session.url,
+    sessionId: session.id,
+  });
 }
