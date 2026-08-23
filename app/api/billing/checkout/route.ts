@@ -26,7 +26,11 @@ export async function POST(req: Request) {
     planKey?: CheckoutPlanKey;
   };
   const planKey: CheckoutPlanKey =
-    body.planKey === "starter" ? "starter" : "business";
+    body.planKey === "starter"
+      ? "starter"
+      : body.planKey === "managed"
+        ? "managed"
+        : "business";
   const stripe = getStripe();
   const priceId = getPriceId(planKey);
   const appUrl = getAppUrl();

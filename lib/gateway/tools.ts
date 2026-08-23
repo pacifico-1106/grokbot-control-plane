@@ -275,6 +275,15 @@ export function isForceApprovalTool(def: GatewayToolDef): boolean {
   );
 }
 
+/**
+ * Confirm-class for Ando BM metering: mail.send, calendar.confirm, commerce.order,
+ * and any allowlisted tool marked kind confirm | send | order.
+ * Propose / draft / read are never confirm-class.
+ */
+export function isConfirmClassTool(def: GatewayToolDef): boolean {
+  return def.kind === "confirm" || def.kind === "send" || def.kind === "order";
+}
+
 export function employeeHasToolScope(
   scopes: string[] | undefined | null,
   def: GatewayToolDef

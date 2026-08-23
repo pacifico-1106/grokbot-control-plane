@@ -46,17 +46,20 @@ export function getAppUrl(): string {
   return process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
 }
 
-export function getPriceId(planKey: "starter" | "business"): string | null {
+export function getPriceId(
+  planKey: "starter" | "business" | "managed"
+): string | null {
   const map = {
     starter: process.env.STRIPE_PRICE_ID_STARTER,
     business: process.env.STRIPE_PRICE_ID_BUSINESS,
+    managed: process.env.STRIPE_PRICE_ID_MANAGED,
   } as const;
   const id = map[planKey];
   if (!id || id.startsWith("replace_me")) return null;
   return id;
 }
 
-export type CheckoutPlanKey = "starter" | "business";
+export type CheckoutPlanKey = "starter" | "business" | "managed";
 
 /** Map Stripe subscription.status → our SubscriptionStatus. */
 export function mapStripeSubscriptionStatus(
@@ -90,6 +93,7 @@ export function resolvePlanKeyFromStripe(params: {
 }): Subscription["planKey"] {
   const starter = process.env.STRIPE_PRICE_ID_STARTER;
   const business = process.env.STRIPE_PRICE_ID_BUSINESS;
+  const managed = process.env.STRIPE_PRICE_ID_MANAGED;
   if (
     params.priceId &&
     starter &&
@@ -106,9 +110,21 @@ export function resolvePlanKeyFromStripe(params: {
   ) {
     return "business";
   }
+  if (
+    params.priceId &&
+    managed &&
+    !managed.startsWith("replace_me") &&
+    params.priceId === managed
+  ) {
+    return "managed";
+  }
   const meta = (params.metadataPlanKey || "").toLowerCase();
-  if (meta === "starter" || meta === "business" || meta === "enterprise") {
+  if (meta === "starter" || meta === "business" || meta === "managed") {
     return meta;
+  }
+  // Legacy Stripe metadata / rows may still say enterprise → treat as managed.
+  if (meta === "enterprise") {
+    return "managed";
   }
   return "business";
 }

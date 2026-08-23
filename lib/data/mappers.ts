@@ -127,7 +127,14 @@ export function mapSubscriptionRow(row: Record<string, unknown>): Subscription {
   return {
     id: String(row.id),
     orgId: String(row.org_id),
-    planKey: (row.plan_key as Subscription["planKey"]) || "business",
+    planKey: (() => {
+      const raw = String(row.plan_key || "business").toLowerCase();
+      if (raw === "starter" || raw === "business" || raw === "managed") {
+        return raw as Subscription["planKey"];
+      }
+      if (raw === "enterprise") return "managed";
+      return "business";
+    })(),
     status: (row.status as SubscriptionStatus) || "trialing",
     stripeSubscriptionId:
       row.stripe_subscription_id != null

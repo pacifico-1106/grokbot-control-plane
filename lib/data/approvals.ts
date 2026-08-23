@@ -22,6 +22,23 @@ export async function listApprovals(
   return data.map((r) => mapApprovalRow(r as Record<string, unknown>));
 }
 
+export async function getApprovalById(
+  id: string,
+  orgId?: string | null
+): Promise<ApprovalRequest | null> {
+  if (!id) return null;
+  if (isDemoMode()) {
+    return getRuntimeApprovals().find((a) => a.id === id) ?? null;
+  }
+  const admin = createSupabaseAdminClient();
+  if (!admin) return null;
+  let q = admin.from("approval_requests").select("*").eq("id", id);
+  if (orgId) q = q.eq("org_id", orgId);
+  const { data, error } = await q.maybeSingle();
+  if (error || !data) return null;
+  return mapApprovalRow(data as Record<string, unknown>);
+}
+
 export async function resolveApproval(
   id: string,
   status: "approved" | "rejected",

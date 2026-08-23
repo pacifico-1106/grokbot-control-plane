@@ -40,14 +40,16 @@ DEMO（Supabase `replace_me_*`）では常に許可。メッセージは日本�
 |---------|--------------|------|
 | starter | スターター | `{{STARTER_PRICE}}`（Dashboardで設定） |
 | business | ビジネス | `{{BUSINESS_PRICE}}`（Dashboardで設定） |
-| enterprise | エンタープライズ | 要相談 |
+| managed | Managed（Care） | `{{MANAGED_PRICE}}`（Dashboardで設定） |
+
+メーター・仮枠の詳細は `docs/pricing-model.md`。
 
 ## 必要な env
 
 - `STRIPE_SECRET_KEY`
 - `STRIPE_WEBHOOK_SECRET`
 - `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY`
-- `STRIPE_PRICE_ID_STARTER` / `STRIPE_PRICE_ID_BUSINESS`
+- `STRIPE_PRICE_ID_STARTER` / `STRIPE_PRICE_ID_BUSINESS` / `STRIPE_PRICE_ID_MANAGED`
 - `STRIPE_ENABLE_CUSTOMER_BALANCE`（任意・`1` で Checkout に振込系を追加）
 - `BILLING_NOTIFY_EMAIL`（webhook 通知先）
 - `TRIAL_DAYS` / `NEXT_PUBLIC_APP_URL`
@@ -56,7 +58,7 @@ DEMO（Supabase `replace_me_*`）では常に許可。メッセージは日本�
 
 ## Dashboard チェックリスト（キー投入前〜）
 
-1. **Products / Prices** — スターター・ビジネス（JPY 定期）。Price ID を env へ
+1. **Products / Prices** — スターター・ビジネス・Managed/Care（JPY 定期）。Price ID を env へ
 2. **Webhook** — `https://<domain>/api/webhooks/stripe`  
    推奨イベント: `customer.subscription.created|updated|deleted`, `invoice.paid`, `invoice.payment_failed`, `customer.subscription.trial_will_end`, `checkout.session.completed`
 3. **Customer Portal** — Settings → Billing → Customer portal（プラン変更・支払方法・解約）

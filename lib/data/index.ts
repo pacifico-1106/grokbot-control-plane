@@ -11,7 +11,7 @@ export {
   type IssueEmployeeInput,
   type IssueEmployeeResult,
 } from "./employees";
-export { listApprovals, resolveApproval } from "./approvals";
+export { listApprovals, getApprovalById, resolveApproval } from "./approvals";
 export { listAuditEvents, appendAuditEvent } from "./audit";
 export {
   listMembers,

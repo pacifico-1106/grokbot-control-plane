@@ -1,4 +1,4 @@
-import { getRuntimeAudit } from "../demo-data";
+import { getRuntimeAudit, pushRuntimeAuditEvent } from "../demo-data";
 import { isDemoMode } from "../mode";
 import { createSupabaseAdminClient } from "../supabase";
 import { mapAuditRow } from "./mappers";
@@ -25,9 +25,18 @@ export async function appendAuditEvent(
   event: Omit<AuditEvent, "id" | "createdAt"> & { actorEmail?: string }
 ): Promise<void> {
   if (isDemoMode()) {
-    const { getRuntimeAudit } = await import("../demo-data");
-    // demo-data mutators already append; this is a no-op path for prod parity
-    void getRuntimeAudit;
+    pushRuntimeAuditEvent({
+      orgId: event.orgId,
+      employeeId: event.employeeId,
+      credentialId: event.credentialId,
+      action: event.action,
+      purpose: event.purpose,
+      summary: event.summary,
+      metadata: {
+        ...(event.metadata ?? {}),
+        ...(event.actorEmail ? { actorEmail: event.actorEmail } : {}),
+      },
+    });
     return;
   }
   const admin = createSupabaseAdminClient();

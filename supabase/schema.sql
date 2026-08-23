@@ -136,7 +136,7 @@ create table if not exists subscriptions (
   id uuid primary key default gen_random_uuid(),
   org_id uuid not null references orgs(id) on delete cascade,
   plan_key text not null default 'business'
-    check (plan_key in ('starter', 'business', 'enterprise')),
+    check (plan_key in ('starter', 'business', 'managed')),
   status text not null default 'trialing'
     check (status in ('trialing', 'active', 'past_due', 'canceled', 'incomplete', 'unpaid')),
   stripe_subscription_id text,

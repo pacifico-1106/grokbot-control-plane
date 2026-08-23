@@ -2,12 +2,18 @@ import { NextResponse } from "next/server";
 import { getCurrentOrgId } from "@/lib/auth/session";
 import {
   assertExecutable,
+  getApprovalById,
   getBinding,
   getEmployee,
   runtimeModeLabel,
 } from "@/lib/data";
 import {
+  isBillableConfirmCompletion,
+  recordGatedConfirmAction,
+} from "@/lib/billing/meter";
+import {
   employeeHasToolScope,
+  isConfirmClassTool,
   isForceApprovalTool,
   resolveGatewayTool,
 } from "@/lib/gateway/tools";
@@ -252,12 +258,31 @@ export async function POST(req: Request) {
     };
   }
 
-  // confirm / send / order (and force flags) → always needs_approval.
+  // Prior human approval unlocks confirm-class completion (meter on success).
+  // Approval button click alone is NOT billed — only Gateway success is.
+  const priorApprovalId = (body.approvalId || "").trim();
+  let priorApprovalOk = false;
+  if (priorApprovalId) {
+    const prior = await getApprovalById(priorApprovalId, orgId || employee.orgId);
+    priorApprovalOk = Boolean(
+      prior &&
+        prior.status === "approved" &&
+        prior.employeeId === employeeId
+    );
+  }
+
+  // confirm / send / order (and force flags) → always needs_approval
+  // unless a matching prior approval unlocks execution.
   const forceApproval =
     isForceApprovalTool(toolDef) ||
     employee.approvalPolicy === "always_human";
 
-  if (forceApproval && tool !== "tools.ping" && tool !== "audit.append") {
+  if (
+    forceApproval &&
+    tool !== "tools.ping" &&
+    tool !== "audit.append" &&
+    !priorApprovalOk
+  ) {
     // commerce.order still runs spend gate for richer reason codes.
     if (tool === "commerce.order") {
       const amountJpy =
@@ -317,8 +342,33 @@ export async function POST(req: Request) {
     );
   }
 
-  // risk_based employee + mayAuto tools: allow in stub (audit later).
+  // risk_based employee + mayAuto tools: allow in stub.
   // browser.use is always force-approval; missing/mismatch already fail-closed above.
+  // Confirm-class succeeds only with priorApprovalOk (or non-force paths).
+  let meter: {
+    type: "gated_confirm_action";
+    billable: boolean;
+    recorded: boolean;
+  } | null = null;
+
+  if (isBillableConfirmCompletion(toolDef) && isConfirmClassTool(toolDef)) {
+    // Successful confirm-class completion → billable meter (P0).
+    await recordGatedConfirmAction({
+      orgId: orgId || employee.orgId,
+      employeeId,
+      tool,
+      jobId,
+      purpose,
+      credentialId: employee.credentialId,
+      billable: true,
+    });
+    meter = {
+      type: "gated_confirm_action",
+      billable: true,
+      recorded: true,
+    };
+  }
+
   return NextResponse.json({
     ok: true,
     demo: runtimeModeLabel() === "demo",
@@ -330,6 +380,8 @@ export async function POST(req: Request) {
     purpose,
     jobId,
     toolKind: toolDef.kind,
+    priorApprovalId: priorApprovalId || undefined,
+    meter,
     result:
       tool === "tools.ping"
         ? { pong: true }
@@ -339,7 +391,15 @@ export async function POST(req: Request) {
             ? { drafted: true }
             : tool === "commerce.quote"
               ? { quoted: true }
-              : { accepted: true },
-    message: `invoke allowed (${tool}; propose/draft/read may auto)`,
+              : tool === "calendar.confirm"
+                ? { confirmed: true }
+                : tool === "mail.send"
+                  ? { sent: true }
+                  : tool === "commerce.order"
+                    ? { ordered: true }
+                    : { accepted: true },
+    message: isConfirmClassTool(toolDef)
+      ? `invoke completed (${tool}; gated_confirm_action metered)`
+      : `invoke allowed (${tool}; propose/draft/read not billed)`,
   });
 }

@@ -39,14 +39,14 @@ const PLAN_FEATURES: Record<PlanKey, { maxEmployees?: number; features: string[]
         "email_notify",
       ],
     },
-    enterprise: {
+    managed: {
       features: [
         "employees",
         "approvals",
         "audit_timeline",
         "team",
-        "sso",
-        "sla",
+        "care_ops",
+        "policy_assist",
         "email_notify",
       ],
     },

@@ -3,33 +3,54 @@
 import { useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import type { CheckoutPlanKey } from "@/lib/stripe";
+import { PLAN_CONFIRM_QUOTAS } from "@/lib/billing/plans";
 
 const PLANS: Array<{
-  id: CheckoutPlanKey | "enterprise";
+  id: CheckoutPlanKey;
   name: string;
   /** Placeholder — real yen amounts live in Stripe Dashboard only. */
   price: string;
   points: string[];
   featured?: boolean;
+  /** 仮枠 monthly gated confirms */
+  quota: number;
 }> = [
   {
     id: "starter",
     name: "スターター",
     price: "{{STARTER_PRICE}} / 月（Dashboardで設定）",
-    points: ["社員証 1〜3", "基本監査", "メール通知"],
+    points: [
+      "AI社員 少数・基本の就業規則",
+      "基本監査（日報の入口）",
+      "メール通知",
+      "propose / draft 中心",
+    ],
+    quota: PLAN_CONFIRM_QUOTAS.starter,
   },
   {
     id: "business",
     name: "ビジネス",
     price: "{{BUSINESS_PRICE}} / 月（Dashboardで設定）",
-    points: ["承認キュー", "監査タイムライン", "チーム（職務・権限）"],
+    points: [
+      "就業規則と日報（承認・監査）",
+      "承認キュー・監査タイムライン",
+      "チーム（職務・権限）",
+      "確定アクションの従量メーター",
+    ],
     featured: true,
+    quota: PLAN_CONFIRM_QUOTAS.business,
   },
   {
-    id: "enterprise",
-    name: "エンタープライズ",
-    price: "要相談",
-    points: ["SSO / SLA", "長期保管", "導入支援"],
+    id: "managed",
+    name: "Managed（Care）",
+    price: "{{MANAGED_PRICE}} / 月（Dashboardで設定）",
+    points: [
+      "Business 全部＋専任伴走（Care）",
+      "導入代行・週次ヘルス",
+      "要再連携の一次対応",
+      "確定枠は厚め（仮枠）",
+    ],
+    quota: PLAN_CONFIRM_QUOTAS.managed,
   },
 ];
 
@@ -113,6 +134,11 @@ export function BillingClient({
 
   return (
     <>
+      <p className="mb-4 text-sm muted leading-relaxed">
+        Botの契約は御社のまま。Staffpassは<strong className="text-[var(--text)] font-medium">就業規則と日報</strong>
+        です。月額で境界を敷き、確定した仕事の分だけ従量。Managed は Care（伴走）込みです。
+      </p>
+
       {checkoutBanner ? (
         <p
           className={`mb-4 text-sm surface p-4 ${
@@ -141,25 +167,24 @@ export function BillingClient({
             <div className="text-xs faint">{plan.id}</div>
             <h2 className="mt-1 text-lg font-medium">{plan.name}</h2>
             <p className="mt-1 text-sm muted">{plan.price}</p>
+            <p className="mt-2 text-xs faint">
+              確定アクション枠{" "}
+              <span className="muted">{plan.quota.toLocaleString("ja-JP")} / 月</span>{" "}
+              <span className="chip text-[10px] ml-1">仮枠</span>
+            </p>
             <ul className="mt-4 space-y-2 text-sm muted">
               {plan.points.map((p) => (
                 <li key={p}>· {p}</li>
               ))}
             </ul>
-            {plan.id === "enterprise" ? (
-              <button type="button" className="btn btn-ghost w-full mt-5 text-sm" disabled>
-                お問い合わせ
-              </button>
-            ) : (
-              <button
-                type="button"
-                className="btn btn-primary w-full mt-5 text-sm"
-                disabled={busy === plan.id}
-                onClick={() => void checkout(plan.id as CheckoutPlanKey)}
-              >
-                {busy === plan.id ? "準備中…" : "Checkout へ"}
-              </button>
-            )}
+            <button
+              type="button"
+              className="btn btn-primary w-full mt-5 text-sm"
+              disabled={busy === plan.id}
+              onClick={() => void checkout(plan.id)}
+            >
+              {busy === plan.id ? "準備中…" : "Checkout へ"}
+            </button>
           </div>
         ))}
       </div>
@@ -182,6 +207,7 @@ export function BillingClient({
 
       <p className="mt-3 text-xs faint leading-relaxed">
         銀行振込は準備が整い次第、お支払い画面に表示されます。表示価格は契約プランの設定が正です。
+        枠数は仮枠（事業確定前）です。課金対象は Gateway 経由の確定アクション成功のみです。
       </p>
 
       {message ? (

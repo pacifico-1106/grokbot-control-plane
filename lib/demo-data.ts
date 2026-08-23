@@ -205,6 +205,56 @@ export const DEMO_SUBSCRIPTION: Subscription = {
 const runtimeEmployees: Employee[] = [...DEMO_EMPLOYEES];
 const runtimeApprovals: ApprovalRequest[] = [...DEMO_APPROVALS];
 const runtimeAudit: AuditEvent[] = [...DEMO_AUDIT];
+
+/** Demo in-memory meter store (gated_confirm_action). */
+export type DemoMeterRecord = {
+  id: string;
+  type: "gated_confirm_action";
+  orgId: string;
+  employeeId: string;
+  tool: string;
+  jobId: string;
+  billable: boolean;
+  purpose?: string | null;
+  createdAt: string;
+};
+
+const runtimeMeters: DemoMeterRecord[] = [
+  // Seed a few so dashboard 「今月の確定アクション」 is non-zero in DEMO.
+  {
+    id: "mtr_seed_1",
+    type: "gated_confirm_action",
+    orgId: DEMO_ORG.id,
+    employeeId: "emp_sales",
+    tool: "mail.send",
+    jobId: "job_seed_mail_1",
+    billable: true,
+    purpose: "sales.outreach",
+    createdAt: new Date(Date.now() - 86400000 * 2).toISOString(),
+  },
+  {
+    id: "mtr_seed_2",
+    type: "gated_confirm_action",
+    orgId: DEMO_ORG.id,
+    employeeId: "emp_sales",
+    tool: "calendar.confirm",
+    jobId: "job_seed_cal_1",
+    billable: true,
+    purpose: "sales.outreach",
+    createdAt: new Date(Date.now() - 86400000).toISOString(),
+  },
+  {
+    id: "mtr_seed_3",
+    type: "gated_confirm_action",
+    orgId: DEMO_ORG.id,
+    employeeId: "emp_ops",
+    tool: "commerce.order",
+    jobId: "job_seed_order_1",
+    billable: true,
+    purpose: "ops.admin",
+    createdAt: new Date(Date.now() - 3600000).toISOString(),
+  },
+];
 const runtimeMembers: OrgMember[] = DEMO_MEMBERS.map((m) => ({
   ...m,
   capabilities: [...(m.capabilities ?? [])],
@@ -320,6 +370,47 @@ export function resolveRuntimeApproval(
     createdAt: new Date().toISOString(),
   });
   return next;
+}
+
+
+export function getRuntimeMeterRecords() {
+  return runtimeMeters;
+}
+
+export function pushRuntimeMeterRecord(
+  record: Omit<DemoMeterRecord, "id"> & { id?: string }
+): DemoMeterRecord {
+  const stored: DemoMeterRecord = {
+    id: record.id || `mtr_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+    type: "gated_confirm_action",
+    orgId: record.orgId,
+    employeeId: record.employeeId,
+    tool: record.tool,
+    jobId: record.jobId,
+    billable: record.billable,
+    purpose: record.purpose ?? null,
+    createdAt: record.createdAt || new Date().toISOString(),
+  };
+  runtimeMeters.unshift(stored);
+  return stored;
+}
+
+export function pushRuntimeAuditEvent(
+  event: Omit<AuditEvent, "id" | "createdAt"> & { createdAt?: string }
+): AuditEvent {
+  const row: AuditEvent = {
+    id: `aud_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+    orgId: event.orgId,
+    employeeId: event.employeeId,
+    credentialId: event.credentialId,
+    action: event.action,
+    purpose: event.purpose,
+    summary: event.summary,
+    metadata: event.metadata ?? {},
+    createdAt: event.createdAt || new Date().toISOString(),
+  };
+  runtimeAudit.unshift(row);
+  return row;
 }
 
 // DEMO: seed durable bindings for sample employees (in-memory; labeled DEMO).

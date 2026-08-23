@@ -114,6 +114,11 @@ export interface GatewayInvokeRequest {
   service?: string;
   accountId?: string;
   args?: Record<string, unknown>;
+  /**
+   * Prior human approval id. When status=approved for this employee,
+   * confirm/send/order may complete (and meter). Approval button alone is not billed.
+   */
+  approvalId?: string;
 }
 
 export type AuditAction =
@@ -219,7 +224,7 @@ export interface AuditEvent {
 export interface Subscription {
   id: string;
   orgId: string;
-  planKey: "starter" | "business" | "enterprise";
+  planKey: "starter" | "business" | "managed";
   status: SubscriptionStatus;
   stripeSubscriptionId: string | null;
   trialEndsAt: string | null;
@@ -227,10 +232,24 @@ export interface Subscription {
 }
 
 export interface BillingPlan {
-  id: "starter" | "business" | "enterprise";
+  id: "starter" | "business" | "managed";
   nameJa: string;
   trialDays: number;
   paymentMethods: Array<"card" | "customer_balance">;
+  /** Placeholder monthly gated confirm quota (仮枠). */
+  confirmQuotaPerMonth?: number;
+}
+
+/** Ando BM P0 — only Gateway confirm-class successes are billable. */
+export type MeterEventType = "gated_confirm_action";
+
+export interface GatedConfirmMeterPayload {
+  type: "gated_confirm_action";
+  orgId: string;
+  employeeId: string;
+  tool: string;
+  jobId: string;
+  billable: boolean;
 }
 
 export interface EmployeePolicyDraft {

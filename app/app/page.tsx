@@ -3,10 +3,16 @@ import { AppShell } from "@/components/AppShell";
 import { DashboardActivity } from "@/components/DashboardActivity";
 import { StatCard } from "@/components/StatCard";
 import { getCurrentOrgId } from "@/lib/auth/session";
+import { entitlementsFromSubscription } from "@/lib/billing/entitlements";
+import {
+  getConfirmUsageSummary,
+  QUOTA_PROVISIONAL_NOTE_JA,
+} from "@/lib/billing/meter";
 import {
   countNeedsReauth,
   getGatewayStatusForOrg,
   getOrgMeta,
+  getSubscription,
   listApprovals,
   listEmployees,
 } from "@/lib/data";
@@ -23,6 +29,9 @@ export default async function DashboardPage() {
   ).length;
   const gateway = await getGatewayStatusForOrg(orgId);
   const reauthCount = await countNeedsReauth(org.id);
+  const sub = await getSubscription(orgId);
+  const entitlements = entitlementsFromSubscription(sub);
+  const confirmUsage = await getConfirmUsageSummary(orgId, entitlements.plan);
 
   return (
     <AppShell
@@ -50,13 +59,18 @@ export default async function DashboardPage() {
         </div>
       ) : null}
 
-      <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3">
+      <div className="grid sm:grid-cols-2 lg:grid-cols-5 gap-3">
         <StatCard
           label="AI社員"
           value={String(employees.length)}
           hint="稼働中"
         />
         <StatCard label="承認待ち" value={String(pending)} hint="要対応" />
+        <StatCard
+          label="今月の確定アクション"
+          value={`${confirmUsage.used} / ${confirmUsage.quota}`}
+          hint={`プラン枠（${confirmUsage.plan}）· ${QUOTA_PROVISIONAL_NOTE_JA}`}
+        />
         <StatCard
           label="再接続が必要"
           value={String(reauthCount)}
@@ -68,6 +82,17 @@ export default async function DashboardPage() {
           hint={gateway === "linked" ? "Staffpass（制御）接続中" : gateway === "pending" ? "連携の手続き中" : "未連携"}
         />
       </div>
+
+      <section className="surface p-4 mt-4 text-sm leading-relaxed">
+        <h2 className="text-sm font-medium">確定アクションとは</h2>
+        <p className="mt-2 muted">
+          人が確認したうえで進めた送信・日程確定・発注などです。下書きや提案、承認ボタンのクリックだけでは増えません。
+          残枠の目安は {confirmUsage.remaining} 回です（{QUOTA_PROVISIONAL_NOTE_JA}）。
+        </p>
+        <p className="mt-2 text-xs faint">
+          計測は制御面 Gateway を通った確定系のみです。Bot のすべての操作を課金対象にしていません。
+        </p>
+      </section>
 
       <DashboardActivity
         employees={employees.map((e) => ({
