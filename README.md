@@ -61,6 +61,26 @@ bun run build   # DEMO keys OK
 bun run dev
 ```
 
+
+## E2E（Playwright smoke）
+
+DEMO モード（キーなし）で主要ページが 200 で開く最小スモークです。実キー不要。
+
+```bash
+bun install
+bunx playwright install chromium   # 初回のみ
+bun run build
+bun run test:e2e                   # ローカル: build 済みなら next start を自動起動
+```
+
+恒久 Vercel URL に対して:
+
+```bash
+PLAYWRIGHT_BASE_URL=https://<your-project>.vercel.app bun run test:e2e
+```
+
+対象: `/` · `/login` · `/app` · `/app/employees/new`（`e2e/smoke.spec.ts`）。
+
 ## ドキュメント
 
 - `docs/production-cutover.md` — **デモ→本番の切替・SQL・Vercel 貼り付け**

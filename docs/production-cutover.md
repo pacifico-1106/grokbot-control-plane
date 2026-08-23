@@ -95,3 +95,40 @@ Gateway / API の **service role クライアントは RLS をバイパス**（�
 
 参照: `docs/stripe-billing-notes.md`
 
+
+## Permanent Vercel deploy（GitHub 連携・推奨）
+
+CLI 上で `vercel whoami` が **Logged out**、かつ `VERCEL_TOKEN` が無い環境では、エージェントから恒久プロジェクトを作成できません。  
+一時デプロイ（`--temporary` / claim）ではなく、**Dashboard で GitHub Import** してください。
+
+### ユーザーがクリックする手順（正確）
+
+1. https://vercel.com/login でログイン（GitHub アカウント推奨）
+2. Dashboard → **Add New… → Project**
+3. **Import** Git Repository: `https://github.com/pacifico-1106/grokbot-control-plane`
+   - 初回は GitHub 連携を許可し、リポジトリへのアクセスを付与
+4. Configure Project:
+   - **Framework Preset:** Next.js（自動検出想定。`vercel.json` でも `framework: nextjs`）
+   - **Root Directory:** `.`（そのまま）
+   - **Region:** `hnd1`（Tokyo）— Project Settings → Functions / Regions、または `vercel.json` の `regions: ["hnd1"]` が効く
+5. **Deploy**（この時点では env はプレースホルダのままで OK → DEMO 起動）
+6. Settings → Git で **main** への push が Production に自動デプロイされることを確認
+7. 後から Settings → Environment Variables に `.env.example` の実キーを貼り、**Redeploy**
+
+### 期待される URL
+
+- 本番: `https://<project-name>.vercel.app`（カスタムドメインは任意）
+- Dashboard: `https://vercel.com/<your-team-or-user>/<project-name>`
+
+※ claim URL や一時デプロイの URL は恒久運用に使わないこと。Git 連携プロジェクトを正とする。
+
+### CLI で恒久デプロイできる場合（ログイン済 or `VERCEL_TOKEN`）
+
+```bash
+# 要: vercel login 済み、または export VERCEL_TOKEN=…
+npx vercel link          # 既存プロジェクトに紐付け、または新規作成
+npx vercel --prod        # Production（--temporary は使わない）
+# Git 連携は Dashboard の Import / Settings → Git が確実
+```
+
+トークン保管例（この box）: `/workspace/.secrets/` に `vercel_token.txt` を置けばエージェントが再利用可能。現状は GitHub PAT のみ。
