@@ -19,8 +19,35 @@ const FEATURES = [
 const BENEFITS = [
   "禁止するより、説明できるレールを敷く。",
   "同じパソコンでも、営業のAI社員と経理のAI社員で権限も記録も違う。",
-  "Botを分けても安全にはならない（公式も共有コンピュータ）。境界は社員証側へ。",
+  "Staffpass は就業規則と日報。手足のエージェント基盤は差し替え可能。",
   "決済や発注の仕組みは外のサービスを使っても、説明責任の台帳は自社側に残す。",
+];
+
+const AGENTS = [
+  {
+    id: "grok",
+    name: "Grok Bot",
+    status: "available" as const,
+    note: "対応中",
+  },
+  {
+    id: "jurin",
+    name: "AIコンシェル／電話入口",
+    status: "soon" as const,
+    note: "順次対応",
+  },
+  {
+    id: "slot-a",
+    name: "順次追加",
+    status: "soon" as const,
+    note: "Coming soon",
+  },
+  {
+    id: "slot-b",
+    name: "順次追加",
+    status: "soon" as const,
+    note: "Coming soon",
+  },
 ];
 
 export default function LandingPage() {
@@ -47,9 +74,13 @@ export default function LandingPage() {
             AI社員を雇え。
           </h1>
           <p className="mt-6 text-base sm:text-lg muted leading-relaxed break-words">
-            権限・承認・記録がついたAI社員を雇う話です。共有PCでも
+            権限・承認・記録がついたAI社員を雇う話です。
+            <span className="text-[var(--text)]">Staffpass</span>
+            は就業規則と日報（制御面）。手足のエージェント基盤は差し替え可能で、まず{" "}
+            <span className="text-[var(--text)]">Grok Bot</span>
+            に対応しています。共有PCでも
             <span className="text-[var(--text)]">「誰が何をしてよいか」</span>
-            を分けられます。手足は Grok Bot で動きます。
+            を分けられます。
           </p>
           <div className="mt-8 flex flex-col sm:flex-row flex-wrap gap-3">
             <Link href="/signup" className="btn btn-primary w-full sm:w-auto">
@@ -61,6 +92,67 @@ export default function LandingPage() {
           </div>
           <p className="mt-4 text-xs faint break-words">
             発注（例: eSIMなど）も、承認と上限の内側で進められます。
+          </p>
+        </section>
+
+        <section className="mt-16 sm:mt-20" aria-labelledby="agents-heading">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between min-w-0">
+            <div className="min-w-0">
+              <p className="text-xs faint tracking-wide uppercase">Works with</p>
+              <h2 id="agents-heading" className="text-xl font-bold tracking-tight break-words mt-1">
+                対応エージェント
+              </h2>
+            </div>
+            <p className="text-sm muted break-words max-w-md">
+              まず Grok Bot に対応。他のエージェント基盤は順次。
+            </p>
+          </div>
+
+          <div className="mt-6 grid grid-cols-2 md:grid-cols-4 gap-3">
+            {AGENTS.map((agent) => {
+              const available = agent.status === "available";
+              return (
+                <div
+                  key={agent.id}
+                  className={`rounded-xl border p-4 min-w-0 flex flex-col gap-3 ${
+                    available
+                      ? "border-[var(--border)] bg-[var(--bg-elevated)]"
+                      : "border-[var(--border-soft)] bg-[var(--bg)] opacity-60 pointer-events-none select-none"
+                  }`}
+                  aria-disabled={!available}
+                >
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <span
+                      className={`inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-[22%] text-xs font-bold ${
+                        available
+                          ? "bg-[var(--accent)] text-[var(--accent-fg)]"
+                          : "bg-[var(--bg-soft)] text-[var(--text-faint)] border border-[var(--border-soft)]"
+                      }`}
+                      aria-hidden
+                    >
+                      {available ? "G" : "·"}
+                    </span>
+                    <div className="min-w-0">
+                      <div
+                        className={`text-sm font-semibold leading-snug break-words ${
+                          available ? "text-[var(--text)]" : "text-[var(--text-faint)]"
+                        }`}
+                      >
+                        {agent.name}
+                      </div>
+                      <div className={`mt-1 text-[11px] ${available ? "text-[var(--ok)]" : "faint"}`}>
+                        {agent.note}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          <p className="mt-4 text-xs faint leading-relaxed break-words">
+            電話入口（受付・通話）と机上の手足（PC上の実行エージェント）は役割が違います。Staffpass
+            は後者の就業規則と日報としてつなぎます。
           </p>
         </section>
 
@@ -81,13 +173,15 @@ export default function LandingPage() {
             <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-soft)] p-5 min-w-0">
               <div className="text-sm font-semibold">おまかせ導入</div>
               <p className="mt-2 text-sm muted leading-relaxed break-words">
-                こちらで Grok Bot の環境を用意し、Staffpass につないだ状態でお渡しします。
+                こちらで実行環境（まず Grok Bot）を用意し、Staffpass
+                につないだ状態でお渡しします。
               </p>
             </div>
             <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-soft)] p-5 min-w-0">
-              <div className="text-sm font-semibold">今の Grok Bot に載せる</div>
+              <div className="text-sm font-semibold">今のエージェントに載せる</div>
               <p className="mt-2 text-sm muted leading-relaxed break-words">
-                いまお使いの Grok Bot をそのまま。社員証・承認・記録だけを Staffpass につなぎます。
+                いまお使いの Grok Bot
+                をそのまま。社員証・承認・記録だけを Staffpass につなぎます。
               </p>
             </div>
           </div>
@@ -104,7 +198,7 @@ export default function LandingPage() {
       </main>
 
       <footer className="border-t border-[var(--border)] py-8 text-center text-xs faint px-4 pb-[max(2rem,env(safe-area-inset-bottom))]">
-        <p>Staffpass · AI社員（Grok Botで動く）</p>
+        <p>Staffpass · 就業規則と日報</p>
         <p className="mt-2">Sealith by TOKYO307</p>
       </footer>
     </div>
