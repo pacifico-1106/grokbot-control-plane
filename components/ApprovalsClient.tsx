@@ -54,7 +54,7 @@ export function ApprovalsClient({
         <div className="surface overflow-hidden">
           <div className="px-4 py-3 border-b border-[var(--border)] flex items-center gap-2">
             <span className="chip chip-warn">要対応 {pending.length}</span>
-            <span className="text-xs faint">fail-closed · 未承認は実行されない</span>
+            <span className="text-xs faint">承認されるまで実行しません</span>
           </div>
           <ul className="divide-y divide-[var(--border-soft)]">
             {pending.map((a) => {
@@ -75,7 +75,7 @@ export function ApprovalsClient({
                               : "chip-ok"
                         }`}
                       >
-                        {a.risk}
+                        {a.risk === "high" ? "高" : a.risk === "medium" ? "中" : a.risk === "low" ? "低" : a.risk}
                       </span>
                       <span className="text-xs faint">{a.purpose}</span>
                       <span className="text-xs muted">
@@ -122,7 +122,7 @@ export function ApprovalsClient({
             {done.map((a) => (
               <li key={a.id} className="flex items-center gap-2 text-sm">
                 <span className={`chip ${a.status === "approved" ? "chip-ok" : "chip-danger"}`}>
-                  {a.status}
+                  {a.status === "approved" ? "承認済み" : a.status === "rejected" ? "却下" : a.status}
                 </span>
                 <span className="muted truncate">{a.summary}</span>
               </li>

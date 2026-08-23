@@ -34,7 +34,7 @@ export function AppShell({
         <div className="px-5 py-5 border-b border-[var(--border-soft)]">
           <Link href="/" className="block">
             <div className="text-[13px] faint tracking-wide">Grok Bot</div>
-            <div className="text-[15px] font-medium mt-0.5">AI社員 制御面</div>
+            <div className="text-[15px] font-medium mt-0.5">AI社員 Staffpass</div>
           </Link>
         </div>
         <nav className="flex-1 px-3 py-4 space-y-1">
@@ -58,7 +58,7 @@ export function AppShell({
           })}
         </nav>
         <div className="px-5 py-4 border-t border-[var(--border-soft)] text-xs faint">
-          Managed / BYO 両対応
+          当社で用意 / 持ち込み 両対応
         </div>
       </aside>
       <div className="flex-1 min-w-0 flex flex-col">

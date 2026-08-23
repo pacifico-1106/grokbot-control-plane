@@ -20,7 +20,7 @@ export default async function ApprovalsPage() {
         employees={employees}
       />
       <p className="mt-4 text-xs faint">
-        承認 / 却下時は Resend で approval_needed / approval_resolved を送る想定です。
+        承認や却下のとき、関係者へメールでお知らせする想定です。
       </p>
     </AppShell>
   );

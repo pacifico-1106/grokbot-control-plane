@@ -39,9 +39,9 @@ export default async function DashboardPage() {
           role="alert"
         >
           <div>
-            <strong style={{ color: "var(--warn)" }}>要再連携</strong>
+            <strong style={{ color: "var(--warn)" }}>再接続が必要</strong>
             <span className="muted ml-2 text-xs">
-              {reauthCount} 件の AI社員バインディングが credentials 破綻を検出しています（黙って消していません）。
+              接続が切れた AI社員がいます（{reauthCount} 件）。記録は残したまま、つなぎ直しが必要です。
             </span>
           </div>
           <Link href="/app/integrations" className="btn btn-ghost text-xs px-3 py-1.5">
@@ -58,14 +58,14 @@ export default async function DashboardPage() {
         />
         <StatCard label="承認待ち" value={String(pending)} hint="要対応" />
         <StatCard
-          label="要再連携"
+          label="再接続が必要"
           value={String(reauthCount)}
-          hint="binding needs_reauth"
+          hint="つなぎ直し待ち"
         />
         <StatCard
           label="導入モード"
-          value={org.integrationMode === "managed" ? "Managed" : "BYO"}
-          hint={`連携: ${gateway}`}
+          value={org.integrationMode === "managed" ? "当社で用意" : "持ち込み"}
+          hint={gateway === "linked" ? "Staffpass（制御）接続中" : gateway === "pending" ? "連携の手続き中" : "未連携"}
         />
       </div>
 
@@ -81,7 +81,7 @@ export default async function DashboardPage() {
         <section className="surface p-6 mt-6 text-center">
           <p className="text-sm font-medium">まずは AI社員を雇いましょう</p>
           <p className="mt-2 text-sm muted">
-            職務を日本語で説明するだけで、権限 Draft と社員証が用意できます。
+            職務を日本語で説明するだけで、権限の案と社員証が用意できます。
           </p>
           <Link
             href="/app/employees/new"

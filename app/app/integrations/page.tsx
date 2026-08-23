@@ -31,7 +31,7 @@ export default async function IntegrationsPage() {
   return (
     <AppShell
       title="連携"
-      subtitle="Managed / BYO · Grok Bot ゲートウェイ"
+      subtitle="当社で用意 / 持ち込み · Staffpass（制御）とのつながり"
     >
       <IntegrationsClient
         initialStatus={await getGatewayStatusForOrg(orgId)}
@@ -39,36 +39,42 @@ export default async function IntegrationsPage() {
         bindingRows={bindingRows}
       />
       <section className="surface p-5 mt-4">
-        <h2 className="text-sm font-medium">ゲートウェイ（スリム）</h2>
+        <h2 className="text-sm font-medium">Staffpass（制御）の考え方</h2>
         <dl className="mt-3 grid sm:grid-cols-2 gap-3 text-sm">
           <div>
-            <dt className="text-xs muted">Health</dt>
-            <dd className="font-mono text-xs mt-1">GET /api/gateway/health</dd>
-          </div>
-          <div>
-            <dt className="text-xs muted">Link</dt>
-            <dd className="font-mono text-xs mt-1">POST /api/gateway/link</dd>
-          </div>
-          <div>
-            <dt className="text-xs muted">Invoke（fail-closed）</dt>
-            <dd className="font-mono text-xs mt-1">POST /api/gateway/invoke</dd>
-          </div>
-          <div>
-            <dt className="text-xs muted">社員証形式</dt>
-            <dd className="font-mono text-xs mt-1">
-              Authorization: Bearer gb_emp_…
+            <dt className="text-xs muted">つながりの確認</dt>
+            <dd className="text-xs muted mt-1 leading-relaxed">
+              いまつながっているかを確認できます。
             </dd>
           </div>
           <div>
-            <dt className="text-xs muted">共有ホスト</dt>
+            <dt className="text-xs muted">連携の手続き</dt>
             <dd className="text-xs muted mt-1 leading-relaxed">
-              実行環境は共有でも、職務分離は社員証・承認・監査で担保します。
+              画面の案内に沿って Grok Bot とつなぎます。
             </dd>
           </div>
           <div>
-            <dt className="text-xs muted">Managed 方針</dt>
+            <dt className="text-xs muted">実行のルール</dt>
             <dd className="text-xs muted mt-1 leading-relaxed">
-              切断は黙って消さない。needs_reauth で 要再連携。
+              承認されるまで実行しません。
+            </dd>
+          </div>
+          <div>
+            <dt className="text-xs muted">社員証</dt>
+            <dd className="text-xs muted mt-1 leading-relaxed">
+              AI社員は社員証で本人確認します（接続用の鍵は詳細画面のみ）。
+            </dd>
+          </div>
+          <div>
+            <dt className="text-xs muted">共有のパソコンでも</dt>
+            <dd className="text-xs muted mt-1 leading-relaxed">
+              実行環境が共有でも、職務の分離は社員証・承認・監査で守ります。
+            </dd>
+          </div>
+          <div>
+            <dt className="text-xs muted">当社で用意する場合</dt>
+            <dd className="text-xs muted mt-1 leading-relaxed">
+              接続が切れても記録は消しません。つなぎ直しが必要と表示します。
             </dd>
           </div>
         </dl>

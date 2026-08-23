@@ -55,7 +55,7 @@ export function EmployeeActionLog({
         <div>
           <h2 className="text-sm font-medium">{title}</h2>
           <p className="mt-1 text-xs muted">
-            タイムスタンプ · 種別 · 目的 · 成否（デモ · バインディング連動）
+            時刻 · 種別 · 目的 · 成否（接続状態と連動）
           </p>
         </div>
         <div
@@ -125,7 +125,7 @@ export function EmployeeActionLog({
       )}
 
       <p className="mt-4 text-[11px] faint">
-        デモデータ（本番は監査イベント + binding ゲート履歴）
+        サンプル表示です。本番では監査の記録と、接続・承認の履歴が並びます。
         {compact && filtered.length > shown.length
           ? ` · ほか ${filtered.length - shown.length} 件`
           : null}

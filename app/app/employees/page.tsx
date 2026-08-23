@@ -18,7 +18,7 @@ export default async function EmployeesPage() {
     >
       <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
         <p className="text-sm muted">
-          日本語で職務を説明 → Draft → 社員証発行。危険操作は承認ゲートへ。
+          日本語で職務を説明 → 権限の案 → 社員証発行。危ない操作は承認待ちへ。
         </p>
         <Link href="/app/employees/new" className="btn btn-primary text-sm">
           AI社員を雇う
@@ -29,7 +29,7 @@ export default async function EmployeesPage() {
         <section className="surface p-8 text-center">
           <p className="text-sm font-medium">まだ AI社員がいません</p>
           <p className="mt-2 text-sm muted leading-relaxed max-w-md mx-auto">
-            最初の一人を雇うと、スコープ・目的・承認ポリシー付きの社員証が発行されます。
+            最初の一人を雇うと、できること・目的・承認のルール付きの社員証が発行されます。
           </p>
           <Link href="/app/employees/new" className="btn btn-primary mt-5 text-sm inline-flex">
             最初の AI社員を雇う
@@ -73,7 +73,7 @@ export default async function EmployeesPage() {
                         e.status === "active" ? "chip-ok" : "chip-warn"
                       }`}
                     >
-                      {e.status}
+                      {e.status === "active" ? "稼働中" : e.status === "suspended" ? "一時停止" : e.status === "draft" ? "下書き" : e.status}
                     </span>
                   </td>
                   <td className="px-4 py-3">

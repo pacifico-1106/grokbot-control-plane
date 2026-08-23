@@ -48,7 +48,7 @@ export default async function EmployeeDetailPage({
   return (
     <AppShell
       title={employee.displayName}
-      subtitle={`${employee.roleLabel} · ${employee.status}`}
+      subtitle={`${employee.roleLabel} · ${employee.status === "active" ? "稼働中" : employee.status === "suspended" ? "一時停止" : employee.status === "draft" ? "下書き" : employee.status}`}
     >
       <div className="flex flex-wrap gap-2 mb-4">
         <Link href="/app/employees" className="btn btn-ghost text-xs px-3 py-1.5">
@@ -85,14 +85,14 @@ export default async function EmployeeDetailPage({
               </dd>
             </div>
             <div>
-              <dt className="text-xs muted">employeeId（生涯不変）</dt>
+              <dt className="text-xs muted">AI社員番号（変更なし）</dt>
               <dd className="mt-1 font-mono text-xs">{employee.id}</dd>
             </div>
           </dl>
         </section>
 
         <section className="surface p-5 space-y-3">
-          <h2 className="text-sm font-medium">スコープ / 目的</h2>
+          <h2 className="text-sm font-medium">できること / 目的</h2>
           <div className="flex flex-wrap gap-2">
             {(employee.scopes ?? []).map((s) => (
               <span key={s} className="chip chip-ok text-[11px]">
@@ -152,15 +152,15 @@ export default async function EmployeeDetailPage({
           </dl>
         ) : employee.scopes.includes("commerce:order") ? (
           <p className="text-sm text-[var(--warn)]">
-            発注スコープあり・予算未設定 → Gateway は fail-closed で人間承認になります。
+            発注は許可されていますが、予算が未設定です。承認されるまで実行しません（人が確認します）。
           </p>
         ) : (
           <p className="text-sm muted">
-            発注スコープなし。将来の決済委任は雇い直し／権限更新時に設定できます。
+            いまは発注の権限がありません。必要になったら、権限を更新するときに予算を決められます。
           </p>
         )}
         <p className="text-xs faint leading-relaxed">
-          実際の発注・送信は Gateway 経由のみ。Botに直結ツールを載せない。
+          実際の発注・送信は、承認・監査を通す仕組み（Staffpass）経由だけです。
         </p>
       </section>
 
@@ -175,7 +175,7 @@ export default async function EmployeeDetailPage({
             <dt className="text-xs muted">ブラウザ利用</dt>
             <dd className="mt-1">
               {employee.scopes.includes("browser:use") ? (
-                <span className="chip chip-ok text-[11px]">許可（browser:use）</span>
+                <span className="chip chip-ok text-[11px]">許可</span>
               ) : (
                 <span className="chip text-[11px]">未許可</span>
               )}
@@ -206,11 +206,11 @@ export default async function EmployeeDetailPage({
           </ul>
         ) : (
           <p className="text-sm muted">
-            許可アカウント未登録。ブラウザ利用時は雇い直し／権限更新でIDを刻むことを推奨します。
+            許可アカウントが未登録です。ブラウザを使う場合は、権限の更新で使えるIDを登録してください。
           </p>
         )}
         <p className="text-xs faint leading-relaxed">
-          実行時のライブセッション照合は部分的な場合があります。方針・監査・Managed の目視確認と合わせて運用してください。
+          実行中のログイン確認は、すべてを自動では見切れない場合があります。方針・監査・当社サポートの目視と合わせて運用してください。
         </p>
       </section>
 

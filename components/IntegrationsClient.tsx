@@ -16,10 +16,10 @@ const STATUS_LABEL: Record<GatewayLinkStatus, string> = {
 };
 
 const BINDING_LABEL: Record<BindingStatus, string> = {
-  unlinked: "未連携",
-  linked: "連携済み",
-  degraded: "劣化",
-  needs_reauth: "要再連携",
+  unlinked: "未接続",
+  linked: "接続中",
+  degraded: "不安定",
+  needs_reauth: "再接続が必要",
   revoked: "取消済み",
 };
 
@@ -88,7 +88,7 @@ export function IntegrationsClient({
         <section className="surface p-5">
           <h2 className="text-sm font-medium">導入モード</h2>
           <p className="mt-2 text-sm muted leading-relaxed">
-            Managed（こちらで用意）または BYO Grok Bot（持ち込み）。
+            「当社で用意」か「お持ちの Grok Bot を持ち込み」かを選べます。
           </p>
           <div className="mt-4 space-y-3">
             <label className="flex gap-3 rounded-lg border border-[var(--border)] p-3 cursor-pointer">
@@ -100,9 +100,9 @@ export function IntegrationsClient({
                 className="mt-1"
               />
               <div>
-                <div className="text-sm">Managed</div>
+                <div className="text-sm">当社で用意</div>
                 <p className="text-xs muted mt-1">
-                  弊社が Grok Bot をセットアップし、制御面に接続済みでお渡しします。
+                  当社が Grok Bot を用意し、Staffpass（制御）につないだ状態でお渡しします。
                 </p>
               </div>
             </label>
@@ -115,9 +115,9 @@ export function IntegrationsClient({
                 className="mt-1"
               />
               <div>
-                <div className="text-sm">BYO Grok Bot</div>
+                <div className="text-sm">持ち込み（BYO）</div>
                 <p className="text-xs muted mt-1">
-                  既存ワークスペースを持ち込み。社員証ゲートと監査のみ接続します。
+                  いまお使いのワークスペースを持ち込み。社員証の確認と記録だけをつなぎます。
                 </p>
               </div>
             </label>
@@ -125,9 +125,9 @@ export function IntegrationsClient({
         </section>
 
         <section className="surface p-5">
-          <h2 className="text-sm font-medium">Grok Bot 連携ステータス</h2>
+          <h2 className="text-sm font-medium">Grok Bot とのつながり</h2>
           <p className="mt-2 text-sm muted">
-            ステータスマシン: disconnected → pending（連携へ） → linked（戻る）
+            流れは「未連携 → 手続き中 → 連携済み」です。
           </p>
           <div className="mt-4 flex flex-wrap items-center gap-2">
             <span
@@ -141,7 +141,6 @@ export function IntegrationsClient({
             >
               {STATUS_LABEL[status]}
             </span>
-            <span className="text-xs faint font-mono">{status}</span>
           </div>
           <div className="mt-5 flex flex-wrap gap-2">
             <button
@@ -171,7 +170,7 @@ export function IntegrationsClient({
           </div>
           {message ? <p className="mt-3 text-xs muted">{message}</p> : null}
           <p className="mt-4 text-xs faint leading-relaxed">
-            本番では Cursor Grok Bot パートナー API の OAuth / ワークスペース紐付けに置き換えます（現状はデモ状態機械）。
+            いまはデモのつなぎ方です。本番では、画面の案内に従って安全につなぎ直します。
           </p>
         </section>
       </div>
@@ -179,13 +178,13 @@ export function IntegrationsClient({
       <section className="surface p-5">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <h2 className="text-sm font-medium">AI社員バインディング（組織）</h2>
+            <h2 className="text-sm font-medium">AI社員の接続状態（組織）</h2>
             <p className="mt-1 text-xs muted leading-relaxed">
-              Managed: lastSuccessAt と status を監視。切断は黙って消さない。
+              最後にうまく動いた時刻と、いまの状態を見ます。切れても記録は残します。
             </p>
           </div>
           <span className="chip chip-warn text-[11px]">
-            切断は黙って消さない
+            切れても記録は残す
           </span>
         </div>
 
@@ -194,10 +193,10 @@ export function IntegrationsClient({
             <thead>
               <tr className="text-left text-[11px] muted border-b border-[var(--border-soft)]">
                 <th className="pb-2 font-normal">AI社員</th>
-                <th className="pb-2 font-normal">status</th>
-                <th className="pb-2 font-normal">agent</th>
-                <th className="pb-2 font-normal">gen</th>
-                <th className="pb-2 font-normal">lastSuccessAt</th>
+                <th className="pb-2 font-normal">接続状態</th>
+                <th className="pb-2 font-normal">エージェント</th>
+                <th className="pb-2 font-normal">社員証世代</th>
+                <th className="pb-2 font-normal">最後の成功</th>
               </tr>
             </thead>
             <tbody>

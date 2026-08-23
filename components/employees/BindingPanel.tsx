@@ -4,10 +4,10 @@ import { useCallback, useState } from "react";
 import type { BindingStatus, EmployeeBinding } from "@/lib/types";
 
 const STATUS_LABEL: Record<BindingStatus, string> = {
-  unlinked: "未連携",
-  linked: "連携済み",
-  degraded: "劣化",
-  needs_reauth: "要再連携",
+  unlinked: "未接続",
+  linked: "接続中",
+  degraded: "不安定",
+  needs_reauth: "再接続が必要",
   revoked: "取消済み",
 };
 
@@ -105,7 +105,7 @@ export function BindingPanel({
       setOneTimeSecret(body.credential?.oneTimeSecret ?? null);
       setMessage(
         body.credential?.notice ||
-          `再発行完了 gen=${body.generation}（employeeId 不変）`
+          `社員証を出し直しました（世代 ${body.generation}。AI社員番号は変わりません）`
       );
     } catch (e) {
       setMessage(e instanceof Error ? e.message : "failed");
@@ -120,9 +120,9 @@ export function BindingPanel({
     <section className="surface p-5 mt-4 space-y-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 className="text-sm font-medium">Grok Bot バインディング</h2>
+          <h2 className="text-sm font-medium">Grok Bot の接続状態</h2>
           <p className="mt-1 text-xs muted leading-relaxed">
-            employeeId は生涯不変。トークン再発行は generation のみ加算します。
+            AI社員の番号はずっと変わりません。社員証を出し直しても、同じ人として扱います。
           </p>
         </div>
         <span className={chipClass(binding.status)}>
@@ -140,13 +140,13 @@ export function BindingPanel({
           }}
           role="alert"
         >
-          <strong>要再連携</strong>
+          <strong>再接続が必要</strong>
           <span className="muted text-xs ml-2" style={{ color: "var(--text-muted)" }}>
-            バインディングは保持されています。社員証を再発行するかヘルスを回復してください（黙ってリセットしません）。
+            つながり情報は消していません。社員証を出し直すか、接続を回復してください。
           </span>
           {binding.lastError ? (
-            <div className="mt-1 font-mono text-[11px] faint">
-              lastError: {binding.lastError}
+            <div className="mt-1 text-[11px] faint">
+              前回のエラー: {binding.lastError}
             </div>
           ) : null}
         </div>
@@ -154,19 +154,19 @@ export function BindingPanel({
 
       <dl className="grid sm:grid-cols-2 gap-3 text-sm">
         <div>
-          <dt className="text-xs muted">employeeId（不変）</dt>
+          <dt className="text-xs muted">AI社員番号（変更なし）</dt>
           <dd className="mt-1 font-mono text-xs">{binding.employeeId}</dd>
         </div>
         <div>
-          <dt className="text-xs muted">credentialGeneration</dt>
+          <dt className="text-xs muted">社員証の世代</dt>
           <dd className="mt-1 font-mono text-xs">{binding.credentialGeneration}</dd>
         </div>
         <div>
-          <dt className="text-xs muted">lastSuccessAt</dt>
+          <dt className="text-xs muted">最後に成功した時刻</dt>
           <dd className="mt-1 text-xs">{formatTs(binding.lastSuccessAt)}</dd>
         </div>
         <div>
-          <dt className="text-xs muted">fingerprint</dt>
+          <dt className="text-xs muted">接続用の鍵（指紋）</dt>
           <dd className="mt-1 font-mono text-[11px] truncate">
             {binding.credentialFingerprint
               ? `${binding.credentialFingerprint.slice(0, 16)}…`
@@ -177,7 +177,7 @@ export function BindingPanel({
 
       <div className="grid sm:grid-cols-2 gap-3">
         <label className="block text-sm">
-          <span className="text-xs muted">Grok Bot agent id</span>
+          <span className="text-xs muted">Grok Bot のエージェントID</span>
           <input
             className="mt-1 w-full rounded-lg border border-[var(--border)] bg-transparent px-3 py-2 text-sm font-mono"
             value={agentId}
@@ -187,7 +187,7 @@ export function BindingPanel({
           />
         </label>
         <label className="block text-sm">
-          <span className="text-xs muted">workspace id（任意）</span>
+          <span className="text-xs muted">ワークスペースID（任意）</span>
           <input
             className="mt-1 w-full rounded-lg border border-[var(--border)] bg-transparent px-3 py-2 text-sm font-mono"
             value={workspaceId}
@@ -213,7 +213,7 @@ export function BindingPanel({
           disabled={busy || binding.status === "revoked"}
           onClick={() => void health(false)}
         >
-          ヘルスチェック
+          接続を確認
         </button>
         <button
           type="button"
@@ -228,20 +228,19 @@ export function BindingPanel({
           className="btn btn-ghost text-xs"
           disabled={busy}
           onClick={() => void health(true)}
-          title="デモ用: 強制失敗 → 要再連携"
+          title="デモ用: 接続切れを試す"
         >
-          デモ破綻
+          接続切れを試す（デモ）
         </button>
       </div>
 
       <p className="text-[11px] faint leading-relaxed">
-        再発行しても employeeId は変わりません。generation だけが上がります。ゲートウェイは
-        unbound / revoked / needs_reauth で fail-closed します。
+        社員証を出し直しても、AI社員の番号は変わりません。未接続・取消・再接続待ちのときは、承認されるまで実行しません。
       </p>
 
       {oneTimeSecret ? (
         <div className="rounded-lg border border-[var(--border)] p-3">
-          <div className="text-xs muted">一度きり秘密（コピーして保管）</div>
+          <div className="text-xs muted">一度だけの接続用の鍵（コピーして保管）</div>
           <code className="mt-1 block break-all text-xs font-mono">
             {oneTimeSecret}
           </code>

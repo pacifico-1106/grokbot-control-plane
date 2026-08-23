@@ -117,7 +117,7 @@ export function HireEmployeeClient() {
 
   function goToSpendOrIssue() {
     if (!displayName.trim() || !roleLabel.trim() || !scopes.length) {
-      setError("名前・職務・スコープは必須です");
+      setError("名前・職務・できることは必須です");
       return;
     }
     setError("");
@@ -126,7 +126,7 @@ export function HireEmployeeClient() {
 
   async function issueCredential() {
     if (!displayName.trim() || !roleLabel.trim() || !scopes.length) {
-      setError("名前・職務・スコープは必須です");
+      setError("名前・職務・できることは必須です");
       return;
     }
     setLoading(true);
@@ -177,7 +177,7 @@ export function HireEmployeeClient() {
 
   const stepsMeta: Array<{ id: Step; label: string }> = [
     { id: "describe", label: "1. 職務説明" },
-    { id: "draft", label: "2. Draft確認" },
+    { id: "draft", label: "2. 権限の案" },
     { id: "spend", label: "3. 予算・承認" },
     { id: "issued", label: "4. 発行" },
   ];
@@ -206,7 +206,7 @@ export function HireEmployeeClient() {
           <div>
             <h2 className="text-sm font-medium">このAI社員に何を任せますか？</h2>
             <p className="mt-2 text-sm muted leading-relaxed">
-              日本語で職務を書くと、最小権限の Draft（スコープ・目的・承認ポリシー）に変換します。
+              日本語で職務を書くと、最小限の権限の案（できること・目的・承認のルール）に変換します。
               発注がある場合は、次のステップで予算上限も決められます。確認するまで社員証は発行されません。
             </p>
           </div>
@@ -230,7 +230,7 @@ export function HireEmployeeClient() {
             ))}
           </div>
           <p className="text-xs faint">
-            APIキー・secret・秘密鍵は入力しないでください。
+            パスワードや接続用の鍵、秘密の番号は入力しないでください。
           </p>
           <button
             type="button"
@@ -238,7 +238,7 @@ export function HireEmployeeClient() {
             disabled={loading || !prompt.trim()}
             onClick={() => void createDraft()}
           >
-            {loading ? "変換中…" : "職務権限 Draft を作る"}
+            {loading ? "変換中…" : "権限の案を作る"}
           </button>
         </section>
       ) : null}
@@ -247,9 +247,9 @@ export function HireEmployeeClient() {
         <section className="surface p-5 space-y-5">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
-              <h2 className="text-sm font-medium">Draft を確認・編集</h2>
+              <h2 className="text-sm font-medium">権限の案を確認・編集</h2>
               <p className="mt-1 text-xs faint">
-                信頼度 {(draft.confidence * 100).toFixed(0)}% · source={draft.source}
+                この案の確からしさ {(draft.confidence * 100).toFixed(0)}%
               </p>
             </div>
             <button
@@ -310,7 +310,7 @@ export function HireEmployeeClient() {
           </label>
 
           <div>
-            <div className="text-sm muted mb-2">スコープ</div>
+            <div className="text-sm muted mb-2">できること</div>
             <div className="flex flex-wrap gap-2">
               {(Object.keys(SCOPE_LABELS) as EmployeeScope[]).map((scope) => {
                 const on = scopes.includes(scope);
@@ -362,17 +362,16 @@ export function HireEmployeeClient() {
 
           <details className="rounded-lg border border-[var(--border-soft)] bg-[var(--bg-soft)] px-3 py-2">
             <summary className="cursor-pointer text-xs font-medium">
-              JP中小向け・必須承認プリセット（Managed初期値）
+              中小企業向け・必ず人が確認する操作（初期設定）
             </summary>
             <p className="mt-2 text-[11px] muted leading-relaxed">
-              人間の職務RBAC（誰が承認ボタンを押せるか）とは別層です。confirm / send
-              はゲートで always_human。propose / draft のみ自動可。
+              「誰が承認ボタンを押せるか」とは別の話です。送信・確定は必ず人が確認。下書き・提案だけ自動にできます。
             </p>
             <ul className="mt-2 space-y-1 text-[11px] leading-relaxed">
               {alwaysHumanMustList().map((row) => (
                 <li key={row.tool}>
                   <span className="font-medium text-[var(--text)]">{row.labelJa}</span>
-                  <span className="muted"> — {row.tool}</span>
+                  <span className="muted"> — 人が確認</span>
                 </li>
               ))}
             </ul>
@@ -409,7 +408,7 @@ export function HireEmployeeClient() {
               className="btn btn-ghost text-xs px-3 py-1.5"
               onClick={() => setStep("draft")}
             >
-              Draft に戻る
+              権限の案に戻る
             </button>
           </div>
 
@@ -421,8 +420,8 @@ export function HireEmployeeClient() {
 
           <p className="rounded-lg border border-[var(--border)] bg-[var(--bg-soft)] px-3 py-2 text-xs muted leading-relaxed">
             <span className="font-medium text-[var(--text)]">運用ルール: </span>
-            実際の発注・送信は Gateway 経由のみ。Botに直結ツールを載せない。
-            （Staffpass が拒否すれば手は動きません）
+            実際の発注・送信は、当社の承認ルート経由だけです。AI社員に直結の道具は載せません。
+            （Staffpass が断れば、その操作は進みません）
           </p>
 
           {hasOrderScope ? (
@@ -445,7 +444,7 @@ export function HireEmployeeClient() {
                 </span>
               </button>
               <p className="text-xs muted leading-relaxed">
-                いまは発注スコープ（commerce:order）がありません。必要になったときのために、予算の考え方だけ先にメモできます。未設定のまま発注スコープを後から足すと、ゲートは fail-closed で人間承認になります。
+                いまは発注の権限がありません。必要になったときのために、予算の考え方だけ先にメモできます。予算未設定のまま発注を足すと、承認されるまで実行しません。
               </p>
               {futureSpendOpen ? (
                 <SpendForm
@@ -491,7 +490,7 @@ export function HireEmployeeClient() {
 
       {step === "issued" ? (
         <section className="surface p-5 space-y-4">
-          <div className="chip chip-ok">発行完了（デモ）</div>
+          <div className="chip chip-ok">発行完了</div>
           <h2 className="text-lg font-medium">{displayName}</h2>
           <p className="text-sm muted">
             {roleLabel} · 承認: {APPROVAL_POLICY_LABELS[approvalPolicy]}
@@ -513,7 +512,7 @@ export function HireEmployeeClient() {
           ) : null}
           <div className="rounded-lg border border-[var(--warn)]/40 bg-[var(--bg-soft)] p-4">
             <p className="text-xs text-[var(--warn)] font-medium">
-              この秘密値は一度だけ表示されます
+              この接続用の鍵は一度だけ表示されます
             </p>
             <pre className="mt-3 text-xs font-mono break-all whitespace-pre-wrap">
               {oneTimeSecret}
@@ -758,7 +757,7 @@ function BrowserAccountsSection({
         <span>
           <span className="font-medium">ブラウザ利用を許可する</span>
           <span className="block text-xs muted mt-0.5">
-            ON にするとスコープに「ブラウザ利用」が入ります。共有セッションのまま個人IDで動かさないでください。
+            ON にすると「ブラウザ利用」が許可されます。共有のログインのまま個人のIDで動かさないでください。
           </span>
         </span>
       </label>
