@@ -117,8 +117,8 @@ CLI 上で `vercel whoami` が **Logged out**、かつ `VERCEL_TOKEN` が無い�
 
 ### 期待される URL
 
-- 本番: `https://<project-name>.vercel.app`（カスタムドメインは任意）
-- Dashboard: `https://vercel.com/<your-team-or-user>/<project-name>`
+- 本番: `https://grokbot-control-plane.vercel.app`（カスタムドメインは任意）
+- Dashboard: `https://vercel.com/tyasakas-projects/grokbot-control-plane`
 
 ※ claim URL や一時デプロイの URL は恒久運用に使わないこと。Git 連携プロジェクトを正とする。
 
