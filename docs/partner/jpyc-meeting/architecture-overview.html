@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>JPYC × Sealith / lifetime-esim — アーキテクチャ概要</title>
+<style>
+  @page {
+    size: A4;
+    margin: 14mm 12mm 16mm 12mm;
+    @bottom-center {
+      content: "JPYC × Sealith / lifetime-esim  ·  アーキテクチャ概要  ·  " counter(page);
+      font-size: 8pt;
+      color: #64748b;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: "Noto Sans CJK JP", "Noto Sans JP", "Hiragino Sans", "Yu Gothic", "DejaVu Sans", sans-serif;
+    color: #0f172a;
+    line-height: 1.6;
+    font-size: 10pt;
+    margin: 0;
+    padding: 0;
+    max-width: 190mm;
+  }
+  h1 {
+    font-size: 16pt;
+    color: #1e3a8a;
+    border-bottom: 3px solid #1e40af;
+    padding-bottom: 8px;
+    margin: 0 0 8px;
+  }
+  h2 {
+    font-size: 12pt;
+    color: #1e40af;
+    margin: 1.3em 0 0.5em;
+    border-left: 4px solid #1e40af;
+    padding-left: 10px;
+    page-break-after: avoid;
+  }
+  h3 {
+    font-size: 10.5pt;
+    color: #334155;
+    margin: 1em 0 0.4em;
+  }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 8px 0 14px;
+    font-size: 9pt;
+  }
+  th, td {
+    border: 1px solid #cbd5e1;
+    padding: 6px 8px;
+    text-align: left;
+    vertical-align: top;
+  }
+  th { background: #eff6ff; color: #1e3a8a; }
+  p { margin: 0.4em 0; }
+  ul, ol { margin: 6px 0 10px; padding-left: 1.35em; }
+  li { margin: 3px 0; }
+  .meta { font-size: 9pt; color: #475569; margin-bottom: 10px; }
+  .callout {
+    background: #f8fafc;
+    border-left: 4px solid #1e40af;
+    padding: 10px 12px;
+    margin: 10px 0;
+  }
+  .footer {
+    margin-top: 18px;
+    padding-top: 10px;
+    border-top: 1px solid #e2e8f0;
+    font-size: 8pt;
+    color: #64748b;
+  }
+  /* Diagram primitives */
+  .diagram {
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    background: #f8fafc;
+    padding: 14px 12px;
+    margin: 10px 0 14px;
+    page-break-inside: avoid;
+  }
+  .diagram-title {
+    font-size: 8.5pt;
+    color: #64748b;
+    margin: 0 0 10px;
+    font-weight: 600;
+  }
+  .flow {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+  }
+  .node {
+    background: #fff;
+    border: 1.5px solid #94a3b8;
+    border-radius: 8px;
+    padding: 8px 10px;
+    font-size: 8.5pt;
+    text-align: center;
+    min-width: 72px;
+    max-width: 120px;
+    line-height: 1.35;
+  }
+  .node.primary { border-color: #1e40af; background: #eff6ff; color: #1e3a8a; font-weight: 600; }
+  .node.jpyc { border-color: #7c3aed; background: #f5f3ff; color: #5b21b6; font-weight: 600; }
+  .node.ok { border-color: #059669; background: #ecfdf5; color: #065f46; }
+  .node.warn { border-color: #d97706; background: #fffbeb; color: #92400e; }
+  .node.muted { border-style: dashed; color: #64748b; }
+  .arrow {
+    color: #64748b;
+    font-size: 14pt;
+    font-weight: 700;
+    padding: 0 2px;
+  }
+  .branch {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    align-items: stretch;
+  }
+  .seq {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .seq-row {
+    display: grid;
+    grid-template-columns: 28px 1fr;
+    gap: 8px;
+    align-items: start;
+    font-size: 9pt;
+  }
+  .seq-num {
+    background: #1e40af;
+    color: #fff;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 8pt;
+    font-weight: 700;
+  }
+  .mountain {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 8px;
+    align-items: end;
+  }
+  .peak {
+    background: #fff;
+    border: 1.5px solid #1e40af;
+    border-radius: 8px 8px 4px 4px;
+    padding: 10px;
+    text-align: center;
+    font-size: 8.5pt;
+  }
+  .peak.p1 { min-height: 70px; background: #eff6ff; }
+  .peak.p2 { min-height: 95px; background: #dbeafe; }
+  .peak.p3 { min-height: 120px; background: #bfdbfe; }
+  .peak strong { display: block; color: #1e3a8a; margin-bottom: 4px; font-size: 9pt; }
+  .note { font-size: 8.5pt; color: #64748b; }
+  .custody {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    font-size: 9pt;
+  }
+  .page-break { page-break-before: always; }
+  @media print {
+    body { max-width: none; }
+    a { color: inherit; text-decoration: none; }
+  }
+</style>
+</head>
+<body>
+
+<h1>JPYC × Sealith / lifetime-esim<br/>アーキテクチャ概要</h1>
+<p class="meta">
+  相手方共有用（NDA締結済）· 版 2026-08-23 · 秘密鍵・APIキー・シード記載なし<br/>
+  対象：JPYC株式会社 様 / 当社（TOKYO307 / Sealith） · 近接PoC：lifetime-esim.com 商品決済（JPYC ＋ 既存 Stripe）
+</p>
+
+<div class="callout">
+  <strong>ひとことで</strong><br/>
+  お客さまが eSIM を買うとき、<strong>クレジットカード（Stripe）か JPYC</strong>で支払えるようにする、というのが直近の PoC です。
+  JPYC を手元に用意する部分は、<strong>JPYC の画面（WebView）で本人確認と最終確定</strong>を行い、当社は金額入力や画面へのつなぎを担当します。
+  当社はお客さまのコインや鍵を預かりません。Staffpass は AI 購入のガバナンス層で、JPYC API の主役ではありません。
+</div>
+
+<h2>1. 登場人物（役割）</h2>
+<table>
+  <tr><th>役割</th><th>誰</th><th>何をするか</th><th>何をしないか</th></tr>
+  <tr>
+    <td><strong>JPYC</strong></td>
+    <td>JPYC株式会社</td>
+    <td>KYC、発行／償還の最終確定、JPYC EX WebView</td>
+    <td>当社の商品フルフィルメント</td>
+  </tr>
+  <tr>
+    <td><strong>当社（接続・加盟店）</strong></td>
+    <td>TOKYO307 / Sealith</td>
+    <td>購入導線・UX、lifetime-esim 手配、受取 Safe（想定）、台帳・監査</td>
+    <td>利用者資産のカストディ、無人S2Sミント</td>
+  </tr>
+  <tr>
+    <td><strong>利用者</strong></td>
+    <td>購入者（個人／法人）</td>
+    <td>自己管理ウォレット、購入意思、JPYC画面での確認</td>
+    <td>—</td>
+  </tr>
+  <tr>
+    <td><strong>AI社員（Staffpass）</strong></td>
+    <td>Grok Bot 制御プレーン</td>
+    <td>（任意）発注提案の承認・上限・監査</td>
+    <td>JPYC API 直接操作・無人発行</td>
+  </tr>
+</table>
+
+<h2>2. 全体像（ハイレベル）</h2>
+<div class="diagram">
+  <p class="diagram-title">図1 — 購入から eSIM お渡しまで</p>
+  <div class="flow">
+    <div class="node primary">購入者</div>
+    <div class="arrow">→</div>
+    <div class="node muted">Staffpass承認<br/><span class="note">任意</span></div>
+    <div class="arrow">→</div>
+    <div class="branch">
+      <div class="node">Stripe</div>
+      <div class="node jpyc">JPYC</div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="node primary">lifetime-esim<br/>フルフィルメント</div>
+    <div class="arrow">→</div>
+    <div class="node ok">eSIM 納品</div>
+  </div>
+  <p class="note" style="margin-top:10px;text-align:center;">破線ボックス＝任意。決済・承認の結果は Sealith 台帳・監査へ記録。</p>
+</div>
+<ol>
+  <li>購入者が商品を選ぶ。</li>
+  <li>（将来・任意）AI社員経由なら Staffpass で上限・承認。人の購入ならスキップ可。</li>
+  <li>支払い方法：Stripe または JPYC。</li>
+  <li>確認後、lifetime-esim が eSIM を手配・お渡し。</li>
+  <li>誰が何を承認し、どのレールで払ったかを台帳に残す。</li>
+</ol>
+
+<h2>3. JPYC EX オンランプ → コマース決済</h2>
+<div class="diagram">
+  <p class="diagram-title">図2 — シーケンス（導線は当社、最終確定は JPYC）</p>
+  <div class="seq">
+    <div class="seq-row"><div class="seq-num">1</div><div><strong>当社アプリ／サイト</strong>：金額・ネットワーク等を選択（UX）</div></div>
+    <div class="seq-row"><div class="seq-num">2</div><div><strong>JPYC WebView</strong>へリダイレクト（発行／償還）— <em>KYC・最終確定はJPYC</em></div></div>
+    <div class="seq-row"><div class="seq-num">3</div><div>利用者が WebView で本人確認・確定操作</div></div>
+    <div class="seq-row"><div class="seq-num">4</div><div>当社へ復帰（リダイレクト戻し）</div></div>
+    <div class="seq-row"><div class="seq-num">5</div><div><strong>状態確認</strong>（API／チェーン証跡）で発行／償還完了を確認</div></div>
+    <div class="seq-row"><div class="seq-num">6</div><div>コマース支払い：利用者 → <strong>加盟店 Safe（受取）</strong></div></div>
+    <div class="seq-row"><div class="seq-num">7</div><div>lifetime-esim フルフィルメント → <strong>eSIM 納品</strong></div></div>
+  </div>
+</div>
+<ul>
+  <li><strong>無人の Server-to-Server 発行はしない</strong>（人が WebView で確定）。</li>
+  <li>発行／償還完了の確認後に商品代金支払い → eSIM 手配、を基本とする（詳細は双方で詰める）。</li>
+  <li>受取は当社の <strong>Safe（マルチシグ想定）</strong>。利用者鍵は当社が持たない。</li>
+</ul>
+
+<div class="page-break"></div>
+
+<h2>4. ノンカストディの整理</h2>
+<div class="diagram">
+  <p class="diagram-title">図3 — 資産の所在</p>
+  <div class="custody">
+    <div class="node ok">利用者の<br/>自己管理ウォレット<br/><span class="note">鍵は利用者のみ</span></div>
+    <div class="arrow">支払 →</div>
+    <div class="node primary">当社 受取 Safe<br/><span class="note">加盟店オペレーション</span></div>
+  </div>
+  <p class="note" style="margin-top:10px;text-align:center;">Sealith は利用者の JPYC／秘密鍵を預からない（ノンカストディ）。</p>
+</div>
+
+<h2>5. Staffpass の位置（軽量）</h2>
+<div class="diagram">
+  <p class="diagram-title">図4 — AI社員起点の購入ゲート（任意）</p>
+  <div class="flow">
+    <div class="node warn">AI社員が<br/>購入を提案</div>
+    <div class="arrow">→</div>
+    <div class="node primary">Staffpass<br/>社員証・予算・承認</div>
+    <div class="arrow">→</div>
+    <div class="node">決済レール<br/>Stripe or JPYC</div>
+  </div>
+</div>
+<p>PoC の最小構成では<strong>人がサイトから直接購入</strong>でも成立します。Staffpass は「AIが勝手に買えない」ためのゲートであり、<strong>JPYC 接続仕様の本体ではありません</strong>。</p>
+
+<h2>6. ロードマップ（山のイメージ）</h2>
+<div class="diagram">
+  <p class="diagram-title">図5 — 国内 PoC から先の山</p>
+  <div class="mountain">
+    <div class="peak p1">
+      <strong>① 国内 eSIM PoC</strong>
+      JPYC決済<br/>＋ Stripe 併存
+    </div>
+    <div class="peak p2">
+      <strong>② 自社連携強化</strong>
+      eSIM ＋ Staffpass<br/>制御の厚み
+    </div>
+    <div class="peak p3">
+      <strong>③ グローバルも視野</strong>
+      決済レールは<br/>地域ごとに最適化
+    </div>
+  </div>
+</div>
+<table>
+  <tr><th>段階</th><th>内容</th><th>注意</th></tr>
+  <tr><td>① いま</td><td>lifetime-esim で JPYC 支払いを試す</td><td>無人発行しない・カストディしない</td></tr>
+  <tr><td>② 次</td><td>承認・監査と決済のつなぎを厚くする</td><td>契約・ライセンス論点を並行</td></tr>
+  <tr><td>③ 将来</td><td>海外展開も視野</td><td><strong>JPYC の海外展開を当社が約束しない</strong></td></tr>
+</table>
+
+<h2>7. PoCでやること / やらないこと</h2>
+<table>
+  <tr><th>やる</th><th>やらない</th></tr>
+  <tr>
+    <td>eSIM 商品の JPYC 決済（Stripe 併存）<br/>WebView オンランプの UX 接続<br/>Safe 受取・台帳・監査</td>
+    <td>無人 S2S ミント／発行<br/>利用者 JPYC・鍵のカストディ<br/>本資料範囲外の新規金融商品組成</td>
+  </tr>
+</table>
+
+<h2>8. 用語のやさしい対応表</h2>
+<table>
+  <tr><th>用語</th><th>意味</th></tr>
+  <tr><td>eSIM</td><td>スマホに通信プランを後から入れる仕組み。lifetime-esim の商品。</td></tr>
+  <tr><td>JPYC</td><td>円に連動するステーブルコイン（詳細は JPYC 公式）。</td></tr>
+  <tr><td>WebView</td><td>アプリやサイトの中に開く JPYC の公式画面。</td></tr>
+  <tr><td>オンランプ</td><td>円などから JPYC を手元に用意する流れ。</td></tr>
+  <tr><td>Safe</td><td>複数人承認などを想定した受取用ウォレット。</td></tr>
+  <tr><td>ノンカストディ</td><td>会社がお客さまの鍵・資産を預からないこと。</td></tr>
+  <tr><td>Staffpass</td><td>AI社員の「社員証・承認・記録」プロダクト。</td></tr>
+</table>
+
+<h2>9. 次の技術確認（宿題候補）</h2>
+<ol>
+  <li>PoC 対象ネットワークとテスト手順</li>
+  <li>発行／償還完了の検知方法（API とチェーン証跡の優先）</li>
+  <li>Safe アドレスの管理・ローテーション方針</li>
+  <li>ユーザー向け画面文言（誰が何を確定するか）</li>
+  <li>障害時の切り分け（当社導線 vs JPYC WebView）</li>
+</ol>
+
+<div class="footer">
+  TOKYO307 / Sealith — 相手方共有可<br/>
+  本資料は設計意図の共有であり、契約条件そのものではありません。
+</div>
+
+</body>
+</html>

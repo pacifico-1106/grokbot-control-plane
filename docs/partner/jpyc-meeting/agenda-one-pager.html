@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8"/>
+<title>JPYC × Sealith / lifetime-esim 技術・契約お打ち合わせ アジェンダ</title>
+<style>
+  @page { size: A4; margin: 10mm 11mm 12mm 11mm; }
+  * { box-sizing: border-box; }
+  body {
+    font-family: "Noto Sans CJK JP", "Noto Sans JP", "Hiragino Sans", "Yu Gothic", sans-serif;
+    color: #0f172a; line-height: 1.32; font-size: 8pt; margin: 0; padding: 0;
+  }
+  h1 { font-size: 12pt; color: #1e3a8a; border-bottom: 2.5px solid #1e40af; padding-bottom: 4px; margin: 0 0 6px; line-height: 1.3; }
+  h2 { font-size: 9pt; color: #1e40af; margin: 7px 0 2px; border-left: 3px solid #1e40af; padding-left: 6px; }
+  table { border-collapse: collapse; width: 100%; margin: 2px 0 4px; font-size: 7.5pt; }
+  th, td { border: 1px solid #cbd5e1; padding: 2px 5px; text-align: left; vertical-align: top; }
+  th { background: #eff6ff; color: #1e3a8a; font-weight: 600; }
+  ul, ol { margin: 2px 0 4px; padding-left: 1.25em; }
+  li { margin: 0; }
+  p { margin: 2px 0; }
+  .callout { background: #f8fafc; border-left: 3px solid #1e40af; padding: 4px 7px; margin: 4px 0; font-size: 7.5pt; }
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; }
+  .box { border: 1px solid #cbd5e1; border-radius: 4px; padding: 4px 6px; }
+  .box.do { border-top: 2.5px solid #059669; }
+  .box.dont { border-top: 2.5px solid #dc2626; }
+  .box h3 { margin: 0 0 2px; font-size: 8pt; color: #334155; }
+  .footer { margin-top: 6px; padding-top: 4px; border-top: 1px solid #e2e8f0; font-size: 6.5pt; color: #64748b; }
+  .check { list-style: none; padding-left: 0; columns: 2; column-gap: 10px; }
+  .check li { break-inside: avoid; margin: 0 0 1px; padding-left: 0; }
+  .check li::before { content: "☐ "; color: #1e40af; }
+  .note { font-size: 7pt; color: #475569; }
+</style>
+</head>
+<body>
+<h1>JPYC × Sealith / lifetime-esim　技術・契約お打ち合わせ アジェンダ</h1>
+<table>
+  <tr><th style="width:12%">日時</th><td>{{DATE}}</td><th style="width:12%">場所</th><td>{{LOCATION}}</td><th style="width:12%">機密</th><td>NDA済・共有可（鍵・APIキーなし）</td></tr>
+</table>
+<table>
+  <tr><th>側</th><th>氏名・役職</th><th>側</th><th>氏名・役職</th></tr>
+  <tr><td>JPYC</td><td>{{JPYC_ATTENDEE_1}}</td><td>当社（TOKYO307 / Sealith）</td><td>{{OUR_ATTENDEE_1}}</td></tr>
+  <tr><td>JPYC</td><td>{{JPYC_ATTENDEE_2}}</td><td>当社</td><td>{{OUR_ATTENDEE_2}}</td></tr>
+</table>
+
+<h2>目的（本日のゴール）</h2>
+<ol>
+  <li><strong>近接PoCの合意</strong>：lifetime-esim.com の JPYC 決済（既存 Stripe 併存）の技術・役割分担を揃える。</li>
+  <li><strong>責任分界</strong>：導線・UXは当社、本人確認・発行／償還の最終確定は JPYC WebView。無人 S2S ミントは行わない。</li>
+  <li><strong>契約・ライセンス論点</strong>：Safe 受取、AIエージェント関与範囲、各社役割を次回アクションまで落とす。</li>
+</ol>
+
+<h2>想定構成の共有</h2>
+<ul>
+  <li><strong>オペレーター</strong>：TOKYO307（Sealith）。eSIM 商品＝lifetime-esim.com。<strong>決済</strong>：Stripe ＋ JPYC（PoC）。</li>
+  <li><strong>JPYC EX</strong>：人／法人が WebView で発行・償還。コネクタは金額・ネットワーク・リダイレクト等の UX。KYC・最終確認は JPYC。</li>
+  <li><strong>ノンカストディ</strong>：利用者自己管理ウォレット → 当社受取 Safe（想定）。Sealith は利用者 JPYC／鍵を預からない。</li>
+  <li><strong>Staffpass（軽く）</strong>：AI社員の承認・上限・監査。エージェント起点購入のガバナンスであり、<strong>JPYC API の主題ではない</strong>。</li>
+</ul>
+<div class="callout">詳細フローは別紙「アーキテクチャ概要」を参照。</div>
+
+<h2>確認事項チェックリスト</h2>
+<ul class="check">
+  <li><strong>導線分担</strong>：当社→JPYC WebView→復帰→決済</li>
+  <li><strong>PoC商品</strong>：SKU／価格帯の開始点</li>
+  <li><strong>受取Safe</strong>：ネットワーク・アドレス管理</li>
+  <li><strong>ステータス</strong>：API／チェーン証跡と決済順序</li>
+  <li><strong>AI関与</strong>：Staffpass任意か／人購入のみか</li>
+  <li><strong>ライセンス役割</strong>：発行・媒介・代行・システム</li>
+  <li><strong>手数料・精算・表示</strong>文言とタイミング</li>
+  <li><strong>サポート分界</strong>とエスカレーション</li>
+  <li><strong>テスト環境</strong>と本番切替条件</li>
+  <li><strong>スケジュール</strong>：開始目標・マイルストーン</li>
+</ul>
+
+<h2>PoC範囲 / やらないこと</h2>
+<div class="two-col">
+  <div class="box do"><h3>やること</h3>
+    <ul>
+      <li>eSIM 代金の JPYC 支払い（Stripe併存）</li>
+      <li>WebView 経由の人／法人オンランプ</li>
+      <li>当社受取 Safe（想定）・台帳・監査</li>
+    </ul>
+  </div>
+  <div class="box dont"><h3>やらないこと（明示）</h3>
+    <ul>
+      <li><strong>無人の S2S 発行／ミント</strong></li>
+      <li><strong>利用者資産・秘密鍵のカストディ</strong></li>
+      <li>JPYC グローバル展開の代弁・約束</li>
+    </ul>
+  </div>
+</div>
+<p class="note"><strong>長期の山（非コミット）</strong>：国内PoC → 自社（eSIM＋Staffpass）レール強化 → 長期的には海外展開も視野。決済レールは地域ごとに最適化。</p>
+
+<h2>タイムボックス（60分） / 次回アクション / 連絡先</h2>
+<table>
+  <tr><th>分</th><td>0–5 目的</td><td>5–20 構成共有</td><td>20–40 確認事項</td><td>40–50 PoC範囲</td><td>50–60 契約・宿題</td></tr>
+</table>
+<table>
+  <tr><th>#</th><th>アクション</th><th>担当</th><th>期限</th></tr>
+  <tr><td>1</td><td>{{ACTION_1}}</td><td>{{OWNER_1}}</td><td>{{DUE_1}}</td></tr>
+  <tr><td>2</td><td>{{ACTION_2}}</td><td>{{OWNER_2}}</td><td>{{DUE_2}}</td></tr>
+  <tr><td>3</td><td>{{ACTION_3}}</td><td>{{OWNER_3}}</td><td>{{DUE_3}}</td></tr>
+</table>
+<table>
+  <tr><th>当社</th><td>{{OUR_CONTACT_NAME}} / {{OUR_CONTACT_EMAIL}} / {{OUR_CONTACT_TEL}}</td>
+      <th>JPYC</th><td>{{JPYC_CONTACT_NAME}} / {{JPYC_CONTACT_EMAIL}}</td></tr>
+</table>
+<div class="footer">TOKYO307 / Sealith — lifetime-esim × JPYC PoC（相手方共有可）。APIキー・ウォレットシード・秘密鍵は含みません。</div>
+</body>
+</html>
