@@ -37,7 +37,7 @@ export default async function LoginPage({
               type="email"
               required={!demo}
               defaultValue={demo ? "owner@example.com" : ""}
-              className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm outline-none focus:border-[var(--text-faint)]"
+              className="mt-1 w-full min-h-[44px] rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2.5 text-sm outline-none focus:border-[var(--text-faint)]"
             />
           </label>
           <label className="block text-sm">
@@ -47,7 +47,7 @@ export default async function LoginPage({
               type="password"
               required={!demo}
               minLength={demo ? undefined : 8}
-              className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm outline-none focus:border-[var(--text-faint)]"
+              className="mt-1 w-full min-h-[44px] rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2.5 text-sm outline-none focus:border-[var(--text-faint)]"
             />
           </label>
           <button type="submit" className="btn btn-primary w-full">

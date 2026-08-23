@@ -54,7 +54,7 @@ export default function GettingStartedPage() {
             </p>
             <h2 className="mt-2 text-sm font-medium">{step.title}</h2>
             <p className="mt-2 text-sm muted leading-relaxed">{step.body}</p>
-            <Link href={step.href} className="btn btn-ghost mt-4 text-xs px-3 py-1.5 inline-flex">
+            <Link href={step.href} className="btn btn-ghost mt-4 text-sm w-full sm:w-auto inline-flex">
               {step.label}
             </Link>
           </section>
@@ -68,7 +68,7 @@ export default function GettingStartedPage() {
           </p>
           <Link
             href="/app/integrations"
-            className="btn btn-ghost mt-2 text-xs px-3 py-1.5 inline-flex"
+            className="btn btn-ghost mt-2 text-sm w-full sm:w-auto inline-flex"
           >
             連携を確認
           </Link>

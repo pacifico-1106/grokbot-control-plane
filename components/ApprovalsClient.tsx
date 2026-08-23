@@ -82,7 +82,7 @@ export function ApprovalsClient({
                         {emp?.displayName ?? a.employeeId}
                       </span>
                     </div>
-                    <p className="mt-2 text-sm leading-snug">{a.summary}</p>
+                    <p className="mt-2 text-sm leading-snug break-words">{a.summary}</p>
                     <p className="mt-1 text-xs faint">
                       {new Date(a.createdAt).toLocaleString("ja-JP", {
                         timeZone: "Asia/Tokyo",
@@ -90,10 +90,10 @@ export function ApprovalsClient({
                       JST
                     </p>
                   </div>
-                  <div className="flex flex-wrap gap-2 lg:justify-end">
+                  <div className="flex flex-col sm:flex-row flex-wrap gap-2 lg:justify-end">
                     <button
                       type="button"
-                      className="btn btn-ghost text-xs px-3 py-1.5"
+                      className="btn btn-ghost text-sm w-full sm:w-auto min-h-[44px]"
                       disabled={pendingId === a.id}
                       onClick={() => void decide(a.id, "reject")}
                     >
@@ -101,7 +101,7 @@ export function ApprovalsClient({
                     </button>
                     <button
                       type="button"
-                      className="btn btn-primary text-xs px-3 py-1.5"
+                      className="btn btn-primary text-sm w-full sm:w-auto min-h-[44px]"
                       disabled={pendingId === a.id}
                       onClick={() => void decide(a.id, "approve")}
                     >
@@ -120,11 +120,11 @@ export function ApprovalsClient({
           <h2 className="text-xs muted mb-3">処理済み</h2>
           <ul className="space-y-2">
             {done.map((a) => (
-              <li key={a.id} className="flex items-center gap-2 text-sm">
+              <li key={a.id} className="flex items-start gap-2 text-sm min-w-0">
                 <span className={`chip ${a.status === "approved" ? "chip-ok" : "chip-danger"}`}>
                   {a.status === "approved" ? "承認済み" : a.status === "rejected" ? "却下" : a.status}
                 </span>
-                <span className="muted truncate">{a.summary}</span>
+                <span className="muted min-w-0 break-words">{a.summary}</span>
               </li>
             ))}
           </ul>

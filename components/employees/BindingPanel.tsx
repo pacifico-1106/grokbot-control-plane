@@ -198,10 +198,10 @@ export function BindingPanel({
         </label>
       </div>
 
-      <div className="flex flex-wrap gap-2">
+      <div className="flex flex-col sm:flex-row flex-wrap gap-2">
         <button
           type="button"
-          className="btn btn-primary text-sm"
+          className="btn btn-primary text-sm w-full sm:w-auto"
           disabled={busy || binding.status === "revoked" || !agentId.trim()}
           onClick={() => void link()}
         >
@@ -209,7 +209,7 @@ export function BindingPanel({
         </button>
         <button
           type="button"
-          className="btn btn-ghost text-sm"
+          className="btn btn-ghost text-sm w-full sm:w-auto"
           disabled={busy || binding.status === "revoked"}
           onClick={() => void health(false)}
         >
@@ -217,7 +217,7 @@ export function BindingPanel({
         </button>
         <button
           type="button"
-          className="btn btn-ghost text-sm"
+          className="btn btn-ghost text-sm w-full sm:w-auto"
           disabled={busy || binding.status === "revoked"}
           onClick={() => void rotate()}
         >
@@ -225,7 +225,7 @@ export function BindingPanel({
         </button>
         <button
           type="button"
-          className="btn btn-ghost text-xs"
+          className="btn btn-ghost text-xs w-full sm:w-auto"
           disabled={busy}
           onClick={() => void health(true)}
           title="デモ用: 接続切れを試す"

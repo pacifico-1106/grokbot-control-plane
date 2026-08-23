@@ -40,26 +40,26 @@ export default async function DashboardPage() {
     >
       {reauthCount > 0 ? (
         <div
-          className="mb-4 rounded-lg border px-4 py-3 text-sm flex flex-wrap items-center justify-between gap-3"
+          className="mb-4 rounded-lg border px-3 sm:px-4 py-3 text-sm flex flex-col sm:flex-row sm:flex-wrap sm:items-center sm:justify-between gap-3 min-w-0"
           style={{
             borderColor: "color-mix(in oklab, var(--warn) 45%, var(--border))",
             background: "color-mix(in oklab, var(--warn) 10%, transparent)",
           }}
           role="alert"
         >
-          <div>
+          <div className="min-w-0 break-words">
             <strong style={{ color: "var(--warn)" }}>再接続が必要</strong>
-            <span className="muted ml-2 text-xs">
+            <span className="muted sm:ml-2 text-xs block sm:inline mt-1 sm:mt-0">
               接続が切れた AI社員がいます（{reauthCount} 件）。記録は残したまま、つなぎ直しが必要です。
             </span>
           </div>
-          <Link href="/app/integrations" className="btn btn-ghost text-xs px-3 py-1.5">
+          <Link href="/app/integrations" className="btn btn-ghost text-sm w-full sm:w-auto shrink-0">
             連携を確認
           </Link>
         </div>
       ) : null}
 
-      <div className="grid sm:grid-cols-2 lg:grid-cols-5 gap-3">
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
         <StatCard
           label="AI社員"
           value={String(employees.length)}
@@ -187,11 +187,11 @@ export default async function DashboardPage() {
                   ))}
               </ul>
             )}
-            <div className="mt-4 flex flex-wrap gap-2">
-              <Link href="/app/getting-started" className="btn btn-ghost text-xs px-3 py-1.5">
+            <div className="mt-4 flex flex-col sm:flex-row flex-wrap gap-2">
+              <Link href="/app/getting-started" className="btn btn-ghost text-sm w-full sm:w-auto">
                 はじめに
               </Link>
-              <Link href="/app/integrations" className="btn btn-ghost text-xs px-3 py-1.5">
+              <Link href="/app/integrations" className="btn btn-ghost text-sm w-full sm:w-auto">
                 連携
               </Link>
             </div>

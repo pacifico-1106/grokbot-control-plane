@@ -25,7 +25,7 @@ export default function SignupPage() {
               name="orgName"
               required
               defaultValue="株式会社サンプル商事"
-              className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm outline-none focus:border-[var(--text-faint)]"
+              className="mt-1 w-full min-h-[44px] rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2.5 text-sm outline-none focus:border-[var(--text-faint)]"
             />
           </label>
           <label className="block text-sm">
@@ -35,7 +35,7 @@ export default function SignupPage() {
               type="email"
               required
               defaultValue="owner@example.com"
-              className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm outline-none focus:border-[var(--text-faint)]"
+              className="mt-1 w-full min-h-[44px] rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2.5 text-sm outline-none focus:border-[var(--text-faint)]"
             />
           </label>
           {!demo ? (
@@ -46,7 +46,7 @@ export default function SignupPage() {
                 type="password"
                 required
                 minLength={8}
-                className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm outline-none focus:border-[var(--text-faint)]"
+                className="mt-1 w-full min-h-[44px] rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2.5 text-sm outline-none focus:border-[var(--text-faint)]"
               />
             </label>
           ) : (
@@ -56,7 +56,7 @@ export default function SignupPage() {
             <span className="muted">導入モード</span>
             <select
               name="mode"
-              className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm"
+              className="mt-1 w-full min-h-[44px] rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2.5 text-sm"
               defaultValue="managed"
             >
               <option value="managed">おまかせ導入（こちらで Grok Bot を用意）</option>
@@ -70,7 +70,7 @@ export default function SignupPage() {
               type="text"
               placeholder="AIC-XXXX"
               autoComplete="off"
-              className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm outline-none focus:border-[var(--text-faint)]"
+              className="mt-1 w-full min-h-[44px] rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2.5 text-sm outline-none focus:border-[var(--text-faint)]"
             />
           </label>
           <button type="submit" className="btn btn-primary w-full">

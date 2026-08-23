@@ -314,8 +314,8 @@ function EmployeeCostTable({ rows }: { rows: EmployeeCostRow[] }) {
   const maxUnits = safeMax(1, rows.map((r) => finiteOr(r.units)));
 
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full text-sm">
+    <div className="table-scroll">
+      <table className="w-full text-sm min-w-[280px]">
         <thead>
           <tr className="text-left text-[11px] muted border-b border-[var(--border-soft)]">
             <th className="pb-2 font-normal">AI社員</th>
@@ -400,7 +400,7 @@ function Segmented<T extends string>({
             key={r.id}
             type="button"
             onClick={() => onChange(r.id)}
-            className="px-3 py-1.5 text-xs rounded-full transition-colors"
+            className="px-3 py-2.5 text-xs rounded-full transition-colors min-h-[40px]"
             style={
               active
                 ? {
@@ -467,7 +467,7 @@ export function DashboardActivity({
             活動量と枠・従量の推計を社長向けに一覧
           </p>
         </div>
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-col sm:flex-row flex-wrap gap-2 w-full sm:w-auto">
           <Segmented
             ariaLabel="表示切替"
             options={[

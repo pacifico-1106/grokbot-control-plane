@@ -142,10 +142,10 @@ export function IntegrationsClient({
               {STATUS_LABEL[status]}
             </span>
           </div>
-          <div className="mt-5 flex flex-wrap gap-2">
+          <div className="mt-5 flex flex-col sm:flex-row flex-wrap gap-2">
             <button
               type="button"
-              className="btn btn-primary text-sm"
+              className="btn btn-primary text-sm w-full sm:w-auto"
               disabled={busy || status === "linked"}
               onClick={() => void run("connect")}
             >
@@ -153,7 +153,7 @@ export function IntegrationsClient({
             </button>
             <button
               type="button"
-              className="btn btn-ghost text-sm"
+              className="btn btn-ghost text-sm w-full sm:w-auto"
               disabled={busy || status !== "pending"}
               onClick={() => void run("handshake")}
             >
@@ -161,7 +161,7 @@ export function IntegrationsClient({
             </button>
             <button
               type="button"
-              className="btn btn-ghost text-sm"
+              className="btn btn-ghost text-sm w-full sm:w-auto"
               disabled={busy || status === "disconnected"}
               onClick={() => void run("disconnect")}
             >
@@ -188,61 +188,97 @@ export function IntegrationsClient({
           </span>
         </div>
 
-        <div className="mt-4 overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="text-left text-[11px] muted border-b border-[var(--border-soft)]">
-                <th className="pb-2 font-normal">AI社員</th>
-                <th className="pb-2 font-normal">接続状態</th>
-                <th className="pb-2 font-normal">エージェント</th>
-                <th className="pb-2 font-normal">社員証世代</th>
-                <th className="pb-2 font-normal">最後の成功</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.length === 0 ? (
-                <tr>
-                  <td colSpan={5} className="py-3 text-xs faint">
-                    まだ AI社員がいません
-                  </td>
-                </tr>
-              ) : null}
+        {rows.length === 0 ? (
+          <p className="mt-4 text-xs faint">まだ AI社員がいません</p>
+        ) : (
+          <>
+            <ul className="mt-4 space-y-3 md:hidden">
               {rows.map((row) => (
-                <tr
+                <li
                   key={row.employeeId}
-                  className="border-b border-[var(--border-soft)] last:border-0"
+                  className="rounded-lg border border-[var(--border-soft)] bg-[var(--bg-soft)] p-3 space-y-2 min-w-0"
                 >
-                  <td className="py-2.5 pr-3">
-                    <Link
-                      href={`/app/employees/${row.employeeId}`}
-                      className="hover:underline"
-                    >
-                      {row.displayName}
-                    </Link>
-                    <div className="text-[11px] faint">{row.roleLabel}</div>
-                    <div className="font-mono text-[10px] faint">
-                      {row.employeeId}
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <Link
+                        href={`/app/employees/${row.employeeId}`}
+                        className="hover:underline text-sm break-words"
+                      >
+                        {row.displayName}
+                      </Link>
+                      <div className="text-[11px] faint break-words">{row.roleLabel}</div>
                     </div>
-                  </td>
-                  <td className="py-2.5">
-                    <span className={bindingChip(row.binding.status)}>
+                    <span className={`${bindingChip(row.binding.status)} shrink-0`}>
                       {BINDING_LABEL[row.binding.status]}
                     </span>
-                  </td>
-                  <td className="py-2.5 font-mono text-[11px]">
-                    {row.binding.grokBotAgentId ?? "—"}
-                  </td>
-                  <td className="py-2.5 tabular-nums">
-                    {row.binding.credentialGeneration}
-                  </td>
-                  <td className="py-2.5 text-xs">
-                    {formatTs(row.binding.lastSuccessAt)}
-                  </td>
-                </tr>
+                  </div>
+                  <dl className="grid grid-cols-2 gap-2 text-[11px]">
+                    <div className="min-w-0">
+                      <dt className="faint">エージェント</dt>
+                      <dd className="font-mono break-all">{row.binding.grokBotAgentId ?? "—"}</dd>
+                    </div>
+                    <div>
+                      <dt className="faint">社員証世代</dt>
+                      <dd className="tabular-nums">{row.binding.credentialGeneration}</dd>
+                    </div>
+                    <div className="col-span-2 min-w-0">
+                      <dt className="faint">最後の成功</dt>
+                      <dd className="break-words">{formatTs(row.binding.lastSuccessAt)}</dd>
+                    </div>
+                  </dl>
+                </li>
               ))}
-            </tbody>
-          </table>
-        </div>
+            </ul>
+            <div className="mt-4 table-scroll hidden md:block">
+              <table className="w-full text-sm min-w-[560px]">
+                <thead>
+                  <tr className="text-left text-[11px] muted border-b border-[var(--border-soft)]">
+                    <th className="pb-2 font-normal">AI社員</th>
+                    <th className="pb-2 font-normal">接続状態</th>
+                    <th className="pb-2 font-normal">エージェント</th>
+                    <th className="pb-2 font-normal">社員証世代</th>
+                    <th className="pb-2 font-normal">最後の成功</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((row) => (
+                    <tr
+                      key={row.employeeId}
+                      className="border-b border-[var(--border-soft)] last:border-0"
+                    >
+                      <td className="py-2.5 pr-3">
+                        <Link
+                          href={`/app/employees/${row.employeeId}`}
+                          className="hover:underline"
+                        >
+                          {row.displayName}
+                        </Link>
+                        <div className="text-[11px] faint">{row.roleLabel}</div>
+                        <div className="font-mono text-[10px] faint">
+                          {row.employeeId}
+                        </div>
+                      </td>
+                      <td className="py-2.5">
+                        <span className={bindingChip(row.binding.status)}>
+                          {BINDING_LABEL[row.binding.status]}
+                        </span>
+                      </td>
+                      <td className="py-2.5 font-mono text-[11px]">
+                        {row.binding.grokBotAgentId ?? "—"}
+                      </td>
+                      <td className="py-2.5 tabular-nums">
+                        {row.binding.credentialGeneration}
+                      </td>
+                      <td className="py-2.5 text-xs">
+                        {formatTs(row.binding.lastSuccessAt)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
+        )}
       </section>
     </div>
   );

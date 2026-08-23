@@ -50,16 +50,16 @@ export default async function EmployeeDetailPage({
       title={employee.displayName}
       subtitle={`${employee.roleLabel} · ${employee.status === "active" ? "稼働中" : employee.status === "suspended" ? "一時停止" : employee.status === "draft" ? "下書き" : employee.status}`}
     >
-      <div className="flex flex-wrap gap-2 mb-4">
-        <Link href="/app/employees" className="btn btn-ghost text-xs px-3 py-1.5">
+      <div className="flex flex-col sm:flex-row flex-wrap gap-2 mb-4">
+        <Link href="/app/employees" className="btn btn-ghost text-sm w-full sm:w-auto">
           ← 一覧
         </Link>
-        <Link href="/app/employees/new" className="btn btn-ghost text-xs px-3 py-1.5">
+        <Link href="/app/employees/new" className="btn btn-ghost text-sm w-full sm:w-auto">
           別のAI社員を雇う
         </Link>
         <Link
           href={`/app/employees/${employee.id}/actions`}
-          className="btn btn-ghost text-xs px-3 py-1.5"
+          className="btn btn-ghost text-sm w-full sm:w-auto"
         >
           詳細ログ
         </Link>

@@ -222,7 +222,7 @@ export function HireEmployeeClient() {
               <button
                 key={ex}
                 type="button"
-                className="chip hover:text-[var(--text)]"
+                className="chip hover:text-[var(--text)] max-w-full break-words text-left"
                 onClick={() => setPrompt(ex)}
               >
                 {ex.slice(0, 18)}…
@@ -234,7 +234,7 @@ export function HireEmployeeClient() {
           </p>
           <button
             type="button"
-            className="btn btn-primary text-sm"
+            className="btn btn-primary text-sm w-full sm:w-auto"
             disabled={loading || !prompt.trim()}
             onClick={() => void createDraft()}
           >
@@ -385,7 +385,7 @@ export function HireEmployeeClient() {
 
           <button
             type="button"
-            className="btn btn-primary text-sm"
+            className="btn btn-primary text-sm w-full sm:w-auto"
             disabled={loading}
             onClick={goToSpendOrIssue}
           >
@@ -475,10 +475,10 @@ export function HireEmployeeClient() {
             setAllowedAccounts={setAllowedAccounts}
           />
 
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-col sm:flex-row flex-wrap gap-2">
             <button
               type="button"
-              className="btn btn-primary text-sm"
+              className="btn btn-primary text-sm w-full sm:w-auto"
               disabled={loading}
               onClick={() => void issueCredential()}
             >
@@ -614,7 +614,7 @@ function SpendForm({
         </label>
       </fieldset>
 
-      <div className="grid md:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <label className="block text-sm">
           <span className="muted">1件あたり上限（円）</span>
           <input

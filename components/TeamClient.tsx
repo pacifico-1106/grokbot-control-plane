@@ -120,8 +120,8 @@ export function TeamClient({ initialMembers }: { initialMembers: OrgMember[] }) 
   }
 
   return (
-    <div className="grid lg:grid-cols-3 gap-4">
-      <section className="surface p-5 lg:col-span-2 space-y-4">
+    <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+      <section className="surface p-5 lg:col-span-2 space-y-4 min-w-0">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h2 className="text-sm font-medium">メンバー</h2>
           <button type="button" className="btn btn-ghost text-xs px-3 py-1.5" onClick={startCreate}>
@@ -165,7 +165,7 @@ export function TeamClient({ initialMembers }: { initialMembers: OrgMember[] }) 
         </ul>
       </section>
 
-      <section className="surface p-5 space-y-4">
+      <section className="surface p-5 space-y-4 min-w-0">
         <h2 className="text-sm font-medium">
           {editing ? "メンバーを編集" : "メンバーを追加"}
         </h2>

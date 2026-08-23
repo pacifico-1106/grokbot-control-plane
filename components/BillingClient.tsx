@@ -162,7 +162,7 @@ export function BillingClient({
 
   return (
     <>
-      <p className="mb-4 text-sm muted leading-relaxed">
+      <p className="mb-4 text-sm muted leading-relaxed break-words">
         Botの契約は御社のまま。Staffpassは<strong className="text-[var(--text)] font-medium">就業規則と日報</strong>
         です。月額で境界を敷き、確定した仕事の分だけ従量。Managed は Care（伴走）込みです。
       </p>
@@ -190,7 +190,7 @@ export function BillingClient({
         </div>
       )}
 
-      <label className="mb-4 block text-sm max-w-sm">
+      <label className="mb-4 block text-sm w-full max-w-sm">
         <span className="muted">紹介コード（任意）</span>
         <input
           type="text"
@@ -202,11 +202,11 @@ export function BillingClient({
         />
       </label>
 
-      <div className="grid lg:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         {PLANS.map((plan) => (
           <div
             key={plan.id}
-            className={`surface p-5 ${
+            className={`surface p-5 min-w-0 ${
               plan.featured ? "ring-1 ring-[var(--text-faint)]" : ""
             }`}
           >
@@ -271,8 +271,8 @@ export function BillingClient({
           <p className="mt-1 text-xs faint leading-relaxed">{KICKOFF_GROK_BAND_JA}</p>
           <ul className="mt-4 space-y-2 text-sm muted">
             {KICKOFF_PACK_LINES.map((line) => (
-              <li key={line.key} className="flex justify-between gap-3">
-                <span>· {line.labelJa}</span>
+              <li key={line.key} className="flex justify-between gap-3 min-w-0">
+                <span className="min-w-0 break-words">· {line.labelJa}</span>
                 <span className="shrink-0 faint">{formatYenJa(line.yen)}</span>
               </li>
             ))}

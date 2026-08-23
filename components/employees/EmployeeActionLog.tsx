@@ -70,7 +70,7 @@ export function EmployeeActionLog({
                 key={f.id}
                 type="button"
                 onClick={() => setFilter(f.id)}
-                className="px-3 py-1.5 text-xs rounded-full transition-colors"
+                className="px-3 py-2.5 text-xs rounded-full transition-colors min-h-[40px]"
                 style={
                   active
                     ? {
@@ -115,7 +115,7 @@ export function EmployeeActionLog({
                   {formatTs(ev.timestamp)}
                 </span>
               </div>
-              <p className="mt-2 text-sm leading-snug">{ev.summary}</p>
+              <p className="mt-2 text-sm leading-snug break-words">{ev.summary}</p>
               {ev.costTip ? (
                 <p className="mt-1 text-[11px] muted">コスト目安 {ev.costTip}</p>
               ) : null}
