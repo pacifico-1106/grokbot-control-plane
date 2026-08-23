@@ -14,6 +14,15 @@
 |------|------|------|
 | ミニマム・デフォルト（P0） | [internal-share/00-minimum-defaults.md](./internal-share/00-minimum-defaults.md) | 製品・展開の正本 |
 | エンジニア要件 | [internal-share/01-engineer-requirements.md](./internal-share/01-engineer-requirements.md) | 実装・レビュー正本 |
+| TOKYO307 標準環境（横断） | [tokyo307-default-stack.md](./tokyo307-default-stack.md) | 自社実証・顧客・パートナー共通の標準環境。Staffpass実装正本は 00・01 |
+
+---
+
+## TOKYO307標準環境
+
+| 文書 | 相対 | 備考 |
+|------|------|------|
+| デフォルトスペック（1枚） | [tokyo307-default-stack.md](./tokyo307-default-stack.md) | TOKYO307横断の標準環境正本。Staffpass実装は `internal-share/00`・`01` |
 
 ---
 
