@@ -24,30 +24,10 @@ const BENEFITS = [
 ];
 
 const AGENTS = [
-  {
-    id: "grok",
-    name: "Grok Bot",
-    status: "available" as const,
-    note: "対応中",
-  },
-  {
-    id: "jurin",
-    name: "AIコンシェル／電話入口",
-    status: "soon" as const,
-    note: "順次対応",
-  },
-  {
-    id: "slot-a",
-    name: "順次追加",
-    status: "soon" as const,
-    note: "Coming soon",
-  },
-  {
-    id: "slot-b",
-    name: "順次追加",
-    status: "soon" as const,
-    note: "Coming soon",
-  },
+  { id: "grok", name: "Grok Bot", status: "available" as const, note: "利用可能" },
+  { id: "jurin", name: "Jurin", status: "soon" as const, note: "Coming soon" },
+  { id: "slot-a", name: "順次追加", status: "slot" as const, note: "順次追加" },
+  { id: "slot-b", name: "順次追加", status: "slot" as const, note: "順次追加" },
 ];
 
 export default function LandingPage() {
@@ -95,11 +75,17 @@ export default function LandingPage() {
           </p>
         </section>
 
-        <section className="mt-16 sm:mt-20" aria-labelledby="agents-heading">
+        <section
+          aria-labelledby="agents-heading"
+          className="mt-16 sm:mt-20 min-w-0"
+        >
           <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between min-w-0">
             <div className="min-w-0">
-              <p className="text-xs faint tracking-wide uppercase">Works with</p>
-              <h2 id="agents-heading" className="text-xl font-bold tracking-tight break-words mt-1">
+              <p className="text-xs faint tracking-wide">対応ランタイム</p>
+              <h2
+                id="agents-heading"
+                className="text-xl font-bold tracking-tight break-words mt-1"
+              >
                 対応エージェント
               </h2>
             </div>
@@ -108,52 +94,39 @@ export default function LandingPage() {
             </p>
           </div>
 
-          <div className="mt-6 grid grid-cols-2 md:grid-cols-4 gap-3">
+          <ul className="mt-6 grid grid-cols-2 md:grid-cols-4 gap-3 list-none p-0 m-0">
             {AGENTS.map((agent) => {
               const available = agent.status === "available";
               return (
-                <div
+                <li
                   key={agent.id}
-                  className={`rounded-xl border p-4 min-w-0 flex flex-col gap-3 ${
+                  className={[
+                    "rounded-xl border p-4 sm:p-5 min-w-0 flex flex-col gap-2 sm:gap-3",
                     available
                       ? "border-[var(--border)] bg-[var(--bg-elevated)]"
-                      : "border-[var(--border-soft)] bg-[var(--bg)] opacity-60 pointer-events-none select-none"
-                  }`}
-                  aria-disabled={!available}
+                      : "border-[var(--border-soft)] bg-[var(--bg)] opacity-55",
+                  ].join(" ")}
                 >
-                  <div className="flex items-center gap-2.5 min-w-0">
-                    <span
-                      className={`inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-[22%] text-xs font-bold ${
-                        available
-                          ? "bg-[var(--accent)] text-[var(--accent-fg)]"
-                          : "bg-[var(--bg-soft)] text-[var(--text-faint)] border border-[var(--border-soft)]"
-                      }`}
-                      aria-hidden
-                    >
-                      {available ? "G" : "·"}
-                    </span>
-                    <div className="min-w-0">
-                      <div
-                        className={`text-sm font-semibold leading-snug break-words ${
-                          available ? "text-[var(--text)]" : "text-[var(--text-faint)]"
-                        }`}
-                      >
-                        {agent.name}
-                      </div>
-                      <div className={`mt-1 text-[11px] ${available ? "text-[var(--ok)]" : "faint"}`}>
-                        {agent.note}
-                      </div>
-                    </div>
-                  </div>
-                </div>
+                  <span
+                    className={[
+                      "text-sm font-semibold tracking-tight break-words leading-snug",
+                      available ? "text-[var(--text)]" : "text-[var(--text-faint)]",
+                    ].join(" ")}
+                  >
+                    {agent.name}
+                  </span>
+                  <span
+                    className={[
+                      "text-[11px] tracking-wide",
+                      available ? "text-[var(--ok)]" : "text-[var(--text-faint)]",
+                    ].join(" ")}
+                  >
+                    {agent.note}
+                  </span>
+                </li>
               );
             })}
-          </div>
-
-          <p className="mt-4 text-xs faint leading-relaxed break-words">
-            電話入口（受付・通話）と机上の手足（PC上の実行エージェント）は役割が違います。Staffpass
-            は後者の就業規則と日報としてつなぎます。
-          </p>
+          </ul>
         </section>
 
         <section className="mt-16 sm:mt-20 grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -178,7 +151,7 @@ export default function LandingPage() {
               </p>
             </div>
             <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-soft)] p-5 min-w-0">
-              <div className="text-sm font-semibold">今のエージェントに載せる</div>
+              <div className="text-sm font-semibold">今の Grok Bot に載せる</div>
               <p className="mt-2 text-sm muted leading-relaxed break-words">
                 いまお使いの Grok Bot
                 をそのまま。社員証・承認・記録だけを Staffpass につなぎます。
@@ -191,14 +164,16 @@ export default function LandingPage() {
           <h2 className="text-xl font-bold break-words">経営者・管理者にとっての要点</h2>
           <ul className="mt-4 space-y-3 text-sm muted">
             {BENEFITS.map((line) => (
-              <li key={line} className="break-words">「{line}」</li>
+              <li key={line} className="break-words">
+                「{line}」
+              </li>
             ))}
           </ul>
         </section>
       </main>
 
       <footer className="border-t border-[var(--border)] py-8 text-center text-xs faint px-4 pb-[max(2rem,env(safe-area-inset-bottom))]">
-        <p>Staffpass · 就業規則と日報</p>
+        <p>Staffpass · 就業規則と日報（エージェント基盤は差し替え可能）</p>
         <p className="mt-2">Sealith by TOKYO307</p>
       </footer>
     </div>

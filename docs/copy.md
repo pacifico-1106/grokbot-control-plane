@@ -36,6 +36,14 @@
 | Gateway / binding | Staffpass経由 / 接続状態 |
 | BYO | 今の Grok Bot に載せる |
 
+## 対応エージェント（LP）
+
+- 見出し: **対応エージェント**
+- 本文: まず Grok Bot に対応。他のエージェント基盤は順次。
+- Available: Grok Bot
+- Coming soon（グレー）: Jurin ＋ 空スロット「順次追加」（統合済みとは言わない）
+- 「Grok専用」は使わない。Bot分割＝境界とも言わない。
+
 ## CTA
 
 - トライアル / ダッシュボード見る
