@@ -8,6 +8,7 @@ import { DEMO_ORG } from "@/lib/demo-data";
 import { isDemoMode } from "@/lib/mode";
 import {
   getAppUrl,
+  getBusinessOnboardingPriceId,
   getCheckoutPaymentMethodTypes,
   getPriceId,
   getStripe,
@@ -20,6 +21,8 @@ export const runtime = "nodejs";
 /**
  * Stripe Checkout Session.
  * DEMO / missing keys → stub JSON. Production → require auth org + Customer.
+ * Business may include one-time onboarding line item when
+ * STRIPE_PRICE_ID_BUSINESS_ONBOARDING is set.
  */
 export async function POST(req: Request) {
   const body = (await req.json().catch(() => ({}))) as {
@@ -33,9 +36,19 @@ export async function POST(req: Request) {
         : "business";
   const stripe = getStripe();
   const priceId = getPriceId(planKey);
+  const onboardingPriceId =
+    planKey === "business" ? getBusinessOnboardingPriceId() : null;
   const appUrl = getAppUrl();
   const paymentMethodTypes = getCheckoutPaymentMethodTypes();
   const sessionCtx = await getSessionContext();
+
+  const lineItemsPreview: Array<{ price: string; quantity: number }> = [
+    { price: priceId || `replace_me_price_${planKey}`, quantity: 1 },
+  ];
+  // Only when env Price ID is set (never invent fake live ids).
+  if (onboardingPriceId) {
+    lineItemsPreview.push({ price: onboardingPriceId, quantity: 1 });
+  }
 
   if (!stripe || !priceId) {
     const orgId = sessionCtx.orgId || DEMO_ORG.id;
@@ -53,6 +66,9 @@ export async function POST(req: Request) {
         cancel_url: `${appUrl}/app/billing?checkout=canceled`,
         client_reference_id: orgId,
         metadata: { orgId, org_id: orgId, planKey },
+        line_items: lineItemsPreview,
+        include_business_onboarding:
+          planKey === "business" && Boolean(onboardingPriceId),
         subscription_data: {
           trial_period_days: TRIAL_DAYS,
           metadata: { orgId, org_id: orgId, planKey },
@@ -92,13 +108,21 @@ export async function POST(req: Request) {
 
   const meta = { orgId, org_id: orgId, planKey };
 
+  const line_items: Array<{ price: string; quantity: number }> = [
+    { price: priceId, quantity: 1 },
+  ];
+  // One-time onboarding for business when Price ID is configured.
+  if (onboardingPriceId) {
+    line_items.push({ price: onboardingPriceId, quantity: 1 });
+  }
+
   const session = await stripe.checkout.sessions.create({
     mode: "subscription",
     customer: customerId,
     client_reference_id: orgId,
     success_url: `${appUrl}/app/billing?checkout=success&session_id={CHECKOUT_SESSION_ID}&plan=${planKey}`,
     cancel_url: `${appUrl}/app/billing?checkout=canceled`,
-    line_items: [{ price: priceId, quantity: 1 }],
+    line_items,
     subscription_data: {
       trial_period_days: TRIAL_DAYS,
       metadata: meta,

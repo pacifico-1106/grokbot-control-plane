@@ -59,6 +59,16 @@ export function getPriceId(
   return id;
 }
 
+/**
+ * One-time business onboarding Price (optional).
+ * When set, Checkout for business adds this as an extra line item.
+ */
+export function getBusinessOnboardingPriceId(): string | null {
+  const id = process.env.STRIPE_PRICE_ID_BUSINESS_ONBOARDING;
+  if (!id || id.startsWith("replace_me")) return null;
+  return id;
+}
+
 export type CheckoutPlanKey = "starter" | "business" | "managed";
 
 /** Map Stripe subscription.status → our SubscriptionStatus. */

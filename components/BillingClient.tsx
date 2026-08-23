@@ -3,22 +3,29 @@
 import { useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import type { CheckoutPlanKey } from "@/lib/stripe";
-import { PLAN_CONFIRM_QUOTAS } from "@/lib/billing/plans";
+import {
+  PLAN_CONFIRM_QUOTAS,
+  PLAN_DISPLAY_YEN,
+  PLAN_ONBOARDING_YEN,
+  PLAN_OVERAGE_YEN,
+  PRICING_PROVISIONAL_NOTE_JA,
+  formatYenJa,
+} from "@/lib/billing/plans";
 
 const PLANS: Array<{
   id: CheckoutPlanKey;
   name: string;
-  /** Placeholder — real yen amounts live in Stripe Dashboard only. */
-  price: string;
   points: string[];
   featured?: boolean;
-  /** 仮枠 monthly gated confirms */
   quota: number;
+  displayYen: number;
+  overageYen: number;
+  onboardingYen?: number;
+  onboardingNote?: string;
 }> = [
   {
     id: "starter",
     name: "スターター",
-    price: "{{STARTER_PRICE}} / 月（Dashboardで設定）",
     points: [
       "AI社員 少数・基本の就業規則",
       "基本監査（日報の入口）",
@@ -26,11 +33,12 @@ const PLANS: Array<{
       "propose / draft 中心",
     ],
     quota: PLAN_CONFIRM_QUOTAS.starter,
+    displayYen: PLAN_DISPLAY_YEN.starter,
+    overageYen: PLAN_OVERAGE_YEN.starter,
   },
   {
     id: "business",
     name: "ビジネス",
-    price: "{{BUSINESS_PRICE}} / 月（Dashboardで設定）",
     points: [
       "就業規則と日報（承認・監査）",
       "承認キュー・監査タイムライン",
@@ -39,11 +47,13 @@ const PLANS: Array<{
     ],
     featured: true,
     quota: PLAN_CONFIRM_QUOTAS.business,
+    displayYen: PLAN_DISPLAY_YEN.business,
+    overageYen: PLAN_OVERAGE_YEN.business,
+    onboardingYen: PLAN_ONBOARDING_YEN.business,
   },
   {
     id: "managed",
     name: "Managed（Care）",
-    price: "{{MANAGED_PRICE}} / 月（Dashboardで設定）",
     points: [
       "Business 全部＋専任伴走（Care）",
       "導入代行・週次ヘルス",
@@ -51,6 +61,9 @@ const PLANS: Array<{
       "確定枠は厚め（仮枠）",
     ],
     quota: PLAN_CONFIRM_QUOTAS.managed,
+    displayYen: PLAN_DISPLAY_YEN.managed,
+    overageYen: PLAN_OVERAGE_YEN.managed,
+    onboardingNote: "オンボーディングは月額に含む",
   },
 ];
 
@@ -139,6 +152,12 @@ export function BillingClient({
         です。月額で境界を敷き、確定した仕事の分だけ従量。Managed は Care（伴走）込みです。
       </p>
 
+      <p className="mb-4 text-xs faint leading-relaxed">
+        表示価格はすべて{" "}
+        <span className="chip text-[10px]">{PRICING_PROVISIONAL_NOTE_JA}</span>
+        。Checkout 実課金は Stripe Dashboard の Price が正です。
+      </p>
+
       {checkoutBanner ? (
         <p
           className={`mb-4 text-sm surface p-4 ${
@@ -166,12 +185,29 @@ export function BillingClient({
           >
             <div className="text-xs faint">{plan.id}</div>
             <h2 className="mt-1 text-lg font-medium">{plan.name}</h2>
-            <p className="mt-1 text-sm muted">{plan.price}</p>
+            <p className="mt-2 text-2xl font-medium tracking-tight">
+              {formatYenJa(plan.displayYen)}
+              <span className="text-sm font-normal muted"> / 月</span>
+            </p>
+            <p className="mt-1 text-[10px] faint">{PRICING_PROVISIONAL_NOTE_JA}</p>
             <p className="mt-2 text-xs faint">
               確定アクション枠{" "}
               <span className="muted">{plan.quota.toLocaleString("ja-JP")} / 月</span>{" "}
               <span className="chip text-[10px] ml-1">仮枠</span>
             </p>
+            <p className="mt-1 text-xs muted">
+              超過: {formatYenJa(plan.overageYen)} / 確定アクション
+              <span className="faint">（従量・P0.5）</span>
+            </p>
+            {plan.onboardingYen != null ? (
+              <p className="mt-1 text-xs muted">
+                導入（初回一式）: {formatYenJa(plan.onboardingYen)}
+                <span className="faint">（税別・仮決め）</span>
+              </p>
+            ) : null}
+            {plan.onboardingNote ? (
+              <p className="mt-1 text-xs faint">{plan.onboardingNote}</p>
+            ) : null}
             <ul className="mt-4 space-y-2 text-sm muted">
               {plan.points.map((p) => (
                 <li key={p}>· {p}</li>
@@ -206,8 +242,11 @@ export function BillingClient({
       </div>
 
       <p className="mt-3 text-xs faint leading-relaxed">
-        銀行振込は準備が整い次第、お支払い画面に表示されます。表示価格は契約プランの設定が正です。
-        枠数は仮枠（事業確定前）です。課金対象は Gateway 経由の確定アクション成功のみです。
+        銀行振込は準備が整い次第、お支払い画面に表示されます。表示は
+        {PRICING_PROVISIONAL_NOTE_JA}
+        。Checkout 実額は Stripe Price ID（env）が正です。枠数は仮枠です。課金対象は
+        Gateway 経由の確定アクション成功のみです。超過従量の Stripe Metered Price
+        は P0.5（未配線）。
       </p>
 
       {message ? (
