@@ -109,6 +109,10 @@ export interface GatewayInvokeRequest {
   isFirstOrder?: boolean;
   spentTodayJpy?: number;
   spentThisMonthJpy?: number;
+  /** Optional claimed browser/SNS identity for allowedAccounts check (C5). */
+  claimedAccount?: { service?: string; accountId?: string };
+  service?: string;
+  accountId?: string;
   args?: Record<string, unknown>;
 }
 

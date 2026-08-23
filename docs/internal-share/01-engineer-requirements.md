@@ -29,6 +29,28 @@
 
 B〜F（テンプレ3枚 / AgentMail は P0.5予約+P1 / 承認UI第一はダッシュボード / 週次FB）は異論なし・本スプリントでは予約または後続。
 
+### 1.3 公式前提 — 共有コンピュータ（C1・P0 / 安藤分析→木村採択）
+
+x.ai Grok Bot 公式 Docs（概念引用。断定は最新公式で確認）:
+
+| 公式メッセージ | Staffpass への含意 |
+|----------------|-------------------|
+| 同一ユーザー配下の **Shared computer**（ファイル・ブラウザ・CLI資格情報が共有） | OS 権限では職務分離できない → **制御面必須** |
+| 画面は Bot 別でも **セキュリティ境界ではない** | 画面分離を売り文句にしない（Won't と整合） |
+| **Do not use separate Bots as a security boundary.** | Bot分け ≠ 安全。境界は Credential（社員証） |
+
+ポジション固定: Grok Bot＝共有コンピュータ上の手足＋個人向け承認ネット。Staffpass＝会社の社員証・職務ポリシー・監査台帳。関係図: [`../gateway-vs-auto-review.md`](../gateway-vs-auto-review.md)。
+
+### 1.4 木村追記決定（C2〜C5 / 2026-08-23）
+
+| ID | 決定 |
+|----|------|
+| **C2** | Gateway vs Auto-review: 組織の正本は **Staffpass**。Auto-review は個人／Bot側ネット |
+| **C3** | Bot間ハンドオフ監査型は **P1 予約のみ**（本スプリント実装なし）— AuditAction に将来 `bot.handoff` 等を足しうる |
+| **C4** | **Routines / Teach** 経由の確定系（confirm / send / order）も Staffpass ゲート必須（always_human）。実行フックは Partner API 不在で限定的 → Managed 補完 |
+| **C5** | `browser:use` で `allowedAccounts` 欠落／不一致は **fail-closed**（ソフト警告のみにしない）。ライブセッション照合の限界は正直に残す |
+| **Hybrid** | 確定系は必須プロキシ。迂回経路は Managed＋事後突合。「全部プロキシ」とは言わない |
+
 ---
 
 ## 2. リポジトリと参照方針
@@ -85,6 +107,7 @@ Org
 - プロンプト全文・CoT は保存しない
 - 構造化サマリ + 参照 ID のみ
 - attempt / result / deny / approve を残す
+- **P1予約（C3）:** Bot間ハンドオフ（公式の相互メッセージ／グループ調整）を説明できる監査型（例: `bot.handoff`）— 本スプリントでは実装しない
 
 ### 人間 RBAC と AI 承認プリセットは別層
 
@@ -108,7 +131,7 @@ Grok Bot / MCP Client
     → Audit Writer（常時）
 ```
 
-**重要前提:** Grok Bot の実行コンピュータはユーザー配下で共有（画面はエージェント別）。OS 権限では職務分離できない → **制御面が必須**。共有ログインは「環境の能力」であり「職務権限」ではない。
+**重要前提（公式と同型）:** Grok Bot の実行コンピュータはユーザー配下で**共有**（画面はエージェント別でもセキュリティ境界ではない）。公式 FAQ: *Do not use separate Bots as a security boundary.* OS 権限では職務分離できない → **制御面が必須**。共有ログインは「環境の能力」であり「職務権限」ではない。
 
 ### 5.1 メール3層（絶対に混ぜない）
 
@@ -126,13 +149,14 @@ Grok Bot / MCP Client
 - **必須:** `employeeId`, `tool`, `purpose`, `jobId`（または `job_id`）
 - **Allowlist:** `lib/gateway/tools.ts`（例: `calendar.propose` / `calendar.confirm` / `mail.draft` / `mail.send` / `commerce.order` …）
 - **未登録ツール:** `403 unknown_tool`（fail-closed）
-- **confirm / send / order:** 常に `402 needs_approval`（always_human デフォルト）
+- **confirm / send / order:** 常に `402 needs_approval`（always_human デフォルト）。**Routines / Teach 由来でも同じ**（C4）
+- **browser.use + allowedAccounts:** 未設定またはクレーム不一致 → `403` fail-closed（C5）。一致しても always_human。ライブID照合は `browserIdentityCheck: "partial"`
 - **propose / draft / read:** employee ポリシーに応じ auto 可
 - **AgentMail ツール:** `501 tool_reserved`（ライブ統合なし）
 
 ### 5.3 承認 must-list（JP SME 厳格・Managed 初期値）
 
-必須承認（`always_human`）: 社外メール送信、日程**確定**、課金・購入、顧客マスタ更新／エクスポート、Drive 社外共有、browser:use、Slack 社外投稿 など。  
+必須承認（`always_human`）: 社外メール送信、日程**確定**、課金・購入、顧客マスタ更新／エクスポート、Drive 社外共有、browser:use、Slack 社外投稿、および **Routines/Teach がそれらの確定系を踏む場合** など。  
 自動可: 空き枠**提案**、メール下書き、社内カレンダー参照、ナレッジ検索、Resend 通知。  
 禁止デフォルト: 許可外アカウント操作、社員証の自己変更、監査ログ削除。
 
@@ -276,5 +300,6 @@ NEXT_PUBLIC_APP_URL=
 - デモ脚本: `../demo-script-esim-approval.md`
 - バインディング: `../binding-lifeline.md`
 - 強制 vs 手動: `../enforcement-auto-vs-manual.md`
+- Gateway vs Auto-review: `../gateway-vs-auto-review.md`
 - 安藤対応表（ワークスペース）: `/workspace/docs/staffpass-minimum-map.md`
 

@@ -11,6 +11,7 @@ import {
   isForceApprovalTool,
   resolveGatewayTool,
 } from "@/lib/gateway/tools";
+import { evaluateAllowedAccountsForBrowser } from "@/lib/employees/allowed-accounts";
 import { evaluateSpend } from "@/lib/spend-gate";
 import type { GatewayInvokeRequest } from "@/lib/types";
 
@@ -21,6 +22,7 @@ export const runtime = "nodejs";
  * - purpose + jobId (or job_id) required
  * - unregistered tools rejected
  * - confirm / send / order force needs_approval
+ * - browser.use: allowedAccounts missing/mismatch → fail-closed (C5)
  * - AgentMail tools are reserved (P0.5) — no live send
  */
 export async function POST(req: Request) {
@@ -191,6 +193,65 @@ export async function POST(req: Request) {
     );
   }
 
+  // C5: browser.use — allowedAccounts missing/mismatch = fail-closed (not soft warn).
+  // Live browser session identity remains only partially verifiable (honesty).
+  let browserIdentityMeta:
+    | {
+        browserIdentityCheck: "partial" | "not_applicable";
+        noteJa?: string;
+        matchedAccount?: { service: string; accountId: string };
+      }
+    | undefined;
+  if (tool === "browser.use") {
+    const args = (body.args || {}) as Record<string, unknown>;
+    const claimed = {
+      service:
+        body.claimedAccount?.service ||
+        body.service ||
+        (typeof args.service === "string" ? args.service : undefined),
+      accountId:
+        body.claimedAccount?.accountId ||
+        body.accountId ||
+        (typeof args.accountId === "string" ? args.accountId : undefined),
+    };
+    const accountsDecision = evaluateAllowedAccountsForBrowser({
+      allowedAccounts: employee.allowedAccounts,
+      claimed,
+      browserRequired: true,
+    });
+    if (!accountsDecision.ok) {
+      return NextResponse.json(
+        {
+          ok: false,
+          code: accountsDecision.code,
+          error: accountsDecision.code,
+          message: accountsDecision.message,
+          disposition: accountsDecision.disposition,
+          browserIdentityCheck: accountsDecision.browserIdentityCheck,
+          allowedAccounts: accountsDecision.allowedAccounts,
+          claimed: accountsDecision.claimed,
+          employeeId,
+          tool,
+          purpose,
+          jobId,
+          // Soft warn is not used when accounts are required / mismatched.
+          needs_approval: false,
+        },
+        { status: 403 }
+      );
+    }
+    browserIdentityMeta = {
+      browserIdentityCheck: accountsDecision.browserIdentityCheck,
+      noteJa: accountsDecision.noteJa,
+      matchedAccount: accountsDecision.matched
+        ? {
+            service: accountsDecision.matched.service,
+            accountId: accountsDecision.matched.accountId,
+          }
+        : undefined,
+    };
+  }
+
   // confirm / send / order (and force flags) → always needs_approval.
   const forceApproval =
     isForceApprovalTool(toolDef) ||
@@ -232,7 +293,10 @@ export async function POST(req: Request) {
         ok: false,
         code: "needs_approval",
         error: "needs_approval",
-        message: `${tool} requires human approval (always_human default for confirm/send/order)`,
+        message:
+          tool === "browser.use"
+            ? `${tool} requires human approval (always_human). allowedAccounts checked; live browser identity remains partial.`
+            : `${tool} requires human approval (always_human default for confirm/send/order)`,
         needs_approval: true,
         employeeId,
         tool,
@@ -240,27 +304,21 @@ export async function POST(req: Request) {
         jobId,
         toolKind: toolDef.kind,
         approvalPolicy: employee.approvalPolicy,
+        ...(browserIdentityMeta
+          ? {
+              browserIdentityCheck: browserIdentityMeta.browserIdentityCheck,
+              browserIdentityNoteJa: browserIdentityMeta.noteJa,
+              matchedAccount: browserIdentityMeta.matchedAccount,
+              allowedAccounts: employee.allowedAccounts ?? [],
+            }
+          : {}),
       },
       { status: 402 }
     );
   }
 
   // risk_based employee + mayAuto tools: allow in stub (audit later).
-  // browser.use is force-approval above; leftover soft path for warnings only if ever mayAuto.
-  const warnings: string[] = [];
-  if (tool === "browser.use") {
-    const accounts = employee.allowedAccounts ?? [];
-    if (!accounts.length) {
-      warnings.push(
-        "allowed_accounts_missing: 許可外部アカウント未設定。ライブセッション照合は不完全なため、ポリシー・監査・Managed確認を併用してください。"
-      );
-    } else {
-      warnings.push(
-        "browser_identity_check_partial: 実行時のブラウザID照合はスタブ段階です。社員証の許可IDと目視／監査で補完します。"
-      );
-    }
-  }
-
+  // browser.use is always force-approval; missing/mismatch already fail-closed above.
   return NextResponse.json({
     ok: true,
     demo: runtimeModeLabel() === "demo",
@@ -282,11 +340,6 @@ export async function POST(req: Request) {
             : tool === "commerce.quote"
               ? { quoted: true }
               : { accepted: true },
-    warnings: warnings.length ? warnings : undefined,
-    allowedAccounts:
-      tool === "browser.use" ? employee.allowedAccounts ?? [] : undefined,
-    message: warnings.length
-      ? "invoke allowed with policy warnings"
-      : `invoke allowed (${tool}; propose/draft/read may auto)`,
+    message: `invoke allowed (${tool}; propose/draft/read may auto)`,
   });
 }

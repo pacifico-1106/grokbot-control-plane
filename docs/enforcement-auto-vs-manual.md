@@ -15,7 +15,7 @@
 | **Fail-closed** | 未連携・失効・権限不足は実行しない（403） | 実装済み |
 | **承認ゲート** | always_human / risk_based。危険操作はキュー | 実装済み |
 | **予算ゲート** | maxPerOrder / day / month。超過は承認 or deny | 実装済み（hire Step3 + spend-gate） |
-| **許可外部アカウント** | `allowedAccounts`（service + accountId）。Google固定ではなく SNS/SaaS も刻む。browser:use とセット | hire Step3 + 社員詳細。ライブ照合は部分的 |
+| **許可外部アカウント** | `allowedAccounts`（service + accountId）。browser:use で**欠落／不一致は fail-closed**（ソフト警告のみにしない・C5） | hire Step3 + Gateway。ライブ照合は部分的（正直） |
 | **監査・コスト** | 成功も失敗も社員別に残す | デモ実装済み |
 | **ヘルスチェック** | 定期的に「まだ通るか」→ 劣化をダッシュボード表示 | 実装済み |
 | **秘密の分離** | 決済・メールの本番シークレットは Gateway／サーバ側のみ | 運用ルール＋実装方針 |
@@ -69,7 +69,7 @@ Bot に「Stripeを直接叩く」「任意URLにPOST」を与えない。
 補足ヒアリングで決めた承認・少額枠・**ブラウザ許可／外部アカウントID**は、**社員証に刻み、Gateway が評価**する。  
 画面の設定と実行時制御が一致していることが「パスの意味」。
 
-**ブラウザ・許可IDの限界メモ:** ランタイムで「今のブラウザが許可IDと一致するか」は環境によって部分的。未設定で `browser:use` すると Gateway スタブは **warning** を返す。止めきれない共有セッションは監査と Managed チェックで補う。
+**ブラウザ・許可ID（C5）:** `browser:use` で許可ID未設定またはクレーム不一致 → Gateway は **403 fail-closed**（ソフト警告のみにしない）。クレーム一致でも always_human。ランタイムの「今のブラウザが許可IDと一致するか」は環境依存で **部分的** — 監査と Managed 目視で補う。応答に `browserIdentityCheck: "partial"` を返す。
 
 ---
 
@@ -88,7 +88,7 @@ Bot に「Stripeを直接叩く」「任意URLにPOST」を与えない。
 - [ ] 権限外 invoke が 403  
 - [ ] 承認必須の操作がキューに入る  
 - [ ] 少額枠超過が止まる（設定時）  
-- [ ] ブラウザ利用時に許可外部アカウントが社員証に入っている（未設定なら警告）  
+- [ ] ブラウザ利用時に許可外部アカウントが社員証に入っている（未設定・不一致は 403）  
 
 **手動確認**
 - [ ] Bot のツール一覧に危険な直結が無い  
@@ -111,3 +111,19 @@ Bot に「Stripeを直接叩く」「任意URLにPOST」を与えない。
 > 「Bot の道具箱には Staffpass 経由だけを残します。直結のメール送信や決済キーは渡しません。」
 
 実装対応: `docs/binding-lifeline.md` / `POST /api/gateway/invoke`（purpose・jobId・allowlist・confirm/send → needs_approval）。
+
+---
+
+## 9. ハイブリッド・プロキシ（木村確定）
+
+Partner API 不在下の実行方針:
+
+| 経路 | 扱い |
+|------|------|
+| **必須プロキシ** | commerce / mail.send / calendar.confirm / 明示的 Gateway invoke — fail-closed |
+| **迂回しうる経路** | Bot内蔵ツール・生ブラウザ等 — Managed で危険直結を外す＋ポリシー／教育＋事後ヘルス・監査突合 |
+| **言わないこと** | 「すべての実行がプロキシ済み」 |
+
+組織の正本と説明責任は常に Staffpass。Auto-review との役割分担は [`gateway-vs-auto-review.md`](./gateway-vs-auto-review.md)。
+
+**Routines / Teach（C4）:** 一度教えた自動化が confirm / send / order を含む場合も Staffpass ゲート必須。実行フックが取れない部分は Managed で道具箱を細くする。
