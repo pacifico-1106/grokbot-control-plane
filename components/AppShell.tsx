@@ -80,7 +80,18 @@ export function AppShell({
             );
           })}
         </nav>
-        <div className="px-5 py-4 border-t border-[var(--border-soft)] text-xs faint space-y-1">
+        <div className="px-5 py-4 border-t border-[var(--border-soft)] text-xs faint space-y-2">
+          <Link
+            href="/app/guides/instructions-design"
+            className={`break-words min-h-[44px] flex items-center ${
+              pathname === "/app/guides/instructions-design" ||
+              pathname.startsWith("/app/guides/instructions-design/")
+                ? "text-[var(--text)]"
+                : "hover:text-[var(--text)]"
+            }`}
+          >
+            Instructionsの組み立て方
+          </Link>
           <div className="break-words">当社で用意 / 持ち込み 両対応</div>
           <div>Sealith by TOKYO307</div>
         </div>
@@ -138,7 +149,19 @@ export function AppShell({
               );
             })}
           </nav>
-          <div className="px-4 py-4 border-t border-[var(--border-soft)] text-xs faint space-y-1">
+          <div className="px-4 py-4 border-t border-[var(--border-soft)] text-xs faint space-y-2">
+            <Link
+              href="/app/guides/instructions-design"
+              className={`break-words min-h-[44px] flex items-center ${
+                pathname === "/app/guides/instructions-design" ||
+                pathname.startsWith("/app/guides/instructions-design/")
+                  ? "text-[var(--text)]"
+                  : "hover:text-[var(--text)]"
+              }`}
+              onClick={() => setMenuOpen(false)}
+            >
+              Instructionsの組み立て方
+            </Link>
             <div className="break-words">当社で用意 / 持ち込み 両対応</div>
             <div>Sealith by TOKYO307</div>
           </div>

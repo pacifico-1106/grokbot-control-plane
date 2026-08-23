@@ -61,6 +61,19 @@ export default function GettingStartedPage() {
         ))}
 
         <section className="surface p-5 space-y-2">
+          <h2 className="text-sm font-medium">Instructionsの組み立て方</h2>
+          <p className="text-sm muted leading-relaxed">
+            Base（固定ルール）／Role（職務の型）／Skills &amp; Routines（変わりやすい手順）に分けて書く。全部を Instructions に詰め込まない。
+          </p>
+          <Link
+            href="/app/guides/instructions-design"
+            className="btn btn-ghost mt-2 text-sm w-full sm:w-auto inline-flex"
+          >
+            ガイドを読む
+          </Link>
+        </section>
+
+        <section className="surface p-5 space-y-2">
           <h2 className="text-sm font-medium">権限を守らせる（自動 / 手動）</h2>
           <p className="text-sm muted leading-relaxed">
             実際の発注・送信は、当社の承認ルート経由だけです。AI社員に直結の「勝手に送る道具」は載せません。
