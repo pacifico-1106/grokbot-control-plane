@@ -1,7 +1,7 @@
 # 営業向け想定問答 — Grok Bot セキュリティ／共有PC × Staffpass
 
 **対象:** 導入商談で必ず聞かれる論点  
-**更新:** 2026-08-23  
+**更新:** 2026-08-24  
 **注意:** Grok Bot / Cursor 本体の契約・学習ポリシーは時期で変わる。断定は公式ヘルプ／契約書で最終確認すること。
 
 **関連（法務雛形）:** [利用規約／データ取扱い概要](../legal/README.md)（共有PC・外部連携・承認ゲート条項のたたき台。要弁護士レビュー）
@@ -128,3 +128,11 @@ AllowedAccount {
 
 ### Q11. Grok の Auto-review があれば Staffpass は不要？
 **A:** 不要にはならない。Auto-review は個人／Bot側の承認ネット。Staffpass は会社の社員証・監査台帳・失効・説明責任。二段。詳細: [`../gateway-vs-auto-review.md`](../gateway-vs-auto-review.md)。
+
+---
+
+## H. AI Gateway との違い（短）
+
+### Q12. Vercel の AI Gateway と同じでは？ルーティングや単価の話では？
+**A:** 違います。Vercel 型の AI Gateway は、モデルの**経路・単価・プロバイダ切替**が主戦場。Staffpass Gateway は**社員証・承認・監査（就業規則と日報）**が主戦場。知能が安くなり利用が急増するほど、止めるルールと日報の相対価値が上がる。私たちは Grok 席を再販しない。
+

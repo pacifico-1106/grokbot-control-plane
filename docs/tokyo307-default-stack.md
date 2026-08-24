@@ -130,7 +130,9 @@ Instructionsは三層: **Base（固定）／Role（職種）／Skills・Routines
 
 ## 6. 明示的に売らない約束
 
-OS完全分離／学習100%停止／マスキング100%／全部プロキシ／補助金必ず出る／Bot分割＝境界／未接続ランタイムの対応済み
+OS完全分離／学習100%停止／マスキング100%／全部プロキシ／補助金必ず出る／Bot分割＝境界／未接続ランタイムの対応済み／**Vercel型AI Gateway（経路・単価）の再販**／**Grok席の再販**
+
+（知能が安くなり利用が増えるほど、止めるルールと日報の相対価値が上がる。制御面は就業規則と日報であり、モデル経路の卸ではない。）
 
 ---
 
@@ -140,3 +142,4 @@ OS完全分離／学習100%停止／マスキング100%／全部プロキシ／�
 - 構想: `staffpass-concept-latest.md`  
 - ミニマム対応表: `staffpass-minimum-map.md`  
 - 本ファイル: `tokyo307-default-stack.md`
+- 営業FAQ（AI Gatewayとの切り分け）: `internal-share/04-sales-security-faq.md` §H
