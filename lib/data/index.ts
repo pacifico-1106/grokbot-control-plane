@@ -9,6 +9,7 @@ export {
 export {
   listEmployees,
   getEmployee,
+  getEmployeeById,
   issueEmployee,
   type IssueEmployeeInput,
   type IssueEmployeeResult,

@@ -53,6 +53,42 @@ export async function getEmployee(
   return all.find((e) => e.id === id) ?? null;
 }
 
+/**
+ * Admin lookup by primary key (no org filter).
+ * Used by Gateway Bot invokes that have x-employee-id but no browser session org.
+ */
+export async function getEmployeeById(id: string): Promise<Employee | null> {
+  if (isDemoMode()) {
+    return getRuntimeEmployees().find((e) => e.id === id) ?? null;
+  }
+  const admin = createSupabaseAdminClient();
+  if (!admin) return null;
+
+  const { data, error } = await admin
+    .from("employees")
+    .select("*")
+    .eq("id", id)
+    .maybeSingle();
+
+  if (error || !data) return null;
+
+  const mapped = mapEmployeeRow(data as Record<string, unknown>);
+
+  const { data: cred } = await admin
+    .from("credentials")
+    .select("id")
+    .eq("employee_id", id)
+    .is("revoked_at", null)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (cred) {
+    mapped.credentialId = String((cred as { id: string }).id);
+  }
+  return mapped;
+}
+
 export type IssueEmployeeInput = {
   orgId?: string | null;
   displayName: string;

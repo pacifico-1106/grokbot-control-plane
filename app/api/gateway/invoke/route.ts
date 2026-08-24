@@ -12,6 +12,7 @@ import {
   getApprovalById,
   getBinding,
   getEmployee,
+  getEmployeeById,
   runtimeModeLabel,
 } from "@/lib/data";
 import {
@@ -238,8 +239,15 @@ export async function POST(req: Request) {
     );
   }
 
-  const orgId = await getCurrentOrgId();
-  const employee = await getEmployee(employeeId, orgId);
+  // Bot invokes often send x-employee-id only (no browser session).
+  // Prefer session org, else binding.orgId, else admin PK lookup.
+  const binding = await getBinding(employeeId);
+  const orgId =
+    (await getCurrentOrgId()) || binding?.orgId || decision.binding.orgId || null;
+  let employee = await getEmployee(employeeId, orgId);
+  if (!employee) {
+    employee = await getEmployeeById(employeeId);
+  }
 
   if (!employee) {
     return NextResponse.json(
