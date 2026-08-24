@@ -54,12 +54,47 @@
 
 ### curl 例（DEMO）
 
-```bash
-# 1) ステータス（Approvals UI でコピーした URL を使う）
-curl -sS 'https://grokbot-control-plane.vercel.app/api/approvals/status?id=apr_1&token=st_demo_apr1_status_token_aaaaaaaa'
+シード `emp_sales` は linked。confirm/send 用 scope 付き。API キー不要（DEMO）。承認は `x-member-id: mem_1`。
 
-# 2) 承認後に同じ URL を再 GET → status=approved
+```bash
+BASE=https://grokbot-control-plane.vercel.app
+EMP=emp_sales
+JOB=job_e2e_$(date +%s)
+
+# A) invoke confirm → 402 needs_approval + pollUrl / pollPath
+curl -sS -X POST "$BASE/api/gateway/invoke" \
+  -H 'Content-Type: application/json' \
+  -H "x-employee-id: $EMP" \
+  -d "{\"employeeId\":\"$EMP\",\"tool\":\"calendar.confirm\",\"purpose\":\"sales.outreach\",\"jobId\":\"$JOB\"}"
+
+# 応答から approvalId / statusToken / pollPath を控える。pollUrl より pollPath を
+# 本番ホストに付けて使う（VERCEL_URL 由来のデプロイ URL を避けられる）。
+
+# B) poll status（pending）
+curl -sS "$BASE/api/approvals/status?id=APPROVAL_ID&token=STATUS_TOKEN"
+
+# C) approve（UI: /app/approvals でも可）
+curl -sS -X POST "$BASE/api/approvals/APPROVAL_ID/approve" \
+  -H 'Content-Type: application/json' \
+  -H 'x-member-id: mem_1' \
+  -d '{}'
+
+# D) re-invoke with approvalId
+curl -sS -X POST "$BASE/api/gateway/invoke" \
+  -H 'Content-Type: application/json' \
+  -H "x-employee-id: $EMP" \
+  -d "{\"employeeId\":\"$EMP\",\"tool\":\"calendar.confirm\",\"purpose\":\"sales.outreach\",\"jobId\":\"$JOB\",\"approvalId\":\"APPROVAL_ID\"}"
+
+# E) 期待成功: HTTP 200, ok:true, result.confirmed:true, priorApprovalId, meter.billable:true
 ```
+
+シード poll（UI デモ用）:
+```bash
+curl -sS 'https://grokbot-control-plane.vercel.app/api/approvals/status?id=apr_1&token=st_demo_apr1_status_token_aaaaaaaa'
+```
+
+新規社員から回す場合: `POST /api/employees/issue`（scopes に mail:send / calendar:confirm）→ `POST /api/employees/{id}/link`（grokBotAgentId）→ 上記 A–E。
+Vercel DEMO は in-memory のため、issue→invoke→approve→reinvoke は同一ウォームインスタンス内で連続実行すること（コールドでチケットが消える）。
 
 ---
 

@@ -29,7 +29,11 @@ export const DEMO_EMPLOYEES: Employee[] = [
     status: "active",
     scopes: [
       "tools:read",
+      "tools:invoke",
       "mail:draft",
+      "mail:send",
+      "calendar:propose",
+      "calendar:confirm",
       "commerce:quote",
       "approvals:request",
       "audit:append",

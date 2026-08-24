@@ -25,6 +25,13 @@ export function statusTokensEqual(a: string, b: string): boolean {
 export function getAppOrigin(): string {
   const fromEnv = (process.env.NEXT_PUBLIC_APP_URL || "").trim().replace(/\/$/, "");
   if (fromEnv) return fromEnv;
+  // Prefer stable production alias over ephemeral *.vercel.app deployment hosts
+  // so Bot pollUrl does not 302 / miss the in-memory DEMO ticket isolate.
+  const prodHost = (process.env.VERCEL_PROJECT_PRODUCTION_URL || "")
+    .trim()
+    .replace(/^https?:\/\//, "")
+    .replace(/\/$/, "");
+  if (prodHost) return `https://${prodHost}`;
   if (process.env.VERCEL_URL) {
     const host = process.env.VERCEL_URL.replace(/^https?:\/\//, "");
     return `https://${host}`;
