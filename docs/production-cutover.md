@@ -17,14 +17,18 @@
 
 1. **コード** — 本ブランチを main に載せる（完了済み想定）
 2. **Supabase プロジェクト作成**（まだキーを Vercel に貼らない）
-3. **SQL 適用**（どちらか一方で可）
-   - **新規:** Supabase SQL Editor で `supabase/schema.sql` を全文実行
-   - **既存 DB:** `supabase/migrations/20260823_production_ready.sql` を実行  
-     （employees.spend / allowed_accounts、org_members.job_*、employee_bindings、RLS）
-4. **Auth 有効化** — Authentication → Providers → Email を ON。必要なら Confirm email を開発中は OFF
-5. **Vercel env にキーを貼る**（下記チェックリスト）
-6. **再デプロイ** → `/signup` で本番登録（Auth user + org + owner member）
-7. **Stripe** webhook / Price ID、**Resend** ドメイン
+3. **SQL 適用**
+   - **新規プロジェクト:** SQL Editor で `supabase/schema.sql` を全文実行（approval loop 列・agentmail 予約・referral_code 含む）
+   - **既存 DB（すでに core がある）:** 次を **この順** で実行  
+     1. `supabase/migrations/20260823_production_ready.sql`  
+     2. `supabase/migrations/20260823_referral_code.sql`  
+     3. `supabase/migrations/20260823_agentmail_reservation.sql`  
+     4. `supabase/migrations/20260824_approval_loop.sql` ← **承認ループ必須**（title / tool / job_id / status_token / poll_path、employees の notify/callback/routine）
+4. **Auth 有効化** — Authentication → Providers → Email を ON。開発中は Confirm email を OFF 推奨（signup が即ログインできる）
+5. **Vercel env にキーを貼る**（下記チェックリスト）— **Supabase 3 点セットが揃うまで DEMO のまま**
+6. **Redeploy** → `GET /api/health` で `runtimeMode: "production"` を確認
+7. **`/signup`** で本番登録（Auth user + org + owner member）。DEMO シード社員（`emp_sales` 等）は **Postgres に無い**
+8. **Stripe** webhook / Price ID、**Resend** ドメイン（承認ループ検証自体には不要）
 
 ## Vercel に貼る環境変数
 
@@ -41,24 +45,43 @@
 | `RESEND_API_KEY` / `EMAIL_FROM` | トランザクションメール |
 | `TRIAL_DAYS` | 既定 14 |
 
-`replace_me_*` を残した項目は該当機能だけスタブのままです。
+**本番切替に必須（これで DEMO 解除）:**  
+`NEXT_PUBLIC_SUPABASE_URL` · `NEXT_PUBLIC_SUPABASE_ANON_KEY` · `SUPABASE_SERVICE_ROLE_KEY`
+
+`replace_me_*` を残した Stripe / Resend は該当機能だけスタブのまま（承認ループ検証は可）。
+
+切替確認: `curl -sS https://<YOUR_DOMAIN>/api/health` → `"runtimeMode":"production"`。
 
 ## 手動 SQL（ユーザー作業）
 
 1. Supabase Dashboard → SQL → New query
-2. `schema.sql`（新規）または `migrations/20260823_production_ready.sql`（既存）を貼って Run
-3. Table Editor で `orgs` / `org_members` / `employees` / `employee_bindings` が見えること
-4. Authentication が有効であること
+2. 新規: `schema.sql` 全文。既存: migrations を上記順に Run
+3. Table Editor で確認:
+   - `orgs` / `org_members` / `employees` / `employee_bindings` / `approval_requests` / `audit_events`
+   - `approval_requests` に `title`, `tool`, `job_id`, `status_token`, `poll_path`
+   - `employees` に `approval_notify_email`, `callback_url`, `approval_routine_text`
+4. Authentication → Providers → Email ON（Confirm email は開発中 OFF 可）
 
 RLS は `org_members.user_id = auth.uid()` で組織隔離。  
 Gateway / API の **service role クライアントは RLS をバイパス**（意図どおり）。
+
+## DEMO シード vs 本番 DB
+
+| DEMO（切替前） | 本番（切替後） |
+|----------------|----------------|
+| `emp_sales` / `apr_1` / `mem_1` はプロセス内メモリ | **空の Postgres**。signup で org+owner が初めて作られる |
+| Upstash / GitHub `demo-store` / `DEMO_APPROVALS_*` | **不要**。承認は `approval_requests` 行が正本 |
+| 承認 UI にシードチケットが出る | シードは出ない。Gateway invoke → 新規行 |
+
+切替後に DEMO 半端ストアを残す必要はない（キーを外してよい）。
 
 ## 動作確認
 
 | モード | 確認 |
 |--------|------|
-| DEMO | env 未設定で `/app`・雇い・承認・チームが動く |
-| Prod | signup → login → `/app` がセッション必須。社員発行が Postgres に残る |
+| DEMO | env 未設定で `/app`・雇い・承認・チームが動く。`GET /api/health` → `runtimeMode:"demo"` |
+| Prod | `GET /api/health` → `runtimeMode:"production"`。signup → login → `/app` がセッション必須。社員発行・承認が Postgres に残る |
+| 承認ループ | invoke → 402+pollUrl → UI 承認 → poll `approved` → approvalId 付き再 invoke |
 
 ## 関連
 

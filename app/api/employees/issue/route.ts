@@ -26,7 +26,7 @@ function issueSecret(): { raw: string; hash: string; prefix: string } {
  */
 export async function POST(req: Request) {
   const rawBody = (await req.json().catch(() => ({}))) as Record<string, unknown>;
-  const gate = requireCapability(
+  const gate = await requireCapability(
     req,
     "hire_issue_credentials",
     typeof rawBody.actorMemberId === "string" ? rawBody.actorMemberId : null

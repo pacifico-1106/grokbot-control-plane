@@ -41,7 +41,7 @@ export async function POST(req: Request) {
     actorMemberId?: string | null;
   };
 
-  const gate = requireCapability(req, "manage_team", body.actorMemberId);
+  const gate = await requireCapability(req, "manage_team", body.actorMemberId);
   if (!gate.ok) return gate.response;
 
   const billingOrgId = await getCurrentOrgId();

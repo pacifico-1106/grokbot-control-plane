@@ -47,15 +47,15 @@
 1. **コード** — dual-mode + schema/RLS をデプロイ（キーなしで `bun run build` 緑）
 2. **Supabase** — プロジェクト作成 → SQL 適用:
    - 新規: `supabase/schema.sql`
-   - 既存: `supabase/migrations/20260823_production_ready.sql`
-   - Auth（Email）を有効化
-3. **Env（最後）** — `.env.example` を Vercel / `.env.local` にコピーし、`replace_me_*` を実キーへ  
-   （詳細: `docs/production-cutover.md`）
-4. **Stripe** — Product/Price → `STRIPE_PRICE_ID_*` → Webhook + Portal（`docs/stripe-billing-notes.md`）
-5. **Resend** — ドメイン認証 → `EMAIL_FROM`
-6. **Vercel** — Import（vercel.json: nextjs, hnd1）→ env 注入 → 再デプロイ
-7. **Grok Bot 連携** — パートナー API が使えるまで `/app/integrations` はデモ状態機械
-8. **バインディング** — `docs/binding-lifeline.md`
+   - 既存: `20260823_production_ready.sql` → `referral_code` → `agentmail_reservation` → **`20260824_approval_loop.sql`**
+   - Auth（Email）ON（開発中 Confirm email OFF 可）
+3. **Env（最後）** — 少なくとも Supabase 3 点（URL / anon / service_role）。詳細: `docs/production-cutover.md`
+4. **Redeploy** → `GET /api/health` が `runtimeMode:"production"`
+5. **`/signup`** — DEMO シード（`emp_sales` 等）は本番 DB に無い。雇い直し + link
+6. **Stripe** — Product/Price → `STRIPE_PRICE_ID_*` → Webhook + Portal（任意・後回し可）
+7. **Resend** — ドメイン認証 → `EMAIL_FROM`（任意・後回し可）
+8. **Grok Bot 連携** — パートナー API が使えるまで `/app/integrations` はデモ状態機械
+9. **バインディング** — `docs/binding-lifeline.md`
 
 ```bash
 bun install

@@ -14,7 +14,7 @@ export async function POST(
   req: Request,
   ctx: { params: Promise<{ id: string }> }
 ) {
-  const gate = requireCapability(req, "approve_actions");
+  const gate = await requireCapability(req, "approve_actions");
   if (!gate.ok) return gate.response;
 
   const { id } = await ctx.params;

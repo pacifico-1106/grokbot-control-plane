@@ -128,6 +128,18 @@ Vercel DEMO は in-memory のため、issue→invoke→approve→reinvoke は同
 最終更新: 2026-08-24（JST）
 
 
+## 本番（Supabase）切替後の再検証
+
+前提: `GET /api/health` が `"runtimeMode":"production"`。signup 済み。実社員を issue + link 済み（`emp_sales` シードは無い）。
+
+1. `POST /api/gateway/invoke`（confirm/send）→ 402 + `approvalId` / `statusToken` / `pollUrl`
+2. Supabase Table Editor で `approval_requests` に行があること（`status_token` / `poll_path` / `title`）
+3. `/app/approvals` で **承認**
+4. 同じ `pollUrl` → `status:"approved"` / `pollHint:"reinvoke_with_approvalId"`
+5. 同じ `jobId` で `approvalId` 付き再 invoke → 200 / confirmed
+
+DEMO 用 Upstash / `DEMO_APPROVALS_*` は本番では使わない（無視してよい）。
+
 ## DEMO on Vercel (multi-isolate)
 
 Gateway `needs_approval` tickets are written through `lib/data/demo-approvals-store.ts`.
