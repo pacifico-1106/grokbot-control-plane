@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { ApprovalRequest, Employee } from "@/lib/types";
 
 function pollUrlFor(a: ApprovalRequest): string {
@@ -15,15 +15,50 @@ function pollUrlFor(a: ApprovalRequest): string {
 export function ApprovalsClient({
   initial,
   employees,
+  demoDurable = true,
+  demoStore = null,
 }: {
   initial: ApprovalRequest[];
   employees: Employee[];
+  /** DEMO: false when only in-memory (Vercel isolate split risk). */
+  demoDurable?: boolean;
+  demoStore?: "upstash" | "github" | "http" | "memory" | null;
 }) {
   const router = useRouter();
   const [rows, setRows] = useState(initial);
   const [pendingId, setPendingId] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [storeLabel, setStoreLabel] = useState(demoStore);
+  const [durable, setDurable] = useState(demoDurable);
+
+  const refreshList = useCallback(async () => {
+    try {
+      const res = await fetch("/api/approvals", { cache: "no-store" });
+      if (!res.ok) return;
+      const body = (await res.json()) as {
+        approvals?: ApprovalRequest[];
+        durable?: boolean;
+        demoStore?: "upstash" | "github" | "http" | "memory" | null;
+      };
+      if (Array.isArray(body.approvals)) setRows(body.approvals);
+      if (typeof body.durable === "boolean") setDurable(body.durable);
+      if (body.demoStore != null) setStoreLabel(body.demoStore);
+    } catch {
+      /* ignore transient poll errors */
+    }
+  }, []);
+
+  useEffect(() => {
+    setRows(initial);
+  }, [initial]);
+
+  useEffect(() => {
+    const t = setInterval(() => {
+      void refreshList();
+    }, 4000);
+    return () => clearInterval(t);
+  }, [refreshList]);
 
   async function decide(id: string, action: "approve" | "reject") {
     setPendingId(id);
@@ -43,6 +78,7 @@ export function ApprovalsClient({
             : r
         )
       );
+      await refreshList();
       router.refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : "failed");
@@ -71,6 +107,22 @@ export function ApprovalsClient({
         </Link>{" "}
         を正本として待ちます（Partner webhook が来るまで必須）。メール通知は副次です。
       </p>
+
+      {!durable ? (
+        <p className="text-xs leading-relaxed rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-amber-950 dark:text-amber-100">
+          DEMO: 承認ストアがインメモリです（store={storeLabel || "memory"}）。
+          Vercel の別インスタンスで Gateway が作ったチケットが一覧に出ない／Bot の
+          poll が承認を見ないことがあります。Upstash Redis（または Vercel KV）の{" "}
+          <code className="text-[10px]">UPSTASH_REDIS_REST_URL</code> +{" "}
+          <code className="text-[10px]">TOKEN</code>、または{" "}
+          <code className="text-[10px]">DEMO_APPROVALS_GITHUB_TOKEN</code>{" "}
+          を Vercel env に設定して再デプロイしてください。
+        </p>
+      ) : storeLabel && storeLabel !== "memory" ? (
+        <p className="text-[10px] faint">
+          DEMO 承認ストア: {storeLabel}（インスタンス横断）
+        </p>
+      ) : null}
 
       {error ? (
         <p className="text-sm text-[var(--danger)]">{error}</p>

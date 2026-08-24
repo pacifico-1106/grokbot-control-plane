@@ -68,6 +68,7 @@ async function createNeedsApprovalResponse(opts: {
   let statusToken: string | null = null;
   let pollUrl: string | null = null;
   let pollPath: string | null = null;
+  let demoStore: string | null = null;
 
   try {
     const created = await createApproval({
@@ -85,6 +86,7 @@ async function createNeedsApprovalResponse(opts: {
     statusToken = created.statusToken;
     pollUrl = created.pollUrl;
     pollPath = created.approval.pollPath;
+    demoStore = created.demoStore ?? null;
   } catch (e) {
     // Still return needs_approval so Bot stops; ticket create failure is surfaced.
     const errMsg = e instanceof Error ? e.message : "approval_create_failed";
@@ -133,6 +135,7 @@ async function createNeedsApprovalResponse(opts: {
       tool: opts.tool,
       purpose: opts.purpose,
       jobId: opts.jobId,
+      demoStore,
       ...opts.extra,
     },
     { status: opts.httpStatus ?? 402 }

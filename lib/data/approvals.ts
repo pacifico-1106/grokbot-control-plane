@@ -1,7 +1,4 @@
 import {
-  getRuntimeApprovals,
-  pushRuntimeApproval,
-  resolveRuntimeApproval,
   type CreateRuntimeApprovalInput,
 } from "../demo-data";
 import {
@@ -10,6 +7,14 @@ import {
   generateStatusToken,
   statusTokensEqual,
 } from "../approvals/tokens";
+import {
+  demoCreateApproval,
+  demoGetApproval,
+  demoListApprovals,
+  demoResolveApproval,
+  getDemoApprovalsBackend,
+  isDurableDemoApprovalsStore,
+} from "./demo-approvals-store";
 import { isDemoMode } from "../mode";
 import { createSupabaseAdminClient } from "../supabase";
 import { mapApprovalRow } from "./mappers";
@@ -33,12 +38,14 @@ export type CreateApprovalResult = {
   /** Plain status token (Bot must persist; may not be re-readable from DB hash stores). */
   statusToken: string;
   demo: boolean;
+  /** DEMO only: which backing store held the ticket. */
+  demoStore?: "upstash" | "github" | "http" | "memory";
 };
 
 export async function listApprovals(
   orgId?: string | null
 ): Promise<ApprovalRequest[]> {
-  if (isDemoMode()) return getRuntimeApprovals();
+  if (isDemoMode()) return demoListApprovals();
   const admin = createSupabaseAdminClient();
   if (!admin || !orgId) return [];
   const { data, error } = await admin
@@ -56,7 +63,7 @@ export async function getApprovalById(
 ): Promise<ApprovalRequest | null> {
   if (!id) return null;
   if (isDemoMode()) {
-    return getRuntimeApprovals().find((a) => a.id === id) ?? null;
+    return demoGetApproval(id);
   }
   const admin = createSupabaseAdminClient();
   if (!admin) return null;
@@ -79,7 +86,7 @@ export async function getApprovalStatusByToken(
 
   let row: ApprovalRequest | null = null;
   if (isDemoMode()) {
-    row = getRuntimeApprovals().find((a) => a.id === id) ?? null;
+    row = await demoGetApproval(id);
   } else {
     const admin = createSupabaseAdminClient();
     if (!admin) return null;
@@ -115,12 +122,13 @@ export async function createApproval(
       jobId: input.jobId,
       statusToken,
     };
-    const approval = pushRuntimeApproval(demoInput);
+    const approval = await demoCreateApproval(demoInput);
     return {
       approval,
-      statusToken,
-      pollUrl: buildPollUrl(approval.id, statusToken),
+      statusToken: approval.statusToken || statusToken,
+      pollUrl: buildPollUrl(approval.id, approval.statusToken || statusToken),
       demo: true,
+      demoStore: getDemoApprovalsBackend(),
     };
   }
 
@@ -254,7 +262,7 @@ export async function resolveApproval(
   orgId?: string | null
 ): Promise<ApprovalRequest | null> {
   if (isDemoMode()) {
-    return resolveRuntimeApproval(id, status, resolvedBy);
+    return demoResolveApproval(id, status, resolvedBy);
   }
   const admin = createSupabaseAdminClient();
   if (!admin) return null;
@@ -297,3 +305,5 @@ export async function resolveApproval(
   mapped.resolvedBy = resolvedBy;
   return mapped;
 }
+
+export { isDurableDemoApprovalsStore, getDemoApprovalsBackend };

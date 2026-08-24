@@ -126,3 +126,23 @@ Vercel DEMO は in-memory のため、issue→invoke→approve→reinvoke は同
 - [ ] 「Partner webhook がある」と偽らない  
 
 最終更新: 2026-08-24（JST）
+
+
+## DEMO on Vercel (multi-isolate)
+
+Gateway `needs_approval` tickets are written through `lib/data/demo-approvals-store.ts`.
+
+Without a durable backend, each serverless isolate has its own in-memory copy of
+`apr_1` / `apr_2` seeds — live `apr_*` tickets created on isolate A will **not**
+show in Approvals UI rendered on isolate B, and Bot poll may never see approve.
+
+Set **one** of the following on the Vercel project (Production) then **Redeploy**:
+
+1. **Upstash Redis / Vercel KV** (preferred): `UPSTASH_REDIS_REST_URL` + `UPSTASH_REDIS_REST_TOKEN`
+   (or `KV_REST_API_URL` + `KV_REST_API_TOKEN`)
+2. **GitHub Contents** on branch `demo-store` / file `approvals.json`:
+   `DEMO_APPROVALS_GITHUB_TOKEN` (repo Contents read/write). Optional
+   `DEMO_APPROVALS_GITHUB_REPO` (default `pacifico-1106/grokbot-control-plane`).
+3. Generic HTTP JSON GET/PUT: `APPROVAL_DEMO_STORE_URL` (+ optional Bearer token)
+
+`GET /api/approvals` returns `durable` + `demoStore` for the Approvals UI banner.

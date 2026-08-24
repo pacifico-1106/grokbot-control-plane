@@ -19,6 +19,8 @@ export {
   getApprovalStatusByToken,
   createApproval,
   resolveApproval,
+  isDurableDemoApprovalsStore,
+  getDemoApprovalsBackend,
   type CreateApprovalInput,
   type CreateApprovalResult,
 } from "./approvals";
