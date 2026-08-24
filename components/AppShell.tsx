@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useId, useState } from "react";
 import { BrandMark } from "@/components/BrandMark";
+import { useAppSession } from "@/components/AppSessionProvider";
 
 const NAV = [
   { href: "/app", label: "ダッシュボード", exact: true },
@@ -34,6 +35,15 @@ export function AppShell({
   const pathname = usePathname();
   const [menuOpen, setMenuOpen] = useState(false);
   const panelId = useId();
+  const session = useAppSession();
+  const memberEmail =
+    session.email ||
+    (session.demo ? "owner@example.com" : null);
+  const memberLabel = memberEmail || "—";
+  const memberTitle =
+    session.displayName && session.displayName !== memberEmail
+      ? `${session.displayName} · ${memberLabel}`
+      : session.displayName || memberLabel;
 
   useEffect(() => {
     setMenuOpen(false);
@@ -220,10 +230,25 @@ export function AppShell({
             </div>
           </div>
           <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
-            <span className="chip chip-ok shrink-0">トライアル</span>
-            <span className="chip hidden sm:inline-flex max-w-[10rem] truncate">
-              owner@example.com
+            <span className="chip chip-ok shrink-0 hidden md:inline-flex">
+              トライアル
             </span>
+            <span
+              className="chip inline-flex max-w-[7rem] sm:max-w-[12rem] truncate text-xs sm:text-sm"
+              title={memberTitle}
+            >
+              {memberLabel}
+            </span>
+            <form action="/api/auth/logout" method="post" className="shrink-0">
+              <button
+                type="submit"
+                className="btn btn-ghost text-xs sm:text-sm min-h-[44px] px-2.5 sm:px-3"
+                aria-label="ログアウト"
+                title={memberTitle !== "—" ? memberTitle : "ログアウト"}
+              >
+                ログアウト
+              </button>
+            </form>
           </div>
         </header>
         <main className="flex-1 px-3 sm:px-4 md:px-8 py-5 md:py-6 pb-[max(1.25rem,env(safe-area-inset-bottom))] min-w-0 max-w-full overflow-x-hidden">

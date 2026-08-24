@@ -24,6 +24,50 @@ const OWNER_CAPS = [
   "manage_billing",
 ];
 
+/** Seed / demo placeholder that must never stick on a real Auth user in production. */
+const DEMO_PLACEHOLDER_EMAIL = "owner@example.com";
+
+export function isDemoPlaceholderEmail(email: string | null | undefined): boolean {
+  return (email || "").trim().toLowerCase() === DEMO_PLACEHOLDER_EMAIL;
+}
+
+/**
+ * One-time repair: org_members still has owner@example.com (or similar seed)
+ * while auth.users has the real signup email — sync email + display_name.
+ */
+async function repairDemoPlaceholderMember(
+  member: OrgMember,
+  sessionEmail: string
+): Promise<OrgMember> {
+  const admin = createSupabaseAdminClient();
+  if (!admin) return member;
+  const email = sessionEmail.trim();
+  if (!email || isDemoPlaceholderEmail(email)) return member;
+  if (!isDemoPlaceholderEmail(member.email)) return member;
+  if (member.email.trim().toLowerCase() === email.toLowerCase()) return member;
+
+  const displayName = email.split("@")[0] || email;
+  const { data, error } = await admin
+    .from("org_members")
+    .update({
+      email,
+      display_name: displayName,
+    })
+    .eq("id", member.id)
+    .select("*")
+    .single();
+
+  if (error || !data) {
+    console.warn(
+      "[auth] repairDemoPlaceholderMember failed:",
+      error?.message || "no_data"
+    );
+    return member;
+  }
+  return mapMemberRow(data as Record<string, unknown>);
+}
+
+
 /**
  * Current session + org. DEMO: always returns demo org, no auth crash.
  */
@@ -163,7 +207,15 @@ export async function provisionOrgForUser(input: {
   }
 
   if (existing) {
-    const member = mapMemberRow(existing as Record<string, unknown>);
+    let member = mapMemberRow(existing as Record<string, unknown>);
+    // Never leave seed owner@example.com on a real Auth user's membership.
+    if (
+      input.email &&
+      !isDemoPlaceholderEmail(input.email) &&
+      isDemoPlaceholderEmail(member.email)
+    ) {
+      member = await repairDemoPlaceholderMember(member, input.email);
+    }
     return { orgId: member.orgId, memberId: member.id, member };
   }
 
@@ -258,6 +310,20 @@ export async function ensureAuthenticatedOrg(): Promise<EnsureOrgResult> {
     return { status: "unauthenticated" };
   }
   if (session.orgId && session.member) {
+    if (
+      session.email &&
+      !isDemoPlaceholderEmail(session.email) &&
+      isDemoPlaceholderEmail(session.member.email)
+    ) {
+      const repaired = await repairDemoPlaceholderMember(
+        session.member,
+        session.email
+      );
+      return {
+        status: "ok",
+        session: { ...session, member: repaired },
+      };
+    }
     return { status: "ok", session };
   }
 

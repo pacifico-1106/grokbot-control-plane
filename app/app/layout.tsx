@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import { AppSessionProvider } from "@/components/AppSessionProvider";
 import { ensureAuthenticatedOrg } from "@/lib/auth/session";
 
 /**
@@ -6,6 +7,9 @@ import { ensureAuthenticatedOrg } from "@/lib/auth/session";
  * Login can succeed while org_members/orgs are missing (failed signup after Auth
  * user create). Auto-provision like signup; if schema is still missing, send to
  * /onboarding instead of an opaque SSR Application error.
+ *
+ * Also one-time-repairs seed owner@example.com on org_members when the Auth
+ * session email differs, then exposes email/displayName to AppShell.
  */
 export default async function AppSectionLayout({
   children,
@@ -28,5 +32,20 @@ export default async function AppSectionLayout({
     );
   }
 
-  return <>{children}</>;
+  const session = result.session;
+  // Prefer Auth user email for chrome; display_name from org_members.
+  const email = session.email ?? session.member?.email ?? null;
+  const displayName = session.member?.displayName ?? null;
+
+  return (
+    <AppSessionProvider
+      value={{
+        email,
+        displayName,
+        demo: session.demo,
+      }}
+    >
+      {children}
+    </AppSessionProvider>
+  );
 }
