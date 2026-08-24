@@ -558,12 +558,21 @@ export function HireEmployeeClient() {
               >
                 {copied ? "コピーしました" : "コピー"}
               </button>
-              <Link
-                href="/app/integrations"
-                className="btn btn-ghost text-xs px-3 py-1.5"
-              >
-                Grok Bot へ連携
-              </Link>
+              {issuedEmployeeId ? (
+                <Link
+                  href={`/app/employees/${issuedEmployeeId}#binding`}
+                  className="btn btn-ghost text-xs px-3 py-1.5"
+                >
+                  社員詳細で Agent ID を入れて連携
+                </Link>
+              ) : (
+                <Link
+                  href="/app/employees"
+                  className="btn btn-ghost text-xs px-3 py-1.5"
+                >
+                  社員詳細で Agent ID を入れて連携
+                </Link>
+              )}
             </div>
           </div>
           {hirePack ? (

@@ -11,7 +11,7 @@ import type {
 
 const STATUS_LABEL: Record<GatewayLinkStatus, string> = {
   linked: "連携済み",
-  pending: "連携待ち（Grok Botへ→戻る）",
+  pending: "ゲートウェイ連携待ち",
   disconnected: "未連携",
 };
 
@@ -157,7 +157,7 @@ export function IntegrationsClient({
               disabled={busy || status !== "pending"}
               onClick={() => void run("handshake")}
             >
-              戻る（連携完了）
+              戻る（ゲートウェイ連携を完了）
             </button>
             <button
               type="button"
@@ -170,7 +170,8 @@ export function IntegrationsClient({
           </div>
           {message ? <p className="mt-3 text-xs muted">{message}</p> : null}
           <p className="mt-4 text-xs faint leading-relaxed">
-            いまはデモのつなぎ方です。本番では、画面の案内に従って安全につなぎ直します。
+            ここは組織と Grok Bot ゲートウェイのつなぎです。各 AI 社員への Agent ID
+            連携は社員詳細ページで行います。いまはデモのつなぎ方です。
           </p>
         </section>
       </div>

@@ -117,7 +117,7 @@ export function BindingPanel({
   const needsReauth = binding.status === "needs_reauth";
 
   return (
-    <section className="surface p-5 mt-4 space-y-4">
+    <section id="binding" className="surface p-5 mt-4 space-y-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h2 className="text-sm font-medium">Grok Bot の接続状態</h2>
