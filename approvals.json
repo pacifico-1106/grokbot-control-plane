@@ -1,6 +1,6 @@
 {
   "v": 1,
-  "updatedAt": "2026-08-24T01:37:30.064Z",
+  "updatedAt": "2026-08-24T01:37:31.355Z",
   "approvals": [
     {
       "id": "apr_mt6kgcg9_169r",
@@ -11,14 +11,14 @@
       "purpose": "sales.outreach",
       "summary": "s",
       "risk": "high",
-      "status": "pending",
+      "status": "approved",
       "tool": "mail.send",
       "jobId": "job_local_1",
       "statusToken": "st_m6-ow4pGgPQgx8cLZkeUbGGGE7ZortJ5",
       "pollPath": "/api/approvals/status?id=apr_mt6kgcg9_169r&token=st_m6-ow4pGgPQgx8cLZkeUbGGGE7ZortJ5",
       "createdAt": "2026-08-24T01:37:29.865Z",
-      "resolvedAt": null,
-      "resolvedBy": null
+      "resolvedAt": "2026-08-24T01:37:31.161Z",
+      "resolvedBy": "owner@example.com"
     }
   ]
 }
