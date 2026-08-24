@@ -54,6 +54,7 @@ export function ApprovalsClient({
   }, [initial]);
 
   useEffect(() => {
+    void refreshList();
     const t = setInterval(() => {
       void refreshList();
     }, 4000);
