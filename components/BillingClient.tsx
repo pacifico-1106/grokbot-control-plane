@@ -82,12 +82,15 @@ type Props = {
   currentPlan?: string;
   currentStatus?: string;
   hasStripeCustomer?: boolean;
+  /** When false, Checkout CTAs are disabled with JP 準備中 copy (no silent stub). */
+  stripeConfigured?: boolean;
 };
 
 export function BillingClient({
   currentPlan,
   currentStatus,
   hasStripeCustomer,
+  stripeConfigured = false,
 }: Props) {
   const [busy, setBusy] = useState<string | null>(null);
   const [message, setMessage] = useState("");
@@ -132,7 +135,7 @@ export function BillingClient({
       }
       setMessage(
         body.message ||
-          `スタブ: ${planKey} の Checkout セッション準備完了（キー未設定）`
+          "オンライン決済は準備中です。銀行振込・お問い合わせをご利用ください。"
       );
     } catch (e) {
       setMessage(e instanceof Error ? e.message : "checkout_failed");
@@ -170,8 +173,30 @@ export function BillingClient({
       <p className="mb-4 text-xs faint leading-relaxed">
         表示価格はすべて{" "}
         <span className="chip text-[10px]">{PRICING_PROVISIONAL_NOTE_JA}</span>
-        。Checkout 実課金は Stripe Dashboard の Price が正です。
+        。
+        {stripeConfigured
+          ? "オンライン決済が有効です。"
+          : "オンライン決済の準備中です。銀行振込・お問い合わせで契約できます。"}
       </p>
+
+      {!stripeConfigured ? (
+        <div
+          className="mb-4 rounded-lg border px-3 sm:px-4 py-3 text-sm leading-relaxed"
+          style={{
+            borderColor: "color-mix(in oklab, var(--warn) 45%, var(--border))",
+            background: "color-mix(in oklab, var(--warn) 10%, transparent)",
+          }}
+          role="status"
+        >
+          <strong style={{ color: "var(--warn)" }}>
+            準備中（オンライン決済はまだ使えません）
+          </strong>
+          <p className="mt-1 text-xs muted">
+            カード決済の設定が完了するまで Checkout
+            はご利用いただけません。銀行振込でのお申し込み、またはお問い合わせください。
+          </p>
+        </div>
+      ) : null}
 
       {checkoutBanner ? (
         <p
@@ -243,14 +268,30 @@ export function BillingClient({
                 <li key={p}>· {p}</li>
               ))}
             </ul>
-            <button
-              type="button"
-              className="btn btn-primary w-full mt-5 text-sm"
-              disabled={busy === plan.id}
-              onClick={() => void checkout(plan.id)}
-            >
-              {busy === plan.id ? "準備中…" : "Checkout へ"}
-            </button>
+            {stripeConfigured ? (
+              <button
+                type="button"
+                className="btn btn-primary w-full mt-5 text-sm"
+                disabled={busy === plan.id}
+                onClick={() => void checkout(plan.id)}
+              >
+                {busy === plan.id ? "準備中…" : "お支払いに進む"}
+              </button>
+            ) : (
+              <div className="mt-5 space-y-2">
+                <button
+                  type="button"
+                  className="btn w-full text-sm opacity-70 cursor-not-allowed"
+                  disabled
+                  aria-disabled="true"
+                >
+                  準備中（オンライン決済はまだ使えません）
+                </button>
+                <p className="text-[11px] faint leading-relaxed text-center">
+                  銀行振込・お問い合わせでご契約いただけます。
+                </p>
+              </div>
+            )}
           </div>
         ))}
       </div>
@@ -277,23 +318,23 @@ export function BillingClient({
               </li>
             ))}
           </ul>
-          <p className="mt-4 text-xs faint leading-relaxed">
-            Checkout は Stripe Price（`STRIPE_PRICE_ID_KICKOFF_PACK`）設定後に有効化します。キー未設定のあいだは表示のみ（仮決め）。
-          </p>
           <button
             type="button"
             className="btn btn-ghost w-full mt-4 text-sm"
-            disabled={busy === "kickoff"}
-            onClick={() => {
-              setBusy("kickoff");
-              setMessage(
-                "キックオフパックは仮決め表示です。STRIPE_PRICE_ID_KICKOFF_PACK を Dashboard で作成・貼付後に Checkout 配線します（Business 初月は含みません）。"
-              );
-              setBusy(null);
-            }}
+            disabled
+            aria-disabled="true"
           >
-            仮決め・準備中
+            準備中（オンライン決済はまだ使えません）
           </button>
+          <p className="mt-2 text-[11px] faint leading-relaxed text-center">
+            キックオフパックは仮決め表示です。銀行振込・お問い合わせでお申し込みください。
+          </p>
+          <details className="mt-3 text-[10px] faint">
+            <summary className="cursor-pointer">開発者向け（決済キー）</summary>
+            <p className="mt-1 leading-relaxed">
+              Stripe Price（STRIPE_PRICE_ID_KICKOFF_PACK）設定後に Checkout を有効化します。
+            </p>
+          </details>
         </div>
 
         <div className="surface p-5">
@@ -313,28 +354,41 @@ export function BillingClient({
       </div>
 
       <div className="mt-4 flex flex-wrap gap-3 items-center">
-        <button
-          type="button"
-          className="btn btn-ghost text-sm"
-          disabled={busy === "portal"}
-          onClick={() => void openPortal()}
-        >
-          {busy === "portal" ? "開いています…" : "カスタマーポータル"}
-        </button>
-        {!hasStripeCustomer ? (
-          <span className="text-xs faint">
-            ※ 初回は Checkout 後にポータルが使えます
-          </span>
-        ) : null}
+        {stripeConfigured ? (
+          <>
+            <button
+              type="button"
+              className="btn btn-ghost text-sm"
+              disabled={busy === "portal"}
+              onClick={() => void openPortal()}
+            >
+              {busy === "portal" ? "開いています…" : "カスタマーポータル"}
+            </button>
+            {!hasStripeCustomer ? (
+              <span className="text-xs faint">
+                ※ 初回はお支払い手続き後にポータルが使えます
+              </span>
+            ) : null}
+          </>
+        ) : (
+          <p className="text-xs muted leading-relaxed">
+            お支払い・契約変更は、銀行振込またはお問い合わせで受け付けます（オンラインポータルは準備中）。
+          </p>
+        )}
       </div>
 
       <p className="mt-3 text-xs faint leading-relaxed">
-        銀行振込は準備が整い次第、お支払い画面に表示されます。表示は
-        {PRICING_PROVISIONAL_NOTE_JA}
-        。Checkout 実額は Stripe Price ID（env）が正です。枠数は仮枠です。課金対象は
-        Gateway 経由の確定アクション成功のみです。超過従量の Stripe Metered Price
-        は P0.5（未配線）。
+        表示は{PRICING_PROVISIONAL_NOTE_JA}
+        。枠数は仮枠です。課金対象は Gateway
+        経由の確定アクション成功のみです。銀行振込は準備が整い次第、手続き方法をご案内します。
       </p>
+      <details className="mt-2 text-[10px] faint">
+        <summary className="cursor-pointer">開発者向け（Stripe）</summary>
+        <p className="mt-1 leading-relaxed">
+          Checkout 実額は Stripe Price ID（env）が正です。超過従量の Metered Price は
+          P0.5（未配線）。STRIPE_SECRET_KEY / STRIPE_PRICE_ID_* 設定後にオンライン決済が有効になります。
+        </p>
+      </details>
 
       {message ? (
         <p className="mt-4 text-sm muted surface p-4">{message}</p>

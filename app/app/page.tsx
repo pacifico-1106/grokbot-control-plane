@@ -14,8 +14,10 @@ import {
   getOrgMeta,
   getSubscription,
   listApprovals,
+  listAuditEvents,
   listEmployees,
 } from "@/lib/data";
+import { isDemoMode } from "@/lib/mode";
 
 export const dynamic = "force-dynamic";
 
@@ -32,6 +34,15 @@ export default async function DashboardPage() {
   const sub = await getSubscription(orgId);
   const entitlements = entitlementsFromSubscription(sub);
   const confirmUsage = await getConfirmUsageSummary(orgId, entitlements.plan);
+  const demoMode = isDemoMode();
+  const auditEvents = demoMode
+    ? []
+    : (await listAuditEvents(orgId, 500)).map((e) => ({
+        employeeId: e.employeeId,
+        action: e.action,
+        createdAt: e.createdAt,
+        metadata: e.metadata ?? null,
+      }));
 
   return (
     <AppShell
@@ -95,6 +106,11 @@ export default async function DashboardPage() {
       </section>
 
       <DashboardActivity
+        mode={demoMode ? "demo" : "production"}
+        auditEvents={auditEvents}
+        confirmUsed={confirmUsage.used}
+        confirmQuota={confirmUsage.quota}
+        planKey={entitlements.plan}
         employees={employees.map((e) => ({
           id: e?.id ?? "unknown",
           displayName: e?.displayName ?? "未設定",

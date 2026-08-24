@@ -47,43 +47,45 @@ export default async function EmployeesPage() {
           <ul className="md:hidden space-y-3">
             {employees.map((e) => (
               <li key={e.id} className="surface p-4 space-y-3 min-w-0">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <Link
-                      href={`/app/employees/${e.id}`}
-                      className="font-medium text-sm underline-offset-2 hover:underline break-words"
-                    >
-                      {e.displayName}
-                    </Link>
-                    <div className="text-xs muted mt-1 break-words">
-                      {e.roleLabel}
+                <Link
+                  href={`/app/employees/${e.id}`}
+                  className="block min-w-0 -m-1 p-1 rounded-md hover:bg-[var(--bg-soft)]"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="font-medium text-sm break-words">
+                        {e.displayName}
+                      </div>
+                      <div className="text-xs muted mt-1 break-words">
+                        {e.roleLabel}
+                      </div>
                     </div>
+                    <span
+                      className={`chip shrink-0 ${
+                        e.status === "active" ? "chip-ok" : "chip-warn"
+                      }`}
+                    >
+                      {e.status === "active"
+                        ? "稼働中"
+                        : e.status === "suspended"
+                          ? "一時停止"
+                          : e.status === "draft"
+                            ? "下書き"
+                            : e.status}
+                    </span>
                   </div>
-                  <span
-                    className={`chip shrink-0 ${
-                      e.status === "active" ? "chip-ok" : "chip-warn"
-                    }`}
-                  >
-                    {e.status === "active"
-                      ? "稼働中"
-                      : e.status === "suspended"
-                        ? "一時停止"
-                        : e.status === "draft"
-                          ? "下書き"
-                          : e.status}
-                  </span>
-                </div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="chip text-[11px] break-words max-w-full">
-                    {APPROVAL_POLICY_LABELS[e.approvalPolicy]}
-                  </span>
-                  <Link
-                    href={`/app/employees/${e.id}/actions`}
-                    className="text-xs muted underline underline-offset-2 min-h-[44px] inline-flex items-center"
-                  >
-                    アクションログ
-                  </Link>
-                </div>
+                  <div className="mt-3">
+                    <span className="chip text-[11px] break-words max-w-full">
+                      {APPROVAL_POLICY_LABELS[e.approvalPolicy]}
+                    </span>
+                  </div>
+                </Link>
+                <Link
+                  href={`/app/employees/${e.id}/actions`}
+                  className="text-xs muted underline underline-offset-2 min-h-[44px] inline-flex items-center"
+                >
+                  アクションログ
+                </Link>
               </li>
             ))}
           </ul>
@@ -103,22 +105,29 @@ export default async function EmployeesPage() {
                 </thead>
                 <tbody>
                   {employees.map((e) => (
-                    <tr key={e.id} className="border-b border-[var(--border-soft)]">
+                    <tr
+                      key={e.id}
+                      className="border-b border-[var(--border-soft)] relative hover:bg-[var(--bg-soft)] group"
+                    >
                       <td className="px-4 py-3">
                         <Link
                           href={`/app/employees/${e.id}`}
-                          className="font-medium underline-offset-2 hover:underline"
-                        >
+                          className="absolute inset-0 z-0"
+                          aria-label={`${e.displayName}の詳細`}
+                        />
+                        <span className="relative z-[1] font-medium group-hover:underline underline-offset-2">
                           {e.displayName}
-                        </Link>
+                        </span>
                       </td>
-                      <td className="px-4 py-3 muted">{e.roleLabel}</td>
-                      <td className="px-4 py-3">
+                      <td className="px-4 py-3 muted relative z-[1] pointer-events-none">
+                        {e.roleLabel}
+                      </td>
+                      <td className="px-4 py-3 relative z-[1] pointer-events-none">
                         <span className="chip text-[11px]">
                           {APPROVAL_POLICY_LABELS[e.approvalPolicy]}
                         </span>
                       </td>
-                      <td className="px-4 py-3">
+                      <td className="px-4 py-3 relative z-[1] pointer-events-none">
                         <span
                           className={`chip ${
                             e.status === "active" ? "chip-ok" : "chip-warn"
@@ -133,7 +142,7 @@ export default async function EmployeesPage() {
                                 : e.status}
                         </span>
                       </td>
-                      <td className="px-4 py-3">
+                      <td className="px-4 py-3 relative z-[1]">
                         <Link
                           href={`/app/employees/${e.id}/actions`}
                           className="text-xs muted underline underline-offset-2"

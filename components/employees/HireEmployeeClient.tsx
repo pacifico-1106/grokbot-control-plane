@@ -14,6 +14,7 @@ import {
 import {
   APPROVAL_POLICY_LABELS,
   SCOPE_LABELS,
+  jobTextImpliesCommerceOrder,
 } from "@/lib/employees/policy-draft";
 import { DEFAULT_SPEND_LIMITS } from "@/lib/spend-gate";
 import type {
@@ -57,6 +58,8 @@ export function HireEmployeeClient() {
   const [browserAllowed, setBrowserAllowed] = useState(false);
   const [allowedAccounts, setAllowedAccounts] = useState<AllowedAccount[]>([]);
   const [oneTimeSecret, setOneTimeSecret] = useState<string | null>(null);
+  const [revealSecret, setRevealSecret] = useState(false);
+  const [orderInferredFromJob, setOrderInferredFromJob] = useState(false);
   const [issuedEmployeeId, setIssuedEmployeeId] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [hirePack, setHirePack] = useState<{
@@ -94,11 +97,25 @@ export function HireEmployeeClient() {
       setDraft(d);
       setDisplayName(d.policy.displayName);
       setRoleLabel(d.policy.roleLabel);
-      setScopes(d.policy.scopes);
+      // Auto-enable commerce:order when job text implies ordering (also enforced in rules).
+      const inferredOrder =
+        jobTextImpliesCommerceOrder(prompt) ||
+        d.policy.scopes.includes("commerce:order") ||
+        d.warnings.includes("commerce_order_requested");
+      const nextScopes = inferredOrder && !d.policy.scopes.includes("commerce:order")
+        ? ([...d.policy.scopes, "commerce:order", "commerce:quote"] as EmployeeScope[])
+        : d.policy.scopes;
+      setOrderInferredFromJob(inferredOrder);
+      const scopesUnique = [...new Set(nextScopes)] as EmployeeScope[];
+      setScopes(scopesUnique);
       setPurposes(d.policy.allowedPurposes.join(", "));
       setApprovalPolicy(d.policy.approvalPolicy);
       setExpiresInDays(d.policy.expiresInDays);
-      setSpend(d.policy.spend ? { ...DEFAULT_SPEND_LIMITS, ...d.policy.spend } : emptySpend());
+      setSpend(
+        scopesUnique.includes("commerce:order")
+          ? { ...DEFAULT_SPEND_LIMITS, ...(d.policy.spend ?? {}) }
+          : emptySpend()
+      );
       setFutureSpendOpen(false);
       const hasBrowser = d.policy.scopes.includes("browser:use");
       setBrowserAllowed(hasBrowser);
@@ -163,6 +180,7 @@ export function HireEmployeeClient() {
       const body = await res.json();
       if (!res.ok) throw new Error(body.error || "issue_failed");
       setOneTimeSecret(body.credential?.oneTimeSecret ?? null);
+      setRevealSecret(false);
       setIssuedEmployeeId(body.employee?.id ?? null);
       setHirePack(
         body.hirePack &&
@@ -313,6 +331,23 @@ export function HireEmployeeClient() {
               ) : null}
             </div>
           )}
+
+
+          {orderInferredFromJob && scopes.includes("commerce:order") ? (
+            <div
+              className="rounded-lg border px-3 py-2.5 text-sm leading-relaxed"
+              style={{
+                borderColor: "color-mix(in oklab, var(--warn) 45%, var(--border))",
+                background: "color-mix(in oklab, var(--warn) 10%, transparent)",
+              }}
+              role="status"
+            >
+              <strong style={{ color: "var(--warn)" }}>発注権限を追加しました</strong>
+              <span className="muted block sm:inline sm:ml-2 text-xs mt-1 sm:mt-0">
+                職務から発注が必要と読み取りました。外すこともできます。
+              </span>
+            </div>
+          ) : null}
 
           <div className="grid md:grid-cols-2 gap-4">
             <label className="block text-sm">
@@ -548,9 +583,21 @@ export function HireEmployeeClient() {
               この接続用の鍵は一度だけ表示されます
             </p>
             <pre className="mt-3 text-xs font-mono break-all whitespace-pre-wrap">
-              {oneTimeSecret}
+              {oneTimeSecret
+                ? revealSecret
+                  ? oneTimeSecret
+                  : "••••••••••••••••••••••••••••••••"
+                : "—"}
             </pre>
             <div className="mt-3 flex flex-wrap gap-2">
+              <button
+                type="button"
+                className="btn btn-ghost text-xs px-3 py-1.5"
+                disabled={!oneTimeSecret}
+                onClick={() => setRevealSecret((v) => !v)}
+              >
+                {revealSecret ? "隠す" : "表示"}
+              </button>
               <button
                 type="button"
                 className="btn btn-primary text-xs px-3 py-1.5"

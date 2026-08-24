@@ -102,6 +102,14 @@ function extractExpiryDays(input: string): number | null {
   return null;
 }
 
+
+/** Job text implies ordering / purchase — auto-enable commerce:order in draft. */
+export function jobTextImpliesCommerceOrder(rawInput: string): boolean {
+  return /(?:発注|注文|購入|購買|調達|決済|買い物|commerce|order|purchase|buy)/i.test(
+    rawInput.trim()
+  );
+}
+
 /**
  * Deterministic Japanese NL → least-privilege policy draft.
  * Pattern adapted from Sealith ai-settings interpret; scopes rewritten for Grok Bot.
@@ -113,7 +121,7 @@ export function buildEmployeePolicyDraft(rawInput: string): EmployeePolicyDraft 
   const wantsSend = /(?:送信|送る|メールを出す|外部送信|send mail)/i.test(input);
   const wantsDraftOnly =
     /(?:下書き|draft)/i.test(input) && !wantsSend;
-  const wantsOrder = /(?:発注|注文|購入|決済|order|purchase|buy)/i.test(input);
+  const wantsOrder = jobTextImpliesCommerceOrder(input);
   const wantsBrowser = /(?:ブラウザ|ウェブ|検索|調べ|browse|research)/i.test(input);
   const wantsWrite = /(?:書込|編集|作成|ファイルを作|write|edit)/i.test(input);
   const wantsCalendarConfirm =
@@ -197,7 +205,9 @@ export function buildEmployeePolicyDraft(rawInput: string): EmployeePolicyDraft 
   }
   if (scopes.includes("commerce:order")) {
     assumptions.push(
-      "発注は予算・承認ステップで上限を設定できます。Draft の「常に人間承認」は初期推奨であり、固定ではありません。"
+      wantsOrder
+        ? "職務文から発注・購入が必要と読み取り、発注権限（commerce:order）を案に含めました。外すこともできます。"
+        : "発注は予算・承認ステップで上限を設定できます。Draft の「常に人間承認」は初期推奨であり、固定ではありません。"
     );
   }
   assumptions.push(

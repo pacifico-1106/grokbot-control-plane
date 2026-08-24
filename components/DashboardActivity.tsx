@@ -14,6 +14,17 @@ import {
   type CostPoint,
   type EmployeeCostRow,
 } from "@/lib/cost-demo";
+import {
+  buildLiveActivity,
+  buildLiveCost,
+  emptyActivity,
+  type DashboardAuditEvent,
+} from "@/lib/dashboard-metrics";
+import {
+  PLAN_CONFIRM_QUOTAS,
+  PLAN_OVERAGE_YEN,
+  type PlanCode,
+} from "@/lib/billing/plans";
 
 const RANGES: { id: ActivityRange; label: string }[] = [
   { id: "day", label: "日次" },
@@ -420,11 +431,23 @@ function Segmented<T extends string>({
 }
 
 const EMPTY_EMPLOYEES: EmployeeInput[] = [];
+const EMPTY_EVENTS: DashboardAuditEvent[] = [];
 
 export function DashboardActivity({
   employees = EMPTY_EMPLOYEES,
+  mode = "production",
+  auditEvents = EMPTY_EVENTS,
+  confirmUsed = 0,
+  confirmQuota,
+  planKey = "business",
 }: {
   employees?: EmployeeInput[];
+  /** production: live audit / empty — never DEMO seed in primary metrics */
+  mode?: "demo" | "production";
+  auditEvents?: DashboardAuditEvent[];
+  confirmUsed?: number;
+  confirmQuota?: number;
+  planKey?: string;
 }) {
   const [range, setRange] = useState<ActivityRange>("week");
   const [tab, setTab] = useState<BoardTab>("activity");
@@ -435,17 +458,58 @@ export function DashboardActivity({
   }, []);
 
   const list = Array.isArray(employees) ? employees : EMPTY_EMPLOYEES;
-  const usingSample = list.length === 0;
+  const events = Array.isArray(auditEvents) ? auditEvents : EMPTY_EVENTS;
+  const isProd = mode !== "demo";
 
-  const activity = useMemo(
-    () => getActivityDemo(range, usingSample ? undefined : list),
-    [range, list, usingSample]
-  );
+  const activity = useMemo(() => {
+    if (!chartsReady) {
+      return emptyActivity(range, list);
+    }
+    if (isProd) {
+      return buildLiveActivity(range, list, events);
+    }
+    // Demo mode: seed charts (labeled サンプル below)
+    return getActivityDemo(range, list.length === 0 ? undefined : list);
+  }, [range, list, events, isProd, chartsReady]);
 
-  const cost = useMemo(
-    () => getCostDemo(range, usingSample ? undefined : list),
-    [range, list, usingSample]
-  );
+  const cost = useMemo(() => {
+    if (!chartsReady) {
+      const pk = (planKey || "business") as PlanCode;
+      const included =
+        confirmQuota ??
+        PLAN_CONFIRM_QUOTAS[pk] ??
+        PLAN_CONFIRM_QUOTAS.business;
+      return {
+        ...buildLiveCost({
+          plan: pk,
+          usedUnits: confirmUsed,
+          employees: list,
+          events: [],
+          range,
+        }),
+        plan: {
+          includedUnits: included,
+          overageYenPerUnit: PLAN_OVERAGE_YEN[pk] ?? PLAN_OVERAGE_YEN.business,
+          planLabel: "読み込み中",
+        },
+      };
+    }
+    if (isProd) {
+      return buildLiveCost({
+        plan: planKey,
+        usedUnits: confirmUsed,
+        employees: list,
+        events,
+        range,
+      });
+    }
+    return getCostDemo(range, list.length === 0 ? undefined : list);
+  }, [range, list, events, isProd, chartsReady, confirmUsed, confirmQuota, planKey]);
+
+  const activityEmpty =
+    isProd &&
+    (Boolean((activity as { empty?: boolean }).empty) ||
+      activity.totals.actions === 0);
 
   const quotaPct = Math.min(
     100,
@@ -464,8 +528,20 @@ export function DashboardActivity({
         <div>
           <h2 className="text-sm font-medium">エージェント活動 · コスト</h2>
           <p className="mt-1 text-xs muted">
-            活動量と枠・従量の推計を社長向けに一覧
+            {isProd
+              ? "監査ログに基づく実データ（未計測は 0）"
+              : "活動量と枠・従量の推計を社長向けに一覧"}
           </p>
+          {isProd ? (
+            <p className="mt-1 text-[11px] faint">本番表示 · サンプル数値は混ぜません</p>
+          ) : (
+            <p className="mt-1">
+              <span className="chip chip-warn text-[10px]">サンプル</span>
+              <span className="text-[11px] faint ml-2">
+                DEMO 推計です。本番では監査の実数または空表示になります。
+              </span>
+            </p>
+          )}
         </div>
         <div className="flex flex-col sm:flex-row flex-wrap gap-2 w-full sm:w-auto">
           <Segmented
@@ -520,18 +596,34 @@ export function DashboardActivity({
             </div>
             <div className="lg:col-span-2">
               <div className="text-xs muted mb-2">AI社員別</div>
-              {usingSample ? (
+              {isProd && activityEmpty ? (
                 <p className="mb-3 text-[11px] faint">
-                  まだ AI社員がいません。下はサンプル表示です。雇うと実データに切り替わります。
+                  まだ計測された活動がありません。Gateway 経由の操作がここに集計されます。
+                </p>
+              ) : null}
+              {!isProd && list.length === 0 ? (
+                <p className="mb-3 text-[11px] faint">
+                  まだ AI社員がいません。下はサンプル表示です。
                 </p>
               ) : null}
               <EmployeeBars rows={activity.employees} />
             </div>
           </div>
 
-          <p className="mt-4 text-[11px] faint">
-            デモデータ（本番は監査イベント集計）
-          </p>
+          {isProd ? (
+            <p className="mt-4 text-[11px] faint">
+              監査イベント集計 · 確定アクション枠は上のカードと突合できます
+            </p>
+          ) : (
+            <details className="mt-4 rounded-lg border border-[var(--border-soft)] px-3 py-2">
+              <summary className="cursor-pointer text-[11px] font-medium">
+                サンプル説明（DEMO）
+              </summary>
+              <p className="mt-2 text-[11px] faint leading-relaxed">
+                上の数値はデモ推計です。本番（Supabase）では監査の実数または 0 表示に切り替わり、サンプルは主表示に出しません。
+              </p>
+            </details>
+          )}
         </>
       ) : (
         <>
@@ -596,7 +688,7 @@ export function DashboardActivity({
               <div className="text-lg font-medium tabular-nums mt-0.5">
                 {formatYen(cost.estimatedOverageYen)}
               </div>
-              <div className="text-[11px] faint mt-1">デモ推計 · 税抜イメージ</div>
+              <div className="text-[11px] faint mt-1">{isProd ? "監査集計 · 税抜イメージ" : "サンプル推計 · 税抜イメージ"}</div>
             </div>
           </div>
 
@@ -620,19 +712,33 @@ export function DashboardActivity({
               )}
             </div>
             <div className="lg:col-span-2">
-              <div className="text-xs muted mb-2">社員別内訳（デモ推計）</div>
-              {usingSample ? (
+              <div className="text-xs muted mb-2">
+                {isProd ? "社員別内訳（監査）" : "社員別内訳（サンプル推計）"}
+              </div>
+              {isProd && (cost as { empty?: boolean }).empty ? (
                 <p className="mb-3 text-[11px] faint">
-                  サンプル社員での推計です。雇うと実AI社員に按分されます。
+                  まだ従量・使用量の記録がありません。枠はプランの仮枠です。
+                </p>
+              ) : null}
+              {!isProd && list.length === 0 ? (
+                <p className="mb-3 text-[11px] faint">
+                  サンプル社員での推計です。
                 </p>
               ) : null}
               <EmployeeCostTable rows={cost.employees} />
             </div>
           </div>
 
-          <p className="mt-4 text-[11px] faint">
-            実コストは Grok Bot / Cursor 課金と突合予定；いまは制御面の推計表示。
-          </p>
+          {isProd ? (
+            <p className="mt-4 text-[11px] faint">
+              使用量は Gateway 確定アクション（課金対象）の監査集計です。枠は仮枠。
+            </p>
+          ) : (
+            <p className="mt-4 text-[11px] faint">
+              <span className="chip chip-warn text-[10px] mr-1">サンプル</span>
+              DEMO 推計です。本番では実メーター／空表示になり、大きなサンプル数値は出しません。
+            </p>
+          )}
         </>
       )}
     </section>

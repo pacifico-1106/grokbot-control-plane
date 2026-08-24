@@ -5,6 +5,7 @@ import { getSessionContext } from "@/lib/auth/session";
 import { entitlementsFromSubscription } from "@/lib/billing/entitlements";
 import { getOrgStripeCustomerId, getSubscription } from "@/lib/data/subscriptions";
 import { describeJpPaymentMethods, TRIAL_DAYS } from "@/lib/stripe";
+import { isStripeConfigured } from "@/lib/mode";
 
 export default async function BillingPage() {
   const session = await getSessionContext();
@@ -58,6 +59,7 @@ export default async function BillingPage() {
           currentPlan={entitlements.plan}
           currentStatus={entitlements.status}
           hasStripeCustomer={Boolean(customerId)}
+          stripeConfigured={isStripeConfigured()}
         />
       </Suspense>
 

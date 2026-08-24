@@ -42,6 +42,8 @@ export function BindingPanel({
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [oneTimeSecret, setOneTimeSecret] = useState<string | null>(null);
+  const [revealSecret, setRevealSecret] = useState(false);
+  const [copiedSecret, setCopiedSecret] = useState(false);
 
   const applyBinding = useCallback((b: EmployeeBinding) => {
     setBinding(b);
@@ -53,6 +55,7 @@ export function BindingPanel({
     setBusy(true);
     setMessage("");
     setOneTimeSecret(null);
+    setRevealSecret(false);
     try {
       const res = await fetch(`/api/employees/${employeeId}/link`, {
         method: "POST",
@@ -103,6 +106,8 @@ export function BindingPanel({
       if (!res.ok) throw new Error(body.message || body.error || "rotate_failed");
       applyBinding(body.binding);
       setOneTimeSecret(body.credential?.oneTimeSecret ?? null);
+      setRevealSecret(false);
+      setCopiedSecret(false);
       setMessage(
         body.credential?.notice ||
           `社員証を出し直しました（世代 ${body.generation}。AI社員番号は変わりません）`
@@ -239,11 +244,32 @@ export function BindingPanel({
       </p>
 
       {oneTimeSecret ? (
-        <div className="rounded-lg border border-[var(--border)] p-3">
+        <div className="rounded-lg border border-[var(--border)] p-3 space-y-2">
           <div className="text-xs muted">一度だけの接続用の鍵（コピーして保管）</div>
-          <code className="mt-1 block break-all text-xs font-mono">
-            {oneTimeSecret}
+          <code className="block break-all text-xs font-mono">
+            {revealSecret ? oneTimeSecret : "••••••••••••••••••••••••••••••••"}
           </code>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              className="btn btn-ghost text-xs px-3 py-1.5"
+              onClick={() => setRevealSecret((v) => !v)}
+            >
+              {revealSecret ? "隠す" : "表示"}
+            </button>
+            <button
+              type="button"
+              className="btn btn-primary text-xs px-3 py-1.5"
+              onClick={() => {
+                void navigator.clipboard.writeText(oneTimeSecret).then(() => {
+                  setCopiedSecret(true);
+                  setTimeout(() => setCopiedSecret(false), 2000);
+                });
+              }}
+            >
+              {copiedSecret ? "コピーしました" : "コピー"}
+            </button>
+          </div>
         </div>
       ) : null}
 
