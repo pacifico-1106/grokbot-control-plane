@@ -177,6 +177,15 @@ export interface Employee {
   spend?: SpendLimits | null;
   /** External accounts engraved on the employee badge (shared-PC safe IDs). */
   allowedAccounts?: AllowedAccount[];
+  /**
+   * Optional machine-readable notify target (future AgentMail / bot inbox).
+   * On approve/reject, Staffpass may POST/email status here in addition to org Resend.
+   */
+  approvalNotifyEmail?: string | null;
+  /** Optional webhook; best-effort POST JSON on resolve (never fails the resolve). */
+  callbackUrl?: string | null;
+  /** Default Routine text forcing status-poll wait (hire-time / one-time display). */
+  approvalRoutineText?: string | null;
   credentialId: string | null;
   createdAt: string;
 }
@@ -200,10 +209,25 @@ export interface ApprovalRequest {
   orgId: string;
   employeeId: string;
   credentialId: string;
+  /** Short ticket title for UI / email subject. */
+  title: string;
   purpose: string;
+  /** Rich multi-line summary (tool / purpose / job / risk / amount). */
   summary: string;
   risk: "low" | "medium" | "high";
   status: ApprovalStatus;
+  /** Gateway tool id that triggered the ticket (e.g. mail.send). */
+  tool?: string | null;
+  /** Correlation job id from invoke. */
+  jobId?: string | null;
+  /**
+   * Opaque token for signed status poll URL.
+   * Present on create so Bot can persist; status API requires id+token.
+   * Demo may keep plaintext; prod may store hash-only (token returned once).
+   */
+  statusToken: string;
+  /** Relative poll path, e.g. /api/approvals/status?id=…&token=… */
+  pollPath: string;
   createdAt: string;
   resolvedAt: string | null;
   resolvedBy: string | null;

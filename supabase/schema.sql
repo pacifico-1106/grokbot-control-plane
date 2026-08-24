@@ -61,6 +61,9 @@ create table if not exists employees (
     check (approval_policy in ('auto', 'always_human', 'risk_based')),
   spend jsonb,
   allowed_accounts jsonb not null default '[]'::jsonb,
+  approval_notify_email text,
+  callback_url text,
+  approval_routine_text text,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -99,6 +102,11 @@ create table if not exists approval_requests (
   credential_id uuid not null references credentials(id),
   purpose text not null,
   summary text not null,
+  title text,
+  tool text,
+  job_id text,
+  status_token text,
+  poll_path text,
   risk text not null check (risk in ('low', 'medium', 'high')),
   status text not null default 'pending'
     check (status in ('pending', 'approved', 'rejected', 'expired')),
@@ -110,6 +118,9 @@ create table if not exists approval_requests (
 
 create index if not exists approval_requests_org_status_idx
   on approval_requests (org_id, status, created_at desc);
+
+create index if not exists approval_requests_status_token_idx
+  on approval_requests (id, status_token);
 
 -- ---------------------------------------------------------------------------
 -- Audit timeline

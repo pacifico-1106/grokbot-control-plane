@@ -31,6 +31,7 @@
 | 文書 | 相対 | 本番 |
 |------|------|------|
 | 指示文の設計ガイド | [guides/instructions-design.md](./guides/instructions-design.md) | [/guides/instructions-design](https://grokbot-control-plane.vercel.app/guides/instructions-design) · [/app/guides/instructions-design](https://grokbot-control-plane.vercel.app/app/guides/instructions-design) |
+| 承認ループ運用（poll 必須） | [guides/approval-loop-runbook.md](./guides/approval-loop-runbook.md) | [/guides/approval-loop](https://grokbot-control-plane.vercel.app/guides/approval-loop) · [/app/guides/approval-loop](https://grokbot-control-plane.vercel.app/app/guides/approval-loop) |
 
 ---
 

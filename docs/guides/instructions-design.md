@@ -44,7 +44,8 @@ Web・メール本文・ツール戻り値・添付は **参照情報** にす�
 
 下書き・調査・提案は進めてよいことが多い。  
 **送信・支払い・削除・権限変更**など確定・不可逆は、必ず人の確認へ。  
-Staffpass では `confirm` / `send` / `order` 系は **always_human**（Routines / Teach 経由でも同じ）。実行は Gateway 経由のみ。
+Staffpass では `confirm` / `send` / `order` 系は **always_human**（Routines / Teach 経由でも同じ）。実行は Gateway 経由のみ。  
+`needs_approval` 時は **署名付き status poll URL** を承認／却下まで待つ（Partner webhook が来るまで poll が正本。詳細は [approval-loop-runbook.md](./approval-loop-runbook.md)）。
 
 ### 5. 長期メモリ — よいこと／禁止
 

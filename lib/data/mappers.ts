@@ -31,21 +31,67 @@ export function mapEmployeeRow(row: Record<string, unknown>): Employee {
     approvalPolicy: (row.approval_policy as ApprovalPolicy) || "risk_based",
     spend: (row.spend as SpendLimits | null) ?? null,
     allowedAccounts: (row.allowed_accounts as AllowedAccount[]) || [],
+    approvalNotifyEmail:
+      row.approval_notify_email != null && String(row.approval_notify_email).trim()
+        ? String(row.approval_notify_email).trim()
+        : null,
+    callbackUrl:
+      row.callback_url != null && String(row.callback_url).trim()
+        ? String(row.callback_url).trim()
+        : null,
+    approvalRoutineText:
+      row.approval_routine_text != null && String(row.approval_routine_text).trim()
+        ? String(row.approval_routine_text)
+        : null,
     credentialId: row.credential_id != null ? String(row.credential_id) : null,
     createdAt: String(row.created_at ?? new Date().toISOString()),
   };
 }
 
 export function mapApprovalRow(row: Record<string, unknown>): ApprovalRequest {
+  const meta =
+    row.metadata && typeof row.metadata === "object"
+      ? (row.metadata as Record<string, unknown>)
+      : {};
+  const id = String(row.id);
+  const statusToken = String(
+    row.status_token ?? meta.statusToken ?? meta.status_token ?? ""
+  );
+  const pollPath = String(
+    row.poll_path ??
+      meta.pollPath ??
+      meta.poll_path ??
+      (statusToken ? `/api/approvals/status?id=${encodeURIComponent(id)}&token=${encodeURIComponent(statusToken)}` : "")
+  );
+  const title = String(
+    row.title ?? meta.title ?? row.summary ?? "承認依頼"
+  );
   return {
-    id: String(row.id),
+    id,
     orgId: String(row.org_id),
     employeeId: String(row.employee_id),
     credentialId: String(row.credential_id),
+    title,
     purpose: String(row.purpose ?? ""),
     summary: String(row.summary ?? ""),
     risk: (row.risk as ApprovalRequest["risk"]) || "medium",
     status: (row.status as ApprovalRequest["status"]) || "pending",
+    tool:
+      row.tool != null
+        ? String(row.tool)
+        : meta.tool != null
+          ? String(meta.tool)
+          : null,
+    jobId:
+      row.job_id != null
+        ? String(row.job_id)
+        : meta.jobId != null
+          ? String(meta.jobId)
+          : meta.job_id != null
+            ? String(meta.job_id)
+            : null,
+    statusToken,
+    pollPath,
     createdAt: String(row.created_at ?? new Date().toISOString()),
     resolvedAt: row.resolved_at != null ? String(row.resolved_at) : null,
     resolvedBy: row.resolved_by != null ? String(row.resolved_by) : null,

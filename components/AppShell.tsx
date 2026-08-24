@@ -92,6 +92,17 @@ export function AppShell({
           >
             Instructionsの組み立て方
           </Link>
+          <Link
+            href="/app/guides/approval-loop"
+            className={`break-words min-h-[44px] flex items-center ${
+              pathname === "/app/guides/approval-loop" ||
+              pathname.startsWith("/app/guides/approval-loop/")
+                ? "text-[var(--text)]"
+                : "hover:text-[var(--text)]"
+            }`}
+          >
+            承認ループ運用
+          </Link>
           <div className="break-words">当社で用意 / 持ち込み 両対応</div>
           <div>Sealith by TOKYO307</div>
         </div>
@@ -161,6 +172,18 @@ export function AppShell({
               onClick={() => setMenuOpen(false)}
             >
               Instructionsの組み立て方
+            </Link>
+            <Link
+              href="/app/guides/approval-loop"
+              className={`break-words min-h-[44px] flex items-center ${
+                pathname === "/app/guides/approval-loop" ||
+                pathname.startsWith("/app/guides/approval-loop/")
+                  ? "text-[var(--text)]"
+                  : "hover:text-[var(--text)]"
+              }`}
+              onClick={() => setMenuOpen(false)}
+            >
+              承認ループ運用
             </Link>
             <div className="break-words">当社で用意 / 持ち込み 両対応</div>
             <div>Sealith by TOKYO307</div>

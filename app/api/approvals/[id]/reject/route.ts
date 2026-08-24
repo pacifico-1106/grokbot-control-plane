@@ -1,6 +1,11 @@
 import { NextResponse } from "next/server";
+import { runApprovalResolveSideEffects } from "@/lib/approvals/resolve-side-effects";
 import { getCurrentOrgId } from "@/lib/auth/session";
-import { resolveApproval, runtimeModeLabel } from "@/lib/data";
+import {
+  getEmployee,
+  resolveApproval,
+  runtimeModeLabel,
+} from "@/lib/data";
 import { requireCapability } from "@/lib/team/demo-actor";
 
 export const runtime = "nodejs";
@@ -18,9 +23,19 @@ export async function POST(
   if (!updated) {
     return NextResponse.json({ error: "not_found" }, { status: 404 });
   }
+
+  const employee = await getEmployee(updated.employeeId, orgId || updated.orgId);
+  const sideEffects = await runApprovalResolveSideEffects({
+    approval: updated,
+    decision: "rejected",
+    actorEmail: gate.actor.email,
+    employee,
+  });
+
   return NextResponse.json({
     ok: true,
     approval: updated,
+    sideEffects,
     demo: runtimeModeLabel() === "demo",
     mode: runtimeModeLabel(),
     actorId: gate.actor.id,

@@ -1,4 +1,5 @@
 import { ensureBindingRow, seedDemoBindings } from "./bindings";
+import { buildPollPath, generateStatusToken } from "./approvals/tokens";
 import type {
   ApprovalRequest,
   AuditEvent,
@@ -73,10 +74,21 @@ export const DEMO_APPROVALS: ApprovalRequest[] = [
     orgId: DEMO_ORG.id,
     employeeId: "emp_sales",
     credentialId: "cred_sales",
-    purpose: "commerce.quote",
-    summary: "顧客A向け見積メール下書きの外部送信",
-    risk: "medium",
+    title: "承認依頼: mail.send（sales.outreach）",
+    purpose: "sales.outreach",
+    summary:
+      "営業AI社員 が「mail.send」の実行承認を求めています。\n" +
+      "目的: sales.outreach\n" +
+      "ジョブID: job_demo_mail_outreach_1\n" +
+      "リスク: high\n" +
+      "内容: 顧客A向け見積フォローメールの外部送信（下書き済み）。\n" +
+      "Staffpass 承認後にのみ confirm/send/order を完了できます。未承認のまま確定しないでください。",
+    risk: "high",
     status: "pending",
+    tool: "mail.send",
+    jobId: "job_demo_mail_outreach_1",
+    statusToken: "st_demo_apr1_status_token_aaaaaaaa",
+    pollPath: buildPollPath("apr_1", "st_demo_apr1_status_token_aaaaaaaa"),
     createdAt: new Date(Date.now() - 3600000).toISOString(),
     resolvedAt: null,
     resolvedBy: null,
@@ -86,10 +98,22 @@ export const DEMO_APPROVALS: ApprovalRequest[] = [
     orgId: DEMO_ORG.id,
     employeeId: "emp_ops",
     credentialId: "cred_ops",
-    purpose: "commerce.order",
-    summary: "デモ用資材 1件の購入実行",
+    title: "承認依頼: commerce.order（ops.admin）",
+    purpose: "ops.admin",
+    summary:
+      "事務AI社員 が「commerce.order」の実行承認を求めています。\n" +
+      "目的: ops.admin\n" +
+      "ジョブID: job_demo_order_supplies_1\n" +
+      "リスク: high\n" +
+      "金額: ¥4,980\n" +
+      "内容: デモ用オフィス資材 1件の購入実行（初回発注・人間承認必須）。\n" +
+      "Staffpass 承認後にのみ confirm/send/order を完了できます。未承認のまま確定しないでください。",
     risk: "high",
     status: "pending",
+    tool: "commerce.order",
+    jobId: "job_demo_order_supplies_1",
+    statusToken: "st_demo_apr2_status_token_bbbbbbbb",
+    pollPath: buildPollPath("apr_2", "st_demo_apr2_status_token_bbbbbbbb"),
     createdAt: new Date(Date.now() - 7200000).toISOString(),
     resolvedAt: null,
     resolvedBy: null,
@@ -367,11 +391,72 @@ export function resolveRuntimeApproval(
     credentialId: next.credentialId,
     action: "approval.resolved",
     purpose: next.purpose,
-    summary: status === "approved" ? `承認: ${next.summary}` : `却下: ${next.summary}`,
-    metadata: { decision: status, resolvedBy },
+    summary: status === "approved" ? `承認: ${next.title || next.summary}` : `却下: ${next.title || next.summary}`,
+    metadata: {
+      decision: status,
+      resolvedBy,
+      tool: next.tool ?? null,
+      jobId: next.jobId ?? null,
+    },
     createdAt: new Date().toISOString(),
   });
   return next;
+}
+
+export type CreateRuntimeApprovalInput = {
+  employeeId: string;
+  credentialId: string;
+  title: string;
+  purpose: string;
+  summary: string;
+  risk: ApprovalRequest["risk"];
+  tool?: string | null;
+  jobId?: string | null;
+  statusToken?: string;
+};
+
+export function pushRuntimeApproval(
+  input: CreateRuntimeApprovalInput
+): ApprovalRequest {
+  const id = `apr_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+  const statusToken = input.statusToken || generateStatusToken();
+  const row: ApprovalRequest = {
+    id,
+    orgId: DEMO_ORG.id,
+    employeeId: input.employeeId,
+    credentialId: input.credentialId,
+    title: input.title,
+    purpose: input.purpose,
+    summary: input.summary,
+    risk: input.risk,
+    status: "pending",
+    tool: input.tool ?? null,
+    jobId: input.jobId ?? null,
+    statusToken,
+    pollPath: buildPollPath(id, statusToken),
+    createdAt: new Date().toISOString(),
+    resolvedAt: null,
+    resolvedBy: null,
+  };
+  runtimeApprovals.unshift(row);
+  runtimeAudit.unshift({
+    id: `aud_${Date.now()}`,
+    orgId: DEMO_ORG.id,
+    employeeId: row.employeeId,
+    credentialId: row.credentialId,
+    action: "approval.requested",
+    purpose: row.purpose,
+    summary: `承認待ち: ${row.title}`,
+    metadata: {
+      approvalId: row.id,
+      tool: row.tool,
+      jobId: row.jobId,
+      risk: row.risk,
+      pollPath: row.pollPath,
+    },
+    createdAt: new Date().toISOString(),
+  });
+  return row;
 }
 
 

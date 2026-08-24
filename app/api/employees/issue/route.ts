@@ -4,6 +4,10 @@ import { getCurrentOrgId } from "@/lib/auth/session";
 import { assertBillingAllows } from "@/lib/billing/entitlements";
 import { issueEmployee, runtimeModeLabel } from "@/lib/data";
 import { normalizeAllowedAccounts } from "@/lib/employees/allowed-accounts";
+import {
+  buildDefaultApprovalRoutine,
+  buildHireInstructionsSnippet,
+} from "@/lib/employees/approval-loop-copy";
 import { normalizeSpendLimits } from "@/lib/spend-gate";
 import { requireCapability } from "@/lib/team/demo-actor";
 import type { AllowedAccount, ApprovalPolicy, EmployeeScope, SpendLimits } from "@/lib/types";
@@ -39,6 +43,8 @@ export async function POST(req: Request) {
     expiresInDays?: number;
     spend?: Partial<SpendLimits> | null;
     allowedAccounts?: AllowedAccount[] | null;
+    approvalNotifyEmail?: string | null;
+    callbackUrl?: string | null;
   };
 
   const displayName = (body.displayName || "").trim();
@@ -67,6 +73,10 @@ export async function POST(req: Request) {
   if (!billingGate.ok) return billingGate.response;
 
   try {
+    const approvalRoutineText = buildDefaultApprovalRoutine({
+      displayName,
+    });
+
     const result = await issueEmployee({
       orgId,
       displayName,
@@ -77,17 +87,33 @@ export async function POST(req: Request) {
       approvalPolicy: body.approvalPolicy || "risk_based",
       spend,
       allowedAccounts,
+      approvalNotifyEmail: body.approvalNotifyEmail?.trim() || null,
+      callbackUrl: body.callbackUrl?.trim() || null,
+      approvalRoutineText,
       secretHash: secret.hash,
       secretPrefix: secret.prefix,
       expiresAt,
       auditSummary: `${displayName} の社員証を発行`,
     });
 
+    const instructionsSnippet = buildHireInstructionsSnippet({
+      displayName,
+      roleLabel,
+      employeeId: result.employee.id,
+    });
+    const routineText = buildDefaultApprovalRoutine({
+      displayName,
+      employeeId: result.employee.id,
+    });
+
     return NextResponse.json({
       ok: true,
       demo: result.demo,
       mode: runtimeModeLabel(),
-      employee: result.employee,
+      employee: {
+        ...result.employee,
+        approvalRoutineText: routineText,
+      },
       credential: {
         id: result.credentialId,
         prefix: secret.prefix,
@@ -103,8 +129,14 @@ export async function POST(req: Request) {
       },
       binding: result.binding,
       generation: result.generation,
+      hirePack: {
+        instructionsSnippet,
+        routineText,
+        noticeJa:
+          "needs_approval 時は作業を止め、署名付き status poll URL を承認/却下まで待つ。Partner webhook が来るまで poll が必須です。",
+      },
       notice:
-        "この秘密値は一度だけ表示されます。Grok Bot 側の連携設定に貼り付け、安全に保管してください。employeeId は生涯不変です。",
+        "この秘密値は一度だけ表示されます。Grok Bot 側の連携設定に貼り付け、安全に保管してください。employeeId は生涯不変です。Instructions / Routine の承認待ちルールも必ず貼ってください。",
       actorId: gate.actor.id,
     });
   } catch (e) {

@@ -1,7 +1,14 @@
 import { NextResponse } from "next/server";
+import {
+  buildApprovalTitle,
+  buildRichApprovalSummary,
+  inferRiskForTool,
+} from "@/lib/approvals/summary";
+import { sendApprovalNeededEmail } from "@/lib/email";
 import { getCurrentOrgId } from "@/lib/auth/session";
 import {
   assertExecutable,
+  createApproval,
   getApprovalById,
   getBinding,
   getEmployee,
@@ -31,6 +38,107 @@ export const runtime = "nodejs";
  * - browser.use: allowedAccounts missing/mismatch → fail-closed (C5)
  * - AgentMail tools are reserved (P0.5) — no live send
  */
+
+async function createNeedsApprovalResponse(opts: {
+  employeeId: string;
+  orgId: string;
+  credentialId: string | null;
+  employeeDisplayName: string;
+  tool: string;
+  purpose: string;
+  jobId: string;
+  risk?: "low" | "medium" | "high";
+  amountJpy?: number | null;
+  message: string;
+  extra?: Record<string, unknown>;
+  httpStatus?: number;
+}) {
+  const risk = opts.risk || inferRiskForTool(opts.tool);
+  const title = buildApprovalTitle(opts.tool, opts.purpose);
+  const summary = buildRichApprovalSummary({
+    tool: opts.tool,
+    purpose: opts.purpose,
+    jobId: opts.jobId,
+    employeeDisplayName: opts.employeeDisplayName,
+    amountJpy: opts.amountJpy,
+    risk,
+  });
+
+  let approvalId: string | null = null;
+  let statusToken: string | null = null;
+  let pollUrl: string | null = null;
+  let pollPath: string | null = null;
+
+  try {
+    const created = await createApproval({
+      orgId: opts.orgId,
+      employeeId: opts.employeeId,
+      credentialId: opts.credentialId || opts.employeeId,
+      title,
+      purpose: opts.purpose,
+      summary,
+      risk,
+      tool: opts.tool,
+      jobId: opts.jobId,
+    });
+    approvalId = created.approval.id;
+    statusToken = created.statusToken;
+    pollUrl = created.pollUrl;
+    pollPath = created.approval.pollPath;
+  } catch (e) {
+    // Still return needs_approval so Bot stops; ticket create failure is surfaced.
+    const errMsg = e instanceof Error ? e.message : "approval_create_failed";
+    return NextResponse.json(
+      {
+        ok: false,
+        code: "needs_approval",
+        error: "needs_approval",
+        message: opts.message,
+        needs_approval: true,
+        approvalCreateError: errMsg,
+        employeeId: opts.employeeId,
+        tool: opts.tool,
+        purpose: opts.purpose,
+        jobId: opts.jobId,
+        summary,
+        title,
+        ...opts.extra,
+      },
+      { status: opts.httpStatus ?? 402 }
+    );
+  }
+
+  // Best-effort human notify (Resend stub in DEMO).
+  const notifyTo =
+    process.env.BILLING_NOTIFY_EMAIL ||
+    process.env.APPROVAL_NOTIFY_EMAIL ||
+    "owner@example.com";
+  void sendApprovalNeededEmail(notifyTo, summary, risk).catch(() => null);
+
+  return NextResponse.json(
+    {
+      ok: false,
+      code: "needs_approval",
+      error: "needs_approval",
+      message: opts.message,
+      needs_approval: true,
+      approvalId,
+      statusToken,
+      pollUrl,
+      pollPath,
+      title,
+      summary,
+      risk,
+      employeeId: opts.employeeId,
+      tool: opts.tool,
+      purpose: opts.purpose,
+      jobId: opts.jobId,
+      ...opts.extra,
+    },
+    { status: opts.httpStatus ?? 402 }
+  );
+}
+
 export async function POST(req: Request) {
   const body = (await req.json().catch(() => ({}))) as GatewayInvokeRequest;
   const headerId = req.headers.get("x-employee-id") || undefined;
@@ -295,38 +403,52 @@ export async function POST(req: Request) {
         spentTodayJpy: body.spentTodayJpy,
         spentThisMonthJpy: body.spentThisMonthJpy,
       });
-      const status = spend.decision === "deny" ? 403 : 402;
-      return NextResponse.json(
-        {
-          ok: false,
-          code: spend.decision === "deny" ? "deny" : "needs_approval",
-          error: spend.reason,
-          message: spend.message,
-          needs_approval: spend.decision !== "deny",
-          spend,
-          employeeId,
-          tool,
-          purpose,
-          jobId,
-        },
-        { status }
-      );
-    }
-
-    return NextResponse.json(
-      {
-        ok: false,
-        code: "needs_approval",
-        error: "needs_approval",
-        message:
-          tool === "browser.use"
-            ? `${tool} requires human approval (always_human). allowedAccounts checked; live browser identity remains partial.`
-            : `${tool} requires human approval (always_human default for confirm/send/order)`,
-        needs_approval: true,
+      if (spend.decision === "deny") {
+        return NextResponse.json(
+          {
+            ok: false,
+            code: "deny",
+            error: spend.reason,
+            message: spend.message,
+            needs_approval: false,
+            spend,
+            employeeId,
+            tool,
+            purpose,
+            jobId,
+          },
+          { status: 403 }
+        );
+      }
+      return createNeedsApprovalResponse({
         employeeId,
+        orgId: orgId || employee.orgId,
+        credentialId: employee.credentialId,
+        employeeDisplayName: employee.displayName,
         tool,
         purpose,
         jobId,
+        risk: "high",
+        amountJpy: Number.isFinite(amountJpy) ? amountJpy : null,
+        message: spend.message,
+        extra: { spend, toolKind: toolDef.kind, approvalPolicy: employee.approvalPolicy },
+      });
+    }
+
+    return createNeedsApprovalResponse({
+      employeeId,
+      orgId: orgId || employee.orgId,
+      credentialId: employee.credentialId,
+      employeeDisplayName: employee.displayName,
+      tool,
+      purpose,
+      jobId,
+      risk: inferRiskForTool(tool),
+      message:
+        tool === "browser.use"
+          ? `${tool} requires human approval (always_human). allowedAccounts checked; live browser identity remains partial.`
+          : `${tool} requires human approval (always_human default for confirm/send/order)`,
+      extra: {
         toolKind: toolDef.kind,
         approvalPolicy: employee.approvalPolicy,
         ...(browserIdentityMeta
@@ -338,8 +460,7 @@ export async function POST(req: Request) {
             }
           : {}),
       },
-      { status: 402 }
-    );
+    });
   }
 
   // risk_based employee + mayAuto tools: allow in stub.

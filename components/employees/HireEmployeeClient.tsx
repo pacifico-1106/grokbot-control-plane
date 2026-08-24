@@ -59,6 +59,14 @@ export function HireEmployeeClient() {
   const [oneTimeSecret, setOneTimeSecret] = useState<string | null>(null);
   const [issuedEmployeeId, setIssuedEmployeeId] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [hirePack, setHirePack] = useState<{
+    instructionsSnippet: string;
+    routineText: string;
+    noticeJa?: string;
+  } | null>(null);
+  const [copiedPack, setCopiedPack] = useState<"instructions" | "routine" | null>(
+    null
+  );
 
   const purposeList = useMemo(
     () =>
@@ -156,6 +164,20 @@ export function HireEmployeeClient() {
       if (!res.ok) throw new Error(body.error || "issue_failed");
       setOneTimeSecret(body.credential?.oneTimeSecret ?? null);
       setIssuedEmployeeId(body.employee?.id ?? null);
+      setHirePack(
+        body.hirePack &&
+          typeof body.hirePack.instructionsSnippet === "string" &&
+          typeof body.hirePack.routineText === "string"
+          ? {
+              instructionsSnippet: body.hirePack.instructionsSnippet,
+              routineText: body.hirePack.routineText,
+              noticeJa:
+                typeof body.hirePack.noticeJa === "string"
+                  ? body.hirePack.noticeJa
+                  : undefined,
+            }
+          : null
+      );
       setStep("issued");
     } catch (e) {
       setError(e instanceof Error ? e.message : "issue_failed");
@@ -169,6 +191,17 @@ export function HireEmployeeClient() {
     await navigator.clipboard.writeText(oneTimeSecret);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
+  }
+
+  async function copyPack(kind: "instructions" | "routine") {
+    if (!hirePack) return;
+    const text =
+      kind === "instructions"
+        ? hirePack.instructionsSnippet
+        : hirePack.routineText;
+    await navigator.clipboard.writeText(text);
+    setCopiedPack(kind);
+    setTimeout(() => setCopiedPack(null), 2000);
   }
 
   function patchSpend(partial: Partial<SpendLimits>) {
@@ -533,6 +566,51 @@ export function HireEmployeeClient() {
               </Link>
             </div>
           </div>
+          {hirePack ? (
+            <div className="rounded-lg border border-[var(--border)] bg-[var(--bg-soft)] p-4 space-y-3">
+              <h3 className="text-sm font-medium">Instructions / Routine（必須）</h3>
+              <p className="text-xs muted leading-relaxed">
+                {hirePack.noticeJa ||
+                  "needs_approval 時は停止し、署名付き status poll を承認結果まで待ってください。Partner webhook が来るまで poll が正本です。"}
+              </p>
+              <div>
+                <div className="flex flex-wrap items-center justify-between gap-2 mb-1">
+                  <span className="text-xs muted">Base 承認待ちルール（Instructions）</span>
+                  <button
+                    type="button"
+                    className="btn btn-ghost text-xs px-2 py-1 min-h-[40px]"
+                    onClick={() => void copyPack("instructions")}
+                  >
+                    {copiedPack === "instructions" ? "コピー済み" : "コピー"}
+                  </button>
+                </div>
+                <pre className="text-[11px] font-mono whitespace-pre-wrap break-words max-h-48 overflow-auto rounded-lg border border-[var(--border-soft)] bg-[var(--bg)] p-3">
+                  {hirePack.instructionsSnippet}
+                </pre>
+              </div>
+              <div>
+                <div className="flex flex-wrap items-center justify-between gap-2 mb-1">
+                  <span className="text-xs muted">Routine テンプレ（Teach / Routines）</span>
+                  <button
+                    type="button"
+                    className="btn btn-ghost text-xs px-2 py-1 min-h-[40px]"
+                    onClick={() => void copyPack("routine")}
+                  >
+                    {copiedPack === "routine" ? "コピー済み" : "コピー"}
+                  </button>
+                </div>
+                <pre className="text-[11px] font-mono whitespace-pre-wrap break-words max-h-48 overflow-auto rounded-lg border border-[var(--border-soft)] bg-[var(--bg)] p-3">
+                  {hirePack.routineText}
+                </pre>
+              </div>
+              <Link
+                href="/app/guides/approval-loop"
+                className="text-xs underline underline-offset-2"
+              >
+                承認ループ運用ガイド
+              </Link>
+            </div>
+          ) : null}
           <div className="flex flex-wrap gap-2">
             <Link href="/app/employees" className="btn btn-ghost text-sm">
               AI社員一覧へ
@@ -552,6 +630,7 @@ export function HireEmployeeClient() {
                 setStep("describe");
                 setDraft(null);
                 setOneTimeSecret(null);
+                setHirePack(null);
                 setSpend(emptySpend());
                 setBrowserAllowed(false);
                 setAllowedAccounts([]);

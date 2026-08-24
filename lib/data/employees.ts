@@ -63,6 +63,9 @@ export type IssueEmployeeInput = {
   approvalPolicy: Employee["approvalPolicy"];
   spend: Employee["spend"];
   allowedAccounts: Employee["allowedAccounts"];
+  approvalNotifyEmail?: string | null;
+  callbackUrl?: string | null;
+  approvalRoutineText?: string | null;
   secretHash: string;
   secretPrefix: string;
   expiresAt: string | null;
@@ -100,6 +103,9 @@ export async function issueEmployee(
       approvalPolicy: input.approvalPolicy,
       spend: input.spend,
       allowedAccounts: input.allowedAccounts ?? [],
+      approvalNotifyEmail: input.approvalNotifyEmail ?? null,
+      callbackUrl: input.callbackUrl ?? null,
+      approvalRoutineText: input.approvalRoutineText ?? null,
       credentialId,
       createdAt: new Date().toISOString(),
     };
@@ -131,6 +137,9 @@ export async function issueEmployee(
       approval_policy: input.approvalPolicy,
       spend: input.spend ?? null,
       allowed_accounts: input.allowedAccounts ?? [],
+      approval_notify_email: input.approvalNotifyEmail ?? null,
+      callback_url: input.callbackUrl ?? null,
+      approval_routine_text: input.approvalRoutineText ?? null,
     })
     .select("*")
     .single();

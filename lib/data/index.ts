@@ -13,7 +13,15 @@ export {
   type IssueEmployeeInput,
   type IssueEmployeeResult,
 } from "./employees";
-export { listApprovals, getApprovalById, resolveApproval } from "./approvals";
+export {
+  listApprovals,
+  getApprovalById,
+  getApprovalStatusByToken,
+  createApproval,
+  resolveApproval,
+  type CreateApprovalInput,
+  type CreateApprovalResult,
+} from "./approvals";
 export { listAuditEvents, appendAuditEvent } from "./audit";
 export {
   listMembers,

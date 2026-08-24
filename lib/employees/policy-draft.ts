@@ -200,6 +200,9 @@ export function buildEmployeePolicyDraft(rawInput: string): EmployeePolicyDraft 
       "発注は予算・承認ステップで上限を設定できます。Draft の「常に人間承認」は初期推奨であり、固定ではありません。"
     );
   }
+  assumptions.push(
+    "needs_approval 時は署名付き status poll URL を承認/却下まで待つ（Partner webhook 実装までは poll 必須）。発行後の Instructions / Routine に貼ってください。"
+  );
   if (allowedAccounts.length) {
     assumptions.push(
       "外部アカウントの候補を職務文から推測しました。実際に使ってよいIDは「予算・承認」ステップで刻んでください。"

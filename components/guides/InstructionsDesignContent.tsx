@@ -19,7 +19,7 @@ const BASE_RULES = [
   {
     n: "4",
     title: "進めてよい／人が必要",
-    body: "下書き・調査・提案は進めてよいことが多い。送信・支払い・削除・権限変更は必ず人の確認へ。confirm / send / order は always_human（Routines / Teach 経由でも同じ）。実行は Gateway 経由のみ。",
+    body: "下書き・調査・提案は進めてよいことが多い。送信・支払い・削除・権限変更は必ず人の確認へ。confirm / send / order は always_human。needs_approval 時は署名付き status poll を承認結果まで待つ（Partner webhook 実装までは必須）。実行は Gateway 経由のみ。",
   },
   {
     n: "5",
