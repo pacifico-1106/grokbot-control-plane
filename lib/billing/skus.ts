@@ -2,7 +2,7 @@
  * Additional Ando / Kimura SKUs beyond recurring plans (P0.5+).
  * Client-safe — display + catalog constants only.
  *
- * displayYen values are 税別・仮決め／事業確定前.
+ * displayYen values are 税込・仮決め／事業確定前 (customer-facing inclusive; do NOT ×1.1).
  * Stripe Dashboard Prices (env) remain Checkout source of truth.
  * Do NOT invent fake price_… ids. Meter stays gated_confirm_action
  * (see lib/billing/meter.ts) — separate from these packs.
@@ -12,7 +12,7 @@ import { formatYenJa, PRICING_PROVISIONAL_NOTE_JA } from "./plans";
 
 export { formatYenJa, PRICING_PROVISIONAL_NOTE_JA };
 
-/** One-time optional kickoff pack (税別・仮決め), yen. */
+/** One-time optional kickoff pack (税込・仮決め), yen. */
 export const KICKOFF_PACK_YEN = 398_000;
 
 /**
@@ -46,7 +46,7 @@ export const KICKOFF_PACK_LINES = [
 ] as const;
 
 export const KICKOFF_PACK_NOTE_JA =
-  "任意・一式（税別・仮決め）。月額プランとは別請求。Business 初月をキックオフに含めない（二重請求回避）。";
+  "任意・一式（税込・仮決め）。月額プランとは別請求。Business 初月をキックオフに含めない（二重請求回避）。";
 
 export const KICKOFF_GROK_BAND_JA =
   "Grok 席代は Pro+/Teams 帯のパススルー。Premium（$120）帯は使わない。";

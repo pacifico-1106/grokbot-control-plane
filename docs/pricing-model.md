@@ -4,7 +4,7 @@
 
 Grok Bot / Cursor の席代・トークンは再販しない。曖昧な「AI実行時間」も売らない。
 
-表示額はすべて **税別・仮決め／事業確定前**。Checkout 実課金は Stripe Dashboard の Price が正。
+表示額はすべて **税込・仮決め／事業確定前**（同じ円数字を顧客向け税込として提示。×1.1 しない）。Checkout 実課金は Stripe Dashboard の Price が正（Dashboard 金額＝税込表示額）。
 
 **SKU 一覧・Stripe 命名・補助金コンプライアンス:** [`pricing-sku-catalog.md`](./pricing-sku-catalog.md)
 
@@ -16,18 +16,18 @@ Grok Bot / Cursor の席代・トークンは再販しない。曖昧な「AI実
 | **B. 導入・運用代行** | 速さ・伴走・保守 | 「キックオフ代行／日々の整備」 | Business＝初回一式（任意）／`kickoff_pack`（任意・透明3行）／Managed＝Care 月額に含む |
 | **C. ゲート従量** | 日報が残る・確定した仕事 | 「通した仕事の分」 | `gated_confirm_action` |
 
-## 2. プラン表（税別・仮決め）
+## 2. プラン表（税込・仮決め）
 
-| planKey | 表示 | 月額（税別） | 仮枠（確定アクション/月） | 超過単価（税別） | 導入 |
+| planKey | 表示 | 月額（税込） | 仮枠（確定アクション/月） | 超過単価（税込） | 導入 |
 |---------|------|--------------|---------------------------|------------------|------|
 | `starter` | スターター | **¥12,000** | **50**（仮枠） | **¥80** / 件 | — |
-| `business` | ビジネス | **¥39,800** | **500**（仮枠） | **¥40** / 件 | **¥150,000** 初回一式（税別・任意） |
+| `business` | ビジネス | **¥39,800** | **500**（仮枠） | **¥40** / 件 | **¥150,000** 初回一式（税込・任意） |
 | `managed` | Managed（Care） | **¥128,000** | **2000**（仮枠） | **¥25** / 件 | 月額に含む |
 
 コード定数: `lib/billing/plans.ts`（`PLAN_DISPLAY_YEN` / `PLAN_OVERAGE_YEN` / `PLAN_ONBOARDING_YEN` / `PLAN_CONFIRM_QUOTAS`）。追加 SKU: `lib/billing/skus.ts`。
 
 - Stripe Price ID: `STRIPE_PRICE_ID_STARTER` / `_BUSINESS` / `_MANAGED` / `_BUSINESS_ONBOARDING`（一式・任意） / `_KICKOFF_PACK`（任意）
-- UI に「税別・仮決め／事業確定前」と明示。枠は **仮枠**。
+- UI に「税込・仮決め／事業確定前」と明示。枠は **仮枠**。
 - **超過の Metered Price 配線は P0.5 スタブ**（表示・ドキュメントのみ。Stripe 従量報告は未実装）。
 - Managed: コア **¥128,000**。営業包装メモとして任意バンドル **¥168,000**（Checkout の正はコア）。詳細は SKU カタログ。
 

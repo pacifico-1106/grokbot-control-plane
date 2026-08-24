@@ -254,7 +254,7 @@ export function BillingClient({
             {plan.onboardingYen != null ? (
               <p className="mt-1 text-xs muted">
                 導入（初回一式）: {formatYenJa(plan.onboardingYen)}
-                <span className="faint">（税別・仮決め）</span>
+                <span className="faint">（税込・仮決め）</span>
               </p>
             ) : null}
             {plan.onboardingNote ? (

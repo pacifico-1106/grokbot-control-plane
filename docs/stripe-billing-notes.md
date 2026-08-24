@@ -3,8 +3,9 @@
 Sealith docs/stripe-billing-strategy.md から trial → Checkout → webhook 同期の考え方のみ参照。
 価格表・R2 原価計算・紹介クレジットは移植しない。
 
-**表示額（税別・仮決め）は `lib/billing/plans.ts` · `lib/billing/skus.ts` / UI / `docs/pricing-model.md` · `docs/pricing-sku-catalog.md`。**
-**Checkout 実課金は Stripe Dashboard の Price ID（env）が正。** コードに fake `price_…` を書かない。
+**表示額（税込・仮決め）は `lib/billing/plans.ts` · `lib/billing/skus.ts` / UI / `docs/pricing-model.md` · `docs/pricing-sku-catalog.md`。**
+**Dashboard Price 金額＝税込表示額**（円数字は据え置き。×1.1 しない）。**Checkout 実課金は Stripe Dashboard の Price ID（env）が正。** コードに fake `price_…` を書かない。
+Stripe Tax を使う場合は **tax behavior を inclusive（内税）推奨**。トライアルは従来どおり **アプリ側**（`TRIAL_DAYS` / Checkout `trial_period_days`）。
 
 ## フロー
 
@@ -38,7 +39,7 @@ DEMO（Supabase `replace_me_*`）では常に許可。メッセージは日本�
 - **card** — 常時 Checkout に含める
 - **customer_balance** — 日本の銀行振込・請求書寄り。Dashboard 有効化後に `STRIPE_ENABLE_CUSTOMER_BALANCE=1`
 
-## プラン表示（税別・仮決め／事業確定前）
+## プラン表示（税込・仮決め／事業確定前）
 
 | planKey | 表示名 | 月額（表示） | 仮枠 | 超過（表示） | 導入 |
 |---------|--------|--------------|------|--------------|------|
@@ -67,10 +68,16 @@ DEMO（Supabase `replace_me_*`）では常に許可。メッセージは日本�
 
 `STRIPE_SECRET_KEY` が `replace_me_*` のあいだ API での Product/Price 作成はスキップする。本物のキーが入ったら、**Dashboard（または API）で Price を作り、ID を env に貼る**。
 
+### Tax / 税表示
+
+- Dashboard に入れる Price の `unit_amount` は **UI・カタログと同じ円数字＝税込表示額**。
+- Stripe Tax を有効にする場合は Price の tax behavior を **inclusive** にする（外税加算で二重にならないように）。
+- トライアル期間はアプリ側（`TRIAL_DAYS`）のまま。Tax 設定で trial を置き換えない。
+
 ### Products / Prices 作成手順（JPY）
 
 1. **Product: Staffpass Starter**
-   - Recurring Price: ¥12,000 / month（税別表示用。税は Stripe Tax または請求書側で別途）
+   - Recurring Price: ¥12,000 / month（**税込表示額**。Stripe Tax 利用時は inclusive 推奨）
    - → `STRIPE_PRICE_ID_STARTER`
 2. **Product: Staffpass Business**
    - Recurring Price: ¥39,800 / month → `STRIPE_PRICE_ID_BUSINESS`

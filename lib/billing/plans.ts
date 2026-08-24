@@ -2,7 +2,7 @@
  * Plan codes + provisional JPY display (Ando BM P0.5).
  * Client-safe — no Supabase / audit imports.
  *
- * displayYen / overageYen / onboardingYen are 税別・仮決め／事業確定前.
+ * displayYen / overageYen / onboardingYen are 税込・仮決め／事業確定前 (customer-facing inclusive; do NOT ×1.1).
  * Stripe Dashboard Prices remain the source of truth for Checkout charges.
  *
  * Additional SKUs (kickoff_pack / subsidy placeholders / managed bundle note):
@@ -21,14 +21,14 @@ export const PLAN_CONFIRM_QUOTAS: Record<PlanCode, number> = {
   managed: 2000,
 };
 
-/** Monthly plan fee (税別・仮決め), yen. */
+/** Monthly plan fee (税込・仮決め), yen. */
 export const PLAN_DISPLAY_YEN: Record<PlanCode, number> = {
   starter: 12_000,
   business: 39_800,
   managed: 128_000,
 };
 
-/** Overage per gated_confirm_action beyond quota (税別・仮決め), yen. Metered Stripe Price = P0.5 stub. */
+/** Overage per gated_confirm_action beyond quota (税込・仮決め), yen. Metered Stripe Price = P0.5 stub. */
 export const PLAN_OVERAGE_YEN: Record<PlanCode, number> = {
   starter: 80,
   business: 40,
@@ -36,7 +36,7 @@ export const PLAN_OVERAGE_YEN: Record<PlanCode, number> = {
 };
 
 /**
- * One-time onboarding (税別・仮決め), yen.
+ * One-time onboarding (税込・仮決め), yen.
  * business only — managed includes onboarding in monthly.
  */
 export const PLAN_ONBOARDING_YEN: Partial<Record<PlanCode, number>> = {
@@ -44,7 +44,7 @@ export const PLAN_ONBOARDING_YEN: Partial<Record<PlanCode, number>> = {
 };
 
 export const PRICING_PROVISIONAL_NOTE_JA =
-  "税別・仮決め／事業確定前";
+  "税込・仮決め／事業確定前";
 
 export const QUOTA_PROVISIONAL_NOTE_JA =
   "仮枠・事業確定前（表示用。本番の請求枠は契約後に確定します）";

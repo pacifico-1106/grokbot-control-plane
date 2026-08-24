@@ -1,7 +1,9 @@
 # Staffpass SKU カタログ（Ando BM + Kimura 追加決定）
 
-**更新:** 2026-08-23  
-**表示額:** すべて **税別・仮決め／事業確定前**。Checkout 実課金は Stripe Dashboard の Price（env）が正。  
+**更新:** 2026-08-24  
+**表示額:** すべて **税込・仮決め／事業確定前**（同じ円数字＝顧客向け税込。×1.1 しない）。Checkout 実課金は Stripe Dashboard の Price（env）が正。  
+**表示・Stripe Price は税込。仮決め／事業確定前。**  
+
 **コード定数:** `lib/billing/plans.ts`（月額プラン）· `lib/billing/skus.ts`（キックオフ／補助金プレースホルダ）  
 **従量メーター:** 常に `gated_confirm_action` のみ。パック SKU と混ぜない。
 
@@ -22,7 +24,7 @@
 
 ## 2. フル SKU 表
 
-| skuKey | 種別 | 表示名 | 税別（仮決め） | Stripe Product 命名（推奨） | Stripe Price 命名（推奨） | env |
+| skuKey | 種別 | 表示名 | 税込（仮決め） | Stripe Product 命名（推奨） | Stripe Price 命名（推奨） | env |
 |--------|------|--------|----------------|-----------------------------|---------------------------|-----|
 | `starter` | recurring / month | スターター | ¥12,000 | `Staffpass Starter` | `staffpass_starter_jpy_month` | `STRIPE_PRICE_ID_STARTER` |
 | `business` | recurring / month | ビジネス | ¥39,800 | `Staffpass Business` | `staffpass_business_jpy_month` | `STRIPE_PRICE_ID_BUSINESS` |
@@ -40,9 +42,9 @@
 
 ## 3. `kickoff_pack` — 透明3行（Kimura）
 
-一式 **¥398,000（税別・仮決め）・任意**。請求・提案時は中身を3行で開示する。
+一式 **¥398,000（税込・仮決め）・任意**。請求・提案時は中身を3行で開示する。
 
-| # | line key | 内容 | 税別（包装分割・仮） |
+| # | line key | 内容 | 税込（包装分割・仮） |
 |---|----------|------|---------------------|
 | 1 | `staffpass_kickoff_setup` | Staffpass キックオフ設定・就業規則テンプレ適用 | ¥198,000 |
 | 2 | `grok_seat_passthrough` | **Grok Bot 席代パススルー（Pro+/Teams 帯）** | ¥60,000 |
@@ -113,4 +115,5 @@
 | 2026-08-23 | Kimura | `subsidy_2y_business` / `subsidy_2y_managed` / `year3_extension` — カタログ＋env。保証言語なし |
 | 2026-08-23 | Kimura | Managed コア ¥128,000。任意バンドル包装 ¥168,000 はメモのみ |
 | 2026-08-23 | Kimura | メーターは `gated_confirm_action` のまま。キックオフに Business 初月を入れない |
+| 2026-08-24 | Kimura / user | 表示・Stripe Price を **税込** に揃え（円数字は据え置き・×1.1 しない。Sealith 風） |
 | 2026-08-23 | Kimura | 紹介コード thin tracking（`AIC-XXXX` → `orgs.referral_code`）。kickoff+monthly のみ・手動月次・Connect なし → [`partner/referral-tracking.md`](./partner/referral-tracking.md) |

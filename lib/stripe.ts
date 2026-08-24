@@ -76,7 +76,7 @@ function envPriceId(name: string): string | null {
 }
 
 /**
- * Optional kickoff pack one-time Price (¥398,000 税別・仮決め).
+ * Optional kickoff pack one-time Price (¥398,000 税込・仮決め).
  * Not auto-added to plan Checkout — separate optional purchase when wired.
  * See docs/pricing-sku-catalog.md (transparent 3 lines; no Business M1).
  */
