@@ -1,0 +1,33 @@
+{
+  "name": "staffpass",
+  "title": "Staffpass",
+  "description": "Staffpass remote MCP — AI employee control plane for Grok Bot. Fail-closed Gateway: whoami, invoke (purpose+jobId), approval status poll, health. Confirm/send/order require human approval with explicit approvalId/statusToken/pollUrl return pipe.",
+  "version": "1.0.0",
+  "websiteUrl": "https://staffpass.sealith.com",
+  "documentationUrl": "https://staffpass.sealith.com/docs/mcp",
+  "transport": {
+    "type": "streamable-http",
+    "url": "https://staffpass.sealith.com/api/mcp"
+  },
+  "authentication": {
+    "type": "http",
+    "scheme": "bearer",
+    "header": "Authorization",
+    "format": "Bearer gb_emp_<…>",
+    "alternateHeaders": ["x-staffpass-credential"]
+  },
+  "tools": [
+    "staffpass_whoami",
+    "staffpass_invoke",
+    "staffpass_get_approval_status",
+    "staffpass_health"
+  ],
+  "capabilities": {
+    "tools": true
+  },
+  "notes": [
+    "Public HTTPS only — no local stdio for Grok Bot Plugins / grok.com connectors.",
+    "clients should set allowed_tools to the four staffpass_* tools.",
+    "On needs_approval, poll pollUrl / staffpass_get_approval_status; do not complete confirm/send/order while pending."
+  ]
+}

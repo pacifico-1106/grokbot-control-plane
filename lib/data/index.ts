@@ -34,6 +34,7 @@ export {
 } from "./members";
 export {
   getBinding,
+  findBindingByCredentialFingerprint,
   listBindingsForOrg,
   countNeedsReauth,
   ensureBindingRow,

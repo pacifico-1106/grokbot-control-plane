@@ -21,17 +21,31 @@ export function statusTokensEqual(a: string, b: string): boolean {
   }
 }
 
+/** Canonical public Staffpass host for MCP + Bot poll URLs. */
+export const STAFFPASS_PUBLIC_ORIGIN = "https://staffpass.sealith.com";
+
 /** Public app origin for poll URLs (prod / local). */
 export function getAppOrigin(): string {
   const fromEnv = (process.env.NEXT_PUBLIC_APP_URL || "").trim().replace(/\/$/, "");
   if (fromEnv) return fromEnv;
-  // Prefer stable production alias over ephemeral *.vercel.app deployment hosts
-  // so Bot pollUrl does not 302 / miss the in-memory DEMO ticket isolate.
+  // Production: prefer documented Staffpass host over ephemeral *.vercel.app
+  // so Bot / MCP pollUrl stays stable across deploys.
+  if (
+    process.env.VERCEL_ENV === "production" ||
+    process.env.NODE_ENV === "production"
+  ) {
+    return STAFFPASS_PUBLIC_ORIGIN;
+  }
   const prodHost = (process.env.VERCEL_PROJECT_PRODUCTION_URL || "")
     .trim()
     .replace(/^https?:\/\//, "")
     .replace(/\/$/, "");
-  if (prodHost) return `https://${prodHost}`;
+  if (prodHost) {
+    if (prodHost.includes("staffpass") || prodHost.includes("sealith")) {
+      return `https://${prodHost}`;
+    }
+    return STAFFPASS_PUBLIC_ORIGIN;
+  }
   if (process.env.VERCEL_URL) {
     const host = process.env.VERCEL_URL.replace(/^https?:\/\//, "");
     return `https://${host}`;

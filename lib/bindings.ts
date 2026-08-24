@@ -53,6 +53,19 @@ export function getBinding(employeeId: string): EmployeeBinding | undefined {
   return runtimeBindings.get(employeeId);
 }
 
+/** Lookup by SHA-256 fingerprint of gb_emp_ secret (DEMO store). */
+export function findBindingByCredentialFingerprint(
+  fingerprint: string
+): EmployeeBinding | undefined {
+  if (!fingerprint) return undefined;
+  for (const b of runtimeBindings.values()) {
+    if (b.credentialFingerprint && b.credentialFingerprint === fingerprint) {
+      return b;
+    }
+  }
+  return undefined;
+}
+
 /** List all bindings for an org (DEMO store). */
 export function listBindingsForOrg(orgId: string): EmployeeBinding[] {
   return [...runtimeBindings.values()].filter((b) => b.orgId === orgId);

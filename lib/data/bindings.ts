@@ -3,6 +3,7 @@ import {
   bindingPublicView,
   countNeedsReauth as demoCountNeedsReauth,
   ensureBindingRow as demoEnsure,
+  findBindingByCredentialFingerprint as demoFindByFingerprint,
   getBinding as demoGet,
   linkAgent as demoLink,
   listBindingsForOrg as demoList,
@@ -32,6 +33,23 @@ export async function getBinding(
     .from("employee_bindings")
     .select("*")
     .eq("employee_id", employeeId)
+    .maybeSingle();
+  if (!data) return undefined;
+  return mapBindingRow(data as Record<string, unknown>);
+}
+
+
+export async function findBindingByCredentialFingerprint(
+  fingerprint: string
+): Promise<EmployeeBinding | undefined> {
+  if (!fingerprint) return undefined;
+  if (isDemoMode()) return demoFindByFingerprint(fingerprint);
+  const admin = createSupabaseAdminClient();
+  if (!admin) return undefined;
+  const { data } = await admin
+    .from("employee_bindings")
+    .select("*")
+    .eq("credential_fingerprint", fingerprint)
     .maybeSingle();
   if (!data) return undefined;
   return mapBindingRow(data as Record<string, unknown>);
