@@ -1,5 +1,23 @@
 import { renderStubHtml } from "@/lib/resend";
 
+function appBaseUrl(): string {
+  return (
+    process.env.NEXT_PUBLIC_APP_URL?.trim().replace(/\/$/, "") ||
+    "https://staffpass.sealith.com"
+  );
+}
+
+function dashboardCta(label: string): string {
+  const href = `${appBaseUrl()}/app/approvals`;
+  return `<p style="margin:24px 0 8px"><a href="${href}" style="display:inline-block;padding:12px 20px;background:#111;color:#fff;border-radius:8px;text-decoration:none">${label}</a></p>`;
+}
+
+function statusLabelJa(statusLabel: string): string {
+  if (statusLabel === "approved" || statusLabel === "承認済み") return "承認済み";
+  if (statusLabel === "rejected" || statusLabel === "却下") return "却下";
+  return statusLabel;
+}
+
 export function welcomeTemplate(orgName: string) {
   return {
     subject: `ようこそ — ${orgName} の AI社員 制御面`,
@@ -24,7 +42,22 @@ export function approvalNeededTemplate(summary: string, risk: string) {
       `<p>危険操作またはポリシー該当の操作が承認待ちです。</p>
        <p><strong>${summary}</strong></p>
        <p>リスク: ${risk}</p>
-       <p>制御面の「承認」から許可または却下してください。</p>`
+       <p>制御面の「承認」から許可または却下してください。</p>
+       ${dashboardCta("ダッシュボードで承認する")}`
+    ),
+  };
+}
+
+export function approvalResolvedTemplate(summary: string, statusLabel: string) {
+  const statusJa = statusLabelJa(statusLabel);
+  return {
+    subject: `[AI社員] 承認が解決されました（${statusJa}）`,
+    html: renderStubHtml(
+      "承認が解決されました",
+      `<p>承認リクエストが処理されました。</p>
+       <p>結果: <strong>${statusJa}</strong></p>
+       <p>${summary}</p>
+       ${dashboardCta("ダッシュボードを開く")}`
     ),
   };
 }

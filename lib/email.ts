@@ -1,5 +1,6 @@
 import {
   approvalNeededTemplate,
+  approvalResolvedTemplate,
   trialEndingTemplate,
   trialStartedTemplate,
   welcomeTemplate,
@@ -7,7 +8,6 @@ import {
 import {
   renderStubHtml,
   sendTransactionalEmail,
-  type EmailTemplate,
 } from "./resend";
 
 export async function sendWelcomeEmail(to: string, orgName: string) {
@@ -66,17 +66,18 @@ export async function sendApprovalNotification(
   to: string,
   kind: "approval_requested" | "approval_resolved" | "approval_needed",
   summary: string,
-  risk = "medium"
+  risk = "medium",
+  statusLabel = "resolved"
 ) {
   if (kind === "approval_needed" || kind === "approval_requested") {
     return sendApprovalNeededEmail(to, summary, risk);
   }
-  const template: EmailTemplate = "approval_resolved";
+  const t = approvalResolvedTemplate(summary, statusLabel);
   return sendTransactionalEmail({
     to,
-    template,
-    subject: "[AI社員] 承認が解決されました",
-    html: renderStubHtml("承認が解決されました", `<p>${summary}</p>`),
+    template: "approval_resolved",
+    subject: t.subject,
+    html: t.html,
     tags: [{ name: "template", value: kind }],
   });
 }

@@ -35,8 +35,9 @@ export async function runApprovalResolveSideEffects(opts: {
     orgEmail = await sendApprovalNotification(
       orgNotifyEmail(),
       "approval_resolved",
-      `${title}\nstatus=${statusLabel}\napprovalId=${approval.id}\nby=${actorEmail}\n${approval.summary}`,
-      approval.risk
+      `${title}<br/>処理者: ${actorEmail}`,
+      approval.risk,
+      statusLabel
     );
   } catch (e) {
     orgEmail = {
