@@ -155,3 +155,25 @@ npx vercel --prod        # Production（--temporary は使わない）
 ```
 
 トークン保管例（この box）: `/workspace/.secrets/` に `vercel_token.txt` を置けばエージェントが再利用可能。現状は GitHub PAT のみ。
+
+
+## Recovery: Auth user exists, org missing
+
+**Symptom:** Signup failed (often `orgs` / `org_members` table missing). Supabase Auth user was created. Later login shows opaque *Application error* / digest on `/app` because pages called `getOrgMeta(null)`.
+
+**Fixed in app (deploy this code):**
+
+1. `app/app/layout.tsx` — `ensureAuthenticatedOrg()` auto-provisions org+owner on first `/app` visit (same shape as signup).
+2. If schema is still missing → soft redirect to `/onboarding` (no SSR crash).
+3. `GET|POST /api/auth/repair-org` — explicit repair URL while logged in.
+4. Signup retries: existing Auth + correct password → provision org and continue.
+
+**What the operator / user should do after deploy:**
+
+1. Confirm SQL applied (`supabase/schema.sql` or migrations in order).
+2. **Same email/password → Login** (or open `/app` if already cookied).
+3. Org is auto-created; dashboard loads.
+4. If still blocked: open **`/onboarding`** or **`/api/auth/repair-org`** while logged in.
+5. Do **not** need to delete the Auth user unless you want a clean re-signup; repair is preferred.
+
+**Do not** leave production without `orgs` + `org_members` — signup will keep creating Auth-only users until schema exists.

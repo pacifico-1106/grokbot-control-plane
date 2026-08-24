@@ -23,7 +23,8 @@ function isDemoFromEnv(): boolean {
 
 /**
  * Soft auth gate: DEMO → pass-through (no crash).
- * Production → refresh session cookies; redirect unauthenticated /app to /login.
+ * Production → refresh session cookies; redirect unauthenticated /app|/onboarding to /login.
+ * Authenticated /login|/signup → /app (layout auto-provisions missing org).
  */
 export async function middleware(request: NextRequest) {
   if (isDemoFromEnv()) {
@@ -60,9 +61,10 @@ export async function middleware(request: NextRequest) {
 
   const path = request.nextUrl.pathname;
   const isApp = path.startsWith("/app");
+  const isOnboarding = path === "/onboarding";
   const isAuthPage = path === "/login" || path === "/signup";
 
-  if (isApp && !user) {
+  if ((isApp || isOnboarding) && !user) {
     const login = new URL("/login", request.url);
     login.searchParams.set("next", path);
     return NextResponse.redirect(login);
@@ -76,5 +78,5 @@ export async function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/app/:path*", "/login", "/signup"],
+  matcher: ["/app/:path*", "/login", "/signup", "/onboarding"],
 };

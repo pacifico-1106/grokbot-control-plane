@@ -35,7 +35,10 @@ export async function getOrgMeta(orgId?: string | null): Promise<OrgMeta> {
 
   const id = orgId;
   if (!id) {
-    throw new Error("org_id_required");
+    // Soft fail: never SSR-crash with an opaque Next digest when session
+    // has Auth but no org_members. /app layout should have provisioned;
+    // callers that still hit this get a clear error string for logs/APIs.
+    throw new Error("org_id_required:authenticate_then_open_/onboarding_or_/app_to_repair");
   }
 
   const { data, error } = await admin
@@ -45,6 +48,7 @@ export async function getOrgMeta(orgId?: string | null): Promise<OrgMeta> {
     .maybeSingle();
 
   if (error || !data) {
+    // Prefer soft signal over opaque digest; layout/onboarding repair path.
     throw new Error(error?.message || "org_not_found");
   }
   return mapOrgRow(data as Record<string, unknown>);

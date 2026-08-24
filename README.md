@@ -22,6 +22,8 @@
 | `/` | LP |
 | `/signup` | トライアル開始（DEMO→/app、Prod→Auth+org） |
 | `/login` | ログイン（DEMO はそのまま /app） |
+| `/onboarding` | Auth のみ残った場合の組織修復（schema 未適用時も SSR クラッシュしない） |
+| `/api/auth/repair-org` | ログイン中の組織自動プロビジョン（GET/POST） |
 | `/app` | ダッシュボード |
 | `/app/employees` | AI社員一覧 |
 | `/app/employees/new` | 日本語 → Draft → 社員証発行（コア） |
