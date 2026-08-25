@@ -10,8 +10,8 @@ const STEPS = [
   },
   {
     title: "導入モードを選ぶ",
-    body: "「当社で用意」か「持ち込み」かを選び、Grok Bot とのつながりを「連携済み」にします。",
-    href: "/app/integrations",
+    body: "「当社で用意」か「持ち込み」かを選び、Grok Bot の Plugins（リモート MCP）につなぎます。チャットに URL を貼るだけではつながりません。",
+    href: "/app/integrations#mcp",
     label: "連携へ",
   },
   {
@@ -59,6 +59,19 @@ export default function GettingStartedPage() {
             </Link>
           </section>
         ))}
+
+        <section className="surface p-5 space-y-2">
+          <h2 className="text-sm font-medium">Grok Bot とつなぐ（MCP）</h2>
+          <p className="text-sm muted leading-relaxed">
+            持ち込みならご自身で Plugins に Staffpass を追加。おまかせ導入なら TOKYO307 が入れます。お客様は Staffpass の画面かメールで承認するだけです。社員証は雇ったときに一度だけ表示されます。
+          </p>
+          <Link
+            href="/app/integrations#mcp"
+            className="btn btn-ghost mt-2 text-sm w-full sm:w-auto inline-flex"
+          >
+            連携へ（MCP URL）
+          </Link>
+        </section>
 
         <section className="surface p-5 space-y-2">
           <h2 className="text-sm font-medium">Instructionsの組み立て方</h2>

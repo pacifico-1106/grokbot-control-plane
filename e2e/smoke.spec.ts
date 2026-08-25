@@ -36,4 +36,22 @@ test.describe("DEMO smoke", () => {
       page.getByRole("heading", { name: "AI社員を雇う" })
     ).toBeVisible();
   });
+
+  test("`/docs/mcp` public MCP setup loads", async ({ page }) => {
+    const res = await page.goto("/docs/mcp");
+    expect(res?.ok()).toBeTruthy();
+    await expect(
+      page.getByRole("heading", { name: "Grok Bot とつなぐ（MCP）" })
+    ).toBeVisible();
+    await expect(page.getByText("https://staffpass.sealith.com/api/mcp")).toBeVisible();
+    await expect(page.getByText("持ち込みGrok")).toBeVisible();
+    await expect(page.getByText("運用代行")).toBeVisible();
+  });
+
+  test("`/app/integrations` shows MCP setup", async ({ page }) => {
+    const res = await page.goto("/app/integrations");
+    expect(res?.ok()).toBeTruthy();
+    await expect(page.getByText("https://staffpass.sealith.com/api/mcp")).toBeVisible();
+    await expect(page.getByText("持ち込みGrok")).toBeVisible();
+  });
 });

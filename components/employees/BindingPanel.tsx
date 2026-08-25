@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useState } from "react";
 import type { BindingStatus, EmployeeBinding } from "@/lib/types";
 
@@ -128,6 +129,13 @@ export function BindingPanel({
           <h2 className="text-sm font-medium">Grok Bot の接続状態</h2>
           <p className="mt-1 text-xs muted leading-relaxed">
             AI社員の番号はずっと変わりません。社員証を出し直しても、同じ人として扱います。
+          </p>
+          <p className="mt-1 text-xs muted leading-relaxed">
+            Grok Bot は Plugins（リモート MCP）でつなぎます。URL と手順は{" "}
+            <Link href="/app/integrations#mcp" className="underline underline-offset-2">
+              連携
+            </Link>
+            。社員証（接続用の鍵）は雇ったときに一度だけ表示されます。
           </p>
         </div>
         <span className={chipClass(binding.status)}>

@@ -30,6 +30,7 @@
 | `/app/approvals` | 要対応・承認キュー |
 | `/app/audit` | 監査タイムライン |
 | `/app/getting-started` | オンボーディング |
+| `/docs/mcp` | 公開 MCP 手順（Grok Bot Plugins / 持ち込み・運用代行） |
 | `/guides/instructions-design` | Instructions 設計ガイド（公開・ログイン不要） |
 | `/app/guides/instructions-design` | 同ガイド（アプリ内） |
 | `/app/integrations` | Managed/BYO + 連携ステータス |

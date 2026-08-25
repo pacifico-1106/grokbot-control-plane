@@ -1,5 +1,6 @@
 import { AppShell } from "@/components/AppShell";
 import { IntegrationsClient } from "@/components/IntegrationsClient";
+import { McpSetupContent } from "@/components/mcp/McpSetupContent";
 import { getCurrentOrgId } from "@/lib/auth/session";
 import {
   ensureBindingRow,
@@ -33,6 +34,9 @@ export default async function IntegrationsPage() {
       title="連携"
       subtitle="当社で用意 / 持ち込み · Staffpass（制御）とのつながり"
     >
+      <div className="mb-4">
+        <McpSetupContent />
+      </div>
       <IntegrationsClient
         initialStatus={await getGatewayStatusForOrg(orgId)}
         initialMode={org.integrationMode}
@@ -50,7 +54,7 @@ export default async function IntegrationsPage() {
           <div>
             <dt className="text-xs muted">連携の手続き</dt>
             <dd className="text-xs muted mt-1 leading-relaxed">
-              画面の案内に沿って Grok Bot とつなぎます。
+              Grok Bot の Plugins（リモート MCP）に Staffpass を登録します。チャットに URL を貼るだけではつながりません。
             </dd>
           </div>
           <div>

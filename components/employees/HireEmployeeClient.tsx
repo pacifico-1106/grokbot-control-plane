@@ -621,6 +621,13 @@ export function HireEmployeeClient() {
                 </Link>
               )}
             </div>
+            <p className="mt-3 text-xs muted leading-relaxed">
+              Grok Bot にはチャットへ貼らず、Plugins（リモート MCP）へ登録します。URL は{" "}
+              <Link href="/app/integrations#mcp" className="underline underline-offset-2">
+                連携
+              </Link>
+              。
+            </p>
           </div>
           {hirePack ? (
             <div className="rounded-lg border border-[var(--border)] bg-[var(--bg-soft)] p-4 space-y-3">

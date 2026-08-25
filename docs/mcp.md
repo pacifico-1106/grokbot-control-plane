@@ -1,5 +1,7 @@
 # Staffpass リモート MCP
 
+経営者向けの公開ページ: [https://staffpass.sealith.com/docs/mcp](https://staffpass.sealith.com/docs/mcp)（ダッシュボード「連携」と同じ手順）。
+
 Staffpass を **Grok Bot Plugins / grok.com connectors / Cursor / Claude / xAI API** から使うための **公開 HTTPS Streamable HTTP MCP** です。
 
 Sealith の「社員証 = Bearer・MCP が第一級」という世界観を踏まえつつ、中小企業向け制御面として **より厳格（fail-closed）** にしています。

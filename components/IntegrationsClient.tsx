@@ -170,8 +170,9 @@ export function IntegrationsClient({
           </div>
           {message ? <p className="mt-3 text-xs muted">{message}</p> : null}
           <p className="mt-4 text-xs faint leading-relaxed">
-            ここは組織と Grok Bot ゲートウェイのつなぎです。各 AI 社員への Agent ID
-            連携は社員詳細ページで行います。いまはデモのつなぎ方です。
+            ここは組織と Grok Bot ゲートウェイのつなぎです。Plugins（リモート MCP）の URL
+            と手順は上の「Grok Bot とつなぐ」。各 AI 社員への Agent ID
+            連携は社員詳細ページで行います。
           </p>
         </section>
       </div>

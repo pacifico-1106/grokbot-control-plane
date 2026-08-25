@@ -7,11 +7,10 @@ import {
   MCP_SERVER_VERSION,
   STAFFPASS_MCP_TOOLS,
 } from "@/lib/mcp/tools";
+import { STAFFPASS_MCP_URL } from "@/lib/mcp/public";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-const PUBLIC_MCP_URL = "https://staffpass.sealith.com/api/mcp";
 
 type JsonRpcId = string | number | null;
 
@@ -65,7 +64,7 @@ function serverInfo() {
     description:
       "Staffpass remote MCP — AI employee control plane (whoami, invoke, approval poll, health). Fail-closed Gateway enforcement; confirm/send/order require human approval.",
     websiteUrl: "https://staffpass.sealith.com",
-    mcpEndpoint: PUBLIC_MCP_URL,
+    mcpEndpoint: STAFFPASS_MCP_URL,
     protocolVersion: MCP_PROTOCOL_VERSION,
     tools: STAFFPASS_MCP_TOOLS.map((t) => t.name),
     auth: {
