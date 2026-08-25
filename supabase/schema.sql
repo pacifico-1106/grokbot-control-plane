@@ -134,6 +134,45 @@ create index if not exists approval_requests_telegram_msg_idx
 create index if not exists approval_requests_job_idx
   on approval_requests (org_id, job_id);
 
+create table if not exists org_notification_channels (
+  id uuid primary key default gen_random_uuid(),
+  org_id uuid not null references orgs(id) on delete cascade,
+  provider text not null check (provider in ('telegram','line')),
+  label text not null,
+  enabled boolean not null default false,
+  config jsonb not null default '{}'::jsonb,
+  webhook_ref text not null default encode(gen_random_bytes(6), 'hex'),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (org_id, provider),
+  unique (webhook_ref)
+);
+
+create table if not exists org_notification_channel_secrets (
+  channel_id uuid primary key references org_notification_channels(id) on delete cascade,
+  credentials_ciphertext text not null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists approval_notification_deliveries (
+  id uuid primary key default gen_random_uuid(),
+  approval_id uuid not null references approval_requests(id) on delete cascade,
+  org_id uuid not null references orgs(id) on delete cascade,
+  channel_id uuid not null references org_notification_channels(id) on delete cascade,
+  provider text not null check (provider in ('telegram','line')),
+  external_message_id text,
+  context jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (approval_id, channel_id)
+);
+
+create index if not exists notification_channels_org_enabled_idx
+  on org_notification_channels (org_id, enabled);
+create index if not exists notification_deliveries_external_idx
+  on approval_notification_deliveries (channel_id, external_message_id);
+
 -- ---------------------------------------------------------------------------
 -- Audit timeline
 -- ---------------------------------------------------------------------------
@@ -256,6 +295,9 @@ alter table org_members enable row level security;
 alter table employees enable row level security;
 alter table credentials enable row level security;
 alter table approval_requests enable row level security;
+alter table org_notification_channels enable row level security;
+alter table org_notification_channel_secrets enable row level security;
+alter table approval_notification_deliveries enable row level security;
 alter table audit_events enable row level security;
 alter table subscriptions enable row level security;
 alter table gateway_links enable row level security;
@@ -295,6 +337,18 @@ create policy approvals_select on approval_requests
   for select using (public.is_org_member(org_id));
 create policy approvals_write_member on approval_requests
   for all using (public.is_org_member(org_id));
+
+drop policy if exists notification_channels_select on org_notification_channels;
+drop policy if exists notification_channels_write_admin on org_notification_channels;
+create policy notification_channels_select on org_notification_channels
+  for select using (public.is_org_member(org_id));
+create policy notification_channels_write_admin on org_notification_channels
+  for all using (public.is_org_admin(org_id))
+  with check (public.is_org_admin(org_id));
+
+drop policy if exists notification_deliveries_select on approval_notification_deliveries;
+create policy notification_deliveries_select on approval_notification_deliveries
+  for select using (public.is_org_member(org_id));
 
 drop policy if exists audit_select on audit_events;
 drop policy if exists audit_insert_member on audit_events;

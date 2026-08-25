@@ -13,6 +13,22 @@ export type ApprovalStatus =
 
 export type ApprovalPolicy = "auto" | "always_human" | "risk_based";
 
+export type NotificationProvider = "telegram" | "line";
+
+export interface NotificationChannel {
+  id: string;
+  orgId: string;
+  provider: NotificationProvider;
+  label: string;
+  enabled: boolean;
+  config: Record<string, unknown>;
+  webhookRef: string;
+  hasCredentials: boolean;
+  webhookPath: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 /** Per-employee purchase limits (JPY). Fail-closed when order scope present but limits missing. */
 export interface SpendLimits {
   /** 0 = 発注禁止（自動不可）。未設定扱いは evaluateSpend 側で needs_approval。 */
@@ -136,6 +152,9 @@ export type AuditAction =
   | "approval.resolved"
   | "approval.revision_requested"
   | "approval.telegram_error"
+  | "notification.channel_updated"
+  | "notification.test_sent"
+  | "notification.delivery_failed"
   | "billing.updated"
   | "email.sent"
   | "gateway.link_changed"

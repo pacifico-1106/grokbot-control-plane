@@ -412,7 +412,9 @@ export async function updateApprovalTelegramState(
   approval: ApprovalRequest,
   patch: {
     telegramMessageId?: number;
-    awaitingRevisionFrom?: number | null;
+    awaitingRevisionFrom?: number | string | null;
+    awaitingRevisionChannelId?: string | null;
+    awaitingRevisionProvider?: "telegram" | "line" | null;
   }
 ): Promise<ApprovalRequest | null> {
   const metadata = { ...approval.metadata };
@@ -423,6 +425,16 @@ export async function updateApprovalTelegramState(
   }
   if (patch.telegramMessageId !== undefined) {
     metadata.telegramMessageId = patch.telegramMessageId;
+  }
+  if (patch.awaitingRevisionChannelId === null) {
+    delete metadata.awaiting_revision_channel_id;
+  } else if (patch.awaitingRevisionChannelId !== undefined) {
+    metadata.awaiting_revision_channel_id = patch.awaitingRevisionChannelId;
+  }
+  if (patch.awaitingRevisionProvider === null) {
+    delete metadata.awaiting_revision_provider;
+  } else if (patch.awaitingRevisionProvider !== undefined) {
+    metadata.awaiting_revision_provider = patch.awaitingRevisionProvider;
   }
 
   if (isDemoMode()) {

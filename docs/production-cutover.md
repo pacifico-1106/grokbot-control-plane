@@ -3,6 +3,13 @@
 このリポジトリは **デモ（インメモリ）と本番（Supabase）を dual-mode** で動かします。  
 `replace_me_*` / 未設定のまま `bun run build` / `bun run dev` が可能です。実キーは最後に注入します。
 
+## テナント別通知チャネル
+
+- `supabase/migrations/20260827_tenant_notification_channels.sql` を適用する。
+- Productionへ安定した32文字以上の `NOTIFICATION_CONFIG_ENCRYPTION_KEY` を追加する。
+- グローバル `TELEGRAM_*` は `info@tokyo307inc.com` 所属組織のパイロット用フォールバックだけに残す。他テナントではコード上無効になる。
+- テナント設定と受け入れ確認は `docs/guides/telegram-approval.md` に従う。
+
 ## 切替条件
 
 `lib/mode.ts` の `isDemoMode()` が次のいずれかで **true** → DEMO:
@@ -25,6 +32,7 @@
      3. `supabase/migrations/20260823_agentmail_reservation.sql`  
      4. `supabase/migrations/20260824_approval_loop.sql` ← **承認ループ必須**（title / tool / job_id / status_token / poll_path、employees の notify/callback/routine）
      5. `supabase/migrations/20260826_telegram_revision.sql` ← Telegram通知、修正依頼、再提出の親子関係
+     6. `supabase/migrations/20260827_tenant_notification_channels.sql` ← テナント別Telegram / LINE、配信記録、暗号化secret分離
 4. **Auth 有効化** — Authentication → Providers → Email を ON。開発中は Confirm email を OFF 推奨（signup が即ログインできる）
 5. **Vercel env にキーを貼る**（下記チェックリスト）— **Supabase 3 点セットが揃うまで DEMO のまま**
 6. **Redeploy** → `GET /api/health` で `runtimeMode: "production"` を確認

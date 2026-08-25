@@ -15,6 +15,7 @@ const NAV = [
   { href: "/app/integrations", label: "連携" },
   { href: "/app/billing", label: "請求" },
   { href: "/app/team", label: "チーム" },
+  { href: "/app/settings", label: "通知設定" },
 ];
 
 function navActive(pathname: string, item: (typeof NAV)[number]) {

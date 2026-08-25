@@ -5,6 +5,7 @@ import {
   getApprovalByTelegramMessageId,
   getApprovalByTelegramRef,
   getEmployee,
+  shouldUseGlobalTelegramFallback,
   resolveApproval,
   updateApprovalTelegramState,
 } from "@/lib/data";
@@ -104,6 +105,7 @@ async function handleCallback(update: TelegramUpdate): Promise<void> {
   try {
     if (
       !approval ||
+      !(await shouldUseGlobalTelegramFallback(approval.orgId)) ||
       approval.status !== "pending" ||
       approval.telegramMessageId !== query.message?.message_id
     ) {
@@ -164,6 +166,7 @@ async function handleReply(update: TelegramUpdate): Promise<void> {
     const awaiting = Number(approval?.metadata.awaiting_revision_from);
     if (
       !approval ||
+      !(await shouldUseGlobalTelegramFallback(approval.orgId)) ||
       approval.status !== "pending" ||
       awaiting !== message.from?.id
     ) {

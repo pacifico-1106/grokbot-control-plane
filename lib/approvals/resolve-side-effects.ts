@@ -1,6 +1,6 @@
 import { sendApprovalNotification } from "@/lib/email";
 import { sendTransactionalEmail, renderStubHtml } from "@/lib/resend";
-import { editTelegramApprovalMessage } from "@/lib/notify/telegram";
+import { updateApprovalNotificationMessages } from "@/lib/notify/channels";
 import type { ApprovalRequest, Employee } from "@/lib/types";
 
 function orgNotifyEmail(): string {
@@ -16,6 +16,7 @@ export type ResolveSideEffectsResult = {
   employeeEmail: { ok: boolean; stub?: boolean; skipped?: boolean; error?: string };
   callback: { ok: boolean; skipped?: boolean; status?: number; error?: string };
   telegram: { ok: boolean; skipped?: boolean; error?: string };
+  notifications: Array<{ ok: boolean; provider: string; error?: string }>;
 };
 
 /**
@@ -135,14 +136,19 @@ export async function runApprovalResolveSideEffects(opts: {
     }
   }
 
-  const telegram = await editTelegramApprovalMessage(
+  const notifications = await updateApprovalNotificationMessages(
     approval,
     decision,
     actorEmail
-  ).catch((error) => ({
+  ).catch((error) => [{
     ok: false,
-    error: error instanceof Error ? error.message : "telegram_edit_failed",
-  }));
+    provider: "unknown",
+    error: error instanceof Error ? error.message : "notification_update_failed",
+  }]);
 
-  return { orgEmail, employeeEmail, callback, telegram };
+  const telegram = notifications.find((item) => item.provider === "telegram") ?? {
+    ok: false,
+    skipped: true,
+  };
+  return { orgEmail, employeeEmail, callback, telegram, notifications };
 }

@@ -31,6 +31,23 @@ export {
 } from "./approvals";
 export { listAuditEvents, appendAuditEvent } from "./audit";
 export {
+  listNotificationChannels,
+  getEnabledNotificationChannels,
+  listAllEnabledNotificationChannels,
+  getNotificationChannelByWebhookRef,
+  upsertNotificationChannel,
+  isTokyo307PilotOrg,
+  isTokyo307PilotEmail,
+  shouldUseGlobalTelegramFallback,
+  getTokyo307PilotOrgId,
+  recordNotificationDelivery,
+  getNotificationDelivery,
+  getApprovalIdByDeliveryExternal,
+  findAwaitingRevisionApproval,
+  type NotificationChannelRuntime,
+  type UpsertNotificationChannelInput,
+} from "./notification-channels";
+export {
   listMembers,
   getMemberById,
   upsertMember,

@@ -4,7 +4,7 @@ import {
   inferRiskForTool,
 } from "@/lib/approvals/summary";
 import { sendApprovalNeededEmail } from "@/lib/email";
-import { sendApprovalToTelegram } from "@/lib/notify/telegram";
+import { sendApprovalNotifications } from "@/lib/notify/channels";
 import { getCurrentOrgId } from "@/lib/auth/session";
 import {
   assertExecutable,
@@ -136,14 +136,15 @@ async function createNeedsApprovalResponse(opts: {
     process.env.APPROVAL_NOTIFY_EMAIL ||
     "owner@example.com";
   void sendApprovalNeededEmail(notifyTo, summary, risk).catch(() => null);
-  const telegramNotify = createdApproval
-    ? await sendApprovalToTelegram(createdApproval, opts.employee ?? null).catch(
-        (error) => ({
+  const channelNotifications = createdApproval
+    ? await sendApprovalNotifications(createdApproval, opts.employee ?? null).catch(
+        (error) => [{
           ok: false,
-          error: error instanceof Error ? error.message : "telegram_notify_failed",
-        })
+          provider: "unknown" as const,
+          error: error instanceof Error ? error.message : "channel_notify_failed",
+        }]
       )
-    : { ok: false, skipped: true };
+    : [];
 
   return jsonResult(
     {
@@ -165,7 +166,11 @@ async function createNeedsApprovalResponse(opts: {
       purpose: opts.purpose,
       jobId: opts.jobId,
       demoStore,
-      telegramNotified: telegramNotify.ok,
+      // Backward-compatible field retained for existing bot clients.
+      telegramNotified: channelNotifications.some(
+        (result) => result.provider === "telegram" && result.ok
+      ),
+      notificationResults: channelNotifications,
       ...opts.extra,
     },
     opts.httpStatus ?? 402

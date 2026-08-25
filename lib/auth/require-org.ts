@@ -39,3 +39,27 @@ export async function requireAuthenticatedOrg(): Promise<
   }
   return { ok: true, orgId: session.orgId, session };
 }
+
+/** Owner/admin-only browser session for tenant-level secrets and integrations. */
+export async function requireOrgAdminSession(): Promise<
+  | { ok: true; orgId: string; email: string }
+  | { ok: false; response: NextResponse }
+> {
+  const session = await getSessionContext();
+  if (session.demo && session.orgId) {
+    return { ok: true, orgId: session.orgId, email: session.email || "owner@example.com" };
+  }
+  if (!session.userId || !session.orgId || !session.member) {
+    return { ok: false, response: authRequiredResponse() };
+  }
+  if (session.member.role !== "owner" && session.member.role !== "admin") {
+    return {
+      ok: false,
+      response: NextResponse.json(
+        { ok: false, error: "admin_required", message: "組織のオーナーまたは管理者権限が必要です" },
+        { status: 403 }
+      ),
+    };
+  }
+  return { ok: true, orgId: session.orgId, email: session.email || session.member.email };
+}

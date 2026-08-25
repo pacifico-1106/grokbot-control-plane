@@ -2,15 +2,27 @@ import {
   getApprovalById,
   updateApprovalTelegramState,
 } from "@/lib/data/approvals";
+import {
+  getNotificationDelivery,
+  recordNotificationDelivery,
+  shouldUseGlobalTelegramFallback,
+  type NotificationChannelRuntime,
+} from "@/lib/data/notification-channels";
 import type { ApprovalRequest, Employee } from "@/lib/types";
 
 const TELEGRAM_TIMEOUT_MS = 5_000;
 
-type TelegramResult = {
+export type TelegramResult = {
   ok: boolean;
   skipped?: boolean;
   messageId?: number;
   error?: string;
+};
+
+export type TelegramTarget = {
+  token: string;
+  chatId: string;
+  allowedUserIds?: string[];
 };
 
 function config() {
@@ -75,9 +87,10 @@ export function buildApprovalTelegramMessage(
 
 async function callTelegram<T = Record<string, unknown>>(
   method: string,
-  payload: Record<string, unknown>
+  payload: Record<string, unknown>,
+  tokenOverride?: string
 ): Promise<{ ok: boolean; result?: T; error?: string }> {
-  const { token } = config();
+  const token = tokenOverride || config().token;
   if (!token) return { ok: false, error: "telegram_not_configured" };
   try {
     const response = await fetch(
@@ -109,10 +122,186 @@ async function callTelegram<T = Record<string, unknown>>(
   }
 }
 
+export function telegramTargetFromChannel(
+  channel: NotificationChannelRuntime
+): TelegramTarget | null {
+  const token = channel.secrets.botToken?.trim() || "";
+  const chatId = String(channel.config.chatId || "").trim();
+  if (!token || !chatId) return null;
+  return {
+    token,
+    chatId,
+    allowedUserIds: Array.isArray(channel.config.allowedUserIds)
+      ? channel.config.allowedUserIds.map(String)
+      : [],
+  };
+}
+
+export async function sendApprovalToTelegramChannel(
+  approval: ApprovalRequest,
+  employee: Employee | null,
+  channel: NotificationChannelRuntime
+): Promise<TelegramResult> {
+  const target = telegramTargetFromChannel(channel);
+  if (!target || !approval.telegramRef) return { ok: false, skipped: true };
+  let replyToMessageId: number | undefined;
+  if (approval.parentApprovalId) {
+    const parentDelivery = await getNotificationDelivery({
+      approvalId: approval.parentApprovalId,
+      channelId: channel.id,
+    });
+    const parsed = Number(parentDelivery?.externalMessageId);
+    if (Number.isSafeInteger(parsed)) replyToMessageId = parsed;
+  }
+  const sent = await callTelegram<{ message_id?: number }>(
+    "sendMessage",
+    {
+      chat_id: target.chatId,
+      text: buildApprovalTelegramMessage(approval, employee),
+      parse_mode: "HTML",
+      disable_web_page_preview: true,
+      ...(replyToMessageId
+        ? {
+            reply_parameters: {
+              message_id: replyToMessageId,
+              allow_sending_without_reply: true,
+            },
+          }
+        : {}),
+      reply_markup: {
+        inline_keyboard: [[
+          { text: "✅ 承認", callback_data: `a:${approval.telegramRef}` },
+          { text: "❌ 却下", callback_data: `r:${approval.telegramRef}` },
+          { text: "✏️ 修正", callback_data: `e:${approval.telegramRef}` },
+        ]],
+      },
+    },
+    target.token
+  );
+  const messageId = Number(sent.result?.message_id);
+  if (!sent.ok || !Number.isSafeInteger(messageId)) {
+    return { ok: false, error: sent.error || "telegram_message_id_missing" };
+  }
+  await recordNotificationDelivery({
+    approval,
+    channelId: channel.id,
+    provider: "telegram",
+    externalMessageId: String(messageId),
+  });
+  return { ok: true, messageId };
+}
+
+export async function editTelegramApprovalForChannel(
+  approval: ApprovalRequest,
+  status: "approved" | "rejected" | "revision_requested",
+  actor: string,
+  channel: NotificationChannelRuntime
+): Promise<TelegramResult> {
+  const target = telegramTargetFromChannel(channel);
+  const delivery = await getNotificationDelivery({
+    approvalId: approval.id,
+    channelId: channel.id,
+  });
+  const messageId = Number(delivery?.externalMessageId);
+  if (!target || !Number.isSafeInteger(messageId)) return { ok: false, skipped: true };
+  const label = status === "approved" ? "✅ 承認済み" : status === "rejected" ? "❌ 却下済み" : "✏️ 修正依頼済み";
+  const note = status === "revision_requested" && approval.revisionNote
+    ? `\n指示: ${escapeTelegramHtml(truncate(approval.revisionNote, 400))}`
+    : "";
+  const edited = await callTelegram("editMessageText", {
+    chat_id: target.chatId,
+    message_id: messageId,
+    text: `${label}\n<b>${escapeTelegramHtml(approval.title)}</b>${note}\n処理者: ${escapeTelegramHtml(actor)}`,
+    parse_mode: "HTML",
+    reply_markup: { inline_keyboard: [] },
+  }, target.token);
+  return edited.ok ? { ok: true } : { ok: false, error: edited.error };
+}
+
+export async function promptTelegramRevisionForChannel(
+  approval: ApprovalRequest,
+  userId: number,
+  channel: NotificationChannelRuntime
+): Promise<TelegramResult> {
+  const target = telegramTargetFromChannel(channel);
+  const delivery = await getNotificationDelivery({ approvalId: approval.id, channelId: channel.id });
+  const messageId = Number(delivery?.externalMessageId);
+  if (!target || !Number.isSafeInteger(messageId)) return { ok: false, skipped: true };
+  const updated = await updateApprovalTelegramState(approval, {
+    awaitingRevisionFrom: userId,
+    awaitingRevisionChannelId: channel.id,
+    awaitingRevisionProvider: "telegram",
+  });
+  if (!updated) return { ok: false, error: "revision_state_update_failed" };
+  const edited = await callTelegram("editMessageText", {
+    chat_id: target.chatId,
+    message_id: messageId,
+    text: `${buildApprovalTelegramMessage(approval, null)}\n\n✏️ <b>修正指示をこのメッセージへの返信で送ってください</b>`,
+    parse_mode: "HTML",
+    reply_markup: { inline_keyboard: [] },
+  }, target.token);
+  if (!edited.ok) {
+    await updateApprovalTelegramState(updated, {
+      awaitingRevisionFrom: null,
+      awaitingRevisionChannelId: null,
+      awaitingRevisionProvider: null,
+    });
+  }
+  return edited.ok ? { ok: true } : { ok: false, error: edited.error };
+}
+
+export async function sendTelegramTextToChannel(
+  channel: NotificationChannelRuntime,
+  text: string,
+  replyToMessageId?: number
+): Promise<TelegramResult> {
+  const target = telegramTargetFromChannel(channel);
+  if (!target) return { ok: false, skipped: true };
+  const sent = await callTelegram<{ message_id?: number }>("sendMessage", {
+    chat_id: target.chatId,
+    text,
+    parse_mode: "HTML",
+    disable_web_page_preview: true,
+    ...(replyToMessageId ? { reply_parameters: { message_id: replyToMessageId, allow_sending_without_reply: true } } : {}),
+  }, target.token);
+  return sent.ok ? { ok: true } : { ok: false, error: sent.error };
+}
+
+export async function answerTelegramCallbackForChannel(
+  channel: NotificationChannelRuntime,
+  callbackQueryId: string,
+  text?: string
+): Promise<void> {
+  const target = telegramTargetFromChannel(channel);
+  if (!target || !callbackQueryId) return;
+  await callTelegram("answerCallbackQuery", {
+    callback_query_id: callbackQueryId,
+    ...(text ? { text: truncate(text, 180) } : {}),
+  }, target.token);
+}
+
+export async function registerTelegramWebhook(
+  channel: NotificationChannelRuntime,
+  absoluteWebhookUrl: string
+): Promise<TelegramResult> {
+  const target = telegramTargetFromChannel(channel);
+  const secret = channel.secrets.webhookSecret?.trim();
+  if (!target || !secret) return { ok: false, error: "telegram_credentials_incomplete" };
+  const result = await callTelegram("setWebhook", {
+    url: absoluteWebhookUrl,
+    secret_token: secret,
+    allowed_updates: ["message", "callback_query"],
+  }, target.token);
+  return result.ok ? { ok: true } : { ok: false, error: result.error };
+}
+
 export async function sendApprovalToTelegram(
   approval: ApprovalRequest,
   employee: Employee | null
 ): Promise<TelegramResult> {
+  if (!(await shouldUseGlobalTelegramFallback(approval.orgId))) {
+    return { ok: false, skipped: true };
+  }
   const { token, chatId } = config();
   if (!token || !chatId) return { ok: false, skipped: true };
   if (!approval.telegramRef) {
@@ -170,6 +359,9 @@ export async function editTelegramApprovalMessage(
   status: "approved" | "rejected" | "revision_requested",
   actor: string
 ): Promise<TelegramResult> {
+  if (!(await shouldUseGlobalTelegramFallback(approval.orgId))) {
+    return { ok: false, skipped: true };
+  }
   const { chatId } = config();
   if (!chatId || !approval.telegramMessageId) {
     return { ok: false, skipped: true };
@@ -199,6 +391,9 @@ export async function promptTelegramRevision(
   approval: ApprovalRequest,
   userId: number
 ): Promise<TelegramResult> {
+  if (!(await shouldUseGlobalTelegramFallback(approval.orgId))) {
+    return { ok: false, skipped: true };
+  }
   const { chatId } = config();
   if (!chatId || !approval.telegramMessageId) {
     return { ok: false, skipped: true };
