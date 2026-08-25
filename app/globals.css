@@ -19,7 +19,7 @@
   --sidebar-w: 240px;
   --radius: 14px;
   --radius-card: 18px;
-  --font-jp: "Yu Gothic Medium", "Yu Gothic", YuGothic, "Hiragino Sans",
+  --font-jp: "Yu Gothic", YuGothic, "Yu Gothic Medium", "Hiragino Sans",
     "Hiragino Kaku Gothic ProN", var(--font-noto-sans-jp), Meiryo, sans-serif;
 }
 
@@ -49,7 +49,7 @@ body {
     var(--bg);
   color: var(--text);
   font-family: var(--font-jp);
-  font-weight: 500;
+  font-weight: 600;
   letter-spacing: -0.01em;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -102,10 +102,12 @@ pre,
 
 .muted {
   color: var(--text-muted);
+  font-weight: 600;
 }
 
 .faint {
   color: var(--text-faint);
+  font-weight: 600;
 }
 
 .btn {

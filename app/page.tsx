@@ -64,8 +64,8 @@ export default function LandingPage() {
         <section className="mx-auto max-w-6xl px-4 sm:px-6 pt-14 sm:pt-20 pb-16 sm:pb-24 grid lg:grid-cols-[1fr_.92fr] items-center gap-12 lg:gap-16">
           <div className="min-w-0">
             <span className="eyebrow">AI EMPLOYEE GOVERNANCE</span>
-            <h1 className="mt-5 text-[clamp(2.6rem,7vw,5.8rem)] font-bold tracking-[-0.065em] leading-[.98]">
-              AIを、<br /><span className="text-gradient">社員として雇う。</span>
+            <h1 className="mt-5 text-[clamp(2.35rem,5vw,4rem)] font-bold tracking-[-0.045em] leading-[1.04]">
+              AIを、<br /><span className="text-gradient whitespace-nowrap">社員として雇う。</span>
             </h1>
             <p className="mt-6 max-w-xl text-base sm:text-lg muted leading-relaxed">
               権限、承認、上限、監査。AIが働くためのルールを、一つの社員証に。
