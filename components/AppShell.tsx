@@ -11,14 +11,19 @@ const NAV = [
   { href: "/app/employees", label: "AI社員", icon: "◇" },
   { href: "/app/approvals", label: "承認", icon: "✓" },
   { href: "/app/audit", label: "監査", icon: "≡" },
-  { href: "/app/getting-started", label: "はじめに", icon: "→" },
   { href: "/app/integrations", label: "連携", icon: "⌁" },
   { href: "/app/billing", label: "請求", icon: "¥" },
   { href: "/app/team", label: "チーム", icon: "◎" },
   { href: "/app/settings", label: "通知設定", icon: "•" },
 ];
 
-function navActive(pathname: string, item: (typeof NAV)[number]) {
+const GUIDE_NAV = [
+  { href: "/app/getting-started", label: "はじめに", icon: "→" },
+  { href: "/app/guides/instructions-design", label: "Instructions設計", icon: "Aa" },
+  { href: "/app/guides/approval-loop", label: "承認ループ", icon: "↻" },
+];
+
+function navActive(pathname: string, item: { href: string; exact?: boolean }) {
   return item.exact
     ? pathname === item.href
     : pathname === item.href || pathname.startsWith(item.href + "/");
@@ -27,7 +32,6 @@ function navActive(pathname: string, item: (typeof NAV)[number]) {
 export function AppShell({
   children,
   title,
-  subtitle,
 }: {
   children: React.ReactNode;
   title: string;
@@ -90,32 +94,24 @@ export function AppShell({
               </Link>
             );
           })}
+          <div className="pt-5 pb-2 px-3 text-[10px] font-semibold tracking-[0.14em] text-[var(--text-faint)]">
+            運用ガイド
+          </div>
+          {GUIDE_NAV.map((item) => {
+            const active = navActive(pathname, item);
+            return (
+              <Link
+                key={item.href}
+                href={item.href}
+                className={`rounded-xl px-3 py-2.5 text-sm min-h-[44px] flex items-center gap-3 ${active ? "bg-[var(--bg-soft)] text-[var(--text)]" : "text-[var(--text-muted)] hover:bg-[var(--bg-soft)] hover:text-[var(--text)]"}`}
+              >
+                <span className="w-5 text-center text-[11px] font-mono text-[var(--accent-strong)]" aria-hidden>{item.icon}</span>{item.label}
+              </Link>
+            );
+          })}
         </nav>
-        <div className="px-5 py-4 border-t border-[var(--border-soft)] text-xs faint space-y-2">
-          <Link
-            href="/app/guides/instructions-design"
-            className={`break-words min-h-[44px] flex items-center ${
-              pathname === "/app/guides/instructions-design" ||
-              pathname.startsWith("/app/guides/instructions-design/")
-                ? "text-[var(--text)]"
-                : "hover:text-[var(--text)]"
-            }`}
-          >
-            Instructionsの組み立て方
-          </Link>
-          <Link
-            href="/app/guides/approval-loop"
-            className={`break-words min-h-[44px] flex items-center ${
-              pathname === "/app/guides/approval-loop" ||
-              pathname.startsWith("/app/guides/approval-loop/")
-                ? "text-[var(--text)]"
-                : "hover:text-[var(--text)]"
-            }`}
-          >
-            承認ループ運用
-          </Link>
-          <div className="break-words">当社で用意 / 持ち込み 両対応</div>
-          <div>Sealith by TOKYO307</div>
+        <div className="px-5 py-4 border-t border-[var(--border-soft)] text-[10px] faint tracking-wide">
+          STAFFPASS CONTROL CENTER
         </div>
       </aside>
 
@@ -170,34 +166,25 @@ export function AppShell({
                 </Link>
               );
             })}
+            <div className="pt-5 pb-2 px-3 text-[10px] font-semibold tracking-[0.14em] text-[var(--text-faint)]">
+              運用ガイド
+            </div>
+            {GUIDE_NAV.map((item) => {
+              const active = navActive(pathname, item);
+              return (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  className={`rounded-xl px-3 py-3 text-sm min-h-[44px] flex items-center gap-3 ${active ? "bg-[var(--bg-soft)] text-[var(--text)]" : "text-[var(--text-muted)] hover:bg-[var(--bg-soft)] hover:text-[var(--text)]"}`}
+                  onClick={() => setMenuOpen(false)}
+                >
+                  <span className="w-5 text-center text-[11px] font-mono text-[var(--accent-strong)]" aria-hidden>{item.icon}</span>{item.label}
+                </Link>
+              );
+            })}
           </nav>
-          <div className="px-4 py-4 border-t border-[var(--border-soft)] text-xs faint space-y-2">
-            <Link
-              href="/app/guides/instructions-design"
-              className={`break-words min-h-[44px] flex items-center ${
-                pathname === "/app/guides/instructions-design" ||
-                pathname.startsWith("/app/guides/instructions-design/")
-                  ? "text-[var(--text)]"
-                  : "hover:text-[var(--text)]"
-              }`}
-              onClick={() => setMenuOpen(false)}
-            >
-              Instructionsの組み立て方
-            </Link>
-            <Link
-              href="/app/guides/approval-loop"
-              className={`break-words min-h-[44px] flex items-center ${
-                pathname === "/app/guides/approval-loop" ||
-                pathname.startsWith("/app/guides/approval-loop/")
-                  ? "text-[var(--text)]"
-                  : "hover:text-[var(--text)]"
-              }`}
-              onClick={() => setMenuOpen(false)}
-            >
-              承認ループ運用
-            </Link>
-            <div className="break-words">当社で用意 / 持ち込み 両対応</div>
-            <div>Sealith by TOKYO307</div>
+          <div className="px-4 py-4 border-t border-[var(--border-soft)] text-[10px] faint tracking-wide">
+            STAFFPASS CONTROL CENTER
           </div>
         </aside>
       </div>
@@ -220,22 +207,17 @@ export function AppShell({
               </span>
             </button>
             <div className="min-w-0">
-              <h1 className="text-[15px] font-semibold leading-tight break-words">
+              <h1 className="text-[15px] font-semibold leading-tight whitespace-nowrap">
                 {title}
               </h1>
-              {subtitle ? (
-                <p className="text-xs muted mt-0.5 break-words line-clamp-2">
-                  {subtitle}
-                </p>
-              ) : null}
             </div>
           </div>
           <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
-            <span className="chip chip-ok shrink-0 hidden md:inline-flex">
+            <span className="chip chip-ok shrink-0 !hidden lg:!inline-flex">
               トライアル
             </span>
             <span
-              className="chip inline-flex max-w-[7rem] sm:max-w-[12rem] truncate text-xs sm:text-sm"
+              className="chip !hidden sm:!inline-flex max-w-[12rem] truncate text-xs sm:text-sm"
               title={memberTitle}
             >
               {memberLabel}

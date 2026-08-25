@@ -65,10 +65,10 @@ export default function LandingPage() {
           <div className="min-w-0">
             <span className="eyebrow">AI EMPLOYEE GOVERNANCE</span>
             <h1 className="mt-5 text-[clamp(2.35rem,5vw,4rem)] font-bold tracking-[-0.045em] leading-[1.04]">
-              AIを、<br /><span className="text-gradient whitespace-nowrap">社員として雇う。</span>
+              AIを、<br /><span className="text-gradient whitespace-nowrap">社員として雇う</span>
             </h1>
             <p className="mt-6 max-w-xl text-base sm:text-lg muted leading-relaxed">
-              権限、承認、上限、監査。AIが働くためのルールを、一つの社員証に。
+              権限、承認、上限、監査。AIが働くためのルールを、一つの社員証に
             </p>
             <div className="mt-8 flex flex-col sm:flex-row gap-3">
               <Link href="/signup" className="btn btn-primary w-full sm:w-auto">14日間、無料で試す</Link>
@@ -78,7 +78,7 @@ export default function LandingPage() {
               Staffpassが必要な理由
             </button>
             <div id="hero-detail" popover="auto" className="info-popover">
-              <h2 className="text-base font-semibold">実行力の外側に、会社のルールを。</h2>
+              <h2 className="text-base font-semibold">実行力の外側に、会社のルールを</h2>
               <p className="mt-3 text-sm muted leading-relaxed">エージェントを分けるだけでは、共有環境・承認・監査の境界は作れません。Staffpassは、どのAIが何の目的で、どこまで実行できるかを会社側で制御します。</p>
               <button type="button" popoverTarget="hero-detail" popoverTargetAction="hide" className="btn btn-ghost mt-5 text-xs">閉じる</button>
             </div>
@@ -98,7 +98,7 @@ export default function LandingPage() {
         <section className="mx-auto max-w-6xl px-4 sm:px-6 py-20 sm:py-28">
           <div className="max-w-2xl">
             <span className="eyebrow">CONTROL BY DESIGN</span>
-            <h2 className="mt-4 text-3xl sm:text-5xl font-bold tracking-[-0.045em] leading-tight">分ければ自律化。<br />まとめれば、すべて承認。</h2>
+            <h2 className="mt-4 text-3xl sm:text-5xl font-bold tracking-[-0.045em] leading-tight">分ければ自律化<br />まとめれば、すべて承認</h2>
           </div>
           <div className="mt-10 grid md:grid-cols-3 gap-4">
             {CONTROLS.map((item) => (
@@ -114,8 +114,8 @@ export default function LandingPage() {
         <section className="mx-auto max-w-6xl px-4 sm:px-6 pb-20 sm:pb-28">
           <div className="surface cta-panel px-5 py-10 sm:p-12 text-center">
             <span className="eyebrow">START SMALL</span>
-            <h2 className="mt-4 text-2xl sm:text-4xl font-bold tracking-tight">最初のAI社員に、最初の社員証を。</h2>
-            <p className="mt-3 text-sm muted">既存のGrok Botにも、新しい環境にも導入できます。</p>
+            <h2 className="mt-4 text-2xl sm:text-4xl font-bold tracking-tight">最初のAI社員に、最初の社員証を</h2>
+            <p className="mt-3 text-sm muted">既存のGrok Botにも、新しい環境にも導入できます</p>
             <Link href="/signup" className="btn btn-primary mt-7">トライアルを始める</Link>
           </div>
         </section>
