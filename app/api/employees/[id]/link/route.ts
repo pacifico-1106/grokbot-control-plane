@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getCurrentOrgId } from "@/lib/auth/session";
+import { requireOrgSession } from "@/lib/auth/require-org";
 import {
   bindingPublicView,
   getBinding,
@@ -14,9 +14,11 @@ export async function POST(
   req: Request,
   ctx: { params: Promise<{ id: string }> }
 ) {
+  const gate = await requireOrgSession();
+  if (!gate.ok) return gate.response;
+
   const { id } = await ctx.params;
-  const orgId = await getCurrentOrgId();
-  const employee = await getEmployee(id, orgId);
+  const employee = await getEmployee(id, gate.orgId);
   if (!employee) {
     return NextResponse.json({ error: "employee_not_found" }, { status: 404 });
   }
@@ -28,7 +30,7 @@ export async function POST(
 
   try {
     const binding = await linkAgent(id, {
-      orgId: employee.orgId || orgId || "",
+      orgId: employee.orgId || gate.orgId,
       grokBotAgentId: body.grokBotAgentId || "",
       grokBotWorkspaceId: body.grokBotWorkspaceId,
     });
@@ -61,9 +63,16 @@ export async function GET(
   _req: Request,
   ctx: { params: Promise<{ id: string }> }
 ) {
+  const gate = await requireOrgSession();
+  if (!gate.ok) return gate.response;
+
   const { id } = await ctx.params;
+  const employee = await getEmployee(id, gate.orgId);
+  if (!employee) {
+    return NextResponse.json({ error: "employee_not_found" }, { status: 404 });
+  }
   const binding = await getBinding(id);
-  if (!binding) {
+  if (!binding || binding.orgId !== gate.orgId) {
     return NextResponse.json({ error: "binding_not_found" }, { status: 404 });
   }
   return NextResponse.json({

@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { requireAuthenticatedOrg } from "@/lib/auth/require-org";
 import {
   sendApprovalNeededEmail,
   sendBillingEmail,
@@ -7,13 +8,16 @@ import {
   sendWelcomeEmail,
 } from "@/lib/email";
 
-/** Dev / stub endpoint to exercise Resend helpers */
+/** Dev / stub endpoint to exercise Resend helpers. Requires Auth user + org. */
 export async function POST(req: Request) {
+  const gate = await requireAuthenticatedOrg();
+  if (!gate.ok) return gate.response;
+
   const body = (await req.json().catch(() => ({}))) as {
     kind?: string;
     to?: string;
   };
-  const to = body.to || "owner@example.com";
+  const to = body.to || gate.session.email || "owner@example.com";
   const kind = body.kind || "welcome";
 
   let result;

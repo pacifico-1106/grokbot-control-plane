@@ -61,15 +61,20 @@ export async function getApprovalById(
   id: string,
   orgId?: string | null
 ): Promise<ApprovalRequest | null> {
-  if (!id) return null;
+  if (!id || !orgId) return null;
   if (isDemoMode()) {
-    return demoGetApproval(id);
+    const row = await demoGetApproval(id);
+    if (!row || row.orgId !== orgId) return null;
+    return row;
   }
   const admin = createSupabaseAdminClient();
   if (!admin) return null;
-  let q = admin.from("approval_requests").select("*").eq("id", id);
-  if (orgId) q = q.eq("org_id", orgId);
-  const { data, error } = await q.maybeSingle();
+  const { data, error } = await admin
+    .from("approval_requests")
+    .select("*")
+    .eq("id", id)
+    .eq("org_id", orgId)
+    .maybeSingle();
   if (error || !data) return null;
   return mapApprovalRow(data as Record<string, unknown>);
 }
@@ -261,22 +266,25 @@ export async function resolveApproval(
   resolvedBy: string,
   orgId?: string | null
 ): Promise<ApprovalRequest | null> {
+  if (!id || !orgId) return null;
   if (isDemoMode()) {
+    const existing = await demoGetApproval(id);
+    if (!existing || existing.orgId !== orgId) return null;
     return demoResolveApproval(id, status, resolvedBy);
   }
   const admin = createSupabaseAdminClient();
   if (!admin) return null;
 
   const now = new Date().toISOString();
-  let q = admin
+  const q = admin
     .from("approval_requests")
     .update({
       status,
       resolved_at: now,
       resolved_by: null,
     })
-    .eq("id", id);
-  if (orgId) q = q.eq("org_id", orgId);
+    .eq("id", id)
+    .eq("org_id", orgId);
   const { data, error } = await q.select("*").maybeSingle();
 
   if (error || !data) return null;

@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getCurrentOrgId } from "@/lib/auth/session";
+import { requireOrgSession } from "@/lib/auth/require-org";
 import {
   getDemoApprovalsBackend,
   isDurableDemoApprovalsStore,
@@ -13,8 +13,10 @@ export const dynamic = "force-dynamic";
 
 /** List approvals for Approvals UI polling (DEMO cross-refresh). */
 export async function GET() {
-  const orgId = await getCurrentOrgId();
-  const approvals = await listApprovals(orgId);
+  const gate = await requireOrgSession();
+  if (!gate.ok) return gate.response;
+
+  const approvals = await listApprovals(gate.orgId);
   return NextResponse.json({
     ok: true,
     mode: runtimeModeLabel(),

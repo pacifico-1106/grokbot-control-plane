@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getCurrentOrgId } from "@/lib/auth/session";
+import { requireOrgSession } from "@/lib/auth/require-org";
 import {
   getGatewayStatusForOrg,
   runtimeModeLabel,
@@ -8,20 +8,23 @@ import {
 import type { GatewayLinkStatus, IntegrationMode } from "@/lib/types";
 
 export async function GET() {
-  const orgId = await getCurrentOrgId();
+  const gate = await requireOrgSession();
+  if (!gate.ok) return gate.response;
   return NextResponse.json({
-    status: await getGatewayStatusForOrg(orgId),
+    status: await getGatewayStatusForOrg(gate.orgId),
     machine: ["disconnected", "pending", "linked"],
     mode: runtimeModeLabel(),
   });
 }
 
 export async function POST(req: Request) {
+  const gate = await requireOrgSession();
+  if (!gate.ok) return gate.response;
   const body = (await req.json().catch(() => ({}))) as {
     action?: "connect" | "disconnect" | "handshake";
     mode?: IntegrationMode;
   };
-  const orgId = await getCurrentOrgId();
+  const orgId = gate.orgId;
   const action = body.action || "connect";
   let next: GatewayLinkStatus = await getGatewayStatusForOrg(orgId);
   if (action === "disconnect") next = "disconnected";

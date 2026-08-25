@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { NextResponse } from "next/server";
+import { requireOrgSession } from "@/lib/auth/require-org";
 import { getCurrentOrgId } from "@/lib/auth/session";
 import { assertBillingAllows } from "@/lib/billing/entitlements";
 import {
@@ -19,8 +20,9 @@ import type {
 export const runtime = "nodejs";
 
 export async function GET() {
-  const orgId = await getCurrentOrgId();
-  const members = await listMembers(orgId);
+  const gate = await requireOrgSession();
+  if (!gate.ok) return gate.response;
+  const members = await listMembers(gate.orgId);
   return NextResponse.json({
     ok: true,
     members,

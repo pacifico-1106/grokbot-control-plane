@@ -49,8 +49,9 @@ export async function getEmployee(
   id: string,
   orgId?: string | null
 ): Promise<Employee | null> {
+  if (!id || !orgId) return null;
   const all = await listEmployees(orgId);
-  return all.find((e) => e.id === id) ?? null;
+  return all.find((e) => e.id === id && e.orgId === orgId) ?? null;
 }
 
 /**

@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { requireAuthenticatedOrg } from "@/lib/auth/require-org";
 import { sendTrialStartedEmail, sendWelcomeEmail } from "@/lib/email";
 import { isDemoMode } from "@/lib/mode";
 import { TRIAL_DAYS } from "@/lib/stripe";
@@ -6,11 +7,15 @@ import { TRIAL_DAYS } from "@/lib/stripe";
 /**
  * Legacy trial form (email stub + redirect).
  * Production signup with Auth+org: use POST /api/auth/signup (see /signup page).
+ * Closed as an unauthenticated relay: requires Auth user + org.
  */
 export async function POST(req: Request) {
+  const gate = await requireAuthenticatedOrg();
+  if (!gate.ok) return gate.response;
+
   const form = await req.formData();
   const orgName = String(form.get("orgName") || "新しい組織");
-  const email = String(form.get("email") || "");
+  const email = String(form.get("email") || gate.session.email || "");
   const mode = String(form.get("mode") || "managed");
 
   if (!email) {

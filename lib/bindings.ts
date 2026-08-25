@@ -289,8 +289,9 @@ export function seedDemoBindings(
 }
 
 export function bindingPublicView(b: EmployeeBinding) {
+  const { credentialFingerprint: _omitFingerprint, ...safe } = b;
   return {
-    ...b,
+    ...safe,
     demo: DEMO_LABEL,
     managedNote:
       "切断・credential 破綻は黙って消さない。status=needs_reauth で 要再連携 を出す。",
