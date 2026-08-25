@@ -17,7 +17,7 @@ export default async function LoginPage({
         <BrandMark size="md" href="/" />
         <p className="mt-5 text-xs faint">ログイン</p>
         <h1 className="mt-2 text-2xl font-bold tracking-tight">
-          AI社員 制御面
+          管理画面
         </h1>
         {demo ? (
           <p className="mt-3 text-sm muted leading-relaxed">
