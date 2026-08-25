@@ -1,5 +1,9 @@
 import { ensureBindingRow, seedDemoBindings } from "./bindings";
-import { buildPollPath, generateStatusToken } from "./approvals/tokens";
+import {
+  buildPollPath,
+  generateStatusToken,
+  generateTelegramRef,
+} from "./approvals/tokens";
 import type {
   ApprovalRequest,
   AuditEvent,
@@ -91,6 +95,12 @@ export const DEMO_APPROVALS: ApprovalRequest[] = [
     status: "pending",
     tool: "mail.send",
     jobId: "job_demo_mail_outreach_1",
+    revisionNote: null,
+    revisionCount: 0,
+    parentApprovalId: null,
+    telegramRef: "demoapr00001",
+    telegramMessageId: null,
+    metadata: {},
     statusToken: "st_demo_apr1_status_token_aaaaaaaa",
     pollPath: buildPollPath("apr_1", "st_demo_apr1_status_token_aaaaaaaa"),
     createdAt: new Date(Date.now() - 3600000).toISOString(),
@@ -116,6 +126,12 @@ export const DEMO_APPROVALS: ApprovalRequest[] = [
     status: "pending",
     tool: "commerce.order",
     jobId: "job_demo_order_supplies_1",
+    revisionNote: null,
+    revisionCount: 0,
+    parentApprovalId: null,
+    telegramRef: "demoapr00002",
+    telegramMessageId: null,
+    metadata: {},
     statusToken: "st_demo_apr2_status_token_bbbbbbbb",
     pollPath: buildPollPath("apr_2", "st_demo_apr2_status_token_bbbbbbbb"),
     createdAt: new Date(Date.now() - 7200000).toISOString(),
@@ -376,14 +392,21 @@ export function addRuntimeEmployee(employee: Employee, auditSummary: string) {
 
 export function resolveRuntimeApproval(
   id: string,
-  status: "approved" | "rejected",
-  resolvedBy = "owner@example.com"
+  status: "approved" | "rejected" | "revision_requested",
+  resolvedBy = "owner@example.com",
+  revisionNote?: string
 ) {
   const idx = runtimeApprovals.findIndex((a) => a.id === id);
   if (idx < 0) return null;
   const next = {
     ...runtimeApprovals[idx],
     status,
+    revisionNote:
+      status === "revision_requested" ? revisionNote?.trim() || null : null,
+    revisionCount:
+      status === "revision_requested"
+        ? runtimeApprovals[idx].revisionCount + 1
+        : runtimeApprovals[idx].revisionCount,
     resolvedAt: new Date().toISOString(),
     resolvedBy,
   };
@@ -393,9 +416,17 @@ export function resolveRuntimeApproval(
     orgId: DEMO_ORG.id,
     employeeId: next.employeeId,
     credentialId: next.credentialId,
-    action: "approval.resolved",
+    action:
+      status === "revision_requested"
+        ? "approval.revision_requested"
+        : "approval.resolved",
     purpose: next.purpose,
-    summary: status === "approved" ? `承認: ${next.title || next.summary}` : `却下: ${next.title || next.summary}`,
+    summary:
+      status === "approved"
+        ? `承認: ${next.title || next.summary}`
+        : status === "revision_requested"
+          ? `修正依頼: ${next.title || next.summary}`
+          : `却下: ${next.title || next.summary}`,
     metadata: {
       decision: status,
       resolvedBy,
@@ -417,6 +448,10 @@ export type CreateRuntimeApprovalInput = {
   tool?: string | null;
   jobId?: string | null;
   statusToken?: string;
+  revisionCount?: number;
+  parentApprovalId?: string | null;
+  telegramRef?: string;
+  metadata?: Record<string, unknown>;
 };
 
 export function pushRuntimeApproval(
@@ -436,6 +471,12 @@ export function pushRuntimeApproval(
     status: "pending",
     tool: input.tool ?? null,
     jobId: input.jobId ?? null,
+    revisionNote: null,
+    revisionCount: input.revisionCount ?? 0,
+    parentApprovalId: input.parentApprovalId ?? null,
+    telegramRef: input.telegramRef || generateTelegramRef(),
+    telegramMessageId: null,
+    metadata: input.metadata ?? {},
     statusToken,
     pollPath: buildPollPath(id, statusToken),
     createdAt: new Date().toISOString(),

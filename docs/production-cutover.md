@@ -24,6 +24,7 @@
      2. `supabase/migrations/20260823_referral_code.sql`  
      3. `supabase/migrations/20260823_agentmail_reservation.sql`  
      4. `supabase/migrations/20260824_approval_loop.sql` ← **承認ループ必須**（title / tool / job_id / status_token / poll_path、employees の notify/callback/routine）
+     5. `supabase/migrations/20260826_telegram_revision.sql` ← Telegram通知、修正依頼、再提出の親子関係
 4. **Auth 有効化** — Authentication → Providers → Email を ON。開発中は Confirm email を OFF 推奨（signup が即ログインできる）
 5. **Vercel env にキーを貼る**（下記チェックリスト）— **Supabase 3 点セットが揃うまで DEMO のまま**
 6. **Redeploy** → `GET /api/health` で `runtimeMode: "production"` を確認
@@ -43,6 +44,9 @@
 | `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` / `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY` | 請求 |
 | `STRIPE_PRICE_ID_STARTER` / `STRIPE_PRICE_ID_BUSINESS` | Checkout |
 | `RESEND_API_KEY` / `EMAIL_FROM` | トランザクションメール |
+| `TELEGRAM_BOT_TOKEN` / `TELEGRAM_APPROVAL_CHAT_ID` | 承認専用Botとグループ |
+| `TELEGRAM_WEBHOOK_SECRET` / `TELEGRAM_ALLOWED_USER_IDS` | Webhook署名と承認者制限 |
+| `CRON_SECRET` | Telegram朝夕ダイジェスト |
 | `TRIAL_DAYS` | 既定 14 |
 
 **本番切替に必須（これで DEMO 解除）:**  
@@ -58,7 +62,7 @@
 2. 新規: `schema.sql` 全文。既存: migrations を上記順に Run
 3. Table Editor で確認:
    - `orgs` / `org_members` / `employees` / `employee_bindings` / `approval_requests` / `audit_events`
-   - `approval_requests` に `title`, `tool`, `job_id`, `status_token`, `poll_path`
+   - `approval_requests` に `title`, `tool`, `job_id`, `status_token`, `poll_path`, `revision_note`, `revision_count`, `telegram_ref`, `telegram_message_id`, `parent_approval_id`
    - `employees` に `approval_notify_email`, `callback_url`, `approval_routine_text`
 4. Authentication → Providers → Email ON（Confirm email は開発中 OFF 可）
 
@@ -81,7 +85,10 @@ Gateway / API の **service role クライアントは RLS をバイパス**（�
 |--------|------|
 | DEMO | env 未設定で `/app`・雇い・承認・チームが動く。`GET /api/health` → `runtimeMode:"demo"` |
 | Prod | `GET /api/health` → `runtimeMode:"production"`。signup → login → `/app` がセッション必須。社員発行・承認が Postgres に残る |
-| 承認ループ | invoke → 402+pollUrl → UI 承認 → poll `approved` → approvalId 付き再 invoke |
+| 承認ループ | invoke → 402+pollUrl → UI/Telegramで承認または修正依頼 → poll → 承認時はapprovalId、修正時は同じjobId+parentApprovalIdで再 invoke |
+
+Telegram Bot の作成、Group Privacy、setWebhook、疎通確認は
+`docs/guides/telegram-approval.md` を参照。
 
 ## 関連
 

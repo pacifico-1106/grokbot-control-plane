@@ -15,6 +15,11 @@ function dashboardCta(label: string): string {
 function statusLabelJa(statusLabel: string): string {
   if (statusLabel === "approved" || statusLabel === "承認済み") return "承認済み";
   if (statusLabel === "rejected" || statusLabel === "却下") return "却下";
+  if (
+    statusLabel === "revision_requested" ||
+    statusLabel === "修正依頼"
+  )
+    return "修正依頼";
   return statusLabel;
 }
 

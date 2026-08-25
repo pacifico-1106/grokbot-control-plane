@@ -7,6 +7,7 @@ export const BASE_APPROVAL_WAIT_RULE = `## Base — 承認待ち（必須・書�
 needs_approval / HTTP 402 を受けたら、作業を直ちに停止する。
 Gateway が返す pollUrl（または statusToken + approvalId）を使い、GET でステータスをポーリングする。
 status が approved になるまで confirm / send / order を完了してはならない。
+revision_requested なら revisionNote に従い、同じ jobId と parentApprovalId で修正版を再提出する。
 rejected / expired なら当該ジョブを中止し、人間に報告する。
 メール通知やチャットの「承認されたかも」は根拠にしない。正本は署名付き status poll（または将来の Partner webhook）のみ。
 approvalId なしの再 invoke で確定を試みない。approved 後は同じ approvalId を付けて再 invoke する。`;

@@ -66,6 +66,12 @@ export function mapApprovalRow(row: Record<string, unknown>): ApprovalRequest {
   const title = String(
     row.title ?? meta.title ?? row.summary ?? "承認依頼"
   );
+  const revisionCount = Number(
+    row.revision_count ?? meta.revisionCount ?? meta.revision_count ?? 0
+  );
+  const telegramMessageId = Number(
+    row.telegram_message_id ?? meta.telegramMessageId ?? Number.NaN
+  );
   return {
     id,
     orgId: String(row.org_id),
@@ -90,6 +96,30 @@ export function mapApprovalRow(row: Record<string, unknown>): ApprovalRequest {
           : meta.job_id != null
             ? String(meta.job_id)
             : null,
+    revisionNote:
+      row.revision_note != null
+        ? String(row.revision_note)
+        : meta.revisionNote != null
+          ? String(meta.revisionNote)
+          : null,
+    revisionCount:
+      Number.isFinite(revisionCount) && revisionCount >= 0 ? revisionCount : 0,
+    parentApprovalId:
+      row.parent_approval_id != null
+        ? String(row.parent_approval_id)
+        : meta.parentApprovalId != null
+          ? String(meta.parentApprovalId)
+          : null,
+    telegramRef:
+      row.telegram_ref != null
+        ? String(row.telegram_ref)
+        : meta.telegramRef != null
+          ? String(meta.telegramRef)
+          : null,
+    telegramMessageId: Number.isSafeInteger(telegramMessageId)
+      ? telegramMessageId
+      : null,
+    metadata: meta,
     statusToken,
     pollPath,
     createdAt: String(row.created_at ?? new Date().toISOString()),

@@ -20,6 +20,10 @@ export {
   getApprovalStatusByToken,
   createApproval,
   resolveApproval,
+  getApprovalByTelegramRef,
+  getApprovalByTelegramMessageId,
+  updateApprovalTelegramState,
+  listApprovalsForTelegramDigest,
   isDurableDemoApprovalsStore,
   getDemoApprovalsBackend,
   type CreateApprovalInput,
@@ -53,4 +57,3 @@ export {
   setOrgStripeCustomerId,
   type UpsertSubscriptionInput,
 } from "./subscriptions";
-

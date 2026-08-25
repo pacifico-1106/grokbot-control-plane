@@ -29,6 +29,8 @@ export function ApprovalsClient({
   const [pendingId, setPendingId] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [revisionId, setRevisionId] = useState<string | null>(null);
+  const [revisionNote, setRevisionNote] = useState("");
   const [storeLabel, setStoreLabel] = useState(demoStore);
   const [durable, setDurable] = useState(demoDurable);
 
@@ -94,6 +96,33 @@ export function ApprovalsClient({
     await navigator.clipboard.writeText(url);
     setCopiedId(a.id);
     setTimeout(() => setCopiedId(null), 2000);
+  }
+
+  async function requestRevision(id: string) {
+    const note = revisionNote.trim();
+    if (!note) {
+      setError("修正内容を入力してください");
+      return;
+    }
+    setPendingId(id);
+    setError("");
+    try {
+      const res = await fetch(`/api/approvals/${id}/revise`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ note }),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error || "failed");
+      setRevisionId(null);
+      setRevisionNote("");
+      await refreshList();
+      router.refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "failed");
+    } finally {
+      setPendingId(null);
+    }
   }
 
   const pending = rows.filter((r) => r.status === "pending");
@@ -215,6 +244,19 @@ export function ApprovalsClient({
                       type="button"
                       className="btn btn-ghost text-sm w-full sm:w-auto min-h-[44px]"
                       disabled={pendingId === a.id}
+                      onClick={() => {
+                        setRevisionId((current) =>
+                          current === a.id ? null : a.id
+                        );
+                        setRevisionNote("");
+                      }}
+                    >
+                      修正依頼
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-ghost text-sm w-full sm:w-auto min-h-[44px]"
+                      disabled={pendingId === a.id}
                       onClick={() => void decide(a.id, "reject")}
                     >
                       却下
@@ -228,6 +270,31 @@ export function ApprovalsClient({
                       承認
                     </button>
                   </div>
+                  {revisionId === a.id ? (
+                    <div className="lg:col-span-2 rounded-lg border border-[var(--border-soft)] bg-[var(--bg-soft)] p-3">
+                      <label className="block text-xs muted" htmlFor={`revision-${a.id}`}>
+                        AI社員へ返す具体的な修正指示
+                      </label>
+                      <textarea
+                        id={`revision-${a.id}`}
+                        className="mt-2 w-full min-h-24 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm"
+                        maxLength={2000}
+                        value={revisionNote}
+                        onChange={(event) => setRevisionNote(event.target.value)}
+                        placeholder="例: 2段落目の金額表記を削除して、同じ jobId で再提出してください"
+                      />
+                      <div className="mt-2 flex justify-end">
+                        <button
+                          type="button"
+                          className="btn btn-primary text-sm min-h-[44px]"
+                          disabled={pendingId === a.id || !revisionNote.trim()}
+                          onClick={() => void requestRevision(a.id)}
+                        >
+                          修正を依頼する
+                        </button>
+                      </div>
+                    </div>
+                  ) : null}
                 </li>
               );
             })}
@@ -243,13 +310,19 @@ export function ApprovalsClient({
               <li key={a.id} className="flex items-start gap-2 text-sm min-w-0">
                 <span
                   className={`chip shrink-0 ${
-                    a.status === "approved" ? "chip-ok" : "chip-danger"
+                    a.status === "approved"
+                      ? "chip-ok"
+                      : a.status === "revision_requested"
+                        ? "chip-warn"
+                        : "chip-danger"
                   }`}
                 >
                   {a.status === "approved"
                     ? "承認済み"
                     : a.status === "rejected"
                       ? "却下"
+                      : a.status === "revision_requested"
+                        ? "修正依頼"
                       : a.status}
                 </span>
                 <div className="min-w-0">
@@ -257,6 +330,11 @@ export function ApprovalsClient({
                   <p className="text-xs muted mt-0.5 break-words">
                     {[a.tool, a.purpose, a.jobId].filter(Boolean).join(" · ")}
                   </p>
+                  {a.revisionNote ? (
+                    <p className="text-xs mt-1 break-words">
+                      修正指示: {a.revisionNote}
+                    </p>
+                  ) : null}
                 </div>
               </li>
             ))}

@@ -1,5 +1,6 @@
 import { sendApprovalNotification } from "@/lib/email";
 import { sendTransactionalEmail, renderStubHtml } from "@/lib/resend";
+import { editTelegramApprovalMessage } from "@/lib/notify/telegram";
 import type { ApprovalRequest, Employee } from "@/lib/types";
 
 function orgNotifyEmail(): string {
@@ -14,21 +15,22 @@ export type ResolveSideEffectsResult = {
   orgEmail: { ok: boolean; stub?: boolean; error?: string };
   employeeEmail: { ok: boolean; stub?: boolean; skipped?: boolean; error?: string };
   callback: { ok: boolean; skipped?: boolean; status?: number; error?: string };
+  telegram: { ok: boolean; skipped?: boolean; error?: string };
 };
 
 /**
- * Best-effort notifications after approve/reject.
+ * Best-effort notifications after approve/reject/revision request.
  * Never throws — resolve API must succeed even if notify/callback fails.
  */
 export async function runApprovalResolveSideEffects(opts: {
   approval: ApprovalRequest;
-  decision: "approved" | "rejected";
+  decision: "approved" | "rejected" | "revision_requested";
   actorEmail: string;
   employee?: Employee | null;
 }): Promise<ResolveSideEffectsResult> {
   const { approval, decision, actorEmail, employee } = opts;
   const title = approval.title || approval.summary.slice(0, 80);
-  const statusLabel = decision === "approved" ? "approved" : "rejected";
+  const statusLabel = decision;
 
   let orgEmail: ResolveSideEffectsResult["orgEmail"] = { ok: false };
   try {
@@ -62,6 +64,10 @@ export async function runApprovalResolveSideEffects(opts: {
         `purpose=${approval.purpose}`,
         `risk=${approval.risk}`,
         `resolvedBy=${actorEmail}`,
+        ...(approval.revisionNote
+          ? [`revisionNote=${approval.revisionNote.replace(/\n/g, " | ")}`]
+          : []),
+        `revisionCount=${approval.revisionCount}`,
         `summary=${approval.summary.replace(/\n/g, " | ")}`,
       ].join("\n");
       employeeEmail = await sendTransactionalEmail({
@@ -106,6 +112,9 @@ export async function runApprovalResolveSideEffects(opts: {
         summary: approval.summary,
         resolvedBy: actorEmail,
         resolvedAt: approval.resolvedAt,
+        revisionNote: approval.revisionNote,
+        revisionCount: approval.revisionCount,
+        parentApprovalId: approval.parentApprovalId,
       };
       const res = await fetch(callbackUrl, {
         method: "POST",
@@ -126,5 +135,14 @@ export async function runApprovalResolveSideEffects(opts: {
     }
   }
 
-  return { orgEmail, employeeEmail, callback };
+  const telegram = await editTelegramApprovalMessage(
+    approval,
+    decision,
+    actorEmail
+  ).catch((error) => ({
+    ok: false,
+    error: error instanceof Error ? error.message : "telegram_edit_failed",
+  }));
+
+  return { orgEmail, employeeEmail, callback, telegram };
 }

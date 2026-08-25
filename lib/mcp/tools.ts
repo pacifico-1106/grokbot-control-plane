@@ -69,6 +69,11 @@ export const STAFFPASS_MCP_TOOLS: McpToolDef[] = [
           description:
             "Prior human approval id after poll returns approved; unlocks confirm/send/order completion.",
         },
+        parentApprovalId: {
+          type: "string",
+          description:
+            "Approval id whose status is revision_requested. Use it when submitting the corrected artifact with the same jobId.",
+        },
         amountJpy: {
           type: "number",
           description: "Order amount in JPY (commerce.order).",
@@ -87,7 +92,7 @@ export const STAFFPASS_MCP_TOOLS: McpToolDef[] = [
   {
     name: "staffpass_get_approval_status",
     description:
-      "Poll a human approval ticket with approvalId + statusToken (same as GET /api/approvals/status). Returns pending|approved|rejected|expired and pollHint. Do not complete confirm/send/order while pending.",
+      "Poll a human approval ticket with approvalId + statusToken (same as GET /api/approvals/status). Returns pending|approved|rejected|revision_requested|expired and pollHint. On revision_requested, revise per revisionNote and re-invoke with the same jobId and parentApprovalId.",
     inputSchema: {
       type: "object",
       properties: {
@@ -175,6 +180,10 @@ export async function callStaffpassMcpTool(
       const jobId = String(args.jobId || args.job_id || "").trim();
       const approvalId =
         typeof args.approvalId === "string" ? args.approvalId.trim() : undefined;
+      const parentApprovalId =
+        typeof args.parentApprovalId === "string"
+          ? args.parentApprovalId.trim()
+          : undefined;
       const amountJpy =
         args.amountJpy == null ? undefined : Number(args.amountJpy);
       const payload =
@@ -188,6 +197,7 @@ export async function callStaffpassMcpTool(
         purpose,
         jobId,
         approvalId,
+        parentApprovalId,
         amountJpy: Number.isFinite(amountJpy as number)
           ? (amountJpy as number)
           : undefined,
@@ -261,6 +271,7 @@ export async function callStaffpassMcpTool(
         approval.status === "rejected" ||
         approval.status === "pending" ||
         approval.status === "expired"
+        || approval.status === "revision_requested"
           ? approval.status
           : "pending";
       return toolResult({
@@ -278,11 +289,16 @@ export async function callStaffpassMcpTool(
         employeeId: approval.employeeId,
         createdAt: approval.createdAt,
         resolvedAt: approval.resolvedAt,
+        revisionNote: approval.revisionNote,
+        revisionCount: approval.revisionCount,
+        parentApprovalId: approval.parentApprovalId,
         pollHint:
           status === "pending"
             ? "continue_polling"
             : status === "approved"
               ? "reinvoke_with_approvalId"
+              : status === "revision_requested"
+                ? `Revise the artifact per revisionNote and re-invoke with the same jobId and parentApprovalId=${approval.id}.`
               : "abort_job",
       });
     }

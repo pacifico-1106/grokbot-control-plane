@@ -4,7 +4,12 @@ export type IntegrationMode = "managed" | "byo";
 
 export type GatewayLinkStatus = "linked" | "pending" | "disconnected";
 
-export type ApprovalStatus = "pending" | "approved" | "rejected" | "expired";
+export type ApprovalStatus =
+  | "pending"
+  | "approved"
+  | "rejected"
+  | "expired"
+  | "revision_requested";
 
 export type ApprovalPolicy = "auto" | "always_human" | "risk_based";
 
@@ -119,6 +124,8 @@ export interface GatewayInvokeRequest {
    * confirm/send/order may complete (and meter). Approval button alone is not billed.
    */
   approvalId?: string;
+  /** Revision parent returned by a prior revision_requested decision. */
+  parentApprovalId?: string;
 }
 
 export type AuditAction =
@@ -127,6 +134,8 @@ export type AuditAction =
   | "tool.invoke"
   | "approval.requested"
   | "approval.resolved"
+  | "approval.revision_requested"
+  | "approval.telegram_error"
   | "billing.updated"
   | "email.sent"
   | "gateway.link_changed"
@@ -220,6 +229,18 @@ export interface ApprovalRequest {
   tool?: string | null;
   /** Correlation job id from invoke. */
   jobId?: string | null;
+  /** Human correction instructions when status=revision_requested. */
+  revisionNote: string | null;
+  /** Number of revision rounds inherited by resubmissions. */
+  revisionCount: number;
+  /** Prior approval that requested this resubmission. */
+  parentApprovalId: string | null;
+  /** Random, non-guessable Telegram callback reference. */
+  telegramRef: string | null;
+  /** Telegram message linked to this approval. */
+  telegramMessageId: number | null;
+  /** Extensible transport metadata (artifact_url, awaiting revision actor, etc.). */
+  metadata: Record<string, unknown>;
   /**
    * Opaque token for signed status poll URL.
    * Present on create so Bot can persist; status API requires id+token.

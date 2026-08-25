@@ -36,6 +36,7 @@ export async function GET(req: Request) {
     approval.status === "rejected" ||
     approval.status === "pending" ||
     approval.status === "expired"
+    || approval.status === "revision_requested"
       ? approval.status
       : "pending";
 
@@ -54,6 +55,9 @@ export async function GET(req: Request) {
     employeeId: approval.employeeId,
     createdAt: approval.createdAt,
     resolvedAt: approval.resolvedAt,
+    revisionNote: approval.revisionNote,
+    revisionCount: approval.revisionCount,
+    parentApprovalId: approval.parentApprovalId,
     /**
      * Bot contract: poll until approved|rejected|expired.
      * Do not complete confirm/send/order while pending.
@@ -63,6 +67,8 @@ export async function GET(req: Request) {
         ? "continue_polling"
         : status === "approved"
           ? "reinvoke_with_approvalId"
+          : status === "revision_requested"
+            ? `Revise the artifact per revisionNote and re-invoke with the same jobId and parentApprovalId=${approval.id}.`
           : "abort_job",
   });
 }

@@ -18,7 +18,11 @@ import {
   resolveRuntimeApproval,
   type CreateRuntimeApprovalInput,
 } from "../demo-data";
-import { buildPollPath, generateStatusToken } from "../approvals/tokens";
+import {
+  buildPollPath,
+  generateStatusToken,
+  generateTelegramRef,
+} from "../approvals/tokens";
 import type { ApprovalRequest } from "../types";
 
 const REDIS_KEY = "staffpass:demo:approvals:v1";
@@ -82,12 +86,26 @@ function cloneSeeds(): ApprovalRequest[] {
   return DEMO_APPROVALS.map((a) => ({ ...a }));
 }
 
+function normalizeStoredApproval(row: ApprovalRequest): ApprovalRequest {
+  return {
+    ...row,
+    revisionNote: row.revisionNote ?? null,
+    revisionCount: Number.isFinite(row.revisionCount) ? row.revisionCount : 0,
+    parentApprovalId: row.parentApprovalId ?? null,
+    telegramRef: row.telegramRef ?? null,
+    telegramMessageId: Number.isSafeInteger(row.telegramMessageId)
+      ? row.telegramMessageId
+      : null,
+    metadata: row.metadata ?? {},
+  };
+}
+
 function mergeSeedAndStored(stored: ApprovalRequest[]): ApprovalRequest[] {
   const byId = new Map<string, ApprovalRequest>();
-  for (const s of cloneSeeds()) byId.set(s.id, s);
+  for (const s of cloneSeeds()) byId.set(s.id, normalizeStoredApproval(s));
   for (const row of stored) {
     if (!row?.id) continue;
-    byId.set(row.id, row);
+    byId.set(row.id, normalizeStoredApproval(row));
   }
   return Array.from(byId.values()).sort((a, b) =>
     a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0
@@ -346,6 +364,31 @@ export async function demoGetApproval(
   return rows.find((a) => a.id === id) ?? null;
 }
 
+export async function demoUpdateApproval(
+  id: string,
+  patch: Partial<ApprovalRequest>
+): Promise<ApprovalRequest | null> {
+  if (!id) return null;
+  if (!isDurableDemoApprovalsStore()) {
+    const rows = getRuntimeApprovals();
+    const idx = rows.findIndex((row) => row.id === id);
+    if (idx < 0) return null;
+    rows[idx] = { ...rows[idx], ...patch };
+    return { ...rows[idx] };
+  }
+
+  const stored = (await loadDurableRows()) ?? [];
+  const merged = mergeSeedAndStored(stored);
+  const idx = merged.findIndex((row) => row.id === id);
+  if (idx < 0) return null;
+  const updated = { ...merged[idx], ...patch };
+  const next = [...merged];
+  next[idx] = updated;
+  if (!(await saveDurableRows(next))) return null;
+  syncMemoryFromRows(next);
+  return updated;
+}
+
 export async function demoCreateApproval(
   input: CreateRuntimeApprovalInput
 ): Promise<ApprovalRequest> {
@@ -369,6 +412,12 @@ export async function demoCreateApproval(
     status: "pending",
     tool: input.tool ?? null,
     jobId: input.jobId ?? null,
+    revisionNote: null,
+    revisionCount: input.revisionCount ?? 0,
+    parentApprovalId: input.parentApprovalId ?? null,
+    telegramRef: input.telegramRef || generateTelegramRef(),
+    telegramMessageId: null,
+    metadata: input.metadata ?? {},
     statusToken,
     pollPath: buildPollPath(id, statusToken),
     createdAt: new Date().toISOString(),
@@ -403,18 +452,19 @@ export async function demoCreateApproval(
 
 export async function demoResolveApproval(
   id: string,
-  status: "approved" | "rejected",
-  resolvedBy: string
+  status: "approved" | "rejected" | "revision_requested",
+  resolvedBy: string,
+  revisionNote?: string
 ): Promise<ApprovalRequest | null> {
   if (!isDurableDemoApprovalsStore()) {
-    return resolveRuntimeApproval(id, status, resolvedBy);
+    return resolveRuntimeApproval(id, status, resolvedBy, revisionNote);
   }
 
   const stored = (await loadDurableRows()) ?? [];
   const merged = mergeSeedAndStored(stored);
   const idx = merged.findIndex((a) => a.id === id);
   if (idx < 0) {
-    const mem = resolveRuntimeApproval(id, status, resolvedBy);
+    const mem = resolveRuntimeApproval(id, status, resolvedBy, revisionNote);
     if (!mem) return null;
     const again = mergeSeedAndStored([...stored, mem]);
     await saveDurableRows(again);
@@ -425,6 +475,12 @@ export async function demoResolveApproval(
   const nextRow: ApprovalRequest = {
     ...merged[idx],
     status,
+    revisionNote:
+      status === "revision_requested" ? revisionNote?.trim() || null : null,
+    revisionCount:
+      status === "revision_requested"
+        ? merged[idx].revisionCount + 1
+        : merged[idx].revisionCount,
     resolvedAt: new Date().toISOString(),
     resolvedBy,
   };
@@ -432,19 +488,24 @@ export async function demoResolveApproval(
   next[idx] = nextRow;
   const ok = await saveDurableRows(next);
   if (!ok) {
-    return resolveRuntimeApproval(id, status, resolvedBy);
+    return resolveRuntimeApproval(id, status, resolvedBy, revisionNote);
   }
   syncMemoryFromRows(next);
   pushRuntimeAuditEvent({
     orgId: DEMO_ORG.id,
     employeeId: nextRow.employeeId,
     credentialId: nextRow.credentialId,
-    action: "approval.resolved",
+    action:
+      status === "revision_requested"
+        ? "approval.revision_requested"
+        : "approval.resolved",
     purpose: nextRow.purpose,
     summary:
       status === "approved"
         ? `承認: ${nextRow.title || nextRow.summary}`
-        : `却下: ${nextRow.title || nextRow.summary}`,
+        : status === "revision_requested"
+          ? `修正依頼: ${nextRow.title || nextRow.summary}`
+          : `却下: ${nextRow.title || nextRow.summary}`,
     metadata: {
       decision: status,
       resolvedBy,

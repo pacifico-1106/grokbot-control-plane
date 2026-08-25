@@ -105,11 +105,16 @@ create table if not exists approval_requests (
   title text,
   tool text,
   job_id text,
+  revision_note text,
+  revision_count integer not null default 0,
+  telegram_message_id bigint,
+  telegram_ref text not null default encode(gen_random_bytes(6), 'hex'),
+  parent_approval_id uuid references approval_requests(id) on delete set null,
   status_token text,
   poll_path text,
   risk text not null check (risk in ('low', 'medium', 'high')),
   status text not null default 'pending'
-    check (status in ('pending', 'approved', 'rejected', 'expired')),
+    check (status in ('pending', 'approved', 'rejected', 'expired', 'revision_requested')),
   metadata jsonb not null default '{}'::jsonb,
   created_at timestamptz not null default now(),
   resolved_at timestamptz,
@@ -121,6 +126,13 @@ create index if not exists approval_requests_org_status_idx
 
 create index if not exists approval_requests_status_token_idx
   on approval_requests (id, status_token);
+
+create unique index if not exists approval_requests_telegram_ref_idx
+  on approval_requests (telegram_ref);
+create index if not exists approval_requests_telegram_msg_idx
+  on approval_requests (telegram_message_id);
+create index if not exists approval_requests_job_idx
+  on approval_requests (org_id, job_id);
 
 -- ---------------------------------------------------------------------------
 -- Audit timeline

@@ -4,6 +4,7 @@ import {
   inferRiskForTool,
 } from "@/lib/approvals/summary";
 import { sendApprovalNeededEmail } from "@/lib/email";
+import { sendApprovalToTelegram } from "@/lib/notify/telegram";
 import { getCurrentOrgId } from "@/lib/auth/session";
 import {
   assertExecutable,
@@ -26,7 +27,7 @@ import {
 } from "@/lib/gateway/tools";
 import { evaluateAllowedAccountsForBrowser } from "@/lib/employees/allowed-accounts";
 import { evaluateSpend } from "@/lib/spend-gate";
-import type { GatewayInvokeRequest } from "@/lib/types";
+import type { Employee, GatewayInvokeRequest } from "@/lib/types";
 
 export type GatewayInvokeResult = {
   httpStatus: number;
@@ -55,6 +56,7 @@ async function createNeedsApprovalResponse(opts: {
   orgId: string;
   credentialId: string | null;
   employeeDisplayName: string;
+  employee?: Employee | null;
   tool: string;
   purpose: string;
   jobId: string;
@@ -63,6 +65,8 @@ async function createNeedsApprovalResponse(opts: {
   message: string;
   extra?: Record<string, unknown>;
   httpStatus?: number;
+  parentApprovalId?: string | null;
+  metadata?: Record<string, unknown>;
 }) {
   const risk = opts.risk || inferRiskForTool(opts.tool);
   const title = buildApprovalTitle(opts.tool, opts.purpose);
@@ -80,6 +84,7 @@ async function createNeedsApprovalResponse(opts: {
   let pollUrl: string | null = null;
   let pollPath: string | null = null;
   let demoStore: string | null = null;
+  let createdApproval: Awaited<ReturnType<typeof createApproval>>["approval"] | null = null;
 
   try {
     const created = await createApproval({
@@ -92,7 +97,10 @@ async function createNeedsApprovalResponse(opts: {
       risk,
       tool: opts.tool,
       jobId: opts.jobId,
+      parentApprovalId: opts.parentApprovalId,
+      metadata: opts.metadata,
     });
+    createdApproval = created.approval;
     approvalId = created.approval.id;
     statusToken = created.statusToken;
     pollUrl = created.pollUrl;
@@ -128,6 +136,14 @@ async function createNeedsApprovalResponse(opts: {
     process.env.APPROVAL_NOTIFY_EMAIL ||
     "owner@example.com";
   void sendApprovalNeededEmail(notifyTo, summary, risk).catch(() => null);
+  const telegramNotify = createdApproval
+    ? await sendApprovalToTelegram(createdApproval, opts.employee ?? null).catch(
+        (error) => ({
+          ok: false,
+          error: error instanceof Error ? error.message : "telegram_notify_failed",
+        })
+      )
+    : { ok: false, skipped: true };
 
   return jsonResult(
     {
@@ -149,6 +165,7 @@ async function createNeedsApprovalResponse(opts: {
       purpose: opts.purpose,
       jobId: opts.jobId,
       demoStore,
+      telegramNotified: telegramNotify.ok,
       ...opts.extra,
     },
     opts.httpStatus ?? 402
@@ -291,6 +308,41 @@ export async function runGatewayInvoke(
       },
       401
     );
+  }
+
+  const parentApprovalId = (body.parentApprovalId || "").trim();
+  if (parentApprovalId) {
+    const parent = await getApprovalById(
+      parentApprovalId,
+      orgId || employee.orgId
+    );
+    if (
+      !parent ||
+      parent.status !== "revision_requested" ||
+      parent.employeeId !== employeeId ||
+      parent.jobId !== jobId
+    ) {
+      return jsonResult(
+        {
+          ok: false,
+          code: "invalid_parent_approval",
+          error: "invalid_parent_approval",
+          message:
+            "parentApprovalId must reference a revision_requested approval for the same employee and jobId",
+          employeeId,
+          tool,
+          purpose,
+          jobId,
+        },
+        400
+      );
+    }
+  }
+
+  const invokeMetadata: Record<string, unknown> = {};
+  const artifactUrl = body.args?.artifact_url ?? body.args?.artifactUrl;
+  if (typeof artifactUrl === "string" && artifactUrl.trim()) {
+    invokeMetadata.artifact_url = artifactUrl.trim();
   }
 
   if (
@@ -470,12 +522,15 @@ export async function runGatewayInvoke(
         orgId: orgId || employee.orgId,
         credentialId: input.credentialId || employee.credentialId,
         employeeDisplayName: employee.displayName,
+        employee,
         tool,
         purpose,
         jobId,
         risk: "high",
         amountJpy: Number.isFinite(amountJpy) ? amountJpy : null,
         message: spend.message,
+        parentApprovalId: parentApprovalId || null,
+        metadata: invokeMetadata,
         extra: { spend, toolKind: toolDef.kind, approvalPolicy: employee.approvalPolicy },
       });
     }
@@ -485,6 +540,7 @@ export async function runGatewayInvoke(
       orgId: orgId || employee.orgId,
       credentialId: input.credentialId || employee.credentialId,
       employeeDisplayName: employee.displayName,
+      employee,
       tool,
       purpose,
       jobId,
@@ -493,6 +549,8 @@ export async function runGatewayInvoke(
         tool === "browser.use"
           ? `${tool} requires human approval (always_human). allowedAccounts checked; live browser identity remains partial.`
           : `${tool} requires human approval (always_human default for confirm/send/order)`,
+      parentApprovalId: parentApprovalId || null,
+      metadata: invokeMetadata,
       extra: {
         toolKind: toolDef.kind,
         approvalPolicy: employee.approvalPolicy,

@@ -5,6 +5,11 @@ export function generateStatusToken(): string {
   return `st_${randomBytes(24).toString("base64url")}`;
 }
 
+/** Compact, random Telegram callback reference (12 hex chars / 48 bits). */
+export function generateTelegramRef(): string {
+  return randomBytes(6).toString("hex");
+}
+
 export function hashStatusToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }

@@ -11,7 +11,7 @@
 | Web | Next.js App Router + TypeScript + Tailwind CSS |
 | Auth / DB | Supabase (Auth + Postgres) — `supabase/schema.sql` + RLS |
 | Billing | Stripe Subscriptions（トライアル、カード + customer_balance 注記） |
-| Email | Resend（welcome / approval_needed / trial_ending ほか） |
+| Notify | Resend + Telegram 承認チャット（未設定時は従来どおりメールのみ） |
 
 **Dual mode:** Supabase キーが `replace_me_*` / 未設定のあいだは **DEMO（インメモリ）**。実キー注入後は Postgres。ビルドにライブキーは不要。
 
@@ -50,7 +50,7 @@
 1. **コード** — dual-mode + schema/RLS をデプロイ（キーなしで `bun run build` 緑）
 2. **Supabase** — プロジェクト作成 → SQL 適用:
    - 新規: `supabase/schema.sql`
-   - 既存: `20260823_production_ready.sql` → `referral_code` → `agentmail_reservation` → **`20260824_approval_loop.sql`**
+   - 既存: `20260823_production_ready.sql` → `referral_code` → `agentmail_reservation` → `20260824_approval_loop.sql` → **`20260826_telegram_revision.sql`**
    - Auth（Email）ON（開発中 Confirm email OFF 可）
 3. **Env（最後）** — 少なくとも Supabase 3 点（URL / anon / service_role）。詳細: `docs/production-cutover.md`
 4. **Redeploy** → `GET /api/health` が `runtimeMode:"production"`
@@ -95,5 +95,6 @@ PLAYWRIGHT_BASE_URL=https://<your-project>.vercel.app bun run test:e2e
 - `docs/stripe-billing-notes.md`
 - `docs/copy.md`
 - `docs/binding-lifeline.md` — employeeId 不変・再発行は generation のみ・要再連携は黙って消さない
+- `docs/guides/telegram-approval.md` — Telegram Bot / webhook / cron の本番設定
 
 ダッシュボード UI は Grok Bot 製品クロム寄りのダーク・ニュートラル。
