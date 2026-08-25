@@ -25,14 +25,18 @@ function ControlVisual() {
           <span className="block font-mono text-[8px] tracking-[0.14em] text-[var(--accent-strong)]">PEBBLE CREW</span>
           <span className="mt-0.5 block text-[10px] muted">READY TO WORK</span>
         </div>
-        <Image
-          src="/brand/ai-employee-pebble-core.png"
-          alt="StaffpassのオリジナルAIクルーキャラクター"
-          width={132}
-          height={132}
-          priority
-          className="h-[112px] w-[112px] object-contain drop-shadow-[0_18px_30px_rgba(0,0,0,.55)] sm:h-[132px] sm:w-[132px]"
-        />
+        <div className="crew-character relative h-[112px] w-[112px] sm:h-[132px] sm:w-[132px]">
+          <Image
+            src="/brand/ai-employee-pebble-core.png"
+            alt="StaffpassのオリジナルAIクルーキャラクター"
+            width={132}
+            height={132}
+            priority
+            className="h-full w-full object-contain drop-shadow-[0_18px_30px_rgba(0,0,0,.55)]"
+          />
+          <span className="crew-eye crew-eye-left" aria-hidden="true" />
+          <span className="crew-eye crew-eye-right" aria-hidden="true" />
+        </div>
       </div>
       <div className="relative surface landing-console p-3 sm:p-4">
         <div className="flex items-center justify-between border-b border-[var(--border-soft)] pb-3">

@@ -233,13 +233,52 @@ select {
   transform: perspective(1100px) rotateY(-3deg) rotateX(2deg);
 }
 
-.hero-crew img {
+.crew-character {
   animation: crew-float 5.5s ease-in-out infinite;
 }
 
 @keyframes crew-float {
   0%, 100% { transform: translateY(0) rotate(-1deg); }
   50% { transform: translateY(-6px) rotate(1deg); }
+}
+
+.crew-eye {
+  position: absolute;
+  top: 51.2%;
+  width: 10.5%;
+  height: 13%;
+  border-radius: 50%;
+  pointer-events: none;
+  opacity: 0;
+  transform: translate(-50%, -50%) scaleY(.12);
+  transform-origin: center;
+  background: linear-gradient(180deg, #d5d2cf 0%, #cbc8c5 100%);
+  animation: crew-blink 6.4s ease-in-out infinite;
+}
+
+.crew-eye::after {
+  content: "";
+  position: absolute;
+  left: 18%;
+  right: 18%;
+  top: 52%;
+  height: 8%;
+  border-radius: 999px;
+  background: #242731;
+}
+
+.crew-eye-left { left: 36.3%; }
+.crew-eye-right { left: 64.1%; }
+
+@keyframes crew-blink {
+  0%, 86%, 89.4%, 92.8%, 100% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scaleY(.12);
+  }
+  87.2%, 88.4%, 90.7%, 91.9% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scaleY(1);
+  }
 }
 
 .status-dot {
@@ -319,5 +358,5 @@ select {
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; }
-  .hero-crew img { animation: none !important; }
+  .crew-character, .crew-eye { animation: none !important; }
 }
