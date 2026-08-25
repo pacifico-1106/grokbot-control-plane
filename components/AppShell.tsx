@@ -194,7 +194,7 @@ export function AppShell({
           <div className="flex items-center gap-2 min-w-0 flex-1">
             <button
               type="button"
-              className="md:hidden btn btn-ghost shrink-0 min-h-[44px] min-w-[44px] px-2.5"
+              className="btn btn-ghost shrink-0 min-h-[44px] min-w-[44px] px-2.5 md:!hidden"
               aria-expanded={menuOpen}
               aria-controls={panelId}
               aria-label={menuOpen ? "メニューを閉じる" : "メニューを開く"}
