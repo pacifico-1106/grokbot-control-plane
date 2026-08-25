@@ -9,7 +9,7 @@ test.describe("DEMO smoke", () => {
     const res = await page.goto("/");
     expect(res?.ok()).toBeTruthy();
     await expect(page.getByRole("heading", { level: 1 })).toContainText(
-      "AIを入れるな"
+      "AIを、社員として雇う"
     );
   });
 
@@ -44,8 +44,8 @@ test.describe("DEMO smoke", () => {
       page.getByRole("heading", { name: "Grok Bot とつなぐ（MCP）" })
     ).toBeVisible();
     await expect(page.getByText("https://staffpass.sealith.com/api/mcp")).toBeVisible();
-    await expect(page.getByText("持ち込みGrok")).toBeVisible();
-    await expect(page.getByText("運用代行")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "持ち込みGrok" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "運用代行" })).toBeVisible();
   });
 
   test("`/app/integrations` shows MCP setup", async ({ page }) => {

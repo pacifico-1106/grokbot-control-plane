@@ -12,11 +12,9 @@ import {
   formatYenJa,
 } from "@/lib/billing/plans";
 import {
-  KICKOFF_GROK_BAND_JA,
   KICKOFF_PACK_LINES,
   KICKOFF_PACK_NOTE_JA,
   KICKOFF_PACK_YEN,
-  MANAGED_BUNDLE_NOTE_JA,
   SUBSIDY_COMING_SOON_JA,
   SUBSIDY_COMPLIANCE_NOTE_JA,
 } from "@/lib/billing/skus";
@@ -31,17 +29,11 @@ const PLANS: Array<{
   overageYen: number;
   onboardingYen?: number;
   onboardingNote?: string;
-  bundleNote?: string;
 }> = [
   {
     id: "starter",
     name: "スターター",
-    points: [
-      "AI社員 少数・基本の就業規則",
-      "基本監査（日報の入口）",
-      "メール通知",
-      "propose / draft 中心",
-    ],
+    points: ["少人数で始める基本統制", "承認と監査ログ", "メール通知"],
     quota: PLAN_CONFIRM_QUOTAS.starter,
     displayYen: PLAN_DISPLAY_YEN.starter,
     overageYen: PLAN_OVERAGE_YEN.starter,
@@ -49,12 +41,7 @@ const PLANS: Array<{
   {
     id: "business",
     name: "ビジネス",
-    points: [
-      "就業規則と日報（承認・監査）",
-      "承認キュー・監査タイムライン",
-      "チーム（職務・権限）",
-      "確定アクションの従量メーター",
-    ],
+    points: ["承認・監査・職務分離", "チーム権限管理", "確定アクション計測"],
     featured: true,
     quota: PLAN_CONFIRM_QUOTAS.business,
     displayYen: PLAN_DISPLAY_YEN.business,
@@ -63,32 +50,21 @@ const PLANS: Array<{
   },
   {
     id: "managed",
-    name: "Managed（Care）",
-    points: [
-      "Business 全部＋専任伴走（Care）",
-      "導入代行・週次ヘルス",
-      "要再連携の一次対応",
-      "確定枠は厚め（仮枠）",
-    ],
+    name: "Managed",
+    points: ["Businessの全機能", "導入代行・週次ヘルス", "要再連携の一次対応"],
     quota: PLAN_CONFIRM_QUOTAS.managed,
     displayYen: PLAN_DISPLAY_YEN.managed,
     overageYen: PLAN_OVERAGE_YEN.managed,
-    onboardingNote: "オンボーディングは月額に含む",
-    bundleNote: MANAGED_BUNDLE_NOTE_JA,
+    onboardingNote: "オンボーディング込み",
   },
 ];
 
 type Props = {
-  currentPlan?: string;
-  currentStatus?: string;
   hasStripeCustomer?: boolean;
-  /** When false, Checkout CTAs are disabled with JP 準備中 copy (no silent stub). */
   stripeConfigured?: boolean;
 };
 
 export function BillingClient({
-  currentPlan,
-  currentStatus,
   hasStripeCustomer,
   stripeConfigured = false,
 }: Props) {
@@ -103,14 +79,11 @@ export function BillingClient({
     if (checkout === "success") {
       return {
         kind: "ok" as const,
-        text: `Checkout が完了しました${plan ? `（${plan}）` : ""}。Webhook 同期後にプラン状態が更新されます。`,
+        text: `お支払いが完了しました${plan ? `（${plan}）` : ""}。まもなく契約状態へ反映されます。`,
       };
     }
     if (checkout === "canceled") {
-      return {
-        kind: "warn" as const,
-        text: "Checkout がキャンセルされました。必要なら再度プランを選択してください。",
-      };
+      return { kind: "warn" as const, text: "お支払いはキャンセルされました" };
     }
     return null;
   }, [searchParams]);
@@ -133,10 +106,7 @@ export function BillingClient({
         window.location.href = body.url;
         return;
       }
-      setMessage(
-        body.message ||
-          "オンライン決済は準備中です。銀行振込・お問い合わせをご利用ください。"
-      );
+      setMessage(body.message || "オンライン決済は準備中です");
     } catch (e) {
       setMessage(e instanceof Error ? e.message : "checkout_failed");
     } finally {
@@ -155,7 +125,7 @@ export function BillingClient({
         window.location.href = body.url;
         return;
       }
-      setMessage(body.message || "カスタマーポータルはスタブです（キー未設定）");
+      setMessage(body.message || "契約管理画面は準備中です");
     } catch (e) {
       setMessage(e instanceof Error ? e.message : "portal_failed");
     } finally {
@@ -165,234 +135,139 @@ export function BillingClient({
 
   return (
     <>
-      <p className="mb-4 text-sm muted leading-relaxed break-words">
-        Botの契約は御社のまま。Staffpassは<strong className="text-[var(--text)] font-medium">就業規則と日報</strong>
-        です。月額で境界を敷き、確定した仕事の分だけ従量。Managed は Care（伴走）込みです。
-      </p>
-
-      <p className="mb-4 text-xs faint leading-relaxed">
-        表示価格はすべて{" "}
-        <span className="chip text-[10px]">{PRICING_PROVISIONAL_NOTE_JA}</span>
-        。
-        {stripeConfigured
-          ? "オンライン決済が有効です。"
-          : "オンライン決済の準備中です。銀行振込・お問い合わせで契約できます。"}
-      </p>
+      {checkoutBanner ? (
+        <div className={`surface mb-4 border-l-4 p-4 text-sm ${checkoutBanner.kind === "ok" ? "border-l-[var(--ok)]" : "border-l-[var(--warn)]"}`}>
+          {checkoutBanner.text}
+        </div>
+      ) : null}
 
       {!stripeConfigured ? (
-        <div
-          className="mb-4 rounded-lg border px-3 sm:px-4 py-3 text-sm leading-relaxed"
-          style={{
-            borderColor: "color-mix(in oklab, var(--warn) 45%, var(--border))",
-            background: "color-mix(in oklab, var(--warn) 10%, transparent)",
-          }}
-          role="status"
-        >
-          <strong style={{ color: "var(--warn)" }}>
-            準備中（オンライン決済はまだ使えません）
-          </strong>
-          <p className="mt-1 text-xs muted">
-            カード決済の設定が完了するまで Checkout
-            はご利用いただけません。銀行振込でのお申し込み、またはお問い合わせください。
-          </p>
+        <div className="surface mb-4 border-l-4 border-l-[var(--warn)] p-4">
+          <p className="text-sm font-semibold text-[var(--warn)]">オンライン決済は準備中です</p>
+          <p className="mt-1 text-xs muted">現在は銀行振込またはお問い合わせでお申し込みいただけます</p>
         </div>
       ) : null}
 
-      {checkoutBanner ? (
-        <p
-          className={`mb-4 text-sm surface p-4 ${
-            checkoutBanner.kind === "ok" ? "text-[var(--text)]" : "muted"
-          }`}
-        >
-          {checkoutBanner.text}
-        </p>
-      ) : null}
+      <section className="surface overflow-hidden">
+        <header className="flex flex-col gap-2 border-b border-[var(--border)] px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-5">
+          <div>
+            <h2 className="text-base font-bold">プランを選ぶ</h2>
+            <p className="mt-1 text-xs muted">AI社員の人数と運用体制に合わせて選択</p>
+          </div>
+          <span className="chip w-fit text-[10px]">{PRICING_PROVISIONAL_NOTE_JA}</span>
+        </header>
 
-      {(currentPlan || currentStatus) && (
-        <div className="mb-4 text-xs faint">
-          現在: プラン <span className="muted">{currentPlan || "—"}</span> · 状態{" "}
-          <span className="muted">{currentStatus || "—"}</span>
-        </div>
-      )}
-
-      <label className="mb-4 block text-sm w-full max-w-sm">
-        <span className="muted">紹介コード（任意）</span>
-        <input
-          type="text"
-          value={referralCode}
-          onChange={(e) => setReferralCode(e.target.value)}
-          placeholder="AIC-XXXX"
-          autoComplete="off"
-          className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm outline-none focus:border-[var(--text-faint)]"
-        />
-      </label>
-
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        {PLANS.map((plan) => (
-          <div
-            key={plan.id}
-            className={`surface p-5 min-w-0 ${
-              plan.featured ? "ring-1 ring-[var(--text-faint)]" : ""
-            }`}
-          >
-            <div className="text-xs faint">{plan.id}</div>
-            <h2 className="mt-1 text-lg font-medium">{plan.name}</h2>
-            <p className="mt-2 text-2xl font-medium tracking-tight">
-              {formatYenJa(plan.displayYen)}
-              <span className="text-sm font-normal muted"> / 月</span>
-            </p>
-            <p className="mt-1 text-[10px] faint">{PRICING_PROVISIONAL_NOTE_JA}</p>
-            <p className="mt-2 text-xs faint">
-              確定アクション枠{" "}
-              <span className="muted">{plan.quota.toLocaleString("ja-JP")} / 月</span>{" "}
-              <span className="chip text-[10px] ml-1">仮枠</span>
-            </p>
-            <p className="mt-1 text-xs muted">
-              超過: {formatYenJa(plan.overageYen)} / 確定アクション
-              <span className="faint">（従量・P0.5）</span>
-            </p>
-            {plan.onboardingYen != null ? (
-              <p className="mt-1 text-xs muted">
-                導入（初回一式）: {formatYenJa(plan.onboardingYen)}
-                <span className="faint">（税込・仮決め）</span>
-              </p>
-            ) : null}
-            {plan.onboardingNote ? (
-              <p className="mt-1 text-xs faint">{plan.onboardingNote}</p>
-            ) : null}
-            {plan.bundleNote ? (
-              <p className="mt-1 text-xs faint leading-relaxed">{plan.bundleNote}</p>
-            ) : null}
-            <ul className="mt-4 space-y-2 text-sm muted">
-              {plan.points.map((p) => (
-                <li key={p}>· {p}</li>
-              ))}
-            </ul>
-            {stripeConfigured ? (
-              <button
-                type="button"
-                className="btn btn-primary w-full mt-5 text-sm"
-                disabled={busy === plan.id}
-                onClick={() => void checkout(plan.id)}
+        <div className="p-3 sm:p-4">
+          <div className="grid grid-cols-1 items-stretch gap-3 lg:grid-cols-3">
+            {PLANS.map((plan) => (
+              <article
+                key={plan.id}
+                className={`flex h-full min-w-0 flex-col rounded-2xl border bg-[var(--bg)] p-5 ${plan.featured ? "border-[color-mix(in_oklab,var(--accent-strong)_58%,var(--border))] shadow-[0_0_24px_var(--accent-glow)]" : "border-[var(--border-soft)]"}`}
               >
-                {busy === plan.id ? "準備中…" : "お支払いに進む"}
-              </button>
-            ) : (
-              <div className="mt-5 space-y-2">
-                <button
-                  type="button"
-                  className="btn w-full text-sm opacity-70 cursor-not-allowed"
-                  disabled
-                  aria-disabled="true"
-                >
-                  準備中（オンライン決済はまだ使えません）
-                </button>
-                <p className="text-[11px] faint leading-relaxed text-center">
-                  銀行振込・お問い合わせでご契約いただけます。
-                </p>
-              </div>
-            )}
-          </div>
-        ))}
-      </div>
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <span className="text-[10px] font-mono uppercase tracking-[0.12em] text-[var(--text-faint)]">{plan.id}</span>
+                    <h3 className="mt-1 text-lg font-bold">{plan.name}</h3>
+                  </div>
+                  {plan.featured ? <span className="chip chip-ok text-[10px]">おすすめ</span> : null}
+                </div>
 
-      <div className="mt-6 grid lg:grid-cols-2 gap-4">
-        <div className="surface p-5">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-xs faint">kickoff_pack</span>
-            <span className="chip text-[10px]">任意</span>
-            <span className="chip text-[10px]">{PRICING_PROVISIONAL_NOTE_JA}</span>
-          </div>
-          <h2 className="mt-1 text-lg font-medium">キックオフパック</h2>
-          <p className="mt-2 text-2xl font-medium tracking-tight">
-            {formatYenJa(KICKOFF_PACK_YEN)}
-            <span className="text-sm font-normal muted"> 一式</span>
-          </p>
-          <p className="mt-2 text-xs muted leading-relaxed">{KICKOFF_PACK_NOTE_JA}</p>
-          <p className="mt-1 text-xs faint leading-relaxed">{KICKOFF_GROK_BAND_JA}</p>
-          <ul className="mt-4 space-y-2 text-sm muted">
-            {KICKOFF_PACK_LINES.map((line) => (
-              <li key={line.key} className="flex justify-between gap-3 min-w-0">
-                <span className="min-w-0 break-words">· {line.labelJa}</span>
-                <span className="shrink-0 faint">{formatYenJa(line.yen)}</span>
-              </li>
+                <p className="mt-5 text-3xl font-bold tracking-tight">
+                  {formatYenJa(plan.displayYen)}
+                  <span className="ml-1 text-xs font-semibold muted">/ 月</span>
+                </p>
+
+                <dl className="mt-5 min-h-[108px] space-y-2 border-y border-[var(--border-soft)] py-4 text-xs">
+                  <div className="flex justify-between gap-3"><dt className="muted">確定アクション</dt><dd>{plan.quota.toLocaleString("ja-JP")}回 / 月</dd></div>
+                  <div className="flex justify-between gap-3"><dt className="muted">枠超過</dt><dd>{formatYenJa(plan.overageYen)} / 回</dd></div>
+                  {plan.onboardingYen != null ? (
+                    <div className="flex justify-between gap-3"><dt className="muted">初回導入</dt><dd>{formatYenJa(plan.onboardingYen)}</dd></div>
+                  ) : null}
+                  {plan.onboardingNote ? (
+                    <div className="flex justify-between gap-3"><dt className="muted">初回導入</dt><dd>{plan.onboardingNote}</dd></div>
+                  ) : null}
+                </dl>
+
+                <ul className="mt-5 flex-1 space-y-2 text-sm muted">
+                  {plan.points.map((point) => <li key={point} className="flex gap-2"><span className="text-[var(--ok)]">✓</span><span>{point}</span></li>)}
+                </ul>
+
+                <div className="mt-auto pt-6">
+                  <button
+                    type="button"
+                    className={`btn min-h-12 w-full text-sm ${stripeConfigured ? "btn-primary" : "btn-ghost opacity-60 cursor-not-allowed"}`}
+                    disabled={!stripeConfigured || busy === plan.id}
+                    aria-disabled={!stripeConfigured}
+                    onClick={() => void checkout(plan.id)}
+                  >
+                    {busy === plan.id ? "準備中…" : stripeConfigured ? "お支払いに進む" : "オンライン決済 準備中"}
+                  </button>
+                </div>
+              </article>
             ))}
-          </ul>
-          <button
-            type="button"
-            className="btn btn-ghost w-full mt-4 text-sm"
-            disabled
-            aria-disabled="true"
-          >
-            準備中（オンライン決済はまだ使えません）
-          </button>
-          <p className="mt-2 text-[11px] faint leading-relaxed text-center">
-            キックオフパックは仮決め表示です。銀行振込・お問い合わせでお申し込みください。
-          </p>
-          <details className="mt-3 text-[10px] faint">
-            <summary className="cursor-pointer">開発者向け（決済キー）</summary>
-            <p className="mt-1 leading-relaxed">
-              Stripe Price（STRIPE_PRICE_ID_KICKOFF_PACK）設定後に Checkout を有効化します。
-            </p>
+          </div>
+
+          <details className="mt-4 rounded-xl border border-[var(--border-soft)] bg-[var(--bg)] px-4 py-3">
+            <summary className="cursor-pointer text-xs font-semibold">紹介コードをお持ちの方</summary>
+            <label className="mt-3 block max-w-sm text-xs">
+              <span className="muted">紹介コード</span>
+              <input
+                type="text"
+                value={referralCode}
+                onChange={(e) => setReferralCode(e.target.value)}
+                placeholder="AIC-XXXX"
+                autoComplete="off"
+                className="mt-1 w-full border border-[var(--border)] bg-[var(--bg-soft)] px-3 py-2 text-sm outline-none focus:border-[var(--accent-strong)]"
+              />
+            </label>
           </details>
         </div>
+      </section>
 
-        <div className="surface p-5">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-xs faint">subsidy_*</span>
-            <span className="chip text-[10px]">準備中</span>
-          </div>
-          <h2 className="mt-1 text-lg font-medium">補助金関連パック</h2>
-          <p className="mt-2 text-sm muted leading-relaxed">{SUBSIDY_COMING_SOON_JA}</p>
-          <ul className="mt-4 space-y-2 text-sm muted">
-            <li>· subsidy_2y_business — Business・2年想定</li>
-            <li>· subsidy_2y_managed — Managed・2年想定</li>
-            <li>· year3_extension — 3年目延長</li>
-          </ul>
-          <p className="mt-4 text-xs faint leading-relaxed">{SUBSIDY_COMPLIANCE_NOTE_JA}</p>
+      <section className="surface mt-4 overflow-hidden">
+        <header className="border-b border-[var(--border)] px-4 py-4 sm:px-5">
+          <h2 className="text-base font-bold">導入支援</h2>
+          <p className="mt-1 text-xs muted">必要な場合だけ追加できます</p>
+        </header>
+        <div className="grid gap-3 p-3 sm:p-4 lg:grid-cols-2">
+          <article className="rounded-2xl border border-[var(--border-soft)] bg-[var(--bg)] p-5">
+            <div className="flex items-center justify-between gap-3">
+              <h3 className="font-bold">キックオフパック</h3>
+              <span className="chip text-[10px]">任意</span>
+            </div>
+            <p className="mt-3 text-2xl font-bold">{formatYenJa(KICKOFF_PACK_YEN)}<span className="ml-1 text-xs muted">一式</span></p>
+            <p className="mt-3 text-xs muted leading-relaxed">{KICKOFF_PACK_NOTE_JA}</p>
+            <details className="mt-4 border-t border-[var(--border-soft)] pt-3">
+              <summary className="cursor-pointer text-xs font-semibold">内訳を見る</summary>
+              <ul className="mt-3 space-y-2 text-xs muted">
+                {KICKOFF_PACK_LINES.map((line) => (
+                  <li key={line.key} className="flex justify-between gap-3"><span>{line.labelJa}</span><span className="shrink-0">{formatYenJa(line.yen)}</span></li>
+                ))}
+              </ul>
+            </details>
+          </article>
+
+          <article className="rounded-2xl border border-[var(--border-soft)] bg-[var(--bg)] p-5">
+            <div className="flex items-center justify-between gap-3">
+              <h3 className="font-bold">補助金関連のご相談</h3>
+              <span className="chip text-[10px]">準備中</span>
+            </div>
+            <p className="mt-3 text-sm muted leading-relaxed">{SUBSIDY_COMING_SOON_JA}</p>
+            <p className="mt-3 text-xs faint leading-relaxed">{SUBSIDY_COMPLIANCE_NOTE_JA}</p>
+          </article>
         </div>
-      </div>
+      </section>
 
-      <div className="mt-4 flex flex-wrap gap-3 items-center">
+      <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <p className="text-[11px] faint">課金対象はGatewayを通って成功した確定アクションのみです</p>
         {stripeConfigured ? (
-          <>
-            <button
-              type="button"
-              className="btn btn-ghost text-sm"
-              disabled={busy === "portal"}
-              onClick={() => void openPortal()}
-            >
-              {busy === "portal" ? "開いています…" : "カスタマーポータル"}
-            </button>
-            {!hasStripeCustomer ? (
-              <span className="text-xs faint">
-                ※ 初回はお支払い手続き後にポータルが使えます
-              </span>
-            ) : null}
-          </>
-        ) : (
-          <p className="text-xs muted leading-relaxed">
-            お支払い・契約変更は、銀行振込またはお問い合わせで受け付けます（オンラインポータルは準備中）。
-          </p>
-        )}
+          <button type="button" className="btn btn-ghost text-xs" disabled={busy === "portal" || !hasStripeCustomer} onClick={() => void openPortal()}>
+            {busy === "portal" ? "開いています…" : "契約内容を管理"}
+          </button>
+        ) : null}
       </div>
 
-      <p className="mt-3 text-xs faint leading-relaxed">
-        表示は{PRICING_PROVISIONAL_NOTE_JA}
-        。枠数は仮枠です。課金対象は Gateway
-        経由の確定アクション成功のみです。銀行振込は準備が整い次第、手続き方法をご案内します。
-      </p>
-      <details className="mt-2 text-[10px] faint">
-        <summary className="cursor-pointer">開発者向け（Stripe）</summary>
-        <p className="mt-1 leading-relaxed">
-          Checkout 実額は Stripe Price ID（env）が正です。超過従量の Metered Price は
-          P0.5（未配線）。STRIPE_SECRET_KEY / STRIPE_PRICE_ID_* 設定後にオンライン決済が有効になります。
-        </p>
-      </details>
-
-      {message ? (
-        <p className="mt-4 text-sm muted surface p-4">{message}</p>
-      ) : null}
+      {message ? <div className="surface mt-4 border-l-4 border-l-[var(--warn)] p-4 text-sm muted">{message}</div> : null}
     </>
   );
 }

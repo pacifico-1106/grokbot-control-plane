@@ -36,10 +36,9 @@ export function getCheckoutPaymentMethodTypes(): Array<
 }
 
 export function describeJpPaymentMethods(): string {
-  return [
-    "カード決済 (card)",
-    "銀行振込 / 顧客残高 (customer_balance) — Dashboard で有効化し STRIPE_ENABLE_CUSTOMER_BALANCE=1 のとき Checkout に追加",
-  ].join(" / ");
+  return process.env.STRIPE_ENABLE_CUSTOMER_BALANCE === "1"
+    ? "クレジットカード・銀行振込をご利用いただけます"
+    : "クレジットカードをご利用いただけます";
 }
 
 export function getAppUrl(): string {

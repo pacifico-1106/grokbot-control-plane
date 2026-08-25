@@ -1,6 +1,6 @@
 import Link from "next/link";
-import Image from "next/image";
 import { AppShell } from "@/components/AppShell";
+import { EmployeeAvatar } from "@/components/employees/EmployeeAvatar";
 import { getCurrentOrgId } from "@/lib/auth/session";
 import { listEmployees } from "@/lib/data";
 import { APPROVAL_POLICY_LABELS } from "@/lib/employees/policy-draft";
@@ -15,16 +15,16 @@ function EmployeePassCard({ employee }: { employee: Employee }) {
     <div className="employee-pass relative overflow-hidden rounded-2xl border border-[color-mix(in_oklab,var(--accent-strong)_28%,var(--border))] bg-[linear-gradient(135deg,#0b1720,#081017)] p-3.5 shadow-[inset_0_1px_0_rgba(255,255,255,.04)]">
       <div className="absolute -right-8 -top-10 h-28 w-28 rounded-full bg-[var(--accent-glow)] blur-2xl" />
       <div className="relative flex items-start justify-between gap-3">
-        <div className="flex items-center gap-2">
-          <Image src="/brand/staffpass-mark-dark-v2.png" alt="" width={26} height={26} className="object-contain" />
-          <div>
-            <span className="block text-[8px] font-mono tracking-[0.16em] text-[var(--accent-strong)]">AI EMPLOYEE PASS</span>
-            <span className="mt-0.5 block text-[9px] faint">STAFFPASS / SEALITH</span>
-          </div>
+        <div>
+          <span className="block text-[8px] font-mono tracking-[0.16em] text-[var(--accent-strong)]">AI EMPLOYEE PASS</span>
+          <span className="mt-0.5 block text-[9px] faint">STAFFPASS / SEALITH</span>
         </div>
-        <span className={`mt-1 h-2 w-2 shrink-0 rounded-full ${employee.status === "active" ? "bg-[var(--ok)] shadow-[0_0_10px_var(--ok)]" : "bg-[var(--warn)]"}`} />
+        <div className="relative">
+          <EmployeeAvatar seed={employee.id} size={58} />
+          <span className={`absolute -right-0.5 -top-0.5 h-2.5 w-2.5 shrink-0 rounded-full border-2 border-[#0b1720] ${employee.status === "active" ? "bg-[var(--ok)] shadow-[0_0_10px_var(--ok)]" : "bg-[var(--warn)]"}`} />
+        </div>
       </div>
-      <div className="relative mt-5">
+      <div className="relative -mt-1 pr-16">
         <div className="text-base font-bold tracking-tight break-words">{employee.displayName}</div>
         <div className="mt-1 text-[11px] muted break-words">{employee.roleLabel}</div>
       </div>
