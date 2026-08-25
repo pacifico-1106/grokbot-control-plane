@@ -9,7 +9,12 @@ const CONTROLS = [
   { icon: "03", title: "記録を残す", body: "目的、承認者、実行結果を一つの監査台帳に残します。" },
 ];
 
-const AGENTS = ["Grok Bot", "ChatGPT", "Claude", "Jurin"];
+const AGENTS = [
+  { name: "Grok Bot", status: "対応中", active: true },
+  { name: "ChatGPT", status: "順次対応" },
+  { name: "Claude", status: "順次対応" },
+  { name: "その他のAI", status: "続々対応予定" },
+];
 
 function ControlVisual() {
   return (
@@ -113,7 +118,7 @@ export default function LandingPage() {
           <div className="mx-auto max-w-6xl px-4 sm:px-6 py-8 flex flex-col md:flex-row md:items-center gap-5 md:gap-10">
             <p className="text-xs faint shrink-0">対応エージェント</p>
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 flex-1">
-              {AGENTS.map((agent, index) => <div key={agent} className={`agent-pill ${index ? "opacity-45" : ""}`}><span>{agent}</span><small>{index ? "順次対応" : "対応中"}</small></div>)}
+              {AGENTS.map((agent) => <div key={agent.name} className={`agent-pill ${agent.active ? "" : "opacity-45"}`}><span>{agent.name}</span><small>{agent.status}</small></div>)}
             </div>
           </div>
         </section>
