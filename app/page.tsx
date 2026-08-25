@@ -1,5 +1,7 @@
 import Link from "next/link";
+import Image from "next/image";
 import { BrandMark } from "@/components/BrandMark";
+import { EmployeeAvatar } from "@/components/employees/EmployeeAvatar";
 
 const CONTROLS = [
   { icon: "01", title: "権限を分ける", body: "社員ごとに職務と操作範囲を限定。まとめる場合は全件承認に切り替えます。" },
@@ -11,18 +13,39 @@ const AGENTS = ["Grok Bot", "ChatGPT", "Claude", "Jurin"];
 
 function ControlVisual() {
   return (
-    <div className="relative mx-auto w-full max-w-[560px]" aria-label="AI社員の実行をStaffpassが制御する図">
+    <div className="relative mx-auto w-full max-w-[560px] pt-20 sm:pt-16" aria-label="Pebble Crewの社員証と、AI社員の実行をStaffpassが制御する図">
       <div className="absolute -inset-10 bg-[radial-gradient(circle,var(--accent-glow),transparent_64%)] blur-2xl" />
+      <div className="hero-crew absolute right-4 top-0 z-10 flex items-end gap-2 sm:right-8">
+        <div className="mb-3 rounded-xl border border-[var(--border)] bg-[color-mix(in_oklab,var(--bg-elevated)_92%,transparent)] px-3 py-2 shadow-xl backdrop-blur-md">
+          <span className="block font-mono text-[8px] tracking-[0.14em] text-[var(--accent-strong)]">PEBBLE CREW</span>
+          <span className="mt-0.5 block text-[10px] muted">READY TO WORK</span>
+        </div>
+        <Image
+          src="/brand/ai-employee-pebble-core.png"
+          alt="StaffpassのオリジナルAIクルーキャラクター"
+          width={132}
+          height={132}
+          priority
+          className="h-[112px] w-[112px] object-contain drop-shadow-[0_18px_30px_rgba(0,0,0,.55)] sm:h-[132px] sm:w-[132px]"
+        />
+      </div>
       <div className="relative surface landing-console p-3 sm:p-4">
         <div className="flex items-center justify-between border-b border-[var(--border-soft)] pb-3">
           <div className="flex items-center gap-2"><span className="status-dot" /> <span className="text-xs muted">Control plane</span></div>
-          <span className="chip chip-ok text-[10px]">稼働中</span>
         </div>
         <div className="mt-3 grid grid-cols-[1fr_auto_1fr] items-center gap-2 sm:gap-4">
-          <div className="visual-node">
-            <span className="text-[10px] faint">AI社員</span>
-            <strong className="mt-1 block text-xs sm:text-sm">営業アシスタント</strong>
-            <span className="mt-2 chip text-[9px] sm:text-[10px]">メール送信</span>
+          <div className="visual-node visual-employee-pass">
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                <span className="font-mono text-[7px] tracking-[0.12em] text-[var(--accent-strong)]">AI EMPLOYEE PASS</span>
+                <strong className="mt-2 block text-xs sm:text-sm">営業AI社員</strong>
+                <span className="mt-0.5 block text-[9px] faint">営業アシスタント</span>
+              </div>
+              <EmployeeAvatar seed="landing-sales-crew" size={46} />
+            </div>
+            <div className="mt-3 flex items-center justify-between border-t border-white/8 pt-2 font-mono text-[7px] faint">
+              <span>EMPLOYEE ID</span><span>EMP_SALES</span>
+            </div>
           </div>
           <div className="flex flex-col items-center gap-1 text-[var(--accent-strong)]">
             <span className="text-xs">→</span><span className="text-[9px] font-mono">GATE</span><span className="text-xs">→</span>

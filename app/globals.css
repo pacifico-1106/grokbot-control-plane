@@ -233,6 +233,15 @@ select {
   transform: perspective(1100px) rotateY(-3deg) rotateX(2deg);
 }
 
+.hero-crew img {
+  animation: crew-float 5.5s ease-in-out infinite;
+}
+
+@keyframes crew-float {
+  0%, 100% { transform: translateY(0) rotate(-1deg); }
+  50% { transform: translateY(-6px) rotate(1deg); }
+}
+
 .status-dot {
   width: .5rem;
   height: .5rem;
@@ -253,6 +262,14 @@ select {
 .visual-node-accent {
   border-color: color-mix(in oklab, var(--accent-strong) 45%, var(--border));
   background: color-mix(in oklab, var(--accent-strong) 7%, var(--bg));
+}
+
+.visual-employee-pass {
+  border-color: color-mix(in oklab, var(--accent-strong) 34%, var(--border));
+  background:
+    radial-gradient(circle at 88% 14%, var(--accent-glow), transparent 34%),
+    linear-gradient(145deg, #0b1720, #071017);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.04);
 }
 
 .metric-tile span,
@@ -302,4 +319,5 @@ select {
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; }
+  .hero-crew img { animation: none !important; }
 }
