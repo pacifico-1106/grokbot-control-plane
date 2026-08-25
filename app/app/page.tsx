@@ -18,6 +18,7 @@ import {
   listEmployees,
 } from "@/lib/data";
 import { isDemoMode } from "@/lib/mode";
+import { buildConcentration } from "@/lib/employees/concentration";
 
 export const dynamic = "force-dynamic";
 
@@ -25,6 +26,8 @@ export default async function DashboardPage() {
   const orgId = await getCurrentOrgId();
   const org = await getOrgMeta(orgId);
   const employees = (await listEmployees(orgId)) ?? [];
+  const concentration = buildConcentration(employees);
+  const mostConcentrated = concentration.employees.find((row) => row.share === concentration.maxShare);
   const approvals = (await listApprovals(orgId)) ?? [];
   const pending = approvals.filter(
     (a) => a.status === "pending"
@@ -70,7 +73,7 @@ export default async function DashboardPage() {
         </div>
       ) : null}
 
-      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+      <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-3">
         <StatCard
           label="AI社員"
           value={String(employees.length)}
@@ -88,22 +91,28 @@ export default async function DashboardPage() {
           hint="つなぎ直し待ち"
         />
         <StatCard
+          label="権限集中度"
+          value={`${Math.round(concentration.maxShare * 100)}%`}
+          hint={mostConcentrated ? `${mostConcentrated.displayName}${concentration.flagged.includes(mostConcentrated.employeeId) ? " · 要分離" : ""}` : "高リスク権限なし"}
+          tone={mostConcentrated && concentration.flagged.includes(mostConcentrated.employeeId) ? "warn" : "default"}
+        />
+        <StatCard
           label="導入モード"
           value={org.integrationMode === "managed" ? "当社で用意" : "持ち込み"}
           hint={gateway === "linked" ? "Staffpass（制御）接続中" : gateway === "pending" ? "連携の手続き中" : "未連携"}
         />
       </div>
 
-      <section className="surface p-4 mt-4 text-sm leading-relaxed">
-        <h2 className="text-sm font-medium">確定アクションとは</h2>
-        <p className="mt-2 muted">
+      <details className="surface px-4 py-3 mt-4 text-sm leading-relaxed">
+        <summary className="text-sm font-medium cursor-pointer">確定アクションの計測について</summary>
+        <p className="mt-3 muted">
           人が確認したうえで進めた送信・日程確定・発注などです。下書きや提案、承認ボタンのクリックだけでは増えません。
           残枠の目安は {confirmUsage.remaining} 回です（{QUOTA_PROVISIONAL_NOTE_JA}）。
         </p>
         <p className="mt-2 text-xs faint">
           計測は制御面 Gateway を通った確定系のみです。Bot のすべての操作を課金対象にしていません。
         </p>
-      </section>
+      </details>
 
       <DashboardActivity
         mode={demoMode ? "demo" : "production"}

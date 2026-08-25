@@ -1,5 +1,6 @@
 import type {
   AllowedAccount,
+  ActionLimits,
   ApprovalPolicy,
   ApprovalRequest,
   AuditAction,
@@ -29,6 +30,8 @@ export function mapEmployeeRow(row: Record<string, unknown>): Employee {
     scopes: (row.scopes as EmployeeScope[]) || [],
     allowedPurposes: (row.allowed_purposes as string[]) || [],
     approvalPolicy: (row.approval_policy as ApprovalPolicy) || "risk_based",
+    sodLevel: (row.sod_level as Employee["sodLevel"]) || "ok",
+    actionLimits: (row.action_limits as ActionLimits) || {},
     spend: (row.spend as SpendLimits | null) ?? null,
     allowedAccounts: (row.allowed_accounts as AllowedAccount[]) || [],
     approvalNotifyEmail:

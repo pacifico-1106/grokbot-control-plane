@@ -7,7 +7,10 @@ import { ensureBindingRow, rotateCredential } from "../bindings";
 import { isDemoMode } from "../mode";
 import { createSupabaseAdminClient } from "../supabase";
 import { mapEmployeeRow } from "./mappers";
-import type { Employee } from "../types";
+import { evaluateSod } from "@/lib/employees/sod";
+import { normalizeActionLimits } from "@/lib/action-gate";
+import { appendAuditEvent } from "@/lib/data/audit";
+import type { ActionLimits, Employee } from "../types";
 
 export async function listEmployees(orgId?: string | null): Promise<Employee[]> {
   if (isDemoMode()) {
@@ -98,6 +101,7 @@ export type IssueEmployeeInput = {
   scopes: Employee["scopes"];
   allowedPurposes: string[];
   approvalPolicy: Employee["approvalPolicy"];
+  actionLimits?: ActionLimits;
   spend: Employee["spend"];
   allowedAccounts: Employee["allowedAccounts"];
   approvalNotifyEmail?: string | null;
@@ -124,6 +128,11 @@ export type IssueEmployeeResult = {
 export async function issueEmployee(
   input: IssueEmployeeInput
 ): Promise<IssueEmployeeResult> {
+  const sodVerdict = evaluateSod(input.scopes);
+  const effectivePolicy = sodVerdict.level === "force_human"
+    ? "always_human"
+    : input.approvalPolicy;
+  const actionLimits = normalizeActionLimits(input.actionLimits);
   if (isDemoMode()) {
     const { randomBytes } = await import("node:crypto");
     const employeeId = `emp_${randomBytes(4).toString("hex")}`;
@@ -137,7 +146,9 @@ export async function issueEmployee(
       status: "active",
       scopes: input.scopes,
       allowedPurposes: input.allowedPurposes,
-      approvalPolicy: input.approvalPolicy,
+      approvalPolicy: effectivePolicy,
+      sodLevel: sodVerdict.level,
+      actionLimits,
       spend: input.spend,
       allowedAccounts: input.allowedAccounts ?? [],
       approvalNotifyEmail: input.approvalNotifyEmail ?? null,
@@ -147,6 +158,17 @@ export async function issueEmployee(
       createdAt: new Date().toISOString(),
     };
     addRuntimeEmployee(employee, input.auditSummary);
+    if (sodVerdict.level === "force_human") {
+      await appendAuditEvent({
+        orgId: employee.orgId,
+        employeeId,
+        credentialId,
+        action: "employee.sod_forced",
+        purpose: null,
+        summary: `${employee.displayName} を全件承認に固定`,
+        metadata: { domains: sodVerdict.domains, previousPolicy: input.approvalPolicy },
+      });
+    }
     const { binding, generation } = rotateCredential(
       employeeId,
       DEMO_ORG.id,
@@ -171,7 +193,9 @@ export async function issueEmployee(
       status: "active",
       scopes: input.scopes,
       allowed_purposes: input.allowedPurposes,
-      approval_policy: input.approvalPolicy,
+      approval_policy: effectivePolicy,
+      sod_level: sodVerdict.level,
+      action_limits: actionLimits,
       spend: input.spend ?? null,
       allowed_accounts: input.allowedAccounts ?? [],
       approval_notify_email: input.approvalNotifyEmail ?? null,
@@ -196,7 +220,8 @@ export async function issueEmployee(
       secret_prefix: input.secretPrefix,
       scopes: input.scopes,
       allowed_purposes: input.allowedPurposes,
-      approval_policy: input.approvalPolicy,
+      approval_policy: effectivePolicy,
+      action_limits: actionLimits,
       spend: input.spend ?? null,
       allowed_accounts: input.allowedAccounts ?? [],
       expires_at: input.expiresAt,
@@ -228,7 +253,9 @@ export async function issueEmployee(
     metadata: {
       scopes: input.scopes,
       purposes: input.allowedPurposes,
-      approvalPolicy: input.approvalPolicy,
+      approvalPolicy: effectivePolicy,
+      sodLevel: sodVerdict.level,
+      actionLimits,
       spend: input.spend ?? null,
       allowedAccounts: input.allowedAccounts ?? [],
     },
@@ -250,6 +277,18 @@ export async function issueEmployee(
     ? mapBindingRow(bindingRow as Record<string, unknown>)
     : ensureBindingRow(employeeId, orgId);
 
+  if (sodVerdict.level === "force_human") {
+    await appendAuditEvent({
+      orgId,
+      employeeId,
+      credentialId,
+      action: "employee.sod_forced",
+      purpose: null,
+      summary: `${employee.displayName} を全件承認に固定`,
+      metadata: { domains: sodVerdict.domains, previousPolicy: input.approvalPolicy },
+    });
+  }
+
   return {
     employee,
     credentialId,
@@ -257,4 +296,69 @@ export async function issueEmployee(
     generation: binding.credentialGeneration,
     demo: false,
   };
+}
+
+export async function updateEmployeePolicy(input: {
+  orgId: string;
+  employeeId: string;
+  scopes: Employee["scopes"];
+  allowedPurposes: string[];
+  approvalPolicy: Employee["approvalPolicy"];
+  actionLimits?: ActionLimits;
+}): Promise<Employee | null> {
+  const verdict = evaluateSod(input.scopes);
+  const effectivePolicy = verdict.level === "force_human" ? "always_human" : input.approvalPolicy;
+  const actionLimits = normalizeActionLimits(input.actionLimits);
+  if (isDemoMode()) {
+    const employee = getRuntimeEmployees().find((item) => item.id === input.employeeId && item.orgId === input.orgId);
+    if (!employee) return null;
+    Object.assign(employee, {
+      scopes: input.scopes,
+      allowedPurposes: input.allowedPurposes,
+      approvalPolicy: effectivePolicy,
+      sodLevel: verdict.level,
+      actionLimits,
+    });
+    return employee;
+  }
+  const admin = createSupabaseAdminClient();
+  if (!admin) return null;
+  const { data, error } = await admin
+    .from("employees")
+    .update({
+      scopes: input.scopes,
+      allowed_purposes: input.allowedPurposes,
+      approval_policy: effectivePolicy,
+      sod_level: verdict.level,
+      action_limits: actionLimits,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", input.employeeId)
+    .eq("org_id", input.orgId)
+    .select("*")
+    .maybeSingle();
+  if (error || !data) return null;
+  await admin
+    .from("credentials")
+    .update({
+      scopes: input.scopes,
+      allowed_purposes: input.allowedPurposes,
+      approval_policy: effectivePolicy,
+      action_limits: actionLimits,
+    })
+    .eq("employee_id", input.employeeId)
+    .eq("org_id", input.orgId)
+    .is("revoked_at", null);
+  if (verdict.level === "force_human") {
+    await appendAuditEvent({
+      orgId: input.orgId,
+      employeeId: input.employeeId,
+      credentialId: null,
+      action: "employee.sod_forced",
+      purpose: null,
+      summary: "権限更新により全件承認へ固定",
+      metadata: { domains: verdict.domains, previousPolicy: input.approvalPolicy },
+    });
+  }
+  return mapEmployeeRow(data as Record<string, unknown>);
 }

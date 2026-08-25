@@ -59,6 +59,9 @@ create table if not exists employees (
   allowed_purposes text[] not null default '{}',
   approval_policy text not null default 'risk_based'
     check (approval_policy in ('auto', 'always_human', 'risk_based')),
+  sod_level text not null default 'ok'
+    check (sod_level in ('ok', 'warn', 'force_human')),
+  action_limits jsonb not null default '{}'::jsonb,
   spend jsonb,
   allowed_accounts jsonb not null default '[]'::jsonb,
   approval_notify_email text,
@@ -80,6 +83,7 @@ create table if not exists credentials (
   allowed_purposes text[] not null default '{}',
   approval_policy text not null default 'risk_based'
     check (approval_policy in ('auto', 'always_human', 'risk_based')),
+  action_limits jsonb not null default '{}'::jsonb,
   spend jsonb,
   allowed_accounts jsonb not null default '[]'::jsonb,
   expires_at timestamptz,
@@ -91,6 +95,19 @@ create table if not exists credentials (
 create index if not exists credentials_employee_idx on credentials (employee_id);
 create index if not exists credentials_org_active_idx
   on credentials (org_id) where revoked_at is null;
+
+create table if not exists action_counters (
+  org_id uuid not null references orgs(id) on delete cascade,
+  employee_id uuid not null references employees(id) on delete cascade,
+  period text not null check (period ~ '^[0-9]{4}-[0-9]{2}$'),
+  tool text not null,
+  count integer not null default 0 check (count >= 0),
+  updated_at timestamptz not null default now(),
+  primary key (org_id, employee_id, period, tool)
+);
+
+create index if not exists action_counters_employee_period_idx
+  on action_counters (employee_id, period);
 
 -- ---------------------------------------------------------------------------
 -- Approvals (要対応)
@@ -294,6 +311,7 @@ alter table orgs enable row level security;
 alter table org_members enable row level security;
 alter table employees enable row level security;
 alter table credentials enable row level security;
+alter table action_counters enable row level security;
 alter table approval_requests enable row level security;
 alter table org_notification_channels enable row level security;
 alter table org_notification_channel_secrets enable row level security;
@@ -330,6 +348,10 @@ create policy credentials_select on credentials
   for select using (public.is_org_member(org_id));
 create policy credentials_write_admin on credentials
   for all using (public.is_org_admin(org_id));
+
+drop policy if exists action_counters_select on action_counters;
+create policy action_counters_select on action_counters
+  for select using (public.is_org_member(org_id));
 
 drop policy if exists approvals_select on approval_requests;
 drop policy if exists approvals_write_member on approval_requests;
@@ -377,6 +399,39 @@ create policy bindings_select on employee_bindings
   for select using (public.is_org_member(org_id));
 create policy bindings_write_admin on employee_bindings
   for all using (public.is_org_admin(org_id));
+
+create or replace function public.increment_action_counter(
+  p_org_id uuid,
+  p_employee_id uuid,
+  p_period text,
+  p_tool text
+) returns integer
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  next_count integer;
+begin
+  if p_period !~ '^[0-9]{4}-[0-9]{2}$' or trim(p_tool) = '' then
+    raise exception 'invalid_action_counter_input';
+  end if;
+  if not exists (
+    select 1 from employees where id = p_employee_id and org_id = p_org_id
+  ) then
+    raise exception 'employee_org_mismatch';
+  end if;
+  insert into action_counters (org_id, employee_id, period, tool, count, updated_at)
+  values (p_org_id, p_employee_id, p_period, p_tool, 1, now())
+  on conflict (org_id, employee_id, period, tool)
+  do update set count = action_counters.count + 1, updated_at = now()
+  returning count into next_count;
+  return next_count;
+end;
+$$;
+
+revoke all on function public.increment_action_counter(uuid, uuid, text, text) from public, anon, authenticated;
+grant execute on function public.increment_action_counter(uuid, uuid, text, text) to service_role;
 
 -- ---------------------------------------------------------------------------
 -- AgentMail reservation (P0.5) — schema/policy only; no live provider wiring in P0.

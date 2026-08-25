@@ -8,12 +8,15 @@ import { sendApprovalNotifications } from "@/lib/notify/channels";
 import { getCurrentOrgId } from "@/lib/auth/session";
 import {
   assertExecutable,
+  appendAuditEvent,
   createApproval,
+  getActionCounts,
   getApprovalById,
   getBinding,
   getEmployee,
   getEmployeeById,
   runtimeModeLabel,
+  incrementActionCounter,
 } from "@/lib/data";
 import {
   isBillableConfirmCompletion,
@@ -27,6 +30,9 @@ import {
 } from "@/lib/gateway/tools";
 import { evaluateAllowedAccountsForBrowser } from "@/lib/employees/allowed-accounts";
 import { evaluateSpend } from "@/lib/spend-gate";
+import { evaluateActionLimit } from "@/lib/action-gate";
+import { evaluateSod } from "@/lib/employees/sod";
+import { DOMAIN_LABELS } from "@/lib/gateway/domains";
 import type { Employee, GatewayInvokeRequest } from "@/lib/types";
 
 export type GatewayInvokeResult = {
@@ -67,10 +73,11 @@ async function createNeedsApprovalResponse(opts: {
   httpStatus?: number;
   parentApprovalId?: string | null;
   metadata?: Record<string, unknown>;
+  summaryPrefix?: string;
 }) {
   const risk = opts.risk || inferRiskForTool(opts.tool);
   const title = buildApprovalTitle(opts.tool, opts.purpose);
-  const summary = buildRichApprovalSummary({
+  const baseSummary = buildRichApprovalSummary({
     tool: opts.tool,
     purpose: opts.purpose,
     jobId: opts.jobId,
@@ -78,6 +85,9 @@ async function createNeedsApprovalResponse(opts: {
     amountJpy: opts.amountJpy,
     risk,
   });
+  const summary = opts.summaryPrefix
+    ? `${opts.summaryPrefix}\n\n${baseSummary}`
+    : baseSummary;
 
   let approvalId: string | null = null;
   let statusToken: string | null = null;
@@ -387,6 +397,11 @@ export async function runGatewayInvoke(
     );
   }
 
+  const sodVerdict = evaluateSod(employee.scopes);
+  const sodSummary = sodVerdict.level === "force_human"
+    ? `⚠ 権限混在社員（${sodVerdict.domains.map((domain) => DOMAIN_LABELS[domain]).join(" + ")}）のため全件承認`
+    : undefined;
+
   // AgentMail: P0.5 reservation only — never live-send in P0.
   if (toolDef.reserved) {
     return jsonResult(
@@ -476,15 +491,54 @@ export async function runGatewayInvoke(
     priorApprovalOk = Boolean(
       prior &&
         prior.status === "approved" &&
-        prior.employeeId === employeeId
+        prior.employeeId === employeeId &&
+        prior.tool === tool &&
+        prior.jobId === jobId &&
+        prior.purpose === purpose
     );
+  }
+
+  const actionCounts = await getActionCounts({
+    orgId: orgId || employee.orgId,
+    employeeId,
+    tool,
+  });
+  const actionLimit = evaluateActionLimit({
+    tool,
+    limits: employee.actionLimits,
+    ...actionCounts,
+  });
+  if (actionLimit.decision === "deny") {
+    await appendAuditEvent({
+      orgId: orgId || employee.orgId,
+      employeeId,
+      credentialId: input.credentialId || employee.credentialId,
+      action: "action_limit.denied",
+      purpose,
+      summary: `${tool} を行為上限の安全停止で拒否`,
+      metadata: { tool, jobId, limit: actionLimit.limit, counts: actionCounts },
+    });
+    return jsonResult({
+      ok: false,
+      code: "action_limit_denied",
+      error: actionLimit.reason,
+      message: actionLimit.message,
+      needs_approval: false,
+      actionLimit,
+      employeeId,
+      tool,
+      purpose,
+      jobId,
+    }, 403);
   }
 
   // confirm / send / order (and force flags) → always needs_approval
   // unless a matching prior approval unlocks execution.
   const forceApproval =
     isForceApprovalTool(toolDef) ||
-    employee.approvalPolicy === "always_human";
+    employee.approvalPolicy === "always_human" ||
+    sodVerdict.level === "force_human" ||
+    actionLimit.decision === "needs_approval";
 
   if (
     forceApproval &&
@@ -492,6 +546,17 @@ export async function runGatewayInvoke(
     tool !== "audit.append" &&
     !priorApprovalOk
   ) {
+    if (actionLimit.decision === "needs_approval") {
+      await appendAuditEvent({
+        orgId: orgId || employee.orgId,
+        employeeId,
+        credentialId: input.credentialId || employee.credentialId,
+        action: "action_limit.reached",
+        purpose,
+        summary: `${tool} が行為上限に到達`,
+        metadata: { tool, jobId, limit: actionLimit.limit, counts: actionCounts },
+      });
+    }
     // commerce.order still runs spend gate for richer reason codes.
     if (tool === "commerce.order") {
       const amountJpy =
@@ -533,10 +598,11 @@ export async function runGatewayInvoke(
         jobId,
         risk: "high",
         amountJpy: Number.isFinite(amountJpy) ? amountJpy : null,
-        message: spend.message,
+        message: actionLimit.decision === "needs_approval" ? actionLimit.message : spend.message,
         parentApprovalId: parentApprovalId || null,
-        metadata: invokeMetadata,
-        extra: { spend, toolKind: toolDef.kind, approvalPolicy: employee.approvalPolicy },
+        metadata: { ...invokeMetadata, sodVerdict, actionLimit },
+        summaryPrefix: sodSummary,
+        extra: { spend, actionLimit, sodVerdict, toolKind: toolDef.kind, approvalPolicy: employee.approvalPolicy },
       });
     }
 
@@ -549,16 +615,23 @@ export async function runGatewayInvoke(
       tool,
       purpose,
       jobId,
-      risk: inferRiskForTool(tool),
+      risk: sodVerdict.level === "force_human" ? "high" : inferRiskForTool(tool),
       message:
-        tool === "browser.use"
+        sodVerdict.level === "force_human"
+          ? sodVerdict.reason
+          : actionLimit.decision === "needs_approval"
+            ? actionLimit.message
+            : tool === "browser.use"
           ? `${tool} requires human approval (always_human). allowedAccounts checked; live browser identity remains partial.`
           : `${tool} requires human approval (always_human default for confirm/send/order)`,
       parentApprovalId: parentApprovalId || null,
-      metadata: invokeMetadata,
+      metadata: { ...invokeMetadata, sodVerdict, actionLimit },
+      summaryPrefix: sodSummary,
       extra: {
         toolKind: toolDef.kind,
         approvalPolicy: employee.approvalPolicy,
+        sodVerdict,
+        actionLimit,
         ...(browserIdentityMeta
           ? {
               browserIdentityCheck: browserIdentityMeta.browserIdentityCheck,
@@ -579,6 +652,17 @@ export async function runGatewayInvoke(
     billable: boolean;
     recorded: boolean;
   } | null = null;
+
+  if (employee.actionLimits?.[tool]) {
+    await incrementActionCounter({
+      orgId: orgId || employee.orgId,
+      employeeId,
+      credentialId: input.credentialId || employee.credentialId,
+      tool,
+      jobId,
+      purpose,
+    });
+  }
 
   if (isBillableConfirmCompletion(toolDef) && isConfirmClassTool(toolDef)) {
     // Successful confirm-class completion → billable meter (P0).

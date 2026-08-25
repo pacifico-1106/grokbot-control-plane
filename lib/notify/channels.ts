@@ -5,7 +5,9 @@ import {
   isTokyo307PilotOrg,
   listAllEnabledNotificationChannels,
   listApprovals,
+  listEmployees,
 } from "@/lib/data";
+import { buildConcentration, type ConcentrationReport } from "@/lib/employees/concentration";
 import type { ApprovalRequest, Employee } from "@/lib/types";
 import {
   editTelegramApprovalForChannel,
@@ -86,7 +88,11 @@ export async function updateApprovalNotificationMessages(
   return results;
 }
 
-function digestText(approvals: ApprovalRequest[], html: boolean): string {
+function digestText(
+  approvals: ApprovalRequest[],
+  html: boolean,
+  concentration?: ConcentrationReport
+): string {
   const now = Date.now();
   const pending = approvals.filter((item) => item.status === "pending");
   const stale = pending.filter((item) => now - new Date(item.createdAt).getTime() >= 86_400_000);
@@ -94,11 +100,22 @@ function digestText(approvals: ApprovalRequest[], html: boolean): string {
   const count = (status: string) => recent.filter((item) => item.status === status).length;
   const esc = (value: string) => html ? escapeTelegramHtml(value) : value;
   const items = pending.slice(0, 10).map((item, index) => `${index + 1}. ${esc(item.title)} #${esc(item.id.slice(0, 8))}`);
+  const concentrated = concentration?.employees.filter((row) => concentration.flagged.includes(row.employeeId)) ?? [];
+  const concentrationLines = concentrated.length
+    ? [
+        "",
+        `⚠️ 権限集中: ${concentrated.length}名`,
+        ...concentrated.slice(0, 5).map((row) =>
+          `・${esc(row.displayName)}: 高リスク領域 ${row.highRiskDomains.length}/${concentration?.orgHighRiskDomainCount || 0}`
+        ),
+      ]
+    : [];
   return [
     "📋 StaffPass 承認ダイジェスト",
     `承認待ち: ${pending.length}件（24時間以上: ${stale.length}件）`,
     `直近12時間: ✅ ${count("approved")} / ❌ ${count("rejected")} / ✏️ ${count("revision_requested")}`,
     ...(items.length ? ["", "承認待ち 上位10件", ...items] : ["", "承認待ちはありません。"]),
+    ...concentrationLines,
   ].join("\n");
 }
 
@@ -106,21 +123,28 @@ export async function sendTenantDigests(): Promise<NotificationDispatchResult[]>
   const channels = await listAllEnabledNotificationChannels();
   const results: NotificationDispatchResult[] = [];
   const byOrg = new Map<string, Awaited<ReturnType<typeof listApprovals>>>();
+  const concentrationByOrg = new Map<string, ConcentrationReport>();
   for (const channel of channels) {
     let approvals = byOrg.get(channel.orgId);
     if (!approvals) {
       approvals = await listApprovals(channel.orgId);
       byOrg.set(channel.orgId, approvals);
     }
+    let concentration = concentrationByOrg.get(channel.orgId);
+    if (!concentration) {
+      concentration = buildConcentration(await listEmployees(channel.orgId));
+      concentrationByOrg.set(channel.orgId, concentration);
+    }
     const sent = channel.provider === "telegram"
-      ? await sendTelegramTextToChannel(channel, digestText(approvals, true))
-      : await sendLineText(channel, digestText(approvals, false));
+      ? await sendTelegramTextToChannel(channel, digestText(approvals, true, concentration))
+      : await sendLineText(channel, digestText(approvals, false, concentration));
     results.push({ ...sent, provider: channel.provider, channelId: channel.id });
   }
   const pilotOrgId = await getTokyo307PilotOrgId();
   if (pilotOrgId && !channels.some((channel) => channel.orgId === pilotOrgId && channel.provider === "telegram")) {
     const approvals = byOrg.get(pilotOrgId) || await listApprovals(pilotOrgId);
-    results.push({ ...(await sendTelegramText(digestText(approvals, true))), provider: "telegram", fallback: true });
+    const concentration = concentrationByOrg.get(pilotOrgId) || buildConcentration(await listEmployees(pilotOrgId));
+    results.push({ ...(await sendTelegramText(digestText(approvals, true, concentration))), provider: "telegram", fallback: true });
   }
   return results;
 }

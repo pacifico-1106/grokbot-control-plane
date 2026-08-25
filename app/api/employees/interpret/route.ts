@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { buildEmployeePolicyDraft } from "@/lib/employees/policy-draft";
+import { buildEmployeePolicyDrafts } from "@/lib/employees/policy-draft";
 
 export const runtime = "nodejs";
 
@@ -21,6 +21,6 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "sensitive_input_not_allowed" }, { status: 400 });
   }
 
-  const draft = buildEmployeePolicyDraft(input);
-  return NextResponse.json({ draft, source: "rules" });
+  const drafts = buildEmployeePolicyDrafts(input);
+  return NextResponse.json({ draft: drafts[0], drafts, source: "rules" });
 }

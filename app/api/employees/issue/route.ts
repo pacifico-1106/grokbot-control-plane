@@ -2,15 +2,18 @@ import { createHash, randomBytes } from "node:crypto";
 import { NextResponse } from "next/server";
 import { getCurrentOrgId } from "@/lib/auth/session";
 import { assertBillingAllows } from "@/lib/billing/entitlements";
-import { issueEmployee, runtimeModeLabel } from "@/lib/data";
+import { appendAuditEvent, issueEmployee, runtimeModeLabel } from "@/lib/data";
+import { normalizeActionLimits } from "@/lib/action-gate";
+import { evaluateSod } from "@/lib/employees/sod";
 import { normalizeAllowedAccounts } from "@/lib/employees/allowed-accounts";
+import { ALL_SCOPES } from "@/lib/employees/policy-draft";
 import {
   buildDefaultApprovalRoutine,
   buildHireInstructionsSnippet,
 } from "@/lib/employees/approval-loop-copy";
 import { normalizeSpendLimits } from "@/lib/spend-gate";
 import { requireCapability } from "@/lib/team/demo-actor";
-import type { AllowedAccount, ApprovalPolicy, EmployeeScope, SpendLimits } from "@/lib/types";
+import type { ActionLimits, AllowedAccount, ApprovalPolicy, EmployeeScope, SpendLimits } from "@/lib/types";
 
 export const runtime = "nodejs";
 
@@ -40,6 +43,8 @@ export async function POST(req: Request) {
     scopes?: string[];
     allowedPurposes?: string[];
     approvalPolicy?: ApprovalPolicy;
+    actionLimits?: ActionLimits;
+    sodOverrideAcknowledged?: boolean;
     expiresInDays?: number;
     spend?: Partial<SpendLimits> | null;
     allowedAccounts?: AllowedAccount[] | null;
@@ -54,13 +59,16 @@ export async function POST(req: Request) {
   }
 
   const scopes = (body.scopes || []) as EmployeeScope[];
-  if (!scopes.length) {
+  if (!scopes.length || scopes.some((scope) => !ALL_SCOPES.includes(scope))) {
     return NextResponse.json({ error: "scopes_required" }, { status: 400 });
   }
 
   const hasOrder = scopes.includes("commerce:order");
   const spend = hasOrder ? normalizeSpendLimits(body.spend ?? {}) : null;
   const allowedAccounts = normalizeAllowedAccounts(body.allowedAccounts);
+  const actionLimits = normalizeActionLimits(body.actionLimits);
+  const sodVerdict = evaluateSod(scopes);
+  const requestedApprovalPolicy = body.approvalPolicy || "risk_based";
 
   const secret = issueSecret();
   const expiresInDays = Math.min(365, Math.max(1, body.expiresInDays || 30));
@@ -84,7 +92,8 @@ export async function POST(req: Request) {
       jobDescription: body.jobDescription || "",
       scopes,
       allowedPurposes: body.allowedPurposes || [],
-      approvalPolicy: body.approvalPolicy || "risk_based",
+      approvalPolicy: requestedApprovalPolicy,
+      actionLimits,
       spend,
       allowedAccounts,
       approvalNotifyEmail: body.approvalNotifyEmail?.trim() || null,
@@ -105,6 +114,18 @@ export async function POST(req: Request) {
       displayName,
       employeeId: result.employee.id,
     });
+    if (sodVerdict.level === "force_human" && body.sodOverrideAcknowledged) {
+      await appendAuditEvent({
+        orgId: result.employee.orgId,
+        employeeId: result.employee.id,
+        credentialId: result.credentialId,
+        actorEmail: gate.actor.email,
+        action: "employee.sod_override",
+        purpose: null,
+        summary: "権限集中の警告を確認して発行",
+        metadata: { domains: sodVerdict.domains, actor: gate.actor.email },
+      });
+    }
 
     return NextResponse.json({
       ok: true,
@@ -119,7 +140,8 @@ export async function POST(req: Request) {
         prefix: secret.prefix,
         scopes,
         allowedPurposes: body.allowedPurposes || [],
-        approvalPolicy: body.approvalPolicy || "risk_based",
+        approvalPolicy: result.employee.approvalPolicy,
+        actionLimits: result.employee.actionLimits,
         spend,
         allowedAccounts,
         expiresAt,
@@ -128,6 +150,7 @@ export async function POST(req: Request) {
         secretHash: secret.hash.slice(0, 12) + "…",
       },
       binding: result.binding,
+      sodVerdict,
       generation: result.generation,
       hirePack: {
         instructionsSnippet,

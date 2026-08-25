@@ -43,7 +43,9 @@ export const DEMO_EMPLOYEES: Employee[] = [
       "audit:append",
     ],
     allowedPurposes: ["sales.outreach", "commerce.quote"],
-    approvalPolicy: "risk_based",
+    approvalPolicy: "always_human",
+    sodLevel: "force_human",
+    actionLimits: { "mail.send": { perDay: 20, perMonth: 300 }, "calendar.confirm": { perDay: 8 } },
     allowedAccounts: [
       {
         service: "google",
@@ -71,6 +73,8 @@ export const DEMO_EMPLOYEES: Employee[] = [
     ],
     allowedPurposes: ["ops.admin", "invoice.check"],
     approvalPolicy: "risk_based",
+    sodLevel: "ok",
+    actionLimits: { "files.write": { perDay: 10 } },
     credentialId: "cred_ops",
     createdAt: new Date(Date.now() - 86400000 * 2).toISOString(),
   },
@@ -383,6 +387,8 @@ export function addRuntimeEmployee(employee: Employee, auditSummary: string) {
       scopes: employee.scopes,
       purposes: employee.allowedPurposes,
       approvalPolicy: employee.approvalPolicy,
+      sodLevel: employee.sodLevel,
+      actionLimits: employee.actionLimits,
       spend: employee.spend ?? null,
       allowedAccounts: employee.allowedAccounts ?? [],
     },

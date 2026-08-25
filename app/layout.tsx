@@ -24,13 +24,10 @@ export const viewport: Viewport = {
 export const metadata: Metadata = {
   title: "Staffpass — Sealith の AI社員 就業規則と日報",
   description:
-    "AIを入れるな。AI社員を雇え。手足のエージェントは強い。足りないのは会社の社員証・承認・台帳。Sealith の Staffpass がそれを埋める。まず Grok Bot（本線）、他は順次。日本の中小・零細の経営者・幹部向け。",
+    "AI社員の権限、承認、行為上限、監査を一つの社員証で管理するコントロールプレーン。",
   icons: {
-    icon: [
-      { url: "/brand/sealith-logo-stripe.svg", type: "image/svg+xml" },
-      { url: "/brand/sealith-logo-stripe.png", type: "image/png" },
-    ],
-    apple: [{ url: "/brand/sealith-logo-stripe.png" }],
+    icon: [{ url: "/brand/staffpass-mark-dark-v2.png", type: "image/png" }],
+    apple: [{ url: "/brand/staffpass-mark-dark-v2.png" }],
   },
 };
 

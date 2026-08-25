@@ -7,15 +7,15 @@ import { BrandMark } from "@/components/BrandMark";
 import { useAppSession } from "@/components/AppSessionProvider";
 
 const NAV = [
-  { href: "/app", label: "ダッシュボード", exact: true },
-  { href: "/app/employees", label: "AI社員" },
-  { href: "/app/approvals", label: "承認" },
-  { href: "/app/audit", label: "監査" },
-  { href: "/app/getting-started", label: "はじめに" },
-  { href: "/app/integrations", label: "連携" },
-  { href: "/app/billing", label: "請求" },
-  { href: "/app/team", label: "チーム" },
-  { href: "/app/settings", label: "通知設定" },
+  { href: "/app", label: "ダッシュボード", icon: "◫", exact: true },
+  { href: "/app/employees", label: "AI社員", icon: "◇" },
+  { href: "/app/approvals", label: "承認", icon: "✓" },
+  { href: "/app/audit", label: "監査", icon: "≡" },
+  { href: "/app/getting-started", label: "はじめに", icon: "→" },
+  { href: "/app/integrations", label: "連携", icon: "⌁" },
+  { href: "/app/billing", label: "請求", icon: "¥" },
+  { href: "/app/team", label: "チーム", icon: "◎" },
+  { href: "/app/settings", label: "通知設定", icon: "•" },
 ];
 
 function navActive(pathname: string, item: (typeof NAV)[number]) {
@@ -80,13 +80,13 @@ export function AppShell({
               <Link
                 key={item.href}
                 href={item.href}
-                className={`rounded-lg px-3 py-2.5 text-sm min-h-[44px] flex items-center ${
+                className={`rounded-xl px-3 py-2.5 text-sm min-h-[44px] flex items-center gap-3 ${
                   active
                     ? "bg-[var(--bg-soft)] text-[var(--text)]"
                     : "text-[var(--text-muted)] hover:bg-[var(--bg-soft)] hover:text-[var(--text)]"
                 }`}
               >
-                {item.label}
+                <span className="w-5 text-center text-[var(--text-faint)]" aria-hidden>{item.icon}</span>{item.label}
               </Link>
             );
           })}
@@ -159,14 +159,14 @@ export function AppShell({
                 <Link
                   key={item.href}
                   href={item.href}
-                  className={`rounded-lg px-3 py-3 text-sm min-h-[44px] flex items-center break-words ${
+                  className={`rounded-xl px-3 py-3 text-sm min-h-[44px] flex items-center gap-3 break-words ${
                     active
                       ? "bg-[var(--bg-soft)] text-[var(--text)]"
                       : "text-[var(--text-muted)] hover:bg-[var(--bg-soft)] hover:text-[var(--text)]"
                   }`}
                   onClick={() => setMenuOpen(false)}
                 >
-                  {item.label}
+                  <span className="w-5 text-center text-[var(--text-faint)]" aria-hidden>{item.icon}</span>{item.label}
                 </Link>
               );
             })}

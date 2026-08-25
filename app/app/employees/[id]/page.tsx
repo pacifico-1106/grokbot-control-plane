@@ -9,6 +9,7 @@ import {
   ensureBindingRow,
   getBinding,
   getEmployee,
+  listEmployees,
 } from "@/lib/data";
 import { getEmployeeActionLog } from "@/lib/employee-actions-demo";
 import { serviceLabel } from "@/lib/employees/allowed-accounts";
@@ -17,6 +18,8 @@ import {
   SCOPE_LABELS,
 } from "@/lib/employees/policy-draft";
 import type { EmployeeScope } from "@/lib/types";
+import { buildConcentration } from "@/lib/employees/concentration";
+import { DOMAIN_LABELS } from "@/lib/gateway/domains";
 
 export const dynamic = "force-dynamic";
 
@@ -38,6 +41,8 @@ export default async function EmployeeDetailPage({
   const orgId = await getCurrentOrgId();
   const employee = await getEmployee(id, orgId);
   if (!employee) notFound();
+  const concentration = buildConcentration(await listEmployees(orgId));
+  const concentrationRow = concentration.employees.find((row) => row.employeeId === employee.id);
 
   const binding =
     (await getBinding(employee.id)) ??
@@ -107,6 +112,47 @@ export default async function EmployeeDetailPage({
           </ul>
         </section>
       </div>
+
+      <section className={`surface p-5 mt-4 ${employee.sodLevel === "force_human" ? "ring-1 ring-[color-mix(in_oklab,var(--danger)_52%,transparent)]" : ""}`}>
+        <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
+          <div>
+            <h2 className="text-sm font-medium">職務分離・権限集中</h2>
+            <p className="mt-2 text-xs muted leading-relaxed">
+              {employee.sodLevel === "force_human"
+                ? "複数の高リスク領域が混在しているため、すべての行為を人が承認します。権限を社員ごとに分けると自動化できる範囲が広がります。"
+                : employee.sodLevel === "warn"
+                  ? "ブラウザ操作を許可しています。利用アカウントを限定し、共有セッションを定期的に確認してください。"
+                  : "高リスク権限は分離されています。"}
+            </p>
+          </div>
+          <span className={`chip shrink-0 ${employee.sodLevel === "force_human" ? "chip-danger" : employee.sodLevel === "warn" ? "chip-warn" : "chip-ok"}`}>
+            {employee.sodLevel === "force_human" ? "全件承認" : employee.sodLevel === "warn" ? "要注意" : "分離済み"}
+          </span>
+        </div>
+        <div className="mt-4 flex flex-wrap gap-2">
+          {(concentrationRow?.highRiskDomains ?? []).map((domain) => (
+            <span key={domain} className="chip chip-warn text-[11px]">{DOMAIN_LABELS[domain]}</span>
+          ))}
+        </div>
+        <div className="mt-3 flex items-center gap-3">
+          <div className="h-2 flex-1 rounded-full bg-[var(--border-soft)] overflow-hidden">
+            <div className="h-full rounded-full bg-[var(--warn)]" style={{ width: `${(concentrationRow?.share ?? 0) * 100}%` }} />
+          </div>
+          <span className="text-xs tabular-nums muted">組織内の {Math.round((concentrationRow?.share ?? 0) * 100)}%</span>
+        </div>
+        {Object.keys(employee.actionLimits).length ? (
+          <details className="mt-4 rounded-xl border border-[var(--border-soft)] px-3 py-2">
+            <summary className="text-xs cursor-pointer">行為上限</summary>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {Object.entries(employee.actionLimits).map(([tool, limit]) => (
+                <span key={tool} className="chip text-[11px]">
+                  {tool}: {limit.perDay ? `日${limit.perDay}` : ""}{limit.perDay && limit.perMonth ? " / " : ""}{limit.perMonth ? `月${limit.perMonth}` : ""}
+                </span>
+              ))}
+            </div>
+          </details>
+        ) : null}
+      </section>
 
       <section className="surface p-5 space-y-3 mt-4">
         <h2 className="text-sm font-medium">予算・承認（決済委任）</h2>

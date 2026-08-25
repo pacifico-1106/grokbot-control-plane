@@ -16,9 +16,13 @@ import { isDemoMode } from "../mode";
 import { createSupabaseAdminClient } from "../supabase";
 import { mapBindingRow } from "./mappers";
 import type {
+  ActionLimits,
+  ApprovalPolicy,
+  EmployeeScope,
   EmployeeBinding,
   ExecutableAllow,
   ExecutableDeny,
+  SpendLimits,
 } from "../types";
 
 export { bindingPublicView };
@@ -147,7 +151,16 @@ export async function linkAgent(
 export async function rotateCredential(
   employeeId: string,
   orgId: string,
-  fingerprint: string
+  fingerprint: string,
+  credential?: {
+    secretPrefix: string;
+    scopes: EmployeeScope[];
+    allowedPurposes: string[];
+    approvalPolicy: ApprovalPolicy;
+    actionLimits: ActionLimits;
+    spend?: SpendLimits | null;
+    allowedAccounts?: Array<{ service: string; accountId: string; label?: string; browserRequired?: boolean }>;
+  }
 ): Promise<{ binding: EmployeeBinding; generation: number }> {
   if (isDemoMode()) return demoRotate(employeeId, orgId, fingerprint);
   const row = await ensureBindingRow(employeeId, orgId);
@@ -170,6 +183,38 @@ export async function rotateCredential(
     .select("*")
     .single();
   if (error || !data) throw new Error(error?.message || "rotate_failed");
+
+  // Keep the credential snapshot aligned with the employee policy on every
+  // rotation. Authentication prefers the binding fingerprint, while this row
+  // remains the durable policy/audit source for the newly issued secret.
+  if (credential) {
+    const { data: rotatedCredential, error: credentialError } = await admin
+      .from("credentials")
+      .insert({
+        org_id: orgId,
+        employee_id: employeeId,
+        secret_hash: fingerprint,
+        secret_prefix: credential.secretPrefix,
+        scopes: credential.scopes,
+        allowed_purposes: credential.allowedPurposes,
+        approval_policy: credential.approvalPolicy,
+        action_limits: credential.actionLimits,
+        spend: credential.spend ?? null,
+        allowed_accounts: credential.allowedAccounts ?? [],
+      })
+      .select("id")
+      .single();
+    if (credentialError || !rotatedCredential) {
+      throw new Error(credentialError?.message || "credential_rotate_insert_failed");
+    }
+    await admin
+      .from("credentials")
+      .update({ revoked_at: new Date().toISOString() })
+      .eq("org_id", orgId)
+      .eq("employee_id", employeeId)
+      .is("revoked_at", null)
+      .neq("id", String(rotatedCredential.id));
+  }
   const binding = mapBindingRow(data as Record<string, unknown>);
   return { binding, generation };
 }

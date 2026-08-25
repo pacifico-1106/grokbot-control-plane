@@ -29,11 +29,11 @@ export function BrandMark({
   const content = (
     <span className={`inline-flex items-center gap-2.5 text-[var(--text)] ${className}`}>
       <Image
-        src="/brand/sealith-logo-stripe.png"
+        src="/brand/staffpass-mark-dark-v2.png"
         alt=""
         width={markPx}
         height={markPx}
-        className="rounded-[22%] shrink-0"
+        className="shrink-0 object-contain"
         priority
       />
       <span className="flex flex-col min-w-0">

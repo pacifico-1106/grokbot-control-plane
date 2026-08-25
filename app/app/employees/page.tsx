@@ -3,6 +3,8 @@ import { AppShell } from "@/components/AppShell";
 import { getCurrentOrgId } from "@/lib/auth/session";
 import { getOrgMeta, listEmployees } from "@/lib/data";
 import { APPROVAL_POLICY_LABELS } from "@/lib/employees/policy-draft";
+import { buildConcentration } from "@/lib/employees/concentration";
+import { DOMAIN_LABELS } from "@/lib/gateway/domains";
 
 export const dynamic = "force-dynamic";
 
@@ -10,6 +12,8 @@ export default async function EmployeesPage() {
   const orgId = await getCurrentOrgId();
   const employees = await listEmployees(orgId);
   const org = await getOrgMeta(orgId);
+  const concentration = buildConcentration(employees);
+  const concentrationById = new Map(concentration.employees.map((row) => [row.employeeId, row]));
 
   return (
     <AppShell
@@ -79,6 +83,18 @@ export default async function EmployeesPage() {
                       {APPROVAL_POLICY_LABELS[e.approvalPolicy]}
                     </span>
                   </div>
+                  {(() => {
+                    const row = concentrationById.get(e.id);
+                    if (!row?.highRiskDomains.length) return null;
+                    return <div className="mt-3">
+                      <div className="flex flex-wrap gap-1.5">
+                        {row.highRiskDomains.map((domain) => <span key={domain} className="chip chip-warn text-[10px]">{DOMAIN_LABELS[domain]}</span>)}
+                      </div>
+                      <div className="mt-2 h-1.5 rounded-full bg-[var(--border-soft)] overflow-hidden">
+                        <div className="h-full rounded-full bg-[var(--warn)]" style={{ width: `${row.share * 100}%` }} />
+                      </div>
+                    </div>;
+                  })()}
                 </Link>
                 <Link
                   href={`/app/employees/${e.id}/actions`}
@@ -99,6 +115,7 @@ export default async function EmployeesPage() {
                     <th className="px-4 py-3 font-medium">名前</th>
                     <th className="px-4 py-3 font-medium">職務</th>
                     <th className="px-4 py-3 font-medium">承認</th>
+                    <th className="px-4 py-3 font-medium">高リスク領域</th>
                     <th className="px-4 py-3 font-medium">状態</th>
                     <th className="px-4 py-3 font-medium">ログ</th>
                   </tr>
@@ -126,6 +143,16 @@ export default async function EmployeesPage() {
                         <span className="chip text-[11px]">
                           {APPROVAL_POLICY_LABELS[e.approvalPolicy]}
                         </span>
+                      </td>
+                      <td className="px-4 py-3 relative z-[1] pointer-events-none min-w-48">
+                        {(() => {
+                          const row = concentrationById.get(e.id);
+                          if (!row?.highRiskDomains.length) return <span className="text-xs faint">なし</span>;
+                          return <div>
+                            <div className="flex flex-wrap gap-1">{row.highRiskDomains.map((domain) => <span key={domain} className="chip chip-warn text-[10px]">{DOMAIN_LABELS[domain]}</span>)}</div>
+                            <div className="mt-2 h-1.5 rounded-full bg-[var(--border-soft)] overflow-hidden"><div className="h-full rounded-full bg-[var(--warn)]" style={{ width: `${row.share * 100}%` }} /></div>
+                          </div>;
+                        })()}
                       </td>
                       <td className="px-4 py-3 relative z-[1] pointer-events-none">
                         <span

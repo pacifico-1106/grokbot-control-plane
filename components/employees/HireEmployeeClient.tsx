@@ -17,7 +17,10 @@ import {
   jobTextImpliesCommerceOrder,
 } from "@/lib/employees/policy-draft";
 import { DEFAULT_SPEND_LIMITS } from "@/lib/spend-gate";
+import { evaluateSod } from "@/lib/employees/sod";
+import { DOMAIN_LABELS, domainOfScope } from "@/lib/gateway/domains";
 import type {
+  ActionLimits,
   AllowedAccount,
   ApprovalPolicy,
   EmployeePolicyDraft,
@@ -46,12 +49,15 @@ export function HireEmployeeClient() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [draft, setDraft] = useState<EmployeePolicyDraft | null>(null);
+  const [drafts, setDrafts] = useState<EmployeePolicyDraft[]>([]);
   const [displayName, setDisplayName] = useState("");
   const [roleLabel, setRoleLabel] = useState("");
   const [scopes, setScopes] = useState<EmployeeScope[]>([]);
   const [purposes, setPurposes] = useState("");
   const [approvalPolicy, setApprovalPolicy] =
     useState<ApprovalPolicy>("risk_based");
+  const [actionLimits, setActionLimits] = useState<ActionLimits>({});
+  const [sodOverrideAcknowledged, setSodOverrideAcknowledged] = useState(false);
   const [expiresInDays, setExpiresInDays] = useState(30);
   const [spend, setSpend] = useState<SpendLimits>(emptySpend);
   const [futureSpendOpen, setFutureSpendOpen] = useState(false);
@@ -61,6 +67,11 @@ export function HireEmployeeClient() {
   const [revealSecret, setRevealSecret] = useState(false);
   const [orderInferredFromJob, setOrderInferredFromJob] = useState(false);
   const [issuedEmployeeId, setIssuedEmployeeId] = useState<string | null>(null);
+  const [issuedBatch, setIssuedBatch] = useState<Array<{
+    id: string;
+    displayName: string;
+    oneTimeSecret: string;
+  }>>([]);
   const [copied, setCopied] = useState(false);
   const [hirePack, setHirePack] = useState<{
     instructionsSnippet: string;
@@ -81,6 +92,37 @@ export function HireEmployeeClient() {
   );
 
   const hasOrderScope = scopes.includes("commerce:order");
+  const liveSod = useMemo(() => evaluateSod(scopes), [scopes]);
+
+  function applyDraft(d: EmployeePolicyDraft) {
+    setDraft(d);
+    setDisplayName(d.policy.displayName);
+    setRoleLabel(d.policy.roleLabel);
+    const inferredOrder =
+      jobTextImpliesCommerceOrder(prompt) ||
+      d.policy.scopes.includes("commerce:order") ||
+      d.warnings.includes("commerce_order_requested");
+    const nextScopes = inferredOrder && !d.policy.scopes.includes("commerce:order")
+      ? ([...d.policy.scopes, "commerce:order", "commerce:quote"] as EmployeeScope[])
+      : d.policy.scopes;
+    const scopesUnique = [...new Set(nextScopes)] as EmployeeScope[];
+    setOrderInferredFromJob(inferredOrder);
+    setScopes(scopesUnique);
+    setPurposes(d.policy.allowedPurposes.join(", "));
+    setApprovalPolicy(d.policy.approvalPolicy);
+    setActionLimits(d.policy.actionLimits || {});
+    setSodOverrideAcknowledged(false);
+    setExpiresInDays(d.policy.expiresInDays);
+    setSpend(scopesUnique.includes("commerce:order")
+      ? { ...DEFAULT_SPEND_LIMITS, ...(d.policy.spend ?? {}) }
+      : emptySpend());
+    setFutureSpendOpen(false);
+    const hasBrowser = d.policy.scopes.includes("browser:use");
+    setBrowserAllowed(hasBrowser);
+    setAllowedAccounts(d.policy.allowedAccounts?.length
+      ? d.policy.allowedAccounts.map((a) => ({ ...a }))
+      : hasBrowser ? [emptyAllowedAccount("google")] : []);
+  }
 
   async function createDraft() {
     setLoading(true);
@@ -93,39 +135,11 @@ export function HireEmployeeClient() {
       });
       const body = await res.json();
       if (!res.ok) throw new Error(body.error || "interpret_failed");
-      const d = body.draft as EmployeePolicyDraft;
-      setDraft(d);
-      setDisplayName(d.policy.displayName);
-      setRoleLabel(d.policy.roleLabel);
-      // Auto-enable commerce:order when job text implies ordering (also enforced in rules).
-      const inferredOrder =
-        jobTextImpliesCommerceOrder(prompt) ||
-        d.policy.scopes.includes("commerce:order") ||
-        d.warnings.includes("commerce_order_requested");
-      const nextScopes = inferredOrder && !d.policy.scopes.includes("commerce:order")
-        ? ([...d.policy.scopes, "commerce:order", "commerce:quote"] as EmployeeScope[])
-        : d.policy.scopes;
-      setOrderInferredFromJob(inferredOrder);
-      const scopesUnique = [...new Set(nextScopes)] as EmployeeScope[];
-      setScopes(scopesUnique);
-      setPurposes(d.policy.allowedPurposes.join(", "));
-      setApprovalPolicy(d.policy.approvalPolicy);
-      setExpiresInDays(d.policy.expiresInDays);
-      setSpend(
-        scopesUnique.includes("commerce:order")
-          ? { ...DEFAULT_SPEND_LIMITS, ...(d.policy.spend ?? {}) }
-          : emptySpend()
-      );
-      setFutureSpendOpen(false);
-      const hasBrowser = d.policy.scopes.includes("browser:use");
-      setBrowserAllowed(hasBrowser);
-      setAllowedAccounts(
-        d.policy.allowedAccounts?.length
-          ? d.policy.allowedAccounts.map((a) => ({ ...a }))
-          : hasBrowser
-            ? [emptyAllowedAccount("google")]
-            : []
-      );
+      const nextDrafts = (Array.isArray(body.drafts) && body.drafts.length
+        ? body.drafts
+        : [body.draft]) as EmployeePolicyDraft[];
+      setDrafts(nextDrafts);
+      applyDraft(nextDrafts[0]);
       setStep("draft");
     } catch (e) {
       setError(e instanceof Error ? e.message : "interpret_failed");
@@ -172,6 +186,8 @@ export function HireEmployeeClient() {
           })(),
           allowedPurposes: purposeList,
           approvalPolicy,
+          actionLimits,
+          sodOverrideAcknowledged,
           expiresInDays,
           spend: hasOrderScope || futureSpendOpen ? spend : null,
           allowedAccounts: normalizeAllowedAccounts(allowedAccounts),
@@ -202,6 +218,65 @@ export function HireEmployeeClient() {
     } finally {
       setLoading(false);
     }
+  }
+
+  async function issueSplitDrafts() {
+    if (drafts.length < 2) return;
+    setLoading(true);
+    setError("");
+    try {
+      const issued: Array<{ id: string; displayName: string; oneTimeSecret: string }> = [];
+      for (const item of drafts) {
+        const res = await fetch("/api/employees/issue", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            ...item.policy,
+            jobDescription: `${prompt}（職務分離: ${item.policy.roleLabel}）`,
+            spend: item.policy.spend ?? null,
+            allowedAccounts: item.policy.allowedAccounts ?? [],
+          }),
+        });
+        const body = await res.json();
+        if (!res.ok) throw new Error(body.error || "issue_failed");
+        issued.push({
+          id: body.employee.id,
+          displayName: body.employee.displayName,
+          oneTimeSecret: body.credential.oneTimeSecret,
+        });
+      }
+      setIssuedBatch(issued);
+      setIssuedEmployeeId(issued[0]?.id ?? null);
+      setOneTimeSecret(issued[0]?.oneTimeSecret ?? null);
+      setStep("issued");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "issue_failed");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function splitCurrentPermissions() {
+    if (!draft) return;
+    const risky = [...new Set(scopes.map(domainOfScope).filter((domain) => domain !== "safe"))];
+    if (risky.length < 2) return;
+    const safe = scopes.filter((scope) => domainOfScope(scope) === "safe");
+    const split = risky.map((domain) => {
+      const splitScopes = [...new Set([...safe, ...scopes.filter((scope) => domainOfScope(scope) === domain)])];
+      return {
+        ...draft,
+        policy: {
+          ...draft.policy,
+          displayName: `${displayName}（${DOMAIN_LABELS[domain]}）`,
+          roleLabel: `${roleLabel}・${DOMAIN_LABELS[domain]}`,
+          scopes: splitScopes,
+          approvalPolicy: "risk_based" as ApprovalPolicy,
+        },
+        sodVerdict: evaluateSod(splitScopes),
+      };
+    });
+    setDrafts(split);
+    applyDraft(split[0]);
   }
 
   async function copySecret() {
@@ -312,6 +387,76 @@ export function HireEmployeeClient() {
             </button>
           </div>
 
+          {drafts.length > 1 ? (
+            <div className="rounded-xl border border-[color-mix(in_oklab,var(--ok)_42%,var(--border))] bg-[color-mix(in_oklab,var(--ok)_7%,var(--bg-soft))] p-4">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                <div>
+                  <p className="text-sm font-semibold">{drafts.length}人に分ける案を作りました</p>
+                  <p className="mt-1 text-xs muted">権限をまとめず、職務ごとに最小限の社員証を発行します。</p>
+                </div>
+                <button
+                  type="button"
+                  className="btn btn-primary text-xs shrink-0"
+                  disabled={loading}
+                  onClick={() => void issueSplitDrafts()}
+                >
+                  {loading ? "発行中…" : `${drafts.length}人の社員として雇う（推奨）`}
+                </button>
+              </div>
+              <div className="mt-3 grid sm:grid-cols-2 gap-2">
+                {drafts.map((item, index) => (
+                  <button
+                    type="button"
+                    key={`${item.policy.roleLabel}-${index}`}
+                    className="text-left rounded-xl border border-[var(--border)] bg-[var(--bg)] p-3 hover:border-[var(--text-faint)]"
+                    onClick={() => applyDraft(item)}
+                  >
+                    <span className="text-sm font-medium">{item.policy.displayName}</span>
+                    <span className="block mt-1 text-xs muted">{item.policy.roleLabel} · {item.policy.scopes.length}権限</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
+          {liveSod.level !== "ok" ? (
+            <div
+              className={`rounded-xl border p-4 ${liveSod.level === "force_human" ? "border-[color-mix(in_oklab,var(--danger)_48%,var(--border))]" : "border-[color-mix(in_oklab,var(--warn)_48%,var(--border))]"}`}
+              role="alert"
+            >
+              <div className="flex flex-wrap items-center gap-2">
+                <span className={`chip ${liveSod.level === "force_human" ? "chip-danger" : "chip-warn"}`}>
+                  {liveSod.level === "force_human" ? "職務分離が必要" : "ブラウザ権限に注意"}
+                </span>
+                <span className="text-xs muted">
+                  {liveSod.domains.map((domain) => DOMAIN_LABELS[domain]).join(" / ")}
+                </span>
+              </div>
+              <p className="mt-3 text-sm leading-relaxed muted">
+                {liveSod.level === "force_human"
+                  ? "複数の高リスク領域を持つため、このまま発行すると全行為が人の承認必須になります。分けると下書きや提案を自動化できます。"
+                  : "ブラウザ操作は共有セッションで動きます。利用できるアカウントを次の画面で必ず限定してください。"}
+              </p>
+              {liveSod.level === "force_human" ? (
+                <div className="mt-3 flex flex-col sm:flex-row gap-2">
+                  <button type="button" className="btn btn-primary text-xs" onClick={splitCurrentPermissions}>
+                    権限を分ける（推奨）
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-ghost text-xs"
+                    onClick={() => {
+                      setSodOverrideAcknowledged(true);
+                      setApprovalPolicy("always_human");
+                    }}
+                  >
+                    このまま発行する
+                  </button>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+
           {(draft.assumptions.length > 0 || draft.warnings.length > 0) && (
             <div className="rounded-lg border border-[var(--border-soft)] bg-[var(--bg-soft)] p-3 space-y-2">
               {draft.assumptions.map((a) => (
@@ -400,7 +545,8 @@ export function HireEmployeeClient() {
             <label className="block text-sm">
               <span className="muted">承認ポリシー（全体）</span>
               <select
-                value={approvalPolicy}
+                value={liveSod.level === "force_human" ? "always_human" : approvalPolicy}
+                disabled={liveSod.level === "force_human"}
                 onChange={(e) =>
                   setApprovalPolicy(e.target.value as ApprovalPolicy)
                 }
@@ -428,6 +574,25 @@ export function HireEmployeeClient() {
             </label>
           </div>
 
+          {Object.keys(actionLimits).length ? (
+            <details className="rounded-xl border border-[var(--border-soft)] bg-[var(--bg-soft)] px-4 py-3">
+              <summary className="cursor-pointer text-xs font-medium">行為上限（推奨値）</summary>
+              <div className="mt-3 grid sm:grid-cols-2 gap-2">
+                {Object.entries(actionLimits).map(([tool, limit]) => (
+                  <div key={tool} className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-xs">
+                    <span className="font-mono">{tool}</span>
+                    <span className="muted ml-2">
+                      {limit.perDay ? `1日 ${limit.perDay}回` : ""}
+                      {limit.perDay && limit.perMonth ? " / " : ""}
+                      {limit.perMonth ? `月 ${limit.perMonth}回` : ""}
+                    </span>
+                  </div>
+                ))}
+              </div>
+              <p className="mt-2 text-[11px] faint">到達後は承認が必要になり、2倍で安全停止します。</p>
+            </details>
+          ) : null}
+
           <details className="rounded-lg border border-[var(--border-soft)] bg-[var(--bg-soft)] px-3 py-2">
             <summary className="cursor-pointer text-xs font-medium">
               中小企業向け・必ず人が確認する操作（初期設定）
@@ -454,10 +619,12 @@ export function HireEmployeeClient() {
           <button
             type="button"
             className="btn btn-primary text-sm w-full sm:w-auto"
-            disabled={loading}
+            disabled={loading || (liveSod.level === "force_human" && !sodOverrideAcknowledged)}
             onClick={goToSpendOrIssue}
           >
-            次へ：予算・承認の補足
+            {liveSod.level === "force_human" && !sodOverrideAcknowledged
+              ? "上の発行方法を選んでください"
+              : "次へ：予算・承認の補足"}
           </button>
         </section>
       ) : null}
@@ -563,6 +730,21 @@ export function HireEmployeeClient() {
           <p className="text-sm muted">
             {roleLabel} · 承認: {APPROVAL_POLICY_LABELS[approvalPolicy]}
           </p>
+          {issuedBatch.length > 1 ? (
+            <div className="space-y-2">
+              <p className="text-sm font-medium">職務を分けて {issuedBatch.length} 人を発行しました</p>
+              {issuedBatch.map((item) => (
+                <div key={item.id} className="rounded-xl border border-[var(--border)] bg-[var(--bg-soft)] p-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-sm">{item.displayName}</span>
+                    <Link href={`/app/employees/${item.id}`} className="text-xs underline underline-offset-2">詳細</Link>
+                  </div>
+                  <code className="mt-2 block text-[11px] break-all text-[var(--warn)]">{item.oneTimeSecret}</code>
+                </div>
+              ))}
+              <p className="text-[11px] text-[var(--warn)]">各接続用の鍵は、この画面でのみ確認できます。</p>
+            </div>
+          ) : null}
           {hasOrderScope || futureSpendOpen ? (
             <p className="text-xs muted">
               予算: 1件あたり最大 ¥{spend.maxPerOrderJpy.toLocaleString("ja-JP")}
@@ -578,7 +760,7 @@ export function HireEmployeeClient() {
                 : ""}
             </p>
           ) : null}
-          <div className="rounded-lg border border-[var(--warn)]/40 bg-[var(--bg-soft)] p-4">
+          {issuedBatch.length <= 1 ? <div className="rounded-xl border border-[var(--warn)]/40 bg-[var(--bg-soft)] p-4">
             <p className="text-xs text-[var(--warn)] font-medium">
               この接続用の鍵は一度だけ表示されます
             </p>
@@ -628,7 +810,7 @@ export function HireEmployeeClient() {
               </Link>
               。
             </p>
-          </div>
+          </div> : null}
           {hirePack ? (
             <div className="rounded-lg border border-[var(--border)] bg-[var(--bg-soft)] p-4 space-y-3">
               <h3 className="text-sm font-medium">Instructions / Routine（必須）</h3>
@@ -692,6 +874,8 @@ export function HireEmployeeClient() {
               onClick={() => {
                 setStep("describe");
                 setDraft(null);
+                setDrafts([]);
+                setIssuedBatch([]);
                 setOneTimeSecret(null);
                 setHirePack(null);
                 setSpend(emptySpend());

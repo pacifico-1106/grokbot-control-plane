@@ -289,7 +289,8 @@ export function seedDemoBindings(
 }
 
 export function bindingPublicView(b: EmployeeBinding) {
-  const { credentialFingerprint: _omitFingerprint, ...safe } = b;
+  const { credentialFingerprint, ...safe } = b;
+  void credentialFingerprint;
   return {
     ...safe,
     demo: DEMO_LABEL,

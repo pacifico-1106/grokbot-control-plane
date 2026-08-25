@@ -13,6 +13,24 @@ export type ApprovalStatus =
 
 export type ApprovalPolicy = "auto" | "always_human" | "risk_based";
 
+export type RiskDomain =
+  | "comm_external"
+  | "money"
+  | "destructive"
+  | "commit"
+  | "browser"
+  | "safe";
+
+export type SodLevel = "ok" | "warn" | "force_human";
+
+export type SodVerdict =
+  | { level: "ok"; domains: RiskDomain[] }
+  | { level: "warn"; domains: RiskDomain[]; reason: string }
+  | { level: "force_human"; domains: RiskDomain[]; reason: string };
+
+export type ActionLimit = { perDay?: number; perMonth?: number };
+export type ActionLimits = Record<string, ActionLimit>;
+
 export type NotificationProvider = "telegram" | "line";
 
 export interface NotificationChannel {
@@ -87,8 +105,11 @@ export type SubscriptionStatus =
 export type EmployeeScope =
   | "tools:read"
   | "tools:invoke"
+  | "calendar:read"
   | "mail:draft"
   | "mail:send"
+  | "agentmail:draft"
+  | "agentmail:send"
   | "calendar:propose"
   | "calendar:confirm"
   | "files:read"
@@ -96,6 +117,10 @@ export type EmployeeScope =
   | "browser:use"
   | "commerce:quote"
   | "commerce:order"
+  | "slack:post"
+  | "slack:post_external"
+  | "drive:share_external"
+  | "knowledge:search"
   | "audit:append"
   | "approvals:request";
 
@@ -155,6 +180,10 @@ export type AuditAction =
   | "notification.channel_updated"
   | "notification.test_sent"
   | "notification.delivery_failed"
+  | "employee.sod_forced"
+  | "employee.sod_override"
+  | "action_limit.reached"
+  | "action_limit.denied"
   | "billing.updated"
   | "email.sent"
   | "gateway.link_changed"
@@ -201,6 +230,8 @@ export interface Employee {
   scopes: EmployeeScope[];
   allowedPurposes: string[];
   approvalPolicy: ApprovalPolicy;
+  sodLevel: SodLevel;
+  actionLimits: ActionLimits;
   /** Purchase budget / risk limits (optional until commerce:order). */
   spend?: SpendLimits | null;
   /** External accounts engraved on the employee badge (shared-PC safe IDs). */
@@ -225,6 +256,7 @@ export interface Credential {
   scopes: EmployeeScope[];
   allowedPurposes: string[];
   approvalPolicy: ApprovalPolicy;
+  actionLimits: ActionLimits;
   spend?: SpendLimits | null;
   allowedAccounts?: AllowedAccount[];
   expiresAt: string | null;
@@ -323,6 +355,7 @@ export interface EmployeePolicyDraft {
     scopes: EmployeeScope[];
     allowedPurposes: string[];
     approvalPolicy: ApprovalPolicy;
+    actionLimits: ActionLimits;
     expiresInDays: number;
     spend?: SpendLimits | null;
     /** Soft recommendation shown in hire step 3 (not forced). */
@@ -335,6 +368,7 @@ export interface EmployeePolicyDraft {
      */
     toolApprovalDefaults?: Record<string, ApprovalPolicy | "deny">;
   };
+  sodVerdict: SodVerdict;
   assumptions: string[];
   missingFields: Array<"role" | "purpose" | "risk" | "scope">;
   warnings: Array<

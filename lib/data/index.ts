@@ -11,6 +11,7 @@ export {
   getEmployee,
   getEmployeeById,
   issueEmployee,
+  updateEmployeePolicy,
   type IssueEmployeeInput,
   type IssueEmployeeResult,
 } from "./employees";
@@ -30,6 +31,12 @@ export {
   type CreateApprovalResult,
 } from "./approvals";
 export { listAuditEvents, appendAuditEvent } from "./audit";
+export {
+  getActionCounts,
+  incrementActionCounter,
+  tokyoActionPeriod,
+  startOfTokyoDayIso,
+} from "./action-counters";
 export {
   listNotificationChannels,
   getEnabledNotificationChannels,

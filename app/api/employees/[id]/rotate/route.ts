@@ -30,7 +30,16 @@ export async function POST(
     const { binding, generation } = await rotateCredential(
       id,
       employee.orgId || orgId || "",
-      secret.fingerprint
+      secret.fingerprint,
+      {
+        secretPrefix: secret.prefix,
+        scopes: employee.scopes,
+        allowedPurposes: employee.allowedPurposes,
+        approvalPolicy: employee.approvalPolicy,
+        actionLimits: employee.actionLimits,
+        spend: employee.spend,
+        allowedAccounts: employee.allowedAccounts,
+      }
     );
     return NextResponse.json({
       ok: true,
