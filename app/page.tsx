@@ -2,6 +2,7 @@ import Link from "next/link";
 import Image from "next/image";
 import { BrandMark } from "@/components/BrandMark";
 import { EmployeeAvatar } from "@/components/employees/EmployeeAvatar";
+import { LegalLinks } from "@/components/LegalLinks";
 
 const CONTROLS = [
   { icon: "01", title: "権限を分ける", body: "社員ごとに職務と操作範囲を限定。まとめる場合は全件承認に切り替えます。" },
@@ -154,8 +155,9 @@ export default function LandingPage() {
       </main>
 
       <footer className="border-t border-[var(--border-soft)]">
-        <div className="mx-auto max-w-6xl px-4 sm:px-6 py-7 flex flex-col sm:flex-row justify-between gap-2 text-xs faint">
-          <span>Staffpass by Sealith</span><span>© TOKYO307</span>
+        <div className="mx-auto max-w-6xl px-4 sm:px-6 py-7 flex flex-col gap-4 text-xs faint">
+          <LegalLinks />
+          <div className="flex flex-col sm:flex-row justify-between gap-2"><span>Staffpass by Sealith</span><span>© TOKYO307</span></div>
         </div>
       </footer>
     </div>

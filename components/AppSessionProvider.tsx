@@ -6,12 +6,14 @@ export type AppSessionValue = {
   email: string | null;
   displayName: string | null;
   demo: boolean;
+  superAdmin: boolean;
 };
 
 const AppSessionContext = createContext<AppSessionValue>({
   email: null,
   displayName: null,
   demo: false,
+  superAdmin: false,
 });
 
 export function AppSessionProvider({

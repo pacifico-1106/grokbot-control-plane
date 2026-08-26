@@ -55,15 +55,21 @@ export async function POST(req: Request) {
   let mode = "managed";
   let displayName = "";
   let referralCode = "";
+  let legalAgreement = false;
 
   if (contentType.includes("application/json")) {
-    const body = (await req.json().catch(() => ({}))) as Record<string, string>;
+    const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
     orgName = String(body.orgName || "").trim();
     email = String(body.email || "").trim();
     password = String(body.password || "");
     mode = String(body.mode || "managed");
     displayName = String(body.displayName || "").trim();
     referralCode = String(body.referral_code || body.referralCode || "").trim();
+    legalAgreement =
+      body.legal_agreement === "accepted" ||
+      body.legal_agreement === true ||
+      body.legalAgreement === "accepted" ||
+      body.legalAgreement === true;
   } else {
     const form = await req.formData();
     orgName = String(form.get("orgName") || "").trim();
@@ -74,6 +80,17 @@ export async function POST(req: Request) {
     referralCode = String(
       form.get("referral_code") || form.get("referralCode") || ""
     ).trim();
+    legalAgreement = form.get("legal_agreement") === "accepted";
+  }
+
+  if (!legalAgreement) {
+    return NextResponse.json(
+      {
+        error: "legal_agreement_required",
+        message: "利用規約とプライバシーポリシーへの同意が必要です",
+      },
+      { status: 400 }
+    );
   }
 
   if (!email) {

@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { BrandMark } from "@/components/BrandMark";
 import { isDemoMode } from "@/lib/mode";
+import { LegalLinks } from "@/components/LegalLinks";
 
 export default function SignupPage() {
   const demo = isDemoMode();
@@ -74,6 +75,14 @@ export default function SignupPage() {
               className="mt-1 w-full min-h-[44px] rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2.5 text-sm outline-none focus:border-[var(--text-faint)]"
             />
           </label>
+          <label className="flex items-start gap-3 rounded-xl border border-[var(--border-soft)] bg-[var(--bg-soft)] p-3 text-xs leading-relaxed muted">
+            <input name="legal_agreement" type="checkbox" value="accepted" required className="mt-0.5 h-4 w-4 shrink-0 accent-[var(--accent-strong)]" />
+            <span>
+              <Link href="/legal/terms" target="_blank" className="underline">利用規約</Link>および
+              <Link href="/legal/privacy" target="_blank" className="underline">プライバシーポリシー</Link>に同意し、
+              <Link href="/legal/commercial-transactions" target="_blank" className="underline">特定商取引法に基づく表記</Link>を確認しました。
+            </span>
+          </label>
           <button type="submit" className="btn btn-primary w-full">
             トライアルを開始してダッシュボードへ
           </button>
@@ -93,6 +102,7 @@ export default function SignupPage() {
             ダッシュボード
           </Link>
         </p>
+        <LegalLinks className="mt-5 border-t border-[var(--border-soft)] pt-4 text-[11px] faint" />
       </div>
     </div>
   );

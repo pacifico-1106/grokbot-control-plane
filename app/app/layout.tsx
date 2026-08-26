@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { AppSessionProvider } from "@/components/AppSessionProvider";
 import { ensureAuthenticatedOrg } from "@/lib/auth/session";
+import { getSuperAdminAccess } from "@/lib/admin/access";
 
 /**
  * Soft gate for every /app/* page.
@@ -36,6 +37,7 @@ export default async function AppSectionLayout({
   // Prefer Auth user email for chrome; display_name from org_members.
   const email = session.email ?? session.member?.email ?? null;
   const displayName = session.member?.displayName ?? null;
+  const superAdminAccess = await getSuperAdminAccess();
 
   return (
     <AppSessionProvider
@@ -43,6 +45,7 @@ export default async function AppSectionLayout({
         email,
         displayName,
         demo: session.demo,
+        superAdmin: superAdminAccess.allowed,
       }}
     >
       {children}

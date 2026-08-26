@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { useEffect, useId, useState } from "react";
 import { BrandMark } from "@/components/BrandMark";
 import { useAppSession } from "@/components/AppSessionProvider";
+import { LegalLinks } from "@/components/LegalLinks";
 
 const NAV = [
   { href: "/app", label: "ダッシュボード", icon: "◫", exact: true },
@@ -94,6 +95,14 @@ export function AppShell({
               </Link>
             );
           })}
+          {session.superAdmin ? (
+            <Link
+              href="/admin"
+              className="rounded-xl px-3 py-2.5 text-sm min-h-[44px] flex items-center gap-3 text-[var(--accent-strong)] hover:bg-[var(--bg-soft)]"
+            >
+              <span className="w-5 text-center" aria-hidden>⌘</span>運営管理
+            </Link>
+          ) : null}
           <div className="pt-5 pb-2 px-3 text-[10px] font-semibold tracking-[0.14em] text-[var(--text-faint)]">
             運用ガイド
           </div>
@@ -110,8 +119,9 @@ export function AppShell({
             );
           })}
         </nav>
-        <div className="px-5 py-4 border-t border-[var(--border-soft)] text-[10px] faint tracking-wide">
-          STAFFPASS CONTROL CENTER
+        <div className="px-5 py-4 border-t border-[var(--border-soft)] text-[10px] faint">
+          <LegalLinks className="gap-x-2 gap-y-1 leading-relaxed" />
+          <p className="mt-3 tracking-wide">STAFFPASS CONTROL CENTER</p>
         </div>
       </aside>
 
@@ -166,6 +176,15 @@ export function AppShell({
                 </Link>
               );
             })}
+            {session.superAdmin ? (
+              <Link
+                href="/admin"
+                className="rounded-xl px-3 py-3 text-sm min-h-[44px] flex items-center gap-3 text-[var(--accent-strong)] hover:bg-[var(--bg-soft)]"
+                onClick={() => setMenuOpen(false)}
+              >
+                <span className="w-5 text-center" aria-hidden>⌘</span>運営管理
+              </Link>
+            ) : null}
             <div className="pt-5 pb-2 px-3 text-[10px] font-semibold tracking-[0.14em] text-[var(--text-faint)]">
               運用ガイド
             </div>
@@ -183,8 +202,9 @@ export function AppShell({
               );
             })}
           </nav>
-          <div className="px-4 py-4 border-t border-[var(--border-soft)] text-[10px] faint tracking-wide">
-            STAFFPASS CONTROL CENTER
+          <div className="px-4 py-4 border-t border-[var(--border-soft)] text-[10px] faint">
+            <LegalLinks className="gap-x-2 gap-y-1 leading-relaxed" />
+            <p className="mt-3 tracking-wide">STAFFPASS CONTROL CENTER</p>
           </div>
         </aside>
       </div>

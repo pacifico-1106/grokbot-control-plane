@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { BrandMark } from "@/components/BrandMark";
 import { isDemoMode } from "@/lib/mode";
+import { LegalLinks } from "@/components/LegalLinks";
 
 export default async function LoginPage({
   searchParams,
@@ -60,6 +61,7 @@ export default async function LoginPage({
             トライアル登録
           </Link>
         </p>
+        <LegalLinks className="mt-5 border-t border-[var(--border-soft)] pt-4 text-[11px] faint" />
       </div>
     </div>
   );

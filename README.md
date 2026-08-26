@@ -25,6 +25,10 @@
 | `/onboarding` | Auth のみ残った場合の組織修復（schema 未適用時も SSR クラッシュしない） |
 | `/api/auth/repair-org` | ログイン中の組織自動プロビジョン（GET/POST） |
 | `/app` | ダッシュボード |
+| `/admin` | Super Admin（全事業者の申込・契約・利用状況、読み取り専用） |
+| `/legal/terms` | 利用規約 |
+| `/legal/privacy` | プライバシーポリシー |
+| `/legal/commercial-transactions` | 特定商取引法に基づく表記 |
 | `/app/employees` | AI社員一覧 |
 | `/app/employees/new` | 日本語 → Draft → 社員証発行（コア） |
 | `/app/approvals` | 要対応・承認キュー |
@@ -53,6 +57,7 @@
    - 既存: `20260823_production_ready.sql` → `referral_code` → `agentmail_reservation` → `20260824_approval_loop.sql` → **`20260826_telegram_revision.sql`**
    - Auth（Email）ON（開発中 Confirm email OFF 可）
 3. **Env（最後）** — 少なくとも Supabase 3 点（URL / anon / service_role）。詳細: `docs/production-cutover.md`
+   - 運営者画面を使う場合は `SUPER_ADMIN_USER_IDS` に Supabase Auth user UUID を設定（`SUPER_ADMIN_EMAILS` は任意の補助）
 4. **Redeploy** → `GET /api/health` が `runtimeMode:"production"`
 5. **`/signup`** — DEMO シード（`emp_sales` 等）は本番 DB に無い。雇い直し + link
 6. **Stripe** — Product/Price → `STRIPE_PRICE_ID_*` → Webhook + Portal（任意・後回し可）

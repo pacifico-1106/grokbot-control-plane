@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createServerClient } from "@supabase/ssr";
+import { matchesSuperAdminAllowlist } from "@/lib/admin/allowlist";
 
 function looksLikePlaceholder(value: string | undefined | null): boolean {
   if (value == null) return true;
@@ -23,7 +24,7 @@ function isDemoFromEnv(): boolean {
 
 /**
  * Soft auth gate: DEMO → pass-through (no crash).
- * Production → refresh session cookies; redirect unauthenticated /app|/onboarding to /login.
+ * Production → refresh session cookies; redirect unauthenticated /app|/admin|/onboarding to /login.
  * Authenticated /login|/signup → /app (layout auto-provisions missing org).
  */
 export async function middleware(request: NextRequest) {
@@ -61,22 +62,29 @@ export async function middleware(request: NextRequest) {
 
   const path = request.nextUrl.pathname;
   const isApp = path.startsWith("/app");
+  const isAdmin = path === "/admin" || path.startsWith("/admin/");
   const isOnboarding = path === "/onboarding";
   const isAuthPage = path === "/login" || path === "/signup";
 
-  if ((isApp || isOnboarding) && !user) {
+  if ((isApp || isAdmin || isOnboarding) && !user) {
     const login = new URL("/login", request.url);
     login.searchParams.set("next", path);
     return NextResponse.redirect(login);
   }
 
   if (isAuthPage && user) {
-    return NextResponse.redirect(new URL("/app", request.url));
+    const superAdmin = matchesSuperAdminAllowlist({
+      userId: user.id,
+      email: user.email || "",
+      userIds: process.env.SUPER_ADMIN_USER_IDS,
+      emails: process.env.SUPER_ADMIN_EMAILS,
+    });
+    return NextResponse.redirect(new URL(superAdmin ? "/admin" : "/app", request.url));
   }
 
   return response;
 }
 
 export const config = {
-  matcher: ["/app/:path*", "/login", "/signup", "/onboarding"],
+  matcher: ["/app/:path*", "/admin/:path*", "/login", "/signup", "/onboarding"],
 };

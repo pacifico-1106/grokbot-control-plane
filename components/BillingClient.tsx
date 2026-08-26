@@ -18,6 +18,7 @@ import {
   SUBSIDY_COMING_SOON_JA,
   SUBSIDY_COMPLIANCE_NOTE_JA,
 } from "@/lib/billing/skus";
+import { LegalLinks } from "@/components/LegalLinks";
 
 const PLANS: Array<{
   id: CheckoutPlanKey;
@@ -266,6 +267,8 @@ export function BillingClient({
           </button>
         ) : null}
       </div>
+
+      <LegalLinks className="mt-4 text-[11px] faint" />
 
       {message ? <div className="surface mt-4 border-l-4 border-l-[var(--warn)] p-4 text-sm muted">{message}</div> : null}
     </>

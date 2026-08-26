@@ -191,6 +191,74 @@ pre,
   min-width: 0;
 }
 
+.legal-copy {
+  font-size: 0.925rem;
+  line-height: 1.9;
+  color: var(--text-muted);
+}
+
+.legal-copy > * + * {
+  margin-top: 2.25rem;
+}
+
+.legal-copy h2 {
+  margin-bottom: 0.9rem;
+  font-size: 1.1rem;
+  color: var(--text);
+}
+
+.legal-copy p + p,
+.legal-copy ol + p,
+.legal-copy ul + p {
+  margin-top: 0.85rem;
+}
+
+.legal-copy ol,
+.legal-copy ul {
+  padding-left: 1.4rem;
+}
+
+.legal-copy ol { list-style: decimal; }
+.legal-copy ul { list-style: disc; }
+.legal-copy li + li { margin-top: 0.45rem; }
+.legal-copy strong { color: var(--text); }
+.legal-copy a { color: var(--accent-strong); text-decoration: underline; }
+
+.legal-copy table {
+  width: 100%;
+  min-width: 680px;
+  border-collapse: collapse;
+  border: 1px solid var(--border);
+}
+
+.legal-copy th,
+.legal-copy td {
+  border-bottom: 1px solid var(--border-soft);
+  padding: 0.9rem 1rem;
+  text-align: left;
+  vertical-align: top;
+}
+
+.legal-copy th {
+  width: 13rem;
+  color: var(--text);
+  background: var(--bg-soft);
+}
+
+.legal-copy dl > div {
+  display: grid;
+  grid-template-columns: minmax(7rem, 11rem) minmax(0, 1fr);
+  gap: 1rem;
+  padding: 0.75rem 0;
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.legal-copy dt { color: var(--text); }
+
+@media (max-width: 640px) {
+  .legal-copy dl > div { grid-template-columns: 1fr; gap: 0.2rem; }
+}
+
 input,
 textarea,
 select {
