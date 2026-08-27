@@ -20,7 +20,7 @@
 - 暗号化ファイル handoff / transfers / receive / PPAP
 - Chrome 拡張
 - Firestore transfer ルールを製品コアにすること（DB は Supabase）
-- JPYC / agent-commerce / OnePlace / Threes provider 運用
+- JPYC送金・Watcher・agent-commerce台帳・OnePlace / Threes provider運用（任意の署名付き監査相関だけは採用）
 - Sealith ブランド PDF・紹介プログラム・重い ops コンソール
 - Sealith クローンになる UI コピーやプラン表の丸写し
 

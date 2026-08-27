@@ -5,7 +5,7 @@
 
 | 項目 | 内容 |
 |------|------|
-| 版 | 2026-08-23 |
+| 版 | 2026-08-27（JPYC社書面回答反映） |
 | 対象 | JPYC株式会社 様 / 当社（TOKYO307 / Sealith） |
 | 関連 | 近接PoC：lifetime-esim.com の商品決済（JPYC ＋ 既存 Stripe） |
 
@@ -15,7 +15,7 @@
 
 お客さまが eSIM を買うとき、**クレジットカード（Stripe）か JPYC** で支払えるようにする、というのが直近の PoC です。
 
-JPYC で「円相当のステーブルコインを手元に用意する」部分は、**JPYC の画面（WebView）で本人確認と最終確定**を行い、当社は金額の入力や画面へのつなぎ（導線）を担当します。当社はお客さまのコインや鍵を預かりません。
+JPYCを手元に用意する手順は、Sealithから**JPYC EX公式サイトへ通常の外部リンク**で案内します。人が公式サイト上で手続きを行い、当社はJPYC EXを埋め込み・自動操作しません。当社はお客さまのコインや鍵を預かりません。
 
 AI社員（Staffpass）は、将来「AIが買い物を提案する」ときに社長が止められるための仕組みで、今回の JPYC 連携の主役ではありません（任意のガバナンス層）。
 
@@ -25,10 +25,10 @@ AI社員（Staffpass）は、将来「AIが買い物を提案する」ときに�
 
 | 役割 | 誰 | 何をするか | 何をしないか |
 |------|-----|------------|--------------|
-| **JPYC** | JPYC株式会社 | KYC、発行／償還の最終確定、JPYC EX WebView の提供 | 当社の商品フルフィルメント |
+| **JPYC** | JPYC株式会社 | KYC、発行／償還の最終確定、JPYC EX公式サイトの提供 | 当社の商品フルフィルメント |
 | **当社（接続・加盟店）** | TOKYO307 / Sealith | 購入導線・UX、lifetime-esim の手配、受取ウォレット（Safe想定）、台帳・監査 | 利用者資産のカストディ、無人S2Sミント |
 | **利用者** | 購入者（個人／法人） | 自己管理ウォレット、購入意思、JPYC画面での確認 | — |
-| **AI社員（Staffpass）** | Grok Bot 上の制御プレーン | （任意）発注提案の承認・上限・監査 | JPYC API の直接操作・無人発行 |
+| **AI社員（Staffpass）** | Grok Bot 上の制御プレーン | （任意）発注提案の承認・上限・監査 | JPYC送金、入金確定、EX操作 |
 
 ---
 
@@ -69,7 +69,7 @@ flowchart LR
 
 ---
 
-## 3. JPYC EX オンランプ → コマース決済（シーケンス）
+## 3. JPYC入手案内 → コマース決済（シーケンス）
 
 「コインを用意してから、加盟店（当社 Safe）へ支払う」までの順序です。
 
@@ -77,29 +77,27 @@ flowchart LR
 sequenceDiagram
   actor U as 利用者
   participant App as 当社アプリ/サイト
-  participant WV as JPYC WebView
-  participant API as 状態確認<br/>API/チェーン
+  participant EX as JPYC EX公式サイト
+  participant Watcher as Sealith Watcher<br/>Polygon
   participant Safe as 加盟店 Safe<br/>（受取）
   participant ES as lifetime-esim
 
-  U->>App: 金額・ネットワーク等を選択
-  App->>WV: リダイレクト（発行/償還）
-  Note over WV: KYC・最終確定はJPYC
-  WV-->>U: 本人確認・確定操作
-  WV->>App: 復帰（リダイレクト戻し）
-  App->>API: 発行/償還ステータス確認
-  API-->>App: 完了証跡
+  U->>App: JPYC入手ガイドを開く
+  App-->>U: JPYC EX公式サイトへの外部リンク
+  U->>EX: 人がKYC・発行手続きを行う
+  Note over EX: Sealith/Staffpassは操作・状態取得しない
   U->>Safe: コマース支払い（JPYC）
-  Safe-->>App: 入金検知/確認
+  Watcher->>Safe: Transferログを検知・確認
+  Watcher-->>App: Sealith正本の入金確定
   App->>ES: フルフィルメント指示
   ES-->>U: eSIM 納品
 ```
 
 **ポイント**
 
-- **導線は当社、本人確認と最終確定は JPYC。**  
-- **無人の Server-to-Server 発行はしない**（人が WebView で確定する前提）。  
-- 発行／償還の完了を確認してから、商品代金の支払い → eSIM 手配、という順序を基本とする（詳細は実装時に双方で詰める）。  
+- **JPYC EXは公式外部リンクだけ。** iframe、WebView、RPA、スクレイピング、status APIは使いません。
+- JPYC社回答により、直接送金＋Watcher＋Safe受取にEX連携API、個別契約、個別許諾、実装費用は不要です。
+- 商品代金の送金は利用者ウォレットからmerchant Safeへ直接行い、Sealith Watcherだけがアプリ上の入金確定を行います。
 - 受取は **当社の Safe（マルチシグ想定）**。利用者鍵は当社が持たない。
 
 ---
@@ -159,7 +157,8 @@ flowchart LR
 | やる | やらない |
 |------|----------|
 | eSIM 商品の JPYC 決済（Stripe 併存） | 無人 S2S ミント／発行 |
-| WebView オンランプの UX 接続 | 利用者 JPYC・鍵のカストディ |
+| JPYC EX公式サイトへの外部リンク | 利用者 JPYC・鍵のカストディ |
+| Sealith Watcherによる直接送金確認 | JPYC EXの埋め込み・自動操作・status API |
 | Safe 受取・台帳・監査 | 本資料範囲外の新規金融商品組成 |
 
 ---
@@ -170,7 +169,7 @@ flowchart LR
 |------|------|
 | eSIM | スマホに通信プランを後から入れる仕組み。lifetime-esim の商品。 |
 | JPYC | 円に連動するステーブルコイン（詳細は JPYC 公式）。 |
-| WebView | アプリやサイトの中に開く JPYC の公式画面。 |
+| 外部リンク | JPYC EX公式サイトを通常のブラウザ遷移で開く導線。 |
 | オンランプ | 円などから JPYC を手元に用意する流れ。 |
 | Safe | 複数人承認などを想定した受取用ウォレット。 |
 | ノンカストディ | 会社がお客さまの鍵・資産を預からないこと。 |
@@ -181,10 +180,10 @@ flowchart LR
 ## 9. 次の技術確認（宿題候補）
 
 1. PoC 対象ネットワークとテスト手順  
-2. 発行／償還完了の検知方法（API とチェーン証跡の優先）  
+2. 直接送金のWatcher確認とpayment event identity
 3. Safe アドレスの管理・ローテーション方針  
 4. ユーザー向け画面文言（誰が何を確定するか）  
-5. 障害時の切り分け（当社導線 vs JPYC WebView）
+5. 障害時の切り分け（公式リンク案内 vs Polygon Watcher）
 
 ---
 

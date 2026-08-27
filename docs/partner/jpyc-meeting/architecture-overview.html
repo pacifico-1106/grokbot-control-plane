@@ -193,8 +193,8 @@
 <div class="callout">
   <strong>ひとことで</strong><br/>
   お客さまが eSIM を買うとき、<strong>クレジットカード（Stripe）か JPYC</strong>で支払えるようにする、というのが直近の PoC です。
-  JPYC を手元に用意する部分は、<strong>JPYC の画面（WebView）で本人確認と最終確定</strong>を行い、当社は金額入力や画面へのつなぎを担当します。
-  当社はお客さまのコインや鍵を預かりません。Staffpass は AI 購入のガバナンス層で、JPYC API の主役ではありません。
+  JPYC を手元に用意する部分は、<strong>JPYC EX公式サイトへの通常の外部リンク</strong>だけを案内し、人が公式サイト上で手続きします。
+  当社はお客さまのコインや鍵を預かりません。Staffpass は AI 購入の任意ガバナンス層で、送金や入金確定を行いません。
 </div>
 
 <h2>1. 登場人物（役割）</h2>
@@ -203,7 +203,7 @@
   <tr>
     <td><strong>JPYC</strong></td>
     <td>JPYC株式会社</td>
-    <td>KYC、発行／償還の最終確定、JPYC EX WebView</td>
+    <td>KYC、発行／償還の最終確定、JPYC EX公式サイト</td>
     <td>当社の商品フルフィルメント</td>
   </tr>
   <tr>
@@ -222,7 +222,7 @@
     <td><strong>AI社員（Staffpass）</strong></td>
     <td>Grok Bot 制御プレーン</td>
     <td>（任意）発注提案の承認・上限・監査</td>
-    <td>JPYC API 直接操作・無人発行</td>
+    <td>JPYC送金・入金確定・EX操作</td>
   </tr>
 </table>
 
@@ -258,16 +258,16 @@
   <p class="diagram-title">図2 — シーケンス（導線は当社、最終確定は JPYC）</p>
   <div class="seq">
     <div class="seq-row"><div class="seq-num">1</div><div><strong>当社アプリ／サイト</strong>：金額・ネットワーク等を選択（UX）</div></div>
-    <div class="seq-row"><div class="seq-num">2</div><div><strong>JPYC WebView</strong>へリダイレクト（発行／償還）— <em>KYC・最終確定はJPYC</em></div></div>
-    <div class="seq-row"><div class="seq-num">3</div><div>利用者が WebView で本人確認・確定操作</div></div>
+    <div class="seq-row"><div class="seq-num">2</div><div><strong>JPYC EX公式サイト</strong>への外部リンクを開く</div></div>
+    <div class="seq-row"><div class="seq-num">3</div><div>利用者が公式サイトで本人確認・発行操作</div></div>
     <div class="seq-row"><div class="seq-num">4</div><div>当社へ復帰（リダイレクト戻し）</div></div>
-    <div class="seq-row"><div class="seq-num">5</div><div><strong>状態確認</strong>（API／チェーン証跡）で発行／償還完了を確認</div></div>
+    <div class="seq-row"><div class="seq-num">5</div><div><strong>Sealith Watcher</strong>がmerchant Safeへの直接送金だけを確認</div></div>
     <div class="seq-row"><div class="seq-num">6</div><div>コマース支払い：利用者 → <strong>加盟店 Safe（受取）</strong></div></div>
     <div class="seq-row"><div class="seq-num">7</div><div>lifetime-esim フルフィルメント → <strong>eSIM 納品</strong></div></div>
   </div>
 </div>
 <ul>
-  <li><strong>無人の Server-to-Server 発行はしない</strong>（人が WebView で確定）。</li>
+  <li><strong>JPYC EXのiframe、WebView、RPA、status APIは使用しません。</strong></li>
   <li>発行／償還完了の確認後に商品代金支払い → eSIM 手配、を基本とする（詳細は双方で詰める）。</li>
   <li>受取は当社の <strong>Safe（マルチシグ想定）</strong>。利用者鍵は当社が持たない。</li>
 </ul>
@@ -327,7 +327,7 @@
 <table>
   <tr><th>やる</th><th>やらない</th></tr>
   <tr>
-    <td>eSIM 商品の JPYC 決済（Stripe 併存）<br/>WebView オンランプの UX 接続<br/>Safe 受取・台帳・監査</td>
+    <td>eSIM 商品の JPYC 決済（Stripe 併存）<br/>JPYC EX公式外部リンク<br/>Safe 受取・Watcher・台帳・監査</td>
     <td>無人 S2S ミント／発行<br/>利用者 JPYC・鍵のカストディ<br/>本資料範囲外の新規金融商品組成</td>
   </tr>
 </table>
@@ -337,7 +337,7 @@
   <tr><th>用語</th><th>意味</th></tr>
   <tr><td>eSIM</td><td>スマホに通信プランを後から入れる仕組み。lifetime-esim の商品。</td></tr>
   <tr><td>JPYC</td><td>円に連動するステーブルコイン（詳細は JPYC 公式）。</td></tr>
-  <tr><td>WebView</td><td>アプリやサイトの中に開く JPYC の公式画面。</td></tr>
+  <tr><td>外部リンク</td><td>JPYC EX公式サイトを通常のブラウザ遷移で開く導線。</td></tr>
   <tr><td>オンランプ</td><td>円などから JPYC を手元に用意する流れ。</td></tr>
   <tr><td>Safe</td><td>複数人承認などを想定した受取用ウォレット。</td></tr>
   <tr><td>ノンカストディ</td><td>会社がお客さまの鍵・資産を預からないこと。</td></tr>
@@ -347,10 +347,10 @@
 <h2>9. 次の技術確認（宿題候補）</h2>
 <ol>
   <li>PoC 対象ネットワークとテスト手順</li>
-  <li>発行／償還完了の検知方法（API とチェーン証跡の優先）</li>
+  <li>直接送金のWatcher確認とpayment event identity</li>
   <li>Safe アドレスの管理・ローテーション方針</li>
   <li>ユーザー向け画面文言（誰が何を確定するか）</li>
-  <li>障害時の切り分け（当社導線 vs JPYC WebView）</li>
+  <li>障害時の切り分け（公式リンク案内 vs Polygon Watcher）</li>
 </ol>
 
 <div class="footer">

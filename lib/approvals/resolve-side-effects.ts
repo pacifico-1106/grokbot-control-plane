@@ -2,6 +2,8 @@ import { sendApprovalNotification } from "@/lib/email";
 import { sendTransactionalEmail, renderStubHtml } from "@/lib/resend";
 import { updateApprovalNotificationMessages } from "@/lib/notify/channels";
 import type { ApprovalRequest, Employee } from "@/lib/types";
+import { deliverAuthorityDecision } from "@/lib/commerce/authority-events";
+import { appendAuditEvent } from "@/lib/data/audit";
 
 function orgNotifyEmail(): string {
   return (
@@ -17,6 +19,13 @@ export type ResolveSideEffectsResult = {
   callback: { ok: boolean; skipped?: boolean; status?: number; error?: string };
   telegram: { ok: boolean; skipped?: boolean; error?: string };
   notifications: Array<{ ok: boolean; provider: string; error?: string }>;
+  authorityEvent: {
+    ok: boolean;
+    skipped?: boolean;
+    eventId?: string;
+    status?: number | null;
+    error?: string;
+  };
 };
 
 /**
@@ -150,5 +159,53 @@ export async function runApprovalResolveSideEffects(opts: {
     ok: false,
     skipped: true,
   };
-  return { orgEmail, employeeEmail, callback, telegram, notifications };
+  const authorityEvent: ResolveSideEffectsResult["authorityEvent"] =
+    decision === "approved" || decision === "rejected"
+      ? await deliverAuthorityDecision({
+          approval,
+          decision,
+          actorEmail,
+          employee,
+        }).catch((error) => ({
+          ok: false,
+          error: error instanceof Error ? error.message : "authority_event_failed",
+        }))
+      : { ok: true, skipped: true };
+  if (approval.metadata.crossProductCommerce) {
+    await appendAuditEvent({
+      orgId: approval.orgId,
+      employeeId: approval.employeeId,
+      credentialId: approval.credentialId,
+      action: "authority.event_delivery",
+      purpose: approval.purpose,
+      summary: authorityEvent.ok
+        ? authorityEvent.skipped
+          ? "Sealith authority event: disabled"
+          : "Sealith authority event: delivered"
+        : "Sealith authority event: delivery pending",
+      actorEmail,
+      metadata: {
+        jobId: approval.jobId,
+        approvalId: approval.id,
+        targetSystem: "sealith",
+        authorityMode: "external_reference",
+        eventId: authorityEvent.eventId ?? null,
+        deliveryStatus: authorityEvent.skipped
+          ? "disabled"
+          : authorityEvent.ok
+            ? "delivered"
+            : "retryable",
+        httpStatus: authorityEvent.status ?? null,
+        error: authorityEvent.error ?? null,
+      },
+    });
+  }
+  return {
+    orgEmail,
+    employeeEmail,
+    callback,
+    telegram,
+    notifications,
+    authorityEvent,
+  };
 }

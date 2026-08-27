@@ -1,0 +1,713 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://www.sealith.com/schemas/cross-product-commerce-events.v1.schema.json",
+  "title": "Sealith cross-product commerce event v1",
+  "description": "Optional authority-to-commerce correlation contract. StaffPass is an initial authority provider, not a required dependency.",
+  "allOf": [
+    {
+      "$ref": "#/$defs/envelope"
+    },
+    {
+      "oneOf": [
+        {
+          "properties": {
+            "eventType": {
+              "const": "authority.decision.recorded.v1"
+            },
+            "producer": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/producer"
+                },
+                {
+                  "properties": {
+                    "kind": {
+                      "const": "authorization_authority"
+                    }
+                  }
+                }
+              ]
+            },
+            "correlation": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/correlation"
+                },
+                {
+                  "required": [
+                    "approvalRef"
+                  ]
+                }
+              ]
+            },
+            "data": {
+              "$ref": "#/$defs/authorityDecisionData"
+            }
+          }
+        },
+        {
+          "properties": {
+            "eventType": {
+              "const": "commerce.order.linked.v1"
+            },
+            "producer": {
+              "$ref": "#/$defs/commerceProducer"
+            },
+            "correlation": {
+              "$ref": "#/$defs/orderCorrelation"
+            },
+            "data": {
+              "$ref": "#/$defs/orderLinkedData"
+            }
+          }
+        },
+        {
+          "properties": {
+            "eventType": {
+              "const": "commerce.payment.status_changed.v1"
+            },
+            "producer": {
+              "$ref": "#/$defs/commerceProducer"
+            },
+            "correlation": {
+              "$ref": "#/$defs/orderCorrelation"
+            },
+            "data": {
+              "$ref": "#/$defs/paymentStatusData"
+            }
+          }
+        },
+        {
+          "properties": {
+            "eventType": {
+              "const": "commerce.fulfillment.status_changed.v1"
+            },
+            "producer": {
+              "$ref": "#/$defs/commerceProducer"
+            },
+            "correlation": {
+              "$ref": "#/$defs/orderCorrelation"
+            },
+            "data": {
+              "$ref": "#/$defs/fulfillmentStatusData"
+            }
+          }
+        },
+        {
+          "properties": {
+            "eventType": {
+              "const": "commerce.reversal.status_changed.v1"
+            },
+            "producer": {
+              "$ref": "#/$defs/commerceProducer"
+            },
+            "correlation": {
+              "$ref": "#/$defs/orderCorrelation"
+            },
+            "data": {
+              "$ref": "#/$defs/reversalStatusData"
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "amount": {
+      "type": "string",
+      "pattern": "^(?:0|[1-9][0-9]{0,35})(?:\\.[0-9]{1,18})?$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "evmAddress": {
+      "type": "string",
+      "pattern": "^0x[a-fA-F0-9]{40}$"
+    },
+    "transactionHash": {
+      "type": "string",
+      "pattern": "^0x[a-fA-F0-9]{64}$"
+    },
+    "producer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "system",
+        "kind",
+        "environment",
+        "tenantId"
+      ],
+      "properties": {
+        "system": {
+          "$ref": "#/$defs/identifier"
+        },
+        "kind": {
+          "enum": [
+            "authorization_authority",
+            "commerce_ledger"
+          ]
+        },
+        "environment": {
+          "enum": [
+            "staging",
+            "production"
+          ]
+        },
+        "tenantId": {
+          "$ref": "#/$defs/identifier"
+        }
+      }
+    },
+    "commerceProducer": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/producer"
+        },
+        {
+          "properties": {
+            "system": {
+              "const": "sealith"
+            },
+            "kind": {
+              "const": "commerce_ledger"
+            }
+          }
+        }
+      ]
+    },
+    "approvalRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "system",
+        "id",
+        "version"
+      ],
+      "properties": {
+        "system": {
+          "$ref": "#/$defs/identifier"
+        },
+        "id": {
+          "$ref": "#/$defs/identifier"
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "correlation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "jobId"
+      ],
+      "properties": {
+        "jobId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "approvalRef": {
+          "$ref": "#/$defs/approvalRef"
+        },
+        "orderId": {
+          "$ref": "#/$defs/identifier"
+        }
+      }
+    },
+    "orderCorrelation": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/correlation"
+        },
+        {
+          "required": [
+            "orderId"
+          ]
+        }
+      ]
+    },
+    "aggregate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "id",
+        "version"
+      ],
+      "properties": {
+        "type": {
+          "$ref": "#/$defs/identifier"
+        },
+        "id": {
+          "$ref": "#/$defs/identifier"
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "envelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "specVersion",
+        "eventId",
+        "eventType",
+        "occurredAt",
+        "producer",
+        "correlation",
+        "aggregate",
+        "data"
+      ],
+      "properties": {
+        "specVersion": {
+          "const": "sealith.cross-product-commerce-events.v1"
+        },
+        "eventId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "eventType": {
+          "enum": [
+            "authority.decision.recorded.v1",
+            "commerce.order.linked.v1",
+            "commerce.payment.status_changed.v1",
+            "commerce.fulfillment.status_changed.v1",
+            "commerce.reversal.status_changed.v1"
+          ]
+        },
+        "occurredAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "expiresAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "producer": {
+          "$ref": "#/$defs/producer"
+        },
+        "correlation": {
+          "$ref": "#/$defs/correlation"
+        },
+        "aggregate": {
+          "$ref": "#/$defs/aggregate"
+        },
+        "data": {
+          "type": "object"
+        }
+      }
+    },
+    "actor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "organizationId",
+        "employeeId",
+        "credentialId",
+        "credentialGeneration"
+      ],
+      "properties": {
+        "organizationId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "employeeId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "credentialId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "credentialGeneration": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "merchantPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "allowedMerchantIds",
+        "requiredSellerOfRecord"
+      ],
+      "properties": {
+        "allowedMerchantIds": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 50,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/identifier"
+          }
+        },
+        "requiredSellerOfRecord": {
+          "$ref": "#/$defs/identifier"
+        }
+      }
+    },
+    "skuPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "allowedSkuIds"
+      ],
+      "properties": {
+        "allowedSkuIds": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 100,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/identifier"
+          }
+        }
+      }
+    },
+    "authorization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "purpose",
+        "currency",
+        "maxAmount",
+        "merchantPolicy",
+        "approvalRequired",
+        "validUntil"
+      ],
+      "properties": {
+        "purpose": {
+          "$ref": "#/$defs/identifier"
+        },
+        "currency": {
+          "enum": [
+            "JPYC"
+          ]
+        },
+        "maxAmount": {
+          "$ref": "#/$defs/amount"
+        },
+        "merchantPolicy": {
+          "$ref": "#/$defs/merchantPolicy"
+        },
+        "skuPolicy": {
+          "$ref": "#/$defs/skuPolicy"
+        },
+        "quoteHash": {
+          "$ref": "#/$defs/sha256"
+        },
+        "approvalRequired": {
+          "type": "boolean"
+        },
+        "approvedByReference": {
+          "$ref": "#/$defs/identifier"
+        },
+        "validUntil": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "authorityDecisionData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "authorityMode",
+        "decisionId",
+        "decisionVersion",
+        "decision",
+        "actor",
+        "authorization"
+      ],
+      "properties": {
+        "authorityMode": {
+          "enum": [
+            "external_reference",
+            "external_trusted"
+          ]
+        },
+        "decisionId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "decisionVersion": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "decision": {
+          "enum": [
+            "approved",
+            "denied",
+            "expired",
+            "revoked"
+          ]
+        },
+        "actor": {
+          "$ref": "#/$defs/actor"
+        },
+        "authorization": {
+          "$ref": "#/$defs/authorization"
+        },
+        "canonicalPayloadHash": {
+          "$ref": "#/$defs/sha256"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "authorityMode": {
+                "const": "external_trusted"
+              }
+            },
+            "required": [
+              "authorityMode"
+            ]
+          },
+          "then": {
+            "properties": {
+              "authorization": {
+                "anyOf": [
+                  {
+                    "required": [
+                      "skuPolicy"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "quoteHash"
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        }
+      ]
+    },
+    "approvalValidation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "disposition"
+      ],
+      "properties": {
+        "disposition": {
+          "enum": [
+            "not_present",
+            "reference_only",
+            "accepted",
+            "rejected"
+          ]
+        },
+        "reasonCode": {
+          "$ref": "#/$defs/identifier"
+        },
+        "sourceEventId": {
+          "$ref": "#/$defs/identifier"
+        }
+      }
+    },
+    "orderLinkedData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "orderId",
+        "orderStatus",
+        "authorityMode",
+        "merchantId",
+        "sellerOfRecord",
+        "skuId",
+        "currency",
+        "amount",
+        "approvalValidation"
+      ],
+      "properties": {
+        "orderId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "orderStatus": {
+          "$ref": "#/$defs/identifier"
+        },
+        "authorityMode": {
+          "enum": [
+            "sealith_native",
+            "external_reference",
+            "external_trusted"
+          ]
+        },
+        "merchantId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "sellerOfRecord": {
+          "$ref": "#/$defs/identifier"
+        },
+        "skuId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "currency": {
+          "enum": [
+            "JPYC"
+          ]
+        },
+        "amount": {
+          "$ref": "#/$defs/amount"
+        },
+        "approvalValidation": {
+          "$ref": "#/$defs/approvalValidation"
+        }
+      }
+    },
+    "transferEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "chainId",
+        "tokenContract",
+        "transactionHash",
+        "logIndex"
+      ],
+      "properties": {
+        "chainId": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "tokenContract": {
+          "$ref": "#/$defs/evmAddress"
+        },
+        "transactionHash": {
+          "$ref": "#/$defs/transactionHash"
+        },
+        "logIndex": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "fromAddress": {
+          "$ref": "#/$defs/evmAddress"
+        },
+        "toAddress": {
+          "$ref": "#/$defs/evmAddress"
+        },
+        "amountAtomic": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]{0,77}$"
+        }
+      }
+    },
+    "paymentStatusData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "orderId",
+        "status"
+      ],
+      "properties": {
+        "orderId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "paymentEventId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "status": {
+          "enum": [
+            "pending",
+            "observed",
+            "confirmed",
+            "failed",
+            "expired",
+            "refunded"
+          ]
+        },
+        "transfer": {
+          "$ref": "#/$defs/transferEvidence"
+        },
+        "reasonCode": {
+          "$ref": "#/$defs/identifier"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "confirmed"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "required": [
+              "paymentEventId",
+              "transfer"
+            ]
+          }
+        }
+      ]
+    },
+    "fulfillmentStatusData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "orderId",
+        "status"
+      ],
+      "properties": {
+        "orderId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "status": {
+          "enum": [
+            "pending",
+            "holding",
+            "fulfilling",
+            "completed",
+            "failed",
+            "released"
+          ]
+        },
+        "providerReference": {
+          "$ref": "#/$defs/identifier"
+        },
+        "reasonCode": {
+          "$ref": "#/$defs/identifier"
+        }
+      }
+    },
+    "reversalStatusData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "orderId",
+        "status"
+      ],
+      "properties": {
+        "orderId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "refundCaseId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "status": {
+          "enum": [
+            "not_requested",
+            "pending_manual_review",
+            "requested",
+            "processing",
+            "completed",
+            "failed"
+          ]
+        },
+        "reasonCode": {
+          "$ref": "#/$defs/identifier"
+        }
+      }
+    }
+  }
+}

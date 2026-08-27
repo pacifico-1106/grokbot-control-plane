@@ -45,14 +45,14 @@
 <h2>目的（本日のゴール）</h2>
 <ol>
   <li><strong>近接PoCの合意</strong>：lifetime-esim.com の JPYC 決済（既存 Stripe 併存）の技術・役割分担を揃える。</li>
-  <li><strong>責任分界</strong>：導線・UXは当社、本人確認・発行／償還の最終確定は JPYC WebView。無人 S2S ミントは行わない。</li>
+  <li><strong>責任分界</strong>：JPYC入手はEX公式外部リンクのみ。支払いはmerchant Safeへの直接送金、確定はSealith Watcher。</li>
   <li><strong>契約・ライセンス論点</strong>：Safe 受取、AIエージェント関与範囲、各社役割を次回アクションまで落とす。</li>
 </ol>
 
 <h2>想定構成の共有</h2>
 <ul>
   <li><strong>オペレーター</strong>：TOKYO307（Sealith）。eSIM 商品＝lifetime-esim.com。<strong>決済</strong>：Stripe ＋ JPYC（PoC）。</li>
-  <li><strong>JPYC EX</strong>：人／法人が WebView で発行・償還。コネクタは金額・ネットワーク・リダイレクト等の UX。KYC・最終確認は JPYC。</li>
+  <li><strong>JPYC EX</strong>：人／法人が公式サイトで発行・償還。Sealith／Staffpassは外部リンクのみで、埋め込み・自動操作・status取得なし。</li>
   <li><strong>ノンカストディ</strong>：利用者自己管理ウォレット → 当社受取 Safe（想定）。Sealith は利用者 JPYC／鍵を預からない。</li>
   <li><strong>Staffpass（軽く）</strong>：AI社員の承認・上限・監査。エージェント起点購入のガバナンスであり、<strong>JPYC API の主題ではない</strong>。</li>
 </ul>
@@ -60,10 +60,10 @@
 
 <h2>確認事項チェックリスト</h2>
 <ul class="check">
-  <li><strong>導線分担</strong>：当社→JPYC WebView→復帰→決済</li>
+  <li><strong>導線分担</strong>：当社→JPYC EX公式外部リンク（EX操作と決済は別工程）</li>
   <li><strong>PoC商品</strong>：SKU／価格帯の開始点</li>
   <li><strong>受取Safe</strong>：ネットワーク・アドレス管理</li>
-  <li><strong>ステータス</strong>：API／チェーン証跡と決済順序</li>
+  <li><strong>ステータス</strong>：EX状態は取得せず、直接送金だけをWatcher確認</li>
   <li><strong>AI関与</strong>：Staffpass任意か／人購入のみか</li>
   <li><strong>ライセンス役割</strong>：発行・媒介・代行・システム</li>
   <li><strong>手数料・精算・表示</strong>文言とタイミング</li>
@@ -77,7 +77,7 @@
   <div class="box do"><h3>やること</h3>
     <ul>
       <li>eSIM 代金の JPYC 支払い（Stripe併存）</li>
-      <li>WebView 経由の人／法人オンランプ</li>
+      <li>JPYC EX公式サイトへの外部リンク</li>
       <li>当社受取 Safe（想定）・台帳・監査</li>
     </ul>
   </div>
@@ -85,6 +85,7 @@
     <ul>
       <li><strong>無人の S2S 発行／ミント</strong></li>
       <li><strong>利用者資産・秘密鍵のカストディ</strong></li>
+      <li>JPYC EXのiframe・WebView・RPA・status API</li>
       <li>JPYC グローバル展開の代弁・約束</li>
     </ul>
   </div>

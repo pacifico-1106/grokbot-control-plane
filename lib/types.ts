@@ -59,6 +59,19 @@ export interface SpendLimits {
   firstOrderRequiresHuman?: boolean;
 }
 
+export interface CommerceAuthorizationInput {
+  targetSystem: "sealith";
+  currency: "JPYC";
+  maxAmount: string;
+  merchantPolicy: {
+    allowedMerchantIds: string[];
+    requiredSellerOfRecord: string;
+  };
+  skuPolicy?: { allowedSkuIds: string[] };
+  quoteHash?: string;
+  validUntil: string;
+}
+
 /** External account the AI employee may use (browser / SNS / SaaS). Flexible — not Google-only. */
 export interface AllowedAccount {
   /** Free text OR preset key (google, microsoft365, line, x, instagram, facebook, slack, custom, …). */
@@ -152,6 +165,8 @@ export interface GatewayInvokeRequest {
   jobId?: string;
   job_id?: string;
   amountJpy?: number;
+  /** Optional Sealith correlation; absence keeps Staffpass fully standalone. */
+  commerceAuthorization?: CommerceAuthorizationInput;
   isFirstOrder?: boolean;
   spentTodayJpy?: number;
   spentThisMonthJpy?: number;
@@ -189,7 +204,9 @@ export type AuditAction =
   | "gateway.link_changed"
   | "employee.created"
   | "employee.updated"
-  | "member.invited";
+  | "member.invited"
+  | "commerce.projection_received"
+  | "authority.event_delivery";
 
 export interface Org {
   id: string;

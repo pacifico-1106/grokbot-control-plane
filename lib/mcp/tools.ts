@@ -78,6 +78,12 @@ export const STAFFPASS_MCP_TOOLS: McpToolDef[] = [
           type: "number",
           description: "Order amount in JPY (commerce.order).",
         },
+        commerceAuthorization: {
+          type: "object",
+          description:
+            "Optional structured JPYC authorization for Sealith correlation. This records authority only and never marks payment complete.",
+          additionalProperties: true,
+        },
         payload: {
           type: "object",
           description:
@@ -201,6 +207,16 @@ export async function callStaffpassMcpTool(
         amountJpy: Number.isFinite(amountJpy as number)
           ? (amountJpy as number)
           : undefined,
+        commerceAuthorization:
+          args.commerceAuthorization &&
+          typeof args.commerceAuthorization === "object" &&
+          !Array.isArray(args.commerceAuthorization)
+            ? (args.commerceAuthorization as GatewayInvokeRequest["commerceAuthorization"])
+            : payload.commerceAuthorization &&
+                typeof payload.commerceAuthorization === "object" &&
+                !Array.isArray(payload.commerceAuthorization)
+              ? (payload.commerceAuthorization as GatewayInvokeRequest["commerceAuthorization"])
+              : undefined,
         args: payload,
         claimedAccount:
           payload.claimedAccount && typeof payload.claimedAccount === "object"

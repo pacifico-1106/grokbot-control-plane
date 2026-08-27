@@ -73,7 +73,9 @@ x-staffpass-credential: gb_emp_<…>
 
 ## ツール一覧（狭い制御面のみ）
 
-Commerce / handoff / JPYC の Sealith 移植は **しません**。
+Commerce / handoff / JPYC の正本機能は Sealith から **移植しません**。任意の
+`external_reference` 連携では、Staffpass承認とSealith注文を署名イベントで相関し、
+Sealith由来の状態を読み取り投影としてだけ保持します。
 
 | Tool | 用途 |
 |------|------|
@@ -253,7 +255,7 @@ xAI API の remote MCP も同じ URL / Bearer を指定してください。
 ## Follow-up（スコープ外）
 
 - 公式マーケットプレイス向けプラグイン梱包
-- Sealith commerce / handoff / JPYC の MCP 移植
+- Sealith commerce / handoff / JPYC の正本機能をStaffpass MCPへ移植
 - Stripe 従量オーバーエイジの MCP 露出
 
 実装の正本は Gateway（`lib/gateway/invoke.ts`）と社員証ガイド（[agent-credential-guide.md](./agent-credential-guide.md)）です。

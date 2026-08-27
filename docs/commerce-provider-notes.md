@@ -8,13 +8,13 @@ Staffpass は **commerce:order（発注）をゲートする側**です。AI社�
 |------|------------|------------|
 | ゲート（許可・上限・承認・監査） | **Staffpass** | `commerce:order` を許可していない／予算未設定／未承認なら **実行しない** |
 | フルフィルメント（実商品の手配・決済） | **外部 Provider** | 例: lifetime-esim.com（Stripe） |
-| 隣接モジュール（任意） | Sealith / JPYC など | eSIM 制御そのものには **必須ではない** |
+| commerce台帳・JPYC入金正本（任意） | Sealith | Staffpassとは`jobId`・namespaced approval・orderIdで接続。単体利用には必須でない |
 
 ## eSIM の位置づけ
 
 - lifetime-esim.com は、承認と上限を通ったあとの **手配・課金 Provider** になり得る、という整理です。
 - Staffpass の LP・ダッシュボードは「発注も承認と上限の内側」とだけ述べ、特定商品のハードセルはしません。
-- Sealith / JPYC は隣接の決済・台帳モジュールであり、eSIM 発注の制御面には必須ではありません。
+- Sealithは任意の決済・台帳モジュールであり、Staffpass単体の発注制御には必須ではありません。併用時だけ署名イベントで監査範囲をつなぎます。
 
 ## 共通パス
 
@@ -27,5 +27,6 @@ Staffpass は **commerce:order（発注）をゲートする側**です。AI社�
 
 ## いま実装しないこと
 
-- lifetime-esim / Sealith / JPYC 向けの Provider 接続コードは **このリポジトリでは未実装**です。
-- 本メモは設計の境界説明のみです。ゲート API・社員証・承認 UI 側の既存パスに乗せる想定で、Provider SDK の追加は別タスクとします。
+- lifetime-esimやJPYCへ送金・発注するProvider接続コードは **このリポジトリでは未実装**です。
+- Sealithとの`external_reference`イベント送受信は実装済みですが既定で無効です。Staffpass承認はSealithのAgent Token、Action Manifest、Human Approvalを迂回しません。
+- StaffpassはJPYC EXを自動操作せず、入金・返金・履行を独自確定しません。Sealith由来の状態は`sourceSystem=sealith`付き投影としてだけ保持します。

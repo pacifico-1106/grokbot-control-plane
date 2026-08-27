@@ -34,6 +34,10 @@ import { evaluateActionLimit } from "@/lib/action-gate";
 import { evaluateSod } from "@/lib/employees/sod";
 import { DOMAIN_LABELS } from "@/lib/gateway/domains";
 import type { Employee, GatewayInvokeRequest } from "@/lib/types";
+import {
+  CrossProductEventError,
+  normalizeCommerceAuthorization,
+} from "@/lib/commerce/cross-product-events";
 
 export type GatewayInvokeResult = {
   httpStatus: number;
@@ -359,6 +363,44 @@ export async function runGatewayInvoke(
   if (typeof artifactUrl === "string" && artifactUrl.trim()) {
     invokeMetadata.artifact_url = artifactUrl.trim();
   }
+  let commerceAuthorization: ReturnType<
+    typeof normalizeCommerceAuthorization
+  > | null = null;
+  if (tool === "commerce.order" && body.commerceAuthorization) {
+    try {
+      commerceAuthorization = normalizeCommerceAuthorization({
+        value: body.commerceAuthorization,
+        purpose,
+        amountJpy: Number(body.amountJpy),
+      });
+    } catch (error) {
+      if (error instanceof CrossProductEventError) {
+        return jsonResult(
+          {
+            ok: false,
+            code: error.code,
+            error: error.code,
+            message: "Sealith向けJPYC購入承認の拘束条件が不正です",
+            employeeId,
+            tool,
+            purpose,
+            jobId,
+          },
+          error.status,
+        );
+      }
+      throw error;
+    }
+    invokeMetadata.crossProductCommerce = {
+      targetSystem: "sealith",
+      authorityMode: "external_reference",
+      credentialGeneration: decision.binding.credentialGeneration,
+      authorization: commerceAuthorization,
+    };
+  }
+  if (tool === "commerce.order") {
+    invokeMetadata.approvedAmountJpy = Number(body.amountJpy);
+  }
 
   if (
     employee.allowedPurposes?.length &&
@@ -496,6 +538,24 @@ export async function runGatewayInvoke(
         prior.jobId === jobId &&
         prior.purpose === purpose
     );
+    if (priorApprovalOk && tool === "commerce.order" && prior) {
+      const priorAmount = Number(prior.metadata.approvedAmountJpy);
+      const priorCrossProduct = prior.metadata.crossProductCommerce ?? null;
+      priorApprovalOk =
+        Number.isFinite(priorAmount) &&
+        priorAmount === Number(body.amountJpy) &&
+        JSON.stringify(priorCrossProduct) ===
+          JSON.stringify(
+            commerceAuthorization
+              ? {
+                  targetSystem: "sealith",
+                  authorityMode: "external_reference",
+                  credentialGeneration: decision.binding.credentialGeneration,
+                  authorization: commerceAuthorization,
+                }
+              : null,
+          );
+    }
   }
 
   const actionCounts = await getActionCounts({

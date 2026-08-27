@@ -2,7 +2,10 @@ import { chromium } from "@playwright/test";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 const dir = path.dirname(fileURLToPath(import.meta.url));
-const browser = await chromium.launch({ executablePath: "/usr/bin/google-chrome-stable", headless: true, args: ["--no-sandbox","--disable-dev-shm-usage"] });
+const executablePath = process.platform === "darwin"
+  ? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+  : "/usr/bin/google-chrome-stable";
+const browser = await chromium.launch({ executablePath, headless: true, args: ["--no-sandbox","--disable-dev-shm-usage"] });
 for (const [h,p] of [["agenda-one-pager.html","agenda-one-pager.pdf"],["architecture-overview.html","architecture-overview.pdf"]]) {
   const page = await browser.newPage();
   await page.goto("file://" + path.join(dir,h), { waitUntil: "networkidle" });
