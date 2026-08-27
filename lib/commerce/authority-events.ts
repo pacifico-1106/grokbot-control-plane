@@ -32,6 +32,23 @@ function positiveEnvInteger(name: string, fallback: number) {
   return Number.isInteger(value) && value > 0 ? value : fallback;
 }
 
+function deliveryTimeoutMs() {
+  return Math.min(
+    positiveEnvInteger("CROSS_PRODUCT_EVENT_DELIVERY_TIMEOUT_MS", 5_000),
+    30_000,
+  );
+}
+
+function deliveryErrorMessage(error: unknown) {
+  if (!(error instanceof Error)) return "delivery_failed";
+  const cause = error.cause;
+  if (!cause || typeof cause !== "object") return error.message.slice(0, 300);
+  const causeCode = "code" in cause && typeof cause.code === "string" ? cause.code : "";
+  const causeMessage =
+    "message" in cause && typeof cause.message === "string" ? cause.message : "";
+  return [error.message, causeCode, causeMessage].filter(Boolean).join(": ").slice(0, 300);
+}
+
 export function authorityDeliveryDisposition(
   status: number | null,
   attempts: number,
@@ -99,11 +116,11 @@ async function deliverOutboxRow(
         )}`,
       },
       body: rawBody,
-      signal: AbortSignal.timeout(5_000),
+      signal: AbortSignal.timeout(deliveryTimeoutMs()),
     });
     status = response.status;
   } catch (error) {
-    lastError = error instanceof Error ? error.message.slice(0, 300) : "delivery_failed";
+    lastError = deliveryErrorMessage(error);
   }
   const disposition = authorityDeliveryDisposition(status, attempts, maxAttempts);
   await admin
@@ -274,7 +291,7 @@ export async function deliverAuthorityDecision(input: {
   );
 }
 
-export async function dispatchAuthorityEventOutbox(limit = 20) {
+export async function dispatchAuthorityEventOutbox(limit = 5) {
   const integration = config();
   if (!integration) return { skipped: true as const, selected: 0, delivered: 0, failed: 0 };
   const admin = createSupabaseAdminClient();
