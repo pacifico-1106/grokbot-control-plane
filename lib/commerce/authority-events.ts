@@ -20,6 +20,8 @@ function config() {
   const environment = process.env.CROSS_PRODUCT_EVENT_ENVIRONMENT;
   const endpoint = process.env.SEALITH_AUTHORITY_EVENTS_URL;
   const secret = process.env.STAFFPASS_SEALITH_EVENT_SECRET ?? "";
+  const vercelBypassSecret =
+    process.env.SEALITH_VERCEL_BYPASS_SECRET?.trim() || null;
   if (
     (environment !== "staging" && environment !== "production") ||
     !endpoint ||
@@ -29,7 +31,12 @@ function config() {
   }
   const url = new URL(endpoint);
   if (url.protocol !== "https:") throw new Error("authority_event_url_must_be_https");
-  return { environment, endpoint: url.toString(), secret } as const;
+  return {
+    environment,
+    endpoint: url.toString(),
+    secret,
+    vercelBypassSecret,
+  } as const;
 }
 
 function snapshotFrom(approval: ApprovalRequest) {
@@ -153,6 +160,12 @@ export async function deliverAuthorityDecision(input: {
       headers: {
         "content-type": "application/json",
         "user-agent": "Staffpass-AuthorityEvent/1.0",
+        ...(integration.vercelBypassSecret
+          ? {
+              "x-vercel-protection-bypass": integration.vercelBypassSecret,
+              "x-vercel-set-bypass-cookie": "samesitenone",
+            }
+          : {}),
         "x-sealith-event-id": eventId,
         "x-sealith-event-timestamp": timestamp,
         "x-sealith-event-signature": `v1=${signCrossProductEvent(
