@@ -104,7 +104,6 @@ async function deliverOutboxRow(
         ...(integration.vercelBypassSecret
           ? {
               "x-vercel-protection-bypass": integration.vercelBypassSecret,
-              "x-vercel-set-bypass-cookie": "samesitenone",
             }
           : {}),
         "x-sealith-event-id": row.event_id,
