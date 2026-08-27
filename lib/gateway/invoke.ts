@@ -632,6 +632,35 @@ export async function runGatewayInvoke(
   });
   const managerId = employee.managerId ?? null;
 
+  // Deny wins over SoD queue: confidential-to-external must not become a pending ticket.
+  if (egress?.decision === "deny") {
+    await appendAuditEvent({
+      orgId: orgId || employee.orgId,
+      employeeId,
+      credentialId: input.credentialId || employee.credentialId,
+      action: "tool.invoke",
+      purpose,
+      summary: `${tool} を相手×情報区分で拒否`,
+      metadata: { tool, jobId, egress, managerId },
+    });
+    return jsonResult(
+      {
+        ok: false,
+        code: "egress_denied",
+        error: egress.reason,
+        message: egress.messageJa,
+        needs_approval: false,
+        egress,
+        managerId,
+        employeeId,
+        tool,
+        purpose,
+        jobId,
+      },
+      403
+    );
+  }
+
   // confirm / send / order (and force flags) → always needs_approval
   // unless a matching prior approval unlocks execution.
   // SoD force_human and action-limit still win even if the matrix would allow.
@@ -745,34 +774,6 @@ export async function runGatewayInvoke(
           : {}),
       },
     });
-  }
-
-  if (egress?.decision === "deny") {
-    await appendAuditEvent({
-      orgId: orgId || employee.orgId,
-      employeeId,
-      credentialId: input.credentialId || employee.credentialId,
-      action: "tool.invoke",
-      purpose,
-      summary: `${tool} を相手×情報区分で拒否`,
-      metadata: { tool, jobId, egress, managerId },
-    });
-    return jsonResult(
-      {
-        ok: false,
-        code: "egress_denied",
-        error: egress.reason,
-        message: egress.messageJa,
-        needs_approval: false,
-        egress,
-        managerId,
-        employeeId,
-        tool,
-        purpose,
-        jobId,
-      },
-      403
-    );
   }
 
   if (egress?.decision === "needs_approval" && !priorApprovalOk) {

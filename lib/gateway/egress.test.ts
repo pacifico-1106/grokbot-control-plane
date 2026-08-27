@@ -132,6 +132,21 @@ describe("information class defaults", () => {
     expect(result.informationClass).toBe("public");
   });
 
+  test("claiming public cannot lower confidential default", async () => {
+    const result = await resolveInformationDisclosure({
+      orgId: DEMO_ORG.id,
+      tool: "comm.send",
+      body: {
+        tool: "comm.send",
+        purpose: "comm.internal",
+        jobId: "job_claim",
+        informationClass: "public",
+        args: { informationClass: "public" },
+      },
+    });
+    expect(result.informationClass).toBe("confidential");
+  });
+
   test("calendar.read busy/free defaults to internal summary", async () => {
     const result = await resolveInformationDisclosure({
       orgId: DEMO_ORG.id,

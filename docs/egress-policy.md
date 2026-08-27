@@ -28,7 +28,7 @@ Slack を通知プロバイダとして足すことは将来の拡張点です�
 
 `public` | `internal` | `confidential` | `verbatim`
 
-未分類アセットは `confidential`。開示の粒度は `summary` | `source`。
+未分類アセットは `confidential`。開示の粒度は `summary` | `source`。モデルは区分を自称できない（より厳しい区分への引き上げのみ）。
 
 ツール既定:
 

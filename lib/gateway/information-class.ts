@@ -124,13 +124,16 @@ export async function resolveInformationDisclosure(input: {
 
   const defaults = toolDefaultClassification(input.tool, args);
   const inherited = assetClasses.length ? maxInformationClass(assetClasses) : null;
-  const informationClass = explicitClass ?? inherited ?? defaults.informationClass;
+  const base = inherited ?? defaults.informationClass;
+  // Classes attach to tools/data. A request may only raise severity (public → confidential),
+  // never self-declare a lower class to bypass the matrix.
+  const informationClass = explicitClass ? maxInformationClass([base, explicitClass]) : base;
   const fidelity = explicitFidelity ?? defaults.fidelity;
-  const unclassified = !explicitClass && !inherited && (sawUnknownAsset || !refs.length) && !explicitClass;
+  const unclassified = !inherited && (sawUnknownAsset || !refs.length);
 
   return {
     informationClass,
     fidelity,
-    unclassified: !explicitClass && (sawUnknownAsset || (!inherited && defaults.informationClass === "confidential" && !refs.length && (input.tool === "knowledge.search" || input.tool === "files.read" || sawUnknownAsset))),
+    unclassified,
   };
 }

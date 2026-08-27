@@ -18,7 +18,7 @@ describe("Gateway audience egress", () => {
           orgId: DEMO_ORG.id,
           slackChannelId: "C_SHARED",
         },
-        args: { informationClass: "confidential", slackChannelId: "C_SHARED" },
+        args: { slackChannelId: "C_SHARED" },
       },
     });
     expect(result.httpStatus).toBe(403);
@@ -39,7 +39,7 @@ describe("Gateway audience egress", () => {
           orgId: DEMO_ORG.id,
           slackChannelId: "C_INTERNAL",
         },
-        args: { informationClass: "public", slackChannelId: "C_INTERNAL" },
+        args: { assetRef: "kb/public-faq", slackChannelId: "C_INTERNAL" },
       },
     });
     expect(result.body.ok).toBe(true);
@@ -59,7 +59,7 @@ describe("Gateway audience egress", () => {
           orgId: DEMO_ORG.id,
           slackChannelId: "C_INTERNAL",
         },
-        args: { informationClass: "public", slackChannelId: "C_INTERNAL" },
+        args: { assetRef: "kb/public-faq", slackChannelId: "C_INTERNAL" },
       },
     });
     expect(allow.body.ok).toBe(true);
@@ -77,7 +77,7 @@ describe("Gateway audience egress", () => {
           slackChannelId: "C_SHARED",
         },
         args: {
-          informationClass: "internal",
+          assetRef: "kb/handbook",
           disclosure: "summary",
           slackChannelId: "C_SHARED",
         },
@@ -115,7 +115,7 @@ describe("Gateway audience egress", () => {
           orgId: DEMO_ORG.id,
           email: "buyer@customer.example",
         },
-        informationClass: "public",
+        args: { assetRef: "kb/public-faq" },
       },
     });
     expect(result.body.ok).toBe(true);
@@ -135,7 +135,7 @@ describe("Gateway audience egress", () => {
           orgId: DEMO_ORG.id,
           slackChannelId: "C_INTERNAL",
         },
-        args: { informationClass: "public", slackChannelId: "C_INTERNAL" },
+        args: { assetRef: "kb/public-faq", slackChannelId: "C_INTERNAL" },
       },
     });
     expect(result.httpStatus).toBe(402);
@@ -177,7 +177,7 @@ describe("Gateway audience egress", () => {
             orgId: DEMO_ORG.id,
             slackChannelId: "C_INTERNAL",
           },
-          args: { informationClass: "public", slackChannelId: "C_INTERNAL" },
+          args: { assetRef: "kb/public-faq", slackChannelId: "C_INTERNAL" },
         },
       });
       expect(result.httpStatus).toBe(403);
@@ -185,5 +185,26 @@ describe("Gateway audience egress", () => {
     } finally {
       employee!.actionLimits = previous;
     }
+  });
+
+  test("model cannot self-declare public to bypass confidential default", async () => {
+    const result = await runGatewayInvoke({
+      employeeId: "emp_comm",
+      credentialId: "cred_comm",
+      body: {
+        tool: "slack.post",
+        purpose: "comm.internal",
+        jobId: `job_claim_public_${Date.now()}`,
+        conversation: {
+          surface: "slack",
+          orgId: DEMO_ORG.id,
+          slackChannelId: "C_SHARED",
+        },
+        informationClass: "public",
+        args: { informationClass: "public", slackChannelId: "C_SHARED" },
+      },
+    });
+    expect(result.httpStatus).toBe(403);
+    expect(result.body.code).toBe("egress_denied");
   });
 });
