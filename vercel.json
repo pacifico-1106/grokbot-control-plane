@@ -3,6 +3,7 @@
   "regions": ["hnd1"],
   "crons": [
     { "path": "/api/cron/telegram-digest", "schedule": "30 23 * * *" },
-    { "path": "/api/cron/telegram-digest", "schedule": "0 9 * * *" }
+    { "path": "/api/cron/telegram-digest", "schedule": "0 9 * * *" },
+    { "path": "/api/cron/cross-product-authority-dispatcher", "schedule": "*/5 * * * *" }
   ]
 }

@@ -22,6 +22,7 @@ export async function receiveSealithCommerceProjection(input: {
   const verified = verifyCrossProductRequest({
     ...input,
     secret: process.env.SEALITH_STAFFPASS_EVENT_SECRET ?? "",
+    previousSecret: process.env.SEALITH_STAFFPASS_EVENT_SECRET_PREVIOUS,
   });
   const event = parseCommerceProjectionEvent(verified.parsed);
   const expectedEnvironment = process.env.CROSS_PRODUCT_EVENT_ENVIRONMENT;

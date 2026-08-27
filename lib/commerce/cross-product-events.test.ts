@@ -9,6 +9,7 @@ import {
   signCrossProductEvent,
   verifyCrossProductRequest,
 } from "./cross-product-events";
+import { authorityDeliveryDisposition } from "./authority-events";
 
 const now = new Date("2026-08-27T06:00:00.000Z");
 const secret = "test-only-cross-product-secret-32-bytes-minimum";
@@ -105,6 +106,22 @@ describe("cross-product no-money contract", () => {
     );
   });
 
+  test("accepts the previous secret during an explicit rotation overlap", () => {
+    const raw = JSON.stringify(projection());
+    const timestamp = "1787810400";
+    const previousSecret = "previous-cross-product-secret-32-bytes-minimum";
+    const verified = verifyCrossProductRequest({
+      rawBody: raw,
+      eventIdHeader: "evt_projection_1",
+      timestampHeader: timestamp,
+      signatureHeader: `v1=${signCrossProductEvent(raw, timestamp, previousSecret)}`,
+      secret,
+      previousSecret,
+      now,
+    });
+    assert.equal(parseCommerceProjectionEvent(verified.parsed).correlation.orderId, "ord_1");
+  });
+
   test("handles duplicate, conflict, stale and tenant mismatch", () => {
     assert.equal(
       classifyInboxReplay({
@@ -144,5 +161,12 @@ describe("cross-product no-money contract", () => {
       () => parseCommerceProjectionEvent({ ...projection(), paid: true }),
       /unknown_event_field/,
     );
+  });
+
+  test("classifies transient retries and permanent dead letters", () => {
+    assert.equal(authorityDeliveryDisposition(503, 1, 3), "retryable");
+    assert.equal(authorityDeliveryDisposition(null, 3, 3), "dead_letter");
+    assert.equal(authorityDeliveryDisposition(401, 1, 3), "dead_letter");
+    assert.equal(authorityDeliveryDisposition(200, 1, 3), "delivered");
   });
 });

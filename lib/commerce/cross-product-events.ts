@@ -152,10 +152,14 @@ export function verifyCrossProductRequest(input: {
   timestampHeader: string | null;
   signatureHeader: string | null;
   secret: string;
+  previousSecret?: string;
   now?: Date;
   maxSkewSeconds?: number;
 }) {
-  if (input.secret.length < 32) {
+  const secrets = [input.secret, input.previousSecret ?? ""].filter(
+    (secret) => secret.length >= 32,
+  );
+  if (secrets.length === 0) {
     throw new CrossProductEventError("event_secret_not_configured", 503);
   }
   const timestamp = input.timestampHeader ?? "";
@@ -171,10 +175,16 @@ export function verifyCrossProductRequest(input: {
   }
   const supplied = input.signatureHeader?.match(/^v1=([a-f0-9]{64})$/)?.[1];
   if (!supplied) throw new CrossProductEventError("invalid_event_signature", 401);
-  const expected = signCrossProductEvent(input.rawBody, timestamp, input.secret);
-  if (
-    !timingSafeEqual(Buffer.from(supplied, "hex"), Buffer.from(expected, "hex"))
-  ) {
+  const suppliedBuffer = Buffer.from(supplied, "hex");
+  const signatureMatches = secrets
+    .map((secret) =>
+      timingSafeEqual(
+        suppliedBuffer,
+        Buffer.from(signCrossProductEvent(input.rawBody, timestamp, secret), "hex"),
+      ),
+    )
+    .some(Boolean);
+  if (!signatureMatches) {
     throw new CrossProductEventError("invalid_event_signature", 401);
   }
   let parsed: unknown;
