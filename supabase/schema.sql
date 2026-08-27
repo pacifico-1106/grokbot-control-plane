@@ -180,7 +180,7 @@ create index if not exists approval_requests_job_idx
 create table if not exists org_notification_channels (
   id uuid primary key default gen_random_uuid(),
   org_id uuid not null references orgs(id) on delete cascade,
-  provider text not null check (provider in ('telegram','line')),
+  provider text not null check (provider in ('telegram','line','slack')),
   label text not null,
   enabled boolean not null default false,
   config jsonb not null default '{}'::jsonb,
@@ -203,7 +203,7 @@ create table if not exists approval_notification_deliveries (
   approval_id uuid not null references approval_requests(id) on delete cascade,
   org_id uuid not null references orgs(id) on delete cascade,
   channel_id uuid not null references org_notification_channels(id) on delete cascade,
-  provider text not null check (provider in ('telegram','line')),
+  provider text not null check (provider in ('telegram','line','slack')),
   external_message_id text,
   context jsonb not null default '{}'::jsonb,
   created_at timestamptz not null default now(),
@@ -215,6 +215,29 @@ create index if not exists notification_channels_org_enabled_idx
   on org_notification_channels (org_id, enabled);
 create index if not exists notification_deliveries_external_idx
   on approval_notification_deliveries (channel_id, external_message_id);
+
+
+create table if not exists org_conversation_adapters (
+  id uuid primary key default gen_random_uuid(),
+  org_id uuid not null references orgs(id) on delete cascade,
+  surface text not null check (surface in ('slack','line','mail','phone','web')),
+  label text not null default 'Slack',
+  enabled boolean not null default false,
+  config jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (org_id, surface)
+);
+
+create table if not exists org_conversation_adapter_secrets (
+  adapter_id uuid primary key references org_conversation_adapters(id) on delete cascade,
+  credentials_ciphertext text not null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create index if not exists conversation_adapters_org_enabled_idx
+  on org_conversation_adapters (org_id, enabled);
 
 -- ---------------------------------------------------------------------------
 -- Audit timeline
@@ -385,6 +408,8 @@ alter table approval_requests enable row level security;
 alter table org_notification_channels enable row level security;
 alter table org_notification_channel_secrets enable row level security;
 alter table approval_notification_deliveries enable row level security;
+alter table org_conversation_adapters enable row level security;
+alter table org_conversation_adapter_secrets enable row level security;
 alter table audit_events enable row level security;
 alter table subscriptions enable row level security;
 alter table gateway_links enable row level security;
@@ -443,6 +468,14 @@ create policy notification_channels_write_admin on org_notification_channels
 drop policy if exists notification_deliveries_select on approval_notification_deliveries;
 create policy notification_deliveries_select on approval_notification_deliveries
   for select using (public.is_org_member(org_id));
+
+drop policy if exists conversation_adapters_select on org_conversation_adapters;
+drop policy if exists conversation_adapters_write_admin on org_conversation_adapters;
+create policy conversation_adapters_select on org_conversation_adapters
+  for select using (public.is_org_member(org_id));
+create policy conversation_adapters_write_admin on org_conversation_adapters
+  for all using (public.is_org_admin(org_id))
+  with check (public.is_org_admin(org_id));
 
 drop policy if exists audit_select on audit_events;
 drop policy if exists audit_insert_member on audit_events;

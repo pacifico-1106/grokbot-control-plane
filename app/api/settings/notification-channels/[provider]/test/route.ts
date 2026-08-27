@@ -4,6 +4,7 @@ import {
   getEnabledNotificationChannels,
 } from "@/lib/data";
 import { sendLineText } from "@/lib/notify/line";
+import { sendSlackTextToChannel } from "@/lib/notify/slack";
 import { sendTelegramTextToChannel } from "@/lib/notify/telegram";
 import { requireOrgAdminSession } from "@/lib/auth/require-org";
 import type { NotificationProvider } from "@/lib/types";
@@ -17,7 +18,7 @@ export async function POST(
   const gate = await requireOrgAdminSession();
   if (!gate.ok) return gate.response;
   const { provider: raw } = await ctx.params;
-  if (raw !== "telegram" && raw !== "line") {
+  if (raw !== "telegram" && raw !== "line" && raw !== "slack") {
     return NextResponse.json({ error: "invalid_provider" }, { status: 400 });
   }
   const provider = raw as NotificationProvider;
@@ -28,7 +29,9 @@ export async function POST(
   const message = "✅ StaffPass 通知チャネルのテストに成功しました。";
   const result = provider === "telegram"
     ? await sendTelegramTextToChannel(channel, message)
-    : await sendLineText(channel, message);
+    : provider === "line"
+      ? await sendLineText(channel, message)
+      : await sendSlackTextToChannel(channel, message);
   await appendAuditEvent({
     orgId: gate.orgId,
     employeeId: null,

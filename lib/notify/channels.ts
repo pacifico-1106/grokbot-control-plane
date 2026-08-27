@@ -10,9 +10,9 @@ import {
 import { buildConcentration, type ConcentrationReport } from "@/lib/employees/concentration";
 import type { ApprovalRequest, Employee } from "@/lib/types";
 /**
- * Org notification channels (Telegram / LINE).
- * Slack DM notify is reserved as a future provider extension point and is
- * NOT a conversation adapter. Do not mix with org_parties / comm.send.
+ * Org notification channels (Telegram / LINE / Slack).
+ * Slack here is the approval *inbox* only. Conversation posting uses
+ * org_conversation_adapters — never mix with comm.send / slack.post.
  */
 import {
   editTelegramApprovalForChannel,
@@ -27,10 +27,15 @@ import {
   sendApprovalToLineChannel,
   sendLineText,
 } from "@/lib/notify/line";
+import {
+  editSlackApprovalForChannel,
+  sendApprovalToSlackChannel,
+  sendSlackTextToChannel,
+} from "@/lib/notify/slack";
 
 export type NotificationDispatchResult = {
   ok: boolean;
-  provider: "telegram" | "line";
+  provider: "telegram" | "line" | "slack";
   channelId?: string;
   fallback?: boolean;
   skipped?: boolean;
@@ -59,7 +64,9 @@ export async function sendApprovalNotifications(
   for (const channel of channels) {
     const sent = channel.provider === "telegram"
       ? await sendApprovalToTelegramChannel(approval, employee, channel)
-      : await sendApprovalToLineChannel(approval, employee, channel);
+      : channel.provider === "line"
+        ? await sendApprovalToLineChannel(approval, employee, channel)
+        : await sendApprovalToSlackChannel(approval, employee, channel);
     const result = { ...sent, provider: channel.provider, channelId: channel.id } as NotificationDispatchResult;
     results.push(result);
     await auditFailure(approval, result);
@@ -83,7 +90,9 @@ export async function updateApprovalNotificationMessages(
   for (const channel of channels) {
     const sent = channel.provider === "telegram"
       ? await editTelegramApprovalForChannel(approval, decision, actor, channel)
-      : await resolveLineApprovalMessage(approval, decision, actor, channel);
+      : channel.provider === "line"
+        ? await resolveLineApprovalMessage(approval, decision, actor, channel)
+        : await editSlackApprovalForChannel(approval, decision, actor, channel);
     results.push({ ...sent, provider: channel.provider, channelId: channel.id });
   }
   if (!channels.some((channel) => channel.provider === "telegram") && await isTokyo307PilotOrg(approval.orgId)) {
@@ -140,9 +149,12 @@ export async function sendTenantDigests(): Promise<NotificationDispatchResult[]>
       concentration = buildConcentration(await listEmployees(channel.orgId));
       concentrationByOrg.set(channel.orgId, concentration);
     }
+    const digest = digestText(approvals, channel.provider === "telegram", concentration);
     const sent = channel.provider === "telegram"
-      ? await sendTelegramTextToChannel(channel, digestText(approvals, true, concentration))
-      : await sendLineText(channel, digestText(approvals, false, concentration));
+      ? await sendTelegramTextToChannel(channel, digest)
+      : channel.provider === "line"
+        ? await sendLineText(channel, digest)
+        : await sendSlackTextToChannel(channel, digest);
     results.push({ ...sent, provider: channel.provider, channelId: channel.id });
   }
   const pilotOrgId = await getTokyo307PilotOrgId();

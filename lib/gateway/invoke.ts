@@ -35,6 +35,10 @@ import {
   isForceApprovalTool,
   resolveGatewayTool,
 } from "@/lib/gateway/tools";
+import {
+  looksLikeSlackTs,
+  postConversationMessage,
+} from "@/lib/gateway/adapters/slack";
 import { evaluateAllowedAccountsForBrowser } from "@/lib/employees/allowed-accounts";
 import { evaluateSpend } from "@/lib/spend-gate";
 import { evaluateActionLimit } from "@/lib/action-gate";
@@ -810,6 +814,62 @@ export async function runGatewayInvoke(
     recorded: boolean;
   } | null = null;
 
+  // Conversation posting (Slack) after egress allow|summarize and SoD/always_human unlock.
+  // Notify inbox is a different plane — never post approvals through this adapter.
+  let conversationDelivery:
+    | { ok: true; delivery: "stub" | "slack"; channel?: string; ts?: string }
+    | undefined;
+  if (
+    isAudienceGatedTool(toolDef) &&
+    (egress?.decision === "allow" || egress?.decision === "summarize")
+  ) {
+    const ctx = parseConversationContext(body, orgId || employee.orgId);
+    const dest = ctx?.slackChannelId || ctx?.slackUserId || "";
+    if (dest) {
+      const args =
+        body.args && typeof body.args === "object"
+          ? (body.args as Record<string, unknown>)
+          : {};
+      const rawText = [args.text, args.body, args.message].find(
+        (value) => typeof value === "string" && value.trim()
+      ) as string | undefined;
+      const posted = await postConversationMessage({
+        orgId: orgId || employee.orgId,
+        channel: dest,
+        text: (rawText || "").trim() || purpose,
+        threadTs: looksLikeSlackTs(ctx?.threadId) ? ctx?.threadId : undefined,
+        summarize: egress.decision === "summarize",
+      });
+      if (!posted.ok) {
+        await appendAuditEvent({
+          orgId: orgId || employee.orgId,
+          employeeId,
+          credentialId: input.credentialId || employee.credentialId,
+          action: "slack.post_failed",
+          purpose,
+          summary: "Slack会話投稿に失敗",
+          metadata: { tool, jobId, error: posted.error, dest },
+        });
+        return jsonResult(
+          {
+            ok: false,
+            code: "slack_post_failed",
+            error: posted.error || "slack_post_failed",
+            message: "Slack投稿に失敗しました",
+            needs_approval: false,
+            egress,
+            employeeId,
+            tool,
+            purpose,
+            jobId,
+          },
+          502
+        );
+      }
+      conversationDelivery = posted;
+    }
+  }
+
   if (employee.actionLimits?.[tool]) {
     await incrementActionCounter({
       orgId: orgId || employee.orgId,
@@ -854,6 +914,7 @@ export async function runGatewayInvoke(
     meter,
     egress: egress ?? undefined,
     managerId: managerId || undefined,
+    conversationDelivery,
     result:
       tool === "tools.ping"
         ? { pong: true }
@@ -873,8 +934,13 @@ export async function runGatewayInvoke(
                       ? {
                           accepted: true,
                           disclosed: egress?.decision === "summarize" ? "summary" : "source",
+                          delivery: conversationDelivery?.delivery,
                         }
-                      : { accepted: true, disclosed: egress?.decision === "summarize" ? "summary" : undefined },
+                      : {
+                          accepted: true,
+                          disclosed: egress?.decision === "summarize" ? "summary" : undefined,
+                          delivery: conversationDelivery?.delivery,
+                        },
     message:
       egress?.decision === "summarize"
         ? egress.messageJa

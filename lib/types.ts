@@ -31,11 +31,11 @@ export type SodVerdict =
 export type ActionLimit = { perDay?: number; perMonth?: number };
 export type ActionLimits = Record<string, ActionLimit>;
 
-export type NotificationProvider = "telegram" | "line";
+export type NotificationProvider = "telegram" | "line" | "slack";
 /**
- * Slack as a *notify* provider is an extension point only.
- * Conversation adapters (comm.send / slack.post) are a different plane from
- * org_notification_channels — do not mix them, and do not require a Slack bot token.
+ * Slack notify lives on org_notification_channels (approval inbox).
+ * Conversation posting lives on org_conversation_adapters (comm.send / slack.post)
+ * after egress. Do not mix the two planes at runtime.
  */
 
 
@@ -49,6 +49,19 @@ export interface NotificationChannel {
   webhookRef: string;
   hasCredentials: boolean;
   webhookPath: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Live conversation posting adapter (separate from notification inbox). */
+export interface ConversationAdapter {
+  id: string;
+  orgId: string;
+  surface: ConversationSurface;
+  label: string;
+  enabled: boolean;
+  config: Record<string, unknown>;
+  hasCredentials: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -289,6 +302,8 @@ export type AuditAction =
   | "notification.channel_updated"
   | "notification.test_sent"
   | "notification.delivery_failed"
+  | "conversation.adapter_updated"
+  | "slack.post_failed"
   | "employee.sod_forced"
   | "employee.sod_override"
   | "action_limit.reached"

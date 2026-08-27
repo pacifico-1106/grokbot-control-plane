@@ -28,6 +28,13 @@ export type UpsertNotificationChannelInput = {
 
 const demoChannels: NotificationChannelRuntime[] = [];
 
+function defaultProviderLabel(provider: NotificationProvider): string {
+  if (provider === "telegram") return "Telegram";
+  if (provider === "line") return "LINE";
+  return "Slack";
+}
+
+
 function demoPublic(row: NotificationChannelRuntime): NotificationChannel {
   return {
     id: row.id,
@@ -55,7 +62,7 @@ function mapPublic(row: Record<string, unknown>): NotificationChannel {
     id: String(row.id),
     orgId: String(row.org_id),
     provider,
-    label: String(row.label || (provider === "telegram" ? "Telegram" : "LINE")),
+    label: String(row.label || defaultProviderLabel(provider)),
     enabled: Boolean(row.enabled),
     config:
       row.config && typeof row.config === "object"
@@ -190,7 +197,7 @@ export async function upsertNotificationChannel(
       id: existing?.id || `chn_${randomBytes(6).toString("hex")}`,
       orgId: input.orgId || DEMO_ORG.id,
       provider: input.provider,
-      label: input.label?.trim() || (input.provider === "telegram" ? "Telegram" : "LINE"),
+      label: input.label?.trim() || defaultProviderLabel(input.provider),
       enabled: input.enabled,
       config: input.config,
       webhookRef: existing?.webhookRef || randomBytes(6).toString("hex"),
@@ -205,6 +212,9 @@ export async function upsertNotificationChannel(
     }
     if (input.enabled && input.provider === "line" && (!row.secrets.channelAccessToken || !row.secrets.channelSecret)) {
       throw new Error("line_credentials_incomplete");
+    }
+    if (input.enabled && input.provider === "slack" && (!row.secrets.botToken || !row.secrets.signingSecret)) {
+      throw new Error("slack_credentials_incomplete");
     }
     row.webhookPath = webhookPath(row.provider, row.webhookRef);
     if (idx >= 0) demoChannels[idx] = row;
@@ -245,13 +255,16 @@ export async function upsertNotificationChannel(
   if (input.enabled && input.provider === "line" && (!secrets.channelAccessToken || !secrets.channelSecret)) {
     throw new Error("line_credentials_incomplete");
   }
+  if (input.enabled && input.provider === "slack" && (!secrets.botToken || !secrets.signingSecret)) {
+    throw new Error("slack_credentials_incomplete");
+  }
   const encryptedSecrets = Object.keys(secrets).length > 0
     ? encryptNotificationSecrets(secrets)
     : "";
   const payload = {
     org_id: input.orgId,
     provider: input.provider,
-    label: input.label?.trim() || (input.provider === "telegram" ? "Telegram" : "LINE"),
+    label: input.label?.trim() || defaultProviderLabel(input.provider),
     enabled: input.enabled,
     config: input.config,
     updated_at: new Date().toISOString(),

@@ -1,13 +1,13 @@
-# テナント別 Telegram / LINE 承認チャネル
+# テナント別 Telegram / LINE / Slack 承認チャネル
 
-各組織は `/app/settings` から専用の Telegram Bot または LINE Messaging API チャネルを設定できます。承認依頼、承認・却下・修正依頼、定時ダイジェストは同一 `org_id` のチャネルとデータだけを使用します。通知障害が発生してもGatewayの承認作成、Web画面、メール通知は継続します。
+各組織は `/app/settings` から専用の Telegram Bot、LINE Messaging API、または Slack 承認通知チャネルを設定できます。承認依頼、承認・却下・修正依頼、定時ダイジェストは同一 `org_id` のチャネルとデータだけを使用します。通知障害が発生してもGatewayの承認作成、Web画面、メール通知は継続します。
 
 ## セキュリティ境界
 
-- Bot token、LINE channel access token / secret、Webhook secretはAES-256-GCMで暗号化する。
+- Bot token、LINE channel access token / secret、Slack signing secret、Webhook secretはAES-256-GCMで暗号化する。
 - 暗号文は `org_notification_channel_secrets` に分離し、ブラウザ用RLS policyを作らない。service roleだけが読み書きする。
 - 設定APIはログイン中のowner/adminのみ利用でき、secretは保存後にレスポンス・画面へ戻さない。
-- Webhook URLは推測困難なチャネル別refを含み、Telegram secret headerまたはLINE署名を検証する。
+- Webhook URLは推測困難なチャネル別refを含み、Telegram secret header、LINE署名、または Slack HMAC（v0 basestring）を検証する。
 - chat/group/room/userと `org_id`、承認の配信記録を照合する。別テナントのrefや承認は処理しない。
 
 Productionでは `NOTIFICATION_CONFIG_ENCRYPTION_KEY` に32文字以上の安定したランダム値が必須です。ローテーション時は既存暗号文の再暗号化が必要なので、通常の再デプロイで値を変えないでください。
@@ -28,6 +28,20 @@ Productionでは `NOTIFICATION_CONFIG_ENCRYPTION_KEY` に32文字以上の安定
 
 LINEのWebhook URLはLINE Developers側の操作が必要なため自動登録されません。
 
+## Slack（テナント設定・承認通知）
+
+Slackの承認通知は Telegram / LINE と同じ `org_notification_channels` です。会話投稿（`comm.send` / `slack.post`）は `org_conversation_adapters` に分離しており、承認カードを会話アダプタへ流しません。
+
+1. [Slack API](https://api.slack.com/apps) でテナント専用アプリを作成し、Bot Token Scopes に `chat:write` を付ける。
+2. ワークスペースへインストールし、承認通知用チャネルへ Bot を招待する。
+3. `/app/settings` の承認用Slackカードに channel ID（C... / G... / D...、App Home/DM なら U...）、Bot token、Signing secret、必要なら許可 user ID を設定して有効化・保存する。
+4. Slackアプリの Interactivity Request URL に `https://staffpass.sealith.com/api/webhooks/slack/<ref>` を貼る（設定画面のパス。自動登録はない。LINEと同様に手動）。
+5. テスト送信で投稿を確認する。ボタンは承認（primary）/ 却下（danger）/ 修正依頼。修正依頼はこのスライスではモーダルなしで `Slackから修正依頼` を記録する。
+
+会話投稿用の Bot token は同じ画面の「会話投稿 Slack」カードへ別保存する。同じ token を両方へ貼ってもよいが、ストアは分かれている。
+
+グローバルenvフォールバックは Slack にはない（LINEと同じ）。
+
 ## Tokyo307パイロットのenvフォールバック
 
 既存のグローバルenv方式は、activeな `org_members.email = info@tokyo307inc.com` を含む組織だけに残します。
@@ -46,11 +60,11 @@ TELEGRAM_ALLOWED_USER_IDS=123456789
 
 ## DB・デプロイ順序
 
-1. `supabase/migrations/20260827_tenant_notification_channels.sql` を適用する。
+1. `supabase/migrations/20260827_tenant_notification_channels.sql` と `supabase/migrations/20260828_slack_notify_post.sql` を適用する。
 2. Productionへ `NOTIFICATION_CONFIG_ENCRYPTION_KEY` を追加する。
 3. アプリをデプロイする。
 4. `info@tokyo307inc.com` の所属組織が1つでactiveであることを確認する。
-5. 各テナントのowner/adminが設定、テスト送信、承認三択、修正返信を確認する。
+5. 各テナントのowner/adminが設定、テスト送信、承認三択、修正返信を確認する。Slackは Interactivity URL の手動登録とチャネルへのBot招待が必要。
 
 定時ダイジェストのcron URLは後方互換のため `/api/cron/telegram-digest` のままですが、実際には有効なTelegram・LINEをテナント単位で処理します。
 

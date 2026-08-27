@@ -24,7 +24,7 @@ export async function PUT(req: Request) {
   if (!gate.ok) return gate.response;
   const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
   const provider = body.provider as NotificationProvider;
-  if (provider !== "telegram" && provider !== "line") {
+  if (provider !== "telegram" && provider !== "line" && provider !== "slack") {
     return NextResponse.json({ error: "invalid_provider" }, { status: 400 });
   }
   const enabled = body.enabled === true;
@@ -33,8 +33,15 @@ export async function PUT(req: Request) {
     : String(body.allowedUserIds || "").split(",").map((value) => value.trim()).filter(Boolean).slice(0, 100);
   const config = provider === "telegram"
     ? { chatId: String(body.chatId || "").trim(), allowedUserIds }
-    : { destinationId: String(body.destinationId || "").trim(), allowedUserIds };
-  if (enabled && !(provider === "telegram" ? config.chatId : config.destinationId)) {
+    : provider === "line"
+      ? { destinationId: String(body.destinationId || "").trim(), allowedUserIds }
+      : { channelId: String(body.channelId || "").trim(), allowedUserIds };
+  const destination = provider === "telegram"
+    ? config.chatId
+    : provider === "line"
+      ? config.destinationId
+      : config.channelId;
+  if (enabled && !destination) {
     return NextResponse.json({ error: "destination_required" }, { status: 400 });
   }
   const existingChannel = (await listNotificationChannels(gate.orgId)).find(
@@ -47,10 +54,15 @@ export async function PUT(req: Request) {
           ? { webhookSecret: randomBytes(32).toString("hex") }
           : {}),
       }
-    : {
-        channelAccessToken: String(body.channelAccessToken || "").trim(),
-        channelSecret: String(body.channelSecret || "").trim(),
-      };
+    : provider === "line"
+      ? {
+          channelAccessToken: String(body.channelAccessToken || "").trim(),
+          channelSecret: String(body.channelSecret || "").trim(),
+        }
+      : {
+          botToken: String(body.botToken || "").trim(),
+          signingSecret: String(body.signingSecret || "").trim(),
+        };
   try {
     const saved = await upsertNotificationChannel({
       orgId: gate.orgId,

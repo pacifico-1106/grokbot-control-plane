@@ -55,6 +55,13 @@ export {
   type UpsertNotificationChannelInput,
 } from "./notification-channels";
 export {
+  listConversationAdapters,
+  getEnabledConversationAdapter,
+  upsertConversationAdapter,
+  type ConversationAdapterRuntime,
+  type UpsertConversationAdapterInput,
+} from "./conversation-adapters";
+export {
   listMembers,
   getMemberById,
   upsertMember,
