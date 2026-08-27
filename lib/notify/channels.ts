@@ -9,6 +9,11 @@ import {
 } from "@/lib/data";
 import { buildConcentration, type ConcentrationReport } from "@/lib/employees/concentration";
 import type { ApprovalRequest, Employee } from "@/lib/types";
+/**
+ * Org notification channels (Telegram / LINE).
+ * Slack DM notify is reserved as a future provider extension point and is
+ * NOT a conversation adapter. Do not mix with org_parties / comm.send.
+ */
 import {
   editTelegramApprovalForChannel,
   escapeTelegramHtml,

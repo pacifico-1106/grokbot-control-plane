@@ -11,6 +11,7 @@ import {
   alwaysHumanMustList,
   denyDefaultList,
 } from "@/lib/employees/approval-presets";
+import { ManagerPicker } from "@/components/employees/ManagerPicker";
 import {
   APPROVAL_POLICY_LABELS,
   SCOPE_LABELS,
@@ -25,6 +26,7 @@ import type {
   ApprovalPolicy,
   EmployeePolicyDraft,
   EmployeeScope,
+  OrgMember,
   SpendLimits,
 } from "@/lib/types";
 
@@ -43,8 +45,9 @@ function emptySpend(): SpendLimits {
   return { ...DEFAULT_SPEND_LIMITS };
 }
 
-export function HireEmployeeClient() {
+export function HireEmployeeClient({ members = [] }: { members?: OrgMember[] }) {
   const [step, setStep] = useState<Step>("describe");
+  const [managerId, setManagerId] = useState<string | null>(null);
   const [prompt, setPrompt] = useState(EXAMPLES[0]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -191,6 +194,7 @@ export function HireEmployeeClient() {
           expiresInDays,
           spend: hasOrderScope || futureSpendOpen ? spend : null,
           allowedAccounts: normalizeAllowedAccounts(allowedAccounts),
+          managerId,
         }),
       });
       const body = await res.json();
@@ -540,6 +544,8 @@ export function HireEmployeeClient() {
               })}
             </div>
           </div>
+
+          <ManagerPicker members={members} value={managerId} onChange={setManagerId} />
 
           <div className="grid md:grid-cols-2 gap-4">
             <label className="block text-sm">

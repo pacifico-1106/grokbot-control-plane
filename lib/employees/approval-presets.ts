@@ -52,13 +52,26 @@ export const JP_SME_STRICT_APPROVAL_PRESETS: ApprovalPresetRow[] = [
   },
   {
     tool: "slack.post",
-    labelJa: "Slack 投稿（社内・許可チャンネル）",
+    labelJa: "Slack 投稿（エイリアス。相手台帳が境界）",
     defaultMode: "risk_based",
+    note: "ツール名では社内/社外を自己申告できない。宛先の audience で判定",
   },
   {
     tool: "slack.post_external",
-    labelJa: "Slack 社外・顧客向け投稿",
-    defaultMode: "always_human",
+    labelJa: "Slack 投稿エイリアス（ツール名は境界ではない）",
+    defaultMode: "risk_based",
+    note: "slack.post と同じ audience resolver。社外宛は matrix に従う",
+  },
+  {
+    tool: "comm.send",
+    labelJa: "会話送信（surface + 宛先必須）",
+    defaultMode: "risk_based",
+    note: "宛先欠落は unknown=社外で fail-closed",
+  },
+  {
+    tool: "comm.reply",
+    labelJa: "会話返信（surface + 宛先必須）",
+    defaultMode: "risk_based",
   },
   {
     tool: "commerce.order",

@@ -46,6 +46,7 @@ export function mapEmployeeRow(row: Record<string, unknown>): Employee {
       row.approval_routine_text != null && String(row.approval_routine_text).trim()
         ? String(row.approval_routine_text)
         : null,
+    managerId: row.manager_id != null ? String(row.manager_id) : null,
     credentialId: row.credential_id != null ? String(row.credential_id) : null,
     createdAt: String(row.created_at ?? new Date().toISOString()),
   };

@@ -87,8 +87,22 @@ export const STAFFPASS_MCP_TOOLS: McpToolDef[] = [
         payload: {
           type: "object",
           description:
-            "Optional tool args (claimedAccount, service, accountId, isFirstOrder, etc.).",
+            "Optional tool args (claimedAccount, service, accountId, isFirstOrder, conversation, informationClass, disclosure).",
           additionalProperties: true,
+        },
+        conversation: {
+          type: "object",
+          description:
+            "Optional conversation context (surface + destination identifiers). Old clients may omit; slack/comm without destination fail-closed as external.",
+          additionalProperties: true,
+        },
+        informationClass: {
+          type: "string",
+          description: "public | internal | confidential | verbatim. Unclassified assets default to confidential.",
+        },
+        disclosure: {
+          type: "string",
+          description: "summary | source. Calendar busy/free defaults to summary.",
         },
       },
       required: ["tool", "purpose", "jobId"],
@@ -237,6 +251,40 @@ export async function callStaffpassMcpTool(
           typeof payload.spentThisMonthJpy === "number"
             ? payload.spentThisMonthJpy
             : undefined,
+        conversation:
+          args.conversation && typeof args.conversation === "object" && !Array.isArray(args.conversation)
+            ? (args.conversation as GatewayInvokeRequest["conversation"])
+            : payload.conversation && typeof payload.conversation === "object" && !Array.isArray(payload.conversation)
+              ? (payload.conversation as GatewayInvokeRequest["conversation"])
+              : undefined,
+        informationClass:
+          typeof args.informationClass === "string"
+            ? (args.informationClass as GatewayInvokeRequest["informationClass"])
+            : typeof payload.informationClass === "string"
+              ? (payload.informationClass as GatewayInvokeRequest["informationClass"])
+              : undefined,
+        disclosure:
+          typeof args.disclosure === "string"
+            ? (args.disclosure as GatewayInvokeRequest["disclosure"])
+            : typeof payload.disclosure === "string"
+              ? (payload.disclosure as GatewayInvokeRequest["disclosure"])
+              : undefined,
+        surface: typeof args.surface === "string" ? (args.surface as GatewayInvokeRequest["surface"]) : undefined,
+        slackChannelId:
+          typeof args.slackChannelId === "string"
+            ? args.slackChannelId
+            : typeof payload.slackChannelId === "string"
+              ? payload.slackChannelId
+              : undefined,
+        slackUserId:
+          typeof args.slackUserId === "string"
+            ? args.slackUserId
+            : typeof payload.slackUserId === "string"
+              ? payload.slackUserId
+              : undefined,
+        email: typeof args.email === "string" ? args.email : typeof payload.email === "string" ? payload.email : undefined,
+        phone: typeof args.phone === "string" ? args.phone : undefined,
+        lineId: typeof args.lineId === "string" ? args.lineId : undefined,
       };
 
       const result = await runGatewayInvoke({

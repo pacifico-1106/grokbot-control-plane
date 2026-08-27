@@ -50,6 +50,7 @@ export async function POST(req: Request) {
     allowedAccounts?: AllowedAccount[] | null;
     approvalNotifyEmail?: string | null;
     callbackUrl?: string | null;
+    managerId?: string | null;
   };
 
   const displayName = (body.displayName || "").trim();
@@ -99,6 +100,7 @@ export async function POST(req: Request) {
       approvalNotifyEmail: body.approvalNotifyEmail?.trim() || null,
       callbackUrl: body.callbackUrl?.trim() || null,
       approvalRoutineText,
+      managerId: body.managerId?.trim() || null,
       secretHash: secret.hash,
       secretPrefix: secret.prefix,
       expiresAt,

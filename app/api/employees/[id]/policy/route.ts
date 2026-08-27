@@ -28,6 +28,7 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
     allowedPurposes,
     approvalPolicy,
     actionLimits: normalizeActionLimits(body.actionLimits),
+    managerId: body.managerId === undefined ? undefined : (body.managerId ? String(body.managerId) : null),
   });
   if (!updated) return NextResponse.json({ error: "employee_not_found" }, { status: 404 });
   await appendAuditEvent({

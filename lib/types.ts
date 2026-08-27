@@ -32,6 +32,12 @@ export type ActionLimit = { perDay?: number; perMonth?: number };
 export type ActionLimits = Record<string, ActionLimit>;
 
 export type NotificationProvider = "telegram" | "line";
+/**
+ * Slack as a *notify* provider is an extension point only.
+ * Conversation adapters (comm.send / slack.post) are a different plane from
+ * org_notification_channels — do not mix them, and do not require a Slack bot token.
+ */
+
 
 export interface NotificationChannel {
   id: string;
@@ -145,6 +151,80 @@ export type EmployeeScope =
  */
 export type EmailLayer = "human_gmail" | "agentmail" | "staffpass_resend";
 
+/** Conversation surface for channel-agnostic egress (WHO × WHAT). */
+export type ConversationSurface = "slack" | "line" | "mail" | "phone" | "web";
+
+/**
+ * Destination of an outbound conversation. Ingress audience is independent.
+ * Unknown / missing destination → treat as external (fail-closed).
+ */
+export interface ConversationContext {
+  surface: ConversationSurface;
+  orgId: string;
+  threadId?: string;
+  email?: string;
+  slackChannelId?: string;
+  slackUserId?: string;
+  phone?: string;
+  lineId?: string;
+}
+
+export type Audience = "internal" | "external" | "unknown";
+export type InformationClass = "public" | "internal" | "confidential" | "verbatim";
+export type DisclosureFidelity = "summary" | "source";
+export type EgressDecision = "allow" | "summarize" | "needs_approval" | "deny";
+
+export type OrgPartyKind =
+  | "email_domain"
+  | "slack_channel"
+  | "slack_user"
+  | "phone"
+  | "line"
+  | "mail_address";
+
+export interface OrgParty {
+  id: string;
+  orgId: string;
+  kind: OrgPartyKind;
+  identifier: string;
+  audience: Exclude<Audience, "unknown">;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type ChannelClassification = "internal" | "shared_external" | "unknown";
+
+export interface OrgChannel {
+  id: string;
+  orgId: string;
+  surface: ConversationSurface;
+  externalId: string;
+  classification: ChannelClassification;
+  mixed: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface InformationAsset {
+  id: string;
+  orgId: string;
+  ref: string;
+  class: InformationClass;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface EgressVerdict {
+  decision: EgressDecision;
+  audience: Audience;
+  effectiveAudience: "internal" | "external";
+  informationClass: InformationClass;
+  fidelity: DisclosureFidelity;
+  namedRecipients: boolean;
+  reason: string;
+  messageJa: string;
+}
+
 /** P0.5 reservation only — no live AgentMail SDK wiring in P0. */
 export interface AgentMailReservation {
   employeeId: string;
@@ -182,6 +262,20 @@ export interface GatewayInvokeRequest {
   approvalId?: string;
   /** Revision parent returned by a prior revision_requested decision. */
   parentApprovalId?: string;
+  /**
+   * Optional conversation context for audience × information-class egress.
+   * Old clients may omit it; slack/comm without destination fail-closed as external.
+   */
+  conversation?: Partial<ConversationContext>;
+  surface?: ConversationSurface;
+  threadId?: string;
+  email?: string;
+  slackChannelId?: string;
+  slackUserId?: string;
+  phone?: string;
+  lineId?: string;
+  informationClass?: InformationClass;
+  disclosure?: DisclosureFidelity;
 }
 
 export type AuditAction =
@@ -262,6 +356,8 @@ export interface Employee {
   callbackUrl?: string | null;
   /** Default Routine text forcing status-poll wait (hire-time / one-time display). */
   approvalRoutineText?: string | null;
+  /** Human manager (org_members.id, same org). Attached to egress approval tickets. */
+  managerId?: string | null;
   credentialId: string | null;
   createdAt: string;
 }
@@ -379,6 +475,8 @@ export interface EmployeePolicyDraft {
     spendRecommendation?: string | null;
     /** Suggested / configured external accounts (Google, SNS, etc.). */
     allowedAccounts?: AllowedAccount[];
+    /** Optional 上長 (org member id). */
+    managerId?: string | null;
     /**
      * Per-tool approval hints from JP SME strict presets (Ando §3).
      * Distinct from human RBAC (OrgMember.capabilities).

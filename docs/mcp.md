@@ -29,8 +29,9 @@ POST /api/mcp  (Streamable HTTP JSON-RPC)
 staffpass_invoke ──► lib/gateway/invoke (同一 Gateway 強制パス)
     │
     ├─ unknown tool / missing purpose / unbound / needs_reauth → hard deny
-    └─ confirm/send/order / always_human → needs_approval
-            + approvalId + statusToken + pollUrl + pollHint + title/summary
+    ├─ SoD force_human / action-limit / always_human confirm-send-order → needs_approval
+    └─ audience × information-class egress（comm.send / slack.* エイリアス）
+            宛先不明 = 社外。slack.post という名前では社内自己申告できない
 ```
 
 **禁止:** MCP 専用の甘いバイパス。`staffpass_invoke` は Gateway と同じ `runGatewayInvoke` を呼びます。
@@ -80,7 +81,7 @@ Sealith由来の状態を読み取り投影としてだけ保持します。
 | Tool | 用途 |
 |------|------|
 | `staffpass_whoami` | employeeId / displayName / orgId / binding / generation / scopes・purposes |
-| `staffpass_invoke` | Gateway と同ロジック。`tool` + `purpose` + `jobId` 必須。confirm/send/order は人間承認で停止 |
+| `staffpass_invoke` | Gateway と同ロジック。`tool` + `purpose` + `jobId` 必須。confirm/send/order は人間承認で停止。任意で `conversation`（surface + 宛先）。`comm.send` / `slack.post` は同一 audience resolver |
 | `staffpass_get_approval_status` | `approvalId` + `statusToken` → GET `/api/approvals/status` と同じ |
 | `staffpass_health` | runtimeMode / supabase・stripe・resend / 当該社員の binding |
 
@@ -257,5 +258,7 @@ xAI API の remote MCP も同じ URL / Bearer を指定してください。
 - 公式マーケットプレイス向けプラグイン梱包
 - Sealith commerce / handoff / JPYC の正本機能をStaffpass MCPへ移植
 - Stripe 従量オーバーエイジの MCP 露出
+
+会話の相手×情報区分（egress）の正本は [egress-policy.md](./egress-policy.md) です。Slack ツール名は境界ではありません。
 
 実装の正本は Gateway（`lib/gateway/invoke.ts`）と社員証ガイド（[agent-credential-guide.md](./agent-credential-guide.md)）です。

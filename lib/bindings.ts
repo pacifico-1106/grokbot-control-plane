@@ -273,6 +273,18 @@ export function seedDemoBindings(
       lastError: null,
     });
   }
+  const comm = runtimeBindings.get("emp_comm");
+  if (comm && comm.status === "unlinked" && !comm.grokBotAgentId) {
+    touch(comm, {
+      grokBotAgentId: "gba_demo_comm",
+      grokBotWorkspaceId: "gbw_demo",
+      credentialGeneration: 1,
+      credentialFingerprint: fingerprintSecret("demo-seed-comm-v1"),
+      status: "linked",
+      lastSuccessAt: new Date(Date.now() - 1800000).toISOString(),
+      lastError: null,
+    });
+  }
   const ops = runtimeBindings.get("emp_ops");
   if (ops && ops.status === "unlinked" && !ops.grokBotAgentId) {
     // Ops starts needs_reauth so Managed UI can show 要再連携 alert.

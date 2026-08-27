@@ -22,6 +22,8 @@ export type GatewayToolId =
   | "commerce.order"
   | "slack.post"
   | "slack.post_external"
+  | "comm.reply"
+  | "comm.send"
   | "drive.share_external"
   | "knowledge.search"
   | "approvals.request"
@@ -174,7 +176,7 @@ export const GATEWAY_TOOL_DEFS: Record<GatewayToolId, GatewayToolDef> = {
   },
   "slack.post": {
     id: "slack.post",
-    labelJa: "Slack 社内投稿",
+    labelJa: "Slack 投稿（エイリアス・相手解決が境界）",
     kind: "mutate",
     requiredScopes: ["slack:post", "tools:invoke"],
     forceNeedsApproval: false,
@@ -182,11 +184,27 @@ export const GATEWAY_TOOL_DEFS: Record<GatewayToolId, GatewayToolDef> = {
   },
   "slack.post_external": {
     id: "slack.post_external",
-    labelJa: "Slack 社外・顧客向け投稿",
-    kind: "send",
-    requiredScopes: ["slack:post_external", "tools:invoke"],
-    forceNeedsApproval: true,
-    mayAuto: false,
+    labelJa: "Slack 投稿エイリアス（ツール名は境界ではない）",
+    kind: "mutate",
+    requiredScopes: ["slack:post_external", "slack:post", "tools:invoke"],
+    forceNeedsApproval: false,
+    mayAuto: true,
+  },
+  "comm.reply": {
+    id: "comm.reply",
+    labelJa: "会話返信（相手×情報区分）",
+    kind: "mutate",
+    requiredScopes: ["tools:invoke", "slack:post", "mail:send"],
+    forceNeedsApproval: false,
+    mayAuto: true,
+  },
+  "comm.send": {
+    id: "comm.send",
+    labelJa: "会話送信（相手×情報区分）",
+    kind: "mutate",
+    requiredScopes: ["tools:invoke", "slack:post", "mail:send"],
+    forceNeedsApproval: false,
+    mayAuto: true,
   },
   "drive.share_external": {
     id: "drive.share_external",
@@ -240,6 +258,10 @@ const ALIASES: Record<string, GatewayToolId> = {
   "commerce:order": "commerce.order",
   "slack:post": "slack.post",
   "slack:post_external": "slack.post_external",
+  "comm:reply": "comm.reply",
+  "comm:send": "comm.send",
+  "comm.reply": "comm.reply",
+  "comm.send": "comm.send",
   "drive:share_external": "drive.share_external",
   "knowledge:search": "knowledge.search",
   "approvals:request": "approvals.request",
@@ -265,8 +287,38 @@ export function listGatewayToolIds(): GatewayToolId[] {
   return Object.keys(GATEWAY_TOOL_DEFS) as GatewayToolId[];
 }
 
+const ALWAYS_HUMAN_TOOL_IDS = new Set<GatewayToolId>([
+  "mail.send",
+  "calendar.confirm",
+  "commerce.order",
+  "drive.share_external",
+  "files.write",
+  "browser.use",
+  "agentmail.send",
+]);
+
+const AUDIENCE_GATED_TOOL_IDS = new Set<GatewayToolId>([
+  "comm.send",
+  "comm.reply",
+  "slack.post",
+  "slack.post_external",
+]);
+
+/** slack.* / comm.* share one audience resolver — tool name is not the boundary. */
+export function isAudienceGatedTool(def: GatewayToolDef | string): boolean {
+  const id = typeof def === "string" ? def : def.id;
+  return AUDIENCE_GATED_TOOL_IDS.has(id as GatewayToolId);
+}
+
+export function isAlwaysHumanTool(def: GatewayToolDef | string): boolean {
+  const id = typeof def === "string" ? def : def.id;
+  return ALWAYS_HUMAN_TOOL_IDS.has(id as GatewayToolId);
+}
+
 /** Tools that always queue for human approval at the gateway. */
 export function isForceApprovalTool(def: GatewayToolDef): boolean {
+  if (isAudienceGatedTool(def)) return false;
+  if (isAlwaysHumanTool(def)) return true;
   return (
     def.forceNeedsApproval ||
     def.kind === "confirm" ||

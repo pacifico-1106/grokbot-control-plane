@@ -22,8 +22,15 @@ import {
   isBillableConfirmCompletion,
   recordGatedConfirmAction,
 } from "@/lib/billing/meter";
+import { evaluateEgressMatrix } from "@/lib/gateway/egress";
+import {
+  parseConversationContext,
+  resolveAudience,
+} from "@/lib/gateway/audience";
+import { resolveInformationDisclosure } from "@/lib/gateway/information-class";
 import {
   employeeHasToolScope,
+  isAudienceGatedTool,
   isConfirmClassTool,
   isForceApprovalTool,
   resolveGatewayTool,
@@ -49,6 +56,29 @@ function jsonResult(
   httpStatus = 200
 ): GatewayInvokeResult {
   return { httpStatus, body };
+}
+
+async function evaluateInvokeEgress(input: {
+  orgId: string;
+  tool: string;
+  toolDef: import("@/lib/gateway/tools").GatewayToolDef;
+  body: import("@/lib/types").GatewayInvokeRequest;
+}): Promise<import("@/lib/types").EgressVerdict | null> {
+  const gated = isAudienceGatedTool(input.toolDef);
+  const ctx = parseConversationContext(input.body, input.orgId);
+  if (!gated && !ctx) return null;
+  const audience = await resolveAudience(ctx, { requireDestination: gated });
+  const disclosure = await resolveInformationDisclosure({
+    orgId: input.orgId,
+    tool: input.tool,
+    body: input.body,
+  });
+  return evaluateEgressMatrix({
+    audience: audience.audience,
+    informationClass: disclosure.informationClass,
+    fidelity: disclosure.fidelity,
+    namedRecipients: audience.namedRecipients,
+  });
 }
 
 /**
@@ -592,8 +622,19 @@ export async function runGatewayInvoke(
     }, 403);
   }
 
+  // Audience × information-class egress (after scope / SoD / action-limit).
+  // slack.* aliases share this resolver — tool name is not the boundary.
+  const egress = await evaluateInvokeEgress({
+    orgId: orgId || employee.orgId,
+    tool,
+    toolDef,
+    body,
+  });
+  const managerId = employee.managerId ?? null;
+
   // confirm / send / order (and force flags) → always needs_approval
   // unless a matching prior approval unlocks execution.
+  // SoD force_human and action-limit still win even if the matrix would allow.
   const forceApproval =
     isForceApprovalTool(toolDef) ||
     employee.approvalPolicy === "always_human" ||
@@ -660,9 +701,9 @@ export async function runGatewayInvoke(
         amountJpy: Number.isFinite(amountJpy) ? amountJpy : null,
         message: actionLimit.decision === "needs_approval" ? actionLimit.message : spend.message,
         parentApprovalId: parentApprovalId || null,
-        metadata: { ...invokeMetadata, sodVerdict, actionLimit },
+        metadata: { ...invokeMetadata, sodVerdict, actionLimit, egress, managerId },
         summaryPrefix: sodSummary,
-        extra: { spend, actionLimit, sodVerdict, toolKind: toolDef.kind, approvalPolicy: employee.approvalPolicy },
+        extra: { spend, actionLimit, sodVerdict, egress, managerId, toolKind: toolDef.kind, approvalPolicy: employee.approvalPolicy },
       });
     }
 
@@ -685,13 +726,15 @@ export async function runGatewayInvoke(
           ? `${tool} requires human approval (always_human). allowedAccounts checked; live browser identity remains partial.`
           : `${tool} requires human approval (always_human default for confirm/send/order)`,
       parentApprovalId: parentApprovalId || null,
-      metadata: { ...invokeMetadata, sodVerdict, actionLimit },
+      metadata: { ...invokeMetadata, sodVerdict, actionLimit, egress, managerId },
       summaryPrefix: sodSummary,
       extra: {
         toolKind: toolDef.kind,
         approvalPolicy: employee.approvalPolicy,
         sodVerdict,
         actionLimit,
+        egress,
+        managerId,
         ...(browserIdentityMeta
           ? {
               browserIdentityCheck: browserIdentityMeta.browserIdentityCheck,
@@ -700,6 +743,59 @@ export async function runGatewayInvoke(
               allowedAccounts: employee.allowedAccounts ?? [],
             }
           : {}),
+      },
+    });
+  }
+
+  if (egress?.decision === "deny") {
+    await appendAuditEvent({
+      orgId: orgId || employee.orgId,
+      employeeId,
+      credentialId: input.credentialId || employee.credentialId,
+      action: "tool.invoke",
+      purpose,
+      summary: `${tool} を相手×情報区分で拒否`,
+      metadata: { tool, jobId, egress, managerId },
+    });
+    return jsonResult(
+      {
+        ok: false,
+        code: "egress_denied",
+        error: egress.reason,
+        message: egress.messageJa,
+        needs_approval: false,
+        egress,
+        managerId,
+        employeeId,
+        tool,
+        purpose,
+        jobId,
+      },
+      403
+    );
+  }
+
+  if (egress?.decision === "needs_approval" && !priorApprovalOk) {
+    return createNeedsApprovalResponse({
+      employeeId,
+      orgId: orgId || employee.orgId,
+      credentialId: input.credentialId || employee.credentialId,
+      employeeDisplayName: employee.displayName,
+      employee,
+      tool,
+      purpose,
+      jobId,
+      risk: "high",
+      message: egress.messageJa,
+      parentApprovalId: parentApprovalId || null,
+      metadata: { ...invokeMetadata, sodVerdict, actionLimit, egress, managerId },
+      extra: {
+        toolKind: toolDef.kind,
+        approvalPolicy: employee.approvalPolicy,
+        sodVerdict,
+        actionLimit,
+        egress,
+        managerId,
       },
     });
   }
@@ -755,6 +851,8 @@ export async function runGatewayInvoke(
     toolKind: toolDef.kind,
     priorApprovalId: priorApprovalId || undefined,
     meter,
+    egress: egress ?? undefined,
+    managerId: managerId || undefined,
     result:
       tool === "tools.ping"
         ? { pong: true }
@@ -770,9 +868,17 @@ export async function runGatewayInvoke(
                   ? { sent: true }
                   : tool === "commerce.order"
                     ? { ordered: true }
-                    : { accepted: true },
-    message: isConfirmClassTool(toolDef)
-      ? `invoke completed (${tool}; gated_confirm_action metered)`
-      : `invoke allowed (${tool}; propose/draft/read not billed)`,
+                    : tool === "comm.send" || tool === "comm.reply"
+                      ? {
+                          accepted: true,
+                          disclosed: egress?.decision === "summarize" ? "summary" : "source",
+                        }
+                      : { accepted: true, disclosed: egress?.decision === "summarize" ? "summary" : undefined },
+    message:
+      egress?.decision === "summarize"
+        ? egress.messageJa
+        : isConfirmClassTool(toolDef)
+          ? `invoke completed (${tool}; gated_confirm_action metered)`
+          : `invoke allowed (${tool}; propose/draft/read not billed)`,
   });
 }

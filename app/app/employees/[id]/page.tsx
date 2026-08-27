@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
 import { BindingPanel } from "@/components/employees/BindingPanel";
 import { EmployeeActionLog } from "@/components/employees/EmployeeActionLog";
+import { EmployeeManagerForm } from "@/components/employees/EmployeeManagerForm";
 import { HireEmployeeClient } from "@/components/employees/HireEmployeeClient";
 import { getCurrentOrgId } from "@/lib/auth/session";
 import {
@@ -10,6 +11,7 @@ import {
   getBinding,
   getEmployee,
   listEmployees,
+  listMembers,
 } from "@/lib/data";
 import { getEmployeeActionLog } from "@/lib/employee-actions-demo";
 import { serviceLabel } from "@/lib/employees/allowed-accounts";
@@ -30,15 +32,17 @@ export default async function EmployeeDetailPage({
 }) {
   const { id } = await params;
 
+  const orgId = await getCurrentOrgId();
+  const members = await listMembers(orgId);
+
   if (id === "new") {
     return (
       <AppShell title="AI社員を雇う" subtitle="新規発行">
-        <HireEmployeeClient />
+        <HireEmployeeClient members={members} />
       </AppShell>
     );
   }
 
-  const orgId = await getCurrentOrgId();
   const employee = await getEmployee(id, orgId);
   if (!employee) notFound();
   const concentration = buildConcentration(await listEmployees(orgId));
@@ -152,6 +156,14 @@ export default async function EmployeeDetailPage({
             </div>
           </details>
         ) : null}
+      </section>
+
+      <section className="surface p-5 space-y-3 mt-4">
+        <h2 className="text-sm font-medium">上長</h2>
+        <p className="text-xs muted leading-relaxed">
+          機密開示の承認チケットに上長IDを付けます。職務分離バッジはそのまま有効です。
+        </p>
+        <EmployeeManagerForm employee={employee} members={members} />
       </section>
 
       <section className="surface p-5 space-y-3 mt-4">

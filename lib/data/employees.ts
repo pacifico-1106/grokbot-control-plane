@@ -107,6 +107,7 @@ export type IssueEmployeeInput = {
   approvalNotifyEmail?: string | null;
   callbackUrl?: string | null;
   approvalRoutineText?: string | null;
+  managerId?: string | null;
   secretHash: string;
   secretPrefix: string;
   expiresAt: string | null;
@@ -154,6 +155,7 @@ export async function issueEmployee(
       approvalNotifyEmail: input.approvalNotifyEmail ?? null,
       callbackUrl: input.callbackUrl ?? null,
       approvalRoutineText: input.approvalRoutineText ?? null,
+      managerId: input.managerId ?? null,
       credentialId,
       createdAt: new Date().toISOString(),
     };
@@ -201,6 +203,7 @@ export async function issueEmployee(
       approval_notify_email: input.approvalNotifyEmail ?? null,
       callback_url: input.callbackUrl ?? null,
       approval_routine_text: input.approvalRoutineText ?? null,
+      manager_id: input.managerId ?? null,
     })
     .select("*")
     .single();
@@ -305,6 +308,7 @@ export async function updateEmployeePolicy(input: {
   allowedPurposes: string[];
   approvalPolicy: Employee["approvalPolicy"];
   actionLimits?: ActionLimits;
+  managerId?: string | null;
 }): Promise<Employee | null> {
   const verdict = evaluateSod(input.scopes);
   const effectivePolicy = verdict.level === "force_human" ? "always_human" : input.approvalPolicy;
@@ -318,6 +322,7 @@ export async function updateEmployeePolicy(input: {
       approvalPolicy: effectivePolicy,
       sodLevel: verdict.level,
       actionLimits,
+      managerId: input.managerId === undefined ? employee.managerId : input.managerId,
     });
     return employee;
   }
@@ -331,6 +336,7 @@ export async function updateEmployeePolicy(input: {
       approval_policy: effectivePolicy,
       sod_level: verdict.level,
       action_limits: actionLimits,
+      ...(input.managerId !== undefined ? { manager_id: input.managerId } : {}),
       updated_at: new Date().toISOString(),
     })
     .eq("id", input.employeeId)
