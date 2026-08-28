@@ -2,13 +2,29 @@
 
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import { BrowserAccountsSection } from "@/components/employees/BrowserAccountsSection";
+import { SpendForm } from "@/components/employees/SpendForm";
+import { emptyAllowedAccount, normalizeAllowedAccounts } from "@/lib/employees/allowed-accounts";
+import { PURPOSE_CHIPS } from "@/lib/employees/known-purposes";
 import {
   APPROVAL_POLICY_LABELS,
   SCOPE_LABELS,
 } from "@/lib/employees/policy-draft";
 import { parsePurposes } from "@/lib/employees/purposes";
 import { evaluateSod } from "@/lib/employees/sod";
-import type { ApprovalPolicy, Employee, EmployeeScope } from "@/lib/types";
+import { DEFAULT_SPEND_LIMITS } from "@/lib/spend-gate";
+import type {
+  ActionLimits,
+  AllowedAccount,
+  ApprovalPolicy,
+  Employee,
+  EmployeeScope,
+  SpendLimits,
+} from "@/lib/types";
+
+function emptySpend(): SpendLimits {
+  return { ...DEFAULT_SPEND_LIMITS };
+}
 
 export function EmployeePolicyForm({
   employee,
@@ -19,11 +35,21 @@ export function EmployeePolicyForm({
 }) {
   const router = useRouter();
   const [scopes, setScopes] = useState<EmployeeScope[]>(employee.scopes ?? []);
-  const [purposes, setPurposes] = useState(
-    (employee.allowedPurposes ?? []).join(", ")
-  );
+  const [purposeList, setPurposeList] = useState<string[]>(employee.allowedPurposes ?? []);
   const [approvalPolicy, setApprovalPolicy] = useState<ApprovalPolicy>(
     employee.approvalPolicy
+  );
+  const [actionLimits, setActionLimits] = useState<ActionLimits>(employee.actionLimits ?? {});
+  const [spend, setSpend] = useState<SpendLimits | null>(
+    (employee.scopes ?? []).includes("commerce:order")
+      ? { ...DEFAULT_SPEND_LIMITS, ...(employee.spend ?? {}) }
+      : null
+  );
+  const [browserAllowed, setBrowserAllowed] = useState(
+    (employee.scopes ?? []).includes("browser:use")
+  );
+  const [allowedAccounts, setAllowedAccounts] = useState<AllowedAccount[]>(
+    (employee.allowedAccounts ?? []).map((row) => ({ ...row }))
   );
   const [sodAck, setSodAck] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -33,13 +59,71 @@ export function EmployeePolicyForm({
   const forceHuman = liveSod.level === "force_human";
   const ackNeeded = forceHuman && approvalPolicy !== "always_human";
   const locked = busy || disabled;
-  const canSave = scopes.length > 0 && !locked && !(ackNeeded && !sodAck);
+  const hasOrderScope = scopes.includes("commerce:order");
+  const normalizedAccounts = normalizeAllowedAccounts(allowedAccounts);
+  const browserNeedsAccounts =
+    scopes.includes("browser:use") && normalizedAccounts.length === 0;
+  const canSave =
+    scopes.length > 0 && !locked && !(ackNeeded && !sodAck) && !browserNeedsAccounts;
 
   function toggleScope(scope: EmployeeScope) {
     if (locked) return;
-    setScopes((cur) =>
-      cur.includes(scope) ? cur.filter((s) => s !== scope) : [...cur, scope]
+    const next = scopes.includes(scope)
+      ? scopes.filter((s) => s !== scope)
+      : [...scopes, scope];
+    setScopes(next);
+    const orderOn = next.includes("commerce:order");
+    const browserOn = next.includes("browser:use");
+    setBrowserAllowed(browserOn);
+    if (orderOn) {
+      setSpend((current) => current ?? emptySpend());
+    } else {
+      setSpend(null);
+    }
+    if (browserOn) {
+      setAllowedAccounts((rows) =>
+        rows.length === 0 ? [emptyAllowedAccount("google")] : rows
+      );
+    }
+  }
+
+  function togglePurpose(purpose: string) {
+    if (locked) return;
+    setPurposeList((cur) =>
+      cur.includes(purpose) ? cur.filter((p) => p !== purpose) : [...cur, purpose]
     );
+  }
+
+  function patchSpend(partial: Partial<SpendLimits>) {
+    setSpend((current) => ({ ...(current ?? emptySpend()), ...partial }));
+  }
+
+  function patchActionLimit(tool: string, field: "perDay" | "perMonth", raw: string) {
+    setActionLimits((current) => {
+      const prev = current[tool] ?? {};
+      const next = { ...prev };
+      if (raw === "") {
+        delete next[field];
+      } else {
+        const n = Number(raw);
+        if (Number.isFinite(n) && n > 0) next[field] = Math.floor(n);
+        else delete next[field];
+      }
+      return { ...current, [tool]: next };
+    });
+  }
+
+  function applyBrowserAllowed(on: boolean) {
+    setBrowserAllowed(on);
+    setScopes((cur) => {
+      const next = new Set(cur);
+      if (on) next.add("browser:use");
+      else next.delete("browser:use");
+      return [...next];
+    });
+    if (on && allowedAccounts.length === 0) {
+      setAllowedAccounts([emptyAllowedAccount("google")]);
+    }
   }
 
   async function save() {
@@ -52,10 +136,12 @@ export function EmployeePolicyForm({
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           scopes,
-          allowedPurposes: parsePurposes(purposes),
+          allowedPurposes: purposeList,
           approvalPolicy,
           sodOverrideAcknowledged: ackNeeded ? true : false,
-          actionLimits: employee.actionLimits,
+          actionLimits,
+          spend: hasOrderScope ? spend : null,
+          allowedAccounts: normalizedAccounts,
           managerId: employee.managerId ?? null,
           voice: employee.voice,
           projectAccess: employee.projectAccess,
@@ -66,16 +152,37 @@ export function EmployeePolicyForm({
         if (body.error === "sod_ack_required") {
           throw new Error("警告を確認してから保存してください");
         }
+        if (body.error === "allowed_accounts_required") {
+          throw new Error("ブラウザ利用には許可アカウントが必要です");
+        }
         throw new Error(body.error || "保存に失敗しました");
       }
       if (Array.isArray(body.employee?.scopes)) {
-        setScopes(body.employee.scopes as EmployeeScope[]);
+        const nextScopes = body.employee.scopes as EmployeeScope[];
+        setScopes(nextScopes);
+        setBrowserAllowed(nextScopes.includes("browser:use"));
       }
       if (Array.isArray(body.employee?.allowedPurposes)) {
-        setPurposes(body.employee.allowedPurposes.join(", "));
+        setPurposeList(body.employee.allowedPurposes as string[]);
       }
       if (typeof body.employee?.approvalPolicy === "string") {
         setApprovalPolicy(body.employee.approvalPolicy as ApprovalPolicy);
+      }
+      if (body.employee?.actionLimits && typeof body.employee.actionLimits === "object") {
+        setActionLimits(body.employee.actionLimits as ActionLimits);
+      }
+      if (body.employee && "spend" in body.employee) {
+        const nextSpend = body.employee.spend as SpendLimits | null;
+        setSpend(
+          (body.employee.scopes as EmployeeScope[] | undefined)?.includes("commerce:order")
+            ? { ...DEFAULT_SPEND_LIMITS, ...(nextSpend ?? {}) }
+            : null
+        );
+      }
+      if (Array.isArray(body.employee?.allowedAccounts)) {
+        setAllowedAccounts(
+          (body.employee.allowedAccounts as AllowedAccount[]).map((row) => ({ ...row }))
+        );
       }
       setSodAck(false);
       setMessage("権限を保存しました");
@@ -86,6 +193,8 @@ export function EmployeePolicyForm({
       setBusy(false);
     }
   }
+
+  const actionLimitKeys = Object.keys(actionLimits);
 
   return (
     <div className="space-y-3">
@@ -112,16 +221,109 @@ export function EmployeePolicyForm({
         ) : null}
       </div>
 
-      <label className="block text-sm">
-        <span className="muted">許可目的（カンマ区切り）</span>
-        <input
-          value={purposes}
-          onChange={(e) => setPurposes(e.target.value)}
-          placeholder="ops.admin, sales.outreach, calendar.propose, comm.internal"
-          className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm"
-          disabled={locked}
-        />
-      </label>
+      <div>
+        <div className="text-sm muted mb-2">許可目的</div>
+        <div className="flex flex-wrap gap-2">
+          {PURPOSE_CHIPS.map((purpose) => {
+            const on = purposeList.includes(purpose);
+            return (
+              <button
+                key={purpose}
+                type="button"
+                onClick={() => togglePurpose(purpose)}
+                disabled={locked}
+                className={`chip ${on ? "chip-ok" : ""}`}
+              >
+                {purpose}
+              </button>
+            );
+          })}
+        </div>
+        <label className="block text-sm mt-2">
+          <span className="muted">追加の目的（カンマ区切り）</span>
+          <input
+            value={purposeList.join(", ")}
+            onChange={(e) => setPurposeList(parsePurposes(e.target.value))}
+            placeholder="ops.admin, sales.outreach, calendar.propose, comm.internal"
+            className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm"
+            disabled={locked}
+          />
+        </label>
+      </div>
+
+      <details className="rounded-xl border border-[var(--border-soft)] bg-[var(--bg-soft)] px-4 py-3">
+        <summary className="cursor-pointer text-xs font-medium">行為上限</summary>
+        {actionLimitKeys.length === 0 ? (
+          <p className="mt-3 text-xs muted">未設定</p>
+        ) : (
+          <div className="mt-3 grid sm:grid-cols-2 gap-2">
+            {actionLimitKeys.map((tool) => {
+              const limit = actionLimits[tool] ?? {};
+              return (
+                <div
+                  key={tool}
+                  className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-xs space-y-2"
+                >
+                  <span className="font-mono">{tool}</span>
+                  <div className="grid grid-cols-2 gap-2">
+                    <label className="block">
+                      <span className="muted">1日</span>
+                      <input
+                        type="number"
+                        min={0}
+                        placeholder="未設定"
+                        value={limit.perDay ?? ""}
+                        onChange={(e) => patchActionLimit(tool, "perDay", e.target.value)}
+                        className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-2 py-1.5 text-xs"
+                        disabled={locked}
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="muted">月</span>
+                      <input
+                        type="number"
+                        min={0}
+                        placeholder="未設定"
+                        value={limit.perMonth ?? ""}
+                        onChange={(e) => patchActionLimit(tool, "perMonth", e.target.value)}
+                        className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-2 py-1.5 text-xs"
+                        disabled={locked}
+                      />
+                    </label>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+        <p className="mt-2 text-[11px] faint">到達後は承認が必要になり、2倍で安全停止します。</p>
+      </details>
+
+      {hasOrderScope && spend ? (
+        <div className="rounded-lg border border-[var(--border-soft)] p-4">
+          <h3 className="text-sm font-medium mb-3">予算・承認（発注）</h3>
+          <SpendForm
+            approvalPolicy={approvalPolicy}
+            setApprovalPolicy={setApprovalPolicy}
+            spend={spend}
+            patchSpend={patchSpend}
+            disabled={locked}
+          />
+        </div>
+      ) : null}
+
+      <BrowserAccountsSection
+        browserAllowed={browserAllowed}
+        setBrowserAllowed={applyBrowserAllowed}
+        allowedAccounts={allowedAccounts}
+        setAllowedAccounts={setAllowedAccounts}
+        disabled={locked}
+      />
+      {browserNeedsAccounts ? (
+        <p className="text-xs text-[var(--warn)]">
+          ブラウザ利用にはアカウントIDの登録が必要です
+        </p>
+      ) : null}
 
       {forceHuman ? (
         <div

@@ -29,9 +29,44 @@ describe("parsePurposes", () => {
     ]);
   });
 
+  test("splits on whitespace and slash", () => {
+    expect(parsePurposes("ops.admin calendar.propose comm.internal")).toEqual([
+      "ops.admin",
+      "calendar.propose",
+      "comm.internal",
+    ]);
+    expect(parsePurposes("ops.admin / calendar.propose / comm.internal")).toEqual([
+      "ops.admin",
+      "calendar.propose",
+      "comm.internal",
+    ]);
+    expect(parsePurposes("ops.admin/calendar.propose")).toEqual([
+      "ops.admin",
+      "calendar.propose",
+    ]);
+  });
+
+  test("drops scope tokens that contain a colon", () => {
+    expect(parsePurposes("ops.admin, mail:send, calendar.propose")).toEqual([
+      "ops.admin",
+      "calendar.propose",
+    ]);
+    expect(parsePurposes("browser:use commerce:order comm.internal")).toEqual([
+      "comm.internal",
+    ]);
+  });
+
+  test("dedupes while keeping first-seen order", () => {
+    expect(parsePurposes("ops.admin, calendar.propose, ops.admin")).toEqual([
+      "ops.admin",
+      "calendar.propose",
+    ]);
+  });
+
   test("empty or whitespace-only input is empty list", () => {
     expect(parsePurposes("")).toEqual([]);
     expect(parsePurposes("   ")).toEqual([]);
     expect(parsePurposes(",、\n")).toEqual([]);
+    expect(parsePurposes("/  ,")).toEqual([]);
   });
 });

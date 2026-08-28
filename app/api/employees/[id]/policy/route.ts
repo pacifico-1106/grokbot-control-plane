@@ -3,13 +3,15 @@ import { getCurrentOrgId } from "@/lib/auth/session";
 import { appendAuditEvent, getEmployee, updateEmployeePolicy } from "@/lib/data";
 import { normalizeActionLimits } from "@/lib/action-gate";
 import { requireCapability } from "@/lib/team/demo-actor";
+import { normalizeAllowedAccounts } from "@/lib/employees/allowed-accounts";
 import { ALL_SCOPES } from "@/lib/employees/policy-draft";
 import { evaluateSod } from "@/lib/employees/sod";
 import { sodAckRequired } from "@/lib/employees/sod-override";
 import { normalizeVoice } from "@/lib/employees/voice";
 import { normalizeProjectAccess } from "@/lib/employees/project-access";
 import { normalizeEmployeeIdentityField } from "@/lib/employees/identity";
-import type { ApprovalPolicy, EmployeeScope } from "@/lib/types";
+import { normalizeSpendLimits } from "@/lib/spend-gate";
+import type { AllowedAccount, ApprovalPolicy, EmployeeScope, SpendLimits } from "@/lib/types";
 
 export const runtime = "nodejs";
 
@@ -49,6 +51,24 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
     roleLabel = normalizeEmployeeIdentityField(body.roleLabel);
     if (!roleLabel) return NextResponse.json({ error: "invalid_identity" }, { status: 400 });
   }
+  const allowedAccounts = body.allowedAccounts !== undefined
+    ? normalizeAllowedAccounts(
+        Array.isArray(body.allowedAccounts) ? (body.allowedAccounts as AllowedAccount[]) : []
+      )
+    : undefined;
+  if (scopes.includes("browser:use")) {
+    const accountsForGate = allowedAccounts ?? normalizeAllowedAccounts(existing.allowedAccounts);
+    if (accountsForGate.length === 0) {
+      return NextResponse.json({ error: "allowed_accounts_required" }, { status: 400 });
+    }
+  }
+  let spend: SpendLimits | null | undefined = undefined;
+  if (body.spend === null) {
+    spend = null;
+  } else if (body.spend !== undefined) {
+    spend = normalizeSpendLimits(body.spend as Partial<SpendLimits>);
+  }
+
   const updated = await updateEmployeePolicy({
     orgId,
     employeeId: id,
@@ -57,6 +77,8 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
     approvalPolicy,
     sodOverrideAcknowledged,
     actionLimits: normalizeActionLimits(body.actionLimits),
+    ...(allowedAccounts !== undefined ? { allowedAccounts } : {}),
+    ...(spend !== undefined ? { spend } : {}),
     managerId: body.managerId === undefined ? undefined : (body.managerId ? String(body.managerId) : null),
     voice: body.voice === undefined ? undefined : normalizeVoice(body.voice),
     projectAccess:

@@ -20,7 +20,6 @@ import {
   listOrgProjects,
 } from "@/lib/data";
 import { getEmployeeActionLog } from "@/lib/employee-actions-demo";
-import { serviceLabel } from "@/lib/employees/allowed-accounts";
 import { APPROVAL_POLICY_LABELS } from "@/lib/employees/policy-draft";
 import { buildConcentration } from "@/lib/employees/concentration";
 import { DOMAIN_LABELS } from "@/lib/gateway/domains";
@@ -231,55 +230,6 @@ export default async function EmployeeDetailPage({
         </p>
       </section>
 
-
-      <section className="surface p-5 space-y-3 mt-4">
-        <h2 className="text-sm font-medium">ブラウザ・外部アカウント</h2>
-        <p className="text-xs muted leading-relaxed">
-          共有PCではログインが混ざる可能性があるため、社員証に刻んだ許可IDのみ使う想定です。不一致時は要確認／停止。
-        </p>
-        <dl className="text-sm space-y-2">
-          <div>
-            <dt className="text-xs muted">ブラウザ利用</dt>
-            <dd className="mt-1">
-              {employee.scopes.includes("browser:use") ? (
-                <span className="chip chip-ok text-[11px]">許可</span>
-              ) : (
-                <span className="chip text-[11px]">未許可</span>
-              )}
-            </dd>
-          </div>
-        </dl>
-        {(employee.allowedAccounts ?? []).length > 0 ? (
-          <ul className="space-y-2">
-            {(employee.allowedAccounts ?? []).map((a, i) => (
-              <li
-                key={`${a.service}-${a.accountId}-${i}`}
-                className="rounded-lg border border-[var(--border-soft)] bg-[var(--bg-soft)] px-3 py-2 text-sm"
-              >
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="chip chip-ok text-[11px]">
-                    {serviceLabel(a.service)}
-                  </span>
-                  {a.browserRequired ? (
-                    <span className="chip text-[11px]">ブラウザ一致重視</span>
-                  ) : null}
-                </div>
-                <p className="mt-1 font-mono text-xs break-all">{a.accountId}</p>
-                {a.label ? (
-                  <p className="mt-1 text-xs muted">{a.label}</p>
-                ) : null}
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <p className="text-sm muted">
-            許可アカウントが未登録です。ブラウザを使う場合は、権限の更新で使えるIDを登録してください。
-          </p>
-        )}
-        <p className="text-xs faint leading-relaxed">
-          実行中のログイン確認は、すべてを自動では見切れない場合があります。方針・監査・当社サポートの目視と合わせて運用してください。
-        </p>
-      </section>
 
       <BindingPanel employeeId={employee.id} initial={binding} />
 

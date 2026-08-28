@@ -322,6 +322,8 @@ export async function updateEmployeePolicy(input: {
   approvalPolicy: Employee["approvalPolicy"];
   sodOverrideAcknowledged?: boolean;
   actionLimits?: ActionLimits;
+  allowedAccounts?: Employee["allowedAccounts"];
+  spend?: Employee["spend"];
   managerId?: string | null;
   voice?: Employee["voice"];
   projectAccess?: EmployeeProjectAccess;
@@ -355,6 +357,8 @@ export async function updateEmployeePolicy(input: {
           : normalizeProjectAccess(input.projectAccess),
       ...(input.displayName !== undefined ? { displayName: input.displayName.trim() } : {}),
       ...(input.roleLabel !== undefined ? { roleLabel: input.roleLabel.trim() } : {}),
+      ...(input.allowedAccounts !== undefined ? { allowedAccounts: input.allowedAccounts } : {}),
+      ...(input.spend !== undefined ? { spend: input.spend } : {}),
     });
     return employee;
   }
@@ -375,6 +379,8 @@ export async function updateEmployeePolicy(input: {
         : {}),
       ...(input.displayName !== undefined ? { display_name: input.displayName.trim() } : {}),
       ...(input.roleLabel !== undefined ? { role_label: input.roleLabel.trim() } : {}),
+      ...(input.allowedAccounts !== undefined ? { allowed_accounts: input.allowedAccounts } : {}),
+      ...(input.spend !== undefined ? { spend: input.spend } : {}),
       updated_at: new Date().toISOString(),
     })
     .eq("id", input.employeeId)
@@ -389,6 +395,8 @@ export async function updateEmployeePolicy(input: {
       allowed_purposes: input.allowedPurposes,
       approval_policy: effectivePolicy,
       action_limits: actionLimits,
+      ...(input.allowedAccounts !== undefined ? { allowed_accounts: input.allowedAccounts } : {}),
+      ...(input.spend !== undefined ? { spend: input.spend } : {}),
     })
     .eq("employee_id", input.employeeId)
     .eq("org_id", input.orgId)
