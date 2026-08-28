@@ -1,3 +1,4 @@
+import { getAppOrigin } from "@/lib/approvals/tokens";
 import {
   getApprovalById,
   updateApprovalTelegramState,
@@ -319,6 +320,27 @@ export async function registerTelegramWebhook(
   return result.ok ? { ok: true } : { ok: false, error: result.error };
 }
 
+/**
+ * グローバル fallback bot（TELEGRAM_BOT_TOKEN）に callback_query 用 webhook を張る。
+ * token / secret が無いときは throw せず skip。
+ */
+export async function ensureGlobalTelegramWebhook(): Promise<TelegramResult> {
+  const token = process.env.TELEGRAM_BOT_TOKEN?.trim() || "";
+  const secret = process.env.TELEGRAM_WEBHOOK_SECRET?.trim() || "";
+  if (!token || !secret) return { ok: false, skipped: true };
+  const url = `${getAppOrigin()}/api/webhooks/telegram`;
+  const result = await callTelegram("setWebhook", {
+    url,
+    secret_token: secret,
+    allowed_updates: ["message", "callback_query"],
+  });
+  if (!result.ok) {
+    console.error("telegram_global_setWebhook_failed", result.error);
+    return { ok: false, error: result.error };
+  }
+  return { ok: true };
+}
+
 export async function sendApprovalToTelegram(
   approval: ApprovalRequest,
   employee: Employee | null
@@ -331,6 +353,9 @@ export async function sendApprovalToTelegram(
   if (!approval.telegramRef) {
     return { ok: false, error: "telegram_ref_missing" };
   }
+
+  // 初回の live notify でも callback が届くよう、送信前にグローバル webhook を武装する
+  await ensureGlobalTelegramWebhook();
 
   const parent = approval.parentApprovalId
     ? await getApprovalById(approval.parentApprovalId, approval.orgId)

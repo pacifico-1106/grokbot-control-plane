@@ -223,6 +223,9 @@ async function handleReply(update: TelegramUpdate): Promise<void> {
 export async function POST(req: Request) {
   const secret = process.env.TELEGRAM_WEBHOOK_SECRET?.trim() || "";
   if (!secret) {
+    console.error(
+      "telegram_webhook_secret_missing: TELEGRAM_WEBHOOK_SECRET is empty; callback_query cannot be accepted (buttons stay dead)"
+    );
     return NextResponse.json(
       { ok: false, error: "telegram_webhook_not_configured" },
       { status: 503 }

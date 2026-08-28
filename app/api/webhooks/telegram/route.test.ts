@@ -74,6 +74,12 @@ describe("Telegram webhook", () => {
     expect(response.status).toBe(401);
   });
 
+  test("returns 503 when TELEGRAM_WEBHOOK_SECRET is empty", async () => {
+    delete process.env.TELEGRAM_WEBHOOK_SECRET;
+    const response = await webhook({});
+    expect(response.status).toBe(503);
+  });
+
   test("ignores a different chat with HTTP 200", async () => {
     const response = await webhook({
       message: { message_id: 1, chat: { id: -999 }, from: { id: 307 } },
@@ -87,6 +93,12 @@ describe("Telegram webhook", () => {
       ["r", "rejected"],
     ] as const) {
       const approval = await notifiedApproval(`job_${expected}_${Date.now()}`);
+      const methods: string[] = [];
+      const inner = globalThis.fetch;
+      globalThis.fetch = (async (input, init) => {
+        methods.push(String(input).split("/").pop() || "");
+        return inner(input as RequestInfo, init);
+      }) as typeof fetch;
       const response = await webhook({
         callback_query: {
           id: `callback_${action}`,
@@ -99,6 +111,7 @@ describe("Telegram webhook", () => {
         },
       });
       expect(response.status).toBe(200);
+      expect(methods).toContain("answerCallbackQuery");
       expect((await getApprovalById(approval.id, DEMO_ORG.id))?.status).toBe(
         expected
       );

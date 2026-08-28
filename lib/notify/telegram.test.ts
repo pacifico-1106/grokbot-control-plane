@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { getAppOrigin } from "../approvals/tokens";
 import {
   buildApprovalTelegramMessage,
+  ensureGlobalTelegramWebhook,
   sendApprovalToTelegram,
 } from "./telegram";
 import type { ApprovalRequest } from "../types";
@@ -34,6 +36,8 @@ const originalFetch = globalThis.fetch;
 const originalEnv = {
   token: process.env.TELEGRAM_BOT_TOKEN,
   chat: process.env.TELEGRAM_APPROVAL_CHAT_ID,
+  secret: process.env.TELEGRAM_WEBHOOK_SECRET,
+  origin: process.env.NEXT_PUBLIC_APP_URL,
 };
 
 afterEach(() => {
@@ -42,6 +46,10 @@ afterEach(() => {
   else process.env.TELEGRAM_BOT_TOKEN = originalEnv.token;
   if (originalEnv.chat === undefined) delete process.env.TELEGRAM_APPROVAL_CHAT_ID;
   else process.env.TELEGRAM_APPROVAL_CHAT_ID = originalEnv.chat;
+  if (originalEnv.secret === undefined) delete process.env.TELEGRAM_WEBHOOK_SECRET;
+  else process.env.TELEGRAM_WEBHOOK_SECRET = originalEnv.secret;
+  if (originalEnv.origin === undefined) delete process.env.NEXT_PUBLIC_APP_URL;
+  else process.env.NEXT_PUBLIC_APP_URL = originalEnv.origin;
 });
 
 describe("Telegram approval notification", () => {
@@ -87,5 +95,36 @@ describe("Telegram approval notification", () => {
     for (const button of keyboard.inline_keyboard.flat()) {
       expect(Buffer.byteLength(button.callback_data, "utf8")).toBeLessThanOrEqual(64);
     }
+  });
+
+  test("skips global webhook registration when token or secret is missing", async () => {
+    delete process.env.TELEGRAM_BOT_TOKEN;
+    delete process.env.TELEGRAM_WEBHOOK_SECRET;
+    expect(await ensureGlobalTelegramWebhook()).toEqual({ ok: false, skipped: true });
+  });
+
+  test("sendApprovalToTelegram registers the global webhook before sendMessage", async () => {
+    process.env.TELEGRAM_BOT_TOKEN = "test-token";
+    process.env.TELEGRAM_APPROVAL_CHAT_ID = "-100123";
+    process.env.TELEGRAM_WEBHOOK_SECRET = "hook-secret";
+    process.env.NEXT_PUBLIC_APP_URL = "https://staffpass.example";
+    const calls: Array<{ method: string; body: Record<string, unknown> }> = [];
+    globalThis.fetch = (async (input, init) => {
+      const url = String(input);
+      const method = url.split("/").pop() || "";
+      calls.push({ method, body: JSON.parse(String(init?.body || "{}")) });
+      return Response.json({ ok: true, result: { message_id: 123 } });
+    }) as typeof fetch;
+
+    await sendApprovalToTelegram(approval, null);
+    const setWebhookIndex = calls.findIndex((call) => call.method === "setWebhook");
+    const sendMessageIndex = calls.findIndex((call) => call.method === "sendMessage");
+    expect(setWebhookIndex >= 0).toBe(true);
+    expect(sendMessageIndex > setWebhookIndex).toBe(true);
+    expect(calls[setWebhookIndex].body).toEqual({
+      url: `${getAppOrigin()}/api/webhooks/telegram`,
+      secret_token: "hook-secret",
+      allowed_updates: ["message", "callback_query"],
+    });
   });
 });

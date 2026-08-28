@@ -7,7 +7,7 @@ import {
   upsertNotificationChannel,
 } from "@/lib/data";
 import { getAppOrigin } from "@/lib/approvals/tokens";
-import { registerTelegramWebhook } from "@/lib/notify/telegram";
+import { ensureGlobalTelegramWebhook, registerTelegramWebhook } from "@/lib/notify/telegram";
 import { requireOrgAdminSession } from "@/lib/auth/require-org";
 import type { NotificationProvider } from "@/lib/types";
 
@@ -79,6 +79,8 @@ export async function PUT(req: Request) {
         ? await registerTelegramWebhook(runtime, `${getAppOrigin()}${saved.webhookPath}`)
         : { ok: false, error: "channel_runtime_unavailable" };
     }
+    // 既存の通知設定保存パス。グローバル fallback bot も同じ origin に webhook を張る。
+    await ensureGlobalTelegramWebhook();
     await appendAuditEvent({
       orgId: gate.orgId,
       employeeId: null,

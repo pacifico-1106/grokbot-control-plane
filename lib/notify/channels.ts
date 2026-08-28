@@ -16,6 +16,7 @@ import type { ApprovalRequest, Employee } from "@/lib/types";
  */
 import {
   editTelegramApprovalForChannel,
+  ensureGlobalTelegramWebhook,
   escapeTelegramHtml,
   sendApprovalToTelegram,
   sendApprovalToTelegramChannel,
@@ -134,6 +135,8 @@ function digestText(
 }
 
 export async function sendTenantDigests(): Promise<NotificationDispatchResult[]> {
+  // 既存の Telegram 運用パス。グローバル bot の webhook を安価に張り直す。
+  await ensureGlobalTelegramWebhook();
   const channels = await listAllEnabledNotificationChannels();
   const results: NotificationDispatchResult[] = [];
   const byOrg = new Map<string, Awaited<ReturnType<typeof listApprovals>>>();
