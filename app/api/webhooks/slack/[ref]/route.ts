@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { fulfillIfApproved } from "@/lib/approvals/fulfill";
 import { runApprovalResolveSideEffects } from "@/lib/approvals/resolve-side-effects";
 import {
   getApprovalByTelegramRef,
@@ -133,6 +134,7 @@ async function handleBlockActions(
   const decision = action.action_id === "staffpass_approve" ? "approved" : "rejected";
   const updated = await resolveApproval(approval.id, decision, actor, channel.orgId);
   if (updated) {
+    await fulfillIfApproved(updated, decision);
     const employee = await getEmployee(updated.employeeId, channel.orgId);
     await runApprovalResolveSideEffects({
       approval: updated,

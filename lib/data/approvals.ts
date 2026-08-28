@@ -463,6 +463,29 @@ export async function updateApprovalTelegramState(
     : mapApprovalRow(data as Record<string, unknown>);
 }
 
+export async function updateApprovalMetadata(
+  approval: ApprovalRequest,
+  patch: Record<string, unknown>
+): Promise<ApprovalRequest | null> {
+  if (!approval?.id) return null;
+  const metadata = { ...approval.metadata, ...patch };
+  if (isDemoMode()) {
+    return demoUpdateApproval(approval.id, { metadata });
+  }
+  const admin = createSupabaseAdminClient();
+  if (!admin) return null;
+  const { data, error } = await admin
+    .from("approval_requests")
+    .update({ metadata })
+    .eq("id", approval.id)
+    .eq("org_id", approval.orgId)
+    .select("*")
+    .maybeSingle();
+  return error || !data
+    ? null
+    : mapApprovalRow(data as Record<string, unknown>);
+}
+
 export async function listApprovalsForTelegramDigest(): Promise<ApprovalRequest[]> {
   if (isDemoMode()) return demoListApprovals();
   const admin = createSupabaseAdminClient();

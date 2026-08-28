@@ -43,6 +43,11 @@ import {
   looksLikeSlackTs,
   postConversationMessage,
 } from "@/lib/gateway/adapters/slack";
+import {
+  buildInvokeSnapshot,
+  conversationDeliveryFromFulfillment,
+  type ConversationDelivery,
+} from "@/lib/approvals/fulfill";
 import { evaluateAllowedAccountsForBrowser } from "@/lib/employees/allowed-accounts";
 import { evaluateSpend } from "@/lib/spend-gate";
 import { evaluateActionLimit } from "@/lib/action-gate";
@@ -178,6 +183,18 @@ async function createNeedsApprovalResponse(opts: {
       metadata: {
         ...(opts.metadata ?? {}),
         artifact,
+        invoke: buildInvokeSnapshot({
+          tool: opts.tool,
+          purpose: opts.purpose,
+          jobId: opts.jobId,
+          employeeId: opts.employeeId,
+          orgId: opts.orgId,
+          employee: opts.employee,
+          body: opts.body,
+          conversation,
+          informationClass: opts.egress?.informationClass,
+          fidelity: opts.egress?.fidelity,
+        }),
       },
     });
     createdApproval = created.approval;
@@ -596,8 +613,10 @@ export async function runGatewayInvoke(
   // Approval button click alone is NOT billed — only Gateway success is.
   const priorApprovalId = (body.approvalId || "").trim();
   let priorApprovalOk = false;
+  let priorApproval: Awaited<ReturnType<typeof getApprovalById>> = null;
   if (priorApprovalId) {
     const prior = await getApprovalById(priorApprovalId, orgId || employee.orgId);
+    priorApproval = prior;
     priorApprovalOk = Boolean(
       prior &&
         prior.status === "approved" &&
@@ -940,9 +959,7 @@ export async function runGatewayInvoke(
   // Conversation posting (Slack) after egress allow|summarize, or after human
   // approval of a needs_approval egress. Deny stays fail-closed above.
   // Notify inbox is a different plane — never post approvals through this adapter.
-  let conversationDelivery:
-    | { ok: true; delivery: "stub" | "slack"; channel?: string; ts?: string }
-    | undefined;
+  let conversationDelivery: ConversationDelivery | undefined;
   if (isAudienceGatedTool(toolDef)) {
     const ctx = parseConversationContext(body, orgId || employee.orgId);
     const dest = ctx?.slackChannelId || ctx?.slackUserId || "";
@@ -951,6 +968,10 @@ export async function runGatewayInvoke(
       egress?.decision === "summarize" ||
       (priorApprovalOk && egress?.decision === "needs_approval");
     if (dest && egressAllowsPost) {
+      const already = conversationDeliveryFromFulfillment(priorApproval);
+      if (already) {
+        conversationDelivery = already;
+      } else {
       const args =
         body.args && typeof body.args === "object"
           ? (body.args as Record<string, unknown>)
@@ -1009,6 +1030,7 @@ export async function runGatewayInvoke(
         );
       }
       conversationDelivery = posted;
+      }
     }
   }
 

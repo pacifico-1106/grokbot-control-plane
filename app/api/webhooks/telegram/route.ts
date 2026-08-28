@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { fulfillIfApproved } from "@/lib/approvals/fulfill";
 import { runApprovalResolveSideEffects } from "@/lib/approvals/resolve-side-effects";
 import {
   appendAuditEvent,
@@ -153,6 +154,7 @@ async function handleCallback(update: TelegramUpdate): Promise<void> {
       await answer("対象はすでに処理済みです");
       return;
     }
+    await fulfillIfApproved(updated, decision);
     const employee = await getEmployee(updated.employeeId, updated.orgId);
     await runApprovalResolveSideEffects({
       approval: updated,

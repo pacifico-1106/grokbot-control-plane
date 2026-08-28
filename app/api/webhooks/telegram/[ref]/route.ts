@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { fulfillIfApproved } from "@/lib/approvals/fulfill";
 import { runApprovalResolveSideEffects } from "@/lib/approvals/resolve-side-effects";
 import {
   getApprovalById,
@@ -69,6 +70,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ ref: string }>
     const actor = `telegram:${query.from!.id}`;
     const updated = await resolveApproval(approval.id, decision, actor, channel.orgId);
     if (updated) {
+      await fulfillIfApproved(updated, decision);
       const employee = await getEmployee(updated.employeeId, channel.orgId);
       await runApprovalResolveSideEffects({ approval: updated, decision, actorEmail: actor, employee });
     }

@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { fulfillApprovedInvoke } from "@/lib/approvals/fulfill";
 import { runApprovalResolveSideEffects } from "@/lib/approvals/resolve-side-effects";
 import { getCurrentOrgId } from "@/lib/auth/session";
 import {
@@ -23,6 +24,8 @@ export async function POST(
   if (!updated) {
     return NextResponse.json({ error: "not_found" }, { status: 404 });
   }
+
+  await fulfillApprovedInvoke(updated);
 
   const employee = await getEmployee(updated.employeeId, orgId || updated.orgId);
   const sideEffects = await runApprovalResolveSideEffects({

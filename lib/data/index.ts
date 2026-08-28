@@ -25,6 +25,7 @@ export {
   getApprovalByTelegramRef,
   getApprovalByTelegramMessageId,
   updateApprovalTelegramState,
+  updateApprovalMetadata,
   listApprovalsForTelegramDigest,
   isDurableDemoApprovalsStore,
   getDemoApprovalsBackend,
