@@ -7,6 +7,7 @@ import {
   getApprovalStatusByToken,
   getBinding,
   getEmployeeById,
+  listOrgProjects,
   runtimeModeLabel,
 } from "@/lib/data";
 import { runGatewayInvoke } from "@/lib/gateway/invoke";
@@ -37,7 +38,7 @@ export const STAFFPASS_MCP_TOOLS: McpToolDef[] = [
   {
     name: "staffpass_whoami",
     description:
-      "Return the authenticated AI employee badge identity: employeeId, displayName, orgId, binding status, credential generation, scopes, allowedPurposes, and voice (character/register). External destinations cannot drop below the polite floor — whoami returns the badge voice; Gateway applies externalFloor when the destination is external. Use before invoking tools. Fail-closed if unbound or needs_reauth. Do not self-declare a persona.",
+      "Return the authenticated AI employee badge identity: employeeId, displayName, orgId, binding status, credential generation, scopes, allowedPurposes, voice, and projectAccess (knowledge wall: company | selected | all). External destinations cannot drop below the polite floor. Out-of-project knowledge is denied even internally. Use before invoking tools. Fail-closed if unbound or needs_reauth. Do not self-declare a persona.",
     inputSchema: {
       type: "object",
       properties: {},
@@ -174,12 +175,16 @@ export async function callStaffpassMcpTool(
           true
         );
       }
+      const orgId = cred.orgId || employee.orgId;
+      const projects = await listOrgProjects(orgId);
       return toolResult(
         buildStaffpassWhoamiPayload({
           employee,
-          orgId: cred.orgId || employee.orgId,
+          orgId,
           binding,
           generation: cred.generation,
+          projects,
+          defaultProjectId: projects.find((item) => item.isDefault)?.id,
         })
       );
     }

@@ -1,3 +1,4 @@
+import { normalizeProjectAccess } from "../employees/project-access";
 import { normalizeVoice } from "../employees/voice";
 import type {
   AllowedAccount,
@@ -49,6 +50,7 @@ export function mapEmployeeRow(row: Record<string, unknown>): Employee {
         : null,
     managerId: row.manager_id != null ? String(row.manager_id) : null,
     voice: normalizeVoice(row.voice),
+    projectAccess: normalizeProjectAccess(row.project_access ?? row.projectAccess),
     credentialId: row.credential_id != null ? String(row.credential_id) : null,
     createdAt: String(row.created_at ?? new Date().toISOString()),
   };

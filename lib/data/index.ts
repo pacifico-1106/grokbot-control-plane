@@ -102,3 +102,13 @@ export {
   getInformationAsset,
   upsertInformationAsset,
 } from "./directory";
+export {
+  listOrgProjects,
+  getOrgProject,
+  getDefaultOrgProject,
+  ensureDefaultOrgProject,
+  upsertOrgProject,
+  deleteOrgProject,
+  DEMO_COMPANY_PROJECT_ID,
+  DEMO_PROJECT_A_ID,
+} from "./projects";

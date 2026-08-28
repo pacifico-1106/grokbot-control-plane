@@ -13,6 +13,7 @@ import {
 } from "@/lib/employees/approval-loop-copy";
 import { normalizeSpendLimits } from "@/lib/spend-gate";
 import { defaultVoice, normalizeVoice } from "@/lib/employees/voice";
+import { defaultProjectAccess, normalizeProjectAccess } from "@/lib/employees/project-access";
 import { requireCapability } from "@/lib/team/demo-actor";
 import type { ActionLimits, AllowedAccount, ApprovalPolicy, EmployeeScope, SpendLimits } from "@/lib/types";
 
@@ -53,6 +54,7 @@ export async function POST(req: Request) {
     callbackUrl?: string | null;
     managerId?: string | null;
     voice?: unknown;
+    projectAccess?: unknown;
   };
 
   const displayName = (body.displayName || "").trim();
@@ -104,6 +106,10 @@ export async function POST(req: Request) {
       approvalRoutineText,
       managerId: body.managerId?.trim() || null,
       voice: body.voice == null ? defaultVoice() : normalizeVoice(body.voice),
+      projectAccess:
+        body.projectAccess == null
+          ? defaultProjectAccess()
+          : normalizeProjectAccess(body.projectAccess),
       secretHash: secret.hash,
       secretPrefix: secret.prefix,
       expiresAt,

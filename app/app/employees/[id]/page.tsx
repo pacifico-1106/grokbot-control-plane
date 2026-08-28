@@ -5,6 +5,7 @@ import { BindingPanel } from "@/components/employees/BindingPanel";
 import { EmployeeActionLog } from "@/components/employees/EmployeeActionLog";
 import { EmployeeManagerForm } from "@/components/employees/EmployeeManagerForm";
 import { EmployeeVoiceForm } from "@/components/employees/EmployeeVoiceForm";
+import { EmployeeProjectAccessForm } from "@/components/employees/EmployeeProjectAccessForm";
 import { HireEmployeeClient } from "@/components/employees/HireEmployeeClient";
 import { getCurrentOrgId } from "@/lib/auth/session";
 import {
@@ -13,6 +14,7 @@ import {
   getEmployee,
   listEmployees,
   listMembers,
+  listOrgProjects,
 } from "@/lib/data";
 import { getEmployeeActionLog } from "@/lib/employee-actions-demo";
 import { serviceLabel } from "@/lib/employees/allowed-accounts";
@@ -35,11 +37,12 @@ export default async function EmployeeDetailPage({
 
   const orgId = await getCurrentOrgId();
   const members = await listMembers(orgId);
+  const projects = await listOrgProjects(orgId);
 
   if (id === "new") {
     return (
       <AppShell title="AI社員を雇う" subtitle="新規発行">
-        <HireEmployeeClient members={members} />
+        <HireEmployeeClient members={members} projects={projects} />
       </AppShell>
     );
   }
@@ -165,6 +168,14 @@ export default async function EmployeeDetailPage({
           機密開示の承認チケットに上長IDを付けます。職務分離バッジはそのまま有効です。
         </p>
         <EmployeeManagerForm employee={employee} members={members} />
+      </section>
+
+      <section className="surface p-5 space-y-3 mt-4">
+        <h2 className="text-sm font-medium">ナレッジ範囲</h2>
+        <p className="text-xs muted leading-relaxed">
+          デフォルトは会社全般です。他案件のナレッジは社内にも出しません。指名プロジェクトはここで付与します。
+        </p>
+        <EmployeeProjectAccessForm employee={employee} projects={projects} />
       </section>
 
       <section className="surface p-5 space-y-3 mt-4">

@@ -134,6 +134,7 @@ const runtimeAssets: InformationAsset[] = [
     orgId: DEMO_ORG.id,
     ref: "kb/public-faq",
     class: "public",
+    projectId: "prj_company",
     createdAt: nowIso(),
     updatedAt: nowIso(),
   },
@@ -142,6 +143,7 @@ const runtimeAssets: InformationAsset[] = [
     orgId: DEMO_ORG.id,
     ref: "kb/handbook",
     class: "internal",
+    projectId: "prj_company",
     createdAt: nowIso(),
     updatedAt: nowIso(),
   },
@@ -150,6 +152,7 @@ const runtimeAssets: InformationAsset[] = [
     orgId: DEMO_ORG.id,
     ref: "kb/salary",
     class: "confidential",
+    projectId: "prj_company",
     createdAt: nowIso(),
     updatedAt: nowIso(),
   },
@@ -158,6 +161,16 @@ const runtimeAssets: InformationAsset[] = [
     orgId: DEMO_ORG.id,
     ref: "contract/nda",
     class: "verbatim",
+    projectId: "prj_company",
+    createdAt: nowIso(),
+    updatedAt: nowIso(),
+  },
+  {
+    id: "ast_project_a_plan",
+    orgId: DEMO_ORG.id,
+    ref: "kb/project-a-plan",
+    class: "confidential",
+    projectId: "prj_project_a",
     createdAt: nowIso(),
     updatedAt: nowIso(),
   },
@@ -197,6 +210,7 @@ function mapAssetRow(row: Record<string, unknown>): InformationAsset {
     orgId: String(row.org_id),
     ref: String(row.ref ?? ""),
     class: isInfoClass(String(row.class)) ? (row.class as InformationClass) : "confidential",
+    projectId: row.project_id != null ? String(row.project_id) : null,
     createdAt: String(row.created_at ?? nowIso()),
     updatedAt: String(row.updated_at ?? nowIso()),
   };
@@ -460,14 +474,22 @@ export async function upsertInformationAsset(input: {
   orgId: string;
   ref: string;
   class: InformationClass;
+  projectId?: string | null;
 }): Promise<InformationAsset> {
   const ref = input.ref.trim();
   if (!ref) throw new Error("ref_required");
   const infoClass = isInfoClass(input.class) ? input.class : "confidential";
+  const projectId =
+    input.projectId === undefined
+      ? undefined
+      : input.projectId
+        ? String(input.projectId).trim() || null
+        : null;
   if (isDemoMode()) {
     const existing = runtimeAssets.find((row) => row.orgId === input.orgId && row.ref === ref);
     if (existing) {
       existing.class = infoClass;
+      if (projectId !== undefined) existing.projectId = projectId;
       existing.updatedAt = nowIso();
       return existing;
     }
@@ -476,6 +498,7 @@ export async function upsertInformationAsset(input: {
       orgId: input.orgId,
       ref,
       class: infoClass,
+      projectId: projectId ?? null,
       createdAt: nowIso(),
       updatedAt: nowIso(),
     };
@@ -484,17 +507,16 @@ export async function upsertInformationAsset(input: {
   }
   const admin = createSupabaseAdminClient();
   if (!admin) throw new Error("supabase_not_configured");
+  const payload: Record<string, unknown> = {
+    org_id: input.orgId,
+    ref,
+    class: infoClass,
+    updated_at: nowIso(),
+  };
+  if (projectId !== undefined) payload.project_id = projectId;
   const { data, error } = await admin
     .from("information_assets")
-    .upsert(
-      {
-        org_id: input.orgId,
-        ref,
-        class: infoClass,
-        updated_at: nowIso(),
-      },
-      { onConflict: "org_id,ref" }
-    )
+    .upsert(payload, { onConflict: "org_id,ref" })
     .select("*")
     .single();
   if (error || !data) throw new Error(error?.message || "asset_upsert_failed");

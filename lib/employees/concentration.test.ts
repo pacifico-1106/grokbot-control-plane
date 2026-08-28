@@ -13,6 +13,7 @@ const base: Omit<Employee, "id" | "displayName" | "scopes"> = {
   sodLevel: "ok",
   actionLimits: {},
   voice: defaultVoice(),
+  projectAccess: { mode: "company", projectIds: [] },
   credentialId: null,
   createdAt: "2026-08-26T00:00:00.000Z",
 };

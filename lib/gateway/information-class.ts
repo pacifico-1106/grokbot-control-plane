@@ -41,7 +41,7 @@ function str(value: unknown): string | undefined {
   return trimmed || undefined;
 }
 
-function collectAssetRefs(args: Record<string, unknown>): string[] {
+export function collectAssetRefs(args: Record<string, unknown>): string[] {
   const refs: string[] = [];
   const single = str(args.assetRef) || str(args.asset) || str(args.ref);
   if (single) refs.push(single);

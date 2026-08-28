@@ -6,6 +6,7 @@ import {
   listInformationAssets,
   listOrgChannels,
   listOrgParties,
+  upsertInformationAsset,
   upsertOrgChannel,
   upsertOrgParty,
 } from "@/lib/data";
@@ -13,6 +14,7 @@ import type {
   Audience,
   ChannelClassification,
   ConversationSurface,
+  InformationClass,
   OrgPartyKind,
 } from "@/lib/types";
 
@@ -61,6 +63,24 @@ export async function PUT(req: Request) {
         mixed: body.mixed === true || classification === "shared_external",
       });
       return NextResponse.json({ ok: true, channel });
+    }
+    if (kind === "asset") {
+      const ref = String(body.ref || "").trim();
+      const infoClass = String(body.class || "confidential") as InformationClass;
+      if (!ref) return NextResponse.json({ error: "ref_required" }, { status: 400 });
+      const projectId =
+        body.projectId === undefined || body.projectId === null
+          ? body.projectId === undefined
+            ? undefined
+            : null
+          : String(body.projectId);
+      const asset = await upsertInformationAsset({
+        orgId: gate.orgId,
+        ref,
+        class: infoClass,
+        projectId,
+      });
+      return NextResponse.json({ ok: true, asset });
     }
     return NextResponse.json({ error: "invalid_record" }, { status: 400 });
   } catch (error) {

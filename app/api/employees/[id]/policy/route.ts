@@ -5,6 +5,7 @@ import { normalizeActionLimits } from "@/lib/action-gate";
 import { requireCapability } from "@/lib/team/demo-actor";
 import { ALL_SCOPES } from "@/lib/employees/policy-draft";
 import { normalizeVoice } from "@/lib/employees/voice";
+import { normalizeProjectAccess } from "@/lib/employees/project-access";
 import type { ApprovalPolicy, EmployeeScope } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -31,6 +32,8 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
     actionLimits: normalizeActionLimits(body.actionLimits),
     managerId: body.managerId === undefined ? undefined : (body.managerId ? String(body.managerId) : null),
     voice: body.voice === undefined ? undefined : normalizeVoice(body.voice),
+    projectAccess:
+      body.projectAccess === undefined ? undefined : normalizeProjectAccess(body.projectAccess),
   });
   if (!updated) return NextResponse.json({ error: "employee_not_found" }, { status: 404 });
   await appendAuditEvent({

@@ -7,6 +7,7 @@ import {
 import { DEFAULT_SPEND_LIMITS } from "@/lib/spend-gate";
 import { evaluateSod } from "@/lib/employees/sod";
 import { defaultVoice } from "@/lib/employees/voice";
+import { defaultProjectAccess } from "@/lib/employees/project-access";
 
 const ROLE_PROFILES: Array<{
   match: RegExp;
@@ -267,6 +268,7 @@ function buildEmployeePolicyDraftForProfile(
       spendRecommendation,
       allowedAccounts,
       voice: defaultVoice(),
+      projectAccess: defaultProjectAccess(),
       toolApprovalDefaults: toolApprovalHintsFromPresets(),
     },
     sodVerdict,

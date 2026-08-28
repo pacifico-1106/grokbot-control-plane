@@ -28,6 +28,8 @@ import {
   resolveAudience,
 } from "@/lib/gateway/audience";
 import { resolveInformationDisclosure } from "@/lib/gateway/information-class";
+import { evaluateProjectScope } from "@/lib/gateway/project-scope";
+import { accessibleProjects } from "@/lib/employees/project-access";
 import {
   employeeHasToolScope,
   isAudienceGatedTool,
@@ -633,7 +635,42 @@ export async function runGatewayInvoke(
     }, 403);
   }
 
-  // Audience × information-class egress (after scope / SoD / action-limit).
+  // Project wall (WHICH) before Slack post. Deny wins over class/voice allow.
+  // Internal dest does not bypass. Composed with audience × class, not a rewrite.
+  const projectScope = await evaluateProjectScope({
+    orgId: orgId || employee.orgId,
+    employee,
+    tool,
+    body,
+  });
+  if (projectScope.denied) {
+    await appendAuditEvent({
+      orgId: orgId || employee.orgId,
+      employeeId,
+      credentialId: input.credentialId || employee.credentialId,
+      action: "tool.invoke",
+      purpose,
+      summary: `${tool} をプロジェクト範囲で拒否`,
+      metadata: { tool, jobId, code: projectScope.code, refs: projectScope.refs },
+    });
+    return jsonResult(
+      {
+        ok: false,
+        code: projectScope.code,
+        error: projectScope.code,
+        message: projectScope.messageJa,
+        needs_approval: false,
+        projectAccess: projectScope.projectAccess,
+        employeeId,
+        tool,
+        purpose,
+        jobId,
+      },
+      403
+    );
+  }
+
+  // Audience × information-class egress (after scope / SoD / action-limit / project wall).
   // slack.* aliases share this resolver — tool name is not the boundary.
   const egress = await evaluateInvokeEgress({
     orgId: orgId || employee.orgId,
@@ -971,6 +1008,9 @@ export async function runGatewayInvoke(
     egress: egress ?? undefined,
     managerId: managerId || undefined,
     ...(voice ? { voice } : {}),
+    ...(tool === "knowledge.search"
+      ? { projectAccess: projectScope.projectAccess }
+      : {}),
     conversationDelivery,
     result:
       tool === "tools.ping"
@@ -987,7 +1027,23 @@ export async function runGatewayInvoke(
                   ? { sent: true }
                   : tool === "commerce.order"
                     ? { ordered: true }
-                    : tool === "comm.send" || tool === "comm.reply"
+                    : tool === "knowledge.search"
+                      ? {
+                          accepted: true,
+                          hits: [],
+                          projectAccess: projectScope.projectAccess,
+                          projects: accessibleProjects(
+                            employee,
+                            projectScope.projects,
+                            projectScope.defaultProjectId
+                          ).map((item) => ({
+                            id: item.id,
+                            slug: item.slug,
+                            name: item.name,
+                            isDefault: item.isDefault,
+                          })),
+                        }
+                      : tool === "comm.send" || tool === "comm.reply"
                       ? {
                           accepted: true,
                           disclosed: egress?.decision === "summarize" ? "summary" : "source",

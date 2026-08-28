@@ -10,8 +10,9 @@ import { mapEmployeeRow } from "./mappers";
 import { evaluateSod } from "@/lib/employees/sod";
 import { normalizeActionLimits } from "@/lib/action-gate";
 import { defaultVoice, normalizeVoice } from "@/lib/employees/voice";
+import { defaultProjectAccess, normalizeProjectAccess } from "@/lib/employees/project-access";
 import { appendAuditEvent } from "@/lib/data/audit";
-import type { ActionLimits, Employee } from "../types";
+import type { ActionLimits, Employee, EmployeeProjectAccess } from "../types";
 
 export async function listEmployees(orgId?: string | null): Promise<Employee[]> {
   if (isDemoMode()) {
@@ -110,6 +111,7 @@ export type IssueEmployeeInput = {
   approvalRoutineText?: string | null;
   managerId?: string | null;
   voice?: Employee["voice"] | null;
+  projectAccess?: EmployeeProjectAccess | null;
   secretHash: string;
   secretPrefix: string;
   expiresAt: string | null;
@@ -159,6 +161,7 @@ export async function issueEmployee(
       approvalRoutineText: input.approvalRoutineText ?? null,
       managerId: input.managerId ?? null,
       voice: normalizeVoice(input.voice ?? defaultVoice()),
+      projectAccess: normalizeProjectAccess(input.projectAccess ?? defaultProjectAccess()),
       credentialId,
       createdAt: new Date().toISOString(),
     };
@@ -208,6 +211,7 @@ export async function issueEmployee(
       approval_routine_text: input.approvalRoutineText ?? null,
       manager_id: input.managerId ?? null,
       voice: normalizeVoice(input.voice ?? defaultVoice()),
+      project_access: normalizeProjectAccess(input.projectAccess ?? defaultProjectAccess()),
     })
     .select("*")
     .single();
@@ -314,6 +318,7 @@ export async function updateEmployeePolicy(input: {
   actionLimits?: ActionLimits;
   managerId?: string | null;
   voice?: Employee["voice"];
+  projectAccess?: EmployeeProjectAccess;
 }): Promise<Employee | null> {
   const verdict = evaluateSod(input.scopes);
   const effectivePolicy = verdict.level === "force_human" ? "always_human" : input.approvalPolicy;
@@ -332,6 +337,10 @@ export async function updateEmployeePolicy(input: {
         input.voice === undefined
           ? (employee.voice ?? defaultVoice())
           : normalizeVoice(input.voice),
+      projectAccess:
+        input.projectAccess === undefined
+          ? (employee.projectAccess ?? defaultProjectAccess())
+          : normalizeProjectAccess(input.projectAccess),
     });
     return employee;
   }
@@ -347,6 +356,9 @@ export async function updateEmployeePolicy(input: {
       action_limits: actionLimits,
       ...(input.managerId !== undefined ? { manager_id: input.managerId } : {}),
       ...(input.voice !== undefined ? { voice: normalizeVoice(input.voice) } : {}),
+      ...(input.projectAccess !== undefined
+        ? { project_access: normalizeProjectAccess(input.projectAccess) }
+        : {}),
       updated_at: new Date().toISOString(),
     })
     .eq("id", input.employeeId)

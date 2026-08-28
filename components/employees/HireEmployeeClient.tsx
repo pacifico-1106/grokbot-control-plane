@@ -13,6 +13,7 @@ import {
 } from "@/lib/employees/approval-presets";
 import { ManagerPicker } from "@/components/employees/ManagerPicker";
 import { VoiceForm } from "@/components/employees/VoiceForm";
+import { ProjectAccessForm } from "@/components/employees/ProjectAccessForm";
 import {
   APPROVAL_POLICY_LABELS,
   SCOPE_LABELS,
@@ -21,6 +22,7 @@ import {
 import { DEFAULT_SPEND_LIMITS } from "@/lib/spend-gate";
 import { evaluateSod } from "@/lib/employees/sod";
 import { defaultVoice, normalizeVoice } from "@/lib/employees/voice";
+import { defaultProjectAccess, normalizeProjectAccess } from "@/lib/employees/project-access";
 import { DOMAIN_LABELS, domainOfScope } from "@/lib/gateway/domains";
 import type {
   ActionLimits,
@@ -28,8 +30,10 @@ import type {
   ApprovalPolicy,
   EmployeePolicyDraft,
   EmployeeScope,
+  EmployeeProjectAccess,
   EmployeeVoice,
   OrgMember,
+  OrgProject,
   SpendLimits,
 } from "@/lib/types";
 
@@ -48,10 +52,11 @@ function emptySpend(): SpendLimits {
   return { ...DEFAULT_SPEND_LIMITS };
 }
 
-export function HireEmployeeClient({ members = [] }: { members?: OrgMember[] }) {
+export function HireEmployeeClient({ members = [], projects = [] }: { members?: OrgMember[]; projects?: OrgProject[] }) {
   const [step, setStep] = useState<Step>("describe");
   const [managerId, setManagerId] = useState<string | null>(null);
   const [voice, setVoice] = useState<EmployeeVoice>(defaultVoice());
+  const [projectAccess, setProjectAccess] = useState<EmployeeProjectAccess>(defaultProjectAccess());
   const [prompt, setPrompt] = useState(EXAMPLES[0]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -130,6 +135,9 @@ export function HireEmployeeClient({ members = [] }: { members?: OrgMember[] }) 
       ? d.policy.allowedAccounts.map((a) => ({ ...a }))
       : hasBrowser ? [emptyAllowedAccount("google")] : []);
     setVoice(d.policy.voice ? normalizeVoice(d.policy.voice) : defaultVoice());
+    setProjectAccess(
+      d.policy.projectAccess ? normalizeProjectAccess(d.policy.projectAccess) : defaultProjectAccess()
+    );
   }
 
   async function createDraft() {
@@ -201,6 +209,7 @@ export function HireEmployeeClient({ members = [] }: { members?: OrgMember[] }) 
           allowedAccounts: normalizeAllowedAccounts(allowedAccounts),
           managerId,
           voice,
+          projectAccess,
         }),
       });
       const body = await res.json();
@@ -552,6 +561,8 @@ export function HireEmployeeClient({ members = [] }: { members?: OrgMember[] }) 
           </div>
 
           <ManagerPicker members={members} value={managerId} onChange={setManagerId} />
+
+          <ProjectAccessForm value={projectAccess} projects={projects} onChange={setProjectAccess} />
 
           <VoiceForm value={voice} onChange={setVoice} />
 

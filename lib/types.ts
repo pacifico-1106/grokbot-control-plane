@@ -218,11 +218,31 @@ export interface OrgChannel {
   updatedAt: string;
 }
 
+export type ProjectAccessMode = "company" | "selected" | "all";
+
+export interface EmployeeProjectAccess {
+  mode: ProjectAccessMode;
+  projectIds: string[];
+}
+
+export interface OrgProject {
+  id: string;
+  orgId: string;
+  slug: string;
+  name: string;
+  description: string;
+  isDefault: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface InformationAsset {
   id: string;
   orgId: string;
   ref: string;
   class: InformationClass;
+  /** Null / omitted → org default 会社全般 project. */
+  projectId: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -398,6 +418,10 @@ export interface Employee {
    * drop below polite (see effectiveVoice).
    */
   voice: EmployeeVoice;
+  /**
+   * Project knowledge wall (WHICH). Default company = 会社全般 only.
+   */
+  projectAccess: EmployeeProjectAccess;
   credentialId: string | null;
   createdAt: string;
 }
@@ -519,6 +543,8 @@ export interface EmployeePolicyDraft {
     managerId?: string | null;
     /** Optional badge voice (default polite on hire if omitted). */
     voice?: EmployeeVoice;
+    /** Optional project wall (default company = 会社全般). */
+    projectAccess?: EmployeeProjectAccess;
     /**
      * Per-tool approval hints from JP SME strict presets (Ando §3).
      * Distinct from human RBAC (OrgMember.capabilities).

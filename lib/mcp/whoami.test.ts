@@ -20,6 +20,7 @@ describe("staffpass_whoami voice", () => {
     expect(payload.voice).toEqual(FRANK_VOICE);
     expect(payload.voiceNoteJa).toBe(WHOAMI_VOICE_NOTE_JA);
     expect((payload.voice as { register?: string }).register).toBe("frank");
+    expect((payload.projectAccess as { mode?: string }).mode).toBe("company");
   });
 
   test("sales employee whoami returns polite badge voice", () => {

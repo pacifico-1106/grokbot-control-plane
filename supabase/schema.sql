@@ -76,12 +76,15 @@ create table if not exists employees (
     "signOff": "何卒よろしくお願いいたします",
     "externalFloor": "polite"
   }'::jsonb,
+  project_access jsonb not null default '{"mode":"company","projectIds":[]}'::jsonb,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
 
 comment on column employees.voice is
   'AI employee badge character/register (polite/frank/custom). External audience cannot drop below polite.';
+comment on column employees.project_access is
+  'Badge project wall: {mode: company|selected|all, projectIds: string[]}. Default company = 会社全般 only.';
 
 create index if not exists employees_org_idx on employees (org_id, status);
 create index if not exists employees_manager_idx on employees (org_id, manager_id)
@@ -361,17 +364,37 @@ create table if not exists org_channels (
 
 create index if not exists org_channels_org_surface_idx on org_channels (org_id, surface);
 
+create table if not exists org_projects (
+  id uuid primary key default gen_random_uuid(),
+  org_id uuid not null references orgs(id) on delete cascade,
+  slug text not null,
+  name text not null,
+  description text not null default '',
+  is_default boolean not null default false,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (org_id, slug)
+);
+
+create unique index if not exists org_projects_one_default_per_org
+  on org_projects (org_id)
+  where is_default;
+
+create index if not exists org_projects_org_idx on org_projects (org_id, slug);
+
 create table if not exists information_assets (
   id uuid primary key default gen_random_uuid(),
   org_id uuid not null references orgs(id) on delete cascade,
   ref text not null,
   class text not null check (class in ('public','internal','confidential','verbatim')),
+  project_id uuid references org_projects(id) on delete set null,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   unique (org_id, ref)
 );
 
 create index if not exists information_assets_org_idx on information_assets (org_id, ref);
+create index if not exists information_assets_project_idx on information_assets (org_id, project_id);
 
 -- ---------------------------------------------------------------------------
 -- RLS: org isolation via org_members.user_id = auth.uid()
@@ -428,6 +451,7 @@ alter table employee_bindings enable row level security;
 alter table org_parties enable row level security;
 alter table org_channels enable row level security;
 alter table information_assets enable row level security;
+alter table org_projects enable row level security;
 
 drop policy if exists orgs_select_member on orgs;
 drop policy if exists orgs_update_admin on orgs;
@@ -537,6 +561,14 @@ drop policy if exists information_assets_write_admin on information_assets;
 create policy information_assets_select on information_assets
   for select using (public.is_org_member(org_id));
 create policy information_assets_write_admin on information_assets
+  for all using (public.is_org_admin(org_id))
+  with check (public.is_org_admin(org_id));
+
+drop policy if exists org_projects_select on org_projects;
+drop policy if exists org_projects_write_admin on org_projects;
+create policy org_projects_select on org_projects
+  for select using (public.is_org_member(org_id));
+create policy org_projects_write_admin on org_projects
   for all using (public.is_org_admin(org_id))
   with check (public.is_org_admin(org_id));
 

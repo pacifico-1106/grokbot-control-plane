@@ -1,5 +1,7 @@
 # 相手 × 情報区分の出域制御
 
+（第四軸 WHICH＝プロジェクト範囲は [project-scope.md](./project-scope.md)。このマトリクスは上書きしません。）
+
 Staffpass は **会話アダプタ**（誰に何を出すか）と **通知チャネル**（Telegram / LINE で人間へ承認を届ける）を混ぜません。
 
 | 面 | 役割 | 例 |
@@ -53,7 +55,9 @@ Slack を通知プロバイダとして足すことは将来の拡張点です�
 
 ## 既存ゲートとの合成
 
-順序: スコープ → SoD → 行為上限 → always_human（mail.send / calendar.confirm / commerce.order / drive.share_external / files.write / browser.use）→ **egress** → **voice（HOW）** → 会話投稿 / スタブ実行。
+順序: スコープ → SoD → 行為上限 → always_human（mail.send / calendar.confirm / commerce.order / drive.share_external / files.write / browser.use）→ **プロジェクト壁（WHICH）** → **egress** → **voice（HOW）** → 会話投稿 / スタブ実行。
+
+第四軸 WHICH（プロジェクト）は社員証の `projectAccess`。既定は会社全般のみ。範囲外は `project_scope_denied`（社内宛でも拒否）。詳細は [project-scope.md](./project-scope.md)。マトリクス自体は変えません。
 
 SoD `force_human` や行為上限の needs_approval / deny は **スキップしません**（マトリクスが allow でも勝ちます）。
 

@@ -50,6 +50,7 @@ export const DEMO_EMPLOYEES: Employee[] = [
     actionLimits: { "mail.send": { perDay: 20, perMonth: 300 }, "calendar.confirm": { perDay: 8 } },
     managerId: "mem_1",
     voice: { ...POLITE_VOICE, forbidden: [...POLITE_VOICE.forbidden] },
+    projectAccess: { mode: "company", projectIds: [] },
     allowedAccounts: [
       {
         service: "google",
@@ -81,6 +82,7 @@ export const DEMO_EMPLOYEES: Employee[] = [
     actionLimits: { "files.write": { perDay: 10 } },
     managerId: "mem_2",
     voice: { ...POLITE_VOICE, forbidden: [...POLITE_VOICE.forbidden] },
+    projectAccess: { mode: "company", projectIds: [] },
     credentialId: "cred_ops",
     createdAt: new Date(Date.now() - 86400000 * 2).toISOString(),
   },
@@ -107,6 +109,7 @@ export const DEMO_EMPLOYEES: Employee[] = [
     actionLimits: {},
     managerId: "mem_1",
     voice: { ...FRANK_VOICE, forbidden: [] },
+    projectAccess: { mode: "company", projectIds: [] },
     credentialId: "cred_comm",
     createdAt: new Date(Date.now() - 86400000).toISOString(),
   },
