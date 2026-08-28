@@ -98,6 +98,7 @@ export async function POST(req: Request) {
       scopes,
       allowedPurposes: body.allowedPurposes || [],
       approvalPolicy: requestedApprovalPolicy,
+      sodOverrideAcknowledged: body.sodOverrideAcknowledged === true,
       actionLimits,
       spend,
       allowedAccounts,

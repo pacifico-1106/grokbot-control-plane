@@ -453,7 +453,9 @@ export function HireEmployeeClient({ members = [], projects = [] }: { members?: 
               </div>
               <p className="mt-3 text-sm leading-relaxed muted">
                 {liveSod.level === "force_human"
-                  ? "複数の高リスク領域を持つため、このまま発行すると全行為が人の承認必須になります。分けると下書きや提案を自動化できます。"
+                  ? sodOverrideAcknowledged
+                    ? "警告を確認しました。承認ポリシーは選べます。確定操作（送信・発注・日程確定）は今どおり人が止めます。社員全体の常時承認だけ外します。"
+                    : "複数の高リスク領域を持つため、警告を確認するまで発行できません。分けると下書きや提案を自動化できます。"
                   : "ブラウザ操作は共有セッションで動きます。利用できるアカウントを次の画面で必ず限定してください。"}
               </p>
               {liveSod.level === "force_human" ? (
@@ -466,10 +468,9 @@ export function HireEmployeeClient({ members = [], projects = [] }: { members?: 
                     className="btn btn-ghost text-xs"
                     onClick={() => {
                       setSodOverrideAcknowledged(true);
-                      setApprovalPolicy("always_human");
                     }}
                   >
-                    このまま発行する
+                    {sodOverrideAcknowledged ? "警告を確認済み" : "このまま発行する"}
                   </button>
                 </div>
               ) : null}
@@ -570,8 +571,8 @@ export function HireEmployeeClient({ members = [], projects = [] }: { members?: 
             <label className="block text-sm">
               <span className="muted">承認ポリシー（全体）</span>
               <select
-                value={liveSod.level === "force_human" ? "always_human" : approvalPolicy}
-                disabled={liveSod.level === "force_human"}
+                value={approvalPolicy}
+                disabled={liveSod.level === "force_human" && !sodOverrideAcknowledged}
                 onChange={(e) =>
                   setApprovalPolicy(e.target.value as ApprovalPolicy)
                 }
@@ -585,6 +586,11 @@ export function HireEmployeeClient({ members = [], projects = [] }: { members?: 
                   )
                 )}
               </select>
+              {liveSod.level === "force_human" && !sodOverrideAcknowledged ? (
+                <span className="mt-1 block text-xs text-[var(--warn)]">
+                  警告を確認すると承認ポリシーを選べます。確認しない場合は全件承認のままです。
+                </span>
+              ) : null}
             </label>
             <label className="block text-sm">
               <span className="muted">有効期限（日）</span>

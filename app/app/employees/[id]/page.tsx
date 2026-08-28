@@ -110,14 +110,20 @@ export default async function EmployeeDetailPage({
             <h2 className="text-sm font-medium">職務分離・権限集中</h2>
             <p className="mt-2 text-xs muted leading-relaxed">
               {employee.sodLevel === "force_human"
-                ? "複数の高リスク領域が混在しているため、すべての行為を人が承認します。権限を社員ごとに分けると自動化できる範囲が広がります。"
+                ? employee.approvalPolicy === "always_human"
+                  ? "複数の高リスク領域が混在しているため、すべての行為を人が承認します。権限を社員ごとに分けると自動化できる範囲が広がります。"
+                  : "複数の高リスク領域が混在しています。警告を確認済みです。確定操作（送信・発注・日程確定）は今どおり人が止めます。"
                 : employee.sodLevel === "warn"
                   ? "ブラウザ操作を許可しています。利用アカウントを限定し、共有セッションを定期的に確認してください。"
                   : "高リスク権限は分離されています。"}
             </p>
           </div>
-          <span className={`chip shrink-0 ${employee.sodLevel === "force_human" ? "chip-danger" : employee.sodLevel === "warn" ? "chip-warn" : "chip-ok"}`}>
-            {employee.sodLevel === "force_human" ? "全件承認" : employee.sodLevel === "warn" ? "要注意" : "分離済み"}
+          <span className={`chip shrink-0 ${employee.sodLevel === "force_human" ? (employee.approvalPolicy !== "always_human" ? "chip-warn" : "chip-danger") : employee.sodLevel === "warn" ? "chip-warn" : "chip-ok"}`}>
+            {employee.sodLevel === "force_human"
+              ? employee.approvalPolicy !== "always_human"
+                ? "警告・承諾済み"
+                : "全件承認"
+              : employee.sodLevel === "warn" ? "要注意" : "分離済み"}
           </span>
         </div>
         <div className="mt-4 flex flex-wrap gap-2">

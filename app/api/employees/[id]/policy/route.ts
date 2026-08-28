@@ -4,6 +4,8 @@ import { appendAuditEvent, getEmployee, updateEmployeePolicy } from "@/lib/data"
 import { normalizeActionLimits } from "@/lib/action-gate";
 import { requireCapability } from "@/lib/team/demo-actor";
 import { ALL_SCOPES } from "@/lib/employees/policy-draft";
+import { evaluateSod } from "@/lib/employees/sod";
+import { sodAckRequired } from "@/lib/employees/sod-override";
 import { normalizeVoice } from "@/lib/employees/voice";
 import { normalizeProjectAccess } from "@/lib/employees/project-access";
 import { normalizeEmployeeIdentityField } from "@/lib/employees/identity";
@@ -32,6 +34,11 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
   if (!scopes.length || scopes.some((scope) => !ALL_SCOPES.includes(scope)) || !["auto", "risk_based", "always_human"].includes(approvalPolicy)) {
     return NextResponse.json({ error: "invalid_policy" }, { status: 400 });
   }
+  const sodOverrideAcknowledged = body.sodOverrideAcknowledged === true;
+  const sodVerdict = evaluateSod(scopes);
+  if (sodAckRequired({ verdict: sodVerdict, requested: approvalPolicy, acknowledged: sodOverrideAcknowledged })) {
+    return NextResponse.json({ error: "sod_ack_required" }, { status: 400 });
+  }
   let displayName: string | undefined;
   let roleLabel: string | undefined;
   if (body.displayName !== undefined) {
@@ -48,6 +55,7 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
     scopes,
     allowedPurposes,
     approvalPolicy,
+    sodOverrideAcknowledged,
     actionLimits: normalizeActionLimits(body.actionLimits),
     managerId: body.managerId === undefined ? undefined : (body.managerId ? String(body.managerId) : null),
     voice: body.voice === undefined ? undefined : normalizeVoice(body.voice),
@@ -73,5 +81,17 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
     summary,
     metadata: { scopes: updated.scopes, approvalPolicy: updated.approvalPolicy, sodLevel: updated.sodLevel, actionLimits: updated.actionLimits },
   });
+  if (sodVerdict.level === "force_human" && sodOverrideAcknowledged && approvalPolicy !== "always_human") {
+    await appendAuditEvent({
+      orgId,
+      employeeId: id,
+      credentialId: updated.credentialId,
+      actorEmail: gate.actor.email,
+      action: "employee.sod_override",
+      purpose: null,
+      summary: "権限集中の警告を確認して保存",
+      metadata: { domains: sodVerdict.domains, actor: gate.actor.email, approvalPolicy: updated.approvalPolicy },
+    });
+  }
   return NextResponse.json({ ok: true, employee: updated });
 }

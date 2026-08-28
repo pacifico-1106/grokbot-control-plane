@@ -25,16 +25,15 @@ export function EmployeePolicyForm({
   const [approvalPolicy, setApprovalPolicy] = useState<ApprovalPolicy>(
     employee.approvalPolicy
   );
+  const [sodAck, setSodAck] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
 
   const liveSod = useMemo(() => evaluateSod(scopes), [scopes]);
   const forceHuman = liveSod.level === "force_human";
-  const effectiveApproval: ApprovalPolicy = forceHuman
-    ? "always_human"
-    : approvalPolicy;
+  const ackNeeded = forceHuman && approvalPolicy !== "always_human";
   const locked = busy || disabled;
-  const canSave = scopes.length > 0 && !locked;
+  const canSave = scopes.length > 0 && !locked && !(ackNeeded && !sodAck);
 
   function toggleScope(scope: EmployeeScope) {
     if (locked) return;
@@ -54,7 +53,8 @@ export function EmployeePolicyForm({
         body: JSON.stringify({
           scopes,
           allowedPurposes: parsePurposes(purposes),
-          approvalPolicy: effectiveApproval,
+          approvalPolicy,
+          sodOverrideAcknowledged: ackNeeded ? true : false,
           actionLimits: employee.actionLimits,
           managerId: employee.managerId ?? null,
           voice: employee.voice,
@@ -62,7 +62,12 @@ export function EmployeePolicyForm({
         }),
       });
       const body = await response.json();
-      if (!response.ok) throw new Error(body.error || "保存に失敗しました");
+      if (!response.ok) {
+        if (body.error === "sod_ack_required") {
+          throw new Error("警告を確認してから保存してください");
+        }
+        throw new Error(body.error || "保存に失敗しました");
+      }
       if (Array.isArray(body.employee?.scopes)) {
         setScopes(body.employee.scopes as EmployeeScope[]);
       }
@@ -72,6 +77,7 @@ export function EmployeePolicyForm({
       if (typeof body.employee?.approvalPolicy === "string") {
         setApprovalPolicy(body.employee.approvalPolicy as ApprovalPolicy);
       }
+      setSodAck(false);
       setMessage("権限を保存しました");
       router.refresh();
     } catch (error) {
@@ -123,7 +129,10 @@ export function EmployeePolicyForm({
           role="alert"
         >
           <p className="text-sm leading-relaxed muted">
-            複数の高リスク領域を持つため、このまま発行すると全行為が人の承認必須になります。分けると下書きや提案を自動化できます。
+            複数の高リスク領域を持つため、警告を確認しないと全件承認のまま保存されます。分けると下書きや提案を自動化できます。
+          </p>
+          <p className="mt-2 text-xs leading-relaxed muted">
+            確定操作（送信・発注・日程確定）は今どおり人が止めます。社員全体の常時承認だけ外します。
           </p>
         </div>
       ) : null}
@@ -131,8 +140,8 @@ export function EmployeePolicyForm({
       <label className="block text-sm">
         <span className="muted">承認ポリシー</span>
         <select
-          value={effectiveApproval}
-          disabled={locked || forceHuman}
+          value={approvalPolicy}
+          disabled={locked}
           onChange={(e) =>
             setApprovalPolicy(e.target.value as ApprovalPolicy)
           }
@@ -148,8 +157,28 @@ export function EmployeePolicyForm({
         </select>
       </label>
 
+      {ackNeeded ? (
+        <label className="flex items-start gap-2 text-sm cursor-pointer">
+          <input
+            type="checkbox"
+            className="mt-1"
+            checked={sodAck}
+            disabled={locked}
+            onChange={(e) => setSodAck(e.target.checked)}
+          />
+          <span>
+            <span className="font-medium">警告を確認した。この権限のまま保存する</span>
+            {!sodAck ? (
+              <span className="block text-xs text-[var(--warn)] mt-0.5">
+                確認しないと保存できません（全件承認のままロックされます）。
+              </span>
+            ) : null}
+          </span>
+        </label>
+      ) : null}
+
       <p className="text-xs muted leading-relaxed">
-        mail.send / commerce.order などの確定操作は Gateway 側でも人が止める。社員レベルを always_human にしなくてもツール側 force は残る。
+        確定操作（送信・発注・日程確定）は今どおり人が止めます。社員全体の常時承認だけ外します。
       </p>
 
       <button

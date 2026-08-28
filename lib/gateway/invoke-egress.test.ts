@@ -145,6 +145,48 @@ describe("Gateway audience egress", () => {
     expect(String(result.body.summary)).toContain("権限混在社員");
   });
 
+  test("acked mixed-domain employee with risk_based does not blanket-queue slack.post", async () => {
+    const sales = getRuntimeEmployees().find((item) => item.id === "emp_sales");
+    expect(sales).toBeTruthy();
+    expect(sales!.sodLevel).toBe("force_human");
+    const previous = sales!.approvalPolicy;
+    sales!.approvalPolicy = "risk_based";
+    try {
+      const result = await runGatewayInvoke({
+        employeeId: "emp_sales",
+        credentialId: "cred_sales",
+        body: {
+          tool: "slack.post",
+          purpose: "sales.outreach",
+          jobId: `job_sod_ack_${Date.now()}`,
+          conversation: {
+            surface: "slack",
+            orgId: DEMO_ORG.id,
+            slackChannelId: "C_INTERNAL",
+          },
+          args: { assetRef: "kb/public-faq", slackChannelId: "C_INTERNAL" },
+        },
+      });
+      expect(result.body.needs_approval).not.toBe(true);
+      expect(result.body.ok).toBe(true);
+      expect((result.body.egress as { decision?: string } | undefined)?.decision).toBe("allow");
+
+      const send = await runGatewayInvoke({
+        employeeId: "emp_sales",
+        credentialId: "cred_sales",
+        body: {
+          tool: "mail.send",
+          purpose: "sales.outreach",
+          jobId: `job_sod_ack_send_${Date.now()}`,
+        },
+      });
+      expect(send.httpStatus).toBe(402);
+      expect(send.body.needs_approval).toBe(true);
+    } finally {
+      sales!.approvalPolicy = previous;
+    }
+  });
+
   test("action-limit 2× still denies even if matrix would allow", async () => {
     const employee = getRuntimeEmployees().find((item) => item.id === "emp_comm");
     expect(employee).toBeTruthy();

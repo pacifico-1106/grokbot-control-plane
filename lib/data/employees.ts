@@ -9,6 +9,7 @@ import { isDemoMode } from "../mode";
 import { createSupabaseAdminClient } from "../supabase";
 import { mapEmployeeRow } from "./mappers";
 import { evaluateSod } from "@/lib/employees/sod";
+import { resolveApprovalPolicy } from "@/lib/employees/sod-override";
 import { normalizeActionLimits } from "@/lib/action-gate";
 import { defaultVoice, normalizeVoice } from "@/lib/employees/voice";
 import { defaultProjectAccess, normalizeProjectAccess } from "@/lib/employees/project-access";
@@ -104,6 +105,7 @@ export type IssueEmployeeInput = {
   scopes: Employee["scopes"];
   allowedPurposes: string[];
   approvalPolicy: Employee["approvalPolicy"];
+  sodOverrideAcknowledged?: boolean;
   actionLimits?: ActionLimits;
   spend: Employee["spend"];
   allowedAccounts: Employee["allowedAccounts"];
@@ -135,9 +137,11 @@ export async function issueEmployee(
   input: IssueEmployeeInput
 ): Promise<IssueEmployeeResult> {
   const sodVerdict = evaluateSod(input.scopes);
-  const effectivePolicy = sodVerdict.level === "force_human"
-    ? "always_human"
-    : input.approvalPolicy;
+  const effectivePolicy = resolveApprovalPolicy({
+    verdict: sodVerdict,
+    requested: input.approvalPolicy,
+    acknowledged: input.sodOverrideAcknowledged,
+  });
   const actionLimits = normalizeActionLimits(input.actionLimits);
   if (isDemoMode()) {
     const { randomBytes } = await import("node:crypto");
@@ -167,7 +171,7 @@ export async function issueEmployee(
       createdAt: new Date().toISOString(),
     };
     addRuntimeEmployee(employee, input.auditSummary);
-    if (sodVerdict.level === "force_human") {
+    if (sodVerdict.level === "force_human" && !input.sodOverrideAcknowledged) {
       await appendAuditEvent({
         orgId: employee.orgId,
         employeeId,
@@ -289,7 +293,7 @@ export async function issueEmployee(
     ? mapBindingRow(bindingRow as Record<string, unknown>)
     : ensureBindingRow(employeeId, orgId);
 
-  if (sodVerdict.level === "force_human") {
+  if (sodVerdict.level === "force_human" && !input.sodOverrideAcknowledged) {
     await appendAuditEvent({
       orgId,
       employeeId,
@@ -316,6 +320,7 @@ export async function updateEmployeePolicy(input: {
   scopes: Employee["scopes"];
   allowedPurposes: string[];
   approvalPolicy: Employee["approvalPolicy"];
+  sodOverrideAcknowledged?: boolean;
   actionLimits?: ActionLimits;
   managerId?: string | null;
   voice?: Employee["voice"];
@@ -324,7 +329,11 @@ export async function updateEmployeePolicy(input: {
   roleLabel?: string;
 }): Promise<Employee | null> {
   const verdict = evaluateSod(input.scopes);
-  const effectivePolicy = verdict.level === "force_human" ? "always_human" : input.approvalPolicy;
+  const effectivePolicy = resolveApprovalPolicy({
+    verdict,
+    requested: input.approvalPolicy,
+    acknowledged: input.sodOverrideAcknowledged,
+  });
   const actionLimits = normalizeActionLimits(input.actionLimits);
   if (isDemoMode()) {
     const employee = getRuntimeEmployees().find((item) => item.id === input.employeeId && item.orgId === input.orgId);
@@ -384,7 +393,7 @@ export async function updateEmployeePolicy(input: {
     .eq("employee_id", input.employeeId)
     .eq("org_id", input.orgId)
     .is("revoked_at", null);
-  if (verdict.level === "force_human") {
+  if (verdict.level === "force_human" && !input.sodOverrideAcknowledged) {
     await appendAuditEvent({
       orgId: input.orgId,
       employeeId: input.employeeId,

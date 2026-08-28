@@ -483,7 +483,9 @@ export async function runGatewayInvoke(
   }
 
   const sodVerdict = evaluateSod(employee.scopes);
-  const sodSummary = sodVerdict.level === "force_human"
+  const sodBlanket =
+    sodVerdict.level === "force_human" && employee.approvalPolicy === "always_human";
+  const sodSummary = sodBlanket
     ? `⚠ 権限混在社員（${sodVerdict.domains.map((domain) => DOMAIN_LABELS[domain]).join(" + ")}）のため全件承認`
     : undefined;
 
@@ -757,11 +759,11 @@ export async function runGatewayInvoke(
 
   // confirm / send / order (and force flags) → always needs_approval
   // unless a matching prior approval unlocks execution.
-  // SoD force_human and action-limit still win even if the matrix would allow.
+  // SoD blanket queues only when approvalPolicy is always_human; per-tool force is unchanged.
   const forceApproval =
     isForceApprovalTool(toolDef) ||
     employee.approvalPolicy === "always_human" ||
-    sodVerdict.level === "force_human" ||
+    sodBlanket ||
     actionLimit.decision === "needs_approval";
 
   if (
@@ -839,9 +841,9 @@ export async function runGatewayInvoke(
       tool,
       purpose,
       jobId,
-      risk: sodVerdict.level === "force_human" ? "high" : inferRiskForTool(tool),
+      risk: sodBlanket ? "high" : inferRiskForTool(tool),
       message:
-        sodVerdict.level === "force_human"
+        sodBlanket
           ? sodVerdict.reason
           : actionLimit.decision === "needs_approval"
             ? actionLimit.message
