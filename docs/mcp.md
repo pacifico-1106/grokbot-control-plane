@@ -80,7 +80,7 @@ Sealith由来の状態を読み取り投影としてだけ保持します。
 
 | Tool | 用途 |
 |------|------|
-| `staffpass_whoami` | employeeId / displayName / orgId / binding / generation / scopes・purposes |
+| `staffpass_whoami` | employeeId / displayName / orgId / binding / generation / scopes・purposes / **voice**（バッジ。社外は丁寧下限） |
 | `staffpass_invoke` | Gateway と同ロジック。`tool` + `purpose` + `jobId` 必須。confirm/send/order は人間承認で停止。任意で `conversation`（surface + 宛先）。`comm.send` / `slack.post` は同一 audience resolver |
 | `staffpass_get_approval_status` | `approvalId` + `statusToken` → GET `/api/approvals/status` と同じ |
 | `staffpass_health` | runtimeMode / supabase・stripe・resend / 当該社員の binding |

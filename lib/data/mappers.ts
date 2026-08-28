@@ -1,3 +1,4 @@
+import { normalizeVoice } from "../employees/voice";
 import type {
   AllowedAccount,
   ActionLimits,
@@ -47,6 +48,7 @@ export function mapEmployeeRow(row: Record<string, unknown>): Employee {
         ? String(row.approval_routine_text)
         : null,
     managerId: row.manager_id != null ? String(row.manager_id) : null,
+    voice: normalizeVoice(row.voice),
     credentialId: row.credential_id != null ? String(row.credential_id) : null,
     createdAt: String(row.created_at ?? new Date().toISOString()),
   };

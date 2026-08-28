@@ -4,6 +4,7 @@ import {
   generateStatusToken,
   generateTelegramRef,
 } from "./approvals/tokens";
+import { FRANK_VOICE, POLITE_VOICE } from "./employees/voice";
 import type {
   ApprovalRequest,
   AuditEvent,
@@ -48,6 +49,7 @@ export const DEMO_EMPLOYEES: Employee[] = [
     sodLevel: "force_human",
     actionLimits: { "mail.send": { perDay: 20, perMonth: 300 }, "calendar.confirm": { perDay: 8 } },
     managerId: "mem_1",
+    voice: { ...POLITE_VOICE, forbidden: [...POLITE_VOICE.forbidden] },
     allowedAccounts: [
       {
         service: "google",
@@ -78,6 +80,7 @@ export const DEMO_EMPLOYEES: Employee[] = [
     sodLevel: "ok",
     actionLimits: { "files.write": { perDay: 10 } },
     managerId: "mem_2",
+    voice: { ...POLITE_VOICE, forbidden: [...POLITE_VOICE.forbidden] },
     credentialId: "cred_ops",
     createdAt: new Date(Date.now() - 86400000 * 2).toISOString(),
   },
@@ -103,6 +106,7 @@ export const DEMO_EMPLOYEES: Employee[] = [
     sodLevel: "ok",
     actionLimits: {},
     managerId: "mem_1",
+    voice: { ...FRANK_VOICE, forbidden: [] },
     credentialId: "cred_comm",
     createdAt: new Date(Date.now() - 86400000).toISOString(),
   },

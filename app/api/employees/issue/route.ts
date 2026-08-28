@@ -12,6 +12,7 @@ import {
   buildHireInstructionsSnippet,
 } from "@/lib/employees/approval-loop-copy";
 import { normalizeSpendLimits } from "@/lib/spend-gate";
+import { defaultVoice, normalizeVoice } from "@/lib/employees/voice";
 import { requireCapability } from "@/lib/team/demo-actor";
 import type { ActionLimits, AllowedAccount, ApprovalPolicy, EmployeeScope, SpendLimits } from "@/lib/types";
 
@@ -51,6 +52,7 @@ export async function POST(req: Request) {
     approvalNotifyEmail?: string | null;
     callbackUrl?: string | null;
     managerId?: string | null;
+    voice?: unknown;
   };
 
   const displayName = (body.displayName || "").trim();
@@ -101,6 +103,7 @@ export async function POST(req: Request) {
       callbackUrl: body.callbackUrl?.trim() || null,
       approvalRoutineText,
       managerId: body.managerId?.trim() || null,
+      voice: body.voice == null ? defaultVoice() : normalizeVoice(body.voice),
       secretHash: secret.hash,
       secretPrefix: secret.prefix,
       expiresAt,

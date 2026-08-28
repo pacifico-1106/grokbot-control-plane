@@ -68,9 +68,20 @@ create table if not exists employees (
   callback_url text,
   approval_routine_text text,
   manager_id uuid references org_members(id) on delete set null,
+  voice jsonb not null default '{
+    "template": "polite",
+    "register": "polite",
+    "endings": "desumasu",
+    "forbidden": ["了解", "ぶっちゃけ", "ヤバい", "マジで", "ごめん"],
+    "signOff": "何卒よろしくお願いいたします",
+    "externalFloor": "polite"
+  }'::jsonb,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+comment on column employees.voice is
+  'AI employee badge character/register (polite/frank/custom). External audience cannot drop below polite.';
 
 create index if not exists employees_org_idx on employees (org_id, status);
 create index if not exists employees_manager_idx on employees (org_id, manager_id)

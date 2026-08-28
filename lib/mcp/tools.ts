@@ -16,6 +16,7 @@ import {
   isStripeConfigured,
 } from "@/lib/mode";
 import type { GatewayInvokeRequest } from "@/lib/types";
+import { buildStaffpassWhoamiPayload } from "@/lib/mcp/whoami";
 
 export const MCP_PROTOCOL_VERSION = "2024-11-05";
 export const MCP_SERVER_NAME = "staffpass";
@@ -36,7 +37,7 @@ export const STAFFPASS_MCP_TOOLS: McpToolDef[] = [
   {
     name: "staffpass_whoami",
     description:
-      "Return the authenticated AI employee badge identity: employeeId, displayName, orgId, binding status, credential generation, scopes and allowedPurposes. Use before invoking tools. Fail-closed if unbound or needs_reauth.",
+      "Return the authenticated AI employee badge identity: employeeId, displayName, orgId, binding status, credential generation, scopes, allowedPurposes, and voice (character/register). External destinations cannot drop below the polite floor — whoami returns the badge voice; Gateway applies externalFloor when the destination is external. Use before invoking tools. Fail-closed if unbound or needs_reauth. Do not self-declare a persona.",
     inputSchema: {
       type: "object",
       properties: {},
@@ -173,26 +174,14 @@ export async function callStaffpassMcpTool(
           true
         );
       }
-      return toolResult({
-        ok: true,
-        employeeId: employee.id,
-        displayName: employee.displayName,
-        roleLabel: employee.roleLabel,
-        orgId: cred.orgId || employee.orgId,
-        status: employee.status,
-        bindingStatus: binding?.status ?? "unlinked",
-        generation: binding?.credentialGeneration ?? cred.generation,
-        scopes: employee.scopes,
-        allowedPurposes: employee.allowedPurposes,
-        approvalPolicy: employee.approvalPolicy,
-        grokBotAgentId: binding?.grokBotAgentId ?? null,
-        messageJa:
-          binding?.status === "needs_reauth"
-            ? "要再連携 — invoke は拒否されます"
-            : binding?.status === "linked"
-              ? "連携済み"
-              : "未連携または実行不可",
-      });
+      return toolResult(
+        buildStaffpassWhoamiPayload({
+          employee,
+          orgId: cred.orgId || employee.orgId,
+          binding,
+          generation: cred.generation,
+        })
+      );
     }
     case "staffpass_invoke": {
       const tool = String(args.tool || "").trim();

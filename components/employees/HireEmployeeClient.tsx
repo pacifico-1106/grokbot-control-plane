@@ -12,6 +12,7 @@ import {
   denyDefaultList,
 } from "@/lib/employees/approval-presets";
 import { ManagerPicker } from "@/components/employees/ManagerPicker";
+import { VoiceForm } from "@/components/employees/VoiceForm";
 import {
   APPROVAL_POLICY_LABELS,
   SCOPE_LABELS,
@@ -19,6 +20,7 @@ import {
 } from "@/lib/employees/policy-draft";
 import { DEFAULT_SPEND_LIMITS } from "@/lib/spend-gate";
 import { evaluateSod } from "@/lib/employees/sod";
+import { defaultVoice, normalizeVoice } from "@/lib/employees/voice";
 import { DOMAIN_LABELS, domainOfScope } from "@/lib/gateway/domains";
 import type {
   ActionLimits,
@@ -26,6 +28,7 @@ import type {
   ApprovalPolicy,
   EmployeePolicyDraft,
   EmployeeScope,
+  EmployeeVoice,
   OrgMember,
   SpendLimits,
 } from "@/lib/types";
@@ -48,6 +51,7 @@ function emptySpend(): SpendLimits {
 export function HireEmployeeClient({ members = [] }: { members?: OrgMember[] }) {
   const [step, setStep] = useState<Step>("describe");
   const [managerId, setManagerId] = useState<string | null>(null);
+  const [voice, setVoice] = useState<EmployeeVoice>(defaultVoice());
   const [prompt, setPrompt] = useState(EXAMPLES[0]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -125,6 +129,7 @@ export function HireEmployeeClient({ members = [] }: { members?: OrgMember[] }) 
     setAllowedAccounts(d.policy.allowedAccounts?.length
       ? d.policy.allowedAccounts.map((a) => ({ ...a }))
       : hasBrowser ? [emptyAllowedAccount("google")] : []);
+    setVoice(d.policy.voice ? normalizeVoice(d.policy.voice) : defaultVoice());
   }
 
   async function createDraft() {
@@ -195,6 +200,7 @@ export function HireEmployeeClient({ members = [] }: { members?: OrgMember[] }) 
           spend: hasOrderScope || futureSpendOpen ? spend : null,
           allowedAccounts: normalizeAllowedAccounts(allowedAccounts),
           managerId,
+          voice,
         }),
       });
       const body = await res.json();
@@ -546,6 +552,8 @@ export function HireEmployeeClient({ members = [] }: { members?: OrgMember[] }) 
           </div>
 
           <ManagerPicker members={members} value={managerId} onChange={setManagerId} />
+
+          <VoiceForm value={voice} onChange={setVoice} />
 
           <div className="grid md:grid-cols-2 gap-4">
             <label className="block text-sm">

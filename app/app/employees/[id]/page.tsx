@@ -4,6 +4,7 @@ import { AppShell } from "@/components/AppShell";
 import { BindingPanel } from "@/components/employees/BindingPanel";
 import { EmployeeActionLog } from "@/components/employees/EmployeeActionLog";
 import { EmployeeManagerForm } from "@/components/employees/EmployeeManagerForm";
+import { EmployeeVoiceForm } from "@/components/employees/EmployeeVoiceForm";
 import { HireEmployeeClient } from "@/components/employees/HireEmployeeClient";
 import { getCurrentOrgId } from "@/lib/auth/session";
 import {
@@ -164,6 +165,14 @@ export default async function EmployeeDetailPage({
           機密開示の承認チケットに上長IDを付けます。職務分離バッジはそのまま有効です。
         </p>
         <EmployeeManagerForm employee={employee} members={members} />
+      </section>
+
+      <section className="surface p-5 space-y-3 mt-4">
+        <h2 className="text-sm font-medium">話し方</h2>
+        <p className="text-xs muted leading-relaxed">
+          丁寧・率直・カスタムは社員証に刻みます。対外の相手では丁寧が下限です。モデルは whoami の voice に従い、毎回ペルソナを自称しません。
+        </p>
+        <EmployeeVoiceForm employee={employee} />
       </section>
 
       <section className="surface p-5 space-y-3 mt-4">

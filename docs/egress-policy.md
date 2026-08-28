@@ -53,6 +53,10 @@ Slack を通知プロバイダとして足すことは将来の拡張点です�
 
 ## 既存ゲートとの合成
 
-順序: スコープ → SoD → 行為上限 → always_human（mail.send / calendar.confirm / commerce.order / drive.share_external / files.write / browser.use）→ **egress** → スタブ実行。
+順序: スコープ → SoD → 行為上限 → always_human（mail.send / calendar.confirm / commerce.order / drive.share_external / files.write / browser.use）→ **egress** → **voice（HOW）** → 会話投稿 / スタブ実行。
 
 SoD `force_human` や行為上限の needs_approval / deny は **スキップしません**（マトリクスが allow でも勝ちます）。
+
+## 話し方（HOW）
+
+WHO × WHAT のあとに、社員証の **voice** が載ります（丁寧 / 率直 / カスタム）。社外（unknown 含む）は丁寧が下限です。禁止語は会話本文の安い単語スキャンであり、DLP ではありません。詳細は [voice.md](./voice.md)。

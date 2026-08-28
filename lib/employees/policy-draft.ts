@@ -6,6 +6,7 @@ import {
 } from "@/lib/employees/approval-presets";
 import { DEFAULT_SPEND_LIMITS } from "@/lib/spend-gate";
 import { evaluateSod } from "@/lib/employees/sod";
+import { defaultVoice } from "@/lib/employees/voice";
 
 const ROLE_PROFILES: Array<{
   match: RegExp;
@@ -265,6 +266,7 @@ function buildEmployeePolicyDraftForProfile(
       spend,
       spendRecommendation,
       allowedAccounts,
+      voice: defaultVoice(),
       toolApprovalDefaults: toolApprovalHintsFromPresets(),
     },
     sodVerdict,

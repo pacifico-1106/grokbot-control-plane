@@ -238,6 +238,26 @@ export interface EgressVerdict {
   messageJa: string;
 }
 
+
+/** Employee badge character / register (HOW). Audience sets a polite floor. */
+export type VoiceTemplate = "polite" | "frank" | "custom";
+export type VoiceRegister = "polite" | "frank";
+export type VoiceEndings = "desumasu" | "da-dearu" | "either";
+
+export interface EmployeeVoice {
+  template: VoiceTemplate;
+  register: VoiceRegister;
+  endings: VoiceEndings;
+  forbidden: string[];
+  signOff: string | null;
+  externalFloor: "polite";
+}
+
+export interface EffectiveVoice extends EmployeeVoice {
+  floorApplied: boolean;
+}
+
+
 /** P0.5 reservation only — no live AgentMail SDK wiring in P0. */
 export interface AgentMailReservation {
   employeeId: string;
@@ -373,6 +393,11 @@ export interface Employee {
   approvalRoutineText?: string | null;
   /** Human manager (org_members.id, same org). Attached to egress approval tickets. */
   managerId?: string | null;
+  /**
+   * Badge character / register. Default polite. External audience cannot
+   * drop below polite (see effectiveVoice).
+   */
+  voice: EmployeeVoice;
   credentialId: string | null;
   createdAt: string;
 }
@@ -492,6 +517,8 @@ export interface EmployeePolicyDraft {
     allowedAccounts?: AllowedAccount[];
     /** Optional 上長 (org member id). */
     managerId?: string | null;
+    /** Optional badge voice (default polite on hire if omitted). */
+    voice?: EmployeeVoice;
     /**
      * Per-tool approval hints from JP SME strict presets (Ando §3).
      * Distinct from human RBAC (OrgMember.capabilities).

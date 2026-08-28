@@ -43,6 +43,13 @@ import { evaluateAllowedAccountsForBrowser } from "@/lib/employees/allowed-accou
 import { evaluateSpend } from "@/lib/spend-gate";
 import { evaluateActionLimit } from "@/lib/action-gate";
 import { evaluateSod } from "@/lib/employees/sod";
+import {
+  VOICE_FORBIDDEN_CODE,
+  VOICE_FORBIDDEN_MESSAGE_JA,
+  effectiveVoice,
+  findForbiddenPhrase,
+  outboundConversationText,
+} from "@/lib/employees/voice";
 import { DOMAIN_LABELS } from "@/lib/gateway/domains";
 import type { Employee, GatewayInvokeRequest } from "@/lib/types";
 import {
@@ -665,6 +672,52 @@ export async function runGatewayInvoke(
     );
   }
 
+  // Voice (HOW) after egress allow|summarize, before live Slack post.
+  // calendar.read etc. are not audience-gated — no forbidden scan.
+  const voice =
+    isAudienceGatedTool(toolDef) && egress
+      ? effectiveVoice(employee.voice, egress.effectiveAudience)
+      : null;
+  if (
+    voice &&
+    (egress?.decision === "allow" || egress?.decision === "summarize")
+  ) {
+    const args =
+      body.args && typeof body.args === "object"
+        ? (body.args as Record<string, unknown>)
+        : {};
+    const outbound = outboundConversationText(args);
+    const phrase = outbound ? findForbiddenPhrase(outbound, voice.forbidden) : null;
+    if (phrase) {
+      await appendAuditEvent({
+        orgId: orgId || employee.orgId,
+        employeeId,
+        credentialId: input.credentialId || employee.credentialId,
+        action: "tool.invoke",
+        purpose,
+        summary: `${tool} を社員の声の禁止語で拒否`,
+        metadata: { tool, jobId, phrase, voice, egress, managerId },
+      });
+      return jsonResult(
+        {
+          ok: false,
+          code: VOICE_FORBIDDEN_CODE,
+          error: VOICE_FORBIDDEN_CODE,
+          message: VOICE_FORBIDDEN_MESSAGE_JA,
+          needs_approval: false,
+          voice,
+          egress,
+          managerId,
+          employeeId,
+          tool,
+          purpose,
+          jobId,
+        },
+        403
+      );
+    }
+  }
+
   // confirm / send / order (and force flags) → always needs_approval
   // unless a matching prior approval unlocks execution.
   // SoD force_human and action-limit still win even if the matrix would allow.
@@ -736,7 +789,7 @@ export async function runGatewayInvoke(
         parentApprovalId: parentApprovalId || null,
         metadata: { ...invokeMetadata, sodVerdict, actionLimit, egress, managerId },
         summaryPrefix: sodSummary,
-        extra: { spend, actionLimit, sodVerdict, egress, managerId, toolKind: toolDef.kind, approvalPolicy: employee.approvalPolicy },
+        extra: { spend, actionLimit, sodVerdict, egress, managerId, ...(voice ? { voice } : {}), toolKind: toolDef.kind, approvalPolicy: employee.approvalPolicy },
       });
     }
 
@@ -768,6 +821,7 @@ export async function runGatewayInvoke(
         actionLimit,
         egress,
         managerId,
+        ...(voice ? { voice } : {}),
         ...(browserIdentityMeta
           ? {
               browserIdentityCheck: browserIdentityMeta.browserIdentityCheck,
@@ -801,6 +855,7 @@ export async function runGatewayInvoke(
         actionLimit,
         egress,
         managerId,
+        ...(voice ? { voice } : {}),
       },
     });
   }
@@ -858,6 +913,7 @@ export async function runGatewayInvoke(
             message: "Slack投稿に失敗しました",
             needs_approval: false,
             egress,
+            ...(voice ? { voice } : {}),
             employeeId,
             tool,
             purpose,
@@ -914,6 +970,7 @@ export async function runGatewayInvoke(
     meter,
     egress: egress ?? undefined,
     managerId: managerId || undefined,
+    ...(voice ? { voice } : {}),
     conversationDelivery,
     result:
       tool === "tools.ping"

@@ -9,6 +9,7 @@ import { createSupabaseAdminClient } from "../supabase";
 import { mapEmployeeRow } from "./mappers";
 import { evaluateSod } from "@/lib/employees/sod";
 import { normalizeActionLimits } from "@/lib/action-gate";
+import { defaultVoice, normalizeVoice } from "@/lib/employees/voice";
 import { appendAuditEvent } from "@/lib/data/audit";
 import type { ActionLimits, Employee } from "../types";
 
@@ -108,6 +109,7 @@ export type IssueEmployeeInput = {
   callbackUrl?: string | null;
   approvalRoutineText?: string | null;
   managerId?: string | null;
+  voice?: Employee["voice"] | null;
   secretHash: string;
   secretPrefix: string;
   expiresAt: string | null;
@@ -156,6 +158,7 @@ export async function issueEmployee(
       callbackUrl: input.callbackUrl ?? null,
       approvalRoutineText: input.approvalRoutineText ?? null,
       managerId: input.managerId ?? null,
+      voice: normalizeVoice(input.voice ?? defaultVoice()),
       credentialId,
       createdAt: new Date().toISOString(),
     };
@@ -204,6 +207,7 @@ export async function issueEmployee(
       callback_url: input.callbackUrl ?? null,
       approval_routine_text: input.approvalRoutineText ?? null,
       manager_id: input.managerId ?? null,
+      voice: normalizeVoice(input.voice ?? defaultVoice()),
     })
     .select("*")
     .single();
@@ -309,6 +313,7 @@ export async function updateEmployeePolicy(input: {
   approvalPolicy: Employee["approvalPolicy"];
   actionLimits?: ActionLimits;
   managerId?: string | null;
+  voice?: Employee["voice"];
 }): Promise<Employee | null> {
   const verdict = evaluateSod(input.scopes);
   const effectivePolicy = verdict.level === "force_human" ? "always_human" : input.approvalPolicy;
@@ -323,6 +328,10 @@ export async function updateEmployeePolicy(input: {
       sodLevel: verdict.level,
       actionLimits,
       managerId: input.managerId === undefined ? employee.managerId : input.managerId,
+      voice:
+        input.voice === undefined
+          ? (employee.voice ?? defaultVoice())
+          : normalizeVoice(input.voice),
     });
     return employee;
   }
@@ -337,6 +346,7 @@ export async function updateEmployeePolicy(input: {
       sod_level: verdict.level,
       action_limits: actionLimits,
       ...(input.managerId !== undefined ? { manager_id: input.managerId } : {}),
+      ...(input.voice !== undefined ? { voice: normalizeVoice(input.voice) } : {}),
       updated_at: new Date().toISOString(),
     })
     .eq("id", input.employeeId)
