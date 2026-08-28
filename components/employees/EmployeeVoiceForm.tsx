@@ -4,6 +4,7 @@ import { useState } from "react";
 import { VoiceForm } from "@/components/employees/VoiceForm";
 import { defaultVoice, normalizeVoice } from "@/lib/employees/voice";
 import type { Employee, EmployeeVoice } from "@/lib/types";
+import { policyErrorMessage } from "@/lib/employees/policy-errors";
 
 export function EmployeeVoiceForm({
   employee,
@@ -35,7 +36,7 @@ export function EmployeeVoiceForm({
         }),
       });
       const body = await response.json();
-      if (!response.ok) throw new Error(body.error || "保存に失敗しました");
+      if (!response.ok) throw new Error(policyErrorMessage(body));
       if (body.employee?.voice) setVoice(normalizeVoice(body.employee.voice));
       setMessage("話し方を保存しました");
     } catch (error) {

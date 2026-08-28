@@ -5,6 +5,7 @@ import {
   getEmployeeSlackIdentity,
   revokeEmployeeSlackIdentity,
 } from "@/lib/data/slack-identities";
+import { policyErrorPayload } from "@/lib/employees/policy-errors";
 import { normalizePostingAs } from "@/lib/employees/posting-as";
 import { slackOAuthConfigured } from "@/lib/slack/oauth";
 import { requireCapability } from "@/lib/team/demo-actor";
@@ -13,10 +14,10 @@ export const runtime = "nodejs";
 
 export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> }) {
   const orgId = await getCurrentOrgId();
-  if (!orgId) return NextResponse.json({ error: "auth_required" }, { status: 401 });
+  if (!orgId) return NextResponse.json(policyErrorPayload("auth_required"), { status: 401 });
   const { id } = await ctx.params;
   const employee = await getEmployee(id, orgId);
-  if (!employee) return NextResponse.json({ error: "employee_not_found" }, { status: 404 });
+  if (!employee) return NextResponse.json(policyErrorPayload("employee_not_found"), { status: 404 });
   const identity = await getEmployeeSlackIdentity(id);
   return NextResponse.json({
     ok: true,
@@ -35,12 +36,12 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
   );
   if (!gate.ok) return gate.response;
   const orgId = await getCurrentOrgId();
-  if (!orgId) return NextResponse.json({ error: "auth_required" }, { status: 401 });
+  if (!orgId) return NextResponse.json(policyErrorPayload("auth_required"), { status: 401 });
   const { id } = await ctx.params;
   const existing = await getEmployee(id, orgId);
-  if (!existing) return NextResponse.json({ error: "employee_not_found" }, { status: 404 });
+  if (!existing) return NextResponse.json(policyErrorPayload("employee_not_found"), { status: 404 });
   if (existing.status === "suspended") {
-    return NextResponse.json({ error: "employee_terminated" }, { status: 403 });
+    return NextResponse.json(policyErrorPayload("employee_terminated"), { status: 403 });
   }
   const postingAs = normalizePostingAs(body.postingAs);
   const updated = await updateEmployeePolicy({
@@ -52,7 +53,7 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
     actionLimits: existing.actionLimits,
     postingAs,
   });
-  if (!updated) return NextResponse.json({ error: "employee_not_found" }, { status: 404 });
+  if (!updated) return NextResponse.json(policyErrorPayload("employee_not_found"), { status: 404 });
   await appendAuditEvent({
     orgId,
     employeeId: id,
@@ -81,10 +82,10 @@ export async function DELETE(req: Request, ctx: { params: Promise<{ id: string }
   );
   if (!gate.ok) return gate.response;
   const orgId = await getCurrentOrgId();
-  if (!orgId) return NextResponse.json({ error: "auth_required" }, { status: 401 });
+  if (!orgId) return NextResponse.json(policyErrorPayload("auth_required"), { status: 401 });
   const { id } = await ctx.params;
   const existing = await getEmployee(id, orgId);
-  if (!existing) return NextResponse.json({ error: "employee_not_found" }, { status: 404 });
+  if (!existing) return NextResponse.json(policyErrorPayload("employee_not_found"), { status: 404 });
   await revokeEmployeeSlackIdentity({ employeeId: id, orgId });
   await appendAuditEvent({
     orgId,

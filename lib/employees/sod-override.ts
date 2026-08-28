@@ -1,4 +1,4 @@
-import type { ApprovalPolicy, SodVerdict } from "@/lib/types";
+import type { ApprovalPolicy, EmployeeScope, SodVerdict } from "@/lib/types";
 
 /**
  * SoD concentration stays fail-closed: mixed high-risk domains force
@@ -27,4 +27,34 @@ export function sodAckRequired(input: {
     input.requested !== "always_human" &&
     !input.acknowledged
   );
+}
+
+/** True when posted scopes + approvalPolicy match the stored employee. */
+export function samePolicyFields(
+  existing: { scopes: readonly string[]; approvalPolicy: string },
+  posted: { scopes: readonly string[]; approvalPolicy: string }
+): boolean {
+  if (existing.approvalPolicy !== posted.approvalPolicy) return false;
+  if (existing.scopes.length !== posted.scopes.length) return false;
+  const a = [...existing.scopes].sort();
+  const b = [...posted.scopes].sort();
+  return a.every((scope, i) => scope === b[i]);
+}
+
+/**
+ * Manager / voice / identity / project PATCHes re-post existing scopes
+ * and approvalPolicy. Those must not demand a fresh SoD ack.
+ */
+export function sodAckRequiredOnPatch(input: {
+  existing: { scopes: readonly EmployeeScope[]; approvalPolicy: ApprovalPolicy };
+  posted: { scopes: readonly EmployeeScope[]; approvalPolicy: ApprovalPolicy };
+  verdict: Pick<SodVerdict, "level">;
+  acknowledged?: boolean;
+}): boolean {
+  if (samePolicyFields(input.existing, input.posted)) return false;
+  return sodAckRequired({
+    verdict: input.verdict,
+    requested: input.posted.approvalPolicy,
+    acknowledged: input.acknowledged,
+  });
 }

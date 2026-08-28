@@ -7,6 +7,7 @@ import { normalizeActionLimits } from "@/lib/action-gate";
 import { evaluateSod } from "@/lib/employees/sod";
 import { normalizeAllowedAccounts } from "@/lib/employees/allowed-accounts";
 import { ALL_SCOPES } from "@/lib/employees/policy-draft";
+import { POLICY_ERROR_MESSAGES, policyErrorPayload } from "@/lib/employees/policy-errors";
 import {
   buildDefaultApprovalRoutine,
   buildHireInstructionsSnippet,
@@ -62,12 +63,12 @@ export async function POST(req: Request) {
   const displayName = (body.displayName || "").trim();
   const roleLabel = (body.roleLabel || "").trim();
   if (!displayName || !roleLabel) {
-    return NextResponse.json({ error: "name_and_role_required" }, { status: 400 });
+    return NextResponse.json(policyErrorPayload("name_and_role_required"), { status: 400 });
   }
 
   const scopes = (body.scopes || []) as EmployeeScope[];
   if (!scopes.length || scopes.some((scope) => !ALL_SCOPES.includes(scope))) {
-    return NextResponse.json({ error: "scopes_required" }, { status: 400 });
+    return NextResponse.json(policyErrorPayload("scopes_required"), { status: 400 });
   }
 
   const hasOrder = scopes.includes("commerce:order");
@@ -178,7 +179,8 @@ export async function POST(req: Request) {
       actorId: gate.actor.id,
     });
   } catch (e) {
-    const message = e instanceof Error ? e.message : "issue_failed";
-    return NextResponse.json({ error: message }, { status: 500 });
+    const raw = e instanceof Error ? e.message : "issue_failed";
+    const code = raw in POLICY_ERROR_MESSAGES ? raw : "issue_failed";
+    return NextResponse.json(policyErrorPayload(code), { status: 500 });
   }
 }

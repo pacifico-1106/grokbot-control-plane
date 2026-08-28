@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import type { Employee, EmployeeSlackIdentity, PostingAs } from "@/lib/types";
+import { policyErrorMessage } from "@/lib/employees/policy-errors";
 
 const SLACK_QUERY_MESSAGES: Record<string, string> = {
   ok: "Slack 連携しました",
@@ -48,7 +49,7 @@ export function SlackIdentityForm({
         body: JSON.stringify({ postingAs: next }),
       });
       const body = await response.json();
-      if (!response.ok) throw new Error(body.error || "保存に失敗しました");
+      if (!response.ok) throw new Error(policyErrorMessage(body));
       if (body.employee?.postingAs === "user" || body.employee?.postingAs === "bot") {
         setPostingAs(body.employee.postingAs);
       }
@@ -71,7 +72,7 @@ export function SlackIdentityForm({
         body: JSON.stringify({}),
       });
       const body = await response.json();
-      if (!response.ok) throw new Error(body.error || "解除に失敗しました");
+      if (!response.ok) throw new Error(policyErrorMessage(body, "解除に失敗しました"));
       setIdentity(null);
       setMessage("Slack 連携を解除しました");
     } catch (error) {
@@ -99,7 +100,7 @@ export function SlackIdentityForm({
           <span>
             <span className="font-medium">会社のBotとして出す</span>
             <span className="block text-xs muted mt-0.5">
-              設定 → 会話投稿 Slack の Bot token（xoxb）を使います。
+              設定 → 「チャンネルに書き込む」の Bot token（xoxb）を使います。
             </span>
           </span>
         </label>

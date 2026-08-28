@@ -28,6 +28,7 @@ import { DEFAULT_SPEND_LIMITS } from "@/lib/spend-gate";
 import { evaluateSod } from "@/lib/employees/sod";
 import { defaultVoice, normalizeVoice } from "@/lib/employees/voice";
 import { defaultProjectAccess, normalizeProjectAccess } from "@/lib/employees/project-access";
+import { policyErrorMessage } from "@/lib/employees/policy-errors";
 import { DOMAIN_LABELS, domainOfScope } from "@/lib/gateway/domains";
 import type {
   ActionLimits,
@@ -144,7 +145,7 @@ export function HireEmployeeClient({ members = [], projects = [] }: { members?: 
         body: JSON.stringify({ input: prompt }),
       });
       const body = await res.json();
-      if (!res.ok) throw new Error(body.error || "interpret_failed");
+      if (!res.ok) throw new Error(policyErrorMessage(body, "職務の読み取りに失敗しました"));
       const nextDrafts = (Array.isArray(body.drafts) && body.drafts.length
         ? body.drafts
         : [body.draft]) as EmployeePolicyDraft[];
@@ -152,7 +153,7 @@ export function HireEmployeeClient({ members = [], projects = [] }: { members?: 
       applyDraft(nextDrafts[0]);
       setStep("draft");
     } catch (e) {
-      setError(e instanceof Error ? e.message : "interpret_failed");
+      setError(e instanceof Error ? e.message : "職務の読み取りに失敗しました");
     } finally {
       setLoading(false);
     }
@@ -208,7 +209,7 @@ export function HireEmployeeClient({ members = [], projects = [] }: { members?: 
         }),
       });
       const body = await res.json();
-      if (!res.ok) throw new Error(body.error || "issue_failed");
+      if (!res.ok) throw new Error(policyErrorMessage(body, "社員証の発行に失敗しました"));
       setOneTimeSecret(body.credential?.oneTimeSecret ?? null);
       setRevealSecret(false);
       setIssuedEmployeeId(body.employee?.id ?? null);
@@ -228,7 +229,7 @@ export function HireEmployeeClient({ members = [], projects = [] }: { members?: 
       );
       setStep("issued");
     } catch (e) {
-      setError(e instanceof Error ? e.message : "issue_failed");
+      setError(e instanceof Error ? e.message : "社員証の発行に失敗しました");
     } finally {
       setLoading(false);
     }
@@ -252,7 +253,7 @@ export function HireEmployeeClient({ members = [], projects = [] }: { members?: 
           }),
         });
         const body = await res.json();
-        if (!res.ok) throw new Error(body.error || "issue_failed");
+        if (!res.ok) throw new Error(policyErrorMessage(body, "社員証の発行に失敗しました"));
         issued.push({
           id: body.employee.id,
           displayName: body.employee.displayName,
@@ -264,7 +265,7 @@ export function HireEmployeeClient({ members = [], projects = [] }: { members?: 
       setOneTimeSecret(issued[0]?.oneTimeSecret ?? null);
       setStep("issued");
     } catch (e) {
-      setError(e instanceof Error ? e.message : "issue_failed");
+      setError(e instanceof Error ? e.message : "社員証の発行に失敗しました");
     } finally {
       setLoading(false);
     }
@@ -592,7 +593,7 @@ export function HireEmployeeClient({ members = [], projects = [] }: { members?: 
               />
               <span>
                 <span className="font-medium">会社のBotとして出す</span>
-                <span className="block text-xs muted mt-0.5">会話投稿 Slack の Bot token を使います。</span>
+                <span className="block text-xs muted mt-0.5">設定の「チャンネルに書き込む」の Bot token を使います。</span>
               </span>
             </label>
             <label className="flex items-start gap-2 text-sm cursor-pointer">
@@ -787,7 +788,7 @@ export function HireEmployeeClient({ members = [], projects = [] }: { members?: 
               />
               <span>
                 <span className="font-medium">会社のBotとして出す</span>
-                <span className="block text-xs muted mt-0.5">会話投稿 Slack の Bot token を使います。</span>
+                <span className="block text-xs muted mt-0.5">設定の「チャンネルに書き込む」の Bot token を使います。</span>
               </span>
             </label>
             <label className="flex items-start gap-2 text-sm cursor-pointer">

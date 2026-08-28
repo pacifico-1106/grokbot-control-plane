@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import type { Employee } from "@/lib/types";
+import { policyErrorMessage } from "@/lib/employees/policy-errors";
 
 export function EmployeeIdentityForm({
   employee,
@@ -37,7 +38,7 @@ export function EmployeeIdentityForm({
         }),
       });
       const body = await response.json();
-      if (!response.ok) throw new Error(body.error || "保存に失敗しました");
+      if (!response.ok) throw new Error(policyErrorMessage(body));
       if (typeof body.employee?.displayName === "string") {
         setDisplayName(body.employee.displayName);
       }

@@ -4,6 +4,7 @@ import { useState } from "react";
 import { ProjectAccessForm } from "@/components/employees/ProjectAccessForm";
 import { defaultProjectAccess, normalizeProjectAccess } from "@/lib/employees/project-access";
 import type { Employee, EmployeeProjectAccess, OrgProject } from "@/lib/types";
+import { policyErrorMessage } from "@/lib/employees/policy-errors";
 
 export function EmployeeProjectAccessForm({
   employee,
@@ -38,7 +39,7 @@ export function EmployeeProjectAccessForm({
         }),
       });
       const body = await response.json();
-      if (!response.ok) throw new Error(body.error || "保存に失敗しました");
+      if (!response.ok) throw new Error(policyErrorMessage(body));
       if (body.employee?.projectAccess) {
         setAccess(normalizeProjectAccess(body.employee.projectAccess));
       }

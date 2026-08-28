@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { evaluateSod } from "./sod";
-import { resolveApprovalPolicy, sodAckRequired } from "./sod-override";
+import { resolveApprovalPolicy, samePolicyFields, sodAckRequired, sodAckRequiredOnPatch } from "./sod-override";
 
 const mixed = evaluateSod(["mail:send", "commerce:order"]);
 const safe = evaluateSod(["mail:draft", "files:read"]);
@@ -79,5 +79,68 @@ describe("sodAckRequired", () => {
     expect(
       sodAckRequired({ verdict: safe, requested: "risk_based" })
     ).toBe(false);
+  });
+});
+
+describe("samePolicyFields", () => {
+  test("true when scopes match regardless of order and policy is unchanged", () => {
+    expect(
+      samePolicyFields(
+        { scopes: ["mail:send", "commerce:order"], approvalPolicy: "risk_based" },
+        { scopes: ["commerce:order", "mail:send"], approvalPolicy: "risk_based" }
+      )
+    ).toBe(true);
+  });
+
+  test("false when scopes or approvalPolicy differ", () => {
+    expect(
+      samePolicyFields(
+        { scopes: ["mail:send"], approvalPolicy: "risk_based" },
+        { scopes: ["mail:send", "commerce:order"], approvalPolicy: "risk_based" }
+      )
+    ).toBe(false);
+    expect(
+      samePolicyFields(
+        { scopes: ["mail:send"], approvalPolicy: "risk_based" },
+        { scopes: ["mail:send"], approvalPolicy: "always_human" }
+      )
+    ).toBe(false);
+  });
+});
+
+describe("sodAckRequiredOnPatch", () => {
+  const mixedScopes = ["mail:send", "commerce:order"] as const;
+
+  test("unchanged manager-style patch does not require ack", () => {
+    expect(
+      sodAckRequiredOnPatch({
+        existing: { scopes: [...mixedScopes], approvalPolicy: "risk_based" },
+        posted: { scopes: ["commerce:order", "mail:send"], approvalPolicy: "risk_based" },
+        verdict: mixed,
+        acknowledged: false,
+      })
+    ).toBe(false);
+  });
+
+  test("changing scopes without ack still requires it", () => {
+    expect(
+      sodAckRequiredOnPatch({
+        existing: { scopes: ["mail:send"], approvalPolicy: "risk_based" },
+        posted: { scopes: [...mixedScopes], approvalPolicy: "risk_based" },
+        verdict: mixed,
+        acknowledged: false,
+      })
+    ).toBe(true);
+  });
+
+  test("changing approvalPolicy without ack still requires it", () => {
+    expect(
+      sodAckRequiredOnPatch({
+        existing: { scopes: ["mail:send", "commerce:order"], approvalPolicy: "always_human" },
+        posted: { scopes: ["mail:send", "commerce:order"], approvalPolicy: "risk_based" },
+        verdict: mixed,
+        acknowledged: false,
+      })
+    ).toBe(true);
   });
 });

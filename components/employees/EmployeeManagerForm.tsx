@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { ManagerPicker } from "@/components/employees/ManagerPicker";
 import type { Employee, OrgMember } from "@/lib/types";
+import { policyErrorMessage } from "@/lib/employees/policy-errors";
 
 export function EmployeeManagerForm({
   employee,
@@ -33,7 +34,7 @@ export function EmployeeManagerForm({
         }),
       });
       const body = await response.json();
-      if (!response.ok) throw new Error(body.error || "保存に失敗しました");
+      if (!response.ok) throw new Error(policyErrorMessage(body));
       setMessage("上長を保存しました");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "保存に失敗しました");

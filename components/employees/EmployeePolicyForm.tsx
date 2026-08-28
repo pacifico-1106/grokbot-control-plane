@@ -12,6 +12,7 @@ import {
   SCOPE_LABELS,
 } from "@/lib/employees/policy-draft";
 import { evaluateSod } from "@/lib/employees/sod";
+import { policyErrorMessage } from "@/lib/employees/policy-errors";
 import { DEFAULT_SPEND_LIMITS } from "@/lib/spend-gate";
 import type {
   ActionLimits,
@@ -144,13 +145,7 @@ export function EmployeePolicyForm({
       });
       const body = await response.json();
       if (!response.ok) {
-        if (body.error === "sod_ack_required") {
-          throw new Error("警告を確認してから保存してください");
-        }
-        if (body.error === "allowed_accounts_required") {
-          throw new Error("ブラウザ利用には許可アカウントが必要です");
-        }
-        throw new Error(body.error || "保存に失敗しました");
+        throw new Error(policyErrorMessage(body));
       }
       if (Array.isArray(body.employee?.scopes)) {
         const nextScopes = body.employee.scopes as EmployeeScope[];
