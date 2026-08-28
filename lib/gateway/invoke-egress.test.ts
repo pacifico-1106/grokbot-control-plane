@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { incrementActionCounter } from "@/lib/data/action-counters";
+import { resolveApproval } from "@/lib/data";
 import { upsertConversationAdapter } from "@/lib/data/conversation-adapters";
 import { getRuntimeEmployees } from "@/lib/demo-data";
 import { runGatewayInvoke } from "@/lib/gateway/invoke";
@@ -301,6 +302,103 @@ describe("Gateway audience egress", () => {
       expect(failed.httpStatus).toBe(502);
       expect(failed.body.code).toBe("slack_post_failed");
       expect(failed.body.ok).toBe(false);
+    } finally {
+      globalThis.fetch = originalFetch;
+      await upsertConversationAdapter({
+        orgId: DEMO_ORG.id,
+        surface: "slack",
+        enabled: false,
+        secrets: {},
+      });
+    }
+  });
+
+  test("prior approval of needs_approval egress still posts Slack conversation (full text)", async () => {
+    const jobId = `job_prior_conf_${Date.now()}`;
+    const threadTs = "1787911797.502889";
+    const body = {
+      tool: "comm.reply",
+      purpose: "comm.internal",
+      jobId,
+      conversation: {
+        surface: "slack" as const,
+        orgId: DEMO_ORG.id,
+        slackChannelId: "C_INTERNAL",
+        threadId: threadTs,
+      },
+      args: {
+        slackChannelId: "C_INTERNAL",
+        text: "顧客への返信本文",
+        threadId: threadTs,
+      },
+    };
+    const queued = await runGatewayInvoke({
+      employeeId: "emp_comm",
+      credentialId: "cred_comm",
+      body,
+    });
+    expect(queued.httpStatus).toBe(402);
+    expect(queued.body.needs_approval).toBe(true);
+    expect((queued.body.egress as { decision?: string } | undefined)?.decision).toBe(
+      "needs_approval"
+    );
+    const approvalId = String(queued.body.approvalId || "");
+    expect(approvalId).toBeTruthy();
+    const approved = await resolveApproval(
+      approvalId,
+      "approved",
+      "ando@example.com",
+      DEMO_ORG.id
+    );
+    expect(approved?.status).toBe("approved");
+
+    await upsertConversationAdapter({
+      orgId: DEMO_ORG.id,
+      surface: "slack",
+      enabled: true,
+      secrets: { botToken: "xoxb-test" },
+    });
+    const originalFetch = globalThis.fetch;
+    let postedUrl = "";
+    let postedAuth = "";
+    let postedPayload: Record<string, unknown> = {};
+    try {
+      globalThis.fetch = (async (input, init) => {
+        postedUrl = String(input);
+        postedAuth = String(
+          (init?.headers as Record<string, string> | undefined)?.authorization || ""
+        );
+        postedPayload = JSON.parse(String(init?.body || "{}"));
+        return Response.json({
+          ok: true,
+          channel: "C_INTERNAL",
+          ts: "1787911800.000001",
+        });
+      }) as typeof fetch;
+      const sent = await runGatewayInvoke({
+        employeeId: "emp_comm",
+        credentialId: "cred_comm",
+        body: { ...body, approvalId },
+      });
+      expect(sent.body.ok).toBe(true);
+      expect((sent.body.egress as { decision?: string } | undefined)?.decision).toBe(
+        "needs_approval"
+      );
+      expect(postedUrl).toBe("https://slack.com/api/chat.postMessage");
+      expect(postedAuth).toBe("Bearer xoxb-test");
+      expect(postedPayload.channel).toBe("C_INTERNAL");
+      expect(postedPayload.thread_ts).toBe(threadTs);
+      expect(String(postedPayload.text)).toBe("顧客への返信本文");
+      expect(String(postedPayload.text)).not.toContain("【要約のみ】");
+      const delivery = sent.body.conversationDelivery as
+        | { delivery?: string; ts?: string; channel?: string }
+        | undefined;
+      expect(delivery?.delivery).toBe("slack");
+      expect(delivery?.ts).toBe("1787911800.000001");
+      expect((sent.body.result as { accepted?: boolean; delivery?: string } | undefined)?.accepted).toBe(
+        true
+      );
+      expect((sent.body.result as { delivery?: string } | undefined)?.delivery).toBe("slack");
     } finally {
       globalThis.fetch = originalFetch;
       await upsertConversationAdapter({

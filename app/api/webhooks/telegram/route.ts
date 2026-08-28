@@ -90,27 +90,37 @@ async function auditTelegramError(
 async function handleCallback(update: TelegramUpdate): Promise<void> {
   const query = update.callback_query!;
   const actor = actorFor(query.from);
-  if (!isExpectedChat(query.message) || !isAllowedUser(query.from)) {
-    await answerTelegramCallback(query.id || "", "この操作は許可されていません");
-    return;
-  }
-
   const match = /^(a|r|e):([A-Za-z0-9_-]{8,32})$/.exec(query.data || "");
   if (!match) {
     await answerTelegramCallback(query.id || "", "無効な操作です");
     return;
   }
 
+  if (!isAllowedUser(query.from)) {
+    await answerTelegramCallback(query.id || "", "この操作は許可されていません");
+    return;
+  }
+
   const approval = await getApprovalByTelegramRef(match[2]);
   try {
-    if (
-      !approval ||
-      !(await shouldUseGlobalTelegramFallback(approval.orgId)) ||
-      approval.status !== "pending" ||
-      approval.telegramMessageId !== query.message?.message_id
-    ) {
+    if (!approval || approval.status !== "pending") {
       await answerTelegramCallback(query.id || "", "対象は処理済みか見つかりません");
       return;
+    }
+
+    const expectedChat = isExpectedChat(query.message);
+    const fallback = await shouldUseGlobalTelegramFallback(approval.orgId);
+    if (!expectedChat && !fallback) {
+      await answerTelegramCallback(query.id || "", "この操作は許可されていません");
+      return;
+    }
+
+    if (approval.telegramMessageId !== query.message?.message_id) {
+      console.warn("telegram_callback_message_id_mismatch", {
+        approvalId: approval.id,
+        expected: approval.telegramMessageId,
+        got: query.message?.message_id,
+      });
     }
 
     if (match[1] === "e") {

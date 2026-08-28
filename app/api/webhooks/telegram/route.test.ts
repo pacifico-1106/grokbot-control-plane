@@ -148,4 +148,38 @@ describe("Telegram webhook", () => {
     expect(child.approval.parentApprovalId).toBe(revised.id);
     expect(child.approval.revisionCount).toBe(1);
   });
+
+  test("approves when telegramRef matches even if message_id differs", async () => {
+    const approval = await notifiedApproval(`job_msgid_${Date.now()}`);
+    const response = await webhook({
+      callback_query: {
+        id: "callback_mismatch",
+        data: `a:${approval.telegramRef}`,
+        from: { id: 307, username: "owner" },
+        message: {
+          message_id: Number(approval.telegramMessageId) + 99,
+          chat: { id: -100307 },
+        },
+      },
+    });
+    expect(response.status).toBe(200);
+    expect((await getApprovalById(approval.id, DEMO_ORG.id))?.status).toBe("approved");
+  });
+
+  test("approves fallback-org callback even when chat id mismatches", async () => {
+    const approval = await notifiedApproval(`job_chat_${Date.now()}`);
+    const response = await webhook({
+      callback_query: {
+        id: "callback_chat",
+        data: `a:${approval.telegramRef}`,
+        from: { id: 307, username: "owner" },
+        message: {
+          message_id: approval.telegramMessageId,
+          chat: { id: -999 },
+        },
+      },
+    });
+    expect(response.status).toBe(200);
+    expect((await getApprovalById(approval.id, DEMO_ORG.id))?.status).toBe("approved");
+  });
 });

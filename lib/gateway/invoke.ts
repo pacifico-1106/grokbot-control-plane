@@ -908,18 +908,20 @@ export async function runGatewayInvoke(
     recorded: boolean;
   } | null = null;
 
-  // Conversation posting (Slack) after egress allow|summarize and SoD/always_human unlock.
+  // Conversation posting (Slack) after egress allow|summarize, or after human
+  // approval of a needs_approval egress. Deny stays fail-closed above.
   // Notify inbox is a different plane — never post approvals through this adapter.
   let conversationDelivery:
     | { ok: true; delivery: "stub" | "slack"; channel?: string; ts?: string }
     | undefined;
-  if (
-    isAudienceGatedTool(toolDef) &&
-    (egress?.decision === "allow" || egress?.decision === "summarize")
-  ) {
+  if (isAudienceGatedTool(toolDef)) {
     const ctx = parseConversationContext(body, orgId || employee.orgId);
     const dest = ctx?.slackChannelId || ctx?.slackUserId || "";
-    if (dest) {
+    const egressAllowsPost =
+      egress?.decision === "allow" ||
+      egress?.decision === "summarize" ||
+      (priorApprovalOk && egress?.decision === "needs_approval");
+    if (dest && egressAllowsPost) {
       const args =
         body.args && typeof body.args === "object"
           ? (body.args as Record<string, unknown>)
@@ -932,7 +934,8 @@ export async function runGatewayInvoke(
         channel: dest,
         text: (rawText || "").trim() || purpose,
         threadTs: looksLikeSlackTs(ctx?.threadId) ? ctx?.threadId : undefined,
-        summarize: egress.decision === "summarize",
+        // After human approval of needs_approval, post FULL text (not 【要約のみ】).
+        summarize: egress?.decision === "summarize",
       });
       if (!posted.ok) {
         await appendAuditEvent({
@@ -1050,11 +1053,13 @@ export async function runGatewayInvoke(
                           accepted: true,
                           disclosed: egress?.decision === "summarize" ? "summary" : "source",
                           delivery: conversationDelivery?.delivery,
+                          conversationDelivery,
                         }
                       : {
                           accepted: true,
                           disclosed: egress?.decision === "summarize" ? "summary" : undefined,
                           delivery: conversationDelivery?.delivery,
+                          conversationDelivery,
                         },
     message:
       egress?.decision === "summarize"
