@@ -4,6 +4,7 @@ import { AppShell } from "@/components/AppShell";
 import { BindingPanel } from "@/components/employees/BindingPanel";
 import { EmployeeActionLog } from "@/components/employees/EmployeeActionLog";
 import { EmployeeManagerForm } from "@/components/employees/EmployeeManagerForm";
+import { EmployeeIdentityForm } from "@/components/employees/EmployeeIdentityForm";
 import { EmployeeVoiceForm } from "@/components/employees/EmployeeVoiceForm";
 import { EmployeeProjectAccessForm } from "@/components/employees/EmployeeProjectAccessForm";
 import { HireEmployeeClient } from "@/components/employees/HireEmployeeClient";
@@ -81,6 +82,7 @@ export default async function EmployeeDetailPage({
       <div className="grid lg:grid-cols-2 gap-4">
         <section className="surface p-5 space-y-3">
           <h2 className="text-sm font-medium">職務</h2>
+          <EmployeeIdentityForm employee={employee} />
           <p className="text-sm muted leading-relaxed">
             {employee.jobDescription || "（説明なし）"}
           </p>

@@ -319,6 +319,8 @@ export async function updateEmployeePolicy(input: {
   managerId?: string | null;
   voice?: Employee["voice"];
   projectAccess?: EmployeeProjectAccess;
+  displayName?: string;
+  roleLabel?: string;
 }): Promise<Employee | null> {
   const verdict = evaluateSod(input.scopes);
   const effectivePolicy = verdict.level === "force_human" ? "always_human" : input.approvalPolicy;
@@ -341,6 +343,8 @@ export async function updateEmployeePolicy(input: {
         input.projectAccess === undefined
           ? (employee.projectAccess ?? defaultProjectAccess())
           : normalizeProjectAccess(input.projectAccess),
+      ...(input.displayName !== undefined ? { displayName: input.displayName.trim() } : {}),
+      ...(input.roleLabel !== undefined ? { roleLabel: input.roleLabel.trim() } : {}),
     });
     return employee;
   }
@@ -359,6 +363,8 @@ export async function updateEmployeePolicy(input: {
       ...(input.projectAccess !== undefined
         ? { project_access: normalizeProjectAccess(input.projectAccess) }
         : {}),
+      ...(input.displayName !== undefined ? { display_name: input.displayName.trim() } : {}),
+      ...(input.roleLabel !== undefined ? { role_label: input.roleLabel.trim() } : {}),
       updated_at: new Date().toISOString(),
     })
     .eq("id", input.employeeId)
