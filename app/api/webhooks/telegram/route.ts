@@ -90,28 +90,36 @@ async function auditTelegramError(
 async function handleCallback(update: TelegramUpdate): Promise<void> {
   const query = update.callback_query!;
   const actor = actorFor(query.from);
+  const callbackId = query.id || "";
   const match = /^(a|r|e):([A-Za-z0-9_-]{8,32})$/.exec(query.data || "");
   if (!match) {
-    await answerTelegramCallback(query.id || "", "無効な操作です");
+    await answerTelegramCallback(callbackId, "無効な操作です");
     return;
   }
 
-  if (!isAllowedUser(query.from)) {
-    await answerTelegramCallback(query.id || "", "この操作は許可されていません");
-    return;
-  }
-
-  const approval = await getApprovalByTelegramRef(match[2]);
+  // Lookup by telegramRef FIRST so a chat-id / message-id mismatch cannot
+  // swallow the callback before the pending ticket is found.
+  let approval: Awaited<ReturnType<typeof getApprovalByTelegramRef>> = null;
+  let answered = false;
+  const answer = async (text: string) => {
+    answered = true;
+    await answerTelegramCallback(callbackId, text);
+  };
   try {
+    approval = await getApprovalByTelegramRef(match[2]);
+    if (!isAllowedUser(query.from)) {
+      await answer("この操作は許可されていません");
+      return;
+    }
     if (!approval || approval.status !== "pending") {
-      await answerTelegramCallback(query.id || "", "対象は処理済みか見つかりません");
+      await answer("対象は処理済みか見つかりません");
       return;
     }
 
     const expectedChat = isExpectedChat(query.message);
     const fallback = await shouldUseGlobalTelegramFallback(approval.orgId);
     if (!expectedChat && !fallback) {
-      await answerTelegramCallback(query.id || "", "この操作は許可されていません");
+      await answer("この操作は許可されていません");
       return;
     }
 
@@ -125,8 +133,7 @@ async function handleCallback(update: TelegramUpdate): Promise<void> {
 
     if (match[1] === "e") {
       const prompted = await promptTelegramRevision(approval, query.from!.id!);
-      await answerTelegramCallback(
-        query.id || "",
+      await answer(
         prompted.ok ? "返信で修正指示を送ってください" : "修正モードにできませんでした"
       );
       if (!prompted.ok) {
@@ -143,7 +150,7 @@ async function handleCallback(update: TelegramUpdate): Promise<void> {
       approval.orgId
     );
     if (!updated) {
-      await answerTelegramCallback(query.id || "", "対象はすでに処理済みです");
+      await answer("対象はすでに処理済みです");
       return;
     }
     const employee = await getEmployee(updated.employeeId, updated.orgId);
@@ -153,13 +160,10 @@ async function handleCallback(update: TelegramUpdate): Promise<void> {
       actorEmail: actor,
       employee,
     });
-    await answerTelegramCallback(
-      query.id || "",
-      decision === "approved" ? "承認しました" : "却下しました"
-    );
+    await answer(decision === "approved" ? "承認しました" : "却下しました");
   } catch (error) {
     await auditTelegramError(approval, error, actor);
-    await answerTelegramCallback(query.id || "", "処理に失敗しました");
+    if (!answered) await answer("処理に失敗しました");
   }
 }
 
