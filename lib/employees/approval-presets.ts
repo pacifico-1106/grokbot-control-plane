@@ -160,24 +160,19 @@ export function toolApprovalHintsFromPresets(): Record<
   return out;
 }
 
-/** If any force-human scope is present, bump employee-level policy to always_human. */
+/**
+ * Employee-level default. Tool-level force (mail.send, calendar.confirm,
+ * commerce.order, browser.use) stays in the Gateway — do not bump the
+ * badge to always_human just because those scopes are on.
+ */
 export function suggestEmployeeApprovalPolicy(input: {
   scopes: string[];
   explicitAlwaysHuman?: boolean;
-  /** Kept for callers; P0 confirm/send scopes still force always_human. */
+  /** Kept for callers; tool-level confirm/send/order still force human. */
   preferRiskBased?: boolean;
 }): ApprovalPolicy {
+  void input.scopes;
   void input.preferRiskBased;
   if (input.explicitAlwaysHuman) return "always_human";
-  const forceScopes = [
-    "mail:send",
-    "calendar:confirm",
-    "commerce:order",
-    "browser:use",
-  ];
-  // Gateway still force-queues confirm/send/order; employee-level default stays strict.
-  if (forceScopes.some((s) => input.scopes.includes(s))) {
-    return "always_human";
-  }
   return "risk_based";
 }

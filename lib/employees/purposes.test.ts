@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { parsePurposes } from "./purposes";
+import { parsePurposes, sanitizePurposes } from "./purposes";
 
 describe("parsePurposes", () => {
   test("splits, trims, drops empty, keeps order", () => {
@@ -68,5 +68,16 @@ describe("parsePurposes", () => {
     expect(parsePurposes("   ")).toEqual([]);
     expect(parsePurposes(",、\n")).toEqual([]);
     expect(parsePurposes("/  ,")).toEqual([]);
+  });
+});
+
+describe("sanitizePurposes", () => {
+  test("drops scopes, blobs, and empty tokens", () => {
+    expect(
+      sanitizePurposes(["ops.admin", "mail:send", "  ", "commerce:order", "comm.internal"])
+    ).toEqual(["ops.admin", "comm.internal"]);
+    expect(sanitizePurposes(["秘書としてメールの下書き", "calendar.propose"])).toEqual([
+      "calendar.propose",
+    ]);
   });
 });
