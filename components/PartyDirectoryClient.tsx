@@ -65,10 +65,24 @@ export function PartyDirectoryClient({
     }
   }
 
+  const matchingChannel = useMemo(
+    () => channels.find((row) => row.externalId.trim() === channelId.trim()),
+    [channels, channelId]
+  );
+  const lockInternal =
+    matchingChannel?.classification === "shared_external" || matchingChannel?.mixed === true;
+  const classificationOptions = (
+    Object.keys(CLASS_LABELS) as ChannelClassification[]
+  ).filter((item) => !(lockInternal && item === "internal"));
+
   async function saveChannel() {
     setBusy(true);
     setMessage("");
     try {
+      const nextClass = lockInternal && classification === "internal" ? "shared_external" : classification;
+      if (lockInternal && classification === "internal") {
+        throw new Error("Slack Connect / 社外混在は社内にできません");
+      }
       const response = await fetch("/api/settings/directory", {
         method: "PUT",
         headers: { "content-type": "application/json" },
@@ -76,12 +90,17 @@ export function PartyDirectoryClient({
           record: "channel",
           surface: "slack",
           externalId: channelId,
-          classification,
-          mixed: classification === "shared_external",
+          classification: nextClass,
+          mixed: nextClass === "shared_external",
         }),
       });
       const body = await response.json();
-      if (!response.ok) throw new Error(body.error || "保存に失敗しました");
+      if (!response.ok) {
+        if (body.error === "connect_cannot_be_internal") {
+          throw new Error("Slack Connect / 社外混在は社内にできません");
+        }
+        throw new Error(body.error || "保存に失敗しました");
+      }
       setChannels((current) => [body.channel, ...current.filter((row) => row.id !== body.channel.id)]);
       setChannelId("");
       setMessage("チャネルを保存しました");
@@ -170,12 +189,15 @@ export function PartyDirectoryClient({
             placeholder="例: C_INTERNAL"
             className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm"
           />
+          <p className="text-xs muted leading-relaxed">
+            Slack Connect / 社外混在は社内にできない。
+          </p>
           <select
-            value={classification}
+            value={lockInternal && classification === "internal" ? "shared_external" : classification}
             onChange={(e) => setClassification(e.target.value as ChannelClassification)}
             className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm"
           >
-            {(Object.keys(CLASS_LABELS) as ChannelClassification[]).map((item) => (
+            {classificationOptions.map((item) => (
               <option key={item} value={item}>
                 {CLASS_LABELS[item]}
               </option>

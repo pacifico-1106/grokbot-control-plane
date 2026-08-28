@@ -98,7 +98,7 @@ export default async function EmployeeDetailPage({
         </section>
 
         <section className="surface p-5 space-y-3">
-          <h2 className="text-sm font-medium">できること / 目的</h2>
+          <h2 className="text-sm font-medium">やらせること / 使う理由</h2>
           <EmployeePolicyForm employee={employee} disabled={employee.status === "suspended"} />
         </section>
       </div>

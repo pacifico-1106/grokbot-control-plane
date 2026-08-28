@@ -15,11 +15,15 @@ import { ManagerPicker } from "@/components/employees/ManagerPicker";
 import { SpendForm } from "@/components/employees/SpendForm";
 import { VoiceForm } from "@/components/employees/VoiceForm";
 import { ProjectAccessForm } from "@/components/employees/ProjectAccessForm";
+import { PolicyPreview } from "@/components/employees/PolicyPreview";
+import { PurposeChips } from "@/components/employees/PurposeChips";
 import {
   APPROVAL_POLICY_LABELS,
+  HIRE_APPROVAL_CHOICES,
   SCOPE_LABELS,
   jobTextImpliesCommerceOrder,
 } from "@/lib/employees/policy-draft";
+import { sanitizePurposes } from "@/lib/employees/purposes";
 import { DEFAULT_SPEND_LIMITS } from "@/lib/spend-gate";
 import { evaluateSod } from "@/lib/employees/sod";
 import { defaultVoice, normalizeVoice } from "@/lib/employees/voice";
@@ -39,9 +43,9 @@ import type {
 } from "@/lib/types";
 
 const EXAMPLES = [
+  "秘書として、メールの下書きと社内Slackの返信、日程の候補を出してほしい。会議の確定は人がする",
   "営業として見積メールの下書きを作り、送信前に必ず承認してほしい",
   "事務として請求書を確認し、社内ファイルを読むだけ",
-  "顧客対応の返信下書きと、必要ならメール送信（承認付き）",
   "購買で発注まで行うが、毎回人間の承認が必要",
 ];
 
@@ -64,7 +68,7 @@ export function HireEmployeeClient({ members = [], projects = [] }: { members?: 
   const [displayName, setDisplayName] = useState("");
   const [roleLabel, setRoleLabel] = useState("");
   const [scopes, setScopes] = useState<EmployeeScope[]>([]);
-  const [purposes, setPurposes] = useState("");
+  const [purposes, setPurposes] = useState<string[]>([]);
   const [approvalPolicy, setApprovalPolicy] =
     useState<ApprovalPolicy>("risk_based");
   const [actionLimits, setActionLimits] = useState<ActionLimits>({});
@@ -93,14 +97,7 @@ export function HireEmployeeClient({ members = [], projects = [] }: { members?: 
     null
   );
 
-  const purposeList = useMemo(
-    () =>
-      purposes
-        .split(/[,、\n]/)
-        .map((p) => p.trim())
-        .filter(Boolean),
-    [purposes]
-  );
+  const purposeList = purposes;
 
   const hasOrderScope = scopes.includes("commerce:order");
   const liveSod = useMemo(() => evaluateSod(scopes), [scopes]);
@@ -110,16 +107,12 @@ export function HireEmployeeClient({ members = [], projects = [] }: { members?: 
     setDisplayName(d.policy.displayName);
     setRoleLabel(d.policy.roleLabel);
     const inferredOrder =
-      jobTextImpliesCommerceOrder(prompt) ||
-      d.policy.scopes.includes("commerce:order") ||
-      d.warnings.includes("commerce_order_requested");
-    const nextScopes = inferredOrder && !d.policy.scopes.includes("commerce:order")
-      ? ([...d.policy.scopes, "commerce:order", "commerce:quote"] as EmployeeScope[])
-      : d.policy.scopes;
-    const scopesUnique = [...new Set(nextScopes)] as EmployeeScope[];
+      d.policy.scopes.includes("commerce:order") &&
+      (jobTextImpliesCommerceOrder(prompt) || d.warnings.includes("commerce_order_requested"));
+    const scopesUnique = [...new Set(d.policy.scopes)] as EmployeeScope[];
     setOrderInferredFromJob(inferredOrder);
     setScopes(scopesUnique);
-    setPurposes(d.policy.allowedPurposes.join(", "));
+    setPurposes(sanitizePurposes(d.policy.allowedPurposes));
     setApprovalPolicy(d.policy.approvalPolicy);
     setActionLimits(d.policy.actionLimits || {});
     setSodOverrideAcknowledged(false);
@@ -532,17 +525,9 @@ export function HireEmployeeClient({ members = [], projects = [] }: { members?: 
             </label>
           </div>
 
-          <label className="block text-sm">
-            <span className="muted">許可目的（カンマ区切り）</span>
-            <input
-              value={purposes}
-              onChange={(e) => setPurposes(e.target.value)}
-              className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm"
-            />
-          </label>
-
           <div>
-            <div className="text-sm muted mb-2">できること</div>
+            <h3 className="text-sm font-medium">何をする人？</h3>
+            <p className="mt-1 mb-2 text-xs muted">やらせること</p>
             <div className="flex flex-wrap gap-2">
               {(Object.keys(SCOPE_LABELS) as EmployeeScope[]).map((scope) => {
                 const on = scopes.includes(scope);
@@ -560,49 +545,62 @@ export function HireEmployeeClient({ members = [], projects = [] }: { members?: 
             </div>
           </div>
 
+          <div>
+            <h3 className="text-sm font-medium">何のために？</h3>
+            <p className="mt-1 mb-2 text-xs muted">使う理由</p>
+            <PurposeChips value={purposes} onChange={setPurposes} />
+          </div>
+
+          <fieldset className="space-y-2">
+            <legend className="text-sm font-medium">一人でやっていいか？</legend>
+            {HIRE_APPROVAL_CHOICES.map((choice) => (
+              <label key={choice.value} className="flex items-start gap-2 text-sm cursor-pointer">
+                <input
+                  type="radio"
+                  name="hire-approval-policy"
+                  className="mt-1"
+                  checked={approvalPolicy === choice.value}
+                  disabled={liveSod.level === "force_human" && !sodOverrideAcknowledged}
+                  onChange={() => setApprovalPolicy(choice.value)}
+                />
+                <span>
+                  <span className="font-medium">{choice.label}</span>
+                  <span className="block text-xs muted mt-0.5">{choice.hint}</span>
+                </span>
+              </label>
+            ))}
+            {liveSod.level === "force_human" && !sodOverrideAcknowledged ? (
+              <span className="block text-xs text-[var(--warn)]">
+                警告を確認すると選べます。確認しない場合は全件、人が見ます。
+              </span>
+            ) : null}
+          </fieldset>
+
+          <PolicyPreview
+            scopes={scopes}
+            allowedPurposes={purposes}
+            approvalPolicy={approvalPolicy}
+            liveSod={liveSod}
+            allowedAccounts={allowedAccounts}
+          />
+
           <ManagerPicker members={members} value={managerId} onChange={setManagerId} />
 
           <ProjectAccessForm value={projectAccess} projects={projects} onChange={setProjectAccess} />
 
           <VoiceForm value={voice} onChange={setVoice} />
 
-          <div className="grid md:grid-cols-2 gap-4">
-            <label className="block text-sm">
-              <span className="muted">承認ポリシー（全体）</span>
-              <select
-                value={approvalPolicy}
-                disabled={liveSod.level === "force_human" && !sodOverrideAcknowledged}
-                onChange={(e) =>
-                  setApprovalPolicy(e.target.value as ApprovalPolicy)
-                }
-                className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm"
-              >
-                {(Object.keys(APPROVAL_POLICY_LABELS) as ApprovalPolicy[]).map(
-                  (k) => (
-                    <option key={k} value={k}>
-                      {APPROVAL_POLICY_LABELS[k]}
-                    </option>
-                  )
-                )}
-              </select>
-              {liveSod.level === "force_human" && !sodOverrideAcknowledged ? (
-                <span className="mt-1 block text-xs text-[var(--warn)]">
-                  警告を確認すると承認ポリシーを選べます。確認しない場合は全件承認のままです。
-                </span>
-              ) : null}
-            </label>
-            <label className="block text-sm">
-              <span className="muted">有効期限（日）</span>
-              <input
-                type="number"
-                min={1}
-                max={365}
-                value={expiresInDays}
-                onChange={(e) => setExpiresInDays(Number(e.target.value) || 30)}
-                className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm"
-              />
-            </label>
-          </div>
+          <label className="block text-sm">
+            <span className="muted">有効期限（日）</span>
+            <input
+              type="number"
+              min={1}
+              max={365}
+              value={expiresInDays}
+              onChange={(e) => setExpiresInDays(Number(e.target.value) || 30)}
+              className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm"
+            />
+          </label>
 
           {Object.keys(actionLimits).length ? (
             <details className="rounded-xl border border-[var(--border-soft)] bg-[var(--bg-soft)] px-4 py-3">
@@ -738,6 +736,14 @@ export function HireEmployeeClient({ members = [], projects = [] }: { members?: 
             }}
             allowedAccounts={allowedAccounts}
             setAllowedAccounts={setAllowedAccounts}
+          />
+
+          <PolicyPreview
+            scopes={scopes}
+            allowedPurposes={purposes}
+            approvalPolicy={approvalPolicy}
+            liveSod={liveSod}
+            allowedAccounts={allowedAccounts}
           />
 
           <div className="flex flex-col sm:flex-row flex-wrap gap-2">

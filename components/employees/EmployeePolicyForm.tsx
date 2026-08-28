@@ -5,12 +5,12 @@ import { useRouter } from "next/navigation";
 import { BrowserAccountsSection } from "@/components/employees/BrowserAccountsSection";
 import { SpendForm } from "@/components/employees/SpendForm";
 import { emptyAllowedAccount, normalizeAllowedAccounts } from "@/lib/employees/allowed-accounts";
-import { PURPOSE_CHIPS } from "@/lib/employees/known-purposes";
+import { PolicyPreview } from "@/components/employees/PolicyPreview";
+import { PurposeChips } from "@/components/employees/PurposeChips";
 import {
-  APPROVAL_POLICY_LABELS,
+  HIRE_APPROVAL_CHOICES,
   SCOPE_LABELS,
 } from "@/lib/employees/policy-draft";
-import { parsePurposes } from "@/lib/employees/purposes";
 import { evaluateSod } from "@/lib/employees/sod";
 import { DEFAULT_SPEND_LIMITS } from "@/lib/spend-gate";
 import type {
@@ -85,13 +85,6 @@ export function EmployeePolicyForm({
         rows.length === 0 ? [emptyAllowedAccount("google")] : rows
       );
     }
-  }
-
-  function togglePurpose(purpose: string) {
-    if (locked) return;
-    setPurposeList((cur) =>
-      cur.includes(purpose) ? cur.filter((p) => p !== purpose) : [...cur, purpose]
-    );
   }
 
   function patchSpend(partial: Partial<SpendLimits>) {
@@ -199,7 +192,8 @@ export function EmployeePolicyForm({
   return (
     <div className="space-y-3">
       <div>
-        <div className="text-sm muted mb-2">できること</div>
+        <h3 className="text-sm font-medium">何をする人？</h3>
+        <p className="mt-1 mb-2 text-xs muted">やらせること</p>
         <div className="flex flex-wrap gap-2">
           {(Object.keys(SCOPE_LABELS) as EmployeeScope[]).map((scope) => {
             const on = scopes.includes(scope);
@@ -222,33 +216,9 @@ export function EmployeePolicyForm({
       </div>
 
       <div>
-        <div className="text-sm muted mb-2">許可目的</div>
-        <div className="flex flex-wrap gap-2">
-          {PURPOSE_CHIPS.map((purpose) => {
-            const on = purposeList.includes(purpose);
-            return (
-              <button
-                key={purpose}
-                type="button"
-                onClick={() => togglePurpose(purpose)}
-                disabled={locked}
-                className={`chip ${on ? "chip-ok" : ""}`}
-              >
-                {purpose}
-              </button>
-            );
-          })}
-        </div>
-        <label className="block text-sm mt-2">
-          <span className="muted">追加の目的（カンマ区切り）</span>
-          <input
-            value={purposeList.join(", ")}
-            onChange={(e) => setPurposeList(parsePurposes(e.target.value))}
-            placeholder="ops.admin, sales.outreach, calendar.propose, comm.internal"
-            className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm"
-            disabled={locked}
-          />
-        </label>
+        <h3 className="text-sm font-medium">何のために？</h3>
+        <p className="mt-1 mb-2 text-xs muted">使う理由</p>
+        <PurposeChips value={purposeList} onChange={setPurposeList} disabled={locked} />
       </div>
 
       <details className="rounded-xl border border-[var(--border-soft)] bg-[var(--bg-soft)] px-4 py-3">
@@ -339,25 +309,42 @@ export function EmployeePolicyForm({
         </div>
       ) : null}
 
-      <label className="block text-sm">
-        <span className="muted">承認ポリシー</span>
-        <select
-          value={approvalPolicy}
-          disabled={locked}
-          onChange={(e) =>
-            setApprovalPolicy(e.target.value as ApprovalPolicy)
-          }
-          className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm"
-        >
-          {(Object.keys(APPROVAL_POLICY_LABELS) as ApprovalPolicy[]).map(
-            (key) => (
-              <option key={key} value={key}>
-                {APPROVAL_POLICY_LABELS[key]}
-              </option>
-            )
-          )}
-        </select>
-      </label>
+      <fieldset className="space-y-2">
+        <legend className="text-sm font-medium">一人でやっていいか？</legend>
+        {HIRE_APPROVAL_CHOICES.map((choice) => (
+          <label key={choice.value} className="flex items-start gap-2 text-sm cursor-pointer">
+            <input
+              type="radio"
+              name="employee-approval-policy"
+              className="mt-1"
+              checked={approvalPolicy === choice.value}
+              disabled={locked}
+              onChange={() => setApprovalPolicy(choice.value)}
+            />
+            <span>
+              <span className="font-medium">{choice.label}</span>
+              <span className="block text-xs muted mt-0.5">{choice.hint}</span>
+            </span>
+          </label>
+        ))}
+        {approvalPolicy === "auto" ? (
+          <label className="flex items-start gap-2 text-sm cursor-pointer">
+            <input type="radio" className="mt-1" checked readOnly disabled={locked} />
+            <span>
+              <span className="font-medium">低リスクのみ自動</span>
+              <span className="block text-xs muted mt-0.5">保存済みの値です。上の二つから選べます。</span>
+            </span>
+          </label>
+        ) : null}
+      </fieldset>
+
+      <PolicyPreview
+        scopes={scopes}
+        allowedPurposes={purposeList}
+        approvalPolicy={approvalPolicy}
+        liveSod={liveSod}
+        allowedAccounts={allowedAccounts}
+      />
 
       {ackNeeded ? (
         <label className="flex items-start gap-2 text-sm cursor-pointer">

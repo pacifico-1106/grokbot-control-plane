@@ -380,6 +380,14 @@ export async function upsertOrgChannel(input: {
   if (!externalId) throw new Error("external_id_required");
   const classification = isChannelClass(input.classification) ? input.classification : "unknown";
   const mixed = Boolean(input.mixed) || classification === "shared_external";
+  const existingChannel = await getOrgChannel(input.orgId, input.surface, externalId);
+  if (
+    existingChannel &&
+    (existingChannel.classification === "shared_external" || existingChannel.mixed) &&
+    classification === "internal"
+  ) {
+    throw new Error("connect_cannot_be_internal");
+  }
   if (isDemoMode()) {
     const existing = runtimeChannels.find(
       (row) => row.orgId === input.orgId && row.surface === input.surface && row.externalId === externalId
