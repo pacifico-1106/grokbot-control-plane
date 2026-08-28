@@ -7,9 +7,11 @@ import type { Employee, OrgMember } from "@/lib/types";
 export function EmployeeManagerForm({
   employee,
   members,
+  disabled = false,
 }: {
   employee: Employee;
   members: OrgMember[];
+  disabled?: boolean;
 }) {
   const [managerId, setManagerId] = useState<string | null>(employee.managerId ?? null);
   const [busy, setBusy] = useState(false);
@@ -42,8 +44,8 @@ export function EmployeeManagerForm({
 
   return (
     <div className="space-y-3">
-      <ManagerPicker members={members} value={managerId} onChange={setManagerId} />
-      <button type="button" className="btn btn-primary text-xs" disabled={busy} onClick={() => void save()}>
+      <ManagerPicker members={members} value={managerId} onChange={setManagerId} disabled={disabled || busy} />
+      <button type="button" className="btn btn-primary text-xs" disabled={busy || disabled} onClick={() => void save()}>
         {busy ? "保存中…" : "上長を保存"}
       </button>
       {message ? <p className="text-xs muted">{message}</p> : null}

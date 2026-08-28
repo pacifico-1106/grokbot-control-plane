@@ -353,6 +353,7 @@ export type AuditAction =
   | "gateway.link_changed"
   | "employee.created"
   | "employee.updated"
+  | "employee.terminated"
   | "member.invited"
   | "commerce.projection_received"
   | "authority.event_delivery";

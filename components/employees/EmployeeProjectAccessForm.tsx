@@ -8,9 +8,11 @@ import type { Employee, EmployeeProjectAccess, OrgProject } from "@/lib/types";
 export function EmployeeProjectAccessForm({
   employee,
   projects,
+  disabled = false,
 }: {
   employee: Employee;
   projects: OrgProject[];
+  disabled?: boolean;
 }) {
   const [access, setAccess] = useState<EmployeeProjectAccess>(
     normalizeProjectAccess(employee.projectAccess ?? defaultProjectAccess())
@@ -54,10 +56,10 @@ export function EmployeeProjectAccessForm({
         value={access}
         projects={projects}
         onChange={setAccess}
-        disabled={busy}
+        disabled={busy || disabled}
         name={`employee-project-access-${employee.id}`}
       />
-      <button type="button" className="btn btn-primary text-xs" disabled={busy} onClick={() => void save()}>
+      <button type="button" className="btn btn-primary text-xs" disabled={busy || disabled} onClick={() => void save()}>
         {busy ? "保存中…" : "ナレッジ範囲を保存"}
       </button>
       {message ? <p className="text-xs muted">{message}</p> : null}

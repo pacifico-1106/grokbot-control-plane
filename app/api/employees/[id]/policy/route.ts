@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getCurrentOrgId } from "@/lib/auth/session";
-import { appendAuditEvent, updateEmployeePolicy } from "@/lib/data";
+import { appendAuditEvent, getEmployee, updateEmployeePolicy } from "@/lib/data";
 import { normalizeActionLimits } from "@/lib/action-gate";
 import { requireCapability } from "@/lib/team/demo-actor";
 import { ALL_SCOPES } from "@/lib/employees/policy-draft";
@@ -18,6 +18,14 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
   const orgId = await getCurrentOrgId();
   if (!orgId) return NextResponse.json({ error: "auth_required" }, { status: 401 });
   const { id } = await ctx.params;
+  const existing = await getEmployee(id, orgId);
+  if (!existing) return NextResponse.json({ error: "employee_not_found" }, { status: 404 });
+  if (existing.status === "suspended") {
+    return NextResponse.json(
+      { error: "employee_terminated", message: "契約終了済みのAI社員は更新できません" },
+      { status: 403 }
+    );
+  }
   const scopes = Array.isArray(body.scopes) ? body.scopes.map(String) as EmployeeScope[] : [];
   const allowedPurposes = Array.isArray(body.allowedPurposes) ? body.allowedPurposes.map(String).filter(Boolean) : [];
   const approvalPolicy = body.approvalPolicy as ApprovalPolicy;

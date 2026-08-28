@@ -5,7 +5,13 @@ import { VoiceForm } from "@/components/employees/VoiceForm";
 import { defaultVoice, normalizeVoice } from "@/lib/employees/voice";
 import type { Employee, EmployeeVoice } from "@/lib/types";
 
-export function EmployeeVoiceForm({ employee }: { employee: Employee }) {
+export function EmployeeVoiceForm({
+  employee,
+  disabled = false,
+}: {
+  employee: Employee;
+  disabled?: boolean;
+}) {
   const [voice, setVoice] = useState<EmployeeVoice>(
     normalizeVoice(employee.voice ?? defaultVoice())
   );
@@ -41,8 +47,8 @@ export function EmployeeVoiceForm({ employee }: { employee: Employee }) {
 
   return (
     <div className="space-y-3">
-      <VoiceForm value={voice} onChange={setVoice} disabled={busy} />
-      <button type="button" className="btn btn-primary text-xs" disabled={busy} onClick={() => void save()}>
+      <VoiceForm value={voice} onChange={setVoice} disabled={busy || disabled} />
+      <button type="button" className="btn btn-primary text-xs" disabled={busy || disabled} onClick={() => void save()}>
         {busy ? "保存中…" : "話し方を保存"}
       </button>
       {message ? <p className="text-xs muted">{message}</p> : null}

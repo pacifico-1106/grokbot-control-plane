@@ -80,9 +80,22 @@ export default async function EmployeesPage() {
                   className="block min-w-0 -m-1 p-1 rounded-md hover:bg-[var(--bg-soft)]"
                 >
                   <EmployeePassCard employee={e} />
-                  <div className="mt-3">
+                  <div className="mt-3 flex flex-wrap gap-2">
                     <span className="chip text-[11px] break-words max-w-full">
                       {APPROVAL_POLICY_LABELS[e.approvalPolicy]}
+                    </span>
+                    <span
+                      className={`chip ${
+                        e.status === "active" ? "chip-ok" : e.status === "suspended" ? "chip-danger" : "chip-warn"
+                      }`}
+                    >
+                      {e.status === "active"
+                        ? "稼働中"
+                        : e.status === "suspended"
+                          ? "契約終了"
+                          : e.status === "draft"
+                            ? "下書き"
+                            : e.status}
                     </span>
                   </div>
                   {(() => {
@@ -157,13 +170,13 @@ export default async function EmployeesPage() {
                       <td className="px-4 py-3 relative z-[1] pointer-events-none">
                         <span
                           className={`chip ${
-                            e.status === "active" ? "chip-ok" : "chip-warn"
+                            e.status === "active" ? "chip-ok" : e.status === "suspended" ? "chip-danger" : "chip-warn"
                           }`}
                         >
                           {e.status === "active"
                             ? "稼働中"
                             : e.status === "suspended"
-                              ? "一時停止"
+                              ? "契約終了"
                               : e.status === "draft"
                                 ? "下書き"
                                 : e.status}

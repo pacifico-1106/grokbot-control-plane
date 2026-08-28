@@ -4,6 +4,7 @@ import {
   getRuntimeEmployees,
 } from "../demo-data";
 import { ensureBindingRow, rotateCredential } from "../bindings";
+import { revokeBinding } from "./bindings";
 import { isDemoMode } from "../mode";
 import { createSupabaseAdminClient } from "../supabase";
 import { mapEmployeeRow } from "./mappers";
@@ -396,3 +397,50 @@ export async function updateEmployeePolicy(input: {
   }
   return mapEmployeeRow(data as Record<string, unknown>);
 }
+
+export async function terminateEmployee(input: {
+  orgId: string;
+  employeeId: string;
+}): Promise<Employee | null> {
+  const orgId = input.orgId?.trim();
+  const employeeId = input.employeeId?.trim();
+  if (!orgId || !employeeId) return null;
+
+  if (isDemoMode()) {
+    const employee = getRuntimeEmployees().find(
+      (item) => item.id === employeeId && item.orgId === orgId
+    );
+    if (!employee) return null;
+    Object.assign(employee, { status: "suspended" as const });
+    await revokeBinding(employeeId);
+    return employee;
+  }
+
+  const admin = createSupabaseAdminClient();
+  if (!admin) return null;
+  const now = new Date().toISOString();
+  const { data, error } = await admin
+    .from("employees")
+    .update({
+      status: "suspended",
+      updated_at: now,
+    })
+    .eq("id", employeeId)
+    .eq("org_id", orgId)
+    .select("*")
+    .maybeSingle();
+  if (error || !data) return null;
+
+  await admin
+    .from("credentials")
+    .update({ revoked_at: now })
+    .eq("org_id", orgId)
+    .eq("employee_id", employeeId)
+    .is("revoked_at", null);
+
+  await revokeBinding(employeeId);
+  const mapped = mapEmployeeRow(data as Record<string, unknown>);
+  mapped.credentialId = null;
+  return mapped;
+}
+

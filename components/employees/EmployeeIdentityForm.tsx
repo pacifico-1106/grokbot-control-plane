@@ -4,7 +4,13 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import type { Employee } from "@/lib/types";
 
-export function EmployeeIdentityForm({ employee }: { employee: Employee }) {
+export function EmployeeIdentityForm({
+  employee,
+  disabled = false,
+}: {
+  employee: Employee;
+  disabled?: boolean;
+}) {
   const router = useRouter();
   const [displayName, setDisplayName] = useState(employee.displayName);
   const [roleLabel, setRoleLabel] = useState(employee.roleLabel);
@@ -60,7 +66,7 @@ export function EmployeeIdentityForm({ employee }: { employee: Employee }) {
             className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm"
             maxLength={80}
             required
-            disabled={busy}
+            disabled={busy || disabled}
           />
         </label>
         <label className="block text-sm">
@@ -71,7 +77,7 @@ export function EmployeeIdentityForm({ employee }: { employee: Employee }) {
             className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm"
             maxLength={80}
             required
-            disabled={busy}
+            disabled={busy || disabled}
           />
         </label>
       </div>
@@ -81,7 +87,7 @@ export function EmployeeIdentityForm({ employee }: { employee: Employee }) {
       <button
         type="button"
         className="btn btn-primary text-xs"
-        disabled={busy || !canSave}
+        disabled={busy || disabled || !canSave}
         onClick={() => void save()}
       >
         {busy ? "保存中…" : "表示名を保存"}

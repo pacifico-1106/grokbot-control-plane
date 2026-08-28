@@ -7,6 +7,7 @@ import { EmployeeManagerForm } from "@/components/employees/EmployeeManagerForm"
 import { EmployeeIdentityForm } from "@/components/employees/EmployeeIdentityForm";
 import { EmployeeVoiceForm } from "@/components/employees/EmployeeVoiceForm";
 import { EmployeeProjectAccessForm } from "@/components/employees/EmployeeProjectAccessForm";
+import { EmployeeTerminateForm } from "@/components/employees/EmployeeTerminateForm";
 import { HireEmployeeClient } from "@/components/employees/HireEmployeeClient";
 import { getCurrentOrgId } from "@/lib/auth/session";
 import {
@@ -62,7 +63,7 @@ export default async function EmployeeDetailPage({
   return (
     <AppShell
       title={employee.displayName}
-      subtitle={`${employee.roleLabel} · ${employee.status === "active" ? "稼働中" : employee.status === "suspended" ? "一時停止" : employee.status === "draft" ? "下書き" : employee.status}`}
+      subtitle={`${employee.roleLabel} · ${employee.status === "active" ? "稼働中" : employee.status === "suspended" ? "契約終了" : employee.status === "draft" ? "下書き" : employee.status}`}
     >
       <div className="flex flex-col sm:flex-row flex-wrap gap-2 mb-4">
         <Link href="/app/employees" className="btn btn-ghost text-sm w-full sm:w-auto">
@@ -82,7 +83,7 @@ export default async function EmployeeDetailPage({
       <div className="grid lg:grid-cols-2 gap-4">
         <section className="surface p-5 space-y-3">
           <h2 className="text-sm font-medium">職務</h2>
-          <EmployeeIdentityForm employee={employee} />
+          <EmployeeIdentityForm employee={employee} disabled={employee.status === "suspended"} />
           <p className="text-sm muted leading-relaxed">
             {employee.jobDescription || "（説明なし）"}
           </p>
@@ -169,7 +170,7 @@ export default async function EmployeeDetailPage({
         <p className="text-xs muted leading-relaxed">
           機密開示の承認チケットに上長IDを付けます。職務分離バッジはそのまま有効です。
         </p>
-        <EmployeeManagerForm employee={employee} members={members} />
+        <EmployeeManagerForm employee={employee} members={members} disabled={employee.status === "suspended"} />
       </section>
 
       <section className="surface p-5 space-y-3 mt-4">
@@ -177,7 +178,7 @@ export default async function EmployeeDetailPage({
         <p className="text-xs muted leading-relaxed">
           デフォルトは会社全般です。他案件のナレッジは社内にも出しません。指名プロジェクトはここで付与します。
         </p>
-        <EmployeeProjectAccessForm employee={employee} projects={projects} />
+        <EmployeeProjectAccessForm employee={employee} projects={projects} disabled={employee.status === "suspended"} />
       </section>
 
       <section className="surface p-5 space-y-3 mt-4">
@@ -185,7 +186,7 @@ export default async function EmployeeDetailPage({
         <p className="text-xs muted leading-relaxed">
           丁寧・率直・カスタムは社員証に刻みます。対外の相手では丁寧が下限です。モデルは whoami の voice に従い、毎回ペルソナを自称しません。
         </p>
-        <EmployeeVoiceForm employee={employee} />
+        <EmployeeVoiceForm employee={employee} disabled={employee.status === "suspended"} />
       </section>
 
       <section className="surface p-5 space-y-3 mt-4">
@@ -295,6 +296,8 @@ export default async function EmployeeDetailPage({
       </section>
 
       <BindingPanel employeeId={employee.id} initial={binding} />
+
+      <EmployeeTerminateForm employee={employee} />
 
       <EmployeeActionLog events={actionEvents} compact />
     </AppShell>

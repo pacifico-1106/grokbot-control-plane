@@ -12,6 +12,7 @@ export {
   getEmployeeById,
   issueEmployee,
   updateEmployeePolicy,
+  terminateEmployee,
   type IssueEmployeeInput,
   type IssueEmployeeResult,
 } from "./employees";
