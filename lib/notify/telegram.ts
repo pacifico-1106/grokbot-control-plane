@@ -94,7 +94,7 @@ export function buildApprovalTelegramMessage(
   employee: Employee | null
 ): string {
   // Keep the full body in DB summary; only trim the Telegram send payload.
-  let summary = approval.summary || "";
+  const summary = approval.summary || "";
   let text = composeApprovalTelegramMessage(approval, employee, summary);
   if (Array.from(text).length <= TELEGRAM_MESSAGE_MAX) return text;
   const suffix = TELEGRAM_OVERFLOW_SUFFIX;
