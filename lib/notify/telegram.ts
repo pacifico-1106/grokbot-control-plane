@@ -58,9 +58,13 @@ function safeArtifactUrl(approval: ApprovalRequest): string | null {
   }
 }
 
-export function buildApprovalTelegramMessage(
+const TELEGRAM_MESSAGE_MAX = 4096;
+const TELEGRAM_OVERFLOW_SUFFIX = "…(続きはダッシュボード)";
+
+function composeApprovalTelegramMessage(
   approval: ApprovalRequest,
-  employee: Employee | null
+  employee: Employee | null,
+  summary: string
 ): string {
   const artifactUrl = safeArtifactUrl(approval);
   const lines = [
@@ -69,7 +73,7 @@ export function buildApprovalTelegramMessage(
     `ツール: <code>${escapeTelegramHtml(approval.tool || "unknown")}</code>`,
     `目的: ${escapeTelegramHtml(approval.purpose)}`,
     "─",
-    escapeTelegramHtml(truncate(approval.summary, 400)),
+    escapeTelegramHtml(summary),
     "─",
     `job: <code>${escapeTelegramHtml(approval.jobId || "-")}</code>${
       approval.revisionCount > 0
@@ -83,6 +87,26 @@ export function buildApprovalTelegramMessage(
     );
   }
   return lines.join("\n");
+}
+
+export function buildApprovalTelegramMessage(
+  approval: ApprovalRequest,
+  employee: Employee | null
+): string {
+  // Keep the full body in DB summary; only trim the Telegram send payload.
+  let summary = approval.summary || "";
+  let text = composeApprovalTelegramMessage(approval, employee, summary);
+  if (Array.from(text).length <= TELEGRAM_MESSAGE_MAX) return text;
+  const suffix = TELEGRAM_OVERFLOW_SUFFIX;
+  let chars = Array.from(summary);
+  while (chars.length > 0) {
+    const candidate = chars.join("") + suffix;
+    text = composeApprovalTelegramMessage(approval, employee, candidate);
+    if (Array.from(text).length <= TELEGRAM_MESSAGE_MAX) return text;
+    const over = Array.from(text).length - TELEGRAM_MESSAGE_MAX;
+    chars = chars.slice(0, Math.max(0, chars.length - Math.max(1, over)));
+  }
+  return composeApprovalTelegramMessage(approval, employee, suffix);
 }
 
 async function callTelegram<T = Record<string, unknown>>(

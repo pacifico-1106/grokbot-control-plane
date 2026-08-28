@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { incrementActionCounter } from "@/lib/data/action-counters";
-import { resolveApproval } from "@/lib/data";
+import { getApprovalById, getApprovalStatusByToken, resolveApproval } from "@/lib/data";
 import { upsertConversationAdapter } from "@/lib/data/conversation-adapters";
 import { getRuntimeEmployees } from "@/lib/demo-data";
 import { runGatewayInvoke } from "@/lib/gateway/invoke";
@@ -409,4 +409,151 @@ describe("Gateway audience egress", () => {
       });
     }
   });
+
+  test("comm.reply approval summary includes channel and full body", async () => {
+    const bodyText = "メンションへの返信本文です。";
+    const result = await runGatewayInvoke({
+      employeeId: "emp_comm",
+      credentialId: "cred_comm",
+      body: {
+        tool: "comm.reply",
+        purpose: "comm.internal",
+        jobId: `job_artifact_reply_${Date.now()}`,
+        conversation: {
+          surface: "slack",
+          orgId: DEMO_ORG.id,
+          slackChannelId: "C_INTERNAL",
+          threadId: "1787911797.502889",
+        },
+        args: {
+          slackChannelId: "C_INTERNAL",
+          channelName: "internal-cs",
+          text: bodyText,
+          threadId: "1787911797.502889",
+        },
+      },
+    });
+    expect(result.httpStatus).toBe(402);
+    expect(result.body.needs_approval).toBe(true);
+    const summary = String(result.body.summary);
+    expect(summary).toContain("チャネル: C_INTERNAL");
+    expect(summary).toContain("internal-cs");
+    expect(summary).toContain(bodyText);
+    expect(summary).toContain("情報区分: 機密");
+    expect(summary).toContain("相手先: 社内");
+    const approvalId = String(result.body.approvalId || "");
+    const stored = await getApprovalById(approvalId, DEMO_ORG.id);
+    expect(stored?.summary).toContain(bodyText);
+    expect((stored?.metadata as { artifact?: { body?: string } }).artifact?.body).toBe(
+      bodyText
+    );
+  });
+
+  test("mail.send approval summary includes to and subject", async () => {
+    const result = await runGatewayInvoke({
+      employeeId: "emp_sales",
+      credentialId: "cred_sales",
+      body: {
+        tool: "mail.send",
+        purpose: "sales.outreach",
+        jobId: `job_artifact_mail_${Date.now()}`,
+        args: {
+          assetRef: "kb/public-faq",
+          to: "buyer@customer.example",
+          subject: "見積フォロー",
+          body: "先日の見積のご確認をお願いします。",
+        },
+      },
+    });
+    expect(result.httpStatus).toBe(402);
+    expect(result.body.needs_approval).toBe(true);
+    const summary = String(result.body.summary);
+    expect(summary).toContain("宛先: buyer@customer.example");
+    expect(summary).toContain("件名: 見積フォロー");
+    expect(summary).toContain("先日の見積のご確認をお願いします。");
+  });
+
+  test("egress deny still 403 and does not queue an approval", async () => {
+    const result = await runGatewayInvoke({
+      employeeId: "emp_comm",
+      credentialId: "cred_comm",
+      body: {
+        tool: "comm.reply",
+        purpose: "comm.internal",
+        jobId: `job_deny_${Date.now()}`,
+        conversation: {
+          surface: "slack",
+          orgId: DEMO_ORG.id,
+          slackChannelId: "C_SHARED",
+        },
+        args: { slackChannelId: "C_SHARED", text: "機密を社外へ" },
+      },
+    });
+    expect(result.httpStatus).toBe(403);
+    expect(result.body.code).toBe("egress_denied");
+    expect(result.body.ok).toBe(false);
+    expect(result.body.needs_approval).not.toBe(true);
+  });
+
+  test("revision_requested allows same jobId re-submit as a new pending ticket", async () => {
+    const jobId = `job_rev_${Date.now()}`;
+    const first = await runGatewayInvoke({
+      employeeId: "emp_comm",
+      credentialId: "cred_comm",
+      body: {
+        tool: "comm.reply",
+        purpose: "comm.internal",
+        jobId,
+        conversation: {
+          surface: "slack",
+          orgId: DEMO_ORG.id,
+          slackChannelId: "C_INTERNAL",
+          threadId: "1787911797.502889",
+        },
+        args: { slackChannelId: "C_INTERNAL", text: "初稿の返信" },
+      },
+    });
+    expect(first.httpStatus).toBe(402);
+    const firstId = String(first.body.approvalId || "");
+    const revised = await resolveApproval(
+      firstId,
+      "revision_requested",
+      "ando@example.com",
+      DEMO_ORG.id,
+      { revisionNote: "金額表記を削除してください" }
+    );
+    expect(revised?.status).toBe("revision_requested");
+    const polled = await getApprovalStatusByToken(
+      firstId,
+      String(first.body.statusToken || "")
+    );
+    expect(polled?.status).toBe("revision_requested");
+    const second = await runGatewayInvoke({
+      employeeId: "emp_comm",
+      credentialId: "cred_comm",
+      body: {
+        tool: "comm.reply",
+        purpose: "comm.internal",
+        jobId,
+        conversation: {
+          surface: "slack",
+          orgId: DEMO_ORG.id,
+          slackChannelId: "C_INTERNAL",
+          threadId: "1787911797.502889",
+        },
+        args: { slackChannelId: "C_INTERNAL", text: "修正後の返信" },
+      },
+    });
+    expect(second.httpStatus).toBe(402);
+    expect(second.body.needs_approval).toBe(true);
+    expect(String(second.body.approvalId)).not.toBe(firstId);
+    expect(String(second.body.summary)).toContain("修正後の返信");
+    expect((await getApprovalById(firstId, DEMO_ORG.id))?.status).toBe(
+      "revision_requested"
+    );
+    expect((await getApprovalById(String(second.body.approvalId), DEMO_ORG.id))?.status).toBe(
+      "pending"
+    );
+  });
+
 });

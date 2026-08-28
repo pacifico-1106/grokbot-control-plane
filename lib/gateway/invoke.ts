@@ -1,5 +1,7 @@
 import {
+  buildApprovalArtifact,
   buildApprovalTitle,
+  buildArtifactLines,
   buildRichApprovalSummary,
   inferRiskForTool,
 } from "@/lib/approvals/summary";
@@ -53,7 +55,7 @@ import {
   outboundConversationText,
 } from "@/lib/employees/voice";
 import { DOMAIN_LABELS } from "@/lib/gateway/domains";
-import type { Employee, GatewayInvokeRequest } from "@/lib/types";
+import type { Employee, EgressVerdict, GatewayInvokeRequest } from "@/lib/types";
 import {
   CrossProductEventError,
   normalizeCommerceAuthorization,
@@ -121,9 +123,26 @@ async function createNeedsApprovalResponse(opts: {
   parentApprovalId?: string | null;
   metadata?: Record<string, unknown>;
   summaryPrefix?: string;
+  body?: GatewayInvokeRequest;
+  egress?: EgressVerdict | null;
 }) {
   const risk = opts.risk || inferRiskForTool(opts.tool);
   const title = buildApprovalTitle(opts.tool, opts.purpose);
+  const conversation = opts.body
+    ? parseConversationContext(opts.body, opts.orgId)
+    : null;
+  const artifact = buildApprovalArtifact(
+    opts.tool,
+    opts.body,
+    opts.egress ?? null,
+    conversation
+  );
+  const extraLines = buildArtifactLines(
+    opts.tool,
+    opts.body,
+    opts.egress ?? null,
+    conversation
+  );
   const baseSummary = buildRichApprovalSummary({
     tool: opts.tool,
     purpose: opts.purpose,
@@ -131,6 +150,7 @@ async function createNeedsApprovalResponse(opts: {
     employeeDisplayName: opts.employeeDisplayName,
     amountJpy: opts.amountJpy,
     risk,
+    extraLines,
   });
   const summary = opts.summaryPrefix
     ? `${opts.summaryPrefix}\n\n${baseSummary}`
@@ -155,7 +175,10 @@ async function createNeedsApprovalResponse(opts: {
       tool: opts.tool,
       jobId: opts.jobId,
       parentApprovalId: opts.parentApprovalId,
-      metadata: opts.metadata,
+      metadata: {
+        ...(opts.metadata ?? {}),
+        artifact,
+      },
     });
     createdApproval = created.approval;
     approvalId = created.approval.id;
@@ -828,6 +851,8 @@ export async function runGatewayInvoke(
         parentApprovalId: parentApprovalId || null,
         metadata: { ...invokeMetadata, sodVerdict, actionLimit, egress, managerId },
         summaryPrefix: sodSummary,
+        body,
+        egress,
         extra: { spend, actionLimit, sodVerdict, egress, managerId, ...(voice ? { voice } : {}), toolKind: toolDef.kind, approvalPolicy: employee.approvalPolicy },
       });
     }
@@ -853,6 +878,8 @@ export async function runGatewayInvoke(
       parentApprovalId: parentApprovalId || null,
       metadata: { ...invokeMetadata, sodVerdict, actionLimit, egress, managerId },
       summaryPrefix: sodSummary,
+      body,
+      egress,
       extra: {
         toolKind: toolDef.kind,
         approvalPolicy: employee.approvalPolicy,
@@ -887,6 +914,8 @@ export async function runGatewayInvoke(
       message: egress.messageJa,
       parentApprovalId: parentApprovalId || null,
       metadata: { ...invokeMetadata, sodVerdict, actionLimit, egress, managerId },
+      body,
+      egress,
       extra: {
         toolKind: toolDef.kind,
         approvalPolicy: employee.approvalPolicy,

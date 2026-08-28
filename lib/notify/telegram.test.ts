@@ -45,11 +45,21 @@ afterEach(() => {
 });
 
 describe("Telegram approval notification", () => {
-  test("escapes HTML, truncates the summary, and includes the artifact", () => {
+  test("escapes HTML, keeps a short full summary, and includes the artifact", () => {
     const text = buildApprovalTelegramMessage(approval, null);
     expect(text).toContain("&lt;顧客&gt; &amp;");
     expect(text).toContain('href="https://example.com/artifact"');
+    expect(text).toContain("長".repeat(450));
+    expect(text).not.toContain("続きはダッシュボード");
     expect(text.length).toBeLessThan(1_200);
+  });
+
+  test("trims Telegram overflow with a dashboard pointer while DB summary stays full", () => {
+    const huge = { ...approval, summary: `本文\n${"あ".repeat(5000)}` };
+    const text = buildApprovalTelegramMessage(huge, null);
+    expect(Array.from(text).length).toBeLessThanOrEqual(4096);
+    expect(text).toContain("…(続きはダッシュボード)");
+    expect(huge.summary.length > 4096).toBe(true);
   });
 
   test("skips without Telegram env", async () => {
