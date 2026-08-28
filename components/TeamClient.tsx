@@ -1,5 +1,6 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
 import {
   CAPABILITY_DEFS,
@@ -21,6 +22,7 @@ function uniqueCaps(caps: HumanCapability[]): HumanCapability[] {
 }
 
 export function TeamClient({ initialMembers }: { initialMembers: OrgMember[] }) {
+  const router = useRouter();
   const [members, setMembers] = useState<OrgMember[]>(initialMembers);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [error, setError] = useState("");
@@ -112,6 +114,10 @@ export function TeamClient({ initialMembers }: { initialMembers: OrgMember[] }) 
         return [next, ...cur];
       });
       startCreate();
+      if (body.demo === true) {
+        setError("デモモードのため、データベースには保存されていません。");
+      }
+      router.refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : "save_failed");
     } finally {

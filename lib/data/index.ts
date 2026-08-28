@@ -66,6 +66,9 @@ export {
   getMemberById,
   upsertMember,
   resolveActorMember,
+  isUuid,
+  normalizeMemberEmail,
+  resolveProductionMemberId,
 } from "./members";
 export {
   getBinding,
