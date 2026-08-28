@@ -53,6 +53,21 @@ export interface NotificationChannel {
   updatedAt: string;
 }
 
+/** Conversation posting identity on the employee badge. */
+export type PostingAs = "bot" | "user";
+export type SlackIdentityStatus = "linked" | "needs_reauth" | "revoked";
+
+/** Public Slack user binding (never includes the user token). */
+export interface EmployeeSlackIdentity {
+  employeeId: string;
+  orgId: string;
+  slackUserId: string;
+  slackTeamId: string;
+  displayName: string;
+  status: SlackIdentityStatus;
+  updatedAt: string;
+}
+
 /** Live conversation posting adapter (separate from notification inbox). */
 export interface ConversationAdapter {
   id: string;
@@ -423,6 +438,11 @@ export interface Employee {
    * Project knowledge wall (WHICH). Default company = 会社全般 only.
    */
   projectAccess: EmployeeProjectAccess;
+  /**
+   * Slack conversation posting identity. Default bot (org xoxb).
+   * user requires a bound Staffpass Slack OAuth token matching allowedAccounts.
+   */
+  postingAs?: PostingAs;
   credentialId: string | null;
   createdAt: string;
 }

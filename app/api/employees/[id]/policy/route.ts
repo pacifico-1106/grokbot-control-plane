@@ -9,6 +9,7 @@ import { evaluateSod } from "@/lib/employees/sod";
 import { sodAckRequired } from "@/lib/employees/sod-override";
 import { normalizeVoice } from "@/lib/employees/voice";
 import { normalizeProjectAccess } from "@/lib/employees/project-access";
+import { normalizePostingAs } from "@/lib/employees/posting-as";
 import { normalizeEmployeeIdentityField } from "@/lib/employees/identity";
 import { normalizeSpendLimits } from "@/lib/spend-gate";
 import type { AllowedAccount, ApprovalPolicy, EmployeeScope, SpendLimits } from "@/lib/types";
@@ -83,6 +84,7 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
     voice: body.voice === undefined ? undefined : normalizeVoice(body.voice),
     projectAccess:
       body.projectAccess === undefined ? undefined : normalizeProjectAccess(body.projectAccess),
+    ...(body.postingAs !== undefined ? { postingAs: normalizePostingAs(body.postingAs) } : {}),
     ...(displayName !== undefined ? { displayName } : {}),
     ...(roleLabel !== undefined ? { roleLabel } : {}),
   });

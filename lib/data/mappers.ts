@@ -51,6 +51,7 @@ export function mapEmployeeRow(row: Record<string, unknown>): Employee {
     managerId: row.manager_id != null ? String(row.manager_id) : null,
     voice: normalizeVoice(row.voice),
     projectAccess: normalizeProjectAccess(row.project_access ?? row.projectAccess),
+    postingAs: row.posting_as === "user" || row.postingAs === "user" ? "user" : "bot",
     credentialId: row.credential_id != null ? String(row.credential_id) : null,
     createdAt: String(row.created_at ?? new Date().toISOString()),
   };

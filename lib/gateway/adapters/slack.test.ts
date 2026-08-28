@@ -2,6 +2,11 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { upsertConversationAdapter } from "@/lib/data/conversation-adapters";
 import { upsertNotificationChannel } from "@/lib/data/notification-channels";
 import {
+  bindEmployeeSlackIdentity,
+  revokeEmployeeSlackIdentity,
+} from "@/lib/data/slack-identities";
+import { DEMO_ORG, getRuntimeEmployees } from "@/lib/demo-data";
+import {
   looksLikeSlackTs,
   postConversationMessage,
 } from "@/lib/gateway/adapters/slack";
@@ -145,5 +150,88 @@ describe("Slack conversation adapter", () => {
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.delivery).toBe("slack");
     expect(auth).toBe("Bearer xoxb-env");
+  });
+
+  test("maps Slack not_in_channel to slack_not_in_channel", async () => {
+    await upsertConversationAdapter({
+      orgId: "org_adapter_test",
+      surface: "slack",
+      enabled: true,
+      secrets: { botToken: "xoxb-live" },
+    });
+    globalThis.fetch = (async () =>
+      Response.json({ ok: false, error: "not_in_channel" })) as typeof fetch;
+    const result = await postConversationMessage({
+      orgId: "org_adapter_test",
+      channel: "C_CONNECT",
+      text: "hello",
+    });
+    expect(result).toEqual({ ok: false, error: "slack_not_in_channel" });
+  });
+
+  test("user path uses bound OAuth token as Authorization bearer", async () => {
+    const emp = getRuntimeEmployees().find((item) => item.id === "emp_comm");
+    if (!emp) throw new Error("missing emp_comm");
+    const previousAccounts = emp.allowedAccounts;
+    const previousPosting = emp.postingAs;
+    emp.allowedAccounts = [
+      ...(emp.allowedAccounts ?? []),
+      { service: "slack", accountId: "U_ANDO" },
+    ];
+    emp.postingAs = "user";
+    await bindEmployeeSlackIdentity({
+      employeeId: emp.id,
+      orgId: DEMO_ORG.id,
+      slackUserId: "U_ANDO",
+      slackTeamId: "T_DEMO",
+      displayName: "安藤",
+      userToken: "xoxp-user",
+    });
+    let auth = "";
+    let payload: Record<string, unknown> = {};
+    globalThis.fetch = (async (_input, init) => {
+      auth = String((init?.headers as Record<string, string> | undefined)?.authorization || "");
+      payload = JSON.parse(String(init?.body || "{}"));
+      return Response.json({ ok: true, channel: "C_INTERNAL", ts: "1503435956.000247" });
+    }) as typeof fetch;
+    try {
+      const result = await postConversationMessage({
+        orgId: DEMO_ORG.id,
+        employeeId: emp.id,
+        postingAs: "user",
+        channel: "C_INTERNAL",
+        text: "本人として",
+      });
+      expect(result.ok).toBe(true);
+      expect(auth).toBe("Bearer xoxp-user");
+      expect(payload.as_user).toBe(undefined);
+    } finally {
+      emp.allowedAccounts = previousAccounts;
+      emp.postingAs = previousPosting;
+      await revokeEmployeeSlackIdentity({ employeeId: emp.id, orgId: DEMO_ORG.id });
+    }
+  });
+
+  test("unbound postingAs=user fails closed (not stub)", async () => {
+    await revokeEmployeeSlackIdentity({ employeeId: "emp_comm", orgId: DEMO_ORG.id });
+    const result = await postConversationMessage({
+      orgId: DEMO_ORG.id,
+      employeeId: "emp_comm",
+      postingAs: "user",
+      channel: "C_INTERNAL",
+      text: "hello",
+    });
+    expect(result).toEqual({ ok: false, error: "slack_identity_unbound" });
+  });
+
+  test("bot path still stubs when no xoxb is configured", async () => {
+    const result = await postConversationMessage({
+      orgId: "org_bot_stub",
+      employeeId: "emp_comm",
+      postingAs: "bot",
+      channel: "C_INTERNAL",
+      text: "hello",
+    });
+    expect(result).toEqual({ ok: true, delivery: "stub" });
   });
 });

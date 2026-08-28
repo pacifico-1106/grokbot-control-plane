@@ -14,6 +14,7 @@ import {
 import { normalizeSpendLimits } from "@/lib/spend-gate";
 import { defaultVoice, normalizeVoice } from "@/lib/employees/voice";
 import { defaultProjectAccess, normalizeProjectAccess } from "@/lib/employees/project-access";
+import { normalizePostingAs } from "@/lib/employees/posting-as";
 import { requireCapability } from "@/lib/team/demo-actor";
 import type { ActionLimits, AllowedAccount, ApprovalPolicy, EmployeeScope, SpendLimits } from "@/lib/types";
 
@@ -55,6 +56,7 @@ export async function POST(req: Request) {
     managerId?: string | null;
     voice?: unknown;
     projectAccess?: unknown;
+    postingAs?: unknown;
   };
 
   const displayName = (body.displayName || "").trim();
@@ -111,6 +113,7 @@ export async function POST(req: Request) {
         body.projectAccess == null
           ? defaultProjectAccess()
           : normalizeProjectAccess(body.projectAccess),
+      postingAs: normalizePostingAs(body.postingAs),
       secretHash: secret.hash,
       secretPrefix: secret.prefix,
       expiresAt,

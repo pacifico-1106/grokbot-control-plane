@@ -960,6 +960,8 @@ export async function runGatewayInvoke(
       ) as string | undefined;
       const posted = await postConversationMessage({
         orgId: orgId || employee.orgId,
+        employeeId,
+        postingAs: employee.postingAs || "bot",
         channel: dest,
         text: (rawText || "").trim() || purpose,
         threadTs: looksLikeSlackTs(ctx?.threadId) ? ctx?.threadId : undefined,
@@ -967,6 +969,19 @@ export async function runGatewayInvoke(
         summarize: egress?.decision === "summarize",
       });
       if (!posted.ok) {
+        const postedError = posted.error || "slack_post_failed";
+        const code =
+          postedError === "slack_identity_unbound"
+            ? "slack_identity_unbound"
+            : postedError === "slack_not_in_channel" || postedError === "not_in_channel"
+              ? "slack_not_in_channel"
+              : "slack_post_failed";
+        const message =
+          code === "slack_identity_unbound"
+            ? "この社員の Slack 本人連携がありません"
+            : code === "slack_not_in_channel"
+              ? "このチャネルに参加していません（Connect では人が招待済みでも Bot は未参加のことがあります）"
+              : "Slack投稿に失敗しました";
         await appendAuditEvent({
           orgId: orgId || employee.orgId,
           employeeId,
@@ -974,14 +989,14 @@ export async function runGatewayInvoke(
           action: "slack.post_failed",
           purpose,
           summary: "Slack会話投稿に失敗",
-          metadata: { tool, jobId, error: posted.error, dest },
+          metadata: { tool, jobId, error: postedError, dest, code },
         });
         return jsonResult(
           {
             ok: false,
-            code: "slack_post_failed",
-            error: posted.error || "slack_post_failed",
-            message: "Slack投稿に失敗しました",
+            code,
+            error: postedError,
+            message,
             needs_approval: false,
             egress,
             ...(voice ? { voice } : {}),

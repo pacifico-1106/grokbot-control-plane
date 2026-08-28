@@ -61,4 +61,35 @@ describe("buildPolicyPreview", () => {
     expect(some.find((row) => row.id === "browser")?.value).toBe("共有セッション注意");
     expect(some.find((row) => row.id === "browser")?.tone).toBe("warn");
   });
+
+  test("postingAs bot vs unbound user", () => {
+    const bot = buildPolicyPreview({
+      scopes: ["slack:post"],
+      approvalPolicy: "risk_based",
+      postingAs: "bot",
+    });
+    expect(bot.find((row) => row.id === "postingAs")).toEqual({
+      id: "postingAs",
+      label: "投稿名義",
+      value: "会社のBot",
+      tone: "ok",
+    });
+    const unbound = buildPolicyPreview({
+      scopes: ["slack:post"],
+      approvalPolicy: "risk_based",
+      postingAs: "user",
+      slackLinked: false,
+    });
+    expect(unbound.find((row) => row.id === "postingAs")?.value).toBe(
+      "この社員（未連携なら「本人としては出せない」）"
+    );
+    const linked = buildPolicyPreview({
+      scopes: ["slack:post"],
+      approvalPolicy: "risk_based",
+      postingAs: "user",
+      slackLinked: true,
+    });
+    expect(linked.find((row) => row.id === "postingAs")?.value).toBe("この社員");
+  });
+
 });

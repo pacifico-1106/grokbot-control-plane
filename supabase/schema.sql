@@ -77,6 +77,8 @@ create table if not exists employees (
     "externalFloor": "polite"
   }'::jsonb,
   project_access jsonb not null default '{"mode":"company","projectIds":[]}'::jsonb,
+  posting_as text not null default 'bot'
+    check (posting_as in ('bot', 'user')),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -85,6 +87,8 @@ comment on column employees.voice is
   'AI employee badge character/register (polite/frank/custom). External audience cannot drop below polite.';
 comment on column employees.project_access is
   'Badge project wall: {mode: company|selected|all, projectIds: string[]}. Default company = 会社全般 only.';
+comment on column employees.posting_as is
+  'Conversation posting identity on the employee badge: bot = org xoxb adapter; user = OAuth-bound xoxp.';
 
 create index if not exists employees_org_idx on employees (org_id, status);
 create index if not exists employees_manager_idx on employees (org_id, manager_id)
@@ -252,6 +256,31 @@ create table if not exists org_conversation_adapter_secrets (
 
 create index if not exists conversation_adapters_org_enabled_idx
   on org_conversation_adapters (org_id, enabled);
+
+create table if not exists employee_slack_identities (
+  employee_id uuid primary key references employees(id) on delete cascade,
+  org_id uuid not null references orgs(id) on delete cascade,
+  slack_user_id text not null,
+  slack_team_id text not null default '',
+  display_name text not null default '',
+  status text not null default 'linked'
+    check (status in ('linked', 'needs_reauth', 'revoked')),
+  updated_at timestamptz not null default now()
+);
+
+create index if not exists employee_slack_identities_org_idx
+  on employee_slack_identities (org_id, status);
+
+create table if not exists employee_slack_identity_secrets (
+  employee_id uuid primary key references employees(id) on delete cascade,
+  credentials_ciphertext text not null,
+  updated_at timestamptz not null default now()
+);
+
+comment on table employee_slack_identities is
+  'Public Slack user binding for postingAs=user. Dashboard may select this; never join secrets.';
+comment on table employee_slack_identity_secrets is
+  'Service-role-only encrypted Slack user tokens (NOTIFICATION_CONFIG_ENCRYPTION_KEY). Intentionally inaccessible via browser RLS.';
 
 -- ---------------------------------------------------------------------------
 -- Audit timeline
@@ -444,6 +473,8 @@ alter table org_notification_channel_secrets enable row level security;
 alter table approval_notification_deliveries enable row level security;
 alter table org_conversation_adapters enable row level security;
 alter table org_conversation_adapter_secrets enable row level security;
+alter table employee_slack_identities enable row level security;
+alter table employee_slack_identity_secrets enable row level security;
 alter table audit_events enable row level security;
 alter table subscriptions enable row level security;
 alter table gateway_links enable row level security;
@@ -509,6 +540,14 @@ drop policy if exists conversation_adapters_write_admin on org_conversation_adap
 create policy conversation_adapters_select on org_conversation_adapters
   for select using (public.is_org_member(org_id));
 create policy conversation_adapters_write_admin on org_conversation_adapters
+  for all using (public.is_org_admin(org_id))
+  with check (public.is_org_admin(org_id));
+
+drop policy if exists employee_slack_identities_select on employee_slack_identities;
+drop policy if exists employee_slack_identities_write_admin on employee_slack_identities;
+create policy employee_slack_identities_select on employee_slack_identities
+  for select using (public.is_org_member(org_id));
+create policy employee_slack_identities_write_admin on employee_slack_identities
   for all using (public.is_org_admin(org_id))
   with check (public.is_org_admin(org_id));
 

@@ -8,6 +8,7 @@ import type {
   AllowedAccount,
   ApprovalPolicy,
   EmployeeScope,
+  PostingAs,
   SodVerdict,
 } from "@/lib/types";
 
@@ -34,6 +35,8 @@ export function buildPolicyPreview(input: {
   approvalPolicy: ApprovalPolicy;
   liveSod?: Pick<SodVerdict, "level"> | null;
   allowedAccounts?: AllowedAccount[] | null;
+  postingAs?: PostingAs | null;
+  slackLinked?: boolean;
 }): PolicyPreviewRow[] {
   void input.allowedPurposes;
   void input.liveSod;
@@ -80,5 +83,18 @@ export function buildPolicyPreview(input: {
     tone: "ok",
   };
 
-  return [slack, mail, calendar, order, browser, external];
+  const postingAs = input.postingAs === "user" ? "user" : "bot";
+  const posting: PolicyPreviewRow =
+    postingAs === "bot"
+      ? { id: "postingAs", label: "投稿名義", value: "会社のBot", tone: "ok" }
+      : input.slackLinked
+        ? { id: "postingAs", label: "投稿名義", value: "この社員", tone: "ok" }
+        : {
+            id: "postingAs",
+            label: "投稿名義",
+            value: "この社員（未連携なら「本人としては出せない」）",
+            tone: "danger",
+          };
+
+  return [slack, posting, mail, calendar, order, browser, external];
 }

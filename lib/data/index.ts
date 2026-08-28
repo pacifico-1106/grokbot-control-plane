@@ -63,6 +63,12 @@ export {
   type UpsertConversationAdapterInput,
 } from "./conversation-adapters";
 export {
+  getEmployeeSlackIdentity,
+  getLinkedSlackUserToken,
+  bindEmployeeSlackIdentity,
+  revokeEmployeeSlackIdentity,
+} from "./slack-identities";
+export {
   listMembers,
   getMemberById,
   upsertMember,

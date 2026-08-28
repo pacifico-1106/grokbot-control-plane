@@ -10,15 +10,18 @@ import { EmployeeVoiceForm } from "@/components/employees/EmployeeVoiceForm";
 import { EmployeeProjectAccessForm } from "@/components/employees/EmployeeProjectAccessForm";
 import { EmployeeTerminateForm } from "@/components/employees/EmployeeTerminateForm";
 import { HireEmployeeClient } from "@/components/employees/HireEmployeeClient";
+import { SlackIdentityForm } from "@/components/employees/SlackIdentityForm";
 import { getCurrentOrgId } from "@/lib/auth/session";
 import {
   ensureBindingRow,
   getBinding,
   getEmployee,
+  getEmployeeSlackIdentity,
   listEmployees,
   listMembers,
   listOrgProjects,
 } from "@/lib/data";
+import { slackOAuthConfigured } from "@/lib/slack/oauth";
 import { getEmployeeActionLog } from "@/lib/employee-actions-demo";
 import { APPROVAL_POLICY_LABELS } from "@/lib/employees/policy-draft";
 import { buildConcentration } from "@/lib/employees/concentration";
@@ -53,6 +56,8 @@ export default async function EmployeeDetailPage({
   const binding =
     (await getBinding(employee.id)) ??
     (await ensureBindingRow(employee.id, employee.orgId || orgId || ""));
+  const slackIdentity = await getEmployeeSlackIdentity(employee.id);
+  const oauthConfigured = slackOAuthConfigured();
 
   const actionEvents = getEmployeeActionLog(employee, binding);
 
@@ -99,7 +104,11 @@ export default async function EmployeeDetailPage({
 
         <section className="surface p-5 space-y-3">
           <h2 className="text-sm font-medium">やらせること / 使う理由</h2>
-          <EmployeePolicyForm employee={employee} disabled={employee.status === "suspended"} />
+          <EmployeePolicyForm
+            employee={employee}
+            slackLinked={slackIdentity?.status === "linked"}
+            disabled={employee.status === "suspended"}
+          />
         </section>
       </div>
 
@@ -164,6 +173,19 @@ export default async function EmployeeDetailPage({
           デフォルトは会社全般です。他案件のナレッジは社内にも出しません。指名プロジェクトはここで付与します。
         </p>
         <EmployeeProjectAccessForm employee={employee} projects={projects} disabled={employee.status === "suspended"} />
+      </section>
+
+      <section className="surface p-5 space-y-3 mt-4">
+        <h2 className="text-sm font-medium">Slack 投稿名義</h2>
+        <p className="text-xs muted leading-relaxed">
+          会社のBotか、この社員本人か。本人で出すには許可アカウントの Slack ID（U…）と OAuth 連携が必要です。
+        </p>
+        <SlackIdentityForm
+          employee={employee}
+          initialIdentity={slackIdentity}
+          oauthConfigured={oauthConfigured}
+          disabled={employee.status === "suspended"}
+        />
       </section>
 
       <section className="surface p-5 space-y-3 mt-4">

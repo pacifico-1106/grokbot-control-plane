@@ -13,8 +13,9 @@ import { resolveApprovalPolicy } from "@/lib/employees/sod-override";
 import { normalizeActionLimits } from "@/lib/action-gate";
 import { defaultVoice, normalizeVoice } from "@/lib/employees/voice";
 import { defaultProjectAccess, normalizeProjectAccess } from "@/lib/employees/project-access";
+import { normalizePostingAs } from "@/lib/employees/posting-as";
 import { appendAuditEvent } from "@/lib/data/audit";
-import type { ActionLimits, Employee, EmployeeProjectAccess } from "../types";
+import type { ActionLimits, Employee, EmployeeProjectAccess, PostingAs } from "../types";
 
 export async function listEmployees(orgId?: string | null): Promise<Employee[]> {
   if (isDemoMode()) {
@@ -115,6 +116,7 @@ export type IssueEmployeeInput = {
   managerId?: string | null;
   voice?: Employee["voice"] | null;
   projectAccess?: EmployeeProjectAccess | null;
+  postingAs?: PostingAs | null;
   secretHash: string;
   secretPrefix: string;
   expiresAt: string | null;
@@ -167,6 +169,7 @@ export async function issueEmployee(
       managerId: input.managerId ?? null,
       voice: normalizeVoice(input.voice ?? defaultVoice()),
       projectAccess: normalizeProjectAccess(input.projectAccess ?? defaultProjectAccess()),
+      postingAs: normalizePostingAs(input.postingAs),
       credentialId,
       createdAt: new Date().toISOString(),
     };
@@ -217,6 +220,7 @@ export async function issueEmployee(
       manager_id: input.managerId ?? null,
       voice: normalizeVoice(input.voice ?? defaultVoice()),
       project_access: normalizeProjectAccess(input.projectAccess ?? defaultProjectAccess()),
+      posting_as: normalizePostingAs(input.postingAs),
     })
     .select("*")
     .single();
@@ -327,6 +331,7 @@ export async function updateEmployeePolicy(input: {
   managerId?: string | null;
   voice?: Employee["voice"];
   projectAccess?: EmployeeProjectAccess;
+  postingAs?: PostingAs;
   displayName?: string;
   roleLabel?: string;
 }): Promise<Employee | null> {
@@ -355,6 +360,7 @@ export async function updateEmployeePolicy(input: {
         input.projectAccess === undefined
           ? (employee.projectAccess ?? defaultProjectAccess())
           : normalizeProjectAccess(input.projectAccess),
+      ...(input.postingAs !== undefined ? { postingAs: normalizePostingAs(input.postingAs) } : {}),
       ...(input.displayName !== undefined ? { displayName: input.displayName.trim() } : {}),
       ...(input.roleLabel !== undefined ? { roleLabel: input.roleLabel.trim() } : {}),
       ...(input.allowedAccounts !== undefined ? { allowedAccounts: input.allowedAccounts } : {}),
@@ -377,6 +383,7 @@ export async function updateEmployeePolicy(input: {
       ...(input.projectAccess !== undefined
         ? { project_access: normalizeProjectAccess(input.projectAccess) }
         : {}),
+      ...(input.postingAs !== undefined ? { posting_as: normalizePostingAs(input.postingAs) } : {}),
       ...(input.displayName !== undefined ? { display_name: input.displayName.trim() } : {}),
       ...(input.roleLabel !== undefined ? { role_label: input.roleLabel.trim() } : {}),
       ...(input.allowedAccounts !== undefined ? { allowed_accounts: input.allowedAccounts } : {}),

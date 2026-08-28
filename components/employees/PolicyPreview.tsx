@@ -6,6 +6,7 @@ import type {
   AllowedAccount,
   ApprovalPolicy,
   EmployeeScope,
+  PostingAs,
   SodVerdict,
 } from "@/lib/types";
 
@@ -22,12 +23,16 @@ export function PolicyPreview({
   approvalPolicy,
   liveSod,
   allowedAccounts,
+  postingAs,
+  slackLinked,
 }: {
   scopes: EmployeeScope[];
   allowedPurposes?: string[];
   approvalPolicy: ApprovalPolicy;
   liveSod?: Pick<SodVerdict, "level"> | null;
   allowedAccounts?: AllowedAccount[] | null;
+  postingAs?: PostingAs | null;
+  slackLinked?: boolean;
 }) {
   const rows = useMemo(
     () =>
@@ -37,8 +42,10 @@ export function PolicyPreview({
         approvalPolicy,
         liveSod,
         allowedAccounts,
+        postingAs,
+        slackLinked,
       }),
-    [scopes, allowedPurposes, approvalPolicy, liveSod, allowedAccounts]
+    [scopes, allowedPurposes, approvalPolicy, liveSod, allowedAccounts, postingAs, slackLinked]
   );
   const danger = rows.some((row) => row.tone === "danger");
   const warn = rows.some((row) => row.tone === "warn");

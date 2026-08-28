@@ -6,6 +6,7 @@
 import { DEMO_ORG } from "@/lib/demo-data";
 import { isDemoMode } from "@/lib/mode";
 import { createSupabaseAdminClient } from "@/lib/supabase";
+import { inspectSlackChannelExtShared } from "@/lib/slack/bot-token";
 import type {
   Audience,
   ChannelClassification,
@@ -271,6 +272,16 @@ export async function upsertOrgParty(input: {
   const identifier = normalizePartyIdentifier(input.kind, input.identifier);
   if (!identifier) throw new Error("identifier_required");
   const audience = input.audience === "internal" ? "internal" : "external";
+  if (input.kind === "slack_channel" && audience === "internal") {
+    const channel = await getOrgChannel(input.orgId, "slack", identifier);
+    if (channel && (channel.classification === "shared_external" || channel.mixed)) {
+      throw new Error("connect_cannot_be_internal");
+    }
+    const extShared = await inspectSlackChannelExtShared(input.orgId, identifier);
+    if (extShared === true) {
+      throw new Error("connect_cannot_be_internal");
+    }
+  }
   if (isDemoMode()) {
     const existing = runtimeParties.find(
       (row) => row.orgId === input.orgId && row.kind === input.kind && row.identifier === identifier
@@ -374,11 +385,18 @@ export async function upsertOrgChannel(input: {
   externalId: string;
   classification: ChannelClassification;
   mixed?: boolean;
+  skipInspect?: boolean;
 }): Promise<OrgChannel> {
   if (!isSurface(input.surface)) throw new Error("invalid_surface");
   const externalId = input.externalId.trim();
   if (!externalId) throw new Error("external_id_required");
-  const classification = isChannelClass(input.classification) ? input.classification : "unknown";
+  let classification = isChannelClass(input.classification) ? input.classification : "unknown";
+  if (!input.skipInspect && input.surface === "slack") {
+    const extShared = await inspectSlackChannelExtShared(input.orgId, externalId);
+    if (extShared === true) {
+      classification = "shared_external";
+    }
+  }
   const mixed = Boolean(input.mixed) || classification === "shared_external";
   const existingChannel = await getOrgChannel(input.orgId, input.surface, externalId);
   if (

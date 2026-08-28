@@ -300,7 +300,7 @@ describe("Gateway audience egress", () => {
         },
       });
       expect(failed.httpStatus).toBe(502);
-      expect(failed.body.code).toBe("slack_post_failed");
+      expect(failed.body.code).toBe("slack_not_in_channel");
       expect(failed.body.ok).toBe(false);
     } finally {
       globalThis.fetch = originalFetch;
@@ -554,6 +554,35 @@ describe("Gateway audience egress", () => {
     expect((await getApprovalById(String(second.body.approvalId), DEMO_ORG.id))?.status).toBe(
       "pending"
     );
+  });
+
+  test("postingAs=user without bound token fails slack_identity_unbound (not stub)", async () => {
+    const emp = getRuntimeEmployees().find((item) => item.id === "emp_comm");
+    if (!emp) throw new Error("missing emp_comm");
+    const previous = emp.postingAs;
+    emp.postingAs = "user";
+    try {
+      const result = await runGatewayInvoke({
+        employeeId: "emp_comm",
+        credentialId: "cred_comm",
+        body: {
+          tool: "slack.post",
+          purpose: "comm.internal",
+          jobId: `job_unbound_${Date.now()}`,
+          conversation: {
+            surface: "slack",
+            orgId: DEMO_ORG.id,
+            slackChannelId: "C_INTERNAL",
+          },
+          args: { assetRef: "kb/public-faq", slackChannelId: "C_INTERNAL", text: "hello" },
+        },
+      });
+      expect(result.httpStatus).toBe(502);
+      expect(result.body.code).toBe("slack_identity_unbound");
+      expect(result.body.ok).toBe(false);
+    } finally {
+      emp.postingAs = previous;
+    }
   });
 
 });

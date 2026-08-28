@@ -1,5 +1,7 @@
-import { getEnabledConversationAdapter } from "@/lib/data/conversation-adapters";
-import { getEnabledNotificationChannels } from "@/lib/data/notification-channels";
+import { getLinkedSlackUserToken } from "@/lib/data/slack-identities";
+import { resolveOrgSlackBotToken } from "@/lib/slack/bot-token";
+import { normalizePostingAs } from "@/lib/employees/posting-as";
+import type { PostingAs } from "@/lib/types";
 
 const SLACK_TIMEOUT_MS = 5_000;
 
@@ -12,30 +14,32 @@ export function looksLikeSlackTs(value: string | undefined | null): boolean {
   return Boolean(value && /^\d+\.\d+$/.test(value.trim()));
 }
 
-async function resolveConversationBotToken(orgId: string): Promise<string> {
-  const adapter = await getEnabledConversationAdapter(orgId, "slack");
-  const adapterToken = adapter?.secrets.botToken?.trim() || "";
-  if (adapterToken) return adapterToken;
+export async function resolveConversationToken(input: {
+  orgId: string;
+  employeeId?: string;
+  postingAs?: PostingAs | string | null;
+}): Promise<{ token: string } | { error: "slack_identity_unbound" }> {
+  const postingAs = normalizePostingAs(input.postingAs);
+  if (postingAs === "user") {
+    const employeeId = input.employeeId?.trim() || "";
+    if (!employeeId) return { error: "slack_identity_unbound" };
+    const userToken = await getLinkedSlackUserToken(employeeId);
+    if (!userToken) return { error: "slack_identity_unbound" };
+    return { token: userToken };
+  }
+  const botToken = await resolveOrgSlackBotToken(input.orgId);
+  return { token: botToken };
+}
 
-  // Conversation adapter is still the preferred store; fallback unblocks live
-  // mention-reply when only notify Slack is configured. Do NOT post approval
-  // tickets through this path.
-  const notifyChannels = await getEnabledNotificationChannels(orgId);
-  const notifyToken =
-    notifyChannels
-      .find((channel) => channel.provider === "slack")
-      ?.secrets.botToken?.trim() || "";
-  if (notifyToken) return notifyToken;
-
-  return (
-    process.env.SLACK_BOT_TOKEN?.trim() ||
-    process.env.SLACK_CONVERSATION_BOT_TOKEN?.trim() ||
-    ""
-  );
+function mapSlackApiError(error: string | undefined, httpStatus: number): string {
+  if (error === "not_in_channel") return "slack_not_in_channel";
+  return error || `slack_http_${httpStatus}`;
 }
 
 export async function postConversationMessage(input: {
   orgId: string;
+  employeeId?: string;
+  postingAs?: PostingAs | string | null;
   channel: string;
   text: string;
   threadTs?: string;
@@ -43,7 +47,13 @@ export async function postConversationMessage(input: {
 }): Promise<SlackConversationPostResult> {
   const dest = input.channel.trim();
   if (!dest) return { ok: false, error: "slack_channel_required" };
-  const token = await resolveConversationBotToken(input.orgId);
+  const resolved = await resolveConversationToken({
+    orgId: input.orgId,
+    employeeId: input.employeeId,
+    postingAs: input.postingAs,
+  });
+  if ("error" in resolved) return { ok: false, error: resolved.error };
+  const token = resolved.token;
   if (!token) return { ok: true, delivery: "stub" };
 
   const text = input.summarize
@@ -70,7 +80,7 @@ export async function postConversationMessage(input: {
       ts?: string;
     };
     if (!body.ok) {
-      return { ok: false, error: body.error || `slack_http_${response.status}` };
+      return { ok: false, error: mapSlackApiError(body.error, response.status) };
     }
     if (!body.channel || !body.ts) {
       return { ok: false, error: "slack_message_missing" };

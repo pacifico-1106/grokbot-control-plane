@@ -8,7 +8,9 @@
 import {
   getOrgChannel,
   getOrgParty,
+  upsertOrgChannel,
 } from "@/lib/data/directory";
+import { inspectSlackChannelExtShared } from "@/lib/slack/bot-token";
 import type {
   Audience,
   ConversationContext,
@@ -176,6 +178,25 @@ export async function resolveAudience(
       }
     }
     signals.push("unknown");
+  }
+
+  if (ctx.slackChannelId) {
+    const extShared = await inspectSlackChannelExtShared(ctx.orgId, ctx.slackChannelId);
+    if (extShared === true) {
+      signals.push("external");
+      try {
+        await upsertOrgChannel({
+          orgId: ctx.orgId,
+          surface: "slack",
+          externalId: ctx.slackChannelId,
+          classification: "shared_external",
+          mixed: true,
+          skipInspect: true,
+        });
+      } catch {
+        /* ledger update is best-effort; audience is already external */
+      }
+    }
   }
 
   const audience = failClosed(signals);

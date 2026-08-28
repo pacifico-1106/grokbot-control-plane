@@ -39,6 +39,7 @@ import type {
   EmployeeVoice,
   OrgMember,
   OrgProject,
+  PostingAs,
   SpendLimits,
 } from "@/lib/types";
 
@@ -60,6 +61,7 @@ export function HireEmployeeClient({ members = [], projects = [] }: { members?: 
   const [managerId, setManagerId] = useState<string | null>(null);
   const [voice, setVoice] = useState<EmployeeVoice>(defaultVoice());
   const [projectAccess, setProjectAccess] = useState<EmployeeProjectAccess>(defaultProjectAccess());
+  const [postingAs, setPostingAs] = useState<PostingAs>("bot");
   const [prompt, setPrompt] = useState(EXAMPLES[0]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -202,6 +204,7 @@ export function HireEmployeeClient({ members = [], projects = [] }: { members?: 
           managerId,
           voice,
           projectAccess,
+          postingAs,
         }),
       });
       const body = await res.json();
@@ -576,12 +579,45 @@ export function HireEmployeeClient({ members = [], projects = [] }: { members?: 
             ) : null}
           </fieldset>
 
+
+          <fieldset className="space-y-2">
+            <legend className="text-sm font-medium">Slack 投稿名義</legend>
+            <label className="flex items-start gap-2 text-sm cursor-pointer">
+              <input
+                type="radio"
+                name="hire-posting-as"
+                className="mt-1"
+                checked={postingAs === "bot"}
+                onChange={() => setPostingAs("bot")}
+              />
+              <span>
+                <span className="font-medium">会社のBotとして出す</span>
+                <span className="block text-xs muted mt-0.5">会話投稿 Slack の Bot token を使います。</span>
+              </span>
+            </label>
+            <label className="flex items-start gap-2 text-sm cursor-pointer">
+              <input
+                type="radio"
+                name="hire-posting-as"
+                className="mt-1"
+                checked={postingAs === "user"}
+                onChange={() => setPostingAs("user")}
+              />
+              <span>
+                <span className="font-medium">この人として出す</span>
+                <span className="block text-xs muted mt-0.5">発行後、社員証で Slack 連携します。未連携なら本人としては出せません。</span>
+              </span>
+            </label>
+          </fieldset>
+
           <PolicyPreview
             scopes={scopes}
             allowedPurposes={purposes}
             approvalPolicy={approvalPolicy}
             liveSod={liveSod}
             allowedAccounts={allowedAccounts}
+            postingAs={postingAs}
+            slackLinked={false}
           />
 
           <ManagerPicker members={members} value={managerId} onChange={setManagerId} />
@@ -738,12 +774,45 @@ export function HireEmployeeClient({ members = [], projects = [] }: { members?: 
             setAllowedAccounts={setAllowedAccounts}
           />
 
+
+          <fieldset className="space-y-2">
+            <legend className="text-sm font-medium">Slack 投稿名義</legend>
+            <label className="flex items-start gap-2 text-sm cursor-pointer">
+              <input
+                type="radio"
+                name="hire-posting-as"
+                className="mt-1"
+                checked={postingAs === "bot"}
+                onChange={() => setPostingAs("bot")}
+              />
+              <span>
+                <span className="font-medium">会社のBotとして出す</span>
+                <span className="block text-xs muted mt-0.5">会話投稿 Slack の Bot token を使います。</span>
+              </span>
+            </label>
+            <label className="flex items-start gap-2 text-sm cursor-pointer">
+              <input
+                type="radio"
+                name="hire-posting-as"
+                className="mt-1"
+                checked={postingAs === "user"}
+                onChange={() => setPostingAs("user")}
+              />
+              <span>
+                <span className="font-medium">この人として出す</span>
+                <span className="block text-xs muted mt-0.5">発行後、社員証で Slack 連携します。未連携なら本人としては出せません。</span>
+              </span>
+            </label>
+          </fieldset>
+
           <PolicyPreview
             scopes={scopes}
             allowedPurposes={purposes}
             approvalPolicy={approvalPolicy}
             liveSod={liveSod}
             allowedAccounts={allowedAccounts}
+            postingAs={postingAs}
+            slackLinked={false}
           />
 
           <div className="flex flex-col sm:flex-row flex-wrap gap-2">

@@ -28,9 +28,11 @@ function emptySpend(): SpendLimits {
 
 export function EmployeePolicyForm({
   employee,
+  slackLinked = false,
   disabled = false,
 }: {
   employee: Employee;
+  slackLinked?: boolean;
   disabled?: boolean;
 }) {
   const router = useRouter();
@@ -344,6 +346,8 @@ export function EmployeePolicyForm({
         approvalPolicy={approvalPolicy}
         liveSod={liveSod}
         allowedAccounts={allowedAccounts}
+        postingAs={employee.postingAs || "bot"}
+        slackLinked={slackLinked}
       />
 
       {ackNeeded ? (

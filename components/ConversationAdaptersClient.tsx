@@ -75,7 +75,9 @@ export function ConversationAdaptersClient({
           placeholder={adapter?.hasCredentials ? "設定済み（変更時のみ入力）" : "未設定"}
         />
       </label>
-      <p className="text-[11px] faint">承認通知のSlack設定とは別ストアです。同じBot tokenを貼っても構いません。</p>
+      <p className="text-[11px] faint">
+        承認通知のSlack設定とは別ストアです。同じBot tokenを貼っても構いません。社員本人として出す場合は各社員証で Slack 連携する。
+      </p>
       <button className="btn btn-primary" disabled={busy} onClick={() => void save()}>
         保存
       </button>
