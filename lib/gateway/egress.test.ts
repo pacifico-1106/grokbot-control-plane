@@ -156,4 +156,58 @@ describe("information class defaults", () => {
     expect(result.informationClass).toBe("internal");
     expect(result.fidelity).toBe("summary");
   });
+
+  test("comm.reply / slack.post to internal default to internal summary", async () => {
+    for (const tool of ["comm.reply", "slack.post"] as const) {
+      const result = await resolveInformationDisclosure({
+        orgId: DEMO_ORG.id,
+        tool,
+        audience: "internal",
+        body: { tool, purpose: "comm.internal", jobId: `job_${tool}` },
+      });
+      expect(result.informationClass).toBe("internal");
+      expect(result.fidelity).toBe("summary");
+    }
+  });
+
+  test("comm.reply to external or unknown stays confidential source", async () => {
+    for (const audience of ["external", "unknown"] as const) {
+      const result = await resolveInformationDisclosure({
+        orgId: DEMO_ORG.id,
+        tool: "comm.reply",
+        audience,
+        body: { tool: "comm.reply", purpose: "comm.internal", jobId: "job_ext" },
+      });
+      expect(result.informationClass).toBe("confidential");
+      expect(result.fidelity).toBe("source");
+    }
+  });
+
+  test("mail.send / calendar.confirm / commerce.order stay confidential even internally", async () => {
+    for (const tool of ["mail.send", "calendar.confirm", "commerce.order"] as const) {
+      const result = await resolveInformationDisclosure({
+        orgId: DEMO_ORG.id,
+        tool,
+        audience: "internal",
+        body: { tool, purpose: "ops.admin", jobId: `job_${tool}` },
+      });
+      expect(result.informationClass).toBe("confidential");
+      expect(result.fidelity).toBe("source");
+    }
+  });
+
+  test("explicit confidential still raises the internal default", async () => {
+    const result = await resolveInformationDisclosure({
+      orgId: DEMO_ORG.id,
+      tool: "comm.reply",
+      audience: "internal",
+      body: {
+        tool: "comm.reply",
+        purpose: "comm.internal",
+        jobId: "job_raise",
+        informationClass: "confidential",
+      },
+    });
+    expect(result.informationClass).toBe("confidential");
+  });
 });

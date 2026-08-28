@@ -3,6 +3,8 @@ import { suggestEmployeeApprovalPolicy } from "./approval-presets";
 import {
   buildEmployeePolicyDraft,
   jobTextImpliesCommerceOrder,
+  jobTextImpliesMailSend,
+  jobTextImpliesMentionReply,
 } from "./policy-draft";
 
 const SECRETARY_JOB =
@@ -115,5 +117,35 @@ describe("buildEmployeePolicyDraft neighboring roles", () => {
     );
     expect(draft.policy.scopes).toContain("commerce:order");
     expect(draft.policy.approvalPolicy).toBe("always_human");
+  });
+});
+
+describe("jobTextImpliesMentionReply / mail send", () => {
+  test("mention-reply language matches; bare 送信 without メール does not", () => {
+    expect(jobTextImpliesMentionReply("Slackのメンションに返信してほしい")).toBe(true);
+    expect(jobTextImpliesMentionReply("社内Slackの返信を担当")).toBe(true);
+    expect(jobTextImpliesMentionReply(SECRETARY_JOB)).toBe(true);
+    expect(jobTextImpliesMailSend("Slackのメンションに返信してほしい")).toBe(false);
+    expect(jobTextImpliesMailSend("Slackに送信して")).toBe(false);
+    expect(jobTextImpliesMailSend("秘書としてメールの下書きと、必要ならメール送信。")).toBe(true);
+  });
+});
+
+describe("buildEmployeePolicyDraft mention reply", () => {
+  test("mention-reply job gets slack:post, risk_based, no mail.send or calendar.confirm", () => {
+    const draft = buildEmployeePolicyDraft("Slackのメンションに返信してほしい");
+    expect(draft.policy.scopes).toContain("slack:post");
+    expect(draft.policy.scopes).not.toContain("mail:send");
+    expect(draft.policy.scopes).not.toContain("calendar:confirm");
+    expect(draft.policy.approvalPolicy).toBe("risk_based");
+    expect(draft.policy.allowedPurposes).toContain("comm.internal");
+  });
+
+  test("secretary mention job still omits mail.send and calendar.confirm unless asked", () => {
+    const draft = buildEmployeePolicyDraft(SECRETARY_JOB);
+    expect(draft.policy.scopes).toContain("slack:post");
+    expect(draft.policy.scopes).not.toContain("mail:send");
+    expect(draft.policy.scopes).not.toContain("calendar:confirm");
+    expect(draft.policy.approvalPolicy).toBe("risk_based");
   });
 });

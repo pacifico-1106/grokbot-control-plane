@@ -56,6 +56,7 @@ async function queueMentionReply(text = BODY_TEXT) {
       slackChannelId: "C_INTERNAL",
       threadId: THREAD_TS,
     },
+    informationClass: "confidential" as const,
     args: {
       slackChannelId: "C_INTERNAL",
       text,

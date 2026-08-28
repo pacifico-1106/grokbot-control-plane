@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { buildPolicyPreview } from "./policy-preview";
+import { evaluateSod } from "./sod";
+import {
+  MENTION_REPLY_AUTO,
+  MENTION_REPLY_WAIT,
+  buildPolicyPreview,
+} from "./policy-preview";
 
 describe("buildPolicyPreview", () => {
   test("secretary defaults: auto Slack, no mail send, no confirm, no order", () => {
@@ -10,7 +15,8 @@ describe("buildPolicyPreview", () => {
       allowedAccounts: [],
     });
     const byId = Object.fromEntries(rows.map((row) => [row.id, row]));
-    expect(byId.slack.value).toBe("自動で出す");
+    expect(byId.slack.label).toBe("メンション返信");
+    expect(byId.slack.value).toBe(MENTION_REPLY_AUTO);
     expect(byId.slack.tone).toBe("ok");
     expect(byId.mail.value).toBe("できない");
     expect(byId.calendar.value).toBe("できない");
@@ -19,12 +25,40 @@ describe("buildPolicyPreview", () => {
     expect(byId.external.value).toContain("機密は出さない");
   });
 
-  test("always_human with slack scope is human-reviewed Slack", () => {
+  test("always_human with slack scope waits for mention replies", () => {
     const rows = buildPolicyPreview({
       scopes: ["slack:post"],
       approvalPolicy: "always_human",
     });
-    expect(rows.find((row) => row.id === "slack")?.value).toBe("人が見てから");
+    expect(rows.find((row) => row.id === "slack")?.value).toBe(MENTION_REPLY_WAIT);
+    expect(rows.find((row) => row.id === "slack")?.tone).toBe("warn");
+  });
+
+  test("mail.send + calendar.confirm SoD keeps mention replies waiting even on risk_based", () => {
+    const scopes = ["slack:post", "mail:send", "calendar:confirm"] as const;
+    expect(evaluateSod([...scopes]).level).toBe("force_human");
+    const rows = buildPolicyPreview({
+      scopes,
+      approvalPolicy: "risk_based",
+      liveSod: evaluateSod([...scopes]),
+    });
+    expect(rows.find((row) => row.id === "slack")?.value).toBe(MENTION_REPLY_WAIT);
+    expect(rows.find((row) => row.id === "slack")?.tone).toBe("warn");
+  });
+
+  test("liveSod force_human shows wait; ok shows auto", () => {
+    const forced = buildPolicyPreview({
+      scopes: ["slack:post"],
+      approvalPolicy: "risk_based",
+      liveSod: { level: "force_human" },
+    });
+    expect(forced.find((row) => row.id === "slack")?.value).toBe(MENTION_REPLY_WAIT);
+    const ok = buildPolicyPreview({
+      scopes: ["slack:post"],
+      approvalPolicy: "risk_based",
+      liveSod: { level: "ok" },
+    });
+    expect(ok.find((row) => row.id === "slack")?.value).toBe(MENTION_REPLY_AUTO);
   });
 
   test("mail.send / calendar.confirm / commerce.order are tool-forced", () => {
@@ -91,5 +125,4 @@ describe("buildPolicyPreview", () => {
     });
     expect(linked.find((row) => row.id === "postingAs")?.value).toBe("この社員");
   });
-
 });

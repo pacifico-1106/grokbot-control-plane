@@ -7,6 +7,75 @@ import { runGatewayInvoke } from "@/lib/gateway/invoke";
 import { DEMO_ORG } from "@/lib/demo-data";
 
 describe("Gateway audience egress", () => {
+  test("comm.reply to internal without class auto-allows as internal summary", async () => {
+    const result = await runGatewayInvoke({
+      employeeId: "emp_comm",
+      credentialId: "cred_comm",
+      body: {
+        tool: "comm.reply",
+        purpose: "comm.internal",
+        jobId: "job_auto_reply",
+        conversation: {
+          surface: "slack",
+          orgId: DEMO_ORG.id,
+          slackChannelId: "C_INTERNAL",
+        },
+        args: { slackChannelId: "C_INTERNAL", text: "社内メンションへの返信です。" },
+      },
+    });
+    expect(result.body.ok).toBe(true);
+    expect(result.body.needs_approval).not.toBe(true);
+    const egress = result.body.egress as { decision?: string; informationClass?: string; fidelity?: string } | undefined;
+    expect(egress?.decision).toBe("allow");
+    expect(egress?.informationClass).toBe("internal");
+    expect(egress?.fidelity).toBe("summary");
+  });
+
+  test("slack.post to internal without class auto-allows as internal summary", async () => {
+    const result = await runGatewayInvoke({
+      employeeId: "emp_comm",
+      credentialId: "cred_comm",
+      body: {
+        tool: "slack.post",
+        purpose: "comm.internal",
+        jobId: "job_auto_post",
+        conversation: {
+          surface: "slack",
+          orgId: DEMO_ORG.id,
+          slackChannelId: "C_INTERNAL",
+        },
+        args: { slackChannelId: "C_INTERNAL", text: "社内連絡です。" },
+      },
+    });
+    expect(result.body.ok).toBe(true);
+    expect(result.body.needs_approval).not.toBe(true);
+    const egress = result.body.egress as { decision?: string; informationClass?: string; fidelity?: string } | undefined;
+    expect(egress?.decision).toBe("allow");
+    expect(egress?.informationClass).toBe("internal");
+    expect(egress?.fidelity).toBe("summary");
+  });
+
+  test("comm.reply to Connect/shared without class still deny", async () => {
+    const result = await runGatewayInvoke({
+      employeeId: "emp_comm",
+      credentialId: "cred_comm",
+      body: {
+        tool: "comm.reply",
+        purpose: "comm.internal",
+        jobId: "job_connect_deny",
+        conversation: {
+          surface: "slack",
+          orgId: DEMO_ORG.id,
+          slackChannelId: "C_SHARED",
+        },
+        args: { slackChannelId: "C_SHARED", text: "社外混在への返信" },
+      },
+    });
+    expect(result.httpStatus).toBe(403);
+    expect(result.body.code).toBe("egress_denied");
+    expect(result.body.needs_approval).not.toBe(true);
+  });
+
   test("slack.post alias cannot bypass: external dest still deny for confidential", async () => {
     const result = await runGatewayInvoke({
       employeeId: "emp_comm",
@@ -326,6 +395,7 @@ describe("Gateway audience egress", () => {
         slackChannelId: "C_INTERNAL",
         threadId: threadTs,
       },
+      informationClass: "confidential" as const,
       args: {
         slackChannelId: "C_INTERNAL",
         text: "顧客への返信本文",
@@ -425,6 +495,7 @@ describe("Gateway audience egress", () => {
           slackChannelId: "C_INTERNAL",
           threadId: "1787911797.502889",
         },
+        informationClass: "confidential" as const,
         args: {
           slackChannelId: "C_INTERNAL",
           channelName: "internal-cs",
@@ -510,6 +581,7 @@ describe("Gateway audience egress", () => {
           slackChannelId: "C_INTERNAL",
           threadId: "1787911797.502889",
         },
+        informationClass: "confidential" as const,
         args: { slackChannelId: "C_INTERNAL", text: "初稿の返信" },
       },
     });
@@ -541,6 +613,7 @@ describe("Gateway audience egress", () => {
           slackChannelId: "C_INTERNAL",
           threadId: "1787911797.502889",
         },
+        informationClass: "confidential" as const,
         args: { slackChannelId: "C_INTERNAL", text: "修正後の返信" },
       },
     });

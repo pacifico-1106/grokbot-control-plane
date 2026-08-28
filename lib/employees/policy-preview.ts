@@ -4,6 +4,7 @@
  * Does not reimplement the Gateway matrix.
  */
 import { normalizeAllowedAccounts } from "@/lib/employees/allowed-accounts";
+import { evaluateSod } from "@/lib/employees/sod";
 import type {
   AllowedAccount,
   ApprovalPolicy,
@@ -21,12 +22,26 @@ export type PolicyPreviewRow = {
   tone: PolicyPreviewTone;
 };
 
+export const MENTION_REPLY_AUTO =
+  "自動（社内は要約で通す。社外・機密は止める）";
+export const MENTION_REPLY_WAIT = "承認待ち";
+
 export function hasCommScope(scopes: readonly string[]): boolean {
   return (
     scopes.includes("slack:post") ||
     scopes.includes("slack:post_external") ||
     scopes.includes("tools:invoke")
   );
+}
+
+function mentionReplyForcedHuman(
+  approvalPolicy: ApprovalPolicy,
+  scopes: readonly string[],
+  liveSod?: Pick<SodVerdict, "level"> | null
+): boolean {
+  if (approvalPolicy === "always_human") return true;
+  const sodLevel = liveSod?.level ?? evaluateSod(scopes as EmployeeScope[]).level;
+  return sodLevel === "force_human";
 }
 
 export function buildPolicyPreview(input: {
@@ -39,7 +54,6 @@ export function buildPolicyPreview(input: {
   slackLinked?: boolean;
 }): PolicyPreviewRow[] {
   void input.allowedPurposes;
-  void input.liveSod;
   const scopes = input.scopes;
   const hasSlack = hasCommScope(scopes);
   const hasMailSend = scopes.includes("mail:send") || scopes.includes("agentmail:send");
@@ -47,13 +61,17 @@ export function buildPolicyPreview(input: {
   const hasOrder = scopes.includes("commerce:order");
   const hasBrowser = scopes.includes("browser:use");
   const accounts = normalizeAllowedAccounts(input.allowedAccounts);
-  const alwaysHuman = input.approvalPolicy === "always_human";
+  const mentionForced = mentionReplyForcedHuman(
+    input.approvalPolicy,
+    scopes,
+    input.liveSod
+  );
 
   const slack: PolicyPreviewRow = !hasSlack
-    ? { id: "slack", label: "メンション返信 / Slack", value: "できない", tone: "muted" }
-    : alwaysHuman
-      ? { id: "slack", label: "メンション返信 / Slack", value: "人が見てから", tone: "warn" }
-      : { id: "slack", label: "メンション返信 / Slack", value: "自動で出す", tone: "ok" };
+    ? { id: "slack", label: "メンション返信", value: "できない", tone: "muted" }
+    : mentionForced
+      ? { id: "slack", label: "メンション返信", value: MENTION_REPLY_WAIT, tone: "warn" }
+      : { id: "slack", label: "メンション返信", value: MENTION_REPLY_AUTO, tone: "ok" };
 
   const mail: PolicyPreviewRow = hasMailSend
     ? { id: "mail", label: "メール送信", value: "必ず人が見る", tone: "danger" }

@@ -152,6 +152,18 @@ export function jobTextImpliesCommerceOrder(rawInput: string): boolean {
   );
 }
 
+/** Mention-reply / Slack secretary jobs. Does not imply mail.send. */
+export function jobTextImpliesMentionReply(rawInput: string): boolean {
+  return /(?:メンション|mention|slack|スラック|社内.?返信|返信)/i.test(rawInput.trim());
+}
+
+/** Mail send only when the job actually asks for mail — not bare 送信/返信. */
+export function jobTextImpliesMailSend(rawInput: string): boolean {
+  const input = rawInput.trim();
+  if (/(?:mail\.send|mail:send|send mail|外部送信|メールを出す)/i.test(input)) return true;
+  return /メール/.test(input) && /(?:送信|送る)/.test(input);
+}
+
 function inferPurposes(
   input: string,
   profile: (typeof ROLE_PROFILES)[number] | undefined,
@@ -180,7 +192,8 @@ function buildEmployeePolicyDraftForProfile(
   const profile = forcedProfile ?? ROLE_PROFILES.find((p) => p.match.test(input));
   const splitMode = Boolean(forcedProfile);
 
-  const wantsSend = !splitMode && /(?:送信|送る|メールを出す|外部送信|send mail)/i.test(input);
+  const wantsSend = !splitMode && jobTextImpliesMailSend(input);
+  const wantsCommReply = !splitMode && jobTextImpliesMentionReply(input);
   const wantsDraftOnly =
     !splitMode && /(?:下書き|draft)/i.test(input) && !wantsSend;
   const wantsOrder = !splitMode && jobTextImpliesCommerceOrder(input);
@@ -208,6 +221,7 @@ function buildEmployeePolicyDraftForProfile(
     ...(wantsOrder ? (["commerce:quote", "commerce:order"] as EmployeeScope[]) : []),
     ...(wantsBrowser ? (["browser:use"] as EmployeeScope[]) : []),
     ...(wantsWrite ? (["files:write"] as EmployeeScope[]) : []),
+    ...(wantsCommReply ? (["slack:post"] as EmployeeScope[]) : []),
     "approvals:request",
     "audit:append",
   ]);

@@ -1,10 +1,13 @@
 /**
  * Information class (WHAT) + disclosure fidelity.
  * Unclassified assets / unknown outbound body → confidential.
+ * Exception: unspecified class/fidelity on comm.reply / slack.post to an
+ * already-resolved internal audience defaults to internal+summary.
  */
 
 import { getInformationAsset } from "@/lib/data/directory";
 import type {
+  Audience,
   DisclosureFidelity,
   GatewayInvokeRequest,
   InformationClass,
@@ -19,6 +22,12 @@ const CLASS_RANK: Record<InformationClass, number> = {
   confidential: 2,
   verbatim: 3,
 };
+
+const INTERNAL_SUMMARY_DEFAULT_TOOLS = new Set([
+  "comm.reply",
+  "slack.post",
+  "slack.post_external",
+]);
 
 export function isInformationClass(value: unknown): value is InformationClass {
   return typeof value === "string" && CLASSES.includes(value as InformationClass);
@@ -67,7 +76,17 @@ function calendarLooksDetailed(args: Record<string, unknown>): boolean {
   return false;
 }
 
-export function toolDefaultClassification(tool: string, args: Record<string, unknown>): {
+/**
+ * Unspecified class/fidelity on an internal mention/Slack post defaults to
+ * internal+summary so the matrix can allow. External / Connect / unknown stay
+ * confidential+source (fail-closed). mail.send / calendar.confirm /
+ * commerce.order are not relaxed.
+ */
+export function toolDefaultClassification(
+  tool: string,
+  args: Record<string, unknown>,
+  audience?: Audience
+): {
   informationClass: InformationClass;
   fidelity: DisclosureFidelity;
 } {
@@ -78,6 +97,9 @@ export function toolDefaultClassification(tool: string, args: Record<string, unk
   }
   if (tool === "knowledge.search" || tool === "files.read") {
     return { informationClass: "confidential", fidelity: "source" };
+  }
+  if (INTERNAL_SUMMARY_DEFAULT_TOOLS.has(tool) && audience === "internal") {
+    return { informationClass: "internal", fidelity: "summary" };
   }
   if (
     tool === "mail.send" ||
@@ -96,6 +118,7 @@ export async function resolveInformationDisclosure(input: {
   orgId: string;
   tool: string;
   body: GatewayInvokeRequest;
+  audience?: Audience;
 }): Promise<{ informationClass: InformationClass; fidelity: DisclosureFidelity; unclassified: boolean }> {
   const args = (input.body.args && typeof input.body.args === "object" ? input.body.args : {}) as Record<string, unknown>;
   const explicitClass =
@@ -122,7 +145,7 @@ export async function resolveInformationDisclosure(input: {
     }
   }
 
-  const defaults = toolDefaultClassification(input.tool, args);
+  const defaults = toolDefaultClassification(input.tool, args, input.audience);
   const inherited = assetClasses.length ? maxInformationClass(assetClasses) : null;
   const base = inherited ?? defaults.informationClass;
   // Classes attach to tools/data. A request may only raise severity (public → confidential),

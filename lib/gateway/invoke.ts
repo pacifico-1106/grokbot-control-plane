@@ -92,6 +92,7 @@ async function evaluateInvokeEgress(input: {
     orgId: input.orgId,
     tool: input.tool,
     body: input.body,
+    audience: audience.audience,
   });
   return evaluateEgressMatrix({
     audience: audience.audience,
