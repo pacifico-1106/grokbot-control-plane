@@ -29,7 +29,7 @@ export function ConversationAdaptersClient({
       if (!response.ok) throw new Error(body.error || "保存に失敗しました");
       setAdapter(body.adapter);
       setBotToken("");
-      setMessage("会話投稿 Slack を保存しました（承認通知とは別の保存先です）");
+      setMessage("チャンネルへの書き込み設定を保存しました");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "保存に失敗しました");
     } finally {
@@ -41,9 +41,9 @@ export function ConversationAdaptersClient({
     <section className="surface p-5 space-y-4 mt-4">
       <div className="flex items-center justify-between gap-3">
         <div>
-          <h2 className="font-medium">会話投稿 Slack</h2>
+          <h2 className="font-medium">チャンネルに書き込む（会社のBot）</h2>
           <p className="text-xs muted mt-1">
-            comm.send / slack.post がegress許可後に chat.postMessage します。承認カードはこのトークンを使いません。
+            承認のあと、AI社員のメッセージがこのBot名義でチャンネルに出ます。xoxb。本人として出すなら社員証へ。
           </p>
         </div>
         <label className="flex items-center gap-2 text-sm">
@@ -75,8 +75,8 @@ export function ConversationAdaptersClient({
           placeholder={adapter?.hasCredentials ? "設定済み（変更時のみ入力）" : "未設定"}
         />
       </label>
-      <p className="text-[11px] faint">
-        承認通知のSlack設定とは別ストアです。同じBot tokenを貼っても構いません。社員本人として出す場合は各社員証で Slack 連携する。
+      <p className="text-[11px] faint leading-relaxed">
+        上の「承認を受け取る」と同じ Bot token を入れて構いません。本人の名前で出す場合は、各社員証で Slack 連携します。
       </p>
       <button className="btn btn-primary" disabled={busy} onClick={() => void save()}>
         保存

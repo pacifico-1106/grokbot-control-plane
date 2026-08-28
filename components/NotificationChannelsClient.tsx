@@ -46,6 +46,19 @@ function providerTitle(provider: NotificationProvider): string {
   return "Slack";
 }
 
+function providerHeading(provider: NotificationProvider): string {
+  if (provider === "telegram") return "承認を受け取る（Telegram）";
+  if (provider === "line") return "承認を受け取る（LINE）";
+  return "承認を受け取る（Slack）";
+}
+
+function providerHint(provider: NotificationProvider): string {
+  if (provider === "slack") {
+    return "ここに入れると、危ない操作のカードがこのチャンネルに届きます。社員の返信そのものは出ません。";
+  }
+  return "危ない操作のカードがここに届きます。会話の書き込みではありません。";
+}
+
 export function NotificationChannelsClient({ initialChannels }: { initialChannels: NotificationChannel[] }) {
   const [channels, setChannels] = useState(initialChannels);
   const [forms, setForms] = useState<Record<NotificationProvider, FormState>>({
@@ -131,7 +144,7 @@ export function NotificationChannelsClient({ initialChannels }: { initialChannel
   }
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 mt-4">
       {message ? <p className="surface p-3 text-sm">{message}</p> : null}
       <div className="grid lg:grid-cols-3 gap-4">
         {PROVIDERS.map((provider) => {
@@ -143,8 +156,8 @@ export function NotificationChannelsClient({ initialChannels }: { initialChannel
             <section key={provider} className="surface p-5 space-y-4">
               <div className="flex items-center justify-between gap-3">
                 <div>
-                  <h2 className="font-medium">{providerTitle(provider)}</h2>
-                  <p className="text-xs muted mt-1">この組織専用の承認通知</p>
+                  <h2 className="font-medium">{providerHeading(provider)}</h2>
+                  <p className="text-xs muted mt-1">{providerHint(provider)}</p>
                 </div>
                 <label className="flex items-center gap-2 text-sm">
                   <input
@@ -211,7 +224,7 @@ export function NotificationChannelsClient({ initialChannels }: { initialChannel
               {saved ? <p className="text-[11px] faint break-all">Webhook: {saved.webhookPath}</p> : null}
               {provider === "slack" ? (
                 <p className="text-[11px] faint leading-relaxed">
-                  Slackアプリの Interactivity Request URL に本番origin付きでこのパスを登録してください。自動登録はありません。会話投稿用tokenは下の別カードへ。
+                  会話への書き込みは下の「チャンネルに書き込む」で設定します。同じ Bot token で構いません。
                 </p>
               ) : null}
               <div className="flex flex-wrap gap-2">

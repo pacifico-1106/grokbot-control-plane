@@ -15,7 +15,7 @@ const NAV = [
   { href: "/app/integrations", label: "連携", icon: "⌁" },
   { href: "/app/billing", label: "請求", icon: "¥" },
   { href: "/app/team", label: "チーム", icon: "◎" },
-  { href: "/app/settings", label: "通知設定", icon: "•" },
+  { href: "/app/settings", label: "つながり", icon: "•" },
 ];
 
 const GUIDE_NAV = [
@@ -33,6 +33,7 @@ function navActive(pathname: string, item: { href: string; exact?: boolean }) {
 export function AppShell({
   children,
   title,
+  subtitle,
 }: {
   children: React.ReactNode;
   title: string;
@@ -230,6 +231,9 @@ export function AppShell({
               <h1 className="text-[15px] font-semibold leading-tight whitespace-nowrap">
                 {title}
               </h1>
+              {subtitle ? (
+                <p className="text-[11px] muted leading-tight mt-0.5 truncate">{subtitle}</p>
+              ) : null}
             </div>
           </div>
           <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">

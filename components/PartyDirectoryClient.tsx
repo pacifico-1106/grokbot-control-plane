@@ -125,8 +125,7 @@ export function PartyDirectoryClient({
       <div>
         <h2 className="text-sm font-medium">相手台帳</h2>
         <p className="mt-2 text-xs muted leading-relaxed">
-          会話の宛先（ドメイン・Slack チャネル ID）を社内 / 社外として登録します。未登録は社外扱いです。
-          これは承認通知チャネル（Telegram / LINE）とは別物です。Slack アプリや Bot トークンは不要です。
+          会話の宛先が社内か社外かを登録します。Bot token は不要です。未登録は社外扱いです。
         </p>
       </div>
       {message ? <p className="text-sm">{message}</p> : null}
@@ -182,7 +181,7 @@ export function PartyDirectoryClient({
         </div>
 
         <div className="rounded-xl border border-[var(--border-soft)] p-4 space-y-3">
-          <h3 className="text-sm font-medium">Slack チャネル分類</h3>
+          <h3 className="text-sm font-medium">このチャンネルは社内？社外？</h3>
           <input
             value={channelId}
             onChange={(e) => setChannelId(e.target.value)}
@@ -190,7 +189,7 @@ export function PartyDirectoryClient({
             className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm"
           />
           <p className="text-xs muted leading-relaxed">
-            Slack Connect / 社外混在は社内にできない。
+            チャンネル ID を社内 / 社外に分けます。Slack Connect / 社外混在は社内にできません。未登録は社外扱いです。
           </p>
           <select
             value={lockInternal && classification === "internal" ? "shared_external" : classification}
