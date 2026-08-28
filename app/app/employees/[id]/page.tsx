@@ -5,6 +5,7 @@ import { BindingPanel } from "@/components/employees/BindingPanel";
 import { EmployeeActionLog } from "@/components/employees/EmployeeActionLog";
 import { EmployeeManagerForm } from "@/components/employees/EmployeeManagerForm";
 import { EmployeeIdentityForm } from "@/components/employees/EmployeeIdentityForm";
+import { EmployeePolicyForm } from "@/components/employees/EmployeePolicyForm";
 import { EmployeeVoiceForm } from "@/components/employees/EmployeeVoiceForm";
 import { EmployeeProjectAccessForm } from "@/components/employees/EmployeeProjectAccessForm";
 import { EmployeeTerminateForm } from "@/components/employees/EmployeeTerminateForm";
@@ -20,11 +21,7 @@ import {
 } from "@/lib/data";
 import { getEmployeeActionLog } from "@/lib/employee-actions-demo";
 import { serviceLabel } from "@/lib/employees/allowed-accounts";
-import {
-  APPROVAL_POLICY_LABELS,
-  SCOPE_LABELS,
-} from "@/lib/employees/policy-draft";
-import type { EmployeeScope } from "@/lib/types";
+import { APPROVAL_POLICY_LABELS } from "@/lib/employees/policy-draft";
 import { buildConcentration } from "@/lib/employees/concentration";
 import { DOMAIN_LABELS } from "@/lib/gateway/domains";
 
@@ -89,12 +86,6 @@ export default async function EmployeeDetailPage({
           </p>
           <dl className="text-sm space-y-2 pt-2">
             <div>
-              <dt className="text-xs muted">承認ポリシー</dt>
-              <dd className="mt-1">
-                {APPROVAL_POLICY_LABELS[employee.approvalPolicy]}
-              </dd>
-            </div>
-            <div>
               <dt className="text-xs muted">社員証 ID</dt>
               <dd className="mt-1 font-mono text-xs">
                 {employee.credentialId ?? "未発行"}
@@ -109,18 +100,7 @@ export default async function EmployeeDetailPage({
 
         <section className="surface p-5 space-y-3">
           <h2 className="text-sm font-medium">できること / 目的</h2>
-          <div className="flex flex-wrap gap-2">
-            {(employee.scopes ?? []).map((s) => (
-              <span key={s} className="chip chip-ok text-[11px]">
-                {SCOPE_LABELS[s as EmployeeScope] ?? s}
-              </span>
-            ))}
-          </div>
-          <ul className="mt-3 space-y-1 text-sm muted">
-            {(employee.allowedPurposes ?? []).map((p) => (
-              <li key={p}>· {p}</li>
-            ))}
-          </ul>
+          <EmployeePolicyForm employee={employee} disabled={employee.status === "suspended"} />
         </section>
       </div>
 
