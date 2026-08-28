@@ -1,16 +1,26 @@
 import Link from "next/link";
 import { BrandMark } from "@/components/BrandMark";
-import { isDemoMode } from "@/lib/mode";
+import { LoginForm } from "@/components/LoginForm";
 import { LegalLinks } from "@/components/LegalLinks";
+import { isSessionNotice } from "@/lib/auth/login-errors";
+import { isDemoMode } from "@/lib/mode";
 
 export default async function LoginPage({
   searchParams,
 }: {
-  searchParams: Promise<{ next?: string }>;
+  searchParams: Promise<{
+    next?: string;
+    error?: string;
+    email?: string;
+    reason?: string;
+    expired?: string;
+  }>;
 }) {
   const sp = await searchParams;
   const next = sp.next || "/app";
   const demo = isDemoMode();
+  const initialEmail = sp.email || (demo ? "owner@example.com" : "");
+  const sessionNotice = isSessionNotice(sp.reason) || sp.expired === "1";
 
   return (
     <div className="min-h-screen bg-[var(--bg)] text-[var(--text)] flex items-center justify-center px-4">
@@ -29,32 +39,13 @@ export default async function LoginPage({
             登録済みのメールとパスワードでサインインしてください。
           </p>
         )}
-        <form action="/api/auth/login" method="post" className="mt-6 space-y-4">
-          <input type="hidden" name="next" value={next} />
-          <label className="block text-sm">
-            <span className="muted">メール</span>
-            <input
-              name="email"
-              type="email"
-              required={!demo}
-              defaultValue={demo ? "owner@example.com" : ""}
-              className="mt-1 w-full min-h-[44px] rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2.5 text-sm outline-none focus:border-[var(--text-faint)]"
-            />
-          </label>
-          <label className="block text-sm">
-            <span className="muted">パスワード</span>
-            <input
-              name="password"
-              type="password"
-              required={!demo}
-              minLength={demo ? undefined : 8}
-              className="mt-1 w-full min-h-[44px] rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2.5 text-sm outline-none focus:border-[var(--text-faint)]"
-            />
-          </label>
-          <button type="submit" className="btn btn-primary w-full">
-            {demo ? "デモでダッシュボードへ" : "ログイン"}
-          </button>
-        </form>
+        <LoginForm
+          next={next}
+          demo={demo}
+          initialEmail={initialEmail}
+          initialError={sp.error}
+          sessionNotice={sessionNotice}
+        />
         <p className="mt-4 text-xs faint">
           アカウント未作成の方は{" "}
           <Link href="/signup" className="underline">

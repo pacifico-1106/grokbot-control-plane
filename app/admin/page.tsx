@@ -43,7 +43,7 @@ export default async function SuperAdminDashboard({
 }) {
   const access = await getSuperAdminAccess();
   if (!access.allowed) {
-    if (access.reason === "unauthenticated") redirect("/login?next=/admin");
+    if (access.reason === "unauthenticated") redirect("/login?next=/admin&reason=session");
     notFound();
   }
 

@@ -21,7 +21,7 @@ export default async function AdminOrganizationPage({
 }) {
   const access = await getSuperAdminAccess();
   if (!access.allowed) {
-    if (access.reason === "unauthenticated") redirect("/login?next=/admin");
+    if (access.reason === "unauthenticated") redirect("/login?next=/admin&reason=session");
     notFound();
   }
 

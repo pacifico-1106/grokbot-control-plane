@@ -20,7 +20,7 @@ export default async function AppSectionLayout({
   const result = await ensureAuthenticatedOrg();
 
   if (result.status === "unauthenticated") {
-    redirect("/login?next=/app");
+    redirect("/login?next=/app&reason=session");
   }
 
   if (result.status === "needs_schema") {

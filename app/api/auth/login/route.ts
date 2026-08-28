@@ -3,6 +3,11 @@ import { isDemoMode } from "@/lib/mode";
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 import { matchesSuperAdminAllowlist } from "@/lib/admin/allowlist";
+import {
+  loginErrorMessage,
+  loginFailureSearchParams,
+  type LoginErrorCode,
+} from "@/lib/auth/login-errors";
 
 export const runtime = "nodejs";
 
@@ -17,8 +22,39 @@ function safeDestination(value: string, requestUrl: string): string {
   }
 }
 
+function wantsJson(req: Request, contentType: string): boolean {
+  const accept = req.headers.get("accept") || "";
+  return contentType.includes("application/json") || accept.includes("application/json");
+}
+
+function isRateLimited(error: { status?: number; message?: string; code?: string }): boolean {
+  if (error.status === 429) return true;
+  if (error.code === "over_request_rate_limit") return true;
+  return /rate|too many/i.test(error.message || "");
+}
+
+function fail(
+  req: Request,
+  json: boolean,
+  code: LoginErrorCode,
+  status: number,
+  email: string,
+  next: string
+) {
+  if (json) {
+    return NextResponse.json(
+      { error: code, message: loginErrorMessage(code, status) },
+      { status }
+    );
+  }
+  const url = new URL("/login", req.url);
+  url.search = loginFailureSearchParams({ code, email, next });
+  return NextResponse.redirect(url, 303);
+}
+
 export async function POST(req: Request) {
   const contentType = req.headers.get("content-type") || "";
+  const json = wantsJson(req, contentType);
   let email = "";
   let password = "";
   let next = "/app";
@@ -38,14 +74,18 @@ export async function POST(req: Request) {
   if (isDemoMode()) {
     const url = new URL(next, req.url);
     url.searchParams.set("demo", "1");
+    if (json) {
+      return NextResponse.json({
+        ok: true,
+        demo: true,
+        next: `${url.pathname}${url.search}${url.hash}`,
+      });
+    }
     return NextResponse.redirect(url, 303);
   }
 
   if (!email || !password) {
-    return NextResponse.json(
-      { error: "credentials_required", message: "メールとパスワードが必要です" },
-      { status: 400 }
-    );
+    return fail(req, json, "credentials_required", 400, email, next);
   }
 
   const cookieStore = await cookies();
@@ -66,15 +106,17 @@ export async function POST(req: Request) {
 
   const { data, error } = await supabase.auth.signInWithPassword({ email, password });
   if (error) {
-    return NextResponse.json(
-      { error: "login_failed", message: "ログインに失敗しました" },
-      { status: 401 }
+    const rateLimited = isRateLimited(error);
+    return fail(
+      req,
+      json,
+      rateLimited ? "rate_limited" : "login_failed",
+      rateLimited ? 429 : 401,
+      email,
+      next
     );
   }
 
-  if (contentType.includes("application/json")) {
-    return NextResponse.json({ ok: true, demo: false });
-  }
   const superAdmin = data.user && matchesSuperAdminAllowlist({
     userId: data.user.id,
     email: data.user.email || email,
@@ -82,5 +124,9 @@ export async function POST(req: Request) {
     emails: process.env.SUPER_ADMIN_EMAILS,
   });
   const destination = next === "/app" && superAdmin ? "/admin" : next;
+
+  if (json) {
+    return NextResponse.json({ ok: true, demo: false, next: destination });
+  }
   return NextResponse.redirect(new URL(destination, req.url), 303);
 }

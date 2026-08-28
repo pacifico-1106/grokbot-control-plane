@@ -69,6 +69,7 @@ export async function middleware(request: NextRequest) {
   if ((isApp || isAdmin || isOnboarding) && !user) {
     const login = new URL("/login", request.url);
     login.searchParams.set("next", path);
+    login.searchParams.set("reason", "session");
     return NextResponse.redirect(login);
   }
 
