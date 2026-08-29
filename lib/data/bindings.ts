@@ -11,8 +11,14 @@ import {
   recordHealthSuccess as demoOk,
   revokeBinding as demoRevoke,
   rotateCredential as demoRotate,
+  updateWakeWebhook as demoUpdateWakeWebhook,
+  getWakeWebhookSecret as demoGetWakeWebhookSecret,
 } from "../bindings";
 import { isDemoMode } from "../mode";
+import {
+  decryptNotificationSecrets,
+  encryptNotificationSecrets,
+} from "../notify/crypto";
 import { createSupabaseAdminClient } from "../supabase";
 import { mapBindingRow } from "./mappers";
 import type {
@@ -333,3 +339,84 @@ export async function assertExecutable(
   }
   return { ok: true, binding };
 }
+
+function decryptWakeSecret(ciphertext: string): string {
+  const secrets = decryptNotificationSecrets(ciphertext);
+  return secrets.wakeSecret?.trim() || secrets.sender?.trim() || "";
+}
+
+export async function getWakeWebhookSecret(employeeId: string): Promise<string> {
+  const id = employeeId.trim();
+  if (!id) return "";
+  if (isDemoMode()) return demoGetWakeWebhookSecret(id);
+  const admin = createSupabaseAdminClient();
+  if (!admin) return "";
+  const { data } = await admin
+    .from("employee_binding_secrets")
+    .select("credentials_ciphertext")
+    .eq("employee_id", id)
+    .maybeSingle();
+  const ciphertext = String(data?.credentials_ciphertext || "");
+  if (!ciphertext) return "";
+  try {
+    return decryptWakeSecret(ciphertext);
+  } catch (error) {
+    console.error("wake_webhook_decrypt_failed", id, error);
+    return "";
+  }
+}
+
+export async function updateWakeWebhook(
+  employeeId: string,
+  opts: { orgId: string; url?: string | null; secret?: string | null }
+): Promise<EmployeeBinding> {
+  if (isDemoMode()) return demoUpdateWakeWebhook(employeeId, opts);
+  const row = await ensureBindingRow(employeeId, opts.orgId);
+  if (row.status === "revoked") {
+    throw Object.assign(new Error("binding_revoked"), { code: "revoked" as const });
+  }
+  let nextUrl = row.wakeWebhookUrl ?? null;
+  if (opts.url !== undefined) {
+    const trimmed = (opts.url || "").trim();
+    nextUrl = trimmed || null;
+  }
+  let hasWake = row.hasWakeWebhook;
+  const admin = createSupabaseAdminClient();
+  if (!admin) throw new Error("supabase_not_configured");
+  const now = new Date().toISOString();
+  if (opts.secret !== undefined) {
+    const secret = (opts.secret || "").trim();
+    if (secret) {
+      const { error } = await admin.from("employee_binding_secrets").upsert(
+        {
+          employee_id: employeeId,
+          credentials_ciphertext: encryptNotificationSecrets({ wakeSecret: secret }),
+          updated_at: now,
+        },
+        { onConflict: "employee_id" }
+      );
+      if (error) throw new Error(error.message || "wake_secret_save_failed");
+      hasWake = true;
+    } else {
+      await admin.from("employee_binding_secrets").delete().eq("employee_id", employeeId);
+      hasWake = false;
+    }
+  }
+  if (!nextUrl) {
+    await admin.from("employee_binding_secrets").delete().eq("employee_id", employeeId);
+    hasWake = false;
+  }
+  const { data, error } = await admin
+    .from("employee_bindings")
+    .update({
+      wake_webhook_url: nextUrl,
+      has_wake_webhook: hasWake,
+      updated_at: now,
+    })
+    .eq("employee_id", employeeId)
+    .select("*")
+    .single();
+  if (error || !data) throw new Error(error?.message || "wake_webhook_save_failed");
+  return mapBindingRow(data as Record<string, unknown>);
+}
+

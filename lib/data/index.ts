@@ -68,6 +68,9 @@ export {
   getLinkedSlackUserToken,
   bindEmployeeSlackIdentity,
   revokeEmployeeSlackIdentity,
+  getEmployeesBySlackUserIds,
+  listLinkedSlackIdentitiesForTeam,
+  type SlackMentionTarget,
 } from "./slack-identities";
 export {
   listMembers,
@@ -91,6 +94,8 @@ export {
   revokeBinding,
   assertExecutable,
   bindingPublicView,
+  updateWakeWebhook,
+  getWakeWebhookSecret,
 } from "./bindings";
 export {
   getSubscription,

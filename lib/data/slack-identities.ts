@@ -1,3 +1,4 @@
+import { getBinding } from "@/lib/data/bindings";
 import { getEmployee } from "@/lib/data/employees";
 import { employeeAllowsSlackUser } from "@/lib/employees/posting-as";
 import { isDemoMode } from "@/lib/mode";
@@ -186,3 +187,95 @@ export async function revokeEmployeeSlackIdentity(input: {
     .eq("employee_id", employeeId)
     .eq("org_id", orgId);
 }
+
+export type SlackMentionTarget = {
+  employeeId: string;
+  orgId: string;
+  slackUserId: string;
+  slackTeamId: string;
+  displayName: string;
+  grokBotAgentId: string | null;
+  wakeWebhookUrl: string | null;
+  hasWakeWebhook: boolean;
+};
+
+function preferTeam(
+  rows: EmployeeSlackIdentity[],
+  teamId?: string | null
+): EmployeeSlackIdentity[] {
+  const team = (teamId || "").trim();
+  if (!team) return rows;
+  const matched = rows.filter((row) => row.slackTeamId === team);
+  return matched.length ? matched : rows.filter((row) => !row.slackTeamId);
+}
+
+async function withBinding(row: EmployeeSlackIdentity): Promise<SlackMentionTarget> {
+  const binding = await getBinding(row.employeeId);
+  return {
+    employeeId: row.employeeId,
+    orgId: row.orgId,
+    slackUserId: row.slackUserId,
+    slackTeamId: row.slackTeamId,
+    displayName: row.displayName,
+    grokBotAgentId: binding?.grokBotAgentId ?? null,
+    wakeWebhookUrl: binding?.wakeWebhookUrl ?? null,
+    hasWakeWebhook: Boolean(binding?.hasWakeWebhook),
+  };
+}
+
+function demoLinked(): EmployeeSlackIdentity[] {
+  return [...demoIdentities.values()]
+    .map((row) => row.public)
+    .filter((row) => row.status === "linked" && row.slackUserId);
+}
+
+/** Admin-client lookup (not RLS browser). Linked identities only. */
+export async function getEmployeesBySlackUserIds(
+  ids: string[],
+  teamId?: string | null
+): Promise<SlackMentionTarget[]> {
+  const unique = [
+    ...new Set(ids.map((id) => id.trim().toUpperCase()).filter(Boolean)),
+  ];
+  if (!unique.length) return [];
+  if (isDemoMode()) {
+    const rows = demoLinked().filter((row) =>
+      unique.includes(row.slackUserId.trim().toUpperCase())
+    );
+    return Promise.all(preferTeam(rows, teamId).map(withBinding));
+  }
+  const admin = createSupabaseAdminClient();
+  if (!admin) return [];
+  const { data, error } = await admin
+    .from("employee_slack_identities")
+    .select("employee_id,org_id,slack_user_id,slack_team_id,display_name,status,updated_at")
+    .in("slack_user_id", unique)
+    .eq("status", "linked");
+  if (error || !data) return [];
+  const rows = data.map((row) => mapPublic(row as Record<string, unknown>));
+  return Promise.all(preferTeam(rows, teamId).map(withBinding));
+}
+
+/** Linked identities in a Slack team (app_mention fallback: wake only if exactly one). */
+export async function listLinkedSlackIdentitiesForTeam(
+  teamId?: string | null
+): Promise<SlackMentionTarget[]> {
+  const team = (teamId || "").trim();
+  if (isDemoMode()) {
+    const rows = demoLinked().filter((row) => !team || row.slackTeamId === team);
+    return Promise.all(rows.map(withBinding));
+  }
+  const admin = createSupabaseAdminClient();
+  if (!admin) return [];
+  let query = admin
+    .from("employee_slack_identities")
+    .select("employee_id,org_id,slack_user_id,slack_team_id,display_name,status,updated_at")
+    .eq("status", "linked");
+  if (team) query = query.eq("slack_team_id", team);
+  const { data, error } = await query;
+  if (error || !data) return [];
+  return Promise.all(
+    data.map((row) => withBinding(mapPublic(row as Record<string, unknown>)))
+  );
+}
+

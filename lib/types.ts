@@ -373,6 +373,7 @@ export type AuditAction =
   | "notification.delivery_failed"
   | "conversation.adapter_updated"
   | "slack.post_failed"
+  | "slack.mention_wake"
   | "employee.sod_forced"
   | "employee.sod_override"
   | "action_limit.reached"
@@ -624,6 +625,10 @@ export interface EmployeeBinding {
   status: BindingStatus;
   lastSuccessAt: string | null;
   lastError: string | null;
+  /** Visible Grok Bot wake URL. Secret never lives on this object. */
+  wakeWebhookUrl: string | null;
+  /** True when a sender/secret is stored (dashboard never returns the secret). */
+  hasWakeWebhook: boolean;
   createdAt: string;
   updatedAt: string;
 }

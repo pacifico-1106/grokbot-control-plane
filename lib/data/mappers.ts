@@ -184,6 +184,11 @@ export function mapBindingRow(row: Record<string, unknown>): EmployeeBinding {
     lastSuccessAt:
       row.last_success_at != null ? String(row.last_success_at) : null,
     lastError: row.last_error != null ? String(row.last_error) : null,
+    wakeWebhookUrl:
+      row.wake_webhook_url != null && String(row.wake_webhook_url).trim()
+        ? String(row.wake_webhook_url).trim()
+        : null,
+    hasWakeWebhook: Boolean(row.has_wake_webhook ?? row.hasWakeWebhook),
     createdAt: String(row.created_at ?? new Date().toISOString()),
     updatedAt: String(row.updated_at ?? new Date().toISOString()),
   };

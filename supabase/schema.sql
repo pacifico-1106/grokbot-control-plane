@@ -282,6 +282,30 @@ comment on table employee_slack_identities is
 comment on table employee_slack_identity_secrets is
   'Service-role-only encrypted Slack user tokens (NOTIFICATION_CONFIG_ENCRYPTION_KEY). Intentionally inaccessible via browser RLS.';
 
+create index if not exists employee_slack_identities_user_status_idx
+  on employee_slack_identities (slack_user_id, status);
+
+create index if not exists employee_slack_identities_team_user_idx
+  on employee_slack_identities (slack_team_id, slack_user_id)
+  where status = 'linked';
+
+create table if not exists employee_binding_secrets (
+  employee_id uuid primary key references employees(id) on delete cascade,
+  credentials_ciphertext text not null,
+  updated_at timestamptz not null default now()
+);
+
+comment on table employee_binding_secrets is
+  'Service-role-only encrypted wake webhook sender key (NOTIFICATION_CONFIG_ENCRYPTION_KEY). Intentionally inaccessible via browser RLS.';
+
+create table if not exists slack_mention_events (
+  event_id text primary key,
+  received_at timestamptz not null default now()
+);
+
+comment on table slack_mention_events is
+  'Idempotency for Slack Event Subscriptions retries (PK event_id). Service-role only.';
+
 -- ---------------------------------------------------------------------------
 -- Audit timeline
 -- ---------------------------------------------------------------------------
@@ -351,6 +375,8 @@ create table if not exists employee_bindings (
     check (status in ('unlinked', 'linked', 'degraded', 'needs_reauth', 'revoked')),
   last_success_at timestamptz,
   last_error text,
+  wake_webhook_url text,
+  has_wake_webhook boolean not null default false,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -474,6 +500,8 @@ alter table approval_notification_deliveries enable row level security;
 alter table org_conversation_adapters enable row level security;
 alter table org_conversation_adapter_secrets enable row level security;
 alter table employee_slack_identities enable row level security;
+alter table employee_binding_secrets enable row level security;
+alter table slack_mention_events enable row level security;
 alter table employee_slack_identity_secrets enable row level security;
 alter table audit_events enable row level security;
 alter table subscriptions enable row level security;

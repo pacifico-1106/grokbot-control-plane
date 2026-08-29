@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useState } from "react";
+import { policyErrorMessage } from "@/lib/employees/policy-errors";
 import type { BindingStatus, EmployeeBinding } from "@/lib/types";
 
 const STATUS_LABEL: Record<BindingStatus, string> = {
@@ -45,11 +46,16 @@ export function BindingPanel({
   const [oneTimeSecret, setOneTimeSecret] = useState<string | null>(null);
   const [revealSecret, setRevealSecret] = useState(false);
   const [copiedSecret, setCopiedSecret] = useState(false);
+  const [wakeUrl, setWakeUrl] = useState(initial.wakeWebhookUrl ?? "");
+  const [wakeSecret, setWakeSecret] = useState("");
+  const [hasWakeWebhook, setHasWakeWebhook] = useState(Boolean(initial.hasWakeWebhook));
 
   const applyBinding = useCallback((b: EmployeeBinding) => {
     setBinding(b);
     setAgentId(b.grokBotAgentId ?? "");
     setWorkspaceId(b.grokBotWorkspaceId ?? "");
+    setWakeUrl(b.wakeWebhookUrl ?? "");
+    setHasWakeWebhook(Boolean(b.hasWakeWebhook));
   }, []);
 
   async function link() {
@@ -67,7 +73,7 @@ export function BindingPanel({
         }),
       });
       const body = await res.json();
-      if (!res.ok) throw new Error(body.message || body.error || "link_failed");
+      if (!res.ok) throw new Error(policyErrorMessage(body, "連携に失敗しました"));
       applyBinding(body.binding);
       setMessage(body.message || "連携しました");
     } catch (e) {
@@ -115,6 +121,29 @@ export function BindingPanel({
       );
     } catch (e) {
       setMessage(e instanceof Error ? e.message : "failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveWake() {
+    setBusy(true);
+    setMessage("");
+    try {
+      const payload: Record<string, string> = { wakeWebhookUrl: wakeUrl.trim() };
+      if (wakeSecret.trim()) payload.wakeWebhookSecret = wakeSecret.trim();
+      const res = await fetch(`/api/employees/${employeeId}/binding`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(policyErrorMessage(body, "保存に失敗しました"));
+      if (body.binding) applyBinding(body.binding);
+      setWakeSecret("");
+      setMessage(body.message || "起こす webhook を保存しました");
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : "保存に失敗しました");
     } finally {
       setBusy(false);
     }
@@ -209,6 +238,46 @@ export function BindingPanel({
             disabled={busy || binding.status === "revoked"}
           />
         </label>
+      </div>
+
+      <div className="space-y-2 rounded-lg border border-[var(--border-soft)] p-3">
+        <div>
+          <h3 className="text-sm font-medium">この社員を起こす webhook</h3>
+          <p className="mt-1 text-xs muted leading-relaxed">
+            Grok Bot の webhook ルーチンからコピー。Cursor Slack 接続は不要。
+          </p>
+        </div>
+        <label className="block text-sm">
+          <span className="text-xs muted">URL</span>
+          <input
+            className="mt-1 w-full rounded-lg border border-[var(--border)] bg-transparent px-3 py-2 text-sm font-mono"
+            value={wakeUrl}
+            onChange={(e) => setWakeUrl(e.target.value)}
+            placeholder="https://"
+            autoComplete="off"
+            disabled={busy || binding.status === "revoked"}
+          />
+        </label>
+        <label className="block text-sm">
+          <span className="text-xs muted">送信キー（secret）</span>
+          <input
+            type="password"
+            className="mt-1 w-full rounded-lg border border-[var(--border)] bg-transparent px-3 py-2 text-sm font-mono"
+            value={wakeSecret}
+            onChange={(e) => setWakeSecret(e.target.value)}
+            placeholder={hasWakeWebhook ? "保存済み（変更するときだけ入力）" : "Grok Bot の送信キー"}
+            autoComplete="new-password"
+            disabled={busy || binding.status === "revoked"}
+          />
+        </label>
+        <button
+          type="button"
+          className="btn btn-ghost text-sm"
+          disabled={busy || binding.status === "revoked"}
+          onClick={() => void saveWake()}
+        >
+          起こす webhook を保存
+        </button>
       </div>
 
       <div className="flex flex-col sm:flex-row flex-wrap gap-2">

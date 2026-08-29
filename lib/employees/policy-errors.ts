@@ -19,6 +19,8 @@ export const POLICY_ERROR_MESSAGES: Record<string, string> = {
   sensitive_input_not_allowed: "秘密情報は入力しないでください",
   capability_denied: "この操作をする権限がありません",
   slack_oauth_unconfigured: "Slack アプリの OAuth が未設定です",
+  invalid_wake_webhook_url: "起こす webhook の URL が正しくありません",
+  wake_webhook_url_required: "起こす webhook の URL が必要です",
 };
 
 export function looksJapanese(value: string): boolean {

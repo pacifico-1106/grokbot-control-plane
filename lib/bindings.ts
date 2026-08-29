@@ -16,6 +16,8 @@ const DEMO_LABEL = "DEMO" as const;
 
 /** Process-local binding rows keyed by employeeId. */
 const runtimeBindings = new Map<string, EmployeeBinding>();
+/** Demo-only wake sender keys. Never copied onto EmployeeBinding / public view. */
+const demoWakeSecrets = new Map<string, string>();
 
 export function fingerprintSecret(raw: string): string {
   return createHash("sha256").update(raw).digest("hex");
@@ -101,6 +103,8 @@ export function ensureBindingRow(
     status: "unlinked",
     lastSuccessAt: null,
     lastError: null,
+    wakeWebhookUrl: null,
+    hasWakeWebhook: false,
     createdAt: nowIso(),
     updatedAt: nowIso(),
   };
@@ -300,11 +304,42 @@ export function seedDemoBindings(
   }
 }
 
+export function updateWakeWebhook(
+  employeeId: string,
+  opts: { orgId: string; url?: string | null; secret?: string | null }
+): EmployeeBinding {
+  const existing = ensureBindingRow(employeeId, opts.orgId);
+  if (existing.status === "revoked") {
+    throw Object.assign(new Error("binding_revoked"), { code: "revoked" as const });
+  }
+  let nextUrl = existing.wakeWebhookUrl ?? null;
+  if (opts.url !== undefined) {
+    const trimmed = (opts.url || "").trim();
+    nextUrl = trimmed || null;
+  }
+  if (opts.secret !== undefined) {
+    const secret = (opts.secret || "").trim();
+    if (secret) demoWakeSecrets.set(employeeId, secret);
+    else demoWakeSecrets.delete(employeeId);
+  }
+  if (!nextUrl) demoWakeSecrets.delete(employeeId);
+  return touch(existing, {
+    wakeWebhookUrl: nextUrl,
+    hasWakeWebhook: demoWakeSecrets.has(employeeId),
+  });
+}
+
+export function getWakeWebhookSecret(employeeId: string): string {
+  return demoWakeSecrets.get(employeeId.trim())?.trim() || "";
+}
+
 export function bindingPublicView(b: EmployeeBinding) {
   const { credentialFingerprint, ...safe } = b;
   void credentialFingerprint;
   return {
     ...safe,
+    wakeWebhookUrl: b.wakeWebhookUrl ?? null,
+    hasWakeWebhook: Boolean(b.hasWakeWebhook),
     demo: DEMO_LABEL,
     managedNote:
       "切断・credential 破綻は黙って消さない。status=needs_reauth で 要再連携 を出す。",
