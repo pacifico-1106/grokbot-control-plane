@@ -379,6 +379,50 @@ describe("Slack mention ingress", () => {
     }
   });
 
+  test("preferTeam prefers same-team when several slack_user_id rows exist", async () => {
+    const comm = getRuntimeEmployees().find((item) => item.id === "emp_comm");
+    const ops = getRuntimeEmployees().find((item) => item.id === "emp_ops");
+    if (!comm || !ops) throw new Error("missing employees");
+    const prevComm = comm.allowedAccounts;
+    const prevOps = ops.allowedAccounts;
+    comm.allowedAccounts = [{ service: "slack", accountId: BOUND_USER }];
+    ops.allowedAccounts = [{ service: "slack", accountId: BOUND_USER }];
+    await revokeEmployeeSlackIdentity({ employeeId: comm.id, orgId: DEMO_ORG.id });
+    await revokeEmployeeSlackIdentity({ employeeId: ops.id, orgId: DEMO_ORG.id });
+    try {
+      await bindEmployeeSlackIdentity({
+        employeeId: comm.id,
+        orgId: DEMO_ORG.id,
+        slackUserId: BOUND_USER,
+        slackTeamId: TEAM,
+        displayName: "安藤",
+        userToken: "xoxp-comm",
+      });
+      await bindEmployeeSlackIdentity({
+        employeeId: ops.id,
+        orgId: DEMO_ORG.id,
+        slackUserId: BOUND_USER,
+        slackTeamId: "T_OTHER",
+        displayName: "事務",
+        userToken: "xoxp-ops",
+      });
+      const same = await getEmployeesBySlackUserIds([BOUND_USER], TEAM);
+      expect(same.map((row) => row.employeeId)).toEqual(["emp_comm"]);
+      const other = await getEmployeesBySlackUserIds([BOUND_USER], "T_OTHER");
+      expect(other.map((row) => row.employeeId)).toEqual(["emp_ops"]);
+      const unknown = await getEmployeesBySlackUserIds([BOUND_USER], "T_UNKNOWN");
+      expect(unknown.map((row) => row.employeeId).sort()).toEqual([
+        "emp_comm",
+        "emp_ops",
+      ]);
+    } finally {
+      await revokeEmployeeSlackIdentity({ employeeId: comm.id, orgId: DEMO_ORG.id });
+      await revokeEmployeeSlackIdentity({ employeeId: ops.id, orgId: DEMO_ORG.id });
+      comm.allowedAccounts = prevComm;
+      ops.allowedAccounts = prevOps;
+    }
+  });
+
   test("slack user id match is case-insensitive", async () => {
     process.env.SLACK_SIGNING_SECRET = SIGNING_SECRET;
     const { restore } = await bindAndo({ slackUserId: "u_ando" });

@@ -63,12 +63,14 @@ type SlackEnvelope = {
 export async function resolveSlackSigningSecret(): Promise<string> {
   const env = process.env.SLACK_SIGNING_SECRET?.trim() || "";
   if (env) return env;
-  console.warn("slack_events_signing_secret_fallback");
   const channels = await listAllEnabledNotificationChannels();
   for (const channel of channels) {
     if (channel.provider !== "slack") continue;
     const secret = channel.secrets.signingSecret?.trim() || "";
-    if (secret) return secret;
+    if (secret) {
+      console.warn("slack_events_signing_secret_fallback");
+      return secret;
+    }
   }
   return "";
 }
