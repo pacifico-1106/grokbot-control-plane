@@ -28,6 +28,7 @@ import { evaluateEgressMatrix } from "@/lib/gateway/egress";
 import {
   parseConversationContext,
   resolveAudience,
+  resolveConversationThreadId,
 } from "@/lib/gateway/audience";
 import { resolveInformationDisclosure } from "@/lib/gateway/information-class";
 import { evaluateProjectScope } from "@/lib/gateway/project-scope";
@@ -980,13 +981,18 @@ export async function runGatewayInvoke(
       const rawText = [args.text, args.body, args.message].find(
         (value) => typeof value === "string" && value.trim()
       ) as string | undefined;
+      const replyThreadTs = resolveConversationThreadId({
+        conversation: ctx,
+        args,
+        body,
+      });
       const posted = await postConversationMessage({
         orgId: orgId || employee.orgId,
         employeeId,
         postingAs: employee.postingAs || "bot",
         channel: dest,
         text: (rawText || "").trim() || purpose,
-        threadTs: looksLikeSlackTs(ctx?.threadId) ? ctx?.threadId : undefined,
+        threadTs: looksLikeSlackTs(replyThreadTs) ? replyThreadTs : undefined,
         // After human approval of needs_approval, post FULL text (not 【要約のみ】).
         summarize: egress?.decision === "summarize",
       });

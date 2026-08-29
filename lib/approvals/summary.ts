@@ -1,4 +1,5 @@
 import { outboundConversationText } from "@/lib/employees/voice";
+import { resolveConversationThreadId } from "@/lib/gateway/audience";
 import type {
   ApprovalRequest,
   ConversationContext,
@@ -95,9 +96,11 @@ export function buildApprovalArtifact(
     args.channel_name,
     args.slackChannelName
   );
-  const threadTs =
-    conversation?.threadId ||
-    firstString(args.threadId, args.thread_id, args.threadTs, args.thread_ts);
+  const threadTs = resolveConversationThreadId({
+    conversation,
+    args,
+    body,
+  });
   const outbound = outboundConversationText(args);
   const mailBody = firstString(args.body, args.text, args.message, args.content);
 

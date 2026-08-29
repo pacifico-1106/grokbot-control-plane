@@ -12,6 +12,7 @@ import {
 } from "@/lib/data";
 import { upsertConversationAdapter } from "@/lib/data/conversation-adapters";
 import { DEMO_ORG } from "@/lib/demo-data";
+import type { GatewayInvokeRequest } from "@/lib/types";
 import { runGatewayInvoke } from "@/lib/gateway/invoke";
 
 const originalFetch = globalThis.fetch;
@@ -245,6 +246,106 @@ describe("approval invoke snapshot + fulfill", () => {
     const result = await fulfillApprovedInvoke(approved!);
     expect(result).toBeNull();
     expect(slack.count()).toBe(0);
+  });
+
+  test("slackThreadTs alias is snapshotted as threadId and posted on approve", async () => {
+    const jobId = `job_fulfill_alias_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    const queued = await runGatewayInvoke({
+      employeeId: "emp_comm",
+      credentialId: "cred_comm",
+      body: {
+        tool: "comm.reply",
+        purpose: "comm.internal",
+        jobId,
+        conversation: {
+          surface: "slack",
+          orgId: DEMO_ORG.id,
+          slackChannelId: "C_INTERNAL",
+          slackThreadTs: THREAD_TS,
+        } as GatewayInvokeRequest["conversation"],
+        informationClass: "confidential",
+        args: {
+          slackChannelId: "C_INTERNAL",
+          text: BODY_TEXT,
+          slackThreadTs: THREAD_TS,
+        },
+      },
+    });
+    expect(queued.httpStatus).toBe(402);
+    const approvalId = String(queued.body.approvalId || "");
+    const stored = await getApprovalById(approvalId, DEMO_ORG.id);
+    const snapshot = parseInvokeSnapshot(stored?.metadata);
+    expect(snapshot?.conversation?.threadId).toBe(THREAD_TS);
+    expect(snapshot?.args.slackThreadTs).toBe(THREAD_TS);
+
+    await upsertConversationAdapter({
+      orgId: DEMO_ORG.id,
+      surface: "slack",
+      enabled: true,
+      secrets: { botToken: "xoxb-fulfill-alias" },
+    });
+    const slack = mockSlackPost("1787960100.000010");
+    const approved = await resolveApproval(
+      approvalId,
+      "approved",
+      "ando@example.com",
+      DEMO_ORG.id
+    );
+    const fulfillment = await fulfillApprovedInvoke(approved!);
+    expect(slack.count()).toBe(1);
+    expect(slack.posted().thread_ts).toBe(THREAD_TS);
+    expect(fulfillment?.ok).toBe(true);
+    expect(fulfillment?.delivery).toBe("slack");
+  });
+
+  test("fulfill snapshot preserves mention messageTs as thread_ts and posts into it", async () => {
+    const mentionTs = "1787960001.111111";
+    const jobId = `job_fulfill_mention_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    const queued = await runGatewayInvoke({
+      employeeId: "emp_comm",
+      credentialId: "cred_comm",
+      body: {
+        tool: "comm.reply",
+        purpose: "comm.internal",
+        jobId,
+        conversation: {
+          surface: "slack",
+          orgId: DEMO_ORG.id,
+          slackChannelId: "C_INTERNAL",
+        },
+        informationClass: "confidential",
+        args: {
+          slackChannelId: "C_INTERNAL",
+          text: BODY_TEXT,
+          messageTs: mentionTs,
+        },
+      },
+    });
+    expect(queued.httpStatus).toBe(402);
+    const approvalId = String(queued.body.approvalId || "");
+    const stored = await getApprovalById(approvalId, DEMO_ORG.id);
+    const snapshot = parseInvokeSnapshot(stored?.metadata);
+    expect(snapshot?.conversation?.threadId).toBe(mentionTs);
+    expect(snapshot?.args.messageTs).toBe(mentionTs);
+
+    await upsertConversationAdapter({
+      orgId: DEMO_ORG.id,
+      surface: "slack",
+      enabled: true,
+      secrets: { botToken: "xoxb-fulfill-mention" },
+    });
+    const slack = mockSlackPost("1787960101.000011");
+    const approved = await resolveApproval(
+      approvalId,
+      "approved",
+      "ando@example.com",
+      DEMO_ORG.id
+    );
+    const fulfillment = await fulfillApprovedInvoke(approved!);
+    expect(slack.count()).toBe(1);
+    expect(slack.posted().thread_ts).toBe(mentionTs);
+    expect(slack.posted().channel).toBe("C_INTERNAL");
+    expect(fulfillment?.ok).toBe(true);
   });
 
   test("failed Slack post keeps approval approved and stores error", async () => {

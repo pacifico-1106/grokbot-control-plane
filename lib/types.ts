@@ -190,6 +190,20 @@ export interface ConversationContext {
   surface: ConversationSurface;
   orgId: string;
   threadId?: string;
+  /**
+   * Incoming Slack aliases folded into threadId by parseConversationContext.
+   * Callers (Grok Bot) send slackThreadTs / thread_ts for an existing thread.
+   */
+  slackThreadTs?: string;
+  thread_ts?: string;
+  threadTs?: string;
+  /**
+   * Mention / source message ts. When no thread parent is present, comm.reply
+   * and slack.post use this as Slack thread_ts so the reply starts a thread
+   * under the mention instead of posting a new channel parent.
+   */
+  messageTs?: string;
+  slackTs?: string;
   email?: string;
   slackChannelId?: string;
   slackUserId?: string;

@@ -11,7 +11,10 @@ import {
   looksLikeSlackTs,
   postConversationMessage,
 } from "@/lib/gateway/adapters/slack";
-import { parseConversationContext } from "@/lib/gateway/audience";
+import {
+  parseConversationContext,
+  resolveConversationThreadId,
+} from "@/lib/gateway/audience";
 import { isAudienceGatedTool } from "@/lib/gateway/tools";
 import type {
   ApprovalRequest,
@@ -32,8 +35,12 @@ const SNAPSHOT_ARG_KEYS = [
   "channelId",
   "channelName",
   "threadId",
+  "thread_id",
   "thread_ts",
   "threadTs",
+  "slackThreadTs",
+  "messageTs",
+  "slackTs",
   "to",
   "subject",
   "email",
@@ -150,13 +157,22 @@ export function buildInvokeSnapshot(input: {
   informationClass?: InformationClass | null;
   fidelity?: DisclosureFidelity | null;
 }): InvokeSnapshot {
-  const conversation =
-    input.conversation ??
-    (input.body ? parseConversationContext(input.body, input.orgId) : null);
   const args =
     input.body?.args && typeof input.body.args === "object"
       ? (input.body.args as Record<string, unknown>)
       : {};
+  const parsed =
+    input.conversation ??
+    (input.body ? parseConversationContext(input.body, input.orgId) : null);
+  const resolvedThread = resolveConversationThreadId({
+    conversation: parsed,
+    args,
+    body: input.body,
+  });
+  const conversation =
+    parsed && resolvedThread && parsed.threadId !== resolvedThread
+      ? { ...parsed, threadId: resolvedThread }
+      : parsed;
   const snapshot: InvokeSnapshot = {
     tool: input.tool,
     purpose: input.purpose,
@@ -285,12 +301,11 @@ function destinationOf(snapshot: InvokeSnapshot): string {
 }
 
 function threadOf(snapshot: InvokeSnapshot): string | undefined {
-  const fromConv = snapshot.conversation?.threadId;
-  if (looksLikeSlackTs(fromConv)) return fromConv;
-  const fromArgs = [snapshot.args.threadId, snapshot.args.thread_ts, snapshot.args.threadTs].find(
-    (value) => typeof value === "string" && looksLikeSlackTs(value)
-  );
-  return typeof fromArgs === "string" ? fromArgs : undefined;
+  const resolved = resolveConversationThreadId({
+    conversation: snapshot.conversation,
+    args: snapshot.args,
+  });
+  return looksLikeSlackTs(resolved) ? resolved : undefined;
 }
 
 async function persistFulfillment(

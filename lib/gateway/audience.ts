@@ -31,6 +31,51 @@ function str(value: unknown): string | undefined {
   return trimmed || undefined;
 }
 
+function firstStr(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    const found = str(value);
+    if (found) return found;
+  }
+  return undefined;
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+/**
+ * Canonical thread id for Slack replies. Clients send several aliases
+ * (slackThreadTs / thread_ts / threadTs); map them all onto threadId.
+ * When no thread parent is present, fall back to the mention-source
+ * message ts so a channel-level mention starts a thread under that message.
+ */
+export function resolveConversationThreadId(input: {
+  conversation?: ConversationContext | Record<string, unknown> | null;
+  args?: Record<string, unknown> | null;
+  body?: Pick<GatewayInvokeRequest, "threadId"> | null;
+}): string | undefined {
+  const conv = asRecord(input.conversation);
+  const args = asRecord(input.args);
+  const body = input.body;
+  return (
+    firstStr(
+      conv.threadId,
+      conv.slackThreadTs,
+      conv.thread_ts,
+      conv.threadTs,
+      body?.threadId,
+      args.threadId,
+      args.thread_id,
+      args.slackThreadTs,
+      args.thread_ts,
+      args.threadTs
+    ) ||
+    firstStr(conv.messageTs, conv.slackTs, args.messageTs, args.slackTs)
+  );
+}
+
 function emailDomain(email: string): string | undefined {
   const at = email.lastIndexOf("@");
   if (at <= 0 || at === email.length - 1) return undefined;
@@ -78,8 +123,8 @@ export function parseConversationContext(
   body: GatewayInvokeRequest,
   orgId: string
 ): ConversationContext | null {
-  const args = (body.args && typeof body.args === "object" ? body.args : {}) as Record<string, unknown>;
-  const conv = body.conversation && typeof body.conversation === "object" ? body.conversation : {};
+  const args = asRecord(body.args);
+  const conv = asRecord(body.conversation);
   const surface = inferSurface(body, args);
   if (!surface) return null;
 
@@ -94,7 +139,7 @@ export function parseConversationContext(
     str(conv.slackUserId) || str(body.slackUserId) || str(args.slackUserId) || str(args.userId);
   const phone = str(conv.phone) || str(body.phone) || str(args.phone);
   const lineId = str(conv.lineId) || str(body.lineId) || str(args.lineId);
-  const threadId = str(conv.threadId) || str(body.threadId) || str(args.threadId) || str(args.thread_id);
+  const threadId = resolveConversationThreadId({ conversation: conv, args, body });
 
   return {
     surface,

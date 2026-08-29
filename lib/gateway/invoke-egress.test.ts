@@ -382,6 +382,59 @@ describe("Gateway audience egress", () => {
     }
   });
 
+  test("comm.reply with empty thread + mention message ts posts thread_ts = mention ts", async () => {
+    const mentionTs = "1787960001.111111";
+    await upsertConversationAdapter({
+      orgId: DEMO_ORG.id,
+      surface: "slack",
+      enabled: true,
+      secrets: { botToken: "xoxb-mention-thread" },
+    });
+    const originalFetch = globalThis.fetch;
+    let postedPayload: Record<string, unknown> = {};
+    try {
+      globalThis.fetch = (async (_input, init) => {
+        postedPayload = JSON.parse(String(init?.body || "{}")) as Record<string, unknown>;
+        return Response.json({
+          ok: true,
+          channel: "C_INTERNAL",
+          ts: "1787960002.222222",
+        });
+      }) as typeof fetch;
+      const sent = await runGatewayInvoke({
+        employeeId: "emp_comm",
+        credentialId: "cred_comm",
+        body: {
+          tool: "comm.reply",
+          purpose: "comm.internal",
+          jobId: `job_mention_ts_${Date.now()}`,
+          conversation: {
+            surface: "slack",
+            orgId: DEMO_ORG.id,
+            slackChannelId: "C_INTERNAL",
+          },
+          args: {
+            slackChannelId: "C_INTERNAL",
+            text: "チャネル親ではなくメンション配下にスレッドを立てます。",
+            messageTs: mentionTs,
+          },
+        },
+      });
+      expect(sent.body.ok).toBe(true);
+      expect(sent.body.needs_approval).not.toBe(true);
+      expect(postedPayload.channel).toBe("C_INTERNAL");
+      expect(postedPayload.thread_ts).toBe(mentionTs);
+    } finally {
+      globalThis.fetch = originalFetch;
+      await upsertConversationAdapter({
+        orgId: DEMO_ORG.id,
+        surface: "slack",
+        enabled: false,
+        secrets: {},
+      });
+    }
+  });
+
   test("prior approval of needs_approval egress still posts Slack conversation (full text)", async () => {
     const jobId = `job_prior_conf_${Date.now()}`;
     const threadTs = "1787911797.502889";
