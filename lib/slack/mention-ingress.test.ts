@@ -8,7 +8,11 @@ import {
 } from "@/lib/data/slack-identities";
 import { getBinding, updateWakeWebhook } from "@/lib/data";
 import { DEMO_ORG, getRuntimeEmployees } from "@/lib/demo-data";
-import { handleSlackEventsRequest } from "@/lib/slack/mention-ingress";
+import {
+  acknowledgeSlackEventsRequest,
+  handleSlackEventsRequest,
+  setSlackMentionClaimInsertForTests,
+} from "@/lib/slack/mention-ingress";
 
 const SIGNING_SECRET = "slack-events-signing-secret-for-tests";
 const WAKE_URL = "https://example.test/wake/ando";
@@ -52,17 +56,18 @@ function mockWake(): { calls: () => WakeCall[] } {
   return { calls: () => calls };
 }
 
-async function bindAndo() {
+async function bindAndo(opts?: { slackTeamId?: string; slackUserId?: string }) {
   const emp = getRuntimeEmployees().find((item) => item.id === "emp_comm");
   if (!emp) throw new Error("missing emp_comm");
   const previous = emp.allowedAccounts;
-  emp.allowedAccounts = [{ service: "slack", accountId: BOUND_USER }];
+  const slackUserId = opts?.slackUserId || BOUND_USER;
+  emp.allowedAccounts = [{ service: "slack", accountId: slackUserId }];
   await revokeEmployeeSlackIdentity({ employeeId: emp.id, orgId: DEMO_ORG.id });
   await bindEmployeeSlackIdentity({
     employeeId: emp.id,
     orgId: DEMO_ORG.id,
-    slackUserId: BOUND_USER,
-    slackTeamId: TEAM,
+    slackUserId,
+    slackTeamId: opts?.slackTeamId ?? TEAM,
     displayName: "安藤",
     userToken: "xoxp-test",
   });
@@ -83,6 +88,7 @@ async function bindAndo() {
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
+  setSlackMentionClaimInsertForTests(null);
   if (savedSigning === undefined) delete process.env.SLACK_SIGNING_SECRET;
   else process.env.SLACK_SIGNING_SECRET = savedSigning;
 });
@@ -271,6 +277,160 @@ describe("Slack mention ingress", () => {
       expect(view.wakeWebhookUrl).toBe(WAKE_URL);
       expect(JSON.stringify(view)).not.toContain(WAKE_SECRET);
       expect("wakeWebhookSecret" in view).toBe(false);
+    } finally {
+      await restore();
+    }
+  });
+
+  test("claim failure other than unique 23505 still wakes", async () => {
+    process.env.SLACK_SIGNING_SECRET = SIGNING_SECRET;
+    setSlackMentionClaimInsertForTests(async () => ({
+      data: null,
+      error: { code: "42P01" },
+    }));
+    const { restore } = await bindAndo();
+    const wake = mockWake();
+    try {
+      const result = await handleSlackEventsRequest(
+        signedRequest({
+          type: "event_callback",
+          team_id: TEAM,
+          event_id: `Ev_claimfail_${Date.now()}`,
+          event: {
+            type: "message",
+            user: SPEAKER,
+            text: `<@${BOUND_USER}> 起こして`,
+            ts: "1788043788.305939",
+            thread_ts: "1788040494.777309",
+            channel: CHANNEL,
+          },
+        })
+      );
+      expect(result.status).toBe(200);
+      expect(wake.calls().length).toBe(1);
+    } finally {
+      await restore();
+    }
+  });
+
+  test("duplicate 23505 does not double-wake", async () => {
+    process.env.SLACK_SIGNING_SECRET = SIGNING_SECRET;
+    let inserts = 0;
+    setSlackMentionClaimInsertForTests(async (eventId) => {
+      inserts += 1;
+      if (inserts === 1) return { data: { event_id: eventId }, error: null };
+      return { data: null, error: { code: "23505" } };
+    });
+    const { restore } = await bindAndo();
+    const wake = mockWake();
+    const envelope = {
+      type: "event_callback",
+      team_id: TEAM,
+      event_id: `Ev_pgdup_${Date.now()}`,
+      event: {
+        type: "message",
+        user: SPEAKER,
+        text: `<@${BOUND_USER}> 再送`,
+        ts: "1787911800.000012",
+        thread_ts: THREAD_TS,
+        channel: CHANNEL,
+      },
+    };
+    try {
+      const first = await handleSlackEventsRequest(signedRequest(envelope));
+      const second = await handleSlackEventsRequest(signedRequest(envelope));
+      expect(first.status).toBe(200);
+      expect(second.status).toBe(200);
+      expect(wake.calls().length).toBe(1);
+      expect(inserts).toBe(2);
+    } finally {
+      await restore();
+    }
+  });
+
+  test("team mismatch still wakes the matching slack_user_id", async () => {
+    process.env.SLACK_SIGNING_SECRET = SIGNING_SECRET;
+    const { restore } = await bindAndo({ slackTeamId: "T_STORED_OTHER" });
+    const wake = mockWake();
+    try {
+      const rows = await getEmployeesBySlackUserIds([BOUND_USER], TEAM);
+      expect(rows.length).toBe(1);
+      expect(rows[0].employeeId).toBe("emp_comm");
+      const result = await handleSlackEventsRequest(
+        signedRequest({
+          type: "event_callback",
+          team_id: TEAM,
+          event_id: `Ev_teammiss_${Date.now()}`,
+          event: {
+            type: "message",
+            user: SPEAKER,
+            text: `<@${BOUND_USER}> ping`,
+            ts: "1788043788.305939",
+            thread_ts: "1788040494.777309",
+            channel: CHANNEL,
+          },
+        })
+      );
+      expect(result.status).toBe(200);
+      expect(wake.calls().length).toBe(1);
+      expect(wake.calls()[0].payload.slackUserId).toBe(BOUND_USER);
+    } finally {
+      await restore();
+    }
+  });
+
+  test("slack user id match is case-insensitive", async () => {
+    process.env.SLACK_SIGNING_SECRET = SIGNING_SECRET;
+    const { restore } = await bindAndo({ slackUserId: "u_ando" });
+    const wake = mockWake();
+    try {
+      const rows = await getEmployeesBySlackUserIds(["U_ANDO"], TEAM);
+      expect(rows.length).toBe(1);
+      expect(rows[0].slackUserId).toBe("u_ando");
+      const result = await handleSlackEventsRequest(
+        signedRequest({
+          type: "event_callback",
+          team_id: TEAM,
+          event_id: `Ev_case_${Date.now()}`,
+          event: {
+            type: "message",
+            user: SPEAKER,
+            text: "<@U_ANDO> こんにちは",
+            ts: "1787911800.000013",
+            channel: CHANNEL,
+          },
+        })
+      );
+      expect(result.status).toBe(200);
+      expect(wake.calls().length).toBe(1);
+    } finally {
+      await restore();
+    }
+  });
+
+  test("acknowledge returns 200 without waiting on wake", async () => {
+    process.env.SLACK_SIGNING_SECRET = SIGNING_SECRET;
+    const { restore } = await bindAndo();
+    const wake = mockWake();
+    try {
+      const result = await acknowledgeSlackEventsRequest(
+        signedRequest({
+          type: "event_callback",
+          team_id: TEAM,
+          event_id: `Ev_ack_${Date.now()}`,
+          event: {
+            type: "message",
+            user: SPEAKER,
+            text: `<@${BOUND_USER}>`,
+            ts: "1787911800.000014",
+            channel: CHANNEL,
+          },
+        })
+      );
+      expect(result.status).toBe(200);
+      expect(result.body.ok).toBe(true);
+      expect(Boolean(result.envelope)).toBe(true);
+      expect(wake.calls().length).toBe(0);
     } finally {
       await restore();
     }

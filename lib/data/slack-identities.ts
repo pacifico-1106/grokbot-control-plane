@@ -203,10 +203,25 @@ function preferTeam(
   rows: EmployeeSlackIdentity[],
   teamId?: string | null
 ): EmployeeSlackIdentity[] {
-  const team = (teamId || "").trim();
-  if (!team) return rows;
-  const matched = rows.filter((row) => row.slackTeamId === team);
-  return matched.length ? matched : rows.filter((row) => !row.slackTeamId);
+  const team = (teamId || "").trim().toUpperCase();
+  if (!team || !rows.length) return rows;
+  const groups = new Map<string, EmployeeSlackIdentity[]>();
+  for (const row of rows) {
+    const key = row.slackUserId.trim().toUpperCase();
+    const list = groups.get(key);
+    if (list) list.push(row);
+    else groups.set(key, [row]);
+  }
+  const selected: EmployeeSlackIdentity[] = [];
+  for (const group of groups.values()) {
+    const matched = group.filter(
+      (row) => row.slackTeamId.trim().toUpperCase() === team
+    );
+    // Prefer the same Slack team when several rows share a user id.
+    // Never drop the only user-id match because team_id differs.
+    selected.push(...(matched.length ? matched : group));
+  }
+  return selected;
 }
 
 async function withBinding(row: EmployeeSlackIdentity): Promise<SlackMentionTarget> {
@@ -234,25 +249,51 @@ export async function getEmployeesBySlackUserIds(
   ids: string[],
   teamId?: string | null
 ): Promise<SlackMentionTarget[]> {
-  const unique = [
-    ...new Set(ids.map((id) => id.trim().toUpperCase()).filter(Boolean)),
-  ];
-  if (!unique.length) return [];
+  const rawIds = ids.map((id) => id.trim()).filter(Boolean);
+  const wanted = new Set(rawIds.map((id) => id.toUpperCase()));
+  if (!wanted.size) return [];
+  const matchWanted = (row: EmployeeSlackIdentity) =>
+    wanted.has(row.slackUserId.trim().toUpperCase());
   if (isDemoMode()) {
-    const rows = demoLinked().filter((row) =>
-      unique.includes(row.slackUserId.trim().toUpperCase())
-    );
+    const rows = demoLinked().filter(matchWanted);
     return Promise.all(preferTeam(rows, teamId).map(withBinding));
   }
   const admin = createSupabaseAdminClient();
   if (!admin) return [];
-  const { data, error } = await admin
+  // Slack user ids are compared case-insensitively. Postgres `.in()` is
+  // case-sensitive and stored ids may not be uppercase, so query original /
+  // upper / lower variants then filter in JS. If any wanted id is still
+  // missing (mixed case in the DB), scan linked rows.
+  const lookupIds = [
+    ...new Set([
+      ...rawIds,
+      ...wanted,
+      ...[...wanted].map((id) => id.toLowerCase()),
+    ]),
+  ];
+  const selectCols =
+    "employee_id,org_id,slack_user_id,slack_team_id,display_name,status,updated_at";
+  const first = await admin
     .from("employee_slack_identities")
-    .select("employee_id,org_id,slack_user_id,slack_team_id,display_name,status,updated_at")
-    .in("slack_user_id", unique)
+    .select(selectCols)
+    .in("slack_user_id", lookupIds)
     .eq("status", "linked");
-  if (error || !data) return [];
-  const rows = data.map((row) => mapPublic(row as Record<string, unknown>));
+  if (first.error) return [];
+  let rows = (first.data ?? [])
+    .map((row) => mapPublic(row as Record<string, unknown>))
+    .filter(matchWanted);
+  const found = new Set(rows.map((row) => row.slackUserId.trim().toUpperCase()));
+  if ([...wanted].some((id) => !found.has(id))) {
+    const fallback = await admin
+      .from("employee_slack_identities")
+      .select(selectCols)
+      .eq("status", "linked");
+    if (!fallback.error && fallback.data) {
+      rows = fallback.data
+        .map((row) => mapPublic(row as Record<string, unknown>))
+        .filter(matchWanted);
+    }
+  }
   return Promise.all(preferTeam(rows, teamId).map(withBinding));
 }
 

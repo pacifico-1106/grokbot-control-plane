@@ -16,7 +16,7 @@ import { isDemoMode } from "@/lib/mode";
 import { verifySlackSignature } from "@/lib/notify/slack";
 import { createSupabaseAdminClient } from "@/lib/supabase";
 
-const WAKE_TIMEOUT_MS = 2_500;
+const WAKE_TIMEOUT_MS = 10_000;
 const MENTION_RE = /<@([UW][A-Z0-9_]+)(?:\|[^>]+)?>/gi;
 const USER_ID_RE = /^[UW][A-Z0-9_]+$/i;
 const SKIP_SUBTYPES = new Set([
@@ -63,6 +63,7 @@ type SlackEnvelope = {
 export async function resolveSlackSigningSecret(): Promise<string> {
   const env = process.env.SLACK_SIGNING_SECRET?.trim() || "";
   if (env) return env;
+  console.warn("slack_events_signing_secret_fallback");
   const channels = await listAllEnabledNotificationChannels();
   for (const channel of channels) {
     if (channel.provider !== "slack") continue;
@@ -113,31 +114,57 @@ function walkBlocks(
   for (const nested of Object.values(rec)) walkBlocks(nested, ids, scan);
 }
 
+type ClaimInsertResult = {
+  data: { event_id?: string } | null;
+  error: { code?: string } | null;
+};
+
+let claimInsertOverride:
+  | null
+  | ((eventId: string) => Promise<ClaimInsertResult>) = null;
+
+/** Test-only: simulate slack_mention_events insert (production path). */
+export function setSlackMentionClaimInsertForTests(
+  override: typeof claimInsertOverride
+): void {
+  claimInsertOverride = override;
+}
+
+function claimInProcess(id: string): boolean {
+  if (demoClaimedEvents.has(id)) return false;
+  demoClaimedEvents.add(id);
+  return true;
+}
+
+function settleClaimInsert(
+  id: string,
+  result: ClaimInsertResult
+): boolean {
+  if (result.error) {
+    if (result.error.code === "23505") return false;
+    // Missing the mention (table absent, network, etc.) is worse than a
+    // duplicate wake. Log and claim in-process so we still proceed.
+    console.error("slack_mention_event_claim_failed", result.error);
+    return claimInProcess(id);
+  }
+  return true;
+}
+
 export async function claimSlackMentionEvent(eventId: string): Promise<boolean> {
   const id = eventId.trim();
   if (!id) return false;
-  if (isDemoMode()) {
-    if (demoClaimedEvents.has(id)) return false;
-    demoClaimedEvents.add(id);
-    return true;
+  if (claimInsertOverride) {
+    return settleClaimInsert(id, await claimInsertOverride(id));
   }
+  if (isDemoMode()) return claimInProcess(id);
   const admin = createSupabaseAdminClient();
-  if (!admin) {
-    if (demoClaimedEvents.has(id)) return false;
-    demoClaimedEvents.add(id);
-    return true;
-  }
+  if (!admin) return claimInProcess(id);
   const { data, error } = await admin
     .from("slack_mention_events")
     .insert({ event_id: id })
     .select("event_id")
     .maybeSingle();
-  if (error) {
-    if (error.code === "23505") return false;
-    console.error("slack_mention_event_claim_failed", error);
-    return false;
-  }
-  return Boolean(data?.event_id);
+  return settleClaimInsert(id, { data, error });
 }
 
 function str(value: unknown): string {
@@ -313,11 +340,15 @@ export async function processSlackMentionEnvelope(
   return { handled: true, woke };
 }
 
-export async function handleSlackEventsRequest(input: {
+export async function acknowledgeSlackEventsRequest(input: {
   rawBody: string;
   timestamp: string;
   signature: string;
-}): Promise<{ status: number; body: Record<string, unknown> }> {
+}): Promise<{
+  status: number;
+  body: Record<string, unknown>;
+  envelope?: SlackEnvelope;
+}> {
   const signingSecret = await resolveSlackSigningSecret();
   const verified = verifySlackSignature({
     signingSecret,
@@ -340,10 +371,21 @@ export async function handleSlackEventsRequest(input: {
     return { status: 200, body: { challenge: envelope.challenge } };
   }
 
-  try {
-    await processSlackMentionEnvelope(envelope);
-  } catch (error) {
-    console.error("slack_events_handle_failed", error);
+  return { status: 200, body: { ok: true }, envelope };
+}
+
+export async function handleSlackEventsRequest(input: {
+  rawBody: string;
+  timestamp: string;
+  signature: string;
+}): Promise<{ status: number; body: Record<string, unknown> }> {
+  const result = await acknowledgeSlackEventsRequest(input);
+  if (result.envelope) {
+    try {
+      await processSlackMentionEnvelope(result.envelope);
+    } catch (error) {
+      console.error("slack_events_handle_failed", error);
+    }
   }
-  return { status: 200, body: { ok: true } };
+  return { status: result.status, body: result.body };
 }
