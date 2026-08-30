@@ -6,7 +6,7 @@ import { LegalLinks } from "@/components/LegalLinks";
 
 const CONTROLS = [
   { icon: "01", title: "権限を分ける", body: "社員ごとに職務と操作範囲を限定。まとめる場合は全件承認に切り替えます。" },
-  { icon: "02", title: "人が止める", body: "送信・確定・発注など、戻せない操作は承認されるまで実行しません。" },
+  { icon: "02", title: "人が止める", body: "初期設定では人が見るまで進みません。自動にもできます。記録は残します。" },
   { icon: "03", title: "記録を残す", body: "目的、承認者、実行結果を一つの監査台帳に残します。" },
 ];
 
@@ -15,6 +15,33 @@ const AGENTS = [
   { name: "ChatGPT", status: "順次対応" },
   { name: "Claude", status: "順次対応" },
   { name: "その他のAI", status: "続々対応予定" },
+];
+
+const FAQ = [
+  {
+    q: "ひとことで何ですか？",
+    a: "AI社員の社員証です。手足（Grok Bot など）に、許可・止め方・仕事の記録を付けます。禁止する製品ではなく、雇って説明できるようにする製品です。",
+  },
+  {
+    q: "ChatGPT や Grok 単体と何が違う？",
+    a: "速さではありません。会社として「この子はここまで」「誰が通したか」を残せることです。公式の AI社員として社内で説明できます。",
+  },
+  {
+    q: "ハーネス（実行環境）でも制御できるのでは？なぜ外に出す？",
+    a: "止め方はハーネスにもあります。ただしそれは個人や Bot 向けの安全網です。Staffpass は会社の就業規則と日報です。手足を替えても規則が残る、Bot を分けてもコンピュータは共有なので境界にならない、承認と失効は会社の台帳に残す——この3つが、外に出す理由です。\n\n一言: 止め方はハーネスにもある。説明できる止め方と、失効できる社員証は、会社の外に置かないと残らない。",
+  },
+  {
+    q: "勝手に送ったり、予定を入れたり、買ったりしない？",
+    a: "初期設定では、社外送信・日程の確定・発注は人が見るまで進みません。事業者の判断で、自動にすることもできます。そのときは警告を確認したうえで、責任は事業者にあります。Staffpass の仕事は、与えた権限どおりに動かすことと、あとから追える記録を残すことです。",
+  },
+  {
+    q: "全部自動にできる？",
+    a: "できます。上限は完全自動化です。リスク判断は事業者です。Staffpass は危ない組み合わせを警告し、承諾を残します。権限の外は通しません。",
+  },
+  {
+    q: "パソコンや Bot を分けないとダメ？",
+    a: "Bot を分けても、同じアカウントのコンピュータは共有されるのが普通です。画面は別でも、ファイルやログインは共有されえます。だから職務の境界は社員証側に置きます。OS の完全分離は約束しません。",
+  },
 ];
 
 function ControlVisual() {
@@ -140,6 +167,31 @@ export default function LandingPage() {
                 <h3 className="mt-8 text-lg font-semibold">{item.title}</h3>
                 <p className="mt-3 text-sm muted leading-relaxed">{item.body}</p>
               </article>
+            ))}
+          </div>
+        </section>
+
+        <section id="faq" className="mx-auto max-w-6xl px-4 sm:px-6 pb-20 sm:pb-28">
+          <div className="max-w-2xl">
+            <span className="eyebrow">FAQ</span>
+            <h2 className="mt-4 text-3xl sm:text-5xl font-bold tracking-[-0.045em] leading-tight">よくある質問</h2>
+          </div>
+          <div className="mt-10 max-w-3xl space-y-3">
+            {FAQ.map((item) => (
+              <details key={item.q} className="group surface p-5 sm:p-6">
+                <summary className="flex cursor-pointer list-none items-start justify-between gap-4 [&::-webkit-details-marker]:hidden">
+                  <span className="text-base sm:text-lg font-semibold leading-snug">{item.q}</span>
+                  <span className="mt-1 shrink-0 font-mono text-xs text-[var(--accent-strong)]" aria-hidden="true">
+                    <span className="group-open:hidden">+</span>
+                    <span className="hidden group-open:inline">−</span>
+                  </span>
+                </summary>
+                <div className="mt-3 space-y-3 text-sm muted leading-relaxed">
+                  {item.a.split("\n\n").map((para) => (
+                    <p key={para}>{para}</p>
+                  ))}
+                </div>
+              </details>
             ))}
           </div>
         </section>
