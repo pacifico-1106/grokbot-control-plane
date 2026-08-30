@@ -51,6 +51,17 @@ export function mapEmployeeRow(row: Record<string, unknown>): Employee {
         ? String(row.approval_routine_text)
         : null,
     managerId: row.manager_id != null ? String(row.manager_id) : null,
+    approvalChannelId:
+      row.approval_channel_id != null
+        ? String(row.approval_channel_id)
+        : row.approvalChannelId != null
+          ? String(row.approvalChannelId)
+          : null,
+    approverUserIds: Array.isArray(row.approver_user_ids)
+      ? (row.approver_user_ids as unknown[]).map(String).filter(Boolean)
+      : Array.isArray(row.approverUserIds)
+        ? (row.approverUserIds as unknown[]).map(String).filter(Boolean)
+        : [],
     voice: normalizeVoice(row.voice),
     projectAccess: normalizeProjectAccess(row.project_access ?? row.projectAccess),
     postingAs: row.posting_as === "user" || row.postingAs === "user" ? "user" : "bot",

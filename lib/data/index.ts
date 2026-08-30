@@ -55,6 +55,8 @@ export {
   getNotificationDelivery,
   getApprovalIdByDeliveryExternal,
   findAwaitingRevisionApproval,
+  resolveEmployeeApprovalChannel,
+  resetDemoNotificationChannels,
   type NotificationChannelRuntime,
   type UpsertNotificationChannelInput,
 } from "./notification-channels";

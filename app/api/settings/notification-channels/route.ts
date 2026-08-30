@@ -44,9 +44,10 @@ export async function PUT(req: Request) {
   if (enabled && !destination) {
     return NextResponse.json({ error: "destination_required" }, { status: 400 });
   }
-  const existingChannel = (await listNotificationChannels(gate.orgId)).find(
-    (channel) => channel.provider === provider
-  );
+  const inboxId = String(body.id || "").trim();
+  const existingChannel = inboxId
+    ? (await listNotificationChannels(gate.orgId)).find((channel) => channel.id === inboxId)
+    : undefined;
   const secrets: Record<string, string> = provider === "telegram"
     ? {
         botToken: String(body.botToken || "").trim(),
@@ -66,9 +67,11 @@ export async function PUT(req: Request) {
   try {
     const saved = await upsertNotificationChannel({
       orgId: gate.orgId,
+      ...(existingChannel?.id ? { id: existingChannel.id } : {}),
       provider,
       label: String(body.label || "").trim(),
       enabled,
+      isDefault: body.isDefault === true,
       config,
       secrets,
     });

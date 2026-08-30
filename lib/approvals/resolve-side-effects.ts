@@ -148,7 +148,8 @@ export async function runApprovalResolveSideEffects(opts: {
   const notifications = await updateApprovalNotificationMessages(
     approval,
     decision,
-    actorEmail
+    actorEmail,
+    employee
   ).catch((error) => [{
     ok: false,
     provider: "unknown",

@@ -1,11 +1,11 @@
 import {
   appendAuditEvent,
-  getEnabledNotificationChannels,
   getTokyo307PilotOrgId,
   isTokyo307PilotOrg,
   listAllEnabledNotificationChannels,
   listApprovals,
   listEmployees,
+  resolveEmployeeApprovalChannel,
 } from "@/lib/data";
 import { buildConcentration, type ConcentrationReport } from "@/lib/employees/concentration";
 import type { ApprovalRequest, Employee } from "@/lib/types";
@@ -60,9 +60,9 @@ export async function sendApprovalNotifications(
   approval: ApprovalRequest,
   employee: Employee | null
 ): Promise<NotificationDispatchResult[]> {
-  const channels = await getEnabledNotificationChannels(approval.orgId);
+  const channel = await resolveEmployeeApprovalChannel(approval.orgId, employee);
   const results: NotificationDispatchResult[] = [];
-  for (const channel of channels) {
+  if (channel) {
     const sent = channel.provider === "telegram"
       ? await sendApprovalToTelegramChannel(approval, employee, channel)
       : channel.provider === "line"
@@ -72,7 +72,7 @@ export async function sendApprovalNotifications(
     results.push(result);
     await auditFailure(approval, result);
   }
-  if (!channels.some((channel) => channel.provider === "telegram") && await isTokyo307PilotOrg(approval.orgId)) {
+  if (!channel && await isTokyo307PilotOrg(approval.orgId)) {
     const sent = await sendApprovalToTelegram(approval, employee);
     const result = { ...sent, provider: "telegram" as const, fallback: true };
     results.push(result);
@@ -84,11 +84,12 @@ export async function sendApprovalNotifications(
 export async function updateApprovalNotificationMessages(
   approval: ApprovalRequest,
   decision: "approved" | "rejected" | "revision_requested",
-  actor: string
+  actor: string,
+  employee?: Employee | null
 ): Promise<NotificationDispatchResult[]> {
-  const channels = await getEnabledNotificationChannels(approval.orgId);
+  const channel = await resolveEmployeeApprovalChannel(approval.orgId, employee);
   const results: NotificationDispatchResult[] = [];
-  for (const channel of channels) {
+  if (channel) {
     const sent = channel.provider === "telegram"
       ? await editTelegramApprovalForChannel(approval, decision, actor, channel)
       : channel.provider === "line"
@@ -96,7 +97,7 @@ export async function updateApprovalNotificationMessages(
         : await editSlackApprovalForChannel(approval, decision, actor, channel);
     results.push({ ...sent, provider: channel.provider, channelId: channel.id });
   }
-  if (!channels.some((channel) => channel.provider === "telegram") && await isTokyo307PilotOrg(approval.orgId)) {
+  if (!channel && await isTokyo307PilotOrg(approval.orgId)) {
     const { editTelegramApprovalMessage } = await import("@/lib/notify/telegram");
     results.push({ ...(await editTelegramApprovalMessage(approval, decision, actor)), provider: "telegram", fallback: true });
   }

@@ -61,6 +61,12 @@ export async function POST(req: Request, ctx: { params: Promise<{ ref: string }>
       await answerTelegramCallbackForChannel(channel, query.id || "", "対象は処理済みか見つかりません");
       return NextResponse.json({ ok: true });
     }
+    const employeeForGate = await getEmployee(approval.employeeId, channel.orgId);
+    const extraApprovers = employeeForGate?.approverUserIds ?? [];
+    if (extraApprovers.length && !extraApprovers.includes(String(query.from!.id))) {
+      await answerTelegramCallbackForChannel(channel, query.id || "", "この操作は許可されていません");
+      return NextResponse.json({ ok: true, ignored: true });
+    }
     if (match[1] === "e") {
       const result = await promptTelegramRevisionForChannel(approval, query.from!.id!, channel);
       await answerTelegramCallbackForChannel(channel, query.id || "", result.ok ? "返信で修正指示を送ってください" : "処理に失敗しました");

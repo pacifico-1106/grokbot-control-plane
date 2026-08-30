@@ -79,6 +79,8 @@ create table if not exists employees (
   callback_url text,
   approval_routine_text text,
   manager_id uuid references org_members(id) on delete set null,
+  approval_channel_id uuid,
+  approver_user_ids text[] not null default '{}',
   voice jsonb not null default '{
     "template": "polite",
     "register": "polite",
@@ -214,9 +216,9 @@ create table if not exists org_notification_channels (
   enabled boolean not null default false,
   config jsonb not null default '{}'::jsonb,
   webhook_ref text not null default encode(gen_random_bytes(6), 'hex'),
+  is_default boolean not null default false,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
-  unique (org_id, provider),
   unique (webhook_ref)
 );
 
@@ -242,8 +244,26 @@ create table if not exists approval_notification_deliveries (
 
 create index if not exists notification_channels_org_enabled_idx
   on org_notification_channels (org_id, enabled);
+create unique index if not exists org_notification_channels_one_default_per_org
+  on org_notification_channels (org_id)
+  where is_default;
 create index if not exists notification_deliveries_external_idx
   on approval_notification_deliveries (channel_id, external_message_id);
+
+alter table employees drop constraint if exists employees_approval_channel_id_fkey;
+alter table employees
+  add constraint employees_approval_channel_id_fkey
+  foreign key (approval_channel_id) references org_notification_channels(id) on delete set null;
+create index if not exists employees_approval_channel_idx
+  on employees (org_id, approval_channel_id)
+  where approval_channel_id is not null;
+
+comment on column org_notification_channels.is_default is
+  'Exactly one default approval inbox per org. Unset employee.approval_channel_id uses this row.';
+comment on column employees.approval_channel_id is
+  'Optional approval inbox (org_notification_channels). Unset falls back to the org default inbox.';
+comment on column employees.approver_user_ids is
+  'Optional extra Telegram/Slack/LINE user ids allowed to resolve this employee''s tickets (AND with channel allowedUserIds).';
 
 
 create table if not exists org_conversation_adapters (

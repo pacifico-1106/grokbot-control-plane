@@ -12,7 +12,7 @@ import type { NotificationProvider } from "@/lib/types";
 export const runtime = "nodejs";
 
 export async function POST(
-  _req: Request,
+  req: Request,
   ctx: { params: Promise<{ provider: string }> }
 ) {
   const gate = await requireOrgAdminSession();
@@ -22,9 +22,12 @@ export async function POST(
     return NextResponse.json({ error: "invalid_provider" }, { status: 400 });
   }
   const provider = raw as NotificationProvider;
-  const channel = (await getEnabledNotificationChannels(gate.orgId)).find(
-    (item) => item.provider === provider
-  );
+  const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
+  const requestedId = String(body.channelId || body.id || "").trim();
+  const enabled = await getEnabledNotificationChannels(gate.orgId);
+  const channel = requestedId
+    ? enabled.find((item) => item.id === requestedId && item.provider === provider)
+    : enabled.find((item) => item.provider === provider);
   if (!channel) return NextResponse.json({ error: "enabled_channel_not_found" }, { status: 404 });
   const message = "✅ StaffPass 通知チャネルのテストに成功しました。";
   const result = provider === "telegram"

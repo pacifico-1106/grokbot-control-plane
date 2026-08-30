@@ -4,6 +4,7 @@ import { AppShell } from "@/components/AppShell";
 import { BindingPanel } from "@/components/employees/BindingPanel";
 import { EmployeeActionLog } from "@/components/employees/EmployeeActionLog";
 import { EmployeeManagerForm } from "@/components/employees/EmployeeManagerForm";
+import { EmployeeApprovalInboxForm } from "@/components/employees/EmployeeApprovalInboxForm";
 import { EmployeeIdentityForm } from "@/components/employees/EmployeeIdentityForm";
 import { EmployeePolicyForm } from "@/components/employees/EmployeePolicyForm";
 import { EmployeeVoiceForm } from "@/components/employees/EmployeeVoiceForm";
@@ -20,6 +21,7 @@ import {
   getOrgSodWarnPolicy,
   listEmployees,
   listMembers,
+  listNotificationChannels,
   listOrgProjects,
 } from "@/lib/data";
 import { slackOAuthConfigured } from "@/lib/slack/oauth";
@@ -42,11 +44,12 @@ export default async function EmployeeDetailPage({
   const members = await listMembers(orgId);
   const projects = await listOrgProjects(orgId);
   const sodWarnPolicy = await getOrgSodWarnPolicy(orgId);
+  const notificationChannels = await listNotificationChannels(orgId);
 
   if (id === "new") {
     return (
       <AppShell title="AI社員を雇う" subtitle="新規発行">
-        <HireEmployeeClient members={members} projects={projects} sodWarnPolicy={sodWarnPolicy} />
+        <HireEmployeeClient members={members} projects={projects} sodWarnPolicy={sodWarnPolicy} notificationChannels={notificationChannels} />
       </AppShell>
     );
   }
@@ -165,6 +168,18 @@ export default async function EmployeeDetailPage({
           機密開示の承認チケットに上長IDを付けます。職務分離バッジはそのまま有効です。
         </p>
         <EmployeeManagerForm employee={employee} members={members} disabled={employee.status === "suspended"} />
+      </section>
+
+      <section className="surface p-5 space-y-3 mt-4">
+        <h2 className="text-sm font-medium">承認の届き先</h2>
+        <p className="text-xs muted leading-relaxed">
+          この社員の承認カードをどのインボックスに届けるか。未指定は組織の既定です。会話の書き込みとは別です。
+        </p>
+        <EmployeeApprovalInboxForm
+          employee={employee}
+          channels={notificationChannels}
+          disabled={employee.status === "suspended"}
+        />
       </section>
 
       <section className="surface p-5 space-y-3 mt-4">

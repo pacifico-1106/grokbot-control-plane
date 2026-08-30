@@ -9,6 +9,7 @@ const channel: NotificationChannelRuntime = {
   provider: "line",
   label: "LINE",
   enabled: true,
+  isDefault: true,
   config: { destinationId: "C-tenant-a", allowedUserIds: ["U-admin"] },
   webhookRef: "line-ref",
   hasCredentials: true,

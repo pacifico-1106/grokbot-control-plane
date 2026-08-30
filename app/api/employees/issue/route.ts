@@ -19,6 +19,7 @@ import { normalizeSpendLimits } from "@/lib/spend-gate";
 import { defaultVoice, normalizeVoice } from "@/lib/employees/voice";
 import { defaultProjectAccess, normalizeProjectAccess } from "@/lib/employees/project-access";
 import { normalizePostingAs } from "@/lib/employees/posting-as";
+import { normalizeApproverUserIds } from "@/lib/employees/approval-inbox";
 import { requireCapability } from "@/lib/team/demo-actor";
 import type { ActionLimits, AllowedAccount, ApprovalPolicy, EmployeeScope, SpendLimits } from "@/lib/types";
 
@@ -62,6 +63,8 @@ export async function POST(req: Request) {
     projectAccess?: unknown;
     postingAs?: unknown;
     toolApprovalDefaults?: unknown;
+    approvalChannelId?: string | null;
+    approverUserIds?: unknown;
   };
 
   const displayName = (body.displayName || "").trim();
@@ -130,6 +133,8 @@ export async function POST(req: Request) {
           ? defaultProjectAccess()
           : normalizeProjectAccess(body.projectAccess),
       postingAs: normalizePostingAs(body.postingAs),
+      approvalChannelId: body.approvalChannelId?.trim() || null,
+      approverUserIds: normalizeApproverUserIds(body.approverUserIds),
       secretHash: secret.hash,
       secretPrefix: secret.prefix,
       expiresAt,

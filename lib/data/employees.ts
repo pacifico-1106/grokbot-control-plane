@@ -16,6 +16,7 @@ import { defaultVoice, normalizeVoice } from "@/lib/employees/voice";
 import { defaultProjectAccess, normalizeProjectAccess } from "@/lib/employees/project-access";
 import { normalizePostingAs } from "@/lib/employees/posting-as";
 import { normalizeToolApprovalDefaults } from "@/lib/employees/approval-presets";
+import { normalizeApproverUserIds } from "@/lib/employees/approval-inbox";
 import type { ActionLimits, Employee, EmployeeProjectAccess, PostingAs } from "../types";
 
 export async function listEmployees(orgId?: string | null): Promise<Employee[]> {
@@ -119,6 +120,8 @@ export type IssueEmployeeInput = {
   voice?: Employee["voice"] | null;
   projectAccess?: EmployeeProjectAccess | null;
   postingAs?: PostingAs | null;
+  approvalChannelId?: string | null;
+  approverUserIds?: string[];
   secretHash: string;
   secretPrefix: string;
   expiresAt: string | null;
@@ -173,6 +176,8 @@ export async function issueEmployee(
       voice: normalizeVoice(input.voice ?? defaultVoice()),
       projectAccess: normalizeProjectAccess(input.projectAccess ?? defaultProjectAccess()),
       postingAs: normalizePostingAs(input.postingAs),
+      approvalChannelId: input.approvalChannelId?.trim() || null,
+      approverUserIds: normalizeApproverUserIds(input.approverUserIds),
       credentialId,
       createdAt: new Date().toISOString(),
     };
@@ -214,6 +219,8 @@ export async function issueEmployee(
       voice: normalizeVoice(input.voice ?? defaultVoice()),
       project_access: normalizeProjectAccess(input.projectAccess ?? defaultProjectAccess()),
       posting_as: normalizePostingAs(input.postingAs),
+      approval_channel_id: input.approvalChannelId?.trim() || null,
+      approver_user_ids: normalizeApproverUserIds(input.approverUserIds),
     })
     .select("*")
     .single();
@@ -316,6 +323,8 @@ export async function updateEmployeePolicy(input: {
   postingAs?: PostingAs;
   displayName?: string;
   roleLabel?: string;
+  approvalChannelId?: string | null;
+  approverUserIds?: string[];
 }): Promise<Employee | null> {
   const verdict = evaluateSod(input.scopes, await getOrgSodWarnPolicy(input.orgId));
   const effectivePolicy = resolveApprovalPolicy({
@@ -350,6 +359,12 @@ export async function updateEmployeePolicy(input: {
       ...(input.roleLabel !== undefined ? { roleLabel: input.roleLabel.trim() } : {}),
       ...(input.allowedAccounts !== undefined ? { allowedAccounts: input.allowedAccounts } : {}),
       ...(input.spend !== undefined ? { spend: input.spend } : {}),
+      ...(input.approvalChannelId !== undefined
+        ? { approvalChannelId: input.approvalChannelId?.trim() || null }
+        : {}),
+      ...(input.approverUserIds !== undefined
+        ? { approverUserIds: normalizeApproverUserIds(input.approverUserIds) }
+        : {}),
     });
     return employee;
   }
@@ -376,6 +391,12 @@ export async function updateEmployeePolicy(input: {
       ...(input.roleLabel !== undefined ? { role_label: input.roleLabel.trim() } : {}),
       ...(input.allowedAccounts !== undefined ? { allowed_accounts: input.allowedAccounts } : {}),
       ...(input.spend !== undefined ? { spend: input.spend } : {}),
+      ...(input.approvalChannelId !== undefined
+        ? { approval_channel_id: input.approvalChannelId?.trim() || null }
+        : {}),
+      ...(input.approverUserIds !== undefined
+        ? { approver_user_ids: normalizeApproverUserIds(input.approverUserIds) }
+        : {}),
       updated_at: new Date().toISOString(),
     })
     .eq("id", input.employeeId)

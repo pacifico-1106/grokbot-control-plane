@@ -13,6 +13,7 @@ import { normalizeToolApprovalDefaults } from "@/lib/employees/approval-presets"
 import { normalizeVoice } from "@/lib/employees/voice";
 import { normalizeProjectAccess } from "@/lib/employees/project-access";
 import { normalizePostingAs } from "@/lib/employees/posting-as";
+import { normalizeApproverUserIds } from "@/lib/employees/approval-inbox";
 import { normalizeEmployeeIdentityField } from "@/lib/employees/identity";
 import { normalizeSpendLimits } from "@/lib/spend-gate";
 import type { AllowedAccount, ApprovalPolicy, EmployeeScope, SpendLimits } from "@/lib/types";
@@ -108,6 +109,12 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
     ...(body.postingAs !== undefined ? { postingAs: normalizePostingAs(body.postingAs) } : {}),
     ...(displayName !== undefined ? { displayName } : {}),
     ...(roleLabel !== undefined ? { roleLabel } : {}),
+    ...(body.approvalChannelId !== undefined
+      ? { approvalChannelId: body.approvalChannelId ? String(body.approvalChannelId) : null }
+      : {}),
+    ...(body.approverUserIds !== undefined
+      ? { approverUserIds: normalizeApproverUserIds(body.approverUserIds) }
+      : {}),
   });
   if (!updated) return fail("employee_not_found", 404);
   const identityUpdated = displayName !== undefined || roleLabel !== undefined;

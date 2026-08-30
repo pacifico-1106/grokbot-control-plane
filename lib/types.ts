@@ -53,6 +53,7 @@ export interface NotificationChannel {
   provider: NotificationProvider;
   label: string;
   enabled: boolean;
+  isDefault: boolean;
   config: Record<string, unknown>;
   webhookRef: string;
   hasCredentials: boolean;
@@ -460,6 +461,10 @@ export interface Employee {
   approvalRoutineText?: string | null;
   /** Human manager (org_members.id, same org). Attached to egress approval tickets. */
   managerId?: string | null;
+  /** Approval inbox (org_notification_channels.id). Unset → org default inbox. */
+  approvalChannelId?: string | null;
+  /** Extra approver user ids for this employee (AND with channel allowedUserIds). */
+  approverUserIds?: string[];
   /**
    * Badge character / register. Default polite. External audience cannot
    * drop below polite (see effectiveVoice).

@@ -19,9 +19,11 @@ export type NotificationChannelRuntime = NotificationChannel & {
 
 export type UpsertNotificationChannelInput = {
   orgId: string;
+  id?: string;
   provider: NotificationProvider;
   label?: string;
   enabled: boolean;
+  isDefault?: boolean;
   config: Record<string, unknown>;
   secrets?: Record<string, string>;
 };
@@ -42,6 +44,7 @@ function demoPublic(row: NotificationChannelRuntime): NotificationChannel {
     provider: row.provider,
     label: row.label,
     enabled: row.enabled,
+    isDefault: Boolean(row.isDefault),
     config: row.config,
     webhookRef: row.webhookRef,
     hasCredentials: row.hasCredentials,
@@ -64,6 +67,7 @@ function mapPublic(row: Record<string, unknown>): NotificationChannel {
     provider,
     label: String(row.label || defaultProviderLabel(provider)),
     enabled: Boolean(row.enabled),
+    isDefault: Boolean(row.is_default),
     config:
       row.config && typeof row.config === "object"
         ? (row.config as Record<string, unknown>)
@@ -105,7 +109,11 @@ export async function listNotificationChannels(
 ): Promise<NotificationChannel[]> {
   if (!orgId) return [];
   if (isDemoMode()) {
-    return demoChannels.filter((row) => row.orgId === orgId).map(demoPublic);
+    return demoChannels
+      .filter((row) => row.orgId === orgId)
+      .slice()
+      .sort((a, b) => Number(b.isDefault) - Number(a.isDefault) || a.createdAt.localeCompare(b.createdAt))
+      .map(demoPublic);
   }
   const admin = createSupabaseAdminClient();
   if (!admin) return [];
@@ -113,7 +121,8 @@ export async function listNotificationChannels(
     .from("org_notification_channels")
     .select("*")
     .eq("org_id", orgId)
-    .order("provider");
+    .order("is_default", { ascending: false })
+    .order("created_at", { ascending: true });
   if (error || !data) return [];
   const credentials = await credentialsByChannelIds(data.map((row) => String(row.id)));
   return data.map((row) =>
@@ -181,6 +190,29 @@ export async function getNotificationChannelByWebhookRef(
   return (await runtimeRows({ provider, webhookRef: ref }))[0] ?? null;
 }
 
+function assertProviderSecrets(
+  provider: NotificationProvider,
+  enabled: boolean,
+  secrets: Record<string, string>
+) {
+  if (!enabled) return;
+  if (provider === "telegram" && (!secrets.botToken || !secrets.webhookSecret)) {
+    throw new Error("telegram_credentials_incomplete");
+  }
+  if (provider === "line" && (!secrets.channelAccessToken || !secrets.channelSecret)) {
+    throw new Error("line_credentials_incomplete");
+  }
+  if (provider === "slack" && (!secrets.botToken || !secrets.signingSecret)) {
+    throw new Error("slack_credentials_incomplete");
+  }
+}
+
+function markOrgDefaultDemo(orgId: string, channelId: string) {
+  for (const row of demoChannels) {
+    if (row.orgId === orgId) row.isDefault = row.id === channelId;
+  }
+}
+
 export async function upsertNotificationChannel(
   input: UpsertNotificationChannelInput
 ): Promise<NotificationChannel> {
@@ -188,17 +220,21 @@ export async function upsertNotificationChannel(
     Object.entries(input.secrets || {}).filter(([, value]) => value.trim())
   );
   if (isDemoMode()) {
-    const idx = demoChannels.findIndex(
-      (row) => row.orgId === input.orgId && row.provider === input.provider
-    );
+    const idx = input.id
+      ? demoChannels.findIndex((row) => row.id === input.id && row.orgId === input.orgId)
+      : -1;
     const existing = idx >= 0 ? demoChannels[idx] : null;
     const now = new Date().toISOString();
+    const orgRows = demoChannels.filter((row) => row.orgId === input.orgId);
+    const wantsDefault =
+      input.isDefault === true || (!existing && !orgRows.some((row) => row.isDefault));
     const row: NotificationChannelRuntime = {
       id: existing?.id || `chn_${randomBytes(6).toString("hex")}`,
       orgId: input.orgId || DEMO_ORG.id,
       provider: input.provider,
       label: input.label?.trim() || defaultProviderLabel(input.provider),
       enabled: input.enabled,
+      isDefault: wantsDefault || Boolean(existing?.isDefault && input.isDefault !== false),
       config: input.config,
       webhookRef: existing?.webhookRef || randomBytes(6).toString("hex"),
       hasCredentials: Boolean(Object.keys(cleanSecrets).length || existing?.hasCredentials),
@@ -207,29 +243,27 @@ export async function upsertNotificationChannel(
       createdAt: existing?.createdAt || now,
       updatedAt: now,
     };
-    if (input.enabled && input.provider === "telegram" && (!row.secrets.botToken || !row.secrets.webhookSecret)) {
-      throw new Error("telegram_credentials_incomplete");
-    }
-    if (input.enabled && input.provider === "line" && (!row.secrets.channelAccessToken || !row.secrets.channelSecret)) {
-      throw new Error("line_credentials_incomplete");
-    }
-    if (input.enabled && input.provider === "slack" && (!row.secrets.botToken || !row.secrets.signingSecret)) {
-      throw new Error("slack_credentials_incomplete");
-    }
+    assertProviderSecrets(input.provider, input.enabled, row.secrets);
     row.webhookPath = webhookPath(row.provider, row.webhookRef);
     if (idx >= 0) demoChannels[idx] = row;
     else demoChannels.push(row);
+    const orgHasDefault = demoChannels.some((item) => item.orgId === row.orgId && item.isDefault);
+    if (wantsDefault || !orgHasDefault) markOrgDefaultDemo(row.orgId, row.id);
     return demoPublic(row);
   }
 
   const admin = createSupabaseAdminClient();
   if (!admin) throw new Error("supabase_not_configured");
-  const { data: existing } = await admin
-    .from("org_notification_channels")
-    .select("*")
-    .eq("org_id", input.orgId)
-    .eq("provider", input.provider)
-    .maybeSingle();
+  let existing: Record<string, unknown> | null = null;
+  if (input.id) {
+    const { data } = await admin
+      .from("org_notification_channels")
+      .select("*")
+      .eq("org_id", input.orgId)
+      .eq("id", input.id)
+      .maybeSingle();
+    existing = (data as Record<string, unknown> | null) ?? null;
+  }
   let existingCiphertext = "";
   if (existing?.id) {
     const { data: existingSecret } = await admin
@@ -249,32 +283,44 @@ export async function upsertNotificationChannel(
   if (input.enabled && Object.keys(secrets).length === 0) {
     throw new Error("notification_credentials_required");
   }
-  if (input.enabled && input.provider === "telegram" && (!secrets.botToken || !secrets.webhookSecret)) {
-    throw new Error("telegram_credentials_incomplete");
-  }
-  if (input.enabled && input.provider === "line" && (!secrets.channelAccessToken || !secrets.channelSecret)) {
-    throw new Error("line_credentials_incomplete");
-  }
-  if (input.enabled && input.provider === "slack" && (!secrets.botToken || !secrets.signingSecret)) {
-    throw new Error("slack_credentials_incomplete");
-  }
+  assertProviderSecrets(input.provider, input.enabled, secrets);
   const encryptedSecrets = Object.keys(secrets).length > 0
     ? encryptNotificationSecrets(secrets)
     : "";
+  const { data: orgRows } = await admin
+    .from("org_notification_channels")
+    .select("id,is_default")
+    .eq("org_id", input.orgId);
+  const hasDefault = (orgRows || []).some(
+    (row) => Boolean((row as { is_default?: boolean }).is_default) && String((row as { id: string }).id) !== String(existing?.id || "")
+  );
+  const wantsDefault = input.isDefault === true || (!existing && !hasDefault);
   const payload = {
     org_id: input.orgId,
     provider: input.provider,
     label: input.label?.trim() || defaultProviderLabel(input.provider),
     enabled: input.enabled,
+    is_default: wantsDefault,
     config: input.config,
     updated_at: new Date().toISOString(),
   };
-  const { data, error } = await admin
-    .from("org_notification_channels")
-    .upsert(payload, { onConflict: "org_id,provider" })
-    .select("*")
-    .single();
+  const query = existing?.id
+    ? admin.from("org_notification_channels").update(payload).eq("id", existing.id).eq("org_id", input.orgId)
+    : admin.from("org_notification_channels").insert(payload);
+  const { data, error } = await query.select("*").single();
   if (error || !data) throw new Error(error?.message || "notification_channel_save_failed");
+  if (wantsDefault) {
+    await admin
+      .from("org_notification_channels")
+      .update({ is_default: false, updated_at: new Date().toISOString() })
+      .eq("org_id", input.orgId)
+      .neq("id", data.id);
+    await admin
+      .from("org_notification_channels")
+      .update({ is_default: true, updated_at: new Date().toISOString() })
+      .eq("id", data.id);
+    (data as { is_default: boolean }).is_default = true;
+  }
   if (Object.keys(secrets).length > 0) {
     const { error: secretError } = await admin
       .from("org_notification_channel_secrets")
@@ -290,7 +336,7 @@ export async function upsertNotificationChannel(
   }
   return mapPublic({
     ...(data as Record<string, unknown>),
-    has_credentials: Object.keys(secrets).length > 0,
+    has_credentials: Object.keys(secrets).length > 0 || Boolean(existingCiphertext),
   });
 }
 
@@ -420,4 +466,27 @@ export async function findAwaitingRevisionApproval(input: {
     .maybeSingle();
   if (error || !data) return null;
   return mapApprovalRow(data as Record<string, unknown>);
+}
+
+export function resetDemoNotificationChannels(orgId?: string): void {
+  if (!orgId) {
+    demoChannels.length = 0;
+    return;
+  }
+  for (let i = demoChannels.length - 1; i >= 0; i -= 1) {
+    if (demoChannels[i].orgId === orgId) demoChannels.splice(i, 1);
+  }
+}
+
+export async function resolveEmployeeApprovalChannel(
+  orgId: string,
+  employee?: { approvalChannelId?: string | null } | null
+): Promise<NotificationChannelRuntime | null> {
+  const channels = await getEnabledNotificationChannels(orgId);
+  const requested = employee?.approvalChannelId?.trim() || "";
+  if (requested) {
+    const chosen = channels.find((channel) => channel.id === requested);
+    if (chosen) return chosen;
+  }
+  return channels.find((channel) => channel.isDefault) ?? channels[0] ?? null;
 }

@@ -13,6 +13,7 @@ import {
 } from "@/lib/employees/approval-presets";
 import { BrowserAccountsSection } from "@/components/employees/BrowserAccountsSection";
 import { ManagerPicker } from "@/components/employees/ManagerPicker";
+import { ApprovalInboxPicker } from "@/components/employees/ApprovalInboxPicker";
 import { SpendForm } from "@/components/employees/SpendForm";
 import { VoiceForm } from "@/components/employees/VoiceForm";
 import { ProjectAccessForm } from "@/components/employees/ProjectAccessForm";
@@ -44,6 +45,7 @@ import type {
   OrgProject,
   PostingAs,
   SodWarnPolicy,
+  NotificationChannel,
   SpendLimits,
 } from "@/lib/types";
 
@@ -65,13 +67,17 @@ export function HireEmployeeClient({
   members = [],
   projects = [],
   sodWarnPolicy = null,
+  notificationChannels = [],
 }: {
   members?: OrgMember[];
   projects?: OrgProject[];
   sodWarnPolicy?: SodWarnPolicy | null;
+  notificationChannels?: NotificationChannel[];
 }) {
   const [step, setStep] = useState<Step>("describe");
   const [managerId, setManagerId] = useState<string | null>(null);
+  const [approvalChannelId, setApprovalChannelId] = useState<string | null>(null);
+  const [approverUserIds, setApproverUserIds] = useState("");
   const [voice, setVoice] = useState<EmployeeVoice>(defaultVoice());
   const [projectAccess, setProjectAccess] = useState<EmployeeProjectAccess>(defaultProjectAccess());
   const [postingAs, setPostingAs] = useState<PostingAs>("bot");
@@ -225,6 +231,8 @@ export function HireEmployeeClient({
           voice,
           projectAccess,
           postingAs,
+          approvalChannelId,
+          approverUserIds,
         }),
       });
       const body = await res.json();
@@ -648,6 +656,13 @@ export function HireEmployeeClient({
           />
 
           <ManagerPicker members={members} value={managerId} onChange={setManagerId} />
+          <ApprovalInboxPicker
+            channels={notificationChannels}
+            approvalChannelId={approvalChannelId}
+            onChannelChange={setApprovalChannelId}
+            approverUserIds={approverUserIds}
+            onApproverUserIdsChange={setApproverUserIds}
+          />
 
           <ProjectAccessForm value={projectAccess} projects={projects} onChange={setProjectAccess} />
 

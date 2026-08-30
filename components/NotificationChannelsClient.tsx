@@ -1,10 +1,14 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import type { NotificationChannel, NotificationProvider } from "@/lib/types";
 
-type FormState = {
+type InboxDraft = {
+  key: string;
+  id?: string;
+  provider: NotificationProvider;
   enabled: boolean;
+  isDefault: boolean;
   label: string;
   destination: string;
   allowedUsers: string;
@@ -26,30 +30,10 @@ function destinationKey(provider: NotificationProvider): string {
   return "channelId";
 }
 
-function initial(provider: NotificationProvider, channels: NotificationChannel[]): FormState {
-  const channel = channels.find((item) => item.provider === provider);
-  return {
-    enabled: channel?.enabled ?? false,
-    label: channel?.label || defaultLabel(provider),
-    destination: String(channel?.config[destinationKey(provider)] || ""),
-    allowedUsers: Array.isArray(channel?.config.allowedUserIds)
-      ? channel!.config.allowedUserIds.map(String).join(",")
-      : "",
-    primarySecret: "",
-    secondarySecret: "",
-  };
-}
-
 function providerTitle(provider: NotificationProvider): string {
   if (provider === "telegram") return "Telegram";
   if (provider === "line") return "LINE";
   return "Slack";
-}
-
-function providerHeading(provider: NotificationProvider): string {
-  if (provider === "telegram") return "承認を受け取る（Telegram）";
-  if (provider === "line") return "承認を受け取る（LINE）";
-  return "承認を受け取る（Slack）";
 }
 
 function providerHint(provider: NotificationProvider): string {
@@ -59,52 +43,107 @@ function providerHint(provider: NotificationProvider): string {
   return "危ない操作のカードがここに届きます。会話の書き込みではありません。";
 }
 
+function destinationLabel(provider: NotificationProvider): string {
+  if (provider === "telegram") return "承認グループ / DM chat ID";
+  if (provider === "line") return "送信先 group / room / user ID";
+  return "通知チャネル ID（C... / G... / D... / U...）";
+}
+
+function draftFromChannel(channel: NotificationChannel): InboxDraft {
+  return {
+    key: channel.id,
+    id: channel.id,
+    provider: channel.provider,
+    enabled: channel.enabled,
+    isDefault: channel.isDefault,
+    label: channel.label || defaultLabel(channel.provider),
+    destination: String(channel.config[destinationKey(channel.provider)] || ""),
+    allowedUsers: Array.isArray(channel.config.allowedUserIds)
+      ? channel.config.allowedUserIds.map(String).join(",")
+      : "",
+    primarySecret: "",
+    secondarySecret: "",
+  };
+}
+
+function emptyDraft(provider: NotificationProvider, makeDefault: boolean): InboxDraft {
+  return {
+    key: `new_${provider}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+    provider,
+    enabled: true,
+    isDefault: makeDefault,
+    label: defaultLabel(provider),
+    destination: "",
+    allowedUsers: "",
+    primarySecret: "",
+    secondarySecret: "",
+  };
+}
+
 export function NotificationChannelsClient({ initialChannels }: { initialChannels: NotificationChannel[] }) {
   const [channels, setChannels] = useState(initialChannels);
-  const [forms, setForms] = useState<Record<NotificationProvider, FormState>>({
-    telegram: initial("telegram", initialChannels),
-    line: initial("line", initialChannels),
-    slack: initial("slack", initialChannels),
-  });
+  const [drafts, setDrafts] = useState<InboxDraft[]>(
+    initialChannels.length
+      ? initialChannels.map(draftFromChannel)
+      : [emptyDraft("telegram", true)]
+  );
+  const [addProvider, setAddProvider] = useState<NotificationProvider>("telegram");
   const [busy, setBusy] = useState<string | null>(null);
   const [message, setMessage] = useState("");
 
-  function update(provider: NotificationProvider, patch: Partial<FormState>) {
-    setForms((current) => ({ ...current, [provider]: { ...current[provider], ...patch } }));
+  const savedById = useMemo(
+    () => Object.fromEntries(channels.map((channel) => [channel.id, channel])),
+    [channels]
+  );
+
+  function updateDraft(key: string, patch: Partial<InboxDraft>) {
+    setDrafts((current) =>
+      current.map((draft) => (draft.key === key ? { ...draft, ...patch } : draft))
+    );
   }
 
-  async function save(provider: NotificationProvider) {
-    setBusy(provider);
+  function addInbox() {
+    const makeDefault = !drafts.some((draft) => draft.isDefault) && channels.every((row) => !row.isDefault);
+    setDrafts((current) => [...current, emptyDraft(addProvider, makeDefault)]);
+  }
+
+  async function save(draft: InboxDraft) {
+    setBusy(draft.key);
     setMessage("");
-    const form = forms[provider];
     const payload =
-      provider === "telegram"
+      draft.provider === "telegram"
         ? {
-            provider,
-            enabled: form.enabled,
-            label: form.label,
-            chatId: form.destination,
-            allowedUserIds: form.allowedUsers,
-            botToken: form.primarySecret,
+            id: draft.id,
+            provider: draft.provider,
+            enabled: draft.enabled,
+            isDefault: draft.isDefault,
+            label: draft.label,
+            chatId: draft.destination,
+            allowedUserIds: draft.allowedUsers,
+            botToken: draft.primarySecret,
           }
-        : provider === "line"
+        : draft.provider === "line"
           ? {
-              provider,
-              enabled: form.enabled,
-              label: form.label,
-              destinationId: form.destination,
-              allowedUserIds: form.allowedUsers,
-              channelAccessToken: form.primarySecret,
-              channelSecret: form.secondarySecret,
+              id: draft.id,
+              provider: draft.provider,
+              enabled: draft.enabled,
+              isDefault: draft.isDefault,
+              label: draft.label,
+              destinationId: draft.destination,
+              allowedUserIds: draft.allowedUsers,
+              channelAccessToken: draft.primarySecret,
+              channelSecret: draft.secondarySecret,
             }
           : {
-              provider,
-              enabled: form.enabled,
-              label: form.label,
-              channelId: form.destination,
-              allowedUserIds: form.allowedUsers,
-              botToken: form.primarySecret,
-              signingSecret: form.secondarySecret,
+              id: draft.id,
+              provider: draft.provider,
+              enabled: draft.enabled,
+              isDefault: draft.isDefault,
+              label: draft.label,
+              channelId: draft.destination,
+              allowedUserIds: draft.allowedUsers,
+              botToken: draft.primarySecret,
+              signingSecret: draft.secondarySecret,
             };
     try {
       const response = await fetch("/api/settings/notification-channels", {
@@ -114,8 +153,25 @@ export function NotificationChannelsClient({ initialChannels }: { initialChannel
       });
       const body = await response.json();
       if (!response.ok) throw new Error(body.error || "保存に失敗しました");
-      setChannels((current) => [...current.filter((item) => item.provider !== provider), body.channel]);
-      update(provider, { primarySecret: "", secondarySecret: "" });
+      const saved = body.channel as NotificationChannel;
+      setChannels((current) => {
+        const without = current.filter((item) => item.id !== saved.id);
+        const next = [...without, saved];
+        return saved.isDefault
+          ? next.map((item) => (item.id === saved.id ? item : { ...item, isDefault: false }))
+          : next;
+      });
+      setDrafts((current) =>
+        current.map((item) => {
+          if (item.key !== draft.key) {
+            return saved.isDefault ? { ...item, isDefault: false } : item;
+          }
+          return {
+            ...draftFromChannel(saved),
+            key: item.key,
+          };
+        })
+      );
       setMessage(
         body.webhook?.ok === false
           ? `保存しましたがWebhook登録に失敗: ${body.webhook.error}`
@@ -128,14 +184,18 @@ export function NotificationChannelsClient({ initialChannels }: { initialChannel
     }
   }
 
-  async function test(provider: NotificationProvider) {
-    setBusy(`${provider}-test`);
+  async function test(draft: InboxDraft) {
+    setBusy(`${draft.key}-test`);
     setMessage("");
     try {
-      const response = await fetch(`/api/settings/notification-channels/${provider}/test`, { method: "POST" });
+      const response = await fetch(`/api/settings/notification-channels/${draft.provider}/test`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ channelId: draft.id }),
+      });
       const body = await response.json();
       if (!response.ok) throw new Error(body.error || "テストに失敗しました");
-      setMessage(`${providerTitle(provider)}へテスト通知を送信しました`);
+      setMessage(`${providerTitle(draft.provider)}へテスト通知を送信しました`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "テストに失敗しました");
     } finally {
@@ -146,55 +206,90 @@ export function NotificationChannelsClient({ initialChannels }: { initialChannel
   return (
     <div className="space-y-4 mt-4">
       {message ? <p className="surface p-3 text-sm">{message}</p> : null}
-      <div className="grid lg:grid-cols-3 gap-4">
-        {PROVIDERS.map((provider) => {
-          const form = forms[provider];
-          const saved = channels.find((item) => item.provider === provider);
-          const isTelegram = provider === "telegram";
-          const isLine = provider === "line";
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+        <p className="text-xs muted leading-relaxed">
+          組織に複数の「承認を受け取る」インボックスを置けます。同じ Telegram Bot でも、DM とグループを分けられます。会話の書き込みは下の欄です。
+        </p>
+        <div className="flex flex-wrap items-center gap-2">
+          <select
+            className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm"
+            value={addProvider}
+            onChange={(event) => setAddProvider(event.target.value as NotificationProvider)}
+          >
+            {PROVIDERS.map((provider) => (
+              <option key={provider} value={provider}>
+                {providerTitle(provider)}
+              </option>
+            ))}
+          </select>
+          <button type="button" className="btn btn-ghost text-sm" onClick={addInbox}>
+            承認を受け取るチャンネルを追加
+          </button>
+        </div>
+      </div>
+      <div className="grid lg:grid-cols-2 gap-4">
+        {drafts.map((draft) => {
+          const saved = draft.id ? savedById[draft.id] : undefined;
+          const isTelegram = draft.provider === "telegram";
+          const isLine = draft.provider === "line";
           return (
-            <section key={provider} className="surface p-5 space-y-4">
+            <section key={draft.key} className="surface p-5 space-y-4">
               <div className="flex items-center justify-between gap-3">
                 <div>
-                  <h2 className="font-medium">{providerHeading(provider)}</h2>
-                  <p className="text-xs muted mt-1">{providerHint(provider)}</p>
+                  <h2 className="font-medium">承認を受け取る（{providerTitle(draft.provider)}）</h2>
+                  <p className="text-xs muted mt-1">{providerHint(draft.provider)}</p>
                 </div>
                 <label className="flex items-center gap-2 text-sm">
                   <input
                     type="checkbox"
-                    checked={form.enabled}
-                    onChange={(event) => update(provider, { enabled: event.target.checked })}
+                    checked={draft.enabled}
+                    onChange={(event) => updateDraft(draft.key, { enabled: event.target.checked })}
                   />
                   有効
                 </label>
               </div>
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={draft.isDefault}
+                  onChange={(event) => {
+                    const checked = event.target.checked;
+                    setDrafts((current) =>
+                      current.map((item) =>
+                        item.key === draft.key
+                          ? { ...item, isDefault: checked }
+                          : checked
+                            ? { ...item, isDefault: false }
+                            : item
+                      )
+                    );
+                  }}
+                />
+                組織の既定インボックス
+              </label>
               <label className="block text-xs muted">
                 表示名
                 <input
                   className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm"
-                  value={form.label}
-                  onChange={(event) => update(provider, { label: event.target.value })}
+                  value={draft.label}
+                  onChange={(event) => updateDraft(draft.key, { label: event.target.value })}
                 />
               </label>
               <label className="block text-xs muted">
-                {isTelegram
-                  ? "承認グループ chat ID"
-                  : isLine
-                    ? "送信先 group / room / user ID"
-                    : "通知チャネル ID（C... / G... / D... / U...）"}
+                {destinationLabel(draft.provider)}
                 <input
                   className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm font-mono"
-                  value={form.destination}
-                  onChange={(event) => update(provider, { destination: event.target.value })}
-                  placeholder={isTelegram ? "-100..." : isLine ? "C... / R... / U..." : "C012..."}
+                  value={draft.destination}
+                  onChange={(event) => updateDraft(draft.key, { destination: event.target.value })}
+                  placeholder={isTelegram ? "-100... / 個人DM" : isLine ? "C... / R... / U..." : "C012..."}
                 />
               </label>
               <label className="block text-xs muted">
                 許可user ID（カンマ区切り、空なら送信先内の全員）
                 <input
                   className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm font-mono"
-                  value={form.allowedUsers}
-                  onChange={(event) => update(provider, { allowedUsers: event.target.value })}
+                  value={draft.allowedUsers}
+                  onChange={(event) => updateDraft(draft.key, { allowedUsers: event.target.value })}
                 />
               </label>
               <label className="block text-xs muted">
@@ -203,8 +298,8 @@ export function NotificationChannelsClient({ initialChannels }: { initialChannel
                   type="password"
                   autoComplete="new-password"
                   className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm"
-                  value={form.primarySecret}
-                  onChange={(event) => update(provider, { primarySecret: event.target.value })}
+                  value={draft.primarySecret}
+                  onChange={(event) => updateDraft(draft.key, { primarySecret: event.target.value })}
                   placeholder={saved?.hasCredentials ? "設定済み（変更時のみ入力）" : "未設定"}
                 />
               </label>
@@ -215,26 +310,26 @@ export function NotificationChannelsClient({ initialChannels }: { initialChannel
                     type="password"
                     autoComplete="new-password"
                     className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm"
-                    value={form.secondarySecret}
-                    onChange={(event) => update(provider, { secondarySecret: event.target.value })}
+                    value={draft.secondarySecret}
+                    onChange={(event) => updateDraft(draft.key, { secondarySecret: event.target.value })}
                     placeholder={saved?.hasCredentials ? "設定済み（変更時のみ入力）" : "未設定"}
                   />
                 </label>
               ) : null}
               {saved ? <p className="text-[11px] faint break-all">Webhook: {saved.webhookPath}</p> : null}
-              {provider === "slack" ? (
+              {draft.provider === "slack" ? (
                 <p className="text-[11px] faint leading-relaxed">
                   会話への書き込みは下の「チャンネルに書き込む」で設定します。同じ Bot token で構いません。
                 </p>
               ) : null}
               <div className="flex flex-wrap gap-2">
-                <button className="btn btn-primary" disabled={busy !== null} onClick={() => void save(provider)}>
+                <button className="btn btn-primary" disabled={busy !== null} onClick={() => void save(draft)}>
                   保存
                 </button>
                 <button
                   className="btn btn-ghost"
                   disabled={busy !== null || !saved?.enabled}
-                  onClick={() => void test(provider)}
+                  onClick={() => void test(draft)}
                 >
                   テスト送信
                 </button>
