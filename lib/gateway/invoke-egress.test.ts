@@ -229,7 +229,7 @@ describe("Gateway audience egress", () => {
   test("acked mixed-domain employee with risk_based does not blanket-queue slack.post", async () => {
     const sales = getRuntimeEmployees().find((item) => item.id === "emp_sales");
     expect(sales).toBeTruthy();
-    expect(sales!.sodLevel).toBe("warn");
+    expect(sales!.approvalPolicy).toBe("always_human");
     const previous = sales!.approvalPolicy;
     sales!.approvalPolicy = "risk_based";
     try {
