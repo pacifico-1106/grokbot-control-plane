@@ -18,6 +18,9 @@ create table if not exists orgs (
   trial_ends_at timestamptz,
   stripe_customer_id text,
   referral_code text,
+  sod_warn_policy jsonb not null default '{
+    "domains": ["comm_external", "money", "destructive", "commit"]
+  }'::jsonb,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -64,7 +67,11 @@ create table if not exists employees (
   action_limits jsonb not null default '{}'::jsonb,
   tool_approval_defaults jsonb not null default '{
     "mail.send": "always_human",
-    "calendar.confirm": "always_human"
+    "calendar.confirm": "always_human",
+    "commerce.order": "always_human",
+    "files.write": "always_human",
+    "drive.share_external": "always_human",
+    "browser.use": "always_human"
   }'::jsonb,
   spend jsonb,
   allowed_accounts jsonb not null default '[]'::jsonb,

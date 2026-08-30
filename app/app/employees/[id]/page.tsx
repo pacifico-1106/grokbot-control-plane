@@ -17,6 +17,7 @@ import {
   getBinding,
   getEmployee,
   getEmployeeSlackIdentity,
+  getOrgSodWarnPolicy,
   listEmployees,
   listMembers,
   listOrgProjects,
@@ -26,7 +27,7 @@ import { getEmployeeActionLog } from "@/lib/employee-actions-demo";
 import { APPROVAL_POLICY_LABELS } from "@/lib/employees/policy-draft";
 import { buildConcentration } from "@/lib/employees/concentration";
 import { DOMAIN_LABELS } from "@/lib/gateway/domains";
-import { evaluateSod, isSendConfirmSodWarn } from "@/lib/employees/sod";
+import { evaluateSod, isComboSodWarn } from "@/lib/employees/sod";
 
 export const dynamic = "force-dynamic";
 
@@ -40,11 +41,12 @@ export default async function EmployeeDetailPage({
   const orgId = await getCurrentOrgId();
   const members = await listMembers(orgId);
   const projects = await listOrgProjects(orgId);
+  const sodWarnPolicy = await getOrgSodWarnPolicy(orgId);
 
   if (id === "new") {
     return (
       <AppShell title="AI社員を雇う" subtitle="新規発行">
-        <HireEmployeeClient members={members} projects={projects} />
+        <HireEmployeeClient members={members} projects={projects} sodWarnPolicy={sodWarnPolicy} />
       </AppShell>
     );
   }
@@ -109,31 +111,26 @@ export default async function EmployeeDetailPage({
             employee={employee}
             slackLinked={slackIdentity?.status === "linked"}
             disabled={employee.status === "suspended"}
+            sodWarnPolicy={sodWarnPolicy}
           />
         </section>
       </div>
 
-      <section className={`surface p-5 mt-4 ${employee.sodLevel === "force_human" ? "ring-1 ring-[color-mix(in_oklab,var(--danger)_52%,transparent)]" : ""}`}>
+      <section className={`surface p-5 mt-4 ${isComboSodWarn(evaluateSod(employee.scopes, sodWarnPolicy)) ? "ring-1 ring-[color-mix(in_oklab,var(--warn)_40%,transparent)]" : ""}`}>
         <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
           <div>
             <h2 className="text-sm font-medium">職務分離・権限集中</h2>
             <p className="mt-2 text-xs muted leading-relaxed">
-              {employee.sodLevel === "force_human"
-                ? employee.approvalPolicy === "always_human"
-                  ? "複数の高リスク領域が混在しているため、すべての行為を人が承認します。権限を社員ごとに分けると自動化できる範囲が広がります。"
-                  : "複数の高リスク領域が混在しています。警告を確認済みです。確定操作（送信・発注・日程確定）は今どおり人が止めます。"
-                : isSendConfirmSodWarn(evaluateSod(employee.scopes))
-                  ? "メール送信と日程確定が同居しています。責任は事業者にあります。社内Slackは承認設定に従います。"
-                  : employee.sodLevel === "warn"
+              {isComboSodWarn(evaluateSod(employee.scopes, sodWarnPolicy))
+                ? "高リスク権限を同時に持たせています。責任は事業者にあります。警告と承諾だけで、行為は止めません。"
+                : employee.sodLevel === "warn"
                   ? "ブラウザ操作を許可しています。利用アカウントを限定し、共有セッションを定期的に確認してください。"
                   : "高リスク権限は分離されています。"}
             </p>
           </div>
-          <span className={`chip shrink-0 ${employee.sodLevel === "force_human" ? (employee.approvalPolicy !== "always_human" ? "chip-warn" : "chip-danger") : employee.sodLevel === "warn" ? "chip-warn" : "chip-ok"}`}>
-            {employee.sodLevel === "force_human"
-              ? employee.approvalPolicy !== "always_human"
-                ? "警告・承諾済み"
-                : "全件承認"
+          <span className={`chip shrink-0 ${isComboSodWarn(evaluateSod(employee.scopes, sodWarnPolicy)) ? "chip-warn" : employee.sodLevel === "warn" ? "chip-warn" : "chip-ok"}`}>
+            {isComboSodWarn(evaluateSod(employee.scopes, sodWarnPolicy))
+              ? "要注意"
               : employee.sodLevel === "warn" ? "要注意" : "分離済み"}
           </span>
         </div>

@@ -31,37 +31,37 @@ function issueInput(overrides: Record<string, unknown> = {}) {
 }
 
 describe("issueEmployee SoD acknowledgment", () => {
-  test("without ack still forces always_human", async () => {
+  test("without ack keeps requested risk_based (no silent always_human)", async () => {
     const result = await issueEmployee(issueInput());
-    expect(result.employee.sodLevel).toBe("force_human");
-    expect(result.employee.approvalPolicy).toBe("always_human");
+    expect(result.employee.sodLevel).toBe("warn");
+    expect(result.employee.approvalPolicy).toBe("risk_based");
   });
 
   test("with ack keeps requested risk_based", async () => {
     const result = await issueEmployee(
       issueInput({ sodOverrideAcknowledged: true, displayName: "安藤承諾" })
     );
-    expect(result.employee.sodLevel).toBe("force_human");
+    expect(result.employee.sodLevel).toBe("warn");
     expect(result.employee.approvalPolicy).toBe("risk_based");
   });
 });
 
 describe("updateEmployeePolicy SoD acknowledgment", () => {
-  test("without ack re-locks to always_human; with ack keeps requested", async () => {
+  test("without ack does not re-lock; with ack keeps requested", async () => {
     const issued = await issueEmployee(
       issueInput({ sodOverrideAcknowledged: true, displayName: "安藤更新" })
     );
     expect(issued.employee.approvalPolicy).toBe("risk_based");
 
-    const locked = await updateEmployeePolicy({
+    const unlocked = await updateEmployeePolicy({
       orgId: DEMO_ORG.id,
       employeeId: issued.employee.id,
       scopes: mixedScopes,
       allowedPurposes: ["ops.admin"],
       approvalPolicy: "auto",
     });
-    expect(locked?.sodLevel).toBe("force_human");
-    expect(locked?.approvalPolicy).toBe("always_human");
+    expect(unlocked?.sodLevel).toBe("warn");
+    expect(unlocked?.approvalPolicy).toBe("auto");
 
     const allowed = await updateEmployeePolicy({
       orgId: DEMO_ORG.id,
@@ -71,7 +71,7 @@ describe("updateEmployeePolicy SoD acknowledgment", () => {
       approvalPolicy: "risk_based",
       sodOverrideAcknowledged: true,
     });
-    expect(allowed?.sodLevel).toBe("force_human");
+    expect(allowed?.sodLevel).toBe("warn");
     expect(allowed?.approvalPolicy).toBe("risk_based");
   });
 });

@@ -28,6 +28,14 @@ export type SodVerdict =
   | { level: "warn"; domains: RiskDomain[]; reason: string }
   | { level: "force_human"; domains: RiskDomain[]; reason: string };
 
+/** High-risk domains that can participate in a save-time SoD combo warning. */
+export type SodWarnDomain = Exclude<RiskDomain, "browser" | "safe">;
+
+/** Org setting: 2+ of these domains produce a warn+ack (never force_human). */
+export type SodWarnPolicy = {
+  domains: SodWarnDomain[];
+};
+
 export type ActionLimit = { perDay?: number; perMonth?: number };
 export type ActionLimits = Record<string, ActionLimit>;
 
@@ -428,8 +436,9 @@ export interface Employee {
   allowedPurposes: string[];
   approvalPolicy: ApprovalPolicy;
   /**
-   * Per-tool approval hints. mail.send / calendar.confirm are choosable
-   * (always_human | risk_based | auto). Missing keys default to always_human.
+   * Per-tool approval hints. Choosable tools (mail.send, calendar.confirm,
+   * commerce.order, files.write, drive.share_external, browser.use) are
+   * always_human | risk_based | auto. Missing keys default to always_human.
    */
   toolApprovalDefaults?: Record<string, ApprovalPolicy | "deny">;
   sodLevel: SodLevel;

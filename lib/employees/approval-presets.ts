@@ -177,7 +177,14 @@ export function suggestEmployeeApprovalPolicy(input: {
   return "risk_based";
 }
 
-export const CHOOSABLE_TOOL_APPROVALS = ["mail.send", "calendar.confirm"] as const;
+export const CHOOSABLE_TOOL_APPROVALS = [
+  "mail.send",
+  "calendar.confirm",
+  "commerce.order",
+  "files.write",
+  "drive.share_external",
+  "browser.use",
+] as const;
 export type ChoosableToolApproval = (typeof CHOOSABLE_TOOL_APPROVALS)[number];
 
 export const TOOL_APPROVAL_CHOICE_LABELS: Record<ApprovalPolicy, string> = {
@@ -186,12 +193,45 @@ export const TOOL_APPROVAL_CHOICE_LABELS: Record<ApprovalPolicy, string> = {
   auto: "自動",
 };
 
+export const CHOOSABLE_TOOL_LABELS: Record<ChoosableToolApproval, string> = {
+  "mail.send": "メール送信",
+  "calendar.confirm": "予定の確定",
+  "commerce.order": "発注・購入",
+  "files.write": "ファイルの更新・削除",
+  "drive.share_external": "Driveの社外共有",
+  "browser.use": "ブラウザ操作",
+};
+
 const STRICT_CHOOSABLE_DEFAULTS: Record<ChoosableToolApproval, ApprovalPolicy> = {
   "mail.send": "always_human",
   "calendar.confirm": "always_human",
+  "commerce.order": "always_human",
+  "files.write": "always_human",
+  "drive.share_external": "always_human",
+  "browser.use": "always_human",
 };
 
-/** New-hire / missing keys stay always_human for send and confirm. */
+export function choosableToolIsEnabled(
+  tool: ChoosableToolApproval,
+  scopes: readonly string[]
+): boolean {
+  switch (tool) {
+    case "mail.send":
+      return scopes.includes("mail:send") || scopes.includes("agentmail:send");
+    case "calendar.confirm":
+      return scopes.includes("calendar:confirm");
+    case "commerce.order":
+      return scopes.includes("commerce:order");
+    case "files.write":
+      return scopes.includes("files:write");
+    case "drive.share_external":
+      return scopes.includes("drive:share_external");
+    case "browser.use":
+      return scopes.includes("browser:use");
+  }
+}
+
+/** New-hire / missing keys stay always_human for choosable tools. */
 export function normalizeToolApprovalDefaults(
   value: unknown
 ): Record<string, ApprovalPolicy | "deny"> {

@@ -8,6 +8,7 @@ import { ALL_SCOPES } from "@/lib/employees/policy-draft";
 import { policyErrorPayload } from "@/lib/employees/policy-errors";
 import { evaluateSod } from "@/lib/employees/sod";
 import { samePolicyFields, sodAckRequiredOnPatch } from "@/lib/employees/sod-override";
+import { getOrgSodWarnPolicy } from "@/lib/data";
 import { normalizeToolApprovalDefaults } from "@/lib/employees/approval-presets";
 import { normalizeVoice } from "@/lib/employees/voice";
 import { normalizeProjectAccess } from "@/lib/employees/project-access";
@@ -41,7 +42,7 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
     return fail("invalid_policy", 400);
   }
   const sodOverrideAcknowledged = body.sodOverrideAcknowledged === true;
-  const sodVerdict = evaluateSod(scopes);
+  const sodVerdict = evaluateSod(scopes, await getOrgSodWarnPolicy(orgId));
   const policyUnchanged = samePolicyFields(
     { scopes: existing.scopes, approvalPolicy: existing.approvalPolicy },
     { scopes, approvalPolicy }
@@ -138,7 +139,13 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
       action: "employee.sod_override",
       purpose: null,
       summary: "権限集中の警告を確認して保存",
-      metadata: { domains: sodVerdict.domains, actor: gate.actor.email, approvalPolicy: updated.approvalPolicy },
+      metadata: {
+        acknowledged: true,
+        domains: sodVerdict.domains,
+        approvalPolicy: updated.approvalPolicy,
+        toolApprovalDefaults: updated.toolApprovalDefaults,
+        actor: gate.actor.email,
+      },
     });
   }
   return NextResponse.json({ ok: true, employee: updated });

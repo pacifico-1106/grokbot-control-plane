@@ -4,13 +4,18 @@
  * Does not reimplement the Gateway matrix.
  */
 import { normalizeAllowedAccounts } from "@/lib/employees/allowed-accounts";
-import { evaluateSod, SOD_OPERATOR_RESPONSIBILITY_JA } from "@/lib/employees/sod";
+import {
+  evaluateSod,
+  isComboSodWarn,
+  SOD_OPERATOR_RESPONSIBILITY_JA,
+} from "@/lib/employees/sod";
 import type {
   AllowedAccount,
   ApprovalPolicy,
   EmployeeScope,
   PostingAs,
   SodVerdict,
+  SodWarnPolicy,
 } from "@/lib/types";
 
 export type PolicyPreviewTone = "ok" | "warn" | "danger" | "muted";
@@ -39,7 +44,7 @@ function mentionReplyForcedHuman(approvalPolicy: ApprovalPolicy): boolean {
 }
 
 function choosablePreview(
-  tool: "mail.send" | "calendar.confirm",
+  tool: string,
   hints?: Record<string, ApprovalPolicy | "deny"> | null
 ): { value: string; tone: PolicyPreviewTone } {
   const hint = hints?.[tool];
@@ -52,11 +57,12 @@ export function buildPolicyPreview(input: {
   scopes: readonly EmployeeScope[] | readonly string[];
   allowedPurposes?: readonly string[];
   approvalPolicy: ApprovalPolicy;
-  liveSod?: Pick<SodVerdict, "level"> | null;
+  liveSod?: (Pick<SodVerdict, "level"> & Partial<Pick<SodVerdict, "domains">>) | null;
   allowedAccounts?: AllowedAccount[] | null;
   postingAs?: PostingAs | null;
   slackLinked?: boolean;
   toolApprovalDefaults?: Record<string, ApprovalPolicy | "deny"> | null;
+  sodWarnPolicy?: SodWarnPolicy | null;
 }): PolicyPreviewRow[] {
   void input.allowedPurposes;
   const scopes = input.scopes;
@@ -64,10 +70,13 @@ export function buildPolicyPreview(input: {
   const hasMailSend = scopes.includes("mail:send") || scopes.includes("agentmail:send");
   const hasConfirm = scopes.includes("calendar:confirm");
   const hasOrder = scopes.includes("commerce:order");
+  const hasFilesWrite = scopes.includes("files:write");
+  const hasDriveShare = scopes.includes("drive:share_external");
   const hasBrowser = scopes.includes("browser:use");
   const accounts = normalizeAllowedAccounts(input.allowedAccounts);
   const mentionForced = mentionReplyForcedHuman(input.approvalPolicy);
-  const sodLevel = input.liveSod?.level ?? evaluateSod(scopes as EmployeeScope[]).level;
+  const sodRaw = input.liveSod ?? evaluateSod(scopes as EmployeeScope[], input.sodWarnPolicy ?? null);
+  const sod = { level: sodRaw.level, domains: sodRaw.domains ?? [] };
 
   const slack: PolicyPreviewRow = !hasSlack
     ? { id: "slack", label: "メンション返信", value: "できない", tone: "muted" }
@@ -85,9 +94,20 @@ export function buildPolicyPreview(input: {
     ? { id: "calendar", label: "予定の確定", value: calHint.value, tone: calHint.tone }
     : { id: "calendar", label: "予定の確定", value: "できない", tone: "muted" };
 
+  const orderHint = choosablePreview("commerce.order", input.toolApprovalDefaults);
   const order: PolicyPreviewRow = hasOrder
-    ? { id: "order", label: "発注", value: "必ず人が見る · お金が動く", tone: "danger" }
+    ? { id: "order", label: "発注", value: orderHint.value, tone: orderHint.tone }
     : { id: "order", label: "発注", value: "できない", tone: "muted" };
+
+  const filesHint = choosablePreview("files.write", input.toolApprovalDefaults);
+  const files: PolicyPreviewRow | null = hasFilesWrite
+    ? { id: "files", label: "ファイル更新", value: filesHint.value, tone: filesHint.tone }
+    : null;
+
+  const driveHint = choosablePreview("drive.share_external", input.toolApprovalDefaults);
+  const drive: PolicyPreviewRow | null = hasDriveShare
+    ? { id: "drive", label: "Drive社外共有", value: driveHint.value, tone: driveHint.tone }
+    : null;
 
   let browser: PolicyPreviewRow;
   if (!hasBrowser) {
@@ -95,7 +115,11 @@ export function buildPolicyPreview(input: {
   } else if (accounts.length === 0) {
     browser = { id: "browser", label: "ブラウザ", value: "動かない（許可アカウント無し）", tone: "danger" };
   } else {
-    browser = { id: "browser", label: "ブラウザ", value: "共有セッション注意", tone: "warn" };
+    const browserHint = choosablePreview("browser.use", input.toolApprovalDefaults);
+    browser =
+      browserHint.value === "必ず人が見る"
+        ? { id: "browser", label: "ブラウザ", value: "共有セッション注意", tone: "warn" }
+        : { id: "browser", label: "ブラウザ", value: browserHint.value, tone: browserHint.tone };
   }
 
   const external: PolicyPreviewRow = {
@@ -118,13 +142,16 @@ export function buildPolicyPreview(input: {
             tone: "danger",
           };
 
-  const rows: PolicyPreviewRow[] = [slack, posting, mail, calendar, order, browser, external];
-  if (hasMailSend && hasConfirm) {
+  const rows: PolicyPreviewRow[] = [slack, posting, mail, calendar, order];
+  if (files) rows.push(files);
+  if (drive) rows.push(drive);
+  rows.push(browser, external);
+  if (isComboSodWarn(sod)) {
     rows.push({
       id: "combo",
       label: "権限の組み合わせ",
       value: SOD_OPERATOR_RESPONSIBILITY_JA,
-      tone: sodLevel === "force_human" ? "danger" : "warn",
+      tone: "warn",
     });
   }
   return rows;

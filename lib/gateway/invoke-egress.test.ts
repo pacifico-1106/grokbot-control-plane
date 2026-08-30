@@ -219,7 +219,6 @@ describe("Gateway audience egress", () => {
       });
       expect(result.httpStatus).toBe(402);
       expect(result.body.needs_approval).toBe(true);
-      expect(String(result.body.summary)).toContain("権限混在社員");
     } finally {
       sales!.scopes = previousScopes;
       sales!.approvalPolicy = previousPolicy;

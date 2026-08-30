@@ -6,7 +6,11 @@ import {
 import { isDemoMode } from "../mode";
 import { createSupabaseAdminClient } from "../supabase";
 import { mapOrgRow, type OrgMeta } from "./mappers";
-import type { GatewayLinkStatus } from "../types";
+import type { GatewayLinkStatus, SodWarnPolicy } from "../types";
+import {
+  DEFAULT_SOD_WARN_POLICY,
+  normalizeSodWarnPolicy,
+} from "@/lib/employees/sod-warn-policy";
 
 /** Default org for DEMO; in production use session orgId. */
 export async function getOrgMeta(orgId?: string | null): Promise<OrgMeta> {
@@ -131,4 +135,45 @@ export async function setOrgReferralCodeIfEmpty(
     })
     .eq("id", orgId);
   return code;
+}
+
+export async function getOrgSodWarnPolicy(
+  orgId?: string | null
+): Promise<SodWarnPolicy> {
+  if (isDemoMode()) {
+    return normalizeSodWarnPolicy(DEMO_ORG.sodWarnPolicy);
+  }
+  const admin = createSupabaseAdminClient();
+  if (!admin || !orgId) {
+    return { domains: [...DEFAULT_SOD_WARN_POLICY.domains] };
+  }
+  const { data } = await admin
+    .from("orgs")
+    .select("sod_warn_policy")
+    .eq("id", orgId)
+    .maybeSingle();
+  return normalizeSodWarnPolicy(
+    (data as { sod_warn_policy?: unknown } | null)?.sod_warn_policy
+  );
+}
+
+export async function setOrgSodWarnPolicy(
+  orgId: string,
+  policy: SodWarnPolicy
+): Promise<SodWarnPolicy> {
+  const next = normalizeSodWarnPolicy(policy);
+  if (isDemoMode()) {
+    DEMO_ORG.sodWarnPolicy = next;
+    return next;
+  }
+  const admin = createSupabaseAdminClient();
+  if (!admin) {
+    throw new Error("supabase_not_configured");
+  }
+  const { error } = await admin
+    .from("orgs")
+    .update({ sod_warn_policy: next, updated_at: new Date().toISOString() })
+    .eq("id", orgId);
+  if (error) throw new Error(error.message);
+  return next;
 }

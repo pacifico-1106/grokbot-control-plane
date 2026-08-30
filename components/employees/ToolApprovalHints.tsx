@@ -2,14 +2,11 @@
 
 import {
   CHOOSABLE_TOOL_APPROVALS,
+  CHOOSABLE_TOOL_LABELS,
   TOOL_APPROVAL_CHOICE_LABELS,
+  choosableToolIsEnabled,
 } from "@/lib/employees/approval-presets";
 import type { ApprovalPolicy } from "@/lib/types";
-
-const TOOL_LABELS: Record<(typeof CHOOSABLE_TOOL_APPROVALS)[number], string> = {
-  "mail.send": "メール送信",
-  "calendar.confirm": "予定の確定",
-};
 
 const CHOICES: ApprovalPolicy[] = ["always_human", "risk_based", "auto"];
 
@@ -24,9 +21,8 @@ export function ToolApprovalHints({
   onChange: (next: Record<string, ApprovalPolicy | "deny">) => void;
   disabled?: boolean;
 }) {
-  const showSend = scopes.includes("mail:send") || scopes.includes("agentmail:send");
-  const showConfirm = scopes.includes("calendar:confirm");
-  if (!showSend && !showConfirm) return null;
+  const visible = CHOOSABLE_TOOL_APPROVALS.filter((tool) => choosableToolIsEnabled(tool, scopes));
+  if (visible.length === 0) return null;
 
   function setTool(tool: (typeof CHOOSABLE_TOOL_APPROVALS)[number], next: ApprovalPolicy) {
     onChange({ ...value, [tool]: next });
@@ -34,17 +30,15 @@ export function ToolApprovalHints({
 
   return (
     <fieldset className="space-y-2">
-      <legend className="text-sm font-medium">送信・確定を人が見るか</legend>
+      <legend className="text-sm font-medium">人が見る行為</legend>
       <p className="text-xs muted leading-relaxed">
-        初期値は毎回人が見ます。社員全体がリスクベースでも、ここを変えなければ送信と確定は止まります。
+        初期値は毎回人が見ます。警告を承諾すれば自動にもできます。責任は事業者にあります。
       </p>
-      {CHOOSABLE_TOOL_APPROVALS.map((tool) => {
-        if (tool === "mail.send" && !showSend) return null;
-        if (tool === "calendar.confirm" && !showConfirm) return null;
+      {visible.map((tool) => {
         const current = value[tool] === "auto" || value[tool] === "risk_based" ? value[tool] : "always_human";
         return (
           <label key={tool} className="block text-sm">
-            <span className="muted">{TOOL_LABELS[tool]}</span>
+            <span className="muted">{CHOOSABLE_TOOL_LABELS[tool]}</span>
             <select
               className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm"
               value={current}

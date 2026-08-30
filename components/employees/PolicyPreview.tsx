@@ -8,6 +8,7 @@ import type {
   EmployeeScope,
   PostingAs,
   SodVerdict,
+  SodWarnPolicy,
 } from "@/lib/types";
 
 const TONE_CHIP: Record<string, string> = {
@@ -26,6 +27,7 @@ export function PolicyPreview({
   postingAs,
   slackLinked,
   toolApprovalDefaults,
+  sodWarnPolicy,
 }: {
   scopes: EmployeeScope[];
   allowedPurposes?: string[];
@@ -35,6 +37,7 @@ export function PolicyPreview({
   postingAs?: PostingAs | null;
   slackLinked?: boolean;
   toolApprovalDefaults?: Record<string, ApprovalPolicy | "deny"> | null;
+  sodWarnPolicy?: SodWarnPolicy | null;
 }) {
   const rows = useMemo(
     () =>
@@ -47,8 +50,9 @@ export function PolicyPreview({
         postingAs,
         slackLinked,
         toolApprovalDefaults,
+        sodWarnPolicy,
       }),
-    [scopes, allowedPurposes, approvalPolicy, liveSod, allowedAccounts, postingAs, slackLinked, toolApprovalDefaults]
+    [scopes, allowedPurposes, approvalPolicy, liveSod, allowedAccounts, postingAs, slackLinked, toolApprovalDefaults, sodWarnPolicy]
   );
   const danger = rows.some((row) => row.tone === "danger");
   const warn = rows.some((row) => row.tone === "warn");

@@ -6,6 +6,7 @@ import { appendAuditEvent, issueEmployee, runtimeModeLabel } from "@/lib/data";
 import { normalizeActionLimits } from "@/lib/action-gate";
 import { evaluateSod } from "@/lib/employees/sod";
 import { sodAckRequired } from "@/lib/employees/sod-override";
+import { getOrgSodWarnPolicy } from "@/lib/data";
 import { normalizeToolApprovalDefaults } from "@/lib/employees/approval-presets";
 import { normalizeAllowedAccounts } from "@/lib/employees/allowed-accounts";
 import { ALL_SCOPES } from "@/lib/employees/policy-draft";
@@ -78,11 +79,11 @@ export async function POST(req: Request) {
   const spend = hasOrder ? normalizeSpendLimits(body.spend ?? {}) : null;
   const allowedAccounts = normalizeAllowedAccounts(body.allowedAccounts);
   const actionLimits = normalizeActionLimits(body.actionLimits);
-  const sodVerdict = evaluateSod(scopes);
   const requestedApprovalPolicy = body.approvalPolicy || "risk_based";
   const toolApprovalDefaults = normalizeToolApprovalDefaults(body.toolApprovalDefaults);
+  const orgId = await getCurrentOrgId();
+  const sodVerdict = evaluateSod(scopes, await getOrgSodWarnPolicy(orgId));
   if (
-    sodVerdict.level !== "force_human" &&
     sodAckRequired({
       verdict: sodVerdict,
       requested: requestedApprovalPolicy,
@@ -97,7 +98,6 @@ export async function POST(req: Request) {
   const expiresAt = new Date(
     Date.now() + expiresInDays * 86400000
   ).toISOString();
-  const orgId = await getCurrentOrgId();
 
   const billingGate = await assertBillingAllows(orgId, "hire");
   if (!billingGate.ok) return billingGate.response;
@@ -158,7 +158,13 @@ export async function POST(req: Request) {
         action: "employee.sod_override",
         purpose: null,
         summary: "権限集中の警告を確認して発行",
-        metadata: { domains: sodVerdict.domains, actor: gate.actor.email },
+        metadata: {
+        acknowledged: true,
+        domains: sodVerdict.domains,
+        approvalPolicy: result.employee.approvalPolicy,
+        toolApprovalDefaults: result.employee.toolApprovalDefaults,
+        actor: gate.actor.email,
+      },
       });
     }
 

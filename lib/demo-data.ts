@@ -22,6 +22,9 @@ export const DEMO_ORG = {
   trialEndsAt: new Date(Date.now() + 14 * 86400000).toISOString(),
   /** Optional partner code (AIC-XXXX); demo memory only. */
   referralCode: null as string | null,
+  sodWarnPolicy: {
+    domains: ["comm_external", "money", "destructive", "commit"],
+  } as { domains: Array<"comm_external" | "money" | "destructive" | "commit"> },
 };
 
 export const DEMO_EMPLOYEES: Employee[] = [
@@ -46,7 +49,7 @@ export const DEMO_EMPLOYEES: Employee[] = [
     ],
     allowedPurposes: ["sales.outreach", "commerce.quote"],
     approvalPolicy: "always_human",
-    sodLevel: "force_human",
+    sodLevel: "warn",
     actionLimits: { "mail.send": { perDay: 20, perMonth: 300 }, "calendar.confirm": { perDay: 8 } },
     managerId: "mem_1",
     voice: { ...POLITE_VOICE, forbidden: [...POLITE_VOICE.forbidden] },

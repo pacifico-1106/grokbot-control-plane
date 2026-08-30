@@ -27,7 +27,7 @@ import {
 } from "@/lib/employees/policy-draft";
 import { sanitizePurposes } from "@/lib/employees/purposes";
 import { DEFAULT_SPEND_LIMITS } from "@/lib/spend-gate";
-import { evaluateSod, isSendConfirmSodWarn, sodNeedsOperatorAck } from "@/lib/employees/sod";
+import { evaluateSod, isComboSodWarn, sodNeedsOperatorAck } from "@/lib/employees/sod";
 import { defaultVoice, normalizeVoice } from "@/lib/employees/voice";
 import { defaultProjectAccess, normalizeProjectAccess } from "@/lib/employees/project-access";
 import { policyErrorMessage } from "@/lib/employees/policy-errors";
@@ -43,6 +43,7 @@ import type {
   OrgMember,
   OrgProject,
   PostingAs,
+  SodWarnPolicy,
   SpendLimits,
 } from "@/lib/types";
 
@@ -59,7 +60,15 @@ function emptySpend(): SpendLimits {
   return { ...DEFAULT_SPEND_LIMITS };
 }
 
-export function HireEmployeeClient({ members = [], projects = [] }: { members?: OrgMember[]; projects?: OrgProject[] }) {
+export function HireEmployeeClient({
+  members = [],
+  projects = [],
+  sodWarnPolicy = null,
+}: {
+  members?: OrgMember[];
+  projects?: OrgProject[];
+  sodWarnPolicy?: SodWarnPolicy | null;
+}) {
   const [step, setStep] = useState<Step>("describe");
   const [managerId, setManagerId] = useState<string | null>(null);
   const [voice, setVoice] = useState<EmployeeVoice>(defaultVoice());
@@ -108,9 +117,9 @@ export function HireEmployeeClient({ members = [], projects = [] }: { members?: 
   const purposeList = purposes;
 
   const hasOrderScope = scopes.includes("commerce:order");
-  const liveSod = useMemo(() => evaluateSod(scopes), [scopes]);
-  const sendConfirmWarn = isSendConfirmSodWarn(liveSod);
-  const needsSodAck = sodNeedsOperatorAck(liveSod);
+  const liveSod = useMemo(() => evaluateSod(scopes, sodWarnPolicy), [scopes, sodWarnPolicy]);
+  const comboWarn = isComboSodWarn(liveSod);
+  const needsSodAck = sodNeedsOperatorAck(liveSod) && approvalPolicy !== "always_human";
 
   function applyDraft(d: EmployeePolicyDraft) {
     setDraft(d);
@@ -445,39 +454,29 @@ export function HireEmployeeClient({ members = [], projects = [] }: { members?: 
 
           {liveSod.level !== "ok" ? (
             <div
-              className={`rounded-xl border p-4 ${liveSod.level === "force_human" ? "border-[color-mix(in_oklab,var(--danger)_48%,var(--border))]" : "border-[color-mix(in_oklab,var(--warn)_48%,var(--border))]"}`}
+              className="rounded-xl border p-4 border-[color-mix(in_oklab,var(--warn)_48%,var(--border))]"
               role="alert"
             >
               <div className="flex flex-wrap items-center gap-2">
-                <span className={`chip ${liveSod.level === "force_human" ? "chip-danger" : "chip-warn"}`}>
-                  {liveSod.level === "force_human"
-                    ? "職務分離が必要"
-                    : sendConfirmWarn
-                      ? "送信と確定の同居"
-                      : "ブラウザ権限に注意"}
+                <span className="chip chip-warn">
+                  {comboWarn ? "危ない組み合わせ" : "ブラウザ権限に注意"}
                 </span>
                 <span className="text-xs muted">
                   {liveSod.domains.map((domain) => DOMAIN_LABELS[domain]).join(" / ")}
                 </span>
               </div>
               <p className="mt-3 text-sm leading-relaxed muted">
-                {liveSod.level === "force_human"
+                {comboWarn
                   ? sodOverrideAcknowledged
-                    ? "警告を確認しました。承認ポリシーは選べます。確定操作（送信・発注・日程確定）は今どおり人が止めます。社員全体の常時承認だけ外します。"
-                    : "複数の高リスク領域を持つため、警告を確認するまで発行できません。分けると下書きや提案を自動化できます。"
-                  : sendConfirmWarn
-                    ? sodOverrideAcknowledged
-                      ? "警告を確認しました。責任は事業者にあります。社内Slackは承認設定に従います。送信と確定の初期値は人が止めます。"
-                      : "メール送信と日程確定が同居しています。発行には警告の承諾が必要です。責任は事業者にあります。"
-                    : "ブラウザ操作は共有セッションで動きます。利用できるアカウントを次の画面で必ず限定してください。"}
+                    ? "警告を確認しました。責任は事業者にあります。警告と承諾だけで、行為は止めません。完全自動化できます。"
+                    : "高リスク権限を同時に持たせています。発行には警告の承諾が必要です。責任は事業者にあります。"
+                  : "ブラウザ操作は共有セッションで動きます。利用できるアカウントを次の画面で必ず限定してください。"}
               </p>
-              {needsSodAck ? (
+              {comboWarn ? (
                 <div className="mt-3 flex flex-col sm:flex-row gap-2">
-                  {liveSod.level === "force_human" ? (
-                    <button type="button" className="btn btn-primary text-xs" onClick={splitCurrentPermissions}>
-                      権限を分ける（推奨）
-                    </button>
-                  ) : null}
+                  <button type="button" className="btn btn-primary text-xs" onClick={splitCurrentPermissions}>
+                    権限を分ける（推奨）
+                  </button>
                   <button
                     type="button"
                     className="btn btn-ghost text-xs"
@@ -583,7 +582,6 @@ export function HireEmployeeClient({ members = [], projects = [] }: { members?: 
                   name="hire-approval-policy"
                   className="mt-1"
                   checked={approvalPolicy === choice.value}
-                  disabled={needsSodAck && !sodOverrideAcknowledged}
                   onChange={() => setApprovalPolicy(choice.value)}
                 />
                 <span>
@@ -594,9 +592,7 @@ export function HireEmployeeClient({ members = [], projects = [] }: { members?: 
             ))}
             {needsSodAck && !sodOverrideAcknowledged ? (
               <span className="block text-xs text-[var(--warn)]">
-                {sendConfirmWarn
-                  ? "警告を確認すると選べます。責任は事業者にあります。"
-                  : "警告を確認すると選べます。確認しない場合は全件、人が見ます。"}
+                警告を確認してから進めます。責任は事業者にあります。
               </span>
             ) : null}
           </fieldset>
@@ -647,6 +643,7 @@ export function HireEmployeeClient({ members = [], projects = [] }: { members?: 
             postingAs={postingAs}
             slackLinked={false}
             toolApprovalDefaults={toolApprovalDefaults}
+            sodWarnPolicy={sodWarnPolicy}
           />
 
           <ManagerPicker members={members} value={managerId} onChange={setManagerId} />
@@ -849,6 +846,7 @@ export function HireEmployeeClient({ members = [], projects = [] }: { members?: 
             postingAs={postingAs}
             slackLinked={false}
             toolApprovalDefaults={toolApprovalDefaults}
+            sodWarnPolicy={sodWarnPolicy}
           />
 
           <div className="flex flex-col sm:flex-row flex-wrap gap-2">

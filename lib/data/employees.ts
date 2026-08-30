@@ -9,6 +9,7 @@ import { isDemoMode } from "../mode";
 import { createSupabaseAdminClient } from "../supabase";
 import { mapEmployeeRow } from "./mappers";
 import { evaluateSod } from "@/lib/employees/sod";
+import { getOrgSodWarnPolicy } from "@/lib/data/org-context";
 import { resolveApprovalPolicy } from "@/lib/employees/sod-override";
 import { normalizeActionLimits } from "@/lib/action-gate";
 import { defaultVoice, normalizeVoice } from "@/lib/employees/voice";
@@ -140,7 +141,7 @@ export type IssueEmployeeResult = {
 export async function issueEmployee(
   input: IssueEmployeeInput
 ): Promise<IssueEmployeeResult> {
-  const sodVerdict = evaluateSod(input.scopes);
+  const sodVerdict = evaluateSod(input.scopes, await getOrgSodWarnPolicy(input.orgId));
   const effectivePolicy = resolveApprovalPolicy({
     verdict: sodVerdict,
     requested: input.approvalPolicy,
@@ -177,17 +178,6 @@ export async function issueEmployee(
       createdAt: new Date().toISOString(),
     };
     addRuntimeEmployee(employee, input.auditSummary);
-    if (sodVerdict.level === "force_human" && !input.sodOverrideAcknowledged) {
-      await appendAuditEvent({
-        orgId: employee.orgId,
-        employeeId,
-        credentialId,
-        action: "employee.sod_forced",
-        purpose: null,
-        summary: `${employee.displayName} を全件承認に固定`,
-        metadata: { domains: sodVerdict.domains, previousPolicy: input.approvalPolicy },
-      });
-    }
     const { binding, generation } = rotateCredential(
       employeeId,
       DEMO_ORG.id,
@@ -301,18 +291,6 @@ export async function issueEmployee(
     ? mapBindingRow(bindingRow as Record<string, unknown>)
     : ensureBindingRow(employeeId, orgId);
 
-  if (sodVerdict.level === "force_human" && !input.sodOverrideAcknowledged) {
-    await appendAuditEvent({
-      orgId,
-      employeeId,
-      credentialId,
-      action: "employee.sod_forced",
-      purpose: null,
-      summary: `${employee.displayName} を全件承認に固定`,
-      metadata: { domains: sodVerdict.domains, previousPolicy: input.approvalPolicy },
-    });
-  }
-
   return {
     employee,
     credentialId,
@@ -340,7 +318,7 @@ export async function updateEmployeePolicy(input: {
   displayName?: string;
   roleLabel?: string;
 }): Promise<Employee | null> {
-  const verdict = evaluateSod(input.scopes);
+  const verdict = evaluateSod(input.scopes, await getOrgSodWarnPolicy(input.orgId));
   const effectivePolicy = resolveApprovalPolicy({
     verdict,
     requested: input.approvalPolicy,
@@ -419,17 +397,6 @@ export async function updateEmployeePolicy(input: {
     .eq("employee_id", input.employeeId)
     .eq("org_id", input.orgId)
     .is("revoked_at", null);
-  if (verdict.level === "force_human" && !input.sodOverrideAcknowledged) {
-    await appendAuditEvent({
-      orgId: input.orgId,
-      employeeId: input.employeeId,
-      credentialId: null,
-      action: "employee.sod_forced",
-      purpose: null,
-      summary: "権限更新により全件承認へ固定",
-      metadata: { domains: verdict.domains, previousPolicy: input.approvalPolicy },
-    });
-  }
   return mapEmployeeRow(data as Record<string, unknown>);
 }
 

@@ -13,7 +13,7 @@ import {
   HIRE_APPROVAL_CHOICES,
   SCOPE_LABELS,
 } from "@/lib/employees/policy-draft";
-import { evaluateSod, isSendConfirmSodWarn, sodNeedsOperatorAck } from "@/lib/employees/sod";
+import { evaluateSod, isComboSodWarn, sodNeedsOperatorAck } from "@/lib/employees/sod";
 import { policyErrorMessage } from "@/lib/employees/policy-errors";
 import { DEFAULT_SPEND_LIMITS } from "@/lib/spend-gate";
 import type {
@@ -22,6 +22,7 @@ import type {
   ApprovalPolicy,
   Employee,
   EmployeeScope,
+  SodWarnPolicy,
   SpendLimits,
 } from "@/lib/types";
 
@@ -33,10 +34,12 @@ export function EmployeePolicyForm({
   employee,
   slackLinked = false,
   disabled = false,
+  sodWarnPolicy = null,
 }: {
   employee: Employee;
   slackLinked?: boolean;
   disabled?: boolean;
+  sodWarnPolicy?: SodWarnPolicy | null;
 }) {
   const router = useRouter();
   const [scopes, setScopes] = useState<EmployeeScope[]>(employee.scopes ?? []);
@@ -63,9 +66,8 @@ export function EmployeePolicyForm({
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
 
-  const liveSod = useMemo(() => evaluateSod(scopes), [scopes]);
-  const forceHuman = liveSod.level === "force_human";
-  const sendConfirmWarn = isSendConfirmSodWarn(liveSod);
+  const liveSod = useMemo(() => evaluateSod(scopes, sodWarnPolicy), [scopes, sodWarnPolicy]);
+  const comboWarn = isComboSodWarn(liveSod);
   const ackNeeded = sodNeedsOperatorAck(liveSod) && approvalPolicy !== "always_human";
   const locked = busy || disabled;
   const hasOrderScope = scopes.includes("commerce:order");
@@ -302,18 +304,16 @@ export function EmployeePolicyForm({
         </p>
       ) : null}
 
-      {forceHuman || sendConfirmWarn ? (
+      {comboWarn ? (
         <div
-          className={`rounded-xl border p-3 ${forceHuman ? "border-[color-mix(in_oklab,var(--danger)_48%,var(--border))]" : "border-[color-mix(in_oklab,var(--warn)_48%,var(--border))]"}`}
+          className="rounded-xl border p-3 border-[color-mix(in_oklab,var(--warn)_48%,var(--border))]"
           role="alert"
         >
           <p className="text-sm leading-relaxed muted">
-            {sendConfirmWarn
-              ? "メール送信と日程確定が同居しています。保存には警告の承諾が必要です。責任は事業者にあります。"
-              : "複数の高リスク領域を持つため、警告を確認しないと全件承認のまま保存されます。分けると下書きや提案を自動化できます。"}
+            高リスク権限を同時に持たせています。保存には警告の承諾が必要です。責任は事業者にあります。
           </p>
           <p className="mt-2 text-xs leading-relaxed muted">
-            確定操作（送信・発注・日程確定）は今どおり人が止めます。社員全体の常時承認だけ外します。社内Slackは承認設定に従います。
+            警告と承諾だけで、行為は止めません。完全自動化できます。
           </p>
         </div>
       ) : null}
@@ -363,6 +363,7 @@ export function EmployeePolicyForm({
         postingAs={employee.postingAs || "bot"}
         slackLinked={slackLinked}
         toolApprovalDefaults={toolApprovalDefaults}
+        sodWarnPolicy={sodWarnPolicy}
       />
 
       {ackNeeded ? (
@@ -378,9 +379,7 @@ export function EmployeePolicyForm({
             <span className="font-medium">警告を確認した。この権限のまま保存する</span>
             {!sodAck ? (
               <span className="block text-xs text-[var(--warn)] mt-0.5">
-                {sendConfirmWarn
-                  ? "確認しないと保存できません。責任は事業者にあります。"
-                  : "確認しないと保存できません（全件承認のままロックされます）。"}
+                確認しないと保存できません。責任は事業者にあります。
               </span>
             ) : null}
           </span>
@@ -388,7 +387,7 @@ export function EmployeePolicyForm({
       ) : null}
 
       <p className="text-xs muted leading-relaxed">
-        確定操作（送信・発注・日程確定）は今どおり人が止めます。社員全体の常時承認だけ外します。
+        人が見る行為は下で選べます。責任は事業者にあります。
       </p>
 
       <button

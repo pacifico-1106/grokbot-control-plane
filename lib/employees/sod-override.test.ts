@@ -6,21 +6,21 @@ const mixed = evaluateSod(["mail:send", "commerce:order"]);
 const safe = evaluateSod(["mail:draft", "files:read"]);
 
 describe("resolveApprovalPolicy", () => {
-  test("force_human without ack stays always_human (fail-closed)", () => {
-    expect(mixed.level).toBe("force_human");
+  test("SoD never rewrites requested policy (no silent always_human)", () => {
+    expect(mixed.level).toBe("warn");
     expect(
       resolveApprovalPolicy({ verdict: mixed, requested: "risk_based" })
-    ).toBe("always_human");
+    ).toBe("risk_based");
     expect(
       resolveApprovalPolicy({
         verdict: mixed,
         requested: "auto",
         acknowledged: false,
       })
-    ).toBe("always_human");
+    ).toBe("auto");
   });
 
-  test("force_human with ack keeps the requested policy", () => {
+  test("after ack, risk_based is kept", () => {
     expect(
       resolveApprovalPolicy({
         verdict: mixed,
@@ -59,7 +59,7 @@ describe("resolveApprovalPolicy", () => {
 });
 
 describe("sodAckRequired", () => {
-  test("send+confirm warn requires ack and never rewrites policy", () => {
+  test("combo warn requires ack and never rewrites policy", () => {
     const combo = evaluateSod(["mail:send", "calendar:confirm"]);
     expect(combo.level).toBe("warn");
     expect(

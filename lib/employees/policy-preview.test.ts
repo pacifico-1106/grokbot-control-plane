@@ -53,19 +53,19 @@ describe("buildPolicyPreview", () => {
     const forced = buildPolicyPreview({
       scopes: ["slack:post"],
       approvalPolicy: "risk_based",
-      liveSod: { level: "force_human" },
+      liveSod: { level: "force_human", domains: [] },
     });
     expect(forced.find((row) => row.id === "slack")?.value).toBe(MENTION_REPLY_AUTO);
     const human = buildPolicyPreview({
       scopes: ["slack:post"],
       approvalPolicy: "always_human",
-      liveSod: { level: "ok" },
+      liveSod: { level: "ok", domains: [] },
     });
     expect(human.find((row) => row.id === "slack")?.value).toBe(MENTION_REPLY_WAIT);
     const ok = buildPolicyPreview({
       scopes: ["slack:post"],
       approvalPolicy: "risk_based",
-      liveSod: { level: "ok" },
+      liveSod: { level: "ok", domains: [] },
     });
     expect(ok.find((row) => row.id === "slack")?.value).toBe(MENTION_REPLY_AUTO);
   });
@@ -83,23 +83,39 @@ describe("buildPolicyPreview", () => {
       tone: "danger",
     });
     expect(byId.calendar.value).toBe("必ず人が見る");
-    expect(byId.order.value).toBe("必ず人が見る · お金が動く");
+    expect(byId.order.value).toBe("必ず人が見る");
     expect(byId.order.tone).toBe("danger");
+    expect(byId.combo.value).toContain("責任は事業者");
   });
 
-  test("per-tool risk_based / auto shows on mail and calendar", () => {
+  test("per-tool risk_based / auto shows on mail, calendar, and order", () => {
     const rows = buildPolicyPreview({
-      scopes: ["mail:send", "calendar:confirm", "slack:post"],
+      scopes: ["mail:send", "calendar:confirm", "commerce:order", "slack:post"],
       approvalPolicy: "risk_based",
       toolApprovalDefaults: {
         "mail.send": "risk_based",
         "calendar.confirm": "auto",
+        "commerce.order": "auto",
       },
     });
     const byId = Object.fromEntries(rows.map((row) => [row.id, row]));
     expect(byId.mail.value).toBe("危ないときだけ人が見る");
     expect(byId.calendar.value).toBe("自動");
+    expect(byId.order.value).toBe("自動");
     expect(byId.slack.value).toBe(MENTION_REPLY_AUTO);
+    expect(byId.combo.value).toContain("責任は事業者");
+  });
+
+  test("mention reply stays auto under risk_based + slack:post even with money/destructive", () => {
+    const scopes = ["slack:post", "commerce:order", "files:write"] as const;
+    expect(evaluateSod([...scopes]).level).toBe("warn");
+    const rows = buildPolicyPreview({
+      scopes,
+      approvalPolicy: "risk_based",
+      liveSod: evaluateSod([...scopes]),
+    });
+    expect(rows.find((row) => row.id === "slack")?.value).toBe(MENTION_REPLY_AUTO);
+    expect(rows.find((row) => row.id === "combo")?.value).toBe(SOD_OPERATOR_RESPONSIBILITY_JA);
   });
 
   test("browser without accounts does not run; with accounts warns shared session", () => {

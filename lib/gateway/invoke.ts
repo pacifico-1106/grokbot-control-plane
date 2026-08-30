@@ -19,6 +19,7 @@ import {
   getEmployeeById,
   runtimeModeLabel,
   incrementActionCounter,
+  getOrgSodWarnPolicy,
 } from "@/lib/data";
 import {
   isBillableConfirmCompletion,
@@ -60,7 +61,6 @@ import {
   findForbiddenPhrase,
   outboundConversationText,
 } from "@/lib/employees/voice";
-import { DOMAIN_LABELS } from "@/lib/gateway/domains";
 import type { Employee, EgressVerdict, GatewayInvokeRequest } from "@/lib/types";
 import {
   CrossProductEventError,
@@ -107,7 +107,7 @@ async function evaluateInvokeEgress(input: {
  * Fail-closed tool invoke (P0 contract) — shared by Gateway HTTP + remote MCP.
  * - purpose + jobId (or job_id) required
  * - unregistered tools rejected
- * - confirm / send / order default needs_approval; per-tool hints can loosen mail.send / calendar.confirm
+ * - confirm / send / order default needs_approval; per-tool hints can loosen mail.send / calendar.confirm / commerce.order / files.write / browser.use
  * - browser.use: allowedAccounts missing/mismatch → fail-closed (C5)
  * - AgentMail tools are reserved (P0.5) — no live send
  * MCP must call this path; never a softer MCP-only branch.
@@ -524,12 +524,9 @@ export async function runGatewayInvoke(
     );
   }
 
-  const sodVerdict = evaluateSod(employee.scopes);
-  const sodBlanket =
-    sodVerdict.level === "force_human" && employee.approvalPolicy === "always_human";
-  const sodSummary = sodBlanket
-    ? `⚠ 権限混在社員（${sodVerdict.domains.map((domain) => DOMAIN_LABELS[domain]).join(" + ")}）のため全件承認`
-    : undefined;
+  const orgSodPolicy = await getOrgSodWarnPolicy(orgId || employee.orgId);
+  const sodVerdict = evaluateSod(employee.scopes, orgSodPolicy);
+
 
   // AgentMail: P0.5 reservation only — never live-send in P0.
   if (toolDef.reserved) {
@@ -801,16 +798,60 @@ export async function runGatewayInvoke(
     }
   }
 
-  // confirm / send / order (and force flags) → always needs_approval
-  // unless a matching prior approval unlocks execution.
-  // SoD blanket queues only when approvalPolicy is always_human.
-  // mayAuto tools (comm.reply / slack.post) honor employee policy + egress;
-  // sibling mail.send / calendar.confirm scopes do not force them.
+  // confirm / send / order default needs_approval unless a per-tool hint
+  // loosens them. SoD warn never forces invoke. Honor employee.approvalPolicy
+  // + toolApprovalDefaults + egress / spend limits only.
+  const perToolHuman = toolRequiresHumanApproval(toolDef, employee.toolApprovalDefaults);
+  const toolHint = employee.toolApprovalDefaults?.[toolDef.id];
+  const amountJpy =
+    tool === "commerce.order"
+      ? body.amountJpy == null
+        ? Number.NaN
+        : Number(body.amountJpy)
+      : Number.NaN;
+  let spend =
+    tool === "commerce.order"
+      ? evaluateSpend({
+          amountJpy,
+          limits: employee.spend,
+          approvalPolicy:
+            employee.approvalPolicy === "always_human"
+              ? "always_human"
+              : toolHint === "auto"
+                ? "auto"
+                : toolHint === "risk_based"
+                  ? "risk_based"
+                  : perToolHuman
+                    ? "always_human"
+                    : employee.approvalPolicy,
+          isFirstOrder: body.isFirstOrder,
+          spentTodayJpy: body.spentTodayJpy,
+          spentThisMonthJpy: body.spentThisMonthJpy,
+        })
+      : null;
+  if (spend?.decision === "deny") {
+    return jsonResult(
+      {
+        ok: false,
+        code: "deny",
+        error: spend.reason,
+        message: spend.message,
+        needs_approval: false,
+        spend,
+        employeeId,
+        tool,
+        purpose,
+        jobId,
+      },
+      403
+    );
+  }
+
   const forceApproval =
-    toolRequiresHumanApproval(toolDef, employee.toolApprovalDefaults) ||
+    perToolHuman ||
     employee.approvalPolicy === "always_human" ||
-    sodBlanket ||
-    actionLimit.decision === "needs_approval";
+    actionLimit.decision === "needs_approval" ||
+    spend?.decision === "needs_approval";
 
   if (
     forceApproval &&
@@ -829,36 +870,7 @@ export async function runGatewayInvoke(
         metadata: { tool, jobId, limit: actionLimit.limit, counts: actionCounts },
       });
     }
-    // commerce.order still runs spend gate for richer reason codes.
     if (tool === "commerce.order") {
-      const amountJpy =
-        body.amountJpy == null ? Number.NaN : Number(body.amountJpy);
-      const spend = evaluateSpend({
-        amountJpy,
-        limits: employee.spend,
-        approvalPolicy: "always_human",
-        isFirstOrder: body.isFirstOrder,
-        spentTodayJpy: body.spentTodayJpy,
-        spentThisMonthJpy: body.spentThisMonthJpy,
-      });
-      if (spend.decision === "deny") {
-        return jsonResult(
-
-          {
-            ok: false,
-            code: "deny",
-            error: spend.reason,
-            message: spend.message,
-            needs_approval: false,
-            spend,
-            employeeId,
-            tool,
-            purpose,
-            jobId,
-          },
-      403
-    );
-      }
       return createNeedsApprovalResponse({
         employeeId,
         orgId: orgId || employee.orgId,
@@ -870,10 +882,9 @@ export async function runGatewayInvoke(
         jobId,
         risk: "high",
         amountJpy: Number.isFinite(amountJpy) ? amountJpy : null,
-        message: actionLimit.decision === "needs_approval" ? actionLimit.message : spend.message,
+        message: actionLimit.decision === "needs_approval" ? actionLimit.message : (spend?.message ?? "発注には人の確認が必要です"),
         parentApprovalId: parentApprovalId || null,
         metadata: { ...invokeMetadata, sodVerdict, actionLimit, egress, managerId },
-        summaryPrefix: sodSummary,
         body,
         egress,
         extra: { spend, actionLimit, sodVerdict, egress, managerId, ...(voice ? { voice } : {}), toolKind: toolDef.kind, approvalPolicy: employee.approvalPolicy },
@@ -889,18 +900,15 @@ export async function runGatewayInvoke(
       tool,
       purpose,
       jobId,
-      risk: sodBlanket ? "high" : inferRiskForTool(tool),
+      risk: inferRiskForTool(tool),
       message:
-        sodBlanket
-          ? sodVerdict.reason
-          : actionLimit.decision === "needs_approval"
+        actionLimit.decision === "needs_approval"
             ? actionLimit.message
             : tool === "browser.use"
           ? `${tool} requires human approval (always_human). allowedAccounts checked; live browser identity remains partial.`
           : `${tool} requires human approval (always_human default for confirm/send/order)`,
       parentApprovalId: parentApprovalId || null,
       metadata: { ...invokeMetadata, sodVerdict, actionLimit, egress, managerId },
-      summaryPrefix: sodSummary,
       body,
       egress,
       extra: {
@@ -1070,6 +1078,40 @@ export async function runGatewayInvoke(
       billable: true,
       recorded: true,
     };
+  }
+
+  if (!priorApprovalOk) {
+    const destCtx = parseConversationContext(body, orgId || employee.orgId);
+    const deliveryChannel =
+      conversationDelivery && "channel" in conversationDelivery
+        ? conversationDelivery.channel
+        : undefined;
+    const destination =
+      destCtx?.slackChannelId ||
+      destCtx?.email ||
+      destCtx?.slackUserId ||
+      destCtx?.phone ||
+      destCtx?.lineId ||
+      (typeof body.args?.to === "string" ? body.args.to : null) ||
+      deliveryChannel ||
+      null;
+    await appendAuditEvent({
+      orgId: orgId || employee.orgId,
+      employeeId,
+      credentialId: input.credentialId || employee.credentialId,
+      action: "tool.invoke",
+      purpose,
+      summary: `${tool} を自動実行`,
+      metadata: {
+        tool,
+        purpose,
+        destination,
+        employeeId,
+        acknowledged: true,
+        auto: true,
+        approvalPolicy: employee.approvalPolicy,
+      },
+    });
   }
 
   return jsonResult({

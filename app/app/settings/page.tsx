@@ -3,8 +3,10 @@ import { ConversationAdaptersClient } from "@/components/ConversationAdaptersCli
 import { NotificationChannelsClient } from "@/components/NotificationChannelsClient";
 import { PartyDirectoryClient } from "@/components/PartyDirectoryClient";
 import { ProjectsClient } from "@/components/settings/ProjectsClient";
+import { SodWarnPolicyClient } from "@/components/settings/SodWarnPolicyClient";
 import { getSessionContext } from "@/lib/auth/session";
 import {
+  getOrgSodWarnPolicy,
   listConversationAdapters,
   listInformationAssets,
   listNotificationChannels,
@@ -24,6 +26,7 @@ export default async function SettingsPage() {
   const orgChannels = canManage ? await listOrgChannels(session.orgId) : [];
   const projects = canManage ? await listOrgProjects(session.orgId) : [];
   const assets = canManage ? await listInformationAssets(session.orgId) : [];
+  const sodWarnPolicy = canManage ? await getOrgSodWarnPolicy(session.orgId) : null;
   return (
     <AppShell
       title="会社のつながり"
@@ -60,6 +63,7 @@ export default async function SettingsPage() {
             認証情報は暗号化して保存し、画面には再表示しません。変更とテスト送信は記録に残します。
           </p>
           <PartyDirectoryClient initialParties={parties} initialChannels={orgChannels} />
+          {sodWarnPolicy ? <SodWarnPolicyClient initialPolicy={sodWarnPolicy} /> : null}
           <ProjectsClient initialProjects={projects} initialAssets={assets} />
         </>
       ) : (

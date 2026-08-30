@@ -4,17 +4,16 @@ import type { ApprovalPolicy, EmployeeScope, SodVerdict } from "@/lib/types";
 type VerdictForAck = Pick<SodVerdict, "level"> & Partial<Pick<SodVerdict, "domains">>;
 
 /**
- * force_human without ack stays fail-closed (always_human).
- * send+confirm warn never rewrites — PATCH/hire must collect ack instead.
+ * SoD never rewrites the requested policy. Unacked warn is blocked by
+ * sod_ack_required at PATCH/hire — not by a silent always_human lock.
  */
 export function resolveApprovalPolicy(input: {
   verdict: Pick<SodVerdict, "level">;
   requested: ApprovalPolicy;
   acknowledged?: boolean;
 }): ApprovalPolicy {
-  if (input.verdict.level === "force_human" && !input.acknowledged) {
-    return "always_human";
-  }
+  void input.verdict;
+  void input.acknowledged;
   return input.requested;
 }
 

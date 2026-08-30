@@ -3,7 +3,7 @@ import type { ApprovalPolicy } from "@/lib/types";
 /**
  * Gateway tool allowlist (P0 contract — Kimura + Ando A).
  * Unregistered tools are rejected fail-closed.
- * confirm / send default needs_approval; mail.send / calendar.confirm honor per-tool hints.
+ * confirm / send default needs_approval; choosable tools honor per-tool hints (mail.send, calendar.confirm, commerce.order, files.write, drive.share_external, browser.use).
  * propose / draft may auto under employee approvalPolicy.
  */
 
@@ -319,7 +319,7 @@ export function isAlwaysHumanTool(def: GatewayToolDef | string): boolean {
 
 
 /**
- * Per-tool hints can loosen mail.send / calendar.confirm.
+ * Per-tool hints can loosen choosable always-human tools (send / confirm / order / write / browser).
  * Audience-gated tools never force from the tool name; employee policy + egress decide.
  * Missing hints keep the strict always-human defaults.
  */
