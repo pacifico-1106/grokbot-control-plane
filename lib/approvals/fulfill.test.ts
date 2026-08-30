@@ -377,3 +377,124 @@ describe("approval invoke snapshot + fulfill", () => {
     expect(parseFulfillment(stored?.metadata)?.error).toBe("slack_not_in_channel");
   });
 });
+
+describe("sns.publish fulfill-on-approve", () => {
+  const savedX = process.env.X_USER_ACCESS_TOKEN;
+
+  afterEach(() => {
+    if (savedX === undefined) delete process.env.X_USER_ACCESS_TOKEN;
+    else process.env.X_USER_ACCESS_TOKEN = savedX;
+  });
+
+  async function queueSns(text = "八坂のSNS本文です。") {
+    const jobId = `job_sns_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    const queued = await runGatewayInvoke({
+      employeeId: "emp_sns",
+      credentialId: "cred_sns",
+      body: {
+        tool: "sns.publish",
+        purpose: "sns.publish",
+        jobId,
+        args: {
+          surface: "x",
+          text,
+          scheduledAt: "2026-09-01T09:00:00+09:00",
+        },
+      },
+    });
+    return { queued, jobId, text };
+  }
+
+  test("needs_approval stores artifact with 本文 / 媒体 / 公開予定", async () => {
+    const { queued, text } = await queueSns();
+    expect(queued.httpStatus).toBe(402);
+    expect(queued.body.needs_approval).toBe(true);
+    const approvalId = String(queued.body.approvalId || "");
+    const stored = await getApprovalById(approvalId, DEMO_ORG.id);
+    const snapshot = parseInvokeSnapshot(stored?.metadata);
+    expect(snapshot?.tool).toBe("sns.publish");
+    expect(snapshot?.args.surface).toBe("x");
+    expect(snapshot?.args.text).toBe(text);
+    expect(snapshot?.args.scheduledAt).toBe("2026-09-01T09:00:00+09:00");
+    const summary = String(stored?.summary || "");
+    expect(summary).toContain("媒体: X");
+    expect(summary).toContain("公開予定:");
+    expect(summary).toContain(text);
+  });
+
+  test("approve calls X official API, not Slack", async () => {
+    const { queued, text } = await queueSns();
+    const approvalId = String(queued.body.approvalId || "");
+    process.env.X_USER_ACCESS_TOKEN = "x-user-fulfill";
+    let url = "";
+    let slackCalls = 0;
+    globalThis.fetch = (async (input, init) => {
+      const href = String(input);
+      if (href.includes("chat.postMessage")) slackCalls += 1;
+      url = href;
+      const payload = JSON.parse(String(init?.body || "{}")) as Record<string, unknown>;
+      expect(payload.text).toBe(text);
+      return Response.json({ data: { id: "tweet_1" } });
+    }) as typeof fetch;
+    const approved = await resolveApproval(
+      approvalId,
+      "approved",
+      "ando@example.com",
+      DEMO_ORG.id
+    );
+    const fulfillment = await fulfillApprovedInvoke(approved!);
+    expect(slackCalls).toBe(0);
+    expect(url).toBe("https://api.x.com/2/tweets");
+    expect(fulfillment?.ok).toBe(true);
+    expect(fulfillment?.delivery).toBe("sns");
+    expect(fulfillment?.id).toBe("tweet_1");
+  });
+
+  test("missing adapter credentials records Japanese error; ticket stays approved", async () => {
+    const { queued } = await queueSns();
+    const approvalId = String(queued.body.approvalId || "");
+    delete process.env.X_USER_ACCESS_TOKEN;
+    delete process.env.X_BEARER_TOKEN;
+    let called = 0;
+    globalThis.fetch = (async () => {
+      called += 1;
+      return Response.json({ ok: false });
+    }) as typeof fetch;
+    const approved = await resolveApproval(
+      approvalId,
+      "approved",
+      "ando@example.com",
+      DEMO_ORG.id
+    );
+    const fulfillment = await fulfillApprovedInvoke(approved!);
+    expect(called).toBe(0);
+    expect(fulfillment?.ok).toBe(false);
+    expect(fulfillment?.error).toContain("認証情報が未設定");
+    const stored = await getApprovalById(approvalId, DEMO_ORG.id);
+    expect(stored?.status).toBe("approved");
+    expect(parseFulfillment(stored?.metadata)?.error).toContain("認証情報が未設定");
+  });
+
+  test("reject does not publish", async () => {
+    const { queued } = await queueSns();
+    const approvalId = String(queued.body.approvalId || "");
+    process.env.X_USER_ACCESS_TOKEN = "x-user-fulfill";
+    let called = 0;
+    globalThis.fetch = (async () => {
+      called += 1;
+      return Response.json({ data: { id: "nope" } });
+    }) as typeof fetch;
+    const rejected = await resolveApproval(
+      approvalId,
+      "rejected",
+      "ando@example.com",
+      DEMO_ORG.id
+    );
+    const skipped = await fulfillIfApproved(rejected!, "rejected");
+    expect(skipped).toBeNull();
+    expect(called).toBe(0);
+    const stored = await getApprovalById(approvalId, DEMO_ORG.id);
+    expect(stored?.status).toBe("rejected");
+    expect(parseFulfillment(stored?.metadata)).toBeNull();
+  });
+});

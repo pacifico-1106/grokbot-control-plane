@@ -3,7 +3,7 @@ import type { ApprovalPolicy } from "@/lib/types";
 /**
  * Gateway tool allowlist (P0 contract — Kimura + Ando A).
  * Unregistered tools are rejected fail-closed.
- * confirm / send default needs_approval; choosable tools honor per-tool hints (mail.send, calendar.confirm, commerce.order, files.write, drive.share_external, browser.use).
+ * confirm / send default needs_approval; choosable tools honor per-tool hints (mail.send, calendar.confirm, commerce.order, files.write, drive.share_external, browser.use, sns.publish).
  * propose / draft may auto under employee approvalPolicy.
  */
 
@@ -26,6 +26,7 @@ export type GatewayToolId =
   | "slack.post_external"
   | "comm.reply"
   | "comm.send"
+  | "sns.publish"
   | "drive.share_external"
   | "knowledge.search"
   | "approvals.request"
@@ -208,6 +209,14 @@ export const GATEWAY_TOOL_DEFS: Record<GatewayToolId, GatewayToolDef> = {
     forceNeedsApproval: false,
     mayAuto: true,
   },
+  "sns.publish": {
+    id: "sns.publish",
+    labelJa: "個人SNS投稿（X / note / LinkedIn / YouTube）",
+    kind: "send",
+    requiredScopes: ["sns:publish"],
+    forceNeedsApproval: true,
+    mayAuto: false,
+  },
   "drive.share_external": {
     id: "drive.share_external",
     labelJa: "Drive 社外共有リンク発行",
@@ -264,6 +273,8 @@ const ALIASES: Record<string, GatewayToolId> = {
   "comm:send": "comm.send",
   "comm.reply": "comm.reply",
   "comm.send": "comm.send",
+  "sns:publish": "sns.publish",
+  "sns.publish": "sns.publish",
   "drive:share_external": "drive.share_external",
   "knowledge:search": "knowledge.search",
   "approvals:request": "approvals.request",
@@ -297,6 +308,7 @@ const ALWAYS_HUMAN_TOOL_IDS = new Set<GatewayToolId>([
   "files.write",
   "browser.use",
   "agentmail.send",
+  "sns.publish",
 ]);
 
 const AUDIENCE_GATED_TOOL_IDS = new Set<GatewayToolId>([
@@ -315,6 +327,12 @@ export function isAudienceGatedTool(def: GatewayToolDef | string): boolean {
 export function isAlwaysHumanTool(def: GatewayToolDef | string): boolean {
   const id = typeof def === "string" ? def : def.id;
   return ALWAYS_HUMAN_TOOL_IDS.has(id as GatewayToolId);
+}
+
+/** Personal SNS posts are fulfill-on-approve, not Slack audience-gated. */
+export function isSnsPublishTool(def: GatewayToolDef | string): boolean {
+  const id = typeof def === "string" ? def : def.id;
+  return id === "sns.publish";
 }
 
 

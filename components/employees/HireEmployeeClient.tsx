@@ -52,6 +52,7 @@ const EXAMPLES = [
   "営業として見積メールの下書きを作り、送信前に必ず承認してほしい",
   "事務として請求書を確認し、社内ファイルを読むだけ",
   "購買で発注まで行うが、毎回人間の承認が必要",
+  "個人SNSとして、X・note・LinkedIn・YouTubeへの投稿は毎回人が見てから出す",
 ];
 
 type Step = "describe" | "draft" | "spend" | "issued";

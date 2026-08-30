@@ -27,6 +27,7 @@ export const SCOPE_DOMAINS: Record<EmployeeScope, RiskDomain> = {
   "commerce:order": "money",
   "slack:post": "safe",
   "slack:post_external": "comm_external",
+  "sns:publish": "comm_external",
   "drive:share_external": "comm_external",
   "knowledge:search": "safe",
   "approvals:request": "safe",

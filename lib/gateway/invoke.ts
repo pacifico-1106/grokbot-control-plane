@@ -38,6 +38,7 @@ import {
   employeeHasToolScope,
   isAudienceGatedTool,
   isConfirmClassTool,
+  isSnsPublishTool,
   toolRequiresHumanApproval,
   resolveGatewayTool,
 } from "@/lib/gateway/tools";
@@ -45,9 +46,11 @@ import {
   looksLikeSlackTs,
   postConversationMessage,
 } from "@/lib/gateway/adapters/slack";
+import { publishSnsPost, type SnsPublishResult } from "@/lib/gateway/adapters/sns";
 import {
   buildInvokeSnapshot,
   conversationDeliveryFromFulfillment,
+  snsDeliveryFromFulfillment,
   type ConversationDelivery,
 } from "@/lib/approvals/fulfill";
 import { evaluateAllowedAccountsForBrowser } from "@/lib/employees/allowed-accounts";
@@ -1051,6 +1054,64 @@ export async function runGatewayInvoke(
     }
   }
 
+  let snsDelivery: SnsPublishResult | undefined;
+  if (isSnsPublishTool(toolDef)) {
+    const already = snsDeliveryFromFulfillment(priorApproval);
+    if (already?.ok) {
+      snsDelivery = already;
+    } else if (priorApprovalOk && already && !already.ok) {
+      snsDelivery = already;
+    } else {
+      const args =
+        body.args && typeof body.args === "object"
+          ? (body.args as Record<string, unknown>)
+          : {};
+      const rawText = [args.text, args.body, args.message].find(
+        (value) => typeof value === "string" && value.trim()
+      );
+      const posted = await publishSnsPost({
+        orgId: orgId || employee.orgId,
+        employeeId,
+        surface: args.surface ?? args.snsSurface ?? args.media,
+        text: typeof rawText === "string" ? rawText : purpose,
+        scheduledAt: args.scheduledAt ?? args.scheduled_at ?? args.scheduledFor,
+        title: args.title,
+      });
+      snsDelivery = posted;
+      if (!posted.ok) {
+        await appendAuditEvent({
+          orgId: orgId || employee.orgId,
+          employeeId,
+          credentialId: input.credentialId || employee.credentialId,
+          action: "sns.publish_failed",
+          purpose,
+          summary: "SNS投稿に失敗",
+          metadata: {
+            tool,
+            jobId,
+            error: posted.error,
+            surface: posted.surface,
+            phase: priorApprovalOk ? "reinvoke" : "auto",
+          },
+        });
+        return jsonResult(
+          {
+            ok: false,
+            code: "sns_publish_failed",
+            error: posted.error,
+            message: posted.error,
+            needs_approval: false,
+            employeeId,
+            tool,
+            purpose,
+            jobId,
+          },
+          502
+        );
+      }
+    }
+  }
+
   if (employee.actionLimits?.[tool]) {
     await incrementActionCounter({
       orgId: orgId || employee.orgId,
@@ -1134,6 +1195,7 @@ export async function runGatewayInvoke(
       ? { projectAccess: projectScope.projectAccess }
       : {}),
     conversationDelivery,
+    snsDelivery,
     result:
       tool === "tools.ping"
         ? { pong: true }
@@ -1165,6 +1227,12 @@ export async function runGatewayInvoke(
                             isDefault: item.isDefault,
                           })),
                         }
+                      : tool === "sns.publish"
+                        ? {
+                            published: Boolean(snsDelivery?.ok),
+                            delivery: snsDelivery && snsDelivery.ok ? snsDelivery.delivery : undefined,
+                            snsDelivery,
+                          }
                       : tool === "comm.send" || tool === "comm.reply"
                       ? {
                           accepted: true,

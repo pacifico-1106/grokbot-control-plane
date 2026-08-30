@@ -154,3 +154,28 @@ describe("buildArtifactLines", () => {
     expect(summary).toContain("相手先: 社内");
   });
 });
+
+describe("sns.publish artifact", () => {
+  test("includes 本文, 媒体, 公開予定", () => {
+    const lines = buildArtifactLines(
+      "sns.publish",
+      {
+        tool: "sns.publish",
+        purpose: "sns.publish",
+        jobId: "job-sns",
+        args: {
+          surface: "x",
+          text: "今週のリリースをお知らせします。",
+          scheduledAt: "2026-09-01T09:00:00+09:00",
+        },
+      },
+      null,
+      null
+    );
+    const text = lines.join("\n");
+    expect(text).toContain("媒体: X");
+    expect(text).toContain("公開予定: 2026-09-01T09:00:00+09:00");
+    expect(text).toContain("本文:");
+    expect(text).toContain("今週のリリースをお知らせします。");
+  });
+});

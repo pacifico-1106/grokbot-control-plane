@@ -73,6 +73,7 @@ export function buildPolicyPreview(input: {
   const hasFilesWrite = scopes.includes("files:write");
   const hasDriveShare = scopes.includes("drive:share_external");
   const hasBrowser = scopes.includes("browser:use");
+  const hasSns = scopes.includes("sns:publish");
   const accounts = normalizeAllowedAccounts(input.allowedAccounts);
   const mentionForced = mentionReplyForcedHuman(input.approvalPolicy);
   const sodRaw = input.liveSod ?? evaluateSod(scopes as EmployeeScope[], input.sodWarnPolicy ?? null);
@@ -83,6 +84,13 @@ export function buildPolicyPreview(input: {
     : mentionForced
       ? { id: "slack", label: "メンション返信", value: MENTION_REPLY_WAIT, tone: "warn" }
       : { id: "slack", label: "メンション返信", value: MENTION_REPLY_AUTO, tone: "ok" };
+
+  const snsHint = choosablePreview("sns.publish", input.toolApprovalDefaults);
+  const sns: PolicyPreviewRow = !hasSns
+    ? { id: "sns", label: "SNS投稿", value: "できない", tone: "muted" }
+    : snsHint.value === "必ず人が見る"
+      ? { id: "sns", label: "SNS投稿", value: "承認待ち", tone: "warn" }
+      : { id: "sns", label: "SNS投稿", value: snsHint.value, tone: snsHint.tone };
 
   const mailHint = choosablePreview("mail.send", input.toolApprovalDefaults);
   const mail: PolicyPreviewRow = hasMailSend
@@ -142,7 +150,7 @@ export function buildPolicyPreview(input: {
             tone: "danger",
           };
 
-  const rows: PolicyPreviewRow[] = [slack, posting, mail, calendar, order];
+  const rows: PolicyPreviewRow[] = [slack, posting, sns, mail, calendar, order];
   if (files) rows.push(files);
   if (drive) rows.push(drive);
   rows.push(browser, external);

@@ -106,6 +106,12 @@ export const JP_SME_STRICT_APPROVAL_PRESETS: ApprovalPresetRow[] = [
     note: "allowedAccounts 不一致なら停止",
   },
   {
+    tool: "sns.publish",
+    labelJa: "個人SNS投稿（X / note / LinkedIn / YouTube）",
+    defaultMode: "always_human",
+    note: "下書きは承認後に出す。公式API。ブラウザ投稿は後続",
+  },
+  {
     tool: "account.unallowed",
     labelJa: "許可外アカウントへの操作",
     defaultMode: "deny",
@@ -184,6 +190,7 @@ export const CHOOSABLE_TOOL_APPROVALS = [
   "files.write",
   "drive.share_external",
   "browser.use",
+  "sns.publish",
 ] as const;
 export type ChoosableToolApproval = (typeof CHOOSABLE_TOOL_APPROVALS)[number];
 
@@ -200,6 +207,7 @@ export const CHOOSABLE_TOOL_LABELS: Record<ChoosableToolApproval, string> = {
   "files.write": "ファイルの更新・削除",
   "drive.share_external": "Driveの社外共有",
   "browser.use": "ブラウザ操作",
+  "sns.publish": "SNS投稿",
 };
 
 const STRICT_CHOOSABLE_DEFAULTS: Record<ChoosableToolApproval, ApprovalPolicy> = {
@@ -209,6 +217,7 @@ const STRICT_CHOOSABLE_DEFAULTS: Record<ChoosableToolApproval, ApprovalPolicy> =
   "files.write": "always_human",
   "drive.share_external": "always_human",
   "browser.use": "always_human",
+  "sns.publish": "always_human",
 };
 
 export function choosableToolIsEnabled(
@@ -228,6 +237,8 @@ export function choosableToolIsEnabled(
       return scopes.includes("drive:share_external");
     case "browser.use":
       return scopes.includes("browser:use");
+    case "sns.publish":
+      return scopes.includes("sns:publish");
   }
 }
 

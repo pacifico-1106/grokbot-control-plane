@@ -165,4 +165,18 @@ describe("buildPolicyPreview", () => {
     });
     expect(linked.find((row) => row.id === "postingAs")?.value).toBe("この社員");
   });
+
+  test("sns.publish preview is 承認待ち by default", () => {
+    const rows = buildPolicyPreview({
+      scopes: ["sns:publish"],
+      approvalPolicy: "always_human",
+    });
+    expect(rows.find((row) => row.id === "sns")).toEqual({
+      id: "sns",
+      label: "SNS投稿",
+      value: "承認待ち",
+      tone: "warn",
+    });
+    expect(rows.find((row) => row.id === "mail")?.value).toBe("できない");
+  });
 });

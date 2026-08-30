@@ -1,7 +1,7 @@
 /**
- * Immediate fulfillment of audience-gated invokes when a human approves.
+ * Immediate fulfillment when a human approves.
+ * Audience-gated tools post Slack. sns.publish posts via the SNS adapter.
  * Notify-only side effects stay in resolve-side-effects.ts (never throws).
- * This module posts Slack (etc.) on the same HTTP request as approve.
  */
 
 import { appendAuditEvent } from "@/lib/data/audit";
@@ -15,7 +15,12 @@ import {
   parseConversationContext,
   resolveConversationThreadId,
 } from "@/lib/gateway/audience";
-import { isAudienceGatedTool } from "@/lib/gateway/tools";
+import {
+  parseSnsSurface,
+  publishSnsPost,
+  type SnsPublishResult,
+} from "@/lib/gateway/adapters/sns";
+import { isAudienceGatedTool, isSnsPublishTool } from "@/lib/gateway/tools";
 import type {
   ApprovalRequest,
   ConversationContext,
@@ -50,6 +55,11 @@ const SNAPSHOT_ARG_KEYS = [
   "userId",
   "phone",
   "lineId",
+  "scheduledAt",
+  "scheduled_at",
+  "scheduledFor",
+  "media",
+  "snsSurface",
 ] as const;
 
 const BODY_KEYS = new Set(["text", "body", "message"]);
@@ -80,9 +90,11 @@ export type InvokeSnapshot = {
 
 export type ApprovalFulfillment = {
   ok: boolean;
-  delivery?: "stub" | "slack" | "mail";
+  delivery?: "stub" | "slack" | "mail" | "sns";
   channel?: string;
   ts?: string;
+  id?: string;
+  surface?: string;
   error?: string;
   at: string;
 };
@@ -243,7 +255,10 @@ export function parseFulfillment(
   const rec = raw as Record<string, unknown>;
   if (typeof rec.ok !== "boolean") return null;
   const delivery =
-    rec.delivery === "slack" || rec.delivery === "stub" || rec.delivery === "mail"
+    rec.delivery === "slack" ||
+    rec.delivery === "stub" ||
+    rec.delivery === "mail" ||
+    rec.delivery === "sns"
       ? rec.delivery
       : undefined;
   const fulfillment: ApprovalFulfillment = {
@@ -253,6 +268,8 @@ export function parseFulfillment(
   if (delivery) fulfillment.delivery = delivery;
   if (typeof rec.channel === "string") fulfillment.channel = rec.channel;
   if (typeof rec.ts === "string") fulfillment.ts = rec.ts;
+  if (typeof rec.id === "string") fulfillment.id = rec.id;
+  if (typeof rec.surface === "string") fulfillment.surface = rec.surface;
   if (typeof rec.error === "string") fulfillment.error = rec.error;
   return fulfillment;
 }
@@ -277,6 +294,30 @@ export function conversationDeliveryFromFulfillment(
       delivery: "mail",
       ...(fulfillment.channel ? { channel: fulfillment.channel } : {}),
       ...(fulfillment.ts ? { ts: fulfillment.ts } : {}),
+    };
+  }
+  return null;
+}
+
+export function snsDeliveryFromFulfillment(
+  approval: ApprovalRequest | null | undefined
+): SnsPublishResult | null {
+  const fulfillment = parseFulfillment(approval?.metadata);
+  if (!fulfillment) return null;
+  if (fulfillment.ok && (fulfillment.delivery === "sns" || fulfillment.delivery === "stub")) {
+    const surface = parseSnsSurface(fulfillment.surface) || "x";
+    return {
+      ok: true,
+      delivery: fulfillment.delivery === "stub" ? "stub" : "sns",
+      surface,
+      ...(fulfillment.id ? { id: fulfillment.id } : {}),
+    };
+  }
+  if (!fulfillment.ok && fulfillment.error) {
+    return {
+      ok: false,
+      error: fulfillment.error,
+      surface: parseSnsSurface(fulfillment.surface) || undefined,
     };
   }
   return null;
@@ -322,15 +363,19 @@ async function auditFulfillmentFailure(
   approval: ApprovalRequest,
   snapshot: InvokeSnapshot,
   error: string,
-  dest: string
+  dest: string,
+  action: "slack.post_failed" | "sns.publish_failed" = "slack.post_failed"
 ): Promise<void> {
   await appendAuditEvent({
     orgId: approval.orgId,
     employeeId: approval.employeeId,
     credentialId: approval.credentialId,
-    action: "slack.post_failed",
+    action,
     purpose: approval.purpose,
-    summary: "承認直後の会話投稿に失敗",
+    summary:
+      action === "sns.publish_failed"
+        ? "承認直後のSNS投稿に失敗"
+        : "承認直後の会話投稿に失敗",
     metadata: {
       approvalId: approval.id,
       tool: snapshot.tool,
@@ -340,6 +385,47 @@ async function auditFulfillmentFailure(
       phase: "approval.fulfill",
     },
   });
+}
+
+async function fulfillSnsPublish(
+  approval: ApprovalRequest,
+  snapshot: InvokeSnapshot
+): Promise<ApprovalFulfillment> {
+  const args = snapshot.args;
+  const posted = await publishSnsPost({
+    orgId: snapshot.orgId || approval.orgId,
+    employeeId: snapshot.employeeId || approval.employeeId,
+    surface: args.surface ?? args.snsSurface ?? args.media,
+    text: outboundText(args, snapshot.purpose || approval.purpose),
+    scheduledAt: args.scheduledAt ?? args.scheduled_at ?? args.scheduledFor,
+    title: args.title,
+  });
+  const at = new Date().toISOString();
+  const fulfillment: ApprovalFulfillment = posted.ok
+    ? {
+        ok: true,
+        delivery: posted.delivery,
+        surface: posted.surface,
+        ...(posted.id ? { id: posted.id, ts: posted.id } : {}),
+        at,
+      }
+    : {
+        ok: false,
+        error: posted.error,
+        ...(posted.surface ? { surface: posted.surface } : {}),
+        at,
+      };
+  await persistFulfillment(approval, fulfillment);
+  if (!posted.ok) {
+    await auditFulfillmentFailure(
+      approval,
+      snapshot,
+      posted.error,
+      posted.surface || "sns",
+      "sns.publish_failed"
+    ).catch(() => undefined);
+  }
+  return fulfillment;
 }
 
 /**
@@ -357,6 +443,10 @@ export async function fulfillApprovedInvoke(
 
     const snapshot = parseInvokeSnapshot(approval.metadata);
     if (!snapshot) return null;
+
+    if (isSnsPublishTool(snapshot.tool || approval.tool || "")) {
+      return fulfillSnsPublish(approval, snapshot);
+    }
 
     if (!isAudienceGatedTool(snapshot.tool || approval.tool || "")) {
       return null;

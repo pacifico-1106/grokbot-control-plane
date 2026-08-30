@@ -20,6 +20,21 @@ const ROLE_PROFILES: Array<{
   actionLimits: ActionLimits;
 }> = [
   {
+    match: /(?:個人SNS|sns\.publish|sns:publish|SNS投稿|SNSに投稿)/i,
+    displayName: "個人SNS AI社員",
+    roleLabel: "個人SNS",
+    purposes: ["sns.publish"],
+    scopes: [
+      "sns:publish",
+      "files:read",
+      "files:write",
+      "approvals:request",
+      "audit:append",
+    ],
+    approvalPolicy: "always_human",
+    actionLimits: {},
+  },
+  {
     match: /(?:秘書|secretary|セクレタリ|社長室)/i,
     displayName: "秘書AI社員",
     roleLabel: "秘書",
@@ -160,17 +175,38 @@ export function jobTextImpliesMentionReply(rawInput: string): boolean {
 /** Mail send only when the job actually asks for mail — not bare 送信/返信. */
 export function jobTextImpliesMailSend(rawInput: string): boolean {
   const input = rawInput.trim();
+  if (jobTextImpliesSnsPublish(input)) return false;
   if (/(?:mail\.send|mail:send|send mail|外部送信|メールを出す)/i.test(input)) return true;
   return /メール/.test(input) && /(?:送信|送る)/.test(input);
+}
+
+/** Personal SNS posts (X / note / LinkedIn / YouTube). Does not imply mail.send. */
+export function jobTextImpliesSnsPublish(rawInput: string): boolean {
+  const input = rawInput.trim();
+  if (!input) return false;
+  if (/(?:個人SNS|sns\.publish|sns:publish|SNS投稿|SNSに投稿)/i.test(input)) return true;
+  const hasSurface =
+    /(?:Twitter|ツイッター|\bnote\b|LinkedIn|リンクトイン|YouTube|ユーチューブ)/i.test(input) ||
+    /(?:^|[\s・,、。\/])X(?:[\s・,、。\/]|$)/.test(input);
+  const hasPost = /(?:投稿|ポスト|publish)/i.test(input);
+  return hasSurface && hasPost;
 }
 
 function inferPurposes(
   input: string,
   profile: (typeof ROLE_PROFILES)[number] | undefined,
-  extras: { wantsOrder: boolean; wantsCalendarPropose: boolean; wantsCalendarConfirm: boolean }
+  extras: {
+    wantsOrder: boolean;
+    wantsCalendarPropose: boolean;
+    wantsCalendarConfirm: boolean;
+    wantsSns: boolean;
+  }
 ): string[] {
   const found = [...(profile?.purposes ?? [])];
-  if (/(?:社内|メンション|slack|スラック|返信)/i.test(input)) found.push("comm.internal");
+  if (extras.wantsSns) found.push("sns.publish");
+  if (!extras.wantsSns && /(?:社内|メンション|slack|スラック|返信)/i.test(input)) {
+    found.push("comm.internal");
+  }
   if (extras.wantsCalendarPropose || /(?:日程|カレンダー|候補|schedule)/i.test(input)) {
     found.push("calendar.propose");
   }
@@ -192,10 +228,11 @@ function buildEmployeePolicyDraftForProfile(
   const profile = forcedProfile ?? ROLE_PROFILES.find((p) => p.match.test(input));
   const splitMode = Boolean(forcedProfile);
 
-  const wantsSend = !splitMode && jobTextImpliesMailSend(input);
-  const wantsCommReply = !splitMode && jobTextImpliesMentionReply(input);
+  const wantsSns = !splitMode && jobTextImpliesSnsPublish(input);
+  const wantsSend = !splitMode && !wantsSns && jobTextImpliesMailSend(input);
+  const wantsCommReply = !splitMode && !wantsSns && jobTextImpliesMentionReply(input);
   const wantsDraftOnly =
-    !splitMode && /(?:下書き|draft)/i.test(input) && !wantsSend;
+    !splitMode && /(?:下書き|draft)/i.test(input) && !wantsSend && !wantsSns;
   const wantsOrder = !splitMode && jobTextImpliesCommerceOrder(input);
   const wantsBrowser =
     !splitMode && /(?:ブラウザ|browser\.use|browser:use|web\s*brows)/i.test(input);
@@ -207,7 +244,8 @@ function buildEmployeePolicyDraftForProfile(
     (!splitMode && /(?:空き|候補|日程.?提案|カレンダー|schedule|面接枠)/i.test(input)) ||
     wantsCalendarConfirm;
   const explicitAlwaysHuman =
-    /(?:必ず承認|毎回承認|人間が許可|always.?human|要承認のみ|毎回人が見る|毎回人間)/i.test(input);
+    /(?:必ず承認|毎回承認|人間が許可|always.?human|要承認のみ|毎回人が見る|毎回人間)/i.test(input) ||
+    profile?.approvalPolicy === "always_human";
   const preferRiskBased = /(?:少額は自動|リスクベース|risk.?based|危ないときだけ)/i.test(input);
 
   const scopes = unique<EmployeeScope>([
@@ -222,6 +260,7 @@ function buildEmployeePolicyDraftForProfile(
     ...(wantsBrowser ? (["browser:use"] as EmployeeScope[]) : []),
     ...(wantsWrite ? (["files:write"] as EmployeeScope[]) : []),
     ...(wantsCommReply ? (["slack:post"] as EmployeeScope[]) : []),
+    ...(wantsSns ? (["sns:publish"] as EmployeeScope[]) : []),
     "approvals:request",
     "audit:append",
   ]);
@@ -264,6 +303,7 @@ function buildEmployeePolicyDraftForProfile(
     wantsOrder,
     wantsCalendarPropose,
     wantsCalendarConfirm,
+    wantsSns,
   });
 
   const assumptions: string[] = [];
@@ -272,6 +312,11 @@ function buildEmployeePolicyDraftForProfile(
   }
   if (!extractExpiryDays(input)) {
     assumptions.push("社員証の有効期限は30日後にしています。");
+  }
+  if (wantsSns || scopes.includes("sns:publish")) {
+    assumptions.push(
+      "個人SNSの投稿はツール強制で必ず人が見ます。承認後に公式APIで出します。"
+    );
   }
   if (wantsSend || scopes.includes("mail:send")) {
     assumptions.push(
@@ -371,6 +416,7 @@ export const ALL_SCOPES: EmployeeScope[] = [
   "commerce:order",
   "slack:post",
   "slack:post_external",
+  "sns:publish",
   "drive:share_external",
   "knowledge:search",
   "audit:append",
@@ -395,6 +441,7 @@ export const SCOPE_LABELS: Record<EmployeeScope, string> = {
   "commerce:order": "発注・購入する",
   "slack:post": "社内Slackに投稿する",
   "slack:post_external": "社外混在のSlackに投稿する",
+  "sns:publish": "SNSに投稿する",
   "drive:share_external": "Driveを社外に共有する",
   "knowledge:search": "社内ナレッジを探す",
   "audit:append": "監査ログに残す",

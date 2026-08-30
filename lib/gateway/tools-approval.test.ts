@@ -34,6 +34,7 @@ describe("choosable money / destructive / browser hints", () => {
     expect(toolRequiresHumanApproval(GATEWAY_TOOL_DEFS["files.write"])).toBe(true);
     expect(toolRequiresHumanApproval(GATEWAY_TOOL_DEFS["browser.use"])).toBe(true);
     expect(toolRequiresHumanApproval(GATEWAY_TOOL_DEFS["drive.share_external"])).toBe(true);
+    expect(toolRequiresHumanApproval(GATEWAY_TOOL_DEFS["sns.publish"])).toBe(true);
   });
 
   test("operator can loosen order / write / browser to auto or risk_based", () => {
@@ -57,5 +58,21 @@ describe("choosable money / destructive / browser hints", () => {
         "commerce.order": "always_human",
       })
     ).toBe(true);
+    expect(
+      toolRequiresHumanApproval(GATEWAY_TOOL_DEFS["sns.publish"], {
+        "sns.publish": "auto",
+      })
+    ).toBe(false);
+  });
+});
+
+describe("sns.publish allowlist", () => {
+  test("is registered with requiredScopes sns:publish and kind send", () => {
+    const def = GATEWAY_TOOL_DEFS["sns.publish"];
+    expect(def).toBeTruthy();
+    expect(def.requiredScopes).toEqual(["sns:publish"]);
+    expect(def.kind).toBe("send");
+    expect(def.forceNeedsApproval).toBe(true);
+    expect(toolRequiresHumanApproval(def)).toBe(true);
   });
 });

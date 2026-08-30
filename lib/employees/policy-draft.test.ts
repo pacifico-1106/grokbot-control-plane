@@ -5,6 +5,7 @@ import {
   jobTextImpliesCommerceOrder,
   jobTextImpliesMailSend,
   jobTextImpliesMentionReply,
+  jobTextImpliesSnsPublish,
 } from "./policy-draft";
 
 const SECRETARY_JOB =
@@ -147,5 +148,47 @@ describe("buildEmployeePolicyDraft mention reply", () => {
     expect(draft.policy.scopes).not.toContain("mail:send");
     expect(draft.policy.scopes).not.toContain("calendar:confirm");
     expect(draft.policy.approvalPolicy).toBe("risk_based");
+  });
+});
+
+describe("buildEmployeePolicyDraft personal SNS", () => {
+  test("個人SNS gets sns:publish without mail.send / slack / calendar / commerce", () => {
+    const draft = buildEmployeePolicyDraft(
+      "個人SNSとして、X・note・LinkedIn・YouTubeへの投稿は毎回人が見てから出す"
+    );
+    expect(draft.policy.roleLabel).toBe("個人SNS");
+    expect(draft.policy.scopes).toContain("sns:publish");
+    expect(draft.policy.scopes).toContain("files:read");
+    expect(draft.policy.scopes).toContain("files:write");
+    expect(draft.policy.scopes).not.toContain("mail:send");
+    expect(draft.policy.scopes).not.toContain("mail:draft");
+    expect(draft.policy.scopes).not.toContain("slack:post");
+    expect(draft.policy.scopes).not.toContain("calendar:confirm");
+    expect(draft.policy.scopes).not.toContain("calendar:propose");
+    expect(draft.policy.scopes).not.toContain("commerce:order");
+    expect(draft.policy.allowedPurposes).toEqual(["sns.publish"]);
+    expect(draft.policy.approvalPolicy).toBe("always_human");
+  });
+});
+
+describe("jobTextImpliesSnsPublish", () => {
+  test("個人SNS matches; mail language does not", () => {
+    expect(jobTextImpliesSnsPublish("個人SNSを担当")).toBe(true);
+    expect(jobTextImpliesSnsPublish("メール送信して")).toBe(false);
+  });
+});
+
+describe("interpret 個人SNS job copy", () => {
+  test("does not add mail.send / calendar.confirm / slack:post / commerce.order", () => {
+    const draft = buildEmployeePolicyDraft(
+      "個人SNSの投稿。X・note・LinkedIn・YouTube。下書きは承認後に出す"
+    );
+    expect(draft.policy.scopes).toContain("sns:publish");
+    expect(draft.policy.scopes).not.toContain("mail:send");
+    expect(draft.policy.scopes).not.toContain("mail:draft");
+    expect(draft.policy.scopes).not.toContain("calendar:confirm");
+    expect(draft.policy.scopes).not.toContain("slack:post");
+    expect(draft.policy.scopes).not.toContain("commerce:order");
+    expect(draft.policy.allowedPurposes).toContain("sns.publish");
   });
 });

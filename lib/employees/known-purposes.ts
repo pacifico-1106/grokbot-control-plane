@@ -19,6 +19,7 @@ export const KNOWN_PURPOSES = [
   "commerce.order",
   "calendar.confirm",
   "comm.internal",
+  "sns.publish",
 ] as const;
 
 export type KnownPurpose = (typeof KNOWN_PURPOSES)[number];
@@ -39,6 +40,7 @@ export const PURPOSE_CHIPS: readonly KnownPurpose[] = [
   "hr.schedule",
   "research.web",
   "research.summary",
+  "sns.publish",
 ];
 
 /** One plain Japanese line — the reason this employee may act. */
@@ -57,6 +59,7 @@ export const PURPOSE_LABELS_JA: Record<KnownPurpose, string> = {
   "hr.schedule": "面接の日程を組む",
   "research.web": "調べものをする",
   "research.summary": "調査をまとめる",
+  "sns.publish": "個人SNSに投稿する",
 };
 
 export function purposeLabelJa(purpose: string): string {

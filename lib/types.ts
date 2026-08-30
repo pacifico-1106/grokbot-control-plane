@@ -174,6 +174,7 @@ export type EmployeeScope =
   | "commerce:order"
   | "slack:post"
   | "slack:post_external"
+  | "sns:publish"
   | "drive:share_external"
   | "knowledge:search"
   | "audit:append"
@@ -381,6 +382,7 @@ export type AuditAction =
   | "notification.delivery_failed"
   | "conversation.adapter_updated"
   | "slack.post_failed"
+  | "sns.publish_failed"
   | "slack.mention_wake"
   | "employee.sod_forced"
   | "employee.sod_override"
@@ -437,7 +439,7 @@ export interface Employee {
   approvalPolicy: ApprovalPolicy;
   /**
    * Per-tool approval hints. Choosable tools (mail.send, calendar.confirm,
-   * commerce.order, files.write, drive.share_external, browser.use) are
+   * commerce.order, files.write, drive.share_external, browser.use, sns.publish) are
    * always_human | risk_based | auto. Missing keys default to always_human.
    */
   toolApprovalDefaults?: Record<string, ApprovalPolicy | "deny">;

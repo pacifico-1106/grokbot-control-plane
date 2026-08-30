@@ -1,4 +1,5 @@
 import { outboundConversationText } from "@/lib/employees/voice";
+import { parseSnsSurface, snsSurfaceLabelJa } from "@/lib/gateway/adapters/sns";
 import { resolveConversationThreadId } from "@/lib/gateway/audience";
 import type {
   ApprovalRequest,
@@ -35,6 +36,8 @@ export type ApprovalArtifact = {
   destination?: string;
   amountJpy?: number;
   what?: string;
+  snsSurface?: string;
+  scheduledAt?: string;
 };
 
 const CLASS_LABEL: Record<string, string> = {
@@ -154,6 +157,21 @@ export function buildApprovalArtifact(
     if (title) artifact.title = title;
   }
 
+  if (tool === "sns.publish") {
+    const surface = firstString(args.surface, args.snsSurface, args.media, body?.surface);
+    const scheduled = firstString(
+      args.scheduledAt,
+      args.scheduled_at,
+      args.scheduledFor,
+      args.publishAt,
+      args.publishedAt
+    );
+    const bodyText = outbound || mailBody;
+    if (surface) artifact.snsSurface = surface;
+    if (scheduled) artifact.scheduledAt = scheduled;
+    if (bodyText) artifact.body = bodyText;
+  }
+
   if (tool === "commerce.order" || tool === "commerce.quote") {
     const vendor = firstString(args.vendor, args.merchant, args.seller);
     const destination = firstString(
@@ -196,6 +214,11 @@ export function formatArtifactLines(artifact: ApprovalArtifact): string[] {
   if (artifact.amountJpy != null && Number.isFinite(artifact.amountJpy)) {
     lines.push(`金額: ¥${Math.round(artifact.amountJpy).toLocaleString("ja-JP")}`);
   }
+  if (artifact.snsSurface) {
+    const parsed = parseSnsSurface(artifact.snsSurface);
+    lines.push(`媒体: ${parsed ? snsSurfaceLabelJa(parsed) : artifact.snsSurface}`);
+  }
+  if (artifact.scheduledAt) lines.push(`公開予定: ${artifact.scheduledAt}`);
   if (artifact.what) lines.push(`内容: ${artifact.what}`);
   if (artifact.informationClass) {
     lines.push(
@@ -252,7 +275,8 @@ export function inferRiskForTool(tool: string): ApprovalRequest["risk"] {
     tool === "commerce.order" ||
     tool === "mail.send" ||
     tool === "calendar.confirm" ||
-    tool === "browser.use"
+    tool === "browser.use" ||
+    tool === "sns.publish"
   ) {
     return "high";
   }

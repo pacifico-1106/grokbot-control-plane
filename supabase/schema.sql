@@ -268,6 +268,28 @@ create table if not exists org_conversation_adapter_secrets (
 create index if not exists conversation_adapters_org_enabled_idx
   on org_conversation_adapters (org_id, enabled);
 
+create table if not exists org_sns_adapters (
+  id uuid primary key default gen_random_uuid(),
+  org_id uuid not null references orgs(id) on delete cascade,
+  surface text not null check (surface in ('x','note','linkedin','youtube')),
+  label text not null default 'SNS',
+  enabled boolean not null default false,
+  config jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (org_id, surface)
+);
+
+create table if not exists org_sns_adapter_secrets (
+  adapter_id uuid primary key references org_sns_adapters(id) on delete cascade,
+  credentials_ciphertext text not null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create index if not exists sns_adapters_org_enabled_idx
+  on org_sns_adapters (org_id, enabled);
+
 create table if not exists employee_slack_identities (
   employee_id uuid primary key references employees(id) on delete cascade,
   org_id uuid not null references orgs(id) on delete cascade,
@@ -510,6 +532,8 @@ alter table org_notification_channel_secrets enable row level security;
 alter table approval_notification_deliveries enable row level security;
 alter table org_conversation_adapters enable row level security;
 alter table org_conversation_adapter_secrets enable row level security;
+alter table org_sns_adapters enable row level security;
+alter table org_sns_adapter_secrets enable row level security;
 alter table employee_slack_identities enable row level security;
 alter table employee_binding_secrets enable row level security;
 alter table slack_mention_events enable row level security;
@@ -579,6 +603,14 @@ drop policy if exists conversation_adapters_write_admin on org_conversation_adap
 create policy conversation_adapters_select on org_conversation_adapters
   for select using (public.is_org_member(org_id));
 create policy conversation_adapters_write_admin on org_conversation_adapters
+  for all using (public.is_org_admin(org_id))
+  with check (public.is_org_admin(org_id));
+
+drop policy if exists sns_adapters_select on org_sns_adapters;
+drop policy if exists sns_adapters_write_admin on org_sns_adapters;
+create policy sns_adapters_select on org_sns_adapters
+  for select using (public.is_org_member(org_id));
+create policy sns_adapters_write_admin on org_sns_adapters
   for all using (public.is_org_admin(org_id))
   with check (public.is_org_admin(org_id));
 

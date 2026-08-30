@@ -6,6 +6,9 @@ export const ACCOUNT_SERVICE_PRESETS: Array<{ key: string; label: string }> = [
   { key: "microsoft365", label: "Microsoft 365" },
   { key: "line", label: "LINE" },
   { key: "x", label: "X" },
+  { key: "note", label: "note" },
+  { key: "linkedin", label: "LinkedIn" },
+  { key: "youtube", label: "YouTube" },
   { key: "instagram", label: "Instagram" },
   { key: "facebook", label: "Facebook" },
   { key: "slack", label: "Slack" },
@@ -55,8 +58,17 @@ export function hintAllowedAccountsFromText(input: string): AllowedAccount[] {
   if (/(?:\bline\b|ライン公式|LINE公式)/i.test(input)) {
     push("line", "公式LINE（要確認）");
   }
-  if (/(?:\bx\b|twitter|ツイッター)/i.test(input)) {
+  if (/(?:\bx\b|twitter|ツイッター|個人SNS)/i.test(input)) {
     push("x", "X公式（要確認）");
+  }
+  if (/(?:\bnote\b)/i.test(input)) {
+    push("note", "note（要確認）");
+  }
+  if (/(?:linkedin|リンクトイン)/i.test(input)) {
+    push("linkedin", "LinkedIn（要確認）");
+  }
+  if (/(?:youtube|ユーチューブ)/i.test(input)) {
+    push("youtube", "YouTube（要確認）");
   }
   if (/(?:instagram|インスタ)/i.test(input)) {
     push("instagram", "Instagram（要確認）");

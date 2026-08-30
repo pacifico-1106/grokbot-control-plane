@@ -119,6 +119,31 @@ export const DEMO_EMPLOYEES: Employee[] = [
     credentialId: "cred_comm",
     createdAt: new Date(Date.now() - 86400000).toISOString(),
   },
+  {
+    id: "emp_sns",
+    orgId: DEMO_ORG.id,
+    displayName: "八坂",
+    roleLabel: "個人SNS",
+    jobDescription: "X / note / LinkedIn / YouTube の投稿は承認後に出す",
+    status: "active",
+    scopes: [
+      "sns:publish",
+      "files:read",
+      "files:write",
+      "approvals:request",
+      "audit:append",
+    ],
+    allowedPurposes: ["sns.publish"],
+    approvalPolicy: "always_human",
+    sodLevel: "warn",
+    actionLimits: {},
+    managerId: "mem_1",
+    voice: { ...POLITE_VOICE, forbidden: [...POLITE_VOICE.forbidden] },
+    projectAccess: { mode: "company", projectIds: [] },
+    postingAs: "bot",
+    credentialId: "cred_sns",
+    createdAt: new Date(Date.now() - 43200000).toISOString(),
+  },
 ];
 
 export const DEMO_APPROVALS: ApprovalRequest[] = [

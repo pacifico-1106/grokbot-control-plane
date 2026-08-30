@@ -66,6 +66,13 @@ export {
   type UpsertConversationAdapterInput,
 } from "./conversation-adapters";
 export {
+  getEnabledSnsAdapter,
+  upsertSnsAdapter,
+  type SnsAdapter,
+  type SnsAdapterRuntime,
+  type UpsertSnsAdapterInput,
+} from "./sns-adapters";
+export {
   getEmployeeSlackIdentity,
   getLinkedSlackUserToken,
   bindEmployeeSlackIdentity,
