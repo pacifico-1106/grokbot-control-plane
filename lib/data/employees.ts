@@ -16,7 +16,6 @@ import { defaultVoice, normalizeVoice } from "@/lib/employees/voice";
 import { defaultProjectAccess, normalizeProjectAccess } from "@/lib/employees/project-access";
 import { normalizePostingAs } from "@/lib/employees/posting-as";
 import { normalizeToolApprovalDefaults } from "@/lib/employees/approval-presets";
-import { appendAuditEvent } from "@/lib/data/audit";
 import type { ActionLimits, Employee, EmployeeProjectAccess, PostingAs } from "../types";
 
 export async function listEmployees(orgId?: string | null): Promise<Employee[]> {

@@ -809,7 +809,7 @@ export async function runGatewayInvoke(
         ? Number.NaN
         : Number(body.amountJpy)
       : Number.NaN;
-  let spend =
+  const spend =
     tool === "commerce.order"
       ? evaluateSpend({
           amountJpy,
