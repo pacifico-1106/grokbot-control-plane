@@ -289,13 +289,14 @@ export async function upsertNotificationChannel(
   const hasDefault = (orgRows || []).some(
     (row) => Boolean((row as { is_default?: boolean }).is_default) && String((row as { id: string }).id) !== String(existing?.id || "")
   );
+  const keepDefault = Boolean(existing?.is_default) && input.isDefault !== false;
   const wantsDefault = input.isDefault === true || (!existing && !hasDefault);
   const payload = {
     org_id: input.orgId,
     provider: input.provider,
     label: input.label?.trim() || defaultProviderLabel(input.provider),
     enabled: input.enabled,
-    is_default: wantsDefault,
+    is_default: (wantsDefault || keepDefault) && !hasDefault,
     config: input.config,
     updated_at: new Date().toISOString(),
   };

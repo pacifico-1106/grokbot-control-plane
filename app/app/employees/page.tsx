@@ -2,13 +2,23 @@ import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
 import { EmployeeAvatar } from "@/components/employees/EmployeeAvatar";
 import { getCurrentOrgId } from "@/lib/auth/session";
-import { listEmployees } from "@/lib/data";
+import { listEmployees, listNotificationChannels } from "@/lib/data";
+import { assignedInboxLabel } from "@/lib/employees/approval-inbox";
 import { APPROVAL_POLICY_LABELS } from "@/lib/employees/policy-draft";
 import { buildConcentration } from "@/lib/employees/concentration";
 import { DOMAIN_LABELS } from "@/lib/gateway/domains";
-import type { Employee } from "@/lib/types";
+import type { Employee, NotificationChannel } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
+
+function InboxBadge({ employee, channels }: { employee: Employee; channels: NotificationChannel[] }) {
+  return (
+    <span className="chip text-[11px] break-words max-w-full">
+      承認の届き先: {assignedInboxLabel(employee, channels)}
+    </span>
+  );
+}
+
 
 function EmployeePassCard({ employee }: { employee: Employee }) {
   return (
@@ -39,6 +49,7 @@ function EmployeePassCard({ employee }: { employee: Employee }) {
 export default async function EmployeesPage() {
   const orgId = await getCurrentOrgId();
   const employees = await listEmployees(orgId);
+  const notificationChannels = await listNotificationChannels(orgId);
   const concentration = buildConcentration(employees);
   const concentrationById = new Map(concentration.employees.map((row) => [row.employeeId, row]));
 
@@ -84,6 +95,7 @@ export default async function EmployeesPage() {
                     <span className="chip text-[11px] break-words max-w-full">
                       {APPROVAL_POLICY_LABELS[e.approvalPolicy]}
                     </span>
+                    <InboxBadge employee={e} channels={notificationChannels} />
                     <span
                       className={`chip ${
                         e.status === "active" ? "chip-ok" : e.status === "suspended" ? "chip-danger" : "chip-warn"
@@ -153,9 +165,12 @@ export default async function EmployeesPage() {
                         {e.roleLabel}
                       </td>
                       <td className="px-4 py-3 relative z-[1] pointer-events-none">
-                        <span className="chip text-[11px]">
-                          {APPROVAL_POLICY_LABELS[e.approvalPolicy]}
-                        </span>
+                        <div className="flex flex-col gap-1.5">
+                          <span className="chip text-[11px]">
+                            {APPROVAL_POLICY_LABELS[e.approvalPolicy]}
+                          </span>
+                          <InboxBadge employee={e} channels={notificationChannels} />
+                        </div>
                       </td>
                       <td className="px-4 py-3 relative z-[1] pointer-events-none min-w-48">
                         {(() => {

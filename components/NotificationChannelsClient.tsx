@@ -224,7 +224,7 @@ export function NotificationChannelsClient({ initialChannels }: { initialChannel
             ))}
           </select>
           <button type="button" className="btn btn-ghost text-sm" onClick={addInbox}>
-            承認を受け取るチャンネルを追加
+            「承認を受け取る」を追加
           </button>
         </div>
       </div>
@@ -237,7 +237,10 @@ export function NotificationChannelsClient({ initialChannels }: { initialChannel
             <section key={draft.key} className="surface p-5 space-y-4">
               <div className="flex items-center justify-between gap-3">
                 <div>
-                  <h2 className="font-medium">承認を受け取る（{providerTitle(draft.provider)}）</h2>
+                  <h2 className="font-medium">
+                    承認を受け取る（{providerTitle(draft.provider)}）
+                    {draft.isDefault ? <span className="chip ml-2 text-[11px]">既定</span> : null}
+                  </h2>
                   <p className="text-xs muted mt-1">{providerHint(draft.provider)}</p>
                 </div>
                 <label className="flex items-center gap-2 text-sm">

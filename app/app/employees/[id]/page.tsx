@@ -26,6 +26,7 @@ import {
 } from "@/lib/data";
 import { slackOAuthConfigured } from "@/lib/slack/oauth";
 import { getEmployeeActionLog } from "@/lib/employee-actions-demo";
+import { assignedInboxLabel } from "@/lib/employees/approval-inbox";
 import { APPROVAL_POLICY_LABELS } from "@/lib/employees/policy-draft";
 import { buildConcentration } from "@/lib/employees/concentration";
 import { DOMAIN_LABELS } from "@/lib/gateway/domains";
@@ -73,6 +74,7 @@ export default async function EmployeeDetailPage({
       subtitle={`${employee.roleLabel} · ${employee.status === "active" ? "稼働中" : employee.status === "suspended" ? "契約終了" : employee.status === "draft" ? "下書き" : employee.status}`}
     >
       <div className="flex flex-col sm:flex-row flex-wrap gap-2 mb-4">
+        <span className="chip text-[11px]">承認の届き先: {assignedInboxLabel(employee, notificationChannels)}</span>
         <Link href="/app/employees" className="btn btn-ghost text-sm w-full sm:w-auto">
           ← 一覧
         </Link>

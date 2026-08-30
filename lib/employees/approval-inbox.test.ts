@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  assignedInboxLabel,
   extraApproversAllow,
   inboxOptionLabel,
   normalizeApproverUserIds,
@@ -38,5 +39,20 @@ describe("approval inbox helpers", () => {
       isDefault: true,
     } as NotificationChannel;
     expect(inboxOptionLabel(channel)).toBe("八坂のDM（既定）");
+  });
+
+  test("assignedInboxLabel falls back to org default when unset", () => {
+    const def = {
+      id: "chn_def",
+      orgId: "org",
+      provider: "telegram",
+      label: "安藤の既定",
+      enabled: true,
+      isDefault: true,
+    } as NotificationChannel;
+    const other = { ...def, id: "chn_2", label: "八坂のDM", isDefault: false };
+    expect(assignedInboxLabel({ approvalChannelId: null }, [def, other])).toBe("安藤の既定（既定）");
+    expect(assignedInboxLabel({ approvalChannelId: "chn_2" }, [def, other])).toBe("八坂のDM");
+    expect(assignedInboxLabel({ approvalChannelId: null }, [])).toBe("未設定");
   });
 });

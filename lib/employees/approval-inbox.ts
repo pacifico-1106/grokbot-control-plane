@@ -40,3 +40,15 @@ export function inboxOptionLabel(channel: NotificationChannel): string {
         : "Slack";
   return `${channel.label || provider}${mark}`;
 }
+
+export function assignedInboxLabel(
+  employee: { approvalChannelId?: string | null },
+  channels: NotificationChannel[]
+): string {
+  const requested = employee.approvalChannelId?.trim() || "";
+  const chosen = requested
+    ? channels.find((channel) => channel.id === requested)
+    : channels.find((channel) => channel.isDefault) ?? channels[0];
+  if (!chosen) return "未設定";
+  return inboxOptionLabel(chosen);
+}
