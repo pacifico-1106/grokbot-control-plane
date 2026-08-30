@@ -7,11 +7,13 @@ import { SpendForm } from "@/components/employees/SpendForm";
 import { emptyAllowedAccount, normalizeAllowedAccounts } from "@/lib/employees/allowed-accounts";
 import { PolicyPreview } from "@/components/employees/PolicyPreview";
 import { PurposeChips } from "@/components/employees/PurposeChips";
+import { ToolApprovalHints } from "@/components/employees/ToolApprovalHints";
+import { normalizeToolApprovalDefaults } from "@/lib/employees/approval-presets";
 import {
   HIRE_APPROVAL_CHOICES,
   SCOPE_LABELS,
 } from "@/lib/employees/policy-draft";
-import { evaluateSod } from "@/lib/employees/sod";
+import { evaluateSod, isSendConfirmSodWarn, sodNeedsOperatorAck } from "@/lib/employees/sod";
 import { policyErrorMessage } from "@/lib/employees/policy-errors";
 import { DEFAULT_SPEND_LIMITS } from "@/lib/spend-gate";
 import type {
@@ -54,13 +56,17 @@ export function EmployeePolicyForm({
   const [allowedAccounts, setAllowedAccounts] = useState<AllowedAccount[]>(
     (employee.allowedAccounts ?? []).map((row) => ({ ...row }))
   );
+  const [toolApprovalDefaults, setToolApprovalDefaults] = useState(
+    () => normalizeToolApprovalDefaults(employee.toolApprovalDefaults)
+  );
   const [sodAck, setSodAck] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
 
   const liveSod = useMemo(() => evaluateSod(scopes), [scopes]);
   const forceHuman = liveSod.level === "force_human";
-  const ackNeeded = forceHuman && approvalPolicy !== "always_human";
+  const sendConfirmWarn = isSendConfirmSodWarn(liveSod);
+  const ackNeeded = sodNeedsOperatorAck(liveSod) && approvalPolicy !== "always_human";
   const locked = busy || disabled;
   const hasOrderScope = scopes.includes("commerce:order");
   const normalizedAccounts = normalizeAllowedAccounts(allowedAccounts);
@@ -134,6 +140,7 @@ export function EmployeePolicyForm({
           scopes,
           allowedPurposes: purposeList,
           approvalPolicy,
+          toolApprovalDefaults,
           sodOverrideAcknowledged: ackNeeded ? true : false,
           actionLimits,
           spend: hasOrderScope ? spend : null,
@@ -157,6 +164,9 @@ export function EmployeePolicyForm({
       }
       if (typeof body.employee?.approvalPolicy === "string") {
         setApprovalPolicy(body.employee.approvalPolicy as ApprovalPolicy);
+      }
+      if (body.employee?.toolApprovalDefaults && typeof body.employee.toolApprovalDefaults === "object") {
+        setToolApprovalDefaults(normalizeToolApprovalDefaults(body.employee.toolApprovalDefaults));
       }
       if (body.employee?.actionLimits && typeof body.employee.actionLimits === "object") {
         setActionLimits(body.employee.actionLimits as ActionLimits);
@@ -292,16 +302,18 @@ export function EmployeePolicyForm({
         </p>
       ) : null}
 
-      {forceHuman ? (
+      {forceHuman || sendConfirmWarn ? (
         <div
-          className="rounded-xl border p-3 border-[color-mix(in_oklab,var(--danger)_48%,var(--border))]"
+          className={`rounded-xl border p-3 ${forceHuman ? "border-[color-mix(in_oklab,var(--danger)_48%,var(--border))]" : "border-[color-mix(in_oklab,var(--warn)_48%,var(--border))]"}`}
           role="alert"
         >
           <p className="text-sm leading-relaxed muted">
-            複数の高リスク領域を持つため、警告を確認しないと全件承認のまま保存されます。分けると下書きや提案を自動化できます。
+            {sendConfirmWarn
+              ? "メール送信と日程確定が同居しています。保存には警告の承諾が必要です。責任は事業者にあります。"
+              : "複数の高リスク領域を持つため、警告を確認しないと全件承認のまま保存されます。分けると下書きや提案を自動化できます。"}
           </p>
           <p className="mt-2 text-xs leading-relaxed muted">
-            確定操作（送信・発注・日程確定）は今どおり人が止めます。社員全体の常時承認だけ外します。
+            確定操作（送信・発注・日程確定）は今どおり人が止めます。社員全体の常時承認だけ外します。社内Slackは承認設定に従います。
           </p>
         </div>
       ) : null}
@@ -335,6 +347,13 @@ export function EmployeePolicyForm({
         ) : null}
       </fieldset>
 
+      <ToolApprovalHints
+        scopes={scopes}
+        value={toolApprovalDefaults}
+        onChange={setToolApprovalDefaults}
+        disabled={locked}
+      />
+
       <PolicyPreview
         scopes={scopes}
         allowedPurposes={purposeList}
@@ -343,6 +362,7 @@ export function EmployeePolicyForm({
         allowedAccounts={allowedAccounts}
         postingAs={employee.postingAs || "bot"}
         slackLinked={slackLinked}
+        toolApprovalDefaults={toolApprovalDefaults}
       />
 
       {ackNeeded ? (
@@ -358,7 +378,9 @@ export function EmployeePolicyForm({
             <span className="font-medium">警告を確認した。この権限のまま保存する</span>
             {!sodAck ? (
               <span className="block text-xs text-[var(--warn)] mt-0.5">
-                確認しないと保存できません（全件承認のままロックされます）。
+                {sendConfirmWarn
+                  ? "確認しないと保存できません。責任は事業者にあります。"
+                  : "確認しないと保存できません（全件承認のままロックされます）。"}
               </span>
             ) : null}
           </span>

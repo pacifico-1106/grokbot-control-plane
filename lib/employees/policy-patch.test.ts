@@ -107,3 +107,52 @@ describe("PATCH /api/employees/[id]/policy SoD ack", () => {
     expect(looksJapanese(String(body.message))).toBe(true);
   });
 });
+
+const sendConfirmScopes: EmployeeScope[] = [
+  "tools:read",
+  "mail:send",
+  "calendar:confirm",
+  "slack:post",
+  "approvals:request",
+  "audit:append",
+];
+
+describe("PATCH send+confirm warn requires ack and keeps risk_based", () => {
+  test("changing to send+confirm without ack is 400; with ack keeps risk_based", async () => {
+    const issued = await issueEmployee({
+      orgId: DEMO_ORG.id,
+      displayName: "同居パッチ",
+      roleLabel: "秘書",
+      scopes: ["tools:read", "slack:post", "approvals:request", "audit:append"],
+      allowedPurposes: ["ops.admin"],
+      approvalPolicy: "risk_based",
+      spend: null,
+      allowedAccounts: [],
+      secretHash: "hash_send_confirm_patch",
+      secretPrefix: "gb_emp_scp",
+      expiresAt: null,
+      auditSummary: "send confirm patch",
+    });
+    const denied = await patchRequest(issued.employee.id, {
+      scopes: sendConfirmScopes,
+      allowedPurposes: ["ops.admin"],
+      approvalPolicy: "risk_based",
+      actionLimits: {},
+    });
+    const deniedBody = await denied.json();
+    expect(denied.status).toBe(400);
+    expect(deniedBody.error).toBe("sod_ack_required");
+
+    const allowed = await patchRequest(issued.employee.id, {
+      scopes: sendConfirmScopes,
+      allowedPurposes: ["ops.admin"],
+      approvalPolicy: "risk_based",
+      actionLimits: {},
+      sodOverrideAcknowledged: true,
+    });
+    const allowedBody = await allowed.json();
+    expect(allowed.status).toBe(200);
+    expect(allowedBody.employee.approvalPolicy).toBe("risk_based");
+    expect(allowedBody.employee.sodLevel).toBe("warn");
+  });
+});

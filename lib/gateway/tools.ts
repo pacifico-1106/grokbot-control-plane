@@ -1,3 +1,5 @@
+import type { ApprovalPolicy } from "@/lib/types";
+
 /**
  * Gateway tool allowlist (P0 contract — Kimura + Ando A).
  * Unregistered tools are rejected fail-closed.
@@ -313,6 +315,23 @@ export function isAudienceGatedTool(def: GatewayToolDef | string): boolean {
 export function isAlwaysHumanTool(def: GatewayToolDef | string): boolean {
   const id = typeof def === "string" ? def : def.id;
   return ALWAYS_HUMAN_TOOL_IDS.has(id as GatewayToolId);
+}
+
+
+/**
+ * Per-tool hints can loosen mail.send / calendar.confirm.
+ * Audience-gated tools never force from the tool name; employee policy + egress decide.
+ * Missing hints keep the strict always-human defaults.
+ */
+export function toolRequiresHumanApproval(
+  def: GatewayToolDef,
+  toolApprovalDefaults?: Record<string, ApprovalPolicy | "deny"> | null
+): boolean {
+  if (isAudienceGatedTool(def)) return false;
+  const hint = toolApprovalDefaults?.[def.id];
+  if (hint === "auto" || hint === "risk_based") return false;
+  if (hint === "always_human") return true;
+  return isForceApprovalTool(def);
 }
 
 /** Tools that always queue for human approval at the gateway. */

@@ -75,3 +75,40 @@ describe("updateEmployeePolicy SoD acknowledgment", () => {
     expect(allowed?.approvalPolicy).toBe("risk_based");
   });
 });
+
+const sendConfirmScopes: EmployeeScope[] = [
+  "tools:read",
+  "mail:draft",
+  "mail:send",
+  "calendar:confirm",
+  "slack:post",
+  "approvals:request",
+  "audit:append",
+];
+
+describe("issueEmployee send+confirm warn", () => {
+  test("without ack keeps requested risk_based (does not rewrite always_human)", async () => {
+    const result = await issueEmployee(
+      issueInput({
+        displayName: "安藤同居",
+        scopes: sendConfirmScopes,
+      })
+    );
+    expect(result.employee.sodLevel).toBe("warn");
+    expect(result.employee.approvalPolicy).toBe("risk_based");
+    expect(result.employee.toolApprovalDefaults?.["mail.send"]).toBe("always_human");
+    expect(result.employee.toolApprovalDefaults?.["calendar.confirm"]).toBe("always_human");
+  });
+
+  test("with ack keeps requested risk_based", async () => {
+    const result = await issueEmployee(
+      issueInput({
+        displayName: "安藤承諾同居",
+        scopes: sendConfirmScopes,
+        sodOverrideAcknowledged: true,
+      })
+    );
+    expect(result.employee.sodLevel).toBe("warn");
+    expect(result.employee.approvalPolicy).toBe("risk_based");
+  });
+});

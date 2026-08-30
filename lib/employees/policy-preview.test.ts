@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { evaluateSod } from "./sod";
+import { evaluateSod, SOD_OPERATOR_RESPONSIBILITY_JA } from "./sod";
 import {
   MENTION_REPLY_AUTO,
   MENTION_REPLY_WAIT,
@@ -34,25 +34,34 @@ describe("buildPolicyPreview", () => {
     expect(rows.find((row) => row.id === "slack")?.tone).toBe("warn");
   });
 
-  test("mail.send + calendar.confirm SoD keeps mention replies waiting even on risk_based", () => {
+  test("mail.send + calendar.confirm warn keeps mention replies auto on risk_based", () => {
     const scopes = ["slack:post", "mail:send", "calendar:confirm"] as const;
-    expect(evaluateSod([...scopes]).level).toBe("force_human");
+    expect(evaluateSod([...scopes]).level).toBe("warn");
     const rows = buildPolicyPreview({
       scopes,
       approvalPolicy: "risk_based",
       liveSod: evaluateSod([...scopes]),
     });
-    expect(rows.find((row) => row.id === "slack")?.value).toBe(MENTION_REPLY_WAIT);
-    expect(rows.find((row) => row.id === "slack")?.tone).toBe("warn");
+    expect(rows.find((row) => row.id === "slack")?.value).toBe(MENTION_REPLY_AUTO);
+    expect(rows.find((row) => row.id === "slack")?.tone).toBe("ok");
+    expect(rows.find((row) => row.id === "combo")?.value).toBe(SOD_OPERATOR_RESPONSIBILITY_JA);
+    expect(rows.find((row) => row.id === "mail")?.value).toBe("必ず人が見る");
+    expect(rows.find((row) => row.id === "calendar")?.value).toBe("必ず人が見る");
   });
 
-  test("liveSod force_human shows wait; ok shows auto", () => {
+  test("liveSod force_human does not blanket mention replies when risk_based", () => {
     const forced = buildPolicyPreview({
       scopes: ["slack:post"],
       approvalPolicy: "risk_based",
       liveSod: { level: "force_human" },
     });
-    expect(forced.find((row) => row.id === "slack")?.value).toBe(MENTION_REPLY_WAIT);
+    expect(forced.find((row) => row.id === "slack")?.value).toBe(MENTION_REPLY_AUTO);
+    const human = buildPolicyPreview({
+      scopes: ["slack:post"],
+      approvalPolicy: "always_human",
+      liveSod: { level: "ok" },
+    });
+    expect(human.find((row) => row.id === "slack")?.value).toBe(MENTION_REPLY_WAIT);
     const ok = buildPolicyPreview({
       scopes: ["slack:post"],
       approvalPolicy: "risk_based",
@@ -61,7 +70,7 @@ describe("buildPolicyPreview", () => {
     expect(ok.find((row) => row.id === "slack")?.value).toBe(MENTION_REPLY_AUTO);
   });
 
-  test("mail.send / calendar.confirm / commerce.order are tool-forced", () => {
+  test("mail.send / calendar.confirm / commerce.order default to tool-forced", () => {
     const rows = buildPolicyPreview({
       scopes: ["mail:send", "calendar:confirm", "commerce:order"],
       approvalPolicy: "risk_based",
@@ -76,6 +85,21 @@ describe("buildPolicyPreview", () => {
     expect(byId.calendar.value).toBe("必ず人が見る");
     expect(byId.order.value).toBe("必ず人が見る · お金が動く");
     expect(byId.order.tone).toBe("danger");
+  });
+
+  test("per-tool risk_based / auto shows on mail and calendar", () => {
+    const rows = buildPolicyPreview({
+      scopes: ["mail:send", "calendar:confirm", "slack:post"],
+      approvalPolicy: "risk_based",
+      toolApprovalDefaults: {
+        "mail.send": "risk_based",
+        "calendar.confirm": "auto",
+      },
+    });
+    const byId = Object.fromEntries(rows.map((row) => [row.id, row]));
+    expect(byId.mail.value).toBe("危ないときだけ人が見る");
+    expect(byId.calendar.value).toBe("自動");
+    expect(byId.slack.value).toBe(MENTION_REPLY_AUTO);
   });
 
   test("browser without accounts does not run; with accounts warns shared session", () => {

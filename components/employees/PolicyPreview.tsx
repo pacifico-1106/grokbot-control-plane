@@ -25,14 +25,16 @@ export function PolicyPreview({
   allowedAccounts,
   postingAs,
   slackLinked,
+  toolApprovalDefaults,
 }: {
   scopes: EmployeeScope[];
   allowedPurposes?: string[];
   approvalPolicy: ApprovalPolicy;
-  liveSod?: Pick<SodVerdict, "level"> | null;
+  liveSod?: Pick<SodVerdict, "level" | "domains"> | null;
   allowedAccounts?: AllowedAccount[] | null;
   postingAs?: PostingAs | null;
   slackLinked?: boolean;
+  toolApprovalDefaults?: Record<string, ApprovalPolicy | "deny"> | null;
 }) {
   const rows = useMemo(
     () =>
@@ -44,8 +46,9 @@ export function PolicyPreview({
         allowedAccounts,
         postingAs,
         slackLinked,
+        toolApprovalDefaults,
       }),
-    [scopes, allowedPurposes, approvalPolicy, liveSod, allowedAccounts, postingAs, slackLinked]
+    [scopes, allowedPurposes, approvalPolicy, liveSod, allowedAccounts, postingAs, slackLinked, toolApprovalDefaults]
   );
   const danger = rows.some((row) => row.tone === "danger");
   const warn = rows.some((row) => row.tone === "warn");

@@ -176,3 +176,35 @@ export function suggestEmployeeApprovalPolicy(input: {
   if (input.explicitAlwaysHuman) return "always_human";
   return "risk_based";
 }
+
+export const CHOOSABLE_TOOL_APPROVALS = ["mail.send", "calendar.confirm"] as const;
+export type ChoosableToolApproval = (typeof CHOOSABLE_TOOL_APPROVALS)[number];
+
+export const TOOL_APPROVAL_CHOICE_LABELS: Record<ApprovalPolicy, string> = {
+  always_human: "毎回人が見る",
+  risk_based: "危ないときだけ人が見る",
+  auto: "自動",
+};
+
+const STRICT_CHOOSABLE_DEFAULTS: Record<ChoosableToolApproval, ApprovalPolicy> = {
+  "mail.send": "always_human",
+  "calendar.confirm": "always_human",
+};
+
+/** New-hire / missing keys stay always_human for send and confirm. */
+export function normalizeToolApprovalDefaults(
+  value: unknown
+): Record<string, ApprovalPolicy | "deny"> {
+  const out: Record<string, ApprovalPolicy | "deny"> = {
+    ...STRICT_CHOOSABLE_DEFAULTS,
+  };
+  if (!value || typeof value !== "object" || Array.isArray(value)) return out;
+  const src = value as Record<string, unknown>;
+  for (const tool of CHOOSABLE_TOOL_APPROVALS) {
+    const raw = src[tool];
+    if (raw === "always_human" || raw === "risk_based" || raw === "auto") {
+      out[tool] = raw;
+    }
+  }
+  return out;
+}

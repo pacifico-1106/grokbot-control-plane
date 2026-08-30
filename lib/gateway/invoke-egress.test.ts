@@ -195,30 +195,41 @@ describe("Gateway audience egress", () => {
   });
 
   test("SoD force_human still queues even if matrix would allow", async () => {
-    const result = await runGatewayInvoke({
-      employeeId: "emp_sales",
-      credentialId: "cred_sales",
-      body: {
-        tool: "slack.post",
-        purpose: "sales.outreach",
-        jobId: `job_sod_egress_${Date.now()}`,
-        conversation: {
-          surface: "slack",
-          orgId: DEMO_ORG.id,
-          slackChannelId: "C_INTERNAL",
+    const sales = getRuntimeEmployees().find((item) => item.id === "emp_sales");
+    expect(sales).toBeTruthy();
+    const previousScopes = [...sales!.scopes];
+    const previousPolicy = sales!.approvalPolicy;
+    sales!.scopes = [...previousScopes, "commerce:order"];
+    sales!.approvalPolicy = "always_human";
+    try {
+      const result = await runGatewayInvoke({
+        employeeId: "emp_sales",
+        credentialId: "cred_sales",
+        body: {
+          tool: "slack.post",
+          purpose: "sales.outreach",
+          jobId: `job_sod_egress_${Date.now()}`,
+          conversation: {
+            surface: "slack",
+            orgId: DEMO_ORG.id,
+            slackChannelId: "C_INTERNAL",
+          },
+          args: { assetRef: "kb/public-faq", slackChannelId: "C_INTERNAL" },
         },
-        args: { assetRef: "kb/public-faq", slackChannelId: "C_INTERNAL" },
-      },
-    });
-    expect(result.httpStatus).toBe(402);
-    expect(result.body.needs_approval).toBe(true);
-    expect(String(result.body.summary)).toContain("権限混在社員");
+      });
+      expect(result.httpStatus).toBe(402);
+      expect(result.body.needs_approval).toBe(true);
+      expect(String(result.body.summary)).toContain("権限混在社員");
+    } finally {
+      sales!.scopes = previousScopes;
+      sales!.approvalPolicy = previousPolicy;
+    }
   });
 
   test("acked mixed-domain employee with risk_based does not blanket-queue slack.post", async () => {
     const sales = getRuntimeEmployees().find((item) => item.id === "emp_sales");
     expect(sales).toBeTruthy();
-    expect(sales!.sodLevel).toBe("force_human");
+    expect(sales!.sodLevel).toBe("warn");
     const previous = sales!.approvalPolicy;
     sales!.approvalPolicy = "risk_based";
     try {

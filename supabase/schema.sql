@@ -62,6 +62,10 @@ create table if not exists employees (
   sod_level text not null default 'ok'
     check (sod_level in ('ok', 'warn', 'force_human')),
   action_limits jsonb not null default '{}'::jsonb,
+  tool_approval_defaults jsonb not null default '{
+    "mail.send": "always_human",
+    "calendar.confirm": "always_human"
+  }'::jsonb,
   spend jsonb,
   allowed_accounts jsonb not null default '[]'::jsonb,
   approval_notify_email text,

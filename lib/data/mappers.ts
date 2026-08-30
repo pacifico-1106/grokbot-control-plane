@@ -1,4 +1,5 @@
 import { normalizeProjectAccess } from "../employees/project-access";
+import { normalizeToolApprovalDefaults } from "../employees/approval-presets";
 import { normalizeVoice } from "../employees/voice";
 import type {
   AllowedAccount,
@@ -32,6 +33,7 @@ export function mapEmployeeRow(row: Record<string, unknown>): Employee {
     scopes: (row.scopes as EmployeeScope[]) || [],
     allowedPurposes: (row.allowed_purposes as string[]) || [],
     approvalPolicy: (row.approval_policy as ApprovalPolicy) || "risk_based",
+    toolApprovalDefaults: normalizeToolApprovalDefaults(row.tool_approval_defaults),
     sodLevel: (row.sod_level as Employee["sodLevel"]) || "ok",
     actionLimits: (row.action_limits as ActionLimits) || {},
     spend: (row.spend as SpendLimits | null) ?? null,

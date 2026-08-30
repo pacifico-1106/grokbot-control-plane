@@ -37,7 +37,7 @@ import {
   employeeHasToolScope,
   isAudienceGatedTool,
   isConfirmClassTool,
-  isForceApprovalTool,
+  toolRequiresHumanApproval,
   resolveGatewayTool,
 } from "@/lib/gateway/tools";
 import {
@@ -803,9 +803,11 @@ export async function runGatewayInvoke(
 
   // confirm / send / order (and force flags) → always needs_approval
   // unless a matching prior approval unlocks execution.
-  // SoD blanket queues only when approvalPolicy is always_human; per-tool force is unchanged.
+  // SoD blanket queues only when approvalPolicy is always_human.
+  // mayAuto tools (comm.reply / slack.post) honor employee policy + egress;
+  // sibling mail.send / calendar.confirm scopes do not force them.
   const forceApproval =
-    isForceApprovalTool(toolDef) ||
+    toolRequiresHumanApproval(toolDef, employee.toolApprovalDefaults) ||
     employee.approvalPolicy === "always_human" ||
     sodBlanket ||
     actionLimit.decision === "needs_approval";

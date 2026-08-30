@@ -5,6 +5,8 @@ import { assertBillingAllows } from "@/lib/billing/entitlements";
 import { appendAuditEvent, issueEmployee, runtimeModeLabel } from "@/lib/data";
 import { normalizeActionLimits } from "@/lib/action-gate";
 import { evaluateSod } from "@/lib/employees/sod";
+import { sodAckRequired } from "@/lib/employees/sod-override";
+import { normalizeToolApprovalDefaults } from "@/lib/employees/approval-presets";
 import { normalizeAllowedAccounts } from "@/lib/employees/allowed-accounts";
 import { ALL_SCOPES } from "@/lib/employees/policy-draft";
 import { POLICY_ERROR_MESSAGES, policyErrorPayload } from "@/lib/employees/policy-errors";
@@ -58,6 +60,7 @@ export async function POST(req: Request) {
     voice?: unknown;
     projectAccess?: unknown;
     postingAs?: unknown;
+    toolApprovalDefaults?: unknown;
   };
 
   const displayName = (body.displayName || "").trim();
@@ -77,6 +80,17 @@ export async function POST(req: Request) {
   const actionLimits = normalizeActionLimits(body.actionLimits);
   const sodVerdict = evaluateSod(scopes);
   const requestedApprovalPolicy = body.approvalPolicy || "risk_based";
+  const toolApprovalDefaults = normalizeToolApprovalDefaults(body.toolApprovalDefaults);
+  if (
+    sodVerdict.level !== "force_human" &&
+    sodAckRequired({
+      verdict: sodVerdict,
+      requested: requestedApprovalPolicy,
+      acknowledged: body.sodOverrideAcknowledged === true,
+    })
+  ) {
+    return NextResponse.json(policyErrorPayload("sod_ack_required"), { status: 400 });
+  }
 
   const secret = issueSecret();
   const expiresInDays = Math.min(365, Math.max(1, body.expiresInDays || 30));
@@ -101,6 +115,7 @@ export async function POST(req: Request) {
       scopes,
       allowedPurposes: body.allowedPurposes || [],
       approvalPolicy: requestedApprovalPolicy,
+      toolApprovalDefaults,
       sodOverrideAcknowledged: body.sodOverrideAcknowledged === true,
       actionLimits,
       spend,
@@ -130,7 +145,11 @@ export async function POST(req: Request) {
       displayName,
       employeeId: result.employee.id,
     });
-    if (sodVerdict.level === "force_human" && body.sodOverrideAcknowledged) {
+    if (
+      body.sodOverrideAcknowledged &&
+      (sodVerdict.level === "force_human" ||
+        (sodVerdict.level === "warn" && sodVerdict.domains.length >= 2))
+    ) {
       await appendAuditEvent({
         orgId: result.employee.orgId,
         employeeId: result.employee.id,

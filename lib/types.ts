@@ -427,6 +427,11 @@ export interface Employee {
   scopes: EmployeeScope[];
   allowedPurposes: string[];
   approvalPolicy: ApprovalPolicy;
+  /**
+   * Per-tool approval hints. mail.send / calendar.confirm are choosable
+   * (always_human | risk_based | auto). Missing keys default to always_human.
+   */
+  toolApprovalDefaults?: Record<string, ApprovalPolicy | "deny">;
   sodLevel: SodLevel;
   actionLimits: ActionLimits;
   /** Purchase budget / risk limits (optional until commerce:order). */

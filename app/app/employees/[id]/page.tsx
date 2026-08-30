@@ -26,6 +26,7 @@ import { getEmployeeActionLog } from "@/lib/employee-actions-demo";
 import { APPROVAL_POLICY_LABELS } from "@/lib/employees/policy-draft";
 import { buildConcentration } from "@/lib/employees/concentration";
 import { DOMAIN_LABELS } from "@/lib/gateway/domains";
+import { evaluateSod, isSendConfirmSodWarn } from "@/lib/employees/sod";
 
 export const dynamic = "force-dynamic";
 
@@ -121,7 +122,9 @@ export default async function EmployeeDetailPage({
                 ? employee.approvalPolicy === "always_human"
                   ? "複数の高リスク領域が混在しているため、すべての行為を人が承認します。権限を社員ごとに分けると自動化できる範囲が広がります。"
                   : "複数の高リスク領域が混在しています。警告を確認済みです。確定操作（送信・発注・日程確定）は今どおり人が止めます。"
-                : employee.sodLevel === "warn"
+                : isSendConfirmSodWarn(evaluateSod(employee.scopes))
+                  ? "メール送信と日程確定が同居しています。責任は事業者にあります。社内Slackは承認設定に従います。"
+                  : employee.sodLevel === "warn"
                   ? "ブラウザ操作を許可しています。利用アカウントを限定し、共有セッションを定期的に確認してください。"
                   : "高リスク権限は分離されています。"}
             </p>

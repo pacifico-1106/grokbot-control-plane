@@ -1,9 +1,11 @@
+import { sodNeedsOperatorAck } from "@/lib/employees/sod";
 import type { ApprovalPolicy, EmployeeScope, SodVerdict } from "@/lib/types";
 
+type VerdictForAck = Pick<SodVerdict, "level"> & Partial<Pick<SodVerdict, "domains">>;
+
 /**
- * SoD concentration stays fail-closed: mixed high-risk domains force
- * always_human unless the operator explicitly acknowledged the warning.
- * sod_level itself is not rewritten here (stays force_human for the UI).
+ * force_human without ack stays fail-closed (always_human).
+ * send+confirm warn never rewrites — PATCH/hire must collect ack instead.
  */
 export function resolveApprovalPolicy(input: {
   verdict: Pick<SodVerdict, "level">;
@@ -16,17 +18,17 @@ export function resolveApprovalPolicy(input: {
   return input.requested;
 }
 
-/** PATCH must tell the UI instead of silently re-locking. */
+/** PATCH / hire must tell the UI instead of silently re-locking. */
 export function sodAckRequired(input: {
-  verdict: Pick<SodVerdict, "level">;
+  verdict: VerdictForAck;
   requested: ApprovalPolicy;
   acknowledged?: boolean;
 }): boolean {
-  return (
-    input.verdict.level === "force_human" &&
-    input.requested !== "always_human" &&
-    !input.acknowledged
-  );
+  if (input.requested === "always_human" || input.acknowledged) return false;
+  return sodNeedsOperatorAck({
+    level: input.verdict.level,
+    domains: input.verdict.domains ?? [],
+  });
 }
 
 /** True when posted scopes + approvalPolicy match the stored employee. */
@@ -48,7 +50,7 @@ export function samePolicyFields(
 export function sodAckRequiredOnPatch(input: {
   existing: { scopes: readonly EmployeeScope[]; approvalPolicy: ApprovalPolicy };
   posted: { scopes: readonly EmployeeScope[]; approvalPolicy: ApprovalPolicy };
-  verdict: Pick<SodVerdict, "level">;
+  verdict: VerdictForAck;
   acknowledged?: boolean;
 }): boolean {
   if (samePolicyFields(input.existing, input.posted)) return false;

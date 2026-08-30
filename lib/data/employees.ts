@@ -14,6 +14,7 @@ import { normalizeActionLimits } from "@/lib/action-gate";
 import { defaultVoice, normalizeVoice } from "@/lib/employees/voice";
 import { defaultProjectAccess, normalizeProjectAccess } from "@/lib/employees/project-access";
 import { normalizePostingAs } from "@/lib/employees/posting-as";
+import { normalizeToolApprovalDefaults } from "@/lib/employees/approval-presets";
 import { appendAuditEvent } from "@/lib/data/audit";
 import type { ActionLimits, Employee, EmployeeProjectAccess, PostingAs } from "../types";
 
@@ -106,6 +107,7 @@ export type IssueEmployeeInput = {
   scopes: Employee["scopes"];
   allowedPurposes: string[];
   approvalPolicy: Employee["approvalPolicy"];
+  toolApprovalDefaults?: Employee["toolApprovalDefaults"];
   sodOverrideAcknowledged?: boolean;
   actionLimits?: ActionLimits;
   spend: Employee["spend"];
@@ -159,6 +161,7 @@ export async function issueEmployee(
       scopes: input.scopes,
       allowedPurposes: input.allowedPurposes,
       approvalPolicy: effectivePolicy,
+      toolApprovalDefaults: normalizeToolApprovalDefaults(input.toolApprovalDefaults),
       sodLevel: sodVerdict.level,
       actionLimits,
       spend: input.spend,
@@ -210,6 +213,7 @@ export async function issueEmployee(
       scopes: input.scopes,
       allowed_purposes: input.allowedPurposes,
       approval_policy: effectivePolicy,
+      tool_approval_defaults: normalizeToolApprovalDefaults(input.toolApprovalDefaults),
       sod_level: sodVerdict.level,
       action_limits: actionLimits,
       spend: input.spend ?? null,
@@ -324,6 +328,7 @@ export async function updateEmployeePolicy(input: {
   scopes: Employee["scopes"];
   allowedPurposes: string[];
   approvalPolicy: Employee["approvalPolicy"];
+  toolApprovalDefaults?: Employee["toolApprovalDefaults"];
   sodOverrideAcknowledged?: boolean;
   actionLimits?: ActionLimits;
   allowedAccounts?: Employee["allowedAccounts"];
@@ -349,6 +354,9 @@ export async function updateEmployeePolicy(input: {
       scopes: input.scopes,
       allowedPurposes: input.allowedPurposes,
       approvalPolicy: effectivePolicy,
+      ...(input.toolApprovalDefaults !== undefined
+        ? { toolApprovalDefaults: normalizeToolApprovalDefaults(input.toolApprovalDefaults) }
+        : {}),
       sodLevel: verdict.level,
       actionLimits,
       managerId: input.managerId === undefined ? employee.managerId : input.managerId,
@@ -376,6 +384,9 @@ export async function updateEmployeePolicy(input: {
       scopes: input.scopes,
       allowed_purposes: input.allowedPurposes,
       approval_policy: effectivePolicy,
+      ...(input.toolApprovalDefaults !== undefined
+        ? { tool_approval_defaults: normalizeToolApprovalDefaults(input.toolApprovalDefaults) }
+        : {}),
       sod_level: verdict.level,
       action_limits: actionLimits,
       ...(input.managerId !== undefined ? { manager_id: input.managerId } : {}),

@@ -9,6 +9,7 @@ import {
 import {
   alwaysHumanMustList,
   denyDefaultList,
+  normalizeToolApprovalDefaults,
 } from "@/lib/employees/approval-presets";
 import { BrowserAccountsSection } from "@/components/employees/BrowserAccountsSection";
 import { ManagerPicker } from "@/components/employees/ManagerPicker";
@@ -17,6 +18,7 @@ import { VoiceForm } from "@/components/employees/VoiceForm";
 import { ProjectAccessForm } from "@/components/employees/ProjectAccessForm";
 import { PolicyPreview } from "@/components/employees/PolicyPreview";
 import { PurposeChips } from "@/components/employees/PurposeChips";
+import { ToolApprovalHints } from "@/components/employees/ToolApprovalHints";
 import {
   APPROVAL_POLICY_LABELS,
   HIRE_APPROVAL_CHOICES,
@@ -25,7 +27,7 @@ import {
 } from "@/lib/employees/policy-draft";
 import { sanitizePurposes } from "@/lib/employees/purposes";
 import { DEFAULT_SPEND_LIMITS } from "@/lib/spend-gate";
-import { evaluateSod } from "@/lib/employees/sod";
+import { evaluateSod, isSendConfirmSodWarn, sodNeedsOperatorAck } from "@/lib/employees/sod";
 import { defaultVoice, normalizeVoice } from "@/lib/employees/voice";
 import { defaultProjectAccess, normalizeProjectAccess } from "@/lib/employees/project-access";
 import { policyErrorMessage } from "@/lib/employees/policy-errors";
@@ -76,6 +78,9 @@ export function HireEmployeeClient({ members = [], projects = [] }: { members?: 
     useState<ApprovalPolicy>("risk_based");
   const [actionLimits, setActionLimits] = useState<ActionLimits>({});
   const [sodOverrideAcknowledged, setSodOverrideAcknowledged] = useState(false);
+  const [toolApprovalDefaults, setToolApprovalDefaults] = useState(() =>
+    normalizeToolApprovalDefaults(undefined)
+  );
   const [expiresInDays, setExpiresInDays] = useState(30);
   const [spend, setSpend] = useState<SpendLimits>(emptySpend);
   const [futureSpendOpen, setFutureSpendOpen] = useState(false);
@@ -104,6 +109,8 @@ export function HireEmployeeClient({ members = [], projects = [] }: { members?: 
 
   const hasOrderScope = scopes.includes("commerce:order");
   const liveSod = useMemo(() => evaluateSod(scopes), [scopes]);
+  const sendConfirmWarn = isSendConfirmSodWarn(liveSod);
+  const needsSodAck = sodNeedsOperatorAck(liveSod);
 
   function applyDraft(d: EmployeePolicyDraft) {
     setDraft(d);
@@ -118,6 +125,7 @@ export function HireEmployeeClient({ members = [], projects = [] }: { members?: 
     setPurposes(sanitizePurposes(d.policy.allowedPurposes));
     setApprovalPolicy(d.policy.approvalPolicy);
     setActionLimits(d.policy.actionLimits || {});
+    setToolApprovalDefaults(normalizeToolApprovalDefaults(d.policy.toolApprovalDefaults));
     setSodOverrideAcknowledged(false);
     setExpiresInDays(d.policy.expiresInDays);
     setSpend(scopesUnique.includes("commerce:order")
@@ -198,6 +206,7 @@ export function HireEmployeeClient({ members = [], projects = [] }: { members?: 
           allowedPurposes: purposeList,
           approvalPolicy,
           actionLimits,
+          toolApprovalDefaults,
           sodOverrideAcknowledged,
           expiresInDays,
           spend: hasOrderScope || futureSpendOpen ? spend : null,
@@ -441,7 +450,11 @@ export function HireEmployeeClient({ members = [], projects = [] }: { members?: 
             >
               <div className="flex flex-wrap items-center gap-2">
                 <span className={`chip ${liveSod.level === "force_human" ? "chip-danger" : "chip-warn"}`}>
-                  {liveSod.level === "force_human" ? "職務分離が必要" : "ブラウザ権限に注意"}
+                  {liveSod.level === "force_human"
+                    ? "職務分離が必要"
+                    : sendConfirmWarn
+                      ? "送信と確定の同居"
+                      : "ブラウザ権限に注意"}
                 </span>
                 <span className="text-xs muted">
                   {liveSod.domains.map((domain) => DOMAIN_LABELS[domain]).join(" / ")}
@@ -452,13 +465,19 @@ export function HireEmployeeClient({ members = [], projects = [] }: { members?: 
                   ? sodOverrideAcknowledged
                     ? "警告を確認しました。承認ポリシーは選べます。確定操作（送信・発注・日程確定）は今どおり人が止めます。社員全体の常時承認だけ外します。"
                     : "複数の高リスク領域を持つため、警告を確認するまで発行できません。分けると下書きや提案を自動化できます。"
-                  : "ブラウザ操作は共有セッションで動きます。利用できるアカウントを次の画面で必ず限定してください。"}
+                  : sendConfirmWarn
+                    ? sodOverrideAcknowledged
+                      ? "警告を確認しました。責任は事業者にあります。社内Slackは承認設定に従います。送信と確定の初期値は人が止めます。"
+                      : "メール送信と日程確定が同居しています。発行には警告の承諾が必要です。責任は事業者にあります。"
+                    : "ブラウザ操作は共有セッションで動きます。利用できるアカウントを次の画面で必ず限定してください。"}
               </p>
-              {liveSod.level === "force_human" ? (
+              {needsSodAck ? (
                 <div className="mt-3 flex flex-col sm:flex-row gap-2">
-                  <button type="button" className="btn btn-primary text-xs" onClick={splitCurrentPermissions}>
-                    権限を分ける（推奨）
-                  </button>
+                  {liveSod.level === "force_human" ? (
+                    <button type="button" className="btn btn-primary text-xs" onClick={splitCurrentPermissions}>
+                      権限を分ける（推奨）
+                    </button>
+                  ) : null}
                   <button
                     type="button"
                     className="btn btn-ghost text-xs"
@@ -564,7 +583,7 @@ export function HireEmployeeClient({ members = [], projects = [] }: { members?: 
                   name="hire-approval-policy"
                   className="mt-1"
                   checked={approvalPolicy === choice.value}
-                  disabled={liveSod.level === "force_human" && !sodOverrideAcknowledged}
+                  disabled={needsSodAck && !sodOverrideAcknowledged}
                   onChange={() => setApprovalPolicy(choice.value)}
                 />
                 <span>
@@ -573,9 +592,11 @@ export function HireEmployeeClient({ members = [], projects = [] }: { members?: 
                 </span>
               </label>
             ))}
-            {liveSod.level === "force_human" && !sodOverrideAcknowledged ? (
+            {needsSodAck && !sodOverrideAcknowledged ? (
               <span className="block text-xs text-[var(--warn)]">
-                警告を確認すると選べます。確認しない場合は全件、人が見ます。
+                {sendConfirmWarn
+                  ? "警告を確認すると選べます。責任は事業者にあります。"
+                  : "警告を確認すると選べます。確認しない場合は全件、人が見ます。"}
               </span>
             ) : null}
           </fieldset>
@@ -611,6 +632,12 @@ export function HireEmployeeClient({ members = [], projects = [] }: { members?: 
             </label>
           </fieldset>
 
+          <ToolApprovalHints
+            scopes={scopes}
+            value={toolApprovalDefaults}
+            onChange={setToolApprovalDefaults}
+          />
+
           <PolicyPreview
             scopes={scopes}
             allowedPurposes={purposes}
@@ -619,6 +646,7 @@ export function HireEmployeeClient({ members = [], projects = [] }: { members?: 
             allowedAccounts={allowedAccounts}
             postingAs={postingAs}
             slackLinked={false}
+            toolApprovalDefaults={toolApprovalDefaults}
           />
 
           <ManagerPicker members={members} value={managerId} onChange={setManagerId} />
@@ -684,10 +712,10 @@ export function HireEmployeeClient({ members = [], projects = [] }: { members?: 
           <button
             type="button"
             className="btn btn-primary text-sm w-full sm:w-auto"
-            disabled={loading || (liveSod.level === "force_human" && !sodOverrideAcknowledged)}
+            disabled={loading || (needsSodAck && !sodOverrideAcknowledged)}
             onClick={goToSpendOrIssue}
           >
-            {liveSod.level === "force_human" && !sodOverrideAcknowledged
+            {needsSodAck && !sodOverrideAcknowledged
               ? "上の発行方法を選んでください"
               : "次へ：予算・承認の補足"}
           </button>
@@ -806,6 +834,12 @@ export function HireEmployeeClient({ members = [], projects = [] }: { members?: 
             </label>
           </fieldset>
 
+          <ToolApprovalHints
+            scopes={scopes}
+            value={toolApprovalDefaults}
+            onChange={setToolApprovalDefaults}
+          />
+
           <PolicyPreview
             scopes={scopes}
             allowedPurposes={purposes}
@@ -814,6 +848,7 @@ export function HireEmployeeClient({ members = [], projects = [] }: { members?: 
             allowedAccounts={allowedAccounts}
             postingAs={postingAs}
             slackLinked={false}
+            toolApprovalDefaults={toolApprovalDefaults}
           />
 
           <div className="flex flex-col sm:flex-row flex-wrap gap-2">

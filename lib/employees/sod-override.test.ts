@@ -59,6 +59,26 @@ describe("resolveApprovalPolicy", () => {
 });
 
 describe("sodAckRequired", () => {
+  test("send+confirm warn requires ack and never rewrites policy", () => {
+    const combo = evaluateSod(["mail:send", "calendar:confirm"]);
+    expect(combo.level).toBe("warn");
+    expect(
+      resolveApprovalPolicy({ verdict: combo, requested: "risk_based" })
+    ).toBe("risk_based");
+    expect(sodAckRequired({ verdict: combo, requested: "risk_based" })).toBe(true);
+    expect(
+      sodAckRequired({
+        verdict: combo,
+        requested: "risk_based",
+        acknowledged: true,
+      })
+    ).toBe(false);
+    expect(sodAckRequired({ verdict: combo, requested: "always_human" })).toBe(false);
+    expect(
+      sodAckRequired({ verdict: { level: "warn" }, requested: "risk_based" })
+    ).toBe(false);
+  });
+
   test("required only when mixed, not always_human, and no ack", () => {
     expect(
       sodAckRequired({ verdict: mixed, requested: "risk_based" })
@@ -142,5 +162,55 @@ describe("sodAckRequiredOnPatch", () => {
         acknowledged: false,
       })
     ).toBe(true);
+  });
+});
+
+const sendConfirm = evaluateSod(["mail:send", "calendar:confirm", "slack:post"]);
+
+describe("send+confirm warn does not rewrite policy", () => {
+  test("evaluateSod is warn", () => {
+    expect(sendConfirm.level).toBe("warn");
+  });
+
+  test("without ack still keeps requested risk_based (no silent always_human)", () => {
+    expect(
+      resolveApprovalPolicy({ verdict: sendConfirm, requested: "risk_based" })
+    ).toBe("risk_based");
+    expect(
+      resolveApprovalPolicy({
+        verdict: sendConfirm,
+        requested: "auto",
+        acknowledged: false,
+      })
+    ).toBe("auto");
+  });
+
+  test("with ack keeps requested policy", () => {
+    expect(
+      resolveApprovalPolicy({
+        verdict: sendConfirm,
+        requested: "risk_based",
+        acknowledged: true,
+      })
+    ).toBe("risk_based");
+  });
+
+  test("sod_ack_required still blocks save until ack", () => {
+    expect(
+      sodAckRequired({ verdict: sendConfirm, requested: "risk_based" })
+    ).toBe(true);
+    expect(
+      sodAckRequired({
+        verdict: sendConfirm,
+        requested: "risk_based",
+        acknowledged: true,
+      })
+    ).toBe(false);
+    expect(
+      sodAckRequired({
+        verdict: sendConfirm,
+        requested: "always_human",
+      })
+    ).toBe(false);
   });
 });

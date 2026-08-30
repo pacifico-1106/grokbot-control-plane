@@ -8,6 +8,7 @@ import { ALL_SCOPES } from "@/lib/employees/policy-draft";
 import { policyErrorPayload } from "@/lib/employees/policy-errors";
 import { evaluateSod } from "@/lib/employees/sod";
 import { samePolicyFields, sodAckRequiredOnPatch } from "@/lib/employees/sod-override";
+import { normalizeToolApprovalDefaults } from "@/lib/employees/approval-presets";
 import { normalizeVoice } from "@/lib/employees/voice";
 import { normalizeProjectAccess } from "@/lib/employees/project-access";
 import { normalizePostingAs } from "@/lib/employees/posting-as";
@@ -83,12 +84,18 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
     spend = normalizeSpendLimits(body.spend as Partial<SpendLimits>);
   }
 
+  const toolApprovalDefaults =
+    body.toolApprovalDefaults !== undefined
+      ? normalizeToolApprovalDefaults(body.toolApprovalDefaults)
+      : undefined;
+
   const updated = await updateEmployeePolicy({
     orgId,
     employeeId: id,
     scopes,
     allowedPurposes,
     approvalPolicy,
+    ...(toolApprovalDefaults !== undefined ? { toolApprovalDefaults } : {}),
     sodOverrideAcknowledged: sodOverrideAcknowledged || policyUnchanged,
     actionLimits: normalizeActionLimits(body.actionLimits),
     ...(allowedAccounts !== undefined ? { allowedAccounts } : {}),
@@ -118,7 +125,11 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
     summary,
     metadata: { scopes: updated.scopes, approvalPolicy: updated.approvalPolicy, sodLevel: updated.sodLevel, actionLimits: updated.actionLimits },
   });
-  if (sodVerdict.level === "force_human" && sodOverrideAcknowledged && approvalPolicy !== "always_human") {
+  if (
+    sodOverrideAcknowledged &&
+    approvalPolicy !== "always_human" &&
+    (sodVerdict.level === "force_human" || sodVerdict.level === "warn" && sodVerdict.domains.length >= 2)
+  ) {
     await appendAuditEvent({
       orgId,
       employeeId: id,

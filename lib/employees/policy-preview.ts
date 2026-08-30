@@ -4,7 +4,7 @@
  * Does not reimplement the Gateway matrix.
  */
 import { normalizeAllowedAccounts } from "@/lib/employees/allowed-accounts";
-import { evaluateSod } from "@/lib/employees/sod";
+import { evaluateSod, SOD_OPERATOR_RESPONSIBILITY_JA } from "@/lib/employees/sod";
 import type {
   AllowedAccount,
   ApprovalPolicy,
@@ -34,14 +34,18 @@ export function hasCommScope(scopes: readonly string[]): boolean {
   );
 }
 
-function mentionReplyForcedHuman(
-  approvalPolicy: ApprovalPolicy,
-  scopes: readonly string[],
-  liveSod?: Pick<SodVerdict, "level"> | null
-): boolean {
-  if (approvalPolicy === "always_human") return true;
-  const sodLevel = liveSod?.level ?? evaluateSod(scopes as EmployeeScope[]).level;
-  return sodLevel === "force_human";
+function mentionReplyForcedHuman(approvalPolicy: ApprovalPolicy): boolean {
+  return approvalPolicy === "always_human";
+}
+
+function choosablePreview(
+  tool: "mail.send" | "calendar.confirm",
+  hints?: Record<string, ApprovalPolicy | "deny"> | null
+): { value: string; tone: PolicyPreviewTone } {
+  const hint = hints?.[tool];
+  if (hint === "auto") return { value: "自動", tone: "warn" };
+  if (hint === "risk_based") return { value: "危ないときだけ人が見る", tone: "warn" };
+  return { value: "必ず人が見る", tone: "danger" };
 }
 
 export function buildPolicyPreview(input: {
@@ -52,6 +56,7 @@ export function buildPolicyPreview(input: {
   allowedAccounts?: AllowedAccount[] | null;
   postingAs?: PostingAs | null;
   slackLinked?: boolean;
+  toolApprovalDefaults?: Record<string, ApprovalPolicy | "deny"> | null;
 }): PolicyPreviewRow[] {
   void input.allowedPurposes;
   const scopes = input.scopes;
@@ -61,11 +66,8 @@ export function buildPolicyPreview(input: {
   const hasOrder = scopes.includes("commerce:order");
   const hasBrowser = scopes.includes("browser:use");
   const accounts = normalizeAllowedAccounts(input.allowedAccounts);
-  const mentionForced = mentionReplyForcedHuman(
-    input.approvalPolicy,
-    scopes,
-    input.liveSod
-  );
+  const mentionForced = mentionReplyForcedHuman(input.approvalPolicy);
+  const sodLevel = input.liveSod?.level ?? evaluateSod(scopes as EmployeeScope[]).level;
 
   const slack: PolicyPreviewRow = !hasSlack
     ? { id: "slack", label: "メンション返信", value: "できない", tone: "muted" }
@@ -73,12 +75,14 @@ export function buildPolicyPreview(input: {
       ? { id: "slack", label: "メンション返信", value: MENTION_REPLY_WAIT, tone: "warn" }
       : { id: "slack", label: "メンション返信", value: MENTION_REPLY_AUTO, tone: "ok" };
 
+  const mailHint = choosablePreview("mail.send", input.toolApprovalDefaults);
   const mail: PolicyPreviewRow = hasMailSend
-    ? { id: "mail", label: "メール送信", value: "必ず人が見る", tone: "danger" }
+    ? { id: "mail", label: "メール送信", value: mailHint.value, tone: mailHint.tone }
     : { id: "mail", label: "メール送信", value: "できない", tone: "muted" };
 
+  const calHint = choosablePreview("calendar.confirm", input.toolApprovalDefaults);
   const calendar: PolicyPreviewRow = hasConfirm
-    ? { id: "calendar", label: "予定の確定", value: "必ず人が見る", tone: "warn" }
+    ? { id: "calendar", label: "予定の確定", value: calHint.value, tone: calHint.tone }
     : { id: "calendar", label: "予定の確定", value: "できない", tone: "muted" };
 
   const order: PolicyPreviewRow = hasOrder
@@ -114,5 +118,14 @@ export function buildPolicyPreview(input: {
             tone: "danger",
           };
 
-  return [slack, posting, mail, calendar, order, browser, external];
+  const rows: PolicyPreviewRow[] = [slack, posting, mail, calendar, order, browser, external];
+  if (hasMailSend && hasConfirm) {
+    rows.push({
+      id: "combo",
+      label: "権限の組み合わせ",
+      value: SOD_OPERATOR_RESPONSIBILITY_JA,
+      tone: sodLevel === "force_human" ? "danger" : "warn",
+    });
+  }
+  return rows;
 }
