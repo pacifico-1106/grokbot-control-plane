@@ -335,7 +335,6 @@ export function isSnsPublishTool(def: GatewayToolDef | string): boolean {
   return id === "sns.publish";
 }
 
-
 /**
  * Per-tool hints can loosen choosable always-human tools (send / confirm / order / write / browser).
  * Audience-gated tools never force from the tool name; employee policy + egress decide.

@@ -379,14 +379,31 @@ describe("approval invoke snapshot + fulfill", () => {
 });
 
 describe("sns.publish fulfill-on-approve", () => {
-  const savedX = process.env.X_USER_ACCESS_TOKEN;
+  const ENV_KEYS = [
+    "X_USER_ACCESS_TOKEN",
+    "X_BEARER_TOKEN",
+    "SNS_X_BEARER_TOKEN",
+    "SNS_X_ACCESS_TOKEN",
+    "SNS_PUBLISH_STUB",
+  ] as const;
+  const saved = Object.fromEntries(ENV_KEYS.map((key) => [key, process.env[key]]));
+
+  function clearSnsEnv() {
+    for (const key of ENV_KEYS) delete process.env[key];
+  }
 
   afterEach(() => {
-    if (savedX === undefined) delete process.env.X_USER_ACCESS_TOKEN;
-    else process.env.X_USER_ACCESS_TOKEN = savedX;
+    for (const key of ENV_KEYS) {
+      const value = saved[key];
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
   });
 
-  async function queueSns(text = "八坂のSNS本文です。") {
+  async function queueSns(
+    text = "八坂のSNS本文です。",
+    extra: Record<string, unknown> = { scheduledAt: "2026-09-01T09:00:00+09:00" }
+  ) {
     const jobId = `job_sns_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
     const queued = await runGatewayInvoke({
       employeeId: "emp_sns",
@@ -398,7 +415,7 @@ describe("sns.publish fulfill-on-approve", () => {
         args: {
           surface: "x",
           text,
-          scheduledAt: "2026-09-01T09:00:00+09:00",
+          ...extra,
         },
       },
     });
@@ -423,8 +440,9 @@ describe("sns.publish fulfill-on-approve", () => {
   });
 
   test("approve calls X official API, not Slack", async () => {
-    const { queued, text } = await queueSns();
+    const { queued, text } = await queueSns("八坂の即時投稿です。", {});
     const approvalId = String(queued.body.approvalId || "");
+    clearSnsEnv();
     process.env.X_USER_ACCESS_TOKEN = "x-user-fulfill";
     let url = "";
     let slackCalls = 0;
@@ -451,10 +469,9 @@ describe("sns.publish fulfill-on-approve", () => {
   });
 
   test("missing adapter credentials records Japanese error; ticket stays approved", async () => {
-    const { queued } = await queueSns();
+    const { queued } = await queueSns("認証なし投稿", {});
     const approvalId = String(queued.body.approvalId || "");
-    delete process.env.X_USER_ACCESS_TOKEN;
-    delete process.env.X_BEARER_TOKEN;
+    clearSnsEnv();
     let called = 0;
     globalThis.fetch = (async () => {
       called += 1;
@@ -476,8 +493,9 @@ describe("sns.publish fulfill-on-approve", () => {
   });
 
   test("reject does not publish", async () => {
-    const { queued } = await queueSns();
+    const { queued } = await queueSns("拒否する投稿", {});
     const approvalId = String(queued.body.approvalId || "");
+    clearSnsEnv();
     process.env.X_USER_ACCESS_TOKEN = "x-user-fulfill";
     let called = 0;
     globalThis.fetch = (async () => {

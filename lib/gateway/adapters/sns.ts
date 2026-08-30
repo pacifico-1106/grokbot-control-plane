@@ -107,6 +107,16 @@ function tokenFromSecrets(secrets: Record<string, string>): string {
   );
 }
 
+function isFutureScheduled(value: unknown): boolean {
+  if (typeof value !== "string" || !value.trim()) return false;
+  const ms = Date.parse(value);
+  return Number.isFinite(ms) && ms > Date.now() + 30_000;
+}
+
+function scheduledUnsupportedError(surface: SnsSurface): string {
+  return `${SNS_SURFACE_LABELS[surface]} の予約投稿（公開予定）は公式API未配線です。本文は投稿していません。`;
+}
+
 function stubEnabled(secrets: Record<string, string>): boolean {
   return (
     process.env.SNS_PUBLISH_STUB?.trim() === "1" ||
@@ -188,6 +198,10 @@ export async function publishSnsPost(input: SnsPublishInput): Promise<SnsPublish
   const token = tokenFromSecrets(secrets) || envTokenFor(surface);
   if (!token) {
     return { ok: false, error: missingCredentialError(surface), surface };
+  }
+
+  if (isFutureScheduled(input.scheduledAt)) {
+    return { ok: false, error: scheduledUnsupportedError(surface), surface };
   }
 
   if (surface === "x") {

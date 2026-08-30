@@ -7,27 +7,36 @@ import {
 } from "./sns";
 
 const originalFetch = globalThis.fetch;
-const savedEnv = {
-  xUser: process.env.X_USER_ACCESS_TOKEN,
-  xBearer: process.env.X_BEARER_TOKEN,
-  liToken: process.env.LINKEDIN_ACCESS_TOKEN,
-  liUrn: process.env.LINKEDIN_AUTHOR_URN,
-  note: process.env.NOTE_API_TOKEN,
-  yt: process.env.YOUTUBE_ACCESS_TOKEN,
-};
+const ENV_KEYS = [
+  "SNS_X_BEARER_TOKEN",
+  "SNS_X_ACCESS_TOKEN",
+  "X_USER_ACCESS_TOKEN",
+  "X_BEARER_TOKEN",
+  "SNS_NOTE_ACCESS_TOKEN",
+  "NOTE_API_TOKEN",
+  "SNS_LINKEDIN_ACCESS_TOKEN",
+  "LINKEDIN_ACCESS_TOKEN",
+  "LINKEDIN_AUTHOR_URN",
+  "SNS_YOUTUBE_ACCESS_TOKEN",
+  "YOUTUBE_ACCESS_TOKEN",
+  "SNS_PUBLISH_STUB",
+] as const;
+const savedEnv: Record<string, string | undefined> = Object.fromEntries(
+  ENV_KEYS.map((key) => [key, process.env[key]])
+);
+
+function applyEnv(key: string, value: string | undefined) {
+  if (value === undefined) delete process.env[key];
+  else process.env[key] = value;
+}
 
 function restore() {
   globalThis.fetch = originalFetch;
-  const apply = (key: string, value: string | undefined) => {
-    if (value === undefined) delete process.env[key];
-    else process.env[key] = value;
-  };
-  apply("X_USER_ACCESS_TOKEN", savedEnv.xUser);
-  apply("X_BEARER_TOKEN", savedEnv.xBearer);
-  apply("LINKEDIN_ACCESS_TOKEN", savedEnv.liToken);
-  apply("LINKEDIN_AUTHOR_URN", savedEnv.liUrn);
-  apply("NOTE_API_TOKEN", savedEnv.note);
-  apply("YOUTUBE_ACCESS_TOKEN", savedEnv.yt);
+  for (const key of ENV_KEYS) applyEnv(key, savedEnv[key]);
+}
+
+function clearSnsEnv() {
+  for (const key of ENV_KEYS) delete process.env[key];
 }
 
 afterEach(restore);
@@ -52,8 +61,7 @@ describe("sns adapter", () => {
   });
 
   test("missing X credentials does not call fetch", async () => {
-    delete process.env.X_USER_ACCESS_TOKEN;
-    delete process.env.X_BEARER_TOKEN;
+    clearSnsEnv();
     let called = 0;
     globalThis.fetch = (async () => {
       called += 1;
@@ -71,6 +79,7 @@ describe("sns adapter", () => {
   });
 
   test("X official POST /2/tweets when user token is set", async () => {
+    clearSnsEnv();
     process.env.X_USER_ACCESS_TOKEN = "x-user-token";
     let url = "";
     let auth = "";
@@ -94,6 +103,7 @@ describe("sns adapter", () => {
   });
 
   test("note/youtube stay unwired even with a token", async () => {
+    clearSnsEnv();
     process.env.NOTE_API_TOKEN = "note-token";
     process.env.YOUTUBE_ACCESS_TOKEN = "yt-token";
     let called = 0;
