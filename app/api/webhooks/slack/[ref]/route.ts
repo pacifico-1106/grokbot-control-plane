@@ -8,6 +8,7 @@ import {
   getNotificationDelivery,
   resolveApproval,
 } from "@/lib/data";
+import { extraApproversAllow } from "@/lib/employees/approval-inbox";
 import { verifySlackSignature } from "@/lib/notify/slack";
 
 export const runtime = "nodejs";
@@ -109,6 +110,9 @@ async function handleBlockActions(
   ) {
     return;
   }
+
+  const employeeForGate = await getEmployee(approval.employeeId, channel.orgId);
+  if (!extraApproversAllow(userId, employeeForGate?.approverUserIds)) return;
 
   const actor = `slack:${userId || "unknown"}`;
   if (action.action_id === "staffpass_revise") {

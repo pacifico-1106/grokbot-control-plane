@@ -9,6 +9,7 @@ import {
 import { getAppOrigin } from "@/lib/approvals/tokens";
 import { ensureGlobalTelegramWebhook, registerTelegramWebhook } from "@/lib/notify/telegram";
 import { requireOrgAdminSession } from "@/lib/auth/require-org";
+import { channelErrorPayload } from "@/lib/notify/channel-errors";
 import type { NotificationProvider } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -25,7 +26,7 @@ export async function PUT(req: Request) {
   const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
   const provider = body.provider as NotificationProvider;
   if (provider !== "telegram" && provider !== "line" && provider !== "slack") {
-    return NextResponse.json({ error: "invalid_provider" }, { status: 400 });
+    return NextResponse.json(channelErrorPayload("invalid_provider"), { status: 400 });
   }
   const enabled = body.enabled === true;
   const allowedUserIds = Array.isArray(body.allowedUserIds)
@@ -42,7 +43,7 @@ export async function PUT(req: Request) {
       ? config.destinationId
       : config.channelId;
   if (enabled && !destination) {
-    return NextResponse.json({ error: "destination_required" }, { status: 400 });
+    return NextResponse.json(channelErrorPayload("destination_required"), { status: 400 });
   }
   const inboxId = String(body.id || "").trim();
   const existingChannel = inboxId
@@ -96,9 +97,7 @@ export async function PUT(req: Request) {
     });
     return NextResponse.json({ ok: true, channel: saved, webhook });
   } catch (error) {
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : "save_failed" },
-      { status: 400 }
-    );
+    const code = error instanceof Error ? error.message : "notification_channel_save_failed";
+    return NextResponse.json(channelErrorPayload(code), { status: 400 });
   }
 }

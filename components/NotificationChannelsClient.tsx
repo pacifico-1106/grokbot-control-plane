@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { channelErrorMessage } from "@/lib/notify/channel-errors";
 import type { NotificationChannel, NotificationProvider } from "@/lib/types";
 
 type InboxDraft = {
@@ -152,7 +153,7 @@ export function NotificationChannelsClient({ initialChannels }: { initialChannel
         body: JSON.stringify(payload),
       });
       const body = await response.json();
-      if (!response.ok) throw new Error(body.error || "保存に失敗しました");
+      if (!response.ok) throw new Error(channelErrorMessage(body));
       const saved = body.channel as NotificationChannel;
       setChannels((current) => {
         const without = current.filter((item) => item.id !== saved.id);
@@ -174,7 +175,7 @@ export function NotificationChannelsClient({ initialChannels }: { initialChannel
       );
       setMessage(
         body.webhook?.ok === false
-          ? `保存しましたがWebhook登録に失敗: ${body.webhook.error}`
+          ? "保存しましたが Webhook の登録に失敗しました"
           : "保存しました"
       );
     } catch (error) {
@@ -194,7 +195,7 @@ export function NotificationChannelsClient({ initialChannels }: { initialChannel
         body: JSON.stringify({ channelId: draft.id }),
       });
       const body = await response.json();
-      if (!response.ok) throw new Error(body.error || "テストに失敗しました");
+      if (!response.ok) throw new Error(channelErrorMessage(body, "テストに失敗しました"));
       setMessage(`${providerTitle(draft.provider)}へテスト通知を送信しました`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "テストに失敗しました");

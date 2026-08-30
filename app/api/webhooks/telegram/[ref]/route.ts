@@ -17,6 +17,7 @@ import {
   sendTelegramTextToChannel,
   telegramTargetFromChannel,
 } from "@/lib/notify/telegram";
+import { extraApproversAllow } from "@/lib/employees/approval-inbox";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -62,8 +63,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ ref: string }>
       return NextResponse.json({ ok: true });
     }
     const employeeForGate = await getEmployee(approval.employeeId, channel.orgId);
-    const extraApprovers = employeeForGate?.approverUserIds ?? [];
-    if (extraApprovers.length && !extraApprovers.includes(String(query.from!.id))) {
+    if (!extraApproversAllow(query.from?.id, employeeForGate?.approverUserIds)) {
       await answerTelegramCallbackForChannel(channel, query.id || "", "この操作は許可されていません");
       return NextResponse.json({ ok: true, ignored: true });
     }

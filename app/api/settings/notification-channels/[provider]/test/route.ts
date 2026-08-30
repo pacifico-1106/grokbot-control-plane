@@ -7,6 +7,7 @@ import { sendLineText } from "@/lib/notify/line";
 import { sendSlackTextToChannel } from "@/lib/notify/slack";
 import { sendTelegramTextToChannel } from "@/lib/notify/telegram";
 import { requireOrgAdminSession } from "@/lib/auth/require-org";
+import { channelErrorPayload } from "@/lib/notify/channel-errors";
 import type { NotificationProvider } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -19,7 +20,7 @@ export async function POST(
   if (!gate.ok) return gate.response;
   const { provider: raw } = await ctx.params;
   if (raw !== "telegram" && raw !== "line" && raw !== "slack") {
-    return NextResponse.json({ error: "invalid_provider" }, { status: 400 });
+    return NextResponse.json(channelErrorPayload("invalid_provider"), { status: 400 });
   }
   const provider = raw as NotificationProvider;
   const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
@@ -28,7 +29,7 @@ export async function POST(
   const channel = requestedId
     ? enabled.find((item) => item.id === requestedId && item.provider === provider)
     : enabled.find((item) => item.provider === provider);
-  if (!channel) return NextResponse.json({ error: "enabled_channel_not_found" }, { status: 404 });
+  if (!channel) return NextResponse.json(channelErrorPayload("enabled_channel_not_found"), { status: 404 });
   const message = "✅ StaffPass 通知チャネルのテストに成功しました。";
   const result = provider === "telegram"
     ? await sendTelegramTextToChannel(channel, message)
@@ -45,5 +46,10 @@ export async function POST(
     summary: `${provider} テスト通知`,
     metadata: { channelId: channel.id, ok: result.ok, error: result.error },
   });
-  return NextResponse.json({ ok: result.ok, error: result.error }, { status: result.ok ? 200 : 502 });
+  return NextResponse.json(
+    result.ok
+      ? { ok: true }
+      : channelErrorPayload("notification_channel_save_failed", "テスト通知の送信に失敗しました"),
+    { status: result.ok ? 200 : 502 }
+  );
 }

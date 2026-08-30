@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getCurrentOrgId } from "@/lib/auth/session";
-import { appendAuditEvent, getEmployee, updateEmployeePolicy } from "@/lib/data";
+import { appendAuditEvent, getEmployee, listNotificationChannels, updateEmployeePolicy } from "@/lib/data";
 import { normalizeActionLimits } from "@/lib/action-gate";
 import { requireCapability } from "@/lib/team/demo-actor";
 import { normalizeAllowedAccounts } from "@/lib/employees/allowed-accounts";
@@ -13,7 +13,7 @@ import { normalizeToolApprovalDefaults } from "@/lib/employees/approval-presets"
 import { normalizeVoice } from "@/lib/employees/voice";
 import { normalizeProjectAccess } from "@/lib/employees/project-access";
 import { normalizePostingAs } from "@/lib/employees/posting-as";
-import { normalizeApproverUserIds } from "@/lib/employees/approval-inbox";
+import { normalizeApproverUserIds, parseApprovalChannelId } from "@/lib/employees/approval-inbox";
 import { normalizeEmployeeIdentityField } from "@/lib/employees/identity";
 import { normalizeSpendLimits } from "@/lib/spend-gate";
 import type { AllowedAccount, ApprovalPolicy, EmployeeScope, SpendLimits } from "@/lib/types";
@@ -91,6 +91,16 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
       ? normalizeToolApprovalDefaults(body.toolApprovalDefaults)
       : undefined;
 
+  let nextApprovalChannelId: string | null | undefined;
+  if (body.approvalChannelId !== undefined) {
+    const parsedInbox = parseApprovalChannelId(
+      body.approvalChannelId,
+      (await listNotificationChannels(orgId)).map((channel) => channel.id)
+    );
+    if (!parsedInbox.ok) return fail("approval_channel_not_found", 400);
+    nextApprovalChannelId = parsedInbox.id;
+  }
+
   const updated = await updateEmployeePolicy({
     orgId,
     employeeId: id,
@@ -109,8 +119,8 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
     ...(body.postingAs !== undefined ? { postingAs: normalizePostingAs(body.postingAs) } : {}),
     ...(displayName !== undefined ? { displayName } : {}),
     ...(roleLabel !== undefined ? { roleLabel } : {}),
-    ...(body.approvalChannelId !== undefined
-      ? { approvalChannelId: body.approvalChannelId ? String(body.approvalChannelId) : null }
+    ...(nextApprovalChannelId !== undefined
+      ? { approvalChannelId: nextApprovalChannelId }
       : {}),
     ...(body.approverUserIds !== undefined
       ? { approverUserIds: normalizeApproverUserIds(body.approverUserIds) }

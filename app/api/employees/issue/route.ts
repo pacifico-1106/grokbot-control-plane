@@ -2,7 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { NextResponse } from "next/server";
 import { getCurrentOrgId } from "@/lib/auth/session";
 import { assertBillingAllows } from "@/lib/billing/entitlements";
-import { appendAuditEvent, issueEmployee, runtimeModeLabel } from "@/lib/data";
+import { appendAuditEvent, issueEmployee, listNotificationChannels, runtimeModeLabel } from "@/lib/data";
 import { normalizeActionLimits } from "@/lib/action-gate";
 import { evaluateSod } from "@/lib/employees/sod";
 import { sodAckRequired } from "@/lib/employees/sod-override";
@@ -19,7 +19,7 @@ import { normalizeSpendLimits } from "@/lib/spend-gate";
 import { defaultVoice, normalizeVoice } from "@/lib/employees/voice";
 import { defaultProjectAccess, normalizeProjectAccess } from "@/lib/employees/project-access";
 import { normalizePostingAs } from "@/lib/employees/posting-as";
-import { normalizeApproverUserIds } from "@/lib/employees/approval-inbox";
+import { normalizeApproverUserIds, parseApprovalChannelId } from "@/lib/employees/approval-inbox";
 import { requireCapability } from "@/lib/team/demo-actor";
 import type { ActionLimits, AllowedAccount, ApprovalPolicy, EmployeeScope, SpendLimits } from "@/lib/types";
 
@@ -110,6 +110,14 @@ export async function POST(req: Request) {
       displayName,
     });
 
+    const parsedInbox = parseApprovalChannelId(
+      body.approvalChannelId,
+      (await listNotificationChannels(orgId)).map((channel) => channel.id)
+    );
+    if (!parsedInbox.ok) {
+      return NextResponse.json(policyErrorPayload("approval_channel_not_found"), { status: 400 });
+    }
+
     const result = await issueEmployee({
       orgId,
       displayName,
@@ -133,7 +141,7 @@ export async function POST(req: Request) {
           ? defaultProjectAccess()
           : normalizeProjectAccess(body.projectAccess),
       postingAs: normalizePostingAs(body.postingAs),
-      approvalChannelId: body.approvalChannelId?.trim() || null,
+      approvalChannelId: parsedInbox.id,
       approverUserIds: normalizeApproverUserIds(body.approverUserIds),
       secretHash: secret.hash,
       secretPrefix: secret.prefix,

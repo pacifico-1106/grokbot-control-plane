@@ -36,7 +36,6 @@ function defaultProviderLabel(provider: NotificationProvider): string {
   return "Slack";
 }
 
-
 function demoPublic(row: NotificationChannelRuntime): NotificationChannel {
   return {
     id: row.id,
@@ -273,13 +272,9 @@ export async function upsertNotificationChannel(
       .maybeSingle();
     existingCiphertext = String(existingSecret?.credentials_ciphertext || "");
   }
-  let secrets = cleanSecrets;
-  if (existingCiphertext) {
-    secrets = {
-      ...decryptNotificationSecrets(existingCiphertext),
-      ...cleanSecrets,
-    };
-  }
+  const secrets = existingCiphertext
+    ? { ...decryptNotificationSecrets(existingCiphertext), ...cleanSecrets }
+    : cleanSecrets;
   if (input.enabled && Object.keys(secrets).length === 0) {
     throw new Error("notification_credentials_required");
   }

@@ -21,6 +21,7 @@ export const POLICY_ERROR_MESSAGES: Record<string, string> = {
   slack_oauth_unconfigured: "Slack アプリの OAuth が未設定です",
   invalid_wake_webhook_url: "起こす webhook の URL が正しくありません",
   wake_webhook_url_required: "起こす webhook の URL が必要です",
+  approval_channel_not_found: "指定の承認インボックスが見つかりません",
 };
 
 export function looksJapanese(value: string): boolean {

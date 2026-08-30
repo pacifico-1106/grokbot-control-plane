@@ -10,6 +10,7 @@ import {
   resolveApproval,
   updateApprovalTelegramState,
 } from "@/lib/data";
+import { extraApproversAllow } from "@/lib/employees/approval-inbox";
 import {
   isAllowedLineSource,
   promptLineRevision,
@@ -57,6 +58,11 @@ export async function POST(req: Request, ctx: { params: Promise<{ ref: string }>
         : null;
       if (!match || !approval || !delivery || approval.orgId !== channel.orgId || approval.status !== "pending") {
         if (event.replyToken) await sendLineText(channel, "対象は処理済みか見つかりません。", event.replyToken);
+        continue;
+      }
+      const employeeForGate = await getEmployee(approval.employeeId, channel.orgId);
+      if (!extraApproversAllow(userId, employeeForGate?.approverUserIds)) {
+        if (event.replyToken) await sendLineText(channel, "この操作は許可されていません。", event.replyToken);
         continue;
       }
       if (match[1] === "e") {
