@@ -29,6 +29,13 @@ describe("separation of duties", () => {
     expect(sodNeedsOperatorAck(verdict)).toBe(true);
   });
 
+  test("send+confirm with browser still warn", () => {
+    const verdict = evaluateSod(["mail:send", "calendar:confirm", "browser:use"]);
+    expect(verdict.level).toBe("warn");
+    expect(isSendConfirmSodWarn(verdict)).toBe(true);
+    expect(sodNeedsOperatorAck(verdict)).toBe(true);
+  });
+
   test("send + confirm + order stays force_human", () => {
     const verdict = evaluateSod(["mail:send", "calendar:confirm", "commerce:order"]);
     expect(verdict.level).toBe("force_human");

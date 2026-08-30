@@ -107,7 +107,7 @@ async function evaluateInvokeEgress(input: {
  * Fail-closed tool invoke (P0 contract) — shared by Gateway HTTP + remote MCP.
  * - purpose + jobId (or job_id) required
  * - unregistered tools rejected
- * - confirm / send / order force needs_approval (always_human never bypassed)
+ * - confirm / send / order default needs_approval; per-tool hints can loosen mail.send / calendar.confirm
  * - browser.use: allowedAccounts missing/mismatch → fail-closed (C5)
  * - AgentMail tools are reserved (P0.5) — no live send
  * MCP must call this path; never a softer MCP-only branch.

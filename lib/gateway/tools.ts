@@ -3,7 +3,7 @@ import type { ApprovalPolicy } from "@/lib/types";
 /**
  * Gateway tool allowlist (P0 contract — Kimura + Ando A).
  * Unregistered tools are rejected fail-closed.
- * confirm / send paths always force needs_approval (always_human default).
+ * confirm / send default needs_approval; mail.send / calendar.confirm honor per-tool hints.
  * propose / draft may auto under employee approvalPolicy.
  */
 
