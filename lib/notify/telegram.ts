@@ -5,8 +5,9 @@ import {
 } from "@/lib/data/approvals";
 import {
   getNotificationDelivery,
+  isTokyo307PilotOrg,
   recordNotificationDelivery,
-  shouldUseGlobalTelegramFallback,
+  resolveEmployeeApprovalChannel,
   type NotificationChannelRuntime,
 } from "@/lib/data/notification-channels";
 import type { ApprovalRequest, Employee } from "@/lib/types";
@@ -305,6 +306,12 @@ export async function answerTelegramCallbackForChannel(
   }, target.token);
 }
 
+export function usesEnvTelegramBotToken(token: string | undefined | null): boolean {
+  const envToken = process.env.TELEGRAM_BOT_TOKEN?.trim() || "";
+  const given = token?.trim() || "";
+  return Boolean(envToken && given && envToken === given);
+}
+
 export async function registerTelegramWebhook(
   channel: NotificationChannelRuntime,
   absoluteWebhookUrl: string
@@ -312,6 +319,9 @@ export async function registerTelegramWebhook(
   const target = telegramTargetFromChannel(channel);
   const secret = channel.secrets.webhookSecret?.trim();
   if (!target || !secret) return { ok: false, error: "telegram_credentials_incomplete" };
+  if (usesEnvTelegramBotToken(target.token)) {
+    return { ok: true, skipped: true };
+  }
   const result = await callTelegram("setWebhook", {
     url: absoluteWebhookUrl,
     secret_token: secret,
@@ -345,7 +355,10 @@ export async function sendApprovalToTelegram(
   approval: ApprovalRequest,
   employee: Employee | null
 ): Promise<TelegramResult> {
-  if (!(await shouldUseGlobalTelegramFallback(approval.orgId))) {
+  if (await resolveEmployeeApprovalChannel(approval.orgId, employee)) {
+    return { ok: false, skipped: true };
+  }
+  if (!(await isTokyo307PilotOrg(approval.orgId))) {
     return { ok: false, skipped: true };
   }
   const { token, chatId } = config();
@@ -408,7 +421,10 @@ export async function editTelegramApprovalMessage(
   status: "approved" | "rejected" | "revision_requested",
   actor: string
 ): Promise<TelegramResult> {
-  if (!(await shouldUseGlobalTelegramFallback(approval.orgId))) {
+  if (await resolveEmployeeApprovalChannel(approval.orgId, null)) {
+    return { ok: false, skipped: true };
+  }
+  if (!(await isTokyo307PilotOrg(approval.orgId))) {
     return { ok: false, skipped: true };
   }
   const { chatId } = config();
@@ -440,7 +456,10 @@ export async function promptTelegramRevision(
   approval: ApprovalRequest,
   userId: number
 ): Promise<TelegramResult> {
-  if (!(await shouldUseGlobalTelegramFallback(approval.orgId))) {
+  if (await resolveEmployeeApprovalChannel(approval.orgId, null)) {
+    return { ok: false, skipped: true };
+  }
+  if (!(await isTokyo307PilotOrg(approval.orgId))) {
     return { ok: false, skipped: true };
   }
   const { chatId } = config();

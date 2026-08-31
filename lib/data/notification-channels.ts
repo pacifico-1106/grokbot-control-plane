@@ -30,6 +30,17 @@ export type UpsertNotificationChannelInput = {
 
 const demoChannels: NotificationChannelRuntime[] = [];
 
+type DemoDelivery = {
+  approvalId: string;
+  orgId: string;
+  channelId: string;
+  provider: NotificationProvider;
+  externalMessageId: string | null;
+  context: Record<string, unknown>;
+};
+
+const demoDeliveries: DemoDelivery[] = [];
+
 function defaultProviderLabel(provider: NotificationProvider): string {
   if (provider === "telegram") return "Telegram";
   if (provider === "line") return "LINE";
@@ -189,6 +200,70 @@ export async function getNotificationChannelByWebhookRef(
   return (await runtimeRows({ provider, webhookRef: ref }))[0] ?? null;
 }
 
+function telegramEnvConfig() {
+  return {
+    token: process.env.TELEGRAM_BOT_TOKEN?.trim() || "",
+    chatId: process.env.TELEGRAM_APPROVAL_CHAT_ID?.trim() || "",
+    webhookSecret: process.env.TELEGRAM_WEBHOOK_SECRET?.trim() || "",
+    allowedUserIds: (process.env.TELEGRAM_ALLOWED_USER_IDS || "")
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean),
+  };
+}
+
+async function applyTelegramPilotEnvReuse(input: {
+  orgId: string;
+  id?: string;
+  provider: NotificationProvider;
+  enabled: boolean;
+  isDefault?: boolean;
+  config: Record<string, unknown>;
+  secrets: Record<string, string>;
+}): Promise<{
+  config: Record<string, unknown>;
+  secrets: Record<string, string>;
+  isDefault?: boolean;
+}> {
+  if (input.provider !== "telegram" || !input.enabled) {
+    return { config: input.config, secrets: input.secrets, isDefault: input.isDefault };
+  }
+  const env = telegramEnvConfig();
+  const secrets = { ...input.secrets };
+  let config = { ...input.config };
+  let isDefault = input.isDefault;
+  const hadToken = Boolean(secrets.botToken?.trim());
+  const isPilot = await isTokyo307PilotOrg(input.orgId);
+  if (!hadToken) {
+    if (isPilot && env.token) {
+      secrets.botToken = env.token;
+      if (env.webhookSecret) secrets.webhookSecret = env.webhookSecret;
+    }
+  } else if (isPilot && env.token && secrets.botToken.trim() === env.token && env.webhookSecret) {
+    secrets.webhookSecret = env.webhookSecret;
+  }
+  const usingEnvBot = Boolean(env.token && secrets.botToken?.trim() === env.token);
+  if (usingEnvBot && isPilot) {
+    const chatId = String(config.chatId || "").trim();
+    if (!chatId) {
+      const others = (await listNotificationChannels(input.orgId)).filter(
+        (row) => row.provider === "telegram" && row.id !== input.id
+      );
+      if (others.length > 0 || !env.chatId) {
+        throw new Error("destination_required");
+      }
+      config = { ...config, chatId: env.chatId };
+      if (!Array.isArray(config.allowedUserIds) || config.allowedUserIds.length === 0) {
+        if (env.allowedUserIds.length > 0) {
+          config = { ...config, allowedUserIds: env.allowedUserIds };
+        }
+      }
+      isDefault = true;
+    }
+  }
+  return { config, secrets, isDefault };
+}
+
 function assertProviderSecrets(
   provider: NotificationProvider,
   enabled: boolean,
@@ -223,22 +298,31 @@ export async function upsertNotificationChannel(
       ? demoChannels.findIndex((row) => row.id === input.id && row.orgId === input.orgId)
       : -1;
     const existing = idx >= 0 ? demoChannels[idx] : null;
+    const applied = await applyTelegramPilotEnvReuse({
+      orgId: input.orgId,
+      id: existing?.id,
+      provider: input.provider,
+      enabled: input.enabled,
+      isDefault: input.isDefault,
+      config: input.config,
+      secrets: { ...(existing?.secrets || {}), ...cleanSecrets },
+    });
     const now = new Date().toISOString();
     const orgRows = demoChannels.filter((row) => row.orgId === input.orgId);
     const wantsDefault =
-      input.isDefault === true || (!existing && !orgRows.some((row) => row.isDefault));
+      applied.isDefault === true || (!existing && !orgRows.some((row) => row.isDefault));
     const row: NotificationChannelRuntime = {
       id: existing?.id || `chn_${randomBytes(6).toString("hex")}`,
       orgId: input.orgId || DEMO_ORG.id,
       provider: input.provider,
       label: input.label?.trim() || defaultProviderLabel(input.provider),
       enabled: input.enabled,
-      isDefault: wantsDefault || Boolean(existing?.isDefault && input.isDefault !== false),
-      config: input.config,
+      isDefault: wantsDefault || Boolean(existing?.isDefault && applied.isDefault !== false),
+      config: applied.config,
       webhookRef: existing?.webhookRef || randomBytes(6).toString("hex"),
-      hasCredentials: Boolean(Object.keys(cleanSecrets).length || existing?.hasCredentials),
+      hasCredentials: Boolean(Object.keys(applied.secrets).length || existing?.hasCredentials),
       webhookPath: "",
-      secrets: { ...(existing?.secrets || {}), ...cleanSecrets },
+      secrets: applied.secrets,
       createdAt: existing?.createdAt || now,
       updatedAt: now,
     };
@@ -272,9 +356,19 @@ export async function upsertNotificationChannel(
       .maybeSingle();
     existingCiphertext = String(existingSecret?.credentials_ciphertext || "");
   }
-  const secrets = existingCiphertext
+  const mergedSecrets = existingCiphertext
     ? { ...decryptNotificationSecrets(existingCiphertext), ...cleanSecrets }
     : cleanSecrets;
+  const applied = await applyTelegramPilotEnvReuse({
+    orgId: input.orgId,
+    id: existing?.id ? String(existing.id) : undefined,
+    provider: input.provider,
+    enabled: input.enabled,
+    isDefault: input.isDefault,
+    config: input.config,
+    secrets: mergedSecrets,
+  });
+  const secrets = applied.secrets;
   if (input.enabled && Object.keys(secrets).length === 0) {
     throw new Error("notification_credentials_required");
   }
@@ -289,15 +383,15 @@ export async function upsertNotificationChannel(
   const hasDefault = (orgRows || []).some(
     (row) => Boolean((row as { is_default?: boolean }).is_default) && String((row as { id: string }).id) !== String(existing?.id || "")
   );
-  const keepDefault = Boolean(existing?.is_default) && input.isDefault !== false;
-  const wantsDefault = input.isDefault === true || (!existing && !hasDefault);
+  const keepDefault = Boolean(existing?.is_default) && applied.isDefault !== false;
+  const wantsDefault = applied.isDefault === true || (!existing && !hasDefault);
   const payload = {
     org_id: input.orgId,
     provider: input.provider,
     label: input.label?.trim() || defaultProviderLabel(input.provider),
     enabled: input.enabled,
     is_default: (wantsDefault || keepDefault) && !hasDefault,
-    config: input.config,
+    config: applied.config,
     updated_at: new Date().toISOString(),
   };
   const query = existing?.id
@@ -357,8 +451,21 @@ export function isTokyo307PilotEmail(email: string | null | undefined): boolean 
 
 export async function shouldUseGlobalTelegramFallback(orgId: string): Promise<boolean> {
   if (!(await isTokyo307PilotOrg(orgId))) return false;
-  const configured = await runtimeRows({ orgId, provider: "telegram" });
+  const configured = (await listNotificationChannels(orgId)).filter(
+    (row) => row.provider === "telegram"
+  );
   return configured.length === 0;
+}
+
+export async function findPilotTelegramChannelByChatId(
+  chatId: string
+): Promise<NotificationChannelRuntime | null> {
+  const id = String(chatId || "").trim();
+  if (!id) return null;
+  const orgId = isDemoMode() ? DEMO_ORG.id : await getTokyo307PilotOrgId();
+  if (!orgId) return null;
+  const channels = await runtimeRows({ orgId, provider: "telegram" });
+  return channels.find((channel) => String(channel.config.chatId || "").trim() === id) ?? null;
 }
 
 export async function getTokyo307PilotOrgId(): Promise<string | null> {
@@ -382,7 +489,22 @@ export async function recordNotificationDelivery(input: {
   externalMessageId?: string | null;
   context?: Record<string, unknown>;
 }): Promise<void> {
-  if (isDemoMode()) return;
+  if (isDemoMode()) {
+    const row: DemoDelivery = {
+      approvalId: input.approval.id,
+      orgId: input.approval.orgId,
+      channelId: input.channelId,
+      provider: input.provider,
+      externalMessageId: input.externalMessageId ?? null,
+      context: input.context ?? {},
+    };
+    const idx = demoDeliveries.findIndex(
+      (item) => item.approvalId === row.approvalId && item.channelId === row.channelId
+    );
+    if (idx >= 0) demoDeliveries[idx] = row;
+    else demoDeliveries.push(row);
+    return;
+  }
   const admin = createSupabaseAdminClient();
   if (!admin) return;
   await admin.from("approval_notification_deliveries").upsert(
@@ -403,7 +525,14 @@ export async function getNotificationDelivery(input: {
   approvalId: string;
   channelId: string;
 }): Promise<{ externalMessageId: string | null; context: Record<string, unknown> } | null> {
-  if (isDemoMode()) return null;
+  if (isDemoMode()) {
+    const row = demoDeliveries.find(
+      (item) => item.approvalId === input.approvalId && item.channelId === input.channelId
+    );
+    return row
+      ? { externalMessageId: row.externalMessageId, context: row.context }
+      : null;
+  }
   const admin = createSupabaseAdminClient();
   if (!admin) return null;
   const { data, error } = await admin
@@ -426,7 +555,13 @@ export async function getApprovalIdByDeliveryExternal(input: {
   channelId: string;
   externalMessageId: string;
 }): Promise<string | null> {
-  if (isDemoMode()) return null;
+  if (isDemoMode()) {
+    const row = demoDeliveries.find(
+      (item) =>
+        item.channelId === input.channelId && item.externalMessageId === input.externalMessageId
+    );
+    return row ? row.approvalId : null;
+  }
   const admin = createSupabaseAdminClient();
   if (!admin) return null;
   const { data, error } = await admin
@@ -467,10 +602,20 @@ export async function findAwaitingRevisionApproval(input: {
 export function resetDemoNotificationChannels(orgId?: string): void {
   if (!orgId) {
     demoChannels.length = 0;
+    demoDeliveries.length = 0;
     return;
   }
+  const removed = new Set<string>();
   for (let i = demoChannels.length - 1; i >= 0; i -= 1) {
-    if (demoChannels[i].orgId === orgId) demoChannels.splice(i, 1);
+    if (demoChannels[i].orgId === orgId) {
+      removed.add(demoChannels[i].id);
+      demoChannels.splice(i, 1);
+    }
+  }
+  for (let i = demoDeliveries.length - 1; i >= 0; i -= 1) {
+    if (demoDeliveries[i].orgId === orgId || removed.has(demoDeliveries[i].channelId)) {
+      demoDeliveries.splice(i, 1);
+    }
   }
 }
 

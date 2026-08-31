@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import {
   appendAuditEvent,
   getNotificationChannelByWebhookRef,
+  isTokyo307PilotOrg,
   listNotificationChannels,
   upsertNotificationChannel,
 } from "@/lib/data";
@@ -42,17 +43,25 @@ export async function PUT(req: Request) {
     : provider === "line"
       ? config.destinationId
       : config.channelId;
-  if (enabled && !destination) {
+  const inboxId = String(body.id || "").trim();
+  const channels = await listNotificationChannels(gate.orgId);
+  const existingChannel = inboxId
+    ? channels.find((channel) => channel.id === inboxId)
+    : undefined;
+  const botToken = provider === "telegram" ? String(body.botToken || "").trim() : "";
+  const envReuseFirstInbox =
+    provider === "telegram" &&
+    enabled &&
+    !botToken &&
+    (await isTokyo307PilotOrg(gate.orgId)) &&
+    !channels.some((channel) => channel.provider === "telegram" && channel.id !== existingChannel?.id);
+  if (enabled && !destination && !envReuseFirstInbox) {
     return NextResponse.json(channelErrorPayload("destination_required"), { status: 400 });
   }
-  const inboxId = String(body.id || "").trim();
-  const existingChannel = inboxId
-    ? (await listNotificationChannels(gate.orgId)).find((channel) => channel.id === inboxId)
-    : undefined;
   const secrets: Record<string, string> = provider === "telegram"
     ? {
-        botToken: String(body.botToken || "").trim(),
-        ...(body.botToken && !existingChannel?.hasCredentials
+        botToken,
+        ...(botToken && !existingChannel?.hasCredentials
           ? { webhookSecret: randomBytes(32).toString("hex") }
           : {}),
       }

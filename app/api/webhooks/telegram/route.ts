@@ -3,6 +3,7 @@ import { fulfillIfApproved } from "@/lib/approvals/fulfill";
 import { runApprovalResolveSideEffects } from "@/lib/approvals/resolve-side-effects";
 import {
   appendAuditEvent,
+  findPilotTelegramChannelByChatId,
   getApprovalByTelegramMessageId,
   getApprovalByTelegramRef,
   getEmployee,
@@ -10,6 +11,7 @@ import {
   resolveApproval,
   updateApprovalTelegramState,
 } from "@/lib/data";
+import { handleTelegramChannelUpdate } from "@/lib/notify/telegram-channel-webhook";
 import {
   answerTelegramCallback,
   promptTelegramRevision,
@@ -90,6 +92,11 @@ async function auditTelegramError(
 
 async function handleCallback(update: TelegramUpdate): Promise<void> {
   const query = update.callback_query!;
+  const tenantChannel = await findPilotTelegramChannelByChatId(String(query.message?.chat?.id ?? ""));
+  if (tenantChannel) {
+    const tenant = await handleTelegramChannelUpdate(tenantChannel, update, { fallbackOnMiss: true });
+    if (tenant.processed) return;
+  }
   const actor = actorFor(query.from);
   const callbackId = query.id || "";
   const match = /^(a|r|e):([A-Za-z0-9_-]{8,32})$/.exec(query.data || "");
@@ -171,6 +178,11 @@ async function handleCallback(update: TelegramUpdate): Promise<void> {
 
 async function handleReply(update: TelegramUpdate): Promise<void> {
   const message = update.message!;
+  const tenantChannel = await findPilotTelegramChannelByChatId(String(message.chat?.id ?? ""));
+  if (tenantChannel) {
+    const tenant = await handleTelegramChannelUpdate(tenantChannel, update, { fallbackOnMiss: true });
+    if (tenant.processed) return;
+  }
   if (!isExpectedChat(message) || !isAllowedUser(message.from)) return;
   const replyTo = Number(message.reply_to_message?.message_id);
   const note = message.text?.trim() || "";

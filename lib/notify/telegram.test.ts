@@ -1,10 +1,14 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { getAppOrigin } from "../approvals/tokens";
+import { DEMO_ORG } from "../demo-data";
+import { resetDemoNotificationChannels } from "../data/notification-channels";
 import {
   buildApprovalTelegramMessage,
   ensureGlobalTelegramWebhook,
+  registerTelegramWebhook,
   sendApprovalToTelegram,
 } from "./telegram";
+import type { NotificationChannelRuntime } from "../data/notification-channels";
 import type { ApprovalRequest } from "../types";
 
 const approval: ApprovalRequest = {
@@ -40,8 +44,13 @@ const originalEnv = {
   origin: process.env.NEXT_PUBLIC_APP_URL,
 };
 
+beforeEach(() => {
+  resetDemoNotificationChannels(DEMO_ORG.id);
+});
+
 afterEach(() => {
   globalThis.fetch = originalFetch;
+  resetDemoNotificationChannels(DEMO_ORG.id);
   if (originalEnv.token === undefined) delete process.env.TELEGRAM_BOT_TOKEN;
   else process.env.TELEGRAM_BOT_TOKEN = originalEnv.token;
   if (originalEnv.chat === undefined) delete process.env.TELEGRAM_APPROVAL_CHAT_ID;
@@ -126,5 +135,59 @@ describe("Telegram approval notification", () => {
       secret_token: "hook-secret",
       allowed_updates: ["message", "callback_query"],
     });
+  });
+});
+
+function channelRuntime(token: string, secret: string): NotificationChannelRuntime {
+  return {
+    id: "chn_env_reuse",
+    orgId: DEMO_ORG.id,
+    provider: "telegram",
+    label: "env",
+    enabled: true,
+    isDefault: true,
+    config: { chatId: "-100307" },
+    webhookRef: "refenv1",
+    hasCredentials: true,
+    webhookPath: "/api/webhooks/telegram/refenv1",
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    secrets: { botToken: token, webhookSecret: secret },
+  };
+}
+
+describe("registerTelegramWebhook env reuse", () => {
+  test("skips setWebhook when the channel token is the env bot", async () => {
+    process.env.TELEGRAM_BOT_TOKEN = "env-bot-token-test";
+    process.env.TELEGRAM_WEBHOOK_SECRET = "env-hook-secret-test";
+    const calls: string[] = [];
+    globalThis.fetch = (async (input) => {
+      calls.push(String(input));
+      return Response.json({ ok: true, result: true });
+    }) as typeof fetch;
+    const result = await registerTelegramWebhook(
+      channelRuntime("env-bot-token-test", "env-hook-secret-test"),
+      "https://staffpass.example/api/webhooks/telegram/refenv1"
+    );
+    expect(result).toEqual({ ok: true, skipped: true });
+    expect(calls.some((url) => url.includes("setWebhook"))).toBe(false);
+  });
+
+  test("still registers setWebhook for a custom bot token", async () => {
+    process.env.TELEGRAM_BOT_TOKEN = "env-bot-token-test";
+    process.env.TELEGRAM_WEBHOOK_SECRET = "env-hook-secret-test";
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    globalThis.fetch = (async (input, init) => {
+      calls.push({ url: String(input), body: JSON.parse(String(init?.body || "{}")) });
+      return Response.json({ ok: true, result: true });
+    }) as typeof fetch;
+    const result = await registerTelegramWebhook(
+      channelRuntime("custom-bot-token", "custom-hook-secret"),
+      "https://staffpass.example/api/webhooks/telegram/refcustom"
+    );
+    expect(result).toEqual({ ok: true });
+    expect(calls.length).toBe(1);
+    expect(calls[0]?.url).toContain("/botcustom-bot-token/setWebhook");
+    expect(calls[0]?.body.url).toBe("https://staffpass.example/api/webhooks/telegram/refcustom");
   });
 });

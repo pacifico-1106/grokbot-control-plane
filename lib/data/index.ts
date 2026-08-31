@@ -50,6 +50,7 @@ export {
   isTokyo307PilotOrg,
   isTokyo307PilotEmail,
   shouldUseGlobalTelegramFallback,
+  findPilotTelegramChannelByChatId,
   getTokyo307PilotOrgId,
   recordNotificationDelivery,
   getNotificationDelivery,

@@ -297,16 +297,27 @@ export function NotificationChannelsClient({ initialChannels }: { initialChannel
                 />
               </label>
               <label className="block text-xs muted">
-                {isTelegram ? "Bot token" : isLine ? "Channel access token" : "Bot token"}
+                {isTelegram ? "Bot token（任意）" : isLine ? "Channel access token" : "Bot token"}
                 <input
                   type="password"
                   autoComplete="new-password"
                   className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm"
                   value={draft.primarySecret}
                   onChange={(event) => updateDraft(draft.key, { primarySecret: event.target.value })}
-                  placeholder={saved?.hasCredentials ? "設定済み（変更時のみ入力）" : "未設定"}
+                  placeholder={
+                    isTelegram
+                      ? saved?.hasCredentials
+                        ? "設定済み（変更時のみ入力）"
+                        : "空なら本番の承認Botを使う"
+                      : saved?.hasCredentials
+                        ? "設定済み（変更時のみ入力）"
+                        : "未設定"
+                  }
                 />
               </label>
+              {isTelegram ? (
+                <p className="text-[11px] faint leading-relaxed">token 空なら本番の承認Botを使う</p>
+              ) : null}
               {!isTelegram ? (
                 <label className="block text-xs muted">
                   {isLine ? "Channel secret" : "Signing secret"}
@@ -320,7 +331,9 @@ export function NotificationChannelsClient({ initialChannels }: { initialChannel
                   />
                 </label>
               ) : null}
-              {saved ? <p className="text-[11px] faint break-all">Webhook: {saved.webhookPath}</p> : null}
+              {saved && draft.provider !== "telegram" ? (
+                <p className="text-[11px] faint break-all">Webhook: {saved.webhookPath}</p>
+              ) : null}
               {draft.provider === "slack" ? (
                 <p className="text-[11px] faint leading-relaxed">
                   会話への書き込みは下の「チャンネルに書き込む」で設定します。同じ Bot token で構いません。

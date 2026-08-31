@@ -1,8 +1,11 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { DEMO_ORG } from "@/lib/demo-data";
 import {
+  getNotificationChannelByWebhookRef,
   listNotificationChannels,
   resetDemoNotificationChannels,
   resolveEmployeeApprovalChannel,
+  shouldUseGlobalTelegramFallback,
   upsertNotificationChannel,
 } from "@/lib/data/notification-channels";
 import { sendApprovalNotifications } from "@/lib/notify/channels";
@@ -10,10 +13,25 @@ import type { ApprovalRequest, Employee } from "@/lib/types";
 
 const ORG = "org_inbox_test";
 const originalFetch = globalThis.fetch;
+const originalEnv = {
+  token: process.env.TELEGRAM_BOT_TOKEN,
+  chat: process.env.TELEGRAM_APPROVAL_CHAT_ID,
+  secret: process.env.TELEGRAM_WEBHOOK_SECRET,
+  allowed: process.env.TELEGRAM_ALLOWED_USER_IDS,
+};
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
   resetDemoNotificationChannels(ORG);
+  resetDemoNotificationChannels(DEMO_ORG.id);
+  if (originalEnv.token === undefined) delete process.env.TELEGRAM_BOT_TOKEN;
+  else process.env.TELEGRAM_BOT_TOKEN = originalEnv.token;
+  if (originalEnv.chat === undefined) delete process.env.TELEGRAM_APPROVAL_CHAT_ID;
+  else process.env.TELEGRAM_APPROVAL_CHAT_ID = originalEnv.chat;
+  if (originalEnv.secret === undefined) delete process.env.TELEGRAM_WEBHOOK_SECRET;
+  else process.env.TELEGRAM_WEBHOOK_SECRET = originalEnv.secret;
+  if (originalEnv.allowed === undefined) delete process.env.TELEGRAM_ALLOWED_USER_IDS;
+  else process.env.TELEGRAM_ALLOWED_USER_IDS = originalEnv.allowed;
 });
 
 async function twoTelegramInboxes() {
@@ -128,5 +146,96 @@ describe("per-employee approval inboxes", () => {
     expect(results.length).toBe(1);
     expect(results[0]?.ok).toBe(true);
     expect(chats).toEqual(["111"]);
+  });
+});
+
+describe("telegram env-reuse inbox", () => {
+  test("pilot org copies env bot token when telegram token is empty", async () => {
+    process.env.TELEGRAM_BOT_TOKEN = "env-bot-token-test";
+    process.env.TELEGRAM_WEBHOOK_SECRET = "env-hook-secret-test";
+    process.env.TELEGRAM_APPROVAL_CHAT_ID = "-100307";
+    process.env.TELEGRAM_ALLOWED_USER_IDS = "307";
+    const saved = await upsertNotificationChannel({
+      orgId: DEMO_ORG.id,
+      provider: "telegram",
+      enabled: true,
+      config: { chatId: "" },
+      secrets: {},
+    });
+    expect(saved.hasCredentials).toBe(true);
+    expect(saved.isDefault).toBe(true);
+    expect(saved.config.chatId).toBe("-100307");
+    expect(saved.config.allowedUserIds).toEqual(["307"]);
+    expect(JSON.stringify(saved)).not.toContain("env-bot-token-test");
+    expect(JSON.stringify(saved)).not.toContain("env-hook-secret-test");
+    const runtime = await getNotificationChannelByWebhookRef("telegram", saved.webhookRef);
+    expect(runtime?.secrets.botToken).toBe("env-bot-token-test");
+    expect(runtime?.secrets.webhookSecret).toBe("env-hook-secret-test");
+    expect(await shouldUseGlobalTelegramFallback(DEMO_ORG.id)).toBe(false);
+  });
+
+  test("non-pilot org still requires a telegram token", async () => {
+    process.env.TELEGRAM_BOT_TOKEN = "env-bot-token-test";
+    process.env.TELEGRAM_WEBHOOK_SECRET = "env-hook-secret-test";
+    process.env.TELEGRAM_APPROVAL_CHAT_ID = "-100307";
+    let message = "";
+    try {
+      await upsertNotificationChannel({
+        orgId: ORG,
+        provider: "telegram",
+        enabled: true,
+        config: { chatId: "12345" },
+        secrets: {},
+      });
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    expect(message).toBe("telegram_credentials_incomplete");
+  });
+
+  test("second env-reuse inbox requires an explicit chat id and keeps the default", async () => {
+    process.env.TELEGRAM_BOT_TOKEN = "env-bot-token-test";
+    process.env.TELEGRAM_WEBHOOK_SECRET = "env-hook-secret-test";
+    process.env.TELEGRAM_APPROVAL_CHAT_ID = "-100307";
+    const first = await upsertNotificationChannel({
+      orgId: DEMO_ORG.id,
+      provider: "telegram",
+      enabled: true,
+      label: "安藤グループ",
+      config: { chatId: "" },
+      secrets: {},
+    });
+    expect(first.isDefault).toBe(true);
+    let secondMessage = "";
+    try {
+      await upsertNotificationChannel({
+        orgId: DEMO_ORG.id,
+        provider: "telegram",
+        enabled: true,
+        isDefault: false,
+        config: { chatId: "" },
+        secrets: {},
+      });
+    } catch (error) {
+      secondMessage = error instanceof Error ? error.message : String(error);
+    }
+    expect(secondMessage).toBe("destination_required");
+    const second = await upsertNotificationChannel({
+      orgId: DEMO_ORG.id,
+      provider: "telegram",
+      enabled: true,
+      isDefault: false,
+      label: "依頼者DM",
+      config: { chatId: "555666" },
+      secrets: {},
+    });
+    expect(second.isDefault).toBe(false);
+    expect(second.config.chatId).toBe("555666");
+    const listed = await listNotificationChannels(DEMO_ORG.id);
+    expect(listed.filter((row) => row.provider === "telegram").length).toBe(2);
+    expect(listed.find((row) => row.isDefault)?.id).toBe(first.id);
+    expect(listed.find((row) => row.isDefault)?.config.chatId).toBe("-100307");
+    const unset = await resolveEmployeeApprovalChannel(DEMO_ORG.id, { approvalChannelId: null });
+    expect(unset?.id).toBe(first.id);
   });
 });
