@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
+import { channelErrorMessage } from "@/lib/notify/channel-errors";
 import type { ApprovalRequest, Employee } from "@/lib/types";
 
 function pollUrlFor(a: ApprovalRequest): string {
@@ -28,6 +29,7 @@ export function ApprovalsClient({
   const [rows, setRows] = useState(initial);
   const [pendingId, setPendingId] = useState<string | null>(null);
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [revisionId, setRevisionId] = useState<string | null>(null);
   const [revisionNote, setRevisionNote] = useState("");
@@ -66,6 +68,7 @@ export function ApprovalsClient({
   async function decide(id: string, action: "approve" | "reject") {
     setPendingId(id);
     setError("");
+    setNotice("");
     try {
       const res = await fetch(`/api/approvals/${id}/${action}`, { method: "POST" });
       const body = await res.json();
@@ -90,6 +93,38 @@ export function ApprovalsClient({
     }
   }
 
+  async function resendCard(id: string) {
+    setPendingId(id);
+    setError("");
+    setNotice("");
+    try {
+      const res = await fetch(`/api/approvals/${id}/notify`, { method: "POST" });
+      const body = (await res.json()) as {
+        error?: string;
+        message?: string;
+        results?: Array<{ ok?: boolean; skipped?: boolean; error?: string }>;
+      };
+      if (!res.ok) {
+        throw new Error(channelErrorMessage(body, "再送に失敗しました"));
+      }
+      const results = Array.isArray(body.results) ? body.results : [];
+      const failed = results.find((row) => !row.ok && !row.skipped);
+      if (failed) {
+        setError(channelErrorMessage(failed, "再送に失敗しました"));
+        return;
+      }
+      if (results.length === 0) {
+        setError("送信先の承認インボックスがありません");
+        return;
+      }
+      setNotice("カードを再送しました");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "再送に失敗しました");
+    } finally {
+      setPendingId(null);
+    }
+  }
+
   async function copyPoll(a: ApprovalRequest) {
     const url = pollUrlFor(a);
     if (!url) return;
@@ -106,6 +141,7 @@ export function ApprovalsClient({
     }
     setPendingId(id);
     setError("");
+    setNotice("");
     try {
       const res = await fetch(`/api/approvals/${id}/revise`, {
         method: "POST",
@@ -156,6 +192,9 @@ export function ApprovalsClient({
 
       {error ? (
         <p className="text-sm text-[var(--danger)]">{error}</p>
+      ) : null}
+      {notice ? (
+        <p className="text-sm text-[var(--ok)]">{notice}</p>
       ) : null}
 
       {pending.length === 0 ? (
@@ -240,6 +279,14 @@ export function ApprovalsClient({
                     ) : null}
                   </div>
                   <div className="flex flex-col sm:flex-row flex-wrap gap-2 lg:justify-end">
+                    <button
+                      type="button"
+                      className="btn btn-ghost text-sm w-full sm:w-auto min-h-[44px]"
+                      disabled={pendingId === a.id}
+                      onClick={() => void resendCard(a.id)}
+                    >
+                      カードを再送
+                    </button>
                     <button
                       type="button"
                       className="btn btn-ghost text-sm w-full sm:w-auto min-h-[44px]"

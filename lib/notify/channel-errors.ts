@@ -11,7 +11,15 @@ export const CHANNEL_ERROR_MESSAGES: Record<string, string> = {
   notification_channel_save_failed: "承認インボックスの保存に失敗しました",
   notification_channel_secret_save_failed: "認証情報の保存に失敗しました",
   supabase_not_configured: "保存先が設定されていません",
+  approval_not_found: "承認依頼が見つかりません",
+  approval_not_pending: "承認待ちの依頼だけ再送できます",
+  telegram_not_configured: "Telegram の設定が不足しています",
 };
+
+const TELEGRAM_ERROR_HINTS: Array<[RegExp, string]> = [
+  [/bot can't initiate conversation/i, "Telegram に送れません。相手が Bot を /start してから再送してください"],
+  [/chat not found/i, "Telegram の送信先チャットが見つかりません"],
+];
 
 function looksJapanese(value: string): boolean {
   return JP.test(value);
@@ -40,6 +48,11 @@ export function channelErrorMessage(
   const error = typeof rec.error === "string" ? rec.error.trim() : "";
   if (error && CHANNEL_ERROR_MESSAGES[error]) return CHANNEL_ERROR_MESSAGES[error];
   if (error && looksJapanese(error)) return error;
+  const hintSource = `${error} ${message}`;
+  for (const [pattern, hint] of TELEGRAM_ERROR_HINTS) {
+    if (pattern.test(hintSource)) return hint;
+  }
   if (message) return message;
+  if (error) return error;
   return fallback;
 }
