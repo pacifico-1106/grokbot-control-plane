@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { channelErrorMessage } from "@/lib/notify/channel-errors";
+import { actorLabel } from "@/lib/employees/actor-label";
 import type { ApprovalRequest, Employee } from "@/lib/types";
 
 function pollUrlFor(a: ApprovalRequest): string {
@@ -353,8 +354,11 @@ export function ApprovalsClient({
         <section className="surface p-4">
           <h2 className="text-xs muted mb-3">処理済み</h2>
           <ul className="space-y-3">
-            {done.map((a) => (
-              <li key={a.id} className="flex items-start gap-2 text-sm min-w-0">
+            {done.map((a) => {
+              const emp = employees.find((e) => e.id === a.employeeId);
+              const actor = actorLabel(emp, a.employeeId);
+              return (
+                <li key={a.id} className="flex items-start gap-2 text-sm min-w-0">
                 <span
                   className={`chip shrink-0 ${
                     a.status === "approved"
@@ -374,6 +378,14 @@ export function ApprovalsClient({
                 </span>
                 <div className="min-w-0">
                   <p className="font-medium break-words">{a.title || a.summary}</p>
+                  <p className="text-xs muted mt-0.5 flex flex-wrap items-baseline gap-x-2 gap-y-0.5 break-words">
+                    {emp?.displayName ? <span>{emp.displayName}</span> : null}
+                    {actor.employeeId ? (
+                      <span className="font-mono faint">{actor.employeeId}</span>
+                    ) : (
+                      <span>{actor.name}</span>
+                    )}
+                  </p>
                   <p className="text-xs muted mt-0.5 break-words">
                     {[a.tool, a.purpose, a.jobId].filter(Boolean).join(" · ")}
                   </p>
@@ -384,7 +396,8 @@ export function ApprovalsClient({
                   ) : null}
                 </div>
               </li>
-            ))}
+              );
+            })}
           </ul>
         </section>
       ) : null}
