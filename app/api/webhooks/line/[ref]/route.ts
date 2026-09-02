@@ -11,6 +11,7 @@ import {
   updateApprovalTelegramState,
 } from "@/lib/data";
 import { extraApproversAllow } from "@/lib/employees/approval-inbox";
+import { isSelfApprovalDenied, SELF_APPROVAL_MESSAGE_JA } from "@/lib/admin-mcp/self-approval";
 import {
   isAllowedLineSource,
   promptLineRevision,
@@ -70,13 +71,21 @@ export async function POST(req: Request, ctx: { params: Promise<{ ref: string }>
         continue;
       }
       const decision = match[1] === "a" ? "approved" : "rejected";
-      const updated = await resolveApproval(approval.id, decision, actor, channel.orgId);
-      if (updated) {
-        await fulfillIfApproved(updated, decision);
-        const employee = await getEmployee(updated.employeeId, channel.orgId);
-        await runApprovalResolveSideEffects({ approval: updated, decision, actorEmail: actor, employee });
+      try {
+        const updated = await resolveApproval(approval.id, decision, actor, channel.orgId);
+        if (updated) {
+          await fulfillIfApproved(updated, decision);
+          const employee = await getEmployee(updated.employeeId, channel.orgId);
+          await runApprovalResolveSideEffects({ approval: updated, decision, actorEmail: actor, employee });
+        }
+        if (event.replyToken) await sendLineText(channel, updated ? (decision === "approved" ? "承認しました。" : "却下しました。") : "対象は処理済みです。", event.replyToken);
+      } catch (error) {
+        if (isSelfApprovalDenied(error)) {
+          if (event.replyToken) await sendLineText(channel, SELF_APPROVAL_MESSAGE_JA, event.replyToken);
+        } else {
+          throw error;
+        }
       }
-      if (event.replyToken) await sendLineText(channel, updated ? (decision === "approved" ? "承認しました。" : "却下しました。") : "対象は処理済みです。", event.replyToken);
       continue;
     }
 
@@ -94,12 +103,20 @@ export async function POST(req: Request, ctx: { params: Promise<{ ref: string }>
         awaitingRevisionChannelId: null,
         awaitingRevisionProvider: null,
       });
-      const updated = await resolveApproval(approval.id, "revision_requested", actor, channel.orgId, { revisionNote: Array.from(note).slice(0, 2_000).join("") });
-      if (updated) {
-        const employee = await getEmployee(updated.employeeId, channel.orgId);
-        await runApprovalResolveSideEffects({ approval: updated, decision: "revision_requested", actorEmail: actor, employee });
+      try {
+        const updated = await resolveApproval(approval.id, "revision_requested", actor, channel.orgId, { revisionNote: Array.from(note).slice(0, 2_000).join("") });
+        if (updated) {
+          const employee = await getEmployee(updated.employeeId, channel.orgId);
+          await runApprovalResolveSideEffects({ approval: updated, decision: "revision_requested", actorEmail: actor, employee });
+        }
+        if (event.replyToken) await sendLineText(channel, updated ? "修正依頼を登録しました。" : "対象は処理済みです。", event.replyToken);
+      } catch (error) {
+        if (isSelfApprovalDenied(error)) {
+          if (event.replyToken) await sendLineText(channel, SELF_APPROVAL_MESSAGE_JA, event.replyToken);
+        } else {
+          throw error;
+        }
       }
-      if (event.replyToken) await sendLineText(channel, updated ? "修正依頼を登録しました。" : "対象は処理済みです。", event.replyToken);
     }
   }
   return NextResponse.json({ ok: true });

@@ -6,28 +6,121 @@ import { useEffect, useId, useState } from "react";
 import { BrandMark } from "@/components/BrandMark";
 import { useAppSession } from "@/components/AppSessionProvider";
 import { LegalLinks } from "@/components/LegalLinks";
+import {
+  GUIDE_GROUP_LABEL,
+  GUIDE_NAV,
+  OTHER_NAV,
+  OTHER_SECTION_LABEL,
+  PRIMARY_NAV,
+  navActive,
+  otherSectionActive,
+  type DashboardNavItem,
+} from "@/lib/dashboard/nav";
 
-const NAV = [
-  { href: "/app", label: "ダッシュボード", icon: "◫", exact: true },
-  { href: "/app/employees", label: "AI社員", icon: "◇" },
-  { href: "/app/approvals", label: "承認", icon: "✓" },
-  { href: "/app/audit", label: "監査", icon: "≡" },
-  { href: "/app/integrations", label: "連携", icon: "⌁" },
-  { href: "/app/billing", label: "請求", icon: "¥" },
-  { href: "/app/team", label: "チーム", icon: "◎" },
-  { href: "/app/settings", label: "つながり", icon: "•" },
-];
+function NavLink({
+  item,
+  pathname,
+  pendingCount,
+  onClick,
+  className,
+}: {
+  item: DashboardNavItem;
+  pathname: string;
+  pendingCount?: number;
+  onClick?: () => void;
+  className?: string;
+}) {
+  const active = navActive(pathname, item);
+  const showBadge = item.href === "/app/approvals" && (pendingCount ?? 0) > 0;
+  return (
+    <Link
+      href={item.href}
+      className={`${className ?? ""} rounded-xl px-3 text-sm min-h-[44px] flex items-center gap-3 ${
+        active
+          ? "bg-[var(--bg-soft)] text-[var(--text)]"
+          : "text-[var(--text-muted)] hover:bg-[var(--bg-soft)] hover:text-[var(--text)]"
+      }`}
+      onClick={onClick}
+    >
+      <span className="w-5 text-center text-[var(--text-faint)]" aria-hidden>
+        {item.icon}
+      </span>
+      <span className="flex-1">{item.label}</span>
+      {showBadge ? (
+        <span className="chip chip-warn text-[10px] tabular-nums">{pendingCount}</span>
+      ) : null}
+    </Link>
+  );
+}
 
-const GUIDE_NAV = [
-  { href: "/app/getting-started", label: "はじめに", icon: "→" },
-  { href: "/app/guides/instructions-design", label: "Instructions設計", icon: "Aa" },
-  { href: "/app/guides/approval-loop", label: "承認ループ", icon: "↻" },
-];
-
-function navActive(pathname: string, item: { href: string; exact?: boolean }) {
-  return item.exact
-    ? pathname === item.href
-    : pathname === item.href || pathname.startsWith(item.href + "/");
+function OtherSection({
+  pathname,
+  pendingCount,
+  onNavigate,
+  compact,
+}: {
+  pathname: string;
+  pendingCount: number;
+  onNavigate?: () => void;
+  compact?: boolean;
+}) {
+  const defaultOpen = otherSectionActive(pathname);
+  const [open, setOpen] = useState(defaultOpen);
+  useEffect(() => {
+    if (defaultOpen) setOpen(true);
+  }, [defaultOpen]);
+  const pad = compact ? "py-3" : "py-2.5";
+  return (
+    <div className="pt-3">
+      <button
+        type="button"
+        className={`w-full rounded-xl px-3 ${pad} text-sm min-h-[44px] flex items-center gap-3 text-[var(--text-muted)] hover:bg-[var(--bg-soft)] hover:text-[var(--text)]`}
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <span className="w-5 text-center text-[var(--text-faint)]" aria-hidden>
+          {open ? "▾" : "▸"}
+        </span>
+        <span className="flex-1 text-left">{OTHER_SECTION_LABEL}</span>
+      </button>
+      {open ? (
+        <div className="mt-1 space-y-1 pl-1">
+          {OTHER_NAV.map((item) => (
+            <NavLink
+              key={item.href}
+              item={item}
+              pathname={pathname}
+              onClick={onNavigate}
+              className={pad}
+            />
+          ))}
+          <div className="pt-3 pb-1 px-3 text-[10px] font-semibold tracking-[0.14em] text-[var(--text-faint)]">
+            {GUIDE_GROUP_LABEL}
+          </div>
+          {GUIDE_NAV.map((item) => (
+            <Link
+              key={item.href}
+              href={item.href}
+              className={`rounded-xl px-3 ${pad} text-sm min-h-[44px] flex items-center gap-3 ${
+                navActive(pathname, item)
+                  ? "bg-[var(--bg-soft)] text-[var(--text)]"
+                  : "text-[var(--text-muted)] hover:bg-[var(--bg-soft)] hover:text-[var(--text)]"
+              }`}
+              onClick={onNavigate}
+            >
+              <span
+                className="w-5 text-center text-[11px] font-mono text-[var(--accent-strong)]"
+                aria-hidden
+              >
+                {item.icon}
+              </span>
+              {item.label}
+            </Link>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 export function AppShell({
@@ -43,9 +136,8 @@ export function AppShell({
   const [menuOpen, setMenuOpen] = useState(false);
   const panelId = useId();
   const session = useAppSession();
-  const memberEmail =
-    session.email ||
-    (session.demo ? "owner@example.com" : null);
+  const pendingCount = session.pendingApprovalCount ?? 0;
+  const memberEmail = session.email || (session.demo ? "owner@example.com" : null);
   const memberLabel = memberEmail || "—";
   const memberTitle =
     session.displayName && session.displayName !== memberEmail
@@ -80,45 +172,27 @@ export function AppShell({
           <BrandMark size="sm" href="/" />
         </div>
         <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
-          {NAV.map((item) => {
-            const active = navActive(pathname, item);
-            return (
-              <Link
-                key={item.href}
-                href={item.href}
-                className={`rounded-xl px-3 py-2.5 text-sm min-h-[44px] flex items-center gap-3 ${
-                  active
-                    ? "bg-[var(--bg-soft)] text-[var(--text)]"
-                    : "text-[var(--text-muted)] hover:bg-[var(--bg-soft)] hover:text-[var(--text)]"
-                }`}
-              >
-                <span className="w-5 text-center text-[var(--text-faint)]" aria-hidden>{item.icon}</span>{item.label}
-              </Link>
-            );
-          })}
+          {PRIMARY_NAV.map((item) => (
+            <NavLink
+              key={item.href}
+              item={item}
+              pathname={pathname}
+              pendingCount={pendingCount}
+              className="py-2.5"
+            />
+          ))}
           {session.superAdmin ? (
             <Link
               href="/admin"
               className="rounded-xl px-3 py-2.5 text-sm min-h-[44px] flex items-center gap-3 text-[var(--accent-strong)] hover:bg-[var(--bg-soft)]"
             >
-              <span className="w-5 text-center" aria-hidden>⌘</span>運営管理
+              <span className="w-5 text-center" aria-hidden>
+                ⌘
+              </span>
+              運営管理
             </Link>
           ) : null}
-          <div className="pt-5 pb-2 px-3 text-[10px] font-semibold tracking-[0.14em] text-[var(--text-faint)]">
-            運用ガイド
-          </div>
-          {GUIDE_NAV.map((item) => {
-            const active = navActive(pathname, item);
-            return (
-              <Link
-                key={item.href}
-                href={item.href}
-                className={`rounded-xl px-3 py-2.5 text-sm min-h-[44px] flex items-center gap-3 ${active ? "bg-[var(--bg-soft)] text-[var(--text)]" : "text-[var(--text-muted)] hover:bg-[var(--bg-soft)] hover:text-[var(--text)]"}`}
-              >
-                <span className="w-5 text-center text-[11px] font-mono text-[var(--accent-strong)]" aria-hidden>{item.icon}</span>{item.label}
-              </Link>
-            );
-          })}
+          <OtherSection pathname={pathname} pendingCount={pendingCount} />
         </nav>
         <div className="px-5 py-4 border-t border-[var(--border-soft)] text-[10px] faint">
           <LegalLinks className="gap-x-2 gap-y-1 leading-relaxed" />
@@ -126,7 +200,6 @@ export function AppShell({
         </div>
       </aside>
 
-      {/* Mobile drawer */}
       <div
         className={`fixed inset-0 z-40 md:hidden ${menuOpen ? "" : "pointer-events-none"}`}
         aria-hidden={!menuOpen}
@@ -160,48 +233,34 @@ export function AppShell({
             </button>
           </div>
           <nav className="flex-1 px-3 py-3 space-y-1 overflow-y-auto">
-            {NAV.map((item) => {
-              const active = navActive(pathname, item);
-              return (
-                <Link
-                  key={item.href}
-                  href={item.href}
-                  className={`rounded-xl px-3 py-3 text-sm min-h-[44px] flex items-center gap-3 break-words ${
-                    active
-                      ? "bg-[var(--bg-soft)] text-[var(--text)]"
-                      : "text-[var(--text-muted)] hover:bg-[var(--bg-soft)] hover:text-[var(--text)]"
-                  }`}
-                  onClick={() => setMenuOpen(false)}
-                >
-                  <span className="w-5 text-center text-[var(--text-faint)]" aria-hidden>{item.icon}</span>{item.label}
-                </Link>
-              );
-            })}
+            {PRIMARY_NAV.map((item) => (
+              <NavLink
+                key={item.href}
+                item={item}
+                pathname={pathname}
+                pendingCount={pendingCount}
+                onClick={() => setMenuOpen(false)}
+                className="py-3 break-words"
+              />
+            ))}
             {session.superAdmin ? (
               <Link
                 href="/admin"
                 className="rounded-xl px-3 py-3 text-sm min-h-[44px] flex items-center gap-3 text-[var(--accent-strong)] hover:bg-[var(--bg-soft)]"
                 onClick={() => setMenuOpen(false)}
               >
-                <span className="w-5 text-center" aria-hidden>⌘</span>運営管理
+                <span className="w-5 text-center" aria-hidden>
+                  ⌘
+                </span>
+                運営管理
               </Link>
             ) : null}
-            <div className="pt-5 pb-2 px-3 text-[10px] font-semibold tracking-[0.14em] text-[var(--text-faint)]">
-              運用ガイド
-            </div>
-            {GUIDE_NAV.map((item) => {
-              const active = navActive(pathname, item);
-              return (
-                <Link
-                  key={item.href}
-                  href={item.href}
-                  className={`rounded-xl px-3 py-3 text-sm min-h-[44px] flex items-center gap-3 ${active ? "bg-[var(--bg-soft)] text-[var(--text)]" : "text-[var(--text-muted)] hover:bg-[var(--bg-soft)] hover:text-[var(--text)]"}`}
-                  onClick={() => setMenuOpen(false)}
-                >
-                  <span className="w-5 text-center text-[11px] font-mono text-[var(--accent-strong)]" aria-hidden>{item.icon}</span>{item.label}
-                </Link>
-              );
-            })}
+            <OtherSection
+              pathname={pathname}
+              pendingCount={pendingCount}
+              onNavigate={() => setMenuOpen(false)}
+              compact
+            />
           </nav>
           <div className="px-4 py-4 border-t border-[var(--border-soft)] text-[10px] faint">
             <LegalLinks className="gap-x-2 gap-y-1 leading-relaxed" />
@@ -237,9 +296,7 @@ export function AppShell({
             </div>
           </div>
           <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
-            <span className="chip chip-ok shrink-0 !hidden lg:!inline-flex">
-              トライアル
-            </span>
+            <span className="chip chip-ok shrink-0 !hidden lg:!inline-flex">トライアル</span>
             <span
               className="chip !hidden sm:!inline-flex max-w-[12rem] truncate text-xs sm:text-sm"
               title={memberTitle}

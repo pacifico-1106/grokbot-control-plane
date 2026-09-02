@@ -140,3 +140,15 @@ export {
   DEMO_COMPANY_PROJECT_ID,
   DEMO_PROJECT_A_ID,
 } from "./projects";
+
+export {
+  getOrgAdminAgent,
+  findAdminAgentByFingerprint,
+  issueOrgAdminAgent,
+  linkOrgAdminAgent,
+  setOrgAdminOpsDocLocation,
+  adminAgentPublicView,
+  mintAdminSecret,
+  resetDemoAdminAgent,
+  DEMO_ADMIN_SECRET,
+} from "./admin-agents";

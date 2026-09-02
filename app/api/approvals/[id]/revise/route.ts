@@ -7,6 +7,7 @@ import {
   runtimeModeLabel,
 } from "@/lib/data";
 import { requireCapability } from "@/lib/team/demo-actor";
+import { SELF_APPROVAL_DENIED, SELF_APPROVAL_MESSAGE_JA } from "@/lib/admin-mcp/self-approval";
 
 export const runtime = "nodejs";
 
@@ -28,13 +29,25 @@ export async function POST(
 
   const { id } = await ctx.params;
   const orgId = await getCurrentOrgId();
-  const updated = await resolveApproval(
-    id,
-    "revision_requested",
-    gate.actor.email,
-    orgId,
-    { revisionNote: note }
-  );
+  let updated;
+  try {
+    updated = await resolveApproval(
+      id,
+      "revision_requested",
+      gate.actor.email,
+      orgId,
+      { revisionNote: note, actorId: gate.actor.id }
+    );
+  } catch (error) {
+    const code = (error as { code?: string }).code || (error instanceof Error ? error.message : "");
+    if (code === SELF_APPROVAL_DENIED) {
+      return NextResponse.json(
+        { error: SELF_APPROVAL_DENIED, message: SELF_APPROVAL_MESSAGE_JA },
+        { status: 403 }
+      );
+    }
+    throw error;
+  }
   if (!updated) {
     return NextResponse.json(
       { error: "not_found_or_already_resolved" },

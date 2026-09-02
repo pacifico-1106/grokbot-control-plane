@@ -7,6 +7,7 @@ export type AppSessionValue = {
   displayName: string | null;
   demo: boolean;
   superAdmin: boolean;
+  pendingApprovalCount: number;
 };
 
 const AppSessionContext = createContext<AppSessionValue>({
@@ -14,6 +15,7 @@ const AppSessionContext = createContext<AppSessionValue>({
   displayName: null,
   demo: false,
   superAdmin: false,
+  pendingApprovalCount: 0,
 });
 
 export function AppSessionProvider({

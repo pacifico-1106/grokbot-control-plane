@@ -1,102 +1,77 @@
 import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
+import { AdminMcpConnect } from "@/components/AdminMcpConnect";
+import { OpsDocLocationForm } from "@/components/OpsDocLocationForm";
+import { getCurrentOrgId } from "@/lib/auth/session";
+import { getOrgAdminAgent } from "@/lib/data";
 
-const STEPS = [
-  {
-    title: "トライアル開始",
-    body: "会社名とメールで Staffpass（制御）を開き、14日間のトライアルに入ります。",
-    href: "/signup",
-    label: "サインアップ",
-  },
-  {
-    title: "導入モードを選ぶ",
-    body: "「当社で用意」か「持ち込み」かを選び、Grok Bot の Plugins（リモート MCP）につなぎます。チャットに URL を貼るだけではつながりません。",
-    href: "/app/integrations#mcp",
-    label: "連携へ",
-  },
-  {
-    title: "最初の AI社員を雇う",
-    body: "職務を日本語で説明 → 権限の案を確認 → 予算・承認の補足 → 社員証発行。接続用の鍵は一度だけ表示されます。実際の発注・送信は、承認・監査を通す仕組み（Staffpass）経由だけです。",
-    href: "/app/employees/new",
-    label: "雇う",
-  },
-  {
-    title: "承認キューを見る",
-    body: "危ない操作は「要対応」に並びます。承認されるまで実行しません。",
-    href: "/app/approvals",
-    label: "承認へ",
-  },
-  {
-    title: "監査タイムライン",
-    body: "誰が・何の目的で・何をしたかを、あとから説明できる形で残します。",
-    href: "/app/audit",
-    label: "監査へ",
-  },
-  {
-    title: "請求（トライアル後）",
-    body: "カード決済、または銀行振込の案内へ進めます。",
-    href: "/app/billing",
-    label: "請求へ",
-  },
-];
+export const dynamic = "force-dynamic";
 
-export default function GettingStartedPage() {
+export default async function GettingStartedPage() {
+  const orgId = await getCurrentOrgId();
+  const adminAgent = await getOrgAdminAgent(orgId);
+  const connected = adminAgent?.status === "linked" && Boolean(adminAgent.grokBotAgentId);
   return (
-    <AppShell
-      title="はじめに"
-      subtitle="中小企業向けの始め方 · 当社で用意 / 持ち込み"
-    >
+    <AppShell title="はじめに" subtitle="セットアップ · 毎日の入口は変更ログと承認">
       <div className="space-y-3">
-        {STEPS.map((step, i) => (
-          <section key={step.title} className="surface p-5">
-            <p className="text-xs faint font-mono">
-              STEP {String(i + 1).padStart(2, "0")}
-            </p>
-            <h2 className="mt-2 text-sm font-medium">{step.title}</h2>
-            <p className="mt-2 text-sm muted leading-relaxed">{step.body}</p>
-            <Link href={step.href} className="btn btn-ghost mt-4 text-sm w-full sm:w-auto inline-flex">
-              {step.label}
-            </Link>
-          </section>
-        ))}
+        <section className="surface p-5">
+          <p className="text-xs faint font-mono">STEP 01</p>
+          <h2 className="mt-2 text-sm font-medium">アカウント</h2>
+          <p className="mt-2 text-sm muted leading-relaxed">会社名とメールで Staffpass に入ります。</p>
+        </section>
 
-        <section className="surface p-5 space-y-2">
-          <h2 className="text-sm font-medium">Grok Bot とつなぐ（MCP）</h2>
+        <AdminMcpConnect connected={connected} grokBotAgentId={adminAgent?.grokBotAgentId ?? null} />
+
+        <section className="surface p-5 space-y-3" id="process-source">
+          <p className="text-xs faint font-mono">STEP 03</p>
+          <h2 className="text-sm font-medium">工程の正本</h2>
           <p className="text-sm muted leading-relaxed">
-            持ち込みならご自身で Plugins に Staffpass を追加。おまかせ導入なら TOKYO307 が入れます。お客様は Staffpass の画面かメールで承認するだけです。社員証は雇ったときに一度だけ表示されます。
+            ドキュメントまたは音声またはテキスト。必須はどれか一つです。Drive
+            がなくても進めます。会話ログも同じ正本候補です。
           </p>
-          <Link
-            href="/app/integrations#mcp"
-            className="btn btn-ghost mt-2 text-sm w-full sm:w-auto inline-flex"
-          >
-            連携へ（MCP URL）
+          <OpsDocLocationForm initial={adminAgent?.opsDocLocation ?? null} />
+        </section>
+
+        <section className="surface p-5">
+          <p className="text-xs faint font-mono">STEP 04</p>
+          <h2 className="mt-2 text-sm font-medium">社員を1人ずつ人確認</h2>
+          <p className="mt-2 text-sm muted leading-relaxed">
+            管理エージェントが提案した最初の権限案を、人が1人ずつ承認します。毎日の入口ではありません。
+          </p>
+          <Link href="/app/approvals" className="btn btn-ghost mt-4 text-sm w-full sm:w-auto inline-flex">
+            承認へ
+          </Link>
+        </section>
+
+        <section className="surface p-5">
+          <p className="text-xs faint font-mono">STEP 05</p>
+          <h2 className="mt-2 text-sm font-medium">承認者と通知口</h2>
+          <p className="mt-2 text-sm muted leading-relaxed">
+            日々の通す／止めるは Telegram / LINE / Slack の通知口が主です。ダッシュボードの承認ボタンは予備です。
+          </p>
+          <Link href="/app/settings" className="btn btn-ghost mt-4 text-sm w-full sm:w-auto inline-flex">
+            通知口
+          </Link>
+        </section>
+
+        <section className="surface p-5">
+          <p className="text-xs faint font-mono">STEP 06</p>
+          <h2 className="mt-2 text-sm font-medium">コネクタ認証</h2>
+          <p className="mt-2 text-sm muted leading-relaxed">
+            Gmail / Slack などの OAuth は人がタップします。承認チケットとは別です。
+          </p>
+          <Link href="/app/integrations" className="btn btn-ghost mt-4 text-sm w-full sm:w-auto inline-flex">
+            連携へ
           </Link>
         </section>
 
         <section className="surface p-5 space-y-2">
-          <h2 className="text-sm font-medium">Instructionsの組み立て方</h2>
+          <h2 className="text-sm font-medium">社員証 MCP は別口</h2>
           <p className="text-sm muted leading-relaxed">
-            Base（固定ルール）／Role（職務の型）／Skills &amp; Routines（変わりやすい手順）に分けて書く。全部を Instructions に詰め込まない。
+            営業・SNSなどの AI社員は社員証 MCP（whoami / invoke / poll / health）を使います。管理MCPとヘッダを混ぜないでください。
           </p>
-          <Link
-            href="/app/guides/instructions-design"
-            className="btn btn-ghost mt-2 text-sm w-full sm:w-auto inline-flex"
-          >
-            ガイドを読む
-          </Link>
-        </section>
-
-        <section className="surface p-5 space-y-2">
-          <h2 className="text-sm font-medium">権限を守らせる（自動 / 手動）</h2>
-          <p className="text-sm muted leading-relaxed">
-            実際の発注・送信は、当社の承認ルート経由だけです。AI社員に直結の「勝手に送る道具」は載せません。
-            社員証・予算・承認は Staffpass（制御）が守り、承認されるまで実行しません。当社で用意する場合は、道具の整理も当社が引き受けます。
-          </p>
-          <Link
-            href="/app/integrations"
-            className="btn btn-ghost mt-2 text-sm w-full sm:w-auto inline-flex"
-          >
-            連携を確認
+          <Link href="/app/integrations#mcp" className="btn btn-ghost mt-2 text-sm w-full sm:w-auto inline-flex">
+            社員証 MCP
           </Link>
         </section>
       </div>

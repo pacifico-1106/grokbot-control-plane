@@ -21,6 +21,7 @@ import {
   type SnsPublishResult,
 } from "@/lib/gateway/adapters/sns";
 import { isAudienceGatedTool, isSnsPublishTool } from "@/lib/gateway/tools";
+import { fulfillApprovedAdmin } from "@/lib/admin-mcp/fulfill-admin";
 import type {
   ApprovalRequest,
   ConversationContext,
@@ -524,5 +525,14 @@ export async function fulfillIfApproved(
   decision: "approved" | "rejected" | "revision_requested"
 ): Promise<ApprovalFulfillment | null> {
   if (decision !== "approved") return null;
+  const admin = await fulfillApprovedAdmin(approval);
+  if (admin) {
+    return {
+      ok: admin.ok,
+      delivery: "stub",
+      at: admin.at,
+      error: admin.error,
+    };
+  }
   return fulfillApprovedInvoke(approval);
 }

@@ -11,6 +11,7 @@ import {
   type NotificationChannelRuntime,
 } from "@/lib/data";
 import { extraApproversAllow } from "@/lib/employees/approval-inbox";
+import { isSelfApprovalDenied, SELF_APPROVAL_MESSAGE_JA } from "@/lib/admin-mcp/self-approval";
 import {
   answerTelegramCallbackForChannel,
   promptTelegramRevisionForChannel,
@@ -103,17 +104,25 @@ export async function handleTelegramChannelUpdate(
     }
     const decision = match![1] === "a" ? "approved" : "rejected";
     const actor = `telegram:${query.from!.id}`;
-    const updated = await resolveApproval(approval!.id, decision, actor, channel.orgId);
-    if (updated) {
-      await fulfillIfApproved(updated, decision);
-      const employee = await getEmployee(updated.employeeId, channel.orgId);
-      await runApprovalResolveSideEffects({ approval: updated, decision, actorEmail: actor, employee });
+    try {
+      const updated = await resolveApproval(approval!.id, decision, actor, channel.orgId);
+      if (updated) {
+        await fulfillIfApproved(updated, decision);
+        const employee = await getEmployee(updated.employeeId, channel.orgId);
+        await runApprovalResolveSideEffects({ approval: updated, decision, actorEmail: actor, employee });
+      }
+      await answerTelegramCallbackForChannel(
+        channel,
+        query.id || "",
+        updated ? (decision === "approved" ? "承認しました" : "却下しました") : "対象は処理済みです"
+      );
+    } catch (error) {
+      if (isSelfApprovalDenied(error)) {
+        await answerTelegramCallbackForChannel(channel, query.id || "", SELF_APPROVAL_MESSAGE_JA);
+      } else {
+        throw error;
+      }
     }
-    await answerTelegramCallbackForChannel(
-      channel,
-      query.id || "",
-      updated ? (decision === "approved" ? "承認しました" : "却下しました") : "対象は処理済みです"
-    );
     return { processed: true };
   }
 
@@ -145,17 +154,25 @@ export async function handleTelegramChannelUpdate(
     awaitingRevisionProvider: null,
   });
   const actor = `telegram:${message.from!.id}`;
-  const updated = await resolveApproval(approval.id, "revision_requested", actor, channel.orgId, {
-    revisionNote: note.slice(0, 2_000),
-  });
-  if (updated) {
-    const employee = await getEmployee(updated.employeeId, channel.orgId);
-    await runApprovalResolveSideEffects({
-      approval: updated,
-      decision: "revision_requested",
-      actorEmail: actor,
-      employee,
+  try {
+    const updated = await resolveApproval(approval.id, "revision_requested", actor, channel.orgId, {
+      revisionNote: note.slice(0, 2_000),
     });
+    if (updated) {
+      const employee = await getEmployee(updated.employeeId, channel.orgId);
+      await runApprovalResolveSideEffects({
+        approval: updated,
+        decision: "revision_requested",
+        actorEmail: actor,
+        employee,
+      });
+    }
+  } catch (error) {
+    if (isSelfApprovalDenied(error)) {
+      await sendTelegramTextToChannel(channel, SELF_APPROVAL_MESSAGE_JA, message.message_id);
+      return { processed: true };
+    }
+    throw error;
   }
   return { processed: true };
 }

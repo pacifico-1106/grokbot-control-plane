@@ -167,13 +167,36 @@ create index if not exists action_counters_employee_period_idx
   on action_counters (employee_id, period);
 
 -- ---------------------------------------------------------------------------
+-- Admin MCP agent (one per tenant, not an employee badge)
+-- ---------------------------------------------------------------------------
+create table if not exists org_admin_agents (
+  id uuid primary key default gen_random_uuid(),
+  org_id uuid not null references orgs(id) on delete cascade,
+  grok_bot_agent_id text,
+  grok_bot_workspace_id text,
+  credential_fingerprint text,
+  secret_prefix text not null default 'gb_adm_',
+  credential_generation integer not null default 0,
+  status text not null default 'unlinked'
+    check (status in ('unlinked', 'linked', 'revoked', 'needs_reauth')),
+  ops_doc_location text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (org_id)
+);
+
+create index if not exists org_admin_agents_fingerprint_idx
+  on org_admin_agents (credential_fingerprint)
+  where credential_fingerprint is not null;
+
+-- ---------------------------------------------------------------------------
 -- Approvals (要対応)
 -- ---------------------------------------------------------------------------
 create table if not exists approval_requests (
   id uuid primary key default gen_random_uuid(),
   org_id uuid not null references orgs(id) on delete cascade,
-  employee_id uuid not null references employees(id),
-  credential_id uuid not null references credentials(id),
+  employee_id uuid references employees(id),
+  credential_id uuid references credentials(id),
   purpose text not null,
   summary text not null,
   title text,

@@ -31,6 +31,7 @@ export function McpSetupContent({
         <p className="text-sm muted leading-relaxed">
           チャットに URL を貼るだけではつながりません。Grok Bot の Plugins /
           コネクタ（リモート MCP）に Staffpass を登録します。
+          これは社員証 MCP です。管理MCP（/api/mcp/admin, gb_adm_）とは別口です。
         </p>
         <div>
           <p className="text-xs muted mb-1.5">

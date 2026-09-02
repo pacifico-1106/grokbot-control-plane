@@ -34,11 +34,13 @@ export function EmployeePolicyForm({
   employee,
   slackLinked = false,
   disabled = false,
+  readOnly = false,
   sodWarnPolicy = null,
 }: {
   employee: Employee;
   slackLinked?: boolean;
   disabled?: boolean;
+  readOnly?: boolean;
   sodWarnPolicy?: SodWarnPolicy | null;
 }) {
   const router = useRouter();
@@ -69,7 +71,7 @@ export function EmployeePolicyForm({
   const liveSod = useMemo(() => evaluateSod(scopes, sodWarnPolicy), [scopes, sodWarnPolicy]);
   const comboWarn = isComboSodWarn(liveSod);
   const ackNeeded = sodNeedsOperatorAck(liveSod) && approvalPolicy !== "always_human";
-  const locked = busy || disabled;
+  const locked = busy || disabled || readOnly;
   const hasOrderScope = scopes.includes("commerce:order");
   const normalizedAccounts = normalizeAllowedAccounts(allowedAccounts);
   const browserNeedsAccounts =
@@ -390,6 +392,11 @@ export function EmployeePolicyForm({
         人が見る行為は下で選べます。責任は事業者にあります。
       </p>
 
+      {readOnly ? (
+        <p className="text-xs muted leading-relaxed">
+          権限の変更は管理MCPの人承認です。この画面では編集できません。
+        </p>
+      ) : (
       <button
         type="button"
         className="btn btn-primary text-xs"
@@ -398,6 +405,7 @@ export function EmployeePolicyForm({
       >
         {busy ? "保存中…" : "権限を保存"}
       </button>
+      )}
       {message ? <p className="text-xs muted">{message}</p> : null}
     </div>
   );

@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { AppSessionProvider } from "@/components/AppSessionProvider";
 import { ensureAuthenticatedOrg } from "@/lib/auth/session";
 import { getSuperAdminAccess } from "@/lib/admin/access";
+import { listApprovals } from "@/lib/data";
 
 /**
  * Soft gate for every /app/* page.
@@ -38,6 +39,8 @@ export default async function AppSectionLayout({
   const email = session.email ?? session.member?.email ?? null;
   const displayName = session.member?.displayName ?? null;
   const superAdminAccess = await getSuperAdminAccess();
+  const approvals = await listApprovals(session.orgId);
+  const pendingApprovalCount = approvals.filter((row) => row.status === "pending").length;
 
   return (
     <AppSessionProvider
@@ -46,6 +49,7 @@ export default async function AppSectionLayout({
         displayName,
         demo: session.demo,
         superAdmin: superAdminAccess.allowed,
+        pendingApprovalCount,
       }}
     >
       {children}

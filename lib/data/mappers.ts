@@ -97,8 +97,8 @@ export function mapApprovalRow(row: Record<string, unknown>): ApprovalRequest {
   return {
     id,
     orgId: String(row.org_id),
-    employeeId: String(row.employee_id),
-    credentialId: String(row.credential_id),
+    employeeId: row.employee_id != null ? String(row.employee_id) : "",
+    credentialId: row.credential_id != null ? String(row.credential_id) : "",
     title,
     purpose: String(row.purpose ?? ""),
     summary: String(row.summary ?? ""),

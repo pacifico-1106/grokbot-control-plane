@@ -21,9 +21,11 @@ const CLASS_LABELS: Record<ChannelClassification, string> = {
 export function PartyDirectoryClient({
   initialParties,
   initialChannels,
+  readOnly = false,
 }: {
   initialParties: OrgParty[];
   initialChannels: OrgChannel[];
+  readOnly?: boolean;
 }) {
   const [parties, setParties] = useState(initialParties);
   const [channels, setChannels] = useState(initialChannels);
@@ -126,6 +128,7 @@ export function PartyDirectoryClient({
         <h2 className="text-sm font-medium">相手台帳</h2>
         <p className="mt-2 text-xs muted leading-relaxed">
           会話の宛先が社内か社外かを登録します。Bot token は不要です。未登録は社外扱いです。
+          {readOnly ? " 変更は管理MCPの人承認です。この画面では閲覧のみです。" : ""}
         </p>
       </div>
       {message ? <p className="text-sm">{message}</p> : null}
@@ -160,7 +163,7 @@ export function PartyDirectoryClient({
             placeholder="例: sample-shoji.example / C0123ABCD"
             className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm"
           />
-          <button type="button" className="btn btn-primary text-xs" disabled={busy || !identifier.trim()} onClick={() => void saveParty()}>
+          <button type="button" className="btn btn-primary text-xs" disabled={readOnly || busy || !identifier.trim()} onClick={() => void saveParty()}>
             相手を追加
           </button>
           <ul className="space-y-2">
@@ -172,7 +175,7 @@ export function PartyDirectoryClient({
                     {row.audience === "internal" ? "社内" : "社外"}
                   </span>
                 </span>
-                <button type="button" className="text-[var(--danger)]" onClick={() => void remove("party", row.id)}>
+                <button type="button" className="text-[var(--danger)]" onClick={() => void remove("party", row.id)} disabled={readOnly}>
                   削除
                 </button>
               </li>
@@ -202,7 +205,7 @@ export function PartyDirectoryClient({
               </option>
             ))}
           </select>
-          <button type="button" className="btn btn-primary text-xs" disabled={busy || !channelId.trim()} onClick={() => void saveChannel()}>
+          <button type="button" className="btn btn-primary text-xs" disabled={readOnly || busy || !channelId.trim()} onClick={() => void saveChannel()}>
             チャネルを追加
           </button>
           <ul className="space-y-2">
@@ -215,7 +218,7 @@ export function PartyDirectoryClient({
                     {row.mixed ? " · ゲスト混在" : ""}
                   </span>
                 </span>
-                <button type="button" className="text-[var(--danger)]" onClick={() => void remove("channel", row.id)}>
+                <button type="button" className="text-[var(--danger)]" onClick={() => void remove("channel", row.id)} disabled={readOnly}>
                   削除
                 </button>
               </li>

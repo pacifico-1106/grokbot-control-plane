@@ -21,6 +21,17 @@ import { createSupabaseAdminClient } from "../supabase";
 import { mapApprovalRow } from "./mappers";
 import type { ApprovalRequest } from "../types";
 import { generateTelegramRef } from "../approvals/tokens";
+import { assertNotSelfApproval } from "@/lib/admin-mcp/self-approval";
+import { isAdminClassApproval } from "@/lib/admin-mcp/audit-class";
+
+function looksLikeUuid(value: string | null | undefined): boolean {
+  return Boolean(
+    value &&
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+        value
+      )
+  );
+}
 
 export type CreateApprovalInput = {
   orgId: string;
@@ -178,8 +189,8 @@ export async function createApproval(
 
   const insertPayload: Record<string, unknown> = {
     org_id: input.orgId,
-    employee_id: input.employeeId,
-    credential_id: input.credentialId,
+    employee_id: looksLikeUuid(input.employeeId) ? input.employeeId : null,
+    credential_id: looksLikeUuid(input.credentialId) ? input.credentialId : null,
     purpose: input.purpose,
     summary: input.summary,
     risk: input.risk,
@@ -204,8 +215,8 @@ export async function createApproval(
   if (error) {
     const legacy = {
       org_id: input.orgId,
-      employee_id: input.employeeId,
-      credential_id: input.credentialId,
+      employee_id: looksLikeUuid(input.employeeId) ? input.employeeId : null,
+      credential_id: looksLikeUuid(input.credentialId) ? input.credentialId : null,
       purpose: input.purpose,
       summary: input.summary,
       risk: input.risk,
@@ -300,7 +311,7 @@ export async function resolveApproval(
   status: "approved" | "rejected" | "revision_requested",
   resolvedBy: string,
   orgId?: string | null,
-  opts: { revisionNote?: string } = {}
+  opts: { revisionNote?: string; grokBotAgentId?: string | null; actorId?: string | null } = {}
 ): Promise<ApprovalRequest | null> {
   if (!id || !orgId) return null;
   const revisionNote = opts.revisionNote?.trim() || null;
@@ -309,6 +320,13 @@ export async function resolveApproval(
     const existing = await demoGetApproval(id);
     if (!existing || existing.orgId !== orgId) return null;
     if (existing.status !== "pending") return null;
+    if (isAdminClassApproval(existing)) {
+      assertNotSelfApproval(existing.metadata, {
+        actor: resolvedBy,
+        actorId: opts.actorId,
+        grokBotAgentId: opts.grokBotAgentId,
+      });
+    }
     return demoResolveApproval(id, status, resolvedBy, revisionNote || undefined);
   }
   const admin = createSupabaseAdminClient();
@@ -317,6 +335,13 @@ export async function resolveApproval(
   const now = new Date().toISOString();
   const existing = await getApprovalById(id, orgId);
   if (!existing || existing.status !== "pending") return null;
+  if (isAdminClassApproval(existing)) {
+    assertNotSelfApproval(existing.metadata, {
+      actor: resolvedBy,
+      actorId: opts.actorId,
+      grokBotAgentId: opts.grokBotAgentId,
+    });
+  }
   const update: Record<string, unknown> = {
     status,
     resolved_at: now,

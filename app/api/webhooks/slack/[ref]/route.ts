@@ -10,6 +10,7 @@ import {
 } from "@/lib/data";
 import { extraApproversAllow } from "@/lib/employees/approval-inbox";
 import { verifySlackSignature } from "@/lib/notify/slack";
+import { isSelfApprovalDenied } from "@/lib/admin-mcp/self-approval";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -115,36 +116,41 @@ async function handleBlockActions(
   if (!extraApproversAllow(userId, employeeForGate?.approverUserIds)) return;
 
   const actor = `slack:${userId || "unknown"}`;
-  if (action.action_id === "staffpass_revise") {
-    const updated = await resolveApproval(
-      approval.id,
-      "revision_requested",
-      actor,
-      channel.orgId,
-      { revisionNote: "Slackから修正依頼" }
-    );
+  try {
+    if (action.action_id === "staffpass_revise") {
+      const updated = await resolveApproval(
+        approval.id,
+        "revision_requested",
+        actor,
+        channel.orgId,
+        { revisionNote: "Slackから修正依頼" }
+      );
+      if (updated) {
+        const employee = await getEmployee(updated.employeeId, channel.orgId);
+        await runApprovalResolveSideEffects({
+          approval: updated,
+          decision: "revision_requested",
+          actorEmail: actor,
+          employee,
+        });
+      }
+      return;
+    }
+
+    const decision = action.action_id === "staffpass_approve" ? "approved" : "rejected";
+    const updated = await resolveApproval(approval.id, decision, actor, channel.orgId);
     if (updated) {
+      await fulfillIfApproved(updated, decision);
       const employee = await getEmployee(updated.employeeId, channel.orgId);
       await runApprovalResolveSideEffects({
         approval: updated,
-        decision: "revision_requested",
+        decision,
         actorEmail: actor,
         employee,
       });
     }
-    return;
-  }
-
-  const decision = action.action_id === "staffpass_approve" ? "approved" : "rejected";
-  const updated = await resolveApproval(approval.id, decision, actor, channel.orgId);
-  if (updated) {
-    await fulfillIfApproved(updated, decision);
-    const employee = await getEmployee(updated.employeeId, channel.orgId);
-    await runApprovalResolveSideEffects({
-      approval: updated,
-      decision,
-      actorEmail: actor,
-      employee,
-    });
+  } catch (error) {
+    if (isSelfApprovalDenied(error)) return;
+    throw error;
   }
 }

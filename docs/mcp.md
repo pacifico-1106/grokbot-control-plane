@@ -262,3 +262,27 @@ xAI API の remote MCP も同じ URL / Bearer を指定してください。
 会話の相手×情報区分（egress）の正本は [egress-policy.md](./egress-policy.md) です。Slack ツール名は境界ではありません。
 
 実装の正本は Gateway（`lib/gateway/invoke.ts`）と社員証ガイド（[agent-credential-guide.md](./agent-credential-guide.md)）です。
+
+
+---
+
+## 管理 MCP（別口）
+
+社員証 MCP（`/api/mcp`, `gb_emp_`）とは **別の口** です。混ぜないでください。
+
+| | |
+|--|--|
+| **Endpoint** | `https://staffpass.sealith.com/api/mcp/admin` |
+| **Auth** | `Authorization: Bearer gb_adm_…`（社員証 `gb_emp_` は fail-closed で拒否） |
+| **Server name** | `staffpass-admin` |
+
+ツール（すべて always_human。人の承認まで mutate しない）:
+
+- `employees.issue`
+- `link`
+- `policy.patch`
+- `parties.upsert`
+- `channels.classify`
+- `roles.propose`
+
+監査クラスは `admin.hire` / `admin.policy` / `admin.parties` など。`tool.invoke` / `mail.send` とは分けます。管理エージェントは自分の申請を承認できません。

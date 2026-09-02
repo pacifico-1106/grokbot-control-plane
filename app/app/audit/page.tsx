@@ -15,7 +15,7 @@ export default async function AuditPage() {
 
   return (
     <AppShell
-      title="監査"
+      title="閲覧"
       subtitle="タイムライン — 誰が・何目的で・何をしたか（プロンプト全文ではない）"
     >
       {events.length === 0 ? (

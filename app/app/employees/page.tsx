@@ -8,6 +8,7 @@ import { APPROVAL_POLICY_LABELS } from "@/lib/employees/policy-draft";
 import { buildConcentration } from "@/lib/employees/concentration";
 import { DOMAIN_LABELS } from "@/lib/gateway/domains";
 import type { Employee, NotificationChannel } from "@/lib/types";
+import { EmployeeRevokeButton } from "@/components/employees/EmployeeRevokeButton";
 
 export const dynamic = "force-dynamic";
 
@@ -54,30 +55,24 @@ export default async function EmployeesPage() {
   const concentrationById = new Map(concentration.employees.map((row) => [row.employeeId, row]));
 
   return (
-    <AppShell title="AI社員">
+    <AppShell title="AI社員一覧">
       <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center sm:justify-between gap-3 mb-4">
         <p className="text-sm muted break-words min-w-0">
-          日本語で職務を説明 → 権限の案 → 社員証発行。危ない操作は承認待ちへ
+          閲覧と失効。権限の編集は管理MCPの人承認です。
         </p>
-        <Link
-          href="/app/employees/new"
-          className="btn btn-primary text-sm w-full sm:w-auto shrink-0"
-        >
-          AI社員を雇う
-        </Link>
       </div>
 
       {employees.length === 0 ? (
         <section className="surface p-6 sm:p-8 text-center">
           <p className="text-sm font-medium">まだ AI社員がいません</p>
           <p className="mt-2 text-sm muted leading-relaxed max-w-md mx-auto break-words">
-            最初の一人を雇うと、できること・目的・承認のルール付きの社員証が発行されます。
+            最初の一人はセットアップの人確認から進めます。毎日の入口ではありません。
           </p>
           <Link
-            href="/app/employees/new"
-            className="btn btn-primary mt-5 text-sm inline-flex w-full sm:w-auto"
+            href="/app/getting-started"
+            className="btn btn-ghost mt-5 text-sm inline-flex w-full sm:w-auto"
           >
-            最初の AI社員を雇う
+            セットアップへ
           </Link>
         </section>
       ) : (
@@ -123,12 +118,17 @@ export default async function EmployeesPage() {
                     </div>;
                   })()}
                 </Link>
-                <Link
-                  href={`/app/employees/${e.id}/actions`}
-                  className="text-xs muted underline underline-offset-2 min-h-[44px] inline-flex items-center"
-                >
-                  アクションログ
-                </Link>
+                <div className="flex flex-wrap items-center gap-3">
+                  <Link
+                    href={`/app/employees/${e.id}/actions`}
+                    className="text-xs muted underline underline-offset-2 min-h-[44px] inline-flex items-center"
+                  >
+                    アクションログ
+                  </Link>
+                  {e.status !== "suspended" ? (
+                    <EmployeeRevokeButton employeeId={e.id} displayName={e.displayName} />
+                  ) : null}
+                </div>
               </li>
             ))}
           </ul>
@@ -145,6 +145,7 @@ export default async function EmployeesPage() {
                     <th className="px-4 py-3 font-medium">高リスク領域</th>
                     <th className="px-4 py-3 font-medium">状態</th>
                     <th className="px-4 py-3 font-medium">ログ</th>
+                    <th className="px-4 py-3 font-medium">失効</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -204,6 +205,13 @@ export default async function EmployeesPage() {
                         >
                           アクション
                         </Link>
+                      </td>
+                      <td className="px-4 py-3 relative z-[1]">
+                        {e.status !== "suspended" ? (
+                          <EmployeeRevokeButton employeeId={e.id} displayName={e.displayName} />
+                        ) : (
+                          <span className="text-xs faint">終了済み</span>
+                        )}
                       </td>
                     </tr>
                   ))}

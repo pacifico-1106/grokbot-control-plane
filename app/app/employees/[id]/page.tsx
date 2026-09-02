@@ -78,8 +78,8 @@ export default async function EmployeeDetailPage({
         <Link href="/app/employees" className="btn btn-ghost text-sm w-full sm:w-auto">
           ← 一覧
         </Link>
-        <Link href="/app/employees/new" className="btn btn-ghost text-sm w-full sm:w-auto">
-          別のAI社員を雇う
+        <Link href="/app/getting-started" className="btn btn-ghost text-sm w-full sm:w-auto">
+          セットアップ
         </Link>
         <Link
           href={`/app/employees/${employee.id}/actions`}
@@ -116,6 +116,7 @@ export default async function EmployeeDetailPage({
             employee={employee}
             slackLinked={slackIdentity?.status === "linked"}
             disabled={employee.status === "suspended"}
+            readOnly
             sodWarnPolicy={sodWarnPolicy}
           />
         </section>

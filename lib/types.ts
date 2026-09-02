@@ -397,7 +397,13 @@ export type AuditAction =
   | "employee.terminated"
   | "member.invited"
   | "commerce.projection_received"
-  | "authority.event_delivery";
+  | "authority.event_delivery"
+  | "admin.hire"
+  | "admin.link"
+  | "admin.policy"
+  | "admin.parties"
+  | "admin.channel"
+  | "admin.role";
 
 export interface Org {
   id: string;
@@ -407,6 +413,26 @@ export interface Org {
   trialEndsAt: string | null;
   stripeCustomerId: string | null;
   createdAt: string;
+}
+
+/**
+ * One top-level admin agent per tenant (not a sales/SNS employee badge).
+ * Auth secret prefix is gb_adm_ — never share the employee MCP gb_emp_ header.
+ */
+export type AdminAgentStatus = "unlinked" | "linked" | "revoked" | "needs_reauth";
+
+export interface OrgAdminAgent {
+  id: string;
+  orgId: string;
+  grokBotAgentId: string | null;
+  grokBotWorkspaceId: string | null;
+  credentialFingerprint: string | null;
+  secretPrefix: string;
+  credentialGeneration: number;
+  status: AdminAgentStatus;
+  opsDocLocation: string | null;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface OrgMember {

@@ -29,8 +29,8 @@ export default async function SettingsPage() {
   const sodWarnPolicy = canManage ? await getOrgSodWarnPolicy(session.orgId) : null;
   return (
     <AppShell
-      title="会社のつながり"
-      subtitle="Slack・Telegram・LINE のつなぎ方。承認・投稿・社内外の見分けをここで設定します。"
+      title="つながり"
+      subtitle="通知口（Telegram / LINE / 承認 Slack）。権限マトリックスではありません。"
     >
       {canManage ? (
         <>
@@ -62,7 +62,7 @@ export default async function SettingsPage() {
           <p className="mt-4 text-xs faint leading-relaxed">
             認証情報は暗号化して保存し、画面には再表示しません。変更とテスト送信は記録に残します。
           </p>
-          <PartyDirectoryClient initialParties={parties} initialChannels={orgChannels} />
+          <PartyDirectoryClient initialParties={parties} initialChannels={orgChannels} readOnly />
           {sodWarnPolicy ? <SodWarnPolicyClient initialPolicy={sodWarnPolicy} /> : null}
           <ProjectsClient initialProjects={projects} initialAssets={assets} />
         </>
