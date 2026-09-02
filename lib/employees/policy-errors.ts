@@ -22,6 +22,8 @@ export const POLICY_ERROR_MESSAGES: Record<string, string> = {
   invalid_wake_webhook_url: "起こす webhook の URL が正しくありません",
   wake_webhook_url_required: "起こす webhook の URL が必要です",
   approval_channel_not_found: "指定の承認インボックスが見つかりません",
+  admin_mcp_required: "権限（できること・使う理由・行為上限）の変更は管理MCPの人承認です",
+  directory_admin_mcp_required: "相手台帳の変更は管理MCPの人承認です",
 };
 
 export function looksJapanese(value: string): boolean {

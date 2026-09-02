@@ -117,8 +117,8 @@ const sendConfirmScopes: EmployeeScope[] = [
   "audit:append",
 ];
 
-describe("PATCH send+confirm warn requires ack and keeps risk_based", () => {
-  test("changing to send+confirm without ack is 400; with ack keeps risk_based", async () => {
+describe("PATCH send+confirm is dashboard-locked", () => {
+  test("changing scopes on dashboard is 403 even with SoD ack", async () => {
     const issued = await issueEmployee({
       orgId: DEMO_ORG.id,
       displayName: "同居パッチ",
@@ -140,19 +140,21 @@ describe("PATCH send+confirm warn requires ack and keeps risk_based", () => {
       actionLimits: {},
     });
     const deniedBody = await denied.json();
-    expect(denied.status).toBe(400);
-    expect(deniedBody.error).toBe("sod_ack_required");
+    expect(denied.status).toBe(403);
+    expect(deniedBody.error).toBe("admin_mcp_required");
+    expect(looksJapanese(String(deniedBody.message))).toBe(true);
 
-    const allowed = await patchRequest(issued.employee.id, {
+    const stillDenied = await patchRequest(issued.employee.id, {
       scopes: sendConfirmScopes,
       allowedPurposes: ["ops.admin"],
       approvalPolicy: "risk_based",
       actionLimits: {},
       sodOverrideAcknowledged: true,
     });
-    const allowedBody = await allowed.json();
-    expect(allowed.status).toBe(200);
-    expect(allowedBody.employee.approvalPolicy).toBe("risk_based");
-    expect(allowedBody.employee.sodLevel).toBe("warn");
+    const stillBody = await stillDenied.json();
+    expect(stillDenied.status).toBe(403);
+    expect(stillBody.error).toBe("admin_mcp_required");
+    const stored = await getEmployee(issued.employee.id, DEMO_ORG.id);
+    expect(stored?.scopes).toEqual(issued.employee.scopes);
   });
 });

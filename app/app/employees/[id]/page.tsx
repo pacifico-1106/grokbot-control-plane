@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
 import { BindingPanel } from "@/components/employees/BindingPanel";
 import { EmployeeActionLog } from "@/components/employees/EmployeeActionLog";
@@ -10,7 +10,6 @@ import { EmployeePolicyForm } from "@/components/employees/EmployeePolicyForm";
 import { EmployeeVoiceForm } from "@/components/employees/EmployeeVoiceForm";
 import { EmployeeProjectAccessForm } from "@/components/employees/EmployeeProjectAccessForm";
 import { EmployeeTerminateForm } from "@/components/employees/EmployeeTerminateForm";
-import { HireEmployeeClient } from "@/components/employees/HireEmployeeClient";
 import { SlackIdentityForm } from "@/components/employees/SlackIdentityForm";
 import { getCurrentOrgId } from "@/lib/auth/session";
 import {
@@ -40,20 +39,15 @@ export default async function EmployeeDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
+  if (id === "new") {
+    redirect("/app/getting-started");
+  }
 
   const orgId = await getCurrentOrgId();
   const members = await listMembers(orgId);
   const projects = await listOrgProjects(orgId);
   const sodWarnPolicy = await getOrgSodWarnPolicy(orgId);
   const notificationChannels = await listNotificationChannels(orgId);
-
-  if (id === "new") {
-    return (
-      <AppShell title="AI社員を雇う" subtitle="新規発行">
-        <HireEmployeeClient members={members} projects={projects} sodWarnPolicy={sodWarnPolicy} notificationChannels={notificationChannels} />
-      </AppShell>
-    );
-  }
 
   const employee = await getEmployee(id, orgId);
   if (!employee) notFound();

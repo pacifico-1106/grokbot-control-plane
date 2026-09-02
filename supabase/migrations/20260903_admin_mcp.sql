@@ -28,3 +28,20 @@ alter table approval_requests
   alter column employee_id drop not null;
 alter table approval_requests
   alter column credential_id drop not null;
+
+comment on table org_admin_agents is
+  'テナントに1つの管理エージェント。認証接頭辞 gb_adm_ は社員証（gb_emp_）ではない。';
+comment on column approval_requests.employee_id is
+  '管理MCPの承認チケットは社員証なしで NULL 可（雇用・権限・相手台帳）。';
+comment on column approval_requests.credential_id is
+  '管理MCPの承認チケットは社員証なしで NULL 可。';
+
+alter table org_admin_agents enable row level security;
+
+drop policy if exists org_admin_agents_select on org_admin_agents;
+drop policy if exists org_admin_agents_write_admin on org_admin_agents;
+create policy org_admin_agents_select on org_admin_agents
+  for select using (public.is_org_member(org_id));
+create policy org_admin_agents_write_admin on org_admin_agents
+  for all using (public.is_org_admin(org_id))
+  with check (public.is_org_admin(org_id));

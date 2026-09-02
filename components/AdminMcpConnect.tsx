@@ -7,9 +7,11 @@ import { STAFFPASS_ADMIN_MCP_URL } from "@/lib/mcp/admin-public";
 export function AdminMcpConnect({
   connected,
   grokBotAgentId,
+  embedded = false,
 }: {
   connected: boolean;
   grokBotAgentId: string | null;
+  embedded?: boolean;
 }) {
   const [busy, setBusy] = useState(false);
   const [secret, setSecret] = useState<string | null>(null);
@@ -53,13 +55,19 @@ export function AdminMcpConnect({
     }
   }
 
-  return (
-    <section id="admin-mcp" className="surface p-5 space-y-3">
-      <p className="text-xs faint font-mono">STEP 02</p>
-      <h2 className="text-sm font-medium">admin MCP 接続</h2>
+  const inner = (
+    <>
+      {embedded ? null : (
+        <>
+          <p className="text-xs faint font-mono">STEP 02</p>
+          <h2 className="text-sm font-medium">admin MCP 接続</h2>
+        </>
+      )}
+      {embedded ? null : (
       <p className="text-sm muted leading-relaxed">
         テナントに管理エージェントは1つです。社員証 MCP（gb_emp_）とは別口です。ヘッダを混ぜないでください。
       </p>
+      )}
       <div>
         <p className="text-xs muted mb-1.5">管理MCP URL</p>
         <CopyableValue value={STAFFPASS_ADMIN_MCP_URL} />
@@ -91,6 +99,12 @@ export function AdminMcpConnect({
         接続する
       </button>
       <p className="text-xs muted">{isConnected ? "接続済み" : "未接続"}{message ? ` · ${message}` : ""}</p>
+    </>
+  );
+  if (embedded) return <div className="space-y-3">{inner}</div>;
+  return (
+    <section id="admin-mcp" className="surface p-5 space-y-3">
+      {inner}
     </section>
   );
 }

@@ -41,10 +41,16 @@ export async function appendAuditEvent(
   }
   const admin = createSupabaseAdminClient();
   if (!admin) return;
+  const asUuid = (value: string | null | undefined) => {
+    const raw = (value || "").trim();
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(raw)
+      ? raw
+      : null;
+  };
   await admin.from("audit_events").insert({
     org_id: event.orgId,
-    employee_id: event.employeeId,
-    credential_id: event.credentialId,
+    employee_id: asUuid(event.employeeId),
+    credential_id: asUuid(event.credentialId),
     actor_email: event.actorEmail ?? null,
     action: event.action,
     purpose: event.purpose,

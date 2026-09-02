@@ -141,6 +141,7 @@ export function PartyDirectoryClient({
               value={kind}
               onChange={(e) => setKind(e.target.value as OrgPartyKind)}
               className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm"
+              disabled={readOnly}
             >
               {(Object.keys(PARTY_KIND_LABELS) as OrgPartyKind[]).map((item) => (
                 <option key={item} value={item}>
@@ -152,6 +153,7 @@ export function PartyDirectoryClient({
               value={audience}
               onChange={(e) => setAudience(e.target.value as "internal" | "external")}
               className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm"
+              disabled={readOnly}
             >
               <option value="internal">社内</option>
               <option value="external">社外</option>
@@ -162,6 +164,7 @@ export function PartyDirectoryClient({
             onChange={(e) => setIdentifier(e.target.value)}
             placeholder="例: sample-shoji.example / C0123ABCD"
             className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm"
+            disabled={readOnly}
           />
           <button type="button" className="btn btn-primary text-xs" disabled={readOnly || busy || !identifier.trim()} onClick={() => void saveParty()}>
             相手を追加
@@ -190,6 +193,7 @@ export function PartyDirectoryClient({
             onChange={(e) => setChannelId(e.target.value)}
             placeholder="例: C_INTERNAL"
             className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm"
+            disabled={readOnly}
           />
           <p className="text-xs muted leading-relaxed">
             チャンネル ID を社内 / 社外に分けます。Slack Connect / 社外混在は社内にできません。未登録は社外扱いです。
@@ -198,6 +202,7 @@ export function PartyDirectoryClient({
             value={lockInternal && classification === "internal" ? "shared_external" : classification}
             onChange={(e) => setClassification(e.target.value as ChannelClassification)}
             className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm"
+            disabled={readOnly}
           >
             {classificationOptions.map((item) => (
               <option key={item} value={item}>

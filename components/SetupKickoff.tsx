@@ -36,7 +36,7 @@ export function SetupKickoff({
           <h3 className="text-sm font-medium">{step.title}</h3>
           <p className="text-sm muted leading-relaxed">{step.body}</p>
           {step.id === "admin-mcp" ? (
-            <AdminMcpConnect connected={adminConnected} grokBotAgentId={grokBotAgentId} />
+            <AdminMcpConnect connected={adminConnected} grokBotAgentId={grokBotAgentId} embedded />
           ) : null}
           {step.id === "process-source" ? <OpsDocLocationForm initial={opsDocLocation} /> : null}
           {step.id === "confirm-employees" ? (

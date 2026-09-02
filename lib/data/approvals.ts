@@ -271,8 +271,8 @@ export async function createApproval(
 
   await admin.from("audit_events").insert({
     org_id: input.orgId,
-    employee_id: input.employeeId,
-    credential_id: input.credentialId,
+    employee_id: looksLikeUuid(input.employeeId) ? input.employeeId : null,
+    credential_id: looksLikeUuid(input.credentialId) ? input.credentialId : null,
     action: "approval.requested",
     purpose: input.purpose,
     summary: `承認待ち: ${input.title}`,

@@ -131,4 +131,17 @@ describe("roles.propose PROCESS SOURCE via admin MCP", () => {
     expect(data.code).toBe("content_required");
     expect(data.driveRequired).toBe(false);
   });
+
+  test("location-only without Drive queues always_human", async () => {
+    const result = await callAdminMcpTool(
+      "roles.propose",
+      { sourceType: "document", location: "Supabase / ops / 職務.md" },
+      demoCred()
+    );
+    expect(Boolean(result.isError)).toBe(false);
+    const data = result.structuredContent as Record<string, unknown>;
+    expect(data.needs_approval).toBe(true);
+    expect(data.always_human).toBe(true);
+    expect(data.auditAction).toBe("admin.role");
+  });
 });

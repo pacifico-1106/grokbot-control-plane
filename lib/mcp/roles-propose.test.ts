@@ -39,6 +39,17 @@ describe("roles.propose PROCESS SOURCE", () => {
     expect(parsed.value.driveWired).toBe(false);
   });
 
+  test("conversation log free text is the same PROCESS SOURCE class", () => {
+    const parsed = parseRolesProposeInput({
+      conversationLog: "昨日の会話: 請求の確認と社内資料の整理をお願いしたい",
+    });
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.value.sourceType).toBe("text");
+    expect(parsed.value.driveWired).toBe(false);
+    expect(parsed.value.combinedText).toContain("請求");
+  });
+
   test("empty input fails with content_required, not Drive required", () => {
     const parsed = parseRolesProposeInput({});
     expect(parsed.ok).toBe(false);

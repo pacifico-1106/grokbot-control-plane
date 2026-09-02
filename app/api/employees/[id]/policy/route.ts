@@ -17,6 +17,10 @@ import { normalizeApproverUserIds, parseApprovalChannelId } from "@/lib/employee
 import { normalizeEmployeeIdentityField } from "@/lib/employees/identity";
 import { normalizeSpendLimits } from "@/lib/spend-gate";
 import type { AllowedAccount, ApprovalPolicy, EmployeeScope, SpendLimits } from "@/lib/types";
+import {
+  DASHBOARD_POLICY_LOCKED,
+  dashboardLockedPolicyChanged,
+} from "@/lib/dashboard/policy-lock";
 
 export const runtime = "nodejs";
 
@@ -41,6 +45,22 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
   const approvalPolicy = body.approvalPolicy as ApprovalPolicy;
   if (!scopes.length || scopes.some((scope) => !ALL_SCOPES.includes(scope)) || !["auto", "risk_based", "always_human"].includes(approvalPolicy)) {
     return fail("invalid_policy", 400);
+  }
+  if (
+    dashboardLockedPolicyChanged({
+      existing: {
+        scopes: existing.scopes,
+        allowedPurposes: existing.allowedPurposes,
+        actionLimits: existing.actionLimits,
+      },
+      posted: {
+        scopes,
+        allowedPurposes,
+        actionLimits: normalizeActionLimits(body.actionLimits),
+      },
+    })
+  ) {
+    return fail(DASHBOARD_POLICY_LOCKED, 403);
   }
   const sodOverrideAcknowledged = body.sodOverrideAcknowledged === true;
   const sodVerdict = evaluateSod(scopes, await getOrgSodWarnPolicy(orgId));

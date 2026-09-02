@@ -58,7 +58,7 @@ export async function queueAdminTool(input: {
   const created = await createApproval({
     orgId: input.cred.orgId,
     employeeId: "",
-    credentialId: input.cred.adminAgentId,
+    credentialId: "",
     title,
     purpose: auditAction,
     summary: input.summary,
@@ -78,7 +78,7 @@ export async function queueAdminTool(input: {
   await appendAuditEvent({
     orgId: input.cred.orgId,
     employeeId: null,
-    credentialId: input.cred.adminAgentId,
+    credentialId: null,
     action: auditAction,
     purpose: auditAction,
     summary: `承認待ち: ${title}`,

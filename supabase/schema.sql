@@ -167,7 +167,7 @@ create index if not exists action_counters_employee_period_idx
   on action_counters (employee_id, period);
 
 -- ---------------------------------------------------------------------------
--- Admin MCP agent (one per tenant, not an employee badge)
+-- 管理MCPエージェント（テナントに1つ。社員証ではない）
 -- ---------------------------------------------------------------------------
 create table if not exists org_admin_agents (
   id uuid primary key default gen_random_uuid(),
@@ -185,6 +185,9 @@ create table if not exists org_admin_agents (
   unique (org_id)
 );
 
+comment on table org_admin_agents is
+  'テナントに1つの管理エージェント。認証接頭辞 gb_adm_ は社員証（gb_emp_）ではない。';
+
 create index if not exists org_admin_agents_fingerprint_idx
   on org_admin_agents (credential_fingerprint)
   where credential_fingerprint is not null;
@@ -195,8 +198,8 @@ create index if not exists org_admin_agents_fingerprint_idx
 create table if not exists approval_requests (
   id uuid primary key default gen_random_uuid(),
   org_id uuid not null references orgs(id) on delete cascade,
-  employee_id uuid references employees(id),
-  credential_id uuid references credentials(id),
+  employee_id uuid references employees(id), -- 管理MCPチケットは NULL 可
+  credential_id uuid references credentials(id), -- 管理MCPチケットは NULL 可
   purpose text not null,
   summary text not null,
   title text,
@@ -589,6 +592,7 @@ alter table org_parties enable row level security;
 alter table org_channels enable row level security;
 alter table information_assets enable row level security;
 alter table org_projects enable row level security;
+alter table org_admin_agents enable row level security;
 
 drop policy if exists orgs_select_member on orgs;
 drop policy if exists orgs_update_admin on orgs;
@@ -692,6 +696,14 @@ create policy bindings_select on employee_bindings
   for select using (public.is_org_member(org_id));
 create policy bindings_write_admin on employee_bindings
   for all using (public.is_org_admin(org_id));
+
+drop policy if exists org_admin_agents_select on org_admin_agents;
+drop policy if exists org_admin_agents_write_admin on org_admin_agents;
+create policy org_admin_agents_select on org_admin_agents
+  for select using (public.is_org_member(org_id));
+create policy org_admin_agents_write_admin on org_admin_agents
+  for all using (public.is_org_admin(org_id))
+  with check (public.is_org_admin(org_id));
 
 drop policy if exists org_parties_select on org_parties;
 drop policy if exists org_parties_write_admin on org_parties;
