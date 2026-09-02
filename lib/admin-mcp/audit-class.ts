@@ -35,11 +35,21 @@ export const OPERATIONAL_AUDIT_ACTIONS = [
 
 const ADMIN_PREFIX = "admin.";
 
+/** Hire-class aliases from the human dashboard (not tool.invoke). */
+export const ADMIN_CLASS_ALIASES = [
+  "credential.issued",
+  "credential.revoked",
+  "employee.created",
+  "employee.updated",
+  "employee.terminated",
+] as const;
+
 export function isAdminAuditAction(action: string | null | undefined): boolean {
   const value = (action || "").trim();
   if (!value) return false;
   if (value.startsWith(ADMIN_PREFIX)) return true;
-  return (ADMIN_AUDIT_ACTIONS as readonly string[]).includes(value);
+  if ((ADMIN_AUDIT_ACTIONS as readonly string[]).includes(value)) return true;
+  return (ADMIN_CLASS_ALIASES as readonly string[]).includes(value);
 }
 
 export function isOperationalAuditAction(action: string | null | undefined): boolean {

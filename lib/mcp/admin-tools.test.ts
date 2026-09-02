@@ -56,6 +56,7 @@ describe("admin MCP always_human", () => {
   test("all admin tools are always_human", () => {
     expect(adminToolsAlwaysHuman()).toBe(true);
     expect(ADMIN_MCP_TOOLS.map((t) => t.name)).toEqual([...ADMIN_MCP_TOOL_NAMES]);
+    expect(ADMIN_MCP_TOOLS.every((t) => t.description.includes("always_human"))).toBe(true);
   });
 
   test("employees.issue queues a ticket and does not mutate", async () => {
