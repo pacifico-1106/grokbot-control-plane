@@ -100,7 +100,7 @@ describe("roles.propose PROCESS SOURCE via admin MCP", () => {
       { sourceType: "text", text: "事務として請求確認と社内資料の整理をしてほしい" },
       demoCred()
     );
-    expect(result.isError).toBeFalsy();
+    expect(Boolean(result.isError)).toBe(false);
     const data = result.structuredContent as Record<string, unknown>;
     expect(data.needs_approval).toBe(true);
     expect(data.always_human).toBe(true);
@@ -117,7 +117,7 @@ describe("roles.propose PROCESS SOURCE via admin MCP", () => {
       },
       demoCred()
     );
-    expect(result.isError).toBeFalsy();
+    expect(Boolean(result.isError)).toBe(false);
     const data = result.structuredContent as Record<string, unknown>;
     expect(data.needs_approval).toBe(true);
     expect(data.always_human).toBe(true);

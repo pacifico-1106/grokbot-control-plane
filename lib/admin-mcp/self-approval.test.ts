@@ -61,12 +61,16 @@ describe("admin self-approval denied", () => {
       })
     ).toThrow(SELF_APPROVAL_DENIED);
 
-    await expect(
-      resolveApproval(created.approval.id, "approved", "adm_demo", DEMO_ORG.id, {
+    let denied = false;
+    try {
+      await resolveApproval(created.approval.id, "approved", "adm_demo", DEMO_ORG.id, {
         grokBotAgentId: "grok_admin_demo",
         actorId: "adm_demo",
-      })
-    ).rejects.toThrow(SELF_APPROVAL_DENIED);
+      });
+    } catch (error) {
+      denied = error instanceof Error && error.message === SELF_APPROVAL_DENIED;
+    }
+    expect(denied).toBe(true);
 
     const human = await resolveApproval(
       created.approval.id,
