@@ -16,6 +16,10 @@ const ACTION_LABEL: Record<string, string> = {
   "admin.channel": "チャネル",
   "admin.link": "連携",
   "admin.role": "職務案",
+  "credential.issued": "雇用",
+  "employee.created": "雇用",
+  "employee.updated": "権限",
+  "employee.terminated": "失効",
 };
 
 export function ChangeLog({
