@@ -43,6 +43,13 @@ export const SETUP_STEPS = [
     label: "承認へ",
   },
   {
+    id: "link-agents",
+    title: "手足の紐付け",
+    body: "MCPが案内します。Bot作成はエージェント側。Staffpassは社員証だけを管理します。",
+    href: "/app/approvals",
+    label: "紐付けへ",
+  },
+  {
     id: "approvers",
     title: "承認者と通知口",
     body: "日々の通す／止めるは Telegram / LINE / Slack の通知口が主です。",
