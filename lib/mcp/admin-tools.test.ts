@@ -76,6 +76,7 @@ describe("admin MCP always_human", () => {
     expect(data.auditClass).toBe("admin");
     expect(data.auditAction).toBe("admin.hire");
     expect(data.approvalId).toBeTruthy();
+    expect(data.nextStepJa).toBe(undefined);
     expect((await listEmployees(DEMO_ORG.id)).length).toBe(before);
   });
 
@@ -90,6 +91,21 @@ describe("admin MCP always_human", () => {
     expect(data.needs_approval).toBe(true);
     expect(data.always_human).toBe(true);
     expect(data.auditAction).toBe("admin.role");
+    expect(data.nextStepJa).toBe(undefined);
+  });
+
+  test("link does not claim completion while approval is pending", async () => {
+    const [employee] = await listEmployees(DEMO_ORG.id);
+    expect(Boolean(employee)).toBe(true);
+    const result = await callAdminMcpTool(
+      "link",
+      { employeeId: employee.id, grokBotAgentId: "agent-pending" },
+      demoCred()
+    );
+    const data = result.structuredContent as Record<string, unknown>;
+    expect(data.needs_approval).toBe(true);
+    expect(data.nextStepJa).toBe(undefined);
+    expect(data.noticeJa).toBe(undefined);
   });
 });
 

@@ -45,6 +45,17 @@ export default async function GettingStartedPage() {
 
         <section className="surface p-5">
           <p className="text-xs faint font-mono">STEP 05</p>
+          <h2 className="mt-2 text-sm font-medium">手足の紐付け</h2>
+          <p className="mt-2 text-sm muted leading-relaxed">
+            MCPが案内します。Bot作成はエージェント側。Staffpassは社員証だけを管理します。
+          </p>
+          <Link href="/app/approvals" className="btn btn-ghost mt-4 text-sm w-full sm:w-auto inline-flex">
+            紐付けへ
+          </Link>
+        </section>
+
+        <section className="surface p-5">
+          <p className="text-xs faint font-mono">STEP 06</p>
           <h2 className="mt-2 text-sm font-medium">承認者と通知口</h2>
           <p className="mt-2 text-sm muted leading-relaxed">
             日々の通す／止めるは Telegram / LINE / Slack の通知口が主です。ダッシュボードの承認ボタンは予備です。
@@ -55,7 +66,7 @@ export default async function GettingStartedPage() {
         </section>
 
         <section className="surface p-5">
-          <p className="text-xs faint font-mono">STEP 06</p>
+          <p className="text-xs faint font-mono">STEP 07</p>
           <h2 className="mt-2 text-sm font-medium">コネクタ認証</h2>
           <p className="mt-2 text-sm muted leading-relaxed">
             Gmail / Slack などの OAuth は人がタップします。承認チケットとは別です。

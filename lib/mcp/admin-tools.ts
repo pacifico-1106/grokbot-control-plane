@@ -17,7 +17,7 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
   {
     name: "employees.issue",
     description:
-      "Issue an AI employee badge after human approval (always_human). Staffpass only issues/links badges — creating Grok bots is out of scope. Admin cannot grant itself extra scopes.",
+      "Issue an AI employee badge after human approval (always_human). Call roles.propose first to get human-confirmed role drafts, then issue with those drafts. After issue succeeds, tell the human to prepare one Grok Bot and call link with grokBotAgentId. Staffpass only issues/links badges — creating Grok bots is out of scope. Admin cannot self-approve or grant itself extra scopes.",
     inputSchema: {
       type: "object",
       properties: {
@@ -39,7 +39,7 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
   {
     name: "link",
     description:
-      "Bind grokBotAgentId / credential to an existing employee badge after human approval (always_human). Does not create Grok bots.",
+      "Bind grokBotAgentId to an existing employee badge after human approval (always_human). Human must prepare one Grok Bot on the agent side first. After link succeeds, proceed to connector OAuth (human taps, separate from approval tickets). Does not create Grok bots. Admin cannot self-approve.",
     inputSchema: {
       type: "object",
       properties: {
@@ -107,7 +107,7 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
   {
     name: "roles.propose",
     description:
-      "Propose employee role drafts from PROCESS SOURCE (always_human). sourceType is document | voice | text. At least one of text, location, or transcript is required. Drive is optional and must not fail the tool. Document, Drive/Supabase location, voice/transcript, and free text (including conversation logs) are the same class. Not available on employee MCP.",
+      "Propose employee role drafts from PROCESS SOURCE (always_human). Human confirms the first edition of role drafts. After approval, proceed to employees.issue with the confirmed drafts. sourceType is document | voice | text. At least one of text, location, or transcript is required. Drive is optional and must not fail the tool. Document, Drive/Supabase location, voice/transcript, and free text (including conversation logs) are the same class. Admin cannot self-approve. Not available on employee MCP.",
     inputSchema: {
       type: "object",
       properties: {
@@ -296,6 +296,12 @@ export async function readApprovedAdminResult(
   if (fulfillment.oneTimeSecret) {
     out.oneTimeSecret = fulfillment.oneTimeSecret;
     out.noticeJa = "この秘密値は一度だけです。社員証 MCP に使い、管理 MCP のヘッダと混ぜないでください。";
+  }
+  if (fulfillment.nextStepJa) {
+    out.nextStepJa = fulfillment.nextStepJa;
+  }
+  if (fulfillment.noticeJa && !out.noticeJa) {
+    out.noticeJa = fulfillment.noticeJa;
   }
   return out;
 }

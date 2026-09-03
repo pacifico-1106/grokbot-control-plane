@@ -171,7 +171,41 @@ export default function LandingPage() {
           </div>
         </section>
 
-        <section id="faq" className="mx-auto max-w-6xl px-4 sm:px-6 pb-20 sm:pb-28">
+        <section className="border-y border-[var(--border-soft)] bg-[var(--bg-elevated)]">
+          <div className="mx-auto max-w-6xl px-4 sm:px-6 py-20 sm:py-28">
+            <div className="max-w-2xl">
+              <span className="eyebrow">外側の保険</span>
+              <h2 className="mt-4 text-3xl sm:text-5xl font-bold tracking-[-0.045em] leading-tight">手足はエージェント。<br />砦は、社員証。</h2>
+              <p className="mt-6 text-base sm:text-lg muted leading-relaxed">
+                仕事をするのはAI社員です。Staffpassは外部の保険として、手間なく社員証を出し、最後の砦として監査を残します。権限の画面を組む製品ではありません。
+              </p>
+            </div>
+            <div className="mt-10 grid md:grid-cols-2 lg:grid-cols-4 gap-4">
+              <article className="surface feature-card p-5 sm:p-6">
+                <span className="font-mono text-xs text-[var(--accent-strong)]">01</span>
+                <h3 className="mt-8 text-lg font-semibold">MCPで始める</h3>
+                <p className="mt-3 text-sm muted leading-relaxed">管理エージェントをStaffpassに接続し、工程を読ませます。</p>
+              </article>
+              <article className="surface feature-card p-5 sm:p-6">
+                <span className="font-mono text-xs text-[var(--accent-strong)]">02</span>
+                <h3 className="mt-8 text-lg font-semibold">工程から社員証</h3>
+                <p className="mt-3 text-sm muted leading-relaxed">マニュアルでも会話でも音声でも。最初の権限案は人が通す。</p>
+              </article>
+              <article className="surface feature-card p-5 sm:p-6">
+                <span className="font-mono text-xs text-[var(--accent-strong)]">03</span>
+                <h3 className="mt-8 text-lg font-semibold">紐付けは個別</h3>
+                <p className="mt-3 text-sm muted leading-relaxed">Grok Botなどは各社のエージェント側。Staffpassは社員証。つなぐ操作は人がする。MCPが次のタップを案内する。</p>
+              </article>
+              <article className="surface feature-card p-5 sm:p-6">
+                <span className="font-mono text-xs text-[var(--accent-strong)]">04</span>
+                <h3 className="mt-8 text-lg font-semibold">コミュニケーション口は順次</h3>
+                <p className="mt-3 text-sm muted leading-relaxed">Slackなど。対応中のチャネルをご確認ください。</p>
+              </article>
+            </div>
+          </div>
+        </section>
+
+        <section id="faq" className="mx-auto max-w-6xl px-4 sm:px-6 py-20 sm:py-28">
           <div className="max-w-2xl">
             <span className="eyebrow">FAQ</span>
             <h2 className="mt-4 text-3xl sm:text-5xl font-bold tracking-[-0.045em] leading-tight">よくある質問</h2>

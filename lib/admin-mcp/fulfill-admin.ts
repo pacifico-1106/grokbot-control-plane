@@ -43,6 +43,17 @@ export type AdminFulfillment = {
   partyId?: string;
   channelId?: string;
   draft?: unknown;
+  nextStepJa?: string;
+  noticeJa?: string;
+};
+
+const TOOL_NEXTSTEP_JA: Record<string, string> = {
+  "employees.issue":
+    "次は手足をこの社員証につなぎます。Grok Botを1体用意して、管理MCPの link に grokBotAgentId を渡してください。人がやるのは承認タップだけです。社員証の秘密はチャットに貼らない。",
+};
+
+const TOOL_NOTICE_JA: Record<string, string> = {
+  link: "紐付け完了。次はコネクタ認証（OAuthは人がタップ、承認チケットとは別）。",
 };
 
 function rec(value: unknown): Record<string, unknown> {
@@ -88,6 +99,8 @@ export function parseAdminFulfillment(
     partyId: typeof rec.partyId === "string" ? rec.partyId : undefined,
     channelId: typeof rec.channelId === "string" ? rec.channelId : undefined,
     draft: rec.draft,
+    nextStepJa: typeof rec.nextStepJa === "string" ? rec.nextStepJa : undefined,
+    noticeJa: typeof rec.noticeJa === "string" ? rec.noticeJa : undefined,
   };
 }
 
@@ -154,6 +167,7 @@ async function fulfillIssue(approval: ApprovalRequest, args: Record<string, unkn
     employeeId: result.employee.id,
     secretPrefix: secret.prefix,
     oneTimeSecret: secret.raw,
+    nextStepJa: TOOL_NEXTSTEP_JA["employees.issue"],
   };
 }
 
@@ -179,7 +193,13 @@ async function fulfillLink(approval: ApprovalRequest, args: Record<string, unkno
       grokBotAgentId: binding.grokBotAgentId,
     },
   });
-  return { ok: true, tool: "link", at: new Date().toISOString(), employeeId };
+  return {
+    ok: true,
+    tool: "link",
+    at: new Date().toISOString(),
+    employeeId,
+    noticeJa: TOOL_NOTICE_JA.link,
+  };
 }
 
 async function fulfillPolicy(approval: ApprovalRequest, args: Record<string, unknown>): Promise<AdminFulfillment> {
