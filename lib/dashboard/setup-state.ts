@@ -52,7 +52,7 @@ export const SETUP_STEPS = [
   {
     id: "approvers",
     title: "承認者と通知口",
-    body: "日々の通す／止めるは Telegram / LINE / Slack の通知口が主です。",
+    body: "日々の通す／止めるは Telegram / LINE / Slack の通知口が主です。社内1:1を分類すると、指定したAI社員の受け口も同時に付きます。",
     href: "/app/settings",
     label: "通知口",
   },

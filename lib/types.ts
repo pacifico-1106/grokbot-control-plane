@@ -385,6 +385,7 @@ export type AuditAction =
   | "slack.post_failed"
   | "sns.publish_failed"
   | "slack.mention_wake"
+  | "slack.internal_im_wake"
   | "employee.sod_forced"
   | "employee.sod_override"
   | "action_limit.reached"

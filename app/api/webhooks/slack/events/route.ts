@@ -3,10 +3,11 @@
  *
  * Slack API → Staffpass アプリ → Event Subscriptions:
  *   Request URL: https://staffpass.sealith.com/api/webhooks/slack/events
- *   Bot events: app_mention, message.channels, message.groups
+ *   Bot events: app_mention, message.channels, message.groups, message.im
+ * message.im は Staffpass アプリ自身とのDMだけ。Botが参加しない人対人DMは届かない。
  * 署名: 環境変数 SLACK_SIGNING_SECRET。未設定なら承認用 Slack 通知チャネルの signingSecret。
  * Vercel: SLACK_SIGNING_SECRET = Slack アプリ Signing Secret（Basic Information）。
- * SQL: 20260830_slack_mention_ingress.sql を本番 SQL エディタで適用。
+ * SQL: 20260830_slack_mention_ingress.sql と 20260903_slack_internal_im_ingress.sql を適用。
  *
  * Slack の 3s 制限に当てないよう、署名検証と url_verification だけ同期し、
  * claim + wake は after() で HTTP 200 の後に回す。

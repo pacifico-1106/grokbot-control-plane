@@ -89,7 +89,7 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
   {
     name: "channels.classify",
     description:
-      "Classify a conversation channel (internal / shared_external / unknown) after human approval (always_human).",
+      "Classify a conversation channel (internal / shared_external / unknown) after human approval (always_human). For an internal Slack 1:1 (D... IM), employeeId installs that employee's mention-free Staffpass-app DM ingress at fulfillment. Omitting employeeId removes the IM ingress (fail-closed). Channels and groups remain mention-triggered.",
     inputSchema: {
       type: "object",
       properties: {
@@ -98,6 +98,8 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
         identifier: { type: "string" },
         classification: { type: "string" },
         mixed: { type: "boolean" },
+        employeeId: { type: "string", description: "Bound employee for an internal Slack 1:1 only" },
+        slackTeamId: { type: "string", description: "Slack workspace id when known" },
         jobId: { type: "string" },
       },
       required: ["externalId"],

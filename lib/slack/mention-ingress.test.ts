@@ -7,6 +7,12 @@ import {
   revokeEmployeeSlackIdentity,
 } from "@/lib/data/slack-identities";
 import { getBinding, updateWakeWebhook } from "@/lib/data";
+import { upsertOrgChannel } from "@/lib/data/directory";
+import {
+  deleteSlackImEmployeeRoute,
+  resolveSlackImWakeTarget,
+  syncSlackImEmployeeRoute,
+} from "@/lib/data/slack-im-routes";
 import { DEMO_ORG, getRuntimeEmployees } from "@/lib/demo-data";
 import {
   acknowledgeSlackEventsRequest,
@@ -22,6 +28,8 @@ const SPEAKER = "U_HUMAN";
 const TEAM = "T_DEMO";
 const THREAD_TS = "1787911797.502889";
 const CHANNEL = "C_CLOUD";
+const INTERNAL_IM = "DSTAFFPASSINTERNAL";
+const UNKNOWN_IM = "DSTAFFPASSUNKNOWN";
 
 const originalFetch = globalThis.fetch;
 const savedSigning = process.env.SLACK_SIGNING_SECRET;
@@ -84,6 +92,25 @@ async function bindAndo(opts?: { slackTeamId?: string; slackUserId?: string }) {
       emp.allowedAccounts = previous;
     },
   };
+}
+
+async function configureInternalIm(employeeId: string, channel = INTERNAL_IM) {
+  await upsertOrgChannel({
+    orgId: DEMO_ORG.id,
+    surface: "slack",
+    externalId: channel,
+    classification: "internal",
+    skipInspect: true,
+  });
+  await syncSlackImEmployeeRoute({
+    orgId: DEMO_ORG.id,
+    surface: "slack",
+    slackChannelId: channel,
+    slackTeamId: TEAM,
+    classification: "internal",
+    mixed: false,
+    employeeId,
+  });
 }
 
 afterEach(() => {
@@ -180,6 +207,158 @@ describe("Slack mention ingress", () => {
       expect(payload.ts).toBe(ts);
       expect(payload.thread_ts).toBeNull();
     } finally {
+      await restore();
+    }
+  });
+
+  test("classified internal IM wakes its bound employee without a mention", async () => {
+    process.env.SLACK_SIGNING_SECRET = SIGNING_SECRET;
+    const { emp, restore } = await bindAndo();
+    const wake = mockWake();
+    await configureInternalIm(emp.id);
+    try {
+      const result = await handleSlackEventsRequest(
+        signedRequest({
+          type: "event_callback",
+          team_id: TEAM,
+          event_id: `Ev_internal_im_${Date.now()}`,
+          event: {
+            type: "message",
+            channel_type: "im",
+            user: SPEAKER,
+            text: "メンションなしでお願いします",
+            ts: "1787911800.000020",
+            channel: INTERNAL_IM,
+          },
+        })
+      );
+      expect(result.status).toBe(200);
+      expect(wake.calls().length).toBe(1);
+      expect(wake.calls()[0].payload.employeeId).toBe(emp.id);
+      expect(wake.calls()[0].payload.text).toBe("メンションなしでお願いします");
+    } finally {
+      await deleteSlackImEmployeeRoute({ orgId: DEMO_ORG.id, slackChannelId: INTERNAL_IM });
+      await restore();
+    }
+  });
+
+  test("unclassified IM does not wake any employee", async () => {
+    process.env.SLACK_SIGNING_SECRET = SIGNING_SECRET;
+    const { restore } = await bindAndo();
+    const wake = mockWake();
+    await upsertOrgChannel({
+      orgId: DEMO_ORG.id,
+      surface: "slack",
+      externalId: UNKNOWN_IM,
+      classification: "unknown",
+      skipInspect: true,
+    });
+    await deleteSlackImEmployeeRoute({ orgId: DEMO_ORG.id, slackChannelId: UNKNOWN_IM });
+    try {
+      const result = await handleSlackEventsRequest(
+        signedRequest({
+          type: "event_callback",
+          team_id: TEAM,
+          event_id: `Ev_unknown_im_${Date.now()}`,
+          event: {
+            type: "message",
+            channel_type: "im",
+            user: SPEAKER,
+            text: "未分類DM",
+            ts: "1787911800.000021",
+            channel: UNKNOWN_IM,
+          },
+        })
+      );
+      expect(result.status).toBe(200);
+      expect(wake.calls().length).toBe(0);
+    } finally {
+      await restore();
+    }
+  });
+
+  test("employee's own Slack user post does not wake the employee", async () => {
+    process.env.SLACK_SIGNING_SECRET = SIGNING_SECRET;
+    const { emp, restore } = await bindAndo();
+    const wake = mockWake();
+    await configureInternalIm(emp.id);
+    try {
+      const result = await handleSlackEventsRequest(
+        signedRequest({
+          type: "event_callback",
+          team_id: TEAM,
+          event_id: `Ev_self_im_${Date.now()}`,
+          event: {
+            type: "message",
+            channel_type: "im",
+            user: BOUND_USER,
+            text: "自分の投稿",
+            ts: "1787911800.000022",
+            channel: INTERNAL_IM,
+          },
+        })
+      );
+      expect(result.status).toBe(200);
+      expect(wake.calls().length).toBe(0);
+    } finally {
+      await deleteSlackImEmployeeRoute({ orgId: DEMO_ORG.id, slackChannelId: INTERNAL_IM });
+      await restore();
+    }
+  });
+
+  test("D-prefixed message without Slack channel_type=im does not use the IM exception", async () => {
+    process.env.SLACK_SIGNING_SECRET = SIGNING_SECRET;
+    const { emp, restore } = await bindAndo();
+    const wake = mockWake();
+    await configureInternalIm(emp.id);
+    try {
+      const result = await handleSlackEventsRequest(
+        signedRequest({
+          type: "event_callback",
+          team_id: TEAM,
+          event_id: `Ev_not_message_im_${Date.now()}`,
+          event: {
+            type: "message",
+            user: SPEAKER,
+            text: "D-prefixだけでは起こさない",
+            ts: "1787911800.000023",
+            channel: INTERNAL_IM,
+          },
+        })
+      );
+      expect(result.status).toBe(200);
+      expect(wake.calls().length).toBe(0);
+    } finally {
+      await deleteSlackImEmployeeRoute({ orgId: DEMO_ORG.id, slackChannelId: INTERNAL_IM });
+      await restore();
+    }
+  });
+
+  test("channels.classify sync without employee removes the IM ingress", async () => {
+    const { emp, restore } = await bindAndo();
+    await configureInternalIm(emp.id);
+    try {
+      const before = await resolveSlackImWakeTarget({
+        slackChannelId: INTERNAL_IM,
+        slackTeamId: TEAM,
+      });
+      expect(before?.employeeId).toBe(emp.id);
+      const route = await syncSlackImEmployeeRoute({
+        orgId: DEMO_ORG.id,
+        surface: "slack",
+        slackChannelId: INTERNAL_IM,
+        slackTeamId: TEAM,
+        classification: "internal",
+        mixed: false,
+      });
+      expect(route).toBeNull();
+      const after = await resolveSlackImWakeTarget({
+        slackChannelId: INTERNAL_IM,
+        slackTeamId: TEAM,
+      });
+      expect(after).toBeNull();
+    } finally {
+      await deleteSlackImEmployeeRoute({ orgId: DEMO_ORG.id, slackChannelId: INTERNAL_IM });
       await restore();
     }
   });
