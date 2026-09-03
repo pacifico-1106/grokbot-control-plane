@@ -50,8 +50,6 @@ export type AdminFulfillment = {
 const TOOL_NEXTSTEP_JA: Record<string, string> = {
   "employees.issue":
     "次は手足をこの社員証につなぎます。Grok Botを1体用意して、管理MCPの link に grokBotAgentId を渡してください。人がやるのは承認タップだけです。社員証の秘密はチャットに貼らない。",
-  "roles.propose":
-    "次は手足をこの社員証につなぎます。Grok Botを1体用意して、管理MCPの link に grokBotAgentId を渡してください。人がやるのは承認タップだけです。社員証の秘密はチャットに貼らない。",
 };
 
 const TOOL_NOTICE_JA: Record<string, string> = {
@@ -302,7 +300,6 @@ async function fulfillRolePropose(
     tool: "roles.propose",
     at: new Date().toISOString(),
     draft,
-    nextStepJa: TOOL_NEXTSTEP_JA["roles.propose"],
   };
 }
 
