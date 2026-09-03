@@ -19,6 +19,15 @@ const TOOL_TITLE_JA: Record<string, string> = {
   "roles.propose": "職務案の提案",
 };
 
+const TOOL_NEXTSTEP_JA: Record<string, string> = {
+  "employees.issue":
+    "次は手足をこの社員証につなぎます。Grok Botを1体用意して、管理MCPの link に grokBotAgentId を渡してください。人がやるのは承認タップだけです。社員証の秘密はチャットに貼らない。",
+  "roles.propose":
+    "次は手足をこの社員証につなぎます。Grok Botを1体用意して、管理MCPの link に grokBotAgentId を渡してください。人がやるのは承認タップだけです。社員証の秘密はチャットに貼らない。",
+  link:
+    "紐付け完了。次はコネクタ認証（OAuthは人がタップ、承認チケットとは別）。",
+};
+
 export type AdminQueueResult = {
   needs_approval: true;
   ok: false;
@@ -34,6 +43,7 @@ export type AdminQueueResult = {
   always_human: true;
   auditClass: typeof ADMIN_AUDIT_CLASS;
   auditAction: string;
+  nextStepJa?: string;
 };
 
 export async function queueAdminTool(input: {
@@ -99,6 +109,7 @@ export async function queueAdminTool(input: {
   );
   void sendApprovalNotifications(created.approval, null).catch(() => null);
 
+  const nextStepJa = TOOL_NEXTSTEP_JA[input.tool];
   return {
     ok: false,
     code: "needs_approval",
@@ -114,5 +125,6 @@ export async function queueAdminTool(input: {
     always_human: true,
     auditClass: ADMIN_AUDIT_CLASS,
     auditAction,
+    ...(nextStepJa ? { nextStepJa } : {}),
   };
 }
