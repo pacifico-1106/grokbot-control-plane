@@ -18,6 +18,7 @@ import {
 } from "@/lib/data/slack-identities";
 import { getWakeWebhookSecret } from "@/lib/data/bindings";
 import {
+  isSlackImChannelId,
   resolveSlackImWakeTarget,
   resolveSlackUserTokenImWakeTarget,
 } from "@/lib/data/slack-im-routes";
@@ -376,6 +377,7 @@ export type SlackEventOutcome = {
   duplicate?: boolean;
   skipReason?: string;
   userToken?: boolean;
+  isDirectMessage?: boolean;
 };
 
 export async function processSlackMentionEnvelope(
@@ -437,7 +439,14 @@ export async function processSlackMentionEnvelope(
   const speakerId = str(event.user);
   const text = typeof event.text === "string" ? event.text : "";
   const mentionedIds = extractMentionedUserIds(text, event.blocks);
-  const isDirectMessage = eventType === "message" && channelType === "im";
+
+  // Path A (bot events): require channel_type === "im"
+  // Path B (user-token events): accept channel_type === "im" OR D-prefixed channel
+  // User-token message.im envelopes may omit channel_type but still have channel: D...
+  const channelLooksLikeIm = isSlackImChannelId(channel);
+  const isDirectMessage =
+    eventType === "message" &&
+    (channelType === "im" || (userTokenAuth && channelLooksLikeIm));
 
   const targets = await resolveWakeTargets({
     eventType,
@@ -461,13 +470,20 @@ export async function processSlackMentionEnvelope(
       channel,
       channelType,
       isDirectMessage,
+      channelLooksLikeIm,
       teamId,
       speakerId,
       mentionedCount: mentionedIds.length,
       userToken: Boolean(userTokenAuth),
       reason,
     });
-    return { handled: true, woke: 0, skipReason: reason, userToken: Boolean(userTokenAuth) };
+    return {
+      handled: true,
+      woke: 0,
+      skipReason: reason,
+      userToken: Boolean(userTokenAuth),
+      isDirectMessage,
+    };
   }
 
   const ts = str(event.ts);
@@ -500,6 +516,8 @@ export async function processSlackMentionEnvelope(
     eventType,
     channel,
     channelType,
+    isDirectMessage,
+    channelLooksLikeIm,
     trigger,
     targetCount: targets.length,
     woke,
@@ -507,7 +525,7 @@ export async function processSlackMentionEnvelope(
     userToken: Boolean(userTokenAuth),
   });
 
-  return { handled: true, woke, userToken: Boolean(userTokenAuth) };
+  return { handled: true, woke, userToken: Boolean(userTokenAuth), isDirectMessage };
 }
 
 export async function acknowledgeSlackEventsRequest(input: {

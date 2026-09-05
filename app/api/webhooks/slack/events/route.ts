@@ -51,14 +51,21 @@ export async function POST(req: Request) {
           console.info("slack_event_processed", {
             eventId,
             eventType,
+            channel: envelope.event?.channel,
+            channelType: envelope.event?.channel_type,
             handled: outcome.handled,
             woke: outcome.woke,
             duplicate: outcome.duplicate,
+            skipReason: outcome.skipReason,
+            userToken: outcome.userToken,
+            isDirectMessage: outcome.isDirectMessage,
           });
         } catch (error) {
           console.error("slack_events_handle_failed", {
             eventId,
             eventType,
+            channel: envelope.event?.channel,
+            channelType: envelope.event?.channel_type,
             error: error instanceof Error ? error.message : String(error),
           });
         }

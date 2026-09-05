@@ -309,12 +309,13 @@ describe("Slack mention ingress", () => {
     }
   });
 
-  test("D-prefixed message without Slack channel_type=im does not use the IM exception", async () => {
+  test("D-prefixed bot event (no user token) without channel_type=im does not use the IM exception", async () => {
     process.env.SLACK_SIGNING_SECRET = SIGNING_SECRET;
     const { emp, restore } = await bindAndo();
     const wake = mockWake();
     await configureInternalIm(emp.id);
     try {
+      // Bot events (Path A) require channel_type=im to be treated as DM
       const result = await handleSlackEventsRequest(
         signedRequest({
           type: "event_callback",
@@ -323,10 +324,11 @@ describe("Slack mention ingress", () => {
           event: {
             type: "message",
             user: SPEAKER,
-            text: "D-prefixだけでは起こさない",
+            text: "D-prefixだけでは起こさない（botイベント）",
             ts: "1787911800.000023",
             channel: INTERNAL_IM,
           },
+          // No authorizations = bot event
         })
       );
       expect(result.status).toBe(200);
@@ -719,7 +721,7 @@ describe("Slack mention ingress", () => {
 });
 
 describe("User-token message.im wake (SLICE B)", () => {
-  test("user-token event with valid route wakes employee", async () => {
+  test("user-token event with valid route wakes employee (with channel_type)", async () => {
     process.env.SLACK_SIGNING_SECRET = SIGNING_SECRET;
     const { emp, restore } = await bindAndo();
     const wake = mockWake();
@@ -742,11 +744,105 @@ describe("User-token message.im wake (SLICE B)", () => {
       expect(result.handled).toBe(true);
       expect(result.woke).toBe(1);
       expect(result.userToken).toBe(true);
+      expect(result.isDirectMessage).toBe(true);
       expect(wake.calls().length).toBe(1);
       expect(wake.calls()[0].payload.employeeId).toBe(emp.id);
       expect(wake.calls()[0].payload.channel).toBe(HUMAN_DM);
     } finally {
       await deleteSlackImEmployeeRoute({ orgId: DEMO_ORG.id, slackChannelId: HUMAN_DM });
+      await restore();
+    }
+  });
+
+  test("user-token event WITHOUT channel_type but with D-prefixed channel wakes employee", async () => {
+    process.env.SLACK_SIGNING_SECRET = SIGNING_SECRET;
+    const { emp, restore } = await bindAndo();
+    const wake = mockWake();
+    await configureInternalIm(emp.id, HUMAN_DM);
+    try {
+      // This is the key regression test: user-token message.im envelopes may omit channel_type
+      const result = await processSlackMentionEnvelope({
+        type: "event_callback",
+        team_id: TEAM,
+        event_id: `Ev_user_token_no_channel_type_${Date.now()}`,
+        authorizations: [{ is_bot: false, user_id: BOUND_USER, team_id: TEAM }],
+        event: {
+          type: "message",
+          // channel_type is intentionally omitted
+          user: SPEAKER,
+          text: "channel_typeなしで上司からの指示です",
+          ts: "1787911800.000050",
+          channel: HUMAN_DM,
+        },
+      });
+      expect(result.handled).toBe(true);
+      expect(result.woke).toBe(1);
+      expect(result.userToken).toBe(true);
+      expect(result.isDirectMessage).toBe(true);
+      expect(wake.calls().length).toBe(1);
+      expect(wake.calls()[0].payload.employeeId).toBe(emp.id);
+      expect(wake.calls()[0].payload.channel).toBe(HUMAN_DM);
+    } finally {
+      await deleteSlackImEmployeeRoute({ orgId: DEMO_ORG.id, slackChannelId: HUMAN_DM });
+      await restore();
+    }
+  });
+
+  test("user-token self-post WITHOUT channel_type still skipped", async () => {
+    process.env.SLACK_SIGNING_SECRET = SIGNING_SECRET;
+    const { emp, restore } = await bindAndo();
+    const wake = mockWake();
+    await configureInternalIm(emp.id, HUMAN_DM);
+    try {
+      // Self-post must still be blocked even when channel_type is omitted
+      const result = await processSlackMentionEnvelope({
+        type: "event_callback",
+        team_id: TEAM,
+        event_id: `Ev_user_token_self_no_channel_type_${Date.now()}`,
+        authorizations: [{ is_bot: false, user_id: BOUND_USER, team_id: TEAM }],
+        event: {
+          type: "message",
+          // channel_type is intentionally omitted
+          user: BOUND_USER, // self-post
+          text: "自分の投稿（channel_typeなし）",
+          ts: "1787911800.000051",
+          channel: HUMAN_DM,
+        },
+      });
+      expect(result.handled).toBe(true);
+      expect(result.woke).toBe(0);
+      expect(result.isDirectMessage).toBe(true);
+      expect(wake.calls().length).toBe(0);
+    } finally {
+      await deleteSlackImEmployeeRoute({ orgId: DEMO_ORG.id, slackChannelId: HUMAN_DM });
+      await restore();
+    }
+  });
+
+  test("user-token event with non-IM channel (C-prefix) does not use IM path", async () => {
+    process.env.SLACK_SIGNING_SECRET = SIGNING_SECRET;
+    const { restore } = await bindAndo();
+    const wake = mockWake();
+    try {
+      // C-prefixed channel should not be treated as DM even with user token
+      const result = await processSlackMentionEnvelope({
+        type: "event_callback",
+        team_id: TEAM,
+        event_id: `Ev_user_token_channel_${Date.now()}`,
+        authorizations: [{ is_bot: false, user_id: BOUND_USER, team_id: TEAM }],
+        event: {
+          type: "message",
+          user: SPEAKER,
+          text: "チャンネルメッセージ",
+          ts: "1787911800.000052",
+          channel: CHANNEL, // C-prefixed, not D-prefixed
+        },
+      });
+      expect(result.handled).toBe(true);
+      expect(result.woke).toBe(0);
+      expect(result.isDirectMessage).toBe(false);
+      expect(wake.calls().length).toBe(0);
+    } finally {
       await restore();
     }
   });
