@@ -9,7 +9,7 @@ test.describe("DEMO smoke", () => {
     const res = await page.goto("/");
     expect(res?.ok()).toBeTruthy();
     await expect(page.getByRole("heading", { level: 1 })).toContainText(
-      "AIを、社員として雇う"
+      "AIのための、社員証"
     );
   });
 
