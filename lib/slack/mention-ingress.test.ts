@@ -847,6 +847,38 @@ describe("User-token message.im wake (SLICE B)", () => {
     }
   });
 
+  test("user-token event with is_bot as string 'false' wakes employee", async () => {
+    process.env.SLACK_SIGNING_SECRET = SIGNING_SECRET;
+    const { emp, restore } = await bindAndo();
+    const wake = mockWake();
+    await configureInternalIm(emp.id, HUMAN_DM);
+    try {
+      // Some Slack payloads might send is_bot as string "false"
+      const result = await processSlackMentionEnvelope({
+        type: "event_callback",
+        team_id: TEAM,
+        event_id: `Ev_user_token_is_bot_string_${Date.now()}`,
+        // @ts-expect-error - testing string coercion
+        authorizations: [{ is_bot: "false", user_id: BOUND_USER, team_id: TEAM }],
+        event: {
+          type: "message",
+          channel_type: "im",
+          user: SPEAKER,
+          text: "is_bot文字列テスト",
+          ts: "1787911800.000053",
+          channel: HUMAN_DM,
+        },
+      });
+      expect(result.handled).toBe(true);
+      expect(result.woke).toBe(1);
+      expect(result.userToken).toBe(true);
+      expect(wake.calls().length).toBe(1);
+    } finally {
+      await deleteSlackImEmployeeRoute({ orgId: DEMO_ORG.id, slackChannelId: HUMAN_DM });
+      await restore();
+    }
+  });
+
   test("user-token event where authorized user does not match route employee does not wake", async () => {
     process.env.SLACK_SIGNING_SECRET = SIGNING_SECRET;
     const { emp, restore } = await bindAndo();
