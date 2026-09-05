@@ -179,6 +179,21 @@ async function listCandidateRoutes(input: {
     .filter(teamMatches);
 }
 
+export async function countSlackImRoutesByOrg(orgId: string): Promise<number> {
+  if (!orgId) return 0;
+  if (isDemoMode()) {
+    return [...demoRoutes.values()].filter((route) => route.orgId === orgId).length;
+  }
+  const admin = createSupabaseAdminClient();
+  if (!admin) return 0;
+  const { count, error } = await admin
+    .from("slack_im_employee_routes")
+    .select("*", { count: "exact", head: true })
+    .eq("org_id", orgId);
+  if (error || count === null) return 0;
+  return count;
+}
+
 /** Resolve only one classified internal Staffpass-app DM; ambiguity denies. */
 export async function resolveSlackImWakeTarget(input: {
   slackChannelId: string;

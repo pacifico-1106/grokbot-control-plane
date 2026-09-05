@@ -23,6 +23,7 @@ export const ADMIN_MCP_TOOL_NAMES = [
   "parties.upsert",
   "channels.classify",
   "roles.propose",
+  "setup.slackStatus",
 ] as const;
 
 export type AdminMcpToolName = (typeof ADMIN_MCP_TOOL_NAMES)[number];

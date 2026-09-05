@@ -1,7 +1,7 @@
 {
   "name": "staffpass-admin",
   "title": "Staffpass Admin",
-  "description": "Staffpass Admin remote MCP — tenant admin mouth (hire / link / policy / parties / channels / roles.propose). Always human. Separate from the employee badge MCP at /api/mcp.",
+  "description": "Staffpass Admin remote MCP — tenant admin mouth (hire / link / policy / parties / channels / roles.propose / setup diagnostics). Most tools are always_human. Separate from the employee badge MCP at /api/mcp.",
   "version": "1.0.0",
   "websiteUrl": "https://staffpass.sealith.com",
   "documentationUrl": "https://staffpass.sealith.com/docs/mcp",
@@ -23,14 +23,17 @@
     "policy.patch",
     "parties.upsert",
     "channels.classify",
-    "roles.propose"
+    "roles.propose",
+    "setup.slackStatus"
   ],
   "capabilities": {
     "tools": true
   },
   "notes": [
     "Separate mouth from employee badge MCP (/api/mcp, gb_emp_). Never share that header here.",
-    "All tools are always_human: create an approval ticket; do not mutate until a different human approves.",
-    "Admin cannot grant itself extra scopes or approve its own request."
+    "Most tools are always_human: create an approval ticket; do not mutate until a different human approves.",
+    "setup.slackStatus is read-only and does not require approval. Use it to diagnose Slack integration before guiding human setup.",
+    "Admin cannot grant itself extra scopes or approve its own request.",
+    "channels.classify with employeeId installs Slack IM ingress for that employee. Omitting employeeId removes the ingress (fail-closed)."
   ]
 }
