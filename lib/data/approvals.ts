@@ -394,40 +394,52 @@ export async function resolveApproval(
 }
 
 export async function getApprovalByTelegramRef(
-  telegramRef: string
+  telegramRef: string,
+  orgId?: string | null
 ): Promise<ApprovalRequest | null> {
   if (!telegramRef) return null;
   if (isDemoMode()) {
     const rows = await demoListApprovals();
-    return rows.find((row) => row.telegramRef === telegramRef) ?? null;
+    const match = rows.find((row) => row.telegramRef === telegramRef) ?? null;
+    if (match && orgId && match.orgId !== orgId) return null;
+    return match;
   }
   const admin = createSupabaseAdminClient();
   if (!admin) return null;
-  const { data, error } = await admin
+  let query = admin
     .from("approval_requests")
     .select("*")
-    .eq("telegram_ref", telegramRef)
-    .maybeSingle();
+    .eq("telegram_ref", telegramRef);
+  if (orgId) {
+    query = query.eq("org_id", orgId);
+  }
+  const { data, error } = await query.maybeSingle();
   return error || !data
     ? null
     : mapApprovalRow(data as Record<string, unknown>);
 }
 
 export async function getApprovalByTelegramMessageId(
-  messageId: number
+  messageId: number,
+  orgId?: string | null
 ): Promise<ApprovalRequest | null> {
   if (!Number.isSafeInteger(messageId)) return null;
   if (isDemoMode()) {
     const rows = await demoListApprovals();
-    return rows.find((row) => row.telegramMessageId === messageId) ?? null;
+    const match = rows.find((row) => row.telegramMessageId === messageId) ?? null;
+    if (match && orgId && match.orgId !== orgId) return null;
+    return match;
   }
   const admin = createSupabaseAdminClient();
   if (!admin) return null;
-  const { data, error } = await admin
+  let query = admin
     .from("approval_requests")
     .select("*")
-    .eq("telegram_message_id", messageId)
-    .maybeSingle();
+    .eq("telegram_message_id", messageId);
+  if (orgId) {
+    query = query.eq("org_id", orgId);
+  }
+  const { data, error } = await query.maybeSingle();
   return error || !data
     ? null
     : mapApprovalRow(data as Record<string, unknown>);

@@ -97,8 +97,8 @@ async function handleBlockActions(
   );
   if (!action?.action_id || !action.value || !ts || !slackChannel) return;
 
-  const approval = await getApprovalByTelegramRef(action.value);
-  if (!approval || approval.orgId !== channel.orgId || approval.status !== "pending") return;
+  const approval = await getApprovalByTelegramRef(action.value, channel.orgId);
+  if (!approval || approval.status !== "pending") return;
   const delivery = await getNotificationDelivery({
     approvalId: approval.id,
     channelId: channel.id,

@@ -1,7 +1,15 @@
 import { describe, expect, test } from "bun:test";
 import { bindingPublicView, ensureBindingRow } from "../bindings";
 import { DEMO_ORG } from "../demo-data";
-import { getApprovalById, getApprovalStatusByToken, resolveApproval } from "./approvals";
+import {
+  createApproval,
+  getApprovalById,
+  getApprovalByTelegramMessageId,
+  getApprovalByTelegramRef,
+  getApprovalStatusByToken,
+  resolveApproval,
+  updateApprovalTelegramState,
+} from "./approvals";
 import { getEmployee } from "./employees";
 
 describe("P0 org-scoped approvals", () => {
@@ -42,6 +50,69 @@ describe("P0 org-scoped approvals", () => {
     expect(
       await getApprovalStatusByToken("", "st_demo_apr1_status_token_aaaaaaaa")
     ).toBeNull();
+  });
+});
+
+describe("P0 org-scoped telegram lookups", () => {
+  test("getApprovalByTelegramRef returns null for cross-org lookup", async () => {
+    const withoutOrg = await getApprovalByTelegramRef("demoapr00001");
+    expect(withoutOrg?.id).toBe("apr_1");
+
+    const sameOrg = await getApprovalByTelegramRef("demoapr00001", DEMO_ORG.id);
+    expect(sameOrg?.id).toBe("apr_1");
+    expect(sameOrg?.orgId).toBe(DEMO_ORG.id);
+
+    const crossOrg = await getApprovalByTelegramRef("demoapr00001", "org_other");
+    expect(crossOrg).toBeNull();
+
+    const crossOrgUuid = await getApprovalByTelegramRef(
+      "demoapr00001",
+      "00000000-0000-4000-8000-000000000099"
+    );
+    expect(crossOrgUuid).toBeNull();
+  });
+
+  test("getApprovalByTelegramRef returns null for empty/null telegramRef", async () => {
+    expect(await getApprovalByTelegramRef("")).toBeNull();
+    expect(await getApprovalByTelegramRef("", DEMO_ORG.id)).toBeNull();
+  });
+
+  test("getApprovalByTelegramMessageId returns null for cross-org lookup", async () => {
+    const created = await createApproval({
+      orgId: DEMO_ORG.id,
+      employeeId: "emp_sales",
+      credentialId: "cred_sales",
+      title: "telegram msgid test",
+      purpose: "test.purpose",
+      summary: "testing cross-org telegram message id lookup",
+      risk: "low",
+    });
+    const approval = await updateApprovalTelegramState(created.approval, {
+      telegramMessageId: 999888,
+    });
+    expect(approval?.telegramMessageId).toBe(999888);
+
+    const withoutOrg = await getApprovalByTelegramMessageId(999888);
+    expect(withoutOrg?.id).toBe(created.approval.id);
+
+    const sameOrg = await getApprovalByTelegramMessageId(999888, DEMO_ORG.id);
+    expect(sameOrg?.id).toBe(created.approval.id);
+    expect(sameOrg?.orgId).toBe(DEMO_ORG.id);
+
+    const crossOrg = await getApprovalByTelegramMessageId(999888, "org_other");
+    expect(crossOrg).toBeNull();
+
+    const crossOrgUuid = await getApprovalByTelegramMessageId(
+      999888,
+      "00000000-0000-4000-8000-000000000099"
+    );
+    expect(crossOrgUuid).toBeNull();
+  });
+
+  test("getApprovalByTelegramMessageId returns null for invalid messageId", async () => {
+    expect(await getApprovalByTelegramMessageId(NaN)).toBeNull();
+    expect(await getApprovalByTelegramMessageId(1.5)).toBeNull();
+    expect(await getApprovalByTelegramMessageId(Infinity)).toBeNull();
   });
 });
 

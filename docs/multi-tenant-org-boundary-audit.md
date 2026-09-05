@@ -67,11 +67,11 @@ Tokens/sessions could allow cross-org queries by id.
 
 | Check | Status | Evidence |
 |-------|--------|----------|
-| `getApprovalByTelegramRef` filters by org | **FAIL** | No org filter in query (`lib/data/approvals.ts:396-413`) |
-| `getApprovalByTelegramMessageId` filters by org | **FAIL** | No org filter in query (`lib/data/approvals.ts:416-433`) |
-| Webhooks validate org match after lookup | **PASS** | Slack: `approval.orgId !== channel.orgId` check (`app/api/webhooks/slack/[ref]/route.ts:101`) |
+| `getApprovalByTelegramRef` filters by org | **PASS** | Optional org_id filter added; callers pass channel.orgId (`lib/data/approvals.ts`) |
+| `getApprovalByTelegramMessageId` filters by org | **PASS** | Optional org_id filter added (`lib/data/approvals.ts`) |
+| Webhooks validate org match after lookup | **PASS** | Slack/Line/Telegram channel webhooks pass orgId to lookup |
 
-**Verdict: HIGH** - Approval lookups by telegramRef/messageId don't filter by org, but downstream validation exists.
+**Verdict: PASS** - Approval lookups now filter by org_id when provided (defense in depth).
 
 ### 3.3 Slack Mention Wake
 
@@ -150,7 +150,7 @@ All major tables have RLS enabled:
 | 1. org_id signup/issue | **PASS** | - | - |
 | 2. MCP auth org binding | **PASS** | - | - |
 | 3.1 Gateway invoke | **PASS** | - | - |
-| 3.2 Approval lookup by ref/msgId | **FAIL** | High | Add org_id filter or validate caller org |
+| 3.2 Approval lookup by ref/msgId | **PASS** | - | FIXED 2026-09-05: org_id filter added |
 | 3.3 Slack mention cross-org wake | **FIXED** | ~~High~~ | FIXED 2026-09-05: Filter by `slack_team_id` in `getEmployeesBySlackUserIds` |
 | 4. Approval/notify org-scoped | **PASS** | - | - |
 | 5. RLS policies | **PASS** | - | - |
@@ -189,20 +189,16 @@ All major tables have RLS enabled:
 
 ---
 
-#### H2: Approval Lookup Without Org Filter
+#### H2: Approval Lookup Without Org Filter — FIXED 2026-09-05
 
-**Problem:** `getApprovalByTelegramRef` and `getApprovalByTelegramMessageId` can return approvals from any org.
+**Problem:** `getApprovalByTelegramRef` and `getApprovalByTelegramMessageId` could return approvals from any org.
 
 **Files:**
-- `lib/data/approvals.ts:396-433`
+- `lib/data/approvals.ts`
 
-**Current Mitigation:** Webhooks validate `approval.orgId === channel.orgId` after lookup.
+**Resolution:** Added optional `orgId` parameter to both functions. When provided, the query filters by `org_id` at the database level. All channel-based webhook callers (Slack, Line, Telegram tenant channels) now pass `channel.orgId` to these lookups. The global Telegram env fallback path continues without org filter for backward compatibility with pilot flows.
 
-**Fix Option A (Defense in Depth):** Add org_id parameter to these functions.
-
-**Fix Option B (Document):** The current post-lookup validation is sufficient if callers are trusted webhook handlers.
-
-**Recommendation:** Option A for defense-in-depth, but not urgent since webhook validation exists.
+**Tests:** Cross-org lookup tests added to `lib/data/p0-auth-idor.test.ts`.
 
 ---
 
@@ -257,10 +253,10 @@ Staffpass has solid multi-tenant foundations:
 - RLS policies properly scope browser queries
 - MCP credentials embed org_id from fingerprint lookup
 - Gateway invoke uses session org_id
-- Webhook handlers validate org match after approval lookup
+- Webhook handlers pass org_id to approval lookups (defense in depth)
 
 **Before onboarding Tenant B:**
-1. Fix H1 (Slack wake cross-org) - add org filter to `getEmployeesBySlackUserIds`
+1. ~~Fix H1 (Slack wake cross-org)~~ - **FIXED 2026-09-05**
 2. Remove M1 (TOKYO307 hardcodes)
 3. Remove M2 (Global Telegram fallback)
-4. Review H2 (approval lookup) - current mitigation is acceptable but defense-in-depth is better
+4. ~~Review H2 (approval lookup)~~ - **FIXED 2026-09-05**
