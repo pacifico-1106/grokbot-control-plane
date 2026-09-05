@@ -251,19 +251,27 @@ async function resolveWakeTargets(input: {
   if (input.isDirectMessage) {
     let target: SlackMentionTarget | null = null;
 
+    // Try user-token resolver first when authorizations present
     if (input.userTokenAuth) {
       target = await resolveSlackUserTokenImWakeTarget({
         slackChannelId: input.channelId,
         slackTeamId: input.teamId,
         authorizedSlackUserId: input.userTokenAuth.user_id || "",
       });
-    } else {
+    }
+
+    // Fall back to Path A resolver when user-token resolver returns null
+    // (e.g., Slack puts the speaker in authorizations, not the recipient)
+    // or when there is no userTokenAuth at all.
+    if (!target) {
       target = await resolveSlackImWakeTarget({
         slackChannelId: input.channelId,
         slackTeamId: input.teamId,
       });
     }
+
     if (!target) return [];
+    // Self-skip: speaker is the bound employee
     if (
       target.slackUserId &&
       target.slackUserId.toUpperCase() === input.speakerId.toUpperCase()
@@ -466,13 +474,13 @@ export async function processSlackMentionEnvelope(
   const text = typeof event.text === "string" ? event.text : "";
   const mentionedIds = extractMentionedUserIds(text, event.blocks);
 
-  // Path A (bot events): require channel_type === "im"
-  // Path B (user-token events): accept channel_type === "im" OR D-prefixed channel
-  // User-token message.im envelopes may omit channel_type but still have channel: D...
+  // Slack may omit channel_type in some edge cases (user-token events, or unexpected payloads).
+  // Any message in a D-prefixed channel is treated as IM to avoid silent drops.
+  // Fail-closed via route/classification: unclassified or no-route channels still silent.
   const channelLooksLikeIm = isSlackImChannelId(channel);
   const isDirectMessage =
     eventType === "message" &&
-    (channelType === "im" || (userTokenAuth && channelLooksLikeIm));
+    (channelType === "im" || channelLooksLikeIm);
 
   const targets = await resolveWakeTargets({
     eventType,
