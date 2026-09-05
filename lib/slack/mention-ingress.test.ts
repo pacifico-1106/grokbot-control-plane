@@ -1175,7 +1175,7 @@ describe("User-token message.im wake (SLICE B)", () => {
 });
 
 describe("IM wake skip audit events", () => {
-  test("IM skip (no route) writes audit event with im_no_route reason", async () => {
+  test("IM skip (no route) does NOT write audit event (no orgId to associate)", async () => {
     process.env.SLACK_SIGNING_SECRET = SIGNING_SECRET;
     await deleteSlackImEmployeeRoute({ orgId: DEMO_ORG.id, slackChannelId: UNKNOWN_IM });
     const auditBefore = getRuntimeAudit().length;
@@ -1199,17 +1199,7 @@ describe("IM wake skip audit events", () => {
     const auditAfter = getRuntimeAudit();
     const newEvents = auditAfter.slice(0, auditAfter.length - auditBefore);
     const skipAudit = newEvents.find((e) => e.action === "slack.im_wake_skipped");
-    expect(skipAudit).toBeDefined();
-    expect(skipAudit?.purpose).toBe("slack.internal_im");
-    expect(skipAudit?.summary).toContain("IM起動スキップ");
-    expect(skipAudit?.summary).toContain("im_no_route");
-    const meta = skipAudit?.metadata as Record<string, unknown>;
-    expect(meta.reason).toBe("im_no_route");
-    expect(meta.channel).toBe(UNKNOWN_IM);
-    expect(meta.channelType).toBe("im");
-    expect(meta.speakerId).toBe(SPEAKER);
-    expect(meta.teamId).toBe(TEAM);
-    expect(meta.channelLooksLikeIm).toBe(true);
+    expect(skipAudit).toBeUndefined();
   });
 
   test("self-post skip writes audit event with im_self_skip reason", async () => {
