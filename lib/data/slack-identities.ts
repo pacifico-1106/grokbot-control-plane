@@ -199,29 +199,19 @@ export type SlackMentionTarget = {
   hasWakeWebhook: boolean;
 };
 
+/**
+ * Fail-closed team filter: when teamId is present, return ONLY rows whose
+ * slack_team_id matches that team. Never fall back to other teams/orgs.
+ * When teamId is absent, return all rows unchanged.
+ */
 function preferTeam(
   rows: EmployeeSlackIdentity[],
   teamId?: string | null
 ): EmployeeSlackIdentity[] {
   const team = (teamId || "").trim().toUpperCase();
-  if (!team || !rows.length) return rows;
-  const groups = new Map<string, EmployeeSlackIdentity[]>();
-  for (const row of rows) {
-    const key = row.slackUserId.trim().toUpperCase();
-    const list = groups.get(key);
-    if (list) list.push(row);
-    else groups.set(key, [row]);
-  }
-  const selected: EmployeeSlackIdentity[] = [];
-  for (const group of groups.values()) {
-    const matched = group.filter(
-      (row) => row.slackTeamId.trim().toUpperCase() === team
-    );
-    // Prefer the same Slack team when several rows share a user id.
-    // Never drop the only user-id match because team_id differs.
-    selected.push(...(matched.length ? matched : group));
-  }
-  return selected;
+  if (!team) return rows;
+  if (!rows.length) return [];
+  return rows.filter((row) => row.slackTeamId.trim().toUpperCase() === team);
 }
 
 async function withBinding(row: EmployeeSlackIdentity): Promise<SlackMentionTarget> {
@@ -269,7 +259,18 @@ function demoLinked(): EmployeeSlackIdentity[] {
     .filter((row) => row.status === "linked" && row.slackUserId);
 }
 
-/** Admin-client lookup (not RLS browser). Linked identities only. */
+/**
+ * Admin-client lookup (not RLS browser). Linked identities only.
+ *
+ * SECURITY (H1 fix): When teamId is present, queries filter by slack_team_id
+ * at DB level. This prevents cross-org wake when the same Slack user is bound
+ * to employees in multiple tenants. When teamId is absent, returns [] for
+ * wake callers (fail-closed) — callers that need cross-team lookup should use
+ * listLinkedSlackIdentitiesForTeam with explicit org filter instead.
+ *
+ * IM wake path uses slack_im_employee_routes (org-scoped via route), not this
+ * function, so it remains unaffected by the fail-closed behavior.
+ */
 export async function getEmployeesBySlackUserIds(
   ids: string[],
   teamId?: string | null
@@ -277,18 +278,21 @@ export async function getEmployeesBySlackUserIds(
   const rawIds = ids.map((id) => id.trim()).filter(Boolean);
   const wanted = new Set(rawIds.map((id) => id.toUpperCase()));
   if (!wanted.size) return [];
+  const team = (teamId || "").trim();
+  if (!team) {
+    return [];
+  }
   const matchWanted = (row: EmployeeSlackIdentity) =>
     wanted.has(row.slackUserId.trim().toUpperCase());
+  const teamUpper = team.toUpperCase();
+  const matchTeam = (row: EmployeeSlackIdentity) =>
+    row.slackTeamId.trim().toUpperCase() === teamUpper;
   if (isDemoMode()) {
-    const rows = demoLinked().filter(matchWanted);
-    return Promise.all(preferTeam(rows, teamId).map(withBinding));
+    const rows = demoLinked().filter((row) => matchWanted(row) && matchTeam(row));
+    return Promise.all(rows.map(withBinding));
   }
   const admin = createSupabaseAdminClient();
   if (!admin) return [];
-  // Slack user ids are compared case-insensitively. Postgres `.in()` is
-  // case-sensitive and stored ids may not be uppercase, so query original /
-  // upper / lower variants then filter in JS. If any wanted id is still
-  // missing (mixed case in the DB), scan linked rows.
   const lookupIds = [
     ...new Set([
       ...rawIds,
@@ -296,30 +300,20 @@ export async function getEmployeesBySlackUserIds(
       ...[...wanted].map((id) => id.toLowerCase()),
     ]),
   ];
+  const teamVariants = [...new Set([team, teamUpper, team.toLowerCase()])];
   const selectCols =
     "employee_id,org_id,slack_user_id,slack_team_id,display_name,status,updated_at";
-  const first = await admin
+  const { data, error } = await admin
     .from("employee_slack_identities")
     .select(selectCols)
     .in("slack_user_id", lookupIds)
+    .in("slack_team_id", teamVariants)
     .eq("status", "linked");
-  if (first.error) return [];
-  let rows = (first.data ?? [])
+  if (error) return [];
+  const rows = (data ?? [])
     .map((row) => mapPublic(row as Record<string, unknown>))
-    .filter(matchWanted);
-  const found = new Set(rows.map((row) => row.slackUserId.trim().toUpperCase()));
-  if ([...wanted].some((id) => !found.has(id))) {
-    const fallback = await admin
-      .from("employee_slack_identities")
-      .select(selectCols)
-      .eq("status", "linked");
-    if (!fallback.error && fallback.data) {
-      rows = fallback.data
-        .map((row) => mapPublic(row as Record<string, unknown>))
-        .filter(matchWanted);
-    }
-  }
-  return Promise.all(preferTeam(rows, teamId).map(withBinding));
+    .filter((row) => matchWanted(row) && matchTeam(row));
+  return Promise.all(rows.map(withBinding));
 }
 
 /** Linked identities in a Slack team (app_mention fallback: wake only if exactly one). */
