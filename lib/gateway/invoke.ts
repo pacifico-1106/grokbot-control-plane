@@ -1006,8 +1006,8 @@ export async function runGatewayInvoke(
         channel: dest,
         text: (rawText || "").trim() || purpose,
         threadTs: looksLikeSlackTs(replyThreadTs) ? replyThreadTs : undefined,
-        // After human approval of needs_approval, post FULL text (not 【要約のみ】).
         summarize: egress?.decision === "summarize",
+        slackUserId: ctx?.slackUserId,
       });
       if (!posted.ok) {
         const postedError = posted.error || "slack_post_failed";
