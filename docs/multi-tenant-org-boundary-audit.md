@@ -1,0 +1,254 @@
+# Multi-Tenant Org Boundary Audit
+
+**Audit Date:** 2026-09-05
+**Scope:** Staffpass multi-tenant control plane - cross-org isolation review
+**Status:** Complete
+
+---
+
+## Executive Summary
+
+Staffpass implements reasonable org isolation through RLS policies, session-based org scoping, and credential fingerprinting. However, several gaps exist that should be addressed before onboarding a second production tenant.
+
+**Critical:** 0
+**High:** 2
+**Medium:** 3
+**Low:** 2
+
+---
+
+## 1. org_id Establishment (Signup / Issue)
+
+### Hypothesis
+org_id could be omitted or swapped during signup or employee issue.
+
+### Findings
+
+| Check | Status | Evidence |
+|-------|--------|----------|
+| Signup creates new org bound to auth user | **PASS** | `createOrgWithOwner` in `lib/auth/session.ts:360-416` creates org + member atomically |
+| org_id cannot be injected via request body | **PASS** | `issueEmployee` in `app/api/employees/issue/route.ts:88` gets orgId from `getCurrentOrgId()` (session-based) |
+| Session org derived from auth.uid() | **PASS** | `getSessionContext` queries `org_members` by `user_id = auth.uid()` |
+
+**Verdict: PASS** - No path to omit or swap org during signup/issue.
+
+---
+
+## 2. Admin MCP and Employee MCP Auth
+
+### Hypothesis
+Tokens/sessions could allow cross-org queries by id.
+
+### Findings
+
+| Check | Status | Evidence |
+|-------|--------|----------|
+| Employee credential returns orgId from binding | **PASS** | `resolveEmployeeCredential` returns `orgId` from credential/binding lookup (`lib/auth/employee-credential.ts:100-110`) |
+| Admin credential returns orgId from agent record | **PASS** | `resolveAdminCredential` returns `orgId` from `findAdminAgentByFingerprint` (`lib/auth/admin-credential.ts:92-102`) |
+| Fingerprints are globally unique | **PASS** | SHA-256 hash of full secret ensures uniqueness |
+| MCP tools use credential.orgId | **PASS** | `callStaffpassMcpTool` passes `cred.orgId` to downstream queries |
+
+**Verdict: PASS** - Credentials are org-bound via fingerprint lookup.
+
+---
+
+## 3. API Routes / Gateway / Slack Event Handlers
+
+### 3.1 Gateway Invoke
+
+| Check | Status | Evidence |
+|-------|--------|----------|
+| orgId from session or binding | **PASS** | `runGatewayInvoke` gets orgId from `getCurrentOrgId() \|\| binding.orgId` (`lib/gateway/invoke.ts:396-398`) |
+| Employee lookup requires orgId | **PASS** | `getEmployee(employeeId, orgId)` requires both params |
+
+**Verdict: PASS**
+
+### 3.2 Approval Lookups
+
+| Check | Status | Evidence |
+|-------|--------|----------|
+| `getApprovalByTelegramRef` filters by org | **FAIL** | No org filter in query (`lib/data/approvals.ts:396-413`) |
+| `getApprovalByTelegramMessageId` filters by org | **FAIL** | No org filter in query (`lib/data/approvals.ts:416-433`) |
+| Webhooks validate org match after lookup | **PASS** | Slack: `approval.orgId !== channel.orgId` check (`app/api/webhooks/slack/[ref]/route.ts:101`) |
+
+**Verdict: HIGH** - Approval lookups by telegramRef/messageId don't filter by org, but downstream validation exists.
+
+### 3.3 Slack Mention Wake
+
+| Check | Status | Evidence |
+|-------|--------|----------|
+| `getEmployeesBySlackUserIds` filters by org | **FAIL** | Queries all orgs by slack_user_id (`lib/data/slack-identities.ts:257-297`) |
+| Slack channel collision across orgs | **FAIL** | Same external channel_id can exist in multiple orgs (`unique (org_id, surface, external_id)`) |
+
+**Verdict: HIGH** - Shared Slack channels or users bound to multiple orgs could wake wrong employees.
+
+**File References:**
+- `lib/data/slack-identities.ts:248-298`
+- `lib/slack/mention-ingress.ts:180-207`
+
+---
+
+## 4. Approval Tickets / Notify - Org Scoped?
+
+| Check | Status | Evidence |
+|-------|--------|----------|
+| `createApproval` sets org_id | **PASS** | Insert includes `org_id: input.orgId` (`lib/data/approvals.ts:190`) |
+| Notification channels org-scoped | **PASS** | `listNotificationChannels` filters by orgId (`lib/data/notification-channels.ts:120-137`) |
+| Delivery records include org_id | **PASS** | `recordNotificationDelivery` sets `org_id` (`lib/data/notification-channels.ts:508-520`) |
+| Telegram channel webhook validates org | **PASS** | `approval.orgId === channel.orgId` check (`lib/notify/telegram-channel-webhook.ts:82-84`) |
+
+**Verdict: PASS** - Approval notifications are properly org-scoped.
+
+---
+
+## 5. RLS Policies - Service-Role Tables
+
+### Tables with RLS Enabled (org-scoped via `is_org_member`)
+
+All major tables have RLS enabled:
+- `orgs`, `org_members`, `employees`, `credentials`, `action_counters`
+- `approval_requests`, `org_notification_channels`, `approval_notification_deliveries`
+- `org_conversation_adapters`, `org_sns_adapters`, `employee_slack_identities`
+- `audit_events`, `subscriptions`, `gateway_links`, `employee_bindings`
+- `org_parties`, `org_channels`, `information_assets`, `org_projects`, `org_admin_agents`
+
+### Tables Intentionally Service-Role Only (No Browser RLS)
+
+| Table | Intentional | Comment |
+|-------|-------------|---------|
+| `org_notification_channel_secrets` | **YES** | Comment in schema: "service-role-only" |
+| `org_conversation_adapter_secrets` | **YES** | Same pattern |
+| `employee_slack_identity_secrets` | **YES** | Comment: "Intentionally inaccessible via browser RLS" |
+| `employee_binding_secrets` | **YES** | Comment: "Service-role-only encrypted" |
+| `slack_mention_events` | **YES** | Idempotency table, service-role only |
+
+**Verdict: PASS** - RLS is properly configured. Secrets tables are intentionally service-role only.
+
+**File Reference:** `supabase/schema.sql:570-800`
+
+---
+
+## 6. Hardcoded Tenant-Specific Values
+
+| Pattern | Location | Severity | Notes |
+|---------|----------|----------|-------|
+| `isTokyo307PilotOrg` | `lib/data/notification-channels.ts:433-446` | **MEDIUM** | Special handling for pilot org |
+| `isTokyo307PilotEmail` | `lib/data/notification-channels.ts:448-450` | **MEDIUM** | Hardcoded email check |
+| `shouldUseGlobalTelegramFallback` | `lib/data/notification-channels.ts:452-458` | **MEDIUM** | Only for TOKYO307 pilot |
+| `八坂` in demo data | `lib/demo-data.ts:125` | **LOW** | Demo/test only |
+| `DEMO_ADMIN_SECRET` | `lib/data/admin-agents.ts:13` | **LOW** | Demo mode only |
+
+**Verdict: MEDIUM** - Pilot org special cases should be removed or made configurable before multi-tenant.
+
+---
+
+## Summary Table
+
+| Check | Status | Severity | Backlog Item |
+|-------|--------|----------|--------------|
+| 1. org_id signup/issue | **PASS** | - | - |
+| 2. MCP auth org binding | **PASS** | - | - |
+| 3.1 Gateway invoke | **PASS** | - | - |
+| 3.2 Approval lookup by ref/msgId | **FAIL** | High | Add org_id filter or validate caller org |
+| 3.3 Slack mention cross-org wake | **FAIL** | High | Filter by org_id in `getEmployeesBySlackUserIds` |
+| 4. Approval/notify org-scoped | **PASS** | - | - |
+| 5. RLS policies | **PASS** | - | - |
+| 6.1 TOKYO307 pilot hardcodes | **WARN** | Medium | Remove or make configurable |
+| 6.2 Global Telegram fallback | **WARN** | Medium | Should be per-org only |
+| 6.3 Demo data names | **PASS** | Low | Acceptable (demo only) |
+
+---
+
+## Fix Backlog
+
+### HIGH Priority
+
+#### H1: Slack Mention Wake Cross-Org Leak
+
+**Problem:** `getEmployeesBySlackUserIds` queries all orgs. A Slack user bound to employees in multiple orgs could trigger wakes across tenants.
+
+**Files:**
+- `lib/data/slack-identities.ts:248-298`
+- `lib/slack/mention-ingress.ts:180-207`
+
+**Fix:** Pass `teamId` as org-discriminator or query by org_id. The `slack_team_id` on `employee_slack_identities` should be required and matched.
+
+**Complexity:** Medium - requires schema migration to enforce `slack_team_id` NOT NULL.
+
+---
+
+#### H2: Approval Lookup Without Org Filter
+
+**Problem:** `getApprovalByTelegramRef` and `getApprovalByTelegramMessageId` can return approvals from any org.
+
+**Files:**
+- `lib/data/approvals.ts:396-433`
+
+**Current Mitigation:** Webhooks validate `approval.orgId === channel.orgId` after lookup.
+
+**Fix Option A (Defense in Depth):** Add org_id parameter to these functions.
+
+**Fix Option B (Document):** The current post-lookup validation is sufficient if callers are trusted webhook handlers.
+
+**Recommendation:** Option A for defense-in-depth, but not urgent since webhook validation exists.
+
+---
+
+### MEDIUM Priority
+
+#### M1: Remove TOKYO307 Pilot Hardcodes
+
+**Problem:** Special handling for `info@tokyo307inc.com` pilot org.
+
+**Files:**
+- `lib/data/notification-channels.ts:433-480`
+
+**Fix:** Remove `isTokyo307PilotOrg`, `isTokyo307PilotEmail`, `shouldUseGlobalTelegramFallback`, `findPilotTelegramChannelByChatId`, `getTokyo307PilotOrgId`. Replace with proper per-org configuration.
+
+---
+
+#### M2: Global Telegram Env Fallback
+
+**Problem:** `shouldUseGlobalTelegramFallback` allows env-based Telegram config to be shared.
+
+**Files:**
+- `lib/data/notification-channels.ts:452-458`
+- `app/api/webhooks/telegram/route.ts` (uses `TELEGRAM_ALLOWED_USER_IDS` env)
+
+**Fix:** Require all tenants to configure their own Telegram channels. Remove global fallback.
+
+---
+
+#### M3: Slack Channel ID Collision Potential
+
+**Problem:** `org_channels` allows same `external_id` across orgs. If Org A and Org B employees join `#industry-chat`, their audience resolution is independent but mentions could cross-wake.
+
+**Files:**
+- `supabase/schema.sql:486-499`
+- `lib/gateway/audience.ts:192-200`
+
+**Fix:** Accept this as intended (orgs can have different classifications for shared channels). Document the behavior. The Slack team_id should be the discriminator for wake targets.
+
+---
+
+### LOW Priority
+
+#### L1: Demo Data Display Names
+
+Japanese names like `八坂` in demo data are acceptable for demo/test mode. No action required.
+
+---
+
+## Conclusion
+
+Staffpass has solid multi-tenant foundations:
+- RLS policies properly scope browser queries
+- MCP credentials embed org_id from fingerprint lookup
+- Gateway invoke uses session org_id
+- Webhook handlers validate org match after approval lookup
+
+**Before onboarding Tenant B:**
+1. Fix H1 (Slack wake cross-org) - add org filter to `getEmployeesBySlackUserIds`
+2. Remove M1 (TOKYO307 hardcodes)
+3. Remove M2 (Global Telegram fallback)
+4. Review H2 (approval lookup) - current mitigation is acceptable but defense-in-depth is better
