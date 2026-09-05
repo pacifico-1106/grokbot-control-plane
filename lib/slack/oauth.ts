@@ -1,8 +1,17 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { getAppOrigin } from "@/lib/approvals/tokens";
 
-/** User-token scopes for Staffpass Slack app (not Cursor Slack OAuth). */
-export const SLACK_USER_SCOPES = "chat:write,users:read,channels:read,groups:read";
+/**
+ * User-token scopes for Staffpass Slack app (not Cursor Slack OAuth).
+ *
+ * - chat:write: postingAs=user の投稿
+ * - users:read: 社員の Slack ユーザー情報取得
+ * - channels:read, groups:read: チャネル情報取得
+ * - im:history: user-token Events (Subscribe to events on behalf of users) の message.im 受信
+ *
+ * im:history 追加後は、リンク済み社員に re-OAuth を促す（既存トークンには im:history がない）。
+ */
+export const SLACK_USER_SCOPES = "chat:write,users:read,channels:read,groups:read,im:history";
 
 export const SLACK_OAUTH_COOKIE = "staffpass_slack_oauth";
 const STATE_TTL_MS = 10 * 60 * 1000;

@@ -2,6 +2,12 @@
  * Staffpass Slack mention ingress (Event Subscriptions).
  * Cursor Slack は使わない。署名は SLACK_SIGNING_SECRET、
  * 未設定なら承認用 Slack 通知チャネルの signingSecret。
+ *
+ * Path A: Bot message.im — Staffpass app との app-DM（Bot Events）
+ * Path B: User-token message.im — human↔human DM（Subscribe to events on behalf of users）
+ *
+ * Path B は社員が im:history スコープで再 OAuth 後、Slack app 設定で
+ * "Subscribe to events on behalf of users" の message.im を有効化すると動作。
  */
 
 import { appendAuditEvent } from "@/lib/data/audit";
@@ -11,7 +17,10 @@ import {
   type SlackMentionTarget,
 } from "@/lib/data/slack-identities";
 import { getWakeWebhookSecret } from "@/lib/data/bindings";
-import { resolveSlackImWakeTarget } from "@/lib/data/slack-im-routes";
+import {
+  resolveSlackImWakeTarget,
+  resolveSlackUserTokenImWakeTarget,
+} from "@/lib/data/slack-im-routes";
 import { listAllEnabledNotificationChannels } from "@/lib/data/notification-channels";
 import { isDemoMode } from "@/lib/mode";
 import { verifySlackSignature } from "@/lib/notify/slack";
@@ -54,13 +63,38 @@ type SlackEvent = {
   blocks?: unknown;
 };
 
+type SlackAuthorization = {
+  is_bot?: boolean;
+  user_id?: string;
+  team_id?: string;
+};
+
 type SlackEnvelope = {
   type?: string;
   challenge?: string;
   team_id?: string;
   event_id?: string;
   event?: SlackEvent;
+  authorizations?: SlackAuthorization[];
 };
+
+/**
+ * Extract the first user-token authorization from the envelope.
+ * User-token events have authorizations[].is_bot = false.
+ * Returns null for bot-token events or missing authorizations.
+ */
+function extractUserTokenAuthorization(
+  envelope: SlackEnvelope
+): SlackAuthorization | null {
+  const auths = envelope.authorizations;
+  if (!auths || !Array.isArray(auths)) return null;
+  for (const auth of auths) {
+    if (auth && auth.is_bot === false && auth.user_id) {
+      return auth;
+    }
+  }
+  return null;
+}
 
 export async function resolveSlackSigningSecret(): Promise<string> {
   const env = process.env.SLACK_SIGNING_SECRET?.trim() || "";
@@ -144,8 +178,6 @@ function settleClaimInsert(
 ): boolean {
   if (result.error) {
     if (result.error.code === "23505") return false;
-    // Missing the mention (table absent, network, etc.) is worse than a
-    // duplicate wake. Log and claim in-process so we still proceed.
     console.error("slack_mention_event_claim_failed", result.error);
     return claimInProcess(id);
   }
@@ -187,15 +219,24 @@ async function resolveWakeTargets(input: {
   speakerId: string;
   channelId: string;
   isDirectMessage: boolean;
+  userTokenAuth: SlackAuthorization | null;
 }): Promise<SlackMentionTarget[]> {
   if (input.isDirectMessage) {
-    const target = await resolveSlackImWakeTarget({
-      slackChannelId: input.channelId,
-      slackTeamId: input.teamId,
-    });
+    let target: SlackMentionTarget | null = null;
+
+    if (input.userTokenAuth) {
+      target = await resolveSlackUserTokenImWakeTarget({
+        slackChannelId: input.channelId,
+        slackTeamId: input.teamId,
+        authorizedSlackUserId: input.userTokenAuth.user_id || "",
+      });
+    } else {
+      target = await resolveSlackImWakeTarget({
+        slackChannelId: input.channelId,
+        slackTeamId: input.teamId,
+      });
+    }
     if (!target) return [];
-    // Covers user-token posts by the employee identity. Bot posts are already
-    // rejected by shouldIgnoreEvent via bot_id / bot_profile / subtype.
     if (
       target.slackUserId &&
       target.slackUserId.toUpperCase() === input.speakerId.toUpperCase()
@@ -229,10 +270,18 @@ async function resolveWakeTargets(input: {
 async function postWake(
   target: SlackMentionTarget,
   payload: SlackWakePayload,
-  trigger: "mention" | "internal_im"
+  trigger: "mention" | "internal_im" | "user_token_im"
 ): Promise<void> {
-  const action = trigger === "internal_im" ? "slack.internal_im_wake" : "slack.mention_wake";
-  const purpose = trigger === "internal_im" ? "slack.internal_im" : "slack.mention";
+  const action =
+    trigger === "user_token_im"
+      ? "slack.user_token_im_wake"
+      : trigger === "internal_im"
+        ? "slack.internal_im_wake"
+        : "slack.mention_wake";
+  const purpose =
+    trigger === "user_token_im" || trigger === "internal_im"
+      ? "slack.internal_im"
+      : "slack.mention";
   const url = target.wakeWebhookUrl?.trim() || "";
   if (!url) {
     await appendAuditEvent({
@@ -281,19 +330,26 @@ async function postWake(
       }).catch(() => undefined);
       return;
     }
+    const summary =
+      trigger === "user_token_im"
+        ? "社内Slack human DM (user token) で社員を起こした"
+        : trigger === "internal_im"
+          ? "社内Slack 1:1で社員を起こした"
+          : "Slackメンションで社員を起こした";
     await appendAuditEvent({
       orgId: target.orgId,
       employeeId: target.employeeId,
       credentialId: null,
       action,
       purpose,
-      summary: trigger === "internal_im" ? "社内Slack 1:1で社員を起こした" : "Slackメンションで社員を起こした",
+      summary,
       metadata: {
         reason: "woke",
         channel: payload.channel,
         ts: payload.ts,
         thread_ts: payload.thread_ts,
         eventId: payload.eventId,
+        userTokenPath: trigger === "user_token_im",
       },
     }).catch(() => undefined);
   } catch (error) {
@@ -319,6 +375,7 @@ export type SlackEventOutcome = {
   woke: number;
   duplicate?: boolean;
   skipReason?: string;
+  userToken?: boolean;
 };
 
 export async function processSlackMentionEnvelope(
@@ -329,6 +386,7 @@ export async function processSlackMentionEnvelope(
   const eventType = str(event?.type);
   const channel = str(event?.channel);
   const channelType = str(event?.channel_type);
+  const userTokenAuth = extractUserTokenAuthorization(envelope);
 
   if (!event || !eventId) {
     console.warn("slack_event_skip", {
@@ -388,6 +446,7 @@ export async function processSlackMentionEnvelope(
     speakerId,
     channelId: channel,
     isDirectMessage,
+    userTokenAuth,
   });
 
   if (!targets.length) {
@@ -405,15 +464,20 @@ export async function processSlackMentionEnvelope(
       teamId,
       speakerId,
       mentionedCount: mentionedIds.length,
+      userToken: Boolean(userTokenAuth),
       reason,
     });
-    return { handled: true, woke: 0, skipReason: reason };
+    return { handled: true, woke: 0, skipReason: reason, userToken: Boolean(userTokenAuth) };
   }
 
   const ts = str(event.ts);
   const threadTs = str(event.thread_ts) || null;
   let woke = 0;
-  const trigger = isDirectMessage ? "internal_im" : "mention";
+  const trigger: "mention" | "internal_im" | "user_token_im" = isDirectMessage
+    ? userTokenAuth
+      ? "user_token_im"
+      : "internal_im"
+    : "mention";
 
   for (const target of targets) {
     const payload: SlackWakePayload = {
@@ -440,9 +504,10 @@ export async function processSlackMentionEnvelope(
     targetCount: targets.length,
     woke,
     skippedNoWebhook: targets.length - woke,
+    userToken: Boolean(userTokenAuth),
   });
 
-  return { handled: true, woke };
+  return { handled: true, woke, userToken: Boolean(userTokenAuth) };
 }
 
 export async function acknowledgeSlackEventsRequest(input: {
