@@ -309,30 +309,31 @@ describe("Slack mention ingress", () => {
     }
   });
 
-  test("D-prefixed bot event (no user token) without channel_type=im does not use the IM exception", async () => {
+  test("D-prefixed message without channel_type wakes via internal route (Path A fallback)", async () => {
     process.env.SLACK_SIGNING_SECRET = SIGNING_SECRET;
     const { emp, restore } = await bindAndo();
     const wake = mockWake();
     await configureInternalIm(emp.id);
     try {
-      // Bot events (Path A) require channel_type=im to be treated as DM
+      // Any D-prefixed channel is treated as IM; route/classification enforces privacy
       const result = await handleSlackEventsRequest(
         signedRequest({
           type: "event_callback",
           team_id: TEAM,
-          event_id: `Ev_not_message_im_${Date.now()}`,
+          event_id: `Ev_d_prefix_no_channel_type_${Date.now()}`,
           event: {
             type: "message",
             user: SPEAKER,
-            text: "D-prefixだけでは起こさない（botイベント）",
+            text: "D-prefixでchannel_typeなし→ルート経由で起こす",
             ts: "1787911800.000023",
             channel: INTERNAL_IM,
           },
-          // No authorizations = bot event
+          // No authorizations, no channel_type — still wakes via route
         })
       );
       expect(result.status).toBe(200);
-      expect(wake.calls().length).toBe(0);
+      expect(wake.calls().length).toBe(1);
+      expect(wake.calls()[0].payload.employeeId).toBe(emp.id);
     } finally {
       await deleteSlackImEmployeeRoute({ orgId: DEMO_ORG.id, slackChannelId: INTERNAL_IM });
       await restore();
@@ -879,30 +880,33 @@ describe("User-token message.im wake (SLICE B)", () => {
     }
   });
 
-  test("user-token event where authorized user does not match route employee does not wake", async () => {
+  test("user-token event with mismatched authorized user_id falls back to Path A resolver and wakes", async () => {
     process.env.SLACK_SIGNING_SECRET = SIGNING_SECRET;
     const { emp, restore } = await bindAndo();
     const wake = mockWake();
     await configureInternalIm(emp.id, HUMAN_DM);
     try {
+      // Slack may put the speaker (boss) in authorizations, not the recipient.
+      // Fall back to Path A resolver: route exists → wake.
       const result = await processSlackMentionEnvelope({
         type: "event_callback",
         team_id: TEAM,
-        event_id: `Ev_user_token_mismatch_${Date.now()}`,
+        event_id: `Ev_user_token_mismatch_fallback_${Date.now()}`,
         authorizations: [{ is_bot: false, user_id: "U_OTHER_USER", team_id: TEAM }],
         event: {
           type: "message",
           channel_type: "im",
           user: SPEAKER,
-          text: "誰かのDM",
+          text: "上司からの指示（authorized user不一致→fallback）",
           ts: "1787911800.000031",
           channel: HUMAN_DM,
         },
       });
       expect(result.handled).toBe(true);
-      expect(result.woke).toBe(0);
+      expect(result.woke).toBe(1);
       expect(result.userToken).toBe(true);
-      expect(wake.calls().length).toBe(0);
+      expect(wake.calls().length).toBe(1);
+      expect(wake.calls()[0].payload.employeeId).toBe(emp.id);
     } finally {
       await deleteSlackImEmployeeRoute({ orgId: DEMO_ORG.id, slackChannelId: HUMAN_DM });
       await restore();
@@ -1082,6 +1086,72 @@ describe("User-token message.im wake (SLICE B)", () => {
       expect(result.userToken).toBe(true);
       expect(result.woke).toBe(1);
       expect(wake.calls().length).toBe(1);
+    } finally {
+      await deleteSlackImEmployeeRoute({ orgId: DEMO_ORG.id, slackChannelId: HUMAN_DM });
+      await restore();
+    }
+  });
+
+  test("user-token mismatch fallback still self-skips when speaker is the employee", async () => {
+    process.env.SLACK_SIGNING_SECRET = SIGNING_SECRET;
+    const { emp, restore } = await bindAndo();
+    const wake = mockWake();
+    await configureInternalIm(emp.id, HUMAN_DM);
+    try {
+      // Speaker is the bound employee; user-token resolver fails (mismatch),
+      // Path A fallback finds the route but self-skip prevents wake.
+      const result = await processSlackMentionEnvelope({
+        type: "event_callback",
+        team_id: TEAM,
+        event_id: `Ev_user_token_mismatch_self_skip_${Date.now()}`,
+        authorizations: [{ is_bot: false, user_id: "U_OTHER_USER", team_id: TEAM }],
+        event: {
+          type: "message",
+          channel_type: "im",
+          user: BOUND_USER, // self-post
+          text: "自分の投稿（mismatch fallback経由でも自己スキップ）",
+          ts: "1787911800.000060",
+          channel: HUMAN_DM,
+        },
+      });
+      expect(result.handled).toBe(true);
+      expect(result.woke).toBe(0);
+      expect(result.isDirectMessage).toBe(true);
+      expect(result.userToken).toBe(true);
+      expect(wake.calls().length).toBe(0);
+    } finally {
+      await deleteSlackImEmployeeRoute({ orgId: DEMO_ORG.id, slackChannelId: HUMAN_DM });
+      await restore();
+    }
+  });
+
+  test("D-prefix without channel_type AND without authorizations wakes via Path A route", async () => {
+    process.env.SLACK_SIGNING_SECRET = SIGNING_SECRET;
+    const { emp, restore } = await bindAndo();
+    const wake = mockWake();
+    await configureInternalIm(emp.id, HUMAN_DM);
+    try {
+      // Completely missing both channel_type and authorizations — still wakes via route
+      const result = await processSlackMentionEnvelope({
+        type: "event_callback",
+        team_id: TEAM,
+        event_id: `Ev_no_channel_type_no_auths_${Date.now()}`,
+        // No authorizations at all
+        event: {
+          type: "message",
+          // No channel_type
+          user: SPEAKER,
+          text: "channel_typeもauthorizationsもない→ルート経由で起こす",
+          ts: "1787911800.000061",
+          channel: HUMAN_DM,
+        },
+      });
+      expect(result.handled).toBe(true);
+      expect(result.woke).toBe(1);
+      expect(result.isDirectMessage).toBe(true);
+      expect(result.userToken).toBe(false);
+      expect(wake.calls().length).toBe(1);
+      expect(wake.calls()[0].payload.employeeId).toBe(emp.id);
     } finally {
       await deleteSlackImEmployeeRoute({ orgId: DEMO_ORG.id, slackChannelId: HUMAN_DM });
       await restore();
