@@ -194,6 +194,21 @@ export async function countSlackImRoutesByOrg(orgId: string): Promise<number> {
   return count;
 }
 
+export async function listSlackImRoutesByOrg(orgId: string): Promise<SlackImEmployeeRoute[]> {
+  if (!orgId) return [];
+  if (isDemoMode()) {
+    return [...demoRoutes.values()].filter((route) => route.orgId === orgId);
+  }
+  const admin = createSupabaseAdminClient();
+  if (!admin) return [];
+  const { data, error } = await admin
+    .from("slack_im_employee_routes")
+    .select("org_id,slack_channel_id,slack_team_id,employee_id,created_at,updated_at")
+    .eq("org_id", orgId);
+  if (error || !data) return [];
+  return data.map((row) => mapRow(row as Record<string, unknown>));
+}
+
 /** Resolve only one classified internal Staffpass-app DM; ambiguity denies. */
 export async function resolveSlackImWakeTarget(input: {
   slackChannelId: string;
