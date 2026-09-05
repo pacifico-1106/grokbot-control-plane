@@ -135,7 +135,7 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
   {
     name: "setup.slackStatus",
     description:
-      "Diagnose Slack integration status for this org (read-only, no approval required). Returns bot token presence, auth.test result, conversation adapter status, IM routes count, and employee posting_as settings. Use before guiding humans through Slack setup. The nextStepJa field indicates the next human action. Refer to docs/tenant-slack-kickoff-rail.md for the full RAIL.",
+      "Diagnose Slack integration status for this org (read-only, no approval required). Returns bot token presence, auth.test result, conversation adapter status, IM routes count, and employee posting_as settings with path-aware guidance. Use before guiding humans through Slack setup. The nextStepJa field indicates the next human action with posting_as pros/cons: Bot（会社窓口・アプリDM向け）vs 個人（社員名義・チャネル向け）。推奨デフォルト: アプリDM向け社員は bot / チャネル・Connect・人対人DM向けは user。Refer to docs/tenant-slack-kickoff-rail.md for the full RAIL.",
     inputSchema: {
       type: "object",
       properties: {},
@@ -296,7 +296,8 @@ async function runSlackStatusDiagnose(
     nextStepJa =
       "チャネル分類を設定してください。内部1:1には channels.classify で employeeId を指定します。詳細: docs/tenant-slack-kickoff-rail.md";
   } else if (postingMismatch.length > 0) {
-    nextStepJa = `posting_as の設定を確認してください: Path A (App DM) は bot、Path B (人↔人DM) は user が必要です。`;
+    nextStepJa =
+      "posting_as の設定を確認してください。【Bot】会社窓口・アプリDM向け・退席非依存。【個人(user)】社員名義・チャネル/人対人DM向け・OAuth依存。Path A (App DM) は bot、Path B (人↔人DM) / チャネル・Connect は user。詳細: docs/tenant-slack-kickoff-rail.md";
   }
 
   const result: SlackStatusResult = {

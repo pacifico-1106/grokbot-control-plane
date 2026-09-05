@@ -46,6 +46,27 @@ Staffpass は2つの Slack DM パスをサポートします：
 
 ---
 
+## Bot vs 個人（user）の比較
+
+管理MCPが社員設定をガイドする際に、以下の比較を提示してください:
+
+**Bot（推奨: アプリDM向け社員）**
+- ✓ 会社の窓口として一貫
+- ✓ アプリDM口と相性が良い
+- ✓ 人のSlack退席に依存しにくい
+- △ 個人っぽさは出ない
+- △ チャンネルで「人」として見せたいときは弱い
+
+**個人 / user（推奨: チャネル・Connect・人対人DM向け）**
+- ✓ 社員名義で信頼・責任が明確
+- ✓ 既存DM/チャンネルの人対人運用と一致
+- △ 本人OAuth・トークン寿命・退席に依存
+- △ アプリDMではBotトークンでないと投稿できない制約あり
+
+**推奨デフォルト**: アプリDM向け社員は `bot` / チャネル・Connect・人対人DM向けは `user`。
+
+---
+
 ## 共通設定事項
 
 ### Socket Mode と Request URL
@@ -75,7 +96,7 @@ Socket Mode が ON だと Events が HTTPS endpoint に届きません。
 
 ### `setup.slackStatus` — 最初のステップ
 
-`setup.slackStatus` は **read-only** の診断ツールで、承認なしで実行できます。`nextStepJa` フィールドに次の人間アクションが示されます。Slack 設定の最初のステップとして常にこれを呼び出してください。
+`setup.slackStatus` は **read-only** の診断ツールで、承認なしで実行できます。`nextStepJa` フィールドに次の人間アクションが示されます（posting_as の pros/cons 推奨を含む）。Slack 設定の最初のステップとして常にこれを呼び出してください。
 
 ### `channels.classify` と `employeeId`
 
@@ -358,7 +379,7 @@ App DM（Staffpassアプリへの直接DM）への返信には `posting_as: bot`
 1. **Socket Mode OFF 必須** - ON のままだと Events が HTTPS endpoint に届かない
 2. **Request URL**: `https://staffpass.sealith.com/api/webhooks/slack/events`
 3. **channels.classify + employeeId** - 内部1:1の `employeeId` 指定で IM route をインストール。省略すると fail-closed で削除
-4. **setup.slackStatus は read-only 最初のステップ** - `nextStepJa` で次の人間アクションを確認
+4. **setup.slackStatus は read-only 最初のステップ** - `nextStepJa` で次の人間アクションを確認（posting_as pros/cons 推奨を含む）
 5. **SQLマイグレーションはオペレータ専用** - テナントにSQL実行を依頼しない。スキーマは共有制御面に適用済み
 
 ### パス A: Staffpass アプリ DM
@@ -381,3 +402,9 @@ App DM（Staffpassアプリへの直接DM）への返信には `posting_as: bot`
 15. **メンション必須** - チャネルと Connect はメンション wake のみ（`app_mention` / 紐付けユーザーメンション）
 16. **shared_external 分類** - Connect チャネルは egress 制御のため分類必須
 17. **オーディエンス行列** - 承認要否は parties / audience / チャネル分類で決定。「メンション相手＝承認者」ではない
+
+### posting_as 推奨（Bot vs 個人）
+
+18. **Bot（アプリDM向け）**: 会社窓口として一貫・アプリDM口と相性良好・退席非依存
+19. **個人/user（チャネル・Connect・人対人DM向け）**: 社員名義で信頼明確・人対人運用一致・OAuth依存
+20. **ダッシュボード社員詳細 / 雇用フロー / PolicyPreview** で同じ比較表を表示
