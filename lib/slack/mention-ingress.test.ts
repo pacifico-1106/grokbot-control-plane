@@ -530,14 +530,13 @@ describe("Slack mention ingress", () => {
     }
   });
 
-  test("team mismatch still wakes the matching slack_user_id", async () => {
+  test("team mismatch does NOT wake (fail-closed, H1 fix)", async () => {
     process.env.SLACK_SIGNING_SECRET = SIGNING_SECRET;
     const { restore } = await bindAndo({ slackTeamId: "T_STORED_OTHER" });
     const wake = mockWake();
     try {
       const rows = await getEmployeesBySlackUserIds([BOUND_USER], TEAM);
-      expect(rows.length).toBe(1);
-      expect(rows[0].employeeId).toBe("emp_comm");
+      expect(rows.length).toBe(0);
       const result = await handleSlackEventsRequest(
         signedRequest({
           type: "event_callback",
@@ -554,8 +553,23 @@ describe("Slack mention ingress", () => {
         })
       );
       expect(result.status).toBe(200);
-      expect(wake.calls().length).toBe(1);
-      expect(wake.calls()[0].payload.slackUserId).toBe(BOUND_USER);
+      expect(wake.calls().length).toBe(0);
+    } finally {
+      await restore();
+    }
+  });
+
+  test("missing teamId returns empty (fail-closed, H1 fix)", async () => {
+    process.env.SLACK_SIGNING_SECRET = SIGNING_SECRET;
+    const { restore } = await bindAndo();
+    const wake = mockWake();
+    try {
+      const rowsWithoutTeam = await getEmployeesBySlackUserIds([BOUND_USER], undefined);
+      expect(rowsWithoutTeam.length).toBe(0);
+      const rowsWithEmptyTeam = await getEmployeesBySlackUserIds([BOUND_USER], "");
+      expect(rowsWithEmptyTeam.length).toBe(0);
+      const rowsWithTeam = await getEmployeesBySlackUserIds([BOUND_USER], TEAM);
+      expect(rowsWithTeam.length).toBe(1);
     } finally {
       await restore();
     }
