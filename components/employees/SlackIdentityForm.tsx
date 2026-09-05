@@ -126,6 +126,30 @@ export function SlackIdentityForm({
         </label>
       </fieldset>
 
+      <details className="rounded-lg border border-[var(--border-soft)] bg-[var(--bg-soft)] px-3 py-2">
+        <summary className="cursor-pointer text-xs font-medium">Bot と 個人 の違い</summary>
+        <div className="mt-3 grid sm:grid-cols-2 gap-3 text-xs">
+          <div className="rounded-lg border border-[var(--border)] bg-[var(--bg)] p-3">
+            <p className="font-medium mb-2">Bot（推奨: アプリDM向け）</p>
+            <p className="text-[var(--ok)] mb-1">✓ 会社の窓口として一貫</p>
+            <p className="text-[var(--ok)] mb-1">✓ アプリDM口と相性が良い</p>
+            <p className="text-[var(--ok)] mb-1">✓ 人のSlack退席に依存しにくい</p>
+            <p className="muted mt-2">△ 個人っぽさは出ない</p>
+            <p className="muted">△ チャンネルで「人」として見せたいときは弱い</p>
+          </div>
+          <div className="rounded-lg border border-[var(--border)] bg-[var(--bg)] p-3">
+            <p className="font-medium mb-2">個人（推奨: チャネル・Connect・人対人DM向け）</p>
+            <p className="text-[var(--ok)] mb-1">✓ 社員名義で信頼・責任が明確</p>
+            <p className="text-[var(--ok)] mb-1">✓ 既存DM/チャンネルの人対人運用と一致</p>
+            <p className="muted mt-2">△ 本人OAuth・トークン寿命・退席に依存</p>
+            <p className="muted">△ アプリDMではBotトークンでないと投稿できない制約あり</p>
+          </div>
+        </div>
+        <p className="mt-3 text-[11px] muted leading-relaxed">
+          推奨デフォルト: アプリDM向け社員は <strong>bot</strong> / チャネル・Connect・人対人DM向けは <strong>user</strong>。
+        </p>
+      </details>
+
       {linked ? (
         <p className="text-xs leading-relaxed">
           連携中: {identity?.displayName ? `${identity.displayName} · ` : ""}

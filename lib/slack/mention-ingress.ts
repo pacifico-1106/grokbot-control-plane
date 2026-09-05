@@ -530,7 +530,7 @@ export async function processSlackMentionEnvelope(
       reason,
     });
 
-    if (isDirectMessage && wakeResult.imSkipReason) {
+    if (isDirectMessage && wakeResult.imSkipReason && wakeResult.imRouteContext?.orgId) {
       const summaryMap: Record<string, string> = {
         im_no_route: "IM起動スキップ: im_no_route",
         im_self_skip: "IM起動スキップ: im_self_skip",
@@ -540,7 +540,7 @@ export async function processSlackMentionEnvelope(
         user_id: a.user_id,
       }));
       appendAuditEvent({
-        orgId: wakeResult.imRouteContext?.orgId ?? null,
+        orgId: wakeResult.imRouteContext.orgId,
         employeeId: wakeResult.imRouteContext?.employeeId ?? null,
         credentialId: null,
         action: "slack.im_wake_skipped",

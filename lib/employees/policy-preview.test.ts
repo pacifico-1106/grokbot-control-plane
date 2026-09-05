@@ -145,7 +145,7 @@ describe("buildPolicyPreview", () => {
     expect(bot.find((row) => row.id === "postingAs")).toEqual({
       id: "postingAs",
       label: "投稿名義",
-      value: "会社のBot",
+      value: "会社のBot（アプリDM向け推奨・窓口一貫・退席非依存）",
       tone: "ok",
     });
     const unbound = buildPolicyPreview({
@@ -155,7 +155,7 @@ describe("buildPolicyPreview", () => {
       slackLinked: false,
     });
     expect(unbound.find((row) => row.id === "postingAs")?.value).toBe(
-      "この社員（未連携なら「本人としては出せない」）"
+      "この社員（未連携・チャネル向け推奨・名義明確・OAuth依存）"
     );
     const linked = buildPolicyPreview({
       scopes: ["slack:post"],
@@ -163,7 +163,9 @@ describe("buildPolicyPreview", () => {
       postingAs: "user",
       slackLinked: true,
     });
-    expect(linked.find((row) => row.id === "postingAs")?.value).toBe("この社員");
+    expect(linked.find((row) => row.id === "postingAs")?.value).toBe(
+      "この社員（チャネル向け推奨・名義明確・OAuth依存）"
+    );
   });
 
   test("sns.publish preview is 承認待ち by default", () => {

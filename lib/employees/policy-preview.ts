@@ -140,13 +140,23 @@ export function buildPolicyPreview(input: {
   const postingAs = input.postingAs === "user" ? "user" : "bot";
   const posting: PolicyPreviewRow =
     postingAs === "bot"
-      ? { id: "postingAs", label: "投稿名義", value: "会社のBot", tone: "ok" }
+      ? {
+          id: "postingAs",
+          label: "投稿名義",
+          value: "会社のBot（アプリDM向け推奨・窓口一貫・退席非依存）",
+          tone: "ok",
+        }
       : input.slackLinked
-        ? { id: "postingAs", label: "投稿名義", value: "この社員", tone: "ok" }
+        ? {
+            id: "postingAs",
+            label: "投稿名義",
+            value: "この社員（チャネル向け推奨・名義明確・OAuth依存）",
+            tone: "ok",
+          }
         : {
             id: "postingAs",
             label: "投稿名義",
-            value: "この社員（未連携なら「本人としては出せない」）",
+            value: "この社員（未連携・チャネル向け推奨・名義明確・OAuth依存）",
             tone: "danger",
           };
 
