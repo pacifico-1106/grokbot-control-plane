@@ -4,12 +4,58 @@
 
 ## 概要
 
-テナントが Staffpass の Slack 機能を使うには、Slack アプリ側とStaffpass側の両方で設定が必要です。管理MCPはAPI経由の設定を担当し、人間はSlack UI・Vercel UIでしかできない設定を担当します。
+テナントが Staffpass の Slack 機能を使うには、Slack アプリ側とStaffpass側の両方で設定が必要です。管理MCPはAPI経由の設定を担当し、人間はSlack UI・ダッシュボードでしかできない設定を担当します。
 
 **制約**
 - `always_human` ツール（hire / classify / parties など）は人の承認が必須
-- テナントにSQLマイグレーションを依頼しない（スキーマはオペレータが共有制御面に適用済み）
+- **SQLマイグレーションはオペレータ専用** — テナントにSQL実行を依頼しない。スキーマは共有制御面に適用済み
 - 秘密値はチャット・PR本文へ貼らない（org-scoped）
+
+---
+
+## パス定義（Path A / Path B）
+
+Staffpass は2つの Slack DM パスをサポートします：
+
+### パス A: Staffpass アプリ DM（Bot Events）
+
+人間が Staffpass アプリと直接 DM するパス。
+
+| 項目 | 値 |
+|------|-----|
+| **用途** | 人 ↔ Staffpass アプリ DM |
+| **Events** | Bot events: `message.im` |
+| **posting_as** | `bot` |
+| **Token** | Bot Token (`xoxb-...`) |
+| **受口** | `channels.classify` + `employeeId` で IM route 登録 |
+
+### パス B: 人↔人 DM（User Token Events）
+
+人間が別の人間と DM し、社員の User Token でそのイベントを受信するパス。
+
+| 項目 | 値 |
+|------|-----|
+| **用途** | 人 ↔ 人 DM（社員が人間の代理で参加） |
+| **Events** | **Subscribe to events on behalf of users**: `message.im` |
+| **posting_as** | `user` |
+| **Token** | User Token (`xoxp-...`) — 社員が Slack 再 OAuth で取得 |
+| **User Token Scopes** | `im:history` |
+| **受口** | `channels.classify` + `employeeId` で IM route 登録 |
+
+**重要**: Bot は人↔人 DM に参加できないため、パス B では User Token と `posting_as: user` が必須。
+
+---
+
+## 共通設定事項
+
+### Socket Mode と Request URL
+
+| 項目 | 値 |
+|------|-----|
+| **Socket Mode** | **OFF**（必須） |
+| **Request URL** | `https://staffpass.sealith.com/api/webhooks/slack/events` |
+
+Socket Mode が ON だと Events が HTTPS endpoint に届きません。
 
 ---
 
@@ -19,15 +65,25 @@
 
 | ツール | 用途 | 承認 |
 |--------|------|------|
+| `setup.slackStatus` | **Slack設定診断（read-only、最初のステップ）** | なし |
 | `employees.issue` | AI社員証の発行 | always_human |
 | `link` | 社員証とGrok Bot連携 | always_human |
 | `policy.patch` | 権限更新 | always_human |
 | `parties.upsert` | 相手台帳登録 | always_human |
 | `channels.classify` | チャネル分類 + 1:1 IM受口設定 | always_human |
 | `roles.propose` | 職務案の提案 | always_human |
-| `setup.slackStatus` | Slack設定診断（read-only） | なし |
 
-> **注意**: ダッシュボードUIは管理MCPの完全な代替ではありません。特に `channels.classify` の `employeeId` 指定やIM受口設定はAdmin MCPのみで行えます。
+### `setup.slackStatus` — 最初のステップ
+
+`setup.slackStatus` は **read-only** の診断ツールで、承認なしで実行できます。`nextStepJa` フィールドに次の人間アクションが示されます。Slack 設定の最初のステップとして常にこれを呼び出してください。
+
+### `channels.classify` と `employeeId`
+
+> **重要**: ダッシュボードUIは管理MCPの完全な代替ではありません。特に `channels.classify` の `employeeId` 指定やIM受口設定は **Admin MCP のみ** で行えます。
+>
+> - `employeeId` を指定すると、そのDMへの人間の投稿がメンションなしで指定社員を起こす（IM route インストール）
+> - `employeeId` を省略すると、IM受口が削除される（**fail-closed**）
+> - チャンネル・グループは従来どおりメンションが必要
 
 ---
 
@@ -55,15 +111,19 @@ Slack API サイトで Staffpass Slack アプリを設定します。
 2. **Enable Events** を ON
 3. **Request URL**: `https://staffpass.sealith.com/api/webhooks/slack/events`
    - Slack が `challenge` を送り、Staffpass が `challenge` を返して検証完了
-4. **Subscribe to bot events** に追加:
+4. **Subscribe to bot events** に追加（パス A）:
    - `message.im`（必須: App Home DM受信）
    - `app_mention`（必要に応じて: チャンネルでのメンション）
+5. **Subscribe to events on behalf of users** に追加（パス B のみ）:
+   - `message.im`（人↔人 DM で User Token イベント受信）
+
+**パス B の注意**: 「Subscribe to events on behalf of users」は「Subscribe to bot events」とは別のセクションです。Bot events だけ設定しても User Token イベントは届きません。
 
 **症状（Request URL 未設定・誤り）**:
 - `url_verification` 失敗でイベント受信できない
 - Vercel `/api/webhooks/slack/events` のログにリクエストが来ない
 
-#### 1-3. Bot Token Scopes 設定
+#### 1-3. Bot Token Scopes 設定（パス A）
 
 1. **Features → OAuth & Permissions**
 2. **Bot Token Scopes** に追加:
@@ -77,7 +137,15 @@ Slack API サイトで Staffpass Slack アプリを設定します。
 - `missing_scope` エラー
 - Bot DM送信失敗
 
-#### 1-4. App Home Messages Tab 有効化
+#### 1-4. User Token Scopes 設定（パス B のみ）
+
+1. **Features → OAuth & Permissions**
+2. **User Token Scopes** に追加:
+   - `im:history` - DM履歴の読み取り（User Token イベント受信に必須）
+
+**重要**: User Token Scopes を追加後、社員が Slack で再 OAuth を行う必要があります。これにより `xoxp-...` トークンが取得され、人↔人 DM イベントを受信できます。
+
+#### 1-5. App Home Messages Tab 有効化（パス A）
 
 1. **Features → App Home**
 2. **Messages Tab** セクション
@@ -122,7 +190,7 @@ tools/call: setup.slackStatus
 
 ### ステップ4: チャネル分類（管理エージェントがMCPで実施）
 
-内部1:1 DM（Staffpassアプリへの直接DM）を設定します。
+内部1:1 DM（パス A: Staffpassアプリへの直接DM、パス B: 人↔人DM）を設定します。
 
 ```
 tools/call: channels.classify
@@ -130,19 +198,14 @@ arguments: {
   "externalId": "D...",           // Slack DM チャネルID
   "surface": "slack",
   "classification": "internal",
-  "employeeId": "emp_xxx",        // ★ 重要: この社員のメンション不要受口を有効化
+  "employeeId": "emp_xxx",        // ★ 必須: この社員のメンション不要受口を有効化
   "slackTeamId": "T...",          // ワークスペースID（推奨）
   "jobId": "job_xxx"
 }
 ```
 
-**`employeeId` の役割**:
-- 指定すると、そのDMへの人間の投稿がメンションなしで指定社員を起こす
-- 省略すると、IM受口が削除される（fail-closed）
-- チャンネル・グループは従来どおりメンションが必要
-
 **症状（employeeId 省略）**:
-- DM が `internal` でも AI社員が起動しない
+- DM が `internal` でも AI社員が起動しない（claim-without-wake）
 - `channels.classify` の結果に `employeeId: null`
 
 ### ステップ5: 投稿設定の確認（パス別）
@@ -176,13 +239,25 @@ App DM（Staffpassアプリへの直接DM）への返信には `posting_as: bot`
 
 ## トラブルシューティング
 
+### 症状表（クイックリファレンス）
+
+| 症状 | 原因 | パス | 修正 |
+|------|------|------|------|
+| DM 投稿が見えない（claim-without-wake） | IM route 未登録 | A/B | `channels.classify` で `employeeId` 指定 |
+| `missing_scope` エラー | User/Bot Token スコープ不足 | A/B | スコープ追加 → 再インストール |
+| App DM で `channel_not_found` | `posting_as: user` になっている | A | `posting_as: bot` に変更 |
+| 人↔人 DM で `channel_not_found` | `posting_as: bot` になっている | B | `posting_as: user` に変更 |
+| パス B イベントが届かない | Bot events のみ設定 | B | **on behalf of users** で `message.im` 追加 |
+| User Token イベントで wake しない | 社員の Slack 再 OAuth 未完了 | B | 社員に `im:history` スコープで再 OAuth 依頼 |
+
 ### イベントが届かない
 
 | 確認項目 | 期待値 | 症状 |
 |----------|--------|------|
 | Socket Mode | OFF | Events が HTTPS endpoint に来ない |
 | Request URL | `https://staffpass.sealith.com/api/webhooks/slack/events` | 検証失敗 |
-| Bot events | `message.im` 含む | DM 未受信 |
+| Bot events | `message.im` 含む（パス A） | App DM 未受信 |
+| Subscribe to events on behalf of users | `message.im` 含む（パス B） | 人↔人 DM 未受信 |
 | SLACK_SIGNING_SECRET | 設定済み | 署名検証失敗 (401) |
 
 ### DM送信できない
@@ -190,9 +265,11 @@ App DM（Staffpassアプリへの直接DM）への返信には `posting_as: bot`
 | 確認項目 | 期待値 | 症状 |
 |----------|--------|------|
 | Bot Token Scopes | `im:history`, `chat:write`, `im:write` | `missing_scope` |
+| User Token Scopes（パス B） | `im:history` | `missing_scope` |
 | アプリ再インストール | スコープ変更後に実施 | スコープが反映されない |
 | Bot Token 登録 | ダッシュボードまたは env | `invalid_auth` |
-| posting_as（パスA） | `bot` | Bot DM に返信できない（App DM の場合） |
+| posting_as（パスA App DM） | `bot` | Bot DM に返信できない |
+| posting_as（パスB 人↔人DM） | `user` | 人 DM に返信できない |
 
 ### AI社員が起動しない
 
@@ -202,6 +279,7 @@ App DM（Staffpassアプリへの直接DM）への返信には `posting_as: bot`
 | チャネル分類 | `internal` | unknown のまま |
 | 社員ステータス | `active` | 停止社員は起動しない |
 | App Home Messages Tab | 有効 | メッセージ入力欄なし |
+| 社員 Slack 再 OAuth（パス B） | `im:history` スコープで完了 | User Token イベント未受信 |
 
 ---
 
@@ -246,15 +324,29 @@ App DM（Staffpassアプリへの直接DM）への返信には `posting_as: bot`
 
 ---
 
-## 2026-09-05 パスA本番からの学習事項
+## 2026-09-05 パスA+B 本番からの学習事項
 
 このRAILは以下の実運用経験を反映しています:
 
+### 共通
+
 1. **Socket Mode OFF 必須** - ON のままだと Events が HTTPS endpoint に届かない
-2. **Bot events: `message.im`** - App Home DM 受信に必須。`app_mention` は追加で必要に応じて
-3. **Bot scopes: `im:history`, `chat:write`, `im:write`** - スコープ変更後は再インストール必須
-4. **Bot Token 二重登録** - ダッシュボード「チャンネルに書き込む」(アダプタ) AND 環境変数 `SLACK_BOT_TOKEN`。アダプタトークンが優先
-5. **App Home Messages Tab** - `messages_tab_read_only_enabled: false` でないとユーザーがDMを送れない
-6. **channels.classify + employeeId** - 内部1:1の `employeeId` 指定で IM route をインストール。省略すると fail-closed で削除
-7. **posting_as: bot（パスA App DM）** - Bot DM への返信には必須。User token では Bot DM を見られない。※パスB（人↔人DM）は `user` を使用
-8. **SQLマイグレーションはオペレータ専用** - テナントにSQL実行を依頼しない。スキーマは共有制御面に適用済み
+2. **Request URL**: `https://staffpass.sealith.com/api/webhooks/slack/events`
+3. **channels.classify + employeeId** - 内部1:1の `employeeId` 指定で IM route をインストール。省略すると fail-closed で削除
+4. **setup.slackStatus は read-only 最初のステップ** - `nextStepJa` で次の人間アクションを確認
+5. **SQLマイグレーションはオペレータ専用** - テナントにSQL実行を依頼しない。スキーマは共有制御面に適用済み
+
+### パス A: Staffpass アプリ DM
+
+6. **Bot events: `message.im`** - App Home DM 受信に必須。`app_mention` は追加で必要に応じて
+7. **Bot scopes: `im:history`, `chat:write`, `im:write`** - スコープ変更後は再インストール必須
+8. **Bot Token 二重登録** - ダッシュボード「チャンネルに書き込む」(アダプタ) AND 環境変数 `SLACK_BOT_TOKEN`。アダプタトークンが優先
+9. **App Home Messages Tab** - `messages_tab_read_only_enabled: false` でないとユーザーがDMを送れない
+10. **posting_as: bot** - Bot DM への返信には必須。User token では Bot DM を見られない
+
+### パス B: 人↔人 DM（User Token Events）
+
+11. **Subscribe to events on behalf of users: `message.im`** - Bot events とは別セクション。Bot events だけでは User Token イベントは届かない
+12. **User Token Scopes: `im:history`** - 社員が Slack 再 OAuth で取得する User Token に必要
+13. **社員 Slack 再 OAuth** - User Token Scopes 追加後、社員が OAuth フローを再実行して `xoxp-...` を取得
+14. **posting_as: user** - Bot は人↔人 DM に参加できない。User Token での投稿が必須
