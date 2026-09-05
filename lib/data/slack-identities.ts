@@ -238,6 +238,31 @@ async function withBinding(row: EmployeeSlackIdentity): Promise<SlackMentionTarg
   };
 }
 
+/** Resolve one employee as a wake target without requiring an outbound Slack identity. */
+export async function getSlackWakeTargetByEmployeeId(input: {
+  employeeId: string;
+  orgId: string;
+}): Promise<SlackMentionTarget | null> {
+  const employee = await getEmployee(input.employeeId.trim(), input.orgId.trim());
+  if (!employee || employee.status !== "active") return null;
+  const identity = await getEmployeeSlackIdentity(employee.id);
+  const linkedIdentity =
+    identity?.orgId === employee.orgId && identity.status === "linked"
+      ? identity
+      : null;
+  const binding = await getBinding(employee.id);
+  return {
+    employeeId: employee.id,
+    orgId: employee.orgId,
+    slackUserId: linkedIdentity?.slackUserId ?? "",
+    slackTeamId: linkedIdentity?.slackTeamId ?? "",
+    displayName: linkedIdentity?.displayName || employee.displayName,
+    grokBotAgentId: binding?.grokBotAgentId ?? null,
+    wakeWebhookUrl: binding?.wakeWebhookUrl ?? null,
+    hasWakeWebhook: Boolean(binding?.hasWakeWebhook),
+  };
+}
+
 function demoLinked(): EmployeeSlackIdentity[] {
   return [...demoIdentities.values()]
     .map((row) => row.public)
@@ -319,4 +344,3 @@ export async function listLinkedSlackIdentitiesForTeam(
     data.map((row) => withBinding(mapPublic(row as Record<string, unknown>)))
   );
 }
-

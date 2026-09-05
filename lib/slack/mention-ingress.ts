@@ -11,6 +11,7 @@ import {
   type SlackMentionTarget,
 } from "@/lib/data/slack-identities";
 import { getWakeWebhookSecret } from "@/lib/data/bindings";
+import { resolveSlackImWakeTarget } from "@/lib/data/slack-im-routes";
 import { listAllEnabledNotificationChannels } from "@/lib/data/notification-channels";
 import { isDemoMode } from "@/lib/mode";
 import { verifySlackSignature } from "@/lib/notify/slack";
@@ -46,6 +47,7 @@ type SlackEvent = {
   ts?: string;
   thread_ts?: string;
   channel?: string;
+  channel_type?: string;
   subtype?: string;
   bot_id?: string;
   bot_profile?: unknown;
@@ -183,7 +185,25 @@ async function resolveWakeTargets(input: {
   mentionedIds: string[];
   teamId: string;
   speakerId: string;
+  channelId: string;
+  isDirectMessage: boolean;
 }): Promise<SlackMentionTarget[]> {
+  if (input.isDirectMessage) {
+    const target = await resolveSlackImWakeTarget({
+      slackChannelId: input.channelId,
+      slackTeamId: input.teamId,
+    });
+    if (!target) return [];
+    // Covers user-token posts by the employee identity. Bot posts are already
+    // rejected by shouldIgnoreEvent via bot_id / bot_profile / subtype.
+    if (
+      target.slackUserId &&
+      target.slackUserId.toUpperCase() === input.speakerId.toUpperCase()
+    ) {
+      return [];
+    }
+    return [target];
+  }
   const mentioned = await getEmployeesBySlackUserIds(input.mentionedIds, input.teamId);
   const speakerRows = input.speakerId
     ? await getEmployeesBySlackUserIds([input.speakerId], input.teamId)
@@ -208,16 +228,19 @@ async function resolveWakeTargets(input: {
 
 async function postWake(
   target: SlackMentionTarget,
-  payload: SlackWakePayload
+  payload: SlackWakePayload,
+  trigger: "mention" | "internal_im"
 ): Promise<void> {
+  const action = trigger === "internal_im" ? "slack.internal_im_wake" : "slack.mention_wake";
+  const purpose = trigger === "internal_im" ? "slack.internal_im" : "slack.mention";
   const url = target.wakeWebhookUrl?.trim() || "";
   if (!url) {
     await appendAuditEvent({
       orgId: target.orgId,
       employeeId: target.employeeId,
       credentialId: null,
-      action: "slack.mention_wake",
-      purpose: "slack.mention",
+      action,
+      purpose,
       summary: "wake_webhook_missing",
       metadata: {
         reason: "wake_webhook_missing",
@@ -247,8 +270,8 @@ async function postWake(
         orgId: target.orgId,
         employeeId: target.employeeId,
         credentialId: null,
-        action: "slack.mention_wake",
-        purpose: "slack.mention",
+        action,
+        purpose,
         summary: "起こす webhook の送信に失敗",
         metadata: {
           reason: "wake_failed",
@@ -262,9 +285,9 @@ async function postWake(
       orgId: target.orgId,
       employeeId: target.employeeId,
       credentialId: null,
-      action: "slack.mention_wake",
-      purpose: "slack.mention",
-      summary: "Slackメンションで社員を起こした",
+      action,
+      purpose,
+      summary: trigger === "internal_im" ? "社内Slack 1:1で社員を起こした" : "Slackメンションで社員を起こした",
       metadata: {
         reason: "woke",
         channel: payload.channel,
@@ -279,8 +302,8 @@ async function postWake(
       orgId: target.orgId,
       employeeId: target.employeeId,
       credentialId: null,
-      action: "slack.mention_wake",
-      purpose: "slack.mention",
+      action,
+      purpose,
       summary: "起こす webhook の送信に失敗",
       metadata: {
         reason: "wake_failed",
@@ -310,15 +333,20 @@ export async function processSlackMentionEnvelope(
   const speakerId = str(event.user);
   const text = typeof event.text === "string" ? event.text : "";
   const mentionedIds = extractMentionedUserIds(text, event.blocks);
+  const channel = str(event.channel);
+  // message.im arrives as type=message with channel_type=im. Do not infer IM
+  // from a D-prefix alone; only the Staffpass app's actual event may wake.
+  const isDirectMessage = eventType === "message" && str(event.channel_type) === "im";
   const targets = await resolveWakeTargets({
     eventType,
     mentionedIds,
     teamId,
     speakerId,
+    channelId: channel,
+    isDirectMessage,
   });
   if (!targets.length) return { handled: true, woke: 0 };
 
-  const channel = str(event.channel);
   const ts = str(event.ts);
   const threadTs = str(event.thread_ts) || null;
   let woke = 0;
@@ -334,7 +362,7 @@ export async function processSlackMentionEnvelope(
       employeeId: target.employeeId,
       eventId,
     };
-    await postWake(target, payload);
+    await postWake(target, payload, isDirectMessage ? "internal_im" : "mention");
     if (target.wakeWebhookUrl?.trim()) woke += 1;
   }
   return { handled: true, woke };

@@ -58,7 +58,7 @@ export default async function GettingStartedPage() {
           <p className="text-xs faint font-mono">STEP 06</p>
           <h2 className="mt-2 text-sm font-medium">承認者と通知口</h2>
           <p className="mt-2 text-sm muted leading-relaxed">
-            日々の通す／止めるは Telegram / LINE / Slack の通知口が主です。ダッシュボードの承認ボタンは予備です。
+            日々の通す／止めるは Telegram / LINE / Slack の通知口が主です。社内1:1を分類すると、指定したAI社員の受け口も同時に付きます。ダッシュボードの承認ボタンは予備です。
           </p>
           <Link href="/app/settings" className="btn btn-ghost mt-4 text-sm w-full sm:w-auto inline-flex">
             通知口
