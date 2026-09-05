@@ -7,7 +7,7 @@ import type { McpToolDef } from "@/lib/mcp/tools";
 import type { ResolvedAdminCredential } from "@/lib/auth/admin-credential";
 import { getApprovalById, getBinding, getEmployee, listEmployees } from "@/lib/data";
 import { listConversationAdapters } from "@/lib/data/conversation-adapters";
-import { countSlackImRoutesByOrg, listSlackImRoutesByOrg } from "@/lib/data/slack-im-routes";
+import { listSlackImRoutesByOrg } from "@/lib/data/slack-im-routes";
 import { getEmployeeSlackIdentity } from "@/lib/data/slack-identities";
 import { resolveOrgSlackBotToken } from "@/lib/slack/bot-token";
 import { queueAdminTool } from "@/lib/admin-mcp/queue";
