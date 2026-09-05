@@ -42,6 +42,10 @@ const FAQ = [
     q: "パソコンや Bot を分けないとダメ？",
     a: "Bot を分けても、同じアカウントのコンピュータは共有されるのが普通です。画面は別でも、ファイルやログインは共有されえます。だから職務の境界は社員証側に置きます。OS の完全分離は約束しません。",
   },
+  {
+    q: "設定にどれくらい時間かかりますか？",
+    a: "MCP対応なので、ダッシュボードと連携の案内に沿って進めれば、特別な開発なしで接続できます。社内の準備や承認確認にかかる時間は組織によりますが、技術的なセットアップ自体は案内どおりに進めれば短時間で終わります。",
+  },
 ];
 
 function ControlVisual() {
@@ -125,7 +129,7 @@ export default function LandingPage() {
           <div className="min-w-0">
             <span className="eyebrow">AI EMPLOYEE GOVERNANCE</span>
             <h1 className="mt-5 text-[clamp(2.35rem,5vw,4rem)] font-bold tracking-[-0.045em] leading-[1.04]">
-              AIを、<br /><span className="text-gradient whitespace-nowrap">社員として雇う</span>
+              AIのための、<br /><span className="text-gradient whitespace-nowrap">社員証</span>
             </h1>
             <p className="mt-6 max-w-xl text-base sm:text-lg muted leading-relaxed">
               権限、承認、上限、監査。AIが働くためのルールを、一つの社員証に
