@@ -215,9 +215,15 @@ Slack の `posting_as` 設定は**通信パスによって異なります**:
 | パス | 用途 | posting_as | 理由 |
 |------|------|------------|------|
 | **パスA: App DM** | 人 ↔ Staffpassアプリ DM | `bot` | User token では Bot DM を見られない |
-| **パスB: 人↔人DM** | 人の代理で人へ送信（将来） | `user` | 人対人 DM に Bot は参加できない |
+| **パスB: 人↔人1:1 DM** | 人の代理で人へ送信 | `user` | 人対人 DM に Bot は参加できない |
+| **チャネル / Connect** | メンション起動、人として返信 | `user` | 人間アイデンティティで返信 |
 
-#### パスA: App DM（このRAILの対象）
+**メンション不要 wake は個別DM（1:1）のみ**:
+- パスA（App DM）: メンション不要（`employeeId` 指定で wake）
+- パスB（人↔人1:1 DM）: メンション不要（`employeeId` 指定で wake）
+- チャネル / Slack Connect: **メンション必須**（`app_mention` または紐付けユーザーへのメンション）
+
+#### パスA: App DM
 
 App DM（Staffpassアプリへの直接DM）への返信には `posting_as: bot` が**必須**です。
 
@@ -229,9 +235,28 @@ App DM（Staffpassアプリへの直接DM）への返信には `posting_as: bot`
 - Bot DM への返信が見えない
 - `channel_not_found` エラー（user token からは Bot DM が見えない）
 
-#### パスB: 人↔人DM（将来対応予定）
+#### パスB: 人↔人1:1 DM（本番稼働中）
 
-人の代理で別の人に DM を送る場合は `posting_as: user` を使用します。Slack Bot は人対人 DM に参加できないため、User token での投稿が必要です。
+人の代理で別の人に DM を送る場合は `posting_as: user` を使用します。Slack Bot は人対人 DM に参加できないため、User token での投稿が必要です。D0BSWG1804F スタイルで本番稼働中。
+
+**パスB 設定手順**:
+1. **User Token Scopes** に `im:history` を追加（OAuth & Permissions）
+2. **Subscribe to events on behalf of users** に `message.im` を追加（Event Subscriptions）
+3. 社員が Staffpass ダッシュボードから **Slack 再認可**（新スコープ付与）
+4. 社員バッジの `posting_as` を `user` に設定
+5. `channels.classify` で人↔人DMを `internal` 分類、`employeeId` 指定
+
+#### チャネル / Slack Connect
+
+チャネルと Slack Connect 共有チャネルでは:
+- **wake**: メンション必須（`app_mention` または紐付け社員ユーザーへのメンション）
+- **返信**: `posting_as: user`（人間アイデンティティ）
+- Bot posting mouth は App DM（パスA）のみ
+
+**Connect / shared_external の注意点**:
+- `channels.classify` で `shared_external` 分類が必要（egress 制御）
+- **オーディエンス行列**が承認要否を決定 — 外部の人がメンションしてくることもある
+- 「メンション相手＝承認者」ではない。承認要否は**相手方（parties / audience / チャネル分類）**で判断
 
 > **注意**: すべての Slack mouth が `bot` である必要はありません。用途に応じて設定してください。
 
@@ -324,7 +349,7 @@ App DM（Staffpassアプリへの直接DM）への返信には `posting_as: bot`
 
 ---
 
-## 2026-09-05 パスA+B 本番からの学習事項
+## 2026-09-05/06 パスA+B本番からの学習事項（Yasaka/Ando locks）
 
 このRAILは以下の実運用経験を反映しています:
 
@@ -344,9 +369,15 @@ App DM（Staffpassアプリへの直接DM）への返信には `posting_as: bot`
 9. **App Home Messages Tab** - `messages_tab_read_only_enabled: false` でないとユーザーがDMを送れない
 10. **posting_as: bot** - Bot DM への返信には必須。User token では Bot DM を見られない
 
-### パス B: 人↔人 DM（User Token Events）
+### パス B: 人↔人 DM（User Token Events） — 本番稼働中
 
 11. **Subscribe to events on behalf of users: `message.im`** - Bot events とは別セクション。Bot events だけでは User Token イベントは届かない
 12. **User Token Scopes: `im:history`** - 社員が Slack 再 OAuth で取得する User Token に必要
 13. **社員 Slack 再 OAuth** - User Token Scopes 追加後、社員が OAuth フローを再実行して `xoxp-...` を取得
 14. **posting_as: user** - Bot は人↔人 DM に参加できない。User Token での投稿が必須
+
+### チャネル / Slack Connect
+
+15. **メンション必須** - チャネルと Connect はメンション wake のみ（`app_mention` / 紐付けユーザーメンション）
+16. **shared_external 分類** - Connect チャネルは egress 制御のため分類必須
+17. **オーディエンス行列** - 承認要否は parties / audience / チャネル分類で決定。「メンション相手＝承認者」ではない
