@@ -53,10 +53,14 @@ describe("employee MCP tool list unchanged", () => {
 });
 
 describe("admin MCP always_human", () => {
-  test("all admin tools are always_human", () => {
+  test("all admin tools except setup.slackStatus are always_human", () => {
     expect(adminToolsAlwaysHuman()).toBe(true);
     expect(ADMIN_MCP_TOOLS.map((t) => t.name)).toEqual([...ADMIN_MCP_TOOL_NAMES]);
-    expect(ADMIN_MCP_TOOLS.every((t) => t.description.includes("always_human"))).toBe(true);
+    const mutatingTools = ADMIN_MCP_TOOLS.filter((t) => t.name !== "setup.slackStatus");
+    expect(mutatingTools.every((t) => t.description.includes("always_human"))).toBe(true);
+    const slackStatus = ADMIN_MCP_TOOLS.find((t) => t.name === "setup.slackStatus");
+    expect(slackStatus?.description.includes("read-only")).toBe(true);
+    expect(slackStatus?.description.includes("no approval required")).toBe(true);
   });
 
   test("employees.issue queues a ticket and does not mutate", async () => {

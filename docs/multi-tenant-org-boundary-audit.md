@@ -11,7 +11,7 @@
 Staffpass implements reasonable org isolation through RLS policies, session-based org scoping, and credential fingerprinting. However, several gaps exist that should be addressed before onboarding a second production tenant.
 
 **Critical:** 0
-**High:** 2
+**High:** 1 (H1 Slack wake cross-org leak FIXED 2026-09-05)
 **Medium:** 3
 **Low:** 2
 
@@ -77,14 +77,15 @@ Tokens/sessions could allow cross-org queries by id.
 
 | Check | Status | Evidence |
 |-------|--------|----------|
-| `getEmployeesBySlackUserIds` filters by org | **FAIL** | Queries all orgs by slack_user_id (`lib/data/slack-identities.ts:257-297`) |
-| Slack channel collision across orgs | **FAIL** | Same external channel_id can exist in multiple orgs (`unique (org_id, surface, external_id)`) |
+| `getEmployeesBySlackUserIds` filters by team | **PASS** | Filter by `slack_team_id` at query time when `teamId` is present (H1 fix, 2026-09-05) |
+| Missing teamId returns empty | **PASS** | Fail-closed: returns `[]` when `teamId` is missing/empty (H1 fix, 2026-09-05) |
+| Slack channel collision across orgs | **OK** | Same external channel_id can exist in multiple orgs, but `slack_team_id` discriminates at wake time |
 
-**Verdict: HIGH** - Shared Slack channels or users bound to multiple orgs could wake wrong employees.
+**Verdict: FIXED** - H1 fix applied 2026-09-05. `getEmployeesBySlackUserIds` now filters by `slack_team_id` at DB level and fails closed when teamId is absent. IM wake path uses `slack_im_employee_routes` (org-scoped via route).
 
 **File References:**
-- `lib/data/slack-identities.ts:248-298`
-- `lib/slack/mention-ingress.ts:180-207`
+- `lib/data/slack-identities.ts:273-322` (getEmployeesBySlackUserIds)
+- `lib/slack/mention-ingress.ts:248-249` (passes teamId from envelope)
 
 ---
 
@@ -150,7 +151,7 @@ All major tables have RLS enabled:
 | 2. MCP auth org binding | **PASS** | - | - |
 | 3.1 Gateway invoke | **PASS** | - | - |
 | 3.2 Approval lookup by ref/msgId | **FAIL** | High | Add org_id filter or validate caller org |
-| 3.3 Slack mention cross-org wake | **FAIL** | High | Filter by org_id in `getEmployeesBySlackUserIds` |
+| 3.3 Slack mention cross-org wake | **FIXED** | ~~High~~ | FIXED 2026-09-05: Filter by `slack_team_id` in `getEmployeesBySlackUserIds` |
 | 4. Approval/notify org-scoped | **PASS** | - | - |
 | 5. RLS policies | **PASS** | - | - |
 | 6.1 TOKYO307 pilot hardcodes | **WARN** | Medium | Remove or make configurable |
@@ -163,17 +164,28 @@ All major tables have RLS enabled:
 
 ### HIGH Priority
 
-#### H1: Slack Mention Wake Cross-Org Leak
+#### H1: Slack Mention Wake Cross-Org Leak — **FIXED 2026-09-05**
 
-**Problem:** `getEmployeesBySlackUserIds` queries all orgs. A Slack user bound to employees in multiple orgs could trigger wakes across tenants.
+**Problem:** `getEmployeesBySlackUserIds` queried all orgs. A Slack user bound to employees in multiple orgs could trigger wakes across tenants.
 
 **Files:**
-- `lib/data/slack-identities.ts:248-298`
-- `lib/slack/mention-ingress.ts:180-207`
+- `lib/data/slack-identities.ts:273-322`
+- `lib/slack/mention-ingress.ts:248-249`
 
-**Fix:** Pass `teamId` as org-discriminator or query by org_id. The `slack_team_id` on `employee_slack_identities` should be required and matched.
+**Fix Applied:**
+1. `getEmployeesBySlackUserIds` now filters by `slack_team_id` at DB level when `teamId` is present
+2. `preferTeam` fails closed: returns only rows matching the team, never falls back to other teams
+3. Removed the fallback that scanned ALL linked rows when some IDs were missing
+4. When `teamId` is missing/empty, returns `[]` (fail-closed) instead of cross-org fan-out
+5. IM wake path (`slack_im_employee_routes`) is org-scoped via route and unaffected
 
-**Complexity:** Medium - requires schema migration to enforce `slack_team_id` NOT NULL.
+**Tests Added:**
+- Same slack_user_id in different teams → only matching team returned
+- Wrong team → no results (fail-closed)
+- Missing teamId → empty results (no cross-org fan-out)
+- Case-insensitive team_id matching
+
+**Complexity:** Low - no schema migration required. Soft enforcement via query filters.
 
 ---
 

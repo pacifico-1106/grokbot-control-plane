@@ -7,7 +7,8 @@ import type { McpToolDef } from "@/lib/mcp/tools";
 import type { ResolvedAdminCredential } from "@/lib/auth/admin-credential";
 import { getApprovalById, getBinding, getEmployee, listEmployees } from "@/lib/data";
 import { listConversationAdapters } from "@/lib/data/conversation-adapters";
-import { countSlackImRoutesByOrg } from "@/lib/data/slack-im-routes";
+import { countSlackImRoutesByOrg, listSlackImRoutesByOrg } from "@/lib/data/slack-im-routes";
+import { getEmployeeSlackIdentity } from "@/lib/data/slack-identities";
 import { resolveOrgSlackBotToken } from "@/lib/slack/bot-token";
 import { queueAdminTool } from "@/lib/admin-mcp/queue";
 import { parseAdminFulfillment } from "@/lib/admin-mcp/fulfill-admin";
@@ -207,6 +208,9 @@ type SlackStatusResult = {
   imRoutesCount: number;
   employeePostingAsBot: number;
   employeePostingAsUser: number;
+  pathAEmployees: number;
+  pathBEmployees: number;
+  postingMismatch: string[];
   issues: string[];
   nextStepJa: string;
 };
@@ -237,22 +241,47 @@ async function runSlackStatusDiagnose(
     issues.push("Slack 会話アダプタが無効です");
   }
 
-  const imRoutesCount = await countSlackImRoutesByOrg(cred.orgId);
+  const imRoutes = await listSlackImRoutesByOrg(cred.orgId);
+  const imRoutesCount = imRoutes.length;
+  const employeesWithRoutes = new Set(imRoutes.map((r) => r.employeeId));
 
   const employees = await listEmployees(cred.orgId);
   let postingAsBot = 0;
   let postingAsUser = 0;
+  let pathAEmployees = 0;
+  let pathBEmployees = 0;
+  const postingMismatch: string[] = [];
+
   for (const emp of employees) {
     if (emp.status !== "active") continue;
     const posting = emp.postingAs;
     if (posting === "bot") postingAsBot++;
     else if (posting === "user") postingAsUser++;
     else postingAsBot++;
+
+    const hasRoute = employeesWithRoutes.has(emp.id);
+    const identity = await getEmployeeSlackIdentity(emp.id);
+    const hasLinkedIdentity = identity?.status === "linked";
+
+    if (hasLinkedIdentity) {
+      pathBEmployees++;
+      if (posting === "bot" && hasRoute) {
+        postingMismatch.push(
+          `${emp.displayName}: Path B (linked identity) だが posting_as: bot。人↔人DMには user が必要`
+        );
+      }
+    } else if (hasRoute) {
+      pathAEmployees++;
+      if (posting === "user") {
+        postingMismatch.push(
+          `${emp.displayName}: Path A (App DM route のみ) だが posting_as: user。Bot DMには bot が必要`
+        );
+      }
+    }
   }
-  if (postingAsUser > 0) {
-    issues.push(
-      `${postingAsUser}人の社員が posting_as: user です。Bot DMへの返信には bot が必要です`
-    );
+
+  if (postingMismatch.length > 0) {
+    issues.push(...postingMismatch);
   }
 
   let nextStepJa = "Slack 設定は完了しています。";
@@ -266,8 +295,8 @@ async function runSlackStatusDiagnose(
   } else if (imRoutesCount === 0) {
     nextStepJa =
       "チャネル分類を設定してください。内部1:1には channels.classify で employeeId を指定します。詳細: docs/tenant-slack-kickoff-rail.md";
-  } else if (postingAsUser > 0) {
-    nextStepJa = `posting_as を bot に変更してください。User token では Bot DM が見えません。`;
+  } else if (postingMismatch.length > 0) {
+    nextStepJa = `posting_as の設定を確認してください: Path A (App DM) は bot、Path B (人↔人DM) は user が必要です。`;
   }
 
   const result: SlackStatusResult = {
@@ -279,6 +308,9 @@ async function runSlackStatusDiagnose(
     imRoutesCount,
     employeePostingAsBot: postingAsBot,
     employeePostingAsUser: postingAsUser,
+    pathAEmployees,
+    pathBEmployees,
+    postingMismatch,
     issues,
     nextStepJa,
   };
