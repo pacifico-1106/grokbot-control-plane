@@ -11,6 +11,7 @@ import { upsertOrgChannel } from "@/lib/data/directory";
 import {
   deleteSlackImEmployeeRoute,
   resolveSlackImWakeTarget,
+  resolveSlackUserTokenImWakeTarget,
   syncSlackImEmployeeRoute,
 } from "@/lib/data/slack-im-routes";
 import { DEMO_ORG, getRuntimeEmployees } from "@/lib/demo-data";
@@ -31,6 +32,7 @@ const THREAD_TS = "1787911797.502889";
 const CHANNEL = "C_CLOUD";
 const INTERNAL_IM = "DSTAFFPASSINTERNAL";
 const UNKNOWN_IM = "DSTAFFPASSUNKNOWN";
+const HUMAN_DM = "D0BSWG1804F";
 
 const originalFetch = globalThis.fetch;
 const savedSigning = process.env.SLACK_SIGNING_SECRET;
@@ -711,6 +713,249 @@ describe("Slack mention ingress", () => {
       expect(outcome.woke).toBe(1);
       expect(outcome.skipReason).toBeUndefined();
     } finally {
+      await restore();
+    }
+  });
+});
+
+describe("User-token message.im wake (SLICE B)", () => {
+  test("user-token event with valid route wakes employee", async () => {
+    process.env.SLACK_SIGNING_SECRET = SIGNING_SECRET;
+    const { emp, restore } = await bindAndo();
+    const wake = mockWake();
+    await configureInternalIm(emp.id, HUMAN_DM);
+    try {
+      const result = await processSlackMentionEnvelope({
+        type: "event_callback",
+        team_id: TEAM,
+        event_id: `Ev_user_token_wake_${Date.now()}`,
+        authorizations: [{ is_bot: false, user_id: BOUND_USER, team_id: TEAM }],
+        event: {
+          type: "message",
+          channel_type: "im",
+          user: SPEAKER,
+          text: "上司からの指示です",
+          ts: "1787911800.000030",
+          channel: HUMAN_DM,
+        },
+      });
+      expect(result.handled).toBe(true);
+      expect(result.woke).toBe(1);
+      expect(result.userToken).toBe(true);
+      expect(wake.calls().length).toBe(1);
+      expect(wake.calls()[0].payload.employeeId).toBe(emp.id);
+      expect(wake.calls()[0].payload.channel).toBe(HUMAN_DM);
+    } finally {
+      await deleteSlackImEmployeeRoute({ orgId: DEMO_ORG.id, slackChannelId: HUMAN_DM });
+      await restore();
+    }
+  });
+
+  test("user-token event where authorized user does not match route employee does not wake", async () => {
+    process.env.SLACK_SIGNING_SECRET = SIGNING_SECRET;
+    const { emp, restore } = await bindAndo();
+    const wake = mockWake();
+    await configureInternalIm(emp.id, HUMAN_DM);
+    try {
+      const result = await processSlackMentionEnvelope({
+        type: "event_callback",
+        team_id: TEAM,
+        event_id: `Ev_user_token_mismatch_${Date.now()}`,
+        authorizations: [{ is_bot: false, user_id: "U_OTHER_USER", team_id: TEAM }],
+        event: {
+          type: "message",
+          channel_type: "im",
+          user: SPEAKER,
+          text: "誰かのDM",
+          ts: "1787911800.000031",
+          channel: HUMAN_DM,
+        },
+      });
+      expect(result.handled).toBe(true);
+      expect(result.woke).toBe(0);
+      expect(result.userToken).toBe(true);
+      expect(wake.calls().length).toBe(0);
+    } finally {
+      await deleteSlackImEmployeeRoute({ orgId: DEMO_ORG.id, slackChannelId: HUMAN_DM });
+      await restore();
+    }
+  });
+
+  test("user-token event without a route does not wake", async () => {
+    process.env.SLACK_SIGNING_SECRET = SIGNING_SECRET;
+    const { restore } = await bindAndo();
+    const wake = mockWake();
+    await deleteSlackImEmployeeRoute({ orgId: DEMO_ORG.id, slackChannelId: HUMAN_DM });
+    try {
+      const result = await processSlackMentionEnvelope({
+        type: "event_callback",
+        team_id: TEAM,
+        event_id: `Ev_user_token_no_route_${Date.now()}`,
+        authorizations: [{ is_bot: false, user_id: BOUND_USER, team_id: TEAM }],
+        event: {
+          type: "message",
+          channel_type: "im",
+          user: SPEAKER,
+          text: "未設定のDM",
+          ts: "1787911800.000032",
+          channel: HUMAN_DM,
+        },
+      });
+      expect(result.handled).toBe(true);
+      expect(result.woke).toBe(0);
+      expect(wake.calls().length).toBe(0);
+    } finally {
+      await restore();
+    }
+  });
+
+  test("user-token event with unclassified channel does not wake", async () => {
+    process.env.SLACK_SIGNING_SECRET = SIGNING_SECRET;
+    const { restore } = await bindAndo();
+    const wake = mockWake();
+    await upsertOrgChannel({
+      orgId: DEMO_ORG.id,
+      surface: "slack",
+      externalId: HUMAN_DM,
+      classification: "unknown",
+      skipInspect: true,
+    });
+    await deleteSlackImEmployeeRoute({ orgId: DEMO_ORG.id, slackChannelId: HUMAN_DM });
+    try {
+      const result = await processSlackMentionEnvelope({
+        type: "event_callback",
+        team_id: TEAM,
+        event_id: `Ev_user_token_unclassified_${Date.now()}`,
+        authorizations: [{ is_bot: false, user_id: BOUND_USER, team_id: TEAM }],
+        event: {
+          type: "message",
+          channel_type: "im",
+          user: SPEAKER,
+          text: "未分類DM",
+          ts: "1787911800.000033",
+          channel: HUMAN_DM,
+        },
+      });
+      expect(result.handled).toBe(true);
+      expect(result.woke).toBe(0);
+      expect(wake.calls().length).toBe(0);
+    } finally {
+      await restore();
+    }
+  });
+
+  test("employee's own post via user-token does not wake themselves", async () => {
+    process.env.SLACK_SIGNING_SECRET = SIGNING_SECRET;
+    const { emp, restore } = await bindAndo();
+    const wake = mockWake();
+    await configureInternalIm(emp.id, HUMAN_DM);
+    try {
+      const result = await processSlackMentionEnvelope({
+        type: "event_callback",
+        team_id: TEAM,
+        event_id: `Ev_user_token_self_${Date.now()}`,
+        authorizations: [{ is_bot: false, user_id: BOUND_USER, team_id: TEAM }],
+        event: {
+          type: "message",
+          channel_type: "im",
+          user: BOUND_USER,
+          text: "自分の投稿",
+          ts: "1787911800.000034",
+          channel: HUMAN_DM,
+        },
+      });
+      expect(result.handled).toBe(true);
+      expect(result.woke).toBe(0);
+      expect(wake.calls().length).toBe(0);
+    } finally {
+      await deleteSlackImEmployeeRoute({ orgId: DEMO_ORG.id, slackChannelId: HUMAN_DM });
+      await restore();
+    }
+  });
+
+  test("bot-token event still uses Path A resolver", async () => {
+    process.env.SLACK_SIGNING_SECRET = SIGNING_SECRET;
+    const { emp, restore } = await bindAndo();
+    const wake = mockWake();
+    await configureInternalIm(emp.id);
+    try {
+      const result = await processSlackMentionEnvelope({
+        type: "event_callback",
+        team_id: TEAM,
+        event_id: `Ev_bot_token_${Date.now()}`,
+        authorizations: [{ is_bot: true, user_id: "B_STAFFPASS_BOT", team_id: TEAM }],
+        event: {
+          type: "message",
+          channel_type: "im",
+          user: SPEAKER,
+          text: "ボットDM経由",
+          ts: "1787911800.000035",
+          channel: INTERNAL_IM,
+        },
+      });
+      expect(result.handled).toBe(true);
+      expect(result.woke).toBe(1);
+      expect(result.userToken).toBe(false);
+      expect(wake.calls().length).toBe(1);
+    } finally {
+      await deleteSlackImEmployeeRoute({ orgId: DEMO_ORG.id, slackChannelId: INTERNAL_IM });
+      await restore();
+    }
+  });
+
+  test("resolveSlackUserTokenImWakeTarget returns target only when authorized user matches", async () => {
+    const { emp, restore } = await bindAndo();
+    await configureInternalIm(emp.id, HUMAN_DM);
+    try {
+      const validTarget = await resolveSlackUserTokenImWakeTarget({
+        slackChannelId: HUMAN_DM,
+        slackTeamId: TEAM,
+        authorizedSlackUserId: BOUND_USER,
+      });
+      expect(validTarget).not.toBeNull();
+      expect(validTarget?.employeeId).toBe(emp.id);
+
+      const invalidTarget = await resolveSlackUserTokenImWakeTarget({
+        slackChannelId: HUMAN_DM,
+        slackTeamId: TEAM,
+        authorizedSlackUserId: "U_OTHER_USER",
+      });
+      expect(invalidTarget).toBeNull();
+    } finally {
+      await deleteSlackImEmployeeRoute({ orgId: DEMO_ORG.id, slackChannelId: HUMAN_DM });
+      await restore();
+    }
+  });
+
+  test("mixed-authorization envelope picks correct resolver based on is_bot", async () => {
+    process.env.SLACK_SIGNING_SECRET = SIGNING_SECRET;
+    const { emp, restore } = await bindAndo();
+    const wake = mockWake();
+    await configureInternalIm(emp.id, HUMAN_DM);
+    try {
+      const result = await processSlackMentionEnvelope({
+        type: "event_callback",
+        team_id: TEAM,
+        event_id: `Ev_mixed_auth_${Date.now()}`,
+        authorizations: [
+          { is_bot: true, user_id: "B_STAFFPASS_BOT", team_id: TEAM },
+          { is_bot: false, user_id: BOUND_USER, team_id: TEAM },
+        ],
+        event: {
+          type: "message",
+          channel_type: "im",
+          user: SPEAKER,
+          text: "複数認可",
+          ts: "1787911800.000036",
+          channel: HUMAN_DM,
+        },
+      });
+      expect(result.handled).toBe(true);
+      expect(result.userToken).toBe(true);
+      expect(result.woke).toBe(1);
+      expect(wake.calls().length).toBe(1);
+    } finally {
+      await deleteSlackImEmployeeRoute({ orgId: DEMO_ORG.id, slackChannelId: HUMAN_DM });
       await restore();
     }
   });

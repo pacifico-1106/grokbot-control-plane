@@ -210,3 +210,45 @@ export async function resolveSlackImWakeTarget(input: {
     orgId: route.orgId,
   });
 }
+
+/**
+ * Resolve user-token message.im wake target for human↔human DM (SLICE B).
+ *
+ * User-token events arrive when:
+ * 1. Employee linked Slack identity with im:history scope
+ * 2. Slack app configured "Subscribe to events on behalf of users" for message.im
+ * 3. Someone posts in a human↔human DM where the employee is a participant
+ *
+ * Fail-closed rules:
+ * - authorizedSlackUserId must match exactly one linked employee
+ * - slackChannelId must have exactly one route in slack_im_employee_routes
+ * - route employee must match the authorized employee
+ * - channel must be classified internal, not mixed
+ *
+ * Privacy: If any condition fails, silently ignore (no wake, no storage).
+ */
+export async function resolveSlackUserTokenImWakeTarget(input: {
+  slackChannelId: string;
+  slackTeamId: string;
+  authorizedSlackUserId: string;
+}): Promise<SlackMentionTarget | null> {
+  const authorizedUserId = input.authorizedSlackUserId.trim().toUpperCase();
+  if (!authorizedUserId || !isSlackImChannelId(input.slackChannelId)) return null;
+
+  const routes = await listCandidateRoutes(input);
+  if (routes.length !== 1) return null;
+  const route = routes[0];
+
+  const channel = await getOrgChannel(route.orgId, "slack", route.slackChannelId);
+  if (!channel || channel.classification !== "internal" || channel.mixed) return null;
+
+  const target = await getSlackWakeTargetByEmployeeId({
+    employeeId: route.employeeId,
+    orgId: route.orgId,
+  });
+  if (!target) return null;
+
+  if (target.slackUserId.toUpperCase() !== authorizedUserId) return null;
+
+  return target;
+}

@@ -9,18 +9,57 @@
 - すべて `always_human` で、管理エージェントは自己承認できません。
 - ダッシュボードに権限編集UIはありません。更新も同じ `channels.classify` を使います。
 
-## Slack が見える範囲
+## 2つの経路と投稿アイデンティティ
 
-Slack の `message.im` は、Staffpass Slack アプリ自身とのDMに届く Bot event です。社員の user token で送信している人対人DMに Staffpass アプリは参加できないため、そのDMは Event Subscriptions では見えません。見えない会話の偽イベントや履歴ポーリングは作りません。
+SLICE B の目的は、AI社員が **人間として** 人対人会話で働けるようにすること。Bot mouth ではない。
 
-メンション不要の入口には、利用者が Slack の Staffpass アプリを開き、その Messages / App Home のDMへ投稿する Staffpass ネイティブ経路を使います。そのDMの `D...` チャネルを `channels.classify` で社内分類し、起こす社員を1人指定してください。
+| 経路 | 対象 | Wake 方法 | 返信アイデンティティ |
+|------|------|-----------|---------------------|
+| **Path A** | Staffpass app DM | Bot message.im | **Bot トークン**（会社ボット） |
+| **Path B** | 人対人 DM / チャネル | User-token message.im | **人間アイデンティティ**（`posting_as=user`） |
+
+### Path A: Staffpass app DM（Bot message.im）
+
+Slack の `message.im` Bot event は、Staffpass Slack アプリ自身とのDMのみに届きます。利用者が Slack の Staffpass アプリを開き、その Messages / App Home のDMへ投稿する経路です。そのDMの `D...` チャネルを `channels.classify` で社内分類し、起こす社員を1人指定してください。
+
+**返信**: Path A は Staffpass bot との会話なので、bot トークン（xoxb）で返信します。PR #5 の bot-forced posting はこの経路のみに適用。
+
+### Path B: 人対人会話（User-token message.im）
+
+社員の user token で送信している人対人DMに Staffpass アプリは参加できないため、Bot event では見えません。しかし、社員が `im:history` スコープで Slack OAuth 認可を済ませ、Slack アプリ側で「Subscribe to events on behalf of users」の `message.im` を有効にすると、社員のユーザートークン経由で人対人DMのイベントを受信できます。
+
+この Path B のイベントは `authorizations[].is_bot = false` で届きます。受信したら:
+
+1. `authorizations[].user_id` がリンク済み社員の Slack ID と一致するか確認
+2. `slack_im_employee_routes` に対象チャネルの internal ルートが存在するか確認
+3. ルートの `employee_id` が認可ユーザーの社員と一致するか確認
+4. すべて満たせば、その社員を起こす
+
+fail-closed: 1つでも条件を満たさなければ、何もしない（偽イベントや履歴ポーリングは作りません）。
+
+**返信**: Path B は人間↔人間の会話なので、`posting_as=user` 設定時は社員の Slack OAuth トークン（xoxp）で返信します。Bot トークン強制は行いません。これにより安藤は上司との1:1で人間として返信できます。
+
+監査ログには `slack.user_token_im_wake` アクションで記録されます。
+
+### 安藤の活動範囲（SLICE B 後）
+
+Path B が有効になると、安藤は以下で Staffpass 権限（チャネル分類、オーディエンス、スコープ）に従って働けます:
+
+- **人対人 1:1 DM** — 上司との internal 分類済み DM
+- **社内チャネル** — internal 分類済みチャネル
+- **外部 Slack Connect チャネル** — shared_external 分類済みチャネル（egress 許可時）
+
+すべて人間アイデンティティ（`posting_as=user`）で投稿。
 
 参考:
 
 - [Slack `message.im` event](https://docs.slack.dev/reference/events/message.im)
 - [Slack App Home: Subscribe to `message.im`](https://docs.slack.dev/surfaces/app-home/)
+- [Slack Events on behalf of users](https://docs.slack.dev/apis/events-api/request-urls#events-on-behalf-of-users)
 
 ## オペレータ設定
+
+### Path A（Bot event）
 
 Staffpass Slack アプリの設定で、次を追加します。
 
@@ -28,5 +67,44 @@ Staffpass Slack アプリの設定で、次を追加します。
 2. **Event Subscriptions** → **Subscribe to bot events** に `message.im` を追加する。
 3. **Save Changes**。Slack が再インストールを求めた場合は、管理者が権限を確認して再インストールする。
 4. Request URL は既存の `/api/webhooks/slack/events` のままにする。
+
+### Path B（User-token event）
+
+Staffpass Slack アプリの設定で、次を追加します。
+
+1. **OAuth & Permissions** の User Token Scopes に以下を含める:
+   - `chat:write` — 投稿（人間アイデンティティで返信）
+   - `users:read` — ユーザー情報
+   - `channels:read` — チャネル情報
+   - `groups:read` — プライベートチャネル情報
+   - `im:history` — DM履歴（user-token event 受信に必須）
+2. **Event Subscriptions** → **Subscribe to events on behalf of users** に `message.im` を追加する。
+3. **Save Changes**。
+
+### 社員の再OAuth
+
+Path B を有効にした後、既存のリンク済み社員の Slack 認可には `im:history` スコープが含まれていません。社員は Staffpass ダッシュボードから Slack 認可を再度行う必要があります。
+
+1. 社員ダッシュボード → Slack 設定 → 「再リンク」または「Slack を再認可」
+2. Slack OAuth 画面で新しいスコープ（`im:history`）を確認して承認
+3. 認可完了後、その社員の人対人DMで Path B wake が動作
+
+### 社員バッジの posting_as 設定
+
+Path B で人間アイデンティティ返信を使うには、社員バッジの `posting_as` を `user` に設定:
+
+```
+employees.posting_as = 'user'
+```
+
+`posting_as=bot` の社員は Path B でも bot トークンで返信します（非推奨: 人対人会話で会社ボットが突然投稿する）。
+
+### Socket Mode
+
+Socket Mode は Off のままにしてください。Event Subscriptions の HTTP webhook を使用します。
+
+### PR #5 との関係
+
+PR #5（force bot token for D… replies）は **Path A のみ** に適用。Path B の人対人 DM では bot 強制は行わず、`posting_as=user` 設定に従って人間アイデンティティで返信します。
 
 秘密値はチケット、チャット、PR本文へ貼りません。
