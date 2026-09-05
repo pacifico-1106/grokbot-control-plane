@@ -314,29 +314,73 @@ async function postWake(
   }
 }
 
+export type SlackEventOutcome = {
+  handled: boolean;
+  woke: number;
+  duplicate?: boolean;
+  skipReason?: string;
+};
+
 export async function processSlackMentionEnvelope(
   envelope: SlackEnvelope
-): Promise<{ handled: boolean; woke: number; duplicate?: boolean }> {
+): Promise<SlackEventOutcome> {
   const event = envelope.event;
   const eventId = str(envelope.event_id);
   const eventType = str(event?.type);
-  if (!event || !eventId) return { handled: false, woke: 0 };
-  if (eventType !== "app_mention" && eventType !== "message") {
-    return { handled: false, woke: 0 };
+  const channel = str(event?.channel);
+  const channelType = str(event?.channel_type);
+
+  if (!event || !eventId) {
+    console.warn("slack_event_skip", {
+      eventId: eventId || "missing",
+      reason: "missing_event_or_id",
+    });
+    return { handled: false, woke: 0, skipReason: "missing_event_or_id" };
   }
-  if (shouldIgnoreEvent(event)) return { handled: true, woke: 0 };
+
+  if (eventType !== "app_mention" && eventType !== "message") {
+    console.info("slack_event_skip", {
+      eventId,
+      eventType,
+      reason: "unsupported_event_type",
+    });
+    return { handled: false, woke: 0, skipReason: "unsupported_event_type" };
+  }
+
+  if (shouldIgnoreEvent(event)) {
+    const subtype = str(event.subtype);
+    const reason = subtype
+      ? `ignored_subtype:${subtype}`
+      : str(event.bot_id) || event.bot_profile
+        ? "bot_message"
+        : "ignored_event";
+    console.info("slack_event_skip", {
+      eventId,
+      eventType,
+      channel,
+      channelType,
+      reason,
+    });
+    return { handled: true, woke: 0, skipReason: reason };
+  }
 
   const claimed = await claimSlackMentionEvent(eventId);
-  if (!claimed) return { handled: true, woke: 0, duplicate: true };
+  if (!claimed) {
+    console.info("slack_event_skip", {
+      eventId,
+      eventType,
+      channel,
+      reason: "duplicate_event",
+    });
+    return { handled: true, woke: 0, duplicate: true, skipReason: "duplicate_event" };
+  }
 
   const teamId = str(envelope.team_id);
   const speakerId = str(event.user);
   const text = typeof event.text === "string" ? event.text : "";
   const mentionedIds = extractMentionedUserIds(text, event.blocks);
-  const channel = str(event.channel);
-  // message.im arrives as type=message with channel_type=im. Do not infer IM
-  // from a D-prefix alone; only the Staffpass app's actual event may wake.
-  const isDirectMessage = eventType === "message" && str(event.channel_type) === "im";
+  const isDirectMessage = eventType === "message" && channelType === "im";
+
   const targets = await resolveWakeTargets({
     eventType,
     mentionedIds,
@@ -345,11 +389,32 @@ export async function processSlackMentionEnvelope(
     channelId: channel,
     isDirectMessage,
   });
-  if (!targets.length) return { handled: true, woke: 0 };
+
+  if (!targets.length) {
+    const reason = isDirectMessage
+      ? "im_no_route_or_self"
+      : mentionedIds.length
+        ? "mentioned_ids_not_bound"
+        : "no_wake_targets";
+    console.info("slack_event_skip", {
+      eventId,
+      eventType,
+      channel,
+      channelType,
+      isDirectMessage,
+      teamId,
+      speakerId,
+      mentionedCount: mentionedIds.length,
+      reason,
+    });
+    return { handled: true, woke: 0, skipReason: reason };
+  }
 
   const ts = str(event.ts);
   const threadTs = str(event.thread_ts) || null;
   let woke = 0;
+  const trigger = isDirectMessage ? "internal_im" : "mention";
+
   for (const target of targets) {
     const payload: SlackWakePayload = {
       channel,
@@ -362,9 +427,21 @@ export async function processSlackMentionEnvelope(
       employeeId: target.employeeId,
       eventId,
     };
-    await postWake(target, payload, isDirectMessage ? "internal_im" : "mention");
+    await postWake(target, payload, trigger);
     if (target.wakeWebhookUrl?.trim()) woke += 1;
   }
+
+  console.info("slack_event_wake_complete", {
+    eventId,
+    eventType,
+    channel,
+    channelType,
+    trigger,
+    targetCount: targets.length,
+    woke,
+    skippedNoWebhook: targets.length - woke,
+  });
+
   return { handled: true, woke };
 }
 
