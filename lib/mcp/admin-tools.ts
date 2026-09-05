@@ -1,10 +1,14 @@
 /**
  * Staffpass Admin MCP tools (separate mouth from employee badge MCP).
- * All tools are always_human. Do not mix with staffpass_whoami / invoke / poll / health.
+ * Most tools are always_human. Do not mix with staffpass_whoami / invoke / poll / health.
+ * setup.slackStatus is a read-only diagnostic tool that does not require approval.
  */
 import type { McpToolDef } from "@/lib/mcp/tools";
 import type { ResolvedAdminCredential } from "@/lib/auth/admin-credential";
-import { getApprovalById, getBinding, getEmployee } from "@/lib/data";
+import { getApprovalById, getBinding, getEmployee, listEmployees } from "@/lib/data";
+import { listConversationAdapters } from "@/lib/data/conversation-adapters";
+import { countSlackImRoutesByOrg } from "@/lib/data/slack-im-routes";
+import { resolveOrgSlackBotToken } from "@/lib/slack/bot-token";
 import { queueAdminTool } from "@/lib/admin-mcp/queue";
 import { parseAdminFulfillment } from "@/lib/admin-mcp/fulfill-admin";
 import { ADMIN_MCP_TOOL_NAMES } from "@/lib/mcp/admin-public";
@@ -127,6 +131,16 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
       additionalProperties: true,
     },
   },
+  {
+    name: "setup.slackStatus",
+    description:
+      "Diagnose Slack integration status for this org (read-only, no approval required). Returns bot token presence, auth.test result, conversation adapter status, IM routes count, and employee posting_as settings. Use before guiding humans through Slack setup. The nextStepJa field indicates the next human action. Refer to docs/tenant-slack-kickoff-rail.md for the full RAIL.",
+    inputSchema: {
+      type: "object",
+      properties: {},
+      additionalProperties: false,
+    },
+  },
 ];
 
 function toolResult(data: unknown, isError = false) {
@@ -152,6 +166,128 @@ export function isAdminMcpToolName(name: string): boolean {
 
 export function adminToolsAlwaysHuman(): boolean {
   return true;
+}
+
+const SLACK_AUTH_TEST_TIMEOUT_MS = 5_000;
+
+type SlackAuthTestResult = {
+  ok: boolean;
+  bot_id?: string;
+  user_id?: string;
+  team_id?: string;
+  error?: string;
+};
+
+async function slackAuthTest(token: string): Promise<SlackAuthTestResult> {
+  if (!token) {
+    return { ok: false, error: "token_missing" };
+  }
+  try {
+    const response = await fetch("https://slack.com/api/auth.test", {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/x-www-form-urlencoded",
+      },
+      signal: AbortSignal.timeout(SLACK_AUTH_TEST_TIMEOUT_MS),
+    });
+    const body = (await response.json().catch(() => ({}))) as SlackAuthTestResult;
+    return body;
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : "auth_test_failed" };
+  }
+}
+
+type SlackStatusResult = {
+  ok: boolean;
+  botTokenPresent: boolean;
+  authTest: SlackAuthTestResult | null;
+  adapterEnabled: boolean;
+  adapterLabel: string | null;
+  imRoutesCount: number;
+  employeePostingAsBot: number;
+  employeePostingAsUser: number;
+  issues: string[];
+  nextStepJa: string;
+};
+
+async function runSlackStatusDiagnose(
+  cred: ResolvedAdminCredential
+): Promise<{ content: Array<{ type: "text"; text: string }>; structuredContent?: unknown; isError?: boolean }> {
+  const issues: string[] = [];
+
+  const botToken = await resolveOrgSlackBotToken(cred.orgId);
+  const botTokenPresent = Boolean(botToken);
+
+  let authTest: SlackAuthTestResult | null = null;
+  if (botTokenPresent) {
+    authTest = await slackAuthTest(botToken);
+    if (!authTest.ok) {
+      issues.push(`auth.test 失敗: ${authTest.error || "unknown"}`);
+    }
+  } else {
+    issues.push("Bot Token が設定されていません");
+  }
+
+  const adapters = await listConversationAdapters(cred.orgId);
+  const slackAdapter = adapters.find((a) => a.surface === "slack");
+  const adapterEnabled = slackAdapter?.enabled ?? false;
+  const adapterLabel = slackAdapter?.label ?? null;
+  if (!adapterEnabled) {
+    issues.push("Slack 会話アダプタが無効です");
+  }
+
+  const imRoutesCount = await countSlackImRoutesByOrg(cred.orgId);
+
+  const employees = await listEmployees(cred.orgId);
+  let postingAsBot = 0;
+  let postingAsUser = 0;
+  for (const emp of employees) {
+    if (emp.status !== "active") continue;
+    const posting = emp.postingAs;
+    if (posting === "bot") postingAsBot++;
+    else if (posting === "user") postingAsUser++;
+    else postingAsBot++;
+  }
+  if (postingAsUser > 0) {
+    issues.push(
+      `${postingAsUser}人の社員が posting_as: user です。Bot DMへの返信には bot が必要です`
+    );
+  }
+
+  let nextStepJa = "Slack 設定は完了しています。";
+  if (!botTokenPresent) {
+    nextStepJa =
+      "Slack Bot Token (xoxb-...) をダッシュボード「設定 → 会話アダプタ → Slack」に登録してください。";
+  } else if (authTest && !authTest.ok) {
+    nextStepJa = `Bot Token の認証に失敗しました (${authTest.error})。トークンを再取得し、ダッシュボードで更新してください。`;
+  } else if (!adapterEnabled) {
+    nextStepJa = "ダッシュボード「設定 → 会話アダプタ → Slack」でアダプタを有効にしてください。";
+  } else if (imRoutesCount === 0) {
+    nextStepJa =
+      "チャネル分類を設定してください。内部1:1には channels.classify で employeeId を指定します。詳細: docs/tenant-slack-kickoff-rail.md";
+  } else if (postingAsUser > 0) {
+    nextStepJa = `posting_as を bot に変更してください。User token では Bot DM が見えません。`;
+  }
+
+  const result: SlackStatusResult = {
+    ok: issues.length === 0,
+    botTokenPresent,
+    authTest,
+    adapterEnabled,
+    adapterLabel,
+    imRoutesCount,
+    employeePostingAsBot: postingAsBot,
+    employeePostingAsUser: postingAsUser,
+    issues,
+    nextStepJa,
+  };
+
+  return {
+    content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+    structuredContent: result,
+    isError: false,
+  };
 }
 
 export async function callAdminMcpTool(
@@ -223,6 +359,10 @@ export async function callAdminMcpTool(
         true
       );
     }
+  }
+
+  if (name === "setup.slackStatus") {
+    return runSlackStatusDiagnose(cred);
   }
 
   let queuedArgs = { ...args };
