@@ -73,14 +73,13 @@ export async function handleTelegramChannelUpdate(
       return { processed: true, ignored: true };
     }
     const match = /^(a|r|e):([A-Za-z0-9_-]{8,32})$/.exec(query.data || "");
-    const approval = match ? await getApprovalByTelegramRef(match[2]) : null;
+    const approval = match ? await getApprovalByTelegramRef(match[2], channel.orgId) : null;
     const delivery = approval
       ? await getNotificationDelivery({ approvalId: approval.id, channelId: channel.id })
       : null;
     const deliveryOk =
       Boolean(match) &&
       Boolean(approval) &&
-      approval!.orgId === channel.orgId &&
       approval!.status === "pending" &&
       delivery?.externalMessageId === String(query.message?.message_id ?? "");
     if (!deliveryOk) {

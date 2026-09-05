@@ -53,11 +53,11 @@ export async function POST(req: Request, ctx: { params: Promise<{ ref: string }>
 
     if (event.type === "postback") {
       const match = /^(a|r|e):([A-Za-z0-9_-]{8,32})$/.exec(event.postback?.data || "");
-      const approval = match ? await getApprovalByTelegramRef(match[2]) : null;
+      const approval = match ? await getApprovalByTelegramRef(match[2], channel.orgId) : null;
       const delivery = approval
         ? await getNotificationDelivery({ approvalId: approval.id, channelId: channel.id })
         : null;
-      if (!match || !approval || !delivery || approval.orgId !== channel.orgId || approval.status !== "pending") {
+      if (!match || !approval || !delivery || approval.status !== "pending") {
         if (event.replyToken) await sendLineText(channel, "対象は処理済みか見つかりません。", event.replyToken);
         continue;
       }
