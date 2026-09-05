@@ -22,21 +22,18 @@ export async function resolveConversationToken(input: {
   orgId: string;
   employeeId?: string;
   postingAs?: PostingAs | string | null;
-  channel?: string;
 }): Promise<{ token: string; effectivePostingAs: PostingAs } | { error: "slack_identity_unbound" }> {
   const requestedPostingAs = normalizePostingAs(input.postingAs);
-  const forceBotForDm = isSlackDmChannel(input.channel);
-  const effectivePostingAs = forceBotForDm ? "bot" : requestedPostingAs;
 
-  if (effectivePostingAs === "user") {
+  if (requestedPostingAs === "user") {
     const employeeId = input.employeeId?.trim() || "";
     if (!employeeId) return { error: "slack_identity_unbound" };
     const userToken = await getLinkedSlackUserToken(employeeId);
     if (!userToken) return { error: "slack_identity_unbound" };
-    return { token: userToken, effectivePostingAs };
+    return { token: userToken, effectivePostingAs: requestedPostingAs };
   }
   const botToken = await resolveOrgSlackBotToken(input.orgId);
-  return { token: botToken, effectivePostingAs };
+  return { token: botToken, effectivePostingAs: requestedPostingAs };
 }
 
 function mapSlackApiError(error: string | undefined, httpStatus: number): string {
@@ -139,7 +136,6 @@ export async function postConversationMessage(input: {
     orgId: input.orgId,
     employeeId: input.employeeId,
     postingAs: input.postingAs,
-    channel: dest,
   });
   if ("error" in resolved) return { ok: false, error: resolved.error };
   const token = resolved.token;
@@ -155,21 +151,52 @@ export async function postConversationMessage(input: {
     return { ok: true, delivery: "slack", channel: posted.channel, ts: posted.ts };
   }
 
-  const canRetryWithOpen =
+  // Path A app DM retry: When user token gets channel_not_found on a DM channel,
+  // fall back to bot token with conversations.open. User tokens cannot see
+  // bot↔human app DMs (Staffpass app DM), but bot tokens can open/post to them.
+  // Path B human↔human DMs succeed with user token directly (no retry needed).
+  const isUserTokenAttempt = resolved.effectivePostingAs === "user";
+  const canRetryWithBotForAppDm =
     posted.rawError === "channel_not_found" &&
     isSlackDmChannel(dest) &&
+    isUserTokenAttempt &&
     input.slackUserId?.trim();
 
-  if (!canRetryWithOpen) {
+  if (!canRetryWithBotForAppDm) {
+    // For bot token channel_not_found on DM, still try conversations.open with bot
+    const canRetryBotWithOpen =
+      posted.rawError === "channel_not_found" &&
+      isSlackDmChannel(dest) &&
+      !isUserTokenAttempt &&
+      input.slackUserId?.trim();
+
+    if (canRetryBotWithOpen) {
+      const openResult = await openSlackConversation(token, input.slackUserId!.trim());
+      if (!openResult.ok) {
+        return { ok: false, error: posted.error };
+      }
+      const retried = await postSlackMessage(token, openResult.channelId, text, input.threadTs);
+      if (retried.ok) {
+        return { ok: true, delivery: "slack", channel: retried.channel, ts: retried.ts };
+      }
+      return { ok: false, error: retried.error };
+    }
+
     return { ok: false, error: posted.error };
   }
 
-  const openResult = await openSlackConversation(token, input.slackUserId!.trim());
+  // Fall back to bot token for Path A app DM
+  const botToken = await resolveOrgSlackBotToken(input.orgId);
+  if (!botToken) {
+    return { ok: false, error: posted.error };
+  }
+
+  const openResult = await openSlackConversation(botToken, input.slackUserId!.trim());
   if (!openResult.ok) {
     return { ok: false, error: posted.error };
   }
 
-  const retried = await postSlackMessage(token, openResult.channelId, text, input.threadTs);
+  const retried = await postSlackMessage(botToken, openResult.channelId, text, input.threadTs);
   if (retried.ok) {
     return { ok: true, delivery: "slack", channel: retried.channel, ts: retried.ts };
   }
