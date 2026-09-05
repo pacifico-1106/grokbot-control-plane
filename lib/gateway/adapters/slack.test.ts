@@ -246,7 +246,7 @@ describe("Slack conversation adapter", () => {
     expect(result).toEqual({ ok: true, delivery: "stub" });
   });
 
-  test("forces bot token for DM channels even when postingAs=user", async () => {
+  test("Path B: human DM with postingAs=user uses user token directly", async () => {
     await upsertConversationAdapter({
       orgId: DEMO_ORG.id,
       surface: "slack",
@@ -273,7 +273,63 @@ describe("Slack conversation adapter", () => {
     let auth = "";
     globalThis.fetch = (async (_input, init) => {
       auth = String((init?.headers as Record<string, string> | undefined)?.authorization || "");
-      return Response.json({ ok: true, channel: "D0BT659Q8KZ", ts: "1503435956.000247" });
+      return Response.json({ ok: true, channel: "D0BSWG1804F", ts: "1503435956.000247" });
+    }) as typeof fetch;
+    try {
+      const result = await postConversationMessage({
+        orgId: DEMO_ORG.id,
+        employeeId: emp.id,
+        postingAs: "user",
+        channel: "D0BSWG1804F",
+        text: "human DM reply as user",
+      });
+      expect(result.ok).toBe(true);
+      expect(auth).toBe("Bearer xoxp-user-dm");
+    } finally {
+      emp.allowedAccounts = previousAccounts;
+      emp.postingAs = previousPosting;
+      await revokeEmployeeSlackIdentity({ employeeId: emp.id, orgId: DEMO_ORG.id });
+    }
+  });
+
+  test("Path A: app DM with postingAs=user falls back to bot on channel_not_found", async () => {
+    await upsertConversationAdapter({
+      orgId: DEMO_ORG.id,
+      surface: "slack",
+      enabled: true,
+      secrets: { botToken: "xoxb-bot-dm" },
+    });
+    const emp = getRuntimeEmployees().find((item) => item.id === "emp_comm");
+    if (!emp) throw new Error("missing emp_comm");
+    const previousAccounts = emp.allowedAccounts;
+    const previousPosting = emp.postingAs;
+    emp.allowedAccounts = [
+      ...(emp.allowedAccounts ?? []),
+      { service: "slack", accountId: "U_APP_DM_USER" },
+    ];
+    emp.postingAs = "user";
+    await bindEmployeeSlackIdentity({
+      employeeId: emp.id,
+      orgId: DEMO_ORG.id,
+      slackUserId: "U_APP_DM_USER",
+      slackTeamId: "T_DEMO",
+      displayName: "App DMユーザー",
+      userToken: "xoxp-user-app-dm",
+    });
+    let callCount = 0;
+    const auths: string[] = [];
+    const urls: string[] = [];
+    globalThis.fetch = (async (input, init) => {
+      callCount++;
+      urls.push(String(input));
+      auths.push(String((init?.headers as Record<string, string> | undefined)?.authorization || ""));
+      if (String(input).includes("chat.postMessage") && callCount === 1) {
+        return Response.json({ ok: false, error: "channel_not_found" });
+      }
+      if (String(input).includes("conversations.open")) {
+        return Response.json({ ok: true, channel: { id: "D_OPENED" } });
+      }
+      return Response.json({ ok: true, channel: "D_OPENED", ts: "1503435956.000247" });
     }) as typeof fetch;
     try {
       const result = await postConversationMessage({
@@ -282,9 +338,14 @@ describe("Slack conversation adapter", () => {
         postingAs: "user",
         channel: "D0BT659Q8KZ",
         text: "app DM reply",
+        slackUserId: "U_COUNTERPART",
       });
       expect(result.ok).toBe(true);
-      expect(auth).toBe("Bearer xoxb-bot-dm");
+      expect(callCount).toBe(3);
+      expect(auths[0]).toBe("Bearer xoxp-user-app-dm");
+      expect(urls[1]).toContain("conversations.open");
+      expect(auths[1]).toBe("Bearer xoxb-bot-dm");
+      expect(auths[2]).toBe("Bearer xoxb-bot-dm");
     } finally {
       emp.allowedAccounts = previousAccounts;
       emp.postingAs = previousPosting;
@@ -292,7 +353,47 @@ describe("Slack conversation adapter", () => {
     }
   });
 
-  test("retries with conversations.open when channel_not_found on DM", async () => {
+  test("unbound postingAs=user on DM fails closed without slackUserId", async () => {
+    const emp = getRuntimeEmployees().find((item) => item.id === "emp_comm");
+    if (!emp) throw new Error("missing emp_comm");
+    const previousAccounts = emp.allowedAccounts;
+    const previousPosting = emp.postingAs;
+    emp.allowedAccounts = [
+      ...(emp.allowedAccounts ?? []),
+      { service: "slack", accountId: "U_UNBOUND" },
+    ];
+    emp.postingAs = "user";
+    await bindEmployeeSlackIdentity({
+      employeeId: emp.id,
+      orgId: DEMO_ORG.id,
+      slackUserId: "U_UNBOUND",
+      slackTeamId: "T_DEMO",
+      displayName: "Unbound user",
+      userToken: "xoxp-unbound",
+    });
+    let callCount = 0;
+    globalThis.fetch = (async () => {
+      callCount++;
+      return Response.json({ ok: false, error: "channel_not_found" });
+    }) as typeof fetch;
+    try {
+      const result = await postConversationMessage({
+        orgId: DEMO_ORG.id,
+        employeeId: emp.id,
+        postingAs: "user",
+        channel: "D_NO_USERID",
+        text: "no slackUserId provided",
+      });
+      expect(result).toEqual({ ok: false, error: "channel_not_found" });
+      expect(callCount).toBe(1);
+    } finally {
+      emp.allowedAccounts = previousAccounts;
+      emp.postingAs = previousPosting;
+      await revokeEmployeeSlackIdentity({ employeeId: emp.id, orgId: DEMO_ORG.id });
+    }
+  });
+
+  test("bot posting retries with conversations.open when channel_not_found on DM", async () => {
     await upsertConversationAdapter({
       orgId: "org_retry_open",
       surface: "slack",
@@ -316,6 +417,7 @@ describe("Slack conversation adapter", () => {
     }) as typeof fetch;
     const result = await postConversationMessage({
       orgId: "org_retry_open",
+      postingAs: "bot",
       channel: "D_STALE",
       text: "retry message",
       slackUserId: "U_COUNTERPART",
