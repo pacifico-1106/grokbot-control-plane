@@ -10,10 +10,15 @@
  * SQL: 20260830_slack_mention_ingress.sql と 20260903_slack_internal_im_ingress.sql を適用。
  *
  * Slack の 3s 制限に当てないよう、署名検証と url_verification だけ同期し、
- * claim + wake は after() で HTTP 200 の後に回す。
+ * claim + wake は waitUntil() で HTTP 200 返却後も isolate freeze まで確実に実行。
+ *
+ * Note: Next.js の after() は Vercel serverless 上で isolate freeze により途中終了
+ * するケースが報告されているため、@vercel/functions の waitUntil を使用。
+ * waitUntil はレスポンス送信後も isolate が freeze されるまで確実に実行される。
  */
 
-import { after, NextResponse } from "next/server";
+import { waitUntil } from "@vercel/functions";
+import { NextResponse } from "next/server";
 import {
   acknowledgeSlackEventsRequest,
   processSlackMentionEnvelope,
@@ -31,13 +36,34 @@ export async function POST(req: Request) {
   });
   if (result.envelope) {
     const envelope = result.envelope;
-    after(async () => {
-      try {
-        await processSlackMentionEnvelope(envelope);
-      } catch (error) {
-        console.error("slack_events_handle_failed", error);
-      }
+    const eventId = envelope.event_id || "unknown";
+    const eventType = envelope.event?.type || "unknown";
+    console.info("slack_event_received", {
+      eventId,
+      eventType,
+      channelType: envelope.event?.channel_type,
+      channel: envelope.event?.channel,
     });
+    waitUntil(
+      (async () => {
+        try {
+          const outcome = await processSlackMentionEnvelope(envelope);
+          console.info("slack_event_processed", {
+            eventId,
+            eventType,
+            handled: outcome.handled,
+            woke: outcome.woke,
+            duplicate: outcome.duplicate,
+          });
+        } catch (error) {
+          console.error("slack_events_handle_failed", {
+            eventId,
+            eventType,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      })()
+    );
   }
   return NextResponse.json(result.body, { status: result.status });
 }

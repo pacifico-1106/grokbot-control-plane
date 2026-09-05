@@ -17,6 +17,7 @@ import { DEMO_ORG, getRuntimeEmployees } from "@/lib/demo-data";
 import {
   acknowledgeSlackEventsRequest,
   handleSlackEventsRequest,
+  processSlackMentionEnvelope,
   setSlackMentionClaimInsertForTests,
 } from "@/lib/slack/mention-ingress";
 
@@ -624,6 +625,91 @@ describe("Slack mention ingress", () => {
       expect(rows[0].grokBotAgentId).toBeTruthy();
       expect(rows[0].wakeWebhookUrl).toBe(WAKE_URL);
       expect(rows[0].hasWakeWebhook).toBe(true);
+    } finally {
+      await restore();
+    }
+  });
+
+  test("skipReason is returned for bot_message subtype", async () => {
+    process.env.SLACK_SIGNING_SECRET = SIGNING_SECRET;
+    const outcome = await processSlackMentionEnvelope({
+      type: "event_callback",
+      team_id: TEAM,
+      event_id: `Ev_bot_${Date.now()}`,
+      event: {
+        type: "message",
+        subtype: "bot_message",
+        user: SPEAKER,
+        text: "bot message",
+        ts: "1787911800.000030",
+        channel: CHANNEL,
+      },
+    });
+    expect(outcome.handled).toBe(true);
+    expect(outcome.woke).toBe(0);
+    expect(outcome.skipReason).toBe("ignored_subtype:bot_message");
+  });
+
+  test("skipReason is returned for unbound mentions", async () => {
+    process.env.SLACK_SIGNING_SECRET = SIGNING_SECRET;
+    const outcome = await processSlackMentionEnvelope({
+      type: "event_callback",
+      team_id: TEAM,
+      event_id: `Ev_skip_unbound_${Date.now()}`,
+      event: {
+        type: "message",
+        user: SPEAKER,
+        text: "こんにちは <@U_STRANGER>",
+        ts: "1787911800.000031",
+        channel: CHANNEL,
+      },
+    });
+    expect(outcome.handled).toBe(true);
+    expect(outcome.woke).toBe(0);
+    expect(outcome.skipReason).toBe("mentioned_ids_not_bound");
+  });
+
+  test("skipReason is returned for IM without route", async () => {
+    process.env.SLACK_SIGNING_SECRET = SIGNING_SECRET;
+    await deleteSlackImEmployeeRoute({ orgId: DEMO_ORG.id, slackChannelId: UNKNOWN_IM });
+    const outcome = await processSlackMentionEnvelope({
+      type: "event_callback",
+      team_id: TEAM,
+      event_id: `Ev_skip_im_${Date.now()}`,
+      event: {
+        type: "message",
+        channel_type: "im",
+        user: SPEAKER,
+        text: "no route IM",
+        ts: "1787911800.000032",
+        channel: UNKNOWN_IM,
+      },
+    });
+    expect(outcome.handled).toBe(true);
+    expect(outcome.woke).toBe(0);
+    expect(outcome.skipReason).toBe("im_no_route_or_self");
+  });
+
+  test("skipReason is undefined on successful wake", async () => {
+    process.env.SLACK_SIGNING_SECRET = SIGNING_SECRET;
+    const { restore } = await bindAndo();
+    mockWake();
+    try {
+      const outcome = await processSlackMentionEnvelope({
+        type: "event_callback",
+        team_id: TEAM,
+        event_id: `Ev_success_${Date.now()}`,
+        event: {
+          type: "message",
+          user: SPEAKER,
+          text: `<@${BOUND_USER}> test`,
+          ts: "1787911800.000033",
+          channel: CHANNEL,
+        },
+      });
+      expect(outcome.handled).toBe(true);
+      expect(outcome.woke).toBe(1);
+      expect(outcome.skipReason).toBeUndefined();
     } finally {
       await restore();
     }
