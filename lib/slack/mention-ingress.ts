@@ -239,6 +239,15 @@ function shouldIgnoreEvent(event: SlackEvent): boolean {
   return false;
 }
 
+type WakeTargetsResult = {
+  targets: SlackMentionTarget[];
+  imSkipReason?: "im_no_route" | "im_self_skip";
+  imRouteContext?: {
+    orgId?: string;
+    employeeId?: string;
+  };
+};
+
 async function resolveWakeTargets(input: {
   eventType: string;
   mentionedIds: string[];
@@ -247,7 +256,7 @@ async function resolveWakeTargets(input: {
   channelId: string;
   isDirectMessage: boolean;
   userTokenAuth: SlackAuthorization | null;
-}): Promise<SlackMentionTarget[]> {
+}): Promise<WakeTargetsResult> {
   if (input.isDirectMessage) {
     let target: SlackMentionTarget | null = null;
 
@@ -270,15 +279,21 @@ async function resolveWakeTargets(input: {
       });
     }
 
-    if (!target) return [];
+    if (!target) {
+      return { targets: [], imSkipReason: "im_no_route" };
+    }
     // Self-skip: speaker is the bound employee
     if (
       target.slackUserId &&
       target.slackUserId.toUpperCase() === input.speakerId.toUpperCase()
     ) {
-      return [];
+      return {
+        targets: [],
+        imSkipReason: "im_self_skip",
+        imRouteContext: { orgId: target.orgId, employeeId: target.employeeId },
+      };
     }
-    return [target];
+    return { targets: [target] };
   }
   const mentioned = await getEmployeesBySlackUserIds(input.mentionedIds, input.teamId);
   const speakerRows = input.speakerId
@@ -290,16 +305,15 @@ async function resolveWakeTargets(input: {
   );
 
   if (input.eventType === "app_mention") {
-    if (others.length) return others;
-    if (mentioned.length) return mentioned;
+    if (others.length) return { targets: others };
+    if (mentioned.length) return { targets: mentioned };
     const teamLinked = await listLinkedSlackIdentitiesForTeam(input.teamId || null);
-    if (teamLinked.length === 1) return teamLinked;
-    return [];
+    if (teamLinked.length === 1) return { targets: teamLinked };
+    return { targets: [] };
   }
 
-  // Own loop: message from a bound identity that does not mention another bound identity.
-  if (speakerBound && others.length === 0) return [];
-  return others;
+  if (speakerBound && others.length === 0) return { targets: [] };
+  return { targets: others };
 }
 
 async function postWake(
@@ -482,7 +496,7 @@ export async function processSlackMentionEnvelope(
     eventType === "message" &&
     (channelType === "im" || channelLooksLikeIm);
 
-  const targets = await resolveWakeTargets({
+  const wakeResult = await resolveWakeTargets({
     eventType,
     mentionedIds,
     teamId,
@@ -491,10 +505,13 @@ export async function processSlackMentionEnvelope(
     isDirectMessage,
     userTokenAuth,
   });
+  const targets = wakeResult.targets;
 
   if (!targets.length) {
     const reason = isDirectMessage
-      ? "im_no_route_or_self"
+      ? wakeResult.imSkipReason === "im_self_skip"
+        ? "im_self_skip"
+        : "im_no_route_or_self"
       : mentionedIds.length
         ? "mentioned_ids_not_bound"
         : "no_wake_targets";
@@ -512,6 +529,38 @@ export async function processSlackMentionEnvelope(
       authsSummary: summarizeAuthorizations(envelope.authorizations),
       reason,
     });
+
+    if (isDirectMessage && wakeResult.imSkipReason) {
+      const summaryMap: Record<string, string> = {
+        im_no_route: "IM起動スキップ: im_no_route",
+        im_self_skip: "IM起動スキップ: im_self_skip",
+      };
+      const authsSummary = (envelope.authorizations || []).map((a) => ({
+        is_bot: a.is_bot,
+        user_id: a.user_id,
+      }));
+      appendAuditEvent({
+        orgId: wakeResult.imRouteContext?.orgId ?? null,
+        employeeId: wakeResult.imRouteContext?.employeeId ?? null,
+        credentialId: null,
+        action: "slack.im_wake_skipped",
+        purpose: "slack.internal_im",
+        summary: summaryMap[wakeResult.imSkipReason] ?? `IM起動スキップ: ${wakeResult.imSkipReason}`,
+        metadata: {
+          reason: wakeResult.imSkipReason,
+          skipReason: reason,
+          channel,
+          channelType,
+          speakerId,
+          teamId,
+          userToken: Boolean(userTokenAuth),
+          eventId,
+          authsSummary,
+          channelLooksLikeIm,
+        },
+      }).catch(() => undefined);
+    }
+
     return {
       handled: true,
       woke: 0,

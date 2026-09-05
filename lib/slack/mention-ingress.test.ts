@@ -8,6 +8,7 @@ import {
 } from "@/lib/data/slack-identities";
 import { getBinding, updateWakeWebhook } from "@/lib/data";
 import { upsertOrgChannel } from "@/lib/data/directory";
+import { getRuntimeAudit } from "@/lib/demo-data";
 import {
   deleteSlackImEmployeeRoute,
   resolveSlackImWakeTarget,
@@ -1156,5 +1157,111 @@ describe("User-token message.im wake (SLICE B)", () => {
       await deleteSlackImEmployeeRoute({ orgId: DEMO_ORG.id, slackChannelId: HUMAN_DM });
       await restore();
     }
+  });
+});
+
+describe("IM wake skip audit events", () => {
+  test("IM skip (no route) writes audit event with im_no_route reason", async () => {
+    process.env.SLACK_SIGNING_SECRET = SIGNING_SECRET;
+    await deleteSlackImEmployeeRoute({ orgId: DEMO_ORG.id, slackChannelId: UNKNOWN_IM });
+    const auditBefore = getRuntimeAudit().length;
+    const result = await processSlackMentionEnvelope({
+      type: "event_callback",
+      team_id: TEAM,
+      event_id: `Ev_audit_noroute_${Date.now()}`,
+      event: {
+        type: "message",
+        channel_type: "im",
+        user: SPEAKER,
+        text: "no route IM audit test",
+        ts: "1787911800.000040",
+        channel: UNKNOWN_IM,
+      },
+    });
+    expect(result.handled).toBe(true);
+    expect(result.woke).toBe(0);
+    expect(result.skipReason).toBe("im_no_route_or_self");
+
+    const auditAfter = getRuntimeAudit();
+    const newEvents = auditAfter.slice(0, auditAfter.length - auditBefore);
+    const skipAudit = newEvents.find((e) => e.action === "slack.im_wake_skipped");
+    expect(skipAudit).toBeDefined();
+    expect(skipAudit?.purpose).toBe("slack.internal_im");
+    expect(skipAudit?.summary).toContain("IM起動スキップ");
+    expect(skipAudit?.summary).toContain("im_no_route");
+    const meta = skipAudit?.metadata as Record<string, unknown>;
+    expect(meta.reason).toBe("im_no_route");
+    expect(meta.channel).toBe(UNKNOWN_IM);
+    expect(meta.channelType).toBe("im");
+    expect(meta.speakerId).toBe(SPEAKER);
+    expect(meta.teamId).toBe(TEAM);
+    expect(meta.channelLooksLikeIm).toBe(true);
+  });
+
+  test("self-post skip writes audit event with im_self_skip reason", async () => {
+    process.env.SLACK_SIGNING_SECRET = SIGNING_SECRET;
+    const { emp, restore } = await bindAndo();
+    mockWake();
+    await configureInternalIm(emp.id);
+    const auditBefore = getRuntimeAudit().length;
+    try {
+      const result = await processSlackMentionEnvelope({
+        type: "event_callback",
+        team_id: TEAM,
+        event_id: `Ev_audit_selfskip_${Date.now()}`,
+        event: {
+          type: "message",
+          channel_type: "im",
+          user: BOUND_USER,
+          text: "自分の投稿 (audit)",
+          ts: "1787911800.000041",
+          channel: INTERNAL_IM,
+        },
+      });
+      expect(result.handled).toBe(true);
+      expect(result.woke).toBe(0);
+      expect(result.skipReason).toBe("im_self_skip");
+
+      const auditAfter = getRuntimeAudit();
+      const newEvents = auditAfter.slice(0, auditAfter.length - auditBefore);
+      const skipAudit = newEvents.find((e) => e.action === "slack.im_wake_skipped");
+      expect(skipAudit).toBeDefined();
+      expect(skipAudit?.purpose).toBe("slack.internal_im");
+      expect(skipAudit?.summary).toContain("im_self_skip");
+      const meta = skipAudit?.metadata as Record<string, unknown>;
+      expect(meta.reason).toBe("im_self_skip");
+      expect(meta.channel).toBe(INTERNAL_IM);
+      expect(meta.speakerId).toBe(BOUND_USER);
+      expect(skipAudit?.orgId).toBe(emp.orgId);
+      expect(skipAudit?.employeeId).toBe(emp.id);
+    } finally {
+      await deleteSlackImEmployeeRoute({ orgId: DEMO_ORG.id, slackChannelId: INTERNAL_IM });
+      await restore();
+    }
+  });
+
+  test("non-IM skip does NOT write im_wake_skipped audit event", async () => {
+    process.env.SLACK_SIGNING_SECRET = SIGNING_SECRET;
+    const auditBefore = getRuntimeAudit().length;
+    const result = await processSlackMentionEnvelope({
+      type: "event_callback",
+      team_id: TEAM,
+      event_id: `Ev_audit_nonIm_${Date.now()}`,
+      event: {
+        type: "message",
+        user: SPEAKER,
+        text: "こんにちは <@U_STRANGER>",
+        ts: "1787911800.000042",
+        channel: CHANNEL,
+      },
+    });
+    expect(result.handled).toBe(true);
+    expect(result.woke).toBe(0);
+    expect(result.skipReason).toBe("mentioned_ids_not_bound");
+
+    const auditAfter = getRuntimeAudit();
+    const newEvents = auditAfter.slice(0, auditAfter.length - auditBefore);
+    const skipAudit = newEvents.find((e) => e.action === "slack.im_wake_skipped");
+    expect(skipAudit).toBeUndefined();
   });
 });
