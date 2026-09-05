@@ -9,13 +9,22 @@
 - すべて `always_human` で、管理エージェントは自己承認できません。
 - ダッシュボードに権限編集UIはありません。更新も同じ `channels.classify` を使います。
 
-## 2つの経路
+## 2つの経路と投稿アイデンティティ
+
+SLICE B の目的は、AI社員が **人間として** 人対人会話で働けるようにすること。Bot mouth ではない。
+
+| 経路 | 対象 | Wake 方法 | 返信アイデンティティ |
+|------|------|-----------|---------------------|
+| **Path A** | Staffpass app DM | Bot message.im | **Bot トークン**（会社ボット） |
+| **Path B** | 人対人 DM / チャネル | User-token message.im | **人間アイデンティティ**（`posting_as=user`） |
 
 ### Path A: Staffpass app DM（Bot message.im）
 
 Slack の `message.im` Bot event は、Staffpass Slack アプリ自身とのDMのみに届きます。利用者が Slack の Staffpass アプリを開き、その Messages / App Home のDMへ投稿する経路です。そのDMの `D...` チャネルを `channels.classify` で社内分類し、起こす社員を1人指定してください。
 
-### Path B: 人対人DM（User-token message.im）
+**返信**: Path A は Staffpass bot との会話なので、bot トークン（xoxb）で返信します。PR #5 の bot-forced posting はこの経路のみに適用。
+
+### Path B: 人対人会話（User-token message.im）
 
 社員の user token で送信している人対人DMに Staffpass アプリは参加できないため、Bot event では見えません。しかし、社員が `im:history` スコープで Slack OAuth 認可を済ませ、Slack アプリ側で「Subscribe to events on behalf of users」の `message.im` を有効にすると、社員のユーザートークン経由で人対人DMのイベントを受信できます。
 
@@ -28,7 +37,19 @@ Slack の `message.im` Bot event は、Staffpass Slack アプリ自身とのDM�
 
 fail-closed: 1つでも条件を満たさなければ、何もしない（偽イベントや履歴ポーリングは作りません）。
 
+**返信**: Path B は人間↔人間の会話なので、`posting_as=user` 設定時は社員の Slack OAuth トークン（xoxp）で返信します。Bot トークン強制は行いません。これにより安藤は上司との1:1で人間として返信できます。
+
 監査ログには `slack.user_token_im_wake` アクションで記録されます。
+
+### 安藤の活動範囲（SLICE B 後）
+
+Path B が有効になると、安藤は以下で Staffpass 権限（チャネル分類、オーディエンス、スコープ）に従って働けます:
+
+- **人対人 1:1 DM** — 上司との internal 分類済み DM
+- **社内チャネル** — internal 分類済みチャネル
+- **外部 Slack Connect チャネル** — shared_external 分類済みチャネル（egress 許可時）
+
+すべて人間アイデンティティ（`posting_as=user`）で投稿。
 
 参考:
 
@@ -52,7 +73,7 @@ Staffpass Slack アプリの設定で、次を追加します。
 Staffpass Slack アプリの設定で、次を追加します。
 
 1. **OAuth & Permissions** の User Token Scopes に以下を含める:
-   - `chat:write` — 投稿
+   - `chat:write` — 投稿（人間アイデンティティで返信）
    - `users:read` — ユーザー情報
    - `channels:read` — チャネル情報
    - `groups:read` — プライベートチャネル情報
@@ -68,8 +89,22 @@ Path B を有効にした後、既存のリンク済み社員の Slack 認可に
 2. Slack OAuth 画面で新しいスコープ（`im:history`）を確認して承認
 3. 認可完了後、その社員の人対人DMで Path B wake が動作
 
+### 社員バッジの posting_as 設定
+
+Path B で人間アイデンティティ返信を使うには、社員バッジの `posting_as` を `user` に設定:
+
+```
+employees.posting_as = 'user'
+```
+
+`posting_as=bot` の社員は Path B でも bot トークンで返信します（非推奨: 人対人会話で会社ボットが突然投稿する）。
+
 ### Socket Mode
 
 Socket Mode は Off のままにしてください。Event Subscriptions の HTTP webhook を使用します。
+
+### PR #5 との関係
+
+PR #5（force bot token for D… replies）は **Path A のみ** に適用。Path B の人対人 DM では bot 強制は行わず、`posting_as=user` 設定に従って人間アイデンティティで返信します。
 
 秘密値はチケット、チャット、PR本文へ貼りません。
