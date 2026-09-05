@@ -80,6 +80,16 @@ type SlackEnvelope = {
 };
 
 /**
+ * Safely check if is_bot is falsy (handles boolean false, string "false", undefined).
+ * Slack typically sends boolean, but defensive coercion handles edge cases.
+ */
+function isBotFalse(value: unknown): boolean {
+  if (value === false) return true;
+  if (value === "false") return true;
+  return false;
+}
+
+/**
  * Extract the first user-token authorization from the envelope.
  * User-token events have authorizations[].is_bot = false.
  * Returns null for bot-token events or missing authorizations.
@@ -90,11 +100,27 @@ function extractUserTokenAuthorization(
   const auths = envelope.authorizations;
   if (!auths || !Array.isArray(auths)) return null;
   for (const auth of auths) {
-    if (auth && auth.is_bot === false && auth.user_id) {
+    if (auth && isBotFalse(auth.is_bot) && auth.user_id) {
       return auth;
     }
   }
   return null;
+}
+
+/**
+ * Summarize authorizations for logging (redact full user_id).
+ */
+function summarizeAuthorizations(
+  auths: SlackAuthorization[] | undefined
+): string {
+  if (!auths || !Array.isArray(auths) || auths.length === 0) return "none";
+  return auths
+    .map((a) => {
+      const bot = a.is_bot === true ? "bot" : a.is_bot === false ? "user" : `is_bot=${a.is_bot}`;
+      const uid = a.user_id ? `${a.user_id.slice(0, 3)}...` : "no_uid";
+      return `${bot}:${uid}`;
+    })
+    .join(",");
 }
 
 export async function resolveSlackSigningSecret(): Promise<string> {
@@ -475,6 +501,7 @@ export async function processSlackMentionEnvelope(
       speakerId,
       mentionedCount: mentionedIds.length,
       userToken: Boolean(userTokenAuth),
+      authsSummary: summarizeAuthorizations(envelope.authorizations),
       reason,
     });
     return {
@@ -523,6 +550,7 @@ export async function processSlackMentionEnvelope(
     woke,
     skippedNoWebhook: targets.length - woke,
     userToken: Boolean(userTokenAuth),
+    authsSummary: summarizeAuthorizations(envelope.authorizations),
   });
 
   return { handled: true, woke, userToken: Boolean(userTokenAuth), isDirectMessage };
