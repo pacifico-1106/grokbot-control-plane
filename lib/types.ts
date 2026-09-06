@@ -731,3 +731,10 @@ export interface OrgIngressHandoffPolicy {
   updatedAt: string;
   updatedBy: "admin_mcp";
 }
+
+export type SealithTransferAuditMetadata = {
+  sealithTransferId?: string;
+  sealithTransferStatus?: "initiated" | "pending" | "ready" | "failed";
+  sealithMode?: "off" | "suggest" | "required";
+  sealithBlocked?: boolean;
+};
