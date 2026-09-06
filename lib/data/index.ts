@@ -157,4 +157,9 @@ export {
   getOrgIngressHandoffPolicy,
   setOrgIngressHandoffPolicy,
   resetDemoIngressHandoffPolicy,
+  getEmployeeIngressHandoffPolicy,
+  setEmployeeIngressHandoffPolicy,
+  getEffectiveIngressHandoffPolicy,
+  type IngressHandoffPolicySource,
+  type EffectiveIngressHandoffPolicy,
 } from "./ingress-handoff";

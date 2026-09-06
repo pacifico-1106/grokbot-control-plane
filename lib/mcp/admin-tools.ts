@@ -5,7 +5,14 @@
  */
 import type { McpToolDef } from "@/lib/mcp/tools";
 import type { ResolvedAdminCredential } from "@/lib/auth/admin-credential";
-import { getApprovalById, getBinding, getEmployee, listEmployees, getOrgIngressHandoffPolicy } from "@/lib/data";
+import {
+  getApprovalById,
+  getBinding,
+  getEmployee,
+  listEmployees,
+  getEffectiveIngressHandoffPolicy,
+  type IngressHandoffPolicySource,
+} from "@/lib/data";
 import { listConversationAdapters } from "@/lib/data/conversation-adapters";
 import {
   validateIngressHandoffPolicy,
@@ -150,23 +157,27 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
   {
     name: "ingressHandoff.get",
     description:
-      "Read the org ingress handoff policy (read-only, no approval required). Returns current policy with summaryJa and nextStepJa. Extends channels.classify / parties / risk_based / always_human patterns. Staffpass = act boundary; Sealith = encrypted file handoff; no round-trip masking.",
+      "Read ingress handoff policy (read-only, no approval required). Omit employeeId for org policy; include for AI社員ごとの設定. Returns effective policy + source layer (employee/org/default) + layers (employeeOverride/orgPolicy). Staffpass = act boundary; Sealith = encrypted file handoff; no round-trip masking.",
     inputSchema: {
       type: "object",
-      properties: {},
+      properties: {
+        employeeId: { type: "string", description: "Optional employee ID for per-employee lookup" },
+      },
       additionalProperties: false,
     },
   },
   {
     name: "ingressHandoff.patch",
     description:
-      "Patch the org ingress handoff policy after human approval (always_human). Full replace of rules array. First-match rule ordering. Admin cannot self-approve. Convenience default: body=full, attachment=meta, sealith=off. Tighten for external/sensitive via ordered rules.",
+      "Patch ingress handoff policy after human approval (always_human). Omit employeeId for org policy; include for AI社員ごとの設定. To clear employee override (inherit org), set clearOverride=true. Full replace of rules array. First-match rule ordering. Admin cannot self-approve. Convenience default: body=full, attachment=meta, sealith=off.",
     inputSchema: {
       type: "object",
       properties: {
+        employeeId: { type: "string", description: "Optional employee ID for per-employee override" },
+        clearOverride: { type: "boolean", description: "Set true to clear employee override and inherit org policy" },
         rules: {
           type: "array",
-          description: "Full replacement rules array (first match wins)",
+          description: "Full replacement rules array (first match wins). Omit when clearOverride=true.",
           items: {
             type: "object",
             properties: {
@@ -193,7 +204,6 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
         },
         jobId: { type: "string" },
       },
-      required: ["rules"],
       additionalProperties: false,
     },
   },
@@ -380,20 +390,53 @@ async function runSlackStatusDiagnose(
 
 type IngressHandoffGetResult = {
   ok: boolean;
-  policy: Awaited<ReturnType<typeof getOrgIngressHandoffPolicy>>;
+  policy: Awaited<ReturnType<typeof getEffectiveIngressHandoffPolicy>>["policy"];
+  source: IngressHandoffPolicySource;
+  layers: {
+    employeeOverride: Awaited<ReturnType<typeof getEffectiveIngressHandoffPolicy>>["employeeOverride"];
+    orgPolicy: Awaited<ReturnType<typeof getEffectiveIngressHandoffPolicy>>["orgPolicy"];
+  };
   summaryJa: string;
+  sourceJa: string;
   nextStepJa: string;
 };
 
+const SOURCE_JA: Record<IngressHandoffPolicySource, string> = {
+  employee: "AI社員オーバーライド",
+  org: "組織ポリシー",
+  default: "デフォルト（便利設定）",
+};
+
 async function runIngressHandoffGet(
-  cred: ResolvedAdminCredential
+  cred: ResolvedAdminCredential,
+  args: Record<string, unknown>
 ): Promise<{ content: Array<{ type: "text"; text: string }>; structuredContent?: unknown; isError?: boolean }> {
-  const policy = await getOrgIngressHandoffPolicy(cred.orgId);
+  const employeeId = typeof args.employeeId === "string" && args.employeeId.trim()
+    ? args.employeeId.trim()
+    : null;
+
+  if (employeeId) {
+    const employee = await getEmployee(employeeId, cred.orgId);
+    if (!employee) {
+      return toolResult(
+        { ok: false, code: "employee_not_found", message: "AI社員が見つかりません" },
+        true
+      );
+    }
+  }
+
+  const effective = await getEffectiveIngressHandoffPolicy(cred.orgId, employeeId);
   const result: IngressHandoffGetResult = {
     ok: true,
-    policy,
-    summaryJa: summarizeIngressHandoffPolicyJa(policy),
-    nextStepJa: nextStepIngressHandoffJa(policy),
+    policy: effective.policy,
+    source: effective.source,
+    layers: {
+      employeeOverride: effective.employeeOverride,
+      orgPolicy: effective.orgPolicy,
+    },
+    summaryJa: summarizeIngressHandoffPolicyJa(effective.policy),
+    sourceJa: SOURCE_JA[effective.source],
+    nextStepJa: nextStepIngressHandoffJa(effective.policy),
   };
   return {
     content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
@@ -478,21 +521,51 @@ export async function callAdminMcpTool(
   }
 
   if (name === "ingressHandoff.get") {
-    return runIngressHandoffGet(cred);
+    return runIngressHandoffGet(cred, args);
   }
 
   if (name === "ingressHandoff.patch") {
-    const validationResult = validateIngressHandoffPolicy({ rules: args.rules });
-    if (!validationResult.ok) {
-      return toolResult(
-        {
-          ok: false,
-          code: "validation_failed",
-          message: "ルールの検証に失敗しました",
-          errors: validationResult.errors,
-        },
-        true
-      );
+    const employeeId = typeof args.employeeId === "string" && args.employeeId.trim()
+      ? args.employeeId.trim()
+      : null;
+    const clearOverride = args.clearOverride === true;
+
+    if (employeeId) {
+      const employee = await getEmployee(employeeId, cred.orgId);
+      if (!employee) {
+        return toolResult(
+          { ok: false, code: "employee_not_found", message: "AI社員が見つかりません" },
+          true
+        );
+      }
+    }
+
+    if (clearOverride) {
+      if (!employeeId) {
+        return toolResult(
+          { ok: false, code: "clear_requires_employee", message: "オーバーライドのクリアはemployeeIdが必要です" },
+          true
+        );
+      }
+    } else {
+      if (!Array.isArray(args.rules) || args.rules.length === 0) {
+        return toolResult(
+          { ok: false, code: "rules_required", message: "rulesが必要です（clearOverride=true以外）" },
+          true
+        );
+      }
+      const validationResult = validateIngressHandoffPolicy({ rules: args.rules });
+      if (!validationResult.ok) {
+        return toolResult(
+          {
+            ok: false,
+            code: "validation_failed",
+            message: "ルールの検証に失敗しました",
+            errors: validationResult.errors,
+          },
+          true
+        );
+      }
     }
   }
 
@@ -538,8 +611,18 @@ export async function callAdminMcpTool(
   } else if (name === "link") {
     summary = `連携を人が確認します（${String(args.employeeId)}）`;
   } else if (name === "ingressHandoff.patch") {
+    const employeeId = typeof args.employeeId === "string" && args.employeeId.trim()
+      ? args.employeeId.trim()
+      : null;
+    const clearOverride = args.clearOverride === true;
     const rulesCount = Array.isArray(args.rules) ? args.rules.length : 0;
-    summary = `受信の渡し方ポリシーの更新を人が確認します（${rulesCount}ルール）`;
+    if (clearOverride && employeeId) {
+      summary = `AI社員の受信の渡し方オーバーライドをクリアして組織ポリシーを継承します`;
+    } else if (employeeId) {
+      summary = `AI社員ごとの受信の渡し方オーバーライドを設定します（${rulesCount}ルール）`;
+    } else {
+      summary = `組織の受信の渡し方ポリシーの更新を人が確認します（${rulesCount}ルール）`;
+    }
   }
 
   const queued = await queueAdminTool({

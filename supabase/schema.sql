@@ -92,6 +92,7 @@ create table if not exists employees (
   project_access jsonb not null default '{"mode":"company","projectIds":[]}'::jsonb,
   posting_as text not null default 'bot'
     check (posting_as in ('bot', 'user')),
+  ingress_handoff_policy jsonb,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -102,10 +103,14 @@ comment on column employees.project_access is
   'Badge project wall: {mode: company|selected|all, projectIds: string[]}. Default company = 会社全般 only.';
 comment on column employees.posting_as is
   'Conversation posting identity on the employee badge: bot = org xoxb adapter; user = OAuth-bound xoxp.';
+comment on column employees.ingress_handoff_policy is
+  'Optional per-employee ingress handoff policy override. Same shape as orgs.ingress_handoff_policy. NULL = inherit org policy. First-match rule ordering.';
 
 create index if not exists employees_org_idx on employees (org_id, status);
 create index if not exists employees_manager_idx on employees (org_id, manager_id)
   where manager_id is not null;
+create index if not exists employees_ingress_handoff_idx on employees (org_id)
+  where ingress_handoff_policy is not null;
 
 create or replace function public.employees_manager_same_org()
 returns trigger

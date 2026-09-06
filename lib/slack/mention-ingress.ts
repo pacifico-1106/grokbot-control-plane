@@ -17,7 +17,7 @@
  */
 
 import { appendAuditEvent } from "@/lib/data/audit";
-import { getOrgIngressHandoffPolicy } from "@/lib/data/ingress-handoff";
+import { getEffectiveIngressHandoffPolicy } from "@/lib/data/ingress-handoff";
 import { getOrgChannel } from "@/lib/data/directory";
 import { resolveIngressHandoffSync } from "@/lib/ingress-handoff/resolve";
 import { applyBodyMode } from "@/lib/ingress-handoff/apply";
@@ -624,15 +624,16 @@ export async function processSlackMentionEnvelope(
   let appliedText = text;
 
   if (orgId) {
-    const [policy, channelRecord] = await Promise.all([
-      getOrgIngressHandoffPolicy(orgId),
+    const employeeId = firstTarget?.employeeId || null;
+    const [effectivePolicy, channelRecord] = await Promise.all([
+      getEffectiveIngressHandoffPolicy(orgId, employeeId),
       getOrgChannel(orgId, "slack", channel),
     ]);
 
     const classification: ChannelClassification =
       channelRecord?.classification ?? "unknown";
 
-    const resolved = resolveIngressHandoffSync(policy, {
+    const resolved = resolveIngressHandoffSync(effectivePolicy.policy, {
       channelId: channel,
       classification,
       isIm: isDirectMessage,

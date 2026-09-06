@@ -11,6 +11,7 @@ import {
   issueEmployee,
   updateEmployeePolicy,
   setOrgIngressHandoffPolicy,
+  setEmployeeIngressHandoffPolicy,
 } from "@/lib/data";
 import { updateApprovalMetadata } from "@/lib/data/approvals";
 import { validateIngressHandoffPolicy } from "@/lib/ingress-handoff/validate";
@@ -353,10 +354,64 @@ async function fulfillIngressHandoff(
   approval: ApprovalRequest,
   args: Record<string, unknown>
 ): Promise<AdminFulfillment> {
+  const employeeId = typeof args.employeeId === "string" && args.employeeId.trim()
+    ? args.employeeId.trim()
+    : null;
+  const clearOverride = args.clearOverride === true;
+
+  if (clearOverride && employeeId) {
+    await setEmployeeIngressHandoffPolicy(employeeId, approval.orgId, null);
+    await appendAuditEvent({
+      orgId: approval.orgId,
+      employeeId,
+      credentialId: null,
+      action: "admin.ingressHandoff",
+      purpose: "admin.ingressHandoff",
+      summary: `AI社員の受信の渡し方オーバーライドをクリアしました（組織ポリシーを継承）`,
+      metadata: {
+        auditClass: ADMIN_AUDIT_CLASS,
+        approvalId: approval.id,
+        employeeId,
+        cleared: true,
+      },
+    });
+    return {
+      ok: true,
+      tool: "ingressHandoff.patch",
+      at: new Date().toISOString(),
+      employeeId,
+    };
+  }
+
   const validation = validateIngressHandoffPolicy({ rules: args.rules });
   if (!validation.ok) {
     throw new Error("invalid_ingress_handoff_policy");
   }
+
+  if (employeeId) {
+    const policy = await setEmployeeIngressHandoffPolicy(employeeId, approval.orgId, validation.policy);
+    await appendAuditEvent({
+      orgId: approval.orgId,
+      employeeId,
+      credentialId: null,
+      action: "admin.ingressHandoff",
+      purpose: "admin.ingressHandoff",
+      summary: `AI社員ごとの受信の渡し方オーバーライドを設定しました（${policy?.rules.length ?? 0}ルール）`,
+      metadata: {
+        auditClass: ADMIN_AUDIT_CLASS,
+        approvalId: approval.id,
+        employeeId,
+        rulesCount: policy?.rules.length ?? 0,
+      },
+    });
+    return {
+      ok: true,
+      tool: "ingressHandoff.patch",
+      at: new Date().toISOString(),
+      employeeId,
+    };
+  }
+
   const policy = await setOrgIngressHandoffPolicy(approval.orgId, validation.policy);
   await appendAuditEvent({
     orgId: approval.orgId,
@@ -364,7 +419,7 @@ async function fulfillIngressHandoff(
     credentialId: null,
     action: "admin.ingressHandoff",
     purpose: "admin.ingressHandoff",
-    summary: `受信の渡し方ポリシーを更新しました（${policy.rules.length}ルール）`,
+    summary: `組織の受信の渡し方ポリシーを更新しました（${policy.rules.length}ルール）`,
     metadata: {
       auditClass: ADMIN_AUDIT_CLASS,
       approvalId: approval.id,
