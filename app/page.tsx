@@ -4,6 +4,13 @@ import { BrandMark } from "@/components/BrandMark";
 import { EmployeeAvatar } from "@/components/employees/EmployeeAvatar";
 import { LegalLinks } from "@/components/LegalLinks";
 
+interface FaqItem {
+  q: string;
+  a: string;
+  href?: string;
+  linkLabel?: string;
+}
+
 const CONTROLS = [
   { icon: "01", title: "権限を分ける", body: "社員ごとに職務と操作範囲を限定。まとめる場合は全件承認に切り替えます。" },
   { icon: "02", title: "人が止める", body: "初期設定では人が見るまで進みません。自動にもできます。記録は残します。" },
@@ -17,7 +24,7 @@ const AGENTS = [
   { name: "その他のAI", status: "続々対応予定" },
 ];
 
-const FAQ = [
+const FAQ: FaqItem[] = [
   {
     q: "Staffpassとは何ですか？",
     a: "AI社員の社員証です。手足（Grok Bot など）に、許可・止め方・仕事の記録を付けます。禁止する製品ではなく、雇って説明できるようにする製品です。",
@@ -56,7 +63,9 @@ const FAQ = [
   },
   {
     q: "Sealithとは何ですか？",
-    a: "機密ファイル共有の仕組みです。ブラウザ内で暗号化し、誰に・何の目的で・いつまで渡すかを限って、あとから共有を止められます。StaffpassがAI社員の社員証なら、Sealithは原本ファイルの受け渡し口です。中小の多くはStaffpassだけで足ります。契約書や顧客名簿などをAIに触らせるときだけ足します。",
+    a: "機密ファイル共有の仕組みです。ブラウザ内で暗号化し、誰に・何の目的で・いつまで渡すかを限って、あとから共有を止められます。StaffpassがAI社員の社員証なら、Sealithは原本ファイルの受け渡し口です。中小企業の多くはStaffpassだけで足ります。契約書や顧客名簿などをAIに触らせるときだけ足します。",
+    href: "https://www.sealith.com/lp/ai-information-management",
+    linkLabel: "Sealithの説明を見る",
   },
 ];
 
@@ -240,6 +249,9 @@ export default function LandingPage() {
                   {item.a.split("\n\n").map((para) => (
                     <p key={para}>{para}</p>
                   ))}
+                  {item.href && (
+                    <Link href={item.href} className="text-sm text-[var(--accent-strong)] underline underline-offset-4" target="_blank" rel="noopener noreferrer">{item.linkLabel ?? "詳しく見る"}</Link>
+                  )}
                 </div>
               </details>
             ))}
