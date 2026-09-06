@@ -372,11 +372,11 @@ export function summarizeIngressHandoffPolicyJa(policy: OrgIngressHandoffPolicy)
 
 export function nextStepIngressHandoffJa(policy: OrgIngressHandoffPolicy): string {
   if (isDefaultIngressHandoffPolicy(policy)) {
-    return "デフォルトの便利設定です。外部/機密チャネルにはルールを追加してください。";
+    return "デフォルトの便利設定です。外部/機密チャネルにはルールを追加してください。AI社員ごとにオーバーライドも可能です。";
   }
   const hasSealithRequired = policy.rules.some((r) => r.sealith === "required");
   if (hasSealithRequired) {
-    return "Sealith必須ルールがあります。暗号化受け渡しの設定を確認してください。";
+    return "Sealith必須ルールがあります。暗号化受け渡しの設定を確認してください。AI社員ごとにオーバーライドも可能です。";
   }
-  return "ルール設定完了。チャネル分類と連動します。";
+  return "ルール設定完了。チャネル分類と連動します。AI社員ごとにオーバーライドも可能です。";
 }

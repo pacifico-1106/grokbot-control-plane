@@ -10,6 +10,7 @@ import { getBinding, updateWakeWebhook } from "@/lib/data";
 import { upsertOrgChannel } from "@/lib/data/directory";
 import {
   setOrgIngressHandoffPolicy,
+  setEmployeeIngressHandoffPolicy,
   resetDemoIngressHandoffPolicy,
 } from "@/lib/data/ingress-handoff";
 import type { OrgIngressHandoffPolicy } from "@/lib/types";
@@ -571,7 +572,7 @@ describe("Slack mention ingress", () => {
   test("missing teamId returns empty (fail-closed, H1 fix)", async () => {
     process.env.SLACK_SIGNING_SECRET = SIGNING_SECRET;
     const { restore } = await bindAndo();
-    const wake = mockWake();
+    mockWake();
     try {
       const rowsWithoutTeam = await getEmployeesBySlackUserIds([BOUND_USER], undefined);
       expect(rowsWithoutTeam.length).toBe(0);
@@ -1578,6 +1579,122 @@ describe("Ingress handoff policy evaluation", () => {
       expect(handoff.bodyMode).toBe("full");
       expect(handoff.attachmentMode).toBe("meta");
       expect(handoff.sealithHandoff).toBe("suggest");
+    } finally {
+      await restore();
+    }
+  });
+
+  test("employee override policy takes precedence over org policy", async () => {
+    process.env.SLACK_SIGNING_SECRET = SIGNING_SECRET;
+    const { emp, restore } = await bindAndo();
+    const wake = mockWake();
+
+    const orgPolicy: OrgIngressHandoffPolicy = {
+      version: 1,
+      rules: [
+        {
+          id: "ihr_org_full",
+          applyTo: "all",
+          body: "full",
+          attachment: "meta",
+          sealith: "off",
+          audit: { jobId: true, sealithTransferId: false },
+        },
+      ],
+      updatedAt: new Date().toISOString(),
+      updatedBy: "admin_mcp",
+    };
+    await setOrgIngressHandoffPolicy(emp.orgId, orgPolicy);
+
+    const employeePolicy: OrgIngressHandoffPolicy = {
+      version: 1,
+      rules: [
+        {
+          id: "ihr_emp_none",
+          applyTo: "all",
+          body: "none",
+          attachment: "none",
+          sealith: "required",
+          audit: { jobId: true, sealithTransferId: true },
+        },
+      ],
+      updatedAt: new Date().toISOString(),
+      updatedBy: "admin_mcp",
+    };
+    await setEmployeeIngressHandoffPolicy(emp.id, emp.orgId, employeePolicy);
+
+    try {
+      const result = await handleSlackEventsRequest(
+        signedRequest({
+          type: "event_callback",
+          team_id: TEAM,
+          event_id: `Ev_handoff_employee_override_${Date.now()}`,
+          event: {
+            type: "message",
+            user: SPEAKER,
+            text: `<@${BOUND_USER}> this should be stripped by employee policy`,
+            ts: "1787911800.000200",
+            channel: CHANNEL,
+          },
+        })
+      );
+      expect(result.status).toBe(200);
+      expect(wake.calls().length).toBe(1);
+      const payload = wake.calls()[0].payload;
+      expect(payload.text).toBe("");
+      expect(payload.ingressHandoff.bodyMode).toBe("none");
+      expect(payload.ingressHandoff.sealithHandoff).toBe("required");
+    } finally {
+      await setEmployeeIngressHandoffPolicy(emp.id, emp.orgId, null);
+      await restore();
+    }
+  });
+
+  test("without employee override, org policy applies", async () => {
+    process.env.SLACK_SIGNING_SECRET = SIGNING_SECRET;
+    const { emp, restore } = await bindAndo();
+    const wake = mockWake();
+
+    const orgPolicy: OrgIngressHandoffPolicy = {
+      version: 1,
+      rules: [
+        {
+          id: "ihr_org_prefix",
+          applyTo: "all",
+          body: "prefix",
+          bodyPrefixChars: 20,
+          attachment: "meta",
+          sealith: "suggest",
+          audit: { jobId: true, sealithTransferId: false },
+        },
+      ],
+      updatedAt: new Date().toISOString(),
+      updatedBy: "admin_mcp",
+    };
+    await setOrgIngressHandoffPolicy(emp.orgId, orgPolicy);
+
+    try {
+      const longText = `<@${BOUND_USER}> this is a long message that should be truncated by the org policy`;
+      const result = await handleSlackEventsRequest(
+        signedRequest({
+          type: "event_callback",
+          team_id: TEAM,
+          event_id: `Ev_handoff_org_only_${Date.now()}`,
+          event: {
+            type: "message",
+            user: SPEAKER,
+            text: longText,
+            ts: "1787911800.000201",
+            channel: CHANNEL,
+          },
+        })
+      );
+      expect(result.status).toBe(200);
+      expect(wake.calls().length).toBe(1);
+      const payload = wake.calls()[0].payload;
+      expect(payload.text.length).toBeLessThan(longText.length);
+      expect(payload.ingressHandoff.bodyMode).toBe("prefix");
+      expect(payload.ingressHandoff.sealithHandoff).toBe("suggest");
     } finally {
       await restore();
     }

@@ -255,7 +255,7 @@ describe("ingressHandoff admin MCP tools", () => {
     const result = await callAdminMcpTool("ingressHandoff.patch", { rules: [] }, demoCred());
     expect(result.isError).toBe(true);
     const data = result.structuredContent as Record<string, unknown>;
-    expect(data.code).toBe("validation_failed");
+    expect(data.code).toBe("rules_required");
   });
 
   test("ingressHandoff.patch requires bodyPrefixChars when body=prefix", async () => {
@@ -295,5 +295,129 @@ describe("ingressHandoff admin MCP tools", () => {
     const tool = ADMIN_MCP_TOOLS.find((t) => t.name === "ingressHandoff.patch");
     expect(tool).toBeDefined();
     expect(tool?.description.includes("always_human")).toBe(true);
+  });
+
+  test("ingressHandoff.get accepts employeeId parameter", () => {
+    const tool = ADMIN_MCP_TOOLS.find((t) => t.name === "ingressHandoff.get");
+    expect(tool).toBeDefined();
+    expect(tool?.inputSchema.properties).toHaveProperty("employeeId");
+    expect(tool?.description.includes("AI社員ごと")).toBe(true);
+  });
+
+  test("ingressHandoff.patch accepts employeeId and clearOverride parameters", () => {
+    const tool = ADMIN_MCP_TOOLS.find((t) => t.name === "ingressHandoff.patch");
+    expect(tool).toBeDefined();
+    expect(tool?.inputSchema.properties).toHaveProperty("employeeId");
+    expect(tool?.inputSchema.properties).toHaveProperty("clearOverride");
+    expect(tool?.description.includes("AI社員ごと")).toBe(true);
+  });
+});
+
+describe("ingressHandoff per-employee admin MCP", () => {
+  test("ingressHandoff.get with employeeId returns effective policy with layers", async () => {
+    resetDemoIngressHandoffPolicy();
+    const [employee] = await listEmployees(DEMO_ORG.id);
+    expect(Boolean(employee)).toBe(true);
+
+    const result = await callAdminMcpTool(
+      "ingressHandoff.get",
+      { employeeId: employee.id },
+      demoCred()
+    );
+    expect(Boolean(result.isError)).toBe(false);
+    const data = result.structuredContent as Record<string, unknown>;
+    expect(data.ok).toBe(true);
+    expect(data.policy).toBeDefined();
+    expect(data.source).toBeDefined();
+    expect(data.sourceJa).toBeDefined();
+    expect(data.layers).toBeDefined();
+    const layers = data.layers as Record<string, unknown>;
+    expect(layers).toHaveProperty("employeeOverride");
+    expect(layers).toHaveProperty("orgPolicy");
+  });
+
+  test("ingressHandoff.get with invalid employeeId returns error", async () => {
+    resetDemoIngressHandoffPolicy();
+    const result = await callAdminMcpTool(
+      "ingressHandoff.get",
+      { employeeId: "nonexistent" },
+      demoCred()
+    );
+    expect(result.isError).toBe(true);
+    const data = result.structuredContent as Record<string, unknown>;
+    expect(data.code).toBe("employee_not_found");
+  });
+
+  test("ingressHandoff.patch with employeeId queues per-employee approval", async () => {
+    resetDemoIngressHandoffPolicy();
+    const [employee] = await listEmployees(DEMO_ORG.id);
+    expect(Boolean(employee)).toBe(true);
+
+    const result = await callAdminMcpTool(
+      "ingressHandoff.patch",
+      {
+        employeeId: employee.id,
+        rules: [
+          {
+            applyTo: "all",
+            body: "none",
+            attachment: "none",
+            sealith: "required",
+          },
+        ],
+      },
+      demoCred()
+    );
+    expect(Boolean(result.isError)).toBe(false);
+    const data = result.structuredContent as Record<string, unknown>;
+    expect(data.needs_approval).toBe(true);
+    expect(data.always_human).toBe(true);
+    expect(String(data.summary || "")).toContain("AI社員ごと");
+  });
+
+  test("ingressHandoff.patch clearOverride requires employeeId", async () => {
+    resetDemoIngressHandoffPolicy();
+    const result = await callAdminMcpTool(
+      "ingressHandoff.patch",
+      { clearOverride: true },
+      demoCred()
+    );
+    expect(result.isError).toBe(true);
+    const data = result.structuredContent as Record<string, unknown>;
+    expect(data.code).toBe("clear_requires_employee");
+  });
+
+  test("ingressHandoff.patch clearOverride with employeeId queues approval", async () => {
+    resetDemoIngressHandoffPolicy();
+    const [employee] = await listEmployees(DEMO_ORG.id);
+    expect(Boolean(employee)).toBe(true);
+
+    const result = await callAdminMcpTool(
+      "ingressHandoff.patch",
+      {
+        employeeId: employee.id,
+        clearOverride: true,
+      },
+      demoCred()
+    );
+    expect(Boolean(result.isError)).toBe(false);
+    const data = result.structuredContent as Record<string, unknown>;
+    expect(data.needs_approval).toBe(true);
+    expect(String(data.summary || "")).toContain("クリア");
+  });
+
+  test("ingressHandoff.patch without rules or clearOverride fails", async () => {
+    resetDemoIngressHandoffPolicy();
+    const [employee] = await listEmployees(DEMO_ORG.id);
+    expect(Boolean(employee)).toBe(true);
+
+    const result = await callAdminMcpTool(
+      "ingressHandoff.patch",
+      { employeeId: employee.id },
+      demoCred()
+    );
+    expect(result.isError).toBe(true);
+    const data = result.structuredContent as Record<string, unknown>;
+    expect(data.code).toBe("rules_required");
   });
 });

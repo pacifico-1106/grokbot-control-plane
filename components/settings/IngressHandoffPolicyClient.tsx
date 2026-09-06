@@ -141,9 +141,9 @@ export function IngressHandoffPolicyClient({ policy, isDefault }: Props) {
     <section className="surface p-5 space-y-4">
       <div className="flex items-start justify-between gap-2">
         <div>
-          <h2 className="font-medium">受信の渡し方</h2>
+          <h2 className="font-medium">受信の渡し方（組織ポリシー）</h2>
           <p className="text-sm text-[var(--text-muted)] mt-1">
-            Slack/外部からのメッセージをAI社員にどう渡すか。ルールは評価順（first-match）。
+            Slack/外部からのメッセージをAI社員にどう渡すか。ルールは評価順（first-match）。AI社員ごとにオーバーライド可能。
           </p>
         </div>
         <span className="chip chip-neutral text-xs shrink-0">読み取り専用</span>
@@ -158,21 +158,23 @@ export function IngressHandoffPolicyClient({ policy, isDefault }: Props) {
             <li>• Sealithへの暗号化受け渡し: オフ</li>
           </ul>
           <p className="text-xs text-[var(--text-faint)] mt-2">
-            外部/機密チャネルにはルールを追加してください。編集は Admin MCP{" "}
-            <code className="font-mono text-[10px]">ingressHandoff.patch</code> (always_human) で行います。
+            外部/機密チャネルにはルールを追加してください。組織全体を編集するには Admin MCP{" "}
+            <code className="font-mono text-[10px]">ingressHandoff.patch</code> (always_human)。
+            AI社員ごとにオーバーライドする場合は employeeId を指定します。
           </p>
         </div>
       ) : (
         <div className="space-y-3">
           <p className="text-xs text-[var(--text-faint)]">
-            {policy.rules.length}ルール • 評価順で最初にマッチしたルールが適用されます
+            {policy.rules.length}ルール • 評価順で最初にマッチしたルールが適用されます • AI社員ごとにオーバーライド可能
           </p>
           {policy.rules.map((rule, index) => (
             <RuleCard key={rule.id} rule={rule} index={index} />
           ))}
           <p className="text-xs text-[var(--text-faint)]">
-            最終更新: {new Date(policy.updatedAt).toLocaleString("ja-JP")} • 編集は Admin MCP{" "}
-            <code className="font-mono text-[10px]">ingressHandoff.patch</code> (always_human)
+            最終更新: {new Date(policy.updatedAt).toLocaleString("ja-JP")} • 組織全体を編集するには Admin MCP{" "}
+            <code className="font-mono text-[10px]">ingressHandoff.patch</code> (always_human)。
+            AI社員ごとのオーバーライドは employeeId 指定。
           </p>
         </div>
       )}

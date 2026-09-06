@@ -10,6 +10,7 @@ import { EmployeePolicyForm } from "@/components/employees/EmployeePolicyForm";
 import { EmployeeVoiceForm } from "@/components/employees/EmployeeVoiceForm";
 import { EmployeeProjectAccessForm } from "@/components/employees/EmployeeProjectAccessForm";
 import { EmployeeTerminateForm } from "@/components/employees/EmployeeTerminateForm";
+import { EmployeeIngressHandoffStatus } from "@/components/employees/EmployeeIngressHandoffStatus";
 import { SlackIdentityForm } from "@/components/employees/SlackIdentityForm";
 import { getCurrentOrgId } from "@/lib/auth/session";
 import {
@@ -18,6 +19,7 @@ import {
   getEmployee,
   getEmployeeSlackIdentity,
   getOrgSodWarnPolicy,
+  getEffectiveIngressHandoffPolicy,
   listEmployees,
   listMembers,
   listNotificationChannels,
@@ -59,6 +61,7 @@ export default async function EmployeeDetailPage({
     (await ensureBindingRow(employee.id, employee.orgId || orgId || ""));
   const slackIdentity = await getEmployeeSlackIdentity(employee.id);
   const oauthConfigured = slackOAuthConfigured();
+  const effectiveIngressHandoff = await getEffectiveIngressHandoffPolicy(orgId, employee.id);
 
   const actionEvents = getEmployeeActionLog(employee, binding);
 
@@ -207,6 +210,10 @@ export default async function EmployeeDetailPage({
         </p>
         <EmployeeVoiceForm employee={employee} disabled={employee.status === "suspended"} />
       </section>
+
+      <div className="mt-4">
+        <EmployeeIngressHandoffStatus effective={effectiveIngressHandoff} />
+      </div>
 
       <section className="surface p-5 space-y-3 mt-4">
         <h2 className="text-sm font-medium">予算・承認（決済委任）</h2>

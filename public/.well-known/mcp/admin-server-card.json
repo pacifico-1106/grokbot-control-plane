@@ -38,6 +38,7 @@
     "Most tools are always_human: create an approval ticket; do not mutate until a different human approves.",
     "setup.slackStatus is read-only and does not require approval. Use it to diagnose Slack integration before guiding human setup.",
     "Admin cannot grant itself extra scopes or approve its own request.",
-    "channels.classify with employeeId installs Slack IM ingress for that employee. Omitting employeeId removes the ingress (fail-closed)."
+    "channels.classify with employeeId installs Slack IM ingress for that employee. Omitting employeeId removes the ingress (fail-closed).",
+    "ingressHandoff supports per-employee overrides: include employeeId in get/patch to manage AI社員ごとの設定. Fallback order: employee override → org policy → default. Use clearOverride=true to clear employee override and inherit org policy."
   ]
 }
