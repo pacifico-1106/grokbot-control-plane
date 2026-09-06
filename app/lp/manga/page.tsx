@@ -13,10 +13,10 @@ export const metadata: Metadata = {
 const PANELS = [
   { src: "/lp/manga/01.png", alt: "便利なのに、説明できない — ChatGPTだけでは足りない理由" },
   { src: "/lp/manga/02.png", alt: "社員が契約書をAIに貼った — あとから誰が渡したか分からない" },
-  { src: "/lp/manga/03.png", alt: "なぜChatGPT・Claude・Geminiだけでは会社の現場でうまくいかないのか？ — 社員証がない、会社の承認が残らない、ファイルの止め方がない", caption: "ChatGPT単体との違い：社員証・承認・止め方の境界がない" },
+  { src: "/lp/manga/03.png", alt: "なぜChatGPT・Claude・Geminiだけでは会社の現場でうまくいかないのか？ — 社員証がない、会社の承認が残らない、ファイルの止め方がない" },
   { src: "/lp/manga/04.png", alt: "StaffpassはAI社員の社員証 — Slack連携、承認スタンプ、監査台帳" },
   { src: "/lp/manga/05.png", alt: "Sealithは機密ファイルの転送便 — シール（ロック）、開封・閲覧、取り消し、目的・期限" },
-  { src: "/lp/manga/06.png", alt: "片方だけでも、両方でも成り立つ — AIが最適解を出し、境界が信頼を保証する", caption: "Staffpassを入れないと何が変わる？ → 許可・止め方・記録が会社の台帳に残る" },
+  { src: "/lp/manga/06.png", alt: "片方だけでも、両方でも成り立つ — AIが最適解を出し、境界が信頼を保証する" },
   { src: "/lp/manga/07.png", alt: "中小企業の社長が変わったポイントまとめ — 社員証で説明できる、転送便で止められる、ChatGPT単体の不安が会社の仕組みに" },
   { src: "/lp/manga/08.png", alt: "はじめの一歩で、未来は大きく変わる — StaffpassアカウントとSealithアカウントの開設CTA" },
 ];
@@ -41,22 +41,17 @@ export default function MangaLP() {
           </p>
         </section>
 
-        <section aria-label="漫画パネル" className="flex flex-col sm:gap-0.5">
+        <section aria-label="漫画パネル" className="flex flex-col gap-0">
           {PANELS.map((panel, idx) => (
             <article key={idx} className="relative w-full">
               <Image
                 src={panel.src}
                 alt={panel.alt}
-                width={720}
-                height={1280}
-                className="w-full h-auto object-contain block sm:rounded"
+                width={1080}
+                height={1170}
+                className="w-full h-auto block"
                 priority={idx < 3}
               />
-              {panel.caption && (
-                <p className="m-0 px-4 py-2 bg-[var(--bg-elevated)] border-y border-[var(--border-soft)] text-xs text-[var(--text-muted)] text-center">
-                  {panel.caption}
-                </p>
-              )}
             </article>
           ))}
         </section>
