@@ -185,6 +185,12 @@ pre,
   -webkit-overflow-scrolling: touch;
 }
 
+@media (max-width: 640px) {
+  .table-scroll {
+    overflow-x: visible;
+  }
+}
+
 .break-words-safe {
   overflow-wrap: anywhere;
   word-break: break-word;
@@ -226,7 +232,6 @@ pre,
 
 .legal-copy table {
   width: 100%;
-  min-width: 680px;
   border-collapse: collapse;
   border: 1px solid var(--border);
 }
@@ -240,9 +245,56 @@ pre,
 }
 
 .legal-copy th {
-  width: 13rem;
   color: var(--text);
   background: var(--bg-soft);
+}
+
+@media (max-width: 640px) {
+  .legal-copy table,
+  .legal-copy tbody,
+  .legal-copy tr,
+  .legal-copy th,
+  .legal-copy td {
+    display: block;
+    width: 100%;
+  }
+
+  .legal-copy table {
+    border: none;
+  }
+
+  .legal-copy tr {
+    margin-bottom: 1rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+  }
+
+  .legal-copy th {
+    padding: 0.75rem 1rem;
+    font-size: 0.8rem;
+    border-bottom: none;
+  }
+
+  .legal-copy td {
+    padding: 0.75rem 1rem;
+    padding-top: 0;
+    background: transparent;
+  }
+
+  .legal-copy td ul {
+    margin-top: 0.25rem;
+  }
+}
+
+@media (min-width: 641px) {
+  .legal-copy table {
+    min-width: 680px;
+  }
+
+  .legal-copy th {
+    width: 13rem;
+  }
 }
 
 .legal-copy dl > div {
