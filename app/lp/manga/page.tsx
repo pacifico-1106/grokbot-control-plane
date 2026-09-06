@@ -79,7 +79,7 @@ export default function MangaLP() {
               </Link>
 
               <Link
-                href="https://www.sealith.com/"
+                href="https://www.sealith.com/lp/ai-information-management"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="btn btn-ghost w-full justify-center text-base border-[color-mix(in_oklab,var(--accent-strong)_30%,var(--border))] hover:border-[color-mix(in_oklab,var(--accent-strong)_50%,var(--border))]"
