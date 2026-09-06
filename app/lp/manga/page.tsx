@@ -47,8 +47,8 @@ export default function MangaLP() {
               <Image
                 src={panel.src}
                 alt={panel.alt}
-                width={640}
-                height={640}
+                width={720}
+                height={1280}
                 className="w-full h-auto object-contain block sm:rounded"
                 priority={idx < 3}
               />
