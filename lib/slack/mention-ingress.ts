@@ -8,9 +8,20 @@
  *
  * Path B は社員が im:history スコープで再 OAuth 後、Slack app 設定で
  * "Subscribe to events on behalf of users" の message.im を有効化すると動作。
+ *
+ * Ingress handoff policy evaluation (Slice 2):
+ * - Resolves org policy rules (first-match-wins) based on channel classification
+ * - Applies body mode (full | prefix | none) to shape message text
+ * - Applies attachment mode (file | meta | none) — currently Slack files not yet parsed
+ * - Records sealithHandoff intent in wake metadata (suggest | required | off)
  */
 
 import { appendAuditEvent } from "@/lib/data/audit";
+import { getOrgIngressHandoffPolicy } from "@/lib/data/ingress-handoff";
+import { getOrgChannel } from "@/lib/data/directory";
+import { resolveIngressHandoffSync } from "@/lib/ingress-handoff/resolve";
+import { applyBodyMode } from "@/lib/ingress-handoff/apply";
+import type { ChannelClassification, SealithHandoff } from "@/lib/types";
 import {
   getEmployeesBySlackUserIds,
   listLinkedSlackIdentitiesForTeam,
@@ -48,6 +59,13 @@ export type SlackWakePayload = {
   teamId: string;
   employeeId: string;
   eventId: string;
+  ingressHandoff?: {
+    bodyMode: "full" | "prefix" | "none";
+    attachmentMode: "file" | "meta" | "none";
+    bodyTruncated?: boolean;
+    sealithHandoff: SealithHandoff;
+    channelClassification: ChannelClassification;
+  };
 };
 
 type SlackEvent = {
@@ -319,7 +337,8 @@ async function resolveWakeTargets(input: {
 async function postWake(
   target: SlackMentionTarget,
   payload: SlackWakePayload,
-  trigger: "mention" | "internal_im" | "user_token_im"
+  trigger: "mention" | "internal_im" | "user_token_im",
+  ingressHandoff?: NonNullable<SlackWakePayload["ingressHandoff"]>
 ): Promise<void> {
   const action =
     trigger === "user_token_im"
@@ -331,6 +350,19 @@ async function postWake(
     trigger === "user_token_im" || trigger === "internal_im"
       ? "slack.internal_im"
       : "slack.mention";
+
+  const handoffMeta = ingressHandoff
+    ? {
+        ingressHandoff: {
+          bodyMode: ingressHandoff.bodyMode,
+          attachmentMode: ingressHandoff.attachmentMode,
+          bodyTruncated: ingressHandoff.bodyTruncated,
+          sealithHandoff: ingressHandoff.sealithHandoff,
+          channelClassification: ingressHandoff.channelClassification,
+        },
+      }
+    : {};
+
   const url = target.wakeWebhookUrl?.trim() || "";
   if (!url) {
     await appendAuditEvent({
@@ -346,6 +378,7 @@ async function postWake(
         ts: payload.ts,
         eventId: payload.eventId,
         slackUserId: target.slackUserId,
+        ...handoffMeta,
       },
     }).catch(() => undefined);
     return;
@@ -375,6 +408,7 @@ async function postWake(
           reason: "wake_failed",
           status: response.status,
           eventId: payload.eventId,
+          ...handoffMeta,
         },
       }).catch(() => undefined);
       return;
@@ -399,6 +433,7 @@ async function postWake(
         thread_ts: payload.thread_ts,
         eventId: payload.eventId,
         userTokenPath: trigger === "user_token_im",
+        ...handoffMeta,
       },
     }).catch(() => undefined);
   } catch (error) {
@@ -414,6 +449,7 @@ async function postWake(
         reason: "wake_failed",
         error: error instanceof Error ? error.message : "wake_failed",
         eventId: payload.eventId,
+        ...handoffMeta,
       },
     }).catch(() => undefined);
   }
@@ -579,19 +615,59 @@ export async function processSlackMentionEnvelope(
       : "internal_im"
     : "mention";
 
+  const firstTarget = targets[0];
+  const orgId = firstTarget?.orgId || "";
+
+  let ingressHandoffMeta:
+    | NonNullable<SlackWakePayload["ingressHandoff"]>
+    | undefined;
+  let appliedText = text;
+
+  if (orgId) {
+    const [policy, channelRecord] = await Promise.all([
+      getOrgIngressHandoffPolicy(orgId),
+      getOrgChannel(orgId, "slack", channel),
+    ]);
+
+    const classification: ChannelClassification =
+      channelRecord?.classification ?? "unknown";
+
+    const resolved = resolveIngressHandoffSync(policy, {
+      channelId: channel,
+      classification,
+      isIm: isDirectMessage,
+    });
+
+    const { text: processedText, truncated } = applyBodyMode(
+      text,
+      resolved.rule.body,
+      resolved.rule.bodyPrefixChars
+    );
+    appliedText = processedText;
+
+    ingressHandoffMeta = {
+      bodyMode: resolved.rule.body,
+      attachmentMode: resolved.rule.attachment,
+      bodyTruncated: truncated || undefined,
+      sealithHandoff: resolved.rule.sealith,
+      channelClassification: classification,
+    };
+  }
+
   for (const target of targets) {
     const payload: SlackWakePayload = {
       channel,
       ts,
       thread_ts: threadTs,
-      text,
+      text: appliedText,
       user: speakerId,
       slackUserId: target.slackUserId,
       teamId,
       employeeId: target.employeeId,
       eventId,
+      ingressHandoff: ingressHandoffMeta,
     };
-    await postWake(target, payload, trigger);
+    await postWake(target, payload, trigger, ingressHandoffMeta);
     if (target.wakeWebhookUrl?.trim()) woke += 1;
   }
 
@@ -608,6 +684,14 @@ export async function processSlackMentionEnvelope(
     skippedNoWebhook: targets.length - woke,
     userToken: Boolean(userTokenAuth),
     authsSummary: summarizeAuthorizations(envelope.authorizations),
+    ingressHandoff: ingressHandoffMeta
+      ? {
+          bodyMode: ingressHandoffMeta.bodyMode,
+          attachmentMode: ingressHandoffMeta.attachmentMode,
+          sealithHandoff: ingressHandoffMeta.sealithHandoff,
+          classification: ingressHandoffMeta.channelClassification,
+        }
+      : undefined,
   });
 
   return { handled: true, woke, userToken: Boolean(userTokenAuth), isDirectMessage };

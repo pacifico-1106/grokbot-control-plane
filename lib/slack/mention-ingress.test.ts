@@ -8,6 +8,11 @@ import {
 } from "@/lib/data/slack-identities";
 import { getBinding, updateWakeWebhook } from "@/lib/data";
 import { upsertOrgChannel } from "@/lib/data/directory";
+import {
+  setOrgIngressHandoffPolicy,
+  resetDemoIngressHandoffPolicy,
+} from "@/lib/data/ingress-handoff";
+import type { OrgIngressHandoffPolicy } from "@/lib/types";
 import { getRuntimeAudit } from "@/lib/demo-data";
 import {
   deleteSlackImEmployeeRoute,
@@ -1267,5 +1272,314 @@ describe("IM wake skip audit events", () => {
     const newEvents = auditAfter.slice(0, auditAfter.length - auditBefore);
     const skipAudit = newEvents.find((e) => e.action === "slack.im_wake_skipped");
     expect(skipAudit).toBeUndefined();
+  });
+});
+
+describe("Ingress handoff policy evaluation", () => {
+  afterEach(() => {
+    resetDemoIngressHandoffPolicy();
+  });
+
+  test("default policy applies body=full and attachment=meta", async () => {
+    process.env.SLACK_SIGNING_SECRET = SIGNING_SECRET;
+    const { restore } = await bindAndo();
+    const wake = mockWake();
+    try {
+      const longText = `<@${BOUND_USER}> これは長いメッセージです。全文が渡されるはずです。`;
+      const result = await handleSlackEventsRequest(
+        signedRequest({
+          type: "event_callback",
+          team_id: TEAM,
+          event_id: `Ev_handoff_default_${Date.now()}`,
+          event: {
+            type: "message",
+            user: SPEAKER,
+            text: longText,
+            ts: "1787911800.000100",
+            channel: CHANNEL,
+          },
+        })
+      );
+      expect(result.status).toBe(200);
+      expect(wake.calls().length).toBe(1);
+      const payload = wake.calls()[0].payload;
+      expect(payload.text).toBe(longText);
+      expect(payload.ingressHandoff).toBeDefined();
+      expect(payload.ingressHandoff.bodyMode).toBe("full");
+      expect(payload.ingressHandoff.attachmentMode).toBe("meta");
+      expect(payload.ingressHandoff.sealithHandoff).toBe("off");
+    } finally {
+      await restore();
+    }
+  });
+
+  test("body=prefix policy truncates long messages", async () => {
+    process.env.SLACK_SIGNING_SECRET = SIGNING_SECRET;
+    const { emp, restore } = await bindAndo();
+    const wake = mockWake();
+
+    const prefixPolicy: OrgIngressHandoffPolicy = {
+      version: 1,
+      rules: [
+        {
+          id: "ihr_prefix",
+          applyTo: "all",
+          body: "prefix",
+          bodyPrefixChars: 10,
+          attachment: "meta",
+          sealith: "off",
+          audit: { jobId: true, sealithTransferId: false },
+        },
+      ],
+      updatedAt: new Date().toISOString(),
+      updatedBy: "admin_mcp",
+    };
+    await setOrgIngressHandoffPolicy(emp.orgId, prefixPolicy);
+
+    try {
+      const longText = `<@${BOUND_USER}> これは長いメッセージです。途中で切られます。`;
+      const result = await handleSlackEventsRequest(
+        signedRequest({
+          type: "event_callback",
+          team_id: TEAM,
+          event_id: `Ev_handoff_prefix_${Date.now()}`,
+          event: {
+            type: "message",
+            user: SPEAKER,
+            text: longText,
+            ts: "1787911800.000101",
+            channel: CHANNEL,
+          },
+        })
+      );
+      expect(result.status).toBe(200);
+      expect(wake.calls().length).toBe(1);
+      const payload = wake.calls()[0].payload;
+      expect(payload.text.length).toBeLessThan(longText.length);
+      expect(payload.text.endsWith("…")).toBe(true);
+      expect(payload.ingressHandoff.bodyMode).toBe("prefix");
+      expect(payload.ingressHandoff.bodyTruncated).toBe(true);
+    } finally {
+      await restore();
+    }
+  });
+
+  test("body=none policy strips message text entirely", async () => {
+    process.env.SLACK_SIGNING_SECRET = SIGNING_SECRET;
+    const { emp, restore } = await bindAndo();
+    const wake = mockWake();
+
+    const nonePolicy: OrgIngressHandoffPolicy = {
+      version: 1,
+      rules: [
+        {
+          id: "ihr_none",
+          applyTo: "all",
+          body: "none",
+          attachment: "none",
+          sealith: "off",
+          audit: { jobId: true, sealithTransferId: false },
+        },
+      ],
+      updatedAt: new Date().toISOString(),
+      updatedBy: "admin_mcp",
+    };
+    await setOrgIngressHandoffPolicy(emp.orgId, nonePolicy);
+
+    try {
+      const result = await handleSlackEventsRequest(
+        signedRequest({
+          type: "event_callback",
+          team_id: TEAM,
+          event_id: `Ev_handoff_none_${Date.now()}`,
+          event: {
+            type: "message",
+            user: SPEAKER,
+            text: `<@${BOUND_USER}> 秘密のメッセージ`,
+            ts: "1787911800.000102",
+            channel: CHANNEL,
+          },
+        })
+      );
+      expect(result.status).toBe(200);
+      expect(wake.calls().length).toBe(1);
+      const payload = wake.calls()[0].payload;
+      expect(payload.text).toBe("");
+      expect(payload.ingressHandoff.bodyMode).toBe("none");
+      expect(payload.ingressHandoff.bodyTruncated).toBe(true);
+    } finally {
+      await restore();
+    }
+  });
+
+  test("classified_external_sensitive rule matches unknown classification", async () => {
+    process.env.SLACK_SIGNING_SECRET = SIGNING_SECRET;
+    const { emp, restore } = await bindAndo();
+    const wake = mockWake();
+
+    const classifiedPolicy: OrgIngressHandoffPolicy = {
+      version: 1,
+      rules: [
+        {
+          id: "ihr_external",
+          applyTo: "classified_external_sensitive",
+          body: "prefix",
+          bodyPrefixChars: 5,
+          attachment: "none",
+          sealith: "suggest",
+          audit: { jobId: true, sealithTransferId: false },
+        },
+        {
+          id: "ihr_fallback",
+          applyTo: "all",
+          body: "full",
+          attachment: "file",
+          sealith: "off",
+          audit: { jobId: true, sealithTransferId: false },
+        },
+      ],
+      updatedAt: new Date().toISOString(),
+      updatedBy: "admin_mcp",
+    };
+    await setOrgIngressHandoffPolicy(emp.orgId, classifiedPolicy);
+
+    try {
+      const result = await handleSlackEventsRequest(
+        signedRequest({
+          type: "event_callback",
+          team_id: TEAM,
+          event_id: `Ev_handoff_classified_${Date.now()}`,
+          event: {
+            type: "message",
+            user: SPEAKER,
+            text: `<@${BOUND_USER}> これは外部チャネルです`,
+            ts: "1787911800.000103",
+            channel: CHANNEL,
+          },
+        })
+      );
+      expect(result.status).toBe(200);
+      expect(wake.calls().length).toBe(1);
+      const payload = wake.calls()[0].payload;
+      expect(payload.text.length).toBeLessThanOrEqual(6);
+      expect(payload.ingressHandoff.bodyMode).toBe("prefix");
+      expect(payload.ingressHandoff.sealithHandoff).toBe("suggest");
+      expect(payload.ingressHandoff.channelClassification).toBe("unknown");
+    } finally {
+      await restore();
+    }
+  });
+
+  test("internal channel uses fallback rule when classified_external_sensitive first", async () => {
+    process.env.SLACK_SIGNING_SECRET = SIGNING_SECRET;
+    const { emp, restore } = await bindAndo();
+    const wake = mockWake();
+    await configureInternalIm(emp.id, INTERNAL_IM);
+
+    const classifiedPolicy: OrgIngressHandoffPolicy = {
+      version: 1,
+      rules: [
+        {
+          id: "ihr_external",
+          applyTo: "classified_external_sensitive",
+          body: "none",
+          attachment: "none",
+          sealith: "required",
+          audit: { jobId: true, sealithTransferId: true },
+        },
+        {
+          id: "ihr_fallback",
+          applyTo: "all",
+          body: "full",
+          attachment: "file",
+          sealith: "off",
+          audit: { jobId: true, sealithTransferId: false },
+        },
+      ],
+      updatedAt: new Date().toISOString(),
+      updatedBy: "admin_mcp",
+    };
+    await setOrgIngressHandoffPolicy(emp.orgId, classifiedPolicy);
+
+    try {
+      const result = await handleSlackEventsRequest(
+        signedRequest({
+          type: "event_callback",
+          team_id: TEAM,
+          event_id: `Ev_handoff_internal_${Date.now()}`,
+          event: {
+            type: "message",
+            channel_type: "im",
+            user: SPEAKER,
+            text: "社内メッセージ",
+            ts: "1787911800.000104",
+            channel: INTERNAL_IM,
+          },
+        })
+      );
+      expect(result.status).toBe(200);
+      expect(wake.calls().length).toBe(1);
+      const payload = wake.calls()[0].payload;
+      expect(payload.text).toBe("社内メッセージ");
+      expect(payload.ingressHandoff.bodyMode).toBe("full");
+      expect(payload.ingressHandoff.sealithHandoff).toBe("off");
+      expect(payload.ingressHandoff.channelClassification).toBe("internal");
+    } finally {
+      await deleteSlackImEmployeeRoute({ orgId: DEMO_ORG.id, slackChannelId: INTERNAL_IM });
+      await restore();
+    }
+  });
+
+  test("audit event includes ingressHandoff metadata", async () => {
+    process.env.SLACK_SIGNING_SECRET = SIGNING_SECRET;
+    const { emp, restore } = await bindAndo();
+    mockWake();
+    const auditBefore = getRuntimeAudit().length;
+
+    const policy: OrgIngressHandoffPolicy = {
+      version: 1,
+      rules: [
+        {
+          id: "ihr_suggest",
+          applyTo: "all",
+          body: "full",
+          attachment: "meta",
+          sealith: "suggest",
+          audit: { jobId: true, sealithTransferId: false },
+        },
+      ],
+      updatedAt: new Date().toISOString(),
+      updatedBy: "admin_mcp",
+    };
+    await setOrgIngressHandoffPolicy(emp.orgId, policy);
+
+    try {
+      await handleSlackEventsRequest(
+        signedRequest({
+          type: "event_callback",
+          team_id: TEAM,
+          event_id: `Ev_handoff_audit_${Date.now()}`,
+          event: {
+            type: "message",
+            user: SPEAKER,
+            text: `<@${BOUND_USER}> audit test`,
+            ts: "1787911800.000105",
+            channel: CHANNEL,
+          },
+        })
+      );
+
+      const auditAfter = getRuntimeAudit();
+      const newEvents = auditAfter.slice(0, auditAfter.length - auditBefore);
+      const wakeAudit = newEvents.find((e) => e.action === "slack.mention_wake");
+      expect(wakeAudit).toBeDefined();
+      expect(wakeAudit?.metadata.ingressHandoff).toBeDefined();
+      const handoff = wakeAudit?.metadata.ingressHandoff as Record<string, unknown>;
+      expect(handoff.bodyMode).toBe("full");
+      expect(handoff.attachmentMode).toBe("meta");
+      expect(handoff.sealithHandoff).toBe("suggest");
+    } finally {
+      await restore();
+    }
   });
 });
