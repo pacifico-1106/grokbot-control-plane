@@ -17,6 +17,7 @@ const TOOL_TITLE_JA: Record<string, string> = {
   "parties.upsert": "相手台帳の更新",
   "channels.classify": "チャネル分類",
   "roles.propose": "職務案の提案",
+  "ingressHandoff.patch": "受信の渡し方",
 };
 
 export type AdminQueueResult = {

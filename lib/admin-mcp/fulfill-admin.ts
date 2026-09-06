@@ -5,8 +5,15 @@
  */
 import { createHash, randomBytes } from "node:crypto";
 import { normalizeActionLimits } from "@/lib/action-gate";
-import { appendAuditEvent, getEmployee, issueEmployee, updateEmployeePolicy } from "@/lib/data";
+import {
+  appendAuditEvent,
+  getEmployee,
+  issueEmployee,
+  updateEmployeePolicy,
+  setOrgIngressHandoffPolicy,
+} from "@/lib/data";
 import { updateApprovalMetadata } from "@/lib/data/approvals";
+import { validateIngressHandoffPolicy } from "@/lib/ingress-handoff/validate";
 import { linkAgent } from "@/lib/data/bindings";
 import { upsertOrgChannel, upsertOrgParty } from "@/lib/data/directory";
 import {
@@ -342,6 +349,35 @@ async function fulfillRolePropose(
   };
 }
 
+async function fulfillIngressHandoff(
+  approval: ApprovalRequest,
+  args: Record<string, unknown>
+): Promise<AdminFulfillment> {
+  const validation = validateIngressHandoffPolicy({ rules: args.rules });
+  if (!validation.ok) {
+    throw new Error("invalid_ingress_handoff_policy");
+  }
+  const policy = await setOrgIngressHandoffPolicy(approval.orgId, validation.policy);
+  await appendAuditEvent({
+    orgId: approval.orgId,
+    employeeId: null,
+    credentialId: null,
+    action: "admin.ingressHandoff",
+    purpose: "admin.ingressHandoff",
+    summary: `受信の渡し方ポリシーを更新しました（${policy.rules.length}ルール）`,
+    metadata: {
+      auditClass: ADMIN_AUDIT_CLASS,
+      approvalId: approval.id,
+      rulesCount: policy.rules.length,
+    },
+  });
+  return {
+    ok: true,
+    tool: "ingressHandoff.patch",
+    at: new Date().toISOString(),
+  };
+}
+
 export async function fulfillApprovedAdmin(
   approval: ApprovalRequest
 ): Promise<AdminFulfillment | null> {
@@ -372,6 +408,9 @@ export async function fulfillApprovedAdmin(
         break;
       case "roles.propose":
         fulfillment = await fulfillRolePropose(approval, args);
+        break;
+      case "ingressHandoff.patch":
+        fulfillment = await fulfillIngressHandoff(approval, args);
         break;
       default:
         fulfillment = { ok: false, tool, at, error: "unknown_admin_tool" };
