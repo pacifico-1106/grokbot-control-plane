@@ -93,6 +93,10 @@ Socket Mode が ON だと Events が HTTPS endpoint に届きません。
 | `parties.upsert` | 相手台帳登録 | always_human |
 | `channels.classify` | チャネル分類 + 1:1 IM受口設定 | always_human |
 | `roles.propose` | 職務案の提案 | always_human |
+| `ingressHandoff.get` | **受信ハンドオフポリシー読み取り（read-only）** | なし |
+| `ingressHandoff.patch` | 受信ハンドオフポリシー更新 | always_human |
+
+> **Note**: Admin MCP に新しいツールがデプロイされた場合、MCP コネクタを再起動/再接続してください（`capabilities.tools.listChanged: true` ですが、Streamable HTTP では通知 push が制限されます）。
 
 ### `setup.slackStatus` — 最初のステップ
 

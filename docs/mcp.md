@@ -276,13 +276,30 @@ xAI API の remote MCP も同じ URL / Bearer を指定してください。
 | **Auth** | `Authorization: Bearer gb_adm_…`（社員証 `gb_emp_` は fail-closed で拒否） |
 | **Server name** | `staffpass-admin` |
 
-ツール（すべて always_human。人の承認まで mutate しない）:
+ツール:
 
-- `employees.issue`
-- `link`
-- `policy.patch`
-- `parties.upsert`
-- `channels.classify`
-- `roles.propose`
+| Tool | 承認 | 用途 |
+|------|------|------|
+| `employees.issue` | always_human | AI社員証の発行 |
+| `link` | always_human | 社員証とGrok Bot連携 |
+| `policy.patch` | always_human | 権限更新 |
+| `parties.upsert` | always_human | 相手台帳登録 |
+| `channels.classify` | always_human | チャネル分類 + 1:1 IM受口設定 |
+| `roles.propose` | always_human | 職務案の提案 |
+| `setup.slackStatus` | なし（read-only） | Slack設定診断 |
+| `ingressHandoff.get` | なし（read-only） | 受信ハンドオフポリシー読み取り |
+| `ingressHandoff.patch` | always_human | 受信ハンドオフポリシー更新 |
 
 監査クラスは `admin.hire` / `admin.policy` / `admin.parties` など。`tool.invoke` / `mail.send` とは分けます。管理エージェントは自分の申請を承認できません。
+
+### ツール更新後の再接続
+
+管理 MCP に新しいツールがデプロイされた場合、MCP クライアント（Cursor、mcp-remote など）でツールリストが更新されないことがあります。
+
+**対処法**: MCP コネクタを再起動/再接続してください。
+
+- **Cursor**: MCP サーバー設定を一度削除して再追加、または Cursor を再起動
+- **mcp-remote**: プロセスを再起動
+- **grok.com connectors**: コネクタを削除して再追加
+
+サーバーは `capabilities.tools.listChanged: true` を返すため、MCP 仕様に準拠したクライアントは `notifications/tools/list_changed` を受信してリストを更新できますが、Streamable HTTP では通知の push が制限されるため、再接続が確実です。

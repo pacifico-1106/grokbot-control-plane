@@ -107,7 +107,7 @@ export async function POST(req: Request) {
   if (method === "initialize") {
     return jsonRpcResult(id, {
       protocolVersion: MCP_PROTOCOL_VERSION,
-      capabilities: { tools: { listChanged: false } },
+      capabilities: { tools: { listChanged: true } },
       serverInfo: {
         name: ADMIN_MCP_SERVER_NAME,
         version: ADMIN_MCP_SERVER_VERSION,
