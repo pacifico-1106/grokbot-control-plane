@@ -24,6 +24,8 @@ export const ADMIN_MCP_TOOL_NAMES = [
   "channels.classify",
   "roles.propose",
   "setup.slackStatus",
+  "ingressHandoff.get",
+  "ingressHandoff.patch",
 ] as const;
 
 export type AdminMcpToolName = (typeof ADMIN_MCP_TOOL_NAMES)[number];

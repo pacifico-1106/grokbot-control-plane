@@ -152,3 +152,9 @@ export {
   resetDemoAdminAgent,
   DEMO_ADMIN_SECRET,
 } from "./admin-agents";
+
+export {
+  getOrgIngressHandoffPolicy,
+  setOrgIngressHandoffPolicy,
+  resetDemoIngressHandoffPolicy,
+} from "./ingress-handoff";

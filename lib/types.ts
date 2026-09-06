@@ -406,7 +406,8 @@ export type AuditAction =
   | "admin.policy"
   | "admin.parties"
   | "admin.channel"
-  | "admin.role";
+  | "admin.role"
+  | "admin.ingressHandoff";
 
 export interface Org {
   id: string;
@@ -700,4 +701,33 @@ export interface ExecutableDeny {
 export interface ExecutableAllow {
   ok: true;
   binding: EmployeeBinding;
+}
+
+/** Ingress handoff policy — how incoming message content is passed to AI employees. */
+export type IngressApplyTo = "all" | "channels" | "classified_external_sensitive";
+export type BodyHandoff = "full" | "prefix" | "none";
+export type AttachmentHandoff = "file" | "meta" | "none";
+export type AttachmentApproval = "none" | "manager";
+export type SealithHandoff = "off" | "suggest" | "required";
+export type SealithRequiredHint = "contract" | "nda" | "quote" | "other";
+
+export interface IngressHandoffRule {
+  id: string;
+  applyTo: IngressApplyTo;
+  channelIds?: string[];
+  body: BodyHandoff;
+  bodyPrefixChars?: number;
+  attachment: AttachmentHandoff;
+  attachmentApproval?: AttachmentApproval;
+  sealith: SealithHandoff;
+  sealithRequiredHints?: SealithRequiredHint[];
+  sealithRequiredOtherText?: string;
+  audit: { jobId: true; sealithTransferId: boolean };
+}
+
+export interface OrgIngressHandoffPolicy {
+  version: 1;
+  rules: IngressHandoffRule[];
+  updatedAt: string;
+  updatedBy: "admin_mcp";
 }

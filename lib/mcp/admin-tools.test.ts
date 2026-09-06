@@ -4,10 +4,11 @@ import { STAFFPASS_MCP_TOOL_NAMES } from "@/lib/mcp/public";
 import { ADMIN_MCP_TOOLS, adminToolsAlwaysHuman, callAdminMcpTool, isAdminMcpToolName } from "@/lib/mcp/admin-tools";
 import { ADMIN_MCP_TOOL_NAMES, ADMIN_MCP_SERVER_NAME } from "@/lib/mcp/admin-public";
 import { MCP_SERVER_NAME } from "@/lib/mcp/tools";
-import { listEmployees } from "@/lib/data";
+import { listEmployees, resetDemoIngressHandoffPolicy } from "@/lib/data";
 import { DEMO_ORG } from "@/lib/demo-data";
 import { resetDemoAdminAgent } from "@/lib/data/admin-agents";
 import type { ResolvedAdminCredential } from "@/lib/auth/admin-credential";
+import type { OrgIngressHandoffPolicy } from "@/lib/types";
 
 const EMPLOYEE_NAMES = STAFFPASS_MCP_TOOLS.map((t) => t.name);
 
@@ -53,14 +54,17 @@ describe("employee MCP tool list unchanged", () => {
 });
 
 describe("admin MCP always_human", () => {
-  test("all admin tools except setup.slackStatus are always_human", () => {
+  test("all admin tools except read-only tools are always_human", () => {
     expect(adminToolsAlwaysHuman()).toBe(true);
     expect(ADMIN_MCP_TOOLS.map((t) => t.name)).toEqual([...ADMIN_MCP_TOOL_NAMES]);
-    const mutatingTools = ADMIN_MCP_TOOLS.filter((t) => t.name !== "setup.slackStatus");
+    const readOnlyTools = ["setup.slackStatus", "ingressHandoff.get"];
+    const mutatingTools = ADMIN_MCP_TOOLS.filter((t) => !readOnlyTools.includes(t.name));
     expect(mutatingTools.every((t) => t.description.includes("always_human"))).toBe(true);
-    const slackStatus = ADMIN_MCP_TOOLS.find((t) => t.name === "setup.slackStatus");
-    expect(slackStatus?.description.includes("read-only")).toBe(true);
-    expect(slackStatus?.description.includes("no approval required")).toBe(true);
+    for (const toolName of readOnlyTools) {
+      const tool = ADMIN_MCP_TOOLS.find((t) => t.name === toolName);
+      expect(tool?.description.includes("read-only")).toBe(true);
+      expect(tool?.description.includes("no approval required")).toBe(true);
+    }
   });
 
   test("employees.issue queues a ticket and does not mutate", async () => {
@@ -163,5 +167,133 @@ describe("roles.propose PROCESS SOURCE via admin MCP", () => {
     expect(data.needs_approval).toBe(true);
     expect(data.always_human).toBe(true);
     expect(data.auditAction).toBe("admin.role");
+  });
+});
+
+describe("ingressHandoff admin MCP tools", () => {
+  test("ingressHandoff.get returns policy without approval (read-only)", async () => {
+    resetDemoIngressHandoffPolicy();
+    const result = await callAdminMcpTool("ingressHandoff.get", {}, demoCred());
+    expect(Boolean(result.isError)).toBe(false);
+    const data = result.structuredContent as Record<string, unknown>;
+    expect(data.ok).toBe(true);
+    expect(data.policy).toBeDefined();
+    expect(data.summaryJa).toBeDefined();
+    expect(data.nextStepJa).toBeDefined();
+    const policy = data.policy as OrgIngressHandoffPolicy;
+    expect(policy.version).toBe(1);
+    expect(policy.rules.length).toBeGreaterThan(0);
+  });
+
+  test("ingressHandoff.get returns convenience default for new org", async () => {
+    resetDemoIngressHandoffPolicy();
+    const result = await callAdminMcpTool("ingressHandoff.get", {}, demoCred());
+    const data = result.structuredContent as Record<string, unknown>;
+    const policy = data.policy as OrgIngressHandoffPolicy;
+    expect(policy.rules[0].applyTo).toBe("all");
+    expect(policy.rules[0].body).toBe("full");
+    expect(policy.rules[0].attachment).toBe("meta");
+    expect(policy.rules[0].sealith).toBe("off");
+  });
+
+  test("ingressHandoff.patch queues always_human approval", async () => {
+    resetDemoIngressHandoffPolicy();
+    const result = await callAdminMcpTool(
+      "ingressHandoff.patch",
+      {
+        rules: [
+          {
+            applyTo: "classified_external_sensitive",
+            body: "prefix",
+            bodyPrefixChars: 200,
+            attachment: "none",
+            sealith: "required",
+          },
+          {
+            applyTo: "all",
+            body: "full",
+            attachment: "meta",
+            sealith: "off",
+          },
+        ],
+      },
+      demoCred()
+    );
+    expect(Boolean(result.isError)).toBe(false);
+    const data = result.structuredContent as Record<string, unknown>;
+    expect(data.needs_approval).toBe(true);
+    expect(data.always_human).toBe(true);
+    expect(data.auditClass).toBe("admin");
+    expect(data.auditAction).toBe("admin.ingressHandoff");
+    expect(data.approvalId).toBeTruthy();
+  });
+
+  test("ingressHandoff.patch validates rules before queueing", async () => {
+    resetDemoIngressHandoffPolicy();
+    const result = await callAdminMcpTool(
+      "ingressHandoff.patch",
+      {
+        rules: [
+          {
+            applyTo: "invalid_value",
+            body: "full",
+            attachment: "meta",
+            sealith: "off",
+          },
+        ],
+      },
+      demoCred()
+    );
+    expect(result.isError).toBe(true);
+    const data = result.structuredContent as Record<string, unknown>;
+    expect(data.code).toBe("validation_failed");
+    expect(data.errors).toBeDefined();
+  });
+
+  test("ingressHandoff.patch rejects empty rules array", async () => {
+    resetDemoIngressHandoffPolicy();
+    const result = await callAdminMcpTool("ingressHandoff.patch", { rules: [] }, demoCred());
+    expect(result.isError).toBe(true);
+    const data = result.structuredContent as Record<string, unknown>;
+    expect(data.code).toBe("validation_failed");
+  });
+
+  test("ingressHandoff.patch requires bodyPrefixChars when body=prefix", async () => {
+    resetDemoIngressHandoffPolicy();
+    const result = await callAdminMcpTool(
+      "ingressHandoff.patch",
+      {
+        rules: [
+          {
+            applyTo: "all",
+            body: "prefix",
+            attachment: "meta",
+            sealith: "off",
+          },
+        ],
+      },
+      demoCred()
+    );
+    expect(result.isError).toBe(true);
+    const data = result.structuredContent as Record<string, unknown>;
+    expect(data.code).toBe("validation_failed");
+  });
+
+  test("ingressHandoff tool names are in admin catalog", () => {
+    expect(ADMIN_MCP_TOOL_NAMES).toContain("ingressHandoff.get");
+    expect(ADMIN_MCP_TOOL_NAMES).toContain("ingressHandoff.patch");
+  });
+
+  test("ingressHandoff.get is read-only (no always_human in description)", () => {
+    const tool = ADMIN_MCP_TOOLS.find((t) => t.name === "ingressHandoff.get");
+    expect(tool).toBeDefined();
+    expect(tool?.description.includes("read-only")).toBe(true);
+    expect(tool?.description.includes("no approval required")).toBe(true);
+  });
+
+  test("ingressHandoff.patch is always_human", () => {
+    const tool = ADMIN_MCP_TOOLS.find((t) => t.name === "ingressHandoff.patch");
+    expect(tool).toBeDefined();
+    expect(tool?.description.includes("always_human")).toBe(true);
   });
 });

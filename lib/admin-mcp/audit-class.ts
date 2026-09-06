@@ -10,6 +10,7 @@ export const ADMIN_AUDIT_ACTIONS = [
   "admin.parties",
   "admin.channel",
   "admin.role",
+  "admin.ingressHandoff",
 ] as const;
 
 export type AdminAuditAction = (typeof ADMIN_AUDIT_ACTIONS)[number];
@@ -21,6 +22,7 @@ export const ADMIN_TOOL_AUDIT_ACTION: Record<string, AdminAuditAction> = {
   "parties.upsert": "admin.parties",
   "channels.classify": "admin.channel",
   "roles.propose": "admin.role",
+  "ingressHandoff.patch": "admin.ingressHandoff",
 };
 
 /** Operational / employee-badge class — never lead the dashboard change log. */

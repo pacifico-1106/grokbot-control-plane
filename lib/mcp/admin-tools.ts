@@ -1,12 +1,17 @@
 /**
  * Staffpass Admin MCP tools (separate mouth from employee badge MCP).
  * Most tools are always_human. Do not mix with staffpass_whoami / invoke / poll / health.
- * setup.slackStatus is a read-only diagnostic tool that does not require approval.
+ * setup.slackStatus and ingressHandoff.get are read-only diagnostic tools that do not require approval.
  */
 import type { McpToolDef } from "@/lib/mcp/tools";
 import type { ResolvedAdminCredential } from "@/lib/auth/admin-credential";
-import { getApprovalById, getBinding, getEmployee, listEmployees } from "@/lib/data";
+import { getApprovalById, getBinding, getEmployee, listEmployees, getOrgIngressHandoffPolicy } from "@/lib/data";
 import { listConversationAdapters } from "@/lib/data/conversation-adapters";
+import {
+  validateIngressHandoffPolicy,
+  summarizeIngressHandoffPolicyJa,
+  nextStepIngressHandoffJa,
+} from "@/lib/ingress-handoff/validate";
 import { listSlackImRoutesByOrg } from "@/lib/data/slack-im-routes";
 import { getEmployeeSlackIdentity } from "@/lib/data/slack-identities";
 import { resolveOrgSlackBotToken } from "@/lib/slack/bot-token";
@@ -139,6 +144,56 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
     inputSchema: {
       type: "object",
       properties: {},
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "ingressHandoff.get",
+    description:
+      "Read the org ingress handoff policy (read-only, no approval required). Returns current policy with summaryJa and nextStepJa. Extends channels.classify / parties / risk_based / always_human patterns. Staffpass = act boundary; Sealith = encrypted file handoff; no round-trip masking.",
+    inputSchema: {
+      type: "object",
+      properties: {},
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "ingressHandoff.patch",
+    description:
+      "Patch the org ingress handoff policy after human approval (always_human). Full replace of rules array. First-match rule ordering. Admin cannot self-approve. Convenience default: body=full, attachment=meta, sealith=off. Tighten for external/sensitive via ordered rules.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        rules: {
+          type: "array",
+          description: "Full replacement rules array (first match wins)",
+          items: {
+            type: "object",
+            properties: {
+              id: { type: "string" },
+              applyTo: { type: "string", description: "all | channels | classified_external_sensitive" },
+              channelIds: { type: "array", items: { type: "string" } },
+              body: { type: "string", description: "full | prefix | none" },
+              bodyPrefixChars: { type: "number", description: "1-4000, required when body=prefix" },
+              attachment: { type: "string", description: "file | meta | none" },
+              attachmentApproval: { type: "string", description: "none | manager (only when attachment!=none)" },
+              sealith: { type: "string", description: "off | suggest | required" },
+              sealithRequiredHints: { type: "array", items: { type: "string" } },
+              sealithRequiredOtherText: { type: "string" },
+              audit: {
+                type: "object",
+                properties: {
+                  jobId: { type: "boolean", description: "Always true" },
+                  sealithTransferId: { type: "boolean" },
+                },
+              },
+            },
+            required: ["applyTo", "body", "attachment", "sealith"],
+          },
+        },
+        jobId: { type: "string" },
+      },
+      required: ["rules"],
       additionalProperties: false,
     },
   },
@@ -323,6 +378,30 @@ async function runSlackStatusDiagnose(
   };
 }
 
+type IngressHandoffGetResult = {
+  ok: boolean;
+  policy: Awaited<ReturnType<typeof getOrgIngressHandoffPolicy>>;
+  summaryJa: string;
+  nextStepJa: string;
+};
+
+async function runIngressHandoffGet(
+  cred: ResolvedAdminCredential
+): Promise<{ content: Array<{ type: "text"; text: string }>; structuredContent?: unknown; isError?: boolean }> {
+  const policy = await getOrgIngressHandoffPolicy(cred.orgId);
+  const result: IngressHandoffGetResult = {
+    ok: true,
+    policy,
+    summaryJa: summarizeIngressHandoffPolicyJa(policy),
+    nextStepJa: nextStepIngressHandoffJa(policy),
+  };
+  return {
+    content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+    structuredContent: result,
+    isError: false,
+  };
+}
+
 export async function callAdminMcpTool(
   name: string,
   args: Record<string, unknown>,
@@ -398,6 +477,25 @@ export async function callAdminMcpTool(
     return runSlackStatusDiagnose(cred);
   }
 
+  if (name === "ingressHandoff.get") {
+    return runIngressHandoffGet(cred);
+  }
+
+  if (name === "ingressHandoff.patch") {
+    const validationResult = validateIngressHandoffPolicy({ rules: args.rules });
+    if (!validationResult.ok) {
+      return toolResult(
+        {
+          ok: false,
+          code: "validation_failed",
+          message: "ルールの検証に失敗しました",
+          errors: validationResult.errors,
+        },
+        true
+      );
+    }
+  }
+
   let queuedArgs = { ...args };
   let summary = `${name} の実行を人が確認します`;
 
@@ -439,6 +537,9 @@ export async function callAdminMcpTool(
     summary = `チャネル分類を人が確認します（${String(args.externalId || args.identifier)}）`;
   } else if (name === "link") {
     summary = `連携を人が確認します（${String(args.employeeId)}）`;
+  } else if (name === "ingressHandoff.patch") {
+    const rulesCount = Array.isArray(args.rules) ? args.rules.length : 0;
+    summary = `受信の渡し方ポリシーの更新を人が確認します（${rulesCount}ルール）`;
   }
 
   const queued = await queueAdminTool({
