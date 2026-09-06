@@ -24,10 +24,14 @@
     "parties.upsert",
     "channels.classify",
     "roles.propose",
-    "setup.slackStatus"
+    "setup.slackStatus",
+    "ingressHandoff.get",
+    "ingressHandoff.patch"
   ],
   "capabilities": {
-    "tools": true
+    "tools": {
+      "listChanged": true
+    }
   },
   "notes": [
     "Separate mouth from employee badge MCP (/api/mcp, gb_emp_). Never share that header here.",

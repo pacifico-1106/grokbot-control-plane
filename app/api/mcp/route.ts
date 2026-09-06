@@ -125,7 +125,7 @@ export async function POST(req: Request) {
     return jsonRpcResult(id, {
       protocolVersion: MCP_PROTOCOL_VERSION,
       capabilities: {
-        tools: { listChanged: false },
+        tools: { listChanged: true },
       },
       serverInfo: {
         name: MCP_SERVER_NAME,
