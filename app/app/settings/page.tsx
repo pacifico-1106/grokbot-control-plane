@@ -2,10 +2,12 @@ import { AppShell } from "@/components/AppShell";
 import { ConversationAdaptersClient } from "@/components/ConversationAdaptersClient";
 import { NotificationChannelsClient } from "@/components/NotificationChannelsClient";
 import { PartyDirectoryClient } from "@/components/PartyDirectoryClient";
+import { IngressHandoffPolicyClient } from "@/components/settings/IngressHandoffPolicyClient";
 import { ProjectsClient } from "@/components/settings/ProjectsClient";
 import { SodWarnPolicyClient } from "@/components/settings/SodWarnPolicyClient";
 import { getSessionContext } from "@/lib/auth/session";
 import {
+  getOrgIngressHandoffPolicy,
   getOrgSodWarnPolicy,
   listConversationAdapters,
   listInformationAssets,
@@ -14,6 +16,7 @@ import {
   listOrgParties,
   listOrgProjects,
 } from "@/lib/data";
+import { isDefaultIngressHandoffPolicy } from "@/lib/ingress-handoff/validate";
 
 export const dynamic = "force-dynamic";
 
@@ -27,6 +30,10 @@ export default async function SettingsPage() {
   const projects = canManage ? await listOrgProjects(session.orgId) : [];
   const assets = canManage ? await listInformationAssets(session.orgId) : [];
   const sodWarnPolicy = canManage ? await getOrgSodWarnPolicy(session.orgId) : null;
+  const ingressHandoffPolicy = canManage ? await getOrgIngressHandoffPolicy(session.orgId) : null;
+  const ingressHandoffIsDefault = ingressHandoffPolicy
+    ? isDefaultIngressHandoffPolicy(ingressHandoffPolicy)
+    : true;
   return (
     <AppShell
       title="つながり"
@@ -63,6 +70,12 @@ export default async function SettingsPage() {
             認証情報は暗号化して保存し、画面には再表示しません。変更とテスト送信は記録に残します。
           </p>
           <PartyDirectoryClient initialParties={parties} initialChannels={orgChannels} readOnly />
+          {ingressHandoffPolicy ? (
+            <IngressHandoffPolicyClient
+              policy={ingressHandoffPolicy}
+              isDefault={ingressHandoffIsDefault}
+            />
+          ) : null}
           {sodWarnPolicy ? <SodWarnPolicyClient initialPolicy={sodWarnPolicy} /> : null}
           <ProjectsClient initialProjects={projects} initialAssets={assets} />
         </>

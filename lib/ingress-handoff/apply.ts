@@ -312,3 +312,37 @@ export function applyIngressHandoffSync(
     sealithTransferId,
   };
 }
+
+/**
+ * Build audit metadata for ingress handoff with sealithTransferId tracking.
+ * Used to persist transferId on approval cards and audit events.
+ */
+export function buildIngressHandoffAuditMetadata(
+  rule: IngressHandoffRule,
+  options: ApplyIngressOptions,
+  extra?: Record<string, unknown>
+): Record<string, unknown> {
+  const sealithIntent = extractSealithIntent(rule);
+
+  const metadata: Record<string, unknown> = {
+    ingressHandoff: {
+      ruleId: rule.id,
+      applyTo: rule.applyTo,
+      bodyMode: rule.body,
+      attachmentMode: rule.attachment,
+      sealithMode: sealithIntent.mode,
+      sealithRequired: sealithIntent.required,
+    },
+    ...extra,
+  };
+
+  if (rule.audit.sealithTransferId && options.sealithTransferId) {
+    metadata.sealithTransferId = options.sealithTransferId;
+  }
+
+  if (options.jobId) {
+    metadata.jobId = options.jobId;
+  }
+
+  return metadata;
+}
