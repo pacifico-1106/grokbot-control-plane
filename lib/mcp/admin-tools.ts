@@ -20,13 +20,13 @@ import {
   validateIngressHandoffPolicy,
   summarizeIngressHandoffPolicyJa,
   nextStepIngressHandoffJa,
-  policyHasHighRiskAutomation,
+  policyHasHighRiskAutomation as ingressPolicyHasHighRisk,
 } from "@/lib/ingress-handoff/validate";
 import {
   validateSchedulingPolicy,
   summarizeSchedulingPolicyJa,
   nextStepSchedulingPolicyJa,
-  policyHasHighRiskAutomation,
+  policyHasHighRiskAutomation as schedulingPolicyHasHighRisk,
 } from "@/lib/scheduling-policy/validate";
 import { listSlackImRoutesByOrg } from "@/lib/data/slack-im-routes";
 import { getEmployeeSlackIdentity } from "@/lib/data/slack-identities";
@@ -537,7 +537,7 @@ async function runIngressHandoffGet(
   }
 
   const effective = await getEffectiveIngressHandoffPolicy(cred.orgId, employeeId);
-  const hasHighRisk = policyHasHighRiskAutomation(effective.policy);
+  const hasHighRisk = ingressPolicyHasHighRisk(effective.policy);
   const result: IngressHandoffGetResult = {
     ok: true,
     policy: effective.policy,
@@ -599,7 +599,7 @@ async function runSchedulingPolicyGet(
   }
 
   const effective = await getEffectiveSchedulingPolicy(cred.orgId, employeeId);
-  const hasHighRisk = policyHasHighRiskAutomation(effective.policy);
+  const hasHighRisk = schedulingPolicyHasHighRisk(effective.policy);
   const result: SchedulingPolicyGetResult = {
     ok: true,
     policy: effective.policy,
@@ -894,7 +894,7 @@ export async function callAdminMcpTool(
     const rulesCount = Array.isArray(args.rules) ? args.rules.length : 0;
     const hasHighRiskConsent = Boolean(args.highRiskConsentAt);
     const rulesArray = Array.isArray(args.rules) ? args.rules : [];
-    const hasHighRiskConfig = policyHasHighRiskAutomation({ rules: rulesArray as Parameters<typeof policyHasHighRiskAutomation>[0]["rules"] });
+    const hasHighRiskConfig = ingressPolicyHasHighRisk({ rules: rulesArray as Parameters<typeof ingressPolicyHasHighRisk>[0]["rules"] });
     if (clearOverride && employeeId) {
       summary = `AI社員の受信の渡し方オーバーライドをクリアして組織ポリシーを継承します`;
     } else if (employeeId) {
