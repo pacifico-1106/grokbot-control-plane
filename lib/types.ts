@@ -958,3 +958,99 @@ export interface MouthRoutingAuditLabel {
   appliedRules: string[];
   reason?: string;
 }
+
+/**
+ * B2 Reply Policy — Slack/LINE conversation reply behavior.
+ *
+ * Controls how AI employees respond on conversation surfaces:
+ * - Mouth choice/priority (connects to F1 mouth-routing, does not reinvent)
+ * - After-hours behavior (drafts only when outside business hours)
+ * - Emoji/short-reply allow/deny
+ * - Channel/thread rules (1 topic = 1 thread)
+ *
+ * Conversation mouths ≠ approval notification channels (never mix).
+ */
+
+/** After-hours behavior mode. */
+export type AfterHoursMode = "draft_only" | "allow_send" | "hold_approval";
+
+/** Short reply behavior. */
+export type ShortReplyMode = "allow" | "deny" | "warn";
+
+/** Emoji usage mode. */
+export type EmojiMode = "allow" | "deny" | "limited";
+
+/** Thread affinity mode for channel replies. */
+export type ThreadAffinityMode = "prefer_thread" | "new_thread_per_topic" | "channel_root";
+
+/**
+ * Business hours window for after-hours policy.
+ */
+export interface BusinessHoursWindow {
+  dayOfWeek: number[];
+  startTime: string;
+  endTime: string;
+  timezone?: string;
+}
+
+/**
+ * Single reply policy rule.
+ */
+export interface ReplyPolicyRule {
+  id: string;
+  priority?: number;
+  surface?: ConversationSurface;
+  afterHoursMode: AfterHoursMode;
+  businessHours?: BusinessHoursWindow;
+  shortReplyMode: ShortReplyMode;
+  shortReplyMinChars?: number;
+  emojiMode: EmojiMode;
+  allowedEmojis?: string[];
+  threadAffinity: ThreadAffinityMode;
+  topicChangeThreshold?: number;
+}
+
+/**
+ * Org-level reply policy.
+ * Follows A1/F1 rule-pack shape (policyId / ruleset / fail-closed / audit / high-risk consent).
+ */
+export interface OrgReplyPolicy {
+  version: 1;
+  policyId: string;
+  policyName: string;
+  rules: ReplyPolicyRule[];
+  highRiskConsentAt?: string;
+  highRiskConsentBy?: string;
+  updatedAt: string;
+  updatedBy: string;
+}
+
+/**
+ * Reply policy application result.
+ */
+export interface ReplyPolicyDecision {
+  allowed: boolean;
+  draftOnly: boolean;
+  holdApproval: boolean;
+  holdReason?: string;
+  emojiStripped: boolean;
+  shortReplyWarning: boolean;
+  threadTs?: string;
+  newThread: boolean;
+  auditLabels: string[];
+  appliedRules: string[];
+}
+
+/**
+ * Audit label for reply policy decisions.
+ */
+export interface ReplyPolicyAuditLabel {
+  replyId: string;
+  surface: ConversationSurface;
+  afterHoursApplied: boolean;
+  draftOnly: boolean;
+  emojiMode: EmojiMode;
+  threadAffinity: ThreadAffinityMode;
+  appliedRules: string[];
+  reason?: string;
+}

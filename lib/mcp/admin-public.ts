@@ -28,6 +28,8 @@ export const ADMIN_MCP_TOOL_NAMES = [
   "ingressHandoff.patch",
   "schedulingPolicy.get",
   "schedulingPolicy.patch",
+  "replyPolicy.get",
+  "replyPolicy.patch",
 ] as const;
 
 export type AdminMcpToolName = (typeof ADMIN_MCP_TOOL_NAMES)[number];

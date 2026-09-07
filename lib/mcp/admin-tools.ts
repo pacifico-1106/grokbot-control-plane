@@ -27,6 +27,12 @@ import {
   nextStepSchedulingPolicyJa,
   policyHasHighRiskAutomation,
 } from "@/lib/scheduling-policy/validate";
+import {
+  validateReplyPolicy,
+  summarizeReplyPolicyJa,
+  nextStepReplyPolicyJa,
+  policyHasHighRiskAutoSend,
+} from "@/lib/gateway/reply-policy-validate";
 import { listSlackImRoutesByOrg } from "@/lib/data/slack-im-routes";
 import { getEmployeeSlackIdentity } from "@/lib/data/slack-identities";
 import { resolveOrgSlackBotToken } from "@/lib/slack/bot-token";
@@ -37,6 +43,7 @@ import { buildEmployeePolicyDrafts } from "@/lib/employees/policy-draft";
 import { parseRolesProposeInput } from "@/lib/mcp/roles-propose";
 import { ALL_SCOPES } from "@/lib/employees/policy-draft";
 import { ADMIN_AUDIT_CLASS } from "@/lib/admin-mcp/audit-class";
+import { getEffectiveReplyPolicy, type ReplyPolicySource } from "@/lib/data/reply-policy";
 
 export const ADMIN_MCP_TOOLS: McpToolDef[] = [
   {
@@ -312,6 +319,65 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
       additionalProperties: false,
     },
   },
+  {
+    name: "replyPolicy.get",
+    description:
+      "Read reply policy (read-only, no approval required). Omit employeeId for org policy; include for AI社員ごとの設定. Returns effective policy + source layer (employee/org/default) + layers (employeeOverride/orgPolicy). B2 reply policy: Slack/LINE返信ルールパック（営業時間外動作・絵文字/短文制御・スレッド親和性）。afterHoursMode の allow_send 設定は highRiskConsentAt/By が必要。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        employeeId: { type: "string", description: "Optional employee ID for per-employee lookup" },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "replyPolicy.patch",
+    description:
+      "Patch reply policy after human approval (always_human). Omit employeeId for org policy; include for AI社員ごとの設定. To clear employee override (inherit org), set clearOverride=true. Full replace of rules array. First-match rule ordering. Admin cannot self-approve. High-risk after-hours mode (allow_send) requires explicit tenant consent (highRiskConsentAt/By). 【高リスク警告】営業時間外の自動送信は silent enable 禁止。承諾 + settings on audit (F4/F5)。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        employeeId: { type: "string", description: "Optional employee ID for per-employee override" },
+        clearOverride: { type: "boolean", description: "Set true to clear employee override and inherit org policy" },
+        policyName: { type: "string", description: "Human-readable policy name" },
+        rules: {
+          type: "array",
+          description: "Full replacement rules array (first match wins). Omit when clearOverride=true.",
+          items: {
+            type: "object",
+            properties: {
+              id: { type: "string" },
+              priority: { type: "number" },
+              surface: { type: "string", description: "slack | line | mail | phone | web (optional, apply to all if omitted)" },
+              afterHoursMode: { type: "string", description: "draft_only | allow_send | hold_approval. High-risk (allow_send) requires consent." },
+              businessHours: {
+                type: "object",
+                description: "Business hours window",
+                properties: {
+                  dayOfWeek: { type: "array", items: { type: "number" }, description: "0=Sun, 6=Sat" },
+                  startTime: { type: "string", description: "HH:MM" },
+                  endTime: { type: "string", description: "HH:MM" },
+                  timezone: { type: "string", description: "IANA timezone (default: Asia/Tokyo)" },
+                },
+              },
+              shortReplyMode: { type: "string", description: "allow | deny | warn" },
+              shortReplyMinChars: { type: "number", description: "Minimum chars for non-short reply (1-1000)" },
+              emojiMode: { type: "string", description: "allow | deny | limited" },
+              allowedEmojis: { type: "array", items: { type: "string" }, description: "Allowed emojis when emojiMode=limited" },
+              threadAffinity: { type: "string", description: "prefer_thread | new_thread_per_topic | channel_root" },
+              topicChangeThreshold: { type: "number", description: "Topic similarity threshold for new_thread_per_topic (0-1)" },
+            },
+            required: ["afterHoursMode", "shortReplyMode", "emojiMode", "threadAffinity"],
+          },
+        },
+        highRiskConsentAt: { type: "string", description: "ISO timestamp of tenant consent for high-risk automation" },
+        highRiskConsentBy: { type: "string", description: "Email/name of person who gave consent" },
+        jobId: { type: "string" },
+      },
+      additionalProperties: false,
+    },
+  },
 ];
 
 function toolResult(data: unknown, isError = false) {
@@ -571,6 +637,12 @@ const SCHEDULING_SOURCE_JA: Record<SchedulingPolicySource, string> = {
   default: "デフォルト（always_human）",
 };
 
+const REPLY_POLICY_SOURCE_JA: Record<ReplyPolicySource, string> = {
+  employee: "AI社員オーバーライド",
+  org: "組織ポリシー",
+  default: "デフォルト（draft_only / 絵文字制限 / スレッド優先）",
+};
+
 async function runSchedulingPolicyGet(
   cred: ResolvedAdminCredential,
   args: Record<string, unknown>
@@ -603,6 +675,62 @@ async function runSchedulingPolicyGet(
     sourceJa: SCHEDULING_SOURCE_JA[effective.source],
     nextStepJa: nextStepSchedulingPolicyJa(effective.policy),
     hasHighRiskAutomation: hasHighRisk,
+    highRiskConsentRecorded: Boolean(effective.policy.highRiskConsentAt),
+  };
+  return {
+    content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+    structuredContent: result,
+    isError: false,
+  };
+}
+
+type ReplyPolicyGetResult = {
+  ok: boolean;
+  policy: Awaited<ReturnType<typeof getEffectiveReplyPolicy>>["policy"];
+  source: ReplyPolicySource;
+  layers: {
+    employeeOverride: Awaited<ReturnType<typeof getEffectiveReplyPolicy>>["employeeOverride"];
+    orgPolicy: Awaited<ReturnType<typeof getEffectiveReplyPolicy>>["orgPolicy"];
+  };
+  summaryJa: string;
+  sourceJa: string;
+  nextStepJa: string;
+  hasHighRiskAutoSend: boolean;
+  highRiskConsentRecorded: boolean;
+};
+
+async function runReplyPolicyGet(
+  cred: ResolvedAdminCredential,
+  args: Record<string, unknown>
+): Promise<{ content: Array<{ type: "text"; text: string }>; structuredContent?: unknown; isError?: boolean }> {
+  const employeeId = typeof args.employeeId === "string" && args.employeeId.trim()
+    ? args.employeeId.trim()
+    : null;
+
+  if (employeeId) {
+    const employee = await getEmployee(employeeId, cred.orgId);
+    if (!employee) {
+      return toolResult(
+        { ok: false, code: "employee_not_found", message: "AI社員が見つかりません" },
+        true
+      );
+    }
+  }
+
+  const effective = await getEffectiveReplyPolicy(cred.orgId, employeeId);
+  const hasHighRisk = policyHasHighRiskAutoSend(effective.policy);
+  const result: ReplyPolicyGetResult = {
+    ok: true,
+    policy: effective.policy,
+    source: effective.source,
+    layers: {
+      employeeOverride: effective.employeeOverride,
+      orgPolicy: effective.orgPolicy,
+    },
+    summaryJa: summarizeReplyPolicyJa(effective.policy),
+    sourceJa: REPLY_POLICY_SOURCE_JA[effective.source],
+    nextStepJa: nextStepReplyPolicyJa(effective.policy),
+    hasHighRiskAutoSend: hasHighRisk,
     highRiskConsentRecorded: Boolean(effective.policy.highRiskConsentAt),
   };
   return {
@@ -738,6 +866,81 @@ export async function callAdminMcpTool(
 
   if (name === "schedulingPolicy.get") {
     return runSchedulingPolicyGet(cred, args);
+  }
+
+  if (name === "replyPolicy.get") {
+    return runReplyPolicyGet(cred, args);
+  }
+
+  if (name === "replyPolicy.patch") {
+    const employeeId = typeof args.employeeId === "string" && args.employeeId.trim()
+      ? args.employeeId.trim()
+      : null;
+    const clearOverride = args.clearOverride === true;
+
+    if (employeeId) {
+      const employee = await getEmployee(employeeId, cred.orgId);
+      if (!employee) {
+        return toolResult(
+          { ok: false, code: "employee_not_found", message: "AI社員が見つかりません" },
+          true
+        );
+      }
+    }
+
+    if (clearOverride) {
+      if (!employeeId) {
+        return toolResult(
+          { ok: false, code: "clear_requires_employee", message: "オーバーライドのクリアはemployeeIdが必要です" },
+          true
+        );
+      }
+    } else {
+      if (!Array.isArray(args.rules) || args.rules.length === 0) {
+        return toolResult(
+          { ok: false, code: "rules_required", message: "rulesが必要です（clearOverride=true以外）" },
+          true
+        );
+      }
+
+      const existingPolicy = await getEffectiveReplyPolicy(cred.orgId, employeeId);
+      const existingConsent = existingPolicy.policy.highRiskConsentAt
+        ? { at: existingPolicy.policy.highRiskConsentAt, by: existingPolicy.policy.highRiskConsentBy || "unknown" }
+        : null;
+
+      const validationResult = validateReplyPolicy(
+        {
+          policyName: args.policyName,
+          rules: args.rules,
+          highRiskConsentAt: args.highRiskConsentAt,
+          highRiskConsentBy: args.highRiskConsentBy,
+        },
+        {
+          requireHighRiskConsent: true,
+          existingConsent,
+        }
+      );
+
+      if (!validationResult.ok) {
+        const hasHighRiskError = validationResult.errors.some(
+          (e) => e.code === "high_risk_consent_required"
+        );
+        return toolResult(
+          {
+            ok: false,
+            code: hasHighRiskError ? "high_risk_consent_required" : "validation_failed",
+            message: hasHighRiskError
+              ? "営業時間外の自動送信にはテナント承諾が必要です。highRiskConsentAt/By を設定してください。"
+              : "ルールの検証に失敗しました",
+            errors: validationResult.errors,
+            warningJa: hasHighRiskError
+              ? "【高リスク警告】営業時間外の自動送信は silent enable 禁止。承諾 + settings on audit。"
+              : undefined,
+          },
+          true
+        );
+      }
+    }
   }
 
   if (name === "schedulingPolicy.patch") {
@@ -879,6 +1082,21 @@ export async function callAdminMcpTool(
     } else {
       const consentNote = hasHighRiskConsent ? "・高リスク承諾あり" : "";
       summary = `組織のスケジューリングポリシーの更新を人が確認します（${rulesCount}ルール${consentNote}）`;
+    }
+  } else if (name === "replyPolicy.patch") {
+    const employeeId = typeof args.employeeId === "string" && args.employeeId.trim()
+      ? args.employeeId.trim()
+      : null;
+    const clearOverride = args.clearOverride === true;
+    const rulesCount = Array.isArray(args.rules) ? args.rules.length : 0;
+    const hasHighRiskConsent = Boolean(args.highRiskConsentAt);
+    if (clearOverride && employeeId) {
+      summary = `AI社員の返信ポリシーオーバーライドをクリアして組織ポリシーを継承します`;
+    } else if (employeeId) {
+      summary = `AI社員ごとの返信ポリシーオーバーライドを設定します（${rulesCount}ルール）`;
+    } else {
+      const consentNote = hasHighRiskConsent ? "・高リスク承諾あり" : "";
+      summary = `組織の返信ポリシーの更新を人が確認します（${rulesCount}ルール${consentNote}）`;
     }
   }
 
