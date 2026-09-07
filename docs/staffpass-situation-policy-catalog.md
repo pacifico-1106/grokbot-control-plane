@@ -82,7 +82,7 @@
 - **Staffpass載せ方:** mail.send ＋ ingress/egress ＋ Sealith handoff
 
 ### B2 Slack／LINE等の返信（実装中 → shipped-slice）
-- **ステータス**: 🔧 実装中（PR #XX）
+- **ステータス**: 🔧 実装中（PR #42）
 - **ルール例:** 口の選択（F1連携）、営業時間外は下書きのみ、絵文字／短文可否  
 - **追記採用:**  
   - 複数口があるときの**優先度**（F1 mouth-routing と連携、再発明しない）  
