@@ -86,6 +86,8 @@ S1 の `dualAudience` を使い、混在チャネルでは WHO×WHAT マトリ�
 
 S3 では `effectiveDecision` の結果に基づき、チャネル本文は external-safe、内部詳細は DM / 限定スレッドへルーティングします（本 PR の範囲外）。
 
+> **オペレータ向けガイダンス**: テナント管理エージェント向けの kickoff rail は [tenant-slack-kickoff-rail.md](./tenant-slack-kickoff-rail.md) を参照。混在chは相手台帳必須（`parties.upsert`）。S1/S2/S3 の進捗もそちらに記載。
+
 ## 情報区分（WHAT）— ちょうど4つ
 
 `public` | `internal` | `confidential` | `verbatim`

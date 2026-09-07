@@ -371,6 +371,100 @@ App DM（Staffpassアプリへの直接DM）への返信には `posting_as: bot`
 - [slack-internal-im-ingress.md](./slack-internal-im-ingress.md) - 社内1:1の受け口技術詳細
 - [mcp.md](./mcp.md) - MCP全般
 - [agent-credential-guide.md](./agent-credential-guide.md) - 社員証ガイド
+- [egress-policy.md](./egress-policy.md) - 相手×情報区分の出域制御（dual-audience 詳細）
+
+---
+
+## プロダクトロック・ガイダンス（オペレータ向け）
+
+管理エージェントはテナントに以下の製品ロックと進捗を説明してください。
+
+### 1. 混在チャネル dual-audience（メンバーレベル解決）
+
+混在チャネル（`shared_external` / Slack Connect / ゲスト招待）では、チャネル単位ではなく **宛先パーティごと** に audience を解決します。
+
+| スライス | ステータス | 内容 |
+|----------|------------|------|
+| **S1** | ✅ 本番稼働（PR #34 / main ~06feb7f） | `resolveAudience` がパーティごとの `dualAudience` を返却（`internalFacing` / `externalFacing`）。チャネル単位の `effectiveAudience` は後方互換で external（floor） |
+| **S2** | ✅ 本番稼働（PR #36 / main ~aea4162） | 二重マトリクス評価 `dualEgress`（`internalDecision` / `externalDecision`）。チャネル投稿は external-safe を維持 |
+| **S3** | ⏳ 未着手 | チャネル body = external-safe、内部詳細 → DM / 限定スレッド / 承認へルーティング分岐 |
+
+**例**: `#stablo_tokyo307` Connect チャネル
+- Yasaka 社員 `U_YAMADA` → `partySignals[{internal, resolved}]`
+- Uehara/Stablo 外部ゲスト → `partySignals[{external, resolved}]` または `{unknown, !resolved}`
+- `dualAudience.hasInternalParty = true`, `hasExternalParty = true`
+
+**運用ガイダンス（S4スタイル）**:
+- **混在chは相手台帳必須**: `parties.upsert` でメンバーの audience（internal / external）を登録
+- 未登録パーティは fail-closed で external 扱い
+- メンションは依然としてチャネル / Connect の wake に必要（DM の `employeeId` 指定とは別）
+- **承認要否 ≠ メンション相手**: 承認判定は audience × 情報区分マトリクス。メンションした人が承認者になるわけではない
+
+### 2. スケジューリング / scheduling.policy（バックログ — 未出荷）
+
+カレンダー連携の自動化フローです。**現時点では実装されていません**。
+
+**想定フロー**:
+1. `calendar.freebusy` で空き時間を取得
+2. （任意）manager / org ポリシーで候補をフィルタ
+3. 対外提案には **最終候補のみ** を表示（内部の全空き枠は見せない）
+4. `calendar.confirm` で予定を確定
+
+**オンラインミーティング設定**:
+- `online_calendar_target`: カレンダープロバイダ（Google / Outlook 等）
+- `online_video_tool`: ビデオツール（Zoom / Meet / Teams 等）— 許可リスト + デフォルト
+- 未定義または許可外は **fail-closed**（対外には送信しない）
+
+**確定能力の上限**:
+- 製品の強制上限は **フル自動確定を許可** する設計（テナント ToS で自己責任）
+- `always_human` を強制する製品ハードシーリングは**ありません**
+- デフォルトプリセットは cautious（人間承認推奨）に留まる可能性あり
+
+**高リスク設定の警告**:
+以下の設定は有効化前に **明示的なテナント承諾** が必要です（informed consent + 監査記録）。サイレント有効化は禁止。
+
+| 高リスク設定 | 警告 |
+|--------------|------|
+| フル自動確定（`calendar.confirm` 人間承認なし） | 誤送信・ダブルブッキングのリスク |
+| 外部/クライアント宛の自動送信 | audience 判定ミスで機密漏洩 |
+| ポリシーなしの自動化 | ガードレールなしの野良運用 |
+| 過度に広い egress 許可 | 情報区分を無視した漏洩 |
+
+> **Note**: scheduling.policy のランタイム実装はこの PR の範囲外です。上記は将来のガイダンス用ドキュメントです。
+
+### 3. 複数の通信口（会話アダプタ vs 承認通知チャネル）
+
+Staffpass は **会話アダプタ**（AI社員が相手と話す口）と **承認通知チャネル**（人間へ承認を届ける口）を **混ぜません**。
+
+| 面 | 役割 | 例 |
+|----|------|----|
+| 会話アダプタ | AI社員 ↔ 相手 の情報送受信 | `comm.send` / `comm.reply` / `slack.post` |
+| 承認通知チャネル | 人間 ← 承認依頼 の通知 | Telegram / LINE notify |
+
+**会話アダプタのロードマップ（SME）**:
+1. **Slack** — 本番稼働中（パスA・B）
+2. **LINE** — 予約中（Jurin 電話含む）
+3. **Chatwork** — ConversationSurface 未実装
+4. **Messenger** — ConversationSurface 未実装
+
+**現在の稼働状況**:
+- 会話の本番: 主に **Slack**
+- 承認通知: **Telegram**（LINE notify も存在）
+- LINE / Jurin の会話アダプタ: 予約（未稼働）
+- Chatwork / Messenger: ConversationSurface にまだ載っていない
+
+**重要**: 会話アダプタを承認通知チャネルとして使わないでください。逆も同様。
+
+### 4. 製品コピー / 本分
+
+Staffpass の本分:
+
+> **与えられた権限の範囲内で行動し、範囲外はブロックする。自動行為は consent / tool / destination を監査に残す。**
+
+**危険な組み合わせの扱い**:
+- 製品は能力を hard-stop **しません**
+- 危険な組み合わせには **承諾ログ** を要求します（組み合わせ警告は承諾のみ）
+- 例: 高リスク設定の有効化 → 警告 + 明示的テナント承諾 → 監査記録
 
 ---
 
