@@ -291,6 +291,8 @@ xAI API の remote MCP も同じ URL / Bearer を指定してください。
 | `ingressHandoff.patch` | always_human | 受信ハンドオフポリシー更新（AI社員ごとにemployeeId指定可、clearOverrideで継承） |
 | `schedulingPolicy.get` | なし（read-only） | A1 スケジューリングポリシー読み取り（本番稼働中） |
 | `schedulingPolicy.patch` | always_human | スケジューリングポリシー更新（高リスク承諾必須） |
+| `replyPolicy.get` | なし（read-only） | B2 返信ポリシー読み取り（本番稼働中、AI社員ごとにemployeeId指定可） |
+| `replyPolicy.patch` | always_human | 返信ポリシー更新（営業時間外 allow_send は高リスク承諾必須） |
 
 監査クラスは `admin.hire` / `admin.policy` / `admin.parties` など。`tool.invoke` / `mail.send` とは分けます。管理エージェントは自分の申請を承認できません。
 
