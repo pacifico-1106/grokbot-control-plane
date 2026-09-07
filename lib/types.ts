@@ -775,7 +775,11 @@ export interface IngressHandoffRule {
 
 export interface OrgIngressHandoffPolicy {
   version: 1;
+  policyId: string;
+  policyName: string;
   rules: IngressHandoffRule[];
+  highRiskConsentAt?: string;
+  highRiskConsentBy?: string;
   updatedAt: string;
   updatedBy: "admin_mcp";
 }

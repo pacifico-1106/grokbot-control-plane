@@ -130,9 +130,15 @@
 
 ## D. 情報の渡し方
 
-### D1 添付・ファイル手渡し（一部済）
+### D1 添付・ファイル手渡し（shipped）
 - **ルール例:** 全文／要約／Sealith切替、上長承認  
-- **Staffpass載せ方:** ingress_handoff_policy（社員ごと）継続
+- **状態:** `ingress_handoff_policy` 実装完了（型・検証・適用エンジン・Admin MCP・高リスク承諾）
+- **Sealith:** off / suggest / required; required without transferId → fail-closed; audit sealithTransferId + jobId
+- **Manager approval:** `attachmentApproval=manager` で fail-closed（承認後に添付を渡す）
+- **高リスク承諾:** `attachment=file + sealith=off + classified_external_sensitive` は silent enable 禁止 → `highRiskConsentAt/By` 必須
+- **Admin MCP ツール:** `ingressHandoff.get` (read-only) / `ingressHandoff.patch` (always_human)
+- **スキーマ:** `orgs.ingress_handoff_policy` / `employees.ingress_handoff_policy` (オーバーライド)
+- **詳細:** `docs/ingress-handoff-d1.md`
 
 ### D2 ナレッジ回答
 - **ルール例:** 社外は公開FAQのみ、社内は案件フォルダまで  

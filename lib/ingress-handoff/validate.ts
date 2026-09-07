@@ -63,6 +63,10 @@ function generateRuleId(): string {
   return `ihr_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
 }
 
+function generatePolicyId(): string {
+  return `ihp_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+}
+
 export function validateRule(
   raw: unknown,
   index: number
@@ -222,7 +226,15 @@ export function validateRule(
   return { ok: true, rule };
 }
 
-export function validateIngressHandoffPolicy(input: unknown): ValidationResult {
+export type ValidationOptions = {
+  requireHighRiskConsent?: boolean;
+  existingConsent?: { at: string; by: string } | null;
+};
+
+export function validateIngressHandoffPolicy(
+  input: unknown,
+  options: ValidationOptions = {}
+): ValidationResult {
   const errors: ValidationError[] = [];
 
   if (!input || typeof input !== "object" || Array.isArray(input)) {
@@ -271,9 +283,42 @@ export function validateIngressHandoffPolicy(input: unknown): ValidationResult {
     return { ok: false, errors };
   }
 
+  const hasHighRisk = policyHasHighRiskAutomation({ rules: validatedRules });
+  const existingConsent = options.existingConsent;
+  const newConsentAt = typeof rec.highRiskConsentAt === "string" ? rec.highRiskConsentAt : undefined;
+  const newConsentBy = typeof rec.highRiskConsentBy === "string" ? rec.highRiskConsentBy : undefined;
+
+  if (hasHighRisk && options.requireHighRiskConsent) {
+    const hasConsent = (newConsentAt && newConsentBy) || existingConsent;
+    if (!hasConsent) {
+      errors.push({
+        field: "highRiskConsent",
+        code: "high_risk_consent_required",
+        message: "High-risk configuration (attachment=file + sealith=off + external_sensitive) requires explicit tenant consent",
+        messageJa: "高リスク設定（添付=ファイル + Sealith=オフ + 外部/機密分類）にはテナント承諾が必要です",
+      });
+      return { ok: false, errors };
+    }
+  }
+
+  const policyId = typeof rec.policyId === "string" && rec.policyId.trim()
+    ? rec.policyId.trim()
+    : generatePolicyId();
+  const policyName = typeof rec.policyName === "string" && rec.policyName.trim()
+    ? rec.policyName.trim()
+    : "受信の渡し方ポリシー";
+
   const policy: OrgIngressHandoffPolicy = {
     version: 1,
+    policyId,
+    policyName,
     rules: validatedRules,
+    ...(hasHighRisk && (newConsentAt || existingConsent?.at)
+      ? {
+          highRiskConsentAt: newConsentAt || existingConsent?.at,
+          highRiskConsentBy: newConsentBy || existingConsent?.by,
+        }
+      : {}),
     updatedAt: new Date().toISOString(),
     updatedBy: "admin_mcp",
   };
@@ -294,10 +339,33 @@ export const DEFAULT_INGRESS_HANDOFF_RULE: IngressHandoffRule = {
 export function defaultIngressHandoffPolicy(): OrgIngressHandoffPolicy {
   return {
     version: 1,
+    policyId: generatePolicyId(),
+    policyName: "デフォルト（便利設定）",
     rules: [{ ...DEFAULT_INGRESS_HANDOFF_RULE, id: generateRuleId() }],
     updatedAt: new Date().toISOString(),
     updatedBy: "admin_mcp",
   };
+}
+
+/**
+ * Check if a policy has high-risk automation configuration.
+ * High-risk: attachment=file + sealith=off on classified_external_sensitive scope.
+ * This pattern exposes raw file bodies to external/sensitive channels without
+ * encryption handoff protection. Requires explicit tenant consent.
+ */
+export function policyHasHighRiskAutomation(
+  policy: Pick<OrgIngressHandoffPolicy, "rules">
+): boolean {
+  for (const rule of policy.rules) {
+    if (
+      rule.applyTo === "classified_external_sensitive" &&
+      rule.attachment === "file" &&
+      rule.sealith === "off"
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export function normalizeIngressHandoffPolicy(value: unknown): OrgIngressHandoffPolicy {
@@ -318,9 +386,24 @@ export function normalizeIngressHandoffPolicy(value: unknown): OrgIngressHandoff
   if (validatedRules.length === 0) {
     return defaultIngressHandoffPolicy();
   }
+  const policyId = typeof rec.policyId === "string" && rec.policyId.trim()
+    ? rec.policyId.trim()
+    : generatePolicyId();
+  const policyName = typeof rec.policyName === "string" && rec.policyName.trim()
+    ? rec.policyName.trim()
+    : "受信の渡し方ポリシー";
+  const hasHighRisk = policyHasHighRiskAutomation({ rules: validatedRules });
   return {
     version: 1,
+    policyId,
+    policyName,
     rules: validatedRules,
+    ...(hasHighRisk && rec.highRiskConsentAt
+      ? {
+          highRiskConsentAt: String(rec.highRiskConsentAt),
+          highRiskConsentBy: typeof rec.highRiskConsentBy === "string" ? rec.highRiskConsentBy : undefined,
+        }
+      : {}),
     updatedAt: typeof rec.updatedAt === "string" ? rec.updatedAt : new Date().toISOString(),
     updatedBy: "admin_mcp",
   };
@@ -336,6 +419,10 @@ export function isDefaultIngressHandoffPolicy(policy: OrgIngressHandoffPolicy): 
     rule.sealith === "off" &&
     rule.audit.sealithTransferId === false
   );
+}
+
+export function hasHighRiskConsentRecorded(policy: OrgIngressHandoffPolicy): boolean {
+  return Boolean(policy.highRiskConsentAt && policy.highRiskConsentBy);
 }
 
 export function summarizeIngressHandoffPolicyJa(policy: OrgIngressHandoffPolicy): string {
@@ -365,7 +452,15 @@ export function summarizeIngressHandoffPolicyJa(policy: OrgIngressHandoffPolicy)
           : "なし";
     const sealithJa =
       rule.sealith === "off" ? "オフ" : rule.sealith === "suggest" ? "推奨" : "必須";
-    parts.push(`${applyToJa}: 本文=${bodyJa}, 添付=${attachmentJa}, Sealith=${sealithJa}`);
+    const approvalJa = rule.attachmentApproval === "manager" ? " (上長承認)" : "";
+    parts.push(`${applyToJa}: 本文=${bodyJa}, 添付=${attachmentJa}${approvalJa}, Sealith=${sealithJa}`);
+  }
+  const hasHighRisk = policyHasHighRiskAutomation(policy);
+  const hasConsent = hasHighRiskConsentRecorded(policy);
+  if (hasHighRisk && hasConsent) {
+    parts.push("【高リスク承諾済】");
+  } else if (hasHighRisk) {
+    parts.push("【高リスク警告】");
   }
   return parts.join(" / ");
 }
@@ -374,9 +469,18 @@ export function nextStepIngressHandoffJa(policy: OrgIngressHandoffPolicy): strin
   if (isDefaultIngressHandoffPolicy(policy)) {
     return "デフォルトの便利設定です。外部/機密チャネルにはルールを追加してください。AI社員ごとにオーバーライドも可能です。";
   }
+  const hasHighRisk = policyHasHighRiskAutomation(policy);
+  const hasConsent = hasHighRiskConsentRecorded(policy);
+  if (hasHighRisk && !hasConsent) {
+    return "【高リスク警告】外部/機密チャネルに対してファイル本体をSealithなしで渡す設定があります。テナント承諾 (highRiskConsentAt/By) が必要です。";
+  }
   const hasSealithRequired = policy.rules.some((r) => r.sealith === "required");
+  const hasManagerApproval = policy.rules.some((r) => r.attachmentApproval === "manager");
   if (hasSealithRequired) {
     return "Sealith必須ルールがあります。暗号化受け渡しの設定を確認してください。AI社員ごとにオーバーライドも可能です。";
+  }
+  if (hasManagerApproval) {
+    return "上長承認ルールがあります。添付ファイルは承認後に渡されます（fail-closed）。AI社員ごとにオーバーライドも可能です。";
   }
   return "ルール設定完了。チャネル分類と連動します。AI社員ごとにオーバーライドも可能です。";
 }
