@@ -856,3 +856,105 @@ export interface SchedulingAuditLabel {
   droppedByRules?: string[];
   reason?: string;
 }
+
+/**
+ * F1 Mouth Routing — dual-gate S3 + multi-mouth priority.
+ *
+ * Routes conversation content based on dualEgress decisions:
+ * - Channel/Connect posts: external-safe body only (effectiveDecision)
+ * - Internal-only content: route to DM / limited thread, or hold behind approval
+ *
+ * Conversation adapters ≠ approval notification channels (never mix).
+ */
+
+/** Multi-mouth priority order for conversation routing. */
+export type MouthPriority = ConversationSurface[];
+
+/** Default mouth priority: Slack → LINE → Chatwork → Messenger. */
+export const DEFAULT_MOUTH_PRIORITY: MouthPriority = ["slack", "line"];
+
+/**
+ * Routing path for a single piece of content.
+ * Determines where and how the content should be delivered.
+ */
+export type RoutingPath =
+  | { kind: "channel"; surfaceHint?: ConversationSurface }
+  | { kind: "dm"; targetUserIds: string[]; surfaceHint?: ConversationSurface }
+  | { kind: "limited_thread"; parentThreadId: string; surfaceHint?: ConversationSurface }
+  | { kind: "hold_approval"; reason: string }
+  | { kind: "deny"; reason: string };
+
+/**
+ * Content variant for routing — what version of the content to deliver.
+ */
+export type ContentVariant = "external_safe" | "internal_full" | "summary_only";
+
+/**
+ * Single routing instruction for a content piece.
+ */
+export interface RoutingInstruction {
+  path: RoutingPath;
+  contentVariant: ContentVariant;
+  audience: "internal" | "external";
+  auditLabel: string;
+}
+
+/**
+ * F1 mouth routing decision.
+ * May produce multiple instructions when internal/external paths differ.
+ */
+export interface MouthRoutingDecision {
+  /** Primary route for channel posting (always external-safe). */
+  channelRoute: RoutingInstruction | null;
+  /** Secondary route for internal-only content (DM / thread / approval). */
+  internalRoute: RoutingInstruction | null;
+  /** True when content was split across multiple paths. */
+  splitDelivery: boolean;
+  /** True when internal content was held (no internal parties, or fail-closed). */
+  internalHeld: boolean;
+  /** Reason for hold when internalHeld is true. */
+  holdReason?: string;
+  /** Audit metadata for both paths. */
+  auditLabels: string[];
+}
+
+/**
+ * F1 mouth routing policy configuration.
+ * Fits the A1 rule-pack shape (policyId / ruleset / fail-closed / audit).
+ */
+export interface MouthRoutingRule {
+  id: string;
+  priority?: number;
+  /** Surface priority override for this rule. */
+  mouthPriority?: MouthPriority;
+  /** When true, internal content goes to DM instead of thread. */
+  preferDmForInternal?: boolean;
+  /** When true, unknown internal parties trigger approval hold. */
+  holdOnUnknownInternal?: boolean;
+}
+
+export interface OrgMouthRoutingPolicy {
+  version: 1;
+  policyId: string;
+  policyName: string;
+  rules: MouthRoutingRule[];
+  /** Default mouth priority for the org. */
+  defaultMouthPriority: MouthPriority;
+  /** High-risk consent (consistent with scheduling.policy). */
+  highRiskConsentAt?: string;
+  highRiskConsentBy?: string;
+  updatedAt: string;
+  updatedBy: string;
+}
+
+/**
+ * Audit label for mouth routing decisions.
+ */
+export interface MouthRoutingAuditLabel {
+  routeId: string;
+  channelPath?: string;
+  internalPath?: string;
+  splitDelivery: boolean;
+  appliedRules: string[];
+  reason?: string;
+}

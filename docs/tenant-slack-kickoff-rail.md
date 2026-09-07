@@ -388,7 +388,7 @@ App DM（Staffpassアプリへの直接DM）への返信には `posting_as: bot`
 |----------|------------|------|
 | **S1** | ✅ 本番稼働（PR #34 / main ~06feb7f） | `resolveAudience` がパーティごとの `dualAudience` を返却（`internalFacing` / `externalFacing`）。チャネル単位の `effectiveAudience` は後方互換で external（floor） |
 | **S2** | ✅ 本番稼働（PR #36 / main ~aea4162） | 二重マトリクス評価 `dualEgress`（`internalDecision` / `externalDecision`）。チャネル投稿は external-safe を維持 |
-| **S3** | ⏳ 未着手 | チャネル body = external-safe、内部詳細 → DM / 限定スレッド / 承認へルーティング分岐 |
+| **S3** | ✅ 本番稼働（F1 口ルーティング） | `evaluateMouthRouting` で分離配信を決定。チャネル投稿 = external-safe、内部詳細 = DM / 限定スレッドへ。外部パーティ存在時は fail-closed で内部 hold |
 
 **例**: `#stablo_tokyo307` Connect チャネル
 - Yasaka 社員 `U_YAMADA` → `partySignals[{internal, resolved}]`

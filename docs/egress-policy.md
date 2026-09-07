@@ -84,7 +84,32 @@ S1 の `dualAudience` を使い、混在チャネルでは WHO×WHAT マトリ�
 - 承認リクエストの `metadata.dualEgress` にも同様に記録
 - `dualDecisionsDiffer()` で内部・外部パスの決定が異なるかを判定可能
 
-S3 では `effectiveDecision` の結果に基づき、チャネル本文は external-safe、内部詳細は DM / 限定スレッドへルーティングします（本 PR の範囲外）。
+### S3: 口ルーティング（F1）
+
+S2 の `dualEgress` を使い、`internalDecision` と `externalDecision` が異なる場合に**チャネル投稿とDM/限定スレッドへの分離配信**を行います。
+
+**動作**:
+1. `dualDecisionsDiffer(dualEgress) = true` → F1 口ルーティング適用
+2. チャネル投稿: `effectiveDecision`（external-safe）のコンテンツのみ
+3. 内部向け詳細: 解決済み内部パーティの DM へ、または限定スレッドへルーティング
+4. 外部パーティ存在 / 未解決パーティ → fail-closed で内部配信を hold（承認待ちまたは拒否）
+5. 両パスは監査イベントに記録
+
+**返却値** (`MouthRoutingDecision`):
+- `channelRoute`: チャネル投稿の指示（null の場合は投稿しない）
+- `internalRoute`: 内部向けの指示（DM / 限定スレッド / hold / deny）
+- `splitDelivery`: 分離配信が発生したか
+- `internalHeld`: 内部配信が hold されたか
+- `auditLabels`: 監査ラベル
+
+**例**: 混在チャネルで社内情報 (`internal`) を送信
+
+| パス | audience | 決定 | ルーティング |
+|------|----------|------|--------------|
+| チャネル投稿 | external | `summarize` | 要約のみ投稿 |
+| 内部 DM | internal | `allow` | 内部パーティに全文配信 |
+
+**会話口と承認通知口は混ぜない**: 口ルーティングは会話アダプタ（`comm.send` / `slack.post`）のみ。承認通知チャネル（Telegram / LINE notify）とは別系統。
 
 > **オペレータ向けガイダンス**: テナント管理エージェント向けの kickoff rail は [tenant-slack-kickoff-rail.md](./tenant-slack-kickoff-rail.md) を参照。混在chは相手台帳必須（`parties.upsert`）。S1/S2/S3 の進捗もそちらに記載。
 
