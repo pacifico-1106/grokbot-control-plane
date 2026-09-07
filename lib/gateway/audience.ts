@@ -2,7 +2,8 @@
  * Channel-agnostic audience resolver (WHO).
  * Tool names (slack.post vs slack.post_external) are never the boundary.
  * Unknown / missing destination → external (fail-closed).
- * Mixed / shared Slack channel → external for egress.
+ * Mixed / shared Slack channel → S1 dual-audience: per-party resolution
+ * with internal-facing vs external-facing signals.
  */
 
 import {
@@ -15,8 +16,10 @@ import type {
   Audience,
   ConversationContext,
   ConversationSurface,
+  DualAudience,
   GatewayInvokeRequest,
   OrgPartyKind,
+  PartyAudienceSignal,
 } from "@/lib/types";
 
 const SURFACES: ConversationSurface[] = ["slack", "line", "mail", "phone", "web"];
@@ -159,6 +162,45 @@ function failClosed(signals: Audience[]): Audience {
   return "internal";
 }
 
+/**
+ * Compute dual-audience from party signals for mixed channels.
+ * - internalFacing: strictest of internal-only parties (for internal-safe routing)
+ * - externalFacing: always external when any external/unknown party present
+ */
+function computeDualAudience(
+  partySignals: PartyAudienceSignal[],
+  channelMixed: boolean
+): DualAudience {
+  const internalParties = partySignals.filter(
+    (item) => item.audience === "internal" && item.resolved
+  );
+  const externalOrUnknownParties = partySignals.filter(
+    (item) => item.audience !== "internal" || !item.resolved
+  );
+
+  const hasInternalParty = internalParties.length > 0;
+  const hasExternalParty = externalOrUnknownParties.length > 0;
+
+  const internalFacing: "internal" | "external" = hasInternalParty && !hasExternalParty
+    ? "internal"
+    : "external";
+
+  const externalFacing: "internal" | "external" = hasExternalParty
+    ? "external"
+    : hasInternalParty
+      ? "internal"
+      : "external";
+
+  return {
+    internalFacing,
+    externalFacing,
+    channelMixed,
+    partySignals,
+    hasInternalParty,
+    hasExternalParty,
+  };
+}
+
 export async function resolveAudience(
   ctx: ConversationContext | null,
   opts?: { requireDestination?: boolean }
@@ -167,13 +209,25 @@ export async function resolveAudience(
   effectiveAudience: "internal" | "external";
   namedRecipients: boolean;
   destinationMissing: boolean;
+  /** S1: dual-audience resolution for mixed/Connect channels. */
+  dualAudience: DualAudience | null;
 }> {
+  const emptyDual: DualAudience = {
+    internalFacing: "external",
+    externalFacing: "external",
+    channelMixed: false,
+    partySignals: [],
+    hasInternalParty: false,
+    hasExternalParty: false,
+  };
+
   if (!ctx) {
     return {
       audience: "unknown",
       effectiveAudience: "external",
       namedRecipients: false,
       destinationMissing: true,
+      dualAudience: emptyDual,
     };
   }
 
@@ -184,20 +238,44 @@ export async function resolveAudience(
       effectiveAudience: "external",
       namedRecipients: false,
       destinationMissing: true,
+      dualAudience: emptyDual,
     };
   }
 
   const signals: Audience[] = [];
+  const partySignals: PartyAudienceSignal[] = [];
+  let channelMixed = false;
+  let channelClassifiedInternal = false;
 
   if (ctx.slackChannelId) {
     const channel = await getOrgChannel(ctx.orgId, ctx.surface, ctx.slackChannelId);
     if (!channel) {
       const party = await getOrgParty(ctx.orgId, "slack_channel", normalizeIdentifier("slack_channel", ctx.slackChannelId));
-      signals.push(party?.audience ?? "unknown");
+      const aud = party?.audience ?? "unknown";
+      signals.push(aud);
+      partySignals.push({
+        kind: "channel",
+        identifier: ctx.slackChannelId,
+        audience: aud,
+        resolved: !!party,
+      });
     } else if (channel.mixed || channel.classification !== "internal") {
-      signals.push("external");
+      channelMixed = true;
+      partySignals.push({
+        kind: "channel",
+        identifier: ctx.slackChannelId,
+        audience: channel.classification === "shared_external" ? "external" : "unknown",
+        resolved: true,
+      });
     } else {
+      channelClassifiedInternal = true;
       signals.push("internal");
+      partySignals.push({
+        kind: "channel",
+        identifier: ctx.slackChannelId,
+        audience: "internal",
+        resolved: true,
+      });
     }
   }
 
@@ -212,23 +290,56 @@ export async function resolveAudience(
     const party = await getOrgParty(ctx.orgId, item.kind, item.identifier);
     if (party) {
       signals.push(party.audience);
+      partySignals.push({
+        kind: item.kind,
+        identifier: item.identifier,
+        audience: party.audience,
+        resolved: true,
+      });
       continue;
     }
     if (item.kind === "mail_address") {
       const domain = emailDomain(item.identifier);
       if (domain) {
         const domainParty = await getOrgParty(ctx.orgId, "email_domain", domain);
-        signals.push(domainParty?.audience ?? "unknown");
+        const aud = domainParty?.audience ?? "unknown";
+        signals.push(aud);
+        partySignals.push({
+          kind: item.kind,
+          identifier: item.identifier,
+          audience: aud,
+          resolved: !!domainParty,
+        });
         continue;
       }
     }
     signals.push("unknown");
+    partySignals.push({
+      kind: item.kind,
+      identifier: item.identifier,
+      audience: "unknown",
+      resolved: false,
+    });
   }
 
   if (ctx.slackChannelId) {
     const extShared = await inspectSlackChannelExtShared(ctx.orgId, ctx.slackChannelId);
     if (extShared === true) {
-      signals.push("external");
+      channelMixed = true;
+      const existingChannelSignal = partySignals.find(
+        (item) => item.kind === "channel" && item.identifier === ctx.slackChannelId
+      );
+      if (existingChannelSignal) {
+        existingChannelSignal.audience = "external";
+        existingChannelSignal.resolved = true;
+      } else {
+        partySignals.push({
+          kind: "channel",
+          identifier: ctx.slackChannelId,
+          audience: "external",
+          resolved: true,
+        });
+      }
       try {
         await upsertOrgChannel({
           orgId: ctx.orgId,
@@ -244,12 +355,36 @@ export async function resolveAudience(
     }
   }
 
-  const audience = failClosed(signals);
+  const nonChannelPartySignals = partySignals.filter((item) => item.kind !== "channel");
+
+  const dualAudience = computeDualAudience(
+    nonChannelPartySignals.length > 0 ? nonChannelPartySignals : partySignals,
+    channelMixed
+  );
+
+  let audience: Audience;
+  if (channelClassifiedInternal && !channelMixed) {
+    audience = failClosed(signals);
+  } else if (channelMixed) {
+    const allSignals = nonChannelPartySignals.map((item) => item.audience);
+    if (allSignals.length === 0) {
+      audience = "external";
+    } else {
+      audience = failClosed(allSignals);
+    }
+    if (audience === "internal") {
+      audience = "external";
+    }
+  } else {
+    audience = failClosed(signals);
+  }
+
   return {
     audience,
     effectiveAudience: audience === "internal" ? "internal" : "external",
     namedRecipients: conversationHasNamedRecipients(ctx),
     destinationMissing,
+    dualAudience,
   };
 }
 

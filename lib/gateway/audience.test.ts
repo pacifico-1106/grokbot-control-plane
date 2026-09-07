@@ -16,6 +16,162 @@ function body(partial: Partial<GatewayInvokeRequest>): GatewayInvokeRequest {
   };
 }
 
+/**
+ * S1 Dual-Audience Tests
+ * Mixed / Slack Connect / shared_external channels need per-party resolution.
+ */
+describe("S1 dual-audience for mixed channels", () => {
+  test("mixed channel + internal party → dual has internal facing, overall external", async () => {
+    const ctx = parseConversationContext(
+      body({
+        conversation: {
+          surface: "slack",
+          orgId: DEMO_ORG.id,
+          slackChannelId: "C_SHARED",
+          slackUserId: "U_YAMADA",
+        },
+      }),
+      DEMO_ORG.id
+    );
+    const resolved = await resolveAudience(ctx);
+
+    expect(resolved.effectiveAudience).toBe("external");
+    expect(resolved.dualAudience).not.toBeNull();
+    expect(resolved.dualAudience?.channelMixed).toBe(true);
+    expect(resolved.dualAudience?.hasInternalParty).toBe(true);
+    expect(resolved.dualAudience?.hasExternalParty).toBe(false);
+    expect(resolved.dualAudience?.internalFacing).toBe("internal");
+    expect(resolved.dualAudience?.externalFacing).toBe("internal");
+  });
+
+  test("mixed channel + external party → dual has external facing", async () => {
+    const ctx = parseConversationContext(
+      body({
+        conversation: {
+          surface: "mail",
+          orgId: DEMO_ORG.id,
+          email: "someone@customer.example",
+        },
+      }),
+      DEMO_ORG.id
+    );
+    const resolved = await resolveAudience(ctx);
+
+    expect(resolved.effectiveAudience).toBe("external");
+    expect(resolved.dualAudience?.hasExternalParty).toBe(true);
+    expect(resolved.dualAudience?.externalFacing).toBe("external");
+  });
+
+  test("mixed channel + internal + unknown party → dual has both, external facing", async () => {
+    const ctx = parseConversationContext(
+      body({
+        conversation: {
+          surface: "slack",
+          orgId: DEMO_ORG.id,
+          slackChannelId: "C_SHARED",
+          slackUserId: "U_UNKNOWN_CONNECT_GUEST",
+        },
+      }),
+      DEMO_ORG.id
+    );
+    const resolved = await resolveAudience(ctx);
+
+    expect(resolved.effectiveAudience).toBe("external");
+    expect(resolved.dualAudience?.channelMixed).toBe(true);
+    expect(resolved.dualAudience?.hasExternalParty).toBe(true);
+    const unknownParty = resolved.dualAudience?.partySignals.find(
+      (signal) => signal.kind === "slack_user"
+    );
+    expect(unknownParty?.audience).toBe("unknown");
+    expect(unknownParty?.resolved).toBe(false);
+    expect(resolved.dualAudience?.externalFacing).toBe("external");
+  });
+
+  test("unknown party remains fail-closed external", async () => {
+    const ctx = parseConversationContext(
+      body({
+        conversation: {
+          surface: "slack",
+          orgId: DEMO_ORG.id,
+          slackUserId: "U_STRANGER",
+        },
+      }),
+      DEMO_ORG.id
+    );
+    const resolved = await resolveAudience(ctx);
+
+    expect(resolved.effectiveAudience).toBe("external");
+    expect(resolved.dualAudience?.hasExternalParty).toBe(true);
+    expect(resolved.dualAudience?.internalFacing).toBe("external");
+    const unknownSignal = resolved.dualAudience?.partySignals.find(
+      (s) => s.kind === "slack_user"
+    );
+    expect(unknownSignal?.audience).toBe("unknown");
+    expect(unknownSignal?.resolved).toBe(false);
+  });
+
+  test("pure internal channel keeps current behavior (no dual-audience activation)", async () => {
+    const ctx = parseConversationContext(
+      body({
+        conversation: {
+          surface: "slack",
+          orgId: DEMO_ORG.id,
+          slackChannelId: "C_INTERNAL",
+        },
+      }),
+      DEMO_ORG.id
+    );
+    const resolved = await resolveAudience(ctx);
+
+    expect(resolved.audience).toBe("internal");
+    expect(resolved.effectiveAudience).toBe("internal");
+    expect(resolved.dualAudience?.channelMixed).toBe(false);
+  });
+
+  test("partySignals include per-party resolution detail", async () => {
+    const ctx = parseConversationContext(
+      body({
+        conversation: {
+          surface: "slack",
+          orgId: DEMO_ORG.id,
+          slackChannelId: "C_SHARED",
+          slackUserId: "U_YAMADA",
+        },
+      }),
+      DEMO_ORG.id
+    );
+    const resolved = await resolveAudience(ctx);
+
+    expect(resolved.dualAudience?.partySignals.length).toBeGreaterThan(0);
+    const yamadaSignal = resolved.dualAudience?.partySignals.find(
+      (signal) => signal.identifier === "U_YAMADA"
+    );
+    expect(yamadaSignal?.kind).toBe("slack_user");
+    expect(yamadaSignal?.audience).toBe("internal");
+    expect(yamadaSignal?.resolved).toBe(true);
+  });
+
+  test("internal email domain in mixed context → internal party signal", async () => {
+    const ctx = parseConversationContext(
+      body({
+        conversation: {
+          surface: "mail",
+          orgId: DEMO_ORG.id,
+          email: "colleague@example.com",
+        },
+      }),
+      DEMO_ORG.id
+    );
+    const resolved = await resolveAudience(ctx);
+
+    expect(resolved.dualAudience?.hasInternalParty).toBe(true);
+    const emailSignal = resolved.dualAudience?.partySignals.find(
+      (signal) => signal.kind === "mail_address"
+    );
+    expect(emailSignal?.audience).toBe("internal");
+  });
+});
+
 describe("audience resolver", () => {
   test("unknown audience (missing destination) is fail-closed as external", async () => {
     const ctx = parseConversationContext(
