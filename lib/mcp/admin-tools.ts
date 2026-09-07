@@ -163,7 +163,7 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
   {
     name: "setup.slackStatus",
     description:
-      "Diagnose Slack integration status for this org (read-only, no approval required). Returns bot token presence, auth.test result, conversation adapter status, IM routes count, and employee posting_as settings with path-aware guidance. Use before guiding humans through Slack setup. The nextStepJa field indicates the next human action with posting_as pros/cons: Bot（会社窓口・アプリDM向け）vs 個人（社員名義・チャネル向け）。推奨デフォルト: アプリDM向け社員は bot / チャネル・Connect・人対人DM向けは user。【dual-audience S1+S2+S3本番】混在/Connect chでは resolveAudience が dualAudience を返却、二重マトリクス評価 dualEgress も稼働中。【F1 口ルーティング本番】S3/F1 口ルーティング本番稼働中。A1 scheduling.policy も本番稼働中。混在chは相手台帳必須（parties.upsert）。Refer to docs/tenant-slack-kickoff-rail.md for the full RAIL including F1 guidance.",
+      "Diagnose Slack integration status for this org (read-only, no approval required). Returns bot token presence, auth.test result, conversation adapter status, IM routes count, and employee posting_as settings with path-aware guidance. Use before guiding humans through Slack setup. The nextStepJa field indicates the next human action with posting_as pros/cons: Bot（会社窓口・アプリDM向け）vs 個人（社員名義・チャネル向け）。推奨デフォルト: アプリDM向け社員は bot / チャネル・Connect・人対人DM向けは user。【dual-audience S1+S2+S3本番】混在/Connect chでは resolveAudience が dualAudience を返却、二重マトリクス評価 dualEgress も稼働中。【F1 口ルーティング本番】S3/F1 口ルーティング本番稼働中。【D1 受信ハンドオフ本番】ingressHandoff.get/patch で添付・ファイル手渡し設定。A1 scheduling.policy も本番稼働中。混在chは相手台帳必須（parties.upsert）。Refer to docs/tenant-slack-kickoff-rail.md for the full RAIL including D1 guidance.",
     inputSchema: {
       type: "object",
       properties: {},
@@ -173,7 +173,7 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
   {
     name: "ingressHandoff.get",
     description:
-      "Read ingress handoff policy (read-only, no approval required). Omit employeeId for org policy; include for AI社員ごとの設定. Returns effective policy + source layer (employee/org/default) + layers (employeeOverride/orgPolicy). Staffpass = act boundary; Sealith = encrypted file handoff; no round-trip masking.",
+      "Read ingress handoff policy (read-only, no approval required). D1本番稼働中。Omit employeeId for org policy; include for AI社員ごとの設定. Returns effective policy (policyId/policyName) + source layer (employee/org/default) + layers (employeeOverride/orgPolicy) + hasHighRiskAutomation + highRiskConsentRecorded. Staffpass = behavior boundary; Sealith = encryption handoff. High-risk: attachment=file + sealith=off + classified_external_sensitive.",
     inputSchema: {
       type: "object",
       properties: {
@@ -185,7 +185,7 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
   {
     name: "ingressHandoff.patch",
     description:
-      "Patch ingress handoff policy after human approval (always_human). Omit employeeId for org policy; include for AI社員ごとの設定. To clear employee override (inherit org), set clearOverride=true. Full replace of rules array. First-match rule ordering. Admin cannot self-approve. Convenience default: body=full, attachment=meta, sealith=off. 【高リスク警告】attachment=file + sealith=off + classified_external_sensitive は silent enable 禁止。テナント承諾 (highRiskConsentAt/By) + 監査に設定を残す。",
+      "Patch ingress handoff policy after human approval (always_human). D1本番稼働中。Omit employeeId for org policy; include for AI社員ごとの設定. To clear employee override (inherit org), set clearOverride=true. Full replace of rules array. First-match rule ordering. policyId auto-generated (ihp_...), policyName human-readable. Slack wake audit: policyId/ruleId/attachmentApproval/pendingManagerApproval. Admin cannot self-approve. Convenience default: body=full, attachment=meta, sealith=off. 【高リスク警告】attachment=file + sealith=off + classified_external_sensitive は silent enable 禁止。テナント承諾 (highRiskConsentAt/By) + 監査に設定を残す。",
     inputSchema: {
       type: "object",
       properties: {
