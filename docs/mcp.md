@@ -286,9 +286,11 @@ xAI API の remote MCP も同じ URL / Bearer を指定してください。
 | `parties.upsert` | always_human | 相手台帳登録 |
 | `channels.classify` | always_human | チャネル分類 + 1:1 IM受口設定 |
 | `roles.propose` | always_human | 職務案の提案 |
-| `setup.slackStatus` | なし（read-only） | Slack設定診断 |
+| `setup.slackStatus` | なし（read-only） | Slack設定診断（F1 口ルーティング状況含む） |
 | `ingressHandoff.get` | なし（read-only） | 受信ハンドオフポリシー読み取り（AI社員ごとにemployeeId指定可） |
 | `ingressHandoff.patch` | always_human | 受信ハンドオフポリシー更新（AI社員ごとにemployeeId指定可、clearOverrideで継承） |
+| `schedulingPolicy.get` | なし（read-only） | A1 スケジューリングポリシー読み取り（本番稼働中） |
+| `schedulingPolicy.patch` | always_human | スケジューリングポリシー更新（高リスク承諾必須） |
 
 監査クラスは `admin.hire` / `admin.policy` / `admin.parties` など。`tool.invoke` / `mail.send` とは分けます。管理エージェントは自分の申請を承認できません。
 
