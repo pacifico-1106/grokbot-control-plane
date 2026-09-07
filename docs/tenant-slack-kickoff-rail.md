@@ -95,6 +95,8 @@ Socket Mode が ON だと Events が HTTPS endpoint に届きません。
 | `roles.propose` | 職務案の提案 | always_human |
 | `ingressHandoff.get` | **受信ハンドオフポリシー読み取り（read-only、AI社員ごとにemployeeId指定可）** | なし |
 | `ingressHandoff.patch` | 受信ハンドオフポリシー更新（AI社員ごとにemployeeId指定可、clearOverrideで継承） | always_human |
+| `replyPolicy.get` | **B2 返信ポリシー読み取り（read-only、AI社員ごとにemployeeId指定可）** | なし |
+| `replyPolicy.patch` | 返信ポリシー更新（営業時間外 allow_send は高リスク承諾必須） | always_human |
 
 > **Note**: Admin MCP に新しいツールがデプロイされた場合、MCP コネクタを再起動/再接続してください（`capabilities.tools.listChanged: true` ですが、Streamable HTTP では通知 push が制限されます）。
 
@@ -372,6 +374,7 @@ App DM（Staffpassアプリへの直接DM）への返信には `posting_as: bot`
 - [mcp.md](./mcp.md) - MCP全般
 - [agent-credential-guide.md](./agent-credential-guide.md) - 社員証ガイド
 - [egress-policy.md](./egress-policy.md) - 相手×情報区分の出域制御（dual-audience 詳細）
+- [reply-policy.md](./reply-policy.md) - B2 Slack/LINE返信ポリシー詳細
 - [staffpass-situation-policy-catalog.md](./staffpass-situation-policy-catalog.md) - シチュエーション／補足ルール カタログ（scheduling backlog / product locks の正本）
 
 ---
@@ -514,11 +517,77 @@ Slack → LINE → (Chatwork / Messenger: 予約)
 |----|------|-----------|------|
 | **A1** | scheduling.policy | ✅ 本番稼働 | 日程調整ルールパック（場所親和・移動バッファ・オンライン設定・confirm自動化レベル）|
 | **F1** | mouth routing | ✅ 本番稼働 | 口ルーティング（分離配信・優先順位・fail-closed）|
-| **B2** | Slack/LINE返信 | 次箱 | スレッド規則・営業時間制御など |
+| **B2** | reply policy | ✅ 本番稼働 | 返信ルールパック（営業時間外動作・絵文字/短文制御・スレッド親和性）|
+| **D1** | 添付・ファイル手渡し | 次箱 | Sealith連携の本線（バックログ） |
 
-詳細: [scheduling-policy.md](./scheduling-policy.md) / [staffpass-situation-policy-catalog.md](./staffpass-situation-policy-catalog.md)
+詳細: [scheduling-policy.md](./scheduling-policy.md) / [reply-policy.md](./reply-policy.md) / [staffpass-situation-policy-catalog.md](./staffpass-situation-policy-catalog.md)
 
-### 5. F6 アイデンティティ開示（identity disclosure）— スタブ
+### 5. B2 Slack/LINE 返信ポリシー（reply policy）
+
+> **ステータス**: ✅ 本番稼働（PR #42 マージ済み）。SQL: `20260908_reply_policy.sql`
+
+B2 Reply Policy は AI 社員の会話返信行動を制御するルールパックです。F1 mouth-routing の**下流**で、口が決まった後の**タイミングと形式**を制御します。
+
+#### 5-1. ポリシーノブ一覧
+
+| ノブ | 説明 | 選択肢 |
+|------|------|--------|
+| **営業時間外動作** | 時間外メッセージの扱い | `draft_only`（下書きのみ）/ `hold_approval`（承認待ち）/ `allow_send`（自動送信・**高リスク**） |
+| **絵文字制御** | 絵文字使用ルール | `allow`（全許可）/ `deny`（全禁止）/ `limited`（許可リスト制限） |
+| **短文制御** | 短い返信の扱い | `allow` / `deny` / `warn` + 最小文字数 |
+| **スレッド親和性** | スレッド運用 | `prefer_thread`（既存優先）/ `new_thread_per_topic`（1トピック1スレッド）/ `channel_root`（チャネル直接） |
+
+#### 5-2. F1 mouth-routing との連携
+
+B2 は F1 の口選択機能を**再発明せず連携**します：
+
+- **会話口 ≠ 承認通知口**: この方針は B2 でも維持
+- **口の優先度**: F1 `MouthRoutingPolicy.defaultMouthPriority` を参照
+- **二重ゲート**: F1 `dualEgress` との組み合わせでチャネル body は external-safe
+
+```
+F1 (どの口へ) → B2 (いつ・どう返す)
+```
+
+#### 5-3. Admin MCP ツール
+
+| ツール | 承認 | 用途 |
+|--------|------|------|
+| `replyPolicy.get` | なし（read-only） | 返信ポリシー読み取り（AI社員ごとに `employeeId` 指定可） |
+| `replyPolicy.patch` | always_human | 返信ポリシー更新（高リスク `allow_send` は承諾必須） |
+
+**診断フロー例**:
+```
+1. replyPolicy.get で現在のポリシーを確認
+2. summaryJa / nextStepJa で次のアクションを把握
+3. 必要に応じて replyPolicy.patch で更新（人間承認）
+```
+
+#### 5-4. 高リスク設定の警告
+
+`afterHoursMode: "allow_send"` は営業時間外でも自動送信を許可します。この設定には**明示的なテナント承諾**が必要です：
+
+- `highRiskConsentAt`: 承諾日時（ISO）
+- `highRiskConsentBy`: 承諾者メール
+
+**警告**: 営業時間外の自動送信は silent enable 禁止。承諾 + settings on audit。
+
+#### 5-5. 本番 SQL マイグレーション
+
+> **⚠️ Staging 警告**: SQL は Grokbot プロジェクト（共有制御面）に適用済み。テナントに SQL 実行を依頼しない。
+
+```sql
+-- Migration: 20260908_reply_policy.sql
+alter table orgs
+  add column if not exists reply_policy jsonb default null;
+
+alter table employees
+  add column if not exists reply_policy jsonb default null;
+```
+
+詳細: [reply-policy.md](./reply-policy.md)
+
+### 6. F6 アイデンティティ開示（identity disclosure）— スタブ
 
 > **ステータス**: 予定（F1 の後）。本 RAIL では配置のみ記載。
 
@@ -528,7 +597,17 @@ F6 はエージェント自身に関する Q&A 応答を制御します（「あ
 - **配置**: `disclosure.policy`（予定）
 - **詳細エンジン**: 本 PR の範囲外（スタブのみ）
 
-### 6. 製品コピー / 本分
+### 7. D1 添付・ファイル手渡し — 次箱プレビュー
+
+> **ステータス**: 次箱（バックログ）。B2 の後。
+
+D1 は Sealith 連携の本線（添付・ファイル手渡し）です。一部は `ingressHandoff.policy` として実装済み。
+
+- **用途**: 全文／要約／Sealith切替、上長承認
+- **Staffpass載せ方**: ingress_handoff_policy（社員ごと）継続
+- **詳細**: [staffpass-situation-policy-catalog.md](./staffpass-situation-policy-catalog.md) § D1
+
+### 8. 製品コピー / 本分
 
 Staffpass の本分:
 

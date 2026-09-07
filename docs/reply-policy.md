@@ -1,8 +1,9 @@
 # B2 Reply Policy — Slack/LINE 返信ポリシー
 
-**ステータス:** 実装中  
+**ステータス:** ✅ 本番稼働（PR #42 マージ済み `2d7f32c`）  
+**SQL:** `20260908_reply_policy.sql`（Grokbot 共有制御面に適用済み）  
 **カタログ:** B2 Slack/LINE等の返信  
-**関連:** F1 口ルーティング（mouth-routing）
+**関連:** F1 口ルーティング（mouth-routing）、[tenant-slack-kickoff-rail.md](./tenant-slack-kickoff-rail.md) § 5
 
 ## 概要
 
