@@ -152,9 +152,9 @@
 - **ルール例:** 社外版は固有名詞マスク、社内版は全文  
 - **Staffpass載せ方:** dual disclosure（混在chと同型の出し分け）
 
-### D4 共用資格の貸与（草案・2026-09-08）
+### D4 共用資格の貸与（草案・2026-09-08 / 設計ロック 木村確認）
 - **別名:** credential lease / AI社員向け共用アカウントの社員証貸与（「AI版1Password」ではない）
-- **ステータス:** カタログ草案。実装は B1 の後段。保管本体は Sealith／専用vault、Staffpass はゲートと監査
+- **ステータス:** カタログ草案＋設計ロック中。設計ロックは B1 と並行可。実装は B1 安定後（実装 GO は別判断）
 - **痛み:**
   - ChatGPT/Claude/Gemini 等の端末ごと手打ちログイン
   - 退職後残存する共有パスワード
@@ -167,17 +167,26 @@
   - org-wide revoke on exit / leak
 - **高リスク:**
   - 本番決済・社外共用・管理者権限 → silent enable 禁止
-  - 明示承諾＋監査（A1/D1同型）
+  - 広い共用IDを社外口から使える／TTL無制限／LLM経由での資格利用 → 警告＋明示承諾
+  - テナント自己責任＋ToS（共用ログイン規約リスク）を最初から明示
+  - 監査（A1/D1同型）
 - **Fail-closed:** 権限外・期限切れ・purpose不一致 → 秘密は渡さない
+- **設計ロック（木村確認）:**
+  1. Staffpass jsonb に**生シークレットを置かない**。当面は参照メタのみ（どの共用資格か・誰に貸せるか・TTL・用途・監査ID／ポインタ）
+  2. 秘密本体の保管・短命注入は **Sealith 拡張が中長期本命**。専用 vault は Sealith が間に合わない／契約分離時のみ。注入はツールランタイムへ短命ハンドル。LLM／チャットには出さない
+  3. 資格の CRUD・共有範囲変更は**管理エージェント＋人**。社員証側は lease された用途のツール invoke のみ
 - **設計芯:**
   - モデルは鍵を見ない
-  - ツールランタイムへ短命注入
+  - ツールランタイムへ短命注入（短命ハンドル）
   - ログ/LLM文脈マスク
   - 人間のMacログイン同期は対象外（1Password/MDM）
-- **Staffpass載せ方:** 仮 `credential.policy` + Admin MCP get/patch（mutate always_human 想定）
+- **Staffpass載せ方:**
+  - パック名: `credential.policy`（または `credentialLease.policy`）
+  - Admin MCP: `credentialLease.get` / `credentialLease.patch`（mutate always_human）
+  - A1/D1 同型
 - **境界:**
-  - Staffpass = ゲート/監査
-  - Sealith/vault = 保管/注入
+  - Staffpass = ゲート/監査（参照メタ・ポリシー・監査ログ）
+  - Sealith/vault = 保管/注入（秘密本体・短命ハンドル生成）
   - 営業は「AI社員の共用アカウントを社員証で貸す」
   - 組織契約+公式コネクタ優先、残る共有IDだけvault
 
@@ -261,6 +270,12 @@
    - 詳細: `docs/reply-policy.md`
 5. ✅ **D1 添付・ファイル手渡し** shipped
 6. 🔧 次箱 **B1**（メール送信／返信）
-7. 📋 **D4 共用資格の貸与** — B1 完了後、設計ロック先行。木村と境界確認してから実装 GO
+7. 📋 **D4 共用資格の貸与**（設計ロック中・木村確認済み）
+   - 設計ロックは B1 と**並行可**
+   - 実装は B1 安定後（実装 GO は別判断）
+   - Staffpass jsonb には参照メタのみ（生シークレット置かない）
+   - 保管・注入は Sealith 拡張が中長期本命
+   - パック名: `credential.policy` or `credentialLease.policy`
+   - Admin MCP: `credentialLease.get` / `credentialLease.patch`（mutate always_human）
 8. 📋 **F6 アイデンティティ開示** — 後パック
 9. AI Concier は A4 の参考・将来連携として別枠
