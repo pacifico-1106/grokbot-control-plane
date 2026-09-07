@@ -137,16 +137,43 @@ function RuleCard({ rule, index }: { rule: IngressHandoffRule; index: number }) 
 }
 
 export function IngressHandoffPolicyClient({ policy, isDefault }: Props) {
+  const hasHighRiskConfig =
+    policy.rules.some(
+      (r) =>
+        r.applyTo === "classified_external_sensitive" &&
+        r.attachment === "file" &&
+        r.sealith === "off"
+    );
+  const hasHighRiskConsent = Boolean(policy.highRiskConsentAt);
+
   return (
     <section className="surface p-5 space-y-4">
       <div className="flex items-start justify-between gap-2">
         <div>
-          <h2 className="font-medium">受信の渡し方（組織ポリシー）</h2>
+          <h2 className="font-medium">{policy.policyName || "受信の渡し方（組織ポリシー）"}</h2>
           <p className="text-sm text-[var(--text-muted)] mt-1">
             Slack/外部からのメッセージをAI社員にどう渡すか。ルールは評価順（first-match）。AI社員ごとにオーバーライド可能。
           </p>
+          {policy.policyId && (
+            <p className="text-xs text-[var(--text-faint)] mt-1">
+              Policy ID: <code className="font-mono">{policy.policyId}</code>
+            </p>
+          )}
         </div>
-        <span className="chip chip-neutral text-xs shrink-0">読み取り専用</span>
+        <div className="flex flex-col items-end gap-1">
+          <span className="chip chip-neutral text-xs shrink-0">読み取り専用</span>
+          {hasHighRiskConfig && (
+            <span
+              className={`chip text-xs shrink-0 ${
+                hasHighRiskConsent
+                  ? "chip-warning"
+                  : "chip-danger"
+              }`}
+            >
+              {hasHighRiskConsent ? "高リスク承諾済" : "高リスク警告"}
+            </span>
+          )}
+        </div>
       </div>
 
       {isDefault ? (
@@ -171,6 +198,33 @@ export function IngressHandoffPolicyClient({ policy, isDefault }: Props) {
           {policy.rules.map((rule, index) => (
             <RuleCard key={rule.id} rule={rule} index={index} />
           ))}
+          {hasHighRiskConfig && (
+            <div
+              className={`rounded-lg p-3 text-sm ${
+                hasHighRiskConsent
+                  ? "bg-amber-50 text-amber-900 dark:bg-amber-900/20 dark:text-amber-200"
+                  : "bg-red-50 text-red-900 dark:bg-red-900/20 dark:text-red-200"
+              }`}
+            >
+              {hasHighRiskConsent ? (
+                <>
+                  <p className="font-medium">高リスク設定の承諾あり</p>
+                  <p className="text-xs mt-1">
+                    承諾日時: {new Date(policy.highRiskConsentAt!).toLocaleString("ja-JP")}
+                    {policy.highRiskConsentBy && ` • 承諾者: ${policy.highRiskConsentBy}`}
+                  </p>
+                </>
+              ) : (
+                <>
+                  <p className="font-medium">【高リスク警告】テナント承諾が必要です</p>
+                  <p className="text-xs mt-1">
+                    外部/機密チャネルにファイル本体をSealithなしで渡す設定があります。
+                    Admin MCP の highRiskConsentAt/By を設定してください。
+                  </p>
+                </>
+              )}
+            </div>
+          )}
           <p className="text-xs text-[var(--text-faint)]">
             最終更新: {new Date(policy.updatedAt).toLocaleString("ja-JP")} • 組織全体を編集するには Admin MCP{" "}
             <code className="font-mono text-[10px]">ingressHandoff.patch</code> (always_human)。

@@ -7,6 +7,8 @@ import {
   isDefaultIngressHandoffPolicy,
   summarizeIngressHandoffPolicyJa,
   nextStepIngressHandoffJa,
+  policyHasHighRiskAutomation,
+  hasHighRiskConsentRecorded,
   DEFAULT_INGRESS_HANDOFF_RULE,
 } from "./validate";
 
@@ -226,8 +228,28 @@ describe("validateIngressHandoffPolicy", () => {
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.policy.version).toBe(1);
+      expect(result.policy.policyId).toMatch(/^ihp_/);
+      expect(result.policy.policyName).toBe("受信の渡し方ポリシー");
       expect(result.policy.rules.length).toBe(1);
       expect(result.policy.updatedBy).toBe("admin_mcp");
+    }
+  });
+
+  test("preserves provided policyName", () => {
+    const result = validateIngressHandoffPolicy({
+      policyName: "外部向け厳格ポリシー",
+      rules: [
+        {
+          applyTo: "all",
+          body: "full",
+          attachment: "meta",
+          sealith: "off",
+        },
+      ],
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.policy.policyName).toBe("外部向け厳格ポリシー");
     }
   });
 
@@ -311,6 +333,8 @@ describe("defaultIngressHandoffPolicy", () => {
   test("returns convenience default", () => {
     const policy = defaultIngressHandoffPolicy();
     expect(policy.version).toBe(1);
+    expect(policy.policyId).toMatch(/^ihp_/);
+    expect(policy.policyName).toBe("デフォルト（便利設定）");
     expect(policy.rules.length).toBe(1);
     expect(policy.rules[0].applyTo).toBe("all");
     expect(policy.rules[0].body).toBe("full");
@@ -394,5 +418,233 @@ describe("nextStepIngressHandoffJa", () => {
     });
     const next = nextStepIngressHandoffJa(policy);
     expect(next).toContain("Sealith必須");
+  });
+
+  test("manager approval guidance", () => {
+    const policy = normalizeIngressHandoffPolicy({
+      rules: [
+        {
+          applyTo: "all",
+          body: "full",
+          attachment: "file",
+          attachmentApproval: "manager",
+          sealith: "off",
+        },
+      ],
+    });
+    const next = nextStepIngressHandoffJa(policy);
+    expect(next).toContain("上長承認");
+  });
+
+  test("high risk without consent guidance", () => {
+    const policy = normalizeIngressHandoffPolicy({
+      rules: [
+        {
+          applyTo: "classified_external_sensitive",
+          body: "full",
+          attachment: "file",
+          sealith: "off",
+        },
+      ],
+    });
+    const next = nextStepIngressHandoffJa(policy);
+    expect(next).toContain("高リスク警告");
+  });
+});
+
+describe("policyHasHighRiskAutomation", () => {
+  test("returns false for default policy", () => {
+    expect(policyHasHighRiskAutomation(defaultIngressHandoffPolicy())).toBe(false);
+  });
+
+  test("returns false for file+sealith=off on all scope", () => {
+    const policy = {
+      rules: [
+        {
+          id: "test",
+          applyTo: "all" as const,
+          body: "full" as const,
+          attachment: "file" as const,
+          sealith: "off" as const,
+          audit: { jobId: true, sealithTransferId: false },
+        },
+      ],
+    };
+    expect(policyHasHighRiskAutomation(policy)).toBe(false);
+  });
+
+  test("returns true for file+sealith=off on classified_external_sensitive", () => {
+    const policy = {
+      rules: [
+        {
+          id: "test",
+          applyTo: "classified_external_sensitive" as const,
+          body: "full" as const,
+          attachment: "file" as const,
+          sealith: "off" as const,
+          audit: { jobId: true, sealithTransferId: false },
+        },
+      ],
+    };
+    expect(policyHasHighRiskAutomation(policy)).toBe(true);
+  });
+
+  test("returns false when sealith is required", () => {
+    const policy = {
+      rules: [
+        {
+          id: "test",
+          applyTo: "classified_external_sensitive" as const,
+          body: "full" as const,
+          attachment: "file" as const,
+          sealith: "required" as const,
+          audit: { jobId: true, sealithTransferId: true },
+        },
+      ],
+    };
+    expect(policyHasHighRiskAutomation(policy)).toBe(false);
+  });
+
+  test("returns false when attachment is meta", () => {
+    const policy = {
+      rules: [
+        {
+          id: "test",
+          applyTo: "classified_external_sensitive" as const,
+          body: "full" as const,
+          attachment: "meta" as const,
+          sealith: "off" as const,
+          audit: { jobId: true, sealithTransferId: false },
+        },
+      ],
+    };
+    expect(policyHasHighRiskAutomation(policy)).toBe(false);
+  });
+});
+
+describe("high-risk consent validation", () => {
+  test("rejects high-risk config without consent when required", () => {
+    const result = validateIngressHandoffPolicy(
+      {
+        rules: [
+          {
+            applyTo: "classified_external_sensitive",
+            body: "full",
+            attachment: "file",
+            sealith: "off",
+          },
+        ],
+      },
+      { requireHighRiskConsent: true }
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors.some((e) => e.code === "high_risk_consent_required")).toBe(true);
+    }
+  });
+
+  test("accepts high-risk config with new consent", () => {
+    const result = validateIngressHandoffPolicy(
+      {
+        rules: [
+          {
+            applyTo: "classified_external_sensitive",
+            body: "full",
+            attachment: "file",
+            sealith: "off",
+          },
+        ],
+        highRiskConsentAt: new Date().toISOString(),
+        highRiskConsentBy: "admin@example.com",
+      },
+      { requireHighRiskConsent: true }
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.policy.highRiskConsentAt).toBeDefined();
+      expect(result.policy.highRiskConsentBy).toBe("admin@example.com");
+    }
+  });
+
+  test("accepts high-risk config with existing consent", () => {
+    const result = validateIngressHandoffPolicy(
+      {
+        rules: [
+          {
+            applyTo: "classified_external_sensitive",
+            body: "full",
+            attachment: "file",
+            sealith: "off",
+          },
+        ],
+      },
+      {
+        requireHighRiskConsent: true,
+        existingConsent: {
+          at: "2026-09-01T00:00:00Z",
+          by: "previous@example.com",
+        },
+      }
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.policy.highRiskConsentAt).toBe("2026-09-01T00:00:00Z");
+    }
+  });
+
+  test("does not require consent for non-high-risk config", () => {
+    const result = validateIngressHandoffPolicy(
+      {
+        rules: [
+          {
+            applyTo: "classified_external_sensitive",
+            body: "full",
+            attachment: "meta",
+            sealith: "off",
+          },
+        ],
+      },
+      { requireHighRiskConsent: true }
+    );
+    expect(result.ok).toBe(true);
+  });
+
+  test("does not require consent when requireHighRiskConsent is false", () => {
+    const result = validateIngressHandoffPolicy(
+      {
+        rules: [
+          {
+            applyTo: "classified_external_sensitive",
+            body: "full",
+            attachment: "file",
+            sealith: "off",
+          },
+        ],
+      },
+      { requireHighRiskConsent: false }
+    );
+    expect(result.ok).toBe(true);
+  });
+});
+
+describe("hasHighRiskConsentRecorded", () => {
+  test("returns false when no consent", () => {
+    expect(hasHighRiskConsentRecorded(defaultIngressHandoffPolicy())).toBe(false);
+  });
+
+  test("returns true when consent recorded", () => {
+    const policy = normalizeIngressHandoffPolicy({
+      rules: [
+        {
+          applyTo: "classified_external_sensitive",
+          body: "full",
+          attachment: "file",
+          sealith: "off",
+        },
+      ],
+      highRiskConsentAt: "2026-09-01T00:00:00Z",
+      highRiskConsentBy: "admin@example.com",
+    });
+    expect(hasHighRiskConsentRecorded(policy)).toBe(true);
   });
 });

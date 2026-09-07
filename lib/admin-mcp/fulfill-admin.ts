@@ -383,10 +383,17 @@ async function fulfillIngressHandoff(
     };
   }
 
-  const validation = validateIngressHandoffPolicy({ rules: args.rules });
+  const validation = validateIngressHandoffPolicy({
+    policyName: args.policyName,
+    rules: args.rules,
+    highRiskConsentAt: args.highRiskConsentAt,
+    highRiskConsentBy: args.highRiskConsentBy,
+  });
   if (!validation.ok) {
     throw new Error("invalid_ingress_handoff_policy");
   }
+
+  const hasHighRiskConsent = Boolean(validation.policy.highRiskConsentAt);
 
   if (employeeId) {
     const policy = await setEmployeeIngressHandoffPolicy(employeeId, approval.orgId, validation.policy);
@@ -401,7 +408,11 @@ async function fulfillIngressHandoff(
         auditClass: ADMIN_AUDIT_CLASS,
         approvalId: approval.id,
         employeeId,
+        policyId: policy?.policyId,
+        policyName: policy?.policyName,
         rulesCount: policy?.rules.length ?? 0,
+        highRiskConsentAt: policy?.highRiskConsentAt,
+        highRiskConsentBy: policy?.highRiskConsentBy,
       },
     });
     return {
@@ -413,17 +424,22 @@ async function fulfillIngressHandoff(
   }
 
   const policy = await setOrgIngressHandoffPolicy(approval.orgId, validation.policy);
+  const consentNote = hasHighRiskConsent ? "（高リスク承諾あり）" : "";
   await appendAuditEvent({
     orgId: approval.orgId,
     employeeId: null,
     credentialId: null,
     action: "admin.ingressHandoff",
     purpose: "admin.ingressHandoff",
-    summary: `組織の受信の渡し方ポリシーを更新しました（${policy.rules.length}ルール）`,
+    summary: `組織の受信の渡し方ポリシーを更新しました（${policy.rules.length}ルール${consentNote}）`,
     metadata: {
       auditClass: ADMIN_AUDIT_CLASS,
       approvalId: approval.id,
+      policyId: policy.policyId,
+      policyName: policy.policyName,
       rulesCount: policy.rules.length,
+      highRiskConsentAt: policy.highRiskConsentAt,
+      highRiskConsentBy: policy.highRiskConsentBy,
     },
   });
   return {

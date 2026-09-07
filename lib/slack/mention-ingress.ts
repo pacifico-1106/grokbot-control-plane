@@ -60,10 +60,15 @@ export type SlackWakePayload = {
   employeeId: string;
   eventId: string;
   ingressHandoff?: {
+    policyId?: string;
+    ruleId?: string;
     bodyMode: "full" | "prefix" | "none";
     attachmentMode: "file" | "meta" | "none";
+    attachmentApproval?: "none" | "manager";
     bodyTruncated?: boolean;
     sealithHandoff: SealithHandoff;
+    sealithTransferId?: string;
+    pendingManagerApproval?: boolean;
     channelClassification: ChannelClassification;
   };
 };
@@ -647,10 +652,15 @@ export async function processSlackMentionEnvelope(
     appliedText = processedText;
 
     ingressHandoffMeta = {
+      policyId: effectivePolicy.policy.policyId,
+      ruleId: resolved.rule.id,
       bodyMode: resolved.rule.body,
       attachmentMode: resolved.rule.attachment,
+      attachmentApproval: resolved.rule.attachmentApproval,
       bodyTruncated: truncated || undefined,
       sealithHandoff: resolved.rule.sealith,
+      pendingManagerApproval:
+        resolved.rule.attachmentApproval === "manager" ? true : undefined,
       channelClassification: classification,
     };
   }
