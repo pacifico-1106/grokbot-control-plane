@@ -20,12 +20,13 @@ import {
   validateIngressHandoffPolicy,
   summarizeIngressHandoffPolicyJa,
   nextStepIngressHandoffJa,
+  policyHasHighRiskAutomation as ingressPolicyHasHighRisk,
 } from "@/lib/ingress-handoff/validate";
 import {
   validateSchedulingPolicy,
   summarizeSchedulingPolicyJa,
   nextStepSchedulingPolicyJa,
-  policyHasHighRiskAutomation,
+  policyHasHighRiskAutomation as schedulingPolicyHasHighRisk,
 } from "@/lib/scheduling-policy/validate";
 import {
   validateReplyPolicy,
@@ -162,7 +163,7 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
   {
     name: "setup.slackStatus",
     description:
-      "Diagnose Slack integration status for this org (read-only, no approval required). Returns bot token presence, auth.test result, conversation adapter status, IM routes count, and employee posting_as settings with path-aware guidance. Use before guiding humans through Slack setup. The nextStepJa field indicates the next human action with posting_as pros/cons: Bot（会社窓口・アプリDM向け）vs 個人（社員名義・チャネル向け）。推奨デフォルト: アプリDM向け社員は bot / チャネル・Connect・人対人DM向けは user。【dual-audience S1+S2+S3本番】混在/Connect chでは resolveAudience が dualAudience を返却、二重マトリクス評価 dualEgress も稼働中。【F1 口ルーティング本番】S3/F1 口ルーティング本番稼働中。A1 scheduling.policy も本番稼働中。混在chは相手台帳必須（parties.upsert）。Refer to docs/tenant-slack-kickoff-rail.md for the full RAIL including F1 guidance.",
+      "Diagnose Slack integration status for this org (read-only, no approval required). Returns bot token presence, auth.test result, conversation adapter status, IM routes count, and employee posting_as settings with path-aware guidance. Use before guiding humans through Slack setup. The nextStepJa field indicates the next human action with posting_as pros/cons: Bot（会社窓口・アプリDM向け）vs 個人（社員名義・チャネル向け）。推奨デフォルト: アプリDM向け社員は bot / チャネル・Connect・人対人DM向けは user。【dual-audience S1+S2+S3本番】混在/Connect chでは resolveAudience が dualAudience を返却、二重マトリクス評価 dualEgress も稼働中。【F1 口ルーティング本番】S3/F1 口ルーティング本番稼働中。【D1 受信ハンドオフ本番】ingressHandoff.get/patch で添付・ファイル手渡し設定。A1 scheduling.policy も本番稼働中。混在chは相手台帳必須（parties.upsert）。Refer to docs/tenant-slack-kickoff-rail.md for the full RAIL including D1 guidance.",
     inputSchema: {
       type: "object",
       properties: {},
@@ -172,7 +173,7 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
   {
     name: "ingressHandoff.get",
     description:
-      "Read ingress handoff policy (read-only, no approval required). Omit employeeId for org policy; include for AI社員ごとの設定. Returns effective policy + source layer (employee/org/default) + layers (employeeOverride/orgPolicy). Staffpass = act boundary; Sealith = encrypted file handoff; no round-trip masking.",
+      "Read ingress handoff policy (read-only, no approval required). D1本番稼働中。Omit employeeId for org policy; include for AI社員ごとの設定. Returns effective policy (policyId/policyName) + source layer (employee/org/default) + layers (employeeOverride/orgPolicy) + hasHighRiskAutomation + highRiskConsentRecorded. Staffpass = behavior boundary; Sealith = encryption handoff. High-risk: attachment=file + sealith=off + classified_external_sensitive.",
     inputSchema: {
       type: "object",
       properties: {
@@ -184,12 +185,13 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
   {
     name: "ingressHandoff.patch",
     description:
-      "Patch ingress handoff policy after human approval (always_human). Omit employeeId for org policy; include for AI社員ごとの設定. To clear employee override (inherit org), set clearOverride=true. Full replace of rules array. First-match rule ordering. Admin cannot self-approve. Convenience default: body=full, attachment=meta, sealith=off.",
+      "Patch ingress handoff policy after human approval (always_human). D1本番稼働中。Omit employeeId for org policy; include for AI社員ごとの設定. To clear employee override (inherit org), set clearOverride=true. Full replace of rules array. First-match rule ordering. policyId auto-generated (ihp_...), policyName human-readable. Slack wake audit: policyId/ruleId/attachmentApproval/pendingManagerApproval. Admin cannot self-approve. Convenience default: body=full, attachment=meta, sealith=off. 【高リスク警告】attachment=file + sealith=off + classified_external_sensitive は silent enable 禁止。テナント承諾 (highRiskConsentAt/By) + 監査に設定を残す。",
     inputSchema: {
       type: "object",
       properties: {
         employeeId: { type: "string", description: "Optional employee ID for per-employee override" },
         clearOverride: { type: "boolean", description: "Set true to clear employee override and inherit org policy" },
+        policyName: { type: "string", description: "Human-readable policy name" },
         rules: {
           type: "array",
           description: "Full replacement rules array (first match wins). Omit when clearOverride=true.",
@@ -202,8 +204,8 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
               body: { type: "string", description: "full | prefix | none" },
               bodyPrefixChars: { type: "number", description: "1-4000, required when body=prefix" },
               attachment: { type: "string", description: "file | meta | none" },
-              attachmentApproval: { type: "string", description: "none | manager (only when attachment!=none)" },
-              sealith: { type: "string", description: "off | suggest | required" },
+              attachmentApproval: { type: "string", description: "none | manager (only when attachment!=none). manager = fail-closed until manager approves." },
+              sealith: { type: "string", description: "off | suggest | required. required without transferId = fail-closed (meta only)." },
               sealithRequiredHints: { type: "array", items: { type: "string" } },
               sealithRequiredOtherText: { type: "string" },
               audit: {
@@ -217,6 +219,8 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
             required: ["applyTo", "body", "attachment", "sealith"],
           },
         },
+        highRiskConsentAt: { type: "string", description: "ISO timestamp of tenant consent for high-risk (file+sealith=off+external) config" },
+        highRiskConsentBy: { type: "string", description: "Email/name of person who gave consent" },
         jobId: { type: "string" },
       },
       additionalProperties: false,
@@ -570,6 +574,8 @@ type IngressHandoffGetResult = {
   summaryJa: string;
   sourceJa: string;
   nextStepJa: string;
+  hasHighRiskAutomation: boolean;
+  highRiskConsentRecorded: boolean;
 };
 
 const SOURCE_JA: Record<IngressHandoffPolicySource, string> = {
@@ -597,6 +603,7 @@ async function runIngressHandoffGet(
   }
 
   const effective = await getEffectiveIngressHandoffPolicy(cred.orgId, employeeId);
+  const hasHighRisk = ingressPolicyHasHighRisk(effective.policy);
   const result: IngressHandoffGetResult = {
     ok: true,
     policy: effective.policy,
@@ -608,6 +615,8 @@ async function runIngressHandoffGet(
     summaryJa: summarizeIngressHandoffPolicyJa(effective.policy),
     sourceJa: SOURCE_JA[effective.source],
     nextStepJa: nextStepIngressHandoffJa(effective.policy),
+    hasHighRiskAutomation: hasHighRisk,
+    highRiskConsentRecorded: Boolean(effective.policy.highRiskConsentAt),
   };
   return {
     content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
@@ -662,7 +671,7 @@ async function runSchedulingPolicyGet(
   }
 
   const effective = await getEffectiveSchedulingPolicy(cred.orgId, employeeId);
-  const hasHighRisk = policyHasHighRiskAutomation(effective.policy);
+  const hasHighRisk = schedulingPolicyHasHighRisk(effective.policy);
   const result: SchedulingPolicyGetResult = {
     ok: true,
     policy: effective.policy,
@@ -849,14 +858,39 @@ export async function callAdminMcpTool(
           true
         );
       }
-      const validationResult = validateIngressHandoffPolicy({ rules: args.rules });
+
+      const existingPolicy = await getEffectiveIngressHandoffPolicy(cred.orgId, employeeId);
+      const existingConsent = existingPolicy.policy.highRiskConsentAt
+        ? { at: existingPolicy.policy.highRiskConsentAt, by: existingPolicy.policy.highRiskConsentBy || "unknown" }
+        : null;
+
+      const validationResult = validateIngressHandoffPolicy(
+        {
+          policyName: args.policyName,
+          rules: args.rules,
+          highRiskConsentAt: args.highRiskConsentAt,
+          highRiskConsentBy: args.highRiskConsentBy,
+        },
+        {
+          requireHighRiskConsent: true,
+          existingConsent,
+        }
+      );
       if (!validationResult.ok) {
+        const hasHighRiskError = validationResult.errors.some(
+          (e) => e.code === "high_risk_consent_required"
+        );
         return toolResult(
           {
             ok: false,
-            code: "validation_failed",
-            message: "ルールの検証に失敗しました",
+            code: hasHighRiskError ? "high_risk_consent_required" : "validation_failed",
+            message: hasHighRiskError
+              ? "高リスク設定（添付=ファイル + Sealith=オフ + 外部/機密分類）にはテナント承諾が必要です。highRiskConsentAt/By を設定してください。"
+              : "ルールの検証に失敗しました",
             errors: validationResult.errors,
+            warningJa: hasHighRiskError
+              ? "【高リスク警告】外部/機密チャネルにファイル本体をSealithなしで渡す設定は silent enable 禁止。承諾 + settings on audit (F4/F5)。"
+              : undefined,
           },
           true
         );
@@ -1061,12 +1095,16 @@ export async function callAdminMcpTool(
       : null;
     const clearOverride = args.clearOverride === true;
     const rulesCount = Array.isArray(args.rules) ? args.rules.length : 0;
+    const hasHighRiskConsent = Boolean(args.highRiskConsentAt);
+    const rulesArray = Array.isArray(args.rules) ? args.rules : [];
+    const hasHighRiskConfig = ingressPolicyHasHighRisk({ rules: rulesArray as Parameters<typeof ingressPolicyHasHighRisk>[0]["rules"] });
     if (clearOverride && employeeId) {
       summary = `AI社員の受信の渡し方オーバーライドをクリアして組織ポリシーを継承します`;
     } else if (employeeId) {
       summary = `AI社員ごとの受信の渡し方オーバーライドを設定します（${rulesCount}ルール）`;
     } else {
-      summary = `組織の受信の渡し方ポリシーの更新を人が確認します（${rulesCount}ルール）`;
+      const consentNote = hasHighRiskConsent && hasHighRiskConfig ? "・高リスク承諾あり" : "";
+      summary = `組織の受信の渡し方ポリシーの更新を人が確認します（${rulesCount}ルール${consentNote}）`;
     }
   } else if (name === "schedulingPolicy.patch") {
     const employeeId = typeof args.employeeId === "string" && args.employeeId.trim()

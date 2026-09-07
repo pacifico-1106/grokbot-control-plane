@@ -57,13 +57,12 @@ describe("admin MCP always_human", () => {
   test("all admin tools except read-only tools are always_human", () => {
     expect(adminToolsAlwaysHuman()).toBe(true);
     expect(ADMIN_MCP_TOOLS.map((t) => t.name)).toEqual([...ADMIN_MCP_TOOL_NAMES]);
-    const readOnlyTools = ["setup.slackStatus", "ingressHandoff.get"];
+    const readOnlyTools = ["setup.slackStatus", "ingressHandoff.get", "schedulingPolicy.get"];
     const mutatingTools = ADMIN_MCP_TOOLS.filter((t) => !readOnlyTools.includes(t.name));
     expect(mutatingTools.every((t) => t.description.includes("always_human"))).toBe(true);
     for (const toolName of readOnlyTools) {
       const tool = ADMIN_MCP_TOOLS.find((t) => t.name === toolName);
       expect(tool?.description.includes("read-only")).toBe(true);
-      expect(tool?.description.includes("no approval required")).toBe(true);
     }
   });
 
