@@ -17,7 +17,7 @@
 | 1 | A1 | 日程調整 | 済・継続。対外約束の入口 |
 | 2 | F1 | 口のルーティング | 複数口前提。以降全部に刺さる |
 | 3 | B2 | Slack／LINE等の返信 | ✅ 本番稼働。スレッド規則もここ |
-| 4 | D1 | 添付・ファイル手渡し | 一部済。Sealith連携の本線 |
+| 4 | D1 | 添付・ファイル手渡し | ✅ 本番稼働。Sealith連携の本線 |
 | 5 | B1 | メール送信／返信 | 対外定番。CC/BCC・添付 |
 | 6 | D2 | ナレッジ回答 | 秘匿漏洩の最重要ガード |
 | 7 | B3 | 見積・提案の送付 | 金と期待値。松竹梅・出精値引き |
@@ -138,12 +138,16 @@
 
 ## D. 情報の渡し方
 
-### D1 添付・ファイル手渡し（shipped）
+### D1 添付・ファイル手渡し（本番稼働）
+- **ステータス**: ✅ 本番稼働（PR #44 マージ済み / `acfd76e`）
 - **ルール例:** 全文／要約／Sealith切替、上長承認  
 - **状態:** `ingress_handoff_policy` 実装完了（型・検証・適用エンジン・Admin MCP・高リスク承諾）
 - **Sealith:** off / suggest / required; required without transferId → fail-closed; audit sealithTransferId + jobId
 - **Manager approval:** `attachmentApproval=manager` で fail-closed（承認後に添付を渡す）
 - **高リスク承諾:** `attachment=file + sealith=off + classified_external_sensitive` は silent enable 禁止 → `highRiskConsentAt/By` 必須
+- **Admin MCP ツール:** `ingressHandoff.get` / `ingressHandoff.patch`
+- **スキーマ:** `orgs.ingress_handoff_policy` / `employees.ingress_handoff_policy` (jsonb、新規SQLなし)
+- **詳細:** `docs/ingress-handoff-d1.md`
 - **Admin MCP ツール:** `ingressHandoff.get` (read-only) / `ingressHandoff.patch` (always_human)
 - **スキーマ:** `orgs.ingress_handoff_policy` / `employees.ingress_handoff_policy` (オーバーライド)
 - **詳細:** `docs/ingress-handoff-d1.md`
@@ -236,6 +240,14 @@
    - Admin MCP: `replyPolicy.get` / `replyPolicy.patch`
    - SQL: `20260908_reply_policy.sql`（Staging 警告: Grokbot 共有制御面に適用済み）
    - 詳細: `docs/reply-policy.md` / [tenant-slack-kickoff-rail.md](./tenant-slack-kickoff-rail.md) § 5
-5. 次箱 **D1**（添付・ファイル手渡し）→ B1
-6. **F6 アイデンティティ開示** は F1 の後（予定）
-7. AI Concier は A4 の参考・将来連携として別枠
+5. ✅ **D1 添付・ファイル手渡し**（PR #44 マージ済み・本番稼働）
+   - policyId/policyName on ingress_handoff_policy
+   - 高リスク承諾: `attachment=file + sealith=off + classified_external_sensitive` → `highRiskConsentAt/By` 必須
+   - Slack wake 監査: policyId/ruleId/attachmentApproval/pendingManagerApproval
+   - Sealith = encryption handoff; Staffpass = behavior boundary
+   - 新規SQLなし（既存 jsonb カラムを使用）
+   - Admin MCP: `ingressHandoff.get` / `ingressHandoff.patch`
+   - 詳細: `docs/ingress-handoff-d1.md`
+6. 次箱 **B1**（メール送信）
+7. **F6 アイデンティティ開示** は F1 の後（予定）
+8. AI Concier は A4 の参考・将来連携として別枠
