@@ -164,10 +164,16 @@
 
 ## F. 横断ルール
 
-### F1 口のルーティング
+### F1 口のルーティング（S3 実装完了）
+- **ステータス**: ✅ 本番稼働（PR #XX / main ~XXXXXXX）
 - 「この相手はLINE、社内はSlack」など状況別既定口  
 - 会話口と承認通知口は混ぜない（確定方針）  
 - 優先: Slack → LINE → Chatwork → Messenger（会話）
+- **S3 二重ゲート**: `dualEgress` の内部/外部判定が異なる場合、チャネル投稿は external-safe、内部向け詳細は DM / 限定スレッドへ分離配信
+- **Fail-closed**: 未知 / 外部混在で解決不能な内部パーティ → 内部漏洩なし（hold / deny）
+- **型**: `MouthRoutingPolicy` / `MouthRoutingDecision` / `OrgMouthRoutingPolicy`
+- **Admin MCP**: `mouthRoutingPolicy.get` / `mouthRoutingPolicy.patch`（将来）
+- **詳細**: `docs/egress-policy.md` § S3
 
 ### F2 応答SLA／営業時間
 - 外向けは翌営、内向けは即時可、時間外は下書きのみ 等
@@ -180,6 +186,19 @@
 
 ### F5 監査ラベル（済）
 - どのルールで残ったか／落ちたか／なぜその文面かを残す
+
+### F6 アイデンティティ開示（予約・F1隣接）
+- **ステータス**: 📋 設計予約（F1と隣接だが別ポリシー族）
+- **用途**: 「あなたは誰？」「AIですか？」「どの組織？」「録音してる？」への応答制御
+- **WHO×WHAT 開示**: audience（internal / external）に応じて allow / deny / template を返す
+- **F1との境界**: F1 は「何をどの口へ出すか」、F6 は「自己紹介・正体開示の可否」
+  - F1 `MouthRoutingPolicy` は **コンテンツの配信先制御**
+  - F6 `DisclosurePolicy`（仮）は **エージェント自身に関するQ&A応答**
+- **例**: 
+  - 社外: 「Staffpassを利用した自動返信です」（テンプレ）
+  - 社内: 「AI社員 八坂です。録音は上長承諾済みです」
+- **実装予定**: F1完了後の次パック。型予約のみ、本PRでは実装しない
+- **拡張点**: `lib/gateway/disclosure-policy.ts`（予約）
 
 ---
 

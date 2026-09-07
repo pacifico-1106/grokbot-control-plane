@@ -1,7 +1,7 @@
 import { getLinkedSlackUserToken } from "@/lib/data/slack-identities";
 import { resolveOrgSlackBotToken } from "@/lib/slack/bot-token";
 import { normalizePostingAs } from "@/lib/employees/posting-as";
-import type { PostingAs } from "@/lib/types";
+import type { MouthRoutingDecision, PostingAs } from "@/lib/types";
 
 const SLACK_TIMEOUT_MS = 5_000;
 
@@ -202,4 +202,115 @@ export async function postConversationMessage(input: {
   }
 
   return { ok: false, error: retried.error };
+}
+
+/**
+ * F1: Split routing result for dual-delivery scenarios.
+ */
+export type SplitRoutingResult = {
+  channelDelivery: SlackConversationPostResult | null;
+  dmDelivery: SlackConversationPostResult | null;
+  splitDelivery: boolean;
+  auditLabels: string[];
+};
+
+/**
+ * F1: Execute split routing based on mouth routing decision.
+ *
+ * When dualEgress shows differing decisions:
+ * - Channel post uses external-safe content (effectiveDecision)
+ * - Internal DM uses full content for internal parties
+ *
+ * Conversation adapters ≠ approval notification channels (never mix).
+ */
+export async function executeSlackSplitRouting(input: {
+  orgId: string;
+  employeeId?: string;
+  postingAs?: PostingAs | string | null;
+  channelId: string;
+  threadTs?: string;
+  externalSafeText: string;
+  internalFullText: string;
+  routing: MouthRoutingDecision;
+  slackUserId?: string;
+}): Promise<SplitRoutingResult> {
+  const auditLabels: string[] = [];
+  let channelDelivery: SlackConversationPostResult | null = null;
+  let dmDelivery: SlackConversationPostResult | null = null;
+
+  const { routing } = input;
+
+  if (routing.channelRoute && routing.channelRoute.path.kind === "channel") {
+    const text =
+      routing.channelRoute.contentVariant === "summary_only"
+        ? `【要約のみ】\n${input.externalSafeText}`
+        : input.externalSafeText;
+
+    channelDelivery = await postConversationMessage({
+      orgId: input.orgId,
+      employeeId: input.employeeId,
+      postingAs: input.postingAs,
+      channel: input.channelId,
+      text,
+      threadTs: input.threadTs,
+      summarize: routing.channelRoute.contentVariant === "summary_only",
+      slackUserId: input.slackUserId,
+    });
+    auditLabels.push(routing.channelRoute.auditLabel);
+  }
+
+  if (routing.internalRoute) {
+    const path = routing.internalRoute.path;
+
+    if (path.kind === "dm" && path.targetUserIds.length > 0) {
+      for (const userId of path.targetUserIds) {
+        const dmResult = await postConversationMessage({
+          orgId: input.orgId,
+          employeeId: input.employeeId,
+          postingAs: input.postingAs,
+          channel: userId,
+          text: input.internalFullText,
+          slackUserId: userId,
+        });
+
+        if (!dmDelivery || dmResult.ok) {
+          dmDelivery = dmResult;
+        }
+      }
+      auditLabels.push(routing.internalRoute.auditLabel);
+    } else if (path.kind === "limited_thread") {
+      dmDelivery = await postConversationMessage({
+        orgId: input.orgId,
+        employeeId: input.employeeId,
+        postingAs: input.postingAs,
+        channel: input.channelId,
+        text: input.internalFullText,
+        threadTs: path.parentThreadId,
+        slackUserId: input.slackUserId,
+      });
+      auditLabels.push(routing.internalRoute.auditLabel);
+    } else if (path.kind === "hold_approval" || path.kind === "deny") {
+      auditLabels.push(routing.internalRoute.auditLabel);
+    }
+  }
+
+  return {
+    channelDelivery,
+    dmDelivery,
+    splitDelivery: routing.splitDelivery,
+    auditLabels,
+  };
+}
+
+/**
+ * F1: Check if a routing decision requires split delivery.
+ */
+export function requiresSplitDelivery(routing: MouthRoutingDecision): boolean {
+  return (
+    routing.splitDelivery &&
+    routing.channelRoute !== null &&
+    routing.internalRoute !== null &&
+    routing.internalRoute.path.kind !== "hold_approval" &&
+    routing.internalRoute.path.kind !== "deny"
+  );
 }
