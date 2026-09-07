@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { evaluateEgressMatrix } from "@/lib/gateway/egress";
+import { dualDecisionsDiffer, evaluateDualEgress, evaluateEgressMatrix } from "@/lib/gateway/egress";
 import { resolveInformationDisclosure } from "@/lib/gateway/information-class";
 import { DEMO_ORG } from "@/lib/demo-data";
+import type { DualAudience } from "@/lib/types";
 
 describe("egress matrix", () => {
   test("external × public → allow", () => {
@@ -209,5 +210,149 @@ describe("information class defaults", () => {
       },
     });
     expect(result.informationClass).toBe("confidential");
+  });
+});
+
+describe("S2 dual egress evaluation", () => {
+  const mixedChannelDual: DualAudience = {
+    internalFacing: "internal",
+    externalFacing: "external",
+    channelMixed: true,
+    partySignals: [
+      { kind: "slack_user", identifier: "U_INTERNAL", audience: "internal", resolved: true },
+      { kind: "slack_user", identifier: "U_EXTERNAL", audience: "external", resolved: true },
+    ],
+    hasInternalParty: true,
+    hasExternalParty: true,
+  };
+
+  const pureInternalDual: DualAudience = {
+    internalFacing: "internal",
+    externalFacing: "internal",
+    channelMixed: false,
+    partySignals: [
+      { kind: "slack_user", identifier: "U_INTERNAL", audience: "internal", resolved: true },
+    ],
+    hasInternalParty: true,
+    hasExternalParty: false,
+  };
+
+  test("mixed channel with internal + external party → two distinct decisions (internal + confidential)", () => {
+    const result = evaluateDualEgress({
+      audience: "external",
+      dualAudience: mixedChannelDual,
+      informationClass: "confidential",
+      fidelity: "summary",
+      namedRecipients: false,
+    });
+
+    expect(result.dualEvaluated).toBe(true);
+    expect(result.internalDecision.decision).toBe("needs_approval");
+    expect(result.internalDecision.effectiveAudience).toBe("internal");
+    expect(result.externalDecision.decision).toBe("deny");
+    expect(result.externalDecision.effectiveAudience).toBe("external");
+    expect(result.effectiveDecision.decision).toBe("deny");
+  });
+
+  test("mixed channel with public info → both allow, but recorded separately", () => {
+    const result = evaluateDualEgress({
+      audience: "external",
+      dualAudience: mixedChannelDual,
+      informationClass: "public",
+      fidelity: "source",
+      namedRecipients: false,
+    });
+
+    expect(result.dualEvaluated).toBe(true);
+    expect(result.internalDecision.decision).toBe("allow");
+    expect(result.externalDecision.decision).toBe("allow");
+    expect(result.effectiveDecision.decision).toBe("allow");
+    expect(dualDecisionsDiffer(result)).toBe(false);
+  });
+
+  test("mixed channel with internal info → internal allow, external summarize", () => {
+    const result = evaluateDualEgress({
+      audience: "external",
+      dualAudience: mixedChannelDual,
+      informationClass: "internal",
+      fidelity: "summary",
+      namedRecipients: false,
+    });
+
+    expect(result.dualEvaluated).toBe(true);
+    expect(result.internalDecision.decision).toBe("allow");
+    expect(result.externalDecision.decision).toBe("summarize");
+    expect(result.effectiveDecision.decision).toBe("summarize");
+    expect(dualDecisionsDiffer(result)).toBe(true);
+  });
+
+  test("pure internal channel → single path, dualEvaluated=false", () => {
+    const result = evaluateDualEgress({
+      audience: "internal",
+      dualAudience: pureInternalDual,
+      informationClass: "confidential",
+      fidelity: "summary",
+      namedRecipients: false,
+    });
+
+    expect(result.dualEvaluated).toBe(false);
+    expect(result.internalDecision.decision).toBe("needs_approval");
+    expect(result.externalDecision.decision).toBe("needs_approval");
+    expect(result.effectiveDecision.decision).toBe("needs_approval");
+    expect(dualDecisionsDiffer(result)).toBe(false);
+  });
+
+  test("null dualAudience → single path fallback", () => {
+    const result = evaluateDualEgress({
+      audience: "external",
+      dualAudience: null,
+      informationClass: "confidential",
+      fidelity: "summary",
+      namedRecipients: false,
+    });
+
+    expect(result.dualEvaluated).toBe(false);
+    expect(result.effectiveDecision.decision).toBe("deny");
+  });
+
+  test("unknown party in mixed channel → fail-closed external", () => {
+    const unknownDual: DualAudience = {
+      internalFacing: "external",
+      externalFacing: "external",
+      channelMixed: true,
+      partySignals: [
+        { kind: "slack_user", identifier: "U_UNKNOWN", audience: "unknown", resolved: false },
+      ],
+      hasInternalParty: false,
+      hasExternalParty: true,
+    };
+
+    const result = evaluateDualEgress({
+      audience: "external",
+      dualAudience: unknownDual,
+      informationClass: "confidential",
+      fidelity: "summary",
+      namedRecipients: false,
+    });
+
+    expect(result.dualEvaluated).toBe(true);
+    expect(result.internalDecision.effectiveAudience).toBe("external");
+    expect(result.externalDecision.effectiveAudience).toBe("external");
+    expect(result.effectiveDecision.decision).toBe("deny");
+  });
+
+  test("effectiveDecision always uses external-facing path for channel posts", () => {
+    const result = evaluateDualEgress({
+      audience: "external",
+      dualAudience: mixedChannelDual,
+      informationClass: "internal",
+      fidelity: "source",
+      namedRecipients: false,
+    });
+
+    expect(result.dualEvaluated).toBe(true);
+    expect(result.internalDecision.decision).toBe("allow");
+    expect(result.externalDecision.decision).toBe("deny");
+    expect(result.effectiveDecision).toEqual(result.externalDecision);
   });
 });

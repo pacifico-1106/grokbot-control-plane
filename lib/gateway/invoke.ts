@@ -25,7 +25,7 @@ import {
   isBillableConfirmCompletion,
   recordGatedConfirmAction,
 } from "@/lib/billing/meter";
-import { evaluateEgressMatrix } from "@/lib/gateway/egress";
+import { evaluateDualEgress, evaluateEgressMatrix } from "@/lib/gateway/egress";
 import {
   parseConversationContext,
   resolveAudience,
@@ -64,7 +64,7 @@ import {
   findForbiddenPhrase,
   outboundConversationText,
 } from "@/lib/employees/voice";
-import type { Employee, EgressVerdict, GatewayInvokeRequest } from "@/lib/types";
+import type { DualEgressVerdict, Employee, EgressVerdict, GatewayInvokeRequest } from "@/lib/types";
 import {
   CrossProductEventError,
   normalizeCommerceAuthorization,
@@ -82,15 +82,24 @@ function jsonResult(
   return { httpStatus, body };
 }
 
+/**
+ * S2: Evaluate invoke egress with dual-audience support.
+ * Returns both the effective verdict (external-safe for behavior) and
+ * the dual verdict (for audit when channelMixed).
+ */
 async function evaluateInvokeEgress(input: {
   orgId: string;
   tool: string;
   toolDef: import("@/lib/gateway/tools").GatewayToolDef;
   body: import("@/lib/types").GatewayInvokeRequest;
-}): Promise<import("@/lib/types").EgressVerdict | null> {
+}): Promise<{
+  egress: EgressVerdict | null;
+  dualEgress: DualEgressVerdict | null;
+}> {
   const gated = isAudienceGatedTool(input.toolDef);
   const ctx = parseConversationContext(input.body, input.orgId);
-  if (!gated && !ctx) return null;
+  if (!gated && !ctx) return { egress: null, dualEgress: null };
+
   const audience = await resolveAudience(ctx, { requireDestination: gated });
   const disclosure = await resolveInformationDisclosure({
     orgId: input.orgId,
@@ -98,12 +107,19 @@ async function evaluateInvokeEgress(input: {
     body: input.body,
     audience: audience.audience,
   });
-  return evaluateEgressMatrix({
+
+  const dualEgress = evaluateDualEgress({
     audience: audience.audience,
+    dualAudience: audience.dualAudience,
     informationClass: disclosure.informationClass,
     fidelity: disclosure.fidelity,
     namedRecipients: audience.namedRecipients,
   });
+
+  return {
+    egress: dualEgress.effectiveDecision,
+    dualEgress,
+  };
 }
 
 /**
@@ -718,7 +734,8 @@ export async function runGatewayInvoke(
 
   // Audience × information-class egress (after scope / SoD / action-limit / project wall).
   // slack.* aliases share this resolver — tool name is not the boundary.
-  const egress = await evaluateInvokeEgress({
+  // S2: evaluateInvokeEgress now returns both egress (effective) and dualEgress (audit).
+  const { egress, dualEgress } = await evaluateInvokeEgress({
     orgId: orgId || employee.orgId,
     tool,
     toolDef,
@@ -735,7 +752,7 @@ export async function runGatewayInvoke(
       action: "tool.invoke",
       purpose,
       summary: `${tool} を相手×情報区分で拒否`,
-      metadata: { tool, jobId, egress, managerId },
+      metadata: { tool, jobId, egress, dualEgress, managerId },
     });
     return jsonResult(
       {
@@ -779,7 +796,7 @@ export async function runGatewayInvoke(
         action: "tool.invoke",
         purpose,
         summary: `${tool} を社員の声の禁止語で拒否`,
-        metadata: { tool, jobId, phrase, voice, egress, managerId },
+        metadata: { tool, jobId, phrase, voice, egress, dualEgress, managerId },
       });
       return jsonResult(
         {
@@ -887,10 +904,10 @@ export async function runGatewayInvoke(
         amountJpy: Number.isFinite(amountJpy) ? amountJpy : null,
         message: actionLimit.decision === "needs_approval" ? actionLimit.message : (spend?.message ?? "発注には人の確認が必要です"),
         parentApprovalId: parentApprovalId || null,
-        metadata: { ...invokeMetadata, sodVerdict, actionLimit, egress, managerId },
+        metadata: { ...invokeMetadata, sodVerdict, actionLimit, egress, dualEgress, managerId },
         body,
         egress,
-        extra: { spend, actionLimit, sodVerdict, egress, managerId, ...(voice ? { voice } : {}), toolKind: toolDef.kind, approvalPolicy: employee.approvalPolicy },
+        extra: { spend, actionLimit, sodVerdict, egress, dualEgress, managerId, ...(voice ? { voice } : {}), toolKind: toolDef.kind, approvalPolicy: employee.approvalPolicy },
       });
     }
 
@@ -911,7 +928,7 @@ export async function runGatewayInvoke(
           ? `${tool} requires human approval (always_human). allowedAccounts checked; live browser identity remains partial.`
           : `${tool} requires human approval (always_human default for confirm/send/order)`,
       parentApprovalId: parentApprovalId || null,
-      metadata: { ...invokeMetadata, sodVerdict, actionLimit, egress, managerId },
+      metadata: { ...invokeMetadata, sodVerdict, actionLimit, egress, dualEgress, managerId },
       body,
       egress,
       extra: {
@@ -920,6 +937,7 @@ export async function runGatewayInvoke(
         sodVerdict,
         actionLimit,
         egress,
+        dualEgress,
         managerId,
         ...(voice ? { voice } : {}),
         ...(browserIdentityMeta
@@ -947,7 +965,7 @@ export async function runGatewayInvoke(
       risk: "high",
       message: egress.messageJa,
       parentApprovalId: parentApprovalId || null,
-      metadata: { ...invokeMetadata, sodVerdict, actionLimit, egress, managerId },
+      metadata: { ...invokeMetadata, sodVerdict, actionLimit, egress, dualEgress, managerId },
       body,
       egress,
       extra: {
@@ -956,6 +974,7 @@ export async function runGatewayInvoke(
         sodVerdict,
         actionLimit,
         egress,
+        dualEgress,
         managerId,
         ...(voice ? { voice } : {}),
       },
@@ -1171,6 +1190,8 @@ export async function runGatewayInvoke(
         acknowledged: true,
         auto: true,
         approvalPolicy: employee.approvalPolicy,
+        egress,
+        dualEgress,
       },
     });
   }
@@ -1189,6 +1210,7 @@ export async function runGatewayInvoke(
     priorApprovalId: priorApprovalId || undefined,
     meter,
     egress: egress ?? undefined,
+    dualEgress: dualEgress ?? undefined,
     managerId: managerId || undefined,
     ...(voice ? { voice } : {}),
     ...(tool === "knowledge.search"

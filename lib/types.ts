@@ -329,6 +329,22 @@ export interface EgressVerdict {
   messageJa: string;
 }
 
+/**
+ * S2 dual egress verdict for mixed/Connect channels.
+ * Evaluates WHO×WHAT matrix twice (internal-facing vs external-facing)
+ * and records both decisions for audit without changing routing behavior.
+ */
+export interface DualEgressVerdict {
+  /** Internal-facing decision (for internal parties only). */
+  internalDecision: EgressVerdict;
+  /** External-facing decision (for external/unknown parties — external-safe). */
+  externalDecision: EgressVerdict;
+  /** True when dual evaluation was applied (channelMixed). */
+  dualEvaluated: boolean;
+  /** Effective decision for channel posting (always external-facing / strictest). */
+  effectiveDecision: EgressVerdict;
+}
+
 
 /** Employee badge character / register (HOW). Audience sets a polite floor. */
 export type VoiceTemplate = "polite" | "frank" | "custom";
