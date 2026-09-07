@@ -388,7 +388,7 @@ App DM（Staffpassアプリへの直接DM）への返信には `posting_as: bot`
 |----------|------------|------|
 | **S1** | ✅ 本番稼働（PR #34 / main ~06feb7f） | `resolveAudience` がパーティごとの `dualAudience` を返却（`internalFacing` / `externalFacing`）。チャネル単位の `effectiveAudience` は後方互換で external（floor） |
 | **S2** | ✅ 本番稼働（PR #36 / main ~aea4162） | 二重マトリクス評価 `dualEgress`（`internalDecision` / `externalDecision`）。チャネル投稿は external-safe を維持 |
-| **S3** | ✅ 本番稼働（F1 口ルーティング） | `evaluateMouthRouting` で分離配信を決定。チャネル投稿 = external-safe、内部詳細 = DM / 限定スレッドへ。外部パーティ存在時は fail-closed で内部 hold |
+| **S3** | ✅ 本番稼働（F1 口ルーティング / PR #40 マージ済み） | `evaluateMouthRouting` で分離配信を決定。チャネル投稿 = external-safe、内部詳細 = DM / 限定スレッドへ。外部パーティ存在時は fail-closed で内部 hold |
 
 **例**: `#stablo_tokyo307` Connect チャネル
 - Yasaka 社員 `U_YAMADA` → `partySignals[{internal, resolved}]`
@@ -401,9 +401,15 @@ App DM（Staffpassアプリへの直接DM）への返信には `posting_as: bot`
 - メンションは依然としてチャネル / Connect の wake に必要（DM の `employeeId` 指定とは別）
 - **承認要否 ≠ メンション相手**: 承認判定は audience × 情報区分マトリクス。メンションした人が承認者になるわけではない
 
-### 2. スケジューリング / scheduling.policy（バックログ — 未出荷）
+### 2. スケジューリング / scheduling.policy（A1 本番稼働）
 
-カレンダー連携の自動化フローです。**現時点では実装されていません**。
+> **ステータス**: ✅ 本番稼働（PR #39 マージ済み）
+
+カレンダー連携の自動化フローです。
+
+**Admin MCP ツール**:
+- `schedulingPolicy.get` — 読み取り専用、承認不要
+- `schedulingPolicy.patch` — `always_human`、高リスク設定には承諾必須
 
 **想定フロー**:
 1. `calendar.freebusy` で空き時間を取得
@@ -431,7 +437,7 @@ App DM（Staffpassアプリへの直接DM）への返信には `posting_as: bot`
 | ポリシーなしの自動化 | ガードレールなしの野良運用 |
 | 過度に広い egress 許可 | 情報区分を無視した漏洩 |
 
-> **Note**: scheduling.policy のランタイム実装はこの PR の範囲外です。上記は将来のガイダンス用ドキュメントです。
+詳細: [scheduling-policy.md](./scheduling-policy.md)
 
 ### 3. 複数の通信口（会話アダプタ vs 承認通知チャネル）
 
@@ -456,7 +462,73 @@ Staffpass は **会話アダプタ**（AI社員が相手と話す口）と **承
 
 **重要**: 会話アダプタを承認通知チャネルとして使わないでください。逆も同様。
 
-### 4. 製品コピー / 本分
+### 4. F1 口ルーティング（mouth routing）
+
+> **ステータス**: ✅ 本番稼働（PR #40 マージ済み）。S1+S2+S3 dual-audience 本番。A1 scheduling.policy 本番。
+
+F1 は Staffpass シチュエーションポリシーパック族の次の箱です。dual-gate S3 と multi-mouth priority を提供します。
+
+#### 4-1. dual-gate S3（分離配信）
+
+`dualEgress` で `internalDecision` と `externalDecision` が異なる場合、配信先を分岐します：
+
+| 配信先 | 内容 | 例 |
+|--------|------|----|
+| **チャネル投稿** | external-safe / `effectiveDecision` のコンテンツのみ | 公開可能な要約・確認メッセージ |
+| **内部向け詳細** | 解決済み内部パーティの **DM** へ配信 | 機密詳細・社内向け補足 |
+
+**fail-closed**: 未知 / 外部混在で解決不能な内部パーティ → 内部漏洩なし（hold / deny）
+
+#### 4-2. multi-mouth priority（口の優先順位）
+
+複数の会話アダプタがある場合の既定優先順位：
+
+```
+Slack → LINE → (Chatwork / Messenger: 予約)
+```
+
+- `resolvePreferredMouth()` で最優先の利用可能 surface を選択
+- ポリシーでルールごとの `mouthPriority` オーバーライドをサポート
+- **会話口と承認通知口は別**（混ぜない方針を維持）
+
+#### 4-3. mouth-routing policy の設定ガイダンス
+
+管理エージェントは以下の順序でテナントをガイドしてください：
+
+1. **相手台帳の整備** — 混在chで分離配信を使うには `parties.upsert` でメンバーの audience（internal / external）を登録
+2. **チャネル分類** — `channels.classify` で `mixed=true`（shared_external / Connect / ゲスト招待）を設定
+3. **口ルーティングポリシー確認** — 組織または AI社員ごとの `mouthRouting.policy` を確認
+
+**必須条件（分離配信）**:
+- 混在chは相手台帳必須（`parties.upsert`）
+- 未登録パーティは fail-closed external
+- DM 配信先は解決済み internal パーティのみ
+
+**Admin MCP ツール**:
+- `mouthRoutingPolicy.get` — 読み取り専用、承認不要（将来）
+- `mouthRoutingPolicy.patch` — `always_human`、人間承認が必要（将来）
+
+#### 4-4. ルールパック族の接続（A1 → F1 → B2）
+
+| ID | 名前 | ステータス | 内容 |
+|----|------|-----------|------|
+| **A1** | scheduling.policy | ✅ 本番稼働 | 日程調整ルールパック（場所親和・移動バッファ・オンライン設定・confirm自動化レベル）|
+| **F1** | mouth routing | ✅ 本番稼働 | 口ルーティング（分離配信・優先順位・fail-closed）|
+| **B2** | Slack/LINE返信 | 次箱 | スレッド規則・営業時間制御など |
+
+詳細: [scheduling-policy.md](./scheduling-policy.md) / [staffpass-situation-policy-catalog.md](./staffpass-situation-policy-catalog.md)
+
+### 5. F6 アイデンティティ開示（identity disclosure）— スタブ
+
+> **ステータス**: 予定（F1 の後）。本 RAIL では配置のみ記載。
+
+F6 はエージェント自身に関する Q&A 応答を制御します（「あなたは誰？」「どこの会社？」など）。
+
+- **F1 と F6 は別ポリシー族**: F1 = コンテンツの配信先制御、F6 = エージェント自己紹介の制御
+- **配置**: `disclosure.policy`（予定）
+- **詳細エンジン**: 本 PR の範囲外（スタブのみ）
+
+### 6. 製品コピー / 本分
 
 Staffpass の本分:
 

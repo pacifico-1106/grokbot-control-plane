@@ -155,7 +155,7 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
   {
     name: "setup.slackStatus",
     description:
-      "Diagnose Slack integration status for this org (read-only, no approval required). Returns bot token presence, auth.test result, conversation adapter status, IM routes count, and employee posting_as settings with path-aware guidance. Use before guiding humans through Slack setup. The nextStepJa field indicates the next human action with posting_as pros/cons: Bot（会社窓口・アプリDM向け）vs 個人（社員名義・チャネル向け）。推奨デフォルト: アプリDM向け社員は bot / チャネル・Connect・人対人DM向けは user。【dual-audience S1+S2本番】混在/Connect chでは resolveAudience が dualAudience を返却、二重マトリクス評価 dualEgress も稼働中。混在chは相手台帳必須（parties.upsert）。Refer to docs/tenant-slack-kickoff-rail.md for the full RAIL including product locks guidance.",
+      "Diagnose Slack integration status for this org (read-only, no approval required). Returns bot token presence, auth.test result, conversation adapter status, IM routes count, and employee posting_as settings with path-aware guidance. Use before guiding humans through Slack setup. The nextStepJa field indicates the next human action with posting_as pros/cons: Bot（会社窓口・アプリDM向け）vs 個人（社員名義・チャネル向け）。推奨デフォルト: アプリDM向け社員は bot / チャネル・Connect・人対人DM向けは user。【dual-audience S1+S2+S3本番】混在/Connect chでは resolveAudience が dualAudience を返却、二重マトリクス評価 dualEgress も稼働中。【F1 口ルーティング本番】S3/F1 口ルーティング本番稼働中。A1 scheduling.policy も本番稼働中。混在chは相手台帳必須（parties.upsert）。Refer to docs/tenant-slack-kickoff-rail.md for the full RAIL including F1 guidance.",
     inputSchema: {
       type: "object",
       properties: {},
@@ -454,7 +454,7 @@ async function runSlackStatusDiagnose(
     issues.push(...postingMismatch);
   }
 
-  let nextStepJa = "Slack 設定は完了しています。混在/Connect chを使う場合は parties.upsert で相手台帳を登録してください（S1 dual-audience 本番稼働中）。詳細: docs/tenant-slack-kickoff-rail.md";
+  let nextStepJa = "Slack 設定は完了しています。混在/Connect chを使う場合は parties.upsert で相手台帳を登録してください（S1+S2+S3 dual-audience 本番、F1 口ルーティング本番稼働中）。詳細: docs/tenant-slack-kickoff-rail.md";
   if (!botTokenPresent) {
     nextStepJa =
       "Slack Bot Token (xoxb-...) をダッシュボード「設定 → 会話アダプタ → Slack」に登録してください。";
@@ -464,10 +464,10 @@ async function runSlackStatusDiagnose(
     nextStepJa = "ダッシュボード「設定 → 会話アダプタ → Slack」でアダプタを有効にしてください。";
   } else if (imRoutesCount === 0) {
     nextStepJa =
-      "チャネル分類を設定してください。内部1:1には channels.classify で employeeId を指定します。混在/Connect chは mixed=true + parties.upsert（相手台帳必須）。S1 dual-audience 本番。詳細: docs/tenant-slack-kickoff-rail.md";
+      "チャネル分類を設定してください。内部1:1には channels.classify で employeeId を指定します。混在/Connect chは mixed=true + parties.upsert（相手台帳必須）。S1+S2+S3 dual-audience 本番、F1 口ルーティング本番稼働中。詳細: docs/tenant-slack-kickoff-rail.md";
   } else if (postingMismatch.length > 0) {
     nextStepJa =
-      "posting_as の設定を確認してください。【Bot】会社窓口・アプリDM向け・退席非依存。【個人(user)】社員名義・チャネル/人対人DM向け・OAuth依存。Path A (App DM) は bot、Path B (人↔人DM) / チャネル・Connect は user。混在chは相手台帳必須。詳細: docs/tenant-slack-kickoff-rail.md";
+      "posting_as の設定を確認してください。【Bot】会社窓口・アプリDM向け・退席非依存。【個人(user)】社員名義・チャネル/人対人DM向け・OAuth依存。Path A (App DM) は bot、Path B (人↔人DM) / チャネル・Connect は user。混在chは相手台帳必須。F1 口ルーティング本番稼働中（分離配信が有効）。詳細: docs/tenant-slack-kickoff-rail.md";
   }
 
   const result: SlackStatusResult = {

@@ -2,7 +2,7 @@
 
 **更新:** 2026-09-07 安藤（八坂ブレスト＋追記を全採用）  
 **用途:** Staffpass／MCP ルールパック族の正本カタログ（八坂GO 2026-09-07 全採用）。
-**次:** A1 `scheduling.policy` で型固定 → F1 口ルーティング。  
+**次:** A1 `scheduling.policy` 本番稼働 → F1 口ルーティング 本番稼働 → B2 次箱。  
 **共通軸:** WHO（誰に・どの口）／WHAT（何を出す）／WHEN・HOW（いつ・いくら・どの手段で確定）  
 **共通天井:** フルオート可・テナント自己責任（ToS）。高リスク設定は警告＋明示承諾＋監査。権限外は不通。
 
@@ -164,8 +164,8 @@
 
 ## F. 横断ルール
 
-### F1 口のルーティング（S3 実装完了）
-- **ステータス**: ✅ 本番稼働（PR #40）
+### F1 口のルーティング（S3 本番稼働）
+- **ステータス**: ✅ 本番稼働（PR #40 マージ済み）
 - 「この相手はLINE、社内はSlack」など状況別既定口  
 - 会話口と承認通知口は混ぜない（確定方針）  
 - 優先: Slack → LINE → Chatwork → Messenger（会話）
@@ -173,7 +173,7 @@
 - **Fail-closed**: 未知 / 外部混在で解決不能な内部パーティ → 内部漏洩なし（hold / deny）
 - **型**: `MouthRoutingPolicy` / `MouthRoutingDecision` / `OrgMouthRoutingPolicy`
 - **Admin MCP**: `mouthRoutingPolicy.get` / `mouthRoutingPolicy.patch`（将来）
-- **詳細**: `docs/egress-policy.md` § S3
+- **詳細**: `docs/egress-policy.md` § S3 / [tenant-slack-kickoff-rail.md](./tenant-slack-kickoff-rail.md)
 
 ### F2 応答SLA／営業時間
 - 外向けは翌営、内向けは即時可、時間外は下書きのみ 等
@@ -209,5 +209,11 @@
    - `lib/scheduling-policy/` に実装
    - Admin MCP: `schedulingPolicy.get` / `schedulingPolicy.patch`
    - 詳細: `docs/scheduling-policy.md`
-3. 次箱 **F1**（口ルーティング／二重ゲートS3土台）→ B2 → D1
-4. AI Concier は A4 の参考・将来連携として別枠
+3. ✅ **F1 口ルーティング**（PR #40 マージ済み・本番稼働）
+   - dual-gate S3: チャネル body = external-safe、内部詳細 → DM / 限定スレッド
+   - multi-mouth priority: Slack → LINE → (Chatwork/Messenger: 予約)
+   - Admin MCP（将来）: `mouthRoutingPolicy.get` / `mouthRoutingPolicy.patch`
+   - キックオフガイダンス: `docs/tenant-slack-kickoff-rail.md`
+4. 次箱 **B2**（Slack/LINE返信）→ D1
+5. **F6 アイデンティティ開示** は F1 の後（予定）
+6. AI Concier は A4 の参考・将来連携として別枠
