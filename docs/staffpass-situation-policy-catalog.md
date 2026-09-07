@@ -43,10 +43,13 @@
 
 ## A. 約束・枠を取る系
 
-### A1 日程調整（済・継続）
+### A1 日程調整（実装中 → shipped-slice）
 - **ルール例:** 場所親和／移動バッファ／オンライン詰め／指定カレンダー／指定ビデオ／自動confirm  
-- **状態:** ポリシー草案あり。実装は混在chの後段  
-- **メモ:** confirmはフルオートまで可＋高リスク承諾
+- **状態:** `scheduling.policy` 実装完了（型・検証・適用エンジン・Admin MCP）  
+- **メモ:** confirmはフルオートまで可＋高リスク承諾（`highRiskConsentAt/By` 必須）
+- **Admin MCP ツール:** `schedulingPolicy.get` / `schedulingPolicy.patch`
+- **スキーマ:** `orgs.scheduling_policy` / `employees.scheduling_policy` (オーバーライド)
+- **詳細:** `docs/scheduling-policy.md`
 
 ### A2 会議室・ブース確保
 - **ルール例:** 連続枠優先、空き散らばり禁止、社外同席可否  
@@ -182,7 +185,10 @@
 
 ## 前進方針（2026-09-07）
 
-1. 本カタログを repo に掲載
-2. **A1 `scheduling.policy`** でルールパック型を固定（CRUD・policyId・fail-closed・監査・高リスク承諾・フルオート天井）
+1. ✅ 本カタログを repo に掲載
+2. ✅ **A1 `scheduling.policy`** でルールパック型を固定（CRUD・policyId・fail-closed・監査・高リスク承諾・フルオート天井）
+   - `lib/scheduling-policy/` に実装
+   - Admin MCP: `schedulingPolicy.get` / `schedulingPolicy.patch`
+   - 詳細: `docs/scheduling-policy.md`
 3. 次箱 **F1**（口ルーティング／二重ゲートS3土台）→ B2 → D1
 4. AI Concier は A4 の参考・将来連携として別枠
