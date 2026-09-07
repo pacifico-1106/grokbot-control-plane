@@ -54,6 +54,38 @@ Slack を通知プロバイダとして足すことは将来の拡張点です�
 
 後続スライスでこの dual 判定を使い、WHO×WHAT マトリクスを内部向け・外部向けで二度適用し、ルーティングを分岐します（S3: チャネル投稿=external-safe、内部詳細=DM/限定スレッド）。
 
+### S2: 二重マトリクス評価と監査記録
+
+S1 の `dualAudience` を使い、混在チャネルでは WHO×WHAT マトリクスを **内部向け・外部向けで二度評価** します。
+
+**返却値**:
+- `dualEgress`: S2 構造体
+  - `internalDecision`: 内部パーティ向けの決定（internal audience で評価）
+  - `externalDecision`: 外部パーティ向けの決定（external audience で評価）
+  - `dualEvaluated`: 二重評価が適用されたか（`channelMixed` かつパーティ存在時に `true`）
+  - `effectiveDecision`: チャネル投稿に適用する決定（常に `externalDecision` = external-safe）
+
+**動作**:
+1. `dualAudience.channelMixed = true` かつパーティ存在 → 二重評価
+2. 純内部チャネル or `dualAudience = null` → 単一パス（`dualEvaluated = false`）
+3. チャネル投稿は常に `effectiveDecision`（external-safe）を使用
+4. 両決定は監査イベントに記録（`metadata.dualEgress`）
+
+**例**: 混在チャネルで機密情報 (`confidential`) を送信
+
+| パス | audience | 決定 | 理由 |
+|------|----------|------|------|
+| 内部向け | internal | `needs_approval` | 機密情報の社内開示には上長承認 |
+| 外部向け | external | `deny` | 機密情報の社外開示は拒否 |
+| 実効 | external | `deny` | チャネル投稿は external-safe |
+
+**監査**:
+- `tool.invoke` 監査イベントの `metadata.dualEgress` に両決定を記録
+- 承認リクエストの `metadata.dualEgress` にも同様に記録
+- `dualDecisionsDiffer()` で内部・外部パスの決定が異なるかを判定可能
+
+S3 では `effectiveDecision` の結果に基づき、チャネル本文は external-safe、内部詳細は DM / 限定スレッドへルーティングします（本 PR の範囲外）。
+
 ## 情報区分（WHAT）— ちょうど4つ
 
 `public` | `internal` | `confidential` | `verbatim`
