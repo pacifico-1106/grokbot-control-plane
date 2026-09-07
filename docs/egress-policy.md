@@ -126,3 +126,5 @@ SoD `force_human` や行為上限の needs_approval / deny は **スキップし
 ## 話し方（HOW）
 
 WHO × WHAT のあとに、社員証の **voice** が載ります（丁寧 / 率直 / カスタム）。社外（unknown 含む）は丁寧が下限です。禁止語は会話本文の安い単語スキャンであり、DLP ではありません。詳細は [voice.md](./voice.md)。
+
+イベント別の補足ルール（日程調整・口ルーティング・添付など）は [staffpass-situation-policy-catalog.md](./staffpass-situation-policy-catalog.md) を参照。
