@@ -1,7 +1,15 @@
 import { getLinkedSlackUserToken } from "@/lib/data/slack-identities";
 import { resolveOrgSlackBotToken } from "@/lib/slack/bot-token";
 import { normalizePostingAs } from "@/lib/employees/posting-as";
-import type { MouthRoutingDecision, PostingAs } from "@/lib/types";
+import type { MouthRoutingDecision, OrgReplyPolicy, PostingAs, ReplyPolicyDecision } from "@/lib/types";
+import {
+  evaluateReplyPolicy,
+  applyEmojiPolicy,
+  shouldDraftOnly,
+  shouldHoldForApproval,
+  summarizeReplyPolicyDecision,
+  defaultReplyPolicy,
+} from "@/lib/gateway/reply-policy";
 
 const SLACK_TIMEOUT_MS = 5_000;
 
@@ -314,3 +322,135 @@ export function requiresSplitDelivery(routing: MouthRoutingDecision): boolean {
     routing.internalRoute.path.kind !== "deny"
   );
 }
+
+/**
+ * B2: Reply policy-aware message posting result.
+ */
+export type ReplyPolicyAwarePostResult =
+  | { ok: true; delivery: "slack"; channel: string; ts: string; replyDecision: ReplyPolicyDecision }
+  | { ok: true; delivery: "draft"; replyDecision: ReplyPolicyDecision; draftText: string }
+  | { ok: true; delivery: "stub"; replyDecision: ReplyPolicyDecision }
+  | { ok: false; error: string; replyDecision?: ReplyPolicyDecision }
+  | { ok: false; error: "reply_policy_hold"; holdReason: string; replyDecision: ReplyPolicyDecision };
+
+/**
+ * B2: Post a Slack message with reply policy enforcement.
+ *
+ * Applies B2 reply policy before sending:
+ * - After-hours: draft_only or hold_approval
+ * - Emoji stripping based on policy
+ * - Thread affinity enforcement
+ *
+ * Connects to F1 mouth-routing for surface selection (does not reinvent).
+ * Conversation adapters ≠ approval notification channels (never mix).
+ */
+export async function postConversationMessageWithReplyPolicy(input: {
+  orgId: string;
+  employeeId?: string;
+  postingAs?: PostingAs | string | null;
+  channel: string;
+  text: string;
+  threadTs?: string;
+  parentThreadTs?: string;
+  summarize?: boolean;
+  slackUserId?: string;
+  replyPolicy?: OrgReplyPolicy | null;
+  currentTime?: Date;
+  timezone?: string;
+  topicSimilarity?: number;
+}): Promise<ReplyPolicyAwarePostResult> {
+  const replyDecision = evaluateReplyPolicy({
+    policy: input.replyPolicy,
+    surface: "slack",
+    currentTime: input.currentTime,
+    timezone: input.timezone,
+    messageText: input.text,
+    existingThreadTs: input.threadTs,
+    parentThreadTs: input.parentThreadTs,
+    channelId: input.channel,
+    topicSimilarity: input.topicSimilarity,
+  });
+
+  if (shouldHoldForApproval(replyDecision)) {
+    return {
+      ok: false,
+      error: "reply_policy_hold",
+      holdReason: replyDecision.holdReason || "policy_requires_approval",
+      replyDecision,
+    };
+  }
+
+  let processedText = input.text;
+  if (replyDecision.emojiStripped && input.replyPolicy?.rules[0]) {
+    const emojiResult = applyEmojiPolicy(input.text, input.replyPolicy.rules[0]);
+    processedText = emojiResult.text;
+  }
+
+  if (shouldDraftOnly(replyDecision)) {
+    return {
+      ok: true,
+      delivery: "draft",
+      replyDecision,
+      draftText: processedText,
+    };
+  }
+
+  const effectiveThreadTs = replyDecision.threadTs || input.threadTs;
+
+  const postResult = await postConversationMessage({
+    orgId: input.orgId,
+    employeeId: input.employeeId,
+    postingAs: input.postingAs,
+    channel: input.channel,
+    text: processedText,
+    threadTs: effectiveThreadTs,
+    summarize: input.summarize,
+    slackUserId: input.slackUserId,
+  });
+
+  if (!postResult.ok) {
+    return { ...postResult, replyDecision };
+  }
+
+  if (postResult.delivery === "stub") {
+    return { ok: true, delivery: "stub", replyDecision };
+  }
+
+  return {
+    ok: true,
+    delivery: "slack",
+    channel: postResult.channel,
+    ts: postResult.ts,
+    replyDecision,
+  };
+}
+
+/**
+ * B2: Check if a message should be held due to reply policy.
+ */
+export function shouldHoldDueToReplyPolicy(
+  text: string,
+  replyPolicy?: OrgReplyPolicy | null,
+  currentTime?: Date,
+  timezone?: string
+): { hold: boolean; reason?: string } {
+  const decision = evaluateReplyPolicy({
+    policy: replyPolicy,
+    surface: "slack",
+    currentTime,
+    timezone,
+    messageText: text,
+    channelId: "",
+  });
+
+  if (shouldHoldForApproval(decision)) {
+    return { hold: true, reason: decision.holdReason };
+  }
+
+  return { hold: false };
+}
+
+/**
+ * B2: Summarize reply policy decision for logging (no tokens/secrets).
+ */
+export { summarizeReplyPolicyDecision } from "@/lib/gateway/reply-policy";

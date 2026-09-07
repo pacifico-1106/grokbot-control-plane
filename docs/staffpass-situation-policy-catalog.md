@@ -81,12 +81,19 @@
 - **追記採用:** BCC、添付は **Sealith連携**（機密は転送便、それ以外は方針）  
 - **Staffpass載せ方:** mail.send ＋ ingress/egress ＋ Sealith handoff
 
-### B2 Slack／LINE等の返信
-- **ルール例:** 口の選択、営業時間外は下書きのみ、絵文字／短文可否  
+### B2 Slack／LINE等の返信（実装中 → shipped-slice）
+- **ステータス**: 🔧 実装中（PR #42）
+- **ルール例:** 口の選択（F1連携）、営業時間外は下書きのみ、絵文字／短文可否  
 - **追記採用:**  
-  - 複数口があるときの**優先度**  
-  - チャンネル／スレッド規則（例: **1トピック1スレッド**）  
+  - 複数口があるときの**優先度**（F1 mouth-routing と連携、再発明しない）  
+  - チャンネル／スレッド規則（例: **1トピック1スレッド**）
+  - 営業時間外: `draft_only` / `hold_approval` / `allow_send`（高リスク承諾必須）
+  - 絵文字: `allow` / `deny` / `limited`（許可リスト）
+  - 短文: `allow` / `deny` / `warn` + 最小文字数
 - **Staffpass載せ方:** 会話アダプタ＋口ルーティング（F1）＋相手台帳
+- **Admin MCP ツール:** `replyPolicy.get` / `replyPolicy.patch`（always_human on mutate）
+- **スキーマ:** `orgs.reply_policy` / `employees.reply_policy` (オーバーライド)
+- **詳細:** `docs/reply-policy.md`
 
 ### B3 見積・提案の送付
 - **ルール例:** 値引き上限、有効期限、承認者、PDFのみ／価格行の出し分け  
@@ -202,7 +209,7 @@
 
 ---
 
-## 前進方針（2026-09-07）
+## 前進方針（2026-09-08）
 
 1. ✅ 本カタログを repo に掲載
 2. ✅ **A1 `scheduling.policy`** でルールパック型を固定（CRUD・policyId・fail-closed・監査・高リスク承諾・フルオート天井）
@@ -214,6 +221,13 @@
    - multi-mouth priority: Slack → LINE → (Chatwork/Messenger: 予約)
    - Admin MCP（将来）: `mouthRoutingPolicy.get` / `mouthRoutingPolicy.patch`
    - キックオフガイダンス: `docs/tenant-slack-kickoff-rail.md`
-4. 次箱 **B2**（Slack/LINE返信）→ D1
-5. **F6 アイデンティティ開示** は F1 の後（予定）
-6. AI Concier は A4 の参考・将来連携として別枠
+4. 🔧 **B2 返信ポリシー**（実装中）
+   - 営業時間外動作: `draft_only` / `hold_approval` / `allow_send`（高リスク承諾必須）
+   - 絵文字/短文制御: ポリシーノブ
+   - スレッド親和性: `prefer_thread` / `new_thread_per_topic` / `channel_root`
+   - F1 mouth-routing と連携（再発明しない）
+   - Admin MCP: `replyPolicy.get` / `replyPolicy.patch`
+   - 詳細: `docs/reply-policy.md`
+5. 次箱 **D1**（添付・ファイル手渡し）→ B1
+6. **F6 アイデンティティ開示** は F1 の後（予定）
+7. AI Concier は A4 の参考・将来連携として別枠
