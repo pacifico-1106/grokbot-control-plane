@@ -21,10 +21,38 @@ Slack を通知プロバイダとして足すことは将来の拡張点です�
 
 - `internal` | `external` | `unknown`
 - unknown は **external** として扱う
-- 混在 / ゲスト / `shared_external` の Slack チャネルは egress 上 **external**
 - 入域と出域の audience は独立
 
 台帳: `org_parties`（ドメイン・Slack ID など）と `org_channels`（チャネル分類）。未登録は社外。
+
+### S1: 混在チャネル dual-audience（メンバーレベル解決）
+
+混在 / ゲスト / `shared_external` / Slack Connect チャネルでは、チャネル単位ではなく **宛先パーティごと** に audience を解決します。
+
+**返却値**:
+- `effectiveAudience`: 後方互換。常にチャネル全体の fail-closed（external-safe）値
+- `dualAudience`: 新規 S1 構造体
+  - `internalFacing`: 内部パーティのみ宛ての場合の判定（内部 vs 外部）
+  - `externalFacing`: 外部／未知パーティ含む場合の判定（常に external）
+  - `channelMixed`: 混在チャネルかどうか
+  - `partySignals`: パーティごとの解決詳細（kind / identifier / audience / resolved）
+  - `hasInternalParty`: 内部パーティが存在
+  - `hasExternalParty`: 外部／未知パーティが存在
+
+**ルール**:
+1. 純内部チャネル（`classification=internal` かつ `mixed=false`）→ 従来通り内部扱い
+2. 混在チャネル → パーティ個別解決、`effectiveAudience` は external を維持
+3. 未登録パーティ → fail-closed external
+4. ext-shared 自動検出 (`shared_external` + Connect) → S1 でもパーティ信号と**合成**（検出自体は維持）
+
+**例**: `#stablo_tokyo307` Connect チャネル
+- Yasaka 社員 (`U_YAMADA`) → `partySignals[{internal, resolved}]`
+- Uehara/Stablo 外部ゲスト → `partySignals[{external, resolved}]` または `{unknown, !resolved}`
+- `dualAudience.hasInternalParty = true`, `hasExternalParty = true`
+- `dualAudience.internalFacing = "external"` (外部パーティがいるため)
+- `dualAudience.externalFacing = "external"`
+
+後続スライスでこの dual 判定を使い、WHO×WHAT マトリクスを内部向け・外部向けで二度適用し、ルーティングを分岐します（S3: チャネル投稿=external-safe、内部詳細=DM/限定スレッド）。
 
 ## 情報区分（WHAT）— ちょうど4つ
 

@@ -222,6 +222,38 @@ export interface ConversationContext {
 }
 
 export type Audience = "internal" | "external" | "unknown";
+
+/**
+ * Per-party audience signal for mixed-channel dual-gate resolution.
+ * Unresolved parties are fail-closed as external.
+ */
+export interface PartyAudienceSignal {
+  kind: OrgPartyKind | "channel";
+  identifier?: string;
+  audience: Audience;
+  resolved: boolean;
+}
+
+/**
+ * Dual-audience resolution for mixed/shared_external/Connect channels.
+ * Allows callers to apply different policies for internal-facing vs
+ * external-facing destinations within the same channel conversation.
+ */
+export interface DualAudience {
+  /** Audience when addressing internal parties only (fail-closed on unknown). */
+  internalFacing: "internal" | "external";
+  /** Audience when addressing external/unknown parties (always external). */
+  externalFacing: "internal" | "external";
+  /** True when channel is mixed/shared_external and dual resolution applies. */
+  channelMixed: boolean;
+  /** Per-party signals for audit and downstream routing. */
+  partySignals: PartyAudienceSignal[];
+  /** True if any party resolved as internal. */
+  hasInternalParty: boolean;
+  /** True if any party resolved as external or unknown (fail-closed). */
+  hasExternalParty: boolean;
+}
+
 export type InformationClass = "public" | "internal" | "confidential" | "verbatim";
 export type DisclosureFidelity = "summary" | "source";
 export type EgressDecision = "allow" | "summarize" | "needs_approval" | "deny";
