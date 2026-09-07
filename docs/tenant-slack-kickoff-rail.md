@@ -372,6 +372,7 @@ App DM（Staffpassアプリへの直接DM）への返信には `posting_as: bot`
 - [mcp.md](./mcp.md) - MCP全般
 - [agent-credential-guide.md](./agent-credential-guide.md) - 社員証ガイド
 - [egress-policy.md](./egress-policy.md) - 相手×情報区分の出域制御（dual-audience 詳細）
+- [staffpass-situation-policy-catalog.md](./staffpass-situation-policy-catalog.md) - シチュエーション／補足ルール カタログ（scheduling backlog / product locks の正本）
 
 ---
 
