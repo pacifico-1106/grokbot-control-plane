@@ -163,3 +163,15 @@ export {
   type IngressHandoffPolicySource,
   type EffectiveIngressHandoffPolicy,
 } from "./ingress-handoff";
+
+export {
+  getOrgSchedulingPolicy,
+  setOrgSchedulingPolicy,
+  resetDemoSchedulingPolicy,
+  getEmployeeSchedulingPolicy,
+  setEmployeeSchedulingPolicy,
+  getEffectiveSchedulingPolicy,
+  recordHighRiskConsent,
+  type SchedulingPolicySource,
+  type EffectiveSchedulingPolicy,
+} from "./scheduling-policy";

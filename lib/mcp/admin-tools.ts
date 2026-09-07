@@ -11,7 +11,9 @@ import {
   getEmployee,
   listEmployees,
   getEffectiveIngressHandoffPolicy,
+  getEffectiveSchedulingPolicy,
   type IngressHandoffPolicySource,
+  type SchedulingPolicySource,
 } from "@/lib/data";
 import { listConversationAdapters } from "@/lib/data/conversation-adapters";
 import {
@@ -19,6 +21,12 @@ import {
   summarizeIngressHandoffPolicyJa,
   nextStepIngressHandoffJa,
 } from "@/lib/ingress-handoff/validate";
+import {
+  validateSchedulingPolicy,
+  summarizeSchedulingPolicyJa,
+  nextStepSchedulingPolicyJa,
+  policyHasHighRiskAutomation,
+} from "@/lib/scheduling-policy/validate";
 import { listSlackImRoutesByOrg } from "@/lib/data/slack-im-routes";
 import { getEmployeeSlackIdentity } from "@/lib/data/slack-identities";
 import { resolveOrgSlackBotToken } from "@/lib/slack/bot-token";
@@ -202,6 +210,103 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
             required: ["applyTo", "body", "attachment", "sealith"],
           },
         },
+        jobId: { type: "string" },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "schedulingPolicy.get",
+    description:
+      "Read scheduling policy (read-only, no approval required). Omit employeeId for org policy; include for AI社員ごとの設定. Returns effective policy + source layer (employee/org/default) + layers (employeeOverride/orgPolicy). A1 scheduling.policy: 日程調整ルールパック（場所親和・移動バッファ・オンライン設定・禁止/優先時間・コスト上限・confirm自動化レベル）。confirmAutomation の高リスク設定（risk_based / conditional / full_auto）は highRiskConsentAt/By が必要。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        employeeId: { type: "string", description: "Optional employee ID for per-employee lookup" },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "schedulingPolicy.patch",
+    description:
+      "Patch scheduling policy after human approval (always_human). Omit employeeId for org policy; include for AI社員ごとの設定. To clear employee override (inherit org), set clearOverride=true. Full replace of rules array. First-match rule ordering. Admin cannot self-approve. High-risk automation levels (risk_based / conditional / full_auto) require explicit tenant consent (highRiskConsentAt/By). 【高リスク警告】full_auto confirm / external 自動 / ポリシーなし自動 / 広すぎる outward slots は silent enable 禁止。承諾 + settings on audit (F4/F5)。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        employeeId: { type: "string", description: "Optional employee ID for per-employee override" },
+        clearOverride: { type: "boolean", description: "Set true to clear employee override and inherit org policy" },
+        policyName: { type: "string", description: "Human-readable policy name" },
+        rules: {
+          type: "array",
+          description: "Full replacement rules array (first match wins). Omit when clearOverride=true.",
+          items: {
+            type: "object",
+            properties: {
+              id: { type: "string" },
+              priority: { type: "number" },
+              locationAffinity: { type: "string", description: "office_first | remote_first | hybrid | any" },
+              travelBufferMinutes: { type: "number", description: "Travel buffer in minutes (0+)" },
+              onlinePack: {
+                type: "object",
+                description: "Online meeting settings",
+                properties: {
+                  enabled: { type: "boolean" },
+                  calendarTarget: { type: "string", description: "Target calendar for online meetings" },
+                  videoToolAllowlist: {
+                    type: "array",
+                    items: {
+                      type: "object",
+                      properties: {
+                        tool: { type: "string" },
+                        isDefault: { type: "boolean" },
+                      },
+                    },
+                  },
+                  defaultVideoTool: { type: "string" },
+                },
+              },
+              hardBlackout: {
+                type: "array",
+                description: "Hard blackout time windows (slot will be dropped)",
+                items: {
+                  type: "object",
+                  properties: {
+                    dayOfWeek: { type: "array", items: { type: "number" }, description: "0=Sun, 6=Sat" },
+                    startTime: { type: "string", description: "HH:MM" },
+                    endTime: { type: "string", description: "HH:MM" },
+                    startDate: { type: "string", description: "ISO date" },
+                    endDate: { type: "string", description: "ISO date" },
+                    reason: { type: "string" },
+                  },
+                },
+              },
+              softPrefer: {
+                type: "array",
+                description: "Soft prefer time windows (slot will be scored higher)",
+                items: {
+                  type: "object",
+                  properties: {
+                    dayOfWeek: { type: "array", items: { type: "number" }, description: "0=Sun, 6=Sat" },
+                    startTime: { type: "string", description: "HH:MM" },
+                    endTime: { type: "string", description: "HH:MM" },
+                    startDate: { type: "string", description: "ISO date" },
+                    endDate: { type: "string", description: "ISO date" },
+                    reason: { type: "string" },
+                  },
+                },
+              },
+              costCapJpy: { type: "number", description: "Optional cost cap in JPY" },
+              confirmAutomation: {
+                type: "string",
+                description: "always_human | risk_based | conditional | full_auto. High-risk (non-always_human) requires consent.",
+              },
+            },
+            required: ["confirmAutomation"],
+          },
+        },
+        highRiskConsentAt: { type: "string", description: "ISO timestamp of tenant consent for high-risk automation" },
+        highRiskConsentBy: { type: "string", description: "Email/name of person who gave consent" },
         jobId: { type: "string" },
       },
       additionalProperties: false,
@@ -445,6 +550,68 @@ async function runIngressHandoffGet(
   };
 }
 
+type SchedulingPolicyGetResult = {
+  ok: boolean;
+  policy: Awaited<ReturnType<typeof getEffectiveSchedulingPolicy>>["policy"];
+  source: SchedulingPolicySource;
+  layers: {
+    employeeOverride: Awaited<ReturnType<typeof getEffectiveSchedulingPolicy>>["employeeOverride"];
+    orgPolicy: Awaited<ReturnType<typeof getEffectiveSchedulingPolicy>>["orgPolicy"];
+  };
+  summaryJa: string;
+  sourceJa: string;
+  nextStepJa: string;
+  hasHighRiskAutomation: boolean;
+  highRiskConsentRecorded: boolean;
+};
+
+const SCHEDULING_SOURCE_JA: Record<SchedulingPolicySource, string> = {
+  employee: "AI社員オーバーライド",
+  org: "組織ポリシー",
+  default: "デフォルト（always_human）",
+};
+
+async function runSchedulingPolicyGet(
+  cred: ResolvedAdminCredential,
+  args: Record<string, unknown>
+): Promise<{ content: Array<{ type: "text"; text: string }>; structuredContent?: unknown; isError?: boolean }> {
+  const employeeId = typeof args.employeeId === "string" && args.employeeId.trim()
+    ? args.employeeId.trim()
+    : null;
+
+  if (employeeId) {
+    const employee = await getEmployee(employeeId, cred.orgId);
+    if (!employee) {
+      return toolResult(
+        { ok: false, code: "employee_not_found", message: "AI社員が見つかりません" },
+        true
+      );
+    }
+  }
+
+  const effective = await getEffectiveSchedulingPolicy(cred.orgId, employeeId);
+  const hasHighRisk = policyHasHighRiskAutomation(effective.policy);
+  const result: SchedulingPolicyGetResult = {
+    ok: true,
+    policy: effective.policy,
+    source: effective.source,
+    layers: {
+      employeeOverride: effective.employeeOverride,
+      orgPolicy: effective.orgPolicy,
+    },
+    summaryJa: summarizeSchedulingPolicyJa(effective.policy),
+    sourceJa: SCHEDULING_SOURCE_JA[effective.source],
+    nextStepJa: nextStepSchedulingPolicyJa(effective.policy),
+    hasHighRiskAutomation: hasHighRisk,
+    highRiskConsentRecorded: Boolean(effective.policy.highRiskConsentAt),
+  };
+  return {
+    content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+    structuredContent: result,
+    isError: false,
+  };
+}
+
 export async function callAdminMcpTool(
   name: string,
   args: Record<string, unknown>,
@@ -569,6 +736,81 @@ export async function callAdminMcpTool(
     }
   }
 
+  if (name === "schedulingPolicy.get") {
+    return runSchedulingPolicyGet(cred, args);
+  }
+
+  if (name === "schedulingPolicy.patch") {
+    const employeeId = typeof args.employeeId === "string" && args.employeeId.trim()
+      ? args.employeeId.trim()
+      : null;
+    const clearOverride = args.clearOverride === true;
+
+    if (employeeId) {
+      const employee = await getEmployee(employeeId, cred.orgId);
+      if (!employee) {
+        return toolResult(
+          { ok: false, code: "employee_not_found", message: "AI社員が見つかりません" },
+          true
+        );
+      }
+    }
+
+    if (clearOverride) {
+      if (!employeeId) {
+        return toolResult(
+          { ok: false, code: "clear_requires_employee", message: "オーバーライドのクリアはemployeeIdが必要です" },
+          true
+        );
+      }
+    } else {
+      if (!Array.isArray(args.rules) || args.rules.length === 0) {
+        return toolResult(
+          { ok: false, code: "rules_required", message: "rulesが必要です（clearOverride=true以外）" },
+          true
+        );
+      }
+
+      const existingPolicy = await getEffectiveSchedulingPolicy(cred.orgId, employeeId);
+      const existingConsent = existingPolicy.policy.highRiskConsentAt
+        ? { at: existingPolicy.policy.highRiskConsentAt, by: existingPolicy.policy.highRiskConsentBy || "unknown" }
+        : null;
+
+      const validationResult = validateSchedulingPolicy(
+        {
+          policyName: args.policyName,
+          rules: args.rules,
+          highRiskConsentAt: args.highRiskConsentAt,
+          highRiskConsentBy: args.highRiskConsentBy,
+        },
+        {
+          requireHighRiskConsent: true,
+          existingConsent,
+        }
+      );
+
+      if (!validationResult.ok) {
+        const hasHighRiskError = validationResult.errors.some(
+          (e) => e.code === "high_risk_consent_required"
+        );
+        return toolResult(
+          {
+            ok: false,
+            code: hasHighRiskError ? "high_risk_consent_required" : "validation_failed",
+            message: hasHighRiskError
+              ? "高リスク自動化レベルにはテナント承諾が必要です。highRiskConsentAt/By を設定してください。"
+              : "ルールの検証に失敗しました",
+            errors: validationResult.errors,
+            warningJa: hasHighRiskError
+              ? "【高リスク警告】full_auto confirm / external 自動 / ポリシーなし自動は silent enable 禁止。承諾 + settings on audit。"
+              : undefined,
+          },
+          true
+        );
+      }
+    }
+  }
+
   let queuedArgs = { ...args };
   let summary = `${name} の実行を人が確認します`;
 
@@ -622,6 +864,21 @@ export async function callAdminMcpTool(
       summary = `AI社員ごとの受信の渡し方オーバーライドを設定します（${rulesCount}ルール）`;
     } else {
       summary = `組織の受信の渡し方ポリシーの更新を人が確認します（${rulesCount}ルール）`;
+    }
+  } else if (name === "schedulingPolicy.patch") {
+    const employeeId = typeof args.employeeId === "string" && args.employeeId.trim()
+      ? args.employeeId.trim()
+      : null;
+    const clearOverride = args.clearOverride === true;
+    const rulesCount = Array.isArray(args.rules) ? args.rules.length : 0;
+    const hasHighRiskConsent = Boolean(args.highRiskConsentAt);
+    if (clearOverride && employeeId) {
+      summary = `AI社員のスケジューリングポリシーオーバーライドをクリアして組織ポリシーを継承します`;
+    } else if (employeeId) {
+      summary = `AI社員ごとのスケジューリングポリシーオーバーライドを設定します（${rulesCount}ルール）`;
+    } else {
+      const consentNote = hasHighRiskConsent ? "・高リスク承諾あり" : "";
+      summary = `組織のスケジューリングポリシーの更新を人が確認します（${rulesCount}ルール${consentNote}）`;
     }
   }
 

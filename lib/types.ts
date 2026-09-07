@@ -786,3 +786,73 @@ export type SealithTransferAuditMetadata = {
   sealithMode?: "off" | "suggest" | "required";
   sealithBlocked?: boolean;
 };
+
+/** A1 scheduling.policy — first situation policy pack. */
+
+/** Location affinity preference for scheduling. */
+export type LocationAffinity = "office_first" | "remote_first" | "hybrid" | "any";
+
+/** Confirm automation level (policy setting). */
+export type ConfirmAutomationLevel =
+  | "always_human"
+  | "risk_based"
+  | "conditional"
+  | "full_auto";
+
+/** Online meeting tool allowlist entry. */
+export interface OnlineVideoToolEntry {
+  tool: string;
+  isDefault?: boolean;
+}
+
+/** Online meeting settings pack. */
+export interface OnlineMeetingPack {
+  enabled: boolean;
+  calendarTarget?: string;
+  videoToolAllowlist: OnlineVideoToolEntry[];
+  defaultVideoTool?: string;
+}
+
+/** Blackout/prefer time window. */
+export interface TimeWindow {
+  dayOfWeek?: number[];
+  startTime?: string;
+  endTime?: string;
+  startDate?: string;
+  endDate?: string;
+  reason?: string;
+}
+
+/** Single scheduling rule. */
+export interface SchedulingRule {
+  id: string;
+  priority?: number;
+  locationAffinity?: LocationAffinity;
+  travelBufferMinutes?: number;
+  onlinePack?: OnlineMeetingPack;
+  hardBlackout?: TimeWindow[];
+  softPrefer?: TimeWindow[];
+  costCapJpy?: number;
+  confirmAutomation: ConfirmAutomationLevel;
+}
+
+/** Org-level scheduling policy. */
+export interface OrgSchedulingPolicy {
+  version: 1;
+  policyId: string;
+  policyName: string;
+  rules: SchedulingRule[];
+  highRiskConsentAt?: string;
+  highRiskConsentBy?: string;
+  updatedAt: string;
+  updatedBy: string;
+}
+
+/** Audit label for which rules kept/dropped a slot. */
+export interface SchedulingAuditLabel {
+  slotId: string;
+  kept: boolean;
+  appliedRules: string[];
+  droppedByRules?: string[];
+  reason?: string;
+}
