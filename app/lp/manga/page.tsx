@@ -110,7 +110,7 @@ export default function MangaLP() {
             </summary>
             <div className="mt-3 text-sm muted leading-relaxed space-y-2">
               <p>
-                <strong className="text-[var(--text)]">Staffpass</strong>はAI社員の社員証です。誰が、何の目的で、どこまで実行できるかを管理し、承認と監査を残します。
+                <strong className="text-[var(--text)]">Staffpass</strong>はAI社員の社員証です。誰が、何の目的で、どこまで実行できるかを管理し、承認と監査を残します。完全自動化まで対応可能で、リスクの高い設定には警告と承諾が求められます。
               </p>
               <p>
                 <strong className="text-[var(--text)]">Sealith</strong>は機密ファイルの転送便です。ブラウザ内で暗号化し、誰に・何の目的で・いつまで渡すかを限って、あとから共有を止められます。
