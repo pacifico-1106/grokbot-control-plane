@@ -1258,6 +1258,8 @@ export async function runGatewayInvoke(
     } else if (dest && replyThreadTs && looksLikeSlackTs(replyThreadTs)) {
       const uploaded = await uploadSlackFile({
         orgId: orgId || employee.orgId,
+        employeeId,
+        postingAs: employee.postingAs || "bot",
         channel: dest,
         threadTs: replyThreadTs,
         fileRef: body.fileAttachment.fileRef,
