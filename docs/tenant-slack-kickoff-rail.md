@@ -691,6 +691,67 @@ Staffpass の本分:
 
 ---
 
+## Wake stance（ロック済み）
+
+Slack でのAI社員起動方針です。チャネル種別・ホスト側に応じた wake 手段を整理します。
+
+### 内部チャネル（自社ワークスペース）
+
+| 項目 | 方針 |
+|------|------|
+| **wake 手段** | Bot アプリ（`@Staffpass`）へのメンション |
+| **アプリ設置** | テナントが自社 WS に Staffpass アプリをインストール |
+| **備考** | 社員証付き Bot として一貫した窓口を提供 |
+
+### 外部チャネル（相手方ホスト Slack Connect）
+
+| 項目 | 方針 |
+|------|------|
+| **wake 手段** | 社員証に紐付けた個人 Slack ユーザーへのメンション |
+| **アプリ設置** | **相手方 WS にはアプリを配布しない** |
+| **例** | `#stablo_tokyo307` Connect → `@tando` 個人メンション |
+| **備考** | 人の顔で起きて、境界は Staffpass が制御 |
+
+### 自社ホスト + 外部ゲスト（混在チャネル）
+
+| 項目 | 方針 |
+|------|------|
+| **wake 手段** | Bot を招待可能なら Bot、不可なら個人メンション |
+| **egress** | dual-gate / external-safe を維持 |
+| **備考** | 混在 ch は相手台帳必須（`parties.upsert`） |
+
+### 営業トーク
+
+> **「社内は社員証付きBot。社外Connectは人の顔で起きて、境界はStaffpass。」**
+
+---
+
+## Public Distribution（App Directory 非公開）
+
+Staffpass Slack アプリは **Public Distribution Activated** ですが、App Directory には公開していません。
+
+### 配布方針
+
+| 項目 | 内容 |
+|------|------|
+| **Install URL** | オペレータが非公開で保管（「オペ保管のInstall URL」） |
+| **チャット・ドキュメントへの生URL貼り付け** | 原則避ける |
+| **App ID** | `A0BU8TABSV6` |
+| **スコープ** | 現在配布中のスコープを維持 |
+
+### テナント設定フロー
+
+```
+1. オペからテナントへ Install URL を共有（非公開チャネル or 1:1）
+2. テナントが自社 WS へインストール
+3. OAuth 完了後、Bot User OAuth Token（xoxb-...）をコピー
+4. Staffpass ダッシュボード → 会話アダプタ → Slack → Token 登録
+```
+
+> **注意**: Install URL をパブリックチャネル・外部共有ドキュメントに貼らないでください。
+
+---
+
 ## 2026-09-05/06 パスA+B本番からの学習事項（Yasaka/Ando locks）
 
 このRAILは以下の実運用経験を反映しています:
