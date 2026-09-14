@@ -262,7 +262,7 @@ describe("setup.lineApproval.demoteTelegram", () => {
       return Response.json({});
     }) as typeof fetch;
 
-    let resolved = await resolveEmployeeApprovalChannel(ORG, issued.employee);
+    const resolved = await resolveEmployeeApprovalChannel(ORG, issued.employee);
     expect(resolved?.provider).toBe("line");
     await sendApprovalNotifications(approval(ORG, issued.employee), issued.employee);
     expect(pushTargets.length).toBe(1);

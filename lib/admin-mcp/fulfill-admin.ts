@@ -79,7 +79,6 @@ export type AdminFulfillment = {
   hasCredentials?: boolean;
   botTokenPresent?: boolean;
   authTest?: { ok: boolean; error?: string | null };
-  enabled?: boolean;
   destinationPresent?: boolean;
   webhookPath?: string;
 };
@@ -326,7 +325,7 @@ async function fulfillLineApprovalSetEmployeeInbox(
     tool: "setup.lineApproval.setEmployeeInbox",
     at: new Date().toISOString(),
     employeeId,
-    channelId: parsed.id,
+    channelId: parsed.id ?? undefined,
     nextStepJa: TOOL_NEXTSTEP_JA["setup.lineApproval.setEmployeeInbox"],
   };
 }

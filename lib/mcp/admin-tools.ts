@@ -9,7 +9,6 @@ import {
   getApprovalById,
   getBinding,
   getEmployee,
-  listEmployees,
   listNotificationChannels,
   getEffectiveIngressHandoffPolicy,
   getEffectiveSchedulingPolicy,
