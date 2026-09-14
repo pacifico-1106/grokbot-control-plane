@@ -97,6 +97,8 @@ Socket Mode が ON だと Events が HTTPS endpoint に届きません。
 | `ingressHandoff.patch` | 受信ハンドオフポリシー更新（AI社員ごとにemployeeId指定可、clearOverrideで継承） | always_human |
 | `replyPolicy.get` | **B2 返信ポリシー読み取り（read-only、AI社員ごとにemployeeId指定可）** | なし |
 | `replyPolicy.patch` | 返信ポリシー更新（営業時間外 allow_send は高リスク承諾必須） | always_human |
+| `internalAudienceRule.get` | **内部オーディエンスルール読み取り（read-only、stablo規模チャネル対応）** | なし |
+| `internalAudienceRule.patch` | 内部オーディエンスルール更新（emailDomains / slackTeamIds / autoSlackTeamInternal） | always_human |
 
 > **Note**: Admin MCP に新しいツールがデプロイされた場合、MCP コネクタを再起動/再接続してください（`capabilities.tools.listChanged: true` ですが、Streamable HTTP では通知 push が制限されます）。
 
@@ -399,8 +401,14 @@ App DM（Staffpassアプリへの直接DM）への返信には `posting_as: bot`
 - Uehara/Stablo 外部ゲスト → `partySignals[{external, resolved}]` または `{unknown, !resolved}`
 - `dualAudience.hasInternalParty = true`, `hasExternalParty = true`
 
+**大規模チャネル（stablo規模）対応**:
+- 毎アカウントを `parties.upsert` で登録するのが破綻する場合は `internalAudienceRule.patch` を使用
+- `slackTeamIds` に自社Slackチームを設定し `autoSlackTeamInternal=true` にすると、自社メンバーは自動で内部扱い
+- Connect ゲスト（異なるチーム）は fail-closed で外部扱い
+- `internalAudienceRule.get` で現在のルールを確認可能（read-only、承認不要）
+
 **運用ガイダンス（S4スタイル）**:
-- **混在chは相手台帳必須**: `parties.upsert` でメンバーの audience（internal / external）を登録
+- **混在chは相手台帳または内部オーディエンスルール必須**: `parties.upsert` でメンバーの audience を個別登録、または `internalAudienceRule.patch` で組織ルールを設定
 - 未登録パーティは fail-closed で external 扱い
 - メンションは依然としてチャネル / Connect の wake に必要（DM の `employeeId` 指定とは別）
 - **承認要否 ≠ メンション相手**: 承認判定は audience × 情報区分マトリクス。メンションした人が承認者になるわけではない

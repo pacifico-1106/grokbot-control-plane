@@ -45,6 +45,7 @@ import { parseRolesProposeInput } from "@/lib/mcp/roles-propose";
 import { ALL_SCOPES } from "@/lib/employees/policy-draft";
 import { ADMIN_AUDIT_CLASS } from "@/lib/admin-mcp/audit-class";
 import { getEffectiveReplyPolicy, type ReplyPolicySource } from "@/lib/data/reply-policy";
+import { getOrgInternalAudienceRule } from "@/lib/data/internal-audience-rule";
 
 export const ADMIN_MCP_TOOLS: McpToolDef[] = [
   {
@@ -377,6 +378,42 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
         },
         highRiskConsentAt: { type: "string", description: "ISO timestamp of tenant consent for high-risk automation" },
         highRiskConsentBy: { type: "string", description: "Email/name of person who gave consent" },
+        jobId: { type: "string" },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "internalAudienceRule.get",
+    description:
+      "Read org internal audience rule (read-only, no approval required). Returns the rule for stablo-scale channels: Internal = parties allowlist UNION emailDomains UNION slackTeamIds. Connect guests / unregistered → external (fail-closed). Example: #stablo_tokyo307 Connect channel with many members — registering every account via parties.upsert breaks at scale. Use org rule: own Slack team members are auto-internal.",
+    inputSchema: {
+      type: "object",
+      properties: {},
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "internalAudienceRule.patch",
+    description:
+      "Patch org internal audience rule after human approval (always_human). For stablo-scale channels: Internal = parties allowlist UNION emailDomains UNION slackTeamIds. Connect guests / unregistered → external (fail-closed). Example: #stablo_tokyo307 Connect channel. Set autoSlackTeamInternal=true and slackTeamIds to auto-treat own-team members as internal. Admin cannot self-approve.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        emailDomains: {
+          type: "array",
+          items: { type: "string" },
+          description: "Email domains considered internal (e.g., [\"sample-shoji.example\"])",
+        },
+        slackTeamIds: {
+          type: "array",
+          items: { type: "string" },
+          description: "Slack team IDs considered internal (own workspace, e.g., [\"T01234567\"])",
+        },
+        autoSlackTeamInternal: {
+          type: "boolean",
+          description: "When true, Slack users from slackTeamIds are auto-internal. Connect guests (different team) remain fail-closed external.",
+        },
         jobId: { type: "string" },
       },
       additionalProperties: false,
@@ -749,6 +786,61 @@ async function runReplyPolicyGet(
   };
 }
 
+type InternalAudienceRuleGetResult = {
+  ok: boolean;
+  rule: Awaited<ReturnType<typeof getOrgInternalAudienceRule>>;
+  summaryJa: string;
+  nextStepJa: string;
+};
+
+function summarizeInternalAudienceRuleJa(
+  rule: Awaited<ReturnType<typeof getOrgInternalAudienceRule>>
+): string {
+  const parts: string[] = [];
+  if (rule.emailDomains.length > 0) {
+    parts.push(`メールドメイン: ${rule.emailDomains.join(", ")}`);
+  }
+  if (rule.slackTeamIds.length > 0) {
+    parts.push(`Slack チーム: ${rule.slackTeamIds.join(", ")}`);
+  }
+  if (rule.autoSlackTeamInternal) {
+    parts.push("自動Slackチーム内部判定: 有効");
+  }
+  if (parts.length === 0) {
+    return "内部オーディエンスルール未設定（parties台帳のみで判定）";
+  }
+  return parts.join(" / ");
+}
+
+function nextStepInternalAudienceRuleJa(
+  rule: Awaited<ReturnType<typeof getOrgInternalAudienceRule>>
+): string {
+  if (rule.slackTeamIds.length === 0 && !rule.autoSlackTeamInternal) {
+    return "大規模チャネル（stablo規模）を使う場合は、slackTeamIds を設定し autoSlackTeamInternal=true にすると、自社Slackメンバーを自動で内部扱いにできます。例: #stablo_tokyo307 Connect チャネル。";
+  }
+  if (rule.autoSlackTeamInternal && rule.slackTeamIds.length > 0) {
+    return "Slack チームルールが設定済みです。自社チームメンバーは内部扱い、Connect ゲストは fail-closed で外部扱いになります。";
+  }
+  return "parties.upsert で個別パーティを登録するか、internalAudienceRule.patch でドメイン/チームルールを設定してください。";
+}
+
+async function runInternalAudienceRuleGet(
+  cred: ResolvedAdminCredential
+): Promise<{ content: Array<{ type: "text"; text: string }>; structuredContent?: unknown; isError?: boolean }> {
+  const rule = await getOrgInternalAudienceRule(cred.orgId);
+  const result: InternalAudienceRuleGetResult = {
+    ok: true,
+    rule,
+    summaryJa: summarizeInternalAudienceRuleJa(rule),
+    nextStepJa: nextStepInternalAudienceRuleJa(rule),
+  };
+  return {
+    content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+    structuredContent: result,
+    isError: false,
+  };
+}
+
 export async function callAdminMcpTool(
   name: string,
   args: Record<string, unknown>,
@@ -904,6 +996,10 @@ export async function callAdminMcpTool(
 
   if (name === "replyPolicy.get") {
     return runReplyPolicyGet(cred, args);
+  }
+
+  if (name === "internalAudienceRule.get") {
+    return runInternalAudienceRuleGet(cred);
   }
 
   if (name === "replyPolicy.patch") {
@@ -1136,6 +1232,15 @@ export async function callAdminMcpTool(
       const consentNote = hasHighRiskConsent ? "・高リスク承諾あり" : "";
       summary = `組織の返信ポリシーの更新を人が確認します（${rulesCount}ルール${consentNote}）`;
     }
+  } else if (name === "internalAudienceRule.patch") {
+    const emailDomains = Array.isArray(args.emailDomains) ? args.emailDomains.length : 0;
+    const slackTeamIds = Array.isArray(args.slackTeamIds) ? args.slackTeamIds.length : 0;
+    const autoSlackTeamInternal = args.autoSlackTeamInternal === true;
+    const parts: string[] = [];
+    if (emailDomains > 0) parts.push(`${emailDomains}ドメイン`);
+    if (slackTeamIds > 0) parts.push(`${slackTeamIds}チーム`);
+    if (autoSlackTeamInternal) parts.push("自動内部判定あり");
+    summary = `内部オーディエンスルールの更新を人が確認します（${parts.join("・") || "設定なし"}）`;
   }
 
   const queued = await queueAdminTool({

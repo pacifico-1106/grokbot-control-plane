@@ -1,10 +1,14 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { DEMO_ORG } from "@/lib/demo-data";
 import {
   parseConversationContext,
   resolveAudience,
   resolveConversationThreadId,
 } from "@/lib/gateway/audience";
+import {
+  clearDemoRule,
+  setOrgInternalAudienceRule,
+} from "@/lib/data/internal-audience-rule";
 import type { GatewayInvokeRequest } from "@/lib/types";
 
 function body(partial: Partial<GatewayInvokeRequest>): GatewayInvokeRequest {
@@ -386,5 +390,225 @@ describe("audience resolver", () => {
       },
     });
     expect(resolved).toBe("1787911797.502889");
+  });
+});
+
+/**
+ * Org internal audience rule tests (stablo-scale channels).
+ * Internal = parties allowlist UNION emailDomains UNION slackTeamIds.
+ * Connect guests / unregistered → external (fail-closed).
+ * Example: #stablo_tokyo307 Connect channel.
+ */
+describe("org internal audience rule (stablo-scale)", () => {
+  afterEach(() => {
+    clearDemoRule();
+  });
+
+  test("autoSlackTeamInternal=true + matching slackTeamId → internal", async () => {
+    await setOrgInternalAudienceRule(
+      DEMO_ORG.id,
+      {
+        slackTeamIds: ["T_STABLO_307"],
+        autoSlackTeamInternal: true,
+      },
+      "test@example.com"
+    );
+
+    const ctx = parseConversationContext(
+      body({
+        conversation: {
+          surface: "slack",
+          orgId: DEMO_ORG.id,
+          slackChannelId: "C_SHARED",
+          slackUserId: "U_STABLO_MEMBER",
+        },
+        args: { slackTeamId: "T_STABLO_307" },
+      }),
+      DEMO_ORG.id
+    );
+
+    const resolved = await resolveAudience(ctx);
+
+    expect(resolved.internalAudienceRule?.autoSlackTeamInternal).toBe(true);
+    expect(resolved.dualAudience?.hasInternalParty).toBe(true);
+    const signal = resolved.dualAudience?.partySignals.find(
+      (s) => s.kind === "slack_user"
+    );
+    expect(signal?.audience).toBe("internal");
+    expect(signal?.resolved).toBe(true);
+  });
+
+  test("autoSlackTeamInternal=true + different slackTeamId → external (Connect guest)", async () => {
+    await setOrgInternalAudienceRule(
+      DEMO_ORG.id,
+      {
+        slackTeamIds: ["T_STABLO_307"],
+        autoSlackTeamInternal: true,
+      },
+      "test@example.com"
+    );
+
+    const ctx = parseConversationContext(
+      body({
+        conversation: {
+          surface: "slack",
+          orgId: DEMO_ORG.id,
+          slackChannelId: "C_SHARED",
+          slackUserId: "U_EXTERNAL_GUEST",
+        },
+        args: { slackTeamId: "T_EXTERNAL_TEAM" },
+      }),
+      DEMO_ORG.id
+    );
+
+    const resolved = await resolveAudience(ctx);
+
+    expect(resolved.dualAudience?.hasExternalParty).toBe(true);
+    const signal = resolved.dualAudience?.partySignals.find(
+      (s) => s.kind === "slack_user"
+    );
+    expect(signal?.audience).toBe("unknown");
+    expect(signal?.resolved).toBe(false);
+  });
+
+  test("autoSlackTeamInternal=false → no auto-internal even with matching team", async () => {
+    await setOrgInternalAudienceRule(
+      DEMO_ORG.id,
+      {
+        slackTeamIds: ["T_STABLO_307"],
+        autoSlackTeamInternal: false,
+      },
+      "test@example.com"
+    );
+
+    const ctx = parseConversationContext(
+      body({
+        conversation: {
+          surface: "slack",
+          orgId: DEMO_ORG.id,
+          slackUserId: "U_STABLO_MEMBER",
+        },
+        args: { slackTeamId: "T_STABLO_307" },
+      }),
+      DEMO_ORG.id
+    );
+
+    const resolved = await resolveAudience(ctx);
+
+    const signal = resolved.dualAudience?.partySignals.find(
+      (s) => s.kind === "slack_user"
+    );
+    expect(signal?.audience).toBe("unknown");
+    expect(signal?.resolved).toBe(false);
+  });
+
+  test("emailDomains rule → matching domain is internal", async () => {
+    await setOrgInternalAudienceRule(
+      DEMO_ORG.id,
+      {
+        emailDomains: ["stablo-internal.example"],
+        autoSlackTeamInternal: false,
+      },
+      "test@example.com"
+    );
+
+    const ctx = parseConversationContext(
+      body({
+        conversation: {
+          surface: "mail",
+          orgId: DEMO_ORG.id,
+          email: "employee@stablo-internal.example",
+        },
+      }),
+      DEMO_ORG.id
+    );
+
+    const resolved = await resolveAudience(ctx);
+
+    expect(resolved.dualAudience?.hasInternalParty).toBe(true);
+    const signal = resolved.dualAudience?.partySignals.find(
+      (s) => s.kind === "mail_address"
+    );
+    expect(signal?.audience).toBe("internal");
+    expect(signal?.resolved).toBe(true);
+  });
+
+  test("emailDomains rule → non-matching domain is external", async () => {
+    await setOrgInternalAudienceRule(
+      DEMO_ORG.id,
+      {
+        emailDomains: ["stablo-internal.example"],
+        autoSlackTeamInternal: false,
+      },
+      "test@example.com"
+    );
+
+    const ctx = parseConversationContext(
+      body({
+        conversation: {
+          surface: "mail",
+          orgId: DEMO_ORG.id,
+          email: "customer@external-corp.example",
+        },
+      }),
+      DEMO_ORG.id
+    );
+
+    const resolved = await resolveAudience(ctx);
+
+    expect(resolved.dualAudience?.hasExternalParty).toBe(true);
+    const signal = resolved.dualAudience?.partySignals.find(
+      (s) => s.kind === "mail_address"
+    );
+    expect(signal?.audience).toBe("unknown");
+    expect(signal?.resolved).toBe(false);
+  });
+
+  test("parties.upsert takes precedence over org rule", async () => {
+    await setOrgInternalAudienceRule(
+      DEMO_ORG.id,
+      {
+        slackTeamIds: ["T_STABLO_307"],
+        autoSlackTeamInternal: true,
+      },
+      "test@example.com"
+    );
+
+    const ctx = parseConversationContext(
+      body({
+        conversation: {
+          surface: "slack",
+          orgId: DEMO_ORG.id,
+          slackChannelId: "C_SHARED",
+          slackUserId: "U_YAMADA",
+        },
+        args: { slackTeamId: "T_EXTERNAL" },
+      }),
+      DEMO_ORG.id
+    );
+
+    const resolved = await resolveAudience(ctx);
+
+    const signal = resolved.dualAudience?.partySignals.find(
+      (s) => s.kind === "slack_user"
+    );
+    expect(signal?.audience).toBe("internal");
+    expect(signal?.resolved).toBe(true);
+  });
+
+  test("slackTeamId parses from args.teamId alias", () => {
+    const ctx = parseConversationContext(
+      body({
+        conversation: {
+          surface: "slack",
+          orgId: DEMO_ORG.id,
+          slackUserId: "U_MEMBER",
+        },
+        args: { teamId: "T_FROM_ALIAS" },
+      }),
+      DEMO_ORG.id
+    );
+
+    expect(ctx?.slackTeamId).toBe("T_FROM_ALIAS");
   });
 });

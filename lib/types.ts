@@ -217,6 +217,11 @@ export interface ConversationContext {
   email?: string;
   slackChannelId?: string;
   slackUserId?: string;
+  /**
+   * Slack team/workspace ID. Used for org internal audience rule:
+   * autoSlackTeamInternal treats own-team members as internal.
+   */
+  slackTeamId?: string;
   phone?: string;
   lineId?: string;
 }
@@ -1057,4 +1062,29 @@ export interface ReplyPolicyAuditLabel {
   threadAffinity: ThreadAffinityMode;
   appliedRules: string[];
   reason?: string;
+}
+
+/**
+ * Org-level internal audience rule for large/stablo-scale channels.
+ *
+ * Internal = parties allowlist UNION emailDomains UNION slackTeamIds.
+ * Connect guests / unregistered → external (fail-closed).
+ *
+ * Example: #stablo_tokyo307 Connect channel with many members —
+ * registering every account via parties.upsert breaks at scale.
+ * Use org rule: own Slack team members are auto-internal.
+ */
+export interface OrgInternalAudienceRule {
+  version: 1;
+  /** Email domains considered internal (e.g., ["sample-shoji.example"]). */
+  emailDomains: string[];
+  /** Slack team IDs considered internal (own workspace). */
+  slackTeamIds: string[];
+  /**
+   * When true, Slack users from slackTeamIds are auto-internal.
+   * Connect guests (different team / external user) remain fail-closed external.
+   */
+  autoSlackTeamInternal: boolean;
+  updatedAt: string;
+  updatedBy: string;
 }

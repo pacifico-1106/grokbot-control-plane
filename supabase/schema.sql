@@ -21,9 +21,13 @@ create table if not exists orgs (
   sod_warn_policy jsonb not null default '{
     "domains": ["comm_external", "money", "destructive", "commit"]
   }'::jsonb,
+  internal_audience_rule jsonb,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+comment on column orgs.internal_audience_rule is
+  'Org-level internal audience rule for large/stablo-scale channels. Internal = parties UNION emailDomains UNION slackTeamIds. Connect guests fail-closed external. A1/D1 shape.';
 
 create table if not exists org_members (
   id uuid primary key default gen_random_uuid(),
