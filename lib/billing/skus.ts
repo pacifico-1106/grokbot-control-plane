@@ -1,55 +1,61 @@
 /**
- * Additional Ando / Kimura SKUs beyond recurring plans (P0.5+).
+ * Additional SKUs beyond recurring plans (pack-first pricing, 2026-09-13).
  * Client-safe — display + catalog constants only.
  *
- * displayYen values are 税込・仮決め／事業確定前 (customer-facing inclusive; do NOT ×1.1).
+ * displayYen values are 税抜 (tax-exclusive).
  * Stripe Dashboard Prices (env) remain Checkout source of truth.
  * Do NOT invent fake price_… ids. Meter stays gated_confirm_action
  * (see lib/billing/meter.ts) — separate from these packs.
+ *
+ * Customer-facing packs: see lib/billing/packs.ts
+ * Back-end SKUs (starter/business/managed): see lib/billing/plans.ts
  */
 
 import { formatYenJa, PRICING_PROVISIONAL_NOTE_JA } from "./plans";
 
 export { formatYenJa, PRICING_PROVISIONAL_NOTE_JA };
 
-/** One-time optional kickoff pack (税込・仮決め), yen. */
-export const KICKOFF_PACK_YEN = 398_000;
+/**
+ * One-time optional kickoff pack (税抜), yen.
+ * Updated 2026-09-13: ¥300,000 (pack-first pricing simplify).
+ */
+export const KICKOFF_PACK_YEN = 300_000;
 
 /**
  * Transparent packaging lines for kickoff_pack (sales / invoice honesty).
- * Total = KICKOFF_PACK_YEN. Line yen are provisional packaging splits —
+ * Total = KICKOFF_PACK_YEN (¥300,000). Line yen are provisional packaging splits —
  * a single Stripe Price may still back Checkout until line Prices exist.
  *
- * Grok seat = Pro+/Teams band pass-through — NOT Premium ($120) band.
+ * Hands (Grok Bot seats) are bundled in pack copy; Stripe Price separation
+ * kept for pack monthly vs hands passthrough billing.
  *
- * CRITICAL: does NOT include Business (or any) subscription first month.
- * Recurring plan fee is always a separate subscription line to avoid
+ * CRITICAL: does NOT include pack subscription first month.
+ * Recurring pack fee is always a separate subscription line to avoid
  * double-billing kickoff vs monthly.
+ *
+ * Updated 2026-09-13: Simplified to ¥300,000 (pack-first pricing).
  */
 export const KICKOFF_PACK_LINES = [
   {
-    key: "staffpass_kickoff_setup",
-    labelJa: "Staffpass キックオフ設定・就業規則テンプレ適用",
-    yen: 198_000,
-  },
-  {
-    key: "grok_seat_passthrough",
-    labelJa:
-      "Grok Bot 席代パススルー（Pro+/Teams 帯。Premium $120 帯ではない）",
-    yen: 60_000,
+    key: "kickoff_setup",
+    labelJa: "初期設定・就業規則テンプレ適用",
+    yen: 150_000,
   },
   {
     key: "kickoff_companion",
     labelJa: "キックオフ伴走（連携チェック・テスト承認・日報導線）",
-    yen: 140_000,
+    yen: 150_000,
   },
 ] as const;
 
 export const KICKOFF_PACK_NOTE_JA =
-  "任意・一式（税込・仮決め）。月額プランとは別請求。Business 初月をキックオフに含めない（二重請求回避）。";
+  "任意・一式（税抜）。月額パックとは別請求。パック初月をキックオフに含めない（二重請求回避）。";
 
+/**
+ * @deprecated Hands are bundled in pack copy. Keep for internal reference only.
+ */
 export const KICKOFF_GROK_BAND_JA =
-  "Grok 席代は Pro+/Teams 帯のパススルー。Premium（$120）帯は使わない。";
+  "手足（Grok Bot）席代はパックに含む。Stripe 請求で分離するが顧客追加課金なし。";
 
 /** Managed core monthly (same as PLAN_DISPLAY_YEN.managed). */
 export const MANAGED_CORE_YEN = 128_000;
