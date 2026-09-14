@@ -21,6 +21,8 @@ Productionでは `NOTIFICATION_CONFIG_ENCRYPTION_KEY` に32文字以上の安定
 
 ## LINE（テナント設定）
 
+Space Tree パイロット（上長承認 OA 化 + 将来 OA 会話窓口）の設計正本: [space-tree-line-oa-design.md](../space-tree-line-oa-design.md)
+
 1. LINE Developersでテナント専用Messaging APIチャネルを作成する。
 2. `/app/settings` に送信先group / room / user ID、channel access token、channel secret、必要なら許可user IDを設定する。
 3. 保存後に表示されるパスへ本番originを付け、LINE DevelopersのWebhook URLへ登録する。
