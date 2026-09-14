@@ -137,3 +137,83 @@ export async function setOrgStripeCustomerId(
     })
     .eq("id", orgId);
 }
+
+export type ExpireTrialsResult = {
+  expiredCount: number;
+  expiredOrgIds: string[];
+};
+
+/**
+ * Expire all trialing subscriptions where trial_ends_at < now (grace: 0 days).
+ * Called by daily cron job. DEMO mode: no-op.
+ */
+export async function expireTrials(): Promise<ExpireTrialsResult> {
+  if (isDemoMode()) {
+    return { expiredCount: 0, expiredOrgIds: [] };
+  }
+
+  const admin = createSupabaseAdminClient();
+  if (!admin) {
+    return { expiredCount: 0, expiredOrgIds: [] };
+  }
+
+  const now = new Date().toISOString();
+
+  const { data, error } = await admin
+    .from("subscriptions")
+    .update({ status: "expired", updated_at: now })
+    .eq("status", "trialing")
+    .lt("trial_ends_at", now)
+    .select("org_id");
+
+  if (error) {
+    throw new Error(error.message || "expire_trials_failed");
+  }
+
+  const expiredOrgIds = (data ?? []).map((row) => String(row.org_id));
+  return {
+    expiredCount: expiredOrgIds.length,
+    expiredOrgIds,
+  };
+}
+
+/**
+ * Extend trial for an org (super admin only). Returns updated subscription.
+ * Does NOT bypass tenant billing gates — only extends trial_ends_at and sets status back to trialing.
+ */
+export async function extendTrial(
+  orgId: string,
+  newTrialEndsAt: string
+): Promise<Subscription | null> {
+  if (isDemoMode()) {
+    return {
+      ...DEMO_SUBSCRIPTION,
+      orgId,
+      status: "trialing",
+      trialEndsAt: newTrialEndsAt,
+    };
+  }
+
+  const admin = createSupabaseAdminClient();
+  if (!admin) {
+    throw new Error("supabase_not_configured");
+  }
+
+  const now = new Date().toISOString();
+  const { data, error } = await admin
+    .from("subscriptions")
+    .update({
+      status: "trialing",
+      trial_ends_at: newTrialEndsAt,
+      updated_at: now,
+    })
+    .eq("org_id", orgId)
+    .select("*")
+    .single();
+
+  if (error || !data) {
+    throw new Error(error?.message || "extend_trial_failed");
+  }
+
+  return mapSubscriptionRow(data as Record<string, unknown>);
+}

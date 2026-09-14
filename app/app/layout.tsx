@@ -3,6 +3,7 @@ import { AppSessionProvider } from "@/components/AppSessionProvider";
 import { ensureAuthenticatedOrg } from "@/lib/auth/session";
 import { getSuperAdminAccess } from "@/lib/admin/access";
 import { listApprovals } from "@/lib/data";
+import { getOrgEntitlements } from "@/lib/billing/entitlements";
 
 /**
  * Soft gate for every /app/* page.
@@ -41,6 +42,7 @@ export default async function AppSectionLayout({
   const superAdminAccess = await getSuperAdminAccess();
   const approvals = await listApprovals(session.orgId);
   const pendingApprovalCount = approvals.filter((row) => row.status === "pending").length;
+  const entitlements = await getOrgEntitlements(session.orgId);
 
   return (
     <AppSessionProvider
@@ -50,6 +52,8 @@ export default async function AppSectionLayout({
         demo: session.demo,
         superAdmin: superAdminAccess.allowed,
         pendingApprovalCount,
+        subscriptionStatus: entitlements.status,
+        expiredTrial: entitlements.expiredTrial,
       }}
     >
       {children}

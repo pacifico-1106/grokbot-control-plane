@@ -3,6 +3,7 @@ import { notFound, redirect } from "next/navigation";
 import { StatCard } from "@/components/StatCard";
 import { getSuperAdminAccess } from "@/lib/admin/access";
 import { getAdminOrganizationDetail } from "@/lib/admin/data";
+import { TrialExtensionForm } from "@/components/admin/TrialExtensionForm";
 
 function formatDate(value: string | null, includeTime = false): string {
   if (!value) return "—";
@@ -87,6 +88,21 @@ export default async function AdminOrganizationPage({
               ))}
               {!detail.employees.length ? <li className="p-4 text-sm muted">まだAI社員はいません。</li> : null}
             </ul>
+          </section>
+
+          <section className="surface overflow-hidden">
+            <header className="border-b border-[var(--border)] px-4 py-3">
+              <h2 className="text-sm font-bold">トライアル延長</h2>
+              <p className="mt-1 text-xs faint">Super Admin 専用・監査ログに記録</p>
+            </header>
+            <div className="p-4">
+              <TrialExtensionForm
+                orgId={org.id}
+                orgName={org.name}
+                currentTrialEndsAt={org.trialEndsAt}
+                subscriptionStatus={org.subscriptionStatus}
+              />
+            </div>
           </section>
         </div>
 

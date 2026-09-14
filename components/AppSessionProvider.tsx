@@ -1,6 +1,7 @@
 "use client";
 
 import { createContext, useContext } from "react";
+import type { SubscriptionStatus } from "@/lib/types";
 
 export type AppSessionValue = {
   email: string | null;
@@ -8,6 +9,8 @@ export type AppSessionValue = {
   demo: boolean;
   superAdmin: boolean;
   pendingApprovalCount: number;
+  subscriptionStatus: SubscriptionStatus | null;
+  expiredTrial: boolean;
 };
 
 const AppSessionContext = createContext<AppSessionValue>({
@@ -16,6 +19,8 @@ const AppSessionContext = createContext<AppSessionValue>({
   demo: false,
   superAdmin: false,
   pendingApprovalCount: 0,
+  subscriptionStatus: null,
+  expiredTrial: false,
 });
 
 export function AppSessionProvider({

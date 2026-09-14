@@ -13,6 +13,8 @@ const STATUS_LABELS: Record<string, string> = {
   past_due: "お支払い確認中",
   canceled: "解約済み",
   unpaid: "未払い",
+  incomplete: "手続き未完了",
+  expired: "期限切れ",
 };
 
 const PLAN_LABELS: Record<string, string> = {
@@ -30,7 +32,7 @@ export default async function BillingPage() {
 
   const statusChip =
     entitlements.status === "active" || entitlements.status === "trialing"
-      ? "chip"
+      ? "chip chip-ok"
       : entitlements.blocked
         ? "chip chip-warn"
         : "chip";

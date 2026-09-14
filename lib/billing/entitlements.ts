@@ -14,6 +14,8 @@ export type Entitlements = {
   /** True when soft-gated (production only). */
   blocked: boolean;
   blockReasonJa: string | null;
+  /** True when expired trial — confirm-class Gateway invokes are gated. */
+  expiredTrial: boolean;
 };
 
 const BLOCKED_STATUSES: SubscriptionStatus[] = [
@@ -21,6 +23,7 @@ const BLOCKED_STATUSES: SubscriptionStatus[] = [
   "canceled",
   "incomplete",
   "unpaid",
+  "expired",
 ];
 
 const PLAN_FEATURES: Record<PlanKey, { maxEmployees?: number; features: string[] }> =
@@ -62,10 +65,26 @@ function statusBlockMessageJa(status: SubscriptionStatus): string {
       return "お申し込み手続きが完了していません。請求ページから Checkout を完了してください。";
     case "unpaid":
       return "未払いのため一部機能を制限しています。請求ページまたはカスタマーポータルでお支払いください。";
+    case "expired":
+      return "トライアル期間が終了しました。プランを選択して Checkout からお手続きください。";
     default:
       return "現在のご契約状態ではこの操作を実行できません。";
   }
 }
+
+/**
+ * Confirm-class Gateway tools soft-gated when trial is expired.
+ * mail.send, comm.reply, calendar.confirm, sns.publish, commerce.*
+ * View + approval poll remain allowed.
+ */
+export const EXPIRED_TRIAL_GATED_TOOLS = new Set([
+  "mail.send",
+  "comm.reply",
+  "calendar.confirm",
+  "sns.publish",
+  "commerce.order",
+  "commerce.quote",
+]);
 
 /**
  * Given org subscription row (or DEMO), return plan entitlements.
@@ -87,10 +106,12 @@ export function entitlementsFromSubscription(
       features: [...pack.features],
       blocked: false,
       blockReasonJa: null,
+      expiredTrial: false,
     };
   }
 
   const blocked = BLOCKED_STATUSES.includes(status);
+  const expiredTrial = status === "expired";
   return {
     plan,
     status,
@@ -99,6 +120,7 @@ export function entitlementsFromSubscription(
     features: [...pack.features],
     blocked,
     blockReasonJa: blocked ? statusBlockMessageJa(status) : null,
+    expiredTrial,
   };
 }
 
@@ -112,7 +134,7 @@ export async function getOrgEntitlements(
 export type EntitlementAction = "hire" | "team";
 
 /**
- * Soft-gate hire/issue and team when status is past_due/canceled/incomplete/unpaid
+ * Soft-gate hire/issue and team when status is past_due/canceled/incomplete/unpaid/expired
  * in production. Demo always passes.
  */
 export async function assertBillingAllows(
@@ -148,4 +170,62 @@ export async function assertBillingAllows(
       { status: 402 }
     ),
   };
+}
+
+export type GatewayGateResult =
+  | { ok: true; entitlements: Entitlements }
+  | { ok: false; code: "expired_trial_gated"; tool: string; entitlements: Entitlements };
+
+/**
+ * Soft-gate confirm-class Gateway tools when trial is expired.
+ * Gated tools: mail.send, comm.reply, calendar.confirm, sns.publish, commerce.*
+ * View + approval poll remain allowed.
+ * Returns ok=true for non-gated tools or non-expired status.
+ */
+export async function assertBillingAllowsGateway(
+  orgId: string | null | undefined,
+  tool: string
+): Promise<GatewayGateResult> {
+  const entitlements = await getOrgEntitlements(orgId);
+
+  if (!entitlements.expiredTrial) {
+    return { ok: true, entitlements };
+  }
+
+  if (!EXPIRED_TRIAL_GATED_TOOLS.has(tool)) {
+    return { ok: true, entitlements };
+  }
+
+  return {
+    ok: false,
+    code: "expired_trial_gated",
+    tool,
+    entitlements,
+  };
+}
+
+/**
+ * Build a 402 response for expired trial gated tools.
+ */
+export function expiredTrialGatedResponse(
+  tool: string,
+  entitlements: Entitlements
+): NextResponse {
+  return NextResponse.json(
+    {
+      ok: false,
+      error: "expired_trial_gated",
+      code: "expired_trial_gated",
+      tool,
+      message: `トライアル期間が終了したため、${tool} はご利用いただけません。プランを選択してお手続きください。`,
+      billingPath: "/app/billing",
+      entitlements: {
+        plan: entitlements.plan,
+        status: entitlements.status,
+        canHire: entitlements.canHire,
+        expiredTrial: entitlements.expiredTrial,
+      },
+    },
+    { status: 402 }
+  );
 }

@@ -442,7 +442,7 @@ create table if not exists subscriptions (
   plan_key text not null default 'business'
     check (plan_key in ('starter', 'business', 'managed')),
   status text not null default 'trialing'
-    check (status in ('trialing', 'active', 'past_due', 'canceled', 'incomplete', 'unpaid')),
+    check (status in ('trialing', 'active', 'past_due', 'canceled', 'incomplete', 'unpaid', 'expired')),
   stripe_subscription_id text,
   stripe_price_id text,
   trial_ends_at timestamptz,

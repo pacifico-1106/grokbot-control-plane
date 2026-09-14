@@ -110,7 +110,7 @@ function deriveStatus(input: {
   lastActivityAt: string | null;
   createdAt: string;
 }): AdminOrganizationStatus {
-  if (["past_due", "unpaid", "incomplete"].includes(input.subscriptionStatus)) {
+  if (["past_due", "unpaid", "incomplete", "expired"].includes(input.subscriptionStatus)) {
     return "attention";
   }
   if (
