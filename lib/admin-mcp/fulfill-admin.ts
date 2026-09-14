@@ -165,7 +165,7 @@ async function fulfillSlackAdapterSetBotToken(
     enabled,
     hasCredentials: saved.hasCredentials,
     botTokenPresent: Boolean(botToken || saved.hasCredentials),
-    authTest: authTest ? { ok: authTest.ok, error: authTest.error ?? null } : null,
+    authTest: authTest ? { ok: authTest.ok, error: authTest.error ?? null } : undefined,
   };
 }
 
