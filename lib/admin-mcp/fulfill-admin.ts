@@ -12,9 +12,15 @@ import {
   updateEmployeePolicy,
   setOrgIngressHandoffPolicy,
   setEmployeeIngressHandoffPolicy,
+  setOrgSchedulingPolicy,
+  setEmployeeSchedulingPolicy,
+  setOrgReplyPolicy,
+  setEmployeeReplyPolicy,
 } from "@/lib/data";
 import { updateApprovalMetadata } from "@/lib/data/approvals";
 import { validateIngressHandoffPolicy } from "@/lib/ingress-handoff/validate";
+import { validateSchedulingPolicy } from "@/lib/scheduling-policy/validate";
+import { validateReplyPolicy } from "@/lib/gateway/reply-policy-validate";
 import { linkAgent } from "@/lib/data/bindings";
 import { upsertOrgChannel, upsertOrgParty } from "@/lib/data/directory";
 import {
@@ -449,6 +455,204 @@ async function fulfillIngressHandoff(
   };
 }
 
+async function fulfillSchedulingPolicy(
+  approval: ApprovalRequest,
+  args: Record<string, unknown>
+): Promise<AdminFulfillment> {
+  const employeeId = typeof args.employeeId === "string" && args.employeeId.trim()
+    ? args.employeeId.trim()
+    : null;
+  const clearOverride = args.clearOverride === true;
+
+  if (clearOverride && employeeId) {
+    await setEmployeeSchedulingPolicy(employeeId, approval.orgId, null);
+    await appendAuditEvent({
+      orgId: approval.orgId,
+      employeeId,
+      credentialId: null,
+      action: "admin.policy",
+      purpose: "admin.policy",
+      summary: `AI社員のスケジューリングポリシーオーバーライドをクリアしました（組織ポリシーを継承）`,
+      metadata: {
+        auditClass: ADMIN_AUDIT_CLASS,
+        approvalId: approval.id,
+        employeeId,
+        cleared: true,
+      },
+    });
+    return {
+      ok: true,
+      tool: "schedulingPolicy.patch",
+      at: new Date().toISOString(),
+      employeeId,
+    };
+  }
+
+  const validation = validateSchedulingPolicy({
+    policyName: args.policyName,
+    rules: args.rules,
+    highRiskConsentAt: args.highRiskConsentAt,
+    highRiskConsentBy: args.highRiskConsentBy,
+  });
+  if (!validation.ok) {
+    throw new Error("invalid_scheduling_policy");
+  }
+
+  const hasHighRiskConsent = Boolean(validation.policy.highRiskConsentAt);
+
+  if (employeeId) {
+    const policy = await setEmployeeSchedulingPolicy(employeeId, approval.orgId, validation.policy);
+    await appendAuditEvent({
+      orgId: approval.orgId,
+      employeeId,
+      credentialId: null,
+      action: "admin.policy",
+      purpose: "admin.policy",
+      summary: `AI社員ごとのスケジューリングポリシーオーバーライドを設定しました（${policy?.rules.length ?? 0}ルール）`,
+      metadata: {
+        auditClass: ADMIN_AUDIT_CLASS,
+        approvalId: approval.id,
+        employeeId,
+        policyId: policy?.policyId,
+        policyName: policy?.policyName,
+        rulesCount: policy?.rules.length ?? 0,
+        highRiskConsentAt: policy?.highRiskConsentAt,
+        highRiskConsentBy: policy?.highRiskConsentBy,
+      },
+    });
+    return {
+      ok: true,
+      tool: "schedulingPolicy.patch",
+      at: new Date().toISOString(),
+      employeeId,
+    };
+  }
+
+  const policy = await setOrgSchedulingPolicy(approval.orgId, validation.policy);
+  const consentNote = hasHighRiskConsent ? "（高リスク承諾あり）" : "";
+  await appendAuditEvent({
+    orgId: approval.orgId,
+    employeeId: null,
+    credentialId: null,
+    action: "admin.policy",
+    purpose: "admin.policy",
+    summary: `組織のスケジューリングポリシーを更新しました（${policy.rules.length}ルール${consentNote}）`,
+    metadata: {
+      auditClass: ADMIN_AUDIT_CLASS,
+      approvalId: approval.id,
+      policyId: policy.policyId,
+      policyName: policy.policyName,
+      rulesCount: policy.rules.length,
+      highRiskConsentAt: policy.highRiskConsentAt,
+      highRiskConsentBy: policy.highRiskConsentBy,
+    },
+  });
+  return {
+    ok: true,
+    tool: "schedulingPolicy.patch",
+    at: new Date().toISOString(),
+  };
+}
+
+async function fulfillReplyPolicy(
+  approval: ApprovalRequest,
+  args: Record<string, unknown>
+): Promise<AdminFulfillment> {
+  const employeeId = typeof args.employeeId === "string" && args.employeeId.trim()
+    ? args.employeeId.trim()
+    : null;
+  const clearOverride = args.clearOverride === true;
+
+  if (clearOverride && employeeId) {
+    await setEmployeeReplyPolicy(employeeId, approval.orgId, null);
+    await appendAuditEvent({
+      orgId: approval.orgId,
+      employeeId,
+      credentialId: null,
+      action: "admin.policy",
+      purpose: "admin.policy",
+      summary: `AI社員の返信ポリシーオーバーライドをクリアしました（組織ポリシーを継承）`,
+      metadata: {
+        auditClass: ADMIN_AUDIT_CLASS,
+        approvalId: approval.id,
+        employeeId,
+        cleared: true,
+      },
+    });
+    return {
+      ok: true,
+      tool: "replyPolicy.patch",
+      at: new Date().toISOString(),
+      employeeId,
+    };
+  }
+
+  const validation = validateReplyPolicy({
+    policyName: args.policyName,
+    rules: args.rules,
+    highRiskConsentAt: args.highRiskConsentAt,
+    highRiskConsentBy: args.highRiskConsentBy,
+  });
+  if (!validation.ok) {
+    throw new Error("invalid_reply_policy");
+  }
+
+  const hasHighRiskConsent = Boolean(validation.policy.highRiskConsentAt);
+
+  if (employeeId) {
+    const policy = await setEmployeeReplyPolicy(employeeId, approval.orgId, validation.policy);
+    await appendAuditEvent({
+      orgId: approval.orgId,
+      employeeId,
+      credentialId: null,
+      action: "admin.policy",
+      purpose: "admin.policy",
+      summary: `AI社員ごとの返信ポリシーオーバーライドを設定しました（${policy?.rules.length ?? 0}ルール）`,
+      metadata: {
+        auditClass: ADMIN_AUDIT_CLASS,
+        approvalId: approval.id,
+        employeeId,
+        policyId: policy?.policyId,
+        policyName: policy?.policyName,
+        rulesCount: policy?.rules.length ?? 0,
+        highRiskConsentAt: policy?.highRiskConsentAt,
+        highRiskConsentBy: policy?.highRiskConsentBy,
+      },
+    });
+    return {
+      ok: true,
+      tool: "replyPolicy.patch",
+      at: new Date().toISOString(),
+      employeeId,
+    };
+  }
+
+  const policy = await setOrgReplyPolicy(approval.orgId, validation.policy);
+  const consentNote = hasHighRiskConsent ? "（高リスク承諾あり）" : "";
+  await appendAuditEvent({
+    orgId: approval.orgId,
+    employeeId: null,
+    credentialId: null,
+    action: "admin.policy",
+    purpose: "admin.policy",
+    summary: `組織の返信ポリシーを更新しました（${policy.rules.length}ルール${consentNote}）`,
+    metadata: {
+      auditClass: ADMIN_AUDIT_CLASS,
+      approvalId: approval.id,
+      policyId: policy.policyId,
+      policyName: policy.policyName,
+      rulesCount: policy.rules.length,
+      highRiskConsentAt: policy.highRiskConsentAt,
+      highRiskConsentBy: policy.highRiskConsentBy,
+    },
+  });
+  return {
+    ok: true,
+    tool: "replyPolicy.patch",
+    at: new Date().toISOString(),
+  };
+}
+
 export async function fulfillApprovedAdmin(
   approval: ApprovalRequest
 ): Promise<AdminFulfillment | null> {
@@ -482,6 +686,12 @@ export async function fulfillApprovedAdmin(
         break;
       case "ingressHandoff.patch":
         fulfillment = await fulfillIngressHandoff(approval, args);
+        break;
+      case "schedulingPolicy.patch":
+        fulfillment = await fulfillSchedulingPolicy(approval, args);
+        break;
+      case "replyPolicy.patch":
+        fulfillment = await fulfillReplyPolicy(approval, args);
         break;
       default:
         fulfillment = { ok: false, tool, at, error: "unknown_admin_tool" };
