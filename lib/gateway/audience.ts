@@ -4,6 +4,10 @@
  * Unknown / missing destination → external (fail-closed).
  * Mixed / shared Slack channel → S1 dual-audience: per-party resolution
  * with internal-facing vs external-facing signals.
+ *
+ * Large/stablo-scale channels: org internal audience rule applies.
+ * Internal = parties allowlist UNION emailDomains UNION slackTeamIds.
+ * Connect guests / unregistered → external (fail-closed).
  */
 
 import {
@@ -11,6 +15,11 @@ import {
   getOrgParty,
   upsertOrgChannel,
 } from "@/lib/data/directory";
+import {
+  getOrgInternalAudienceRule,
+  isEmailDomainInternal,
+  isSlackTeamInternal,
+} from "@/lib/data/internal-audience-rule";
 import { inspectSlackChannelExtShared } from "@/lib/slack/bot-token";
 import type {
   Audience,
@@ -18,6 +27,7 @@ import type {
   ConversationSurface,
   DualAudience,
   GatewayInvokeRequest,
+  OrgInternalAudienceRule,
   OrgPartyKind,
   PartyAudienceSignal,
 } from "@/lib/types";
@@ -140,6 +150,8 @@ export function parseConversationContext(
     str(args.channel);
   const slackUserId =
     str(conv.slackUserId) || str(body.slackUserId) || str(args.slackUserId) || str(args.userId);
+  const slackTeamId =
+    str(conv.slackTeamId) || str(args.slackTeamId) || str(args.teamId);
   const phone = str(conv.phone) || str(body.phone) || str(args.phone);
   const lineId = str(conv.lineId) || str(body.lineId) || str(args.lineId);
   const threadId = resolveConversationThreadId({ conversation: conv, args, body });
@@ -151,6 +163,7 @@ export function parseConversationContext(
     email,
     slackChannelId,
     slackUserId,
+    slackTeamId,
     phone,
     lineId,
   };
@@ -211,6 +224,8 @@ export async function resolveAudience(
   destinationMissing: boolean;
   /** S1: dual-audience resolution for mixed/Connect channels. */
   dualAudience: DualAudience | null;
+  /** Org internal audience rule applied (for stablo-scale channels). */
+  internalAudienceRule?: OrgInternalAudienceRule;
 }> {
   const emptyDual: DualAudience = {
     internalFacing: "external",
@@ -241,6 +256,8 @@ export async function resolveAudience(
       dualAudience: emptyDual,
     };
   }
+
+  const internalAudienceRule = await getOrgInternalAudienceRule(ctx.orgId);
 
   const signals: Audience[] = [];
   const partySignals: PartyAudienceSignal[] = [];
@@ -298,17 +315,50 @@ export async function resolveAudience(
       });
       continue;
     }
+
+    if (item.kind === "slack_user" && ctx.slackTeamId) {
+      if (isSlackTeamInternal(internalAudienceRule, ctx.slackTeamId)) {
+        signals.push("internal");
+        partySignals.push({
+          kind: item.kind,
+          identifier: item.identifier,
+          audience: "internal",
+          resolved: true,
+        });
+        continue;
+      }
+    }
+
     if (item.kind === "mail_address") {
       const domain = emailDomain(item.identifier);
       if (domain) {
         const domainParty = await getOrgParty(ctx.orgId, "email_domain", domain);
-        const aud = domainParty?.audience ?? "unknown";
-        signals.push(aud);
+        if (domainParty) {
+          signals.push(domainParty.audience);
+          partySignals.push({
+            kind: item.kind,
+            identifier: item.identifier,
+            audience: domainParty.audience,
+            resolved: true,
+          });
+          continue;
+        }
+        if (isEmailDomainInternal(internalAudienceRule, item.identifier)) {
+          signals.push("internal");
+          partySignals.push({
+            kind: item.kind,
+            identifier: item.identifier,
+            audience: "internal",
+            resolved: true,
+          });
+          continue;
+        }
+        signals.push("unknown");
         partySignals.push({
           kind: item.kind,
           identifier: item.identifier,
-          audience: aud,
-          resolved: !!domainParty,
+          audience: "unknown",
+          resolved: false,
         });
         continue;
       }
@@ -385,6 +435,7 @@ export async function resolveAudience(
     namedRecipients: conversationHasNamedRecipients(ctx),
     destinationMissing,
     dualAudience,
+    internalAudienceRule,
   };
 }
 

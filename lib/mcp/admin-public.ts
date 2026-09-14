@@ -30,6 +30,8 @@ export const ADMIN_MCP_TOOL_NAMES = [
   "schedulingPolicy.patch",
   "replyPolicy.get",
   "replyPolicy.patch",
+  "internalAudienceRule.get",
+  "internalAudienceRule.patch",
 ] as const;
 
 export type AdminMcpToolName = (typeof ADMIN_MCP_TOOL_NAMES)[number];

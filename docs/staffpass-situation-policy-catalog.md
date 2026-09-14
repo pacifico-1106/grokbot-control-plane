@@ -259,6 +259,16 @@
 - **実装予定**: F1完了後の次パック。型予約のみ、本PRでは実装しない
 - **拡張点**: `lib/gateway/disclosure-policy.ts`（予約）
 
+### F7 内部オーディエンスルール（stablo規模チャネル対応）
+- **ステータス**: ✅ 本番稼働
+- **用途**: 大規模チャネル（#stablo_tokyo307 等）で毎アカウントを parties.upsert で登録するのが破綻する問題を解決
+- **ルール設計**: Internal = parties allowlist UNION emailDomains UNION slackTeamIds
+- **Fail-closed**: Connect ゲスト / 未登録 → external
+- **型**: `OrgInternalAudienceRule` / `lib/data/internal-audience-rule.ts`
+- **Admin MCP ツール**: `internalAudienceRule.get` (read-only) / `internalAudienceRule.patch` (always_human)
+- **スキーマ**: `orgs.internal_audience_rule` (jsonb)
+- **例**: `#stablo_tokyo307` Connect チャネル — 自社Slackチーム `T_STABLO_307` のメンバーは自動で内部扱い、外部ゲストは fail-closed で外部扱い
+
 ---
 
 ## 前進方針（2026-09-08）
