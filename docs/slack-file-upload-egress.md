@@ -6,6 +6,28 @@
 
 `comm.reply` / `comm.send` で Slack スレッドへ PDF などのファイルを添付送信する機能。バイナリデータは LLM コンテキストを経由せず、Gateway が直接 Slack API へアップロードします。
 
+## キックオフ診断: `setup.slackStatus`
+
+Path B（`posting_as: user`）での PDF 添付前に、管理 MCP の **`setup.slackStatus`**（read-only、承認不要）を実行してください。秘密値は返しません。
+
+| 確認項目 | フィールド |
+|----------|-----------|
+| Bot xoxb 登録 | `botTokenPresent`, `authTest`, `adapterEnabled` |
+| Bot `files:write` | `botHasFilesWrite`, `botFilesWriteCode` |
+| 社員 User Token `files:write` | `employees[].fileUploadReady`, `needsReoauthForFilesWrite` |
+| Path B 集計 | `pathBReadiness` |
+| 次の人間アクション | `nextStepJa` |
+
+**canonical 順序**（`nextStepJa` と一致）:
+
+1. Slack API → Bot Token Scopes に `files:write` → Reinstall
+2. ダッシュボード **つながり → チャンネルに書き込む（会社のBot）** で xoxb 登録
+3. Slack API → User Token Scopes に `files:write`
+4. 社員証から Slack Authorize（`/api/slack/oauth/start?employeeId={employeeId}` — 人間がブラウザでタップ）
+5. 任意: `comm.reply` + `fileAttachment` で e2e
+
+詳細 RAIL: [tenant-slack-kickoff-rail.md](./tenant-slack-kickoff-rail.md)
+
 ## Egress ポリシー（P0 制約）
 
 | 条件 | 判定 | 理由 |
@@ -55,7 +77,8 @@
 1. [Slack API Dashboard](https://api.slack.com/apps) → 対象アプリ（`A0BU8TABSV6`）
 2. **OAuth & Permissions** → **User Token Scopes**
 3. `files:write` を追加
-4. **リンク済み社員に re-OAuth を依頼**: 既存の User Token には新スコープが含まれないため、社員が Staffpass ダッシュボードから Slack 再認可を実行し、新しい `xoxp-...` トークンを取得する必要があります
+4. **リンク済み社員に re-OAuth を依頼**: 既存の User Token には新スコープが含まれないため、社員が社員証画面から **Authorize**（`/api/slack/oauth/start?employeeId={employeeId}`）を実行し、新しい User Token を取得する必要があります（人間がブラウザでタップ。サーバーが OAuth しない）
+5. `setup.slackStatus` で `employees[].fileUploadReady === true` を確認
 
 ### 設定手順（Bot Token Scopes）
 
@@ -63,6 +86,8 @@
 2. **OAuth & Permissions** → **Bot Token Scopes**
 3. `files:write` を追加
 4. **Install to Workspace** で再インストール（Public Distribution の場合は全テナントへ再配布）
+5. 新しい xoxb をダッシュボード **つながり → チャンネルに書き込む（会社のBot）** に登録
+6. `setup.slackStatus` で `botHasFilesWrite === true` を確認
 
 ## Gateway invoke body
 
@@ -170,4 +195,4 @@ Slack App 側の `files:write` スコープ追加は、テナント管理者が 
 ## 関連ドキュメント
 
 - [egress-policy.md](./egress-policy.md) — 相手 × 情報区分の出域制御
-- [tenant-slack-kickoff-rail.md](./tenant-slack-kickoff-rail.md) — テナント Slack 設定ガイド
+- [tenant-slack-kickoff-rail.md](./tenant-slack-kickoff-rail.md) — テナント Slack 設定ガイド（`setup.slackStatus` キックオフ診断含む）
