@@ -17,9 +17,15 @@ import {
   setOrgReplyPolicy,
   setEmployeeReplyPolicy,
   upsertConversationAdapter,
+  listNotificationChannels,
+  upsertNotificationChannel,
 } from "@/lib/data";
 import { decryptNotificationSecrets } from "@/lib/notify/crypto";
 import { DASHBOARD_BOT_TOKEN_PATH_JA, slackAuthTest } from "@/lib/slack/slack-status-diagnose";
+import {
+  mapLineApprovalChannelStatus,
+  WEBHOOK_REGISTER_HINT_JA,
+} from "@/lib/line/line-approval-status-diagnose";
 import { updateApprovalMetadata } from "@/lib/data/approvals";
 import { validateIngressHandoffPolicy } from "@/lib/ingress-handoff/validate";
 import { validateSchedulingPolicy } from "@/lib/scheduling-policy/validate";
@@ -32,7 +38,7 @@ import {
   syncSlackImEmployeeRoute,
 } from "@/lib/data/slack-im-routes";
 import { normalizeAllowedAccounts } from "@/lib/employees/allowed-accounts";
-import { normalizeApproverUserIds } from "@/lib/employees/approval-inbox";
+import { normalizeApproverUserIds, parseApprovalChannelId } from "@/lib/employees/approval-inbox";
 import { normalizeToolApprovalDefaults } from "@/lib/employees/approval-presets";
 import { ALL_SCOPES } from "@/lib/employees/policy-draft";
 import { defaultProjectAccess, normalizeProjectAccess } from "@/lib/employees/project-access";
@@ -73,6 +79,8 @@ export type AdminFulfillment = {
   hasCredentials?: boolean;
   botTokenPresent?: boolean;
   authTest?: { ok: boolean; error?: string | null };
+  destinationPresent?: boolean;
+  webhookPath?: string;
 };
 
 const TOOL_NEXTSTEP_JA: Record<string, string> = {
@@ -81,6 +89,12 @@ const TOOL_NEXTSTEP_JA: Record<string, string> = {
   link: "次はコネクタ認証です（OAuthは人がタップ、承認チケットとは別）。Slackの口を設定する場合は setup.slackStatus で現状を診断し、channels.classify で employeeId を指定してください。詳細: docs/tenant-slack-kickoff-rail.md",
   "setup.slackAdapter.setBotToken":
     `Bot token を登録しました。setup.slackStatus で botTokenPresent / authTest / adapterEnabled を確認してください。これは会話投稿アダプタ（「${DASHBOARD_BOT_TOKEN_PATH_JA}」）であり、「承認を受け取る」のSlackではありません。`,
+  "setup.lineApproval.upsert":
+    "承認用 LINE チャネルを登録しました。setup.lineApprovalStatus で webhookUrlTemplate を確認し、LINE Developers に Webhook URL を貼ってください。",
+  "setup.lineApproval.setEmployeeInbox":
+    "AI 社員の承認インボックスを更新しました。setup.lineApprovalStatus の employeeInboxSummary で割り当てを確認してください。",
+  "setup.lineApproval.demoteTelegram":
+    "Telegram 承認チャネルを無効化しました。setup.lineApprovalStatus で telegramApprovalEnabled=false を確認してください。",
 };
 
 const TOOL_NOTICE_JA: Record<string, string> = {
@@ -108,6 +122,28 @@ function resolveQueuedBotToken(args: Record<string, unknown>): string {
   const ciphertext = String(args.botTokenCiphertext || "").trim();
   if (!ciphertext) return "";
   return decryptNotificationSecrets(ciphertext).botToken?.trim() || "";
+}
+
+function resolveQueuedLineSecrets(args: Record<string, unknown>): {
+  channelAccessToken: string;
+  channelSecret: string;
+} {
+  const ciphertext = String(args.secretsCiphertext || "").trim();
+  if (!ciphertext) return { channelAccessToken: "", channelSecret: "" };
+  const decrypted = decryptNotificationSecrets(ciphertext);
+  return {
+    channelAccessToken: decrypted.channelAccessToken?.trim() || "",
+    channelSecret: decrypted.channelSecret?.trim() || "",
+  };
+}
+
+function normalizeAllowedUserIds(raw: unknown): string[] {
+  const list = Array.isArray(raw)
+    ? raw.map(String)
+    : typeof raw === "string"
+      ? raw.split(/[,\s]+/)
+      : [];
+  return [...new Set(list.map((value) => value.trim()).filter(Boolean))].slice(0, 100);
 }
 
 async function fulfillSlackAdapterSetBotToken(
@@ -169,6 +205,204 @@ async function fulfillSlackAdapterSetBotToken(
   };
 }
 
+async function fulfillLineApprovalUpsert(
+  approval: ApprovalRequest,
+  args: Record<string, unknown>
+): Promise<AdminFulfillment> {
+  const enabled = args.enabled !== false;
+  const destinationId = String(args.destinationId || "").trim();
+  const allowedUserIds = normalizeAllowedUserIds(args.allowedUserIds);
+  const label = typeof args.label === "string" ? args.label.trim() : "";
+  const isDefault = args.isDefault === true;
+  const channelId = String(args.channelId || "").trim();
+  const { channelAccessToken, channelSecret } = resolveQueuedLineSecrets(args);
+  const channels = await listNotificationChannels(approval.orgId);
+  const existing = channelId
+    ? channels.find((channel) => channel.id === channelId && channel.provider === "line")
+    : undefined;
+  if (channelId && !existing) throw new Error("line_channel_not_found");
+
+  if (enabled) {
+    if (!destinationId) throw new Error("destination_required");
+    const hasExistingCredentials = Boolean(existing?.hasCredentials);
+    if (!channelAccessToken && !hasExistingCredentials) {
+      throw new Error("line_credentials_incomplete");
+    }
+    if (!channelSecret && !hasExistingCredentials) {
+      throw new Error("line_credentials_incomplete");
+    }
+  }
+
+  const saved = await upsertNotificationChannel({
+    orgId: approval.orgId,
+    ...(existing?.id ? { id: existing.id } : {}),
+    provider: "line",
+    label,
+    enabled,
+    isDefault,
+    config: { destinationId, allowedUserIds },
+    secrets: {
+      ...(channelAccessToken ? { channelAccessToken } : {}),
+      ...(channelSecret ? { channelSecret } : {}),
+    },
+  });
+  const publicChannel = mapLineApprovalChannelStatus(saved);
+
+  await appendAuditEvent({
+    orgId: approval.orgId,
+    employeeId: null,
+    credentialId: null,
+    action: "admin.notificationChannel",
+    purpose: "admin.notificationChannel",
+    summary: `承認用 LINE チャネルを${enabled ? "更新" : "無効化"}（管理MCP・人承認）`,
+    metadata: {
+      auditClass: ADMIN_AUDIT_CLASS,
+      approvalId: approval.id,
+      channelId: saved.id,
+      provider: "line",
+      enabled,
+      destinationPresent: publicChannel.destinationPresent,
+      hasCredentials: saved.hasCredentials,
+    },
+  });
+
+  return {
+    ok: true,
+    tool: "setup.lineApproval.upsert",
+    at: new Date().toISOString(),
+    channelId: saved.id,
+    enabled,
+    destinationPresent: publicChannel.destinationPresent,
+    webhookPath: saved.webhookPath,
+    nextStepJa: TOOL_NEXTSTEP_JA["setup.lineApproval.upsert"],
+    noticeJa: WEBHOOK_REGISTER_HINT_JA,
+  };
+}
+
+async function fulfillLineApprovalSetEmployeeInbox(
+  approval: ApprovalRequest,
+  args: Record<string, unknown>
+): Promise<AdminFulfillment> {
+  const employeeId = String(args.employeeId || "").trim();
+  if (!employeeId) throw new Error("employee_id_required");
+  const employee = await getEmployee(employeeId, approval.orgId);
+  if (!employee) throw new Error("employee_not_found");
+
+  const channels = await listNotificationChannels(approval.orgId);
+  const parsed = parseApprovalChannelId(
+    args.approvalChannelId,
+    channels.filter((channel) => channel.provider === "line").map((channel) => channel.id)
+  );
+  if (!parsed.ok) throw new Error("line_approval_channel_not_found");
+
+  const updated = await updateEmployeePolicy({
+    orgId: approval.orgId,
+    employeeId,
+    scopes: employee.scopes,
+    allowedPurposes: employee.allowedPurposes,
+    approvalPolicy: employee.approvalPolicy,
+    approvalChannelId: parsed.id,
+  });
+  if (!updated) throw new Error("employee_not_found");
+
+  await appendAuditEvent({
+    orgId: approval.orgId,
+    employeeId,
+    credentialId: updated.credentialId,
+    action: "admin.notificationChannel",
+    purpose: "admin.notificationChannel",
+    summary: `${updated.displayName} の承認インボックスを${parsed.id ? "LINE チャネルへ割り当て" : "組織既定へ戻す"}（管理MCP・人承認）`,
+    metadata: {
+      auditClass: ADMIN_AUDIT_CLASS,
+      approvalId: approval.id,
+      approvalChannelId: parsed.id,
+      provider: "line",
+    },
+  });
+
+  return {
+    ok: true,
+    tool: "setup.lineApproval.setEmployeeInbox",
+    at: new Date().toISOString(),
+    employeeId,
+    channelId: parsed.id ?? undefined,
+    nextStepJa: TOOL_NEXTSTEP_JA["setup.lineApproval.setEmployeeInbox"],
+  };
+}
+
+async function fulfillLineApprovalDemoteTelegram(
+  approval: ApprovalRequest,
+  args: Record<string, unknown>
+): Promise<AdminFulfillment> {
+  const mode = args.mode === "clearDefault" ? "clearDefault" : "disable";
+  const channelId = String(args.channelId || "").trim();
+  const channels = await listNotificationChannels(approval.orgId);
+  const lineDefault = channels.find(
+    (channel) => channel.provider === "line" && channel.enabled
+  );
+  let targets = channels.filter((channel) => channel.provider === "telegram" && channel.enabled);
+  if (channelId) {
+    targets = targets.filter((channel) => channel.id === channelId);
+    if (targets.length === 0) throw new Error("telegram_channel_not_found");
+  }
+  if (mode === "clearDefault") {
+    if (!lineDefault) throw new Error("line_default_required");
+    targets = targets.filter((channel) => channel.isDefault);
+  }
+
+  const disabledIds: string[] = [];
+  for (const channel of targets) {
+    await upsertNotificationChannel({
+      orgId: approval.orgId,
+      id: channel.id,
+      provider: "telegram",
+      enabled: false,
+      isDefault: false,
+      config: channel.config,
+    });
+    disabledIds.push(channel.id);
+  }
+
+  if (lineDefault) {
+    await upsertNotificationChannel({
+      orgId: approval.orgId,
+      id: lineDefault.id,
+      provider: "line",
+      enabled: true,
+      isDefault: true,
+      config: lineDefault.config,
+    });
+  }
+
+  await appendAuditEvent({
+    orgId: approval.orgId,
+    employeeId: null,
+    credentialId: null,
+    action: "admin.notificationChannel",
+    purpose: "admin.notificationChannel",
+    summary: `Telegram 承認チャネルを無効化（${disabledIds.length}件・管理MCP・人承認）`,
+    metadata: {
+      auditClass: ADMIN_AUDIT_CLASS,
+      approvalId: approval.id,
+      mode,
+      disabledChannelIds: disabledIds,
+      lineDefaultChannelId: lineDefault?.id ?? null,
+    },
+  });
+
+  return {
+    ok: true,
+    tool: "setup.lineApproval.demoteTelegram",
+    at: new Date().toISOString(),
+    channelId: disabledIds[0],
+    nextStepJa: TOOL_NEXTSTEP_JA["setup.lineApproval.demoteTelegram"],
+    noticeJa:
+      disabledIds.length > 0
+        ? `${disabledIds.length} 件の Telegram 承認チャネルを無効化しました。`
+        : "対象の Telegram 承認チャネルはありませんでした。",
+  };
+}
+
 async function persist(approval: ApprovalRequest, fulfillment: AdminFulfillment): Promise<void> {
   const saved = await updateApprovalMetadata(approval, {
     fulfillment,
@@ -197,6 +431,9 @@ export function parseAdminFulfillment(
     draft: rec.draft,
     nextStepJa: typeof rec.nextStepJa === "string" ? rec.nextStepJa : undefined,
     noticeJa: typeof rec.noticeJa === "string" ? rec.noticeJa : undefined,
+    enabled: typeof rec.enabled === "boolean" ? rec.enabled : undefined,
+    destinationPresent: typeof rec.destinationPresent === "boolean" ? rec.destinationPresent : undefined,
+    webhookPath: typeof rec.webhookPath === "string" ? rec.webhookPath : undefined,
   };
 }
 
@@ -771,6 +1008,15 @@ export async function fulfillApprovedAdmin(
         break;
       case "setup.slackAdapter.setBotToken":
         fulfillment = await fulfillSlackAdapterSetBotToken(approval, args);
+        break;
+      case "setup.lineApproval.upsert":
+        fulfillment = await fulfillLineApprovalUpsert(approval, args);
+        break;
+      case "setup.lineApproval.setEmployeeInbox":
+        fulfillment = await fulfillLineApprovalSetEmployeeInbox(approval, args);
+        break;
+      case "setup.lineApproval.demoteTelegram":
+        fulfillment = await fulfillLineApprovalDemoteTelegram(approval, args);
         break;
       default:
         fulfillment = { ok: false, tool, at, error: "unknown_admin_tool" };

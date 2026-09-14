@@ -26,6 +26,10 @@
     "roles.propose",
     "setup.slackStatus",
     "setup.slackAdapter.setBotToken",
+    "setup.lineApprovalStatus",
+    "setup.lineApproval.upsert",
+    "setup.lineApproval.setEmployeeInbox",
+    "setup.lineApproval.demoteTelegram",
     "ingressHandoff.get",
     "ingressHandoff.patch"
   ],
@@ -39,6 +43,8 @@
     "Most tools are always_human: create an approval ticket; do not mutate until a different human approves.",
     "setup.slackStatus is read-only and does not require approval. Use it to diagnose Slack integration before guiding human setup.",
     "setup.slackAdapter.setBotToken registers the conversation posting adapter Bot token (つながり → チャンネルに書き込む（会社のBot）). always_human. NOT the approval-inbox Slack under 承認を受け取る.",
+    "setup.lineApprovalStatus is read-only and does not require approval. Diagnose LINE approval-inbox channels (承認を受け取る → 承認用LINE) before Space Tree kickoff.",
+    "setup.lineApproval.upsert / setEmployeeInbox / demoteTelegram configure the LINE approval inbox (always_human). NOT conversation LINE (P1) or Slack posting adapter.",
     "Admin cannot grant itself extra scopes or approve its own request.",
     "channels.classify with employeeId installs Slack IM ingress for that employee. Omitting employeeId removes the ingress (fail-closed).",
     "ingressHandoff supports per-employee overrides: include employeeId in get/patch to manage AI社員ごとの設定. Fallback order: employee override → org policy → default. Use clearOverride=true to clear employee override and inherit org policy."

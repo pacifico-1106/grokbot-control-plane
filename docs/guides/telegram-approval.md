@@ -23,6 +23,19 @@ Productionでは `NOTIFICATION_CONFIG_ENCRYPTION_KEY` に32文字以上の安定
 
 Space Tree パイロット（上長承認 OA 化 + 将来 OA 会話窓口）の設計正本: [space-tree-line-oa-design.md](../space-tree-line-oa-design.md)
 
+### Admin MCP（Space Tree キックオフ）
+
+| ツール | 用途 | 承認 |
+|--------|------|------|
+| `setup.lineApprovalStatus` | **LINE 承認インボックス診断（read-only・最初のステップ）** | なし |
+| `setup.lineApproval.upsert` | 承認用 LINE チャネル（token / secret / destinationId）登録 | always_human |
+| `setup.lineApproval.setEmployeeInbox` | AI 社員の承認インボックスを LINE へ割り当て（または組織既定へ戻す） | always_human |
+| `setup.lineApproval.demoteTelegram` | Telegram 承認チャネル無効化（二重送信防止） | always_human |
+
+`setup.lineApprovalStatus` は秘密値を返しません。`nextStepJa` の順序に従って人間作業と always_human ツールを進めてください。承認用 LINE ≠ 会話投稿 LINE（P1）≠ Slack 会話投稿アダプタ（`setup.slackAdapter.setBotToken`）。
+
+### ダッシュボード手順
+
 1. LINE Developersでテナント専用Messaging APIチャネルを作成する。
 2. `/app/settings` に送信先group / room / user ID、channel access token、channel secret、必要なら許可user IDを設定する。
 3. 保存後に表示されるパスへ本番originを付け、LINE DevelopersのWebhook URLへ登録する。

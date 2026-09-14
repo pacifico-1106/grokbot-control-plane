@@ -19,6 +19,9 @@ const TOOL_TITLE_JA: Record<string, string> = {
   "roles.propose": "職務案の提案",
   "ingressHandoff.patch": "受信の渡し方",
   "setup.slackAdapter.setBotToken": "Slack会話投稿Botトークン",
+  "setup.lineApproval.upsert": "承認用LINEチャネル",
+  "setup.lineApproval.setEmployeeInbox": "AI社員の承認インボックス（LINE）",
+  "setup.lineApproval.demoteTelegram": "Telegram承認チャネルの無効化",
 };
 
 export type AdminQueueResult = {
