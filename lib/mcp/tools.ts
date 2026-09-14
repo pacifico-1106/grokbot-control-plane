@@ -106,6 +106,40 @@ export const STAFFPASS_MCP_TOOLS: McpToolDef[] = [
           type: "string",
           description: "summary | source. Calendar busy/free defaults to summary.",
         },
+        fileAttachment: {
+          type: "object",
+          description:
+            "Optional file attachment for comm.reply / comm.send (Slack only). Pass as top-level arg, not inside payload. Internal audience + thread required; external/unknown fail-closed.",
+          properties: {
+            fileRef: {
+              type: "string",
+              description:
+                "File reference: temp store path, signed URL, or publicly accessible URL.",
+            },
+            filename: {
+              type: "string",
+              description: "Original filename with extension (e.g. report.pdf).",
+            },
+            mimeType: {
+              type: "string",
+              description: "MIME type (e.g. application/pdf). Optional but recommended.",
+            },
+            bytes: {
+              type: "number",
+              description: "File size in bytes (for validation / audit). Optional.",
+            },
+            title: {
+              type: "string",
+              description: "Optional title displayed in Slack file preview.",
+            },
+            initialComment: {
+              type: "string",
+              description: "Optional initial comment posted with the file.",
+            },
+          },
+          required: ["fileRef", "filename"],
+          additionalProperties: false,
+        },
       },
       required: ["tool", "purpose", "jobId"],
       additionalProperties: false,
@@ -153,6 +187,39 @@ function toolResult(data: unknown, isError = false) {
     ],
     structuredContent: data,
     isError,
+  };
+}
+
+/**
+ * Resolve fileAttachment from MCP args.
+ * Prefers top-level args.fileAttachment, falls back to payload.fileAttachment.
+ * Validates required fields (fileRef, filename) and returns undefined if invalid.
+ */
+function resolveFileAttachment(
+  args: Record<string, unknown>,
+  payload: Record<string, unknown>
+): GatewayInvokeRequest["fileAttachment"] {
+  const attachment =
+    args.fileAttachment && typeof args.fileAttachment === "object" && !Array.isArray(args.fileAttachment)
+      ? (args.fileAttachment as Record<string, unknown>)
+      : payload.fileAttachment && typeof payload.fileAttachment === "object" && !Array.isArray(payload.fileAttachment)
+        ? (payload.fileAttachment as Record<string, unknown>)
+        : null;
+
+  if (!attachment) return undefined;
+
+  const fileRef = typeof attachment.fileRef === "string" ? attachment.fileRef.trim() : "";
+  const filename = typeof attachment.filename === "string" ? attachment.filename.trim() : "";
+
+  if (!fileRef || !filename) return undefined;
+
+  return {
+    fileRef,
+    filename,
+    mimeType: typeof attachment.mimeType === "string" ? attachment.mimeType.trim() : undefined,
+    bytes: typeof attachment.bytes === "number" && Number.isFinite(attachment.bytes) ? attachment.bytes : undefined,
+    title: typeof attachment.title === "string" ? attachment.title.trim() : undefined,
+    initialComment: typeof attachment.initialComment === "string" ? attachment.initialComment.trim() : undefined,
   };
 }
 
@@ -279,6 +346,7 @@ export async function callStaffpassMcpTool(
         email: typeof args.email === "string" ? args.email : typeof payload.email === "string" ? payload.email : undefined,
         phone: typeof args.phone === "string" ? args.phone : undefined,
         lineId: typeof args.lineId === "string" ? args.lineId : undefined,
+        fileAttachment: resolveFileAttachment(args, payload),
       };
 
       const result = await runGatewayInvoke({
