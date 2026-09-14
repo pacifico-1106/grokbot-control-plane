@@ -3,6 +3,7 @@ import { AppShell } from "@/components/AppShell";
 import { BillingClient } from "@/components/BillingClient";
 import { getSessionContext } from "@/lib/auth/session";
 import { entitlementsFromSubscription } from "@/lib/billing/entitlements";
+import { packDisplayNameFromBackendSku } from "@/lib/billing/packs";
 import { getOrgStripeCustomerId, getSubscription } from "@/lib/data/subscriptions";
 import { describeJpPaymentMethods } from "@/lib/stripe";
 import { isStripeConfigured } from "@/lib/mode";
@@ -13,12 +14,6 @@ const STATUS_LABELS: Record<string, string> = {
   past_due: "お支払い確認中",
   canceled: "解約済み",
   unpaid: "未払い",
-};
-
-const PLAN_LABELS: Record<string, string> = {
-  starter: "スターター",
-  business: "ビジネス",
-  managed: "Managed",
 };
 
 export default async function BillingPage() {
@@ -46,7 +41,7 @@ export default async function BillingPage() {
             {STATUS_LABELS[entitlements.status] ?? entitlements.status}
           </span>
           <span className="font-semibold">
-            {PLAN_LABELS[entitlements.plan] ?? entitlements.plan}
+            {packDisplayNameFromBackendSku(entitlements.plan)}
           </span>
           {sub?.trialEndsAt ? (
             <span className="text-xs faint">

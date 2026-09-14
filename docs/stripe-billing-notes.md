@@ -1,11 +1,15 @@
 # Stripe billing notes（JP SME / Staffpass）
 
 Sealith docs/stripe-billing-strategy.md から trial → Checkout → webhook 同期の考え方のみ参照。
-価格表・R2 原価計算・紹介クレジットは移植しない。
 
-**表示額（税込・仮決め）は `lib/billing/plans.ts` · `lib/billing/skus.ts` / UI / `docs/pricing-model.md` · `docs/pricing-sku-catalog.md`。**
-**Dashboard Price 金額＝税込表示額**（円数字は据え置き。×1.1 しない）。**Checkout 実課金は Stripe Dashboard の Price ID（env）が正。** コードに fake `price_…` を書かない。
-Stripe Tax を使う場合は **tax behavior を inclusive（内税）推奨**。トライアルは従来どおり **アプリ側**（`TRIAL_DAYS` / Checkout `trial_period_days`）。
+## 二層価格体系（Yasaka, 2026-09-13）
+
+- **顧客向け:** AI社員 Lite / Standard / Kickoff / Care（`lib/billing/packs.ts`）
+- **バックエンド:** starter / business / managed SKU（`lib/billing/plans.ts`）— 顧客に表示しない
+
+**顧客向け表示額は税抜。** Stripe Dashboard Prices（env）が正。
+コードに fake `price_…` を書かない。
+Stripe Tax を使う場合は適切な tax behavior 設定。トライアルは従来どおり **アプリ側**（`TRIAL_DAYS` / Checkout `trial_period_days`）。
 
 ## フロー
 
@@ -39,15 +43,21 @@ DEMO（Supabase `replace_me_*`）では常に許可。メッセージは日本�
 - **card** — 常時 Checkout に含める
 - **customer_balance** — 日本の銀行振込・請求書寄り。Dashboard 有効化後に `STRIPE_ENABLE_CUSTOMER_BALANCE=1`
 
-## プラン表示（税込・仮決め／事業確定前）
+## 顧客向けパック（税抜, 2026-09-13）
 
-| planKey | 表示名 | 月額（表示） | 仮枠 | 超過（表示） | 導入 |
-|---------|--------|--------------|------|--------------|------|
-| starter | スターター | ¥12,000 | 50 | ¥80/件 | — |
-| business | ビジネス | ¥39,800 | 500 | ¥40/件 | ¥150,000 一式 |
-| managed | Managed（Care） | ¥128,000 | 2000 | ¥25/件 | 月額に含む |
+| パック | 月額（税抜） | バックエンドSKU |
+|--------|-------------|----------------|
+| AI社員 Lite | ¥98,000 | `business` |
+| AI社員 Standard | ¥198,000 | `managed` |
 
-詳細は `docs/pricing-model.md` · `docs/pricing-sku-catalog.md`。超過の **Metered Price 配線は P0.5 スタブ**（未実装）。
+| オプション | 価格（税抜） | 請求 |
+|-----------|-------------|------|
+| 導入（キックオフ） | ¥300,000 | 一式 |
+| Care | +¥80,000 | 月額 |
+
+**注意:** バックエンドSKU名（Starter/Business/Managed）は顧客に表示しない。
+
+詳細は `docs/pricing-model.md` · `docs/pricing-sku-catalog.md`。
 
 ## 必要な env
 
@@ -56,8 +66,8 @@ DEMO（Supabase `replace_me_*`）では常に許可。メッセージは日本�
 - `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY`
 - `STRIPE_PRICE_ID_STARTER` / `STRIPE_PRICE_ID_BUSINESS` / `STRIPE_PRICE_ID_MANAGED`
 - `STRIPE_PRICE_ID_BUSINESS_ONBOARDING`（任意・business 一式 one-time）
-- `STRIPE_PRICE_ID_KICKOFF_PACK`（任意・キックオフ一式 ¥398,000・透明3行はカタログ）
-- `STRIPE_PRICE_ID_SUBSIDY_2Y_BUSINESS` / `_SUBSIDY_2Y_MANAGED` / `_YEAR3_EXTENSION`（プレースホルダ・保証表現禁止）
+- `STRIPE_PRICE_ID_KICKOFF_PACK`（任意・キックオフ一式 ¥300,000）
+- `STRIPE_PRICE_ID_SUBSIDY_2Y_BUSINESS` / `_SUBSIDY_2Y_MANAGED` / `_YEAR3_EXTENSION`（内部プレースホルダ・顧客UIから削除済み）
 - `STRIPE_ENABLE_CUSTOMER_BALANCE`（任意・`1` で Checkout に振込系を追加）
 - `BILLING_NOTIFY_EMAIL`（webhook 通知先）
 - `TRIAL_DAYS` / `NEXT_PUBLIC_APP_URL`
@@ -85,8 +95,8 @@ DEMO（Supabase `replace_me_*`）では常に許可。メッセージは日本�
 3. **Product: Staffpass Managed (Care)**
    - Recurring Price: ¥128,000 / month → `STRIPE_PRICE_ID_MANAGED`
    - 導入は月額に含む（別 Price 不要）
-4. **Kickoff Pack（任意）** — One-time ¥398,000 → `STRIPE_PRICE_ID_KICKOFF_PACK`。 透明3行・Grok Pro+/Teams パススルー・**Business 初月を含めない**。 詳細 `docs/pricing-sku-catalog.md`。Checkout 自動追加は未配線（表示のみ可）。
-5. **補助金プレースホルダ** — 金額確定後に Product/Price → `STRIPE_PRICE_ID_SUBSIDY_2Y_BUSINESS` / `_SUBSIDY_2Y_MANAGED` / `_YEAR3_EXTENSION`。 UI は「準備中／保証しない」のみ。
+4. **Kickoff Pack（任意）** — One-time ¥300,000 → `STRIPE_PRICE_ID_KICKOFF_PACK`。 パック初月を含めない。 詳細 `docs/pricing-sku-catalog.md`。
+5. **補助金プレースホルダ** — 顧客UIから削除済み。内部プレースホルダのみ。
 6. **Overage（P0.5・後続）** — Metered Price（starter ¥80 / business ¥40 / managed ¥25 per `gated_confirm_action`）。Usage Records 配線は未実装。作成しても env 未接続でよい。
 7. **Webhook** — `https://<domain>/api/webhooks/stripe`  
    推奨イベント: `customer.subscription.created|updated|deleted`, `invoice.paid`, `invoice.payment_failed`, `customer.subscription.trial_will_end`, `checkout.session.completed`
