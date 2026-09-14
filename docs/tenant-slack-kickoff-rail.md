@@ -39,7 +39,7 @@ Staffpass は2つの Slack DM パスをサポートします：
 | **Events** | **Subscribe to events on behalf of users**: `message.im` |
 | **posting_as** | `user` |
 | **Token** | User Token (`xoxp-...`) — 社員が Slack 再 OAuth で取得 |
-| **User Token Scopes** | `im:history` |
+| **User Token Scopes** | `im:history`, `files:write` |
 | **受口** | `channels.classify` + `employeeId` で IM route 登録 |
 
 **重要**: Bot は人↔人 DM に参加できないため、パス B では User Token と `posting_as: user` が必須。
@@ -171,8 +171,11 @@ Slack API サイトで Staffpass Slack アプリを設定します。
 1. **Features → OAuth & Permissions**
 2. **User Token Scopes** に追加:
    - `im:history` - DM履歴の読み取り（User Token イベント受信に必須）
+   - `files:write` - ファイルアップロード（Path B での PDF 添付等に必須）
 
-**重要**: User Token Scopes を追加後、社員が Slack で再 OAuth を行う必要があります。これにより `xoxp-...` トークンが取得され、人↔人 DM イベントを受信できます。
+**重要**: User Token Scopes を追加後、社員が Slack で再 OAuth を行う必要があります。これにより `xoxp-...` トークンが取得され、人↔人 DM イベント受信およびファイルアップロードが可能になります。
+
+> **Path B ファイルアップロード**: Bot Token の `files:write` では不十分です。人↔人 DM（例: `D0BSWG1804F`）への添付は User Token で `files.getUploadURLExternal` を呼ぶため、**User Token にも `files:write` が必要**です。
 
 #### 1-5. App Home Messages Tab 有効化（パス A）
 
@@ -319,7 +322,7 @@ App DM（Staffpassアプリへの直接DM）への返信には `posting_as: bot`
 | 確認項目 | 期待値 | 症状 |
 |----------|--------|------|
 | Bot Token Scopes | `im:history`, `chat:write`, `im:write` | `missing_scope` |
-| User Token Scopes（パス B） | `im:history` | `missing_scope` |
+| User Token Scopes（パス B） | `im:history`, `files:write` | `missing_scope` |
 | アプリ再インストール | スコープ変更後に実施 | スコープが反映されない |
 | Bot Token 登録 | ダッシュボードまたは env | `invalid_auth` |
 | posting_as（パスA App DM） | `bot` | Bot DM に返信できない |
@@ -783,7 +786,7 @@ Staffpass Slack アプリは **Public Distribution Activated** ですが、App D
 ### パス B: 人↔人 DM（User Token Events） — 本番稼働中
 
 11. **Subscribe to events on behalf of users: `message.im`** - Bot events とは別セクション。Bot events だけでは User Token イベントは届かない
-12. **User Token Scopes: `im:history`** - 社員が Slack 再 OAuth で取得する User Token に必要
+12. **User Token Scopes: `im:history`, `files:write`** - 社員が Slack 再 OAuth で取得する User Token に必要（`files:write` は Path B ファイルアップロードに必須）
 13. **社員 Slack 再 OAuth** - User Token Scopes 追加後、社員が OAuth フローを再実行して `xoxp-...` を取得
 14. **posting_as: user** - Bot は人↔人 DM に参加できない。User Token での投稿が必須
 
