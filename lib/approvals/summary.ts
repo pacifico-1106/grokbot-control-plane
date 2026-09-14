@@ -199,6 +199,20 @@ export function buildApprovalArtifact(
 
 export function formatArtifactLines(artifact: ApprovalArtifact): string[] {
   const lines: string[] = [];
+
+  // mail.send: put to/subject/body first for judgment material visibility
+  if (artifact.tool === "mail.send" || artifact.tool === "mail.draft") {
+    if (artifact.to) lines.push(`宛先: ${artifact.to}`);
+    if (artifact.subject) lines.push(`件名: ${artifact.subject}`);
+    if (artifact.body) {
+      const preview = artifact.body.length > 200
+        ? artifact.body.slice(0, 200) + "…"
+        : artifact.body;
+      lines.push(`本文先頭: ${preview}`);
+    }
+    return lines;
+  }
+
   if (artifact.channelId) {
     const name = artifact.channelName ? `（${artifact.channelName}）` : "";
     lines.push(`チャネル: ${artifact.channelId}${name}`);

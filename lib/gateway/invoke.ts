@@ -84,6 +84,71 @@ function jsonResult(
 }
 
 /**
+ * Validate mail.send required fields for approval judgment material.
+ * Fail-closed: missing to/subject/body → 400 (not needs_approval).
+ */
+function validateMailSendArtifact(body: GatewayInvokeRequest): {
+  ok: true;
+  to: string;
+  subject: string;
+  bodyText: string;
+  from?: string;
+} | {
+  ok: false;
+  missing: string[];
+  code: string;
+  messageJa: string;
+} {
+  const args = body.args && typeof body.args === "object"
+    ? (body.args as Record<string, unknown>)
+    : {};
+
+  const to = (
+    typeof args.to === "string" ? args.to :
+    typeof args.recipient === "string" ? args.recipient :
+    typeof args.email === "string" ? args.email :
+    typeof body.email === "string" ? body.email :
+    body.conversation?.email ?? ""
+  ).trim();
+
+  const subject = (
+    typeof args.subject === "string" ? args.subject :
+    typeof args.title === "string" ? args.title :
+    ""
+  ).trim();
+
+  const bodyText = (
+    typeof args.body === "string" ? args.body :
+    typeof args.text === "string" ? args.text :
+    typeof args.message === "string" ? args.message :
+    typeof args.content === "string" ? args.content :
+    ""
+  ).trim();
+
+  const from = (
+    typeof args.from === "string" ? args.from :
+    typeof args.sender === "string" ? args.sender :
+    ""
+  ).trim() || undefined;
+
+  const missing: string[] = [];
+  if (!to) missing.push("to");
+  if (!subject) missing.push("subject");
+  if (!bodyText) missing.push("body");
+
+  if (missing.length > 0) {
+    return {
+      ok: false,
+      missing,
+      code: "mail_send_missing_fields",
+      messageJa: `メール送信には宛先・件名・本文が必須です。不足: ${missing.join(", ")}`,
+    };
+  }
+
+  return { ok: true, to, subject, bodyText, from };
+}
+
+/**
  * S2: Evaluate invoke egress with dual-audience support.
  * Returns both the effective verdict (external-safe for behavior) and
  * the dual verdict (for audit when channelMixed).
@@ -897,6 +962,42 @@ export async function runGatewayInvoke(
     employee.approvalPolicy === "always_human" ||
     actionLimit.decision === "needs_approval" ||
     spend?.decision === "needs_approval";
+
+  // mail.send fail-closed: require to/subject/body for judgment material
+  if (tool === "mail.send" && forceApproval && !priorApprovalOk) {
+    const mailValidation = validateMailSendArtifact(body);
+    if (!mailValidation.ok) {
+      await appendAuditEvent({
+        orgId: orgId || employee.orgId,
+        employeeId,
+        credentialId: input.credentialId || employee.credentialId,
+        action: "tool.invoke",
+        purpose,
+        summary: `${tool} を判断材料不足で拒否（fail-closed）`,
+        metadata: {
+          tool,
+          jobId,
+          code: mailValidation.code,
+          missing: mailValidation.missing,
+        },
+      });
+      return jsonResult(
+        {
+          ok: false,
+          code: mailValidation.code,
+          error: mailValidation.code,
+          message: mailValidation.messageJa,
+          missing: mailValidation.missing,
+          needs_approval: false,
+          employeeId,
+          tool,
+          purpose,
+          jobId,
+        },
+        400
+      );
+    }
+  }
 
   if (
     forceApproval &&

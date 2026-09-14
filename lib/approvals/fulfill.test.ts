@@ -516,3 +516,110 @@ describe("sns.publish fulfill-on-approve", () => {
     expect(parseFulfillment(stored?.metadata)).toBeNull();
   });
 });
+
+describe("mail.send artifact fail-closed + stub fulfillment", () => {
+  test("mail.send without to/subject/body returns 400 (fail-closed)", async () => {
+    const jobId = `job_mail_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    const result = await runGatewayInvoke({
+      employeeId: "emp_sales",
+      credentialId: "cred_sales",
+      body: {
+        tool: "mail.send",
+        purpose: "sales.outreach",
+        jobId,
+        args: {
+          // Missing to, subject, body
+        },
+      },
+    });
+    expect(result.httpStatus).toBe(400);
+    expect(result.body.code).toBe("mail_send_missing_fields");
+    expect(result.body.needs_approval).toBe(false);
+    expect(result.body.missing).toContain("to");
+    expect(result.body.missing).toContain("subject");
+    expect(result.body.missing).toContain("body");
+  });
+
+  test("mail.send with only to returns 400", async () => {
+    const jobId = `job_mail_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    const result = await runGatewayInvoke({
+      employeeId: "emp_sales",
+      credentialId: "cred_sales",
+      body: {
+        tool: "mail.send",
+        purpose: "sales.outreach",
+        jobId,
+        args: {
+          to: "test@example.com",
+        },
+      },
+    });
+    expect(result.httpStatus).toBe(400);
+    expect(result.body.missing).toContain("subject");
+    expect(result.body.missing).toContain("body");
+    expect(result.body.missing).not.toContain("to");
+  });
+
+  test("mail.send with all fields queues needs_approval and stores artifact", async () => {
+    const jobId = `job_mail_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    const result = await runGatewayInvoke({
+      employeeId: "emp_sales",
+      credentialId: "cred_sales",
+      body: {
+        tool: "mail.send",
+        purpose: "sales.outreach",
+        jobId,
+        args: {
+          to: "recipient@example.com",
+          subject: "テスト件名",
+          body: "テスト本文です。",
+        },
+      },
+    });
+    expect(result.httpStatus).toBe(402);
+    expect(result.body.needs_approval).toBe(true);
+    const approvalId = String(result.body.approvalId || "");
+    const stored = await getApprovalById(approvalId, DEMO_ORG.id);
+    expect(stored).toBeTruthy();
+    const artifact = stored?.metadata?.artifact as Record<string, unknown> | undefined;
+    expect(artifact?.to).toBe("recipient@example.com");
+    expect(artifact?.subject).toBe("テスト件名");
+    expect(artifact?.body).toBe("テスト本文です。");
+    const summary = String(stored?.summary || "");
+    expect(summary).toContain("宛先: recipient@example.com");
+    expect(summary).toContain("件名: テスト件名");
+    expect(summary).toContain("本文先頭:");
+  });
+
+  test("mail.send approved returns stub fulfillment", async () => {
+    const jobId = `job_mail_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    const queued = await runGatewayInvoke({
+      employeeId: "emp_sales",
+      credentialId: "cred_sales",
+      body: {
+        tool: "mail.send",
+        purpose: "sales.outreach",
+        jobId,
+        args: {
+          to: "recipient@example.com",
+          subject: "承認テスト",
+          body: "承認後のスタブテスト。",
+        },
+      },
+    });
+    expect(queued.httpStatus).toBe(402);
+    const approvalId = String(queued.body.approvalId || "");
+    const approved = await resolveApproval(
+      approvalId,
+      "approved",
+      "ando@example.com",
+      DEMO_ORG.id
+    );
+    expect(approved?.status).toBe("approved");
+    const fulfillment = await fulfillApprovedInvoke(approved!);
+    expect(fulfillment?.ok).toBe(true);
+    expect(fulfillment?.delivery).toBe("stub");
+    const stored = await getApprovalById(approvalId, DEMO_ORG.id);
+    expect(parseFulfillment(stored?.metadata)?.delivery).toBe("stub");
+  });
+});

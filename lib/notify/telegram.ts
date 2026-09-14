@@ -63,26 +63,75 @@ function safeArtifactUrl(approval: ApprovalRequest): string | null {
 const TELEGRAM_MESSAGE_MAX = 4096;
 const TELEGRAM_OVERFLOW_SUFFIX = "…(続きはダッシュボード)";
 
+type ApprovalArtifact = {
+  tool?: string;
+  to?: string;
+  subject?: string;
+  body?: string;
+};
+
+function extractMailArtifact(approval: ApprovalRequest): ApprovalArtifact | null {
+  const artifact = approval.metadata?.artifact;
+  if (!artifact || typeof artifact !== "object" || Array.isArray(artifact)) {
+    return null;
+  }
+  const rec = artifact as Record<string, unknown>;
+  if (rec.tool !== "mail.send" && rec.tool !== "mail.draft") {
+    return null;
+  }
+  return {
+    tool: String(rec.tool),
+    to: typeof rec.to === "string" ? rec.to : undefined,
+    subject: typeof rec.subject === "string" ? rec.subject : undefined,
+    body: typeof rec.body === "string" ? rec.body : undefined,
+  };
+}
+
 function composeApprovalTelegramMessage(
   approval: ApprovalRequest,
   employee: Employee | null,
   summary: string
 ): string {
   const artifactUrl = safeArtifactUrl(approval);
+  const mailArtifact = extractMailArtifact(approval);
+
   const lines = [
     `🟡 <b>承認依頼 #${escapeTelegramHtml(approval.id.slice(0, 8))}</b>  [risk: ${escapeTelegramHtml(approval.risk)}]`,
     `社員: ${escapeTelegramHtml(employee?.displayName || approval.employeeId)}`,
     `ツール: <code>${escapeTelegramHtml(approval.tool || "unknown")}</code>`,
     `目的: ${escapeTelegramHtml(approval.purpose)}`,
-    "─",
-    escapeTelegramHtml(summary),
-    "─",
+  ];
+
+  // mail.send: put 宛先/件名/本文先頭 first for judgment material
+  if (mailArtifact) {
+    lines.push("─");
+    if (mailArtifact.to) {
+      lines.push(`宛先: ${escapeTelegramHtml(mailArtifact.to)}`);
+    }
+    if (mailArtifact.subject) {
+      lines.push(`件名: ${escapeTelegramHtml(mailArtifact.subject)}`);
+    }
+    if (mailArtifact.body) {
+      const preview = mailArtifact.body.length > 200
+        ? mailArtifact.body.slice(0, 200) + "…"
+        : mailArtifact.body;
+      lines.push(`本文先頭: ${escapeTelegramHtml(preview)}`);
+    }
+    lines.push("─");
+  } else {
+    lines.push("─");
+    lines.push(escapeTelegramHtml(summary));
+    lines.push("─");
+  }
+
+  lines.push(
     `job: <code>${escapeTelegramHtml(approval.jobId || "-")}</code>${
       approval.revisionCount > 0
         ? `   再提出: ${approval.revisionCount + 1}回目`
         : ""
-    }`,
-  ];
+    }`
+  );
+
   if (artifactUrl) {
     lines.push(
       `成果物: <a href="${escapeTelegramHtml(artifactUrl)}">確認する</a>`

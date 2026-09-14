@@ -20,7 +20,7 @@ import {
   publishSnsPost,
   type SnsPublishResult,
 } from "@/lib/gateway/adapters/sns";
-import { isAudienceGatedTool, isSnsPublishTool } from "@/lib/gateway/tools";
+import { isAudienceGatedTool, isSnsPublishTool, isConfirmClassTool, GATEWAY_TOOL_DEFS } from "@/lib/gateway/tools";
 import { fulfillApprovedAdmin } from "@/lib/admin-mcp/fulfill-admin";
 import type {
   ApprovalRequest,
@@ -430,6 +430,66 @@ async function fulfillSnsPublish(
 }
 
 /**
+ * mail.send fulfill-on-approve: honest stub fulfillment with audit.
+ * Live mail send is not yet implemented — record stub, never pretend real send.
+ */
+async function fulfillMailSend(
+  approval: ApprovalRequest,
+  snapshot: InvokeSnapshot
+): Promise<ApprovalFulfillment> {
+  const at = new Date().toISOString();
+  const args = snapshot.args;
+
+  const to = (
+    typeof args.to === "string" ? args.to :
+    typeof args.recipient === "string" ? args.recipient :
+    typeof args.email === "string" ? args.email :
+    snapshot.conversation?.email ?? ""
+  );
+
+  const subject = (
+    typeof args.subject === "string" ? args.subject :
+    typeof args.title === "string" ? args.title :
+    ""
+  );
+
+  // Record honest stub fulfillment — live mail send is not implemented
+  const fulfillment: ApprovalFulfillment = {
+    ok: true,
+    delivery: "stub",
+    at,
+  };
+
+  await persistFulfillment(approval, fulfillment);
+
+  // Audit: record the approved mail.send with stub fulfillment
+  await appendAuditEvent({
+    orgId: approval.orgId,
+    employeeId: approval.employeeId,
+    credentialId: approval.credentialId,
+    action: "tool.invoke",
+    purpose: approval.purpose,
+    summary: "承認済みメール送信（スタブ実行・ライブ送信は未実装）",
+    metadata: {
+      approvalId: approval.id,
+      tool: snapshot.tool,
+      jobId: snapshot.jobId,
+      delivery: "stub",
+      to,
+      subject,
+      phase: "approval.fulfill",
+      noteJa: "mail.send のライブ送信は未実装。承認後の記録のみ。",
+    },
+  }).catch(() => undefined);
+
+  return fulfillment;
+}
+
+function isMailSendTool(tool: string): boolean {
+  return tool === "mail.send";
+}
+
+/**
  * After resolveApproval(approved): post the snapshotted Slack/etc. message.
  * Never throws — the human already said yes; failures are recorded on metadata.
  */
@@ -447,6 +507,11 @@ export async function fulfillApprovedInvoke(
 
     if (isSnsPublishTool(snapshot.tool || approval.tool || "")) {
       return fulfillSnsPublish(approval, snapshot);
+    }
+
+    // mail.send: honest stub fulfillment (live send not yet implemented)
+    if (isMailSendTool(snapshot.tool || approval.tool || "")) {
+      return fulfillMailSend(approval, snapshot);
     }
 
     if (!isAudienceGatedTool(snapshot.tool || approval.tool || "")) {
