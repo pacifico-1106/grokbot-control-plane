@@ -164,7 +164,7 @@ async function uploadToSlackUrl(
       headers: {
         "content-type": mimeType,
       },
-      body: fileBuffer,
+      body: new Uint8Array(fileBuffer),
       signal: AbortSignal.timeout(SLACK_TIMEOUT_MS),
     });
     if (!response.ok) {
@@ -401,7 +401,7 @@ export function buildFileUploadAuditPayload(
     mimeType?: string;
     fileRef?: string;
   }
-): SlackFileUploadAuditPayload {
+): Record<string, unknown> {
   return {
     jobId: extra.jobId,
     channel: result.channel,

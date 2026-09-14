@@ -915,7 +915,7 @@ describe("Gateway audience egress", () => {
       expect(result.body.ok).toBe(true);
       expect(fileUploadCalled).toBe(false);
       const resultObj = result.body.result as { fileUpload?: unknown } | undefined;
-      expect(resultObj?.fileUpload).toBeUndefined();
+      expect(resultObj?.fileUpload).toBe(undefined);
     } finally {
       globalThis.fetch = originalFetch;
       await upsertConversationAdapter({

@@ -1122,7 +1122,7 @@ export async function runGatewayInvoke(
           channel: dest,
         },
       });
-    } else if (dest && looksLikeSlackTs(replyThreadTs)) {
+    } else if (dest && replyThreadTs && looksLikeSlackTs(replyThreadTs)) {
       const uploaded = await uploadSlackFile({
         orgId: orgId || employee.orgId,
         channel: dest,
