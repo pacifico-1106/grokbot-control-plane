@@ -422,6 +422,23 @@ export interface GatewayInvokeRequest {
   lineId?: string;
   informationClass?: InformationClass;
   disclosure?: DisclosureFidelity;
+  /**
+   * Optional file attachment for comm.reply / comm.send.
+   * Binary is never in LLM context — use fileRef (temp store / signed URL) or gateway-held key.
+   * Egress P0: internal only, thread required. External/mixed audiences fail-closed for file body.
+   */
+  fileAttachment?: {
+    /** File reference: temp store path, signed URL, or gateway-held base64 key */
+    fileRef: string;
+    filename: string;
+    mimeType?: string;
+    /** File size in bytes (for validation / audit) */
+    bytes?: number;
+    /** Optional title displayed in Slack */
+    title?: string;
+    /** Optional initial comment posted with the file */
+    initialComment?: string;
+  };
 }
 
 export type AuditAction =
@@ -437,6 +454,9 @@ export type AuditAction =
   | "notification.delivery_failed"
   | "conversation.adapter_updated"
   | "slack.post_failed"
+  | "slack.file_uploaded"
+  | "slack.file_upload_failed"
+  | "slack.file_egress_denied"
   | "sns.publish_failed"
   | "slack.mention_wake"
   | "slack.internal_im_wake"

@@ -721,4 +721,210 @@ describe("Gateway audience egress", () => {
     }
   });
 
+  test("comm.reply with file attachment to internal thread uploads file", async () => {
+    await upsertConversationAdapter({
+      orgId: DEMO_ORG.id,
+      surface: "slack",
+      enabled: true,
+      secrets: { botToken: "xoxb-file-test" },
+    });
+    const originalFetch = globalThis.fetch;
+    const apiCalls: Array<{ url: string; body?: unknown }> = [];
+    try {
+      globalThis.fetch = (async (input, _init) => {
+        const url = String(input);
+        apiCalls.push({ url });
+
+        if (url.includes("chat.postMessage")) {
+          return Response.json({
+            ok: true,
+            channel: "C_INTERNAL",
+            ts: "1787960001.111111",
+          });
+        }
+        if (url.includes("files.getUploadURLExternal")) {
+          return Response.json({
+            ok: true,
+            upload_url: "https://files.slack.com/upload/v1/ABC123",
+            file_id: "F0123456789",
+          });
+        }
+        if (url.includes("files.slack.com/upload")) {
+          return new Response(null, { status: 200 });
+        }
+        if (url.includes("files.completeUploadExternal")) {
+          return Response.json({
+            ok: true,
+            files: [{ id: "F0123456789", timestamp: "1787960002.222222" }],
+          });
+        }
+        return Response.json({ ok: false, error: "unknown_endpoint" });
+      }) as typeof fetch;
+
+      const result = await runGatewayInvoke({
+        employeeId: "emp_comm",
+        credentialId: "cred_comm",
+        body: {
+          tool: "comm.reply",
+          purpose: "comm.internal",
+          jobId: `job_file_internal_${Date.now()}`,
+          conversation: {
+            surface: "slack",
+            orgId: DEMO_ORG.id,
+            slackChannelId: "C_INTERNAL",
+            threadId: "1787960001.111111",
+          },
+          args: {
+            slackChannelId: "C_INTERNAL",
+            text: "レポートを添付しました。",
+            threadId: "1787960001.111111",
+          },
+          fileAttachment: {
+            fileRef: "https://example.com/report.pdf",
+            filename: "report.pdf",
+            mimeType: "application/pdf",
+            title: "月次レポート",
+          },
+        },
+      });
+
+      expect(result.body.ok).toBe(true);
+      const resultObj = result.body.result as { fileUpload?: { ok: boolean; fileId?: string } } | undefined;
+      expect(resultObj?.fileUpload?.ok).toBe(true);
+      expect(resultObj?.fileUpload?.fileId).toBe("F0123456789");
+      expect(apiCalls.some((c) => c.url.includes("files.getUploadURLExternal"))).toBe(true);
+      expect(apiCalls.some((c) => c.url.includes("files.completeUploadExternal"))).toBe(true);
+    } finally {
+      globalThis.fetch = originalFetch;
+      await upsertConversationAdapter({
+        orgId: DEMO_ORG.id,
+        surface: "slack",
+        enabled: false,
+        secrets: {},
+      });
+    }
+  });
+
+  test("comm.reply with file attachment to external channel does not upload file (egress denied)", async () => {
+    await upsertConversationAdapter({
+      orgId: DEMO_ORG.id,
+      surface: "slack",
+      enabled: true,
+      secrets: { botToken: "xoxb-file-test" },
+    });
+    const originalFetch = globalThis.fetch;
+    let fileUploadCalled = false;
+    try {
+      globalThis.fetch = (async (input) => {
+        const url = String(input);
+        if (url.includes("files.getUploadURLExternal")) {
+          fileUploadCalled = true;
+        }
+        return Response.json({ ok: false, error: "egress_denied" });
+      }) as typeof fetch;
+
+      const result = await runGatewayInvoke({
+        employeeId: "emp_comm",
+        credentialId: "cred_comm",
+        body: {
+          tool: "comm.reply",
+          purpose: "comm.internal",
+          jobId: `job_file_external_${Date.now()}`,
+          conversation: {
+            surface: "slack",
+            orgId: DEMO_ORG.id,
+            slackChannelId: "C_SHARED",
+            threadId: "1787960001.111111",
+          },
+          args: {
+            slackChannelId: "C_SHARED",
+            text: "レポート添付",
+            threadId: "1787960001.111111",
+          },
+          fileAttachment: {
+            fileRef: "https://example.com/report.pdf",
+            filename: "report.pdf",
+            mimeType: "application/pdf",
+          },
+        },
+      });
+
+      expect(result.httpStatus).toBe(403);
+      expect(result.body.code).toBe("egress_denied");
+      expect(fileUploadCalled).toBe(false);
+    } finally {
+      globalThis.fetch = originalFetch;
+      await upsertConversationAdapter({
+        orgId: DEMO_ORG.id,
+        surface: "slack",
+        enabled: false,
+        secrets: {},
+      });
+    }
+  });
+
+  test("comm.reply with file attachment but no thread_ts does not upload file", async () => {
+    await upsertConversationAdapter({
+      orgId: DEMO_ORG.id,
+      surface: "slack",
+      enabled: true,
+      secrets: { botToken: "xoxb-file-test" },
+    });
+    const originalFetch = globalThis.fetch;
+    let fileUploadCalled = false;
+    try {
+      globalThis.fetch = (async (input) => {
+        const url = String(input);
+        if (url.includes("files.getUploadURLExternal")) {
+          fileUploadCalled = true;
+        }
+        if (url.includes("chat.postMessage")) {
+          return Response.json({
+            ok: true,
+            channel: "C_INTERNAL",
+            ts: "1787960001.111111",
+          });
+        }
+        return Response.json({ ok: false, error: "unknown" });
+      }) as typeof fetch;
+
+      const result = await runGatewayInvoke({
+        employeeId: "emp_comm",
+        credentialId: "cred_comm",
+        body: {
+          tool: "comm.reply",
+          purpose: "comm.internal",
+          jobId: `job_file_no_thread_${Date.now()}`,
+          conversation: {
+            surface: "slack",
+            orgId: DEMO_ORG.id,
+            slackChannelId: "C_INTERNAL",
+          },
+          args: {
+            slackChannelId: "C_INTERNAL",
+            text: "スレッドなしのメッセージ",
+          },
+          fileAttachment: {
+            fileRef: "https://example.com/report.pdf",
+            filename: "report.pdf",
+            mimeType: "application/pdf",
+          },
+        },
+      });
+
+      expect(result.body.ok).toBe(true);
+      expect(fileUploadCalled).toBe(false);
+      const resultObj = result.body.result as { fileUpload?: unknown } | undefined;
+      expect(resultObj?.fileUpload).toBe(undefined);
+    } finally {
+      globalThis.fetch = originalFetch;
+      await upsertConversationAdapter({
+        orgId: DEMO_ORG.id,
+        surface: "slack",
+        enabled: false,
+        secrets: {},
+      });
+    }
+  });
+
 });

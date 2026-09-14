@@ -47,6 +47,12 @@ import {
   looksLikeSlackTs,
   postConversationMessage,
 } from "@/lib/gateway/adapters/slack";
+import {
+  evaluateFileAttachmentEgress,
+  uploadSlackFile,
+  buildFileUploadAuditPayload,
+  type SlackFileUploadResult,
+} from "@/lib/gateway/adapters/slack-file-upload";
 import { publishSnsPost, type SnsPublishResult } from "@/lib/gateway/adapters/sns";
 import {
   buildInvokeSnapshot,
@@ -1199,6 +1205,103 @@ export async function runGatewayInvoke(
     }
   }
 
+  // File attachment handling for comm.reply / comm.send (Slack only, P0: internal thread required)
+  let fileUploadResult: SlackFileUploadResult | undefined;
+  if (
+    isAudienceGatedTool(toolDef) &&
+    body.fileAttachment?.fileRef &&
+    body.fileAttachment?.filename
+  ) {
+    const ctx = parseConversationContext(body, orgId || employee.orgId);
+    const dest = ctx?.slackChannelId || ctx?.slackUserId || "";
+    const replyThreadTs = resolveConversationThreadId({
+      conversation: ctx,
+      args: body.args && typeof body.args === "object"
+        ? (body.args as Record<string, unknown>)
+        : {},
+      body,
+    });
+
+    const fileEgress = evaluateFileAttachmentEgress({
+      audience: egress?.audience ?? "unknown",
+      effectiveAudience: egress?.effectiveAudience ?? "external",
+      threadTs: looksLikeSlackTs(replyThreadTs) ? replyThreadTs : undefined,
+      channel: dest,
+    });
+
+    if (!fileEgress.allowed) {
+      await appendAuditEvent({
+        orgId: orgId || employee.orgId,
+        employeeId,
+        credentialId: input.credentialId || employee.credentialId,
+        action: "slack.file_egress_denied",
+        purpose,
+        summary: `ファイル添付を拒否: ${fileEgress.reason}`,
+        metadata: {
+          tool,
+          jobId,
+          reason: fileEgress.reason,
+          audience: egress?.audience,
+          effectiveAudience: egress?.effectiveAudience,
+          filename: body.fileAttachment.filename,
+          threadTs: replyThreadTs,
+          channel: dest,
+        },
+      });
+    } else if (dest && replyThreadTs && looksLikeSlackTs(replyThreadTs)) {
+      const uploaded = await uploadSlackFile({
+        orgId: orgId || employee.orgId,
+        channel: dest,
+        threadTs: replyThreadTs,
+        fileRef: body.fileAttachment.fileRef,
+        fileUrl: body.fileAttachment.fileRef.startsWith("http")
+          ? body.fileAttachment.fileRef
+          : undefined,
+        filename: body.fileAttachment.filename,
+        mimeType: body.fileAttachment.mimeType,
+        title: body.fileAttachment.title,
+        initialComment: body.fileAttachment.initialComment,
+      });
+
+      if (uploaded.ok) {
+        fileUploadResult = uploaded;
+        await appendAuditEvent({
+          orgId: orgId || employee.orgId,
+          employeeId,
+          credentialId: input.credentialId || employee.credentialId,
+          action: "slack.file_uploaded",
+          purpose,
+          summary: `Slackファイル添付: ${uploaded.filename}`,
+          metadata: buildFileUploadAuditPayload(uploaded, {
+            jobId,
+            audience: egress?.audience ?? "unknown",
+            mimeType: body.fileAttachment.mimeType,
+            fileRef: body.fileAttachment.fileRef,
+          }),
+        });
+      } else {
+        await appendAuditEvent({
+          orgId: orgId || employee.orgId,
+          employeeId,
+          credentialId: input.credentialId || employee.credentialId,
+          action: "slack.file_upload_failed",
+          purpose,
+          summary: `Slackファイル添付に失敗: ${uploaded.error}`,
+          metadata: {
+            tool,
+            jobId,
+            error: uploaded.error,
+            code: uploaded.code,
+            filename: body.fileAttachment.filename,
+            channel: dest,
+            threadTs: replyThreadTs,
+            audience: egress?.audience,
+          },
+        });
+      }
+    }
+  }
+
   let snsDelivery: SnsPublishResult | undefined;
   if (isSnsPublishTool(toolDef)) {
     const already = snsDeliveryFromFulfillment(priorApproval);
@@ -1387,6 +1490,12 @@ export async function runGatewayInvoke(
                           disclosed: egress?.decision === "summarize" ? "summary" : "source",
                           delivery: conversationDelivery?.delivery,
                           conversationDelivery,
+                          fileUpload: fileUploadResult ? {
+                            ok: true,
+                            fileId: fileUploadResult.fileId,
+                            filename: fileUploadResult.filename,
+                            bytes: fileUploadResult.bytes,
+                          } : undefined,
                         }
                       : {
                           accepted: true,
