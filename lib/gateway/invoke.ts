@@ -25,6 +25,7 @@ import {
   isBillableConfirmCompletion,
   recordGatedConfirmAction,
 } from "@/lib/billing/meter";
+import { assertBillingAllowsGateway } from "@/lib/billing/entitlements";
 import { evaluateDualEgress, evaluateEgressMatrix } from "@/lib/gateway/egress";
 import {
   parseConversationContext,
@@ -430,6 +431,30 @@ export async function runGatewayInvoke(
         tool,
       },
       401
+    );
+  }
+
+  const billingGate = await assertBillingAllowsGateway(orgId || employee.orgId, tool);
+  if (!billingGate.ok) {
+    return jsonResult(
+      {
+        ok: false,
+        code: billingGate.code,
+        error: billingGate.code,
+        tool,
+        message: `トライアル期間が終了したため、${tool} はご利用いただけません。プランを選択してお手続きください。`,
+        billingPath: "/app/billing",
+        entitlements: {
+          plan: billingGate.entitlements.plan,
+          status: billingGate.entitlements.status,
+          canHire: billingGate.entitlements.canHire,
+          expiredTrial: billingGate.entitlements.expiredTrial,
+        },
+        employeeId,
+        purpose,
+        jobId,
+      },
+      402
     );
   }
 

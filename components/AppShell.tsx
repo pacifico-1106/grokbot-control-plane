@@ -6,6 +6,7 @@ import { useEffect, useId, useState } from "react";
 import { BrandMark } from "@/components/BrandMark";
 import { useAppSession } from "@/components/AppSessionProvider";
 import { LegalLinks } from "@/components/LegalLinks";
+import { ExpiredTrialBanner } from "@/components/ExpiredTrialBanner";
 import {
   GUIDE_GROUP_LABEL,
   GUIDE_NAV,
@@ -296,7 +297,25 @@ export function AppShell({
             </div>
           </div>
           <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
-            <span className="chip chip-ok shrink-0 !hidden lg:!inline-flex">トライアル</span>
+            {session.subscriptionStatus === "expired" ? (
+              <Link
+                href="/app/billing"
+                className="chip chip-warn shrink-0 !hidden lg:!inline-flex hover:opacity-80"
+              >
+                期限切れ
+              </Link>
+            ) : session.subscriptionStatus === "trialing" ? (
+              <span className="chip chip-ok shrink-0 !hidden lg:!inline-flex">トライアル</span>
+            ) : session.subscriptionStatus === "active" ? (
+              <span className="chip chip-ok shrink-0 !hidden lg:!inline-flex">契約中</span>
+            ) : session.subscriptionStatus ? (
+              <Link
+                href="/app/billing"
+                className="chip chip-warn shrink-0 !hidden lg:!inline-flex hover:opacity-80"
+              >
+                {session.subscriptionStatus}
+              </Link>
+            ) : null}
             <span
               className="chip !hidden sm:!inline-flex max-w-[12rem] truncate text-xs sm:text-sm"
               title={memberTitle}
@@ -316,6 +335,7 @@ export function AppShell({
           </div>
         </header>
         <main className="flex-1 px-3 sm:px-4 md:px-8 py-5 md:py-6 pb-[max(1.25rem,env(safe-area-inset-bottom))] min-w-0 max-w-full overflow-x-hidden">
+          <ExpiredTrialBanner />
           {children}
         </main>
       </div>

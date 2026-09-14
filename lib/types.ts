@@ -155,7 +155,8 @@ export type SubscriptionStatus =
   | "past_due"
   | "canceled"
   | "incomplete"
-  | "unpaid";
+  | "unpaid"
+  | "expired";
 
 /** Grok Bot–oriented scopes (not Sealith transfer scopes). */
 export type EmployeeScope =
