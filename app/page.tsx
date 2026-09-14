@@ -67,6 +67,10 @@ const FAQ: FaqItem[] = [
     href: "https://www.sealith.com/lp/ai-information-management",
     linkLabel: "Sealithの説明を見る",
   },
+  {
+    q: "自己改良やスウォームの時代に、社員証は追いつける？",
+    a: "手足側で許可された改良は止めません。ただし、採点と本番昇格は社員証（Staffpass）の外に置きます。改良の手触りは残し、本番にする判断は会社が持つ——それがStaffpassの立ち位置です。",
+  },
 ];
 
 function ControlVisual() {
@@ -152,7 +156,10 @@ export default function LandingPage() {
             <h1 className="mt-5 text-[clamp(2.35rem,5vw,4rem)] font-bold tracking-[-0.045em] leading-[1.04]">
               AIのための、<br /><span className="text-gradient whitespace-nowrap">社員証</span>
             </h1>
-            <p className="mt-6 max-w-xl text-base sm:text-lg muted leading-relaxed">
+            <p className="mt-4 max-w-xl text-sm sm:text-base muted leading-relaxed">
+              まだAIを検索みたいに使っていませんか。雇うなら、出口のルールが要ります。
+            </p>
+            <p className="mt-4 max-w-xl text-base sm:text-lg muted leading-relaxed">
               権限、承認、上限、監査。AIが働くためのルールを、一つの社員証に
             </p>
             <div className="mt-8 flex flex-col sm:flex-row gap-3">
@@ -183,7 +190,7 @@ export default function LandingPage() {
         <section className="mx-auto max-w-6xl px-4 sm:px-6 py-20 sm:py-28">
           <div className="max-w-2xl">
             <span className="eyebrow">CONTROL BY DESIGN</span>
-            <h2 className="mt-4 text-3xl sm:text-5xl font-bold tracking-[-0.045em] leading-tight">分ければ自律化<br />まとめれば、すべて承認</h2>
+            <h2 className="mt-4 text-3xl sm:text-5xl font-bold tracking-[-0.045em] leading-tight">権限を分ける。<br />通してよい範囲だけ動かす。</h2>
           </div>
           <div className="mt-10 grid md:grid-cols-3 gap-4">
             {CONTROLS.map((item) => (
