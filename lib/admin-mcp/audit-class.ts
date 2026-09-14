@@ -11,6 +11,7 @@ export const ADMIN_AUDIT_ACTIONS = [
   "admin.channel",
   "admin.role",
   "admin.ingressHandoff",
+  "admin.conversationAdapter",
 ] as const;
 
 export type AdminAuditAction = (typeof ADMIN_AUDIT_ACTIONS)[number];
@@ -23,6 +24,7 @@ export const ADMIN_TOOL_AUDIT_ACTION: Record<string, AdminAuditAction> = {
   "channels.classify": "admin.channel",
   "roles.propose": "admin.role",
   "ingressHandoff.patch": "admin.ingressHandoff",
+  "setup.slackAdapter.setBotToken": "admin.conversationAdapter",
 };
 
 /** Operational / employee-badge class — never lead the dashboard change log. */

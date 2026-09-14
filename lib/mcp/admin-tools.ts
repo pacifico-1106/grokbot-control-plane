@@ -33,7 +33,8 @@ import {
   nextStepReplyPolicyJa,
   policyHasHighRiskAutoSend,
 } from "@/lib/gateway/reply-policy-validate";
-import { diagnoseSlackStatus } from "@/lib/slack/slack-status-diagnose";
+import { diagnoseSlackStatus, DASHBOARD_BOT_TOKEN_PATH_JA } from "@/lib/slack/slack-status-diagnose";
+import { encryptNotificationSecrets } from "@/lib/notify/crypto";
 import { queueAdminTool } from "@/lib/admin-mcp/queue";
 import { parseAdminFulfillment } from "@/lib/admin-mcp/fulfill-admin";
 import { ADMIN_MCP_TOOL_NAMES } from "@/lib/mcp/admin-public";
@@ -165,6 +166,30 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
     inputSchema: {
       type: "object",
       properties: {},
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "setup.slackAdapter.setBotToken",
+    description:
+      `Register or update the org Slack conversation posting adapter Bot token (xoxb-...) after human approval (always_human). This is the token for AI社員↔相手の会話投稿 under dashboard「${DASHBOARD_BOT_TOKEN_PATH_JA}」— NOT the approval-inbox Slack under「承認を受け取る」. Reuses the same encrypted store as PUT /api/settings/conversation-adapters. Never returns the raw token. Admin cannot self-approve. After approval, run setup.slackStatus to confirm readiness.`,
+    inputSchema: {
+      type: "object",
+      properties: {
+        botToken: {
+          type: "string",
+          description: "Slack Bot User OAuth Token (xoxb-...). Required when enabled=true.",
+        },
+        enabled: {
+          type: "boolean",
+          description: "Enable the Slack conversation adapter (default true). Set false to disable without a new token.",
+        },
+        label: {
+          type: "string",
+          description: "Optional display label (default: Slack 会話投稿).",
+        },
+        jobId: { type: "string" },
+      },
       additionalProperties: false,
     },
   },
@@ -770,6 +795,32 @@ export async function callAdminMcpTool(
     return runSlackStatusDiagnose(cred);
   }
 
+  if (name === "setup.slackAdapter.setBotToken") {
+    const enabled = args.enabled !== false;
+    const botToken = String(args.botToken || "").trim();
+    if (enabled && !botToken) {
+      return toolResult(
+        {
+          ok: false,
+          code: "slack_adapter_token_required",
+          message: `有効化するには Bot User OAuth Token (xoxb-...) が必要です。ダッシュボード「${DASHBOARD_BOT_TOKEN_PATH_JA}」と同じ値です（「承認を受け取る」のSlackではありません）。`,
+        },
+        true
+      );
+    }
+    if (botToken && !botToken.startsWith("xoxb-")) {
+      return toolResult(
+        {
+          ok: false,
+          code: "invalid_bot_token_format",
+          message:
+            "Bot User OAuth Token は xoxb- で始まる必要があります。User Token (xoxp-) や承認インボックス用トークンはここでは使えません。",
+        },
+        true
+      );
+    }
+  }
+
   if (name === "ingressHandoff.get") {
     return runIngressHandoffGet(cred, args);
   }
@@ -1095,6 +1146,22 @@ export async function callAdminMcpTool(
     if (slackTeamIds > 0) parts.push(`${slackTeamIds}チーム`);
     if (autoSlackTeamInternal) parts.push("自動内部判定あり");
     summary = `内部オーディエンスルールの更新を人が確認します（${parts.join("・") || "設定なし"}）`;
+  } else if (name === "setup.slackAdapter.setBotToken") {
+    const enabled = args.enabled !== false;
+    const botToken = String(args.botToken || "").trim();
+    const label = String(args.label || "").trim();
+    queuedArgs = {
+      enabled,
+      label: label || null,
+      botTokenPresent: Boolean(botToken),
+      ...(botToken
+        ? { botTokenCiphertext: encryptNotificationSecrets({ botToken }) }
+        : {}),
+      jobId: args.jobId,
+    };
+    summary = enabled
+      ? `Slack会話投稿アダプタの Bot token 登録を人が確認します（ダッシュボード「${DASHBOARD_BOT_TOKEN_PATH_JA}」。「承認を受け取る」ではありません）`
+      : `Slack会話投稿アダプタを無効化します（「承認を受け取る」のSlackとは別）`;
   }
 
   const queued = await queueAdminTool({
