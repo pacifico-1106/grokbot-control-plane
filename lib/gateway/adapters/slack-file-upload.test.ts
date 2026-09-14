@@ -236,7 +236,7 @@ describe("uploadSlackFile with mocked Slack API", () => {
     });
 
     const originalFetch = globalThis.fetch;
-    let apiCalls: Array<{ url: string; body?: unknown }> = [];
+    const apiCalls: Array<{ url: string; body?: unknown }> = [];
 
     try {
       globalThis.fetch = (async (input, init) => {

@@ -729,9 +729,9 @@ describe("Gateway audience egress", () => {
       secrets: { botToken: "xoxb-file-test" },
     });
     const originalFetch = globalThis.fetch;
-    let apiCalls: Array<{ url: string; body?: unknown }> = [];
+    const apiCalls: Array<{ url: string; body?: unknown }> = [];
     try {
-      globalThis.fetch = (async (input, init) => {
+      globalThis.fetch = (async (input, _init) => {
         const url = String(input);
         apiCalls.push({ url });
 
