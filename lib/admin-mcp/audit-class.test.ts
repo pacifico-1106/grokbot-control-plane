@@ -18,6 +18,9 @@ describe("admin audit class is separate", () => {
     expect(auditActionForAdminTool("setup.slackAdapter.setBotToken")).toBe(
       "admin.conversationAdapter"
     );
+    expect(auditActionForAdminTool("setup.lineApproval.upsert")).toBe(
+      "admin.notificationChannel"
+    );
   });
 
   test("tool.invoke / mail.send / comm.reply are not the change-log class", () => {

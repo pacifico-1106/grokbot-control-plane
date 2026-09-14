@@ -404,6 +404,33 @@ P0 オペ実証用。**P1 実装仕様は本文 P1 節参照 — P0+P1 設計ロ
 | 設定 UI ラベル | `components/NotificationChannelsClient.tsx` — `承認用LINE` |
 | 会話（未出荷） | `app/api/settings/conversation-adapters/route.ts` — Slack のみ |
 | テナント手順 | `docs/guides/telegram-approval.md` |
+| Admin MCP 診断 | `setup.lineApprovalStatus` — `lib/line/line-approval-status-diagnose.ts` |
+| Admin MCP 設定 | `setup.lineApproval.upsert` / `setEmployeeInbox` / `demoteTelegram` — `lib/mcp/admin-tools.ts` |
+
+---
+
+## Admin MCP（Space Tree キックオフレール）
+
+Slack の `setup.slackStatus` / `setup.slackAdapter.setBotToken` と同型で、**承認インボックス用 LINE** の設定を管理 MCP から進められます。
+
+| ツール | 用途 | 承認 |
+|--------|------|------|
+| `setup.lineApprovalStatus` | LINE 承認チャネル診断（channels / Telegram 衝突 / employeeInboxSummary / nextStepJa） | なし |
+| `setup.lineApproval.upsert` | `org_notification_channels` provider=`line` の登録・更新 | always_human |
+| `setup.lineApproval.setEmployeeInbox` | 社員別 `approvalChannelId` を LINE へ（または既定へクリア） | always_human |
+| `setup.lineApproval.demoteTelegram` | Telegram 承認経路の無効化（`disable` / `clearDefault`） | always_human |
+
+**混同注意:** 承認用 LINE（本ツール群）≠ 会話投稿 LINE（P1 予定）≠ Slack 会話投稿アダプタ。
+
+**canonical `nextStepJa` 順序:**
+
+1. LINE OA / Messaging API 作成（人間）
+2. OA 表示名 `{employeeDisplayName}（AIスタッフ）`（人間・§P1-e）
+3. 上長が OA を友だち追加 → userId 取得（人間）
+4. `setup.lineApproval.upsert` + 人承認
+5. Webhook URL を LINE Developers に貼付 + 有効化（人間・自動登録不可）
+6. テスト送信 / Flex 承認
+7. `setup.lineApproval.setEmployeeInbox` + `setup.lineApproval.demoteTelegram`
 
 ---
 

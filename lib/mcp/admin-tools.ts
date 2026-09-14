@@ -10,6 +10,7 @@ import {
   getBinding,
   getEmployee,
   listEmployees,
+  listNotificationChannels,
   getEffectiveIngressHandoffPolicy,
   getEffectiveSchedulingPolicy,
   type IngressHandoffPolicySource,
@@ -34,11 +35,13 @@ import {
   policyHasHighRiskAutoSend,
 } from "@/lib/gateway/reply-policy-validate";
 import { diagnoseSlackStatus, DASHBOARD_BOT_TOKEN_PATH_JA } from "@/lib/slack/slack-status-diagnose";
+import { diagnoseLineApprovalStatus } from "@/lib/line/line-approval-status-diagnose";
 import { encryptNotificationSecrets } from "@/lib/notify/crypto";
 import { queueAdminTool } from "@/lib/admin-mcp/queue";
 import { parseAdminFulfillment } from "@/lib/admin-mcp/fulfill-admin";
 import { ADMIN_MCP_TOOL_NAMES } from "@/lib/mcp/admin-public";
 import { buildEmployeePolicyDrafts } from "@/lib/employees/policy-draft";
+import { parseApprovalChannelId } from "@/lib/employees/approval-inbox";
 import { parseRolesProposeInput } from "@/lib/mcp/roles-propose";
 import { ALL_SCOPES } from "@/lib/employees/policy-draft";
 import { ADMIN_AUDIT_CLASS } from "@/lib/admin-mcp/audit-class";
@@ -190,6 +193,89 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
         },
         jobId: { type: "string" },
       },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "setup.lineApprovalStatus",
+    description:
+      "Diagnose org LINE approval-inbox channels under org_notification_channels (provider=line). read-only, no approval required. Returns channel readiness, Telegram collision risk, employee inbox summary, and nextStepJa for Space Tree kickoff. Never returns secrets. Confusion note: approval LINE ≠ conversation LINE (P1) ≠ Slack adapter. Refer to docs/space-tree-line-oa-design.md.",
+    inputSchema: {
+      type: "object",
+      properties: {},
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "setup.lineApproval.upsert",
+    description:
+      "Register or update an org LINE approval-inbox channel (channelAccessToken, channelSecret, destinationId) after human approval (always_human). Same store as dashboard「承認を受け取る」→ 承認用LINE / PUT /api/settings/notification-channels. Secrets are encrypted at rest in approval metadata only. Never returns raw tokens. NOT the conversation LINE adapter (P1) or Slack posting adapter.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        channelAccessToken: {
+          type: "string",
+          description: "LINE Messaging API channel access token. Required when enabled=true on create.",
+        },
+        channelSecret: {
+          type: "string",
+          description: "LINE Messaging API channel secret. Required when enabled=true on create.",
+        },
+        destinationId: {
+          type: "string",
+          description: "LINE userId (U...) / groupId (C...) / roomId (R...) for approval delivery.",
+        },
+        allowedUserIds: {
+          type: "array",
+          items: { type: "string" },
+          description: "Optional allowlist of LINE userIds who may approve via webhook.",
+        },
+        enabled: { type: "boolean", description: "Enable the channel (default true)." },
+        label: { type: "string", description: "Optional display label (default: LINE)." },
+        isDefault: { type: "boolean", description: "Set as org default approval inbox." },
+        channelId: { type: "string", description: "Existing org_notification_channels.id to update." },
+        jobId: { type: "string" },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "setup.lineApproval.setEmployeeInbox",
+    description:
+      "Assign an AI employee approval inbox to a LINE notification channel (or clear to org default) after human approval (always_human). Uses the same path as EmployeeApprovalInboxForm / employee policy update. approvalChannelId must be a LINE channel in this org when set.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        employeeId: { type: "string" },
+        approvalChannelId: {
+          type: "string",
+          description: "LINE org_notification_channels.id, or omit/null to inherit org default.",
+        },
+        jobId: { type: "string" },
+      },
+      required: ["employeeId"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "setup.lineApproval.demoteTelegram",
+    description:
+      "Disable Telegram approval channels to prevent dual Telegram+LINE delivery after human approval (always_human). mode=disable disables all enabled telegram channels (optional channelId). mode=clearDefault disables telegram channels marked isDefault when LINE is the default inbox.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        mode: {
+          type: "string",
+          enum: ["disable", "clearDefault"],
+          description: "disable | clearDefault",
+        },
+        channelId: {
+          type: "string",
+          description: "Optional telegram org_notification_channels.id (disable mode only).",
+        },
+        jobId: { type: "string" },
+      },
+      required: ["mode"],
       additionalProperties: false,
     },
   },
@@ -472,6 +558,17 @@ async function runSlackStatusDiagnose(
   cred: ResolvedAdminCredential
 ): Promise<{ content: Array<{ type: "text"; text: string }>; structuredContent?: unknown; isError?: boolean }> {
   const result = await diagnoseSlackStatus(cred.orgId);
+  return {
+    content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+    structuredContent: result,
+    isError: false,
+  };
+}
+
+async function runLineApprovalStatusDiagnose(
+  cred: ResolvedAdminCredential
+): Promise<{ content: Array<{ type: "text"; text: string }>; structuredContent?: unknown; isError?: boolean }> {
+  const result = await diagnoseLineApprovalStatus(cred.orgId);
   return {
     content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
     structuredContent: result,
@@ -795,6 +892,10 @@ export async function callAdminMcpTool(
     return runSlackStatusDiagnose(cred);
   }
 
+  if (name === "setup.lineApprovalStatus") {
+    return runLineApprovalStatusDiagnose(cred);
+  }
+
   if (name === "setup.slackAdapter.setBotToken") {
     const enabled = args.enabled !== false;
     const botToken = String(args.botToken || "").trim();
@@ -818,6 +919,122 @@ export async function callAdminMcpTool(
         },
         true
       );
+    }
+  }
+
+  if (name === "setup.lineApproval.upsert") {
+    const enabled = args.enabled !== false;
+    const destinationId = String(args.destinationId || "").trim();
+    const channelAccessToken = String(args.channelAccessToken || "").trim();
+    const channelSecret = String(args.channelSecret || "").trim();
+    const channelId = String(args.channelId || "").trim();
+    const channels = await listNotificationChannels(cred.orgId);
+    const existing = channelId
+      ? channels.find((channel) => channel.id === channelId && channel.provider === "line")
+      : undefined;
+    if (channelId && !existing) {
+      return toolResult(
+        { ok: false, code: "line_channel_not_found", message: "指定の LINE 承認チャネルが見つかりません" },
+        true
+      );
+    }
+    if (enabled && !destinationId) {
+      return toolResult(
+        { ok: false, code: "destination_required", message: "有効化するには destinationId が必要です" },
+        true
+      );
+    }
+    const hasExistingCredentials = Boolean(existing?.hasCredentials);
+    if (enabled && !channelAccessToken && !hasExistingCredentials) {
+      return toolResult(
+        {
+          ok: false,
+          code: "line_credentials_incomplete",
+          message: "有効化するには channelAccessToken / channelSecret が必要です（既存 secret がある場合は省略可）",
+        },
+        true
+      );
+    }
+    if (enabled && !channelSecret && !hasExistingCredentials) {
+      return toolResult(
+        {
+          ok: false,
+          code: "line_credentials_incomplete",
+          message: "有効化するには channelAccessToken / channelSecret が必要です（既存 secret がある場合は省略可）",
+        },
+        true
+      );
+    }
+  }
+
+  if (name === "setup.lineApproval.setEmployeeInbox") {
+    const employeeId = String(args.employeeId || "").trim();
+    if (!employeeId) {
+      return toolResult(
+        { ok: false, code: "employee_id_required", message: "employeeId が必要です" },
+        true
+      );
+    }
+    const employee = await getEmployee(employeeId, cred.orgId);
+    if (!employee) {
+      return toolResult(
+        { ok: false, code: "employee_not_found", message: "AI社員が見つかりません" },
+        true
+      );
+    }
+    if (args.approvalChannelId !== undefined && args.approvalChannelId !== null) {
+      const lineIds = (await listNotificationChannels(cred.orgId))
+        .filter((channel) => channel.provider === "line")
+        .map((channel) => channel.id);
+      const parsed = parseApprovalChannelId(args.approvalChannelId, lineIds);
+      if (!parsed.ok) {
+        return toolResult(
+          {
+            ok: false,
+            code: "line_approval_channel_not_found",
+            message: "approvalChannelId は同一 org の LINE 承認チャネルである必要があります",
+          },
+          true
+        );
+      }
+    }
+  }
+
+  if (name === "setup.lineApproval.demoteTelegram") {
+    const mode = String(args.mode || "").trim();
+    if (mode !== "disable" && mode !== "clearDefault") {
+      return toolResult(
+        { ok: false, code: "invalid_mode", message: "mode は disable または clearDefault です" },
+        true
+      );
+    }
+    const channelId = String(args.channelId || "").trim();
+    const channels = await listNotificationChannels(cred.orgId);
+    if (channelId) {
+      const target = channels.find(
+        (channel) => channel.id === channelId && channel.provider === "telegram"
+      );
+      if (!target) {
+        return toolResult(
+          { ok: false, code: "telegram_channel_not_found", message: "指定の Telegram 承認チャネルが見つかりません" },
+          true
+        );
+      }
+    }
+    if (mode === "clearDefault") {
+      const lineDefault = channels.find(
+        (channel) => channel.provider === "line" && channel.enabled
+      );
+      if (!lineDefault) {
+        return toolResult(
+          {
+            ok: false,
+            code: "line_default_required",
+            message: "clearDefault には有効な既定 LINE 承認チャネルが必要です",
+          },
+          true
+        );
+      }
     }
   }
 
@@ -1162,6 +1379,60 @@ export async function callAdminMcpTool(
     summary = enabled
       ? `Slack会話投稿アダプタの Bot token 登録を人が確認します（ダッシュボード「${DASHBOARD_BOT_TOKEN_PATH_JA}」。「承認を受け取る」ではありません）`
       : `Slack会話投稿アダプタを無効化します（「承認を受け取る」のSlackとは別）`;
+  } else if (name === "setup.lineApproval.upsert") {
+    const enabled = args.enabled !== false;
+    const destinationId = String(args.destinationId || "").trim();
+    const channelAccessToken = String(args.channelAccessToken || "").trim();
+    const channelSecret = String(args.channelSecret || "").trim();
+    const label = String(args.label || "").trim();
+    const allowedUserIds = Array.isArray(args.allowedUserIds)
+      ? args.allowedUserIds.map(String).map((value) => value.trim()).filter(Boolean).slice(0, 100)
+      : [];
+    const secrets: Record<string, string> = {};
+    if (channelAccessToken) secrets.channelAccessToken = channelAccessToken;
+    if (channelSecret) secrets.channelSecret = channelSecret;
+    queuedArgs = {
+      enabled,
+      destinationId,
+      allowedUserIds,
+      label: label || null,
+      isDefault: args.isDefault === true,
+      channelId: String(args.channelId || "").trim() || null,
+      channelAccessTokenPresent: Boolean(channelAccessToken),
+      channelSecretPresent: Boolean(channelSecret),
+      ...(Object.keys(secrets).length > 0
+        ? { secretsCiphertext: encryptNotificationSecrets(secrets) }
+        : {}),
+      jobId: args.jobId,
+    };
+    summary = enabled
+      ? `承認用 LINE チャネル登録を人が確認します（destinationId: ${destinationId.slice(0, 4)}…）`
+      : "承認用 LINE チャネルを無効化します";
+  } else if (name === "setup.lineApproval.setEmployeeInbox") {
+    const employeeId = String(args.employeeId || "").trim();
+    const approvalChannelId =
+      args.approvalChannelId === undefined || args.approvalChannelId === null
+        ? null
+        : String(args.approvalChannelId).trim() || null;
+    queuedArgs = {
+      employeeId,
+      approvalChannelId,
+      jobId: args.jobId,
+    };
+    summary = approvalChannelId
+      ? `AI社員 ${employeeId} の承認インボックスを LINE チャネルへ割り当てることを人が確認します`
+      : `AI社員 ${employeeId} の承認インボックスを組織既定へ戻すことを人が確認します`;
+  } else if (name === "setup.lineApproval.demoteTelegram") {
+    const mode = args.mode === "clearDefault" ? "clearDefault" : "disable";
+    queuedArgs = {
+      mode,
+      channelId: String(args.channelId || "").trim() || null,
+      jobId: args.jobId,
+    };
+    summary =
+      mode === "clearDefault"
+        ? "Telegram 既定承認チャネルを無効化して LINE 単独送信にすることを人が確認します"
+        : "Telegram 承認チャネルを無効化することを人が確認します";
   }
 
   const queued = await queueAdminTool({
@@ -1200,6 +1471,15 @@ export async function readApprovedAdminResult(
   }
   if (fulfillment.noticeJa && !out.noticeJa) {
     out.noticeJa = fulfillment.noticeJa;
+  }
+  if (fulfillment.enabled !== undefined) {
+    out.enabled = fulfillment.enabled;
+  }
+  if (fulfillment.destinationPresent !== undefined) {
+    out.destinationPresent = fulfillment.destinationPresent;
+  }
+  if (fulfillment.webhookPath) {
+    out.webhookPath = fulfillment.webhookPath;
   }
   return out;
 }

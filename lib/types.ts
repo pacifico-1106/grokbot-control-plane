@@ -482,7 +482,8 @@ export type AuditAction =
   | "admin.channel"
   | "admin.role"
   | "admin.ingressHandoff"
-  | "admin.conversationAdapter";
+  | "admin.conversationAdapter"
+  | "admin.notificationChannel";
 
 export interface Org {
   id: string;
