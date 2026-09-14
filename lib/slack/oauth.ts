@@ -8,10 +8,11 @@ import { getAppOrigin } from "@/lib/approvals/tokens";
  * - users:read: 社員の Slack ユーザー情報取得
  * - channels:read, groups:read: チャネル情報取得
  * - im:history: user-token Events (Subscribe to events on behalf of users) の message.im 受信
+ * - files:write: postingAs=user でのファイルアップロード（Path B 人↔人 DM へ PDF 添付等）
  *
- * im:history 追加後は、リンク済み社員に re-OAuth を促す（既存トークンには im:history がない）。
+ * スコープ追加後は、リンク済み社員に re-OAuth を促す（既存トークンには新スコープがない）。
  */
-export const SLACK_USER_SCOPES = "chat:write,users:read,channels:read,groups:read,im:history";
+export const SLACK_USER_SCOPES = "chat:write,users:read,channels:read,groups:read,im:history,files:write";
 
 export const SLACK_OAUTH_COOKIE = "staffpass_slack_oauth";
 const STATE_TTL_MS = 10 * 60 * 1000;

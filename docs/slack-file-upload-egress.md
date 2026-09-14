@@ -27,26 +27,42 @@
 
 ## 必要スコープ
 
-### `files:write`
+### Bot Token Scopes（`xoxb-...`）
 
 > **重要**: Public Distribution Slack App で `files:write` スコープを追加する場合、再インストールが必要です。スコープ追加は人間の承認を経てから行ってください。
 
 **このコードは `files:write` スコープを自動で追加しません。** Slack App の設定画面で手動追加し、各ワークスペースで再インストールを案内してください。
 
-### 設定手順
+| スコープ | 用途 |
+|----------|------|
+| `chat:write` | メッセージ投稿（既存） |
+| `files:write` | ファイルアップロード |
+| `conversations.open` | DM 開始（既存） |
+
+### User Token Scopes（`xoxp-...`）— Path B 必須
+
+**Path B（`posting_as: user`）でのファイルアップロード**には、User Token にも `files:write` スコープが必要です。Bot Token の `files:write` だけでは、User Token で呼び出す `files.getUploadURLExternal` API は `missing_scope` エラーを返します。
+
+> **重要**: 人↔人 DM（例: `D0BSWG1804F`）へのファイル添付は、Bot が参加できないため User Token（`xoxp-...`）でアップロードします。Bot Token `files:write` は Path A / チャネル投稿用であり、Path B には効きません。
+
+| スコープ | 用途 |
+|----------|------|
+| `im:history` | DM 履歴読み取り / User Token Events |
+| `files:write` | **ファイルアップロード（Path B 必須）** |
+
+#### 設定手順（User Token Scopes）
+
+1. [Slack API Dashboard](https://api.slack.com/apps) → 対象アプリ（`A0BU8TABSV6`）
+2. **OAuth & Permissions** → **User Token Scopes**
+3. `files:write` を追加
+4. **リンク済み社員に re-OAuth を依頼**: 既存の User Token には新スコープが含まれないため、社員が Staffpass ダッシュボードから Slack 再認可を実行し、新しい `xoxp-...` トークンを取得する必要があります
+
+### 設定手順（Bot Token Scopes）
 
 1. [Slack API Dashboard](https://api.slack.com/apps) → 対象アプリ
 2. **OAuth & Permissions** → **Bot Token Scopes**
 3. `files:write` を追加
 4. **Install to Workspace** で再インストール（Public Distribution の場合は全テナントへ再配布）
-
-### 既存スコープとの関係
-
-| スコープ | 用途 |
-|----------|------|
-| `chat:write` | メッセージ投稿（既存） |
-| `files:write` | ファイルアップロード（**新規追加**） |
-| `conversations.open` | DM 開始（既存） |
 
 ## Gateway invoke body
 
