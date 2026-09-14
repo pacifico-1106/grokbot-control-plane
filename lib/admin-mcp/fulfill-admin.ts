@@ -16,7 +16,10 @@ import {
   setEmployeeSchedulingPolicy,
   setOrgReplyPolicy,
   setEmployeeReplyPolicy,
+  upsertConversationAdapter,
 } from "@/lib/data";
+import { decryptNotificationSecrets } from "@/lib/notify/crypto";
+import { DASHBOARD_BOT_TOKEN_PATH_JA, slackAuthTest } from "@/lib/slack/slack-status-diagnose";
 import { updateApprovalMetadata } from "@/lib/data/approvals";
 import { validateIngressHandoffPolicy } from "@/lib/ingress-handoff/validate";
 import { validateSchedulingPolicy } from "@/lib/scheduling-policy/validate";
@@ -64,12 +67,20 @@ export type AdminFulfillment = {
   draft?: unknown;
   nextStepJa?: string;
   noticeJa?: string;
+  adapterId?: string;
+  surface?: string;
+  enabled?: boolean;
+  hasCredentials?: boolean;
+  botTokenPresent?: boolean;
+  authTest?: { ok: boolean; error?: string | null };
 };
 
 const TOOL_NEXTSTEP_JA: Record<string, string> = {
   "employees.issue":
     "次は手足をこの社員証につなぎます。Grok Botを1体用意して、管理MCPの link に grokBotAgentId を渡してください。人がやるのは承認タップだけです。社員証の秘密はチャットに貼らない。連携後、Slackの口を設定する場合は setup.slackStatus で現状を診断し、docs/tenant-slack-kickoff-rail.md の手順に従ってください。",
   link: "次はコネクタ認証です（OAuthは人がタップ、承認チケットとは別）。Slackの口を設定する場合は setup.slackStatus で現状を診断し、channels.classify で employeeId を指定してください。詳細: docs/tenant-slack-kickoff-rail.md",
+  "setup.slackAdapter.setBotToken":
+    `Bot token を登録しました。setup.slackStatus で botTokenPresent / authTest / adapterEnabled を確認してください。これは会話投稿アダプタ（「${DASHBOARD_BOT_TOKEN_PATH_JA}」）であり、「承認を受け取る」のSlackではありません。`,
 };
 
 const TOOL_NOTICE_JA: Record<string, string> = {
@@ -91,6 +102,71 @@ function issueSecret(): { raw: string; hash: string; prefix: string } {
 function asScopes(value: unknown): EmployeeScope[] {
   if (!Array.isArray(value)) return [];
   return value.map(String).filter((scope) => ALL_SCOPES.includes(scope as EmployeeScope)) as EmployeeScope[];
+}
+
+function resolveQueuedBotToken(args: Record<string, unknown>): string {
+  const ciphertext = String(args.botTokenCiphertext || "").trim();
+  if (!ciphertext) return "";
+  return decryptNotificationSecrets(ciphertext).botToken?.trim() || "";
+}
+
+async function fulfillSlackAdapterSetBotToken(
+  approval: ApprovalRequest,
+  args: Record<string, unknown>
+): Promise<AdminFulfillment> {
+  const enabled = args.enabled !== false;
+  const botToken = resolveQueuedBotToken(args);
+  const label = typeof args.label === "string" ? args.label.trim() : "";
+
+  if (enabled && !botToken) {
+    throw new Error("slack_adapter_token_required");
+  }
+  if (botToken && !botToken.startsWith("xoxb-")) {
+    throw new Error("invalid_bot_token_format");
+  }
+
+  const saved = await upsertConversationAdapter({
+    orgId: approval.orgId,
+    surface: "slack",
+    label,
+    enabled,
+    config: {},
+    secrets: botToken ? { botToken } : undefined,
+  });
+
+  const authTest = botToken ? await slackAuthTest(botToken) : null;
+
+  await appendAuditEvent({
+    orgId: approval.orgId,
+    employeeId: null,
+    credentialId: null,
+    action: "admin.conversationAdapter",
+    purpose: "admin.conversationAdapter",
+    summary: `Slack 会話投稿アダプタを${enabled ? "更新" : "無効化"}（管理MCP・人承認）`,
+    metadata: {
+      auditClass: ADMIN_AUDIT_CLASS,
+      approvalId: approval.id,
+      adapterId: saved.id,
+      surface: "slack",
+      enabled,
+      botTokenPresent: Boolean(botToken || saved.hasCredentials),
+      authTestOk: authTest?.ok ?? null,
+    },
+  });
+
+  return {
+    ok: true,
+    tool: "setup.slackAdapter.setBotToken",
+    at: new Date().toISOString(),
+    nextStepJa: TOOL_NEXTSTEP_JA["setup.slackAdapter.setBotToken"],
+    noticeJa: `会話投稿アダプタ（「${DASHBOARD_BOT_TOKEN_PATH_JA}」）を更新しました。「承認を受け取る」のSlackとは別です。`,
+    adapterId: saved.id,
+    surface: "slack",
+    enabled,
+    hasCredentials: saved.hasCredentials,
+    botTokenPresent: Boolean(botToken || saved.hasCredentials),
+    authTest: authTest ? { ok: authTest.ok, error: authTest.error ?? null } : null,
+  };
 }
 
 async function persist(approval: ApprovalRequest, fulfillment: AdminFulfillment): Promise<void> {
@@ -692,6 +768,9 @@ export async function fulfillApprovedAdmin(
         break;
       case "replyPolicy.patch":
         fulfillment = await fulfillReplyPolicy(approval, args);
+        break;
+      case "setup.slackAdapter.setBotToken":
+        fulfillment = await fulfillSlackAdapterSetBotToken(approval, args);
         break;
       default:
         fulfillment = { ok: false, tool, at, error: "unknown_admin_tool" };

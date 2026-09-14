@@ -21,7 +21,7 @@ Path B（`posting_as: user`）での PDF 添付前に、管理 MCP の **`setup.
 **canonical 順序**（`nextStepJa` と一致）:
 
 1. Slack API → Bot Token Scopes に `files:write` → Reinstall
-2. ダッシュボード **つながり → チャンネルに書き込む（会社のBot）** で xoxb 登録
+2. ダッシュボード **つながり → チャンネルに書き込む（会社のBot）** で xoxb 登録（または管理MCP `setup.slackAdapter.setBotToken` + 人承認。**承認を受け取る**のSlackとは別）
 3. Slack API → User Token Scopes に `files:write`
 4. 社員証から Slack Authorize（`/api/slack/oauth/start?employeeId={employeeId}` — 人間がブラウザでタップ）
 5. 任意: `comm.reply` + `fileAttachment` で e2e

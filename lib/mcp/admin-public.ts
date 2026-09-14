@@ -24,6 +24,7 @@ export const ADMIN_MCP_TOOL_NAMES = [
   "channels.classify",
   "roles.propose",
   "setup.slackStatus",
+  "setup.slackAdapter.setBotToken",
   "ingressHandoff.get",
   "ingressHandoff.patch",
   "schedulingPolicy.get",

@@ -18,6 +18,7 @@ const TOOL_TITLE_JA: Record<string, string> = {
   "channels.classify": "チャネル分類",
   "roles.propose": "職務案の提案",
   "ingressHandoff.patch": "受信の渡し方",
+  "setup.slackAdapter.setBotToken": "Slack会話投稿Botトークン",
 };
 
 export type AdminQueueResult = {

@@ -15,6 +15,9 @@ describe("admin audit class is separate", () => {
     expect(isAdminAuditAction("admin.channel")).toBe(true);
     expect(auditActionForAdminTool("employees.issue")).toBe("admin.hire");
     expect(auditActionForAdminTool("parties.upsert")).toBe("admin.parties");
+    expect(auditActionForAdminTool("setup.slackAdapter.setBotToken")).toBe(
+      "admin.conversationAdapter"
+    );
   });
 
   test("tool.invoke / mail.send / comm.reply are not the change-log class", () => {

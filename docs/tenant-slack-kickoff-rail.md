@@ -87,6 +87,7 @@ Socket Mode が ON だと Events が HTTPS endpoint に届きません。
 | ツール | 用途 | 承認 |
 |--------|------|------|
 | `setup.slackStatus` | **Slack設定診断（read-only、最初のステップ）** | なし |
+| `setup.slackAdapter.setBotToken` | **会話投稿アダプタの Bot token 登録**（つながり → チャンネルに書き込む（会社のBot）の xoxb。承認インボックス「承認を受け取る」とは別） | always_human |
 | `employees.issue` | AI社員証の発行 | always_human |
 | `link` | 社員証とGrok Bot連携 | always_human |
 | `policy.patch` | 権限更新 | always_human |
@@ -203,13 +204,21 @@ Slack API サイトで Staffpass Slack アプリを設定します。
 - ユーザーがアプリDMを開いてもメッセージ入力欄が出ない
 - `message.im` イベントが届かない
 
-### ステップ2: Bot Token をStaffpassへ登録（人間がダッシュボードで実施）
+### ステップ2: Bot Token をStaffpassへ登録（人間がダッシュボードまたは管理MCPで実施）
 
 1. Slack アプリの **OAuth & Permissions** → **Bot User OAuth Token** (`xoxb-...`) をコピー
-2. Staffpassダッシュボード → **つながり** → **チャンネルに書き込む（会社のBot）**
-3. **Bot token** 欄に貼り付けて保存（有効チェック ON）
+2. 次のいずれかで登録（**同じ会話投稿アダプタ**の保存先です）:
+   - **ダッシュボード**: Staffpass → **つながり** → **チャンネルに書き込む（会社のBot）** → **Bot token** 欄に貼り付けて保存（有効チェック ON）
+   - **管理MCP**（人承認必須）:
+     ```
+     tools/call: setup.slackAdapter.setBotToken
+     arguments: { "botToken": "xoxb-...", "enabled": true }
+     ```
+     人が承認タップ後に反映されます。秘密値はレスポンス・承認カードに返りません。
 
-> アダプタトークンは環境変数 `SLACK_BOT_TOKEN` より優先されます。Bot Token Scopes 変更・再インストール後は、新しい xoxb をここで更新してください。
+> **混同防止**: これは AI社員が相手と話す **会話投稿アダプタ**（上記ダッシュボードパス）用です。**承認を受け取る**（Telegram / LINE / Slack 承認インボックス）のトークンとは別物です。会話口と承認通知口は混ぜません。
+
+> アダプタトークンは環境変数 `SLACK_BOT_TOKEN` より優先されます。Bot Token Scopes 変更・再インストール後は、新しい xoxb をここで更新してください。反映後は `setup.slackStatus` で `botTokenPresent` / `authTest` / `adapterEnabled` を確認してください。
 
 **症状（Token未登録・期限切れ）**:
 - `auth.test` 失敗
@@ -383,7 +392,7 @@ App DM（Staffpassアプリへの直接DM）への返信には `posting_as: bot`
      │    Bot Scopes 指示 ─────────────→ │ Slack UI で設定
      │                                   │ → Reinstall
      │                                   │
-     │    Bot Token 登録指示 ──────────→ │ ダッシュボードで設定
+     │    Bot Token 登録指示 ──────────→ │ ダッシュボードまたは setup.slackAdapter.setBotToken（人承認）
      │                                   │
      │ 3. setup.slackStatus で確認       │
      │                                   │
