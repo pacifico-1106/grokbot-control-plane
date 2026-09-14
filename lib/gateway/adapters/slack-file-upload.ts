@@ -2,22 +2,28 @@
  * Slack file upload adapter for comm.reply / comm.send egress.
  *
  * Uses files.getUploadURLExternal + files.completeUploadExternal (v2 flow)
- * with org conversation adapter xoxb token. Binary never enters LLM context.
+ * with the same token resolution as postConversationMessage (user token when
+ * postingAs=user and linked; else bot token).
  *
  * Egress P0: internal only. Mixed / external audiences → fail-closed for file body.
  * thread_ts required (boss DM / internal threads only).
  *
  * Scope requirement: files:write on the Slack app (Public Distribution reinstall).
+ * User token requires files:write scope granted via OAuth user flow.
  * Document this for human approval — do not silently expand scopes.
  */
 
-import { resolveOrgSlackBotToken } from "@/lib/slack/bot-token";
-import type { Audience } from "@/lib/types";
+import { resolveConversationToken } from "@/lib/gateway/adapters/slack";
+import type { Audience, PostingAs } from "@/lib/types";
 
 const SLACK_TIMEOUT_MS = 30_000;
 
 export interface SlackFileUploadInput {
   orgId: string;
+  /** Employee ID for token resolution (required for user token posting) */
+  employeeId?: string;
+  /** Posting identity: 'user' uses linked user token (files:write), 'bot' uses bot token */
+  postingAs?: PostingAs | string | null;
   channel: string;
   threadTs: string;
   /** File reference: temp store path, signed URL, or gateway-held base64 key */
@@ -49,6 +55,80 @@ export interface SlackFileUploadError {
 }
 
 export type SlackFileUploadOutcome = SlackFileUploadResult | SlackFileUploadError;
+
+/**
+ * Unified file upload response for invoke result.
+ * Always included in response when fileAttachment was present on invoke body.
+ */
+export type FileUploadResponse =
+  | {
+      ok: true;
+      fileId: string;
+      filename: string;
+      bytes: number;
+    }
+  | {
+      ok: false;
+      code: string;
+      reason: string;
+      messageJa: string;
+    };
+
+/**
+ * Build success file upload response from upload result.
+ */
+export function buildFileUploadSuccess(result: SlackFileUploadResult): FileUploadResponse {
+  return {
+    ok: true,
+    fileId: result.fileId,
+    filename: result.filename,
+    bytes: result.bytes,
+  };
+}
+
+/**
+ * Build error file upload response from egress denial.
+ */
+export function buildFileUploadEgressDenied(
+  verdict: FileAttachmentEgressVerdict
+): FileUploadResponse {
+  return {
+    ok: false,
+    code: verdict.reason,
+    reason: verdict.reason,
+    messageJa: verdict.messageJa,
+  };
+}
+
+/**
+ * Build error file upload response from upload failure.
+ */
+export function buildFileUploadFailed(
+  error: SlackFileUploadError
+): FileUploadResponse {
+  return {
+    ok: false,
+    code: error.code,
+    reason: error.error,
+    messageJa: `ファイルアップロードに失敗しました: ${error.error}`,
+  };
+}
+
+/**
+ * Build error file upload response for skipped upload (dest/thread missing after egress allow).
+ */
+export function buildFileUploadSkipped(opts: {
+  filename: string;
+  hasDest: boolean;
+  hasThreadTs: boolean;
+}): FileUploadResponse {
+  return {
+    ok: false,
+    code: "file_upload_skipped",
+    reason: "file_upload_skipped",
+    messageJa: `ファイル添付がスキップされました (dest=${opts.hasDest}, threadTs=${opts.hasThreadTs})`,
+  };
+}
 
 export interface FileAttachmentEgressInput {
   audience: Audience;
@@ -231,16 +311,30 @@ async function completeUpload(
 
 /**
  * Fetch file from signed URL (alternative to direct buffer).
+ * Explicitly follows redirects (3xx) to the final destination.
  */
 async function fetchFileFromUrl(
   fileUrl: string
-): Promise<{ ok: true; buffer: Buffer } | { ok: false; error: string }> {
+): Promise<{ ok: true; buffer: Buffer } | { ok: false; error: string; code: string }> {
   try {
     const response = await fetch(fileUrl, {
+      redirect: "follow",
       signal: AbortSignal.timeout(SLACK_TIMEOUT_MS),
     });
     if (!response.ok) {
-      return { ok: false, error: `fetch_file_http_${response.status}` };
+      const isRedirect = response.status >= 300 && response.status < 400;
+      if (isRedirect) {
+        return {
+          ok: false,
+          error: `fetch_file_redirect_not_followed_${response.status}`,
+          code: "file_fetch_redirect_failed",
+        };
+      }
+      return {
+        ok: false,
+        error: `fetch_file_http_${response.status}`,
+        code: "file_fetch_failed",
+      };
     }
     const arrayBuffer = await response.arrayBuffer();
     return { ok: true, buffer: Buffer.from(arrayBuffer) };
@@ -248,6 +342,7 @@ async function fetchFileFromUrl(
     return {
       ok: false,
       error: error instanceof Error ? error.message : "fetch_file_failed",
+      code: "file_fetch_failed",
     };
   }
 }
@@ -255,10 +350,12 @@ async function fetchFileFromUrl(
 /**
  * Upload file to Slack channel/thread using files.uploadV2 flow.
  *
- * Requires:
- * - org conversation adapter with xoxb token
- * - files:write scope on Slack app
- * - thread_ts (boss DM / internal threads only)
+ * Uses the same token resolution as postConversationMessage:
+ * - postingAs=user with linked identity → user token (requires files:write user scope)
+ * - postingAs=bot or unlinked → bot token (requires files:write app scope)
+ *
+ * This ensures file uploads work in human↔human DMs (Path B) where the bot
+ * is not present, by using the user's own token.
  *
  * Binary file data is passed via fileBuffer (gateway-held) or fileUrl (signed URL).
  * Never passes through LLM context.
@@ -266,12 +363,26 @@ async function fetchFileFromUrl(
 export async function uploadSlackFile(
   input: SlackFileUploadInput
 ): Promise<SlackFileUploadOutcome> {
-  const token = await resolveOrgSlackBotToken(input.orgId);
+  const resolved = await resolveConversationToken({
+    orgId: input.orgId,
+    employeeId: input.employeeId,
+    postingAs: input.postingAs,
+  });
+
+  if ("error" in resolved) {
+    return {
+      ok: false,
+      error: resolved.error,
+      code: resolved.error,
+    };
+  }
+
+  const token = resolved.token;
   if (!token) {
     return {
       ok: false,
-      error: "slack_bot_token_missing",
-      code: "slack_bot_token_missing",
+      error: "slack_token_missing",
+      code: "slack_token_missing",
     };
   }
 
@@ -308,7 +419,7 @@ export async function uploadSlackFile(
       return {
         ok: false,
         error: fetchResult.error,
-        code: "file_fetch_failed",
+        code: fetchResult.code,
       };
     }
     fileBuffer = fetchResult.buffer;

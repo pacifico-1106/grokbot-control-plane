@@ -91,9 +91,10 @@ describe("file attachment egress control", () => {
 });
 
 describe("uploadSlackFile validation", () => {
-  test("missing bot token returns error", async () => {
+  test("missing token returns error", async () => {
     const result = await uploadSlackFile({
       orgId: DEMO_ORG.id,
+      postingAs: "bot",
       channel: "C_INTERNAL",
       threadTs: "1787960001.111111",
       fileRef: "temp://abc123",
@@ -102,7 +103,7 @@ describe("uploadSlackFile validation", () => {
     });
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.code).toBe("slack_bot_token_missing");
+      expect(result.code).toBe("slack_token_missing");
     }
   });
 
@@ -338,6 +339,214 @@ describe("uploadSlackFile with mocked Slack API", () => {
       if (!result.ok) {
         expect(result.error).toBe("missing_scope");
         expect(result.code).toBe("get_upload_url_failed");
+      }
+    } finally {
+      globalThis.fetch = originalFetch;
+      await upsertConversationAdapter({
+        orgId: DEMO_ORG.id,
+        surface: "slack",
+        enabled: false,
+        secrets: {},
+      });
+    }
+  });
+});
+
+describe("uploadSlackFile token selection", () => {
+  test("postingAs=bot uses bot token", async () => {
+    await upsertConversationAdapter({
+      orgId: DEMO_ORG.id,
+      surface: "slack",
+      enabled: true,
+      secrets: { botToken: "xoxb-bot-token-test" },
+    });
+
+    const originalFetch = globalThis.fetch;
+    let capturedToken: string | null = null;
+
+    try {
+      globalThis.fetch = (async (input, init) => {
+        const url = String(input);
+        const authHeader = init?.headers && typeof init.headers === "object"
+          ? (init.headers as Record<string, string>).authorization
+          : undefined;
+        if (authHeader) {
+          capturedToken = authHeader.replace("Bearer ", "");
+        }
+
+        if (url.includes("files.getUploadURLExternal")) {
+          return Response.json({
+            ok: true,
+            upload_url: "https://files.slack.com/upload/v1/ABC123",
+            file_id: "F0123456789",
+          });
+        }
+        if (url.includes("files.slack.com/upload")) {
+          return new Response(null, { status: 200 });
+        }
+        if (url.includes("files.completeUploadExternal")) {
+          return Response.json({
+            ok: true,
+            files: [{ id: "F0123456789", timestamp: "1787960002.222222" }],
+          });
+        }
+        return Response.json({ ok: false, error: "unknown_endpoint" });
+      }) as typeof fetch;
+
+      const result = await uploadSlackFile({
+        orgId: DEMO_ORG.id,
+        postingAs: "bot",
+        channel: "C_CHANNEL",
+        threadTs: "1787960001.111111",
+        fileRef: "temp://abc123",
+        fileBuffer: Buffer.from("test content"),
+        filename: "test.pdf",
+      });
+
+      expect(result.ok).toBe(true);
+      expect(capturedToken).toBe("xoxb-bot-token-test");
+    } finally {
+      globalThis.fetch = originalFetch;
+      await upsertConversationAdapter({
+        orgId: DEMO_ORG.id,
+        surface: "slack",
+        enabled: false,
+        secrets: {},
+      });
+    }
+  });
+
+  test("postingAs=user without linked identity returns slack_identity_unbound error", async () => {
+    await upsertConversationAdapter({
+      orgId: DEMO_ORG.id,
+      surface: "slack",
+      enabled: true,
+      secrets: { botToken: "xoxb-bot-token" },
+    });
+
+    try {
+      const result = await uploadSlackFile({
+        orgId: DEMO_ORG.id,
+        employeeId: "emp_no_slack_link",
+        postingAs: "user",
+        channel: "D_DM_CHANNEL",
+        threadTs: "1787960001.111111",
+        fileRef: "temp://abc123",
+        fileBuffer: Buffer.from("test content"),
+        filename: "test.pdf",
+      });
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.code).toBe("slack_identity_unbound");
+      }
+    } finally {
+      await upsertConversationAdapter({
+        orgId: DEMO_ORG.id,
+        surface: "slack",
+        enabled: false,
+        secrets: {},
+      });
+    }
+  });
+});
+
+describe("uploadSlackFile file fetch with redirects", () => {
+  test("follows redirects when fetching file from URL", async () => {
+    await upsertConversationAdapter({
+      orgId: DEMO_ORG.id,
+      surface: "slack",
+      enabled: true,
+      secrets: { botToken: "xoxb-redirect-test" },
+    });
+
+    const originalFetch = globalThis.fetch;
+    const fetchCalls: string[] = [];
+
+    try {
+      globalThis.fetch = (async (input, init) => {
+        const url = String(input);
+        fetchCalls.push(url);
+
+        if (url === "https://example.com/file.pdf") {
+          return new Response(Buffer.from("PDF content"), {
+            status: 200,
+            headers: { "content-type": "application/pdf" },
+          });
+        }
+        if (url.includes("files.getUploadURLExternal")) {
+          return Response.json({
+            ok: true,
+            upload_url: "https://files.slack.com/upload/v1/ABC123",
+            file_id: "F0123456789",
+          });
+        }
+        if (url.includes("files.slack.com/upload")) {
+          return new Response(null, { status: 200 });
+        }
+        if (url.includes("files.completeUploadExternal")) {
+          return Response.json({
+            ok: true,
+            files: [{ id: "F0123456789", timestamp: "1787960002.222222" }],
+          });
+        }
+        return Response.json({ ok: false, error: "unknown_endpoint" });
+      }) as typeof fetch;
+
+      const result = await uploadSlackFile({
+        orgId: DEMO_ORG.id,
+        channel: "C_INTERNAL",
+        threadTs: "1787960001.111111",
+        fileRef: "https://example.com/file.pdf",
+        fileUrl: "https://example.com/file.pdf",
+        filename: "file.pdf",
+      });
+
+      expect(result.ok).toBe(true);
+      expect(fetchCalls[0]).toBe("https://example.com/file.pdf");
+    } finally {
+      globalThis.fetch = originalFetch;
+      await upsertConversationAdapter({
+        orgId: DEMO_ORG.id,
+        surface: "slack",
+        enabled: false,
+        secrets: {},
+      });
+    }
+  });
+
+  test("returns clear error when file fetch fails with non-2xx", async () => {
+    await upsertConversationAdapter({
+      orgId: DEMO_ORG.id,
+      surface: "slack",
+      enabled: true,
+      secrets: { botToken: "xoxb-fetch-fail-test" },
+    });
+
+    const originalFetch = globalThis.fetch;
+
+    try {
+      globalThis.fetch = (async (input) => {
+        const url = String(input);
+        if (url === "https://example.com/missing.pdf") {
+          return new Response(null, { status: 404 });
+        }
+        return Response.json({ ok: false, error: "unknown_endpoint" });
+      }) as typeof fetch;
+
+      const result = await uploadSlackFile({
+        orgId: DEMO_ORG.id,
+        channel: "C_INTERNAL",
+        threadTs: "1787960001.111111",
+        fileRef: "https://example.com/missing.pdf",
+        fileUrl: "https://example.com/missing.pdf",
+        filename: "missing.pdf",
+      });
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error).toBe("fetch_file_http_404");
+        expect(result.code).toBe("file_fetch_failed");
       }
     } finally {
       globalThis.fetch = originalFetch;
