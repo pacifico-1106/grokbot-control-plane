@@ -102,9 +102,23 @@ Socket Mode が ON だと Events が HTTPS endpoint に届きません。
 
 > **Note**: Admin MCP に新しいツールがデプロイされた場合、MCP コネクタを再起動/再接続してください（`capabilities.tools.listChanged: true` ですが、Streamable HTTP では通知 push が制限されます）。
 
-### `setup.slackStatus` — 最初のステップ
+### `setup.slackStatus` — 最初のステップ（キックオフ診断）
 
-`setup.slackStatus` は **read-only** の診断ツールで、承認なしで実行できます。`nextStepJa` フィールドに次の人間アクションが示されます（posting_as の pros/cons 推奨を含む）。Slack 設定の最初のステップとして常にこれを呼び出してください。
+`setup.slackStatus` は **read-only** の診断ツールで、承認なしで実行できます。秘密値は返しません。Slack 設定の最初のステップとして常にこれを呼び出してください。
+
+**主なフィールド**
+
+| フィールド | 意味 |
+|-----------|------|
+| `botTokenPresent` / `authTest` | xoxb がダッシュボードに登録され有効か |
+| `botHasFilesWrite` / `botFilesWriteCode` | Bot Token の `files:write` プローブ結果 |
+| `adapterEnabled` | 「つながり → チャンネルに書き込む（会社のBot）」が有効か |
+| `employees[]` | 社員ごとの `postingAs`, `slackIdentityLinked`, `fileUploadReady`, `needsReoauthForFilesWrite` |
+| `pathBReadiness` | Path B（`posting_as: user`）のファイル添付準備の集計 |
+| `authorizeUrlTemplate` | 社員 Slack 再連携 URL テンプレート（`/api/slack/oauth/start?employeeId=...`） |
+| `nextStepJa` | 次の人間アクション（canonical 順序） |
+
+**`nextStepJa` の canonical 順序**: Bot `files:write` 追加 → Reinstall → ダッシュボード「つながり → チャンネルに書き込む（会社のBot）」で xoxb 登録 → User Token `files:write` → 社員証 Slack Authorize（人間がブラウザでタップ）→ 任意で e2e
 
 ### `channels.classify` と `employeeId`
 
@@ -152,13 +166,14 @@ Slack API サイトで Staffpass Slack アプリを設定します。
 - `url_verification` 失敗でイベント受信できない
 - Vercel `/api/webhooks/slack/events` のログにリクエストが来ない
 
-#### 1-3. Bot Token Scopes 設定（パス A）
+#### 1-3. Bot Token Scopes 設定（パス A + Path B 補助）
 
 1. **Features → OAuth & Permissions**
 2. **Bot Token Scopes** に追加:
    - `im:history` - DM履歴の読み取り
    - `chat:write` - メッセージ投稿
    - `im:write` - DMの開始/書き込み
+   - `files:write` - ファイルアップロード（Path A チャネル / App DM 添付。Path B 本体は User Token 側）
 
 **重要**: スコープ変更後は **Reinstall to Workspace** が必要です。
 
@@ -191,10 +206,10 @@ Slack API サイトで Staffpass Slack アプリを設定します。
 ### ステップ2: Bot Token をStaffpassへ登録（人間がダッシュボードで実施）
 
 1. Slack アプリの **OAuth & Permissions** → **Bot User OAuth Token** (`xoxb-...`) をコピー
-2. Staffpassダッシュボード → **設定 → 会話アダプタ** → **Slack**
-3. **Bot Token** 欄に貼り付けて保存
+2. Staffpassダッシュボード → **つながり** → **チャンネルに書き込む（会社のBot）**
+3. **Bot token** 欄に貼り付けて保存（有効チェック ON）
 
-> アダプタトークンは環境変数 `SLACK_BOT_TOKEN` より優先されます。新しいトークンでの再設定が反映されない場合は、アダプタ設定を更新してください。
+> アダプタトークンは環境変数 `SLACK_BOT_TOKEN` より優先されます。Bot Token Scopes 変更・再インストール後は、新しい xoxb をここで更新してください。
 
 **症状（Token未登録・期限切れ）**:
 - `auth.test` 失敗
@@ -209,16 +224,26 @@ tools/call: setup.slackStatus
 診断結果の例:
 ```json
 {
-  "ok": true,
+  "ok": false,
   "botTokenPresent": true,
   "authTest": { "ok": true, "bot_id": "B...", "user_id": "U..." },
+  "botHasFilesWrite": false,
+  "botFilesWriteCode": "missing_scope",
+  "botFilesWriteNeeded": "files:write",
   "adapterEnabled": true,
+  "dashboardBotTokenPathJa": "つながり → チャンネルに書き込む（会社のBot）",
   "imRoutesCount": 0,
-  "nextStepJa": "チャネル分類を設定してください。内部1:1には channels.classify で employeeId を指定します。"
+  "pathBReadiness": {
+    "pathBEmployeeCount": 1,
+    "linkedCount": 0,
+    "needsAuthorizeCount": 1,
+    "ready": false
+  },
+  "nextStepJa": "Slack API → OAuth & Permissions → Bot Token Scopes に files:write を追加し..."
 }
 ```
 
-`nextStepJa` フィールドに次の人間アクションが示されます。
+`nextStepJa` に次の人間アクションが示されます。Path B PDF 添付の前提は `docs/slack-file-upload-egress.md` を参照。
 
 ### ステップ4: チャネル分類（管理エージェントがMCPで実施）
 
@@ -756,7 +781,7 @@ Staffpass Slack アプリは **Public Distribution Activated** ですが、App D
 1. オペからテナントへ Install URL を共有（非公開チャネル or 1:1）
 2. テナントが自社 WS へインストール
 3. OAuth 完了後、Bot User OAuth Token（xoxb-...）をコピー
-4. Staffpass ダッシュボード → 会話アダプタ → Slack → Token 登録
+4. Staffpass ダッシュボード → つながり → チャンネルに書き込む（会社のBot）→ xoxb 登録
 ```
 
 > **注意**: Install URL をパブリックチャネル・外部共有ドキュメントに貼らないでください。

@@ -15,7 +15,6 @@ import {
   type IngressHandoffPolicySource,
   type SchedulingPolicySource,
 } from "@/lib/data";
-import { listConversationAdapters } from "@/lib/data/conversation-adapters";
 import {
   validateIngressHandoffPolicy,
   summarizeIngressHandoffPolicyJa,
@@ -34,9 +33,7 @@ import {
   nextStepReplyPolicyJa,
   policyHasHighRiskAutoSend,
 } from "@/lib/gateway/reply-policy-validate";
-import { listSlackImRoutesByOrg } from "@/lib/data/slack-im-routes";
-import { getEmployeeSlackIdentity } from "@/lib/data/slack-identities";
-import { resolveOrgSlackBotToken } from "@/lib/slack/bot-token";
+import { diagnoseSlackStatus } from "@/lib/slack/slack-status-diagnose";
 import { queueAdminTool } from "@/lib/admin-mcp/queue";
 import { parseAdminFulfillment } from "@/lib/admin-mcp/fulfill-admin";
 import { ADMIN_MCP_TOOL_NAMES } from "@/lib/mcp/admin-public";
@@ -164,7 +161,7 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
   {
     name: "setup.slackStatus",
     description:
-      "Diagnose Slack integration status for this org (read-only, no approval required). Returns bot token presence, auth.test result, conversation adapter status, IM routes count, and employee posting_as settings with path-aware guidance. Use before guiding humans through Slack setup. The nextStepJa field indicates the next human action with posting_as pros/cons: Bot（会社窓口・アプリDM向け）vs 個人（社員名義・チャネル向け）。推奨デフォルト: アプリDM向け社員は bot / チャネル・Connect・人対人DM向けは user。【dual-audience S1+S2+S3本番】混在/Connect chでは resolveAudience が dualAudience を返却、二重マトリクス評価 dualEgress も稼働中。【F1 口ルーティング本番】S3/F1 口ルーティング本番稼働中。【D1 受信ハンドオフ本番】ingressHandoff.get/patch で添付・ファイル手渡し設定。A1 scheduling.policy も本番稼働中。混在chは相手台帳必須（parties.upsert）。Refer to docs/tenant-slack-kickoff-rail.md for the full RAIL including D1 guidance.",
+      "Diagnose Slack integration status for this org (read-only, no approval required). Returns bot token presence, auth.test, bot files:write probe, conversation adapter status, IM routes, per-employee posting_as / Slack identity / Path B fileUploadReady, pathBReadiness aggregate, and nextStepJa (canonical order: Bot files:write→Reinstall→つながり xoxb→User files:write→社員証 Slack Authorize). No secrets returned. Use before guiding humans through Slack setup. Refer to docs/tenant-slack-kickoff-rail.md and docs/slack-file-upload-egress.md.",
     inputSchema: {
       type: "object",
       properties: {},
@@ -446,153 +443,10 @@ export function adminToolsAlwaysHuman(): boolean {
   return true;
 }
 
-const SLACK_AUTH_TEST_TIMEOUT_MS = 5_000;
-
-type SlackAuthTestResult = {
-  ok: boolean;
-  bot_id?: string;
-  user_id?: string;
-  team_id?: string;
-  error?: string;
-};
-
-async function slackAuthTest(token: string): Promise<SlackAuthTestResult> {
-  if (!token) {
-    return { ok: false, error: "token_missing" };
-  }
-  try {
-    const response = await fetch("https://slack.com/api/auth.test", {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${token}`,
-        "content-type": "application/x-www-form-urlencoded",
-      },
-      signal: AbortSignal.timeout(SLACK_AUTH_TEST_TIMEOUT_MS),
-    });
-    const body = (await response.json().catch(() => ({}))) as SlackAuthTestResult;
-    return body;
-  } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : "auth_test_failed" };
-  }
-}
-
-type SlackStatusResult = {
-  ok: boolean;
-  botTokenPresent: boolean;
-  authTest: SlackAuthTestResult | null;
-  adapterEnabled: boolean;
-  adapterLabel: string | null;
-  imRoutesCount: number;
-  employeePostingAsBot: number;
-  employeePostingAsUser: number;
-  pathAEmployees: number;
-  pathBEmployees: number;
-  postingMismatch: string[];
-  issues: string[];
-  nextStepJa: string;
-};
-
 async function runSlackStatusDiagnose(
   cred: ResolvedAdminCredential
 ): Promise<{ content: Array<{ type: "text"; text: string }>; structuredContent?: unknown; isError?: boolean }> {
-  const issues: string[] = [];
-
-  const botToken = await resolveOrgSlackBotToken(cred.orgId);
-  const botTokenPresent = Boolean(botToken);
-
-  let authTest: SlackAuthTestResult | null = null;
-  if (botTokenPresent) {
-    authTest = await slackAuthTest(botToken);
-    if (!authTest.ok) {
-      issues.push(`auth.test 失敗: ${authTest.error || "unknown"}`);
-    }
-  } else {
-    issues.push("Bot Token が設定されていません");
-  }
-
-  const adapters = await listConversationAdapters(cred.orgId);
-  const slackAdapter = adapters.find((a) => a.surface === "slack");
-  const adapterEnabled = slackAdapter?.enabled ?? false;
-  const adapterLabel = slackAdapter?.label ?? null;
-  if (!adapterEnabled) {
-    issues.push("Slack 会話アダプタが無効です");
-  }
-
-  const imRoutes = await listSlackImRoutesByOrg(cred.orgId);
-  const imRoutesCount = imRoutes.length;
-  const employeesWithRoutes = new Set(imRoutes.map((r) => r.employeeId));
-
-  const employees = await listEmployees(cred.orgId);
-  let postingAsBot = 0;
-  let postingAsUser = 0;
-  let pathAEmployees = 0;
-  let pathBEmployees = 0;
-  const postingMismatch: string[] = [];
-
-  for (const emp of employees) {
-    if (emp.status !== "active") continue;
-    const posting = emp.postingAs;
-    if (posting === "bot") postingAsBot++;
-    else if (posting === "user") postingAsUser++;
-    else postingAsBot++;
-
-    const hasRoute = employeesWithRoutes.has(emp.id);
-    const identity = await getEmployeeSlackIdentity(emp.id);
-    const hasLinkedIdentity = identity?.status === "linked";
-
-    if (hasLinkedIdentity) {
-      pathBEmployees++;
-      if (posting === "bot" && hasRoute) {
-        postingMismatch.push(
-          `${emp.displayName}: Path B (linked identity) だが posting_as: bot。人↔人DMには user が必要`
-        );
-      }
-    } else if (hasRoute) {
-      pathAEmployees++;
-      if (posting === "user") {
-        postingMismatch.push(
-          `${emp.displayName}: Path A (App DM route のみ) だが posting_as: user。Bot DMには bot が必要`
-        );
-      }
-    }
-  }
-
-  if (postingMismatch.length > 0) {
-    issues.push(...postingMismatch);
-  }
-
-  let nextStepJa = "Slack 設定は完了しています。混在/Connect chを使う場合は parties.upsert で相手台帳を登録してください（S1+S2+S3 dual-audience 本番、F1 口ルーティング本番稼働中）。詳細: docs/tenant-slack-kickoff-rail.md";
-  if (!botTokenPresent) {
-    nextStepJa =
-      "Slack Bot Token (xoxb-...) をダッシュボード「設定 → 会話アダプタ → Slack」に登録してください。";
-  } else if (authTest && !authTest.ok) {
-    nextStepJa = `Bot Token の認証に失敗しました (${authTest.error})。トークンを再取得し、ダッシュボードで更新してください。`;
-  } else if (!adapterEnabled) {
-    nextStepJa = "ダッシュボード「設定 → 会話アダプタ → Slack」でアダプタを有効にしてください。";
-  } else if (imRoutesCount === 0) {
-    nextStepJa =
-      "チャネル分類を設定してください。内部1:1には channels.classify で employeeId を指定します。混在/Connect chは mixed=true + parties.upsert（相手台帳必須）。S1+S2+S3 dual-audience 本番、F1 口ルーティング本番稼働中。詳細: docs/tenant-slack-kickoff-rail.md";
-  } else if (postingMismatch.length > 0) {
-    nextStepJa =
-      "posting_as の設定を確認してください。【Bot】会社窓口・アプリDM向け・退席非依存。【個人(user)】社員名義・チャネル/人対人DM向け・OAuth依存。Path A (App DM) は bot、Path B (人↔人DM) / チャネル・Connect は user。混在chは相手台帳必須。F1 口ルーティング本番稼働中（分離配信が有効）。詳細: docs/tenant-slack-kickoff-rail.md";
-  }
-
-  const result: SlackStatusResult = {
-    ok: issues.length === 0,
-    botTokenPresent,
-    authTest,
-    adapterEnabled,
-    adapterLabel,
-    imRoutesCount,
-    employeePostingAsBot: postingAsBot,
-    employeePostingAsUser: postingAsUser,
-    pathAEmployees,
-    pathBEmployees,
-    postingMismatch,
-    issues,
-    nextStepJa,
-  };
-
+  const result = await diagnoseSlackStatus(cred.orgId);
   return {
     content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
     structuredContent: result,
