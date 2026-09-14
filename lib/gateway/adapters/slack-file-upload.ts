@@ -50,6 +50,80 @@ export interface SlackFileUploadError {
 
 export type SlackFileUploadOutcome = SlackFileUploadResult | SlackFileUploadError;
 
+/**
+ * Unified file upload response for invoke result.
+ * Always included in response when fileAttachment was present on invoke body.
+ */
+export type FileUploadResponse =
+  | {
+      ok: true;
+      fileId: string;
+      filename: string;
+      bytes: number;
+    }
+  | {
+      ok: false;
+      code: string;
+      reason: string;
+      messageJa: string;
+    };
+
+/**
+ * Build success file upload response from upload result.
+ */
+export function buildFileUploadSuccess(result: SlackFileUploadResult): FileUploadResponse {
+  return {
+    ok: true,
+    fileId: result.fileId,
+    filename: result.filename,
+    bytes: result.bytes,
+  };
+}
+
+/**
+ * Build error file upload response from egress denial.
+ */
+export function buildFileUploadEgressDenied(
+  verdict: FileAttachmentEgressVerdict
+): FileUploadResponse {
+  return {
+    ok: false,
+    code: verdict.reason,
+    reason: verdict.reason,
+    messageJa: verdict.messageJa,
+  };
+}
+
+/**
+ * Build error file upload response from upload failure.
+ */
+export function buildFileUploadFailed(
+  error: SlackFileUploadError
+): FileUploadResponse {
+  return {
+    ok: false,
+    code: error.code,
+    reason: error.error,
+    messageJa: `ファイルアップロードに失敗しました: ${error.error}`,
+  };
+}
+
+/**
+ * Build error file upload response for skipped upload (dest/thread missing after egress allow).
+ */
+export function buildFileUploadSkipped(opts: {
+  filename: string;
+  hasDest: boolean;
+  hasThreadTs: boolean;
+}): FileUploadResponse {
+  return {
+    ok: false,
+    code: "file_upload_skipped",
+    reason: "file_upload_skipped",
+    messageJa: `ファイル添付がスキップされました (dest=${opts.hasDest}, threadTs=${opts.hasThreadTs})`,
+  };
+}
+
 export interface FileAttachmentEgressInput {
   audience: Audience;
   effectiveAudience: "internal" | "external";

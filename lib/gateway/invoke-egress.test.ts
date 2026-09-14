@@ -789,7 +789,11 @@ describe("Gateway audience egress", () => {
       });
 
       expect(result.body.ok).toBe(true);
-      const resultObj = result.body.result as { fileUpload?: { ok: boolean; fileId?: string } } | undefined;
+      const resultObj = result.body.result as {
+        fileUpload?: { ok: boolean; fileId?: string };
+        fileAttachmentReceived?: boolean;
+      } | undefined;
+      expect(resultObj?.fileAttachmentReceived).toBe(true);
       expect(resultObj?.fileUpload?.ok).toBe(true);
       expect(resultObj?.fileUpload?.fileId).toBe("F0123456789");
       expect(apiCalls.some((c) => c.url.includes("files.getUploadURLExternal"))).toBe(true);
@@ -914,8 +918,86 @@ describe("Gateway audience egress", () => {
 
       expect(result.body.ok).toBe(true);
       expect(fileUploadCalled).toBe(false);
-      const resultObj = result.body.result as { fileUpload?: unknown } | undefined;
-      expect(resultObj?.fileUpload).toBe(undefined);
+      const resultObj = result.body.result as {
+        fileUpload?: { ok: boolean; code?: string; reason?: string };
+        fileAttachmentReceived?: boolean;
+      } | undefined;
+      expect(resultObj?.fileAttachmentReceived).toBe(true);
+      expect(resultObj?.fileUpload?.ok).toBe(false);
+      expect(resultObj?.fileUpload?.code).toBe("file_attachment_thread_required");
+    } finally {
+      globalThis.fetch = originalFetch;
+      await upsertConversationAdapter({
+        orgId: DEMO_ORG.id,
+        surface: "slack",
+        enabled: false,
+        secrets: {},
+      });
+    }
+  });
+
+  test("comm.reply with file attachment returns fileUpload.ok=false on Slack upload failure", async () => {
+    await upsertConversationAdapter({
+      orgId: DEMO_ORG.id,
+      surface: "slack",
+      enabled: true,
+      secrets: { botToken: "xoxb-file-test" },
+    });
+    const originalFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = (async (input) => {
+        const url = String(input);
+        if (url.includes("files.getUploadURLExternal")) {
+          return Response.json({
+            ok: false,
+            error: "missing_scope",
+          });
+        }
+        if (url.includes("chat.postMessage")) {
+          return Response.json({
+            ok: true,
+            channel: "C_INTERNAL",
+            ts: "1787960001.111111",
+          });
+        }
+        return Response.json({ ok: false, error: "unknown" });
+      }) as typeof fetch;
+
+      const result = await runGatewayInvoke({
+        employeeId: "emp_comm",
+        credentialId: "cred_comm",
+        body: {
+          tool: "comm.reply",
+          purpose: "comm.internal",
+          jobId: `job_file_upload_fail_${Date.now()}`,
+          conversation: {
+            surface: "slack",
+            orgId: DEMO_ORG.id,
+            slackChannelId: "C_INTERNAL",
+            threadId: "1787960001.111111",
+          },
+          args: {
+            slackChannelId: "C_INTERNAL",
+            text: "レポートを添付しました。",
+            threadId: "1787960001.111111",
+          },
+          fileAttachment: {
+            fileRef: "https://example.com/report.pdf",
+            filename: "report.pdf",
+            mimeType: "application/pdf",
+          },
+        },
+      });
+
+      expect(result.body.ok).toBe(true);
+      const resultObj = result.body.result as {
+        fileUpload?: { ok: boolean; code?: string; reason?: string };
+        fileAttachmentReceived?: boolean;
+      } | undefined;
+      expect(resultObj?.fileAttachmentReceived).toBe(true);
+      expect(resultObj?.fileUpload?.ok).toBe(false);
+      expect(resultObj?.fileUpload?.code).toBe("get_upload_url_failed");
+      expect(resultObj?.fileUpload?.reason).toBe("missing_scope");
     } finally {
       globalThis.fetch = originalFetch;
       await upsertConversationAdapter({
