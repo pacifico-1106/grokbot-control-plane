@@ -231,6 +231,7 @@
 - **Fail-closed**: 未知 / 外部混在で解決不能な内部パーティ → 内部漏洩なし（hold / deny）
 - **型**: `MouthRoutingPolicy` / `MouthRoutingDecision` / `OrgMouthRoutingPolicy`
 - **Admin MCP**: `mouthRoutingPolicy.get` / `mouthRoutingPolicy.patch`（将来）
+- **Wake stance（ロック）**: 社内=Bot、外部Connect=個人、混在=Bot可なら Bot else 個人（[tenant-slack-kickoff-rail.md](./tenant-slack-kickoff-rail.md) § Wake stance）
 - **詳細**: `docs/egress-policy.md` § S3 / [tenant-slack-kickoff-rail.md](./tenant-slack-kickoff-rail.md)
 
 ### F2 応答SLA／営業時間
