@@ -22,6 +22,6 @@
 - `stuck_watch.audience_ledger_retry` — 補完再試行
 - `stuck_watch.w4_notify` — config_drift 通知
 
-## 未着手
+## 次カット
 
-- Employee MCP (`staffpass_stuck_*`) — 次カット
+- Employee MCP (`staffpass_stuck_*`) — `docs/f7-stuck-watch-cut4-employee-mcp.md`

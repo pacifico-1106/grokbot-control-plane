@@ -18,6 +18,10 @@ import {
 } from "@/lib/mode";
 import type { GatewayInvokeRequest } from "@/lib/types";
 import { buildStaffpassWhoamiPayload } from "@/lib/mcp/whoami";
+import {
+  runEmployeeStuckList,
+  runEmployeeStuckRetry,
+} from "@/lib/stuck-watch/employee-handlers";
 
 export const MCP_PROTOCOL_VERSION = "2024-11-05";
 export const MCP_SERVER_NAME = "staffpass";
@@ -172,6 +176,45 @@ export const STAFFPASS_MCP_TOOLS: McpToolDef[] = [
     inputSchema: {
       type: "object",
       properties: {},
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "staffpass_stuck_list",
+    description:
+      "List stuck watch items for this employee badge only (read-only). F7: W1 mention-unanswered + W2 approved-unfulfilled scoped to calling badge. Returns summaryJa/nextStepJa per item. Cross-employee items are excluded.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        includeResolved: {
+          type: "boolean",
+          description: "Include resolved items (default false).",
+        },
+        kind: {
+          type: "string",
+          description: "Optional filter: w1 | w1_mention_unanswered | w2 | w2_approved_unfulfilled.",
+        },
+        limit: {
+          type: "number",
+          description: "Max items to return (1–100, default 50).",
+        },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "staffpass_stuck_retry",
+    description:
+      "Retry a stuck watch item owned by this employee badge (read-only action, no approval ticket). F7: ops_fault only; expected_gate refused; config_drift returns fix hint. W2 uses fulfill reinvoke; send/confirm re-evaluates gates. Cannot retry other employees' items.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        itemId: {
+          type: "string",
+          description: "Item id from staffpass_stuck_list (w1:... or w2:...).",
+        },
+      },
+      required: ["itemId"],
       additionalProperties: false,
     },
   },
@@ -455,12 +498,42 @@ export async function callStaffpassMcpTool(
         publicOrigin: "https://staffpass.sealith.com",
       });
     }
+    case "staffpass_stuck_list": {
+      const orgId = cred.orgId;
+      if (!orgId) {
+        return toolResult(
+          {
+            ok: false,
+            code: "org_required",
+            message: "orgId missing on credential (fail-closed)",
+          },
+          true
+        );
+      }
+      const result = await runEmployeeStuckList(orgId, cred.employeeId, args);
+      return toolResult(result, !result.ok);
+    }
+    case "staffpass_stuck_retry": {
+      const orgId = cred.orgId;
+      if (!orgId) {
+        return toolResult(
+          {
+            ok: false,
+            code: "org_required",
+            message: "orgId missing on credential (fail-closed)",
+          },
+          true
+        );
+      }
+      const result = await runEmployeeStuckRetry(orgId, cred.employeeId, args);
+      return toolResult(result, !result.ok);
+    }
     default:
       return toolResult(
         {
           ok: false,
           code: "unknown_mcp_tool",
-          message: `Unknown MCP tool: ${name}. Allowed: staffpass_whoami, staffpass_invoke, staffpass_get_approval_status, staffpass_health`,
+          message: `Unknown MCP tool: ${name}. Allowed: staffpass_whoami, staffpass_invoke, staffpass_get_approval_status, staffpass_health, staffpass_stuck_list, staffpass_stuck_retry`,
         },
         true
       );
