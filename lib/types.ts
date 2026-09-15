@@ -855,6 +855,65 @@ export interface TimeWindow {
   reason?: string;
 }
 
+/** Multi-calendar free/busy merge mode (A1 v2). */
+export type FreeBusyMergeMode = "union_busy";
+
+/** Calendar sources for union_busy merge (A1 v2). */
+export interface CalendarSources {
+  ids: string[];
+  freeBusyMerge: FreeBusyMergeMode;
+}
+
+/** Meeting mode detection strategy (A1 v2). */
+export type MeetingModeStrategy = "title_tag" | "explicit_only";
+
+/** Resolved meeting mode for a slot. */
+export type MeetingModeKind = "online" | "in_person";
+
+/** Action when meeting mode cannot be determined (A1 v2). */
+export type OnUnspecifiedMeetingMode = "drop" | "escalate";
+
+/** Meeting mode policy (A1 v2). */
+export interface MeetingModePolicy {
+  strategy: MeetingModeStrategy;
+  onlineTitleTags?: string[];
+  defaultMode?: MeetingModeKind;
+  onUnspecified: OnUnspecifiedMeetingMode;
+}
+
+/** Action when region cannot be resolved (A1 v2). */
+export type OnUnknownRegion = "drop" | "escalate" | "allow";
+
+/** Geographic area policy (A1 v2). */
+export interface AreaPolicy {
+  allowCountries?: string[];
+  denyCountries?: string[];
+  allowRegions?: string[];
+  denyRegions?: string[];
+  onUnknownRegion?: OnUnknownRegion;
+}
+
+/** Static travel feasibility constraints (A1 v2 — no routing API). */
+export interface TravelFeasibility {
+  maxOneWayMinutes?: number;
+  requireBuffer?: boolean;
+}
+
+/** Org-specific region dictionary entry (A1 v2). */
+export interface OrgRegionEntry {
+  code: string;
+  labelJa: string;
+  aliases?: string[];
+  country?: string;
+}
+
+/** Org region dictionary — no shared world geo master (A1 v2). */
+export interface OrgRegionDictionary {
+  version: 1;
+  defaultCountry: string;
+  regions: OrgRegionEntry[];
+}
+
 /** Single scheduling rule. */
 export interface SchedulingRule {
   id: string;
@@ -866,6 +925,14 @@ export interface SchedulingRule {
   softPrefer?: TimeWindow[];
   costCapJpy?: number;
   confirmAutomation: ConfirmAutomationLevel;
+  /** A1 v2: multi-calendar free/busy sources. */
+  calendarSources?: CalendarSources;
+  /** A1 v2: online vs in-person detection. */
+  meetingMode?: MeetingModePolicy;
+  /** A1 v2: geographic allow/deny. */
+  areaPolicy?: AreaPolicy;
+  /** A1 v2: static travel constraints. */
+  travelFeasibility?: TravelFeasibility;
 }
 
 /** Org-level scheduling policy. */
@@ -874,6 +941,8 @@ export interface OrgSchedulingPolicy {
   policyId: string;
   policyName: string;
   rules: SchedulingRule[];
+  /** A1 v2: org-specific region dictionary (embedded on policy jsonb). */
+  regionDictionary?: OrgRegionDictionary;
   highRiskConsentAt?: string;
   highRiskConsentBy?: string;
   updatedAt: string;
@@ -887,6 +956,12 @@ export interface SchedulingAuditLabel {
   appliedRules: string[];
   droppedByRules?: string[];
   reason?: string;
+  /** A1 v2: resolved meeting mode for the slot. */
+  meetingMode?: MeetingModeKind | "unspecified";
+  /** A1 v2: resolved region code. */
+  region?: string | null;
+  /** A1 v2: calendar ids used for union_busy. */
+  calendarSourcesUsed?: string[];
 }
 
 /**

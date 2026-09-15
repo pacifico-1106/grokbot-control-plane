@@ -1,8 +1,8 @@
 # A1 Scheduling Policy（日程調整ポリシー）
 
-**更新:** 2026-09-07  
-**状態:** shipped-slice（A1完了）  
-**次:** F1 口ルーティング → B2 Slack/LINE返信
+**更新:** 2026-09-15  
+**状態:** shipped-slice（A1 v1）+ **v2 拡張**（P0-A1, Yasaka GO 2026-09-15）  
+**次:** P0-B1 mail.policy → F1 口ルーティング
 
 ---
 
@@ -68,6 +68,37 @@ interface SchedulingRule {
   softPrefer?: TimeWindow[];            // スコア加点
   costCapJpy?: number;                  // コスト上限
   confirmAutomation: ConfirmAutomationLevel;
+  // --- A1 v2 (all optional, non-breaking) ---
+  calendarSources?: { ids: string[]; freeBusyMerge: "union_busy" };
+  meetingMode?: {
+    strategy: "title_tag" | "explicit_only";
+    onlineTitleTags?: string[];
+    defaultMode?: "online" | "in_person";
+    onUnspecified: "drop" | "escalate";
+  };
+  areaPolicy?: {
+    allowCountries?: string[];
+    denyCountries?: string[];
+    allowRegions?: string[];
+    denyRegions?: string[];
+    onUnknownRegion?: "drop" | "escalate" | "allow";
+  };
+  travelFeasibility?: {
+    maxOneWayMinutes?: number;
+    requireBuffer?: boolean;  // static buffer only — no routing API
+  };
+}
+
+interface OrgRegionDictionary {
+  version: 1;
+  defaultCountry: string;  // default JP
+  regions: Array<{ code: string; labelJa: string; aliases?: string[]; country?: string }>;
+}
+
+// Embedded on OrgSchedulingPolicy (no separate SQL for P0):
+interface OrgSchedulingPolicy {
+  // ...existing fields...
+  regionDictionary?: OrgRegionDictionary;
 }
 
 type ConfirmAutomationLevel =
@@ -170,8 +201,19 @@ type ConfirmAutomationLevel =
 ### フロー
 
 ```
-freebusy/read → apply scheduling.policy → outward propose shows final candidates only
+freebusy/read → union_busy (v2) → apply scheduling.policy v2 rules → outward propose shows final candidates only
 ```
+
+### A1 v2 ルール
+
+| ルール | 動作 |
+|--------|------|
+| `calendarSources` (union_busy) | 設定カレンダーのいずれかで busy → 候補除外。`ids: []` → fail-closed escalate |
+| `meetingMode` (title_tag) | タイトルに `onlineTitleTags` 一致 → online、それ以外は defaultMode (in_person) |
+| `meetingMode` (explicit_only) | `meetingModeExplicit` / `isOnline` で判定。未指定 → onUnspecified |
+| `areaPolicy` | 対面のみ適用。denyRegions / allowRegions / countries |
+| `travelFeasibility` | 静的移動時間・バッファ（routing API なし） |
+| `regionDictionary` | org 固有地域辞書（共有ワールドマスタなし） |
 
 ### スコアリング
 
@@ -196,6 +238,9 @@ interface SchedulingAuditLabel {
   appliedRules: string[];     // 適用されたルールID
   droppedByRules?: string[];  // 除外したルールID
   reason?: string;            // 理由の詳細
+  meetingMode?: "online" | "in_person" | "unspecified";  // v2
+  region?: string | null;     // v2
+  calendarSourcesUsed?: string[];  // v2
 }
 ```
 
@@ -252,9 +297,10 @@ const result = await applySchedulingPolicyToPropose({
 bun test lib/scheduling-policy/
 ```
 
-51 テストケース:
-- 検証 (validate.test.ts): 31 テスト
-- 適用エンジン (apply.test.ts): 20 テスト
+テストケース:
+- 検証 (validate.test.ts)
+- 適用エンジン (apply.test.ts)
+- **A1 v2 AC (v2-ac.test.ts): A1-1〜A1-6**
 
 ---
 

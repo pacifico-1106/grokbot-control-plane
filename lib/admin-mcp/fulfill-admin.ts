@@ -804,6 +804,7 @@ async function fulfillSchedulingPolicy(
   const validation = validateSchedulingPolicy({
     policyName: args.policyName,
     rules: args.rules,
+    regionDictionary: args.regionDictionary,
     highRiskConsentAt: args.highRiskConsentAt,
     highRiskConsentBy: args.highRiskConsentBy,
   });

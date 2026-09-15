@@ -420,8 +420,65 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
                 type: "string",
                 description: "always_human | risk_based | conditional | full_auto. High-risk (non-always_human) requires consent.",
               },
+              calendarSources: {
+                type: "object",
+                description: "A1 v2: multi-calendar free/busy (union_busy). Empty ids → fail-closed escalate.",
+                properties: {
+                  ids: { type: "array", items: { type: "string" } },
+                  freeBusyMerge: { type: "string", description: "union_busy" },
+                },
+              },
+              meetingMode: {
+                type: "object",
+                description: "A1 v2: online vs in-person detection",
+                properties: {
+                  strategy: { type: "string", description: "title_tag | explicit_only" },
+                  onlineTitleTags: { type: "array", items: { type: "string" } },
+                  defaultMode: { type: "string", description: "online | in_person" },
+                  onUnspecified: { type: "string", description: "drop | escalate" },
+                },
+              },
+              areaPolicy: {
+                type: "object",
+                description: "A1 v2: geographic allow/deny",
+                properties: {
+                  allowCountries: { type: "array", items: { type: "string" } },
+                  denyCountries: { type: "array", items: { type: "string" } },
+                  allowRegions: { type: "array", items: { type: "string" } },
+                  denyRegions: { type: "array", items: { type: "string" } },
+                  onUnknownRegion: { type: "string", description: "drop | escalate | allow" },
+                },
+              },
+              travelFeasibility: {
+                type: "object",
+                description: "A1 v2: static travel constraints (no routing API)",
+                properties: {
+                  maxOneWayMinutes: { type: "number" },
+                  requireBuffer: { type: "boolean" },
+                },
+              },
             },
             required: ["confirmAutomation"],
+          },
+        },
+        regionDictionary: {
+          type: "object",
+          description: "A1 v2: org-specific region dictionary (embedded on policy jsonb)",
+          properties: {
+            version: { type: "number", description: "Must be 1" },
+            defaultCountry: { type: "string", description: "Default JP" },
+            regions: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  code: { type: "string" },
+                  labelJa: { type: "string" },
+                  aliases: { type: "array", items: { type: "string" } },
+                  country: { type: "string" },
+                },
+              },
+            },
           },
         },
         highRiskConsentAt: { type: "string", description: "ISO timestamp of tenant consent for high-risk automation" },
@@ -1234,6 +1291,7 @@ export async function callAdminMcpTool(
         {
           policyName: args.policyName,
           rules: args.rules,
+          regionDictionary: args.regionDictionary,
           highRiskConsentAt: args.highRiskConsentAt,
           highRiskConsentBy: args.highRiskConsentBy,
         },

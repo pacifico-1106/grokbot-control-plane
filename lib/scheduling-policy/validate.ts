@@ -4,13 +4,24 @@
  * Fail-closed: missing/conflicting rules → do not widen candidates; escalate to human.
  */
 import type {
+  AreaPolicy,
+  CalendarSources,
   ConfirmAutomationLevel,
+  FreeBusyMergeMode,
   LocationAffinity,
+  MeetingModeKind,
+  MeetingModePolicy,
+  MeetingModeStrategy,
+  OnUnspecifiedMeetingMode,
+  OnUnknownRegion,
   OnlineMeetingPack,
   OnlineVideoToolEntry,
+  OrgRegionDictionary,
+  OrgRegionEntry,
   OrgSchedulingPolicy,
   SchedulingRule,
   TimeWindow,
+  TravelFeasibility,
 } from "@/lib/types";
 
 const LOCATION_AFFINITY_VALUES: LocationAffinity[] = [
@@ -32,6 +43,58 @@ const HIGH_RISK_AUTOMATION_LEVELS: ConfirmAutomationLevel[] = [
   "conditional",
   "full_auto",
 ];
+
+const FREE_BUSY_MERGE_VALUES: FreeBusyMergeMode[] = ["union_busy"];
+const MEETING_MODE_STRATEGY_VALUES: MeetingModeStrategy[] = ["title_tag", "explicit_only"];
+const MEETING_MODE_KIND_VALUES: MeetingModeKind[] = ["online", "in_person"];
+const ON_UNSPECIFIED_MEETING_MODE_VALUES: OnUnspecifiedMeetingMode[] = ["drop", "escalate"];
+const ON_UNKNOWN_REGION_VALUES: OnUnknownRegion[] = ["drop", "escalate", "allow"];
+
+const RULE_ALLOWED_KEYS = new Set([
+  "id",
+  "priority",
+  "locationAffinity",
+  "travelBufferMinutes",
+  "onlinePack",
+  "hardBlackout",
+  "softPrefer",
+  "costCapJpy",
+  "confirmAutomation",
+  "calendarSources",
+  "meetingMode",
+  "areaPolicy",
+  "travelFeasibility",
+]);
+
+const POLICY_ALLOWED_KEYS = new Set([
+  "version",
+  "policyId",
+  "policyName",
+  "rules",
+  "regionDictionary",
+  "highRiskConsentAt",
+  "highRiskConsentBy",
+  "updatedAt",
+  "updatedBy",
+]);
+
+const CALENDAR_SOURCES_ALLOWED_KEYS = new Set(["ids", "freeBusyMerge"]);
+const MEETING_MODE_ALLOWED_KEYS = new Set([
+  "strategy",
+  "onlineTitleTags",
+  "defaultMode",
+  "onUnspecified",
+]);
+const AREA_POLICY_ALLOWED_KEYS = new Set([
+  "allowCountries",
+  "denyCountries",
+  "allowRegions",
+  "denyRegions",
+  "onUnknownRegion",
+]);
+const TRAVEL_FEASIBILITY_ALLOWED_KEYS = new Set(["maxOneWayMinutes", "requireBuffer"]);
+const REGION_DICTIONARY_ALLOWED_KEYS = new Set(["version", "defaultCountry", "regions"]);
+const REGION_ENTRY_ALLOWED_KEYS = new Set(["code", "labelJa", "aliases", "country"]);
 
 export type ValidationError = {
   ruleIndex?: number;
@@ -69,6 +132,492 @@ function generateRuleId(): string {
 
 function generatePolicyId(): string {
   return `sp_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+}
+
+function collectUnknownFieldErrors(
+  rec: Record<string, unknown>,
+  allowed: Set<string>,
+  fieldPath: string,
+  ruleIndex?: number
+): ValidationError[] {
+  const errors: ValidationError[] = [];
+  for (const key of Object.keys(rec)) {
+    if (!allowed.has(key)) {
+      errors.push({
+        ruleIndex,
+        field: `${fieldPath}.${key}`,
+        code: "unknown_field",
+        message: `Unknown field: ${fieldPath}.${key}`,
+        messageJa: `未知のフィールド: ${fieldPath}.${key}`,
+      });
+    }
+  }
+  return errors;
+}
+
+function validateStringArray(
+  raw: unknown,
+  fieldPath: string,
+  ruleIndex?: number
+): { ok: true; values: string[] } | { ok: false; errors: ValidationError[] } {
+  if (!Array.isArray(raw)) {
+    return {
+      ok: false,
+      errors: [
+        {
+          ruleIndex,
+          field: fieldPath,
+          code: "invalid_string_array",
+          message: `${fieldPath} must be an array of strings`,
+          messageJa: `${fieldPath} は文字列配列でなければなりません`,
+        },
+      ],
+    };
+  }
+  const values: string[] = [];
+  for (let i = 0; i < raw.length; i++) {
+    if (typeof raw[i] !== "string" || !raw[i].trim()) {
+      return {
+        ok: false,
+        errors: [
+          {
+            ruleIndex,
+            field: `${fieldPath}[${i}]`,
+            code: "invalid_string_array_item",
+            message: `${fieldPath}[${i}] must be a non-empty string`,
+            messageJa: `${fieldPath}[${i}] は空でない文字列でなければなりません`,
+          },
+        ],
+      };
+    }
+    values.push(raw[i].trim());
+  }
+  return { ok: true, values };
+}
+
+function validateCalendarSources(
+  raw: unknown,
+  index: number
+): { ok: true; sources: CalendarSources } | { ok: false; errors: ValidationError[] } {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return {
+      ok: false,
+      errors: [
+        {
+          ruleIndex: index,
+          field: "calendarSources",
+          code: "invalid_calendar_sources_format",
+          message: "calendarSources must be an object",
+          messageJa: "calendarSources はオブジェクトでなければなりません",
+        },
+      ],
+    };
+  }
+
+  const rec = raw as Record<string, unknown>;
+  const errors = collectUnknownFieldErrors(rec, CALENDAR_SOURCES_ALLOWED_KEYS, "calendarSources", index);
+
+  const idsResult = validateStringArray(rec.ids, "calendarSources.ids", index);
+  if (!idsResult.ok) {
+    errors.push(...idsResult.errors);
+  }
+
+  if (
+    typeof rec.freeBusyMerge !== "string" ||
+    !FREE_BUSY_MERGE_VALUES.includes(rec.freeBusyMerge as FreeBusyMergeMode)
+  ) {
+    errors.push({
+      ruleIndex: index,
+      field: "calendarSources.freeBusyMerge",
+      code: "invalid_free_busy_merge",
+      message: `freeBusyMerge must be one of: ${FREE_BUSY_MERGE_VALUES.join(", ")}`,
+      messageJa: `freeBusyMerge は ${FREE_BUSY_MERGE_VALUES.join(" / ")} のいずれかです`,
+    });
+  }
+
+  if (errors.length > 0) {
+    return { ok: false, errors };
+  }
+
+  return {
+    ok: true,
+    sources: {
+      ids: idsResult.ok ? idsResult.values : [],
+      freeBusyMerge: rec.freeBusyMerge as FreeBusyMergeMode,
+    },
+  };
+}
+
+function validateMeetingMode(
+  raw: unknown,
+  index: number
+): { ok: true; meetingMode: MeetingModePolicy } | { ok: false; errors: ValidationError[] } {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return {
+      ok: false,
+      errors: [
+        {
+          ruleIndex: index,
+          field: "meetingMode",
+          code: "invalid_meeting_mode_format",
+          message: "meetingMode must be an object",
+          messageJa: "meetingMode はオブジェクトでなければなりません",
+        },
+      ],
+    };
+  }
+
+  const rec = raw as Record<string, unknown>;
+  const errors = collectUnknownFieldErrors(rec, MEETING_MODE_ALLOWED_KEYS, "meetingMode", index);
+
+  if (
+    typeof rec.strategy !== "string" ||
+    !MEETING_MODE_STRATEGY_VALUES.includes(rec.strategy as MeetingModeStrategy)
+  ) {
+    errors.push({
+      ruleIndex: index,
+      field: "meetingMode.strategy",
+      code: "invalid_meeting_mode_strategy",
+      message: `strategy must be one of: ${MEETING_MODE_STRATEGY_VALUES.join(", ")}`,
+      messageJa: `strategy は ${MEETING_MODE_STRATEGY_VALUES.join(" / ")} のいずれかです`,
+    });
+  }
+
+  if (rec.onlineTitleTags !== undefined) {
+    const tagsResult = validateStringArray(rec.onlineTitleTags, "meetingMode.onlineTitleTags", index);
+    if (!tagsResult.ok) {
+      errors.push(...tagsResult.errors);
+    }
+  }
+
+  if (
+    rec.defaultMode !== undefined &&
+    (typeof rec.defaultMode !== "string" ||
+      !MEETING_MODE_KIND_VALUES.includes(rec.defaultMode as MeetingModeKind))
+  ) {
+    errors.push({
+      ruleIndex: index,
+      field: "meetingMode.defaultMode",
+      code: "invalid_meeting_mode_default",
+      message: `defaultMode must be one of: ${MEETING_MODE_KIND_VALUES.join(", ")}`,
+      messageJa: `defaultMode は ${MEETING_MODE_KIND_VALUES.join(" / ")} のいずれかです`,
+    });
+  }
+
+  if (
+    typeof rec.onUnspecified !== "string" ||
+    !ON_UNSPECIFIED_MEETING_MODE_VALUES.includes(rec.onUnspecified as OnUnspecifiedMeetingMode)
+  ) {
+    errors.push({
+      ruleIndex: index,
+      field: "meetingMode.onUnspecified",
+      code: "invalid_meeting_mode_on_unspecified",
+      message: `onUnspecified must be one of: ${ON_UNSPECIFIED_MEETING_MODE_VALUES.join(", ")}`,
+      messageJa: `onUnspecified は ${ON_UNSPECIFIED_MEETING_MODE_VALUES.join(" / ")} のいずれかです`,
+    });
+  }
+
+  if (errors.length > 0) {
+    return { ok: false, errors };
+  }
+
+  const meetingMode: MeetingModePolicy = {
+    strategy: rec.strategy as MeetingModeStrategy,
+    onUnspecified: rec.onUnspecified as OnUnspecifiedMeetingMode,
+  };
+
+  if (Array.isArray(rec.onlineTitleTags)) {
+    const tagsResult = validateStringArray(rec.onlineTitleTags, "meetingMode.onlineTitleTags", index);
+    if (tagsResult.ok && tagsResult.values.length > 0) {
+      meetingMode.onlineTitleTags = tagsResult.values;
+    }
+  }
+
+  if (
+    typeof rec.defaultMode === "string" &&
+    MEETING_MODE_KIND_VALUES.includes(rec.defaultMode as MeetingModeKind)
+  ) {
+    meetingMode.defaultMode = rec.defaultMode as MeetingModeKind;
+  }
+
+  return { ok: true, meetingMode };
+}
+
+function validateAreaPolicy(
+  raw: unknown,
+  index: number
+): { ok: true; areaPolicy: AreaPolicy } | { ok: false; errors: ValidationError[] } {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return {
+      ok: false,
+      errors: [
+        {
+          ruleIndex: index,
+          field: "areaPolicy",
+          code: "invalid_area_policy_format",
+          message: "areaPolicy must be an object",
+          messageJa: "areaPolicy はオブジェクトでなければなりません",
+        },
+      ],
+    };
+  }
+
+  const rec = raw as Record<string, unknown>;
+  const errors = collectUnknownFieldErrors(rec, AREA_POLICY_ALLOWED_KEYS, "areaPolicy", index);
+  const areaPolicy: AreaPolicy = {};
+
+  for (const key of ["allowCountries", "denyCountries", "allowRegions", "denyRegions"] as const) {
+    if (rec[key] !== undefined) {
+      const result = validateStringArray(rec[key], `areaPolicy.${key}`, index);
+      if (!result.ok) {
+        errors.push(...result.errors);
+      } else if (result.values.length > 0) {
+        areaPolicy[key] = result.values;
+      }
+    }
+  }
+
+  if (
+    rec.onUnknownRegion !== undefined &&
+    (typeof rec.onUnknownRegion !== "string" ||
+      !ON_UNKNOWN_REGION_VALUES.includes(rec.onUnknownRegion as OnUnknownRegion))
+  ) {
+    errors.push({
+      ruleIndex: index,
+      field: "areaPolicy.onUnknownRegion",
+      code: "invalid_on_unknown_region",
+      message: `onUnknownRegion must be one of: ${ON_UNKNOWN_REGION_VALUES.join(", ")}`,
+      messageJa: `onUnknownRegion は ${ON_UNKNOWN_REGION_VALUES.join(" / ")} のいずれかです`,
+    });
+  } else if (typeof rec.onUnknownRegion === "string") {
+    areaPolicy.onUnknownRegion = rec.onUnknownRegion as OnUnknownRegion;
+  }
+
+  if (errors.length > 0) {
+    return { ok: false, errors };
+  }
+
+  return { ok: true, areaPolicy };
+}
+
+function validateTravelFeasibility(
+  raw: unknown,
+  index: number
+): { ok: true; travelFeasibility: TravelFeasibility } | { ok: false; errors: ValidationError[] } {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return {
+      ok: false,
+      errors: [
+        {
+          ruleIndex: index,
+          field: "travelFeasibility",
+          code: "invalid_travel_feasibility_format",
+          message: "travelFeasibility must be an object",
+          messageJa: "travelFeasibility はオブジェクトでなければなりません",
+        },
+      ],
+    };
+  }
+
+  const rec = raw as Record<string, unknown>;
+  const errors = collectUnknownFieldErrors(
+    rec,
+    TRAVEL_FEASIBILITY_ALLOWED_KEYS,
+    "travelFeasibility",
+    index
+  );
+  const travelFeasibility: TravelFeasibility = {};
+
+  if (rec.maxOneWayMinutes !== undefined) {
+    const minutes = Number(rec.maxOneWayMinutes);
+    if (!Number.isFinite(minutes) || minutes < 0) {
+      errors.push({
+        ruleIndex: index,
+        field: "travelFeasibility.maxOneWayMinutes",
+        code: "invalid_max_one_way_minutes",
+        message: "maxOneWayMinutes must be a non-negative number",
+        messageJa: "maxOneWayMinutes は 0 以上の数値でなければなりません",
+      });
+    } else {
+      travelFeasibility.maxOneWayMinutes = minutes;
+    }
+  }
+
+  if (rec.requireBuffer !== undefined) {
+    if (typeof rec.requireBuffer !== "boolean") {
+      errors.push({
+        ruleIndex: index,
+        field: "travelFeasibility.requireBuffer",
+        code: "invalid_require_buffer",
+        message: "requireBuffer must be a boolean",
+        messageJa: "requireBuffer は boolean でなければなりません",
+      });
+    } else {
+      travelFeasibility.requireBuffer = rec.requireBuffer;
+    }
+  }
+
+  if (errors.length > 0) {
+    return { ok: false, errors };
+  }
+
+  return { ok: true, travelFeasibility };
+}
+
+function validateRegionEntry(
+  raw: unknown,
+  index: number
+): { ok: true; entry: OrgRegionEntry } | { ok: false; errors: ValidationError[] } {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return {
+      ok: false,
+      errors: [
+        {
+          field: `regionDictionary.regions[${index}]`,
+          code: "invalid_region_entry_format",
+          message: "Region entry must be an object",
+          messageJa: "地域エントリはオブジェクトでなければなりません",
+        },
+      ],
+    };
+  }
+
+  const rec = raw as Record<string, unknown>;
+  const errors = collectUnknownFieldErrors(
+    rec,
+    REGION_ENTRY_ALLOWED_KEYS,
+    `regionDictionary.regions[${index}]`
+  );
+
+  if (typeof rec.code !== "string" || !rec.code.trim()) {
+    errors.push({
+      field: `regionDictionary.regions[${index}].code`,
+      code: "invalid_region_code",
+      message: "Region code is required",
+      messageJa: "地域コードは必須です",
+    });
+  }
+
+  if (typeof rec.labelJa !== "string" || !rec.labelJa.trim()) {
+    errors.push({
+      field: `regionDictionary.regions[${index}].labelJa`,
+      code: "invalid_region_label",
+      message: "Region labelJa is required",
+      messageJa: "地域ラベル（日本語）は必須です",
+    });
+  }
+
+  if (rec.aliases !== undefined) {
+    const aliasesResult = validateStringArray(
+      rec.aliases,
+      `regionDictionary.regions[${index}].aliases`
+    );
+    if (!aliasesResult.ok) {
+      errors.push(...aliasesResult.errors);
+    }
+  }
+
+  if (rec.country !== undefined && (typeof rec.country !== "string" || !rec.country.trim())) {
+    errors.push({
+      field: `regionDictionary.regions[${index}].country`,
+      code: "invalid_region_country",
+      message: "Region country must be a non-empty string",
+      messageJa: "地域の国コードは空でない文字列でなければなりません",
+    });
+  }
+
+  if (errors.length > 0) {
+    return { ok: false, errors };
+  }
+
+  const entry: OrgRegionEntry = {
+    code: (rec.code as string).trim(),
+    labelJa: (rec.labelJa as string).trim(),
+  };
+
+  if (Array.isArray(rec.aliases)) {
+    const aliasesResult = validateStringArray(
+      rec.aliases,
+      `regionDictionary.regions[${index}].aliases`
+    );
+    if (aliasesResult.ok && aliasesResult.values.length > 0) {
+      entry.aliases = aliasesResult.values;
+    }
+  }
+
+  if (typeof rec.country === "string" && rec.country.trim()) {
+    entry.country = rec.country.trim();
+  }
+
+  return { ok: true, entry };
+}
+
+function validateRegionDictionary(
+  raw: unknown
+): { ok: true; dictionary: OrgRegionDictionary } | { ok: false; errors: ValidationError[] } {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return {
+      ok: false,
+      errors: [
+        {
+          field: "regionDictionary",
+          code: "invalid_region_dictionary_format",
+          message: "regionDictionary must be an object",
+          messageJa: "regionDictionary はオブジェクトでなければなりません",
+        },
+      ],
+    };
+  }
+
+  const rec = raw as Record<string, unknown>;
+  const errors = collectUnknownFieldErrors(rec, REGION_DICTIONARY_ALLOWED_KEYS, "regionDictionary");
+
+  if (rec.version !== 1) {
+    errors.push({
+      field: "regionDictionary.version",
+      code: "invalid_region_dictionary_version",
+      message: "regionDictionary.version must be 1",
+      messageJa: "regionDictionary.version は 1 でなければなりません",
+    });
+  }
+
+  const defaultCountry =
+    typeof rec.defaultCountry === "string" && rec.defaultCountry.trim()
+      ? rec.defaultCountry.trim()
+      : "JP";
+
+  if (!Array.isArray(rec.regions)) {
+    errors.push({
+      field: "regionDictionary.regions",
+      code: "regions_required",
+      message: "regionDictionary.regions array is required",
+      messageJa: "regionDictionary.regions 配列が必要です",
+    });
+    return { ok: false, errors };
+  }
+
+  const regions: OrgRegionEntry[] = [];
+  for (let i = 0; i < rec.regions.length; i++) {
+    const result = validateRegionEntry(rec.regions[i], i);
+    if (result.ok) {
+      regions.push(result.entry);
+    } else {
+      errors.push(...result.errors);
+    }
+  }
+
+  if (errors.length > 0) {
+    return { ok: false, errors };
+  }
+
+  return {
+    ok: true,
+    dictionary: {
+      version: 1,
+      defaultCountry,
+      regions,
+    },
+  };
 }
 
 function validateTimeWindow(
@@ -215,6 +764,7 @@ export function validateSchedulingRule(
   }
 
   const rec = raw as Record<string, unknown>;
+  errors.push(...collectUnknownFieldErrors(rec, RULE_ALLOWED_KEYS, "rule", index));
 
   const id =
     typeof rec.id === "string" && rec.id.trim() ? rec.id.trim() : generateRuleId();
@@ -323,6 +873,42 @@ export function validateSchedulingRule(
     rule.confirmAutomation = rec.confirmAutomation;
   }
 
+  if (rec.calendarSources !== undefined) {
+    const sourcesResult = validateCalendarSources(rec.calendarSources, index);
+    if (sourcesResult.ok) {
+      rule.calendarSources = sourcesResult.sources;
+    } else {
+      errors.push(...sourcesResult.errors);
+    }
+  }
+
+  if (rec.meetingMode !== undefined) {
+    const meetingModeResult = validateMeetingMode(rec.meetingMode, index);
+    if (meetingModeResult.ok) {
+      rule.meetingMode = meetingModeResult.meetingMode;
+    } else {
+      errors.push(...meetingModeResult.errors);
+    }
+  }
+
+  if (rec.areaPolicy !== undefined) {
+    const areaResult = validateAreaPolicy(rec.areaPolicy, index);
+    if (areaResult.ok) {
+      rule.areaPolicy = areaResult.areaPolicy;
+    } else {
+      errors.push(...areaResult.errors);
+    }
+  }
+
+  if (rec.travelFeasibility !== undefined) {
+    const travelResult = validateTravelFeasibility(rec.travelFeasibility, index);
+    if (travelResult.ok) {
+      rule.travelFeasibility = travelResult.travelFeasibility;
+    } else {
+      errors.push(...travelResult.errors);
+    }
+  }
+
   if (errors.length > 0) {
     return { ok: false, errors };
   }
@@ -352,6 +938,7 @@ export function validateSchedulingPolicy(
   }
 
   const rec = input as Record<string, unknown>;
+  errors.push(...collectUnknownFieldErrors(rec, POLICY_ALLOWED_KEYS, "policy"));
 
   const policyId =
     typeof rec.policyId === "string" && rec.policyId.trim()
@@ -420,6 +1007,20 @@ export function validateSchedulingPolicy(
     return { ok: false, errors };
   }
 
+  let regionDictionary: OrgRegionDictionary | undefined;
+  if (rec.regionDictionary !== undefined) {
+    const dictResult = validateRegionDictionary(rec.regionDictionary);
+    if (dictResult.ok) {
+      regionDictionary = dictResult.dictionary;
+    } else {
+      errors.push(...dictResult.errors);
+    }
+  }
+
+  if (errors.length > 0) {
+    return { ok: false, errors };
+  }
+
   const policy: OrgSchedulingPolicy = {
     version: 1,
     policyId,
@@ -428,6 +1029,10 @@ export function validateSchedulingPolicy(
     updatedAt: new Date().toISOString(),
     updatedBy: "admin_mcp",
   };
+
+  if (regionDictionary) {
+    policy.regionDictionary = regionDictionary;
+  }
 
   if (
     typeof rec.highRiskConsentAt === "string" &&
@@ -481,7 +1086,15 @@ export function normalizeSchedulingPolicy(value: unknown): OrgSchedulingPolicy {
     return defaultSchedulingPolicy();
   }
 
-  return {
+  let regionDictionary: OrgRegionDictionary | undefined;
+  if (rec.regionDictionary && typeof rec.regionDictionary === "object") {
+    const dictResult = validateRegionDictionary(rec.regionDictionary);
+    if (dictResult.ok) {
+      regionDictionary = dictResult.dictionary;
+    }
+  }
+
+  const policy: OrgSchedulingPolicy = {
     version: 1,
     policyId:
       typeof rec.policyId === "string" && rec.policyId.trim()
@@ -500,6 +1113,12 @@ export function normalizeSchedulingPolicy(value: unknown): OrgSchedulingPolicy {
       typeof rec.updatedAt === "string" ? rec.updatedAt : new Date().toISOString(),
     updatedBy: "admin_mcp",
   };
+
+  if (regionDictionary) {
+    policy.regionDictionary = regionDictionary;
+  }
+
+  return policy;
 }
 
 export function isDefaultSchedulingPolicy(policy: OrgSchedulingPolicy): boolean {
@@ -512,7 +1131,12 @@ export function isDefaultSchedulingPolicy(policy: OrgSchedulingPolicy): boolean 
     rule.onlinePack === undefined &&
     rule.hardBlackout === undefined &&
     rule.softPrefer === undefined &&
-    rule.costCapJpy === undefined
+    rule.costCapJpy === undefined &&
+    rule.calendarSources === undefined &&
+    rule.meetingMode === undefined &&
+    rule.areaPolicy === undefined &&
+    rule.travelFeasibility === undefined &&
+    policy.regionDictionary === undefined
   );
 }
 
@@ -547,7 +1171,22 @@ export function summarizeSchedulingPolicyJa(policy: OrgSchedulingPolicy): string
     const bufferJa = rule.travelBufferMinutes
       ? `移動${rule.travelBufferMinutes}分`
       : "";
-    const parts2 = [locationJa, automationJa, bufferJa].filter(Boolean);
+    const calendarJa = rule.calendarSources
+      ? `複数カレンダー(${rule.calendarSources.ids.length}件)`
+      : "";
+    const meetingModeJa = rule.meetingMode
+      ? rule.meetingMode.strategy === "title_tag"
+        ? `オンラインタグ${rule.meetingMode.onlineTitleTags?.length ? `(${rule.meetingMode.onlineTitleTags.join("/")})` : ""}`
+        : "明示モード"
+      : "";
+    const areaJa = rule.areaPolicy?.allowRegions?.length
+      ? `地域許可(${rule.areaPolicy.allowRegions.join("/")})`
+      : rule.areaPolicy?.denyRegions?.length
+        ? `地域拒否(${rule.areaPolicy.denyRegions.join("/")})`
+        : "";
+    const parts2 = [locationJa, automationJa, bufferJa, calendarJa, meetingModeJa, areaJa].filter(
+      Boolean
+    );
     parts.push(parts2.join(" / "));
   }
   return parts.join(" → ");

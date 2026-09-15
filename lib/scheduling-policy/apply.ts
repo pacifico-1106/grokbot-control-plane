@@ -4,12 +4,18 @@
  * Record which rules dropped/kept (audit labels F5). Fail-closed on conflict/unknown.
  */
 import { appendAuditEvent } from "@/lib/data/audit";
+import { resolveRegionCode, resolveRegionCountry } from "./region";
 import type {
+  AreaPolicy,
   ConfirmAutomationLevel,
+  MeetingModeKind,
+  MeetingModePolicy,
+  OnUnknownRegion,
   OrgSchedulingPolicy,
   SchedulingAuditLabel,
   SchedulingRule,
   TimeWindow,
+  TravelFeasibility,
 } from "@/lib/types";
 
 /** Input slot from freebusy or calendar system. */
@@ -21,6 +27,18 @@ export interface FreebusySlot {
   locationHint?: string;
   estimatedCostJpy?: number;
   metadata?: Record<string, unknown>;
+  /** A1 v2: event title for title_tag meeting mode detection. */
+  title?: string;
+  /** A1 v2: explicit meeting mode (explicit_only strategy). */
+  meetingModeExplicit?: MeetingModeKind;
+  /** A1 v2: region hint (code, alias, or label). */
+  regionHint?: string;
+  /** A1 v2: one-way travel time in minutes (static, no routing API). */
+  travelOneWayMinutes?: number;
+  /** A1 v2: minutes since previous event (for requireBuffer). */
+  bufferBeforeMinutes?: number;
+  /** A1 v2: minutes until next event (for requireBuffer). */
+  bufferAfterMinutes?: number;
 }
 
 /** Scored candidate after policy application. */
@@ -50,6 +68,8 @@ export interface ApplySchedulingPolicyOptions {
   employeeId?: string;
   jobId?: string;
   now?: Date;
+  /** A1 v2: calendar ids used for union_busy pre-filter. */
+  calendarSourcesUsed?: string[];
 }
 
 function parseDate(str: string): Date {
@@ -140,13 +160,162 @@ function isSlotPreferred(
   return { preferred: false };
 }
 
+function resolveMeetingMode(
+  slot: FreebusySlot,
+  policy: MeetingModePolicy
+): { mode: MeetingModeKind | "unspecified"; reason?: string } {
+  if (policy.strategy === "explicit_only") {
+    if (slot.meetingModeExplicit) {
+      return { mode: slot.meetingModeExplicit };
+    }
+    if (slot.isOnline === true) {
+      return { mode: "online" };
+    }
+    if (slot.isOnline === false) {
+      return { mode: "in_person" };
+    }
+    return { mode: "unspecified", reason: "meetingMode: explicit_only but mode not specified" };
+  }
+
+  const title = slot.title ?? "";
+  const tags = policy.onlineTitleTags ?? [];
+  const hasOnlineTag = tags.some((tag) => title.toLowerCase().includes(tag.toLowerCase()));
+  if (hasOnlineTag) {
+    return { mode: "online", reason: "meetingMode: title_tag matched online" };
+  }
+
+  const defaultMode = policy.defaultMode ?? "in_person";
+  if (title.trim()) {
+    return { mode: defaultMode, reason: `meetingMode: title_tag default ${defaultMode}` };
+  }
+
+  return { mode: "unspecified", reason: "meetingMode: no title for title_tag" };
+}
+
+function evaluateAreaPolicy(
+  slot: FreebusySlot,
+  meetingMode: MeetingModeKind | "unspecified",
+  areaPolicy: AreaPolicy,
+  policy: OrgSchedulingPolicy
+): { kept: boolean; region: string | null; reason?: string; escalate?: boolean } {
+  if (meetingMode !== "in_person") {
+    return { kept: true, region: null };
+  }
+
+  const regionCode = resolveRegionCode(slot.regionHint, policy.regionDictionary);
+  const onUnknown: OnUnknownRegion = areaPolicy.onUnknownRegion ?? "drop";
+
+  if (!regionCode) {
+    if (onUnknown === "allow") {
+      return { kept: true, region: null, reason: "areaPolicy: unknown region allowed" };
+    }
+    if (onUnknown === "escalate") {
+      return {
+        kept: false,
+        region: null,
+        reason: "areaPolicy: unknown region escalate",
+        escalate: true,
+      };
+    }
+    return {
+      kept: false,
+      region: null,
+      reason: "areaPolicy: unknown region dropped",
+    };
+  }
+
+  if (areaPolicy.denyRegions?.includes(regionCode)) {
+    return {
+      kept: false,
+      region: regionCode,
+      reason: `areaPolicy: denyRegions ${regionCode}`,
+    };
+  }
+
+  if (
+    areaPolicy.allowRegions &&
+    areaPolicy.allowRegions.length > 0 &&
+    !areaPolicy.allowRegions.includes(regionCode)
+  ) {
+    return {
+      kept: false,
+      region: regionCode,
+      reason: `areaPolicy: not in allowRegions (${regionCode})`,
+    };
+  }
+
+  const country = resolveRegionCountry(regionCode, policy.regionDictionary);
+  if (country && areaPolicy.denyCountries?.includes(country)) {
+    return {
+      kept: false,
+      region: regionCode,
+      reason: `areaPolicy: denyCountries ${country}`,
+    };
+  }
+
+  if (
+    country &&
+    areaPolicy.allowCountries &&
+    areaPolicy.allowCountries.length > 0 &&
+    !areaPolicy.allowCountries.includes(country)
+  ) {
+    return {
+      kept: false,
+      region: regionCode,
+      reason: `areaPolicy: not in allowCountries (${country})`,
+    };
+  }
+
+  return { kept: true, region: regionCode };
+}
+
+function evaluateTravelFeasibility(
+  slot: FreebusySlot,
+  meetingMode: MeetingModeKind | "unspecified",
+  travelFeasibility: TravelFeasibility,
+  rule: SchedulingRule
+): { kept: boolean; reason?: string } {
+  if (meetingMode !== "in_person") {
+    return { kept: true };
+  }
+
+  if (
+    travelFeasibility.maxOneWayMinutes !== undefined &&
+    slot.travelOneWayMinutes !== undefined &&
+    slot.travelOneWayMinutes > travelFeasibility.maxOneWayMinutes
+  ) {
+    return {
+      kept: false,
+      reason: `travelFeasibility: ${slot.travelOneWayMinutes}min > max ${travelFeasibility.maxOneWayMinutes}min`,
+    };
+  }
+
+  if (travelFeasibility.requireBuffer) {
+    const bufferMinutes = rule.travelBufferMinutes ?? 30;
+    const before = slot.bufferBeforeMinutes ?? Infinity;
+    const after = slot.bufferAfterMinutes ?? Infinity;
+    if (before < bufferMinutes || after < bufferMinutes) {
+      return {
+        kept: false,
+        reason: `travelFeasibility: buffer ${bufferMinutes}min required (before=${before}, after=${after})`,
+      };
+    }
+  }
+
+  return { kept: true };
+}
+
 function scoreSlotByRule(
   slot: FreebusySlot,
-  rule: SchedulingRule
+  rule: SchedulingRule,
+  policy: OrgSchedulingPolicy
 ): {
   score: number;
   kept: boolean;
   reasons: string[];
+  meetingMode?: MeetingModeKind | "unspecified";
+  region?: string | null;
+  escalate?: boolean;
 } {
   let score = 100;
   const reasons: string[] = [];
@@ -200,6 +369,82 @@ function scoreSlotByRule(
     reasons.push(`costWithinCap: ${slot.estimatedCostJpy} / ${rule.costCapJpy}`);
   }
 
+  let resolvedMeetingMode: MeetingModeKind | "unspecified" | undefined;
+  let resolvedRegion: string | null | undefined;
+  let escalate = false;
+
+  if (rule.meetingMode) {
+    const meetingResult = resolveMeetingMode(slot, rule.meetingMode);
+    resolvedMeetingMode = meetingResult.mode;
+    if (meetingResult.reason) {
+      reasons.push(meetingResult.reason);
+    }
+
+    if (meetingResult.mode === "unspecified") {
+      if (rule.meetingMode.onUnspecified === "escalate") {
+        kept = false;
+        escalate = true;
+        reasons.push("meetingMode: onUnspecified escalate");
+        return {
+          score: 0,
+          kept,
+          reasons,
+          meetingMode: "unspecified",
+          escalate,
+        };
+      }
+      kept = false;
+      reasons.push("meetingMode: onUnspecified drop");
+      return { score: 0, kept, reasons, meetingMode: "unspecified" };
+    }
+
+    if (slot.isOnline === undefined) {
+      slot = { ...slot, isOnline: meetingResult.mode === "online" };
+    }
+  }
+
+  if (rule.areaPolicy && resolvedMeetingMode !== "unspecified") {
+    const modeForArea = resolvedMeetingMode ?? (slot.isOnline ? "online" : "in_person");
+    const areaResult = evaluateAreaPolicy(slot, modeForArea, rule.areaPolicy, policy);
+    resolvedRegion = areaResult.region;
+    if (!areaResult.kept) {
+      kept = false;
+      if (areaResult.reason) reasons.push(areaResult.reason);
+      if (areaResult.escalate) escalate = true;
+      return {
+        score: 0,
+        kept,
+        reasons,
+        meetingMode: resolvedMeetingMode,
+        region: resolvedRegion,
+        escalate,
+      };
+    }
+    if (areaResult.reason) reasons.push(areaResult.reason);
+  }
+
+  if (rule.travelFeasibility) {
+    const modeForTravel =
+      resolvedMeetingMode ?? (slot.isOnline ? "online" : "in_person");
+    const travelResult = evaluateTravelFeasibility(
+      slot,
+      modeForTravel,
+      rule.travelFeasibility,
+      rule
+    );
+    if (!travelResult.kept) {
+      kept = false;
+      if (travelResult.reason) reasons.push(travelResult.reason);
+      return {
+        score: 0,
+        kept,
+        reasons,
+        meetingMode: resolvedMeetingMode,
+        region: resolvedRegion,
+      };
+    }
+  }
+
   if (rule.onlinePack?.enabled && slot.isOnline) {
     if (rule.onlinePack.calendarTarget && slot.metadata?.calendar) {
       if (slot.metadata.calendar !== rule.onlinePack.calendarTarget) {
@@ -228,7 +473,7 @@ function scoreSlotByRule(
     }
   }
 
-  return { score, kept, reasons };
+  return { score, kept, reasons, meetingMode: resolvedMeetingMode, region: resolvedRegion };
 }
 
 function resolveEffectiveConfirmAutomation(
@@ -260,7 +505,8 @@ function resolveEffectiveConfirmAutomation(
 export function applySchedulingPolicySync(
   policy: OrgSchedulingPolicy,
   slots: FreebusySlot[],
-  _now: Date = new Date()
+  _now: Date = new Date(),
+  options: Pick<ApplySchedulingPolicyOptions, "calendarSourcesUsed"> = {}
 ): ApplySchedulingPolicyResult {
   if (policy.rules.length === 0) {
     return {
@@ -278,16 +524,30 @@ export function applySchedulingPolicySync(
   const allCandidates: ScoredCandidate[] = [];
   const auditLabels: SchedulingAuditLabel[] = [];
 
+  let policyEscalate = false;
+
   for (const slot of slots) {
     let bestScore = -1;
     let kept = false;
     const appliedRules: string[] = [];
     const droppedByRules: string[] = [];
     const allReasons: string[] = [];
+    let slotMeetingMode: MeetingModeKind | "unspecified" | undefined;
+    let slotRegion: string | null | undefined;
 
     for (const rule of policy.rules) {
-      const result = scoreSlotByRule(slot, rule);
+      const result = scoreSlotByRule(slot, rule, policy);
       appliedRules.push(rule.id);
+
+      if (result.meetingMode) {
+        slotMeetingMode = result.meetingMode;
+      }
+      if (result.region !== undefined) {
+        slotRegion = result.region;
+      }
+      if (result.escalate) {
+        policyEscalate = true;
+      }
 
       if (result.kept) {
         if (result.score > bestScore) {
@@ -322,6 +582,9 @@ export function applySchedulingPolicySync(
       appliedRules,
       droppedByRules: droppedByRules.length > 0 ? droppedByRules : undefined,
       reason: allReasons.join("; ") || undefined,
+      meetingMode: slotMeetingMode,
+      region: slotRegion ?? null,
+      calendarSourcesUsed: options.calendarSourcesUsed,
     });
   }
 
@@ -338,7 +601,8 @@ export function applySchedulingPolicySync(
     effectiveConfirmAutomation,
     droppedCount: allCandidates.filter((c) => !c.kept).length,
     keptCount: finalCandidates.length,
-    failClosed: false,
+    failClosed: policyEscalate,
+    failClosedReason: policyEscalate ? "policy_escalate" : undefined,
   };
 }
 
@@ -351,7 +615,9 @@ export async function applySchedulingPolicy(
   options: ApplySchedulingPolicyOptions
 ): Promise<ApplySchedulingPolicyResult> {
   const now = options.now || new Date();
-  const result = applySchedulingPolicySync(policy, slots, now);
+  const result = applySchedulingPolicySync(policy, slots, now, {
+    calendarSourcesUsed: options.calendarSourcesUsed,
+  });
 
   if (result.droppedCount > 0 || result.failClosed) {
     await appendAuditEvent({
@@ -439,6 +705,16 @@ export function getDefaultVideoTool(policy: OrgSchedulingPolicy): string | null 
 /**
  * Get online calendar target from policy.
  */
+/**
+ * Resolve effective confirm automation for calendar.confirm path.
+ * Regression: default policy always returns always_human.
+ */
+export function resolveCalendarConfirmAutomation(
+  policy: OrgSchedulingPolicy
+): ConfirmAutomationLevel {
+  return resolveEffectiveConfirmAutomation(policy.rules);
+}
+
 export function getOnlineCalendarTarget(policy: OrgSchedulingPolicy): string | null {
   for (const rule of policy.rules) {
     if (rule.onlinePack?.enabled && rule.onlinePack.calendarTarget) {
