@@ -439,6 +439,8 @@ export interface GatewayInvokeRequest {
     /** Optional initial comment posted with the file */
     initialComment?: string;
   };
+  /** F7: set internally to prevent audience ledger 補完 loops (stripped before persistence). */
+  _audienceLedgerSupplemented?: boolean;
 }
 
 export type AuditAction =
@@ -486,6 +488,8 @@ export type AuditAction =
   | "admin.notificationChannel"
   | "stuck_watch.w2_retry"
   | "stuck_watch.w1_notify"
+  | "stuck_watch.audience_ledger_retry"
+  | "stuck_watch.w4_notify"
   | "stuck_watch.retry"
   | "stuck_watch.resolve";
 
