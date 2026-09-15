@@ -41,7 +41,12 @@
     "internalAudienceRule.get",
     "internalAudienceRule.patch",
     "stuckWatch.get",
-    "stuckWatch.patch"
+    "stuckWatch.patch",
+    "stuckWatch.list",
+    "stuckWatch.inspect",
+    "stuckWatch.retry",
+    "stuckWatch.resolve",
+    "stuckWatch.classify"
   ],
   "capabilities": {
     "tools": {

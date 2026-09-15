@@ -484,7 +484,10 @@ export type AuditAction =
   | "admin.ingressHandoff"
   | "admin.conversationAdapter"
   | "admin.notificationChannel"
-  | "stuck_watch.w2_retry";
+  | "stuck_watch.w2_retry"
+  | "stuck_watch.w1_notify"
+  | "stuck_watch.retry"
+  | "stuck_watch.resolve";
 
 export interface Org {
   id: string;
@@ -1289,9 +1292,40 @@ export interface OrgStuckWatchPolicy {
 
 /** Per-approval stuck watch metadata (W2 retry tracking). */
 export interface ApprovalStuckWatchMeta {
+  w1?: {
+    firstDetectedAt?: string;
+    notifiedAt?: string;
+    retryCount?: number;
+    lastAttemptAt?: string;
+  };
   w2?: {
     firstDetectedAt?: string;
     lastAttemptAt?: string;
     retryCount: number;
   };
+}
+
+/** F7 stuck watch item kinds. */
+export type StuckWatchKind = "w1_mention_unanswered" | "w2_approved_unfulfilled";
+
+/** Aggregated stuck watch item for Admin MCP list/inspect. */
+export interface StuckWatchItem {
+  id: string;
+  orgId: string;
+  kind: StuckWatchKind;
+  employeeId: string | null;
+  jobId?: string | null;
+  approvalId?: string | null;
+  tool?: string | null;
+  faultClass: FaultClass;
+  stuckHint: StuckHint;
+  code?: string | null;
+  status: "open" | "notified" | "resolved";
+  detectedAt: string;
+  notifiedAt?: string | null;
+  resolvedAt?: string | null;
+  minutesOpen: number;
+  summaryJa: string;
+  nextStepJa: string;
+  metadata: Record<string, unknown>;
 }

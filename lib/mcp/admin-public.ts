@@ -41,6 +41,11 @@ export const ADMIN_MCP_TOOL_NAMES = [
   "internalAudienceRule.patch",
   "stuckWatch.get",
   "stuckWatch.patch",
+  "stuckWatch.list",
+  "stuckWatch.inspect",
+  "stuckWatch.retry",
+  "stuckWatch.resolve",
+  "stuckWatch.classify",
 ] as const;
 
 export type AdminMcpToolName = (typeof ADMIN_MCP_TOOL_NAMES)[number];

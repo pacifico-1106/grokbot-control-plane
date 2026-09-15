@@ -4,11 +4,21 @@ import { createSupabaseAdminClient } from "../supabase";
 import { mapAuditRow } from "./mappers";
 import type { AuditEvent } from "../types";
 
+const STUCK_WATCH_WAKE_ACTIONS = [
+  "slack.mention_wake",
+  "slack.internal_im_wake",
+  "slack.user_token_im_wake",
+] as const;
+
 export async function listAuditEvents(
   orgId?: string | null,
   limit = 100
 ): Promise<AuditEvent[]> {
-  if (isDemoMode()) return getRuntimeAudit().slice(0, limit);
+  if (isDemoMode()) {
+    const events = getRuntimeAudit();
+    if (!orgId) return events.slice(0, limit);
+    return events.filter((event) => event.orgId === orgId).slice(0, limit);
+  }
   const admin = createSupabaseAdminClient();
   if (!admin || !orgId) return [];
   const { data, error } = await admin
@@ -19,6 +29,41 @@ export async function listAuditEvents(
     .limit(limit);
   if (error || !data) return [];
   return data.map((r) => mapAuditRow(r as Record<string, unknown>));
+}
+
+/** Recent audits for F7 stuck watch (wake + invoke + stuck_watch actions). */
+export async function listAuditEventsForStuckWatch(
+  orgId?: string | null,
+  limit = 500
+): Promise<AuditEvent[]> {
+  if (isDemoMode()) {
+    const events = getRuntimeAudit();
+    const filtered = orgId
+      ? events.filter((event) => event.orgId === orgId)
+      : events;
+    return filtered.slice(0, limit);
+  }
+  const admin = createSupabaseAdminClient();
+  if (!admin) return [];
+  let query = admin
+    .from("audit_events")
+    .select("*")
+    .order("created_at", { ascending: false })
+    .limit(limit);
+  if (orgId) {
+    query = query.eq("org_id", orgId);
+  }
+  const { data, error } = await query;
+  if (error || !data) return [];
+  return data.map((r) => mapAuditRow(r as Record<string, unknown>));
+}
+
+export function isMentionWakeAudit(event: AuditEvent): boolean {
+  return (
+    STUCK_WATCH_WAKE_ACTIONS.includes(
+      event.action as (typeof STUCK_WATCH_WAKE_ACTIONS)[number]
+    ) && event.metadata?.reason === "woke"
+  );
 }
 
 export async function appendAuditEvent(
