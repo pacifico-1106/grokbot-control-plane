@@ -39,7 +39,9 @@
     "mailPolicy.get",
     "mailPolicy.patch",
     "internalAudienceRule.get",
-    "internalAudienceRule.patch"
+    "internalAudienceRule.patch",
+    "stuckWatch.get",
+    "stuckWatch.patch"
   ],
   "capabilities": {
     "tools": {
