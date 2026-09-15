@@ -4,6 +4,7 @@ import { StatCard } from "@/components/StatCard";
 import { getSuperAdminAccess } from "@/lib/admin/access";
 import { getAdminOrganizationDetail } from "@/lib/admin/data";
 import { TrialExtensionForm } from "@/components/admin/TrialExtensionForm";
+import { ProxyApprovalPanel } from "@/components/admin/ProxyApprovalPanel";
 
 function formatDate(value: string | null, includeTime = false): string {
   if (!value) return "—";
@@ -53,6 +54,12 @@ export default async function AdminOrganizationPage({
         <StatCard label="Gateway" value={org.gatewayStatus} hint={org.integrationMode} />
         <StatCard label="最終活動" value={formatDate(org.lastActivityAt)} hint={org.lastActivityAt ? formatDate(org.lastActivityAt, true) : "記録なし"} />
       </section>
+
+      {org.pendingApprovals > 0 && (
+        <div className="mt-6">
+          <ProxyApprovalPanel orgId={org.id} orgName={org.name} />
+        </div>
+      )}
 
       <div className="mt-6 grid gap-4 xl:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]">
         <div className="space-y-4">
