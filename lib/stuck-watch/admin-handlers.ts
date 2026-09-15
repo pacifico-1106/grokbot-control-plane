@@ -16,6 +16,10 @@ import {
   stuckWatchKindFromItemId,
 } from "@/lib/stuck-watch/items";
 import {
+  attemptAudienceLedgerRetry,
+  finalizeAudienceLedgerFailure,
+} from "@/lib/stuck-watch/audience-ledger";
+import {
   canAutoRetryOpsFault,
   prepareOpsFaultRetryInvokeBody,
 } from "@/lib/stuck-watch/retry-eligibility";
@@ -419,7 +423,7 @@ export async function runStuckWatchRetry(
           ? parseInvokeSnapshot(withSnapshot.metadata)
           : null;
         if (snapshot) {
-          const body = prepareOpsFaultRetryInvokeBody({
+          const baseBody = prepareOpsFaultRetryInvokeBody({
             tool: snapshot.tool,
             purpose: snapshot.purpose,
             jobId: snapshot.jobId,
@@ -427,11 +431,64 @@ export async function runStuckWatchRetry(
             conversation: snapshot.conversation ?? undefined,
             args: snapshot.args,
           });
-          const invoked = await runGatewayInvoke({
-            employeeId: item.employeeId,
-            credentialId: employee.credentialId,
-            body,
-          });
+
+          let invoked: Awaited<ReturnType<typeof runGatewayInvoke>>;
+          if (item.code === "egress_denied") {
+            const ledger = await attemptAudienceLedgerRetry(
+              {
+                orgId,
+                employeeId: item.employeeId,
+                credentialId: employee.credentialId,
+                body: baseBody,
+                egress: (item.metadata.egress as
+                  | { audience?: string; effectiveAudience?: string }
+                  | undefined) ?? { audience: "unknown" },
+                tool: snapshot.tool,
+                purpose: snapshot.purpose,
+                jobId: snapshot.jobId,
+                force: true,
+              },
+              runGatewayInvoke
+            );
+            if (ledger.attempted && ledger.invokeResult) {
+              if (
+                !ledger.invokeResult.body.ok &&
+                String(ledger.invokeResult.body.code) === "egress_denied"
+              ) {
+                const failed = await finalizeAudienceLedgerFailure(
+                  {
+                    orgId,
+                    employeeId: item.employeeId,
+                    tool: snapshot.tool,
+                    jobId: snapshot.jobId,
+                    purpose: snapshot.purpose,
+                    code: "egress_denied",
+                    itemId: item.id,
+                    egress: ledger.invokeResult.body.egress as
+                      | { audience?: string; effectiveAudience?: string }
+                      | undefined,
+                  },
+                  ledger.invokeResult.body,
+                  ledger.invokeResult.httpStatus
+                );
+                invoked = failed;
+              } else {
+                invoked = ledger.invokeResult;
+              }
+            } else {
+              invoked = await runGatewayInvoke({
+                employeeId: item.employeeId,
+                credentialId: employee.credentialId,
+                body: baseBody,
+              });
+            }
+          } else {
+            invoked = await runGatewayInvoke({
+              employeeId: item.employeeId,
+              credentialId: employee.credentialId,
+              body: baseBody,
+            });
+          }
           await appendAuditEvent({
             orgId,
             employeeId: item.employeeId,

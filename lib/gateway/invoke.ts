@@ -83,7 +83,13 @@ import {
   findForbiddenPhrase,
   outboundConversationText,
 } from "@/lib/employees/voice";
+import {
+  attemptAudienceLedgerRetry,
+  finalizeAudienceLedgerFailure,
+  orgHasInternalAudienceLedger,
+} from "@/lib/stuck-watch/audience-ledger";
 import { enrichInvokeFailureBody } from "@/lib/stuck-watch/enrich";
+import { getOrgStuckWatchPolicy } from "@/lib/data/stuck-watch-policy";
 import type { DualEgressVerdict, Employee, EgressVerdict, GatewayInvokeRequest } from "@/lib/types";
 import {
   CrossProductEventError,
@@ -868,6 +874,59 @@ export async function runGatewayInvoke(
       summary: `${tool} を相手×情報区分で拒否`,
       metadata: { tool, jobId, egress, dualEgress, managerId },
     });
+
+    const effectiveOrgId = orgId || employee.orgId;
+    const ledgerRetry = await attemptAudienceLedgerRetry(
+      {
+        orgId: effectiveOrgId,
+        employeeId,
+        credentialId: input.credentialId || employee.credentialId,
+        body,
+        egress,
+        tool,
+        purpose,
+        jobId,
+      },
+      runGatewayInvoke
+    );
+
+    if (ledgerRetry.attempted && ledgerRetry.invokeResult) {
+      const retryCode = String(ledgerRetry.invokeResult.body.code || "");
+      if (retryCode !== "egress_denied") {
+        return {
+          httpStatus: ledgerRetry.invokeResult.httpStatus,
+          body: {
+            ...ledgerRetry.invokeResult.body,
+            audienceLedgerSupplementAttempted: true,
+            audienceLedgerSupplementSucceeded: true,
+          },
+        };
+      }
+      if (retryCode === "egress_denied") {
+        const failed = await finalizeAudienceLedgerFailure(
+          {
+            orgId: effectiveOrgId,
+            employeeId,
+            tool,
+            jobId,
+            purpose,
+            code: retryCode,
+            egress: ledgerRetry.invokeResult.body.egress as
+              | { audience?: string; effectiveAudience?: string }
+              | undefined,
+          },
+          ledgerRetry.invokeResult.body,
+          ledgerRetry.invokeResult.httpStatus
+        );
+        return { httpStatus: failed.httpStatus, body: failed.body };
+      }
+      return ledgerRetry.invokeResult;
+    }
+
+    const stuckPolicy = await getOrgStuckWatchPolicy(effectiveOrgId);
+    const hasInternalLedger =
+      stuckPolicy.inferInternalAudienceFromLedger &&
+      (await orgHasInternalAudienceLedger(effectiveOrgId));
     return jsonResult(
       {
         ok: false,
@@ -876,11 +935,13 @@ export async function runGatewayInvoke(
         message: egress.messageJa,
         needs_approval: false,
         egress,
+        dualEgress,
         managerId,
         employeeId,
         tool,
         purpose,
         jobId,
+        hasInternalLedger,
       },
       403
     );
