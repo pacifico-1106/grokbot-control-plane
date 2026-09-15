@@ -13,11 +13,12 @@
 
 ## 1. 方針ロック
 
-1. Admin MCP 必須: `orgs.create`（**always_human**）。任意: `orgs.status`。
+1. Admin MCP 必須: `orgs.create`（**always_human**）。任意: `orgs.status` / `orgs.issueAdminCredential`。
 2. 中身は **signup と同じパイプライン**: Auth user + org + owner member + trial。
 3. 監査アクション `create_org`。**パスワード平文を監査・レスポンス・ログに出さない**。
 4. UI はあればよい。P0 は MCP で完走。
 5. AI社員（例: 稲盛）は **作成後** に `employees.issue`。本ツールでは org+owner まで。
+6. 新 org の `gb_adm_` は **`orgs.issueAdminCredential`**（always_human・プラットフォーム運用者のみ）。対象 `orgId` にスコープされた管理 MCP 認証を発行し、承認後に `oneTimeSecret` を一度だけ返す。
 
 ## 2. 入力
 
@@ -52,6 +53,7 @@
 | C4 | 監査に create_org。パスワード平文なし |
 | C5 | 既存 email の回復／重複は signup と同方針（fail 明示 or repair パス） |
 | C6 | 任意 `orgs.status` で orgId の trial/status を読める |
+| C7 | `orgs.issueAdminCredential` は always_human。承認後に対象 org の `gb_adm_` を発行し `oneTimeSecret` を一度だけ返す。監査に平文 secret なし |
 
 ## 6. スペースツリー実証の想定値（運用メモ）
 
@@ -68,7 +70,7 @@
 
 ## 8. プラットフォームゲート（fail-closed）
 
-Admin MCP はテナントスコープ（`gb_adm_` → `org_admin_agents.org_id`）。`orgs.create` / `orgs.status` は **プラットフォーム運用者のみ**。
+Admin MCP はテナントスコープ（`gb_adm_` → `org_admin_agents.org_id`）。`orgs.create` / `orgs.status` / `orgs.issueAdminCredential` は **プラットフォーム運用者のみ**。
 
 ゲート条件（**いずれかを満たすこと。未設定・不一致は拒否**）:
 
@@ -83,3 +85,4 @@ Admin MCP はテナントスコープ（`gb_adm_` → `org_admin_agents.org_id`�
 - 承認キュー: `ownerPassword` は平文を `adminMutation` に残さない。暗号化して `ownerPasswordCiphertext` のみ保存。
 - `invite=true` かつ password 省略時は履行時にランダム生成（監査・レスポンス・ログに出さない）。
 - **承認後の再呼び出し:** ステータス poll が `pollHint: reinvoke_with_approvalId` を返したら、同じ `orgs.create` を `approvalId` 付きで再呼び出す（`arguments.approvalId` / `_meta.approvalId` / トップレベル `approvalId` のいずれか）。承認済みなら `fulfillApprovedAdmin` を一度だけ実行し、`orgId` / `ownerEmail` / `trialEndsAt` / `summaryJa` / `nextStepJa` を返す。新しい承認チケットは作らない。
+- **`orgs.issueAdminCredential`:** 入力 `orgId`（対象テナント UUID）+ 任意 `jobId`。履行時に `mintAdminSecret` + `issueOrgAdminAgent` を **対象 orgId** に対して実行（呼び出し元 ops org ではない）。監査アクション `admin.issue_admin_credential`（メタ: targetOrgId, secretPrefix, generation — 平文 secret 禁止）。`approvalId` 再呼び出しパターンは `orgs.create` と同じ。

@@ -23,6 +23,7 @@ const TOOL_TITLE_JA: Record<string, string> = {
   "setup.lineApproval.setEmployeeInbox": "AI社員の承認インボックス（LINE）",
   "setup.lineApproval.demoteTelegram": "Telegram承認チャネルの無効化",
   "orgs.create": "テナント作成（プラットフォーム運用）",
+  "orgs.issueAdminCredential": "管理MCP認証発行（プラットフォーム運用）",
 };
 
 export type AdminQueueResult = {

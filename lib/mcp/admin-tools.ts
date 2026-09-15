@@ -70,6 +70,10 @@ import {
   validateOrgCreateInput,
   platformOrgStatus,
 } from "@/lib/admin-mcp/orgs-create";
+import {
+  queueOrgIssueAdminCredentialArgs,
+  validateOrgIssueAdminCredentialInput,
+} from "@/lib/admin-mcp/orgs-issue-admin-credential";
 
 export const ADMIN_MCP_TOOLS: McpToolDef[] = [
   {
@@ -813,6 +817,25 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
       additionalProperties: false,
     },
   },
+  {
+    name: "orgs.issueAdminCredential",
+    description:
+      "Mint a tenant-scoped gb_adm_ admin MCP bearer for a target org after human approval (always_human). Platform super-admin only — normal tenant gb_adm_ is rejected (fail-closed). Issued credential scopes to target orgId, not the caller ops org. Returns oneTimeSecret once after approval (same pattern as employees.issue). Never logs or audits the raw secret.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        orgId: { type: "string", description: "Target organization UUID to mint gb_adm_ for" },
+        jobId: { type: "string" },
+        approvalId: {
+          type: "string",
+          description:
+            "After human approval, re-invoke with this id to fulfill and read the result (pollHint: reinvoke_with_approvalId).",
+        },
+      },
+      required: ["orgId"],
+      additionalProperties: false,
+    },
+  },
 ];
 
 function toolResult(data: unknown, isError = false) {
@@ -1400,7 +1423,7 @@ export async function callAdminMcpTool(
     }
   }
 
-  if (name === "orgs.create" || name === "orgs.status") {
+  if (name === "orgs.create" || name === "orgs.status" || name === "orgs.issueAdminCredential") {
     const gate = await assertPlatformOpsFromAdminCred(cred);
     if (!gate.allowed) {
       return toolResult(
@@ -2137,6 +2160,23 @@ export async function callAdminMcpTool(
       platformActorOrgId: gate.actor.orgId,
     };
     summary = `テナント作成を人が確認します（${parsed.value.orgName} · ${parsed.value.ownerEmail}）`;
+  } else if (name === "orgs.issueAdminCredential") {
+    const parsed = validateOrgIssueAdminCredentialInput(args);
+    if (!parsed.ok) {
+      return toolResult(
+        { ok: false, code: parsed.code, message: parsed.message },
+        true
+      );
+    }
+    const gate = await assertPlatformOpsFromAdminCred(cred);
+    if (!gate.allowed) {
+      return toolResult(
+        { ok: false, code: gate.code, message: gate.message },
+        true
+      );
+    }
+    queuedArgs = queueOrgIssueAdminCredentialArgs(parsed.value, gate.actor);
+    summary = `管理MCP認証（gb_adm_）発行を人が確認します（対象 org: ${parsed.value.targetOrgId.slice(0, 8)}…）`;
   }
 
   const queued = await queueAdminTool({
@@ -2168,13 +2208,14 @@ export async function readApprovedAdminResult(
   };
   if (fulfillment.oneTimeSecret) {
     out.oneTimeSecret = fulfillment.oneTimeSecret;
+  }
+  if (fulfillment.noticeJa) {
+    out.noticeJa = fulfillment.noticeJa;
+  } else if (fulfillment.oneTimeSecret) {
     out.noticeJa = "この秘密値は一度だけです。社員証 MCP に使い、管理 MCP のヘッダと混ぜないでください。";
   }
   if (fulfillment.nextStepJa) {
     out.nextStepJa = fulfillment.nextStepJa;
-  }
-  if (fulfillment.noticeJa && !out.noticeJa) {
-    out.noticeJa = fulfillment.noticeJa;
   }
   if (fulfillment.enabled !== undefined) {
     out.enabled = fulfillment.enabled;
@@ -2202,6 +2243,9 @@ export async function readApprovedAdminResult(
   }
   if (fulfillment.summaryJa) {
     out.summaryJa = fulfillment.summaryJa;
+  }
+  if (fulfillment.adminAgentId) {
+    out.adminAgentId = fulfillment.adminAgentId;
   }
   return out;
 }
