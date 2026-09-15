@@ -28,13 +28,15 @@ function demoCred(): ResolvedAdminCredential {
   };
 }
 
-describe("employee MCP tool list unchanged", () => {
-  test("employee MCP stays whoami / invoke / poll / health", () => {
+describe("employee MCP tool list", () => {
+  test("employee MCP includes whoami / invoke / poll / health / stuck watch", () => {
     expect(EMPLOYEE_NAMES).toEqual([
       "staffpass_whoami",
       "staffpass_invoke",
       "staffpass_get_approval_status",
       "staffpass_health",
+      "staffpass_stuck_list",
+      "staffpass_stuck_retry",
     ]);
     expect([...STAFFPASS_MCP_TOOL_NAMES]).toEqual(EMPLOYEE_NAMES);
   });
