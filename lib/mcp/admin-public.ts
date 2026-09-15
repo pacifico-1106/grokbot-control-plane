@@ -39,6 +39,8 @@ export const ADMIN_MCP_TOOL_NAMES = [
   "mailPolicy.patch",
   "internalAudienceRule.get",
   "internalAudienceRule.patch",
+  "stuckWatch.get",
+  "stuckWatch.patch",
 ] as const;
 
 export type AdminMcpToolName = (typeof ADMIN_MCP_TOOL_NAMES)[number];

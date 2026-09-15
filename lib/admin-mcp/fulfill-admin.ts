@@ -18,6 +18,8 @@ import {
   setEmployeeReplyPolicy,
   setOrgMailPolicy,
   setEmployeeMailPolicy,
+  getOrgStuckWatchPolicy,
+  setOrgStuckWatchPolicy,
   upsertConversationAdapter,
   listNotificationChannels,
   upsertNotificationChannel,
@@ -33,6 +35,7 @@ import { validateIngressHandoffPolicy } from "@/lib/ingress-handoff/validate";
 import { validateSchedulingPolicy } from "@/lib/scheduling-policy/validate";
 import { validateReplyPolicy } from "@/lib/gateway/reply-policy-validate";
 import { validateMailPolicy } from "@/lib/mail-policy/validate";
+import { normalizeStuckWatchPolicy } from "@/lib/stuck-watch/validate";
 import { linkAgent } from "@/lib/data/bindings";
 import { upsertOrgChannel, upsertOrgParty } from "@/lib/data/directory";
 import {
@@ -1069,6 +1072,65 @@ async function fulfillMailPolicy(
   };
 }
 
+async function fulfillStuckWatch(
+  approval: ApprovalRequest,
+  args: Record<string, unknown>
+): Promise<AdminFulfillment> {
+  const current = await getOrgStuckWatchPolicy(approval.orgId);
+  const patch: Record<string, unknown> = {};
+  if (args.enabled !== undefined) patch.enabled = args.enabled === true;
+  if (args.mentionUnansweredMinutes !== undefined) {
+    patch.mentionUnansweredMinutes = args.mentionUnansweredMinutes;
+  }
+  if (args.approvedUnfulfilledMinutes !== undefined) {
+    patch.approvedUnfulfilledMinutes = args.approvedUnfulfilledMinutes;
+  }
+  if (args.maxAutoRetries !== undefined) patch.maxAutoRetries = args.maxAutoRetries;
+  if (args.retryBackoffSeconds !== undefined) {
+    patch.retryBackoffSeconds = args.retryBackoffSeconds;
+  }
+  if (args.autoRetryFaultClasses !== undefined) {
+    patch.autoRetryFaultClasses = args.autoRetryFaultClasses;
+  }
+  if (args.notifyMouth !== undefined) patch.notifyMouth = args.notifyMouth;
+  if (args.inferInternalAudienceFromLedger !== undefined) {
+    patch.inferInternalAudienceFromLedger =
+      args.inferInternalAudienceFromLedger === true;
+  }
+
+  const policy = await setOrgStuckWatchPolicy(
+    approval.orgId,
+    normalizeStuckWatchPolicy({ ...current, ...patch }),
+    "admin_mcp"
+  );
+
+  await appendAuditEvent({
+    orgId: approval.orgId,
+    employeeId: null,
+    credentialId: null,
+    action: "admin.policy",
+    purpose: "admin.policy",
+    summary: `Stuck Watch ポリシーを更新しました（W2=${policy.approvedUnfulfilledMinutes}分・maxRetry=${policy.maxAutoRetries}）`,
+    metadata: {
+      auditClass: ADMIN_AUDIT_CLASS,
+      approvalId: approval.id,
+      enabled: policy.enabled,
+      mentionUnansweredMinutes: policy.mentionUnansweredMinutes,
+      approvedUnfulfilledMinutes: policy.approvedUnfulfilledMinutes,
+      maxAutoRetries: policy.maxAutoRetries,
+      retryBackoffSeconds: policy.retryBackoffSeconds,
+      autoRetryFaultClasses: policy.autoRetryFaultClasses,
+      inferInternalAudienceFromLedger: policy.inferInternalAudienceFromLedger,
+    },
+  });
+
+  return {
+    ok: true,
+    tool: "stuckWatch.patch",
+    at: new Date().toISOString(),
+  };
+}
+
 export async function fulfillApprovedAdmin(
   approval: ApprovalRequest
 ): Promise<AdminFulfillment | null> {
@@ -1111,6 +1173,9 @@ export async function fulfillApprovedAdmin(
         break;
       case "mailPolicy.patch":
         fulfillment = await fulfillMailPolicy(approval, args);
+        break;
+      case "stuckWatch.patch":
+        fulfillment = await fulfillStuckWatch(approval, args);
         break;
       case "setup.slackAdapter.setBotToken":
         fulfillment = await fulfillSlackAdapterSetBotToken(approval, args);

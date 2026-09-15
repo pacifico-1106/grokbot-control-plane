@@ -28,6 +28,7 @@ export const ADMIN_TOOL_AUDIT_ACTION: Record<string, AdminAuditAction> = {
   "schedulingPolicy.patch": "admin.policy",
   "replyPolicy.patch": "admin.policy",
   "mailPolicy.patch": "admin.policy",
+  "stuckWatch.patch": "admin.policy",
   "setup.slackAdapter.setBotToken": "admin.conversationAdapter",
   "setup.lineApproval.upsert": "admin.notificationChannel",
   "setup.lineApproval.setEmployeeInbox": "admin.notificationChannel",

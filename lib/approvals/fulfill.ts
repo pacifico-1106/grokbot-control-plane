@@ -22,6 +22,7 @@ import {
 } from "@/lib/gateway/adapters/sns";
 import { isAudienceGatedTool, isSnsPublishTool, isConfirmClassTool, GATEWAY_TOOL_DEFS } from "@/lib/gateway/tools";
 import { fulfillApprovedAdmin } from "@/lib/admin-mcp/fulfill-admin";
+import { stampW2WatchIfUnfulfilled } from "@/lib/stuck-watch/w2-unfulfilled";
 import type {
   ApprovalRequest,
   ConversationContext,
@@ -603,12 +604,20 @@ export async function fulfillIfApproved(
   if (decision !== "approved") return null;
   const admin = await fulfillApprovedAdmin(approval);
   if (admin) {
-    return {
+    const result: ApprovalFulfillment = {
       ok: admin.ok,
       delivery: "stub",
       at: admin.at,
       error: admin.error,
     };
+    if (!admin.ok) {
+      await stampW2WatchIfUnfulfilled(approval);
+    }
+    return result;
   }
-  return fulfillApprovedInvoke(approval);
+  const invoke = await fulfillApprovedInvoke(approval);
+  if (!invoke?.ok) {
+    await stampW2WatchIfUnfulfilled(approval);
+  }
+  return invoke;
 }

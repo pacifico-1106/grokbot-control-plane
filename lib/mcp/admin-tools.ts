@@ -53,6 +53,8 @@ import { ADMIN_AUDIT_CLASS } from "@/lib/admin-mcp/audit-class";
 import { getEffectiveReplyPolicy, type ReplyPolicySource } from "@/lib/data/reply-policy";
 import { getEffectiveMailPolicy, type MailPolicySource } from "@/lib/data/mail-policy";
 import { getOrgInternalAudienceRule } from "@/lib/data/internal-audience-rule";
+import { getOrgStuckWatchPolicy } from "@/lib/data/stuck-watch-policy";
+import { defaultStuckWatchPolicy } from "@/lib/stuck-watch/validate";
 
 export const ADMIN_MCP_TOOLS: McpToolDef[] = [
   {
@@ -640,6 +642,42 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
       additionalProperties: false,
     },
   },
+  {
+    name: "stuckWatch.get",
+    description:
+      "Read stuck watch policy (read-only, no approval required). F7 Stuck Watch: faultClass mapping, W2 approved-unfulfilled watch, ops_fault auto-retry limits. Null org column returns sensible defaults.",
+    inputSchema: {
+      type: "object",
+      properties: {},
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "stuckWatch.patch",
+    description:
+      "Patch org stuck watch policy after human approval (always_human). F7: enabled, mentionUnansweredMinutes, approvedUnfulfilledMinutes, maxAutoRetries, retryBackoffSeconds, autoRetryFaultClasses, notifyMouth, inferInternalAudienceFromLedger. Admin cannot self-approve.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        enabled: { type: "boolean" },
+        mentionUnansweredMinutes: { type: "number" },
+        approvedUnfulfilledMinutes: { type: "number" },
+        maxAutoRetries: { type: "number" },
+        retryBackoffSeconds: { type: "number" },
+        autoRetryFaultClasses: {
+          type: "array",
+          items: {
+            type: "string",
+            enum: ["expected_gate", "ops_fault", "config_drift"],
+          },
+        },
+        notifyMouth: { type: "string" },
+        inferInternalAudienceFromLedger: { type: "boolean" },
+        jobId: { type: "string" },
+      },
+      additionalProperties: false,
+    },
+  },
 ];
 
 function toolResult(data: unknown, isError = false) {
@@ -992,6 +1030,43 @@ async function runInternalAudienceRuleGet(
   };
 }
 
+function summarizeStuckWatchPolicyJa(
+  policy: Awaited<ReturnType<typeof getOrgStuckWatchPolicy>>
+): string {
+  const parts = [
+    policy.enabled ? "有効" : "無効",
+    `W1=${policy.mentionUnansweredMinutes}分`,
+    `W2=${policy.approvedUnfulfilledMinutes}分`,
+    `自動リトライ最大${policy.maxAutoRetries}回`,
+    `バックオフ${policy.retryBackoffSeconds}秒`,
+    `autoRetry=${policy.autoRetryFaultClasses.join(",")}`,
+  ];
+  if (policy.inferInternalAudienceFromLedger) {
+    parts.push("台帳から内部audience推論あり");
+  }
+  return `F7 Stuck Watch: ${parts.join(" · ")}`;
+}
+
+async function runStuckWatchGet(
+  cred: ResolvedAdminCredential
+): Promise<{ content: Array<{ type: "text"; text: string }>; structuredContent?: unknown; isError?: boolean }> {
+  const policy = await getOrgStuckWatchPolicy(cred.orgId);
+  const defaults = defaultStuckWatchPolicy();
+  const result = {
+    ok: true,
+    policy,
+    defaults,
+    summaryJa: summarizeStuckWatchPolicyJa(policy),
+    nextStepJa:
+      "不当停止が続く場合は stuckWatch.patch で W2 閾値や maxAutoRetries を調整してください。正当ゲート（needs_approval 等）は自動再発火しません。",
+  };
+  return {
+    content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+    structuredContent: result,
+    isError: false,
+  };
+}
+
 export async function callAdminMcpTool(
   name: string,
   args: Record<string, unknown>,
@@ -1301,6 +1376,10 @@ export async function callAdminMcpTool(
 
   if (name === "internalAudienceRule.get") {
     return runInternalAudienceRuleGet(cred);
+  }
+
+  if (name === "stuckWatch.get") {
+    return runStuckWatchGet(cred);
   }
 
   if (name === "replyPolicy.patch") {
@@ -1629,6 +1708,17 @@ export async function callAdminMcpTool(
     if (slackTeamIds > 0) parts.push(`${slackTeamIds}チーム`);
     if (autoSlackTeamInternal) parts.push("自動内部判定あり");
     summary = `内部オーディエンスルールの更新を人が確認します（${parts.join("・") || "設定なし"}）`;
+  } else if (name === "stuckWatch.patch") {
+    const enabled = args.enabled === false ? "無効化" : args.enabled === true ? "有効化" : null;
+    const parts: string[] = [];
+    if (enabled) parts.push(enabled);
+    if (args.approvedUnfulfilledMinutes != null) {
+      parts.push(`W2=${args.approvedUnfulfilledMinutes}分`);
+    }
+    if (args.maxAutoRetries != null) {
+      parts.push(`maxRetry=${args.maxAutoRetries}`);
+    }
+    summary = `Stuck Watch ポリシーの更新を人が確認します（${parts.join("・") || "設定変更"}）`;
   } else if (name === "setup.slackAdapter.setBotToken") {
     const enabled = args.enabled !== false;
     const botToken = String(args.botToken || "").trim();

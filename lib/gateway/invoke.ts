@@ -83,6 +83,7 @@ import {
   findForbiddenPhrase,
   outboundConversationText,
 } from "@/lib/employees/voice";
+import { enrichInvokeFailureBody } from "@/lib/stuck-watch/enrich";
 import type { DualEgressVerdict, Employee, EgressVerdict, GatewayInvokeRequest } from "@/lib/types";
 import {
   CrossProductEventError,
@@ -98,7 +99,11 @@ function jsonResult(
   body: Record<string, unknown>,
   httpStatus = 200
 ): GatewayInvokeResult {
-  return { httpStatus, body };
+  const enriched =
+    body.ok === false || httpStatus >= 400
+      ? enrichInvokeFailureBody(body, httpStatus)
+      : body;
+  return { httpStatus, body: enriched };
 }
 
 /**

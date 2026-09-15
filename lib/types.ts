@@ -483,7 +483,8 @@ export type AuditAction =
   | "admin.role"
   | "admin.ingressHandoff"
   | "admin.conversationAdapter"
-  | "admin.notificationChannel";
+  | "admin.notificationChannel"
+  | "stuck_watch.w2_retry";
 
 export interface Org {
   id: string;
@@ -1263,4 +1264,34 @@ export interface OrgInternalAudienceRule {
   autoSlackTeamInternal: boolean;
   updatedAt: string;
   updatedBy: string;
+}
+
+/** F7 Stuck Watch — fault classification (F5 extension). */
+export type FaultClass = "expected_gate" | "ops_fault" | "config_drift";
+
+/** F7 invoke failure hint for Bot / MCP clients. */
+export type StuckHint = "retryable" | "fix" | "wait_approval";
+
+/** Org-level stuck watch policy (F7). */
+export interface OrgStuckWatchPolicy {
+  version: 1;
+  enabled: boolean;
+  mentionUnansweredMinutes: number;
+  approvedUnfulfilledMinutes: number;
+  maxAutoRetries: number;
+  retryBackoffSeconds: number;
+  autoRetryFaultClasses: FaultClass[];
+  notifyMouth?: string | null;
+  inferInternalAudienceFromLedger: boolean;
+  updatedAt: string;
+  updatedBy: string;
+}
+
+/** Per-approval stuck watch metadata (W2 retry tracking). */
+export interface ApprovalStuckWatchMeta {
+  w2?: {
+    firstDetectedAt?: string;
+    lastAttemptAt?: string;
+    retryCount: number;
+  };
 }
