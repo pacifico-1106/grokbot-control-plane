@@ -63,6 +63,7 @@ describe("admin MCP always_human", () => {
       "ingressHandoff.get",
       "schedulingPolicy.get",
       "replyPolicy.get",
+      "mailPolicy.get",
       "internalAudienceRule.get",
     ];
     const mutatingTools = ADMIN_MCP_TOOLS.filter((t) => !readOnlyTools.includes(t.name));

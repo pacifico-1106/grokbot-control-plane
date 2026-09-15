@@ -5,6 +5,24 @@ import { upsertConversationAdapter } from "@/lib/data/conversation-adapters";
 import { getRuntimeEmployees } from "@/lib/demo-data";
 import { runGatewayInvoke } from "@/lib/gateway/invoke";
 import { DEMO_ORG } from "@/lib/demo-data";
+import { setOrgMailPolicy, resetDemoMailPolicy } from "@/lib/data/mail-policy";
+import { normalizeMailPolicy } from "@/lib/mail-policy/validate";
+
+async function withNeedsApprovalMailPolicy<T>(fn: () => Promise<T>): Promise<T> {
+  await setOrgMailPolicy(
+    DEMO_ORG.id,
+    normalizeMailPolicy({
+      policyId: "mpp_test_needs_approval",
+      policyName: "Test Needs Approval",
+      rules: [{ id: "mpr_ext", audience: "external", sendMode: "needs_approval" }],
+    })
+  );
+  try {
+    return await fn();
+  } finally {
+    resetDemoMailPolicy();
+  }
+}
 
 describe("Gateway audience egress", () => {
   test("comm.reply to internal without class auto-allows as internal summary", async () => {
@@ -251,15 +269,23 @@ describe("Gateway audience egress", () => {
       expect(result.body.ok).toBe(true);
       expect((result.body.egress as { decision?: string } | undefined)?.decision).toBe("allow");
 
-      const send = await runGatewayInvoke({
-        employeeId: "emp_sales",
-        credentialId: "cred_sales",
-        body: {
-          tool: "mail.send",
-          purpose: "sales.outreach",
-          jobId: `job_sod_ack_send_${Date.now()}`,
-        },
-      });
+      const send = await withNeedsApprovalMailPolicy(() =>
+        runGatewayInvoke({
+          employeeId: "emp_sales",
+          credentialId: "cred_sales",
+          body: {
+            tool: "mail.send",
+            purpose: "sales.outreach",
+            jobId: `job_sod_ack_send_${Date.now()}`,
+            args: {
+              assetRef: "kb/public-faq",
+              to: "buyer@customer.example",
+              subject: "フォロー",
+              body: "ご確認ください。",
+            },
+          },
+        })
+      );
       expect(send.httpStatus).toBe(402);
       expect(send.body.needs_approval).toBe(true);
     } finally {
@@ -584,21 +610,23 @@ describe("Gateway audience egress", () => {
   });
 
   test("mail.send approval summary includes to and subject", async () => {
-    const result = await runGatewayInvoke({
-      employeeId: "emp_sales",
-      credentialId: "cred_sales",
-      body: {
-        tool: "mail.send",
-        purpose: "sales.outreach",
-        jobId: `job_artifact_mail_${Date.now()}`,
-        args: {
-          assetRef: "kb/public-faq",
-          to: "buyer@customer.example",
-          subject: "見積フォロー",
-          body: "先日の見積のご確認をお願いします。",
+    const result = await withNeedsApprovalMailPolicy(() =>
+      runGatewayInvoke({
+        employeeId: "emp_sales",
+        credentialId: "cred_sales",
+        body: {
+          tool: "mail.send",
+          purpose: "sales.outreach",
+          jobId: `job_artifact_mail_${Date.now()}`,
+          args: {
+            assetRef: "kb/public-faq",
+            to: "buyer@customer.example",
+            subject: "見積フォロー",
+            body: "先日の見積のご確認をお願いします。",
+          },
         },
-      },
-    });
+      })
+    );
     expect(result.httpStatus).toBe(402);
     expect(result.body.needs_approval).toBe(true);
     const summary = String(result.body.summary);

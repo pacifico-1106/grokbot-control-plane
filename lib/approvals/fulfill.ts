@@ -462,6 +462,16 @@ async function fulfillMailSend(
 
   await persistFulfillment(approval, fulfillment);
 
+  const artifact = approval.metadata?.artifact as Record<string, unknown> | undefined;
+  const sendMode =
+    typeof artifact?.sendMode === "string"
+      ? artifact.sendMode
+      : typeof approval.metadata?.mailPolicy === "object" &&
+          approval.metadata?.mailPolicy &&
+          typeof (approval.metadata.mailPolicy as Record<string, unknown>).sendMode === "string"
+        ? String((approval.metadata.mailPolicy as Record<string, unknown>).sendMode)
+        : undefined;
+
   // Audit: record the approved mail.send with stub fulfillment
   await appendAuditEvent({
     orgId: approval.orgId,
@@ -477,6 +487,7 @@ async function fulfillMailSend(
       delivery: "stub",
       to,
       subject,
+      sendMode,
       phase: "approval.fulfill",
       noteJa: "mail.send のライブ送信は未実装。承認後の記録のみ。",
     },

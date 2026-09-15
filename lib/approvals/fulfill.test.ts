@@ -12,8 +12,26 @@ import {
 } from "@/lib/data";
 import { upsertConversationAdapter } from "@/lib/data/conversation-adapters";
 import { DEMO_ORG } from "@/lib/demo-data";
+import { setOrgMailPolicy, resetDemoMailPolicy } from "@/lib/data/mail-policy";
+import { normalizeMailPolicy } from "@/lib/mail-policy/validate";
 import type { GatewayInvokeRequest } from "@/lib/types";
 import { runGatewayInvoke } from "@/lib/gateway/invoke";
+
+async function withNeedsApprovalMailPolicy<T>(fn: () => Promise<T>): Promise<T> {
+  await setOrgMailPolicy(
+    DEMO_ORG.id,
+    normalizeMailPolicy({
+      policyId: "mpp_test_needs_approval",
+      policyName: "Test Needs Approval",
+      rules: [{ id: "mpr_ext", audience: "external", sendMode: "needs_approval" }],
+    })
+  );
+  try {
+    return await fn();
+  } finally {
+    resetDemoMailPolicy();
+  }
+}
 
 const originalFetch = globalThis.fetch;
 const savedEnv = {
@@ -560,7 +578,8 @@ describe("mail.send artifact fail-closed + stub fulfillment", () => {
     expect(result.body.missing).not.toContain("to");
   });
 
-  test("mail.send with all fields queues needs_approval and stores artifact", async () => {
+  test("mail.send to external demotes to draft by default (B1-1)", async () => {
+    resetDemoMailPolicy();
     const jobId = `job_mail_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
     const result = await runGatewayInvoke({
       employeeId: "emp_sales",
@@ -576,6 +595,29 @@ describe("mail.send artifact fail-closed + stub fulfillment", () => {
         },
       },
     });
+    expect(result.httpStatus).toBe(200);
+    expect(result.body.code).toBe("mail_send_demoted_to_draft");
+    expect(result.body.demoted).toBe(true);
+    expect(result.body.tool).toBe("mail.draft");
+  });
+
+  test("mail.send with all fields queues needs_approval and stores artifact", async () => {
+    const jobId = `job_mail_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    const result = await withNeedsApprovalMailPolicy(() =>
+      runGatewayInvoke({
+      employeeId: "emp_sales",
+      credentialId: "cred_sales",
+      body: {
+        tool: "mail.send",
+        purpose: "sales.outreach",
+        jobId,
+        args: {
+          to: "recipient@example.com",
+          subject: "テスト件名",
+          body: "テスト本文です。",
+        },
+      },
+    }));
     expect(result.httpStatus).toBe(402);
     expect(result.body.needs_approval).toBe(true);
     const approvalId = String(result.body.approvalId || "");
@@ -585,28 +627,32 @@ describe("mail.send artifact fail-closed + stub fulfillment", () => {
     expect(artifact?.to).toBe("recipient@example.com");
     expect(artifact?.subject).toBe("テスト件名");
     expect(artifact?.body).toBe("テスト本文です。");
+    expect(artifact?.sendMode).toBe("needs_approval");
     const summary = String(stored?.summary || "");
     expect(summary).toContain("宛先: recipient@example.com");
     expect(summary).toContain("件名: テスト件名");
     expect(summary).toContain("本文先頭:");
+    expect(summary).toContain("sendMode:");
   });
 
   test("mail.send approved returns stub fulfillment", async () => {
     const jobId = `job_mail_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
-    const queued = await runGatewayInvoke({
-      employeeId: "emp_sales",
-      credentialId: "cred_sales",
-      body: {
-        tool: "mail.send",
-        purpose: "sales.outreach",
-        jobId,
-        args: {
-          to: "recipient@example.com",
-          subject: "承認テスト",
-          body: "承認後のスタブテスト。",
+    const queued = await withNeedsApprovalMailPolicy(() =>
+      runGatewayInvoke({
+        employeeId: "emp_sales",
+        credentialId: "cred_sales",
+        body: {
+          tool: "mail.send",
+          purpose: "sales.outreach",
+          jobId,
+          args: {
+            to: "recipient@example.com",
+            subject: "承認テスト",
+            body: "承認後のスタブテスト。",
+          },
         },
-      },
-    });
+      })
+    );
     expect(queued.httpStatus).toBe(402);
     const approvalId = String(queued.body.approvalId || "");
     const approved = await resolveApproval(

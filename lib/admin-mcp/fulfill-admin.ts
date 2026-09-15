@@ -16,6 +16,8 @@ import {
   setEmployeeSchedulingPolicy,
   setOrgReplyPolicy,
   setEmployeeReplyPolicy,
+  setOrgMailPolicy,
+  setEmployeeMailPolicy,
   upsertConversationAdapter,
   listNotificationChannels,
   upsertNotificationChannel,
@@ -30,6 +32,7 @@ import { updateApprovalMetadata } from "@/lib/data/approvals";
 import { validateIngressHandoffPolicy } from "@/lib/ingress-handoff/validate";
 import { validateSchedulingPolicy } from "@/lib/scheduling-policy/validate";
 import { validateReplyPolicy } from "@/lib/gateway/reply-policy-validate";
+import { validateMailPolicy } from "@/lib/mail-policy/validate";
 import { linkAgent } from "@/lib/data/bindings";
 import { upsertOrgChannel, upsertOrgParty } from "@/lib/data/directory";
 import {
@@ -967,6 +970,105 @@ async function fulfillReplyPolicy(
   };
 }
 
+async function fulfillMailPolicy(
+  approval: ApprovalRequest,
+  args: Record<string, unknown>
+): Promise<AdminFulfillment> {
+  const employeeId = typeof args.employeeId === "string" && args.employeeId.trim()
+    ? args.employeeId.trim()
+    : null;
+  const clearOverride = args.clearOverride === true;
+
+  if (clearOverride && employeeId) {
+    await setEmployeeMailPolicy(employeeId, approval.orgId, null);
+    await appendAuditEvent({
+      orgId: approval.orgId,
+      employeeId,
+      credentialId: null,
+      action: "admin.policy",
+      purpose: "admin.policy",
+      summary: `AI社員のメールポリシーオーバーライドをクリアしました（組織ポリシーを継承）`,
+      metadata: {
+        auditClass: ADMIN_AUDIT_CLASS,
+        approvalId: approval.id,
+        employeeId,
+        cleared: true,
+      },
+    });
+    return {
+      ok: true,
+      tool: "mailPolicy.patch",
+      at: new Date().toISOString(),
+      employeeId,
+    };
+  }
+
+  const validation = validateMailPolicy({
+    policyName: args.policyName,
+    rules: args.rules,
+    highRiskConsentAt: args.highRiskConsentAt,
+    highRiskConsentBy: args.highRiskConsentBy,
+  });
+  if (!validation.ok) {
+    throw new Error("invalid_mail_policy");
+  }
+
+  const hasHighRiskConsent = Boolean(validation.policy.highRiskConsentAt);
+
+  if (employeeId) {
+    const policy = await setEmployeeMailPolicy(employeeId, approval.orgId, validation.policy);
+    await appendAuditEvent({
+      orgId: approval.orgId,
+      employeeId,
+      credentialId: null,
+      action: "admin.policy",
+      purpose: "admin.policy",
+      summary: `AI社員ごとのメールポリシーオーバーライドを設定しました（${policy?.rules.length ?? 0}ルール）`,
+      metadata: {
+        auditClass: ADMIN_AUDIT_CLASS,
+        approvalId: approval.id,
+        employeeId,
+        policyId: policy?.policyId,
+        policyName: policy?.policyName,
+        rulesCount: policy?.rules.length ?? 0,
+        highRiskConsentAt: policy?.highRiskConsentAt,
+        highRiskConsentBy: policy?.highRiskConsentBy,
+      },
+    });
+    return {
+      ok: true,
+      tool: "mailPolicy.patch",
+      at: new Date().toISOString(),
+      employeeId,
+    };
+  }
+
+  const policy = await setOrgMailPolicy(approval.orgId, validation.policy);
+  const consentNote = hasHighRiskConsent ? "（高リスク承諾あり）" : "";
+  await appendAuditEvent({
+    orgId: approval.orgId,
+    employeeId: null,
+    credentialId: null,
+    action: "admin.policy",
+    purpose: "admin.policy",
+    summary: `組織のメールポリシーを更新しました（${policy.rules.length}ルール${consentNote}）`,
+    metadata: {
+      auditClass: ADMIN_AUDIT_CLASS,
+      approvalId: approval.id,
+      policyId: policy.policyId,
+      policyName: policy.policyName,
+      rulesCount: policy.rules.length,
+      highRiskConsentAt: policy.highRiskConsentAt,
+      highRiskConsentBy: policy.highRiskConsentBy,
+    },
+  });
+  return {
+    ok: true,
+    tool: "mailPolicy.patch",
+    at: new Date().toISOString(),
+  };
+}
+
 export async function fulfillApprovedAdmin(
   approval: ApprovalRequest
 ): Promise<AdminFulfillment | null> {
@@ -1006,6 +1108,9 @@ export async function fulfillApprovedAdmin(
         break;
       case "replyPolicy.patch":
         fulfillment = await fulfillReplyPolicy(approval, args);
+        break;
+      case "mailPolicy.patch":
+        fulfillment = await fulfillMailPolicy(approval, args);
         break;
       case "setup.slackAdapter.setBotToken":
         fulfillment = await fulfillSlackAdapterSetBotToken(approval, args);

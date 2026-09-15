@@ -2,7 +2,25 @@ import { describe, expect, test } from "bun:test";
 import { getRuntimeEmployees } from "@/lib/demo-data";
 import { runGatewayInvoke } from "@/lib/gateway/invoke";
 import { DEMO_ORG } from "@/lib/demo-data";
+import { setOrgMailPolicy, resetDemoMailPolicy } from "@/lib/data/mail-policy";
+import { normalizeMailPolicy } from "@/lib/mail-policy/validate";
 import { evaluateSod } from "@/lib/employees/sod";
+
+async function withNeedsApprovalMailPolicy<T>(fn: () => Promise<T>): Promise<T> {
+  await setOrgMailPolicy(
+    DEMO_ORG.id,
+    normalizeMailPolicy({
+      policyId: "mpp_test_needs_approval",
+      policyName: "Test Needs Approval",
+      rules: [{ id: "mpr_ext", audience: "external", sendMode: "needs_approval" }],
+    })
+  );
+  try {
+    return await fn();
+  } finally {
+    resetDemoMailPolicy();
+  }
+}
 import { DEFAULT_SPEND_LIMITS } from "@/lib/spend-gate";
 
 describe("Gateway SoD integration", () => {
@@ -96,15 +114,23 @@ describe("Gateway SoD integration", () => {
       expect(result.body.ok).toBe(true);
       expect(result.body.needs_approval).not.toBe(true);
 
-      const send = await runGatewayInvoke({
-        employeeId: "emp_comm",
-        credentialId: "cred_comm",
-        body: {
-          tool: "mail.send",
-          purpose: "comm.internal",
-          jobId: `job_sod_send_${Date.now()}`,
-        },
-      });
+      const send = await withNeedsApprovalMailPolicy(() =>
+        runGatewayInvoke({
+          employeeId: "emp_comm",
+          credentialId: "cred_comm",
+          body: {
+            tool: "mail.send",
+            purpose: "comm.internal",
+            jobId: `job_sod_send_${Date.now()}`,
+            args: {
+              assetRef: "kb/public-faq",
+              to: "partner@external.example",
+              subject: "フォロー",
+              body: "ご確認ください。",
+            },
+          },
+        })
+      );
       expect(send.httpStatus).toBe(402);
       expect(send.body.needs_approval).toBe(true);
     } finally {

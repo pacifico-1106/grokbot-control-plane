@@ -1,8 +1,8 @@
 import {
   buildApprovalArtifact,
   buildApprovalTitle,
-  buildArtifactLines,
   buildRichApprovalSummary,
+  formatArtifactLines,
   inferRiskForTool,
 } from "@/lib/approvals/summary";
 import { sendApprovalNeededEmail } from "@/lib/email";
@@ -17,10 +17,18 @@ import {
   getBinding,
   getEmployee,
   getEmployeeById,
+  getEffectiveIngressHandoffPolicy,
+  getEffectiveMailPolicy,
   runtimeModeLabel,
   incrementActionCounter,
   getOrgSodWarnPolicy,
 } from "@/lib/data";
+import { getOrgInternalAudienceRule } from "@/lib/data/internal-audience-rule";
+import {
+  evaluateMailPolicy,
+  extractMailRecipients,
+} from "@/lib/mail-policy/apply";
+import type { MailPolicyDecision } from "@/lib/types";
 import {
   isBillableConfirmCompletion,
   recordGatedConfirmAction,
@@ -227,6 +235,7 @@ async function createNeedsApprovalResponse(opts: {
   summaryPrefix?: string;
   body?: GatewayInvokeRequest;
   egress?: EgressVerdict | null;
+  mailPolicy?: MailPolicyDecision | null;
 }) {
   const risk = opts.risk || inferRiskForTool(opts.tool);
   const title = buildApprovalTitle(opts.tool, opts.purpose);
@@ -239,12 +248,12 @@ async function createNeedsApprovalResponse(opts: {
     opts.egress ?? null,
     conversation
   );
-  const extraLines = buildArtifactLines(
-    opts.tool,
-    opts.body,
-    opts.egress ?? null,
-    conversation
-  );
+  if (opts.mailPolicy && (opts.tool === "mail.send" || opts.tool === "mail.draft")) {
+    artifact.sendMode = opts.mailPolicy.sendMode;
+    const recipients = opts.body ? extractMailRecipients(opts.body) : { hasAttachments: false };
+    if (recipients.hasAttachments) artifact.hasAttachments = true;
+  }
+  const extraLines = formatArtifactLines(artifact);
   const baseSummary = buildRichApprovalSummary({
     tool: opts.tool,
     purpose: opts.purpose,
@@ -967,14 +976,10 @@ export async function runGatewayInvoke(
     );
   }
 
-  const forceApproval =
-    perToolHuman ||
-    employee.approvalPolicy === "always_human" ||
-    actionLimit.decision === "needs_approval" ||
-    spend?.decision === "needs_approval";
+  let mailPolicyDecision: MailPolicyDecision | null = null;
 
-  // mail.send fail-closed: require to/subject/body for judgment material
-  if (tool === "mail.send" && forceApproval && !priorApprovalOk) {
+  // B1 mail.policy: evaluate before approval gate (demote / reject / sendMode)
+  if (tool === "mail.send" && !priorApprovalOk) {
     const mailValidation = validateMailSendArtifact(body);
     if (!mailValidation.ok) {
       await appendAuditEvent({
@@ -1007,7 +1012,123 @@ export async function runGatewayInvoke(
         400
       );
     }
+
+    const effectiveMail = await getEffectiveMailPolicy(orgId || employee.orgId, employeeId);
+    const internalRule = await getOrgInternalAudienceRule(orgId || employee.orgId);
+    const d1Effective = await getEffectiveIngressHandoffPolicy(orgId || employee.orgId, employeeId);
+    const recipients = extractMailRecipients(body);
+    const mailArgs =
+      body.args && typeof body.args === "object"
+        ? (body.args as Record<string, unknown>)
+        : {};
+    const sealithTransferId =
+      typeof mailArgs.sealithTransferId === "string" ? mailArgs.sealithTransferId : null;
+
+    mailPolicyDecision = evaluateMailPolicy({
+      policy: effectiveMail.policy,
+      to: mailValidation.to,
+      cc: recipients.cc,
+      bcc: recipients.bcc,
+      hasAttachments: recipients.hasAttachments,
+      internalAudienceRule: internalRule,
+      ingressHandoffPolicy: d1Effective.policy,
+      sealithTransferId,
+    });
+
+    if (mailPolicyDecision.rejected) {
+      await appendAuditEvent({
+        orgId: orgId || employee.orgId,
+        employeeId,
+        credentialId: input.credentialId || employee.credentialId,
+        action: "tool.invoke",
+        purpose,
+        summary: `${tool} をメールポリシーで拒否（fail-closed）`,
+        metadata: {
+          tool,
+          jobId,
+          code: mailPolicyDecision.rejectCode,
+          sendMode: mailPolicyDecision.sendMode,
+          auditLabels: mailPolicyDecision.auditLabels,
+          appliedRules: mailPolicyDecision.appliedRules,
+        },
+      });
+      return jsonResult(
+        {
+          ok: false,
+          code: mailPolicyDecision.rejectCode,
+          error: mailPolicyDecision.rejectCode,
+          message: mailPolicyDecision.rejectReason,
+          needs_approval: false,
+          employeeId,
+          tool,
+          purpose,
+          jobId,
+          mailPolicy: {
+            sendMode: mailPolicyDecision.sendMode,
+            audience: mailPolicyDecision.audience,
+          },
+        },
+        403
+      );
+    }
+
+    if (mailPolicyDecision.demotedToDraft) {
+      await appendAuditEvent({
+        orgId: orgId || employee.orgId,
+        employeeId,
+        credentialId: input.credentialId || employee.credentialId,
+        action: "tool.invoke",
+        purpose,
+        summary: "mail.send を mail.draft に降格（mail policy draft_only）",
+        metadata: {
+          tool: "mail.draft",
+          originalTool: "mail.send",
+          jobId,
+          code: "mail_send_demoted_to_draft",
+          sendMode: mailPolicyDecision.sendMode,
+          audience: mailPolicyDecision.audience,
+          auditLabels: mailPolicyDecision.auditLabels,
+          appliedRules: mailPolicyDecision.appliedRules,
+        },
+      });
+      return jsonResult({
+        ok: true,
+        code: "mail_send_demoted_to_draft",
+        demoted: true,
+        originalTool: "mail.send",
+        tool: "mail.draft",
+        sendMode: mailPolicyDecision.sendMode,
+        messageJa:
+          "メールポリシーにより mail.send は mail.draft に降格されました（draft_only — 実送信なし）",
+        mailPolicy: {
+          sendMode: mailPolicyDecision.sendMode,
+          audience: mailPolicyDecision.audience,
+          appliedRules: mailPolicyDecision.appliedRules,
+          auditLabels: mailPolicyDecision.auditLabels,
+        },
+        employeeId,
+        purpose,
+        jobId,
+        result: { drafted: true },
+      });
+    }
   }
+
+  let mailPolicyForceApproval: boolean | undefined;
+  if (tool === "mail.send" && mailPolicyDecision) {
+    if (mailPolicyDecision.needsApproval) {
+      mailPolicyForceApproval = true;
+    } else if (mailPolicyDecision.autoSend) {
+      mailPolicyForceApproval = false;
+    }
+  }
+
+  const forceApproval =
+    mailPolicyForceApproval ??
+    (perToolHuman ||
+      employee.approvalPolicy === "always_human" ||
+      actionLimit.decision === "needs_approval" ||
+      spend?.decision === "needs_approval");
 
   if (
     forceApproval &&
@@ -1067,6 +1188,7 @@ export async function runGatewayInvoke(
       metadata: { ...invokeMetadata, sodVerdict, actionLimit, egress, dualEgress, managerId },
       body,
       egress,
+      mailPolicy: tool === "mail.send" ? mailPolicyDecision : null,
       extra: {
         toolKind: toolDef.kind,
         approvalPolicy: employee.approvalPolicy,
@@ -1076,6 +1198,15 @@ export async function runGatewayInvoke(
         dualEgress,
         managerId,
         ...(voice ? { voice } : {}),
+        ...(mailPolicyDecision
+          ? {
+              mailPolicy: {
+                sendMode: mailPolicyDecision.sendMode,
+                audience: mailPolicyDecision.audience,
+                appliedRules: mailPolicyDecision.appliedRules,
+              },
+            }
+          : {}),
         ...(browserIdentityMeta
           ? {
               browserIdentityCheck: browserIdentityMeta.browserIdentityCheck,

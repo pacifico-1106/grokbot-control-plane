@@ -35,6 +35,8 @@ export const ADMIN_MCP_TOOL_NAMES = [
   "schedulingPolicy.patch",
   "replyPolicy.get",
   "replyPolicy.patch",
+  "mailPolicy.get",
+  "mailPolicy.patch",
   "internalAudienceRule.get",
   "internalAudienceRule.patch",
 ] as const;

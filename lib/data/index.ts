@@ -187,3 +187,15 @@ export {
   type ReplyPolicySource,
   type EffectiveReplyPolicy,
 } from "./reply-policy";
+
+export {
+  getOrgMailPolicy,
+  setOrgMailPolicy,
+  resetDemoMailPolicy,
+  getEmployeeMailPolicy,
+  setEmployeeMailPolicy,
+  getEffectiveMailPolicy,
+  recordMailPolicyHighRiskConsent,
+  type MailPolicySource,
+  type EffectiveMailPolicy,
+} from "./mail-policy";

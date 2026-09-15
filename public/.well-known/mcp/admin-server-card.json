@@ -31,7 +31,15 @@
     "setup.lineApproval.setEmployeeInbox",
     "setup.lineApproval.demoteTelegram",
     "ingressHandoff.get",
-    "ingressHandoff.patch"
+    "ingressHandoff.patch",
+    "schedulingPolicy.get",
+    "schedulingPolicy.patch",
+    "replyPolicy.get",
+    "replyPolicy.patch",
+    "mailPolicy.get",
+    "mailPolicy.patch",
+    "internalAudienceRule.get",
+    "internalAudienceRule.patch"
   ],
   "capabilities": {
     "tools": {

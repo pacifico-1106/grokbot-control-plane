@@ -38,6 +38,8 @@ export type ApprovalArtifact = {
   what?: string;
   snsSurface?: string;
   scheduledAt?: string;
+  sendMode?: string;
+  hasAttachments?: boolean;
 };
 
 const CLASS_LABEL: Record<string, string> = {
@@ -134,6 +136,12 @@ export function buildApprovalArtifact(
     if (to) artifact.to = to;
     if (subject) artifact.subject = subject;
     if (mailBody) artifact.body = mailBody;
+    const sendMode = firstString(args.sendMode);
+    if (sendMode) artifact.sendMode = sendMode;
+    const hasAttachments =
+      Array.isArray(args.attachments) && args.attachments.length > 0 ||
+      args.hasAttachments === true;
+    if (hasAttachments) artifact.hasAttachments = true;
   }
 
   if (tool === "calendar.confirm" || tool === "calendar.propose") {
@@ -209,6 +217,18 @@ export function formatArtifactLines(artifact: ApprovalArtifact): string[] {
         ? artifact.body.slice(0, 200) + "…"
         : artifact.body;
       lines.push(`本文先頭: ${preview}`);
+    }
+    if (artifact.hasAttachments) lines.push("添付: あり");
+    if (artifact.sendMode) {
+      const sendModeJa =
+        artifact.sendMode === "draft_only"
+          ? "下書きのみ"
+          : artifact.sendMode === "needs_approval"
+            ? "承認必須"
+            : artifact.sendMode === "auto"
+              ? "自動送信"
+              : artifact.sendMode;
+      lines.push(`sendMode: ${sendModeJa}`);
     }
     return lines;
   }
