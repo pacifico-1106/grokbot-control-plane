@@ -1,8 +1,8 @@
 # Staffpass シチュエーション／補足ルール カタログ（草案）
 
-**更新:** 2026-09-08 安藤（八坂ブレスト＋D4草案追加）  
+**更新:** 2026-09-15 安藤（F7 Stuck Watch カタログ採用）  
 **用途:** Staffpass／MCP ルールパック族の正本カタログ（八坂GO 2026-09-07 全採用）。
-**次:** A1/F1/B2/D1 shipped → 次箱 B1 → D4 設計ロック。  
+**次:** A1v2 + B1 shipped → 次箱 **F7 Stuck Watch + P0-ID/IN/RP**（F7 は faultClass+W2 から並行可）。  
 **共通軸:** WHO（誰に・どの口）／WHAT（何を出す）／WHEN・HOW（いつ・いくら・どの手段で確定）  
 **共通天井:** フルオート可・テナント自己責任（ToS）。高リスク設定は警告＋明示承諾＋監査。権限外は不通。
 
@@ -265,8 +265,10 @@
 - **実装予定**: F1完了後の次パック。型予約のみ、本PRでは実装しない
 - **拡張点**: `lib/gateway/disclosure-policy.ts`（予約）
 
-### F7 内部オーディエンスルール（stablo規模チャネル対応）
-- **ステータス**: ✅ 本番稼働
+### F7（旧採番）内部オーディエンスルール（stablo規模チャネル対応）
+> **注記:** 旧F7採番・本番済み／2026-09-15以降のカタログF7は **Stuck Watch**（下記）。本節は shipped 内部オーディエンス機能の記録。
+
+- **ステータス**: ✅ 本番稼働（旧F7採番）
 - **用途**: 大規模チャネル（#stablo_tokyo307 等）で毎アカウントを parties.upsert で登録するのが破綻する問題を解決
 - **ルール設計**: Internal = parties allowlist UNION emailDomains UNION slackTeamIds
 - **Fail-closed**: Connect ゲスト / 未登録 → external
@@ -275,9 +277,26 @@
 - **スキーマ**: `orgs.internal_audience_rule` (jsonb)
 - **例**: `#stablo_tokyo307` Connect チャネル — 自社Slackチーム `T_STABLO_307` のメンバーは自動で内部扱い、外部ゲストは fail-closed で外部扱い
 
+### F7 Stuck Watch — 不当停止の検知と再発火
+- **ステータス**: 実装GO（2026-09-15）／実装予定
+- **カタログID**: F7（2026-09-15 以降の製品F7）
+- **用途**: AI社員オペの不当停止（メンション未返信・承認後未fulfill・課金ゲート誤爆等）を観測し、安全な範囲で再発火。直せないものは運用口へ出す
+- **faultClass（F5拡張）**: `expected_gate`（正当ゲート・再発火しない）／`ops_fault`（自動リトライ対象）／`config_drift`（通知のみ）
+- **ウォッチ P0**:
+  - W1 メンション未返信（デフォルト15分）
+  - W2 承認後未fulfill（デフォルト5分）→ 自動reinvoke max2・auto-fulfill #53 系と統合（重複実装しない）
+  - W3 ops_fault連続（K=2で停止）
+  - W4 config_driftは通知のみ
+- **StuckWatchPolicy**: `orgs.stuck_watch_policy` jsonb — enabled, mentionUnansweredMinutes, approvedUnfulfilledMinutes, maxAutoRetries=2, retryBackoffSeconds, autoRetryFaultClasses=["ops_fault"], notifyMouth, inferInternalAudienceFromLedger=true
+- **Admin MCP ツール**: `stuckWatch.get` / `stuckWatch.patch` / `stuckWatch.list` / `stuckWatch.inspect` / `stuckWatch.retry` / `stuckWatch.resolve` / `stuckWatch.classify`（summaryJa/nextStepJa）
+- **Employee MCP（任意）**: `staffpass_stuck_list` / `staffpass_stuck_retry`
+- **invoke 拡張**: 失敗レスポンスに `faultClass` + `stuckHint`（`retryable` / `fix` / `wait_approval`）
+- **カット順**: faultClass → W2 → W1 → audience補完 → Admin MCP → employee任意
+- **詳細**: `docs/f7-stuck-watch-20260915.md`
+
 ---
 
-## 前進方針（2026-09-08）
+## 前進方針（2026-09-08 → 2026-09-15 更新）
 
 1. ✅ 本カタログを repo に掲載
 2. ✅ **A1 `scheduling.policy`** shipped（CRUD・policyId・fail-closed・監査・高リスク承諾・フルオート天井）
@@ -305,13 +324,17 @@
    - 新規SQLなし（既存 jsonb カラムを使用）
    - Admin MCP: `ingressHandoff.get` / `ingressHandoff.patch`
    - 詳細: `docs/ingress-handoff-d1.md`
-6. 🔧 次箱 **B1**（メール送信／返信）
-7. 📋 **D4 共用資格の貸与**（設計ロック中・木村確認済み）
+6. ✅ **B1**（メール送信／返信）— shipped
+7. 🔧 **次箱 F7 Stuck Watch + P0-ID/IN/RP**（F7 は faultClass+W2 から並行可）
+   - faultClass（F5拡張）→ W2（#53 統合）→ W1 → audience補完 → Admin MCP → employee任意
+   - 実装GO 2026-09-15／実装予定
+   - 詳細: `docs/f7-stuck-watch-20260915.md`
+8. 📋 **D4 共用資格の貸与**（設計ロック中・木村確認済み）
    - 設計ロックは B1 と**並行可**
    - 実装は B1 安定後（実装 GO は別判断）
    - Staffpass jsonb には参照メタのみ（生シークレット置かない）
    - 保管・注入は Sealith 拡張が中長期本命
    - パック名: `credential.policy` or `credentialLease.policy`
    - Admin MCP: `credentialLease.get` / `credentialLease.patch`（mutate always_human）
-8. 📋 **F6 アイデンティティ開示** — 後パック
-9. AI Concier は A4 の参考・将来連携として別枠
+9. 📋 **F6 アイデンティティ開示** — 後パック
+10. AI Concier は A4 の参考・将来連携として別枠
