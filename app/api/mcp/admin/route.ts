@@ -151,6 +151,19 @@ export async function POST(req: Request) {
       !Array.isArray(params.arguments)
         ? (params.arguments as Record<string, unknown>)
         : {};
+    const meta =
+      params._meta &&
+      typeof params._meta === "object" &&
+      !Array.isArray(params._meta)
+        ? (params._meta as Record<string, unknown>)
+        : null;
+    const approvalId =
+      (typeof toolArgs.approvalId === "string" ? toolArgs.approvalId.trim() : "") ||
+      (meta && typeof meta.approvalId === "string" ? meta.approvalId.trim() : "") ||
+      (typeof params.approvalId === "string" ? params.approvalId.trim() : "");
+    if (approvalId && !toolArgs.approvalId) {
+      toolArgs.approvalId = approvalId;
+    }
     if (!toolName) {
       return jsonRpcError(id, -32602, "tools/call requires params.name");
     }

@@ -43,7 +43,9 @@ import { diagnoseSlackStatus, DASHBOARD_BOT_TOKEN_PATH_JA } from "@/lib/slack/sl
 import { diagnoseLineApprovalStatus } from "@/lib/line/line-approval-status-diagnose";
 import { encryptNotificationSecrets } from "@/lib/notify/crypto";
 import { queueAdminTool } from "@/lib/admin-mcp/queue";
-import { parseAdminFulfillment } from "@/lib/admin-mcp/fulfill-admin";
+import { fulfillApprovedAdmin, parseAdminFulfillment } from "@/lib/admin-mcp/fulfill-admin";
+import { auditActionForAdminTool } from "@/lib/admin-mcp/audit-class";
+import { buildPollUrl } from "@/lib/approvals/tokens";
 import { ADMIN_MCP_TOOL_NAMES } from "@/lib/mcp/admin-public";
 import { buildEmployeePolicyDrafts } from "@/lib/employees/policy-draft";
 import { parseApprovalChannelId } from "@/lib/employees/approval-inbox";
@@ -788,6 +790,11 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
           description: "Required for new Auth users when invite is false. Never stored in audit plaintext.",
         },
         jobId: { type: "string" },
+        approvalId: {
+          type: "string",
+          description:
+            "After human approval, re-invoke with this id to fulfill and read the result (pollHint: reinvoke_with_approvalId).",
+        },
       },
       required: ["orgName", "ownerEmail"],
       additionalProperties: false,
@@ -827,6 +834,128 @@ function adminCannotTargetSelf(
 
 export function isAdminMcpToolName(name: string): boolean {
   return (ADMIN_MCP_TOOL_NAMES as readonly string[]).includes(name);
+}
+
+const ADMIN_READ_ONLY_TOOLS = new Set<string>([
+  "setup.slackStatus",
+  "setup.lineApprovalStatus",
+  "ingressHandoff.get",
+  "schedulingPolicy.get",
+  "replyPolicy.get",
+  "mailPolicy.get",
+  "internalAudienceRule.get",
+  "stuckWatch.get",
+  "stuckWatch.list",
+  "stuckWatch.inspect",
+  "stuckWatch.classify",
+  "stuckWatch.retry",
+  "stuckWatch.resolve",
+  "orgs.status",
+]);
+
+function isAdminMutationTool(name: string): boolean {
+  return isAdminMcpToolName(name) && !ADMIN_READ_ONLY_TOOLS.has(name);
+}
+
+function extractApprovalId(args: Record<string, unknown>): string {
+  const raw = args.approvalId;
+  return typeof raw === "string" ? raw.trim() : "";
+}
+
+async function handleAdminApprovalReinvoke(
+  toolName: string,
+  approvalId: string,
+  cred: ResolvedAdminCredential
+): Promise<{
+  content: Array<{ type: "text"; text: string }>;
+  structuredContent?: unknown;
+  isError?: boolean;
+}> {
+  const approval = await getApprovalById(approvalId, cred.orgId);
+  if (!approval) {
+    return toolResult(
+      { ok: false, code: "approval_not_found", message: "承認チケットが見つかりません" },
+      true
+    );
+  }
+
+  const approvalTool = String(approval.metadata?.adminTool || approval.tool || "").trim();
+  if (approvalTool && approvalTool !== toolName) {
+    return toolResult(
+      {
+        ok: false,
+        code: "approval_tool_mismatch",
+        message: `approvalId は ${approvalTool} 用です（要求: ${toolName}）`,
+      },
+      true
+    );
+  }
+
+  if (approval.status === "pending") {
+    return toolResult(
+      {
+        ok: false,
+        code: "needs_approval",
+        needs_approval: true,
+        approvalId: approval.id,
+        statusToken: approval.statusToken,
+        pollUrl: buildPollUrl(approval.id, approval.statusToken),
+        pollPath: approval.pollPath,
+        pollHint: "continue_polling",
+        title: approval.title,
+        summary: approval.summary,
+        tool: approvalTool || toolName,
+        always_human: true,
+        auditClass: ADMIN_AUDIT_CLASS,
+        auditAction: auditActionForAdminTool(toolName),
+      },
+      false
+    );
+  }
+
+  if (approval.status === "rejected") {
+    return toolResult(
+      { ok: false, code: "approval_rejected", message: "承認が拒否されました" },
+      true
+    );
+  }
+
+  if (approval.status === "expired") {
+    return toolResult(
+      { ok: false, code: "approval_expired", message: "承認チケットの期限が切れました" },
+      true
+    );
+  }
+
+  if (approval.status === "revision_requested") {
+    return toolResult(
+      {
+        ok: false,
+        code: "revision_requested",
+        message: "修正が要求されています",
+        revisionNote: approval.revisionNote,
+        parentApprovalId: approval.id,
+      },
+      true
+    );
+  }
+
+  if (approval.status === "approved") {
+    await fulfillApprovedAdmin(approval);
+    const result = await readApprovedAdminResult(cred, approvalId);
+    if (!result) {
+      return toolResult(
+        { ok: false, code: "fulfillment_failed", message: "承認後の履行に失敗しました" },
+        true
+      );
+    }
+    return toolResult(result, result.ok === false);
+  }
+
+  return toolResult(
+    { ok: false, code: "approval_not_approved", message: "承認が完了していません" },
+    true
+  );
 }
 
 export function adminToolsAlwaysHuman(): boolean {
@@ -1213,6 +1342,11 @@ export async function callAdminMcpTool(
       },
       true
     );
+  }
+
+  const approvalId = extractApprovalId(args);
+  if (approvalId && isAdminMutationTool(name)) {
+    return handleAdminApprovalReinvoke(name, approvalId, cred);
   }
 
   if (name === "policy.patch" || name === "link") {
