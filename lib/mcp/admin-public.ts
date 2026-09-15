@@ -48,6 +48,7 @@ export const ADMIN_MCP_TOOL_NAMES = [
   "stuckWatch.classify",
   "orgs.create",
   "orgs.status",
+  "orgs.patch",
   "orgs.issueAdminCredential",
   "approvals.proxyResolve",
 ] as const;

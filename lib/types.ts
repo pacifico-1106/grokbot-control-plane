@@ -489,6 +489,7 @@ export type AuditAction =
   | "admin.create_org"
   | "admin.issue_admin_credential"
   | "admin.proxy_approve"
+  | "admin.org_patch"
   | "stuck_watch.w2_retry"
   | "stuck_watch.w1_notify"
   | "stuck_watch.audience_ledger_retry"
