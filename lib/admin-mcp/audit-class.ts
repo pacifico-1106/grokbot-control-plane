@@ -13,6 +13,7 @@ export const ADMIN_AUDIT_ACTIONS = [
   "admin.ingressHandoff",
   "admin.conversationAdapter",
   "admin.notificationChannel",
+  "admin.create_org",
 ] as const;
 
 export type AdminAuditAction = (typeof ADMIN_AUDIT_ACTIONS)[number];
@@ -33,6 +34,7 @@ export const ADMIN_TOOL_AUDIT_ACTION: Record<string, AdminAuditAction> = {
   "setup.lineApproval.upsert": "admin.notificationChannel",
   "setup.lineApproval.setEmployeeInbox": "admin.notificationChannel",
   "setup.lineApproval.demoteTelegram": "admin.notificationChannel",
+  "orgs.create": "admin.create_org",
 };
 
 /** Operational / employee-badge class — never lead the dashboard change log. */

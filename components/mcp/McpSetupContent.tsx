@@ -13,6 +13,8 @@ const TOOL_BLURB: Record<(typeof STAFFPASS_MCP_TOOL_NAMES)[number], string> = {
   staffpass_invoke: "実行（目的と jobId が必要）",
   staffpass_get_approval_status: "承認待ちの確認",
   staffpass_health: "つながりの確認",
+  staffpass_stuck_list: "不当停止の一覧",
+  staffpass_stuck_retry: "不当停止の再試行",
 };
 
 export function McpSetupContent({

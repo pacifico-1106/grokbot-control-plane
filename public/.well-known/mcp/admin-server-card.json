@@ -46,7 +46,9 @@
     "stuckWatch.inspect",
     "stuckWatch.retry",
     "stuckWatch.resolve",
-    "stuckWatch.classify"
+    "stuckWatch.classify",
+    "orgs.create",
+    "orgs.status"
   ],
   "capabilities": {
     "tools": {
@@ -62,6 +64,7 @@
     "setup.lineApproval.upsert / setEmployeeInbox / demoteTelegram configure the LINE approval inbox (always_human). NOT conversation LINE (P1) or Slack posting adapter.",
     "Admin cannot grant itself extra scopes or approve its own request.",
     "channels.classify with employeeId installs Slack IM ingress for that employee. Omitting employeeId removes the ingress (fail-closed).",
-    "ingressHandoff supports per-employee overrides: include employeeId in get/patch to manage AI社員ごとの設定. Fallback order: employee override → org policy → default. Use clearOverride=true to clear employee override and inherit org policy."
+    "ingressHandoff supports per-employee overrides: include employeeId in get/patch to manage AI社員ごとの設定. Fallback order: employee override → org policy → default. Use clearOverride=true to clear employee override and inherit org policy.",
+    "orgs.create / orgs.status are platform super-admin tools (SUPER_ADMIN allowlist + optional PLATFORM_OPS_ORG_ID). Normal tenant gb_adm_ receives platform_ops_forbidden. orgs.create is always_human and reuses the signup org pipeline."
   ]
 }
