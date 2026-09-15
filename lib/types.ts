@@ -1172,6 +1172,84 @@ export interface ReplyPolicyAuditLabel {
  * registering every account via parties.upsert breaks at scale.
  * Use org rule: own Slack team members are auto-internal.
  */
+/**
+ * B1 Mail Policy — outbound mail send/draft behavior.
+ *
+ * Controls how AI employees send email:
+ * - sendMode per audience (internal/external)
+ * - Domain allowlist/denylist
+ * - Attachment rules (D1 inheritance / forbid)
+ * - CC/BCC permissions
+ *
+ * Fail-closed: default external → draft_only (no real send).
+ * draft_only on mail.send demotes to mail.draft with explicit audit code.
+ */
+
+/** Mail send mode per rule. */
+export type MailSendMode = "draft_only" | "needs_approval" | "auto";
+
+/** Audience selector for mail policy rules. */
+export type MailPolicyAudience = "internal" | "external" | "any";
+
+/** Attachment policy reference — inherit D1 or forbid outright. */
+export type MailAttachmentPolicyRef = "inherit_d1" | "forbid";
+
+/** Single mail policy rule (first-match by priority). */
+export interface MailPolicyRule {
+  id: string;
+  priority?: number;
+  audience?: MailPolicyAudience;
+  toDomainAllowlist?: string[];
+  toDomainDenylist?: string[];
+  sendMode: MailSendMode;
+  draftMailbox?: string;
+  requireHumanFinalSend?: boolean;
+  allowCc?: boolean;
+  allowBcc?: boolean;
+  attachmentPolicyRef?: MailAttachmentPolicyRef;
+}
+
+/** Org-level mail policy. */
+export interface OrgMailPolicy {
+  version: 1;
+  policyId: string;
+  policyName: string;
+  rules: MailPolicyRule[];
+  highRiskConsentAt?: string;
+  highRiskConsentBy?: string;
+  updatedAt: string;
+  updatedBy: string;
+}
+
+/** Mail policy application result. */
+export interface MailPolicyDecision {
+  allowed: boolean;
+  rejected: boolean;
+  rejectReason?: string;
+  rejectCode?: string;
+  demotedToDraft: boolean;
+  needsApproval: boolean;
+  autoSend: boolean;
+  sendMode: MailSendMode;
+  audience: "internal" | "external";
+  attachmentAllowed: boolean;
+  effectiveAttachmentPolicy: MailAttachmentPolicyRef | "forbid" | "sealith_required";
+  auditLabels: string[];
+  appliedRules: string[];
+  code?: string;
+}
+
+/** Audit label for mail policy decisions. */
+export interface MailPolicyAuditLabel {
+  mailId: string;
+  to: string;
+  audience: "internal" | "external";
+  sendMode: MailSendMode;
+  demotedToDraft: boolean;
+  appliedRules: string[];
+  reason?: string;
+}
+
 export interface OrgInternalAudienceRule {
   version: 1;
   /** Email domains considered internal (e.g., ["sample-shoji.example"]). */

@@ -80,9 +80,14 @@
 ## B. 文章を外に出す系
 
 ### B1 メール送信／返信
+- **ステータス**: ✅ 本番稼働（P0-B1 本 PR）
+- **SQL**: `20260915_mail_policy.sql`
 - **ルール例:** CC必須、署名、敬語フロア、添付ルール、ドメイン別テンプレ  
 - **追記採用:** BCC、添付は **Sealith連携**（機密は転送便、それ以外は方針）  
 - **Staffpass載せ方:** mail.send ＋ ingress/egress ＋ Sealith handoff
+- **Admin MCP ツール:** `mailPolicy.get` / `mailPolicy.patch`（always_human on mutate）
+- **スキーマ:** `orgs.mail_policy` / `employees.mail_policy` (オーバーライド)
+- **詳細:** `docs/mail-policy.md`
 
 ### B2 Slack／LINE等の返信（本番稼働）
 - **ステータス**: ✅ 本番稼働（PR #42 マージ済み `2d7f32c`）

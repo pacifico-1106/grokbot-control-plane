@@ -33,6 +33,12 @@ import {
   nextStepReplyPolicyJa,
   policyHasHighRiskAutoSend,
 } from "@/lib/gateway/reply-policy-validate";
+import {
+  validateMailPolicy,
+  summarizeMailPolicyJa,
+  nextStepMailPolicyJa,
+  policyHasHighRiskAutoSend as mailPolicyHasHighRiskAutoSend,
+} from "@/lib/mail-policy/validate";
 import { diagnoseSlackStatus, DASHBOARD_BOT_TOKEN_PATH_JA } from "@/lib/slack/slack-status-diagnose";
 import { diagnoseLineApprovalStatus } from "@/lib/line/line-approval-status-diagnose";
 import { encryptNotificationSecrets } from "@/lib/notify/crypto";
@@ -45,6 +51,7 @@ import { parseRolesProposeInput } from "@/lib/mcp/roles-propose";
 import { ALL_SCOPES } from "@/lib/employees/policy-draft";
 import { ADMIN_AUDIT_CLASS } from "@/lib/admin-mcp/audit-class";
 import { getEffectiveReplyPolicy, type ReplyPolicySource } from "@/lib/data/reply-policy";
+import { getEffectiveMailPolicy, type MailPolicySource } from "@/lib/data/mail-policy";
 import { getOrgInternalAudienceRule } from "@/lib/data/internal-audience-rule";
 
 export const ADMIN_MCP_TOOLS: McpToolDef[] = [
@@ -548,6 +555,56 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
     },
   },
   {
+    name: "mailPolicy.get",
+    description:
+      "Read mail policy (read-only, no approval required). Omit employeeId for org policy; include for AI社員ごとの設定. Returns effective policy + source layer (employee/org/default) + layers (employeeOverride/orgPolicy). B1 mail policy: メール送信ルールパック（sendMode / ドメイン許可・拒否 / 添付D1継承）。sendMode auto 設定は highRiskConsentAt/By が必要。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        employeeId: { type: "string", description: "Optional employee ID for per-employee lookup" },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "mailPolicy.patch",
+    description:
+      "Patch mail policy after human approval (always_human). Omit employeeId for org policy; include for AI社員ごとの設定. To clear employee override (inherit org), set clearOverride=true. Full replace of rules array. First-match rule ordering. Admin cannot self-approve. sendMode auto requires explicit tenant consent (highRiskConsentAt/By). 【高リスク警告】外部宛自動送信は silent enable 禁止。承諾 + settings on audit (F4/F5)。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        employeeId: { type: "string", description: "Optional employee ID for per-employee override" },
+        clearOverride: { type: "boolean", description: "Set true to clear employee override and inherit org policy" },
+        policyName: { type: "string", description: "Human-readable policy name" },
+        rules: {
+          type: "array",
+          description: "Full replacement rules array (first match wins). Omit when clearOverride=true.",
+          items: {
+            type: "object",
+            properties: {
+              id: { type: "string" },
+              priority: { type: "number" },
+              audience: { type: "string", description: "internal | external | any" },
+              toDomainAllowlist: { type: "array", items: { type: "string" } },
+              toDomainDenylist: { type: "array", items: { type: "string" } },
+              sendMode: { type: "string", description: "draft_only | needs_approval | auto" },
+              draftMailbox: { type: "string" },
+              requireHumanFinalSend: { type: "boolean" },
+              allowCc: { type: "boolean" },
+              allowBcc: { type: "boolean" },
+              attachmentPolicyRef: { type: "string", description: "inherit_d1 | forbid" },
+            },
+            required: ["sendMode"],
+          },
+        },
+        highRiskConsentAt: { type: "string", description: "ISO timestamp of tenant consent for high-risk automation" },
+        highRiskConsentBy: { type: "string", description: "Email/name of person who gave consent" },
+        jobId: { type: "string" },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
     name: "internalAudienceRule.get",
     description:
       "Read org internal audience rule (read-only, no approval required). Returns the rule for stablo-scale channels: Internal = parties allowlist UNION emailDomains UNION slackTeamIds. Connect guests / unregistered → external (fail-closed). Example: #stablo_tokyo307 Connect channel with many members — registering every account via parties.upsert breaks at scale. Use org rule: own Slack team members are auto-internal.",
@@ -721,6 +778,12 @@ const REPLY_POLICY_SOURCE_JA: Record<ReplyPolicySource, string> = {
   default: "デフォルト（draft_only / 絵文字制限 / スレッド優先）",
 };
 
+const MAIL_POLICY_SOURCE_JA: Record<MailPolicySource, string> = {
+  employee: "AI社員オーバーライド",
+  org: "組織ポリシー",
+  default: "デフォルト（外部宛 draft_only）",
+};
+
 async function runSchedulingPolicyGet(
   cred: ResolvedAdminCredential,
   args: Record<string, unknown>
@@ -854,6 +917,62 @@ function nextStepInternalAudienceRuleJa(
     return "Slack チームルールが設定済みです。自社チームメンバーは内部扱い、Connect ゲストは fail-closed で外部扱いになります。";
   }
   return "parties.upsert で個別パーティを登録するか、internalAudienceRule.patch でドメイン/チームルールを設定してください。";
+}
+
+type MailPolicyGetResult = {
+  ok: boolean;
+  policy: Awaited<ReturnType<typeof getEffectiveMailPolicy>>["policy"];
+  source: MailPolicySource;
+  layers: {
+    employeeOverride: Awaited<ReturnType<typeof getEffectiveMailPolicy>>["employeeOverride"];
+    orgPolicy: Awaited<ReturnType<typeof getEffectiveMailPolicy>>["orgPolicy"];
+  };
+  summaryJa: string;
+  sourceJa: string;
+  nextStepJa: string;
+  hasHighRiskAutoSend: boolean;
+  highRiskConsentRecorded: boolean;
+};
+
+async function runMailPolicyGet(
+  cred: ResolvedAdminCredential,
+  args: Record<string, unknown>
+): Promise<{ content: Array<{ type: "text"; text: string }>; structuredContent?: unknown; isError?: boolean }> {
+  const employeeId = typeof args.employeeId === "string" && args.employeeId.trim()
+    ? args.employeeId.trim()
+    : null;
+
+  if (employeeId) {
+    const employee = await getEmployee(employeeId, cred.orgId);
+    if (!employee) {
+      return toolResult(
+        { ok: false, code: "employee_not_found", message: "AI社員が見つかりません" },
+        true
+      );
+    }
+  }
+
+  const effective = await getEffectiveMailPolicy(cred.orgId, employeeId);
+  const hasHighRisk = mailPolicyHasHighRiskAutoSend(effective.policy);
+  const result: MailPolicyGetResult = {
+    ok: true,
+    policy: effective.policy,
+    source: effective.source,
+    layers: {
+      employeeOverride: effective.employeeOverride,
+      orgPolicy: effective.orgPolicy,
+    },
+    summaryJa: summarizeMailPolicyJa(effective.policy),
+    sourceJa: MAIL_POLICY_SOURCE_JA[effective.source],
+    nextStepJa: nextStepMailPolicyJa(effective.policy),
+    hasHighRiskAutoSend: hasHighRisk,
+    highRiskConsentRecorded: Boolean(effective.policy.highRiskConsentAt),
+  };
+  return {
+    content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+    structuredContent: result,
+    isError: false,
+  };
 }
 
 async function runInternalAudienceRuleGet(
@@ -1176,6 +1295,10 @@ export async function callAdminMcpTool(
     return runReplyPolicyGet(cred, args);
   }
 
+  if (name === "mailPolicy.get") {
+    return runMailPolicyGet(cred, args);
+  }
+
   if (name === "internalAudienceRule.get") {
     return runInternalAudienceRuleGet(cred);
   }
@@ -1243,6 +1366,77 @@ export async function callAdminMcpTool(
             errors: validationResult.errors,
             warningJa: hasHighRiskError
               ? "【高リスク警告】営業時間外の自動送信は silent enable 禁止。承諾 + settings on audit。"
+              : undefined,
+          },
+          true
+        );
+      }
+    }
+  }
+
+  if (name === "mailPolicy.patch") {
+    const employeeId = typeof args.employeeId === "string" && args.employeeId.trim()
+      ? args.employeeId.trim()
+      : null;
+    const clearOverride = args.clearOverride === true;
+
+    if (employeeId) {
+      const employee = await getEmployee(employeeId, cred.orgId);
+      if (!employee) {
+        return toolResult(
+          { ok: false, code: "employee_not_found", message: "AI社員が見つかりません" },
+          true
+        );
+      }
+    }
+
+    if (clearOverride) {
+      if (!employeeId) {
+        return toolResult(
+          { ok: false, code: "clear_requires_employee", message: "オーバーライドのクリアはemployeeIdが必要です" },
+          true
+        );
+      }
+    } else {
+      if (!Array.isArray(args.rules) || args.rules.length === 0) {
+        return toolResult(
+          { ok: false, code: "rules_required", message: "rulesが必要です（clearOverride=true以外）" },
+          true
+        );
+      }
+
+      const existingPolicy = await getEffectiveMailPolicy(cred.orgId, employeeId);
+      const existingConsent = existingPolicy.policy.highRiskConsentAt
+        ? { at: existingPolicy.policy.highRiskConsentAt, by: existingPolicy.policy.highRiskConsentBy || "unknown" }
+        : null;
+
+      const validationResult = validateMailPolicy(
+        {
+          policyName: args.policyName,
+          rules: args.rules,
+          highRiskConsentAt: args.highRiskConsentAt,
+          highRiskConsentBy: args.highRiskConsentBy,
+        },
+        {
+          requireHighRiskConsent: true,
+          existingConsent,
+        }
+      );
+
+      if (!validationResult.ok) {
+        const hasHighRiskError = validationResult.errors.some(
+          (e) => e.code === "high_risk_consent_required"
+        );
+        return toolResult(
+          {
+            ok: false,
+            code: hasHighRiskError ? "high_risk_consent_required" : "validation_failed",
+            message: hasHighRiskError
+              ? "sendMode auto にはテナント承諾が必要です。highRiskConsentAt/By を設定してください。"
+              : "ルールの検証に失敗しました",
+            errors: validationResult.errors,
+            warningJa: hasHighRiskError
+              ? "【高リスク警告】外部宛自動送信は silent enable 禁止。承諾 + settings on audit。"
               : undefined,
           },
           true
@@ -1410,6 +1604,21 @@ export async function callAdminMcpTool(
     } else {
       const consentNote = hasHighRiskConsent ? "・高リスク承諾あり" : "";
       summary = `組織の返信ポリシーの更新を人が確認します（${rulesCount}ルール${consentNote}）`;
+    }
+  } else if (name === "mailPolicy.patch") {
+    const employeeId = typeof args.employeeId === "string" && args.employeeId.trim()
+      ? args.employeeId.trim()
+      : null;
+    const clearOverride = args.clearOverride === true;
+    const rulesCount = Array.isArray(args.rules) ? args.rules.length : 0;
+    const hasHighRiskConsent = Boolean(args.highRiskConsentAt);
+    if (clearOverride && employeeId) {
+      summary = `AI社員のメールポリシーオーバーライドをクリアして組織ポリシーを継承します`;
+    } else if (employeeId) {
+      summary = `AI社員ごとのメールポリシーオーバーライドを設定します（${rulesCount}ルール）`;
+    } else {
+      const consentNote = hasHighRiskConsent ? "・高リスク承諾あり" : "";
+      summary = `組織のメールポリシーの更新を人が確認します（${rulesCount}ルール${consentNote}）`;
     }
   } else if (name === "internalAudienceRule.patch") {
     const emailDomains = Array.isArray(args.emailDomains) ? args.emailDomains.length : 0;
