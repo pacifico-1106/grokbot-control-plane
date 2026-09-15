@@ -55,6 +55,13 @@ import { getEffectiveMailPolicy, type MailPolicySource } from "@/lib/data/mail-p
 import { getOrgInternalAudienceRule } from "@/lib/data/internal-audience-rule";
 import { getOrgStuckWatchPolicy } from "@/lib/data/stuck-watch-policy";
 import { defaultStuckWatchPolicy } from "@/lib/stuck-watch/validate";
+import {
+  runStuckWatchClassify,
+  runStuckWatchInspect,
+  runStuckWatchList,
+  runStuckWatchResolve,
+  runStuckWatchRetry,
+} from "@/lib/stuck-watch/admin-handlers";
 
 export const ADMIN_MCP_TOOLS: McpToolDef[] = [
   {
@@ -678,6 +685,76 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
       additionalProperties: false,
     },
   },
+  {
+    name: "stuckWatch.list",
+    description:
+      "List open stuck watch items (read-only, no approval required). F7: W1 mention-unanswered + W2 approved-unfulfilled. Returns summaryJa/nextStepJa per item.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        kind: {
+          type: "string",
+          description: "Optional filter: w1 | w2 | w1_mention_unanswered | w2_approved_unfulfilled",
+        },
+        includeResolved: { type: "boolean", description: "Include manually resolved items" },
+        limit: { type: "number", description: "Max items (default 50, max 100)" },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "stuckWatch.inspect",
+    description:
+      "Inspect one stuck watch item by itemId (read-only, no approval required). F7: faultClass, retry eligibility, summaryJa/nextStepJa.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        itemId: { type: "string", description: "Item id from stuckWatch.list (w1:... or w2:...)" },
+      },
+      required: ["itemId"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "stuckWatch.retry",
+    description:
+      "Retry a stuck watch item (read-only action, no approval ticket). F7: ops_fault only auto path; expected_gate refused; config_drift notify/fix. W2 uses existing fulfill reinvoke; send/confirm re-evaluates gates.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        itemId: { type: "string", description: "Item id from stuckWatch.list" },
+      },
+      required: ["itemId"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "stuckWatch.resolve",
+    description:
+      "Mark a stuck watch item resolved (read-only action, no approval ticket). F7: excludes item from active watch until re-detected.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        itemId: { type: "string", description: "Item id from stuckWatch.list" },
+        note: { type: "string", description: "Optional resolution note for audit" },
+      },
+      required: ["itemId"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "stuckWatch.classify",
+    description:
+      "Classify faultClass + stuckHint for a stuck item or raw invoke failure code (read-only). F7: summaryJa/nextStepJa for ops vs expected_gate vs config_drift.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        itemId: { type: "string", description: "Item id from stuckWatch.list" },
+        code: { type: "string", description: "Raw invoke failure code (when itemId omitted)" },
+      },
+      additionalProperties: false,
+    },
+  },
 ];
 
 function toolResult(data: unknown, isError = false) {
@@ -1058,7 +1135,7 @@ async function runStuckWatchGet(
     defaults,
     summaryJa: summarizeStuckWatchPolicyJa(policy),
     nextStepJa:
-      "不当停止が続く場合は stuckWatch.patch で W2 閾値や maxAutoRetries を調整してください。正当ゲート（needs_approval 等）は自動再発火しません。",
+      "不当停止は stuckWatch.list で確認し、ops_fault は stuckWatch.retry、正当ゲートは resolve のみ。W1/W2 閾値は stuckWatch.patch で調整できます。",
   };
   return {
     content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
@@ -1380,6 +1457,51 @@ export async function callAdminMcpTool(
 
   if (name === "stuckWatch.get") {
     return runStuckWatchGet(cred);
+  }
+
+  if (name === "stuckWatch.list") {
+    const result = await runStuckWatchList(cred.orgId, args);
+    return {
+      content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+      structuredContent: result,
+      isError: !result.ok,
+    };
+  }
+
+  if (name === "stuckWatch.inspect") {
+    const result = await runStuckWatchInspect(cred.orgId, args);
+    return {
+      content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+      structuredContent: result,
+      isError: !result.ok,
+    };
+  }
+
+  if (name === "stuckWatch.classify") {
+    const result = await runStuckWatchClassify(cred.orgId, args);
+    return {
+      content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+      structuredContent: result,
+      isError: !result.ok,
+    };
+  }
+
+  if (name === "stuckWatch.retry") {
+    const result = await runStuckWatchRetry(cred.orgId, args, cred.actorId);
+    return {
+      content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+      structuredContent: result,
+      isError: !result.ok,
+    };
+  }
+
+  if (name === "stuckWatch.resolve") {
+    const result = await runStuckWatchResolve(cred.orgId, args, cred.actorId);
+    return {
+      content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+      structuredContent: result,
+      isError: !result.ok,
+    };
   }
 
   if (name === "replyPolicy.patch") {

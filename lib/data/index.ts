@@ -34,7 +34,12 @@ export {
   type CreateApprovalInput,
   type CreateApprovalResult,
 } from "./approvals";
-export { listAuditEvents, appendAuditEvent } from "./audit";
+export {
+  listAuditEvents,
+  listAuditEventsForStuckWatch,
+  isMentionWakeAudit,
+  appendAuditEvent,
+} from "./audit";
 export {
   getActionCounts,
   incrementActionCounter,
