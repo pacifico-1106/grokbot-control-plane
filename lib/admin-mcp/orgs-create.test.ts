@@ -119,6 +119,102 @@ describe("orgs.create admin MCP", () => {
     expect((await listApprovals(DEMO_ORG.id)).length).toBe(before + 1);
   });
 
+  test("reinvoke with approvalId fulfills approved ticket and returns orgId", async () => {
+    allowPlatformOpsInDemo();
+    const queued = await callAdminMcpTool(
+      "orgs.create",
+      {
+        orgName: "株式会社リインボーク",
+        ownerEmail: "reinvoke@spacetree.jp",
+        invite: true,
+      },
+      demoCred()
+    );
+    const approvalId = String(
+      (queued.structuredContent as Record<string, unknown>).approvalId || ""
+    );
+    await resolveApproval(
+      approvalId,
+      "approved",
+      "human-approver@example.com",
+      DEMO_ORG.id
+    );
+
+    const result = await callAdminMcpTool(
+      "orgs.create",
+      { approvalId },
+      demoCred()
+    );
+    expect(Boolean(result.isError)).toBe(false);
+    const data = result.structuredContent as Record<string, unknown>;
+    expect(data.ok).toBe(true);
+    expect(data.orgId).toBeTruthy();
+    expect(data.ownerEmail).toBe("reinvoke@spacetree.jp");
+    expect(data.trialEndsAt).toBeTruthy();
+    expect(data.summaryJa).toBeTruthy();
+    expect(data.nextStepJa).toBeTruthy();
+    expect(data.needs_approval).toBeUndefined();
+  });
+
+  test("reinvoke with approvalId returns cached fulfillment without double create", async () => {
+    allowPlatformOpsInDemo();
+    const queued = await callAdminMcpTool(
+      "orgs.create",
+      {
+        orgName: "株式会社キャッシュ",
+        ownerEmail: "cached@spacetree.jp",
+        invite: true,
+      },
+      demoCred()
+    );
+    const approvalId = String(
+      (queued.structuredContent as Record<string, unknown>).approvalId || ""
+    );
+    const approved = await resolveApproval(
+      approvalId,
+      "approved",
+      "human-approver@example.com",
+      DEMO_ORG.id
+    );
+    const firstFulfillment = await fulfillApprovedAdmin(approved!);
+    expect(firstFulfillment?.ok).toBe(true);
+
+    const first = await callAdminMcpTool("orgs.create", { approvalId }, demoCred());
+    const second = await callAdminMcpTool("orgs.create", { approvalId }, demoCred());
+    const firstData = first.structuredContent as Record<string, unknown>;
+    const secondData = second.structuredContent as Record<string, unknown>;
+    expect(firstData.ok).toBe(true);
+    expect(secondData.ok).toBe(true);
+    expect(secondData.orgId).toBe(firstData.orgId);
+    expect(secondData.orgId).toBe(firstFulfillment?.orgId);
+  });
+
+  test("reinvoke with approvalId on pending ticket returns needs_approval", async () => {
+    allowPlatformOpsInDemo();
+    const before = (await listApprovals(DEMO_ORG.id)).length;
+    const queued = await callAdminMcpTool(
+      "orgs.create",
+      {
+        orgName: "株式会社ペンディング",
+        ownerEmail: "pending@spacetree.jp",
+        invite: true,
+      },
+      demoCred()
+    );
+    const approvalId = String(
+      (queued.structuredContent as Record<string, unknown>).approvalId || ""
+    );
+
+    const pending = await callAdminMcpTool("orgs.create", { approvalId }, demoCred());
+    expect(Boolean(pending.isError)).toBe(false);
+    const data = pending.structuredContent as Record<string, unknown>;
+    expect(data.needs_approval).toBe(true);
+    expect(data.code).toBe("needs_approval");
+    expect(data.approvalId).toBe(approvalId);
+    expect(data.pollHint).toBe("continue_polling");
+    expect((await listApprovals(DEMO_ORG.id)).length).toBe(before + 1);
+  });
+
   test("fulfillment creates org in demo without password in audit metadata", async () => {
     allowPlatformOpsInDemo();
     const queued = await callAdminMcpTool(

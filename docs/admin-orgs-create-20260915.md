@@ -82,3 +82,4 @@ Admin MCP はテナントスコープ（`gb_adm_` → `org_admin_agents.org_id`�
 - パイプライン: `createOrgWithOwner` / `provisionOrgForUser`（`lib/auth/session.ts`）を再利用。`trialDays` は引数で上書き可。
 - 承認キュー: `ownerPassword` は平文を `adminMutation` に残さない。暗号化して `ownerPasswordCiphertext` のみ保存。
 - `invite=true` かつ password 省略時は履行時にランダム生成（監査・レスポンス・ログに出さない）。
+- **承認後の再呼び出し:** ステータス poll が `pollHint: reinvoke_with_approvalId` を返したら、同じ `orgs.create` を `approvalId` 付きで再呼び出す（`arguments.approvalId` / `_meta.approvalId` / トップレベル `approvalId` のいずれか）。承認済みなら `fulfillApprovedAdmin` を一度だけ実行し、`orgId` / `ownerEmail` / `trialEndsAt` / `summaryJa` / `nextStepJa` を返す。新しい承認チケットは作らない。
