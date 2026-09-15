@@ -49,7 +49,8 @@
     "stuckWatch.classify",
     "orgs.create",
     "orgs.status",
-    "orgs.issueAdminCredential"
+    "orgs.issueAdminCredential",
+    "approvals.proxyResolve"
   ],
   "capabilities": {
     "tools": {
@@ -66,6 +67,7 @@
     "Admin cannot grant itself extra scopes or approve its own request.",
     "channels.classify with employeeId installs Slack IM ingress for that employee. Omitting employeeId removes the ingress (fail-closed).",
     "ingressHandoff supports per-employee overrides: include employeeId in get/patch to manage AI社員ごとの設定. Fallback order: employee override → org policy → default. Use clearOverride=true to clear employee override and inherit org policy.",
-    "orgs.create / orgs.status / orgs.issueAdminCredential are platform super-admin tools (SUPER_ADMIN allowlist + optional PLATFORM_OPS_ORG_ID). Normal tenant gb_adm_ receives platform_ops_forbidden. orgs.create and orgs.issueAdminCredential are always_human. orgs.issueAdminCredential mints gb_adm_ for a target orgId (not the caller ops org); oneTimeSecret is returned once after approval."
+    "orgs.create / orgs.status / orgs.issueAdminCredential are platform super-admin tools (SUPER_ADMIN allowlist + optional PLATFORM_OPS_ORG_ID). Normal tenant gb_adm_ receives platform_ops_forbidden. orgs.create and orgs.issueAdminCredential are always_human. orgs.issueAdminCredential mints gb_adm_ for a target orgId (not the caller ops org); oneTimeSecret is returned once after approval.",
+    "approvals.proxyResolve is a platform super-admin tool for resolving a tenant's pending approval on their behalf during setup/support. Requires mandate (setup | support) and optional note for audit. Audit records: targetOrgId, approvalId, mandate, note, actorEmail, actorUserId, decision, timestamp. NOT wrapped in another always_human ticket — this tool IS the human decision for platform ops. Use when tenant's LINE/Telegram approval inbox is empty during setup代行."
   ]
 }

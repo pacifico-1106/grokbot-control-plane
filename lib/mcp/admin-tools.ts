@@ -66,6 +66,12 @@ import {
 } from "@/lib/stuck-watch/admin-handlers";
 import { assertPlatformOpsFromAdminCred } from "@/lib/admin/platform-ops-gate";
 import {
+  proxyResolveApproval,
+  listPendingApprovalsForOrg,
+  PROXY_APPROVAL_MANDATES,
+  type ProxyApprovalMandate,
+} from "@/lib/admin/proxy-approve";
+import {
   queueOrgCreateArgs,
   validateOrgCreateInput,
   platformOrgStatus,
@@ -836,6 +842,35 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
       additionalProperties: false,
     },
   },
+  {
+    name: "approvals.proxyResolve",
+    description:
+      "Resolve a pending approval ticket for a tenant org on their behalf (platform ops proxy). Platform super-admin only — requires SUPER_ADMIN allowlist + optional PLATFORM_OPS_ORG_ID (fail-closed). Requires mandate (setup | support) for audit compliance. Audit records: targetOrgId, approvalId, mandate, note, actorEmail, actorUserId, decision, timestamp. Visible on tenant change log as platform proxy action (Japanese summary). Self-approval still denied (admin agent cannot approve its own request). After approve, same fulfill path as normal resolution (fulfillApprovedAdmin / fulfillApprovedInvoke). NOT wrapped in another always_human ticket — this tool IS the human decision for platform ops. Use during tenant setup代行 when their LINE/Telegram approval inbox is empty.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        orgId: { type: "string", description: "Target tenant organization UUID" },
+        approvalId: { type: "string", description: "Pending approval ticket UUID to resolve" },
+        decision: {
+          type: "string",
+          enum: ["approved", "rejected"],
+          description: "Resolution decision: approved | rejected",
+        },
+        mandate: {
+          type: "string",
+          enum: ["setup", "support"],
+          description: "Mandate/名目 for audit: setup (セットアップ代行) | support (サポート対応)",
+        },
+        note: {
+          type: "string",
+          description: "Optional free-text note for audit (e.g., 'Space Tree初期設定のため')",
+        },
+        jobId: { type: "string", description: "Optional correlation job ID" },
+      },
+      required: ["orgId", "approvalId", "decision", "mandate"],
+      additionalProperties: false,
+    },
+  },
 ];
 
 function toolResult(data: unknown, isError = false) {
@@ -1437,6 +1472,80 @@ export async function callAdminMcpTool(
       const isError = result.ok === false;
       return toolResult(result, isError);
     }
+  }
+
+  if (name === "approvals.proxyResolve") {
+    const gate = await assertPlatformOpsFromAdminCred(cred);
+    if (!gate.allowed) {
+      return toolResult(
+        { ok: false, code: gate.code, message: gate.message },
+        true
+      );
+    }
+
+    const targetOrgId = String(args.orgId || "").trim();
+    const approvalId = String(args.approvalId || "").trim();
+    const decision = String(args.decision || "").trim();
+    const mandate = String(args.mandate || "").trim();
+    const note = String(args.note || "").trim();
+
+    if (!targetOrgId) {
+      return toolResult(
+        { ok: false, code: "org_id_required", message: "orgId が必要です" },
+        true
+      );
+    }
+    if (!approvalId) {
+      return toolResult(
+        { ok: false, code: "approval_id_required", message: "approvalId が必要です" },
+        true
+      );
+    }
+    if (!["approved", "rejected"].includes(decision)) {
+      return toolResult(
+        { ok: false, code: "invalid_decision", message: "decision は approved | rejected のいずれかを指定してください" },
+        true
+      );
+    }
+    if (!PROXY_APPROVAL_MANDATES.includes(mandate as ProxyApprovalMandate)) {
+      return toolResult(
+        { ok: false, code: "invalid_mandate", message: `mandate は ${PROXY_APPROVAL_MANDATES.join(" | ")} のいずれかを指定してください` },
+        true
+      );
+    }
+
+    const result = await proxyResolveApproval({
+      targetOrgId,
+      approvalId,
+      decision: decision as "approved" | "rejected",
+      mandate: mandate as ProxyApprovalMandate,
+      note: note || undefined,
+      actor: {
+        email: gate.actor.email,
+        userId: gate.actor.userId || "",
+      },
+    });
+
+    if (!result.ok) {
+      return toolResult(
+        { ok: false, code: result.code, message: result.error },
+        true
+      );
+    }
+
+    return toolResult({
+      ok: true,
+      decision,
+      mandate,
+      approvalId: result.approval?.id,
+      status: result.approval?.status,
+      resolvedBy: result.approval?.resolvedBy,
+      resolvedAt: result.approval?.resolvedAt,
+      tool: result.approval?.tool,
+      jobId: result.approval?.jobId,
+      sideEffectsRan: Boolean(result.sideEffects),
+      summaryJa: `${decision === "approved" ? "承認" : "却下"}しました（プラットフォーム代行・${mandate}）`,
+    });
   }
 
   if (name === "setup.slackStatus") {

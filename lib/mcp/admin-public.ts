@@ -49,6 +49,7 @@ export const ADMIN_MCP_TOOL_NAMES = [
   "orgs.create",
   "orgs.status",
   "orgs.issueAdminCredential",
+  "approvals.proxyResolve",
 ] as const;
 
 export type AdminMcpToolName = (typeof ADMIN_MCP_TOOL_NAMES)[number];

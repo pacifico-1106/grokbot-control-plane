@@ -15,6 +15,7 @@ export const ADMIN_AUDIT_ACTIONS = [
   "admin.notificationChannel",
   "admin.create_org",
   "admin.issue_admin_credential",
+  "admin.proxy_approve",
 ] as const;
 
 export type AdminAuditAction = (typeof ADMIN_AUDIT_ACTIONS)[number];
