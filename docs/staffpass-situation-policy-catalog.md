@@ -294,6 +294,25 @@
 - **カット順**: faultClass → W2 → W1 → audience補完 → Admin MCP → employee任意
 - **詳細**: `docs/f7-stuck-watch-20260915.md`
 
+### F8 Approval Workflow — 合議・定足数・最終Go
+- **ステータス**: ✅ 本番稼働（2026-09-16）
+- **カタログID**: F8
+- **用途**: 複数人の合議（quorum）→ 定足数達成 → 最終Go担当という承認ワークフローを実現。みらい社中など委員会型組織向け
+- **概念**:
+  - `stages`: 順次実行の承認レーン（合議フェーズ）
+  - `quorum`: `any` (1人) / `count` (N人) / `ratio` (2/3等) / `majority` (過半数)
+  - `onReject`: `fail_closed`（1 reject で即終了）/ `count_as_vote`（得票のみ）
+  - `finalGoUserId`: 全ステージ完了後の最終承認者（省略可）
+- **デフォルト互換**: ポリシー未設定時は現行の1人承認（OR）がそのまま動作（AC W1）
+- **型**: `OrgApprovalWorkflowPolicy` / `ApprovalWorkflowInstance` / `ApprovalWorkflowBallot`
+- **SQL**: `20260916_approval_workflow.sql`
+- **スキーマ**: `orgs.approval_workflow_policy` / `employees.approval_workflow_policy` (オーバーライド) / `approval_workflow_instances` / `approval_workflow_ballots`
+- **Admin MCP ツール**: `approvalWorkflow.get` (read-only) / `approvalWorkflow.patch` (always_human) / `approvalWorkflow.inspect` (read-only) / `approvalWorkflow.remind` (always_human)
+- **get_approval_status 拡張**: `workflow` フィールドに instanceId / stageId / progress (approved/rejected/pending/quorum) / finalGoPending
+- **通知カード**: 進捗表示（例: 2/3）+ 「あなたの1票」
+- **監査**: 各票を `approval_workflow_ballots` に記録（actor, stage, vote, at）
+- **詳細**: `docs/staffpass-approval-workflow-quorum-20260916.md`
+
 ---
 
 ## 前進方針（2026-09-08 → 2026-09-15 更新）
@@ -329,12 +348,19 @@
    - faultClass（F5拡張）→ W2（#53 統合）→ W1 → audience補完 → Admin MCP → employee任意
    - 実装GO 2026-09-15／実装予定
    - 詳細: `docs/f7-stuck-watch-20260915.md`
-8. 📋 **D4 共用資格の貸与**（設計ロック中・木村確認済み）
+8. ✅ **F8 Approval Workflow**（2026-09-16）
+   - 合議・定足数・最終Go による承認ワークフロー
+   - quorum: any / count / ratio / majority
+   - fail_closed reject: 1 reject で即終了
+   - デフォルト互換: ポリシー未設定時は現行1人承認
+   - Admin MCP: `approvalWorkflow.get` / `approvalWorkflow.patch` / `approvalWorkflow.inspect` / `approvalWorkflow.remind`
+   - 詳細: `docs/staffpass-approval-workflow-quorum-20260916.md`
+9. 📋 **D4 共用資格の貸与**（設計ロック中・木村確認済み）
    - 設計ロックは B1 と**並行可**
    - 実装は B1 安定後（実装 GO は別判断）
    - Staffpass jsonb には参照メタのみ（生シークレット置かない）
    - 保管・注入は Sealith 拡張が中長期本命
    - パック名: `credential.policy` or `credentialLease.policy`
    - Admin MCP: `credentialLease.get` / `credentialLease.patch`（mutate always_human）
-9. 📋 **F6 アイデンティティ開示** — 後パック
-10. AI Concier は A4 の参考・将来連携として別枠
+10. 📋 **F6 アイデンティティ開示** — 後パック
+11. AI Concier は A4 の参考・将来連携として別枠
