@@ -1,5 +1,5 @@
 /**
- * Fail-closed gate for platform-level Admin MCP tools (orgs.create / orgs.status).
+ * Fail-closed gate for platform-level Admin MCP tools (orgs.create / orgs.status / orgs.issueAdminCredential).
  * Tenant-scoped gb_adm_ alone is insufficient — caller org must be platform ops.
  */
 import { matchesSuperAdminAllowlist } from "@/lib/admin/allowlist";
@@ -64,7 +64,7 @@ export async function assertPlatformOpsFromAdminCred(
       allowed: false,
       code: "platform_ops_forbidden",
       message:
-        "orgs.create / orgs.status は SUPER_ADMIN allowlist 上の org owner のみ利用できます（fail-closed）",
+        "プラットフォーム運用ツール（orgs.create / orgs.status / orgs.issueAdminCredential）は SUPER_ADMIN allowlist 上の org owner のみ利用できます（fail-closed）",
     };
   }
 

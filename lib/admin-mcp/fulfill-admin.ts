@@ -54,6 +54,7 @@ import { normalizeSpendLimits } from "@/lib/spend-gate";
 import { isAdminClassApproval } from "@/lib/admin-mcp/audit-class";
 import { ADMIN_AUDIT_CLASS, auditActionForAdminTool } from "@/lib/admin-mcp/audit-class";
 import { fulfillOrgCreateFromQueuedArgs } from "@/lib/admin-mcp/orgs-create";
+import { fulfillOrgIssueAdminCredentialFromQueuedArgs } from "@/lib/admin-mcp/orgs-issue-admin-credential";
 import type { PlatformOpsActor } from "@/lib/admin/platform-ops-gate";
 import type {
   ActionLimits,
@@ -95,6 +96,7 @@ export type AdminFulfillment = {
   trialEndsAt?: string | null;
   integrationMode?: string;
   summaryJa?: string;
+  adminAgentId?: string;
 };
 
 const TOOL_NEXTSTEP_JA: Record<string, string> = {
@@ -111,6 +113,8 @@ const TOOL_NEXTSTEP_JA: Record<string, string> = {
     "Telegram 承認チャネルを無効化しました。setup.lineApprovalStatus で telegramApprovalEnabled=false を確認してください。",
   "orgs.create":
     "テナントを作成しました。次は employees.issue で AI社員を発行してください（新 org の gb_adm_ は別途発行）。",
+  "orgs.issueAdminCredential":
+    "対象 org の gb_adm_ を発行しました。Admin MCP ヘッダに設定してから employees.issue 等を実行してください。",
 };
 
 const TOOL_NOTICE_JA: Record<string, string> = {
@@ -460,6 +464,7 @@ export function parseAdminFulfillment(
     integrationMode:
       typeof rec.integrationMode === "string" ? rec.integrationMode : undefined,
     summaryJa: typeof rec.summaryJa === "string" ? rec.summaryJa : undefined,
+    adminAgentId: typeof rec.adminAgentId === "string" ? rec.adminAgentId : undefined,
   };
 }
 
@@ -724,6 +729,45 @@ async function fulfillOrgCreate(
     integrationMode: created.integrationMode,
     summaryJa: created.summaryJa,
     nextStepJa: created.nextStepJa || TOOL_NEXTSTEP_JA["orgs.create"],
+  };
+}
+
+async function fulfillOrgIssueAdminCredential(
+  approval: ApprovalRequest,
+  args: Record<string, unknown>
+): Promise<AdminFulfillment> {
+  const actor = platformActorFromQueuedArgs(args);
+  const issued = await fulfillOrgIssueAdminCredentialFromQueuedArgs(args, actor);
+
+  await appendAuditEvent({
+    orgId: approval.orgId,
+    employeeId: null,
+    credentialId: issued.adminAgentId,
+    action: "admin.issue_admin_credential",
+    purpose: "admin.issue_admin_credential",
+    summary: issued.summaryJa,
+    metadata: {
+      auditClass: ADMIN_AUDIT_CLASS,
+      approvalId: approval.id,
+      targetOrgId: issued.targetOrgId,
+      secretPrefix: issued.secretPrefix,
+      generation: issued.credentialGeneration,
+      actorEmail: actor.email,
+      actorUserId: actor.userId,
+    },
+  });
+
+  return {
+    ok: true,
+    tool: "orgs.issueAdminCredential",
+    at: new Date().toISOString(),
+    orgId: issued.targetOrgId,
+    adminAgentId: issued.adminAgentId,
+    secretPrefix: issued.secretPrefix,
+    oneTimeSecret: issued.oneTimeSecret,
+    summaryJa: issued.summaryJa,
+    nextStepJa: issued.nextStepJa || TOOL_NEXTSTEP_JA["orgs.issueAdminCredential"],
+    noticeJa: issued.noticeJa,
   };
 }
 
@@ -1265,6 +1309,9 @@ export async function fulfillApprovedAdmin(
         break;
       case "orgs.create":
         fulfillment = await fulfillOrgCreate(approval, args);
+        break;
+      case "orgs.issueAdminCredential":
+        fulfillment = await fulfillOrgIssueAdminCredential(approval, args);
         break;
       default:
         fulfillment = { ok: false, tool, at, error: "unknown_admin_tool" };

@@ -22,7 +22,11 @@ describe("admin audit class is separate", () => {
       "admin.notificationChannel"
     );
     expect(auditActionForAdminTool("orgs.create")).toBe("admin.create_org");
+    expect(auditActionForAdminTool("orgs.issueAdminCredential")).toBe(
+      "admin.issue_admin_credential"
+    );
     expect(isAdminAuditAction("admin.create_org")).toBe(true);
+    expect(isAdminAuditAction("admin.issue_admin_credential")).toBe(true);
   });
 
   test("tool.invoke / mail.send / comm.reply are not the change-log class", () => {
