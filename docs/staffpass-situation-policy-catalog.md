@@ -1,8 +1,8 @@
 # Staffpass シチュエーション／補足ルール カタログ（草案）
 
-**更新:** 2026-09-15 安藤（F7 Stuck Watch カタログ採用）  
+**更新:** 2026-09-16 安藤（F8 承認ワークフロー（合議・定足数・最終Go）カタログ採用）  
 **用途:** Staffpass／MCP ルールパック族の正本カタログ（八坂GO 2026-09-07 全採用）。
-**次:** A1v2 + B1 shipped → 次箱 **F7 Stuck Watch + P0-ID/IN/RP**（F7 は faultClass+W2 から並行可）。  
+**次:** A1v2 + B1 shipped → 次箱 **F7 Stuck Watch + P0-ID/IN/RP** → **F8 承認ワークフロー（合議・定足数・最終Go）**。  
 **共通軸:** WHO（誰に・どの口）／WHAT（何を出す）／WHEN・HOW（いつ・いくら・どの手段で確定）  
 **共通天井:** フルオート可・テナント自己責任（ToS）。高リスク設定は警告＋明示承諾＋監査。権限外は不通。
 
@@ -40,6 +40,8 @@
 | 24 | F4 | 自動の天井 | 済方針。全イベントのメタ |
 | 25 | F5 | 監査ラベル | 済方針。全イベントのメタ |
 | — | F6 | アイデンティティ開示 | 後パック。§F に詳細 |
+| — | F7 | Stuck Watch | ✅ 実装GO。faultClass・W2・W1・audience補完・Admin MCP |
+| — | F8 | 承認ワークフロー（合議・定足数・最終Go） | 実装GO。quorum/stages/finalGo、デフォルトOR維持、Admin MCP |
 
 ---
 
@@ -294,6 +296,31 @@
 - **カット順**: faultClass → W2 → W1 → audience補完 → Admin MCP → employee任意
 - **詳細**: `docs/f7-stuck-watch-20260915.md`
 
+### F8 承認ワークフロー（合議・定足数・最終Go）
+- **ステータス**: 実装GO（2026-09-16）
+- **カタログID**: F8（横断メタ）
+- **用途**: みらい社中など「上司3人の合議 → 定足数 → 最終Go担当」が必要な組織向け。現行の1人承認（OR）はデフォルト維持
+- **概念**:
+  - **QuorumRule**: `any`（現行互換・1人完了）/ `count`（N人以上）/ `ratio`（例: 2/3）/ `majority`（過半数）
+  - **ApprovalLane**: 合議段階。voterUserIds + quorum + onReject（`fail_closed` / `count_as_vote`）
+  - **ApprovalWorkflow**: stages（順次合議）+ finalGoUserId（最終Go担当、省略可）+ match（対象tools/purposes）
+- **ランタイム**: invoke → workflowInstance 作成 → stage0 全 voter にカード配信 → quorum 達成で次 stage → finalGo → fulfill
+- **既存互換**: workflow 未設定 → 現行 `any`（1人承認）、allowedUserIds のみ → OR
+- **Admin MCP ツール**: `approvalWorkflow.get` / `approvalWorkflow.patch`（always_human）/ `approvalWorkflow.inspect` / `approvalWorkflow.remind`（always_human）
+- **Employee MCP（任意）**: `staffpass_approval_ballot_status`（自分の票と進捗）
+- **AC（受け入れ条件）**:
+  - W1: workflow 未設定orgでは現行どおり1人承認で通る（回帰）
+  - W2: ratio 2/3 で voters=3 のとき approve 2 で stage 達成、1では未達
+  - W3: majority で voters=3 のとき 2 で達成
+  - W4: reject 1（fail_closed）で instance 全体が rejected、fulfill されない
+  - W5: finalGoUserId 設定時、合議達成後も最終票まで外向け send されない
+  - W6: 各票が監査に残る（actor, stage, vote, at）
+  - W7: Admin MCP だけで patch / inspect ができる
+  - W8: Slack（または設定口）に進捗付きカードが届く
+- **カット順**: データ模型 → エンジン（quorum計算+fail_closed）→ finalGo → カードUI進捗 → Admin MCP → みらい社中プリセット
+- **みらい社中パイロット**: org設定、AI社員1体（対外Slack/mail、対内企画・経費窓口）、上司3人合議（2/3 or majority）＋最終Go担当
+- **詳細**: `docs/staffpass-approval-workflow-quorum-20260916.md`
+
 ---
 
 ## 前進方針（2026-09-08 → 2026-09-15 更新）
@@ -329,12 +356,20 @@
    - faultClass（F5拡張）→ W2（#53 統合）→ W1 → audience補完 → Admin MCP → employee任意
    - 実装GO 2026-09-15／実装予定
    - 詳細: `docs/f7-stuck-watch-20260915.md`
-8. 📋 **D4 共用資格の貸与**（設計ロック中・木村確認済み）
+8. 🔧 **F8 承認ワークフロー（合議・定足数・最終Go）**
+   - quorum（any/count/ratio/majority）+ stages + finalGo + fail_closed
+   - 現行1人承認（OR）はデフォルト維持。workflow は org/employee/tool で opt-in
+   - Admin MCP: `approvalWorkflow.get` / `approvalWorkflow.patch` / `approvalWorkflow.inspect` / `approvalWorkflow.remind`
+   - AC: W1–W8（回帰・quorum計算・reject・finalGo・監査・MCP・UI進捗）
+   - みらい社中パイロット: 上司3人合議（2/3 or majority）＋最終Go担当
+   - 実装GO 2026-09-16
+   - 詳細: `docs/staffpass-approval-workflow-quorum-20260916.md`
+9. 📋 **D4 共用資格の貸与**（設計ロック中・木村確認済み）
    - 設計ロックは B1 と**並行可**
    - 実装は B1 安定後（実装 GO は別判断）
    - Staffpass jsonb には参照メタのみ（生シークレット置かない）
    - 保管・注入は Sealith 拡張が中長期本命
    - パック名: `credential.policy` or `credentialLease.policy`
    - Admin MCP: `credentialLease.get` / `credentialLease.patch`（mutate always_human）
-9. 📋 **F6 アイデンティティ開示** — 後パック
-10. AI Concier は A4 の参考・将来連携として別枠
+10. 📋 **F6 アイデンティティ開示** — 後パック
+11. AI Concier は A4 の参考・将来連携として別枠
