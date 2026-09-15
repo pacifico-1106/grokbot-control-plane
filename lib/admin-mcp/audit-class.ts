@@ -16,6 +16,7 @@ export const ADMIN_AUDIT_ACTIONS = [
   "admin.create_org",
   "admin.issue_admin_credential",
   "admin.proxy_approve",
+  "admin.org_patch",
 ] as const;
 
 export type AdminAuditAction = (typeof ADMIN_AUDIT_ACTIONS)[number];
@@ -38,6 +39,7 @@ export const ADMIN_TOOL_AUDIT_ACTION: Record<string, AdminAuditAction> = {
   "setup.lineApproval.demoteTelegram": "admin.notificationChannel",
   "orgs.create": "admin.create_org",
   "orgs.issueAdminCredential": "admin.issue_admin_credential",
+  "orgs.patch": "admin.org_patch",
 };
 
 /** Operational / employee-badge class — never lead the dashboard change log. */

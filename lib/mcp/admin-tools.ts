@@ -80,6 +80,10 @@ import {
   queueOrgIssueAdminCredentialArgs,
   validateOrgIssueAdminCredentialInput,
 } from "@/lib/admin-mcp/orgs-issue-admin-credential";
+import {
+  validateOrgPatchInput,
+  platformPatchOrg,
+} from "@/lib/admin-mcp/orgs-patch";
 
 export const ADMIN_MCP_TOOLS: McpToolDef[] = [
   {
@@ -824,6 +828,20 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
     },
   },
   {
+    name: "orgs.patch",
+    description:
+      "Patch org metadata (currently: name only). Platform super-admin only — fail-closed for normal tenant admins. NOT always_human: the platform-ops actor (Super Admin) is the human deciding. Audit records previousName, newName, actorEmail. Use for cross-tenant rename operations (e.g. TOKYO307 setup).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        orgId: { type: "string", description: "Target organization UUID" },
+        name: { type: "string", description: "New organization display name (trim, non-empty, max 200 chars)" },
+      },
+      required: ["orgId", "name"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "orgs.issueAdminCredential",
     description:
       "Mint a tenant-scoped gb_adm_ admin MCP bearer for a target org after human approval (always_human). Platform super-admin only — normal tenant gb_adm_ is rejected (fail-closed). Issued credential scopes to target orgId, not the caller ops org. Returns oneTimeSecret once after approval (same pattern as employees.issue). Never logs or audits the raw secret.",
@@ -909,6 +927,7 @@ const ADMIN_READ_ONLY_TOOLS = new Set<string>([
   "stuckWatch.retry",
   "stuckWatch.resolve",
   "orgs.status",
+  "orgs.patch",
 ]);
 
 function isAdminMutationTool(name: string): boolean {
@@ -1458,7 +1477,7 @@ export async function callAdminMcpTool(
     }
   }
 
-  if (name === "orgs.create" || name === "orgs.status" || name === "orgs.issueAdminCredential") {
+  if (name === "orgs.create" || name === "orgs.status" || name === "orgs.patch" || name === "orgs.issueAdminCredential") {
     const gate = await assertPlatformOpsFromAdminCred(cred);
     if (!gate.allowed) {
       return toolResult(
@@ -1471,6 +1490,25 @@ export async function callAdminMcpTool(
       const result = await platformOrgStatus(orgId);
       const isError = result.ok === false;
       return toolResult(result, isError);
+    }
+    if (name === "orgs.patch") {
+      const parsed = validateOrgPatchInput(args);
+      if (!parsed.ok) {
+        return toolResult(
+          { ok: false, code: parsed.code, message: parsed.message },
+          true
+        );
+      }
+      try {
+        const result = await platformPatchOrg(parsed.value, gate.actor);
+        return toolResult({ ok: true, ...result }, false);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "patch_failed";
+        return toolResult(
+          { ok: false, code: "patch_failed", message },
+          true
+        );
+      }
     }
   }
 

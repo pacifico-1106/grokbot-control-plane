@@ -5,6 +5,7 @@ import { getSuperAdminAccess } from "@/lib/admin/access";
 import { getAdminOrganizationDetail } from "@/lib/admin/data";
 import { TrialExtensionForm } from "@/components/admin/TrialExtensionForm";
 import { ProxyApprovalPanel } from "@/components/admin/ProxyApprovalPanel";
+import { OrgRenameForm } from "@/components/admin/OrgRenameForm";
 
 function formatDate(value: string | null, includeTime = false): string {
   if (!value) return "—";
@@ -108,6 +109,19 @@ export default async function AdminOrganizationPage({
                 orgName={org.name}
                 currentTrialEndsAt={org.trialEndsAt}
                 subscriptionStatus={org.subscriptionStatus}
+              />
+            </div>
+          </section>
+
+          <section className="surface overflow-hidden">
+            <header className="border-b border-[var(--border)] px-4 py-3">
+              <h2 className="text-sm font-bold">組織名変更</h2>
+              <p className="mt-1 text-xs faint">Super Admin 専用・監査ログに記録</p>
+            </header>
+            <div className="p-4">
+              <OrgRenameForm
+                orgId={org.id}
+                currentName={org.name}
               />
             </div>
           </section>
