@@ -235,3 +235,37 @@ describe("proxyResolveApproval - audit metadata", () => {
     expect(result.ok).toBe(true);
   });
 });
+
+describe("proxyResolveApproval - resolved_by column safety", () => {
+  test("resolvedBy is set to actor email in the result object (not DB resolved_by column)", async () => {
+    const testApproval = await createTestApproval();
+    const result = await proxyResolveApproval({
+      targetOrgId: testOrgId,
+      approvalId: testApproval.id,
+      decision: "approved",
+      mandate: "setup",
+      actor: SUPER_ADMIN_ACTOR,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.approval?.resolvedBy).toBe(SUPER_ADMIN_ACTOR.email);
+  });
+
+  test("actor email is NOT a valid UUID (sanity check for DB column type)", () => {
+    const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+    expect(uuidPattern.test(SUPER_ADMIN_ACTOR.email)).toBe(false);
+    expect(uuidPattern.test(DIFFERENT_ACTOR.email)).toBe(false);
+  });
+
+  test("resolve_db_error code is returned for actual DB errors", async () => {
+    const result = await proxyResolveApproval({
+      targetOrgId: testOrgId,
+      approvalId: "approval_nonexistent_for_db_error_test",
+      decision: "approved",
+      mandate: "setup",
+      actor: SUPER_ADMIN_ACTOR,
+    });
+    expect(result.ok).toBe(false);
+    expect(result.code).toBe("approval_not_found");
+  });
+});

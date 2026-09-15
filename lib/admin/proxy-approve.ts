@@ -49,6 +49,7 @@ export type ProxyApproveResult = {
   sideEffects?: unknown;
   error?: string;
   code?: string;
+  debug?: string;
 };
 
 function isValidMandate(value: unknown): value is ProxyApprovalMandate {
@@ -81,21 +82,36 @@ async function getApprovalByOrgId(
   return mapApprovalRow(data as Record<string, unknown>);
 }
 
+export type ResolveByOrgIdResult =
+  | { ok: true; approval: ApprovalRequest }
+  | { ok: false; code: "db_error"; message: string; debug?: string }
+  | { ok: false; code: "not_found_or_race" };
+
 async function resolveApprovalByOrgId(
   approvalId: string,
   targetOrgId: string,
   status: "approved" | "rejected",
   actor: ProxyApprovalActor
-): Promise<ApprovalRequest | null> {
+): Promise<ResolveByOrgIdResult> {
   if (isDemoMode()) {
     const existing = await demoGetApproval(approvalId);
-    if (!existing || existing.orgId !== targetOrgId) return null;
-    if (existing.status !== "pending") return null;
-    return demoResolveApproval(approvalId, status, actor.email);
+    if (!existing || existing.orgId !== targetOrgId) {
+      return { ok: false, code: "not_found_or_race" };
+    }
+    if (existing.status !== "pending") {
+      return { ok: false, code: "not_found_or_race" };
+    }
+    const resolved = await demoResolveApproval(approvalId, status, actor.email);
+    if (!resolved) {
+      return { ok: false, code: "not_found_or_race" };
+    }
+    return { ok: true, approval: resolved };
   }
   
   const admin = createSupabaseAdminClient();
-  if (!admin) return null;
+  if (!admin) {
+    return { ok: false, code: "db_error", message: "Supabase client not configured" };
+  }
   
   const now = new Date().toISOString();
   
@@ -104,7 +120,7 @@ async function resolveApprovalByOrgId(
     .update({
       status,
       resolved_at: now,
-      resolved_by: actor.email,
+      resolved_by: null,
     })
     .eq("id", approvalId)
     .eq("org_id", targetOrgId)
@@ -112,11 +128,23 @@ async function resolveApprovalByOrgId(
     .select("*")
     .maybeSingle();
   
-  if (error || !data) return null;
+  if (error) {
+    const isProduction = process.env.NODE_ENV === "production";
+    return {
+      ok: false,
+      code: "db_error",
+      message: "データベースの更新に失敗しました",
+      debug: isProduction ? undefined : error.message,
+    };
+  }
+  
+  if (!data) {
+    return { ok: false, code: "not_found_or_race" };
+  }
   
   const mapped = mapApprovalRow(data as Record<string, unknown>);
   mapped.resolvedBy = actor.email;
-  return mapped;
+  return { ok: true, approval: mapped };
 }
 
 export async function proxyResolveApproval(
@@ -157,20 +185,30 @@ export async function proxyResolveApproval(
     };
   }
   
-  const updated = await resolveApprovalByOrgId(
+  const resolveResult = await resolveApprovalByOrgId(
     approvalId,
     targetOrgId,
     decision,
     actor
   );
   
-  if (!updated) {
+  if (!resolveResult.ok) {
+    if (resolveResult.code === "db_error") {
+      return {
+        ok: false,
+        code: "resolve_db_error",
+        error: resolveResult.message,
+        ...(resolveResult.debug ? { debug: resolveResult.debug } : {}),
+      };
+    }
     return {
       ok: false,
       code: "resolve_failed",
       error: "承認処理に失敗しました（同時更新の可能性）",
     };
   }
+  
+  const updated = resolveResult.approval;
   
   const decisionLabelJa = decision === "approved" ? "承認" : "却下";
   const mandateLabelJa = PROXY_MANDATE_LABELS_JA[mandate];
