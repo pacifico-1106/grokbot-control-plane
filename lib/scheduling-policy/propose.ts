@@ -9,9 +9,15 @@ import {
   getDefaultVideoTool,
   getOnlineCalendarTarget,
   isVideoToolAllowed,
+  resolveCalendarConfirmAutomation,
   type ApplySchedulingPolicyOptions,
   type FreebusySlot,
 } from "./apply";
+import {
+  filterSlotsByUnionBusy,
+  resolveCalendarSources,
+  type BusyInterval,
+} from "./freebusy";
 import { getEffectiveSchedulingPolicy } from "@/lib/data/scheduling-policy";
 import type { ConfirmAutomationLevel, OrgSchedulingPolicy } from "@/lib/types";
 
@@ -26,6 +32,8 @@ export interface ProposeInput {
   slots: FreebusySlot[];
   context: ProposeContext;
   requestedVideoTool?: string;
+  /** A1 v2: busy intervals per calendar id for union_busy merge. */
+  busyByCalendar?: Record<string, BusyInterval[]>;
 }
 
 export interface ProposeResult {
@@ -83,13 +91,59 @@ export async function applySchedulingPolicyToPropose(
   }
 
   const policy = effective.policy;
+  const calendarSources = resolveCalendarSources(policy.rules);
+
+  if (calendarSources && calendarSources.ids.length === 0) {
+    return {
+      finalCandidates: [],
+      policyApplied: true,
+      policyId: policy.policyId,
+      policyName: policy.policyName,
+      effectiveConfirmAutomation: resolveCalendarConfirmAutomation(policy),
+      droppedCount: slots.length,
+      keptCount: 0,
+      failClosed: true,
+      failClosedReason: "empty_calendar_sources",
+      auditMetadata: {
+        schedulingPolicy: {
+          source: effective.source,
+          policyId: policy.policyId,
+          policyName: policy.policyName,
+          keptCount: 0,
+          droppedCount: slots.length,
+          effectiveConfirmAutomation: resolveCalendarConfirmAutomation(policy),
+          failClosed: true,
+          failClosedReason: "empty_calendar_sources",
+        },
+        jobId: context.jobId,
+      },
+    };
+  }
+
+  let workingSlots = slots;
+  let unionBusyDropped = 0;
+  let calendarSourcesUsed: string[] | undefined;
+
+  if (calendarSources && input.busyByCalendar) {
+    const unionResult = filterSlotsByUnionBusy(
+      workingSlots,
+      calendarSources,
+      input.busyByCalendar
+    );
+    workingSlots = unionResult.kept;
+    unionBusyDropped = unionResult.dropped.length;
+    calendarSourcesUsed = unionResult.calendarSourcesUsed;
+  }
+
   const options: ApplySchedulingPolicyOptions = {
     orgId: context.orgId,
     employeeId: context.employeeId,
     jobId: context.jobId,
+    calendarSourcesUsed,
   };
 
-  const result = await applySchedulingPolicy(policy, slots, options);
+  const result = await applySchedulingPolicy(policy, workingSlots, options);
+  const totalDropped = result.droppedCount + unionBusyDropped;
 
   let onlineSettings: ProposeResult["onlineSettings"] | undefined;
   if (requestedVideoTool) {
@@ -114,7 +168,7 @@ export async function applySchedulingPolicyToPropose(
     policyId: policy.policyId,
     policyName: policy.policyName,
     effectiveConfirmAutomation: result.effectiveConfirmAutomation,
-    droppedCount: result.droppedCount,
+    droppedCount: totalDropped,
     keptCount: result.keptCount,
     failClosed: result.failClosed,
     failClosedReason: result.failClosedReason,
@@ -125,7 +179,7 @@ export async function applySchedulingPolicyToPropose(
         policyId: policy.policyId,
         policyName: policy.policyName,
         keptCount: result.keptCount,
-        droppedCount: result.droppedCount,
+        droppedCount: totalDropped,
         effectiveConfirmAutomation: result.effectiveConfirmAutomation,
         failClosed: result.failClosed,
         failClosedReason: result.failClosedReason,
@@ -142,7 +196,8 @@ export async function applySchedulingPolicyToPropose(
 export function applySchedulingPolicyToProposeSync(
   policy: OrgSchedulingPolicy | null,
   slots: FreebusySlot[],
-  requestedVideoTool?: string
+  requestedVideoTool?: string,
+  busyByCalendar?: Record<string, BusyInterval[]>
 ): Omit<ProposeResult, "auditMetadata"> & { auditMetadata?: Record<string, unknown> } {
   if (!policy) {
     return {
@@ -157,7 +212,36 @@ export function applySchedulingPolicyToProposeSync(
     };
   }
 
-  const result = applySchedulingPolicySync(policy, slots);
+  const calendarSources = resolveCalendarSources(policy.rules);
+  if (calendarSources && calendarSources.ids.length === 0) {
+    return {
+      finalCandidates: [],
+      policyApplied: true,
+      policyId: policy.policyId,
+      policyName: policy.policyName,
+      effectiveConfirmAutomation: resolveCalendarConfirmAutomation(policy),
+      droppedCount: slots.length,
+      keptCount: 0,
+      failClosed: true,
+      failClosedReason: "empty_calendar_sources",
+    };
+  }
+
+  let workingSlots = slots;
+  let unionBusyDropped = 0;
+  let calendarSourcesUsed: string[] | undefined;
+
+  if (calendarSources && busyByCalendar) {
+    const unionResult = filterSlotsByUnionBusy(workingSlots, calendarSources, busyByCalendar);
+    workingSlots = unionResult.kept;
+    unionBusyDropped = unionResult.dropped.length;
+    calendarSourcesUsed = unionResult.calendarSourcesUsed;
+  }
+
+  const result = applySchedulingPolicySync(policy, workingSlots, new Date(), {
+    calendarSourcesUsed,
+  });
+  const totalDropped = result.droppedCount + unionBusyDropped;
 
   let onlineSettings: ProposeResult["onlineSettings"] | undefined;
   if (requestedVideoTool) {
@@ -176,7 +260,7 @@ export function applySchedulingPolicyToProposeSync(
     policyId: policy.policyId,
     policyName: policy.policyName,
     effectiveConfirmAutomation: result.effectiveConfirmAutomation,
-    droppedCount: result.droppedCount,
+    droppedCount: totalDropped,
     keptCount: result.keptCount,
     failClosed: result.failClosed,
     failClosedReason: result.failClosedReason,

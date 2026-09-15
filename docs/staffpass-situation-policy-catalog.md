@@ -45,13 +45,14 @@
 
 ## A. 約束・枠を取る系
 
-### A1 日程調整（実装中 → shipped-slice）
+### A1 日程調整（v2 拡張 — P0-A1）
 - **ルール例:** 場所親和／移動バッファ／オンライン詰め／指定カレンダー／指定ビデオ／自動confirm  
-- **状態:** `scheduling.policy` 実装完了（型・検証・適用エンジン・Admin MCP）  
-- **メモ:** confirmはフルオートまで可＋高リスク承諾（`highRiskConsentAt/By` 必須）
-- **Admin MCP ツール:** `schedulingPolicy.get` / `schedulingPolicy.patch`
-- **スキーマ:** `orgs.scheduling_policy` / `employees.scheduling_policy` (オーバーライド)
-- **詳細:** `docs/scheduling-policy.md`
+- **v2 追加 (2026-09-15):** 複数カレンダー union_busy / meetingMode (title_tag) / areaPolicy / travelFeasibility / org regionDictionary  
+- **状態:** `scheduling.policy` v1 shipped + **v2 本 PR**  
+- **メモ:** confirmはフルオートまで可＋高リスク承諾（`highRiskConsentAt/By` 必須）。空 calendarSources.ids → escalate fail-closed  
+- **Admin MCP ツール:** `schedulingPolicy.get` / `schedulingPolicy.patch`（後方互換）  
+- **スキーマ:** `orgs.scheduling_policy` / `employees.scheduling_policy` (オーバーライド、`regionDictionary` は policy jsonb 埋め込み)  
+- **詳細:** `docs/scheduling-policy.md` / `docs/p0-ai-employee-ops-backlog-20260915.md`
 
 ### A2 会議室・ブース確保
 - **ルール例:** 連続枠優先、空き散らばり禁止、社外同席可否  
