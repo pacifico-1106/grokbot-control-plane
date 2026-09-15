@@ -21,6 +21,8 @@ describe("admin audit class is separate", () => {
     expect(auditActionForAdminTool("setup.lineApproval.upsert")).toBe(
       "admin.notificationChannel"
     );
+    expect(auditActionForAdminTool("orgs.create")).toBe("admin.create_org");
+    expect(isAdminAuditAction("admin.create_org")).toBe(true);
   });
 
   test("tool.invoke / mail.send / comm.reply are not the change-log class", () => {

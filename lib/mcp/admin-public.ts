@@ -46,6 +46,8 @@ export const ADMIN_MCP_TOOL_NAMES = [
   "stuckWatch.retry",
   "stuckWatch.resolve",
   "stuckWatch.classify",
+  "orgs.create",
+  "orgs.status",
 ] as const;
 
 export type AdminMcpToolName = (typeof ADMIN_MCP_TOOL_NAMES)[number];

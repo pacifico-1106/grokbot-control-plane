@@ -62,6 +62,12 @@ import {
   runStuckWatchResolve,
   runStuckWatchRetry,
 } from "@/lib/stuck-watch/admin-handlers";
+import { assertPlatformOpsFromAdminCred } from "@/lib/admin/platform-ops-gate";
+import {
+  queueOrgCreateArgs,
+  validateOrgCreateInput,
+  platformOrgStatus,
+} from "@/lib/admin-mcp/orgs-create";
 
 export const ADMIN_MCP_TOOLS: McpToolDef[] = [
   {
@@ -755,6 +761,51 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
       additionalProperties: false,
     },
   },
+  {
+    name: "orgs.create",
+    description:
+      "Create a new tenant (org + Auth owner + trial) after human approval (always_human). Platform super-admin only — normal tenant gb_adm_ is rejected (fail-closed). Reuses signup pipeline (createOrgWithOwner / provisionOrgForUser). Never returns or audits plaintext passwords. After success, issue AI employees via employees.issue in the new org.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        orgName: { type: "string", description: "Organization display name" },
+        ownerEmail: { type: "string", description: "Human owner email" },
+        integrationMode: {
+          type: "string",
+          description: "managed | byo (default managed)",
+        },
+        trialDays: {
+          type: "number",
+          description: "Trial length in days (default 14, max 365)",
+        },
+        invite: {
+          type: "boolean",
+          description: "When true, omit ownerPassword — a random password is generated at fulfillment (never returned)",
+        },
+        ownerDisplayName: { type: "string" },
+        ownerPassword: {
+          type: "string",
+          description: "Required for new Auth users when invite is false. Never stored in audit plaintext.",
+        },
+        jobId: { type: "string" },
+      },
+      required: ["orgName", "ownerEmail"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "orgs.status",
+    description:
+      "Read org trial/subscription status by orgId (read-only, no approval). Platform super-admin only — fail-closed for normal tenant admins.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        orgId: { type: "string", description: "Target organization UUID" },
+      },
+      required: ["orgId"],
+      additionalProperties: false,
+    },
+  },
 ];
 
 function toolResult(data: unknown, isError = false) {
@@ -1212,6 +1263,22 @@ export async function callAdminMcpTool(
         { ok: false, code: "scopes_required", message: "できることを1つ以上選んでください" },
         true
       );
+    }
+  }
+
+  if (name === "orgs.create" || name === "orgs.status") {
+    const gate = await assertPlatformOpsFromAdminCred(cred);
+    if (!gate.allowed) {
+      return toolResult(
+        { ok: false, code: gate.code, message: gate.message },
+        true
+      );
+    }
+    if (name === "orgs.status") {
+      const orgId = String(args.orgId || "").trim();
+      const result = await platformOrgStatus(orgId);
+      const isError = result.ok === false;
+      return toolResult(result, isError);
     }
   }
 
@@ -1911,6 +1978,31 @@ export async function callAdminMcpTool(
       mode === "clearDefault"
         ? "Telegram 既定承認チャネルを無効化して LINE 単独送信にすることを人が確認します"
         : "Telegram 承認チャネルを無効化することを人が確認します";
+  } else if (name === "orgs.create") {
+    const parsed = validateOrgCreateInput(args);
+    if (!parsed.ok) {
+      return toolResult(
+        { ok: false, code: parsed.code, message: parsed.message },
+        true
+      );
+    }
+    const gate = await assertPlatformOpsFromAdminCred(cred);
+    if (!gate.allowed) {
+      return toolResult(
+        { ok: false, code: gate.code, message: gate.message },
+        true
+      );
+    }
+    queuedArgs = {
+      ...queueOrgCreateArgs(
+        parsed.value,
+        typeof args.jobId === "string" ? args.jobId : undefined
+      ),
+      platformActorEmail: gate.actor.email,
+      platformActorUserId: gate.actor.userId,
+      platformActorOrgId: gate.actor.orgId,
+    };
+    summary = `テナント作成を人が確認します（${parsed.value.orgName} · ${parsed.value.ownerEmail}）`;
   }
 
   const queued = await queueAdminTool({
@@ -1958,6 +2050,24 @@ export async function readApprovedAdminResult(
   }
   if (fulfillment.webhookPath) {
     out.webhookPath = fulfillment.webhookPath;
+  }
+  if (fulfillment.orgId) {
+    out.orgId = fulfillment.orgId;
+  }
+  if (fulfillment.ownerUserId) {
+    out.ownerUserId = fulfillment.ownerUserId;
+  }
+  if (fulfillment.ownerEmail) {
+    out.ownerEmail = fulfillment.ownerEmail;
+  }
+  if (fulfillment.trialEndsAt !== undefined) {
+    out.trialEndsAt = fulfillment.trialEndsAt;
+  }
+  if (fulfillment.integrationMode) {
+    out.integrationMode = fulfillment.integrationMode;
+  }
+  if (fulfillment.summaryJa) {
+    out.summaryJa = fulfillment.summaryJa;
   }
   return out;
 }

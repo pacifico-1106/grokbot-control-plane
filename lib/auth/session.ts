@@ -186,6 +186,8 @@ export async function provisionOrgForUser(input: {
   integrationMode?: "managed" | "byo";
   displayName?: string;
   referralCode?: string | null;
+  /** Override default trial length (1–365). Defaults to TRIAL_DAYS env or 14. */
+  trialDays?: number;
 }): Promise<{ orgId: string; memberId: string; member: OrgMember }> {
   if (isDemoMode()) {
     throw new Error("demo_mode_no_auth_signup");
@@ -219,7 +221,11 @@ export async function provisionOrgForUser(input: {
     return { orgId: member.orgId, memberId: member.id, member };
   }
 
-  const trialDays = Number(process.env.TRIAL_DAYS || "14");
+  const defaultTrialDays = Number(process.env.TRIAL_DAYS || "14");
+  const trialDays =
+    input.trialDays != null && Number.isFinite(input.trialDays)
+      ? Math.min(365, Math.max(1, Math.floor(input.trialDays)))
+      : defaultTrialDays;
   const trialEnds = new Date(
     Date.now() + trialDays * 86400000
   ).toISOString();
@@ -365,6 +371,7 @@ export async function createOrgWithOwner(input: {
   displayName?: string;
   /** Optional partner code AIC-XXXX (Kimura stage 2). */
   referralCode?: string | null;
+  trialDays?: number;
 }): Promise<{
   userId: string;
   orgId: string;
@@ -403,6 +410,7 @@ export async function createOrgWithOwner(input: {
       integrationMode: input.integrationMode,
       displayName: input.displayName,
       referralCode: input.referralCode,
+      trialDays: input.trialDays,
     });
     return {
       userId,

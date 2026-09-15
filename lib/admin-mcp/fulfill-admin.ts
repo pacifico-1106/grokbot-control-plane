@@ -53,6 +53,8 @@ import { defaultVoice, normalizeVoice } from "@/lib/employees/voice";
 import { normalizeSpendLimits } from "@/lib/spend-gate";
 import { isAdminClassApproval } from "@/lib/admin-mcp/audit-class";
 import { ADMIN_AUDIT_CLASS, auditActionForAdminTool } from "@/lib/admin-mcp/audit-class";
+import { fulfillOrgCreateFromQueuedArgs } from "@/lib/admin-mcp/orgs-create";
+import type { PlatformOpsActor } from "@/lib/admin/platform-ops-gate";
 import type {
   ActionLimits,
   AllowedAccount,
@@ -87,6 +89,12 @@ export type AdminFulfillment = {
   authTest?: { ok: boolean; error?: string | null };
   destinationPresent?: boolean;
   webhookPath?: string;
+  orgId?: string;
+  ownerUserId?: string;
+  ownerEmail?: string;
+  trialEndsAt?: string | null;
+  integrationMode?: string;
+  summaryJa?: string;
 };
 
 const TOOL_NEXTSTEP_JA: Record<string, string> = {
@@ -101,6 +109,8 @@ const TOOL_NEXTSTEP_JA: Record<string, string> = {
     "AI 社員の承認インボックスを更新しました。setup.lineApprovalStatus の employeeInboxSummary で割り当てを確認してください。",
   "setup.lineApproval.demoteTelegram":
     "Telegram 承認チャネルを無効化しました。setup.lineApprovalStatus で telegramApprovalEnabled=false を確認してください。",
+  "orgs.create":
+    "テナントを作成しました。次は employees.issue で AI社員を発行してください（新 org の gb_adm_ は別途発行）。",
 };
 
 const TOOL_NOTICE_JA: Record<string, string> = {
@@ -440,6 +450,16 @@ export function parseAdminFulfillment(
     enabled: typeof rec.enabled === "boolean" ? rec.enabled : undefined,
     destinationPresent: typeof rec.destinationPresent === "boolean" ? rec.destinationPresent : undefined,
     webhookPath: typeof rec.webhookPath === "string" ? rec.webhookPath : undefined,
+    orgId: typeof rec.orgId === "string" ? rec.orgId : undefined,
+    ownerUserId: typeof rec.ownerUserId === "string" ? rec.ownerUserId : undefined,
+    ownerEmail: typeof rec.ownerEmail === "string" ? rec.ownerEmail : undefined,
+    trialEndsAt:
+      rec.trialEndsAt === null || typeof rec.trialEndsAt === "string"
+        ? (rec.trialEndsAt as string | null)
+        : undefined,
+    integrationMode:
+      typeof rec.integrationMode === "string" ? rec.integrationMode : undefined,
+    summaryJa: typeof rec.summaryJa === "string" ? rec.summaryJa : undefined,
   };
 }
 
@@ -650,6 +670,60 @@ async function fulfillChannel(approval: ApprovalRequest, args: Record<string, un
     at: new Date().toISOString(),
     channelId: channel.id,
     employeeId: route?.employeeId,
+  };
+}
+
+function platformActorFromQueuedArgs(args: Record<string, unknown>): PlatformOpsActor {
+  return {
+    email: String(args.platformActorEmail || "platform@ops"),
+    userId:
+      typeof args.platformActorUserId === "string" && args.platformActorUserId.trim()
+        ? args.platformActorUserId.trim()
+        : null,
+    orgId: String(args.platformActorOrgId || ""),
+  };
+}
+
+async function fulfillOrgCreate(
+  approval: ApprovalRequest,
+  args: Record<string, unknown>
+): Promise<AdminFulfillment> {
+  const actor = platformActorFromQueuedArgs(args);
+  const created = await fulfillOrgCreateFromQueuedArgs(args, actor);
+
+  await appendAuditEvent({
+    orgId: approval.orgId,
+    employeeId: null,
+    credentialId: null,
+    action: "admin.create_org",
+    purpose: "admin.create_org",
+    summary: created.summaryJa,
+    metadata: {
+      auditClass: ADMIN_AUDIT_CLASS,
+      approvalId: approval.id,
+      orgId: created.orgId,
+      orgName: String(args.orgName || ""),
+      ownerEmail: created.ownerEmail,
+      integrationMode: created.integrationMode,
+      trialDays: args.trialDays ?? 14,
+      actorEmail: actor.email,
+      actorUserId: actor.userId,
+      recovered: created.recovered === true,
+      ownerPasswordPresent: args.ownerPasswordPresent === true,
+    },
+  });
+
+  return {
+    ok: true,
+    tool: "orgs.create",
+    at: new Date().toISOString(),
+    orgId: created.orgId,
+    ownerUserId: created.ownerUserId,
+    ownerEmail: created.ownerEmail,
+    trialEndsAt: created.trialEndsAt,
+    integrationMode: created.integrationMode,
+    summaryJa: created.summaryJa,
+    nextStepJa: created.nextStepJa || TOOL_NEXTSTEP_JA["orgs.create"],
   };
 }
 
@@ -1188,6 +1262,9 @@ export async function fulfillApprovedAdmin(
         break;
       case "setup.lineApproval.demoteTelegram":
         fulfillment = await fulfillLineApprovalDemoteTelegram(approval, args);
+        break;
+      case "orgs.create":
+        fulfillment = await fulfillOrgCreate(approval, args);
         break;
       default:
         fulfillment = { ok: false, tool, at, error: "unknown_admin_tool" };

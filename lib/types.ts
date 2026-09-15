@@ -486,6 +486,7 @@ export type AuditAction =
   | "admin.ingressHandoff"
   | "admin.conversationAdapter"
   | "admin.notificationChannel"
+  | "admin.create_org"
   | "stuck_watch.w2_retry"
   | "stuck_watch.w1_notify"
   | "stuck_watch.audience_ledger_retry"

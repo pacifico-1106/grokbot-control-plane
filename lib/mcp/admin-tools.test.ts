@@ -73,6 +73,7 @@ describe("admin MCP always_human", () => {
       "stuckWatch.classify",
       "stuckWatch.retry",
       "stuckWatch.resolve",
+      "orgs.status",
     ];
     const mutatingTools = ADMIN_MCP_TOOLS.filter((t) => !readOnlyTools.includes(t.name));
     expect(mutatingTools.every((t) => t.description.includes("always_human"))).toBe(true);
