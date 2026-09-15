@@ -1,11 +1,14 @@
 import { NextResponse } from "next/server";
 import { getApprovalStatusByToken, runtimeModeLabel } from "@/lib/data";
+import { getApprovalWorkflowProgress } from "@/lib/approval-workflow";
 
 export const runtime = "nodejs";
 
 /**
  * Signed status poll — primary return pipe until Partner webhook exists.
  * Public-ish: requires id + statusToken (not org session).
+ *
+ * F8 extension: includes workflow progress when workflow applies.
  */
 export async function GET(req: Request) {
   const url = new URL(req.url);
@@ -40,7 +43,9 @@ export async function GET(req: Request) {
       ? approval.status
       : "pending";
 
-  return NextResponse.json({
+  const workflowProgress = await getApprovalWorkflowProgress(approval.id);
+
+  const response: Record<string, unknown> = {
     ok: true,
     demo: runtimeModeLabel() === "demo",
     mode: runtimeModeLabel(),
@@ -58,10 +63,6 @@ export async function GET(req: Request) {
     revisionNote: approval.revisionNote,
     revisionCount: approval.revisionCount,
     parentApprovalId: approval.parentApprovalId,
-    /**
-     * Bot contract: poll until approved|rejected|expired.
-     * Do not complete confirm/send/order while pending.
-     */
     pollHint:
       status === "pending"
         ? "continue_polling"
@@ -70,5 +71,33 @@ export async function GET(req: Request) {
           : status === "revision_requested"
             ? `Revise the artifact per revisionNote and re-invoke with the same jobId and parentApprovalId=${approval.id}.`
           : "abort_job",
-  });
+  };
+
+  if (workflowProgress) {
+    response.workflow = {
+      instanceId: workflowProgress.instanceId,
+      status: workflowProgress.status,
+      stageId: workflowProgress.currentStage?.stageId ?? null,
+      stageName: workflowProgress.currentStage?.nameJa ?? null,
+      progress: workflowProgress.currentStage
+        ? {
+            approved: workflowProgress.currentStage.approved,
+            rejected: workflowProgress.currentStage.rejected,
+            pending: workflowProgress.currentStage.pending,
+            quorum: workflowProgress.currentStage.quorumDisplay,
+          }
+        : null,
+      finalGoPending: workflowProgress.finalGoPending,
+      stages: workflowProgress.stages.map((s) => ({
+        stageId: s.stageId,
+        nameJa: s.nameJa,
+        approved: s.approved,
+        pending: s.pending,
+        quorum: s.quorumDisplay,
+        quorumMet: s.quorumMet,
+      })),
+    };
+  }
+
+  return NextResponse.json(response);
 }
