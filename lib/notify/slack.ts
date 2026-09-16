@@ -110,18 +110,39 @@ function approvalFallbackText(approval: ApprovalRequest): string {
   return `承認依頼: ${approval.title} [risk: ${approval.risk}]`;
 }
 
+export interface WorkflowProgressDisplay {
+  stageName: string;
+  approved: number;
+  pending: number;
+  quorum: string;
+  finalGoPending: boolean;
+}
+
+function workflowProgressText(progress: WorkflowProgressDisplay | null): string {
+  if (!progress) return "";
+  if (progress.finalGoPending) {
+    return `\n🔐 *最終Go待ち* (ステージ完了)`;
+  }
+  return `\n📊 *${escapeSlackMrkdwn(progress.stageName)}*: ${progress.approved}/${progress.quorum} 承認（残り ${progress.pending} 票）`;
+}
+
 function approvalBlocks(
   approval: ApprovalRequest,
   employee: Employee | null,
-  options?: { resolved?: { label: string; actor: string } }
+  options?: {
+    resolved?: { label: string; actor: string };
+    workflow?: WorkflowProgressDisplay | null;
+  }
 ) {
+  const workflowText = workflowProgressText(options?.workflow ?? null);
   const summary = [
     `*承認依頼* \`#${escapeSlackMrkdwn(approval.id.slice(0, 8))}\`  risk: ${escapeSlackMrkdwn(approval.risk)}`,
     `社員: ${escapeSlackMrkdwn(employee?.displayName || approval.employeeId)}`,
     `ツール: \`${escapeSlackMrkdwn(approval.tool || "unknown")}\``,
     `目的: ${escapeSlackMrkdwn(approval.purpose)}`,
     escapeSlackMrkdwn(truncate(approval.summary, 400)),
-  ].join("\n");
+    workflowText,
+  ].filter(Boolean).join("\n");
   const section = {
     type: "section",
     text: { type: "mrkdwn", text: summary },
@@ -139,6 +160,9 @@ function approvalBlocks(
     ];
   }
   const value = approvalValue(approval);
+  const voteHint = options?.workflow
+    ? "（あなたの1票を投じます）"
+    : "";
   return [
     section,
     {
@@ -146,7 +170,7 @@ function approvalBlocks(
       elements: [
         {
           type: "button",
-          text: { type: "plain_text", text: "承認" },
+          text: { type: "plain_text", text: `承認${voteHint}` },
           style: "primary",
           action_id: "staffpass_approve",
           value,
@@ -178,7 +202,8 @@ function approvalBlocks(
 export async function sendApprovalToSlackChannel(
   approval: ApprovalRequest,
   employee: Employee | null,
-  channel: NotificationChannelRuntime
+  channel: NotificationChannelRuntime,
+  options?: { workflow?: WorkflowProgressDisplay | null }
 ): Promise<SlackNotifyResult> {
   const cfg = target(channel);
   if (!cfg.botToken || !cfg.channelId || !approvalValue(approval)) {
@@ -187,7 +212,7 @@ export async function sendApprovalToSlackChannel(
   const sent = await callSlack(cfg.botToken, "chat.postMessage", {
     channel: cfg.channelId,
     text: approvalFallbackText(approval),
-    blocks: approvalBlocks(approval, employee),
+    blocks: approvalBlocks(approval, employee, { workflow: options?.workflow }),
   });
   const ts = sent.result?.ts;
   const slackChannel = sent.result?.channel;

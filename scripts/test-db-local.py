@@ -38,8 +38,11 @@ try:
         sql(ROOT / "supabase/migrations" / name)
     migration = ROOT / "supabase/migrations/20260916000000_approval_execution_security.sql"
     sql(migration)
+    workflow_migration = ROOT / "supabase/migrations/20260916_approval_workflow.sql"
+    sql(workflow_migration)  # F8 must apply after the already-deployed #80 schema.
     sql(ROOT / "tests/security/db-execution.sql")
     sql(migration)  # ACL/functions/table expansion must be re-applicable.
+    sql(workflow_migration)
     from concurrent.futures import ThreadPoolExecutor
     def query(command):
         result = run([BIN / "psql", "-X", "-qAt", "-v", "ON_ERROR_STOP=1", "-h", cluster,
@@ -57,7 +60,7 @@ try:
         results = list(pool.map(query, [command]*12))
     assert results.count("fixture-only") == 1 and results.count("consumed") == 11, "secret consumption was not atomic"
     assert query("select count(*) from approval_requests where metadata::text like '%fixture-only%';") == "0"
-    print("PASS: PostgreSQL 16 role ACLs, tenant/requester/generation/status denials, stale metadata, no lease reclaim; 12 concurrent claims = 1 winner; 12 secret readers = 1 winner; migration reapplied.")
+    print("PASS: PostgreSQL 16 role ACLs, tenant/requester/generation/status denials, stale metadata, no lease reclaim; 12 concurrent claims = 1 winner; 12 secret readers = 1 winner; #80 and F8 migrations applied and reapplied. F8 vote concurrency/ACL behavior is not covered.")
 
 finally:
     if started:

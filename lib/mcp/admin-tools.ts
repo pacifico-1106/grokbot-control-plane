@@ -66,6 +66,14 @@ import {
   runStuckWatchResolve,
   runStuckWatchRetry,
 } from "@/lib/stuck-watch/admin-handlers";
+import {
+  getEffectiveApprovalWorkflowPolicy,
+  getApprovalWorkflowProgress,
+  validateApprovalWorkflowPolicy,
+  summarizeApprovalWorkflowPolicyJa,
+  nextStepApprovalWorkflowJa,
+  type ApprovalWorkflowPolicySource,
+} from "@/lib/approval-workflow";
 import { assertPlatformOpsFromAdminCred } from "@/lib/admin/platform-ops-gate";
 import {
   proxyResolveApproval,
@@ -780,6 +788,87 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
     },
   },
   {
+    name: "approvalWorkflow.get",
+    description:
+      "Read approval workflow policy (read-only, no approval required). F8 合議ワークフロー: stages with quorum (any/count/ratio/majority), finalGoUserId, onReject=fail_closed. Null policy = current 1-approver OR (AC W1). Omit employeeId for org policy; include for AI社員ごとの設定. Returns effective policy + source layer (employee/org/none) + layers (employeeOverride/orgPolicy).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        employeeId: { type: "string", description: "Optional employee ID for per-employee lookup" },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "approvalWorkflow.patch",
+    description:
+      "Patch approval workflow policy after human approval (always_human). F8 合議ワークフロー: stages with quorum (any/count/ratio/majority), finalGoUserId, onReject=fail_closed. Omit employeeId for org policy; include for AI社員ごとの設定. To clear employee override (inherit org), set clearOverride=true. Admin cannot self-approve. When no workflow policy is set, current 1-approver OR remains (AC W1).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        employeeId: { type: "string", description: "Optional employee ID for per-employee override" },
+        clearOverride: { type: "boolean", description: "Set true to clear employee override and inherit org policy" },
+        policyName: { type: "string", description: "Human-readable policy name" },
+        stages: {
+          type: "array",
+          description: "Sequential approval stages (lanes)",
+          items: {
+            type: "object",
+            properties: {
+              id: { type: "string" },
+              nameJa: { type: "string", description: "Stage display name in Japanese" },
+              voterUserIds: { type: "array", items: { type: "string" }, description: "User IDs allowed to vote" },
+              quorum: {
+                type: "object",
+                description: "Quorum rule: {type: 'any'} | {type: 'count', n: N} | {type: 'ratio', numerator, denominator} | {type: 'majority'}",
+              },
+              onReject: { type: "string", description: "fail_closed | count_as_vote. P0: fail_closed = 1 reject rejects entire instance" },
+            },
+            required: ["id", "nameJa", "voterUserIds", "quorum", "onReject"],
+          },
+        },
+        finalGoUserId: { type: "string", description: "Optional user ID for final approval after all stages" },
+        match: {
+          type: "object",
+          description: "Optional: which tools/purposes trigger this workflow",
+          properties: {
+            tools: { type: "array", items: { type: "string" } },
+            purposes: { type: "array", items: { type: "string" } },
+          },
+        },
+        jobId: { type: "string" },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "approvalWorkflow.inspect",
+    description:
+      "Inspect a workflow instance by approvalId (read-only, no approval required). F8: Returns instance status, current stage, ballot progress, finalGo status. Use to check workflow progress during approval.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        approvalId: { type: "string", description: "Approval request ID to inspect workflow for" },
+      },
+      required: ["approvalId"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "approvalWorkflow.remind",
+    description:
+      "Send reminder to pending voters in a workflow instance after human approval (always_human). F8: Notifies voters who haven't voted in the current stage or finalGo. Use when workflow is stuck waiting for votes.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        approvalId: { type: "string", description: "Approval request ID to send reminders for" },
+        jobId: { type: "string" },
+      },
+      required: ["approvalId"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "orgs.create",
     description:
       "Create a new tenant (org + Auth owner + trial) after human approval (always_human). Platform super-admin only — normal tenant gb_adm_ is rejected (fail-closed). Reuses signup pipeline (createOrgWithOwner / provisionOrgForUser). Never returns or audits plaintext passwords. After success, issue AI employees via employees.issue in the new org.",
@@ -928,6 +1017,8 @@ const ADMIN_READ_ONLY_TOOLS = new Set<string>([
   "stuckWatch.classify",
   "stuckWatch.retry",
   "stuckWatch.resolve",
+  "approvalWorkflow.get",
+  "approvalWorkflow.inspect",
   "orgs.status",
   "orgs.patch",
 ]);
@@ -1399,6 +1490,131 @@ async function runStuckWatchGet(
     nextStepJa:
       "不当停止は stuckWatch.list で確認し、ops_fault は stuckWatch.retry、正当ゲートは resolve のみ。W1/W2 閾値は stuckWatch.patch で調整できます。",
   };
+  return {
+    content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+    structuredContent: result,
+    isError: false,
+  };
+}
+
+const APPROVAL_WORKFLOW_SOURCE_JA: Record<ApprovalWorkflowPolicySource, string> = {
+  employee: "AI社員オーバーライド",
+  org: "組織ポリシー",
+  none: "未設定（現行1人承認）",
+};
+
+type ApprovalWorkflowGetResult = {
+  ok: boolean;
+  policy: Awaited<ReturnType<typeof getEffectiveApprovalWorkflowPolicy>>["policy"];
+  source: ApprovalWorkflowPolicySource;
+  layers: {
+    employeeOverride: Awaited<ReturnType<typeof getEffectiveApprovalWorkflowPolicy>>["employeeOverride"];
+    orgPolicy: Awaited<ReturnType<typeof getEffectiveApprovalWorkflowPolicy>>["orgPolicy"];
+  };
+  summaryJa: string;
+  sourceJa: string;
+  nextStepJa: string;
+};
+
+async function runApprovalWorkflowGet(
+  cred: ResolvedAdminCredential,
+  args: Record<string, unknown>
+): Promise<{ content: Array<{ type: "text"; text: string }>; structuredContent?: unknown; isError?: boolean }> {
+  const employeeId = typeof args.employeeId === "string" && args.employeeId.trim()
+    ? args.employeeId.trim()
+    : null;
+
+  if (employeeId) {
+    const employee = await getEmployee(employeeId, cred.orgId);
+    if (!employee) {
+      return toolResult(
+        { ok: false, code: "employee_not_found", message: "AI社員が見つかりません" },
+        true
+      );
+    }
+  }
+
+  const effective = await getEffectiveApprovalWorkflowPolicy(cred.orgId, employeeId);
+  const result: ApprovalWorkflowGetResult = {
+    ok: true,
+    policy: effective.policy,
+    source: effective.source,
+    layers: {
+      employeeOverride: effective.employeeOverride,
+      orgPolicy: effective.orgPolicy,
+    },
+    summaryJa: summarizeApprovalWorkflowPolicyJa(effective.policy),
+    sourceJa: APPROVAL_WORKFLOW_SOURCE_JA[effective.source],
+    nextStepJa: nextStepApprovalWorkflowJa(effective.policy),
+  };
+  return {
+    content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+    structuredContent: result,
+    isError: false,
+  };
+}
+
+async function runApprovalWorkflowInspect(
+  cred: ResolvedAdminCredential,
+  args: Record<string, unknown>
+): Promise<{ content: Array<{ type: "text"; text: string }>; structuredContent?: unknown; isError?: boolean }> {
+  const approvalId = typeof args.approvalId === "string" ? args.approvalId.trim() : "";
+  if (!approvalId) {
+    return toolResult(
+      { ok: false, code: "approval_id_required", message: "approvalIdが必要です" },
+      true
+    );
+  }
+
+  const approval = await getApprovalById(approvalId, cred.orgId);
+  if (!approval) {
+    return toolResult(
+      { ok: false, code: "approval_not_found", message: "承認チケットが見つかりません" },
+      true
+    );
+  }
+
+  const progress = await getApprovalWorkflowProgress(approvalId);
+  if (!progress) {
+    return toolResult({
+      ok: true,
+      hasWorkflow: false,
+      approval: {
+        id: approval.id,
+        status: approval.status,
+        title: approval.title,
+        tool: approval.tool,
+      },
+      summaryJa: "このチケットにはワークフローが設定されていません（現行1人承認）",
+    });
+  }
+
+  const result = {
+    ok: true,
+    hasWorkflow: true,
+    approval: {
+      id: approval.id,
+      status: approval.status,
+      title: approval.title,
+      tool: approval.tool,
+    },
+    workflow: {
+      instanceId: progress.instanceId,
+      status: progress.status,
+      currentStageIndex: progress.currentStageIndex,
+      currentStage: progress.currentStage,
+      stages: progress.stages,
+      finalGoPending: progress.finalGoPending,
+      finalGoUserId: progress.finalGoUserId,
+      finalGoVoted: progress.finalGoVoted,
+    },
+    summaryJa: progress.finalGoPending
+      ? `ワークフロー: 最終Go待ち（ステージ完了）`
+      : progress.currentStage
+        ? `ワークフロー: ${progress.currentStage.nameJa} (${progress.currentStage.approved}/${progress.currentStage.quorumDisplay})`
+        : `ワークフロー: ${progress.status}`,
+  };
+
   return {
     content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
     structuredContent: result,
@@ -1883,6 +2099,76 @@ export async function callAdminMcpTool(
       structuredContent: result,
       isError: !result.ok,
     };
+  }
+
+  if (name === "approvalWorkflow.get") {
+    return runApprovalWorkflowGet(cred, args);
+  }
+
+  if (name === "approvalWorkflow.inspect") {
+    return runApprovalWorkflowInspect(cred, args);
+  }
+
+  if (name === "approvalWorkflow.patch") {
+    const employeeId = typeof args.employeeId === "string" && args.employeeId.trim()
+      ? args.employeeId.trim()
+      : null;
+    const clearOverride = args.clearOverride === true;
+
+    if (employeeId) {
+      const employee = await getEmployee(employeeId, cred.orgId);
+      if (!employee) {
+        return toolResult(
+          { ok: false, code: "employee_not_found", message: "AI社員が見つかりません" },
+          true
+        );
+      }
+    }
+
+    if (clearOverride) {
+      if (!employeeId) {
+        return toolResult(
+          { ok: false, code: "clear_requires_employee", message: "オーバーライドのクリアはemployeeIdが必要です" },
+          true
+        );
+      }
+    } else {
+      if (!Array.isArray(args.stages) || args.stages.length === 0) {
+        return toolResult(
+          { ok: false, code: "stages_required", message: "stagesが必要です（clearOverride=true以外）" },
+          true
+        );
+      }
+
+      const validationResult = validateApprovalWorkflowPolicy({
+        policyName: args.policyName,
+        stages: args.stages,
+        finalGoUserId: args.finalGoUserId,
+        match: args.match,
+      });
+
+      if (!validationResult.ok) {
+        return toolResult(
+          {
+            ok: false,
+            code: "validation_failed",
+            message: "ワークフローポリシーの検証に失敗しました",
+            errors: validationResult.errors,
+          },
+          true
+        );
+      }
+    }
+  }
+
+  if (name === "approvalWorkflow.remind") {
+    const approvalId = typeof args.approvalId === "string" ? args.approvalId.trim() : "";
+    if (!approvalId) {
+      return toolResult(
+        { ok: false, code: "approval_id_required", message: "approvalIdが必要です" },
+        true
+      );
+    }
   }
 
   if (name === "replyPolicy.patch") {

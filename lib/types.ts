@@ -1339,3 +1339,116 @@ export interface StuckWatchItem {
   nextStepJa: string;
   metadata: Record<string, unknown>;
 }
+
+/**
+ * F8 Approval Workflow — quorum-based multi-approver workflows.
+ *
+ * Enables sequential stages with quorum (any/count/ratio/majority),
+ * optional finalGo after stages, and fail_closed reject semantics.
+ * Default when policy absent: current OR / single-approver (AC W1).
+ */
+
+/** Quorum rule for a stage: how many approvals needed. */
+export type QuorumRule =
+  | { type: "any" }
+  | { type: "count"; n: number }
+  | { type: "ratio"; numerator: number; denominator: number }
+  | { type: "majority" };
+
+/** Reject behavior: fail_closed = 1 reject rejects entire instance. */
+export type OnRejectBehavior = "fail_closed" | "count_as_vote";
+
+/** Single approval lane (stage) in a workflow. */
+export interface ApprovalLane {
+  id: string;
+  nameJa: string;
+  voterUserIds: string[];
+  quorum: QuorumRule;
+  onReject: OnRejectBehavior;
+}
+
+/** Match criteria for which actions trigger this workflow. */
+export interface ApprovalWorkflowMatch {
+  tools?: string[];
+  purposes?: string[];
+}
+
+/** Notification surface for workflow cards. */
+export type WorkflowNotifyMouth = {
+  surface: "slack" | "line" | "telegram" | "web";
+};
+
+/** Org-level approval workflow policy. */
+export interface OrgApprovalWorkflowPolicy {
+  version: 1;
+  policyId: string;
+  policyName: string;
+  match?: ApprovalWorkflowMatch;
+  stages: ApprovalLane[];
+  finalGoUserId?: string;
+  notifyMouth?: WorkflowNotifyMouth;
+  highRiskConsentAt?: string;
+  highRiskConsentBy?: string;
+  updatedAt: string;
+  updatedBy: string;
+}
+
+/** Workflow instance status. */
+export type WorkflowInstanceStatus = "active" | "approved" | "rejected" | "expired";
+
+/** Workflow instance: one per approval_request when workflow applies. */
+export interface ApprovalWorkflowInstance {
+  id: string;
+  approvalId: string;
+  orgId: string;
+  policyId: string;
+  policySnapshot: OrgApprovalWorkflowPolicy;
+  currentStageIndex: number;
+  status: WorkflowInstanceStatus;
+  finalGoPending: boolean;
+  finalGoUserId: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Vote value in a ballot. */
+export type BallotVote = "approve" | "reject" | null;
+
+/** Individual ballot (vote) in a workflow stage. */
+export interface ApprovalWorkflowBallot {
+  id: string;
+  instanceId: string;
+  orgId: string;
+  stageId: string;
+  stageIndex: number;
+  voterUserId: string;
+  vote: BallotVote;
+  votedAt: string | null;
+  isFinalGo: boolean;
+  createdAt: string;
+}
+
+/** Stage progress for status/card display. */
+export interface WorkflowStageProgress {
+  stageId: string;
+  stageIndex: number;
+  nameJa: string;
+  approved: number;
+  rejected: number;
+  pending: number;
+  total: number;
+  quorumDisplay: string;
+  quorumMet: boolean;
+}
+
+/** Workflow progress shape for get_approval_status / cards. */
+export interface WorkflowProgress {
+  instanceId: string;
+  status: WorkflowInstanceStatus;
+  currentStageIndex: number;
+  currentStage: WorkflowStageProgress | null;
+  stages: WorkflowStageProgress[];
+  finalGoPending: boolean;
+  finalGoUserId: string | null;
+  finalGoVoted: boolean;
+}
