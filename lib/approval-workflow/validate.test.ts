@@ -12,6 +12,16 @@ import {
 import type { OrgApprovalWorkflowPolicy } from "@/lib/types";
 
 describe("validateApprovalWorkflowPolicy", () => {
+  test("rejects duplicate voters/stages, unreachable or fractional quorum, and malformed match filters", () => {
+    const stage = { id: "review", nameJa: "Review", voterUserIds: ["v1", "v2"], quorum: { type: "any" }, onReject: "fail_closed" };
+    for (const patch of [
+      { voterUserIds: ["v1", "v1"] }, { voterUserIds: [" v1", "v2"] }, { id: "final_go" },
+      { quorum: { type: "count", n: 3 } }, { quorum: { type: "count", n: 1.5 } },
+      { quorum: { type: "ratio", numerator: 1.5, denominator: 2 } },
+    ]) expect(validateApprovalWorkflowPolicy({ policyName: "Fixture", stages: [{ ...stage, ...patch }] }).ok).toBe(false);
+    expect(validateApprovalWorkflowPolicy({ policyName: "Fixture", stages: [stage, stage] }).ok).toBe(false);
+    expect(validateApprovalWorkflowPolicy({ policyName: "Fixture", stages: [stage], match: { tools: [123] } }).ok).toBe(false);
+  });
   test("rejects null input", () => {
     const result = validateApprovalWorkflowPolicy(null);
     expect(result.ok).toBe(false);

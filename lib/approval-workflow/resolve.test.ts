@@ -10,13 +10,14 @@
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { DEMO_ORG, pushRuntimeApproval } from "@/lib/demo-data";
-import { createApproval, getApprovalById, resolveApproval } from "@/lib/data";
+import { DEMO_ORG, upsertRuntimeMember } from "@/lib/demo-data";
+import { createApproval, getApprovalById } from "@/lib/data";
 import {
   setOrgApprovalWorkflowPolicy,
   resetDemoWorkflowData,
   getWorkflowInstanceByApprovalId,
   getBallotsByInstanceId,
+  setDemoWorkflowVoterBinding,
 } from "./data";
 import {
   initializeWorkflowForApproval,
@@ -53,6 +54,10 @@ test("admin self-resolution cannot write intermediate, final, or rejecting ballo
       await initializeWorkflowForApproval(approval, null);
       const instance = (await getWorkflowInstanceByApprovalId(approval.id))!;
       const before = await getBallotsByInstanceId(instance.id);
+      setDemoWorkflowVoterBinding({ orgId: DEMO_ORG.id, provider: "slack", channelKey: "fixture", userId: "U_SELF", memberId: "requester" });
+      await expect(resolveApprovalWithWorkflow(approval.id, status, "slack:U_SELF", DEMO_ORG.id, {
+        decisionId: "fixture-self-vote", externalVoter: { provider: "slack", channelKey: "fixture", userId: "U_SELF" },
+      })).rejects.toThrow("self_approval_denied");
       await expect(resolveApprovalWithWorkflow(approval.id, status, "requester@example.com", DEMO_ORG.id,
         { actorId: "requester", voterUserId: "requester" })).rejects.toThrow("self_approval_denied");
       await expect(resolveApprovalWithWorkflow(approval.id, status, "reviewer@example.com", DEMO_ORG.id,
@@ -97,6 +102,10 @@ function makePolicy(
   stages: ApprovalLane[],
   finalGoUserId?: string
 ): OrgApprovalWorkflowPolicy {
+  for (const id of new Set([...stages.flatMap(s => s.voterUserIds), ...(finalGoUserId ? [finalGoUserId] : [])])) {
+    upsertRuntimeMember({ id, orgId: DEMO_ORG.id, email: `${id}@example.invalid`, displayName: id,
+      role: "member", status: "active", capabilities: ["approve_actions"] });
+  }
   return {
     version: 1,
     policyId: `awp_test_${Date.now()}`,
@@ -630,7 +639,7 @@ describe("workflow-integrated resolution", () => {
 
     const result = await handleWorkflowVote(approval.approval.id, "random_user", "approve");
     expect(result.voted).toBe(false);
-    expect(result.reason).toBe("not_in_current_stage");
+    expect(result.reason).toBe("voter_not_authorized");
   });
 });
 

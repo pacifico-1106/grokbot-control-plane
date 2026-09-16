@@ -857,14 +857,15 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
   {
     name: "approvalWorkflow.remind",
     description:
-      "Send reminder to pending voters in a workflow instance after human approval (always_human). F8: Notifies voters who haven't voted in the current stage or finalGo. Use when workflow is stuck waiting for votes.",
+      "Send a reminder card to the configured approval inbox after human approval (always_human). F8: targetApprovalId identifies the pending workflow. approvalId is reserved for reinvoking this reminder's own approved ticket. No private DM is sent.",
     inputSchema: {
       type: "object",
       properties: {
-        approvalId: { type: "string", description: "Approval request ID to send reminders for" },
+        targetApprovalId: { type: "string", description: "Pending workflow approval to remind" },
+        approvalId: { type: "string", description: "Approved reminder request ID for reinvoke only" },
         jobId: { type: "string" },
       },
-      required: ["approvalId"],
+      required: ["targetApprovalId"],
       additionalProperties: false,
     },
   },
@@ -2162,13 +2163,15 @@ export async function callAdminMcpTool(
   }
 
   if (name === "approvalWorkflow.remind") {
-    const approvalId = typeof args.approvalId === "string" ? args.approvalId.trim() : "";
-    if (!approvalId) {
+    const targetId = typeof args.targetApprovalId === "string" ? args.targetApprovalId.trim() : "";
+    if (!targetId) {
       return toolResult(
-        { ok: false, code: "approval_id_required", message: "approvalIdが必要です" },
+        { ok: false, code: "target_approval_id_required", message: "targetApprovalIdが必要です" },
         true
       );
     }
+    const target = await getApprovalById(targetId, cred.orgId);
+    if (!target || target.status !== "pending") return toolResult({ ok: false, code: "target_approval_not_pending" }, true);
   }
 
   if (name === "replyPolicy.patch") {

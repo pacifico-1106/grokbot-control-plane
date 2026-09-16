@@ -1416,6 +1416,7 @@ export type BallotVote = "approve" | "reject" | null;
 
 /** Individual ballot (vote) in a workflow stage. */
 export interface ApprovalWorkflowBallot {
+  decisionId?: string | null;
   id: string;
   instanceId: string;
   orgId: string;

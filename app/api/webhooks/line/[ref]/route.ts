@@ -1,3 +1,5 @@
+import { resolveApprovalWithWorkflow } from "@/lib/approvals/workflow-integration";
+import { initializeWorkflowForApproval } from "@/lib/approval-workflow/resolve";
 import { NextResponse } from "next/server";
 import { fulfillIfApproved } from "@/lib/approvals/fulfill";
 import { runApprovalResolveSideEffects } from "@/lib/approvals/resolve-side-effects";
@@ -24,6 +26,7 @@ export const dynamic = "force-dynamic";
 
 type LineSource = { type?: string; userId?: string; groupId?: string; roomId?: string };
 type LineEvent = {
+  webhookEventId?: string;
   type?: string;
   replyToken?: string;
   source?: LineSource;
@@ -67,18 +70,20 @@ export async function POST(req: Request, ctx: { params: Promise<{ ref: string }>
         continue;
       }
       if (match[1] === "e") {
+        if ((await initializeWorkflowForApproval(approval, approval.employeeId || null)).instance) continue;
         if (event.replyToken) await promptLineRevision(approval, userId, event.replyToken, channel);
         continue;
       }
       const decision = match[1] === "a" ? "approved" : "rejected";
       try {
-        const updated = await resolveApproval(approval.id, decision, actor, channel.orgId);
+        const result = await resolveApprovalWithWorkflow(approval.id, decision, actor, channel.orgId, { decisionId: event.webhookEventId ? `line:${channel.id}:${event.webhookEventId}` : "", externalVoter: { provider: "line", channelKey: channel.id, userId } });
+        const updated = result.ok && result.workflowComplete ? result.approval : null;
         if (updated) {
           await fulfillIfApproved(updated, decision);
           const employee = await getEmployee(updated.employeeId, channel.orgId);
           await runApprovalResolveSideEffects({ approval: updated, decision, actorEmail: actor, employee });
         }
-        if (event.replyToken) await sendLineText(channel, updated ? (decision === "approved" ? "承認しました。" : "却下しました。") : "対象は処理済みです。", event.replyToken);
+        if (event.replyToken) await sendLineText(channel, updated ? (decision === "approved" ? "承認しました。" : "却下しました。") : result.ok ? "投票を記録しました（合議は継続中です）。" : "投票を記録できませんでした。", event.replyToken);
       } catch (error) {
         if (isSelfApprovalDenied(error)) {
           if (event.replyToken) await sendLineText(channel, SELF_APPROVAL_MESSAGE_JA, event.replyToken);
@@ -98,6 +103,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ ref: string }>
         userId,
       });
       if (!approval || !note) continue;
+      if ((await initializeWorkflowForApproval(approval, approval.employeeId || null)).instance) continue;
       await updateApprovalTelegramState(approval, {
         awaitingRevisionFrom: null,
         awaitingRevisionChannelId: null,

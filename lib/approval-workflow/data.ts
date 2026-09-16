@@ -6,6 +6,7 @@
 
 import { isDemoMode } from "@/lib/mode";
 import { createSupabaseAdminClient } from "@/lib/supabase";
+import { getRuntimeMemberById } from "@/lib/demo-data";
 import type {
   ApprovalLane,
   ApprovalWorkflowBallot,
@@ -19,15 +20,33 @@ const demoWorkflowPolicies = new Map<string, OrgApprovalWorkflowPolicy>();
 const demoEmployeeWorkflowPolicies = new Map<string, OrgApprovalWorkflowPolicy>();
 const demoInstances = new Map<string, ApprovalWorkflowInstance>();
 const demoBallots = new Map<string, ApprovalWorkflowBallot>();
+const demoInitialized = new Set<string>();
+type DemoVoterBinding = { orgId: string; provider: string; channelKey: string; userId: string; memberId: string; expiresAt?: string; revoked?: boolean };
+const demoVoterBindings = new Map<string, DemoVoterBinding>();
+const bindingKey = (b: Pick<DemoVoterBinding, "orgId" | "provider" | "channelKey" | "userId">) => JSON.stringify([b.orgId,b.provider,b.channelKey,b.userId]);
+export function setDemoWorkflowVoterBinding(binding: DemoVoterBinding): void {
+  if (!isDemoMode()) throw new Error("demo_only");
+  demoVoterBindings.set(bindingKey(binding), binding);
+}
+export function getDemoWorkflowVoterBinding(orgId: string, external: { provider: string; channelKey: string; userId: string }): string {
+  const binding = demoVoterBindings.get(bindingKey({ orgId, ...external }));
+  return binding && !binding.revoked && (!binding.expiresAt || Date.parse(binding.expiresAt) > Date.now()) ? binding.memberId : "";
+}
+export function demoWorkflowVoterIsCurrent(orgId: string, memberId: string): boolean {
+  const member = getRuntimeMemberById(memberId);
+  return !!member && member.orgId === orgId && member.status === "active" && !!member.capabilities?.includes("approve_actions");
+}
+export const isDemoWorkflowInitialized = (id: string) => demoInitialized.has(id);
+export const markDemoWorkflowInitialized = (id: string) => { demoInitialized.add(id); };
 
 function mapPolicyRow(row: Record<string, unknown>): OrgApprovalWorkflowPolicy | null {
   if (!row || typeof row !== "object") return null;
   const policy = row as unknown as OrgApprovalWorkflowPolicy;
-  if (!policy.version || !policy.policyId) return null;
+  if (!policy.version || !policy.policyId) throw new Error("workflow_invalid_policy");
   return policy;
 }
 
-function mapInstanceRow(row: Record<string, unknown>): ApprovalWorkflowInstance | null {
+export function mapInstanceRow(row: Record<string, unknown>): ApprovalWorkflowInstance | null {
   if (!row || typeof row !== "object") return null;
   return {
     id: String(row.id || ""),
@@ -44,7 +63,7 @@ function mapInstanceRow(row: Record<string, unknown>): ApprovalWorkflowInstance 
   };
 }
 
-function mapBallotRow(row: Record<string, unknown>): ApprovalWorkflowBallot | null {
+export function mapBallotRow(row: Record<string, unknown>): ApprovalWorkflowBallot | null {
   if (!row || typeof row !== "object") return null;
   return {
     id: String(row.id || ""),
@@ -56,6 +75,7 @@ function mapBallotRow(row: Record<string, unknown>): ApprovalWorkflowBallot | nu
     vote: (row.vote as BallotVote) ?? null,
     votedAt: row.voted_at ? String(row.voted_at) : null,
     isFinalGo: Boolean(row.is_final_go),
+    decisionId: row.decision_id ? String(row.decision_id) : null,
     createdAt: String(row.created_at || new Date().toISOString()),
   };
 }
@@ -68,7 +88,7 @@ export async function getOrgApprovalWorkflowPolicy(
   }
 
   const admin = createSupabaseAdminClient();
-  if (!admin) return null;
+  if (!admin) throw new Error("workflow_unavailable");
 
   const { data, error } = await admin
     .from("orgs")
@@ -76,7 +96,9 @@ export async function getOrgApprovalWorkflowPolicy(
     .eq("id", orgId)
     .maybeSingle();
 
-  if (error || !data?.approval_workflow_policy) return null;
+  if (error) throw new Error("workflow_policy_unavailable");
+  if (!data) throw new Error("workflow_target_not_found");
+  if (!data.approval_workflow_policy) return null;
   return mapPolicyRow(data.approval_workflow_policy as Record<string, unknown>);
 }
 
@@ -89,7 +111,7 @@ export async function getEmployeeApprovalWorkflowPolicy(
   }
 
   const admin = createSupabaseAdminClient();
-  if (!admin) return null;
+  if (!admin) throw new Error("workflow_unavailable");
 
   const { data, error } = await admin
     .from("employees")
@@ -98,7 +120,9 @@ export async function getEmployeeApprovalWorkflowPolicy(
     .eq("org_id", orgId)
     .maybeSingle();
 
-  if (error || !data?.approval_workflow_policy) return null;
+  if (error) throw new Error("workflow_policy_unavailable");
+  if (!data) throw new Error("workflow_target_not_found");
+  if (!data.approval_workflow_policy) return null;
   return mapPolicyRow(data.approval_workflow_policy as Record<string, unknown>);
 }
 
@@ -156,14 +180,15 @@ export async function setOrgApprovalWorkflowPolicy(
   }
 
   const admin = createSupabaseAdminClient();
-  if (!admin) return false;
+  if (!admin) throw new Error("workflow_unavailable");
 
-  const { error } = await admin
+  const { data, error } = await admin
     .from("orgs")
     .update({ approval_workflow_policy: policy })
-    .eq("id", orgId);
+    .eq("id", orgId).select("id").maybeSingle();
 
-  return !error;
+  if (error) throw new Error("workflow_policy_write_failed");
+  return Boolean(data);
 }
 
 export async function setEmployeeApprovalWorkflowPolicy(
@@ -182,15 +207,16 @@ export async function setEmployeeApprovalWorkflowPolicy(
   }
 
   const admin = createSupabaseAdminClient();
-  if (!admin) return false;
+  if (!admin) throw new Error("workflow_unavailable");
 
-  const { error } = await admin
+  const { data, error } = await admin
     .from("employees")
     .update({ approval_workflow_policy: policy })
     .eq("id", employeeId)
-    .eq("org_id", orgId);
+    .eq("org_id", orgId).select("id").maybeSingle();
 
-  return !error;
+  if (error) throw new Error("workflow_policy_write_failed");
+  return Boolean(data);
 }
 
 export async function createWorkflowInstance(input: {
@@ -219,7 +245,7 @@ export async function createWorkflowInstance(input: {
   }
 
   const admin = createSupabaseAdminClient();
-  if (!admin) return null;
+  if (!admin) throw new Error("workflow_unavailable");
 
   const { data, error } = await admin
     .from("approval_workflow_instances")
@@ -237,7 +263,8 @@ export async function createWorkflowInstance(input: {
     .select("*")
     .maybeSingle();
 
-  if (error || !data) return null;
+  if (error) throw new Error("workflow_data_unavailable");
+  if (!data) return null;
   return mapInstanceRow(data as Record<string, unknown>);
 }
 
@@ -252,7 +279,7 @@ export async function getWorkflowInstanceByApprovalId(
   }
 
   const admin = createSupabaseAdminClient();
-  if (!admin) return null;
+  if (!admin) throw new Error("workflow_unavailable");
 
   const { data, error } = await admin
     .from("approval_workflow_instances")
@@ -260,7 +287,8 @@ export async function getWorkflowInstanceByApprovalId(
     .eq("approval_id", approvalId)
     .maybeSingle();
 
-  if (error || !data) return null;
+  if (error) throw new Error("workflow_data_unavailable");
+  if (!data) return null;
   return mapInstanceRow(data as Record<string, unknown>);
 }
 
@@ -272,7 +300,7 @@ export async function getWorkflowInstanceById(
   }
 
   const admin = createSupabaseAdminClient();
-  if (!admin) return null;
+  if (!admin) throw new Error("workflow_unavailable");
 
   const { data, error } = await admin
     .from("approval_workflow_instances")
@@ -280,7 +308,8 @@ export async function getWorkflowInstanceById(
     .eq("id", instanceId)
     .maybeSingle();
 
-  if (error || !data) return null;
+  if (error) throw new Error("workflow_data_unavailable");
+  if (!data) return null;
   return mapInstanceRow(data as Record<string, unknown>);
 }
 
@@ -305,7 +334,7 @@ export async function updateWorkflowInstance(
   }
 
   const admin = createSupabaseAdminClient();
-  if (!admin) return null;
+  if (!admin) throw new Error("workflow_unavailable");
 
   const update: Record<string, unknown> = {
     updated_at: new Date().toISOString(),
@@ -327,7 +356,8 @@ export async function updateWorkflowInstance(
     .select("*")
     .maybeSingle();
 
-  if (error || !data) return null;
+  if (error) throw new Error("workflow_data_unavailable");
+  if (!data) return null;
   return mapInstanceRow(data as Record<string, unknown>);
 }
 
@@ -361,7 +391,7 @@ export async function createBallotsForStage(input: {
   }
 
   const admin = createSupabaseAdminClient();
-  if (!admin) return [];
+  if (!admin) throw new Error("workflow_unavailable");
 
   const { data, error } = await admin
     .from("approval_workflow_ballots")
@@ -380,7 +410,8 @@ export async function createBallotsForStage(input: {
     )
     .select("*");
 
-  if (error || !data) return [];
+  if (error) throw new Error("workflow_data_unavailable");
+  if (!data) return [];
   return data.map((row) => mapBallotRow(row as Record<string, unknown>)!).filter(Boolean);
 }
 
@@ -409,7 +440,7 @@ export async function createFinalGoBallot(input: {
   }
 
   const admin = createSupabaseAdminClient();
-  if (!admin) return null;
+  if (!admin) throw new Error("workflow_unavailable");
 
   const { data, error } = await admin
     .from("approval_workflow_ballots")
@@ -427,7 +458,8 @@ export async function createFinalGoBallot(input: {
     .select("*")
     .maybeSingle();
 
-  if (error || !data) return null;
+  if (error) throw new Error("workflow_data_unavailable");
+  if (!data) return null;
   return mapBallotRow(data as Record<string, unknown>);
 }
 
@@ -441,7 +473,7 @@ export async function getBallotsByInstanceId(
   }
 
   const admin = createSupabaseAdminClient();
-  if (!admin) return [];
+  if (!admin) throw new Error("workflow_unavailable");
 
   const { data, error } = await admin
     .from("approval_workflow_ballots")
@@ -449,7 +481,8 @@ export async function getBallotsByInstanceId(
     .eq("instance_id", instanceId)
     .order("stage_index", { ascending: true });
 
-  if (error || !data) return [];
+  if (error) throw new Error("workflow_data_unavailable");
+  if (!data) return [];
   return data.map((row) => mapBallotRow(row as Record<string, unknown>)!).filter(Boolean);
 }
 
@@ -472,7 +505,7 @@ export async function getBallotForVoter(
   }
 
   const admin = createSupabaseAdminClient();
-  if (!admin) return null;
+  if (!admin) throw new Error("workflow_unavailable");
 
   const { data, error } = await admin
     .from("approval_workflow_ballots")
@@ -482,35 +515,39 @@ export async function getBallotForVoter(
     .eq("voter_user_id", voterUserId)
     .maybeSingle();
 
-  if (error || !data) return null;
+  if (error) throw new Error("workflow_data_unavailable");
+  if (!data) return null;
   return mapBallotRow(data as Record<string, unknown>);
 }
 
 export async function castBallot(
   ballotId: string,
-  vote: BallotVote
+  vote: BallotVote,
+  decisionId?: string
 ): Promise<ApprovalWorkflowBallot | null> {
   const now = new Date().toISOString();
 
   if (isDemoMode()) {
     const ballot = demoBallots.get(ballotId);
-    if (!ballot) return null;
-    const updated = { ...ballot, vote, votedAt: now };
+    if (!ballot || ballot.vote !== null) return null;
+    const updated = { ...ballot, vote, votedAt: now, decisionId: decisionId ?? null };
     demoBallots.set(ballotId, updated);
     return updated;
   }
 
   const admin = createSupabaseAdminClient();
-  if (!admin) return null;
+  if (!admin) throw new Error("workflow_unavailable");
 
   const { data, error } = await admin
     .from("approval_workflow_ballots")
-    .update({ vote, voted_at: now })
+    .update({ vote, voted_at: now, decision_id: decisionId ?? null })
     .eq("id", ballotId)
+    .is("vote", null)
     .select("*")
     .maybeSingle();
 
-  if (error || !data) return null;
+  if (error) throw new Error("workflow_data_unavailable");
+  if (!data) return null;
   return mapBallotRow(data as Record<string, unknown>);
 }
 
@@ -525,7 +562,7 @@ export async function getPendingBallotsByVoter(
   }
 
   const admin = createSupabaseAdminClient();
-  if (!admin) return [];
+  if (!admin) throw new Error("workflow_unavailable");
 
   const { data, error } = await admin
     .from("approval_workflow_ballots")
@@ -534,7 +571,8 @@ export async function getPendingBallotsByVoter(
     .eq("org_id", orgId)
     .is("vote", null);
 
-  if (error || !data) return [];
+  if (error) throw new Error("workflow_data_unavailable");
+  if (!data) return [];
   return data.map((row) => mapBallotRow(row as Record<string, unknown>)!).filter(Boolean);
 }
 
@@ -543,6 +581,8 @@ export function resetDemoWorkflowData(): void {
   demoEmployeeWorkflowPolicies.clear();
   demoInstances.clear();
   demoBallots.clear();
+  demoInitialized.clear();
+  demoVoterBindings.clear();
 }
 
 export async function listActiveWorkflowInstances(
@@ -555,7 +595,7 @@ export async function listActiveWorkflowInstances(
   }
 
   const admin = createSupabaseAdminClient();
-  if (!admin) return [];
+  if (!admin) throw new Error("workflow_unavailable");
 
   const { data, error } = await admin
     .from("approval_workflow_instances")
@@ -564,6 +604,7 @@ export async function listActiveWorkflowInstances(
     .eq("status", "active")
     .order("created_at", { ascending: false });
 
-  if (error || !data) return [];
+  if (error) throw new Error("workflow_data_unavailable");
+  if (!data) return [];
   return data.map((row) => mapInstanceRow(row as Record<string, unknown>)!).filter(Boolean);
 }

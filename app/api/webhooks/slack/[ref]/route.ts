@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { NextResponse } from "next/server";
 import { fulfillIfApproved } from "@/lib/approvals/fulfill";
 import { runApprovalResolveSideEffects } from "@/lib/approvals/resolve-side-effects";
@@ -71,7 +72,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ ref: string }>
   if (payload.type !== "block_actions") return ack();
 
   try {
-    await handleBlockActions(channel, payload);
+    await handleBlockActions(channel, payload, `slack:${channel.id}:${createHash("sha256").update(rawBody).digest("hex")}`);
   } catch (error) {
     console.error("slack_webhook_handle_failed", error);
   }
@@ -80,7 +81,8 @@ export async function POST(req: Request, ctx: { params: Promise<{ ref: string }>
 
 async function handleBlockActions(
   channel: NonNullable<Awaited<ReturnType<typeof getNotificationChannelByWebhookRef>>>,
-  payload: SlackPayload
+  payload: SlackPayload,
+  decisionId: string
 ) {
   const userId = payload.user?.id || "";
   const slackChannel = payload.channel?.id || payload.container?.channel_id || "";
@@ -138,7 +140,7 @@ async function handleBlockActions(
     }
 
     const decision = action.action_id === "staffpass_approve" ? "approved" : "rejected";
-    const updated = await resolveApproval(approval.id, decision, actor, channel.orgId);
+    const updated = await resolveApproval(approval.id, decision, actor, channel.orgId, { decisionId, externalVoter: { provider: "slack", channelKey: channel.id, userId } });
     if (updated) {
       await fulfillIfApproved(updated, decision);
       const employee = await getEmployee(updated.employeeId, channel.orgId);
