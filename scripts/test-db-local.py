@@ -6,6 +6,11 @@ from pathlib import Path
 import subprocess
 import tempfile
 import shutil
+import argparse
+
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument("--f8-parent-state", choices=("fresh", "legacy-indexes", "mismatched-indexes", "existing-constraints"), default="fresh")
+args = parser.parse_args()
 
 ROOT = Path(__file__).resolve().parents[1]
 BIN = Path(os.environ.get("PG_TEST_BIN", "/opt/homebrew/opt/postgresql@16/bin"))
@@ -21,6 +26,18 @@ def sql(path):
     # Fixture-only SQL. ON_ERROR_STOP prevents false green results.
     run([BIN / "psql", "-X", "-q", "-v", "ON_ERROR_STOP=1", "-h", cluster,
          "-p", "55439", "-U", "test_admin", "-d", "postgres", "-f", path], stdout=subprocess.DEVNULL)
+
+def query(command):
+    result = run([BIN / "psql", "-X", "-qAt", "-v", "ON_ERROR_STOP=1", "-h", cluster,
+        "-p", "55439", "-U", "test_admin", "-d", "postgres", "-c", command], capture_output=True, text=True)
+    return result.stdout.strip()
+
+def parent_constraints():
+    return query("""select conrelid::regclass::text || ':' || conname || ':' || oid || ':' || conindid
+        from pg_constraint where contype='u' and not condeferrable and convalidated
+        and conrelid in ('public.org_members'::regclass, 'public.approval_requests'::regclass,
+                        'public.approval_workflow_instances'::regclass)
+        and pg_get_constraintdef(oid)='UNIQUE (id, org_id)' order by conrelid, conname;""")
 
 try:
     run([BIN / "initdb", "-D", cluster / "data", "-U", "test_admin", "--auth=trust", "--no-locale"], stdout=subprocess.DEVNULL)
@@ -40,18 +57,40 @@ try:
     sql(migration)
     workflow_migration = ROOT / "supabase/migrations/20260916_approval_workflow.sql"
     sql(workflow_migration)  # F8 must apply after the already-deployed #80 schema.
+    parents = {
+        "org_members": "org_members_id_org_uidx",
+        "approval_requests": "approval_requests_id_org_uidx",
+        "approval_workflow_instances": "workflow_instances_id_org_uidx",
+    }
+    existing_indexes = {}
+    for table, index in parents.items():
+        if args.f8_parent_state in ("legacy-indexes", "mismatched-indexes"):
+            # A pre-existing same-name index may not cover the FK's columns.
+            columns = "id, org_id" if args.f8_parent_state == "legacy-indexes" else "id"
+            query(f"create unique index {index} on public.{table} ({columns});")
+            existing_indexes[index] = query(f"select 'public.{index}'::regclass::oid;")
+        elif args.f8_parent_state == "existing-constraints":
+            # Split/manual rollout names must also remain idempotent.
+            query(f"alter table public.{table} add constraint {table}_fixture_key unique (id, org_id);")
+    existing_constraints = parent_constraints()
     enforcement = ROOT / "supabase/migrations/20260916120000_f8_enforcement.sql"
     sql(enforcement)
+    constraints = parent_constraints()
+    assert len(constraints.splitlines()) == 3, constraints
+    for table in parents:
+        name = table + ("_fixture_key" if args.f8_parent_state == "existing-constraints" else "_id_org_key")
+        assert any(row.startswith(f"{table}:{name}:") for row in constraints.splitlines()), constraints
+    if existing_constraints:
+        assert constraints == existing_constraints, "existing parent constraints/indexes were replaced"
+    for index, oid in existing_indexes.items():
+        assert query(f"select 'public.{index}'::regclass::oid;") == oid, "legacy index was replaced"
     sql(ROOT / "tests/security/db-execution.sql")
     sql(migration)  # ACL/functions/table expansion must be re-applicable.
     sql(workflow_migration)
     sql(enforcement)
+    assert parent_constraints() == constraints, "reapply duplicated/replaced parent constraints or indexes"
     sql(ROOT / "tests/security/db-workflow.sql")
     from concurrent.futures import ThreadPoolExecutor
-    def query(command):
-        result = run([BIN / "psql", "-X", "-qAt", "-v", "ON_ERROR_STOP=1", "-h", cluster,
-            "-p", "55439", "-U", "test_admin", "-d", "postgres", "-c", command], capture_output=True, text=True)
-        return result.stdout.strip()
     org = "00000000-0000-4000-8000-000000000001"
     ticket = "00000000-0000-4000-8000-000000000010"
     actor = "00000000-0000-4000-8000-000000000020"
@@ -74,6 +113,7 @@ try:
         votes = list(pool.map(query, commands))
     assert votes == ["true", "true"], votes
     assert query("select current_stage_index from approval_workflow_instances where approval_id='40000000-0000-4000-8000-000000000014';") == "1"
+    print(f"PASS: F8 parent state={args.f8_parent_state}; 3 explicit UNIQUE constraints; existing constraint/index OIDs preserved across apply/reapply.")
     print("PASS: #80 ACL/authority/metadata regressions; 12 claims and 12 secret readers each have 1 winner. F8 W1, multi-stage/finalGo, rejection, current voter/binding, self-approval, same-org FKs, direct access denial, atomic rollback and recovery pass. 12 duplicate votes count once; 2 concurrent voters advance once. All migrations reapplied.")
 
 finally:
