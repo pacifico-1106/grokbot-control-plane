@@ -4,7 +4,8 @@ import {
   platformIssueAdminCredential,
 } from "@/lib/admin-mcp/orgs-issue-admin-credential";
 import { callAdminMcpTool } from "@/lib/mcp/admin-tools";
-import { fulfillApprovedAdmin } from "@/lib/admin-mcp/fulfill-admin";
+import { fulfillApprovedAdmin, parseAdminFulfillment } from "@/lib/admin-mcp/fulfill-admin";
+import { fulfillIfApproved } from "@/lib/approvals/fulfill";
 import { getApprovalById, listApprovals, listAuditEvents } from "@/lib/data";
 import { DEMO_ORG } from "@/lib/demo-data";
 import { getOrgAdminAgent, resetDemoAdminAgent } from "@/lib/data/admin-agents";
@@ -174,5 +175,75 @@ describe("orgs.issueAdminCredential admin MCP", () => {
     const agent = await getOrgAdminAgent(TARGET_ORG_ID);
     expect(agent?.orgId).toBe(TARGET_ORG_ID);
     expect(agent?.orgId).not.toBe(DEMO_ORG.id);
+  });
+
+  test("fulfillIfApproved auto-fulfills Admin MCP on approve (webhook path)", async () => {
+    allowPlatformOpsInDemo();
+    const queued = await callAdminMcpTool(
+      "orgs.issueAdminCredential",
+      { orgId: TARGET_ORG_ID },
+      demoCred()
+    );
+    const approvalId = String(
+      (queued.structuredContent as Record<string, unknown>).approvalId || ""
+    );
+    expect(approvalId).toBeTruthy();
+
+    const approved = await resolveApproval(
+      approvalId,
+      "approved",
+      "telegram:123456",
+      DEMO_ORG.id
+    );
+    expect(approved).toBeTruthy();
+    expect(approved!.status).toBe("approved");
+
+    const fulfillment = await fulfillIfApproved(approved!, "approved");
+    expect(fulfillment).toBeTruthy();
+    expect(fulfillment!.ok).toBe(true);
+    expect(fulfillment!.delivery).toBe("stub");
+
+    const stored = await getApprovalById(approvalId, DEMO_ORG.id);
+    const adminFulfillment = parseAdminFulfillment(stored?.metadata);
+    expect(adminFulfillment).toBeTruthy();
+    expect(adminFulfillment!.ok).toBe(true);
+    expect(adminFulfillment!.orgId).toBe(TARGET_ORG_ID);
+    expect(adminFulfillment!.oneTimeSecret).toMatch(/^gb_adm_/);
+
+    const agent = await getOrgAdminAgent(TARGET_ORG_ID);
+    expect(agent?.orgId).toBe(TARGET_ORG_ID);
+  });
+
+  test("fulfillIfApproved does not re-fulfill already fulfilled Admin MCP", async () => {
+    allowPlatformOpsInDemo();
+    const queued = await callAdminMcpTool(
+      "orgs.issueAdminCredential",
+      { orgId: TARGET_ORG_ID },
+      demoCred()
+    );
+    const approvalId = String(
+      (queued.structuredContent as Record<string, unknown>).approvalId || ""
+    );
+
+    const approved = await resolveApproval(
+      approvalId,
+      "approved",
+      "telegram:123456",
+      DEMO_ORG.id
+    );
+
+    const first = await fulfillIfApproved(approved!, "approved");
+    expect(first!.ok).toBe(true);
+
+    const storedFirst = await getApprovalById(approvalId, DEMO_ORG.id);
+    const firstSecret = parseAdminFulfillment(storedFirst?.metadata)?.oneTimeSecret;
+    expect(firstSecret).toMatch(/^gb_adm_/);
+
+    const second = await fulfillIfApproved(approved!, "approved");
+    expect(second!.ok).toBe(true);
+
+    const storedSecond = await getApprovalById(approvalId, DEMO_ORG.id);
+    const secondSecret = parseAdminFulfillment(storedSecond?.metadata)?.oneTimeSecret;
+    expect(secondSecret).toBe(firstSecret);
   });
 });

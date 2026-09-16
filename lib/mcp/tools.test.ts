@@ -1,8 +1,13 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { STAFFPASS_MCP_TOOLS, callStaffpassMcpTool } from "@/lib/mcp/tools";
 import { DEMO_ORG, getRuntimeEmployees } from "@/lib/demo-data";
 import { upsertConversationAdapter } from "@/lib/data/conversation-adapters";
 import type { ResolvedEmployeeCredential } from "@/lib/auth/employee-credential";
+import { callAdminMcpTool } from "@/lib/mcp/admin-tools";
+import { fulfillIfApproved } from "@/lib/approvals/fulfill";
+import { resolveApproval } from "@/lib/data/approvals";
+import { resetDemoAdminAgent } from "@/lib/data/admin-agents";
+import type { ResolvedAdminCredential } from "@/lib/auth/admin-credential";
 
 function demoCred(employeeId = "emp_comm"): ResolvedEmployeeCredential {
   const employee = getRuntimeEmployees().find((e) => e.id === employeeId);
@@ -468,5 +473,114 @@ describe("staffpass_invoke fileAttachment mapping to Gateway", () => {
     const data = result.structuredContent as Record<string, unknown>;
     expect(data.ok).toBe(false);
     expect(data.code).toBe("egress_denied");
+  });
+});
+
+const TARGET_ORG_ID = "6d134a38-a0ab-4a8e-aba7-3202650ff523";
+
+function demoAdminCred(): ResolvedAdminCredential {
+  const agent = resetDemoAdminAgent({ grokBotAgentId: "grok_platform_ops" });
+  return {
+    orgId: DEMO_ORG.id,
+    adminAgentId: agent.id,
+    grokBotAgentId: agent.grokBotAgentId,
+    actorId: agent.id,
+    generation: agent.credentialGeneration,
+    via: "bearer",
+    agent,
+  };
+}
+
+const envBackup = {
+  emails: process.env.SUPER_ADMIN_EMAILS,
+  platformOrgId: process.env.PLATFORM_OPS_ORG_ID,
+};
+
+afterEach(() => {
+  process.env.SUPER_ADMIN_EMAILS = envBackup.emails;
+  process.env.PLATFORM_OPS_ORG_ID = envBackup.platformOrgId;
+});
+
+function allowPlatformOpsInDemo() {
+  process.env.SUPER_ADMIN_EMAILS = "owner@example.com";
+  delete process.env.PLATFORM_OPS_ORG_ID;
+}
+
+describe("staffpass_get_approval_status auto-fulfill", () => {
+  test("returns fulfillment result in poll response for Admin MCP after webhook approval", async () => {
+    allowPlatformOpsInDemo();
+
+    const queued = await callAdminMcpTool(
+      "orgs.issueAdminCredential",
+      { orgId: TARGET_ORG_ID },
+      demoAdminCred()
+    );
+    const queuedData = queued.structuredContent as Record<string, unknown>;
+    expect(queuedData.needs_approval).toBe(true);
+    const approvalId = String(queuedData.approvalId || "");
+    const statusToken = String(queuedData.statusToken || "");
+    expect(approvalId).toBeTruthy();
+    expect(statusToken).toBeTruthy();
+
+    const approved = await resolveApproval(
+      approvalId,
+      "approved",
+      "telegram:123456",
+      DEMO_ORG.id
+    );
+    expect(approved).toBeTruthy();
+    expect(approved!.status).toBe("approved");
+
+    await fulfillIfApproved(approved!, "approved");
+
+    const pollResult = await callStaffpassMcpTool(
+      "staffpass_get_approval_status",
+      { approvalId, statusToken },
+      demoCred()
+    );
+    const pollData = pollResult.structuredContent as Record<string, unknown>;
+    expect(pollData.ok).toBe(true);
+    expect(pollData.status).toBe("approved");
+    expect(pollData.pollHint).toBe("fulfilled");
+    expect(pollData.fulfillment).toBeTruthy();
+
+    const fulfillment = pollData.fulfillment as Record<string, unknown>;
+    expect(fulfillment.fulfilled).toBe(true);
+    expect(fulfillment.orgId).toBe(TARGET_ORG_ID);
+    expect(String(fulfillment.oneTimeSecret || "")).toMatch(/^gb_adm_/);
+    expect(fulfillment.secretPrefix).toBeTruthy();
+    expect(fulfillment.nextStepJa).toBeTruthy();
+  });
+
+  test("returns reinvoke_with_approvalId when approved but not yet fulfilled", async () => {
+    allowPlatformOpsInDemo();
+
+    const queued = await callAdminMcpTool(
+      "orgs.issueAdminCredential",
+      { orgId: TARGET_ORG_ID },
+      demoAdminCred()
+    );
+    const queuedData = queued.structuredContent as Record<string, unknown>;
+    const approvalId = String(queuedData.approvalId || "");
+    const statusToken = String(queuedData.statusToken || "");
+
+    const approved = await resolveApproval(
+      approvalId,
+      "approved",
+      "telegram:123456",
+      DEMO_ORG.id
+    );
+    expect(approved).toBeTruthy();
+
+    const pollResult = await callStaffpassMcpTool(
+      "staffpass_get_approval_status",
+      { approvalId, statusToken },
+      demoCred()
+    );
+    const pollData = pollResult.structuredContent as Record<string, unknown>;
+    expect(pollData.ok).toBe(true);
+    expect(pollData.status).toBe("approved");
+    expect(pollData.pollHint).toBe("reinvoke_with_approvalId");
+    expect(pollData.fulfillment).toBeUndefined();
   });
 });
