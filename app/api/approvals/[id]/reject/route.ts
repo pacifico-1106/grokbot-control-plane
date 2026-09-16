@@ -54,7 +54,7 @@ export async function POST(
   }
 
   const employee = await getEmployee(updated.employeeId, orgId || updated.orgId);
-  const sideEffects = result.workflowComplete
+  const sideEffects = result.ok && result.workflowComplete
     ? await runApprovalResolveSideEffects({
         approval: updated,
         decision: "rejected",

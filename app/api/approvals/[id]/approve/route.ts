@@ -55,13 +55,13 @@ export async function POST(
     return NextResponse.json({ error: "not_found" }, { status: 404 });
   }
 
-  if (result.workflowComplete && result.workflowApproved) {
+  if (result.ok && result.workflowComplete && result.workflowApproved) {
     await fulfillApprovedAdmin(updated);
     await fulfillApprovedInvoke(updated);
   }
 
   const employee = await getEmployee(updated.employeeId, orgId || updated.orgId);
-  const sideEffects = result.workflowComplete
+  const sideEffects = result.ok && result.workflowComplete
     ? await runApprovalResolveSideEffects({
         approval: updated,
         decision: result.workflowApproved ? "approved" : "rejected",

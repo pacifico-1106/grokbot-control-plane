@@ -6,6 +6,8 @@
  */
 
 import type { ApprovalRequest, WorkflowProgress } from "@/lib/types";
+import { isAdminClassApproval } from "@/lib/admin-mcp/audit-class";
+import { assertNotSelfApproval } from "@/lib/admin-mcp/self-approval";
 import {
   getWorkflowInstanceByApprovalId,
   handleWorkflowVote,
@@ -76,6 +78,16 @@ export async function resolveApprovalWithWorkflow(
     };
   }
 
+  // Keep the base resolver's requester/resolver boundary before any ballot write,
+  // including intermediate votes that do not reach baseResolveApproval yet.
+  if (isAdminClassApproval(approval)) {
+    assertNotSelfApproval(approval.metadata, {
+      actor: resolvedBy,
+      actorId: opts.actorId,
+      grokBotAgentId: opts.grokBotAgentId,
+    });
+  }
+
   const instance = await getWorkflowInstanceByApprovalId(id);
 
   if (!instance) {
@@ -89,9 +101,9 @@ export async function resolveApprovalWithWorkflow(
       ok: Boolean(resolved),
       approval: resolved,
       workflowApplied: false,
-      workflowComplete: true,
-      workflowApproved: status === "approved",
-      workflowRejected: status === "rejected",
+      workflowComplete: Boolean(resolved),
+      workflowApproved: resolved?.status === "approved",
+      workflowRejected: resolved?.status === "rejected",
       progress: null,
       reason: resolved ? "resolved_no_workflow" : "resolve_failed",
     };
@@ -139,11 +151,11 @@ export async function resolveApprovalWithWorkflow(
       ok: Boolean(resolved),
       approval: resolved,
       workflowApplied: true,
-      workflowComplete: true,
-      workflowApproved: voteResult.workflowApproved,
-      workflowRejected: voteResult.workflowRejected,
+      workflowComplete: Boolean(resolved),
+      workflowApproved: resolved?.status === "approved",
+      workflowRejected: resolved?.status === "rejected",
       progress: voteResult.progress,
-      reason: voteResult.reason,
+      reason: resolved ? voteResult.reason : "resolve_failed",
     };
   }
 

@@ -35,6 +35,40 @@ afterEach(() => {
   resetDemoWorkflowData();
 });
 
+test("admin self-resolution cannot write intermediate, final, or rejecting ballots", async () => {
+  for (const status of ["approved", "rejected"] as const) {
+    for (const quorum of [1, 2]) {
+      resetDemoWorkflowData();
+      await setOrgApprovalWorkflowPolicy(DEMO_ORG.id, makePolicy([
+        makeStage("admin", "管理者承認", ["requester", "reviewer"], "count", quorum),
+      ]));
+      const { approval } = await createApproval({
+        orgId: DEMO_ORG.id, employeeId: "", credentialId: "",
+        title: "Admin self-approval regression", purpose: "admin.policy", summary: "fixture",
+        risk: "high", tool: "policy.patch", jobId: crypto.randomUUID(),
+        metadata: { auditClass: "admin", adminRequester: {
+          kind: "admin_agent", actorId: "requester", grokBotAgentId: "requester-agent",
+        } },
+      });
+      await initializeWorkflowForApproval(approval, null);
+      const instance = (await getWorkflowInstanceByApprovalId(approval.id))!;
+      const before = await getBallotsByInstanceId(instance.id);
+      await expect(resolveApprovalWithWorkflow(approval.id, status, "requester@example.com", DEMO_ORG.id,
+        { actorId: "requester", voterUserId: "requester" })).rejects.toThrow("self_approval_denied");
+      await expect(resolveApprovalWithWorkflow(approval.id, status, "reviewer@example.com", DEMO_ORG.id,
+        { actorId: "reviewer", voterUserId: "reviewer", grokBotAgentId: "requester-agent" })).rejects.toThrow("self_approval_denied");
+      expect(await getBallotsByInstanceId(instance.id)).toEqual(before);
+      expect((await getWorkflowInstanceByApprovalId(approval.id))?.status).toBe("active");
+      expect((await getApprovalById(approval.id, DEMO_ORG.id))?.status).toBe("pending");
+      const independent = await resolveApprovalWithWorkflow(approval.id, status, "reviewer@example.com", DEMO_ORG.id,
+        { actorId: "reviewer", voterUserId: "reviewer" });
+      expect(independent.ok).toBe(true);
+      expect((await getBallotsByInstanceId(instance.id)).find(b => b.voterUserId === "reviewer")?.vote)
+        .toBe(status === "approved" ? "approve" : "reject");
+    }
+  }
+});
+
 function makeStage(
   id: string,
   nameJa: string,
