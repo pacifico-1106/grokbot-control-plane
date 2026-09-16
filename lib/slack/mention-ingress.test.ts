@@ -1306,9 +1306,9 @@ describe("Ingress handoff policy evaluation", () => {
       const payload = wake.calls()[0].payload;
       expect(payload.text).toBe(longText);
       expect(payload.ingressHandoff).toBeDefined();
-      expect(payload.ingressHandoff.bodyMode).toBe("full");
-      expect(payload.ingressHandoff.attachmentMode).toBe("meta");
-      expect(payload.ingressHandoff.sealithHandoff).toBe("off");
+      expect((payload.ingressHandoff as Record<string, unknown>).bodyMode).toBe("full");
+      expect((payload.ingressHandoff as Record<string, unknown>).attachmentMode).toBe("meta");
+      expect((payload.ingressHandoff as Record<string, unknown>).sealithHandoff).toBe("off");
     } finally {
       await restore();
     }
@@ -1320,6 +1320,7 @@ describe("Ingress handoff policy evaluation", () => {
     const wake = mockWake();
 
     const prefixPolicy: OrgIngressHandoffPolicy = {
+      policyId: "ihp_fixture", policyName: "Fixture",
       version: 1,
       rules: [
         {
@@ -1356,10 +1357,10 @@ describe("Ingress handoff policy evaluation", () => {
       expect(result.status).toBe(200);
       expect(wake.calls().length).toBe(1);
       const payload = wake.calls()[0].payload;
-      expect(payload.text.length).toBeLessThan(longText.length);
-      expect(payload.text.endsWith("…")).toBe(true);
-      expect(payload.ingressHandoff.bodyMode).toBe("prefix");
-      expect(payload.ingressHandoff.bodyTruncated).toBe(true);
+      expect(String(payload.text).length).toBeLessThan(longText.length);
+      expect(String(payload.text).endsWith("…")).toBe(true);
+      expect((payload.ingressHandoff as Record<string, unknown>).bodyMode).toBe("prefix");
+      expect((payload.ingressHandoff as Record<string, unknown>).bodyTruncated).toBe(true);
     } finally {
       await restore();
     }
@@ -1371,6 +1372,7 @@ describe("Ingress handoff policy evaluation", () => {
     const wake = mockWake();
 
     const nonePolicy: OrgIngressHandoffPolicy = {
+      policyId: "ihp_fixture", policyName: "Fixture",
       version: 1,
       rules: [
         {
@@ -1406,8 +1408,8 @@ describe("Ingress handoff policy evaluation", () => {
       expect(wake.calls().length).toBe(1);
       const payload = wake.calls()[0].payload;
       expect(payload.text).toBe("");
-      expect(payload.ingressHandoff.bodyMode).toBe("none");
-      expect(payload.ingressHandoff.bodyTruncated).toBe(true);
+      expect((payload.ingressHandoff as Record<string, unknown>).bodyMode).toBe("none");
+      expect((payload.ingressHandoff as Record<string, unknown>).bodyTruncated).toBe(true);
     } finally {
       await restore();
     }
@@ -1419,6 +1421,7 @@ describe("Ingress handoff policy evaluation", () => {
     const wake = mockWake();
 
     const classifiedPolicy: OrgIngressHandoffPolicy = {
+      policyId: "ihp_fixture", policyName: "Fixture",
       version: 1,
       rules: [
         {
@@ -1462,10 +1465,10 @@ describe("Ingress handoff policy evaluation", () => {
       expect(result.status).toBe(200);
       expect(wake.calls().length).toBe(1);
       const payload = wake.calls()[0].payload;
-      expect(payload.text.length).toBeLessThanOrEqual(6);
-      expect(payload.ingressHandoff.bodyMode).toBe("prefix");
-      expect(payload.ingressHandoff.sealithHandoff).toBe("suggest");
-      expect(payload.ingressHandoff.channelClassification).toBe("unknown");
+      expect(String(payload.text).length).toBeLessThanOrEqual(6);
+      expect((payload.ingressHandoff as Record<string, unknown>).bodyMode).toBe("prefix");
+      expect((payload.ingressHandoff as Record<string, unknown>).sealithHandoff).toBe("suggest");
+      expect((payload.ingressHandoff as Record<string, unknown>).channelClassification).toBe("unknown");
     } finally {
       await restore();
     }
@@ -1478,6 +1481,7 @@ describe("Ingress handoff policy evaluation", () => {
     await configureInternalIm(emp.id, INTERNAL_IM);
 
     const classifiedPolicy: OrgIngressHandoffPolicy = {
+      policyId: "ihp_fixture", policyName: "Fixture",
       version: 1,
       rules: [
         {
@@ -1522,9 +1526,9 @@ describe("Ingress handoff policy evaluation", () => {
       expect(wake.calls().length).toBe(1);
       const payload = wake.calls()[0].payload;
       expect(payload.text).toBe("社内メッセージ");
-      expect(payload.ingressHandoff.bodyMode).toBe("full");
-      expect(payload.ingressHandoff.sealithHandoff).toBe("off");
-      expect(payload.ingressHandoff.channelClassification).toBe("internal");
+      expect((payload.ingressHandoff as Record<string, unknown>).bodyMode).toBe("full");
+      expect((payload.ingressHandoff as Record<string, unknown>).sealithHandoff).toBe("off");
+      expect((payload.ingressHandoff as Record<string, unknown>).channelClassification).toBe("internal");
     } finally {
       await deleteSlackImEmployeeRoute({ orgId: DEMO_ORG.id, slackChannelId: INTERNAL_IM });
       await restore();
@@ -1538,6 +1542,7 @@ describe("Ingress handoff policy evaluation", () => {
     const auditBefore = getRuntimeAudit().length;
 
     const policy: OrgIngressHandoffPolicy = {
+      policyId: "ihp_fixture", policyName: "Fixture",
       version: 1,
       rules: [
         {
@@ -1590,6 +1595,7 @@ describe("Ingress handoff policy evaluation", () => {
     const wake = mockWake();
 
     const orgPolicy: OrgIngressHandoffPolicy = {
+      policyId: "ihp_fixture", policyName: "Fixture",
       version: 1,
       rules: [
         {
@@ -1607,6 +1613,7 @@ describe("Ingress handoff policy evaluation", () => {
     await setOrgIngressHandoffPolicy(emp.orgId, orgPolicy);
 
     const employeePolicy: OrgIngressHandoffPolicy = {
+      policyId: "ihp_fixture", policyName: "Fixture",
       version: 1,
       rules: [
         {
@@ -1642,8 +1649,8 @@ describe("Ingress handoff policy evaluation", () => {
       expect(wake.calls().length).toBe(1);
       const payload = wake.calls()[0].payload;
       expect(payload.text).toBe("");
-      expect(payload.ingressHandoff.bodyMode).toBe("none");
-      expect(payload.ingressHandoff.sealithHandoff).toBe("required");
+      expect((payload.ingressHandoff as Record<string, unknown>).bodyMode).toBe("none");
+      expect((payload.ingressHandoff as Record<string, unknown>).sealithHandoff).toBe("required");
     } finally {
       await setEmployeeIngressHandoffPolicy(emp.id, emp.orgId, null);
       await restore();
@@ -1656,6 +1663,7 @@ describe("Ingress handoff policy evaluation", () => {
     const wake = mockWake();
 
     const orgPolicy: OrgIngressHandoffPolicy = {
+      policyId: "ihp_fixture", policyName: "Fixture",
       version: 1,
       rules: [
         {
@@ -1692,9 +1700,9 @@ describe("Ingress handoff policy evaluation", () => {
       expect(result.status).toBe(200);
       expect(wake.calls().length).toBe(1);
       const payload = wake.calls()[0].payload;
-      expect(payload.text.length).toBeLessThan(longText.length);
-      expect(payload.ingressHandoff.bodyMode).toBe("prefix");
-      expect(payload.ingressHandoff.sealithHandoff).toBe("suggest");
+      expect(String(payload.text).length).toBeLessThan(longText.length);
+      expect((payload.ingressHandoff as Record<string, unknown>).bodyMode).toBe("prefix");
+      expect((payload.ingressHandoff as Record<string, unknown>).sealithHandoff).toBe("suggest");
     } finally {
       await restore();
     }

@@ -1,3 +1,4 @@
+import { publicApproval } from "@/lib/approvals/public";
 import { NextResponse } from "next/server";
 import { requireOrgSession } from "@/lib/auth/require-org";
 import {
@@ -23,6 +24,6 @@ export async function GET() {
     demo: isDemoMode(),
     demoStore: isDemoMode() ? getDemoApprovalsBackend() : null,
     durable: isDemoMode() ? isDurableDemoApprovalsStore() : true,
-    approvals,
+    approvals: approvals.map(publicApproval),
   });
 }

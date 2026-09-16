@@ -1,3 +1,4 @@
+import { publicApproval } from "@/lib/approvals/public";
 import { NextResponse } from "next/server";
 import { fulfillApprovedInvoke } from "@/lib/approvals/fulfill";
 import { fulfillApprovedAdmin } from "@/lib/admin-mcp/fulfill-admin";
@@ -54,7 +55,7 @@ export async function POST(
 
   return NextResponse.json({
     ok: true,
-    approval: updated,
+    approval: publicApproval(updated),
     sideEffects,
     demo: runtimeModeLabel() === "demo",
     mode: runtimeModeLabel(),

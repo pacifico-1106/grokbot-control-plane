@@ -17,6 +17,7 @@ const DEFAULT_RULE: IngressHandoffRule = {
 
 function makePolicy(rules: Partial<IngressHandoffRule>[]): OrgIngressHandoffPolicy {
   return {
+    policyId: "ihp_fixture", policyName: "Fixture",
     version: 1,
     rules: rules.map((r, i) => ({
       ...DEFAULT_RULE,
@@ -42,7 +43,7 @@ describe("resolveIngressHandoffSync", () => {
 
   test("returns default rule when policy has no rules", () => {
     const result = resolveIngressHandoffSync(
-      { version: 1, rules: [], updatedAt: "", updatedBy: "admin_mcp" },
+      { policyId: "ihp_fixture", policyName: "Fixture", version: 1, rules: [], updatedAt: "", updatedBy: "admin_mcp" },
       { channelId: "C123", classification: "internal" }
     );
     expect(result.isDefault).toBe(true);

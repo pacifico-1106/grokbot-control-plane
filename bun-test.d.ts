@@ -3,6 +3,16 @@ declare module "bun:test" {
   type TestFunction = (name: string, callback: TestCallback) => void;
   type Matcher = {
     not: Matcher;
+    rejects: Matcher;
+    resolves: Matcher;
+    toBeUndefined(): void;
+    toBeDefined(): void;
+    toHaveProperty(key: string): void;
+    toBeGreaterThanOrEqual(expected: number): void;
+    toBeGreaterThan(expected: number): void;
+    toHaveLength(expected: number): void;
+    toMatch(expected: string | RegExp): void;
+    toMatchObject(expected: unknown): void;
     toBe(expected: unknown): void;
     toBeCloseTo(expected: number): void;
     toBeLessThan(expected: number): void;
@@ -14,6 +24,7 @@ declare module "bun:test" {
     toThrow(expected?: unknown): void;
   };
 
+  export const afterAll: (callback: TestCallback) => void;
   export const afterEach: (callback: TestCallback) => void;
   export const beforeEach: (callback: TestCallback) => void;
   export const describe: TestFunction;

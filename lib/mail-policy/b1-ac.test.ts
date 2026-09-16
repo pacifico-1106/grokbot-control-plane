@@ -45,10 +45,11 @@ function d1Policy(
         body: "full",
         attachment,
         sealith,
+        audit: { jobId: true, sealithTransferId: false },
       },
     ],
     updatedAt: new Date().toISOString(),
-    updatedBy: "test",
+    updatedBy: "admin_mcp",
   };
 }
 

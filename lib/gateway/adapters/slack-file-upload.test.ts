@@ -1,4 +1,13 @@
-import { describe, expect, test } from "bun:test";
+const downloadCalls: string[] = [];
+mock.module("@/lib/security/public-file-download", () => ({
+  MAX_FILE_BYTES: 50 * 1024 * 1024,
+  downloadPublicFile: async (url: string) => {
+    downloadCalls.push(url);
+    if (url.includes("missing")) throw new Error("file_download_failed");
+    return Buffer.from("%PDF-1.4 test content");
+  },
+}));
+import { describe, expect, test, mock } from "bun:test";
 import {
   evaluateFileAttachmentEgress,
   uploadSlackFile,
@@ -451,8 +460,8 @@ describe("uploadSlackFile token selection", () => {
   });
 });
 
-describe("uploadSlackFile file fetch with redirects", () => {
-  test("follows redirects when fetching file from URL", async () => {
+describe("uploadSlackFile secure downloader integration", () => {
+  test("delegates the URL to the secure downloader before calling Slack", async () => {
     await upsertConversationAdapter({
       orgId: DEMO_ORG.id,
       surface: "slack",
@@ -503,7 +512,8 @@ describe("uploadSlackFile file fetch with redirects", () => {
       });
 
       expect(result.ok).toBe(true);
-      expect(fetchCalls[0]).toBe("https://example.com/file.pdf");
+      expect(downloadCalls.includes("https://example.com/file.pdf")).toBe(true);
+      expect(fetchCalls[0]).toContain("files.getUploadURLExternal");
     } finally {
       globalThis.fetch = originalFetch;
       await upsertConversationAdapter({
@@ -545,7 +555,7 @@ describe("uploadSlackFile file fetch with redirects", () => {
 
       expect(result.ok).toBe(false);
       if (!result.ok) {
-        expect(result.error).toBe("fetch_file_http_404");
+        expect(result.error).toBe("fetch_file_failed");
         expect(result.code).toBe("file_fetch_failed");
       }
     } finally {
@@ -587,6 +597,6 @@ describe("buildFileUploadAuditPayload", () => {
     expect(payload.bytes).toBe(12345);
     expect(payload.audience).toBe("internal");
     expect(payload.mimeType).toBe("application/pdf");
-    expect(payload.fileRef).toBe("temp://abc123");
+    expect(String(payload.fileRef)).toMatch(/^sha256:[a-f0-9]{64}$/);
   });
 });

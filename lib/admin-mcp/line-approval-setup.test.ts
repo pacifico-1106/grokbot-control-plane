@@ -101,6 +101,10 @@ function approval(orgId: string, employee?: Partial<Employee>): ApprovalRequest 
 }
 
 beforeEach(() => {
+  globalThis.fetch = (async (url) => {
+    if (!String(url).startsWith("https://api.line.me/")) throw new Error("unexpected_fixture_endpoint");
+    return Response.json({});
+  }) as typeof fetch;
   process.env.NOTIFICATION_CONFIG_ENCRYPTION_KEY = ENCRYPTION_KEY;
 });
 

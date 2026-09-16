@@ -16,7 +16,8 @@ function demoCred(employeeId = "emp_comm"): ResolvedEmployeeCredential {
     orgId: DEMO_ORG.id,
     credentialId: `cred_${employeeId}`,
     generation: 1,
-    via: "bearer",
+    fingerprint: "fixture-hash",
+    secretPrefix: "gb_emp_fixture",
     binding: {
       status: "linked",
       employeeId,

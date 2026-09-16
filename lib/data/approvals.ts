@@ -505,22 +505,29 @@ export async function updateApprovalMetadata(
   patch: Record<string, unknown>
 ): Promise<ApprovalRequest | null> {
   if (!approval?.id) return null;
-  const metadata = { ...approval.metadata, ...patch };
   if (isDemoMode()) {
+    const current = await demoGetApproval(approval.id);
+    if (!current || current.orgId !== approval.orgId) return null;
+    const metadata = { ...current.metadata, ...patch };
+    if (current.metadata.adminSecretConsumed === true) {
+      metadata.adminSecretConsumed = true;
+      for (const key of ["fulfillment", "adminFulfillment"]) {
+        if (metadata[key] && typeof metadata[key] === "object") {
+          const value = { ...(metadata[key] as Record<string, unknown>) };
+          delete value.oneTimeSecret;
+          metadata[key] = value;
+        }
+      }
+    }
     return demoUpdateApproval(approval.id, { metadata });
   }
   const admin = createSupabaseAdminClient();
   if (!admin) return null;
-  const { data, error } = await admin
-    .from("approval_requests")
-    .update({ metadata })
-    .eq("id", approval.id)
-    .eq("org_id", approval.orgId)
-    .select("*")
-    .maybeSingle();
-  return error || !data
-    ? null
-    : mapApprovalRow(data as Record<string, unknown>);
+  const { data, error } = await admin.rpc("merge_approval_metadata", {
+    p_id: approval.id, p_org: approval.orgId, p_patch: patch,
+  });
+  if (error) throw new Error("approval_metadata_save_failed");
+  return data ? mapApprovalRow(data as Record<string, unknown>) : null;
 }
 
 export async function listApprovalsForTelegramDigest(): Promise<ApprovalRequest[]> {

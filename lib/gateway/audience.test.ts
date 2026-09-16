@@ -408,7 +408,7 @@ describe("org internal audience rule (stablo-scale)", () => {
     await setOrgInternalAudienceRule(
       DEMO_ORG.id,
       {
-        slackTeamIds: ["T_STABLO_307"],
+        slackTeamIds: ["TSTABLO307"],
         autoSlackTeamInternal: true,
       },
       "test@example.com"
@@ -422,7 +422,7 @@ describe("org internal audience rule (stablo-scale)", () => {
           slackChannelId: "C_SHARED",
           slackUserId: "U_STABLO_MEMBER",
         },
-        args: { slackTeamId: "T_STABLO_307" },
+        args: { slackTeamId: "TSTABLO307" },
       }),
       DEMO_ORG.id
     );
@@ -442,7 +442,7 @@ describe("org internal audience rule (stablo-scale)", () => {
     await setOrgInternalAudienceRule(
       DEMO_ORG.id,
       {
-        slackTeamIds: ["T_STABLO_307"],
+        slackTeamIds: ["TSTABLO307"],
         autoSlackTeamInternal: true,
       },
       "test@example.com"
@@ -475,7 +475,7 @@ describe("org internal audience rule (stablo-scale)", () => {
     await setOrgInternalAudienceRule(
       DEMO_ORG.id,
       {
-        slackTeamIds: ["T_STABLO_307"],
+        slackTeamIds: ["TSTABLO307"],
         autoSlackTeamInternal: false,
       },
       "test@example.com"
@@ -488,7 +488,7 @@ describe("org internal audience rule (stablo-scale)", () => {
           orgId: DEMO_ORG.id,
           slackUserId: "U_STABLO_MEMBER",
         },
-        args: { slackTeamId: "T_STABLO_307" },
+        args: { slackTeamId: "TSTABLO307" },
       }),
       DEMO_ORG.id
     );
@@ -568,7 +568,7 @@ describe("org internal audience rule (stablo-scale)", () => {
     await setOrgInternalAudienceRule(
       DEMO_ORG.id,
       {
-        slackTeamIds: ["T_STABLO_307"],
+        slackTeamIds: ["TSTABLO307"],
         autoSlackTeamInternal: true,
       },
       "test@example.com"

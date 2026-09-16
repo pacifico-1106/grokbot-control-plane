@@ -14,6 +14,7 @@ const ORG_ID = DEMO_ORG.id;
 
 function makePolicy(body: "full" | "prefix" | "none", sealith: "off" | "suggest" | "required"): OrgIngressHandoffPolicy {
   return {
+    policyId: "ihp_fixture", policyName: "Fixture",
     version: 1,
     rules: [
       {

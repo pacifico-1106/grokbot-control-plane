@@ -51,7 +51,7 @@ describe("supplementInvokeBodyFromLedger", () => {
   test("infers slackTeamId from single-team org rule", async () => {
     await setOrgInternalAudienceRule(
       DEMO_ORG.id,
-      { slackTeamIds: ["T_ONLY_TEAM"], autoSlackTeamInternal: true },
+      { slackTeamIds: ["TONLYTEAM"], autoSlackTeamInternal: true },
       "test"
     );
     const body = await supplementInvokeBodyFromLedger(DEMO_ORG.id, {
@@ -60,7 +60,7 @@ describe("supplementInvokeBodyFromLedger", () => {
       jobId: "job_supp",
       args: { slackUserId: "U_TEST", slackChannelId: "C_SHARED" },
     });
-    expect(body.conversation?.slackTeamId).toBe("T_ONLY_TEAM");
+    expect(body.conversation?.slackTeamId).toBe("TONLYTEAM");
   });
 
   test("syncs channel classification from parties ledger", async () => {
