@@ -20,7 +20,7 @@ describe("validateRule", () => {
         body: "full",
         attachment: "meta",
         sealith: "off",
-        audit: { jobId: true, sealithTransferId: false },
+        audit: { jobId: true as const, sealithTransferId: false },
       },
       0
     );
@@ -151,7 +151,7 @@ describe("validateRule", () => {
         body: "full",
         attachment: "meta",
         sealith: "off",
-        audit: { jobId: true, sealithTransferId: true },
+        audit: { jobId: true as const, sealithTransferId: true },
       },
       0
     );
@@ -169,7 +169,7 @@ describe("validateRule", () => {
         attachment: "file",
         sealith: "required",
         sealithRequiredHints: ["contract", "nda"],
-        audit: { jobId: true, sealithTransferId: true },
+        audit: { jobId: true as const, sealithTransferId: true },
       },
       0
     );
@@ -466,7 +466,7 @@ describe("policyHasHighRiskAutomation", () => {
           body: "full" as const,
           attachment: "file" as const,
           sealith: "off" as const,
-          audit: { jobId: true, sealithTransferId: false },
+          audit: { jobId: true as const, sealithTransferId: false },
         },
       ],
     };
@@ -482,7 +482,7 @@ describe("policyHasHighRiskAutomation", () => {
           body: "full" as const,
           attachment: "file" as const,
           sealith: "off" as const,
-          audit: { jobId: true, sealithTransferId: false },
+          audit: { jobId: true as const, sealithTransferId: false },
         },
       ],
     };
@@ -498,7 +498,7 @@ describe("policyHasHighRiskAutomation", () => {
           body: "full" as const,
           attachment: "file" as const,
           sealith: "required" as const,
-          audit: { jobId: true, sealithTransferId: true },
+          audit: { jobId: true as const, sealithTransferId: true },
         },
       ],
     };
@@ -514,7 +514,7 @@ describe("policyHasHighRiskAutomation", () => {
           body: "full" as const,
           attachment: "meta" as const,
           sealith: "off" as const,
-          audit: { jobId: true, sealithTransferId: false },
+          audit: { jobId: true as const, sealithTransferId: false },
         },
       ],
     };

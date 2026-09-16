@@ -68,6 +68,7 @@ import {
 import { publishSnsPost, type SnsPublishResult } from "@/lib/gateway/adapters/sns";
 import {
   buildInvokeSnapshot,
+  fulfillApprovedInvoke,
   conversationDeliveryFromFulfillment,
   snsDeliveryFromFulfillment,
   type ConversationDelivery,
@@ -759,6 +760,7 @@ export async function runGatewayInvoke(
       prior &&
         prior.status === "approved" &&
         prior.employeeId === employeeId &&
+        prior.credentialId === (input.credentialId || employee.credentialId) &&
         prior.tool === tool &&
         prior.jobId === jobId &&
         prior.purpose === purpose
@@ -1316,6 +1318,14 @@ export async function runGatewayInvoke(
 
   // risk_based employee + mayAuto tools: allow in stub.
   // browser.use is always force-approval; missing/mismatch already fail-closed above.
+  // Reinvocation shares the same execution claim as approval callbacks and W2.
+  // Use the approved snapshot, never a replacement message in this request.
+  if (priorApprovalOk && priorApproval && (isAudienceGatedTool(toolDef) || isSnsPublishTool(toolDef))) {
+    const fulfilled = await fulfillApprovedInvoke(priorApproval);
+    if (!fulfilled?.ok) return jsonResult({ ok: false, code: fulfilled?.error || "approval_execution_failed",
+      error: fulfilled?.error || "approval_execution_failed", employeeId, tool, purpose, jobId }, 409);
+  }
+
   // Confirm-class succeeds only with priorApprovalOk (or non-force paths).
   let meter: {
     type: "gated_confirm_action";

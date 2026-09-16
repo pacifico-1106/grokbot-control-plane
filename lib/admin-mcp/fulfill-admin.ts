@@ -1,3 +1,6 @@
+import { isDemoMode } from "@/lib/mode";
+import { executeApproval } from "@/lib/approvals/execution";
+import { setOrgInternalAudienceRule, validateInternalAudienceRulePatch } from "@/lib/data/internal-audience-rule";
 /**
  * Fulfill admin MCP tickets after a different human approves.
  * Uses the existing issueEmployee / linkAgent / updateEmployeePolicy /
@@ -428,6 +431,7 @@ async function persist(approval: ApprovalRequest, fulfillment: AdminFulfillment)
     fulfillment,
     adminFulfillment: fulfillment,
   });
+  if (!saved && !isDemoMode()) throw new Error("approval_metadata_save_failed");
   approval.metadata = saved ? saved.metadata : { ...approval.metadata, fulfillment };
 }
 
@@ -1249,7 +1253,7 @@ async function fulfillStuckWatch(
   };
 }
 
-export async function fulfillApprovedAdmin(
+async function fulfillApprovedAdminCore(
   approval: ApprovalRequest
 ): Promise<AdminFulfillment | null> {
   if (!isAdminClassApproval(approval)) return null;
@@ -1292,6 +1296,16 @@ export async function fulfillApprovedAdmin(
       case "mailPolicy.patch":
         fulfillment = await fulfillMailPolicy(approval, args);
         break;
+      case "internalAudienceRule.patch": {
+        const rule = validateInternalAudienceRulePatch(args);
+        await setOrgInternalAudienceRule(approval.orgId, rule, approval.resolvedBy || "admin_mcp");
+        await appendAuditEvent({ orgId: approval.orgId, employeeId: null, credentialId: null,
+          action: "admin.policy", purpose: "admin.policy", summary: "社内判定ルールを更新（管理MCP・人承認）",
+          metadata: { approvalId: approval.id, auditClass: ADMIN_AUDIT_CLASS, rule },
+        });
+        fulfillment = { ok: true, tool, at };
+        break;
+      }
       case "stuckWatch.patch":
         fulfillment = await fulfillStuckWatch(approval, args);
         break;
@@ -1331,3 +1345,12 @@ export async function fulfillApprovedAdmin(
 }
 
 export { auditActionForAdminTool };
+
+export async function fulfillApprovedAdmin(approval: ApprovalRequest): Promise<AdminFulfillment | null> {
+  if (approval.status !== "approved" || !isAdminClassApproval(approval)) return null;
+  try { return await executeApproval(approval, () => fulfillApprovedAdminCore(approval)); }
+  catch (error) {
+    return { ok: false, at: new Date().toISOString(), tool: approval.tool || "",
+      error: error instanceof Error ? error.message : "approval_execution_failed" };
+  }
+}

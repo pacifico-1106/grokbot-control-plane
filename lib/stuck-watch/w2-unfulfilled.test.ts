@@ -28,6 +28,7 @@ function makeApproval(
     revisionNote: null,
     revisionCount: 0,
     parentApprovalId: null,
+    telegramRef: null, telegramMessageId: null, statusToken: "fixture",
     pollPath: "/api/approvals/status?id=x&token=y",
     metadata: {
       invoke: {

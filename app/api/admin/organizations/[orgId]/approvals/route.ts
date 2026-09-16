@@ -1,3 +1,4 @@
+import { publicApproval } from "@/lib/approvals/public";
 import { NextResponse } from "next/server";
 import { getSuperAdminAccess } from "@/lib/admin/access";
 import { listPendingApprovalsForOrg } from "@/lib/admin/proxy-approve";
@@ -32,7 +33,7 @@ export async function GET(
     const approvals = await listPendingApprovalsForOrg(orgId);
     return NextResponse.json({
       ok: true,
-      approvals,
+      approvals: approvals.map(publicApproval),
       count: approvals.length,
     });
   } catch (error) {

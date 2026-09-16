@@ -8,9 +8,10 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "bun test lib",
+    "test": "node scripts/test-local.mjs",
     "test:e2e": "playwright test",
-    "test:e2e:ui": "playwright test --ui"
+    "test:e2e:ui": "playwright test --ui",
+    "test:db": "python3 scripts/test-db-local.py"
   },
   "dependencies": {
     "@supabase/ssr": "^0.6.1",

@@ -1,3 +1,4 @@
+import { publicApproval } from "@/lib/approvals/public";
 import { NextResponse } from "next/server";
 import { runApprovalResolveSideEffects } from "@/lib/approvals/resolve-side-effects";
 import { getCurrentOrgId } from "@/lib/auth/session";
@@ -65,7 +66,7 @@ export async function POST(
 
   return NextResponse.json({
     ok: true,
-    approval: updated,
+    approval: publicApproval(updated),
     sideEffects,
     demo: runtimeModeLabel() === "demo",
     mode: runtimeModeLabel(),

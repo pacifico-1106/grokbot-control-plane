@@ -1,3 +1,4 @@
+import { redactMetadata } from "@/lib/data/redaction";
 /**
  * Staffpass remote MCP tool surface (narrow control-plane only).
  * Confirm/send/order always stop for human approval via shared Gateway invoke.
@@ -155,7 +156,7 @@ export const STAFFPASS_MCP_TOOLS: McpToolDef[] = [
   {
     name: "staffpass_get_approval_status",
     description:
-      "Poll a human approval ticket with approvalId + statusToken (same as GET /api/approvals/status). Returns pending|approved|rejected|revision_requested|expired and pollHint. When status=approved and the action has been auto-fulfilled (by the approval webhook), the fulfillment result is included in the response with pollHint=fulfilled — no re-invoke needed. If pollHint=reinvoke_with_approvalId, re-invoke with approvalId. On revision_requested, revise per revisionNote and re-invoke with the same jobId and parentApprovalId.",
+      "Poll a human approval ticket with approvalId + statusToken (same as GET /api/approvals/status). Returns pending|approved|rejected|revision_requested|expired and pollHint. When status=approved and the action has been auto-fulfilled (by the approval webhook), the fulfillment result is included in the response with pollHint=fulfilled. Admin credential secrets are never returned by this employee MCP: when resultRetrieval is present, authenticate to /api/mcp/admin and re-invoke the indicated admin tool with approvalId. If pollHint=reinvoke_with_approvalId, re-invoke with approvalId. On revision_requested, revise per revisionNote and re-invoke with the same jobId and parentApprovalId.",
     inputSchema: {
       type: "object",
       properties: {
@@ -447,19 +448,20 @@ export async function callStaffpassMcpTool(
           ? approval.status
           : "pending";
 
-      // Auto-fulfill result for Admin MCP tools: include fulfillment in poll response
-      // so agents don't need to re-invoke to get the result after approval.
+      // Polling capabilities expose status and non-secret results. Credential
+      // retrieval still requires the original admin identity and atomic consume.
       let fulfillmentResult: Record<string, unknown> | null = null;
+      let adminResultRequired = false;
       if (status === "approved") {
         if (isAdminClassApproval(approval)) {
           const adminFulfill = parseAdminFulfillment(approval.metadata);
           if (adminFulfill?.ok) {
+            adminResultRequired = Boolean(adminFulfill.oneTimeSecret);
             fulfillmentResult = {
               fulfilled: true,
               tool: adminFulfill.tool,
               ...(adminFulfill.employeeId ? { employeeId: adminFulfill.employeeId } : {}),
               ...(adminFulfill.secretPrefix ? { secretPrefix: adminFulfill.secretPrefix } : {}),
-              ...(adminFulfill.oneTimeSecret ? { oneTimeSecret: adminFulfill.oneTimeSecret } : {}),
               ...(adminFulfill.orgId ? { orgId: adminFulfill.orgId } : {}),
               ...(adminFulfill.adminAgentId ? { adminAgentId: adminFulfill.adminAgentId } : {}),
               ...(adminFulfill.partyId ? { partyId: adminFulfill.partyId } : {}),
@@ -520,13 +522,15 @@ export async function callStaffpassMcpTool(
         revisionNote: approval.revisionNote,
         revisionCount: approval.revisionCount,
         parentApprovalId: approval.parentApprovalId,
-        // When fulfilled, agent can read result directly without re-invoke
-        ...(fulfillmentResult ? { fulfillment: fulfillmentResult } : {}),
+        ...(fulfillmentResult ? { fulfillment: redactMetadata(fulfillmentResult) } : {}),
+        ...(adminResultRequired ? { resultRetrieval: {
+          endpoint: "/api/mcp/admin", tool: fulfillmentResult?.tool, approvalId: approval.id, requiresAdminCredential: true,
+        } } : {}),
         pollHint:
           status === "pending"
             ? "continue_polling"
             : status === "approved"
-              ? fulfillmentResult
+              ? fulfillmentResult && !adminResultRequired
                 ? "fulfilled"
                 : "reinvoke_with_approvalId"
               : status === "revision_requested"

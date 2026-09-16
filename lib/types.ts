@@ -528,6 +528,8 @@ export interface OrgAdminAgent {
 }
 
 export interface OrgMember {
+  /** Auth identity, distinct from the editable profile email. */
+  userId?: string | null;
   id: string;
   orgId: string;
   email: string;

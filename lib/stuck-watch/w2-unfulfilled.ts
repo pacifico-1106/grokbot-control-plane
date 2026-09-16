@@ -1,3 +1,4 @@
+import { assertApprovalExecutionAuthority } from "@/lib/approvals/execution-authority";
 /**
  * W2: approved-but-unfulfilled watch — auto reinvoke fulfill (max 2).
  * Uses existing fulfillApprovedInvoke / fulfillApprovedAdmin paths only.
@@ -225,6 +226,8 @@ export async function runW2FulfillRetry(
     };
   }
 
+  try { await assertApprovalExecutionAuthority(approval); }
+  catch { return { ok: false, skipped: true, reason: "approval_authority_revoked", retryCount: eligibility.retryCount }; }
   const nextRetryCount = eligibility.retryCount + 1;
   const now = new Date().toISOString();
   await persistW2Meta(approval, {

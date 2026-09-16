@@ -1,3 +1,4 @@
+import { publicApproval } from "@/lib/approvals/public";
 import { NextResponse } from "next/server";
 import { getSuperAdminAccess } from "@/lib/admin/access";
 import {
@@ -88,7 +89,7 @@ export async function POST(
 
     return NextResponse.json({
       ok: true,
-      approval: result.approval,
+      approval: result.approval ? publicApproval(result.approval) : undefined,
       sideEffects: result.sideEffects,
       decision,
       mandate,

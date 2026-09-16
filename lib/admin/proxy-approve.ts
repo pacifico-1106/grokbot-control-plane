@@ -1,3 +1,4 @@
+import { assertNotSelfApproval, isSelfApprovalDenied, type ApprovalResolver } from "@/lib/admin-mcp/self-approval";
 /**
  * Platform-ops proxy approval: Super Admin resolves a tenant's pending approval
  * on their behalf during setup/support. Requires mandate (setup|support) for audit.
@@ -41,6 +42,8 @@ export type ProxyApproveInput = {
   mandate: ProxyApprovalMandate;
   note?: string;
   actor: ProxyApprovalActor;
+  /** Server-authenticated MCP actor; never taken from request arguments. */
+  resolver?: ApprovalResolver;
 };
 
 export type ProxyApproveResult = {
@@ -185,6 +188,13 @@ export async function proxyResolveApproval(
     };
   }
   
+  try {
+    assertNotSelfApproval(existing.metadata, input.resolver ?? { actorId: actor.userId, actor: actor.email });
+  } catch (error) {
+    if (isSelfApprovalDenied(error)) return { ok: false, code: "self_approval_denied", error: "自分の申請は承認できません" };
+    throw error;
+  }
+
   const resolveResult = await resolveApprovalByOrgId(
     approvalId,
     targetOrgId,

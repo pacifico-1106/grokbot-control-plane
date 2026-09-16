@@ -1,6 +1,15 @@
-import { afterEach, describe, expect, test } from "bun:test";
+// URL download policy has its own DNS/stream tests. These tests verify mapping
+// and Slack API payloads using deterministic file bytes.
+mock.module("@/lib/security/public-file-download", () => ({
+  MAX_FILE_BYTES: 50 * 1024 * 1024,
+  downloadPublicFile: async (url: string) => {
+    if (!url.startsWith("https://example.com/")) throw new Error("unexpected_fixture_file");
+    return Buffer.from("%PDF-1.4 test content");
+  },
+}));
+import { afterEach, describe, expect, test, mock } from "bun:test";
 import { STAFFPASS_MCP_TOOLS, callStaffpassMcpTool } from "@/lib/mcp/tools";
-import { DEMO_ORG, getRuntimeEmployees } from "@/lib/demo-data";
+import { DEMO_ORG } from "@/lib/demo-data";
 import { upsertConversationAdapter } from "@/lib/data/conversation-adapters";
 import type { ResolvedEmployeeCredential } from "@/lib/auth/employee-credential";
 import { callAdminMcpTool } from "@/lib/mcp/admin-tools";
@@ -10,14 +19,13 @@ import { resetDemoAdminAgent } from "@/lib/data/admin-agents";
 import type { ResolvedAdminCredential } from "@/lib/auth/admin-credential";
 
 function demoCred(employeeId = "emp_comm"): ResolvedEmployeeCredential {
-  const employee = getRuntimeEmployees().find((e) => e.id === employeeId);
   return {
     employeeId,
     orgId: DEMO_ORG.id,
     credentialId: `cred_${employeeId}`,
     generation: 1,
-    via: "bearer",
-    employee: employee ?? undefined,
+    fingerprint: "fixture-hash",
+    secretPrefix: "gb_emp_fixture",
     binding: {
       status: "linked",
       employeeId,
@@ -507,13 +515,14 @@ function allowPlatformOpsInDemo() {
 }
 
 describe("staffpass_get_approval_status auto-fulfill", () => {
-  test("returns fulfillment result in poll response for Admin MCP after webhook approval", async () => {
+  test("preserves poll results but returns admin secrets only to the original admin credential once", async () => {
     allowPlatformOpsInDemo();
 
+    const adminCred = demoAdminCred();
     const queued = await callAdminMcpTool(
       "orgs.issueAdminCredential",
       { orgId: TARGET_ORG_ID },
-      demoAdminCred()
+      adminCred
     );
     const queuedData = queued.structuredContent as Record<string, unknown>;
     expect(queuedData.needs_approval).toBe(true);
@@ -541,13 +550,27 @@ describe("staffpass_get_approval_status auto-fulfill", () => {
     const pollData = pollResult.structuredContent as Record<string, unknown>;
     expect(pollData.ok).toBe(true);
     expect(pollData.status).toBe("approved");
-    expect(pollData.pollHint).toBe("fulfilled");
+    expect(pollData.pollHint).toBe("reinvoke_with_approvalId");
     expect(pollData.fulfillment).toBeTruthy();
 
     const fulfillment = pollData.fulfillment as Record<string, unknown>;
     expect(fulfillment.fulfilled).toBe(true);
     expect(fulfillment.orgId).toBe(TARGET_ORG_ID);
-    expect(String(fulfillment.oneTimeSecret || "")).toMatch(/^gb_adm_/);
+    expect(fulfillment.oneTimeSecret).toBeUndefined();
+    expect(pollData.resultRetrieval).toEqual({ endpoint: "/api/mcp/admin", tool: "orgs.issueAdminCredential", approvalId, requiresAdminCredential: true });
+    const repeatPoll = await callStaffpassMcpTool("staffpass_get_approval_status", { approvalId, statusToken }, demoCred());
+    expect((repeatPoll.structuredContent as { fulfillment: Record<string, unknown> }).fulfillment.oneTimeSecret).toBeUndefined();
+    const denied = await callAdminMcpTool("orgs.issueAdminCredential", { approvalId }, { ...adminCred, generation: adminCred.generation + 1 });
+    expect(denied.isError).toBe(true);
+    const result = await callAdminMcpTool("orgs.issueAdminCredential", { approvalId }, adminCred);
+    const adminResult = result.structuredContent as Record<string, unknown>;
+    expect(adminResult.ok).toBe(true);
+    expect(String(adminResult.oneTimeSecret)).toMatch(/^gb_adm_/);
+    expect(JSON.stringify(pollData).includes(String(adminResult.oneTimeSecret))).toBe(false);
+    const again = await callAdminMcpTool("orgs.issueAdminCredential", { approvalId }, adminCred);
+    expect((again.structuredContent as Record<string, unknown>).oneTimeSecret).toBeUndefined();
+    const consumedPoll = await callStaffpassMcpTool("staffpass_get_approval_status", { approvalId, statusToken }, demoCred());
+    expect((consumedPoll.structuredContent as Record<string, unknown>).pollHint).toBe("fulfilled");
     expect(fulfillment.secretPrefix).toBeTruthy();
     expect(fulfillment.nextStepJa).toBeTruthy();
   });
@@ -555,10 +578,11 @@ describe("staffpass_get_approval_status auto-fulfill", () => {
   test("returns reinvoke_with_approvalId when approved but not yet fulfilled", async () => {
     allowPlatformOpsInDemo();
 
+    const adminCred = demoAdminCred();
     const queued = await callAdminMcpTool(
       "orgs.issueAdminCredential",
       { orgId: TARGET_ORG_ID },
-      demoAdminCred()
+      adminCred
     );
     const queuedData = queued.structuredContent as Record<string, unknown>;
     const approvalId = String(queuedData.approvalId || "");

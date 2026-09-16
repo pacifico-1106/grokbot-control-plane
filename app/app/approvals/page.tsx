@@ -1,3 +1,4 @@
+import { publicApproval } from "@/lib/approvals/public";
 import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
 import { ApprovalsClient } from "@/components/ApprovalsClient";
@@ -24,7 +25,7 @@ export default async function ApprovalsPage() {
       subtitle="要対応 — 危険操作はここで許可してから実行"
     >
       <ApprovalsClient
-        initial={approvals}
+        initial={approvals.map(publicApproval)}
         employees={employees}
         demoDurable={demo ? isDurableDemoApprovalsStore() : true}
         demoStore={demo ? getDemoApprovalsBackend() : null}

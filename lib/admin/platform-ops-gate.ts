@@ -4,6 +4,8 @@
  */
 import { matchesSuperAdminAllowlist } from "@/lib/admin/allowlist";
 import type { ResolvedAdminCredential } from "@/lib/auth/admin-credential";
+import { isDemoMode } from "@/lib/mode";
+import { createSupabaseAdminClient } from "@/lib/supabase";
 import { listMembers } from "@/lib/data/members";
 
 export type PlatformOpsActor = {
@@ -23,17 +25,6 @@ export type PlatformOpsGateResult =
 function configuredPlatformOpsOrgId(): string | null {
   const value = (process.env.PLATFORM_OPS_ORG_ID || "").trim();
   return value || null;
-}
-
-function ownerMatchesSuperAdminAllowlist(owner: { email: string }): boolean {
-  const email = owner.email.trim();
-  if (!email) return false;
-  return matchesSuperAdminAllowlist({
-    userId: "unknown",
-    email,
-    userIds: process.env.SUPER_ADMIN_USER_IDS,
-    emails: process.env.SUPER_ADMIN_EMAILS,
-  });
 }
 
 /**
@@ -58,7 +49,26 @@ export async function assertPlatformOpsFromAdminCred(
     (member) => member.role === "owner" && member.status === "active"
   );
 
-  const matchedOwner = owners.find((owner) => ownerMatchesSuperAdminAllowlist(owner));
+  // org_members.email is editable profile data, never an authentication identity.
+  const admin = isDemoMode() ? null : createSupabaseAdminClient();
+  let matchedOwner: { email: string; userId: string } | null = null;
+  for (const owner of owners) {
+    let identity: { email: string; userId: string } | null = null;
+    if (isDemoMode()) {
+      identity = { email: owner.email, userId: owner.userId || owner.id };
+    } else if (admin && owner.userId) {
+      const { data, error } = await admin.auth.admin.getUserById(owner.userId);
+      const user = data?.user;
+      if (!error && user && user.id === owner.userId &&
+          !(user.banned_until && Date.parse(user.banned_until) > Date.now()) &&
+          !(user as unknown as { deleted_at?: string }).deleted_at) {
+        identity = { userId: user.id, email: user.email_confirmed_at ? user.email || "" : "" };
+      }
+    }
+    if (identity && matchesSuperAdminAllowlist({ ...identity,
+      userIds: process.env.SUPER_ADMIN_USER_IDS, emails: process.env.SUPER_ADMIN_EMAILS,
+    })) { matchedOwner = identity; break; }
+  }
   if (!matchedOwner) {
     return {
       allowed: false,
@@ -72,7 +82,7 @@ export async function assertPlatformOpsFromAdminCred(
     allowed: true,
     actor: {
       email: matchedOwner.email,
-      userId: null,
+      userId: matchedOwner.userId,
       orgId: cred.orgId,
     },
   };

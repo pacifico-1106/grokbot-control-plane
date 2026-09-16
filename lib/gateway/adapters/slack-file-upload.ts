@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+import { downloadPublicFile, MAX_FILE_BYTES } from "@/lib/security/public-file-download";
 /**
  * Slack file upload adapter for comm.reply / comm.send egress.
  *
@@ -311,37 +313,17 @@ async function completeUpload(
 
 /**
  * Fetch file from signed URL (alternative to direct buffer).
- * Explicitly follows redirects (3xx) to the final destination.
+ * Follows at most three public HTTPS redirects, with DNS/IP and size checks.
  */
 async function fetchFileFromUrl(
   fileUrl: string
 ): Promise<{ ok: true; buffer: Buffer } | { ok: false; error: string; code: string }> {
   try {
-    const response = await fetch(fileUrl, {
-      redirect: "follow",
-      signal: AbortSignal.timeout(SLACK_TIMEOUT_MS),
-    });
-    if (!response.ok) {
-      const isRedirect = response.status >= 300 && response.status < 400;
-      if (isRedirect) {
-        return {
-          ok: false,
-          error: `fetch_file_redirect_not_followed_${response.status}`,
-          code: "file_fetch_redirect_failed",
-        };
-      }
-      return {
-        ok: false,
-        error: `fetch_file_http_${response.status}`,
-        code: "file_fetch_failed",
-      };
-    }
-    const arrayBuffer = await response.arrayBuffer();
-    return { ok: true, buffer: Buffer.from(arrayBuffer) };
-  } catch (error) {
+    return { ok: true, buffer: await downloadPublicFile(fileUrl) };
+  } catch {
     return {
       ok: false,
-      error: error instanceof Error ? error.message : "fetch_file_failed",
+      error: "fetch_file_failed",
       code: "file_fetch_failed",
     };
   }
@@ -431,6 +413,7 @@ export async function uploadSlackFile(
     };
   }
 
+  if (fileBuffer.length > MAX_FILE_BYTES) return { ok: false, code: "file_too_large", error: "file_too_large" };
   const mimeType = input.mimeType || "application/octet-stream";
 
   const uploadUrlResult = await getUploadUrl(
@@ -522,6 +505,6 @@ export function buildFileUploadAuditPayload(
     bytes: result.bytes,
     audience: extra.audience,
     mimeType: extra.mimeType,
-    fileRef: extra.fileRef,
+    fileRef: extra.fileRef ? `sha256:${createHash("sha256").update(extra.fileRef).digest("hex")}` : undefined,
   };
 }

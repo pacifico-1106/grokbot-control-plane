@@ -71,11 +71,33 @@ export async function getOrgInternalAudienceRule(
   );
 }
 
+/** Reject malformed security policy rather than coercing it into a wider audience. */
+export function validateInternalAudienceRulePatch(raw: Record<string, unknown>): Partial<OrgInternalAudienceRule> {
+  const out: Partial<OrgInternalAudienceRule> = {};
+  for (const key of ["emailDomains", "slackTeamIds"] as const) {
+    if (raw[key] === undefined) continue;
+    const value = raw[key];
+    if (!Array.isArray(value) || value.length > 100 || value.some((v) =>
+      typeof v !== "string" || !(key === "emailDomains"
+        ? /^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$/i
+        : /^T[A-Z0-9]{2,30}$/i).test(v.trim()))) {
+      throw new Error("invalid_internal_audience_rule");
+    }
+    out[key] = [...new Set(value.map((v: string) => key === "emailDomains" ? v.trim().toLowerCase() : v.trim().toUpperCase()))];
+  }
+  if (raw.autoSlackTeamInternal !== undefined) {
+    if (typeof raw.autoSlackTeamInternal !== "boolean") throw new Error("invalid_internal_audience_rule");
+    out.autoSlackTeamInternal = raw.autoSlackTeamInternal;
+  }
+  return out;
+}
+
 export async function setOrgInternalAudienceRule(
   orgId: string,
   rule: Partial<OrgInternalAudienceRule>,
   updatedBy: string
 ): Promise<OrgInternalAudienceRule> {
+  rule = validateInternalAudienceRulePatch(rule);
   const current = await getOrgInternalAudienceRule(orgId);
   const next: OrgInternalAudienceRule = {
     version: 1,

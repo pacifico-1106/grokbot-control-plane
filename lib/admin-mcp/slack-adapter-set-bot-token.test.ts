@@ -15,6 +15,7 @@ import type { ResolvedAdminCredential } from "@/lib/auth/admin-credential";
 
 const TEST_TOKEN = "xoxb-test-admin-mcp-slack-adapter-secret";
 const ENCRYPTION_KEY = "test-key-that-is-at-least-32-characters-long";
+const originalFetch = globalThis.fetch;
 const originalKey = process.env.NOTIFICATION_CONFIG_ENCRYPTION_KEY;
 
 function demoCred(): ResolvedAdminCredential {
@@ -39,10 +40,15 @@ function jsonHasNoToken(value: unknown, token: string): boolean {
 }
 
 beforeEach(() => {
+  globalThis.fetch = (async (url) => {
+    if (String(url) !== "https://slack.com/api/auth.test") throw new Error("unexpected_fixture_endpoint");
+    return Response.json({ ok: true, team_id: "TFIXTURE", user_id: "UFIXTURE" });
+  }) as typeof fetch;
   process.env.NOTIFICATION_CONFIG_ENCRYPTION_KEY = ENCRYPTION_KEY;
 });
 
 afterEach(async () => {
+  globalThis.fetch = originalFetch;
   if (originalKey === undefined) delete process.env.NOTIFICATION_CONFIG_ENCRYPTION_KEY;
   else process.env.NOTIFICATION_CONFIG_ENCRYPTION_KEY = originalKey;
   await upsertConversationAdapter({

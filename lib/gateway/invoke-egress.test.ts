@@ -1,4 +1,13 @@
-import { describe, expect, test } from "bun:test";
+// URL download policy has its own DNS/stream tests. These tests verify mapping
+// and Slack API payloads using deterministic file bytes.
+mock.module("@/lib/security/public-file-download", () => ({
+  MAX_FILE_BYTES: 50 * 1024 * 1024,
+  downloadPublicFile: async (url: string) => {
+    if (!url.startsWith("https://example.com/")) throw new Error("unexpected_fixture_file");
+    return Buffer.from("%PDF-1.4 test content");
+  },
+}));
+import { describe, expect, test, mock } from "bun:test";
 import { incrementActionCounter } from "@/lib/data/action-counters";
 import { getApprovalById, getApprovalStatusByToken, resolveApproval } from "@/lib/data";
 import { upsertConversationAdapter } from "@/lib/data/conversation-adapters";

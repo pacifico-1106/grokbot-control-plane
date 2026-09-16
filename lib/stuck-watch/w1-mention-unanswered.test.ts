@@ -97,6 +97,7 @@ describe("hasSuccessfulReplyAfterWake", () => {
       revisionNote: null,
       revisionCount: 0,
       parentApprovalId: null,
+      telegramRef: null, telegramMessageId: null, statusToken: "fixture",
       pollPath: "/x",
       metadata: {
         fulfillment: {
@@ -133,6 +134,7 @@ describe("inferW1BlockingContext", () => {
       revisionNote: null,
       revisionCount: 0,
       parentApprovalId: null,
+      telegramRef: null, telegramMessageId: null, statusToken: "fixture",
       pollPath: "/x",
       metadata: {},
     };
@@ -254,6 +256,7 @@ describe("evaluateW1Eligibility expected_gate blocking", () => {
       revisionNote: null,
       revisionCount: 0,
       parentApprovalId: null,
+      telegramRef: null, telegramMessageId: null, statusToken: "fixture",
       pollPath: "/x",
       metadata: {},
     };

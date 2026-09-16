@@ -1,3 +1,5 @@
+import { consumeAdminApprovalSecret } from "@/lib/admin-mcp/consume-secret";
+import { canReadAdminApproval } from "@/lib/admin-mcp/result-authority";
 /**
  * Staffpass Admin MCP tools (separate mouth from employee badge MCP).
  * Most tools are always_human. Do not mix with staffpass_whoami / invoke / poll / health.
@@ -956,6 +958,9 @@ async function handleAdminApprovalReinvoke(
     );
   }
 
+  if (!(await canReadAdminApproval(approval, cred))) {
+    return toolResult({ ok: false, code: "approval_requester_mismatch", message: "この資格情報では承認結果を取得できません" }, true);
+  }
   const approvalTool = String(approval.metadata?.adminTool || approval.tool || "").trim();
   if (approvalTool && approvalTool !== toolName) {
     return toolResult(
@@ -1421,8 +1426,12 @@ export async function callAdminMcpTool(
     );
   }
 
+  if (name.startsWith("orgs.") || name === "approvals.proxyResolve") {
+    const gate = await assertPlatformOpsFromAdminCred(cred);
+    if (!gate.allowed) return toolResult({ ok: false, code: gate.code, message: gate.message }, true);
+  }
   const approvalId = extractApprovalId(args);
-  if (approvalId && isAdminMutationTool(name)) {
+  if (approvalId && name !== "approvals.proxyResolve" && isAdminMutationTool(name)) {
     return handleAdminApprovalReinvoke(name, approvalId, cred);
   }
 
@@ -1553,6 +1562,7 @@ export async function callAdminMcpTool(
     }
 
     const result = await proxyResolveApproval({
+      resolver: { actorId: cred.actorId, grokBotAgentId: cred.grokBotAgentId },
       targetOrgId,
       approvalId,
       decision: decision as "approved" | "rejected",
@@ -2340,7 +2350,7 @@ export async function readApprovedAdminResult(
   approvalId: string
 ): Promise<Record<string, unknown> | null> {
   const approval = await getApprovalById(approvalId, cred.orgId);
-  if (!approval || approval.status !== "approved") return null;
+  if (!approval || approval.status !== "approved" || !(await canReadAdminApproval(approval, cred))) return null;
   const fulfillment = parseAdminFulfillment(approval.metadata);
   if (!fulfillment) return null;
   const out: Record<string, unknown> = {
@@ -2354,7 +2364,8 @@ export async function readApprovedAdminResult(
     draft: fulfillment.draft ?? null,
   };
   if (fulfillment.oneTimeSecret) {
-    out.oneTimeSecret = fulfillment.oneTimeSecret;
+    const secret = await consumeAdminApprovalSecret(approval, cred);
+    if (secret) out.oneTimeSecret = secret;
   }
   if (fulfillment.noticeJa) {
     out.noticeJa = fulfillment.noticeJa;

@@ -59,6 +59,7 @@ export async function queueAdminTool(input: {
     `admin_${input.tool}_${Date.now().toString(36)}`;
   const requester: AdminRequester = {
     kind: "admin_agent",
+    credentialGeneration: input.cred.generation,
     grokBotAgentId: input.cred.grokBotAgentId,
     actorId: input.cred.actorId,
   };

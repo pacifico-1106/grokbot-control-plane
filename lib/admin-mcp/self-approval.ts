@@ -8,6 +8,7 @@ export const SELF_APPROVAL_MESSAGE_JA =
 
 export type AdminRequester = {
   kind: "admin_agent";
+  credentialGeneration?: number;
   grokBotAgentId: string | null;
   actorId: string | null;
 };
@@ -31,6 +32,7 @@ export function parseAdminRequester(
   if (rec.kind !== "admin_agent") return null;
   return {
     kind: "admin_agent",
+    credentialGeneration: rec.credentialGeneration === undefined ? undefined : Number(rec.credentialGeneration),
     grokBotAgentId:
       typeof rec.grokBotAgentId === "string" ? rec.grokBotAgentId : null,
     actorId: typeof rec.actorId === "string" ? rec.actorId : null,

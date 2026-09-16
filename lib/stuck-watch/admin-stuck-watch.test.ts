@@ -53,6 +53,7 @@ function makeW2Approval(): ApprovalRequest {
     revisionNote: null,
     revisionCount: 0,
     parentApprovalId: null,
+    telegramRef: null, telegramMessageId: null, statusToken: "fixture",
     pollPath: "/x",
     metadata: {
       invoke: {

@@ -166,6 +166,7 @@ export function mapAuditRow(row: Record<string, unknown>): AuditEvent {
 
 export function mapMemberRow(row: Record<string, unknown>): OrgMember {
   return {
+    userId: typeof row.user_id === "string" ? row.user_id : null,
     id: String(row.id),
     orgId: String(row.org_id),
     email: String(row.email ?? ""),

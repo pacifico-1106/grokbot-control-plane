@@ -1,3 +1,6 @@
+import { isDemoMode } from "@/lib/mode";
+import { isAdminClassApproval } from "@/lib/admin-mcp/audit-class";
+import { executeApproval } from "@/lib/approvals/execution";
 /**
  * Immediate fulfillment when a human approves.
  * Audience-gated tools post Slack. sns.publish posts via the SNS adapter.
@@ -356,6 +359,7 @@ async function persistFulfillment(
   fulfillment: ApprovalFulfillment
 ): Promise<void> {
   const saved = await updateApprovalMetadata(approval, { fulfillment });
+  if (!saved && !isDemoMode()) throw new Error("approval_metadata_save_failed");
   approval.metadata = saved
     ? saved.metadata
     : { ...approval.metadata, fulfillment };
@@ -505,7 +509,7 @@ function isMailSendTool(tool: string): boolean {
  * After resolveApproval(approved): post the snapshotted Slack/etc. message.
  * Never throws — the human already said yes; failures are recorded on metadata.
  */
-export async function fulfillApprovedInvoke(
+async function fulfillApprovedInvokeCore(
   approval: ApprovalRequest
 ): Promise<ApprovalFulfillment | null> {
   try {
@@ -620,4 +624,13 @@ export async function fulfillIfApproved(
     await stampW2WatchIfUnfulfilled(approval);
   }
   return invoke;
+}
+
+export async function fulfillApprovedInvoke(approval: ApprovalRequest): Promise<ApprovalFulfillment | null> {
+  if (approval.status !== "approved" || !parseInvokeSnapshot(approval.metadata) || isAdminClassApproval(approval)) return null;
+  try { return await executeApproval(approval, () => fulfillApprovedInvokeCore(approval)); }
+  catch (error) {
+    return { ok: false, at: new Date().toISOString(),
+      error: error instanceof Error ? error.message : "approval_execution_failed" };
+  }
 }
