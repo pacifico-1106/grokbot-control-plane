@@ -1,5 +1,7 @@
 # PR #78: #80 適用後の main への rebase とレビュー引き継ぎ
 
+> 後続対応: main `2a4e019` から、以下の未接続箇所を実装・検証した新規PRを準備。現時点の解消状況・検証・配備条件は [F8接続の引き継ぎ](f8-enforcement-handoff-20260916.md) を参照。この文書の下記は #78 rebase 時点の記録を保持している。本番F8有効化は未実施。
+
 ## 対象と統合結果
 
 - PR: https://github.com/pacifico-1106/grokbot-control-plane/pull/78

@@ -1,3 +1,5 @@
+import { resolveApprovalWithWorkflow } from "@/lib/approvals/workflow-integration";
+import { initializeWorkflowForApproval } from "@/lib/approval-workflow/resolve";
 import { NextResponse } from "next/server";
 import { fulfillIfApproved } from "@/lib/approvals/fulfill";
 import { runApprovalResolveSideEffects } from "@/lib/approvals/resolve-side-effects";
@@ -140,6 +142,9 @@ async function handleCallback(update: TelegramUpdate): Promise<void> {
     }
 
     if (match[1] === "e") {
+      if ((await initializeWorkflowForApproval(approval, approval.employeeId || null)).instance) {
+        await answer("合議中の修正依頼は未対応です"); return;
+      }
       const prompted = await promptTelegramRevision(approval, query.from!.id!);
       await answer(
         prompted.ok ? "返信で修正指示を送ってください" : "修正モードにできませんでした"
@@ -151,14 +156,16 @@ async function handleCallback(update: TelegramUpdate): Promise<void> {
     }
 
     const decision = match[1] === "a" ? "approved" : "rejected";
-    const updated = await resolveApproval(
+    const result = await resolveApprovalWithWorkflow(
       approval.id,
       decision,
       actor,
-      approval.orgId
+      approval.orgId,
+      { decisionId: query.id ? `telegram:global:${query.id}` : "", externalVoter: { provider: "telegram", channelKey: "telegram:global", userId: String(query.from!.id) } }
     );
+    const updated = result.ok && result.workflowComplete ? result.approval : null;
     if (!updated) {
-      await answer("対象はすでに処理済みです");
+      await answer(result.ok ? "投票を記録しました（合議は継続中です）" : "投票を記録できませんでした");
       return;
     }
     await fulfillIfApproved(updated, decision);
@@ -209,6 +216,7 @@ async function handleReply(update: TelegramUpdate): Promise<void> {
       return;
     }
 
+    if ((await initializeWorkflowForApproval(approval, approval.employeeId || null)).instance) return;
     await updateApprovalTelegramState(approval, { awaitingRevisionFrom: null });
     const updated = await resolveApproval(
       approval.id,

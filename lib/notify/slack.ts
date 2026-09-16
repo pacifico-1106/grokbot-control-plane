@@ -123,7 +123,7 @@ function workflowProgressText(progress: WorkflowProgressDisplay | null): string 
   if (progress.finalGoPending) {
     return `\n🔐 *最終Go待ち* (ステージ完了)`;
   }
-  return `\n📊 *${escapeSlackMrkdwn(progress.stageName)}*: ${progress.approved}/${progress.quorum} 承認（残り ${progress.pending} 票）`;
+  return `\n📊 *${escapeSlackMrkdwn(progress.stageName)}*: ${escapeSlackMrkdwn(progress.quorum)} 承認（残り ${progress.pending} 票）`;
 }
 
 function approvalBlocks(
@@ -273,4 +273,20 @@ export async function sendSlackTextToChannel(
   return sent.ok
     ? { ok: true, ts: sent.result?.ts, channel: sent.result?.channel }
     : { ok: false, error: sent.error };
+}
+
+export async function editSlackWorkflowProgress(
+  approval: ApprovalRequest, employee: Employee | null, channel: NotificationChannelRuntime,
+  workflow: WorkflowProgressDisplay
+): Promise<SlackNotifyResult> {
+  const cfg = target(channel);
+  const delivery = await getNotificationDelivery({ approvalId: approval.id, channelId: channel.id });
+  const ts = delivery?.externalMessageId || "";
+  const slackChannel = String(delivery?.context.channel || cfg.channelId || "");
+  if (!cfg.botToken || !ts || !slackChannel) return { ok: false, skipped: true };
+  const edited = await callSlack(cfg.botToken, "chat.update", {
+    channel: slackChannel, ts, text: approvalFallbackText(approval),
+    blocks: approvalBlocks(approval, employee, { workflow }),
+  });
+  return { ok: edited.ok, ...(edited.error ? { error: edited.error } : {}) };
 }

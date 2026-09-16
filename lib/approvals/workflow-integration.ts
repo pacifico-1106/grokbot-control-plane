@@ -9,13 +9,27 @@ import type { ApprovalRequest, WorkflowProgress } from "@/lib/types";
 import { isAdminClassApproval } from "@/lib/admin-mcp/audit-class";
 import { assertNotSelfApproval } from "@/lib/admin-mcp/self-approval";
 import {
-  getWorkflowInstanceByApprovalId,
   handleWorkflowVote,
   isWorkflowApprovalComplete,
   getApprovalWorkflowProgress,
   initializeWorkflowForApproval,
 } from "@/lib/approval-workflow";
-import { resolveApproval as baseResolveApproval, getApprovalById } from "@/lib/data/approvals";
+import { resolveApprovalWithoutWorkflow as baseResolveApproval, getApprovalById } from "@/lib/data/approvals";
+import { isDemoMode } from "@/lib/mode";
+import { createSupabaseAdminClient } from "@/lib/supabase";
+import { withDemoWorkflowLock } from "@/lib/approval-workflow/lock";
+import { getBallotsByInstanceId, demoWorkflowVoterIsCurrent } from "@/lib/approval-workflow/data";
+import { evaluateQuorum } from "@/lib/approval-workflow/engine";
+
+export type WorkflowResolverOptions = {
+  revisionNote?: string;
+  grokBotAgentId?: string | null;
+  actorId?: string | null;
+  voterUserId?: string;
+  externalVoter?: { provider: "slack" | "telegram" | "line"; channelKey: string; userId: string };
+  /** Server-derived provider event ID, scoped to the authenticated channel. */
+  decisionId?: string;
+};
 
 export interface WorkflowResolveResult {
   ok: boolean;
@@ -44,12 +58,24 @@ export async function resolveApprovalWithWorkflow(
   status: "approved" | "rejected" | "revision_requested",
   resolvedBy: string,
   orgId: string,
-  opts: {
-    revisionNote?: string;
-    grokBotAgentId?: string | null;
-    actorId?: string | null;
-    voterUserId?: string;
-  } = {}
+  opts: WorkflowResolverOptions = {}
+): Promise<WorkflowResolveResult> {
+  const result = await (isDemoMode()
+    ? withDemoWorkflowLock(`resolve:${id}`, () => resolveWorkflow(id, status, resolvedBy, orgId, opts))
+    : resolveWorkflow(id, status, resolvedBy, orgId, opts));
+  if (result.ok && !result.workflowComplete && result.approval && result.progress) {
+    // Notification failure cannot undo an already committed vote or authorize execution.
+    try {
+      const { refreshWorkflowNotification } = await import("@/lib/notify/channels");
+      await refreshWorkflowNotification(result.approval, result.progress);
+    } catch { /* The status API remains the source of truth. No completion notification is sent. */ }
+  }
+  return result;
+}
+
+async function resolveWorkflow(
+  id: string, status: "approved" | "rejected" | "revision_requested", resolvedBy: string,
+  orgId: string, opts: WorkflowResolverOptions
 ): Promise<WorkflowResolveResult> {
   const approval = await getApprovalById(id, orgId);
   if (!approval) {
@@ -88,7 +114,9 @@ export async function resolveApprovalWithWorkflow(
     });
   }
 
-  const instance = await getWorkflowInstanceByApprovalId(id);
+  // Idempotent snapshot initialization is also required for tickets created by
+  // an older application. A DB failure must never mean "no workflow".
+  const { instance } = await initializeWorkflowForApproval(approval, approval.employeeId || null);
 
   if (!instance) {
     const resolved = await baseResolveApproval(id, status, resolvedBy, orgId, {
@@ -122,10 +150,22 @@ export async function resolveApprovalWithWorkflow(
     };
   }
 
-  const voterUserId = opts.voterUserId || opts.actorId || resolvedBy;
+  const voterUserId = isDemoMode() ? (opts.voterUserId || opts.actorId || resolvedBy) : (opts.voterUserId ?? opts.actorId ?? "");
+  if (opts.externalVoter && !opts.decisionId) return { ok: false, approval, workflowApplied: true,
+    workflowComplete: false, workflowApproved: false, workflowRejected: false, progress: null, reason: "workflow_event_id_required" };
   const vote = status === "approved" ? "approve" : "reject";
 
-  const voteResult = await handleWorkflowVote(id, voterUserId, vote);
+  // Production commits ballots, stage state, and base approval in one RPC.
+  // Demo also supports retrying the old terminal-instance / pending-ticket gap.
+  const recoverable = isDemoMode() && ["approved", "rejected"].includes(instance.status) &&
+    demoWorkflowVoterIsCurrent(orgId, voterUserId) &&
+    (await getBallotsByInstanceId(instance.id)).some(b => b.voterUserId === voterUserId && b.vote !== null);
+  const voteResult = recoverable
+    ? { voted: true, workflowComplete: true, workflowApproved: instance.status === "approved",
+        workflowRejected: instance.status === "rejected", progress: await getApprovalWorkflowProgress(id),
+        reason: "recovered", approval: undefined }
+    : await handleWorkflowVote(id, voterUserId, vote, { ...opts, orgId, actor: resolvedBy,
+        expectedStage: instance.finalGoPending ? "final_go" : instance.policySnapshot.stages[instance.currentStageIndex]?.id });
 
   if (!voteResult.voted) {
     return {
@@ -142,10 +182,10 @@ export async function resolveApprovalWithWorkflow(
 
   if (voteResult.workflowComplete) {
     const finalStatus = voteResult.workflowApproved ? "approved" : "rejected";
-    const resolved = await baseResolveApproval(id, finalStatus, resolvedBy, orgId, {
+    const resolved = voteResult.approval ?? (isDemoMode() ? await baseResolveApproval(id, finalStatus, resolvedBy, orgId, {
       grokBotAgentId: opts.grokBotAgentId,
       actorId: opts.actorId,
-    });
+    }) : null);
 
     return {
       ok: Boolean(resolved),
@@ -182,6 +222,15 @@ export async function canFulfillApproval(
     return { canFulfill: false, reason: "not_approved" };
   }
 
+  if (!isDemoMode()) {
+    const admin = createSupabaseAdminClient();
+    if (!admin) throw new Error("workflow_unavailable");
+    const { data, error } = await admin.rpc("approval_workflow_can_execute", { p_id: approval.id, p_org: approval.orgId });
+    if (error || typeof data !== "boolean") throw new Error("workflow_execution_check_failed");
+    return { canFulfill: data, reason: data ? "workflow_satisfied" : "workflow_not_approved" };
+  }
+  const initialized = await initializeWorkflowForApproval(approval, approval.employeeId || null);
+
   const workflowStatus = await isWorkflowApprovalComplete(approval.id);
 
   if (!workflowStatus.hasWorkflow) {
@@ -194,6 +243,20 @@ export async function canFulfillApproval(
 
   if (!workflowStatus.approved) {
     return { canFulfill: false, reason: "workflow_not_approved" };
+  }
+
+  const instance = initialized.instance!;
+  const ballots = await getBallotsByInstanceId(instance.id);
+  for (const [index, stage] of instance.policySnapshot.stages.entries()) {
+    const stageBallots = ballots.filter(b => b.stageId === stage.id && b.stageIndex === index && !b.isFinalGo)
+      .map(b => b.vote === "approve" && !demoWorkflowVoterIsCurrent(approval.orgId, b.voterUserId) ? { ...b, vote: null } : b);
+    if (!evaluateQuorum(stage.quorum, stageBallots).met || (stage.onReject === "fail_closed" && stageBallots.some(b => b.vote === "reject"))) {
+      return { canFulfill: false, reason: "workflow_authority_revoked" };
+    }
+  }
+  if (instance.finalGoPending || (instance.finalGoUserId && !ballots.some(b => b.isFinalGo && b.voterUserId === instance.finalGoUserId &&
+    b.vote === "approve" && demoWorkflowVoterIsCurrent(approval.orgId, b.voterUserId)))) {
+    return { canFulfill: false, reason: "workflow_final_go_required" };
   }
 
   return { canFulfill: true, reason: "workflow_approved" };

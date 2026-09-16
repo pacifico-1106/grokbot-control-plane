@@ -23,6 +23,8 @@ import type { ApprovalRequest } from "../types";
 import { generateTelegramRef } from "../approvals/tokens";
 import { assertNotSelfApproval } from "@/lib/admin-mcp/self-approval";
 import { isAdminClassApproval } from "@/lib/admin-mcp/audit-class";
+import { initializeWorkflowForApproval } from "@/lib/approval-workflow/resolve";
+import { resolveApprovalWithWorkflow, type WorkflowResolverOptions } from "@/lib/approvals/workflow-integration";
 
 function looksLikeUuid(value: string | null | undefined): boolean {
   return Boolean(
@@ -161,6 +163,7 @@ export async function createApproval(
       metadata: input.metadata,
     };
     const approval = await demoCreateApproval(demoInput);
+    await initializeWorkflowForApproval(approval, input.employeeId || null);
     return {
       approval,
       statusToken: approval.statusToken || statusToken,
@@ -298,6 +301,7 @@ export async function createApproval(
     metadata: metaUpdate,
   });
 
+  await initializeWorkflowForApproval(mapped, input.employeeId || null);
   return {
     approval: mapped,
     statusToken,
@@ -307,6 +311,17 @@ export async function createApproval(
 }
 
 export async function resolveApproval(
+  id: string, status: "approved" | "rejected" | "revision_requested", resolvedBy: string,
+  orgId?: string | null, opts: WorkflowResolverOptions = {}
+): Promise<ApprovalRequest | null> {
+  if (!id || !orgId) return null;
+  const result = await resolveApprovalWithWorkflow(id, status, resolvedBy, orgId, opts);
+  // Old callers only run fulfillment/notifications when a ticket actually resolves.
+  return result.ok && result.workflowComplete ? result.approval : null;
+}
+
+/** Internal finalization only. Production F8 finalization happens in the vote RPC. */
+export async function resolveApprovalWithoutWorkflow(
   id: string,
   status: "approved" | "rejected" | "revision_requested",
   resolvedBy: string,

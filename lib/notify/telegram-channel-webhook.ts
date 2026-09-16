@@ -1,3 +1,5 @@
+import { resolveApprovalWithWorkflow } from "@/lib/approvals/workflow-integration";
+import { initializeWorkflowForApproval } from "@/lib/approval-workflow/resolve";
 import { fulfillIfApproved } from "@/lib/approvals/fulfill";
 import { runApprovalResolveSideEffects } from "@/lib/approvals/resolve-side-effects";
 import {
@@ -93,6 +95,10 @@ export async function handleTelegramChannelUpdate(
       return { processed: true, ignored: true };
     }
     if (match![1] === "e") {
+      if ((await initializeWorkflowForApproval(approval!, approval!.employeeId || null)).instance) {
+        await answerTelegramCallbackForChannel(channel, query.id || "", "合議中の修正依頼は未対応です");
+        return { processed: true, ignored: true };
+      }
       const result = await promptTelegramRevisionForChannel(approval!, query.from!.id!, channel);
       await answerTelegramCallbackForChannel(
         channel,
@@ -104,7 +110,8 @@ export async function handleTelegramChannelUpdate(
     const decision = match![1] === "a" ? "approved" : "rejected";
     const actor = `telegram:${query.from!.id}`;
     try {
-      const updated = await resolveApproval(approval!.id, decision, actor, channel.orgId);
+      const result = await resolveApprovalWithWorkflow(approval!.id, decision, actor, channel.orgId, { decisionId: query.id ? `telegram:${channel.id}:${query.id}` : "", externalVoter: { provider: "telegram", channelKey: channel.id, userId: String(query.from!.id) } });
+      const updated = result.ok && result.workflowComplete ? result.approval : null;
       if (updated) {
         await fulfillIfApproved(updated, decision);
         const employee = await getEmployee(updated.employeeId, channel.orgId);
@@ -113,7 +120,7 @@ export async function handleTelegramChannelUpdate(
       await answerTelegramCallbackForChannel(
         channel,
         query.id || "",
-        updated ? (decision === "approved" ? "承認しました" : "却下しました") : "対象は処理済みです"
+        updated ? (decision === "approved" ? "承認しました" : "却下しました") : result.ok ? "投票を記録しました（合議は継続中です）" : "投票を記録できませんでした"
       );
     } catch (error) {
       if (isSelfApprovalDenied(error)) {
@@ -147,6 +154,7 @@ export async function handleTelegramChannelUpdate(
     await sendTelegramTextToChannel(channel, "対象が見つかりません", message.message_id);
     return { processed: true };
   }
+  if ((await initializeWorkflowForApproval(approval, approval.employeeId || null)).instance) return { processed: true, ignored: true };
   await updateApprovalTelegramState(approval, {
     awaitingRevisionFrom: null,
     awaitingRevisionChannelId: null,

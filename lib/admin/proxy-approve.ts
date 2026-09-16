@@ -17,8 +17,9 @@ import { mapApprovalRow } from "@/lib/data/mappers";
 import { getEmployee } from "@/lib/data/employees";
 import {
   demoGetApproval,
-  demoResolveApproval,
 } from "@/lib/data/demo-approvals-store";
+import { resolveApprovalWithWorkflow } from "@/lib/approvals/workflow-integration";
+import { initializeWorkflowForApproval } from "@/lib/approval-workflow/resolve";
 import type { ApprovalRequest, AuditAction } from "@/lib/types";
 
 export type ProxyApprovalMandate = "setup" | "support";
@@ -85,71 +86,6 @@ async function getApprovalByOrgId(
   return mapApprovalRow(data as Record<string, unknown>);
 }
 
-export type ResolveByOrgIdResult =
-  | { ok: true; approval: ApprovalRequest }
-  | { ok: false; code: "db_error"; message: string; debug?: string }
-  | { ok: false; code: "not_found_or_race" };
-
-async function resolveApprovalByOrgId(
-  approvalId: string,
-  targetOrgId: string,
-  status: "approved" | "rejected",
-  actor: ProxyApprovalActor
-): Promise<ResolveByOrgIdResult> {
-  if (isDemoMode()) {
-    const existing = await demoGetApproval(approvalId);
-    if (!existing || existing.orgId !== targetOrgId) {
-      return { ok: false, code: "not_found_or_race" };
-    }
-    if (existing.status !== "pending") {
-      return { ok: false, code: "not_found_or_race" };
-    }
-    const resolved = await demoResolveApproval(approvalId, status, actor.email);
-    if (!resolved) {
-      return { ok: false, code: "not_found_or_race" };
-    }
-    return { ok: true, approval: resolved };
-  }
-  
-  const admin = createSupabaseAdminClient();
-  if (!admin) {
-    return { ok: false, code: "db_error", message: "Supabase client not configured" };
-  }
-  
-  const now = new Date().toISOString();
-  
-  const { data, error } = await admin
-    .from("approval_requests")
-    .update({
-      status,
-      resolved_at: now,
-      resolved_by: null,
-    })
-    .eq("id", approvalId)
-    .eq("org_id", targetOrgId)
-    .eq("status", "pending")
-    .select("*")
-    .maybeSingle();
-  
-  if (error) {
-    const isProduction = process.env.NODE_ENV === "production";
-    return {
-      ok: false,
-      code: "db_error",
-      message: "データベースの更新に失敗しました",
-      debug: isProduction ? undefined : error.message,
-    };
-  }
-  
-  if (!data) {
-    return { ok: false, code: "not_found_or_race" };
-  }
-  
-  const mapped = mapApprovalRow(data as Record<string, unknown>);
-  mapped.resolvedBy = actor.email;
-  return { ok: true, approval: mapped };
-}
-
 export async function proxyResolveApproval(
   input: ProxyApproveInput
 ): Promise<ProxyApproveResult> {
@@ -195,31 +131,25 @@ export async function proxyResolveApproval(
     throw error;
   }
 
-  const resolveResult = await resolveApprovalByOrgId(
-    approvalId,
-    targetOrgId,
-    decision,
-    actor
-  );
-  
-  if (!resolveResult.ok) {
-    if (resolveResult.code === "db_error") {
-      return {
-        ok: false,
-        code: "resolve_db_error",
-        error: resolveResult.message,
-        ...(resolveResult.debug ? { debug: resolveResult.debug } : {}),
-      };
-    }
-    return {
-      ok: false,
-      code: "resolve_failed",
-      error: "承認処理に失敗しました（同時更新の可能性）",
-    };
+  const initialized = await initializeWorkflowForApproval(existing, existing.employeeId || null);
+  let memberId = actor.userId;
+  if (initialized.instance && !isDemoMode()) {
+    const admin = createSupabaseAdminClient();
+    if (!admin) return { ok: false, code: "workflow_unavailable" };
+    const { data, error } = await admin.from("org_members").select("id").eq("org_id", targetOrgId)
+      .eq("user_id", actor.userId).eq("status", "active").maybeSingle();
+    if (error) return { ok: false, code: "workflow_unavailable" };
+    // Platform authority does not grant a tenant quorum vote.
+    memberId = data?.id || "";
   }
-  
+  const resolveResult = await resolveApprovalWithWorkflow(approvalId, decision, actor.email, targetOrgId, {
+    actorId: input.resolver?.actorId ?? memberId, voterUserId: memberId,
+    grokBotAgentId: input.resolver?.grokBotAgentId,
+  });
+  if (!resolveResult.ok || !resolveResult.approval) {
+    return { ok: false, code: resolveResult.reason, error: "承認を記録できませんでした" };
+  }
   const updated = resolveResult.approval;
-  
   const decisionLabelJa = decision === "approved" ? "承認" : "却下";
   const mandateLabelJa = PROXY_MANDATE_LABELS_JA[mandate];
   const notePart = note ? ` / メモ: ${note}` : "";
@@ -235,6 +165,7 @@ export async function proxyResolveApproval(
     summary: `【プラットフォーム代行${decisionLabelJa}】${mandateLabelJa}: ${updated.title || updated.summary.slice(0, 60)}${notePart}`,
     metadata: {
       proxyApproval: true,
+      workflowComplete: resolveResult.workflowComplete,
       mandate,
       note: note || null,
       decision,
@@ -245,6 +176,9 @@ export async function proxyResolveApproval(
       jobId: updated.jobId,
     },
   });
+  if (!resolveResult.workflowComplete) {
+    return { ok: true, approval: updated, sideEffects: { workflowComplete: false, workflow: resolveResult.progress } };
+  }
   
   if (decision === "approved") {
     await fulfillApprovedAdmin(updated);

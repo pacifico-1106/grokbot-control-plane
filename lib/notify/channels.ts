@@ -8,7 +8,8 @@ import {
   resolveEmployeeApprovalChannel,
 } from "@/lib/data";
 import { buildConcentration, type ConcentrationReport } from "@/lib/employees/concentration";
-import type { ApprovalRequest, Employee } from "@/lib/types";
+import type { ApprovalRequest, Employee, WorkflowProgress } from "@/lib/types";
+import { getApprovalWorkflowProgress } from "@/lib/approval-workflow/resolve";
 /**
  * Org notification channels (Telegram / LINE / Slack).
  * Slack here is the approval *inbox* only. Conversation posting uses
@@ -32,7 +33,16 @@ import {
   editSlackApprovalForChannel,
   sendApprovalToSlackChannel,
   sendSlackTextToChannel,
+  editSlackWorkflowProgress,
+  type WorkflowProgressDisplay,
 } from "@/lib/notify/slack";
+
+function workflowDisplay(progress: WorkflowProgress | null): WorkflowProgressDisplay | null {
+  if (!progress) return null;
+  return { stageName: progress.currentStage?.nameJa || "最終Go", approved: progress.currentStage?.approved || 0,
+    pending: progress.currentStage?.pending || 0, quorum: progress.currentStage?.quorumDisplay || "",
+    finalGoPending: progress.finalGoPending };
+}
 
 export type NotificationDispatchResult = {
   ok: boolean;
@@ -63,11 +73,12 @@ export async function sendApprovalNotifications(
   const channel = await resolveEmployeeApprovalChannel(approval.orgId, employee);
   const results: NotificationDispatchResult[] = [];
   if (channel) {
+    const workflow = channel.provider === "slack" ? workflowDisplay(await getApprovalWorkflowProgress(approval.id)) : null;
     const sent = channel.provider === "telegram"
       ? await sendApprovalToTelegramChannel(approval, employee, channel)
       : channel.provider === "line"
         ? await sendApprovalToLineChannel(approval, employee, channel)
-        : await sendApprovalToSlackChannel(approval, employee, channel);
+        : await sendApprovalToSlackChannel(approval, employee, channel, { workflow });
     const result = { ...sent, provider: channel.provider, channelId: channel.id } as NotificationDispatchResult;
     results.push(result);
     await auditFailure(approval, result);
@@ -79,6 +90,15 @@ export async function sendApprovalNotifications(
     await auditFailure(approval, result);
   }
   return results;
+}
+
+/** Refresh the existing card without sending completion callbacks or issuing new actions. */
+export async function refreshWorkflowNotification(approval: ApprovalRequest, progress: WorkflowProgress): Promise<void> {
+  const { getEmployee } = await import("@/lib/data/employees");
+  const employee = await getEmployee(approval.employeeId, approval.orgId);
+  const channel = await resolveEmployeeApprovalChannel(approval.orgId, employee);
+  const display = workflowDisplay(progress);
+  if (channel?.provider === "slack" && display) await editSlackWorkflowProgress(approval, employee, channel, display);
 }
 
 export async function updateApprovalNotificationMessages(

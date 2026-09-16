@@ -6,6 +6,7 @@ let binding: Record<string,unknown>;
 let billed = true;
 let claims = 0, effects = 0;
 let claimState = "";
+let workflowAllowed = true, workflowError = false, revokeWorkflowAfterClaim = false;
 const approval = (): ApprovalRequest => ({ id: "approval", orgId: "org", employeeId: "employee", credentialId: "credential",
  title: "test", purpose: "support", summary: "test", risk: "low", status: "approved", tool: "comm.reply", jobId: "job",
  revisionNote:null, revisionCount:0, parentApprovalId:null, telegramRef:null, telegramMessageId:null,
@@ -24,6 +25,10 @@ mock.module("@/lib/supabase", () => ({ createSupabaseAdminClient: () => ({
   } }; return query;
  },
  rpc: async (name: string, args: Record<string,unknown>) => {
+   if (name === "approval_workflow_can_execute") return {
+    data: workflowAllowed && !(revokeWorkflowAfterClaim && claims > 0),
+    error: workflowError ? { message: "fixture DB outage" } : null,
+   };
    if (name === "claim_approval_execution") {
     claims++;
     if (claimState && claimState !== "failed") return {data:{state:claimState},error:null};
@@ -41,8 +46,21 @@ beforeEach(() => {
  credential={secret_hash:"hash",revoked_at:null,expires_at:null};
  binding={status:"linked",credential_fingerprint:"hash"};
  billed=true;claims=0;effects=0;claimState="";
+ workflowAllowed=true;workflowError=false;revokeWorkflowAfterClaim=false;
 });
 const send = async () => { effects++; return {ok:true}; };
+test("incomplete workflows and DB failures fail closed before claim or external effects", async () => {
+ workflowAllowed=false;
+ await expect(executeApproval(approval(),send)).rejects.toThrow("workflow_not_approved");
+ workflowAllowed=true;workflowError=true;
+ await expect(executeApproval(approval(),send)).rejects.toThrow("workflow_execution_check_failed");
+ expect(claims).toBe(0);expect(effects).toBe(0);
+});
+test("workflow authority is checked again after claim before any external effect", async () => {
+ revokeWorkflowAfterClaim=true;
+ await expect(executeApproval(approval(),send)).rejects.toThrow("workflow_not_approved");
+ expect(claims).toBe(1);expect(claimState).toBe("failed");expect(effects).toBe(0);
+});
 test("valid execution succeeds; concurrent callers share one claim and cause one external effect", async () => {
  const results=await Promise.allSettled([executeApproval(approval(),send),executeApproval(approval(),send)]);
  expect(results.filter(r=>r.status==="fulfilled").length).toBe(1);

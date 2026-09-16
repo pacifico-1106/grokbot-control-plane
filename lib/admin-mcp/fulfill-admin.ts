@@ -1,5 +1,6 @@
 import { isDemoMode } from "@/lib/mode";
 import { executeApproval } from "@/lib/approvals/execution";
+import { fulfillWorkflowMutation } from "@/lib/approval-workflow/admin";
 import { setOrgInternalAudienceRule, validateInternalAudienceRulePatch } from "@/lib/data/internal-audience-rule";
 /**
  * Fulfill admin MCP tickets after a different human approves.
@@ -1308,6 +1309,10 @@ async function fulfillApprovedAdminCore(
       }
       case "stuckWatch.patch":
         fulfillment = await fulfillStuckWatch(approval, args);
+        break;
+      case "approvalWorkflow.patch":
+      case "approvalWorkflow.remind":
+        fulfillment = await fulfillWorkflowMutation(approval, args, tool);
         break;
       case "setup.slackAdapter.setBotToken":
         fulfillment = await fulfillSlackAdapterSetBotToken(approval, args);

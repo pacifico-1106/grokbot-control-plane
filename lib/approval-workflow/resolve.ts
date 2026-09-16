@@ -12,10 +12,16 @@ import type {
   ApprovalRequest,
   ApprovalWorkflowBallot,
   ApprovalWorkflowInstance,
-  OrgApprovalWorkflowPolicy,
   WorkflowProgress,
 } from "@/lib/types";
 import { appendAuditEvent } from "@/lib/data/audit";
+import { isDemoMode } from "@/lib/mode";
+import { createSupabaseAdminClient } from "@/lib/supabase";
+import { mapApprovalRow } from "@/lib/data/mappers";
+import { demoGetApproval } from "@/lib/data/demo-approvals-store";
+import { assertNotSelfApproval } from "@/lib/admin-mcp/self-approval";
+import { withDemoWorkflowLock } from "./lock";
+import { validateApprovalWorkflowPolicy } from "./validate";
 import {
   castBallot,
   createBallotsForStage,
@@ -26,6 +32,11 @@ import {
   getEffectiveApprovalWorkflowPolicy,
   getWorkflowInstanceByApprovalId,
   updateWorkflowInstance,
+  mapInstanceRow,
+  isDemoWorkflowInitialized,
+  markDemoWorkflowInitialized,
+  getDemoWorkflowVoterBinding,
+  demoWorkflowVoterIsCurrent,
 } from "./data";
 import {
   buildWorkflowProgress,
@@ -46,6 +57,32 @@ export async function initializeWorkflowForApproval(
   approval: ApprovalRequest,
   employeeId: string | null
 ): Promise<WorkflowInitResult> {
+  if (!isDemoMode()) {
+    const admin = createSupabaseAdminClient();
+    if (!admin) throw new Error("workflow_unavailable");
+    const { data, error } = await admin.rpc("initialize_approval_workflow", { p_id: approval.id, p_org: approval.orgId });
+    if (error || typeof data !== "boolean") throw new Error("workflow_initialization_failed");
+    if (!data) return { created: false, instance: null, ballots: [], progress: null };
+    const instance = await getWorkflowInstanceByApprovalId(approval.id);
+    if (!instance || instance.orgId !== approval.orgId) throw new Error("workflow_instance_missing");
+    const ballots = await getBallotsByInstanceId(instance.id);
+    return { created: false, instance, ballots, progress: buildWorkflowProgress(instance, ballots) };
+  }
+  return withDemoWorkflowLock(`init:${approval.id}`, async () => {
+    const existing = await getWorkflowInstanceByApprovalId(approval.id);
+    if (existing) {
+      if (existing.orgId !== approval.orgId) throw new Error("workflow_org_mismatch");
+      const ballots = await getBallotsByInstanceId(existing.id);
+      return { created: false, instance: existing, ballots, progress: buildWorkflowProgress(existing, ballots) };
+    }
+    if (isDemoWorkflowInitialized(approval.id)) return { created: false, instance: null, ballots: [], progress: null };
+    const result = await initializeDemoWorkflow(approval, employeeId);
+    markDemoWorkflowInitialized(approval.id);
+    return result;
+  });
+}
+
+async function initializeDemoWorkflow(approval: ApprovalRequest, employeeId: string | null): Promise<WorkflowInitResult> {
   const effective = await getEffectiveApprovalWorkflowPolicy(
     approval.orgId,
     employeeId
@@ -54,6 +91,8 @@ export async function initializeWorkflowForApproval(
   if (!effective.policy) {
     return { created: false, instance: null, ballots: [], progress: null };
   }
+
+  if (!validateApprovalWorkflowPolicy(effective.policy as unknown as Record<string, unknown>).ok) throw new Error("workflow_invalid_policy");
 
   if (!shouldCreateWorkflowInstance(effective.policy, approval.tool ?? null, approval.purpose)) {
     return { created: false, instance: null, ballots: [], progress: null };
@@ -66,7 +105,7 @@ export async function initializeWorkflowForApproval(
   });
 
   if (!instance) {
-    return { created: false, instance: null, ballots: [], progress: null };
+    throw new Error("workflow_initialization_failed");
   }
 
   const firstStage = effective.policy.stages[0];
@@ -98,6 +137,7 @@ export async function initializeWorkflowForApproval(
 }
 
 export interface WorkflowVoteResult {
+  approval?: ApprovalRequest;
   voted: boolean;
   ballot: ApprovalWorkflowBallot | null;
   instance: ApprovalWorkflowInstance | null;
@@ -111,8 +151,35 @@ export interface WorkflowVoteResult {
 export async function handleWorkflowVote(
   approvalId: string,
   voterUserId: string,
-  vote: "approve" | "reject"
+  vote: "approve" | "reject",
+  opts: { orgId?: string; actor?: string; actorId?: string | null; grokBotAgentId?: string | null;
+    externalVoter?: { provider: "slack" | "telegram" | "line"; channelKey: string; userId: string };
+    decisionId?: string; expectedStage?: string } = {}
 ): Promise<WorkflowVoteResult> {
+  if (!isDemoMode()) {
+    const admin = createSupabaseAdminClient();
+    if (!admin || !opts.orgId) throw new Error("workflow_unavailable");
+    const { data, error } = await admin.rpc("cast_approval_workflow_vote", {
+      p_id: approvalId, p_org: opts.orgId, p_voter: voterUserId, p_vote: vote,
+      p_actor: opts.actor || voterUserId, p_actor_id: opts.actorId ?? null, p_agent: opts.grokBotAgentId ?? null,
+      p_provider: opts.externalVoter?.provider ?? null, p_channel: opts.externalVoter?.channelKey ?? null,
+      p_external: opts.externalVoter?.userId ?? null,
+      p_decision_id: opts.decisionId ?? null, p_expected_stage: opts.expectedStage ?? null,
+    });
+    if (error || !data) throw new Error(error?.message === "self_approval_denied" ? "self_approval_denied" : "workflow_vote_failed");
+    const instance = data.instance ? mapInstanceRow(data.instance) : null;
+    const approval = data.approval ? mapApprovalRow(data.approval) : undefined;
+    const ballots = instance ? await getBallotsByInstanceId(instance.id) : [];
+    return { voted: data.accepted === true, ballot: null, instance, approval,
+      workflowComplete: approval?.status === "approved" || approval?.status === "rejected",
+      workflowApproved: approval?.status === "approved", workflowRejected: approval?.status === "rejected",
+      progress: instance ? buildWorkflowProgress(instance, ballots) : null, reason: String(data.reason || "workflow_vote_failed") };
+  }
+  const voter = opts.externalVoter ? getDemoWorkflowVoterBinding(opts.orgId || "", opts.externalVoter) : voterUserId;
+  return withDemoWorkflowLock(`vote:${approvalId}`, () => handleDemoWorkflowVote(approvalId, voter, vote, opts));
+}
+
+async function handleDemoWorkflowVote(approvalId: string, voterUserId: string, vote: "approve" | "reject", opts: {decisionId?: string; expectedStage?: string}): Promise<WorkflowVoteResult> {
   const instance = await getWorkflowInstanceByApprovalId(approvalId);
 
   if (!instance) {
@@ -129,6 +196,12 @@ export async function handleWorkflowVote(
   }
 
   const policy = instance.policySnapshot;
+  if (!demoWorkflowVoterIsCurrent(instance.orgId, voterUserId)) return {
+    voted: false, ballot: null, instance, workflowComplete: false, workflowApproved: false,
+    workflowRejected: false, progress: null, reason: "voter_not_authorized",
+  };
+  const ticket = await demoGetApproval(approvalId);
+  if (ticket) assertNotSelfApproval(ticket.metadata, { actorId: voterUserId });
   let stageId: string;
 
   if (instance.finalGoPending) {
@@ -149,6 +222,11 @@ export async function handleWorkflowVote(
     }
     stageId = currentStage.id;
   }
+  const duplicate = opts.decisionId && (await getBallotsByInstanceId(instance.id)).some(b => b.decisionId === opts.decisionId);
+  if (duplicate || (opts.expectedStage && opts.expectedStage !== stageId)) return {
+    voted: false, ballot: null, instance, workflowComplete: false, workflowApproved: false, workflowRejected: false,
+    progress: null, reason: duplicate ? "duplicate_decision" : "workflow_stage_changed",
+  };
 
   const existingBallot = await getBallotForVoter(instance.id, stageId, voterUserId);
   const canVote = canVoterResolve(instance, voterUserId, existingBallot);
@@ -181,7 +259,7 @@ export async function handleWorkflowVote(
     };
   }
 
-  const updatedBallot = await castBallot(existingBallot.id, vote);
+  const updatedBallot = await castBallot(existingBallot.id, vote, opts.decisionId);
   if (!updatedBallot) {
     const allBallots = await getBallotsByInstanceId(instance.id);
     return {

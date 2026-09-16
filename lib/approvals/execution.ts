@@ -5,6 +5,7 @@ import { createSupabaseAdminClient } from "@/lib/supabase";
 import { mapApprovalRow } from "@/lib/data/mappers";
 import { demoGetApproval } from "@/lib/data/demo-approvals-store";
 import { assertApprovalExecutionAuthority } from "./execution-authority";
+import { canFulfillApproval } from "./workflow-integration";
 
 type Result = { ok: boolean; error?: string };
 type State = "running" | "succeeded" | "failed" | "uncertain";
@@ -19,6 +20,8 @@ export async function executeApproval<T extends Result>(
   approval: ApprovalRequest, execute: () => Promise<T | null>
 ): Promise<T | null> {
   await assertApprovalExecutionAuthority(approval);
+  const workflow = await canFulfillApproval(approval);
+  if (!workflow.canFulfill) throw new Error(workflow.reason);
   const claimId = randomUUID();
   const demoKey = `${approval.orgId}:${approval.id}`;
   const admin = isDemoMode() ? null : createSupabaseAdminClient();
@@ -48,7 +51,11 @@ export async function executeApproval<T extends Result>(
     });
     if (error || !data) throw new Error("approval_execution_outcome_unknown");
   };
-  try { await assertApprovalExecutionAuthority(approval); }
+  try {
+    await assertApprovalExecutionAuthority(approval);
+    const currentWorkflow = await canFulfillApproval(approval);
+    if (!currentWorkflow.canFulfill) throw new Error(currentWorkflow.reason);
+  }
   catch (error) { await finish("failed"); throw error; }
   let result: T | null;
   try { result = await execute(); }

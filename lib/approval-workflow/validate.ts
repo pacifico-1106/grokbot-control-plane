@@ -27,11 +27,12 @@ function isValidQuorumRule(rule: unknown): rule is QuorumRule {
   const r = rule as Record<string, unknown>;
 
   if (r.type === "any") return true;
-  if (r.type === "count" && typeof r.n === "number" && r.n >= 1) return true;
+  if (r.type === "count" && typeof r.n === "number" && Number.isSafeInteger(r.n) && r.n >= 1) return true;
   if (
     r.type === "ratio" &&
     typeof r.numerator === "number" &&
     typeof r.denominator === "number" &&
+    Number.isSafeInteger(r.numerator) && Number.isSafeInteger(r.denominator) &&
     r.numerator >= 1 &&
     r.denominator >= 1 &&
     r.numerator <= r.denominator
@@ -57,6 +58,7 @@ function isValidLane(lane: unknown, index: number): ValidationError[] {
   if (typeof l.id !== "string" || !l.id.trim()) {
     errors.push({ code: "missing_lane_id", path: `${path}.id`, message: "stage id is required" });
   }
+  if (l.id === "final_go") errors.push({ code: "reserved_stage_id", path: `${path}.id`, message: "final_go is reserved" });
 
   if (typeof l.nameJa !== "string" || !l.nameJa.trim()) {
     errors.push({ code: "missing_lane_name", path: `${path}.nameJa`, message: "stage nameJa is required" });
@@ -68,12 +70,18 @@ function isValidLane(lane: unknown, index: number): ValidationError[] {
       path: `${path}.voterUserIds`,
       message: "stage must have at least one voter",
     });
-  } else if (l.voterUserIds.some((v: unknown) => typeof v !== "string" || !v)) {
+  } else if (l.voterUserIds.some((v: unknown) => typeof v !== "string" || !v.trim() || v !== v.trim())) {
     errors.push({
       code: "invalid_voter_id",
       path: `${path}.voterUserIds`,
       message: "all voter ids must be non-empty strings",
     });
+  }
+  if (Array.isArray(l.voterUserIds) && new Set(l.voterUserIds).size !== l.voterUserIds.length) {
+    errors.push({ code: "duplicate_voter", path: `${path}.voterUserIds`, message: "voters must be unique" });
+  }
+  if (isValidQuorumRule(l.quorum) && l.quorum.type === "count" && Array.isArray(l.voterUserIds) && l.quorum.n > l.voterUserIds.length) {
+    errors.push({ code: "unreachable_quorum", path: `${path}.quorum`, message: "count exceeds voters" });
   }
 
   if (!isValidQuorumRule(l.quorum)) {
@@ -120,6 +128,8 @@ export function validateApprovalWorkflowPolicy(
     for (let i = 0; i < policy.stages.length; i++) {
       errors.push(...isValidLane(policy.stages[i], i));
     }
+    const ids = policy.stages.map((s: unknown) => s && typeof s === "object" ? String((s as Record<string, unknown>).id).trim() : undefined);
+    if (new Set(ids).size !== ids.length) errors.push({ code: "duplicate_stage", path: "stages", message: "stage IDs must be unique" });
   }
 
   if (policy.finalGoUserId !== undefined && policy.finalGoUserId !== null) {
@@ -137,6 +147,11 @@ export function validateApprovalWorkflowPolicy(
       errors.push({ code: "invalid_match", path: "match", message: "match must be an object" });
     } else {
       const match = policy.match as Record<string, unknown>;
+      for (const key of ["tools", "purposes"]) {
+        if (Array.isArray(match[key]) && (match[key] as unknown[]).some(v => typeof v !== "string" || !v.trim())) {
+          errors.push({ code: "invalid_match_value", path: `match.${key}`, message: "match entries must be non-empty strings" });
+        }
+      }
       if (match.tools !== undefined && !Array.isArray(match.tools)) {
         errors.push({ code: "invalid_match_tools", path: "match.tools", message: "match.tools must be an array" });
       }

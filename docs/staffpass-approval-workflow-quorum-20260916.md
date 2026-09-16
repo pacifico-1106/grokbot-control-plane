@@ -37,7 +37,7 @@ type QuorumRule =
 interface ApprovalLane {
   id: string;                                    // lane_consensus / lane_final
   nameJa: string;
-  voterUserIds: string[];                        // Slack/Telegram/LINE user ids or staffpass member ids（実装で統一）
+  voterUserIds: string[];                        // Staffpass org_members.id。チャットIDは別の本人対応表で照合
   quorum: QuorumRule;
   // reject が1つでも即 reject か、定足数だけ見るか
   onReject: "fail_closed" | "count_as_vote";     // P0推奨: fail_closed
