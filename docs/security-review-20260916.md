@@ -14,6 +14,14 @@
 
 参照: [最新main](https://github.com/pacifico-1106/grokbot-control-plane/commit/add508d14d0eb28bda2a2bb8399e2ad5a3a08ea7)、[前回からの差分](https://github.com/pacifico-1106/grokbot-control-plane/compare/b1e616c8c3817c653c6560bc6494e8746d877347...add508d14d0eb28bda2a2bb8399e2ad5a3a08ea7)。
 
+## PR作成時の再照合
+
+PR作成直前にmainが `033e69f`（PR #79: Admin MCP fulfillment結果をemployee MCPのpollへ追加）へ進んでいたため、同じ修正ブランチへ統合した。`lib/mcp/tools.test.ts`のimport競合を解消し、URL取得fixtureと新しいpollテストの両方を残した。
+
+新しいpoll経路は`oneTimeSecret`をそのまま返すため、そのまま統合するとR3/R8の保護を迂回する。状態・秘密以外の履行結果・自動履行は維持し、秘密が未取得の場合は`resultRetrieval`に管理MCPのエンドポイント・元のtool・approvalIdを返し、`pollHint=reinvoke_with_approvalId`で管理資格情報による取得を案内する。秘密は元の管理資格情報で一度だけ取得し、取得後のpollは`fulfilled`となる。
+
+**#79で追加された「employee MCPのpollから管理秘密を受け取る」契約は変更になる。** 当該クライアントの対応を配備前に確認する。別世代の管理資格情報による取得拒否、pollの繰り返しでも秘密を返さないこと、正しい管理資格情報での一度きりの取得を統合テストで確認した。アプリ公開・migrationの適用は引き続き保留。
+
 ## 修正内容とレビュー結果
 
 | ID | 問題・影響 | 今回の変更 | 検証・限界 |
@@ -41,7 +49,7 @@
 実環境の秘密・dotenvを継承しないテストランナーを追加。個々のファイルを別プロセスで実行し、fetch/DNS/HTTPSの非fixture通信を検出する。Slack/LINEテストは実APIへ送らず明示的なfixtureを利用する。
 
 - 修正前: 87ファイル中85ファイルが通過。2ファイルは架空tokenで非fixture通信を試みるため遮断された。テスト用通信fixtureを明示して修正。
-- 修正後: 95ファイル、885テスト成功、失敗0。
+- 修正後: 95ファイル、889テスト成功、失敗0。
 - 本番形式ビルド: Node 24 / Next.js 15.5.23、コンパイル・lint/型検査・47ページ生成を完了。既存の警告は配備手順を参照。
 - TypeScript: `tsc --noEmit` 成功。既存テストの不足したBun matcher宣言、旧型のfixtureも現行型に合わせた。アプリの型を緩めたりテストを型検査から除外したりしていない。
 - PostgreSQL 16: 使い捨てクラスタ・Unix socketのみでschema＋既存マイグレーション＋追加migrationを適用。service_roleの正常系、anon/authenticatedの追加RPC/table拒否、対象組織・状態・世代・起票者拒否、秘密復活防止、並列claim/consume、再適用を確認。

@@ -1,3 +1,4 @@
+import { redactMetadata } from "@/lib/data/redaction";
 /**
  * Staffpass remote MCP tool surface (narrow control-plane only).
  * Confirm/send/order always stop for human approval via shared Gateway invoke.
@@ -22,6 +23,9 @@ import {
   runEmployeeStuckList,
   runEmployeeStuckRetry,
 } from "@/lib/stuck-watch/employee-handlers";
+import { isAdminClassApproval } from "@/lib/admin-mcp/audit-class";
+import { parseAdminFulfillment } from "@/lib/admin-mcp/fulfill-admin";
+import { parseFulfillment } from "@/lib/approvals/fulfill";
 
 export const MCP_PROTOCOL_VERSION = "2024-11-05";
 export const MCP_SERVER_NAME = "staffpass";
@@ -152,7 +156,7 @@ export const STAFFPASS_MCP_TOOLS: McpToolDef[] = [
   {
     name: "staffpass_get_approval_status",
     description:
-      "Poll a human approval ticket with approvalId + statusToken (same as GET /api/approvals/status). Returns pending|approved|rejected|revision_requested|expired and pollHint. On revision_requested, revise per revisionNote and re-invoke with the same jobId and parentApprovalId.",
+      "Poll a human approval ticket with approvalId + statusToken (same as GET /api/approvals/status). Returns pending|approved|rejected|revision_requested|expired and pollHint. When status=approved and the action has been auto-fulfilled (by the approval webhook), the fulfillment result is included in the response with pollHint=fulfilled. Admin credential secrets are never returned by this employee MCP: when resultRetrieval is present, authenticate to /api/mcp/admin and re-invoke the indicated admin tool with approvalId. If pollHint=reinvoke_with_approvalId, re-invoke with approvalId. On revision_requested, revise per revisionNote and re-invoke with the same jobId and parentApprovalId.",
     inputSchema: {
       type: "object",
       properties: {
@@ -443,6 +447,63 @@ export async function callStaffpassMcpTool(
         || approval.status === "revision_requested"
           ? approval.status
           : "pending";
+
+      // Polling capabilities expose status and non-secret results. Credential
+      // retrieval still requires the original admin identity and atomic consume.
+      let fulfillmentResult: Record<string, unknown> | null = null;
+      let adminResultRequired = false;
+      if (status === "approved") {
+        if (isAdminClassApproval(approval)) {
+          const adminFulfill = parseAdminFulfillment(approval.metadata);
+          if (adminFulfill?.ok) {
+            adminResultRequired = Boolean(adminFulfill.oneTimeSecret);
+            fulfillmentResult = {
+              fulfilled: true,
+              tool: adminFulfill.tool,
+              ...(adminFulfill.employeeId ? { employeeId: adminFulfill.employeeId } : {}),
+              ...(adminFulfill.secretPrefix ? { secretPrefix: adminFulfill.secretPrefix } : {}),
+              ...(adminFulfill.orgId ? { orgId: adminFulfill.orgId } : {}),
+              ...(adminFulfill.adminAgentId ? { adminAgentId: adminFulfill.adminAgentId } : {}),
+              ...(adminFulfill.partyId ? { partyId: adminFulfill.partyId } : {}),
+              ...(adminFulfill.channelId ? { channelId: adminFulfill.channelId } : {}),
+              ...(adminFulfill.draft ? { draft: adminFulfill.draft } : {}),
+              ...(adminFulfill.nextStepJa ? { nextStepJa: adminFulfill.nextStepJa } : {}),
+              ...(adminFulfill.noticeJa ? { noticeJa: adminFulfill.noticeJa } : {}),
+              ...(adminFulfill.ownerUserId ? { ownerUserId: adminFulfill.ownerUserId } : {}),
+              ...(adminFulfill.ownerEmail ? { ownerEmail: adminFulfill.ownerEmail } : {}),
+              ...(adminFulfill.trialEndsAt !== undefined ? { trialEndsAt: adminFulfill.trialEndsAt } : {}),
+              ...(adminFulfill.integrationMode ? { integrationMode: adminFulfill.integrationMode } : {}),
+              ...(adminFulfill.summaryJa ? { summaryJa: adminFulfill.summaryJa } : {}),
+            };
+          } else if (adminFulfill && !adminFulfill.ok) {
+            fulfillmentResult = {
+              fulfilled: true,
+              ok: false,
+              error: adminFulfill.error,
+            };
+          }
+        } else {
+          // Gateway invoke tools: check for fulfillment result
+          const invokeFulfill = parseFulfillment(approval.metadata);
+          if (invokeFulfill?.ok) {
+            fulfillmentResult = {
+              fulfilled: true,
+              delivery: invokeFulfill.delivery,
+              ...(invokeFulfill.channel ? { channel: invokeFulfill.channel } : {}),
+              ...(invokeFulfill.ts ? { ts: invokeFulfill.ts } : {}),
+              ...(invokeFulfill.id ? { id: invokeFulfill.id } : {}),
+              ...(invokeFulfill.surface ? { surface: invokeFulfill.surface } : {}),
+            };
+          } else if (invokeFulfill && !invokeFulfill.ok) {
+            fulfillmentResult = {
+              fulfilled: true,
+              ok: false,
+              error: invokeFulfill.error,
+            };
+          }
+        }
+      }
+
       return toolResult({
         ok: true,
         demo: runtimeModeLabel() === "demo",
@@ -461,14 +522,20 @@ export async function callStaffpassMcpTool(
         revisionNote: approval.revisionNote,
         revisionCount: approval.revisionCount,
         parentApprovalId: approval.parentApprovalId,
+        ...(fulfillmentResult ? { fulfillment: redactMetadata(fulfillmentResult) } : {}),
+        ...(adminResultRequired ? { resultRetrieval: {
+          endpoint: "/api/mcp/admin", tool: fulfillmentResult?.tool, approvalId: approval.id, requiresAdminCredential: true,
+        } } : {}),
         pollHint:
           status === "pending"
             ? "continue_polling"
             : status === "approved"
-              ? "reinvoke_with_approvalId"
+              ? fulfillmentResult && !adminResultRequired
+                ? "fulfilled"
+                : "reinvoke_with_approvalId"
               : status === "revision_requested"
                 ? `Revise the artifact per revisionNote and re-invoke with the same jobId and parentApprovalId=${approval.id}.`
-              : "abort_job",
+                : "abort_job",
       });
     }
     case "staffpass_health": {

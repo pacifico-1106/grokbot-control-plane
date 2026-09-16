@@ -2,7 +2,7 @@
 
 ## 現在の状態
 
-`codex/security-review-fixes-20260916` は `add508d14d0eb28bda2a2bb8399e2ad5a3a08ea7` から作ったローカル修正版。本番には未適用。レビュー結果は [security-review-20260916.md](security-review-20260916.md)。
+`codex/security-review-fixes-20260916` は `add508d14d0eb28bda2a2bb8399e2ad5a3a08ea7` から作り、PR作成時にmain `033e69f`（#79）を統合した修正版。本番には未適用。レビュー結果は [security-review-20260916.md](security-review-20260916.md)。
 
 このブランチはアプリと追加DB関数をセットで扱う。従来版の `20260910000000_authorization_boundaries` を混ぜない。今回のmigrationは既存public権限のrevokeや既存FK追加を含まない。手動適用された列・設定を消す変更もない。
 
@@ -23,7 +23,7 @@
 
 1. 最新mainを再fetchし、基点から進んだ差分を確認する。進んでいれば別worktree上でこのブランチを統合し、変更された機能のテストを再実行する。元の未コミット作業をreset/stash/上書きしない。
 2. 管理者が [read-only事前確認SQL](../supabase/security-review-preflight.sql) を実環境で実行する。関数の旧オーバーロード、RLS/Viewの実効権限、手動GRANT・default privilege・直接DB利用サービスを確認する。SQL結果の秘密値や個人情報は共有しない。さらにStorageのbucket公開/ポリシー/所有者、署名URLの発行元と期限を確認する。このSQLだけで安全とは判定しない。
-3. 現運営者のAuth/owner照合、既存の管理MCP結果取得クライアント、`internalAudienceRule.patch`承認済み未履行チケット、世代を持たない旧チケットの処置を決める。キャンセル・再起票・失効や実キーの再発行は別途承認対象。
+3. #79のpoll結果から管理秘密を読むクライアントは、`resultRetrieval`の案内に従い管理MCPで一度きりの取得を行う方式へ対応する。状態と秘密以外のpoll結果は維持する。現運営者のAuth/owner照合、既存の管理MCP結果取得クライアント、`internalAudienceRule.patch`承認済み未履行チケット、世代を持たない旧チケットの処置を決める。キャンセル・再起票・失効や実キーの再発行は別途承認対象。
 4. 本番と分離したDB/Storage/provider sandboxで、**追加DB migration → 新アプリ**の順に適用する。既存版でもDB拡張後にログイン/書込みが続けられること、新版で下記受入確認が通ることを確認する。外部連携のテストは許可されたsandboxのみ。
 5. 本番適用の別途承認後、`20260916000000_approval_execution_security.sql` を適用して4 RPCとclaim tableのACLを確認する。アプリだけ先行するとmissing RPCで履行が停止する。設定不備時に旧ロジックへ黙ってfallbackさせない。
 6. 旧バージョンの承認処理・W2・Gateway実行が残ったまま新バージョンへ切り替えない。旧コードは新claimを取得しないため、混在期間の排他は保証できない。配備担当が処理受付の保留・in-flight処理の完了・Cron切替の方法を具体化し、既存運用への影響を承認してから実施する。無停止を未検証のまま約束しない。
@@ -65,4 +65,4 @@ node scripts/build-local.mjs
 
 `build-local.mjs`はdotenvファイルを検出すると停止し、秘密情報を継承せず本番形式のビルドを行う。既存Google Fontsのダウンロードが必要な場合がある。実DB接続や本番への配備ではない。
 
-最終検証: 95ファイル・885テスト成功、失敗0。型検査とビルドも成功（47ページ生成）。既存の未使用変数、複数lockfileによるworkspace root推定、webpack cacheのサイズ警告は残る。テスト結果とビルドは本番の無影響の保証ではなく、配備前のローカル検証結果である。
+最終検証: 95ファイル・889テスト成功、失敗0。型検査とビルドも成功（47ページ生成）。既存の未使用変数、複数lockfileによるworkspace root推定、webpack cacheのサイズ警告は残る。テスト結果とビルドは本番の無影響の保証ではなく、配備前のローカル検証結果である。
