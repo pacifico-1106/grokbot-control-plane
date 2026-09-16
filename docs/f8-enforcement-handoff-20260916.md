@@ -1,5 +1,13 @@
 # F8: 合議の実行制約・DB排他制御の接続
 
+2026-09-16 追記（本番適用後の履歴整合）: #81は `4f08846` でmainへ合流済み。依頼者の報告では、FIXED／分割版SQLとVercel Productionの配備は完了し、ポリシーは引き続き未設定。今回の追従PRは **本番適用済みのUNIQUE CONSTRAINT版への履歴整合のみ** で、本番への再migrationを要求しない。
+
+`org_members` / `approval_requests` / `approval_workflow_instances` の `(id, org_id)` は明示的な、遅延不可のUNIQUE CONSTRAINTに統一。カタログを `IF NOT EXISTS` で確認し、同じ列の制約が既にあれば別名でも保持する。旧index・既存データは削除せず、SQLのドル引用を `$f8$` に揃える。参照boxのFIXED原本・分割版はこの作業環境から参照できず、全文照合および本番DBへの接続は未実施。
+
+追従PRの検証: 102ファイル・987テストと型検査が成功。`python3 scripts/test-db-local.py --f8-parent-state <state>` を `fresh` / `legacy-indexes` / `mismatched-indexes` / `existing-constraints` の4状態で実行し、各一時DBで3制約の存在、既存制約・indexの保持、再適用時の非重複、#80/F8の権限・並行処理を確認した。既存FK・RLS・RPC・triggerの定義はドル引用以外に変更していない。SQL Editor上での分割実行は未検証。
+
+この追従PRでもポリシー・voter bindingsを書き込まず、F8を有効化しない。マージは木村さんのレビュー → 安藤さん経由のユーザー確認後に判断する。以下は#81作成時点の実装・検証・配備計画の記録であり、本番再適用の指示ではない。
+
 対象は main `2a4e01945d4f233a7f17b15cfeffd254bed400b3`（旧 #78 合流後）からの新規ブランチ。旧 #78 ブランチは更新しない。
 本変更はレビュー待ちであり、本番有効化・本番 migration 適用・プリセット適用を行っていない。どのテナントにもポリシーや投票者対応表を書き込んでいない。
 

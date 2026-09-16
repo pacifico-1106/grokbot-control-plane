@@ -1,14 +1,30 @@
 -- Apply before the matching application. No tenant policy or binding is written.
 -- Existing inconsistent rows fail validation; this migration never repairs/deletes data.
+-- Production's FIXED/split constraint variant is already applied (rollout report).
+-- This file aligns repository history; it does not require a production re-run.
 begin;
 set local lock_timeout = '5s';
 alter table public.approval_requests add column if not exists workflow_initialized boolean not null default false;
 alter table public.approval_workflow_ballots add column if not exists decision_id text;
 create unique index if not exists workflow_ballot_decision_uidx on public.approval_workflow_ballots(instance_id,decision_id) where decision_id is not null;
-create unique index if not exists approval_requests_id_org_uidx on public.approval_requests(id,org_id);
-create unique index if not exists workflow_instances_id_org_uidx on public.approval_workflow_instances(id,org_id);
-create unique index if not exists org_members_id_org_uidx on public.org_members(id,org_id);
-do $$ begin
+-- Explicit FK parent constraints. Keep existing equivalent constraints (including
+-- different names from a split/manual rollout) and any legacy indexes intact.
+do $f8$ declare t text; parent regclass; begin
+  foreach t in array array['org_members','approval_requests','approval_workflow_instances'] loop
+    parent:=format('public.%I',t)::regclass;
+    if not exists (
+      select 1 from pg_constraint c
+      where c.conrelid=parent and c.contype='u' and not c.condeferrable and c.convalidated
+        and c.conkey=array[
+          (select attnum from pg_attribute where attrelid=parent and attname='id' and not attisdropped),
+          (select attnum from pg_attribute where attrelid=parent and attname='org_id' and not attisdropped)
+        ]::smallint[]
+    ) then
+      execute format('alter table public.%I add constraint %I unique (id, org_id)',t,t||'_id_org_key');
+    end if;
+  end loop;
+end $f8$;
+do $f8$ begin
   if not exists(select 1 from pg_constraint where conname='workflow_approval_same_org' and conrelid='public.approval_workflow_instances'::regclass) then
     alter table public.approval_workflow_instances add constraint workflow_approval_same_org
       foreign key(approval_id,org_id) references public.approval_requests(id,org_id) on delete cascade not valid;
@@ -17,7 +33,7 @@ do $$ begin
     alter table public.approval_workflow_ballots add constraint workflow_ballot_same_org
       foreign key(instance_id,org_id) references public.approval_workflow_instances(id,org_id) on delete cascade not valid;
   end if;
-end $$;
+end $f8$;
 alter table public.approval_workflow_instances validate constraint workflow_approval_same_org;
 alter table public.approval_workflow_ballots validate constraint workflow_ballot_same_org;
 
@@ -41,7 +57,7 @@ revoke all on public.approval_workflow_instances,public.approval_workflow_ballot
 grant select,insert,update,delete on public.approval_workflow_instances,public.approval_workflow_ballots,public.approval_workflow_voter_bindings to service_role;
 -- A later/default/column GRANT must not reopen direct client access. Only the
 -- already-trusted BYPASSRLS server role (or DB owner) can access these tables.
-do $$ declare t text; c record; begin
+do $f8$ declare t text; c record; begin
   foreach t in array array['approval_workflow_instances','approval_workflow_ballots','approval_workflow_voter_bindings'] loop
     execute format('drop policy if exists workflow_server_only on public.%I',t);
     execute format('create policy workflow_server_only on public.%I as restrictive for all to public using (false) with check (false)',t);
@@ -50,18 +66,18 @@ do $$ declare t text; c record; begin
         c.column_name,c.column_name,c.column_name,c.column_name,t);
     end loop;
   end loop;
-end $$;
+end $f8$;
 
 create or replace function public.workflow_voter_is_current(p_org uuid,p_member text)
-returns boolean language sql stable security definer set search_path=pg_catalog,public as $$
+returns boolean language sql stable security definer set search_path=pg_catalog,public as $f8$
   select exists(select 1 from public.org_members m join auth.users u on u.id=m.user_id
     where m.id::text=p_member and m.org_id=p_org and m.status='active'
     and 'approve_actions'=any(m.capabilities) and u.deleted_at is null
     and (u.banned_until is null or u.banned_until<=now()));
-$$;
+$f8$;
 
 create or replace function public.workflow_quorum_required(q jsonb,n integer)
-returns integer language plpgsql immutable security invoker set search_path=pg_catalog,public as $$
+returns integer language plpgsql immutable security invoker set search_path=pg_catalog,public as $f8$
 declare r numeric; numerator numeric; denominator numeric;
 begin
   if n<1 then raise exception 'workflow_invalid_policy'; end if;
@@ -80,10 +96,10 @@ begin
   end case;
   if r<1 or r>n then raise exception 'workflow_invalid_policy'; end if;
   return r::integer;
-end $$;
+end $f8$;
 
 create or replace function public.validate_workflow_snapshot(p jsonb)
-returns void language plpgsql security invoker set search_path=pg_catalog,public as $$
+returns void language plpgsql security invoker set search_path=pg_catalog,public as $f8$
 declare s jsonb; ids text[]:='{}'; voters integer;
 begin
   if p->>'version' is distinct from '1' or coalesce(p->>'policyId','')='' or jsonb_typeof(p->'stages') is distinct from 'array'
@@ -107,10 +123,10 @@ begin
         raise exception 'workflow_invalid_policy'; end if;
     end loop;
   end if;
-end $$;
+end $f8$;
 
 create or replace function public.initialize_approval_workflow(p_id uuid,p_org uuid)
-returns boolean language plpgsql security invoker set search_path=pg_catalog,public as $$
+returns boolean language plpgsql security invoker set search_path=pg_catalog,public as $f8$
 declare a public.approval_requests; w public.approval_workflow_instances; p jsonb; ep jsonb; s jsonb; idx integer;
 begin
   select * into a from public.approval_requests where id=p_id and org_id=p_org for update;
@@ -150,17 +166,17 @@ begin
   end if;
   update public.approval_requests set workflow_initialized=true where id=p_id;
   return p is not null;
-end $$;
+end $f8$;
 
 create or replace function public.initialize_workflow_after_insert()
-returns trigger language plpgsql security definer set search_path=pg_catalog,public as $$
-begin perform public.initialize_approval_workflow(new.id,new.org_id); return new; end $$;
+returns trigger language plpgsql security definer set search_path=pg_catalog,public as $f8$
+begin perform public.initialize_approval_workflow(new.id,new.org_id); return new; end $f8$;
 drop trigger if exists approval_workflow_initialize on public.approval_requests;
 create trigger approval_workflow_initialize after insert on public.approval_requests
   for each row execute function public.initialize_workflow_after_insert();
 
 create or replace function public.workflow_instance_satisfied(p_instance uuid,p_org uuid)
-returns boolean language plpgsql security invoker set search_path=pg_catalog,public as $$
+returns boolean language plpgsql security invoker set search_path=pg_catalog,public as $f8$
 declare w public.approval_workflow_instances; s jsonb; idx integer; n integer; approvals integer;
 begin
   select * into w from public.approval_workflow_instances where id=p_instance and org_id=p_org;
@@ -179,25 +195,25 @@ begin
     where b.instance_id=w.id and b.org_id=p_org and b.is_final_go and b.voter_user_id=w.final_go_user_id
     and b.vote='approve' and public.workflow_voter_is_current(p_org,b.voter_user_id)) then return false; end if;
   return true;
-end $$;
+end $f8$;
 
 create or replace function public.approval_workflow_can_execute(p_id uuid,p_org uuid)
-returns boolean language plpgsql security invoker set search_path=pg_catalog,public as $$
+returns boolean language plpgsql security invoker set search_path=pg_catalog,public as $f8$
 declare w public.approval_workflow_instances;
 begin
   if not public.initialize_approval_workflow(p_id,p_org) then return true; end if;
   select * into w from public.approval_workflow_instances where approval_id=p_id and org_id=p_org;
   return public.workflow_instance_satisfied(w.id,p_org);
-end $$;
+end $f8$;
 
 -- Defense at the existing #80 claim boundary without changing its lease/secret contract.
 create or replace function public.guard_workflow_execution_claim()
-returns trigger language plpgsql security invoker set search_path=pg_catalog,public as $$
+returns trigger language plpgsql security invoker set search_path=pg_catalog,public as $f8$
 begin
   if new.state='running' and not public.approval_workflow_can_execute(new.approval_id,new.org_id) then
     raise exception 'workflow_not_approved'; end if;
   return new;
-end $$;
+end $f8$;
 drop trigger if exists workflow_execution_claim_guard on public.approval_execution_claims;
 create trigger workflow_execution_claim_guard before insert or update on public.approval_execution_claims
   for each row execute function public.guard_workflow_execution_claim();
@@ -206,7 +222,7 @@ create or replace function public.cast_approval_workflow_vote(
   p_id uuid,p_org uuid,p_voter text,p_vote text,p_actor text,p_actor_id text default null,p_agent text default null,
   p_provider text default null,p_channel text default null,p_external text default null,
   p_decision_id text default null,p_expected_stage text default null)
-returns jsonb language plpgsql security invoker set search_path=pg_catalog,public as $$
+returns jsonb language plpgsql security invoker set search_path=pg_catalog,public as $f8$
 declare a public.approval_requests; w public.approval_workflow_instances; s jsonb; b public.approval_workflow_ballots;
   stage text; approvals integer; rejects integer; next_status text; accepted boolean:=false; recovered boolean:=false;
 begin
@@ -277,11 +293,11 @@ begin
       jsonb_build_object('approvalId',p_id,'instanceId',w.id,'voterMemberId',p_voter,'actor',p_actor,'vote',p_vote,'recovered',recovered));
   return jsonb_build_object('accepted',accepted or recovered,'reason',case when recovered then 'recovered' else 'voted' end,
     'approval',to_jsonb(a),'instance',to_jsonb(w));
-end $$;
+end $f8$;
 
 -- Prevent a legacy resolver/direct table writer from skipping a configured workflow.
 create or replace function public.guard_workflow_approval_status()
-returns trigger language plpgsql security definer set search_path=pg_catalog,public as $$
+returns trigger language plpgsql security definer set search_path=pg_catalog,public as $f8$
 declare w public.approval_workflow_instances; p jsonb;
 begin
   if new.status is not distinct from old.status then return new; end if;
@@ -298,7 +314,7 @@ begin
     new.workflow_initialized:=true;
   end if;
   return new;
-end $$;
+end $f8$;
 drop trigger if exists workflow_approval_status_guard on public.approval_requests;
 create trigger workflow_approval_status_guard before update of status on public.approval_requests
   for each row execute function public.guard_workflow_approval_status();
@@ -306,7 +322,7 @@ create trigger workflow_approval_status_guard before update of status on public.
 -- Policies and initialization markers are service-managed; table-level grants on
 -- orgs/employees/approval_requests must not allow authenticated callers to forge them.
 create or replace function public.guard_workflow_service_fields()
-returns trigger language plpgsql security invoker set search_path=pg_catalog,public as $$
+returns trigger language plpgsql security invoker set search_path=pg_catalog,public as $f8$
 begin
   if tg_table_name='approval_requests' and tg_op='INSERT' then
     new.workflow_initialized:=false; return new;
@@ -326,7 +342,7 @@ begin
     end if;
   end if;
   return new;
-end $$;
+end $f8$;
 drop trigger if exists workflow_policy_service_only on public.orgs;
 create trigger workflow_policy_service_only before insert or update of approval_workflow_policy on public.orgs
   for each row execute function public.guard_workflow_service_fields();
@@ -338,7 +354,7 @@ create trigger workflow_marker_service_only before insert or update of workflow_
   for each row execute function public.guard_workflow_service_fields();
 
 -- Function creation defaults must not expose any new RPC, including internal helpers.
-do $$ declare f record; begin
+do $f8$ declare f record; begin
   for f in select oid::regprocedure as signature from pg_proc where pronamespace='public'::regnamespace and proname in
     ('workflow_voter_is_current','workflow_quorum_required','validate_workflow_snapshot','initialize_approval_workflow',
      'initialize_workflow_after_insert','workflow_instance_satisfied','approval_workflow_can_execute','guard_workflow_execution_claim',
@@ -346,5 +362,5 @@ do $$ declare f record; begin
     execute format('revoke all on function %s from public,anon,authenticated',f.signature);
     execute format('grant execute on function %s to service_role',f.signature);
   end loop;
-end $$;
+end $f8$;
 commit;
