@@ -212,7 +212,11 @@ export interface ConversationContext {
    * Mention / source message ts. When no thread parent is present, comm.reply
    * and slack.post use this as Slack thread_ts so the reply starts a thread
    * under the mention instead of posting a new channel parent.
+   *
+   * Wake handoff sends `ts` (mention message timestamp); prefer_thread policy
+   * reads this to start threads under channel-root mentions.
    */
+  ts?: string;
   messageTs?: string;
   slackTs?: string;
   email?: string;

@@ -89,6 +89,31 @@ export function resolveConversationThreadId(input: {
   );
 }
 
+/**
+ * Extract the parent message timestamp from wake/conversation context.
+ * This is the `ts` of the message being replied to (e.g., the @mention message).
+ * Different from thread_ts — this is used to start a new thread under a channel-root message.
+ *
+ * Wake handoff sends `ts` (mention message ts); thread_ts is null for channel-root mentions.
+ * When prefer_thread reply policy is active and no explicit thread_ts is provided,
+ * this parent ts should be used as thread_ts to reply under the original message.
+ */
+export function resolveParentMessageTs(input: {
+  conversation?: ConversationContext | Record<string, unknown> | null;
+  args?: Record<string, unknown> | null;
+}): string | undefined {
+  const conv = asRecord(input.conversation);
+  const args = asRecord(input.args);
+  return firstStr(
+    conv.ts,
+    conv.messageTs,
+    conv.slackTs,
+    args.ts,
+    args.messageTs,
+    args.slackTs
+  );
+}
+
 function emailDomain(email: string): string | undefined {
   const at = email.lastIndexOf("@");
   if (at <= 0 || at === email.length - 1) return undefined;
@@ -155,6 +180,9 @@ export function parseConversationContext(
   const phone = str(conv.phone) || str(body.phone) || str(args.phone);
   const lineId = str(conv.lineId) || str(body.lineId) || str(args.lineId);
   const threadId = resolveConversationThreadId({ conversation: conv, args, body });
+  const ts = str(conv.ts) || str(args.ts);
+  const messageTs = str(conv.messageTs) || str(args.messageTs);
+  const slackTs = str(conv.slackTs) || str(args.slackTs);
 
   return {
     surface,
@@ -166,6 +194,9 @@ export function parseConversationContext(
     slackTeamId,
     phone,
     lineId,
+    ...(ts ? { ts } : {}),
+    ...(messageTs ? { messageTs } : {}),
+    ...(slackTs ? { slackTs } : {}),
   };
 }
 

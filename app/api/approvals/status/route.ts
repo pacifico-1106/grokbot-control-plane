@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server";
 import { getApprovalStatusByToken, runtimeModeLabel } from "@/lib/data";
 import { getApprovalWorkflowProgress } from "@/lib/approval-workflow";
+import { parseFulfillment } from "@/lib/approvals/fulfill";
+import { parseAdminFulfillment } from "@/lib/admin-mcp/fulfill-admin";
+import { isAdminClassApproval } from "@/lib/admin-mcp/audit-class";
+import { redactMetadata } from "@/lib/data/redaction";
 
 export const runtime = "nodejs";
 
@@ -45,6 +49,59 @@ export async function GET(req: Request) {
 
   const workflowProgress = await getApprovalWorkflowProgress(approval.id);
 
+  let fulfillmentResult: Record<string, unknown> | null = null;
+  let adminResultRequired = false;
+  if (status === "approved") {
+    if (isAdminClassApproval(approval)) {
+      const adminFulfill = parseAdminFulfillment(approval.metadata);
+      if (adminFulfill?.ok) {
+        adminResultRequired = Boolean(adminFulfill.oneTimeSecret);
+        fulfillmentResult = {
+          fulfilled: true,
+          tool: adminFulfill.tool,
+          ...(adminFulfill.employeeId ? { employeeId: adminFulfill.employeeId } : {}),
+          ...(adminFulfill.secretPrefix ? { secretPrefix: adminFulfill.secretPrefix } : {}),
+          ...(adminFulfill.orgId ? { orgId: adminFulfill.orgId } : {}),
+          ...(adminFulfill.adminAgentId ? { adminAgentId: adminFulfill.adminAgentId } : {}),
+          ...(adminFulfill.partyId ? { partyId: adminFulfill.partyId } : {}),
+          ...(adminFulfill.channelId ? { channelId: adminFulfill.channelId } : {}),
+          ...(adminFulfill.draft ? { draft: adminFulfill.draft } : {}),
+          ...(adminFulfill.nextStepJa ? { nextStepJa: adminFulfill.nextStepJa } : {}),
+          ...(adminFulfill.noticeJa ? { noticeJa: adminFulfill.noticeJa } : {}),
+          ...(adminFulfill.ownerUserId ? { ownerUserId: adminFulfill.ownerUserId } : {}),
+          ...(adminFulfill.ownerEmail ? { ownerEmail: adminFulfill.ownerEmail } : {}),
+          ...(adminFulfill.trialEndsAt !== undefined ? { trialEndsAt: adminFulfill.trialEndsAt } : {}),
+          ...(adminFulfill.integrationMode ? { integrationMode: adminFulfill.integrationMode } : {}),
+          ...(adminFulfill.summaryJa ? { summaryJa: adminFulfill.summaryJa } : {}),
+        };
+      } else if (adminFulfill && !adminFulfill.ok) {
+        fulfillmentResult = {
+          fulfilled: true,
+          ok: false,
+          error: adminFulfill.error,
+        };
+      }
+    } else {
+      const invokeFulfill = parseFulfillment(approval.metadata);
+      if (invokeFulfill?.ok) {
+        fulfillmentResult = {
+          fulfilled: true,
+          delivery: invokeFulfill.delivery,
+          ...(invokeFulfill.channel ? { channel: invokeFulfill.channel } : {}),
+          ...(invokeFulfill.ts ? { ts: invokeFulfill.ts } : {}),
+          ...(invokeFulfill.id ? { id: invokeFulfill.id } : {}),
+          ...(invokeFulfill.surface ? { surface: invokeFulfill.surface } : {}),
+        };
+      } else if (invokeFulfill && !invokeFulfill.ok) {
+        fulfillmentResult = {
+          fulfilled: true,
+          ok: false,
+          error: invokeFulfill.error,
+        };
+      }
+    }
+  }
+
   const response: Record<string, unknown> = {
     ok: true,
     demo: runtimeModeLabel() === "demo",
@@ -63,11 +120,14 @@ export async function GET(req: Request) {
     revisionNote: approval.revisionNote,
     revisionCount: approval.revisionCount,
     parentApprovalId: approval.parentApprovalId,
+    ...(fulfillmentResult ? { fulfillment: redactMetadata(fulfillmentResult) } : {}),
     pollHint:
       status === "pending"
         ? "continue_polling"
         : status === "approved"
-          ? "reinvoke_with_approvalId"
+          ? fulfillmentResult && !adminResultRequired
+            ? "fulfilled"
+            : "reinvoke_with_approvalId"
           : status === "revision_requested"
             ? `Revise the artifact per revisionNote and re-invoke with the same jobId and parentApprovalId=${approval.id}.`
           : "abort_job",
