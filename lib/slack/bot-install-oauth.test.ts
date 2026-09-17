@@ -135,6 +135,7 @@ describe("SLACK_BOT_SCOPES", () => {
     expect(SLACK_BOT_SCOPES).toContain("channels:history");
     expect(SLACK_BOT_SCOPES).toContain("groups:history");
     expect(SLACK_BOT_SCOPES).toContain("app_mentions:read");
+    expect(SLACK_BOT_SCOPES).toContain("files:write");
   });
 });
 

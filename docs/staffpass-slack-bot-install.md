@@ -56,6 +56,9 @@ Staffpass Slack アプリには2つの OAuth フローがあります：
 | `groups:history` | プライベートチャンネル履歴読み取り |
 | `im:history` | DM 履歴読み取り |
 | `chat:write` | メッセージ投稿 |
+| `files:write` | ファイルアップロード（Path A チャネル / App DM 添付） |
+
+> **注意**: `files:write` スコープを追加後、テナントは「Slack ワークスペースにインストール」を再実行して xoxb をリフレッシュする必要があります。既存のトークンには新スコープが含まれていません。
 
 ## セキュリティ
 

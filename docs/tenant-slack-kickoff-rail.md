@@ -203,9 +203,12 @@ Slack API サイトで Staffpass Slack アプリを設定します。
    - `im:history` - DM履歴の読み取り
    - `chat:write` - メッセージ投稿
    - `im:write` - DMの開始/書き込み
+   - `channels:history` - パブリックチャンネル履歴読み取り
+   - `groups:history` - プライベートチャンネル履歴読み取り
+   - `app_mentions:read` - @mention イベント受信
    - `files:write` - ファイルアップロード（Path A チャネル / App DM 添付。Path B 本体は User Token 側）
 
-**重要**: スコープ変更後は **Reinstall to Workspace** が必要です。
+**重要**: スコープ変更後は **Reinstall to Workspace** が必要です。bot-install OAuth（`/api/slack/bot-install/start`）も `files:write` を要求するように更新されました。テナントは「Slack ワークスペースにインストール」を再実行して新しい xoxb を取得してください。
 
 **症状（スコープ不足）**:
 - `missing_scope` エラー
@@ -384,7 +387,7 @@ App DM（Staffpassアプリへの直接DM）への返信には `posting_as: bot`
 
 | 確認項目 | 期待値 | 症状 |
 |----------|--------|------|
-| Bot Token Scopes | `im:history`, `chat:write`, `im:write` | `missing_scope` |
+| Bot Token Scopes | `im:history`, `chat:write`, `im:write`, `files:write` | `missing_scope` |
 | User Token Scopes（パス B） | `im:history`, `files:write` | `missing_scope` |
 | アプリ再インストール | スコープ変更後に実施 | スコープが反映されない |
 | Bot Token 登録 | ダッシュボードまたは env | `invalid_auth` |
@@ -841,7 +844,7 @@ Staffpass Slack アプリは **Public Distribution Activated** ですが、App D
 ### パス A: Staffpass アプリ DM
 
 6. **Bot events: `message.im`** - App Home DM 受信に必須。`app_mention` は追加で必要に応じて
-7. **Bot scopes: `im:history`, `chat:write`, `im:write`** - スコープ変更後は再インストール必須
+7. **Bot scopes: `im:history`, `chat:write`, `im:write`, `files:write`** - スコープ変更後は再インストール必須。bot-install OAuth も `files:write` を要求するように更新済み
 8. **Bot Token 二重登録** - ダッシュボード「チャンネルに書き込む」(アダプタ) AND 環境変数 `SLACK_BOT_TOKEN`。アダプタトークンが優先
 9. **App Home Messages Tab** - `messages_tab_read_only_enabled: false` でないとユーザーがDMを送れない
 10. **posting_as: bot** - Bot DM への返信には必須。User token では Bot DM を見られない

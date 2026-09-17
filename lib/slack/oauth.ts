@@ -21,10 +21,12 @@ export const SLACK_USER_SCOPES = "chat:write,users:read,channels:read,groups:rea
  * - app_mentions:read: @mention イベント受信
  * - channels:history, groups:history, im:history: メッセージ履歴読み取り
  * - chat:write: メッセージ投稿
+ * - files:write: ファイルアップロード（Path A チャネル / App DM 添付）
  *
  * docs/tenant-slack-kickoff-rail.md の Bot Token Scopes と一致させること。
+ * スコープ追加後は、テナントが bot-install フローを再実行して xoxb をリフレッシュする必要があります。
  */
-export const SLACK_BOT_SCOPES = "im:write,app_mentions:read,channels:history,groups:history,im:history,chat:write";
+export const SLACK_BOT_SCOPES = "im:write,app_mentions:read,channels:history,groups:history,im:history,chat:write,files:write";
 
 export const SLACK_OAUTH_COOKIE = "staffpass_slack_oauth";
 export const SLACK_BOT_INSTALL_COOKIE = "staffpass_slack_bot_install";
