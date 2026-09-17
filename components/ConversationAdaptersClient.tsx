@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useState } from "react";
 import type { ConversationAdapter } from "@/lib/types";
 
@@ -78,9 +79,21 @@ export function ConversationAdaptersClient({
       <p className="text-[11px] faint leading-relaxed">
         上の「承認を受け取る」と同じ Bot token を入れて構いません。本人の名前で出す場合は、各社員証で Slack 連携します。
       </p>
-      <button className="btn btn-primary" disabled={busy} onClick={() => void save()}>
-        保存
-      </button>
+      <div className="flex items-center gap-3 flex-wrap">
+        <button className="btn btn-primary" disabled={busy} onClick={() => void save()}>
+          保存
+        </button>
+        <Link
+          href="/app/slack-bot-install"
+          className="btn btn-ghost text-sm"
+        >
+          Slack ワークスペースにインストール →
+        </Link>
+      </div>
+      <p className="text-[10px] faint leading-relaxed border-t border-[var(--border-soft)] pt-3">
+        <span className="font-medium">Install と Authorize の違い:</span>{" "}
+        Install は Bot をワークスペースに追加（管理者が1回）、Authorize は社員が個人の Slack を連携（本人名義投稿用）。
+      </p>
     </section>
   );
 }

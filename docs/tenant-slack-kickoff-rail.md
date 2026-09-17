@@ -80,6 +80,35 @@ Socket Mode が ON だと Events が HTTPS endpoint に届きません。
 
 ---
 
+## Install と Authorize の違い
+
+Staffpass Slack 連携には2つの OAuth フローがあり、役割が異なります：
+
+| 操作 | 目的 | 実行者 | トークン | 用途 |
+|------|------|--------|----------|------|
+| **Install** | Bot をワークスペースに追加 | WS管理者（1回） | `xoxb-` | 会社の Bot 名義で投稿（`posting_as: bot`） |
+| **Authorize** | 社員が個人 Slack を連携 | 各社員 | `xoxp-` | 本人名義で投稿（`posting_as: user`、Path B） |
+
+### Install（ワークスペースにインストール）
+
+- **誰が**: Slack ワークスペースの管理者（Staffpass のオーナー/管理者ロール必須）
+- **何を**: Staffpass Slack アプリをワークスペースに追加
+- **結果**: Bot Token (`xoxb-`) が組織の conversation adapter に登録される
+- **UI**: ダッシュボード「つながり → チャンネルに書き込む」→「Slack ワークスペースにインストール」
+- **1回**: ワークスペースごとに1回実行すれば、全AI社員が利用可能
+
+### Authorize（社員の Slack 連携）
+
+- **誰が**: 各AI社員（または本人に代わって管理者）
+- **何を**: 社員の Slack アカウントを Staffpass に連携
+- **結果**: User Token (`xoxp-`) が社員証に登録される
+- **UI**: 社員証画面 →「Slack 連携」
+- **各自**: `posting_as: user` または Path B を使う社員ごとに必要
+
+詳細は [staffpass-slack-bot-install.md](./staffpass-slack-bot-install.md) を参照。
+
+---
+
 ## 管理MCPの能力一覧（設定前に提示）
 
 管理エージェントは、設定を提案する前に、利用可能なAdmin MCPツールを簡潔に列挙してください（ダッシュボードUIと異なります）:
