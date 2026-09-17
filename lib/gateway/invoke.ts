@@ -39,7 +39,9 @@ import {
   parseConversationContext,
   resolveAudience,
   resolveConversationThreadId,
+  resolveParentMessageTs,
 } from "@/lib/gateway/audience";
+import { getEffectiveReplyPolicy } from "@/lib/data/reply-policy";
 import { resolveInformationDisclosure } from "@/lib/gateway/information-class";
 import { evaluateProjectScope } from "@/lib/gateway/project-scope";
 import { accessibleProjects } from "@/lib/employees/project-access";
@@ -1356,11 +1358,27 @@ export async function runGatewayInvoke(
       const rawText = [args.text, args.body, args.message].find(
         (value) => typeof value === "string" && value.trim()
       ) as string | undefined;
-      const replyThreadTs = resolveConversationThreadId({
+      const explicitThreadTs = resolveConversationThreadId({
         conversation: ctx,
         args,
         body,
       });
+
+      let replyThreadTs = explicitThreadTs;
+      if (!looksLikeSlackTs(replyThreadTs) && ctx?.surface === "slack") {
+        const replyPolicyResult = await getEffectiveReplyPolicy(
+          orgId || employee.orgId,
+          employeeId
+        );
+        const threadAffinity = replyPolicyResult.policy.rules?.[0]?.threadAffinity;
+        if (threadAffinity === "prefer_thread") {
+          const parentTs = resolveParentMessageTs({ conversation: ctx, args });
+          if (looksLikeSlackTs(parentTs)) {
+            replyThreadTs = parentTs;
+          }
+        }
+      }
+
       const posted = await postConversationMessage({
         orgId: orgId || employee.orgId,
         employeeId,

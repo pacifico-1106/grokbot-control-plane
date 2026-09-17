@@ -1047,3 +1047,289 @@ describe("Gateway audience egress", () => {
   });
 
 });
+
+import { setOrgReplyPolicy, resetDemoReplyPolicy } from "@/lib/data/reply-policy";
+import { normalizeReplyPolicy } from "@/lib/gateway/reply-policy-validate";
+
+describe("Gateway prefer_thread auto thread_ts injection", () => {
+  test("prefer_thread policy injects thread_ts from wake ts when no explicit thread_ts", async () => {
+    const wakeTs = "1787960001.111111";
+    await setOrgReplyPolicy(
+      DEMO_ORG.id,
+      normalizeReplyPolicy({
+        policyId: "rpp_prefer_thread",
+        policyName: "Prefer Thread",
+        rules: [
+          {
+            id: "rpr_prefer_thread",
+            surface: "slack",
+            afterHoursMode: "allow_send",
+            shortReplyMode: "allow",
+            emojiMode: "allow",
+            threadAffinity: "prefer_thread",
+          },
+        ],
+      })
+    );
+    await upsertConversationAdapter({
+      orgId: DEMO_ORG.id,
+      surface: "slack",
+      enabled: true,
+      secrets: { botToken: "xoxb-prefer-thread" },
+    });
+    const originalFetch = globalThis.fetch;
+    let postedPayload: Record<string, unknown> = {};
+    try {
+      globalThis.fetch = (async (_input, init) => {
+        postedPayload = JSON.parse(String(init?.body || "{}")) as Record<string, unknown>;
+        return Response.json({
+          ok: true,
+          channel: "C_INTERNAL",
+          ts: "1787960002.222222",
+        });
+      }) as typeof fetch;
+      const sent = await runGatewayInvoke({
+        employeeId: "emp_comm",
+        credentialId: "cred_comm",
+        body: {
+          tool: "comm.reply",
+          purpose: "comm.internal",
+          jobId: `job_prefer_thread_ts_${Date.now()}`,
+          conversation: {
+            surface: "slack",
+            orgId: DEMO_ORG.id,
+            slackChannelId: "C_INTERNAL",
+            ts: wakeTs,
+          },
+          args: {
+            slackChannelId: "C_INTERNAL",
+            text: "prefer_thread でスレッド配下に投稿されるはず。",
+          },
+        },
+      });
+      expect(sent.body.ok).toBe(true);
+      expect(sent.body.needs_approval).not.toBe(true);
+      expect(postedPayload.channel).toBe("C_INTERNAL");
+      expect(postedPayload.thread_ts).toBe(wakeTs);
+    } finally {
+      globalThis.fetch = originalFetch;
+      resetDemoReplyPolicy();
+      await upsertConversationAdapter({
+        orgId: DEMO_ORG.id,
+        surface: "slack",
+        enabled: false,
+        secrets: {},
+      });
+    }
+  });
+
+  test("explicit thread_ts is preserved even with prefer_thread policy", async () => {
+    const explicitThreadTs = "1787911797.502889";
+    const wakeTs = "1787960001.111111";
+    await setOrgReplyPolicy(
+      DEMO_ORG.id,
+      normalizeReplyPolicy({
+        policyId: "rpp_prefer_thread",
+        policyName: "Prefer Thread",
+        rules: [
+          {
+            id: "rpr_prefer_thread",
+            surface: "slack",
+            afterHoursMode: "allow_send",
+            shortReplyMode: "allow",
+            emojiMode: "allow",
+            threadAffinity: "prefer_thread",
+          },
+        ],
+      })
+    );
+    await upsertConversationAdapter({
+      orgId: DEMO_ORG.id,
+      surface: "slack",
+      enabled: true,
+      secrets: { botToken: "xoxb-explicit-thread" },
+    });
+    const originalFetch = globalThis.fetch;
+    let postedPayload: Record<string, unknown> = {};
+    try {
+      globalThis.fetch = (async (_input, init) => {
+        postedPayload = JSON.parse(String(init?.body || "{}")) as Record<string, unknown>;
+        return Response.json({
+          ok: true,
+          channel: "C_INTERNAL",
+          ts: "1787960002.222222",
+        });
+      }) as typeof fetch;
+      const sent = await runGatewayInvoke({
+        employeeId: "emp_comm",
+        credentialId: "cred_comm",
+        body: {
+          tool: "comm.reply",
+          purpose: "comm.internal",
+          jobId: `job_explicit_thread_${Date.now()}`,
+          conversation: {
+            surface: "slack",
+            orgId: DEMO_ORG.id,
+            slackChannelId: "C_INTERNAL",
+            threadId: explicitThreadTs,
+            ts: wakeTs,
+          },
+          args: {
+            slackChannelId: "C_INTERNAL",
+            text: "明示的なスレッドが優先される。",
+          },
+        },
+      });
+      expect(sent.body.ok).toBe(true);
+      expect(postedPayload.channel).toBe("C_INTERNAL");
+      expect(postedPayload.thread_ts).toBe(explicitThreadTs);
+    } finally {
+      globalThis.fetch = originalFetch;
+      resetDemoReplyPolicy();
+      await upsertConversationAdapter({
+        orgId: DEMO_ORG.id,
+        surface: "slack",
+        enabled: false,
+        secrets: {},
+      });
+    }
+  });
+
+  test("channel_root policy does not inject thread_ts from wake ts", async () => {
+    const wakeTs = "1787960001.111111";
+    await setOrgReplyPolicy(
+      DEMO_ORG.id,
+      normalizeReplyPolicy({
+        policyId: "rpp_channel_root",
+        policyName: "Channel Root",
+        rules: [
+          {
+            id: "rpr_channel_root",
+            surface: "slack",
+            afterHoursMode: "allow_send",
+            shortReplyMode: "allow",
+            emojiMode: "allow",
+            threadAffinity: "channel_root",
+          },
+        ],
+      })
+    );
+    await upsertConversationAdapter({
+      orgId: DEMO_ORG.id,
+      surface: "slack",
+      enabled: true,
+      secrets: { botToken: "xoxb-channel-root" },
+    });
+    const originalFetch = globalThis.fetch;
+    let postedPayload: Record<string, unknown> = {};
+    try {
+      globalThis.fetch = (async (_input, init) => {
+        postedPayload = JSON.parse(String(init?.body || "{}")) as Record<string, unknown>;
+        return Response.json({
+          ok: true,
+          channel: "C_INTERNAL",
+          ts: "1787960002.222222",
+        });
+      }) as typeof fetch;
+      const sent = await runGatewayInvoke({
+        employeeId: "emp_comm",
+        credentialId: "cred_comm",
+        body: {
+          tool: "comm.reply",
+          purpose: "comm.internal",
+          jobId: `job_channel_root_${Date.now()}`,
+          conversation: {
+            surface: "slack",
+            orgId: DEMO_ORG.id,
+            slackChannelId: "C_INTERNAL",
+            ts: wakeTs,
+          },
+          args: {
+            slackChannelId: "C_INTERNAL",
+            text: "channel_root ではスレッド注入しない。",
+          },
+        },
+      });
+      expect(sent.body.ok).toBe(true);
+      expect(postedPayload.channel).toBe("C_INTERNAL");
+      expect(postedPayload.thread_ts).toBeUndefined();
+    } finally {
+      globalThis.fetch = originalFetch;
+      resetDemoReplyPolicy();
+      await upsertConversationAdapter({
+        orgId: DEMO_ORG.id,
+        surface: "slack",
+        enabled: false,
+        secrets: {},
+      });
+    }
+  });
+
+  test("missing parent ts with prefer_thread does not inject thread_ts (fail-closed)", async () => {
+    await setOrgReplyPolicy(
+      DEMO_ORG.id,
+      normalizeReplyPolicy({
+        policyId: "rpp_prefer_thread",
+        policyName: "Prefer Thread",
+        rules: [
+          {
+            id: "rpr_prefer_thread",
+            surface: "slack",
+            afterHoursMode: "allow_send",
+            shortReplyMode: "allow",
+            emojiMode: "allow",
+            threadAffinity: "prefer_thread",
+          },
+        ],
+      })
+    );
+    await upsertConversationAdapter({
+      orgId: DEMO_ORG.id,
+      surface: "slack",
+      enabled: true,
+      secrets: { botToken: "xoxb-no-parent-ts" },
+    });
+    const originalFetch = globalThis.fetch;
+    let postedPayload: Record<string, unknown> = {};
+    try {
+      globalThis.fetch = (async (_input, init) => {
+        postedPayload = JSON.parse(String(init?.body || "{}")) as Record<string, unknown>;
+        return Response.json({
+          ok: true,
+          channel: "C_INTERNAL",
+          ts: "1787960002.222222",
+        });
+      }) as typeof fetch;
+      const sent = await runGatewayInvoke({
+        employeeId: "emp_comm",
+        credentialId: "cred_comm",
+        body: {
+          tool: "comm.reply",
+          purpose: "comm.internal",
+          jobId: `job_no_parent_ts_${Date.now()}`,
+          conversation: {
+            surface: "slack",
+            orgId: DEMO_ORG.id,
+            slackChannelId: "C_INTERNAL",
+          },
+          args: {
+            slackChannelId: "C_INTERNAL",
+            text: "親tsがないので thread_ts は注入されない。",
+          },
+        },
+      });
+      expect(sent.body.ok).toBe(true);
+      expect(postedPayload.channel).toBe("C_INTERNAL");
+      expect(postedPayload.thread_ts).toBeUndefined();
+    } finally {
+      globalThis.fetch = originalFetch;
+      resetDemoReplyPolicy();
+      await upsertConversationAdapter({
+        orgId: DEMO_ORG.id,
+        surface: "slack",
+        enabled: false,
+        secrets: {},
+      });
+    }
+  });
+});
