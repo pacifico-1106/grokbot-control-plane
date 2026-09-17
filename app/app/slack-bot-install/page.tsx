@@ -94,7 +94,9 @@ export default async function SlackBotInstallPage(props: { searchParams: SearchP
                   </Link>
                   でチャンネルを登録してください
                 </li>
-                <li>AI社員の会話投稿が Bot 名義でチャンネルに送信されます</li>
+                <li>
+                  AI社員の会話投稿が Bot 名義（<code className="text-[10px] bg-[var(--bg-soft)] px-1 rounded">posting_as: bot</code>）でチャンネルに送信されます
+                </li>
               </ol>
             </div>
           ) : (
@@ -133,7 +135,7 @@ export default async function SlackBotInstallPage(props: { searchParams: SearchP
               <div className="flex gap-2">
                 <dt className="font-medium min-w-[5rem]">Authorize:</dt>
                 <dd className="muted">
-                  社員が個人の Slack アカウントを連携。本人名義の投稿に必要。
+                  社員が個人の Slack アカウントを連携。本人名義の投稿（<code className="text-[10px] bg-[var(--bg-soft)] px-1 rounded">posting_as: user</code>）に必要。
                 </dd>
               </div>
             </dl>

@@ -455,6 +455,7 @@ export type AuditAction =
   | "notification.test_sent"
   | "notification.delivery_failed"
   | "conversation.adapter_updated"
+  | "conversation.adapter_installed"
   | "slack.post_failed"
   | "slack.file_uploaded"
   | "slack.file_upload_failed"
