@@ -1709,7 +1709,7 @@ describe("Ingress handoff policy evaluation", () => {
   });
 });
 
-describe("G7 Connect→own-tenant employee wake routing", () => {
+describe("G7 Cross-team wake routing (Option A: cross_team_wake_bindings)", () => {
   const CONNECT_HOST_TEAM = "T_CONNECT_HOST";
   const CONNECT_GUEST_USER = "W_CONNECT_GUEST";
   const savedConnectFlag = process.env.G7_CONNECT_WAKE_ROUTING;
@@ -1717,8 +1717,8 @@ describe("G7 Connect→own-tenant employee wake routing", () => {
   afterEach(async () => {
     if (savedConnectFlag === undefined) delete process.env.G7_CONNECT_WAKE_ROUTING;
     else process.env.G7_CONNECT_WAKE_ROUTING = savedConnectFlag;
-    const { resetDemoConnectWakeBinds } = await import("@/lib/data/slack-connect-wake-binds");
-    resetDemoConnectWakeBinds();
+    const { resetDemoCrossTeamWakeBindings } = await import("@/lib/data/cross-team-wake-bindings");
+    resetDemoCrossTeamWakeBindings();
   });
 
   test("flag OFF: Connect guest mention does NOT wake (existing behavior unchanged)", async () => {
@@ -1727,11 +1727,11 @@ describe("G7 Connect→own-tenant employee wake routing", () => {
     const { restore } = await bindAndo();
     const wake = mockWake();
 
-    const { upsertConnectWakeBind } = await import("@/lib/data/slack-connect-wake-binds");
+    const { upsertCrossTeamWakeBinding } = await import("@/lib/data/cross-team-wake-bindings");
     const emp = getRuntimeEmployees().find((e) => e.id === "emp_comm");
     if (!emp) throw new Error("missing emp_comm");
 
-    await upsertConnectWakeBind({
+    await upsertCrossTeamWakeBinding({
       receivingOrgId: DEMO_ORG.id,
       receivingTeamId: CONNECT_HOST_TEAM,
       mentionedSlackUserId: CONNECT_GUEST_USER,
@@ -1761,17 +1761,17 @@ describe("G7 Connect→own-tenant employee wake routing", () => {
     }
   });
 
-  test("flag ON: Connect guest mention WITH bind wakes target employee", async () => {
+  test("flag ON: Connect guest mention WITH binding wakes target employee", async () => {
     process.env.SLACK_SIGNING_SECRET = SIGNING_SECRET;
     process.env.G7_CONNECT_WAKE_ROUTING = "1";
     const { restore } = await bindAndo();
     const wake = mockWake();
 
-    const { upsertConnectWakeBind } = await import("@/lib/data/slack-connect-wake-binds");
+    const { upsertCrossTeamWakeBinding } = await import("@/lib/data/cross-team-wake-bindings");
     const emp = getRuntimeEmployees().find((e) => e.id === "emp_comm");
     if (!emp) throw new Error("missing emp_comm");
 
-    await upsertConnectWakeBind({
+    await upsertCrossTeamWakeBinding({
       receivingOrgId: DEMO_ORG.id,
       receivingTeamId: CONNECT_HOST_TEAM,
       mentionedSlackUserId: CONNECT_GUEST_USER,
@@ -1802,7 +1802,7 @@ describe("G7 Connect→own-tenant employee wake routing", () => {
     }
   });
 
-  test("flag ON: Connect guest mention WITHOUT bind does NOT wake (fail-closed)", async () => {
+  test("flag ON: Connect guest mention WITHOUT binding does NOT wake (fail-closed)", async () => {
     process.env.SLACK_SIGNING_SECRET = SIGNING_SECRET;
     process.env.G7_CONNECT_WAKE_ROUTING = "1";
     const { restore } = await bindAndo();
@@ -1813,11 +1813,11 @@ describe("G7 Connect→own-tenant employee wake routing", () => {
         signedRequest({
           type: "event_callback",
           team_id: CONNECT_HOST_TEAM,
-          event_id: `Ev_connect_no_bind_${Date.now()}`,
+          event_id: `Ev_connect_no_binding_${Date.now()}`,
           event: {
             type: "message",
             user: SPEAKER,
-            text: `<@${CONNECT_GUEST_USER}> no bind exists`,
+            text: `<@${CONNECT_GUEST_USER}> no binding exists`,
             ts: "1787911800.000302",
             channel: CHANNEL,
           },
@@ -1830,17 +1830,17 @@ describe("G7 Connect→own-tenant employee wake routing", () => {
     }
   });
 
-  test("flag ON: self-mention via Connect bind does NOT wake (self-skip)", async () => {
+  test("flag ON: self-mention via cross-team binding does NOT wake (self-skip)", async () => {
     process.env.SLACK_SIGNING_SECRET = SIGNING_SECRET;
     process.env.G7_CONNECT_WAKE_ROUTING = "1";
     const { restore } = await bindAndo();
     const wake = mockWake();
 
-    const { upsertConnectWakeBind } = await import("@/lib/data/slack-connect-wake-binds");
+    const { upsertCrossTeamWakeBinding } = await import("@/lib/data/cross-team-wake-bindings");
     const emp = getRuntimeEmployees().find((e) => e.id === "emp_comm");
     if (!emp) throw new Error("missing emp_comm");
 
-    await upsertConnectWakeBind({
+    await upsertCrossTeamWakeBinding({
       receivingOrgId: DEMO_ORG.id,
       receivingTeamId: CONNECT_HOST_TEAM,
       mentionedSlackUserId: CONNECT_GUEST_USER,
@@ -1870,7 +1870,7 @@ describe("G7 Connect→own-tenant employee wake routing", () => {
     }
   });
 
-  test("flag ON: mixed mention (team-bound + Connect bind) wakes both", async () => {
+  test("flag ON: mixed mention (team-bound + cross-team binding) wakes both", async () => {
     process.env.SLACK_SIGNING_SECRET = SIGNING_SECRET;
     process.env.G7_CONNECT_WAKE_ROUTING = "1";
     const { restore } = await bindAndo({ slackTeamId: CONNECT_HOST_TEAM });
@@ -1882,8 +1882,8 @@ describe("G7 Connect→own-tenant employee wake routing", () => {
 
     await updateWakeWebhook(emp2.id, { orgId: emp2.orgId, url: "https://example.test/wake/emp2", secret: "s2" });
 
-    const { upsertConnectWakeBind } = await import("@/lib/data/slack-connect-wake-binds");
-    await upsertConnectWakeBind({
+    const { upsertCrossTeamWakeBinding } = await import("@/lib/data/cross-team-wake-bindings");
+    await upsertCrossTeamWakeBinding({
       receivingOrgId: DEMO_ORG.id,
       receivingTeamId: CONNECT_HOST_TEAM,
       mentionedSlackUserId: CONNECT_GUEST_USER,

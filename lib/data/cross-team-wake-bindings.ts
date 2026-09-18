@@ -1,5 +1,5 @@
 /**
- * G7 Slack Connect→own-tenant employee wake routing data layer.
+ * G7 Cross-team wake routing data layer — Option A locked (2026-09-19).
  *
  * Provides explicit bind lookups for cross-org wake when a Connect guest is mentioned.
  * Feature flag G7_CONNECT_WAKE_ROUTING must be ON for the wake path to use these functions.
@@ -15,7 +15,7 @@ import { getSlackWakeTargetByEmployeeId, type SlackMentionTarget } from "@/lib/d
 import { isDemoMode } from "@/lib/mode";
 import { createSupabaseAdminClient } from "@/lib/supabase";
 
-export interface SlackConnectWakeBind {
+export interface CrossTeamWakeBinding {
   id: string;
   receivingOrgId: string;
   receivingTeamId: string;
@@ -27,17 +27,17 @@ export interface SlackConnectWakeBind {
   updatedAt: string;
 }
 
-const demoBinds = new Map<string, SlackConnectWakeBind>();
+const demoBindings = new Map<string, CrossTeamWakeBinding>();
 
 function nowIso(): string {
   return new Date().toISOString();
 }
 
-function bindKey(receivingOrgId: string, receivingTeamId: string, mentionedSlackUserId: string): string {
+function bindingKey(receivingOrgId: string, receivingTeamId: string, mentionedSlackUserId: string): string {
   return `${receivingOrgId.trim()}:${receivingTeamId.trim().toUpperCase()}:${mentionedSlackUserId.trim().toUpperCase()}`;
 }
 
-function mapRow(row: Record<string, unknown>): SlackConnectWakeBind {
+function mapRow(row: Record<string, unknown>): CrossTeamWakeBinding {
   return {
     id: String(row.id ?? ""),
     receivingOrgId: String(row.receiving_org_id ?? ""),
@@ -52,36 +52,36 @@ function mapRow(row: Record<string, unknown>): SlackConnectWakeBind {
 }
 
 /**
- * Feature flag check for G7 Connect wake routing.
+ * Feature flag check for G7 cross-team wake routing.
  * Default OFF — code paths using this are dead until explicitly enabled.
  */
-export function isConnectWakeRoutingEnabled(): boolean {
+export function isCrossTeamWakeRoutingEnabled(): boolean {
   return process.env.G7_CONNECT_WAKE_ROUTING === "1";
 }
 
 /**
- * Look up explicit Connect wake binds by (receivingTeamId, mentionedSlackUserId).
+ * Look up explicit cross-team wake binding by (receivingTeamId, mentionedSlackUserId).
  *
  * Fail-closed design:
- * - Returns null if 0 or >1 enabled binds match (ambiguous = no wake).
- * - Returns the single bind if exactly 1 match.
+ * - Returns null if 0 or >1 enabled bindings match (ambiguous = no wake).
+ * - Returns the single binding if exactly 1 match.
  *
  * SECURITY: Does not verify employee is still active; caller must check.
  */
-export async function getConnectWakeBind(input: {
+export async function getCrossTeamWakeBinding(input: {
   receivingTeamId: string;
   mentionedSlackUserId: string;
-}): Promise<SlackConnectWakeBind | null> {
+}): Promise<CrossTeamWakeBinding | null> {
   const teamId = input.receivingTeamId.trim().toUpperCase();
   const userId = input.mentionedSlackUserId.trim().toUpperCase();
   if (!teamId || !userId) return null;
 
   if (isDemoMode()) {
-    const matches = [...demoBinds.values()].filter(
-      (bind) =>
-        bind.enabled &&
-        bind.receivingTeamId.toUpperCase() === teamId &&
-        bind.mentionedSlackUserId.toUpperCase() === userId
+    const matches = [...demoBindings.values()].filter(
+      (binding) =>
+        binding.enabled &&
+        binding.receivingTeamId.toUpperCase() === teamId &&
+        binding.mentionedSlackUserId.toUpperCase() === userId
     );
     if (matches.length !== 1) return null;
     return matches[0];
@@ -94,7 +94,7 @@ export async function getConnectWakeBind(input: {
   const userVariants = [...new Set([userId, userId.toLowerCase(), input.mentionedSlackUserId.trim()])];
 
   const { data, error } = await admin
-    .from("slack_connect_wake_binds")
+    .from("cross_team_wake_bindings")
     .select("*")
     .in("receiving_team_id", teamVariants)
     .in("mentioned_slack_user_id", userVariants)
@@ -105,9 +105,9 @@ export async function getConnectWakeBind(input: {
   const rows = data
     .map((row) => mapRow(row as Record<string, unknown>))
     .filter(
-      (bind) =>
-        bind.receivingTeamId.toUpperCase() === teamId &&
-        bind.mentionedSlackUserId.toUpperCase() === userId
+      (binding) =>
+        binding.receivingTeamId.toUpperCase() === teamId &&
+        binding.mentionedSlackUserId.toUpperCase() === userId
     );
 
   if (rows.length !== 1) return null;
@@ -115,41 +115,41 @@ export async function getConnectWakeBind(input: {
 }
 
 /**
- * Resolve Connect wake bind to a wake target.
+ * Resolve cross-team wake binding to a wake target.
  *
  * Fail-closed design:
- * - Returns null if bind not found or employee inactive/missing.
+ * - Returns null if binding not found or employee inactive/missing.
  * - Returns SlackMentionTarget only when all conditions are met.
  */
-export async function resolveConnectWakeTarget(input: {
+export async function resolveCrossTeamWakeTarget(input: {
   receivingTeamId: string;
   mentionedSlackUserId: string;
 }): Promise<SlackMentionTarget | null> {
-  const bind = await getConnectWakeBind(input);
-  if (!bind) return null;
+  const binding = await getCrossTeamWakeBinding(input);
+  if (!binding) return null;
 
-  const employee = await getEmployee(bind.targetEmployeeId, bind.targetOrgId);
+  const employee = await getEmployee(binding.targetEmployeeId, binding.targetOrgId);
   if (!employee || employee.status !== "active") return null;
 
   return getSlackWakeTargetByEmployeeId({
-    employeeId: bind.targetEmployeeId,
-    orgId: bind.targetOrgId,
+    employeeId: binding.targetEmployeeId,
+    orgId: binding.targetOrgId,
   });
 }
 
 /**
- * Upsert a Connect wake bind (admin tooling only).
+ * Upsert a cross-team wake binding (admin tooling only).
  *
  * For tests and future admin MCP. Production enable is separate GO.
  */
-export async function upsertConnectWakeBind(input: {
+export async function upsertCrossTeamWakeBinding(input: {
   receivingOrgId: string;
   receivingTeamId: string;
   mentionedSlackUserId: string;
   targetOrgId: string;
   targetEmployeeId: string;
   enabled?: boolean;
-}): Promise<SlackConnectWakeBind> {
+}): Promise<CrossTeamWakeBinding> {
   const receivingOrgId = input.receivingOrgId.trim();
   const receivingTeamId = input.receivingTeamId.trim();
   const mentionedSlackUserId = input.mentionedSlackUserId.trim();
@@ -158,7 +158,7 @@ export async function upsertConnectWakeBind(input: {
   const enabled = input.enabled ?? true;
 
   if (!receivingOrgId || !receivingTeamId || !mentionedSlackUserId || !targetOrgId || !targetEmployeeId) {
-    throw new Error("invalid_connect_wake_bind");
+    throw new Error("invalid_cross_team_wake_binding");
   }
 
   const employee = await getEmployee(targetEmployeeId, targetOrgId);
@@ -168,10 +168,10 @@ export async function upsertConnectWakeBind(input: {
   const timestamp = nowIso();
 
   if (isDemoMode()) {
-    const key = bindKey(receivingOrgId, receivingTeamId, mentionedSlackUserId);
-    const existing = demoBinds.get(key);
-    const bind: SlackConnectWakeBind = {
-      id: existing?.id ?? `bind_${Date.now()}`,
+    const key = bindingKey(receivingOrgId, receivingTeamId, mentionedSlackUserId);
+    const existing = demoBindings.get(key);
+    const binding: CrossTeamWakeBinding = {
+      id: existing?.id ?? `binding_${Date.now()}`,
       receivingOrgId,
       receivingTeamId,
       mentionedSlackUserId,
@@ -181,15 +181,15 @@ export async function upsertConnectWakeBind(input: {
       createdAt: existing?.createdAt ?? timestamp,
       updatedAt: timestamp,
     };
-    demoBinds.set(key, bind);
-    return bind;
+    demoBindings.set(key, binding);
+    return binding;
   }
 
   const admin = createSupabaseAdminClient();
   if (!admin) throw new Error("supabase_not_configured");
 
   const { data, error } = await admin
-    .from("slack_connect_wake_binds")
+    .from("cross_team_wake_bindings")
     .upsert(
       {
         receiving_org_id: receivingOrgId,
@@ -205,23 +205,23 @@ export async function upsertConnectWakeBind(input: {
     .select("*")
     .single();
 
-  if (error || !data) throw new Error(error?.message || "connect_wake_bind_upsert_failed");
+  if (error || !data) throw new Error(error?.message || "cross_team_wake_binding_upsert_failed");
   return mapRow(data as Record<string, unknown>);
 }
 
 /**
- * Delete a Connect wake bind by id (admin tooling only).
+ * Delete a cross-team wake binding by id (admin tooling only).
  */
-export async function deleteConnectWakeBind(input: {
+export async function deleteCrossTeamWakeBinding(input: {
   id: string;
 }): Promise<void> {
   const id = input.id.trim();
   if (!id) return;
 
   if (isDemoMode()) {
-    for (const [key, bind] of demoBinds.entries()) {
-      if (bind.id === id) {
-        demoBinds.delete(key);
+    for (const [key, binding] of demoBindings.entries()) {
+      if (binding.id === id) {
+        demoBindings.delete(key);
         return;
       }
     }
@@ -232,28 +232,28 @@ export async function deleteConnectWakeBind(input: {
   if (!admin) throw new Error("supabase_not_configured");
 
   const { error } = await admin
-    .from("slack_connect_wake_binds")
+    .from("cross_team_wake_bindings")
     .delete()
     .eq("id", id);
 
-  if (error) throw new Error(error.message || "connect_wake_bind_delete_failed");
+  if (error) throw new Error(error.message || "cross_team_wake_binding_delete_failed");
 }
 
 /**
- * List Connect wake binds for a target org (admin tooling only).
+ * List cross-team wake bindings for a target org (admin tooling only).
  */
-export async function listConnectWakeBindsByTargetOrg(orgId: string): Promise<SlackConnectWakeBind[]> {
+export async function listCrossTeamWakeBindingsByTargetOrg(orgId: string): Promise<CrossTeamWakeBinding[]> {
   if (!orgId) return [];
 
   if (isDemoMode()) {
-    return [...demoBinds.values()].filter((bind) => bind.targetOrgId === orgId);
+    return [...demoBindings.values()].filter((binding) => binding.targetOrgId === orgId);
   }
 
   const admin = createSupabaseAdminClient();
   if (!admin) return [];
 
   const { data, error } = await admin
-    .from("slack_connect_wake_binds")
+    .from("cross_team_wake_bindings")
     .select("*")
     .eq("target_org_id", orgId)
     .order("created_at", { ascending: false });
@@ -263,8 +263,8 @@ export async function listConnectWakeBindsByTargetOrg(orgId: string): Promise<Sl
 }
 
 /**
- * Reset demo binds (test utility).
+ * Reset demo bindings (test utility).
  */
-export function resetDemoConnectWakeBinds(): void {
-  demoBinds.clear();
+export function resetDemoCrossTeamWakeBindings(): void {
+  demoBindings.clear();
 }

@@ -1,11 +1,11 @@
 /**
- * Unit tests for G7 Slack Connect→own-tenant wake routing data layer.
+ * Unit tests for G7 cross-team wake routing data layer — Option A locked (2026-09-19).
  *
  * Tests fail-closed design: empty, single (success), and ambiguous (>1) cases.
  * Feature flag behavior is tested separately in mention-ingress.test.ts.
  *
  * SMOKE TARGET (Design Lock 2026-09-18):
- * First smoke path: TOKYO307 #aitest → explicit bind → Mirai Tomori wake.
+ * First smoke path: TOKYO307 #aitest → explicit binding → Mirai Tomori wake.
  * These tests use generic fixtures (T_CONNECT_HOST, W_CONNECT_GUEST);
  * real channel/user IDs for 307 #aitest smoke TBD in admin MCP tooling.
  */
@@ -13,14 +13,14 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { DEMO_ORG, getRuntimeEmployees } from "@/lib/demo-data";
 import {
-  deleteConnectWakeBind,
-  getConnectWakeBind,
-  isConnectWakeRoutingEnabled,
-  listConnectWakeBindsByTargetOrg,
-  resetDemoConnectWakeBinds,
-  resolveConnectWakeTarget,
-  upsertConnectWakeBind,
-} from "@/lib/data/slack-connect-wake-binds";
+  deleteCrossTeamWakeBinding,
+  getCrossTeamWakeBinding,
+  isCrossTeamWakeRoutingEnabled,
+  listCrossTeamWakeBindingsByTargetOrg,
+  resetDemoCrossTeamWakeBindings,
+  resolveCrossTeamWakeTarget,
+  upsertCrossTeamWakeBinding,
+} from "@/lib/data/cross-team-wake-bindings";
 import { updateWakeWebhook } from "@/lib/data";
 
 const RECEIVING_TEAM = "T_CONNECT_HOST";
@@ -28,43 +28,43 @@ const MENTIONED_USER = "W_CONNECT_GUEST";
 const WAKE_URL = "https://example.test/wake/connect";
 
 afterEach(() => {
-  resetDemoConnectWakeBinds();
+  resetDemoCrossTeamWakeBindings();
   delete process.env.G7_CONNECT_WAKE_ROUTING;
 });
 
-describe("G7 Connect wake binds data layer", () => {
-  test("isConnectWakeRoutingEnabled returns false by default", () => {
+describe("G7 cross-team wake bindings data layer", () => {
+  test("isCrossTeamWakeRoutingEnabled returns false by default", () => {
     delete process.env.G7_CONNECT_WAKE_ROUTING;
-    expect(isConnectWakeRoutingEnabled()).toBe(false);
+    expect(isCrossTeamWakeRoutingEnabled()).toBe(false);
   });
 
-  test("isConnectWakeRoutingEnabled returns true when G7_CONNECT_WAKE_ROUTING=1", () => {
+  test("isCrossTeamWakeRoutingEnabled returns true when G7_CONNECT_WAKE_ROUTING=1", () => {
     process.env.G7_CONNECT_WAKE_ROUTING = "1";
-    expect(isConnectWakeRoutingEnabled()).toBe(true);
+    expect(isCrossTeamWakeRoutingEnabled()).toBe(true);
   });
 
-  test("isConnectWakeRoutingEnabled returns false for other values", () => {
+  test("isCrossTeamWakeRoutingEnabled returns false for other values", () => {
     process.env.G7_CONNECT_WAKE_ROUTING = "0";
-    expect(isConnectWakeRoutingEnabled()).toBe(false);
+    expect(isCrossTeamWakeRoutingEnabled()).toBe(false);
     process.env.G7_CONNECT_WAKE_ROUTING = "true";
-    expect(isConnectWakeRoutingEnabled()).toBe(false);
+    expect(isCrossTeamWakeRoutingEnabled()).toBe(false);
     process.env.G7_CONNECT_WAKE_ROUTING = "yes";
-    expect(isConnectWakeRoutingEnabled()).toBe(false);
+    expect(isCrossTeamWakeRoutingEnabled()).toBe(false);
   });
 
-  test("getConnectWakeBind returns null when no binds exist (fail-closed)", async () => {
-    const result = await getConnectWakeBind({
+  test("getCrossTeamWakeBinding returns null when no bindings exist (fail-closed)", async () => {
+    const result = await getCrossTeamWakeBinding({
       receivingTeamId: RECEIVING_TEAM,
       mentionedSlackUserId: MENTIONED_USER,
     });
     expect(result).toBeNull();
   });
 
-  test("getConnectWakeBind returns bind when exactly one exists", async () => {
+  test("getCrossTeamWakeBinding returns binding when exactly one exists", async () => {
     const emp = getRuntimeEmployees().find((e) => e.id === "emp_comm");
     if (!emp) throw new Error("missing emp_comm");
 
-    const bind = await upsertConnectWakeBind({
+    const binding = await upsertCrossTeamWakeBinding({
       receivingOrgId: DEMO_ORG.id,
       receivingTeamId: RECEIVING_TEAM,
       mentionedSlackUserId: MENTIONED_USER,
@@ -72,11 +72,11 @@ describe("G7 Connect wake binds data layer", () => {
       targetEmployeeId: emp.id,
     });
 
-    expect(bind.receivingTeamId).toBe(RECEIVING_TEAM);
-    expect(bind.mentionedSlackUserId).toBe(MENTIONED_USER);
-    expect(bind.targetEmployeeId).toBe(emp.id);
+    expect(binding.receivingTeamId).toBe(RECEIVING_TEAM);
+    expect(binding.mentionedSlackUserId).toBe(MENTIONED_USER);
+    expect(binding.targetEmployeeId).toBe(emp.id);
 
-    const result = await getConnectWakeBind({
+    const result = await getCrossTeamWakeBinding({
       receivingTeamId: RECEIVING_TEAM,
       mentionedSlackUserId: MENTIONED_USER,
     });
@@ -85,11 +85,11 @@ describe("G7 Connect wake binds data layer", () => {
     expect(result?.targetEmployeeId).toBe(emp.id);
   });
 
-  test("getConnectWakeBind lookup is case-insensitive", async () => {
+  test("getCrossTeamWakeBinding lookup is case-insensitive", async () => {
     const emp = getRuntimeEmployees().find((e) => e.id === "emp_comm");
     if (!emp) throw new Error("missing emp_comm");
 
-    await upsertConnectWakeBind({
+    await upsertCrossTeamWakeBinding({
       receivingOrgId: DEMO_ORG.id,
       receivingTeamId: "t_connect_host",
       mentionedSlackUserId: "w_connect_guest",
@@ -97,7 +97,7 @@ describe("G7 Connect wake binds data layer", () => {
       targetEmployeeId: emp.id,
     });
 
-    const result = await getConnectWakeBind({
+    const result = await getCrossTeamWakeBinding({
       receivingTeamId: "T_CONNECT_HOST",
       mentionedSlackUserId: "W_CONNECT_GUEST",
     });
@@ -106,11 +106,11 @@ describe("G7 Connect wake binds data layer", () => {
     expect(result?.targetEmployeeId).toBe(emp.id);
   });
 
-  test("getConnectWakeBind returns null when bind is disabled", async () => {
+  test("getCrossTeamWakeBinding returns null when binding is disabled", async () => {
     const emp = getRuntimeEmployees().find((e) => e.id === "emp_comm");
     if (!emp) throw new Error("missing emp_comm");
 
-    await upsertConnectWakeBind({
+    await upsertCrossTeamWakeBinding({
       receivingOrgId: DEMO_ORG.id,
       receivingTeamId: RECEIVING_TEAM,
       mentionedSlackUserId: MENTIONED_USER,
@@ -119,7 +119,7 @@ describe("G7 Connect wake binds data layer", () => {
       enabled: false,
     });
 
-    const result = await getConnectWakeBind({
+    const result = await getCrossTeamWakeBinding({
       receivingTeamId: RECEIVING_TEAM,
       mentionedSlackUserId: MENTIONED_USER,
     });
@@ -127,11 +127,11 @@ describe("G7 Connect wake binds data layer", () => {
     expect(result).toBeNull();
   });
 
-  test("getConnectWakeBind returns null when empty teamId or userId", async () => {
+  test("getCrossTeamWakeBinding returns null when empty teamId or userId", async () => {
     const emp = getRuntimeEmployees().find((e) => e.id === "emp_comm");
     if (!emp) throw new Error("missing emp_comm");
 
-    await upsertConnectWakeBind({
+    await upsertCrossTeamWakeBinding({
       receivingOrgId: DEMO_ORG.id,
       receivingTeamId: RECEIVING_TEAM,
       mentionedSlackUserId: MENTIONED_USER,
@@ -139,20 +139,20 @@ describe("G7 Connect wake binds data layer", () => {
       targetEmployeeId: emp.id,
     });
 
-    const result1 = await getConnectWakeBind({
+    const result1 = await getCrossTeamWakeBinding({
       receivingTeamId: "",
       mentionedSlackUserId: MENTIONED_USER,
     });
     expect(result1).toBeNull();
 
-    const result2 = await getConnectWakeBind({
+    const result2 = await getCrossTeamWakeBinding({
       receivingTeamId: RECEIVING_TEAM,
       mentionedSlackUserId: "",
     });
     expect(result2).toBeNull();
   });
 
-  test("resolveConnectWakeTarget returns target for valid bind with active employee", async () => {
+  test("resolveCrossTeamWakeTarget returns target for valid binding with active employee", async () => {
     const emp = getRuntimeEmployees().find((e) => e.id === "emp_comm");
     if (!emp) throw new Error("missing emp_comm");
 
@@ -162,7 +162,7 @@ describe("G7 Connect wake binds data layer", () => {
       secret: "test-secret",
     });
 
-    await upsertConnectWakeBind({
+    await upsertCrossTeamWakeBinding({
       receivingOrgId: DEMO_ORG.id,
       receivingTeamId: RECEIVING_TEAM,
       mentionedSlackUserId: MENTIONED_USER,
@@ -170,7 +170,7 @@ describe("G7 Connect wake binds data layer", () => {
       targetEmployeeId: emp.id,
     });
 
-    const target = await resolveConnectWakeTarget({
+    const target = await resolveCrossTeamWakeTarget({
       receivingTeamId: RECEIVING_TEAM,
       mentionedSlackUserId: MENTIONED_USER,
     });
@@ -182,8 +182,8 @@ describe("G7 Connect wake binds data layer", () => {
     await updateWakeWebhook(emp.id, { orgId: emp.orgId, url: null, secret: "" });
   });
 
-  test("resolveConnectWakeTarget returns null when no bind exists", async () => {
-    const target = await resolveConnectWakeTarget({
+  test("resolveCrossTeamWakeTarget returns null when no binding exists", async () => {
+    const target = await resolveCrossTeamWakeTarget({
       receivingTeamId: RECEIVING_TEAM,
       mentionedSlackUserId: MENTIONED_USER,
     });
@@ -191,9 +191,9 @@ describe("G7 Connect wake binds data layer", () => {
     expect(target).toBeNull();
   });
 
-  test("upsertConnectWakeBind throws when employee not found", async () => {
+  test("upsertCrossTeamWakeBinding throws when employee not found", async () => {
     await expect(
-      upsertConnectWakeBind({
+      upsertCrossTeamWakeBinding({
         receivingOrgId: DEMO_ORG.id,
         receivingTeamId: RECEIVING_TEAM,
         mentionedSlackUserId: MENTIONED_USER,
@@ -203,23 +203,23 @@ describe("G7 Connect wake binds data layer", () => {
     ).rejects.toThrow("employee_not_found");
   });
 
-  test("upsertConnectWakeBind throws when required fields empty", async () => {
+  test("upsertCrossTeamWakeBinding throws when required fields empty", async () => {
     await expect(
-      upsertConnectWakeBind({
+      upsertCrossTeamWakeBinding({
         receivingOrgId: "",
         receivingTeamId: RECEIVING_TEAM,
         mentionedSlackUserId: MENTIONED_USER,
         targetOrgId: DEMO_ORG.id,
         targetEmployeeId: "emp_comm",
       })
-    ).rejects.toThrow("invalid_connect_wake_bind");
+    ).rejects.toThrow("invalid_cross_team_wake_binding");
   });
 
-  test("deleteConnectWakeBind removes the bind", async () => {
+  test("deleteCrossTeamWakeBinding removes the binding", async () => {
     const emp = getRuntimeEmployees().find((e) => e.id === "emp_comm");
     if (!emp) throw new Error("missing emp_comm");
 
-    const bind = await upsertConnectWakeBind({
+    const binding = await upsertCrossTeamWakeBinding({
       receivingOrgId: DEMO_ORG.id,
       receivingTeamId: RECEIVING_TEAM,
       mentionedSlackUserId: MENTIONED_USER,
@@ -227,26 +227,26 @@ describe("G7 Connect wake binds data layer", () => {
       targetEmployeeId: emp.id,
     });
 
-    const before = await getConnectWakeBind({
+    const before = await getCrossTeamWakeBinding({
       receivingTeamId: RECEIVING_TEAM,
       mentionedSlackUserId: MENTIONED_USER,
     });
     expect(before).not.toBeNull();
 
-    await deleteConnectWakeBind({ id: bind.id });
+    await deleteCrossTeamWakeBinding({ id: binding.id });
 
-    const after = await getConnectWakeBind({
+    const after = await getCrossTeamWakeBinding({
       receivingTeamId: RECEIVING_TEAM,
       mentionedSlackUserId: MENTIONED_USER,
     });
     expect(after).toBeNull();
   });
 
-  test("listConnectWakeBindsByTargetOrg returns binds for the org", async () => {
+  test("listCrossTeamWakeBindingsByTargetOrg returns bindings for the org", async () => {
     const emp = getRuntimeEmployees().find((e) => e.id === "emp_comm");
     if (!emp) throw new Error("missing emp_comm");
 
-    await upsertConnectWakeBind({
+    await upsertCrossTeamWakeBinding({
       receivingOrgId: DEMO_ORG.id,
       receivingTeamId: RECEIVING_TEAM,
       mentionedSlackUserId: MENTIONED_USER,
@@ -254,26 +254,26 @@ describe("G7 Connect wake binds data layer", () => {
       targetEmployeeId: emp.id,
     });
 
-    const binds = await listConnectWakeBindsByTargetOrg(emp.orgId);
-    expect(binds.length).toBe(1);
-    expect(binds[0].targetEmployeeId).toBe(emp.id);
+    const bindings = await listCrossTeamWakeBindingsByTargetOrg(emp.orgId);
+    expect(bindings.length).toBe(1);
+    expect(bindings[0].targetEmployeeId).toBe(emp.id);
   });
 
-  test("listConnectWakeBindsByTargetOrg returns empty for unknown org", async () => {
-    const binds = await listConnectWakeBindsByTargetOrg("org_nonexistent");
-    expect(binds.length).toBe(0);
+  test("listCrossTeamWakeBindingsByTargetOrg returns empty for unknown org", async () => {
+    const bindings = await listCrossTeamWakeBindingsByTargetOrg("org_nonexistent");
+    expect(bindings.length).toBe(0);
   });
 });
 
-describe("G7 Connect wake binds ambiguous case (fail-closed)", () => {
-  test("getConnectWakeBind returns null when multiple binds match (ambiguous)", async () => {
+describe("G7 cross-team wake bindings ambiguous case (fail-closed)", () => {
+  test("getCrossTeamWakeBinding returns null when multiple bindings match (ambiguous)", async () => {
     const employees = getRuntimeEmployees().filter((e) => e.status === "active");
     if (employees.length < 2) throw new Error("need at least 2 active employees");
 
     const emp1 = employees[0];
     const emp2 = employees[1];
 
-    await upsertConnectWakeBind({
+    await upsertCrossTeamWakeBinding({
       receivingOrgId: DEMO_ORG.id,
       receivingTeamId: RECEIVING_TEAM,
       mentionedSlackUserId: MENTIONED_USER,
@@ -281,13 +281,13 @@ describe("G7 Connect wake binds ambiguous case (fail-closed)", () => {
       targetEmployeeId: emp1.id,
     });
 
-    const firstResult = await getConnectWakeBind({
+    const firstResult = await getCrossTeamWakeBinding({
       receivingTeamId: RECEIVING_TEAM,
       mentionedSlackUserId: MENTIONED_USER,
     });
     expect(firstResult).not.toBeNull();
 
-    await upsertConnectWakeBind({
+    await upsertCrossTeamWakeBinding({
       receivingOrgId: "org_other",
       receivingTeamId: RECEIVING_TEAM,
       mentionedSlackUserId: MENTIONED_USER,
@@ -295,7 +295,7 @@ describe("G7 Connect wake binds ambiguous case (fail-closed)", () => {
       targetEmployeeId: emp2.id,
     });
 
-    const ambiguousResult = await getConnectWakeBind({
+    const ambiguousResult = await getCrossTeamWakeBinding({
       receivingTeamId: RECEIVING_TEAM,
       mentionedSlackUserId: MENTIONED_USER,
     });
