@@ -34,6 +34,10 @@ import {
   resolveSlackImWakeTarget,
   resolveSlackUserTokenImWakeTarget,
 } from "@/lib/data/slack-im-routes";
+import {
+  isCrossTeamWakeRoutingEnabled,
+  resolveCrossTeamWakeTarget,
+} from "@/lib/data/cross-team-wake-bindings";
 import { listAllEnabledNotificationChannels } from "@/lib/data/notification-channels";
 import { isDemoMode } from "@/lib/mode";
 import { verifySlackSignature } from "@/lib/notify/slack";
@@ -328,16 +332,45 @@ async function resolveWakeTargets(input: {
     (row) => row.slackUserId.toUpperCase() !== input.speakerId.toUpperCase()
   );
 
+  // G7 Cross-team wake routing — Option A: cross_team_wake_bindings (flag G7_CONNECT_WAKE_ROUTING=1).
+  // When flag OFF: this entire block is dead code — existing behavior unchanged.
+  // When flag ON: after team-scoped lookup misses, check explicit cross-team wake bindings.
+  // Fail-closed: missing/ambiguous binding does NOT wake (resolveCrossTeamWakeTarget returns null).
+  // Security: never guess employee across orgs by display name; explicit admin binding only.
+  const crossTeamTargets: SlackMentionTarget[] = [];
+  if (isCrossTeamWakeRoutingEnabled() && input.teamId) {
+    const foundUserIds = new Set(mentioned.map((m) => m.slackUserId.toUpperCase()));
+    const unboundUserIds = input.mentionedIds.filter(
+      (id) => !foundUserIds.has(id.toUpperCase()) && id.toUpperCase() !== input.speakerId.toUpperCase()
+    );
+    for (const mentionedUserId of unboundUserIds) {
+      const crossTeamTarget = await resolveCrossTeamWakeTarget({
+        receivingTeamId: input.teamId,
+        mentionedSlackUserId: mentionedUserId,
+      });
+      if (crossTeamTarget) {
+        crossTeamTargets.push(crossTeamTarget);
+      }
+    }
+  }
+
+  const allOthers = [
+    ...others,
+    ...crossTeamTargets.filter(
+      (ct) => ct.slackUserId.toUpperCase() !== input.speakerId.toUpperCase()
+    ),
+  ];
+
   if (input.eventType === "app_mention") {
-    if (others.length) return { targets: others };
+    if (allOthers.length) return { targets: allOthers };
     if (mentioned.length) return { targets: mentioned };
     const teamLinked = await listLinkedSlackIdentitiesForTeam(input.teamId || null);
     if (teamLinked.length === 1) return { targets: teamLinked };
     return { targets: [] };
   }
 
-  if (speakerBound && others.length === 0) return { targets: [] };
-  return { targets: others };
+  if (speakerBound && allOthers.length === 0) return { targets: [] };
+  return { targets: allOthers };
 }
 
 async function postWake(
