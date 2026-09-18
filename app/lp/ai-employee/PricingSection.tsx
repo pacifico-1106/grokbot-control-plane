@@ -163,7 +163,7 @@ export function PricingSection() {
               }`}
             >
               {tier.popular && (
-                <span className="absolute -top-3 left-1/2 -translate-x-1/2 chip chip-ok text-[10px] px-3">
+                <span className="absolute -top-3.5 left-1/2 -translate-x-1/2 z-10 chip chip-ok text-[10px] px-3 bg-[var(--bg-elevated)] ring-2 ring-[var(--bg-elevated)]">
                   人気
                 </span>
               )}
