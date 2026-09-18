@@ -1,8 +1,15 @@
 # G7 Connect Wake Routing — 設計ロックメモ
 
 **作成日:** 2026-09-18  
-**ステータス:** 設計ロック待ち（Yasaka / Ando 承認）  
+**ステータス:** 一部ロック済み（First smoke ロック完了 / Bind 構造ロック待ち）  
 **関連:** [tenant-slack-kickoff-rail.md](./tenant-slack-kickoff-rail.md) · [multi-tenant-org-boundary-audit.md](./multi-tenant-org-boundary-audit.md) · [p0-ai-employee-ops-backlog-20260915.md](./p0-ai-employee-ops-backlog-20260915.md)
+
+### ロック状況サマリ
+
+| 項目 | ステータス | ロック内容 |
+|------|------------|------------|
+| **First smoke** | ✅ **ロック済み**（Ando 2026-09-18） | **(a) 307 `#aitest`** が canonical test path |
+| **Bind テーブル構造** | 🔒 ロック待ち | Option A（新テーブル）/ Option B（既存拡張）|
 
 ---
 
@@ -174,14 +181,16 @@ Connect 共有チャネルは `shared_external` 分類。dual-audience 評価:
 
 ---
 
-## 6. First Smoke Options（A/B 選択 — Yasaka / Ando ロック）
+## 6. First Smoke — ✅ ロック済み
 
-> **🔒 ロック選択（Yasaka / Ando）**: 以下の A/B から選択
+> **✅ ロック完了（Ando 2026-09-18）**: **(a) 307 `#aitest`** が canonical test path
 
-### Option A: 307 `#aitest` 受信 → explicit bind → Tomori wake
+### 6-1. Test/Smoke Lock: (a) 307 `#aitest`
+
+**ロック決定:** 307 Connect `#aitest` を G7 の canonical test path として使用。
 
 ```
-【フロー】
+【First Smoke フロー】
 1. 307 Connect `#aitest` (T40CKLB5Z) で @[Tomori ゲスト] をメンション
 2. Staffpass ingress が event を受信
 3. cross_team_wake_bindings で検索:
@@ -191,32 +200,28 @@ Connect 共有チャネルは `shared_external` 分類。dual-audience 評価:
 5. 返信は Tomori の User Token で T40CKLB5Z 側の共有チャネルへ投稿
 ```
 
-**Pros:**
+**選定理由:**
 - 307 側で既存の `#aitest` を使用可能
 - 短いフィードバックループ
+- Tomori の 307 側ゲスト user_id を事前取得して bind 登録
 
-**Cons:**
-- Tomori の 307 側ゲスト user_id を事前取得が必要
+### 6-2. Production Intent: (b) Mirai / Uehara Connect（後続）
 
-### Option B: Mirai 側 Connect main battlefield
+**本番運用では Mirai 側 Connect main battlefield を想定**（Uehara Connect 等）。First smoke 完了後に移行。
 
 ```
-【フロー】
-1. Miraishachu が 307 と Connect 共有チャネルを作成
+【Production-shaped フロー（後続）】
+1. Miraishachu が 307 と Connect 共有チャネルを作成（または既存 Connect を使用）
 2. Miraishachu 側で @Tomori をメンション（home team wake）
 3. 307 側メンバーの投稿は cross_team bind で Tomori wake
 ```
 
-**Pros:**
+**Production intent の理由:**
 - Mirai 側がホストで制御しやすい
-- Home team wake と cross-team wake を両方テスト可能
+- Home team wake と cross-team wake を両方活用
+- 実運用に近い形でのオペレーション
 
-**Cons:**
-- Connect チャネル作成の追加ステップ
-
-### 推奨（Yasaka / Ando ロック待ち）
-
-**Option A** を推奨: 既存の `#aitest` を使い、最短で smoke test 可能。
+**移行タイミング:** First smoke (a) 完了 + 基本動作確認後
 
 ---
 
@@ -280,13 +285,15 @@ export function isCrossTeamWakeEnabled(orgId: string): boolean {
 
 ### 8-3. 有効化の前提条件
 
-- [ ] 本設計メモの Yasaka / Ando ロック完了
+- [x] First smoke ロック完了（Ando 2026-09-18: (a) 307 `#aitest`）
+- [ ] Bind テーブル構造ロック完了（Yasaka / Ando）
 - [ ] Security review（本メモ §7 チェックリスト）
 - [ ] `cross_team_wake_bindings` テーブルマイグレーション
 - [ ] resolveWakeTargets への cross-team 分岐追加
 - [ ] Admin MCP ツール実装（`crossTeamWake.bind` / `crossTeamWake.list`）
 - [ ] 監査イベント追加
-- [ ] Smoke test 完了（Option A or B）
+- [ ] First smoke 完了: (a) 307 `#aitest` → Tomori wake
+- [ ] Production intent へ移行: (b) Mirai / Uehara Connect
 
 **Production enable は本 PR とは別 GO。**
 
@@ -315,22 +322,30 @@ export function isCrossTeamWakeEnabled(orgId: string): boolean {
 
 ---
 
-## 11. ロック待ち項目まとめ
+## 11. ロック状況まとめ
 
-> **Yasaka / Ando 承認待ち**
+### ✅ ロック済み
+
+| # | 項目 | ロック | 決定者 |
+|---|------|--------|--------|
+| 2 | **First smoke** | **(a) 307 `#aitest`** — canonical test path | Ando 2026-09-18 |
+
+### 🔒 ロック待ち（Yasaka / Ando 承認待ち）
 
 | # | 項目 | 選択肢 | 推奨 |
 |---|------|--------|------|
-| 1 | Bind テーブル構造 | Option A（新テーブル）/ Option B（既存拡張） | **A** |
-| 2 | First smoke | Option A（307 #aitest）/ Option B（Mirai 側 Connect） | **A** |
+| 1 | Bind テーブル構造 | Option A（新テーブル `cross_team_wake_bindings`）/ Option B（既存 `employee_slack_identities` 拡張） | **A** |
 
-**ロック後のアクション:**
-1. 本メモをマージ
-2. SQL マイグレーション PR 作成
-3. resolveWakeTargets 拡張 PR 作成
-4. Admin MCP ツール PR 作成
-5. Smoke test 実施
-6. Production enable（別 GO）
+### ロック後のアクション
+
+1. Bind テーブル構造ロック完了
+2. 本メモをマージ
+3. SQL マイグレーション PR 作成
+4. resolveWakeTargets 拡張 PR 作成
+5. Admin MCP ツール PR 作成
+6. First smoke (a) 307 `#aitest` 実施
+7. Production intent (b) Mirai Connect へ移行
+8. Production enable（別 GO）
 
 ---
 
@@ -339,3 +354,4 @@ export function isCrossTeamWakeEnabled(orgId: string): boolean {
 | 日付 | 変更 |
 |------|------|
 | 2026-09-18 | 初版作成（設計ロック待ち） |
+| 2026-09-18 | **First smoke ロック**: (a) 307 `#aitest` を canonical test path に決定（Ando）。(b) Mirai Connect は production intent として後続。|
