@@ -486,7 +486,7 @@ export default function AIEmployeeLP() {
                   <br />
                   代表取締役 / Founder &amp; Atelier Principal
                 </p>
-                <div className="mt-4 flex flex-col gap-2">
+                <div className="mt-4">
                   <Link
                     href="https://tokyo307inc.com/about/taiyo-yasaka"
                     target="_blank"
@@ -494,14 +494,6 @@ export default function AIEmployeeLP() {
                     className="btn btn-ghost text-xs w-full justify-center"
                   >
                     プロフィールを見る
-                  </Link>
-                  <Link
-                    href="https://www.youtube.com/@tyasaka1106/videos"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="btn btn-ghost text-xs w-full justify-center"
-                  >
-                    YouTubeチャンネル
                   </Link>
                 </div>
               </div>
