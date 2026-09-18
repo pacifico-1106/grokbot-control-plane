@@ -3,6 +3,11 @@
  *
  * Tests fail-closed design: empty, single (success), and ambiguous (>1) cases.
  * Feature flag behavior is tested separately in mention-ingress.test.ts.
+ *
+ * SMOKE TARGET (Design Lock 2026-09-18):
+ * First smoke path: TOKYO307 #aitest → explicit bind → Mirai Tomori wake.
+ * These tests use generic fixtures (T_CONNECT_HOST, W_CONNECT_GUEST);
+ * real channel/user IDs for 307 #aitest smoke TBD in admin MCP tooling.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";

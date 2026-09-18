@@ -2,6 +2,10 @@
 -- Explicit bind table for cross-org wake when a Connect guest is mentioned.
 -- Feature flag G7_CONNECT_WAKE_ROUTING=1 (default OFF — this is scaffold only).
 --
+-- SMOKE TARGET (Design Lock 2026-09-18):
+-- First smoke path: TOKYO307 #aitest → explicit bind → Mirai Tomori wake.
+-- Channel IDs NOT hardcoded; smoke fixture TBD in admin MCP tooling PR.
+--
 -- SECURITY DESIGN:
 -- - Tenant isolation: binds are scoped to (receiving_org, target_org) pairs.
 -- - Fail-closed: missing or ambiguous (>1) binds do NOT wake.
