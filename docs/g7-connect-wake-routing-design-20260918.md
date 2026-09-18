@@ -1,15 +1,19 @@
 # G7 Connect Wake Routing — 設計ロックメモ
 
 **作成日:** 2026-09-18  
-**ステータス:** 一部ロック済み（First smoke ロック完了 / Bind 構造ロック待ち）  
+**ステータス:** ✅ 設計ロック完了  
 **関連:** [tenant-slack-kickoff-rail.md](./tenant-slack-kickoff-rail.md) · [multi-tenant-org-boundary-audit.md](./multi-tenant-org-boundary-audit.md) · [p0-ai-employee-ops-backlog-20260915.md](./p0-ai-employee-ops-backlog-20260915.md)
 
 ### ロック状況サマリ
 
 | 項目 | ステータス | ロック内容 |
 |------|------------|------------|
+| **Bind テーブル構造** | ✅ **ロック済み**（Ando 2026-09-19） | **Option A: `cross_team_wake_bindings`**（Option B rejected） |
 | **First smoke** | ✅ **ロック済み**（Ando 2026-09-18） | **(a) 307 `#aitest`** が canonical test path |
-| **Bind テーブル構造** | 🔒 ロック待ち | Option A（新テーブル）/ Option B（既存拡張）|
+
+### プロダクトロック: Tomori = 内外窓口
+
+> **ロック（Ando 2026-09-19）**: Tomori は**内外窓口**として、外部 Connect WS（307 `#aitest` 含む）からも G7 explicit bind 経由で wake される。Ando スタイルの「個人 Connect 顔」ではなく、社員証付き AI 社員として外部からも起きる。
 
 ---
 
@@ -61,14 +65,15 @@ G7 は **受信テナント（Connect の相手方ホスト）** から **自テ
 
 **ファジーマッチ禁止**: 表示名・メールアドレス・類似 Slack user_id での推測マッチは行わない。
 
-### 3-2. 提案テーブル / キー構造
+### 3-2. Bind テーブル構造 — ✅ ロック済み
 
-> **🔒 ロック選択（Yasaka / Ando）**: 以下の A/B から選択
+> **✅ ロック完了（Ando 2026-09-19）**: **Option A: `cross_team_wake_bindings`** を採用。Option B は rejected。
 
-#### Option A: 受信側 team_id + mentioned slack_user_id → employeeId / orgId
+#### ✅ Option A: `cross_team_wake_bindings`（採用）
+
+受信側 team_id + mentioned slack_user_id → employeeId / orgId
 
 ```sql
--- Option A: 新テーブル
 create table if not exists cross_team_wake_bindings (
   id uuid primary key default gen_random_uuid(),
   receiving_team_id text not null,           -- 相手方 WS team_id（例: T40CKLB5Z）
@@ -85,35 +90,23 @@ create table if not exists cross_team_wake_bindings (
 create index idx_cross_team_wake_receiving on cross_team_wake_bindings(receiving_team_id, mentioned_slack_user_id) where enabled = true;
 ```
 
-**Pros:**
+**採用理由:**
 - receiving_team_id 単位で明示的制御
 - 1 mention → 1 employee の直接マッピング
+- Connect では相手方 WS でのゲスト user_id が自社 user_id と異なるケースが多い
+- 明示的 bind テーブルでの管理が安全
 
-**Cons:**
-- 相手方でのゲスト Slack user_id を事前に把握する必要あり
-
-#### Option B: Home team slack_user_id マッピング（自社 U... → 自社 employee）
+#### ❌ Option B: `employee_slack_identities` 拡張（rejected）
 
 ```sql
--- Option B: employee_slack_identities 拡張
+-- REJECTED: 採用しない
 alter table employee_slack_identities
   add column if not exists allow_cross_team_wake boolean not null default false;
-
--- allow_cross_team_wake = true の場合:
--- 任意の team_id からのメンションで home team の employee を wake 可能
 ```
 
-**Pros:**
-- 既存テーブル拡張のみ
-- 自社 Slack user_id から employee への既存マッピングを再利用
-
-**Cons:**
+**Rejected 理由:**
 - 相手方での Slack user_id と自社 Slack user_id が異なる場合に対応できない
 - Connect ゲストは別 user_id を持つことがある
-
-#### 推奨（Yasaka / Ando ロック待ち）
-
-**Option A** を推奨: Connect では相手方 WS でのゲスト user_id が自社 user_id と異なるケースが多い。明示的 bind テーブルでの管理が安全。
 
 ---
 
@@ -286,7 +279,8 @@ export function isCrossTeamWakeEnabled(orgId: string): boolean {
 ### 8-3. 有効化の前提条件
 
 - [x] First smoke ロック完了（Ando 2026-09-18: (a) 307 `#aitest`）
-- [ ] Bind テーブル構造ロック完了（Yasaka / Ando）
+- [x] Bind テーブル構造ロック完了（Ando 2026-09-19: Option A `cross_team_wake_bindings`）
+- [x] プロダクトロック: Tomori = 内外窓口（Ando 2026-09-19）
 - [ ] Security review（本メモ §7 チェックリスト）
 - [ ] `cross_team_wake_bindings` テーブルマイグレーション
 - [ ] resolveWakeTargets への cross-team 分岐追加
@@ -324,27 +318,23 @@ export function isCrossTeamWakeEnabled(orgId: string): boolean {
 
 ## 11. ロック状況まとめ
 
-### ✅ ロック済み
+### ✅ 全項目ロック完了
 
 | # | 項目 | ロック | 決定者 |
 |---|------|--------|--------|
+| 1 | **Bind テーブル構造** | **Option A: `cross_team_wake_bindings`**（Option B rejected） | Ando 2026-09-19 |
 | 2 | **First smoke** | **(a) 307 `#aitest`** — canonical test path | Ando 2026-09-18 |
+| 3 | **Tomori = 内外窓口** | 外部 Connect WS からも G7 explicit bind で wake | Ando 2026-09-19 |
 
-### 🔒 ロック待ち（Yasaka / Ando 承認待ち）
+### 次のアクション
 
-| # | 項目 | 選択肢 | 推奨 |
-|---|------|--------|------|
-| 1 | Bind テーブル構造 | Option A（新テーブル `cross_team_wake_bindings`）/ Option B（既存 `employee_slack_identities` 拡張） | **A** |
-
-### ロック後のアクション
-
-1. Bind テーブル構造ロック完了
+1. ~~設計ロック完了~~ ✅
 2. 本メモをマージ
-3. SQL マイグレーション PR 作成
+3. SQL マイグレーション PR 作成（`cross_team_wake_bindings` テーブル）
 4. resolveWakeTargets 拡張 PR 作成
-5. Admin MCP ツール PR 作成
-6. First smoke (a) 307 `#aitest` 実施
-7. Production intent (b) Mirai Connect へ移行
+5. Admin MCP ツール PR 作成（`crossTeamWake.bind` / `crossTeamWake.list`）
+6. First smoke (a) 307 `#aitest` → Tomori wake 実施
+7. Production intent (b) Mirai / Uehara Connect へ移行
 8. Production enable（別 GO）
 
 ---
@@ -355,3 +345,4 @@ export function isCrossTeamWakeEnabled(orgId: string): boolean {
 |------|------|
 | 2026-09-18 | 初版作成（設計ロック待ち） |
 | 2026-09-18 | **First smoke ロック**: (a) 307 `#aitest` を canonical test path に決定（Ando）。(b) Mirai Connect は production intent として後続。|
+| 2026-09-19 | **Bind 構造ロック**: Option A `cross_team_wake_bindings` を採用（Ando）。Option B rejected。**プロダクトロック**: Tomori = 内外窓口（外部 Connect WS からも G7 explicit bind で wake）。設計ロック完了。|
