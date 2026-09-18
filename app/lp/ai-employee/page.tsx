@@ -72,6 +72,10 @@ const FAQ = [
     a: "はい。Internプランは月50,000円（税別）です。ただし、Google Workspaceのアカウント費用やGrok Botの従量課金分など、実費は別途かかります。セットアップから運用まで、私たちがハンズオンでサポートします。",
   },
   {
+    q: "初期費用と月額の違いは？",
+    a: "初期費用はセットアップ・研修費用で、導入時に一度だけお支払いいただきます。月額はAI社員の利用料金で、毎月または年払いでお支払いいただきます。年払いなら月額が10%オフになります。",
+  },
+  {
     q: "承認はどうやって行うの？",
     a: "メール、LINE、Slackで承認依頼が届きます。初期設定では、社外送信・日程確定・発注は人が見るまで進みません。スマホから承認・却下を行えます。",
   },
@@ -112,10 +116,10 @@ export default function AIEmployeeLP() {
           <BrandMark size="md" className="min-w-0" />
           <nav className="flex items-center gap-2">
             <Link
-              href="/signup"
+              href="/lp/ai-employee/consult"
               className="btn btn-primary text-xs sm:text-sm"
             >
-              無料で相談
+              相談する
             </Link>
           </nav>
         </div>
@@ -138,8 +142,8 @@ export default function AIEmployeeLP() {
                 AI社員の「社員証」で、許可・止め方・記録を会社に残します。
               </p>
               <div className="mt-8 flex flex-col sm:flex-row gap-3 justify-center lg:justify-start">
-                <Link href="/signup" className="btn btn-primary">
-                  無料で相談する
+                <Link href="/lp/ai-employee/consult" className="btn btn-primary">
+                  相談する
                 </Link>
                 <Link href="#pricing" className="btn btn-ghost">
                   料金を見る
@@ -555,16 +559,21 @@ export default function AIEmployeeLP() {
           <div className="surface cta-panel px-5 py-10 sm:p-12 text-center">
             <span className="eyebrow">GET STARTED</span>
             <h2 className="mt-4 text-2xl sm:text-4xl font-bold tracking-tight">
-              まずは無料で相談
+              まずは相談から
             </h2>
             <p className="mt-3 text-sm muted max-w-xl mx-auto">
               AI社員の導入に興味があれば、お気軽にご相談ください。
               <br className="hidden sm:block" />
               御社の業務に合った提案をいたします。
             </p>
-            <Link href="/signup" className="btn btn-primary mt-7">
-              無料で相談する
-            </Link>
+            <div className="mt-7 flex flex-col sm:flex-row gap-3 justify-center">
+              <Link href="/lp/ai-employee/consult" className="btn btn-primary">
+                相談する
+              </Link>
+              <Link href="#pricing" className="btn btn-ghost">
+                料金を見る
+              </Link>
+            </div>
           </div>
         </section>
       </main>
