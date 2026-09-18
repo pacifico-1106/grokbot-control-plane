@@ -267,6 +267,9 @@ export default function AIEmployeeLP() {
                 Google Workspace（会社負担）、Slackワークスペース（会社負担）、Cursor/Grok
                 Botの従量課金分、LINE公式アカウント費用（ご利用の場合）は、プラン料金とは別に実費としてかかります。
               </p>
+              <p className="mt-2 text-xs faint">
+                ※ その他、業務において必要となるアカウントに応じ変動します。
+              </p>
             </div>
           </div>
         </section>
