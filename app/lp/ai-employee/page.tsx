@@ -6,7 +6,7 @@ import { LegalLinks } from "@/components/LegalLinks";
 import { PricingSection } from "./PricingSection";
 
 export const metadata: Metadata = {
-  title: "AI社員 導入パック — 中小企業336万社の味方 | Staffpass",
+  title: "AI社員 導入パック — 中小企業336万社のミカタ | Staffpass",
   description:
     "AI社員の導入から運用まで、中小企業の経営者のためのマネージドパック。Staffpass（社員証・許可・記録）、会社メール、Grok Bot をまとめて導入。月50,000円から。",
 };
@@ -132,7 +132,7 @@ export default function AIEmployeeLP() {
             <div className="max-w-3xl text-center lg:text-left order-2 lg:order-1">
               <span className="eyebrow">AI EMPLOYEE MANAGED PACK</span>
               <h1 className="mt-5 text-[clamp(2rem,5vw,3.5rem)] font-bold tracking-[-0.045em] leading-[1.1]">
-                中小企業336万社の味方
+                中小企業336万社のミカタ
                 <br />
                 <span className="text-gradient">AI社員 by Staffpass</span>
               </h1>
