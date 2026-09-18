@@ -469,6 +469,8 @@ export type AuditAction =
   | "slack.internal_im_wake"
   | "slack.user_token_im_wake"
   | "slack.im_wake_skipped"
+  | "slack.user_token_channel_wake"
+  | "slack.user_token_channel_wake_skipped"
   | "employee.sod_forced"
   | "employee.sod_override"
   | "action_limit.reached"

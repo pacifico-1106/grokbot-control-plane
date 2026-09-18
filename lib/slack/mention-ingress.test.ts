@@ -1917,3 +1917,303 @@ describe("G7 Cross-team wake routing (Option A: cross_team_wake_bindings)", () =
     }
   });
 });
+
+/**
+ * P0 User-token channel mention ingress tests.
+ * Path C: message.channels / message.groups with user-token authorization.
+ * @see docs/p0-user-mention-ingress-design-20260919.md
+ */
+describe("P0 User-token channel mention ingress (Path C)", () => {
+  const savedFlag = process.env.P0_USER_CHANNEL_MENTION_INGRESS;
+  const USER_CHANNEL = "C_USER_CHANNEL";
+  const SUBSCRIBER_USER = "U_SUBSCRIBER";
+  const SUBSCRIBER_TEAM = "T_SUBSCRIBER";
+  const OTHER_SPEAKER = "U_OTHER_SPEAKER";
+  const OTHER_TEAM = "T_OTHER";
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    setSlackMentionClaimInsertForTests(null);
+    if (savedSigning === undefined) delete process.env.SLACK_SIGNING_SECRET;
+    else process.env.SLACK_SIGNING_SECRET = savedSigning;
+    if (savedFlag === undefined) delete process.env.P0_USER_CHANNEL_MENTION_INGRESS;
+    else process.env.P0_USER_CHANNEL_MENTION_INGRESS = savedFlag;
+  });
+
+  test("flag OFF: user-token channel event is skipped silently", async () => {
+    process.env.SLACK_SIGNING_SECRET = SIGNING_SECRET;
+    delete process.env.P0_USER_CHANNEL_MENTION_INGRESS;
+    const wake = mockWake();
+
+    const result = await handleSlackEventsRequest(
+      signedRequest({
+        type: "event_callback",
+        team_id: OTHER_TEAM,
+        event_id: `Ev_user_channel_flag_off_${Date.now()}`,
+        event: {
+          type: "message",
+          channel_type: "channel",
+          user: OTHER_SPEAKER,
+          text: `<@${SUBSCRIBER_USER}> hello from channel`,
+          ts: "1787911800.000400",
+          channel: USER_CHANNEL,
+        },
+        authorizations: [
+          { is_bot: false, user_id: SUBSCRIBER_USER, team_id: SUBSCRIBER_TEAM },
+        ],
+      })
+    );
+
+    expect(result.status).toBe(200);
+    expect(wake.calls().length).toBe(0);
+  });
+
+  test("flag ON: user-token channel event without mention is skipped", async () => {
+    process.env.SLACK_SIGNING_SECRET = SIGNING_SECRET;
+    process.env.P0_USER_CHANNEL_MENTION_INGRESS = "1";
+    const wake = mockWake();
+
+    const result = await handleSlackEventsRequest(
+      signedRequest({
+        type: "event_callback",
+        team_id: OTHER_TEAM,
+        event_id: `Ev_user_channel_no_mention_${Date.now()}`,
+        event: {
+          type: "message",
+          channel_type: "channel",
+          user: OTHER_SPEAKER,
+          text: "hello without mention",
+          ts: "1787911800.000401",
+          channel: USER_CHANNEL,
+        },
+        authorizations: [
+          { is_bot: false, user_id: SUBSCRIBER_USER, team_id: SUBSCRIBER_TEAM },
+        ],
+      })
+    );
+
+    expect(result.status).toBe(200);
+    expect(wake.calls().length).toBe(0);
+  });
+
+  test("flag ON: self-loop (speaker = subscriber) is skipped", async () => {
+    process.env.SLACK_SIGNING_SECRET = SIGNING_SECRET;
+    process.env.P0_USER_CHANNEL_MENTION_INGRESS = "1";
+    const wake = mockWake();
+
+    const result = await handleSlackEventsRequest(
+      signedRequest({
+        type: "event_callback",
+        team_id: SUBSCRIBER_TEAM,
+        event_id: `Ev_user_channel_self_loop_${Date.now()}`,
+        event: {
+          type: "message",
+          channel_type: "channel",
+          user: SUBSCRIBER_USER,
+          text: `<@${SUBSCRIBER_USER}> self mention`,
+          ts: "1787911800.000402",
+          channel: USER_CHANNEL,
+        },
+        authorizations: [
+          { is_bot: false, user_id: SUBSCRIBER_USER, team_id: SUBSCRIBER_TEAM },
+        ],
+      })
+    );
+
+    expect(result.status).toBe(200);
+    expect(wake.calls().length).toBe(0);
+  });
+
+  test("flag ON: unbound subscriber is skipped (employee_not_bound)", async () => {
+    process.env.SLACK_SIGNING_SECRET = SIGNING_SECRET;
+    process.env.P0_USER_CHANNEL_MENTION_INGRESS = "1";
+    const wake = mockWake();
+
+    const result = await handleSlackEventsRequest(
+      signedRequest({
+        type: "event_callback",
+        team_id: OTHER_TEAM,
+        event_id: `Ev_user_channel_unbound_${Date.now()}`,
+        event: {
+          type: "message",
+          channel_type: "channel",
+          user: OTHER_SPEAKER,
+          text: `<@${SUBSCRIBER_USER}> mention unbound`,
+          ts: "1787911800.000403",
+          channel: USER_CHANNEL,
+        },
+        authorizations: [
+          { is_bot: false, user_id: SUBSCRIBER_USER, team_id: SUBSCRIBER_TEAM },
+        ],
+      })
+    );
+
+    expect(result.status).toBe(200);
+    expect(wake.calls().length).toBe(0);
+  });
+
+  test("flag ON: bound subscriber with unclassified channel is skipped", async () => {
+    process.env.SLACK_SIGNING_SECRET = SIGNING_SECRET;
+    process.env.P0_USER_CHANNEL_MENTION_INGRESS = "1";
+    const { restore } = await bindAndo({ slackUserId: SUBSCRIBER_USER, slackTeamId: SUBSCRIBER_TEAM });
+    const wake = mockWake();
+
+    try {
+      const result = await handleSlackEventsRequest(
+        signedRequest({
+          type: "event_callback",
+          team_id: OTHER_TEAM,
+          event_id: `Ev_user_channel_unclassified_${Date.now()}`,
+          event: {
+            type: "message",
+            channel_type: "channel",
+            user: OTHER_SPEAKER,
+            text: `<@${SUBSCRIBER_USER}> mention in unclassified channel`,
+            ts: "1787911800.000404",
+            channel: "C_UNCLASSIFIED_CHANNEL",
+          },
+          authorizations: [
+            { is_bot: false, user_id: SUBSCRIBER_USER, team_id: SUBSCRIBER_TEAM },
+          ],
+        })
+      );
+
+      expect(result.status).toBe(200);
+      expect(wake.calls().length).toBe(0);
+    } finally {
+      await restore();
+    }
+  });
+
+  test("flag ON: bound subscriber with classified channel wakes employee", async () => {
+    process.env.SLACK_SIGNING_SECRET = SIGNING_SECRET;
+    process.env.P0_USER_CHANNEL_MENTION_INGRESS = "1";
+    const { restore } = await bindAndo({ slackUserId: SUBSCRIBER_USER, slackTeamId: SUBSCRIBER_TEAM });
+    const wake = mockWake();
+
+    await upsertOrgChannel({
+      orgId: DEMO_ORG.id,
+      surface: "slack",
+      externalId: USER_CHANNEL,
+      classification: "shared_external",
+      skipInspect: true,
+    });
+
+    try {
+      const result = await handleSlackEventsRequest(
+        signedRequest({
+          type: "event_callback",
+          team_id: OTHER_TEAM,
+          event_id: `Ev_user_channel_wake_${Date.now()}`,
+          event: {
+            type: "message",
+            channel_type: "channel",
+            user: OTHER_SPEAKER,
+            text: `<@${SUBSCRIBER_USER}> hello from classified channel`,
+            ts: "1787911800.000405",
+            channel: USER_CHANNEL,
+          },
+          authorizations: [
+            { is_bot: false, user_id: SUBSCRIBER_USER, team_id: SUBSCRIBER_TEAM },
+          ],
+        })
+      );
+
+      expect(result.status).toBe(200);
+      expect(wake.calls().length).toBe(1);
+      const call = wake.calls()[0];
+      expect(call.payload.employeeId).toBe("emp_comm");
+      expect(call.payload.channel).toBe(USER_CHANNEL);
+      expect(call.payload.user).toBe(OTHER_SPEAKER);
+      expect(call.payload.slackUserId).toBe(SUBSCRIBER_USER);
+    } finally {
+      await restore();
+    }
+  });
+
+  test("flag ON: internal channel (non-Connect) wakes employee", async () => {
+    process.env.SLACK_SIGNING_SECRET = SIGNING_SECRET;
+    process.env.P0_USER_CHANNEL_MENTION_INGRESS = "1";
+    const { restore } = await bindAndo({ slackUserId: SUBSCRIBER_USER, slackTeamId: SUBSCRIBER_TEAM });
+    const wake = mockWake();
+
+    const internalChannel = "C_INTERNAL_USER_CHANNEL";
+    await upsertOrgChannel({
+      orgId: DEMO_ORG.id,
+      surface: "slack",
+      externalId: internalChannel,
+      classification: "internal",
+      skipInspect: true,
+    });
+
+    try {
+      const result = await handleSlackEventsRequest(
+        signedRequest({
+          type: "event_callback",
+          team_id: SUBSCRIBER_TEAM,
+          event_id: `Ev_user_channel_internal_${Date.now()}`,
+          event: {
+            type: "message",
+            channel_type: "channel",
+            user: "U_COWORKER",
+            text: `<@${SUBSCRIBER_USER}> internal channel mention`,
+            ts: "1787911800.000406",
+            channel: internalChannel,
+          },
+          authorizations: [
+            { is_bot: false, user_id: SUBSCRIBER_USER, team_id: SUBSCRIBER_TEAM },
+          ],
+        })
+      );
+
+      expect(result.status).toBe(200);
+      expect(wake.calls().length).toBe(1);
+      expect(wake.calls()[0].payload.employeeId).toBe("emp_comm");
+    } finally {
+      await restore();
+    }
+  });
+
+  test("flag ON: private channel (groups) with user-token wakes employee", async () => {
+    process.env.SLACK_SIGNING_SECRET = SIGNING_SECRET;
+    process.env.P0_USER_CHANNEL_MENTION_INGRESS = "1";
+    const { restore } = await bindAndo({ slackUserId: SUBSCRIBER_USER, slackTeamId: SUBSCRIBER_TEAM });
+    const wake = mockWake();
+
+    const privateChannel = "G_PRIVATE_CHANNEL";
+    await upsertOrgChannel({
+      orgId: DEMO_ORG.id,
+      surface: "slack",
+      externalId: privateChannel,
+      classification: "internal",
+      skipInspect: true,
+    });
+
+    try {
+      const result = await handleSlackEventsRequest(
+        signedRequest({
+          type: "event_callback",
+          team_id: SUBSCRIBER_TEAM,
+          event_id: `Ev_user_channel_private_${Date.now()}`,
+          event: {
+            type: "message",
+            channel_type: "group",
+            user: "U_COWORKER",
+            text: `<@${SUBSCRIBER_USER}> private channel mention`,
+            ts: "1787911800.000407",
+            channel: privateChannel,
+          },
+          authorizations: [
+            { is_bot: false, user_id: SUBSCRIBER_USER, team_id: SUBSCRIBER_TEAM },
+          ],
+        })
+      );
+
+      expect(result.status).toBe(200);
+      expect(wake.calls().length).toBe(1);
+      expect(wake.calls()[0].payload.employeeId).toBe("emp_comm");
+    } finally {
+      await restore();
+    }
+  });
+});

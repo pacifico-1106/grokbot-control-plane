@@ -4,15 +4,28 @@ import { getAppOrigin } from "@/lib/approvals/tokens";
 /**
  * User-token scopes for Staffpass Slack app (not Cursor Slack OAuth).
  *
+ * Core scopes:
  * - chat:write: postingAs=user の投稿
  * - users:read: 社員の Slack ユーザー情報取得
- * - channels:read, groups:read: チャネル情報取得
- * - im:history: user-token Events (Subscribe to events on behalf of users) の message.im 受信
+ * - channels:read, groups:read: チャネル情報取得（legacy — 別クリーンアップ検討）
  * - files:write: postingAs=user でのファイルアップロード（Path B 人↔人 DM へ PDF 添付等）
+ *
+ * History scopes for user-token Events (Subscribe to events on behalf of users):
+ * - im:history: message.im 受信（既存 Path B DM ingress）
+ * - channels:history: message.channels 受信（P0 user-token channel mention ingress）
+ * - groups:history: message.groups 受信（P0 user-token channel mention ingress）
+ *
+ * @see docs/p0-user-mention-ingress-design-20260919.md §3 最小スコープ + クレデンシャル・リース (DL-1)
+ *
+ * Forbidden scopes (never request):
+ * - admin.* — 管理権限は不要、ブラスト半径が組織全体に拡大
+ * - search:read — 検索能力は不要
+ * - files:read — ファイル読み取りは別途 D1 ingress handoff で制御
  *
  * スコープ追加後は、リンク済み社員に re-OAuth を促す（既存トークンには新スコープがない）。
  */
-export const SLACK_USER_SCOPES = "chat:write,users:read,channels:read,groups:read,im:history,files:write";
+export const SLACK_USER_SCOPES =
+  "chat:write,users:read,channels:read,groups:read,im:history,files:write,channels:history,groups:history";
 
 /**
  * Bot-token scopes for Staffpass Slack app workspace installation.
