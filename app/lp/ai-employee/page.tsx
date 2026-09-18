@@ -6,6 +6,7 @@ import { LegalLinks } from "@/components/LegalLinks";
 import { PricingSection } from "./PricingSection";
 // Temporary: early-bird 100 slots — remove when campaign ends
 import { CampaignBanner } from "./CampaignBanner";
+import { FloatingYouTubePromo } from "./FloatingYouTubePromo";
 
 export const metadata: Metadata = {
   title: "AI社員 導入パック — 中小企業336万社のミカタ | Staffpass",
@@ -721,6 +722,9 @@ export default function AIEmployeeLP() {
           </div>
         </div>
       </footer>
+
+      {/* Floating YouTube promo player */}
+      <FloatingYouTubePromo />
     </div>
   );
 }
