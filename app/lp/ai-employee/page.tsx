@@ -507,18 +507,88 @@ export default function AIEmployeeLP() {
                   </div>
                 </div>
 
-                {/* Speaking Image */}
-                <div className="surface p-4 overflow-hidden rounded-xl">
-                  <Image
-                    src="/lp/ai-employee/ai-business-speaking.webp"
-                    alt="八坂太洋による生成AI活用の講演・研修の様子"
-                    width={800}
-                    height={400}
-                    className="w-full h-auto rounded-lg object-cover"
-                  />
-                  <p className="mt-3 text-xs faint text-center">
-                    生成AI活用に関する講演・研修の様子
-                  </p>
+                {/* Field Records Gallery */}
+                <div>
+                  <h4 className="text-base font-semibold mb-3">講演・研修の様子</h4>
+                  <p className="text-xs muted mb-4">Speaking / Training / Advisory · 2025—2026</p>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+                    <figure className="group">
+                      <div className="aspect-[4/3] overflow-hidden rounded surface relative">
+                        <Image
+                          src="/lp/ai-employee/ai-business-speaking-session.webp"
+                          alt="経営者向け講演"
+                          fill
+                          sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 20vw"
+                          className="object-cover group-hover:scale-105 transition-transform duration-300"
+                        />
+                      </div>
+                      <figcaption className="mt-2 text-xs muted text-center">経営者向け</figcaption>
+                    </figure>
+                    <figure className="group">
+                      <div className="aspect-[4/3] overflow-hidden rounded surface relative">
+                        <Image
+                          src="/lp/ai-employee/generative-ai-app-training.webp"
+                          alt="商工会向け研修"
+                          fill
+                          sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 20vw"
+                          className="object-cover group-hover:scale-105 transition-transform duration-300"
+                        />
+                      </div>
+                      <figcaption className="mt-2 text-xs muted text-center">商工会向け</figcaption>
+                    </figure>
+                    <figure className="group">
+                      <div className="aspect-[4/3] overflow-hidden rounded surface relative">
+                        <Image
+                          src="/lp/ai-employee/ai-agent-business-seminar.webp"
+                          alt="共催・地域DXセミナー"
+                          fill
+                          sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 20vw"
+                          className="object-cover group-hover:scale-105 transition-transform duration-300"
+                        />
+                      </div>
+                      <figcaption className="mt-2 text-xs muted text-center">共催・地域DX</figcaption>
+                    </figure>
+                    <figure className="group">
+                      <div className="aspect-[4/3] overflow-hidden rounded surface relative">
+                        <Image
+                          src="/lp/ai-employee/ai-advisory-session.webp"
+                          alt="民間研修"
+                          fill
+                          sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 20vw"
+                          className="object-cover group-hover:scale-105 transition-transform duration-300"
+                        />
+                      </div>
+                      <figcaption className="mt-2 text-xs muted text-center">民間研修</figcaption>
+                    </figure>
+                    <figure className="group">
+                      <a
+                        href="https://youtu.be/l4fVZ1-VRcU"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="block"
+                      >
+                        <div className="aspect-[4/3] overflow-hidden rounded surface relative">
+                          <Image
+                            src="/lp/ai-employee/youtube-ai-agents-100cho.jpg"
+                            alt="AIエージェント100兆個の話を、現場の経営者向けに翻訳する"
+                            fill
+                            sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 20vw"
+                            className="object-cover group-hover:scale-105 transition-transform duration-300"
+                          />
+                          <div className="absolute inset-0 flex items-center justify-center bg-black/30 group-hover:bg-black/40 transition-colors">
+                            <div className="w-10 h-10 rounded-full bg-red-600 flex items-center justify-center">
+                              <svg className="w-4 h-4 text-white ml-0.5" fill="currentColor" viewBox="0 0 24 24">
+                                <path d="M8 5v14l11-7z" />
+                              </svg>
+                            </div>
+                          </div>
+                        </div>
+                        <figcaption className="mt-2 text-xs muted text-center line-clamp-2">
+                          AIエージェント100兆個の話を、現場の経営者向けに翻訳する
+                        </figcaption>
+                      </a>
+                    </figure>
+                  </div>
                 </div>
               </div>
             </div>
