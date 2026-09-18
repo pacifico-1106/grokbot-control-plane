@@ -4,6 +4,7 @@ import {
   parseConversationContext,
   resolveAudience,
   resolveConversationThreadId,
+  resolveParentMessageTs,
 } from "@/lib/gateway/audience";
 import {
   clearDemoRule,
@@ -390,6 +391,97 @@ describe("audience resolver", () => {
       },
     });
     expect(resolved).toBe("1787911797.502889");
+  });
+
+  test("wake ts preserved on context when thread_ts is null (production wake shape)", () => {
+    const wakeTs = "1787960001.111111";
+    const ctx = parseConversationContext(
+      body({
+        conversation: {
+          surface: "slack",
+          orgId: DEMO_ORG.id,
+          slackChannelId: "C_INTERNAL",
+          ts: wakeTs,
+          thread_ts: null,
+        } as unknown as GatewayInvokeRequest["conversation"],
+      }),
+      DEMO_ORG.id
+    );
+    expect(ctx?.ts).toBe(wakeTs);
+    expect(ctx?.threadId).toBeUndefined();
+  });
+
+  test("wake ts in args preserved on context when conversation has no ts", () => {
+    const wakeTs = "1787960001.111111";
+    const ctx = parseConversationContext(
+      body({
+        conversation: {
+          surface: "slack",
+          orgId: DEMO_ORG.id,
+          slackChannelId: "C_INTERNAL",
+        },
+        args: { ts: wakeTs },
+      }),
+      DEMO_ORG.id
+    );
+    expect(ctx?.ts).toBe(wakeTs);
+    expect(ctx?.threadId).toBeUndefined();
+  });
+
+  test("resolveParentMessageTs finds ts from conversation context", () => {
+    const wakeTs = "1787960001.111111";
+    const ctx = parseConversationContext(
+      body({
+        conversation: {
+          surface: "slack",
+          orgId: DEMO_ORG.id,
+          slackChannelId: "C_INTERNAL",
+          ts: wakeTs,
+          thread_ts: null,
+        } as unknown as GatewayInvokeRequest["conversation"],
+      }),
+      DEMO_ORG.id
+    );
+    const parentTs = resolveParentMessageTs({ conversation: ctx, args: {} });
+    expect(parentTs).toBe(wakeTs);
+  });
+
+  test("resolveParentMessageTs finds ts from args when conversation.ts missing", () => {
+    const wakeTs = "1787960001.111111";
+    const parentTs = resolveParentMessageTs({
+      conversation: { surface: "slack", slackChannelId: "C_INTERNAL" },
+      args: { ts: wakeTs },
+    });
+    expect(parentTs).toBe(wakeTs);
+  });
+
+  test("resolveParentMessageTs prefers ts over messageTs/slackTs", () => {
+    const ts = "1787960001.111111";
+    const messageTs = "1787960002.222222";
+    const parentTs = resolveParentMessageTs({
+      conversation: { ts, messageTs },
+      args: {},
+    });
+    expect(parentTs).toBe(ts);
+  });
+
+  test("ts at body root level is extracted (Bot sends body.ts)", () => {
+    const wakeTs = "1787960001.111111";
+    const ctx = parseConversationContext(
+      {
+        tool: "comm.send",
+        purpose: "comm.internal",
+        jobId: "job_body_ts",
+        ts: wakeTs,
+        conversation: {
+          surface: "slack",
+          slackChannelId: "C_INTERNAL",
+        },
+      } as unknown as GatewayInvokeRequest,
+      DEMO_ORG.id
+    );
+    expect(ctx?.ts).toBe(wakeTs);
+    expect(ctx?.threadId).toBeUndefined();
   });
 });
 
