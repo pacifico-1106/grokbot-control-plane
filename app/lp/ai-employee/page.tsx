@@ -574,6 +574,16 @@ export default function AIEmployeeLP() {
                 料金を見る
               </Link>
             </div>
+            <p className="mt-8 text-xs faint">
+              <Link
+                href="https://tokyo307inc.com/ai-development-company"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="hover:underline"
+              >
+                小さく事業開発などの相談もお気軽にお問い合わせください。
+              </Link>
+            </p>
           </div>
         </section>
       </main>
