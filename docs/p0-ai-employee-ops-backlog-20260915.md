@@ -86,3 +86,34 @@
 ### Out of scope
 
 - P0-ID, IN, RP, full mailer UI, BCC legal forks
+
+---
+
+## G7: Cross-Team Wake Routing（Connect / 他ワークスペース受信）
+
+**状態:** 設計ロック待ち  
+**設計メモ:** [g7-connect-wake-routing-design-20260918.md](./g7-connect-wake-routing-design-20260918.md)  
+**担当:** Yasaka / Ando ロック
+
+### スコープ
+
+相手方 Slack Connect / 他ワークスペースでのメンションから、自テナント AI 社員への wake routing を可能にする。
+
+### 背景
+
+- 現状: `resolveWakeTargets` は event team_id にスコープ。Tomori (Miraishachu `T0C24UVNJJF`) は 307 Connect `#aitest` (`T40CKLB5Z`) からは wake されない（H1 修正後の意図された動作）
+- G7: explicit bind により cross-team wake を許可
+
+### ロック待ち項目
+
+| # | 項目 | 選択肢 | 推奨 |
+|---|------|--------|------|
+| 1 | Bind テーブル構造 | Option A（新テーブル `cross_team_wake_bindings`）/ Option B（既存 `employee_slack_identities` 拡張） | **A** |
+| 2 | First smoke | Option A（307 `#aitest` 受信 → Tomori wake）/ Option B（Mirai 側 Connect main battlefield） | **A** |
+
+### Production enable
+
+- フラグ OFF default
+- 本設計ロック + security review 完了後に別 GO
+
+詳細は [g7-connect-wake-routing-design-20260918.md](./g7-connect-wake-routing-design-20260918.md) を参照。
