@@ -8,6 +8,7 @@ interface PricingTier {
   name: string;
   tierLabel: string;
   description: string;
+  examples?: string[];
   monthly: number | null;
   setupFee: number | null;
   popular?: boolean;
@@ -20,7 +21,14 @@ const PRICING_TIERS: PricingTier[] = [
     id: "intern",
     name: "Intern",
     tierLabel: "インターン",
-    description: "定型業務・一般事務向け",
+    description: "定型・一般事務向け",
+    examples: [
+      "日報・議事録の下書き",
+      "定型メールの下書き",
+      "社内案内の下書き・投稿準備",
+      "予定の空き確認と候補提示",
+      "よくある質問への一次返答案",
+    ],
     monthly: 50000,
     setupFee: 150000,
     features: [
@@ -37,6 +45,13 @@ const PRICING_TIERS: PricingTier[] = [
     name: "Proper",
     tierLabel: "プロパー",
     description: "営業・顧客対応向け",
+    examples: [
+      "問い合わせへの一次返信下書き",
+      "見積・提案メモの整理",
+      "商談・打合せの日程候補提示",
+      "顧客対応ログの要約・日報",
+      "フォローアップのリマインド",
+    ],
     monthly: 150000,
     setupFee: 150000,
     popular: true,
@@ -53,7 +68,14 @@ const PRICING_TIERS: PricingTier[] = [
     id: "executive",
     name: "Executive",
     tierLabel: "エグゼクティブ",
-    description: "経営補佐・高度運用向け",
+    description: "経営補佐・高度運用（開発保守等）向け",
+    examples: [
+      "経営向けの週次サマリー",
+      "複数チャネルの優先度整理",
+      "承認ルールの設計と高度な運用",
+      "開発・保守の調査と実装案",
+      "個別要件に合わせた業務設計の伴走",
+    ],
     monthly: 300000,
     setupFee: 300000,
     features: [
@@ -61,7 +83,7 @@ const PRICING_TIERS: PricingTier[] = [
       "高度な権限設計",
       "監査ログ詳細出力",
       "専任サポート担当",
-      "GitHub連携オプション",
+      "開発・保守対応",
       "ハンズオン導入支援",
     ],
   },
@@ -168,8 +190,8 @@ export function PricingSection() {
                 </span>
               )}
 
-              {/* Plan Name Block - consistent height */}
-              <div className="min-h-[4.5rem]">
+              {/* Plan Name Block */}
+              <div>
                 <div className="flex items-center gap-2">
                   <h3 className="text-lg font-semibold">{tier.name}</h3>
                   <span className="text-xs text-[var(--text-muted)]">
@@ -177,6 +199,26 @@ export function PricingSection() {
                   </span>
                 </div>
                 <p className="mt-1 text-sm muted">{tier.description}</p>
+                {tier.examples && tier.examples.length > 0 && (
+                  <ul className="mt-3 space-y-1">
+                    {tier.examples.map((example) => (
+                      <li
+                        key={example}
+                        className="flex items-start gap-1.5 text-xs text-[var(--text-muted)]"
+                      >
+                        <span className="text-[var(--accent-strong)] shrink-0">
+                          ・
+                        </span>
+                        {example}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {tier.isCustom && (
+                  <p className="mt-3 text-xs text-[var(--text-muted)]">
+                    業務範囲はご相談のうえ設計します
+                  </p>
+                )}
               </div>
 
               {/* Price Block - consistent height */}

@@ -93,7 +93,7 @@ const FAQ = [
   },
   {
     q: "自社のシステム開発やメンテナンスにも使える？",
-    a: "将来的には、GitHubリポジトリを接続して、同じ人＋AIの承認ループで開発・保守も回せるようになります。まずは業務運用からスタートし、準備ができ次第ご案内します。",
+    a: "はい。エグゼクティブプランでは、開発・保守の調査や実装案を同じ「人＋AI」の承認ループで回せます。実際の実行は人が承認してから行われるため、安心してお任せいただけます。詳細はご相談ください。",
   },
   {
     q: "解約はいつでもできる？",
@@ -381,24 +381,6 @@ export default function AIEmployeeLP() {
 
         {/* Pricing Section */}
         <PricingSection />
-
-        {/* Future: GitHub */}
-        <section className="mx-auto max-w-6xl px-4 sm:px-6 py-20 sm:py-28">
-          <div className="surface p-6 sm:p-10 max-w-3xl mx-auto">
-            <span className="eyebrow">COMING SOON</span>
-            <h2 className="mt-4 text-xl sm:text-2xl font-bold tracking-tight">
-              GitHubリポジトリ連携で、
-              <br className="sm:hidden" />
-              開発・保守も同じループに
-            </h2>
-            <p className="mt-4 text-sm muted leading-relaxed">
-              将来的には、GitHubリポジトリを接続することで、業務運用だけでなく、システム開発やメンテナンスも同じ「人＋AI」の承認ループで回せるようになります。コードの調査・実装・レビュー・デプロイを、AI社員と人が協力して進める世界を目指しています。
-            </p>
-            <p className="mt-3 text-sm faint">
-              準備ができ次第、ご案内いたします。
-            </p>
-          </div>
-        </section>
 
         {/* Expert Supervision - 八坂太洋 */}
         <section className="border-y border-[var(--border-soft)] bg-[var(--bg-elevated)]">
