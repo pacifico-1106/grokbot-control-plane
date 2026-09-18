@@ -498,66 +498,84 @@ select {
 }
 
 /* Trust Ribbon - LP Hero */
+/* Mobile: horizontal badge (no rotation, no clipping) */
+/* Tablet/Desktop: diagonal corner ribbon */
 .trust-ribbon {
   position: absolute;
-  top: 0;
-  right: 0;
-  overflow: hidden;
-  width: 150px;
-  height: 150px;
+  top: 8px;
+  right: 8px;
   z-index: 10;
   pointer-events: none;
 }
 
 .trust-ribbon-text {
-  position: absolute;
-  top: 28px;
-  right: -35px;
-  display: flex;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 200px;
-  padding: 6px 0;
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.02em;
-  color: var(--accent-fg);
-  background: linear-gradient(135deg, var(--accent), #79eaf3);
-  box-shadow:
-    0 2px 8px rgba(83, 225, 239, 0.35),
-    inset 0 1px 0 rgba(255, 255, 255, 0.25);
-  transform: rotate(45deg);
-  transform-origin: center;
-  text-align: center;
+  padding: 6px 14px;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: #021a1f;
+  background: linear-gradient(
+    135deg,
+    #a8e8ee 0%,
+    #6dd5e0 40%,
+    #4db8c7 100%
+  );
+  border-radius: 4px;
   white-space: nowrap;
+  box-shadow:
+    0 1px 3px rgba(0, 40, 50, 0.15),
+    inset 0 1px 0 rgba(255, 255, 255, 0.4);
 }
 
+/* Tablet and up: switch to diagonal ribbon */
 @media (min-width: 640px) {
   .trust-ribbon {
-    width: 180px;
-    height: 180px;
+    top: 0;
+    right: 0;
+    overflow: hidden;
+    width: 260px;
+    height: 260px;
   }
 
   .trust-ribbon-text {
-    top: 36px;
-    right: -40px;
-    width: 240px;
-    padding: 8px 0;
+    position: absolute;
+    top: 54px;
+    right: -56px;
+    width: 300px;
+    padding: 10px 0;
     font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    border-radius: 0;
+    background: linear-gradient(
+      135deg,
+      #b0ebf0 0%,
+      #6dd5e0 35%,
+      #3fa8b5 100%
+    );
+    box-shadow:
+      0 2px 6px rgba(0, 50, 60, 0.2),
+      inset 0 1px 0 rgba(255, 255, 255, 0.35),
+      inset 0 -1px 0 rgba(0, 60, 70, 0.1);
+    transform: rotate(45deg);
+    transform-origin: center;
   }
 }
 
 @media (min-width: 1024px) {
   .trust-ribbon {
-    width: 200px;
-    height: 200px;
+    width: 300px;
+    height: 300px;
   }
 
   .trust-ribbon-text {
-    top: 42px;
-    right: -42px;
-    width: 260px;
-    padding: 9px 0;
+    top: 62px;
+    right: -60px;
+    width: 340px;
+    padding: 11px 0;
     font-size: 12px;
   }
 }
