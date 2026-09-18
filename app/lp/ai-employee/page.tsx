@@ -522,13 +522,13 @@ export default function AIEmployeeLP() {
                       <span className="text-[var(--accent-strong)] mt-0.5 shrink-0">
                         •
                       </span>
-                      民泊EXPOプレミアム、Threesなどのプロダクト開発
+                      2015年独立以降、国内外で開発プロジェクトを統括・牽引、自社プロダクトの売却経験
                     </li>
                     <li className="flex items-start gap-2">
                       <span className="text-[var(--accent-strong)] mt-0.5 shrink-0">
                         •
                       </span>
-                      現在はAI駆動開発によるMVP支援・新規事業支援を展開
+                      0→1を専門領域としAI駆動開発によるMVP支援・新規事業支援を展開
                     </li>
                     <li className="flex items-start gap-2">
                       <span className="text-[var(--accent-strong)] mt-0.5 shrink-0">
@@ -537,6 +537,16 @@ export default function AIEmployeeLP() {
                       個人事業主・経営者向け、商工会経営指導員向けに生成AIによるアプリ開発の研修・講演を実施
                     </li>
                   </ul>
+                  <p className="mt-3 text-xs text-[var(--text-muted)]">
+                    <Link
+                      href="https://www.miraishachu.city/lp/yamanashi/event20260710"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="hover:underline"
+                    >
+                      最近の登壇 →
+                    </Link>
+                  </p>
                 </div>
 
                 {/* Design Philosophy */}
