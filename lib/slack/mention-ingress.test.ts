@@ -1708,3 +1708,212 @@ describe("Ingress handoff policy evaluation", () => {
     }
   });
 });
+
+describe("G7 Connect→own-tenant employee wake routing", () => {
+  const CONNECT_HOST_TEAM = "T_CONNECT_HOST";
+  const CONNECT_GUEST_USER = "W_CONNECT_GUEST";
+  const savedConnectFlag = process.env.G7_CONNECT_WAKE_ROUTING;
+
+  afterEach(async () => {
+    if (savedConnectFlag === undefined) delete process.env.G7_CONNECT_WAKE_ROUTING;
+    else process.env.G7_CONNECT_WAKE_ROUTING = savedConnectFlag;
+    const { resetDemoConnectWakeBinds } = await import("@/lib/data/slack-connect-wake-binds");
+    resetDemoConnectWakeBinds();
+  });
+
+  test("flag OFF: Connect guest mention does NOT wake (existing behavior unchanged)", async () => {
+    process.env.SLACK_SIGNING_SECRET = SIGNING_SECRET;
+    delete process.env.G7_CONNECT_WAKE_ROUTING;
+    const { restore } = await bindAndo();
+    const wake = mockWake();
+
+    const { upsertConnectWakeBind } = await import("@/lib/data/slack-connect-wake-binds");
+    const emp = getRuntimeEmployees().find((e) => e.id === "emp_comm");
+    if (!emp) throw new Error("missing emp_comm");
+
+    await upsertConnectWakeBind({
+      receivingOrgId: DEMO_ORG.id,
+      receivingTeamId: CONNECT_HOST_TEAM,
+      mentionedSlackUserId: CONNECT_GUEST_USER,
+      targetOrgId: emp.orgId,
+      targetEmployeeId: emp.id,
+    });
+
+    try {
+      const result = await handleSlackEventsRequest(
+        signedRequest({
+          type: "event_callback",
+          team_id: CONNECT_HOST_TEAM,
+          event_id: `Ev_connect_flag_off_${Date.now()}`,
+          event: {
+            type: "message",
+            user: SPEAKER,
+            text: `<@${CONNECT_GUEST_USER}> ping from channel`,
+            ts: "1787911800.000300",
+            channel: CHANNEL,
+          },
+        })
+      );
+      expect(result.status).toBe(200);
+      expect(wake.calls().length).toBe(0);
+    } finally {
+      await restore();
+    }
+  });
+
+  test("flag ON: Connect guest mention WITH bind wakes target employee", async () => {
+    process.env.SLACK_SIGNING_SECRET = SIGNING_SECRET;
+    process.env.G7_CONNECT_WAKE_ROUTING = "1";
+    const { restore } = await bindAndo();
+    const wake = mockWake();
+
+    const { upsertConnectWakeBind } = await import("@/lib/data/slack-connect-wake-binds");
+    const emp = getRuntimeEmployees().find((e) => e.id === "emp_comm");
+    if (!emp) throw new Error("missing emp_comm");
+
+    await upsertConnectWakeBind({
+      receivingOrgId: DEMO_ORG.id,
+      receivingTeamId: CONNECT_HOST_TEAM,
+      mentionedSlackUserId: CONNECT_GUEST_USER,
+      targetOrgId: emp.orgId,
+      targetEmployeeId: emp.id,
+    });
+
+    try {
+      const result = await handleSlackEventsRequest(
+        signedRequest({
+          type: "event_callback",
+          team_id: CONNECT_HOST_TEAM,
+          event_id: `Ev_connect_flag_on_${Date.now()}`,
+          event: {
+            type: "message",
+            user: SPEAKER,
+            text: `<@${CONNECT_GUEST_USER}> ping from Connect channel`,
+            ts: "1787911800.000301",
+            channel: CHANNEL,
+          },
+        })
+      );
+      expect(result.status).toBe(200);
+      expect(wake.calls().length).toBe(1);
+      expect(wake.calls()[0].payload.employeeId).toBe(emp.id);
+    } finally {
+      await restore();
+    }
+  });
+
+  test("flag ON: Connect guest mention WITHOUT bind does NOT wake (fail-closed)", async () => {
+    process.env.SLACK_SIGNING_SECRET = SIGNING_SECRET;
+    process.env.G7_CONNECT_WAKE_ROUTING = "1";
+    const { restore } = await bindAndo();
+    const wake = mockWake();
+
+    try {
+      const result = await handleSlackEventsRequest(
+        signedRequest({
+          type: "event_callback",
+          team_id: CONNECT_HOST_TEAM,
+          event_id: `Ev_connect_no_bind_${Date.now()}`,
+          event: {
+            type: "message",
+            user: SPEAKER,
+            text: `<@${CONNECT_GUEST_USER}> no bind exists`,
+            ts: "1787911800.000302",
+            channel: CHANNEL,
+          },
+        })
+      );
+      expect(result.status).toBe(200);
+      expect(wake.calls().length).toBe(0);
+    } finally {
+      await restore();
+    }
+  });
+
+  test("flag ON: self-mention via Connect bind does NOT wake (self-skip)", async () => {
+    process.env.SLACK_SIGNING_SECRET = SIGNING_SECRET;
+    process.env.G7_CONNECT_WAKE_ROUTING = "1";
+    const { restore } = await bindAndo();
+    const wake = mockWake();
+
+    const { upsertConnectWakeBind } = await import("@/lib/data/slack-connect-wake-binds");
+    const emp = getRuntimeEmployees().find((e) => e.id === "emp_comm");
+    if (!emp) throw new Error("missing emp_comm");
+
+    await upsertConnectWakeBind({
+      receivingOrgId: DEMO_ORG.id,
+      receivingTeamId: CONNECT_HOST_TEAM,
+      mentionedSlackUserId: CONNECT_GUEST_USER,
+      targetOrgId: emp.orgId,
+      targetEmployeeId: emp.id,
+    });
+
+    try {
+      const result = await handleSlackEventsRequest(
+        signedRequest({
+          type: "event_callback",
+          team_id: CONNECT_HOST_TEAM,
+          event_id: `Ev_connect_self_${Date.now()}`,
+          event: {
+            type: "message",
+            user: CONNECT_GUEST_USER,
+            text: `<@${CONNECT_GUEST_USER}> self-post`,
+            ts: "1787911800.000303",
+            channel: CHANNEL,
+          },
+        })
+      );
+      expect(result.status).toBe(200);
+      expect(wake.calls().length).toBe(0);
+    } finally {
+      await restore();
+    }
+  });
+
+  test("flag ON: mixed mention (team-bound + Connect bind) wakes both", async () => {
+    process.env.SLACK_SIGNING_SECRET = SIGNING_SECRET;
+    process.env.G7_CONNECT_WAKE_ROUTING = "1";
+    const { restore } = await bindAndo({ slackTeamId: CONNECT_HOST_TEAM });
+    const wake = mockWake();
+
+    const employees = getRuntimeEmployees().filter((e) => e.status === "active");
+    const emp2 = employees.find((e) => e.id !== "emp_comm");
+    if (!emp2) throw new Error("need second active employee");
+
+    await updateWakeWebhook(emp2.id, { orgId: emp2.orgId, url: "https://example.test/wake/emp2", secret: "s2" });
+
+    const { upsertConnectWakeBind } = await import("@/lib/data/slack-connect-wake-binds");
+    await upsertConnectWakeBind({
+      receivingOrgId: DEMO_ORG.id,
+      receivingTeamId: CONNECT_HOST_TEAM,
+      mentionedSlackUserId: CONNECT_GUEST_USER,
+      targetOrgId: emp2.orgId,
+      targetEmployeeId: emp2.id,
+    });
+
+    try {
+      const result = await handleSlackEventsRequest(
+        signedRequest({
+          type: "event_callback",
+          team_id: CONNECT_HOST_TEAM,
+          event_id: `Ev_connect_mixed_${Date.now()}`,
+          event: {
+            type: "message",
+            user: SPEAKER,
+            text: `<@${BOUND_USER}> <@${CONNECT_GUEST_USER}> both mentioned`,
+            ts: "1787911800.000304",
+            channel: CHANNEL,
+          },
+        })
+      );
+      expect(result.status).toBe(200);
+      expect(wake.calls().length).toBe(2);
+      const wokenIds = new Set(wake.calls().map((c) => c.payload.employeeId));
+      expect(wokenIds.has("emp_comm")).toBe(true);
+      expect(wokenIds.has(emp2.id)).toBe(true);
+    } finally {
+      await updateWakeWebhook(emp2.id, { orgId: emp2.orgId, url: null, secret: "" });
+      await restore();
+    }
+  });
+});
