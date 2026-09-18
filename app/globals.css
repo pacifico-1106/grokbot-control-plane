@@ -499,7 +499,7 @@ select {
 
 /* Trust Ribbon - LP Hero */
 /* Mobile: horizontal badge (no rotation, no clipping) */
-/* Desktop: diagonal corner ribbon */
+/* Tablet/Desktop: diagonal corner ribbon */
 .trust-ribbon {
   position: absolute;
   top: 8px;
@@ -512,17 +512,22 @@ select {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 6px 12px;
+  padding: 6px 14px;
   font-size: 9px;
-  font-weight: 700;
-  letter-spacing: 0.02em;
-  color: var(--accent-fg);
-  background: linear-gradient(135deg, var(--accent), #79eaf3);
-  box-shadow:
-    0 2px 8px rgba(83, 225, 239, 0.35),
-    inset 0 1px 0 rgba(255, 255, 255, 0.25);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: #021a1f;
+  background: linear-gradient(
+    135deg,
+    #a8e8ee 0%,
+    #6dd5e0 40%,
+    #4db8c7 100%
+  );
   border-radius: 4px;
   white-space: nowrap;
+  box-shadow:
+    0 1px 3px rgba(0, 40, 50, 0.15),
+    inset 0 1px 0 rgba(255, 255, 255, 0.4);
 }
 
 /* Tablet and up: switch to diagonal ribbon */
@@ -531,18 +536,30 @@ select {
     top: 0;
     right: 0;
     overflow: hidden;
-    width: 200px;
-    height: 200px;
+    width: 260px;
+    height: 260px;
   }
 
   .trust-ribbon-text {
     position: absolute;
-    top: 38px;
-    right: -45px;
-    width: 260px;
-    padding: 8px 0;
+    top: 54px;
+    right: -56px;
+    width: 300px;
+    padding: 10px 0;
     font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.05em;
     border-radius: 0;
+    background: linear-gradient(
+      135deg,
+      #b0ebf0 0%,
+      #6dd5e0 35%,
+      #3fa8b5 100%
+    );
+    box-shadow:
+      0 2px 6px rgba(0, 50, 60, 0.2),
+      inset 0 1px 0 rgba(255, 255, 255, 0.35),
+      inset 0 -1px 0 rgba(0, 60, 70, 0.1);
     transform: rotate(45deg);
     transform-origin: center;
   }
@@ -550,15 +567,15 @@ select {
 
 @media (min-width: 1024px) {
   .trust-ribbon {
-    width: 220px;
-    height: 220px;
+    width: 300px;
+    height: 300px;
   }
 
   .trust-ribbon-text {
-    top: 44px;
-    right: -46px;
-    width: 280px;
-    padding: 9px 0;
+    top: 62px;
+    right: -60px;
+    width: 340px;
+    padding: 11px 0;
     font-size: 12px;
   }
 }
