@@ -154,6 +154,28 @@ export default function AIEmployeeLP() {
                   料金を見る
                 </Link>
               </div>
+              <div className="mt-4 flex justify-center lg:justify-start">
+                <Link
+                  href="/lp/ai-employee/manga"
+                  className="text-sm text-[var(--accent-strong)] hover:underline inline-flex items-center gap-1"
+                >
+                  <svg
+                    className="w-4 h-4"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                    aria-hidden="true"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"
+                    />
+                  </svg>
+                  漫画でイメージする →
+                </Link>
+              </div>
             </div>
 
             {/* AI Character - Hero Crew */}
@@ -183,6 +205,49 @@ export default function AIEmployeeLP() {
                   />
                 </div>
               </div>
+            </div>
+          </div>
+        </section>
+
+        {/* Manga CTA */}
+        <section className="mx-auto max-w-6xl px-4 sm:px-6 pb-12 sm:pb-16">
+          <div className="surface p-5 sm:p-6">
+            <div className="flex flex-col sm:flex-row items-center gap-4 sm:gap-6">
+              <div className="flex-1 text-center sm:text-left">
+                <span className="eyebrow">MANGA</span>
+                <h2 className="mt-2 text-lg sm:text-xl font-bold tracking-[-0.03em]">
+                  漫画でイメージする
+                </h2>
+                <p className="mt-2 text-sm muted leading-relaxed">
+                  3つのプランでAI社員がどう働くか、ストーリーで紹介します。
+                </p>
+              </div>
+              <div className="flex flex-wrap justify-center gap-2">
+                <Link
+                  href="/lp/ai-employee/manga/intern"
+                  className="btn btn-ghost text-xs py-2 px-3"
+                >
+                  インターン編
+                </Link>
+                <Link
+                  href="/lp/ai-employee/manga/proper"
+                  className="btn btn-ghost text-xs py-2 px-3"
+                >
+                  プロパー編
+                </Link>
+                <Link
+                  href="/lp/ai-employee/manga/executive"
+                  className="btn btn-ghost text-xs py-2 px-3"
+                >
+                  エグゼクティブ編
+                </Link>
+              </div>
+              <Link
+                href="/lp/ai-employee/manga"
+                className="btn btn-primary text-sm shrink-0"
+              >
+                漫画を読む
+              </Link>
             </div>
           </div>
         </section>
