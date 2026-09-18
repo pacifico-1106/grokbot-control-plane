@@ -5,17 +5,14 @@ const VALID_PLANS = ["intern", "proper", "executive"] as const;
 type AiEmpPlan = (typeof VALID_PLANS)[number];
 
 function getSetupPriceId(plan: AiEmpPlan): string | null {
-  if (plan === "intern" || plan === "proper") {
-    const id = process.env.STRIPE_PRICE_ID_AI_EMP_SETUP_INTERN;
-    if (!id || id.startsWith("replace_me")) return null;
-    return id;
-  }
-  if (plan === "executive") {
-    const id = process.env.STRIPE_PRICE_ID_AI_EMP_SETUP_EXECUTIVE;
-    if (!id || id.startsWith("replace_me")) return null;
-    return id;
-  }
-  return null;
+  const envMap: Record<AiEmpPlan, string | undefined> = {
+    intern: process.env.STRIPE_PRICE_ID_AI_EMP_SETUP_INTERN,
+    proper: process.env.STRIPE_PRICE_ID_AI_EMP_SETUP_PROPER,
+    executive: process.env.STRIPE_PRICE_ID_AI_EMP_SETUP_EXECUTIVE,
+  };
+  const id = envMap[plan];
+  if (!id || id.startsWith("replace_me")) return null;
+  return id;
 }
 
 function getSetupYen(plan: AiEmpPlan): number {

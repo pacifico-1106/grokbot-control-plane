@@ -252,14 +252,17 @@ AI社員パック初期費用の Stripe Price ID:
 
 | 環境変数 | 用途 | Price 設定 |
 |----------|------|------------|
-| `STRIPE_PRICE_ID_AI_EMP_SETUP_INTERN` | インターン/プロパー 初期費用 | one-time ¥150,000 |
+| `STRIPE_PRICE_ID_AI_EMP_SETUP_INTERN` | インターン 初期費用 | one-time ¥150,000 |
+| `STRIPE_PRICE_ID_AI_EMP_SETUP_PROPER` | プロパー 初期費用 | one-time ¥150,000 |
 | `STRIPE_PRICE_ID_AI_EMP_SETUP_EXECUTIVE` | エグゼクティブ 初期費用 | one-time ¥300,000 |
 
 **Stripe Dashboard 作業**:
-1. Product 作成: `AI社員パック 初期費用（インターン/プロパー）`
-2. Price 作成: one-time ¥150,000 JPY → ID を env にコピー
-3. Product 作成: `AI社員パック 初期費用（エグゼクティブ）`
-4. Price 作成: one-time ¥300,000 JPY → ID を env にコピー
+1. Product 作成: `AI社員パック 初期費用（インターン）`
+2. Price 作成: one-time ¥150,000 JPY → `STRIPE_PRICE_ID_AI_EMP_SETUP_INTERN`
+3. Product 作成: `AI社員パック 初期費用（プロパー）`
+4. Price 作成: one-time ¥150,000 JPY → `STRIPE_PRICE_ID_AI_EMP_SETUP_PROPER`
+5. Product 作成: `AI社員パック 初期費用（エグゼクティブ）`
+6. Price 作成: one-time ¥300,000 JPY → `STRIPE_PRICE_ID_AI_EMP_SETUP_EXECUTIVE`
 
 **Checkout metadata**:
 - `plan`: `intern` | `proper` | `executive`
