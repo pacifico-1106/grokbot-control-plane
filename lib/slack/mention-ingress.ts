@@ -5,9 +5,13 @@
  *
  * Path A: Bot message.im — Staffpass app との app-DM（Bot Events）
  * Path B: User-token message.im — human↔human DM（Subscribe to events on behalf of users）
+ * Path C: User-token message.channels/groups — channel @mention（P0 user-token ingress, flag-gated）
  *
  * Path B は社員が im:history スコープで再 OAuth 後、Slack app 設定で
  * "Subscribe to events on behalf of users" の message.im を有効化すると動作。
+ *
+ * Path C は P0_USER_CHANNEL_MENTION_INGRESS=1 で有効化。channels:history, groups:history スコープ必須。
+ * @see docs/p0-user-mention-ingress-design-20260919.md
  *
  * Ingress handoff policy evaluation (Slice 2):
  * - Resolves org policy rules (first-match-wins) based on channel classification
@@ -39,6 +43,14 @@ import {
   resolveCrossTeamWakeTarget,
 } from "@/lib/data/cross-team-wake-bindings";
 import { listAllEnabledNotificationChannels } from "@/lib/data/notification-channels";
+import {
+  isUserChannelMentionIngressEnabled,
+  isUserTokenChannelEvent,
+  isConnectEvent,
+  isSelfLoop,
+  buildUserChannelWakeAudit,
+  type UserChannelSkipReason,
+} from "@/lib/slack/user-channel-ingress";
 import { isDemoMode } from "@/lib/mode";
 import { verifySlackSignature } from "@/lib/notify/slack";
 import { createSupabaseAdminClient } from "@/lib/supabase";
@@ -376,19 +388,23 @@ async function resolveWakeTargets(input: {
 async function postWake(
   target: SlackMentionTarget,
   payload: SlackWakePayload,
-  trigger: "mention" | "internal_im" | "user_token_im",
+  trigger: "mention" | "internal_im" | "user_token_im" | "user_token_channel",
   ingressHandoff?: NonNullable<SlackWakePayload["ingressHandoff"]>
 ): Promise<void> {
   const action =
-    trigger === "user_token_im"
-      ? "slack.user_token_im_wake"
-      : trigger === "internal_im"
-        ? "slack.internal_im_wake"
-        : "slack.mention_wake";
+    trigger === "user_token_channel"
+      ? "slack.user_token_channel_wake"
+      : trigger === "user_token_im"
+        ? "slack.user_token_im_wake"
+        : trigger === "internal_im"
+          ? "slack.internal_im_wake"
+          : "slack.mention_wake";
   const purpose =
-    trigger === "user_token_im" || trigger === "internal_im"
-      ? "slack.internal_im"
-      : "slack.mention";
+    trigger === "user_token_channel"
+      ? "slack.user_token_channel"
+      : trigger === "user_token_im" || trigger === "internal_im"
+        ? "slack.internal_im"
+        : "slack.mention";
 
   const handoffMeta = ingressHandoff
     ? {
@@ -515,7 +531,518 @@ export type SlackEventOutcome = {
   skipReason?: string;
   userToken?: boolean;
   isDirectMessage?: boolean;
+  /** P0: user-token channel event (Path C) */
+  isUserTokenChannel?: boolean;
 };
+
+/**
+ * Process user-token channel events (Path C: message.channels / message.groups).
+ *
+ * Flag-gated by P0_USER_CHANNEL_MENTION_INGRESS:
+ * - OFF: skip silently with audit stub (no behavior change)
+ * - ON: process with fail-closed behavior per DL-2
+ *
+ * Fail-closed conditions (DL-2):
+ * - Employee not bound: skip + audit
+ * - Channel not classified: skip + audit
+ * - Team mismatch: skip + audit
+ * - Self-loop (speaker = bound employee): skip + audit
+ * - No mention: skip + audit
+ *
+ * @see docs/p0-user-mention-ingress-design-20260919.md §4 (DL-2) and §5 (DL-3)
+ */
+async function processUserTokenChannelEvent(input: {
+  envelope: SlackEnvelope;
+  eventId: string;
+  eventType: string;
+  channel: string;
+  channelType: string;
+  teamId: string;
+  speakerId: string;
+  text: string;
+  mentionedIds: string[];
+  userTokenAuth: SlackAuthorization | null;
+}): Promise<SlackEventOutcome> {
+  const {
+    envelope,
+    eventId,
+    eventType,
+    channel,
+    channelType,
+    teamId,
+    speakerId,
+    text,
+    mentionedIds,
+    userTokenAuth,
+  } = input;
+
+  const subscriberUserId = userTokenAuth?.user_id || "";
+  const subscriberTeamId = userTokenAuth?.team_id || "";
+  const isConnect = isConnectEvent(teamId, subscriberTeamId);
+
+  // P0 flag check: when OFF, skip silently with audit stub
+  if (!isUserChannelMentionIngressEnabled()) {
+    console.info("slack_event_skip", {
+      eventId,
+      eventType,
+      channel,
+      channelType,
+      reason: "user_channel_ingress_flag_off",
+      userToken: true,
+      isUserTokenChannel: true,
+    });
+
+    // Audit stub: record skip with reason (DL-3)
+    // Only audit if we can identify the subscriber
+    if (subscriberUserId && subscriberTeamId) {
+      const auditPayload = buildUserChannelWakeAudit({
+        tokenSubject: { slackUserId: subscriberUserId, slackTeamId: subscriberTeamId },
+        channelId: channel,
+        channelClassification: "unknown",
+        isShared: isConnect,
+        employeeId: "",
+        orgId: "",
+        eventId,
+        eventType,
+        speakerId,
+        speakerTeamId: teamId,
+        mentionedIds,
+        timestamp: str(envelope.event?.ts),
+        woke: false,
+        skipReason: "flag_off",
+      });
+      appendAuditEvent({
+        orgId: "",
+        employeeId: null,
+        credentialId: null,
+        action: "slack.user_token_channel_wake_skipped",
+        purpose: "slack.user_token_channel",
+        summary: "User-token channel wake スキップ: flag_off",
+        metadata: {
+          reason: "flag_off" as UserChannelSkipReason,
+          ...auditPayload,
+        },
+      }).catch(() => undefined);
+    }
+
+    return {
+      handled: true,
+      woke: 0,
+      skipReason: "user_channel_ingress_flag_off",
+      userToken: true,
+      isDirectMessage: false,
+      isUserTokenChannel: true,
+    };
+  }
+
+  // === Flag ON: process with fail-closed behavior (DL-2) ===
+
+  // DL-2: Explicit identity map only — resolve subscriber to employee
+  // Must have valid userTokenAuth
+  if (!userTokenAuth || !subscriberUserId || !subscriberTeamId) {
+    console.info("slack_event_skip", {
+      eventId,
+      eventType,
+      channel,
+      channelType,
+      reason: "user_channel_auth_mismatch",
+      userToken: true,
+      isUserTokenChannel: true,
+    });
+    return {
+      handled: true,
+      woke: 0,
+      skipReason: "user_channel_auth_mismatch",
+      userToken: true,
+      isUserTokenChannel: true,
+    };
+  }
+
+  // DL-2: Self-loop check — speaker is the subscribed employee
+  if (isSelfLoop(speakerId, subscriberUserId)) {
+    console.info("slack_event_skip", {
+      eventId,
+      eventType,
+      channel,
+      channelType,
+      speakerId,
+      subscriberUserId,
+      reason: "user_channel_self_loop",
+      userToken: true,
+      isUserTokenChannel: true,
+    });
+
+    // Audit stub for self-loop skip (DL-3)
+    const auditPayload = buildUserChannelWakeAudit({
+      tokenSubject: { slackUserId: subscriberUserId, slackTeamId: subscriberTeamId },
+      channelId: channel,
+      channelClassification: "unknown",
+      isShared: isConnect,
+      employeeId: "",
+      orgId: "",
+      eventId,
+      eventType,
+      speakerId,
+      speakerTeamId: teamId,
+      mentionedIds,
+      timestamp: str(envelope.event?.ts),
+      woke: false,
+      skipReason: "self_loop",
+    });
+    appendAuditEvent({
+      orgId: "",
+      employeeId: null,
+      credentialId: null,
+      action: "slack.user_token_channel_wake_skipped",
+      purpose: "slack.user_token_channel",
+      summary: "User-token channel wake スキップ: self_loop",
+      metadata: {
+        reason: "self_loop" as UserChannelSkipReason,
+        ...auditPayload,
+      },
+    }).catch(() => undefined);
+
+    return {
+      handled: true,
+      woke: 0,
+      skipReason: "user_channel_self_loop",
+      userToken: true,
+      isUserTokenChannel: true,
+    };
+  }
+
+  // DL-2: Check if subscriber is mentioned (channel wake requires @mention)
+  const subscriberMentioned = mentionedIds.some(
+    (id) => id.toUpperCase() === subscriberUserId.toUpperCase()
+  );
+  if (!subscriberMentioned) {
+    console.info("slack_event_skip", {
+      eventId,
+      eventType,
+      channel,
+      channelType,
+      subscriberUserId,
+      mentionedIds,
+      reason: "user_channel_no_mention",
+      userToken: true,
+      isUserTokenChannel: true,
+    });
+
+    // Audit stub for no-mention skip (DL-3)
+    const auditPayload = buildUserChannelWakeAudit({
+      tokenSubject: { slackUserId: subscriberUserId, slackTeamId: subscriberTeamId },
+      channelId: channel,
+      channelClassification: "unknown",
+      isShared: isConnect,
+      employeeId: "",
+      orgId: "",
+      eventId,
+      eventType,
+      speakerId,
+      speakerTeamId: teamId,
+      mentionedIds,
+      timestamp: str(envelope.event?.ts),
+      woke: false,
+      skipReason: "no_mention",
+    });
+    appendAuditEvent({
+      orgId: "",
+      employeeId: null,
+      credentialId: null,
+      action: "slack.user_token_channel_wake_skipped",
+      purpose: "slack.user_token_channel",
+      summary: "User-token channel wake スキップ: no_mention",
+      metadata: {
+        reason: "no_mention" as UserChannelSkipReason,
+        ...auditPayload,
+      },
+    }).catch(() => undefined);
+
+    return {
+      handled: true,
+      woke: 0,
+      skipReason: "user_channel_no_mention",
+      userToken: true,
+      isUserTokenChannel: true,
+    };
+  }
+
+  // DL-2: Resolve subscriber to employee via explicit identity map
+  // Fail-closed: unbound subscriber does not wake
+  const subscriberTargets = await getEmployeesBySlackUserIds(
+    [subscriberUserId],
+    subscriberTeamId
+  );
+
+  if (subscriberTargets.length === 0) {
+    console.info("slack_event_skip", {
+      eventId,
+      eventType,
+      channel,
+      channelType,
+      subscriberUserId,
+      subscriberTeamId,
+      reason: "user_channel_employee_not_bound",
+      userToken: true,
+      isUserTokenChannel: true,
+    });
+
+    // Audit stub for unbound skip (DL-3)
+    const auditPayload = buildUserChannelWakeAudit({
+      tokenSubject: { slackUserId: subscriberUserId, slackTeamId: subscriberTeamId },
+      channelId: channel,
+      channelClassification: "unknown",
+      isShared: isConnect,
+      employeeId: "",
+      orgId: "",
+      eventId,
+      eventType,
+      speakerId,
+      speakerTeamId: teamId,
+      mentionedIds,
+      timestamp: str(envelope.event?.ts),
+      woke: false,
+      skipReason: "employee_not_bound",
+    });
+    appendAuditEvent({
+      orgId: "",
+      employeeId: null,
+      credentialId: null,
+      action: "slack.user_token_channel_wake_skipped",
+      purpose: "slack.user_token_channel",
+      summary: "User-token channel wake スキップ: employee_not_bound",
+      metadata: {
+        reason: "employee_not_bound" as UserChannelSkipReason,
+        ...auditPayload,
+      },
+    }).catch(() => undefined);
+
+    return {
+      handled: true,
+      woke: 0,
+      skipReason: "user_channel_employee_not_bound",
+      userToken: true,
+      isUserTokenChannel: true,
+    };
+  }
+
+  const target = subscriberTargets[0];
+
+  // DL-2: Channel classification check (fail-closed on unknown)
+  const channelRecord = await getOrgChannel(target.orgId, "slack", channel);
+  const classification: ChannelClassification =
+    channelRecord?.classification ?? "unknown";
+
+  if (classification === "unknown") {
+    console.info("slack_event_skip", {
+      eventId,
+      eventType,
+      channel,
+      channelType,
+      classification,
+      reason: "user_channel_not_classified",
+      userToken: true,
+      isUserTokenChannel: true,
+    });
+
+    // Audit stub for unclassified channel skip (DL-3)
+    const auditPayload = buildUserChannelWakeAudit({
+      tokenSubject: { slackUserId: subscriberUserId, slackTeamId: subscriberTeamId },
+      channelId: channel,
+      channelClassification: classification,
+      isShared: isConnect,
+      employeeId: target.employeeId,
+      orgId: target.orgId,
+      eventId,
+      eventType,
+      speakerId,
+      speakerTeamId: teamId,
+      mentionedIds,
+      timestamp: str(envelope.event?.ts),
+      woke: false,
+      skipReason: "channel_not_classified",
+    });
+    appendAuditEvent({
+      orgId: target.orgId,
+      employeeId: target.employeeId,
+      credentialId: null,
+      action: "slack.user_token_channel_wake_skipped",
+      purpose: "slack.user_token_channel",
+      summary: "User-token channel wake スキップ: channel_not_classified",
+      metadata: {
+        reason: "channel_not_classified" as UserChannelSkipReason,
+        ...auditPayload,
+      },
+    }).catch(() => undefined);
+
+    return {
+      handled: true,
+      woke: 0,
+      skipReason: "user_channel_not_classified",
+      userToken: true,
+      isUserTokenChannel: true,
+    };
+  }
+
+  // DL-4: Team mismatch check for org binding
+  // Subscriber team must match the employee's bound team
+  if (target.slackTeamId.toUpperCase() !== subscriberTeamId.toUpperCase()) {
+    console.info("slack_event_skip", {
+      eventId,
+      eventType,
+      channel,
+      channelType,
+      subscriberTeamId,
+      boundTeamId: target.slackTeamId,
+      reason: "user_channel_team_mismatch",
+      userToken: true,
+      isUserTokenChannel: true,
+    });
+
+    // Audit stub for team mismatch skip (DL-3)
+    const auditPayload = buildUserChannelWakeAudit({
+      tokenSubject: { slackUserId: subscriberUserId, slackTeamId: subscriberTeamId },
+      channelId: channel,
+      channelClassification: classification,
+      isShared: isConnect,
+      employeeId: target.employeeId,
+      orgId: target.orgId,
+      eventId,
+      eventType,
+      speakerId,
+      speakerTeamId: teamId,
+      mentionedIds,
+      timestamp: str(envelope.event?.ts),
+      woke: false,
+      skipReason: "team_mismatch",
+    });
+    appendAuditEvent({
+      orgId: target.orgId,
+      employeeId: target.employeeId,
+      credentialId: null,
+      action: "slack.user_token_channel_wake_skipped",
+      purpose: "slack.user_token_channel",
+      summary: "User-token channel wake スキップ: team_mismatch",
+      metadata: {
+        reason: "team_mismatch" as UserChannelSkipReason,
+        ...auditPayload,
+      },
+    }).catch(() => undefined);
+
+    return {
+      handled: true,
+      woke: 0,
+      skipReason: "user_channel_team_mismatch",
+      userToken: true,
+      isUserTokenChannel: true,
+    };
+  }
+
+  // All checks passed: wake the employee
+  // TODO (DL-1): Token rotation / credential lease plumbing (separate implementation)
+  const ts = str(envelope.event?.ts);
+  const threadTs = str(envelope.event?.thread_ts) || null;
+
+  // Apply ingress handoff policy
+  const [effectivePolicy] = await Promise.all([
+    getEffectiveIngressHandoffPolicy(target.orgId, target.employeeId),
+  ]);
+
+  const resolved = resolveIngressHandoffSync(effectivePolicy.policy, {
+    channelId: channel,
+    classification,
+    isIm: false,
+  });
+
+  const { text: processedText, truncated } = applyBodyMode(
+    text,
+    resolved.rule.body,
+    resolved.rule.bodyPrefixChars
+  );
+
+  const ingressHandoffMeta: NonNullable<SlackWakePayload["ingressHandoff"]> = {
+    policyId: effectivePolicy.policy.policyId,
+    ruleId: resolved.rule.id,
+    bodyMode: resolved.rule.body,
+    attachmentMode: resolved.rule.attachment,
+    attachmentApproval: resolved.rule.attachmentApproval,
+    bodyTruncated: truncated || undefined,
+    sealithHandoff: resolved.rule.sealith,
+    pendingManagerApproval:
+      resolved.rule.attachmentApproval === "manager" ? true : undefined,
+    channelClassification: classification,
+  };
+
+  const payload: SlackWakePayload = {
+    channel,
+    ts,
+    thread_ts: threadTs,
+    text: processedText,
+    user: speakerId,
+    slackUserId: target.slackUserId,
+    teamId: subscriberTeamId,
+    employeeId: target.employeeId,
+    eventId,
+    ingressHandoff: ingressHandoffMeta,
+  };
+
+  // Post wake
+  await postWake(target, payload, "user_token_channel", ingressHandoffMeta);
+
+  // Audit success (DL-3)
+  const auditPayload = buildUserChannelWakeAudit({
+    tokenSubject: { slackUserId: subscriberUserId, slackTeamId: subscriberTeamId },
+    channelId: channel,
+    channelClassification: classification,
+    isShared: isConnect,
+    employeeId: target.employeeId,
+    orgId: target.orgId,
+    eventId,
+    eventType,
+    speakerId,
+    speakerTeamId: teamId,
+    mentionedIds,
+    timestamp: ts,
+    woke: true,
+  });
+  appendAuditEvent({
+    orgId: target.orgId,
+    employeeId: target.employeeId,
+    credentialId: null,
+    action: "slack.user_token_channel_wake",
+    purpose: "slack.user_token_channel",
+    summary: "User-token channel mention で社員を起こした",
+    metadata: {
+      ...auditPayload,
+      ingressHandoff: {
+        bodyMode: ingressHandoffMeta.bodyMode,
+        attachmentMode: ingressHandoffMeta.attachmentMode,
+        sealithHandoff: ingressHandoffMeta.sealithHandoff,
+        channelClassification: classification,
+      },
+    },
+  }).catch(() => undefined);
+
+  console.info("slack_event_user_channel_wake", {
+    eventId,
+    eventType,
+    channel,
+    channelType,
+    isConnect,
+    employeeId: target.employeeId,
+    orgId: target.orgId,
+    userToken: true,
+    isUserTokenChannel: true,
+    classification,
+  });
+
+  return {
+    handled: true,
+    woke: 1,
+    userToken: true,
+    isUserTokenChannel: true,
+  };
+}
 
 export async function processSlackMentionEnvelope(
   envelope: SlackEnvelope
@@ -576,6 +1103,27 @@ export async function processSlackMentionEnvelope(
   const speakerId = str(event.user);
   const text = typeof event.text === "string" ? event.text : "";
   const mentionedIds = extractMentionedUserIds(text, event.blocks);
+
+  // Path C: User-token channel events (message.channels / message.groups)
+  // Flag-gated: when P0_USER_CHANNEL_MENTION_INGRESS is OFF, skip silently.
+  // When ON, process with fail-closed behavior per DL-2.
+  // @see docs/p0-user-mention-ingress-design-20260919.md
+  const isUserTokenChannel = isUserTokenChannelEvent(envelope);
+  if (isUserTokenChannel) {
+    const outcome = await processUserTokenChannelEvent({
+      envelope,
+      eventId,
+      eventType,
+      channel,
+      channelType,
+      teamId,
+      speakerId,
+      text,
+      mentionedIds,
+      userTokenAuth,
+    });
+    return outcome;
+  }
 
   // Slack may omit channel_type in some edge cases (user-token events, or unexpected payloads).
   // Any message in a D-prefixed channel is treated as IM to avoid silent drops.
