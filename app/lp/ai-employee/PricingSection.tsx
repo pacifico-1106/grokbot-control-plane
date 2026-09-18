@@ -4,6 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 
 interface PricingTier {
+  id: string;
   name: string;
   tierLabel: string;
   description: string;
@@ -16,11 +17,12 @@ interface PricingTier {
 
 const PRICING_TIERS: PricingTier[] = [
   {
+    id: "intern",
     name: "Intern",
     tierLabel: "インターン",
     description: "定型業務・一般事務向け",
     monthly: 50000,
-    setupFee: 50000,
+    setupFee: 150000,
     features: [
       "AI社員証（Staffpass）",
       "会社メール連携",
@@ -31,11 +33,12 @@ const PRICING_TIERS: PricingTier[] = [
     ],
   },
   {
+    id: "proper",
     name: "Proper",
     tierLabel: "プロパー",
     description: "営業・顧客対応向け",
     monthly: 150000,
-    setupFee: 100000,
+    setupFee: 150000,
     popular: true,
     features: [
       "Internプランの全機能",
@@ -47,11 +50,12 @@ const PRICING_TIERS: PricingTier[] = [
     ],
   },
   {
+    id: "executive",
     name: "Executive",
     tierLabel: "エグゼクティブ",
     description: "経営補佐・高度運用向け",
     monthly: 300000,
-    setupFee: 200000,
+    setupFee: 300000,
     features: [
       "Properプランの全機能",
       "高度な権限設計",
@@ -62,6 +66,7 @@ const PRICING_TIERS: PricingTier[] = [
     ],
   },
   {
+    id: "custom",
     name: "カスタマイズ",
     tierLabel: "カスタマイズ",
     description: "大規模・特殊要件向け",
@@ -243,14 +248,33 @@ export function PricingSection() {
               </ul>
 
               {/* CTA - aligned at bottom */}
-              <Link
-                href="/signup"
-                className={`btn mt-6 w-full justify-center ${
-                  tier.popular ? "btn-primary" : "btn-ghost"
-                }`}
-              >
-                {tier.isCustom ? "お問い合わせ" : "相談する"}
-              </Link>
+              <div className="mt-6 space-y-2">
+                {tier.isCustom ? (
+                  <Link
+                    href={`/lp/ai-employee/consult?plan=${tier.id}`}
+                    className="btn btn-ghost w-full justify-center"
+                  >
+                    相談する
+                  </Link>
+                ) : (
+                  <>
+                    <Link
+                      href={`/lp/ai-employee/checkout?plan=${tier.id}`}
+                      className={`btn w-full justify-center ${
+                        tier.popular ? "btn-primary" : "btn-ghost"
+                      }`}
+                    >
+                      初期費用を払って申し込む
+                    </Link>
+                    <Link
+                      href={`/lp/ai-employee/consult?plan=${tier.id}`}
+                      className="btn btn-ghost w-full justify-center text-xs"
+                    >
+                      相談する
+                    </Link>
+                  </>
+                )}
+              </div>
             </article>
           ))}
         </div>
