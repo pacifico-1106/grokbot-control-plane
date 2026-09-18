@@ -180,9 +180,10 @@ export function parseConversationContext(
   const phone = str(conv.phone) || str(body.phone) || str(args.phone);
   const lineId = str(conv.lineId) || str(body.lineId) || str(args.lineId);
   const threadId = resolveConversationThreadId({ conversation: conv, args, body });
-  const ts = str(conv.ts) || str(args.ts);
-  const messageTs = str(conv.messageTs) || str(args.messageTs);
-  const slackTs = str(conv.slackTs) || str(args.slackTs);
+  const bodyRecord = body as unknown as Record<string, unknown>;
+  const ts = str(conv.ts) || str(bodyRecord.ts) || str(args.ts);
+  const messageTs = str(conv.messageTs) || str(bodyRecord.messageTs) || str(args.messageTs);
+  const slackTs = str(conv.slackTs) || str(bodyRecord.slackTs) || str(args.slackTs);
 
   return {
     surface,
