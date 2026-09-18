@@ -1050,6 +1050,11 @@ describe("Gateway audience egress", () => {
 
 import { setOrgReplyPolicy, resetDemoReplyPolicy } from "@/lib/data/reply-policy";
 import { normalizeReplyPolicy } from "@/lib/gateway/reply-policy-validate";
+import {
+  storeWakeParent,
+  clearStash,
+  lookupWakeParent,
+} from "@/lib/data/wake-parent-stash";
 
 describe("Gateway prefer_thread auto thread_ts injection", () => {
   test("prefer_thread policy injects thread_ts from wake ts when no explicit thread_ts", async () => {
@@ -1538,6 +1543,436 @@ describe("Gateway prefer_thread auto thread_ts injection", () => {
     } finally {
       globalThis.fetch = originalFetch;
       resetDemoReplyPolicy();
+      await upsertConversationAdapter({
+        orgId: DEMO_ORG.id,
+        surface: "slack",
+        enabled: false,
+        secrets: {},
+      });
+    }
+  });
+});
+
+describe("Gateway prefer_thread wake stash fallback (Ev0C30P93BQC fix)", () => {
+  test("wake stash → slack.post without client ts → thread_ts equals wake.ts", async () => {
+    clearStash();
+    const wakeTs = "1789746322.045839";
+
+    // Simulate wake event storing parent ts
+    storeWakeParent({
+      orgId: DEMO_ORG.id,
+      employeeId: "emp_comm",
+      channelId: "C_INTERNAL",
+      parentTs: wakeTs,
+      eventId: "Ev0C30P93BQC",
+    });
+
+    await setOrgReplyPolicy(
+      DEMO_ORG.id,
+      normalizeReplyPolicy({
+        policyId: "rpp_prefer_thread",
+        policyName: "Prefer Thread",
+        rules: [
+          {
+            id: "rpr_prefer_thread",
+            surface: "slack",
+            afterHoursMode: "allow_send",
+            shortReplyMode: "allow",
+            emojiMode: "allow",
+            threadAffinity: "prefer_thread",
+          },
+        ],
+      })
+    );
+    await upsertConversationAdapter({
+      orgId: DEMO_ORG.id,
+      surface: "slack",
+      enabled: true,
+      secrets: { botToken: "xoxb-wake-stash" },
+    });
+
+    const originalFetch = globalThis.fetch;
+    let postedPayload: Record<string, unknown> = {};
+    try {
+      globalThis.fetch = (async (_input, init) => {
+        postedPayload = JSON.parse(String(init?.body || "{}")) as Record<string, unknown>;
+        return Response.json({
+          ok: true,
+          channel: "C_INTERNAL",
+          ts: "1789746400.000001",
+        });
+      }) as typeof fetch;
+
+      // Invoke WITHOUT any ts in the request (client omitted wake ts)
+      const sent = await runGatewayInvoke({
+        employeeId: "emp_comm",
+        credentialId: "cred_comm",
+        body: {
+          tool: "comm.reply",
+          purpose: "comm.internal",
+          jobId: `job_wake_stash_${Date.now()}`,
+          conversation: {
+            surface: "slack",
+            orgId: DEMO_ORG.id,
+            slackChannelId: "C_INTERNAL",
+            // NO ts, NO messageTs, NO slackTs — client did not forward wake ts
+          },
+          args: {
+            slackChannelId: "C_INTERNAL",
+            text: "Wake stash fallback: should inject wake.ts as thread_ts",
+          },
+        },
+      });
+
+      expect(sent.body.ok).toBe(true);
+      expect(sent.body.needs_approval).not.toBe(true);
+      expect(postedPayload.channel).toBe("C_INTERNAL");
+      expect(postedPayload.thread_ts).toBe(wakeTs);
+
+      const result = sent.body.result as { threadTsSource?: string } | undefined;
+      expect(result?.threadTsSource).toBe("wake_stash");
+
+      // Stash entry should be consumed
+      const remaining = lookupWakeParent({
+        orgId: DEMO_ORG.id,
+        employeeId: "emp_comm",
+        channelId: "C_INTERNAL",
+      });
+      expect(remaining).toBeNull();
+    } finally {
+      globalThis.fetch = originalFetch;
+      resetDemoReplyPolicy();
+      clearStash();
+      await upsertConversationAdapter({
+        orgId: DEMO_ORG.id,
+        surface: "slack",
+        enabled: false,
+        secrets: {},
+      });
+    }
+  });
+
+  test("prefer_thread + client-provided ts still works (client wins)", async () => {
+    clearStash();
+    const wakeTs = "1789746322.045839";
+    const clientTs = "1789700000.000000"; // Different ts from client
+
+    // Store stash entry
+    storeWakeParent({
+      orgId: DEMO_ORG.id,
+      employeeId: "emp_comm",
+      channelId: "C_INTERNAL",
+      parentTs: wakeTs,
+      eventId: "Ev0C30P93BQC",
+    });
+
+    await setOrgReplyPolicy(
+      DEMO_ORG.id,
+      normalizeReplyPolicy({
+        policyId: "rpp_prefer_thread",
+        policyName: "Prefer Thread",
+        rules: [
+          {
+            id: "rpr_prefer_thread",
+            surface: "slack",
+            afterHoursMode: "allow_send",
+            shortReplyMode: "allow",
+            emojiMode: "allow",
+            threadAffinity: "prefer_thread",
+          },
+        ],
+      })
+    );
+    await upsertConversationAdapter({
+      orgId: DEMO_ORG.id,
+      surface: "slack",
+      enabled: true,
+      secrets: { botToken: "xoxb-client-wins" },
+    });
+
+    const originalFetch = globalThis.fetch;
+    let postedPayload: Record<string, unknown> = {};
+    try {
+      globalThis.fetch = (async (_input, init) => {
+        postedPayload = JSON.parse(String(init?.body || "{}")) as Record<string, unknown>;
+        return Response.json({
+          ok: true,
+          channel: "C_INTERNAL",
+          ts: "1789746400.000001",
+        });
+      }) as typeof fetch;
+
+      // Invoke WITH client-provided ts
+      const sent = await runGatewayInvoke({
+        employeeId: "emp_comm",
+        credentialId: "cred_comm",
+        body: {
+          tool: "comm.reply",
+          purpose: "comm.internal",
+          jobId: `job_client_wins_${Date.now()}`,
+          conversation: {
+            surface: "slack",
+            orgId: DEMO_ORG.id,
+            slackChannelId: "C_INTERNAL",
+            ts: clientTs, // Client provides ts
+          },
+          args: {
+            slackChannelId: "C_INTERNAL",
+            text: "Client ts should win over wake stash",
+          },
+        },
+      });
+
+      expect(sent.body.ok).toBe(true);
+      expect(postedPayload.thread_ts).toBe(clientTs); // Client ts wins
+
+      const result = sent.body.result as { threadTsSource?: string } | undefined;
+      expect(result?.threadTsSource).toBe("client");
+    } finally {
+      globalThis.fetch = originalFetch;
+      resetDemoReplyPolicy();
+      clearStash();
+      await upsertConversationAdapter({
+        orgId: DEMO_ORG.id,
+        surface: "slack",
+        enabled: false,
+        secrets: {},
+      });
+    }
+  });
+
+  test("no stash entry → no injection, channel root", async () => {
+    clearStash(); // Ensure no stash entries
+
+    await setOrgReplyPolicy(
+      DEMO_ORG.id,
+      normalizeReplyPolicy({
+        policyId: "rpp_prefer_thread",
+        policyName: "Prefer Thread",
+        rules: [
+          {
+            id: "rpr_prefer_thread",
+            surface: "slack",
+            afterHoursMode: "allow_send",
+            shortReplyMode: "allow",
+            emojiMode: "allow",
+            threadAffinity: "prefer_thread",
+          },
+        ],
+      })
+    );
+    await upsertConversationAdapter({
+      orgId: DEMO_ORG.id,
+      surface: "slack",
+      enabled: true,
+      secrets: { botToken: "xoxb-no-stash" },
+    });
+
+    const originalFetch = globalThis.fetch;
+    let postedPayload: Record<string, unknown> = {};
+    try {
+      globalThis.fetch = (async (_input, init) => {
+        postedPayload = JSON.parse(String(init?.body || "{}")) as Record<string, unknown>;
+        return Response.json({
+          ok: true,
+          channel: "C_INTERNAL",
+          ts: "1789746400.000001",
+        });
+      }) as typeof fetch;
+
+      const sent = await runGatewayInvoke({
+        employeeId: "emp_comm",
+        credentialId: "cred_comm",
+        body: {
+          tool: "comm.reply",
+          purpose: "comm.internal",
+          jobId: `job_no_stash_${Date.now()}`,
+          conversation: {
+            surface: "slack",
+            orgId: DEMO_ORG.id,
+            slackChannelId: "C_INTERNAL",
+          },
+          args: {
+            slackChannelId: "C_INTERNAL",
+            text: "No stash, no client ts → should go to channel root",
+          },
+        },
+      });
+
+      expect(sent.body.ok).toBe(true);
+      expect(postedPayload.thread_ts).toBeUndefined();
+
+      const result = sent.body.result as { threadTsSource?: string } | undefined;
+      expect(result?.threadTsSource).toBe("none");
+    } finally {
+      globalThis.fetch = originalFetch;
+      resetDemoReplyPolicy();
+      await upsertConversationAdapter({
+        orgId: DEMO_ORG.id,
+        surface: "slack",
+        enabled: false,
+        secrets: {},
+      });
+    }
+  });
+
+  test("wrong channel stash → no injection (tenant isolation)", async () => {
+    clearStash();
+    const wakeTs = "1789746322.045839";
+
+    // Store stash for a DIFFERENT channel
+    storeWakeParent({
+      orgId: DEMO_ORG.id,
+      employeeId: "emp_comm",
+      channelId: "C_OTHER_CHANNEL",
+      parentTs: wakeTs,
+      eventId: "Ev0C30P93BQC",
+    });
+
+    await setOrgReplyPolicy(
+      DEMO_ORG.id,
+      normalizeReplyPolicy({
+        policyId: "rpp_prefer_thread",
+        policyName: "Prefer Thread",
+        rules: [
+          {
+            id: "rpr_prefer_thread",
+            surface: "slack",
+            afterHoursMode: "allow_send",
+            shortReplyMode: "allow",
+            emojiMode: "allow",
+            threadAffinity: "prefer_thread",
+          },
+        ],
+      })
+    );
+    await upsertConversationAdapter({
+      orgId: DEMO_ORG.id,
+      surface: "slack",
+      enabled: true,
+      secrets: { botToken: "xoxb-wrong-channel" },
+    });
+
+    const originalFetch = globalThis.fetch;
+    let postedPayload: Record<string, unknown> = {};
+    try {
+      globalThis.fetch = (async (_input, init) => {
+        postedPayload = JSON.parse(String(init?.body || "{}")) as Record<string, unknown>;
+        return Response.json({
+          ok: true,
+          channel: "C_INTERNAL",
+          ts: "1789746400.000001",
+        });
+      }) as typeof fetch;
+
+      // Invoke for C_INTERNAL (different from stash channel)
+      const sent = await runGatewayInvoke({
+        employeeId: "emp_comm",
+        credentialId: "cred_comm",
+        body: {
+          tool: "comm.reply",
+          purpose: "comm.internal",
+          jobId: `job_wrong_channel_${Date.now()}`,
+          conversation: {
+            surface: "slack",
+            orgId: DEMO_ORG.id,
+            slackChannelId: "C_INTERNAL",
+          },
+          args: {
+            slackChannelId: "C_INTERNAL",
+            text: "Different channel from stash → no injection",
+          },
+        },
+      });
+
+      expect(sent.body.ok).toBe(true);
+      expect(postedPayload.thread_ts).toBeUndefined();
+    } finally {
+      globalThis.fetch = originalFetch;
+      resetDemoReplyPolicy();
+      clearStash();
+      await upsertConversationAdapter({
+        orgId: DEMO_ORG.id,
+        surface: "slack",
+        enabled: false,
+        secrets: {},
+      });
+    }
+  });
+
+  test("channel_root policy ignores wake stash", async () => {
+    clearStash();
+    const wakeTs = "1789746322.045839";
+
+    storeWakeParent({
+      orgId: DEMO_ORG.id,
+      employeeId: "emp_comm",
+      channelId: "C_INTERNAL",
+      parentTs: wakeTs,
+      eventId: "Ev0C30P93BQC",
+    });
+
+    await setOrgReplyPolicy(
+      DEMO_ORG.id,
+      normalizeReplyPolicy({
+        policyId: "rpp_channel_root",
+        policyName: "Channel Root",
+        rules: [
+          {
+            id: "rpr_channel_root",
+            surface: "slack",
+            afterHoursMode: "allow_send",
+            shortReplyMode: "allow",
+            emojiMode: "allow",
+            threadAffinity: "channel_root", // channel_root, not prefer_thread
+          },
+        ],
+      })
+    );
+    await upsertConversationAdapter({
+      orgId: DEMO_ORG.id,
+      surface: "slack",
+      enabled: true,
+      secrets: { botToken: "xoxb-channel-root-stash" },
+    });
+
+    const originalFetch = globalThis.fetch;
+    let postedPayload: Record<string, unknown> = {};
+    try {
+      globalThis.fetch = (async (_input, init) => {
+        postedPayload = JSON.parse(String(init?.body || "{}")) as Record<string, unknown>;
+        return Response.json({
+          ok: true,
+          channel: "C_INTERNAL",
+          ts: "1789746400.000001",
+        });
+      }) as typeof fetch;
+
+      const sent = await runGatewayInvoke({
+        employeeId: "emp_comm",
+        credentialId: "cred_comm",
+        body: {
+          tool: "comm.reply",
+          purpose: "comm.internal",
+          jobId: `job_channel_root_stash_${Date.now()}`,
+          conversation: {
+            surface: "slack",
+            orgId: DEMO_ORG.id,
+            slackChannelId: "C_INTERNAL",
+          },
+          args: {
+            slackChannelId: "C_INTERNAL",
+            text: "channel_root policy → stash ignored",
+          },
+        },
+      });
+
+      expect(sent.body.ok).toBe(true);
+      expect(postedPayload.thread_ts).toBeUndefined();
+    } finally {
+      globalThis.fetch = originalFetch;
+      resetDemoReplyPolicy();
+      clearStash();
       await upsertConversationAdapter({
         orgId: DEMO_ORG.id,
         surface: "slack",
