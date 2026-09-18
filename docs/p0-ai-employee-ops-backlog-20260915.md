@@ -120,3 +120,42 @@
 - Security review 完了後に別 GO
 
 詳細は [g7-connect-wake-routing-design-20260918.md](./g7-connect-wake-routing-design-20260918.md) を参照。
+
+---
+
+## P0-UM1: User Mention Channel Ingress（個人メンション起こし）
+
+**状態:** 🔴 設計スパイク  
+**担当:** Ando product lock 2026-09-19  
+**優先度:** P0（短期実装必須）
+
+### 概要
+
+外部 Slack Connect チャネルで AI社員の個人アカウントへのメンション（`@tando`）で wake する機能。
+相手方ワークスペースに Staffpass アプリのインストールを **要求しない**。
+
+### Ando model lock
+
+- **internal = Bot**: 社内チャネルは Bot `app_mention` で wake
+- **external = user account**: 外部 Connect は User-token events で wake、人間アイデンティティで返信
+- G7 Bot+Connect path は短期 smoke only。長期 external mouth には使用しない
+
+### 設計ドキュメント
+
+→ [`docs/p0-user-mention-ingress-design-20260919.md`](./p0-user-mention-ingress-design-20260919.md)
+
+### オープンロック
+
+| ID | 担当 | 内容 |
+|----|------|------|
+| L1 | Yasaka | User OAuth スコープ拡大承認（`channels:history`, `groups:history`） |
+| L2 | Ando | Connect 相手方検証（Stablo 側でイベント受信確認） |
+| L3 | Yasaka | 社員 OAuth 再フロー UX 設計承認 |
+| L4 | Yasaka | 監査フィールド仕様承認 |
+| L5 | Ando | ロールアウト戦略（feature flag vs 一括） |
+
+### Out of scope
+
+- Bot 経由の外部 Connect wake（Ando model で禁止）
+- Socket Mode 移行
+- DM ingress の変更（既存 Path A/B は維持）
