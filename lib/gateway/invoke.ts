@@ -41,6 +41,7 @@ import {
   resolveConversationThreadId,
   resolveParentMessageTs,
 } from "@/lib/gateway/audience";
+import { lookupWakeParent, consumeWakeParent } from "@/lib/data/wake-parent-stash";
 import { getEffectiveReplyPolicy } from "@/lib/data/reply-policy";
 import { resolveInformationDisclosure } from "@/lib/gateway/information-class";
 import { evaluateProjectScope } from "@/lib/gateway/project-scope";
@@ -1339,6 +1340,7 @@ export async function runGatewayInvoke(
   // approval of a needs_approval egress. Deny stays fail-closed above.
   // Notify inbox is a different plane — never post approvals through this adapter.
   let conversationDelivery: ConversationDelivery | undefined;
+  let threadTsSource: "client" | "wake_stash" | "none" | undefined;
   if (isAudienceGatedTool(toolDef)) {
     const ctx = parseConversationContext(body, orgId || employee.orgId);
     const dest = ctx?.slackChannelId || ctx?.slackUserId || "";
@@ -1365,6 +1367,7 @@ export async function runGatewayInvoke(
       });
 
       let replyThreadTs = explicitThreadTs;
+      threadTsSource = "none";
       if (!looksLikeSlackTs(replyThreadTs) && ctx?.surface === "slack") {
         const replyPolicyResult = await getEffectiveReplyPolicy(
           orgId || employee.orgId,
@@ -1375,8 +1378,28 @@ export async function runGatewayInvoke(
           const parentTs = resolveParentMessageTs({ conversation: ctx, args });
           if (looksLikeSlackTs(parentTs)) {
             replyThreadTs = parentTs;
+            threadTsSource = "client";
+          } else if (ctx?.slackChannelId) {
+            // Fallback to wake parent stash when client did not forward ts
+            const wakeParent = lookupWakeParent({
+              orgId: orgId || employee.orgId,
+              employeeId,
+              channelId: ctx.slackChannelId,
+            });
+            if (wakeParent && looksLikeSlackTs(wakeParent.parentTs)) {
+              replyThreadTs = wakeParent.parentTs;
+              threadTsSource = "wake_stash";
+              // Consume the entry to prevent stale data from accumulating
+              consumeWakeParent({
+                orgId: orgId || employee.orgId,
+                employeeId,
+                channelId: ctx.slackChannelId,
+              });
+            }
           }
         }
+      } else if (looksLikeSlackTs(replyThreadTs)) {
+        threadTsSource = "client";
       }
 
       const posted = await postConversationMessage({
@@ -1750,6 +1773,7 @@ export async function runGatewayInvoke(
                           disclosed: egress?.decision === "summarize" ? "summary" : "source",
                           delivery: conversationDelivery?.delivery,
                           conversationDelivery,
+                          threadTsSource: threadTsSource || undefined,
                           fileAttachmentReceived: fileAttachmentReceived || undefined,
                           fileUpload: fileUploadResponse,
                         }
@@ -1758,6 +1782,7 @@ export async function runGatewayInvoke(
                           disclosed: egress?.decision === "summarize" ? "summary" : undefined,
                           delivery: conversationDelivery?.delivery,
                           conversationDelivery,
+                          threadTsSource: threadTsSource || undefined,
                         },
     message:
       egress?.decision === "summarize"

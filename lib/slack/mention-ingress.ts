@@ -19,6 +19,7 @@
 import { appendAuditEvent } from "@/lib/data/audit";
 import { getEffectiveIngressHandoffPolicy } from "@/lib/data/ingress-handoff";
 import { getOrgChannel } from "@/lib/data/directory";
+import { storeWakeParent } from "@/lib/data/wake-parent-stash";
 import { resolveIngressHandoffSync } from "@/lib/ingress-handoff/resolve";
 import { applyBodyMode } from "@/lib/ingress-handoff/apply";
 import type { ChannelClassification, SealithHandoff } from "@/lib/types";
@@ -418,6 +419,19 @@ async function postWake(
       }).catch(() => undefined);
       return;
     }
+
+    // Store wake parent ts for prefer_thread injection when client does not forward ts
+    // Only store for channel-root mentions (thread_ts is null) where there's a valid ts
+    if (payload.ts && !payload.thread_ts) {
+      storeWakeParent({
+        orgId: target.orgId,
+        employeeId: target.employeeId,
+        channelId: payload.channel,
+        parentTs: payload.ts,
+        eventId: payload.eventId,
+      });
+    }
+
     const summary =
       trigger === "user_token_im"
         ? "社内Slack human DM (user token) で社員を起こした"
@@ -438,6 +452,7 @@ async function postWake(
         thread_ts: payload.thread_ts,
         eventId: payload.eventId,
         userTokenPath: trigger === "user_token_im",
+        wakeParentStashed: payload.ts && !payload.thread_ts ? true : undefined,
         ...handoffMeta,
       },
     }).catch(() => undefined);
