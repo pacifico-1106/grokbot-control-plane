@@ -133,7 +133,11 @@ export default function AIEmployeeLP() {
 
       <main>
         {/* Hero with AI Character */}
-        <section className="mx-auto max-w-6xl px-4 sm:px-6 pt-14 sm:pt-20 pb-16 sm:pb-24">
+        <section className="mx-auto max-w-6xl px-4 sm:px-6 pt-14 sm:pt-20 pb-16 sm:pb-24 relative">
+          {/* Trust Ribbon */}
+          <div className="trust-ribbon" aria-label="楽天出身のAI専門家による監修">
+            <span className="trust-ribbon-text">楽天出身のAI専門家による監修</span>
+          </div>
           <div className="grid lg:grid-cols-[1fr_auto] items-center gap-8 lg:gap-12">
             <div className="max-w-3xl text-center lg:text-left order-2 lg:order-1">
               <span className="eyebrow">AI EMPLOYEE MANAGED PACK</span>
