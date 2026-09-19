@@ -8,6 +8,8 @@ interface PricingTier {
   name: string;
   tierLabel: string;
   description: string;
+  gyomuCapacity: string;
+  gyomuCapacityNote?: string;
   examples?: string[];
   monthly: number | null;
   setupFee: number | null;
@@ -16,12 +18,39 @@ interface PricingTier {
   isCustom?: boolean;
 }
 
+const GYOMU_CATALOG = [
+  {
+    label: "日報・議事録・社内案内の下書き",
+    plans: ["intern", "proper", "executive"],
+  },
+  {
+    label: "問い合わせ一次返信・FAQ下書き",
+    plans: ["intern", "proper", "executive"],
+  },
+  {
+    label: "予定調整・空き確認",
+    plans: ["intern", "proper", "executive"],
+  },
+  {
+    label: "商談メモ整理・フォロー抜け漏れ防止",
+    plans: ["proper", "executive"],
+    note: "Proper〜",
+  },
+  {
+    label: "週次論点整理・施策たたき台・開発保守の下調べ",
+    plans: ["executive"],
+    note: "Executive",
+  },
+];
+
 const PRICING_TIERS: PricingTier[] = [
   {
     id: "intern",
     name: "Intern",
     tierLabel: "インターン",
     description: "定型・一般事務向け",
+    gyomuCapacity: "≈ 1業務",
+    gyomuCapacityNote: "定型1領域",
     examples: [
       "日報・議事録の下書き",
       "定型メールの下書き",
@@ -45,6 +74,8 @@ const PRICING_TIERS: PricingTier[] = [
     name: "Proper",
     tierLabel: "プロパー",
     description: "営業・顧客対応向け",
+    gyomuCapacity: "≈ 3業務相当",
+    gyomuCapacityNote: "顧客対応など複数定型",
     examples: [
       "問い合わせへの一次返信下書き",
       "見積・提案メモの整理",
@@ -69,6 +100,8 @@ const PRICING_TIERS: PricingTier[] = [
     name: "Executive",
     tierLabel: "エグゼクティブ",
     description: "経営補佐・高度運用（開発保守等）向け",
+    gyomuCapacity: "高度運用＋複数",
+    gyomuCapacityNote: "開発保守等、個別に業務を設計",
     examples: [
       "経営向けの週次サマリー",
       "複数チャネルの優先度整理",
@@ -92,6 +125,8 @@ const PRICING_TIERS: PricingTier[] = [
     name: "カスタマイズ",
     tierLabel: "カスタマイズ",
     description: "大規模・特殊要件向け",
+    gyomuCapacity: "個別設計",
+    gyomuCapacityNote: "複数領域を横断・はみ出す業務",
     monthly: null,
     setupFee: null,
     isCustom: true,
@@ -132,8 +167,16 @@ export function PricingSection() {
           <h2 className="mt-4 text-2xl sm:text-4xl font-bold tracking-[-0.045em] leading-tight">
             シンプルな料金体系
           </h2>
-          <p className="mt-4 text-base muted">
-            中小企業336万社のミカタ。役割・責任に応じて、月額料金を選べます。
+          <p className="mt-4 text-base muted leading-relaxed">
+            中小企業336万社のミカタ。AI社員プランごとに、任せられる
+            <span className="font-semibold text-[var(--text)]">「業務キャパの箱」</span>
+            が決まります。
+          </p>
+          <p className="mt-2 text-sm muted leading-relaxed">
+            インターンは1業務、プロパーは3業務相当まで対応。どの業務を任せるかは、
+            下の業務カタログを参考に選べます。
+            <span className="text-[var(--accent-strong)]">1業務あたり月5万円から</span>
+            、インターンプランでスタートできます。
           </p>
         </div>
 
@@ -199,6 +242,17 @@ export function PricingSection() {
                   </span>
                 </div>
                 <p className="mt-1 text-sm muted">{tier.description}</p>
+                {/* 業務キャパ Badge */}
+                <div className="mt-2 inline-flex items-center gap-1.5 px-2 py-1 rounded-full bg-[var(--accent-strong)]/10 border border-[var(--accent-strong)]/20">
+                  <span className="text-xs font-semibold text-[var(--accent-strong)]">
+                    {tier.gyomuCapacity}
+                  </span>
+                  {tier.gyomuCapacityNote && (
+                    <span className="text-[10px] text-[var(--text-muted)]">
+                      （{tier.gyomuCapacityNote}）
+                    </span>
+                  )}
+                </div>
                 {tier.examples && tier.examples.length > 0 && (
                   <ul className="mt-3 space-y-1">
                     {tier.examples.map((example) => (
@@ -319,6 +373,43 @@ export function PricingSection() {
               </div>
             </article>
           ))}
+        </div>
+
+        {/* 業務カタログ Section */}
+        <div className="mt-12 surface p-6 sm:p-8">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-6">
+            <div>
+              <h3 className="text-lg font-semibold">業務カタログ</h3>
+              <p className="mt-1 text-sm muted">
+                プランを選ぶ際の参考に。どの業務を任せるか、ここから選べます。
+              </p>
+            </div>
+          </div>
+          <div className="space-y-3">
+            {GYOMU_CATALOG.map((gyomu) => (
+              <div
+                key={gyomu.label}
+                className="flex items-center justify-between gap-4 py-2 border-b border-[var(--border-soft)] last:border-0"
+              >
+                <div className="flex items-center gap-2">
+                  <span className="text-[var(--ok)]">✓</span>
+                  <span className="text-sm">{gyomu.label}</span>
+                </div>
+                {gyomu.note && (
+                  <span className="text-xs text-[var(--accent-strong)] shrink-0">
+                    {gyomu.note}〜
+                  </span>
+                )}
+              </div>
+            ))}
+          </div>
+          <div className="mt-6 pt-4 border-t border-[var(--border-soft)]">
+            <p className="text-xs text-[var(--text-muted)] leading-relaxed">
+              <span className="font-semibold">はみ出す業務・複数領域を横断する業務は？</span>
+              <br />
+              カスタマイズプランで個別にお見積りします。まずはご相談ください。
+            </p>
+          </div>
         </div>
 
         <div className="mt-8 text-center space-y-2">
