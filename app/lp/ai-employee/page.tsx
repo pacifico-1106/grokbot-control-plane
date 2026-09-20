@@ -151,9 +151,7 @@ export default function AIEmployeeLP() {
                 <span className="text-gradient">AI社員 by Staffpass</span>
               </h1>
               <p className="mt-6 text-base sm:text-lg muted leading-relaxed max-w-2xl mx-auto lg:mx-0">
-                導入から運用まで、まるごとおまかせ。
-                <br className="hidden sm:block" />
-                AI社員の「社員証」で、許可・止め方・記録を会社に残します。
+                導入から運用までおまかせ。採用・研修で立ち上げ、「社員証」で許可・止め方・記録を会社に残します。
               </p>
               <div className="mt-8 flex flex-col sm:flex-row gap-3 justify-center lg:justify-start">
                 <Link href="/lp/ai-employee/consult" className="btn btn-primary">
