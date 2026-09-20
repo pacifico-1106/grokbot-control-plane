@@ -458,6 +458,46 @@ export default function AIEmployeeLP() {
           </div>
         </section>
 
+        {/* Philosophy / 考え方 */}
+        <section className="border-y border-[var(--border-soft)] bg-[var(--bg-elevated)]">
+          <div className="mx-auto max-w-6xl px-4 sm:px-6 py-16 sm:py-20">
+            <div className="max-w-3xl mx-auto text-center">
+              <span className="eyebrow">PHILOSOPHY</span>
+              <h2 className="mt-4 text-xl sm:text-2xl font-bold tracking-[-0.03em] leading-snug">
+                安全とは、権限どおりに動かし、
+                <br className="hidden sm:block" />
+                あとから追えること。
+              </h2>
+              <p className="mt-5 text-base sm:text-lg muted leading-relaxed">
+                監視ではなく、就業規則。
+                <br className="sm:hidden" />
+                AI社員を、会社のルールの中で働かせる。
+              </p>
+            </div>
+            <div className="mt-10 grid sm:grid-cols-2 gap-4 max-w-2xl mx-auto">
+              <div className="surface p-5 sm:p-6">
+                <p className="text-sm font-semibold text-[var(--text-muted)]">
+                  従来の監視
+                </p>
+                <p className="mt-2 text-sm muted leading-relaxed">
+                  異常を見つけるのが監視。
+                </p>
+              </div>
+              <div className="surface p-5 sm:p-6 ring-1 ring-[var(--accent-strong)]">
+                <p className="text-sm font-semibold text-[var(--accent-strong)]">
+                  Staffpass
+                </p>
+                <p className="mt-2 text-sm leading-relaxed">
+                  社員として働かせて記録するのが Staffpass。
+                </p>
+              </div>
+            </div>
+            <p className="mt-8 text-sm muted leading-relaxed text-center max-w-2xl mx-auto">
+              従来のソフトは壊れると止まります。AIエージェントは、止まりにくいまま間違えることがあります。Staffpassは監視カメラではなく社員証です。与えた権限の外は通さず、通したものはあとから追えます。
+            </p>
+          </div>
+        </section>
+
         {/* Pricing Section */}
         <PricingSection />
 
