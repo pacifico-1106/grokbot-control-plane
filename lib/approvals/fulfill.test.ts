@@ -669,3 +669,391 @@ describe("mail.send artifact fail-closed + stub fulfillment", () => {
     expect(parseFulfillment(stored?.metadata)?.delivery).toBe("stub");
   });
 });
+
+import { setOrgReplyPolicy, resetDemoReplyPolicy } from "@/lib/data/reply-policy";
+import { normalizeReplyPolicy } from "@/lib/gateway/reply-policy-validate";
+import {
+  storeWakeParent,
+  clearStash,
+} from "@/lib/data/wake-parent-stash";
+
+describe("fulfill prefer_thread + wake parent stash", () => {
+  afterEach(async () => {
+    globalThis.fetch = originalFetch;
+    restoreEnv();
+    resetDemoReplyPolicy();
+    clearStash();
+    await upsertConversationAdapter({
+      orgId: DEMO_ORG.id,
+      surface: "slack",
+      enabled: false,
+      secrets: {},
+    });
+  });
+
+  async function enablePreferThreadPolicy() {
+    await setOrgReplyPolicy(
+      DEMO_ORG.id,
+      normalizeReplyPolicy({
+        policyId: "rpp_prefer_thread",
+        policyName: "Prefer Thread",
+        rules: [
+          {
+            id: "rpr_prefer",
+            surface: "slack",
+            threadAffinity: "prefer_thread",
+            afterHoursMode: "allow_send",
+            emojiMode: "allow",
+            shortReplyMode: "allow",
+          },
+        ],
+      })
+    );
+  }
+
+  test("snapshot preserves bare ts from conversation", async () => {
+    const wakeTs = "1789800001.111111";
+    const jobId = `job_ts_snapshot_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    const queued = await runGatewayInvoke({
+      employeeId: "emp_comm",
+      credentialId: "cred_comm",
+      body: {
+        tool: "comm.reply",
+        purpose: "comm.internal",
+        jobId,
+        conversation: {
+          surface: "slack",
+          orgId: DEMO_ORG.id,
+          slackChannelId: "C_INTERNAL",
+          ts: wakeTs,
+        } as GatewayInvokeRequest["conversation"],
+        informationClass: "confidential",
+        args: {
+          slackChannelId: "C_INTERNAL",
+          text: "返信テスト",
+          ts: wakeTs,
+        },
+      },
+    });
+    expect(queued.httpStatus).toBe(402);
+    const approvalId = String(queued.body.approvalId || "");
+    const stored = await getApprovalById(approvalId, DEMO_ORG.id);
+    const snapshot = parseInvokeSnapshot(stored?.metadata);
+    expect(snapshot?.conversation?.ts).toBe(wakeTs);
+    expect(snapshot?.args.ts).toBe(wakeTs);
+  });
+
+  test("fulfill with prefer_thread + wake stash → post uses thread_ts from stash", async () => {
+    await enablePreferThreadPolicy();
+    clearStash();
+
+    const wakeTs = "1789800002.222222";
+    const jobId = `job_stash_fulfill_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+
+    storeWakeParent({
+      orgId: DEMO_ORG.id,
+      employeeId: "emp_comm",
+      channelId: "C_INTERNAL",
+      parentTs: wakeTs,
+      eventId: "Ev_fulfill_test",
+    });
+
+    const queued = await runGatewayInvoke({
+      employeeId: "emp_comm",
+      credentialId: "cred_comm",
+      body: {
+        tool: "comm.reply",
+        purpose: "comm.internal",
+        jobId,
+        conversation: {
+          surface: "slack",
+          orgId: DEMO_ORG.id,
+          slackChannelId: "C_INTERNAL",
+        } as GatewayInvokeRequest["conversation"],
+        informationClass: "confidential",
+        args: {
+          slackChannelId: "C_INTERNAL",
+          text: "承認後にスレッド投稿されるべきメッセージ",
+        },
+      },
+    });
+    expect(queued.httpStatus).toBe(402);
+    const approvalId = String(queued.body.approvalId || "");
+
+    await upsertConversationAdapter({
+      orgId: DEMO_ORG.id,
+      surface: "slack",
+      enabled: true,
+      secrets: { botToken: "xoxb-fulfill-stash-test" },
+    });
+
+    let postedThreadTs: string | undefined;
+    globalThis.fetch = (async (input, init) => {
+      const url = String(input);
+      if (url.includes("chat.postMessage")) {
+        const payload = JSON.parse(String(init?.body || "{}")) as Record<
+          string,
+          unknown
+        >;
+        postedThreadTs = payload.thread_ts as string | undefined;
+        return Response.json({
+          ok: true,
+          channel: "C_INTERNAL",
+          ts: "1789800099.000001",
+        });
+      }
+      return Response.json({ ok: false, error: "unexpected_fetch" });
+    }) as typeof fetch;
+
+    const approved = await resolveApproval(
+      approvalId,
+      "approved",
+      "ando@example.com",
+      DEMO_ORG.id
+    );
+    const fulfillment = await fulfillApprovedInvoke(approved!);
+    expect(fulfillment?.ok).toBe(true);
+    expect(fulfillment?.delivery).toBe("slack");
+    expect(postedThreadTs).toBe(wakeTs);
+    const stored = await getApprovalById(approvalId, DEMO_ORG.id);
+    expect(parseFulfillment(stored?.metadata)?.threadTsSource).toBe("wake_stash");
+  });
+
+  test("fulfill with prefer_thread + client ts (snapshot) → post uses client ts", async () => {
+    await enablePreferThreadPolicy();
+    clearStash();
+
+    const clientTs = "1789800003.333333";
+    const jobId = `job_client_ts_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+
+    const queued = await runGatewayInvoke({
+      employeeId: "emp_comm",
+      credentialId: "cred_comm",
+      body: {
+        tool: "comm.reply",
+        purpose: "comm.internal",
+        jobId,
+        conversation: {
+          surface: "slack",
+          orgId: DEMO_ORG.id,
+          slackChannelId: "C_INTERNAL",
+          ts: clientTs,
+        } as GatewayInvokeRequest["conversation"],
+        informationClass: "confidential",
+        args: {
+          slackChannelId: "C_INTERNAL",
+          text: "クライアントtsで投稿",
+        },
+      },
+    });
+    expect(queued.httpStatus).toBe(402);
+    const approvalId = String(queued.body.approvalId || "");
+
+    await upsertConversationAdapter({
+      orgId: DEMO_ORG.id,
+      surface: "slack",
+      enabled: true,
+      secrets: { botToken: "xoxb-fulfill-client-ts" },
+    });
+
+    let postedThreadTs: string | undefined;
+    globalThis.fetch = (async (input, init) => {
+      const url = String(input);
+      if (url.includes("chat.postMessage")) {
+        const payload = JSON.parse(String(init?.body || "{}")) as Record<
+          string,
+          unknown
+        >;
+        postedThreadTs = payload.thread_ts as string | undefined;
+        return Response.json({
+          ok: true,
+          channel: "C_INTERNAL",
+          ts: "1789800099.000002",
+        });
+      }
+      return Response.json({ ok: false, error: "unexpected_fetch" });
+    }) as typeof fetch;
+
+    const approved = await resolveApproval(
+      approvalId,
+      "approved",
+      "ando@example.com",
+      DEMO_ORG.id
+    );
+    const fulfillment = await fulfillApprovedInvoke(approved!);
+    expect(fulfillment?.ok).toBe(true);
+    expect(fulfillment?.delivery).toBe("slack");
+    expect(postedThreadTs).toBe(clientTs);
+    const stored = await getApprovalById(approvalId, DEMO_ORG.id);
+    expect(parseFulfillment(stored?.metadata)?.threadTsSource).toBe("client");
+  });
+
+  test("fulfill with channel_root policy → no thread injection despite wake stash", async () => {
+    await setOrgReplyPolicy(
+      DEMO_ORG.id,
+      normalizeReplyPolicy({
+        policyId: "rpp_channel_root",
+        policyName: "Channel Root",
+        rules: [
+          {
+            id: "rpr_root",
+            surface: "slack",
+            threadAffinity: "channel_root",
+            afterHoursMode: "allow_send",
+            emojiMode: "allow",
+            shortReplyMode: "allow",
+          },
+        ],
+      })
+    );
+    clearStash();
+
+    const wakeTs = "1789800004.444444";
+    const jobId = `job_channel_root_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+
+    storeWakeParent({
+      orgId: DEMO_ORG.id,
+      employeeId: "emp_comm",
+      channelId: "C_INTERNAL",
+      parentTs: wakeTs,
+      eventId: "Ev_channel_root",
+    });
+
+    const queued = await runGatewayInvoke({
+      employeeId: "emp_comm",
+      credentialId: "cred_comm",
+      body: {
+        tool: "comm.reply",
+        purpose: "comm.internal",
+        jobId,
+        conversation: {
+          surface: "slack",
+          orgId: DEMO_ORG.id,
+          slackChannelId: "C_INTERNAL",
+        } as GatewayInvokeRequest["conversation"],
+        informationClass: "confidential",
+        args: {
+          slackChannelId: "C_INTERNAL",
+          text: "channel_rootメッセージ",
+        },
+      },
+    });
+    expect(queued.httpStatus).toBe(402);
+    const approvalId = String(queued.body.approvalId || "");
+
+    await upsertConversationAdapter({
+      orgId: DEMO_ORG.id,
+      surface: "slack",
+      enabled: true,
+      secrets: { botToken: "xoxb-fulfill-channel-root" },
+    });
+
+    let postedThreadTs: string | undefined;
+    globalThis.fetch = (async (input, init) => {
+      const url = String(input);
+      if (url.includes("chat.postMessage")) {
+        const payload = JSON.parse(String(init?.body || "{}")) as Record<
+          string,
+          unknown
+        >;
+        postedThreadTs = payload.thread_ts as string | undefined;
+        return Response.json({
+          ok: true,
+          channel: "C_INTERNAL",
+          ts: "1789800099.000003",
+        });
+      }
+      return Response.json({ ok: false, error: "unexpected_fetch" });
+    }) as typeof fetch;
+
+    const approved = await resolveApproval(
+      approvalId,
+      "approved",
+      "ando@example.com",
+      DEMO_ORG.id
+    );
+    const fulfillment = await fulfillApprovedInvoke(approved!);
+    expect(fulfillment?.ok).toBe(true);
+    expect(postedThreadTs).toBeUndefined();
+    const stored = await getApprovalById(approvalId, DEMO_ORG.id);
+    expect(parseFulfillment(stored?.metadata)?.threadTsSource).toBeUndefined();
+  });
+
+  test("explicit threadId takes precedence over ts (Path C parity)", async () => {
+    await enablePreferThreadPolicy();
+    clearStash();
+
+    const explicitThreadTs = "1789800005.555555";
+    const wakeTs = "1789800005.666666";
+    const jobId = `job_explicit_thread_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+
+    storeWakeParent({
+      orgId: DEMO_ORG.id,
+      employeeId: "emp_comm",
+      channelId: "C_INTERNAL",
+      parentTs: wakeTs,
+      eventId: "Ev_explicit",
+    });
+
+    const queued = await runGatewayInvoke({
+      employeeId: "emp_comm",
+      credentialId: "cred_comm",
+      body: {
+        tool: "comm.reply",
+        purpose: "comm.internal",
+        jobId,
+        conversation: {
+          surface: "slack",
+          orgId: DEMO_ORG.id,
+          slackChannelId: "C_INTERNAL",
+          threadId: explicitThreadTs,
+          ts: wakeTs,
+        } as GatewayInvokeRequest["conversation"],
+        informationClass: "confidential",
+        args: {
+          slackChannelId: "C_INTERNAL",
+          text: "明示的なthreadIdがある場合",
+        },
+      },
+    });
+    expect(queued.httpStatus).toBe(402);
+    const approvalId = String(queued.body.approvalId || "");
+
+    await upsertConversationAdapter({
+      orgId: DEMO_ORG.id,
+      surface: "slack",
+      enabled: true,
+      secrets: { botToken: "xoxb-fulfill-explicit" },
+    });
+
+    let postedThreadTs: string | undefined;
+    globalThis.fetch = (async (input, init) => {
+      const url = String(input);
+      if (url.includes("chat.postMessage")) {
+        const payload = JSON.parse(String(init?.body || "{}")) as Record<
+          string,
+          unknown
+        >;
+        postedThreadTs = payload.thread_ts as string | undefined;
+        return Response.json({
+          ok: true,
+          channel: "C_INTERNAL",
+          ts: "1789800099.000004",
+        });
+      }
+      return Response.json({ ok: false, error: "unexpected_fetch" });
+    }) as typeof fetch;
+
+    const approved = await resolveApproval(
+      approvalId,
+      "approved",
+      "ando@example.com",
+      DEMO_ORG.id
+    );
+    const fulfillment = await fulfillApprovedInvoke(approved!);
+    expect(fulfillment?.ok).toBe(true);
+    expect(postedThreadTs).toBe(explicitThreadTs);
+    const stored = await getApprovalById(approvalId, DEMO_ORG.id);
+    expect(parseFulfillment(stored?.metadata)?.threadTsSource).toBe("client");
+  });
+});
