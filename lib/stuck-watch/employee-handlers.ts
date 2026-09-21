@@ -17,6 +17,10 @@ function employeeNextStepJa(item: StuckWatchItem): string {
     return "正当ゲート（承認待ち等）のため自動再発火しません。承認を進めるか管理者へ連絡してください。";
   }
   if (item.faultClass === "config_drift") {
+    const isAudienceRelated = item.code === "egress_denied";
+    if (isAudienceRelated) {
+      return "audience 台帳設定が不足しています。管理者に (1) channels.classify で shared_external + mixed=true、(2) parties.upsert で speaker を内部登録、(3) internalAudienceRule.patch の設定を依頼してください。";
+    }
     return "設定不足です。管理者に parties.upsert / internalAudienceRule.patch / scopes 設定の修正を依頼してください。";
   }
   return "ops_fault です。staffpass_stuck_retry で再試行できます（ゲートは再評価されます）。";

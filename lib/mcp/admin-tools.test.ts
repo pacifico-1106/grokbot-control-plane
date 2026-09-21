@@ -61,6 +61,7 @@ describe("admin MCP always_human", () => {
     expect(ADMIN_MCP_TOOLS.map((t) => t.name)).toEqual([...ADMIN_MCP_TOOL_NAMES]);
     const readOnlyTools = [
       "setup.slackStatus",
+      "setup.connectInternalBase",
       "setup.lineApprovalStatus",
       "ingressHandoff.get",
       "schedulingPolicy.get",
