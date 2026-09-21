@@ -66,13 +66,48 @@ const SKIP_SUBTYPES = new Set([
 
 const demoClaimedEvents = new Set<string>();
 
+/**
+ * Wake payload sent to the employee's webhook when triggered via Slack.
+ *
+ * Identity fields (important for egress audience resolution):
+ * - speakerId / user: the Slack user ID of the interlocutor (who mentioned / messaged)
+ * - slackUserId: the AI employee's bound Slack user ID (NOT the interlocutor)
+ * - speakerTeamId / teamId: the Slack team ID of the speaker's workspace
+ *
+ * When forwarding this payload to conversation context for egress (e.g. slack.post),
+ * the agent should pass speakerId/user as the WHO identifier for audience resolution,
+ * NOT slackUserId. slackUserId identifies the employee, not the egress destination party.
+ */
 export type SlackWakePayload = {
   channel: string;
   ts: string;
   thread_ts: string | null;
   text: string;
+  /**
+   * Slack user ID of the interlocutor (who mentioned / sent the message).
+   * This is the egress destination party for audience resolution.
+   * Alias: `user` (for backward compatibility).
+   */
+  speakerId: string;
+  /**
+   * Slack user ID of the interlocutor. Alias of speakerId for backward compatibility.
+   * @deprecated Use speakerId for clarity.
+   */
   user: string;
+  /**
+   * AI employee's bound Slack user ID.
+   * WARNING: This is the employee's identity, NOT the egress interlocutor.
+   * Do not use this for audience WHO resolution in egress.
+   */
   slackUserId: string;
+  /**
+   * Slack team ID of the speaker's workspace.
+   * Use for audience team-based internal resolution.
+   */
+  speakerTeamId: string;
+  /**
+   * Slack team ID. Alias of speakerTeamId for backward compatibility.
+   */
   teamId: string;
   employeeId: string;
   eventId: string;
@@ -978,8 +1013,10 @@ async function processUserTokenChannelEvent(input: {
     ts,
     thread_ts: threadTs,
     text: processedText,
+    speakerId,
     user: speakerId,
     slackUserId: target.slackUserId,
+    speakerTeamId: teamId,
     teamId: subscriberTeamId,
     employeeId: target.employeeId,
     eventId,
@@ -1267,8 +1304,10 @@ export async function processSlackMentionEnvelope(
       ts,
       thread_ts: threadTs,
       text: appliedText,
+      speakerId,
       user: speakerId,
       slackUserId: target.slackUserId,
+      speakerTeamId: teamId,
       teamId,
       employeeId: target.employeeId,
       eventId,

@@ -157,6 +157,17 @@ function inferSurface(body: GatewayInvokeRequest, args: Record<string, unknown>)
   return undefined;
 }
 
+/**
+ * Parse conversation context from gateway invoke request.
+ *
+ * For Slack surface, the interlocutor (WHO) for egress audience resolution
+ * is determined by preferring speaker fields over employee-bound fields:
+ *   speakerId / user (speaker) → slackUserId (employee fallback)
+ *
+ * This ensures that when a wake payload is forwarded to conversation context,
+ * the speaker's identity (the human who mentioned/messaged) is used for
+ * audience resolution, not the AI employee's bound Slack user ID.
+ */
 export function parseConversationContext(
   body: GatewayInvokeRequest,
   orgId: string
@@ -174,8 +185,14 @@ export function parseConversationContext(
     str(args.channelId) ||
     str(args.channel);
   const slackUserId =
+    str(conv.speakerId) ||
+    str(conv.user) ||
+    str(args.speakerId) ||
+    str(args.user) ||
     str(conv.slackUserId) || str(body.slackUserId) || str(args.slackUserId) || str(args.userId);
   const slackTeamId =
+    str(conv.speakerTeamId) ||
+    str(args.speakerTeamId) ||
     str(conv.slackTeamId) || str(args.slackTeamId) || str(args.teamId);
   const phone = str(conv.phone) || str(body.phone) || str(args.phone);
   const lineId = str(conv.lineId) || str(body.lineId) || str(args.lineId);
