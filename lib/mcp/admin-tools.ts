@@ -42,6 +42,10 @@ import {
   policyHasHighRiskAutoSend as mailPolicyHasHighRiskAutoSend,
 } from "@/lib/mail-policy/validate";
 import { diagnoseSlackStatus, DASHBOARD_BOT_TOKEN_PATH_JA } from "@/lib/slack/slack-status-diagnose";
+import {
+  diagnoseConnectInternalBase,
+  diagnoseChannelInternalBaseReadiness,
+} from "@/lib/slack/connect-internal-base-diagnose";
 import { diagnoseLineApprovalStatus } from "@/lib/line/line-approval-status-diagnose";
 import { encryptNotificationSecrets } from "@/lib/notify/crypto";
 import { queueAdminTool } from "@/lib/admin-mcp/queue";
@@ -212,10 +216,15 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
   {
     name: "setup.slackStatus",
     description:
-      "Diagnose Slack integration status for this org (read-only, no approval required). Returns bot token presence, auth.test, bot files:write probe, conversation adapter status, IM routes, per-employee posting_as / Slack identity / Path B fileUploadReady, pathBReadiness aggregate, and nextStepJa (canonical order: Bot files:write→Reinstall→つながり xoxb→User files:write→社員証 Slack Authorize). No secrets returned. Use before guiding humans through Slack setup. Refer to docs/tenant-slack-kickoff-rail.md and docs/slack-file-upload-egress.md.",
+      "Diagnose Slack integration status for this org (read-only, no approval required). Returns bot token presence, auth.test, bot files:write probe, conversation adapter status, IM routes, per-employee posting_as / Slack identity / Path B fileUploadReady, pathBReadiness aggregate, and nextStepJa (canonical order: Bot files:write→Reinstall→つながり xoxb→User files:write→社員証 Slack Authorize). Optional channelId includes Connect internal-base readiness for that channel (classify + mixed + parties/IAR coverage). No secrets returned. Use before guiding humans through Slack setup. Refer to docs/tenant-slack-kickoff-rail.md and docs/slack-file-upload-egress.md.",
     inputSchema: {
       type: "object",
-      properties: {},
+      properties: {
+        channelId: {
+          type: "string",
+          description: "Optional Slack channel ID (C...) for Connect internal-base readiness diagnosis",
+        },
+      },
       additionalProperties: false,
     },
   },
@@ -240,6 +249,26 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
         },
         jobId: { type: "string" },
       },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "setup.connectInternalBase",
+    description:
+      "Diagnose Connect internal-base setup for a Slack Connect / shared_external channel (read-only, no approval required). " +
+      "Returns checklist: (1) channel classify → shared_external + mixed, (2) parties or IAR configured, (3) employee post contract doc, (4) connectivity probe hint. " +
+      "Each step has nextStepJa with the exact next Admin MCP tool name. " +
+      "IC guidance: client cannot lower IC (raise-only), public needs information_assets + assetRef, free-text → confidential + approval. " +
+      "Use for Uehara Connect / G7 cross-team wake tenant setup. Refer to docs/g7-connect-wake-routing-design-20260918.md.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        channelId: {
+          type: "string",
+          description: "Slack Connect channel ID (C...) to diagnose. Required.",
+        },
+      },
+      required: ["channelId"],
       additionalProperties: false,
     },
   },
@@ -1006,6 +1035,7 @@ export function isAdminMcpToolName(name: string): boolean {
 
 const ADMIN_READ_ONLY_TOOLS = new Set<string>([
   "setup.slackStatus",
+  "setup.connectInternalBase",
   "setup.lineApprovalStatus",
   "ingressHandoff.get",
   "schedulingPolicy.get",
@@ -1137,13 +1167,59 @@ export function adminToolsAlwaysHuman(): boolean {
 }
 
 async function runSlackStatusDiagnose(
-  cred: ResolvedAdminCredential
+  cred: ResolvedAdminCredential,
+  channelId?: string | null
 ): Promise<{ content: Array<{ type: "text"; text: string }>; structuredContent?: unknown; isError?: boolean }> {
-  const result = await diagnoseSlackStatus(cred.orgId);
+  const slackStatus = await diagnoseSlackStatus(cred.orgId);
+
+  const normalizedChannelId = channelId?.trim() || null;
+  let connectInternalBaseReadiness = null;
+  if (normalizedChannelId) {
+    connectInternalBaseReadiness = await diagnoseChannelInternalBaseReadiness(
+      cred.orgId,
+      normalizedChannelId
+    );
+  }
+
+  const IC_GUIDANCE_JA =
+    "ICはクライアントで下げられない（raise-only）。public は information_assets + assetRef が必要。フリーテキスト送信は confidential → 承認が正解。";
+
+  const result = {
+    ...slackStatus,
+    connectInternalBaseReadiness,
+    icGuidanceJa: normalizedChannelId ? IC_GUIDANCE_JA : undefined,
+  };
+
   return {
     content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
     structuredContent: result,
     isError: false,
+  };
+}
+
+async function runConnectInternalBaseDiagnose(
+  cred: ResolvedAdminCredential,
+  args: Record<string, unknown>
+): Promise<{ content: Array<{ type: "text"; text: string }>; structuredContent?: unknown; isError?: boolean }> {
+  const channelId = typeof args.channelId === "string" ? args.channelId.trim() : null;
+
+  if (!channelId) {
+    return toolResult(
+      {
+        ok: false,
+        code: "channel_id_required",
+        message: "channelId が必要です",
+        nextStepJa: "診断対象の Slack Connect チャネル ID（C で始まる ID）を channelId 引数に渡してください",
+      },
+      true
+    );
+  }
+
+  const result = await diagnoseConnectInternalBase(cred.orgId, channelId);
+  return {
+    content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+    structuredContent: result,
+    isError: !result.ok,
   };
 }
 
@@ -1814,7 +1890,12 @@ export async function callAdminMcpTool(
   }
 
   if (name === "setup.slackStatus") {
-    return runSlackStatusDiagnose(cred);
+    const channelId = typeof args.channelId === "string" ? args.channelId.trim() : null;
+    return runSlackStatusDiagnose(cred, channelId);
+  }
+
+  if (name === "setup.connectInternalBase") {
+    return runConnectInternalBaseDiagnose(cred, args);
   }
 
   if (name === "setup.lineApprovalStatus") {

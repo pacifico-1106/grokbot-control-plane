@@ -59,13 +59,21 @@ function denyExpectedGate(item: StuckWatchItem): StuckWatchAdminResult {
 }
 
 function denyConfigDrift(item: StuckWatchItem): StuckWatchAdminResult {
+  const isAudienceRelated =
+    item.code === "egress_denied" ||
+    String(item.metadata?.audience || "").includes("unknown") ||
+    String(item.metadata?.effectiveAudience || "").includes("external");
+
+  const nextStepJa = isAudienceRelated
+    ? "audience 台帳設定が不足しています。(1) channels.classify で shared_external + mixed=true を設定、(2) parties.upsert で speaker の slack_user を内部登録、または (3) internalAudienceRule.patch で slackTeamIds + autoSlackTeamInternal=true を設定してください。wake.channel を comm.reply の slackChannelId に渡し、承認を待ってください。"
+    : "設定不足です。parties.upsert / internalAudienceRule.patch / scopes 設定を修正してください。修正後に手動で再試行できます。";
+
   return {
     ok: false,
     code: "config_drift_notify_fix",
     message: "config_drift は通知・修正のみ（自動リトライ不可）",
     summaryJa: item.summaryJa,
-    nextStepJa:
-      "設定不足です。parties.upsert / internalAudienceRule.patch / scopes 設定を修正してください。修正後に手動で再試行できます。",
+    nextStepJa,
     item,
     faultClass: "config_drift",
   };

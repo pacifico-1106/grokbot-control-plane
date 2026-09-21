@@ -282,7 +282,7 @@ export async function notifyConfigDriftW4(
     `tool=${input.tool} jobId=${input.jobId}`,
     `audience=${audience} code=${input.code}`,
     `employeeId=${input.employeeId || "—"}`,
-    "parties.upsert / internalAudienceRule.patch / channels.classify を確認してください。",
+    "【次のステップ】(1) channels.classify で shared_external + mixed=true を確認、(2) parties.upsert で speaker を内部登録、(3) internalAudienceRule.patch で slackTeamIds + autoSlackTeamInternal を設定。wake.channel を comm.reply に渡し承認を待ってください。",
   ].join("\n");
 
   const mouth = await notifyStuckWatchMouth(input.orgId, policy, message, {

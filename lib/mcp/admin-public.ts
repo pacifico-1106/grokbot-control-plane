@@ -25,6 +25,7 @@ export const ADMIN_MCP_TOOL_NAMES = [
   "roles.propose",
   "setup.slackStatus",
   "setup.slackAdapter.setBotToken",
+  "setup.connectInternalBase",
   "setup.lineApprovalStatus",
   "setup.lineApproval.upsert",
   "setup.lineApproval.setEmployeeInbox",

@@ -51,11 +51,15 @@ function summarizeW1Ja(
   return `W1 メンション未返信: channel=${channel} / faultClass=${blocking.faultClass} / code=${blocking.code}`;
 }
 
-function nextStepW1Ja(faultClass: FaultClass): string {
+function nextStepW1Ja(faultClass: FaultClass, code?: string): string {
   if (faultClass === "expected_gate") {
     return "正当ゲート（承認待ち等）のため自動再発火しません。承認を進めるか stuckWatch.resolve で解決済みにしてください。";
   }
   if (faultClass === "config_drift") {
+    const isAudienceRelated = code === "egress_denied";
+    if (isAudienceRelated) {
+      return "audience 台帳設定が不足しています。(1) channels.classify で shared_external + mixed=true を設定、(2) parties.upsert で speaker を内部登録、または (3) internalAudienceRule.patch を設定。修正後 stuckWatch.retry を検討してください。";
+    }
     return "設定不足（台帳・スコープ等）です。parties.upsert / internalAudienceRule.patch で修正後、stuckWatch.retry を検討してください。";
   }
   return "ops_fault です。stuckWatch.retry で再試行できます（ゲートは再評価されます）。notifyMouth 通知も確認してください。";
@@ -112,7 +116,7 @@ function buildW1Item(
     resolvedAt: resolvedAt ?? null,
     minutesOpen: Math.floor(minutesOpen),
     summaryJa: summarizeW1Ja(wake, blocking),
-    nextStepJa: nextStepW1Ja(blocking.faultClass),
+    nextStepJa: nextStepW1Ja(blocking.faultClass, blocking.code),
     metadata: {
       channel,
       mentionTs: ts,
