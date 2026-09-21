@@ -1982,3 +1982,163 @@ describe("Gateway prefer_thread wake stash fallback (Ev0C30P93BQC fix)", () => {
     }
   });
 });
+
+/**
+ * P0 Slack destination validation tests (Tomori bug fix).
+ * Prevent channel wake from silently posting to DM when agent omits channel.
+ *
+ * Note: These tests verify that the destination validation passes or fails,
+ * not that the overall invoke succeeds. The egress policy may still require
+ * approval even when destination validation passes.
+ */
+describe("Slack destination validation (user ID fallback prevention)", () => {
+  test("user-only without DM intent is denied (fail-closed)", async () => {
+    // Use an internal user (U_YAMADA) that would pass egress check if it were a channel,
+    // but should still fail destination validation because it's a user ID without DM intent.
+    const result = await runGatewayInvoke({
+      employeeId: "emp_comm",
+      credentialId: "cred_comm",
+      body: {
+        tool: "slack.post",
+        purpose: "comm.internal",
+        jobId: `job_user_only_deny_${Date.now()}`,
+        conversation: {
+          surface: "slack",
+          orgId: DEMO_ORG.id,
+          slackUserId: "U_YAMADA",
+        },
+        args: { text: "This should be denied - no channel, no DM intent" },
+      },
+    });
+    expect(result.httpStatus).toBe(400);
+    expect(result.body.ok).toBe(false);
+    expect(result.body.code).toBe("slack_channel_required");
+    expect(result.body.needs_approval).toBe(false);
+  });
+
+  test("user-only with dm=true is allowed (explicit DM intent)", async () => {
+    const result = await runGatewayInvoke({
+      employeeId: "emp_comm",
+      credentialId: "cred_comm",
+      body: {
+        tool: "slack.post",
+        purpose: "comm.internal",
+        jobId: `job_user_dm_allow_${Date.now()}`,
+        conversation: {
+          surface: "slack",
+          orgId: DEMO_ORG.id,
+          slackUserId: "U_YAMADA",
+        },
+        args: { text: "Explicit DM to internal user", dm: true },
+      },
+    });
+    expect(result.body.code).not.toBe("slack_channel_required");
+  });
+
+  test("user-only with dmIntent=true passes destination validation (egress may still require approval)", async () => {
+    const result = await runGatewayInvoke({
+      employeeId: "emp_comm",
+      credentialId: "cred_comm",
+      body: {
+        tool: "comm.send",
+        purpose: "comm.internal",
+        jobId: `job_user_dmintent_${Date.now()}`,
+        conversation: {
+          surface: "slack",
+          orgId: DEMO_ORG.id,
+          slackUserId: "U_YAMADA",
+        },
+        args: { text: "Explicit DM with dmIntent flag", dmIntent: true },
+      },
+    });
+    expect(result.body.code).not.toBe("slack_channel_required");
+  });
+
+  test("user-only with postingTo=im passes destination validation", async () => {
+    const result = await runGatewayInvoke({
+      employeeId: "emp_comm",
+      credentialId: "cred_comm",
+      body: {
+        tool: "comm.send",
+        purpose: "comm.internal",
+        jobId: `job_user_postingto_${Date.now()}`,
+        conversation: {
+          surface: "slack",
+          orgId: DEMO_ORG.id,
+          slackUserId: "U_YAMADA",
+        },
+        args: { text: "Explicit DM with postingTo=im", postingTo: "im" },
+      },
+    });
+    expect(result.body.code).not.toBe("slack_channel_required");
+  });
+
+  test("channel + user prefers channel as destination", async () => {
+    await upsertConversationAdapter({
+      orgId: DEMO_ORG.id,
+      surface: "slack",
+      enabled: true,
+      secrets: { botToken: "xoxb-channel-prefer" },
+    });
+    const originalFetch = globalThis.fetch;
+    let postedChannel = "";
+    try {
+      globalThis.fetch = (async (_input, init) => {
+        const payload = JSON.parse(String(init?.body || "{}")) as Record<string, unknown>;
+        postedChannel = String(payload.channel || "");
+        return Response.json({
+          ok: true,
+          channel: postedChannel,
+          ts: "1789746500.000001",
+        });
+      }) as typeof fetch;
+
+      // Use internal user (U_YAMADA) to avoid egress deny due to unknown external user
+      const result = await runGatewayInvoke({
+        employeeId: "emp_comm",
+        credentialId: "cred_comm",
+        body: {
+          tool: "slack.post",
+          purpose: "comm.internal",
+          jobId: `job_channel_prefer_${Date.now()}`,
+          conversation: {
+            surface: "slack",
+            orgId: DEMO_ORG.id,
+            slackChannelId: "C_INTERNAL",
+            slackUserId: "U_YAMADA",
+          },
+          args: { text: "Post to channel, not user DM" },
+        },
+      });
+      expect(result.body.code).not.toBe("slack_channel_required");
+      expect(postedChannel).toBe("C_INTERNAL");
+    } finally {
+      globalThis.fetch = originalFetch;
+      await upsertConversationAdapter({
+        orgId: DEMO_ORG.id,
+        surface: "slack",
+        enabled: false,
+        secrets: {},
+      });
+    }
+  });
+
+  test("explicit D channel is allowed (DM channel ID)", async () => {
+    const result = await runGatewayInvoke({
+      employeeId: "emp_comm",
+      credentialId: "cred_comm",
+      body: {
+        tool: "slack.post",
+        purpose: "comm.internal",
+        jobId: `job_d_channel_${Date.now()}`,
+        conversation: {
+          surface: "slack",
+          orgId: DEMO_ORG.id,
+          slackChannelId: "D0BT659Q8KZ",
+        },
+        args: { text: "Post to DM channel by D... ID" },
+      },
+    });
+    expect(result.body.code).not.toBe("slack_channel_required");
+  });
+});
