@@ -17,7 +17,10 @@ import {
 import {
   parseConversationContext,
   resolveConversationThreadId,
+  resolveParentMessageTs,
 } from "@/lib/gateway/audience";
+import { lookupWakeParent, consumeWakeParent } from "@/lib/data/wake-parent-stash";
+import { getEffectiveReplyPolicy } from "@/lib/data/reply-policy";
 import {
   parseSnsSurface,
   publishSnsPost,
@@ -51,6 +54,7 @@ const SNAPSHOT_ARG_KEYS = [
   "slackThreadTs",
   "messageTs",
   "slackTs",
+  "ts",
   "to",
   "subject",
   "email",
@@ -84,6 +88,7 @@ export type InvokeSnapshot = {
     slackChannelId?: string;
     slackUserId?: string;
     threadId?: string;
+    ts?: string;
     email?: string;
     phone?: string;
     lineId?: string;
@@ -102,6 +107,7 @@ export type ApprovalFulfillment = {
   surface?: string;
   error?: string;
   at: string;
+  threadTsSource?: "client" | "wake_stash";
 };
 
 export type ConversationDelivery =
@@ -155,6 +161,7 @@ function snapshotConversation(
     slackChannelId: conversation.slackChannelId,
     slackUserId: conversation.slackUserId,
     threadId: conversation.threadId,
+    ts: conversation.ts,
     email: conversation.email,
     phone: conversation.phone,
     lineId: conversation.lineId,
@@ -241,6 +248,7 @@ export function parseInvokeSnapshot(
           slackChannelId: str(convRaw.slackChannelId),
           slackUserId: str(convRaw.slackUserId),
           threadId: str(convRaw.threadId),
+          ts: str(convRaw.ts),
           email: str(convRaw.email),
           phone: str(convRaw.phone),
           lineId: str(convRaw.lineId),
@@ -276,6 +284,9 @@ export function parseFulfillment(
   if (typeof rec.id === "string") fulfillment.id = rec.id;
   if (typeof rec.surface === "string") fulfillment.surface = rec.surface;
   if (typeof rec.error === "string") fulfillment.error = rec.error;
+  if (rec.threadTsSource === "client" || rec.threadTsSource === "wake_stash") {
+    fulfillment.threadTsSource = rec.threadTsSource;
+  }
   return fulfillment;
 }
 
@@ -346,12 +357,65 @@ function destinationOf(snapshot: InvokeSnapshot): string {
   return typeof fromArgs === "string" ? fromArgs.trim() : "";
 }
 
-function threadOf(snapshot: InvokeSnapshot): string | undefined {
-  const resolved = resolveConversationThreadId({
-    conversation: snapshot.conversation,
-    args: snapshot.args,
+/**
+ * Resolve thread_ts for fulfill-time posting. Mirrors invoke.ts logic:
+ * 1. Explicit thread_ts from snapshot (resolveConversationThreadId)
+ * 2. If prefer_thread policy and no explicit thread_ts:
+ *    a) Try client-provided parent ts (resolveParentMessageTs)
+ *    b) Fall back to wake parent stash (lookupWakeParent)
+ *
+ * Note: Wake parent stash is in-memory and may not survive across restarts.
+ * For durable prefer_thread, agents should pass thread_ts=wake.ts on invoke.
+ */
+async function threadOf(
+  snapshot: InvokeSnapshot
+): Promise<{ threadTs: string | undefined; source: "client" | "wake_stash" | "none" }> {
+  const conv = snapshot.conversation;
+  const args = snapshot.args;
+
+  const explicitThreadTs = resolveConversationThreadId({
+    conversation: conv,
+    args,
   });
-  return looksLikeSlackTs(resolved) ? resolved : undefined;
+
+  if (looksLikeSlackTs(explicitThreadTs)) {
+    return { threadTs: explicitThreadTs, source: "client" };
+  }
+
+  if (conv?.surface !== "slack" || !conv.slackChannelId) {
+    return { threadTs: undefined, source: "none" };
+  }
+
+  const replyPolicyResult = await getEffectiveReplyPolicy(
+    snapshot.orgId || conv.orgId,
+    snapshot.employeeId
+  );
+  const threadAffinity = replyPolicyResult.policy.rules?.[0]?.threadAffinity;
+
+  if (threadAffinity !== "prefer_thread") {
+    return { threadTs: undefined, source: "none" };
+  }
+
+  const parentTs = resolveParentMessageTs({ conversation: conv, args });
+  if (looksLikeSlackTs(parentTs)) {
+    return { threadTs: parentTs, source: "client" };
+  }
+
+  const wakeParent = lookupWakeParent({
+    orgId: snapshot.orgId || conv.orgId || "",
+    employeeId: snapshot.employeeId,
+    channelId: conv.slackChannelId,
+  });
+  if (wakeParent && looksLikeSlackTs(wakeParent.parentTs)) {
+    consumeWakeParent({
+      orgId: snapshot.orgId || conv.orgId || "",
+      employeeId: snapshot.employeeId,
+      channelId: conv.slackChannelId,
+    });
+    return { threadTs: wakeParent.parentTs, source: "wake_stash" };
+  }
+
+  return { threadTs: undefined, source: "none" };
 }
 
 async function persistFulfillment(
@@ -537,13 +601,15 @@ async function fulfillApprovedInvokeCore(
     const dest = destinationOf(snapshot);
     if (!dest) return null;
 
+    const threadResult = await threadOf(snapshot);
+
     const posted = await postConversationMessage({
       orgId: snapshot.orgId || approval.orgId,
       employeeId: snapshot.employeeId || approval.employeeId,
       postingAs: snapshot.postingAs,
       channel: dest,
       text: outboundText(snapshot.args, snapshot.purpose || approval.purpose),
-      threadTs: threadOf(snapshot),
+      threadTs: threadResult.threadTs,
       // Human already approved the full mention-reply body.
       summarize: false,
     });
@@ -561,7 +627,10 @@ async function fulfillApprovedInvokeCore(
         : { ok: true, delivery: "stub", at }
       : { ok: false, error: posted.error || "slack_post_failed", at };
 
-    await persistFulfillment(approval, fulfillment);
+    await persistFulfillment(approval, {
+      ...fulfillment,
+      threadTsSource: threadResult.source !== "none" ? threadResult.source : undefined,
+    } as ApprovalFulfillment);
     if (!posted.ok) {
       await auditFulfillmentFailure(
         approval,
