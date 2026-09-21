@@ -181,8 +181,10 @@ describe("Slack mention ingress", () => {
       expect(call.payload.channel).toBe(CHANNEL);
       expect(call.payload.ts).toBe("1787911800.000001");
       expect(call.payload.thread_ts).toBe(THREAD_TS);
+      expect(call.payload.speakerId).toBe(SPEAKER);
       expect(call.payload.user).toBe(SPEAKER);
       expect(call.payload.slackUserId).toBe(BOUND_USER);
+      expect(call.payload.speakerTeamId).toBe(TEAM);
       expect(call.payload.teamId).toBe(TEAM);
       expect(call.payload.employeeId).toBe("emp_comm");
       expect(call.payload.text).toContain(`<@${BOUND_USER}>`);
@@ -2124,8 +2126,10 @@ describe("P0 User-token channel mention ingress (Path C)", () => {
       const call = wake.calls()[0];
       expect(call.payload.employeeId).toBe("emp_comm");
       expect(call.payload.channel).toBe(USER_CHANNEL);
+      expect(call.payload.speakerId).toBe(OTHER_SPEAKER);
       expect(call.payload.user).toBe(OTHER_SPEAKER);
       expect(call.payload.slackUserId).toBe(SUBSCRIBER_USER);
+      expect(call.payload.speakerTeamId).toBe(OTHER_TEAM);
     } finally {
       await restore();
     }
@@ -2212,6 +2216,152 @@ describe("P0 User-token channel mention ingress (Path C)", () => {
       expect(result.status).toBe(200);
       expect(wake.calls().length).toBe(1);
       expect(wake.calls()[0].payload.employeeId).toBe("emp_comm");
+    } finally {
+      await restore();
+    }
+  });
+});
+
+/**
+ * Wake payload speaker/employee identity differentiation tests.
+ *
+ * SlackWakePayload must clearly distinguish:
+ *   - speakerId / user: the interlocutor (who mentioned / sent the message)
+ *   - slackUserId: the AI employee's bound Slack user ID
+ *
+ * This is critical for egress audience resolution: the speaker (human) should
+ * be resolved for audience WHO, not the employee's own Slack identity.
+ */
+describe("Wake payload speaker/employee identity differentiation", () => {
+  test("channel mention: speakerId is the human, slackUserId is the employee", async () => {
+    process.env.SLACK_SIGNING_SECRET = SIGNING_SECRET;
+    const { restore } = await bindAndo();
+    const wake = mockWake();
+
+    try {
+      await handleSlackEventsRequest(
+        signedRequest({
+          type: "event_callback",
+          team_id: TEAM,
+          event_id: `Ev_speaker_identity_${Date.now()}`,
+          event: {
+            type: "message",
+            user: SPEAKER,
+            text: `<@${BOUND_USER}> 話しかける`,
+            ts: "1787911800.100000",
+            channel: CHANNEL,
+          },
+        })
+      );
+
+      expect(wake.calls().length).toBe(1);
+      const payload = wake.calls()[0].payload;
+
+      expect(payload.speakerId).toBe(SPEAKER);
+      expect(payload.user).toBe(SPEAKER);
+      expect(payload.slackUserId).toBe(BOUND_USER);
+      expect(payload.speakerId).not.toBe(payload.slackUserId);
+    } finally {
+      await restore();
+    }
+  });
+
+  test("internal IM: speakerId is the human, slackUserId is the employee", async () => {
+    process.env.SLACK_SIGNING_SECRET = SIGNING_SECRET;
+    const { emp, restore } = await bindAndo();
+    const wake = mockWake();
+    await configureInternalIm(emp.id);
+
+    try {
+      await handleSlackEventsRequest(
+        signedRequest({
+          type: "event_callback",
+          team_id: TEAM,
+          event_id: `Ev_im_speaker_identity_${Date.now()}`,
+          event: {
+            type: "message",
+            channel_type: "im",
+            user: SPEAKER,
+            text: "DM from human",
+            ts: "1787911800.100001",
+            channel: INTERNAL_IM,
+          },
+        })
+      );
+
+      expect(wake.calls().length).toBe(1);
+      const payload = wake.calls()[0].payload;
+
+      expect(payload.speakerId).toBe(SPEAKER);
+      expect(payload.user).toBe(SPEAKER);
+      expect(payload.slackUserId).toBe(BOUND_USER);
+      expect(payload.speakerId).not.toBe(payload.slackUserId);
+    } finally {
+      await deleteSlackImEmployeeRoute({ orgId: DEMO_ORG.id, slackChannelId: INTERNAL_IM });
+      await restore();
+    }
+  });
+
+  test("speakerTeamId is the speaker's workspace, separate from employee binding", async () => {
+    process.env.SLACK_SIGNING_SECRET = SIGNING_SECRET;
+    const { restore } = await bindAndo();
+    const wake = mockWake();
+
+    try {
+      await handleSlackEventsRequest(
+        signedRequest({
+          type: "event_callback",
+          team_id: TEAM,
+          event_id: `Ev_speaker_team_${Date.now()}`,
+          event: {
+            type: "message",
+            user: SPEAKER,
+            text: `<@${BOUND_USER}> team check`,
+            ts: "1787911800.100002",
+            channel: CHANNEL,
+          },
+        })
+      );
+
+      expect(wake.calls().length).toBe(1);
+      const payload = wake.calls()[0].payload;
+
+      expect(payload.speakerTeamId).toBe(TEAM);
+      expect(payload.teamId).toBe(TEAM);
+    } finally {
+      await restore();
+    }
+  });
+
+  test("wake payload fields allow agent to forward speaker for egress audience resolution", async () => {
+    process.env.SLACK_SIGNING_SECRET = SIGNING_SECRET;
+    const { restore } = await bindAndo();
+    const wake = mockWake();
+
+    try {
+      await handleSlackEventsRequest(
+        signedRequest({
+          type: "event_callback",
+          team_id: TEAM,
+          event_id: `Ev_egress_forward_${Date.now()}`,
+          event: {
+            type: "message",
+            user: SPEAKER,
+            text: `<@${BOUND_USER}> egress test`,
+            ts: "1787911800.100003",
+            channel: CHANNEL,
+          },
+        })
+      );
+
+      expect(wake.calls().length).toBe(1);
+      const payload = wake.calls()[0].payload;
+
+      expect(payload.speakerId).toBeDefined();
+      expect(payload.slackUserId).toBeDefined();
+
+      expect(payload.speakerId).toBe(SPEAKER);
+      expect(payload.slackUserId).toBe(BOUND_USER);
     } finally {
       await restore();
     }

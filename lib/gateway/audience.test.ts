@@ -704,3 +704,158 @@ describe("org internal audience rule (stablo-scale)", () => {
     expect(ctx?.slackTeamId).toBe("T_FROM_ALIAS");
   });
 });
+
+/**
+ * Speaker ID priority tests (Slack wake → egress audience WHO fix).
+ *
+ * SlackWakePayload has:
+ *   - speakerId / user: the interlocutor (who mentioned / messaged)
+ *   - slackUserId: the AI employee's bound Slack user ID
+ *
+ * parseConversationContext must prefer speakerId / user over slackUserId
+ * for audience WHO resolution to correctly identify the speaker party,
+ * not the employee's own Slack identity.
+ */
+describe("speakerId priority for egress audience WHO", () => {
+  test("speakerId in conversation takes priority over slackUserId", () => {
+    const ctx = parseConversationContext(
+      body({
+        conversation: {
+          surface: "slack",
+          orgId: DEMO_ORG.id,
+          slackChannelId: "C_SHARED",
+          speakerId: "U_SPEAKER_MIRAI",
+          slackUserId: "U_EMPLOYEE_ANDO",
+        } as GatewayInvokeRequest["conversation"],
+      }),
+      DEMO_ORG.id
+    );
+
+    expect(ctx?.slackUserId).toBe("U_SPEAKER_MIRAI");
+  });
+
+  test("user in conversation takes priority over slackUserId", () => {
+    const ctx = parseConversationContext(
+      body({
+        conversation: {
+          surface: "slack",
+          orgId: DEMO_ORG.id,
+          slackChannelId: "C_SHARED",
+          user: "U_SPEAKER_HUMAN",
+          slackUserId: "U_EMPLOYEE_BOT",
+        } as GatewayInvokeRequest["conversation"],
+      }),
+      DEMO_ORG.id
+    );
+
+    expect(ctx?.slackUserId).toBe("U_SPEAKER_HUMAN");
+  });
+
+  test("speakerId in args takes priority over slackUserId in conversation", () => {
+    const ctx = parseConversationContext(
+      body({
+        conversation: {
+          surface: "slack",
+          orgId: DEMO_ORG.id,
+          slackChannelId: "C_SHARED",
+          slackUserId: "U_EMPLOYEE",
+        },
+        args: { speakerId: "U_SPEAKER_FROM_ARGS" },
+      }),
+      DEMO_ORG.id
+    );
+
+    expect(ctx?.slackUserId).toBe("U_SPEAKER_FROM_ARGS");
+  });
+
+  test("user in args takes priority over slackUserId in conversation", () => {
+    const ctx = parseConversationContext(
+      body({
+        conversation: {
+          surface: "slack",
+          orgId: DEMO_ORG.id,
+          slackChannelId: "C_SHARED",
+          slackUserId: "U_EMPLOYEE",
+        },
+        args: { user: "U_SPEAKER_FROM_ARGS" },
+      }),
+      DEMO_ORG.id
+    );
+
+    expect(ctx?.slackUserId).toBe("U_SPEAKER_FROM_ARGS");
+  });
+
+  test("slackUserId is used as fallback when no speaker fields present", () => {
+    const ctx = parseConversationContext(
+      body({
+        conversation: {
+          surface: "slack",
+          orgId: DEMO_ORG.id,
+          slackChannelId: "C_SHARED",
+          slackUserId: "U_EMPLOYEE_FALLBACK",
+        },
+      }),
+      DEMO_ORG.id
+    );
+
+    expect(ctx?.slackUserId).toBe("U_EMPLOYEE_FALLBACK");
+  });
+
+  test("speakerTeamId in conversation takes priority over slackTeamId", () => {
+    const ctx = parseConversationContext(
+      body({
+        conversation: {
+          surface: "slack",
+          orgId: DEMO_ORG.id,
+          slackUserId: "U_MEMBER",
+          speakerTeamId: "T_SPEAKER_TEAM",
+          slackTeamId: "T_EMPLOYEE_TEAM",
+        } as GatewayInvokeRequest["conversation"],
+      }),
+      DEMO_ORG.id
+    );
+
+    expect(ctx?.slackTeamId).toBe("T_SPEAKER_TEAM");
+  });
+
+  test("speakerTeamId in args takes priority over slackTeamId", () => {
+    const ctx = parseConversationContext(
+      body({
+        conversation: {
+          surface: "slack",
+          orgId: DEMO_ORG.id,
+          slackUserId: "U_MEMBER",
+          slackTeamId: "T_EMPLOYEE_TEAM",
+        },
+        args: { speakerTeamId: "T_SPEAKER_TEAM_FROM_ARGS" },
+      }),
+      DEMO_ORG.id
+    );
+
+    expect(ctx?.slackTeamId).toBe("T_SPEAKER_TEAM_FROM_ARGS");
+  });
+
+  test("registered speaker party resolves internal when wake has both speaker and employee IDs", async () => {
+    const ctx = parseConversationContext(
+      body({
+        conversation: {
+          surface: "slack",
+          orgId: DEMO_ORG.id,
+          slackChannelId: "C_SHARED",
+          speakerId: "U_YAMADA",
+          slackUserId: "U_EMPLOYEE_ANDO",
+        } as GatewayInvokeRequest["conversation"],
+      }),
+      DEMO_ORG.id
+    );
+
+    const resolved = await resolveAudience(ctx);
+
+    const signal = resolved.dualAudience?.partySignals.find(
+      (s) => s.kind === "slack_user"
+    );
+    expect(signal?.identifier).toBe("U_YAMADA");
+    expect(signal?.audience).toBe("internal");
+    expect(signal?.resolved).toBe(true);
+  });
+});
