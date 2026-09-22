@@ -139,8 +139,8 @@ const SETUP_DEEP_LINK_NEXTSTEP_JA = 'Admin MCP の setup.slackStatus、setup.lin
 
 export function buildSecretDetectionErrorResponse(detection: SecretDetectionResult & { ok: false }): {
   ok: false;
-  code: string;
-  error: string;
+  code: "secret_detected_in_payload";
+  error: "secret_detected_in_payload";
   pattern: string;
   redactedPreview: string;
   messageJa: string;
