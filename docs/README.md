@@ -73,6 +73,8 @@
 | Stripe 請求メモ | [stripe-billing-notes.md](./stripe-billing-notes.md) |
 | **P1 外部契約カード登録（設計メモ）** | [p1-external-contract-card-registration-design-20260923.md](./p1-external-contract-card-registration-design-20260923.md) |
 | パートナー紹介トラッキング | [partner/referral-tracking.md](./partner/referral-tracking.md) |
+| P1 外部契約カード登録（設計） | [p1-external-contract-card-registration-design-20260923.md](./p1-external-contract-card-registration-design-20260923.md) |
+| P1 外部契約カード登録（データモデル） | [p1-external-contract-card-registration-data-model-20260923.md](./p1-external-contract-card-registration-data-model-20260923.md) |
 
 ---
 
