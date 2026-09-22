@@ -99,6 +99,10 @@ import {
   CrossProductEventError,
   normalizeCommerceAuthorization,
 } from "@/lib/commerce/cross-product-events";
+import {
+  detectSecretInPayload,
+  buildSecretDetectionErrorResponse,
+} from "@/lib/security/secret-detector";
 
 export type GatewayInvokeResult = {
   httpStatus: number;
@@ -462,6 +466,22 @@ export async function runGatewayInvoke(
         code: "tool_required",
         error: "tool_required",
         message: "tool is required; unregistered tools are rejected",
+      },
+      400
+    );
+  }
+
+  // P0-A: Secret-in-chat detector (fail-closed, before any data logging)
+  // Chat NEVER: passwords, refresh tokens, API keys, full employee/admin badge secrets
+  const secretDetection = detectSecretInPayload(body);
+  if (!secretDetection.ok) {
+    return jsonResult(
+      {
+        ...buildSecretDetectionErrorResponse(secretDetection),
+        employeeId,
+        tool: toolRaw,
+        purpose,
+        jobId,
       },
       400
     );

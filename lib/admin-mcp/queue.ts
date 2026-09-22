@@ -1,6 +1,9 @@
 /**
  * Always-human queue for admin MCP tools.
  * Create an approval ticket; do not mutate until a different human approves.
+ * 
+ * P0-A: Secret-in-chat detector integrated (fail-closed).
+ * Secrets detected in args are rejected before approval ticket creation.
  */
 import { sendApprovalNeededEmail } from "@/lib/email";
 import { sendApprovalNotifications } from "@/lib/notify/channels";
@@ -9,6 +12,10 @@ import type { ResolvedAdminCredential } from "@/lib/auth/admin-credential";
 import { auditActionForAdminTool, ADMIN_AUDIT_CLASS, isAdminClassApproval } from "@/lib/admin-mcp/audit-class";
 export { isAdminClassApproval };
 import type { AdminRequester } from "@/lib/admin-mcp/self-approval";
+import {
+  detectSecretInPayload,
+  buildSecretDetectionErrorResponse,
+} from "@/lib/security/secret-detector";
 
 const TOOL_TITLE_JA: Record<string, string> = {
   "employees.issue": "AI社員の発行",
@@ -43,6 +50,17 @@ export type AdminQueueResult = {
   auditAction: string;
 };
 
+export type AdminQueueSecretRejection = {
+  ok: false;
+  code: "secret_detected_in_payload";
+  error: "secret_detected_in_payload";
+  pattern: string;
+  redactedPreview: string;
+  messageJa: string;
+  nextStepJa: string;
+  tool: string;
+};
+
 export async function queueAdminTool(input: {
   cred: ResolvedAdminCredential;
   tool: string;
@@ -50,7 +68,18 @@ export async function queueAdminTool(input: {
   title?: string;
   summary: string;
   jobId?: string;
-}): Promise<AdminQueueResult> {
+}): Promise<AdminQueueResult | AdminQueueSecretRejection> {
+  // P0-A: Secret-in-chat detector (fail-closed, before approval ticket creation)
+  // Chat NEVER: passwords, refresh tokens, API keys, full employee/admin badge secrets
+  const secretDetection = detectSecretInPayload(input.args);
+  if (!secretDetection.ok) {
+    const errorResponse = buildSecretDetectionErrorResponse(secretDetection);
+    return {
+      ...errorResponse,
+      tool: input.tool,
+    };
+  }
+
   const auditAction = auditActionForAdminTool(input.tool);
   const title = input.title || TOOL_TITLE_JA[input.tool] || input.tool;
   const jobId =
