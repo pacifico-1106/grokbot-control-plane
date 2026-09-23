@@ -26,6 +26,65 @@ export function isSlackDmChannel(channelId: string | undefined | null): boolean 
   return Boolean(channelId && channelId.startsWith("D"));
 }
 
+export function isSlackUserId(value: string | undefined | null): boolean {
+  if (!value) return false;
+  const trimmed = value.trim();
+  return trimmed.startsWith("U") || trimmed.startsWith("W");
+}
+
+export function isSlackChannelId(value: string | undefined | null): boolean {
+  if (!value) return false;
+  const trimmed = value.trim();
+  return trimmed.startsWith("C") || trimmed.startsWith("G");
+}
+
+export type SlackPostDestValidation =
+  | { ok: true; dest: string }
+  | { ok: false; code: "slack_channel_required"; messageJa: string };
+
+export function validateSlackPostDestination(input: {
+  slackChannelId?: string | null;
+  slackUserId?: string | null;
+  dmIntent?: boolean;
+}): SlackPostDestValidation {
+  const channelId = input.slackChannelId?.trim() || "";
+  const userId = input.slackUserId?.trim() || "";
+
+  if (isSlackChannelId(channelId)) {
+    return { ok: true, dest: channelId };
+  }
+
+  if (isSlackDmChannel(channelId)) {
+    return { ok: true, dest: channelId };
+  }
+
+  if (channelId) {
+    return { ok: true, dest: channelId };
+  }
+
+  if (isSlackUserId(userId)) {
+    if (input.dmIntent === true) {
+      return { ok: true, dest: userId };
+    }
+    return {
+      ok: false,
+      code: "slack_channel_required",
+      messageJa:
+        "Slack チャネルが指定されていません。ユーザーID への自動 DM は禁止です（fail-closed）。明示的な DM 意図がある場合は dm=true を指定してください。",
+    };
+  }
+
+  if (userId) {
+    return { ok: true, dest: userId };
+  }
+
+  return {
+    ok: false,
+    code: "slack_channel_required",
+    messageJa: "Slack 宛先が指定されていません（fail-closed）。",
+  };
+}
+
 export async function resolveConversationToken(input: {
   orgId: string;
   employeeId?: string;

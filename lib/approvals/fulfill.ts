@@ -13,6 +13,7 @@ import { normalizePostingAs } from "@/lib/employees/posting-as";
 import {
   looksLikeSlackTs,
   postConversationMessage,
+  validateSlackPostDestination,
 } from "@/lib/gateway/adapters/slack";
 import {
   parseConversationContext,
@@ -598,8 +599,47 @@ async function fulfillApprovedInvokeCore(
       return null;
     }
 
-    const dest = destinationOf(snapshot);
-    if (!dest) return null;
+    const snapshotArgs = snapshot.args ?? {};
+    const dmIntent =
+      snapshotArgs.dm === true ||
+      snapshotArgs.postingTo === "im" ||
+      snapshotArgs.dmIntent === true;
+    const destValidation = validateSlackPostDestination({
+      slackChannelId: snapshot.conversation?.slackChannelId,
+      slackUserId: snapshot.conversation?.slackUserId,
+      dmIntent,
+    });
+
+    if (!destValidation.ok) {
+      const at = new Date().toISOString();
+      const fulfillment: ApprovalFulfillment = {
+        ok: false,
+        error: destValidation.code,
+        at,
+      };
+      await persistFulfillment(approval, fulfillment);
+      await appendAuditEvent({
+        orgId: approval.orgId,
+        employeeId: approval.employeeId,
+        credentialId: approval.credentialId,
+        action: "slack.post_failed",
+        purpose: approval.purpose,
+        summary: "承認直後の会話投稿をユーザーID宛てDM禁止で拒否（fail-closed）",
+        metadata: {
+          approvalId: approval.id,
+          tool: snapshot.tool,
+          jobId: snapshot.jobId,
+          code: destValidation.code,
+          slackChannelId: snapshot.conversation?.slackChannelId,
+          slackUserId: snapshot.conversation?.slackUserId,
+          dmIntent,
+          phase: "approval.fulfill",
+        },
+      }).catch(() => undefined);
+      return fulfillment;
+    }
+
+    const dest = destValidation.dest;
 
     const threadResult = await threadOf(snapshot);
 

@@ -57,6 +57,7 @@ import {
 import {
   looksLikeSlackTs,
   postConversationMessage,
+  validateSlackPostDestination,
 } from "@/lib/gateway/adapters/slack";
 import {
   evaluateFileAttachmentEgress,
@@ -1363,7 +1364,60 @@ export async function runGatewayInvoke(
   let threadTsSource: "client" | "wake_stash" | "none" | undefined;
   if (isAudienceGatedTool(toolDef)) {
     const ctx = parseConversationContext(body, orgId || employee.orgId);
-    const dest = ctx?.slackChannelId || ctx?.slackUserId || "";
+    const args =
+      body.args && typeof body.args === "object"
+        ? (body.args as Record<string, unknown>)
+        : {};
+
+    // Slack destination validation: prevent silent DM fallback from channel wakes.
+    // Only validate when surface is slack or when slackChannelId/slackUserId is present.
+    const isSlackSurface = ctx?.surface === "slack" || ctx?.slackChannelId || ctx?.slackUserId;
+    let dest = "";
+    if (isSlackSurface) {
+      const dmIntent = args.dm === true || args.postingTo === "im" || args.dmIntent === true;
+      const destValidation = validateSlackPostDestination({
+        slackChannelId: ctx?.slackChannelId,
+        slackUserId: ctx?.slackUserId,
+        dmIntent,
+      });
+      if (!destValidation.ok) {
+        await appendAuditEvent({
+          orgId: orgId || employee.orgId,
+          employeeId,
+          credentialId: input.credentialId || employee.credentialId,
+          action: "slack.post_failed",
+          purpose,
+          summary: `${tool} をユーザーID宛てDM禁止で拒否（fail-closed）`,
+          metadata: {
+            tool,
+            jobId,
+            code: destValidation.code,
+            slackChannelId: ctx?.slackChannelId,
+            slackUserId: ctx?.slackUserId,
+            dmIntent,
+          },
+        });
+        return jsonResult(
+          {
+            ok: false,
+            code: destValidation.code,
+            error: destValidation.code,
+            message: destValidation.messageJa,
+            needs_approval: false,
+            egress,
+            employeeId,
+            tool,
+            purpose,
+            jobId,
+          },
+          400
+        );
+      }
+      dest = destValidation.dest;
+    } else {
+      // Non-Slack surface: use original destination resolution (email, phone, etc.)
+      dest = ctx?.slackChannelId || ctx?.slackUserId || "";
+    }
     const egressAllowsPost =
       egress?.decision === "allow" ||
       egress?.decision === "summarize" ||
@@ -1373,10 +1427,6 @@ export async function runGatewayInvoke(
       if (already) {
         conversationDelivery = already;
       } else {
-      const args =
-        body.args && typeof body.args === "object"
-          ? (body.args as Record<string, unknown>)
-          : {};
       const rawText = [args.text, args.body, args.message].find(
         (value) => typeof value === "string" && value.trim()
       ) as string | undefined;
