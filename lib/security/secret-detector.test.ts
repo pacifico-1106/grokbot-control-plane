@@ -4,6 +4,9 @@ import {
   detectSecretInPayload,
   redactPayloadForAudit,
   buildSecretDetectionErrorResponse,
+  detectCardLikeString,
+  isCardLikeDetection,
+  buildCardDetectionErrorResponse,
   type SecretDetectionResult,
 } from "./secret-detector";
 
@@ -311,6 +314,155 @@ describe("secret-detector", () => {
 
     test("does not flag email addresses", () => {
       expect(detectSecretInString("admin@example.com")).toEqual({ ok: true });
+    });
+  });
+
+  describe("P1 card-like string detection", () => {
+    describe("detectCardLikeString", () => {
+      test("detects Visa card numbers (Luhn valid)", () => {
+        const result = detectCardLikeString("4111111111111111");
+        expect(result.detected).toBe(true);
+        if (result.detected) {
+          expect(result.patternName).toBe("card_visa");
+        }
+      });
+
+      test("detects Mastercard numbers (Luhn valid)", () => {
+        const result = detectCardLikeString("5500000000000004");
+        expect(result.detected).toBe(true);
+        if (result.detected) {
+          expect(result.patternName).toBe("card_mastercard");
+        }
+      });
+
+      test("detects Amex numbers (Luhn valid)", () => {
+        const result = detectCardLikeString("340000000000009");
+        expect(result.detected).toBe(true);
+        if (result.detected) {
+          expect(result.patternName).toBe("card_amex");
+        }
+      });
+
+      test("detects card numbers with spaces", () => {
+        const result = detectCardLikeString("4111 1111 1111 1111");
+        expect(result.detected).toBe(true);
+        if (result.detected) {
+          expect(result.patternName).toBe("card_generic_16");
+        }
+      });
+
+      test("detects card numbers with hyphens", () => {
+        const result = detectCardLikeString("4111-1111-1111-1111");
+        expect(result.detected).toBe(true);
+        if (result.detected) {
+          expect(result.patternName).toBe("card_generic_16");
+        }
+      });
+
+      test("rejects numbers failing Luhn check", () => {
+        const result = detectCardLikeString("4111111111111112");
+        expect(result.detected).toBe(false);
+      });
+
+      test("passes normal text", () => {
+        expect(detectCardLikeString("Hello world")).toEqual({ detected: false });
+      });
+
+      test("passes short numbers", () => {
+        expect(detectCardLikeString("12345")).toEqual({ detected: false });
+      });
+    });
+
+    describe("card detection in detectSecretInString", () => {
+      test("detects card numbers in messages", () => {
+        const result = detectSecretInString("My card is 4111111111111111");
+        expect(result.ok).toBe(false);
+        if (!result.ok) {
+          expect(result.pattern).toBe("card_visa");
+        }
+      });
+
+      test("redactedPreview is [CARD_DATA_REDACTED]", () => {
+        const result = detectSecretInString("4111111111111111");
+        expect(result.ok).toBe(false);
+        if (!result.ok) {
+          expect(result.redactedPreview).toBe("[CARD_DATA_REDACTED]");
+        }
+      });
+
+      test("nextStepJa mentions Stripe secure page", () => {
+        const result = detectSecretInString("4111111111111111");
+        expect(result.ok).toBe(false);
+        if (!result.ok) {
+          expect(result.nextStepJa).toContain("Stripe");
+        }
+      });
+
+      test("never echoes card digits in redactedPreview", () => {
+        const cardNumbers = [
+          "4111111111111111",
+          "5500000000000004",
+          "340000000000009",
+        ];
+
+        for (const cardNum of cardNumbers) {
+          const result = detectSecretInString(cardNum);
+          expect(result.ok).toBe(false);
+          if (!result.ok) {
+            expect(result.redactedPreview).toBe("[CARD_DATA_REDACTED]");
+            expect(result.redactedPreview).not.toContain("4111");
+            expect(result.redactedPreview).not.toContain("5500");
+            expect(result.redactedPreview).not.toContain("3400");
+          }
+        }
+      });
+    });
+
+    describe("isCardLikeDetection helper", () => {
+      test("returns true for card patterns", () => {
+        const result = detectSecretInString("4111111111111111");
+        expect(isCardLikeDetection(result)).toBe(true);
+      });
+
+      test("returns false for non-card secrets", () => {
+        const result = detectSecretInString("xoxb-123456789-abcdefghij");
+        expect(result.ok).toBe(false);
+        expect(isCardLikeDetection(result)).toBe(false);
+      });
+
+      test("returns false for ok results", () => {
+        const result = detectSecretInString("Hello world");
+        expect(isCardLikeDetection(result)).toBe(false);
+      });
+    });
+
+    describe("buildCardDetectionErrorResponse", () => {
+      test("returns card_like_string_blocked error code", () => {
+        const result = detectSecretInString("4111111111111111");
+        expect(result.ok).toBe(false);
+        if (!result.ok) {
+          const errorResponse = buildCardDetectionErrorResponse(result);
+          expect(errorResponse.error).toBe("card_like_string_blocked");
+          expect(errorResponse.redactedPreview).toBe("[CARD_DATA_REDACTED]");
+        }
+      });
+    });
+
+    describe("card false positive avoidance", () => {
+      test("does not flag Stripe IDs", () => {
+        expect(detectCardLikeString("pm_1234567890abcdef")).toEqual({ detected: false });
+        expect(detectCardLikeString("cus_1234567890abcdef")).toEqual({ detected: false });
+        expect(detectCardLikeString("seti_1234567890abcdef")).toEqual({ detected: false });
+      });
+
+      test("does not flag UUIDs", () => {
+        expect(detectCardLikeString("550e8400-e29b-41d4-a716-446655440000")).toEqual({ detected: false });
+      });
+
+      test("does not flag phone numbers", () => {
+        expect(detectCardLikeString("03-1234-5678")).toEqual({ detected: false });
+        expect(detectCardLikeString("+81-90-1234-5678")).toEqual({ detected: false });
+      });
     });
   });
 });

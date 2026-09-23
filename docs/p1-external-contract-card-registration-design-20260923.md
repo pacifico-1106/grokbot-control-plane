@@ -254,8 +254,52 @@ audit_card_setup_events (監査専用)
 
 ---
 
+---
+
+## 実装状況
+
+**実装完了:** 2026-09-23  
+**フラグ名:** `EXTERNAL_CONTRACT_CARD_SETUP`  
+**デフォルト:** `0`（OFF）
+
+### 実装コンポーネント
+
+| コンポーネント | ファイル | 状態 |
+|--------------|---------|------|
+| マイグレーション | `supabase/migrations/20260923_external_contract_card_setup.sql` | ✅ 完了 |
+| フィーチャーフラグ | `lib/external-contract-card/feature-flag.ts` | ✅ 完了 |
+| カード検出器拡張 | `lib/security/secret-detector.ts` | ✅ 完了 |
+| データアクセス層 | `lib/external-contract-card/data.ts` | ✅ 完了 |
+| Checkout セッション | `lib/external-contract-card/checkout-setup.ts` | ✅ 完了 |
+| Webhook ハンドラ | `lib/external-contract-card/webhook-handler.ts` | ✅ 完了 |
+| Portal リンク | `lib/external-contract-card/portal-link.ts` | ✅ 完了 |
+| テスト | `lib/external-contract-card/external-contract-card.test.ts` | ✅ 完了 |
+
+### 本番有効化の前提条件
+
+⚠️ **本番環境では `EXTERNAL_CONTRACT_CARD_SETUP=0`（デフォルト）を維持してください。**
+
+本番有効化には以下が**必須**です：
+
+1. **完全なセキュリティ監査**
+   - PCI DSS SAQ A 準拠の確認
+   - Stripe-hosted フローのみ使用の確認
+   - PAN/CVV/expiry がログ・DB・env に一切保存されないことの確認
+
+2. **別途の本番有効化 GO**
+   - セキュリティチームからの承認
+   - 運用チームからの承認
+
+3. **監査ログ確認**
+   - `audit_external_contract_card_events` テーブルに PAN 関連データがないこと
+
+**SAQ A 達成を宣言しないでください** — 監査完了時の検証対象として記録されています。
+
+---
+
 ## 変更履歴
 
 | 日付 | 担当 | 内容 |
 |------|------|------|
 | 2026-09-23 | Yasaka | Design lock |
+| 2026-09-23 | Cloud Agent | Implementation (flag OFF, pending security audit) |
