@@ -7,6 +7,12 @@
  * - Chat OK: short-lived setup links, approval cards, status/nextStepJa
  * - Chat NEVER: passwords, refresh tokens, API keys, full employee/admin badge secrets
  * - Prefix-only OK for ops triage
+ *
+ * P1 Extension (2026-09-23):
+ * - Card-like / PAN-ish patterns added for external contract card registration
+ * - On detection: log only that something was blocked (NEVER the matched value)
+ * - Fail-closed: card_like_string_blocked audit event
+ * @see docs/p1-external-contract-card-registration-design-20260923.md
  */
 
 export type SecretDetectionResult = {
@@ -50,6 +56,96 @@ const SECRET_PATTERNS: SecretPattern[] = [
   { name: 'base64_long_secret', pattern: /[A-Za-z0-9+\/]{64,}={0,2}/, minLength: 64 },
   { name: 'hex_long_secret', pattern: /[a-f0-9]{64,}/i, minLength: 64 },
 ];
+
+/**
+ * P1 Card-like / PAN-ish patterns for external contract card registration.
+ * CRITICAL: On detection, NEVER log the matched value itself.
+ * Log only that something was blocked (card_like_string_blocked).
+ *
+ * Patterns detect potential credit card numbers:
+ * - Visa: starts with 4, 13 or 16 digits
+ * - Mastercard: starts with 51-55, 16 digits
+ * - Amex: starts with 34/37, 15 digits
+ * - Generic: 13-19 digit sequences with optional separators
+ *
+ * All patterns require Luhn checksum validation to reduce false positives.
+ * @see docs/p1-external-contract-card-registration-design-20260923.md
+ */
+export type CardLikePattern = {
+  name: string;
+  pattern: RegExp;
+  requiresLuhn: boolean;
+};
+
+const CARD_LIKE_PATTERNS: CardLikePattern[] = [
+  { name: 'card_visa', pattern: /4[0-9]{12}(?:[0-9]{3})?/, requiresLuhn: true },
+  { name: 'card_mastercard', pattern: /5[1-5][0-9]{14}/, requiresLuhn: true },
+  { name: 'card_amex', pattern: /3[47][0-9]{13}/, requiresLuhn: true },
+  { name: 'card_discover', pattern: /6(?:011|5[0-9]{2})[0-9]{12}/, requiresLuhn: true },
+  { name: 'card_jcb', pattern: /(?:2131|1800|35\d{3})\d{11}/, requiresLuhn: true },
+  { name: 'card_generic_16', pattern: /[0-9]{4}[\s\-]?[0-9]{4}[\s\-]?[0-9]{4}[\s\-]?[0-9]{4}/, requiresLuhn: true },
+  { name: 'card_generic_15', pattern: /[0-9]{4}[\s\-]?[0-9]{6}[\s\-]?[0-9]{5}/, requiresLuhn: true },
+];
+
+/**
+ * Luhn algorithm (mod 10) checksum validator.
+ * Used to validate potential card numbers and reduce false positives.
+ * Returns true if the number passes the Luhn check.
+ */
+function passesLuhnCheck(digits: string): boolean {
+  const cleaned = digits.replace(/[\s\-]/g, '');
+  if (!/^\d+$/.test(cleaned) || cleaned.length < 13 || cleaned.length > 19) {
+    return false;
+  }
+
+  let sum = 0;
+  let isEven = false;
+
+  for (let i = cleaned.length - 1; i >= 0; i--) {
+    let digit = parseInt(cleaned[i], 10);
+
+    if (isEven) {
+      digit *= 2;
+      if (digit > 9) {
+        digit -= 9;
+      }
+    }
+
+    sum += digit;
+    isEven = !isEven;
+  }
+
+  return sum % 10 === 0;
+}
+
+/**
+ * Check if a string contains card-like / PAN-ish patterns.
+ * CRITICAL: On detection, return only pattern name for audit.
+ * NEVER return or log the matched card number itself.
+ */
+export type CardLikeDetectionResult = {
+  detected: false;
+} | {
+  detected: true;
+  patternName: string;
+};
+
+export function detectCardLikeString(value: string): CardLikeDetectionResult {
+  for (const { name, pattern, requiresLuhn } of CARD_LIKE_PATTERNS) {
+    const match = value.match(pattern);
+    if (match) {
+      const matched = match[0];
+      if (requiresLuhn && !passesLuhnCheck(matched)) {
+        continue;
+      }
+      return {
+        detected: true,
+        patternName: name,
+      };
+    }
+  }
+  return { detected: false };
+}
 
 const ALLOWLIST_PATTERNS = [
   /^https?:\/\//i,
@@ -101,6 +197,19 @@ export function detectSecretInString(value: string): SecretDetectionResult {
       };
     }
   }
+
+  const cardResult = detectCardLikeString(value);
+  if (cardResult.detected) {
+    return {
+      ok: false,
+      code: 'secret_detected_in_payload',
+      pattern: cardResult.patternName,
+      redactedPreview: '[CARD_DATA_REDACTED]',
+      messageJa: 'カード情報のような文字列が検出されました。カード番号をチャットに入力しないでください。',
+      nextStepJa: 'カード登録はStaffpassから発行されるセキュアリンクを使用してください。Stripeのホスト画面で安全にカード情報を入力できます。',
+    };
+  }
+
   return { ok: true };
 }
 
@@ -154,5 +263,41 @@ export function buildSecretDetectionErrorResponse(detection: SecretDetectionResu
     redactedPreview: detection.redactedPreview,
     messageJa: SETUP_DEEP_LINK_MESSAGE_JA,
     nextStepJa: SETUP_DEEP_LINK_NEXTSTEP_JA,
+  };
+}
+
+/**
+ * P1: Check if a detection result is for card-like patterns.
+ * Used to trigger card_like_string_blocked audit events.
+ */
+export function isCardLikeDetection(detection: SecretDetectionResult): boolean {
+  if (detection.ok) return false;
+  return detection.pattern.startsWith('card_');
+}
+
+/**
+ * P1: Build card-specific error response with stricter redaction.
+ * CRITICAL: redactedPreview is always [CARD_DATA_REDACTED] — never any card digits.
+ */
+const CARD_SETUP_MESSAGE_JA = 'カード情報のような文字列が検出されました。カード番号をチャットに入力しないでください。';
+const CARD_SETUP_NEXTSTEP_JA = 'カード登録はStaffpassから発行されるセキュアリンクを使用してください。Stripeのホスト画面で安全にカード情報を入力できます。';
+
+export function buildCardDetectionErrorResponse(detection: SecretDetectionResult & { ok: false }): {
+  ok: false;
+  code: "secret_detected_in_payload";
+  error: "card_like_string_blocked";
+  pattern: string;
+  redactedPreview: "[CARD_DATA_REDACTED]";
+  messageJa: string;
+  nextStepJa: string;
+} {
+  return {
+    ok: false,
+    code: detection.code,
+    error: "card_like_string_blocked",
+    pattern: detection.pattern,
+    redactedPreview: "[CARD_DATA_REDACTED]",
+    messageJa: CARD_SETUP_MESSAGE_JA,
+    nextStepJa: CARD_SETUP_NEXTSTEP_JA,
   };
 }

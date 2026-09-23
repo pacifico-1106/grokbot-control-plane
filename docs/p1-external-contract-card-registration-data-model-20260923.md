@@ -402,8 +402,25 @@ console.log('Setup completed:', {
 
 ---
 
+---
+
+## 実装状況
+
+**実装完了:** 2026-09-23  
+**フラグ名:** `EXTERNAL_CONTRACT_CARD_SETUP`  
+**デフォルト:** `0`（OFF）
+
+マイグレーションファイル: `supabase/migrations/20260923_external_contract_card_setup.sql`
+
+⚠️ **本番環境では `EXTERNAL_CONTRACT_CARD_SETUP=0`（デフォルト）を維持してください。**
+
+本番有効化には完全なセキュリティ監査と別途 GO が必要です。
+
+---
+
 ## 変更履歴
 
 | 日付 | 担当 | 内容 |
 |------|------|------|
 | 2026-09-23 | Cloud Agent | Initial data model proposal |
+| 2026-09-23 | Cloud Agent | Implementation (flag OFF, pending security audit) |
