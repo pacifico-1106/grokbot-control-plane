@@ -115,11 +115,11 @@ export const BUSINESS_AUDIT_CLASS = "business" as const;
 export type ApprovalRouteClass = typeof ADMIN_AUDIT_CLASS | typeof BUSINESS_AUDIT_CLASS;
 
 /**
- * Admin-class tool prefixes: any tool whose name starts with these is admin-class.
- * This ensures future admin tools (setup.*, orgs.*, billing.*, etc.) are automatically
- * classified without requiring enumeration by name.
+ * Admin-class tool prefixes for fallback classification.
+ * These are used only when tool metadata does not declare approvalClass.
+ * Admin MCP tools default to admin; gateway tools default to business.
  */
-const ADMIN_TOOL_PREFIXES = [
+const ADMIN_TOOL_PREFIXES_FALLBACK = [
   "admin.",
   "setup.",
   "orgs.",
@@ -132,9 +132,9 @@ const ADMIN_TOOL_PREFIXES = [
 
 /**
  * Explicit admin-class tools that don't follow the prefix convention.
- * Employee-facing tools that modify account/org settings.
+ * Used only as fallback when tool metadata does not declare approvalClass.
  */
-const ADMIN_CLASS_TOOLS_EXPLICIT = new Set([
+const ADMIN_CLASS_TOOLS_FALLBACK = new Set([
   "employees.issue",
   "link",
   "policy.patch",
@@ -149,14 +149,60 @@ const ADMIN_CLASS_TOOLS_EXPLICIT = new Set([
 ]);
 
 /**
- * Check if a tool is admin-class by class membership (not by name enumeration).
- * Admin-class tools require explicit admin route policy when flag is enabled.
+ * Tool metadata registry for approval class lookup.
+ * Populated by registerToolApprovalClass() when Admin MCP tools are loaded.
+ * This is the primary source of truth for tool classification.
  */
-export function isAdminClassTool(tool: string | null | undefined): boolean {
+const toolApprovalClassRegistry = new Map<string, ApprovalRouteClass>();
+
+/**
+ * Register a tool's approval class from its definition metadata.
+ * Called during Admin MCP tool initialization.
+ */
+export function registerToolApprovalClass(
+  toolName: string,
+  approvalClass: ApprovalRouteClass
+): void {
+  toolApprovalClassRegistry.set(toolName, approvalClass);
+}
+
+/**
+ * Get the approval class for a tool from metadata registry.
+ * Returns null if not registered (fallback logic should be used).
+ */
+export function getToolApprovalClassFromRegistry(
+  toolName: string
+): ApprovalRouteClass | null {
+  return toolApprovalClassRegistry.get(toolName) ?? null;
+}
+
+/**
+ * Check if a tool is admin-class.
+ * Classification priority:
+ * 1. Tool metadata (approvalClass in tool definition) - primary source
+ * 2. Prefix-based fallback for Admin MCP tools without explicit metadata
+ * 3. Admin MCP tools default to admin when unclassified (fail-closed)
+ *
+ * Gateway (employee) tools without metadata default to business class.
+ */
+export function isAdminClassTool(
+  tool: string | null | undefined,
+  isAdminMcpTool = false
+): boolean {
   const t = (tool || "").trim();
   if (!t) return false;
-  if (ADMIN_CLASS_TOOLS_EXPLICIT.has(t)) return true;
-  return ADMIN_TOOL_PREFIXES.some((prefix) => t.startsWith(prefix));
+
+  const registeredClass = getToolApprovalClassFromRegistry(t);
+  if (registeredClass) {
+    return registeredClass === ADMIN_AUDIT_CLASS;
+  }
+
+  if (ADMIN_CLASS_TOOLS_FALLBACK.has(t)) return true;
+  if (ADMIN_TOOL_PREFIXES_FALLBACK.some((prefix) => t.startsWith(prefix))) return true;
+
+  if (isAdminMcpTool) return true;
+
+  return false;
 }
 
 export function isAdminClassApproval(approval: {
@@ -165,12 +211,21 @@ export function isAdminClassApproval(approval: {
   metadata?: Record<string, unknown> | null;
 }): boolean {
   const meta = approval.metadata || {};
+
+  if (meta.approvalClass === ADMIN_AUDIT_CLASS) return true;
   if (meta.auditClass === ADMIN_AUDIT_CLASS) return true;
-  if (meta.always_human === true && typeof meta.adminTool === "string") return true;
+
+  if (meta.always_human === true && typeof meta.adminTool === "string") {
+    const isAdminMcp = meta.isAdminMcpTool === true;
+    return isAdminClassTool(meta.adminTool as string, isAdminMcp);
+  }
+
   const purpose = (approval.purpose || "").trim();
   if (purpose.startsWith("admin.")) return true;
+
   const tool = (approval.tool ?? meta.adminTool ?? meta.tool) as string | undefined;
-  return isAdminClassTool(tool);
+  const isAdminMcp = meta.isAdminMcpTool === true;
+  return isAdminClassTool(tool, isAdminMcp);
 }
 
 /**

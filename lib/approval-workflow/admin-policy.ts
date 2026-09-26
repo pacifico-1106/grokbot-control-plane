@@ -2,10 +2,14 @@
  * Admin-class approval policy enforcement.
  *
  * When ADMIN_APPROVER_POLICY_REQUIRED flag is enabled:
- * - Admin-class tickets require an org-level policy with a matching admin-class route.
+ * - Admin-class tickets require an org-level policy with a matching admin-class route,
+ *   OR fall back to org owners as default admin approvers.
  * - Employee overrides cannot satisfy or replace the admin route requirement.
  * - Business-route voters cannot vote on admin-class tickets.
- * - If policy is absent, fail closed (reason code "admin_policy_required").
+ * - If no admin route and no org owners exist, fail closed.
+ *
+ * Default admin-class approver = org owner(s). An org can set a specific member
+ * instead via policy routes configuration.
  *
  * When flag is OFF: existing W1 behavior (any single approver) is preserved.
  */
@@ -20,6 +24,7 @@ import {
 } from "@/lib/admin-mcp/audit-class";
 import type {
   ApprovalClassRoute,
+  ApprovalLane,
   ApprovalRequest,
   OrgApprovalWorkflowPolicy,
 } from "@/lib/types";
@@ -55,18 +60,80 @@ export function hasValidAdminRoute(
 }
 
 /**
+ * Build a default admin route from org owners.
+ * Used when no explicit admin route is configured but org owners exist.
+ * The route uses single-stage with "any" quorum (any org owner can approve).
+ */
+export function buildDefaultAdminRouteFromOwners(
+  ownerIds: string[]
+): ApprovalClassRoute | null {
+  if (!ownerIds || ownerIds.length === 0) return null;
+  const stage: ApprovalLane = {
+    id: "default_admin_stage",
+    nameJa: "組織オーナー承認",
+    voterUserIds: ownerIds,
+    quorum: { type: "any" },
+    onReject: "fail_closed",
+  };
+  return {
+    class: ADMIN_AUDIT_CLASS,
+    stages: [stage],
+  };
+}
+
+/**
+ * Check if admin approval can proceed with org owners as fallback.
+ * Returns true if either:
+ * 1. Policy has explicit admin route with voters, OR
+ * 2. Org owners are available as default admin approvers
+ */
+export function canProceedWithAdminApproval(
+  policy: OrgApprovalWorkflowPolicy | null,
+  orgOwnerIds: string[]
+): boolean {
+  if (hasValidAdminRoute(policy)) return true;
+  return orgOwnerIds.length > 0;
+}
+
+/**
+ * Get the effective admin route, using org owners as fallback.
+ * Priority:
+ * 1. Explicit admin route from policy
+ * 2. Default route built from org owners
+ */
+export function getEffectiveAdminRoute(
+  policy: OrgApprovalWorkflowPolicy | null,
+  orgOwnerIds: string[]
+): ApprovalClassRoute | null {
+  const explicitRoute = findRouteForClass(policy, ADMIN_AUDIT_CLASS);
+  if (explicitRoute && explicitRoute.stages?.some((s) => s.voterUserIds?.length > 0)) {
+    return explicitRoute;
+  }
+  return buildDefaultAdminRouteFromOwners(orgOwnerIds);
+}
+
+/**
  * Check if an approval can proceed under the admin policy requirement.
  *
  * When ADMIN_APPROVER_POLICY_REQUIRED is ON:
- * - Admin-class approvals require an org-level policy with admin route
+ * - Admin-class approvals require either:
+ *   a) An org-level policy with explicit admin route, OR
+ *   b) Org owners available as default admin approvers
  * - Employee overrides cannot satisfy the admin route requirement
+ * - If neither explicit route nor org owners exist, fail closed
  *
  * When OFF: always returns ok (existing W1 behavior preserved).
+ *
+ * @param approval - The approval request to check
+ * @param orgPolicy - Org-level approval workflow policy (may be null)
+ * @param employeePolicy - Employee-level policy override (ignored for admin class)
+ * @param orgOwnerIds - Org owner member IDs for fallback (empty array = no fallback)
  */
 export function checkAdminPolicyRequirement(
   approval: Pick<ApprovalRequest, "purpose" | "tool" | "metadata">,
   orgPolicy: OrgApprovalWorkflowPolicy | null,
-  employeePolicy: OrgApprovalWorkflowPolicy | null
+  employeePolicy: OrgApprovalWorkflowPolicy | null,
+  orgOwnerIds: string[] = []
 ): AdminPolicyCheckResult {
   if (!isAdminApproverPolicyRequired()) {
     return { ok: true };
@@ -77,6 +144,10 @@ export function checkAdminPolicyRequirement(
   }
 
   if (hasValidAdminRoute(orgPolicy)) {
+    return { ok: true };
+  }
+
+  if (orgOwnerIds.length > 0) {
     return { ok: true };
   }
 
@@ -93,7 +164,7 @@ export function checkAdminPolicyRequirement(
     ok: false,
     code: "admin_policy_required",
     reason:
-      "admin_class_requires_org_policy: org-level admin route policy is required for admin-class approvals",
+      "admin_class_requires_admin_approver: no admin route configured and no org owners available",
   };
 }
 
@@ -101,30 +172,41 @@ export function checkAdminPolicyRequirement(
  * Get the effective policy for an approval, considering class-based routing.
  *
  * For admin-class approvals when flag is ON:
- * - Must use org-level policy with admin route
+ * - Must use org-level policy with admin route, OR org owners as fallback
  * - Employee override is ignored for admin-class routing
  *
  * For business-class approvals:
  * - Employee override takes precedence (existing coalesce behavior)
+ *
+ * @param approval - The approval request
+ * @param orgPolicy - Org-level approval workflow policy
+ * @param employeePolicy - Employee-level policy override
+ * @param orgOwnerIds - Org owner member IDs for admin class fallback
  */
 export function getEffectiveClassPolicy(
   approval: Pick<ApprovalRequest, "purpose" | "tool" | "metadata">,
   orgPolicy: OrgApprovalWorkflowPolicy | null,
-  employeePolicy: OrgApprovalWorkflowPolicy | null
+  employeePolicy: OrgApprovalWorkflowPolicy | null,
+  orgOwnerIds: string[] = []
 ): {
   policy: OrgApprovalWorkflowPolicy | null;
-  source: "org" | "employee" | "none";
+  source: "org" | "employee" | "org_owners_default" | "none";
   route: ApprovalClassRoute | null;
   approvalClass: ApprovalRouteClass;
 } {
   const approvalClass = getApprovalRouteClass(approval);
 
   if (isAdminApproverPolicyRequired() && approvalClass === ADMIN_AUDIT_CLASS) {
-    const adminRoute = findRouteForClass(orgPolicy, ADMIN_AUDIT_CLASS);
+    const effectiveRoute = getEffectiveAdminRoute(orgPolicy, orgOwnerIds);
+    const source = hasValidAdminRoute(orgPolicy)
+      ? "org"
+      : orgOwnerIds.length > 0
+        ? "org_owners_default"
+        : "none";
     return {
       policy: orgPolicy,
-      source: orgPolicy ? "org" : "none",
-      route: adminRoute,
+      source,
+      route: effectiveRoute,
       approvalClass,
     };
   }

@@ -6,11 +6,13 @@
  * Secrets detected in args are rejected before approval ticket creation.
  *
  * P0 Item 1: Admin-class tickets require explicit account-approver policy
- * when ADMIN_APPROVER_POLICY_REQUIRED flag is enabled. If absent, fail-closed.
+ * when ADMIN_APPROVER_POLICY_REQUIRED flag is enabled.
+ * Default admin approver = org owner(s). If no explicit route and no org owners, fail-closed.
  */
 import { sendApprovalNeededEmail } from "@/lib/email";
 import { sendApprovalNotifications } from "@/lib/notify/channels";
 import { appendAuditEvent, createApproval } from "@/lib/data";
+import { getOrgOwnerIds } from "@/lib/data/members";
 import type { ResolvedAdminCredential } from "@/lib/auth/admin-credential";
 import { auditActionForAdminTool, ADMIN_AUDIT_CLASS, isAdminClassApproval } from "@/lib/admin-mcp/audit-class";
 export { isAdminClassApproval };
@@ -102,14 +104,20 @@ export async function queueAdminTool(input: {
   }
 
   // P0 Item 1: Admin-class tickets require explicit account-approver policy
-  // When ADMIN_APPROVER_POLICY_REQUIRED is ON, check for admin route policy
+  // When ADMIN_APPROVER_POLICY_REQUIRED is ON, check for admin route policy or org owners
   if (isAdminApproverPolicyRequired()) {
     const orgPolicy = await getOrgApprovalWorkflowPolicy(input.cred.orgId);
+    const orgOwnerIds = await getOrgOwnerIds(input.cred.orgId);
     
     const policyCheck = checkAdminPolicyRequirement(
-      { purpose: auditActionForAdminTool(input.tool), tool: input.tool, metadata: { auditClass: ADMIN_AUDIT_CLASS } },
+      {
+        purpose: auditActionForAdminTool(input.tool),
+        tool: input.tool,
+        metadata: { auditClass: ADMIN_AUDIT_CLASS, isAdminMcpTool: true },
+      },
       orgPolicy,
-      null
+      null,
+      orgOwnerIds
     );
 
     if (!policyCheck.ok) {
@@ -119,13 +127,14 @@ export async function queueAdminTool(input: {
         credentialId: null,
         action: "admin.policy",
         purpose: auditActionForAdminTool(input.tool),
-        summary: `管理クラス承認拒否（ポリシー未設定）: ${input.tool}`,
+        summary: `管理クラス承認拒否（承認者未設定）: ${input.tool}`,
         metadata: {
           tool: input.tool,
           code: policyCheck.code,
           reason: policyCheck.reason,
           auditClass: ADMIN_AUDIT_CLASS,
           flagEnabled: true,
+          orgOwnerCount: orgOwnerIds.length,
         },
       });
 
@@ -135,9 +144,9 @@ export async function queueAdminTool(input: {
         error: "admin_policy_required",
         reason: policyCheck.reason,
         messageJa:
-          "管理クラスの操作には、組織レベルの承認ワークフローポリシー（管理ルート付き）が必要です。",
+          "管理クラスの操作には、組織レベルの承認者設定（管理ルートまたは組織オーナー）が必要です。",
         nextStepJa:
-          "管理者が approvalWorkflow.patch でadminクラスのルートを含むポリシーを設定してください。",
+          "組織にオーナーを追加するか、approvalWorkflow.patch でadminクラスのルートを設定してください。",
         tool: input.tool,
         auditClass: ADMIN_AUDIT_CLASS,
       };
@@ -168,9 +177,11 @@ export async function queueAdminTool(input: {
     jobId,
     metadata: {
       auditClass: ADMIN_AUDIT_CLASS,
+      approvalClass: ADMIN_AUDIT_CLASS,
       auditAction,
       always_human: true,
       adminTool: input.tool,
+      isAdminMcpTool: true,
       adminMutation: input.args,
       adminRequester: requester,
     },

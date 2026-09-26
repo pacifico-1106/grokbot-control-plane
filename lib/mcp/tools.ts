@@ -31,6 +31,8 @@ export const MCP_PROTOCOL_VERSION = "2024-11-05";
 export const MCP_SERVER_NAME = "staffpass";
 export const MCP_SERVER_VERSION = "1.0.0";
 
+export type ApprovalClass = "admin" | "business";
+
 export type McpToolDef = {
   name: string;
   description: string;
@@ -40,6 +42,15 @@ export type McpToolDef = {
     required?: string[];
     additionalProperties?: boolean;
   };
+  /**
+   * Approval class declared in tool metadata.
+   * - 'admin': Account/org-level operations (setup, billing, credentials, policies)
+   * - 'business': Employee-level operations (mail, calendar, commerce, slack)
+   *
+   * Admin MCP tools default to 'admin' when not explicitly declared.
+   * Gateway tools default to 'business' when not explicitly declared.
+   */
+  approvalClass?: ApprovalClass;
 };
 
 export const STAFFPASS_MCP_TOOLS: McpToolDef[] = [

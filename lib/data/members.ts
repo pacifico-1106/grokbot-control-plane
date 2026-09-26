@@ -207,6 +207,25 @@ export async function upsertMember(
   throw new Error(insertError?.message || "member_upsert_failed");
 }
 
+/**
+ * Get org owner user IDs for default admin approver configuration.
+ * Returns member IDs of all members with role='owner'.
+ * Used when no explicit admin route is configured — org owners are default admin approvers.
+ */
+export async function getOrgOwnerIds(orgId: string): Promise<string[]> {
+  const members = await listMembers(orgId);
+  return members.filter((m) => m.role === "owner").map((m) => m.id);
+}
+
+/**
+ * Get org owner members for admin approval routing.
+ * Returns full member objects for role='owner' members.
+ */
+export async function getOrgOwners(orgId: string): Promise<OrgMember[]> {
+  const members = await listMembers(orgId);
+  return members.filter((m) => m.role === "owner");
+}
+
 /** Resolve actor for capability checks — DEMO falls back to mem_1. */
 export async function resolveActorMember(
   actorId: string | null | undefined,

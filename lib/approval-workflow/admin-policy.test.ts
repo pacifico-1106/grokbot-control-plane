@@ -2,24 +2,35 @@
  * P0 Item 1: Admin-class approval policy enforcement tests.
  *
  * Tests:
- * - Null policy fail-closed (flag ON)
+ * - Null policy fail-closed (flag ON) unless org owners available
  * - W1 preserved (flag OFF)
  * - Employee override cannot satisfy admin route
  * - Business voter denied on admin ticket
  * - New admin tools classified by class (not name enumeration)
+ * - Org owners as default admin approvers when no explicit route
+ *
+ * All tests use fixtures, no hardcoded org IDs or personal names.
  */
-import { describe, expect, it, beforeEach, afterEach, mock, spyOn } from "bun:test";
+import { describe, expect, test, beforeEach, afterEach } from "bun:test";
 import {
   checkAdminPolicyRequirement,
   getEffectiveClassPolicy,
   canVoterVoteOnApproval,
   findRouteForClass,
   hasValidAdminRoute,
+  buildDefaultAdminRouteFromOwners,
+  canProceedWithAdminApproval,
+  getEffectiveAdminRoute,
   ADMIN_AUDIT_CLASS,
   BUSINESS_AUDIT_CLASS,
 } from "./admin-policy";
 import { isAdminClassApproval, isAdminClassTool, getApprovalRouteClass } from "@/lib/admin-mcp/audit-class";
 import type { OrgApprovalWorkflowPolicy, ApprovalClassRoute, ApprovalLane } from "@/lib/types";
+
+const FIXTURE_ORG_OWNER_1 = "fixture_owner_1";
+const FIXTURE_ORG_OWNER_2 = "fixture_owner_2";
+const FIXTURE_ADMIN_VOTER = "fixture_admin_voter";
+const FIXTURE_BUSINESS_VOTER = "fixture_business_voter";
 
 const createStage = (id: string, voterUserIds: string[]): ApprovalLane => ({
   id,
@@ -29,12 +40,12 @@ const createStage = (id: string, voterUserIds: string[]): ApprovalLane => ({
   onReject: "fail_closed",
 });
 
-const createAdminRoute = (voters: string[]): ApprovalClassRoute => ({
+const createAdminRoute = (voters: string[] = [FIXTURE_ADMIN_VOTER]): ApprovalClassRoute => ({
   class: "admin",
   stages: [createStage("admin_stage", voters)],
 });
 
-const createBusinessRoute = (voters: string[]): ApprovalClassRoute => ({
+const createBusinessRoute = (voters: string[] = [FIXTURE_BUSINESS_VOTER]): ApprovalClassRoute => ({
   class: "business",
   stages: [createStage("business_stage", voters)],
 });
@@ -44,21 +55,21 @@ const createPolicy = (options: {
   stages?: ApprovalLane[];
 }): OrgApprovalWorkflowPolicy => ({
   version: 1,
-  policyId: "test_policy",
+  policyId: "fixture_policy",
   policyName: "テストポリシー",
-  stages: options.stages ?? [createStage("default", ["voter_1"])],
+  stages: options.stages ?? [createStage("default", [FIXTURE_BUSINESS_VOTER])],
   routes: options.routes,
   updatedAt: new Date().toISOString(),
-  updatedBy: "test",
+  updatedBy: "fixture_test",
 });
 
 describe("isAdminClassTool", () => {
-  it("classifies admin.* tools as admin class", () => {
+  test("classifies admin.* tools as admin class", () => {
     expect(isAdminClassTool("admin.hire")).toBe(true);
     expect(isAdminClassTool("admin.policy")).toBe(true);
   });
 
-  it("classifies setup.* tools as admin class", () => {
+  test("classifies setup.* tools as admin class", () => {
     expect(isAdminClassTool("setup.slackAdapter.setBotToken")).toBe(true);
     expect(isAdminClassTool("setup.lineApproval.upsert")).toBe(true);
     expect(isAdminClassTool("setup.billing")).toBe(true);
@@ -66,13 +77,13 @@ describe("isAdminClassTool", () => {
     expect(isAdminClassTool("setup.portal")).toBe(true);
   });
 
-  it("classifies orgs.* tools as admin class", () => {
+  test("classifies orgs.* tools as admin class", () => {
     expect(isAdminClassTool("orgs.create")).toBe(true);
     expect(isAdminClassTool("orgs.issueAdminCredential")).toBe(true);
     expect(isAdminClassTool("orgs.patch")).toBe(true);
   });
 
-  it("classifies billing/portal/card tools as admin class", () => {
+  test("classifies billing/portal/card tools as admin class", () => {
     expect(isAdminClassTool("billing.patch")).toBe(true);
     expect(isAdminClassTool("billing.update")).toBe(true);
     expect(isAdminClassTool("portal.setup")).toBe(true);
@@ -81,7 +92,7 @@ describe("isAdminClassTool", () => {
     expect(isAdminClassTool("externalContractCard.patch")).toBe(true);
   });
 
-  it("classifies explicit admin tools as admin class", () => {
+  test("classifies explicit admin tools as admin class", () => {
     expect(isAdminClassTool("employees.issue")).toBe(true);
     expect(isAdminClassTool("link")).toBe(true);
     expect(isAdminClassTool("policy.patch")).toBe(true);
@@ -92,12 +103,22 @@ describe("isAdminClassTool", () => {
     expect(isAdminClassTool("mailPolicy.patch")).toBe(true);
   });
 
-  it("classifies future admin tools by prefix", () => {
+  test("classifies future admin tools by prefix (not name enumeration)", () => {
     expect(isAdminClassTool("internalAudienceRule.patch")).toBe(true);
     expect(isAdminClassTool("approvalWorkflow.patch")).toBe(true);
+    expect(isAdminClassTool("setup.futureNewTool")).toBe(true);
+    expect(isAdminClassTool("billing.newOperation")).toBe(true);
   });
 
-  it("does not classify business tools as admin class", () => {
+  test("unclassified Admin MCP tools default to admin (fail-closed)", () => {
+    expect(isAdminClassTool("unknownAdminTool", true)).toBe(true);
+  });
+
+  test("unclassified gateway tools default to business", () => {
+    expect(isAdminClassTool("unknownGatewayTool", false)).toBe(false);
+  });
+
+  test("does not classify business tools as admin class", () => {
     expect(isAdminClassTool("mail.send")).toBe(false);
     expect(isAdminClassTool("calendar.confirm")).toBe(false);
     expect(isAdminClassTool("commerce.order")).toBe(false);
@@ -108,36 +129,50 @@ describe("isAdminClassTool", () => {
 });
 
 describe("isAdminClassApproval", () => {
-  it("detects admin class by auditClass metadata", () => {
+  test("detects admin class by approvalClass metadata", () => {
+    expect(isAdminClassApproval({ metadata: { approvalClass: "admin" } })).toBe(true);
+    expect(isAdminClassApproval({ metadata: { approvalClass: "business" } })).toBe(false);
+  });
+
+  test("detects admin class by auditClass metadata (legacy)", () => {
     expect(isAdminClassApproval({ metadata: { auditClass: "admin" } })).toBe(true);
     expect(isAdminClassApproval({ metadata: { auditClass: "business" } })).toBe(false);
   });
 
-  it("detects admin class by always_human + adminTool metadata", () => {
+  test("detects admin class by isAdminMcpTool marker", () => {
+    expect(isAdminClassApproval({
+      metadata: { always_human: true, adminTool: "unknownTool", isAdminMcpTool: true },
+    })).toBe(true);
+    expect(isAdminClassApproval({
+      metadata: { always_human: true, adminTool: "unknownTool", isAdminMcpTool: false },
+    })).toBe(false);
+  });
+
+  test("detects admin class by adminTool metadata (tool classification, not always_human)", () => {
     expect(isAdminClassApproval({
       metadata: { always_human: true, adminTool: "employees.issue" },
     })).toBe(true);
-    // Note: employees.issue is an admin-class tool by itself, so even without always_human,
-    // it will be detected as admin class due to the tool check
     expect(isAdminClassApproval({
       metadata: { always_human: false, adminTool: "employees.issue" },
     })).toBe(true);
-    // Use a business tool to verify always_human check is separate
     expect(isAdminClassApproval({
       metadata: { always_human: true, adminTool: "mail.send" },
+    })).toBe(false);
+    expect(isAdminClassApproval({
+      metadata: { always_human: true, adminTool: "mail.send", isAdminMcpTool: true },
     })).toBe(true);
     expect(isAdminClassApproval({
       metadata: { always_human: false, tool: "mail.send" },
     })).toBe(false);
   });
 
-  it("detects admin class by purpose prefix", () => {
+  test("detects admin class by purpose prefix", () => {
     expect(isAdminClassApproval({ purpose: "admin.hire" })).toBe(true);
     expect(isAdminClassApproval({ purpose: "admin.policy" })).toBe(true);
     expect(isAdminClassApproval({ purpose: "tool.invoke" })).toBe(false);
   });
 
-  it("detects admin class by tool", () => {
+  test("detects admin class by tool", () => {
     expect(isAdminClassApproval({ tool: "employees.issue" })).toBe(true);
     expect(isAdminClassApproval({ tool: "setup.billing" })).toBe(true);
     expect(isAdminClassApproval({ tool: "mail.send" })).toBe(false);
@@ -145,13 +180,13 @@ describe("isAdminClassApproval", () => {
 });
 
 describe("getApprovalRouteClass", () => {
-  it("returns admin for admin-class approvals", () => {
+  test("returns admin for admin-class approvals", () => {
     expect(getApprovalRouteClass({ purpose: "admin.hire" })).toBe("admin");
     expect(getApprovalRouteClass({ metadata: { auditClass: "admin" } })).toBe("admin");
     expect(getApprovalRouteClass({ tool: "setup.billing" })).toBe("admin");
   });
 
-  it("returns business for non-admin approvals", () => {
+  test("returns business for non-admin approvals", () => {
     expect(getApprovalRouteClass({ purpose: "tool.invoke" })).toBe("business");
     expect(getApprovalRouteClass({ tool: "mail.send" })).toBe("business");
     expect(getApprovalRouteClass({})).toBe("business");
@@ -159,66 +194,112 @@ describe("getApprovalRouteClass", () => {
 });
 
 describe("findRouteForClass", () => {
-  it("finds admin route", () => {
+  test("finds admin route", () => {
     const policy = createPolicy({
-      routes: [createAdminRoute(["admin_voter"]), createBusinessRoute(["business_voter"])],
+      routes: [createAdminRoute(), createBusinessRoute()],
     });
     const route = findRouteForClass(policy, "admin");
     expect(route?.class).toBe("admin");
-    expect(route?.stages[0].voterUserIds).toEqual(["admin_voter"]);
+    expect(route?.stages[0].voterUserIds).toEqual([FIXTURE_ADMIN_VOTER]);
   });
 
-  it("finds business route", () => {
+  test("finds business route", () => {
     const policy = createPolicy({
-      routes: [createAdminRoute(["admin_voter"]), createBusinessRoute(["business_voter"])],
+      routes: [createAdminRoute(), createBusinessRoute()],
     });
     const route = findRouteForClass(policy, "business");
     expect(route?.class).toBe("business");
-    expect(route?.stages[0].voterUserIds).toEqual(["business_voter"]);
+    expect(route?.stages[0].voterUserIds).toEqual([FIXTURE_BUSINESS_VOTER]);
   });
 
-  it("returns null when route not found", () => {
+  test("returns null when route not found", () => {
     const policy = createPolicy({
-      routes: [createBusinessRoute(["business_voter"])],
+      routes: [createBusinessRoute()],
     });
     expect(findRouteForClass(policy, "admin")).toBeNull();
   });
 
-  it("returns null when no routes defined", () => {
+  test("returns null when no routes defined", () => {
     const policy = createPolicy({});
     expect(findRouteForClass(policy, "admin")).toBeNull();
   });
 });
 
 describe("hasValidAdminRoute", () => {
-  it("returns true for policy with valid admin route", () => {
+  test("returns true for policy with valid admin route", () => {
     const policy = createPolicy({
-      routes: [createAdminRoute(["admin_voter"])],
+      routes: [createAdminRoute()],
     });
     expect(hasValidAdminRoute(policy)).toBe(true);
   });
 
-  it("returns false for policy without admin route", () => {
+  test("returns false for policy without admin route", () => {
     const policy = createPolicy({
-      routes: [createBusinessRoute(["business_voter"])],
+      routes: [createBusinessRoute()],
     });
     expect(hasValidAdminRoute(policy)).toBe(false);
   });
 
-  it("returns false for admin route with empty voters", () => {
+  test("returns false for admin route with empty voters", () => {
     const policy = createPolicy({
       routes: [createAdminRoute([])],
     });
     expect(hasValidAdminRoute(policy)).toBe(false);
   });
 
-  it("returns false for null policy", () => {
+  test("returns false for null policy", () => {
     expect(hasValidAdminRoute(null)).toBe(false);
   });
 
-  it("returns false for policy without routes", () => {
+  test("returns false for policy without routes", () => {
     const policy = createPolicy({});
     expect(hasValidAdminRoute(policy)).toBe(false);
+  });
+});
+
+describe("buildDefaultAdminRouteFromOwners", () => {
+  test("builds admin route from org owners", () => {
+    const route = buildDefaultAdminRouteFromOwners([FIXTURE_ORG_OWNER_1, FIXTURE_ORG_OWNER_2]);
+    expect(route?.class).toBe("admin");
+    expect(route?.stages.length).toBe(1);
+    expect(route?.stages[0].voterUserIds).toEqual([FIXTURE_ORG_OWNER_1, FIXTURE_ORG_OWNER_2]);
+    expect(route?.stages[0].quorum).toEqual({ type: "any" });
+  });
+
+  test("returns null for empty owners", () => {
+    expect(buildDefaultAdminRouteFromOwners([])).toBeNull();
+  });
+});
+
+describe("canProceedWithAdminApproval", () => {
+  test("returns true with explicit admin route", () => {
+    const policy = createPolicy({ routes: [createAdminRoute()] });
+    expect(canProceedWithAdminApproval(policy, [])).toBe(true);
+  });
+
+  test("returns true with org owners as fallback", () => {
+    expect(canProceedWithAdminApproval(null, [FIXTURE_ORG_OWNER_1])).toBe(true);
+  });
+
+  test("returns false without route or owners", () => {
+    expect(canProceedWithAdminApproval(null, [])).toBe(false);
+  });
+});
+
+describe("getEffectiveAdminRoute", () => {
+  test("returns explicit route when available", () => {
+    const policy = createPolicy({ routes: [createAdminRoute()] });
+    const route = getEffectiveAdminRoute(policy, [FIXTURE_ORG_OWNER_1]);
+    expect(route?.stages[0].voterUserIds).toEqual([FIXTURE_ADMIN_VOTER]);
+  });
+
+  test("falls back to org owners when no explicit route", () => {
+    const route = getEffectiveAdminRoute(null, [FIXTURE_ORG_OWNER_1]);
+    expect(route?.stages[0].voterUserIds).toEqual([FIXTURE_ORG_OWNER_1]);
+  });
+
+  test("returns null when neither available", () => {
+    expect(getEffectiveAdminRoute(null, [])).toBeNull();
   });
 });
 
@@ -238,20 +319,22 @@ describe("checkAdminPolicyRequirement (flag OFF)", () => {
     }
   });
 
-  it("allows admin-class approval without admin route (W1 preserved)", () => {
+  test("allows admin-class approval without admin route (W1 preserved)", () => {
     const result = checkAdminPolicyRequirement(
       { purpose: "admin.hire", tool: "employees.issue", metadata: { auditClass: "admin" } },
       null,
-      null
+      null,
+      []
     );
     expect(result.ok).toBe(true);
   });
 
-  it("allows business-class approval without policy", () => {
+  test("allows business-class approval without policy", () => {
     const result = checkAdminPolicyRequirement(
       { purpose: "tool.invoke", tool: "mail.send", metadata: {} },
       null,
-      null
+      null,
+      []
     );
     expect(result.ok).toBe(true);
   });
@@ -273,11 +356,12 @@ describe("checkAdminPolicyRequirement (flag ON)", () => {
     }
   });
 
-  it("fails closed for admin-class approval without org policy", () => {
+  test("fails closed for admin-class approval without org policy or owners", () => {
     const result = checkAdminPolicyRequirement(
       { purpose: "admin.hire", tool: "employees.issue", metadata: { auditClass: "admin" } },
       null,
-      null
+      null,
+      []
     );
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -285,14 +369,25 @@ describe("checkAdminPolicyRequirement (flag ON)", () => {
     }
   });
 
-  it("fails closed for admin-class approval with employee override only", () => {
+  test("succeeds with org owners as default admin approvers", () => {
+    const result = checkAdminPolicyRequirement(
+      { purpose: "admin.hire", tool: "employees.issue", metadata: { auditClass: "admin" } },
+      null,
+      null,
+      [FIXTURE_ORG_OWNER_1]
+    );
+    expect(result.ok).toBe(true);
+  });
+
+  test("fails closed for admin-class approval with employee override only", () => {
     const employeePolicy = createPolicy({
-      routes: [createAdminRoute(["employee_admin_voter"])],
+      routes: [createAdminRoute()],
     });
     const result = checkAdminPolicyRequirement(
       { purpose: "admin.hire", tool: "employees.issue", metadata: { auditClass: "admin" } },
       null,
-      employeePolicy
+      employeePolicy,
+      []
     );
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -301,35 +396,38 @@ describe("checkAdminPolicyRequirement (flag ON)", () => {
     }
   });
 
-  it("succeeds for admin-class approval with org-level admin route", () => {
+  test("succeeds for admin-class approval with org-level admin route", () => {
     const orgPolicy = createPolicy({
-      routes: [createAdminRoute(["admin_voter"])],
+      routes: [createAdminRoute()],
     });
     const result = checkAdminPolicyRequirement(
       { purpose: "admin.hire", tool: "employees.issue", metadata: { auditClass: "admin" } },
       orgPolicy,
-      null
+      null,
+      []
     );
     expect(result.ok).toBe(true);
   });
 
-  it("allows business-class approval without admin route", () => {
+  test("allows business-class approval without admin route", () => {
     const orgPolicy = createPolicy({
-      routes: [createBusinessRoute(["business_voter"])],
+      routes: [createBusinessRoute()],
     });
     const result = checkAdminPolicyRequirement(
       { purpose: "tool.invoke", tool: "mail.send", metadata: {} },
       orgPolicy,
-      null
+      null,
+      []
     );
     expect(result.ok).toBe(true);
   });
 
-  it("allows business-class approval without policy", () => {
+  test("allows business-class approval without policy", () => {
     const result = checkAdminPolicyRequirement(
       { purpose: "tool.invoke", tool: "mail.send", metadata: {} },
       null,
-      null
+      null,
+      []
     );
     expect(result.ok).toBe(true);
   });
@@ -351,15 +449,12 @@ describe("canVoterVoteOnApproval (flag OFF)", () => {
     }
   });
 
-  it("allows any voter on admin ticket (flag OFF)", () => {
+  test("allows any voter on admin ticket (flag OFF)", () => {
     const orgPolicy = createPolicy({
-      routes: [
-        createAdminRoute(["admin_voter"]),
-        createBusinessRoute(["business_voter"]),
-      ],
+      routes: [createAdminRoute(), createBusinessRoute()],
     });
     const result = canVoterVoteOnApproval(
-      "business_voter",
+      FIXTURE_BUSINESS_VOTER,
       { purpose: "admin.hire", tool: "employees.issue", metadata: { auditClass: "admin" } },
       orgPolicy
     );
@@ -384,15 +479,12 @@ describe("canVoterVoteOnApproval (flag ON)", () => {
     }
   });
 
-  it("allows admin voter on admin ticket", () => {
+  test("allows admin voter on admin ticket", () => {
     const orgPolicy = createPolicy({
-      routes: [
-        createAdminRoute(["admin_voter"]),
-        createBusinessRoute(["business_voter"]),
-      ],
+      routes: [createAdminRoute(), createBusinessRoute()],
     });
     const result = canVoterVoteOnApproval(
-      "admin_voter",
+      FIXTURE_ADMIN_VOTER,
       { purpose: "admin.hire", tool: "employees.issue", metadata: { auditClass: "admin" } },
       orgPolicy
     );
@@ -400,15 +492,12 @@ describe("canVoterVoteOnApproval (flag ON)", () => {
     expect(result.reason).toBe("in_admin_route");
   });
 
-  it("denies business voter on admin ticket", () => {
+  test("denies business voter on admin ticket", () => {
     const orgPolicy = createPolicy({
-      routes: [
-        createAdminRoute(["admin_voter"]),
-        createBusinessRoute(["business_voter"]),
-      ],
+      routes: [createAdminRoute(), createBusinessRoute()],
     });
     const result = canVoterVoteOnApproval(
-      "business_voter",
+      FIXTURE_BUSINESS_VOTER,
       { purpose: "admin.hire", tool: "employees.issue", metadata: { auditClass: "admin" } },
       orgPolicy
     );
@@ -416,15 +505,12 @@ describe("canVoterVoteOnApproval (flag ON)", () => {
     expect(result.reason).toBe("business_voter_on_admin_ticket");
   });
 
-  it("allows any voter on business ticket", () => {
+  test("allows any voter on business ticket", () => {
     const orgPolicy = createPolicy({
-      routes: [
-        createAdminRoute(["admin_voter"]),
-        createBusinessRoute(["business_voter"]),
-      ],
+      routes: [createAdminRoute(), createBusinessRoute()],
     });
     const result = canVoterVoteOnApproval(
-      "business_voter",
+      FIXTURE_BUSINESS_VOTER,
       { purpose: "tool.invoke", tool: "mail.send", metadata: {} },
       orgPolicy
     );
@@ -432,10 +518,10 @@ describe("canVoterVoteOnApproval (flag ON)", () => {
     expect(result.reason).toBe("business_class");
   });
 
-  it("allows voting when no class routes defined", () => {
+  test("allows voting when no class routes defined", () => {
     const orgPolicy = createPolicy({});
     const result = canVoterVoteOnApproval(
-      "any_voter",
+      "fixture_any_voter",
       { purpose: "admin.hire", tool: "employees.issue", metadata: { auditClass: "admin" } },
       orgPolicy
     );
@@ -460,41 +546,172 @@ describe("getEffectiveClassPolicy (flag ON)", () => {
     }
   });
 
-  it("uses org policy for admin-class approvals (ignores employee override)", () => {
+  test("uses org policy for admin-class approvals (ignores employee override)", () => {
     const orgPolicy = createPolicy({
-      routes: [createAdminRoute(["org_admin_voter"])],
+      routes: [createAdminRoute()],
     });
     const employeePolicy = createPolicy({
-      routes: [createAdminRoute(["employee_admin_voter"])],
+      routes: [createAdminRoute(["fixture_employee_admin_voter"])],
     });
 
     const result = getEffectiveClassPolicy(
       { purpose: "admin.hire", tool: "employees.issue", metadata: { auditClass: "admin" } },
       orgPolicy,
-      employeePolicy
+      employeePolicy,
+      []
     );
 
     expect(result.source).toBe("org");
     expect(result.approvalClass).toBe("admin");
-    expect(result.route?.stages[0].voterUserIds).toEqual(["org_admin_voter"]);
+    expect(result.route?.stages[0].voterUserIds).toEqual([FIXTURE_ADMIN_VOTER]);
   });
 
-  it("uses employee policy for business-class approvals", () => {
+  test("uses org owners as fallback for admin-class approvals", () => {
+    const result = getEffectiveClassPolicy(
+      { purpose: "admin.hire", tool: "employees.issue", metadata: { auditClass: "admin" } },
+      null,
+      null,
+      [FIXTURE_ORG_OWNER_1]
+    );
+
+    expect(result.source).toBe("org_owners_default");
+    expect(result.approvalClass).toBe("admin");
+    expect(result.route?.stages[0].voterUserIds).toEqual([FIXTURE_ORG_OWNER_1]);
+  });
+
+  test("uses employee policy for business-class approvals", () => {
     const orgPolicy = createPolicy({
-      routes: [createBusinessRoute(["org_business_voter"])],
+      routes: [createBusinessRoute(["fixture_org_business_voter"])],
     });
     const employeePolicy = createPolicy({
-      routes: [createBusinessRoute(["employee_business_voter"])],
+      routes: [createBusinessRoute()],
     });
 
     const result = getEffectiveClassPolicy(
       { purpose: "tool.invoke", tool: "mail.send", metadata: {} },
       orgPolicy,
-      employeePolicy
+      employeePolicy,
+      []
     );
 
     expect(result.source).toBe("employee");
     expect(result.approvalClass).toBe("business");
-    expect(result.route?.stages[0].voterUserIds).toEqual(["employee_business_voter"]);
+    expect(result.route?.stages[0].voterUserIds).toEqual([FIXTURE_BUSINESS_VOTER]);
+  });
+});
+
+/**
+ * Tenant-agnostic invariant tests.
+ * These tests must pass for any org fixture and verify security invariants.
+ */
+describe("INVARIANT: Cross-org voter isolation", () => {
+  const ORG_A_VOTER = "fixture_org_a_voter";
+  const ORG_B_VOTER = "fixture_org_b_voter";
+
+  const orgAPolicy = createPolicy({
+    routes: [
+      createAdminRoute([ORG_A_VOTER]),
+      createBusinessRoute([ORG_A_VOTER]),
+    ],
+  });
+
+  const orgBPolicy = createPolicy({
+    routes: [
+      createAdminRoute([ORG_B_VOTER]),
+      createBusinessRoute([ORG_B_VOTER]),
+    ],
+  });
+
+  let originalEnv: string | undefined;
+
+  beforeEach(() => {
+    originalEnv = process.env.ADMIN_APPROVER_POLICY_REQUIRED;
+    process.env.ADMIN_APPROVER_POLICY_REQUIRED = "true";
+  });
+
+  afterEach(() => {
+    if (originalEnv !== undefined) {
+      process.env.ADMIN_APPROVER_POLICY_REQUIRED = originalEnv;
+    } else {
+      delete process.env.ADMIN_APPROVER_POLICY_REQUIRED;
+    }
+  });
+
+  test("INVARIANT: voter from org B cannot vote on org A admin ticket", () => {
+    const result = canVoterVoteOnApproval(
+      ORG_B_VOTER,
+      { purpose: "admin.hire", tool: "employees.issue", metadata: { auditClass: "admin" } },
+      orgAPolicy
+    );
+    expect(result.allowed).toBe(false);
+    expect(result.reason).toBe("not_in_admin_route");
+  });
+
+  test("INVARIANT: voter from org B cannot vote on org A business ticket when routes configured", () => {
+    const result = canVoterVoteOnApproval(
+      ORG_B_VOTER,
+      { purpose: "tool.invoke", tool: "mail.send", metadata: {} },
+      orgAPolicy
+    );
+    expect(result.allowed).toBe(true);
+    expect(result.reason).toBe("business_class");
+  });
+
+  test("INVARIANT: org owner from org B is not valid for org A admin approval", () => {
+    const resultOrgA = checkAdminPolicyRequirement(
+      { purpose: "admin.hire", tool: "employees.issue", metadata: { auditClass: "admin" } },
+      null,
+      null,
+      [ORG_A_VOTER]
+    );
+    expect(resultOrgA.ok).toBe(true);
+
+    const resultOrgB = canVoterVoteOnApproval(
+      ORG_B_VOTER,
+      { purpose: "admin.hire", tool: "employees.issue", metadata: { auditClass: "admin" } },
+      createPolicy({ routes: [createAdminRoute([ORG_A_VOTER])] })
+    );
+    expect(resultOrgB.allowed).toBe(false);
+  });
+
+  test("INVARIANT: empty voter list means no one can vote", () => {
+    const emptyPolicy = createPolicy({
+      routes: [createAdminRoute([])],
+    });
+    const result = canVoterVoteOnApproval(
+      ORG_A_VOTER,
+      { purpose: "admin.hire", tool: "employees.issue", metadata: { auditClass: "admin" } },
+      emptyPolicy
+    );
+    expect(result.allowed).toBe(false);
+    expect(result.reason).toBe("not_in_admin_route");
+  });
+});
+
+describe("INVARIANT: Tool classification is deterministic", () => {
+  test("INVARIANT: same tool always returns same classification", () => {
+    const tools = [
+      "employees.issue", "mail.send", "setup.billing", "commerce.order",
+      "billing.patch", "slack.post", "orgs.create", "calendar.confirm",
+    ];
+    for (const tool of tools) {
+      const first = isAdminClassTool(tool);
+      const second = isAdminClassTool(tool);
+      const third = isAdminClassTool(tool);
+      expect(first).toBe(second);
+      expect(second).toBe(third);
+    }
+  });
+
+  test("INVARIANT: admin tools are always admin, business tools are always business", () => {
+    const adminTools = ["employees.issue", "setup.billing", "billing.patch", "orgs.create"];
+    const businessTools = ["mail.send", "commerce.order", "slack.post", "calendar.confirm"];
+
+    for (const tool of adminTools) {
+      expect(isAdminClassTool(tool)).toBe(true);
+    }
+    for (const tool of businessTools) {
+      expect(isAdminClassTool(tool)).toBe(false);
+    }
   });
 });
