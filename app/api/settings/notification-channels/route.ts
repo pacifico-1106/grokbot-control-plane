@@ -11,6 +11,7 @@ import { getAppOrigin } from "@/lib/approvals/tokens";
 import { ensureGlobalTelegramWebhook, registerTelegramWebhook } from "@/lib/notify/telegram";
 import { requireOrgAdminSession } from "@/lib/auth/require-org";
 import { channelErrorPayload } from "@/lib/notify/channel-errors";
+import { validateSlackChannelNotExternal } from "@/lib/slack/channel-validation";
 import type { NotificationProvider } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -74,6 +75,39 @@ export async function PUT(req: Request) {
           botToken: String(body.botToken || "").trim(),
           signingSecret: String(body.signingSecret || "").trim(),
         };
+  // P0 Item 5: Reject Slack Connect / externally shared channels
+  // This check is always enforced at registration time (not behind flag) for security
+  if (provider === "slack" && enabled && destination) {
+    const slackBotToken = secrets.botToken;
+    if (slackBotToken) {
+      const validation = await validateSlackChannelNotExternal(slackBotToken, destination);
+      if (!validation.ok) {
+        await appendAuditEvent({
+          orgId: gate.orgId,
+          employeeId: null,
+          credentialId: null,
+          actorEmail: gate.email,
+          action: "notification.channel_updated",
+          purpose: null,
+          summary: `Slack承認チャンネル登録拒否（外部共有チャンネル）`,
+          metadata: {
+            provider,
+            channelId: destination,
+            validationCode: validation.code,
+            validationReason: validation.reason,
+          },
+        });
+        return NextResponse.json(
+          channelErrorPayload(
+            validation.code,
+            `外部共有チャンネル（Slack Connect）は承認インボックスとして使用できません: ${validation.reason}`
+          ),
+          { status: 400 }
+        );
+      }
+    }
+  }
+
   try {
     const saved = await upsertNotificationChannel({
       orgId: gate.orgId,

@@ -12,17 +12,22 @@ import {
 import { extraApproversAllow } from "@/lib/employees/approval-inbox";
 import { verifySlackSignature } from "@/lib/notify/slack";
 import { isSelfApprovalDenied } from "@/lib/admin-mcp/self-approval";
+import { isSlackApprovalStrict } from "@/lib/feature-flags";
+import { isSlackUserFromExpectedTeam } from "@/lib/slack/channel-validation";
+import { checkSlackVoterBinding } from "@/lib/approval-workflow/slack-voter";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-type SlackUser = { id?: string };
+type SlackUser = { id?: string; team_id?: string };
+type SlackTeam = { id?: string };
 type SlackChannel = { id?: string };
 type SlackAction = { action_id?: string; value?: string; type?: string };
 type SlackPayload = {
   type?: string;
   challenge?: string;
   user?: SlackUser;
+  team?: SlackTeam;
   channel?: SlackChannel;
   container?: { message_ts?: string; channel_id?: string };
   message?: { ts?: string };
@@ -85,13 +90,54 @@ async function handleBlockActions(
   decisionId: string
 ) {
   const userId = payload.user?.id || "";
+  const userTeamId = payload.user?.team_id || payload.team?.id || "";
   const slackChannel = payload.channel?.id || payload.container?.channel_id || "";
   const ts = payload.message?.ts || payload.container?.message_ts || "";
   const allowed = Array.isArray(channel.config.allowedUserIds)
     ? channel.config.allowedUserIds.map(String)
     : [];
-  if (allowed.length > 0 && (!userId || !allowed.includes(userId))) {
-    return;
+
+  const strictMode = isSlackApprovalStrict();
+
+  // P0 Item 5: When strict mode is ON, verify team_id matches expected team
+  // This prevents external-org users (Slack Connect) from pressing approval buttons
+  if (strictMode) {
+    const expectedTeamId = String(channel.config.expectedTeamId || "").trim();
+    const teamCheck = isSlackUserFromExpectedTeam(userTeamId, expectedTeamId);
+    if (!teamCheck.allowed) {
+      console.warn("slack_approval_team_mismatch", {
+        channelId: channel.id,
+        reason: teamCheck.reason,
+        userTeamId,
+        expectedTeamId,
+      });
+      return;
+    }
+  }
+
+  // P0 Item 5: When strict mode is ON, require allowedUserIds OR valid voter binding
+  if (strictMode) {
+    const { isSlackUserAuthorizedForApproval } = await import("@/lib/approval-workflow/slack-voter");
+    const authCheck = await isSlackUserAuthorizedForApproval(
+      channel.orgId,
+      channel.id,
+      userId,
+      allowed,
+      true
+    );
+    if (!authCheck.authorized) {
+      console.warn("slack_approval_unauthorized", {
+        channelId: channel.id,
+        userId,
+        reason: authCheck.reason,
+      });
+      return;
+    }
+  } else {
+    // Existing behavior: only check allowedUserIds if non-empty
+    if (allowed.length > 0 && (!userId || !allowed.includes(userId))) {
+      return;
+    }
   }
 
   const action = (payload.actions || []).find((item) =>
