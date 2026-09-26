@@ -1,12 +1,15 @@
 import {
   appendAuditEvent,
+  getEnabledNotificationChannels,
   getTokyo307PilotOrgId,
   isTokyo307PilotOrg,
   listAllEnabledNotificationChannels,
   listApprovals,
   listEmployees,
   resolveEmployeeApprovalChannel,
+  type NotificationChannelRuntime,
 } from "@/lib/data";
+import { isAdminClassApproval } from "@/lib/admin-mcp/audit-class";
 import { buildConcentration, type ConcentrationReport } from "@/lib/employees/concentration";
 import type { ApprovalRequest, Employee, WorkflowProgress } from "@/lib/types";
 import { getApprovalWorkflowProgress } from "@/lib/approval-workflow/resolve";
@@ -44,6 +47,29 @@ function workflowDisplay(progress: WorkflowProgress | null): WorkflowProgressDis
     finalGoPending: progress.finalGoPending };
 }
 
+/**
+ * Resolve the notification channel for an approval.
+ *
+ * Admin-class approvals (isAdminClassApproval) are routed to the org default/admin inbox,
+ * NOT to an employee's business approval channel. This ensures admin operations are always
+ * visible to org-level approvers (Telegram currently).
+ *
+ * Business-class approvals use the employee's configured channel or org default.
+ */
+async function resolveApprovalNotificationChannel(
+  approval: ApprovalRequest,
+  employee?: { approvalChannelId?: string | null } | null
+): Promise<NotificationChannelRuntime | null> {
+  const channels = await getEnabledNotificationChannels(approval.orgId);
+  const defaultChannel = channels.find((channel) => channel.isDefault) ?? channels[0] ?? null;
+
+  if (isAdminClassApproval(approval)) {
+    return defaultChannel;
+  }
+
+  return resolveEmployeeApprovalChannel(approval.orgId, employee);
+}
+
 export type NotificationDispatchResult = {
   ok: boolean;
   provider: "telegram" | "line" | "slack";
@@ -70,7 +96,8 @@ export async function sendApprovalNotifications(
   approval: ApprovalRequest,
   employee: Employee | null
 ): Promise<NotificationDispatchResult[]> {
-  const channel = await resolveEmployeeApprovalChannel(approval.orgId, employee);
+  // Admin-class approvals go to org default inbox, not employee business channel
+  const channel = await resolveApprovalNotificationChannel(approval, employee);
   const results: NotificationDispatchResult[] = [];
   if (channel) {
     const workflow = channel.provider === "slack" ? workflowDisplay(await getApprovalWorkflowProgress(approval.id)) : null;

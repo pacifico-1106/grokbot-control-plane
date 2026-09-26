@@ -30,6 +30,7 @@ import {
   getBallotForVoter,
   getBallotsByInstanceId,
   getEffectiveApprovalWorkflowPolicy,
+  getOrgApprovalWorkflowPolicy,
   getWorkflowInstanceByApprovalId,
   updateWorkflowInstance,
   mapInstanceRow,
@@ -38,6 +39,12 @@ import {
   getDemoWorkflowVoterBinding,
   demoWorkflowVoterIsCurrent,
 } from "./data";
+import {
+  canVoterVoteOnApproval,
+  checkAdminPolicyRequirement,
+} from "./admin-policy";
+import { isAdminClassApproval } from "@/lib/admin-mcp/audit-class";
+import { isAdminApproverPolicyRequired } from "@/lib/feature-flags";
 import {
   buildWorkflowProgress,
   canVoterResolve,
@@ -154,8 +161,27 @@ export async function handleWorkflowVote(
   vote: "approve" | "reject",
   opts: { orgId?: string; actor?: string; actorId?: string | null; grokBotAgentId?: string | null;
     externalVoter?: { provider: "slack" | "telegram" | "line"; channelKey: string; userId: string };
-    decisionId?: string; expectedStage?: string } = {}
+    decisionId?: string; expectedStage?: string;
+    approval?: { purpose?: string | null; tool?: string | null; metadata?: Record<string, unknown> | null } } = {}
 ): Promise<WorkflowVoteResult> {
+  // P0 Item 1: Block business voters from voting on admin-class tickets
+  if (isAdminApproverPolicyRequired() && opts.approval && opts.orgId) {
+    const orgPolicy = await getOrgApprovalWorkflowPolicy(opts.orgId);
+    const voterCheck = canVoterVoteOnApproval(voterUserId, opts.approval, orgPolicy);
+    if (!voterCheck.allowed) {
+      return {
+        voted: false,
+        ballot: null,
+        instance: null,
+        workflowComplete: false,
+        workflowApproved: false,
+        workflowRejected: false,
+        progress: null,
+        reason: voterCheck.reason,
+      };
+    }
+  }
+
   if (!isDemoMode()) {
     const admin = createSupabaseAdminClient();
     if (!admin || !opts.orgId) throw new Error("workflow_unavailable");
