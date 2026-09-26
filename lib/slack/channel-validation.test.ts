@@ -1,5 +1,9 @@
 /**
  * P0 Item 5: Slack channel validation tests.
+ *
+ * Includes tenant-agnostic invariant tests:
+ * - Slack Connect / externally shared channels can never be registered as approval channels
+ * - Cross-org Slack user isolation
  */
 import { describe, expect, test, afterEach } from "bun:test";
 import {
@@ -147,5 +151,92 @@ describe("isSlackUserFromExpectedTeam", () => {
     const result = isSlackUserFromExpectedTeam("T456", "T123");
     expect(result.allowed).toBe(false);
     expect(result.reason).toBe("external_team_user");
+  });
+});
+
+/**
+ * Tenant-agnostic invariant tests.
+ * These tests must pass for any org fixture and verify security invariants.
+ */
+describe("INVARIANT: Slack Connect channels can never be registered as approval channels", () => {
+  afterEach(() => {
+    globalThis.fetch = fetch;
+  });
+
+  const EXTERNAL_CHANNEL_FIXTURES = [
+    {
+      name: "Slack Connect channel (is_ext_shared)",
+      channel: { id: "C_CONNECT", name: "connect-channel", is_ext_shared: true },
+      expectedCode: "slack_connect_channel",
+    },
+    {
+      name: "Shared channel (is_shared)",
+      channel: { id: "C_SHARED", name: "shared-channel", is_shared: true },
+      expectedCode: "shared_channel",
+    },
+    {
+      name: "Pending external share (is_pending_ext_shared)",
+      channel: { id: "C_PENDING", name: "pending-channel", is_pending_ext_shared: true },
+      expectedCode: "pending_external_share",
+    },
+    {
+      name: "Both is_ext_shared and is_shared",
+      channel: { id: "C_BOTH", name: "dual-channel", is_ext_shared: true, is_shared: true },
+      expectedCode: "slack_connect_channel",
+    },
+  ];
+
+  for (const fixture of EXTERNAL_CHANNEL_FIXTURES) {
+    test(`INVARIANT: ${fixture.name} is rejected`, async () => {
+      globalThis.fetch = makeMockFetch({
+        ok: true,
+        channel: fixture.channel,
+      }) as typeof fetch;
+
+      const result = await validateSlackChannelNotExternal("xoxb-test", fixture.channel.id);
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.code).toBe(fixture.expectedCode);
+      }
+    });
+  }
+
+  test("INVARIANT: internal channel is accepted", async () => {
+    globalThis.fetch = makeMockFetch({
+      ok: true,
+      channel: {
+        id: "C_INTERNAL",
+        name: "internal-channel",
+        is_channel: true,
+        is_shared: false,
+        is_ext_shared: false,
+        is_pending_ext_shared: false,
+      },
+    }) as typeof fetch;
+
+    const result = await validateSlackChannelNotExternal("xoxb-test", "C_INTERNAL");
+    expect(result.ok).toBe(true);
+  });
+});
+
+describe("INVARIANT: Cross-org Slack user isolation", () => {
+  const ORG_A_TEAM = "T_ORG_A";
+  const ORG_B_TEAM = "T_ORG_B";
+
+  test("INVARIANT: user from org B team cannot pass org A team check", () => {
+    const result = isSlackUserFromExpectedTeam(ORG_B_TEAM, ORG_A_TEAM);
+    expect(result.allowed).toBe(false);
+    expect(result.reason).toBe("external_team_user");
+  });
+
+  test("INVARIANT: user with missing team_id is rejected (fail-closed)", () => {
+    const result = isSlackUserFromExpectedTeam(undefined, ORG_A_TEAM);
+    expect(result.allowed).toBe(false);
+    expect(result.reason).toBe("user_team_id_missing");
+  });
+
+  test("INVARIANT: same team user is allowed", () => {
+    const result = isSlackUserFromExpectedTeam(ORG_A_TEAM, ORG_A_TEAM);
+    expect(result.allowed).toBe(true);
   });
 });

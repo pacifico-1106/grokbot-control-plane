@@ -153,3 +153,67 @@ describe("isSlackUserAuthorizedForApproval (strict mode)", () => {
     expect(result.reason).toBe("strict_mode_requires_allowed_user_ids_or_voter_binding");
   });
 });
+
+/**
+ * Tenant-agnostic invariant tests.
+ * These tests must pass for any org fixture and verify security invariants.
+ */
+describe("INVARIANT: Cross-org voter isolation (Slack)", () => {
+  const ORG_A = "fixture_org_a";
+  const ORG_B = "fixture_org_b";
+  const CHANNEL_A = "chn_fixture_a";
+  const USER_ORG_A = "U_ORG_A_USER";
+  const USER_ORG_B = "U_ORG_B_USER";
+  const MEMBER_A = "member_fixture_a";
+
+  beforeEach(() => {
+    resetDemoWorkflowData();
+  });
+
+  afterEach(() => {
+    resetDemoWorkflowData();
+  });
+
+  test("INVARIANT: voter binding in org B is not valid for org A (strict mode)", async () => {
+    setDemoWorkflowVoterBinding({
+      orgId: ORG_B,
+      provider: "slack",
+      channelKey: CHANNEL_A,
+      userId: USER_ORG_B,
+      memberId: MEMBER_A,
+    });
+
+    const result = await isSlackUserAuthorizedForApproval(
+      ORG_A,
+      CHANNEL_A,
+      USER_ORG_B,
+      [],
+      true
+    );
+    expect(result.authorized).toBe(false);
+  });
+
+  test("INVARIANT: user not in allowedUserIds cannot vote regardless of org", async () => {
+    const result = await isSlackUserAuthorizedForApproval(
+      ORG_A,
+      CHANNEL_A,
+      USER_ORG_B,
+      [USER_ORG_A],
+      false
+    );
+    expect(result.authorized).toBe(false);
+    expect(result.reason).toBe("not_in_allowed_user_ids");
+  });
+
+  test("INVARIANT: strict mode with no allowedUserIds and no binding rejects all", async () => {
+    const result = await isSlackUserAuthorizedForApproval(
+      ORG_A,
+      CHANNEL_A,
+      USER_ORG_A,
+      [],
+      true
+    );
+    expect(result.authorized).toBe(false);
+    expect(result.reason).toBe("strict_mode_requires_allowed_user_ids_or_voter_binding");
+  });
+});
