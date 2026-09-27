@@ -143,13 +143,23 @@ describe("OAuth state signing and verification", () => {
     expect(verifyGoogleOAuthState("no-dot-here", "nonce")).toBeNull();
   });
 
-  test("includes PKCE code verifier in state", () => {
+  test("state NEVER contains code verifier (PKCE security)", () => {
     process.env.GOOGLE_OAUTH_CLIENT_SECRET = "test-secret-that-is-long-enough";
     const verifier = generateCodeVerifier();
-    const input = { orgId: "org-1", employeeId: "emp-1", nonce: "test-nonce", codeVerifier: verifier };
+    const input = { orgId: "org-1", employeeId: "emp-1", nonce: "test-nonce" };
     const state = signGoogleOAuthState(input);
+
+    expect(state).not.toContain(verifier);
+    expect(state).not.toContain("codeVerifier");
+    expect(state).not.toContain("code_verifier");
+
+    const decoded = Buffer.from(state.split(".")[0], "base64url").toString("utf8");
+    expect(decoded).not.toContain(verifier);
+    expect(decoded).not.toContain("codeVerifier");
+
     const parsed = verifyGoogleOAuthState(state, "test-nonce");
-    expect(parsed?.codeVerifier).toBe(verifier);
+    expect(parsed).not.toBeNull();
+    expect((parsed as unknown as Record<string, unknown>).codeVerifier).toBeUndefined();
   });
 });
 
@@ -202,5 +212,98 @@ describe("decodeIdToken", () => {
 
   test("returns null for invalid base64 payload", () => {
     expect(decodeIdToken("header.!!!invalid!!!.sig")).toBeNull();
+  });
+});
+
+describe("validateIdToken", () => {
+  const { validateIdToken } = require("./oauth");
+
+  test("validates correct token", () => {
+    process.env.GOOGLE_OAUTH_CLIENT_ID = "test-client-id";
+    const result = validateIdToken({
+      aud: "test-client-id",
+      iss: "https://accounts.google.com",
+      sub: "12345",
+      email: "test@example.com",
+      email_verified: true,
+      exp: Math.floor(Date.now() / 1000) + 3600,
+    });
+    expect(result.valid).toBe(true);
+  });
+
+  test("accepts accounts.google.com issuer", () => {
+    process.env.GOOGLE_OAUTH_CLIENT_ID = "test-client-id";
+    const result = validateIdToken({
+      aud: "test-client-id",
+      iss: "accounts.google.com",
+      sub: "12345",
+      email_verified: true,
+      exp: Math.floor(Date.now() / 1000) + 3600,
+    });
+    expect(result.valid).toBe(true);
+  });
+
+  test("rejects wrong audience", () => {
+    process.env.GOOGLE_OAUTH_CLIENT_ID = "test-client-id";
+    const result = validateIdToken({
+      aud: "wrong-client-id",
+      iss: "https://accounts.google.com",
+      sub: "12345",
+      email_verified: true,
+      exp: Math.floor(Date.now() / 1000) + 3600,
+    });
+    expect(result.valid).toBe(false);
+    expect(result.reason).toBe("invalid_audience");
+  });
+
+  test("rejects wrong issuer", () => {
+    process.env.GOOGLE_OAUTH_CLIENT_ID = "test-client-id";
+    const result = validateIdToken({
+      aud: "test-client-id",
+      iss: "https://evil.com",
+      sub: "12345",
+      email_verified: true,
+      exp: Math.floor(Date.now() / 1000) + 3600,
+    });
+    expect(result.valid).toBe(false);
+    expect(result.reason).toBe("invalid_issuer");
+  });
+
+  test("rejects expired token", () => {
+    process.env.GOOGLE_OAUTH_CLIENT_ID = "test-client-id";
+    const result = validateIdToken({
+      aud: "test-client-id",
+      iss: "https://accounts.google.com",
+      sub: "12345",
+      email_verified: true,
+      exp: Math.floor(Date.now() / 1000) - 3600,
+    });
+    expect(result.valid).toBe(false);
+    expect(result.reason).toBe("token_expired");
+  });
+
+  test("rejects unverified email", () => {
+    process.env.GOOGLE_OAUTH_CLIENT_ID = "test-client-id";
+    const result = validateIdToken({
+      aud: "test-client-id",
+      iss: "https://accounts.google.com",
+      sub: "12345",
+      email_verified: false,
+      exp: Math.floor(Date.now() / 1000) + 3600,
+    });
+    expect(result.valid).toBe(false);
+    expect(result.reason).toBe("email_not_verified");
+  });
+
+  test("rejects missing subject", () => {
+    process.env.GOOGLE_OAUTH_CLIENT_ID = "test-client-id";
+    const result = validateIdToken({
+      aud: "test-client-id",
+      iss: "https://accounts.google.com",
+      email_verified: true,
+      exp: Math.floor(Date.now() / 1000) + 3600,
+    });
+    expect(result.valid).toBe(false);
+    expect(result.reason).toBe("missing_subject");
   });
 });

@@ -3,6 +3,7 @@ import { getAppOrigin } from "@/lib/approvals/tokens";
 import { GOOGLE_CALENDAR_SCOPES } from "./scopes";
 
 export const GOOGLE_OAUTH_COOKIE = "staffpass_google_oauth";
+export const GOOGLE_PKCE_COOKIE = "staffpass_google_pkce";
 const STATE_TTL_MS = 10 * 60 * 1000;
 
 /**
@@ -22,10 +23,15 @@ export function googleOAuthRedirectUrl(): string {
   return `${getAppOrigin()}/api/google/oauth/callback`;
 }
 
+/**
+ * Signing secret for OAuth state HMAC.
+ * Priority: GOOGLE_OAUTH_STATE_SECRET > GOOGLE_OAUTH_CLIENT_SECRET.
+ * Fail-closed: returns empty string if neither is set.
+ */
 function signingSecret(): string {
   return (
+    process.env.GOOGLE_OAUTH_STATE_SECRET?.trim() ||
     process.env.GOOGLE_OAUTH_CLIENT_SECRET?.trim() ||
-    process.env.NOTIFICATION_CONFIG_ENCRYPTION_KEY?.trim() ||
     ""
   );
 }
@@ -34,7 +40,6 @@ export type GoogleOAuthState = {
   orgId: string;
   employeeId: string;
   nonce: string;
-  codeVerifier?: string;
   exp: number;
 };
 
@@ -58,19 +63,18 @@ export async function generateCodeChallenge(verifier: string): Promise<string> {
 
 /**
  * Sign OAuth state with HMAC for tamper detection.
- * Includes org+employee binding, nonce, expiry, and optional PKCE verifier.
+ * Includes org+employee binding, nonce, and expiry.
+ * PKCE code verifier is stored separately in a httpOnly cookie (never in state).
  */
 export function signGoogleOAuthState(input: {
   orgId: string;
   employeeId: string;
   nonce: string;
-  codeVerifier?: string;
 }): string {
   const payload: GoogleOAuthState = {
     orgId: input.orgId,
     employeeId: input.employeeId,
     nonce: input.nonce,
-    codeVerifier: input.codeVerifier,
     exp: Date.now() + STATE_TTL_MS,
   };
   const encoded = Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
@@ -206,6 +210,40 @@ export interface GoogleIdTokenPayload {
   locale?: string;
   iat?: number;
   exp?: number;
+}
+
+/**
+ * Validate ID token claims for security.
+ * Checks aud, iss, exp, and email_verified.
+ */
+export function validateIdToken(payload: GoogleIdTokenPayload): {
+  valid: boolean;
+  reason?: string;
+} {
+  const clientId = process.env.GOOGLE_OAUTH_CLIENT_ID?.trim() || "";
+
+  if (!payload.aud || payload.aud !== clientId) {
+    return { valid: false, reason: "invalid_audience" };
+  }
+
+  const validIssuers = ["accounts.google.com", "https://accounts.google.com"];
+  if (!payload.iss || !validIssuers.includes(payload.iss)) {
+    return { valid: false, reason: "invalid_issuer" };
+  }
+
+  if (!payload.exp || payload.exp * 1000 < Date.now()) {
+    return { valid: false, reason: "token_expired" };
+  }
+
+  if (payload.email_verified !== true) {
+    return { valid: false, reason: "email_not_verified" };
+  }
+
+  if (!payload.sub) {
+    return { valid: false, reason: "missing_subject" };
+  }
+
+  return { valid: true };
 }
 
 /**

@@ -6,8 +6,10 @@ import { bindEmployeeGoogleIdentity } from "@/lib/data/google-identities";
 import { isGoogleCalendarReadEnabled } from "@/lib/feature-flags";
 import {
   GOOGLE_OAUTH_COOKIE,
+  GOOGLE_PKCE_COOKIE,
   decodeIdToken,
   exchangeGoogleCode,
+  validateIdToken,
   verifyGoogleOAuthState,
 } from "@/lib/google/oauth";
 import { validateGrantedScopes } from "@/lib/google/scopes";
@@ -38,7 +40,9 @@ export async function GET(req: Request) {
 
   const jar = await cookies();
   const nonce = jar.get(GOOGLE_OAUTH_COOKIE)?.value || "";
+  const codeVerifier = jar.get(GOOGLE_PKCE_COOKIE)?.value || "";
   jar.delete(GOOGLE_OAUTH_COOKIE);
+  jar.delete(GOOGLE_PKCE_COOKIE);
 
   const parsed = verifyGoogleOAuthState(state, nonce);
   if (!parsed) {
@@ -52,29 +56,23 @@ export async function GET(req: Request) {
     );
   }
 
-  if (!code) {
+  if (!code || !codeVerifier) {
     return redirectEmployee(parsed.employeeId, "error");
   }
 
   try {
-    const exchanged = await exchangeGoogleCode(code, parsed.codeVerifier);
+    const exchanged = await exchangeGoogleCode(code, codeVerifier);
 
     if (exchanged.error) {
-      console.error("google_oauth_exchange_error", exchanged.error, exchanged.error_description);
       return redirectEmployee(parsed.employeeId, "error");
     }
 
     if (!exchanged.access_token || !exchanged.refresh_token) {
-      console.error("google_oauth_missing_tokens", {
-        hasAccessToken: Boolean(exchanged.access_token),
-        hasRefreshToken: Boolean(exchanged.refresh_token),
-      });
       return redirectEmployee(parsed.employeeId, "error");
     }
 
     const scopeValidation = validateGrantedScopes(exchanged.scope || "");
     if (!scopeValidation.valid) {
-      console.error("google_oauth_scope_validation_failed", scopeValidation);
       await appendAuditEvent({
         orgId: parsed.orgId,
         employeeId: parsed.employeeId,
@@ -91,20 +89,31 @@ export async function GET(req: Request) {
     }
 
     if (!exchanged.id_token) {
-      console.error("google_oauth_missing_id_token");
       return redirectEmployee(parsed.employeeId, "error");
     }
 
     const idTokenPayload = decodeIdToken(exchanged.id_token);
-    if (!idTokenPayload?.sub) {
-      console.error("google_oauth_invalid_id_token");
+    if (!idTokenPayload) {
+      return redirectEmployee(parsed.employeeId, "error");
+    }
+
+    const idTokenValidation = validateIdToken(idTokenPayload);
+    if (!idTokenValidation.valid) {
+      await appendAuditEvent({
+        orgId: parsed.orgId,
+        employeeId: parsed.employeeId,
+        action: "google.identity_connected",
+        purpose: "google.oauth.callback",
+        summary: `Google OAuth ID token validation failed: ${idTokenValidation.reason}`,
+        metadata: { reason: idTokenValidation.reason },
+      });
       return redirectEmployee(parsed.employeeId, "error");
     }
 
     await bindEmployeeGoogleIdentity({
       employeeId: parsed.employeeId,
       orgId: parsed.orgId,
-      googleSub: idTokenPayload.sub,
+      googleSub: idTokenPayload.sub!,
       googleEmail: idTokenPayload.email || "",
       grantedScopes: exchanged.scope || "",
       refreshToken: exchanged.refresh_token,
@@ -123,9 +132,7 @@ export async function GET(req: Request) {
     });
 
     return redirectEmployee(parsed.employeeId, "ok");
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "";
-    console.error("google_oauth_callback_error", message);
+  } catch {
     return redirectEmployee(parsed.employeeId, "error");
   }
 }

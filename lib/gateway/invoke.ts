@@ -103,6 +103,16 @@ import {
   detectSecretInPayload,
   buildSecretDetectionErrorResponse,
 } from "@/lib/security/secret-detector";
+import { isGoogleCalendarReadEnabled } from "@/lib/feature-flags";
+import { readCalendarFreebusy } from "@/lib/google/calendar-read";
+import {
+  addCalendarReadGrant,
+  revokeCalendarReadGrant,
+} from "@/lib/data/google-identities";
+import {
+  applySchedulingPolicyToPropose,
+  type ProposeInput,
+} from "@/lib/scheduling-policy/propose";
 
 export type GatewayInvokeResult = {
   httpStatus: number;
@@ -1726,6 +1736,198 @@ export async function runGatewayInvoke(
         dualEgress,
       },
     });
+  }
+
+  // calendar.read: query Google freebusy behind flag
+  if (tool === "calendar.read") {
+    const args = (body.args || {}) as Record<string, unknown>;
+    const calendarIds = Array.isArray(args.calendarIds)
+      ? (args.calendarIds as string[])
+      : typeof args.calendarIds === "string"
+        ? [args.calendarIds]
+        : [];
+    const timeMin = typeof args.timeMin === "string" ? args.timeMin : "";
+    const timeMax = typeof args.timeMax === "string" ? args.timeMax : "";
+
+    if (!isGoogleCalendarReadEnabled()) {
+      return jsonResult({
+        ok: true,
+        tool,
+        employeeId,
+        purpose,
+        jobId,
+        flagOff: true,
+        busyByCalendar: {},
+        refused: calendarIds,
+        queried: [],
+        message: "Google Calendar integration is disabled (flag OFF)",
+      });
+    }
+
+    const readResult = await readCalendarFreebusy({
+      orgId: orgId || employee.orgId,
+      employeeId,
+      jobId,
+      calendarIds,
+      timeMin,
+      timeMax,
+    });
+
+    return jsonResult({
+      ok: readResult.ok,
+      tool,
+      employeeId,
+      purpose,
+      jobId,
+      busyByCalendar: readResult.busyByCalendar,
+      errors: readResult.errors,
+      refused: readResult.refused,
+      queried: readResult.queried,
+    });
+  }
+
+  // calendar.propose: fetch busy via calendar.read (if flag ON), run propose logic
+  if (tool === "calendar.propose") {
+    const args = (body.args || {}) as Record<string, unknown>;
+    const slots = Array.isArray(args.slots) ? args.slots : [];
+    const calendarIds = Array.isArray(args.calendarIds)
+      ? (args.calendarIds as string[])
+      : [];
+    const timeMin = typeof args.timeMin === "string" ? args.timeMin : "";
+    const timeMax = typeof args.timeMax === "string" ? args.timeMax : "";
+    const requestedVideoTool = typeof args.videoTool === "string" ? args.videoTool : undefined;
+    let busyByCalendar = (args.busyByCalendar || {}) as Record<string, Array<{ start: string; end: string }>>;
+
+    if (isGoogleCalendarReadEnabled() && calendarIds.length > 0 && timeMin && timeMax) {
+      const readResult = await readCalendarFreebusy({
+        orgId: orgId || employee.orgId,
+        employeeId,
+        jobId,
+        calendarIds,
+        timeMin,
+        timeMax,
+      });
+      if (readResult.ok) {
+        busyByCalendar = { ...busyByCalendar, ...readResult.busyByCalendar };
+      }
+    }
+
+    const proposeInput: ProposeInput = {
+      slots: slots.map((s: unknown) => {
+        const slot = s as { start?: string; end?: string; id?: string };
+        return { start: slot.start || "", end: slot.end || "", id: slot.id };
+      }),
+      context: {
+        orgId: orgId || employee.orgId,
+        employeeId,
+        jobId,
+      },
+      requestedVideoTool,
+      busyByCalendar,
+    };
+
+    const proposeResult = await applySchedulingPolicyToPropose(proposeInput);
+
+    return jsonResult({
+      ok: true,
+      tool,
+      employeeId,
+      purpose,
+      jobId,
+      proposed: true,
+      slots: proposeResult.finalCandidates,
+      policyApplied: proposeResult.policyApplied,
+      policyId: proposeResult.policyId,
+      policyName: proposeResult.policyName,
+      droppedCount: proposeResult.droppedCount,
+      keptCount: proposeResult.keptCount,
+      onlineSettings: proposeResult.onlineSettings,
+      busyByCalendarUsed: Object.keys(busyByCalendar).length > 0,
+    });
+  }
+
+  // calendar.allowlist.patch: fulfillment after approval
+  if (tool === "calendar.allowlist.patch") {
+    if (!priorApprovalOk) {
+      return jsonResult({
+        ok: false,
+        code: "approval_required",
+        error: "approval_required",
+        message: "calendar.allowlist.patch requires prior human approval",
+        needs_approval: true,
+        employeeId,
+        tool,
+        purpose,
+        jobId,
+      }, 402);
+    }
+
+    const args = (body.args || {}) as Record<string, unknown>;
+    const action = typeof args.action === "string" ? args.action : "add";
+    const calendarId = typeof args.calendarId === "string" ? args.calendarId : "";
+    const grantId = typeof args.grantId === "string" ? args.grantId : "";
+    const label = typeof args.label === "string" ? args.label : "";
+    const targetEmployeeId = typeof args.employeeId === "string" ? args.employeeId : null;
+
+    if (action === "add" && calendarId) {
+      const grant = await addCalendarReadGrant({
+        orgId: orgId || employee.orgId,
+        employeeId: targetEmployeeId,
+        calendarId,
+        label,
+        approvalId: priorApprovalId,
+      });
+      await appendAuditEvent({
+        orgId: orgId || employee.orgId,
+        employeeId,
+        action: "calendar.allowlist_patch",
+        purpose,
+        summary: `Calendar allowlist grant added: ${calendarId}`,
+        metadata: { grantId: grant.id, calendarId, targetEmployeeId, approvalId: priorApprovalId, jobId },
+      });
+      return jsonResult({
+        ok: true,
+        tool,
+        employeeId,
+        purpose,
+        jobId,
+        action: "add",
+        grant,
+      });
+    } else if (action === "revoke" && grantId) {
+      await revokeCalendarReadGrant({
+        grantId,
+        orgId: orgId || employee.orgId,
+      });
+      await appendAuditEvent({
+        orgId: orgId || employee.orgId,
+        employeeId,
+        action: "calendar.allowlist_patch",
+        purpose,
+        summary: `Calendar allowlist grant revoked: ${grantId}`,
+        metadata: { grantId, approvalId: priorApprovalId, jobId },
+      });
+      return jsonResult({
+        ok: true,
+        tool,
+        employeeId,
+        purpose,
+        jobId,
+        action: "revoke",
+        grantId,
+      });
+    }
+
+    return jsonResult({
+      ok: false,
+      code: "invalid_action",
+      error: "invalid_action",
+      message: "action must be 'add' or 'revoke' with appropriate arguments",
+      employeeId,
+      tool,
+      purpose,
+      jobId,
+    }, 400);
   }
 
   return jsonResult({

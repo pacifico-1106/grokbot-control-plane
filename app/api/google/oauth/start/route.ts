@@ -6,6 +6,7 @@ import { getEmployee } from "@/lib/data";
 import { isGoogleCalendarReadEnabled } from "@/lib/feature-flags";
 import {
   GOOGLE_OAUTH_COOKIE,
+  GOOGLE_PKCE_COOKIE,
   generateCodeChallenge,
   generateCodeVerifier,
   googleAuthorizeUrl,
@@ -53,17 +54,19 @@ export async function GET(req: Request) {
       orgId: gate.orgId,
       employeeId,
       nonce,
-      codeVerifier,
     });
 
     const jar = await cookies();
-    jar.set(GOOGLE_OAUTH_COOKIE, nonce, {
+    const cookieOptions = {
       httpOnly: true,
-      sameSite: "lax",
+      sameSite: "lax" as const,
       path: "/",
       maxAge: 600,
       secure: process.env.NODE_ENV === "production",
-    });
+    };
+
+    jar.set(GOOGLE_OAUTH_COOKIE, nonce, cookieOptions);
+    jar.set(GOOGLE_PKCE_COOKIE, codeVerifier, cookieOptions);
 
     return NextResponse.redirect(googleAuthorizeUrl(state, codeChallenge));
   } catch {

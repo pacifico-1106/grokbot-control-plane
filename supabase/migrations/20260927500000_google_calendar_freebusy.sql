@@ -91,26 +91,27 @@ alter table employee_google_identities enable row level security;
 alter table employee_google_identity_secrets enable row level security;
 alter table calendar_read_grants enable row level security;
 
--- Google identities: members can view, admins can write
+-- Google identities: members can SELECT only. Writes via service_role (OAuth callback).
 drop policy if exists google_identities_select on employee_google_identities;
 drop policy if exists google_identities_write_admin on employee_google_identities;
 create policy google_identities_select on employee_google_identities
   for select using (public.is_org_member(org_id));
-create policy google_identities_write_admin on employee_google_identities
-  for all using (public.is_org_admin(org_id))
-  with check (public.is_org_admin(org_id));
+-- No write policy for browser — only service_role bypasses RLS for writes.
 
--- Google identity secrets: service_role only (no browser access)
+-- Google identity secrets: service_role only (no browser access at all)
 -- No RLS policies for anon/authenticated — only service_role bypasses RLS
+revoke all on employee_google_identity_secrets from anon, authenticated;
 
--- Calendar read grants: members can view, admins can write
+-- Calendar read grants: members can SELECT only. Writes via service_role (approved allowlist.patch).
 drop policy if exists calendar_read_grants_select on calendar_read_grants;
 drop policy if exists calendar_read_grants_write_admin on calendar_read_grants;
 create policy calendar_read_grants_select on calendar_read_grants
   for select using (public.is_org_member(org_id));
-create policy calendar_read_grants_write_admin on calendar_read_grants
-  for all using (public.is_org_admin(org_id))
-  with check (public.is_org_admin(org_id));
+-- No write policy for browser — only service_role bypasses RLS for writes.
+
+-- Revoke insert/update/delete from browser roles (they can only SELECT via policy above)
+revoke insert, update, delete on employee_google_identities from anon, authenticated;
+revoke insert, update, delete on calendar_read_grants from anon, authenticated;
 
 -- ---------------------------------------------------------------------------
 -- Audit log for calendar reads (append-only, no secrets)
