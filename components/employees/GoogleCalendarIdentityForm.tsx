@@ -6,9 +6,11 @@ import type { EmployeeGoogleIdentity } from "@/lib/data/google-identities";
 
 const GOOGLE_QUERY_MESSAGES: Record<string, string> = {
   ok: "Google Calendar を連携しました",
-  denied:
-    "連携がキャンセルされました。接続する Google アカウントの Workspace でサードパーティアプリがブロックされている可能性があります。" +
-    "アカウントを別の Workspace に移すか、管理者に Staffpass の許可を依頼してください（Admin console → Security → API controls → App access control）。",
+  denied: "連携がキャンセルされました",
+  admin_blocked:
+    "Workspace のサードパーティアプリ制限によりブロックされました。" +
+    "アカウントをオペレータが管理する Workspace または Staffpass を許可済みの Workspace に移すか、" +
+    "管理者に Staffpass クライアントの許可を依頼してください（Admin console → Security → API controls → App access control）。",
   error: "Google Calendar 連携に失敗しました",
   scope_error: "許可されていないスコープが含まれています",
 };

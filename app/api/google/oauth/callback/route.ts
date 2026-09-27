@@ -51,9 +51,11 @@ export async function GET(req: Request) {
 
   if (oauthError) {
     const errorParam =
-      oauthError === "access_denied" || oauthError === "admin_policy_enforced"
-        ? "denied"
-        : "error";
+      oauthError === "admin_policy_enforced"
+        ? "admin_blocked"
+        : oauthError === "access_denied"
+          ? "denied"
+          : "error";
     return redirectEmployee(parsed.employeeId, errorParam);
   }
 

@@ -1769,26 +1769,7 @@ export async function runGatewayInvoke(
     });
   }
 
-  // calendar.read: query Google freebusy (only when flag ON; flag OFF returns hint)
-  if (tool === "calendar.read" && !isGoogleCalendarReadEnabled()) {
-    return jsonResult({
-      ok: true,
-      tool,
-      employeeId,
-      purpose,
-      jobId,
-      busyByCalendar: {},
-      errors: {},
-      refused: [],
-      queried: [],
-      busyDataComplete: false,
-      nextStepJa:
-        "Google Calendar 連携は現在無効です（フラグ OFF）。" +
-        "接続するアカウントは、AI 社員専用の Google アカウントで、" +
-        "オペレータが管理する Workspace または Staffpass を許可済みの Workspace に所属している必要があります。" +
-        "相手方は Staffpass に接続せず、カレンダーを AI 社員アカウントに共有（空き時間のみで OK）してください。",
-    });
-  }
+  // calendar.read: query Google freebusy (only when flag ON; flag OFF falls through to generic path)
   if (isGoogleCalendarReadEnabled() && tool === "calendar.read") {
     const args = (body.args || {}) as Record<string, unknown>;
     const calendarIds = Array.isArray(args.calendarIds)
@@ -1824,24 +1805,7 @@ export async function runGatewayInvoke(
     });
   }
 
-  // calendar.propose: fetches busy and applies policy (only when flag ON; flag OFF returns hint)
-  if (tool === "calendar.propose" && !isGoogleCalendarReadEnabled()) {
-    return jsonResult({
-      ok: true,
-      tool,
-      employeeId,
-      purpose,
-      jobId,
-      proposed: false,
-      slots: [],
-      busyDataComplete: false,
-      nextStepJa:
-        "Google Calendar 連携は現在無効です（フラグ OFF）。" +
-        "接続するアカウントは、AI 社員専用の Google アカウントで、" +
-        "オペレータが管理する Workspace または Staffpass を許可済みの Workspace に所属している必要があります。" +
-        "相手方は Staffpass に接続せず、カレンダーを AI 社員アカウントに共有（空き時間のみで OK）してください。",
-    });
-  }
+  // calendar.propose: fetches busy and applies policy (only when flag ON; flag OFF falls through to generic path)
   if (isGoogleCalendarReadEnabled() && tool === "calendar.propose") {
     const args = (body.args || {}) as Record<string, unknown>;
     const slots = Array.isArray(args.slots) ? args.slots : [];
