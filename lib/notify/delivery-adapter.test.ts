@@ -8,8 +8,8 @@
  * - Admin-class never routes to business voters
  */
 
-import { describe, test, expect, beforeEach, mock, spyOn } from "bun:test";
-import type { ApprovalRequest, Employee } from "@/lib/types";
+import { describe, test, expect, beforeEach, mock } from "bun:test";
+import type { ApprovalRequest, Employee, NotificationProvider } from "@/lib/types";
 import type { NotificationChannelRuntime } from "@/lib/data/notification-channels";
 
 mock.module("@/lib/mode", () => ({
@@ -20,29 +20,38 @@ mock.module("@/lib/mode", () => ({
   runtimeModeLabel: () => "demo",
 }));
 
-const mockFetch = mock(() =>
-  Promise.resolve({
-    ok: true,
-    json: () => Promise.resolve({ ok: true }),
-  } as Response)
-);
-global.fetch = mockFetch as unknown as typeof fetch;
+let mockChannels: NotificationChannelRuntime[] = [];
 
 mock.module("@/lib/data/notification-channels", () => ({
-  getEnabledNotificationChannels: mock(() => Promise.resolve([])),
-  getNotificationChannelSecretsById: mock(() => Promise.resolve(null)),
-  resolveEmployeeApprovalChannel: mock(() => Promise.resolve(null)),
+  getEnabledNotificationChannels: async (orgId: string) =>
+    mockChannels.filter((c) => c.orgId === orgId),
+  getNotificationChannelSecretsById: async () => null,
+  resolveEmployeeApprovalChannel: async (orgId: string) =>
+    mockChannels.find((c) => c.orgId === orgId && c.isDefault) ?? null,
 }));
 
 mock.module("@/lib/approval-workflow/voter-binding", () => ({
-  listVoterBindings: mock(() => Promise.resolve([])),
+  listVoterBindings: async () => [],
 }));
 
 mock.module("@/lib/notify/slack", () => ({
-  sendApprovalToSlackChannel: mock(() => Promise.resolve({ ok: true })),
-  editSlackApprovalForChannel: mock(() => Promise.resolve({ ok: true })),
-  editSlackWorkflowProgress: mock(() => Promise.resolve({ ok: true })),
+  sendApprovalToSlackChannel: async () => ({ ok: true }),
+  editSlackApprovalForChannel: async () => ({ ok: true }),
+  editSlackWorkflowProgress: async () => ({ ok: true }),
 }));
+
+let mockFetchResponse: {
+  ok: boolean;
+  channel?: { id?: string; is_ext_shared?: boolean; is_shared?: boolean; is_pending_ext_shared?: boolean };
+  error?: string;
+} = { ok: true, channel: { id: "C12345" } };
+
+const originalFetch = global.fetch;
+global.fetch = async () =>
+  ({
+    ok: true,
+    json: async () => mockFetchResponse,
+  }) as Response;
 
 import {
   isRecipientRoutingEnabled,
@@ -55,55 +64,64 @@ import {
   hasDeliveryAdapter,
   type DeliveryRecipient,
 } from "./delivery-adapter";
-import { isAdminClassApproval } from "@/lib/admin-mcp/audit-class";
-import * as notificationChannels from "@/lib/data/notification-channels";
-import * as voterBinding from "@/lib/approval-workflow/voter-binding";
 
 const createMockApproval = (overrides: Partial<ApprovalRequest> = {}): ApprovalRequest => ({
   id: "approval-1",
   orgId: "org-1",
+  employeeId: "emp-1",
+  credentialId: "cred-1",
   title: "Test Request",
   summary: "Test summary",
   risk: "medium",
   status: "pending",
   purpose: "test",
-  employeeId: "emp-1",
-  channelId: "channel-1",
-  externalMessageId: null,
-  context: {},
-  createdAt: new Date(),
-  updatedAt: new Date(),
+  revisionNote: null,
+  revisionCount: 0,
+  parentApprovalId: null,
+  telegramRef: null,
+  telegramMessageId: null,
+  metadata: {},
+  statusToken: "token-1",
+  pollPath: "/api/approvals/status",
+  createdAt: new Date().toISOString(),
+  resolvedAt: null,
+  resolvedBy: null,
   ...overrides,
 });
 
 const createMockEmployee = (overrides: Partial<Employee> = {}): Employee => ({
   id: "emp-1",
   orgId: "org-1",
-  name: "Test Employee",
-  slackId: "U12345",
-  email: "test@example.com",
-  jobTitle: "Engineer",
-  onLeave: false,
-  createdAt: new Date(),
-  updatedAt: new Date(),
+  displayName: "Test Employee",
+  roleLabel: "Engineer",
+  jobDescription: "Test job",
+  status: "active",
+  scopes: [],
+  allowedPurposes: [],
+  approvalPolicy: "always_human",
+  sodLevel: "ok",
+  actionLimits: {},
+  voice: { template: "polite", register: "polite", endings: "desumasu", forbidden: [], signOff: null, externalFloor: "polite" },
+  projectAccess: { mode: "company", projectIds: [] },
+  credentialId: null,
+  createdAt: new Date().toISOString(),
   ...overrides,
 });
 
-const createMockChannel = (overrides: Partial<NotificationChannelRuntime> = {}): NotificationChannelRuntime => ({
-  id: "channel-1",
-  orgId: "org-1",
-  provider: "slack",
-  name: "Test Channel",
-  enabled: true,
-  isDefault: true,
-  config: { channelId: "C12345" },
-  secrets: { botToken: "xoxb-test-token", signingSecret: "test-secret" },
-  ...overrides,
-} as NotificationChannelRuntime);
+const createMockChannel = (overrides: Partial<NotificationChannelRuntime> = {}): NotificationChannelRuntime =>
+  ({
+    id: "channel-1",
+    orgId: "org-1",
+    provider: "slack",
+    name: "Test Channel",
+    enabled: true,
+    isDefault: true,
+    config: { channelId: "C12345" },
+    secrets: { botToken: "xoxb-test-token", signingSecret: "test-secret" },
+    ...overrides,
+  }) as NotificationChannelRuntime;
 
 describe("isRecipientRoutingEnabled", () => {
-  const originalEnv = process.env.APPROVAL_RECIPIENT_ROUTING;
-
   beforeEach(() => {
     delete process.env.APPROVAL_RECIPIENT_ROUTING;
   });
@@ -139,11 +157,10 @@ describe("isRecipientRoutingEnabled", () => {
 });
 
 describe("routeApprovalToRecipients", () => {
-  const originalEnv = process.env.APPROVAL_RECIPIENT_ROUTING;
-
   beforeEach(() => {
     delete process.env.APPROVAL_RECIPIENT_ROUTING;
-    mockFetch.mockClear();
+    mockChannels = [];
+    mockFetchResponse = { ok: true, channel: { id: "C12345" } };
   });
 
   test("falls back to default when feature flag is OFF", async () => {
@@ -163,8 +180,8 @@ describe("routeApprovalToRecipients", () => {
     process.env.APPROVAL_RECIPIENT_ROUTING = "true";
 
     const adminApproval = createMockApproval({
-      context: { class: "admin" },
-      purpose: "staffpass_admin_workflow",
+      metadata: { approvalClass: "admin" },
+      purpose: "admin.hire",
     });
     const employee = createMockEmployee();
 
@@ -183,8 +200,6 @@ describe("routeApprovalToRecipients", () => {
     const approval = createMockApproval();
     const employee = createMockEmployee();
 
-    spyOn(notificationChannels, "resolveEmployeeApprovalChannel").mockResolvedValue(null);
-
     const result = await routeApprovalToRecipients({
       approval,
       employee,
@@ -198,8 +213,8 @@ describe("routeApprovalToRecipients", () => {
 describe("validateDeliveryRecipient", () => {
   test("admin-class must use channel delivery", () => {
     const adminApproval = createMockApproval({
-      context: { class: "admin" },
-      purpose: "staffpass_admin_workflow",
+      metadata: { approvalClass: "admin" },
+      purpose: "admin.hire",
     });
 
     const dmRecipient: DeliveryRecipient = {
@@ -216,8 +231,8 @@ describe("validateDeliveryRecipient", () => {
 
   test("admin-class can use channel delivery", () => {
     const adminApproval = createMockApproval({
-      context: { class: "admin" },
-      purpose: "staffpass_admin_workflow",
+      metadata: { approvalClass: "admin" },
+      purpose: "admin.hire",
     });
 
     const channelRecipient: DeliveryRecipient = {
@@ -261,12 +276,13 @@ describe("validateDeliveryRecipient", () => {
 
 describe("checkSharedChannelDeliveryAllowed", () => {
   beforeEach(() => {
-    mockFetch.mockClear();
+    mockChannels = [];
+    mockFetchResponse = { ok: true, channel: { id: "C12345" } };
   });
 
   test("returns not allowed when no adapter available", async () => {
     const result = await checkSharedChannelDeliveryAllowed(
-      "unknown_provider" as any,
+      "unknown_provider" as NotificationProvider,
       "channel-1",
       "org-1"
     );
@@ -284,33 +300,25 @@ describe("hasDeliveryAdapter", () => {
   });
 
   test("returns false for unknown providers", () => {
-    expect(hasDeliveryAdapter("unknown" as any)).toBe(false);
+    expect(hasDeliveryAdapter("unknown" as NotificationProvider)).toBe(false);
   });
 });
 
 describe("SlackDeliveryAdapter - shared channel blocking", () => {
   beforeEach(() => {
-    mockFetch.mockClear();
+    mockChannels = [createMockChannel()];
+    mockFetchResponse = { ok: true, channel: { id: "C12345" } };
   });
 
   test("isSharedChannel returns shared=true for Slack Connect channel", async () => {
-    mockFetch.mockImplementation(() =>
-      Promise.resolve({
-        ok: true,
-        json: () =>
-          Promise.resolve({
-            ok: true,
-            channel: {
-              id: "C12345",
-              is_ext_shared: true,
-              is_shared: false,
-            },
-          }),
-      } as Response)
-    );
-
-    const mockChannel = createMockChannel();
-    spyOn(notificationChannels, "getEnabledNotificationChannels").mockResolvedValue([mockChannel]);
+    mockFetchResponse = {
+      ok: true,
+      channel: {
+        id: "C12345",
+        is_ext_shared: true,
+        is_shared: false,
+      },
+    };
 
     const adapter = await createDeliveryAdapter("slack", "channel-1", "org-1");
     expect(adapter).not.toBeNull();
@@ -321,23 +329,14 @@ describe("SlackDeliveryAdapter - shared channel blocking", () => {
   });
 
   test("isSharedChannel returns shared=true for externally shared channel", async () => {
-    mockFetch.mockImplementation(() =>
-      Promise.resolve({
-        ok: true,
-        json: () =>
-          Promise.resolve({
-            ok: true,
-            channel: {
-              id: "C12345",
-              is_ext_shared: false,
-              is_shared: true,
-            },
-          }),
-      } as Response)
-    );
-
-    const mockChannel = createMockChannel();
-    spyOn(notificationChannels, "getEnabledNotificationChannels").mockResolvedValue([mockChannel]);
+    mockFetchResponse = {
+      ok: true,
+      channel: {
+        id: "C12345",
+        is_ext_shared: false,
+        is_shared: true,
+      },
+    };
 
     const adapter = await createDeliveryAdapter("slack", "channel-1", "org-1");
     expect(adapter).not.toBeNull();
@@ -348,24 +347,15 @@ describe("SlackDeliveryAdapter - shared channel blocking", () => {
   });
 
   test("isSharedChannel returns shared=false for private channel", async () => {
-    mockFetch.mockImplementation(() =>
-      Promise.resolve({
-        ok: true,
-        json: () =>
-          Promise.resolve({
-            ok: true,
-            channel: {
-              id: "C12345",
-              is_ext_shared: false,
-              is_shared: false,
-              is_pending_ext_shared: false,
-            },
-          }),
-      } as Response)
-    );
-
-    const mockChannel = createMockChannel();
-    spyOn(notificationChannels, "getEnabledNotificationChannels").mockResolvedValue([mockChannel]);
+    mockFetchResponse = {
+      ok: true,
+      channel: {
+        id: "C12345",
+        is_ext_shared: false,
+        is_shared: false,
+        is_pending_ext_shared: false,
+      },
+    };
 
     const adapter = await createDeliveryAdapter("slack", "channel-1", "org-1");
     expect(adapter).not.toBeNull();
@@ -373,23 +363,37 @@ describe("SlackDeliveryAdapter - shared channel blocking", () => {
     const result = await adapter!.isSharedChannel();
     expect(result.shared).toBe(false);
   });
+
+  test("sendCard blocks delivery to shared channel", async () => {
+    mockFetchResponse = {
+      ok: true,
+      channel: {
+        id: "C12345",
+        is_ext_shared: true,
+      },
+    };
+
+    const adapter = await createDeliveryAdapter("slack", "channel-1", "org-1");
+    expect(adapter).not.toBeNull();
+
+    const result = await adapter!.sendCard({
+      approval: createMockApproval(),
+      employee: null,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe("shared_channel_blocked");
+    expect(result.skipped).toBe(true);
+  });
 });
 
 describe("Cross-org delivery isolation", () => {
-  test("adapter only loads channels for its own org", async () => {
-    const mockChannel = createMockChannel({ orgId: "org-1" });
-    const getChannelsSpy = spyOn(notificationChannels, "getEnabledNotificationChannels").mockResolvedValue([mockChannel]);
-
-    const adapter = await createDeliveryAdapter("slack", "channel-1", "org-1");
-
-    expect(getChannelsSpy).toHaveBeenCalledWith("org-1");
-    expect(adapter).not.toBeNull();
+  beforeEach(() => {
+    mockChannels = [createMockChannel({ orgId: "org-1", id: "channel-1" })];
+    mockFetchResponse = { ok: true, channel: { id: "C12345" } };
   });
 
   test("adapter cannot access channels from different org", async () => {
-    const mockChannel = createMockChannel({ orgId: "org-1", id: "channel-1" });
-    spyOn(notificationChannels, "getEnabledNotificationChannels").mockResolvedValue([mockChannel]);
-
     const adapter = await createDeliveryAdapter("slack", "channel-1", "org-2");
     expect(adapter).not.toBeNull();
 
@@ -401,6 +405,25 @@ describe("Cross-org delivery isolation", () => {
     expect(result.ok).toBe(false);
     expect(result.error).toBe("channel_not_found");
     expect(result.skipped).toBe(true);
+  });
+
+  test("adapter loads only channels for its own org", async () => {
+    mockChannels = [
+      createMockChannel({ orgId: "org-1", id: "channel-1" }),
+      createMockChannel({ orgId: "org-2", id: "channel-2" }),
+    ];
+
+    const adapter = await createDeliveryAdapter("slack", "channel-1", "org-1");
+    expect(adapter).not.toBeNull();
+
+    mockFetchResponse = { ok: true, channel: { id: "C12345", is_ext_shared: false, is_shared: false } };
+
+    const result = await adapter!.sendCard({
+      approval: createMockApproval({ orgId: "org-1" }),
+      employee: null,
+    });
+
+    expect(result.ok).toBe(true);
   });
 });
 
