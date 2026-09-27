@@ -103,8 +103,10 @@ import {
   revokeVoterBinding,
   listVoterBindings,
   checkSetupApproverBindingStatus,
+  isTelegramGlobalChannelKey,
   type VoterBindingProvider,
 } from "@/lib/approval-workflow/voter-binding";
+import { getOrgOwnerIds } from "@/lib/data/members";
 
 export const ADMIN_MCP_TOOLS: McpToolDef[] = [
   {
@@ -908,13 +910,13 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
   {
     name: "approvalWorkflow.bindVoter",
     description:
-      "Bind an external identity (Slack/Telegram/LINE) to an org member for approval workflow voting (always_human, approvalClass admin). Identity verification required: Slack user receives a DM with a confirmation button. Binding is pending until verified. Cross-org invariant: member must belong to the same org as the channel. External team users (Slack Connect) rejected. Expiring bindings (default 180 days). No auto-matching by name/email guesses.",
+      "Bind an external identity (Slack/Telegram/LINE) to an org member for approval workflow voting (always_human, approvalClass admin). Identity verification required: Slack/Telegram user receives a DM with a confirmation button. Binding is pending until verified. Cross-org invariant: member must belong to the same org as the channel. External team users (Slack Connect) rejected. Expiring bindings (default 180 days). No auto-matching by name/email guesses. Special: for Telegram global route (channelKey='telegram:global'), only org owners can be bound.",
     inputSchema: {
       type: "object",
       properties: {
         memberId: { type: "string", description: "Target org_members.id to bind (must be same org)" },
         provider: { type: "string", enum: ["slack", "telegram", "line"], description: "External identity provider" },
-        channelKey: { type: "string", description: "Notification channel UUID (org_notification_channels.id)" },
+        channelKey: { type: "string", description: "Notification channel UUID (org_notification_channels.id), or 'telegram:global' for Telegram global route (org owner only)" },
         externalUserId: { type: "string", description: "External user ID (Slack user ID, Telegram user ID, LINE user ID)" },
         expiresInDays: { type: "number", description: "Binding expiry in days (default 180)" },
         jobId: { type: "string" },
@@ -2368,13 +2370,27 @@ export async function callAdminMcpTool(
       );
     }
 
-    const channels = await listNotificationChannels(cred.orgId);
-    const channel = channels.find((c) => c.id === channelKey && c.provider === provider);
-    if (!channel) {
-      return toolResult(
-        { ok: false, code: "channel_not_found", message: "指定された通知チャンネルが見つかりません" },
-        true
-      );
+    if (provider === "telegram" && isTelegramGlobalChannelKey(channelKey)) {
+      const orgOwnerIds = await getOrgOwnerIds(cred.orgId);
+      if (!orgOwnerIds.includes(memberId)) {
+        return toolResult(
+          {
+            ok: false,
+            code: "telegram_global_owner_only",
+            message: "telegram:global へのバインディングは組織オーナーのみ許可されています",
+          },
+          true
+        );
+      }
+    } else {
+      const channels = await listNotificationChannels(cred.orgId);
+      const channel = channels.find((c) => c.id === channelKey && c.provider === provider);
+      if (!channel) {
+        return toolResult(
+          { ok: false, code: "channel_not_found", message: "指定された通知チャンネルが見つかりません" },
+          true
+        );
+      }
     }
   }
 
