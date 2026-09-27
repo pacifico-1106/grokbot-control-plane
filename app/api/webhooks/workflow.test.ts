@@ -44,7 +44,7 @@ async function ticket() {
     purpose:"fixture",summary:"Fixture",risk:"low",tool:"comm.reply",jobId:crypto.randomUUID()})).approval;
 }
 function bind(channel:NotificationChannel,userId:string,memberId:string) {
-  setDemoWorkflowVoterBinding({orgId:DEMO_ORG.id,provider:channel.provider,channelKey:channel.id,userId,memberId});
+  setDemoWorkflowVoterBinding({orgId:DEMO_ORG.id,provider:channel.provider,channelKey:channel.id,userId,memberId,verifiedAt:new Date().toISOString()});
 }
 async function slackVote(c:NotificationChannel,a:ApprovalRequest,userId:string,validSignature=true) {
   const raw=JSON.stringify({type:"block_actions",user:{id:userId},channel:{id:"C_FIXTURE"},message:{ts:"123.45"},
@@ -98,7 +98,7 @@ test("global Telegram fallback also requires an explicit voter binding and canno
   const values=["fixture-token","-10077","fixture-secret","77"];
   keys.forEach((k,i)=>{process.env[k]=values[i];});
   try {
-    setDemoWorkflowVoterBinding({orgId:DEMO_ORG.id,provider:"telegram",channelKey:"telegram:global",userId:"77",memberId:"v1"});
+    setDemoWorkflowVoterBinding({orgId:DEMO_ORG.id,provider:"telegram",channelKey:"telegram:global",userId:"77",memberId:"v1",verifiedAt:new Date().toISOString()});
     const request=()=>new Request("https://fixture.invalid/webhook",{method:"POST",headers:{"x-telegram-bot-api-secret-token":"fixture-secret"},
       body:JSON.stringify({callback_query:{id:"fixture-global",data:`a:${a.telegramRef}`,from:{id:77},message:{message_id:77,chat:{id:-10077}}}})});
     await globalTelegram(request());await globalTelegram(request());
