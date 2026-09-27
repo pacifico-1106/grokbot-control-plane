@@ -41,3 +41,24 @@ export function isAdminApproverPolicyRequired(): boolean {
 export function isSlackApprovalStrict(): boolean {
   return parseFlag(process.env.SLACK_APPROVAL_STRICT);
 }
+
+/**
+ * Google Calendar free/busy read integration.
+ *
+ * When ON:
+ * - OAuth start/callback routes are enabled for Google Calendar.
+ * - calendar.read tool queries Google freebusy.query API for allowlisted calendars.
+ * - calendar.propose integrates busy intervals from Google.
+ * - Connect Google Calendar step shown in employee setup flow.
+ *
+ * When OFF (default):
+ * - Google OAuth routes return 404/disabled.
+ * - calendar.read/propose behave as today (stubs or agent-supplied data only).
+ * - No changes to production behavior.
+ *
+ * Rollout: full security audit required before enabling in production.
+ * Scopes: openid email calendar.freebusy (read-only, minimal).
+ */
+export function isGoogleCalendarReadEnabled(): boolean {
+  return parseFlag(process.env.GOOGLE_CALENDAR_READ_ENABLED);
+}
