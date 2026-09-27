@@ -22,6 +22,7 @@ import {
   runtimeModeLabel,
   incrementActionCounter,
   getOrgSodWarnPolicy,
+  updateApprovalMetadata,
 } from "@/lib/data";
 import { getOrgInternalAudienceRule } from "@/lib/data/internal-audience-rule";
 import {
@@ -34,7 +35,7 @@ import {
   recordGatedConfirmAction,
 } from "@/lib/billing/meter";
 import { assertBillingAllowsGateway } from "@/lib/billing/entitlements";
-import { evaluateDualEgress, evaluateEgressMatrix } from "@/lib/gateway/egress";
+import { evaluateDualEgress } from "@/lib/gateway/egress";
 import {
   parseConversationContext,
   resolveAudience,
@@ -74,6 +75,7 @@ import {
   fulfillApprovedInvoke,
   conversationDeliveryFromFulfillment,
   snsDeliveryFromFulfillment,
+  parseFulfillment,
   type ConversationDelivery,
 } from "@/lib/approvals/fulfill";
 import { evaluateAllowedAccountsForBrowser } from "@/lib/employees/allowed-accounts";
@@ -95,6 +97,8 @@ import {
 import { enrichInvokeFailureBody } from "@/lib/stuck-watch/enrich";
 import { getOrgStuckWatchPolicy } from "@/lib/data/stuck-watch-policy";
 import type { DualEgressVerdict, Employee, EgressVerdict, GatewayInvokeRequest } from "@/lib/types";
+import { createHash } from "node:crypto";
+import { createSupabaseAdminClient } from "@/lib/supabase";
 import {
   CrossProductEventError,
   normalizeCommerceAuthorization,
@@ -103,6 +107,16 @@ import {
   detectSecretInPayload,
   buildSecretDetectionErrorResponse,
 } from "@/lib/security/secret-detector";
+import { isGoogleCalendarReadEnabled } from "@/lib/feature-flags";
+import { readCalendarFreebusy } from "@/lib/google/calendar-read";
+import {
+  addCalendarReadGrant,
+  revokeCalendarReadGrant,
+} from "@/lib/data/google-identities";
+import {
+  applySchedulingPolicyToPropose,
+  type ProposeInput,
+} from "@/lib/scheduling-policy/propose";
 
 export type GatewayInvokeResult = {
   httpStatus: number;
@@ -649,6 +663,19 @@ export async function runGatewayInvoke(
   if (tool === "commerce.order") {
     invokeMetadata.approvedAmountJpy = Number(body.amountJpy);
   }
+  if (tool === "calendar.allowlist.patch") {
+    const args = (body.args || {}) as Record<string, unknown>;
+    const allowlistArgs = {
+      action: typeof args.action === "string" ? args.action : "add",
+      calendarId: typeof args.calendarId === "string" ? args.calendarId : "",
+      grantId: typeof args.grantId === "string" ? args.grantId : "",
+      label: typeof args.label === "string" ? args.label : "",
+      targetEmployeeId: typeof args.employeeId === "string" ? args.employeeId : null,
+    };
+    const canonical = JSON.stringify(allowlistArgs);
+    invokeMetadata.calendarAllowlistArgs = allowlistArgs;
+    invokeMetadata.calendarAllowlistArgsHash = createHash("sha256").update(canonical).digest("hex");
+  }
 
   if (
     employee.allowedPurposes?.length &&
@@ -805,6 +832,20 @@ export async function runGatewayInvoke(
                 }
               : null,
           );
+    }
+    if (priorApprovalOk && tool === "calendar.allowlist.patch" && prior) {
+      const priorArgsHash = prior.metadata.calendarAllowlistArgsHash;
+      const currentArgs = (body.args || {}) as Record<string, unknown>;
+      const currentAllowlistArgs = {
+        action: typeof currentArgs.action === "string" ? currentArgs.action : "add",
+        calendarId: typeof currentArgs.calendarId === "string" ? currentArgs.calendarId : "",
+        grantId: typeof currentArgs.grantId === "string" ? currentArgs.grantId : "",
+        label: typeof currentArgs.label === "string" ? currentArgs.label : "",
+        targetEmployeeId: typeof currentArgs.employeeId === "string" ? currentArgs.employeeId : null,
+      };
+      const currentCanonical = JSON.stringify(currentAllowlistArgs);
+      const currentHash = createHash("sha256").update(currentCanonical).digest("hex");
+      priorApprovalOk = typeof priorArgsHash === "string" && priorArgsHash === currentHash;
     }
   }
 
@@ -1728,6 +1769,330 @@ export async function runGatewayInvoke(
     });
   }
 
+  // calendar.read: query Google freebusy (only when flag ON; flag OFF falls through to generic response)
+  if (isGoogleCalendarReadEnabled() && tool === "calendar.read") {
+    const args = (body.args || {}) as Record<string, unknown>;
+    const calendarIds = Array.isArray(args.calendarIds)
+      ? (args.calendarIds as string[])
+      : typeof args.calendarIds === "string"
+        ? [args.calendarIds]
+        : [];
+    const timeMin = typeof args.timeMin === "string" ? args.timeMin : "";
+    const timeMax = typeof args.timeMax === "string" ? args.timeMax : "";
+
+    const readResult = await readCalendarFreebusy({
+      orgId: orgId || employee.orgId,
+      employeeId,
+      jobId,
+      calendarIds,
+      timeMin,
+      timeMax,
+    });
+
+    return jsonResult({
+      ok: readResult.ok,
+      tool,
+      employeeId,
+      purpose,
+      jobId,
+      busyByCalendar: readResult.busyByCalendar,
+      errors: readResult.errors,
+      refused: readResult.refused,
+      queried: readResult.queried,
+    });
+  }
+
+  // calendar.propose: fetches busy and applies policy (only when flag ON; flag OFF falls through to generic response)
+  if (isGoogleCalendarReadEnabled() && tool === "calendar.propose") {
+    const args = (body.args || {}) as Record<string, unknown>;
+    const slots = Array.isArray(args.slots) ? args.slots : [];
+    const calendarIds = Array.isArray(args.calendarIds)
+      ? (args.calendarIds as string[])
+      : [];
+    const timeMin = typeof args.timeMin === "string" ? args.timeMin : "";
+    const timeMax = typeof args.timeMax === "string" ? args.timeMax : "";
+    const requestedVideoTool = typeof args.videoTool === "string" ? args.videoTool : undefined;
+    let busyByCalendar = (args.busyByCalendar || {}) as Record<string, Array<{ start: string; end: string }>>;
+    let readErrors: Record<string, { code: string; message: string }> = {};
+    let busyDataComplete = true;
+
+    if (calendarIds.length > 0 && timeMin && timeMax) {
+      const readResult = await readCalendarFreebusy({
+        orgId: orgId || employee.orgId,
+        employeeId,
+        jobId,
+        calendarIds,
+        timeMin,
+        timeMax,
+      });
+      if (readResult.ok) {
+        busyByCalendar = { ...busyByCalendar, ...readResult.busyByCalendar };
+        if (Object.keys(readResult.errors).length > 0) {
+          readErrors = readResult.errors;
+          busyDataComplete = false;
+        }
+      } else {
+        readErrors = readResult.errors;
+        busyDataComplete = false;
+      }
+    }
+
+    const proposeInput: ProposeInput = {
+      slots: slots.map((s: unknown) => {
+        const slot = s as { start?: string; end?: string; id?: string };
+        return { start: slot.start || "", end: slot.end || "", id: slot.id || "" };
+      }),
+      context: {
+        orgId: orgId || employee.orgId,
+        employeeId,
+        jobId,
+      },
+      requestedVideoTool,
+      busyByCalendar,
+    };
+
+    const proposeResult = await applySchedulingPolicyToPropose(proposeInput);
+
+    return jsonResult({
+      ok: true,
+      tool,
+      employeeId,
+      purpose,
+      jobId,
+      proposed: true,
+      slots: proposeResult.finalCandidates,
+      policyApplied: proposeResult.policyApplied,
+      policyId: proposeResult.policyId,
+      policyName: proposeResult.policyName,
+      droppedCount: proposeResult.droppedCount,
+      keptCount: proposeResult.keptCount,
+      onlineSettings: proposeResult.onlineSettings,
+      busyByCalendarUsed: Object.keys(busyByCalendar).length > 0,
+      busyDataComplete,
+      ...(Object.keys(readErrors).length > 0 ? { readErrors } : {}),
+    });
+  }
+
+  // calendar.allowlist.patch: fulfillment after approval (flag-gated)
+  if (tool === "calendar.allowlist.patch") {
+    if (!isGoogleCalendarReadEnabled()) {
+      return jsonResult({
+        ok: false,
+        code: "feature_disabled",
+        error: "feature_disabled",
+        message: "Google Calendar integration is disabled (flag OFF)",
+        employeeId,
+        tool,
+        purpose,
+        jobId,
+      }, 400);
+    }
+
+    if (!priorApprovalOk) {
+      return jsonResult({
+        ok: false,
+        code: "approval_required",
+        error: "approval_required",
+        message: "calendar.allowlist.patch requires prior human approval",
+        needs_approval: true,
+        employeeId,
+        tool,
+        purpose,
+        jobId,
+      }, 402);
+    }
+
+    // Single-use: check if approval already has fulfillment (replay)
+    if (priorApproval) {
+      const existingFulfillment = parseFulfillment(priorApproval.metadata);
+      if (existingFulfillment) {
+        return jsonResult({
+          ok: existingFulfillment.ok,
+          tool,
+          employeeId,
+          purpose,
+          jobId,
+          replay: true,
+          fulfillment: existingFulfillment,
+        });
+      }
+
+      // Atomically claim the approval before executing (only first caller wins)
+      const admin = createSupabaseAdminClient();
+      if (!admin) {
+        return jsonResult({
+          ok: false,
+          code: "claim_failed",
+          error: "claim_failed",
+          message: "Database unavailable for claim",
+          employeeId,
+          tool,
+          purpose,
+          jobId,
+        }, 503);
+      }
+      const { data: claimResult, error: claimError } = await admin.rpc("claim_approval_fulfillment", {
+        p_id: priorApproval.id,
+        p_org: priorApproval.orgId,
+        p_tool: tool,
+      });
+      if (claimError || claimResult !== true) {
+        // Claim failed - either already fulfilled or concurrent claim won
+        // Re-fetch to get the fulfillment result
+        const refreshed = await getApprovalById(priorApproval.id, priorApproval.orgId);
+        const refreshedFulfillment = refreshed ? parseFulfillment(refreshed.metadata) : null;
+        if (refreshedFulfillment) {
+          return jsonResult({
+            ok: refreshedFulfillment.ok,
+            tool,
+            employeeId,
+            purpose,
+            jobId,
+            replay: true,
+            fulfillment: refreshedFulfillment,
+          });
+        }
+        return jsonResult({
+          ok: false,
+          code: "claim_failed",
+          error: "claim_failed",
+          message: "Approval claim failed - concurrent execution or already fulfilled",
+          employeeId,
+          tool,
+          purpose,
+          jobId,
+        }, 409);
+      }
+    }
+
+    const args = (body.args || {}) as Record<string, unknown>;
+    const action = typeof args.action === "string" ? args.action : "add";
+    const calendarId = typeof args.calendarId === "string" ? args.calendarId : "";
+    const grantId = typeof args.grantId === "string" ? args.grantId : "";
+    const label = typeof args.label === "string" ? args.label : "";
+    const targetEmployeeId = typeof args.employeeId === "string" ? args.employeeId : null;
+
+    // Validate calendarId format: non-empty, max 254 chars, no whitespace or control chars
+    if (action === "add") {
+      if (!calendarId || calendarId.length > 254) {
+        return jsonResult({
+          ok: false,
+          code: "invalid_calendar_id",
+          error: "invalid_calendar_id",
+          message: "calendarId must be non-empty and at most 254 characters",
+          employeeId,
+          tool,
+          purpose,
+          jobId,
+        }, 400);
+      }
+      // eslint-disable-next-line no-control-regex
+      if (/[\s\x00-\x1f\x7f]/.test(calendarId)) {
+        return jsonResult({
+          ok: false,
+          code: "invalid_calendar_id",
+          error: "invalid_calendar_id",
+          message: "calendarId must not contain whitespace or control characters",
+          employeeId,
+          tool,
+          purpose,
+          jobId,
+        }, 400);
+      }
+    }
+
+    // Validate targetEmployeeId: must belong to same org if provided
+    if (targetEmployeeId) {
+      const targetEmployee = await getEmployee(targetEmployeeId, orgId || employee.orgId);
+      if (!targetEmployee) {
+        return jsonResult({
+          ok: false,
+          code: "invalid_target_employee",
+          error: "invalid_target_employee",
+          message: "targetEmployeeId must belong to the same organization",
+          employeeId,
+          tool,
+          purpose,
+          jobId,
+        }, 400);
+      }
+    }
+
+    if (action === "add" && calendarId) {
+      const grant = await addCalendarReadGrant({
+        orgId: orgId || employee.orgId,
+        employeeId: targetEmployeeId,
+        calendarId,
+        label,
+        approvalId: priorApprovalId,
+      });
+      await appendAuditEvent({
+        orgId: orgId || employee.orgId,
+        employeeId,
+        credentialId: input.credentialId || employee.credentialId,
+        action: "calendar.allowlist_patch",
+        purpose,
+        summary: `Calendar allowlist grant added: ${calendarId}`,
+        metadata: { grantId: grant.id, calendarId, targetEmployeeId, approvalId: priorApprovalId, jobId },
+      });
+      // Record fulfillment
+      if (priorApproval) {
+        await updateApprovalMetadata(priorApproval, {
+          fulfillment: { ok: true, at: new Date().toISOString(), delivery: "stub", action: "add", grantId: grant.id },
+        });
+      }
+      return jsonResult({
+        ok: true,
+        tool,
+        employeeId,
+        purpose,
+        jobId,
+        action: "add",
+        grant,
+      });
+    } else if (action === "revoke" && grantId) {
+      await revokeCalendarReadGrant({
+        grantId,
+        orgId: orgId || employee.orgId,
+      });
+      await appendAuditEvent({
+        orgId: orgId || employee.orgId,
+        employeeId,
+        credentialId: input.credentialId || employee.credentialId,
+        action: "calendar.allowlist_patch",
+        purpose,
+        summary: `Calendar allowlist grant revoked: ${grantId}`,
+        metadata: { grantId, approvalId: priorApprovalId, jobId },
+      });
+      // Record fulfillment
+      if (priorApproval) {
+        await updateApprovalMetadata(priorApproval, {
+          fulfillment: { ok: true, at: new Date().toISOString(), delivery: "stub", action: "revoke", grantId },
+        });
+      }
+      return jsonResult({
+        ok: true,
+        tool,
+        employeeId,
+        purpose,
+        jobId,
+        action: "revoke",
+        grantId,
+      });
+    }
+
+    return jsonResult({
+      ok: false,
+      code: "invalid_action",
+      error: "invalid_action",
+      message: "action must be 'add' or 'revoke' with appropriate arguments",
+      employeeId,
+      tool,
+      purpose,
+      jobId,
+    }, 400);
+  }
+
   return jsonResult({
     ok: true,
     demo: runtimeModeLabel() === "demo",
@@ -1753,9 +2118,7 @@ export async function runGatewayInvoke(
     result:
       tool === "tools.ping"
         ? { pong: true }
-        : tool === "calendar.propose"
-          ? { proposed: true, slots: [] }
-          : tool === "mail.draft"
+        : tool === "mail.draft"
             ? { drafted: true }
             : tool === "commerce.quote"
               ? { quoted: true }

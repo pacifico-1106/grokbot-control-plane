@@ -1,0 +1,118 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import type { Employee } from "@/lib/types";
+import type { EmployeeGoogleIdentity } from "@/lib/data/google-identities";
+
+const GOOGLE_QUERY_MESSAGES: Record<string, string> = {
+  ok: "Google Calendar を連携しました",
+  denied: "連携がキャンセルされました",
+  error: "Google Calendar 連携に失敗しました",
+  scope_error: "許可されていないスコープが含まれています",
+};
+
+export function GoogleCalendarIdentityForm({
+  employee,
+  initialIdentity,
+  oauthConfigured,
+  flagEnabled,
+  disabled = false,
+}: {
+  employee: Employee;
+  initialIdentity: EmployeeGoogleIdentity | null;
+  oauthConfigured: boolean;
+  flagEnabled: boolean;
+  disabled?: boolean;
+}) {
+  const [identity, setIdentity] = useState(initialIdentity);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
+
+  const linked = identity?.status === "linked" && Boolean(identity.googleSub);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const google = params.get("google");
+    if (google && GOOGLE_QUERY_MESSAGES[google]) {
+      setMessage(GOOGLE_QUERY_MESSAGES[google]);
+    }
+  }, []);
+
+  async function revoke() {
+    setBusy(true);
+    setMessage("");
+    try {
+      const response = await fetch(`/api/google/oauth/disconnect`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ employeeId: employee.id }),
+      });
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.error || "解除に失敗しました");
+      setIdentity(null);
+      setMessage("Google Calendar 連携を解除しました");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "解除に失敗しました");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!flagEnabled) {
+    return (
+      <div className="text-xs muted">
+        Google Calendar 統合は現在無効です（GOOGLE_CALENDAR_READ_ENABLED=false）。
+      </div>
+    );
+  }
+
+  const locked = busy || disabled;
+
+  return (
+    <div className="space-y-3">
+      <p className="text-xs muted leading-relaxed">
+        AI社員がカレンダーの空き時間（Free/Busy）を読み取れます。
+        イベント内容は見えません。読み取れるカレンダーはアローリストで制限されます。
+      </p>
+
+      {linked ? (
+        <p className="text-xs leading-relaxed">
+          連携中: {identity?.googleEmail || identity?.googleSub}
+          <span className="block text-[11px] muted mt-0.5">
+            スコープ: {identity?.grantedScopes?.replace(/https:\/\/www\.googleapis\.com\/auth\//g, "")}
+          </span>
+        </p>
+      ) : (
+        <p className="text-xs muted leading-relaxed">
+          カレンダーのオーナー（対象者）の Google アカウントで連携します。
+        </p>
+      )}
+
+      {oauthConfigured ? (
+        <div className="flex flex-wrap gap-2">
+          <a
+            className="btn btn-primary text-xs"
+            href={`/api/google/oauth/start?employeeId=${encodeURIComponent(employee.id)}`}
+            aria-disabled={locked}
+          >
+            Google Calendar 連携
+          </a>
+          {linked ? (
+            <button
+              type="button"
+              className="btn btn-ghost text-xs"
+              disabled={locked}
+              onClick={() => void revoke()}
+            >
+              連携を解除
+            </button>
+          ) : null}
+        </div>
+      ) : (
+        <p className="text-xs text-[var(--warn)]">Google OAuth が未設定</p>
+      )}
+
+      {message ? <p className="text-xs muted">{message}</p> : null}
+    </div>
+  );
+}

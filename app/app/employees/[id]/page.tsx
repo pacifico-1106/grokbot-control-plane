@@ -12,6 +12,7 @@ import { EmployeeProjectAccessForm } from "@/components/employees/EmployeeProjec
 import { EmployeeTerminateForm } from "@/components/employees/EmployeeTerminateForm";
 import { EmployeeIngressHandoffStatus } from "@/components/employees/EmployeeIngressHandoffStatus";
 import { SlackIdentityForm } from "@/components/employees/SlackIdentityForm";
+import { GoogleCalendarIdentityForm } from "@/components/employees/GoogleCalendarIdentityForm";
 import { getCurrentOrgId } from "@/lib/auth/session";
 import {
   ensureBindingRow,
@@ -25,7 +26,10 @@ import {
   listNotificationChannels,
   listOrgProjects,
 } from "@/lib/data";
+import { getEmployeeGoogleIdentity } from "@/lib/data/google-identities";
 import { slackOAuthConfigured } from "@/lib/slack/oauth";
+import { googleOAuthConfigured } from "@/lib/google/oauth";
+import { isGoogleCalendarReadEnabled } from "@/lib/feature-flags";
 import { getEmployeeActionLog } from "@/lib/employee-actions-demo";
 import { assignedInboxLabel } from "@/lib/employees/approval-inbox";
 import { APPROVAL_POLICY_LABELS } from "@/lib/employees/policy-draft";
@@ -60,7 +64,10 @@ export default async function EmployeeDetailPage({
     (await getBinding(employee.id)) ??
     (await ensureBindingRow(employee.id, employee.orgId || orgId || ""));
   const slackIdentity = await getEmployeeSlackIdentity(employee.id);
-  const oauthConfigured = slackOAuthConfigured();
+  const slackOauthConfigured = slackOAuthConfigured();
+  const googleIdentity = await getEmployeeGoogleIdentity(employee.id);
+  const googleOauthConfigured = googleOAuthConfigured();
+  const googleCalendarEnabled = isGoogleCalendarReadEnabled();
   const effectiveIngressHandoff = await getEffectiveIngressHandoffPolicy(orgId, employee.id);
 
   const actionEvents = getEmployeeActionLog(employee, binding);
@@ -198,7 +205,18 @@ export default async function EmployeeDetailPage({
         <SlackIdentityForm
           employee={employee}
           initialIdentity={slackIdentity}
-          oauthConfigured={oauthConfigured}
+          oauthConfigured={slackOauthConfigured}
+          disabled={employee.status === "suspended"}
+        />
+      </section>
+
+      <section className="surface p-5 space-y-3 mt-4">
+        <h2 className="text-sm font-medium">Google Calendar 連携</h2>
+        <GoogleCalendarIdentityForm
+          employee={employee}
+          initialIdentity={googleIdentity}
+          oauthConfigured={googleOauthConfigured}
+          flagEnabled={googleCalendarEnabled}
           disabled={employee.status === "suspended"}
         />
       </section>

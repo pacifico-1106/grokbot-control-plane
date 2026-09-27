@@ -505,7 +505,11 @@ export type AuditAction =
   | "stuck_watch.audience_ledger_retry"
   | "stuck_watch.w4_notify"
   | "stuck_watch.retry"
-  | "stuck_watch.resolve";
+  | "stuck_watch.resolve"
+  | "calendar.freebusy_read"
+  | "calendar.allowlist_patch"
+  | "google.identity_connected"
+  | "google.identity_revoked";
 
 export interface Org {
   id: string;

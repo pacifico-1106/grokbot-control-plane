@@ -13,6 +13,7 @@ export type GatewayToolId =
   | "calendar.read"
   | "calendar.propose"
   | "calendar.confirm"
+  | "calendar.allowlist.patch"
   | "mail.draft"
   | "mail.send"
   | "agentmail.draft"
@@ -100,6 +101,14 @@ export const GATEWAY_TOOL_DEFS: Record<GatewayToolId, GatewayToolDef> = {
     labelJa: "日程の確定（invite / 承諾）",
     kind: "confirm",
     requiredScopes: ["calendar:confirm", "tools:invoke"],
+    forceNeedsApproval: true,
+    mayAuto: false,
+  },
+  "calendar.allowlist.patch": {
+    id: "calendar.allowlist.patch",
+    labelJa: "カレンダー参照許可リスト変更",
+    kind: "mutate",
+    requiredScopes: ["calendar:read", "tools:invoke"],
     forceNeedsApproval: true,
     mayAuto: false,
   },
@@ -258,6 +267,8 @@ const ALIASES: Record<string, GatewayToolId> = {
   "calendar:read": "calendar.read",
   "calendar:propose": "calendar.propose",
   "calendar:confirm": "calendar.confirm",
+  "calendar:allowlist.patch": "calendar.allowlist.patch",
+  "calendar.allowlist:patch": "calendar.allowlist.patch",
   "mail:draft": "mail.draft",
   "mail:send": "mail.send",
   "agentmail:draft": "agentmail.draft",
@@ -303,6 +314,7 @@ export function listGatewayToolIds(): GatewayToolId[] {
 const ALWAYS_HUMAN_TOOL_IDS = new Set<GatewayToolId>([
   "mail.send",
   "calendar.confirm",
+  "calendar.allowlist.patch",
   "commerce.order",
   "drive.share_external",
   "files.write",
