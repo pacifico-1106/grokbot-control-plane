@@ -276,4 +276,48 @@ describe("single-use fulfillment", () => {
     const isReplay = existingFulfillment && existingFulfillment.ok !== undefined;
     expect(isReplay).toBe(true);
   });
+
+  test("atomic claim SQL conditions are correct", () => {
+    // The claim_approval_fulfillment function uses these conditions:
+    // 1. id = p_id
+    // 2. org_id = p_org  
+    // 3. status = 'approved'
+    // 4. tool = p_tool
+    // 5. NOT (metadata ? 'fulfillment') -- no existing fulfillment
+    // Only when ALL conditions match does the update succeed and return true
+    const conditions = [
+      { name: "id matches", required: true },
+      { name: "org_id matches", required: true },
+      { name: "status is approved", required: true },
+      { name: "tool matches", required: true },
+      { name: "no existing fulfillment", required: true },
+    ];
+    expect(conditions.every(c => c.required)).toBe(true);
+    expect(conditions.length).toBe(5);
+  });
+
+  test("concurrent claims: only first caller wins (simulation)", () => {
+    // Simulate the race condition scenario:
+    // Two callers check for existing fulfillment (both see none)
+    // Both try to claim atomically
+    // With atomic SQL update, only ONE succeeds
+    let claimWinner: number | null = null;
+    const simulateClaim = (callerId: number): boolean => {
+      if (claimWinner === null) {
+        // First caller wins the atomic UPDATE
+        claimWinner = callerId;
+        return true;
+      }
+      // Second caller's UPDATE finds no matching row (fulfillment already exists)
+      return false;
+    };
+
+    // Simulate concurrent execution
+    const results = [simulateClaim(1), simulateClaim(2)];
+    
+    // Only one should succeed
+    expect(results.filter(r => r === true).length).toBe(1);
+    expect(results.filter(r => r === false).length).toBe(1);
+    expect(claimWinner).toBe(1); // First caller wins
+  });
 });

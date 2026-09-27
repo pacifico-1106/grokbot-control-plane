@@ -77,7 +77,9 @@ import {
   snsDeliveryFromFulfillment,
   parseFulfillment,
   type ConversationDelivery,
+  type ApprovalFulfillment,
 } from "@/lib/approvals/fulfill";
+import { executeApproval } from "@/lib/approvals/execution";
 import { evaluateAllowedAccountsForBrowser } from "@/lib/employees/allowed-accounts";
 import { evaluateSpend } from "@/lib/spend-gate";
 import { evaluateActionLimit } from "@/lib/action-gate";
@@ -98,6 +100,7 @@ import { enrichInvokeFailureBody } from "@/lib/stuck-watch/enrich";
 import { getOrgStuckWatchPolicy } from "@/lib/data/stuck-watch-policy";
 import type { DualEgressVerdict, Employee, EgressVerdict, GatewayInvokeRequest } from "@/lib/types";
 import { createHash } from "node:crypto";
+import { createSupabaseAdminClient } from "@/lib/supabase";
 import {
   CrossProductEventError,
   normalizeCommerceAuthorization,
@@ -1901,7 +1904,6 @@ export async function runGatewayInvoke(
       }, 402);
     }
 
-    // Single-use: if approval already has fulfillment, return that result
     // Single-use: check if approval already has fulfillment (replay)
     if (priorApproval) {
       const existingFulfillment = parseFulfillment(priorApproval.metadata);
@@ -1917,38 +1919,51 @@ export async function runGatewayInvoke(
         });
       }
 
-      // Atomically claim the approval before executing
-      const claimAt = new Date().toISOString();
-      const claimed = await updateApprovalMetadata(priorApproval, {
-        fulfillment: { ok: false, at: claimAt, claiming: true },
-      });
-      if (!claimed) {
+      // Atomically claim the approval before executing (only first caller wins)
+      const admin = createSupabaseAdminClient();
+      if (!admin) {
         return jsonResult({
           ok: false,
           code: "claim_failed",
           error: "claim_failed",
-          message: "Failed to claim approval for execution",
+          message: "Database unavailable for claim",
           employeeId,
           tool,
           purpose,
           jobId,
-        }, 409);
+        }, 503);
       }
-      // Re-check if we actually claimed it (another caller may have beaten us)
-      const claimedMeta = claimed.metadata?.fulfillment as Record<string, unknown> | undefined;
-      if (claimedMeta && claimedMeta.claiming !== true) {
-        const recheckFulfillment = parseFulfillment(claimed.metadata);
-        if (recheckFulfillment) {
+      const { data: claimResult, error: claimError } = await admin.rpc("claim_approval_fulfillment", {
+        p_id: priorApproval.id,
+        p_org: priorApproval.orgId,
+        p_tool: tool,
+      });
+      if (claimError || claimResult !== true) {
+        // Claim failed - either already fulfilled or concurrent claim won
+        // Re-fetch to get the fulfillment result
+        const refreshed = await getApprovalById(priorApproval.id, priorApproval.orgId);
+        const refreshedFulfillment = refreshed ? parseFulfillment(refreshed.metadata) : null;
+        if (refreshedFulfillment) {
           return jsonResult({
-            ok: recheckFulfillment.ok,
+            ok: refreshedFulfillment.ok,
             tool,
             employeeId,
             purpose,
             jobId,
             replay: true,
-            fulfillment: recheckFulfillment,
+            fulfillment: refreshedFulfillment,
           });
         }
+        return jsonResult({
+          ok: false,
+          code: "claim_failed",
+          error: "claim_failed",
+          message: "Approval claim failed - concurrent execution or already fulfilled",
+          employeeId,
+          tool,
+          purpose,
+          jobId,
+        }, 409);
       }
     }
 

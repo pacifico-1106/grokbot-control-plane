@@ -120,3 +120,39 @@ revoke insert, update, delete on calendar_read_grants from anon, authenticated;
 -- with action = 'calendar.freebusy_read'.
 -- Metadata includes: calendar_ids requested, calendar_ids allowed, timeMin, timeMax,
 -- busy_interval_count, errors (per-calendar), but NEVER tokens or event contents.
+
+-- ---------------------------------------------------------------------------
+-- Atomic fulfillment claim for calendar.allowlist.patch (single-use approvals)
+-- ---------------------------------------------------------------------------
+-- This function atomically claims an approval for fulfillment. Only the first
+-- caller wins; concurrent callers get false. This prevents replay attacks where
+-- an approved "add X" could be replayed after X is revoked.
+create or replace function public.claim_approval_fulfillment(
+  p_id uuid,
+  p_org uuid,
+  p_tool text
+) returns boolean
+language plpgsql
+security definer
+set search_path = pg_catalog, public
+as $$
+begin
+  update public.approval_requests
+  set metadata = metadata || jsonb_build_object(
+    'fulfillment', jsonb_build_object('claiming', true, 'at', now())
+  )
+  where id = p_id
+    and org_id = p_org
+    and status = 'approved'
+    and tool = p_tool
+    and not (metadata ? 'fulfillment');
+  return found;
+end;
+$$;
+
+comment on function public.claim_approval_fulfillment(uuid, uuid, text) is
+  'Atomically claim an approval for fulfillment. Returns true if claim succeeded, false if already claimed or conditions not met.';
+
+-- Security: only service_role can call this function
+revoke all on function public.claim_approval_fulfillment(uuid, uuid, text) from public, anon, authenticated;
+grant execute on function public.claim_approval_fulfillment(uuid, uuid, text) to service_role;
