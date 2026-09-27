@@ -63,6 +63,8 @@ export {
   getVoterBinding,
   checkSetupApproverBindingStatus,
   resetDemoVoterBindings,
+  isTelegramGlobalChannelKey,
+  TELEGRAM_GLOBAL_CHANNEL_KEY,
   type VoterBinding,
   type VoterBindingProvider,
   type VoterBindingStatus,
@@ -74,3 +76,10 @@ export {
   handleVerificationRejection,
   parseVerificationCallbackValue,
 } from "./voter-binding-verification";
+
+export {
+  sendVerificationToTelegramUser,
+  handleTelegramVerificationConfirm,
+  handleTelegramVerificationReject,
+  parseTelegramVerificationCallbackValue,
+} from "./telegram-binding-verification";

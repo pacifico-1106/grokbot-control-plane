@@ -1,6 +1,11 @@
 import { resolveApprovalWithWorkflow } from "@/lib/approvals/workflow-integration";
 import { initializeWorkflowForApproval } from "@/lib/approval-workflow/resolve";
 import { getMemberIdFromVoterBinding } from "@/lib/approval-workflow";
+import {
+  handleTelegramVerificationConfirm,
+  handleTelegramVerificationReject,
+  parseTelegramVerificationCallbackValue,
+} from "@/lib/approval-workflow/telegram-binding-verification";
 import { NextResponse } from "next/server";
 import { fulfillIfApproved } from "@/lib/approvals/fulfill";
 import { runApprovalResolveSideEffects } from "@/lib/approvals/resolve-side-effects";
@@ -93,6 +98,44 @@ async function auditTelegramError(
   });
 }
 
+async function handleVoterBindingCallback(
+  query: TelegramUpdate["callback_query"],
+  action: string,
+  callbackValue: string,
+  callbackId: string
+): Promise<void> {
+  const presserTelegramUserId = String(query?.from?.id ?? "");
+  if (!presserTelegramUserId) {
+    await answerTelegramCallback(callbackId, "ユーザーIDを取得できませんでした");
+    return;
+  }
+
+  try {
+    if (action === "c") {
+      const result = await handleTelegramVerificationConfirm({
+        callbackValue,
+        presserTelegramUserId,
+      });
+      if (result.ok) {
+        await answerTelegramCallback(callbackId, "✅ 承認者として登録されました");
+      } else {
+        await answerTelegramCallback(callbackId, result.messageJa);
+      }
+    } else if (action === "r") {
+      const result = await handleTelegramVerificationReject({
+        callbackValue,
+        presserTelegramUserId,
+      });
+      await answerTelegramCallback(callbackId, result.messageJa);
+    } else {
+      await answerTelegramCallback(callbackId, "無効な操作です");
+    }
+  } catch (error) {
+    console.error("telegram_voter_binding_callback_error", error);
+    await answerTelegramCallback(callbackId, "処理中にエラーが発生しました");
+  }
+}
+
 async function handleCallback(update: TelegramUpdate): Promise<void> {
   const query = update.callback_query!;
   const tenantChannel = await findPilotTelegramChannelByChatId(String(query.message?.chat?.id ?? ""));
@@ -100,9 +143,17 @@ async function handleCallback(update: TelegramUpdate): Promise<void> {
     const tenant = await handleTelegramChannelUpdate(tenantChannel, update, { fallbackOnMiss: true });
     if (tenant.processed) return;
   }
-  const actor = actorFor(query.from);
   const callbackId = query.id || "";
-  const match = /^(a|r|e):([A-Za-z0-9_-]{8,32})$/.exec(query.data || "");
+  const callbackData = query.data || "";
+
+  const voterBindingMatch = /^vb:(c|r):(.+)$/.exec(callbackData);
+  if (voterBindingMatch) {
+    await handleVoterBindingCallback(query, voterBindingMatch[1], voterBindingMatch[2], callbackId);
+    return;
+  }
+
+  const actor = actorFor(query.from);
+  const match = /^(a|r|e):([A-Za-z0-9_-]{8,32})$/.exec(callbackData);
   if (!match) {
     await answerTelegramCallback(callbackId, "無効な操作です");
     return;

@@ -128,12 +128,27 @@ export async function checkMemberBelongsToOrg(
   return { ok: true };
 }
 
+/**
+ * Reserved channelKey for the global Telegram approval route.
+ * This is not an org_notification_channels UUID, but a special key
+ * that maps to the env-based TELEGRAM_BOT_TOKEN / TELEGRAM_APPROVAL_CHAT_ID route.
+ */
+export const TELEGRAM_GLOBAL_CHANNEL_KEY = "telegram:global";
+
+export function isTelegramGlobalChannelKey(channelKey: string): boolean {
+  return channelKey === TELEGRAM_GLOBAL_CHANNEL_KEY;
+}
+
 export async function checkChannelBelongsToOrg(
   channelKey: string,
   orgId: string,
   provider: VoterBindingProvider
 ): Promise<{ ok: boolean; teamId?: string; reason?: string }> {
   if (isDemoMode()) {
+    return { ok: true };
+  }
+
+  if (provider === "telegram" && isTelegramGlobalChannelKey(channelKey)) {
     return { ok: true };
   }
 

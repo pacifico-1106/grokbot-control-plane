@@ -62,9 +62,11 @@ import { fulfillOrgIssueAdminCredentialFromQueuedArgs } from "@/lib/admin-mcp/or
 import {
   createPendingVoterBinding,
   revokeVoterBinding,
+  isTelegramGlobalChannelKey,
   type VoterBindingProvider,
 } from "@/lib/approval-workflow/voter-binding";
 import { sendVerificationDmToSlackUser } from "@/lib/approval-workflow/voter-binding-verification";
+import { sendVerificationToTelegramUser } from "@/lib/approval-workflow/telegram-binding-verification";
 import { getNotificationChannelSecretsById } from "@/lib/data/notification-channels";
 import type { PlatformOpsActor } from "@/lib/admin/platform-ops-gate";
 import type {
@@ -733,14 +735,13 @@ async function fulfillVoterBind(
     };
   }
 
+  const org = { name: "Staffpass組織", displayName: "" };
+  const memberName = `メンバー ${memberId.slice(0, 8)}`;
+  let nextStepJa = "確認ボタンをクリックして、バインディングを有効化してください。";
+
   if (provider === "slack") {
     const channelSecrets = await getNotificationChannelSecretsById(approval.orgId, channelKey);
     if (channelSecrets.botToken) {
-      const channels = await listNotificationChannels(approval.orgId);
-      const channel = channels.find((c) => c.id === channelKey);
-      const org = { name: "Staffpass組織", displayName: "" };
-      const memberName = `メンバー ${memberId.slice(0, 8)}`;
-
       await sendVerificationDmToSlackUser({
         botToken: channelSecrets.botToken,
         slackUserId: externalUserId,
@@ -751,6 +752,21 @@ async function fulfillVoterBind(
         orgName: org.name,
         verificationCode: bindResult.verificationCode,
       });
+      nextStepJa = "Slack DMで送信された確認ボタンをクリックして、バインディングを有効化してください。";
+    }
+  } else if (provider === "telegram" && isTelegramGlobalChannelKey(channelKey)) {
+    const telegramResult = await sendVerificationToTelegramUser({
+      telegramUserId: externalUserId,
+      orgId: approval.orgId,
+      memberId,
+      memberDisplayName: memberName,
+      orgName: org.name,
+      verificationCode: bindResult.verificationCode,
+    });
+    if (telegramResult.ok) {
+      nextStepJa = "Telegram DMで送信された確認ボタンをクリックして、バインディングを有効化してください。";
+    } else {
+      nextStepJa = `Telegram DMの送信に失敗しました（${telegramResult.error}）。Telegram Bot が正しく設定されているか確認してください。`;
     }
   }
 
@@ -777,7 +793,7 @@ async function fulfillVoterBind(
     ok: true,
     tool: "approvalWorkflow.bindVoter",
     at: new Date().toISOString(),
-    nextStepJa: "Slack DMで送信された確認ボタンをクリックして、バインディングを有効化してください。",
+    nextStepJa,
   };
 }
 
