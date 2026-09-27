@@ -210,6 +210,7 @@ export async function createPendingVoterBinding(
       updatedAt: now.toISOString(),
       verificationCode,
       verificationExpiry: Date.now() + VERIFICATION_CODE_EXPIRY_MS,
+      failedVerificationAttempts: 0,
     };
     demoBindings.set(bindingKey(binding), binding);
     return { ok: true, binding, verificationCode };
@@ -240,6 +241,7 @@ export async function createPendingVoterBinding(
         verification_expiry: verificationExpiry.toISOString(),
         created_at: now.toISOString(),
         updated_at: now.toISOString(),
+        failed_verification_attempts: 0,
       },
       { onConflict: "org_id,provider,channel_key,external_user_id" }
     )
