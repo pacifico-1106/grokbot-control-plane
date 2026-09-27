@@ -15,6 +15,7 @@
 import { randomBytes, createHmac } from "node:crypto";
 import { isDemoMode } from "@/lib/mode";
 import { createSupabaseAdminClient } from "@/lib/supabase";
+import { setDemoWorkflowVoterBinding } from "./data";
 
 export type VoterBindingProvider = "slack" | "telegram" | "line";
 export type VoterBindingStatus = "pending" | "active" | "expired" | "revoked";
@@ -279,6 +280,17 @@ export async function verifyVoterBinding(
     delete demo.verificationCode;
     delete demo.verificationExpiry;
     demoBindings.set(key, demo);
+
+    setDemoWorkflowVoterBinding({
+      orgId: demo.orgId,
+      provider: demo.provider,
+      channelKey: demo.channelKey,
+      userId: demo.externalUserId,
+      memberId: demo.memberId,
+      expiresAt: demo.expiresAt ?? undefined,
+      verifiedAt: demo.verifiedAt,
+    });
+
     return { ok: true, binding: demo };
   }
 
