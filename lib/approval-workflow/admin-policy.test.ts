@@ -21,6 +21,7 @@ import {
   buildDefaultAdminRouteFromOwners,
   canProceedWithAdminApproval,
   getEffectiveAdminRoute,
+  canResolverResolveAdminApproval,
   ADMIN_AUDIT_CLASS,
   BUSINESS_AUDIT_CLASS,
 } from "./admin-policy";
@@ -614,6 +615,187 @@ describe("INVARIANT: Cross-org voter isolation", () => {
     );
     expect(result.allowed).toBe(false);
     expect(result.reason).toBe("not_in_admin_route");
+  });
+});
+
+/**
+ * Tests for canResolverResolveAdminApproval - W1 path restriction.
+ * These tests verify that when admin_approver_enforcement is enabled:
+ * - Explicit admin route: only admin-route voters can resolve
+ * - No admin route: only org owners can resolve (default approvers)
+ * - Business voters cannot resolve admin tickets
+ * - Enforcement OFF: any resolver allowed (W1 preserved)
+ */
+describe("canResolverResolveAdminApproval (W1 path restriction)", () => {
+  const FIXTURE_ADMIN_RESOLVER = "fixture_admin_resolver";
+  const FIXTURE_BUSINESS_RESOLVER = "fixture_business_resolver";
+  const FIXTURE_NON_VOTER = "fixture_non_voter";
+  const FIXTURE_ORG_OWNER = "fixture_org_owner";
+
+  const adminApproval = { purpose: "admin.hire", tool: "employees.issue", metadata: { approvalClass: "admin" } };
+  const businessApproval = { purpose: "tool.invoke", tool: "mail.send", metadata: {} };
+
+  const policyWithRoutes = createPolicy({
+    routes: [
+      createAdminRoute([FIXTURE_ADMIN_RESOLVER]),
+      createBusinessRoute([FIXTURE_BUSINESS_RESOLVER]),
+    ],
+  });
+
+  describe("enforcement OFF (W1 preserved)", () => {
+    test("allows any resolver on admin ticket", () => {
+      const result = canResolverResolveAdminApproval(
+        FIXTURE_BUSINESS_RESOLVER,
+        adminApproval,
+        policyWithRoutes,
+        [],
+        false // enforcement OFF
+      );
+      expect(result.allowed).toBe(true);
+      expect(result.reason).toBe("enforcement_off");
+    });
+
+    test("allows any resolver on business ticket", () => {
+      const result = canResolverResolveAdminApproval(
+        FIXTURE_NON_VOTER,
+        businessApproval,
+        policyWithRoutes,
+        [],
+        false
+      );
+      expect(result.allowed).toBe(true);
+      expect(result.reason).toBe("enforcement_off");
+    });
+  });
+
+  describe("enforcement ON with explicit admin route", () => {
+    test("allows admin-route resolver on admin ticket", () => {
+      const result = canResolverResolveAdminApproval(
+        FIXTURE_ADMIN_RESOLVER,
+        adminApproval,
+        policyWithRoutes,
+        [],
+        true // enforcement ON
+      );
+      expect(result.allowed).toBe(true);
+      expect(result.reason).toBe("in_admin_route");
+    });
+
+    test("denies business-route resolver on admin ticket", () => {
+      const result = canResolverResolveAdminApproval(
+        FIXTURE_BUSINESS_RESOLVER,
+        adminApproval,
+        policyWithRoutes,
+        [],
+        true
+      );
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toBe("business_voter_on_admin_ticket");
+    });
+
+    test("denies non-route resolver on admin ticket", () => {
+      const result = canResolverResolveAdminApproval(
+        FIXTURE_NON_VOTER,
+        adminApproval,
+        policyWithRoutes,
+        [],
+        true
+      );
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toBe("not_in_admin_route");
+    });
+
+    test("allows any resolver on business ticket", () => {
+      const result = canResolverResolveAdminApproval(
+        FIXTURE_BUSINESS_RESOLVER,
+        businessApproval,
+        policyWithRoutes,
+        [],
+        true
+      );
+      expect(result.allowed).toBe(true);
+      expect(result.reason).toBe("business_class");
+    });
+  });
+
+  describe("enforcement ON without admin route (org owners as default)", () => {
+    const policyWithoutAdminRoute = createPolicy({
+      routes: [createBusinessRoute([FIXTURE_BUSINESS_RESOLVER])],
+    });
+
+    test("allows org owner on admin ticket", () => {
+      const result = canResolverResolveAdminApproval(
+        FIXTURE_ORG_OWNER,
+        adminApproval,
+        policyWithoutAdminRoute,
+        [FIXTURE_ORG_OWNER],
+        true
+      );
+      expect(result.allowed).toBe(true);
+      expect(result.reason).toBe("org_owner_default");
+    });
+
+    test("denies non-owner member on admin ticket", () => {
+      const result = canResolverResolveAdminApproval(
+        FIXTURE_BUSINESS_RESOLVER,
+        adminApproval,
+        policyWithoutAdminRoute,
+        [FIXTURE_ORG_OWNER],
+        true
+      );
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toBe("non_owner_on_admin_ticket");
+    });
+
+    test("denies any resolver when no org owners exist", () => {
+      const result = canResolverResolveAdminApproval(
+        FIXTURE_BUSINESS_RESOLVER,
+        adminApproval,
+        policyWithoutAdminRoute,
+        [], // no owners
+        true
+      );
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toBe("non_owner_on_admin_ticket");
+    });
+  });
+
+  describe("null policy (enforcement ON)", () => {
+    test("allows org owner when null policy", () => {
+      const result = canResolverResolveAdminApproval(
+        FIXTURE_ORG_OWNER,
+        adminApproval,
+        null, // null policy
+        [FIXTURE_ORG_OWNER],
+        true
+      );
+      expect(result.allowed).toBe(true);
+      expect(result.reason).toBe("org_owner_default");
+    });
+
+    test("denies non-owner when null policy", () => {
+      const result = canResolverResolveAdminApproval(
+        FIXTURE_NON_VOTER,
+        adminApproval,
+        null,
+        [FIXTURE_ORG_OWNER],
+        true
+      );
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toBe("non_owner_on_admin_ticket");
+    });
+
+    test("denies any resolver when null policy and no owners", () => {
+      const result = canResolverResolveAdminApproval(
+        FIXTURE_NON_VOTER,
+        adminApproval,
+        null,
+        [],
+        true
+      );
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toBe("non_owner_on_admin_ticket");
+    });
   });
 });
 

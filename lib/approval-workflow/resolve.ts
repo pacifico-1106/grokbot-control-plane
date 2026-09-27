@@ -185,12 +185,14 @@ export async function handleWorkflowVote(
   if (!isDemoMode()) {
     const admin = createSupabaseAdminClient();
     if (!admin || !opts.orgId) throw new Error("workflow_unavailable");
-    const { data, error } = await admin.rpc("cast_approval_workflow_vote", {
+    // Use checked version for SQL-level admin enforcement (defense-in-depth)
+    const { data, error } = await admin.rpc("cast_approval_workflow_vote_checked", {
       p_id: approvalId, p_org: opts.orgId, p_voter: voterUserId, p_vote: vote,
       p_actor: opts.actor || voterUserId, p_actor_id: opts.actorId ?? null, p_agent: opts.grokBotAgentId ?? null,
       p_provider: opts.externalVoter?.provider ?? null, p_channel: opts.externalVoter?.channelKey ?? null,
       p_external: opts.externalVoter?.userId ?? null,
       p_decision_id: opts.decisionId ?? null, p_expected_stage: opts.expectedStage ?? null,
+      p_check_admin_enforcement: isAdminApproverPolicyRequired(),
     });
     if (error || !data) throw new Error(error?.message === "self_approval_denied" ? "self_approval_denied" : "workflow_vote_failed");
     const instance = data.instance ? mapInstanceRow(data.instance) : null;
