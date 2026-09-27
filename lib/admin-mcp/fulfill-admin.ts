@@ -59,6 +59,13 @@ import { isAdminClassApproval } from "@/lib/admin-mcp/audit-class";
 import { ADMIN_AUDIT_CLASS, auditActionForAdminTool } from "@/lib/admin-mcp/audit-class";
 import { fulfillOrgCreateFromQueuedArgs } from "@/lib/admin-mcp/orgs-create";
 import { fulfillOrgIssueAdminCredentialFromQueuedArgs } from "@/lib/admin-mcp/orgs-issue-admin-credential";
+import {
+  createPendingVoterBinding,
+  revokeVoterBinding,
+  type VoterBindingProvider,
+} from "@/lib/approval-workflow/voter-binding";
+import { sendVerificationDmToSlackUser } from "@/lib/approval-workflow/voter-binding-verification";
+import { getNotificationChannelSecretsById } from "@/lib/data/notification-channels";
 import type { PlatformOpsActor } from "@/lib/admin/platform-ops-gate";
 import type {
   ActionLimits,
@@ -694,6 +701,139 @@ function platformActorFromQueuedArgs(args: Record<string, unknown>): PlatformOps
   };
 }
 
+async function fulfillVoterBind(
+  approval: ApprovalRequest,
+  args: Record<string, unknown>
+): Promise<AdminFulfillment> {
+  const memberId = String(args.memberId || "").trim();
+  const provider = String(args.provider || "").trim() as VoterBindingProvider;
+  const channelKey = String(args.channelKey || "").trim();
+  const externalUserId = String(args.externalUserId || "").trim();
+  const expiresInDays = typeof args.expiresInDays === "number" ? args.expiresInDays : undefined;
+
+  if (!memberId || !provider || !channelKey || !externalUserId) {
+    throw new Error("missing_required_fields");
+  }
+
+  const bindResult = await createPendingVoterBinding({
+    orgId: approval.orgId,
+    provider,
+    channelKey,
+    externalUserId,
+    memberId,
+    expiresInDays,
+  });
+
+  if (!bindResult.ok) {
+    return {
+      ok: false,
+      tool: "approvalWorkflow.bindVoter",
+      at: new Date().toISOString(),
+      error: bindResult.reason,
+    };
+  }
+
+  if (provider === "slack") {
+    const channelSecrets = await getNotificationChannelSecretsById(approval.orgId, channelKey);
+    if (channelSecrets.botToken) {
+      const channels = await listNotificationChannels(approval.orgId);
+      const channel = channels.find((c) => c.id === channelKey);
+      const org = { name: "Staffpass組織", displayName: "" };
+      const memberName = `メンバー ${memberId.slice(0, 8)}`;
+
+      await sendVerificationDmToSlackUser({
+        botToken: channelSecrets.botToken,
+        slackUserId: externalUserId,
+        orgId: approval.orgId,
+        channelKey,
+        memberId,
+        memberDisplayName: memberName,
+        orgName: org.name,
+        verificationCode: bindResult.verificationCode,
+      });
+    }
+  }
+
+  await appendAuditEvent({
+    orgId: approval.orgId,
+    employeeId: null,
+    credentialId: null,
+    action: "admin.policy",
+    purpose: "admin.policy",
+    summary: `承認者バインディング作成（${provider}・管理MCP・人承認）`,
+    metadata: {
+      auditClass: ADMIN_AUDIT_CLASS,
+      approvalId: approval.id,
+      provider,
+      channelKey,
+      externalUserId,
+      memberId,
+      status: "pending",
+      expiresAt: bindResult.binding.expiresAt,
+    },
+  });
+
+  return {
+    ok: true,
+    tool: "approvalWorkflow.bindVoter",
+    at: new Date().toISOString(),
+    nextStepJa: "Slack DMで送信された確認ボタンをクリックして、バインディングを有効化してください。",
+  };
+}
+
+async function fulfillVoterUnbind(
+  approval: ApprovalRequest,
+  args: Record<string, unknown>
+): Promise<AdminFulfillment> {
+  const provider = String(args.provider || "").trim() as VoterBindingProvider;
+  const channelKey = String(args.channelKey || "").trim();
+  const externalUserId = String(args.externalUserId || "").trim();
+
+  if (!provider || !channelKey || !externalUserId) {
+    throw new Error("missing_required_fields");
+  }
+
+  const revokeResult = await revokeVoterBinding(
+    approval.orgId,
+    provider,
+    channelKey,
+    externalUserId
+  );
+
+  if (!revokeResult.ok) {
+    return {
+      ok: false,
+      tool: "approvalWorkflow.unbindVoter",
+      at: new Date().toISOString(),
+      error: revokeResult.reason,
+    };
+  }
+
+  await appendAuditEvent({
+    orgId: approval.orgId,
+    employeeId: null,
+    credentialId: null,
+    action: "admin.policy",
+    purpose: "admin.policy",
+    summary: `承認者バインディング取り消し（${provider}・管理MCP・人承認）`,
+    metadata: {
+      auditClass: ADMIN_AUDIT_CLASS,
+      approvalId: approval.id,
+      provider,
+      channelKey,
+      externalUserId,
+      status: "revoked",
+    },
+  });
+
+  return {
+    ok: true,
+    tool: "approvalWorkflow.unbindVoter",
+    at: new Date().toISOString(),
+    nextStepJa: "バインディングを取り消しました。このユーザーは承認ワークフローで投票できなくなります。",
+  };
+}
+
 async function fulfillOrgCreate(
   approval: ApprovalRequest,
   args: Record<string, unknown>
@@ -1325,6 +1465,12 @@ async function fulfillApprovedAdminCore(
         break;
       case "setup.lineApproval.demoteTelegram":
         fulfillment = await fulfillLineApprovalDemoteTelegram(approval, args);
+        break;
+      case "approvalWorkflow.bindVoter":
+        fulfillment = await fulfillVoterBind(approval, args);
+        break;
+      case "approvalWorkflow.unbindVoter":
+        fulfillment = await fulfillVoterUnbind(approval, args);
         break;
       case "orgs.create":
         fulfillment = await fulfillOrgCreate(approval, args);

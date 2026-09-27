@@ -21,7 +21,16 @@ const demoEmployeeWorkflowPolicies = new Map<string, OrgApprovalWorkflowPolicy>(
 const demoInstances = new Map<string, ApprovalWorkflowInstance>();
 const demoBallots = new Map<string, ApprovalWorkflowBallot>();
 const demoInitialized = new Set<string>();
-type DemoVoterBinding = { orgId: string; provider: string; channelKey: string; userId: string; memberId: string; expiresAt?: string; revoked?: boolean };
+type DemoVoterBinding = {
+  orgId: string;
+  provider: string;
+  channelKey: string;
+  userId: string;
+  memberId: string;
+  expiresAt?: string;
+  revoked?: boolean;
+  verifiedAt?: string;
+};
 const demoVoterBindings = new Map<string, DemoVoterBinding>();
 const bindingKey = (b: Pick<DemoVoterBinding, "orgId" | "provider" | "channelKey" | "userId">) => JSON.stringify([b.orgId,b.provider,b.channelKey,b.userId]);
 export function setDemoWorkflowVoterBinding(binding: DemoVoterBinding): void {
@@ -30,7 +39,11 @@ export function setDemoWorkflowVoterBinding(binding: DemoVoterBinding): void {
 }
 export function getDemoWorkflowVoterBinding(orgId: string, external: { provider: string; channelKey: string; userId: string }): string {
   const binding = demoVoterBindings.get(bindingKey({ orgId, ...external }));
-  return binding && !binding.revoked && (!binding.expiresAt || Date.parse(binding.expiresAt) > Date.now()) ? binding.memberId : "";
+  if (!binding) return "";
+  if (binding.revoked) return "";
+  if (!binding.verifiedAt) return "";
+  if (binding.expiresAt && Date.parse(binding.expiresAt) < Date.now()) return "";
+  return binding.memberId;
 }
 
 /**
@@ -53,7 +66,7 @@ export async function getMemberIdFromVoterBinding(
 
   const { data, error } = await admin
     .from("approval_workflow_voter_bindings")
-    .select("member_id, expires_at, revoked")
+    .select("member_id, expires_at, revoked_at, verified_at")
     .eq("org_id", orgId)
     .eq("provider", external.provider)
     .eq("channel_key", external.channelKey)
@@ -62,8 +75,14 @@ export async function getMemberIdFromVoterBinding(
 
   if (error || !data) return null;
 
-  const row = data as { member_id: string; expires_at?: string | null; revoked?: boolean };
-  if (row.revoked) return null;
+  const row = data as {
+    member_id: string;
+    expires_at?: string | null;
+    revoked_at?: string | null;
+    verified_at?: string | null;
+  };
+  if (row.revoked_at) return null;
+  if (!row.verified_at) return null;
   if (row.expires_at && Date.parse(row.expires_at) < Date.now()) return null;
 
   return row.member_id || null;

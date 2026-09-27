@@ -54,7 +54,7 @@ test("admin self-resolution cannot write intermediate, final, or rejecting ballo
       await initializeWorkflowForApproval(approval, null);
       const instance = (await getWorkflowInstanceByApprovalId(approval.id))!;
       const before = await getBallotsByInstanceId(instance.id);
-      setDemoWorkflowVoterBinding({ orgId: DEMO_ORG.id, provider: "slack", channelKey: "fixture", userId: "U_SELF", memberId: "requester" });
+      setDemoWorkflowVoterBinding({ orgId: DEMO_ORG.id, provider: "slack", channelKey: "fixture", userId: "U_SELF", memberId: "requester", verifiedAt: new Date().toISOString() });
       await expect(resolveApprovalWithWorkflow(approval.id, status, "slack:U_SELF", DEMO_ORG.id, {
         decisionId: "fixture-self-vote", externalVoter: { provider: "slack", channelKey: "fixture", userId: "U_SELF" },
       })).rejects.toThrow("self_approval_denied");

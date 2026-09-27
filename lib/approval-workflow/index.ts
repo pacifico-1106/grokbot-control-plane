@@ -54,3 +54,23 @@ export {
   summarizeApprovalWorkflowPolicyJa,
   nextStepApprovalWorkflowJa,
 } from "./validate";
+
+export {
+  createPendingVoterBinding,
+  verifyVoterBinding,
+  revokeVoterBinding,
+  listVoterBindings,
+  getVoterBinding,
+  checkSetupApproverBindingStatus,
+  resetDemoVoterBindings,
+  type VoterBinding,
+  type VoterBindingProvider,
+  type VoterBindingStatus,
+} from "./voter-binding";
+
+export {
+  sendVerificationDmToSlackUser,
+  handleVerificationButtonClick,
+  handleVerificationRejection,
+  parseVerificationCallbackValue,
+} from "./voter-binding-verification";
