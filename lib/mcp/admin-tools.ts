@@ -98,6 +98,13 @@ import {
   validateOrgPatchInput,
   platformPatchOrg,
 } from "@/lib/admin-mcp/orgs-patch";
+import {
+  createPendingVoterBinding,
+  revokeVoterBinding,
+  listVoterBindings,
+  checkSetupApproverBindingStatus,
+  type VoterBindingProvider,
+} from "@/lib/approval-workflow/voter-binding";
 
 export const ADMIN_MCP_TOOLS: McpToolDef[] = [
   {
@@ -899,6 +906,68 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
     },
   },
   {
+    name: "approvalWorkflow.bindVoter",
+    description:
+      "Bind an external identity (Slack/Telegram/LINE) to an org member for approval workflow voting (always_human, approvalClass admin). Identity verification required: Slack user receives a DM with a confirmation button. Binding is pending until verified. Cross-org invariant: member must belong to the same org as the channel. External team users (Slack Connect) rejected. Expiring bindings (default 180 days). No auto-matching by name/email guesses.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        memberId: { type: "string", description: "Target org_members.id to bind (must be same org)" },
+        provider: { type: "string", enum: ["slack", "telegram", "line"], description: "External identity provider" },
+        channelKey: { type: "string", description: "Notification channel UUID (org_notification_channels.id)" },
+        externalUserId: { type: "string", description: "External user ID (Slack user ID, Telegram user ID, LINE user ID)" },
+        expiresInDays: { type: "number", description: "Binding expiry in days (default 180)" },
+        jobId: { type: "string" },
+        approvalId: { type: "string", description: "Re-invoke with approved ticket ID" },
+      },
+      required: ["memberId", "provider", "channelKey", "externalUserId"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "approvalWorkflow.unbindVoter",
+    description:
+      "Revoke an existing voter binding (always_human, approvalClass admin). The binding is marked as revoked and the user can no longer vote. Cannot unbind if there would be no active voters left for admin-class tickets.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        provider: { type: "string", enum: ["slack", "telegram", "line"], description: "External identity provider" },
+        channelKey: { type: "string", description: "Notification channel UUID" },
+        externalUserId: { type: "string", description: "External user ID to unbind" },
+        jobId: { type: "string" },
+        approvalId: { type: "string", description: "Re-invoke with approved ticket ID" },
+      },
+      required: ["provider", "channelKey", "externalUserId"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "approvalWorkflow.listVoterBindings",
+    description:
+      "List voter bindings for the org (read-only, no approval). Filter by provider, channelKey, or memberId. Returns binding status (pending/active/expired/revoked).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        provider: { type: "string", enum: ["slack", "telegram", "line"], description: "Filter by provider" },
+        channelKey: { type: "string", description: "Filter by notification channel UUID" },
+        memberId: { type: "string", description: "Filter by member ID" },
+        includeExpired: { type: "boolean", description: "Include expired bindings (default false)" },
+        includeRevoked: { type: "boolean", description: "Include revoked bindings (default false)" },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "setup.approverBindingStatus",
+    description:
+      "Check the setup status of approver bindings for the org (read-only, no approval). Part of the setup rail: WS Install -> employee -> approver (bind) -> smoke. Reports missing or pending approver bindings.",
+    inputSchema: {
+      type: "object",
+      properties: {},
+      additionalProperties: false,
+    },
+  },
+  {
     name: "orgs.create",
     description:
       "Create a new tenant (org + Auth owner + trial) after human approval (always_human). Platform super-admin only — normal tenant gb_adm_ is rejected (fail-closed). Reuses signup pipeline (createOrgWithOwner / provisionOrgForUser). Never returns or audits plaintext passwords. After success, issue AI employees via employees.issue in the new org.",
@@ -1037,6 +1106,8 @@ const ADMIN_READ_ONLY_TOOLS_SET = new Set<string>([
   "stuckWatch.resolve",
   "approvalWorkflow.get",
   "approvalWorkflow.inspect",
+  "approvalWorkflow.listVoterBindings",
+  "setup.approverBindingStatus",
   "orgs.status",
   "orgs.patch",
   "approvals.proxyResolve",
@@ -2275,6 +2346,109 @@ export async function callAdminMcpTool(
     }
     const target = await getApprovalById(targetId, cred.orgId);
     if (!target || target.status !== "pending") return toolResult({ ok: false, code: "target_approval_not_pending" }, true);
+  }
+
+  if (name === "approvalWorkflow.bindVoter") {
+    const memberId = typeof args.memberId === "string" ? args.memberId.trim() : "";
+    const provider = typeof args.provider === "string" ? args.provider.trim() : "";
+    const channelKey = typeof args.channelKey === "string" ? args.channelKey.trim() : "";
+    const externalUserId = typeof args.externalUserId === "string" ? args.externalUserId.trim() : "";
+
+    if (!memberId || !provider || !channelKey || !externalUserId) {
+      return toolResult(
+        { ok: false, code: "missing_required_fields", message: "memberId, provider, channelKey, externalUserId が必要です" },
+        true
+      );
+    }
+
+    if (!["slack", "telegram", "line"].includes(provider)) {
+      return toolResult(
+        { ok: false, code: "invalid_provider", message: "provider は slack, telegram, line のいずれかである必要があります" },
+        true
+      );
+    }
+
+    const channels = await listNotificationChannels(cred.orgId);
+    const channel = channels.find((c) => c.id === channelKey && c.provider === provider);
+    if (!channel) {
+      return toolResult(
+        { ok: false, code: "channel_not_found", message: "指定された通知チャンネルが見つかりません" },
+        true
+      );
+    }
+  }
+
+  if (name === "approvalWorkflow.unbindVoter") {
+    const provider = typeof args.provider === "string" ? args.provider.trim() : "";
+    const channelKey = typeof args.channelKey === "string" ? args.channelKey.trim() : "";
+    const externalUserId = typeof args.externalUserId === "string" ? args.externalUserId.trim() : "";
+
+    if (!provider || !channelKey || !externalUserId) {
+      return toolResult(
+        { ok: false, code: "missing_required_fields", message: "provider, channelKey, externalUserId が必要です" },
+        true
+      );
+    }
+
+    if (!["slack", "telegram", "line"].includes(provider)) {
+      return toolResult(
+        { ok: false, code: "invalid_provider", message: "provider は slack, telegram, line のいずれかである必要があります" },
+        true
+      );
+    }
+  }
+
+  if (name === "approvalWorkflow.listVoterBindings") {
+    const provider = typeof args.provider === "string" ? args.provider.trim() : undefined;
+    const channelKey = typeof args.channelKey === "string" ? args.channelKey.trim() : undefined;
+    const memberId = typeof args.memberId === "string" ? args.memberId.trim() : undefined;
+    const includeExpired = args.includeExpired === true;
+    const includeRevoked = args.includeRevoked === true;
+
+    if (provider && !["slack", "telegram", "line"].includes(provider)) {
+      return toolResult(
+        { ok: false, code: "invalid_provider", message: "provider は slack, telegram, line のいずれかである必要があります" },
+        true
+      );
+    }
+
+    const bindings = await listVoterBindings({
+      orgId: cred.orgId,
+      provider: provider as VoterBindingProvider | undefined,
+      channelKey,
+      memberId,
+      includeExpired,
+      includeRevoked,
+    });
+
+    return toolResult({
+      ok: true,
+      bindings: bindings.map((b) => ({
+        provider: b.provider,
+        channelKey: b.channelKey,
+        externalUserId: b.externalUserId,
+        memberId: b.memberId,
+        status: b.status,
+        teamId: b.teamId,
+        expiresAt: b.expiresAt,
+        verifiedAt: b.verifiedAt,
+        createdAt: b.createdAt,
+      })),
+      count: bindings.length,
+    });
+  }
+
+  if (name === "setup.approverBindingStatus") {
+    const status = await checkSetupApproverBindingStatus(cred.orgId);
+    return toolResult({
+      ok: true,
+      ...status,
+      nextTool: status.hasActiveBindings
+        ? null
+        : status.hasPendingBindings
+          ? null
+          : "approvalWorkflow.bindVoter",
+    });
   }
 
   if (name === "replyPolicy.patch") {

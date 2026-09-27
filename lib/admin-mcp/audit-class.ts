@@ -53,6 +53,8 @@ export const ADMIN_TOOL_AUDIT_ACTION: Record<string, AdminAuditAction> = {
   "approvalWorkflow.patch": "admin.policy",
   "internalAudienceRule.patch": "admin.policy",
   "approvalWorkflow.remind": "admin.policy",
+  "approvalWorkflow.bindVoter": "admin.policy",
+  "approvalWorkflow.unbindVoter": "admin.policy",
   "approvals.proxyResolve": "admin.proxy_approve",
 };
 

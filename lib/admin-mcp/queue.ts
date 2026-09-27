@@ -37,6 +37,8 @@ const TOOL_TITLE_JA: Record<string, string> = {
   "setup.lineApproval.upsert": "承認用LINEチャネル",
   "setup.lineApproval.setEmployeeInbox": "AI社員の承認インボックス（LINE）",
   "setup.lineApproval.demoteTelegram": "Telegram承認チャネルの無効化",
+  "approvalWorkflow.bindVoter": "承認者バインディング作成",
+  "approvalWorkflow.unbindVoter": "承認者バインディング取り消し",
   "orgs.create": "テナント作成（プラットフォーム運用）",
   "orgs.issueAdminCredential": "管理MCP認証発行（プラットフォーム運用）",
 };

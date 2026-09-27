@@ -200,6 +200,34 @@ export async function getNotificationChannelByWebhookRef(
   return (await runtimeRows({ provider, webhookRef: ref }))[0] ?? null;
 }
 
+export async function getNotificationChannelSecretsById(
+  channelId: string,
+  orgId: string
+): Promise<{ botToken?: string; signingSecret?: string; channelAccessToken?: string; channelSecret?: string } | null> {
+  if (isDemoMode()) {
+    const demo = demoChannels.find((row) => row.id === channelId && row.orgId === orgId);
+    return demo?.secrets ?? null;
+  }
+
+  const admin = createSupabaseAdminClient();
+  if (!admin) return null;
+
+  const { data, error } = await admin
+    .from("org_notification_channels")
+    .select("id")
+    .eq("id", channelId)
+    .eq("org_id", orgId)
+    .maybeSingle();
+
+  if (error || !data) return null;
+
+  const credentials = await credentialsByChannelIds([channelId]);
+  const ciphertext = credentials.get(channelId);
+  if (!ciphertext) return null;
+
+  return decryptNotificationSecrets(ciphertext);
+}
+
 function telegramEnvConfig() {
   return {
     token: process.env.TELEGRAM_BOT_TOKEN?.trim() || "",

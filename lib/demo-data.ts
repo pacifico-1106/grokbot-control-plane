@@ -389,6 +389,21 @@ export function getRuntimeMemberById(id: string) {
   return runtimeMembers.find((m) => m.id === id) ?? null;
 }
 
+export function setRuntimeMember(member: OrgMember) {
+  const idx = runtimeMembers.findIndex((m) => m.id === member.id);
+  if (idx >= 0) runtimeMembers[idx] = member;
+  else runtimeMembers.push(member);
+}
+
+export function resetRuntimeMembers() {
+  runtimeMembers.length = 0;
+  for (const m of DEMO_MEMBERS) {
+    runtimeMembers.push({ ...m, capabilities: [...(m.capabilities ?? [])] });
+  }
+}
+
+export type RuntimeMember = OrgMember;
+
 export function upsertRuntimeMember(member: OrgMember) {
   const idx = runtimeMembers.findIndex((m) => m.id === member.id);
   if (idx >= 0) runtimeMembers[idx] = member;
