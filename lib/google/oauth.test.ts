@@ -7,6 +7,7 @@ import {
   googleAuthorizeUrl,
   googleOAuthConfigured,
   signGoogleOAuthState,
+  validateIdToken,
   verifyGoogleOAuthState,
 } from "./oauth";
 
@@ -216,8 +217,6 @@ describe("decodeIdToken", () => {
 });
 
 describe("validateIdToken", () => {
-  const { validateIdToken } = require("./oauth");
-
   test("validates correct token", () => {
     process.env.GOOGLE_OAUTH_CLIENT_ID = "test-client-id";
     const result = validateIdToken({

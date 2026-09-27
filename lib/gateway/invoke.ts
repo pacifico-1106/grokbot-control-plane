@@ -35,7 +35,7 @@ import {
   recordGatedConfirmAction,
 } from "@/lib/billing/meter";
 import { assertBillingAllowsGateway } from "@/lib/billing/entitlements";
-import { evaluateDualEgress, evaluateEgressMatrix } from "@/lib/gateway/egress";
+import { evaluateDualEgress } from "@/lib/gateway/egress";
 import {
   parseConversationContext,
   resolveAudience,
@@ -77,9 +77,7 @@ import {
   snsDeliveryFromFulfillment,
   parseFulfillment,
   type ConversationDelivery,
-  type ApprovalFulfillment,
 } from "@/lib/approvals/fulfill";
-import { executeApproval } from "@/lib/approvals/execution";
 import { evaluateAllowedAccountsForBrowser } from "@/lib/employees/allowed-accounts";
 import { evaluateSpend } from "@/lib/spend-gate";
 import { evaluateActionLimit } from "@/lib/action-gate";
