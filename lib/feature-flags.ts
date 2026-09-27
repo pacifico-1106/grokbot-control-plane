@@ -62,3 +62,23 @@ export function isSlackApprovalStrict(): boolean {
 export function isGoogleCalendarReadEnabled(): boolean {
   return parseFlag(process.env.GOOGLE_CALENDAR_READ_ENABLED);
 }
+
+/**
+ * Slack reaction stamps for AI employee wakes and replies.
+ *
+ * When ON:
+ * - Adds :eyes: reaction on triggering message when wake is accepted.
+ * - Replaces/adds :white_check_mark: reaction when reply is posted.
+ * - Adds :hourglass_flowing_sand: reaction when escalated to approval.
+ * - Uses the posting identity already configured for the workspace.
+ * - Required scope: reactions:write. Degrades silently if scope missing (logs once).
+ * - No reactions in channels where bot is not a member.
+ * - No reactions on Slack Connect external messages if posting is disallowed there.
+ * - Idempotent: safe to call multiple times for same message.
+ *
+ * When OFF (default):
+ * - No reaction stamps added. Existing behavior preserved.
+ */
+export function isSlackReactionStampsEnabled(): boolean {
+  return parseFlag(process.env.SLACK_REACTION_STAMPS);
+}

@@ -54,6 +54,7 @@ import {
 import { isDemoMode } from "@/lib/mode";
 import { verifySlackSignature } from "@/lib/notify/slack";
 import { createSupabaseAdminClient } from "@/lib/supabase";
+import { addLookingReaction } from "@/lib/slack/reaction-stamps";
 
 const WAKE_TIMEOUT_MS = 10_000;
 const MENTION_RE = /<@([UW][A-Z0-9_]+)(?:\|[^>]+)?>/gi;
@@ -515,6 +516,14 @@ async function postWake(
         eventId: payload.eventId,
       });
     }
+
+    // Add :eyes: reaction to indicate wake accepted (flag-gated, best-effort)
+    void addLookingReaction({
+      orgId: target.orgId,
+      employeeId: target.employeeId,
+      channel: payload.channel,
+      timestamp: payload.ts,
+    }).catch(() => undefined);
 
     const summary =
       trigger === "user_token_im"

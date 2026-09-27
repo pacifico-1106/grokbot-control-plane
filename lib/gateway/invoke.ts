@@ -108,6 +108,10 @@ import {
   buildSecretDetectionErrorResponse,
 } from "@/lib/security/secret-detector";
 import { isGoogleCalendarReadEnabled } from "@/lib/feature-flags";
+import {
+  addCompletedReaction,
+  addWaitingApprovalReaction,
+} from "@/lib/slack/reaction-stamps";
 import { readCalendarFreebusy } from "@/lib/google/calendar-read";
 import {
   addCalendarReadGrant,
@@ -381,6 +385,24 @@ async function createNeedsApprovalResponse(opts: {
         }]
       )
     : [];
+
+  // Add :hourglass_flowing_sand: reaction on original message to indicate waiting for approval (flag-gated, best-effort)
+  if (
+    conversation?.surface === "slack" &&
+    conversation.slackChannelId &&
+    (conversation.ts || conversation.messageTs || conversation.slackTs)
+  ) {
+    const originalTs = conversation.ts || conversation.messageTs || conversation.slackTs || "";
+    if (looksLikeSlackTs(originalTs)) {
+      void addWaitingApprovalReaction({
+        orgId: opts.orgId,
+        employeeId: opts.employeeId,
+        postingAs: opts.employee?.postingAs || "bot",
+        channel: conversation.slackChannelId,
+        timestamp: originalTs,
+      }).catch(() => undefined);
+    }
+  }
 
   return jsonResult(
     {
@@ -1514,6 +1536,18 @@ export async function runGatewayInvoke(
         );
       }
       conversationDelivery = posted;
+
+      // Add :white_check_mark: reaction on original message to indicate reply completed (flag-gated, best-effort)
+      const originalTs = resolveParentMessageTs({ conversation: ctx, args });
+      if (ctx?.surface === "slack" && ctx.slackChannelId && originalTs && looksLikeSlackTs(originalTs)) {
+        void addCompletedReaction({
+          orgId: orgId || employee.orgId,
+          employeeId,
+          postingAs: employee.postingAs || "bot",
+          channel: ctx.slackChannelId,
+          timestamp: originalTs,
+        }).catch(() => undefined);
+      }
       }
     }
   }
