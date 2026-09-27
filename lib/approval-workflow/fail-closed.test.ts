@@ -13,7 +13,7 @@ mock.module("@/lib/data/approvals", () => ({
 }));
 mock.module("@/lib/supabase", () => ({ createSupabaseAdminClient: () => ({
   rpc: async (name: string) => {
-    if (name === "cast_approval_workflow_vote") { voteCalls++; return { data: null, error: { message: "fixture transaction failed" } }; }
+    if (name === "cast_approval_workflow_vote" || name === "cast_approval_workflow_vote_checked") { voteCalls++; return { data: null, error: { message: "fixture transaction failed" } }; }
     return { data: initialized, error: rpcError ? { message: "fixture outage" } : null };
   },
   from: (name: string) => {
