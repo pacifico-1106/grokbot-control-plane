@@ -200,32 +200,39 @@ export async function getNotificationChannelByWebhookRef(
   return (await runtimeRows({ provider, webhookRef: ref }))[0] ?? null;
 }
 
+/**
+ * Get stored secrets for an existing notification channel by ID.
+ * Used to retrieve bot token for validation when updating without re-entering credentials.
+ *
+ * @param orgId Organization ID
+ * @param channelId Channel ID
+ * @returns Decrypted secrets or empty object if not found
+ */
 export async function getNotificationChannelSecretsById(
-  channelId: string,
-  orgId: string
-): Promise<{ botToken?: string; signingSecret?: string; channelAccessToken?: string; channelSecret?: string } | null> {
+  orgId: string,
+  channelId: string
+): Promise<Record<string, string>> {
   if (isDemoMode()) {
-    const demo = demoChannels.find((row) => row.id === channelId && row.orgId === orgId);
-    return demo?.secrets ?? null;
+    const channel = demoChannels.find((row) => row.id === channelId && row.orgId === orgId);
+    return channel?.secrets || {};
   }
 
   const admin = createSupabaseAdminClient();
-  if (!admin) return null;
+  if (!admin) return {};
 
-  const { data, error } = await admin
-    .from("org_notification_channels")
-    .select("id")
-    .eq("id", channelId)
-    .eq("org_id", orgId)
+  const { data } = await admin
+    .from("org_notification_channel_secrets")
+    .select("credentials_ciphertext")
+    .eq("channel_id", channelId)
     .maybeSingle();
 
-  if (error || !data) return null;
+  if (!data?.credentials_ciphertext) return {};
 
-  const credentials = await credentialsByChannelIds([channelId]);
-  const ciphertext = credentials.get(channelId);
-  if (!ciphertext) return null;
-
-  return decryptNotificationSecrets(ciphertext);
+  try {
+    return decryptNotificationSecrets(String(data.credentials_ciphertext));
+  } catch {
+    return {};
+  }
 }
 
 function telegramEnvConfig() {
