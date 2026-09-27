@@ -389,36 +389,46 @@ if (channel.is_shared) {
 
 ## 既知の制限事項
 
-### APPROVAL_RECIPIENT_ROUTING有効化前に修正が必要な問題
+### APPROVAL_RECIPIENT_ROUTING一意制約の修正（完了）
 
 **問題**: `approval_notification_deliveries` テーブルの一意制約
 
-現在の一意制約:
+旧来の一意制約 `UNIQUE (approval_id, channel_id)` では、DMデリバリーとチャンネルデリバリーが同じ `channel_id` を共有する場合に衝突が発生していました。
+
+**修正内容**（20260927300000_delivery_unique_fix.sql で適用）:
+
+1. 旧来の完全一意制約を部分一意インデックスに置換
+   - チャンネルデリバリー（recipient IS NULL）: `(approval_id, channel_id) WHERE recipient IS NULL`
+   - 受信者別デリバリー（recipient IS NOT NULL）: `(approval_id, channel_id, recipient) WHERE recipient IS NOT NULL`
+
+2. `recordNotificationDelivery` をSQL RPC関数 `upsert_notification_delivery` を使用するように変更
+   - Supabase JS の `onConflict` は部分インデックスを直接ターゲットできないため
+
+**検証SQL**:
 ```sql
-UNIQUE (approval_id, channel_id)
+-- 1. 旧来の完全一意制約が削除されていること
+SELECT constraint_name FROM information_schema.table_constraints
+WHERE table_name = 'approval_notification_deliveries'
+  AND constraint_type = 'UNIQUE';
+-- 結果: 空（完全一意制約なし）
+
+-- 2. 両方の部分一意インデックスが存在すること
+SELECT indexname FROM pg_indexes
+WHERE tablename = 'approval_notification_deliveries'
+  AND indexname LIKE '%unique%';
+-- 結果:
+--   approval_notification_deliveries_channel_unique_idx (recipient IS NULL)
+--   approval_notification_deliveries_recipient_unique_idx (recipient IS NOT NULL)
+
+-- 3. 重複がないこと
+SELECT approval_id, channel_id, recipient, count(*)
+FROM approval_notification_deliveries
+GROUP BY approval_id, channel_id, recipient
+HAVING count(*) > 1;
+-- 結果: 0行
 ```
 
-DMデリバリーとチャンネルデリバリーが同じ `channel_id` を共有する場合、衝突が発生します。
-
-**修正内容**（#126コードデプロイ後に適用）:
-
-1. マイグレーション適用
-   ```sql
-   -- 20260927200000_delivery_per_recipient.sql
-   ALTER TABLE approval_notification_deliveries
-     ADD COLUMN recipient TEXT,
-     ADD COLUMN recipient_kind TEXT DEFAULT 'channel';
-   
-   -- 一意制約の変更
-   ALTER TABLE approval_notification_deliveries
-     DROP CONSTRAINT approval_notification_deliveries_approval_id_channel_id_key,
-     ADD CONSTRAINT approval_notification_deliveries_unique
-       UNIQUE (approval_id, channel_id, recipient);
-   ```
-
-2. `onConflict` の変更（コード側）
-
-**ステータス**: #126のコードデプロイ後、マイグレーション適用が必要
+**ステータス**: ✅ 修正完了（PR #127）
 
 ---
 
