@@ -3,52 +3,53 @@
 --
 -- Changes:
 -- 1. Add recipient column to track individual delivery targets
--- 2. Change unique constraint from (approval_id, channel_id)
---    to (approval_id, channel_id, recipient)
---
--- This allows:
--- - Same approval delivered to multiple recipients on same channel (channel + DMs)
--- - Tracking individual delivery per voter binding
--- - Thread deliveries tracked separately from channel deliveries
+-- 2. Add partial unique index for DM/thread deliveries (recipient IS NOT NULL)
+-- 3. KEEP the old unique constraint for channel deliveries (recipient IS NULL)
 --
 -- Backward compatibility:
--- - Existing rows have NULL recipient (channel delivery)
--- - New DM deliveries set recipient to external_user_id
+-- - Old code uses `onConflict: "approval_id,channel_id"` which requires the original
+--   constraint to exist. We KEEP this constraint for channel deliveries.
+-- - New DM deliveries have recipient IS NOT NULL and use a separate partial index.
+-- - Existing rows have NULL recipient (channel delivery) and are unaffected.
+--
+-- Note: The UPDATE backfill for recipient_kind is safe for small tables.
+
+begin;
+set local lock_timeout = '5s';
 
 -- Add recipient column
-alter table approval_notification_deliveries
+alter table public.approval_notification_deliveries
   add column if not exists recipient text;
 
 -- Add recipient_kind to distinguish delivery types
-alter table approval_notification_deliveries
+alter table public.approval_notification_deliveries
   add column if not exists recipient_kind text check (recipient_kind in ('channel', 'dm', 'thread'));
 
--- Drop old unique constraint
-alter table approval_notification_deliveries
-  drop constraint if exists approval_notification_deliveries_approval_id_channel_id_key;
+-- DO NOT drop the old unique constraint!
+-- Old code depends on: onConflict: "approval_id,channel_id"
+-- The constraint approval_notification_deliveries_approval_id_channel_id_key remains.
 
--- Create new unique constraint including recipient
--- Uses COALESCE to treat NULL as empty string for uniqueness
-create unique index if not exists approval_notification_deliveries_unique_per_recipient
-  on approval_notification_deliveries (approval_id, channel_id, coalesce(recipient, ''));
+-- Add partial unique index for DM/thread deliveries (recipient IS NOT NULL)
+-- This ensures uniqueness for (approval_id, channel_id, recipient) when recipient is set.
+create unique index if not exists approval_notification_deliveries_recipient_unique_idx
+  on public.approval_notification_deliveries (approval_id, channel_id, recipient)
+  where recipient is not null;
 
 -- Index for looking up deliveries by recipient
 create index if not exists approval_notification_deliveries_recipient_idx
-  on approval_notification_deliveries (channel_id, recipient)
+  on public.approval_notification_deliveries (channel_id, recipient)
   where recipient is not null;
 
--- Index for looking up channel deliveries (recipient IS NULL)
-create index if not exists approval_notification_deliveries_channel_only_idx
-  on approval_notification_deliveries (approval_id, channel_id)
-  where recipient is null;
-
 -- Update existing rows to have recipient_kind = 'channel'
-update approval_notification_deliveries
+-- Safe backfill: table is typically small (one row per approval per channel)
+update public.approval_notification_deliveries
   set recipient_kind = 'channel'
   where recipient_kind is null;
 
-comment on column approval_notification_deliveries.recipient is
+comment on column public.approval_notification_deliveries.recipient is
   'External user ID for DM deliveries, thread_ts for thread deliveries, NULL for channel';
 
-comment on column approval_notification_deliveries.recipient_kind is
+comment on column public.approval_notification_deliveries.recipient_kind is
   'Type of delivery: channel (default inbox), dm (direct message), thread (conversation reply)';
+
+commit;
