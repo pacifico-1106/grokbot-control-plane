@@ -1,4 +1,4 @@
-import { readdirSync } from "node:fs";
+import { readdirSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 
@@ -11,7 +11,15 @@ function tests(dir) {
     entry.isDirectory() ? tests(`${dir}/${entry.name}`) :
       entry.name.endsWith(".test.ts") ? [`${dir}/${entry.name}`] : []);
 }
-const files = process.argv.slice(2).length ? process.argv.slice(2) : [...tests("lib"), ...tests("app")];
+function expandArgs(args) {
+  return args.flatMap(arg => {
+    try {
+      const stat = statSync(arg);
+      return stat.isDirectory() ? tests(arg) : [arg];
+    } catch { return [arg]; }
+  });
+}
+const files = process.argv.slice(2).length ? expandArgs(process.argv.slice(2)) : [...tests("lib"), ...tests("app")];
 let failed = 0;
 for (const file of files.sort()) {
   const result = spawnSync(bun, ["--no-env-file", "test", "--preload", resolve("tests/security/no-network.ts"), resolve(file)], { env, stdio: "inherit" });
