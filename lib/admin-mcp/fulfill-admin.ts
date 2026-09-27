@@ -734,8 +734,8 @@ async function fulfillVoterBind(
   }
 
   if (provider === "slack") {
-    const channelSecrets = await getNotificationChannelSecretsById(channelKey, approval.orgId);
-    if (channelSecrets?.botToken) {
+    const channelSecrets = await getNotificationChannelSecretsById(approval.orgId, channelKey);
+    if (channelSecrets.botToken) {
       const channels = await listNotificationChannels(approval.orgId);
       const channel = channels.find((c) => c.id === channelKey);
       const org = { name: "Staffpass組織", displayName: "" };

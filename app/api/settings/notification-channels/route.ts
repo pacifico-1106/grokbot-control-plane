@@ -11,6 +11,8 @@ import { getAppOrigin } from "@/lib/approvals/tokens";
 import { ensureGlobalTelegramWebhook, registerTelegramWebhook } from "@/lib/notify/telegram";
 import { requireOrgAdminSession } from "@/lib/auth/require-org";
 import { channelErrorPayload } from "@/lib/notify/channel-errors";
+import { validateSlackChannelNotExternal, getSlackBotTeamId } from "@/lib/slack/channel-validation";
+import { getNotificationChannelSecretsById as getNotificationChannelSecrets } from "@/lib/data/notification-channels";
 import type { NotificationProvider } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -74,7 +76,68 @@ export async function PUT(req: Request) {
           botToken: String(body.botToken || "").trim(),
           signingSecret: String(body.signingSecret || "").trim(),
         };
+  // P0 Item 5: Reject Slack Connect / externally shared channels
+  // This check is always enforced at registration time (not behind flag) for security
+  // Item 7: Load stored bot token when secrets.botToken is empty
+  // Item 8: Capture expectedTeamId via auth.test at registration
+  let slackTeamId: string | undefined;
+  if (provider === "slack" && enabled && destination) {
+    let slackBotToken = secrets.botToken;
+    // If no new token provided, load the stored token for validation
+    if (!slackBotToken && existingChannel?.id) {
+      const storedSecrets = await getNotificationChannelSecrets(gate.orgId, existingChannel.id);
+      slackBotToken = storedSecrets.botToken || "";
+    }
+    // Fail closed if no token available
+    if (!slackBotToken) {
+      return NextResponse.json(
+        channelErrorPayload("bot_token_required", "Slackボットトークンが必要です"),
+        { status: 400 }
+      );
+    }
+    // Validate channel is not externally shared
+    const validation = await validateSlackChannelNotExternal(slackBotToken, destination);
+    if (!validation.ok) {
+      await appendAuditEvent({
+        orgId: gate.orgId,
+        employeeId: null,
+        credentialId: null,
+        actorEmail: gate.email,
+        action: "notification.channel_updated",
+        purpose: null,
+        summary: `Slack承認チャンネル登録拒否（外部共有チャンネル）`,
+        metadata: {
+          provider,
+          channelId: destination,
+          validationCode: validation.code,
+          validationReason: validation.reason,
+        },
+      });
+      return NextResponse.json(
+        channelErrorPayload(
+          validation.code,
+          `外部共有チャンネル（Slack Connect）は承認インボックスとして使用できません: ${validation.reason}`
+        ),
+        { status: 400 }
+      );
+    }
+    // Item 8: Capture team_id via auth.test to store as expectedTeamId
+    const teamIdResult = await getSlackBotTeamId(slackBotToken);
+    if (teamIdResult.ok) {
+      slackTeamId = teamIdResult.teamId;
+    } else {
+      console.warn("slack_auth_test_failed", {
+        channelId: destination,
+        reason: teamIdResult.reason,
+      });
+    }
+  }
+
   try {
+    // Add expectedTeamId to Slack config if captured
+    const finalConfig = provider === "slack" && slackTeamId
+      ? { ...config, expectedTeamId: slackTeamId }
+      : config;
     const saved = await upsertNotificationChannel({
       orgId: gate.orgId,
       ...(existingChannel?.id ? { id: existingChannel.id } : {}),
@@ -82,7 +145,7 @@ export async function PUT(req: Request) {
       label: String(body.label || "").trim(),
       enabled,
       isDefault: body.isDefault === true,
-      config,
+      config: finalConfig,
       secrets,
     });
     let webhook: { ok: boolean; error?: string } | null = null;
