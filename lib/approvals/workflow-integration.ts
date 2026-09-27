@@ -121,12 +121,14 @@ async function resolveWorkflow(
   const { instance } = await initializeWorkflowForApproval(approval, approval.employeeId || null);
 
   if (!instance) {
+    // P0 Item 5: Record decisionId for W1 replay protection when strict mode is ON
     const resolved = await baseResolveApproval(id, status, resolvedBy, orgId, {
       memberId: opts.memberId,
       revisionNote: opts.revisionNote,
       grokBotAgentId: opts.grokBotAgentId,
       actorId: opts.actorId,
       decisionId: opts.decisionId,
+      externalVoter: opts.externalVoter,
     });
 
     return {
