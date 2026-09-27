@@ -26,8 +26,9 @@ const LINE_TOKEN = "line-access-token-secret-test-value";
 const LINE_SECRET = "line-channel-secret-test-value";
 const TELEGRAM_TOKEN = "telegram-bot-token-secret-test";
 const ENCRYPTION_KEY = "test-key-that-is-at-least-32-characters-long";
-const originalKey = process.env.NOTIFICATION_CONFIG_ENCRYPTION_KEY;
-const originalFetch = globalThis.fetch;
+
+let savedEncryptionKey: string | undefined;
+let savedFetch: typeof globalThis.fetch;
 
 function demoCred(): ResolvedAdminCredential {
   const agent = resetDemoAdminAgent({
@@ -101,6 +102,8 @@ function approval(orgId: string, employee?: Partial<Employee>): ApprovalRequest 
 }
 
 beforeEach(() => {
+  savedEncryptionKey = process.env.NOTIFICATION_CONFIG_ENCRYPTION_KEY;
+  savedFetch = globalThis.fetch;
   globalThis.fetch = (async (url) => {
     if (!String(url).startsWith("https://api.line.me/")) throw new Error("unexpected_fixture_endpoint");
     return Response.json({});
@@ -109,9 +112,9 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  if (originalKey === undefined) delete process.env.NOTIFICATION_CONFIG_ENCRYPTION_KEY;
-  else process.env.NOTIFICATION_CONFIG_ENCRYPTION_KEY = originalKey;
-  globalThis.fetch = originalFetch;
+  if (savedEncryptionKey === undefined) delete process.env.NOTIFICATION_CONFIG_ENCRYPTION_KEY;
+  else process.env.NOTIFICATION_CONFIG_ENCRYPTION_KEY = savedEncryptionKey;
+  globalThis.fetch = savedFetch;
   resetDemoNotificationChannels(ORG);
 });
 

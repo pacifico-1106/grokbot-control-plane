@@ -1,14 +1,18 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
   decryptNotificationSecrets,
   encryptNotificationSecrets,
 } from "./crypto";
 
-const originalKey = process.env.NOTIFICATION_CONFIG_ENCRYPTION_KEY;
+let savedEncryptionKey: string | undefined;
+
+beforeEach(() => {
+  savedEncryptionKey = process.env.NOTIFICATION_CONFIG_ENCRYPTION_KEY;
+});
 
 afterEach(() => {
-  if (originalKey === undefined) delete process.env.NOTIFICATION_CONFIG_ENCRYPTION_KEY;
-  else process.env.NOTIFICATION_CONFIG_ENCRYPTION_KEY = originalKey;
+  if (savedEncryptionKey === undefined) delete process.env.NOTIFICATION_CONFIG_ENCRYPTION_KEY;
+  else process.env.NOTIFICATION_CONFIG_ENCRYPTION_KEY = savedEncryptionKey;
 });
 
 describe("tenant notification credential encryption", () => {

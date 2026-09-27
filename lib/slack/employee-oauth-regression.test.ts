@@ -12,23 +12,27 @@ const TEST_ORG_ID = "org_test_regression";
 const TEST_EMPLOYEE_ID = "emp_test_regression";
 const TEST_NONCE = "regression-nonce-123";
 const ENCRYPTION_KEY = "test-key-that-is-at-least-32-characters-long";
-const originalKey = process.env.NOTIFICATION_CONFIG_ENCRYPTION_KEY;
-const originalSecret = process.env.SLACK_CLIENT_SECRET;
-const originalClientId = process.env.SLACK_CLIENT_ID;
+
+let savedEncryptionKey: string | undefined;
+let savedSlackSecret: string | undefined;
+let savedSlackClientId: string | undefined;
 
 beforeEach(() => {
+  savedEncryptionKey = process.env.NOTIFICATION_CONFIG_ENCRYPTION_KEY;
+  savedSlackSecret = process.env.SLACK_CLIENT_SECRET;
+  savedSlackClientId = process.env.SLACK_CLIENT_ID;
   process.env.NOTIFICATION_CONFIG_ENCRYPTION_KEY = ENCRYPTION_KEY;
   process.env.SLACK_CLIENT_SECRET = ENCRYPTION_KEY;
   process.env.SLACK_CLIENT_ID = "test-client-id";
 });
 
 afterEach(() => {
-  if (originalKey === undefined) delete process.env.NOTIFICATION_CONFIG_ENCRYPTION_KEY;
-  else process.env.NOTIFICATION_CONFIG_ENCRYPTION_KEY = originalKey;
-  if (originalSecret === undefined) delete process.env.SLACK_CLIENT_SECRET;
-  else process.env.SLACK_CLIENT_SECRET = originalSecret;
-  if (originalClientId === undefined) delete process.env.SLACK_CLIENT_ID;
-  else process.env.SLACK_CLIENT_ID = originalClientId;
+  if (savedEncryptionKey === undefined) delete process.env.NOTIFICATION_CONFIG_ENCRYPTION_KEY;
+  else process.env.NOTIFICATION_CONFIG_ENCRYPTION_KEY = savedEncryptionKey;
+  if (savedSlackSecret === undefined) delete process.env.SLACK_CLIENT_SECRET;
+  else process.env.SLACK_CLIENT_SECRET = savedSlackSecret;
+  if (savedSlackClientId === undefined) delete process.env.SLACK_CLIENT_ID;
+  else process.env.SLACK_CLIENT_ID = savedSlackClientId;
 });
 
 describe("Employee OAuth regression - signSlackOAuthState", () => {
