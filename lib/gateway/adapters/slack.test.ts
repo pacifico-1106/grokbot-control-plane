@@ -8,8 +8,11 @@ import {
 import { DEMO_ORG, getRuntimeEmployees } from "@/lib/demo-data";
 import {
   isSlackDmChannel,
+  isSlackUserId,
+  isSlackChannelId,
   looksLikeSlackTs,
   postConversationMessage,
+  validateSlackPostDestination,
 } from "@/lib/gateway/adapters/slack";
 
 const originalFetch = globalThis.fetch;
@@ -46,6 +49,97 @@ describe("Slack conversation adapter", () => {
     expect(isSlackDmChannel("")).toBe(false);
     expect(isSlackDmChannel(null)).toBe(false);
     expect(isSlackDmChannel(undefined)).toBe(false);
+  });
+
+  test("isSlackUserId identifies user IDs (U.../W...)", () => {
+    expect(isSlackUserId("U415HCDAB")).toBe(true);
+    expect(isSlackUserId("U_YAMADA")).toBe(true);
+    expect(isSlackUserId("W123")).toBe(true);
+    expect(isSlackUserId("C0BT659Q8KZ")).toBe(false);
+    expect(isSlackUserId("D123")).toBe(false);
+    expect(isSlackUserId("G123")).toBe(false);
+    expect(isSlackUserId("")).toBe(false);
+    expect(isSlackUserId(null)).toBe(false);
+    expect(isSlackUserId(undefined)).toBe(false);
+  });
+
+  test("isSlackChannelId identifies channel IDs (C.../G...)", () => {
+    expect(isSlackChannelId("C0C2D3JJ69X")).toBe(true);
+    expect(isSlackChannelId("C_INTERNAL")).toBe(true);
+    expect(isSlackChannelId("G123")).toBe(true);
+    expect(isSlackChannelId("D123")).toBe(false);
+    expect(isSlackChannelId("U415HCDAB")).toBe(false);
+    expect(isSlackChannelId("")).toBe(false);
+    expect(isSlackChannelId(null)).toBe(false);
+    expect(isSlackChannelId(undefined)).toBe(false);
+  });
+
+  test("validateSlackPostDestination: channel+user → dest=channel", () => {
+    const result = validateSlackPostDestination({
+      slackChannelId: "C0C2D3JJ69X",
+      slackUserId: "U415HCDAB",
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.dest).toBe("C0C2D3JJ69X");
+    }
+  });
+
+  test("validateSlackPostDestination: user-only without DM intent → deny", () => {
+    const result = validateSlackPostDestination({
+      slackChannelId: undefined,
+      slackUserId: "U415HCDAB",
+      dmIntent: false,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe("slack_channel_required");
+    }
+  });
+
+  test("validateSlackPostDestination: user-only with dmIntent=true → allow IM", () => {
+    const result = validateSlackPostDestination({
+      slackChannelId: undefined,
+      slackUserId: "U415HCDAB",
+      dmIntent: true,
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.dest).toBe("U415HCDAB");
+    }
+  });
+
+  test("validateSlackPostDestination: explicit D channel → allow IM", () => {
+    const result = validateSlackPostDestination({
+      slackChannelId: "D0BT659Q8KZ",
+      slackUserId: "U415HCDAB",
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.dest).toBe("D0BT659Q8KZ");
+    }
+  });
+
+  test("validateSlackPostDestination: G channel (private) → allow", () => {
+    const result = validateSlackPostDestination({
+      slackChannelId: "G012ABCDE",
+      slackUserId: "U415HCDAB",
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.dest).toBe("G012ABCDE");
+    }
+  });
+
+  test("validateSlackPostDestination: empty → deny", () => {
+    const result = validateSlackPostDestination({
+      slackChannelId: undefined,
+      slackUserId: undefined,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe("slack_channel_required");
+    }
   });
 
   test("returns stub when no enabled adapter is configured", async () => {
