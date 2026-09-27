@@ -65,6 +65,7 @@ export {
   resetDemoNotificationChannels,
   type NotificationChannelRuntime,
   type UpsertNotificationChannelInput,
+  type RecipientKind,
 } from "./notification-channels";
 export {
   listConversationAdapters,

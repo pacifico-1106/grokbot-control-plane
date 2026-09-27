@@ -97,6 +97,7 @@ describe("isSlackUserAuthorizedForApproval (strict mode)", () => {
       channelKey: CHANNEL_ID,
       userId: VOTER_1,
       memberId: MEMBER_ID,
+      verifiedAt: new Date().toISOString(),
     });
 
     const result = await isSlackUserAuthorizedForApproval(
@@ -181,6 +182,7 @@ describe("INVARIANT: Cross-org voter isolation (Slack)", () => {
       channelKey: CHANNEL_A,
       userId: USER_ORG_B,
       memberId: MEMBER_A,
+      verifiedAt: new Date().toISOString(),
     });
 
     const result = await isSlackUserAuthorizedForApproval(
