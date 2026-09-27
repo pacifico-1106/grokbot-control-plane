@@ -69,7 +69,7 @@ create or replace function public.upsert_notification_delivery(
 ) returns uuid
 language plpgsql
 security definer
-set search_path = public
+set search_path = pg_catalog, public
 as $$
 declare
   v_id uuid;
@@ -88,7 +88,7 @@ begin
   -- For per-recipient deliveries (recipient is not null), match on (approval_id, channel_id, recipient)
   if p_recipient is null then
     -- Legacy upsert: match on (approval_id, channel_id) where recipient is null
-    insert into approval_notification_deliveries (
+    insert into public.approval_notification_deliveries (
       approval_id, org_id, channel_id, provider, external_message_id, context,
       recipient, recipient_kind, updated_at
     )
@@ -105,7 +105,7 @@ begin
     returning id into v_id;
   else
     -- Per-recipient upsert: match on (approval_id, channel_id, recipient)
-    insert into approval_notification_deliveries (
+    insert into public.approval_notification_deliveries (
       approval_id, org_id, channel_id, provider, external_message_id, context,
       recipient, recipient_kind, updated_at
     )

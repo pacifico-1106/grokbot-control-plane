@@ -564,7 +564,7 @@ export async function recordNotificationDelivery(input: {
   }
   const admin = createSupabaseAdminClient();
   if (!admin) return;
-  await admin.rpc("upsert_notification_delivery", {
+  const { error } = await admin.rpc("upsert_notification_delivery", {
     p_approval_id: input.approval.id,
     p_org_id: input.approval.orgId,
     p_channel_id: input.channelId,
@@ -574,6 +574,17 @@ export async function recordNotificationDelivery(input: {
     p_recipient: recipient,
     p_recipient_kind: recipientKind,
   });
+  if (error) {
+    console.error("upsert_notification_delivery_failed", {
+      approvalId: input.approval.id,
+      channelId: input.channelId,
+      provider: input.provider,
+      recipient,
+      recipientKind,
+      error: error.message,
+      code: error.code,
+    });
+  }
 }
 
 export async function getNotificationDelivery(input: {
