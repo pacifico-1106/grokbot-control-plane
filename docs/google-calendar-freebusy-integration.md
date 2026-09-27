@@ -50,8 +50,15 @@ This integration allows AI employees to read busy intervals from calendars share
 GOOGLE_OAUTH_CLIENT_ID=your-client-id.apps.googleusercontent.com
 GOOGLE_OAUTH_CLIENT_SECRET=your-client-secret
 
+# Required for production (recommended)
+# Dedicated HMAC key for OAuth state signing. If unset, falls back to GOOGLE_OAUTH_CLIENT_SECRET.
+GOOGLE_OAUTH_STATE_SECRET=your-32-char-min-random-secret
+
 # Optional (defaults to standard callback path)
 GOOGLE_OAUTH_REDIRECT_URL=https://your-domain/api/google/oauth/callback
+
+# Encryption key for refresh tokens (shared with notification config)
+NOTIFICATION_CONFIG_ENCRYPTION_KEY=your-encryption-key
 
 # Feature flag (keep OFF until security audit complete)
 GOOGLE_CALENDAR_READ_ENABLED=false
@@ -59,10 +66,10 @@ GOOGLE_CALENDAR_READ_ENABLED=false
 
 ### Database Migration
 
-Apply **before** merging feature PR:
+Apply **before** enabling feature flag:
 
 ```sql
--- File: supabase/migrations/20260927400000_google_calendar_freebusy.sql
+-- File: supabase/migrations/20260927500000_google_calendar_freebusy.sql
 -- Apply via: supabase db push
 ```
 
@@ -80,6 +87,16 @@ Callback validates that granted scopes:
 2. Do NOT include forbidden scopes (`calendar`, `calendar.events`, etc.)
 3. Do NOT include unknown scopes (fail-closed)
 
+### OAuth Security
+
+- **PKCE**: Code verifier stored in secure httpOnly cookie (never in state parameter)
+- **State signing**: HMAC-signed with `GOOGLE_OAUTH_STATE_SECRET` (or `GOOGLE_OAUTH_CLIENT_SECRET` fallback)
+- **ID token validation**:
+  - Audience matches our client ID
+  - Issuer is `https://accounts.google.com` or `accounts.google.com`
+  - Token not expired
+  - Email is verified
+
 ### Token Handling
 
 - Refresh tokens encrypted with `NOTIFICATION_CONFIG_ENCRYPTION_KEY`
@@ -88,7 +105,7 @@ Callback validates that granted scopes:
   - Audit metadata
   - Logs
   - Chat/LLM context
-- RLS: `employee_google_identity_secrets` accessible only via service_role
+- RLS: `employee_google_identity_secrets` accessible only via service_role (browser cannot write)
 
 ### Allowlist Enforcement
 
@@ -116,8 +133,12 @@ Never logged: tokens, event contents (freebusy has none anyway)
 - [ ] Google Cloud OAuth client created
 - [ ] OAuth consent screen configured
 - [ ] For >100 users: Google app verification submitted/approved
-- [ ] Environment variables set
-- [ ] Database migration applied
+- [ ] Environment variables set:
+  - [ ] `GOOGLE_OAUTH_CLIENT_ID`
+  - [ ] `GOOGLE_OAUTH_CLIENT_SECRET`
+  - [ ] `GOOGLE_OAUTH_STATE_SECRET` (recommended: dedicated signing key)
+  - [ ] `NOTIFICATION_CONFIG_ENCRYPTION_KEY`
+- [ ] Database migration `20260927500000_google_calendar_freebusy.sql` applied
 - [ ] Test users validated in staging
 
 ### Enabling
