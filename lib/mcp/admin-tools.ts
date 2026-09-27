@@ -1012,6 +1012,49 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
   },
 ];
 
+/**
+ * Admin MCP tools that do NOT create approval tickets.
+ * Includes:
+ * - Read-only diagnostic tools
+ * - Platform-ops direct tools (actor IS the human, no approval ticket)
+ *
+ * These tools do not need approvalClass as they never create approval rows.
+ */
+const ADMIN_READ_ONLY_TOOLS_SET = new Set<string>([
+  "setup.slackStatus",
+  "setup.connectInternalBase",
+  "setup.lineApprovalStatus",
+  "ingressHandoff.get",
+  "schedulingPolicy.get",
+  "replyPolicy.get",
+  "mailPolicy.get",
+  "internalAudienceRule.get",
+  "stuckWatch.get",
+  "stuckWatch.list",
+  "stuckWatch.inspect",
+  "stuckWatch.classify",
+  "stuckWatch.retry",
+  "stuckWatch.resolve",
+  "approvalWorkflow.get",
+  "approvalWorkflow.inspect",
+  "orgs.status",
+  "orgs.patch",
+  "approvals.proxyResolve",
+]);
+
+/**
+ * Annotate all mutating Admin MCP tools with approvalClass: "admin".
+ * This is the METADATA-DRIVEN approach: classification lives in tool definition,
+ * not in hardcoded name/prefix lists.
+ *
+ * Read-only tools do not create approval tickets, so they don't need approvalClass.
+ */
+for (const tool of ADMIN_MCP_TOOLS) {
+  if (!ADMIN_READ_ONLY_TOOLS_SET.has(tool.name)) {
+    tool.approvalClass = "admin";
+  }
+}
+
 function toolResult(data: unknown, isError = false) {
   return {
     content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }],
@@ -1033,29 +1076,8 @@ export function isAdminMcpToolName(name: string): boolean {
   return (ADMIN_MCP_TOOL_NAMES as readonly string[]).includes(name);
 }
 
-const ADMIN_READ_ONLY_TOOLS = new Set<string>([
-  "setup.slackStatus",
-  "setup.connectInternalBase",
-  "setup.lineApprovalStatus",
-  "ingressHandoff.get",
-  "schedulingPolicy.get",
-  "replyPolicy.get",
-  "mailPolicy.get",
-  "internalAudienceRule.get",
-  "stuckWatch.get",
-  "stuckWatch.list",
-  "stuckWatch.inspect",
-  "stuckWatch.classify",
-  "stuckWatch.retry",
-  "stuckWatch.resolve",
-  "approvalWorkflow.get",
-  "approvalWorkflow.inspect",
-  "orgs.status",
-  "orgs.patch",
-]);
-
 function isAdminMutationTool(name: string): boolean {
-  return isAdminMcpToolName(name) && !ADMIN_READ_ONLY_TOOLS.has(name);
+  return isAdminMcpToolName(name) && !ADMIN_READ_ONLY_TOOLS_SET.has(name);
 }
 
 function extractApprovalId(args: Record<string, unknown>): string {

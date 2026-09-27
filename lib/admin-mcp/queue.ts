@@ -4,10 +4,15 @@
  * 
  * P0-A: Secret-in-chat detector integrated (fail-closed).
  * Secrets detected in args are rejected before approval ticket creation.
+ *
+ * P0 Item 1: Admin-class tickets require explicit account-approver policy
+ * when ADMIN_APPROVER_POLICY_REQUIRED flag is enabled.
+ * Default admin approver = org owner(s). If no explicit route and no org owners, fail-closed.
  */
 import { sendApprovalNeededEmail } from "@/lib/email";
 import { sendApprovalNotifications } from "@/lib/notify/channels";
 import { appendAuditEvent, createApproval } from "@/lib/data";
+import { getOrgOwnerIds } from "@/lib/data/members";
 import type { ResolvedAdminCredential } from "@/lib/auth/admin-credential";
 import { auditActionForAdminTool, ADMIN_AUDIT_CLASS, isAdminClassApproval } from "@/lib/admin-mcp/audit-class";
 export { isAdminClassApproval };
@@ -16,6 +21,9 @@ import {
   detectSecretInPayload,
   buildSecretDetectionErrorResponse,
 } from "@/lib/security/secret-detector";
+import { checkAdminPolicyRequirement } from "@/lib/approval-workflow/admin-policy";
+import { getOrgApprovalWorkflowPolicy } from "@/lib/approval-workflow/data";
+import { isAdminApproverPolicyRequired } from "@/lib/feature-flags";
 
 const TOOL_TITLE_JA: Record<string, string> = {
   "employees.issue": "AI社員の発行",
@@ -61,6 +69,21 @@ export type AdminQueueSecretRejection = {
   tool: string;
 };
 
+/**
+ * Admin policy required rejection.
+ * Returned when ADMIN_APPROVER_POLICY_REQUIRED is ON and no admin route policy exists.
+ */
+export type AdminPolicyRequiredRejection = {
+  ok: false;
+  code: "admin_policy_required";
+  error: "admin_policy_required";
+  reason: string;
+  messageJa: string;
+  nextStepJa: string;
+  tool: string;
+  auditClass: typeof ADMIN_AUDIT_CLASS;
+};
+
 export async function queueAdminTool(input: {
   cred: ResolvedAdminCredential;
   tool: string;
@@ -68,7 +91,7 @@ export async function queueAdminTool(input: {
   title?: string;
   summary: string;
   jobId?: string;
-}): Promise<AdminQueueResult | AdminQueueSecretRejection> {
+}): Promise<AdminQueueResult | AdminQueueSecretRejection | AdminPolicyRequiredRejection> {
   // P0-A: Secret-in-chat detector (fail-closed, before approval ticket creation)
   // Chat NEVER: passwords, refresh tokens, API keys, full employee/admin badge secrets
   const secretDetection = detectSecretInPayload(input.args);
@@ -78,6 +101,56 @@ export async function queueAdminTool(input: {
       ...errorResponse,
       tool: input.tool,
     };
+  }
+
+  // P0 Item 1: Admin-class tickets require explicit account-approver policy
+  // When ADMIN_APPROVER_POLICY_REQUIRED is ON, check for admin route policy or org owners
+  if (isAdminApproverPolicyRequired()) {
+    const orgPolicy = await getOrgApprovalWorkflowPolicy(input.cred.orgId);
+    const orgOwnerIds = await getOrgOwnerIds(input.cred.orgId);
+    
+    const policyCheck = checkAdminPolicyRequirement(
+      {
+        purpose: auditActionForAdminTool(input.tool),
+        tool: input.tool,
+        metadata: { auditClass: ADMIN_AUDIT_CLASS, isAdminMcpTool: true },
+      },
+      orgPolicy,
+      null,
+      orgOwnerIds
+    );
+
+    if (!policyCheck.ok) {
+      await appendAuditEvent({
+        orgId: input.cred.orgId,
+        employeeId: null,
+        credentialId: null,
+        action: "admin.policy",
+        purpose: auditActionForAdminTool(input.tool),
+        summary: `管理クラス承認拒否（承認者未設定）: ${input.tool}`,
+        metadata: {
+          tool: input.tool,
+          code: policyCheck.code,
+          reason: policyCheck.reason,
+          auditClass: ADMIN_AUDIT_CLASS,
+          flagEnabled: true,
+          orgOwnerCount: orgOwnerIds.length,
+        },
+      });
+
+      return {
+        ok: false,
+        code: "admin_policy_required",
+        error: "admin_policy_required",
+        reason: policyCheck.reason,
+        messageJa:
+          "管理クラスの操作には、組織レベルの承認者設定（管理ルートまたは組織オーナー）が必要です。",
+        nextStepJa:
+          "組織にオーナーを追加するか、approvalWorkflow.patch でadminクラスのルートを設定してください。",
+        tool: input.tool,
+        auditClass: ADMIN_AUDIT_CLASS,
+      };
+    }
   }
 
   const auditAction = auditActionForAdminTool(input.tool);
@@ -104,9 +177,11 @@ export async function queueAdminTool(input: {
     jobId,
     metadata: {
       auditClass: ADMIN_AUDIT_CLASS,
+      approvalClass: ADMIN_AUDIT_CLASS,
       auditAction,
       always_human: true,
       adminTool: input.tool,
+      isAdminMcpTool: true,
       adminMutation: input.args,
       adminRequester: requester,
     },

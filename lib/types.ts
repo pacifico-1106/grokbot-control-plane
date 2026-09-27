@@ -497,6 +497,9 @@ export type AuditAction =
   | "admin.issue_admin_credential"
   | "admin.proxy_approve"
   | "admin.org_patch"
+  | "admin.billing"
+  | "admin.external_contract_card"
+  | "admin.portal"
   | "stuck_watch.w2_retry"
   | "stuck_watch.w1_notify"
   | "stuck_watch.audience_ledger_retry"
@@ -1380,6 +1383,22 @@ export interface ApprovalWorkflowMatch {
   purposes?: string[];
 }
 
+/**
+ * Class-based approval route.
+ * Routes approvals by class (admin/business) rather than by tool/purpose enumeration.
+ * Admin-class route is required for admin tools when ADMIN_APPROVER_POLICY_REQUIRED is enabled.
+ */
+export type ApprovalRouteClass = "admin" | "business";
+
+export interface ApprovalClassRoute {
+  /** Route class: admin (account-level operations) or business (employee operations). */
+  class: ApprovalRouteClass;
+  /** Stages for this route class. Uses same ApprovalLane schema. */
+  stages: ApprovalLane[];
+  /** Optional final approver for this route class. */
+  finalGoUserId?: string;
+}
+
 /** Notification surface for workflow cards. */
 export type WorkflowNotifyMouth = {
   surface: "slack" | "line" | "telegram" | "web";
@@ -1393,6 +1412,13 @@ export interface OrgApprovalWorkflowPolicy {
   match?: ApprovalWorkflowMatch;
   stages: ApprovalLane[];
   finalGoUserId?: string;
+  /**
+   * Class-based routes for routing by approval class (admin/business).
+   * When present, routes take precedence over stages for class-matched approvals.
+   * Admin-class route is required when ADMIN_APPROVER_POLICY_REQUIRED flag is enabled.
+   * Empty routes array or missing routes falls back to stages (existing behavior).
+   */
+  routes?: ApprovalClassRoute[];
   notifyMouth?: WorkflowNotifyMouth;
   highRiskConsentAt?: string;
   highRiskConsentBy?: string;

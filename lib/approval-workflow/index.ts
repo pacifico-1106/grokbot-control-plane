@@ -34,6 +34,7 @@ export {
   getPendingBallotsByVoter,
   listActiveWorkflowInstances,
   resetDemoWorkflowData,
+  getMemberIdFromVoterBinding,
   type EffectiveApprovalWorkflowPolicy,
   type ApprovalWorkflowPolicySource,
 } from "./data";

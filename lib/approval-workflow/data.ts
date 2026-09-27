@@ -32,6 +32,42 @@ export function getDemoWorkflowVoterBinding(orgId: string, external: { provider:
   const binding = demoVoterBindings.get(bindingKey({ orgId, ...external }));
   return binding && !binding.revoked && (!binding.expiresAt || Date.parse(binding.expiresAt) > Date.now()) ? binding.memberId : "";
 }
+
+/**
+ * P0 Item 1: Get the member ID from a voter binding for an external resolver.
+ * This is used to verify the resolver's identity for admin-class approval enforcement.
+ *
+ * @returns member ID if valid binding exists, null otherwise
+ */
+export async function getMemberIdFromVoterBinding(
+  orgId: string,
+  external: { provider: "slack" | "telegram" | "line"; channelKey: string; userId: string }
+): Promise<string | null> {
+  if (isDemoMode()) {
+    const memberId = getDemoWorkflowVoterBinding(orgId, external);
+    return memberId || null;
+  }
+
+  const admin = createSupabaseAdminClient();
+  if (!admin) return null;
+
+  const { data, error } = await admin
+    .from("approval_workflow_voter_bindings")
+    .select("member_id, expires_at, revoked")
+    .eq("org_id", orgId)
+    .eq("provider", external.provider)
+    .eq("channel_key", external.channelKey)
+    .eq("external_user_id", external.userId)
+    .maybeSingle();
+
+  if (error || !data) return null;
+
+  const row = data as { member_id: string; expires_at?: string | null; revoked?: boolean };
+  if (row.revoked) return null;
+  if (row.expires_at && Date.parse(row.expires_at) < Date.now()) return null;
+
+  return row.member_id || null;
+}
 export function demoWorkflowVoterIsCurrent(orgId: string, memberId: string): boolean {
   const member = getRuntimeMemberById(memberId);
   return !!member && member.orgId === orgId && member.status === "active" && !!member.capabilities?.includes("approve_actions");

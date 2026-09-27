@@ -320,13 +320,29 @@ export async function resolveApproval(
   return result.ok && result.workflowComplete ? result.approval : null;
 }
 
-/** Internal finalization only. Production F8 finalization happens in the vote RPC. */
+/**
+ * Internal finalization only. Production F8 finalization happens in the vote RPC.
+ *
+ * P0 Item 1: When admin_approver_enforcement is ON for the org, admin-class tickets
+ * MUST have a valid memberId. The RPC resolve_approval_w1_checked performs atomic
+ * authorization check and update. For non-admin tickets or when enforcement is OFF,
+ * the memberId can be null but providing it is recommended for audit trail.
+ *
+ * @param id - Approval request ID
+ * @param status - Target status
+ * @param resolvedBy - Actor string for audit (e.g. 'slack:U123', 'web:user@example.com')
+ * @param orgId - Organization ID
+ * @param opts.memberId - Member ID of the resolver (REQUIRED for admin-class when enforcement ON)
+ * @param opts.revisionNote - Required for revision_requested status
+ * @param opts.decisionId - Decision ID for replay protection
+ */
 export async function resolveApprovalWithoutWorkflow(
   id: string,
   status: "approved" | "rejected" | "revision_requested",
   resolvedBy: string,
   orgId?: string | null,
   opts: {
+    memberId?: string | null;
     revisionNote?: string;
     grokBotAgentId?: string | null;
     actorId?: string | null;
@@ -353,7 +369,6 @@ export async function resolveApprovalWithoutWorkflow(
   const admin = createSupabaseAdminClient();
   if (!admin) return null;
 
-  const now = new Date().toISOString();
   const existing = await getApprovalById(id, orgId);
   if (!existing || existing.status !== "pending") return null;
   if (isAdminClassApproval(existing)) {
@@ -363,66 +378,64 @@ export async function resolveApprovalWithoutWorkflow(
       grokBotAgentId: opts.grokBotAgentId,
     });
   }
-  const update: Record<string, unknown> = {
-    status,
-    resolved_at: now,
-    resolved_by: null,
-  };
-  if (status === "revision_requested") {
-    update.revision_note = revisionNote;
-    update.revision_count = existing.revisionCount + 1;
-  }
-  // P0 Item 5: Record decisionId for W1 replay protection
-  if (opts.decisionId || opts.externalVoter) {
-    const meta = { ...existing.metadata };
-    if (opts.decisionId) {
-      meta.w1DecisionId = opts.decisionId;
-    }
-    if (opts.externalVoter) {
-      meta.w1ExternalVoter = opts.externalVoter;
-    }
-    update.metadata = meta;
-  }
-  const q = admin
-    .from("approval_requests")
-    .update(update)
-    .eq("id", id)
-    .eq("org_id", orgId)
-    .eq("status", "pending");
-  const { data, error } = await q.select("*").maybeSingle();
 
-  if (error || !data) return null;
+  // Use the security definer RPC for atomic authorization check and update
+  // This ensures admin-class tickets with enforcement ON have a verified resolver
+  const { data: rpcResult, error: rpcError } = await admin.rpc("resolve_approval_w1_checked", {
+    p_id: id,
+    p_org: orgId,
+    p_member_id: opts.memberId || null,
+    p_decision: status,
+    p_actor: resolvedBy,
+    p_revision_note: revisionNote,
+    p_decision_id: opts.decisionId || null,
+  });
 
-  const row = data as Record<string, unknown>;
-  const mapped = mapApprovalRow(row);
+  if (rpcError) {
+    console.error("resolve_approval_w1_checked_error", rpcError);
+    return null;
+  }
+
+  const result = rpcResult as { ok: boolean; reason?: string; approval_id?: string };
+  if (!result.ok) {
+    console.warn("resolve_approval_w1_checked_rejected", { id, orgId, reason: result.reason });
+    return null;
+  }
+
+  // Fetch the updated approval
+  const updated = await getApprovalById(id, orgId);
+  if (!updated) return null;
+
+  // Insert audit event
   await admin.from("audit_events").insert({
-    org_id: row.org_id,
-    employee_id: row.employee_id,
-    credential_id: row.credential_id,
+    org_id: orgId,
+    employee_id: updated.employeeId,
+    credential_id: updated.credentialId,
     actor_email: resolvedBy,
     action:
       status === "revision_requested"
         ? "approval.revision_requested"
         : "approval.resolved",
-    purpose: row.purpose,
+    purpose: updated.purpose,
     summary:
       status === "approved"
-        ? `承認: ${mapped.title || mapped.summary}`
+        ? `承認: ${updated.title || updated.summary}`
         : status === "revision_requested"
-          ? `修正依頼: ${mapped.title || mapped.summary}`
-          : `却下: ${mapped.title || mapped.summary}`,
+          ? `修正依頼: ${updated.title || updated.summary}`
+          : `却下: ${updated.title || updated.summary}`,
     metadata: {
       decision: status,
       resolvedBy,
-      tool: mapped.tool ?? null,
-      jobId: mapped.jobId ?? null,
-      revisionNote: mapped.revisionNote,
-      revisionCount: mapped.revisionCount,
+      memberId: opts.memberId || null,
+      tool: updated.tool ?? null,
+      jobId: updated.jobId ?? null,
+      revisionNote: updated.revisionNote,
+      revisionCount: updated.revisionCount,
     },
   });
 
-  mapped.resolvedBy = resolvedBy;
-  return mapped;
+  updated.resolvedBy = resolvedBy;
+  return updated;
 }
 
 export async function getApprovalByTelegramRef(

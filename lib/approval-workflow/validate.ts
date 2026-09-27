@@ -2,13 +2,17 @@
  * F8 Approval Workflow Policy Validation
  *
  * Validates and normalizes workflow policies, provides Japanese summaries.
+ * Supports class-based routing (admin/business) for PR-1 hardening.
  */
 
 import type {
+  ApprovalClassRoute,
   ApprovalLane,
+  ApprovalRouteClass,
   OrgApprovalWorkflowPolicy,
   QuorumRule,
 } from "@/lib/types";
+import { isAdminApproverPolicyRequired } from "@/lib/feature-flags";
 
 export interface ValidationError {
   code: string;
@@ -165,11 +169,98 @@ export function validateApprovalWorkflowPolicy(
     }
   }
 
+  if (policy.routes !== undefined && policy.routes !== null) {
+    errors.push(...validateClassRoutes(policy.routes as unknown[]));
+  }
+
   if (errors.length > 0) {
     return { ok: false, errors };
   }
 
   return { ok: true, errors: [] };
+}
+
+const VALID_ROUTE_CLASSES: ApprovalRouteClass[] = ["admin", "business"];
+
+function isValidRouteClass(c: unknown): c is ApprovalRouteClass {
+  return typeof c === "string" && VALID_ROUTE_CLASSES.includes(c as ApprovalRouteClass);
+}
+
+function validateClassRoutes(routes: unknown[]): ValidationError[] {
+  const errors: ValidationError[] = [];
+
+  if (!Array.isArray(routes)) {
+    errors.push({ code: "invalid_routes", path: "routes", message: "routes must be an array" });
+    return errors;
+  }
+
+  const seenClasses = new Set<string>();
+
+  for (let i = 0; i < routes.length; i++) {
+    const route = routes[i];
+    const path = `routes[${i}]`;
+
+    if (!route || typeof route !== "object") {
+      errors.push({ code: "invalid_route", path, message: "route must be an object" });
+      continue;
+    }
+
+    const r = route as Record<string, unknown>;
+
+    if (!isValidRouteClass(r.class)) {
+      errors.push({
+        code: "invalid_route_class",
+        path: `${path}.class`,
+        message: "route class must be 'admin' or 'business'",
+      });
+    } else {
+      if (seenClasses.has(r.class)) {
+        errors.push({
+          code: "duplicate_route_class",
+          path: `${path}.class`,
+          message: `duplicate route class: ${r.class}`,
+        });
+      }
+      seenClasses.add(r.class);
+    }
+
+    if (!Array.isArray(r.stages)) {
+      errors.push({
+        code: "missing_route_stages",
+        path: `${path}.stages`,
+        message: "route must have stages array",
+      });
+    } else if (r.stages.length === 0) {
+      errors.push({
+        code: "empty_route_stages",
+        path: `${path}.stages`,
+        message: "route must have at least one stage",
+      });
+    } else {
+      for (let j = 0; j < (r.stages as unknown[]).length; j++) {
+        const stagePath = `${path}.stages[${j}]`;
+        const stageErrors = isValidLane((r.stages as unknown[])[j], j);
+        errors.push(
+          ...stageErrors.map((e) => ({
+            ...e,
+            path: e.path?.replace(/^stages\[\d+\]/, stagePath) ?? stagePath,
+          }))
+        );
+      }
+    }
+
+    if (r.finalGoUserId !== undefined && r.finalGoUserId !== null) {
+      if (typeof r.finalGoUserId !== "string" || !r.finalGoUserId.trim()) {
+        errors.push({
+          code: "invalid_route_final_go",
+          path: `${path}.finalGoUserId`,
+          message: "finalGoUserId must be a non-empty string when set",
+        });
+      }
+    }
+  }
+
+  return errors;
 }
 
 export function normalizeApprovalWorkflowPolicy(

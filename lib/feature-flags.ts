@@ -10,6 +10,23 @@ function parseFlag(envVar: string | undefined): boolean {
 }
 
 /**
+ * PR-1 Item 1: Admin-class approvals require explicit account-approver policy.
+ *
+ * When ON:
+ * - Admin-class tickets (isAdminClassApproval / auditClass admin / purpose admin.* / always_human admin tools)
+ *   require an org-level policy with a matching admin-class route.
+ * - If absent, fail closed (ticket rejected or blocked with reason code "admin_policy_required").
+ * - Employee overrides cannot satisfy or replace the admin route requirement.
+ * - Business-route voters cannot vote on admin-class tickets.
+ *
+ * When OFF (default):
+ * - Existing W1 behavior preserved (any single approver).
+ */
+export function isAdminApproverPolicyRequired(): boolean {
+  return parseFlag(process.env.ADMIN_APPROVER_POLICY_REQUIRED);
+}
+
+/**
  * PR-2 Item 5: Slack approval path hardening.
  *
  * When ON:
