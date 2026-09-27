@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   GATEWAY_TOOL_DEFS,
   isAlwaysHumanTool,
+  isAudienceGatedTool,
   isForceApprovalTool,
   resolveGatewayTool,
 } from "@/lib/gateway/tools";
@@ -116,5 +117,27 @@ describe("calendar.confirm gateway tool", () => {
   test("tool has confirm kind", () => {
     const def = GATEWAY_TOOL_DEFS["calendar.confirm"];
     expect(def.kind).toBe("confirm");
+  });
+});
+
+describe("calendar.allowlist.patch security", () => {
+  test("tool cannot be executed without approval (forceNeedsApproval + mayAuto=false)", () => {
+    const def = GATEWAY_TOOL_DEFS["calendar.allowlist.patch"];
+    expect(def.forceNeedsApproval).toBe(true);
+    expect(def.mayAuto).toBe(false);
+    expect(isForceApprovalTool(def)).toBe(true);
+    expect(isAlwaysHumanTool(def)).toBe(true);
+  });
+
+  test("tool is not audience-gated (cannot bypass approval via audience)", () => {
+    const def = GATEWAY_TOOL_DEFS["calendar.allowlist.patch"];
+    expect(isAudienceGatedTool(def)).toBe(false);
+  });
+
+  test("tool kind is mutate (not read/propose)", () => {
+    const def = GATEWAY_TOOL_DEFS["calendar.allowlist.patch"];
+    expect(def.kind).toBe("mutate");
+    expect(def.kind).not.toBe("read");
+    expect(def.kind).not.toBe("propose");
   });
 });

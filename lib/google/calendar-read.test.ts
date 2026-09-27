@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 const originalFlagEnv = process.env.GOOGLE_CALENDAR_READ_ENABLED;
 const originalMode = process.env.DEMO_MODE;
@@ -36,19 +36,27 @@ describe("calendar read with flag OFF", () => {
 
   test("flag OFF parity: no Google API calls made", async () => {
     delete process.env.GOOGLE_CALENDAR_READ_ENABLED;
-    const fetchSpy = mock(() => Promise.resolve(new Response("{}")));
-    globalThis.fetch = fetchSpy as typeof fetch;
+    const originalFetch = globalThis.fetch;
+    let fetchCallCount = 0;
+    globalThis.fetch = ((..._args: Parameters<typeof fetch>) => {
+      fetchCallCount++;
+      return Promise.resolve(new Response("{}"));
+    }) as typeof fetch;
 
-    const { readCalendarFreebusy } = await import("./calendar-read");
-    await readCalendarFreebusy({
-      orgId: "org-1",
-      employeeId: "emp-1",
-      calendarIds: ["calendar1@example.com"],
-      timeMin: "2026-01-01T00:00:00Z",
-      timeMax: "2026-01-02T00:00:00Z",
-    });
+    try {
+      const { readCalendarFreebusy } = await import("./calendar-read");
+      await readCalendarFreebusy({
+        orgId: "org-1",
+        employeeId: "emp-1",
+        calendarIds: ["calendar1@example.com"],
+        timeMin: "2026-01-01T00:00:00Z",
+        timeMax: "2026-01-02T00:00:00Z",
+      });
 
-    expect(fetchSpy).not.toHaveBeenCalled();
+      expect(fetchCallCount).toBe(0);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 });
 

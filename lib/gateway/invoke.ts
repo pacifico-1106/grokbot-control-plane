@@ -1815,7 +1815,7 @@ export async function runGatewayInvoke(
     const proposeInput: ProposeInput = {
       slots: slots.map((s: unknown) => {
         const slot = s as { start?: string; end?: string; id?: string };
-        return { start: slot.start || "", end: slot.end || "", id: slot.id };
+        return { start: slot.start || "", end: slot.end || "", id: slot.id || "" };
       }),
       context: {
         orgId: orgId || employee.orgId,
@@ -1880,6 +1880,7 @@ export async function runGatewayInvoke(
       await appendAuditEvent({
         orgId: orgId || employee.orgId,
         employeeId,
+        credentialId: input.credentialId || employee.credentialId,
         action: "calendar.allowlist_patch",
         purpose,
         summary: `Calendar allowlist grant added: ${calendarId}`,
@@ -1902,6 +1903,7 @@ export async function runGatewayInvoke(
       await appendAuditEvent({
         orgId: orgId || employee.orgId,
         employeeId,
+        credentialId: input.credentialId || employee.credentialId,
         action: "calendar.allowlist_patch",
         purpose,
         summary: `Calendar allowlist grant revoked: ${grantId}`,
@@ -1955,9 +1957,7 @@ export async function runGatewayInvoke(
     result:
       tool === "tools.ping"
         ? { pong: true }
-        : tool === "calendar.propose"
-          ? { proposed: true, slots: [] }
-          : tool === "mail.draft"
+        : tool === "mail.draft"
             ? { drafted: true }
             : tool === "commerce.quote"
               ? { quoted: true }

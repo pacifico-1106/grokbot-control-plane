@@ -76,6 +76,7 @@ export async function GET(req: Request) {
       await appendAuditEvent({
         orgId: parsed.orgId,
         employeeId: parsed.employeeId,
+        credentialId: null,
         action: "google.identity_connected",
         purpose: "google.oauth.callback",
         summary: `Google OAuth scope validation failed: ${scopeValidation.reason}`,
@@ -102,6 +103,7 @@ export async function GET(req: Request) {
       await appendAuditEvent({
         orgId: parsed.orgId,
         employeeId: parsed.employeeId,
+        credentialId: null,
         action: "google.identity_connected",
         purpose: "google.oauth.callback",
         summary: `Google OAuth ID token validation failed: ${idTokenValidation.reason}`,
@@ -122,6 +124,7 @@ export async function GET(req: Request) {
     await appendAuditEvent({
       orgId: parsed.orgId,
       employeeId: parsed.employeeId,
+      credentialId: null,
       action: "google.identity_connected",
       purpose: "google.oauth.callback",
       summary: `Google Calendar connected: ${idTokenPayload.email || idTokenPayload.sub}`,

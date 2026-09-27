@@ -250,6 +250,7 @@ export async function readCalendarFreebusy(
   await appendAuditEvent({
     orgId,
     employeeId,
+    credentialId: null,
     action: "calendar.freebusy_read",
     purpose: jobId || "calendar.read",
     summary: `Read freebusy for ${toQuery.length} calendar(s)`,

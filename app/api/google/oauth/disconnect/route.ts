@@ -58,6 +58,7 @@ export async function POST(req: Request) {
   await appendAuditEvent({
     orgId: gate.orgId,
     employeeId,
+    credentialId: null,
     action: "google.identity_revoked",
     purpose: "google.oauth.disconnect",
     summary: `Google Calendar disconnected: ${identity.googleEmail || identity.googleSub}`,
