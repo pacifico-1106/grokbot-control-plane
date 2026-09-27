@@ -60,6 +60,9 @@ export const ADMIN_MCP_TOOL_NAMES = [
   "orgs.patch",
   "orgs.issueAdminCredential",
   "approvals.proxyResolve",
+  "employeeIdentity.status",
+  "employeeIdentity.upsert",
+  "employeeIdentity.bindMailbox",
 ] as const;
 
 export type AdminMcpToolName = (typeof ADMIN_MCP_TOOL_NAMES)[number];

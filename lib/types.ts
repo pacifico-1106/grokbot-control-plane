@@ -1490,3 +1490,69 @@ export interface WorkflowProgress {
   finalGoUserId: string | null;
   finalGoVoted: boolean;
 }
+
+/**
+ * P0-ID: Employee identity binding for per-org human responsibility mapping.
+ *
+ * Maps AI employees to responsible humans within an org for:
+ * - Business approvals routing
+ * - Mailbox ownership / inbox access
+ * - Audit and compliance reporting
+ *
+ * Security invariants:
+ * - One binding per employee per org (composite unique)
+ * - Cross-org binding prohibited
+ * - Mailbox binding requires always_human approval
+ */
+export type EmployeeIdentityStatus = "active" | "pending" | "suspended" | "revoked";
+
+export interface EmployeeIdentityBinding {
+  id: string;
+  orgId: string;
+  employeeId: string;
+  responsibleMemberId: string;
+  mailboxId: string | null;
+  status: EmployeeIdentityStatus;
+  createdAt: string;
+  updatedAt: string;
+  revokedAt: string | null;
+  revokedBy: string | null;
+}
+
+/**
+ * P0-IN: Inbox routing destination for approval delivery.
+ *
+ * Routes approval cards to:
+ * - Slack DM (primary path for P0)
+ * - LINE (seam only, not enabled until P1)
+ *
+ * Never routes to Slack Connect shared channels.
+ */
+export type InboxRoutingSurface = "slack_dm" | "line_dm" | "channel";
+
+export interface InboxRoutingDestination {
+  surface: InboxRoutingSurface;
+  recipientId: string;
+  channelId?: string;
+  orgId: string;
+  valid: boolean;
+  reason?: string;
+}
+
+/**
+ * P0-RP: Reply recipient validation result.
+ *
+ * Validates who may be replied to based on:
+ * - Employee's allowed audience (internal/external)
+ * - Channel classification (internal/shared_external)
+ * - Explicit party registrations
+ */
+export type ReplyRecipientStatus = "allowed" | "denied" | "needs_approval";
+
+export interface ReplyRecipientValidation {
+  status: ReplyRecipientStatus;
+  audience: "internal" | "external" | "unknown";
+  reason: string;
+  approvalClass: "business" | "admin";
+  failClosed: boolean;
+}

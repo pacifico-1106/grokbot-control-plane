@@ -56,6 +56,8 @@ export const ADMIN_TOOL_AUDIT_ACTION: Record<string, AdminAuditAction> = {
   "approvalWorkflow.bindVoter": "admin.policy",
   "approvalWorkflow.unbindVoter": "admin.policy",
   "approvals.proxyResolve": "admin.proxy_approve",
+  "employeeIdentity.upsert": "admin.policy",
+  "employeeIdentity.bindMailbox": "admin.policy",
 };
 
 /** Operational / employee-badge class — never lead the dashboard change log. */
