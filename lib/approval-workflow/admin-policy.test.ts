@@ -24,7 +24,7 @@ import {
   ADMIN_AUDIT_CLASS,
   BUSINESS_AUDIT_CLASS,
 } from "./admin-policy";
-import { isAdminClassApproval, isAdminClassTool, getApprovalRouteClass } from "@/lib/admin-mcp/audit-class";
+import { isAdminClassApproval, getApprovalRouteClass } from "@/lib/admin-mcp/audit-class";
 import type { OrgApprovalWorkflowPolicy, ApprovalClassRoute, ApprovalLane } from "@/lib/types";
 
 const FIXTURE_ORG_OWNER_1 = "fixture_owner_1";
@@ -63,121 +63,50 @@ const createPolicy = (options: {
   updatedBy: "fixture_test",
 });
 
-describe("isAdminClassTool", () => {
-  test("classifies admin.* tools as admin class", () => {
-    expect(isAdminClassTool("admin.hire")).toBe(true);
-    expect(isAdminClassTool("admin.policy")).toBe(true);
-  });
-
-  test("classifies setup.* tools as admin class", () => {
-    expect(isAdminClassTool("setup.slackAdapter.setBotToken")).toBe(true);
-    expect(isAdminClassTool("setup.lineApproval.upsert")).toBe(true);
-    expect(isAdminClassTool("setup.billing")).toBe(true);
-    expect(isAdminClassTool("setup.card")).toBe(true);
-    expect(isAdminClassTool("setup.portal")).toBe(true);
-  });
-
-  test("classifies orgs.* tools as admin class", () => {
-    expect(isAdminClassTool("orgs.create")).toBe(true);
-    expect(isAdminClassTool("orgs.issueAdminCredential")).toBe(true);
-    expect(isAdminClassTool("orgs.patch")).toBe(true);
-  });
-
-  test("classifies billing/portal/card tools as admin class", () => {
-    expect(isAdminClassTool("billing.patch")).toBe(true);
-    expect(isAdminClassTool("billing.update")).toBe(true);
-    expect(isAdminClassTool("portal.setup")).toBe(true);
-    expect(isAdminClassTool("portal.patch")).toBe(true);
-    expect(isAdminClassTool("externalContractCard.setup")).toBe(true);
-    expect(isAdminClassTool("externalContractCard.patch")).toBe(true);
-  });
-
-  test("classifies explicit admin tools as admin class", () => {
-    expect(isAdminClassTool("employees.issue")).toBe(true);
-    expect(isAdminClassTool("link")).toBe(true);
-    expect(isAdminClassTool("policy.patch")).toBe(true);
-    expect(isAdminClassTool("parties.upsert")).toBe(true);
-    expect(isAdminClassTool("channels.classify")).toBe(true);
-    expect(isAdminClassTool("ingressHandoff.patch")).toBe(true);
-    expect(isAdminClassTool("schedulingPolicy.patch")).toBe(true);
-    expect(isAdminClassTool("mailPolicy.patch")).toBe(true);
-  });
-
-  test("classifies future admin tools by prefix (not name enumeration)", () => {
-    expect(isAdminClassTool("internalAudienceRule.patch")).toBe(true);
-    expect(isAdminClassTool("approvalWorkflow.patch")).toBe(true);
-    expect(isAdminClassTool("setup.futureNewTool")).toBe(true);
-    expect(isAdminClassTool("billing.newOperation")).toBe(true);
-  });
-
-  test("unclassified Admin MCP tools default to admin (fail-closed)", () => {
-    expect(isAdminClassTool("unknownAdminTool", true)).toBe(true);
-  });
-
-  test("unclassified gateway tools default to business", () => {
-    expect(isAdminClassTool("unknownGatewayTool", false)).toBe(false);
-  });
-
-  test("does not classify business tools as admin class", () => {
-    expect(isAdminClassTool("mail.send")).toBe(false);
-    expect(isAdminClassTool("calendar.confirm")).toBe(false);
-    expect(isAdminClassTool("commerce.order")).toBe(false);
-    expect(isAdminClassTool("slack.post")).toBe(false);
-    expect(isAdminClassTool("comm.send")).toBe(false);
-    expect(isAdminClassTool("sns.publish")).toBe(false);
-  });
-});
-
-describe("isAdminClassApproval", () => {
-  test("detects admin class by approvalClass metadata", () => {
+describe("isAdminClassApproval metadata-driven classification", () => {
+  test("PRIMARY: metadata.approvalClass = admin", () => {
     expect(isAdminClassApproval({ metadata: { approvalClass: "admin" } })).toBe(true);
     expect(isAdminClassApproval({ metadata: { approvalClass: "business" } })).toBe(false);
   });
 
-  test("detects admin class by auditClass metadata (legacy)", () => {
+  test("PRIMARY: metadata.approvalClass takes precedence over tool/purpose", () => {
+    expect(isAdminClassApproval({
+      tool: "mail.send",
+      purpose: "tool.invoke",
+      metadata: { approvalClass: "admin" },
+    })).toBe(true);
+    expect(isAdminClassApproval({
+      tool: "employees.issue",
+      purpose: "admin.hire",
+      metadata: { approvalClass: "business" },
+    })).toBe(false);
+  });
+
+  test("SECONDARY: metadata.auditClass (legacy)", () => {
     expect(isAdminClassApproval({ metadata: { auditClass: "admin" } })).toBe(true);
     expect(isAdminClassApproval({ metadata: { auditClass: "business" } })).toBe(false);
   });
 
-  test("detects admin class by isAdminMcpTool marker", () => {
-    expect(isAdminClassApproval({
-      metadata: { always_human: true, adminTool: "unknownTool", isAdminMcpTool: true },
-    })).toBe(true);
-    expect(isAdminClassApproval({
-      metadata: { always_human: true, adminTool: "unknownTool", isAdminMcpTool: false },
-    })).toBe(false);
+  test("isAdminMcpTool marker indicates admin class", () => {
+    expect(isAdminClassApproval({ metadata: { isAdminMcpTool: true } })).toBe(true);
+    expect(isAdminClassApproval({ metadata: { isAdminMcpTool: false } })).toBe(false);
   });
 
-  test("detects admin class by adminTool metadata (tool classification, not always_human)", () => {
-    expect(isAdminClassApproval({
-      metadata: { always_human: true, adminTool: "employees.issue" },
-    })).toBe(true);
-    expect(isAdminClassApproval({
-      metadata: { always_human: false, adminTool: "employees.issue" },
-    })).toBe(true);
-    expect(isAdminClassApproval({
-      metadata: { always_human: true, adminTool: "mail.send" },
-    })).toBe(false);
-    expect(isAdminClassApproval({
-      metadata: { always_human: true, adminTool: "mail.send", isAdminMcpTool: true },
-    })).toBe(true);
-    expect(isAdminClassApproval({
-      metadata: { always_human: false, tool: "mail.send" },
-    })).toBe(false);
+  test("LEGACY FALLBACK: tool prefix classification for pre-existing rows", () => {
+    expect(isAdminClassApproval({ tool: "setup.slackAdapter.setBotToken" })).toBe(true);
+    expect(isAdminClassApproval({ tool: "orgs.create" })).toBe(true);
+    expect(isAdminClassApproval({ tool: "employees.issue" })).toBe(true);
+    expect(isAdminClassApproval({ tool: "mail.send" })).toBe(false);
+    expect(isAdminClassApproval({ tool: "calendar.confirm" })).toBe(false);
   });
 
-  test("detects admin class by purpose prefix", () => {
+  test("LEGACY FALLBACK: purpose prefix classification", () => {
     expect(isAdminClassApproval({ purpose: "admin.hire" })).toBe(true);
     expect(isAdminClassApproval({ purpose: "admin.policy" })).toBe(true);
     expect(isAdminClassApproval({ purpose: "tool.invoke" })).toBe(false);
   });
-
-  test("detects admin class by tool", () => {
-    expect(isAdminClassApproval({ tool: "employees.issue" })).toBe(true);
-    expect(isAdminClassApproval({ tool: "setup.billing" })).toBe(true);
-    expect(isAdminClassApproval({ tool: "mail.send" })).toBe(false);
-  });
 });
+
 
 describe("getApprovalRouteClass", () => {
   test("returns admin for admin-class approvals", () => {
@@ -688,30 +617,42 @@ describe("INVARIANT: Cross-org voter isolation", () => {
   });
 });
 
-describe("INVARIANT: Tool classification is deterministic", () => {
-  test("INVARIANT: same tool always returns same classification", () => {
-    const tools = [
-      "employees.issue", "mail.send", "setup.billing", "commerce.order",
-      "billing.patch", "slack.post", "orgs.create", "calendar.confirm",
+describe("INVARIANT: Approval classification is deterministic", () => {
+  test("INVARIANT: same approval always returns same classification", () => {
+    const approvals = [
+      { metadata: { approvalClass: "admin" } },
+      { metadata: { approvalClass: "business" } },
+      { tool: "employees.issue" },
+      { tool: "mail.send" },
+      { purpose: "admin.hire" },
+      { purpose: "tool.invoke" },
     ];
-    for (const tool of tools) {
-      const first = isAdminClassTool(tool);
-      const second = isAdminClassTool(tool);
-      const third = isAdminClassTool(tool);
+    for (const approval of approvals) {
+      const first = isAdminClassApproval(approval);
+      const second = isAdminClassApproval(approval);
+      const third = isAdminClassApproval(approval);
       expect(first).toBe(second);
       expect(second).toBe(third);
     }
   });
 
-  test("INVARIANT: admin tools are always admin, business tools are always business", () => {
-    const adminTools = ["employees.issue", "setup.billing", "billing.patch", "orgs.create"];
-    const businessTools = ["mail.send", "commerce.order", "slack.post", "calendar.confirm"];
+  test("INVARIANT: metadata.approvalClass is authoritative", () => {
+    const adminApprovals = [
+      { metadata: { approvalClass: "admin" } },
+      { metadata: { auditClass: "admin" } },
+      { metadata: { isAdminMcpTool: true } },
+    ];
+    const businessApprovals = [
+      { metadata: { approvalClass: "business" } },
+      { tool: "mail.send" },
+      { purpose: "tool.invoke" },
+    ];
 
-    for (const tool of adminTools) {
-      expect(isAdminClassTool(tool)).toBe(true);
+    for (const approval of adminApprovals) {
+      expect(isAdminClassApproval(approval)).toBe(true);
     }
-    for (const tool of businessTools) {
-      expect(isAdminClassTool(tool)).toBe(false);
+    for (const approval of businessApprovals) {
+      expect(isAdminClassApproval(approval)).toBe(false);
     }
   });
 });

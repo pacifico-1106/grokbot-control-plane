@@ -4,8 +4,11 @@
  * with this class only.
  *
  * Admin-class approvals require explicit account-approver policy when
- * ADMIN_APPROVER_POLICY_REQUIRED is enabled. Financial/billing/card-related
- * tools are classified admin so they never reach business approvers.
+ * admin_approver_enforcement is enabled at org or platform level.
+ *
+ * Classification is METADATA-DRIVEN: approval.metadata.approvalClass is
+ * the primary source of truth, set at ticket creation. Legacy fallback
+ * is used only for pre-existing rows that lack the field.
  */
 export const ADMIN_AUDIT_ACTIONS = [
   "admin.hire",
@@ -49,15 +52,8 @@ export const ADMIN_TOOL_AUDIT_ACTION: Record<string, AdminAuditAction> = {
   "orgs.patch": "admin.org_patch",
   "approvalWorkflow.patch": "admin.policy",
   "internalAudienceRule.patch": "admin.policy",
-  "billing.patch": "admin.billing",
-  "billing.update": "admin.billing",
-  "externalContractCard.setup": "admin.external_contract_card",
-  "externalContractCard.patch": "admin.external_contract_card",
-  "portal.setup": "admin.portal",
-  "portal.patch": "admin.portal",
-  "setup.billing": "admin.billing",
-  "setup.card": "admin.external_contract_card",
-  "setup.portal": "admin.portal",
+  "approvalWorkflow.remind": "admin.policy",
+  "approvals.proxyResolve": "admin.proxy_approve",
 };
 
 /** Operational / employee-badge class — never lead the dashboard change log. */
@@ -115,96 +111,64 @@ export const BUSINESS_AUDIT_CLASS = "business" as const;
 export type ApprovalRouteClass = typeof ADMIN_AUDIT_CLASS | typeof BUSINESS_AUDIT_CLASS;
 
 /**
- * Admin-class tool prefixes for fallback classification.
- * These are used only when tool metadata does not declare approvalClass.
- * Admin MCP tools default to admin; gateway tools default to business.
+ * LEGACY FALLBACK: Tool prefixes for classification when metadata.approvalClass is missing.
+ * This is used only for pre-existing approval rows that were created before
+ * metadata-driven classification was implemented.
+ *
+ * @deprecated New tickets should have metadata.approvalClass set at creation.
  */
-const ADMIN_TOOL_PREFIXES_FALLBACK = [
+const LEGACY_ADMIN_TOOL_PREFIXES = [
   "admin.",
   "setup.",
   "orgs.",
-  "billing.",
-  "portal.",
-  "externalContractCard.",
   "internalAudienceRule.",
   "approvalWorkflow.",
+  "ingressHandoff.",
+  "schedulingPolicy.",
+  "replyPolicy.",
+  "mailPolicy.",
+  "stuckWatch.",
+  "approvals.",
 ] as const;
 
 /**
- * Explicit admin-class tools that don't follow the prefix convention.
- * Used only as fallback when tool metadata does not declare approvalClass.
+ * LEGACY FALLBACK: Explicit admin-class tools for pre-existing rows.
+ * @deprecated New tickets should have metadata.approvalClass set at creation.
  */
-const ADMIN_CLASS_TOOLS_FALLBACK = new Set([
+const LEGACY_ADMIN_CLASS_TOOLS = new Set([
   "employees.issue",
   "link",
   "policy.patch",
   "parties.upsert",
   "channels.classify",
   "roles.propose",
-  "ingressHandoff.patch",
-  "schedulingPolicy.patch",
-  "replyPolicy.patch",
-  "mailPolicy.patch",
-  "stuckWatch.patch",
 ]);
 
 /**
- * Tool metadata registry for approval class lookup.
- * Populated by registerToolApprovalClass() when Admin MCP tools are loaded.
- * This is the primary source of truth for tool classification.
- */
-const toolApprovalClassRegistry = new Map<string, ApprovalRouteClass>();
-
-/**
- * Register a tool's approval class from its definition metadata.
- * Called during Admin MCP tool initialization.
- */
-export function registerToolApprovalClass(
-  toolName: string,
-  approvalClass: ApprovalRouteClass
-): void {
-  toolApprovalClassRegistry.set(toolName, approvalClass);
-}
-
-/**
- * Get the approval class for a tool from metadata registry.
- * Returns null if not registered (fallback logic should be used).
- */
-export function getToolApprovalClassFromRegistry(
-  toolName: string
-): ApprovalRouteClass | null {
-  return toolApprovalClassRegistry.get(toolName) ?? null;
-}
-
-/**
- * Check if a tool is admin-class.
- * Classification priority:
- * 1. Tool metadata (approvalClass in tool definition) - primary source
- * 2. Prefix-based fallback for Admin MCP tools without explicit metadata
- * 3. Admin MCP tools default to admin when unclassified (fail-closed)
+ * Check if a tool is admin-class using LEGACY fallback logic.
+ * Only used when metadata.approvalClass is not set.
  *
- * Gateway (employee) tools without metadata default to business class.
+ * @deprecated Use metadata.approvalClass for new tickets.
  */
-export function isAdminClassTool(
-  tool: string | null | undefined,
-  isAdminMcpTool = false
-): boolean {
+function isAdminClassToolLegacy(tool: string | null | undefined): boolean {
   const t = (tool || "").trim();
   if (!t) return false;
-
-  const registeredClass = getToolApprovalClassFromRegistry(t);
-  if (registeredClass) {
-    return registeredClass === ADMIN_AUDIT_CLASS;
-  }
-
-  if (ADMIN_CLASS_TOOLS_FALLBACK.has(t)) return true;
-  if (ADMIN_TOOL_PREFIXES_FALLBACK.some((prefix) => t.startsWith(prefix))) return true;
-
-  if (isAdminMcpTool) return true;
-
-  return false;
+  if (LEGACY_ADMIN_CLASS_TOOLS.has(t)) return true;
+  return LEGACY_ADMIN_TOOL_PREFIXES.some((prefix) => t.startsWith(prefix));
 }
 
+/**
+ * Check if an approval is admin-class.
+ *
+ * Classification priority (METADATA-FIRST):
+ * 1. metadata.approvalClass - PRIMARY source of truth for new tickets
+ * 2. metadata.auditClass - Legacy field, still honored
+ * 3. metadata.isAdminMcpTool + always_human - Admin MCP ticket marker
+ * 4. purpose prefix "admin." - Audit action prefix
+ * 5. LEGACY FALLBACK: tool name/prefix classification for pre-existing rows
+ *
+ * New tickets MUST have metadata.approvalClass set at creation.
+ */
 export function isAdminClassApproval(approval: {
   purpose?: string | null;
   tool?: string | null;
@@ -213,24 +177,22 @@ export function isAdminClassApproval(approval: {
   const meta = approval.metadata || {};
 
   if (meta.approvalClass === ADMIN_AUDIT_CLASS) return true;
-  if (meta.auditClass === ADMIN_AUDIT_CLASS) return true;
+  if (meta.approvalClass === BUSINESS_AUDIT_CLASS) return false;
 
-  if (meta.always_human === true && typeof meta.adminTool === "string") {
-    const isAdminMcp = meta.isAdminMcpTool === true;
-    return isAdminClassTool(meta.adminTool as string, isAdminMcp);
-  }
+  if (meta.auditClass === ADMIN_AUDIT_CLASS) return true;
+  if (meta.auditClass === BUSINESS_AUDIT_CLASS) return false;
+
+  if (meta.isAdminMcpTool === true) return true;
 
   const purpose = (approval.purpose || "").trim();
   if (purpose.startsWith("admin.")) return true;
 
   const tool = (approval.tool ?? meta.adminTool ?? meta.tool) as string | undefined;
-  const isAdminMcp = meta.isAdminMcpTool === true;
-  return isAdminClassTool(tool, isAdminMcp);
+  return isAdminClassToolLegacy(tool);
 }
 
 /**
  * Get the approval class for routing purposes.
- * Admin-class requires explicit admin route policy when ADMIN_APPROVER_POLICY_REQUIRED is enabled.
  */
 export function getApprovalRouteClass(approval: {
   purpose?: string | null;

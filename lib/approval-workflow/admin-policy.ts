@@ -232,7 +232,7 @@ export function getEffectiveClassPolicy(
  */
 export function canVoterVoteOnApproval(
   voterUserId: string,
-  approval: Pick<ApprovalRequest, "purpose" | "tool" | "metadata">,
+  approval: { purpose?: string | null; tool?: string | null; metadata?: Record<string, unknown> | null },
   policy: OrgApprovalWorkflowPolicy | null
 ): { allowed: boolean; reason: string } {
   if (!isAdminApproverPolicyRequired()) {
@@ -282,6 +282,59 @@ export function canVoterVoteOnApproval(
     allowed: false,
     reason: "not_in_admin_route",
   };
+}
+
+/**
+ * Check if a resolver can resolve an admin-class approval (W1 path).
+ *
+ * When enforcement is ON and no explicit admin route exists:
+ * - Only org owners can resolve admin-class tickets
+ * - Non-owner members are rejected
+ *
+ * When enforcement is OFF: existing W1 behavior (any approver can resolve).
+ *
+ * @param resolverId - The member ID attempting to resolve
+ * @param approval - The approval being resolved
+ * @param policy - Org-level approval workflow policy
+ * @param orgOwnerIds - List of org owner member IDs
+ * @param enforcementEnabled - Whether admin_approver_enforcement is ON for this org
+ */
+export function canResolverResolveAdminApproval(
+  resolverId: string,
+  approval: { purpose?: string | null; tool?: string | null; metadata?: Record<string, unknown> | null },
+  policy: OrgApprovalWorkflowPolicy | null,
+  orgOwnerIds: string[],
+  enforcementEnabled: boolean
+): { allowed: boolean; reason: string } {
+  if (!enforcementEnabled) {
+    return { allowed: true, reason: "enforcement_off" };
+  }
+
+  if (!isAdminClassApproval(approval)) {
+    return { allowed: true, reason: "business_class" };
+  }
+
+  if (hasValidAdminRoute(policy)) {
+    const isInAdminRoute = findRouteForClass(policy, ADMIN_AUDIT_CLASS)?.stages.some(
+      (stage) => stage.voterUserIds.includes(resolverId)
+    );
+    if (isInAdminRoute) {
+      return { allowed: true, reason: "in_admin_route" };
+    }
+    const isInBusinessRoute = findRouteForClass(policy, BUSINESS_AUDIT_CLASS)?.stages.some(
+      (stage) => stage.voterUserIds.includes(resolverId)
+    );
+    if (isInBusinessRoute) {
+      return { allowed: false, reason: "business_voter_on_admin_ticket" };
+    }
+    return { allowed: false, reason: "not_in_admin_route" };
+  }
+
+  if (orgOwnerIds.includes(resolverId)) {
+    return { allowed: true, reason: "org_owner_default" };
+  }
+
+  return { allowed: false, reason: "non_owner_on_admin_ticket" };
 }
 
 export { ADMIN_AUDIT_CLASS, BUSINESS_AUDIT_CLASS };
