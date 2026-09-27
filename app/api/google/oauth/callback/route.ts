@@ -50,10 +50,13 @@ export async function GET(req: Request) {
   }
 
   if (oauthError) {
-    return redirectEmployee(
-      parsed.employeeId,
-      oauthError === "access_denied" ? "denied" : "error"
-    );
+    const errorParam =
+      oauthError === "admin_policy_enforced"
+        ? "admin_blocked"
+        : oauthError === "access_denied"
+          ? "denied"
+          : "error";
+    return redirectEmployee(parsed.employeeId, errorParam);
   }
 
   if (!code || !codeVerifier) {

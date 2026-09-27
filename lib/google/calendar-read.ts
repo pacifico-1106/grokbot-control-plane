@@ -10,6 +10,10 @@
  * - Max window capped at 31 days to prevent unbounded queries.
  * - Per-calendar errors (notFound, notShared) surface as status, not crash.
  * - Tokens never appear in responses, logs, audit metadata, or chat.
+ *
+ * MCP Rail Hints:
+ * - When flag OFF or no identity: nextStepJa guides setup
+ * - When readErrors: hintJa explains how to resolve sharing issues
  */
 import type { BusyInterval } from "@/lib/scheduling-policy/freebusy";
 import {
@@ -40,6 +44,12 @@ export interface CalendarReadResult {
   refused: string[];
   queried: string[];
   auditMetadata: Record<string, unknown>;
+  /** MCP rail hint: next step in Japanese when action is needed */
+  nextStepJa?: string;
+  /** MCP rail hint: per-calendar hints for resolving read errors */
+  readErrorHints?: Record<string, string>;
+  /** MCP rail hint: whether busy data is complete (false if any read errors) */
+  busyDataComplete?: boolean;
 }
 
 export interface CalendarReadError {
@@ -100,6 +110,12 @@ export async function readCalendarFreebusy(
       refused: rawCalendarIds,
       queried: [],
       auditMetadata: { ...auditBase, flagOff: true },
+      nextStepJa:
+        "Google Calendar 連携は現在無効です（フラグ OFF）。" +
+        "接続するアカウントは、AI 社員専用の Google アカウントで、" +
+        "オペレータが管理する Workspace または Staffpass を許可済みの Workspace に所属している必要があります。" +
+        "相手方は Staffpass に接続せず、カレンダーを AI 社員アカウントに共有（空き時間のみで OK）してください。",
+      busyDataComplete: false,
     };
   }
 
@@ -165,6 +181,13 @@ export async function readCalendarFreebusy(
       refused,
       queried: [],
       auditMetadata: { ...auditBase, noGoogleIdentity: true },
+      nextStepJa:
+        "この AI 社員に Google アカウントが連携されていません。" +
+        "社員証画面から「Google カレンダー接続」を実行してください。" +
+        "接続するアカウントは、AI 社員専用の Google アカウントで、" +
+        "オペレータが管理する Workspace または Staffpass を許可済みの Workspace に所属している必要があります。" +
+        "相手方は Staffpass に接続せず、カレンダーを AI 社員アカウントに共有（空き時間のみで OK）してください。",
+      busyDataComplete: false,
     };
   }
 
@@ -178,6 +201,12 @@ export async function readCalendarFreebusy(
       refused,
       queried: [],
       auditMetadata: { ...auditBase, tokenRefreshFailed: true },
+      nextStepJa:
+        "Google トークンの更新に失敗しました。" +
+        "社員証画面から Google を再連携してください。" +
+        "接続する Google アカウントの Workspace でサードパーティアプリがブロックされている場合は、" +
+        "アカウントを別の Workspace に移すか、管理者に Staffpass の許可を依頼してください。",
+      busyDataComplete: false,
     };
   }
 
@@ -194,6 +223,11 @@ export async function readCalendarFreebusy(
     if (freebusyResult.error.code === 401) {
       await markGoogleIdentityNeedsReauth(employeeId);
     }
+    const hintJa = freebusyResult.error.code === 401
+      ? "認証エラーです。社員証画面から Google を再連携してください。" +
+        "接続する Google アカウントの Workspace でサードパーティアプリがブロックされている場合は、" +
+        "アカウントを別の Workspace に移すか、管理者に Staffpass の許可を依頼してください。"
+      : "Google API エラーです。しばらく待ってから再試行してください。";
     return {
       ok: false,
       busyByCalendar: {},
@@ -210,25 +244,40 @@ export async function readCalendarFreebusy(
         apiError: true,
         apiErrorCode: freebusyResult.error.code,
       },
+      nextStepJa: hintJa,
+      busyDataComplete: false,
     };
   }
 
   const busyByCalendar: Record<string, BusyInterval[]> = {};
   const errors: Record<string, CalendarReadError> = {};
+  const readErrorHints: Record<string, string> = {};
 
   for (const calendarId of toQuery) {
     const calData = freebusyResult.calendars?.[calendarId];
     if (!calData) {
       errors[calendarId] = { code: "not_found", message: "Calendar not in response" };
+      readErrorHints[calendarId] =
+        "カレンダーが見つかりません。オーナーに AI 社員アカウントへの共有を依頼してください（空き時間のみで OK）。" +
+        "オーナーの Workspace で外部カレンダー共有が無効な場合は、管理者に許可を依頼してください。";
       continue;
     }
 
     if (calData.errors?.length) {
       const firstError = calData.errors[0];
+      const reason = firstError.reason || "calendar_error";
       errors[calendarId] = {
-        code: firstError.reason || "calendar_error",
+        code: reason,
         message: firstError.reason || "Calendar query error",
       };
+      if (reason === "notFound" || reason === "notShared") {
+        readErrorHints[calendarId] =
+          "カレンダーへのアクセス権がありません。オーナーに AI 社員アカウントへの共有を依頼してください（空き時間のみで OK）。" +
+          "オーナーの Workspace で外部カレンダー共有が無効な場合は、管理者に許可を依頼してください。";
+      } else {
+        readErrorHints[calendarId] =
+          `カレンダー読み取りエラー (${reason})。しばらく待ってから再試行してください。`;
+      }
       continue;
     }
 
@@ -257,6 +306,9 @@ export async function readCalendarFreebusy(
     metadata: auditMetadata,
   });
 
+  const hasReadErrors = Object.keys(errors).length > 0;
+  const busyDataComplete = !hasReadErrors;
+
   return {
     ok: true,
     busyByCalendar,
@@ -264,6 +316,15 @@ export async function readCalendarFreebusy(
     refused,
     queried: toQuery,
     auditMetadata,
+    ...(hasReadErrors ? { readErrorHints } : {}),
+    busyDataComplete,
+    ...(hasReadErrors
+      ? {
+          nextStepJa:
+            "一部のカレンダーで読み取りエラーが発生しました（readErrors を確認）。" +
+            "オーナーに AI 社員アカウントへの共有を依頼してください（空き時間のみで OK）。",
+        }
+      : {}),
   };
 }
 

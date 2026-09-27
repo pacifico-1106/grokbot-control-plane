@@ -7,6 +7,10 @@ import type { EmployeeGoogleIdentity } from "@/lib/data/google-identities";
 const GOOGLE_QUERY_MESSAGES: Record<string, string> = {
   ok: "Google Calendar を連携しました",
   denied: "連携がキャンセルされました",
+  admin_blocked:
+    "Workspace のサードパーティアプリ制限によりブロックされました。" +
+    "アカウントをオペレータが管理する Workspace または Staffpass を許可済みの Workspace に移すか、" +
+    "管理者に Staffpass クライアントの許可を依頼してください（Admin console → Security → API controls → App access control）。",
   error: "Google Calendar 連携に失敗しました",
   scope_error: "許可されていないスコープが含まれています",
 };
@@ -83,9 +87,14 @@ export function GoogleCalendarIdentityForm({
           </span>
         </p>
       ) : (
-        <p className="text-xs muted leading-relaxed">
-          カレンダーのオーナー（対象者）の Google アカウントで連携します。
-        </p>
+        <div className="text-xs muted leading-relaxed space-y-2">
+          <p>
+            <strong>接続するアカウント:</strong> AI 社員専用の Google アカウント（オペレータが管理する Workspace、または Staffpass を許可済みの Workspace）
+          </p>
+          <p>
+            <strong>相手方への依頼:</strong> 相手方は Staffpass に接続せず、カレンダーを AI 社員アカウントに共有してください（空き時間のみで OK）。
+          </p>
+        </div>
       )}
 
       {oauthConfigured ? (

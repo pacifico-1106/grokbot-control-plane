@@ -36,6 +36,16 @@
 
 ---
 
+## Runbooks（運用手順書）
+
+| 文書 | 相対 | 備考 |
+|------|------|------|
+| Slack テナントキックオフ RAIL | [tenant-slack-kickoff-rail.md](./tenant-slack-kickoff-rail.md) | Slack 設定の RAIL |
+| Google Calendar テナント展開 | [runbooks/google-calendar-tenant-rollout.md](./runbooks/google-calendar-tenant-rollout.md) | カレンダー連携の展開手順 |
+| Google Calendar 技術仕様 | [google-calendar-freebusy-integration.md](./google-calendar-freebusy-integration.md) | freebusy 読み取りの技術仕様 |
+
+---
+
 ## 営業・セキュリティ
 
 | 文書 | 相対 |

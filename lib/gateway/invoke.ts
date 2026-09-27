@@ -1769,7 +1769,7 @@ export async function runGatewayInvoke(
     });
   }
 
-  // calendar.read: query Google freebusy (only when flag ON; flag OFF falls through to generic response)
+  // calendar.read: query Google freebusy (only when flag ON; flag OFF falls through to generic path)
   if (isGoogleCalendarReadEnabled() && tool === "calendar.read") {
     const args = (body.args || {}) as Record<string, unknown>;
     const calendarIds = Array.isArray(args.calendarIds)
@@ -1799,10 +1799,13 @@ export async function runGatewayInvoke(
       errors: readResult.errors,
       refused: readResult.refused,
       queried: readResult.queried,
+      ...(readResult.nextStepJa ? { nextStepJa: readResult.nextStepJa } : {}),
+      ...(readResult.readErrorHints ? { readErrorHints: readResult.readErrorHints } : {}),
+      ...(readResult.busyDataComplete !== undefined ? { busyDataComplete: readResult.busyDataComplete } : {}),
     });
   }
 
-  // calendar.propose: fetches busy and applies policy (only when flag ON; flag OFF falls through to generic response)
+  // calendar.propose: fetches busy and applies policy (only when flag ON; flag OFF falls through to generic path)
   if (isGoogleCalendarReadEnabled() && tool === "calendar.propose") {
     const args = (body.args || {}) as Record<string, unknown>;
     const slots = Array.isArray(args.slots) ? args.slots : [];
@@ -1814,7 +1817,9 @@ export async function runGatewayInvoke(
     const requestedVideoTool = typeof args.videoTool === "string" ? args.videoTool : undefined;
     let busyByCalendar = (args.busyByCalendar || {}) as Record<string, Array<{ start: string; end: string }>>;
     let readErrors: Record<string, { code: string; message: string }> = {};
+    let readErrorHints: Record<string, string> = {};
     let busyDataComplete = true;
+    let nextStepJa: string | undefined;
 
     if (calendarIds.length > 0 && timeMin && timeMax) {
       const readResult = await readCalendarFreebusy({
@@ -1830,10 +1835,22 @@ export async function runGatewayInvoke(
         if (Object.keys(readResult.errors).length > 0) {
           readErrors = readResult.errors;
           busyDataComplete = false;
+          if (readResult.readErrorHints) {
+            readErrorHints = readResult.readErrorHints;
+          }
+          if (readResult.nextStepJa) {
+            nextStepJa = readResult.nextStepJa;
+          }
         }
       } else {
         readErrors = readResult.errors;
         busyDataComplete = false;
+        if (readResult.readErrorHints) {
+          readErrorHints = readResult.readErrorHints;
+        }
+        if (readResult.nextStepJa) {
+          nextStepJa = readResult.nextStepJa;
+        }
       }
     }
 
@@ -1870,6 +1887,8 @@ export async function runGatewayInvoke(
       busyByCalendarUsed: Object.keys(busyByCalendar).length > 0,
       busyDataComplete,
       ...(Object.keys(readErrors).length > 0 ? { readErrors } : {}),
+      ...(Object.keys(readErrorHints).length > 0 ? { readErrorHints } : {}),
+      ...(nextStepJa ? { nextStepJa } : {}),
     });
   }
 
