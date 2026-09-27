@@ -37,6 +37,8 @@ type DemoDelivery = {
   provider: NotificationProvider;
   externalMessageId: string | null;
   context: Record<string, unknown>;
+  recipient?: string | null;
+  recipientKind?: "channel" | "dm" | "thread";
 };
 
 const demoDeliveries: DemoDelivery[] = [];
@@ -517,13 +519,20 @@ export async function getTokyo307PilotOrgId(): Promise<string | null> {
   return data?.org_id ? String(data.org_id) : null;
 }
 
+export type RecipientKind = "channel" | "dm" | "thread";
+
 export async function recordNotificationDelivery(input: {
   approval: ApprovalRequest;
   channelId: string;
   provider: NotificationProvider;
   externalMessageId?: string | null;
   context?: Record<string, unknown>;
+  recipient?: string | null;
+  recipientKind?: RecipientKind;
 }): Promise<void> {
+  const recipientKind = input.recipientKind ?? "channel";
+  const recipient = input.recipient ?? null;
+
   if (isDemoMode()) {
     const row: DemoDelivery = {
       approvalId: input.approval.id,
@@ -532,50 +541,80 @@ export async function recordNotificationDelivery(input: {
       provider: input.provider,
       externalMessageId: input.externalMessageId ?? null,
       context: input.context ?? {},
+      recipient,
+      recipientKind,
     };
-    const idx = demoDeliveries.findIndex(
-      (item) => item.approvalId === row.approvalId && item.channelId === row.channelId
-    );
+    const idx = demoDeliveries.findIndex((item) => {
+      if (recipient === null) {
+        return (
+          item.approvalId === row.approvalId &&
+          item.channelId === row.channelId &&
+          item.recipient === null
+        );
+      }
+      return (
+        item.approvalId === row.approvalId &&
+        item.channelId === row.channelId &&
+        item.recipient === recipient
+      );
+    });
     if (idx >= 0) demoDeliveries[idx] = row;
     else demoDeliveries.push(row);
     return;
   }
   const admin = createSupabaseAdminClient();
   if (!admin) return;
-  await admin.from("approval_notification_deliveries").upsert(
-    {
-      approval_id: input.approval.id,
-      org_id: input.approval.orgId,
-      channel_id: input.channelId,
-      provider: input.provider,
-      external_message_id: input.externalMessageId ?? null,
-      context: input.context ?? {},
-      updated_at: new Date().toISOString(),
-    },
-    { onConflict: "approval_id,channel_id" }
-  );
+  await admin.rpc("upsert_notification_delivery", {
+    p_approval_id: input.approval.id,
+    p_org_id: input.approval.orgId,
+    p_channel_id: input.channelId,
+    p_provider: input.provider,
+    p_external_message_id: input.externalMessageId ?? null,
+    p_context: input.context ?? {},
+    p_recipient: recipient,
+    p_recipient_kind: recipientKind,
+  });
 }
 
 export async function getNotificationDelivery(input: {
   approvalId: string;
   channelId: string;
+  recipient?: string | null;
 }): Promise<{ externalMessageId: string | null; context: Record<string, unknown> } | null> {
+  const recipient = input.recipient ?? null;
+
   if (isDemoMode()) {
-    const row = demoDeliveries.find(
-      (item) => item.approvalId === input.approvalId && item.channelId === input.channelId
-    );
+    const row = demoDeliveries.find((item) => {
+      if (recipient === null) {
+        return (
+          item.approvalId === input.approvalId &&
+          item.channelId === input.channelId &&
+          (item.recipient === null || item.recipient === undefined)
+        );
+      }
+      return (
+        item.approvalId === input.approvalId &&
+        item.channelId === input.channelId &&
+        item.recipient === recipient
+      );
+    });
     return row
       ? { externalMessageId: row.externalMessageId, context: row.context }
       : null;
   }
   const admin = createSupabaseAdminClient();
   if (!admin) return null;
-  const { data, error } = await admin
+  let query = admin
     .from("approval_notification_deliveries")
     .select("external_message_id,context")
     .eq("approval_id", input.approvalId)
-    .eq("channel_id", input.channelId)
-    .maybeSingle();
+    .eq("channel_id", input.channelId);
+  if (recipient === null) {
+    query = query.is("recipient", null);
+  } else {
+    query = query.eq("recipient", recipient);
+  }
+  const { data, error } = await query.maybeSingle();
   if (error || !data) return null;
   return {
     externalMessageId: data.external_message_id ? String(data.external_message_id) : null,
