@@ -347,6 +347,7 @@ export async function resolveApprovalWithoutWorkflow(
     grokBotAgentId?: string | null;
     actorId?: string | null;
     decisionId?: string;
+    externalVoter?: { provider: "slack" | "telegram" | "line"; channelKey: string; userId: string };
   } = {}
 ): Promise<ApprovalRequest | null> {
   if (!id || !orgId) return null;
