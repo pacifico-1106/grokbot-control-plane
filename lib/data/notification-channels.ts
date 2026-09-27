@@ -200,6 +200,41 @@ export async function getNotificationChannelByWebhookRef(
   return (await runtimeRows({ provider, webhookRef: ref }))[0] ?? null;
 }
 
+/**
+ * Get stored secrets for an existing notification channel by ID.
+ * Used to retrieve bot token for validation when updating without re-entering credentials.
+ *
+ * @param orgId Organization ID
+ * @param channelId Channel ID
+ * @returns Decrypted secrets or empty object if not found
+ */
+export async function getNotificationChannelSecretsById(
+  orgId: string,
+  channelId: string
+): Promise<Record<string, string>> {
+  if (isDemoMode()) {
+    const channel = demoChannels.find((row) => row.id === channelId && row.orgId === orgId);
+    return channel?.secrets || {};
+  }
+
+  const admin = createSupabaseAdminClient();
+  if (!admin) return {};
+
+  const { data } = await admin
+    .from("org_notification_channel_secrets")
+    .select("credentials_ciphertext")
+    .eq("channel_id", channelId)
+    .maybeSingle();
+
+  if (!data?.credentials_ciphertext) return {};
+
+  try {
+    return decryptNotificationSecrets(String(data.credentials_ciphertext));
+  } catch {
+    return {};
+  }
+}
+
 function telegramEnvConfig() {
   return {
     token: process.env.TELEGRAM_BOT_TOKEN?.trim() || "",

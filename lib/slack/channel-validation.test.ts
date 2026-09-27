@@ -9,6 +9,7 @@ import { describe, expect, test, afterEach } from "bun:test";
 import {
   validateSlackChannelNotExternal,
   isSlackUserFromExpectedTeam,
+  getSlackBotTeamId,
 } from "./channel-validation";
 
 const makeMockFetch = (body: unknown, status = 200) =>
@@ -238,5 +239,92 @@ describe("INVARIANT: Cross-org Slack user isolation", () => {
   test("INVARIANT: same team user is allowed", () => {
     const result = isSlackUserFromExpectedTeam(ORG_A_TEAM, ORG_A_TEAM);
     expect(result.allowed).toBe(true);
+  });
+});
+
+describe("isSlackUserFromExpectedTeam strict mode", () => {
+  test("non-strict mode: allows when no expectedTeamId configured", () => {
+    const result = isSlackUserFromExpectedTeam("T123", undefined, false);
+    expect(result.allowed).toBe(true);
+    expect(result.reason).toBe("no_team_check_configured");
+  });
+
+  test("strict mode: FAILS CLOSED when no expectedTeamId configured", () => {
+    const result = isSlackUserFromExpectedTeam("T123", undefined, true);
+    expect(result.allowed).toBe(false);
+    expect(result.reason).toBe("expected_team_id_not_configured");
+  });
+
+  test("strict mode: FAILS CLOSED when expectedTeamId is empty string", () => {
+    const result = isSlackUserFromExpectedTeam("T123", "", true);
+    expect(result.allowed).toBe(false);
+    expect(result.reason).toBe("expected_team_id_not_configured");
+  });
+
+  test("strict mode: allows when teams match", () => {
+    const result = isSlackUserFromExpectedTeam("T123", "T123", true);
+    expect(result.allowed).toBe(true);
+    expect(result.reason).toBe("same_team");
+  });
+
+  test("strict mode: rejects external team user", () => {
+    const result = isSlackUserFromExpectedTeam("T456", "T123", true);
+    expect(result.allowed).toBe(false);
+    expect(result.reason).toBe("external_team_user");
+  });
+});
+
+describe("getSlackBotTeamId", () => {
+  afterEach(() => {
+    globalThis.fetch = fetch;
+  });
+
+  test("rejects missing bot token", async () => {
+    const result = await getSlackBotTeamId("");
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toBe("missing_bot_token");
+    }
+  });
+
+  test("returns team_id on success", async () => {
+    globalThis.fetch = makeMockFetch({
+      ok: true,
+      team_id: "T12345",
+      bot_id: "B12345",
+    }) as typeof fetch;
+
+    const result = await getSlackBotTeamId("xoxb-token");
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.teamId).toBe("T12345");
+      expect(result.botId).toBe("B12345");
+    }
+  });
+
+  test("handles API error response", async () => {
+    globalThis.fetch = makeMockFetch({
+      ok: false,
+      error: "invalid_auth",
+    }) as typeof fetch;
+
+    const result = await getSlackBotTeamId("xoxb-invalid");
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toBe("invalid_auth");
+    }
+  });
+
+  test("handles missing team_id in response", async () => {
+    globalThis.fetch = makeMockFetch({
+      ok: true,
+      bot_id: "B12345",
+    }) as typeof fetch;
+
+    const result = await getSlackBotTeamId("xoxb-token");
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toBe("team_id_not_returned");
+    }
   });
 });

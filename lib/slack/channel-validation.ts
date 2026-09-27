@@ -117,16 +117,72 @@ export async function validateSlackChannelNotExternal(
 }
 
 /**
+ * Get the team_id for the workspace that owns the bot token via auth.test.
+ * Used at registration time to capture expectedTeamId.
+ *
+ * @param botToken Slack bot token
+ * @returns team_id if successful, null on failure
+ */
+export async function getSlackBotTeamId(
+  botToken: string
+): Promise<{ ok: true; teamId: string; botId: string } | { ok: false; reason: string }> {
+  if (!botToken?.trim()) {
+    return { ok: false, reason: "missing_bot_token" };
+  }
+
+  try {
+    const response = await fetch(`${SLACK_API}/auth.test`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${botToken}`,
+        "content-type": "application/json",
+      },
+      signal: AbortSignal.timeout(SLACK_TIMEOUT_MS),
+    });
+
+    const body = (await response.json().catch(() => ({}))) as {
+      ok?: boolean;
+      error?: string;
+      team_id?: string;
+      bot_id?: string;
+    };
+
+    if (!body.ok) {
+      return { ok: false, reason: body.error || `HTTP ${response.status}` };
+    }
+
+    if (!body.team_id) {
+      return { ok: false, reason: "team_id_not_returned" };
+    }
+
+    return { ok: true, teamId: body.team_id, botId: body.bot_id || "" };
+  } catch (error) {
+    return {
+      ok: false,
+      reason: error instanceof Error ? error.message : "auth_test_failed",
+    };
+  }
+}
+
+/**
  * Check if a Slack user's team_id matches the expected workspace.
  *
  * Slack Connect users have a different team_id than the channel's workspace.
  * When SLACK_APPROVAL_STRICT is ON, reject external-org users.
+ *
+ * @param userTeamId - The team_id from the Slack user pressing the button
+ * @param expectedTeamId - The team_id captured at registration via auth.test
+ * @param strictMode - Whether strict mode is enabled (fail closed when expectedTeamId missing)
  */
 export function isSlackUserFromExpectedTeam(
   userTeamId: string | undefined,
-  expectedTeamId: string | undefined
+  expectedTeamId: string | undefined,
+  strictMode: boolean = false
 ): { allowed: boolean; reason: string } {
   if (!expectedTeamId) {
+    if (strictMode) {
+      return { allowed: false, reason: "expected_team_id_not_configured" };
+    }
     return { allowed: true, reason: "no_team_check_configured" };
   }
 
