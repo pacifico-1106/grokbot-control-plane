@@ -326,7 +326,13 @@ export async function resolveApprovalWithoutWorkflow(
   status: "approved" | "rejected" | "revision_requested",
   resolvedBy: string,
   orgId?: string | null,
-  opts: { revisionNote?: string; grokBotAgentId?: string | null; actorId?: string | null } = {}
+  opts: {
+    revisionNote?: string;
+    grokBotAgentId?: string | null;
+    actorId?: string | null;
+    decisionId?: string;
+    externalVoter?: { provider: "slack" | "telegram" | "line"; channelKey: string; userId: string };
+  } = {}
 ): Promise<ApprovalRequest | null> {
   if (!id || !orgId) return null;
   const revisionNote = opts.revisionNote?.trim() || null;
@@ -365,6 +371,17 @@ export async function resolveApprovalWithoutWorkflow(
   if (status === "revision_requested") {
     update.revision_note = revisionNote;
     update.revision_count = existing.revisionCount + 1;
+  }
+  // P0 Item 5: Record decisionId for W1 replay protection
+  if (opts.decisionId || opts.externalVoter) {
+    const meta = { ...existing.metadata };
+    if (opts.decisionId) {
+      meta.w1DecisionId = opts.decisionId;
+    }
+    if (opts.externalVoter) {
+      meta.w1ExternalVoter = opts.externalVoter;
+    }
+    update.metadata = meta;
   }
   const q = admin
     .from("approval_requests")
