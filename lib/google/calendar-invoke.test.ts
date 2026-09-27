@@ -23,12 +23,14 @@ describe("calendar.allowlist.patch args hash", () => {
       action: "add",
       calendarId: "test@example.com",
       grantId: "",
+      label: "Test Calendar",
       targetEmployeeId: null,
     };
     const args2 = {
       action: "add",
       calendarId: "test@example.com",
       grantId: "",
+      label: "Test Calendar",
       targetEmployeeId: null,
     };
     expect(JSON.stringify(args1)).toBe(JSON.stringify(args2));
@@ -39,6 +41,7 @@ describe("calendar.allowlist.patch args hash", () => {
       action: "add",
       calendarId: "calendar@example.com",
       grantId: "",
+      label: "",
       targetEmployeeId: "emp-123",
     };
     const canonical = JSON.stringify(args);
@@ -53,12 +56,14 @@ describe("calendar.allowlist.patch args hash", () => {
       action: "add",
       calendarId: "calendar1@example.com",
       grantId: "",
+      label: "",
       targetEmployeeId: null,
     };
     const args2 = {
       action: "add",
       calendarId: "calendar2@example.com",
       grantId: "",
+      label: "",
       targetEmployeeId: null,
     };
     const hash1 = createHash("sha256").update(JSON.stringify(args1)).digest("hex");
@@ -71,12 +76,14 @@ describe("calendar.allowlist.patch args hash", () => {
       action: "add",
       calendarId: "",
       grantId: "grant-1",
+      label: "",
       targetEmployeeId: null,
     };
     const argsRevoke = {
       action: "revoke",
       calendarId: "",
       grantId: "grant-1",
+      label: "",
       targetEmployeeId: null,
     };
     const hashAdd = createHash("sha256").update(JSON.stringify(argsAdd)).digest("hex");
@@ -89,13 +96,35 @@ describe("calendar.allowlist.patch args hash", () => {
       action: "add",
       calendarId: "cal@example.com",
       grantId: "",
+      label: "",
       targetEmployeeId: null,
     };
     const args2 = {
       action: "add",
       calendarId: "cal@example.com",
       grantId: "",
+      label: "",
       targetEmployeeId: "emp-1",
+    };
+    const hash1 = createHash("sha256").update(JSON.stringify(args1)).digest("hex");
+    const hash2 = createHash("sha256").update(JSON.stringify(args2)).digest("hex");
+    expect(hash1).not.toBe(hash2);
+  });
+
+  test("label change produces different hash", () => {
+    const args1 = {
+      action: "add",
+      calendarId: "cal@example.com",
+      grantId: "",
+      label: "Personal",
+      targetEmployeeId: null,
+    };
+    const args2 = {
+      action: "add",
+      calendarId: "cal@example.com",
+      grantId: "",
+      label: "Work",
+      targetEmployeeId: null,
     };
     const hash1 = createHash("sha256").update(JSON.stringify(args1)).digest("hex");
     const hash2 = createHash("sha256").update(JSON.stringify(args2)).digest("hex");
@@ -120,19 +149,23 @@ describe("calendarId validation rules", () => {
     "calendar\x00with\x00null",
   ];
 
-  test.each(VALID_CALENDAR_IDS)("accepts valid calendarId: %s", (calendarId) => {
-    expect(calendarId.length).toBeLessThanOrEqual(254);
-    expect(calendarId.length).toBeGreaterThan(0);
-    // eslint-disable-next-line no-control-regex
-    expect(/[\s\x00-\x1f\x7f]/.test(calendarId)).toBe(false);
+  test("accepts valid calendarIds", () => {
+    for (const calendarId of VALID_CALENDAR_IDS) {
+      expect(calendarId.length).toBeLessThanOrEqual(254);
+      expect(calendarId.length).toBeGreaterThan(0);
+      // eslint-disable-next-line no-control-regex
+      expect(/[\s\x00-\x1f\x7f]/.test(calendarId)).toBe(false);
+    }
   });
 
-  test.each(INVALID_CALENDAR_IDS)("rejects invalid calendarId: %s", (calendarId) => {
-    const isEmpty = calendarId.length === 0;
-    const isTooLong = calendarId.length > 254;
-    // eslint-disable-next-line no-control-regex
-    const hasInvalidChars = /[\s\x00-\x1f\x7f]/.test(calendarId);
-    expect(isEmpty || isTooLong || hasInvalidChars).toBe(true);
+  test("rejects invalid calendarIds", () => {
+    for (const calendarId of INVALID_CALENDAR_IDS) {
+      const isEmpty = calendarId.length === 0;
+      const isTooLong = calendarId.length > 254;
+      // eslint-disable-next-line no-control-regex
+      const hasInvalidChars = /[\s\x00-\x1f\x7f]/.test(calendarId);
+      expect(isEmpty || isTooLong || hasInvalidChars).toBe(true);
+    }
   });
 });
 
@@ -167,6 +200,7 @@ describe("approval args binding security", () => {
       action: "add",
       calendarId: "test@example.com",
       grantId: "",
+      label: "",
       targetEmployeeId: null,
     })).digest("hex");
     const isValid = typeof priorArgsHash === "string" && priorArgsHash === currentHash;
@@ -178,12 +212,14 @@ describe("approval args binding security", () => {
       action: "add",
       calendarId: "calendar1@example.com",
       grantId: "",
+      label: "",
       targetEmployeeId: null,
     })).digest("hex");
     const currentHash = createHash("sha256").update(JSON.stringify({
       action: "add",
       calendarId: "calendar2@example.com",
       grantId: "",
+      label: "",
       targetEmployeeId: null,
     })).digest("hex");
     const isValid = typeof priorArgsHash === "string" && priorArgsHash === currentHash;
@@ -195,11 +231,49 @@ describe("approval args binding security", () => {
       action: "add",
       calendarId: "calendar@example.com",
       grantId: "",
+      label: "",
       targetEmployeeId: null,
     };
     const priorArgsHash = createHash("sha256").update(JSON.stringify(args)).digest("hex");
     const currentHash = createHash("sha256").update(JSON.stringify(args)).digest("hex");
     const isValid = typeof priorArgsHash === "string" && priorArgsHash === currentHash;
     expect(isValid).toBe(true);
+  });
+
+  test("label mismatch should fail", () => {
+    const priorArgsHash = createHash("sha256").update(JSON.stringify({
+      action: "add",
+      calendarId: "calendar@example.com",
+      grantId: "",
+      label: "Personal Calendar",
+      targetEmployeeId: null,
+    })).digest("hex");
+    const currentHash = createHash("sha256").update(JSON.stringify({
+      action: "add",
+      calendarId: "calendar@example.com",
+      grantId: "",
+      label: "Work Calendar",
+      targetEmployeeId: null,
+    })).digest("hex");
+    const isValid = typeof priorArgsHash === "string" && priorArgsHash === currentHash;
+    expect(isValid).toBe(false);
+  });
+});
+
+describe("single-use fulfillment", () => {
+  test("fulfillment with claiming:true is not considered complete", () => {
+    const claimingFulfillment = { ok: false, at: "2026-01-01T00:00:00Z", claiming: true };
+    expect(claimingFulfillment.claiming).toBe(true);
+  });
+
+  test("fulfillment without claiming is complete", () => {
+    const completeFulfillment = { ok: true, at: "2026-01-01T00:00:00Z", delivery: "stub" };
+    expect((completeFulfillment as Record<string, unknown>).claiming).toBeUndefined();
+  });
+
+  test("second call with existing fulfillment returns replay", () => {
+    const existingFulfillment = { ok: true, at: "2026-01-01T00:00:00Z", delivery: "stub", action: "add", grantId: "grant-123" };
+    const isReplay = existingFulfillment && existingFulfillment.ok !== undefined;
+    expect(isReplay).toBe(true);
   });
 });

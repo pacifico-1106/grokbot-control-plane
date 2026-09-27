@@ -22,6 +22,7 @@ import {
   runtimeModeLabel,
   incrementActionCounter,
   getOrgSodWarnPolicy,
+  updateApprovalMetadata,
 } from "@/lib/data";
 import { getOrgInternalAudienceRule } from "@/lib/data/internal-audience-rule";
 import {
@@ -667,6 +668,7 @@ export async function runGatewayInvoke(
       action: typeof args.action === "string" ? args.action : "add",
       calendarId: typeof args.calendarId === "string" ? args.calendarId : "",
       grantId: typeof args.grantId === "string" ? args.grantId : "",
+      label: typeof args.label === "string" ? args.label : "",
       targetEmployeeId: typeof args.employeeId === "string" ? args.employeeId : null,
     };
     const canonical = JSON.stringify(allowlistArgs);
@@ -837,6 +839,7 @@ export async function runGatewayInvoke(
         action: typeof currentArgs.action === "string" ? currentArgs.action : "add",
         calendarId: typeof currentArgs.calendarId === "string" ? currentArgs.calendarId : "",
         grantId: typeof currentArgs.grantId === "string" ? currentArgs.grantId : "",
+        label: typeof currentArgs.label === "string" ? currentArgs.label : "",
         targetEmployeeId: typeof currentArgs.employeeId === "string" ? currentArgs.employeeId : null,
       };
       const currentCanonical = JSON.stringify(currentAllowlistArgs);
@@ -1765,8 +1768,8 @@ export async function runGatewayInvoke(
     });
   }
 
-  // calendar.read: query Google freebusy behind flag
-  if (tool === "calendar.read") {
+  // calendar.read: query Google freebusy (only when flag ON; flag OFF falls through to generic response)
+  if (isGoogleCalendarReadEnabled() && tool === "calendar.read") {
     const args = (body.args || {}) as Record<string, unknown>;
     const calendarIds = Array.isArray(args.calendarIds)
       ? (args.calendarIds as string[])
@@ -1775,21 +1778,6 @@ export async function runGatewayInvoke(
         : [];
     const timeMin = typeof args.timeMin === "string" ? args.timeMin : "";
     const timeMax = typeof args.timeMax === "string" ? args.timeMax : "";
-
-    if (!isGoogleCalendarReadEnabled()) {
-      return jsonResult({
-        ok: true,
-        tool,
-        employeeId,
-        purpose,
-        jobId,
-        flagOff: true,
-        busyByCalendar: {},
-        refused: calendarIds,
-        queried: [],
-        message: "Google Calendar integration is disabled (flag OFF)",
-      });
-    }
 
     const readResult = await readCalendarFreebusy({
       orgId: orgId || employee.orgId,
@@ -1813,20 +1801,8 @@ export async function runGatewayInvoke(
     });
   }
 
-  // calendar.propose: flag-OFF returns pre-PR stub; flag-ON fetches busy and applies policy
-  if (tool === "calendar.propose") {
-    if (!isGoogleCalendarReadEnabled()) {
-      return jsonResult({
-        ok: true,
-        tool,
-        employeeId,
-        purpose,
-        jobId,
-        proposed: true,
-        slots: [],
-      });
-    }
-
+  // calendar.propose: fetches busy and applies policy (only when flag ON; flag OFF falls through to generic response)
+  if (isGoogleCalendarReadEnabled() && tool === "calendar.propose") {
     const args = (body.args || {}) as Record<string, unknown>;
     const slots = Array.isArray(args.slots) ? args.slots : [];
     const calendarIds = Array.isArray(args.calendarIds)
@@ -1926,6 +1902,7 @@ export async function runGatewayInvoke(
     }
 
     // Single-use: if approval already has fulfillment, return that result
+    // Single-use: check if approval already has fulfillment (replay)
     if (priorApproval) {
       const existingFulfillment = parseFulfillment(priorApproval.metadata);
       if (existingFulfillment) {
@@ -1938,6 +1915,40 @@ export async function runGatewayInvoke(
           replay: true,
           fulfillment: existingFulfillment,
         });
+      }
+
+      // Atomically claim the approval before executing
+      const claimAt = new Date().toISOString();
+      const claimed = await updateApprovalMetadata(priorApproval, {
+        fulfillment: { ok: false, at: claimAt, claiming: true },
+      });
+      if (!claimed) {
+        return jsonResult({
+          ok: false,
+          code: "claim_failed",
+          error: "claim_failed",
+          message: "Failed to claim approval for execution",
+          employeeId,
+          tool,
+          purpose,
+          jobId,
+        }, 409);
+      }
+      // Re-check if we actually claimed it (another caller may have beaten us)
+      const claimedMeta = claimed.metadata?.fulfillment as Record<string, unknown> | undefined;
+      if (claimedMeta && claimedMeta.claiming !== true) {
+        const recheckFulfillment = parseFulfillment(claimed.metadata);
+        if (recheckFulfillment) {
+          return jsonResult({
+            ok: recheckFulfillment.ok,
+            tool,
+            employeeId,
+            purpose,
+            jobId,
+            replay: true,
+            fulfillment: recheckFulfillment,
+          });
+        }
       }
     }
 
@@ -2011,6 +2022,12 @@ export async function runGatewayInvoke(
         summary: `Calendar allowlist grant added: ${calendarId}`,
         metadata: { grantId: grant.id, calendarId, targetEmployeeId, approvalId: priorApprovalId, jobId },
       });
+      // Record fulfillment
+      if (priorApproval) {
+        await updateApprovalMetadata(priorApproval, {
+          fulfillment: { ok: true, at: new Date().toISOString(), delivery: "stub", action: "add", grantId: grant.id },
+        });
+      }
       return jsonResult({
         ok: true,
         tool,
@@ -2034,6 +2051,12 @@ export async function runGatewayInvoke(
         summary: `Calendar allowlist grant revoked: ${grantId}`,
         metadata: { grantId, approvalId: priorApprovalId, jobId },
       });
+      // Record fulfillment
+      if (priorApproval) {
+        await updateApprovalMetadata(priorApproval, {
+          fulfillment: { ok: true, at: new Date().toISOString(), delivery: "stub", action: "revoke", grantId },
+        });
+      }
       return jsonResult({
         ok: true,
         tool,
