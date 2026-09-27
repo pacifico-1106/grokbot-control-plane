@@ -457,4 +457,27 @@ describe("unverified bindings never count as voters", () => {
 
     expect(memberId).toBe(DEMO_MEMBER_ID);
   });
+
+  test("legacy binding (verified_at set by backfill) still resolves to member", async () => {
+    const { getMemberIdFromVoterBinding, setDemoWorkflowVoterBinding, resetDemoWorkflowData } = await import("./data");
+
+    resetDemoWorkflowData();
+
+    setDemoWorkflowVoterBinding({
+      orgId: DEMO_ORG_ID,
+      provider: "slack",
+      channelKey: "channel-legacy",
+      userId: "U_LEGACY_USER",
+      memberId: DEMO_MEMBER_ID,
+      verifiedAt: new Date().toISOString(),
+    });
+
+    const memberId = await getMemberIdFromVoterBinding(DEMO_ORG_ID, {
+      provider: "slack",
+      channelKey: "channel-legacy",
+      userId: "U_LEGACY_USER",
+    });
+
+    expect(memberId).toBe(DEMO_MEMBER_ID);
+  });
 });
