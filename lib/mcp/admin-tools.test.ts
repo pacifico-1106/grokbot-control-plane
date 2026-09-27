@@ -63,6 +63,7 @@ describe("admin MCP always_human", () => {
       "setup.slackStatus",
       "setup.connectInternalBase",
       "setup.lineApprovalStatus",
+      "setup.approverBindingStatus",
       "ingressHandoff.get",
       "schedulingPolicy.get",
       "replyPolicy.get",
@@ -77,6 +78,7 @@ describe("admin MCP always_human", () => {
       "orgs.status",
       "approvalWorkflow.get",
       "approvalWorkflow.inspect",
+      "approvalWorkflow.listVoterBindings",
     ];
     const mutatingTools = ADMIN_MCP_TOOLS.filter((t) => !readOnlyTools.includes(t.name));
     expect(mutatingTools.every((t) => t.description.includes("always_human"))).toBe(true);

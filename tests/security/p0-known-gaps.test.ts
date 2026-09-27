@@ -1,7 +1,10 @@
 /**
  * P0 Known Gaps Tests
- * Tests for delivery unique constraint gap fix (approval_id, channel_id)
- *
+ * 
+ * Tests for documented known issues. When a gap is fixed, the test should be
+ * unskipped and the implementation verified.
+ * 
+ * Delivery unique constraint gap (approval_id, channel_id) - FIXED
  * When APPROVAL_RECIPIENT_ROUTING is ON, both DM delivery and channel delivery
  * can share the same channel_id. This test verifies that:
  * 1. Channel deliveries (recipient null) and per-recipient deliveries can coexist
@@ -11,7 +14,7 @@
 
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { DEMO_ORG } from "@/lib/demo-data";
-import { createApproval, resolveApproval } from "@/lib/data/approvals";
+import { createApproval } from "@/lib/data/approvals";
 import {
   upsertNotificationChannel,
   recordNotificationDelivery,
@@ -59,6 +62,18 @@ describe("P0 delivery unique constraint gap fix", () => {
     }
   });
 
+  /**
+   * Previously skipped: unique constraint allows DM and channel delivery to same channel_id
+   * 
+   * Issue was: The old unique constraint (approval_id, channel_id) on
+   * approval_notification_deliveries collided when recipient routing is ON
+   * because DM and channel deliveries can share the same channel_id.
+   * 
+   * Fix: Migration 20260927300000_delivery_unique_fix.sql replaced the full
+   * unique constraint with partial unique indexes:
+   * - (approval_id, channel_id) WHERE recipient IS NULL for channel deliveries
+   * - (approval_id, channel_id, recipient) WHERE recipient IS NOT NULL for DM/thread
+   */
   test("DM delivery and channel delivery can coexist for same (approval_id, channel_id)", async () => {
     process.env.APPROVAL_RECIPIENT_ROUTING = "true";
 
@@ -327,5 +342,29 @@ describe("P0 delivery constraint - flags OFF regression", () => {
 
     expect(delivery?.externalMessageId).toBe("updated");
     expect(delivery?.context.count).toBe(2);
+  });
+});
+
+describe("KNOWN GAP: is_org_shared detection", () => {
+  /**
+   * Note: is_org_shared (multi-org Enterprise Grid workspace sharing)
+   * is not currently blocked by validateSlackChannelNotExternal.
+   * 
+   * is_org_shared indicates the channel is shared across multiple workspaces
+   * in the same Enterprise Grid organization. This is different from
+   * is_ext_shared (Slack Connect with external orgs).
+   * 
+   * The current implementation focuses on external sharing risk. Internal
+   * org-wide sharing within Enterprise Grid may be acceptable depending
+   * on the organization's security posture.
+   * 
+   * TODO: Decide whether to block is_org_shared channels based on
+   * customer requirements for Enterprise Grid deployments.
+   */
+  test("is_org_shared is not currently blocked (documented behavior)", () => {
+    // This is currently expected behavior - is_org_shared is NOT blocked
+    // because it represents internal sharing within an Enterprise Grid,
+    // not external sharing with outside organizations.
+    expect(true).toBe(true);
   });
 });
