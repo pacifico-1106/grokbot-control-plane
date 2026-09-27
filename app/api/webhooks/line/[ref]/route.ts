@@ -1,5 +1,6 @@
 import { resolveApprovalWithWorkflow } from "@/lib/approvals/workflow-integration";
 import { initializeWorkflowForApproval } from "@/lib/approval-workflow/resolve";
+import { getMemberIdFromVoterBinding } from "@/lib/approval-workflow";
 import { NextResponse } from "next/server";
 import { fulfillIfApproved } from "@/lib/approvals/fulfill";
 import { runApprovalResolveSideEffects } from "@/lib/approvals/resolve-side-effects";
@@ -75,8 +76,18 @@ export async function POST(req: Request, ctx: { params: Promise<{ ref: string }>
         continue;
       }
       const decision = match[1] === "a" ? "approved" : "rejected";
+      // P0 Item 1: Look up member ID from voter binding for admin-class enforcement
+      const memberId = await getMemberIdFromVoterBinding(channel.orgId, {
+        provider: "line",
+        channelKey: channel.id,
+        userId,
+      });
       try {
-        const result = await resolveApprovalWithWorkflow(approval.id, decision, actor, channel.orgId, { decisionId: event.webhookEventId ? `line:${channel.id}:${event.webhookEventId}` : "", externalVoter: { provider: "line", channelKey: channel.id, userId } });
+        const result = await resolveApprovalWithWorkflow(approval.id, decision, actor, channel.orgId, {
+          decisionId: event.webhookEventId ? `line:${channel.id}:${event.webhookEventId}` : "",
+          externalVoter: { provider: "line", channelKey: channel.id, userId },
+          memberId,
+        });
         const updated = result.ok && result.workflowComplete ? result.approval : null;
         if (updated) {
           await fulfillIfApproved(updated, decision);
@@ -109,8 +120,17 @@ export async function POST(req: Request, ctx: { params: Promise<{ ref: string }>
         awaitingRevisionChannelId: null,
         awaitingRevisionProvider: null,
       });
+      // P0 Item 1: Look up member ID from voter binding for admin-class enforcement
+      const revisionMemberId = await getMemberIdFromVoterBinding(channel.orgId, {
+        provider: "line",
+        channelKey: channel.id,
+        userId,
+      });
       try {
-        const updated = await resolveApproval(approval.id, "revision_requested", actor, channel.orgId, { revisionNote: Array.from(note).slice(0, 2_000).join("") });
+        const updated = await resolveApproval(approval.id, "revision_requested", actor, channel.orgId, {
+          revisionNote: Array.from(note).slice(0, 2_000).join(""),
+          memberId: revisionMemberId,
+        });
         if (updated) {
           const employee = await getEmployee(updated.employeeId, channel.orgId);
           await runApprovalResolveSideEffects({ approval: updated, decision: "revision_requested", actorEmail: actor, employee });

@@ -1,5 +1,6 @@
 import { resolveApprovalWithWorkflow } from "@/lib/approvals/workflow-integration";
 import { initializeWorkflowForApproval } from "@/lib/approval-workflow/resolve";
+import { getMemberIdFromVoterBinding } from "@/lib/approval-workflow";
 import { NextResponse } from "next/server";
 import { fulfillIfApproved } from "@/lib/approvals/fulfill";
 import { runApprovalResolveSideEffects } from "@/lib/approvals/resolve-side-effects";
@@ -156,12 +157,22 @@ async function handleCallback(update: TelegramUpdate): Promise<void> {
     }
 
     const decision = match[1] === "a" ? "approved" : "rejected";
+    // P0 Item 1: Look up member ID from voter binding for admin-class enforcement
+    const memberId = await getMemberIdFromVoterBinding(approval.orgId, {
+      provider: "telegram",
+      channelKey: "telegram:global",
+      userId: String(query.from!.id),
+    });
     const result = await resolveApprovalWithWorkflow(
       approval.id,
       decision,
       actor,
       approval.orgId,
-      { decisionId: query.id ? `telegram:global:${query.id}` : "", externalVoter: { provider: "telegram", channelKey: "telegram:global", userId: String(query.from!.id) } }
+      {
+        decisionId: query.id ? `telegram:global:${query.id}` : "",
+        externalVoter: { provider: "telegram", channelKey: "telegram:global", userId: String(query.from!.id) },
+        memberId,
+      }
     );
     const updated = result.ok && result.workflowComplete ? result.approval : null;
     if (!updated) {
@@ -218,12 +229,18 @@ async function handleReply(update: TelegramUpdate): Promise<void> {
 
     if ((await initializeWorkflowForApproval(approval, approval.employeeId || null)).instance) return;
     await updateApprovalTelegramState(approval, { awaitingRevisionFrom: null });
+    // P0 Item 1: Look up member ID from voter binding for admin-class enforcement
+    const memberId = await getMemberIdFromVoterBinding(approval.orgId, {
+      provider: "telegram",
+      channelKey: "telegram:global",
+      userId: String(message.from!.id),
+    });
     const updated = await resolveApproval(
       approval.id,
       "revision_requested",
       actor,
       approval.orgId,
-      { revisionNote: note }
+      { revisionNote: note, memberId }
     );
     if (!updated) {
       await sendTelegramText("対象はすでに処理済みです", message.message_id);

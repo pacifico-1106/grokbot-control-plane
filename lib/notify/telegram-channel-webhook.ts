@@ -1,5 +1,6 @@
 import { resolveApprovalWithWorkflow } from "@/lib/approvals/workflow-integration";
 import { initializeWorkflowForApproval } from "@/lib/approval-workflow/resolve";
+import { getMemberIdFromVoterBinding } from "@/lib/approval-workflow";
 import { fulfillIfApproved } from "@/lib/approvals/fulfill";
 import { runApprovalResolveSideEffects } from "@/lib/approvals/resolve-side-effects";
 import {
@@ -109,8 +110,18 @@ export async function handleTelegramChannelUpdate(
     }
     const decision = match![1] === "a" ? "approved" : "rejected";
     const actor = `telegram:${query.from!.id}`;
+    // P0 Item 1: Look up member ID from voter binding for admin-class enforcement
+    const memberId = await getMemberIdFromVoterBinding(channel.orgId, {
+      provider: "telegram",
+      channelKey: channel.id,
+      userId: String(query.from!.id),
+    });
     try {
-      const result = await resolveApprovalWithWorkflow(approval!.id, decision, actor, channel.orgId, { decisionId: query.id ? `telegram:${channel.id}:${query.id}` : "", externalVoter: { provider: "telegram", channelKey: channel.id, userId: String(query.from!.id) } });
+      const result = await resolveApprovalWithWorkflow(approval!.id, decision, actor, channel.orgId, {
+        decisionId: query.id ? `telegram:${channel.id}:${query.id}` : "",
+        externalVoter: { provider: "telegram", channelKey: channel.id, userId: String(query.from!.id) },
+        memberId,
+      });
       const updated = result.ok && result.workflowComplete ? result.approval : null;
       if (updated) {
         await fulfillIfApproved(updated, decision);
@@ -161,9 +172,16 @@ export async function handleTelegramChannelUpdate(
     awaitingRevisionProvider: null,
   });
   const actor = `telegram:${message.from!.id}`;
+  // P0 Item 1: Look up member ID from voter binding for admin-class enforcement
+  const memberId = await getMemberIdFromVoterBinding(channel.orgId, {
+    provider: "telegram",
+    channelKey: channel.id,
+    userId: String(message.from!.id),
+  });
   try {
     const updated = await resolveApproval(approval.id, "revision_requested", actor, channel.orgId, {
       revisionNote: note.slice(0, 2_000),
+      memberId,
     });
     if (updated) {
       const employee = await getEmployee(updated.employeeId, channel.orgId);

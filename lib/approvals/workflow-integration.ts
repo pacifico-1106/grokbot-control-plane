@@ -29,6 +29,8 @@ export type WorkflowResolverOptions = {
   externalVoter?: { provider: "slack" | "telegram" | "line"; channelKey: string; userId: string };
   /** Server-derived provider event ID, scoped to the authenticated channel. */
   decisionId?: string;
+  /** P0 Item 1: Member ID for admin-class enforcement. REQUIRED when enforcement ON. */
+  memberId?: string | null;
 };
 
 export interface WorkflowResolveResult {
@@ -120,9 +122,11 @@ async function resolveWorkflow(
 
   if (!instance) {
     const resolved = await baseResolveApproval(id, status, resolvedBy, orgId, {
+      memberId: opts.memberId,
       revisionNote: opts.revisionNote,
       grokBotAgentId: opts.grokBotAgentId,
       actorId: opts.actorId,
+      decisionId: opts.decisionId,
     });
 
     return {

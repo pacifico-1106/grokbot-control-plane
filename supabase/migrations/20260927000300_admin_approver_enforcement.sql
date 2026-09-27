@@ -229,6 +229,11 @@ end $f$;
 -- ---------------------------------------------------------------------------
 -- Guard trigger for admin-class approval resolution
 -- Only fires when admin_approver_enforcement = true on the org
+--
+-- SECURITY FIX: null resolved_by is ONLY allowed for:
+-- - status = 'expired' (system expiration)
+-- - status = 'rejected' with null resolved_by (system rejection)
+-- For 'approved' status, resolved_by MUST be set to a valid member ID
 -- ---------------------------------------------------------------------------
 create or replace function public.guard_admin_class_approval()
 returns trigger language plpgsql security definer set search_path=pg_catalog,public as $f$
@@ -237,9 +242,9 @@ declare
   is_admin boolean;
   resolver_check record;
 begin
-  -- Only guard status changes to approved/rejected
+  -- Only guard status changes to approved/rejected/expired
   if new.status is not distinct from old.status then return new; end if;
-  if new.status not in ('approved', 'rejected') then return new; end if;
+  if new.status not in ('approved', 'rejected', 'expired') then return new; end if;
   
   -- Get org with enforcement setting
   select o.admin_approver_enforcement, o.approval_workflow_policy
@@ -261,13 +266,23 @@ begin
   
   if not is_admin then return new; end if;
   
-  -- Check resolver authorization
-  -- resolved_by contains the resolver member ID
-  if new.resolved_by is null then
-    -- Allow system/service-role resolutions (expire, etc.)
+  -- SECURITY: For admin-class + enforcement ON + approved status:
+  -- resolved_by MUST be set to a verified member ID
+  if new.status = 'approved' and new.resolved_by is null then
+    raise exception 'admin_approval_requires_resolver: approved admin-class tickets must have resolved_by set';
+  end if;
+  
+  -- Allow expired status with null resolver (system expiration)
+  if new.status = 'expired' then
+    return new;
+  end if;
+  
+  -- Allow rejected status with null resolver (system rejection, e.g. workflow timeout)
+  if new.status = 'rejected' and new.resolved_by is null then
     return new;
   end if;
 
+  -- Check resolver authorization for all other cases
   select * into resolver_check
   from public.can_resolve_admin_approval(
     coalesce(old.org_id, new.org_id),
@@ -348,13 +363,128 @@ begin
 end $f$;
 
 -- ---------------------------------------------------------------------------
+-- Security definer RPC for W1 (non-workflow) admin-class approval resolution
+-- Atomically checks authorization and performs the conditional update.
+-- This is the ONLY path for resolving admin-class approvals with enforcement ON.
+-- ---------------------------------------------------------------------------
+create or replace function public.resolve_approval_w1_checked(
+  p_id uuid,
+  p_org uuid,
+  p_member_id uuid,
+  p_decision text,  -- 'approved' or 'rejected'
+  p_actor text,     -- audit actor string (e.g. 'slack:U123', 'web:user@example.com')
+  p_revision_note text default null,
+  p_decision_id text default null
+)
+returns jsonb language plpgsql security definer set search_path=pg_catalog,public as $f$
+declare
+  a public.approval_requests;
+  org_row record;
+  is_admin boolean;
+  resolver_check record;
+  now_ts timestamptz := now();
+begin
+  -- Validate decision
+  if p_decision not in ('approved', 'rejected', 'revision_requested') then
+    return jsonb_build_object('ok', false, 'reason', 'invalid_decision');
+  end if;
+  
+  -- revision_requested requires a note
+  if p_decision = 'revision_requested' and coalesce(trim(p_revision_note), '') = '' then
+    return jsonb_build_object('ok', false, 'reason', 'revision_note_required');
+  end if;
+  
+  -- Get the approval with FOR UPDATE lock
+  select * into a from public.approval_requests
+  where id = p_id and org_id = p_org
+  for update;
+  
+  if not found then
+    return jsonb_build_object('ok', false, 'reason', 'not_found');
+  end if;
+  
+  if a.status <> 'pending' then
+    return jsonb_build_object('ok', false, 'reason', 'not_pending', 'current_status', a.status);
+  end if;
+  
+  -- Get org settings
+  select o.admin_approver_enforcement, o.approval_workflow_policy
+  into org_row
+  from public.orgs o where o.id = p_org;
+  
+  -- Check admin enforcement
+  if coalesce(org_row.admin_approver_enforcement, false) then
+    is_admin := public.is_admin_class_approval(a.purpose, a.tool, a.metadata);
+    
+    if is_admin then
+      -- For admin-class tickets with enforcement ON, member_id is REQUIRED
+      if p_member_id is null then
+        return jsonb_build_object('ok', false, 'reason', 'member_id_required_for_admin_class');
+      end if;
+      
+      -- Verify the member exists and belongs to this org
+      if not exists (
+        select 1 from public.org_members
+        where id = p_member_id and org_id = p_org and status = 'active'
+      ) then
+        return jsonb_build_object('ok', false, 'reason', 'invalid_member_for_org');
+      end if;
+      
+      -- Check resolver authorization
+      select * into resolver_check
+      from public.can_resolve_admin_approval(p_org, p_member_id::text, org_row.approval_workflow_policy);
+      
+      if not resolver_check.allowed then
+        return jsonb_build_object('ok', false, 'reason', resolver_check.reason);
+      end if;
+    end if;
+  end if;
+  
+  -- Perform the update
+  if p_decision = 'revision_requested' then
+    update public.approval_requests set
+      status = 'revision_requested',
+      resolved_at = now_ts,
+      resolved_by = p_member_id,
+      revision_note = p_revision_note,
+      revision_count = a.revision_count + 1,
+      metadata = coalesce(a.metadata, '{}'::jsonb) || 
+        jsonb_build_object('w1DecisionId', p_decision_id, 'w1Actor', p_actor)
+    where id = p_id and org_id = p_org and status = 'pending';
+  else
+    update public.approval_requests set
+      status = p_decision,
+      resolved_at = now_ts,
+      resolved_by = p_member_id,
+      metadata = coalesce(a.metadata, '{}'::jsonb) || 
+        jsonb_build_object('w1DecisionId', p_decision_id, 'w1Actor', p_actor)
+    where id = p_id and org_id = p_org and status = 'pending';
+  end if;
+  
+  if not found then
+    -- Race condition: status changed between select and update
+    return jsonb_build_object('ok', false, 'reason', 'concurrent_update');
+  end if;
+  
+  return jsonb_build_object(
+    'ok', true,
+    'approval_id', p_id,
+    'decision', p_decision,
+    'resolved_by', p_member_id
+  );
+end $f$;
+
+comment on function public.resolve_approval_w1_checked is
+  'P0 Item 1: Security definer RPC for W1 admin-class approval resolution. Atomically checks authorization and updates. The ONLY path for resolving admin-class tickets with enforcement ON.';
+
+-- ---------------------------------------------------------------------------
 -- Revoke public access and grant to service_role
 -- ---------------------------------------------------------------------------
 do $f$ declare fn record; begin
   for fn in select oid::regprocedure as sig from pg_proc where pronamespace='public'::regnamespace and proname in
     ('is_admin_class_approval','has_valid_admin_route','is_voter_in_admin_route',
      'is_voter_only_in_business_route','is_org_owner_member','can_resolve_admin_approval',
-     'guard_admin_class_approval','cast_approval_workflow_vote_checked') loop
+     'guard_admin_class_approval','cast_approval_workflow_vote_checked','resolve_approval_w1_checked') loop
     execute format('revoke all on function %s from public,anon,authenticated', fn.sig);
     execute format('grant execute on function %s to service_role', fn.sig);
   end loop;

@@ -12,6 +12,7 @@ import {
 import { extraApproversAllow } from "@/lib/employees/approval-inbox";
 import { verifySlackSignature } from "@/lib/notify/slack";
 import { isSelfApprovalDenied } from "@/lib/admin-mcp/self-approval";
+import { getMemberIdFromVoterBinding } from "@/lib/approval-workflow";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -118,6 +119,15 @@ async function handleBlockActions(
   if (!extraApproversAllow(userId, employeeForGate?.approverUserIds)) return;
 
   const actor = `slack:${userId || "unknown"}`;
+  
+  // P0 Item 1: Look up member ID from voter binding for admin-class enforcement
+  // This is REQUIRED when admin_approver_enforcement is ON for the org
+  const memberId = await getMemberIdFromVoterBinding(channel.orgId, {
+    provider: "slack",
+    channelKey: channel.id,
+    userId,
+  });
+  
   try {
     if (action.action_id === "staffpass_revise") {
       const updated = await resolveApproval(
@@ -125,7 +135,7 @@ async function handleBlockActions(
         "revision_requested",
         actor,
         channel.orgId,
-        { revisionNote: "Slackから修正依頼" }
+        { revisionNote: "Slackから修正依頼", memberId }
       );
       if (updated) {
         const employee = await getEmployee(updated.employeeId, channel.orgId);
@@ -140,7 +150,11 @@ async function handleBlockActions(
     }
 
     const decision = action.action_id === "staffpass_approve" ? "approved" : "rejected";
-    const updated = await resolveApproval(approval.id, decision, actor, channel.orgId, { decisionId, externalVoter: { provider: "slack", channelKey: channel.id, userId } });
+    const updated = await resolveApproval(approval.id, decision, actor, channel.orgId, {
+      decisionId,
+      externalVoter: { provider: "slack", channelKey: channel.id, userId },
+      memberId,
+    });
     if (updated) {
       await fulfillIfApproved(updated, decision);
       const employee = await getEmployee(updated.employeeId, channel.orgId);

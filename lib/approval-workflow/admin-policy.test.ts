@@ -799,6 +799,140 @@ describe("canResolverResolveAdminApproval (W1 path restriction)", () => {
   });
 });
 
+/**
+ * SQL-level enforcement tests via resolve_approval_w1_checked RPC.
+ *
+ * These tests verify the security fix for the DB guard hole:
+ * - enforcement ON + resolved_by null + approved => rejected
+ * - Slack presser without binding => rejected (memberId null)
+ * - Owner via web with memberId => ok
+ * - Non-owner with memberId => rejected
+ * - Other-org member => rejected
+ * - enforcement OFF => unchanged (null memberId allowed)
+ *
+ * Note: These are tested at the app level via canResolverResolveAdminApproval
+ * because the actual SQL RPC requires a database connection. The app function
+ * mirrors the SQL logic for the same security checks.
+ */
+describe("SQL-level enforcement (via app-level mirror)", () => {
+  const ADMIN_TICKET = { purpose: "admin.hire", tool: "employees.issue", metadata: { approvalClass: "admin" } };
+  const BUSINESS_TICKET = { purpose: "tool.invoke", tool: "mail.send", metadata: {} };
+  const OWNER = "fixture_owner";
+  const NON_OWNER = "fixture_non_owner";
+  const OTHER_ORG_MEMBER = "fixture_other_org_member";
+
+  describe("enforcement ON + null memberId", () => {
+    test("SECURITY: null memberId on approved admin ticket => rejected", () => {
+      // Simulates: Slack presser without voter binding (memberId = null)
+      // The RPC will reject because p_member_id is null for admin-class ticket
+      const result = canResolverResolveAdminApproval(
+        "", // empty string simulates null memberId
+        ADMIN_TICKET,
+        null, // no policy
+        [OWNER],
+        true // enforcement ON
+      );
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toBe("non_owner_on_admin_ticket");
+    });
+
+    test("SECURITY: Slack presser without binding is denied", () => {
+      // When voter binding lookup returns null, memberId is null
+      // For admin-class tickets with enforcement ON, this MUST be rejected
+      const result = canResolverResolveAdminApproval(
+        "", // no memberId from binding
+        ADMIN_TICKET,
+        null,
+        [OWNER],
+        true
+      );
+      expect(result.allowed).toBe(false);
+    });
+  });
+
+  describe("enforcement ON + valid memberId", () => {
+    test("owner via web with memberId => allowed", () => {
+      const result = canResolverResolveAdminApproval(
+        OWNER,
+        ADMIN_TICKET,
+        null,
+        [OWNER],
+        true
+      );
+      expect(result.allowed).toBe(true);
+      expect(result.reason).toBe("org_owner_default");
+    });
+
+    test("non-owner member => rejected", () => {
+      const result = canResolverResolveAdminApproval(
+        NON_OWNER,
+        ADMIN_TICKET,
+        null,
+        [OWNER],
+        true
+      );
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toBe("non_owner_on_admin_ticket");
+    });
+
+    test("other-org member => rejected (not in owner list)", () => {
+      const result = canResolverResolveAdminApproval(
+        OTHER_ORG_MEMBER,
+        ADMIN_TICKET,
+        null,
+        [OWNER], // other-org member not in this list
+        true
+      );
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toBe("non_owner_on_admin_ticket");
+    });
+  });
+
+  describe("enforcement OFF (backward compatibility)", () => {
+    test("null memberId on admin ticket => allowed (W1 preserved)", () => {
+      const result = canResolverResolveAdminApproval(
+        "", // empty memberId
+        ADMIN_TICKET,
+        null,
+        [OWNER],
+        false // enforcement OFF
+      );
+      expect(result.allowed).toBe(true);
+      expect(result.reason).toBe("enforcement_off");
+    });
+
+    test("any resolver on admin ticket => allowed", () => {
+      const result = canResolverResolveAdminApproval(
+        NON_OWNER,
+        ADMIN_TICKET,
+        null,
+        [OWNER],
+        false
+      );
+      expect(result.allowed).toBe(true);
+    });
+
+    test("business ticket always allowed regardless of enforcement", () => {
+      const resultOff = canResolverResolveAdminApproval(
+        NON_OWNER,
+        BUSINESS_TICKET,
+        null,
+        [],
+        false
+      );
+      const resultOn = canResolverResolveAdminApproval(
+        NON_OWNER,
+        BUSINESS_TICKET,
+        null,
+        [],
+        true
+      );
+      expect(resultOff.allowed).toBe(true);
+      expect(resultOn.allowed).toBe(true);
+    });
+  });
+});
+
 describe("INVARIANT: Approval classification is deterministic", () => {
   test("INVARIANT: same approval always returns same classification", () => {
     const approvals = [
