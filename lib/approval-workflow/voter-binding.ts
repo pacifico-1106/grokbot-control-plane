@@ -12,10 +12,21 @@
  * - No auto-matching by name/email guesses
  */
 
-import { randomBytes, createHmac } from "node:crypto";
+import { randomBytes, createHmac, timingSafeEqual } from "node:crypto";
 import { isDemoMode } from "@/lib/mode";
 import { createSupabaseAdminClient } from "@/lib/supabase";
 import { setDemoWorkflowVoterBinding } from "./data";
+
+function getVoterBindingSecret(): string {
+  const secret = process.env.VOTER_BINDING_SECRET;
+  if (isDemoMode()) {
+    return secret || "dev-secret";
+  }
+  if (!secret || secret.trim() === "" || secret === "dev-secret") {
+    throw new Error("VOTER_BINDING_SECRET must be configured in production");
+  }
+  return secret;
+}
 
 export type VoterBindingProvider = "slack" | "telegram" | "line";
 export type VoterBindingStatus = "pending" | "active" | "expired" | "revoked";
@@ -67,7 +78,7 @@ const DEFAULT_EXPIRY_DAYS = 180;
 const VERIFICATION_CODE_LENGTH = 6;
 const VERIFICATION_CODE_EXPIRY_MS = 15 * 60 * 1000;
 
-type DemoBinding = VoterBinding & { verificationCode?: string; verificationExpiry?: number };
+type DemoBinding = VoterBinding & { verificationCode?: string; verificationExpiry?: number; failedVerificationAttempts?: number };
 const demoBindings = new Map<string, DemoBinding>();
 const bindingKey = (b: Pick<VoterBinding, "orgId" | "provider" | "channelKey" | "externalUserId">) =>
   JSON.stringify([b.orgId, b.provider, b.channelKey, b.externalUserId]);
@@ -199,6 +210,7 @@ export async function createPendingVoterBinding(
       updatedAt: now.toISOString(),
       verificationCode,
       verificationExpiry: Date.now() + VERIFICATION_CODE_EXPIRY_MS,
+      failedVerificationAttempts: 0,
     };
     demoBindings.set(bindingKey(binding), binding);
     return { ok: true, binding, verificationCode };
@@ -209,7 +221,7 @@ export async function createPendingVoterBinding(
     return { ok: false, reason: "supabase_unavailable", messageJa: "データベースに接続できません。" };
   }
 
-  const verificationHash = hashVerificationCode(verificationCode, process.env.VOTER_BINDING_SECRET || "dev-secret");
+  const verificationHash = hashVerificationCode(verificationCode, getVoterBindingSecret());
   const verificationExpiry = new Date(Date.now() + VERIFICATION_CODE_EXPIRY_MS);
 
   const { data, error } = await admin
@@ -229,6 +241,7 @@ export async function createPendingVoterBinding(
         verification_expiry: verificationExpiry.toISOString(),
         created_at: now.toISOString(),
         updated_at: now.toISOString(),
+        failed_verification_attempts: 0,
       },
       { onConflict: "org_id,provider,channel_key,external_user_id" }
     )
@@ -259,6 +272,11 @@ export async function verifyVoterBinding(
     if (demo.revokedAt) {
       return { ok: false, reason: "binding_revoked", messageJa: "このバインディングは取り消されています。" };
     }
+    const MAX_DEMO_FAILED_ATTEMPTS = 5;
+    const demoFailedAttempts = demo.failedVerificationAttempts ?? 0;
+    if (demoFailedAttempts >= MAX_DEMO_FAILED_ATTEMPTS) {
+      return { ok: false, reason: "verification_locked", messageJa: "検証試行回数の上限に達しました。管理者に連絡してください。" };
+    }
     if (!demo.verificationCode || !demo.verificationExpiry) {
       return { ok: false, reason: "no_pending_verification", messageJa: "保留中の検証がありません。" };
     }
@@ -266,9 +284,22 @@ export async function verifyVoterBinding(
       return { ok: false, reason: "verification_expired", messageJa: "検証コードの有効期限が切れています。" };
     }
     if (input.verificationCode !== demo.verificationCode) {
+      demo.failedVerificationAttempts = demoFailedAttempts + 1;
+      demo.updatedAt = new Date().toISOString();
+      if (demo.failedVerificationAttempts >= MAX_DEMO_FAILED_ATTEMPTS) {
+        delete demo.verificationCode;
+        delete demo.verificationExpiry;
+      }
+      demoBindings.set(key, demo);
+      if (demo.failedVerificationAttempts >= MAX_DEMO_FAILED_ATTEMPTS) {
+        return { ok: false, reason: "verification_locked", messageJa: "検証試行回数の上限に達しました。管理者に連絡してください。" };
+      }
       return { ok: false, reason: "invalid_verification_code", messageJa: "検証コードが一致しません。" };
     }
-    if (input.teamId && demo.teamId && input.teamId !== demo.teamId) {
+    if (demo.teamId && !input.teamId) {
+      return { ok: false, reason: "team_id_required", messageJa: "ワークスペースIDが必要です。" };
+    }
+    if (demo.teamId && input.teamId !== demo.teamId) {
       return { ok: false, reason: "team_id_mismatch", messageJa: "ワークスペースIDが一致しません（外部ユーザー拒否）。" };
     }
 
@@ -320,6 +351,12 @@ export async function verifyVoterBinding(
     return { ok: false, reason: "binding_revoked", messageJa: "このバインディングは取り消されています。" };
   }
 
+  const MAX_FAILED_ATTEMPTS = 5;
+  const failedAttempts = Number(row.failed_verification_attempts ?? 0);
+  if (failedAttempts >= MAX_FAILED_ATTEMPTS) {
+    return { ok: false, reason: "verification_locked", messageJa: "検証試行回数の上限に達しました。管理者に連絡してください。" };
+  }
+
   const verificationExpiry = row.verification_expiry ? new Date(String(row.verification_expiry)) : null;
   if (!verificationExpiry || verificationExpiry < new Date()) {
     return { ok: false, reason: "verification_expired", messageJa: "検証コードの有効期限が切れています。" };
@@ -328,14 +365,42 @@ export async function verifyVoterBinding(
   const expectedHash = row.verification_hash as string;
   const actualHash = hashVerificationCode(
     input.verificationCode || "",
-    process.env.VOTER_BINDING_SECRET || "dev-secret"
+    getVoterBindingSecret()
   );
-  if (expectedHash !== actualHash) {
+  const expectedBuf = Buffer.from(expectedHash);
+  const actualBuf = Buffer.from(actualHash);
+  if (expectedBuf.length !== actualBuf.length || !timingSafeEqual(expectedBuf, actualBuf)) {
+    const newAttempts = failedAttempts + 1;
+    const invalidateOnLock = newAttempts >= MAX_FAILED_ATTEMPTS;
+    await admin
+      .from("approval_workflow_voter_bindings")
+      .update({
+        failed_verification_attempts: newAttempts,
+        updated_at: new Date().toISOString(),
+        ...(invalidateOnLock ? { verification_hash: null, verification_expiry: null } : {}),
+      })
+      .eq("org_id", input.orgId)
+      .eq("provider", input.provider)
+      .eq("channel_key", input.channelKey)
+      .eq("external_user_id", input.externalUserId);
+
+    if (invalidateOnLock) {
+      console.warn("voter_binding_verification_locked", {
+        orgId: input.orgId,
+        provider: input.provider,
+        channelKey: input.channelKey,
+        externalUserId: input.externalUserId,
+      });
+      return { ok: false, reason: "verification_locked", messageJa: "検証試行回数の上限に達しました。管理者に連絡してください。" };
+    }
     return { ok: false, reason: "invalid_verification_code", messageJa: "検証コードが一致しません。" };
   }
 
   const existingTeamId = row.team_id as string | null;
-  if (input.teamId && existingTeamId && input.teamId !== existingTeamId) {
+  if (existingTeamId && !input.teamId) {
+    return { ok: false, reason: "team_id_required", messageJa: "ワークスペースIDが必要です。" };
+  }
+  if (existingTeamId && input.teamId !== existingTeamId) {
     return { ok: false, reason: "team_id_mismatch", messageJa: "ワークスペースIDが一致しません（外部ユーザー拒否）。" };
   }
 
@@ -353,11 +418,19 @@ export async function verifyVoterBinding(
     .eq("provider", input.provider)
     .eq("channel_key", input.channelKey)
     .eq("external_user_id", input.externalUserId)
+    .is("verified_at", null)
+    .is("revoked_at", null)
+    .eq("verification_hash", expectedHash)
+    .gt("verification_expiry", new Date().toISOString())
     .select("*")
     .maybeSingle();
 
-  if (updateError || !updated) {
+  if (updateError) {
     return { ok: false, reason: "verification_update_failed", messageJa: "検証の更新に失敗しました。" };
+  }
+
+  if (!updated) {
+    return { ok: false, reason: "verification_race_or_expired", messageJa: "検証が既に完了しているか、有効期限が切れています。" };
   }
 
   return { ok: true, binding: mapBindingRow(updated as Record<string, unknown>) };

@@ -7,6 +7,7 @@
  * - Wrong api_app_id rejected (403)
  * - Wrong team_id rejected (403)
  * - Valid request accepted and vote uses checked RPC
+ * - PR #129 audit fix: ambiguous secret detection
  */
 import { describe, expect, test, beforeEach, afterEach, mock } from "bun:test";
 import { createHmac } from "node:crypto";
@@ -356,6 +357,102 @@ describe("Slack interactivity endpoint security", () => {
         team: { id: FIXTURE_TEAM_ID },
         user: { id: FIXTURE_USER_ID, team_id: FIXTURE_TEAM_ID },
       },
+    });
+
+    const response = await POST(req);
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.ok).toBe(true);
+  });
+});
+
+describe("PR #129 audit fix: ambiguous secret detection", () => {
+  beforeEach(() => {
+    mockCandidates = [];
+    resolveApprovalCalls = [];
+  });
+
+  afterEach(() => {
+    mockCandidates = [];
+  });
+
+  test("ambiguous secret detection logs and rejects when multiple candidates match same signature", async () => {
+    const SHARED_SECRET = "shared-secret-value";
+    
+    mockCandidates = [
+      {
+        id: "channel-org-a",
+        orgId: "org-a",
+        signingSecret: SHARED_SECRET,
+        apiAppId: FIXTURE_API_APP_ID,
+        teamId: FIXTURE_TEAM_ID,
+        expectedTeamId: FIXTURE_TEAM_ID,
+        allowedUserIds: [],
+      },
+      {
+        id: "channel-org-b",
+        orgId: "org-b",
+        signingSecret: SHARED_SECRET,
+        apiAppId: FIXTURE_API_APP_ID,
+        teamId: FIXTURE_TEAM_ID,
+        expectedTeamId: FIXTURE_TEAM_ID,
+        allowedUserIds: [],
+      },
+    ];
+
+    const req = makeRequest({
+      payload: {
+        type: "block_actions",
+        api_app_id: FIXTURE_API_APP_ID,
+        team: { id: FIXTURE_TEAM_ID },
+        user: { id: FIXTURE_USER_ID, team_id: FIXTURE_TEAM_ID },
+        actions: [{ action_id: "staffpass_approve", value: "test-value" }],
+      },
+      signingSecret: SHARED_SECRET,
+    });
+
+    const response = await POST(req);
+    expect(response.status).toBe(401);
+    const body = await response.json();
+    expect(body.error).toBe("unauthorized");
+  });
+
+  test("accepts when only one candidate matches signature among multiple", async () => {
+    const SECRET_A = "secret-a";
+    const SECRET_B = "secret-b";
+    
+    mockCandidates = [
+      {
+        id: "channel-org-a",
+        orgId: "org-a",
+        signingSecret: SECRET_A,
+        apiAppId: FIXTURE_API_APP_ID,
+        teamId: FIXTURE_TEAM_ID,
+        expectedTeamId: FIXTURE_TEAM_ID,
+        allowedUserIds: [FIXTURE_USER_ID],
+      },
+      {
+        id: "channel-org-b",
+        orgId: "org-b",
+        signingSecret: SECRET_B,
+        apiAppId: FIXTURE_API_APP_ID,
+        teamId: FIXTURE_TEAM_ID,
+        expectedTeamId: FIXTURE_TEAM_ID,
+        allowedUserIds: [FIXTURE_USER_ID],
+      },
+    ];
+
+    const req = makeRequest({
+      payload: {
+        type: "block_actions",
+        api_app_id: FIXTURE_API_APP_ID,
+        team: { id: FIXTURE_TEAM_ID },
+        user: { id: FIXTURE_USER_ID, team_id: FIXTURE_TEAM_ID },
+        channel: { id: "C_TEST" },
+        message: { ts: "1234567890.123456" },
+        actions: [{ action_id: "staffpass_approve", value: "test-value" }],
+      },
+      signingSecret: SECRET_A,
     });
 
     const response = await POST(req);

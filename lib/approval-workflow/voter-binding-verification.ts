@@ -9,12 +9,24 @@
  */
 
 import { createHmac, timingSafeEqual } from "node:crypto";
+import { isDemoMode } from "@/lib/mode";
 import {
   generateVerificationCode,
   verifyVoterBinding,
   type VoterBinding,
   type VoterBindingProvider,
 } from "./voter-binding";
+
+function getCallbackSecret(): string {
+  const secret = process.env.VOTER_BINDING_SECRET;
+  if (isDemoMode()) {
+    return secret || "dev-secret";
+  }
+  if (!secret || secret.trim() === "" || secret === "dev-secret") {
+    throw new Error("VOTER_BINDING_SECRET must be configured in production");
+  }
+  return secret;
+}
 
 const SLACK_API = "https://slack.com/api";
 const SLACK_TIMEOUT_MS = 5_000;
@@ -162,8 +174,6 @@ function escapeSlackMrkdwn(value: unknown): string {
     .replace(/>/g, "&gt;");
 }
 
-const CALLBACK_SECRET = process.env.VOTER_BINDING_SECRET || "dev-secret";
-
 function buildVerificationCallbackValue(input: {
   orgId: string;
   channelKey: string;
@@ -177,7 +187,7 @@ function buildVerificationCallbackValue(input: {
     v: input.verificationCode,
     t: Date.now(),
   });
-  const sig = createHmac("sha256", CALLBACK_SECRET)
+  const sig = createHmac("sha256", getCallbackSecret())
     .update(payload)
     .digest("base64url")
     .slice(0, 16);
@@ -198,7 +208,7 @@ export function parseVerificationCallbackValue(
     return { ok: false, reason: "decode_failed" };
   }
 
-  const expectedSig = createHmac("sha256", CALLBACK_SECRET)
+  const expectedSig = createHmac("sha256", getCallbackSecret())
     .update(payload)
     .digest("base64url")
     .slice(0, 16);
@@ -234,7 +244,21 @@ export async function handleVerificationButtonClick(input: {
   | { ok: true; binding: VoterBinding; messageJa: string }
   | { ok: false; reason: string; messageJa: string }
 > {
-  const parsed = parseVerificationCallbackValue(input.callbackValue);
+  let parsed: ReturnType<typeof parseVerificationCallbackValue>;
+  try {
+    parsed = parseVerificationCallbackValue(input.callbackValue);
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("VOTER_BINDING_SECRET")) {
+      console.error("voter_binding_secret_not_configured", { error: error.message });
+      return {
+        ok: false,
+        reason: "secret_not_configured",
+        messageJa: "システム設定エラー: 検証シークレットが設定されていません。管理者に連絡してください。",
+      };
+    }
+    throw error;
+  }
+
   if (!parsed.ok) {
     return {
       ok: false,
@@ -251,14 +275,27 @@ export async function handleVerificationButtonClick(input: {
     };
   }
 
-  const result = await verifyVoterBinding({
-    orgId: parsed.orgId,
-    provider: "slack" as VoterBindingProvider,
-    channelKey: parsed.channelKey,
-    externalUserId: parsed.slackUserId,
-    verificationCode: parsed.verificationCode,
-    teamId: input.presserTeamId,
-  });
+  let result: Awaited<ReturnType<typeof verifyVoterBinding>>;
+  try {
+    result = await verifyVoterBinding({
+      orgId: parsed.orgId,
+      provider: "slack" as VoterBindingProvider,
+      channelKey: parsed.channelKey,
+      externalUserId: parsed.slackUserId,
+      verificationCode: parsed.verificationCode,
+      teamId: input.presserTeamId,
+    });
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("VOTER_BINDING_SECRET")) {
+      console.error("voter_binding_secret_not_configured", { error: error.message });
+      return {
+        ok: false,
+        reason: "secret_not_configured",
+        messageJa: "システム設定エラー: 検証シークレットが設定されていません。管理者に連絡してください。",
+      };
+    }
+    throw error;
+  }
 
   if (!result.ok) {
     return result;
@@ -275,7 +312,21 @@ export async function handleVerificationRejection(input: {
   callbackValue: string;
   presserSlackUserId: string;
 }): Promise<{ ok: true; messageJa: string } | { ok: false; reason: string; messageJa: string }> {
-  const parsed = parseVerificationCallbackValue(input.callbackValue);
+  let parsed: ReturnType<typeof parseVerificationCallbackValue>;
+  try {
+    parsed = parseVerificationCallbackValue(input.callbackValue);
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("VOTER_BINDING_SECRET")) {
+      console.error("voter_binding_secret_not_configured", { error: error.message });
+      return {
+        ok: false,
+        reason: "secret_not_configured",
+        messageJa: "システム設定エラー: 検証シークレットが設定されていません。管理者に連絡してください。",
+      };
+    }
+    throw error;
+  }
+
   if (!parsed.ok) {
     return {
       ok: false,

@@ -481,3 +481,181 @@ describe("unverified bindings never count as voters", () => {
     expect(memberId).toBe(DEMO_MEMBER_ID);
   });
 });
+
+describe("brute-force protection (PR #129 audit fix)", () => {
+  beforeEach(() => {
+    resetDemoVoterBindings();
+    demoMembers.clear();
+    demoMembers.set(baseMember.id, baseMember);
+  });
+
+  test("locks verification after 5 failed attempts", async () => {
+    const createResult = await createPendingVoterBinding({
+      orgId: DEMO_ORG_ID,
+      provider: "slack",
+      channelKey: "channel-bruteforce",
+      externalUserId: "U_ATTACKER",
+      memberId: DEMO_MEMBER_ID,
+    });
+
+    expect(createResult.ok).toBe(true);
+    if (!createResult.ok) return;
+
+    for (let i = 0; i < 5; i++) {
+      const verifyResult = await verifyVoterBinding({
+        orgId: DEMO_ORG_ID,
+        provider: "slack",
+        channelKey: "channel-bruteforce",
+        externalUserId: "U_ATTACKER",
+        verificationCode: "000000",
+      });
+
+      if (i < 4) {
+        expect(verifyResult.ok).toBe(false);
+        if (!verifyResult.ok) {
+          expect(verifyResult.reason).toBe("invalid_verification_code");
+        }
+      } else {
+        expect(verifyResult.ok).toBe(false);
+        if (!verifyResult.ok) {
+          expect(verifyResult.reason).toBe("verification_locked");
+        }
+      }
+    }
+
+    const verifyAfterLock = await verifyVoterBinding({
+      orgId: DEMO_ORG_ID,
+      provider: "slack",
+      channelKey: "channel-bruteforce",
+      externalUserId: "U_ATTACKER",
+      verificationCode: createResult.verificationCode,
+    });
+
+    expect(verifyAfterLock.ok).toBe(false);
+    if (!verifyAfterLock.ok) {
+      expect(verifyAfterLock.reason).toBe("verification_locked");
+    }
+  });
+
+  test("re-creating binding resets failed_verification_attempts allowing re-verification", async () => {
+    const createResult1 = await createPendingVoterBinding({
+      orgId: DEMO_ORG_ID,
+      provider: "slack",
+      channelKey: "channel-reverify",
+      externalUserId: "U_REVERIFY",
+      memberId: DEMO_MEMBER_ID,
+    });
+
+    expect(createResult1.ok).toBe(true);
+    if (!createResult1.ok) return;
+
+    for (let i = 0; i < 5; i++) {
+      await verifyVoterBinding({
+        orgId: DEMO_ORG_ID,
+        provider: "slack",
+        channelKey: "channel-reverify",
+        externalUserId: "U_REVERIFY",
+        verificationCode: "000000",
+      });
+    }
+
+    const verifyLocked = await verifyVoterBinding({
+      orgId: DEMO_ORG_ID,
+      provider: "slack",
+      channelKey: "channel-reverify",
+      externalUserId: "U_REVERIFY",
+      verificationCode: "000000",
+    });
+    expect(verifyLocked.ok).toBe(false);
+    if (!verifyLocked.ok) {
+      expect(verifyLocked.reason).toBe("verification_locked");
+    }
+
+    const createResult2 = await createPendingVoterBinding({
+      orgId: DEMO_ORG_ID,
+      provider: "slack",
+      channelKey: "channel-reverify",
+      externalUserId: "U_REVERIFY",
+      memberId: DEMO_MEMBER_ID,
+    });
+
+    expect(createResult2.ok).toBe(true);
+    if (!createResult2.ok) return;
+
+    const verifyAfterReset = await verifyVoterBinding({
+      orgId: DEMO_ORG_ID,
+      provider: "slack",
+      channelKey: "channel-reverify",
+      externalUserId: "U_REVERIFY",
+      verificationCode: createResult2.verificationCode,
+    });
+
+    expect(verifyAfterReset.ok).toBe(true);
+    if (verifyAfterReset.ok) {
+      expect(verifyAfterReset.binding.status).toBe("active");
+    }
+  });
+});
+
+describe("team_id enforcement (PR #129 audit fix)", () => {
+  beforeEach(() => {
+    resetDemoVoterBindings();
+    demoMembers.clear();
+    demoMembers.set(baseMember.id, baseMember);
+  });
+
+  test("requires teamId when binding has team_id", async () => {
+    const createResult = await createPendingVoterBinding({
+      orgId: DEMO_ORG_ID,
+      provider: "slack",
+      channelKey: "channel-teamid",
+      externalUserId: "U_SLACK_123",
+      memberId: DEMO_MEMBER_ID,
+      teamId: "T_EXPECTED",
+    });
+
+    expect(createResult.ok).toBe(true);
+    if (!createResult.ok) return;
+
+    const verifyResult = await verifyVoterBinding({
+      orgId: DEMO_ORG_ID,
+      provider: "slack",
+      channelKey: "channel-teamid",
+      externalUserId: "U_SLACK_123",
+      verificationCode: createResult.verificationCode,
+    });
+
+    expect(verifyResult.ok).toBe(false);
+    if (!verifyResult.ok) {
+      expect(verifyResult.reason).toBe("team_id_required");
+    }
+  });
+
+  test("accepts matching teamId when binding has team_id", async () => {
+    const createResult = await createPendingVoterBinding({
+      orgId: DEMO_ORG_ID,
+      provider: "slack",
+      channelKey: "channel-teamid-ok",
+      externalUserId: "U_SLACK_456",
+      memberId: DEMO_MEMBER_ID,
+      teamId: "T_EXPECTED",
+    });
+
+    expect(createResult.ok).toBe(true);
+    if (!createResult.ok) return;
+
+    const verifyResult = await verifyVoterBinding({
+      orgId: DEMO_ORG_ID,
+      provider: "slack",
+      channelKey: "channel-teamid-ok",
+      externalUserId: "U_SLACK_456",
+      verificationCode: createResult.verificationCode,
+      teamId: "T_EXPECTED",
+    });
+
+    expect(verifyResult.ok).toBe(true);
+    if (verifyResult.ok) {
+      expect(verifyResult.binding.teamId).toBe("T_EXPECTED");
+    }
+  });
+});
