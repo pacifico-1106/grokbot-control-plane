@@ -76,6 +76,7 @@ async function verifySignatureWithCandidates(
     return { ok: false, reason: "no_candidates" };
   }
 
+  const matchedCandidates: InteractivityChannelCandidate[] = [];
   for (const candidate of candidates) {
     const signingSecret = candidate.signingSecret?.trim() || "";
     if (!signingSecret) continue;
@@ -88,11 +89,23 @@ async function verifySignatureWithCandidates(
         signature,
       })
     ) {
-      return { ok: true, channel: candidate };
+      matchedCandidates.push(candidate);
     }
   }
 
-  return { ok: false, reason: "signature_invalid" };
+  if (matchedCandidates.length === 0) {
+    return { ok: false, reason: "signature_invalid" };
+  }
+
+  if (matchedCandidates.length > 1) {
+    console.error("slack_interactivity_ambiguous_secret", {
+      matchedOrgIds: matchedCandidates.map((c) => c.orgId),
+      matchedChannelIds: matchedCandidates.map((c) => c.id),
+    });
+    return { ok: false, reason: "ambiguous_secret" };
+  }
+
+  return { ok: true, channel: matchedCandidates[0] };
 }
 
 export async function POST(req: Request) {
