@@ -74,6 +74,7 @@ import {
   fulfillApprovedInvoke,
   conversationDeliveryFromFulfillment,
   snsDeliveryFromFulfillment,
+  parseFulfillment,
   type ConversationDelivery,
 } from "@/lib/approvals/fulfill";
 import { evaluateAllowedAccountsForBrowser } from "@/lib/employees/allowed-accounts";
@@ -95,6 +96,7 @@ import {
 import { enrichInvokeFailureBody } from "@/lib/stuck-watch/enrich";
 import { getOrgStuckWatchPolicy } from "@/lib/data/stuck-watch-policy";
 import type { DualEgressVerdict, Employee, EgressVerdict, GatewayInvokeRequest } from "@/lib/types";
+import { createHash } from "node:crypto";
 import {
   CrossProductEventError,
   normalizeCommerceAuthorization,
@@ -659,6 +661,18 @@ export async function runGatewayInvoke(
   if (tool === "commerce.order") {
     invokeMetadata.approvedAmountJpy = Number(body.amountJpy);
   }
+  if (tool === "calendar.allowlist.patch") {
+    const args = (body.args || {}) as Record<string, unknown>;
+    const allowlistArgs = {
+      action: typeof args.action === "string" ? args.action : "add",
+      calendarId: typeof args.calendarId === "string" ? args.calendarId : "",
+      grantId: typeof args.grantId === "string" ? args.grantId : "",
+      targetEmployeeId: typeof args.employeeId === "string" ? args.employeeId : null,
+    };
+    const canonical = JSON.stringify(allowlistArgs);
+    invokeMetadata.calendarAllowlistArgs = allowlistArgs;
+    invokeMetadata.calendarAllowlistArgsHash = createHash("sha256").update(canonical).digest("hex");
+  }
 
   if (
     employee.allowedPurposes?.length &&
@@ -815,6 +829,19 @@ export async function runGatewayInvoke(
                 }
               : null,
           );
+    }
+    if (priorApprovalOk && tool === "calendar.allowlist.patch" && prior) {
+      const priorArgsHash = prior.metadata.calendarAllowlistArgsHash;
+      const currentArgs = (body.args || {}) as Record<string, unknown>;
+      const currentAllowlistArgs = {
+        action: typeof currentArgs.action === "string" ? currentArgs.action : "add",
+        calendarId: typeof currentArgs.calendarId === "string" ? currentArgs.calendarId : "",
+        grantId: typeof currentArgs.grantId === "string" ? currentArgs.grantId : "",
+        targetEmployeeId: typeof currentArgs.employeeId === "string" ? currentArgs.employeeId : null,
+      };
+      const currentCanonical = JSON.stringify(currentAllowlistArgs);
+      const currentHash = createHash("sha256").update(currentCanonical).digest("hex");
+      priorApprovalOk = typeof priorArgsHash === "string" && priorArgsHash === currentHash;
     }
   }
 
@@ -1786,8 +1813,20 @@ export async function runGatewayInvoke(
     });
   }
 
-  // calendar.propose: fetch busy via calendar.read (if flag ON), run propose logic
+  // calendar.propose: flag-OFF returns pre-PR stub; flag-ON fetches busy and applies policy
   if (tool === "calendar.propose") {
+    if (!isGoogleCalendarReadEnabled()) {
+      return jsonResult({
+        ok: true,
+        tool,
+        employeeId,
+        purpose,
+        jobId,
+        proposed: true,
+        slots: [],
+      });
+    }
+
     const args = (body.args || {}) as Record<string, unknown>;
     const slots = Array.isArray(args.slots) ? args.slots : [];
     const calendarIds = Array.isArray(args.calendarIds)
@@ -1797,8 +1836,10 @@ export async function runGatewayInvoke(
     const timeMax = typeof args.timeMax === "string" ? args.timeMax : "";
     const requestedVideoTool = typeof args.videoTool === "string" ? args.videoTool : undefined;
     let busyByCalendar = (args.busyByCalendar || {}) as Record<string, Array<{ start: string; end: string }>>;
+    let readErrors: Record<string, { code: string; message: string }> = {};
+    let busyDataComplete = true;
 
-    if (isGoogleCalendarReadEnabled() && calendarIds.length > 0 && timeMin && timeMax) {
+    if (calendarIds.length > 0 && timeMin && timeMax) {
       const readResult = await readCalendarFreebusy({
         orgId: orgId || employee.orgId,
         employeeId,
@@ -1809,6 +1850,13 @@ export async function runGatewayInvoke(
       });
       if (readResult.ok) {
         busyByCalendar = { ...busyByCalendar, ...readResult.busyByCalendar };
+        if (Object.keys(readResult.errors).length > 0) {
+          readErrors = readResult.errors;
+          busyDataComplete = false;
+        }
+      } else {
+        readErrors = readResult.errors;
+        busyDataComplete = false;
       }
     }
 
@@ -1843,11 +1891,26 @@ export async function runGatewayInvoke(
       keptCount: proposeResult.keptCount,
       onlineSettings: proposeResult.onlineSettings,
       busyByCalendarUsed: Object.keys(busyByCalendar).length > 0,
+      busyDataComplete,
+      ...(Object.keys(readErrors).length > 0 ? { readErrors } : {}),
     });
   }
 
-  // calendar.allowlist.patch: fulfillment after approval
+  // calendar.allowlist.patch: fulfillment after approval (flag-gated)
   if (tool === "calendar.allowlist.patch") {
+    if (!isGoogleCalendarReadEnabled()) {
+      return jsonResult({
+        ok: false,
+        code: "feature_disabled",
+        error: "feature_disabled",
+        message: "Google Calendar integration is disabled (flag OFF)",
+        employeeId,
+        tool,
+        purpose,
+        jobId,
+      }, 400);
+    }
+
     if (!priorApprovalOk) {
       return jsonResult({
         ok: false,
@@ -1862,12 +1925,74 @@ export async function runGatewayInvoke(
       }, 402);
     }
 
+    // Single-use: if approval already has fulfillment, return that result
+    if (priorApproval) {
+      const existingFulfillment = parseFulfillment(priorApproval.metadata);
+      if (existingFulfillment) {
+        return jsonResult({
+          ok: existingFulfillment.ok,
+          tool,
+          employeeId,
+          purpose,
+          jobId,
+          replay: true,
+          fulfillment: existingFulfillment,
+        });
+      }
+    }
+
     const args = (body.args || {}) as Record<string, unknown>;
     const action = typeof args.action === "string" ? args.action : "add";
     const calendarId = typeof args.calendarId === "string" ? args.calendarId : "";
     const grantId = typeof args.grantId === "string" ? args.grantId : "";
     const label = typeof args.label === "string" ? args.label : "";
     const targetEmployeeId = typeof args.employeeId === "string" ? args.employeeId : null;
+
+    // Validate calendarId format: non-empty, max 254 chars, no whitespace or control chars
+    if (action === "add") {
+      if (!calendarId || calendarId.length > 254) {
+        return jsonResult({
+          ok: false,
+          code: "invalid_calendar_id",
+          error: "invalid_calendar_id",
+          message: "calendarId must be non-empty and at most 254 characters",
+          employeeId,
+          tool,
+          purpose,
+          jobId,
+        }, 400);
+      }
+      // eslint-disable-next-line no-control-regex
+      if (/[\s\x00-\x1f\x7f]/.test(calendarId)) {
+        return jsonResult({
+          ok: false,
+          code: "invalid_calendar_id",
+          error: "invalid_calendar_id",
+          message: "calendarId must not contain whitespace or control characters",
+          employeeId,
+          tool,
+          purpose,
+          jobId,
+        }, 400);
+      }
+    }
+
+    // Validate targetEmployeeId: must belong to same org if provided
+    if (targetEmployeeId) {
+      const targetEmployee = await getEmployee(targetEmployeeId, orgId || employee.orgId);
+      if (!targetEmployee) {
+        return jsonResult({
+          ok: false,
+          code: "invalid_target_employee",
+          error: "invalid_target_employee",
+          message: "targetEmployeeId must belong to the same organization",
+          employeeId,
+          tool,
+          purpose,
+          jobId,
+        }, 400);
+      }
+    }
 
     if (action === "add" && calendarId) {
       const grant = await addCalendarReadGrant({
