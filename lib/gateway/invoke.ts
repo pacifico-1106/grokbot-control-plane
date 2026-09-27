@@ -1769,7 +1769,26 @@ export async function runGatewayInvoke(
     });
   }
 
-  // calendar.read: query Google freebusy (only when flag ON; flag OFF falls through to generic response)
+  // calendar.read: query Google freebusy (only when flag ON; flag OFF returns hint)
+  if (tool === "calendar.read" && !isGoogleCalendarReadEnabled()) {
+    return jsonResult({
+      ok: true,
+      tool,
+      employeeId,
+      purpose,
+      jobId,
+      busyByCalendar: {},
+      errors: {},
+      refused: [],
+      queried: [],
+      busyDataComplete: false,
+      nextStepJa:
+        "Google Calendar 連携は現在無効です（フラグ OFF）。" +
+        "接続するアカウントは、AI 社員専用の Google アカウントで、" +
+        "オペレータが管理する Workspace または Staffpass を許可済みの Workspace に所属している必要があります。" +
+        "相手方は Staffpass に接続せず、カレンダーを AI 社員アカウントに共有（空き時間のみで OK）してください。",
+    });
+  }
   if (isGoogleCalendarReadEnabled() && tool === "calendar.read") {
     const args = (body.args || {}) as Record<string, unknown>;
     const calendarIds = Array.isArray(args.calendarIds)
@@ -1799,10 +1818,30 @@ export async function runGatewayInvoke(
       errors: readResult.errors,
       refused: readResult.refused,
       queried: readResult.queried,
+      ...(readResult.nextStepJa ? { nextStepJa: readResult.nextStepJa } : {}),
+      ...(readResult.readErrorHints ? { readErrorHints: readResult.readErrorHints } : {}),
+      ...(readResult.busyDataComplete !== undefined ? { busyDataComplete: readResult.busyDataComplete } : {}),
     });
   }
 
-  // calendar.propose: fetches busy and applies policy (only when flag ON; flag OFF falls through to generic response)
+  // calendar.propose: fetches busy and applies policy (only when flag ON; flag OFF returns hint)
+  if (tool === "calendar.propose" && !isGoogleCalendarReadEnabled()) {
+    return jsonResult({
+      ok: true,
+      tool,
+      employeeId,
+      purpose,
+      jobId,
+      proposed: false,
+      slots: [],
+      busyDataComplete: false,
+      nextStepJa:
+        "Google Calendar 連携は現在無効です（フラグ OFF）。" +
+        "接続するアカウントは、AI 社員専用の Google アカウントで、" +
+        "オペレータが管理する Workspace または Staffpass を許可済みの Workspace に所属している必要があります。" +
+        "相手方は Staffpass に接続せず、カレンダーを AI 社員アカウントに共有（空き時間のみで OK）してください。",
+    });
+  }
   if (isGoogleCalendarReadEnabled() && tool === "calendar.propose") {
     const args = (body.args || {}) as Record<string, unknown>;
     const slots = Array.isArray(args.slots) ? args.slots : [];
@@ -1814,7 +1853,9 @@ export async function runGatewayInvoke(
     const requestedVideoTool = typeof args.videoTool === "string" ? args.videoTool : undefined;
     let busyByCalendar = (args.busyByCalendar || {}) as Record<string, Array<{ start: string; end: string }>>;
     let readErrors: Record<string, { code: string; message: string }> = {};
+    let readErrorHints: Record<string, string> = {};
     let busyDataComplete = true;
+    let nextStepJa: string | undefined;
 
     if (calendarIds.length > 0 && timeMin && timeMax) {
       const readResult = await readCalendarFreebusy({
@@ -1830,10 +1871,22 @@ export async function runGatewayInvoke(
         if (Object.keys(readResult.errors).length > 0) {
           readErrors = readResult.errors;
           busyDataComplete = false;
+          if (readResult.readErrorHints) {
+            readErrorHints = readResult.readErrorHints;
+          }
+          if (readResult.nextStepJa) {
+            nextStepJa = readResult.nextStepJa;
+          }
         }
       } else {
         readErrors = readResult.errors;
         busyDataComplete = false;
+        if (readResult.readErrorHints) {
+          readErrorHints = readResult.readErrorHints;
+        }
+        if (readResult.nextStepJa) {
+          nextStepJa = readResult.nextStepJa;
+        }
       }
     }
 
@@ -1870,6 +1923,8 @@ export async function runGatewayInvoke(
       busyByCalendarUsed: Object.keys(busyByCalendar).length > 0,
       busyDataComplete,
       ...(Object.keys(readErrors).length > 0 ? { readErrors } : {}),
+      ...(Object.keys(readErrorHints).length > 0 ? { readErrorHints } : {}),
+      ...(nextStepJa ? { nextStepJa } : {}),
     });
   }
 

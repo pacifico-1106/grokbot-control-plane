@@ -34,6 +34,22 @@ describe("calendar read with flag OFF", () => {
     expect(result.auditMetadata.flagOff).toBe(true);
   });
 
+  test("includes MCP hint when flag is OFF", async () => {
+    delete process.env.GOOGLE_CALENDAR_READ_ENABLED;
+    const { readCalendarFreebusy } = await import("./calendar-read");
+    const result = await readCalendarFreebusy({
+      orgId: "org-1",
+      employeeId: "emp-1",
+      calendarIds: ["calendar1@example.com"],
+      timeMin: "2026-01-01T00:00:00Z",
+      timeMax: "2026-01-02T00:00:00Z",
+    });
+    expect(result.nextStepJa).toBeDefined();
+    expect(result.nextStepJa).toContain("無効");
+    expect(result.nextStepJa).toContain("Workspace");
+    expect(result.busyDataComplete).toBe(false);
+  });
+
   test("flag OFF parity: no Google API calls made", async () => {
     delete process.env.GOOGLE_CALENDAR_READ_ENABLED;
     const originalFetch = globalThis.fetch;
@@ -168,6 +184,42 @@ describe("secret safety", () => {
     expect(resultStr).not.toContain("refreshToken");
     expect(resultStr).not.toContain("accessToken");
     expect(resultStr).not.toContain("credentials_ciphertext");
+  });
+});
+
+describe("MCP hint fields", () => {
+  test("includes busyDataComplete=false when flag OFF (no data available)", async () => {
+    delete process.env.GOOGLE_CALENDAR_READ_ENABLED;
+    const { readCalendarFreebusy } = await import("./calendar-read");
+
+    const result = await readCalendarFreebusy({
+      orgId: "org-1",
+      employeeId: "emp-1",
+      calendarIds: ["calendar1@example.com"],
+      timeMin: "2026-01-01T00:00:00Z",
+      timeMax: "2026-01-02T00:00:00Z",
+    });
+
+    expect(result.busyDataComplete).toBe(false);
+    expect(result.nextStepJa).toBeDefined();
+  });
+
+  test("hint text never contains tokens or secrets", async () => {
+    delete process.env.GOOGLE_CALENDAR_READ_ENABLED;
+    const { readCalendarFreebusy } = await import("./calendar-read");
+    const result = await readCalendarFreebusy({
+      orgId: "org-1",
+      employeeId: "emp-1",
+      calendarIds: ["calendar1@example.com"],
+      timeMin: "2026-01-01T00:00:00Z",
+      timeMax: "2026-01-02T00:00:00Z",
+    });
+
+    if (result.nextStepJa) {
+      expect(result.nextStepJa).not.toContain("token");
+      expect(result.nextStepJa).not.toContain("secret");
+      expect(result.nextStepJa).not.toContain("password");
+    }
   });
 });
 
