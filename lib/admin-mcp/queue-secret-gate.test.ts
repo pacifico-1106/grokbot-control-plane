@@ -228,3 +228,79 @@ describe("admin queue rawArgsForSecretScan (P0-A ciphertext bypass)", () => {
     expect("needs_approval" in result && result.needs_approval).toBe(true);
   });
 });
+
+describe("admin queue per-tool secret allowlist (P0-A narrow exclusion)", () => {
+  test("botToken on non-allowlisted tool is still rejected", async () => {
+    const result = await queueAdminTool({
+      cred: demoCred(),
+      tool: "parties.upsert",
+      args: {
+        kind: "email_domain",
+        identifier: "example.com",
+        botToken: "xoxb-fake-token-for-some-reason",
+      },
+      summary: "Test botToken on wrong tool",
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.code).toBe("secret_detected_in_payload");
+    const rejection = result as AdminQueueSecretRejection;
+    expect(rejection.pattern).toBe("slack_token");
+  });
+
+  test("AWS-key-like value in non-allowlisted field of setBotToken is still rejected", async () => {
+    const result = await queueAdminTool({
+      cred: demoCred(),
+      tool: "setup.slackAdapter.setBotToken",
+      args: {
+        enabled: true,
+        botTokenPresent: true,
+        metadata: {
+          awsKey: "AKIAIOSFODNN7EXAMPLE",
+        },
+      },
+      summary: "Test non-allowlisted field with secret",
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.code).toBe("secret_detected_in_payload");
+    const rejection = result as AdminQueueSecretRejection;
+    expect(rejection.pattern).toBe("aws_access_key");
+  });
+
+  test("channelAccessToken with secret-like value on non-LINE tool is still rejected", async () => {
+    const result = await queueAdminTool({
+      cred: demoCred(),
+      tool: "channels.classify",
+      args: {
+        externalId: "C123456",
+        classification: "internal",
+        channelAccessToken: "sk-abcdefghijklmnopqrstuvwxyz1234567890",
+      },
+      summary: "Test secret-like token on wrong tool",
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.code).toBe("secret_detected_in_payload");
+    const rejection = result as AdminQueueSecretRejection;
+    expect(rejection.pattern).toBe("openai_key");
+  });
+
+  test("ownerPassword with secret-like value on orgs.create is still scanned", async () => {
+    const result = await queueAdminTool({
+      cred: demoCred(),
+      tool: "orgs.create",
+      args: {
+        name: "Test Org",
+        ownerEmail: "owner@example.com",
+        ownerPassword: "sk-abcdefghijklmnopqrstuvwxyz1234567890",
+      },
+      summary: "Test ownerPassword is scanned",
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.code).toBe("secret_detected_in_payload");
+    const rejection = result as AdminQueueSecretRejection;
+    expect(rejection.pattern).toBe("openai_key");
+  });
+});

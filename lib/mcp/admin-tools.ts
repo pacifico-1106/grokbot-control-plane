@@ -2902,17 +2902,17 @@ export async function callAdminMcpTool(
     summary = `管理MCP認証（gb_adm_）発行を人が確認します（対象 org: ${parsed.value.targetOrgId.slice(0, 8)}…）`;
   }
 
-  // P0-A: Build rawArgsForSecretScan excluding known secret fields.
-  // These tools are DESIGNED to receive secrets which are immediately encrypted.
-  // The secret detector should scan for UNEXPECTED secrets, not the intended secret inputs.
-  const KNOWN_SECRET_FIELDS = [
-    "botToken",
-    "channelAccessToken",
-    "channelSecret",
-    "ownerPassword",
-  ];
+  // P0-A: Build rawArgsForSecretScan excluding per-tool known secret fields.
+  // Only specific tools are designed to receive specific secrets which are immediately encrypted.
+  // All other args and all other tools must still be scanned for unexpected secrets.
+  // NOTE: orgs.create ownerPassword is NOT allowlisted — P0-A lock says "Chat NEVER: Passwords".
+  const TOOL_SECRET_ALLOWLIST: Record<string, string[]> = {
+    "setup.slackAdapter.setBotToken": ["botToken"],
+    "setup.lineApproval.upsert": ["channelAccessToken", "channelSecret"],
+  };
+  const allowedFields = TOOL_SECRET_ALLOWLIST[name] ?? [];
   const rawArgsForSecretScan = Object.fromEntries(
-    Object.entries(args).filter(([key]) => !KNOWN_SECRET_FIELDS.includes(key))
+    Object.entries(args).filter(([key]) => !allowedFields.includes(key))
   );
 
   const queued = await queueAdminTool({
