@@ -8,6 +8,7 @@ import {
   resolvePlanKeyFromStripe,
   unixToIso,
 } from "@/lib/stripe";
+import { processCardSetupWebhook } from "@/lib/external-contract-card/webhook-handler";
 import type Stripe from "stripe";
 
 export const runtime = "nodejs";
@@ -98,6 +99,7 @@ async function retrieveSubscription(
 
 /**
  * Stripe webhook — subscription / invoice sync via service role when NOT demo.
+ * Also handles card setup events for external contract card registration.
  */
 export async function POST(req: Request) {
   const stripe = getStripe();
@@ -112,6 +114,35 @@ export async function POST(req: Request) {
     });
     return NextResponse.json({ received: true, stub: true });
   }
+
+  // Process card setup events first (setup_intent.*, checkout.session.expired)
+  // The card setup handler has its own signature verification and event parsing.
+  const cardSetupResult = await processCardSetupWebhook(raw, signature);
+  if (cardSetupResult.processed) {
+    const { eventType, action, orgId } = cardSetupResult;
+    if (action !== "ignored") {
+      console.info("[stripe:webhook:card-setup]", {
+        eventType,
+        action,
+        orgId,
+      });
+      return NextResponse.json({
+        received: true,
+        type: eventType,
+        cardSetup: { action, orgId },
+      });
+    }
+    // Card setup handler saw the event but it wasn't a card setup event (ignored).
+    // Continue with normal subscription handling.
+  } else if (!cardSetupResult.processed && cardSetupResult.reason === "invalid_signature") {
+    // Signature verification failed in card setup handler
+    return NextResponse.json(
+      { error: cardSetupResult.error || "invalid_signature" },
+      { status: 400 }
+    );
+  }
+  // If card setup handler returned processed=false for other reasons (missing_signature, etc.),
+  // we continue with normal handling which will do its own verification.
 
   let event: Stripe.Event;
   try {

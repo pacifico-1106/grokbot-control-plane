@@ -67,6 +67,20 @@ import {
 import { sendVerificationDmToSlackUser } from "@/lib/approval-workflow/voter-binding-verification";
 import { getNotificationChannelSecretsById } from "@/lib/data/notification-channels";
 import type { PlatformOpsActor } from "@/lib/admin/platform-ops-gate";
+import {
+  createCardSetupSession,
+  buildCardSetupMouthResponse,
+} from "@/lib/external-contract-card/checkout-setup";
+import {
+  createPortalLink,
+  buildPortalLinkMouthResponse,
+} from "@/lib/external-contract-card/portal-link";
+import {
+  isCardSetupApproval,
+} from "@/lib/external-contract-card/queue-card-setup";
+import {
+  isPortalLinkApproval,
+} from "@/lib/external-contract-card/queue-portal-link";
 import type {
   ActionLimits,
   AllowedAccount,
@@ -1394,6 +1408,117 @@ async function fulfillStuckWatch(
   };
 }
 
+/**
+ * Fulfill card setup link mint after always_human approval.
+ * Creates Stripe Checkout session (mode=setup) and returns the deep link.
+ */
+async function fulfillCardSetupLinkMint(
+  approval: ApprovalRequest
+): Promise<AdminFulfillment> {
+  const result = await createCardSetupSession({
+    orgId: approval.orgId,
+    approvalId: approval.id,
+    actorUserId: approval.resolvedBy || undefined,
+    actorEmail: approval.resolvedBy || undefined,
+  });
+
+  if (!result.ok) {
+    return {
+      ok: false,
+      tool: "cardSetup.mintLink",
+      at: new Date().toISOString(),
+      error: result.error,
+      nextStepJa: result.nextStepJa,
+    };
+  }
+
+  const mouthResponse = buildCardSetupMouthResponse(result);
+
+  await appendAuditEvent({
+    orgId: approval.orgId,
+    employeeId: null,
+    credentialId: null,
+    action: "admin.external_contract_card",
+    purpose: "admin.external_contract_card",
+    summary: "外部契約カード登録リンクを発行（人承認後）",
+    metadata: {
+      auditClass: ADMIN_AUDIT_CLASS,
+      approvalId: approval.id,
+      sessionId: result.sessionId,
+      expiresAt: result.expiresAt,
+    },
+  });
+
+  return {
+    ok: true,
+    tool: "cardSetup.mintLink",
+    at: new Date().toISOString(),
+    nextStepJa: mouthResponse.nextStepJa,
+    summaryJa: mouthResponse.messageJa,
+    ...({
+      linkUrl: mouthResponse.linkUrl,
+      expiresAt: result.expiresAt,
+      expiresInMinutes: mouthResponse.expiresInMinutes,
+    } as Record<string, unknown>),
+  };
+}
+
+/**
+ * Fulfill portal link mint after always_human approval.
+ * Creates Stripe Customer Portal session and returns the deep link.
+ */
+async function fulfillPortalLinkMint(
+  approval: ApprovalRequest,
+  args: Record<string, unknown>
+): Promise<AdminFulfillment> {
+  const result = await createPortalLink({
+    orgId: approval.orgId,
+    approvalId: approval.id,
+    actorUserId: approval.resolvedBy || undefined,
+    actorEmail: approval.resolvedBy || undefined,
+  });
+
+  if (!result.ok) {
+    return {
+      ok: false,
+      tool: "cardSetup.mintPortalLink",
+      at: new Date().toISOString(),
+      error: result.error,
+      nextStepJa: result.nextStepJa,
+    };
+  }
+
+  const mouthResponse = buildPortalLinkMouthResponse(result);
+  const portalPurpose = String(args.portalPurpose || "change");
+
+  await appendAuditEvent({
+    orgId: approval.orgId,
+    employeeId: null,
+    credentialId: null,
+    action: "admin.portal",
+    purpose: "admin.portal",
+    summary: `支払い方法管理リンクを発行（${portalPurpose}・人承認後）`,
+    metadata: {
+      auditClass: ADMIN_AUDIT_CLASS,
+      approvalId: approval.id,
+      portalPurpose,
+      expiresInMinutes: result.expiresInMinutes,
+    },
+  });
+
+  return {
+    ok: true,
+    tool: "cardSetup.mintPortalLink",
+    at: new Date().toISOString(),
+    nextStepJa: mouthResponse.nextStepJa,
+    summaryJa: mouthResponse.messageJa,
+    ...({
+      linkUrl: mouthResponse.linkUrl,
+      expiresInMinutes: mouthResponse.expiresInMinutes,
+    } as Record<string, unknown>),
+  };
+}
+
 async function fulfillApprovedAdminCore(
   approval: ApprovalRequest
 ): Promise<AdminFulfillment | null> {
@@ -1477,6 +1602,12 @@ async function fulfillApprovedAdminCore(
         break;
       case "orgs.issueAdminCredential":
         fulfillment = await fulfillOrgIssueAdminCredential(approval, args);
+        break;
+      case "cardSetup.mintLink":
+        fulfillment = await fulfillCardSetupLinkMint(approval);
+        break;
+      case "cardSetup.mintPortalLink":
+        fulfillment = await fulfillPortalLinkMint(approval, args);
         break;
       default:
         fulfillment = { ok: false, tool, at, error: "unknown_admin_tool" };

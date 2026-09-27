@@ -356,4 +356,94 @@ describe("P1 External Contract Card Registration", () => {
       expect(detectCardLikeString("emp_12345678")).toEqual({ detected: false });
     });
   });
+
+  describe("Webhook Handler Integration", () => {
+    test("processCardSetupWebhook returns ignored when flag OFF", async () => {
+      const originalFlag = process.env[EXTERNAL_CONTRACT_CARD_SETUP_FLAG];
+      delete process.env[EXTERNAL_CONTRACT_CARD_SETUP_FLAG];
+
+      const { processCardSetupWebhook } = await import("./webhook-handler");
+      const result = await processCardSetupWebhook("{}", "test-signature");
+
+      expect(result.processed).toBe(true);
+      if (result.processed) {
+        expect(result.action).toBe("ignored");
+      }
+
+      if (originalFlag !== undefined) {
+        process.env[EXTERNAL_CONTRACT_CARD_SETUP_FLAG] = originalFlag;
+      }
+    });
+
+    test("processCardSetupWebhook returns missing_signature when no signature", async () => {
+      const originalFlag = process.env[EXTERNAL_CONTRACT_CARD_SETUP_FLAG];
+      process.env[EXTERNAL_CONTRACT_CARD_SETUP_FLAG] = "1";
+
+      const { processCardSetupWebhook } = await import("./webhook-handler");
+      const result = await processCardSetupWebhook("{}", null);
+
+      expect(result.processed).toBe(false);
+      if (!result.processed) {
+        expect(result.reason).toBe("missing_signature");
+      }
+
+      if (originalFlag !== undefined) {
+        process.env[EXTERNAL_CONTRACT_CARD_SETUP_FLAG] = originalFlag;
+      } else {
+        delete process.env[EXTERNAL_CONTRACT_CARD_SETUP_FLAG];
+      }
+    });
+  });
+
+  describe("Approval Queue Integration", () => {
+    test("isCardSetupApproval identifies card setup tickets", () => {
+      const { isCardSetupApproval } = require("./queue-card-setup");
+
+      expect(
+        isCardSetupApproval({
+          auditClass: "external_contract_card_setup",
+          cardSetupRequest: true,
+        })
+      ).toBe(true);
+
+      expect(
+        isCardSetupApproval({
+          auditClass: "admin",
+          cardSetupRequest: false,
+        })
+      ).toBe(false);
+
+      expect(
+        isCardSetupApproval({
+          auditClass: "external_contract_card_setup",
+          cardSetupRequest: false,
+        })
+      ).toBe(false);
+    });
+
+    test("isPortalLinkApproval identifies portal link tickets", () => {
+      const { isPortalLinkApproval } = require("./queue-portal-link");
+
+      expect(
+        isPortalLinkApproval({
+          auditClass: "external_contract_card_portal",
+          portalLinkRequest: true,
+        })
+      ).toBe(true);
+
+      expect(
+        isPortalLinkApproval({
+          auditClass: "admin",
+          portalLinkRequest: false,
+        })
+      ).toBe(false);
+    });
+  });
+
+  describe("Idempotency", () => {
+    test("isSetupIntentProcessed is available", async () => {
+      const { isSetupIntentProcessed } = await import("./data");
+      expect(typeof isSetupIntentProcessed).toBe("function");
+    });
+  });
 });
