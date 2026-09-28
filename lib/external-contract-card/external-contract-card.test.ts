@@ -396,8 +396,8 @@ describe("P1 External Contract Card Registration", () => {
   });
 
   describe("Approval Queue Integration", () => {
-    test("isCardSetupApproval identifies card setup tickets", () => {
-      const { isCardSetupApproval } = require("./queue-card-setup");
+    test("isCardSetupApproval identifies card setup tickets", async () => {
+      const { isCardSetupApproval } = await import("./queue-card-setup");
 
       expect(
         isCardSetupApproval({
@@ -421,8 +421,8 @@ describe("P1 External Contract Card Registration", () => {
       ).toBe(false);
     });
 
-    test("isPortalLinkApproval identifies portal link tickets", () => {
-      const { isPortalLinkApproval } = require("./queue-portal-link");
+    test("isPortalLinkApproval identifies portal link tickets", async () => {
+      const { isPortalLinkApproval } = await import("./queue-portal-link");
 
       expect(
         isPortalLinkApproval({

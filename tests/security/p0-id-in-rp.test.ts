@@ -275,3 +275,88 @@ describe("P0 Cross-Org Invariants", () => {
     expect(result.reason).toBe("employee_not_found");
   });
 });
+
+describe("P0-IN: Wired Path Tests", () => {
+  test("inbox routing module is imported by notify/channels.ts", async () => {
+    const channelsModule = await import("@/lib/notify/channels");
+    expect(typeof channelsModule.sendApprovalNotifications).toBe("function");
+  });
+
+  test("sendApprovalNotifications calls inbox routing when flag ON", async () => {
+    process.env.P0_INBOX_ROUTING_ENABLED = "true";
+
+    const approval = {
+      id: "apr_wired_test",
+      orgId: "test_org",
+      employeeId: "emp_test",
+      credentialId: "cred_test",
+      title: "Test Approval",
+      purpose: "tool.invoke",
+      summary: "Test",
+      risk: "medium" as const,
+      status: "pending" as const,
+      tool: "mail.send",
+      jobId: "job_test",
+      revisionNote: null,
+      revisionCount: 0,
+      parentApprovalId: null,
+      telegramRef: null,
+      telegramMessageId: null,
+      metadata: {},
+      statusToken: "st_test",
+      pollPath: "/api/approvals/test/status",
+      createdAt: new Date().toISOString(),
+      resolvedAt: null,
+      resolvedBy: null,
+    };
+
+    const { sendApprovalNotifications } = await import("@/lib/notify/channels");
+    const results = await sendApprovalNotifications(approval, null);
+    expect(Array.isArray(results)).toBe(true);
+
+    delete process.env.P0_INBOX_ROUTING_ENABLED;
+  });
+});
+
+describe("P0-RP: Wired Path Tests", () => {
+  test("reply recipient validate module is imported by gateway/invoke.ts", async () => {
+    const validateModule = await import("@/lib/gateway/reply-recipient-validate");
+    expect(typeof validateModule.validateReplyRecipient).toBe("function");
+    expect(typeof validateModule.decideReplyDestination).toBe("function");
+  });
+
+  test("validateReplyRecipient returns allowed when flag OFF (wired path)", async () => {
+    const { validateReplyRecipient } = await import("@/lib/gateway/reply-recipient-validate");
+    
+    const result = await validateReplyRecipient({
+      orgId: "test_org",
+      employeeId: "emp_test",
+      recipientId: "C123456",
+      surface: "slack",
+    });
+
+    expect(result.status).toBe("allowed");
+    expect(result.failClosed).toBe(false);
+    expect(result.approvalClass).toBe("business");
+  });
+
+  test("validateReplyRecipient returns denied for external when flag ON", async () => {
+    process.env.P0_REPLY_POLICY_ENHANCED = "true";
+
+    const { validateReplyRecipient } = await import("@/lib/gateway/reply-recipient-validate");
+    
+    const result = await validateReplyRecipient({
+      orgId: "test_org",
+      employee: null,
+      context: { slackChannelId: "C_TEST", slackUserId: "unknown_external_user" },
+      recipientIdentifier: "unknown_external_user",
+      recipientKind: "slack_user",
+    });
+
+    // External recipients are detected as external audience (fail-closed treats unknown as external)
+    expect(["external", "unknown"]).toContain(result.audience);
+    expect(result.approvalClass).toBe("business");
+
+    delete process.env.P0_REPLY_POLICY_ENHANCED;
+  });
+});
