@@ -1,5 +1,5 @@
 import { createHmac } from "node:crypto";
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
   decodeIdToken,
   generateCodeChallenge,
@@ -11,19 +11,25 @@ import {
   verifyGoogleOAuthState,
 } from "./oauth";
 
-const originalClientId = process.env.GOOGLE_OAUTH_CLIENT_ID;
-const originalClientSecret = process.env.GOOGLE_OAUTH_CLIENT_SECRET;
-const originalEncryptionKey = process.env.NOTIFICATION_CONFIG_ENCRYPTION_KEY;
+let savedClientId: string | undefined;
+let savedClientSecret: string | undefined;
+let savedEncryptionKey: string | undefined;
+
+beforeEach(() => {
+  savedClientId = process.env.GOOGLE_OAUTH_CLIENT_ID;
+  savedClientSecret = process.env.GOOGLE_OAUTH_CLIENT_SECRET;
+  savedEncryptionKey = process.env.NOTIFICATION_CONFIG_ENCRYPTION_KEY;
+});
 
 afterEach(() => {
-  if (originalClientId === undefined) delete process.env.GOOGLE_OAUTH_CLIENT_ID;
-  else process.env.GOOGLE_OAUTH_CLIENT_ID = originalClientId;
+  if (savedClientId === undefined) delete process.env.GOOGLE_OAUTH_CLIENT_ID;
+  else process.env.GOOGLE_OAUTH_CLIENT_ID = savedClientId;
 
-  if (originalClientSecret === undefined) delete process.env.GOOGLE_OAUTH_CLIENT_SECRET;
-  else process.env.GOOGLE_OAUTH_CLIENT_SECRET = originalClientSecret;
+  if (savedClientSecret === undefined) delete process.env.GOOGLE_OAUTH_CLIENT_SECRET;
+  else process.env.GOOGLE_OAUTH_CLIENT_SECRET = savedClientSecret;
 
-  if (originalEncryptionKey === undefined) delete process.env.NOTIFICATION_CONFIG_ENCRYPTION_KEY;
-  else process.env.NOTIFICATION_CONFIG_ENCRYPTION_KEY = originalEncryptionKey;
+  if (savedEncryptionKey === undefined) delete process.env.NOTIFICATION_CONFIG_ENCRYPTION_KEY;
+  else process.env.NOTIFICATION_CONFIG_ENCRYPTION_KEY = savedEncryptionKey;
 });
 
 describe("googleOAuthConfigured", () => {

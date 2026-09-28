@@ -90,13 +90,18 @@ export async function queueAdminTool(input: {
   cred: ResolvedAdminCredential;
   tool: string;
   args: Record<string, unknown>;
+  /** Raw user input for secret scanning (before encryption). If omitted, args is scanned. */
+  rawArgsForSecretScan?: Record<string, unknown>;
   title?: string;
   summary: string;
   jobId?: string;
 }): Promise<AdminQueueResult | AdminQueueSecretRejection | AdminPolicyRequiredRejection> {
   // P0-A: Secret-in-chat detector (fail-closed, before approval ticket creation)
   // Chat NEVER: passwords, refresh tokens, API keys, full employee/admin badge secrets
-  const secretDetection = detectSecretInPayload(input.args);
+  // IMPORTANT: Scan raw user input (rawArgsForSecretScan), NOT the post-encryption args.
+  // Server-generated ciphertext (*Ciphertext fields from lib/notify/crypto) must not trigger.
+  const argsToScan = input.rawArgsForSecretScan ?? input.args;
+  const secretDetection = detectSecretInPayload(argsToScan);
   if (!secretDetection.ok) {
     const errorResponse = buildSecretDetectionErrorResponse(secretDetection);
     return {

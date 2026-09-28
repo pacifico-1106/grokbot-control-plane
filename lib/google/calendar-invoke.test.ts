@@ -1,20 +1,27 @@
 import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
-const originalFlagEnv = process.env.GOOGLE_CALENDAR_READ_ENABLED;
-const originalMode = process.env.DEMO_MODE;
+let savedFlagEnv: string | undefined;
+let savedMode: string | undefined;
+let savedEncryptionKey: string | undefined;
 
 beforeEach(() => {
+  savedFlagEnv = process.env.GOOGLE_CALENDAR_READ_ENABLED;
+  savedMode = process.env.DEMO_MODE;
+  savedEncryptionKey = process.env.NOTIFICATION_CONFIG_ENCRYPTION_KEY;
   process.env.DEMO_MODE = "true";
   process.env.NOTIFICATION_CONFIG_ENCRYPTION_KEY = "test-key-that-is-at-least-32-characters-long";
 });
 
 afterEach(() => {
-  if (originalFlagEnv === undefined) delete process.env.GOOGLE_CALENDAR_READ_ENABLED;
-  else process.env.GOOGLE_CALENDAR_READ_ENABLED = originalFlagEnv;
+  if (savedFlagEnv === undefined) delete process.env.GOOGLE_CALENDAR_READ_ENABLED;
+  else process.env.GOOGLE_CALENDAR_READ_ENABLED = savedFlagEnv;
 
-  if (originalMode === undefined) delete process.env.DEMO_MODE;
-  else process.env.DEMO_MODE = originalMode;
+  if (savedMode === undefined) delete process.env.DEMO_MODE;
+  else process.env.DEMO_MODE = savedMode;
+
+  if (savedEncryptionKey === undefined) delete process.env.NOTIFICATION_CONFIG_ENCRYPTION_KEY;
+  else process.env.NOTIFICATION_CONFIG_ENCRYPTION_KEY = savedEncryptionKey;
 });
 
 describe("calendar.allowlist.patch args hash", () => {
