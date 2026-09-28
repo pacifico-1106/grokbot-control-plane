@@ -48,51 +48,101 @@ WHERE o.name = 'TOKYO307' AND om.role = 'owner';
 
 ## 2. ステップ1: 八坂の Telegram 投票者バインディング登録
 
+### ルーティングの仕組み
+
+**重要**: 承認通知のルーティングは以下の優先順位で決まります:
+
+1. **テナントチャネル優先**: `org_notification_channels` に有効な Telegram チャネルがある場合、そこに配信
+2. **グローバルフォールバック**: テナントチャネルがない場合のみ、`telegram:global` (env 設定の Bot) にフォールバック
+
+TOKYO307 には以下のテナント Telegram チャネルがあります:
+- `承認用Telegram` (ID: `98eb7dd7-f401-4291-a9de-64b510d90d31`)
+- `依頼者` (ID: `d430bb5a-c60e-44b4-89cd-7683e57b85be`)
+
+**したがって、八坂が投票に使うのはテナントチャネル経由であり、`telegram:global` ではありません。**
+
 ### 実施内容
 
-八坂の Telegram ID を `telegram:global` チャネルキーでバインドする。
+八坂がテナントチャネルから投票できるように、各チャネル ID をキーとしてバインドする。
 
 ### 手順
 
-1. Admin MCP で以下を実行:
+1. Admin MCP で以下を実行（**承認用Telegram チャネル**用）:
 
 ```json
 {
   "tool": "approvalWorkflow.bindVoter",
   "args": {
-    "memberId": "<八坂の org_members.id>",
+    "memberId": "db77fa1c-615b-401a-9125-9c52b9adc5a6",
     "provider": "telegram",
-    "channelKey": "telegram:global",
+    "channelKey": "98eb7dd7-f401-4291-a9de-64b510d90d31",
     "externalUserId": "<八坂の Telegram User ID>"
   }
 }
 ```
 
-2. always_human チケットが発行されるので、既存の承認者（またはプラットフォーム運用代行）が承認
-3. 承認後、八坂の Telegram に確認ボタン付き DM が送信される
-4. 八坂が「承認者として登録する」ボタンをクリック
+2. Admin MCP で以下を実行（**依頼者チャネル**用、必要に応じて）:
+
+```json
+{
+  "tool": "approvalWorkflow.bindVoter",
+  "args": {
+    "memberId": "db77fa1c-615b-401a-9125-9c52b9adc5a6",
+    "provider": "telegram",
+    "channelKey": "d430bb5a-c60e-44b4-89cd-7683e57b85be",
+    "externalUserId": "<八坂の Telegram User ID>"
+  }
+}
+```
+
+3. always_human チケットが発行されるので、既存の承認者（またはプラットフォーム運用代行）が承認
+4. 承認後、各チャネルの Bot から八坂の Telegram に確認ボタン付き DM が送信される
+   - **注意**: DM は各チャネル固有の Bot から送信される。ユーザーがその Bot を /start していない場合、送信は失敗する
+   - 失敗した場合は、八坂に該当 Bot を /start してもらい、再度 bindVoter を実行
+5. 八坂が「承認者として登録する」ボタンをクリック
 
 ### 検証クエリ
 
 ```sql
--- バインディング状態の確認
+-- バインディング状態の確認（テナントチャネル）
 SELECT provider, channel_key, external_user_id, member_id, 
        verified_at, expires_at, revoked_at
 FROM approval_workflow_voter_bindings
-WHERE org_id = '<TOKYO307_ORG_ID>'
-  AND channel_key = 'telegram:global';
+WHERE org_id = '92f3617c-33fc-4dac-b9b4-d4f42e8522ac'
+  AND provider = 'telegram'
+  AND channel_key IN (
+    '98eb7dd7-f401-4291-a9de-64b510d90d31',
+    'd430bb5a-c60e-44b4-89cd-7683e57b85be'
+  );
 ```
 
-**期待結果**: `verified_at IS NOT NULL` かつ `revoked_at IS NULL`
+**期待結果**: 各チャネルについて `verified_at IS NOT NULL` かつ `revoked_at IS NULL`
 
 ### ロールバック
 
 ```sql
 UPDATE approval_workflow_voter_bindings
 SET revoked_at = NOW()
-WHERE org_id = '<TOKYO307_ORG_ID>'
-  AND channel_key = 'telegram:global'
-  AND external_user_id = '<八坂の Telegram ID>';
+WHERE org_id = '92f3617c-33fc-4dac-b9b4-d4f42e8522ac'
+  AND provider = 'telegram'
+  AND member_id = 'db77fa1c-615b-401a-9125-9c52b9adc5a6';
+```
+
+### telegram:global バインディング（オプション）
+
+グローバルフォールバックが有効な場合（テナントチャネルがすべて無効化された場合）に備え、
+`telegram:global` バインディングも追加で作成しておくことを推奨:
+
+```json
+{
+  "tool": "approvalWorkflow.bindVoter",
+  "args": {
+    "memberId": "db77fa1c-615b-401a-9125-9c52b9adc5a6",
+    "provider": "telegram",
+    "channelKey": "telegram:global",
+    "externalUserId": "<八坂の Telegram User ID>"
+  }
+}
 ```
 
 ---
@@ -360,17 +410,43 @@ APPROVAL_RECIPIENT_ROUTING=false
 | 2 | Interactivity URL | なし (Telegram に影響なし) | - |
 | 3 | SLACK_APPROVAL_STRICT | なし (Telegram に影響なし) | - |
 | 4 | ADMIN_APPROVER_POLICY_REQUIRED | **なし** (org owner はデフォルト許可) | - |
-| 5 | admin_approver_enforcement | **条件付き** | **ステップ1を先に完了** |
+| 5 | admin_approver_enforcement | **条件付き** | **ステップ1を先に完了（テナントチャネル用）** |
 | 6 | APPROVAL_RECIPIENT_ROUTING | なし (admin class は DM 対象外) | - |
 
-### 重要
+### 重要: テナントチャネルと channelKey の関係
 
-**ステップ5 (admin_approver_enforcement) を有効にする前に、必ずステップ1 (八坂のバインディング) を完了させること。**
+**TOKYO307 にはテナント Telegram チャネルが存在します。**
+
+`lib/notify/telegram-channel-webhook.ts` では、投票時に `channelKey: channel.id` で `getMemberIdFromVoterBinding()` を呼びます:
+
+```typescript
+const memberId = await getMemberIdFromVoterBinding(channel.orgId, {
+  provider: "telegram",
+  channelKey: channel.id,  // テナントチャネルの UUID
+  userId: String(query.from!.id),
+});
+```
+
+つまり、`telegram:global` バインディングだけでは**テナントチャネル経由の投票にマッチしません**。
+
+### ステップ1 の前提条件
+
+**ステップ5 (admin_approver_enforcement) を有効にする前に、必ずステップ1（テナントチャネル用のバインディング）を完了させること。**
 
 バインディングがないと:
 - `getMemberIdFromVoterBinding()` が `null` を返す
 - DB トリガー `guard_admin_approval_resolution_tg` が resolver を拒否
 - 八坂が管理系チケットを承認できなくなる
+
+### バインディングが必要なチャネル
+
+TOKYO307 の場合、以下のバインディングが必要です（少なくとも通知が配信されるチャネル分）:
+
+| チャネル名 | channelKey (UUID) |
+|-----------|------------------|
+| 承認用Telegram | `98eb7dd7-f401-4291-a9de-64b510d90d31` |
+| 依頼者 | `d430bb5a-c60e-44b4-89cd-7683e57b85be` |
+| (オプション) グローバルフォールバック | `telegram:global` |
 
 ---
 

@@ -46,6 +46,7 @@ export interface SendTelegramVerificationInput {
   memberDisplayName: string;
   orgName: string;
   verificationCode: string;
+  channelKey?: string;
 }
 
 export interface TelegramVerificationResult {
@@ -62,10 +63,12 @@ export async function sendVerificationToTelegramUser(
     return { ok: false, error: "missing_credentials" };
   }
 
+  const channelKey = input.channelKey || TELEGRAM_GLOBAL_CHANNEL_KEY;
   const callbackValue = buildTelegramVerificationCallbackValue({
     orgId: input.orgId,
     telegramUserId: input.telegramUserId,
     verificationCode: input.verificationCode,
+    channelKey,
   });
 
   const text = `*Staffpass 承認者登録の確認*\n\n` +
@@ -122,6 +125,113 @@ export async function sendVerificationToTelegramUser(
   }
 }
 
+export interface SendTelegramVerificationViaChannelInput {
+  telegramUserId: string;
+  orgId: string;
+  memberId: string;
+  memberDisplayName: string;
+  orgName: string;
+  verificationCode: string;
+  channelId: string;
+  botToken: string;
+}
+
+export interface TelegramVerificationViaChannelResult {
+  ok: boolean;
+  messageId?: number;
+  error?: string;
+  nextStepJa?: string;
+}
+
+/**
+ * Send verification DM via a tenant channel's bot token.
+ * Used when binding a voter to a tenant-specific Telegram channel.
+ *
+ * Note: This only works if the user has already started a conversation
+ * with the channel's bot. If not, Telegram will reject the send and
+ * we return a clear nextStepJa instructing the user to start the bot.
+ */
+export async function sendVerificationToTelegramUserViaChannel(
+  input: SendTelegramVerificationViaChannelInput
+): Promise<TelegramVerificationViaChannelResult> {
+  const botToken = input.botToken?.trim();
+  if (!botToken || !input.telegramUserId?.trim()) {
+    return { ok: false, error: "missing_credentials" };
+  }
+
+  const callbackValue = buildTelegramVerificationCallbackValue({
+    orgId: input.orgId,
+    telegramUserId: input.telegramUserId,
+    verificationCode: input.verificationCode,
+    channelKey: input.channelId,
+  });
+
+  const text = `*Staffpass 承認者登録の確認*\n\n` +
+    `組織「${escapeTelegramMarkdown(input.orgName)}」で、あなたのアカウントを承認者「${escapeTelegramMarkdown(input.memberDisplayName)}」として登録しようとしています。\n\n` +
+    `このバインディングを承認すると、このチャネルから承認ワークフローでチケットを承認・却下できるようになります。\n\n` +
+    `確認コード: \`${input.verificationCode}\`\n\n` +
+    `_この確認は15分で期限切れになります。心当たりがない場合は「拒否」をクリックしてください。_`;
+
+  const inlineKeyboard = [
+    [
+      { text: "✅ 承認者として登録する", callback_data: `vb:c:${callbackValue}` },
+    ],
+    [
+      { text: "❌ 拒否する", callback_data: `vb:r:${callbackValue}` },
+    ],
+  ];
+
+  const url = `${TELEGRAM_API}/bot${botToken}/sendMessage`;
+
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        chat_id: input.telegramUserId,
+        text,
+        parse_mode: "Markdown",
+        reply_markup: { inline_keyboard: inlineKeyboard },
+      }),
+      signal: AbortSignal.timeout(TELEGRAM_TIMEOUT_MS),
+    });
+
+    const body = (await response.json().catch(() => ({}))) as {
+      ok?: boolean;
+      result?: { message_id?: number };
+      description?: string;
+      error_code?: number;
+    };
+
+    if (!body.ok) {
+      console.error("telegram_verification_via_channel_dm_failed", {
+        telegramUserId: input.telegramUserId,
+        channelId: input.channelId,
+        error: body.description,
+        errorCode: body.error_code,
+      });
+
+      if (body.error_code === 403 || (body.description && body.description.includes("bot can't initiate"))) {
+        return {
+          ok: false,
+          error: "bot_blocked_or_not_started",
+          nextStepJa: `このチャネルのBotからDMを送信できません。ユーザー ${input.telegramUserId} がまだBotを開始していない可能性があります。Telegramでこのチャネル用のBotを /start してから再度お試しください。`,
+        };
+      }
+
+      return { ok: false, error: body.description || "send_failed" };
+    }
+
+    return { ok: true, messageId: body.result?.message_id };
+  } catch (error) {
+    console.error("telegram_verification_via_channel_dm_error", error);
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : "network_error",
+    };
+  }
+}
+
 function escapeTelegramMarkdown(value: unknown): string {
   return String(value ?? "")
     .replace(/[_*[\]()~`>#+=|{}.!-]/g, "\\$&");
@@ -131,11 +241,13 @@ function buildTelegramVerificationCallbackValue(input: {
   orgId: string;
   telegramUserId: string;
   verificationCode: string;
+  channelKey: string;
 }): string {
   const payload = JSON.stringify({
     o: input.orgId,
     u: input.telegramUserId,
     v: input.verificationCode,
+    c: input.channelKey,
     t: Date.now(),
   });
   const sig = createHmac("sha256", getCallbackSecret())
@@ -147,7 +259,7 @@ function buildTelegramVerificationCallbackValue(input: {
 
 export function parseTelegramVerificationCallbackValue(
   value: string
-): { ok: true; orgId: string; telegramUserId: string; verificationCode: string } | { ok: false; reason: string } {
+): { ok: true; orgId: string; telegramUserId: string; verificationCode: string; channelKey: string } | { ok: false; reason: string } {
   const parts = value.split(".");
   if (parts.length !== 2) return { ok: false, reason: "invalid_format" };
 
@@ -171,7 +283,7 @@ export function parseTelegramVerificationCallbackValue(
   }
 
   try {
-    const parsed = JSON.parse(payload) as { o?: string; u?: string; v?: string; t?: number };
+    const parsed = JSON.parse(payload) as { o?: string; u?: string; v?: string; c?: string; t?: number };
     if (!parsed.o || !parsed.u || !parsed.v) {
       return { ok: false, reason: "missing_fields" };
     }
@@ -180,6 +292,7 @@ export function parseTelegramVerificationCallbackValue(
       orgId: parsed.o,
       telegramUserId: parsed.u,
       verificationCode: parsed.v,
+      channelKey: parsed.c || TELEGRAM_GLOBAL_CHANNEL_KEY,
     };
   } catch {
     return { ok: false, reason: "parse_failed" };
@@ -229,7 +342,7 @@ export async function handleTelegramVerificationConfirm(input: {
     result = await verifyVoterBinding({
       orgId: parsed.orgId,
       provider: "telegram" as VoterBindingProvider,
-      channelKey: "telegram:global",
+      channelKey: parsed.channelKey,
       externalUserId: parsed.telegramUserId,
       verificationCode: parsed.verificationCode,
     });
