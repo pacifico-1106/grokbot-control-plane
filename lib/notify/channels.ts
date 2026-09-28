@@ -13,6 +13,8 @@ import { isAdminClassApproval } from "@/lib/admin-mcp/audit-class";
 import { buildConcentration, type ConcentrationReport } from "@/lib/employees/concentration";
 import type { ApprovalRequest, Employee, WorkflowProgress } from "@/lib/types";
 import { getApprovalWorkflowProgress } from "@/lib/approval-workflow/resolve";
+import { isInboxRoutingEnabled } from "@/lib/feature-flags";
+import { routeInboxToResponsibleHuman } from "@/lib/notify/inbox-routing";
 /**
  * Org notification channels (Telegram / LINE / Slack).
  * Slack here is the approval *inbox* only. Conversation posting uses
@@ -96,9 +98,35 @@ export async function sendApprovalNotifications(
   approval: ApprovalRequest,
   employee: Employee | null
 ): Promise<NotificationDispatchResult[]> {
-  // Admin-class approvals go to org default inbox, not employee business channel
-  const channel = await resolveApprovalNotificationChannel(approval, employee);
   const results: NotificationDispatchResult[] = [];
+
+  if (isInboxRoutingEnabled()) {
+    const workflow = workflowDisplay(await getApprovalWorkflowProgress(approval.id));
+    const routingResult = await routeInboxToResponsibleHuman({
+      approval,
+      employee,
+      workflow,
+      stageVoterUserIds: workflow ? undefined : undefined,
+    });
+
+    if (!routingResult.fallbackToDefault && routingResult.deliveries.length > 0) {
+      for (const delivery of routingResult.deliveries) {
+        const result: NotificationDispatchResult = {
+          ok: delivery.ok,
+          provider: "slack",
+          channelId: delivery.channel || undefined,
+          error: delivery.error || undefined,
+        };
+        results.push(result);
+        await auditFailure(approval, result);
+      }
+      if (results.some((r) => r.ok)) {
+        return results;
+      }
+    }
+  }
+
+  const channel = await resolveApprovalNotificationChannel(approval, employee);
   if (channel) {
     const workflow = channel.provider === "slack" ? workflowDisplay(await getApprovalWorkflowProgress(approval.id)) : null;
     const sent = channel.provider === "telegram"

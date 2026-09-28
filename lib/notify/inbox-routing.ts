@@ -20,7 +20,6 @@ import { isAdminClassApproval, BUSINESS_AUDIT_CLASS } from "@/lib/admin-mcp/audi
 import { listVoterBindings } from "@/lib/approval-workflow/voter-binding";
 import { getIdentityBinding } from "@/lib/employees/employee-identity";
 import {
-  getEnabledNotificationChannels,
   resolveEmployeeApprovalChannel,
   type NotificationChannelRuntime,
 } from "@/lib/data/notification-channels";
