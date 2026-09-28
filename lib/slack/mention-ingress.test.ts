@@ -1,5 +1,5 @@
 import { createHmac } from "node:crypto";
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { bindingPublicView } from "@/lib/bindings";
 import {
   bindEmployeeSlackIdentity,
@@ -41,8 +41,8 @@ const INTERNAL_IM = "DSTAFFPASSINTERNAL";
 const UNKNOWN_IM = "DSTAFFPASSUNKNOWN";
 const HUMAN_DM = "D0BSWG1804F";
 
-const originalFetch = globalThis.fetch;
-const savedSigning = process.env.SLACK_SIGNING_SECRET;
+let savedFetch: typeof globalThis.fetch;
+let savedSigning: string | undefined;
 
 function sign(rawBody: string, timestamp: string, key = SIGNING_SECRET): string {
   return `v0=${createHmac("sha256", key).update(`v0:${timestamp}:${rawBody}`).digest("hex")}`;
@@ -123,8 +123,13 @@ async function configureInternalIm(employeeId: string, channel = INTERNAL_IM) {
   });
 }
 
+beforeEach(() => {
+  savedFetch = globalThis.fetch;
+  savedSigning = process.env.SLACK_SIGNING_SECRET;
+});
+
 afterEach(() => {
-  globalThis.fetch = originalFetch;
+  globalThis.fetch = savedFetch;
   setSlackMentionClaimInsertForTests(null);
   if (savedSigning === undefined) delete process.env.SLACK_SIGNING_SECRET;
   else process.env.SLACK_SIGNING_SECRET = savedSigning;
@@ -1714,7 +1719,11 @@ describe("Ingress handoff policy evaluation", () => {
 describe("G7 Cross-team wake routing (Option A: cross_team_wake_bindings)", () => {
   const CONNECT_HOST_TEAM = "T_CONNECT_HOST";
   const CONNECT_GUEST_USER = "W_CONNECT_GUEST";
-  const savedConnectFlag = process.env.G7_CONNECT_WAKE_ROUTING;
+  let savedConnectFlag: string | undefined;
+
+  beforeEach(() => {
+    savedConnectFlag = process.env.G7_CONNECT_WAKE_ROUTING;
+  });
 
   afterEach(async () => {
     if (savedConnectFlag === undefined) delete process.env.G7_CONNECT_WAKE_ROUTING;
@@ -1926,20 +1935,24 @@ describe("G7 Cross-team wake routing (Option A: cross_team_wake_bindings)", () =
  * @see docs/p0-user-mention-ingress-design-20260919.md
  */
 describe("P0 User-token channel mention ingress (Path C)", () => {
-  const savedFlag = process.env.P0_USER_CHANNEL_MENTION_INGRESS;
+  let savedPathCFlag: string | undefined;
   const USER_CHANNEL = "C_USER_CHANNEL";
   const SUBSCRIBER_USER = "U_SUBSCRIBER";
   const SUBSCRIBER_TEAM = "T_SUBSCRIBER";
   const OTHER_SPEAKER = "U_OTHER_SPEAKER";
   const OTHER_TEAM = "T_OTHER";
 
+  beforeEach(() => {
+    savedPathCFlag = process.env.P0_USER_CHANNEL_MENTION_INGRESS;
+  });
+
   afterEach(() => {
-    globalThis.fetch = originalFetch;
+    globalThis.fetch = savedFetch;
     setSlackMentionClaimInsertForTests(null);
     if (savedSigning === undefined) delete process.env.SLACK_SIGNING_SECRET;
     else process.env.SLACK_SIGNING_SECRET = savedSigning;
-    if (savedFlag === undefined) delete process.env.P0_USER_CHANNEL_MENTION_INGRESS;
-    else process.env.P0_USER_CHANNEL_MENTION_INGRESS = savedFlag;
+    if (savedPathCFlag === undefined) delete process.env.P0_USER_CHANNEL_MENTION_INGRESS;
+    else process.env.P0_USER_CHANNEL_MENTION_INGRESS = savedPathCFlag;
   });
 
   test("flag OFF: user-token channel event is skipped silently", async () => {

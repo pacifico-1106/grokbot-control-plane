@@ -15,8 +15,9 @@ import type { ResolvedAdminCredential } from "@/lib/auth/admin-credential";
 
 const TEST_TOKEN = "xoxb-test-admin-mcp-slack-adapter-secret";
 const ENCRYPTION_KEY = "test-key-that-is-at-least-32-characters-long";
-const originalFetch = globalThis.fetch;
-const originalKey = process.env.NOTIFICATION_CONFIG_ENCRYPTION_KEY;
+
+let savedFetch: typeof globalThis.fetch;
+let savedEncryptionKey: string | undefined;
 
 function demoCred(): ResolvedAdminCredential {
   const agent = resetDemoAdminAgent({
@@ -40,6 +41,8 @@ function jsonHasNoToken(value: unknown, token: string): boolean {
 }
 
 beforeEach(() => {
+  savedFetch = globalThis.fetch;
+  savedEncryptionKey = process.env.NOTIFICATION_CONFIG_ENCRYPTION_KEY;
   globalThis.fetch = (async (url) => {
     if (String(url) !== "https://slack.com/api/auth.test") throw new Error("unexpected_fixture_endpoint");
     return Response.json({ ok: true, team_id: "TFIXTURE", user_id: "UFIXTURE" });
@@ -48,9 +51,9 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
-  globalThis.fetch = originalFetch;
-  if (originalKey === undefined) delete process.env.NOTIFICATION_CONFIG_ENCRYPTION_KEY;
-  else process.env.NOTIFICATION_CONFIG_ENCRYPTION_KEY = originalKey;
+  globalThis.fetch = savedFetch;
+  if (savedEncryptionKey === undefined) delete process.env.NOTIFICATION_CONFIG_ENCRYPTION_KEY;
+  else process.env.NOTIFICATION_CONFIG_ENCRYPTION_KEY = savedEncryptionKey;
   await upsertConversationAdapter({
     orgId: DEMO_ORG.id,
     surface: "slack",
