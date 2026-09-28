@@ -8,6 +8,7 @@ import {
 import {
   createApproval,
   getApprovalById,
+  listAuditEvents,
   resolveApproval,
 } from "@/lib/data";
 import { upsertConversationAdapter } from "@/lib/data/conversation-adapters";
@@ -393,6 +394,139 @@ describe("approval invoke snapshot + fulfill", () => {
     const stored = await getApprovalById(approvalId, DEMO_ORG.id);
     expect(stored?.status).toBe("approved");
     expect(parseFulfillment(stored?.metadata)?.error).toBe("slack_not_in_channel");
+  });
+
+  test("successful Slack post writes slack.posted audit event with metadata", async () => {
+    const { queued, jobId } = await queueMentionReply();
+    const approvalId = String(queued.body.approvalId || "");
+    await upsertConversationAdapter({
+      orgId: DEMO_ORG.id,
+      surface: "slack",
+      enabled: true,
+      secrets: { botToken: "xoxb-fulfill-test" },
+    });
+    const slack = mockSlackPost("1788000000.000001");
+    const approved = await resolveApproval(
+      approvalId,
+      "approved",
+      "ando@example.com",
+      DEMO_ORG.id
+    );
+    await fulfillApprovedInvoke(approved!);
+    expect(slack.count()).toBe(1);
+
+    const audits = await listAuditEvents(DEMO_ORG.id, 20);
+    const postedAudit = audits.find(
+      (event) =>
+        event.action === "slack.posted" &&
+        (event.metadata as Record<string, unknown>)?.approvalId === approvalId
+    );
+    expect(postedAudit).toBeTruthy();
+    expect(postedAudit?.metadata).toMatchObject({
+      tool: "comm.reply",
+      jobId,
+      approvalId,
+      channel: "C_INTERNAL",
+      thread_ts: THREAD_TS,
+      ts: "1788000000.000001",
+      destKind: "channel_thread",
+      phase: "approval.fulfill",
+    });
+  });
+
+  test("slack.posted audit records destKind=channel when no thread_ts", async () => {
+    const jobId = `job_channel_audit_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    const queued = await runGatewayInvoke({
+      employeeId: "emp_comm",
+      credentialId: "cred_comm",
+      body: {
+        tool: "comm.send",
+        purpose: "comm.internal",
+        jobId,
+        conversation: {
+          surface: "slack",
+          orgId: DEMO_ORG.id,
+          slackChannelId: "C_INTERNAL",
+        } as GatewayInvokeRequest["conversation"],
+        informationClass: "confidential",
+        args: {
+          slackChannelId: "C_INTERNAL",
+          text: "チャネルルートへの投稿",
+        },
+      },
+    });
+    expect(queued.httpStatus).toBe(402);
+    const approvalId = String(queued.body.approvalId || "");
+    await upsertConversationAdapter({
+      orgId: DEMO_ORG.id,
+      surface: "slack",
+      enabled: true,
+      secrets: { botToken: "xoxb-fulfill-channel" },
+    });
+    globalThis.fetch = (async (input, init) => {
+      if (String(input).includes("chat.postMessage")) {
+        return Response.json({
+          ok: true,
+          channel: "C_INTERNAL",
+          ts: "1788000001.000002",
+        });
+      }
+      return Response.json({ ok: false, error: "unexpected_fetch" });
+    }) as typeof fetch;
+    const approved = await resolveApproval(
+      approvalId,
+      "approved",
+      "ando@example.com",
+      DEMO_ORG.id
+    );
+    await fulfillApprovedInvoke(approved!);
+
+    const audits = await listAuditEvents(DEMO_ORG.id, 20);
+    const postedAudit = audits.find(
+      (event) =>
+        event.action === "slack.posted" &&
+        (event.metadata as Record<string, unknown>)?.approvalId === approvalId
+    );
+    expect(postedAudit).toBeTruthy();
+    expect((postedAudit?.metadata as Record<string, unknown>)?.destKind).toBe("channel");
+  });
+
+  test("failed Slack post audit event includes tool and jobId", async () => {
+    const { queued, jobId } = await queueMentionReply();
+    const approvalId = String(queued.body.approvalId || "");
+    await upsertConversationAdapter({
+      orgId: DEMO_ORG.id,
+      surface: "slack",
+      enabled: true,
+      secrets: { botToken: "xoxb-fulfill-fail" },
+    });
+    globalThis.fetch = (async (input) => {
+      if (String(input).includes("chat.postMessage")) {
+        return Response.json({ ok: false, error: "channel_not_found" });
+      }
+      return Response.json({ ok: false, error: "unexpected_fetch" });
+    }) as typeof fetch;
+    const approved = await resolveApproval(
+      approvalId,
+      "approved",
+      "ando@example.com",
+      DEMO_ORG.id
+    );
+    await fulfillApprovedInvoke(approved!);
+
+    const audits = await listAuditEvents(DEMO_ORG.id, 20);
+    const failedAudit = audits.find(
+      (event) =>
+        event.action === "slack.post_failed" &&
+        (event.metadata as Record<string, unknown>)?.approvalId === approvalId
+    );
+    expect(failedAudit).toBeTruthy();
+    expect(failedAudit?.metadata).toMatchObject({
+      tool: "comm.reply",
+      jobId,
+      approvalId,
+      phase: "approval.fulfill",
+    });
   });
 });
 

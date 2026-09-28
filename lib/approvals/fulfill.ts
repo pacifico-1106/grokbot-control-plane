@@ -678,6 +678,28 @@ async function fulfillApprovedInvokeCore(
         posted.error || "slack_post_failed",
         dest
       ).catch(() => undefined);
+    } else if (posted.delivery === "slack") {
+      const destKind: "dm" | "channel_thread" | "channel" =
+        dest.startsWith("D") ? "dm" :
+        threadResult.threadTs ? "channel_thread" : "channel";
+      await appendAuditEvent({
+        orgId: approval.orgId,
+        employeeId: approval.employeeId,
+        credentialId: approval.credentialId,
+        action: "slack.posted",
+        purpose: approval.purpose,
+        summary: "承認済み会話投稿を実行",
+        metadata: {
+          tool: snapshot.tool,
+          jobId: snapshot.jobId,
+          approvalId: approval.id,
+          channel: posted.channel,
+          thread_ts: threadResult.threadTs,
+          ts: posted.ts,
+          destKind,
+          phase: "approval.fulfill",
+        },
+      }).catch(() => undefined);
     }
     return fulfillment;
   } catch (error) {
@@ -699,6 +721,8 @@ async function fulfillApprovedInvokeCore(
         summary: "承認直後の会話投稿に失敗",
         metadata: {
           approvalId: approval.id,
+          tool: approval.tool,
+          jobId: approval.jobId,
           error: message,
           phase: "approval.fulfill",
         },
