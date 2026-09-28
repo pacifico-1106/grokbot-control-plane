@@ -24,8 +24,6 @@ import {
   buildCardDetectionErrorResponse,
   type SecretDetectionResult,
 } from "@/lib/security/secret-detector";
-import { isCardSetupApproval } from "./queue-card-setup";
-import { isPortalLinkApproval } from "./queue-portal-link";
 
 describe("P1 External Contract Card Registration", () => {
   describe("Feature Flag", () => {
@@ -377,18 +375,20 @@ describe("P1 External Contract Card Registration", () => {
       }
     });
 
-    test("processCardSetupWebhook returns ignored when flag ON but Stripe not configured", async () => {
+    test("processCardSetupWebhook returns missing_signature when no signature", async () => {
       const originalFlag = process.env[EXTERNAL_CONTRACT_CARD_SETUP_FLAG];
+      const originalSecret = process.env.STRIPE_WEBHOOK_SECRET;
+      const originalStripeKey = process.env.STRIPE_SECRET_KEY;
       process.env[EXTERNAL_CONTRACT_CARD_SETUP_FLAG] = "1";
+      process.env.STRIPE_WEBHOOK_SECRET = "whsec_test_secret_for_signature_check";
+      process.env.STRIPE_SECRET_KEY = "sk_test_fake_key_for_signature_check";
 
       const { processCardSetupWebhook } = await import("./webhook-handler");
       const result = await processCardSetupWebhook("{}", null);
 
-      // When flag is ON but STRIPE_SECRET_KEY is not configured,
-      // handler returns processed=true with action=ignored (safe fallback)
-      expect(result.processed).toBe(true);
-      if (result.processed) {
-        expect(result.action).toBe("ignored");
+      expect(result.processed).toBe(false);
+      if (!result.processed) {
+        expect(result.reason).toBe("missing_signature");
       }
 
       if (originalFlag !== undefined) {
@@ -396,11 +396,23 @@ describe("P1 External Contract Card Registration", () => {
       } else {
         delete process.env[EXTERNAL_CONTRACT_CARD_SETUP_FLAG];
       }
+      if (originalSecret !== undefined) {
+        process.env.STRIPE_WEBHOOK_SECRET = originalSecret;
+      } else {
+        delete process.env.STRIPE_WEBHOOK_SECRET;
+      }
+      if (originalStripeKey !== undefined) {
+        process.env.STRIPE_SECRET_KEY = originalStripeKey;
+      } else {
+        delete process.env.STRIPE_SECRET_KEY;
+      }
     });
   });
 
   describe("Approval Queue Integration", () => {
-    test("isCardSetupApproval identifies card setup tickets", () => {
+    test("isCardSetupApproval identifies card setup tickets", async () => {
+      const { isCardSetupApproval } = await import("./queue-card-setup");
+
       expect(
         isCardSetupApproval({
           auditClass: "external_contract_card_setup",
@@ -423,7 +435,9 @@ describe("P1 External Contract Card Registration", () => {
       ).toBe(false);
     });
 
-    test("isPortalLinkApproval identifies portal link tickets", () => {
+    test("isPortalLinkApproval identifies portal link tickets", async () => {
+      const { isPortalLinkApproval } = await import("./queue-portal-link");
+
       expect(
         isPortalLinkApproval({
           auditClass: "external_contract_card_portal",

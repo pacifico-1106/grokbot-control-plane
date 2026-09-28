@@ -61,6 +61,10 @@ import {
   validateSlackPostDestination,
 } from "@/lib/gateway/adapters/slack";
 import {
+  validateReplyRecipient,
+  decideReplyDestination,
+} from "@/lib/gateway/reply-recipient-validate";
+import {
   evaluateFileAttachmentEgress,
   uploadSlackFile,
   buildFileUploadAuditPayload,
@@ -1481,6 +1485,52 @@ export async function runGatewayInvoke(
       // Non-Slack surface: use original destination resolution (email, phone, etc.)
       dest = ctx?.slackChannelId || ctx?.slackUserId || "";
     }
+
+    // P0-RP: Enhanced reply recipient validation (fail-closed when flag ON)
+    if (dest && isSlackSurface) {
+      const recipientValidation = await validateReplyRecipient({
+        orgId: orgId || employee.orgId,
+        employee,
+        context: ctx || {},
+        recipientIdentifier: ctx?.slackUserId || dest,
+        recipientKind: "slack_user",
+      });
+      if (recipientValidation.status === "denied" && recipientValidation.failClosed) {
+        await appendAuditEvent({
+          orgId: orgId || employee.orgId,
+          employeeId,
+          credentialId: input.credentialId || employee.credentialId,
+          action: "slack.post_failed",
+          purpose,
+          summary: `返信先が拒否されました（fail-closed）: ${recipientValidation.reason}`,
+          metadata: {
+            tool,
+            jobId,
+            recipientId: dest,
+            audience: recipientValidation.audience,
+            reason: recipientValidation.reason,
+            failClosed: true,
+            replyPolicyEnhanced: true,
+          },
+        });
+        return jsonResult(
+          {
+            ok: false,
+            code: "reply_recipient_denied",
+            error: "reply_recipient_denied",
+            message: recipientValidation.reason,
+            needs_approval: false,
+            egress,
+            employeeId,
+            tool,
+            purpose,
+            jobId,
+          },
+          403
+        );
+      }
+    }
+
     const egressAllowsPost =
       egress?.decision === "allow" ||
       egress?.decision === "summarize" ||

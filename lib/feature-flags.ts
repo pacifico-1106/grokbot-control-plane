@@ -82,3 +82,55 @@ export function isGoogleCalendarReadEnabled(): boolean {
 export function isSlackReactionStampsEnabled(): boolean {
   return parseFlag(process.env.SLACK_REACTION_STAMPS);
 }
+
+/**
+ * P0-ID: Employee identity management tools.
+ *
+ * When ON:
+ * - employeeIdentity.status (read-only) returns identity binding info per org.
+ * - employeeIdentity.upsert and employeeIdentity.bindMailbox (always_human, admin class)
+ *   allow binding employee identity to org members and mailboxes.
+ * - Identity bindings are per-org with validation and audit logging.
+ * - RLS enforced on employee_identity_bindings table.
+ *
+ * When OFF (default):
+ * - employeeIdentity.* tools return feature_disabled error.
+ * - No changes to existing behavior.
+ */
+export function isEmployeeIdentityEnabled(): boolean {
+  return parseFlag(process.env.P0_EMPLOYEE_IDENTITY_ENABLED);
+}
+
+/**
+ * P0-IN: Inbox routing for AI employee inbound requests.
+ *
+ * When ON:
+ * - AI employee's approval-needed items surface to responsible human via Slack DM.
+ * - Uses voter bindings to route to bound business approvers.
+ * - Slack Connect shared channels are never used for approval delivery.
+ * - LINE adapter seam is present but not enabled until P1.
+ *
+ * When OFF (default):
+ * - Approvals route to default org inbox (existing behavior).
+ * - No direct DM delivery to approvers.
+ */
+export function isInboxRoutingEnabled(): boolean {
+  return parseFlag(process.env.P0_INBOX_ROUTING_ENABLED);
+}
+
+/**
+ * P0-RP: Enhanced reply policy with recipient validation.
+ *
+ * When ON:
+ * - Reply recipients must be validated against employee's allowed audience.
+ * - Channel/thread/DM choice is policy-driven.
+ * - Fail-closed when destination is unclear (no silent external send).
+ * - reply/send approval class = business (not admin).
+ *
+ * When OFF (default):
+ * - Existing reply policy behavior preserved.
+ * - No recipient validation enforcement.
+ */
+export function isReplyPolicyEnhancedEnabled(): boolean {
+  return parseFlag(process.env.P0_REPLY_POLICY_ENHANCED);
+}

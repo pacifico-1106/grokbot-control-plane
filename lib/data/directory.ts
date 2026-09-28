@@ -323,6 +323,14 @@ export async function upsertOrgParty(input: {
   return mapPartyRow(data as Record<string, unknown>);
 }
 
+export async function getOrgPartyByIdentifier(
+  orgId: string,
+  kind: OrgPartyKind,
+  identifier: string
+): Promise<OrgParty | null> {
+  return getOrgParty(orgId, kind, identifier);
+}
+
 export async function deleteOrgParty(orgId: string, id: string): Promise<boolean> {
   if (!orgId || !id) return false;
   if (isDemoMode()) {

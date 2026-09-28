@@ -83,6 +83,11 @@ import {
 import {
   isPortalLinkApproval,
 } from "@/lib/external-contract-card/queue-portal-link";
+import {
+  upsertIdentityBinding,
+  bindMailbox,
+  getIdentityBinding,
+} from "@/lib/employees/employee-identity";
 import type {
   ActionLimits,
   AllowedAccount,
@@ -1535,6 +1540,121 @@ async function fulfillPortalLinkMint(
   };
 }
 
+async function fulfillEmployeeIdentityUpsert(
+  approval: ApprovalRequest,
+  args: Record<string, unknown>
+): Promise<AdminFulfillment> {
+  const employeeId = String(args.employeeId || "").trim();
+  const responsibleMemberId = String(args.responsibleMemberId || "").trim();
+  const mailboxId = args.mailboxId ? String(args.mailboxId).trim() : null;
+
+  if (!employeeId || !responsibleMemberId) {
+    throw new Error("missing_required_fields");
+  }
+
+  const result = await upsertIdentityBinding({
+    orgId: approval.orgId,
+    employeeId,
+    responsibleMemberId,
+    mailboxId,
+  });
+
+  if (!result.ok) {
+    return {
+      ok: false,
+      tool: "employeeIdentity.upsert",
+      at: new Date().toISOString(),
+      error: result.code,
+    };
+  }
+
+  await appendAuditEvent({
+    orgId: approval.orgId,
+    employeeId,
+    credentialId: null,
+    action: "admin.policy",
+    purpose: "admin.policy",
+    summary: `AI社員アイデンティティバインディングを作成/更新（管理MCP・人承認）`,
+    metadata: {
+      auditClass: ADMIN_AUDIT_CLASS,
+      approvalId: approval.id,
+      employeeId,
+      responsibleMemberId,
+      mailboxId,
+      bindingId: result.binding.id,
+    },
+  });
+
+  return {
+    ok: true,
+    tool: "employeeIdentity.upsert",
+    at: new Date().toISOString(),
+    employeeId,
+    nextStepJa: "アイデンティティバインディングを作成しました。必要に応じて employeeIdentity.bindMailbox でメールボックスをバインドしてください。",
+  };
+}
+
+async function fulfillEmployeeIdentityBindMailbox(
+  approval: ApprovalRequest,
+  args: Record<string, unknown>
+): Promise<AdminFulfillment> {
+  const employeeId = String(args.employeeId || "").trim();
+  const mailboxId = String(args.mailboxId || "").trim();
+
+  if (!employeeId || !mailboxId) {
+    throw new Error("missing_required_fields");
+  }
+
+  const existing = await getIdentityBinding(approval.orgId, employeeId);
+  if (!existing) {
+    return {
+      ok: false,
+      tool: "employeeIdentity.bindMailbox",
+      at: new Date().toISOString(),
+      error: "binding_not_found",
+    };
+  }
+
+  const result = await bindMailbox({
+    orgId: approval.orgId,
+    employeeId,
+    mailboxId,
+  });
+
+  if (!result.ok) {
+    return {
+      ok: false,
+      tool: "employeeIdentity.bindMailbox",
+      at: new Date().toISOString(),
+      error: result.code,
+    };
+  }
+
+  await appendAuditEvent({
+    orgId: approval.orgId,
+    employeeId,
+    credentialId: null,
+    action: "admin.policy",
+    purpose: "admin.policy",
+    summary: `AI社員にメールボックスをバインド（管理MCP・人承認）`,
+    metadata: {
+      auditClass: ADMIN_AUDIT_CLASS,
+      approvalId: approval.id,
+      employeeId,
+      mailboxId,
+      bindingId: result.binding.id,
+    },
+  });
+
+  return {
+    ok: true,
+    tool: "employeeIdentity.bindMailbox",
+    at: new Date().toISOString(),
+    employeeId,
+    nextStepJa: "メールボックスをバインドしました。AI社員の受信箱ルーティングが有効になります。",
+  };
+}
+
 async function fulfillApprovedAdminCore(
   approval: ApprovalRequest
 ): Promise<AdminFulfillment | null> {
@@ -1624,6 +1744,12 @@ async function fulfillApprovedAdminCore(
         break;
       case "cardSetup.mintPortalLink":
         fulfillment = await fulfillPortalLinkMint(approval, args);
+        break;
+      case "employeeIdentity.upsert":
+        fulfillment = await fulfillEmployeeIdentityUpsert(approval, args);
+        break;
+      case "employeeIdentity.bindMailbox":
+        fulfillment = await fulfillEmployeeIdentityBindMailbox(approval, args);
         break;
       default:
         fulfillment = { ok: false, tool, at, error: "unknown_admin_tool" };

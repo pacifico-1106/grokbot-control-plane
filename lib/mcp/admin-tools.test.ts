@@ -79,6 +79,7 @@ describe("admin MCP always_human", () => {
       "approvalWorkflow.get",
       "approvalWorkflow.inspect",
       "approvalWorkflow.listVoterBindings",
+      "employeeIdentity.status",
     ];
     const mutatingTools = ADMIN_MCP_TOOLS.filter((t) => !readOnlyTools.includes(t.name));
     expect(mutatingTools.every((t) => t.description.includes("always_human"))).toBe(true);

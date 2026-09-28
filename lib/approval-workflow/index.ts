@@ -43,6 +43,7 @@ export {
   initializeWorkflowForApproval,
   handleWorkflowVote,
   getApprovalWorkflowProgress,
+  getCurrentStageVoterUserIds,
   isWorkflowApprovalComplete,
   type WorkflowVoteResult,
   type WorkflowInitResult,

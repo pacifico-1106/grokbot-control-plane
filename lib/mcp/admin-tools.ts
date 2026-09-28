@@ -78,6 +78,10 @@ import {
   nextStepApprovalWorkflowJa,
   type ApprovalWorkflowPolicySource,
 } from "@/lib/approval-workflow";
+import {
+  getIdentityBindingStatus,
+  checkFeatureEnabled as checkEmployeeIdentityFeatureEnabled,
+} from "@/lib/employees/employee-identity";
 import { assertPlatformOpsFromAdminCred } from "@/lib/admin/platform-ops-gate";
 import {
   proxyResolveApproval,
@@ -1081,6 +1085,49 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
       additionalProperties: false,
     },
   },
+  {
+    name: "employeeIdentity.status",
+    description:
+      "Check the status of employee identity bindings for this org (read-only, no approval). Returns binding counts and setup guidance. Feature flag P0_EMPLOYEE_IDENTITY_ENABLED must be ON.",
+    inputSchema: {
+      type: "object",
+      properties: {},
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "employeeIdentity.upsert",
+    description:
+      "Create or update an employee identity binding (always_human, approvalClass admin). Maps an AI employee to a responsible human member within the org. Cross-org binding prohibited. Feature flag P0_EMPLOYEE_IDENTITY_ENABLED must be ON.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        employeeId: { type: "string", description: "AI employee UUID to bind" },
+        responsibleMemberId: { type: "string", description: "Org member UUID who is responsible for this employee" },
+        mailboxId: { type: "string", description: "Optional mailbox ID (use bindMailbox for secure mailbox binding)" },
+        jobId: { type: "string" },
+        approvalId: { type: "string", description: "Re-invoke with approved ticket ID" },
+      },
+      required: ["employeeId", "responsibleMemberId"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "employeeIdentity.bindMailbox",
+    description:
+      "Bind a mailbox to an existing employee identity (always_human, approvalClass admin). Requires prior employeeIdentity.upsert. Used for inbox access delegation. Feature flag P0_EMPLOYEE_IDENTITY_ENABLED must be ON.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        employeeId: { type: "string", description: "AI employee UUID with existing identity binding" },
+        mailboxId: { type: "string", description: "Mailbox ID to bind (e.g., AgentMail inbox ID)" },
+        jobId: { type: "string" },
+        approvalId: { type: "string", description: "Re-invoke with approved ticket ID" },
+      },
+      required: ["employeeId", "mailboxId"],
+      additionalProperties: false,
+    },
+  },
 ];
 
 /**
@@ -1113,6 +1160,7 @@ const ADMIN_READ_ONLY_TOOLS_SET = new Set<string>([
   "orgs.status",
   "orgs.patch",
   "approvals.proxyResolve",
+  "employeeIdentity.status",
 ]);
 
 /**
@@ -2467,6 +2515,75 @@ export async function callAdminMcpTool(
     });
   }
 
+  if (name === "employeeIdentity.status") {
+    const featureCheck = checkEmployeeIdentityFeatureEnabled();
+    if (featureCheck) {
+      return toolResult({ ok: false, code: featureCheck.code, message: featureCheck.messageJa }, true);
+    }
+    const status = await getIdentityBindingStatus(cred.orgId);
+    return toolResult({
+      ok: true,
+      ...status,
+      nextTool: status.activeBindings === 0 ? "employeeIdentity.upsert" : null,
+    });
+  }
+
+  if (name === "employeeIdentity.upsert") {
+    const featureCheck = checkEmployeeIdentityFeatureEnabled();
+    if (featureCheck) {
+      return toolResult({ ok: false, code: featureCheck.code, message: featureCheck.messageJa }, true);
+    }
+    const employeeId = String(args.employeeId || "").trim();
+    const responsibleMemberId = String(args.responsibleMemberId || "").trim();
+    if (!employeeId) {
+      return toolResult(
+        { ok: false, code: "employee_id_required", message: "employeeId が必要です" },
+        true
+      );
+    }
+    if (!responsibleMemberId) {
+      return toolResult(
+        { ok: false, code: "responsible_member_id_required", message: "responsibleMemberId が必要です" },
+        true
+      );
+    }
+    const employee = await getEmployee(employeeId, cred.orgId);
+    if (!employee) {
+      return toolResult(
+        { ok: false, code: "employee_not_found", message: "AI社員が見つかりません" },
+        true
+      );
+    }
+  }
+
+  if (name === "employeeIdentity.bindMailbox") {
+    const featureCheck = checkEmployeeIdentityFeatureEnabled();
+    if (featureCheck) {
+      return toolResult({ ok: false, code: featureCheck.code, message: featureCheck.messageJa }, true);
+    }
+    const employeeId = String(args.employeeId || "").trim();
+    const mailboxId = String(args.mailboxId || "").trim();
+    if (!employeeId) {
+      return toolResult(
+        { ok: false, code: "employee_id_required", message: "employeeId が必要です" },
+        true
+      );
+    }
+    if (!mailboxId) {
+      return toolResult(
+        { ok: false, code: "mailbox_id_required", message: "mailboxId が必要です" },
+        true
+      );
+    }
+    const employee = await getEmployee(employeeId, cred.orgId);
+    if (!employee) {
+      return toolResult(
+        { ok: false, code: "employee_not_found", message: "AI社員が見つかりません" },
+        true
+      );
+    }
+  }
+
   if (name === "replyPolicy.patch") {
     const employeeId = typeof args.employeeId === "string" && args.employeeId.trim()
       ? args.employeeId.trim()
@@ -2899,6 +3016,26 @@ export async function callAdminMcpTool(
       platformActorOrgId: gate.actor.orgId,
     };
     summary = `テナント作成を人が確認します（${parsed.value.orgName} · ${parsed.value.ownerEmail}）`;
+  } else if (name === "employeeIdentity.upsert") {
+    const employeeId = String(args.employeeId || "").trim();
+    const responsibleMemberId = String(args.responsibleMemberId || "").trim();
+    const mailboxId = args.mailboxId ? String(args.mailboxId).trim() : null;
+    queuedArgs = {
+      employeeId,
+      responsibleMemberId,
+      mailboxId,
+      jobId: args.jobId,
+    };
+    summary = `AI社員 ${employeeId.slice(0, 8)}… を責任者 ${responsibleMemberId.slice(0, 8)}… へバインドすることを人が確認します`;
+  } else if (name === "employeeIdentity.bindMailbox") {
+    const employeeId = String(args.employeeId || "").trim();
+    const mailboxId = String(args.mailboxId || "").trim();
+    queuedArgs = {
+      employeeId,
+      mailboxId,
+      jobId: args.jobId,
+    };
+    summary = `AI社員 ${employeeId.slice(0, 8)}… にメールボックス ${mailboxId.slice(0, 8)}… をバインドすることを人が確認します`;
   } else if (name === "orgs.issueAdminCredential") {
     const parsed = validateOrgIssueAdminCredentialInput(args);
     if (!parsed.ok) {
