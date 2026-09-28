@@ -66,7 +66,11 @@ import {
   type VoterBindingProvider,
 } from "@/lib/approval-workflow/voter-binding";
 import { sendVerificationDmToSlackUser } from "@/lib/approval-workflow/voter-binding-verification";
-import { sendVerificationToTelegramUser } from "@/lib/approval-workflow/telegram-binding-verification";
+import {
+  sendVerificationToTelegramUser,
+  sendVerificationToTelegramUserViaChannel,
+  sendVerificationToTelegramGroup,
+} from "@/lib/approval-workflow/telegram-binding-verification";
 import { getNotificationChannelSecretsById } from "@/lib/data/notification-channels";
 import type { PlatformOpsActor } from "@/lib/admin/platform-ops-gate";
 import {
@@ -781,11 +785,58 @@ async function fulfillVoterBind(
       memberDisplayName: memberName,
       orgName: org.name,
       verificationCode: bindResult.verificationCode,
+      channelKey,
     });
     if (telegramResult.ok) {
       nextStepJa = "Telegram DMで送信された確認ボタンをクリックして、バインディングを有効化してください。";
     } else {
       nextStepJa = `Telegram DMの送信に失敗しました（${telegramResult.error}）。Telegram Bot が正しく設定されているか確認してください。`;
+    }
+  } else if (provider === "telegram") {
+    const channelSecrets = await getNotificationChannelSecretsById(approval.orgId, channelKey);
+    const channels = await listNotificationChannels(approval.orgId);
+    const channel = channels.find((ch) => ch.id === channelKey && ch.provider === "telegram");
+    const chatId = String(channel?.config?.chatId || "").trim();
+    const isGroupChat = chatId.startsWith("-");
+
+    if (channelSecrets.botToken) {
+      const telegramResult = await sendVerificationToTelegramUserViaChannel({
+        telegramUserId: externalUserId,
+        orgId: approval.orgId,
+        memberId,
+        memberDisplayName: memberName,
+        orgName: org.name,
+        verificationCode: bindResult.verificationCode,
+        channelId: channelKey,
+        botToken: channelSecrets.botToken,
+      });
+
+      if (telegramResult.ok) {
+        nextStepJa = "Telegram DMで送信された確認ボタンをクリックして、バインディングを有効化してください。";
+      } else if (telegramResult.error === "bot_blocked_or_not_started" && isGroupChat && chatId) {
+        const groupResult = await sendVerificationToTelegramGroup({
+          telegramUserId: externalUserId,
+          orgId: approval.orgId,
+          memberId,
+          memberDisplayName: memberName,
+          orgName: org.name,
+          verificationCode: bindResult.verificationCode,
+          channelId: channelKey,
+          botToken: channelSecrets.botToken,
+          groupChatId: chatId,
+        });
+        if (groupResult.ok) {
+          nextStepJa = "グループチャットに確認ボタンを送信しました。本人のみがクリックできます。グループ内のボタンをクリックしてバインディングを有効化してください。";
+        } else {
+          nextStepJa = `グループチャットへの送信も失敗しました（${groupResult.error}）。チャネルのBot設定を確認してください。`;
+        }
+      } else if (telegramResult.nextStepJa) {
+        nextStepJa = telegramResult.nextStepJa;
+      } else {
+        nextStepJa = `Telegram DMの送信に失敗しました（${telegramResult.error}）。チャネルのBot設定を確認し、ユーザーがBotを開始しているか確認してください。`;
+      }
+    } else {
+      nextStepJa = `Telegramチャネル ${channelKey} のBot Tokenが設定されていません。通知チャネルの設定を確認してください。`;
     }
   }
 
