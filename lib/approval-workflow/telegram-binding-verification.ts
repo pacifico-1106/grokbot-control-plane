@@ -237,7 +237,7 @@ function escapeTelegramMarkdown(value: unknown): string {
     .replace(/[_*[\]()~`>#+=|{}.!-]/g, "\\$&");
 }
 
-function buildTelegramVerificationCallbackValue(input: {
+export function buildTelegramVerificationCallbackValue(input: {
   orgId: string;
   telegramUserId: string;
   verificationCode: string;
@@ -442,8 +442,8 @@ export async function sendVerificationToTelegramGroup(
   });
 
   const text = `*Staffpass 承認者登録の確認*\n\n` +
-    `@${escapeTelegramMarkdown(input.telegramUserId)} さん、組織「${escapeTelegramMarkdown(input.orgName)}」で承認者「${escapeTelegramMarkdown(input.memberDisplayName)}」として登録しようとしています。\n\n` +
-    `下のボタンは *本人のみ* が押せます（他の人が押しても無効です）。\n\n` +
+    `組織「${escapeTelegramMarkdown(input.orgName)}」で承認者「${escapeTelegramMarkdown(input.memberDisplayName)}」として登録しようとしています。\n\n` +
+    `下のボタンは *承認者本人のみ* が押せます（他の人が押しても無効です）。\n\n` +
     `確認コード: \`${input.verificationCode}\`\n\n` +
     `_この確認は15分で期限切れになります。_`;
 

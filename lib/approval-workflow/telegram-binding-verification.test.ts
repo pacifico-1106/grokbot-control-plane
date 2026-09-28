@@ -63,6 +63,7 @@ const {
   parseTelegramVerificationCallbackValue,
   handleTelegramVerificationConfirm,
   handleTelegramVerificationReject,
+  buildTelegramVerificationCallbackValue,
 } = await import("./telegram-binding-verification");
 
 describe("telegram:global channel key", () => {
@@ -382,5 +383,104 @@ describe("telegram tenant channel verification", () => {
   test("parseTelegramVerificationCallbackValue returns channelKey from payload", () => {
     const result = parseTelegramVerificationCallbackValue("invalid");
     expect(result.ok).toBe(false);
+  });
+});
+
+describe("group verification button press by another member", () => {
+  const ANOTHER_USER_ID = "99999999";
+
+  beforeEach(() => {
+    resetDemoVoterBindings();
+    resetDemoWorkflowData();
+    demoMembers.clear();
+    demoMembers.set(ownerMember.id, ownerMember);
+  });
+
+  test("button press from another group member is rejected with no state change", async () => {
+    const createResult = await createPendingVoterBinding({
+      orgId: DEMO_ORG_ID,
+      provider: "telegram",
+      channelKey: TENANT_CHANNEL_ID,
+      externalUserId: TELEGRAM_USER_ID,
+      memberId: OWNER_MEMBER_ID,
+    });
+
+    expect(createResult.ok).toBe(true);
+    if (!createResult.ok) return;
+
+    const callbackValue = buildTelegramVerificationCallbackValue({
+      orgId: DEMO_ORG_ID,
+      telegramUserId: TELEGRAM_USER_ID,
+      verificationCode: createResult.verificationCode,
+      channelKey: TENANT_CHANNEL_ID,
+    });
+
+    const bindingBefore = await getVoterBinding(
+      DEMO_ORG_ID,
+      "telegram",
+      TENANT_CHANNEL_ID,
+      TELEGRAM_USER_ID
+    );
+    expect(bindingBefore?.status).toBe("pending");
+
+    const result = await handleTelegramVerificationConfirm({
+      callbackValue,
+      presserTelegramUserId: ANOTHER_USER_ID,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toBe("user_mismatch");
+      expect(result.messageJa).toBe("このボタンはあなた宛てではありません。");
+    }
+
+    const bindingAfter = await getVoterBinding(
+      DEMO_ORG_ID,
+      "telegram",
+      TENANT_CHANNEL_ID,
+      TELEGRAM_USER_ID
+    );
+    expect(bindingAfter?.status).toBe("pending");
+    expect(bindingAfter?.verifiedAt).toBeFalsy();
+  });
+
+  test("button press from the correct user activates the binding", async () => {
+    const createResult = await createPendingVoterBinding({
+      orgId: DEMO_ORG_ID,
+      provider: "telegram",
+      channelKey: TENANT_CHANNEL_ID,
+      externalUserId: TELEGRAM_USER_ID,
+      memberId: OWNER_MEMBER_ID,
+    });
+
+    expect(createResult.ok).toBe(true);
+    if (!createResult.ok) return;
+
+    const callbackValue = buildTelegramVerificationCallbackValue({
+      orgId: DEMO_ORG_ID,
+      telegramUserId: TELEGRAM_USER_ID,
+      verificationCode: createResult.verificationCode,
+      channelKey: TENANT_CHANNEL_ID,
+    });
+
+    const result = await handleTelegramVerificationConfirm({
+      callbackValue,
+      presserTelegramUserId: TELEGRAM_USER_ID,
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.binding.status).toBe("active");
+      expect(result.messageJa).toContain("正常に登録");
+    }
+
+    const bindingAfter = await getVoterBinding(
+      DEMO_ORG_ID,
+      "telegram",
+      TENANT_CHANNEL_ID,
+      TELEGRAM_USER_ID
+    );
+    expect(bindingAfter?.status).toBe("active");
+    expect(bindingAfter?.verifiedAt).toBeDefined();
   });
 });
