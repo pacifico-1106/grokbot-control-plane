@@ -76,12 +76,12 @@ TOKYO307 には以下のテナント Telegram チャネルがあります:
     "memberId": "db77fa1c-615b-401a-9125-9c52b9adc5a6",
     "provider": "telegram",
     "channelKey": "98eb7dd7-f401-4291-a9de-64b510d90d31",
-    "externalUserId": "<八坂の Telegram User ID>"
+    "externalUserId": "8446547736"
   }
 }
 ```
 
-2. Admin MCP で以下を実行（**依頼者チャネル**用、必要に応じて）:
+2. Admin MCP で以下を実行（**依頼者チャネル**用、deliveries 0件だが将来用に推奨）:
 
 ```json
 {
@@ -90,16 +90,31 @@ TOKYO307 には以下のテナント Telegram チャネルがあります:
     "memberId": "db77fa1c-615b-401a-9125-9c52b9adc5a6",
     "provider": "telegram",
     "channelKey": "d430bb5a-c60e-44b4-89cd-7683e57b85be",
-    "externalUserId": "<八坂の Telegram User ID>"
+    "externalUserId": "8446547736"
   }
 }
 ```
 
 3. always_human チケットが発行されるので、既存の承認者（またはプラットフォーム運用代行）が承認
 4. 承認後、各チャネルの Bot から八坂の Telegram に確認ボタン付き DM が送信される
-   - **注意**: DM は各チャネル固有の Bot から送信される。ユーザーがその Bot を /start していない場合、送信は失敗する
-   - 失敗した場合は、八坂に該当 Bot を /start してもらい、再度 bindVoter を実行
-5. 八坂が「承認者として登録する」ボタンをクリック
+
+### DM 送信と事前作業について
+
+**承認用Telegram チャネル (98eb7dd7...)** は chatId=-5253257557 の**グループチャット**です。
+
+| シナリオ | 動作 |
+|---------|------|
+| 八坂が Bot と DM 開始済み | Bot から八坂宛に DM で確認ボタンが届く |
+| 八坂が Bot と DM 未開始 | **フォールバック**: グループチャット内に確認ボタンが投稿される（ボタンは八坂本人のみ有効） |
+
+**推奨事前作業（オプション）**:
+- 八坂が承認用Telegram チャネルの Bot を Telegram で `/start` しておく
+- これにより、確認ボタンが DM で届き、グループに投稿されない（プライバシー向上）
+- ただし、未開始でもグループフォールバックにより登録は完了可能
+
+**依頼者チャネル (d430bb5a...)** は chatId=8446547736 で**八坂宛 DM** なので、この問題は発生しない。
+
+5. 八坂が「承認者として登録する」ボタンをクリック（DM またはグループ内）
 
 ### 検証クエリ
 
@@ -140,7 +155,7 @@ WHERE org_id = '92f3617c-33fc-4dac-b9b4-d4f42e8522ac'
     "memberId": "db77fa1c-615b-401a-9125-9c52b9adc5a6",
     "provider": "telegram",
     "channelKey": "telegram:global",
-    "externalUserId": "<八坂の Telegram User ID>"
+    "externalUserId": "8446547736"
   }
 }
 ```
@@ -442,11 +457,13 @@ const memberId = await getMemberIdFromVoterBinding(channel.orgId, {
 
 TOKYO307 の場合、以下のバインディングが必要です（少なくとも通知が配信されるチャネル分）:
 
-| チャネル名 | channelKey (UUID) |
-|-----------|------------------|
-| 承認用Telegram | `98eb7dd7-f401-4291-a9de-64b510d90d31` |
-| 依頼者 | `d430bb5a-c60e-44b4-89cd-7683e57b85be` |
-| (オプション) グローバルフォールバック | `telegram:global` |
+| チャネル名 | channelKey (UUID) | chatId | deliveries | 備考 |
+|-----------|------------------|--------|------------|------|
+| 承認用Telegram | `98eb7dd7-f401-4291-a9de-64b510d90d31` | `-5253257557` | 36件 | **グループチャット** - 管理者承認はここに届く |
+| 依頼者 | `d430bb5a-c60e-44b4-89cd-7683e57b85be` | `8446547736` | 0件 | 八坂宛 DM |
+| (オプション) グローバルフォールバック | `telegram:global` | - | - | テナントチャネルが無効な場合用 |
+
+**八坂の Telegram user ID**: `8446547736`（全チャネルの allowedUserIds がこれ1件のみ）
 
 ---
 
@@ -536,6 +553,15 @@ HAVING COUNT(*) > 1;
 
 **always_human ステップ**:
 - `approvalWorkflow.bindVoter` (組織オーナー承認必須)
+
+### みらい社中: Telegram 承認チャネル
+
+**本番データ (2026-09-28)**:
+- 承認用Telegram チャネル: `6f3a9dff-0625-4b11-b2ce-e3975d23a062`
+- chatId: `8446547736` (DM - 八坂宛)
+- deliveries: 19件、最終 2026-09-21 09:01 UTC
+
+**注意**: このチャネルの chatId は八坂の Telegram user ID と同じであり、DM チャネルとして機能しています。
 
 ### みらい社中: 上原・仲田への Slack (共有チャンネル禁止)
 

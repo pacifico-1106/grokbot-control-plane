@@ -409,6 +409,96 @@ export async function handleTelegramVerificationReject(input: {
   };
 }
 
+export interface SendTelegramVerificationToGroupInput {
+  telegramUserId: string;
+  orgId: string;
+  memberId: string;
+  memberDisplayName: string;
+  orgName: string;
+  verificationCode: string;
+  channelId: string;
+  botToken: string;
+  groupChatId: string;
+}
+
+/**
+ * Send verification message to a GROUP chat with user-restricted buttons.
+ * Used as a fallback when DM sending fails (user hasn't started the bot).
+ * The buttons are restricted to only the target user via callback data validation.
+ */
+export async function sendVerificationToTelegramGroup(
+  input: SendTelegramVerificationToGroupInput
+): Promise<TelegramVerificationViaChannelResult> {
+  const botToken = input.botToken?.trim();
+  if (!botToken || !input.telegramUserId?.trim() || !input.groupChatId?.trim()) {
+    return { ok: false, error: "missing_credentials" };
+  }
+
+  const callbackValue = buildTelegramVerificationCallbackValue({
+    orgId: input.orgId,
+    telegramUserId: input.telegramUserId,
+    verificationCode: input.verificationCode,
+    channelKey: input.channelId,
+  });
+
+  const text = `*Staffpass 承認者登録の確認*\n\n` +
+    `@${escapeTelegramMarkdown(input.telegramUserId)} さん、組織「${escapeTelegramMarkdown(input.orgName)}」で承認者「${escapeTelegramMarkdown(input.memberDisplayName)}」として登録しようとしています。\n\n` +
+    `下のボタンは *本人のみ* が押せます（他の人が押しても無効です）。\n\n` +
+    `確認コード: \`${input.verificationCode}\`\n\n` +
+    `_この確認は15分で期限切れになります。_`;
+
+  const inlineKeyboard = [
+    [
+      { text: "✅ 承認者として登録する", callback_data: `vb:c:${callbackValue}` },
+    ],
+    [
+      { text: "❌ 拒否する", callback_data: `vb:r:${callbackValue}` },
+    ],
+  ];
+
+  const url = `${TELEGRAM_API}/bot${botToken}/sendMessage`;
+
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        chat_id: input.groupChatId,
+        text,
+        parse_mode: "Markdown",
+        reply_markup: { inline_keyboard: inlineKeyboard },
+      }),
+      signal: AbortSignal.timeout(TELEGRAM_TIMEOUT_MS),
+    });
+
+    const body = (await response.json().catch(() => ({}))) as {
+      ok?: boolean;
+      result?: { message_id?: number };
+      description?: string;
+      error_code?: number;
+    };
+
+    if (!body.ok) {
+      console.error("telegram_verification_group_send_failed", {
+        telegramUserId: input.telegramUserId,
+        channelId: input.channelId,
+        groupChatId: input.groupChatId,
+        error: body.description,
+        errorCode: body.error_code,
+      });
+      return { ok: false, error: body.description || "send_failed" };
+    }
+
+    return { ok: true, messageId: body.result?.message_id };
+  } catch (error) {
+    console.error("telegram_verification_group_send_error", error);
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : "network_error",
+    };
+  }
+}
+
 export const TELEGRAM_GLOBAL_CHANNEL_KEY = "telegram:global";
 
 export function isTelegramGlobalChannelKey(channelKey: string): boolean {
