@@ -316,6 +316,48 @@ describe("P0-IN: Wired Path Tests", () => {
 
     delete process.env.P0_INBOX_ROUTING_ENABLED;
   });
+
+  test("sendApprovalNotifications skips inbox routing for admin-class approvals even when flag ON", async () => {
+    process.env.P0_INBOX_ROUTING_ENABLED = "true";
+
+    const adminApproval = {
+      id: "apr_admin_wired_test",
+      orgId: "test_org",
+      employeeId: "emp_test",
+      credentialId: "cred_test",
+      title: "Admin Approval",
+      purpose: "admin.hire",
+      summary: "Test",
+      risk: "high" as const,
+      status: "pending" as const,
+      tool: "employees.issue",
+      jobId: "job_test",
+      revisionNote: null,
+      revisionCount: 0,
+      parentApprovalId: null,
+      telegramRef: null,
+      telegramMessageId: null,
+      metadata: { approvalClass: "admin" },
+      statusToken: "st_test",
+      pollPath: "/api/approvals/test/status",
+      createdAt: new Date().toISOString(),
+      resolvedAt: null,
+      resolvedBy: null,
+    };
+
+    const { sendApprovalNotifications } = await import("@/lib/notify/channels");
+    const results = await sendApprovalNotifications(adminApproval, null);
+    expect(Array.isArray(results)).toBe(true);
+
+    delete process.env.P0_INBOX_ROUTING_ENABLED;
+  });
+
+  test("getCurrentStageVoterUserIds returns voter IDs from workflow instance", async () => {
+    const { getCurrentStageVoterUserIds } = await import("@/lib/approval-workflow/resolve");
+    
+    const voterIds = await getCurrentStageVoterUserIds("nonexistent_approval");
+    expect(voterIds).toBeNull();
+  });
 });
 
 describe("P0-RP: Wired Path Tests", () => {

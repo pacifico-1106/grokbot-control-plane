@@ -12,7 +12,7 @@ import {
 import { isAdminClassApproval } from "@/lib/admin-mcp/audit-class";
 import { buildConcentration, type ConcentrationReport } from "@/lib/employees/concentration";
 import type { ApprovalRequest, Employee, WorkflowProgress } from "@/lib/types";
-import { getApprovalWorkflowProgress } from "@/lib/approval-workflow/resolve";
+import { getApprovalWorkflowProgress, getCurrentStageVoterUserIds } from "@/lib/approval-workflow/resolve";
 import { isInboxRoutingEnabled } from "@/lib/feature-flags";
 import { routeInboxToResponsibleHuman } from "@/lib/notify/inbox-routing";
 /**
@@ -100,13 +100,14 @@ export async function sendApprovalNotifications(
 ): Promise<NotificationDispatchResult[]> {
   const results: NotificationDispatchResult[] = [];
 
-  if (isInboxRoutingEnabled()) {
+  if (isInboxRoutingEnabled() && !isAdminClassApproval(approval)) {
     const workflow = workflowDisplay(await getApprovalWorkflowProgress(approval.id));
+    const stageVoterUserIds = await getCurrentStageVoterUserIds(approval.id);
     const routingResult = await routeInboxToResponsibleHuman({
       approval,
       employee,
       workflow,
-      stageVoterUserIds: workflow ? undefined : undefined,
+      stageVoterUserIds: stageVoterUserIds ?? undefined,
     });
 
     if (!routingResult.fallbackToDefault && routingResult.deliveries.length > 0) {

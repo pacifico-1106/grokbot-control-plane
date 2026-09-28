@@ -504,6 +504,33 @@ export async function getApprovalWorkflowProgress(
   return buildWorkflowProgress(instance, ballots);
 }
 
+/**
+ * Get the voter user IDs for the current stage of the approval workflow.
+ * Returns null if no workflow instance exists.
+ * Returns empty array if the workflow is complete (no current stage).
+ *
+ * Used by P0-IN inbox routing to route notifications only to stage voters.
+ */
+export async function getCurrentStageVoterUserIds(
+  approvalId: string
+): Promise<string[] | null> {
+  const instance = await getWorkflowInstanceByApprovalId(approvalId);
+  if (!instance) return null;
+
+  if (instance.status !== "active") {
+    return [];
+  }
+
+  if (instance.finalGoPending && instance.finalGoUserId) {
+    return [instance.finalGoUserId];
+  }
+
+  const currentStage = instance.policySnapshot.stages[instance.currentStageIndex];
+  if (!currentStage) return [];
+
+  return currentStage.voterUserIds || [];
+}
+
 export async function isWorkflowApprovalComplete(
   approvalId: string
 ): Promise<{ hasWorkflow: boolean; complete: boolean; approved: boolean }> {

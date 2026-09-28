@@ -377,7 +377,11 @@ describe("P1 External Contract Card Registration", () => {
 
     test("processCardSetupWebhook returns missing_signature when no signature", async () => {
       const originalFlag = process.env[EXTERNAL_CONTRACT_CARD_SETUP_FLAG];
+      const originalSecret = process.env.STRIPE_WEBHOOK_SECRET;
+      const originalStripeKey = process.env.STRIPE_SECRET_KEY;
       process.env[EXTERNAL_CONTRACT_CARD_SETUP_FLAG] = "1";
+      process.env.STRIPE_WEBHOOK_SECRET = "whsec_test_secret_for_signature_check";
+      process.env.STRIPE_SECRET_KEY = "sk_test_fake_key_for_signature_check";
 
       const { processCardSetupWebhook } = await import("./webhook-handler");
       const result = await processCardSetupWebhook("{}", null);
@@ -391,6 +395,16 @@ describe("P1 External Contract Card Registration", () => {
         process.env[EXTERNAL_CONTRACT_CARD_SETUP_FLAG] = originalFlag;
       } else {
         delete process.env[EXTERNAL_CONTRACT_CARD_SETUP_FLAG];
+      }
+      if (originalSecret !== undefined) {
+        process.env.STRIPE_WEBHOOK_SECRET = originalSecret;
+      } else {
+        delete process.env.STRIPE_WEBHOOK_SECRET;
+      }
+      if (originalStripeKey !== undefined) {
+        process.env.STRIPE_SECRET_KEY = originalStripeKey;
+      } else {
+        delete process.env.STRIPE_SECRET_KEY;
       }
     });
   });
