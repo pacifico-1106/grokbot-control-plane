@@ -6,6 +6,11 @@
  * - Casts ballot on approval resolve
  * - Advances stages and handles finalGo
  * - Returns whether the full workflow is complete
+ *
+ * P1 Approval Kind Routes Integration:
+ * When P1_APPROVAL_KIND_ROUTES_ENABLED is ON, uses kind-based routing to:
+ * - Determine approvers from kind routes instead of class routes
+ * - Create synthetic workflow policies for the existing ballot system
  */
 
 import type {
@@ -15,6 +20,7 @@ import type {
   WorkflowProgress,
 } from "@/lib/types";
 import { appendAuditEvent } from "@/lib/data/audit";
+import { updateApprovalMetadata } from "@/lib/data/approvals";
 import { isDemoMode } from "@/lib/mode";
 import { createSupabaseAdminClient } from "@/lib/supabase";
 import { mapApprovalRow } from "@/lib/data/mappers";
@@ -44,7 +50,10 @@ import {
   checkAdminPolicyRequirement,
 } from "./admin-policy";
 import { isAdminClassApproval } from "@/lib/admin-mcp/audit-class";
-import { isAdminApproverPolicyRequired } from "@/lib/feature-flags";
+import {
+  isAdminApproverPolicyRequired,
+  isApprovalKindRoutesEnabled,
+} from "@/lib/feature-flags";
 import {
   buildWorkflowProgress,
   canVoterResolve,
@@ -52,6 +61,10 @@ import {
   evaluateStageAdvance,
   shouldCreateWorkflowInstance,
 } from "./engine";
+import {
+  shouldUseKindRouting,
+  buildKindRoutingMetadata,
+} from "@/lib/approval-kind-routes/workflow-bridge";
 
 export interface WorkflowInitResult {
   created: boolean;
@@ -90,6 +103,64 @@ export async function initializeWorkflowForApproval(
 }
 
 async function initializeDemoWorkflow(approval: ApprovalRequest, employeeId: string | null): Promise<WorkflowInitResult> {
+  // P1: Check if kind-based routing should be used (flag ON)
+  if (isApprovalKindRoutesEnabled()) {
+    const kindResult = await shouldUseKindRouting(
+      { tool: approval.tool, orgId: approval.orgId, employeeId: approval.employeeId },
+      undefined // ownerUserId - resolved within shouldUseKindRouting
+    );
+
+    if (kindResult) {
+      const { kind, route, syntheticPolicy } = kindResult;
+
+      const instance = await createWorkflowInstance({
+        approvalId: approval.id,
+        orgId: approval.orgId,
+        policy: syntheticPolicy,
+      });
+
+      if (!instance) {
+        throw new Error("workflow_initialization_failed");
+      }
+
+      // Store kind routing metadata for expiry/reminder tracking
+      const kindRoutingMeta = buildKindRoutingMetadata(kind, route, syntheticPolicy.policyId);
+      await updateApprovalMetadata(approval, { kindRouting: kindRoutingMeta });
+
+      const firstStage = syntheticPolicy.stages[0];
+      const ballots = await createBallotsForStage({
+        instanceId: instance.id,
+        orgId: approval.orgId,
+        stage: firstStage,
+        stageIndex: 0,
+      });
+
+      await appendAuditEvent({
+        orgId: approval.orgId,
+        employeeId: approval.employeeId,
+        credentialId: approval.credentialId,
+        action: "approval.requested",
+        purpose: approval.purpose,
+        summary: `ワークフロー開始 (kind=${kind}): ${syntheticPolicy.policyName}`,
+        metadata: {
+          approvalId: approval.id,
+          instanceId: instance.id,
+          policyId: syntheticPolicy.policyId,
+          kind,
+          routeQuorum: route.quorum,
+          stageName: firstStage.nameJa,
+          voters: firstStage.voterUserIds.length,
+          kindRouting: true,
+          deadlineAt: kindRoutingMeta.deadlineAt,
+        },
+      });
+
+      const progress = buildWorkflowProgress(instance, ballots);
+      return { created: true, instance, ballots, progress };
+    }
+  }
+
+  // Legacy path: use existing class-based routing
   const effective = await getEffectiveApprovalWorkflowPolicy(
     approval.orgId,
     employeeId

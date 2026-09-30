@@ -45,3 +45,19 @@ export {
   type KindApprovalResolution,
   type DecisionTierResolution,
 } from "./engine";
+export {
+  getKindRouteApprovers,
+  buildSyntheticWorkflowPolicy,
+  shouldUseKindRouting,
+  calculateKindRouteExpiry,
+  isKindRouteExpired,
+  isKindRouteExpiredByDeadline,
+  shouldSendKindRouteReminder,
+  buildKindRoutingMetadata,
+  parseKindRoutingMetadata,
+  getKindRouteOnExpire,
+  isKindRoutedApproval,
+  evaluateKindRouteExpiry,
+  evaluateKindRouteReminder,
+  type KindRoutingMetadata,
+} from "./workflow-bridge";
