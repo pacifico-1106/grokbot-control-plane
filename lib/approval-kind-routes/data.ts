@@ -239,12 +239,36 @@ export function migrateClassRoutesToKindRoutes(
 }
 
 /**
+ * Get the existing approval workflow policy (for migration).
+ * This reads from the same source as approval-workflow/data.ts
+ */
+async function getExistingWorkflowPolicy(
+  orgId: string
+): Promise<OrgApprovalWorkflowPolicy | null> {
+  if (isDemoMode()) {
+    return null;
+  }
+
+  const admin = createSupabaseAdminClient();
+  if (!admin) return null;
+
+  const { data, error } = await admin
+    .from("orgs")
+    .select("approval_workflow_policy")
+    .eq("id", orgId)
+    .maybeSingle();
+
+  if (error || !data || !data.approval_workflow_policy) return null;
+  return data.approval_workflow_policy as OrgApprovalWorkflowPolicy;
+}
+
+/**
  * Get effective approval route for a specific kind.
  *
  * Resolution order:
  * 1. Employee override (if present and P1_APPROVAL_KIND_ROUTES_ENABLED)
  * 2. Org kind routes policy (if present and P1_APPROVAL_KIND_ROUTES_ENABLED)
- * 3. Legacy routes[] migration (if P1_APPROVAL_KIND_ROUTES_ENABLED)
+ * 3. Legacy routes[] migration (if P1_APPROVAL_KIND_ROUTES_ENABLED and existing routes[])
  * 4. Default (owner 1名)
  *
  * When P1_APPROVAL_KIND_ROUTES_ENABLED is OFF, always returns default (legacy behavior).
@@ -286,7 +310,7 @@ export async function getEffectiveApprovalKindRoute(
     }
   }
 
-  // Check org policy
+  // Check org kind routes policy (new P1 policy)
   const orgPolicy = await getOrgApprovalKindRoutesPolicy(orgId);
   if (orgPolicy) {
     const orgRoute = orgPolicy.routes.find((r) => r.kind === kind);
@@ -300,7 +324,24 @@ export async function getEffectiveApprovalKindRoute(
     }
   }
 
-  // Return default
+  // Migrate from existing routes[] (class=admin|business) if present
+  const existingWorkflowPolicy = await getExistingWorkflowPolicy(orgId);
+  if (existingWorkflowPolicy?.routes && existingWorkflowPolicy.routes.length > 0) {
+    const migratedPolicy = migrateClassRoutesToKindRoutes(existingWorkflowPolicy, defaultOwner);
+    if (migratedPolicy) {
+      const migratedRoute = migratedPolicy.routes.find((r) => r.kind === kind);
+      if (migratedRoute) {
+        return {
+          route: migratedRoute,
+          source: "org",
+          orgRoute: migratedRoute,
+          employeeOverride: null,
+        };
+      }
+    }
+  }
+
+  // Return default (owner 1名)
   return {
     route: defaultRoute,
     source: "default",
