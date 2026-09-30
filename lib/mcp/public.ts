@@ -16,6 +16,7 @@ export const STAFFPASS_MCP_TOOL_NAMES = [
   "staffpass_health",
   "staffpass_stuck_list",
   "staffpass_stuck_retry",
+  "staffpass_decision_request",
 ] as const;
 
 export type StaffpassMcpToolName = (typeof STAFFPASS_MCP_TOOL_NAMES)[number];
