@@ -59,6 +59,7 @@ export {
 export {
   createPendingVoterBinding,
   verifyVoterBinding,
+  verifyVoterBindingByNonce,
   revokeVoterBinding,
   listVoterBindings,
   getVoterBinding,
@@ -74,6 +75,7 @@ export {
   type VoterBindingStatus,
   type PendingBindingInfo,
   type RegenerateVerificationResult,
+  type VerifyByNonceInput,
 } from "./voter-binding";
 
 export {

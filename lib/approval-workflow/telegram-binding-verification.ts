@@ -15,11 +15,8 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { isDemoMode } from "@/lib/mode";
 import {
-  generateVerificationCode,
-  verifyVoterBinding,
-  getVoterBindingByNonce,
+  verifyVoterBindingByNonce,
   type VoterBinding,
-  type VoterBindingProvider,
 } from "./voter-binding";
 
 const TELEGRAM_API = "https://api.telegram.org";
@@ -315,6 +312,8 @@ export function parseTelegramVerificationCallbackValue(
 export async function handleTelegramVerificationConfirm(input: {
   callbackValue: string;
   presserTelegramUserId: string;
+  expectedChannelKey: string;
+  expectedOrgId: string;
 }): Promise<
   | { ok: true; binding: VoterBinding; messageJa: string }
   | { ok: false; reason: string; messageJa: string }
@@ -349,43 +348,12 @@ export async function handleTelegramVerificationConfirm(input: {
     };
   }
 
-  const bindingInfo = await getVoterBindingByNonce(parsed.nonce);
-  if (!bindingInfo) {
-    return {
-      ok: false,
-      reason: "binding_not_found",
-      messageJa: "バインディングが見つかりません。有効期限が切れている可能性があります。",
-    };
-  }
-
-  if (bindingInfo.externalUserId !== input.presserTelegramUserId) {
-    return {
-      ok: false,
-      reason: "user_mismatch",
-      messageJa: "このボタンはあなた宛てではありません。",
-    };
-  }
-
-  let result: Awaited<ReturnType<typeof verifyVoterBinding>>;
-  try {
-    result = await verifyVoterBinding({
-      orgId: bindingInfo.orgId,
-      provider: bindingInfo.provider,
-      channelKey: bindingInfo.channelKey,
-      externalUserId: bindingInfo.externalUserId,
-      verificationCode: bindingInfo.verificationCode,
-    });
-  } catch (error) {
-    if (error instanceof Error && error.message.includes("VOTER_BINDING_SECRET")) {
-      console.error("voter_binding_secret_not_configured", { error: error.message });
-      return {
-        ok: false,
-        reason: "secret_not_configured",
-        messageJa: "システム設定エラー: 検証シークレットが設定されていません。",
-      };
-    }
-    throw error;
-  }
+  const result = await verifyVoterBindingByNonce({
+    nonce: parsed.nonce,
+    presserExternalUserId: input.presserTelegramUserId,
+    expectedChannelKey: input.expectedChannelKey,
+    expectedOrgId: input.expectedOrgId,
+  });
 
   if (!result.ok) {
     return result;

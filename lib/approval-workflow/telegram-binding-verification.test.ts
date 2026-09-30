@@ -169,11 +169,11 @@ describe("telegram verification confirm handler", () => {
     expect(createResult.ok).toBe(true);
     if (!createResult.ok) return;
 
-    const { sendVerificationToTelegramUser } = await import("./telegram-binding-verification");
-
     const wrongUserResult = await handleTelegramVerificationConfirm({
       callbackValue: "invalid_callback_value",
       presserTelegramUserId: "wrong_user",
+      expectedChannelKey: TELEGRAM_GLOBAL_CHANNEL_KEY,
+      expectedOrgId: DEMO_ORG_ID,
     });
 
     expect(wrongUserResult.ok).toBe(false);
@@ -420,6 +420,8 @@ describe("group verification button press by another member", () => {
     const result = await handleTelegramVerificationConfirm({
       callbackValue,
       presserTelegramUserId: ANOTHER_USER_ID,
+      expectedChannelKey: TENANT_CHANNEL_ID,
+      expectedOrgId: DEMO_ORG_ID,
     });
 
     expect(result.ok).toBe(false);
@@ -458,6 +460,8 @@ describe("group verification button press by another member", () => {
     const result = await handleTelegramVerificationConfirm({
       callbackValue,
       presserTelegramUserId: TELEGRAM_USER_ID,
+      expectedChannelKey: TENANT_CHANNEL_ID,
+      expectedOrgId: DEMO_ORG_ID,
     });
 
     expect(result.ok).toBe(true);

@@ -39,12 +39,14 @@ mock.module("@/lib/demo-data", () => ({
 const {
   createPendingVoterBinding,
   verifyVoterBinding,
+  verifyVoterBindingByNonce,
   revokeVoterBinding,
   listVoterBindings,
   getVoterBinding,
   checkSetupApproverBindingStatus,
   resetDemoVoterBindings,
   generateVerificationCode,
+  generateVerificationNonce,
   hashVerificationCode,
 } = await import("./voter-binding");
 
@@ -656,6 +658,197 @@ describe("team_id enforcement (PR #129 audit fix)", () => {
     expect(verifyResult.ok).toBe(true);
     if (verifyResult.ok) {
       expect(verifyResult.binding.teamId).toBe("T_EXPECTED");
+    }
+  });
+});
+
+describe("verifyVoterBindingByNonce (demo mode)", () => {
+  beforeEach(() => {
+    resetDemoVoterBindings();
+    demoMembers.clear();
+    demoMembers.set(baseMember.id, baseMember);
+  });
+
+  test("verifies binding by nonce successfully", async () => {
+    const createResult = await createPendingVoterBinding({
+      orgId: DEMO_ORG_ID,
+      provider: "telegram",
+      channelKey: "channel-nonce-test",
+      externalUserId: "TG_USER_123",
+      memberId: DEMO_MEMBER_ID,
+    });
+
+    expect(createResult.ok).toBe(true);
+    if (!createResult.ok) return;
+
+    const verifyResult = await verifyVoterBindingByNonce({
+      nonce: createResult.verificationNonce,
+      presserExternalUserId: "TG_USER_123",
+      expectedChannelKey: "channel-nonce-test",
+      expectedOrgId: DEMO_ORG_ID,
+    });
+
+    expect(verifyResult.ok).toBe(true);
+    if (verifyResult.ok) {
+      expect(verifyResult.binding.status).toBe("active");
+      expect(verifyResult.binding.verifiedAt).toBeDefined();
+    }
+  });
+
+  test("rejects wrong presser user ID", async () => {
+    const createResult = await createPendingVoterBinding({
+      orgId: DEMO_ORG_ID,
+      provider: "telegram",
+      channelKey: "channel-nonce-presser",
+      externalUserId: "TG_USER_CORRECT",
+      memberId: DEMO_MEMBER_ID,
+    });
+
+    expect(createResult.ok).toBe(true);
+    if (!createResult.ok) return;
+
+    const verifyResult = await verifyVoterBindingByNonce({
+      nonce: createResult.verificationNonce,
+      presserExternalUserId: "TG_USER_WRONG",
+      expectedChannelKey: "channel-nonce-presser",
+      expectedOrgId: DEMO_ORG_ID,
+    });
+
+    expect(verifyResult.ok).toBe(false);
+    if (!verifyResult.ok) {
+      expect(verifyResult.reason).toBe("user_mismatch");
+    }
+  });
+
+  test("rejects wrong channel key", async () => {
+    const createResult = await createPendingVoterBinding({
+      orgId: DEMO_ORG_ID,
+      provider: "telegram",
+      channelKey: "channel-correct",
+      externalUserId: "TG_USER_456",
+      memberId: DEMO_MEMBER_ID,
+    });
+
+    expect(createResult.ok).toBe(true);
+    if (!createResult.ok) return;
+
+    const verifyResult = await verifyVoterBindingByNonce({
+      nonce: createResult.verificationNonce,
+      presserExternalUserId: "TG_USER_456",
+      expectedChannelKey: "channel-wrong",
+      expectedOrgId: DEMO_ORG_ID,
+    });
+
+    expect(verifyResult.ok).toBe(false);
+    if (!verifyResult.ok) {
+      expect(verifyResult.reason).toBe("channel_mismatch");
+    }
+  });
+
+  test("rejects wrong org ID", async () => {
+    const createResult = await createPendingVoterBinding({
+      orgId: DEMO_ORG_ID,
+      provider: "telegram",
+      channelKey: "channel-org-test",
+      externalUserId: "TG_USER_789",
+      memberId: DEMO_MEMBER_ID,
+    });
+
+    expect(createResult.ok).toBe(true);
+    if (!createResult.ok) return;
+
+    const verifyResult = await verifyVoterBindingByNonce({
+      nonce: createResult.verificationNonce,
+      presserExternalUserId: "TG_USER_789",
+      expectedChannelKey: "channel-org-test",
+      expectedOrgId: OTHER_ORG_ID,
+    });
+
+    expect(verifyResult.ok).toBe(false);
+    if (!verifyResult.ok) {
+      expect(verifyResult.reason).toBe("org_mismatch");
+    }
+  });
+
+  test("rejects replayed nonce (already verified)", async () => {
+    const createResult = await createPendingVoterBinding({
+      orgId: DEMO_ORG_ID,
+      provider: "telegram",
+      channelKey: "channel-replay",
+      externalUserId: "TG_USER_REPLAY",
+      memberId: DEMO_MEMBER_ID,
+    });
+
+    expect(createResult.ok).toBe(true);
+    if (!createResult.ok) return;
+
+    const firstVerify = await verifyVoterBindingByNonce({
+      nonce: createResult.verificationNonce,
+      presserExternalUserId: "TG_USER_REPLAY",
+      expectedChannelKey: "channel-replay",
+      expectedOrgId: DEMO_ORG_ID,
+    });
+
+    expect(firstVerify.ok).toBe(true);
+
+    const replayVerify = await verifyVoterBindingByNonce({
+      nonce: createResult.verificationNonce,
+      presserExternalUserId: "TG_USER_REPLAY",
+      expectedChannelKey: "channel-replay",
+      expectedOrgId: DEMO_ORG_ID,
+    });
+
+    expect(replayVerify.ok).toBe(false);
+    if (!replayVerify.ok) {
+      expect(replayVerify.reason).toBe("binding_not_found");
+    }
+  });
+
+  test("rejects unknown nonce", async () => {
+    const unknownNonce = generateVerificationNonce();
+
+    const verifyResult = await verifyVoterBindingByNonce({
+      nonce: unknownNonce,
+      presserExternalUserId: "TG_USER_UNKNOWN",
+      expectedChannelKey: "channel-unknown",
+      expectedOrgId: DEMO_ORG_ID,
+    });
+
+    expect(verifyResult.ok).toBe(false);
+    if (!verifyResult.ok) {
+      expect(verifyResult.reason).toBe("binding_not_found");
+    }
+  });
+
+  test("rejects revoked binding", async () => {
+    const createResult = await createPendingVoterBinding({
+      orgId: DEMO_ORG_ID,
+      provider: "telegram",
+      channelKey: "channel-revoked",
+      externalUserId: "TG_USER_REVOKED",
+      memberId: DEMO_MEMBER_ID,
+    });
+
+    expect(createResult.ok).toBe(true);
+    if (!createResult.ok) return;
+
+    await revokeVoterBinding(
+      DEMO_ORG_ID,
+      "telegram",
+      "channel-revoked",
+      "TG_USER_REVOKED"
+    );
+
+    const verifyResult = await verifyVoterBindingByNonce({
+      nonce: createResult.verificationNonce,
+      presserExternalUserId: "TG_USER_REVOKED",
+      expectedChannelKey: "channel-revoked",
+      expectedOrgId: DEMO_ORG_ID,
+    });
+
+    expect(verifyResult.ok).toBe(false);
+    if (!verifyResult.ok) {
+      expect(verifyResult.reason).toBe("binding_revoked");
     }
   });
 });

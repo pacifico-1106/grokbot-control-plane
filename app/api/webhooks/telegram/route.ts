@@ -6,6 +6,7 @@ import {
   handleTelegramVerificationReject,
   parseTelegramVerificationCallbackValue,
 } from "@/lib/approval-workflow/telegram-binding-verification";
+import { getVoterBindingByNonce, TELEGRAM_GLOBAL_CHANNEL_KEY } from "@/lib/approval-workflow/voter-binding";
 import { NextResponse } from "next/server";
 import { fulfillIfApproved } from "@/lib/approvals/fulfill";
 import { runApprovalResolveSideEffects } from "@/lib/approvals/resolve-side-effects";
@@ -111,10 +112,24 @@ async function handleVoterBindingCallback(
   }
 
   try {
+    const parsed = parseTelegramVerificationCallbackValue(callbackValue, presserTelegramUserId);
+    if (!parsed.ok) {
+      await answerTelegramCallback(callbackId, "検証データが不正です");
+      return;
+    }
+
+    const bindingInfo = await getVoterBindingByNonce(parsed.nonce);
+    if (!bindingInfo) {
+      await answerTelegramCallback(callbackId, "バインディングが見つかりません");
+      return;
+    }
+
     if (action === "c") {
       const result = await handleTelegramVerificationConfirm({
         callbackValue,
         presserTelegramUserId,
+        expectedChannelKey: bindingInfo.channelKey,
+        expectedOrgId: bindingInfo.orgId,
       });
       if (result.ok) {
         await answerTelegramCallback(callbackId, "✅ 承認者として登録されました");

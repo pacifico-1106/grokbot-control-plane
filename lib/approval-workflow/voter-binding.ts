@@ -346,15 +346,7 @@ export async function verifyVoterBinding(
     delete demo.verificationNonce;
     demoBindings.set(key, demo);
 
-    setDemoWorkflowVoterBinding({
-      orgId: demo.orgId,
-      provider: demo.provider,
-      channelKey: demo.channelKey,
-      userId: demo.externalUserId,
-      memberId: demo.memberId,
-      expiresAt: demo.expiresAt ?? undefined,
-      verifiedAt: demo.verifiedAt,
-    });
+    await applyPostVerifySideEffects(demo);
 
     return { ok: true, binding: demo };
   }
@@ -617,7 +609,6 @@ export interface PendingBindingInfo {
   channelKey: string;
   externalUserId: string;
   memberId: string;
-  verificationCode: string;
 }
 
 export async function getVoterBindingByNonce(
@@ -634,7 +625,6 @@ export async function getVoterBindingByNonce(
       channelKey: demo.channelKey,
       externalUserId: demo.externalUserId,
       memberId: demo.memberId,
-      verificationCode: demo.verificationCode,
     };
   }
 
@@ -659,8 +649,151 @@ export async function getVoterBindingByNonce(
     channelKey: String(data.channel_key),
     externalUserId: String(data.external_user_id),
     memberId: String(data.member_id),
-    verificationCode: "__hash_only__",
   };
+}
+
+export interface VerifyByNonceInput {
+  nonce: string;
+  presserExternalUserId: string;
+  expectedChannelKey: string;
+  expectedOrgId: string;
+}
+
+const MAX_FAILED_ATTEMPTS = 5;
+
+async function applyPostVerifySideEffects(binding: VoterBinding): Promise<void> {
+  if (isDemoMode()) {
+    setDemoWorkflowVoterBinding({
+      orgId: binding.orgId,
+      provider: binding.provider,
+      channelKey: binding.channelKey,
+      userId: binding.externalUserId,
+      memberId: binding.memberId,
+      expiresAt: binding.expiresAt ?? undefined,
+      verifiedAt: binding.verifiedAt ?? undefined,
+    });
+  }
+}
+
+export async function verifyVoterBindingByNonce(
+  input: VerifyByNonceInput
+): Promise<{ ok: true; binding: VoterBinding } | { ok: false; reason: string; messageJa: string }> {
+  if (isDemoMode()) {
+    const key = demoNonceIndex.get(input.nonce);
+    if (!key) {
+      return { ok: false, reason: "binding_not_found", messageJa: "バインディングが見つかりません。" };
+    }
+    const demo = demoBindings.get(key);
+    if (!demo) {
+      return { ok: false, reason: "binding_not_found", messageJa: "バインディングが見つかりません。" };
+    }
+    if (demo.verifiedAt) {
+      return { ok: false, reason: "already_verified", messageJa: "このバインディングは既に検証済みです。" };
+    }
+    if (demo.revokedAt) {
+      return { ok: false, reason: "binding_revoked", messageJa: "このバインディングは取り消されています。" };
+    }
+    if (demo.orgId !== input.expectedOrgId) {
+      return { ok: false, reason: "org_mismatch", messageJa: "組織が一致しません。" };
+    }
+    if (demo.channelKey !== input.expectedChannelKey) {
+      return { ok: false, reason: "channel_mismatch", messageJa: "チャネルが一致しません。" };
+    }
+    if (demo.externalUserId !== input.presserExternalUserId) {
+      return { ok: false, reason: "user_mismatch", messageJa: "このボタンはあなた宛てではありません。" };
+    }
+    const demoFailedAttempts = demo.failedVerificationAttempts ?? 0;
+    if (demoFailedAttempts >= MAX_FAILED_ATTEMPTS) {
+      return { ok: false, reason: "verification_locked", messageJa: "検証試行回数の上限に達しました。管理者に連絡してください。" };
+    }
+    if (!demo.verificationExpiry || Date.now() > demo.verificationExpiry) {
+      return { ok: false, reason: "verification_expired", messageJa: "検証の有効期限が切れています。" };
+    }
+
+    const now = new Date().toISOString();
+    demo.verifiedAt = now;
+    demo.updatedAt = now;
+    demo.status = "active";
+    demoNonceIndex.delete(input.nonce);
+    delete demo.verificationCode;
+    delete demo.verificationExpiry;
+    delete demo.verificationNonce;
+    demoBindings.set(key, demo);
+
+    await applyPostVerifySideEffects(demo);
+    return { ok: true, binding: demo };
+  }
+
+  const admin = createSupabaseAdminClient();
+  if (!admin) {
+    return { ok: false, reason: "supabase_unavailable", messageJa: "データベースに接続できません。" };
+  }
+
+  const now = new Date().toISOString();
+  const { data: updated, error: updateError } = await admin
+    .from("approval_workflow_voter_bindings")
+    .update({
+      verified_at: now,
+      updated_at: now,
+      verification_hash: null,
+      verification_expiry: null,
+      verification_nonce: null,
+    })
+    .eq("verification_nonce", input.nonce)
+    .eq("external_user_id", input.presserExternalUserId)
+    .eq("channel_key", input.expectedChannelKey)
+    .eq("org_id", input.expectedOrgId)
+    .is("verified_at", null)
+    .is("revoked_at", null)
+    .gt("verification_expiry", now)
+    .lt("failed_verification_attempts", MAX_FAILED_ATTEMPTS)
+    .select("*")
+    .maybeSingle();
+
+  if (updateError) {
+    console.error("verify_by_nonce_update_error", { error: updateError.message });
+    return { ok: false, reason: "verification_update_failed", messageJa: "検証の更新に失敗しました。" };
+  }
+
+  if (!updated) {
+    const { data: existing } = await admin
+      .from("approval_workflow_voter_bindings")
+      .select("verified_at, revoked_at, verification_expiry, failed_verification_attempts, external_user_id, channel_key, org_id")
+      .eq("verification_nonce", input.nonce)
+      .maybeSingle();
+
+    if (!existing) {
+      return { ok: false, reason: "binding_not_found", messageJa: "バインディングが見つかりません。有効期限が切れているか、既に使用済みです。" };
+    }
+    if (existing.verified_at) {
+      return { ok: false, reason: "already_verified", messageJa: "このバインディングは既に検証済みです。" };
+    }
+    if (existing.revoked_at) {
+      return { ok: false, reason: "binding_revoked", messageJa: "このバインディングは取り消されています。" };
+    }
+    if (existing.external_user_id !== input.presserExternalUserId) {
+      return { ok: false, reason: "user_mismatch", messageJa: "このボタンはあなた宛てではありません。" };
+    }
+    if (existing.channel_key !== input.expectedChannelKey) {
+      return { ok: false, reason: "channel_mismatch", messageJa: "チャネルが一致しません。" };
+    }
+    if (existing.org_id !== input.expectedOrgId) {
+      return { ok: false, reason: "org_mismatch", messageJa: "組織が一致しません。" };
+    }
+    const failedAttempts = Number(existing.failed_verification_attempts ?? 0);
+    if (failedAttempts >= MAX_FAILED_ATTEMPTS) {
+      return { ok: false, reason: "verification_locked", messageJa: "検証試行回数の上限に達しました。管理者に連絡してください。" };
+    }
+    const verificationExpiry = existing.verification_expiry ? new Date(String(existing.verification_expiry)) : null;
+    if (!verificationExpiry || verificationExpiry < new Date()) {
+      return { ok: false, reason: "verification_expired", messageJa: "検証の有効期限が切れています。" };
+    }
+    return { ok: false, reason: "verification_race_or_expired", messageJa: "検証が既に完了しているか、有効期限が切れています。" };
+  }
+
+  const binding = mapBindingRow(updated as Record<string, unknown>);
+  await applyPostVerifySideEffects(binding);
+  return { ok: true, binding };
 }
 
 export interface RegenerateVerificationResult {

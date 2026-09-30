@@ -1,3 +1,4 @@
+import { createHmac } from "node:crypto";
 import type { ApprovalRequest } from "@/lib/types";
 import type { AdminFulfillment } from "@/lib/admin-mcp/fulfill-admin";
 import { isDemoMode } from "@/lib/mode";
@@ -23,6 +24,17 @@ import {
   sendVerificationToTelegramGroup,
 } from "./telegram-binding-verification";
 import { sendVerificationDmToSlackUser } from "./voter-binding-verification";
+
+const RESEND_MIN_INTERVAL_MS = 2 * 60 * 1000;
+const RESEND_MAX_PER_24H = 10;
+const RESEND_24H_MS = 24 * 60 * 60 * 1000;
+
+function hashExternalUserId(externalUserId: string): string {
+  return createHmac("sha256", "resend-audit-salt")
+    .update(externalUserId)
+    .digest("hex")
+    .slice(0, 16);
+}
 
 export async function isCurrentWorkflowMember(orgId: string, memberId: string): Promise<boolean> {
   if (isDemoMode()) {
@@ -82,12 +94,99 @@ export interface ResendVoterVerificationInput {
   provider: VoterBindingProvider;
   channelKey: string;
   externalUserId: string;
+  actorCredentialId?: string;
 }
 
 export interface ResendVoterVerificationResult {
   ok: boolean;
   messageJa: string;
   error?: string;
+}
+
+interface ResendRateLimitInfo {
+  lastResendAt: Date | null;
+  resendCount24h: number;
+  failedVerificationAttempts: number;
+}
+
+async function getResendRateLimitInfo(
+  orgId: string,
+  provider: VoterBindingProvider,
+  channelKey: string,
+  externalUserId: string
+): Promise<ResendRateLimitInfo | null> {
+  if (isDemoMode()) {
+    return { lastResendAt: null, resendCount24h: 0, failedVerificationAttempts: 0 };
+  }
+
+  const admin = createSupabaseAdminClient();
+  if (!admin) return null;
+
+  const { data, error } = await admin
+    .from("approval_workflow_voter_bindings")
+    .select("last_resend_at, resend_count_24h, failed_verification_attempts")
+    .eq("org_id", orgId)
+    .eq("provider", provider)
+    .eq("channel_key", channelKey)
+    .eq("external_user_id", externalUserId)
+    .maybeSingle();
+
+  if (error || !data) return null;
+
+  return {
+    lastResendAt: data.last_resend_at ? new Date(data.last_resend_at) : null,
+    resendCount24h: Number(data.resend_count_24h ?? 0),
+    failedVerificationAttempts: Number(data.failed_verification_attempts ?? 0),
+  };
+}
+
+async function updateResendRateLimit(
+  orgId: string,
+  provider: VoterBindingProvider,
+  channelKey: string,
+  externalUserId: string,
+  wasLocked: boolean
+): Promise<void> {
+  if (isDemoMode()) return;
+
+  const admin = createSupabaseAdminClient();
+  if (!admin) return;
+
+  const now = new Date();
+  const { data: current } = await admin
+    .from("approval_workflow_voter_bindings")
+    .select("last_resend_at, resend_count_24h")
+    .eq("org_id", orgId)
+    .eq("provider", provider)
+    .eq("channel_key", channelKey)
+    .eq("external_user_id", externalUserId)
+    .maybeSingle();
+
+  let newCount = 1;
+  if (current?.last_resend_at) {
+    const lastResend = new Date(current.last_resend_at);
+    if (now.getTime() - lastResend.getTime() < RESEND_24H_MS) {
+      newCount = (current.resend_count_24h ?? 0) + 1;
+    }
+  }
+
+  const updateData: Record<string, unknown> = {
+    last_resend_at: now.toISOString(),
+    resend_count_24h: newCount,
+    updated_at: now.toISOString(),
+  };
+
+  if (wasLocked) {
+    updateData.failed_verification_attempts = 0;
+  }
+
+  await admin
+    .from("approval_workflow_voter_bindings")
+    .update(updateData)
+    .eq("org_id", orgId)
+    .eq("provider", provider)
+    .eq("channel_key", channelKey)
+    .eq("external_user_id", externalUserId);
 }
 
 export async function resendVoterVerification(
@@ -117,6 +216,65 @@ export async function resendVoterVerification(
     return { ok: false, messageJa: "バインディングの状態が不正です。", error: "invalid_status" };
   }
 
+  const rateLimitInfo = await getResendRateLimitInfo(
+    input.orgId,
+    input.provider,
+    input.channelKey,
+    input.externalUserId
+  );
+
+  const wasLocked = rateLimitInfo && rateLimitInfo.failedVerificationAttempts >= 5;
+
+  if (rateLimitInfo && !wasLocked) {
+    const now = Date.now();
+    if (rateLimitInfo.lastResendAt && now - rateLimitInfo.lastResendAt.getTime() < RESEND_MIN_INTERVAL_MS) {
+      const waitSec = Math.ceil((RESEND_MIN_INTERVAL_MS - (now - rateLimitInfo.lastResendAt.getTime())) / 1000);
+      await appendAuditEvent({
+        orgId: input.orgId,
+        employeeId: null,
+        credentialId: input.actorCredentialId || null,
+        action: "voter_binding.resend_rate_limited",
+        purpose: "voter_binding.resend",
+        summary: `再送信のレート制限（${waitSec}秒待機が必要）`,
+        metadata: {
+          provider: input.provider,
+          channelKey: input.channelKey,
+          externalUserIdHash: hashExternalUserId(input.externalUserId),
+          reason: "min_interval",
+        },
+      });
+      return {
+        ok: false,
+        messageJa: `再送信は2分間隔で制限されています。${waitSec}秒後に再試行してください。`,
+        error: "rate_limited_min_interval",
+      };
+    }
+
+    if (rateLimitInfo.lastResendAt && now - rateLimitInfo.lastResendAt.getTime() < RESEND_24H_MS) {
+      if (rateLimitInfo.resendCount24h >= RESEND_MAX_PER_24H) {
+        await appendAuditEvent({
+          orgId: input.orgId,
+          employeeId: null,
+          credentialId: input.actorCredentialId || null,
+          action: "voter_binding.resend_rate_limited",
+          purpose: "voter_binding.resend",
+          summary: `再送信の24時間上限に達しました（${RESEND_MAX_PER_24H}回）`,
+          metadata: {
+            provider: input.provider,
+            channelKey: input.channelKey,
+            externalUserIdHash: hashExternalUserId(input.externalUserId),
+            reason: "max_24h",
+          },
+        });
+        return {
+          ok: false,
+          messageJa: `24時間以内の再送信上限（${RESEND_MAX_PER_24H}回）に達しました。`,
+          error: "rate_limited_max_24h",
+        };
+      }
+    }
+  }
+
   const regenResult = await regenerateVerificationForBinding(
     input.orgId,
     input.provider,
@@ -125,31 +283,70 @@ export async function resendVoterVerification(
   );
 
   if (!regenResult.ok || !regenResult.verificationCode || !regenResult.verificationNonce) {
+    await appendAuditEvent({
+      orgId: input.orgId,
+      employeeId: null,
+      credentialId: input.actorCredentialId || null,
+      action: "voter_binding.resend_failed",
+      purpose: "voter_binding.resend",
+      summary: `検証再生成に失敗: ${regenResult.reason}`,
+      metadata: {
+        provider: input.provider,
+        channelKey: input.channelKey,
+        externalUserIdHash: hashExternalUserId(input.externalUserId),
+        reason: regenResult.reason,
+      },
+    });
     return { ok: false, messageJa: regenResult.messageJa || "検証コードの再生成に失敗しました。", error: regenResult.reason };
+  }
+
+  await updateResendRateLimit(
+    input.orgId,
+    input.provider,
+    input.channelKey,
+    input.externalUserId,
+    wasLocked ?? false
+  );
+
+  if (wasLocked) {
+    await appendAuditEvent({
+      orgId: input.orgId,
+      employeeId: null,
+      credentialId: input.actorCredentialId || null,
+      action: "voter_binding.unlock_via_resend",
+      purpose: "voter_binding.resend",
+      summary: "ロックされたバインディングを再送信でアンロック",
+      metadata: {
+        provider: input.provider,
+        channelKey: input.channelKey,
+        externalUserIdHash: hashExternalUserId(input.externalUserId),
+      },
+    });
   }
 
   const memberName = `メンバー ${binding.memberId.slice(0, 8)}`;
   const orgName = "Staffpass組織";
 
+  let sendResult: { ok: boolean; messageJa: string; error?: string };
+
   if (input.provider === "slack") {
     const channelSecrets = await getNotificationChannelSecretsById(input.orgId, input.channelKey);
     if (!channelSecrets.botToken) {
-      return { ok: false, messageJa: "Slackチャネルのボットトークンが設定されていません。", error: "missing_bot_token" };
+      sendResult = { ok: false, messageJa: "Slackチャネルのボットトークンが設定されていません。", error: "missing_bot_token" };
+    } else {
+      await sendVerificationDmToSlackUser({
+        botToken: channelSecrets.botToken,
+        slackUserId: input.externalUserId,
+        orgId: input.orgId,
+        channelKey: input.channelKey,
+        memberId: binding.memberId,
+        memberDisplayName: memberName,
+        orgName,
+        verificationCode: regenResult.verificationCode,
+      });
+      sendResult = { ok: true, messageJa: "Slack DMで検証メッセージを再送信しました。" };
     }
-    await sendVerificationDmToSlackUser({
-      botToken: channelSecrets.botToken,
-      slackUserId: input.externalUserId,
-      orgId: input.orgId,
-      channelKey: input.channelKey,
-      memberId: binding.memberId,
-      memberDisplayName: memberName,
-      orgName,
-      verificationCode: regenResult.verificationCode,
-    });
-    return { ok: true, messageJa: "Slack DMで検証メッセージを再送信しました。" };
-  }
-
-  if (input.provider === "telegram" && isTelegramGlobalChannelKey(input.channelKey)) {
+  } else if (input.provider === "telegram" && isTelegramGlobalChannelKey(input.channelKey)) {
     const telegramResult = await sendVerificationToTelegramUser({
       telegramUserId: input.externalUserId,
       orgId: input.orgId,
@@ -161,12 +358,11 @@ export async function resendVoterVerification(
       channelKey: input.channelKey,
     });
     if (telegramResult.ok) {
-      return { ok: true, messageJa: "Telegram DMで検証メッセージを再送信しました。" };
+      sendResult = { ok: true, messageJa: "Telegram DMで検証メッセージを再送信しました。" };
+    } else {
+      sendResult = { ok: false, messageJa: `Telegram DMの送信に失敗しました: ${telegramResult.error}`, error: telegramResult.error };
     }
-    return { ok: false, messageJa: `Telegram DMの送信に失敗しました: ${telegramResult.error}`, error: telegramResult.error };
-  }
-
-  if (input.provider === "telegram") {
+  } else if (input.provider === "telegram") {
     const channelSecrets = await getNotificationChannelSecretsById(input.orgId, input.channelKey);
     const channels = await listNotificationChannels(input.orgId);
     const channel = channels.find((ch) => ch.id === input.channelKey && ch.provider === "telegram");
@@ -174,27 +370,9 @@ export async function resendVoterVerification(
     const isGroupChat = chatId.startsWith("-");
 
     if (!channelSecrets.botToken) {
-      return { ok: false, messageJa: "Telegramチャネルのボットトークンが設定されていません。", error: "missing_bot_token" };
-    }
-
-    const telegramResult = await sendVerificationToTelegramUserViaChannel({
-      telegramUserId: input.externalUserId,
-      orgId: input.orgId,
-      memberId: binding.memberId,
-      memberDisplayName: memberName,
-      orgName,
-      verificationCode: regenResult.verificationCode,
-      verificationNonce: regenResult.verificationNonce,
-      channelId: input.channelKey,
-      botToken: channelSecrets.botToken,
-    });
-
-    if (telegramResult.ok) {
-      return { ok: true, messageJa: "Telegram DMで検証メッセージを再送信しました。" };
-    }
-
-    if (telegramResult.error === "bot_blocked_or_not_started" && isGroupChat && chatId) {
-      const groupResult = await sendVerificationToTelegramGroup({
+      sendResult = { ok: false, messageJa: "Telegramチャネルのボットトークンが設定されていません。", error: "missing_bot_token" };
+    } else {
+      const telegramResult = await sendVerificationToTelegramUserViaChannel({
         telegramUserId: input.externalUserId,
         orgId: input.orgId,
         memberId: binding.memberId,
@@ -204,24 +382,57 @@ export async function resendVoterVerification(
         verificationNonce: regenResult.verificationNonce,
         channelId: input.channelKey,
         botToken: channelSecrets.botToken,
-        groupChatId: chatId,
       });
-      if (groupResult.ok) {
-        return { ok: true, messageJa: "グループチャットに検証メッセージを再送信しました。" };
+
+      if (telegramResult.ok) {
+        sendResult = { ok: true, messageJa: "Telegram DMで検証メッセージを再送信しました。" };
+      } else if (telegramResult.error === "bot_blocked_or_not_started" && isGroupChat && chatId) {
+        const groupResult = await sendVerificationToTelegramGroup({
+          telegramUserId: input.externalUserId,
+          orgId: input.orgId,
+          memberId: binding.memberId,
+          memberDisplayName: memberName,
+          orgName,
+          verificationCode: regenResult.verificationCode,
+          verificationNonce: regenResult.verificationNonce,
+          channelId: input.channelKey,
+          botToken: channelSecrets.botToken,
+          groupChatId: chatId,
+        });
+        if (groupResult.ok) {
+          sendResult = { ok: true, messageJa: "グループチャットに検証メッセージを再送信しました。" };
+        } else {
+          sendResult = { ok: false, messageJa: `グループチャットへの送信に失敗しました: ${groupResult.error}`, error: groupResult.error };
+        }
+      } else {
+        sendResult = {
+          ok: false,
+          messageJa: telegramResult.nextStepJa || `Telegram DMの送信に失敗しました: ${telegramResult.error}`,
+          error: telegramResult.error,
+        };
       }
-      return { ok: false, messageJa: `グループチャットへの送信に失敗しました: ${groupResult.error}`, error: groupResult.error };
     }
-
-    return {
-      ok: false,
-      messageJa: telegramResult.nextStepJa || `Telegram DMの送信に失敗しました: ${telegramResult.error}`,
-      error: telegramResult.error,
-    };
+  } else if (input.provider === "line") {
+    sendResult = { ok: false, messageJa: "LINEの検証再送信はまだサポートされていません。", error: "line_not_supported" };
+  } else {
+    sendResult = { ok: false, messageJa: "不明なプロバイダーです。", error: "unknown_provider" };
   }
 
-  if (input.provider === "line") {
-    return { ok: false, messageJa: "LINEの検証再送信はまだサポートされていません。", error: "line_not_supported" };
-  }
+  await appendAuditEvent({
+    orgId: input.orgId,
+    employeeId: null,
+    credentialId: input.actorCredentialId || null,
+    action: sendResult.ok ? "voter_binding.resend_success" : "voter_binding.resend_failed",
+    purpose: "voter_binding.resend",
+    summary: sendResult.ok ? "検証メッセージを再送信" : `再送信に失敗: ${sendResult.error}`,
+    metadata: {
+      provider: input.provider,
+      channelKey: input.channelKey,
+      externalUserIdHash: hashExternalUserId(input.externalUserId),
+      outcome: sendResult.ok ? "success" : "failure",
+      ...(sendResult.error ? { error: sendResult.error } : {}),
+    },
+  });
 
-  return { ok: false, messageJa: "不明なプロバイダーです。", error: "unknown_provider" };
+  return sendResult;
 }
