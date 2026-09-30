@@ -52,3 +52,15 @@ export {
   sendDecisionVotingCard,
   type DecisionNotificationResult,
 } from "./notify";
+
+export {
+  buildTopicGateApprovalMetadata,
+  checkTopicGate,
+  containsSensitiveTopic,
+  createDefaultTopicGateConfig,
+  DEFAULT_SENSITIVE_TOPICS,
+  formatTopicGateCard,
+  isMainBoardChannel,
+  validateTopicGateConfig,
+  type TopicGateCheckResult,
+} from "./topic-gate";
