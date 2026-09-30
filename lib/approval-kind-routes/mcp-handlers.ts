@@ -266,7 +266,7 @@ export async function validateApprovalRoutesPatch(
   const beforeSnapshot = await getOrgApprovalKindRoutesPolicy(cred.orgId);
 
   // Generate diff
-  const diffSummary = generatePolicyDiff(beforeSnapshot, policy as OrgApprovalKindRoutesPolicy);
+  const diffSummary = generatePolicyDiff(beforeSnapshot, policy as unknown as OrgApprovalKindRoutesPolicy);
 
   return {
     ok: true,

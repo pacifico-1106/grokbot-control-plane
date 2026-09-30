@@ -2668,10 +2668,17 @@ export async function callAdminMcpTool(
     }
 
     // Queue for approval with diff card
-    return queueAdminTool({
+    const queueResult = await queueAdminTool({
       cred,
-      toolName: name,
-      args,
+      tool: name,
+      args: {
+        ...args,
+        __metadata: {
+          beforeSnapshot: validation.beforeSnapshot,
+          afterSnapshot: validation.afterSnapshot,
+          diffSummary: validation.diffSummary,
+        },
+      },
       title: "承認ルート設定の変更",
       summary: [
         "承認ルート設定を変更します。",
@@ -2679,12 +2686,8 @@ export async function callAdminMcpTool(
         "■ 変更内容:",
         ...(validation.diffSummary || []).map((d) => `  ${d}`),
       ].join("\n"),
-      metadata: {
-        beforeSnapshot: validation.beforeSnapshot,
-        afterSnapshot: validation.afterSnapshot,
-        diffSummary: validation.diffSummary,
-      },
     });
+    return toolResult(queueResult, true);
   }
 
   if (name === "employeeIdentity.status") {
