@@ -535,13 +535,39 @@ export async function promptTelegramRevision(
 
 export async function answerTelegramCallback(
   callbackQueryId: string,
-  text?: string
+  text?: string,
+  showAlert = false
 ): Promise<void> {
   if (!callbackQueryId) return;
   await callTelegram("answerCallbackQuery", {
     callback_query_id: callbackQueryId,
     ...(text ? { text: truncate(text, 180) } : {}),
+    ...(showAlert ? { show_alert: true } : {}),
   });
+}
+
+export async function editGlobalTelegramMessage(
+  chatId: string | number,
+  messageId: number,
+  text: string
+): Promise<{ ok: boolean; error?: string }> {
+  if (!chatId || !Number.isSafeInteger(messageId)) {
+    return { ok: false, error: "invalid_parameters" };
+  }
+  const result = await callTelegram("editMessageText", {
+    chat_id: chatId,
+    message_id: messageId,
+    text,
+    reply_markup: { inline_keyboard: [] },
+  });
+  if (!result.ok) {
+    console.error("telegram_edit_global_message_failed", {
+      chatId,
+      messageId,
+      error: result.error,
+    });
+  }
+  return result;
 }
 
 export async function sendTelegramText(

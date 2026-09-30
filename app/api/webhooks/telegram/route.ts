@@ -7,6 +7,10 @@ import {
   parseTelegramVerificationCallbackValue,
 } from "@/lib/approval-workflow/telegram-binding-verification";
 import { getVoterBindingByNonce, TELEGRAM_GLOBAL_CHANNEL_KEY } from "@/lib/approval-workflow/voter-binding";
+
+function formatJstTimestamp(): string {
+  return new Date().toLocaleString("ja-JP", { timeZone: "Asia/Tokyo" });
+}
 import { NextResponse } from "next/server";
 import { fulfillIfApproved } from "@/lib/approvals/fulfill";
 import { runApprovalResolveSideEffects } from "@/lib/approvals/resolve-side-effects";
@@ -23,6 +27,7 @@ import {
 import { handleTelegramChannelUpdate } from "@/lib/notify/telegram-channel-webhook";
 import {
   answerTelegramCallback,
+  editGlobalTelegramMessage,
   promptTelegramRevision,
   sendTelegramText,
 } from "@/lib/notify/telegram";
@@ -106,21 +111,24 @@ async function handleVoterBindingCallback(
   callbackId: string
 ): Promise<void> {
   const presserTelegramUserId = String(query?.from?.id ?? "");
+  const chatId = query?.message?.chat?.id;
+  const messageId = query?.message?.message_id;
+
   if (!presserTelegramUserId) {
-    await answerTelegramCallback(callbackId, "ユーザーIDを取得できませんでした");
+    await answerTelegramCallback(callbackId, "ユーザーIDを取得できませんでした", true);
     return;
   }
 
   try {
     const parsed = parseTelegramVerificationCallbackValue(callbackValue, presserTelegramUserId);
     if (!parsed.ok) {
-      await answerTelegramCallback(callbackId, "検証データが不正です");
+      await answerTelegramCallback(callbackId, "検証データが不正です", true);
       return;
     }
 
     const bindingInfo = await getVoterBindingByNonce(parsed.nonce);
     if (!bindingInfo) {
-      await answerTelegramCallback(callbackId, "バインディングが見つかりません");
+      await answerTelegramCallback(callbackId, "バインディングが見つかりません", true);
       return;
     }
 
@@ -132,22 +140,34 @@ async function handleVoterBindingCallback(
         expectedOrgId: bindingInfo.orgId,
       });
       if (result.ok) {
-        await answerTelegramCallback(callbackId, "✅ 承認者として登録されました");
+        const successText = `✅ 承認者登録が完了しました（${formatJstTimestamp()} JST）`;
+        if (chatId && messageId) {
+          await editGlobalTelegramMessage(chatId, messageId, successText);
+        }
+        await answerTelegramCallback(callbackId, "✅ 承認者として登録されました", true);
       } else {
-        await answerTelegramCallback(callbackId, result.messageJa);
+        await answerTelegramCallback(callbackId, result.messageJa, true);
       }
     } else if (action === "r") {
       const result = await handleTelegramVerificationReject({
         callbackValue,
         presserTelegramUserId,
       });
-      await answerTelegramCallback(callbackId, result.messageJa);
+      if (result.ok) {
+        const rejectText = `❌ 登録を拒否しました（${formatJstTimestamp()} JST）`;
+        if (chatId && messageId) {
+          await editGlobalTelegramMessage(chatId, messageId, rejectText);
+        }
+        await answerTelegramCallback(callbackId, "❌ 登録を拒否しました", true);
+      } else {
+        await answerTelegramCallback(callbackId, result.messageJa, true);
+      }
     } else {
-      await answerTelegramCallback(callbackId, "無効な操作です");
+      await answerTelegramCallback(callbackId, "無効な操作です", true);
     }
   } catch (error) {
     console.error("telegram_voter_binding_callback_error", error);
-    await answerTelegramCallback(callbackId, "処理中にエラーが発生しました");
+    await answerTelegramCallback(callbackId, "処理中にエラーが発生しました", true);
   }
 }
 

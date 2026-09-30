@@ -3,7 +3,9 @@ import { getAppOrigin } from "../approvals/tokens";
 import { DEMO_ORG } from "../demo-data";
 import { resetDemoNotificationChannels } from "../data/notification-channels";
 import {
+  answerTelegramCallback,
   buildApprovalTelegramMessage,
+  editGlobalTelegramMessage,
   ensureGlobalTelegramWebhook,
   registerTelegramWebhook,
   sendApprovalToTelegram,
@@ -189,5 +191,116 @@ describe("registerTelegramWebhook env reuse", () => {
     expect(calls.length).toBe(1);
     expect(calls[0]?.url).toContain("/botcustom-bot-token/setWebhook");
     expect(calls[0]?.body.url).toBe("https://staffpass.example/api/webhooks/telegram/refcustom");
+  });
+});
+
+describe("answerTelegramCallback with show_alert", () => {
+  test("sends show_alert: true when showAlert parameter is true", async () => {
+    process.env.TELEGRAM_BOT_TOKEN = "test-token";
+    let capturedBody: Record<string, unknown> = {};
+    globalThis.fetch = (async (_input, init) => {
+      capturedBody = JSON.parse(String(init?.body || "{}"));
+      return Response.json({ ok: true });
+    }) as typeof fetch;
+
+    await answerTelegramCallback("callback123", "テストメッセージ", true);
+
+    expect(capturedBody.callback_query_id).toBe("callback123");
+    expect(capturedBody.text).toBe("テストメッセージ");
+    expect(capturedBody.show_alert).toBe(true);
+  });
+
+  test("omits show_alert when showAlert parameter is false", async () => {
+    process.env.TELEGRAM_BOT_TOKEN = "test-token";
+    let capturedBody: Record<string, unknown> = {};
+    globalThis.fetch = (async (_input, init) => {
+      capturedBody = JSON.parse(String(init?.body || "{}"));
+      return Response.json({ ok: true });
+    }) as typeof fetch;
+
+    await answerTelegramCallback("callback456", "通常メッセージ", false);
+
+    expect(capturedBody.callback_query_id).toBe("callback456");
+    expect(capturedBody.text).toBe("通常メッセージ");
+    expect(capturedBody.show_alert).toBeUndefined();
+  });
+
+  test("omits show_alert when showAlert parameter is not provided", async () => {
+    process.env.TELEGRAM_BOT_TOKEN = "test-token";
+    let capturedBody: Record<string, unknown> = {};
+    globalThis.fetch = (async (_input, init) => {
+      capturedBody = JSON.parse(String(init?.body || "{}"));
+      return Response.json({ ok: true });
+    }) as typeof fetch;
+
+    await answerTelegramCallback("callback789", "デフォルト");
+
+    expect(capturedBody.show_alert).toBeUndefined();
+  });
+
+  test("truncates text over 180 characters", async () => {
+    process.env.TELEGRAM_BOT_TOKEN = "test-token";
+    let capturedBody: Record<string, unknown> = {};
+    globalThis.fetch = (async (_input, init) => {
+      capturedBody = JSON.parse(String(init?.body || "{}"));
+      return Response.json({ ok: true });
+    }) as typeof fetch;
+
+    const longText = "あ".repeat(200);
+    await answerTelegramCallback("callback_long", longText, true);
+
+    expect(Array.from(capturedBody.text as string).length).toBeLessThanOrEqual(180);
+    expect(capturedBody.show_alert).toBe(true);
+  });
+});
+
+describe("editGlobalTelegramMessage", () => {
+  test("edits message with empty inline_keyboard to remove buttons", async () => {
+    process.env.TELEGRAM_BOT_TOKEN = "test-token";
+    let capturedBody: Record<string, unknown> = {};
+    globalThis.fetch = (async (_input, init) => {
+      capturedBody = JSON.parse(String(init?.body || "{}"));
+      return Response.json({ ok: true });
+    }) as typeof fetch;
+
+    const result = await editGlobalTelegramMessage(-123456, 789, "✅ 承認者登録が完了しました");
+
+    expect(result.ok).toBe(true);
+    expect(capturedBody.chat_id).toBe(-123456);
+    expect(capturedBody.message_id).toBe(789);
+    expect(capturedBody.text).toBe("✅ 承認者登録が完了しました");
+    expect(capturedBody.reply_markup).toEqual({ inline_keyboard: [] });
+  });
+
+  test("returns error for invalid parameters", async () => {
+    process.env.TELEGRAM_BOT_TOKEN = "test-token";
+    globalThis.fetch = (async () => {
+      return Response.json({ ok: true });
+    }) as typeof fetch;
+
+    const result = await editGlobalTelegramMessage("", 789, "test");
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe("invalid_parameters");
+  });
+
+  test("returns error when Telegram API fails", async () => {
+    process.env.TELEGRAM_BOT_TOKEN = "test-token";
+    const consoleErrorSpy = console.error;
+    console.error = () => {};
+    globalThis.fetch = (async () => {
+      return Response.json({ ok: false, description: "Bad Request" });
+    }) as typeof fetch;
+
+    const result = await editGlobalTelegramMessage(-123456, 789, "test");
+
+    expect(result.ok).toBe(false);
+    console.error = consoleErrorSpy;
+  });
+
+  test("returns error when not configured", async () => {
+    delete process.env.TELEGRAM_BOT_TOKEN;
+    const result = await editGlobalTelegramMessage(-123456, 789, "test");
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe("telegram_not_configured");
   });
 });
