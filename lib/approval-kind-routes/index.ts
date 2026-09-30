@@ -27,3 +27,21 @@ export {
   migrateClassRoutesToKindRoutes,
   resetDemoApprovalKindRoutesData,
 } from "./data";
+export {
+  evaluateKindQuorum,
+  formatKindQuorumDisplay,
+  calculateDeadlineStatus,
+  calculateReminderStatus,
+  resolveKindApproval,
+  getApprovalKind,
+  getRouteForApproval,
+  canUserVoteOnKindApproval,
+  determineDecisionTier,
+  canDowngradeTier,
+  getPendingApprovers,
+  type KindQuorumEvaluation,
+  type DeadlineStatus,
+  type ReminderStatus,
+  type KindApprovalResolution,
+  type DecisionTierResolution,
+} from "./engine";
