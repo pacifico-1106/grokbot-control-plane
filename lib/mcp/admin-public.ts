@@ -55,6 +55,8 @@ export const ADMIN_MCP_TOOL_NAMES = [
   "approvalWorkflow.unbindVoter",
   "approvalWorkflow.resendVoterVerification",
   "approvalWorkflow.listVoterBindings",
+  "approvalRoutes.get",
+  "approvalRoutes.patch",
   "setup.approverBindingStatus",
   "orgs.create",
   "orgs.status",
