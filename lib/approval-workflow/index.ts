@@ -62,13 +62,18 @@ export {
   revokeVoterBinding,
   listVoterBindings,
   getVoterBinding,
+  getVoterBindingByNonce,
+  regenerateVerificationForBinding,
   checkSetupApproverBindingStatus,
   resetDemoVoterBindings,
+  generateVerificationNonce,
   isTelegramGlobalChannelKey,
   TELEGRAM_GLOBAL_CHANNEL_KEY,
   type VoterBinding,
   type VoterBindingProvider,
   type VoterBindingStatus,
+  type PendingBindingInfo,
+  type RegenerateVerificationResult,
 } from "./voter-binding";
 
 export {
@@ -80,7 +85,18 @@ export {
 
 export {
   sendVerificationToTelegramUser,
+  sendVerificationToTelegramUserViaChannel,
+  sendVerificationToTelegramGroup,
+  buildTelegramVerificationCallbackValue,
   handleTelegramVerificationConfirm,
   handleTelegramVerificationReject,
   parseTelegramVerificationCallbackValue,
+  getTelegramCallbackDataByteLength,
+  TELEGRAM_CALLBACK_DATA_MAX_BYTES,
 } from "./telegram-binding-verification";
+
+export {
+  resendVoterVerification,
+  type ResendVoterVerificationInput,
+  type ResendVoterVerificationResult,
+} from "./admin";

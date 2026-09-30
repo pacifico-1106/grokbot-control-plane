@@ -6,6 +6,7 @@ import {
   handleTelegramVerificationReject,
   parseTelegramVerificationCallbackValue,
 } from "@/lib/approval-workflow/telegram-binding-verification";
+import { getVoterBindingByNonce } from "@/lib/approval-workflow/voter-binding";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -48,12 +49,18 @@ export async function POST(req: Request, ctx: { params: Promise<{ ref: string }>
         return NextResponse.json({ ok: true });
       }
 
-      if (parsed.channelKey !== channel.id) {
+      const bindingInfo = await getVoterBindingByNonce(parsed.nonce);
+      if (!bindingInfo) {
+        await answerCallback(channel.secrets.botToken || "", query.id || "", "バインディングが見つかりません");
+        return NextResponse.json({ ok: true });
+      }
+
+      if (bindingInfo.channelKey !== channel.id) {
         await answerCallback(channel.secrets.botToken || "", query.id || "", "チャネルが一致しません");
         return NextResponse.json({ ok: true });
       }
 
-      if (parsed.orgId !== channel.orgId) {
+      if (bindingInfo.orgId !== channel.orgId) {
         await answerCallback(channel.secrets.botToken || "", query.id || "", "組織が一致しません");
         return NextResponse.json({ ok: true });
       }

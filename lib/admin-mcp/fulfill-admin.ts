@@ -785,6 +785,7 @@ async function fulfillVoterBind(
       memberDisplayName: memberName,
       orgName: org.name,
       verificationCode: bindResult.verificationCode,
+      verificationNonce: bindResult.verificationNonce,
       channelKey,
     });
     if (telegramResult.ok) {
@@ -807,6 +808,7 @@ async function fulfillVoterBind(
         memberDisplayName: memberName,
         orgName: org.name,
         verificationCode: bindResult.verificationCode,
+        verificationNonce: bindResult.verificationNonce,
         channelId: channelKey,
         botToken: channelSecrets.botToken,
       });
@@ -821,6 +823,7 @@ async function fulfillVoterBind(
           memberDisplayName: memberName,
           orgName: org.name,
           verificationCode: bindResult.verificationCode,
+          verificationNonce: bindResult.verificationNonce,
           channelId: channelKey,
           botToken: channelSecrets.botToken,
           groupChatId: chatId,

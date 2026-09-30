@@ -948,6 +948,21 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
     },
   },
   {
+    name: "approvalWorkflow.resendVoterVerification",
+    description:
+      "Resend the verification message for an existing pending voter binding (admin read-only-safe). Generates a new verification code and nonce with fresh 15-minute expiry. Use when the original verification message expired or was not received. Does not create new authority — the binding must already exist in pending state.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        provider: { type: "string", enum: ["slack", "telegram", "line"], description: "External identity provider" },
+        channelKey: { type: "string", description: "Notification channel UUID or 'telegram:global'" },
+        externalUserId: { type: "string", description: "External user ID to resend verification to" },
+      },
+      required: ["provider", "channelKey", "externalUserId"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "approvalWorkflow.listVoterBindings",
     description:
       "List voter bindings for the org (read-only, no approval). Filter by provider, channelKey, or memberId. Returns binding status (pending/active/expired/revoked).",
@@ -2460,6 +2475,36 @@ export async function callAdminMcpTool(
         true
       );
     }
+  }
+
+  if (name === "approvalWorkflow.resendVoterVerification") {
+    const provider = typeof args.provider === "string" ? args.provider.trim() : "";
+    const channelKey = typeof args.channelKey === "string" ? args.channelKey.trim() : "";
+    const externalUserId = typeof args.externalUserId === "string" ? args.externalUserId.trim() : "";
+
+    if (!provider || !channelKey || !externalUserId) {
+      return toolResult(
+        { ok: false, code: "missing_required_fields", message: "provider, channelKey, externalUserId が必要です" },
+        true
+      );
+    }
+
+    if (!["slack", "telegram", "line"].includes(provider)) {
+      return toolResult(
+        { ok: false, code: "invalid_provider", message: "provider は slack, telegram, line のいずれかである必要があります" },
+        true
+      );
+    }
+
+    const { resendVoterVerification } = await import("@/lib/approval-workflow/admin");
+    const result = await resendVoterVerification({
+      orgId: cred.orgId,
+      provider: provider as VoterBindingProvider,
+      channelKey,
+      externalUserId,
+    });
+
+    return toolResult(result, !result.ok);
   }
 
   if (name === "approvalWorkflow.listVoterBindings") {
