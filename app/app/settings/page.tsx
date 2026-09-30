@@ -2,9 +2,11 @@ import { AppShell } from "@/components/AppShell";
 import { ConversationAdaptersClient } from "@/components/ConversationAdaptersClient";
 import { NotificationChannelsClient } from "@/components/NotificationChannelsClient";
 import { PartyDirectoryClient } from "@/components/PartyDirectoryClient";
+import { ApprovalKindRoutesClient } from "@/components/settings/ApprovalKindRoutesClient";
 import { IngressHandoffPolicyClient } from "@/components/settings/IngressHandoffPolicyClient";
 import { ProjectsClient } from "@/components/settings/ProjectsClient";
 import { SodWarnPolicyClient } from "@/components/settings/SodWarnPolicyClient";
+import { getOrgApprovalKindRoutesPolicy } from "@/lib/approval-kind-routes/data";
 import { getSessionContext } from "@/lib/auth/session";
 import {
   getOrgIngressHandoffPolicy,
@@ -16,6 +18,7 @@ import {
   listOrgParties,
   listOrgProjects,
 } from "@/lib/data";
+import { isApprovalKindRoutesEnabled } from "@/lib/feature-flags";
 import { isDefaultIngressHandoffPolicy } from "@/lib/ingress-handoff/validate";
 
 export const dynamic = "force-dynamic";
@@ -34,6 +37,10 @@ export default async function SettingsPage() {
   const ingressHandoffIsDefault = ingressHandoffPolicy
     ? isDefaultIngressHandoffPolicy(ingressHandoffPolicy)
     : true;
+  const approvalKindRoutesEnabled = isApprovalKindRoutesEnabled();
+  const approvalKindRoutesPolicy = canManage && approvalKindRoutesEnabled
+    ? await getOrgApprovalKindRoutesPolicy(session.orgId)
+    : null;
   return (
     <AppShell
       title="つながり"
@@ -78,6 +85,10 @@ export default async function SettingsPage() {
           ) : null}
           {sodWarnPolicy ? <SodWarnPolicyClient initialPolicy={sodWarnPolicy} /> : null}
           <ProjectsClient initialProjects={projects} initialAssets={assets} />
+          <ApprovalKindRoutesClient
+            policy={approvalKindRoutesPolicy}
+            enabled={approvalKindRoutesEnabled}
+          />
         </>
       ) : (
         <p className="surface p-4 text-sm">この設定は組織のオーナーまたは管理者のみ変更できます。</p>
