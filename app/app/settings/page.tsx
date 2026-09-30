@@ -38,7 +38,7 @@ export default async function SettingsPage() {
     ? isDefaultIngressHandoffPolicy(ingressHandoffPolicy)
     : true;
   const approvalKindRoutesEnabled = isApprovalKindRoutesEnabled();
-  const approvalKindRoutesPolicy = canManage && approvalKindRoutesEnabled
+  const approvalKindRoutesPolicy = canManage && approvalKindRoutesEnabled && session.orgId
     ? await getOrgApprovalKindRoutesPolicy(session.orgId)
     : null;
   return (
