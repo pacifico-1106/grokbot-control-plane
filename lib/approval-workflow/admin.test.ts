@@ -201,4 +201,27 @@ describe("resendVoterVerification", () => {
     expect(resendResult.ok).toBe(false);
     expect(resendResult.error).toBe("binding_revoked");
   });
+
+  test("resend for telegram global channel attempts DM to user", async () => {
+    const createResult = await createPendingVoterBinding({
+      orgId: RESEND_ORG_ID,
+      provider: "telegram",
+      channelKey: "telegram:global",
+      externalUserId: "123456789",
+      memberId: RESEND_MEMBER_ID,
+    });
+
+    expect(createResult.ok).toBe(true);
+    if (!createResult.ok) return;
+
+    const resendResult = await resendVoterVerification({
+      orgId: RESEND_ORG_ID,
+      provider: "telegram",
+      channelKey: "telegram:global",
+      externalUserId: "123456789",
+    });
+
+    expect(resendResult.ok).toBe(false);
+    expect(resendResult.error).toBeDefined();
+  });
 });

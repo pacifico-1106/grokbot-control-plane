@@ -811,32 +811,21 @@ async function fulfillVoterBind(
         verificationNonce: bindResult.verificationNonce,
         channelId: channelKey,
         botToken: channelSecrets.botToken,
+        chatId,
       });
 
       if (telegramResult.ok) {
-        nextStepJa = "Telegram DMで送信された確認ボタンをクリックして、バインディングを有効化してください。";
-      } else if (telegramResult.error === "bot_blocked_or_not_started" && isGroupChat && chatId) {
-        const groupResult = await sendVerificationToTelegramGroup({
-          telegramUserId: externalUserId,
-          orgId: approval.orgId,
-          memberId,
-          memberDisplayName: memberName,
-          orgName: org.name,
-          verificationCode: bindResult.verificationCode,
-          verificationNonce: bindResult.verificationNonce,
-          channelId: channelKey,
-          botToken: channelSecrets.botToken,
-          groupChatId: chatId,
-        });
-        if (groupResult.ok) {
-          nextStepJa = "グループチャットに確認ボタンを送信しました。本人のみがクリックできます。グループ内のボタンをクリックしてバインディングを有効化してください。";
-        } else {
-          nextStepJa = `グループチャットへの送信も失敗しました（${groupResult.error}）。チャネルのBot設定を確認してください。`;
-        }
+        nextStepJa = isGroupChat
+          ? "グループチャットに確認ボタンを送信しました。本人のみがクリックできます。グループ内のボタンをクリックしてバインディングを有効化してください。"
+          : "Telegramチャットで送信された確認ボタンをクリックして、バインディングを有効化してください。";
+      } else if (telegramResult.error === "chat_not_reachable") {
+        nextStepJa = telegramResult.nextStepJa || (isGroupChat
+          ? `グループチャットに送信できません。Botがグループに追加されているか確認してください。`
+          : `Telegramチャットに送信できません。ユーザーがBotを開始しているか確認してください。`);
       } else if (telegramResult.nextStepJa) {
         nextStepJa = telegramResult.nextStepJa;
       } else {
-        nextStepJa = `Telegram DMの送信に失敗しました（${telegramResult.error}）。チャネルのBot設定を確認し、ユーザーがBotを開始しているか確認してください。`;
+        nextStepJa = `Telegramへの送信に失敗しました（${telegramResult.error}）。チャネルのBot設定を確認してください。`;
       }
     } else {
       nextStepJa = `Telegramチャネル ${channelKey} のBot Tokenが設定されていません。通知チャネルの設定を確認してください。`;

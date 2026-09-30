@@ -300,30 +300,6 @@ export async function resendVoterVerification(
     return { ok: false, messageJa: regenResult.messageJa || "検証コードの再生成に失敗しました。", error: regenResult.reason };
   }
 
-  await updateResendRateLimit(
-    input.orgId,
-    input.provider,
-    input.channelKey,
-    input.externalUserId,
-    wasLocked ?? false
-  );
-
-  if (wasLocked) {
-    await appendAuditEvent({
-      orgId: input.orgId,
-      employeeId: null,
-      credentialId: input.actorCredentialId || null,
-      action: "voter_binding.unlock_via_resend",
-      purpose: "voter_binding.resend",
-      summary: "ロックされたバインディングを再送信でアンロック",
-      metadata: {
-        provider: input.provider,
-        channelKey: input.channelKey,
-        externalUserIdHash: hashExternalUserId(input.externalUserId),
-      },
-    });
-  }
-
   const memberName = `メンバー ${binding.memberId.slice(0, 8)}`;
   const orgName = "Staffpass組織";
 
@@ -382,32 +358,21 @@ export async function resendVoterVerification(
         verificationNonce: regenResult.verificationNonce,
         channelId: input.channelKey,
         botToken: channelSecrets.botToken,
+        chatId,
       });
 
       if (telegramResult.ok) {
-        sendResult = { ok: true, messageJa: "Telegram DMで検証メッセージを再送信しました。" };
-      } else if (telegramResult.error === "bot_blocked_or_not_started" && isGroupChat && chatId) {
-        const groupResult = await sendVerificationToTelegramGroup({
-          telegramUserId: input.externalUserId,
-          orgId: input.orgId,
-          memberId: binding.memberId,
-          memberDisplayName: memberName,
-          orgName,
-          verificationCode: regenResult.verificationCode,
-          verificationNonce: regenResult.verificationNonce,
-          channelId: input.channelKey,
-          botToken: channelSecrets.botToken,
-          groupChatId: chatId,
-        });
-        if (groupResult.ok) {
-          sendResult = { ok: true, messageJa: "グループチャットに検証メッセージを再送信しました。" };
-        } else {
-          sendResult = { ok: false, messageJa: `グループチャットへの送信に失敗しました: ${groupResult.error}`, error: groupResult.error };
-        }
+        sendResult = { ok: true, messageJa: isGroupChat ? "グループチャットに検証メッセージを再送信しました。" : "Telegramチャットに検証メッセージを再送信しました。" };
+      } else if (telegramResult.error === "chat_not_reachable" && isGroupChat && chatId) {
+        sendResult = {
+          ok: false,
+          messageJa: telegramResult.nextStepJa || `グループチャットに送信できません。Botがグループに追加されているか確認してください。`,
+          error: telegramResult.error,
+        };
       } else {
         sendResult = {
           ok: false,
-          messageJa: telegramResult.nextStepJa || `Telegram DMの送信に失敗しました: ${telegramResult.error}`,
+          messageJa: telegramResult.nextStepJa || `Telegramへの送信に失敗しました: ${telegramResult.error}`,
           error: telegramResult.error,
         };
       }
@@ -416,6 +381,32 @@ export async function resendVoterVerification(
     sendResult = { ok: false, messageJa: "LINEの検証再送信はまだサポートされていません。", error: "line_not_supported" };
   } else {
     sendResult = { ok: false, messageJa: "不明なプロバイダーです。", error: "unknown_provider" };
+  }
+
+  if (sendResult.ok) {
+    await updateResendRateLimit(
+      input.orgId,
+      input.provider,
+      input.channelKey,
+      input.externalUserId,
+      wasLocked ?? false
+    );
+
+    if (wasLocked) {
+      await appendAuditEvent({
+        orgId: input.orgId,
+        employeeId: null,
+        credentialId: input.actorCredentialId || null,
+        action: "voter_binding.unlock_via_resend",
+        purpose: "voter_binding.resend",
+        summary: "ロックされたバインディングを再送信でアンロック",
+        metadata: {
+          provider: input.provider,
+          channelKey: input.channelKey,
+          externalUserIdHash: hashExternalUserId(input.externalUserId),
+        },
+      });
+    }
   }
 
   await appendAuditEvent({
