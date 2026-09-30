@@ -79,3 +79,126 @@ test("remind rechecks the target on execution; resolved targets cause no reminde
  expect(result?.ok).toBe(false);expect(result?.error).toBe("target_approval_not_pending");
  expect(sent.filter(id=>id===target.id).length).toBe(0);
 });
+
+import { describe } from "bun:test";
+import { createPendingVoterBinding, resetDemoVoterBindings, getVoterBinding } from "./voter-binding";
+import { resendVoterVerification } from "./admin";
+
+describe("resendVoterVerification", () => {
+  const RESEND_ORG_ID = DEMO_ORG.id;
+  const RESEND_MEMBER_ID = "resend-member-id";
+  const RESEND_EXTERNAL_USER_ID = "SLACK_USER_FOR_RESEND";
+
+  beforeEach(() => {
+    resetDemoVoterBindings();
+    resetDemoWorkflowData();
+    upsertRuntimeMember({
+      id: RESEND_MEMBER_ID,
+      orgId: RESEND_ORG_ID,
+      email: "resend-member@example.com",
+      displayName: "Resend Member",
+      role: "admin",
+      status: "active",
+      capabilities: ["approve_actions"],
+    });
+  });
+
+  test("resend only sends to the externalUserId stored on the binding", async () => {
+    const createResult = await createPendingVoterBinding({
+      orgId: RESEND_ORG_ID,
+      provider: "slack",
+      channelKey: "channel-resend-test",
+      externalUserId: RESEND_EXTERNAL_USER_ID,
+      memberId: RESEND_MEMBER_ID,
+    });
+
+    expect(createResult.ok).toBe(true);
+    if (!createResult.ok) return;
+
+    const bindingBefore = await getVoterBinding(
+      RESEND_ORG_ID,
+      "slack",
+      "channel-resend-test",
+      RESEND_EXTERNAL_USER_ID
+    );
+    expect(bindingBefore).not.toBeNull();
+    expect(bindingBefore?.externalUserId).toBe(RESEND_EXTERNAL_USER_ID);
+  });
+
+  test("resend fails for non-existent binding", async () => {
+    const result = await resendVoterVerification({
+      orgId: RESEND_ORG_ID,
+      provider: "slack",
+      channelKey: "non-existent-channel",
+      externalUserId: "NON_EXISTENT_USER",
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe("binding_not_found");
+  });
+
+  test("resend fails for already verified binding", async () => {
+    const { verifyVoterBinding } = await import("./voter-binding");
+
+    const createResult = await createPendingVoterBinding({
+      orgId: RESEND_ORG_ID,
+      provider: "slack",
+      channelKey: "channel-resend-verified",
+      externalUserId: "SLACK_USER_VERIFIED",
+      memberId: RESEND_MEMBER_ID,
+    });
+
+    expect(createResult.ok).toBe(true);
+    if (!createResult.ok) return;
+
+    await verifyVoterBinding({
+      orgId: RESEND_ORG_ID,
+      provider: "slack",
+      channelKey: "channel-resend-verified",
+      externalUserId: "SLACK_USER_VERIFIED",
+      verificationCode: createResult.verificationCode,
+    });
+
+    const resendResult = await resendVoterVerification({
+      orgId: RESEND_ORG_ID,
+      provider: "slack",
+      channelKey: "channel-resend-verified",
+      externalUserId: "SLACK_USER_VERIFIED",
+    });
+
+    expect(resendResult.ok).toBe(false);
+    expect(resendResult.error).toBe("already_verified");
+  });
+
+  test("resend fails for revoked binding", async () => {
+    const { revokeVoterBinding } = await import("./voter-binding");
+
+    const createResult = await createPendingVoterBinding({
+      orgId: RESEND_ORG_ID,
+      provider: "slack",
+      channelKey: "channel-resend-revoked",
+      externalUserId: "SLACK_USER_REVOKED",
+      memberId: RESEND_MEMBER_ID,
+    });
+
+    expect(createResult.ok).toBe(true);
+    if (!createResult.ok) return;
+
+    await revokeVoterBinding(
+      RESEND_ORG_ID,
+      "slack",
+      "channel-resend-revoked",
+      "SLACK_USER_REVOKED"
+    );
+
+    const resendResult = await resendVoterVerification({
+      orgId: RESEND_ORG_ID,
+      provider: "slack",
+      channelKey: "channel-resend-revoked",
+      externalUserId: "SLACK_USER_REVOKED",
+    });
+
+    expect(resendResult.ok).toBe(false);
+    expect(resendResult.error).toBe("binding_revoked");
+  });
+});

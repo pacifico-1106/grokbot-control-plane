@@ -15,10 +15,8 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { isDemoMode } from "@/lib/mode";
 import {
-  generateVerificationCode,
-  verifyVoterBinding,
+  verifyVoterBindingByNonce,
   type VoterBinding,
-  type VoterBindingProvider,
 } from "./voter-binding";
 
 const TELEGRAM_API = "https://api.telegram.org";
@@ -46,6 +44,7 @@ export interface SendTelegramVerificationInput {
   memberDisplayName: string;
   orgName: string;
   verificationCode: string;
+  verificationNonce: string;
   channelKey?: string;
 }
 
@@ -63,12 +62,9 @@ export async function sendVerificationToTelegramUser(
     return { ok: false, error: "missing_credentials" };
   }
 
-  const channelKey = input.channelKey || TELEGRAM_GLOBAL_CHANNEL_KEY;
   const callbackValue = buildTelegramVerificationCallbackValue({
-    orgId: input.orgId,
+    verificationNonce: input.verificationNonce,
     telegramUserId: input.telegramUserId,
-    verificationCode: input.verificationCode,
-    channelKey,
   });
 
   const text = `*Staffpass 承認者登録の確認*\n\n` +
@@ -132,6 +128,7 @@ export interface SendTelegramVerificationViaChannelInput {
   memberDisplayName: string;
   orgName: string;
   verificationCode: string;
+  verificationNonce: string;
   channelId: string;
   botToken: string;
 }
@@ -160,10 +157,8 @@ export async function sendVerificationToTelegramUserViaChannel(
   }
 
   const callbackValue = buildTelegramVerificationCallbackValue({
-    orgId: input.orgId,
+    verificationNonce: input.verificationNonce,
     telegramUserId: input.telegramUserId,
-    verificationCode: input.verificationCode,
-    channelKey: input.channelId,
   });
 
   const text = `*Staffpass 承認者登録の確認*\n\n` +
@@ -237,78 +232,95 @@ function escapeTelegramMarkdown(value: unknown): string {
     .replace(/[_*[\]()~`>#+=|{}.!-]/g, "\\$&");
 }
 
+/**
+ * Build a compact callback_data for Telegram inline buttons.
+ *
+ * Format: `NONCE.USERHASH.SIG` (always <= 64 bytes)
+ * - NONCE: 16 chars base64url (12 bytes random)
+ * - USERHASH: 8 chars truncated hash of telegramUserId (for presser verification)
+ * - SIG: 8 chars truncated HMAC signature
+ * - Total: 16 + 1 + 8 + 1 + 8 = 34 chars (well under 64 bytes)
+ */
 export function buildTelegramVerificationCallbackValue(input: {
-  orgId: string;
+  verificationNonce: string;
   telegramUserId: string;
-  verificationCode: string;
-  channelKey: string;
 }): string {
-  const payload = JSON.stringify({
-    o: input.orgId,
-    u: input.telegramUserId,
-    v: input.verificationCode,
-    c: input.channelKey,
-    t: Date.now(),
-  });
-  const sig = createHmac("sha256", getCallbackSecret())
-    .update(payload)
+  const userHash = createHmac("sha256", getCallbackSecret())
+    .update(input.telegramUserId)
     .digest("base64url")
-    .slice(0, 12);
-  return `${Buffer.from(payload).toString("base64url")}.${sig}`;
+    .slice(0, 8);
+  const sigInput = `${input.verificationNonce}.${userHash}`;
+  const sig = createHmac("sha256", getCallbackSecret())
+    .update(sigInput)
+    .digest("base64url")
+    .slice(0, 8);
+  return `${input.verificationNonce}.${userHash}.${sig}`;
 }
 
+export const TELEGRAM_CALLBACK_DATA_MAX_BYTES = 64;
+
+export function getTelegramCallbackDataByteLength(
+  prefix: string,
+  callbackValue: string
+): number {
+  return Buffer.byteLength(`${prefix}${callbackValue}`, "utf8");
+}
+
+/**
+ * Parse and verify a nonce-based callback value.
+ * Returns the nonce if valid. The caller must look up the binding by nonce
+ * and verify the presser's userId against the expected userId.
+ */
 export function parseTelegramVerificationCallbackValue(
-  value: string
-): { ok: true; orgId: string; telegramUserId: string; verificationCode: string; channelKey: string } | { ok: false; reason: string } {
+  value: string,
+  presserTelegramUserId?: string
+): { ok: true; nonce: string } | { ok: false; reason: string } {
   const parts = value.split(".");
-  if (parts.length !== 2) return { ok: false, reason: "invalid_format" };
 
-  const [payloadB64, sig] = parts;
-  let payload: string;
-  try {
-    payload = Buffer.from(payloadB64, "base64url").toString();
-  } catch {
-    return { ok: false, reason: "decode_failed" };
-  }
+  if (parts.length === 3) {
+    const [nonce, userHash, sig] = parts;
+    const sigInput = `${nonce}.${userHash}`;
+    const expectedSig = createHmac("sha256", getCallbackSecret())
+      .update(sigInput)
+      .digest("base64url")
+      .slice(0, 8);
 
-  const expectedSig = createHmac("sha256", getCallbackSecret())
-    .update(payload)
-    .digest("base64url")
-    .slice(0, 12);
-
-  const a = Buffer.from(sig);
-  const b = Buffer.from(expectedSig);
-  if (a.length !== b.length || !timingSafeEqual(a, b)) {
-    return { ok: false, reason: "signature_invalid" };
-  }
-
-  try {
-    const parsed = JSON.parse(payload) as { o?: string; u?: string; v?: string; c?: string; t?: number };
-    if (!parsed.o || !parsed.u || !parsed.v) {
-      return { ok: false, reason: "missing_fields" };
+    const a = Buffer.from(sig);
+    const b = Buffer.from(expectedSig);
+    if (a.length !== b.length || !timingSafeEqual(a, b)) {
+      return { ok: false, reason: "signature_invalid" };
     }
-    return {
-      ok: true,
-      orgId: parsed.o,
-      telegramUserId: parsed.u,
-      verificationCode: parsed.v,
-      channelKey: parsed.c || TELEGRAM_GLOBAL_CHANNEL_KEY,
-    };
-  } catch {
-    return { ok: false, reason: "parse_failed" };
+
+    if (presserTelegramUserId) {
+      const expectedUserHash = createHmac("sha256", getCallbackSecret())
+        .update(presserTelegramUserId)
+        .digest("base64url")
+        .slice(0, 8);
+      const ua = Buffer.from(userHash);
+      const ub = Buffer.from(expectedUserHash);
+      if (ua.length !== ub.length || !timingSafeEqual(ua, ub)) {
+        return { ok: false, reason: "user_mismatch" };
+      }
+    }
+
+    return { ok: true, nonce };
   }
+
+  return { ok: false, reason: "invalid_format" };
 }
 
 export async function handleTelegramVerificationConfirm(input: {
   callbackValue: string;
   presserTelegramUserId: string;
+  expectedChannelKey: string;
+  expectedOrgId: string;
 }): Promise<
   | { ok: true; binding: VoterBinding; messageJa: string }
   | { ok: false; reason: string; messageJa: string }
 > {
   let parsed: ReturnType<typeof parseTelegramVerificationCallbackValue>;
   try {
-    parsed = parseTelegramVerificationCallbackValue(input.callbackValue);
+    parsed = parseTelegramVerificationCallbackValue(input.callbackValue, input.presserTelegramUserId);
   } catch (error) {
     if (error instanceof Error && error.message.includes("VOTER_BINDING_SECRET")) {
       console.error("voter_binding_secret_not_configured", { error: error.message });
@@ -322,6 +334,13 @@ export async function handleTelegramVerificationConfirm(input: {
   }
 
   if (!parsed.ok) {
+    if (parsed.reason === "user_mismatch") {
+      return {
+        ok: false,
+        reason: "user_mismatch",
+        messageJa: "このボタンはあなた宛てではありません。",
+      };
+    }
     return {
       ok: false,
       reason: parsed.reason,
@@ -329,34 +348,12 @@ export async function handleTelegramVerificationConfirm(input: {
     };
   }
 
-  if (parsed.telegramUserId !== input.presserTelegramUserId) {
-    return {
-      ok: false,
-      reason: "user_mismatch",
-      messageJa: "このボタンはあなた宛てではありません。",
-    };
-  }
-
-  let result: Awaited<ReturnType<typeof verifyVoterBinding>>;
-  try {
-    result = await verifyVoterBinding({
-      orgId: parsed.orgId,
-      provider: "telegram" as VoterBindingProvider,
-      channelKey: parsed.channelKey,
-      externalUserId: parsed.telegramUserId,
-      verificationCode: parsed.verificationCode,
-    });
-  } catch (error) {
-    if (error instanceof Error && error.message.includes("VOTER_BINDING_SECRET")) {
-      console.error("voter_binding_secret_not_configured", { error: error.message });
-      return {
-        ok: false,
-        reason: "secret_not_configured",
-        messageJa: "システム設定エラー: 検証シークレットが設定されていません。",
-      };
-    }
-    throw error;
-  }
+  const result = await verifyVoterBindingByNonce({
+    nonce: parsed.nonce,
+    presserExternalUserId: input.presserTelegramUserId,
+    expectedChannelKey: input.expectedChannelKey,
+    expectedOrgId: input.expectedOrgId,
+  });
 
   if (!result.ok) {
     return result;
@@ -375,7 +372,7 @@ export async function handleTelegramVerificationReject(input: {
 }): Promise<{ ok: true; messageJa: string } | { ok: false; reason: string; messageJa: string }> {
   let parsed: ReturnType<typeof parseTelegramVerificationCallbackValue>;
   try {
-    parsed = parseTelegramVerificationCallbackValue(input.callbackValue);
+    parsed = parseTelegramVerificationCallbackValue(input.callbackValue, input.presserTelegramUserId);
   } catch (error) {
     if (error instanceof Error && error.message.includes("VOTER_BINDING_SECRET")) {
       return {
@@ -388,18 +385,17 @@ export async function handleTelegramVerificationReject(input: {
   }
 
   if (!parsed.ok) {
+    if (parsed.reason === "user_mismatch") {
+      return {
+        ok: false,
+        reason: "user_mismatch",
+        messageJa: "このボタンはあなた宛てではありません。",
+      };
+    }
     return {
       ok: false,
       reason: parsed.reason,
       messageJa: "検証データが不正です。",
-    };
-  }
-
-  if (parsed.telegramUserId !== input.presserTelegramUserId) {
-    return {
-      ok: false,
-      reason: "user_mismatch",
-      messageJa: "このボタンはあなた宛てではありません。",
     };
   }
 
@@ -416,6 +412,7 @@ export interface SendTelegramVerificationToGroupInput {
   memberDisplayName: string;
   orgName: string;
   verificationCode: string;
+  verificationNonce: string;
   channelId: string;
   botToken: string;
   groupChatId: string;
@@ -435,10 +432,8 @@ export async function sendVerificationToTelegramGroup(
   }
 
   const callbackValue = buildTelegramVerificationCallbackValue({
-    orgId: input.orgId,
+    verificationNonce: input.verificationNonce,
     telegramUserId: input.telegramUserId,
-    verificationCode: input.verificationCode,
-    channelKey: input.channelId,
   });
 
   const text = `*Staffpass 承認者登録の確認*\n\n` +

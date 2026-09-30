@@ -79,6 +79,7 @@ describe("admin MCP always_human", () => {
       "approvalWorkflow.get",
       "approvalWorkflow.inspect",
       "approvalWorkflow.listVoterBindings",
+      "approvalWorkflow.resendVoterVerification",
       "employeeIdentity.status",
     ];
     const mutatingTools = ADMIN_MCP_TOOLS.filter((t) => !readOnlyTools.includes(t.name));

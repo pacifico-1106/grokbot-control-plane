@@ -139,14 +139,10 @@ describe("telegram verification callback parsing", () => {
     expect(result.ok).toBe(false);
   });
 
-  test("parseTelegramVerificationCallbackValue rejects invalid signature", () => {
-    const fakePayload = Buffer.from(JSON.stringify({
-      o: DEMO_ORG_ID,
-      u: TELEGRAM_USER_ID,
-      v: "123456",
-      t: Date.now(),
-    })).toString("base64url");
-    const result = parseTelegramVerificationCallbackValue(`${fakePayload}.invalidsig`);
+  test("parseTelegramVerificationCallbackValue rejects invalid signature", async () => {
+    const { generateVerificationNonce } = await import("./voter-binding");
+    const nonce = generateVerificationNonce();
+    const result = parseTelegramVerificationCallbackValue(`${nonce}.fakehash.invalidsig`);
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.reason).toBe("signature_invalid");
@@ -173,11 +169,11 @@ describe("telegram verification confirm handler", () => {
     expect(createResult.ok).toBe(true);
     if (!createResult.ok) return;
 
-    const { sendVerificationToTelegramUser } = await import("./telegram-binding-verification");
-
     const wrongUserResult = await handleTelegramVerificationConfirm({
       callbackValue: "invalid_callback_value",
       presserTelegramUserId: "wrong_user",
+      expectedChannelKey: TELEGRAM_GLOBAL_CHANNEL_KEY,
+      expectedOrgId: DEMO_ORG_ID,
     });
 
     expect(wrongUserResult.ok).toBe(false);
@@ -409,10 +405,8 @@ describe("group verification button press by another member", () => {
     if (!createResult.ok) return;
 
     const callbackValue = buildTelegramVerificationCallbackValue({
-      orgId: DEMO_ORG_ID,
+      verificationNonce: createResult.verificationNonce,
       telegramUserId: TELEGRAM_USER_ID,
-      verificationCode: createResult.verificationCode,
-      channelKey: TENANT_CHANNEL_ID,
     });
 
     const bindingBefore = await getVoterBinding(
@@ -426,6 +420,8 @@ describe("group verification button press by another member", () => {
     const result = await handleTelegramVerificationConfirm({
       callbackValue,
       presserTelegramUserId: ANOTHER_USER_ID,
+      expectedChannelKey: TENANT_CHANNEL_ID,
+      expectedOrgId: DEMO_ORG_ID,
     });
 
     expect(result.ok).toBe(false);
@@ -457,15 +453,15 @@ describe("group verification button press by another member", () => {
     if (!createResult.ok) return;
 
     const callbackValue = buildTelegramVerificationCallbackValue({
-      orgId: DEMO_ORG_ID,
+      verificationNonce: createResult.verificationNonce,
       telegramUserId: TELEGRAM_USER_ID,
-      verificationCode: createResult.verificationCode,
-      channelKey: TENANT_CHANNEL_ID,
     });
 
     const result = await handleTelegramVerificationConfirm({
       callbackValue,
       presserTelegramUserId: TELEGRAM_USER_ID,
+      expectedChannelKey: TENANT_CHANNEL_ID,
+      expectedOrgId: DEMO_ORG_ID,
     });
 
     expect(result.ok).toBe(true);
@@ -482,5 +478,82 @@ describe("group verification button press by another member", () => {
     );
     expect(bindingAfter?.status).toBe("active");
     expect(bindingAfter?.verifiedAt).toBeDefined();
+  });
+});
+
+describe("callback_data 64-byte limit", () => {
+  test("buildTelegramVerificationCallbackValue produces compact callback_data", async () => {
+    const { generateVerificationNonce } = await import("./voter-binding");
+    const { buildTelegramVerificationCallbackValue } = await import("./telegram-binding-verification");
+
+    const nonce = generateVerificationNonce();
+    const callbackValue = buildTelegramVerificationCallbackValue({
+      verificationNonce: nonce,
+      telegramUserId: TELEGRAM_USER_ID,
+    });
+
+    expect(callbackValue.length).toBeLessThanOrEqual(50);
+    expect(callbackValue.split(".")).toHaveLength(3);
+  });
+
+  test("callback_data with prefix stays under 64 bytes", async () => {
+    const { generateVerificationNonce } = await import("./voter-binding");
+    const {
+      buildTelegramVerificationCallbackValue,
+      TELEGRAM_CALLBACK_DATA_MAX_BYTES,
+    } = await import("./telegram-binding-verification");
+
+    const nonce = generateVerificationNonce();
+    const callbackValue = buildTelegramVerificationCallbackValue({
+      verificationNonce: nonce,
+      telegramUserId: TELEGRAM_USER_ID,
+    });
+
+    const confirmData = `vb:c:${callbackValue}`;
+    const rejectData = `vb:r:${callbackValue}`;
+
+    expect(Buffer.byteLength(confirmData, "utf8")).toBeLessThanOrEqual(TELEGRAM_CALLBACK_DATA_MAX_BYTES);
+    expect(Buffer.byteLength(rejectData, "utf8")).toBeLessThanOrEqual(TELEGRAM_CALLBACK_DATA_MAX_BYTES);
+  });
+
+  test("callback_data stays under 64 bytes with long telegram user IDs", async () => {
+    const { generateVerificationNonce } = await import("./voter-binding");
+    const {
+      buildTelegramVerificationCallbackValue,
+      TELEGRAM_CALLBACK_DATA_MAX_BYTES,
+    } = await import("./telegram-binding-verification");
+
+    const longUserIds = ["12345678", "123456789012", "1234567890123456", "99999999999999999999"];
+
+    for (const userId of longUserIds) {
+      const nonce = generateVerificationNonce();
+      const callbackValue = buildTelegramVerificationCallbackValue({
+        verificationNonce: nonce,
+        telegramUserId: userId,
+      });
+
+      const confirmData = `vb:c:${callbackValue}`;
+      const byteLen = Buffer.byteLength(confirmData, "utf8");
+      expect(byteLen).toBeLessThanOrEqual(TELEGRAM_CALLBACK_DATA_MAX_BYTES);
+    }
+  });
+
+  test("multiple nonces produce different callback values", async () => {
+    const { generateVerificationNonce } = await import("./voter-binding");
+    const { buildTelegramVerificationCallbackValue } = await import("./telegram-binding-verification");
+
+    const nonce1 = generateVerificationNonce();
+    const nonce2 = generateVerificationNonce();
+
+    const cb1 = buildTelegramVerificationCallbackValue({
+      verificationNonce: nonce1,
+      telegramUserId: TELEGRAM_USER_ID,
+    });
+    const cb2 = buildTelegramVerificationCallbackValue({
+      verificationNonce: nonce2,
+      telegramUserId: TELEGRAM_USER_ID,
+    });
+
+    expect(cb1).not.toBe(cb2);
   });
 });

@@ -4,7 +4,6 @@ import { handleTelegramChannelUpdate } from "@/lib/notify/telegram-channel-webho
 import {
   handleTelegramVerificationConfirm,
   handleTelegramVerificationReject,
-  parseTelegramVerificationCallbackValue,
 } from "@/lib/approval-workflow/telegram-binding-verification";
 
 export const runtime = "nodejs";
@@ -42,26 +41,12 @@ export async function POST(req: Request, ctx: { params: Promise<{ ref: string }>
       const callbackValue = vbMatch[2];
       const presserTelegramUserId = String(query.from?.id ?? "");
 
-      const parsed = parseTelegramVerificationCallbackValue(callbackValue);
-      if (!parsed.ok) {
-        await answerCallback(channel.secrets.botToken || "", query.id || "", "検証データが不正です");
-        return NextResponse.json({ ok: true });
-      }
-
-      if (parsed.channelKey !== channel.id) {
-        await answerCallback(channel.secrets.botToken || "", query.id || "", "チャネルが一致しません");
-        return NextResponse.json({ ok: true });
-      }
-
-      if (parsed.orgId !== channel.orgId) {
-        await answerCallback(channel.secrets.botToken || "", query.id || "", "組織が一致しません");
-        return NextResponse.json({ ok: true });
-      }
-
       if (action === "c") {
         const result = await handleTelegramVerificationConfirm({
           callbackValue,
           presserTelegramUserId,
+          expectedChannelKey: channel.id,
+          expectedOrgId: channel.orgId,
         });
         await answerCallback(channel.secrets.botToken || "", query.id || "", result.messageJa);
       } else {

@@ -510,7 +510,11 @@ export type AuditAction =
   | "calendar.freebusy_read"
   | "calendar.allowlist_patch"
   | "google.identity_connected"
-  | "google.identity_revoked";
+  | "google.identity_revoked"
+  | "voter_binding.resend_rate_limited"
+  | "voter_binding.resend_failed"
+  | "voter_binding.resend_success"
+  | "voter_binding.unlock_via_resend";
 
 export interface Org {
   id: string;
