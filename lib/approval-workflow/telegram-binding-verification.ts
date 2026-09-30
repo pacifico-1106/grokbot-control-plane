@@ -131,6 +131,7 @@ export interface SendTelegramVerificationViaChannelInput {
   verificationNonce: string;
   channelId: string;
   botToken: string;
+  chatId?: string;
 }
 
 export interface TelegramVerificationViaChannelResult {
@@ -140,13 +141,20 @@ export interface TelegramVerificationViaChannelResult {
   nextStepJa?: string;
 }
 
+function isChatNotReachable(errorCode: number | undefined, description: string | undefined): boolean {
+  if (errorCode === 400 && description?.toLowerCase().includes("chat not found")) return true;
+  if (errorCode === 403) return true;
+  if (description?.includes("bot can't initiate")) return true;
+  if (description?.includes("bot was blocked")) return true;
+  return false;
+}
+
 /**
- * Send verification DM via a tenant channel's bot token.
- * Used when binding a voter to a tenant-specific Telegram channel.
+ * Send verification message via a tenant channel's bot token to the channel's configured chatId.
+ * This matches how ordinary approval cards are delivered - to config.chatId, not a DM to the user.
  *
- * Note: This only works if the user has already started a conversation
- * with the channel's bot. If not, Telegram will reject the send and
- * we return a clear nextStepJa instructing the user to start the bot.
+ * For DM channels (chatId = user ID), this sends to that user's chat.
+ * For group channels (chatId starts with -), this sends to the group with presser restriction.
  */
 export async function sendVerificationToTelegramUserViaChannel(
   input: SendTelegramVerificationViaChannelInput
@@ -156,14 +164,21 @@ export async function sendVerificationToTelegramUserViaChannel(
     return { ok: false, error: "missing_credentials" };
   }
 
+  const targetChatId = input.chatId?.trim() || input.telegramUserId;
+  const isGroupChat = targetChatId.startsWith("-");
+
   const callbackValue = buildTelegramVerificationCallbackValue({
     verificationNonce: input.verificationNonce,
     telegramUserId: input.telegramUserId,
   });
 
+  const groupNotice = isGroupChat
+    ? `\n\n下のボタンは *承認者本人のみ* が押せます（他の人が押しても無効です）。`
+    : "";
+
   const text = `*Staffpass 承認者登録の確認*\n\n` +
     `組織「${escapeTelegramMarkdown(input.orgName)}」で、あなたのアカウントを承認者「${escapeTelegramMarkdown(input.memberDisplayName)}」として登録しようとしています。\n\n` +
-    `このバインディングを承認すると、このチャネルから承認ワークフローでチケットを承認・却下できるようになります。\n\n` +
+    `このバインディングを承認すると、このチャネルから承認ワークフローでチケットを承認・却下できるようになります。${groupNotice}\n\n` +
     `確認コード: \`${input.verificationCode}\`\n\n` +
     `_この確認は15分で期限切れになります。心当たりがない場合は「拒否」をクリックしてください。_`;
 
@@ -183,7 +198,7 @@ export async function sendVerificationToTelegramUserViaChannel(
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        chat_id: input.telegramUserId,
+        chat_id: targetChatId,
         text,
         parse_mode: "Markdown",
         reply_markup: { inline_keyboard: inlineKeyboard },
@@ -199,18 +214,21 @@ export async function sendVerificationToTelegramUserViaChannel(
     };
 
     if (!body.ok) {
-      console.error("telegram_verification_via_channel_dm_failed", {
+      console.error("telegram_verification_via_channel_failed", {
+        targetChatId,
         telegramUserId: input.telegramUserId,
         channelId: input.channelId,
         error: body.description,
         errorCode: body.error_code,
       });
 
-      if (body.error_code === 403 || (body.description && body.description.includes("bot can't initiate"))) {
+      if (isChatNotReachable(body.error_code, body.description)) {
         return {
           ok: false,
-          error: "bot_blocked_or_not_started",
-          nextStepJa: `このチャネルのBotからDMを送信できません。ユーザー ${input.telegramUserId} がまだBotを開始していない可能性があります。Telegramでこのチャネル用のBotを /start してから再度お試しください。`,
+          error: "chat_not_reachable",
+          nextStepJa: isGroupChat
+            ? `グループチャット ${targetChatId} に送信できません。Botがグループに追加されているか確認してください。`
+            : `このチャネルのBotからチャット ${targetChatId} に送信できません。ユーザーがまだBotを開始していない可能性があります。Telegramでこのチャネル用のBotを /start してから再度お試しください。`,
         };
       }
 
@@ -219,7 +237,7 @@ export async function sendVerificationToTelegramUserViaChannel(
 
     return { ok: true, messageId: body.result?.message_id };
   } catch (error) {
-    console.error("telegram_verification_via_channel_dm_error", error);
+    console.error("telegram_verification_via_channel_error", error);
     return {
       ok: false,
       error: error instanceof Error ? error.message : "network_error",

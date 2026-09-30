@@ -557,3 +557,46 @@ describe("callback_data 64-byte limit", () => {
     expect(cb1).not.toBe(cb2);
   });
 });
+
+describe("sendVerificationToTelegramUserViaChannel uses chatId", () => {
+  test("uses chatId when provided instead of telegramUserId", async () => {
+    const { sendVerificationToTelegramUserViaChannel } = await import("./telegram-binding-verification");
+    const { generateVerificationNonce } = await import("./voter-binding");
+
+    const result = await sendVerificationToTelegramUserViaChannel({
+      telegramUserId: "user123",
+      orgId: DEMO_ORG_ID,
+      memberId: OWNER_MEMBER_ID,
+      memberDisplayName: "Test",
+      orgName: "Test Org",
+      verificationCode: "123456",
+      verificationNonce: generateVerificationNonce(),
+      channelId: TENANT_CHANNEL_ID,
+      botToken: "",
+      chatId: "-123456789",
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe("missing_credentials");
+  });
+
+  test("group chat detection works with chatId starting with -", async () => {
+    const { sendVerificationToTelegramUserViaChannel } = await import("./telegram-binding-verification");
+    const { generateVerificationNonce } = await import("./voter-binding");
+
+    const result = await sendVerificationToTelegramUserViaChannel({
+      telegramUserId: "user123",
+      orgId: DEMO_ORG_ID,
+      memberId: OWNER_MEMBER_ID,
+      memberDisplayName: "Test",
+      orgName: "Test Org",
+      verificationCode: "123456",
+      verificationNonce: generateVerificationNonce(),
+      channelId: TENANT_CHANNEL_ID,
+      botToken: "invalid",
+      chatId: "-5253257557",
+    });
+
+    expect(result.ok).toBe(false);
+  });
+});
