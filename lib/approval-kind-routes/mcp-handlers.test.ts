@@ -25,12 +25,24 @@ beforeEach(() => {
 
 const mockCred = () => ({
   orgId: "test-org",
-  userId: "test-user",
-  email: "test@example.com",
-  role: "admin" as const,
-  isOwner: false,
-  isPlatformOps: false,
+  adminAgentId: "test-admin-agent",
   grokBotAgentId: null,
+  actorId: "test-actor",
+  generation: 1,
+  via: "bearer" as const,
+  agent: {
+    id: "test-admin-agent",
+    orgId: "test-org",
+    grokBotAgentId: null,
+    grokBotWorkspaceId: null,
+    credentialFingerprint: null,
+    secretPrefix: "gb_adm_test",
+    credentialGeneration: 1,
+    status: "linked" as const,
+    opsDocLocation: null,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  },
 });
 
 describe("handleApprovalRoutesGet", () => {

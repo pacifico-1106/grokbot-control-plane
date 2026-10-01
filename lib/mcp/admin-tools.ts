@@ -81,6 +81,7 @@ import {
 import {
   handleApprovalRoutesGet,
   validateApprovalRoutesPatch,
+  handleDeputyActivate,
 } from "@/lib/approval-kind-routes/mcp-handlers";
 import { isApprovalKindRoutesEnabled } from "@/lib/feature-flags";
 import {
@@ -1213,6 +1214,22 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
         approvalId: { type: "string", description: "Re-invoke with approved ticket ID" },
       },
       required: ["employeeId", "mailboxId"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "decision.deputyActivate",
+    description:
+      "Activate a deputy (代理人) for a pending decision request (always_human). Deputy can act on behalf of the requester. Security: self-approval forbidden (deputy cannot be requester), cross-org forbidden (deputy must be in same org). P1_DECISION_WORKFLOW_ENABLED must be ON.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        approvalId: { type: "string", description: "Original decision request approval ID" },
+        deputyUserId: { type: "string", description: "User ID of the deputy (must be in same org, cannot be requester)" },
+        reason: { type: "string", description: "Reason for deputy activation" },
+        jobId: { type: "string" },
+      },
+      required: ["approvalId", "deputyUserId"],
       additionalProperties: false,
     },
   },
@@ -2688,6 +2705,16 @@ export async function callAdminMcpTool(
       ].join("\n"),
     });
     return toolResult(queueResult, true);
+  }
+
+  // P1 Decision Workflow - Deputy Activation
+  if (name === "decision.deputyActivate") {
+    const result = await handleDeputyActivate(cred, {
+      approvalId: typeof args.approvalId === "string" ? args.approvalId.trim() : "",
+      deputyUserId: typeof args.deputyUserId === "string" ? args.deputyUserId.trim() : "",
+      reason: typeof args.reason === "string" ? args.reason.trim() : undefined,
+    });
+    return toolResult(result, !result.ok);
   }
 
   if (name === "employeeIdentity.status") {
