@@ -17,7 +17,7 @@ const STORIES = [
     subtitle: "定型が回る朝",
     description:
       "日報、議事録、社内案内、予定調整、FAQ対応——定型業務から始めるAI社員活用のストーリー。",
-    thumbnail: "/lp/ai-employee/manga/intern/01.png",
+    thumbnail: "/lp/ai-employee/manga/intern/01.webp",
     color: "var(--accent-strong)",
   },
   {
@@ -26,7 +26,7 @@ const STORIES = [
     subtitle: "顧客対応が止まらない",
     description:
       "問い合わせ対応、一次返信、見積整理、商談日程調整——営業の余白を取り戻すストーリー。",
-    thumbnail: "/lp/ai-employee/manga/proper/01.png",
+    thumbnail: "/lp/ai-employee/manga/proper/01.webp",
     color: "var(--ok)",
   },
   {
@@ -35,7 +35,7 @@ const STORIES = [
     subtitle: "経営補佐と開発保守",
     description:
       "週次サマリー、優先度整理、承認ルール設計、開発調査——経営と開発の伴走を描くストーリー。",
-    thumbnail: "/lp/ai-employee/manga/executive/01.png",
+    thumbnail: "/lp/ai-employee/manga/executive/01.webp",
     color: "var(--warning)",
   },
 ];

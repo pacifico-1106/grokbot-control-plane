@@ -12,27 +12,27 @@ export const metadata: Metadata = {
 
 const PANELS = [
   {
-    src: "/lp/ai-employee/manga/intern/01.png",
+    src: "/lp/ai-employee/manga/intern/01.webp",
     alt: "日報と議事録、また社長の夜更かし",
   },
   {
-    src: "/lp/ai-employee/manga/intern/02.png",
+    src: "/lp/ai-employee/manga/intern/02.webp",
     alt: "定型はAI社員（インターン）へ",
   },
   {
-    src: "/lp/ai-employee/manga/intern/03.png",
+    src: "/lp/ai-employee/manga/intern/03.webp",
     alt: "社内の案内も下書きまで",
   },
   {
-    src: "/lp/ai-employee/manga/intern/04.png",
+    src: "/lp/ai-employee/manga/intern/04.webp",
     alt: "予定の空きも確認",
   },
   {
-    src: "/lp/ai-employee/manga/intern/05.png",
+    src: "/lp/ai-employee/manga/intern/05.webp",
     alt: "よくある質問に一次案",
   },
   {
-    src: "/lp/ai-employee/manga/intern/06.png",
+    src: "/lp/ai-employee/manga/intern/06.webp",
     alt: "インターンから、会社の仕組みに",
   },
 ];
