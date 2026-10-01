@@ -134,3 +134,118 @@ export function isInboxRoutingEnabled(): boolean {
 export function isReplyPolicyEnhancedEnabled(): boolean {
   return parseFlag(process.env.P0_REPLY_POLICY_ENHANCED);
 }
+
+/**
+ * LP_CHAT_ENABLED: Enable AI consultation chat on LP.
+ *
+ * When ON:
+ * - Chat launcher component rendered on LP.
+ * - /api/journeys, /api/chat/turn endpoints active.
+ * - KB search available.
+ * - Requires OPENAI_API_KEY to be configured.
+ *
+ * When OFF (default):
+ * - No chat launcher.
+ * - Consultation form only.
+ */
+export function isLpChatEnabled(): boolean {
+  return parseFlag(process.env.LP_CHAT_ENABLED);
+}
+
+/**
+ * LP_INQUIRY_DB_ENABLED: Store LP inquiries in Supabase.
+ *
+ * When ON:
+ * - lp_inquiries table receives inserts.
+ * - notification_outbox populated.
+ *
+ * When OFF (default):
+ * - Inquiry endpoint returns success but does not persist.
+ */
+export function isLpInquiryDbEnabled(): boolean {
+  return parseFlag(process.env.LP_INQUIRY_DB_ENABLED);
+}
+
+/**
+ * LP_INQUIRY_BOT_PROTECTION_ENABLED: Turnstile verification for LP forms.
+ *
+ * When ON:
+ * - Require cf-turnstile-response token validation.
+ * - Reject bots before any DB writes.
+ *
+ * When OFF (default):
+ * - No bot verification (existing behavior).
+ */
+export function isLpInquiryBotProtectionEnabled(): boolean {
+  return parseFlag(process.env.LP_INQUIRY_BOT_PROTECTION_ENABLED);
+}
+
+/**
+ * LP_INQUIRY_RATE_LIMIT_ENABLED: IP-hash rate limiting for LP forms.
+ *
+ * When ON:
+ * - Rate limit by hashed IP address.
+ * - Returns 429 when exceeded.
+ *
+ * When OFF (default):
+ * - No rate limiting.
+ */
+export function isLpInquiryRateLimitEnabled(): boolean {
+  return parseFlag(process.env.LP_INQUIRY_RATE_LIMIT_ENABLED);
+}
+
+/**
+ * LP_CATALOG_DB_ENABLED: Read catalog from Supabase instead of hardcoded.
+ *
+ * When ON:
+ * - lp_catalog_plans table used.
+ * - Falls back to hardcoded if table empty.
+ *
+ * When OFF (default):
+ * - Hardcoded catalog only.
+ */
+export function isLpCatalogDbEnabled(): boolean {
+  return parseFlag(process.env.LP_CATALOG_DB_ENABLED);
+}
+
+/**
+ * LP_ORDER_LEDGER_ENABLED: Track orders in lp_orders table.
+ *
+ * When ON:
+ * - checkout_attempts and lp_orders populated.
+ * - Stripe webhook updates order status.
+ *
+ * When OFF (default):
+ * - No order tracking.
+ */
+export function isLpOrderLedgerEnabled(): boolean {
+  return parseFlag(process.env.LP_ORDER_LEDGER_ENABLED);
+}
+
+/**
+ * LP_JOURNEYS_ENABLED: Enable guest journey tracking.
+ *
+ * When ON:
+ * - /api/journeys creates journey records.
+ * - Guest cookies set for session tracking.
+ *
+ * When OFF (default):
+ * - Journey endpoint returns feature_disabled.
+ */
+export function isLpJourneysEnabled(): boolean {
+  return parseFlag(process.env.LP_JOURNEYS_ENABLED);
+}
+
+/**
+ * LP_CHAT_TOOLS_ENABLED: Enable OpenAI tool calling in chat.
+ *
+ * When ON:
+ * - Chat turn uses function calling with KB search, catalog, etc.
+ * - Tools execute against live data.
+ *
+ * When OFF (default):
+ * - Simple completion without tools.
+ */
+export function isLpChatToolsEnabled(): boolean {
+  return parseFlag(process.env.LP_CHAT_TOOLS_ENABLED);
+}
