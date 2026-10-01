@@ -1,5 +1,6 @@
 import { consumeAdminApprovalSecret } from "@/lib/admin-mcp/consume-secret";
 import { canReadAdminApproval } from "@/lib/admin-mcp/result-authority";
+import { assertAdminToolAllowedForPlan } from "@/lib/billing/plan-gate";
 /**
  * Staffpass Admin MCP tools (separate mouth from employee badge MCP).
  * Most tools are always_human. Do not mix with staffpass_whoami / invoke / poll / health.
@@ -1963,6 +1964,24 @@ export async function callAdminMcpTool(
         ok: false,
         code: "unknown_mcp_tool",
         message: `Unknown admin MCP tool: ${name}`,
+      },
+      true
+    );
+  }
+
+  // P1 Plan Rails: check if tool is available for org's plan (flag-gated)
+  const planGate = await assertAdminToolAllowedForPlan(cred.orgId, name);
+  if (!planGate.ok) {
+    return toolResult(
+      {
+        ok: false,
+        code: planGate.code,
+        message: planGate.messageJa,
+        planKey: planGate.planKey,
+        billingStatus: planGate.billingStatus,
+        tool: planGate.tool,
+        availableInPlans: planGate.availableInPlans,
+        billingPath: "/app/billing",
       },
       true
     );
