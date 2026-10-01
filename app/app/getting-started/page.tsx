@@ -2,6 +2,7 @@ import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
 import { AdminMcpConnect } from "@/components/AdminMcpConnect";
 import { OpsDocLocationForm } from "@/components/OpsDocLocationForm";
+import { PlanGuidance } from "@/components/PlanGuidance";
 import { getCurrentOrgId } from "@/lib/auth/session";
 import { getOrgAdminAgent } from "@/lib/data";
 
@@ -14,6 +15,8 @@ export default async function GettingStartedPage() {
   return (
     <AppShell title="はじめに" subtitle="セットアップ · 毎日の入口は変更ログと承認">
       <div className="space-y-3">
+        <PlanGuidance />
+
         <section className="surface p-5">
           <p className="text-xs faint font-mono">STEP 01</p>
           <h2 className="mt-2 text-sm font-medium">アカウント</h2>

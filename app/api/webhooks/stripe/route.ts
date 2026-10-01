@@ -9,6 +9,7 @@ import {
   unixToIso,
 } from "@/lib/stripe";
 import { processCardSetupWebhook } from "@/lib/external-contract-card/webhook-handler";
+import { processSubscriptionForPlanChange } from "@/lib/billing/stripe-plan-webhook";
 import type Stripe from "stripe";
 
 export const runtime = "nodejs";
@@ -162,12 +163,17 @@ export async function POST(req: Request) {
       const sub = event.data.object as Stripe.Subscription;
       const result = await syncSubscriptionFromStripe(sub);
       syncedOrgId = result.orgId;
+      
+      // P1 Plan Rails: Process plan changes with event.id idempotency
+      const planResult = await processSubscriptionForPlanChange(event, result.orgId);
+      
       await sendBillingEmail(
         notify,
         `[AI社員] Stripe: ${event.type}`,
         `<p>イベント <code>${event.type}</code> を受け取りました。</p>
          <p>orgId=<code>${result.orgId ?? "unknown"}</code> synced=${result.synced}</p>
-         <p>status=<code>${sub.status}</code> sub=<code>${sub.id}</code></p>`
+         <p>status=<code>${sub.status}</code> sub=<code>${sub.id}</code></p>
+         ${planResult.action ? `<p>planAction=<code>${planResult.action}</code></p>` : ""}`
       );
       break;
     }

@@ -26,6 +26,7 @@ import {
 import { isAdminClassApproval } from "@/lib/admin-mcp/audit-class";
 import { parseAdminFulfillment } from "@/lib/admin-mcp/fulfill-admin";
 import { parseFulfillment } from "@/lib/approvals/fulfill";
+import { handleDecisionRequest, type DecisionRequestInput } from "@/lib/decision-workflow";
 
 export const MCP_PROTOCOL_VERSION = "2024-11-05";
 export const MCP_SERVER_NAME = "staffpass";
@@ -232,6 +233,72 @@ export const STAFFPASS_MCP_TOOLS: McpToolDef[] = [
       required: ["itemId"],
       additionalProperties: false,
     },
+  },
+  {
+    name: "staffpass_decision_request",
+    description:
+      "Create a decision request (稟議・決裁) for human approval. Tier is auto-determined: T1 (専決), T2 (理事過半数, 72h deadline, fail_closed for amounts >= threshold), T3 (社員総会 for 定款変更/役員/決算). Tax-excluded amount is calculated for threshold comparison. Deputy user can be specified. Returns approvalId and statusToken for polling. P1_DECISION_WORKFLOW_ENABLED must be ON.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        title: {
+          type: "string",
+          description: "Decision request title (required).",
+        },
+        description: {
+          type: "string",
+          description: "Detailed description of the decision request (required).",
+        },
+        purpose: {
+          type: "string",
+          description: "Purpose of the decision (required).",
+        },
+        jobId: {
+          type: "string",
+          description: "Correlation id for this job (required).",
+        },
+        amountJpy: {
+          type: "number",
+          description: "Amount in JPY. Used for tier auto-escalation.",
+        },
+        taxIncluded: {
+          type: "boolean",
+          description: "Whether amountJpy includes tax (default true). Tax-excluded amount is calculated for threshold comparison.",
+        },
+        category: {
+          type: "string",
+          description: "Optional category (e.g. 契約, 出張, 備品).",
+        },
+        requestedTier: {
+          type: "string",
+          enum: ["T1", "T2", "T3"],
+          description: "Optional requested tier. Can upgrade but not downgrade (unless owner).",
+        },
+        deputyUserId: {
+          type: "string",
+          description: "Optional deputy user who can act on behalf of approver.",
+        },
+        attachments: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              type: { type: "string", enum: ["document", "image", "link"] },
+              name: { type: "string" },
+              url: { type: "string" },
+              fileRef: { type: "string" },
+              mimeType: { type: "string" },
+              bytes: { type: "number" },
+            },
+            required: ["type", "name"],
+          },
+          description: "Optional attachments for the decision request.",
+        },
+      },
+      required: ["title", "description", "purpose", "jobId"],
+      additionalProperties: false,
+    },
+    approvalClass: "business",
   },
 ];
 
@@ -604,6 +671,24 @@ export async function callStaffpassMcpTool(
         );
       }
       const result = await runEmployeeStuckRetry(orgId, cred.employeeId, args);
+      return toolResult(result, !result.ok);
+    }
+    case "staffpass_decision_request": {
+      const input: DecisionRequestInput = {
+        title: typeof args.title === "string" ? args.title.trim() : "",
+        description: typeof args.description === "string" ? args.description.trim() : "",
+        purpose: typeof args.purpose === "string" ? args.purpose.trim() : "",
+        jobId: typeof args.jobId === "string" ? args.jobId.trim() : "",
+        amountJpy: typeof args.amountJpy === "number" ? args.amountJpy : null,
+        taxIncluded: typeof args.taxIncluded === "boolean" ? args.taxIncluded : true,
+        category: typeof args.category === "string" ? args.category.trim() : null,
+        requestedTier: typeof args.requestedTier === "string" && ["T1", "T2", "T3"].includes(args.requestedTier)
+          ? (args.requestedTier as "T1" | "T2" | "T3")
+          : null,
+        deputyUserId: typeof args.deputyUserId === "string" ? args.deputyUserId.trim() : null,
+        attachments: Array.isArray(args.attachments) ? args.attachments : undefined,
+      };
+      const result = await handleDecisionRequest(cred, input);
       return toolResult(result, !result.ok);
     }
     default:

@@ -587,4 +587,49 @@ export async function listApprovalsForTelegramDigest(): Promise<ApprovalRequest[
   return data.map((row) => mapApprovalRow(row as Record<string, unknown>));
 }
 
+/**
+ * List pending T2 decision approvals for expiry cron.
+ * Filters at DB level: status=pending, metadata->type=decision_request, metadata->tier=T2.
+ * Paginates to avoid PostgREST 1000 row limit.
+ */
+export async function listPendingT2Decisions(): Promise<ApprovalRequest[]> {
+  if (isDemoMode()) {
+    const all = await demoListApprovals();
+    return all.filter((a) => {
+      const m = a.metadata as Record<string, unknown> | null;
+      return a.status === "pending" && m?.type === "decision_request" && m?.tier === "T2";
+    });
+  }
+
+  const admin = createSupabaseAdminClient();
+  if (!admin) return [];
+
+  const PAGE_SIZE = 500;
+  const results: ApprovalRequest[] = [];
+  let offset = 0;
+  let hasMore = true;
+
+  while (hasMore) {
+    const { data, error } = await admin
+      .from("approval_requests")
+      .select("*")
+      .eq("status", "pending")
+      .contains("metadata", { type: "decision_request", tier: "T2" })
+      .order("created_at", { ascending: true })
+      .range(offset, offset + PAGE_SIZE - 1);
+
+    if (error || !data) break;
+
+    results.push(...data.map((row) => mapApprovalRow(row as Record<string, unknown>)));
+
+    if (data.length < PAGE_SIZE) {
+      hasMore = false;
+    } else {
+      offset += PAGE_SIZE;
+    }
+  }
+
+  return results;
+}
+
 export { isDurableDemoApprovalsStore, getDemoApprovalsBackend };

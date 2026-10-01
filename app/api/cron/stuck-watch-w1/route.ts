@@ -1,11 +1,15 @@
 import { NextResponse } from "next/server";
 import { processW1MentionWatchAllOrgs } from "@/lib/stuck-watch/w1-mention-unanswered";
+import { listPendingT2Decisions } from "@/lib/data/approvals";
+import { checkAndExpireT2Decision } from "@/lib/decision-workflow/expiry";
+import { isDecisionWorkflowEnabled } from "@/lib/feature-flags";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 /**
  * Cron: W1 mention-unanswered watch — notify via policy.notifyMouth.
+ * Also processes T2 decision expiry (hourly check, runs every 5min but idempotent).
  * Does not auto-retry expected_gate (notification only).
  */
 export async function GET(req: Request) {
@@ -24,11 +28,27 @@ export async function GET(req: Request) {
     const results = await processW1MentionWatchAllOrgs();
     const notified = results.filter((row) => row.ok && !row.skipped);
 
+    const t2Expiry = { candidates: 0, rejected: 0, skipped: 0, errors: 0 };
+
+    if (isDecisionWorkflowEnabled()) {
+      const now = new Date();
+      const t2Decisions = await listPendingT2Decisions();
+
+      for (const approval of t2Decisions) {
+        const result = await checkAndExpireT2Decision(approval, now);
+        t2Expiry.candidates++;
+        if (result.action === "rejected") t2Expiry.rejected++;
+        else if (result.action === "skipped") t2Expiry.skipped++;
+        else if (result.action === "error") t2Expiry.errors++;
+      }
+    }
+
     return NextResponse.json({
       ok: true,
       scanned: results.length,
       notified: notified.length,
       results,
+      t2Expiry,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "unknown_error";

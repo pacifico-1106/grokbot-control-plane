@@ -15,6 +15,7 @@ const TOOL_BLURB: Record<(typeof STAFFPASS_MCP_TOOL_NAMES)[number], string> = {
   staffpass_health: "つながりの確認",
   staffpass_stuck_list: "不当停止の一覧",
   staffpass_stuck_retry: "不当停止の再試行",
+  staffpass_decision_request: "稟議・決裁（P1）",
 };
 
 export function McpSetupContent({
