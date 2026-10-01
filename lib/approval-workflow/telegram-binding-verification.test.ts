@@ -593,10 +593,11 @@ describe("sendVerificationToTelegramUserViaChannel uses chatId", () => {
       verificationCode: "123456",
       verificationNonce: generateVerificationNonce(),
       channelId: TENANT_CHANNEL_ID,
-      botToken: "invalid",
+      botToken: "",
       chatId: "-5253257557",
     });
 
     expect(result.ok).toBe(false);
+    expect(result.error).toBe("missing_credentials");
   });
 });

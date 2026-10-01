@@ -134,3 +134,57 @@ export function isInboxRoutingEnabled(): boolean {
 export function isReplyPolicyEnhancedEnabled(): boolean {
   return parseFlag(process.env.P0_REPLY_POLICY_ENHANCED);
 }
+
+/**
+ * P1: Approval Kind Routes — per-kind approval routing.
+ *
+ * When ON:
+ * - Approvals are routed by kind (post/mail/account/decision/other).
+ * - Tool→kind mapping determines the kind.
+ * - Per-kind routes with approvers, quorum, finalGo, deadline, reminders.
+ * - account kind requires owner/admin human approvers only.
+ *
+ * When OFF (default):
+ * - Existing routes[] (class=admin|business) behavior preserved.
+ * - Default is owner 1名 for all kinds.
+ */
+export function isApprovalKindRoutesEnabled(): boolean {
+  return parseFlag(process.env.P1_APPROVAL_KIND_ROUTES_ENABLED);
+}
+
+/**
+ * P1: Decision Workflow — 3-tier decision system.
+ *
+ * When ON:
+ * - decision.request tool available on Employee MCP.
+ * - T1 (専決), T2 (理事過半数), T3 (社員総会) tiers.
+ * - Tax-excluded amount ≥ 500,000 JPY auto-escalates to T2+.
+ * - Classification-based auto-escalation (定款/役員/決算 → T3).
+ * - Deputy (deputyUserId) manual-only activation.
+ * - Fiscal year starts 4/1.
+ *
+ * When OFF (default):
+ * - decision.request returns feature_disabled error.
+ * - No changes to existing behavior.
+ */
+export function isDecisionWorkflowEnabled(): boolean {
+  return parseFlag(process.env.P1_DECISION_WORKFLOW_ENABLED);
+}
+
+/**
+ * P1: Topic-Gated Posting — sensitivity-based approval for posts.
+ *
+ * When ON:
+ * - Posts to registered main-board channels undergo sensitivity check.
+ * - Non-sensitive replies can skip approval (audit-logged).
+ * - Sensitive topics, attachments, URLs, amount notation require approval.
+ * - Errors/timeouts count as sensitive (fail-closed).
+ * - Secret-detector hits block the post entirely.
+ *
+ * When OFF (default):
+ * - All posts require approval as today.
+ * - No sensitivity-based bypassing.
+ */
+export function isTopicGatedPostingEnabled(): boolean {
+  return parseFlag(process.env.P1_TOPIC_GATED_POSTING_ENABLED);
+}
