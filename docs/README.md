@@ -81,6 +81,7 @@
 | 価格モデル | [pricing-model.md](./pricing-model.md) |
 | **SKU カタログ（商用の最新）** | [pricing-sku-catalog.md](./pricing-sku-catalog.md) |
 | Stripe 請求メモ | [stripe-billing-notes.md](./stripe-billing-notes.md) |
+| **P1 Plan Rails（プラン別MCP制御）** | [plan-rails.md](./plan-rails.md) |
 | **P1 外部契約カード登録（設計メモ）** | [p1-external-contract-card-registration-design-20260923.md](./p1-external-contract-card-registration-design-20260923.md) |
 | パートナー紹介トラッキング | [partner/referral-tracking.md](./partner/referral-tracking.md) |
 | P1 外部契約カード登録（設計） | [p1-external-contract-card-registration-design-20260923.md](./p1-external-contract-card-registration-design-20260923.md) |

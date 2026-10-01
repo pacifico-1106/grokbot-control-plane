@@ -5,11 +5,7 @@
  */
 
 import { createSupabaseAdminClient } from "@/lib/supabase";
-
-function isLpCatalogDbEnabled(): boolean {
-  const v = (process.env.LP_CATALOG_DB_ENABLED ?? "").trim().toLowerCase();
-  return v === "true" || v === "1" || v === "on" || v === "enabled";
-}
+import { isLpCatalogDbEnabled } from "@/lib/feature-flags";
 
 export interface CatalogItem {
   sku: string;
