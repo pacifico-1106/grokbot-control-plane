@@ -9,6 +9,7 @@
  * Feature flag: LP_WAKE_WEBHOOK_ENABLED (default OFF)
  */
 
+import { hashIp } from "@/lib/lp/rate-limit";
 import { NextRequest, NextResponse } from "next/server";
 import { createHash } from "node:crypto";
 import { isLpWakeWebhookEnabled } from "@/lib/feature-flags";
@@ -18,10 +19,6 @@ import {
   updateWebhookEventStatus,
 } from "@/lib/lp/wake-webhook";
 
-function hashIp(ip: string): string {
-  const salt = process.env.LP_IP_HASH_SALT || "default-salt";
-  return createHash("sha256").update(`${ip}:${salt}`).digest("hex");
-}
 
 function hashUserAgent(ua: string): string {
   return createHash("sha256").update(ua).digest("hex").slice(0, 32);

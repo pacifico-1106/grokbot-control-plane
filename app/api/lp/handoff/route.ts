@@ -18,12 +18,15 @@ import {
   cancelHandoff,
 } from "@/lib/lp/handoffs";
 import { enqueueHandoffNotification } from "@/lib/lp/outbox-processor";
+import { resolveGuestJourney, type GuestSessionResult } from "@/lib/lp/guest-session";
+import { hashIp } from "@/lib/lp/rate-limit";
 import { createHash } from "node:crypto";
 
-function hashIp(ip: string): string {
-  const salt = process.env.LP_IP_HASH_SALT || "default-salt";
-  return createHash("sha256").update(`${ip}:${salt}`).digest("hex");
+function sessionError(session: Extract<GuestSessionResult, { ok: false }>) {
+  return NextResponse.json({ error: session.error }, { status: session.status });
 }
+
+const NOT_FOUND = { error: "not_found", message: "Handoff not found" } as const;
 
 function hashUserAgent(ua: string): string {
   return createHash("sha256").update(ua).digest("hex").slice(0, 32);
@@ -49,16 +52,13 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  const session = await resolveGuestJourney(request, { requireCsrf: true });
+  if (!session.ok) return sessionError(session);
+  const journeyId = session.journey.id;
+
   try {
     const body = await request.json();
-    const { journeyId, reason, summaryDraft } = body;
-
-    if (!journeyId || typeof journeyId !== "string") {
-      return NextResponse.json(
-        { error: "invalid_input", message: "journeyId is required" },
-        { status: 400 }
-      );
-    }
+    const { reason, summaryDraft } = body;
 
     if (!reason || typeof reason !== "string" || reason.length > 500) {
       return NextResponse.json(
@@ -124,13 +124,14 @@ export async function GET(request: NextRequest) {
     );
   }
 
+  const session = await resolveGuestJourney(request, { requireCsrf: false });
+  if (!session.ok) return sessionError(session);
+
   const handoff = await getHandoff(handoffId);
 
-  if (!handoff) {
-    return NextResponse.json(
-      { error: "not_found", message: "Handoff not found" },
-      { status: 404 }
-    );
+  // Another guest's handoff is reported as not found, so ids cannot be probed.
+  if (!handoff || handoff.journeyId !== session.journey.id) {
+    return NextResponse.json(NOT_FOUND, { status: 404 });
   }
 
   return NextResponse.json({
@@ -182,6 +183,13 @@ export async function PUT(request: NextRequest) {
       );
     }
 
+    const session = await resolveGuestJourney(request, { requireCsrf: true });
+    if (!session.ok) return sessionError(session);
+    const existing = await getHandoff(handoffId);
+    if (!existing || existing.journeyId !== session.journey.id) {
+      return NextResponse.json(NOT_FOUND, { status: 404 });
+    }
+
     const confirmedHandoff = await confirmHandoff({
       handoffId,
       summaryFinal,
@@ -230,6 +238,13 @@ export async function DELETE(request: NextRequest) {
       { error: "invalid_input", message: "id is required" },
       { status: 400 }
     );
+  }
+
+  const session = await resolveGuestJourney(request, { requireCsrf: true });
+  if (!session.ok) return sessionError(session);
+  const existing = await getHandoff(handoffId);
+  if (!existing || existing.journeyId !== session.journey.id) {
+    return NextResponse.json(NOT_FOUND, { status: 404 });
   }
 
   const success = await cancelHandoff(handoffId);
