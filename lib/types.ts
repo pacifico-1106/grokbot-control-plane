@@ -1343,7 +1343,10 @@ export interface ApprovalStuckWatchMeta {
 }
 
 /** F7 stuck watch item kinds. */
-export type StuckWatchKind = "w1_mention_unanswered" | "w2_approved_unfulfilled";
+export type StuckWatchKind =
+  | "w1_mention_unanswered"
+  | "w2_approved_unfulfilled"
+  | "d1_decision_stalled";
 
 /** Aggregated stuck watch item for Admin MCP list/inspect. */
 export interface StuckWatchItem {
