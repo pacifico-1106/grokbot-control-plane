@@ -45,8 +45,10 @@ export default async function AppSectionLayout({
   const approvals = await listApprovals(session.orgId);
   const pendingApprovalCount = approvals.filter((row) => row.status === "pending").length;
   const entitlements = await getOrgEntitlements(session.orgId);
-  const planInfo = await getOrgPlanInfo(session.orgId);
   const planRailsEnabled = isPlanRailsEnabled();
+  // Flag OFF must not touch the plan columns at all (they may not exist yet
+  // before the plan_rails migration is applied).
+  const planInfo = planRailsEnabled ? await getOrgPlanInfo(session.orgId) : null;
 
   return (
     <AppSessionProvider
