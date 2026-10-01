@@ -75,3 +75,10 @@ export {
   type DeputyActivationInput,
   type DeputyActivationResult,
 } from "./deputy";
+
+export {
+  checkAndExpireT2Decision,
+  runT2ExpiryCron,
+  type RunT2ExpiryCronResult,
+  type T2ExpiryCheckResult,
+} from "./expiry";

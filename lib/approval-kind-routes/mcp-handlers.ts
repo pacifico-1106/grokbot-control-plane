@@ -312,6 +312,21 @@ export interface FulfillApprovalRoutesPatchResult {
   message?: string;
 }
 
+export interface DeputyActivateInput {
+  approvalId: string;
+  deputyUserId: string;
+  reason?: string;
+}
+
+export interface DeputyActivateResult {
+  ok: boolean;
+  code?: string;
+  message?: string;
+  approvalId?: string;
+  statusToken?: string;
+  pollUrl?: string;
+}
+
 /**
  * Fulfill approvalRoutes.patch after always_human approval.
  *
@@ -430,5 +445,241 @@ export async function fulfillApprovalRoutesPatch(
   return {
     ok: true,
     message: "承認ルート設定を更新しました",
+  };
+}
+
+/**
+ * Handle decision.deputyActivate — file always_human approval for deputy activation.
+ *
+ * Security:
+ * - Self-approval forbidden (deputy cannot be the requester)
+ * - Cross-org forbidden (deputy must be in same org)
+ * - Creates always_human approval ticket
+ */
+export async function handleDeputyActivate(
+  cred: ResolvedAdminCredential,
+  args: DeputyActivateInput
+): Promise<DeputyActivateResult> {
+  const { isDecisionWorkflowEnabled } = await import("@/lib/feature-flags");
+  const { getApprovalById, createApproval } = await import("@/lib/data/approvals");
+  const { appendAuditEvent } = await import("@/lib/data/audit");
+  const { listMembers } = await import("@/lib/data/members");
+  const {
+    validateDeputyActivation,
+    buildDeputyActivationApprovalMetadata,
+  } = await import("@/lib/decision-workflow/deputy");
+
+  if (!isDecisionWorkflowEnabled()) {
+    return {
+      ok: false,
+      code: "decision_workflow_disabled",
+      message: "P1_DECISION_WORKFLOW_ENABLED is OFF",
+    };
+  }
+
+  const { approvalId, deputyUserId, reason } = args;
+
+  if (!approvalId || !deputyUserId) {
+    return {
+      ok: false,
+      code: "invalid_input",
+      message: "approvalId and deputyUserId are required",
+    };
+  }
+
+  const originalApproval = await getApprovalById(approvalId, cred.orgId);
+  if (!originalApproval) {
+    return {
+      ok: false,
+      code: "approval_not_found",
+      message: "Original approval not found",
+    };
+  }
+
+  const metadata = originalApproval.metadata as Record<string, unknown> | null;
+  if (metadata?.type !== "decision_request") {
+    return {
+      ok: false,
+      code: "not_decision_request",
+      message: "Original approval is not a decision request",
+    };
+  }
+
+  const members = await listMembers(cred.orgId);
+  const deputyMember = members.find((m) => m.userId === deputyUserId || m.id === deputyUserId);
+
+  const validation = validateDeputyActivation(
+    {
+      approvalId,
+      deputyUserId,
+      requesterId: originalApproval.employeeId,
+      requesterOrgId: originalApproval.orgId,
+      reason,
+    },
+    deputyMember?.orgId ?? null
+  );
+
+  if (!validation.ok) {
+    return {
+      ok: false,
+      code: validation.code,
+      message: validation.message,
+    };
+  }
+
+  const deputyMetadata = buildDeputyActivationApprovalMetadata(
+    originalApproval,
+    deputyUserId,
+    reason
+  );
+
+  const result = await createApproval({
+    orgId: cred.orgId,
+    employeeId: originalApproval.employeeId,
+    credentialId: cred.actorId ?? "",
+    title: `決裁代理委任: ${originalApproval.title}`,
+    purpose: "decision.deputy_activate",
+    summary: `決裁 ${originalApproval.id} の代理を ${deputyUserId} に委任します\n理由: ${reason ?? "指定なし"}`,
+    risk: "medium",
+    tool: "decision.deputyActivate",
+    jobId: `deputy_${approvalId}_${deputyUserId}`,
+    metadata: deputyMetadata,
+  });
+
+  await appendAuditEvent({
+    orgId: cred.orgId,
+    employeeId: originalApproval.employeeId,
+    credentialId: cred.actorId ?? "",
+    action: "decision.deputy_activated",
+    purpose: "decision.deputy_activate",
+    summary: `決裁代理委任を申請: ${deputyUserId}`,
+    metadata: {
+      approvalId: result.approval.id,
+      originalApprovalId: approvalId,
+      deputyUserId,
+      reason,
+    },
+  });
+
+  return {
+    ok: true,
+    approvalId: result.approval.id,
+    statusToken: result.statusToken,
+    pollUrl: result.pollUrl,
+    message: "決裁代理委任を申請しました（人承認が必要です）",
+  };
+}
+
+export interface FulfillDeputyActivateResult {
+  ok: boolean;
+  code?: string;
+  message?: string;
+}
+
+/**
+ * Fulfill decision.deputyActivate after always_human approval.
+ *
+ * Security:
+ * - Re-validates self-approval forbidden at fulfill time
+ * - Re-validates cross-org forbidden at fulfill time
+ * - Records decision.deputy_activated audit
+ */
+export async function fulfillDeputyActivate(
+  approval: import("@/lib/types").ApprovalRequest,
+  _args: Record<string, unknown>
+): Promise<FulfillDeputyActivateResult> {
+  const { isDecisionWorkflowEnabled } = await import("@/lib/feature-flags");
+  const { getApprovalById } = await import("@/lib/data/approvals");
+  const { appendAuditEvent } = await import("@/lib/data/audit");
+  const { listMembers } = await import("@/lib/data/members");
+  const {
+    validateDeputyActivation,
+    recordDeputyActivation,
+    isDeputyActivationRequest,
+  } = await import("@/lib/decision-workflow/deputy");
+
+  if (!isDecisionWorkflowEnabled()) {
+    return {
+      ok: false,
+      code: "decision_workflow_disabled",
+      message: "P1_DECISION_WORKFLOW_ENABLED is OFF",
+    };
+  }
+
+  if (!isDeputyActivationRequest(approval)) {
+    return {
+      ok: false,
+      code: "not_deputy_activation",
+      message: "This approval is not a deputy activation request",
+    };
+  }
+
+  const metadata = approval.metadata as Record<string, unknown>;
+  const originalApprovalId = metadata.originalApprovalId as string;
+  const deputyUserId = metadata.deputyUserId as string;
+
+  if (!originalApprovalId || !deputyUserId) {
+    return {
+      ok: false,
+      code: "invalid_metadata",
+      message: "Missing originalApprovalId or deputyUserId in approval metadata",
+    };
+  }
+
+  const originalApproval = await getApprovalById(originalApprovalId, approval.orgId);
+  if (!originalApproval) {
+    return {
+      ok: false,
+      code: "original_not_found",
+      message: "Original decision approval not found",
+    };
+  }
+
+  const members = await listMembers(approval.orgId);
+  const deputyMember = members.find((m) => m.userId === deputyUserId || m.id === deputyUserId);
+
+  const validation = validateDeputyActivation(
+    {
+      approvalId: originalApprovalId,
+      deputyUserId,
+      requesterId: originalApproval.employeeId,
+      requesterOrgId: originalApproval.orgId,
+    },
+    deputyMember?.orgId ?? null
+  );
+
+  if (!validation.ok) {
+    await appendAuditEvent({
+      orgId: approval.orgId,
+      employeeId: approval.employeeId,
+      credentialId: approval.credentialId,
+      action: "decision.deputy_activated",
+      purpose: approval.purpose,
+      summary: `決裁代理委任が拒否されました: ${validation.message}`,
+      metadata: {
+        approvalId: approval.id,
+        originalApprovalId,
+        deputyUserId,
+        rejectionCode: validation.code,
+        rejectionMessage: validation.message,
+      },
+    });
+
+    return {
+      ok: false,
+      code: validation.code,
+      message: validation.message,
+    };
+  }
+
+  await recordDeputyActivation(
+    originalApproval,
+    deputyUserId,
+    approval.resolvedBy ?? "system"
+  );
+
+  return {
+    ok: true,
+    message: `決裁 ${originalApprovalId} の代理を ${deputyUserId} に委任しました`,
   };
 }

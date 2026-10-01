@@ -16,6 +16,9 @@ import { isDecisionWorkflowEnabled } from "@/lib/feature-flags";
 import { getEffectiveApprovalKindRoute } from "@/lib/approval-kind-routes/data";
 import { getOrgApprovalKindRoutesPolicy } from "@/lib/approval-kind-routes/data";
 import type { DecisionTier, DecisionTierRoute, DecisionWorkflowConfig } from "@/lib/approval-kind-routes/types";
+import { createApproval } from "@/lib/data/approvals";
+import { appendAuditEvent } from "@/lib/data/audit";
+import { sendDecisionVotingCard } from "./notify";
 import {
   CONSUMPTION_TAX_RATE,
   T3_AUTO_ESCALATION_KEYWORDS,
@@ -24,6 +27,8 @@ import {
   type DecisionRequestValidation,
   type FiscalYearInfo,
 } from "./types";
+
+const T2_DEADLINE_HOURS = 72;
 
 /**
  * Calculate tax-excluded amount from tax-included amount.
@@ -207,6 +212,7 @@ export function getTierRoute(
  * Handle decision.request from Employee MCP.
  *
  * Creates an approval ticket for the decision with appropriate tier.
+ * Sends voting cards to notification channels after approval creation.
  */
 export async function handleDecisionRequest(
   cred: ResolvedEmployeeCredential,
@@ -256,9 +262,101 @@ export async function handleDecisionRequest(
 
   const summary = buildDecisionSummary(input, tier, validation);
 
+  const now = new Date();
+  const deadlineAt =
+    tier === "T2"
+      ? new Date(now.getTime() + T2_DEADLINE_HOURS * 60 * 60 * 1000)
+      : tierRoute?.deadlineHours
+        ? new Date(now.getTime() + tierRoute.deadlineHours * 60 * 60 * 1000)
+        : null;
+
+  const approverUserIds = tierRoute?.approverUserIds ?? effectiveDecisionRoute?.route?.approverUserIds ?? [];
+  const quorum = tierRoute?.quorum ?? effectiveDecisionRoute?.route?.quorum ?? { type: "any" as const };
+
+  const decisionMetadata: Record<string, unknown> = {
+    type: "decision_request",
+    tier,
+    tierReason: validation.tierReason,
+    amountJpy: input.amountJpy ?? null,
+    taxExcludedAmountJpy: validation.taxExcludedAmountJpy ?? null,
+    taxIncluded: input.taxIncluded ?? true,
+    category: input.category ?? null,
+    fiscalYear: validation.fiscalYear ?? null,
+    deputyUserId,
+    deadlineAt: deadlineAt?.toISOString() ?? null,
+    approverUserIds,
+    quorumRequired: quorum.type === "all" ? "all" : quorum.type === "count" ? quorum.n : 1,
+    totalVoters: approverUserIds.length,
+    approvedCount: 0,
+    rejectedCount: 0,
+    votes: [],
+    attachments: input.attachments ?? [],
+  };
+
+  let approvalResult;
+  try {
+    approvalResult = await createApproval({
+      orgId,
+      employeeId: cred.employeeId,
+      credentialId: cred.credentialId ?? "",
+      title: input.title,
+      purpose: input.purpose,
+      summary,
+      risk: tier === "T3" ? "high" : tier === "T2" ? "medium" : "low",
+      tool: "decision.request",
+      jobId: input.jobId,
+      metadata: decisionMetadata,
+    });
+  } catch (error) {
+    return {
+      ok: false,
+      code: "approval_creation_failed",
+      message: error instanceof Error ? error.message : "Failed to create approval",
+    };
+  }
+
+  await appendAuditEvent({
+    orgId,
+    employeeId: cred.employeeId,
+    credentialId: cred.credentialId ?? "",
+    action: "decision.requested",
+    purpose: input.purpose,
+    summary: `決裁依頼: ${tier} ${input.title}`,
+    metadata: {
+      approvalId: approvalResult.approval.id,
+      tier,
+      tierReason: validation.tierReason,
+      amountJpy: input.amountJpy ?? null,
+      fiscalYear: validation.fiscalYear ?? null,
+      deadlineAt: deadlineAt?.toISOString() ?? null,
+    },
+  });
+
+  const votingCardResults = await sendDecisionVotingCard(approvalResult.approval);
+  const votingCardFailed = votingCardResults.some((r) => !r.ok);
+
+  if (votingCardFailed) {
+    await appendAuditEvent({
+      orgId,
+      employeeId: cred.employeeId,
+      credentialId: cred.credentialId ?? "",
+      action: "notification.delivery_failed",
+      purpose: input.purpose,
+      summary: "決裁投票カードの配信に一部失敗（決裁依頼は pending のまま継続）",
+      metadata: {
+        approvalId: approvalResult.approval.id,
+        tier,
+        results: votingCardResults,
+      },
+    });
+  }
+
   return {
     ok: true,
     code: "needs_approval",
+    approvalId: approvalResult.approval.id,
+    statusToken: approvalResult.statusToken,
+    pollUrl: approvalResult.pollUrl,
     tier,
     tierReason: validation.tierReason,
     title: input.title,
