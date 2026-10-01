@@ -139,6 +139,14 @@ describe("P1 Plan Rails — Flag OFF Regression", () => {
   });
 
   describe("plan-change-handler with flag OFF", () => {
+    test("handleBillingStatusChange should not write when flag OFF", async () => {
+      const { handleBillingStatusChange } = await import("./plan-change-handler");
+      const result = await handleBillingStatusChange("org-test", "canceled", {
+        source: "test",
+      });
+      expect(result).toEqual({ ok: true, action: "no_change" });
+    });
+
     test("handlePlanDowngrade should be no-op when flag OFF", async () => {
       const { handlePlanDowngrade } = await import("./plan-change-handler");
       

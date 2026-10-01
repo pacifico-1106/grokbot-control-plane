@@ -201,19 +201,20 @@ export async function cancelScheduledDowngrade(
  * - Cancel pending approvals for non-read tools
  * - Org can still read, but cannot execute actions
  *
- * When P1_PLAN_RAILS_ENABLED is OFF, only billing_status is updated (no scope change).
+ * When P1_PLAN_RAILS_ENABLED is OFF, nothing is written (billing_status is a
+ * plan_rails column and may not exist before the migration is applied).
  */
 export async function handleBillingStatusChange(
   orgId: string,
   newStatus: string,
   metadata?: { source?: string }
 ): Promise<PlanChangeResult> {
+  if (!isPlanRailsEnabled()) {
+    return { ok: true, action: "no_change" };
+  }
+
   try {
     await updateOrgBillingStatus(orgId, newStatus);
-
-    if (!isPlanRailsEnabled()) {
-      return { ok: true, action: "applied" };
-    }
 
     const isNarrowing = newStatus === "canceled" || newStatus === "suspended";
 
