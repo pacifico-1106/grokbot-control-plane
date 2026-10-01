@@ -134,3 +134,20 @@ export function isInboxRoutingEnabled(): boolean {
 export function isReplyPolicyEnhancedEnabled(): boolean {
   return parseFlag(process.env.P0_REPLY_POLICY_ENHANCED);
 }
+
+/**
+ * LP_CHAT_ENABLED: Enable AI consultation chat on LP.
+ *
+ * When ON:
+ * - Chat launcher component rendered on LP.
+ * - /api/journeys, /api/chat/turn endpoints active.
+ * - KB search available.
+ * - Requires OPENAI_API_KEY to be configured.
+ *
+ * When OFF (default):
+ * - No chat launcher.
+ * - Consultation form only.
+ */
+export function isLpChatEnabled(): boolean {
+  return parseFlag(process.env.LP_CHAT_ENABLED);
+}
