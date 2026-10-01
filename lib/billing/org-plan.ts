@@ -25,10 +25,14 @@ export interface OrgPlanInfo {
  * Get plan info for an org.
  *
  * DEMO mode: returns DEMO_ORG with null plan (legacy behavior).
+ * Returns null if orgId is missing.
  */
 export async function getOrgPlanInfo(
-  orgId: string
+  orgId: string | null | undefined
 ): Promise<OrgPlanInfo | null> {
+  if (!orgId) {
+    return null;
+  }
   if (isDemoMode()) {
     return {
       orgId: DEMO_ORG.id,
