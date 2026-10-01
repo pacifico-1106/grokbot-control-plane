@@ -26,11 +26,13 @@ export {
 export {
   calculateDecisionProgress,
   checkDecisionStalled,
+  handleT2Expiry,
   shouldAutoExpire,
   generateProgressSummary,
   type DecisionVote,
   type DecisionProgressState,
   type DecisionStuckItem,
+  type T2ExpiryResult,
 } from "./progress";
 
 export {

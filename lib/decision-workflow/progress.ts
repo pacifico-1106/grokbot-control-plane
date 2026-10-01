@@ -226,6 +226,64 @@ export function shouldAutoExpire(
 }
 
 /**
+ * T2 Expiry Result
+ */
+export interface T2ExpiryResult {
+  expired: boolean;
+  status: "rejected" | "unchanged";
+  reason: string;
+  error?: string;
+}
+
+/**
+ * Handle T2 decision expiry with fail_closed semantics.
+ *
+ * SECURITY: On any error, we NEVER approve - fail closed to rejected.
+ * This ensures that a malfunction cannot result in unauthorized approval.
+ *
+ * @returns Expiry result with status "rejected" if expired, "unchanged" if not
+ */
+export function handleT2Expiry(
+  state: DecisionProgressState,
+  now: Date = new Date()
+): T2ExpiryResult {
+  if (!isDecisionWorkflowEnabled()) {
+    return { expired: false, status: "unchanged", reason: "decision_workflow_disabled" };
+  }
+
+  if (state.status !== "pending") {
+    return { expired: false, status: "unchanged", reason: "already_resolved" };
+  }
+
+  if (state.tier !== "T2") {
+    return { expired: false, status: "unchanged", reason: "not_t2" };
+  }
+
+  if (!state.deadlineAt) {
+    return { expired: false, status: "unchanged", reason: "no_deadline" };
+  }
+
+  try {
+    if (now > state.deadlineAt) {
+      return {
+        expired: true,
+        status: "rejected",
+        reason: "deadline_exceeded",
+      };
+    }
+
+    return { expired: false, status: "unchanged", reason: "deadline_not_reached" };
+  } catch (error) {
+    return {
+      expired: true,
+      status: "rejected",
+      reason: "error_fail_closed",
+      error: error instanceof Error ? error.message : "unknown_error",
+    };
+  }
+}
+
+/**
  * Generate progress summary text.
  */
 export function generateProgressSummary(state: DecisionProgressState): string {
