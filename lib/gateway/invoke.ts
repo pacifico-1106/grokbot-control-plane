@@ -120,6 +120,7 @@ import {
   addCompletedReaction,
   addWaitingApprovalReaction,
 } from "@/lib/slack/reaction-stamps";
+import { assertGatewayToolAllowedForPlan } from "@/lib/billing/plan-gate";
 import { readCalendarFreebusy } from "@/lib/google/calendar-read";
 import {
   addCalendarReadGrant,
@@ -683,6 +684,28 @@ export async function runGatewayInvoke(
         jobId,
       },
       402
+    );
+  }
+
+  // P1 Plan Rails: check if tool is available for org's plan (flag-gated)
+  const planGate = await assertGatewayToolAllowedForPlan(orgId || employee.orgId, tool);
+  if (!planGate.ok) {
+    return jsonResult(
+      {
+        ok: false,
+        code: planGate.code,
+        error: planGate.code,
+        tool,
+        message: planGate.messageJa,
+        planKey: planGate.planKey,
+        billingStatus: planGate.billingStatus,
+        availableInPlans: planGate.availableInPlans,
+        billingPath: "/app/billing",
+        employeeId,
+        purpose,
+        jobId,
+      },
+      403
     );
   }
 
