@@ -273,7 +273,7 @@ describe("validateApprovalRoutes", () => {
       expect(result.errors.some((e) => e.code === "invalid_amount_threshold")).toBe(true);
     });
 
-    test("rejects T2 with finalGo", () => {
+    test("accepts T2 with finalGo (tenant-configurable)", () => {
       const policy = validPolicy();
       policy.decisionWorkflow = {
         amountThresholdJpy: 500000,
@@ -293,8 +293,7 @@ describe("validateApprovalRoutes", () => {
         ],
       };
       const result = validateApprovalRoutes(policy, mockContext());
-      expect(result.ok).toBe(false);
-      expect(result.errors.some((e) => e.code === "t2_final_go_forbidden")).toBe(true);
+      expect(result.ok).toBe(true);
     });
   });
 });

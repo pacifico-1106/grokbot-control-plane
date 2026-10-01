@@ -12,9 +12,10 @@
  * - account kind requires owner/admin human approvers only
  * - Zero approvers forbidden
  * - Quorum cannot exceed valid approvers
- * - T2 cannot have finalGo or veto
  * - amountThreshold must be non-negative
  * - remindEveryDays must be positive
+ * - Tier IDs must be unique
+ * - Tier routing rules reference valid tiers
  */
 
 import type {
@@ -31,6 +32,7 @@ import {
   MIN_TAX_RATE,
   MAX_TAX_RATE,
   MAX_SENSITIVE_TOPICS,
+  MAX_T3_KEYWORDS,
   DEFAULT_SENSITIVE_TOPICS as PRESET_DEFAULT_SENSITIVE_TOPICS,
   createDefaultApprovalKindRoute,
   createDefaultDecisionWorkflowConfig as createPresetDefaultDecisionWorkflowConfig,
@@ -247,7 +249,7 @@ function validateRoute(
 }
 
 /**
- * Validate decision tier route (T1/T2/T3).
+ * Validate decision tier route (supports arbitrary tier IDs).
  */
 function validateDecisionTierRoute(
   route: unknown,
@@ -264,23 +266,37 @@ function validateDecisionTierRoute(
   const r = route as Record<string, unknown>;
   const tier = r.tier;
 
-  // Validate tier
-  if (tier !== "T1" && tier !== "T2" && tier !== "T3") {
+  // Validate tier ID (any non-empty string allowed)
+  if (typeof tier !== "string" || !tier.trim()) {
     errors.push({
       code: "invalid_tier",
       path: `${path}.tier`,
-      message: "tier must be 'T1', 'T2', or 'T3'",
+      message: "tier must be a non-empty string",
+    });
+  } else if (tier.length > 50) {
+    errors.push({
+      code: "tier_id_too_long",
+      path: `${path}.tier`,
+      message: "tier id cannot exceed 50 characters",
     });
   }
 
-  // T2 specific validations
-  if (tier === "T2") {
-    // T2 cannot have finalGo
-    if (r.finalGoUserId !== undefined && r.finalGoUserId !== null) {
+  // Validate nameJa
+  if (typeof r.nameJa !== "string" || !r.nameJa.trim()) {
+    errors.push({
+      code: "invalid_tier_name",
+      path: `${path}.nameJa`,
+      message: "nameJa must be a non-empty string",
+    });
+  }
+
+  // Validate rank (optional, but must be valid number when set)
+  if (r.rank !== undefined && r.rank !== null) {
+    if (typeof r.rank !== "number" || !Number.isInteger(r.rank)) {
       errors.push({
-        code: "t2_final_go_forbidden",
-        path: `${path}.finalGoUserId`,
-        message: "T2 (理事過半数) cannot have finalGo (八坂 has no veto)",
+        code: "invalid_tier_rank",
+        path: `${path}.rank`,
+        message: "rank must be an integer when set",
       });
     }
   }
@@ -457,9 +473,207 @@ function validateDecisionWorkflowConfig(
       path: `${path}.tiers`,
       message: "tiers must be an array",
     });
+  } else if (tiers.length === 0) {
+    errors.push({
+      code: "at_least_one_tier_required",
+      path: `${path}.tiers`,
+      message: "at least one tier is required",
+    });
   } else {
+    const tierIds = new Set<string>();
+    const ranks = new Set<number>();
+
     for (let i = 0; i < tiers.length; i++) {
       errors.push(...validateDecisionTierRoute(tiers[i], `${path}.tiers[${i}]`, ctx));
+
+      const tier = tiers[i] as Record<string, unknown>;
+
+      // Check for duplicate tier IDs
+      const tierId = tier.tier as string;
+      if (tierId && tierIds.has(tierId)) {
+        errors.push({
+          code: "duplicate_tier_id",
+          path: `${path}.tiers[${i}].tier`,
+          message: `duplicate tier id: ${tierId}`,
+        });
+      }
+      if (tierId) tierIds.add(tierId);
+
+      // Check for duplicate ranks
+      const rank = tier.rank as number | undefined;
+      if (typeof rank === "number") {
+        if (ranks.has(rank)) {
+          errors.push({
+            code: "duplicate_tier_rank",
+            path: `${path}.tiers[${i}].rank`,
+            message: `duplicate tier rank: ${rank}`,
+          });
+        }
+        ranks.add(rank);
+      }
+    }
+
+    // Validate tierRouting rules
+    if (c.tierRouting !== undefined) {
+      errors.push(...validateTierRoutingRules(c.tierRouting, `${path}.tierRouting`, tierIds));
+    }
+
+    // Validate defaultTierId references an existing tier
+    if (c.defaultTierId !== undefined && c.defaultTierId !== null) {
+      if (typeof c.defaultTierId !== "string" || !c.defaultTierId.trim()) {
+        errors.push({
+          code: "invalid_default_tier_id",
+          path: `${path}.defaultTierId`,
+          message: "defaultTierId must be a non-empty string when set",
+        });
+      } else if (!tierIds.has(c.defaultTierId)) {
+        errors.push({
+          code: "default_tier_id_not_found",
+          path: `${path}.defaultTierId`,
+          message: `defaultTierId references unknown tier: ${c.defaultTierId}`,
+        });
+      }
+    }
+  }
+
+  return errors;
+}
+
+/**
+ * Validate tier routing rules.
+ */
+function validateTierRoutingRules(
+  rules: unknown,
+  path: string,
+  validTierIds: Set<string>
+): ValidationError[] {
+  const errors: ValidationError[] = [];
+
+  if (!Array.isArray(rules)) {
+    errors.push({
+      code: "invalid_tier_routing",
+      path,
+      message: "tierRouting must be an array",
+    });
+    return errors;
+  }
+
+  for (let i = 0; i < rules.length; i++) {
+    const rule = rules[i];
+    if (!rule || typeof rule !== "object") {
+      errors.push({
+        code: "invalid_tier_routing_rule",
+        path: `${path}[${i}]`,
+        message: "tier routing rule must be an object",
+      });
+      continue;
+    }
+
+    const r = rule as Record<string, unknown>;
+
+    // Validate tierId
+    if (typeof r.tierId !== "string" || !r.tierId.trim()) {
+      errors.push({
+        code: "invalid_routing_rule_tier_id",
+        path: `${path}[${i}].tierId`,
+        message: "tierId must be a non-empty string",
+      });
+    } else if (!validTierIds.has(r.tierId)) {
+      errors.push({
+        code: "routing_rule_tier_not_found",
+        path: `${path}[${i}].tierId`,
+        message: `tierId references unknown tier: ${r.tierId}`,
+      });
+    }
+
+    // Validate match conditions
+    if (!r.match || typeof r.match !== "object") {
+      errors.push({
+        code: "invalid_routing_rule_match",
+        path: `${path}[${i}].match`,
+        message: "match conditions object is required",
+      });
+    } else {
+      errors.push(...validateTierMatchCondition(r.match, `${path}[${i}].match`));
+    }
+  }
+
+  return errors;
+}
+
+/**
+ * Validate tier match conditions.
+ */
+function validateTierMatchCondition(
+  match: unknown,
+  path: string
+): ValidationError[] {
+  const errors: ValidationError[] = [];
+
+  if (!match || typeof match !== "object") {
+    return errors;
+  }
+
+  const m = match as Record<string, unknown>;
+
+  // Validate keywords (plain substring match, no regex)
+  if (m.keywords !== undefined) {
+    if (!Array.isArray(m.keywords)) {
+      errors.push({
+        code: "invalid_keywords",
+        path: `${path}.keywords`,
+        message: "keywords must be an array",
+      });
+    } else if (m.keywords.length > MAX_T3_KEYWORDS) {
+      errors.push({
+        code: "keywords_limit_exceeded",
+        path: `${path}.keywords`,
+        message: `keywords cannot exceed ${MAX_T3_KEYWORDS} items`,
+      });
+    } else {
+      for (let i = 0; i < m.keywords.length; i++) {
+        if (typeof m.keywords[i] !== "string" || !m.keywords[i].trim()) {
+          errors.push({
+            code: "invalid_keyword",
+            path: `${path}.keywords[${i}]`,
+            message: "keywords must be non-empty strings",
+          });
+          break;
+        }
+      }
+    }
+  }
+
+  // Validate minAmountJpy
+  if (m.minAmountJpy !== undefined && m.minAmountJpy !== null) {
+    if (typeof m.minAmountJpy !== "number" || m.minAmountJpy < 0) {
+      errors.push({
+        code: "invalid_min_amount",
+        path: `${path}.minAmountJpy`,
+        message: "minAmountJpy must be a non-negative number",
+      });
+    }
+  }
+
+  // Validate categories
+  if (m.categories !== undefined) {
+    if (!Array.isArray(m.categories)) {
+      errors.push({
+        code: "invalid_categories",
+        path: `${path}.categories`,
+        message: "categories must be an array",
+      });
+    } else {
+      for (let i = 0; i < m.categories.length; i++) {
+        if (typeof m.categories[i] !== "string" || !m.categories[i].trim()) {
+          errors.push({
+            code: "invalid_category",
+            path: `${path}.categories[${i}]`,
+            message: "categories must be non-empty strings",
+          });
+          break;
+        }
+      }
     }
   }
 

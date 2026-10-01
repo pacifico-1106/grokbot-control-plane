@@ -184,7 +184,7 @@ describe("determineDecisionTier", () => {
 
     const result = determineDecisionTier(input, defaultConfig);
     expect(result.tier).toBe("T3");
-    expect(result.reason).toBe("T3_KEYWORD_MATCH");
+    expect(result.reason).toBe("T3_KEYWORD_MATCH (legacy)");
   });
 
   test("T3 keyword takes precedence over T2 amount", () => {
@@ -199,7 +199,7 @@ describe("determineDecisionTier", () => {
 
     const result = determineDecisionTier(input, defaultConfig);
     expect(result.tier).toBe("T3");
-    expect(result.reason).toBe("T3_KEYWORD_MATCH");
+    expect(result.reason).toBe("T3_KEYWORD_MATCH (legacy)");
   });
 
   test("allows upgrade via requestedTier", () => {

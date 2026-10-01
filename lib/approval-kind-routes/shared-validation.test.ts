@@ -325,7 +325,7 @@ const SHARED_VALIDATION_CASES: ValidationTestCase[] = [
     expectErrorCodes: ["invalid_amount_threshold"],
   },
   {
-    name: "rejects T2 with finalGo (八坂 has no veto)",
+    name: "accepts T2 with finalGo (tenant-configurable since tiers are arbitrary)",
     input: (() => {
       const p = validPolicy();
       p.decisionWorkflow = {
@@ -347,8 +347,8 @@ const SHARED_VALIDATION_CASES: ValidationTestCase[] = [
       };
       return p;
     })(),
-    expectOk: false,
-    expectErrorCodes: ["t2_final_go_forbidden"],
+    expectOk: true,
+    expectErrorCodes: [],
   },
 ];
 

@@ -39,6 +39,7 @@ export {
   MIRAI_SHACHU_REMIND_EVERY_DAYS,
   MIRAI_SHACHU_CONSUMPTION_TAX_RATE,
   createMiraiShachuTierRoutes,
+  createMiraiShachuTierRoutingRules,
   createMiraiShachuDecisionWorkflowConfig,
   createMiraiShachuTopicGateConfig,
 } from "./mirai-shachu";

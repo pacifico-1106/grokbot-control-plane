@@ -12,6 +12,7 @@ import type {
   DecisionWorkflowConfig,
   TopicGateConfig,
   DecisionTierRoute,
+  TierRoutingRule,
 } from "../types";
 
 /**
@@ -88,6 +89,7 @@ export function createMiraiShachuTierRoutes(
     {
       tier: "T1",
       nameJa: "代表理事の専決",
+      rank: 1,
       approverUserIds: [ownerUserId],
       quorum: { type: "any" },
       finalGoUserId: null,
@@ -98,6 +100,7 @@ export function createMiraiShachuTierRoutes(
     {
       tier: "T2",
       nameJa: "理事過半数",
+      rank: 2,
       approverUserIds: boardMemberUserIds.length > 0 ? boardMemberUserIds : [ownerUserId],
       quorum: { type: "count", n: Math.ceil((boardMemberUserIds.length || 1) / 2) },
       finalGoUserId: null,
@@ -108,12 +111,36 @@ export function createMiraiShachuTierRoutes(
     {
       tier: "T3",
       nameJa: "社員総会",
+      rank: 3,
       approverUserIds: allMemberUserIds.length > 0 ? allMemberUserIds : [ownerUserId],
       quorum: { type: "all" },
       finalGoUserId: null,
       deadlineHours: null,
       onExpire: "keep_open",
       remindEveryDays: MIRAI_SHACHU_REMIND_EVERY_DAYS,
+    },
+  ];
+}
+
+/**
+ * Create みらい社中 tier routing rules.
+ * T3: keywords match (定款変更, 役員, 決算, etc.)
+ * T2: amount >= 500,000 JPY (tax-excluded)
+ * Default: T1
+ */
+export function createMiraiShachuTierRoutingRules(): TierRoutingRule[] {
+  return [
+    {
+      tierId: "T3",
+      match: {
+        keywords: [...MIRAI_SHACHU_T3_KEYWORDS],
+      },
+    },
+    {
+      tierId: "T2",
+      match: {
+        minAmountJpy: MIRAI_SHACHU_AMOUNT_THRESHOLD_JPY,
+      },
     },
   ];
 }
@@ -133,6 +160,8 @@ export function createMiraiShachuDecisionWorkflowConfig(
     consumptionTaxRate: MIRAI_SHACHU_CONSUMPTION_TAX_RATE,
     deputyUserId: null,
     tiers: createMiraiShachuTierRoutes(ownerUserId, boardMemberUserIds, allMemberUserIds),
+    tierRouting: createMiraiShachuTierRoutingRules(),
+    defaultTierId: "T1",
   };
 }
 
