@@ -86,6 +86,8 @@ export interface DecisionWorkflowConfig {
   amountThresholdJpy: number;
   fiscalYearStartMonth: number;
   fiscalYearStartDay: number;
+  /** Consumption tax rate (default 0.10 = 10%). Must be between 0 and 1. */
+  consumptionTaxRate?: number;
   deputyUserId?: string | null;
   tiers: DecisionTierRoute[];
 }

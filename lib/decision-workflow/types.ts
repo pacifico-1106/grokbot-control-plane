@@ -83,12 +83,16 @@ export interface FiscalYearInfo {
 }
 
 /**
- * Tax exclusion constants.
+ * Default consumption tax rate.
+ * @deprecated Use DecisionWorkflowConfig.consumptionTaxRate from org policy.
+ * This value is only used as fallback when config doesn't specify a rate.
  */
 export const CONSUMPTION_TAX_RATE = 0.1;
 
 /**
  * Auto-escalation keywords for T3.
+ * @deprecated Will be moved to org config in a future PR.
+ * These are みらい社中 specific values kept for backward compatibility.
  */
 export const T3_AUTO_ESCALATION_KEYWORDS = [
   "定款変更",

@@ -25,6 +25,17 @@ import type {
   TopicGateConfig,
 } from "./types";
 import { APPROVAL_KINDS } from "./types";
+import {
+  MIN_DEADLINE_HOURS,
+  MAX_DEADLINE_HOURS,
+  MIN_TAX_RATE,
+  MAX_TAX_RATE,
+  MAX_SENSITIVE_TOPICS,
+  DEFAULT_SENSITIVE_TOPICS as PRESET_DEFAULT_SENSITIVE_TOPICS,
+  createDefaultApprovalKindRoute,
+  createDefaultDecisionWorkflowConfig as createPresetDefaultDecisionWorkflowConfig,
+  createDefaultTopicGateConfig as createPresetDefaultTopicGateConfig,
+} from "./presets";
 
 export interface ValidationError {
   code: string;
@@ -333,6 +344,23 @@ function validateDecisionTierRoute(
     });
   }
 
+  // Validate deadlineHours (optional, but must be within bounds when set)
+  if (r.deadlineHours !== undefined && r.deadlineHours !== null) {
+    if (typeof r.deadlineHours !== "number") {
+      errors.push({
+        code: "invalid_deadline_hours",
+        path: `${path}.deadlineHours`,
+        message: "deadlineHours must be a number when set",
+      });
+    } else if (r.deadlineHours < MIN_DEADLINE_HOURS || r.deadlineHours > MAX_DEADLINE_HOURS) {
+      errors.push({
+        code: "deadline_hours_out_of_range",
+        path: `${path}.deadlineHours`,
+        message: `deadlineHours must be between ${MIN_DEADLINE_HOURS} and ${MAX_DEADLINE_HOURS}`,
+      });
+    }
+  }
+
   return errors;
 }
 
@@ -385,6 +413,23 @@ function validateDecisionWorkflowConfig(
       path: `${path}.fiscalYearStartDay`,
       message: "fiscalYearStartDay must be 1-31",
     });
+  }
+
+  // Validate consumptionTaxRate (optional, default 0.10)
+  if (c.consumptionTaxRate !== undefined && c.consumptionTaxRate !== null) {
+    if (typeof c.consumptionTaxRate !== "number") {
+      errors.push({
+        code: "invalid_consumption_tax_rate",
+        path: `${path}.consumptionTaxRate`,
+        message: "consumptionTaxRate must be a number",
+      });
+    } else if (c.consumptionTaxRate < MIN_TAX_RATE || c.consumptionTaxRate > MAX_TAX_RATE) {
+      errors.push({
+        code: "consumption_tax_rate_out_of_range",
+        path: `${path}.consumptionTaxRate`,
+        message: `consumptionTaxRate must be between ${MIN_TAX_RATE} and ${MAX_TAX_RATE}`,
+      });
+    }
   }
 
   // Validate deputyUserId (optional)
@@ -442,6 +487,14 @@ function validateTopicGateConfig(config: unknown, path: string): ValidationError
         message: "sensitiveTopics must be an array",
       });
     } else {
+      // Empty array is valid: it means "no sensitive topics"
+      if (c.sensitiveTopics.length > MAX_SENSITIVE_TOPICS) {
+        errors.push({
+          code: "sensitive_topics_limit_exceeded",
+          path: `${path}.sensitiveTopics`,
+          message: `sensitiveTopics cannot exceed ${MAX_SENSITIVE_TOPICS} items`,
+        });
+      }
       for (const topic of c.sensitiveTopics) {
         if (typeof topic !== "string" || !topic.trim()) {
           errors.push({
@@ -533,74 +586,25 @@ export function validateApprovalRoutes(
 
 /**
  * Default approval kind route (owner 1名).
+ * Re-exported from presets for backward compatibility.
  */
-export function defaultApprovalKindRoute(
-  kind: ApprovalKind,
-  ownerUserId: string
-): ApprovalKindRoute {
-  return {
-    kind,
-    approverUserIds: [ownerUserId],
-    quorum: { type: "any" },
-    finalGoUserId: null,
-    deadlineHours: null,
-    onExpire: "fail_closed",
-    remindEveryDays: 3,
-    notifyChannelIds: [],
-  };
-}
+export const defaultApprovalKindRoute = createDefaultApprovalKindRoute;
 
 /**
- * Default sensitive topics list (みらい社中の値).
+ * Default sensitive topics list.
+ * Re-exported from presets for backward compatibility.
+ * Note: These are generic defaults, not tenant-specific.
  */
-export const DEFAULT_SENSITIVE_TOPICS = [
-  "金額",
-  "支払",
-  "請求",
-  "口座",
-  "予算",
-  "決算",
-  "税務",
-  "報酬",
-  "契約条件",
-  "個人情報",
-  "役員人事",
-  "定款",
-] as const;
+export const DEFAULT_SENSITIVE_TOPICS = PRESET_DEFAULT_SENSITIVE_TOPICS;
 
 /**
  * Default topic gate config.
+ * Re-exported from presets for backward compatibility.
  */
-export function defaultTopicGateConfig(): TopicGateConfig {
-  return {
-    enabled: false,
-    sensitiveTopics: [...DEFAULT_SENSITIVE_TOPICS],
-    mainBoardChannelIds: [],
-  };
-}
+export const defaultTopicGateConfig = createPresetDefaultTopicGateConfig;
 
 /**
- * Default decision workflow config (みらい社中).
+ * Default decision workflow config.
+ * Re-exported from presets for backward compatibility.
  */
-export function defaultDecisionWorkflowConfig(
-  ownerUserId: string
-): DecisionWorkflowConfig {
-  return {
-    amountThresholdJpy: 500000,
-    fiscalYearStartMonth: 4,
-    fiscalYearStartDay: 1,
-    deputyUserId: null,
-    tiers: [
-      {
-        tier: "T1",
-        nameJa: "代表理事の専決",
-        approverUserIds: [ownerUserId],
-        quorum: { type: "any" },
-        finalGoUserId: null,
-        deadlineHours: null,
-        onExpire: "keep_open",
-        remindEveryDays: 3,
-      },
-    ],
-  };
-}
+export const defaultDecisionWorkflowConfig = createPresetDefaultDecisionWorkflowConfig;

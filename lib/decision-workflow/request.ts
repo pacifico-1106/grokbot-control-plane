@@ -27,15 +27,21 @@ import {
   type DecisionRequestValidation,
   type FiscalYearInfo,
 } from "./types";
-
-const T2_DEADLINE_HOURS = 72;
+import { DEFAULT_CONSUMPTION_TAX_RATE } from "@/lib/approval-kind-routes/presets";
 
 /**
  * Calculate tax-excluded amount from tax-included amount.
+ * @param amountJpy - The amount in JPY
+ * @param taxIncluded - Whether the amount includes tax (default true)
+ * @param taxRate - The consumption tax rate (default from config or 0.10)
  */
-export function calculateTaxExcludedAmount(amountJpy: number, taxIncluded = true): number {
+export function calculateTaxExcludedAmount(
+  amountJpy: number,
+  taxIncluded = true,
+  taxRate: number = DEFAULT_CONSUMPTION_TAX_RATE
+): number {
   if (!taxIncluded) return amountJpy;
-  return Math.floor(amountJpy / (1 + CONSUMPTION_TAX_RATE));
+  return Math.floor(amountJpy / (1 + taxRate));
 }
 
 /**
@@ -98,7 +104,8 @@ export function determineDecisionTier(
   isOwner = false
 ): { tier: DecisionTier; reason: string } {
   const amountJpy = input.amountJpy ?? 0;
-  const taxExcluded = calculateTaxExcludedAmount(amountJpy, input.taxIncluded ?? true);
+  const taxRate = config?.consumptionTaxRate ?? DEFAULT_CONSUMPTION_TAX_RATE;
+  const taxExcluded = calculateTaxExcludedAmount(amountJpy, input.taxIncluded ?? true, taxRate);
   const threshold = config?.amountThresholdJpy ?? 500000;
   const tierOrder: Record<DecisionTier, number> = { T1: 1, T2: 2, T3: 3 };
 
@@ -181,8 +188,9 @@ export function validateDecisionRequest(
   }
 
   const { tier, reason } = determineDecisionTier(input, config, isOwner);
+  const taxRate = config?.consumptionTaxRate ?? DEFAULT_CONSUMPTION_TAX_RATE;
   const taxExcludedAmountJpy = input.amountJpy
-    ? calculateTaxExcludedAmount(input.amountJpy, input.taxIncluded ?? true)
+    ? calculateTaxExcludedAmount(input.amountJpy, input.taxIncluded ?? true, taxRate)
     : undefined;
   const fiscalYear = config
     ? calculateFiscalYear(new Date(), config).fiscalYear
@@ -263,12 +271,10 @@ export async function handleDecisionRequest(
   const summary = buildDecisionSummary(input, tier, validation);
 
   const now = new Date();
-  const deadlineAt =
-    tier === "T2"
-      ? new Date(now.getTime() + T2_DEADLINE_HOURS * 60 * 60 * 1000)
-      : tierRoute?.deadlineHours
-        ? new Date(now.getTime() + tierRoute.deadlineHours * 60 * 60 * 1000)
-        : null;
+  // Use deadlineHours from tier route config; no hardcoded tier-specific values
+  const deadlineAt = tierRoute?.deadlineHours
+    ? new Date(now.getTime() + tierRoute.deadlineHours * 60 * 60 * 1000)
+    : null;
 
   const approverUserIds = tierRoute?.approverUserIds ?? effectiveDecisionRoute?.route?.approverUserIds ?? [];
   const quorum = tierRoute?.quorum ?? effectiveDecisionRoute?.route?.quorum ?? { type: "any" as const };
