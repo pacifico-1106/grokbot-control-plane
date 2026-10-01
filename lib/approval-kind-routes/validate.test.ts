@@ -59,7 +59,7 @@ describe("validateApprovalRoutes", () => {
 
     test("rejects missing policyName", () => {
       const policy = validPolicy();
-      delete (policy as Record<string, unknown>).policyName;
+      delete (policy as unknown as Record<string, unknown>).policyName;
       const result = validateApprovalRoutes(policy, mockContext());
       expect(result.ok).toBe(false);
       expect(result.errors.some((e) => e.code === "missing_policy_name")).toBe(true);
@@ -177,7 +177,7 @@ describe("validateApprovalRoutes", () => {
 
     test("rejects invalid quorum type", () => {
       const policy = validPolicy();
-      (policy.routes[0] as Record<string, unknown>).quorum = { type: "invalid" };
+      (policy.routes[0] as unknown as Record<string, unknown>).quorum = { type: "invalid" };
       const result = validateApprovalRoutes(policy, mockContext());
       expect(result.ok).toBe(false);
       expect(result.errors.some((e) => e.code === "invalid_quorum")).toBe(true);
@@ -234,7 +234,7 @@ describe("validateApprovalRoutes", () => {
 
     test("rejects invalid onExpire", () => {
       const policy = validPolicy();
-      (policy.routes[0] as Record<string, unknown>).onExpire = "invalid";
+      (policy.routes[0] as unknown as Record<string, unknown>).onExpire = "invalid";
       const result = validateApprovalRoutes(policy, mockContext());
       expect(result.ok).toBe(false);
       expect(result.errors.some((e) => e.code === "invalid_on_expire")).toBe(true);

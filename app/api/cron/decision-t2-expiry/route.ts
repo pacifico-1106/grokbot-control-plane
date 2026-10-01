@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { listApprovalsForTelegramDigest } from "@/lib/data/approvals";
+import { listPendingT2Decisions } from "@/lib/data/approvals";
 import { isDecisionWorkflowEnabled } from "@/lib/feature-flags";
 import { checkAndExpireT2Decision } from "@/lib/decision-workflow/expiry";
 
@@ -7,7 +7,8 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 /**
- * Cron: T2 Decision Expiry — auto-reject expired T2 decisions.
+ * T2 Decision Expiry — auto-reject expired T2 decisions.
+ * Called from stuck-watch-w1 cron (not registered as separate cron).
  *
  * Security:
  * - fail_closed: Never approve on error, always reject
@@ -37,33 +38,25 @@ export async function GET(req: Request) {
 
   try {
     const now = new Date();
-    const approvals = await listApprovalsForTelegramDigest();
+    const t2Decisions = await listPendingT2Decisions();
 
-    const t2Decisions = approvals.filter((approval) => {
-      const metadata = approval.metadata as Record<string, unknown> | null;
-      return (
-        metadata?.type === "decision_request" &&
-        metadata?.tier === "T2" &&
-        approval.status === "pending"
-      );
-    });
+    let rejected = 0;
+    let skipped = 0;
+    let errors = 0;
 
-    const results = await Promise.all(
-      t2Decisions.map((approval) => checkAndExpireT2Decision(approval, now))
-    );
-
-    const rejected = results.filter((r) => r.action === "rejected").length;
-    const skipped = results.filter((r) => r.action === "skipped").length;
-    const errors = results.filter((r) => r.action === "error").length;
+    for (const approval of t2Decisions) {
+      const result = await checkAndExpireT2Decision(approval, now);
+      if (result.action === "rejected") rejected++;
+      else if (result.action === "skipped") skipped++;
+      else if (result.action === "error") errors++;
+    }
 
     return NextResponse.json({
       ok: true,
-      scanned: approvals.length,
       candidates: t2Decisions.length,
       rejected,
       skipped,
       errors,
-      results,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "unknown_error";

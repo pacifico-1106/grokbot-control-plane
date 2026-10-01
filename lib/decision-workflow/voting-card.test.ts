@@ -22,6 +22,7 @@ const mockApproval: ApprovalRequest = {
   id: "approval-1",
   orgId: "org-1",
   employeeId: "emp-1",
+  credentialId: "cred-1",
   title: "サーバー購入稟議",
   summary: "開発環境用サーバーの購入",
   purpose: "インフラ更新",
@@ -30,8 +31,15 @@ const mockApproval: ApprovalRequest = {
   risk: "medium",
   status: "pending",
   createdAt: new Date().toISOString(),
-  expiresAt: null,
   resolvedAt: null,
+  resolvedBy: null,
+  revisionNote: null,
+  revisionCount: 0,
+  parentApprovalId: null,
+  telegramRef: null,
+  telegramMessageId: null,
+  statusToken: "test-token",
+  pollPath: "/api/approvals/approval-1/poll",
   metadata: {},
 };
 
@@ -172,7 +180,7 @@ describe("formatDecisionCardForSlack", () => {
     expect(slack.text).toContain("理事過半数");
     expect(slack.text).toContain("サーバー購入稟議");
     expect(slack.blocks.length).toBeGreaterThan(0);
-    expect(slack.blocks[0]).toHaveProperty("type", "header");
+    expect((slack.blocks[0] as Record<string, unknown>).type).toBe("header");
   });
 
   test("includes amount fields when present", () => {

@@ -208,7 +208,7 @@ const SHARED_VALIDATION_CASES: ValidationTestCase[] = [
     name: "rejects invalid quorum type",
     input: (() => {
       const p = validPolicy();
-      (p.routes[0] as Record<string, unknown>).quorum = { type: "invalid" };
+      (p.routes[0] as unknown as Record<string, unknown>).quorum = { type: "invalid" };
       return p;
     })(),
     expectOk: false,
@@ -279,7 +279,7 @@ const SHARED_VALIDATION_CASES: ValidationTestCase[] = [
     name: "rejects invalid onExpire",
     input: (() => {
       const p = validPolicy();
-      (p.routes[0] as Record<string, unknown>).onExpire = "invalid";
+      (p.routes[0] as unknown as Record<string, unknown>).onExpire = "invalid";
       return p;
     })(),
     expectOk: false,

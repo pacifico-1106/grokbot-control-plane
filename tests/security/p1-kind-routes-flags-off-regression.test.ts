@@ -288,14 +288,15 @@ describe("FLAGS-OFF REGRESSION: Decision workflow functions no-op when flag OFF"
       status: "pending" as const,
       metadata: { type: "decision_request", tier: "T2" },
       createdAt: new Date().toISOString(),
+      resolvedAt: null,
+      resolvedBy: null,
       pollPath: "/api/approvals/test-approval/poll",
+      statusToken: "test-token",
       revisionNote: null,
       revisionCount: 0,
       parentApprovalId: null,
       telegramRef: null,
       telegramMessageId: null,
-      slackRef: null,
-      slackMessageTs: null,
       jobId: "test-job",
     };
 
@@ -318,14 +319,15 @@ describe("FLAGS-OFF REGRESSION: Decision workflow functions no-op when flag OFF"
       status: "pending" as const,
       metadata: { type: "decision_request", tier: "T2" },
       createdAt: new Date(Date.now() - 100 * 60 * 60 * 1000).toISOString(), // 100h ago
+      resolvedAt: null,
+      resolvedBy: null,
       pollPath: "/api/approvals/test-approval/poll",
+      statusToken: "test-token",
       revisionNote: null,
       revisionCount: 0,
       parentApprovalId: null,
       telegramRef: null,
       telegramMessageId: null,
-      slackRef: null,
-      slackMessageTs: null,
       jobId: "test-job",
     };
 
@@ -348,17 +350,24 @@ describe("FLAGS-OFF REGRESSION: Decision workflow functions no-op when flag OFF"
     const { handleDeputyActivate } = await import("@/lib/approval-kind-routes/mcp-handlers");
     const mockCred = {
       orgId: "test-org",
-      userId: "test-user",
-      email: "test@example.com",
-      role: "admin" as const,
-      isOwner: true,
-      isPlatformOps: false,
+      adminAgentId: "test-admin-agent",
       grokBotAgentId: null,
-      adminAgentId: null,
       actorId: "test-actor",
       generation: 1,
-      via: "test" as const,
-      agent: null,
+      via: "bearer" as const,
+      agent: {
+        id: "test-admin-agent",
+        orgId: "test-org",
+        grokBotAgentId: null,
+        grokBotWorkspaceId: null,
+        credentialFingerprint: null,
+        secretPrefix: "gb_adm_test",
+        credentialGeneration: 1,
+        status: "linked" as const,
+        opsDocLocation: null,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      },
     };
 
     const result = await handleDeputyActivate(mockCred, {
@@ -384,14 +393,15 @@ describe("FLAGS-OFF REGRESSION: Decision workflow functions no-op when flag OFF"
       status: "approved" as const,
       metadata: { type: "deputy_activation", originalApprovalId: "orig-1", deputyUserId: "deputy-1" },
       createdAt: new Date().toISOString(),
+      resolvedAt: null,
+      resolvedBy: null,
       pollPath: "/api/approvals/test-approval/poll",
+      statusToken: "test-token",
       revisionNote: null,
       revisionCount: 0,
       parentApprovalId: null,
       telegramRef: null,
       telegramMessageId: null,
-      slackRef: null,
-      slackMessageTs: null,
       jobId: "test-job",
     };
 
