@@ -61,3 +61,13 @@ export {
   evaluateKindRouteReminder,
   type KindRoutingMetadata,
 } from "./workflow-bridge";
+export {
+  handleApprovalRoutesGet,
+  validateApprovalRoutesPatch,
+  buildValidatorContext,
+  generatePolicyDiff,
+  checkBeforeStateMatch,
+  type ApprovalRoutesGetResult,
+  type ApprovalRoutesPatchInput,
+  type ApprovalRoutesPatchResult,
+} from "./mcp-handlers";
