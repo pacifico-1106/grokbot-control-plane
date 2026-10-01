@@ -75,6 +75,13 @@ function isValidQuorum(quorum: unknown): quorum is ApprovalKindQuorum {
   ) {
     return true;
   }
+  if (
+    q.type === "weight" &&
+    typeof q.min === "number" &&
+    q.min > 0
+  ) {
+    return true;
+  }
   return false;
 }
 
@@ -183,7 +190,7 @@ function validateRoute(
     errors.push({
       code: "invalid_quorum",
       path: `${path}.quorum`,
-      message: "quorum must be { type: 'any' } | { type: 'count', n: number } | { type: 'all' }",
+      message: "quorum must be { type: 'any' } | { type: 'count', n: number } | { type: 'all' } | { type: 'weight', min: number }",
     });
   } else if (
     quorum.type === "count" &&
@@ -328,7 +335,7 @@ function validateDecisionTierRoute(
     errors.push({
       code: "invalid_quorum",
       path: `${path}.quorum`,
-      message: "quorum must be { type: 'any' } | { type: 'count', n: number } | { type: 'all' }",
+      message: "quorum must be { type: 'any' } | { type: 'count', n: number } | { type: 'all' } | { type: 'weight', min: number }",
     });
   } else if (
     quorum.type === "count" &&
@@ -340,6 +347,53 @@ function validateDecisionTierRoute(
       path: `${path}.quorum`,
       message: "quorum count exceeds number of approvers",
     });
+  }
+
+  // Validate voterWeights
+  const voterWeights = r.voterWeights;
+  if (voterWeights !== undefined && voterWeights !== null) {
+    if (typeof voterWeights !== "object" || Array.isArray(voterWeights)) {
+      errors.push({
+        code: "invalid_voter_weights",
+        path: `${path}.voterWeights`,
+        message: "voterWeights must be an object mapping userId to weight",
+      });
+    } else {
+      const weights = voterWeights as Record<string, unknown>;
+      for (const [userId, weight] of Object.entries(weights)) {
+        if (typeof weight !== "number" || weight <= 0) {
+          errors.push({
+            code: "invalid_voter_weight",
+            path: `${path}.voterWeights.${userId}`,
+            message: "voterWeights values must be positive numbers",
+          });
+          break;
+        }
+      }
+    }
+  }
+
+  // Validate weight quorum requires voterWeights
+  if (isValidQuorum(quorum) && quorum.type === "weight") {
+    if (!voterWeights || typeof voterWeights !== "object" || Object.keys(voterWeights).length === 0) {
+      errors.push({
+        code: "weight_quorum_requires_voter_weights",
+        path: `${path}.voterWeights`,
+        message: "voterWeights is required when quorum type is 'weight'",
+      });
+    } else {
+      const weights = voterWeights as Record<string, number>;
+      const totalWeight = Array.isArray(approverUserIds)
+        ? approverUserIds.reduce((sum, id) => sum + (weights[id] ?? 1), 0)
+        : 0;
+      if (totalWeight < quorum.min) {
+        errors.push({
+          code: "unreachable_weight_quorum",
+          path: `${path}.quorum`,
+          message: `required weight ${quorum.min} exceeds total available weight ${totalWeight}`,
+        });
+      }
+    }
   }
 
   // Validate onExpire

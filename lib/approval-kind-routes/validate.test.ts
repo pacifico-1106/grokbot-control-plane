@@ -336,3 +336,99 @@ describe("DEFAULT_SENSITIVE_TOPICS", () => {
     expect(DEFAULT_SENSITIVE_TOPICS).toContain("定款");
   });
 });
+
+describe("weighted quorum validation", () => {
+  test("accepts valid weighted quorum with voterWeights", () => {
+    const policy = validPolicy();
+    policy.decisionWorkflow = {
+      amountThresholdJpy: 500000,
+      fiscalYearStartMonth: 4,
+      fiscalYearStartDay: 1,
+      tiers: [
+        {
+          tier: "T2",
+          nameJa: "理事過半数",
+          approverUserIds: ["owner-1", "admin-1", "admin-2"],
+          voterWeights: { "owner-1": 3, "admin-1": 2, "admin-2": 1 },
+          quorum: { type: "weight", min: 4 },
+          deadlineHours: 72,
+          onExpire: "fail_closed",
+          remindEveryDays: 3,
+        },
+      ],
+    };
+    const result = validateApprovalRoutes(policy, mockContext());
+    expect(result.ok).toBe(true);
+  });
+
+  test("rejects weighted quorum without voterWeights", () => {
+    const policy = validPolicy();
+    policy.decisionWorkflow = {
+      amountThresholdJpy: 500000,
+      fiscalYearStartMonth: 4,
+      fiscalYearStartDay: 1,
+      tiers: [
+        {
+          tier: "T2",
+          nameJa: "理事過半数",
+          approverUserIds: ["owner-1", "admin-1", "admin-2"],
+          quorum: { type: "weight", min: 4 },
+          deadlineHours: 72,
+          onExpire: "fail_closed",
+          remindEveryDays: 3,
+        },
+      ],
+    };
+    const result = validateApprovalRoutes(policy, mockContext());
+    expect(result.ok).toBe(false);
+    expect(result.errors.some((e) => e.code === "weight_quorum_requires_voter_weights")).toBe(true);
+  });
+
+  test("rejects unreachable weighted quorum", () => {
+    const policy = validPolicy();
+    policy.decisionWorkflow = {
+      amountThresholdJpy: 500000,
+      fiscalYearStartMonth: 4,
+      fiscalYearStartDay: 1,
+      tiers: [
+        {
+          tier: "T2",
+          nameJa: "理事過半数",
+          approverUserIds: ["owner-1", "admin-1", "admin-2"],
+          voterWeights: { "owner-1": 1, "admin-1": 1, "admin-2": 1 },
+          quorum: { type: "weight", min: 10 },
+          deadlineHours: 72,
+          onExpire: "fail_closed",
+          remindEveryDays: 3,
+        },
+      ],
+    };
+    const result = validateApprovalRoutes(policy, mockContext());
+    expect(result.ok).toBe(false);
+    expect(result.errors.some((e) => e.code === "unreachable_weight_quorum")).toBe(true);
+  });
+
+  test("rejects negative voter weight", () => {
+    const policy = validPolicy();
+    policy.decisionWorkflow = {
+      amountThresholdJpy: 500000,
+      fiscalYearStartMonth: 4,
+      fiscalYearStartDay: 1,
+      tiers: [
+        {
+          tier: "T2",
+          nameJa: "理事過半数",
+          approverUserIds: ["owner-1", "admin-1"],
+          voterWeights: { "owner-1": 3, "admin-1": -1 },
+          quorum: { type: "count", n: 2 },
+          deadlineHours: 72,
+          onExpire: "fail_closed",
+          remindEveryDays: 3,
+        },
+      ],
+    };
+    const result = validateApprovalRoutes(policy, mockContext());
+    expect(result.ok).toBe(false);
+    expect(result.errors.some((e) => e.code === "invalid_voter_weight")).toBe(true);
+  });
+});

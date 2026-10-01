@@ -37,10 +37,17 @@ export interface DecisionProgress {
   rejectedCount: number;
   pendingCount: number;
   totalVoters: number;
-  quorumRequired: number | "all";
+  quorumRequired: number | "all" | { type: "weight"; min: number };
   quorumMet: boolean;
   deadlineAt?: Date | null;
   isExpired?: boolean;
+  /** Weighted totals (present when voterWeights are configured) */
+  weighted?: {
+    approvedWeight: number;
+    rejectedWeight: number;
+    pendingWeight: number;
+    totalWeight: number;
+  };
 }
 
 /**
@@ -125,43 +132,61 @@ function extractProgress(
 ): DecisionProgress {
   const votes = (metadata.votes as Record<string, string>) || {};
   const approverUserIds = (metadata.approverUserIds as string[]) || [];
+  const voterWeights = (metadata.voterWeights as Record<string, number>) || {};
+  const hasWeights = Object.keys(voterWeights).length > 0;
 
   let approvedCount = 0;
   let rejectedCount = 0;
   let pendingCount = 0;
 
+  let approvedWeight = 0;
+  let rejectedWeight = 0;
+  let pendingWeight = 0;
+  let totalWeight = 0;
+
   for (const voterId of approverUserIds) {
     const vote = votes[voterId];
+    const weight = voterWeights[voterId] ?? 1;
+    totalWeight += weight;
+
     if (vote === "approve") {
       approvedCount++;
+      approvedWeight += weight;
     } else if (vote === "reject") {
       rejectedCount++;
+      rejectedWeight += weight;
     } else {
       pendingCount++;
+      pendingWeight += weight;
     }
   }
 
   const totalVoters = approverUserIds.length;
-  const quorum = metadata.quorum as { type: string; n?: number } | undefined;
-  let quorumRequired: number | "all" = 1;
+  const quorum = metadata.quorum as { type: string; n?: number; min?: number } | undefined;
+  let quorumRequired: number | "all" | { type: "weight"; min: number } = 1;
+  let quorumMet: boolean;
 
   if (quorum) {
-    if (quorum.type === "all") {
+    if (quorum.type === "weight" && typeof quorum.min === "number") {
+      quorumRequired = { type: "weight", min: quorum.min };
+      quorumMet = approvedWeight >= quorum.min;
+    } else if (quorum.type === "all") {
       quorumRequired = "all";
+      quorumMet = approvedCount === totalVoters && totalVoters > 0;
     } else if (quorum.type === "count" && typeof quorum.n === "number") {
       quorumRequired = quorum.n;
+      quorumMet = approvedCount >= quorumRequired;
+    } else {
+      quorumMet = approvedCount >= 1;
     }
+  } else {
+    quorumMet = approvedCount >= 1;
   }
-
-  const quorumMet =
-    quorumRequired === "all"
-      ? approvedCount === totalVoters && totalVoters > 0
-      : approvedCount >= quorumRequired;
 
   const deadline = extractDeadline(approval, metadata);
   const isExpired = deadline ? deadline < new Date() : false;
 
-  return {
+  const result: DecisionProgress = {
     approvedCount,
     rejectedCount,
     pendingCount,
@@ -171,6 +196,17 @@ function extractProgress(
     deadlineAt: deadline,
     isExpired,
   };
+
+  if (hasWeights) {
+    result.weighted = {
+      approvedWeight,
+      rejectedWeight,
+      pendingWeight,
+      totalWeight,
+    };
+  }
+
+  return result;
 }
 
 /**
@@ -188,12 +224,24 @@ function extractDeadline(
 }
 
 /**
+ * Format progress text for display.
+ */
+function formatProgressText(progress: DecisionProgress): string {
+  if (progress.weighted) {
+    return `${progress.weighted.approvedWeight}/${progress.weighted.totalWeight}pt`;
+  }
+  return `${progress.approvedCount}/${progress.totalVoters}名`;
+}
+
+/**
  * Format card for Slack.
  */
 export function formatDecisionCardForSlack(card: DecisionVotingCard): {
   text: string;
   blocks: unknown[];
 } {
+  const progressText = formatProgressText(card.progress);
+
   const blocks: unknown[] = [
     {
       type: "header",
@@ -212,7 +260,7 @@ export function formatDecisionCardForSlack(card: DecisionVotingCard): {
         },
         {
           type: "mrkdwn",
-          text: `*進捗:*\n${card.progress.approvedCount}/${card.progress.totalVoters}名`,
+          text: `*進捗:*\n${progressText}`,
         },
       ],
     },
@@ -289,11 +337,13 @@ export function formatDecisionCardForTelegram(card: DecisionVotingCard): {
   text: string;
   inlineKeyboard: unknown[][];
 } {
+  const progressText = formatProgressText(card.progress);
+
   const lines: string[] = [
     `<b>【${card.tierLabel}】${card.title}</b>`,
     "",
     `<b>Tier:</b> ${card.tier} (${card.tierLabel})`,
-    `<b>進捗:</b> ${card.progress.approvedCount}/${card.progress.totalVoters}名`,
+    `<b>進捗:</b> ${progressText}`,
   ];
 
   if (card.amountJpy) {
