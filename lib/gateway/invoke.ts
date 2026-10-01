@@ -268,8 +268,8 @@ function extractChannelIdForTopicGate(body: GatewayInvokeRequest): string | null
     typeof args.channelId === "string" ? args.channelId :
     typeof args.channel_id === "string" ? args.channel_id :
     typeof args.channel === "string" ? args.channel :
-    body.conversation?.channelId ??
-    body.conversation?.channel_id ??
+    body.slackChannelId ??
+    body.conversation?.slackChannelId ??
     null
   );
 
