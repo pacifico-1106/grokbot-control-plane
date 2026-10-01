@@ -17,6 +17,7 @@ import type {
   ApprovalRequest,
   ApprovalWorkflowBallot,
   ApprovalWorkflowInstance,
+  OrgApprovalWorkflowPolicy,
   WorkflowProgress,
 } from "@/lib/types";
 import { appendAuditEvent } from "@/lib/data/audit";
@@ -78,6 +79,19 @@ export async function initializeWorkflowForApproval(
   employeeId: string | null
 ): Promise<WorkflowInitResult> {
   if (!isDemoMode()) {
+    // P1: When kind routes are enabled, use kind-based routing instead of class-based
+    if (isApprovalKindRoutesEnabled()) {
+      const kindResult = await shouldUseKindRouting(
+        { tool: approval.tool, orgId: approval.orgId, employeeId: approval.employeeId },
+        undefined
+      );
+
+      if (kindResult) {
+        return initializeProductionKindRouteWorkflow(approval, kindResult);
+      }
+    }
+
+    // Existing class-based routing via SQL RPC
     const admin = createSupabaseAdminClient();
     if (!admin) throw new Error("workflow_unavailable");
     const { data, error } = await admin.rpc("initialize_approval_workflow", { p_id: approval.id, p_org: approval.orgId });
@@ -100,6 +114,73 @@ export async function initializeWorkflowForApproval(
     markDemoWorkflowInitialized(approval.id);
     return result;
   });
+}
+
+/**
+ * Initialize workflow for production mode using kind-based routing.
+ * Uses SQL-based workflow storage but TypeScript-based kind route resolution.
+ */
+async function initializeProductionKindRouteWorkflow(
+  approval: ApprovalRequest,
+  kindResult: { kind: import("@/lib/approval-kind-routes/types").ApprovalKind; route: import("@/lib/approval-kind-routes/types").ApprovalKindRoute; syntheticPolicy: OrgApprovalWorkflowPolicy }
+): Promise<WorkflowInitResult> {
+  const { kind, route, syntheticPolicy } = kindResult;
+  const admin = createSupabaseAdminClient();
+  if (!admin) throw new Error("workflow_unavailable");
+
+  // Check if instance already exists
+  const existing = await getWorkflowInstanceByApprovalId(approval.id);
+  if (existing) {
+    if (existing.orgId !== approval.orgId) throw new Error("workflow_org_mismatch");
+    const ballots = await getBallotsByInstanceId(existing.id);
+    return { created: false, instance: existing, ballots, progress: buildWorkflowProgress(existing, ballots) };
+  }
+
+  // Create workflow instance with kind-based policy
+  const instance = await createWorkflowInstance({
+    approvalId: approval.id,
+    orgId: approval.orgId,
+    policy: syntheticPolicy,
+  });
+
+  if (!instance) {
+    throw new Error("workflow_initialization_failed");
+  }
+
+  // Store kind routing metadata for expiry/reminder tracking
+  const kindRoutingMeta = buildKindRoutingMetadata(kind, route, syntheticPolicy.policyId);
+  await updateApprovalMetadata(approval, { kindRouting: kindRoutingMeta });
+
+  const firstStage = syntheticPolicy.stages[0];
+  const ballots = await createBallotsForStage({
+    instanceId: instance.id,
+    orgId: approval.orgId,
+    stage: firstStage,
+    stageIndex: 0,
+  });
+
+  await appendAuditEvent({
+    orgId: approval.orgId,
+    employeeId: approval.employeeId,
+    credentialId: approval.credentialId,
+    action: "approval.requested",
+    purpose: approval.purpose,
+    summary: `ワークフロー開始 (kind=${kind}): ${syntheticPolicy.policyName}`,
+    metadata: {
+      approvalId: approval.id,
+      instanceId: instance.id,
+      policyId: syntheticPolicy.policyId,
+      kind,
+      routeQuorum: route.quorum,
+      stageName: firstStage.nameJa,
+      voters: firstStage.voterUserIds.length,
+      kindRouting: true,
+      deadlineAt: kindRoutingMeta.deadlineAt,
+    },
+  });
+
+  const progress = buildWorkflowProgress(instance, ballots);
+  return { created: true, instance, ballots, progress };
 }
 
 async function initializeDemoWorkflow(approval: ApprovalRequest, employeeId: string | null): Promise<WorkflowInitResult> {
