@@ -12,28 +12,28 @@ export const metadata: Metadata = {
 
 const PANELS = [
   {
-    src: "/lp/ai-employee/manga/proper/01.png",
+    src: "/lp/ai-employee/manga/proper/01.webp",
     alt: "問い合わせが止まらない午後",
   },
   {
-    src: "/lp/ai-employee/manga/proper/02.png",
+    src: "/lp/ai-employee/manga/proper/02.webp",
     alt: "一次返信の下書き",
   },
   {
-    src: "/lp/ai-employee/manga/proper/03.png",
-    alt: "見積メモを整理",
+    src: "/lp/ai-employee/manga/proper/03.webp",
+    alt: "商談メモを整理",
   },
   {
-    src: "/lp/ai-employee/manga/proper/04.png",
-    alt: "商談の日程候補",
+    src: "/lp/ai-employee/manga/proper/04.webp",
+    alt: "フォローの抜け漏れを防ぐ",
   },
   {
-    src: "/lp/ai-employee/manga/proper/05.png",
-    alt: "対応ログが日報に",
+    src: "/lp/ai-employee/manga/proper/05.webp",
+    alt: "資料のたたき台",
   },
   {
-    src: "/lp/ai-employee/manga/proper/06.png",
-    alt: "プロパーで、営業の余白を取り戻す",
+    src: "/lp/ai-employee/manga/proper/06.webp",
+    alt: "プロパーで、顧客対応を仕組みに",
   },
 ];
 

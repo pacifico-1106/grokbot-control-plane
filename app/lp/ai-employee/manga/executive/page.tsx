@@ -12,27 +12,27 @@ export const metadata: Metadata = {
 
 const PANELS = [
   {
-    src: "/lp/ai-employee/manga/executive/01.png",
+    src: "/lp/ai-employee/manga/executive/01.webp",
     alt: "経営と現場、両方が見える席",
   },
   {
-    src: "/lp/ai-employee/manga/executive/02.png",
+    src: "/lp/ai-employee/manga/executive/02.webp",
     alt: "週次サマリー",
   },
   {
-    src: "/lp/ai-employee/manga/executive/03.png",
+    src: "/lp/ai-employee/manga/executive/03.webp",
     alt: "優先度を整理",
   },
   {
-    src: "/lp/ai-employee/manga/executive/04.png",
+    src: "/lp/ai-employee/manga/executive/04.webp",
     alt: "承認ルールの設計",
   },
   {
-    src: "/lp/ai-employee/manga/executive/05.png",
+    src: "/lp/ai-employee/manga/executive/05.webp",
     alt: "開発・保守の調査と実装案",
   },
   {
-    src: "/lp/ai-employee/manga/executive/06.png",
+    src: "/lp/ai-employee/manga/executive/06.webp",
     alt: "エグゼクティブで、経営と開発の伴走",
   },
 ];
