@@ -4,6 +4,8 @@ import { ensureAuthenticatedOrg } from "@/lib/auth/session";
 import { getSuperAdminAccess } from "@/lib/admin/access";
 import { listApprovals } from "@/lib/data";
 import { getOrgEntitlements } from "@/lib/billing/entitlements";
+import { getOrgPlanInfo } from "@/lib/billing/org-plan";
+import { isPlanRailsEnabled } from "@/lib/feature-flags";
 
 /**
  * Soft gate for every /app/* page.
@@ -43,6 +45,8 @@ export default async function AppSectionLayout({
   const approvals = await listApprovals(session.orgId);
   const pendingApprovalCount = approvals.filter((row) => row.status === "pending").length;
   const entitlements = await getOrgEntitlements(session.orgId);
+  const planInfo = await getOrgPlanInfo(session.orgId);
+  const planRailsEnabled = isPlanRailsEnabled();
 
   return (
     <AppSessionProvider
@@ -54,6 +58,10 @@ export default async function AppSectionLayout({
         pendingApprovalCount,
         subscriptionStatus: entitlements.status,
         expiredTrial: entitlements.expiredTrial,
+        planKey: planInfo?.planKey ?? null,
+        planRailsEnabled,
+        scheduledPlanKey: planInfo?.scheduledPlanKey ?? null,
+        scheduledPlanEffectiveAt: planInfo?.scheduledPlanEffectiveAt ?? null,
       }}
     >
       {children}
