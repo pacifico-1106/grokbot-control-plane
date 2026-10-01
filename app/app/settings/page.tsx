@@ -13,6 +13,7 @@ import {
   getOrgSodWarnPolicy,
   listConversationAdapters,
   listInformationAssets,
+  listMembers,
   listNotificationChannels,
   listOrgChannels,
   listOrgParties,
@@ -41,6 +42,9 @@ export default async function SettingsPage() {
   const approvalKindRoutesPolicy = canManage && approvalKindRoutesEnabled && session.orgId
     ? await getOrgApprovalKindRoutesPolicy(session.orgId)
     : null;
+  const members = canManage && approvalKindRoutesEnabled
+    ? await listMembers(session.orgId)
+    : [];
   return (
     <AppShell
       title="つながり"
@@ -88,6 +92,12 @@ export default async function SettingsPage() {
           <ApprovalKindRoutesClient
             policy={approvalKindRoutesPolicy}
             enabled={approvalKindRoutesEnabled}
+            members={members.map((m) => ({
+              id: m.id,
+              displayName: m.displayName,
+              email: m.email,
+              role: m.role,
+            }))}
           />
         </>
       ) : (

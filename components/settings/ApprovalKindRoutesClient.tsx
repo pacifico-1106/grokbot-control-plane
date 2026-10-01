@@ -1,5 +1,6 @@
 "use client";
 
+import { useState, useCallback } from "react";
 import type {
   ApprovalKind,
   ApprovalKindQuorum,
@@ -13,6 +14,7 @@ import { APPROVAL_KINDS } from "@/lib/approval-kind-routes/types";
 type Props = {
   policy: OrgApprovalKindRoutesPolicy | null;
   enabled: boolean;
+  members?: { id: string; displayName: string; email: string; role: string }[];
 };
 
 const KIND_LABELS: Record<ApprovalKind, string> = {
@@ -44,7 +46,58 @@ function formatQuorum(quorum: ApprovalKindQuorum): string {
   }
 }
 
-function RouteCard({ route }: { route: ApprovalKindRoute }) {
+function RouteCard({
+  route,
+  isEditing,
+  onUpdate,
+  members,
+}: {
+  route: ApprovalKindRoute;
+  isEditing: boolean;
+  onUpdate?: (route: ApprovalKindRoute) => void;
+  members?: { id: string; displayName: string; email: string; role: string }[];
+}) {
+  const eligibleMembers = members?.filter((m) =>
+    route.kind === "account" ? ["owner", "admin"].includes(m.role) : true
+  ) ?? [];
+
+  const handleApproverToggle = (memberId: string) => {
+    if (!onUpdate) return;
+    const current = route.approverUserIds;
+    const next = current.includes(memberId)
+      ? current.filter((id) => id !== memberId)
+      : [...current, memberId];
+    onUpdate({ ...route, approverUserIds: next });
+  };
+
+  const handleQuorumChange = (type: "any" | "count" | "all", n?: number) => {
+    if (!onUpdate) return;
+    let quorum: ApprovalKindQuorum;
+    if (type === "count" && n !== undefined) {
+      quorum = { type: "count", n };
+    } else if (type === "all") {
+      quorum = { type: "all" };
+    } else {
+      quorum = { type: "any" };
+    }
+    onUpdate({ ...route, quorum });
+  };
+
+  const handleFinalGoChange = (userId: string | null) => {
+    if (!onUpdate) return;
+    onUpdate({ ...route, finalGoUserId: userId });
+  };
+
+  const handleOnExpireChange = (onExpire: "fail_closed" | "keep_open") => {
+    if (!onUpdate) return;
+    onUpdate({ ...route, onExpire });
+  };
+
+  const handleDeadlineChange = (hours: number | null) => {
+    if (!onUpdate) return;
+    onUpdate({ ...route, deadlineHours: hours });
+  };
+
   return (
     <div className="rounded-lg border border-[var(--border-soft)] p-4 space-y-3">
       <div className="flex items-center justify-between gap-2">
@@ -59,43 +112,139 @@ function RouteCard({ route }: { route: ApprovalKindRoute }) {
         )}
       </div>
 
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-2 text-sm">
-        <div>
-          <div className="text-xs text-[var(--text-faint)]">承認者数</div>
-          <div>{route.approverUserIds.length}名</div>
-        </div>
-
-        <div>
-          <div className="text-xs text-[var(--text-faint)]">Quorum</div>
-          <div>{formatQuorum(route.quorum)}</div>
-        </div>
-
-        <div>
-          <div className="text-xs text-[var(--text-faint)]">finalGo</div>
-          <div className={route.finalGoUserId ? "text-[var(--accent-strong)]" : "text-[var(--text-muted)]"}>
-            {route.finalGoUserId ? "あり" : "なし"}
-          </div>
-        </div>
-
-        <div>
-          <div className="text-xs text-[var(--text-faint)]">期限切れ</div>
-          <div className={route.onExpire === "fail_closed" ? "text-[var(--accent-strong)]" : ""}>
-            {route.onExpire === "fail_closed" ? "自動却下" : "保持"}
-          </div>
-        </div>
-
-        {route.deadlineHours && (
+      {isEditing ? (
+        <div className="space-y-4">
           <div>
-            <div className="text-xs text-[var(--text-faint)]">期限</div>
-            <div>{route.deadlineHours}時間</div>
+            <label className="text-xs text-[var(--text-faint)] block mb-1">承認者</label>
+            <div className="flex flex-wrap gap-2">
+              {eligibleMembers.map((m) => (
+                <label key={m.id} className="flex items-center gap-1 text-sm cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={route.approverUserIds.includes(m.id)}
+                    onChange={() => handleApproverToggle(m.id)}
+                    className="rounded"
+                  />
+                  {m.displayName || m.email}
+                </label>
+              ))}
+              {eligibleMembers.length === 0 && (
+                <span className="text-xs text-[var(--text-muted)]">
+                  利用可能なメンバーがいません
+                </span>
+              )}
+            </div>
+            {route.approverUserIds.length === 0 && (
+              <p className="text-xs text-red-500 mt-1">承認者は1名以上必要です</p>
+            )}
           </div>
-        )}
 
-        <div>
-          <div className="text-xs text-[var(--text-faint)]">リマインド</div>
-          <div>{route.remindEveryDays}日ごと</div>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="text-xs text-[var(--text-faint)] block mb-1">Quorum</label>
+              <select
+                value={route.quorum.type === "count" ? `count_${route.quorum.n}` : route.quorum.type}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  if (val === "any") handleQuorumChange("any");
+                  else if (val === "all") handleQuorumChange("all");
+                  else if (val.startsWith("count_")) {
+                    handleQuorumChange("count", parseInt(val.replace("count_", ""), 10));
+                  }
+                }}
+                className="input-field text-sm w-full"
+              >
+                <option value="any">1名 (any)</option>
+                {[2, 3, 4, 5].map((n) => (
+                  <option key={n} value={`count_${n}`}>{n}名</option>
+                ))}
+                <option value="all">全員</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="text-xs text-[var(--text-faint)] block mb-1">期限切れ時</label>
+              <select
+                value={route.onExpire}
+                onChange={(e) => handleOnExpireChange(e.target.value as "fail_closed" | "keep_open")}
+                className="input-field text-sm w-full"
+              >
+                <option value="keep_open">保持</option>
+                <option value="fail_closed">自動却下</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="text-xs text-[var(--text-faint)] block mb-1">期限 (時間)</label>
+              <input
+                type="number"
+                value={route.deadlineHours ?? ""}
+                onChange={(e) => handleDeadlineChange(e.target.value ? parseInt(e.target.value, 10) : null)}
+                placeholder="無制限"
+                className="input-field text-sm w-full"
+                min={1}
+              />
+            </div>
+
+            <div>
+              <label className="text-xs text-[var(--text-faint)] block mb-1">finalGo</label>
+              <select
+                value={route.finalGoUserId ?? ""}
+                onChange={(e) => handleFinalGoChange(e.target.value || null)}
+                className="input-field text-sm w-full"
+              >
+                <option value="">なし</option>
+                {route.approverUserIds.map((id) => {
+                  const m = members?.find((m) => m.id === id);
+                  return (
+                    <option key={id} value={id}>
+                      {m?.displayName || m?.email || id}
+                    </option>
+                  );
+                })}
+              </select>
+            </div>
+          </div>
         </div>
-      </div>
+      ) : (
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-2 text-sm">
+          <div>
+            <div className="text-xs text-[var(--text-faint)]">承認者数</div>
+            <div>{route.approverUserIds.length}名</div>
+          </div>
+
+          <div>
+            <div className="text-xs text-[var(--text-faint)]">Quorum</div>
+            <div>{formatQuorum(route.quorum)}</div>
+          </div>
+
+          <div>
+            <div className="text-xs text-[var(--text-faint)]">finalGo</div>
+            <div className={route.finalGoUserId ? "text-[var(--accent-strong)]" : "text-[var(--text-muted)]"}>
+              {route.finalGoUserId ? "あり" : "なし"}
+            </div>
+          </div>
+
+          <div>
+            <div className="text-xs text-[var(--text-faint)]">期限切れ</div>
+            <div className={route.onExpire === "fail_closed" ? "text-[var(--accent-strong)]" : ""}>
+              {route.onExpire === "fail_closed" ? "自動却下" : "継続"}
+            </div>
+          </div>
+
+          {route.deadlineHours && (
+            <div>
+              <div className="text-xs text-[var(--text-faint)]">期限</div>
+              <div>{route.deadlineHours}時間</div>
+            </div>
+          )}
+
+          <div>
+            <div className="text-xs text-[var(--text-faint)]">リマインド</div>
+            <div>{route.remindEveryDays}日ごと</div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -191,7 +340,107 @@ function DecisionWorkflowCard({ config }: { config: DecisionWorkflowConfig }) {
   );
 }
 
-export function ApprovalKindRoutesClient({ policy, enabled }: Props) {
+function createDefaultRoutes(): ApprovalKindRoute[] {
+  return APPROVAL_KINDS.map((kind) => ({
+    kind,
+    approverUserIds: [],
+    quorum: { type: "any" as const },
+    finalGoUserId: null,
+    deadlineHours: null,
+    onExpire: "keep_open" as const,
+    remindEveryDays: 3,
+  }));
+}
+
+export function ApprovalKindRoutesClient({ policy, enabled, members }: Props) {
+  const [isEditing, setIsEditing] = useState(false);
+  const [editedRoutes, setEditedRoutes] = useState<ApprovalKindRoute[]>(() =>
+    policy?.routes ?? createDefaultRoutes()
+  );
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [saveSuccess, setSaveSuccess] = useState(false);
+
+  const handleRouteUpdate = useCallback((updatedRoute: ApprovalKindRoute) => {
+    setEditedRoutes((prev) =>
+      prev.map((r) => (r.kind === updatedRoute.kind ? updatedRoute : r))
+    );
+  }, []);
+
+  const handleSave = async () => {
+    setSaveError(null);
+    setSaveSuccess(false);
+
+    const hasEmptyApprovers = editedRoutes.some((r) => r.approverUserIds.length === 0);
+    if (hasEmptyApprovers) {
+      setSaveError("全てのルートに少なくとも1名の承認者が必要です");
+      return;
+    }
+
+    const accountRoute = editedRoutes.find((r) => r.kind === "account");
+    if (accountRoute && members) {
+      const invalidApprovers = accountRoute.approverUserIds.filter((id) => {
+        const m = members.find((m) => m.id === id);
+        return m && !["owner", "admin"].includes(m.role);
+      });
+      if (invalidApprovers.length > 0) {
+        setSaveError("account種類の承認者はowner/adminのみです");
+        return;
+      }
+    }
+
+    setIsSaving(true);
+
+    try {
+      const proposedPolicy: OrgApprovalKindRoutesPolicy = {
+        version: 1,
+        policyId: policy?.policyId || `policy-${Date.now()}`,
+        policyName: policy?.policyName || "承認ルート設定",
+        routes: editedRoutes,
+        topicGate: policy?.topicGate,
+        decisionWorkflow: policy?.decisionWorkflow,
+        updatedAt: new Date().toISOString(),
+        updatedBy: "web_api",
+      };
+
+      const beforeStateHash = policy
+        ? Buffer.from(JSON.stringify(policy)).toString("base64").slice(0, 32)
+        : "";
+
+      const res = await fetch("/api/approval-routes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ policy: proposedPolicy, beforeStateHash }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        if (data.error === "before_state_mismatch") {
+          setSaveError("設定が他のユーザーによって更新されました。ページを再読み込みしてください。");
+        } else if (data.errors) {
+          setSaveError(`バリデーションエラー: ${data.errors.join(", ")}`);
+        } else {
+          setSaveError(data.error || "保存に失敗しました");
+        }
+        return;
+      }
+
+      setSaveSuccess(true);
+      setIsEditing(false);
+    } catch (err) {
+      setSaveError("ネットワークエラーが発生しました");
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleCancel = () => {
+    setEditedRoutes(policy?.routes ?? createDefaultRoutes());
+    setIsEditing(false);
+    setSaveError(null);
+  };
+
   if (!enabled) {
     return (
       <section className="surface p-5 space-y-4">
@@ -232,45 +481,79 @@ export function ApprovalKindRoutesClient({ policy, enabled }: Props) {
             </p>
           )}
         </div>
-        <span className="chip chip-neutral text-xs shrink-0">読み取り専用</span>
+        {!isEditing ? (
+          <button
+            onClick={() => setIsEditing(true)}
+            className="btn btn-secondary text-xs"
+          >
+            編集
+          </button>
+        ) : (
+          <span className="chip chip-warning text-xs shrink-0">編集中</span>
+        )}
       </div>
 
-      {policy ? (
-        <>
-          <div className="space-y-3">
-            <p className="text-xs text-[var(--text-faint)]">
-              {policy.routes.length}種類のルート • AI承認者禁止 • 自己承認禁止 • account種類はowner/adminのみ
-            </p>
-            {policy.routes.map((route) => (
-              <RouteCard key={route.kind} route={route} />
-            ))}
-          </div>
+      {saveError && (
+        <div className="rounded-lg bg-red-50 border border-red-200 p-3 text-sm text-red-700">
+          {saveError}
+        </div>
+      )}
 
-          {policy.topicGate && <TopicGateCard config={policy.topicGate} />}
+      {saveSuccess && (
+        <div className="rounded-lg bg-green-50 border border-green-200 p-3 text-sm text-green-700">
+          変更リクエストを送信しました。承認後に設定が適用されます。
+        </div>
+      )}
 
-          {policy.decisionWorkflow && <DecisionWorkflowCard config={policy.decisionWorkflow} />}
+      <div className="space-y-3">
+        <p className="text-xs text-[var(--text-faint)]">
+          {(isEditing ? editedRoutes : policy?.routes ?? []).length}種類のルート • AI承認者禁止 • 自己承認禁止 • account種類はowner/adminのみ
+        </p>
+        {(isEditing ? editedRoutes : policy?.routes ?? createDefaultRoutes()).map((route) => (
+          <RouteCard
+            key={route.kind}
+            route={route}
+            isEditing={isEditing}
+            onUpdate={isEditing ? handleRouteUpdate : undefined}
+            members={members}
+          />
+        ))}
+      </div>
 
-          <p className="text-xs text-[var(--text-faint)]">
-            最終更新: {new Date(policy.updatedAt).toLocaleString("ja-JP")} by {policy.updatedBy} •{" "}
-            編集するには Admin MCP{" "}
-            <code className="font-mono text-[10px]">approvalRoutes.patch</code> (always_human)
-          </p>
-        </>
-      ) : (
-        <div className="rounded-lg bg-[var(--bg-soft)] p-4 space-y-2">
-          <p className="text-sm font-medium">デフォルト設定</p>
-          <ul className="text-sm text-[var(--text-muted)] space-y-1">
-            {APPROVAL_KINDS.map((kind) => (
-              <li key={kind}>
-                • {KIND_LABELS[kind]}: owner 1名承認
-              </li>
-            ))}
-          </ul>
-          <p className="text-xs text-[var(--text-faint)] mt-2">
-            カスタマイズするには Admin MCP{" "}
-            <code className="font-mono text-[10px]">approvalRoutes.patch</code> (always_human) を使用します。
+      {policy?.topicGate && <TopicGateCard config={policy.topicGate} />}
+
+      {policy?.decisionWorkflow && <DecisionWorkflowCard config={policy.decisionWorkflow} />}
+
+      {isEditing ? (
+        <div className="flex gap-2 pt-2">
+          <button
+            onClick={handleSave}
+            disabled={isSaving}
+            className="btn btn-primary text-sm"
+          >
+            {isSaving ? "送信中..." : "変更を申請"}
+          </button>
+          <button
+            onClick={handleCancel}
+            disabled={isSaving}
+            className="btn btn-secondary text-sm"
+          >
+            キャンセル
+          </button>
+          <p className="text-xs text-[var(--text-faint)] self-center ml-2">
+            変更は承認が必要です (always_human)
           </p>
         </div>
+      ) : (
+        <p className="text-xs text-[var(--text-faint)]">
+          {policy ? (
+            <>
+              最終更新: {new Date(policy.updatedAt).toLocaleString("ja-JP")} by {policy.updatedBy}
+            </>
+          ) : (
+            "デフォルト設定"
+          )}
+        </p>
       )}
     </section>
   );
