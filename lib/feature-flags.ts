@@ -188,3 +188,24 @@ export function isDecisionWorkflowEnabled(): boolean {
 export function isTopicGatedPostingEnabled(): boolean {
   return parseFlag(process.env.P1_TOPIC_GATED_POSTING_ENABLED);
 }
+
+/**
+ * P1: Plan Rails — per-plan MCP allowlists and approval route templates.
+ *
+ * When ON:
+ * - Gateway tools are filtered by org.plan_key → code-defined scopes
+ * - Admin MCP tools are filtered by org.plan_key → code-defined scopes
+ * - New orgs from Stripe checkout get plan_key from subscription metadata
+ * - Plan changes trigger scope audit and pending approval cancellation
+ * - Fulfill re-checks plan at execution time
+ * - Downgrades at period end (scheduled), cancellation/suspension immediate
+ * - Upgrades require always_human approval before applying
+ *
+ * When OFF (default):
+ * - Existing behavior preserved (byte-identical)
+ * - All scopes available to all orgs (including plan_key = NULL)
+ * - plan_key column may exist but is ignored for scope filtering
+ */
+export function isPlanRailsEnabled(): boolean {
+  return parseFlag(process.env.P1_PLAN_RAILS_ENABLED);
+}
