@@ -20,21 +20,13 @@ export interface TopicGateCheckResult {
 }
 
 /**
- * Default sensitive topics (みらい社中 specific).
+ * Default sensitive topics.
+ * Re-exported from presets for backward compatibility.
+ * Note: These are used ONLY when generating a new default config.
+ * An explicit empty sensitiveTopics array in config means "no topics".
  */
-export const DEFAULT_SENSITIVE_TOPICS: readonly string[] = [
-  "決算",
-  "役員",
-  "定款",
-  "人事",
-  "給与",
-  "個人情報",
-  "法務",
-  "訴訟",
-  "契約",
-  "NDA",
-  "秘密保持",
-] as const;
+import { DEFAULT_SENSITIVE_TOPICS as PRESET_DEFAULT_SENSITIVE_TOPICS } from "@/lib/approval-kind-routes/presets";
+export const DEFAULT_SENSITIVE_TOPICS: readonly string[] = PRESET_DEFAULT_SENSITIVE_TOPICS;
 
 /**
  * Check if content contains sensitive topics.
@@ -95,9 +87,10 @@ export function checkTopicGate(
     };
   }
 
-  const sensitiveTopics = config.sensitiveTopics.length > 0
-    ? config.sensitiveTopics
-    : DEFAULT_SENSITIVE_TOPICS;
+  // Use config's sensitiveTopics directly.
+  // Empty array = org explicitly wants no sensitive topics.
+  // No fallback to default - that only happens when generating new config.
+  const sensitiveTopics = config.sensitiveTopics;
 
   const matchedTopics = containsSensitiveTopic(content, sensitiveTopics);
 

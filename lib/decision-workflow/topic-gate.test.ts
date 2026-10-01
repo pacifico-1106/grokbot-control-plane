@@ -104,7 +104,8 @@ describe("checkTopicGate", () => {
     expect(result.reason).toBe("topic_gate_not_configured");
   });
 
-  test("uses default topics when none configured", () => {
+  test("allows all when sensitiveTopics is empty (explicit opt-out)", () => {
+    // An explicit empty array means "no sensitive topics" - NOT fallback to defaults
     const configWithoutTopics: TopicGateConfig = {
       enabled: true,
       sensitiveTopics: [],
@@ -113,8 +114,10 @@ describe("checkTopicGate", () => {
 
     const result = checkTopicGate("決算報告", "C01GENERAL", configWithoutTopics);
 
-    expect(result.requiresApproval).toBe(true);
-    expect(result.matchedTopics).toContain("決算");
+    // Empty sensitiveTopics = no topics to check = everything allowed
+    expect(result.requiresApproval).toBe(false);
+    expect(result.allowed).toBe(true);
+    expect(result.matchedTopics).toEqual([]);
   });
 
   test("allows when config is null", () => {
@@ -250,17 +253,14 @@ describe("createDefaultTopicGateConfig", () => {
 });
 
 describe("DEFAULT_SENSITIVE_TOPICS", () => {
-  test("includes みらい社中 specific topics", () => {
+  test("includes generic financial and legal topics", () => {
+    // DEFAULT_SENSITIVE_TOPICS now comes from presets/defaults.ts
+    // and contains generic (not tenant-specific) topics
+    expect(DEFAULT_SENSITIVE_TOPICS).toContain("金額");
     expect(DEFAULT_SENSITIVE_TOPICS).toContain("決算");
-    expect(DEFAULT_SENSITIVE_TOPICS).toContain("役員");
-    expect(DEFAULT_SENSITIVE_TOPICS).toContain("定款");
-    expect(DEFAULT_SENSITIVE_TOPICS).toContain("人事");
-    expect(DEFAULT_SENSITIVE_TOPICS).toContain("給与");
     expect(DEFAULT_SENSITIVE_TOPICS).toContain("個人情報");
-    expect(DEFAULT_SENSITIVE_TOPICS).toContain("法務");
-    expect(DEFAULT_SENSITIVE_TOPICS).toContain("訴訟");
-    expect(DEFAULT_SENSITIVE_TOPICS).toContain("契約");
-    expect(DEFAULT_SENSITIVE_TOPICS).toContain("NDA");
-    expect(DEFAULT_SENSITIVE_TOPICS).toContain("秘密保持");
+    expect(DEFAULT_SENSITIVE_TOPICS).toContain("定款");
+    // These are generic defaults, not みらい社中 specific
+    expect(DEFAULT_SENSITIVE_TOPICS.length).toBeGreaterThan(5);
   });
 });

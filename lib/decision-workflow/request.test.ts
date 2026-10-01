@@ -6,7 +6,7 @@ import { describe, expect, test, mock, beforeEach } from "bun:test";
 import {
   calculateFiscalYear,
   calculateTaxExcludedAmount,
-  containsT3Keywords,
+  containsKeywords,
   determineDecisionTier,
   validateDecisionRequest,
 } from "./request";
@@ -21,14 +21,15 @@ mock.module("@/lib/mode", () => ({
   isDemoMode: () => true,
 }));
 
-const defaultConfig: DecisionWorkflowConfig = {
-  amountThresholdJpy: 500000,
+// Basic config without tier routing (no auto-escalation)
+const basicConfig: DecisionWorkflowConfig = {
   fiscalYearStartMonth: 4,
   fiscalYearStartDay: 1,
   tiers: [
     {
       tier: "T1",
       nameJa: "専決",
+      rank: 1,
       approverUserIds: ["owner-1"],
       quorum: { type: "any" },
       onExpire: "keep_open",
@@ -37,6 +38,7 @@ const defaultConfig: DecisionWorkflowConfig = {
     {
       tier: "T2",
       nameJa: "理事過半数",
+      rank: 2,
       approverUserIds: ["owner-1", "admin-1", "admin-2"],
       quorum: { type: "count", n: 2 },
       deadlineHours: 72,
@@ -46,10 +48,26 @@ const defaultConfig: DecisionWorkflowConfig = {
     {
       tier: "T3",
       nameJa: "社員総会",
+      rank: 3,
       approverUserIds: ["owner-1", "admin-1", "admin-2", "member-1"],
       quorum: { type: "all" },
       onExpire: "keep_open",
       remindEveryDays: 1,
+    },
+  ],
+};
+
+// Config with tier routing (みらい社中 style - for testing)
+const configWithRouting: DecisionWorkflowConfig = {
+  ...basicConfig,
+  tierRouting: [
+    {
+      tierId: "T3",
+      match: { keywords: ["定款変更", "役員", "決算", "解散"] },
+    },
+    {
+      tierId: "T2",
+      match: { minAmountJpy: 500000 },
     },
   ],
 };
@@ -74,7 +92,7 @@ describe("calculateTaxExcludedAmount", () => {
 describe("calculateFiscalYear", () => {
   test("calculates fiscal year starting April", () => {
     const config: DecisionWorkflowConfig = {
-      ...defaultConfig,
+      ...basicConfig,
       fiscalYearStartMonth: 4,
       fiscalYearStartDay: 1,
     };
@@ -90,7 +108,7 @@ describe("calculateFiscalYear", () => {
 
   test("calculates fiscal year starting January", () => {
     const config: DecisionWorkflowConfig = {
-      ...defaultConfig,
+      ...basicConfig,
       fiscalYearStartMonth: 1,
       fiscalYearStartDay: 1,
     };
@@ -105,148 +123,194 @@ describe("calculateFiscalYear", () => {
   });
 });
 
-describe("containsT3Keywords", () => {
+describe("containsKeywords", () => {
+  const keywords = ["定款変更", "役員", "決算", "解散"];
+
   test("detects 定款変更", () => {
-    expect(containsT3Keywords("定款変更について")).toBe(true);
+    expect(containsKeywords("定款変更について", keywords)).toBe(true);
   });
 
   test("detects 役員", () => {
-    expect(containsT3Keywords("新役員選任")).toBe(true);
+    expect(containsKeywords("新役員選任", keywords)).toBe(true);
   });
 
   test("detects 決算", () => {
-    expect(containsT3Keywords("決算報告")).toBe(true);
+    expect(containsKeywords("決算報告", keywords)).toBe(true);
   });
 
   test("detects 解散", () => {
-    expect(containsT3Keywords("会社解散")).toBe(true);
+    expect(containsKeywords("会社解散", keywords)).toBe(true);
   });
 
   test("returns false for non-matching text", () => {
-    expect(containsT3Keywords("通常の経費申請")).toBe(false);
-    expect(containsT3Keywords("備品購入")).toBe(false);
+    expect(containsKeywords("通常の経費申請", keywords)).toBe(false);
+    expect(containsKeywords("備品購入", keywords)).toBe(false);
+  });
+
+  test("returns false for empty keywords", () => {
+    expect(containsKeywords("定款変更", [])).toBe(false);
   });
 });
 
 describe("determineDecisionTier", () => {
-  test("defaults to T1 for small amounts", () => {
-    const input: DecisionRequestInput = {
-      title: "経費申請",
-      description: "出張経費",
-      purpose: "顧客訪問",
-      jobId: "job-1",
-      amountJpy: 50000,
-      taxIncluded: true,
-    };
+  describe("without tier routing (basic config)", () => {
+    test("returns lowest-rank tier for any request", () => {
+      const input: DecisionRequestInput = {
+        title: "経費申請",
+        description: "出張経費",
+        purpose: "顧客訪問",
+        jobId: "job-1",
+        amountJpy: 50000,
+        taxIncluded: true,
+      };
 
-    const result = determineDecisionTier(input, defaultConfig);
-    expect(result.tier).toBe("T1");
-    expect(result.reason).toBe("T1_DEFAULT");
+      const result = determineDecisionTier(input, basicConfig);
+      expect(result.tier).toBe("T1");
+      expect(result.reason).toBe("LOWEST_RANK_TIER");
+    });
+
+    test("no auto-escalation for large amounts without tierRouting", () => {
+      const input: DecisionRequestInput = {
+        title: "大型契約",
+        description: "サーバー購入",
+        purpose: "インフラ更新",
+        jobId: "job-1",
+        amountJpy: 1000000,
+        taxIncluded: true,
+      };
+
+      const result = determineDecisionTier(input, basicConfig);
+      expect(result.tier).toBe("T1");
+      expect(result.reason).toBe("LOWEST_RANK_TIER");
+    });
+
+    test("no auto-escalation for keywords without tierRouting", () => {
+      const input: DecisionRequestInput = {
+        title: "定款変更の件",
+        description: "事業目的追加",
+        purpose: "事業拡大",
+        jobId: "job-1",
+      };
+
+      const result = determineDecisionTier(input, basicConfig);
+      expect(result.tier).toBe("T1");
+      expect(result.reason).toBe("LOWEST_RANK_TIER");
+    });
   });
 
-  test("escalates to T2 for amounts >= threshold (tax-excluded)", () => {
-    const input: DecisionRequestInput = {
-      title: "大型契約",
-      description: "サーバー購入",
-      purpose: "インフラ更新",
-      jobId: "job-1",
-      amountJpy: 550001,
-      taxIncluded: true,
-    };
+  describe("with tier routing (configurable escalation)", () => {
+    test("escalates to T2 for amounts >= threshold", () => {
+      const input: DecisionRequestInput = {
+        title: "大型契約",
+        description: "サーバー購入",
+        purpose: "インフラ更新",
+        jobId: "job-1",
+        amountJpy: 550001,
+        taxIncluded: true,
+      };
 
-    const result = determineDecisionTier(input, defaultConfig);
-    expect(result.tier).toBe("T2");
-    expect(result.reason).toContain("T2_AMOUNT_THRESHOLD");
+      const result = determineDecisionTier(input, configWithRouting);
+      expect(result.tier).toBe("T2");
+      expect(result.reason).toContain("AMOUNT_THRESHOLD");
+    });
+
+    test("escalates to T3 for keyword match", () => {
+      const input: DecisionRequestInput = {
+        title: "定款変更の件",
+        description: "事業目的追加",
+        purpose: "事業拡大",
+        jobId: "job-1",
+        amountJpy: 10000,
+      };
+
+      const result = determineDecisionTier(input, configWithRouting);
+      expect(result.tier).toBe("T3");
+      expect(result.reason).toContain("KEYWORD_MATCH");
+    });
+
+    test("first matching rule wins (keywords before amounts)", () => {
+      const input: DecisionRequestInput = {
+        title: "役員報酬変更",
+        description: "役員報酬増額",
+        purpose: "人事",
+        jobId: "job-1",
+        amountJpy: 1000000,
+        taxIncluded: true,
+      };
+
+      const result = determineDecisionTier(input, configWithRouting);
+      expect(result.tier).toBe("T3");
+      expect(result.reason).toContain("KEYWORD_MATCH");
+    });
   });
 
-  test("does not escalate to T2 when tax-excluded is below threshold", () => {
-    const input: DecisionRequestInput = {
-      title: "経費",
-      description: "備品",
-      purpose: "オフィス",
-      jobId: "job-1",
-      amountJpy: 549999,
-      taxIncluded: true,
-    };
+  describe("requested tier", () => {
+    test("allows upgrade via requestedTier", () => {
+      const input: DecisionRequestInput = {
+        title: "重要案件",
+        description: "要検討事項",
+        purpose: "リスク管理",
+        jobId: "job-1",
+        amountJpy: 10000,
+        requestedTier: "T2",
+      };
 
-    const result = determineDecisionTier(input, defaultConfig);
-    expect(result.tier).toBe("T1");
+      const result = determineDecisionTier(input, basicConfig);
+      expect(result.tier).toBe("T2");
+      expect(result.reason).toContain("REQUESTED_UPGRADE");
+    });
+
+    test("owner can downgrade tier", () => {
+      const input: DecisionRequestInput = {
+        title: "軽微案件",
+        description: "高額だが専決可能",
+        purpose: "迅速対応",
+        jobId: "job-1",
+        amountJpy: 600000,
+        taxIncluded: true,
+        requestedTier: "T1",
+      };
+
+      const result = determineDecisionTier(input, configWithRouting, true);
+      expect(result.tier).toBe("T1");
+      expect(result.reason).toContain("OWNER_DOWNGRADE");
+    });
+
+    test("non-owner cannot downgrade tier", () => {
+      const input: DecisionRequestInput = {
+        title: "軽微案件",
+        description: "高額だが専決希望",
+        purpose: "迅速対応",
+        jobId: "job-1",
+        amountJpy: 600000,
+        taxIncluded: true,
+        requestedTier: "T1",
+      };
+
+      const result = determineDecisionTier(input, configWithRouting, false);
+      expect(result.tier).toBe("T2");
+      expect(result.reason).toContain("AMOUNT_THRESHOLD");
+    });
   });
 
-  test("escalates to T3 for keyword match", () => {
-    const input: DecisionRequestInput = {
-      title: "定款変更の件",
-      description: "事業目的追加",
-      purpose: "事業拡大",
-      jobId: "job-1",
-      amountJpy: 10000,
-    };
+  describe("error handling", () => {
+    test("fails closed when no tiers configured", () => {
+      const emptyConfig: DecisionWorkflowConfig = {
+        fiscalYearStartMonth: 4,
+        fiscalYearStartDay: 1,
+        tiers: [],
+      };
 
-    const result = determineDecisionTier(input, defaultConfig);
-    expect(result.tier).toBe("T3");
-    expect(result.reason).toBe("T3_KEYWORD_MATCH");
-  });
+      const input: DecisionRequestInput = {
+        title: "経費申請",
+        description: "出張経費",
+        purpose: "顧客訪問",
+        jobId: "job-1",
+      };
 
-  test("T3 keyword takes precedence over T2 amount", () => {
-    const input: DecisionRequestInput = {
-      title: "役員報酬変更",
-      description: "役員報酬増額",
-      purpose: "人事",
-      jobId: "job-1",
-      amountJpy: 1000000,
-      taxIncluded: true,
-    };
-
-    const result = determineDecisionTier(input, defaultConfig);
-    expect(result.tier).toBe("T3");
-    expect(result.reason).toBe("T3_KEYWORD_MATCH");
-  });
-
-  test("allows upgrade via requestedTier", () => {
-    const input: DecisionRequestInput = {
-      title: "重要案件",
-      description: "要検討事項",
-      purpose: "リスク管理",
-      jobId: "job-1",
-      amountJpy: 10000,
-      requestedTier: "T2",
-    };
-
-    const result = determineDecisionTier(input, defaultConfig);
-    expect(result.tier).toBe("T2");
-    expect(result.reason).toBe("REQUESTED_UPGRADE_TO_T2");
-  });
-
-  test("owner can downgrade tier", () => {
-    const input: DecisionRequestInput = {
-      title: "軽微案件",
-      description: "高額だが専決可能",
-      purpose: "迅速対応",
-      jobId: "job-1",
-      amountJpy: 600000,
-      taxIncluded: true,
-      requestedTier: "T1",
-    };
-
-    const result = determineDecisionTier(input, defaultConfig, true);
-    expect(result.tier).toBe("T1");
-    expect(result.reason).toBe("OWNER_DOWNGRADE_TO_T1");
-  });
-
-  test("non-owner cannot downgrade tier", () => {
-    const input: DecisionRequestInput = {
-      title: "軽微案件",
-      description: "高額だが専決希望",
-      purpose: "迅速対応",
-      jobId: "job-1",
-      amountJpy: 600000,
-      taxIncluded: true,
-      requestedTier: "T1",
-    };
-
-    const result = determineDecisionTier(input, defaultConfig, false);
-    expect(result.tier).toBe("T2");
-    expect(result.reason).toContain("T2_AMOUNT_THRESHOLD");
+      const result = determineDecisionTier(input, emptyConfig);
+      expect(result.reason).toBe("DECISION_TIERS_NOT_CONFIGURED");
+    });
   });
 });
 
@@ -260,7 +324,7 @@ describe("validateDecisionRequest", () => {
       amountJpy: 50000,
     };
 
-    const result = validateDecisionRequest(input, defaultConfig);
+    const result = validateDecisionRequest(input, basicConfig);
     expect(result.ok).toBe(true);
     expect(result.resolvedTier).toBe("T1");
     expect(result.fiscalYear).toBeDefined();
@@ -274,7 +338,7 @@ describe("validateDecisionRequest", () => {
       jobId: "job-1",
     };
 
-    const result = validateDecisionRequest(input, defaultConfig);
+    const result = validateDecisionRequest(input, basicConfig);
     expect(result.ok).toBe(false);
     expect(result.errors).toContain("title_required");
   });
@@ -287,7 +351,7 @@ describe("validateDecisionRequest", () => {
       jobId: "job-1",
     };
 
-    const result = validateDecisionRequest(input, defaultConfig);
+    const result = validateDecisionRequest(input, basicConfig);
     expect(result.ok).toBe(false);
     expect(result.errors).toContain("description_required");
   });
@@ -300,7 +364,7 @@ describe("validateDecisionRequest", () => {
       jobId: "job-1",
     };
 
-    const result = validateDecisionRequest(input, defaultConfig);
+    const result = validateDecisionRequest(input, basicConfig);
     expect(result.ok).toBe(false);
     expect(result.errors).toContain("purpose_required");
   });
@@ -313,7 +377,7 @@ describe("validateDecisionRequest", () => {
       jobId: "",
     };
 
-    const result = validateDecisionRequest(input, defaultConfig);
+    const result = validateDecisionRequest(input, basicConfig);
     expect(result.ok).toBe(false);
     expect(result.errors).toContain("jobId_required");
   });
@@ -327,7 +391,7 @@ describe("validateDecisionRequest", () => {
       amountJpy: -1000,
     };
 
-    const result = validateDecisionRequest(input, defaultConfig);
+    const result = validateDecisionRequest(input, basicConfig);
     expect(result.ok).toBe(false);
     expect(result.errors).toContain("amountJpy_negative");
   });
@@ -342,8 +406,27 @@ describe("validateDecisionRequest", () => {
       taxIncluded: true,
     };
 
-    const result = validateDecisionRequest(input, defaultConfig);
+    const result = validateDecisionRequest(input, basicConfig);
     expect(result.ok).toBe(true);
     expect(result.taxExcludedAmountJpy).toBe(99999);
+  });
+
+  test("rejects when no tiers configured", () => {
+    const emptyConfig: DecisionWorkflowConfig = {
+      fiscalYearStartMonth: 4,
+      fiscalYearStartDay: 1,
+      tiers: [],
+    };
+
+    const input: DecisionRequestInput = {
+      title: "経費申請",
+      description: "出張経費",
+      purpose: "顧客訪問",
+      jobId: "job-1",
+    };
+
+    const result = validateDecisionRequest(input, emptyConfig);
+    expect(result.ok).toBe(false);
+    expect(result.errors).toContain("decision_tiers_not_configured");
   });
 });

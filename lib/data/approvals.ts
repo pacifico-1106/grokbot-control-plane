@@ -588,7 +588,83 @@ export async function listApprovalsForTelegramDigest(): Promise<ApprovalRequest[
 }
 
 /**
+ * Check if a decision approval has an effective deadline.
+ * Returns true if:
+ * - Has explicit deadlineAt in metadata, OR
+ * - Is T2 (legacy fallback uses creation + 72h)
+ */
+function hasEffectiveDeadline(approval: ApprovalRequest): boolean {
+  const m = approval.metadata as Record<string, unknown> | null;
+  if (m?.type !== "decision_request") return false;
+  if (approval.status !== "pending") return false;
+
+  // Has explicit deadlineAt
+  if (m?.deadlineAt) return true;
+
+  // Legacy T2 (uses creation + 72h)
+  if (m?.tier === "T2") return true;
+
+  return false;
+}
+
+/**
+ * List pending decision approvals that have deadlines for expiry cron.
+ * Includes:
+ * - Decisions with explicit deadlineAt in metadata
+ * - Legacy T2 decisions (use creation + 72h fallback)
+ * Paginates to avoid PostgREST 1000 row limit.
+ */
+export async function listPendingDecisionsWithDeadlines(orgId?: string | null): Promise<ApprovalRequest[]> {
+  if (isDemoMode()) {
+    const all = await demoListApprovals();
+    return all.filter(hasEffectiveDeadline);
+  }
+
+  const admin = createSupabaseAdminClient();
+  if (!admin) return [];
+
+  const PAGE_SIZE = 500;
+  const results: ApprovalRequest[] = [];
+  let offset = 0;
+  let hasMore = true;
+
+  while (hasMore) {
+    let query = admin
+      .from("approval_requests")
+      .select("*")
+      .eq("status", "pending")
+      .contains("metadata", { type: "decision_request" })
+      .order("created_at", { ascending: true })
+      .range(offset, offset + PAGE_SIZE - 1);
+
+    if (orgId) {
+      query = query.eq("org_id", orgId);
+    }
+
+    const { data, error } = await query;
+
+    if (error || !data) break;
+
+    // Filter in code: has deadlineAt OR is T2
+    const filtered = data
+      .map((row) => mapApprovalRow(row as Record<string, unknown>))
+      .filter(hasEffectiveDeadline);
+
+    results.push(...filtered);
+
+    if (data.length < PAGE_SIZE) {
+      hasMore = false;
+    } else {
+      offset += PAGE_SIZE;
+    }
+  }
+
+  return results;
+}
+
+/**
  * List pending T2 decision approvals for expiry cron.
+ * @deprecated Use listPendingDecisionsWithDeadlines for all decisions with deadlines.
  * Filters at DB level: status=pending, metadata->type=decision_request, metadata->tier=T2.
  * Paginates to avoid PostgREST 1000 row limit.
  */

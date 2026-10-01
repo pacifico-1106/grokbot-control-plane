@@ -396,68 +396,35 @@ export interface DecisionTierResolution {
 }
 
 /**
- * Determine the appropriate decision tier based on amount and classification.
- * Used in D1 PR for decision.request routing.
+ * Determine decision tier - returns lowest-rank tier.
+ *
+ * NOTE: Auto-escalation based on keywords or amounts is NO LONGER performed here.
+ * This was removed because keyword/amount thresholds are tenant-specific values
+ * (e.g., 定款変更/役員/決算 keywords and ¥500,000 threshold are みらい社中 policy).
+ *
+ * To enable keyword/amount-based tier routing, use tierRouting in DecisionWorkflowConfig.
+ * This function now only returns the lowest-rank tier (or first tier if no ranks).
+ *
+ * For みらい社中 behavior (keyword/amount escalation), apply the mirai-shachu preset.
+ *
+ * @deprecated Use determineDecisionTier from lib/decision-workflow/request.ts which
+ * supports configurable tierRouting rules.
  */
 export function determineDecisionTier(
   tiers: DecisionTierRoute[],
-  amountJpy: number | null,
-  amountThresholdJpy: number,
-  classification: string | null
+  _amountJpy: number | null,
+  _amountThresholdJpy: number,
+  _classification: string | null
 ): DecisionTierResolution | null {
   if (tiers.length === 0) return null;
 
-  const t1 = tiers.find((t) => t.tier === "T1");
-  const t2 = tiers.find((t) => t.tier === "T2");
-  const t3 = tiers.find((t) => t.tier === "T3");
+  // Sort by rank (ascending), tiers without rank come first (rank 0)
+  const sorted = [...tiers].sort((a, b) => (a.rank ?? 0) - (b.rank ?? 0));
+  const lowestTier = sorted[0];
 
-  // Classification-based auto-escalation to T3
-  const t3Classifications = ["定款変更", "役員", "決算"];
-  if (classification && t3Classifications.includes(classification)) {
-    if (t3) {
-      return {
-        tier: "T3",
-        route: t3,
-        autoEscalated: true,
-        escalationReason: `classification: ${classification}`,
-      };
-    }
-  }
-
-  // Amount-based auto-escalation to T2+
-  if (amountJpy !== null && amountJpy >= amountThresholdJpy) {
-    if (t2) {
-      return {
-        tier: "T2",
-        route: t2,
-        autoEscalated: true,
-        escalationReason: `amount: ${amountJpy} >= ${amountThresholdJpy}`,
-      };
-    }
-    if (t3) {
-      return {
-        tier: "T3",
-        route: t3,
-        autoEscalated: true,
-        escalationReason: `amount: ${amountJpy} >= ${amountThresholdJpy} (no T2)`,
-      };
-    }
-  }
-
-  // Default to T1
-  if (t1) {
-    return {
-      tier: "T1",
-      route: t1,
-      autoEscalated: false,
-      escalationReason: null,
-    };
-  }
-
-  // Fallback to first available tier
   return {
-    tier: tiers[0].tier,
-    route: tiers[0],
+    tier: lowestTier.tier,
+    route: lowestTier,
     autoEscalated: false,
     escalationReason: null,
   };

@@ -8,7 +8,7 @@ export * from "./types";
 export {
   calculateFiscalYear,
   calculateTaxExcludedAmount,
-  containsT3Keywords,
+  containsKeywords,
   determineDecisionTier,
   getTierRoute,
   handleDecisionRequest,
@@ -77,8 +77,12 @@ export {
 } from "./deputy";
 
 export {
-  checkAndExpireT2Decision,
-  runT2ExpiryCron,
-  type RunT2ExpiryCronResult,
-  type T2ExpiryCheckResult,
+  checkAndExpireDecision,
+  checkAndExpireT2Decision, // deprecated alias
+  runDecisionExpiryCron,
+  runT2ExpiryCron, // deprecated alias
+  type DecisionExpiryCheckResult,
+  type RunDecisionExpiryCronResult,
+  type RunT2ExpiryCronResult, // deprecated alias
+  type T2ExpiryCheckResult, // deprecated alias
 } from "./expiry";
