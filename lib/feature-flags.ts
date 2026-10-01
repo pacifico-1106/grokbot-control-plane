@@ -134,3 +134,33 @@ export function isInboxRoutingEnabled(): boolean {
 export function isReplyPolicyEnhancedEnabled(): boolean {
   return parseFlag(process.env.P0_REPLY_POLICY_ENHANCED);
 }
+
+/**
+ * LP_CATALOG_DB_ENABLED: Read catalog from database.
+ *
+ * When ON:
+ * - Checkout and pricing read from catalog_items table.
+ * - Catalog versioning enabled.
+ *
+ * When OFF (default):
+ * - Hardcoded constants used (existing behavior).
+ */
+export function isLpCatalogDbEnabled(): boolean {
+  return parseFlag(process.env.LP_CATALOG_DB_ENABLED);
+}
+
+/**
+ * LP_ORDER_LEDGER_ENABLED: Record LP orders and checkout attempts.
+ *
+ * When ON:
+ * - Orders, order_revisions, checkout_attempts, stripe_event_inbox tables used.
+ * - LP setup payments recorded from checkout.session.completed webhook.
+ * - Payment status updated only after verified signature and re-fetch.
+ *
+ * When OFF (default):
+ * - No order ledger.
+ * - Existing webhook behavior unchanged.
+ */
+export function isLpOrderLedgerEnabled(): boolean {
+  return parseFlag(process.env.LP_ORDER_LEDGER_ENABLED);
+}
