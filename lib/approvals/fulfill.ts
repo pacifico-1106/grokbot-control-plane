@@ -1,6 +1,10 @@
 import { isDemoMode } from "@/lib/mode";
 import { isAdminClassApproval } from "@/lib/admin-mcp/audit-class";
 import { executeApproval } from "@/lib/approvals/execution";
+import {
+  recheckGatewayToolAtFulfill,
+  recheckAdminToolAtFulfill,
+} from "@/lib/billing/plan-fulfill-recheck";
 /**
  * Immediate fulfillment when a human approves.
  * Audience-gated tools post Slack. sns.publish posts via the SNS adapter.
@@ -739,6 +743,37 @@ export async function fulfillIfApproved(
   decision: "approved" | "rejected" | "revision_requested"
 ): Promise<ApprovalFulfillment | null> {
   if (decision !== "approved") return null;
+
+  const tool = approval.tool || "";
+  const isAdminTool = isAdminClassApproval(approval);
+
+  // P1 Plan Rails: Re-check plan scope at fulfill time
+  if (isAdminTool) {
+    const planCheck = await recheckAdminToolAtFulfill(approval.orgId, tool, approval);
+    if (!planCheck.ok) {
+      const result: ApprovalFulfillment = {
+        ok: false,
+        delivery: "stub",
+        at: new Date().toISOString(),
+        error: `plan_recheck_failed: ${planCheck.code}`,
+      };
+      await stampW2WatchIfUnfulfilled(approval);
+      return result;
+    }
+  } else if (tool) {
+    const planCheck = await recheckGatewayToolAtFulfill(approval.orgId, tool, approval);
+    if (!planCheck.ok) {
+      const result: ApprovalFulfillment = {
+        ok: false,
+        delivery: "stub",
+        at: new Date().toISOString(),
+        error: `plan_recheck_failed: ${planCheck.code}`,
+      };
+      await stampW2WatchIfUnfulfilled(approval);
+      return result;
+    }
+  }
+
   const admin = await fulfillApprovedAdmin(approval);
   if (admin) {
     const result: ApprovalFulfillment = {

@@ -112,11 +112,15 @@ import {
   detectSecretInPayload,
   buildSecretDetectionErrorResponse,
 } from "@/lib/security/secret-detector";
-import { isGoogleCalendarReadEnabled } from "@/lib/feature-flags";
+import { isGoogleCalendarReadEnabled, isTopicGatedPostingEnabled } from "@/lib/feature-flags";
+import { checkTopicGate, buildTopicGateApprovalMetadata } from "@/lib/decision-workflow/topic-gate";
+import { getOrgApprovalKindRoutesPolicy } from "@/lib/approval-kind-routes/data";
+import { getToolApprovalKind } from "@/lib/approval-kind-routes/tool-kind-map";
 import {
   addCompletedReaction,
   addWaitingApprovalReaction,
 } from "@/lib/slack/reaction-stamps";
+import { assertGatewayToolAllowedForPlan } from "@/lib/billing/plan-gate";
 import { readCalendarFreebusy } from "@/lib/google/calendar-read";
 import {
   addCalendarReadGrant,
@@ -206,6 +210,71 @@ function validateMailSendArtifact(body: GatewayInvokeRequest): {
   }
 
   return { ok: true, to, subject, bodyText, from };
+}
+
+/**
+ * P1: Extract content for topic gate check.
+ * Combines message text, attachments, and metadata into a single string.
+ */
+function extractContentForTopicGate(body: GatewayInvokeRequest): string {
+  const args = body.args && typeof body.args === "object"
+    ? (body.args as Record<string, unknown>)
+    : {};
+
+  const parts: string[] = [];
+
+  const text = (
+    typeof args.text === "string" ? args.text :
+    typeof args.message === "string" ? args.message :
+    typeof args.body === "string" ? args.body :
+    typeof args.content === "string" ? args.content :
+    ""
+  ).trim();
+  if (text) parts.push(text);
+
+  const subject = (
+    typeof args.subject === "string" ? args.subject :
+    typeof args.title === "string" ? args.title :
+    ""
+  ).trim();
+  if (subject) parts.push(subject);
+
+  const attachments = args.attachments;
+  if (Array.isArray(attachments)) {
+    for (const att of attachments) {
+      if (typeof att === "string") {
+        parts.push(att);
+      } else if (att && typeof att === "object") {
+        const filename = (att as Record<string, unknown>).filename ||
+          (att as Record<string, unknown>).name || "";
+        if (typeof filename === "string" && filename) {
+          parts.push(filename);
+        }
+      }
+    }
+  }
+
+  return parts.join(" ");
+}
+
+/**
+ * P1: Extract channel ID for topic gate check.
+ */
+function extractChannelIdForTopicGate(body: GatewayInvokeRequest): string | null {
+  const args = body.args && typeof body.args === "object"
+    ? (body.args as Record<string, unknown>)
+    : {};
+
+  const channelId = (
+    typeof args.channelId === "string" ? args.channelId :
+    typeof args.channel_id === "string" ? args.channel_id :
+    typeof args.channel === "string" ? args.channel :
+    body.slackChannelId ??
+    body.conversation?.slackChannelId ??
+    null
+  );
+
+  return channelId && typeof channelId === "string" ? channelId : null;
 }
 
 /**
@@ -618,6 +687,28 @@ export async function runGatewayInvoke(
     );
   }
 
+  // P1 Plan Rails: check if tool is available for org's plan (flag-gated)
+  const planGate = await assertGatewayToolAllowedForPlan(orgId || employee.orgId, tool);
+  if (!planGate.ok) {
+    return jsonResult(
+      {
+        ok: false,
+        code: planGate.code,
+        error: planGate.code,
+        tool,
+        message: planGate.messageJa,
+        planKey: planGate.planKey,
+        billingStatus: planGate.billingStatus,
+        availableInPlans: planGate.availableInPlans,
+        billingPath: "/app/billing",
+        employeeId,
+        purpose,
+        jobId,
+      },
+      403
+    );
+  }
+
   const parentApprovalId = (body.parentApprovalId || "").trim();
   if (parentApprovalId) {
     const parent = await getApprovalById(
@@ -744,6 +835,17 @@ export async function runGatewayInvoke(
   const orgSodPolicy = await getOrgSodWarnPolicy(orgId || employee.orgId);
   const sodVerdict = evaluateSod(employee.scopes, orgSodPolicy);
 
+  // P1: Topic Gate — check posts for sensitive topics behind P1_TOPIC_GATED_POSTING_ENABLED
+  let topicGateResult: ReturnType<typeof checkTopicGate> | null = null;
+  const toolKind = getToolApprovalKind(tool);
+  if (toolKind === "post" && isTopicGatedPostingEnabled()) {
+    const orgPolicy = await getOrgApprovalKindRoutesPolicy(orgId || employee.orgId);
+    const topicGateConfig = orgPolicy?.topicGate ?? null;
+    const contentToCheck = extractContentForTopicGate(body);
+    const channelId = extractChannelIdForTopicGate(body);
+    topicGateResult = checkTopicGate(contentToCheck, channelId, topicGateConfig);
+    invokeMetadata.topicGateResult = topicGateResult;
+  }
 
   // AgentMail: P0.5 reservation only — never live-send in P0.
   if (toolDef.reserved) {
@@ -1282,12 +1384,16 @@ export async function runGatewayInvoke(
     }
   }
 
+  // P1: Topic gate can force approval for posts with sensitive topics
+  const topicGateForceApproval = topicGateResult?.requiresApproval ?? false;
+
   const forceApproval =
     mailPolicyForceApproval ??
     (perToolHuman ||
       employee.approvalPolicy === "always_human" ||
       actionLimit.decision === "needs_approval" ||
-      spend?.decision === "needs_approval");
+      spend?.decision === "needs_approval" ||
+      topicGateForceApproval);
 
   if (
     forceApproval &&
@@ -1304,6 +1410,22 @@ export async function runGatewayInvoke(
         purpose,
         summary: `${tool} が行為上限に到達`,
         metadata: { tool, jobId, limit: actionLimit.limit, counts: actionCounts },
+      });
+    }
+    if (topicGateForceApproval && topicGateResult) {
+      await appendAuditEvent({
+        orgId: orgId || employee.orgId,
+        employeeId,
+        credentialId: input.credentialId || employee.credentialId,
+        action: "topic_gate.triggered",
+        purpose,
+        summary: `${tool} が機密話題を含むため承認が必要`,
+        metadata: {
+          tool,
+          jobId,
+          matchedTopics: topicGateResult.matchedTopics,
+          reason: topicGateResult.reason,
+        },
       });
     }
     if (tool === "commerce.order") {
@@ -1336,15 +1458,32 @@ export async function runGatewayInvoke(
       tool,
       purpose,
       jobId,
-      risk: inferRiskForTool(tool),
+      risk: topicGateForceApproval ? "high" : inferRiskForTool(tool),
       message:
-        actionLimit.decision === "needs_approval"
+        topicGateForceApproval && topicGateResult
+          ? `${tool} は機密話題（${topicGateResult.matchedTopics.join(", ")}）を含むため承認が必要です`
+          : actionLimit.decision === "needs_approval"
             ? actionLimit.message
             : tool === "browser.use"
           ? `${tool} requires human approval (always_human). allowedAccounts checked; live browser identity remains partial.`
           : `${tool} requires human approval (always_human default for confirm/send/order)`,
       parentApprovalId: parentApprovalId || null,
-      metadata: { ...invokeMetadata, sodVerdict, actionLimit, egress, dualEgress, managerId },
+      metadata: {
+        ...invokeMetadata,
+        sodVerdict,
+        actionLimit,
+        egress,
+        dualEgress,
+        managerId,
+        ...(topicGateResult
+          ? {
+              topicGate: {
+                matchedTopics: topicGateResult.matchedTopics,
+                reason: topicGateResult.reason,
+              },
+            }
+          : {}),
+      },
       body,
       egress,
       mailPolicy: tool === "mail.send" ? mailPolicyDecision : null,
@@ -1372,6 +1511,14 @@ export async function runGatewayInvoke(
               browserIdentityNoteJa: browserIdentityMeta.noteJa,
               matchedAccount: browserIdentityMeta.matchedAccount,
               allowedAccounts: employee.allowedAccounts ?? [],
+            }
+          : {}),
+        ...(topicGateResult?.requiresApproval
+          ? {
+              topicGate: {
+                matchedTopics: topicGateResult.matchedTopics,
+                reason: topicGateResult.reason,
+              },
             }
           : {}),
       },
