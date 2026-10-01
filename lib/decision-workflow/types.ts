@@ -83,24 +83,14 @@ export interface FiscalYearInfo {
 }
 
 /**
- * Default consumption tax rate.
- * @deprecated Use DecisionWorkflowConfig.consumptionTaxRate from org policy.
- * This value is only used as fallback when config doesn't specify a rate.
+ * NOTE: Tenant-specific constants have been removed.
+ *
+ * - T3_AUTO_ESCALATION_KEYWORDS: Moved to presets/mirai-shachu.ts
+ *   Use DecisionWorkflowConfig.tierRouting for keyword-based escalation.
+ *
+ * - CONSUMPTION_TAX_RATE: Use DecisionWorkflowConfig.consumptionTaxRate
+ *   or DEFAULT_CONSUMPTION_TAX_RATE from presets/defaults.ts (Japan standard 10%).
+ *
+ * Legacy behavior (no config): Request goes to lowest-rank configured tier.
+ * みらい社中 behavior requires applying the mirai-shachu preset.
  */
-export const CONSUMPTION_TAX_RATE = 0.1;
-
-/**
- * Auto-escalation keywords for T3.
- * @deprecated Will be moved to org config in a future PR.
- * These are みらい社中 specific values kept for backward compatibility.
- */
-export const T3_AUTO_ESCALATION_KEYWORDS = [
-  "定款変更",
-  "役員",
-  "決算",
-  "解散",
-  "合併",
-  "分割",
-  "資本金",
-  "重要財産",
-] as const;

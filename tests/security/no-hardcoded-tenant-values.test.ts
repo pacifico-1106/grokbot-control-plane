@@ -10,10 +10,16 @@
  * - Database/config (org-level policy JSON)
  *
  * Forbidden locations:
- * - lib/decision-workflow/*.ts (except types.ts for deprecated exports)
- * - lib/approval-kind-routes/*.ts (except presets/ and validate.ts re-exports)
+ * - lib/decision-workflow/*.ts (except types.ts for notes)
+ * - lib/approval-kind-routes/*.ts (except presets/)
  * - lib/data/*.ts
  * - lib/stuck-watch/*.ts
+ *
+ * STRICT ENFORCEMENT:
+ * - No hardcoded T3 keywords (定款変更, 役員, 決算, etc.) in logic
+ * - No hardcoded amount thresholds (500000) in logic
+ * - No hardcoded tax rates (0.1 or 0.10) in logic except DEFAULT_CONSUMPTION_TAX_RATE
+ * - No T3_AUTO_ESCALATION_KEYWORDS or CONSUMPTION_TAX_RATE exports from types.ts
  */
 
 import { describe, test, expect } from "bun:test";
@@ -26,45 +32,23 @@ const WORKSPACE_ROOT = path.resolve(__dirname, "../..");
  * みらい社中 specific values that should NOT appear in logic modules.
  * These values are allowed ONLY in preset files.
  */
-const MIRAI_SHACHU_VALUES = {
-  amount_threshold: "500000", // ¥500,000 threshold (tax-excluded)
-  t2_deadline: "72", // T2 72h deadline (as hours)
-  remind_days: "3", // 3-day reminders - BUT this is also a sensible default
-  fiscal_month: "4", // April (FY start month) - BUT this is Japan standard
-  fiscal_day: "1", // 1st (FY start day) - BUT this is standard
-  t3_keywords: [
-    "定款変更",
-    "役員",
-    "決算",
-    "解散",
-    "合併",
-    "分割",
-    "資本金",
-    "重要財産",
-  ],
-  sensitive_topics: [
-    "決算",
-    "役員",
-    "定款",
-    "人事",
-    "給与",
-    "個人情報",
-    "法務",
-    "訴訟",
-    "契約",
-    "NDA",
-    "秘密保持",
-  ],
-};
+const MIRAI_SHACHU_T3_KEYWORDS = [
+  "定款変更",
+  "役員",
+  "決算",
+  "解散",
+  "合併",
+  "分割",
+  "資本金",
+  "重要財産",
+];
 
 /**
  * Logic modules that should NOT contain hardcoded tenant values.
- * Preset files and type-only files are excluded.
- *
- * Note: Some modules still use deprecated exports from types.ts.
- * This will be cleaned up in PR2 when T3 keywords move to config.
+ * Includes request.ts and engine.ts - these must NOT have hardcoded keywords/amounts.
  */
 const LOGIC_MODULE_PATHS = [
+  "lib/decision-workflow/request.ts",
   "lib/decision-workflow/progress.ts",
   "lib/decision-workflow/result.ts",
   "lib/decision-workflow/voting-card.ts",
@@ -81,23 +65,17 @@ const LOGIC_MODULE_PATHS = [
 /**
  * Files that are ALLOWED to contain tenant values.
  * - Preset files contain reference values
- * - types.ts contains deprecated exports for backward compatibility
- * - validate.ts re-exports from presets
+ * - validate.ts may reference constants from presets
  * - topic-gate.ts re-exports from presets
- * - request.ts still uses T3_AUTO_ESCALATION_KEYWORDS (to be moved in PR2)
- * - expiry.ts has LEGACY_T2_DEADLINE_HOURS for backward compatibility
- * - engine.ts has t3Classifications (to be moved in PR2)
+ * - expiry.ts has LEGACY_T2_DEADLINE_HOURS for backward compat with existing T2 records
  */
 const ALLOWED_FILES = [
   "lib/approval-kind-routes/presets/mirai-shachu.ts",
   "lib/approval-kind-routes/presets/defaults.ts",
   "lib/approval-kind-routes/presets/index.ts",
-  "lib/decision-workflow/types.ts", // deprecated exports
-  "lib/approval-kind-routes/validate.ts", // re-exports from presets
+  "lib/approval-kind-routes/validate.ts", // may import from presets
   "lib/decision-workflow/topic-gate.ts", // re-exports from presets
-  "lib/decision-workflow/request.ts", // uses T3_AUTO_ESCALATION_KEYWORDS (to be moved in PR2)
-  "lib/decision-workflow/expiry.ts", // has LEGACY_T2_DEADLINE_HOURS for backward compat
-  "lib/approval-kind-routes/engine.ts", // has t3Classifications (to be moved in PR2)
+  "lib/decision-workflow/expiry.ts", // LEGACY_T2_DEADLINE_HOURS for existing records
 ];
 
 function readFile(relativePath: string): string {
@@ -112,6 +90,15 @@ function isAllowedFile(relativePath: string): boolean {
   return ALLOWED_FILES.some((allowed) => relativePath.endsWith(allowed));
 }
 
+function getFileLines(content: string): string[] {
+  return content.split("\n");
+}
+
+function isCommentLine(line: string): boolean {
+  const trimmed = line.trim();
+  return trimmed.startsWith("//") || trimmed.startsWith("*") || trimmed.startsWith("/*");
+}
+
 describe("No Hardcoded Tenant Values", () => {
   describe("T3 Keywords", () => {
     test("should not have T3 keywords hardcoded in logic modules", () => {
@@ -121,54 +108,91 @@ describe("No Hardcoded Tenant Values", () => {
         const content = readFile(modulePath);
         if (!content) continue;
 
-        for (const keyword of MIRAI_SHACHU_VALUES.t3_keywords) {
-          const hasKeyword =
-            content.includes(`"${keyword}"`) || content.includes(`'${keyword}'`);
+        const lines = getFileLines(content);
+        for (let i = 0; i < lines.length; i++) {
+          const line = lines[i];
+          if (isCommentLine(line)) continue;
 
-          expect(hasKeyword).toBe(false);
+          for (const keyword of MIRAI_SHACHU_T3_KEYWORDS) {
+            const hasKeyword =
+              line.includes(`"${keyword}"`) || line.includes(`'${keyword}'`);
+
+            expect(hasKeyword).toBe(false);
+          }
         }
       }
     });
-  });
 
-  describe("Sensitive Topics", () => {
-    test("should not have sensitive topics hardcoded in logic modules", () => {
-      for (const modulePath of LOGIC_MODULE_PATHS) {
-        if (isAllowedFile(modulePath)) continue;
+    test("types.ts should NOT export T3_AUTO_ESCALATION_KEYWORDS", () => {
+      const content = readFile("lib/decision-workflow/types.ts");
+      // Should not have an export of this constant (it's been removed)
+      expect(content).not.toMatch(/export\s+(const|let|var)\s+T3_AUTO_ESCALATION_KEYWORDS/);
+    });
 
-        const content = readFile(modulePath);
-        if (!content) continue;
-
-        for (const topic of MIRAI_SHACHU_VALUES.sensitive_topics) {
-          const hasTopic =
-            content.includes(`"${topic}"`) || content.includes(`'${topic}'`);
-
-          expect(hasTopic).toBe(false);
+    test("engine.ts should NOT have hardcoded t3Classifications", () => {
+      const content = readFile("lib/approval-kind-routes/engine.ts");
+      const lines = getFileLines(content);
+      for (const line of lines) {
+        if (isCommentLine(line)) continue;
+        // Should not have t3Classifications array with keywords
+        if (line.includes("t3Classifications") && !line.includes("@deprecated")) {
+          expect(line).not.toMatch(/\[.*".*".*\]/);
         }
       }
     });
   });
 
   describe("Amount Threshold", () => {
-    test("should not have 500000 threshold hardcoded in logic modules (except as default)", () => {
+    test("should not have hardcoded 500000 in logic modules", () => {
       for (const modulePath of LOGIC_MODULE_PATHS) {
         if (isAllowedFile(modulePath)) continue;
 
         const content = readFile(modulePath);
         if (!content) continue;
 
-        // Check for hardcoded 500000 that's NOT a default reference
-        // Pattern: matches 500000 but not DEFAULT_AMOUNT_THRESHOLD_JPY
-        const lines = content.split("\n");
+        const lines = getFileLines(content);
         for (let i = 0; i < lines.length; i++) {
           const line = lines[i];
-          if (line.includes("500000") && !line.includes("DEFAULT_") && !line.includes("config")) {
-            // Allow fallback expressions like "config?.amountThresholdJpy ?? 500000"
-            if (line.includes("??") || line.includes("||")) continue;
-            // Allow comments
-            if (line.trim().startsWith("//") || line.trim().startsWith("*")) continue;
+          if (isCommentLine(line)) continue;
 
+          // 500000 should not appear in logic, even as a fallback
+          if (line.includes("500000")) {
+            // Fail - this value should come from config, not be hardcoded
             expect(line).not.toContain("500000");
+          }
+        }
+      }
+    });
+
+    test("defaults.ts should NOT have DEFAULT_AMOUNT_THRESHOLD_JPY", () => {
+      const content = readFile("lib/approval-kind-routes/presets/defaults.ts");
+      // Amount thresholds are tenant policy, not neutral defaults
+      expect(content).not.toMatch(/export\s+(const|let|var)\s+DEFAULT_AMOUNT_THRESHOLD_JPY\s*=/);
+    });
+  });
+
+  describe("Tax Rate", () => {
+    test("types.ts should NOT export CONSUMPTION_TAX_RATE", () => {
+      const content = readFile("lib/decision-workflow/types.ts");
+      // Should not have an export of this constant (it's been removed)
+      expect(content).not.toMatch(/export\s+(const|let|var)\s+CONSUMPTION_TAX_RATE\s*=/);
+    });
+
+    test("should not have hardcoded 0.1 or 0.10 tax rate in logic (except DEFAULT_)", () => {
+      for (const modulePath of LOGIC_MODULE_PATHS) {
+        if (isAllowedFile(modulePath)) continue;
+
+        const content = readFile(modulePath);
+        if (!content) continue;
+
+        const lines = getFileLines(content);
+        for (const line of lines) {
+          if (isCommentLine(line)) continue;
+
+          // Check for = 0.1 or = 0.10 but not DEFAULT_CONSUMPTION_TAX_RATE
+          if ((line.includes("= 0.1") || line.includes("= 0.10")) && 
+              !line.includes("DEFAULT_CONSUMPTION_TAX_RATE")) {
+            expect(line).not.toMatch(/=\s*0\.1(0)?\s*;?$/);
           }
         }
       }
@@ -176,41 +200,39 @@ describe("No Hardcoded Tenant Values", () => {
   });
 
   describe("Deadline Hours", () => {
-    test("should not have T2_DEADLINE_HOURS = 72 in logic modules", () => {
+    test("should not have T2_DEADLINE_HOURS in logic modules (except expiry.ts LEGACY_)", () => {
       for (const modulePath of LOGIC_MODULE_PATHS) {
         if (isAllowedFile(modulePath)) continue;
 
         const content = readFile(modulePath);
         if (!content) continue;
 
-        // Check for T2_DEADLINE_HOURS constant definition (not usage)
-        const hasHardcodedConstant =
-          content.includes("T2_DEADLINE_HOURS = 72") ||
-          content.includes("T2_DEADLINE_HOURS=72");
-
-        expect(hasHardcodedConstant).toBe(false);
+        // Check for T2_DEADLINE_HOURS (not LEGACY_T2_DEADLINE_HOURS)
+        expect(content).not.toMatch(/(?<!LEGACY_)T2_DEADLINE_HOURS/);
       }
     });
   });
 
-  describe("Preset Files Exist", () => {
-    test("should have mirai-shachu preset file", () => {
+  describe("Preset Files", () => {
+    test("should have mirai-shachu preset file with tenant values", () => {
       const content = readFile("lib/approval-kind-routes/presets/mirai-shachu.ts");
       expect(content.length).toBeGreaterThan(0);
 
       // Should contain the tenant-specific values
-      for (const keyword of MIRAI_SHACHU_VALUES.t3_keywords.slice(0, 3)) {
+      for (const keyword of MIRAI_SHACHU_T3_KEYWORDS.slice(0, 3)) {
         expect(content).toContain(keyword);
       }
+      expect(content).toContain("500000");
     });
 
     test("should have neutral defaults preset file", () => {
       const content = readFile("lib/approval-kind-routes/presets/defaults.ts");
       expect(content.length).toBeGreaterThan(0);
 
-      // Should contain default constants
+      // Should contain default constants (but NOT amount threshold)
       expect(content).toContain("DEFAULT_CONSUMPTION_TAX_RATE");
-      expect(content).toContain("DEFAULT_AMOUNT_THRESHOLD_JPY");
+      expect(content).toContain("DEFAULT_FISCAL_YEAR_START_MONTH");
+      expect(content).toContain("DEFAULT_REMIND_EVERY_DAYS");
     });
   });
 
@@ -221,12 +243,27 @@ describe("No Hardcoded Tenant Values", () => {
       expect(content).toContain("DEFAULT_CONSUMPTION_TAX_RATE");
     });
 
+    test("request.ts should NOT import T3_AUTO_ESCALATION_KEYWORDS", () => {
+      const content = readFile("lib/decision-workflow/request.ts");
+      expect(content).not.toContain("T3_AUTO_ESCALATION_KEYWORDS");
+    });
+
+    test("request.ts should NOT import CONSUMPTION_TAX_RATE from types", () => {
+      const content = readFile("lib/decision-workflow/request.ts");
+      // Should not import CONSUMPTION_TAX_RATE (should use DEFAULT_CONSUMPTION_TAX_RATE from presets)
+      expect(content).not.toMatch(/import.*CONSUMPTION_TAX_RATE.*from.*types/);
+    });
+
     test("request.ts should get deadline from tier route", () => {
       const content = readFile("lib/decision-workflow/request.ts");
       expect(content).toContain("tierRoute?.deadlineHours");
-      // Should NOT have hardcoded T2 deadline logic (tier === "T2" ? T2_DEADLINE_HOURS : ...)
-      // Note: tier === "T2" may appear in comments or risk level logic, that's fine
       expect(content).not.toContain("T2_DEADLINE_HOURS");
+    });
+
+    test("request.ts should use tierRouting for escalation", () => {
+      const content = readFile("lib/decision-workflow/request.ts");
+      expect(content).toContain("tierRouting");
+      expect(content).toContain("containsKeywords");
     });
 
     test("expiry.ts should check onExpire from tier config", () => {
@@ -235,10 +272,48 @@ describe("No Hardcoded Tenant Values", () => {
       expect(content).toContain("tierRoute.onExpire");
     });
 
+    test("data.ts should use DEFAULT_REMIND_EVERY_DAYS constant", () => {
+      const content = readFile("lib/approval-kind-routes/data.ts");
+      expect(content).toContain("DEFAULT_REMIND_EVERY_DAYS");
+      // Should not have hardcoded remindEveryDays: 3
+      const lines = getFileLines(content);
+      for (const line of lines) {
+        if (isCommentLine(line)) continue;
+        if (line.includes("remindEveryDays:") && line.includes("3")) {
+          expect(line).toContain("DEFAULT_REMIND_EVERY_DAYS");
+        }
+      }
+    });
+
     test("topic-gate.ts should not fallback to DEFAULT_SENSITIVE_TOPICS", () => {
       const content = readFile("lib/decision-workflow/topic-gate.ts");
-      // Should NOT have: config.sensitiveTopics.length > 0 ? ... : DEFAULT_SENSITIVE_TOPICS
       expect(content).not.toContain("sensitiveTopics.length > 0");
+    });
+  });
+
+  describe("engine.ts determineDecisionTier", () => {
+    test("should NOT auto-escalate based on amounts or keywords", () => {
+      const content = readFile("lib/approval-kind-routes/engine.ts");
+      
+      // Check that determineDecisionTier doesn't have amount/keyword escalation logic
+      // It should just return the lowest-rank tier
+      const lines = getFileLines(content);
+      let inDetermineDecisionTier = false;
+      
+      for (const line of lines) {
+        if (line.includes("export function determineDecisionTier")) {
+          inDetermineDecisionTier = true;
+        }
+        if (inDetermineDecisionTier && line.startsWith("}")) {
+          break;
+        }
+        if (inDetermineDecisionTier && !isCommentLine(line)) {
+          // Should not have amount comparison for escalation
+          expect(line).not.toMatch(/amountJpy\s*>=\s*amountThreshold/);
+          // Should not have t3Classifications array
+          expect(line).not.toMatch(/t3Classifications\s*=\s*\[/);
+        }
+      }
     });
   });
 });
