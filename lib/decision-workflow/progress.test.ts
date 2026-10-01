@@ -558,3 +558,92 @@ describe("handleT2Expiry", () => {
     expect(result.reason).toBe("deadline_exceeded");
   });
 });
+
+describe("weighted voting", () => {
+  test("calculates weighted progress with voterWeights", () => {
+    const votes: DecisionVote[] = [
+      { voterId: "user-1", vote: "approve", votedAt: new Date() },
+      { voterId: "user-2", vote: "reject", votedAt: new Date() },
+    ];
+
+    const result = calculateDecisionProgress(
+      votes,
+      ["user-1", "user-2", "user-3"],
+      { type: "count", n: 2 },
+      "requester-1",
+      [],
+      { "user-1": 3, "user-2": 2, "user-3": 1 }
+    );
+
+    expect(result.weighted).toBeDefined();
+    expect(result.weighted?.approvedWeight).toBe(3);
+    expect(result.weighted?.rejectedWeight).toBe(2);
+    expect(result.weighted?.pendingWeight).toBe(1);
+    expect(result.weighted?.totalWeight).toBe(6);
+  });
+
+  test("weighted quorum met when approved weight >= min", () => {
+    const votes: DecisionVote[] = [
+      { voterId: "user-1", vote: "approve", votedAt: new Date() },
+    ];
+
+    const result = calculateDecisionProgress(
+      votes,
+      ["user-1", "user-2", "user-3"],
+      { type: "weight", min: 3 },
+      "requester-1",
+      [],
+      { "user-1": 3, "user-2": 2, "user-3": 1 }
+    );
+
+    expect(result.quorumMet).toBe(true);
+    expect(result.quorumRequired).toEqual({ type: "weight", min: 3 });
+  });
+
+  test("weighted quorum not met when approved weight < min", () => {
+    const votes: DecisionVote[] = [
+      { voterId: "user-3", vote: "approve", votedAt: new Date() },
+    ];
+
+    const result = calculateDecisionProgress(
+      votes,
+      ["user-1", "user-2", "user-3"],
+      { type: "weight", min: 3 },
+      "requester-1",
+      [],
+      { "user-1": 3, "user-2": 2, "user-3": 1 }
+    );
+
+    expect(result.quorumMet).toBe(false);
+    expect(result.weighted?.approvedWeight).toBe(1);
+  });
+
+  test("progress summary shows weighted info", () => {
+    const state: DecisionProgressState = {
+      approvalId: "test-1",
+      tier: "T2",
+      status: "pending",
+      votes: [],
+      approvedCount: 1,
+      rejectedCount: 0,
+      pendingCount: 2,
+      totalVoters: 3,
+      quorumRequired: { type: "weight", min: 4 },
+      quorumMet: false,
+      deadlineAt: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      weighted: {
+        approvedWeight: 3,
+        rejectedWeight: 0,
+        pendingWeight: 3,
+        totalWeight: 6,
+      },
+    };
+
+    const summary = generateProgressSummary(state);
+
+    expect(summary).toContain("3/6pt承認");
+    expect(summary).toContain("残り1ptの承認が必要");
+  });
+});

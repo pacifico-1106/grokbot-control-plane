@@ -33,12 +33,26 @@ export interface DecisionResult {
   approvedCount: number;
   rejectedCount: number;
   totalVoters: number;
-  quorumRequired: number | "all";
+  quorumRequired: number | "all" | { type: "weight"; min: number };
   createdAt: Date;
   resolvedAt: Date;
   deadline?: Date | null;
   expirationReason?: string;
   minutes?: DecisionMinutes;
+  /** Weighted vote totals (present when voterWeights are configured) */
+  weighted?: {
+    approvedWeight: number;
+    rejectedWeight: number;
+    totalWeight: number;
+  };
+}
+
+/**
+ * Vote detail entry with optional weight.
+ */
+export interface VoteDetailEntry {
+  name: string;
+  weight?: number;
 }
 
 /**
@@ -54,13 +68,20 @@ export interface DecisionMinutes {
   description: string;
   resolution: string;
   voteDetails: {
-    approved: string[];
-    rejected: string[];
-    abstained: string[];
-    notVoted: string[];
+    approved: string[] | VoteDetailEntry[];
+    rejected: string[] | VoteDetailEntry[];
+    abstained: string[] | VoteDetailEntry[];
+    notVoted: string[] | VoteDetailEntry[];
   };
   remarks?: string[];
   generatedAt: string;
+  /** Present when weighted voting was used */
+  weightedSummary?: {
+    approvedWeight: number;
+    rejectedWeight: number;
+    totalWeight: number;
+    requiredWeight?: number;
+  };
 }
 
 /**
@@ -102,7 +123,7 @@ export function recordDecisionResult(
           ? "expired"
           : "withdrawn";
 
-  return {
+  const result: DecisionResult = {
     approvalId: state.approvalId,
     orgId: (metadata.orgId as string) || "",
     requesterId: (metadata.requesterId as string) || "",
@@ -124,6 +145,16 @@ export function recordDecisionResult(
     deadline: state.deadlineAt,
     expirationReason: state.status === "expired" ? "deadline_exceeded" : undefined,
   };
+
+  if (state.weighted) {
+    result.weighted = {
+      approvedWeight: state.weighted.approvedWeight,
+      rejectedWeight: state.weighted.rejectedWeight,
+      totalWeight: state.weighted.totalWeight,
+    };
+  }
+
+  return result;
 }
 
 /**
@@ -131,12 +162,22 @@ export function recordDecisionResult(
  */
 export function generateDecisionMinutes(
   result: DecisionResult,
-  approverNames: Record<string, string> = {}
+  approverNames: Record<string, string> = {},
+  voterWeights?: Record<string, number>
 ): DecisionMinutes {
   const documentId = `MIN-${result.approvalId.slice(0, 8)}-${Date.now().toString(36)}`;
 
-  const resolveNames = (userIds: string[]): string[] =>
-    userIds.map((id) => approverNames[id] || id);
+  const hasWeights = voterWeights && Object.keys(voterWeights).length > 0;
+
+  const resolveNames = (userIds: string[]): string[] | VoteDetailEntry[] => {
+    if (hasWeights) {
+      return userIds.map((id) => ({
+        name: approverNames[id] || id,
+        weight: voterWeights[id],
+      }));
+    }
+    return userIds.map((id) => approverNames[id] || id);
+  };
 
   const approvedUserIds = result.votes.filter((v) => v.vote === "approve").map((v) => v.voterId);
   const rejectedUserIds = result.votes.filter((v) => v.vote === "reject").map((v) => v.voterId);
@@ -162,7 +203,7 @@ export function generateDecisionMinutes(
     }
   }
 
-  return {
+  const minutes: DecisionMinutes = {
     documentId,
     title: `決裁議事録: ${result.title}`,
     meetingDate: result.resolvedAt.toISOString().split("T")[0],
@@ -180,6 +221,22 @@ export function generateDecisionMinutes(
     remarks: remarks.length > 0 ? remarks : undefined,
     generatedAt: new Date().toISOString(),
   };
+
+  if (result.weighted) {
+    const requiredWeight =
+      typeof result.quorumRequired === "object" && result.quorumRequired.type === "weight"
+        ? result.quorumRequired.min
+        : undefined;
+
+    minutes.weightedSummary = {
+      approvedWeight: result.weighted.approvedWeight,
+      rejectedWeight: result.weighted.rejectedWeight,
+      totalWeight: result.weighted.totalWeight,
+      requiredWeight,
+    };
+  }
+
+  return minutes;
 }
 
 /**
@@ -190,24 +247,38 @@ function generateResolutionText(result: DecisionResult): string {
   const tierLabel = TIER_LABELS[result.tier];
 
   let quorumText: string;
-  if (result.quorumRequired === "all") {
+  if (typeof result.quorumRequired === "object" && result.quorumRequired.type === "weight") {
+    quorumText = `${result.quorumRequired.min}pt以上の承認`;
+  } else if (result.quorumRequired === "all") {
     quorumText = "全員の承認";
   } else {
     quorumText = `${result.quorumRequired}名以上の承認`;
   }
 
   if (result.status === "approved") {
+    if (result.weighted) {
+      return `本議案は${tierLabel}決裁により${statusLabel}されました。` +
+        `（${result.weighted.approvedWeight}pt承認 / ${result.weighted.totalWeight}pt中、${quorumText}を達成）`;
+    }
     return `本議案は${tierLabel}決裁により${statusLabel}されました。` +
       `（${result.approvedCount}名承認 / ${result.totalVoters}名中、${quorumText}を達成）`;
   }
 
   if (result.status === "rejected") {
+    if (result.weighted) {
+      return `本議案は${tierLabel}決裁により${statusLabel}されました。` +
+        `（${result.weighted.rejectedWeight}pt却下 / ${result.weighted.totalWeight}pt中）`;
+    }
     return `本議案は${tierLabel}決裁により${statusLabel}されました。` +
       `（${result.rejectedCount}名却下 / ${result.totalVoters}名中）`;
   }
 
   if (result.status === "expired") {
     if (result.tier === "T2") {
+      if (result.weighted) {
+        return `本議案は期限切れにより自動却下されました。` +
+          `（${result.weighted.approvedWeight}pt承認 / ${result.weighted.totalWeight}pt中、${quorumText}未達成）`;
+      }
       return `本議案は期限切れにより自動却下されました。` +
         `（${result.approvedCount}名承認 / ${result.totalVoters}名中、${quorumText}未達成）`;
     }
@@ -215,6 +286,21 @@ function generateResolutionText(result: DecisionResult): string {
   }
 
   return `本議案は取り下げられました。`;
+}
+
+/**
+ * Format vote detail entries as text.
+ */
+function formatVoteEntries(entries: string[] | VoteDetailEntry[]): string {
+  if (entries.length === 0) return "";
+
+  if (typeof entries[0] === "string") {
+    return (entries as string[]).join(", ");
+  }
+
+  return (entries as VoteDetailEntry[])
+    .map((e) => (e.weight !== undefined ? `${e.name} (${e.weight}pt)` : e.name))
+    .join(", ");
 }
 
 /**
@@ -244,17 +330,25 @@ export function formatMinutesAsMarkdown(minutes: DecisionMinutes): string {
     "",
   ];
 
+  if (minutes.weightedSummary) {
+    lines.push(`**投票ポイント集計:** 承認 ${minutes.weightedSummary.approvedWeight}pt / 却下 ${minutes.weightedSummary.rejectedWeight}pt / 合計 ${minutes.weightedSummary.totalWeight}pt`);
+    if (minutes.weightedSummary.requiredWeight !== undefined) {
+      lines.push(`**必要ポイント:** ${minutes.weightedSummary.requiredWeight}pt`);
+    }
+    lines.push("");
+  }
+
   if (minutes.voteDetails.approved.length > 0) {
-    lines.push(`**承認:** ${minutes.voteDetails.approved.join(", ")}`);
+    lines.push(`**承認:** ${formatVoteEntries(minutes.voteDetails.approved)}`);
   }
   if (minutes.voteDetails.rejected.length > 0) {
-    lines.push(`**却下:** ${minutes.voteDetails.rejected.join(", ")}`);
+    lines.push(`**却下:** ${formatVoteEntries(minutes.voteDetails.rejected)}`);
   }
   if (minutes.voteDetails.abstained.length > 0) {
-    lines.push(`**棄権:** ${minutes.voteDetails.abstained.join(", ")}`);
+    lines.push(`**棄権:** ${formatVoteEntries(minutes.voteDetails.abstained)}`);
   }
   if (minutes.voteDetails.notVoted.length > 0) {
-    lines.push(`**未投票:** ${minutes.voteDetails.notVoted.join(", ")}`);
+    lines.push(`**未投票:** ${formatVoteEntries(minutes.voteDetails.notVoted)}`);
   }
 
   if (minutes.remarks && minutes.remarks.length > 0) {

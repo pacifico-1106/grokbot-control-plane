@@ -21,11 +21,19 @@ export const APPROVAL_KINDS: readonly ApprovalKind[] = [
   "other",
 ] as const;
 
-/** Quorum rule for approval routes. */
+/**
+ * Quorum rule for approval routes.
+ *
+ * - "any": At least one approval required
+ * - "count": At least n approvals required
+ * - "all": All approvers must approve
+ * - "weight": Total weight of approvals must be >= min (uses voterWeights)
+ */
 export type ApprovalKindQuorum =
   | { type: "any" }
   | { type: "count"; n: number }
-  | { type: "all" };
+  | { type: "all" }
+  | { type: "weight"; min: number };
 
 /** Behavior when deadline expires. */
 export type OnExpireBehavior = "fail_closed" | "keep_open";

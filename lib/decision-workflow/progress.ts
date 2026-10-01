@@ -31,7 +31,7 @@ export interface DecisionProgressState {
   rejectedCount: number;
   pendingCount: number;
   totalVoters: number;
-  quorumRequired: number | "all";
+  quorumRequired: number | "all" | { type: "weight"; min: number };
   quorumMet: boolean;
   deadlineAt: Date | null;
   createdAt: Date;
@@ -39,6 +39,13 @@ export interface DecisionProgressState {
   escalatedFrom?: DecisionTier;
   escalatedAt?: Date;
   resultRecordedAt?: Date;
+  /** Weighted vote totals (present when voterWeights are configured) */
+  weighted?: {
+    approvedWeight: number;
+    rejectedWeight: number;
+    pendingWeight: number;
+    totalWeight: number;
+  };
 }
 
 /**
@@ -63,22 +70,42 @@ export interface DecisionStuckItem {
 }
 
 /**
- * Calculate decision progress from votes.
+ * Result of decision progress calculation.
  */
-export function calculateDecisionProgress(
-  votes: DecisionVote[],
-  approverUserIds: string[],
-  quorum: { type: "any" | "count" | "all"; n?: number },
-  requesterId: string,
-  aiUserIds: string[] = []
-): {
+export interface DecisionProgressResult {
   approvedCount: number;
   rejectedCount: number;
   pendingCount: number;
   totalVoters: number;
   quorumMet: boolean;
-  quorumRequired: number | "all";
-} {
+  quorumRequired: number | "all" | { type: "weight"; min: number };
+  /** Weighted totals when voterWeights are provided */
+  weighted?: {
+    approvedWeight: number;
+    rejectedWeight: number;
+    pendingWeight: number;
+    totalWeight: number;
+  };
+}
+
+/**
+ * Calculate decision progress from votes.
+ *
+ * @param votes - Array of votes cast
+ * @param approverUserIds - List of valid approver user IDs
+ * @param quorum - Quorum configuration
+ * @param requesterId - Requester ID (excluded from voting)
+ * @param aiUserIds - AI user IDs (excluded from voting)
+ * @param voterWeights - Optional weights per voter (default: 1 for each)
+ */
+export function calculateDecisionProgress(
+  votes: DecisionVote[],
+  approverUserIds: string[],
+  quorum: { type: "any" | "count" | "all" | "weight"; n?: number; min?: number },
+  requesterId: string,
+  aiUserIds: string[] = [],
+  voterWeights?: Record<string, number>
+): DecisionProgressResult {
   const voteMap = new Map(votes.map((v) => [v.voterId, v]));
   const excludedIds = new Set([requesterId, ...aiUserIds]);
 
@@ -88,36 +115,50 @@ export function calculateDecisionProgress(
   let rejectedCount = 0;
   let pendingCount = 0;
 
+  let approvedWeight = 0;
+  let rejectedWeight = 0;
+  let pendingWeight = 0;
+  let totalWeight = 0;
+
   for (const voterId of validApprovers) {
+    const weight = voterWeights?.[voterId] ?? 1;
+    totalWeight += weight;
+
     const vote = voteMap.get(voterId);
     if (!vote) {
       pendingCount++;
+      pendingWeight += weight;
     } else if (vote.vote === "approve") {
       approvedCount++;
+      approvedWeight += weight;
     } else if (vote.vote === "reject") {
       rejectedCount++;
+      rejectedWeight += weight;
     } else {
       pendingCount++;
+      pendingWeight += weight;
     }
   }
 
   const totalVoters = validApprovers.length;
-  let quorumRequired: number | "all";
+  let quorumRequired: number | "all" | { type: "weight"; min: number };
+  let quorumMet: boolean;
 
-  if (quorum.type === "all") {
+  if (quorum.type === "weight" && typeof quorum.min === "number") {
+    quorumRequired = { type: "weight", min: quorum.min };
+    quorumMet = approvedWeight >= quorum.min;
+  } else if (quorum.type === "all") {
     quorumRequired = "all";
+    quorumMet = approvedCount === totalVoters && totalVoters > 0;
   } else if (quorum.type === "count" && typeof quorum.n === "number") {
     quorumRequired = Math.min(quorum.n, totalVoters);
+    quorumMet = approvedCount >= quorumRequired;
   } else {
     quorumRequired = 1;
+    quorumMet = approvedCount >= 1;
   }
 
-  const quorumMet =
-    quorumRequired === "all"
-      ? approvedCount === totalVoters && totalVoters > 0
-      : approvedCount >= quorumRequired;
-
-  return {
+  const result: DecisionProgressResult = {
     approvedCount,
     rejectedCount,
     pendingCount,
@@ -125,6 +166,17 @@ export function calculateDecisionProgress(
     quorumMet,
     quorumRequired,
   };
+
+  if (voterWeights && Object.keys(voterWeights).length > 0) {
+    result.weighted = {
+      approvedWeight,
+      rejectedWeight,
+      pendingWeight,
+      totalWeight,
+    };
+  }
+
+  return result;
 }
 
 /**
@@ -185,11 +237,28 @@ export function checkDecisionStalled(
     }
   }
 
-  const quorumNum =
-    state.quorumRequired === "all" ? state.totalVoters : state.quorumRequired;
-  const possibleApprovals = state.approvedCount + state.pendingCount;
+  // Check if quorum is unreachable
+  let quorumUnreachable = false;
+  let quorumSummary = "";
 
-  if (possibleApprovals < quorumNum) {
+  if (typeof state.quorumRequired === "object" && state.quorumRequired.type === "weight") {
+    // For weighted quorum, check if possible weight is below required
+    const possibleWeight = (state.weighted?.approvedWeight ?? 0) + (state.weighted?.pendingWeight ?? 0);
+    if (possibleWeight < state.quorumRequired.min) {
+      quorumUnreachable = true;
+      quorumSummary = `Quorum到達不可能 (${state.weighted?.rejectedWeight ?? 0}pt却下済み)`;
+    }
+  } else {
+    const quorumNum =
+      state.quorumRequired === "all" ? state.totalVoters : (state.quorumRequired as number);
+    const possibleApprovals = state.approvedCount + state.pendingCount;
+    if (possibleApprovals < quorumNum) {
+      quorumUnreachable = true;
+      quorumSummary = `Quorum到達不可能 (${state.rejectedCount}名却下済み)`;
+    }
+  }
+
+  if (quorumUnreachable) {
     return {
       kind: "decision_stalled",
       approvalId: state.approvalId,
@@ -204,7 +273,7 @@ export function checkDecisionStalled(
         total: state.totalVoters,
       },
       deadlineAt: state.deadlineAt,
-      summaryJa: `Quorum到達不可能 (${state.rejectedCount}名却下済み)`,
+      summaryJa: quorumSummary,
       nextStepJa: "決裁依頼を取り下げて再申請を検討してください",
     };
   }
@@ -290,20 +359,31 @@ export function generateProgressSummary(state: DecisionProgressState): string {
   const parts: string[] = [];
 
   parts.push(`Tier: ${state.tier}`);
-  parts.push(`進捗: ${state.approvedCount}/${state.totalVoters}名承認`);
 
-  if (state.rejectedCount > 0) {
-    parts.push(`(${state.rejectedCount}名却下)`);
+  if (state.weighted) {
+    parts.push(`進捗: ${state.weighted.approvedWeight}/${state.weighted.totalWeight}pt承認`);
+    if (state.rejectedCount > 0) {
+      parts.push(`(${state.weighted.rejectedWeight}pt却下)`);
+    }
+  } else {
+    parts.push(`進捗: ${state.approvedCount}/${state.totalVoters}名承認`);
+    if (state.rejectedCount > 0) {
+      parts.push(`(${state.rejectedCount}名却下)`);
+    }
   }
 
   if (state.quorumMet) {
     parts.push("✓ Quorum達成");
   } else {
-    const remaining =
-      state.quorumRequired === "all"
-        ? state.pendingCount
-        : Math.max(0, (state.quorumRequired as number) - state.approvedCount);
-    parts.push(`残り${remaining}名の承認が必要`);
+    if (typeof state.quorumRequired === "object" && state.quorumRequired.type === "weight") {
+      const remaining = Math.max(0, state.quorumRequired.min - (state.weighted?.approvedWeight ?? 0));
+      parts.push(`残り${remaining}ptの承認が必要`);
+    } else if (state.quorumRequired === "all") {
+      parts.push(`残り${state.pendingCount}名の承認が必要`);
+    } else {
+      const remaining = Math.max(0, (state.quorumRequired as number) - state.approvedCount);
+      parts.push(`残り${remaining}名の承認が必要`);
+    }
   }
 
   if (state.deadlineAt) {
