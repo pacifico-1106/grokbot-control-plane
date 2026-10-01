@@ -1,5 +1,6 @@
 import { consumeAdminApprovalSecret } from "@/lib/admin-mcp/consume-secret";
 import { canReadAdminApproval } from "@/lib/admin-mcp/result-authority";
+import { assertAdminToolAllowedForPlan } from "@/lib/billing/plan-gate";
 /**
  * Staffpass Admin MCP tools (separate mouth from employee badge MCP).
  * Most tools are always_human. Do not mix with staffpass_whoami / invoke / poll / health.
@@ -78,6 +79,12 @@ import {
   nextStepApprovalWorkflowJa,
   type ApprovalWorkflowPolicySource,
 } from "@/lib/approval-workflow";
+import {
+  handleApprovalRoutesGet,
+  validateApprovalRoutesPatch,
+  handleDeputyActivate,
+} from "@/lib/approval-kind-routes/mcp-handlers";
+import { isApprovalKindRoutesEnabled } from "@/lib/feature-flags";
 import {
   getIdentityBindingStatus,
   checkFeatureEnabled as checkEmployeeIdentityFeatureEnabled,
@@ -989,6 +996,74 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
     },
   },
   {
+    name: "approvalRoutes.get",
+    description:
+      "Read approval routes policy (read-only, no approval required). P1 承認ルートの種類別設定: Returns effective routes for all kinds (post/mail/account/decision/other), source layer (org/employee/default), legacy workflow info. Omit employeeId for org policy; include for AI社員ごとの設定. Feature flag P1_APPROVAL_KIND_ROUTES_ENABLED must be ON for full functionality; otherwise returns legacy info only.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        employeeId: { type: "string", description: "Optional employee ID for per-employee lookup" },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "approvalRoutes.patch",
+    description:
+      "Patch approval routes policy after human approval (always_human, approvalClass admin). P1 承認ルートの種類別設定: Routes for each kind with approvers, quorum (any/count/all), finalGo, deadline, onExpire, reminders. Changes are shown in diff card before approval. Admin cannot self-approve. account kind requires owner/admin approvers only. Feature flag P1_APPROVAL_KIND_ROUTES_ENABLED must be ON.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        employeeId: { type: "string", description: "Optional employee ID for per-employee override" },
+        clearOverride: { type: "boolean", description: "Set true to clear employee override and inherit org policy" },
+        policyName: { type: "string", description: "Human-readable policy name" },
+        routes: {
+          type: "array",
+          description: "Routes for each approval kind",
+          items: {
+            type: "object",
+            properties: {
+              kind: { type: "string", enum: ["post", "mail", "account", "decision", "other"], description: "Approval kind" },
+              approverUserIds: { type: "array", items: { type: "string" }, description: "User IDs allowed to approve" },
+              quorum: {
+                type: "object",
+                description: "Quorum rule: {type: 'any'} | {type: 'count', n: N} | {type: 'all'}",
+              },
+              finalGoUserId: { type: "string", description: "Optional final approver" },
+              deadlineHours: { type: "number", description: "Optional deadline in hours" },
+              onExpire: { type: "string", enum: ["fail_closed", "keep_open"], description: "Behavior on deadline expiry" },
+              remindEveryDays: { type: "number", description: "Reminder interval in days (default 3)" },
+            },
+            required: ["kind", "approverUserIds", "quorum", "onExpire", "remindEveryDays"],
+          },
+        },
+        topicGate: {
+          type: "object",
+          description: "Topic gate config for post kind (P1_TOPIC_GATED_POSTING_ENABLED)",
+          properties: {
+            enabled: { type: "boolean" },
+            sensitiveTopics: { type: "array", items: { type: "string" } },
+            mainBoardChannelIds: { type: "array", items: { type: "string" } },
+          },
+        },
+        decisionWorkflow: {
+          type: "object",
+          description: "Decision workflow config (P1_DECISION_WORKFLOW_ENABLED)",
+          properties: {
+            amountThresholdJpy: { type: "number", description: "Tax-excluded amount threshold (default 500000)" },
+            fiscalYearStartMonth: { type: "number", description: "1-12 (default 4 for April)" },
+            fiscalYearStartDay: { type: "number", description: "1-31 (default 1)" },
+            deputyUserId: { type: "string", description: "Deputy user ID (manual activation only)" },
+            tiers: { type: "array", description: "Decision tiers (T1/T2/T3)" },
+          },
+        },
+        jobId: { type: "string" },
+        approvalId: { type: "string", description: "Re-invoke with approved ticket ID" },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
     name: "orgs.create",
     description:
       "Create a new tenant (org + Auth owner + trial) after human approval (always_human). Platform super-admin only — normal tenant gb_adm_ is rejected (fail-closed). Reuses signup pipeline (createOrgWithOwner / provisionOrgForUser). Never returns or audits plaintext passwords. After success, issue AI employees via employees.issue in the new org.",
@@ -1143,6 +1218,22 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
       additionalProperties: false,
     },
   },
+  {
+    name: "decision.deputyActivate",
+    description:
+      "Activate a deputy (代理人) for a pending decision request (always_human). Deputy can act on behalf of the requester. Security: self-approval forbidden (deputy cannot be requester), cross-org forbidden (deputy must be in same org). P1_DECISION_WORKFLOW_ENABLED must be ON.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        approvalId: { type: "string", description: "Original decision request approval ID" },
+        deputyUserId: { type: "string", description: "User ID of the deputy (must be in same org, cannot be requester)" },
+        reason: { type: "string", description: "Reason for deputy activation" },
+        jobId: { type: "string" },
+      },
+      required: ["approvalId", "deputyUserId"],
+      additionalProperties: false,
+    },
+  },
 ];
 
 /**
@@ -1171,6 +1262,7 @@ const ADMIN_READ_ONLY_TOOLS_SET = new Set<string>([
   "approvalWorkflow.get",
   "approvalWorkflow.inspect",
   "approvalWorkflow.listVoterBindings",
+  "approvalRoutes.get",
   "setup.approverBindingStatus",
   "orgs.status",
   "orgs.patch",
@@ -1877,6 +1969,24 @@ export async function callAdminMcpTool(
     );
   }
 
+  // P1 Plan Rails: check if tool is available for org's plan (flag-gated)
+  const planGate = await assertAdminToolAllowedForPlan(cred.orgId, name);
+  if (!planGate.ok) {
+    return toolResult(
+      {
+        ok: false,
+        code: planGate.code,
+        message: planGate.messageJa,
+        planKey: planGate.planKey,
+        billingStatus: planGate.billingStatus,
+        tool: planGate.tool,
+        availableInPlans: planGate.availableInPlans,
+        billingPath: "/app/billing",
+      },
+      true
+    );
+  }
+
   if (name.startsWith("orgs.") || name === "approvals.proxyResolve") {
     const gate = await assertPlatformOpsFromAdminCred(cred);
     if (!gate.allowed) return toolResult({ ok: false, code: gate.code, message: gate.message }, true);
@@ -2558,6 +2668,72 @@ export async function callAdminMcpTool(
           ? null
           : "approvalWorkflow.bindVoter",
     });
+  }
+
+  // P1 Approval Kind Routes
+  if (name === "approvalRoutes.get") {
+    const result = await handleApprovalRoutesGet(cred, args);
+    return toolResult(result);
+  }
+
+  if (name === "approvalRoutes.patch") {
+    // Check feature flag
+    if (!isApprovalKindRoutesEnabled()) {
+      return toolResult(
+        {
+          ok: false,
+          code: "feature_disabled",
+          message: "P1_APPROVAL_KIND_ROUTES_ENABLED が OFF のため、この機能は使用できません",
+        },
+        true
+      );
+    }
+
+    // Validate input
+    const validation = await validateApprovalRoutesPatch(cred, {
+      employeeId: typeof args.employeeId === "string" ? args.employeeId.trim() : null,
+      clearOverride: args.clearOverride === true,
+      policyName: typeof args.policyName === "string" ? args.policyName.trim() : undefined,
+      routes: Array.isArray(args.routes) ? args.routes : undefined,
+      topicGate: args.topicGate,
+      decisionWorkflow: args.decisionWorkflow,
+    });
+
+    if (!validation.ok) {
+      return toolResult(validation, true);
+    }
+
+    // Queue for approval with diff card
+    const queueResult = await queueAdminTool({
+      cred,
+      tool: name,
+      args: {
+        ...args,
+        __metadata: {
+          beforeSnapshot: validation.beforeSnapshot,
+          afterSnapshot: validation.afterSnapshot,
+          diffSummary: validation.diffSummary,
+        },
+      },
+      title: "承認ルート設定の変更",
+      summary: [
+        "承認ルート設定を変更します。",
+        "",
+        "■ 変更内容:",
+        ...(validation.diffSummary || []).map((d) => `  ${d}`),
+      ].join("\n"),
+    });
+    return toolResult(queueResult, true);
+  }
+
+  // P1 Decision Workflow - Deputy Activation
+  if (name === "decision.deputyActivate") {
+    const result = await handleDeputyActivate(cred, {
+      approvalId: typeof args.approvalId === "string" ? args.approvalId.trim() : "",
+      deputyUserId: typeof args.deputyUserId === "string" ? args.deputyUserId.trim() : "",
+      reason: typeof args.reason === "string" ? args.reason.trim() : undefined,
+    });
+    return toolResult(result, !result.ok);
   }
 
   if (name === "employeeIdentity.status") {

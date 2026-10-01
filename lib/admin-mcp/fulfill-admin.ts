@@ -1,6 +1,10 @@
 import { isDemoMode } from "@/lib/mode";
 import { executeApproval } from "@/lib/approvals/execution";
 import { fulfillWorkflowMutation } from "@/lib/approval-workflow/admin";
+import {
+  fulfillApprovalRoutesPatch as fulfillApprovalRoutesPatchHandler,
+  fulfillDeputyActivate as fulfillDeputyActivateHandler,
+} from "@/lib/approval-kind-routes/mcp-handlers";
 import { setOrgInternalAudienceRule, validateInternalAudienceRulePatch } from "@/lib/data/internal-audience-rule";
 /**
  * Fulfill admin MCP tickets after a different human approves.
@@ -1473,6 +1477,64 @@ async function fulfillStuckWatch(
 }
 
 /**
+ * Fulfill approval routes patch after always_human approval.
+ * Re-runs validation, checks before-state match, and writes audit record.
+ */
+async function fulfillApprovalRoutesPatch(
+  approval: ApprovalRequest,
+  args: Record<string, unknown>
+): Promise<AdminFulfillment> {
+  const at = new Date().toISOString();
+  const result = await fulfillApprovalRoutesPatchHandler(approval, args);
+
+  if (!result.ok) {
+    return {
+      ok: false,
+      tool: "approvalRoutes.patch",
+      at,
+      error: result.code,
+      nextStepJa: result.message,
+    };
+  }
+
+  return {
+    ok: true,
+    tool: "approvalRoutes.patch",
+    at,
+    summaryJa: result.message,
+  };
+}
+
+/**
+ * Fulfill decision.deputyActivate after always_human approval.
+ * Re-validates self-approval and cross-org constraints at fulfill time.
+ */
+async function fulfillDeputyActivate(
+  approval: ApprovalRequest,
+  args: Record<string, unknown>
+): Promise<AdminFulfillment> {
+  const at = new Date().toISOString();
+  const result = await fulfillDeputyActivateHandler(approval, args);
+
+  if (!result.ok) {
+    return {
+      ok: false,
+      tool: "decision.deputyActivate",
+      at,
+      error: result.code,
+      nextStepJa: result.message,
+    };
+  }
+
+  return {
+    ok: true,
+    tool: "decision.deputyActivate",
+    at,
+    summaryJa: result.message,
+  };
+}
+
+/**
  * Fulfill card setup link mint after always_human approval.
  * Creates Stripe Checkout session (mode=setup) and returns the deep link.
  */
@@ -1757,6 +1819,12 @@ async function fulfillApprovedAdminCore(
       case "approvalWorkflow.patch":
       case "approvalWorkflow.remind":
         fulfillment = await fulfillWorkflowMutation(approval, args, tool);
+        break;
+      case "approvalRoutes.patch":
+        fulfillment = await fulfillApprovalRoutesPatch(approval, args);
+        break;
+      case "decision.deputyActivate":
+        fulfillment = await fulfillDeputyActivate(approval, args);
         break;
       case "setup.slackAdapter.setBotToken":
         fulfillment = await fulfillSlackAdapterSetBotToken(approval, args);

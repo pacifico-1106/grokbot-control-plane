@@ -4,6 +4,15 @@ import { updateApprovalNotificationMessages } from "@/lib/notify/channels";
 import type { ApprovalRequest, Employee } from "@/lib/types";
 import { deliverAuthorityDecision } from "@/lib/commerce/authority-events";
 import { appendAuditEvent } from "@/lib/data/audit";
+import { isDecisionWorkflowEnabled } from "@/lib/feature-flags";
+import { isDecisionRequest } from "@/lib/decision-workflow/notify";
+import {
+  recordDecisionResult,
+  generateDecisionMinutes,
+  formatMinutesAsMarkdown,
+  type DecisionResult,
+  type DecisionMinutes,
+} from "@/lib/decision-workflow/result";
 
 function orgNotifyEmail(): string {
   return (
@@ -24,6 +33,13 @@ export type ResolveSideEffectsResult = {
     skipped?: boolean;
     eventId?: string;
     status?: number | null;
+    error?: string;
+  };
+  decisionResult?: {
+    ok: boolean;
+    skipped?: boolean;
+    result?: DecisionResult;
+    minutes?: DecisionMinutes;
     error?: string;
   };
 };
@@ -201,6 +217,113 @@ export async function runApprovalResolveSideEffects(opts: {
       },
     });
   }
+
+  let decisionResult: ResolveSideEffectsResult["decisionResult"] = {
+    ok: true,
+    skipped: true,
+  };
+
+  if (
+    isDecisionWorkflowEnabled() &&
+    isDecisionRequest(approval) &&
+    (decision === "approved" || decision === "rejected")
+  ) {
+    try {
+      const metadata = approval.metadata as Record<string, unknown>;
+      const tier = metadata.tier as "T1" | "T2" | "T3";
+      const votes = (metadata.votes as unknown[]) ?? [];
+      const totalVoters =
+        typeof metadata.totalVoters === "number" ? metadata.totalVoters : 0;
+      const approvedCount =
+        typeof metadata.approvedCount === "number" ? metadata.approvedCount : 0;
+      const rejectedCount =
+        typeof metadata.rejectedCount === "number" ? metadata.rejectedCount : 0;
+      const quorumRequired =
+        metadata.quorumRequired === "all"
+          ? ("all" as const)
+          : typeof metadata.quorumRequired === "number"
+            ? metadata.quorumRequired
+            : 1;
+      const deadlineAt = metadata.deadlineAt
+        ? new Date(metadata.deadlineAt as string)
+        : null;
+
+      const progressState = {
+        approvalId: approval.id,
+        tier,
+        status: decision as "approved" | "rejected",
+        votes: votes.map((v: unknown) => {
+          const vote = v as Record<string, unknown>;
+          return {
+            voterId: String(vote.voterId || ""),
+            vote: (vote.vote as "approve" | "reject" | "abstain") || "abstain",
+            votedAt: vote.votedAt ? new Date(vote.votedAt as string) : new Date(),
+          };
+        }),
+        approvedCount,
+        rejectedCount,
+        pendingCount: Math.max(0, totalVoters - approvedCount - rejectedCount),
+        totalVoters,
+        quorumRequired,
+        quorumMet:
+          quorumRequired === "all"
+            ? approvedCount === totalVoters
+            : approvedCount >= quorumRequired,
+        deadlineAt,
+        createdAt: new Date(approval.createdAt),
+        updatedAt: new Date(),
+      };
+
+      const result = recordDecisionResult(progressState, {
+        orgId: approval.orgId,
+        requesterId: approval.employeeId,
+        title: approval.title,
+        summary: approval.summary,
+        amountJpy: metadata.amountJpy as number | undefined,
+        taxExcludedAmountJpy: metadata.taxExcludedAmountJpy as number | undefined,
+        category: metadata.category as string | undefined,
+        fiscalYear: (metadata.fiscalYear as string) || "",
+      });
+
+      const minutes = generateDecisionMinutes(result);
+      result.minutes = minutes;
+
+      await appendAuditEvent({
+        orgId: approval.orgId,
+        employeeId: approval.employeeId,
+        credentialId: approval.credentialId,
+        action: "decision.resolved",
+        purpose: approval.purpose,
+        summary: `決裁${decision === "approved" ? "承認" : "却下"}: ${tier} ${approval.title}`,
+        actorEmail,
+        metadata: {
+          approvalId: approval.id,
+          tier,
+          status: decision,
+          approvedCount: result.approvedCount,
+          rejectedCount: result.rejectedCount,
+          totalVoters: result.totalVoters,
+          quorumRequired: result.quorumRequired,
+          fiscalYear: result.fiscalYear,
+          documentId: minutes.documentId,
+        },
+      });
+
+      decisionResult = {
+        ok: true,
+        skipped: false,
+        result,
+        minutes,
+      };
+    } catch (error) {
+      decisionResult = {
+        ok: false,
+        skipped: false,
+        error: error instanceof Error ? error.message : "decision_result_failed",
+      };
+    }
+  }
+
   return {
     orgEmail,
     employeeEmail,
@@ -208,5 +331,6 @@ export async function runApprovalResolveSideEffects(opts: {
     telegram,
     notifications,
     authorityEvent,
+    decisionResult,
   };
 }

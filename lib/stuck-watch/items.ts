@@ -4,6 +4,12 @@
 import { listApprovals } from "@/lib/data";
 import { isMentionWakeAudit, listAuditEventsForStuckWatch } from "@/lib/data/audit";
 import { getOrgStuckWatchPolicy } from "@/lib/data/stuck-watch-policy";
+import { isDecisionWorkflowEnabled } from "@/lib/feature-flags";
+import {
+  checkDecisionStalled,
+  shouldAutoExpire,
+  type DecisionProgressState,
+} from "@/lib/decision-workflow/progress";
 import {
   hasSuccessfulReplyAfterWake,
   inferW1BlockingContext,
@@ -192,6 +198,128 @@ function buildW2Item(
   };
 }
 
+function d1ItemId(approvalId: string): string {
+  return `d1:${approvalId}`;
+}
+
+function isDecisionApproval(approval: ApprovalRequest): boolean {
+  const metadata = approval.metadata as Record<string, unknown> | null;
+  return metadata?.type === "decision_request" && !!metadata?.tier;
+}
+
+function extractDecisionProgress(
+  approval: ApprovalRequest,
+  now: Date
+): DecisionProgressState | null {
+  const metadata = approval.metadata as Record<string, unknown> | null;
+  if (!metadata?.tier) return null;
+
+  const tier = metadata.tier as "T1" | "T2" | "T3";
+  const votes = (metadata.votes as unknown[]) ?? [];
+  const approvedCount =
+    typeof metadata.approvedCount === "number" ? metadata.approvedCount : 0;
+  const rejectedCount =
+    typeof metadata.rejectedCount === "number" ? metadata.rejectedCount : 0;
+  const totalVoters =
+    typeof metadata.totalVoters === "number" ? metadata.totalVoters : 0;
+  const quorumRequired =
+    metadata.quorumRequired === "all"
+      ? ("all" as const)
+      : typeof metadata.quorumRequired === "number"
+        ? metadata.quorumRequired
+        : 1;
+  const deadlineAt = metadata.deadlineAt
+    ? new Date(metadata.deadlineAt as string)
+    : null;
+
+  return {
+    approvalId: approval.id,
+    tier,
+    status:
+      approval.status === "pending"
+        ? "pending"
+        : approval.status === "approved"
+          ? "approved"
+          : approval.status === "rejected"
+            ? "rejected"
+            : "pending",
+    votes: votes.map((v: unknown) => {
+      const vote = v as Record<string, unknown>;
+      return {
+        voterId: String(vote.voterId || ""),
+        vote: (vote.vote as "approve" | "reject" | "abstain") || "abstain",
+        votedAt: vote.votedAt ? new Date(vote.votedAt as string) : now,
+      };
+    }),
+    approvedCount,
+    rejectedCount,
+    pendingCount: Math.max(0, totalVoters - approvedCount - rejectedCount),
+    totalVoters,
+    quorumRequired,
+    quorumMet: quorumRequired === "all" ? approvedCount === totalVoters : approvedCount >= quorumRequired,
+    deadlineAt,
+    createdAt: new Date(approval.createdAt),
+    updatedAt: new Date(approval.resolvedAt ?? approval.createdAt),
+  };
+}
+
+function buildD1Item(
+  approval: ApprovalRequest,
+  resolved: Map<string, string>,
+  now: Date
+): StuckWatchItem | null {
+  if (!isDecisionWorkflowEnabled()) return null;
+  if (!isDecisionApproval(approval)) return null;
+  if (approval.status !== "pending") return null;
+
+  const progressState = extractDecisionProgress(approval, now);
+  if (!progressState) return null;
+
+  const stalledItem = checkDecisionStalled(progressState, now);
+  if (!stalledItem) return null;
+
+  const itemId = d1ItemId(approval.id);
+  const resolvedAt = resolved.get(itemId);
+  const minutesOpen = Math.floor(
+    (now.getTime() - new Date(approval.createdAt).getTime()) / 60_000
+  );
+
+  const status = resolvedAt ? "resolved" : "open";
+  const faultClass: FaultClass = "expected_gate";
+  const stuckHint: StuckHint =
+    stalledItem.reason === "quorum_unreachable" ? "fix" : "retryable";
+
+  const willAutoExpire = shouldAutoExpire(progressState, now);
+
+  return {
+    id: itemId,
+    orgId: approval.orgId,
+    kind: "d1_decision_stalled",
+    employeeId: approval.employeeId,
+    jobId: approval.jobId,
+    approvalId: approval.id,
+    tool: approval.tool,
+    faultClass,
+    stuckHint,
+    code: stalledItem.reason,
+    status,
+    detectedAt: approval.createdAt,
+    notifiedAt: null,
+    resolvedAt: resolvedAt ?? null,
+    minutesOpen,
+    summaryJa: stalledItem.summaryJa,
+    nextStepJa: stalledItem.nextStepJa,
+    metadata: {
+      tier: stalledItem.tier,
+      reason: stalledItem.reason,
+      daysSinceCreation: stalledItem.daysSinceCreation,
+      progress: stalledItem.progress,
+      deadlineAt: stalledItem.deadlineAt?.toISOString() ?? null,
+      willAutoExpire,
+    },
+  };
+}
+
 export async function listStuckWatchItems(
   orgId: string,
   options?: { includeResolved?: boolean }
@@ -231,6 +359,13 @@ export async function listStuckWatchItems(
     items.push(item);
   }
 
+  for (const approval of approvals) {
+    const item = buildD1Item(approval, resolved, now);
+    if (!item) continue;
+    if (!options?.includeResolved && item.status === "resolved") continue;
+    items.push(item);
+  }
+
   return items.sort(
     (a, b) => new Date(b.detectedAt).getTime() - new Date(a.detectedAt).getTime()
   );
@@ -247,5 +382,6 @@ export async function getStuckWatchItem(
 export function stuckWatchKindFromItemId(itemId: string): StuckWatchKind | null {
   if (itemId.startsWith("w1:")) return "w1_mention_unanswered";
   if (itemId.startsWith("w2:")) return "w2_approved_unfulfilled";
+  if (itemId.startsWith("d1:")) return "d1_decision_stalled";
   return null;
 }

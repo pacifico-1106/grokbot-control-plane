@@ -136,6 +136,81 @@ export function isReplyPolicyEnhancedEnabled(): boolean {
 }
 
 /**
+ * P1: Approval Kind Routes — per-kind approval routing.
+ *
+ * When ON:
+ * - Approvals are routed by kind (post/mail/account/decision/other).
+ * - Tool→kind mapping determines the kind.
+ * - Per-kind routes with approvers, quorum, finalGo, deadline, reminders.
+ * - account kind requires owner/admin human approvers only.
+ *
+ * When OFF (default):
+ * - Existing routes[] (class=admin|business) behavior preserved.
+ * - Default is owner 1名 for all kinds.
+ */
+export function isApprovalKindRoutesEnabled(): boolean {
+  return parseFlag(process.env.P1_APPROVAL_KIND_ROUTES_ENABLED);
+}
+
+/**
+ * P1: Decision Workflow — 3-tier decision system.
+ *
+ * When ON:
+ * - decision.request tool available on Employee MCP.
+ * - T1 (専決), T2 (理事過半数), T3 (社員総会) tiers.
+ * - Tax-excluded amount ≥ 500,000 JPY auto-escalates to T2+.
+ * - Classification-based auto-escalation (定款/役員/決算 → T3).
+ * - Deputy (deputyUserId) manual-only activation.
+ * - Fiscal year starts 4/1.
+ *
+ * When OFF (default):
+ * - decision.request returns feature_disabled error.
+ * - No changes to existing behavior.
+ */
+export function isDecisionWorkflowEnabled(): boolean {
+  return parseFlag(process.env.P1_DECISION_WORKFLOW_ENABLED);
+}
+
+/**
+ * P1: Topic-Gated Posting — sensitivity-based approval for posts.
+ *
+ * When ON:
+ * - Posts to registered main-board channels undergo sensitivity check.
+ * - Non-sensitive replies can skip approval (audit-logged).
+ * - Sensitive topics, attachments, URLs, amount notation require approval.
+ * - Errors/timeouts count as sensitive (fail-closed).
+ * - Secret-detector hits block the post entirely.
+ *
+ * When OFF (default):
+ * - All posts require approval as today.
+ * - No sensitivity-based bypassing.
+ */
+export function isTopicGatedPostingEnabled(): boolean {
+  return parseFlag(process.env.P1_TOPIC_GATED_POSTING_ENABLED);
+}
+
+/**
+ * P1: Plan Rails — per-plan MCP allowlists and approval route templates.
+ *
+ * When ON:
+ * - Gateway tools are filtered by org.plan_key → code-defined scopes
+ * - Admin MCP tools are filtered by org.plan_key → code-defined scopes
+ * - New orgs from Stripe checkout get plan_key from subscription metadata
+ * - Plan changes trigger scope audit and pending approval cancellation
+ * - Fulfill re-checks plan at execution time
+ * - Downgrades at period end (scheduled), cancellation/suspension immediate
+ * - Upgrades require always_human approval before applying
+ *
+ * When OFF (default):
+ * - Existing behavior preserved (byte-identical)
+ * - All scopes available to all orgs (including plan_key = NULL)
+ * - plan_key column may exist but is ignored for scope filtering
+ */
+export function isPlanRailsEnabled(): boolean {
+  return parseFlag(process.env.P1_PLAN_RAILS_ENABLED);
+}
+
+/**
  * LP_INQUIRY_DB_ENABLED: Store LP inquiries in database.
  *
  * When ON:

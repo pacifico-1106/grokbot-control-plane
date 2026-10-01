@@ -7,6 +7,8 @@ import { BrandMark } from "@/components/BrandMark";
 import { useAppSession } from "@/components/AppSessionProvider";
 import { LegalLinks } from "@/components/LegalLinks";
 import { ExpiredTrialBanner } from "@/components/ExpiredTrialBanner";
+import { PlanBadge } from "@/components/PlanBadge";
+import { ScheduledPlanChangeBanner } from "@/components/ScheduledPlanChangeBanner";
 import {
   GUIDE_GROUP_LABEL,
   GUIDE_NAV,
@@ -297,6 +299,14 @@ export function AppShell({
             </div>
           </div>
           <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+            {session.planRailsEnabled && session.planKey ? (
+              <Link
+                href="/app/billing"
+                className="shrink-0 !hidden lg:!inline-flex hover:opacity-80"
+              >
+                <PlanBadge planKey={session.planKey} />
+              </Link>
+            ) : null}
             {session.subscriptionStatus === "expired" ? (
               <Link
                 href="/app/billing"
@@ -336,6 +346,7 @@ export function AppShell({
         </header>
         <main className="flex-1 px-3 sm:px-4 md:px-8 py-5 md:py-6 pb-[max(1.25rem,env(safe-area-inset-bottom))] min-w-0 max-w-full overflow-x-hidden">
           <ExpiredTrialBanner />
+          <ScheduledPlanChangeBanner />
           {children}
         </main>
       </div>
