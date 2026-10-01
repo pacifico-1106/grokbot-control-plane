@@ -20,18 +20,21 @@ import { APPROVAL_KINDS } from "../types";
 
 /**
  * Default consumption tax rate for Japan (10%).
+ * This is the Japan standard rate, not a tenant-specific value.
  * Used when org config doesn't specify a rate.
  */
 export const DEFAULT_CONSUMPTION_TAX_RATE = 0.10;
 
 /**
- * Default amount threshold for T2 escalation (tax-excluded).
- * Used when org config doesn't specify a threshold.
+ * NOTE: DEFAULT_AMOUNT_THRESHOLD_JPY was removed.
+ * Amount thresholds for tier escalation are tenant-specific policy.
+ * The ¥500,000 threshold was みらい社中's policy, not a generic default.
+ * Use tierRouting in DecisionWorkflowConfig for amount-based tier routing.
  */
-export const DEFAULT_AMOUNT_THRESHOLD_JPY = 500000;
 
 /**
  * Default fiscal year start: April 1st (Japan standard).
+ * This is the Japan standard, not a tenant-specific value.
  * Used when org config doesn't specify fiscal year settings.
  */
 export const DEFAULT_FISCAL_YEAR_START_MONTH = 4;
@@ -134,12 +137,15 @@ export function createDefaultDecisionTierRoute(
 
 /**
  * Create default decision workflow config (minimal, single tier).
+ *
+ * NOTE: No amount threshold or keyword escalation is configured by default.
+ * For tenant-specific escalation rules, use tierRouting in the config.
+ * For みらい社中 behavior, apply the mirai-shachu preset.
  */
 export function createDefaultDecisionWorkflowConfig(
   ownerUserId: string
 ): DecisionWorkflowConfig {
   return {
-    amountThresholdJpy: DEFAULT_AMOUNT_THRESHOLD_JPY,
     fiscalYearStartMonth: DEFAULT_FISCAL_YEAR_START_MONTH,
     fiscalYearStartDay: DEFAULT_FISCAL_YEAR_START_DAY,
     consumptionTaxRate: DEFAULT_CONSUMPTION_TAX_RATE,

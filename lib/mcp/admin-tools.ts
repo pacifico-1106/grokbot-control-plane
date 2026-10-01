@@ -1049,7 +1049,7 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
           type: "object",
           description: "Decision workflow config (P1_DECISION_WORKFLOW_ENABLED)",
           properties: {
-            amountThresholdJpy: { type: "number", description: "Tax-excluded amount threshold (default 500000)" },
+            amountThresholdJpy: { type: "number", description: "Tax-excluded amount threshold (deprecated: use tierRouting rules)" },
             fiscalYearStartMonth: { type: "number", description: "1-12 (default 4 for April)" },
             fiscalYearStartDay: { type: "number", description: "1-31 (default 1)" },
             deputyUserId: { type: "string", description: "Deputy user ID (manual activation only)" },

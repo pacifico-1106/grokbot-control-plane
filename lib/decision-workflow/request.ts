@@ -20,8 +20,6 @@ import { createApproval } from "@/lib/data/approvals";
 import { appendAuditEvent } from "@/lib/data/audit";
 import { sendDecisionVotingCard } from "./notify";
 import {
-  CONSUMPTION_TAX_RATE,
-  T3_AUTO_ESCALATION_KEYWORDS,
   type DecisionRequestInput,
   type DecisionRequestResult,
   type DecisionRequestValidation,
@@ -79,227 +77,151 @@ export function calculateFiscalYear(
 }
 
 /**
- * Check if text contains any of the given keywords (case-insensitive substring match).
+ * Check if text contains any of the given keywords (plain substring match).
+ * Used for configurable tier routing rules.
  */
-export function containsKeywords(text: string, keywords: readonly string[]): string[] {
+export function containsKeywords(text: string, keywords: readonly string[]): boolean {
+  if (!keywords || keywords.length === 0) return false;
   const normalized = text.toLowerCase();
-  return keywords.filter((keyword) =>
-    normalized.includes(keyword.toLowerCase())
-  );
+  return keywords.some((keyword) => normalized.includes(keyword.toLowerCase()));
 }
 
 /**
- * Check if title/description contains T3 auto-escalation keywords.
- * @deprecated Use tier routing rules from config instead.
+ * Get the lowest-rank tier from config.
+ * Returns null if no tiers are configured.
  */
-export function containsT3Keywords(text: string): boolean {
-  return containsKeywords(text, T3_AUTO_ESCALATION_KEYWORDS).length > 0;
+function getLowestRankTier(config: DecisionWorkflowConfig | null): DecisionTierRoute | null {
+  if (!config?.tiers || config.tiers.length === 0) return null;
+
+  // Sort by rank (ascending), tiers without rank come first (rank 0)
+  const sorted = [...config.tiers].sort((a, b) => (a.rank ?? 0) - (b.rank ?? 0));
+  return sorted[0];
 }
 
 /**
- * Build tier order map from config.
- * Uses tier.rank if available, otherwise falls back to index.
+ * Get tier rank from config. Returns 0 for unknown tiers.
  */
-function buildTierOrder(config: DecisionWorkflowConfig | null): Record<string, number> {
-  if (!config?.tiers) {
-    // Legacy fallback
-    return { T1: 1, T2: 2, T3: 3 };
-  }
-
-  const orderMap: Record<string, number> = {};
-  const tiersWithRank = config.tiers.map((t, i) => ({
-    tier: t.tier,
-    rank: t.rank ?? i,
-  }));
-
-  // Sort by rank
-  tiersWithRank.sort((a, b) => a.rank - b.rank);
-
-  // Assign order based on sorted position
-  tiersWithRank.forEach((t, i) => {
-    orderMap[t.tier] = i + 1;
-  });
-
-  return orderMap;
+function getTierRank(tier: DecisionTier, config: DecisionWorkflowConfig | null): number {
+  if (!config?.tiers) return 0;
+  const found = config.tiers.find((t) => t.tier === tier);
+  return found?.rank ?? 0;
 }
 
 /**
- * Get the default tier from config.
- */
-function getDefaultTier(config: DecisionWorkflowConfig | null): DecisionTier {
-  if (!config?.tiers || config.tiers.length === 0) {
-    return "T1";
-  }
-
-  if (config.defaultTierId) {
-    return config.defaultTierId;
-  }
-
-  // Use the tier with lowest rank (or first if no ranks)
-  const sortedTiers = [...config.tiers].sort((a, b) => (a.rank ?? 0) - (b.rank ?? 0));
-  return sortedTiers[0].tier;
-}
-
-/**
- * Check if a tier routing rule matches the input.
- */
-function matchesTierRule(
-  rule: TierRoutingRule,
-  input: DecisionRequestInput,
-  taxExcludedAmount: number
-): { matches: boolean; reason?: string } {
-  const match = rule.match;
-  const textToCheck = `${input.title} ${input.description} ${input.category ?? ""}`;
-
-  // Check keywords (any match)
-  if (match.keywords && match.keywords.length > 0) {
-    const matchedKeywords = containsKeywords(textToCheck, match.keywords);
-    if (matchedKeywords.length > 0) {
-      return {
-        matches: true,
-        reason: `KEYWORD_MATCH: ${matchedKeywords.join(", ")}`,
-      };
-    }
-  }
-
-  // Check minAmountJpy
-  if (match.minAmountJpy !== undefined && match.minAmountJpy !== null) {
-    if (taxExcludedAmount >= match.minAmountJpy) {
-      return {
-        matches: true,
-        reason: `AMOUNT_THRESHOLD: ${taxExcludedAmount.toLocaleString()}円(税抜) >= ${match.minAmountJpy.toLocaleString()}円`,
-      };
-    }
-  }
-
-  // Check categories
-  if (match.categories && match.categories.length > 0 && input.category) {
-    if (match.categories.includes(input.category)) {
-      return {
-        matches: true,
-        reason: `CATEGORY_MATCH: ${input.category}`,
-      };
-    }
-  }
-
-  return { matches: false };
-}
-
-/**
- * Determine decision tier using routing rules.
- */
-function determineTierByRouting(
-  input: DecisionRequestInput,
-  config: DecisionWorkflowConfig,
-  taxExcludedAmount: number
-): { tier: DecisionTier; reason: string } | null {
-  if (!config.tierRouting || config.tierRouting.length === 0) {
-    return null;
-  }
-
-  for (const rule of config.tierRouting) {
-    const result = matchesTierRule(rule, input, taxExcludedAmount);
-    if (result.matches) {
-      return {
-        tier: rule.tierId,
-        reason: result.reason ?? `ROUTING_RULE: ${rule.tierId}`,
-      };
-    }
-  }
-
-  return null;
-}
-
-/**
- * Determine decision tier using legacy rules (deprecated).
- * Used when no tier routing rules are configured.
- */
-function determineTierByLegacyRules(
-  input: DecisionRequestInput,
-  config: DecisionWorkflowConfig | null,
-  taxExcludedAmount: number
-): { tier: DecisionTier; reason: string } {
-  const threshold = config?.amountThresholdJpy ?? 500000;
-  const textToCheck = `${input.title} ${input.description} ${input.category ?? ""}`;
-
-  // T3: keywords (deprecated hardcoded list)
-  if (containsT3Keywords(textToCheck)) {
-    return {
-      tier: "T3",
-      reason: "T3_KEYWORD_MATCH (legacy)",
-    };
-  }
-
-  // T2: amount threshold
-  if (taxExcludedAmount >= threshold) {
-    return {
-      tier: "T2",
-      reason: `T2_AMOUNT_THRESHOLD: ${taxExcludedAmount.toLocaleString()}円(税抜) >= ${threshold.toLocaleString()}円`,
-    };
-  }
-
-  // Default: T1
-  return {
-    tier: "T1",
-    reason: "T1_DEFAULT",
-  };
-}
-
-/**
- * Determine decision tier based on amount, category, and keywords.
+ * Determine decision tier based on config.
  *
- * If config has tierRouting rules, they are used.
- * Otherwise, falls back to legacy rules (T3 keywords, T2 amount threshold).
+ * Behavior when no tierRouting is configured:
+ * - NO keyword-based or amount-based auto-escalation
+ * - Request goes to lowest-rank configured tier (or defaultTierId if set)
+ * - Explicitly requested higher tier is honored (upgrade-only semantics)
+ * - Owner can downgrade
  *
- * Requested tier can upgrade but not downgrade (unless by owner).
+ * To get みらい社中 behavior (keyword/amount escalation), apply mirai-shachu preset.
  */
 export function determineDecisionTier(
   input: DecisionRequestInput,
   config: DecisionWorkflowConfig | null,
   isOwner = false
 ): { tier: DecisionTier; reason: string } {
-  const amountJpy = input.amountJpy ?? 0;
-  const taxRate = config?.consumptionTaxRate ?? DEFAULT_CONSUMPTION_TAX_RATE;
-  const taxExcluded = calculateTaxExcludedAmount(amountJpy, input.taxIncluded ?? true, taxRate);
-
-  // Try tier routing rules first
-  let routingResult = config?.tierRouting
-    ? determineTierByRouting(input, config, taxExcluded)
-    : null;
-
-  // Fall back to legacy rules
-  if (!routingResult) {
-    routingResult = determineTierByLegacyRules(input, config, taxExcluded);
+  // No tiers configured = fail closed
+  if (!config?.tiers || config.tiers.length === 0) {
+    return {
+      tier: "T1", // fallback, but handleDecisionRequest will reject
+      reason: "DECISION_TIERS_NOT_CONFIGURED",
+    };
   }
 
-  const tierOrder = buildTierOrder(config);
-  const requiredTier = routingResult.tier;
-  const requiredReason = routingResult.reason;
-  const requiredOrder = tierOrder[requiredTier] ?? 0;
+  // Determine base tier (lowest rank or defaultTierId)
+  let baseTier: DecisionTier;
+  let baseReason: string;
 
-  // Handle requested tier (upgrade only, unless owner)
+  if (config.defaultTierId) {
+    const defaultRoute = config.tiers.find((t) => t.tier === config.defaultTierId);
+    if (defaultRoute) {
+      baseTier = defaultRoute.tier;
+      baseReason = "DEFAULT_TIER";
+    } else {
+      const lowest = getLowestRankTier(config)!;
+      baseTier = lowest.tier;
+      baseReason = "LOWEST_RANK_TIER";
+    }
+  } else {
+    const lowest = getLowestRankTier(config)!;
+    baseTier = lowest.tier;
+    baseReason = "LOWEST_RANK_TIER";
+  }
+
+  // Apply tier routing rules if configured
+  if (config.tierRouting && config.tierRouting.length > 0) {
+    const amountJpy = input.amountJpy ?? 0;
+    const taxRate = config.consumptionTaxRate ?? DEFAULT_CONSUMPTION_TAX_RATE;
+    const taxExcluded = calculateTaxExcludedAmount(amountJpy, input.taxIncluded ?? true, taxRate);
+    const textToCheck = `${input.title} ${input.description} ${input.category ?? ""}`;
+
+    for (const rule of config.tierRouting) {
+      const targetRoute = config.tiers.find((t) => t.tier === rule.tierId);
+      if (!targetRoute) continue;
+
+      const match = rule.match;
+      let matched = false;
+      let matchReason = "";
+
+      // Check keywords
+      if (match.keywords && match.keywords.length > 0) {
+        if (containsKeywords(textToCheck, match.keywords)) {
+          matched = true;
+          matchReason = `KEYWORD_MATCH: ${rule.tierId}`;
+        }
+      }
+
+      // Check minAmountJpy
+      if (!matched && match.minAmountJpy !== undefined && match.minAmountJpy !== null) {
+        if (taxExcluded >= match.minAmountJpy) {
+          matched = true;
+          matchReason = `AMOUNT_THRESHOLD: ${taxExcluded.toLocaleString()}円(税抜) >= ${match.minAmountJpy.toLocaleString()}円 → ${rule.tierId}`;
+        }
+      }
+
+      // Check categories
+      if (!matched && match.categories && match.categories.length > 0) {
+        if (input.category && match.categories.includes(input.category)) {
+          matched = true;
+          matchReason = `CATEGORY_MATCH: ${input.category} → ${rule.tierId}`;
+        }
+      }
+
+      if (matched) {
+        baseTier = rule.tierId;
+        baseReason = matchReason;
+        break; // First matching rule wins
+      }
+    }
+  }
+
+  // Handle requested tier (upgrade-only unless owner)
   const requestedTier = input.requestedTier;
   if (requestedTier) {
-    const requestedOrder = tierOrder[requestedTier] ?? 0;
+    const requestedRank = getTierRank(requestedTier, config);
+    const baseRank = getTierRank(baseTier, config);
 
-    if (requestedOrder > requiredOrder) {
+    if (requestedRank > baseRank) {
       return {
         tier: requestedTier,
-        reason: `REQUESTED_UPGRADE_TO_${requestedTier}`,
+        reason: `REQUESTED_UPGRADE: ${baseTier} → ${requestedTier}`,
       };
     }
 
-    if (requestedOrder < requiredOrder && isOwner) {
+    if (requestedRank < baseRank && isOwner) {
       return {
         tier: requestedTier,
-        reason: `OWNER_DOWNGRADE_TO_${requestedTier}`,
+        reason: `OWNER_DOWNGRADE: ${baseTier} → ${requestedTier}`,
       };
     }
   }
 
   return {
-    tier: requiredTier,
-    reason: requiredReason,
+    tier: baseTier,
+    reason: baseReason,
   };
 }
 
@@ -342,6 +264,15 @@ export function validateDecisionRequest(
   }
 
   const { tier, reason } = determineDecisionTier(input, config, isOwner);
+
+  // Fail closed when no decision tiers are configured
+  if (reason === "DECISION_TIERS_NOT_CONFIGURED") {
+    return {
+      ok: false,
+      errors: ["decision_tiers_not_configured"],
+    };
+  }
+
   const taxRate = config?.consumptionTaxRate ?? DEFAULT_CONSUMPTION_TAX_RATE;
   const taxExcludedAmountJpy = input.amountJpy
     ? calculateTaxExcludedAmount(input.amountJpy, input.taxIncluded ?? true, taxRate)

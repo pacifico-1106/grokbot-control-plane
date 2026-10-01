@@ -8,7 +8,7 @@ export * from "./types";
 export {
   calculateFiscalYear,
   calculateTaxExcludedAmount,
-  containsT3Keywords,
+  containsKeywords,
   determineDecisionTier,
   getTierRoute,
   handleDecisionRequest,

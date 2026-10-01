@@ -7,9 +7,9 @@
  */
 
 // Default (neutral) values used for all organizations
+// NOTE: DEFAULT_AMOUNT_THRESHOLD_JPY was removed - amount thresholds are tenant policy
 export {
   DEFAULT_CONSUMPTION_TAX_RATE,
-  DEFAULT_AMOUNT_THRESHOLD_JPY,
   DEFAULT_FISCAL_YEAR_START_MONTH,
   DEFAULT_FISCAL_YEAR_START_DAY,
   DEFAULT_REMIND_EVERY_DAYS,

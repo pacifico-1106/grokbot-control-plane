@@ -396,188 +396,35 @@ export interface DecisionTierResolution {
 }
 
 /**
- * Tier routing input for determineDecisionTier.
- */
-export interface TierRoutingInput {
-  tiers: DecisionTierRoute[];
-  tierRouting?: import("./types").TierRoutingRule[];
-  defaultTierId?: DecisionTier;
-  amountJpy: number | null;
-  amountThresholdJpy: number;
-  text?: string;
-  category?: string | null;
-}
-
-/**
- * Check if text contains any keyword (case-insensitive substring match).
- */
-function containsKeyword(text: string, keywords: string[]): string | null {
-  const normalized = text.toLowerCase();
-  for (const keyword of keywords) {
-    if (normalized.includes(keyword.toLowerCase())) {
-      return keyword;
-    }
-  }
-  return null;
-}
-
-/**
- * Get the default tier from input.
- */
-function getDefaultTierRoute(input: TierRoutingInput): DecisionTierRoute | null {
-  if (input.tiers.length === 0) return null;
-
-  // Use defaultTierId if specified
-  if (input.defaultTierId) {
-    const tier = input.tiers.find((t) => t.tier === input.defaultTierId);
-    if (tier) return tier;
-  }
-
-  // Use the tier with lowest rank (or first if no ranks)
-  const sortedTiers = [...input.tiers].sort((a, b) => (a.rank ?? 0) - (b.rank ?? 0));
-  return sortedTiers[0];
-}
-
-/**
- * Determine the appropriate decision tier based on routing rules.
- * Used in D1 PR for decision.request routing.
+ * Determine decision tier - returns lowest-rank tier.
  *
- * If tierRouting rules are provided, they are evaluated in order.
- * Otherwise, falls back to legacy rules (T1/T2/T3).
+ * NOTE: Auto-escalation based on keywords or amounts is NO LONGER performed here.
+ * This was removed because keyword/amount thresholds are tenant-specific values
+ * (e.g., 定款変更/役員/決算 keywords and ¥500,000 threshold are みらい社中 policy).
+ *
+ * To enable keyword/amount-based tier routing, use tierRouting in DecisionWorkflowConfig.
+ * This function now only returns the lowest-rank tier (or first tier if no ranks).
+ *
+ * For みらい社中 behavior (keyword/amount escalation), apply the mirai-shachu preset.
+ *
+ * @deprecated Use determineDecisionTier from lib/decision-workflow/request.ts which
+ * supports configurable tierRouting rules.
  */
 export function determineDecisionTier(
   tiers: DecisionTierRoute[],
-  amountJpy: number | null,
-  amountThresholdJpy: number,
-  classification: string | null,
-  options?: {
-    tierRouting?: import("./types").TierRoutingRule[];
-    defaultTierId?: DecisionTier;
-    text?: string;
-    category?: string | null;
-  }
+  _amountJpy: number | null,
+  _amountThresholdJpy: number,
+  _classification: string | null
 ): DecisionTierResolution | null {
   if (tiers.length === 0) return null;
 
-  const text = options?.text ?? "";
+  // Sort by rank (ascending), tiers without rank come first (rank 0)
+  const sorted = [...tiers].sort((a, b) => (a.rank ?? 0) - (b.rank ?? 0));
+  const lowestTier = sorted[0];
 
-  // Try tier routing rules first
-  if (options?.tierRouting && options.tierRouting.length > 0) {
-    for (const rule of options.tierRouting) {
-      const route = tiers.find((t) => t.tier === rule.tierId);
-      if (!route) continue;
-
-      const match = rule.match;
-
-      // Check keywords
-      if (match.keywords && match.keywords.length > 0) {
-        const matched = containsKeyword(text, match.keywords);
-        if (matched) {
-          return {
-            tier: rule.tierId,
-            route,
-            autoEscalated: true,
-            escalationReason: `keyword: ${matched}`,
-          };
-        }
-      }
-
-      // Check minAmountJpy
-      if (match.minAmountJpy !== undefined && amountJpy !== null) {
-        if (amountJpy >= match.minAmountJpy) {
-          return {
-            tier: rule.tierId,
-            route,
-            autoEscalated: true,
-            escalationReason: `amount: ${amountJpy} >= ${match.minAmountJpy}`,
-          };
-        }
-      }
-
-      // Check categories
-      if (match.categories && match.categories.length > 0) {
-        const cat = options?.category ?? classification;
-        if (cat && match.categories.includes(cat)) {
-          return {
-            tier: rule.tierId,
-            route,
-            autoEscalated: true,
-            escalationReason: `category: ${cat}`,
-          };
-        }
-      }
-    }
-
-    // No rule matched, use default
-    const defaultRoute = getDefaultTierRoute({
-      tiers,
-      defaultTierId: options?.defaultTierId,
-      amountJpy,
-      amountThresholdJpy,
-    });
-    if (defaultRoute) {
-      return {
-        tier: defaultRoute.tier,
-        route: defaultRoute,
-        autoEscalated: false,
-        escalationReason: null,
-      };
-    }
-  }
-
-  // Legacy fallback when no tierRouting is configured
-  const t1 = tiers.find((t) => t.tier === "T1");
-  const t2 = tiers.find((t) => t.tier === "T2");
-  const t3 = tiers.find((t) => t.tier === "T3");
-
-  // Classification-based auto-escalation to T3 (legacy)
-  // Note: This hardcoded list is deprecated. Use tierRouting instead.
-  const legacyT3Classifications = ["定款変更", "役員", "決算"];
-  if (classification && legacyT3Classifications.includes(classification)) {
-    if (t3) {
-      return {
-        tier: "T3",
-        route: t3,
-        autoEscalated: true,
-        escalationReason: `classification: ${classification} (legacy)`,
-      };
-    }
-  }
-
-  // Amount-based auto-escalation to T2+
-  if (amountJpy !== null && amountJpy >= amountThresholdJpy) {
-    if (t2) {
-      return {
-        tier: "T2",
-        route: t2,
-        autoEscalated: true,
-        escalationReason: `amount: ${amountJpy} >= ${amountThresholdJpy}`,
-      };
-    }
-    if (t3) {
-      return {
-        tier: "T3",
-        route: t3,
-        autoEscalated: true,
-        escalationReason: `amount: ${amountJpy} >= ${amountThresholdJpy} (no T2)`,
-      };
-    }
-  }
-
-  // Default to T1
-  if (t1) {
-    return {
-      tier: "T1",
-      route: t1,
-      autoEscalated: false,
-      escalationReason: null,
-    };
-  }
-
-  // Fallback to first available tier
   return {
-    tier: tiers[0].tier,
-    route: tiers[0],
+    tier: lowestTier.tier,
+    route: lowestTier,
     autoEscalated: false,
     escalationReason: null,
   };

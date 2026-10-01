@@ -74,9 +74,8 @@ export interface DecisionTierRoute {
   tier: DecisionTier;
   /** Display name in Japanese */
   nameJa: string;
-  /** Ordering rank (higher = more escalated). Must be unique within org. */
+  /** Tier rank for ordering (lower = less authority). Used for upgrade-only semantics. */
   rank?: number;
-  /** Approver user IDs for this tier */
   approverUserIds: string[];
   /** Optional voter weights for weighted voting */
   voterWeights?: Record<string, number>;
@@ -127,11 +126,39 @@ export interface TopicGateConfig {
 }
 
 /**
+ * Tier routing rule match conditions.
+ * Plain substring matching for keywords (no regex for security).
+ */
+export interface TierMatchCondition {
+  /** Keywords to match in title/description (plain substring match) */
+  keywords?: string[];
+  /** Minimum amount (tax-excluded) to trigger this tier */
+  minAmountJpy?: number;
+  /** Categories to match */
+  categories?: string[];
+}
+
+/**
+ * Tier routing rule.
+ * Rules are evaluated in order; first match wins.
+ */
+export interface TierRoutingRule {
+  /** Target tier ID */
+  tierId: DecisionTier;
+  /** Match conditions */
+  match: TierMatchCondition;
+}
+
+/**
  * Decision workflow configuration.
+ *
+ * Note: amountThresholdJpy is deprecated. Use tierRouting rules for
+ * amount-based tier escalation (e.g., { tierId: "T2", match: { minAmountJpy: 500000 } }).
+ * The field is kept for backward compatibility with existing policies.
  */
 export interface DecisionWorkflowConfig {
-  /** Tax-excluded amount threshold for legacy T2 escalation (deprecated, use tierRouting) */
-  amountThresholdJpy: number;
+  /** @deprecated Use tierRouting rules for amount-based escalation */
+  amountThresholdJpy?: number;
   fiscalYearStartMonth: number;
   fiscalYearStartDay: number;
   /** Consumption tax rate (default 0.10 = 10%). Must be between 0 and 1. */

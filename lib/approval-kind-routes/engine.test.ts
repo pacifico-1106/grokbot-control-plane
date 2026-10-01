@@ -358,36 +358,45 @@ describe("determineDecisionTier", () => {
     },
   ];
 
-  test("defaults to T1 for small amounts", () => {
+  // NOTE: This function no longer auto-escalates based on amount or keywords.
+  // It now returns the lowest-rank tier (or first tier if no ranks).
+  // Keyword/amount-based escalation requires tierRouting config.
+  // See lib/decision-workflow/request.ts determineDecisionTier for configurable routing.
+
+  test("returns lowest-rank tier regardless of amount", () => {
     const result = determineDecisionTier(mockTiers, 100000, 500000, null);
     expect(result?.tier).toBe("T1");
     expect(result?.autoEscalated).toBe(false);
   });
 
-  test("auto-escalates to T2 for large amounts", () => {
+  test("returns lowest-rank tier regardless of large amount (no auto-escalation)", () => {
     const result = determineDecisionTier(mockTiers, 500000, 500000, null);
-    expect(result?.tier).toBe("T2");
-    expect(result?.autoEscalated).toBe(true);
-    expect(result?.escalationReason).toContain("amount");
+    // No longer auto-escalates - returns lowest tier
+    expect(result?.tier).toBe("T1");
+    expect(result?.autoEscalated).toBe(false);
   });
 
-  test("auto-escalates to T3 for 定款変更", () => {
+  test("returns lowest-rank tier regardless of keywords (no auto-escalation)", () => {
+    // Keywords like 定款変更, 役員, 決算 no longer trigger auto-escalation
+    // Use tierRouting config for keyword-based routing
     const result = determineDecisionTier(mockTiers, 0, 500000, "定款変更");
-    expect(result?.tier).toBe("T3");
-    expect(result?.autoEscalated).toBe(true);
-    expect(result?.escalationReason).toContain("定款変更");
+    expect(result?.tier).toBe("T1");
+    expect(result?.autoEscalated).toBe(false);
   });
 
-  test("auto-escalates to T3 for 役員", () => {
-    const result = determineDecisionTier(mockTiers, 0, 500000, "役員");
-    expect(result?.tier).toBe("T3");
-    expect(result?.autoEscalated).toBe(true);
+  test("respects tier rank when configured", () => {
+    const tiersWithRank = [
+      { ...mockTiers[0], rank: 1 },
+      { ...mockTiers[1], rank: 2 },
+      { ...mockTiers[2], rank: 3 },
+    ];
+    const result = determineDecisionTier(tiersWithRank, 0, 500000, null);
+    expect(result?.tier).toBe("T1");
   });
 
-  test("auto-escalates to T3 for 決算", () => {
-    const result = determineDecisionTier(mockTiers, 0, 500000, "決算");
-    expect(result?.tier).toBe("T3");
-    expect(result?.autoEscalated).toBe(true);
+  test("returns first tier when no ranks configured", () => {
+    const result = determineDecisionTier(mockTiers, 0, 500000, null);
+    expect(result?.tier).toBe("T1");
   });
 });
 
