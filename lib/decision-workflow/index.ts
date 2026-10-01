@@ -32,3 +32,23 @@ export {
   type DecisionProgressState,
   type DecisionStuckItem,
 } from "./progress";
+
+export {
+  buildReturnNotification,
+  formatMinutesAsJson,
+  formatMinutesAsMarkdown,
+  generateDecisionMinutes,
+  isConnectSharedChannel,
+  recordDecisionResult,
+  validateReturnTarget,
+  type DecisionMinutes,
+  type DecisionResult,
+  type DecisionResultStatus,
+  type ReturnNotificationConfig,
+} from "./result";
+
+export {
+  isDecisionRequest,
+  sendDecisionVotingCard,
+  type DecisionNotificationResult,
+} from "./notify";
