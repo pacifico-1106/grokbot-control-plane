@@ -514,7 +514,15 @@ export type AuditAction =
   | "voter_binding.resend_rate_limited"
   | "voter_binding.resend_failed"
   | "voter_binding.resend_success"
-  | "voter_binding.unlock_via_resend";
+  | "voter_binding.unlock_via_resend"
+  | "approval_routes.patch"
+  | "approval_routes.patch_conflict"
+  | "topic_gate.triggered"
+  | "decision.requested"
+  | "decision.vote_recorded"
+  | "decision.resolved"
+  | "decision.expired"
+  | "decision.deputy_activated";
 
 export interface Org {
   id: string;
