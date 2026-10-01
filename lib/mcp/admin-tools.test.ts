@@ -29,7 +29,7 @@ function demoCred(): ResolvedAdminCredential {
 }
 
 describe("employee MCP tool list", () => {
-  test("employee MCP includes whoami / invoke / poll / health / stuck watch", () => {
+  test("employee MCP includes whoami / invoke / poll / health / stuck watch / decision_request", () => {
     expect(EMPLOYEE_NAMES).toEqual([
       "staffpass_whoami",
       "staffpass_invoke",
@@ -37,6 +37,7 @@ describe("employee MCP tool list", () => {
       "staffpass_health",
       "staffpass_stuck_list",
       "staffpass_stuck_retry",
+      "staffpass_decision_request",
     ]);
     expect([...STAFFPASS_MCP_TOOL_NAMES]).toEqual(EMPLOYEE_NAMES);
   });
