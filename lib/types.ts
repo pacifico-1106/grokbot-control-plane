@@ -528,6 +528,9 @@ export type AuditAction =
   | "plan.downgrade_cancelled"
   | "plan.billing_status_narrowed"
   | "plan.changed"
+  | "plan.upgrade_requested"
+  | "plan.upgrade_applied"
+  | "plan.upgrade_rejected"
   | "approval.cancelled_by_plan_change";
 
 export interface Org {
