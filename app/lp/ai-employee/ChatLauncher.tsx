@@ -184,147 +184,172 @@ export function ChatLauncher({
     [csrfToken]
   );
 
-  if (!open) {
-    return (
-      <button
-        type="button"
-        onClick={() => setOpen(true)}
-        className="fixed bottom-4 left-4 z-[45] sm:bottom-6 sm:left-6 btn btn-primary shadow-lg rounded-full w-12 h-12 p-0 sm:w-auto sm:h-auto sm:px-4 sm:py-2 flex items-center justify-center"
-        aria-haspopup="dialog"
-        aria-label="AIに相談する"
-        data-testid="lp-chat-launcher"
-      >
-        {/* Compact on phones so it does not sit under the floating video card */}
-        <span className="sm:hidden text-xs font-semibold">AI相談</span>
-        <span className="hidden sm:inline">AIに相談する</span>
-      </button>
-    );
-  }
-
   return (
-    <div
-      role="dialog"
-      aria-label="AI相談窓口"
-      data-testid="lp-chat-panel"
-      className="fixed bottom-4 left-4 right-4 z-50 sm:right-auto sm:bottom-6 sm:left-6 sm:w-[380px] max-h-[80vh] flex flex-col rounded-2xl border border-[var(--border)] bg-[var(--bg-elevated)] shadow-2xl"
-    >
-      <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--border-soft)]">
-        <div>
-          <div className="text-sm font-semibold">AI相談窓口</div>
-          <div className="text-xs faint">応答するのはAIです（人ではありません）</div>
-        </div>
+    <>
+      {/* Phones: reserve the space the fixed dock covers so the footer can scroll clear of it. */}
+      <div aria-hidden="true" className="h-[var(--lp-chat-dock-h)] sm:hidden" />
+      {/*
+        Phones (< sm): the launcher sits in its own fixed bottom bar next to a
+        相談する link instead of floating over the page, so it can never cover the
+        page's full-width 相談する CTAs or the YouTube promo (which is lifted above
+        the bar via --lp-chat-dock-h). From sm up the bar is display:contents and
+        the launcher floats bottom-left as before.
+      */}
+      <div
+        data-testid="lp-chat-dock"
+        className="fixed inset-x-0 bottom-0 z-[45] h-[var(--lp-chat-dock-h)] flex items-start gap-2 px-4 pt-2 border-t border-[var(--border-soft)] bg-[color-mix(in_oklab,var(--bg)_88%,transparent)] backdrop-blur-xl sm:contents"
+      >
         <button
           type="button"
-          onClick={() => setOpen(false)}
-          className="text-sm faint hover:text-[var(--text)]"
-          aria-label="閉じる"
+          onClick={() => setOpen((v) => !v)}
+          className={`btn shrink-0 bg-transparent text-[var(--accent-strong)] border-[color-mix(in_oklab,var(--accent-strong)_45%,var(--border))]! sm:fixed sm:bottom-6 sm:left-6 sm:z-[45] sm:bg-[linear-gradient(135deg,var(--accent),#79eaf3)] sm:text-[var(--accent-fg)] sm:font-bold! sm:border-transparent! sm:shadow-lg ${open ? "sm:hidden!" : ""}`}
+          aria-haspopup="dialog"
+          aria-expanded={open}
+          aria-label="AIに相談する"
+          data-testid="lp-chat-launcher"
         >
-          ✕
+          <svg className="w-4 h-4 shrink-0 sm:hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M8 10h8M8 14h5M21 12c0 4.418-4.03 8-9 8a9.86 9.86 0 01-4-.83L3 20l1.4-3.73A7.6 7.6 0 013 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"
+            />
+          </svg>
+          <span className="sm:hidden">AI相談</span>
+          <span className="hidden sm:inline">AIに相談する</span>
         </button>
+        <Link href="/lp/ai-employee/consult" className="btn btn-primary flex-1 min-w-0 sm:hidden!">
+          相談する
+        </Link>
       </div>
 
-      {!csrfToken ? (
-        <div className="p-4 flex flex-col gap-3 text-sm" data-testid="lp-chat-consent">
-          <p>
-            この窓口ではAIがご質問にお答えします。料金や契約は画面で確認してから確定し、会話だけで申込は成立しません。
-            パスワードやカード番号は入力しないでください。
-          </p>
-          <label className="flex items-start gap-2">
-            <input
-              type="checkbox"
-              checked={consented}
-              onChange={(e) => setConsented(e.target.checked)}
-              className="mt-1"
-            />
-            <span>
-              AIが応答することを理解し、
-              <Link href="/legal/privacy" target="_blank" className="underline">
-                プライバシーポリシー
-              </Link>
-              に同意します。
-            </span>
-          </label>
-          {turnstileSiteKey && <div ref={turnstileRef} />}
-          <button
-            type="button"
-            className="btn btn-primary"
-            disabled={!consented || busy || (!!turnstileSiteKey && !turnstileToken)}
-            onClick={startJourney}
-          >
-            相談をはじめる
-          </button>
-        </div>
-      ) : (
-        <>
-          <div ref={listRef} className="flex-1 overflow-y-auto p-4 flex flex-col gap-3 text-sm" aria-live="polite">
-            {messages.map((m) => (
-              <div key={m.id} className={m.role === "user" ? "self-end max-w-[85%]" : "self-start max-w-[90%]"}>
-                <div
-                  className={
-                    m.role === "user"
-                      ? "rounded-xl px-3 py-2 bg-[var(--accent-strong)] text-white whitespace-pre-wrap"
-                      : "rounded-xl px-3 py-2 bg-[var(--bg-soft)] whitespace-pre-wrap"
-                  }
-                >
-                  {m.text}
-                </div>
-                {m.cards?.map((card, i) =>
-                  card.type === "proposal_card" ? (
-                    <div key={i} className="mt-2 rounded-xl border border-[var(--border)] p-3" data-testid="lp-chat-proposal">
-                      <div className="font-semibold">{card.displayName}</div>
-                      <div className="text-xs faint mt-1">
-                        初期 {yen(card.setupAmountExTax)} ／ 月額 {yen(card.monthlyAmountExTax)}
-                      </div>
-                      {card.note && <div className="text-xs faint mt-1">{card.note}</div>}
-                      <Link href={card.checkoutUrl} className="btn btn-primary text-xs mt-2 inline-block">
-                        申込内容を確認する
-                      </Link>
-                    </div>
-                  ) : handoffEnabled ? (
-                    <div key={i} className="mt-2 rounded-xl border border-[var(--border)] p-3" data-testid="lp-chat-handoff">
-                      <div className="text-xs faint">担当者に共有する内容（次の画面で編集できます）</div>
-                      <div className="mt-1 whitespace-pre-wrap">{card.summaryDraft}</div>
-                      <button
-                        type="button"
-                        className="btn btn-primary text-xs mt-2"
-                        disabled={busy}
-                        onClick={() => requestHandoff(card)}
-                      >
-                        内容を確認して相談を依頼する
-                      </button>
-                    </div>
-                  ) : null
-                )}
-              </div>
-            ))}
-            {busy && <div className="self-start text-xs faint">考えています…</div>}
-          </div>
-          <form
-            className="flex gap-2 p-3 border-t border-[var(--border-soft)]"
-            onSubmit={(e) => {
-              e.preventDefault();
-              void send();
-            }}
-          >
-            <input
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              maxLength={2000}
-              placeholder="任せたい業務を入力"
-              className="flex-1 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm"
-              aria-label="メッセージ"
-            />
-            <button type="submit" className="btn btn-primary text-sm" disabled={busy || !input.trim()}>
-              送信
+      {open && (
+        <div
+          role="dialog"
+          aria-label="AI相談窓口"
+          data-testid="lp-chat-panel"
+          className="fixed left-4 right-4 z-50 bottom-[calc(var(--lp-chat-dock-h)+0.5rem)] max-h-[min(80vh,calc(100dvh-var(--lp-chat-dock-h)-1.5rem))] sm:right-auto sm:bottom-6 sm:left-6 sm:w-[380px] sm:max-h-[80vh] flex flex-col rounded-2xl border border-[var(--border)] bg-[var(--bg-elevated)] shadow-2xl"
+        >
+          <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--border-soft)]">
+            <div>
+              <div className="text-sm font-semibold">AI相談窓口</div>
+              <div className="text-xs faint">応答するのはAIです（人ではありません）</div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setOpen(false)}
+              className="text-sm faint hover:text-[var(--text)]"
+              aria-label="閉じる"
+            >
+              ✕
             </button>
-          </form>
-        </>
-      )}
-      {error && (
-        <div className="px-4 pb-3 text-xs text-red-500" role="alert">
-          {error}
+          </div>
+
+          {!csrfToken ? (
+            <div className="p-4 flex flex-col gap-3 text-sm" data-testid="lp-chat-consent">
+              <p>
+                この窓口ではAIがご質問にお答えします。料金や契約は画面で確認してから確定し、会話だけで申込は成立しません。
+                パスワードやカード番号は入力しないでください。
+              </p>
+              <label className="flex items-start gap-2">
+                <input
+                  type="checkbox"
+                  checked={consented}
+                  onChange={(e) => setConsented(e.target.checked)}
+                  className="mt-1"
+                />
+                <span>
+                  AIが応答することを理解し、
+                  <Link href="/legal/privacy" target="_blank" className="underline">
+                    プライバシーポリシー
+                  </Link>
+                  に同意します。
+                </span>
+              </label>
+              {turnstileSiteKey && <div ref={turnstileRef} />}
+              <button
+                type="button"
+                className="btn btn-primary"
+                disabled={!consented || busy || (!!turnstileSiteKey && !turnstileToken)}
+                onClick={startJourney}
+              >
+                相談をはじめる
+              </button>
+            </div>
+          ) : (
+            <>
+              <div ref={listRef} className="flex-1 overflow-y-auto p-4 flex flex-col gap-3 text-sm" aria-live="polite">
+                {messages.map((m) => (
+                  <div key={m.id} className={m.role === "user" ? "self-end max-w-[85%]" : "self-start max-w-[90%]"}>
+                    <div
+                      className={
+                        m.role === "user"
+                          ? "rounded-xl px-3 py-2 bg-[var(--accent-strong)] text-white whitespace-pre-wrap"
+                          : "rounded-xl px-3 py-2 bg-[var(--bg-soft)] whitespace-pre-wrap"
+                      }
+                    >
+                      {m.text}
+                    </div>
+                    {m.cards?.map((card, i) =>
+                      card.type === "proposal_card" ? (
+                        <div key={i} className="mt-2 rounded-xl border border-[var(--border)] p-3" data-testid="lp-chat-proposal">
+                          <div className="font-semibold">{card.displayName}</div>
+                          <div className="text-xs faint mt-1">
+                            初期 {yen(card.setupAmountExTax)} ／ 月額 {yen(card.monthlyAmountExTax)}
+                          </div>
+                          {card.note && <div className="text-xs faint mt-1">{card.note}</div>}
+                          <Link href={card.checkoutUrl} className="btn btn-primary text-xs mt-2 inline-block">
+                            申込内容を確認する
+                          </Link>
+                        </div>
+                      ) : handoffEnabled ? (
+                        <div key={i} className="mt-2 rounded-xl border border-[var(--border)] p-3" data-testid="lp-chat-handoff">
+                          <div className="text-xs faint">担当者に共有する内容（次の画面で編集できます）</div>
+                          <div className="mt-1 whitespace-pre-wrap">{card.summaryDraft}</div>
+                          <button
+                            type="button"
+                            className="btn btn-primary text-xs mt-2"
+                            disabled={busy}
+                            onClick={() => requestHandoff(card)}
+                          >
+                            内容を確認して相談を依頼する
+                          </button>
+                        </div>
+                      ) : null
+                    )}
+                  </div>
+                ))}
+                {busy && <div className="self-start text-xs faint">考えています…</div>}
+              </div>
+              <form
+                className="flex gap-2 p-3 border-t border-[var(--border-soft)]"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  void send();
+                }}
+              >
+                <input
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  maxLength={2000}
+                  placeholder="任せたい業務を入力"
+                  className="flex-1 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm"
+                  aria-label="メッセージ"
+                />
+                <button type="submit" className="btn btn-primary text-sm" disabled={busy || !input.trim()}>
+                  送信
+                </button>
+              </form>
+            </>
+          )}
+          {error && (
+            <div className="px-4 pb-3 text-xs text-red-500" role="alert">
+              {error}
+            </div>
+          )}
         </div>
       )}
-    </div>
+    </>
   );
 }

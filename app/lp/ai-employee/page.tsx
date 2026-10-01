@@ -809,7 +809,7 @@ export default function AIEmployeeLP() {
       </footer>
 
       {/* Floating YouTube promo player */}
-      <FloatingYouTubePromo />
+      <FloatingYouTubePromo liftForChatDock={isLpChatEnabled()} />
 
       {/* AI consultation chat: rendered only when LP_CHAT_ENABLED is ON */}
       {isLpChatEnabled() && (
