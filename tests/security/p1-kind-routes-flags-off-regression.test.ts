@@ -20,6 +20,10 @@ mock.module("@/lib/supabase", () => ({
 }));
 mock.module("@/lib/mode", () => ({
   isDemoMode: () => true,
+  isSupabaseConfigured: () => false,
+  isStripeConfigured: () => false,
+  isResendConfigured: () => false,
+  runtimeModeLabel: () => "demo",
 }));
 
 const envBackup = {
@@ -265,5 +269,134 @@ describe("FLAGS-OFF REGRESSION: Tool kind mapping behavior preserved", () => {
     expect(getToolApprovalKind("employees.issue")).toBe("account");
     expect(getToolApprovalKind("decision.request")).toBe("decision");
     expect(getToolApprovalKind("unknown.tool")).toBe("other");
+  });
+});
+
+describe("FLAGS-OFF REGRESSION: Decision workflow functions no-op when flag OFF", () => {
+  test("sendDecisionVotingCard returns empty array when flag OFF", async () => {
+    const { sendDecisionVotingCard } = await import("@/lib/decision-workflow");
+    const mockApproval = {
+      id: "test-approval",
+      orgId: "test-org",
+      employeeId: "test-employee",
+      credentialId: "test-cred",
+      title: "Test Decision",
+      summary: "Test summary",
+      purpose: "test",
+      risk: "medium" as const,
+      tool: "decision.request",
+      status: "pending" as const,
+      metadata: { type: "decision_request", tier: "T2" },
+      createdAt: new Date().toISOString(),
+      pollPath: "/api/approvals/test-approval/poll",
+      revisionNote: null,
+      revisionCount: 0,
+      parentApprovalId: null,
+      telegramRef: null,
+      telegramMessageId: null,
+      slackRef: null,
+      slackMessageTs: null,
+      jobId: "test-job",
+    };
+
+    const results = await sendDecisionVotingCard(mockApproval);
+    expect(results).toEqual([]);
+  });
+
+  test("checkAndExpireT2Decision skips when flag OFF", async () => {
+    const { checkAndExpireT2Decision } = await import("@/lib/decision-workflow");
+    const mockApproval = {
+      id: "test-approval",
+      orgId: "test-org",
+      employeeId: "test-employee",
+      credentialId: "test-cred",
+      title: "Test Decision",
+      summary: "Test summary",
+      purpose: "test",
+      risk: "medium" as const,
+      tool: "decision.request",
+      status: "pending" as const,
+      metadata: { type: "decision_request", tier: "T2" },
+      createdAt: new Date(Date.now() - 100 * 60 * 60 * 1000).toISOString(), // 100h ago
+      pollPath: "/api/approvals/test-approval/poll",
+      revisionNote: null,
+      revisionCount: 0,
+      parentApprovalId: null,
+      telegramRef: null,
+      telegramMessageId: null,
+      slackRef: null,
+      slackMessageTs: null,
+      jobId: "test-job",
+    };
+
+    const result = await checkAndExpireT2Decision(mockApproval);
+    expect(result.action).toBe("skipped");
+    expect(result.reason).toBe("decision_workflow_disabled");
+  });
+
+  test("runT2ExpiryCron returns empty results when flag OFF", async () => {
+    const { runT2ExpiryCron } = await import("@/lib/decision-workflow");
+
+    const result = await runT2ExpiryCron("test-org");
+    expect(result.ok).toBe(true);
+    expect(result.processed).toBe(0);
+    expect(result.rejected).toBe(0);
+    expect(result.results).toEqual([]);
+  });
+
+  test("handleDeputyActivate returns disabled when flag OFF", async () => {
+    const { handleDeputyActivate } = await import("@/lib/approval-kind-routes/mcp-handlers");
+    const mockCred = {
+      orgId: "test-org",
+      userId: "test-user",
+      email: "test@example.com",
+      role: "admin" as const,
+      isOwner: true,
+      isPlatformOps: false,
+      grokBotAgentId: null,
+      adminAgentId: null,
+      actorId: "test-actor",
+      generation: 1,
+      via: "test" as const,
+      agent: null,
+    };
+
+    const result = await handleDeputyActivate(mockCred, {
+      approvalId: "test-approval",
+      deputyUserId: "test-deputy",
+    });
+    expect(result.ok).toBe(false);
+    expect(result.code).toBe("decision_workflow_disabled");
+  });
+
+  test("fulfillDeputyActivate returns disabled when flag OFF", async () => {
+    const { fulfillDeputyActivate } = await import("@/lib/approval-kind-routes/mcp-handlers");
+    const mockApproval = {
+      id: "test-approval",
+      orgId: "test-org",
+      employeeId: "test-employee",
+      credentialId: "test-cred",
+      title: "Test Deputy",
+      summary: "Test summary",
+      purpose: "decision.deputy_activate",
+      risk: "medium" as const,
+      tool: "decision.deputyActivate",
+      status: "approved" as const,
+      metadata: { type: "deputy_activation", originalApprovalId: "orig-1", deputyUserId: "deputy-1" },
+      createdAt: new Date().toISOString(),
+      pollPath: "/api/approvals/test-approval/poll",
+      revisionNote: null,
+      revisionCount: 0,
+      parentApprovalId: null,
+      telegramRef: null,
+      telegramMessageId: null,
+      slackRef: null,
+      slackMessageTs: null,
+      jobId: "test-job",
+    };
+
+    const result = await fulfillDeputyActivate(mockApproval, {});
+    expect(result.ok).toBe(false);
+    expect(result.code).toBe("decision_workflow_disabled");
   });
 });
