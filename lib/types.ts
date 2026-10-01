@@ -522,7 +522,13 @@ export type AuditAction =
   | "decision.vote_recorded"
   | "decision.resolved"
   | "decision.expired"
-  | "decision.deputy_activated";
+  | "decision.deputy_activated"
+  | "plan.downgrade_scheduled"
+  | "plan.downgrade_applied"
+  | "plan.downgrade_cancelled"
+  | "plan.billing_status_narrowed"
+  | "plan.changed"
+  | "approval.cancelled_by_plan_change";
 
 export interface Org {
   id: string;
