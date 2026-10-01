@@ -28,7 +28,7 @@ export async function GET(req: Request) {
     const results = await processW1MentionWatchAllOrgs();
     const notified = results.filter((row) => row.ok && !row.skipped);
 
-    let t2Expiry = { candidates: 0, rejected: 0, skipped: 0, errors: 0 };
+    const t2Expiry = { candidates: 0, rejected: 0, skipped: 0, errors: 0 };
 
     if (isDecisionWorkflowEnabled()) {
       const now = new Date();
