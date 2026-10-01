@@ -9,6 +9,7 @@
 import { NextResponse } from "next/server";
 import { getSessionContext } from "@/lib/auth/session";
 import { isApprovalKindRoutesEnabled } from "@/lib/feature-flags";
+import { assertApiPlanAllows } from "@/lib/billing/plan-api-gate";
 import {
   getOrgApprovalKindRoutesPolicy,
   getEffectiveApprovalKindRoute,
@@ -122,6 +123,9 @@ export async function POST(req: Request) {
   if (!isApprovalKindRoutesEnabled()) {
     return jsonError("feature_disabled", 403);
   }
+
+  const planGate = await assertApiPlanAllows(orgId, "approval_routes", "承認ルート設定の変更");
+  if (!planGate.ok) return planGate.response;
 
   let body: Record<string, unknown>;
   try {
