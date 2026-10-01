@@ -6,10 +6,27 @@ const approval = { id: "ticket", orgId: "org", employeeId: "", status: "pending"
 const instance = { id: "instance", approval_id: "ticket", org_id: "org", status: "active", current_stage_index: 0,
   policy_snapshot: { version: 1, policyId: "policy", policyName: "fixture", stages: [
     { id: "s", nameJa: "s", voterUserIds: ["member"], quorum: { type: "any" }, onReject: "fail_closed" } ] } };
-mock.module("@/lib/mode", () => ({ isDemoMode: () => false }));
+mock.module("@/lib/mode", () => ({
+  isDemoMode: () => false,
+  isSupabaseConfigured: () => true,
+  isStripeConfigured: () => false,
+  isResendConfigured: () => false,
+  runtimeModeLabel: () => "production",
+}));
 mock.module("@/lib/data/approvals", () => ({
   getApprovalById: async (_id: string, org: string) => org === "org" ? approval : null,
   resolveApprovalWithoutWorkflow: async () => { baseUpdates++; return { ...approval, status: "approved" }; },
+  listApprovals: async () => [],
+  createApproval: async () => ({ approval, pollUrl: "", statusToken: "", demo: false }),
+  getApprovalStatusByToken: async () => null,
+  updateApprovalTelegramState: async () => true,
+  updateApprovalMetadata: async (a: ApprovalRequest, _patch: Record<string, unknown>) => a,
+  listApprovalsForTelegramDigest: async () => [],
+  isDurableDemoApprovalsStore: () => false,
+  getDemoApprovalsBackend: () => "memory",
+  resolveApproval: async () => ({ ...approval, status: "approved" }),
+  getApprovalByTelegramRef: async () => null,
+  getApprovalByTelegramMessageId: async () => null,
 }));
 mock.module("@/lib/supabase", () => ({ createSupabaseAdminClient: () => ({
   rpc: async (name: string) => {

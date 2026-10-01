@@ -514,7 +514,25 @@ export type AuditAction =
   | "voter_binding.resend_rate_limited"
   | "voter_binding.resend_failed"
   | "voter_binding.resend_success"
-  | "voter_binding.unlock_via_resend";
+  | "voter_binding.unlock_via_resend"
+  | "approval_routes.patch"
+  | "approval_routes.patch_conflict"
+  | "topic_gate.triggered"
+  | "decision.requested"
+  | "decision.vote_recorded"
+  | "decision.resolved"
+  | "decision.expired"
+  | "decision.deputy_activated"
+  | "plan.downgrade_scheduled"
+  | "plan.downgrade_applied"
+  | "plan.downgrade_cancelled"
+  | "plan.billing_status_narrowed"
+  | "plan.changed"
+  | "plan.upgrade_requested"
+  | "plan.upgrade_applied"
+  | "plan.upgrade_rejected"
+  | "plan.fulfill_blocked"
+  | "approval.cancelled_by_plan_change";
 
 export interface Org {
   id: string;
@@ -1335,7 +1353,10 @@ export interface ApprovalStuckWatchMeta {
 }
 
 /** F7 stuck watch item kinds. */
-export type StuckWatchKind = "w1_mention_unanswered" | "w2_approved_unfulfilled";
+export type StuckWatchKind =
+  | "w1_mention_unanswered"
+  | "w2_approved_unfulfilled"
+  | "d1_decision_stalled";
 
 /** Aggregated stuck watch item for Admin MCP list/inspect. */
 export interface StuckWatchItem {

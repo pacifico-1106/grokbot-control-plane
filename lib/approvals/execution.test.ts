@@ -13,8 +13,21 @@ const approval = (): ApprovalRequest => ({ id: "approval", orgId: "org", employe
  statusToken:"", pollPath:"", createdAt:"2026-09-16", resolvedAt:"2026-09-16",resolvedBy:null,
  metadata: { invoke: { orgId: "org", employeeId: "employee", tool:"comm.reply", purpose:"support",args:{text:"fixture",channel:"CTEST"} } },
 });
-mock.module("@/lib/mode", () => ({ isDemoMode: () => false }));
-mock.module("@/lib/data/employees", () => ({ getEmployee: async () => employee }));
+mock.module("@/lib/mode", () => ({
+  isDemoMode: () => false,
+  isSupabaseConfigured: () => true,
+  isStripeConfigured: () => false,
+  isResendConfigured: () => false,
+  runtimeModeLabel: () => "production",
+}));
+mock.module("@/lib/data/employees", () => ({
+  getEmployee: async () => employee,
+  listEmployees: async () => [],
+  getEmployeeById: async () => null,
+  issueEmployee: async () => ({}),
+  updateEmployeePolicy: async () => true,
+  terminateEmployee: async () => true,
+}));
 mock.module("@/lib/billing/entitlements", () => ({ assertBillingAllowsGateway: async () => ({ok:billed}) }));
 mock.module("@/lib/supabase", () => ({ createSupabaseAdminClient: () => ({
  from: (table: string) => {

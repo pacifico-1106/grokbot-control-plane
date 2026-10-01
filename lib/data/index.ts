@@ -29,6 +29,7 @@ export {
   updateApprovalTelegramState,
   updateApprovalMetadata,
   listApprovalsForTelegramDigest,
+  listPendingT2Decisions,
   isDurableDemoApprovalsStore,
   getDemoApprovalsBackend,
   type CreateApprovalInput,
