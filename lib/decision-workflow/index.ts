@@ -66,3 +66,12 @@ export {
   validateTopicGateConfig,
   type TopicGateCheckResult,
 } from "./topic-gate";
+
+export {
+  buildDeputyActivationApprovalMetadata,
+  isDeputyActivationRequest,
+  recordDeputyActivation,
+  validateDeputyActivation,
+  type DeputyActivationInput,
+  type DeputyActivationResult,
+} from "./deputy";
