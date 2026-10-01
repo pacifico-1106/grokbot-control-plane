@@ -46,3 +46,9 @@ export {
   type DecisionResultStatus,
   type ReturnNotificationConfig,
 } from "./result";
+
+export {
+  isDecisionRequest,
+  sendDecisionVotingCard,
+  type DecisionNotificationResult,
+} from "./notify";
