@@ -17,6 +17,7 @@ import type {
 } from "./types";
 import { APPROVAL_KINDS } from "./types";
 import { defaultApprovalKindRoute } from "./validate";
+import { DEFAULT_REMIND_EVERY_DAYS } from "./presets";
 import type {
   ApprovalClassRoute,
   OrgApprovalWorkflowPolicy,
@@ -189,7 +190,7 @@ function convertClassRouteToKindRoute(
     finalGoUserId: classRoute.finalGoUserId ?? null,
     deadlineHours: null,
     onExpire: stage.onReject === "fail_closed" ? "fail_closed" : "keep_open",
-    remindEveryDays: 3,
+    remindEveryDays: DEFAULT_REMIND_EVERY_DAYS,
     notifyChannelIds: [],
   };
 }

@@ -295,10 +295,12 @@ function DecisionWorkflowCard({ config }: { config: DecisionWorkflowConfig }) {
       <h3 className="font-medium text-sm">決裁ワークフロー (Decision Workflow)</h3>
 
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-2 text-sm">
-        <div>
-          <div className="text-xs text-[var(--text-faint)]">自動昇格閾値</div>
-          <div>{config.amountThresholdJpy.toLocaleString()}円(税抜)</div>
-        </div>
+        {config.amountThresholdJpy != null && (
+          <div>
+            <div className="text-xs text-[var(--text-faint)]">自動昇格閾値 (非推奨)</div>
+            <div>{config.amountThresholdJpy.toLocaleString()}円(税抜)</div>
+          </div>
+        )}
 
         <div>
           <div className="text-xs text-[var(--text-faint)]">会計年度開始</div>
@@ -334,7 +336,7 @@ function DecisionWorkflowCard({ config }: { config: DecisionWorkflowConfig }) {
 
       <p className="text-xs text-[var(--text-faint)]">
         P1_DECISION_WORKFLOW_ENABLED が ON のとき有効。
-        閾値超過でT2自動昇格、定款変更・役員・決算はT3。
+        段の自動振り分け（キーワード・金額・カテゴリ）は会社ごとの tierRouting 設定に従います。未設定なら最下位の段に回ります。
       </p>
     </div>
   );
