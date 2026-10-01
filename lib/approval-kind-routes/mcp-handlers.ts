@@ -305,3 +305,130 @@ export async function checkBeforeStateMatch(
 
   return { matches, currentState };
 }
+
+export interface FulfillApprovalRoutesPatchResult {
+  ok: boolean;
+  code?: string;
+  message?: string;
+}
+
+/**
+ * Fulfill approvalRoutes.patch after always_human approval.
+ *
+ * This is called by fulfill-admin.ts after the approval ticket is approved.
+ * - Re-runs validation
+ * - Checks before-state match (rejects if state changed since filing)
+ * - Persists the new policy
+ * - Writes audit record (who filed, who approved, the diff)
+ */
+export async function fulfillApprovalRoutesPatch(
+  approval: import("@/lib/types").ApprovalRequest,
+  args: Record<string, unknown>
+): Promise<FulfillApprovalRoutesPatchResult> {
+  const { appendAuditEvent } = await import("@/lib/data/audit");
+  const { setOrgApprovalKindRoutesPolicy } = await import("./data");
+  const { isApprovalKindRoutesEnabled } = await import("@/lib/feature-flags");
+
+  if (!isApprovalKindRoutesEnabled()) {
+    return {
+      ok: false,
+      code: "feature_disabled",
+      message: "P1_APPROVAL_KIND_ROUTES_ENABLED is OFF",
+    };
+  }
+
+  // Extract the before/after snapshots from approval metadata
+  const meta = approval.metadata || {};
+  const argsSnapshot = meta.argsSnapshot as Record<string, unknown> | undefined;
+  if (!argsSnapshot) {
+    return {
+      ok: false,
+      code: "missing_args_snapshot",
+      message: "承認チケットにスナップショットがありません",
+    };
+  }
+
+  const beforeSnapshot = argsSnapshot.beforeSnapshot as OrgApprovalKindRoutesPolicy | null;
+  const afterSnapshot = argsSnapshot.afterSnapshot as Record<string, unknown> | undefined;
+  const diffSummary = argsSnapshot.diffSummary as string[] | undefined;
+
+  if (!afterSnapshot) {
+    return {
+      ok: false,
+      code: "missing_after_snapshot",
+      message: "変更後のポリシーがありません",
+    };
+  }
+
+  // Check before-state match
+  const { matches, currentState } = await checkBeforeStateMatch(approval.orgId, beforeSnapshot);
+  if (!matches) {
+    await appendAuditEvent({
+      orgId: approval.orgId,
+      employeeId: null,
+      credentialId: null,
+      action: "approval_routes.patch_conflict",
+      purpose: "admin.policy",
+      summary: "承認ルート更新が競合しました（変更前の状態が一致しません）",
+      metadata: {
+        approvalId: approval.id,
+        expectedPolicyId: beforeSnapshot?.policyId ?? null,
+        currentPolicyId: currentState?.policyId ?? null,
+        resolvedBy: approval.resolvedBy,
+      },
+    });
+
+    return {
+      ok: false,
+      code: "before_state_mismatch",
+      message: "承認時点で設定が変更されていました。再度お試しください。",
+    };
+  }
+
+  // Re-run validation
+  const ctx = await buildValidatorContext(approval.orgId, null);
+  const validation = validateApprovalRoutes(afterSnapshot, ctx);
+  if (!validation.ok) {
+    return {
+      ok: false,
+      code: "validation_failed",
+      message: "ポリシーの検証に失敗しました",
+    };
+  }
+
+  // Persist the new policy
+  const saved = await setOrgApprovalKindRoutesPolicy(
+    approval.orgId,
+    afterSnapshot as unknown as OrgApprovalKindRoutesPolicy
+  );
+
+  if (!saved) {
+    return {
+      ok: false,
+      code: "save_failed",
+      message: "ポリシーの保存に失敗しました",
+    };
+  }
+
+  // Write audit record
+  await appendAuditEvent({
+    orgId: approval.orgId,
+    employeeId: null,
+    credentialId: null,
+    action: "approval_routes.patch",
+    purpose: "admin.policy",
+    summary: "承認ルート設定を更新しました（管理MCP・人承認後）",
+    metadata: {
+      approvalId: approval.id,
+      policyId: (afterSnapshot as { policyId?: string }).policyId,
+      filedBy: (meta.invoke as { actorId?: string })?.actorId ?? null,
+      approvedBy: approval.resolvedBy,
+      diff: diffSummary,
+    },
+  });
+
+  return {
+    ok: true,
+    message: "承認ルート設定を更新しました",
+  };
+}
