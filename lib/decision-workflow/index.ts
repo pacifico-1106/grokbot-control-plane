@@ -26,11 +26,13 @@ export {
 export {
   calculateDecisionProgress,
   checkDecisionStalled,
+  handleT2Expiry,
   shouldAutoExpire,
   generateProgressSummary,
   type DecisionVote,
   type DecisionProgressState,
   type DecisionStuckItem,
+  type T2ExpiryResult,
 } from "./progress";
 
 export {
@@ -52,3 +54,24 @@ export {
   sendDecisionVotingCard,
   type DecisionNotificationResult,
 } from "./notify";
+
+export {
+  buildTopicGateApprovalMetadata,
+  checkTopicGate,
+  containsSensitiveTopic,
+  createDefaultTopicGateConfig,
+  DEFAULT_SENSITIVE_TOPICS,
+  formatTopicGateCard,
+  isMainBoardChannel,
+  validateTopicGateConfig,
+  type TopicGateCheckResult,
+} from "./topic-gate";
+
+export {
+  buildDeputyActivationApprovalMetadata,
+  isDeputyActivationRequest,
+  recordDeputyActivation,
+  validateDeputyActivation,
+  type DeputyActivationInput,
+  type DeputyActivationResult,
+} from "./deputy";

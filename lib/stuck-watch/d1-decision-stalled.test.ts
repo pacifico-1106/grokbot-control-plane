@@ -88,6 +88,33 @@ describe("D1 decision stalled — flag OFF behavior", () => {
     expect(result).toBeNull();
   });
 
+  test("handleT2Expiry returns unchanged when flag is OFF", async () => {
+    const { handleT2Expiry } = await import(
+      "@/lib/decision-workflow/progress"
+    );
+
+    const state = {
+      approvalId: "apr_decision_1",
+      tier: "T2" as const,
+      status: "pending" as const,
+      votes: [],
+      approvedCount: 0,
+      rejectedCount: 0,
+      pendingCount: 3,
+      totalVoters: 3,
+      quorumRequired: 2,
+      quorumMet: false,
+      deadlineAt: new Date(Date.now() - 1000),
+      createdAt: new Date(Date.now() - 72 * 60 * 60_000),
+      updatedAt: new Date(),
+    };
+
+    const result = handleT2Expiry(state, new Date());
+    expect(result.expired).toBe(false);
+    expect(result.status).toBe("unchanged");
+    expect(result.reason).toBe("decision_workflow_disabled");
+  });
+
   test("isDecisionRequest returns false when flag is OFF", async () => {
     const { isDecisionRequest } = await import("@/lib/decision-workflow/notify");
 

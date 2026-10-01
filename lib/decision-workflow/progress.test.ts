@@ -2,11 +2,12 @@
  * P1 Decision Workflow — Progress Tests
  */
 
-import { describe, expect, test, mock } from "bun:test";
+import { describe, expect, test, mock, beforeEach, afterEach } from "bun:test";
 import {
   calculateDecisionProgress,
   checkDecisionStalled,
   shouldAutoExpire,
+  handleT2Expiry,
   generateProgressSummary,
   type DecisionProgressState,
   type DecisionVote,
@@ -444,5 +445,116 @@ describe("generateProgressSummary", () => {
     const summary = generateProgressSummary(state);
 
     expect(summary).toContain("⚠️ 期限切れ");
+  });
+});
+
+describe("handleT2Expiry", () => {
+  const baseState: DecisionProgressState = {
+    approvalId: "approval-1",
+    tier: "T2",
+    status: "pending",
+    votes: [],
+    approvedCount: 0,
+    rejectedCount: 0,
+    pendingCount: 2,
+    totalVoters: 2,
+    quorumRequired: 2,
+    quorumMet: false,
+    deadlineAt: new Date(Date.now() - 1000),
+    createdAt: new Date(Date.now() - 72 * 60 * 60 * 1000),
+    updatedAt: new Date(),
+  };
+
+  test("rejects T2 past deadline (fail_closed)", () => {
+    const result = handleT2Expiry(baseState);
+
+    expect(result.expired).toBe(true);
+    expect(result.status).toBe("rejected");
+    expect(result.reason).toBe("deadline_exceeded");
+  });
+
+  test("returns unchanged for T2 before deadline", () => {
+    const state: DecisionProgressState = {
+      ...baseState,
+      deadlineAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+    };
+
+    const result = handleT2Expiry(state);
+
+    expect(result.expired).toBe(false);
+    expect(result.status).toBe("unchanged");
+    expect(result.reason).toBe("deadline_not_reached");
+  });
+
+  test("returns unchanged for T1 past deadline", () => {
+    const state: DecisionProgressState = {
+      ...baseState,
+      tier: "T1",
+    };
+
+    const result = handleT2Expiry(state);
+
+    expect(result.expired).toBe(false);
+    expect(result.status).toBe("unchanged");
+    expect(result.reason).toBe("not_t2");
+  });
+
+  test("returns unchanged for T3 past deadline (only T2 auto-rejects)", () => {
+    const state: DecisionProgressState = {
+      ...baseState,
+      tier: "T3",
+      quorumRequired: "all",
+    };
+
+    const result = handleT2Expiry(state);
+
+    expect(result.expired).toBe(false);
+    expect(result.status).toBe("unchanged");
+    expect(result.reason).toBe("not_t2");
+  });
+
+  test("returns unchanged for already resolved status", () => {
+    const state: DecisionProgressState = {
+      ...baseState,
+      status: "approved",
+    };
+
+    const result = handleT2Expiry(state);
+
+    expect(result.expired).toBe(false);
+    expect(result.status).toBe("unchanged");
+    expect(result.reason).toBe("already_resolved");
+  });
+
+  test("returns unchanged when no deadline set", () => {
+    const state: DecisionProgressState = {
+      ...baseState,
+      deadlineAt: null,
+    };
+
+    const result = handleT2Expiry(state);
+
+    expect(result.expired).toBe(false);
+    expect(result.status).toBe("unchanged");
+    expect(result.reason).toBe("no_deadline");
+  });
+
+  test("SECURITY: never approves even with all votes (fail_closed)", () => {
+    const state: DecisionProgressState = {
+      ...baseState,
+      votes: [
+        { voterId: "user-1", vote: "approve", votedAt: new Date() },
+        { voterId: "user-2", vote: "approve", votedAt: new Date() },
+      ],
+      approvedCount: 2,
+      pendingCount: 0,
+      quorumMet: true,
+    };
+
+    const result = handleT2Expiry(state, new Date());
+
+    expect(result.expired).toBe(true);
+    expect(result.status).toBe("rejected");
+    expect(result.reason).toBe("deadline_exceeded");
   });
 });
