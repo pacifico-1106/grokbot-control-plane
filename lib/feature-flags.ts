@@ -134,3 +134,32 @@ export function isInboxRoutingEnabled(): boolean {
 export function isReplyPolicyEnhancedEnabled(): boolean {
   return parseFlag(process.env.P0_REPLY_POLICY_ENHANCED);
 }
+
+/**
+ * LP_HANDOFF_ENABLED: Enable handoff from AI chat to human consultation.
+ *
+ * When ON:
+ * - Handoff requests can be created from chat.
+ * - /api/lp/handoff endpoints active.
+ * - Outbox processes handoff notifications.
+ *
+ * When OFF (default):
+ * - Handoff endpoints return feature_disabled.
+ */
+export function isLpHandoffEnabled(): boolean {
+  return parseFlag(process.env.LP_HANDOFF_ENABLED);
+}
+
+/**
+ * LP_WAKE_WEBHOOK_ENABLED: Enable external wake webhooks.
+ *
+ * When ON:
+ * - /api/webhooks/lp-wake/[path] endpoints active.
+ * - External systems can trigger journey resumption.
+ *
+ * When OFF (default):
+ * - Wake webhook endpoints return feature_disabled.
+ */
+export function isLpWakeWebhookEnabled(): boolean {
+  return parseFlag(process.env.LP_WAKE_WEBHOOK_ENABLED);
+}
