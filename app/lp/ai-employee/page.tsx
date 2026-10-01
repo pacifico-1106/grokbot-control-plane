@@ -701,6 +701,31 @@ export default function AIEmployeeLP() {
                 </div>
               </div>
             </div>
+            {/* Company - TOKYO307 (developer / operator, supplementary) */}
+            <div className="mt-10 border-t border-[var(--border-soft)] pt-8">
+              <div className="flex flex-col sm:flex-row items-center sm:items-start gap-5 sm:gap-6">
+                <Image
+                  src="/lp/ai-employee/tokyo307-logo-stacked-reverse.svg"
+                  alt="TOKYO307"
+                  width={60}
+                  height={65}
+                  unoptimized
+                  className="shrink-0 opacity-90"
+                />
+                <div className="min-w-0 text-center sm:text-left">
+                  <span className="eyebrow">開発・運営</span>
+                  <h3 className="mt-2 text-sm font-semibold">
+                    トーキョーサンマルナナ株式会社
+                    <span className="ml-2 text-xs font-normal muted">TOKYO307</span>
+                  </h3>
+                  <div className="mt-3 space-y-1 text-xs muted leading-relaxed">
+                    <p>TOKYO307は、経営者の未整理な課題から入り、AI、ソフトウェア、ハードウェア連携、運用までを一気通貫で推進する0→1開発アトリエです。</p>
+                    <p>楽天やMicrosoftなど大手IT企業で豊富なキャリアを積んだ国内外ハイクラスエンジニアがあなたの企業活動におけるIT領域を必要に応じてサポートします。</p>
+                    <p>実装体制に加え、自ら売上やコスト、意思決定を引き受けてきた人材がプロジェクトを牵引するため安心してお任せいただけます。</p>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
         </section>
 
