@@ -336,7 +336,7 @@ function DecisionWorkflowCard({ config }: { config: DecisionWorkflowConfig }) {
 
       <p className="text-xs text-[var(--text-faint)]">
         P1_DECISION_WORKFLOW_ENABLED が ON のとき有効。
-        閾値超過でT2自動昇格、定款変更・役員・決算はT3。
+        段の自動振り分け（キーワード・金額・カテゴリ）は会社ごとの tierRouting 設定に従います。未設定なら最下位の段に回ります。
       </p>
     </div>
   );

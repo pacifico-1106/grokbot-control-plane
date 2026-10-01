@@ -15,7 +15,7 @@ import type { ResolvedEmployeeCredential } from "@/lib/auth/employee-credential"
 import { isDecisionWorkflowEnabled } from "@/lib/feature-flags";
 import { getEffectiveApprovalKindRoute } from "@/lib/approval-kind-routes/data";
 import { getOrgApprovalKindRoutesPolicy } from "@/lib/approval-kind-routes/data";
-import type { DecisionTier, DecisionTierRoute, DecisionWorkflowConfig } from "@/lib/approval-kind-routes/types";
+import type { DecisionTier, DecisionTierRoute, DecisionWorkflowConfig, TierRoutingRule } from "@/lib/approval-kind-routes/types";
 import { createApproval } from "@/lib/data/approvals";
 import { appendAuditEvent } from "@/lib/data/audit";
 import { sendDecisionVotingCard } from "./notify";

@@ -52,23 +52,67 @@ export interface ApprovalKindRoute {
 }
 
 /**
- * Decision tier sub-routes (T1/T2/T3).
- * Only used when kind = "decision".
+ * Decision tier identifier.
+ * Can be any org-defined string (e.g. "T1", "T2", "T3", "board", "general_meeting").
+ * Common values: T1 (専決), T2 (理事過半数), T3 (社員総会)
  */
-export type DecisionTier = "T1" | "T2" | "T3";
+export type DecisionTier = string;
 
+/**
+ * Legacy fixed tiers for backward compatibility.
+ * New code should use tier ids from config.
+ */
+export const LEGACY_DECISION_TIERS = ["T1", "T2", "T3"] as const;
+export type LegacyDecisionTier = (typeof LEGACY_DECISION_TIERS)[number];
+
+/**
+ * Decision tier route configuration.
+ * Each tier has its own approval workflow settings.
+ */
 export interface DecisionTierRoute {
+  /** Unique tier identifier (e.g. "T1", "board_approval") */
   tier: DecisionTier;
+  /** Display name in Japanese */
   nameJa: string;
   /** Tier rank for ordering (lower = less authority). Used for upgrade-only semantics. */
   rank?: number;
   approverUserIds: string[];
+  /** Optional voter weights for weighted voting */
   voterWeights?: Record<string, number>;
+  /** Quorum rule for approval */
   quorum: ApprovalKindQuorum;
+  /** Optional final approval user */
   finalGoUserId?: string | null;
+  /** Deadline in hours (null = no deadline) */
   deadlineHours?: number | null;
+  /** Behavior when deadline expires */
   onExpire: OnExpireBehavior;
+  /** Reminder interval in days */
   remindEveryDays: number;
+}
+
+/**
+ * Tier routing rule for auto-escalation.
+ * Rules are evaluated in order (highest tier first).
+ */
+export interface TierRoutingRule {
+  /** Target tier id */
+  tierId: DecisionTier;
+  /** Match conditions (all must match for rule to apply) */
+  match: TierMatchCondition;
+}
+
+/**
+ * Match conditions for tier routing.
+ * Multiple conditions are AND-ed together.
+ */
+export interface TierMatchCondition {
+  /** Match if text contains any of these keywords (plain substring, case-insensitive) */
+  keywords?: string[];
+  /** Match if tax-excluded amount >= this value */
+  minAmountJpy?: number;
+  /** Match if category equals any of these values */
+  categories?: string[];
 }
 
 /**
@@ -120,11 +164,16 @@ export interface DecisionWorkflowConfig {
   /** Consumption tax rate (default 0.10 = 10%). Must be between 0 and 1. */
   consumptionTaxRate?: number;
   deputyUserId?: string | null;
+  /** Tier configurations (must have at least one) */
   tiers: DecisionTierRoute[];
-  /** Tier routing rules for automatic tier selection (first match wins) */
+  /**
+   * Tier routing rules for auto-escalation.
+   * Evaluated in order from first to last. First matching rule wins.
+   * If no rule matches, defaultTierId is used.
+   */
   tierRouting?: TierRoutingRule[];
-  /** Default tier ID when no routing rules match (defaults to lowest-rank tier) */
-  defaultTierId?: string;
+  /** Default tier when no routing rule matches (defaults to first tier by rank) */
+  defaultTierId?: DecisionTier;
 }
 
 /**

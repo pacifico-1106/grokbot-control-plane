@@ -440,10 +440,12 @@ export function canDowngradeTier(
   userId: string,
   ownerUserId: string
 ): { allowed: boolean; reason: string } {
-  const tierRank = { T1: 1, T2: 2, T3: 3 };
+  const tierRank: Record<string, number> = { T1: 1, T2: 2, T3: 3 };
 
-  // Not a downgrade
-  if (tierRank[targetTier] >= tierRank[currentTier]) {
+  // Not a downgrade (unknown tiers default to rank 0)
+  const currentRank = tierRank[currentTier] ?? 0;
+  const targetRank = tierRank[targetTier] ?? 0;
+  if (targetRank >= currentRank) {
     return { allowed: true, reason: "not_a_downgrade" };
   }
 

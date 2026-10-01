@@ -237,7 +237,7 @@ export const STAFFPASS_MCP_TOOLS: McpToolDef[] = [
   {
     name: "staffpass_decision_request",
     description:
-      "Create a decision request (稟議・決裁) for human approval. Tier is auto-determined: T1 (専決), T2 (理事過半数, 72h deadline, fail_closed for amounts >= threshold), T3 (社員総会 for 定款変更/役員/決算). Tax-excluded amount is calculated for threshold comparison. Deputy user can be specified. Returns approvalId and statusToken for polling. P1_DECISION_WORKFLOW_ENABLED must be ON.",
+      "Create a decision request (稟議・決裁) for human approval. Tier is chosen from the org's configured tiers and tierRouting rules (keywords, tax-excluded amount, category; first match wins); with no rules it goes to the lowest-rank tier. A higher tier may be requested explicitly. Deputy user can be specified. Returns approvalId and statusToken for polling. P1_DECISION_WORKFLOW_ENABLED must be ON.",
     inputSchema: {
       type: "object",
       properties: {
