@@ -1,4 +1,5 @@
 import "server-only";
+import { resolveAppOrigin, STAFFPASS_PUBLIC_ORIGIN } from "./app-url";
 
 function value(name: string): string | null {
   const raw = process.env[name]?.trim();
@@ -40,7 +41,7 @@ export function getLegalIdentity(): LegalIdentity {
     responsiblePerson,
     contactEmail,
     effectiveDate: value("LEGAL_EFFECTIVE_DATE") || "2026年8月26日",
-    siteUrl: value("NEXT_PUBLIC_APP_URL") || "https://grokbot-control-plane.vercel.app",
+    siteUrl: value("NEXT_PUBLIC_APP_URL") ? resolveAppOrigin() : STAFFPASS_PUBLIC_ORIGIN,
     configured: Boolean(phone),
   };
 }
