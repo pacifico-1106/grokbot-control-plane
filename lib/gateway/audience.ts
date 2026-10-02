@@ -13,8 +13,8 @@
 import {
   getOrgChannel,
   getOrgParty,
-  upsertOrgChannel,
 } from "@/lib/data/directory";
+import { upsertOrgChannelFromAutomaticPath } from "@/lib/channel-scope/data";
 import {
   getOrgInternalAudienceRule,
   isEmailDomainInternal,
@@ -440,7 +440,8 @@ export async function resolveAudience(
         });
       }
       try {
-        await upsertOrgChannel({
+        // CS5: new rows from this automatic path are source=egress_inspect (flag ON); existing rows keep their source.
+        await upsertOrgChannelFromAutomaticPath({
           orgId: ctx.orgId,
           surface: "slack",
           externalId: ctx.slackChannelId,

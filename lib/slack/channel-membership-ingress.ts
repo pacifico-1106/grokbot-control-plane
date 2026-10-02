@@ -32,7 +32,7 @@
  * (no buttons) goes to the approver inbox when policy.connect.notifyApproverOnInvite (default
  * true) — lib/channel-scope/notify.ts. The send gate itself lives in lib/channel-scope/egress-gate.ts.
  *
- * Not here: reconcile cron (CS5).
+ * Reconcile (missed events, later shares, leaves / bot removal): lib/channel-scope/reconcile.ts (CS5).
  */
 import { appendAuditEvent } from "@/lib/data/audit";
 import { getEnabledConversationAdapter } from "@/lib/data/conversation-adapters";
@@ -267,7 +267,7 @@ function audit(
 }
 
 /** Connect channel the policy does not include ⇒ out_of_scope; everything else stays member. */
-function joinState(scope: EffectiveChannelScope, channel: ChannelScopeChannel, via: MembershipVia): MembershipState {
+export function joinState(scope: EffectiveChannelScope, channel: ChannelScopeChannel, via: MembershipVia): MembershipState {
   const decision = isChannelInScope({
     scope,
     surface: "slack",

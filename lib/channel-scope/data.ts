@@ -402,6 +402,74 @@ export async function upsertAutoClassifiedChannel(input: {
 }
 
 /**
+ * CS5 (closes the CS4 note-1 gap): org_channels writes from the legacy AUTOMATIC paths —
+ * gateway/audience.ts (lazy ext-shared inspect at send time) and stuck-watch/audience-ledger.ts
+ * (ledger supplement from an internal party) — used to create rows with the column default
+ * source='manual', i.e. "a human registered this", so a Connect channel found that way escaped
+ * the CS4 send gate and counted as registered.
+ *
+ * - Flag OFF ⇒ exactly the legacy upsertOrgChannel call (no scope columns touched, so this stays
+ *   inert before the channel_scope migration is applied).
+ * - Flag ON, row already exists ⇒ the same legacy upsert, which does not send `source`, so the
+ *   existing row's provenance (manual / auto_join / …) and human_confirmed_at are never rewritten.
+ * - Flag ON, NEW row ⇒ inserted with source='egress_inspect' (insert-only, ignoreDuplicates). If
+ *   another writer created the row concurrently, falls back to the legacy upsert (keeps that row's
+ *   source). Classification / mixed / connect_cannot_be_internal are exactly the legacy rules —
+ *   nothing is widened; the only effect is that the new row is treated as automatic.
+ */
+export async function upsertOrgChannelFromAutomaticPath(
+  input: Parameters<typeof upsertOrgChannel>[0]
+): Promise<Awaited<ReturnType<typeof upsertOrgChannel>>> {
+  if (!readChannelScopeFlags().enabled || input.surface !== "slack" || input.skipInspect !== true) {
+    // Only the two skipInspect callers are migrated; anything else keeps the legacy path.
+    return upsertOrgChannel(input);
+  }
+  const externalId = (input.externalId ?? "").trim();
+  if (!externalId) return upsertOrgChannel(input);
+  const existing = await getOrgChannel(input.orgId, input.surface, externalId);
+  if (existing) return upsertOrgChannel(input);
+
+  const classification: ChannelClassification = isClass(input.classification) ? input.classification : "unknown";
+  const mixed = Boolean(input.mixed) || classification === "shared_external";
+  const at = nowIso();
+  if (isDemoMode()) {
+    const row = await upsertOrgChannel(input);
+    const key = `${input.orgId}:${input.surface}:${externalId}`;
+    demoChannelMeta.set(key, { ...(demoChannelMeta.get(key) ?? {}), source: "egress_inspect", lastInspectedAt: at });
+    return row;
+  }
+  const { data, error } = await admin()
+    .from("org_channels")
+    .upsert(
+      {
+        org_id: input.orgId,
+        surface: input.surface,
+        external_id: externalId,
+        classification,
+        mixed,
+        source: "egress_inspect",
+        last_inspected_at: at,
+        updated_at: at,
+      },
+      { onConflict: "org_id,surface,external_id", ignoreDuplicates: true }
+    )
+    .select("*");
+  if (error) throw new Error(error.message || "channel_upsert_failed");
+  const row = (data ?? [])[0] as Record<string, unknown> | undefined;
+  if (!row) return upsertOrgChannel(input); // created concurrently ⇒ legacy update, source untouched
+  return {
+    id: String(row.id),
+    orgId: String(row.org_id),
+    surface: input.surface,
+    externalId: String(row.external_id),
+    classification: isClass(row.classification) ? row.classification : "unknown",
+    mixed: Boolean(row.mixed),
+    createdAt: String(row.created_at ?? at),
+    updatedAt: String(row.updated_at ?? at),
+  };
+}
+
+/**
  * CS4: a human confirmed the channel's classification (channels.classify fulfill, after
  * approval). Sets human_confirmed_at; source is kept (provenance). Flag ON only.
  * Returns false when the row does not exist.
@@ -484,6 +552,39 @@ export async function listEmployeeChannelMemberships(
   const { data, error } = await query.order("updated_at", { ascending: false }).limit(limit);
   if (error) throw new Error("channel_memberships_unavailable");
   return (data ?? []).map((row) => mapMembership(row as Record<string, unknown>));
+}
+
+/**
+ * CS5: every membership row of one employee (reconcile needs the full set, not the newest 500).
+ * Paged by id; capped at maxRows (truncated=true when more exist). Flag ON callers only.
+ */
+export async function listAllEmployeeChannelMemberships(
+  orgId: string,
+  employeeId: string,
+  maxRows = 5_000
+): Promise<{ rows: EmployeeChannelMembership[]; truncated: boolean }> {
+  if (!orgId || !employeeId) return { rows: [], truncated: false };
+  const cap = Math.max(1, Math.floor(maxRows));
+  if (isDemoMode()) {
+    const all = demoMemberships.filter((m) => m.orgId === orgId && m.employeeId === employeeId);
+    return { rows: all.slice(0, cap), truncated: all.length > cap };
+  }
+  const rows: EmployeeChannelMembership[] = [];
+  const page = MEMBERSHIP_LIST_MAX;
+  for (let offset = 0; offset < cap + 1; offset += page) {
+    const { data, error } = await admin()
+      .from("employee_channel_memberships")
+      .select("*")
+      .eq("org_id", orgId)
+      .eq("employee_id", employeeId)
+      .order("id", { ascending: true })
+      .range(offset, offset + page - 1);
+    if (error) throw new Error("channel_memberships_unavailable");
+    const batch = (data ?? []).map((row) => mapMembership(row as Record<string, unknown>));
+    rows.push(...batch);
+    if (batch.length < page) break;
+  }
+  return { rows: rows.slice(0, cap), truncated: rows.length > cap };
 }
 
 export interface UpsertMembershipInput {

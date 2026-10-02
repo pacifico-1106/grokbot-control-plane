@@ -59,6 +59,7 @@ export const ADMIN_TOOL_AUDIT_ACTION: Record<string, AdminAuditAction> = {
   "employeeIdentity.upsert": "admin.policy",
   "employeeIdentity.bindMailbox": "admin.policy",
   "channelScope.patch": "admin.policy",
+  "channelScope.reconcile": "admin.policy",
 };
 
 /** Operational / employee-badge class — never lead the dashboard change log. */
