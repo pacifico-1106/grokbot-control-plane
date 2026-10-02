@@ -24,7 +24,8 @@ export function readCsrfCookie(cookieString: string): string | null {
 }
 
 /** Shown by the UI as the first assistant bubble; the model is told not to repeat it. */
-export const LP_CHAT_GREETING = "AI相談窓口です。どの業務を任せたいですか。";
+export const LP_CHAT_GREETING =
+  "こんにちは、StaffpassのAI相談窓口です。日報・議事録の下書き、問い合わせへの一次返信、予定調整など、AI社員に任せられる仕事やプラン選びについて、お気軽にご相談ください。";
 
 /** Max transcript entries sent with a chat turn (the server caps again). */
 export const LP_CHAT_HISTORY_LIMIT = 12;
