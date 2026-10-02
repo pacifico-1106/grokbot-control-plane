@@ -165,12 +165,43 @@ export interface ToolResult {
   citations?: Array<{ title: string; url: string | null }>;
 }
 
+/** Split a free-text query into up to 4 distinct terms (>= 2 chars) on whitespace and punctuation. */
+export function splitSearchTerms(query: string): string[] {
+  const terms = query
+    .split(/[\s\u3000、。,.・/／?？!！「」『』()（）]+/u)
+    .map((t) => t.trim())
+    .filter((t) => t.length >= 2);
+  return [...new Set(terms)].slice(0, 4);
+}
+
 export async function executeKnowledgeSearch(args: { query?: string; topic?: string }): Promise<ToolResult> {
   if (!args.query || args.query.length > 500) {
     return { success: false, error: "invalid_query" };
   }
 
-  const result = await searchKnowledgeBase(args.query, 3);
+  let result = await searchKnowledgeBase(args.query, 3);
+
+  // search_published_kb is a substring match on the whole query, so a multi-word query
+  // ("AI社員 業務 範囲") rarely matches. Fall back to the individual terms.
+  if (result.status === "not_found") {
+    const terms = splitSearchTerms(args.query);
+    if (terms.length > 1) {
+      const seen = new Set<string>();
+      const passages: KbSearchResult["passages"] = [];
+      let hit: KbSearchResult | null = null;
+      for (const term of terms) {
+        const r = await searchKnowledgeBase(term, 3);
+        if (r.status === "error") continue;
+        for (const p of r.passages) {
+          if (seen.has(p.documentId) || passages.length >= 3) continue;
+          seen.add(p.documentId);
+          passages.push(p);
+        }
+        if (r.status === "found") hit = r;
+      }
+      if (hit && passages.length > 0) result = { ...hit, passages };
+    }
+  }
 
   if (result.status === "error") {
     return { success: false, error: "search_failed" };

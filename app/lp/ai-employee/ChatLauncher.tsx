@@ -15,6 +15,8 @@ import Link from "next/link";
 import {
   LP_CSRF_HEADER,
   LP_PRIVACY_VERSION,
+  LP_CHAT_GREETING,
+  buildTurnHistory,
   isSafeLpPath,
   parseChatCard,
   readCsrfCookie,
@@ -131,7 +133,7 @@ export function ChatLauncher({
       started = true;
       setCsrfToken(data.csrfToken);
       setMessages([
-        { id: "greeting", role: "assistant", text: "AI相談窓口です。どの業務を任せたいですか。" },
+        { id: "greeting", role: "assistant", text: LP_CHAT_GREETING },
       ]);
     } catch {
       setError("通信に失敗しました。");
@@ -155,13 +157,15 @@ export function ChatLauncher({
     setBusy(true);
     setError(null);
     const clientTurnId = crypto.randomUUID();
+    // The server keeps no message text, so the transcript so far goes with each turn.
+    const history = buildTurnHistory(messages);
     setMessages((m) => [...m, { id: clientTurnId, role: "user", text }]);
     try {
       const res = await fetch("/api/chat/turn", {
         method: "POST",
         headers: { "Content-Type": "application/json", [LP_CSRF_HEADER]: token },
         credentials: "same-origin",
-        body: JSON.stringify({ text, clientTurnId }),
+        body: JSON.stringify({ text, clientTurnId, history }),
       });
       const data = await res.json().catch(() => null);
       if (!res.ok || !data?.ok) {
@@ -181,7 +185,7 @@ export function ChatLauncher({
     } finally {
       setBusy(false);
     }
-  }, [input, busy, csrfToken]);
+  }, [input, busy, csrfToken, messages]);
 
   const requestHandoff = useCallback(
     async (card: Extract<ChatCard, { type: "handoff_preview" }>) => {
