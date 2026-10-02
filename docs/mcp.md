@@ -48,6 +48,17 @@ staffpass_invoke ──► lib/gateway/invoke (同一 Gateway 強制パス)
 
 ---
 
+## プロトコル版 / Protocol eras（`MCP_PROTOCOL_NEGOTIATION_ENABLED` + `MCP_PROTOCOL_MODERN_ENABLED`、既定 OFF）
+
+デュアル・エラ（dual-era）: `initialize` は従来どおり（2025-11-25 以前と交渉）、`_meta["io.modelcontextprotocol/protocolVersion"]: "2026-07-28"` 付きのリクエストはステートレス（modern）として処理します。
+Dual-era: `initialize` keeps legacy semantics; requests carrying the 2026-07-28 `_meta` version are served statelessly.
+
+- `server/discover` → `supportedVersions`（modern 先頭 + legacy）、`capabilities`、`_meta["io.modelcontextprotocol/serverInfo"]`、`instructions`、`ttlMs` / `cacheScope:"public"`。
+- modern リクエストは `MCP-Protocol-Version`（body と一致）・`Mcp-Method`（全リクエスト）・`Mcp-Name`（`tools/call`、`=?base64?…?=` 可）が必須。不一致・欠落・不正値 → `400` + `-32020`（HeaderMismatch）。ヘッダでのルーティング詐称（`Mcp-Name` と body のツール名不一致）は認証・実行前に拒否。
+- 未対応バージョン → `400` + `-32022` `{supported, requested}`。modern の未知メソッド → `404` + `-32601`。
+- modern の結果には `resultType:"complete"`、`tools/list` は `ttlMs: 300000` + `cacheScope:"private"`（認証必須のため）。`Mcp-Session-Id` は発行しません。
+- 管理 MCP（`/api/mcp/admin`）は legacy のまま（対象外）。
+
 ## 認証
 
 社員証発行時に一度だけ表示される秘密値:

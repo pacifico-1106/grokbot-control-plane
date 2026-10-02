@@ -417,6 +417,23 @@ export function isMcpProtocolNegotiationEnabled(): boolean {
 }
 
 /**
+ * MCP_PROTOCOL_MODERN_ENABLED (default OFF) — dual-era support for the
+ * 2026-07-28 stateless revision on /api/mcp. Effective only together with
+ * MCP_PROTOCOL_NEGOTIATION_ENABLED. When ON:
+ * - server/discover; per-request `_meta["io.modelcontextprotocol/protocolVersion"]`
+ * - Mcp-Method / Mcp-Name header ↔ body validation (400 / -32020 HeaderMismatch)
+ * - unsupported version → 400 / -32022 UnsupportedProtocolVersion {supported, requested}
+ * - modern results carry resultType:"complete"; tools/list adds ttlMs + cacheScope
+ * initialize keeps legacy semantics (dual-era). OFF → nothing changes.
+ */
+export function isMcpProtocolModernEnabled(): boolean {
+  return (
+    parseFlag(process.env.MCP_PROTOCOL_NEGOTIATION_ENABLED) &&
+    parseFlag(process.env.MCP_PROTOCOL_MODERN_ENABLED)
+  );
+}
+
+/**
  * MCP OAuth 2.1 Authorization Server + Resource Server (design 2026-10-03).
  *
  * When ON (and not DEMO mode):

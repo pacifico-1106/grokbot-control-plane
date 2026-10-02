@@ -21,6 +21,15 @@ import {
 } from "@/lib/mcp/tools";
 import { STAFFPASS_MCP_URL } from "@/lib/mcp/public";
 import { isConfigChangeRequestEnabled } from "@/lib/feature-flags";
+import { isMcpProtocolModernEnabled } from "@/lib/feature-flags";
+import {
+  MODERN_CORS_ALLOW_HEADERS,
+  MODERN_TOOLS_LIST_TTL_MS,
+  buildDiscoverResult,
+  classifyModernRequest,
+  modernResult,
+  unsupportedHeaderVersionError,
+} from "@/lib/mcp/modern";
 import {
   checkProtocolVersionHeader,
   negotiateInitializeVersion,
@@ -45,8 +54,9 @@ function corsHeaders(): HeadersInit {
   return {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-    "Access-Control-Allow-Headers":
-      "Authorization, Content-Type, Accept, Mcp-Session-Id, x-staffpass-credential",
+    "Access-Control-Allow-Headers": isMcpProtocolModernEnabled()
+      ? `Authorization, Content-Type, Accept, Mcp-Session-Id, x-staffpass-credential, ${MODERN_CORS_ALLOW_HEADERS}`
+      : "Authorization, Content-Type, Accept, Mcp-Session-Id, x-staffpass-credential",
     "Access-Control-Expose-Headers": isMcpOAuthEnabled()
       ? "Mcp-Session-Id, WWW-Authenticate"
       : "Mcp-Session-Id",
@@ -99,7 +109,12 @@ function serverInfo() {
   };
 }
 
-function initializeInstructions(base: string): string {
+function mcpInstructions(): string {
+  const base =
+        "Staffpass is a fail-closed AI employee control plane. Authenticate with Authorization: Bearer gb_emp_…. Use staffpass_whoami then staffpass_invoke with purpose+jobId. On needs_approval, poll staffpass_get_approval_status with approvalId+statusToken (pollUrl in the result) until approved|rejected|revision_requested|expired — do not complete confirm/send/order while pending. On revision_requested, revise per revisionNote and re-invoke with the same jobId and parentApprovalId. Restrict clients with allowed_tools to the four staffpass_* tools." +
+        (isConfigChangeRequestEnabled()
+          ? " Never change your own Instructions/policy text or channel ledger/classification yourself: file staffpass_config_change_request and wait for the human approver; approvers/permissions/billing are not requestable."
+          : "");
   return isMcpOAuthEnabled() ? oauthInstructions(base) : base;
 }
 
@@ -152,8 +167,20 @@ export async function POST(req: Request) {
     return jsonRpcError(id, -32600, "Invalid Request: method required", undefined, 400);
   }
 
+  // 2026-07-28 dual-era (flag OFF → { modern: false }, no change).
+  const modernReq = classifyModernRequest(req, method, params);
+  if (modernReq.modern && !modernReq.ok) {
+    return jsonRpcError(id, modernReq.code, modernReq.message, modernReq.data, 400);
+  }
+  const isModern = modernReq.modern;
+  const result = (r: Record<string, unknown>) => jsonRpcResult(id, isModern ? modernResult(r) : r);
+
   const protocolHeader = checkProtocolVersionHeader(req);
   if (!protocolHeader.ok) {
+    if (isMcpProtocolModernEnabled()) {
+      const e = unsupportedHeaderVersionError(protocolHeader.version);
+      return jsonRpcError(id, e.code, e.message, e.data, 400);
+    }
     return jsonRpcError(
       id,
       -32600,
@@ -167,7 +194,10 @@ export async function POST(req: Request) {
   // Claude / ChatGPT start the sign-in flow (they ignore challenges on 200).
   if (isMcpOAuthEnabled() && !hasAnyMcpCredential(req)) {
     const lifecycle =
-      method === "initialize" || method === "ping" || method.startsWith("notifications/");
+      method === "initialize" ||
+      method === "ping" ||
+      method === "server/discover" ||
+      method.startsWith("notifications/");
     if (!(lifecycle && isMcpOAuthLegacyUnauthInitialize())) {
       return jsonRpcError(
         id,
@@ -195,17 +225,19 @@ export async function POST(req: Request) {
         name: MCP_SERVER_NAME,
         version: MCP_SERVER_VERSION,
       },
-      instructions: initializeInstructions(
-        "Staffpass is a fail-closed AI employee control plane. Authenticate with Authorization: Bearer gb_emp_…. Use staffpass_whoami then staffpass_invoke with purpose+jobId. On needs_approval, poll staffpass_get_approval_status with approvalId+statusToken (pollUrl in the result) until approved|rejected|revision_requested|expired — do not complete confirm/send/order while pending. On revision_requested, revise per revisionNote and re-invoke with the same jobId and parentApprovalId. Restrict clients with allowed_tools to the four staffpass_* tools." +
-        (isConfigChangeRequestEnabled()
-          ? " Never change your own Instructions/policy text or channel ledger/classification yourself: file staffpass_config_change_request and wait for the human approver; approvers/permissions/billing are not requestable."
-          : "")
-      ),
+      instructions: mcpInstructions(),
     });
   }
 
+  if (method === "server/discover" && isMcpProtocolModernEnabled()) {
+    return jsonRpcResult(
+      id,
+      buildDiscoverResult({ name: MCP_SERVER_NAME, version: MCP_SERVER_VERSION, instructions: mcpInstructions() })
+    );
+  }
+
   if (method === "ping") {
-    return jsonRpcResult(id, {});
+    return result({});
   }
 
   // tools/* require employee badge
@@ -232,9 +264,10 @@ export async function POST(req: Request) {
 
     if (method === "tools/list") {
       const listed = presentToolsForList(listStaffpassMcpTools());
-      return jsonRpcResult(id, {
-        tools: isMcpOAuthEnabled() ? decorateToolsForOAuth(listed) : listed,
-      });
+      const tools = isMcpOAuthEnabled() ? decorateToolsForOAuth(listed) : listed;
+      return isModern
+        ? result({ tools, ttlMs: MODERN_TOOLS_LIST_TTL_MS, cacheScope: "private" })
+        : jsonRpcResult(id, { tools });
     }
 
     const toolName = String(params.name || "").trim();
@@ -250,12 +283,12 @@ export async function POST(req: Request) {
     }
 
     try {
-      const result = await callStaffpassMcpTool(
+      const toolResult = await callStaffpassMcpTool(
         toolName,
         toolArgs,
         auth.credential
       );
-      return jsonRpcResult(id, result);
+      return isModern ? result(toolResult as Record<string, unknown>) : jsonRpcResult(id, toolResult);
     } catch (e) {
       // Never echo internal error text (may carry SQL / upstream detail) to MCP clients.
       console.error("[mcp] tools/call failed", {
@@ -266,5 +299,6 @@ export async function POST(req: Request) {
     }
   }
 
-  return jsonRpcError(id, -32601, `Method not found: ${method}`);
+  // Modern era: unknown method MUST be 404 + -32601.
+  return jsonRpcError(id, -32601, `Method not found: ${method}`, undefined, isModern ? 404 : 200);
 }
