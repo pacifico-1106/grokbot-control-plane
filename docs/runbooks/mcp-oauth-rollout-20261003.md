@@ -53,3 +53,14 @@
 2. マイグレーション `20261003100000_mcp_oauth.sql` を 八坂さんが実行（`/workspace/staffpass-sql/mcp-oauth-20261003/`）。
 3. `MCP_OAUTH_STATE_SECRET`、`IP_HASH_KEY`、`MCP_OAUTH_ORG_ALLOWLIST=92f3617c-33fc-4dac-b9b4-d4f42e8522ac` を設定。
 4. `MCP_OAUTH_ENABLED=true`。問題があれば即 OFF（挙動は今と完全に同じに戻る）。
+
+## Token / revoke（PR-6）
+
+- `POST /api/oauth/token`: `application/x-www-form-urlencoded` のみ・パラメータ重複は拒否・公開クライアントのみ（`client_secret` は 401）・PKCE S256。
+  - code は 60 秒・1 回限り。**再利用を検知したら grant ごと取り消し**（`oauth.code_reuse_detected`、owner/admin に通知）。
+  - refresh は毎回ローテーション。回転済みトークンの再利用は 30 秒以内なら `invalid_grant` のみ（通信リトライ対策）、30 秒を超えたら**盗用とみなし grant ごと取り消し**（`oauth.refresh_reuse_detected`、通知）。
+  - access 1 時間・refresh 30 日。どちらも grant の期限（≤90 日・≤社員証の期限）を超えない。
+  - 監査 `oauth.token_issued` は code 交換時の 1 回だけ（refresh ごとには書かない）。ハッシュ先頭 12 文字のみ。
+  - client と IP あたり 60 回/分。応答は `Cache-Control: no-store`。
+- `POST /api/oauth/revoke`（RFC 7009）: 常に 200。refresh を取り消すと grant ごと取り消し（`oauth.grant_revoked`）、access はそのトークンだけ。
+- cron `/api/cron/oauth-purge`（毎日 03:00 JST、`CRON_SECRET` 必須）: 期限切れの認可リクエスト・code・トークンを削除。フラグ OFF の間は何もしません。

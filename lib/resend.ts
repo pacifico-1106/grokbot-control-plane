@@ -9,7 +9,8 @@ export type EmailTemplate =
   | "approval_requested"
   | "approval_needed"
   | "approval_resolved"
-  | "oauth_connected";
+  | "oauth_connected"
+  | "oauth_security";
 
 export interface SendEmailInput {
   to: string | string[];
