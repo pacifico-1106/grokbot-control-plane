@@ -12,6 +12,7 @@ import {
  */
 
 import { appendAuditEvent } from "@/lib/data/audit";
+import { evaluateRemovedChannelGate, REMOVED_CHANNEL_DENY_CODE } from "@/lib/channel-scope/removed-gate";
 import { updateApprovalMetadata } from "@/lib/data/approvals";
 import { normalizePostingAs } from "@/lib/employees/posting-as";
 import {
@@ -644,6 +645,36 @@ async function fulfillApprovedInvokeCore(
     }
 
     const dest = destValidation.dest;
+
+    // P1 Channel Scope (CS6, §11.5): removed from the channel after the approval ⇒ do not post.
+    // Flag OFF ⇒ no DB access; lookup failure with the flag ON ⇒ fail-closed.
+    const removedGate = await evaluateRemovedChannelGate({
+      orgId: snapshot.orgId || approval.orgId,
+      employeeId: snapshot.employeeId || approval.employeeId,
+      slackChannelId: snapshot.conversation?.slackChannelId,
+      postingAs: snapshot.postingAs,
+    });
+    if (removedGate.denied) {
+      const at = new Date().toISOString();
+      const fulfillment: ApprovalFulfillment = { ok: false, error: REMOVED_CHANNEL_DENY_CODE, at };
+      await persistFulfillment(approval, fulfillment);
+      await appendAuditEvent({
+        orgId: approval.orgId,
+        employeeId: approval.employeeId,
+        credentialId: approval.credentialId,
+        action: "channel_scope.removed_channel_denied",
+        purpose: approval.purpose,
+        summary: "承認後の投稿を拒否（AI社員がチャンネルから外されている・fail-closed）",
+        metadata: {
+          approvalId: approval.id,
+          tool: snapshot.tool,
+          jobId: snapshot.jobId,
+          phase: "approval.fulfill",
+          channelScopeRemovedGate: removedGate,
+        },
+      }).catch(() => undefined);
+      return fulfillment;
+    }
 
     const threadResult = await threadOf(snapshot);
 
