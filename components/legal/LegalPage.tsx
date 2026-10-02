@@ -19,7 +19,7 @@ export function LegalPage({
       <header className="border-b border-[var(--border-soft)]">
         <div className="mx-auto flex max-w-4xl items-center justify-between gap-3 px-4 py-4 sm:px-6">
           <BrandMark size="sm" href="/" />
-          <Link href="/signup" className="btn btn-primary px-4 text-xs">無料で試す</Link>
+          <Link href="/lp/ai-employee/consult" className="btn btn-primary px-4 text-xs">導入を相談する</Link>
         </div>
       </header>
       <main className="mx-auto max-w-4xl px-4 py-10 sm:px-6 sm:py-14">
