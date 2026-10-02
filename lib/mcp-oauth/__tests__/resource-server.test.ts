@@ -137,3 +137,13 @@ test("WWW-Authenticate carries resource_metadata + scope, error only when asked"
   const err = wwwAuthenticate({ error: "invalid_token", description: 'bad"x' });
   expect(err.startsWith('Bearer error="invalid_token", error_description="badx"')).toBe(true);
 });
+
+test("blocked client → its live access token is refused at the resource server", async () => {
+  const { accessToken } = await seedClientAndGrant(store);
+  expect((await resolveMcpCredential(req(accessToken))).ok).toBe(true);
+  const c = (await store.getClient("https://claude.ai/oauth/mcp-client.json"))!;
+  await store.upsertClient({ ...c, status: "blocked" });
+  const r = await resolveMcpCredential(req(accessToken));
+  expect(r.ok).toBe(false);
+  if (!r.ok) expect(r.httpStatus).toBe(401);
+});

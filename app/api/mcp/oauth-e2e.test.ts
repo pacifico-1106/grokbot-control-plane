@@ -1,4 +1,7 @@
-import { afterAll, afterEach, beforeEach, expect, mock, setSystemTime, test } from "bun:test";
+import * as bunTest from "bun:test";
+import { afterAll, afterEach, beforeEach, expect, mock, test } from "bun:test";
+// setSystemTime exists at runtime but is missing from the pinned bun-types.
+const setSystemTime = (bunTest as unknown as { setSystemTime: (d?: Date) => void }).setSystemTime;
 import { CLAUDE_CLIENT, ISSUER, RESOURCE, directory, freshStore } from "@/lib/mcp-oauth/__tests__/fixtures";
 import type { Employee, OrgMember } from "@/lib/types";
 
