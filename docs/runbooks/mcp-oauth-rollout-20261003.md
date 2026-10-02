@@ -72,3 +72,11 @@
 - 社員証の再発行（Q3）: **既定では OAuth 接続を切りません**。「OAuth 接続（AI クライアント）もすべて取り消す」にチェックしたときだけ取り消します（reason=rotate）。
 - ゲートウェイの監査: OAuth 経由の invoke は全監査行の metadata に `authMethod: "oauth"`、`oauthGrantId`、`oauthClientHost` が付きます（社員証 `gb_emp_` 経由は従来どおり）。
 - いずれもフラグ OFF の間は何もしません（UI も非表示）。
+
+## クライアント互換（PR-8）/ Client compat
+
+- OAuth ON 時のみ: `tools/list` に `securitySchemes`（oauth2 / `staffpass.employee`）、`staffpass_profile`（読み取り専用）、認証エラー本文に `_meta["mcp/www_authenticate"]`、initialize instructions を OAuth 前提の文言に差し替え、`GET /api/mcp` の `auth.oauth`。OFF 時はバイト同一（テストで固定）。
+- Only when ON: securitySchemes, `staffpass_profile`, body-level challenge `_meta`, OAuth-aware instructions, server-card `auth.oauth`. OFF = byte-identical (tests pin this).
+- フラグ非依存の堅牢化: `tools/call` の 500 は内部エラー文言を返さず `tool_call_failed` 固定（ログはツール名と例外名のみ）。
+- Flag-independent hardening: tools/call 500 no longer echoes `e.message`.
+- 実機確認（Q9, 八坂さんの ChatGPT Business / Claude Team）: 接続後に `staffpass_profile` を呼び、org 名が TOKYO307、表示名が対象社員であることを確認。

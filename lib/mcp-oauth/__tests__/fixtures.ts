@@ -6,7 +6,7 @@ export const ISSUER = "https://staffpass.sealith.com";
 export const RESOURCE = `${ISSUER}/api/mcp`;
 export const CLAUDE_CLIENT = "https://claude.ai/oauth/mcp-client.json";
 
-export type FakeEmployee = { id: string; orgId: string; status: string; credentialId: string | null; displayName: string };
+export type FakeEmployee = { id: string; orgId: string; status: string; credentialId: string | null; displayName: string; roleLabel?: string };
 export const directory = {
   employees: new Map<string, FakeEmployee>(),
   bindings: new Map<string, { status: string; credentialGeneration: number; orgId: string; employeeId: string }>(),
@@ -15,7 +15,7 @@ export const directory = {
     this.employees.clear();
     this.bindings.clear();
     this.credentials.clear();
-    this.employees.set("emp_1", { id: "emp_1", orgId: "org_a", status: "active", credentialId: "cred_1", displayName: "営業AI" });
+    this.employees.set("emp_1", { id: "emp_1", orgId: "org_a", status: "active", credentialId: "cred_1", displayName: "営業AI", roleLabel: "営業アシスタント" });
     this.bindings.set("emp_1", { status: "linked", credentialGeneration: 3, orgId: "org_a", employeeId: "emp_1" });
     this.credentials.set("emp_1", { credentialId: "cred_1", expiresAt: null });
   },

@@ -70,6 +70,19 @@ x-staffpass-credential: gb_emp_<…>
 | 不明・失効・期限切れ | `invalid_credential` / `revoked` |
 | 社員なし | `employee_not_found` |
 
+### OAuth 2.1（`MCP_OAUTH_ENABLED`、既定 OFF / パイロット org のみ）
+
+フラグ ON 時は Claude / ChatGPT などのリモート MCP クライアントが OAuth で接続できます（`gb_emp_` Bearer はそのまま併用可）。
+When `MCP_OAUTH_ENABLED` is ON, remote MCP clients can connect via OAuth; `gb_emp_` Bearer keeps working unchanged.
+
+- 未認証リクエスト → `401` + `WWW-Authenticate: Bearer resource_metadata="…/.well-known/oauth-protected-resource/api/mcp", scope="staffpass.employee"`。同じ値を JSON-RPC `error.data._meta["mcp/www_authenticate"]` にも載せます（HTTP ヘッダを見ないクライアント向け）。
+- メタデータ: `/.well-known/oauth-protected-resource/api/mcp`（RFC 9728）、`/.well-known/oauth-authorization-server`（RFC 8414）。クライアント登録は CIMD（`client_id` = HTTPS URL）。DCR は別フラグ `MCP_OAUTH_DCR_ENABLED`。
+- トークン: `sp_at_`（アクセス、短命）/ `sp_rt_`（リフレッシュ、ローテーション + 再利用検知）。`/api/mcp` のみで有効（`resource` 固定）。管理 MCP（`/api/mcp/admin`）は OAuth トークンを拒否します。
+- `tools/list` の各ツールに `securitySchemes: [{ "type": "oauth2", "scopes": ["staffpass.employee"] }]`（`_meta.securitySchemes` にもミラー）。
+- `staffpass_profile`（読み取り専用、OAuth ON 時のみ）: 安定した不透明 id（`sp_prof_…`、org+社員から決定的に生成、DB id ではない）・表示名・役割・org 名を返します。`_meta["openai/profile"]` 付き。秘密値は含みません。
+- サーバーカード（`GET /api/mcp`）の `auth.oauth` に AS / PRM URL を掲載。
+- 接続の取消: 社員詳細の「OAuth 接続」パネル（owner/admin）、または `/api/oauth/revoke`。ローテーション時は「OAuth 接続も切断する」チェックで一括失効（既定は切らない）。
+
 ---
 
 ## ツール一覧（狭い制御面のみ）
@@ -110,6 +123,7 @@ staffpass_health
 curl -sS -X POST 'https://staffpass.sealith.com/api/mcp' \
   -H 'Content-Type: application/json' \
   -H 'Accept: application/json' \
+  -H 'Authorization: Bearer gb_emp_YOUR_SECRET_HERE' \
   -d '{
     "jsonrpc": "2.0",
     "id": 1,

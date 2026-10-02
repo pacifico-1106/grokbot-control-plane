@@ -2,6 +2,12 @@ import { NextResponse } from "next/server";
 import { isMcpOAuthLegacyUnauthInitialize } from "@/lib/feature-flags";
 import { isMcpOAuthEnabled } from "@/lib/mcp-oauth/config";
 import {
+  authChallengeMeta,
+  decorateToolsForOAuth,
+  oauthInstructions,
+  oauthServerCardAuth,
+} from "@/lib/mcp-oauth/client-compat";
+import {
   hasAnyMcpCredential,
   resolveMcpCredential,
   wwwAuthenticate,
@@ -88,8 +94,13 @@ function serverInfo() {
       type: "bearer",
       scheme: "Authorization: Bearer gb_emp_…",
       alternateHeader: "x-staffpass-credential",
+      ...(isMcpOAuthEnabled() ? oauthServerCardAuth() : {}),
     },
   };
+}
+
+function initializeInstructions(base: string): string {
+  return isMcpOAuthEnabled() ? oauthInstructions(base) : base;
 }
 
 export async function OPTIONS() {
@@ -162,7 +173,7 @@ export async function POST(req: Request) {
         id,
         -32001,
         "Authentication required (OAuth 2.1 or Authorization: Bearer gb_emp_…)",
-        { code: "missing_credential" },
+        { code: "missing_credential", _meta: authChallengeMeta() },
         401,
         { "WWW-Authenticate": wwwAuthenticate() }
       );
@@ -184,11 +195,12 @@ export async function POST(req: Request) {
         name: MCP_SERVER_NAME,
         version: MCP_SERVER_VERSION,
       },
-      instructions:
+      instructions: initializeInstructions(
         "Staffpass is a fail-closed AI employee control plane. Authenticate with Authorization: Bearer gb_emp_…. Use staffpass_whoami then staffpass_invoke with purpose+jobId. On needs_approval, poll staffpass_get_approval_status with approvalId+statusToken (pollUrl in the result) until approved|rejected|revision_requested|expired — do not complete confirm/send/order while pending. On revision_requested, revise per revisionNote and re-invoke with the same jobId and parentApprovalId. Restrict clients with allowed_tools to the four staffpass_* tools." +
         (isConfigChangeRequestEnabled()
           ? " Never change your own Instructions/policy text or channel ledger/classification yourself: file staffpass_config_change_request and wait for the human approver; approvers/permissions/billing are not requestable."
-          : ""),
+          : "")
+      ),
     });
   }
 
@@ -208,19 +220,20 @@ export async function POST(req: Request) {
               ),
             }
           : undefined;
-      return jsonRpcError(
-        id,
-        -32001,
-        auth.message,
-        { code: auth.code },
-        auth.httpStatus,
-        challenge
-      );
+      const errorData: Record<string, unknown> = { code: auth.code };
+      if (challenge) {
+        // Body-level mirror of the HTTP challenge for clients that only surface JSON-RPC.
+        errorData._meta = authChallengeMeta(
+          hasAnyMcpCredential(req) ? { error: "invalid_token", description: auth.code } : {}
+        );
+      }
+      return jsonRpcError(id, -32001, auth.message, errorData, auth.httpStatus, challenge);
     }
 
     if (method === "tools/list") {
+      const listed = presentToolsForList(listStaffpassMcpTools());
       return jsonRpcResult(id, {
-        tools: presentToolsForList(listStaffpassMcpTools()),
+        tools: isMcpOAuthEnabled() ? decorateToolsForOAuth(listed) : listed,
       });
     }
 
@@ -244,8 +257,12 @@ export async function POST(req: Request) {
       );
       return jsonRpcResult(id, result);
     } catch (e) {
-      const message = e instanceof Error ? e.message : "tool_call_failed";
-      return jsonRpcError(id, -32000, message, undefined, 500);
+      // Never echo internal error text (may carry SQL / upstream detail) to MCP clients.
+      console.error("[mcp] tools/call failed", {
+        tool: toolName.slice(0, 64),
+        error: e instanceof Error ? e.name : "unknown",
+      });
+      return jsonRpcError(id, -32000, "tool_call_failed", undefined, 500);
     }
   }
 
