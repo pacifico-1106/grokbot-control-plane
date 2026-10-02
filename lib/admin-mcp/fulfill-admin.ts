@@ -551,6 +551,7 @@ async function fulfillIssue(approval: ApprovalRequest, args: Record<string, unkn
     secretPrefix: secret.prefix,
     expiresAt,
     auditSummary: `${displayName} の社員証を発行（管理MCP・人承認後）`,
+    actorEmail: approval.resolvedBy ?? null,
   });
   await appendAuditEvent({
     orgId: approval.orgId,
@@ -559,7 +560,11 @@ async function fulfillIssue(approval: ApprovalRequest, args: Record<string, unkn
     action: "admin.hire",
     purpose: "admin.hire",
     summary: `${displayName} を人確認のうえで発行`,
-    metadata: { auditClass: ADMIN_AUDIT_CLASS, approvalId: approval.id },
+    metadata: {
+      auditClass: ADMIN_AUDIT_CLASS,
+      approvalId: approval.id,
+      secretHashPrefix: secret.hash.slice(0, 12),
+    },
   });
   return {
     ok: true,
