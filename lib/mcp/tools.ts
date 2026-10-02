@@ -28,6 +28,14 @@ import { parseAdminFulfillment } from "@/lib/admin-mcp/fulfill-admin";
 import { parseFulfillment } from "@/lib/approvals/fulfill";
 import { handleDecisionRequest, type DecisionRequestInput } from "@/lib/decision-workflow";
 import { isConfigChangeRequestEnabled } from "@/lib/feature-flags";
+import { isMcpOAuthEnabled } from "@/lib/mcp-oauth/config";
+import {
+  STAFFPASS_PROFILE_TOOL_DEF,
+  STAFFPASS_PROFILE_TOOL_NAME,
+  buildProfile,
+  profileToolResult,
+} from "@/lib/mcp-oauth/client-compat";
+import { getOrgName } from "@/lib/mcp-oauth/org-info";
 import {
   CONFIG_CHANGE_KINDS,
   CONFIG_CHANGE_MCP_TOOL,
@@ -388,9 +396,11 @@ export const CONFIG_CHANGE_REQUEST_MCP_TOOL_DEF: McpToolDef = {
 
 /** Employee MCP tools/list. Flag OFF → exactly STAFFPASS_MCP_TOOLS. */
 export function listStaffpassMcpTools(): McpToolDef[] {
-  return isConfigChangeRequestEnabled()
+  const base = isConfigChangeRequestEnabled()
     ? [...STAFFPASS_MCP_TOOLS, CONFIG_CHANGE_REQUEST_MCP_TOOL_DEF]
     : STAFFPASS_MCP_TOOLS;
+  // staffpass_profile only exists when MCP OAuth is ON (Q10).
+  return isMcpOAuthEnabled() ? [...base, STAFFPASS_PROFILE_TOOL_DEF as McpToolDef] : base;
 }
 
 function toolResult(data: unknown, isError = false) {
@@ -443,7 +453,29 @@ export async function callStaffpassMcpTool(
   name: string,
   args: Record<string, unknown>,
   cred: ResolvedEmployeeCredential
-): Promise<{ content: Array<{ type: "text"; text: string }>; structuredContent?: unknown; isError?: boolean }> {
+): Promise<{
+  content: Array<{ type: "text"; text: string }>;
+  structuredContent?: unknown;
+  isError?: boolean;
+  _meta?: Record<string, unknown>;
+}> {
+  if (name === STAFFPASS_PROFILE_TOOL_NAME && isMcpOAuthEnabled()) {
+    const employee = await getEmployeeById(cred.employeeId);
+    if (!employee || employee.orgId !== cred.orgId) {
+      return toolResult({ ok: false, code: "employee_not_found", message: "Employee not found" }, true);
+    }
+    const authMethod = (cred as { authMethod?: string }).authMethod === "oauth" ? "oauth" : "gb_emp";
+    return profileToolResult(
+      buildProfile({
+        orgId: cred.orgId,
+        employeeId: cred.employeeId,
+        displayName: employee.displayName || "",
+        roleLabel: employee.roleLabel || "",
+        orgName: await getOrgName(cred.orgId).catch(() => null),
+        authMethod,
+      })
+    );
+  }
   switch (name) {
     case "staffpass_whoami": {
       const employee = await getEmployeeById(cred.employeeId);
