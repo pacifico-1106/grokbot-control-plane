@@ -21,6 +21,16 @@ export function isAllowedTool(name: string): name is AllowedToolName {
   return ALLOWED_TOOLS.includes(name as AllowedToolName);
 }
 
+/** Explicit visitor statements that make executive a candidate (recommend_plan). */
+export const EXECUTIVE_SIGNALS = [
+  "decision_authority",
+  "pre_decision_full",
+  "heavy_model",
+  "development",
+] as const;
+
+export type ExecutiveSignal = (typeof EXECUTIVE_SIGNALS)[number];
+
 export const TOOL_DEFINITIONS = [
   {
     type: "function" as const,
@@ -79,6 +89,12 @@ export const TOOL_DEFINITIONS = [
             type: "string",
             enum: ["simple", "moderate", "complex"],
             description: "Complexity level",
+          },
+          executiveSignals: {
+            type: "array",
+            items: { type: "string", enum: [...EXECUTIVE_SIGNALS] },
+            description:
+              "Set only when the visitor explicitly said so: decision_authority = the AI employee approves within a set limit, pre_decision_full = handles everything up to the final decision, heavy_model = needs high-performance AI models or high-volume processing, development = builds or maintains systems. The number or breadth of task areas alone is never an executive signal.",
           },
           tools: {
             type: "array",
@@ -220,7 +236,10 @@ export async function executeKnowledgeSearch(
       success: true,
       data: {
         found: false,
-        message: "承認済みの情報が見つかりませんでした。詳細は相談窓口でご確認ください。",
+        // Guidance for the model, not visitor text: the old wording
+        // (「承認済みの情報が見つかりませんでした」) was echoed to visitors verbatim.
+        message:
+          "該当する掲載情報はありません。本文では調べた結果や内部の仕組みに触れず、推測で確約も否定もせず、「詳細は個別に確認のうえ、担当よりご回答いたします」と丁寧に伝えてください。",
       },
     };
   }
@@ -283,37 +302,56 @@ export async function executeCatalogGet(args: { sku?: string }): Promise<ToolRes
   };
 }
 
+const EXECUTIVE_SIGNAL_REASONS: Record<ExecutiveSignal, string> = {
+  decision_authority: "決められた上限までの承認権限を任せる業務に対応",
+  pre_decision_full: "決裁直前までを任せる業務に対応",
+  heavy_model: "高性能なAIモデルや大量の処理が必要な業務に対応",
+  development: "システムの開発・保守に対応",
+};
+
+export const RECOMMEND_PLAN_UPGRADE_NOTE =
+  "まずインターンかプロパーで始め、様子を見て上位プランやカスタマイズへの切り替えをご相談できます";
+
 export async function executeRecommendPlan(args: {
   taskAreas?: string[];
   complexity?: string;
+  executiveSignals?: string[];
   tools?: string[];
   timing?: string;
 }): Promise<ToolResult> {
   const taskAreas = args.taskAreas || [];
   const complexity = args.complexity || "moderate";
+  const signals = [...new Set(args.executiveSignals || [])].filter((s): s is ExecutiveSignal =>
+    (EXECUTIVE_SIGNALS as readonly string[]).includes(s)
+  );
 
   let recommendedSku: string;
   const reasons: string[] = [];
   const unknowns: string[] = [];
   let requiresConsultation = false;
+  let upgradePath: string[] | undefined;
 
   if (taskAreas.length === 0) {
     unknowns.push("任せたい業務が不明です");
     requiresConsultation = true;
   }
 
-  if (taskAreas.length <= 1 && complexity === "simple") {
+  if (signals.length > 0) {
+    // Executive only on what the visitor explicitly asked for, never on breadth alone.
+    recommendedSku = "executive";
+    for (const s of signals) reasons.push(EXECUTIVE_SIGNAL_REASONS[s]);
+  } else if (taskAreas.length <= 1 && complexity === "simple") {
     recommendedSku = "intern";
     reasons.push("定型1領域に対応");
-  } else if (taskAreas.length <= 3 && complexity !== "complex") {
-    recommendedSku = "proper";
-    reasons.push("複数の定型業務に対応");
-  } else if (complexity === "complex" || taskAreas.length > 3) {
-    recommendedSku = "executive";
-    reasons.push("高度な運用や複数業務の個別設計に対応");
   } else {
     recommendedSku = "proper";
-    reasons.push("標準的な業務範囲に対応");
+    if (taskAreas.length > 3 || complexity === "complex") {
+      reasons.push("業務が多い・範囲が広い場合も、標準プランから始められます");
+      reasons.push(RECOMMEND_PLAN_UPGRADE_NOTE);
+      upgradePath = ["executive", "custom"];
+    } else {
+      reasons.push("複数の定型業務に対応");
+    }
   }
 
   if (args.tools && args.tools.length > 0) {
@@ -329,6 +367,7 @@ export async function executeRecommendPlan(args: {
     data: {
       sku: recommendedSku,
       reasons,
+      ...(upgradePath ? { upgradePath } : {}),
       unknowns,
       requiresConsultation: requiresConsultation || unknowns.length > 0,
       note: "プランは候補です。業務適合や成果を保証するものではありません。",
@@ -419,7 +458,9 @@ export async function executeTool(
     case "catalog_get":
       return executeCatalogGet(args as { sku?: string });
     case "recommend_plan":
-      return executeRecommendPlan(args as { taskAreas?: string[]; complexity?: string; tools?: string[]; timing?: string });
+      return executeRecommendPlan(
+        args as { taskAreas?: string[]; complexity?: string; executiveSignals?: string[]; tools?: string[]; timing?: string }
+      );
     case "proposal_prepare":
       return executeProposalPrepare(args as { sku?: string; billingPreference?: string; requirements?: string });
     case "handoff_offer":

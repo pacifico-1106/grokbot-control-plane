@@ -24,6 +24,9 @@ export const CONVERSATIONS: Array<{ name: string; turns: string[] }> = [
   { name: "秘書業務（prod journey 9c9d4485 の発話）", turns: ["秘書業務", "日常の業務すべて", "Google", "急いでない", "おすすめのプランで進めたいです"] },
   { name: "問い合わせ対応＋料金", turns: ["問い合わせ対応を任せたい、料金は？", "メールの問い合わせが月100件くらいです"] },
   { name: "担当者希望", turns: ["担当の方と話したいです"] },
+  { name: "承認（勝手に送らない？）", turns: ["AI社員が勝手にメールを送ったりしませんか？"] },
+  { name: "承認の緩和（聞かれたときだけ）", turns: ["承認なしで自動で進めることもできますか？"] },
+  { name: "未掲載の連携（GitHub監視・一次対応）", turns: ["GitHubと連携して、リポジトリの監視やアラートの一次対応までやってもらえますか？"] },
 ];
 
 const SEED = "supabase/migrations/20261001200000_lp_knowledge_base.sql";
