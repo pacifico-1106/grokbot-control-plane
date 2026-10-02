@@ -20,6 +20,7 @@ import {
   readCsrfCookie,
   type ChatCard,
 } from "@/lib/lp/client-session";
+import { createTurnstileController, type TurnstileApi, type TurnstileController } from "@/lib/lp/turnstile-client";
 
 interface Message {
   id: string;
@@ -30,10 +31,7 @@ interface Message {
 
 declare global {
   interface Window {
-    turnstile?: {
-      render: (el: HTMLElement, opts: { sitekey: string; callback: (token: string) => void }) => string;
-      reset: (id?: string) => void;
-    };
+    turnstile?: TurnstileApi;
   }
 }
 
@@ -59,6 +57,17 @@ export function ChatLauncher({
   const [error, setError] = useState<string | null>(null);
   const [turnstileToken, setTurnstileToken] = useState<string | null>(null);
   const turnstileRef = useRef<HTMLDivElement>(null);
+  const turnstileCtl = useRef<TurnstileController | null>(null);
+  if (turnstileSiteKey && !turnstileCtl.current) {
+    turnstileCtl.current = createTurnstileController({
+      sitekey: turnstileSiteKey,
+      getApi: () => window.turnstile,
+      onTokenChange: setTurnstileToken,
+      onError: ({ gaveUp }) => {
+        if (gaveUp) setError("認証を完了できませんでした。ページを再読み込みしてお試しください。");
+      },
+    });
+  }
   const listRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -66,28 +75,43 @@ export function ChatLauncher({
   }, [messages]);
 
   // Load Cloudflare Turnstile only when a site key is configured and the consent step is visible.
+  // The consent step's container is a new element each time it is shown (e.g. after a 401), so the
+  // controller removes the old widget on unmount and renders a fresh one with a fresh token.
   useEffect(() => {
-    if (!open || csrfToken || !turnstileSiteKey || !turnstileRef.current) return;
+    const ctl = turnstileCtl.current;
+    if (!open || csrfToken || !ctl || !turnstileRef.current) return;
     const el = turnstileRef.current;
+    let cancelled = false;
+    let script: HTMLScriptElement | null = null;
     const render = () => {
-      if (window.turnstile && el.childElementCount === 0) {
-        window.turnstile.render(el, { sitekey: turnstileSiteKey, callback: setTurnstileToken });
-      }
+      if (!cancelled) ctl.mount(el);
     };
     if (window.turnstile) {
       render();
-      return;
+    } else {
+      script = document.querySelector<HTMLScriptElement>(`script[src="${TURNSTILE_SRC}"]`);
+      if (!script) {
+        script = document.createElement("script");
+        script.src = TURNSTILE_SRC;
+        script.async = true;
+        document.head.appendChild(script);
+      }
+      script.addEventListener("load", render);
     }
-    const script = document.createElement("script");
-    script.src = TURNSTILE_SRC;
-    script.async = true;
-    script.onload = render;
-    document.head.appendChild(script);
-  }, [open, csrfToken, turnstileSiteKey]);
+    return () => {
+      cancelled = true;
+      script?.removeEventListener("load", render);
+      ctl.unmount();
+    };
+  }, [open, csrfToken]);
 
   const startJourney = useCallback(async () => {
     setBusy(true);
     setError(null);
+    // Turnstile tokens are single-use: take it for this attempt (clears it and resets the widget).
+    const ctl = turnstileCtl.current;
+    const attemptToken = ctl ? ctl.takeToken() : null;
+    let started = false;
     try {
       const res = await fetch("/api/journeys", {
         method: "POST",
@@ -96,7 +120,7 @@ export function ChatLauncher({
         body: JSON.stringify({
           aiDisclosureAccepted: true,
           privacyVersion: LP_PRIVACY_VERSION,
-          turnstileToken: turnstileToken ?? undefined,
+          turnstileToken: attemptToken ?? undefined,
         }),
       });
       const data = await res.json().catch(() => null);
@@ -104,6 +128,7 @@ export function ChatLauncher({
         setError(data?.message ?? "チャットを開始できませんでした。時間をおいてお試しください。");
         return;
       }
+      started = true;
       setCsrfToken(data.csrfToken);
       setMessages([
         { id: "greeting", role: "assistant", text: "AI相談窓口です。どの業務を任せたいですか。" },
@@ -111,9 +136,11 @@ export function ChatLauncher({
     } catch {
       setError("通信に失敗しました。");
     } finally {
+      // Any failed start (400 turnstile_failed, 401/403/429/5xx, network) needs a fresh challenge.
+      if (!started) ctl?.reset();
       setBusy(false);
     }
-  }, [turnstileToken]);
+  }, []);
 
   const send = useCallback(async () => {
     const text = input.trim();

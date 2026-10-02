@@ -14,7 +14,7 @@ import {
   createJourney,
   generateGuestToken,
   generateCsrfToken,
-  formatGuestCookie,
+  formatGuestCookieValue,
 } from "@/lib/lp/journeys";
 import { verifyTurnstileToken, getClientIp, getTurnstileConfig } from "@/lib/lp/turnstile";
 import { hashIp, checkRateLimits } from "@/lib/lp/rate-limit";
@@ -140,7 +140,10 @@ export async function POST(req: Request) {
   }
 
   const cookieStore = await cookies();
-  const guestCookieValue = formatGuestCookie(token);
+  // cookies().set() takes the bare value. Passing the full Set-Cookie string from
+  // formatGuestCookie() stored "lp_guest=<token>.<sig>; Path=/; ..." as the value,
+  // so every later signature check failed with invalid_session.
+  const guestCookieValue = formatGuestCookieValue(token);
 
   cookieStore.set(GUEST_COOKIE_NAME, guestCookieValue, {
     httpOnly: true,
