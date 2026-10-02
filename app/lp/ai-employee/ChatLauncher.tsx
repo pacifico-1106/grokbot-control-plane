@@ -16,7 +16,9 @@ import {
   LP_CSRF_HEADER,
   LP_PRIVACY_VERSION,
   LP_CHAT_GREETING,
+  LP_CONSULT_PATH,
   buildTurnHistory,
+  chatCardView,
   isSafeLpPath,
   parseChatCard,
   readCsrfCookie,
@@ -323,7 +325,7 @@ export function ChatLauncher({
                       {m.text}
                     </div>
                     {m.cards?.map((card, i) =>
-                      card.type === "proposal_card" ? (
+                      card.type === "proposal_card" && chatCardView(card, handoffEnabled) === "proposal" ? (
                         <div key={i} className="mt-2 rounded-xl border border-[var(--border)] p-3" data-testid="lp-chat-proposal">
                           <div className="font-semibold">{card.displayName}</div>
                           <div className="text-xs faint mt-1">
@@ -334,7 +336,7 @@ export function ChatLauncher({
                             申込内容を確認する
                           </Link>
                         </div>
-                      ) : handoffEnabled ? (
+                      ) : card.type === "handoff_preview" && chatCardView(card, handoffEnabled) === "handoff" ? (
                         <div key={i} className="mt-2 rounded-xl border border-[var(--border)] p-3" data-testid="lp-chat-handoff">
                           <div className="text-xs faint">担当者に共有する内容（次の画面で編集できます）</div>
                           <div className="mt-1 whitespace-pre-wrap">{card.summaryDraft}</div>
@@ -347,7 +349,16 @@ export function ChatLauncher({
                             内容を確認して相談を依頼する
                           </button>
                         </div>
-                      ) : null
+                      ) : (
+                        <div key={i} className="mt-2 rounded-xl border border-[var(--border)] p-3" data-testid="lp-chat-contact">
+                          <div className="text-xs faint">
+                            {card.type === "contact_link" && card.note ? card.note : "相談フォームから担当者にご連絡いただけます。"}
+                          </div>
+                          <Link href={LP_CONSULT_PATH} className="btn btn-primary text-xs mt-2 inline-block">
+                            相談フォームを開く
+                          </Link>
+                        </div>
+                      )
                     )}
                   </div>
                 ))}

@@ -169,9 +169,14 @@ describe("chat turn: prod smoke conversation", () => {
 describe("chat turn: flags shape the tools offered", () => {
   test("LP_HANDOFF_ENABLED off: handoff_offer is not offered and a forced call is refused", async () => {
     delete process.env.LP_HANDOFF_ENABLED;
-    const { body } = await turn("担当の方と話したいです");
+    const { body } = await turn("料金の目安も教えてください");
     expect(openAiRequests[0].tools!.map((t) => t.function.name)).not.toContain("handoff_offer");
     expect(body.cards).toBeUndefined();
+    // An explicit request for a person gets the contact form card without a model call (handoff.test.ts).
+    openAiRequests.length = 0;
+    const human = await turn("担当の方と話したいです");
+    expect(openAiRequests.length).toBe(0);
+    expect((human.body.cards as Array<{ type: string }>).map((c) => c.type)).toEqual(["contact_link"]);
 
     openAiRequests.length = 0;
     forceToolCall = "handoff_offer";

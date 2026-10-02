@@ -69,7 +69,16 @@ export interface HandoffPreviewCard {
   note?: string;
 }
 
-export type ChatCard = ProposalCard | HandoffPreviewCard;
+/** Normal contact path (consult form) when the human handoff flow is OFF. URL is fixed client-side. */
+export interface ContactLinkCard {
+  type: "contact_link";
+  href: typeof LP_CONSULT_PATH;
+  note?: string;
+}
+
+export const LP_CONSULT_PATH = "/lp/ai-employee/consult";
+
+export type ChatCard = ProposalCard | HandoffPreviewCard | ContactLinkCard;
 
 /** Narrow untrusted card JSON from the chat API to the two shapes the UI knows. */
 export function parseChatCard(raw: unknown): ChatCard | null {
@@ -97,5 +106,30 @@ export function parseChatCard(raw: unknown): ChatCard | null {
       note: typeof r.note === "string" ? r.note : undefined,
     };
   }
+  if (r.type === "contact_link") {
+    return {
+      type: "contact_link",
+      href: LP_CONSULT_PATH,
+      note: typeof r.note === "string" ? r.note.slice(0, 200) : undefined,
+    };
+  }
   return null;
+}
+
+/**
+ * How the launcher shows a card. A handoff card with the handoff flow OFF degrades to the
+ * contact form link, so the visitor is never left with a dead "approve" step.
+ */
+export function chatCardView(
+  card: ChatCard,
+  handoffEnabled: boolean
+): "proposal" | "handoff" | "contact" {
+  if (card.type === "proposal_card") return "proposal";
+  if (card.type === "handoff_preview") return handoffEnabled ? "handoff" : "contact";
+  return "contact";
+}
+
+/** The handoff confirm page may edit/confirm only while the row is awaiting confirmation. */
+export function isHandoffAwaitingConfirmation(status: string): boolean {
+  return status === "pending_confirmation" || status === "pending";
 }

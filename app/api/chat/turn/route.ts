@@ -33,6 +33,14 @@ import {
   selectToolDefinitions,
   type ChatCapabilities,
 } from "@/lib/lp/chat-prompt";
+import {
+  HANDOFF_CARD_REPLY,
+  HANDOFF_OFF_REPLY,
+  buildServerHandoffCard,
+  contactLinkCard,
+  detectHandoffIntent,
+  looksLikeFakeHandoffText,
+} from "@/lib/lp/handoff-intent";
 
 const GUEST_COOKIE_NAME = "lp_guest";
 const CSRF_HEADER_NAME = "x-csrf-token";
@@ -153,6 +161,29 @@ export async function POST(req: Request) {
     text
   );
 
+  // A visitor asking for a person must always get a working path, never a fake
+  // in-chat "approval" (prod smoke 2026-10-02 turn 3).
+  const handoffIntent = detectHandoffIntent(text);
+  const forceHandoffTool = handoffIntent && allowedThisTurn.has("handoff_offer");
+
+  if (handoffIntent && !caps.handoffEnabled) {
+    await recordChatTurn({
+      journeyId: journey.id,
+      turnNumber,
+      clientTurnId,
+      kbReleaseId: kbRelease?.releaseId,
+      model: "rule:handoff_disabled",
+      toolCalls: ["contact_link"],
+    });
+    return NextResponse.json({
+      ok: true,
+      reply: HANDOFF_OFF_REPLY,
+      cards: [contactLinkCard()],
+      kbReleaseId: kbRelease?.releaseId,
+      turnNumber,
+    });
+  }
+
   let reply = "";
   const citations: Array<{ title: string; url: string | null }> = [];
   const cards: Array<unknown> = [];
@@ -178,7 +209,16 @@ export async function POST(req: Request) {
         body: JSON.stringify({
           model,
           messages,
-          ...(tools.length > 0 ? { tools, tool_choice: toolsAllowed ? "auto" : "none" } : {}),
+          ...(tools.length > 0
+            ? {
+                tools,
+                tool_choice: !toolsAllowed
+                  ? "none"
+                  : forceHandoffTool && rounds === 1
+                    ? { type: "function", function: { name: "handoff_offer" } }
+                    : "auto",
+              }
+            : {}),
           max_tokens: MAX_OUTPUT_TOKENS,
         }),
         signal: AbortSignal.timeout(30000),
@@ -261,7 +301,10 @@ export async function POST(req: Request) {
 
           if (toolResult.data && typeof toolResult.data === "object" && "type" in toolResult.data) {
             const dataType = (toolResult.data as { type?: string }).type;
-            if (dataType === "proposal_card" || dataType === "handoff_preview") {
+            const duplicateHandoff =
+              dataType === "handoff_preview" &&
+              cards.some((c) => (c as { type?: string } | null)?.type === "handoff_preview");
+            if ((dataType === "proposal_card" || dataType === "handoff_preview") && !duplicateHandoff) {
               cards.push(toolResult.data);
             }
           }
@@ -281,6 +324,21 @@ export async function POST(req: Request) {
         reply = assistantMessage.content || reply;
         continueLoop = false;
       }
+    }
+
+    const hasHandoffCard = cards.some(
+      (c) => !!c && typeof c === "object" && (c as { type?: string }).type === "handoff_preview"
+    );
+    const fakeHandoff = looksLikeFakeHandoffText(reply);
+    if (caps.handoffEnabled && (handoffIntent || fakeHandoff)) {
+      if (!hasHandoffCard) {
+        cards.push(buildServerHandoffCard(history, text));
+        toolCallsUsed.push("handoff_offer:server");
+      }
+      if (!hasHandoffCard || fakeHandoff || !reply.trim()) reply = HANDOFF_CARD_REPLY;
+    } else if (!caps.handoffEnabled && fakeHandoff) {
+      reply = HANDOFF_OFF_REPLY;
+      cards.push(contactLinkCard());
     }
 
     if (!reply.trim()) {

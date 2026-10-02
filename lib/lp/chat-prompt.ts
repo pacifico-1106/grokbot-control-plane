@@ -29,6 +29,9 @@ export interface ChatCapabilities {
   handoffEnabled: boolean;
 }
 
+const NO_HANDOFF_LINE =
+  "担当者との相談を希望されたら、ページの「相談する」（相談フォーム）から申し込めると案内する。要約や承認のお願いを本文に書かない。";
+
 export function buildSystemPrompt(caps: ChatCapabilities): string {
   const lines = [
     "あなたはStaffpass AI社員のAI相談窓口です。人間だと名乗らない。",
@@ -51,16 +54,17 @@ export function buildSystemPrompt(caps: ChatCapabilities): string {
     );
     if (caps.handoffEnabled) {
       lines.push(
-        "担当者・人と話したい、相談したい、見積りが必要、または回答できない内容のときは、handoff_offerを呼び、共有する要約案（summaryDraft）を作って画面に表示する。",
-        "相談引継ぎは要約を表示し、本人の画面承認を待つ。会話だけで引継ぎを確定しない。"
+        "担当者・人と話したい、相談したい、見積り・電話・問い合わせの希望、または回答できない内容のときは、必ずhandoff_offerツールを呼ぶ。summaryDraftには顧客の発言だけを基にした要約を入れる。",
+        "要約・要約案・承認のお願い・「この内容でよろしければ」などを本文に書かない。確認と承認は画面のカードで行う。handoff_offerの後の本文は「下のカードから内容を確認してください」の一言だけにする。",
+        "会話だけで引継ぎを確定しない。"
       );
     } else {
-      lines.push("担当者との相談を希望されたら、ページの「相談する」から申し込めると案内する。");
+      lines.push(NO_HANDOFF_LINE);
     }
   } else {
     lines.push(
       "料金や個別条件は確約せず、ページの料金表と「相談する」を案内する。",
-      "担当者との相談を希望されたら、ページの「相談する」から申し込めると案内する。"
+      NO_HANDOFF_LINE
     );
   }
   return lines.join("\n");

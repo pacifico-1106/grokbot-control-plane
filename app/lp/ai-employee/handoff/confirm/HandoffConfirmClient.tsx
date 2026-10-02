@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { LP_CSRF_HEADER, readCsrfCookie } from "@/lib/lp/client-session";
+import { LP_CSRF_HEADER, isHandoffAwaitingConfirmation, readCsrfCookie } from "@/lib/lp/client-session";
 
 type State =
   | { kind: "loading" }
@@ -100,7 +100,9 @@ export function HandoffConfirmClient({ handoffId }: { handoffId: string }) {
   if (state.kind === "cancelled")
     return <p className="mt-6 text-sm" data-testid="handoff-cancelled">相談の依頼を取り消しました。担当者には共有されていません。</p>;
 
-  const pending = state.status === "pending";
+  // Rows are created as "pending_confirmation" (lib/lp/handoffs.ts); comparing with "pending"
+  // made every new handoff look already processed and disabled the confirm form.
+  const pending = isHandoffAwaitingConfirmation(state.status);
   const canConfirm = pending && summary.trim().length > 0 && summary.length <= 2000 && (email || phone);
 
   return (
