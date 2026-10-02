@@ -3,9 +3,11 @@ import {
   createOrgWithOwner,
   provisionOrgForUser,
 } from "@/lib/auth/session";
+import { evaluateSignupGuard, SIGNUP_HONEYPOT_FIELD } from "@/lib/auth/signup-guard";
 import { setOrgReferralCodeIfEmpty } from "@/lib/data/org-context";
 import { DEMO_ORG } from "@/lib/demo-data";
 import { sendTrialStartedEmail, sendWelcomeEmail } from "@/lib/email";
+import { getClientIp, getTurnstileConfig, verifyTurnstileToken } from "@/lib/lp/turnstile";
 import { isDemoMode } from "@/lib/mode";
 import { TRIAL_DAYS } from "@/lib/stripe";
 import { createServerClient } from "@supabase/ssr";
@@ -56,6 +58,8 @@ export async function POST(req: Request) {
   let displayName = "";
   let referralCode = "";
   let legalAgreement = false;
+  let honeypot = "";
+  let turnstileToken = "";
 
   if (contentType.includes("application/json")) {
     const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
@@ -70,6 +74,10 @@ export async function POST(req: Request) {
       body.legal_agreement === true ||
       body.legalAgreement === "accepted" ||
       body.legalAgreement === true;
+    honeypot = String(body[SIGNUP_HONEYPOT_FIELD] || "");
+    turnstileToken = String(
+      body.turnstileToken || body["cf-turnstile-response"] || ""
+    );
   } else {
     const form = await req.formData();
     orgName = String(form.get("orgName") || "").trim();
@@ -81,6 +89,8 @@ export async function POST(req: Request) {
       form.get("referral_code") || form.get("referralCode") || ""
     ).trim();
     legalAgreement = form.get("legal_agreement") === "accepted";
+    honeypot = String(form.get(SIGNUP_HONEYPOT_FIELD) || "");
+    turnstileToken = String(form.get("cf-turnstile-response") || "");
   }
 
   if (!legalAgreement) {
@@ -96,6 +106,40 @@ export async function POST(req: Request) {
   if (!email) {
     return NextResponse.json({ error: "email_required" }, { status: 400 });
   }
+  if (email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return NextResponse.json({ error: "invalid_email" }, { status: 400 });
+  }
+
+  // Bot protection runs before any Auth user / org / email side effect.
+  // Not behind a flag (P0 hotfix spam-sample-20261003); Turnstile fail-closed outside DEMO.
+  const guard = await evaluateSignupGuard(
+    {
+      orgName,
+      referralCode,
+      honeypot,
+      turnstileToken,
+      clientIp: getClientIp(req),
+      demo: isDemoMode(),
+    },
+    {
+      turnstileConfigured: () => getTurnstileConfig() !== null,
+      verifyTurnstile: verifyTurnstileToken,
+    }
+  );
+  if (!guard.ok) {
+    if (!contentType.includes("application/json")) {
+      // Plain HTML form: back to /signup with a fixed error code (no echo of input).
+      const back = new URL("/signup", req.url);
+      back.searchParams.set("error", guard.error);
+      return NextResponse.redirect(back, 303);
+    }
+    return NextResponse.json(
+      { error: guard.error, message: guard.message },
+      { status: guard.status }
+    );
+  }
+  orgName = guard.orgName;
+  referralCode = guard.referralCode ?? "";
 
   if (isDemoMode()) {
     if (referralCode) {
