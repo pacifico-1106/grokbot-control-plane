@@ -3,6 +3,8 @@ import { ConversationAdaptersClient } from "@/components/ConversationAdaptersCli
 import { NotificationChannelsClient } from "@/components/NotificationChannelsClient";
 import { PartyDirectoryClient } from "@/components/PartyDirectoryClient";
 import { ApprovalKindRoutesClient } from "@/components/settings/ApprovalKindRoutesClient";
+import { ChannelScopeClient } from "@/components/settings/ChannelScopeClient";
+import { handleChannelScopeGet } from "@/lib/channel-scope/admin";
 import { IngressHandoffPolicyClient } from "@/components/settings/IngressHandoffPolicyClient";
 import { ProjectsClient } from "@/components/settings/ProjectsClient";
 import { SodWarnPolicyClient } from "@/components/settings/SodWarnPolicyClient";
@@ -18,6 +20,7 @@ import {
   listOrgChannels,
   listOrgParties,
   listOrgProjects,
+  listEmployees,
 } from "@/lib/data";
 import { isApprovalKindRoutesEnabled } from "@/lib/feature-flags";
 import { isDefaultIngressHandoffPolicy } from "@/lib/ingress-handoff/validate";
@@ -45,6 +48,10 @@ export default async function SettingsPage() {
   const members = canManage && approvalKindRoutesEnabled
     ? await listMembers(session.orgId)
     : [];
+  // P1 Channel Scope (CS6): read-only view + change request card. Flag OFF ⇒ no stored policy read.
+  const channelScope = canManage && session.orgId ? await handleChannelScopeGet(session.orgId, {}).catch(() => null) : null;
+  const scopeEmployees =
+    channelScope?.ok && channelScope.enabled ? (await listEmployees(session.orgId)).filter((e) => e.status === "active") : [];
   return (
     <AppShell
       title="つながり"
@@ -89,6 +96,12 @@ export default async function SettingsPage() {
           ) : null}
           {sodWarnPolicy ? <SodWarnPolicyClient initialPolicy={sodWarnPolicy} /> : null}
           <ProjectsClient initialProjects={projects} initialAssets={assets} />
+          {channelScope?.ok ? (
+            <ChannelScopeClient
+              initial={channelScope}
+              employees={scopeEmployees.map((e) => ({ id: e.id, displayName: e.displayName }))}
+            />
+          ) : null}
           <ApprovalKindRoutesClient
             policy={approvalKindRoutesPolicy}
             enabled={approvalKindRoutesEnabled}

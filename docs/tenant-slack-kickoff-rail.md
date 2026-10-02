@@ -189,6 +189,11 @@ Slack API サイトで Staffpass Slack アプリを設定します。
    - `app_mention`（必要に応じて: チャンネルでのメンション）
 5. **Subscribe to events on behalf of users** に追加（パス B のみ）:
    - `message.im`（人↔人 DM で User Token イベント受信）
+6. **チャンネル範囲（P1 Channel Scope）を使う場合**（`P1_CHANNEL_SCOPE_ENABLED` を ON にする前に追加）:
+   - **Subscribe to bot events**: `member_joined_channel`, `member_left_channel`, `channel_left`, `group_left`, `channel_shared`, `channel_unshared`
+   - **Subscribe to events on behalf of users**: `member_joined_channel`, `member_left_channel`（ユーザー名義の社員が招待・退出されたときに使う）
+   - これらは「AI社員がどのチャンネルに参加しているか」を記録するためだけに使います。範囲外チャンネルの本文は保存・転送しません。
+   - Slack にはイベント購読の状態を読む API がないため、`setup.slackStatus.channelScope.eventsObserved` は「参加イベントを受信した実績があるか」の推定です。
 
 **パス B の注意**: 「Subscribe to events on behalf of users」は「Subscribe to bot events」とは別のセクションです。Bot events だけ設定しても User Token イベントは届きません。
 
@@ -207,6 +212,9 @@ Slack API サイトで Staffpass Slack アプリを設定します。
    - `groups:history` - プライベートチャンネル履歴読み取り
    - `app_mentions:read` - @mention イベント受信
    - `files:write` - ファイルアップロード（Path A チャネル / App DM 添付。Path B 本体は User Token 側）
+   - `channels:read`, `groups:read`, `users:read` - **チャンネル範囲（P1 Channel Scope）用**。参加チャンネルの一覧（`users.conversations`）、共有状態（`conversations.info`）、招待者のワークスペース判定（`users.info`）に使う
+
+> **チャンネル範囲のスコープ**: bot-install OAuth は `P1_CHANNEL_SCOPE_ENABLED` が ON のときだけ `channels:read,groups:read,users:read` を追加で要求します（OFF のときは従来どおり）。Slack アプリ側に先にスコープを追加してからフラグを ON にし、その後テナントに再インストールしてもらってください（順序を逆にするとインストールに失敗する可能性があります）。
 
 **重要**: スコープ変更後は **Reinstall to Workspace** が必要です。bot-install OAuth（`/api/slack/bot-install/start`）も `files:write` を要求するように更新されました。テナントは「Slack ワークスペースにインストール」を再実行して新しい xoxb を取得してください。
 
@@ -220,6 +228,8 @@ Slack API サイトで Staffpass Slack アプリを設定します。
 2. **User Token Scopes** に追加:
    - `im:history` - DM履歴の読み取り（User Token イベント受信に必須）
    - `files:write` - ファイルアップロード（Path B での PDF 添付等に必須）
+
+> **チャンネル範囲**: User Token Scopes の `channels:read`, `groups:read`, `users:read` は既に要求済みです（`SLACK_USER_SCOPES`）。古いトークンの社員は再 Authorize が必要な場合があり、`setup.slackStatus.channelScope.userTokens` に表示されます（`all_joined` の紐付け済み社員のみ確認）。
 
 **重要**: User Token Scopes を追加後、社員が Slack で再 OAuth を行う必要があります。これにより `xoxp-...` トークンが取得され、人↔人 DM イベント受信およびファイルアップロードが可能になります。
 
@@ -285,6 +295,47 @@ tools/call: setup.slackStatus
 ```
 
 `nextStepJa` に次の人間アクションが示されます。Path B PDF 添付の前提は `docs/slack-file-upload-egress.md` を参照。
+
+`P1_CHANNEL_SCOPE_ENABLED` が ON のときだけ、結果に `channelScope` セクションが加わります（OFF のときはキー自体が出ません）:
+
+```json
+"channelScope": {
+  "enabled": true,
+  "connectEnabled": false,
+  "tenantDefault": { "mode": "registered_only", "includeSlackConnect": false, "source": "default", "chosen": false },
+  "allJoinedEmployees": 0,
+  "bot": {
+    "channelsRead": { "ready": true, "code": "ok", "needed": null },
+    "usersRead": { "ready": false, "code": "missing_scope", "needed": "users:read" }
+  },
+  "userTokens": [{ "employeeId": "emp_xxx", "displayName": "稲盛", "channelsRead": { "ready": true, "code": "ok", "needed": null } }],
+  "eventsObserved": false,
+  "unconfirmedConnectCount": 0,
+  "issues": ["Bot Token に users:read がありません（Connect 招待元 team の確認に必要）"],
+  "nextStepJa": "チャンネル範囲モードを channelScope.patch で選んでください…"
+}
+```
+
+### ステップ3.5: チャンネル範囲モードの選択（`P1_CHANNEL_SCOPE_ENABLED` ON のときのみ）
+
+`channels.classify` の前に、AI社員がどのチャンネルで動くかを決めます。
+
+| モード | 意味 |
+|--------|------|
+| `registered_only`（既定） | 人が登録したチャンネルだけ（従来どおり） |
+| `all_joined` | AI社員が参加している社内チャンネルすべて（自動で範囲に入る） |
+| `all_joined` + `includeSlackConnect` | 上記に加えて Slack Connect（`P1_CHANNEL_SCOPE_CONNECT_ENABLED` ON が必要） |
+
+```
+tools/call: channelScope.patch
+arguments: { "mode": "all_joined", "employeeId": "emp_xxx", "beforeStateHash": "<channelScope.get の値>", "jobId": "job_xxx" }
+```
+
+- チケットは always_human（kind=account）。**owner の承認後**に適用されます。自己承認はできません。
+- ダッシュボード `/app/settings` → **チャンネル範囲** カードからも変更申請できます（申請のみ。適用は承認後）。
+- 自動で範囲に入った Slack Connect チャンネルは、`channels.classify` で人が確認するまで送信が承認待ち（needs_approval）になります。
+- 既に参加中のチャンネルを取り込むには `channelScope.reconcile { employeeId, dryRun: true }` で予定を確認し、`dryRun: false`（always_human）で適用します。6時間ごとの cron も同じ照合を行います。
+- Bot / 社員がチャンネルから**外された**（`removed`）場合、そのチャンネルへの送信はフラグ ON のとき拒否されます（`channel_membership_removed`、承認済みでも拒否）。自分で退出した（`left`）場合は拒否しません。
 
 ### ステップ4: チャネル分類（管理エージェントがMCPで実施）
 
@@ -372,6 +423,8 @@ App DM（Staffpassアプリへの直接DM）への返信には `posting_as: bot`
 | 人↔人 DM で `channel_not_found` | `posting_as: bot` になっている | B | `posting_as: user` に変更 |
 | パス B イベントが届かない | Bot events のみ設定 | B | **on behalf of users** で `message.im` 追加 |
 | User Token イベントで wake しない | 社員の Slack 再 OAuth 未完了 | B | 社員に `im:history` スコープで再 OAuth 依頼 |
+| 参加チャンネルが範囲に入らない | チャンネル範囲イベント未購読 / Bot に `channels:read` なし / モードが `registered_only` | チャネル | 1-2 の 6・1-3 のスコープ追加 → 再インストール → `channelScope.patch` |
+| 送信が `channel_membership_removed` で拒否 | Bot / 社員がチャンネルから外された | チャネル | 再招待（`member_joined_channel` で解除）または `channelScope.reconcile` |
 
 ### イベントが届かない
 
@@ -381,6 +434,7 @@ App DM（Staffpassアプリへの直接DM）への返信には `posting_as: bot`
 | Request URL | `https://staffpass.sealith.com/api/webhooks/slack/events` | 検証失敗 |
 | Bot events | `message.im` 含む（パス A） | App DM 未受信 |
 | Subscribe to events on behalf of users | `message.im` 含む（パス B） | 人↔人 DM 未受信 |
+| チャンネル範囲イベント（bot / on behalf of users） | 1-2 の 6 を参照 | 参加・退出・共有化が記録されない |
 | SLACK_SIGNING_SECRET | 設定済み | 署名検証失敗 (401) |
 
 ### DM送信できない
@@ -428,6 +482,9 @@ App DM（Staffpassアプリへの直接DM）への返信には `posting_as: bot`
      │                                   │
      │ 3. setup.slackStatus で確認       │
      │                                   │
+     │ 3.5 channelScope.patch（フラグON時）│
+     │ ←─────────────────────────────────│ owner 承認タップ
+     │                                   │
      │ 4. channels.classify 呼び出し     │
      │    (employeeId 指定)              │
      │                                   │
@@ -447,6 +504,7 @@ App DM（Staffpassアプリへの直接DM）への返信には `posting_as: bot`
 - [egress-policy.md](./egress-policy.md) - 相手×情報区分の出域制御（dual-audience 詳細）
 - [ingress-handoff-d1.md](./ingress-handoff-d1.md) - D1 添付・ファイル手渡し + Sealith 連携
 - [reply-policy.md](./reply-policy.md) - B2 Slack/LINE返信ポリシー詳細
+- [runbooks/channel-scope-rollout-20261002.md](./runbooks/channel-scope-rollout-20261002.md) - チャンネル範囲（P1 Channel Scope）の本番投入手順
 - [staffpass-situation-policy-catalog.md](./staffpass-situation-policy-catalog.md) - シチュエーション／補足ルール カタログ（scheduling backlog / product locks の正本）
 
 ---
