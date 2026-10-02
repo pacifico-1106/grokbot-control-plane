@@ -88,6 +88,10 @@ export async function resolveOAuthAccessToken(raw: string, now = new Date()): Pr
     return invalid("grant revoked, expired or not for this resource");
   }
   if (!isOrgAllowedForOAuth(grant.orgId)) return invalid("organization not enabled for OAuth");
+  // Blocking a client (status=blocked / deleted) must cut its live access tokens too,
+  // not only consent + refresh (audit run-1 candidate rs-blocked-client-token-still-valid).
+  const client = await store.getClient(grant.clientId);
+  if (!client || client.status !== "active") return invalid("client blocked or unknown");
 
   const employee = await getEmployeeById(grant.employeeId);
   if (!employee || employee.orgId !== grant.orgId || employee.status === "suspended") {

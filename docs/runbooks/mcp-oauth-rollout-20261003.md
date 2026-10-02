@@ -80,3 +80,9 @@
 - フラグ非依存の堅牢化: `tools/call` の 500 は内部エラー文言を返さず `tool_call_failed` 固定（ログはツール名と例外名のみ）。
 - Flag-independent hardening: tools/call 500 no longer echoes `e.message`.
 - 実機確認（Q9, 八坂さんの ChatGPT Business / Claude Team）: 接続後に `staffpass_profile` を呼び、org 名が TOKYO307、表示名が対象社員であることを確認。
+
+## 堅牢化（PR-10）/ Hardening
+
+- クライアント単位の緊急停止 / per-client kill switch: `update oauth_clients set status='blocked' where client_id='<url>';`（承認後に実行）。PR-10 から resource server も client status を確認するため、発行済みアクセストークンも即時無効（従来は最大 1 時間有効だった。audit run-1 候補 `rs-blocked-client-token-still-valid`）。
+- E2E テスト `app/api/mcp/oauth-e2e.test.ts`、手順書 `docs/runbooks/mcp-oauth-e2e-inspector-20261003.md`。
+- 監査 run-1（`~/security-audit-skill/grokbot-control-plane/run-1`）は独立検証エージェントが使えず incomplete。未検証リード: X-Forwarded-For 先頭ホップでのレート制限キー（エッジの XFF 上書き挙動を要確認）。
