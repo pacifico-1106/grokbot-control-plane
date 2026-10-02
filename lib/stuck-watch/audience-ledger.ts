@@ -9,8 +9,8 @@ import {
   getOrgParty,
   listOrgChannels,
   listOrgParties,
-  upsertOrgChannel,
 } from "@/lib/data/directory";
+import { upsertOrgChannelFromAutomaticPath } from "@/lib/channel-scope/data";
 import { getOrgInternalAudienceRule } from "@/lib/data/internal-audience-rule";
 import { getOrgStuckWatchPolicy } from "@/lib/data/stuck-watch-policy";
 import {
@@ -138,7 +138,8 @@ export async function supplementInvokeBodyFromLedger(
     if (party?.audience === "internal") {
       const channel = await getOrgChannel(orgId, "slack", channelId);
       if (!channel || channel.classification !== "internal") {
-        await upsertOrgChannel({
+        // CS5: new rows from this automatic path are source=egress_inspect (flag ON); existing rows keep their source.
+        await upsertOrgChannelFromAutomaticPath({
           orgId,
           surface: "slack",
           externalId: channelId,
