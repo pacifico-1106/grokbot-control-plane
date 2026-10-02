@@ -23,6 +23,24 @@ export function readCsrfCookie(cookieString: string): string | null {
   return null;
 }
 
+/** Shown by the UI as the first assistant bubble; the model is told not to repeat it. */
+export const LP_CHAT_GREETING = "AI相談窓口です。どの業務を任せたいですか。";
+
+/** Max transcript entries sent with a chat turn (the server caps again). */
+export const LP_CHAT_HISTORY_LIMIT = 12;
+
+/** Transcript sent with /api/chat/turn: user/assistant text only, newest last. */
+export function buildTurnHistory(
+  messages: ReadonlyArray<{ role: string; text: string }>
+): Array<{ role: "user" | "assistant"; text: string }> {
+  return messages
+    .filter((m): m is { role: "user" | "assistant"; text: string } =>
+      (m.role === "user" || m.role === "assistant") && typeof m.text === "string" && m.text.trim() !== ""
+    )
+    .slice(-LP_CHAT_HISTORY_LIMIT)
+    .map((m) => ({ role: m.role, text: m.text.slice(0, 2000) }));
+}
+
 /** Only same-site relative paths under the LP are followed from server-provided card data. */
 export function isSafeLpPath(path: unknown): path is string {
   return (
