@@ -16,7 +16,7 @@
   ```sql
   select id, name, created_at from orgs where id = '92f3617c-33fc-4dac-b9b4-d4f42e8522ac';
   ```
-- 空にすると**全組織**が対象になります（パイロット中は必ず値を入れる）。
+- **PR-11 以降: 空・未設定なら全組織を拒否**（`MCP_OAUTH_ORG_ALLOWLIST_REQUIRED` 既定 true、fail-closed）。全組織に開くときだけ `MCP_OAUTH_ORG_ALLOWLIST_REQUIRED=false` を明示します。 / Empty or missing allowlist now denies every org unless `MCP_OAUTH_ORG_ALLOWLIST_REQUIRED=false`.
 - 許可リストは同意（consent）と、毎リクエストのトークン検証（RS）の両方で判定されます。外せば既存 grant も即座に使えなくなります。
 
 ## フラグと環境変数 / Flags & env
@@ -27,9 +27,10 @@
 | `MCP_OAUTH_DCR_ENABLED` | OFF | `/api/oauth/register`（DCR）。Q7: 通常は CIMD のみ |
 | `MCP_OAUTH_LEGACY_UNAUTH_INITIALIZE` | OFF | Q4 の逃げ道: OAuth ON でも `initialize`/`ping`/`notifications/*` だけ未認証で 200 |
 | `MCP_OAUTH_CONSENT_REQUIRE_MFA` | OFF | Q2 のフック: ON で同意に aal2（二要素）を要求 |
-| `MCP_OAUTH_STATE_SECRET` | — | 同意 CSRF の HMAC 鍵（32 バイト以上。未設定なら同意は 503 で fail-closed） |
-| `IP_HASH_KEY` | — | レート制限キー（未設定なら authorize / register は 503） |
+| `MCP_OAUTH_STATE_SECRET` | — | 同意 CSRF と rid ブラウザ結び付け cookie の HMAC 鍵（32 バイト以上。未設定なら authorize / 同意は 503 で fail-closed） |
+| `IP_HASH_KEY` | — | レート制限キー（未設定なら authorize / register は 503）。PR-11 から IP は `ipAddress(req)`（@vercel/functions = `x-real-ip`）のみを使用し、`X-Forwarded-For` は読みません |
 | `MCP_OAUTH_ISSUER` | `https://staffpass.sealith.com` | issuer（末尾スラッシュなし） |
+| `MCP_OAUTH_ORG_ALLOWLIST_REQUIRED` | true | PR-11: 許可リストが空なら全組織拒否。`false` を明示したときだけ空 = 全組織 |
 | `MCP_UNAUTH_INIT_LOG_ENABLED` | OFF | #210: 未認証 initialize の観測ログ（OAuth ON 前に数日） |
 
 ## 同意（consent）の条件 / Who can consent (PR-5)
@@ -58,7 +59,8 @@
 
 - `POST /api/oauth/token`: `application/x-www-form-urlencoded` のみ・パラメータ重複は拒否・公開クライアントのみ（`client_secret` は 401）・PKCE S256。
   - code は 60 秒・1 回限り。**再利用を検知したら grant ごと取り消し**（`oauth.code_reuse_detected`、owner/admin に通知）。
-  - refresh は毎回ローテーション。回転済みトークンの再利用は 30 秒以内なら `invalid_grant` のみ（通信リトライ対策）、30 秒を超えたら**盗用とみなし grant ごと取り消し**（`oauth.refresh_reuse_detected`、通知）。
+  - code は client_id / redirect_uri / PKCE を**消費前に**照合（PR-11）。verifier を持たない漏えい code では grant は取り消されません。正しい verifier での再提示だけを再利用として扱います。
+  - refresh は毎回ローテーション。回転済みトークンの再利用は 30 秒以内なら `invalid_grant` のみ（通信リトライ対策、PR-11 から監査 `oauth.refresh_replay_in_grace` を記録）、30 秒を超えたら**盗用とみなし grant ごと取り消し**（`oauth.refresh_reuse_detected`、通知）。
   - access 1 時間・refresh 30 日。どちらも grant の期限（≤90 日・≤社員証の期限）を超えない。
   - 監査 `oauth.token_issued` は code 交換時の 1 回だけ（refresh ごとには書かない）。ハッシュ先頭 12 文字のみ。
   - client と IP あたり 60 回/分。応答は `Cache-Control: no-store`。
@@ -86,3 +88,17 @@
 - クライアント単位の緊急停止 / per-client kill switch: `update oauth_clients set status='blocked' where client_id='<url>';`（承認後に実行）。PR-10 から resource server も client status を確認するため、発行済みアクセストークンも即時無効（従来は最大 1 時間有効だった。audit run-1 候補 `rs-blocked-client-token-still-valid`）。
 - E2E テスト `app/api/mcp/oauth-e2e.test.ts`、手順書 `docs/runbooks/mcp-oauth-e2e-inspector-20261003.md`。
 - 監査 run-1（`~/security-audit-skill/grokbot-control-plane/run-1`）は独立検証エージェントが使えず incomplete。未検証リード: X-Forwarded-For 先頭ホップでのレート制限キー（エッジの XFF 上書き挙動を要確認）。
+
+## ハードニング 2（PR-11） / Hardening 2
+
+- **rid のブラウザ結び付け**: `/oauth/authorize` が `__Host-sp_oauth_rb_<hash>` cookie（HttpOnly・Secure・SameSite=Lax・Path=/・10 分）を発行し、同意画面の表示と送信の両方で必須。他人から転送された同意 URL は 403。全クライアントで「自分で開始した場合だけ許可」の警告を表示。
+- **RS**: `MCP_OAUTH_DCR_ENABLED` を OFF にすると DCR クライアントの有効なアクセストークンも即拒否。社員は `status=active` のみ（consent と同じ）。
+- **CIMD 再取得**は既存の `status` を上書きしない（ブロックが再取得で戻らない）。
+- 許可リストは空なら fail-closed（上記）。
+
+### ハードニング 2b（PR-11 追加コミット）
+- 「このブラウザで開始されていない」画面は `/oauth/consent/not-started` で **HTTP 403**。同意 POST がエラーになったら、その rid の結び付け cookie を削除（AI クライアントからやり直し）。
+- 同意画面の上部に「許可すると <ホスト> の AI クライアントが AI 社員「…」として動けるようになります」と「誰かからこのリンクが送られてきた場合は許可しないでください」を枠付きで表示。チェックボックスの文言にも接続先ホストを表示。
+- 既存のまま確認済み: 許可には 15 分以内の Staffpass ログインが必要。新しい grant ごとに owner / admin へ通知メール（重複抑止なし）。
+- `oauth.refresh_replay_in_grace` は回転済みトークン 1 つにつき 1 行（DB カウンタ、1 時間窓、障害時は記録する側に倒す）。
+- 残余リスク（監査 run-1 `mcp-oauth/consent-rid-not-bound-to-user-agent`, needs_validation）: **authorize URL** を転送されると、被害者のブラウザが自分で cookie を受け取るため同意できてしまう。最終的な防御はクライアント側の state とユーザーセッションの結び付け（RFC 6749 §10.12）。Q9 の確認項目で検証します。

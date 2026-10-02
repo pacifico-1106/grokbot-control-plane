@@ -153,7 +153,18 @@ export async function handleTokenRequest(req: Request, deps: TokenDeps): Promise
     if (!code || !redirectUri || !VERIFIER_RE.test(verifier)) {
       return err(400, "invalid_request", "code, redirect_uri and a valid code_verifier are required");
     }
-    const consumed = await deps.store.consumeCode(sha256Hex(code), nowIso);
+    // Hardening 5: validate client / redirect_uri / PKCE against a non-consuming
+    // read FIRST. A leaked code presented without the verifier is rejected
+    // without burning the code or revoking the grant; only a presenter that
+    // proves possession (matching client + redirect + verifier) of an already
+    // consumed code is treated as a genuine replay (→ family revocation).
+    const codeHash = sha256Hex(code);
+    const peek = await deps.store.getCode(codeHash);
+    if (!peek) return err(400, "invalid_grant", "authorization code is invalid, expired or already used");
+    if (peek.clientId !== client.clientId || peek.redirectUri !== redirectUri || !safeEq(s256(verifier), peek.codeChallenge)) {
+      return err(400, "invalid_grant", "code does not match client, redirect_uri or PKCE verifier");
+    }
+    const consumed = await deps.store.consumeCode(codeHash, nowIso);
     if (!consumed.ok) {
       if (consumed.reason === "already_consumed" && consumed.record) {
         const g = await deps.store.getGrant(consumed.record.grantId);
@@ -166,7 +177,7 @@ export async function handleTokenRequest(req: Request, deps: TokenDeps): Promise
             action: "oauth.code_reuse_detected",
             purpose: null,
             summary: `認可コードの再利用を検知し、${hostOf(g.clientId)} への接続を取り消しました`,
-            metadata: { grantId: g.id, clientHost: hostOf(g.clientId), codeHashPrefix: hashPrefix(sha256Hex(code)) },
+            metadata: { grantId: g.id, clientHost: hostOf(g.clientId), codeHashPrefix: hashPrefix(codeHash) },
           });
           await deps.notifySecurity({ orgId: g.orgId, employeeId: g.employeeId, clientHost: hostOf(g.clientId), kind: "code_reuse" }).catch(() => undefined);
         }
@@ -213,7 +224,20 @@ export async function handleTokenRequest(req: Request, deps: TokenDeps): Promise
       const rec = rotated.record;
       if (rotated.reason === "already_consumed" && rec && !rec.revokedAt && rec.rotatedAt) {
         const age = now.getTime() - Date.parse(rec.rotatedAt);
-        if (age > REFRESH_REUSE_GRACE_SEC * 1000 && grant.status === "active") {
+        if (age <= REFRESH_REUSE_GRACE_SEC * 1000 && grant.status === "active" && (await firstReplayAudit(deps, hash))) {
+          // Hardening 6: benign client retries inside the grace window are not
+          // revoked, but they are recorded so a pattern of replays is visible.
+          // Hardening 2b: deduped to one row per rotated token (not per request).
+          await deps.audit({
+            orgId: grant.orgId,
+            employeeId: grant.employeeId,
+            credentialId: null,
+            action: "oauth.refresh_replay_in_grace",
+            purpose: null,
+            summary: `${hostOf(grant.clientId)} が使用済みリフレッシュトークンを猶予時間内に再送しました（取り消しなし）`,
+            metadata: { grantId: grant.id, clientHost: hostOf(grant.clientId), refreshHashPrefix: hashPrefix(hash), ageSec: Math.floor(age / 1000) },
+          });
+        } else if (age > REFRESH_REUSE_GRACE_SEC * 1000 && grant.status === "active") {
           await revokeGrantFamily(deps, grant, "refresh_reuse", nowIso);
           await deps.audit({
             orgId: grant.orgId,
@@ -243,6 +267,20 @@ export async function handleTokenRequest(req: Request, deps: TokenDeps): Promise
   }
 
   return err(400, "unsupported_grant_type", "grant_type must be authorization_code or refresh_token");
+}
+
+/**
+ * One in-grace replay audit per rotated refresh token: a DB fixed-window counter
+ * keyed by the token hash (1 h window ≫ 30 s grace → practically once; at most
+ * twice if the grace straddles a window boundary). Fails open (audits) on error.
+ */
+async function firstReplayAudit(deps: TokenDeps, refreshHash: string): Promise<boolean> {
+  try {
+    const d = await deps.rateLimit(`refresh_replay_audit:${refreshHash.slice(0, 32)}`, 1, 3600);
+    return d.count <= 1;
+  } catch {
+    return true;
+  }
 }
 
 export async function handleRevokeRequest(req: Request, deps: TokenDeps): Promise<EndpointResult> {

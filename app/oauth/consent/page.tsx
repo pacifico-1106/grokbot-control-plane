@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { notFound, redirect } from "next/navigation";
 import { BrandMark } from "@/components/BrandMark";
 import { isMcpOAuthEnabled } from "@/lib/mcp-oauth/config";
-import { defaultConsentDeps, loadConsentView, type ConsentView } from "@/lib/mcp-oauth/consent";
+import { LOOPBACK_WARNING_JA, defaultConsentDeps, loadConsentView, type ConsentView } from "@/lib/mcp-oauth/consent";
 
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "AI クライアント接続の許可 | Staffpass", robots: { index: false, follow: false } };
@@ -34,6 +34,11 @@ export default async function OAuthConsentPage({ searchParams }: { searchParams:
 
   if (out.type === "login_required") {
     redirect(`/login?next=${encodeURIComponent(`/oauth/consent?rid=${rid}`)}`);
+  }
+
+  if (out.type === "page" && out.reason === "not_started_here") {
+    // Rendered by a route handler so the browser gets a real HTTP 403 (hardening 2b).
+    redirect("/oauth/consent/not-started");
   }
 
   if (out.type === "page") {
@@ -69,11 +74,13 @@ export default async function OAuthConsentPage({ searchParams }: { searchParams:
             )}
           </p>
           <p className="mt-1 text-3xl font-bold tracking-tight">{v.client.redirectHost}</p>
-          {v.client.loopback ? (
+          <div className="mt-3 rounded border-2 p-3" role="alert">
+            <p className="text-base font-bold">{v.approvalSummaryJa}</p>
             <p className="mt-2 text-sm font-semibold">
-              ⚠ この接続はあなたの PC 上のアプリに渡されます。自分で始めた操作でなければ拒否してください。
+              {v.client.loopback ? `${LOOPBACK_WARNING_JA} ` : ""}
+              {v.startedYourselfWarningJa}
             </p>
-          ) : null}
+          </div>
         </section>
 
         <section className="mt-6">
@@ -124,7 +131,9 @@ export default async function OAuthConsentPage({ searchParams }: { searchParams:
 
           <label className="flex items-start gap-2 text-sm">
             <input type="checkbox" name="confirm" value="yes" disabled={!canAllow} required={canAllow} />
-            <span>内容を確認しました。この AI クライアントに上記の AI 社員として行動させることを許可します。</span>
+            <span>
+              内容を確認しました。<strong>{v.client.redirectHost}</strong> の AI クライアントに、選んだ AI 社員として行動させることを許可します。
+            </span>
           </label>
 
           <div className="flex gap-3">

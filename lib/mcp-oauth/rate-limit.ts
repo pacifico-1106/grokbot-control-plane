@@ -3,11 +3,18 @@
  * Buckets use an HMAC of the client IP (IP_HASH_KEY); no key → fail closed.
  */
 import { createHmac } from "node:crypto";
+import { ipAddress } from "@vercel/functions";
 import { getOAuthStore } from "@/lib/data/oauth";
 
+/**
+ * Platform-observed client IP (hardening 7): `ipAddress(req)` from
+ * @vercel/functions (Vercel sets x-real-ip from the TCP peer), falling back to
+ * x-real-ip. The generic X-Forwarded-For header is never read, so a client
+ * cannot pick its own bucket even if a proxy in front appends to XFF.
+ */
 export function clientIp(req: Request): string {
-  const xff = (req.headers.get("x-forwarded-for") || "").split(",")[0]?.trim();
-  return xff || (req.headers.get("x-real-ip") || "").trim() || "unknown";
+  const ip = (ipAddress(req) || req.headers.get("x-real-ip") || "").trim();
+  return ip || "unknown";
 }
 
 /** null when IP_HASH_KEY is missing/short → callers answer 503 (fail-closed). */

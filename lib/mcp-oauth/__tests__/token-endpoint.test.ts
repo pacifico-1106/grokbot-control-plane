@@ -11,6 +11,7 @@ let audits: Array<{ action: string; metadata: Record<string, unknown> }>;
 let notices: string[];
 let rateAllowed = true;
 let grantId = "";
+let buckets = new Map<string, number>();
 
 function deps(over: Partial<TokenDeps> = {}): TokenDeps {
   return {
@@ -22,7 +23,11 @@ function deps(over: Partial<TokenDeps> = {}): TokenDeps {
     notifySecurity: async (n) => {
       notices.push(n.kind);
     },
-    rateLimit: async () => ({ allowed: rateAllowed, count: 1, retryAfterSec: 30 }),
+    rateLimit: async (bucket, limit) => {
+      const n = (buckets.get(bucket) ?? 0) + 1;
+      buckets.set(bucket, n);
+      return { allowed: rateAllowed && n <= limit, count: n, retryAfterSec: 30 };
+    },
     ipHash: () => "iphash",
     ...over,
   };
@@ -53,12 +58,15 @@ const refresh = (rt: string, over: Record<string, string> = {}) =>
   handleTokenRequest(form({ grant_type: "refresh_token", refresh_token: rt, client_id: CLAUDE_CLIENT, ...over }), deps());
 
 beforeEach(() => {
-  delete process.env.MCP_OAUTH_ORG_ALLOWLIST;
+  // Allowlist is fail-closed by default (MCP_OAUTH_ORG_ALLOWLIST_REQUIRED); pilot org = org_a.
+  process.env.MCP_OAUTH_ORG_ALLOWLIST = "org_a";
+  delete process.env.MCP_OAUTH_ORG_ALLOWLIST_REQUIRED;
   store = freshStore();
   now = new Date("2026-10-03T00:00:00Z");
   audits = [];
   notices = [];
   rateAllowed = true;
+  buckets = new Map();
 });
 
 describe("POST /api/oauth/token — authorization_code", () => {
@@ -123,10 +131,50 @@ describe("POST /api/oauth/token — authorization_code", () => {
     expect(await exchange(code2)).toMatchObject({ body: { error: "invalid_grant" } });
   });
 
+  test("empty allowlist is fail-closed by default; only MCP_OAUTH_ORG_ALLOWLIST_REQUIRED=0 opens all orgs (hardening 8)", async () => {
+    delete process.env.MCP_OAUTH_ORG_ALLOWLIST;
+    expect(await exchange(await seed())).toMatchObject({ body: { error: "invalid_grant" } });
+    process.env.MCP_OAUTH_ORG_ALLOWLIST = " , ";
+    expect(await exchange(await seed())).toMatchObject({ body: { error: "invalid_grant" } });
+    process.env.MCP_OAUTH_ORG_ALLOWLIST_REQUIRED = "0";
+    expect((await exchange(await seed())).status).toBe(200);
+  });
+
   test("token lifetimes are capped by grant expiry", async () => {
     const code = await seed(new Date(now.getTime() + 600_000).toISOString());
     const r = await exchange(code);
     expect((r.body as Record<string, number>).expires_in).toBe(600);
+  });
+});
+
+describe("POST /api/oauth/token — validate before consuming the code (hardening 5)", () => {
+  test("leaked code + wrong verifier → invalid_grant, code NOT burned, grant survives, owner can still exchange", async () => {
+    const code = await seed();
+    expect(await exchange(code, { code_verifier: "w".repeat(43) })).toMatchObject({ status: 400, body: { error: "invalid_grant" } });
+    expect(await exchange(code, { code_verifier: "x".repeat(43) })).toMatchObject({ status: 400, body: { error: "invalid_grant" } });
+    expect((await store.getGrant(grantId))?.status).toBe("active");
+    expect(audits.map((a) => a.action)).not.toContain("oauth.code_reuse_detected");
+    expect(notices).toEqual([]);
+    expect((await exchange(code)).status).toBe(200);
+  });
+
+  test("leaked code + wrong redirect_uri / other registered client → not consumed, no revocation", async () => {
+    const code = await seed();
+    expect(await exchange(code, { redirect_uri: "https://claude.ai/api/mcp/other" })).toMatchObject({ body: { error: "invalid_grant" } });
+    await store.upsertClient({ clientId: "https://chatgpt.com/c.json", registrationType: "cimd", clientName: "ChatGPT", clientUri: null, logoUri: null, redirectUris: ["https://chatgpt.com/connector_platform_oauth_redirect"], tokenEndpointAuthMethod: "none", metadata: {}, metadataFetchedAt: null, metadataExpiresAt: null, status: "active", createdIpHash: null });
+    expect(await exchange(code, { client_id: "https://chatgpt.com/c.json" })).toMatchObject({ body: { error: "invalid_grant" } });
+    expect((await store.getGrant(grantId))?.status).toBe("active");
+    expect((await exchange(code)).status).toBe(200);
+  });
+
+  test("replay of a used code with a WRONG verifier does not revoke; genuine replay (correct verifier) still does", async () => {
+    const code = await seed();
+    expect((await exchange(code)).status).toBe(200);
+    expect(await exchange(code, { code_verifier: "w".repeat(43) })).toMatchObject({ body: { error: "invalid_grant" } });
+    expect((await store.getGrant(grantId))?.status).toBe("active");
+    expect(await exchange(code)).toMatchObject({ body: { error: "invalid_grant" } });
+    expect((await store.getGrant(grantId))?.status).toBe("revoked");
+    expect(audits.map((a) => a.action)).toContain("oauth.code_reuse_detected");
   });
 });
 
@@ -174,6 +222,43 @@ describe("POST /api/oauth/token — refresh rotation", () => {
     expect(await refresh(p.refresh_token)).toMatchObject({ body: { error: "invalid_grant" } });
     expect((await store.getGrant(grantId))?.status).toBe("active");
     expect(notices).toEqual([]);
+    // hardening 6: the in-grace replay is still audited (no revocation, no notice)
+    const replay = audits.filter((a) => a.action === "oauth.refresh_replay_in_grace");
+    expect(replay.length).toBe(1);
+    expect(replay[0].metadata).toMatchObject({ grantId, clientHost: "claude.ai", ageSec: 10 });
+    expect(String(replay[0].metadata.refreshHashPrefix)).toHaveLength(12);
+    expect(JSON.stringify(audits)).not.toContain(p.refresh_token);
+  });
+
+  test("hardening 2b: in-grace replay audit is deduped — once per token per grace window", async () => {
+    const p = await pair();
+    const p1 = (await refresh(p.refresh_token)).body as Record<string, string>;
+    for (const dt of [2_000, 3_000, 5_000, 10_000]) {
+      now = new Date(now.getTime() + dt);
+      expect(await refresh(p.refresh_token)).toMatchObject({ body: { error: "invalid_grant" } });
+    }
+    const inGrace = () => audits.filter((a) => a.action === "oauth.refresh_replay_in_grace");
+    expect(inGrace().length).toBe(1);
+    expect((await store.getGrant(grantId))?.status).toBe("active");
+    // a different rotated token gets its own (single) audit row
+    expect((await refresh(p1.refresh_token)).status).toBe(200);
+    now = new Date(now.getTime() + 1_000);
+    await refresh(p1.refresh_token);
+    await refresh(p1.refresh_token);
+    expect(inGrace().length).toBe(2);
+    expect(inGrace()[1].metadata.refreshHashPrefix).not.toBe(inGrace()[0].metadata.refreshHashPrefix);
+  });
+
+  test("hardening 2b: replay-audit dedupe fails open (dedupe store error → still audited)", async () => {
+    const p = await pair();
+    await refresh(p.refresh_token);
+    now = new Date(now.getTime() + 5_000);
+    const r = await handleTokenRequest(
+      form({ grant_type: "refresh_token", refresh_token: p.refresh_token, client_id: CLAUDE_CLIENT }),
+      deps({ rateLimit: async (b) => { if (b.startsWith("refresh_replay_audit:")) throw new Error("db down"); return { allowed: true, count: 1, retryAfterSec: 30 }; } })
+    );
+    expect(r).toMatchObject({ body: { error: "invalid_grant" } });
+    expect(audits.filter((a) => a.action === "oauth.refresh_replay_in_grace").length).toBe(1);
   });
 
   test("reuse after grace → grant + all tokens revoked, audit + owner notice", async () => {

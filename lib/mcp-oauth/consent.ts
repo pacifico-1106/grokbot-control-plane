@@ -18,6 +18,7 @@ import {
   isOrgAllowedForOAuth,
   oauthStateSecret,
 } from "@/lib/mcp-oauth/config";
+import { ridBindingCookieName, verifyRidBinding } from "@/lib/mcp-oauth/browser-binding";
 import { mintConsentCsrf, verifyConsentCsrf } from "@/lib/mcp-oauth/csrf";
 import type { CurrentCredential } from "@/lib/mcp-oauth/employee-state";
 import { buildClientRedirect } from "@/lib/mcp-oauth/http";
@@ -60,10 +61,12 @@ export type ConsentDeps = {
   notify: (input: ConsentNotifyInput) => Promise<void>;
   rateLimit: (bucket: string, limit: number, windowSec: number) => Promise<RateDecision>;
   stateSecret: () => string | null;
+  /** Request cookie lookup (rid browser binding, hardening 2). */
+  getCookie: (name: string) => Promise<string | null>;
   now: () => Date;
 };
 
-export type ConsentPage = { type: "page"; status: number; error: string; messageJa: string };
+export type ConsentPage = { type: "page"; status: number; error: string; messageJa: string; reason?: "not_started_here" };
 export type ConsentRedirect = { type: "redirect"; location: string };
 
 export type ConsentEmployeeOption = {
@@ -90,6 +93,10 @@ export type ConsentView = {
     loopback: boolean;
   };
   employees: ConsentEmployeeOption[];
+  /** Always shown, for every client (hardening 2). */
+  startedYourselfWarningJa: string;
+  /** Prominent "what you are approving": client/redirect host + eligible AI employee names (hardening 2b). */
+  approvalSummaryJa: string;
   /** null → may consent; otherwise the reason (shown, buttons disabled except deny). */
   blockedReason: null | "role" | "org_not_allowed" | "login_too_old" | "mfa_required" | "no_employees";
 };
@@ -101,6 +108,29 @@ export type ConsentViewOutcome =
 
 function page(status: number, error: string, messageJa: string): ConsentPage {
   return { type: "page", status, error, messageJa };
+}
+
+export const STARTED_YOURSELF_WARNING_JA =
+  "⚠ この接続を自分で開始した場合（このブラウザで AI クライアントから始めた操作）だけ許可してください。誰かからこのリンクが送られてきた場合は、許可しないでください（「拒否」を押してください）。";
+
+export const NOT_STARTED_HERE_MESSAGE_JA =
+  "この接続リクエストは、このブラウザで開始されたものではありません。誰かからリンクが送られてきた場合は、何もせずに閉じてください。自分で接続したい場合は、AI クライアントからこのブラウザでやり直してください。";
+
+function approvalSummary(clientHost: string, redirectHostName: string, employees: ConsentEmployeeOption[]): string {
+  const where = redirectHostName && redirectHostName !== clientHost ? `${clientHost}（送信先 ${redirectHostName}）` : clientHost || redirectHostName;
+  const names = employees.slice(0, 5).map((e) => `「${e.displayName}」`).join("");
+  const more = employees.length > 5 ? ` ほか ${employees.length - 5} 名` : "";
+  return employees.length
+    ? `許可すると、${where} の AI クライアントが、選んだ AI 社員（候補: ${names}${more}）として動けるようになります。`
+    : `許可すると、${where} の AI クライアントが AI 社員として動けるようになります。`;
+}
+export const LOOPBACK_WARNING_JA = "この接続はあなたの PC 上のアプリに渡されます。";
+
+const NOT_BOUND_PAGE = (): ConsentPage => ({ ...page(403, "access_denied", NOT_STARTED_HERE_MESSAGE_JA), reason: "not_started_here" });
+
+async function browserBound(deps: ConsentDeps, secret: string, rid: string): Promise<boolean> {
+  if (!rid || rid.length > 128) return false;
+  return verifyRidBinding(secret, rid, await deps.getCookie(ridBindingCookieName(rid)));
 }
 
 function clientHostOf(clientId: string): string {
@@ -173,6 +203,7 @@ export async function loadConsentView(rid: string, deps: ConsentDeps): Promise<C
 
   const r = await usableAuthRequest(deps, rid);
   if (!r.ok) return r.out;
+  if (!(await browserBound(deps, secret, rid))) return NOT_BOUND_PAGE();
   const now = deps.now();
 
   const employees = await eligibleEmployees(deps, session.orgId);
@@ -201,6 +232,8 @@ export async function loadConsentView(rid: string, deps: ConsentDeps): Promise<C
         loopback: isLoopbackRedirect(r.req.redirectUri),
       },
       employees,
+      startedYourselfWarningJa: STARTED_YOURSELF_WARNING_JA,
+      approvalSummaryJa: approvalSummary(host, redirectHost(r.req.redirectUri), employees),
       blockedReason,
     },
   };
@@ -233,6 +266,7 @@ export async function processConsentDecision(
 
   const r = await usableAuthRequest(deps, input.rid);
   if (!r.ok) return r.out;
+  if (!(await browserBound(deps, secret, input.rid))) return NOT_BOUND_PAGE();
   const { req, client } = r;
   const clientHost = clientHostOf(client.clientId);
   const actorEmail = session.email || session.member.email;
@@ -376,6 +410,10 @@ export async function defaultConsentDeps(): Promise<ConsentDeps> {
     notify: notify.notifyOAuthConnected,
     rateLimit: (b, l, w) => rateLimit(b, l, w),
     stateSecret: oauthStateSecret,
+    getCookie: async (name) => {
+      const { cookies } = await import("next/headers");
+      return (await cookies()).get(name)?.value ?? null;
+    },
     now: () => new Date(),
   };
 }

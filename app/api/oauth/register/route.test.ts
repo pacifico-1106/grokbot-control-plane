@@ -26,7 +26,7 @@ const on = () => {
   process.env.IP_HASH_KEY = "test-ip-hash-key-0123456789";
 };
 const reg = (body: unknown, ip = "203.0.113.5") =>
-  POST(new Request("https://staffpass.test/api/oauth/register", { method: "POST", headers: { "content-type": "application/json", "x-forwarded-for": ip }, body: JSON.stringify(body) }));
+  POST(new Request("https://staffpass.test/api/oauth/register", { method: "POST", headers: { "content-type": "application/json", "x-real-ip": ip }, body: JSON.stringify(body) }));
 const good = { client_name: "Claude", redirect_uris: ["https://claude.ai/api/mcp/auth_callback"], token_endpoint_auth_method: "none" };
 
 test("404 unless both MCP_OAUTH_ENABLED and MCP_OAUTH_DCR_ENABLED", async () => {

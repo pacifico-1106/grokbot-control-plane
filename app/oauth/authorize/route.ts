@@ -1,4 +1,5 @@
-import { isMcpOAuthEnabled } from "@/lib/mcp-oauth/config";
+import { isMcpOAuthEnabled, oauthStateSecret } from "@/lib/mcp-oauth/config";
+import { ridBindingSetCookie } from "@/lib/mcp-oauth/browser-binding";
 import { handleAuthorizeRequest } from "@/lib/mcp-oauth/authorize";
 import { oauthErrorPage, redirect303 } from "@/lib/mcp-oauth/http";
 import { OAUTH_RATE_LIMITS, ipHash, rateLimit } from "@/lib/mcp-oauth/rate-limit";
@@ -19,7 +20,12 @@ export async function GET(req: Request) {
     return res;
   }
 
+  // Without the state secret the browser cannot be bound to the rid (hardening 2) → fail closed.
+  const secret = oauthStateSecret();
+  if (!secret) return oauthErrorPage(503, "temporarily_unavailable", "サーバー設定が未完了のため、いまは接続できません。");
+
   const out = await handleAuthorizeRequest(new URL(req.url));
   if (out.type === "page") return oauthErrorPage(out.status, out.error, out.messageJa);
-  return redirect303(out.location);
+  if (!out.rid) return redirect303(out.location);
+  return redirect303(out.location, { "Set-Cookie": ridBindingSetCookie(secret, out.rid) });
 }
