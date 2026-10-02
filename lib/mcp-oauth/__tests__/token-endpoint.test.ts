@@ -53,7 +53,9 @@ const refresh = (rt: string, over: Record<string, string> = {}) =>
   handleTokenRequest(form({ grant_type: "refresh_token", refresh_token: rt, client_id: CLAUDE_CLIENT, ...over }), deps());
 
 beforeEach(() => {
-  delete process.env.MCP_OAUTH_ORG_ALLOWLIST;
+  // Allowlist is fail-closed by default (MCP_OAUTH_ORG_ALLOWLIST_REQUIRED); pilot org = org_a.
+  process.env.MCP_OAUTH_ORG_ALLOWLIST = "org_a";
+  delete process.env.MCP_OAUTH_ORG_ALLOWLIST_REQUIRED;
   store = freshStore();
   now = new Date("2026-10-03T00:00:00Z");
   audits = [];
@@ -123,10 +125,50 @@ describe("POST /api/oauth/token — authorization_code", () => {
     expect(await exchange(code2)).toMatchObject({ body: { error: "invalid_grant" } });
   });
 
+  test("empty allowlist is fail-closed by default; only MCP_OAUTH_ORG_ALLOWLIST_REQUIRED=0 opens all orgs (hardening 8)", async () => {
+    delete process.env.MCP_OAUTH_ORG_ALLOWLIST;
+    expect(await exchange(await seed())).toMatchObject({ body: { error: "invalid_grant" } });
+    process.env.MCP_OAUTH_ORG_ALLOWLIST = " , ";
+    expect(await exchange(await seed())).toMatchObject({ body: { error: "invalid_grant" } });
+    process.env.MCP_OAUTH_ORG_ALLOWLIST_REQUIRED = "0";
+    expect((await exchange(await seed())).status).toBe(200);
+  });
+
   test("token lifetimes are capped by grant expiry", async () => {
     const code = await seed(new Date(now.getTime() + 600_000).toISOString());
     const r = await exchange(code);
     expect((r.body as Record<string, number>).expires_in).toBe(600);
+  });
+});
+
+describe("POST /api/oauth/token — validate before consuming the code (hardening 5)", () => {
+  test("leaked code + wrong verifier → invalid_grant, code NOT burned, grant survives, owner can still exchange", async () => {
+    const code = await seed();
+    expect(await exchange(code, { code_verifier: "w".repeat(43) })).toMatchObject({ status: 400, body: { error: "invalid_grant" } });
+    expect(await exchange(code, { code_verifier: "x".repeat(43) })).toMatchObject({ status: 400, body: { error: "invalid_grant" } });
+    expect((await store.getGrant(grantId))?.status).toBe("active");
+    expect(audits.map((a) => a.action)).not.toContain("oauth.code_reuse_detected");
+    expect(notices).toEqual([]);
+    expect((await exchange(code)).status).toBe(200);
+  });
+
+  test("leaked code + wrong redirect_uri / other registered client → not consumed, no revocation", async () => {
+    const code = await seed();
+    expect(await exchange(code, { redirect_uri: "https://claude.ai/api/mcp/other" })).toMatchObject({ body: { error: "invalid_grant" } });
+    await store.upsertClient({ clientId: "https://chatgpt.com/c.json", registrationType: "cimd", clientName: "ChatGPT", clientUri: null, logoUri: null, redirectUris: ["https://chatgpt.com/connector_platform_oauth_redirect"], tokenEndpointAuthMethod: "none", metadata: {}, metadataFetchedAt: null, metadataExpiresAt: null, status: "active", createdIpHash: null });
+    expect(await exchange(code, { client_id: "https://chatgpt.com/c.json" })).toMatchObject({ body: { error: "invalid_grant" } });
+    expect((await store.getGrant(grantId))?.status).toBe("active");
+    expect((await exchange(code)).status).toBe(200);
+  });
+
+  test("replay of a used code with a WRONG verifier does not revoke; genuine replay (correct verifier) still does", async () => {
+    const code = await seed();
+    expect((await exchange(code)).status).toBe(200);
+    expect(await exchange(code, { code_verifier: "w".repeat(43) })).toMatchObject({ body: { error: "invalid_grant" } });
+    expect((await store.getGrant(grantId))?.status).toBe("active");
+    expect(await exchange(code)).toMatchObject({ body: { error: "invalid_grant" } });
+    expect((await store.getGrant(grantId))?.status).toBe("revoked");
+    expect(audits.map((a) => a.action)).toContain("oauth.code_reuse_detected");
   });
 });
 
@@ -174,6 +216,12 @@ describe("POST /api/oauth/token — refresh rotation", () => {
     expect(await refresh(p.refresh_token)).toMatchObject({ body: { error: "invalid_grant" } });
     expect((await store.getGrant(grantId))?.status).toBe("active");
     expect(notices).toEqual([]);
+    // hardening 6: the in-grace replay is still audited (no revocation, no notice)
+    const replay = audits.filter((a) => a.action === "oauth.refresh_replay_in_grace");
+    expect(replay.length).toBe(1);
+    expect(replay[0].metadata).toMatchObject({ grantId, clientHost: "claude.ai", ageSec: 10 });
+    expect(String(replay[0].metadata.refreshHashPrefix)).toHaveLength(12);
+    expect(JSON.stringify(audits)).not.toContain(p.refresh_token);
   });
 
   test("reuse after grace → grant + all tokens revoked, audit + owner notice", async () => {

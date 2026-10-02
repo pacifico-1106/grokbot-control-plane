@@ -79,13 +79,17 @@ const owner = { id: "mem_1", orgId: "org_a", userId: "user_1", email: "owner@tok
 const emp = { id: "emp_1", orgId: "org_a", displayName: "営業AI", roleLabel: "営業アシスタント", status: "active", scopes: ["mail:draft"], allowedPurposes: ["sales"] } as unknown as Employee;
 
 let store = freshStore();
-const ENV = ["MCP_OAUTH_ENABLED", "MCP_OAUTH_ORG_ALLOWLIST", "MCP_OAUTH_ISSUER", "IP_HASH_KEY", "MCP_PROTOCOL_NEGOTIATION_ENABLED", "MCP_PROTOCOL_MODERN_ENABLED"];
+const ENV = ["MCP_OAUTH_ENABLED", "MCP_OAUTH_ORG_ALLOWLIST", "MCP_OAUTH_ORG_ALLOWLIST_REQUIRED", "MCP_OAUTH_ISSUER", "IP_HASH_KEY", "MCP_OAUTH_STATE_SECRET", "MCP_PROTOCOL_NEGOTIATION_ENABLED", "MCP_PROTOCOL_MODERN_ENABLED"];
 const saved: Record<string, string | undefined> = {};
+/** Cookie jar of the admin's browser (rid binding cookie from /oauth/authorize). */
+const browserJar = new Map<string, string>();
 beforeEach(() => {
   for (const k of ENV) (saved[k] = process.env[k]), delete process.env[k];
   process.env.MCP_OAUTH_ENABLED = "1";
   process.env.MCP_OAUTH_ORG_ALLOWLIST = "org_a";
   process.env.IP_HASH_KEY = "dummy-ip-hash-key-for-tests";
+  process.env.MCP_OAUTH_STATE_SECRET = SECRET;
+  browserJar.clear();
   store = freshStore();
   __setOAuthStoreForTests(store);
   directory.reset();
@@ -106,6 +110,7 @@ beforeEach(() => {
     notify: async () => {},
     rateLimit: async () => ({ allowed: true, count: 1, retryAfterSec: 60 }),
     stateSecret: () => SECRET,
+    getCookie: async (name) => browserJar.get(name) ?? null,
     now: () => new Date(),
   });
 });
@@ -122,14 +127,18 @@ async function authorize(over: Record<string, string> = {}) {
   const u = new URL(`${ISSUER}/oauth/authorize`);
   const q = { client_id: CLAUDE_CLIENT, redirect_uri: CB, response_type: "code", code_challenge: s256(VERIFIER), code_challenge_method: "S256", resource: RESOURCE, scope: "staffpass.employee offline_access", state: "st_e2e", ...over };
   for (const [k, v] of Object.entries(q)) u.searchParams.set(k, v);
-  return authorizeRoute.GET(new Request(u, { headers: { "x-forwarded-for": "203.0.113.7" } }));
+  const res = await authorizeRoute.GET(new Request(u, { headers: { "x-real-ip": "203.0.113.7" } }));
+  const pair = (res.headers.get("set-cookie") || "").split(";")[0];
+  const eq = pair.indexOf("=");
+  if (eq > 0) browserJar.set(pair.slice(0, eq), pair.slice(eq + 1));
+  return res;
 }
 async function consent(rid: string, over: Record<string, string> = {}, headers: Record<string, string> = {}) {
   const body = new URLSearchParams({ rid, csrf: mintConsentCsrf(SECRET, rid, "user_1", new Date()), decision: "allow", employee_id: "emp_1", confirm: "yes", ...over });
   return consentRoute.POST(new Request(`${ISSUER}/api/oauth/consent`, { method: "POST", headers: { origin: ISSUER, "sec-fetch-site": "same-origin", "content-type": "application/x-www-form-urlencoded", ...headers }, body }));
 }
 const tokenReq = (params: Record<string, string>) =>
-  tokenRoute.POST(new Request(`${ISSUER}/api/oauth/token`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", "x-forwarded-for": "203.0.113.7" }, body: new URLSearchParams(params) }));
+  tokenRoute.POST(new Request(`${ISSUER}/api/oauth/token`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", "x-real-ip": "203.0.113.7" }, body: new URLSearchParams(params) }));
 const mcpCall = (token: string, method: string, params: Record<string, unknown> = {}, handler = mcp.POST, url = `${ISSUER}/api/mcp`) =>
   handler(new Request(url, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${token}` }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }) }));
 
@@ -212,7 +221,7 @@ test("E2E code replay → invalid_grant and tokens from the first exchange are r
 
 test("E2E revoke (RFC 7009) → AT 401 at /api/mcp with invalid_token challenge", async () => {
   const { tok } = await fullFlow();
-  const rv = await revokeRoute.POST(new Request(`${ISSUER}/api/oauth/revoke`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", "x-forwarded-for": "203.0.113.7" }, body: new URLSearchParams({ token: tok.refresh_token, client_id: CLAUDE_CLIENT }) }));
+  const rv = await revokeRoute.POST(new Request(`${ISSUER}/api/oauth/revoke`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", "x-real-ip": "203.0.113.7" }, body: new URLSearchParams({ token: tok.refresh_token, client_id: CLAUDE_CLIENT }) }));
   expect(rv.status).toBe(200);
   const after = await mcpCall(tok.access_token, "tools/list");
   expect(after.status).toBe(401);
@@ -277,4 +286,14 @@ test("credential lifecycle: rotation keeps OAuth (Q3 default); revoked / expired
   directory.reset();
   directory.bindings.set("emp_1", { ...directory.bindings.get("emp_1")!, status: "revoked" });
   expect((await mcpCall(tok.access_token, "tools/list")).status).toBe(403);
+});
+
+test("E2E hardening 2: consent URL forwarded to another admin's browser (no binding cookie) cannot be approved", async () => {
+  const a = await authorize();
+  const rid = new URL(a.headers.get("location")!).searchParams.get("rid")!;
+  browserJar.clear(); // victim browser never visited /oauth/authorize
+  const c = await consent(rid);
+  expect(c.status).toBe(403);
+  expect(c.headers.get("location")).toBeNull();
+  expect(audits.map((x) => x.action)).not.toContain("oauth.consent_granted");
 });

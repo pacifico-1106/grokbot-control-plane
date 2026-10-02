@@ -91,3 +91,35 @@ test("fetch failure with no cache → refused", async () => {
   }) as unknown as typeof fetch;
   expect(await resolveCimdClient(URL_OK, { fetchImpl: boom, resolveHost: publicDns })).toEqual({ ok: false, error: "fetch_failed" });
 });
+
+test("hardening 3: a block applied while an expired-cache refetch is in flight is NOT undone by the refresh upsert", async () => {
+  const { getOAuthStore } = await import("@/lib/data/oauth");
+  const t0 = new Date("2026-10-03T00:00:00Z");
+  const first = await resolveCimdClient(URL_OK, { fetchImpl: fetchJson(doc()), resolveHost: publicDns, now: t0 });
+  expect(first.ok).toBe(true);
+  const store = getOAuthStore();
+  // cache expired (TTL 300s); admin blocks the client while the refetch is running
+  const racingFetch = (async () => {
+    calls++;
+    const c = (await store.getClient(URL_OK))!;
+    await store.upsertClient({ ...c, status: "blocked" });
+    return new Response(JSON.stringify(doc()), { status: 200, headers: { "content-type": "application/json" } });
+  }) as unknown as typeof fetch;
+  const r = await resolveCimdClient(URL_OK, { fetchImpl: racingFetch, resolveHost: publicDns, now: new Date(t0.getTime() + 400_000) });
+  expect(r.ok).toBe(false);
+  expect((await store.getClient(URL_OK))?.status).toBe("blocked");
+  // and a later resolve still refuses without fetching
+  const before = calls;
+  expect((await resolveCimdClient(URL_OK, { fetchImpl: fetchJson(doc()), resolveHost: publicDns, now: new Date(t0.getTime() + 800_000) })).ok).toBe(false);
+  expect(calls).toBe(before);
+});
+
+test("hardening 3: memory store upsertClient({ preserveStatus }) keeps an existing status, inserts as given", async () => {
+  const store = createMemoryOAuthStore();
+  const base = { clientId: URL_OK, registrationType: "cimd" as const, clientName: "Claude", clientUri: null, logoUri: null, redirectUris: ["https://claude.ai/api/mcp/auth_callback"], tokenEndpointAuthMethod: "none" as const, metadata: {}, metadataFetchedAt: null, metadataExpiresAt: null, status: "active" as const, createdIpHash: null };
+  expect((await store.upsertClient(base, { preserveStatus: true })).status).toBe("active");
+  await store.upsertClient({ ...base, status: "blocked" });
+  const after = await store.upsertClient({ ...base, clientName: "Claude 2" }, { preserveStatus: true });
+  expect(after.status).toBe("blocked");
+  expect(after.clientName).toBe("Claude 2");
+});

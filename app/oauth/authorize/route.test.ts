@@ -23,7 +23,7 @@ const logout = await import("@/app/api/auth/logout/route");
 
 const CB = "https://claude.ai/api/mcp/auth_callback";
 const SECRET = "k".repeat(40);
-const ENV = ["MCP_OAUTH_ENABLED", "IP_HASH_KEY", "MCP_OAUTH_ORG_ALLOWLIST", "MCP_OAUTH_ISSUER"];
+const ENV = ["MCP_OAUTH_ENABLED", "IP_HASH_KEY", "MCP_OAUTH_ORG_ALLOWLIST", "MCP_OAUTH_ORG_ALLOWLIST_REQUIRED", "MCP_OAUTH_ISSUER", "MCP_OAUTH_STATE_SECRET"];
 const saved: Record<string, string | undefined> = {};
 let store = freshStore();
 
@@ -31,7 +31,9 @@ beforeEach(async () => {
   for (const k of ENV) saved[k] = process.env[k];
   process.env.MCP_OAUTH_ENABLED = "true";
   process.env.IP_HASH_KEY = "i".repeat(40);
-  delete process.env.MCP_OAUTH_ORG_ALLOWLIST;
+  process.env.MCP_OAUTH_STATE_SECRET = SECRET;
+  process.env.MCP_OAUTH_ORG_ALLOWLIST = "org_a";
+  delete process.env.MCP_OAUTH_ORG_ALLOWLIST_REQUIRED;
   delete process.env.MCP_OAUTH_ISSUER;
   store = freshStore();
   __setOAuthStoreForTests(store);
@@ -73,7 +75,7 @@ describe("GET /oauth/authorize", () => {
   });
 
   test("ON → 303 to consent with security headers", async () => {
-    const res = await authorize.GET(new Request(authorizeUrl, { headers: { "x-forwarded-for": "203.0.113.5" } }));
+    const res = await authorize.GET(new Request(authorizeUrl, { headers: { "x-real-ip": "203.0.113.5" } }));
     expect(res.status).toBe(303);
     expect(res.headers.get("location")!.startsWith(`${ISSUER}/oauth/consent?rid=`)).toBe(true);
     expect(res.headers.get("x-frame-options")).toBe("DENY");
@@ -90,9 +92,40 @@ describe("GET /oauth/authorize", () => {
     expect(html).not.toContain("evil.example");
   });
 
+  test("hardening 2: sets a short-lived __Host- rid-binding cookie (HttpOnly, Secure, SameSite=Lax, Path=/, no Domain)", async () => {
+    const res = await authorize.GET(new Request(authorizeUrl, { headers: { "x-real-ip": "203.0.113.5" } }));
+    const rid = new URL(res.headers.get("location")!).searchParams.get("rid")!;
+    const sc = res.headers.get("set-cookie")!;
+    expect(sc).toBeTruthy();
+    const [pair, ...attrs] = sc.split(";").map((x) => x.trim());
+    expect(pair.startsWith("__Host-sp_oauth_rb_")).toBe(true);
+    expect(pair).not.toContain(rid);
+    const lower = attrs.map((a) => a.toLowerCase());
+    expect(lower).toContain("httponly");
+    expect(lower).toContain("secure");
+    expect(lower).toContain("samesite=lax");
+    expect(lower).toContain("path=/");
+    expect(lower).toContain("max-age=600");
+    expect(lower.some((a) => a.startsWith("domain="))).toBe(false);
+  });
+
+  test("hardening 2: MCP_OAUTH_STATE_SECRET missing → 503 (cannot bind the browser), no auth request created", async () => {
+    delete process.env.MCP_OAUTH_STATE_SECRET;
+    const res = await authorize.GET(new Request(authorizeUrl, { headers: { "x-real-ip": "203.0.113.5" } }));
+    expect(res.status).toBe(503);
+    expect(res.headers.get("location")).toBeNull();
+    expect(res.headers.get("set-cookie")).toBeNull();
+  });
+
+  test("hardening 7: rotating X-Forwarded-For does not escape the per-IP limit", async () => {
+    let last = 0;
+    for (let i = 0; i < 31; i++) last = (await authorize.GET(new Request(authorizeUrl, { headers: { "x-real-ip": "198.51.100.8", "x-forwarded-for": `10.0.0.${i}` } }))).status;
+    expect(last).toBe(429);
+  });
+
   test("rate limit 30/min per IP", async () => {
     let last = 0;
-    for (let i = 0; i < 31; i++) last = (await authorize.GET(new Request(authorizeUrl, { headers: { "x-forwarded-for": "198.51.100.7" } }))).status;
+    for (let i = 0; i < 31; i++) last = (await authorize.GET(new Request(authorizeUrl, { headers: { "x-real-ip": "198.51.100.7" } }))).status;
     expect(last).toBe(429);
   });
 });
@@ -106,9 +139,15 @@ function consentReq(body: Record<string, string>, headers: Record<string, string
 }
 
 describe("POST /api/oauth/consent", () => {
+  let jar = new Map<string, string>();
   async function wire() {
-    const authRes = await authorize.GET(new Request(authorizeUrl, { headers: { "x-forwarded-for": "192.0.2.1" } }));
+    const authRes = await authorize.GET(new Request(authorizeUrl, { headers: { "x-real-ip": "192.0.2.1" } }));
     const rid = new URL(authRes.headers.get("location")!).searchParams.get("rid")!;
+    // the browser that started the flow keeps the rid-binding cookie
+    jar = new Map();
+    const pair = (authRes.headers.get("set-cookie") || "").split(";")[0];
+    const eq = pair.indexOf("=");
+    if (eq > 0) jar.set(pair.slice(0, eq), pair.slice(eq + 1));
     const now = new Date();
     __setConsentDepsForTests({
       store,
@@ -129,6 +168,7 @@ describe("POST /api/oauth/consent", () => {
       notify: async () => undefined,
       rateLimit: async () => ({ allowed: true, count: 1, retryAfterSec: 60 }),
       stateSecret: () => SECRET,
+      getCookie: async (name) => jar.get(name) ?? null,
       now: () => now,
     });
     return { rid, csrf: mintConsentCsrf(SECRET, rid, "u1", now) };
@@ -166,6 +206,19 @@ describe("POST /api/oauth/consent", () => {
     expect(loc.searchParams.get("iss")).toBe(ISSUER);
     expect(res.headers.get("cache-control")).toBe("no-store");
     expect(res.headers.get("referrer-policy")).toBe("no-referrer");
+    // binding cookie is cleared once the rid is used
+    const sc = res.headers.get("set-cookie") || "";
+    expect(sc.startsWith("__Host-sp_oauth_rb_")).toBe(true);
+    expect(sc.toLowerCase()).toContain("max-age=0");
+  });
+
+  test("hardening 2: a victim browser without the starter's cookie cannot approve the forwarded rid", async () => {
+    const { rid, csrf } = await wire();
+    jar.clear();
+    const res = await consent.POST(consentReq({ rid, csrf, decision: "allow", employee_id: "emp_1", confirm: "yes" }));
+    expect(res.status).toBe(403);
+    expect(res.headers.get("location")).toBeNull();
+    expect((await store.getAuthRequest(rid))?.consumedAt).toBeNull();
   });
 });
 

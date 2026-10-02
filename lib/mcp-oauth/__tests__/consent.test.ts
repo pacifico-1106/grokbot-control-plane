@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { loadConsentView, processConsentDecision, type ConsentDeps, type ConsentSession } from "@/lib/mcp-oauth/consent";
 import { mintConsentCsrf, verifyConsentCsrf } from "@/lib/mcp-oauth/csrf";
+import { mintRidBinding, ridBindingCookieName } from "@/lib/mcp-oauth/browser-binding";
 import { sha256Hex } from "@/lib/mcp-oauth/tokens";
 import type { Employee, OrgMember } from "@/lib/types";
 import { CLAUDE_CLIENT, ISSUER, RESOURCE, freshStore } from "@/lib/mcp-oauth/__tests__/fixtures";
@@ -33,6 +34,8 @@ let notified: number;
 let rateAllowed: boolean;
 let aal: string | null;
 let now: Date;
+/** Cookie jar of the browser that hit /oauth/authorize (rid binding, hardening 2). */
+let jar: Map<string, string>;
 
 function deps(): ConsentDeps {
   return {
@@ -52,6 +55,7 @@ function deps(): ConsentDeps {
     },
     rateLimit: async () => ({ allowed: rateAllowed, count: 1, retryAfterSec: 60 }),
     stateSecret: () => SECRET,
+    getCookie: async (name) => jar.get(name) ?? null,
     now: () => now,
   };
 }
@@ -81,6 +85,7 @@ async function seedRequest(id = "rid_" + "a".repeat(40)) {
     scope: ["staffpass.employee", "offline_access"],
     expiresAt: new Date(now.getTime() + 600_000).toISOString(),
   });
+  jar.set(ridBindingCookieName(id), mintRidBinding(SECRET, id));
   return id;
 }
 
@@ -100,6 +105,7 @@ beforeEach(() => {
     ["emp_x", emp({ id: "emp_x", orgId: "org_b", displayName: "他社AI" })],
   ]);
   audits = [];
+  jar = new Map();
   notified = 0;
   rateAllowed = true;
   aal = "aal1";
@@ -321,5 +327,48 @@ describe("consent decision", () => {
       { ...deps(), notify: async () => { throw new Error("smtp down"); } }
     );
     expect(out.type).toBe("redirect");
+  });
+});
+
+describe("hardening 2: rid bound to the browser that started /oauth/authorize", () => {
+  test("consent GET without the binding cookie → 403 page (no CSRF minted)", async () => {
+    const rid = await seedRequest();
+    jar.clear();
+    const out = await loadConsentView(rid, deps());
+    expect(out).toMatchObject({ type: "page", status: 403, error: "access_denied" });
+    expect(JSON.stringify(out)).not.toContain(rid);
+  });
+
+  test("consent POST (allow AND deny) without / with a forged / other-rid cookie → 403, rid untouched, no grant", async () => {
+    const rid = await seedRequest();
+    const other = await seedRequest("rid_" + "b".repeat(40));
+    const name = ridBindingCookieName(rid);
+    for (const v of [null, "forged", mintRidBinding(SECRET, other), mintRidBinding("t".repeat(40), rid)]) {
+      if (v === null) jar.delete(name);
+      else jar.set(name, v);
+      expect(await allow(rid)).toMatchObject({ type: "page", status: 403 });
+      expect(await allow(rid, { decision: "deny" })).toMatchObject({ type: "page", status: 403 });
+    }
+    expect((await store.getAuthRequest(rid))?.consumedAt).toBeNull();
+    expect(audits.map((a) => a.action)).not.toContain("oauth.consent_granted");
+    jar.set(name, mintRidBinding(SECRET, rid));
+    expect(await allow(rid)).toMatchObject({ type: "redirect" });
+  });
+
+  test("a different rid's cookie name with this rid's value does not help (name is per-rid)", async () => {
+    const rid = await seedRequest();
+    const v = jar.get(ridBindingCookieName(rid))!;
+    jar.clear();
+    jar.set(ridBindingCookieName("rid_" + "c".repeat(40)), v);
+    expect(await loadConsentView(rid, deps())).toMatchObject({ type: "page", status: 403 });
+  });
+
+  test("'only approve if you started this yourself' warning is shown for every client, not only loopback", async () => {
+    const out = await loadConsentView(await seedRequest(), deps());
+    expect(out.type).toBe("view");
+    if (out.type === "view") {
+      expect(out.view.client.loopback).toBe(false);
+      expect(out.view.startedYourselfWarningJa).toContain("自分で開始");
+    }
   });
 });

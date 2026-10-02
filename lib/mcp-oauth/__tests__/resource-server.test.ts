@@ -30,11 +30,12 @@ const { __setOAuthStoreForTests } = await import("@/lib/data/oauth");
 const { resolveMcpCredential, wwwAuthenticate } = await import("../resource-server");
 
 let store = freshStore();
-const ENV = ["MCP_OAUTH_ENABLED", "MCP_OAUTH_ORG_ALLOWLIST", "MCP_OAUTH_ISSUER"];
+const ENV = ["MCP_OAUTH_ENABLED", "MCP_OAUTH_ORG_ALLOWLIST", "MCP_OAUTH_ORG_ALLOWLIST_REQUIRED", "MCP_OAUTH_ISSUER", "MCP_OAUTH_DCR_ENABLED"];
 const saved: Record<string, string | undefined> = {};
 beforeEach(() => {
   for (const k of ENV) (saved[k] = process.env[k]), delete process.env[k];
   process.env.MCP_OAUTH_ENABLED = "1";
+  process.env.MCP_OAUTH_ORG_ALLOWLIST = "org_a";
   store = freshStore();
   __setOAuthStoreForTests(store);
   directory.reset();
@@ -146,4 +147,51 @@ test("blocked client → its live access token is refused at the resource server
   const r = await resolveMcpCredential(req(accessToken));
   expect(r.ok).toBe(false);
   if (!r.ok) expect(r.httpStatus).toBe(401);
+});
+
+test("hardening 1: DCR flag OFF → live access token of a DCR-registered client is refused; ON → accepted", async () => {
+  const { accessToken } = await seedClientAndGrant(store);
+  const c = (await store.getClient("https://claude.ai/oauth/mcp-client.json"))!;
+  await store.upsertClient({ ...c, registrationType: "dcr" });
+  process.env.MCP_OAUTH_DCR_ENABLED = "1";
+  expect((await resolveMcpCredential(req(accessToken))).ok).toBe(true);
+  delete process.env.MCP_OAUTH_DCR_ENABLED;
+  const r = await resolveMcpCredential(req(accessToken));
+  expect(r.ok).toBe(false);
+  if (!r.ok) {
+    expect(r.httpStatus).toBe(401);
+    expect(r.oauthError).toBe("invalid_token");
+  }
+});
+
+test("hardening 1: CIMD client tokens are unaffected by the DCR flag", async () => {
+  const { accessToken } = await seedClientAndGrant(store);
+  delete process.env.MCP_OAUTH_DCR_ENABLED;
+  expect((await resolveMcpCredential(req(accessToken))).ok).toBe(true);
+});
+
+test("hardening 4: employee must be status 'active' (draft / unknown statuses refused, like consent)", async () => {
+  const { accessToken } = await seedClientAndGrant(store);
+  for (const status of ["draft", "archived", "", "suspended"]) {
+    directory.employees.set("emp_1", { ...directory.employees.get("emp_1")!, status });
+    const r = await resolveMcpCredential(req(accessToken));
+    expect([status, r.ok]).toEqual([status, false]);
+  }
+  directory.employees.set("emp_1", { ...directory.employees.get("emp_1")!, status: "active" });
+  expect((await resolveMcpCredential(req(accessToken))).ok).toBe(true);
+});
+
+test("hardening 8: empty / missing allowlist denies every org unless MCP_OAUTH_ORG_ALLOWLIST_REQUIRED=0", async () => {
+  const { accessToken } = await seedClientAndGrant(store);
+  delete process.env.MCP_OAUTH_ORG_ALLOWLIST;
+  expect((await resolveMcpCredential(req(accessToken))).ok).toBe(false);
+  process.env.MCP_OAUTH_ORG_ALLOWLIST = "";
+  expect((await resolveMcpCredential(req(accessToken))).ok).toBe(false);
+  process.env.MCP_OAUTH_ORG_ALLOWLIST_REQUIRED = "1";
+  expect((await resolveMcpCredential(req(accessToken))).ok).toBe(false);
+  process.env.MCP_OAUTH_ORG_ALLOWLIST_REQUIRED = "0";
+  expect((await resolveMcpCredential(req(accessToken))).ok).toBe(true);
+  // a non-empty list always applies, regardless of the REQUIRED switch
+  process.env.MCP_OAUTH_ORG_ALLOWLIST = "org_pilot";
+  expect((await resolveMcpCredential(req(accessToken))).ok).toBe(false);
 });
