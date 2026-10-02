@@ -1,0 +1,55 @@
+# MCP OAuth 2.1 ロールアウト手順 / Rollout runbook (2026-10-03)
+
+> 状態: コードは PR #205〜（スタック）で **すべてフラグ OFF**。マイグレーションは**ファイルのみ**（未実行）。
+> このドキュメントは PR ごとに追記されます。 / All code ships flag-OFF; migrations are files only.
+
+## Q5: パイロット組織 / Pilot org allowlist
+
+本番ドメイン（`https://staffpass.sealith.com`）で、組織の許可リストを使って TOKYO307 だけで始めます。
+
+| Env | ロールアウト時に設定する値 |
+|---|---|
+| `MCP_OAUTH_ORG_ALLOWLIST` | `92f3617c-33fc-4dac-b9b4-d4f42e8522ac`（TOKYO307 / トーキョーサンマルサンマルナナ株式会社） |
+
+- 値の出典: リポジトリ内の既存運用ドキュメント（`docs/admin-orgs-patch-20260915.md` §8、`docs/runbooks/approval-enforcement-rollout-2026-09-28.md`）。エージェントには本番 DB の読み取り手段が無いため、**設定前に** 次の SQL で確認してください（読み取りのみ）:
+
+  ```sql
+  select id, name, created_at from orgs where id = '92f3617c-33fc-4dac-b9b4-d4f42e8522ac';
+  ```
+- 空にすると**全組織**が対象になります（パイロット中は必ず値を入れる）。
+- 許可リストは同意（consent）と、毎リクエストのトークン検証（RS）の両方で判定されます。外せば既存 grant も即座に使えなくなります。
+
+## フラグと環境変数 / Flags & env
+
+| Env | 既定 | 用途 |
+|---|---|---|
+| `MCP_OAUTH_ENABLED` | OFF | OAuth 全体（.well-known、authorize、consent、token、revoke、`sp_at_` 受け入れ、401 の WWW-Authenticate）。DEMO では常に無効 |
+| `MCP_OAUTH_DCR_ENABLED` | OFF | `/api/oauth/register`（DCR）。Q7: 通常は CIMD のみ |
+| `MCP_OAUTH_LEGACY_UNAUTH_INITIALIZE` | OFF | Q4 の逃げ道: OAuth ON でも `initialize`/`ping`/`notifications/*` だけ未認証で 200 |
+| `MCP_OAUTH_CONSENT_REQUIRE_MFA` | OFF | Q2 のフック: ON で同意に aal2（二要素）を要求 |
+| `MCP_OAUTH_STATE_SECRET` | — | 同意 CSRF の HMAC 鍵（32 バイト以上。未設定なら同意は 503 で fail-closed） |
+| `IP_HASH_KEY` | — | レート制限キー（未設定なら authorize / register は 503） |
+| `MCP_OAUTH_ISSUER` | `https://staffpass.sealith.com` | issuer（末尾スラッシュなし） |
+| `MCP_UNAUTH_INIT_LOG_ENABLED` | OFF | #210: 未認証 initialize の観測ログ（OAuth ON 前に数日） |
+
+## 同意（consent）の条件 / Who can consent (PR-5)
+
+- 実セッション（Supabase ユーザー + その組織の active メンバー）。**owner へのフォールバックは使わない**。
+- role が owner / admin、かつ capability `hire_issue_credentials`（Q1）。
+- 最後のログインから 15 分以内（`auth.users.last_sign_in_at`）。過ぎていれば画面の「再ログインする」から。
+- 組織が `MCP_OAUTH_ORG_ALLOWLIST` に含まれる。
+- 選んだ AI 社員がセッションの組織に属し、active、binding が失効しておらず、有効な社員証がある。
+- grant の期限は 90 日、かつ社員証の期限を超えない。code は 60 秒・1 回限り。
+- 許可後、組織の owner / admin にメール通知（取り消しリンク付き）。監査: `oauth.consent_granted` / `oauth.consent_denied`。
+- OAuth ON の間、ログイン POST は別オリジンからの `Origin` を 403 にします（ログイン CSRF 対策）。
+
+## 実機確認 / Verification accounts (Q9)
+
+八坂さんが ChatGPT Business（Premium シート）と Claude Team のアカウントを用意。PR-6（token）・PR-8（クライアント互換）マージ後、ステージングまたはパイロット組織で確認します。
+
+## ロールアウト順（案）
+
+1. #210 を先にマージし `MCP_UNAUTH_INIT_LOG_ENABLED=true` で 3〜7 日観測（Q4）。
+2. マイグレーション `20261003100000_mcp_oauth.sql` を 八坂さんが実行（`/workspace/staffpass-sql/mcp-oauth-20261003/`）。
+3. `MCP_OAUTH_STATE_SECRET`、`IP_HASH_KEY`、`MCP_OAUTH_ORG_ALLOWLIST=92f3617c-33fc-4dac-b9b4-d4f42e8522ac` を設定。
+4. `MCP_OAUTH_ENABLED=true`。問題があれば即 OFF（挙動は今と完全に同じに戻る）。

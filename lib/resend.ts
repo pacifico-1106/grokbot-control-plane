@@ -8,7 +8,8 @@ export type EmailTemplate =
   | "billing_receipt"
   | "approval_requested"
   | "approval_needed"
-  | "approval_resolved";
+  | "approval_resolved"
+  | "oauth_connected";
 
 export interface SendEmailInput {
   to: string | string[];

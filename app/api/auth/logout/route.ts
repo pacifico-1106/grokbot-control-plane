@@ -24,5 +24,15 @@ export async function POST(req: Request) {
     );
     await supabase.auth.signOut();
   }
-  return NextResponse.redirect(new URL("/login", req.url), 303);
+  // Consent screen "switch org / re-login": come back to the same consent request.
+  // Only the exact /oauth/consent?rid=<token> shape is honoured (no open redirect).
+  const nextRaw = await req
+    .formData()
+    .then((f) => f.get("next"))
+    .catch(() => null);
+  const login = new URL("/login", req.url);
+  if (typeof nextRaw === "string" && /^\/oauth\/consent\?rid=[A-Za-z0-9_-]{1,128}$/.test(nextRaw)) {
+    login.searchParams.set("next", nextRaw);
+  }
+  return NextResponse.redirect(login, 303);
 }

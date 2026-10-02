@@ -3,6 +3,8 @@ import { isDemoMode } from "@/lib/mode";
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 import { matchesSuperAdminAllowlist } from "@/lib/admin/allowlist";
+import { isMcpOAuthEnabled } from "@/lib/mcp-oauth/config";
+import { isSameOriginBrowserPost } from "@/lib/mcp-oauth/http";
 import {
   loginErrorMessage,
   loginFailureSearchParams,
@@ -53,6 +55,11 @@ function fail(
 }
 
 export async function POST(req: Request) {
+  // Login CSRF guard (MCP OAuth consent relies on "who is signed in").
+  // Only while MCP_OAUTH_ENABLED is ON; requests without Origin (non-browser) pass.
+  if (isMcpOAuthEnabled() && !isSameOriginBrowserPost(req, { requireOrigin: false })) {
+    return NextResponse.json({ error: "origin_mismatch", message: "不正な送信元です。" }, { status: 403 });
+  }
   const contentType = req.headers.get("content-type") || "";
   const json = wantsJson(req, contentType);
   let email = "";

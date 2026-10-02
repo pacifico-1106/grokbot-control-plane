@@ -77,6 +77,8 @@ export const ADMIN_CLASS_ALIASES = [
   "credential.issued",
   "credential.revoked",
   "credential.rotated",
+  "oauth.consent_granted",
+  "oauth.grant_revoked",
   "employee.created",
   "employee.updated",
   "employee.terminated",

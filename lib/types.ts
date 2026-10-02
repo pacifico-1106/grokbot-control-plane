@@ -451,6 +451,13 @@ export type AuditAction =
   | "credential.issued"
   | "credential.revoked"
   | "credential.rotated"
+  /** MCP OAuth (flag MCP_OAUTH_ENABLED). Metadata: client host, grant id, hash prefixes only. */
+  | "oauth.consent_granted"
+  | "oauth.consent_denied"
+  | "oauth.grant_revoked"
+  | "oauth.token_issued"
+  | "oauth.code_reuse_detected"
+  | "oauth.refresh_reuse_detected"
   | "tool.invoke"
   | "approval.requested"
   | "approval.resolved"
