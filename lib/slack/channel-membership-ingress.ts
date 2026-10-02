@@ -27,7 +27,12 @@
  * - Connect channels the policy does not include are recorded as out_of_scope.
  * - No message bodies are read or stored.
  *
- * Not in CS3: approver info card on Connect invites (CS4), reconcile cron (CS5).
+ * CS4: the inviter's home team is looked up with users.info (same token as conversations.info;
+ * failure ⇒ null) and stored on the membership. On a Connect invite / later share, an info card
+ * (no buttons) goes to the approver inbox when policy.connect.notifyApproverOnInvite (default
+ * true) — lib/channel-scope/notify.ts. The send gate itself lives in lib/channel-scope/egress-gate.ts.
+ *
+ * Not here: reconcile cron (CS5).
  */
 import { appendAuditEvent } from "@/lib/data/audit";
 import { getEnabledConversationAdapter } from "@/lib/data/conversation-adapters";
@@ -38,6 +43,8 @@ import {
   listLinkedSlackIdentitiesForTeam,
 } from "@/lib/data/slack-identities";
 import { resolveOrgSlackBotToken } from "@/lib/slack/bot-token";
+import { getEmployee } from "@/lib/data/employees";
+import { sendConnectInviteInfoCard, type ConnectInviteKind } from "@/lib/channel-scope/notify";
 import {
   getEffectiveChannelScope,
   listEmployeeChannelMemberships,
@@ -108,6 +115,8 @@ export type ChannelMembershipDeps = {
   claim: (eventId: string) => Promise<boolean>;
   /** conversations.info; null on any failure. Overridable for tests. */
   fetchConversationInfo?: (token: string, channelId: string) => Promise<SlackConversationInfoLike | null>;
+  /** CS4: users.info → the user's home team id; null on any failure. Overridable for tests. */
+  fetchUserTeamId?: (token: string, userId: string) => Promise<string | null>;
 };
 
 const SLACK_TIMEOUT_MS = 5_000;
@@ -171,6 +180,24 @@ export async function fetchSlackConversationInfo(
       connected_team_ids: list(c.connected_team_ids),
       pending_connected_team_ids: list(c.pending_connected_team_ids),
     };
+  } catch {
+    return null;
+  }
+}
+
+/** CS4: users.info → user.team_id (the inviter's home workspace). Never throws; never logs the token. */
+export async function fetchSlackUserTeamId(token: string, userId: string): Promise<string | null> {
+  if (!token || !userId) return null;
+  try {
+    const url = `https://slack.com/api/users.info?user=${encodeURIComponent(userId)}`;
+    const response = await fetch(url, {
+      method: "GET",
+      headers: { authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(SLACK_TIMEOUT_MS),
+    });
+    const body = (await response.json().catch(() => ({}))) as { ok?: boolean; user?: { team_id?: unknown } };
+    if (!body.ok || !body.user) return null;
+    return teamOrNull(body.user.team_id);
   } catch {
     return null;
   }
@@ -253,17 +280,65 @@ function joinState(scope: EffectiveChannelScope, channel: ChannelScopeChannel, v
     : "member";
 }
 
+async function slackTokenFor(orgId: string, subject: Subject): Promise<string> {
+  const userToken = subject.via === "user" ? await getLinkedSlackUserToken(subject.employeeId) : "";
+  return userToken || (await resolveOrgSlackBotToken(orgId));
+}
+
 async function classifyForOrg(
   orgId: string,
   subject: Subject,
   channelId: string,
-  fetchInfo: NonNullable<ChannelMembershipDeps["fetchConversationInfo"]>
-): Promise<AutoClassification> {
-  const userToken = subject.via === "user" ? await getLinkedSlackUserToken(subject.employeeId) : "";
-  const token = userToken || (await resolveOrgSlackBotToken(orgId));
-  const info = token ? await fetchInfo(token, channelId) : null;
-  const rule = await getOrgInternalAudienceRule(orgId);
-  return classifySlackConversation(info, rule.slackTeamIds);
+  fetchInfo: NonNullable<ChannelMembershipDeps["fetchConversationInfo"]>,
+  fetchUserTeam: NonNullable<ChannelMembershipDeps["fetchUserTeamId"]>,
+  inviter: string | null
+): Promise<{ auto: AutoClassification; inviterTeamId: string | null; internalTeams: Set<string> }> {
+  const token = await slackTokenFor(orgId, subject);
+  const [info, inviterTeamId, rule] = await Promise.all([
+    token ? fetchInfo(token, channelId) : Promise.resolve(null),
+    token && inviter ? fetchUserTeam(token, inviter) : Promise.resolve(null),
+    getOrgInternalAudienceRule(orgId),
+  ]);
+  return {
+    auto: classifySlackConversation(info, rule.slackTeamIds),
+    inviterTeamId,
+    internalTeams: new Set(rule.slackTeamIds.map(upper)),
+  };
+}
+
+function isConnectLike(channel: ChannelScopeChannel): boolean {
+  return channel.classification === "shared_external" || channel.mixed;
+}
+
+/** CS4: info card to the employee's approver inbox, deduped per (org, inbox) within one event. */
+async function maybeNotifyConnect(input: {
+  sent: Set<string>;
+  scope: EffectiveChannelScope;
+  subject: { orgId: string; employeeId: string };
+  channel: ChannelScopeChannel;
+  inScope: boolean;
+  kind: ConnectInviteKind;
+  inviterSlackUserId: string | null;
+  inviterTeamId: string | null;
+  eventId: string;
+}): Promise<boolean> {
+  if (!input.scope.policy.connect.notifyApproverOnInvite) return false;
+  const employee = await getEmployee(input.subject.employeeId, input.subject.orgId).catch(() => null);
+  const key = `${input.subject.orgId}:${employee?.approvalChannelId?.trim() || "default"}`;
+  if (input.sent.has(key)) return false;
+  input.sent.add(key);
+  const result = await sendConnectInviteInfoCard({
+    orgId: input.subject.orgId,
+    employee: employee ? { id: employee.id, displayName: employee.displayName, approvalChannelId: employee.approvalChannelId } : null,
+    channelId: input.channel.externalId,
+    externalTeamIds: input.channel.externalTeamIds ?? [],
+    inviterSlackUserId: input.inviterSlackUserId,
+    inviterTeamId: input.inviterTeamId,
+    inScope: input.inScope,
+    kind: input.kind,
+    eventId: input.eventId,
+  });
+  return result.sent;
 }
 
 async function handleJoin(input: {
@@ -273,12 +348,21 @@ async function handleJoin(input: {
   inviter: string | null;
   joinerTeam: string | null;
   fetchInfo: NonNullable<ChannelMembershipDeps["fetchConversationInfo"]>;
+  fetchUserTeam: NonNullable<ChannelMembershipDeps["fetchUserTeamId"]>;
 }): Promise<{ applied: number; failed: number }> {
   let applied = 0;
   let failed = 0;
+  const notified = new Set<string>();
   const classified = new Map<
     string,
-    { auto: AutoClassification; channel: ChannelScopeChannel; rejectedWidening: boolean; confirmationCleared: boolean }
+    {
+      auto: AutoClassification;
+      channel: ChannelScopeChannel;
+      rejectedWidening: boolean;
+      confirmationCleared: boolean;
+      inviterTeamId: string | null;
+      inviterExternal: boolean | null;
+    }
   >();
   for (const subject of input.subjects) {
     try {
@@ -308,7 +392,14 @@ async function handleJoin(input: {
       }
       let entry = classified.get(subject.orgId);
       if (!entry) {
-        const auto = await classifyForOrg(subject.orgId, subject, input.channelId, input.fetchInfo);
+        const { auto, inviterTeamId, internalTeams } = await classifyForOrg(
+          subject.orgId,
+          subject,
+          input.channelId,
+          input.fetchInfo,
+          input.fetchUserTeam,
+          input.inviter
+        );
         const written = await upsertAutoClassifiedChannel({
           orgId: subject.orgId,
           externalId: input.channelId,
@@ -320,6 +411,8 @@ async function handleJoin(input: {
           channel: written.channel,
           rejectedWidening: written.merged.rejectedWidening,
           confirmationCleared: written.confirmationCleared,
+          inviterTeamId,
+          inviterExternal: inviterTeamId ? !internalTeams.has(inviterTeamId) : null,
         };
         classified.set(subject.orgId, entry);
       }
@@ -331,9 +424,24 @@ async function handleJoin(input: {
         via: subject.via,
         state,
         inviterSlackUserId: input.inviter,
+        inviterTeamId: entry.inviterTeamId,
         eventId: input.eventId,
       });
       if (res.applied) applied += 1;
+      const approverNotified =
+        res.applied && isConnectLike(entry.channel)
+          ? await maybeNotifyConnect({
+              sent: notified,
+              scope,
+              subject,
+              channel: entry.channel,
+              inScope: state === "member",
+              kind: "invited",
+              inviterSlackUserId: input.inviter,
+              inviterTeamId: entry.inviterTeamId,
+              eventId: input.eventId,
+            })
+          : false;
       await audit(subject.orgId, subject.employeeId, "channel_scope.auto_classified", `チャンネル自動分類: ${entry.channel.classification}`, {
         channelId: input.channelId,
         via: subject.via,
@@ -351,7 +459,10 @@ async function handleJoin(input: {
         includeSlackConnect: scope.policy.includeSlackConnect,
         connectSuppressed: scope.connectSuppressed,
         inviterSlackUserId: input.inviter,
+        inviterTeamId: entry.inviterTeamId,
+        inviterExternal: entry.inviterExternal,
         joinerTeamId: input.joinerTeam,
+        approverNotified,
         eventId: input.eventId,
       });
     } catch (error) {
@@ -416,6 +527,7 @@ async function handleShared(input: {
 }): Promise<{ applied: number; failed: number }> {
   let applied = 0;
   let failed = 0;
+  const notified = new Set<string>();
   const orgs = [...new Set(input.subjects.map((s) => s.orgId))];
   for (const orgId of orgs) {
     try {
@@ -431,9 +543,26 @@ async function handleShared(input: {
       if (written.merged.changed || written.created) applied += 1;
       const rows = await listEmployeeChannelMemberships(orgId, { externalId: input.channelId, state: "member", limit: 500 });
       const movedOut: string[] = [];
+      let approverNotified = 0;
       for (const row of rows) {
         const scope = await getEffectiveChannelScope(orgId, row.employeeId);
         const state = joinState(scope, written.channel, row.via);
+        if (
+          (written.merged.changed || written.created) &&
+          (await maybeNotifyConnect({
+            sent: notified,
+            scope,
+            subject: { orgId, employeeId: row.employeeId },
+            channel: written.channel,
+            inScope: state === "member",
+            kind: "shared_later",
+            inviterSlackUserId: null,
+            inviterTeamId: null,
+            eventId: input.eventId,
+          }))
+        ) {
+          approverNotified += 1;
+        }
         if (state === "out_of_scope") {
           await upsertEmployeeChannelMembership({
             orgId,
@@ -455,6 +584,7 @@ async function handleShared(input: {
         humanConfirmed: Boolean(written.channel.humanConfirmedAt),
         humanConfirmationCleared: written.confirmationCleared,
         membershipsMovedOutOfScope: movedOut,
+        approverNotified,
         eventId: input.eventId,
       });
     } catch (error) {
@@ -519,6 +649,7 @@ export async function processChannelMembershipEnvelope(
             inviter: userOrNull(event.inviter),
             joinerTeam: teamOrNull(event.team),
             fetchInfo,
+            fetchUserTeam: deps.fetchUserTeamId ?? fetchSlackUserTeamId,
           })
         : await handleLeave({ subjects, channelId, eventId, state: "left", eventType });
     return { handled: true, woke: 0, channelMembership: summary(subjects.length, result.applied, result.failed) };

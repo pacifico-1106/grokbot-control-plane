@@ -112,8 +112,9 @@ import {
   detectSecretInPayload,
   buildSecretDetectionErrorResponse,
 } from "@/lib/security/secret-detector";
-import { isGoogleCalendarReadEnabled, isTopicGatedPostingEnabled } from "@/lib/feature-flags";
+import { isChannelScopeEnabled, isGoogleCalendarReadEnabled, isTopicGatedPostingEnabled } from "@/lib/feature-flags";
 import { checkTopicGate, buildTopicGateApprovalMetadata } from "@/lib/decision-workflow/topic-gate";
+import { evaluateConnectEgressGate } from "@/lib/channel-scope/egress-gate";
 import { getOrgApprovalKindRoutesPolicy } from "@/lib/approval-kind-routes/data";
 import { getToolApprovalKind } from "@/lib/approval-kind-routes/tool-kind-map";
 import {
@@ -1523,6 +1524,59 @@ export async function runGatewayInvoke(
           : {}),
       },
     });
+  }
+
+  // P1 Channel Scope (CS4): auto-joined Slack Connect channel not yet confirmed by a human ⇒
+  // every send needs approval (connect.egress=needs_approval_until_confirmed). Runs after
+  // deny / voice so it only ever adds an approval. Flag OFF ⇒ no DB access, no change.
+  if (isAudienceGatedTool(toolDef) && !priorApprovalOk && isChannelScopeEnabled()) {
+    const connectCtx = parseConversationContext(body, orgId || employee.orgId);
+    const connectGate = await evaluateConnectEgressGate({
+      orgId: orgId || employee.orgId,
+      employeeId,
+      slackChannelId: connectCtx?.surface === "slack" ? connectCtx.slackChannelId : null,
+    });
+    if (connectGate.required) {
+      await appendAuditEvent({
+        orgId: orgId || employee.orgId,
+        employeeId,
+        credentialId: input.credentialId || employee.credentialId,
+        action: "channel_scope.connect_egress_gated",
+        purpose,
+        summary: `${tool} は未確定の Slack Connect チャンネルへの送信のため承認が必要`,
+        metadata: { tool, jobId, channelScopeConnectGate: connectGate },
+      });
+      return createNeedsApprovalResponse({
+        employeeId,
+        orgId: orgId || employee.orgId,
+        credentialId: input.credentialId || employee.credentialId,
+        employeeDisplayName: employee.displayName,
+        employee,
+        tool,
+        purpose,
+        jobId,
+        risk: "high",
+        message:
+          connectGate.reason === "lookup_failed"
+            ? `${tool}: チャンネル範囲の確認に失敗したため、送信には承認が必要です`
+            : `${tool}: 自動参加した外部 Slack Connect チャンネル（人の確定前）への送信は承認が必要です`,
+        parentApprovalId: parentApprovalId || null,
+        metadata: { ...invokeMetadata, sodVerdict, actionLimit, egress, dualEgress, managerId, channelScopeConnectGate: connectGate },
+        body,
+        egress,
+        extra: {
+          toolKind: toolDef.kind,
+          approvalPolicy: employee.approvalPolicy,
+          sodVerdict,
+          actionLimit,
+          egress,
+          dualEgress,
+          managerId,
+          channelScopeConnectGate: connectGate,
+          ...(voice ? { voice } : {}),
+        },
+      });
+    }
   }
 
   if (egress?.decision === "needs_approval" && !priorApprovalOk) {

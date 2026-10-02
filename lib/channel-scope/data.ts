@@ -401,6 +401,40 @@ export async function upsertAutoClassifiedChannel(input: {
   throw new Error("channel_scope_channel_write_conflict");
 }
 
+/**
+ * CS4: a human confirmed the channel's classification (channels.classify fulfill, after
+ * approval). Sets human_confirmed_at; source is kept (provenance). Flag ON only.
+ * Returns false when the row does not exist.
+ */
+export async function markChannelHumanConfirmed(input: {
+  orgId: string;
+  surface?: ChannelScopeSurface;
+  externalId: string;
+  at?: string;
+}): Promise<boolean> {
+  requireEnabled();
+  const surface = input.surface ?? "slack";
+  const externalId = (input.externalId ?? "").trim();
+  if (!input.orgId || !externalId) throw new Error("external_id_required");
+  const at = input.at ?? nowIso();
+  if (isDemoMode()) {
+    const row = await getOrgChannel(input.orgId, surface, externalId);
+    if (!row) return false;
+    const key = `${input.orgId}:${surface}:${externalId}`;
+    demoChannelMeta.set(key, { ...(demoChannelMeta.get(key) ?? {}), humanConfirmedAt: at });
+    return true;
+  }
+  const { data, error } = await admin()
+    .from("org_channels")
+    .update({ human_confirmed_at: at, updated_at: at })
+    .eq("org_id", input.orgId)
+    .eq("surface", surface)
+    .eq("external_id", externalId)
+    .select("id");
+  if (error) throw new Error("channel_scope_channel_write_failed");
+  return (data ?? []).length > 0;
+}
+
 // ---------------------------------------------------------------------------
 // employee_channel_memberships
 // ---------------------------------------------------------------------------
