@@ -11,6 +11,7 @@ let audits: Array<{ action: string; metadata: Record<string, unknown> }>;
 let notices: string[];
 let rateAllowed = true;
 let grantId = "";
+let buckets = new Map<string, number>();
 
 function deps(over: Partial<TokenDeps> = {}): TokenDeps {
   return {
@@ -22,7 +23,11 @@ function deps(over: Partial<TokenDeps> = {}): TokenDeps {
     notifySecurity: async (n) => {
       notices.push(n.kind);
     },
-    rateLimit: async () => ({ allowed: rateAllowed, count: 1, retryAfterSec: 30 }),
+    rateLimit: async (bucket, limit) => {
+      const n = (buckets.get(bucket) ?? 0) + 1;
+      buckets.set(bucket, n);
+      return { allowed: rateAllowed && n <= limit, count: n, retryAfterSec: 30 };
+    },
     ipHash: () => "iphash",
     ...over,
   };
@@ -61,6 +66,7 @@ beforeEach(() => {
   audits = [];
   notices = [];
   rateAllowed = true;
+  buckets = new Map();
 });
 
 describe("POST /api/oauth/token — authorization_code", () => {
@@ -222,6 +228,37 @@ describe("POST /api/oauth/token — refresh rotation", () => {
     expect(replay[0].metadata).toMatchObject({ grantId, clientHost: "claude.ai", ageSec: 10 });
     expect(String(replay[0].metadata.refreshHashPrefix)).toHaveLength(12);
     expect(JSON.stringify(audits)).not.toContain(p.refresh_token);
+  });
+
+  test("hardening 2b: in-grace replay audit is deduped — once per token per grace window", async () => {
+    const p = await pair();
+    const p1 = (await refresh(p.refresh_token)).body as Record<string, string>;
+    for (const dt of [2_000, 3_000, 5_000, 10_000]) {
+      now = new Date(now.getTime() + dt);
+      expect(await refresh(p.refresh_token)).toMatchObject({ body: { error: "invalid_grant" } });
+    }
+    const inGrace = () => audits.filter((a) => a.action === "oauth.refresh_replay_in_grace");
+    expect(inGrace().length).toBe(1);
+    expect((await store.getGrant(grantId))?.status).toBe("active");
+    // a different rotated token gets its own (single) audit row
+    expect((await refresh(p1.refresh_token)).status).toBe(200);
+    now = new Date(now.getTime() + 1_000);
+    await refresh(p1.refresh_token);
+    await refresh(p1.refresh_token);
+    expect(inGrace().length).toBe(2);
+    expect(inGrace()[1].metadata.refreshHashPrefix).not.toBe(inGrace()[0].metadata.refreshHashPrefix);
+  });
+
+  test("hardening 2b: replay-audit dedupe fails open (dedupe store error → still audited)", async () => {
+    const p = await pair();
+    await refresh(p.refresh_token);
+    now = new Date(now.getTime() + 5_000);
+    const r = await handleTokenRequest(
+      form({ grant_type: "refresh_token", refresh_token: p.refresh_token, client_id: CLAUDE_CLIENT }),
+      deps({ rateLimit: async (b) => { if (b.startsWith("refresh_replay_audit:")) throw new Error("db down"); return { allowed: true, count: 1, retryAfterSec: 30 }; } })
+    );
+    expect(r).toMatchObject({ body: { error: "invalid_grant" } });
+    expect(audits.filter((a) => a.action === "oauth.refresh_replay_in_grace").length).toBe(1);
   });
 
   test("reuse after grace → grant + all tokens revoked, audit + owner notice", async () => {

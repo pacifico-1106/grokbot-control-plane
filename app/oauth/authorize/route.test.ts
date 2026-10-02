@@ -20,6 +20,7 @@ const authorize = await import("./route");
 const consent = await import("@/app/api/oauth/consent/route");
 const login = await import("@/app/api/auth/login/route");
 const logout = await import("@/app/api/auth/logout/route");
+const notStarted = await import("@/app/oauth/consent/not-started/route");
 
 const CB = "https://claude.ai/api/mcp/auth_callback";
 const SECRET = "k".repeat(40);
@@ -219,6 +220,42 @@ describe("POST /api/oauth/consent", () => {
     expect(res.status).toBe(403);
     expect(res.headers.get("location")).toBeNull();
     expect((await store.getAuthRequest(rid))?.consumedAt).toBeNull();
+  });
+
+  // --- hardening 2b: consent POST errors + not-started page ---
+  const cookieName = (sc: string) => sc.split("=")[0];
+
+  test("consent POST error page (e.g. unchecked confirmation) clears that rid's binding cookie", async () => {
+    const { rid, csrf } = await wire();
+    const res = await consent.POST(consentReq({ rid, csrf, decision: "allow", employee_id: "emp_1" }));
+    expect(res.status).toBe(400);
+    const sc = res.headers.get("set-cookie") || "";
+    expect(cookieName(sc)).toBe([...jar.keys()][0]);
+    expect(sc.toLowerCase()).toContain("max-age=0");
+  });
+
+  test("not-bound POST → 403 and cookie cleared; cross-origin POST → 403 WITHOUT touching cookies", async () => {
+    const { rid, csrf } = await wire();
+    const name = [...jar.keys()][0];
+    const xo = await consent.POST(consentReq({ rid, csrf, decision: "allow", employee_id: "emp_1", confirm: "yes" }, { origin: "https://evil.example" }));
+    expect(xo.status).toBe(403);
+    expect(xo.headers.get("set-cookie")).toBeNull();
+    jar.set(name, "forged");
+    const res = await consent.POST(consentReq({ rid, csrf, decision: "allow", employee_id: "emp_1", confirm: "yes" }));
+    expect(res.status).toBe(403);
+    expect((res.headers.get("set-cookie") || "").toLowerCase()).toContain("max-age=0");
+  });
+
+  test("GET /oauth/consent/not-started → HTTP 403 HTML with the warning; flag OFF → 404", async () => {
+    const res = await notStarted.GET(new Request(`${ISSUER}/oauth/consent/not-started`));
+    expect(res.status).toBe(403);
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    expect(res.headers.get("x-frame-options")).toBe("DENY");
+    const html = await res.text();
+    expect(html).toContain("このブラウザで開始");
+    expect(html).toContain("送られてきた");
+    delete process.env.MCP_OAUTH_ENABLED;
+    expect((await notStarted.GET(new Request(`${ISSUER}/oauth/consent/not-started`))).status).toBe(404);
   });
 });
 

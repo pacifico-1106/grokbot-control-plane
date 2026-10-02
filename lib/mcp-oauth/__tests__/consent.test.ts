@@ -372,3 +372,40 @@ describe("hardening 2: rid bound to the browser that started /oauth/authorize", 
     }
   });
 });
+
+describe("hardening 2b: mitigations for the forwarded-authorize-URL variant", () => {
+  test("not-started-here page is a 403 with reason not_started_here (page.tsx turns it into an HTTP 403)", async () => {
+    const rid = await seedRequest();
+    jar.clear();
+    expect(await loadConsentView(rid, deps())).toMatchObject({ type: "page", status: 403, reason: "not_started_here" });
+    expect(await allow(rid)).toMatchObject({ type: "page", status: 403, reason: "not_started_here" });
+  });
+
+  test("view prominently names the client host and the AI employee(s), and says not to approve a link someone sent you", async () => {
+    const out = await loadConsentView(await seedRequest(), deps());
+    expect(out.type).toBe("view");
+    if (out.type === "view") {
+      expect(out.view.approvalSummaryJa).toContain("claude.ai");
+      expect(out.view.approvalSummaryJa).toContain("営業AI");
+      expect(out.view.approvalSummaryJa).not.toContain("他社AI");
+      expect(out.view.startedYourselfWarningJa).toContain("送られてきた");
+      expect(out.view.startedYourselfWarningJa).toContain("許可しないでください");
+    }
+  });
+
+  test("fresh Staffpass login (≤15 min) is required to approve — view blocks and POST refuses a 16-min-old login", async () => {
+    const rid = await seedRequest();
+    session = { ...session, lastSignInAt: new Date(now.getTime() - 16 * 60_000).toISOString() };
+    const out = await loadConsentView(rid, deps());
+    expect(out.type === "view" && out.view.blockedReason).toBe("login_too_old");
+    expect(await allow(rid)).toMatchObject({ type: "page", status: 401 });
+    expect((await store.getAuthRequest(rid))?.consumedAt).toBeNull();
+  });
+
+  test("owner/admin notification is sent for EVERY new grant (no dedupe across grants)", async () => {
+    expect(await allow(await seedRequest())).toMatchObject({ type: "redirect" });
+    expect(await allow(await seedRequest("rid_" + "d".repeat(40)))).toMatchObject({ type: "redirect" });
+    expect(notified).toBe(2);
+    expect(audits.filter((a) => a.action === "oauth.consent_granted").length).toBe(2);
+  });
+});
