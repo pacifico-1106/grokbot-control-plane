@@ -207,7 +207,7 @@ function renderNotificationHtml(entry: OutboxEntry): string {
     case "handoff_created":
       return renderHandoffHtml(payload);
     default:
-      return `<p>通知タイプ: ${entry.notificationType}</p>`;
+      return `<p>通知タイプ: ${sanitize(entry.notificationType)}</p>`;
   }
 }
 
