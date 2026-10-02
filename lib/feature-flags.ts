@@ -302,3 +302,45 @@ export function isLpOrderLedgerEnabled(): boolean {
 export function isLpChatEnabled(): boolean {
   return parseFlag(process.env.LP_CHAT_ENABLED);
 }
+
+/**
+ * LP_INQUIRY_RATE_LIMIT_ENABLED: IP-hash rate limiting for LP forms.
+ *
+ * When ON:
+ * - Rate limit by hashed IP address.
+ * - Returns 429 when exceeded.
+ *
+ * When OFF (default):
+ * - No rate limiting.
+ */
+export function isLpInquiryRateLimitEnabled(): boolean {
+  return parseFlag(process.env.LP_INQUIRY_RATE_LIMIT_ENABLED);
+}
+
+/**
+ * LP_JOURNEYS_ENABLED: Enable guest journey tracking.
+ *
+ * When ON:
+ * - /api/journeys creates journey records.
+ * - Guest cookies set for session tracking.
+ *
+ * When OFF (default):
+ * - Journey endpoint returns feature_disabled.
+ */
+export function isLpJourneysEnabled(): boolean {
+  return parseFlag(process.env.LP_JOURNEYS_ENABLED);
+}
+
+/**
+ * LP_CHAT_TOOLS_ENABLED: Enable OpenAI tool calling in chat.
+ *
+ * When ON:
+ * - Chat turn uses function calling with KB search, catalog, etc.
+ * - Tools execute against live data.
+ *
+ * When OFF (default):
+ * - Simple completion without tools.
+ */
+export function isLpChatToolsEnabled(): boolean {
+  return parseFlag(process.env.LP_CHAT_TOOLS_ENABLED);
+}
