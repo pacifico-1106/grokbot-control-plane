@@ -11,6 +11,7 @@ import {
   getPublishedRelease,
   createDraftRevision,
   proposeRelease,
+  KbReleaseError,
 } from "./knowledge-base";
 
 export interface KbReadResult {
@@ -40,6 +41,12 @@ export interface KbReleaseProposeResult {
   ok: boolean;
   releaseId?: string;
   status?: "pending_approval";
+  /** Full revision set of the proposed release (requested + carried forward). */
+  revisionIds?: string[];
+  /** Revisions of the current published release kept unchanged. */
+  carriedForward?: string[];
+  /** Release this one will supersede when published (null for the first). */
+  supersedes?: string | null;
   error?: string;
 }
 
@@ -136,6 +143,7 @@ export async function handleKbReleasePropose(input: {
   releaseKey: string;
   revisionIds: string[];
   proposedBy: string;
+  removeDocumentKeys?: string[];
 }): Promise<KbReleaseProposeResult> {
   if (!isLpChatEnabled()) {
     return { ok: false, error: "feature_disabled" };
@@ -146,22 +154,27 @@ export async function handleKbReleasePropose(input: {
   }
 
   try {
+    // Always lands as pending_approval. Publishing is a separate human step
+    // (publishRelease via scripts/lp-kb-publish.ts) and is never exposed as a tool.
     const result = await proposeRelease({
       releaseKey: input.releaseKey,
       revisionIds: input.revisionIds,
       proposedBy: input.proposedBy,
+      removeDocumentKeys: input.removeDocumentKeys,
     });
-
-    if (!result) {
-      return { ok: false, error: "propose_failed" };
-    }
 
     return {
       ok: true,
       releaseId: result.releaseId,
       status: result.status,
+      revisionIds: result.revisionIds,
+      carriedForward: result.carriedForward,
+      supersedes: result.supersedes,
     };
   } catch (error) {
+    if (error instanceof KbReleaseError) {
+      return { ok: false, error: error.code };
+    }
     return {
       ok: false,
       error: error instanceof Error ? error.message : "unknown_error",
@@ -220,7 +233,7 @@ export const KB_ADMIN_TOOL_DEFS = [
   {
     name: "kb.release.propose",
     description:
-      "Propose a KB release for human approval (always_human). The release bundles specific revisions. Once approved and published, content becomes visible in chat search. Never auto-publish.",
+      "Propose a KB release for human approval (always_human). The release bundles specific revisions; documents of the current published release that are not replaced are carried forward unchanged unless listed in removeDocumentKeys. Once approved and published, included documents become public and the previous release is superseded. Never auto-publish.",
     inputSchema: {
       type: "object",
       properties: {
@@ -236,6 +249,11 @@ export const KB_ADMIN_TOOL_DEFS = [
         proposedBy: {
           type: "string",
           description: "ID of the admin proposing this release.",
+        },
+        removeDocumentKeys: {
+          type: "array",
+          items: { type: "string" },
+          description: "Document keys of the current published release to drop instead of carrying forward.",
         },
       },
       required: ["releaseKey", "revisionIds", "proposedBy"],
