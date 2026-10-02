@@ -5,9 +5,10 @@ import {
   MCP_PROTOCOL_VERSION,
   MCP_SERVER_NAME,
   MCP_SERVER_VERSION,
-  STAFFPASS_MCP_TOOLS,
+  listStaffpassMcpTools,
 } from "@/lib/mcp/tools";
 import { STAFFPASS_MCP_URL } from "@/lib/mcp/public";
+import { isConfigChangeRequestEnabled } from "@/lib/feature-flags";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -66,7 +67,7 @@ function serverInfo() {
     websiteUrl: "https://staffpass.sealith.com",
     mcpEndpoint: STAFFPASS_MCP_URL,
     protocolVersion: MCP_PROTOCOL_VERSION,
-    tools: STAFFPASS_MCP_TOOLS.map((t) => t.name),
+    tools: listStaffpassMcpTools().map((t) => t.name),
     auth: {
       type: "bearer",
       scheme: "Authorization: Bearer gb_emp_…",
@@ -132,7 +133,10 @@ export async function POST(req: Request) {
         version: MCP_SERVER_VERSION,
       },
       instructions:
-        "Staffpass is a fail-closed AI employee control plane. Authenticate with Authorization: Bearer gb_emp_…. Use staffpass_whoami then staffpass_invoke with purpose+jobId. On needs_approval, poll staffpass_get_approval_status with approvalId+statusToken (pollUrl in the result) until approved|rejected|revision_requested|expired — do not complete confirm/send/order while pending. On revision_requested, revise per revisionNote and re-invoke with the same jobId and parentApprovalId. Restrict clients with allowed_tools to the four staffpass_* tools.",
+        "Staffpass is a fail-closed AI employee control plane. Authenticate with Authorization: Bearer gb_emp_…. Use staffpass_whoami then staffpass_invoke with purpose+jobId. On needs_approval, poll staffpass_get_approval_status with approvalId+statusToken (pollUrl in the result) until approved|rejected|revision_requested|expired — do not complete confirm/send/order while pending. On revision_requested, revise per revisionNote and re-invoke with the same jobId and parentApprovalId. Restrict clients with allowed_tools to the four staffpass_* tools." +
+        (isConfigChangeRequestEnabled()
+          ? " Never change your own Instructions/policy text or channel ledger/classification yourself: file staffpass_config_change_request and wait for the human approver; approvers/permissions/billing are not requestable."
+          : ""),
     });
   }
 
@@ -155,7 +159,7 @@ export async function POST(req: Request) {
 
     if (method === "tools/list") {
       return jsonRpcResult(id, {
-        tools: STAFFPASS_MCP_TOOLS.map((t) => ({
+        tools: listStaffpassMcpTools().map((t) => ({
           name: t.name,
           description: t.description,
           inputSchema: t.inputSchema,

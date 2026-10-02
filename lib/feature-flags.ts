@@ -373,3 +373,26 @@ export function isLpHandoffEnabled(): boolean {
 export function isLpWakeWebhookEnabled(): boolean {
   return parseFlag(process.env.LP_WAKE_WEBHOOK_ENABLED);
 }
+
+/**
+ * P1: config.change_request — AI self-config changes need a human approver.
+ *
+ * When ON:
+ * - Employee MCP exposes staffpass_config_change_request. An AI employee that is
+ *   asked (Slack etc.) to change its own Instructions / policy text, or the
+ *   channel ledger / channel classification, files a pending approval routed to
+ *   the employee's approver inbox (responsible-human Slack DM when inbox routing
+ *   is ON, else the employee/org approval channel: Slack / Telegram / LINE).
+ * - Nothing is applied until a human approves; approve applies exactly the
+ *   proposed change (+ audit), reject applies nothing (+ audit + polite notice).
+ * - No resolvable approver → refused (fail-closed), nothing created or applied.
+ * - whoami returns the approved Instructions overlay; admin MCP channels.classify
+ *   tickets carry a before→after diff summary.
+ * - Admin console / human dashboard edits are NOT gated by this flag.
+ *
+ * When OFF (default):
+ * - Tool hidden from tools/list and returns feature_disabled; existing behavior unchanged.
+ */
+export function isConfigChangeRequestEnabled(): boolean {
+  return parseFlag(process.env.P1_CONFIG_CHANGE_REQUEST_ENABLED);
+}

@@ -532,7 +532,12 @@ export type AuditAction =
   | "plan.upgrade_applied"
   | "plan.upgrade_rejected"
   | "plan.fulfill_blocked"
-  | "approval.cancelled_by_plan_change";
+  | "approval.cancelled_by_plan_change"
+  | "config.change_requested"
+  | "config.change_refused"
+  | "config.change_applied"
+  | "config.change_apply_failed"
+  | "config.change_rejected";
 
 export interface Org {
   id: string;

@@ -84,7 +84,10 @@ import {
   validateApprovalRoutesPatch,
   handleDeputyActivate,
 } from "@/lib/approval-kind-routes/mcp-handlers";
-import { isApprovalKindRoutesEnabled } from "@/lib/feature-flags";
+import { isApprovalKindRoutesEnabled, isConfigChangeRequestEnabled } from "@/lib/feature-flags";
+import { buildDiff } from "@/lib/config-change-request/core";
+import { getOrgChannel } from "@/lib/data/directory";
+import type { ChannelClassification, ConversationSurface } from "@/lib/types";
 import {
   getIdentityBindingStatus,
   checkFeatureEnabled as checkEmployeeIdentityFeatureEnabled,
@@ -1410,6 +1413,37 @@ async function handleAdminApprovalReinvoke(
     { ok: false, code: "approval_not_approved", message: "承認が完了していません" },
     true
   );
+}
+
+async function buildChannelClassifyDiffSummaryJa(
+  orgId: string,
+  args: Record<string, unknown>
+): Promise<string> {
+  const externalId = String(args.externalId || args.identifier || "").trim();
+  const surface = (String(args.surface || "slack").trim() || "slack") as ConversationSurface;
+  const rawClass = String(args.classification || "unknown").trim();
+  const classification: ChannelClassification =
+    rawClass === "internal" || rawClass === "shared_external" ? rawClass : "unknown";
+  const current = await getOrgChannel(orgId, surface, externalId);
+  const diff = buildDiff(
+    {
+      kind: "channel_classification",
+      surface,
+      externalId,
+      classification,
+      // Same normalisation as upsertOrgChannel (shared_external is always mixed).
+      mixed: args.mixed === true || classification === "shared_external",
+      slackTeamId: null,
+    },
+    {
+      kind: "channel",
+      exists: Boolean(current),
+      classification: current?.classification ?? null,
+      mixed: Boolean(current?.mixed),
+      channelId: current?.id ?? null,
+    }
+  );
+  return `管理エージェントから次の変更依頼が来ています: ${diff.summaryJa}。反映しますか？`;
 }
 
 export function adminToolsAlwaysHuman(): boolean {
@@ -3058,6 +3092,10 @@ export async function callAdminMcpTool(
     summary = `相手台帳の更新を人が確認します（${String(args.identifier)}）`;
   } else if (name === "channels.classify") {
     summary = `チャネル分類を人が確認します（${String(args.externalId || args.identifier)}）`;
+    if (isConfigChangeRequestEnabled()) {
+      // Show the approver the actual before → after, not just the channel id.
+      summary = await buildChannelClassifyDiffSummaryJa(cred.orgId, args).catch(() => summary);
+    }
   } else if (name === "link") {
     summary = `連携を人が確認します（${String(args.employeeId)}）`;
   } else if (name === "ingressHandoff.patch") {

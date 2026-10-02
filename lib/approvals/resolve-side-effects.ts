@@ -4,6 +4,8 @@ import { updateApprovalNotificationMessages } from "@/lib/notify/channels";
 import type { ApprovalRequest, Employee } from "@/lib/types";
 import { deliverAuthorityDecision } from "@/lib/commerce/authority-events";
 import { appendAuditEvent } from "@/lib/data/audit";
+import { isConfigChangeApproval } from "@/lib/config-change-request/core";
+import { recordConfigChangeResolution } from "@/lib/config-change-request/service";
 import { isDecisionWorkflowEnabled } from "@/lib/feature-flags";
 import { isDecisionRequest } from "@/lib/decision-workflow/notify";
 import {
@@ -57,6 +59,12 @@ export async function runApprovalResolveSideEffects(opts: {
   const { approval, decision, actorEmail, employee } = opts;
   const title = approval.title || approval.summary.slice(0, 80);
   const statusLabel = decision;
+
+  // config.change_request: audit reject/revision (nothing applied) and build the
+  // polite requester notice the AI relays through the gateway. No-op otherwise.
+  const configChange = isConfigChangeApproval(approval)
+    ? await recordConfigChangeResolution({ approval, decision, actorEmail })
+    : null;
 
   let orgEmail: ResolveSideEffectsResult["orgEmail"] = { ok: false };
   try {
@@ -141,6 +149,9 @@ export async function runApprovalResolveSideEffects(opts: {
         revisionNote: approval.revisionNote,
         revisionCount: approval.revisionCount,
         parentApprovalId: approval.parentApprovalId,
+        ...(configChange?.requesterNoticeJa
+          ? { requesterNoticeJa: configChange.requesterNoticeJa }
+          : {}),
       };
       const res = await fetch(callbackUrl, {
         method: "POST",
