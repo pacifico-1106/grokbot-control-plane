@@ -13,11 +13,13 @@
  */
 import { isDemoMode } from "@/lib/mode";
 import { createSupabaseAdminClient } from "@/lib/supabase";
-import { getOrgChannel, listOrgChannels } from "@/lib/data/directory";
+import { getOrgChannel, listOrgChannels, upsertOrgChannel } from "@/lib/data/directory";
 import type { ChannelClassification } from "@/lib/types";
 import type {
+  AutoClassification,
   ChannelScopeChannel,
   ChannelScopeDecision,
+  ChannelScopeIngressPath,
   ChannelScopePolicy,
   ChannelScopeSurface,
   EffectiveChannelScope,
@@ -28,7 +30,14 @@ import type {
 } from "./types";
 import { CHANNEL_SCOPE_SURFACES, MEMBERSHIP_STATES, MEMBERSHIP_VIAS, ORG_CHANNEL_SOURCES } from "./types";
 import { validateChannelScopePolicy } from "./validate";
-import { isChannelInScope, readChannelScopeFlags, resolveEffectiveChannelScope } from "./resolve";
+import {
+  isChannelInScope,
+  isChannelInScopeForPath,
+  mergeAutoClassification,
+  readChannelScopeFlags,
+  resolveEffectiveChannelScope,
+  type MergedClassification,
+} from "./resolve";
 
 export const SLACK_CONVERSATION_ID_RE = /^[CG][A-Z0-9]{2,63}$/;
 export const MEMBERSHIP_LIST_MAX = 500;
@@ -267,6 +276,131 @@ export async function listUnconfirmedConnectChannels(orgId: string, limit = 100)
   return (data ?? []).map((row) => mapScopeChannel(row as Record<string, unknown>)).filter(isUnconfirmedConnect);
 }
 
+export interface AutoChannelWriteResult {
+  channel: ChannelScopeChannel;
+  merged: MergedClassification;
+  created: boolean;
+  /** The row became Connect-like, so an earlier human confirmation (of a non-Connect state) was cleared. */
+  confirmationCleared: boolean;
+}
+
+const SCOPE_CHANNEL_COLUMNS =
+  "external_id, classification, mixed, source, slack_team_id, external_team_ids, human_confirmed_at, last_inspected_at";
+
+/**
+ * CS3: write an automatic classification (member_joined / channel_shared / reconcile) into
+ * org_channels. Stricter-only via mergeAutoClassification:
+ * - shared_external / mixed is sticky; unknown never overwrites; external teams only grow.
+ * - New rows get source=auto (never 'manual'); existing rows keep their source and
+ *   human_confirmed_at (a human row stays human, but may still become stricter).
+ * - Exception: when a row becomes Connect-like (shared_external / mixed) for the first time, a
+ *   human_confirmed_at given for the earlier, non-Connect state is cleared, so a human has to
+ *   confirm the new state again (sends stay gated until then, CS4).
+ * - Production: compare-and-set on (classification, mixed) with one retry, so a concurrent
+ *   human/auto write is re-merged instead of overwritten.
+ */
+export async function upsertAutoClassifiedChannel(input: {
+  orgId: string;
+  surface?: ChannelScopeSurface;
+  externalId: string;
+  auto: Pick<AutoClassification, "classification" | "mixed" | "externalTeamIds"> & { slackTeamId?: string | null };
+  source: Exclude<OrgChannelSource, "manual">;
+  at?: string;
+}): Promise<AutoChannelWriteResult> {
+  requireEnabled();
+  const surface = input.surface ?? "slack";
+  const externalId = (input.externalId ?? "").trim();
+  if (!input.orgId) throw new Error("org_id_required");
+  if (!CHANNEL_SCOPE_SURFACES.includes(surface)) throw new Error("invalid_surface");
+  if (!SLACK_CONVERSATION_ID_RE.test(externalId)) throw new Error("invalid_external_id");
+  if (!ORG_CHANNEL_SOURCES.includes(input.source) || (input.source as string) === "manual") {
+    throw new Error("invalid_auto_source");
+  }
+  const at = input.at ?? nowIso();
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const existing = await getChannelScopeChannel(input.orgId, surface, externalId);
+    const merged = mergeAutoClassification(existing, input.auto);
+    const slackTeamId = existing?.slackTeamId ?? input.auto.slackTeamId ?? null;
+    const wasConnect = Boolean(existing && (existing.classification === "shared_external" || existing.mixed));
+    const isConnect = merged.classification === "shared_external" || merged.mixed;
+    const confirmationCleared = Boolean(existing?.humanConfirmedAt) && !wasConnect && isConnect;
+    const humanConfirmedAt = confirmationCleared ? null : existing?.humanConfirmedAt ?? null;
+
+    if (isDemoMode()) {
+      if (!existing || merged.changed) {
+        await upsertOrgChannel({
+          orgId: input.orgId,
+          surface,
+          externalId,
+          classification: merged.classification,
+          mixed: merged.mixed,
+          skipInspect: true,
+        });
+      }
+      const key = `${input.orgId}:${surface}:${externalId}`;
+      const prevMeta = demoChannelMeta.get(key) ?? {};
+      demoChannelMeta.set(key, {
+        ...prevMeta,
+        source: existing ? existing.source ?? "manual" : input.source,
+        slackTeamId,
+        externalTeamIds: merged.externalTeamIds,
+        humanConfirmedAt,
+        lastInspectedAt: at,
+      });
+      const channel = (await getChannelScopeChannel(input.orgId, surface, externalId))!;
+      return { channel, merged, created: !existing, confirmationCleared };
+    }
+
+    const client = admin();
+    if (!existing) {
+      const { data, error } = await client
+        .from("org_channels")
+        .upsert(
+          {
+            org_id: input.orgId,
+            surface,
+            external_id: externalId,
+            classification: merged.classification,
+            mixed: merged.mixed,
+            source: input.source,
+            slack_team_id: slackTeamId,
+            external_team_ids: merged.externalTeamIds,
+            last_inspected_at: at,
+            updated_at: at,
+          },
+          { onConflict: "org_id,surface,external_id", ignoreDuplicates: true }
+        )
+        .select(SCOPE_CHANNEL_COLUMNS);
+      if (error) throw new Error("channel_scope_channel_write_failed");
+      const row = (data ?? [])[0] as Record<string, unknown> | undefined;
+      if (row) return { channel: mapScopeChannel(row), merged, created: true, confirmationCleared: false };
+      continue; // created concurrently ⇒ re-merge against the stored row
+    }
+    const { data, error } = await client
+      .from("org_channels")
+      .update({
+        classification: merged.classification,
+        mixed: merged.mixed,
+        slack_team_id: slackTeamId,
+        external_team_ids: merged.externalTeamIds,
+        last_inspected_at: at,
+        ...(confirmationCleared ? { human_confirmed_at: null } : {}),
+        ...(merged.changed ? { updated_at: at } : {}),
+      })
+      .eq("org_id", input.orgId)
+      .eq("surface", surface)
+      .eq("external_id", externalId)
+      .eq("classification", existing.classification)
+      .eq("mixed", existing.mixed)
+      .select(SCOPE_CHANNEL_COLUMNS);
+    if (error) throw new Error("channel_scope_channel_write_failed");
+    const row = (data ?? [])[0] as Record<string, unknown> | undefined;
+    if (row) return { channel: mapScopeChannel(row), merged, created: false, confirmationCleared };
+  }
+  throw new Error("channel_scope_channel_write_conflict");
+}
+
 // ---------------------------------------------------------------------------
 // employee_channel_memberships
 // ---------------------------------------------------------------------------
@@ -436,11 +570,15 @@ export async function evaluateChannelScope(input: {
   employeeId: string;
   surface: ChannelScopeSurface;
   externalId: string;
+  /** CS3: ingress path. Omitted ⇒ strict isChannelInScope (same as user_token_channel). */
+  path?: ChannelScopeIngressPath;
 }): Promise<ChannelScopeDecision> {
   const flags = readChannelScopeFlags();
+  const decideFor = (args: Parameters<typeof isChannelInScope>[0]) =>
+    input.path ? isChannelInScopeForPath({ ...args, path: input.path }) : isChannelInScope(args);
   if (!flags.enabled) {
     const scope = resolveEffectiveChannelScope({ flags });
-    return isChannelInScope({ scope, surface: input.surface, externalId: input.externalId, channel: null });
+    return decideFor({ scope, surface: input.surface, externalId: input.externalId, channel: null });
   }
   try {
     const scope = await getEffectiveChannelScope(input.orgId, input.employeeId);
@@ -454,7 +592,7 @@ export async function evaluateChannelScope(input: {
           })
         : Promise.resolve([]),
     ]);
-    return isChannelInScope({ scope, surface: input.surface, externalId: input.externalId, channel, memberships });
+    return decideFor({ scope, surface: input.surface, externalId: input.externalId, channel, memberships });
   } catch {
     return { enforced: true, inScope: false, reason: "lookup_failed", mode: "registered_only", source: "default" };
   }

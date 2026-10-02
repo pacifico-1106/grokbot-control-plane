@@ -19,6 +19,7 @@ import type {
   ChannelScopeChannel,
   ChannelScopeDecision,
   ChannelScopeFlags,
+  ChannelScopeIngressPath,
   ChannelScopePolicy,
   ChannelScopeSource,
   ChannelScopeSurface,
@@ -157,6 +158,31 @@ export function isChannelInScope(input: {
   if (!scope.policy.includeSlackConnect) return decide(false, "connect_not_included");
   if (!isConnectTeamAllowed(scope.policy, channel.externalTeamIds)) return decide(false, "connect_team_not_allowed");
   return decide(true, "joined_connect");
+}
+
+/**
+ * CS3: ingress-path aware decision.
+ *
+ * - user_token_channel (DL-2 path): exactly isChannelInScope.
+ * - bot_channel (app_mention / bot message in a channel): today this path has no ledger
+ *   requirement, and registered_only promises "today's behavior". So under registered_only the
+ *   bot path stays legacy-allowed, EXCEPT channels that only automatic classification put in the
+ *   ledger (source≠manual, not human-confirmed). Those rows only exist because of all_joined, so
+ *   switching back to registered_only takes them out of scope again. all_joined uses the full
+ *   isChannelInScope (left/removed, Connect exclusion, unknown ⇒ out).
+ */
+export function isChannelInScopeForPath(
+  input: Parameters<typeof isChannelInScope>[0] & { path: ChannelScopeIngressPath }
+): ChannelScopeDecision {
+  const decision = isChannelInScope(input);
+  if (!decision.enforced || input.path !== "bot_channel" || decision.mode !== "registered_only") {
+    return decision;
+  }
+  if (decision.inScope || decision.reason === "surface_not_in_scope") return decision;
+  const channel = input.channel ?? null;
+  const autoOnly = Boolean(channel && (channel.source ?? "manual") !== "manual" && !channel.humanConfirmedAt);
+  if (autoOnly) return { ...decision, inScope: false, reason: "auto_not_confirmed" };
+  return { ...decision, inScope: true, reason: "bot_path_legacy" };
 }
 
 function normTeam(v: unknown): string | null {

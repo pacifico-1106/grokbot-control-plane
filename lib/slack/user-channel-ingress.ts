@@ -122,7 +122,9 @@ export type UserChannelSkipReason =
   | "no_mention"
   | "self_loop"
   | "auth_mismatch"
-  | "invalid_event";
+  | "invalid_event"
+  /** P1 Channel Scope (CS3): channel is outside the employee's channel scope. */
+  | "channel_out_of_scope";
 
 /**
  * Check if a channel ID looks like a Slack DM (D-prefixed).

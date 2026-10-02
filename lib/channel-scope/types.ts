@@ -134,7 +134,12 @@ export type ChannelScopeDecisionReason =
   | "connect_team_not_allowed"
   | "classification_unknown"
   | "surface_not_in_scope"
-  | "lookup_failed";
+  | "lookup_failed"
+  /** CS3: bot path under registered_only keeps today's behavior (no ledger requirement). */
+  | "bot_path_legacy";
+
+/** CS3: which ingress path asks (bot path keeps legacy behavior under registered_only). */
+export type ChannelScopeIngressPath = "user_token_channel" | "bot_channel";
 
 export interface ChannelScopeDecision {
   /**

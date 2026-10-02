@@ -55,6 +55,15 @@ import { isDemoMode } from "@/lib/mode";
 import { verifySlackSignature } from "@/lib/notify/slack";
 import { createSupabaseAdminClient } from "@/lib/supabase";
 import { addLookingReaction } from "@/lib/slack/reaction-stamps";
+import { isChannelScopeEnabled } from "@/lib/feature-flags";
+import { evaluateChannelScope } from "@/lib/channel-scope/data";
+import type { ChannelScopeDecision } from "@/lib/channel-scope/types";
+import {
+  isChannelMembershipEventType,
+  processChannelMembershipEnvelope,
+  type ChannelMembershipEnvelope,
+  type ChannelMembershipOutcome,
+} from "@/lib/slack/channel-membership-ingress";
 
 const WAKE_TIMEOUT_MS = 10_000;
 const MENTION_RE = /<@([UW][A-Z0-9_]+)(?:\|[^>]+)?>/gi;
@@ -577,7 +586,49 @@ export type SlackEventOutcome = {
   isDirectMessage?: boolean;
   /** P0: user-token channel event (Path C) */
   isUserTokenChannel?: boolean;
+  /** P1 Channel Scope (CS3): membership event summary. */
+  channelMembership?: ChannelMembershipOutcome["channelMembership"];
 };
+
+function scopeAuditMeta(decision: ChannelScopeDecision) {
+  return { reason: decision.reason, mode: decision.mode, source: decision.source };
+}
+
+/**
+ * P1 Channel Scope (CS3): drop bot-path channel targets that are outside their channel scope.
+ * Only called when P1_CHANNEL_SCOPE_ENABLED is ON and the event is not a DM.
+ */
+async function filterBotPathTargetsByChannelScope(input: {
+  targets: SlackMentionTarget[];
+  channel: string;
+  eventId: string;
+}): Promise<{ allowed: SlackMentionTarget[]; skipped: { target: SlackMentionTarget; decision: ChannelScopeDecision }[] }> {
+  const allowed: SlackMentionTarget[] = [];
+  const skipped: { target: SlackMentionTarget; decision: ChannelScopeDecision }[] = [];
+  for (const target of input.targets) {
+    const decision = await evaluateChannelScope({
+      orgId: target.orgId,
+      employeeId: target.employeeId,
+      surface: "slack",
+      externalId: input.channel,
+      path: "bot_channel",
+    });
+    if (decision.enforced && !decision.inScope) skipped.push({ target, decision });
+    else allowed.push(target);
+  }
+  for (const { target, decision } of skipped) {
+    appendAuditEvent({
+      orgId: target.orgId,
+      employeeId: target.employeeId,
+      credentialId: null,
+      action: "channel_scope.wake_skipped",
+      purpose: "slack.mention",
+      summary: "チャンネル範囲外のため起動しない: channel_out_of_scope",
+      metadata: { channel: input.channel, eventId: input.eventId, path: "bot_channel", channelScope: scopeAuditMeta(decision) },
+    }).catch(() => undefined);
+  }
+  return { allowed, skipped };
+}
 
 /**
  * Process user-token channel events (Path C: message.channels / message.groups).
@@ -982,6 +1033,65 @@ async function processUserTokenChannelEvent(input: {
     };
   }
 
+  // P1 Channel Scope (CS3): employee channel scope. Flag OFF ⇒ enforced=false, no DB, no change.
+  if (isChannelScopeEnabled()) {
+    const scopeDecision = await evaluateChannelScope({
+      orgId: target.orgId,
+      employeeId: target.employeeId,
+      surface: "slack",
+      externalId: channel,
+      path: "user_token_channel",
+    });
+    if (scopeDecision.enforced && !scopeDecision.inScope) {
+      console.info("slack_event_skip", {
+        eventId,
+        eventType,
+        channel,
+        channelType,
+        reason: "channel_out_of_scope",
+        scopeReason: scopeDecision.reason,
+        userToken: true,
+        isUserTokenChannel: true,
+      });
+      const auditPayload = buildUserChannelWakeAudit({
+        tokenSubject: { slackUserId: subscriberUserId, slackTeamId: subscriberTeamId },
+        channelId: channel,
+        channelClassification: classification,
+        isShared: isConnect,
+        employeeId: target.employeeId,
+        orgId: target.orgId,
+        eventId,
+        eventType,
+        speakerId,
+        speakerTeamId: teamId,
+        mentionedIds,
+        timestamp: str(envelope.event?.ts),
+        woke: false,
+        skipReason: "channel_out_of_scope",
+      });
+      appendAuditEvent({
+        orgId: target.orgId,
+        employeeId: target.employeeId,
+        credentialId: null,
+        action: "slack.user_token_channel_wake_skipped",
+        purpose: "slack.user_token_channel",
+        summary: "User-token channel wake スキップ: channel_out_of_scope",
+        metadata: {
+          reason: "channel_out_of_scope" as UserChannelSkipReason,
+          channelScope: scopeAuditMeta(scopeDecision),
+          ...auditPayload,
+        },
+      }).catch(() => undefined);
+      return {
+        handled: true,
+        woke: 0,
+        skipReason: "channel_out_of_scope",
+        userToken: true,
+        isUserTokenChannel: true,
+      };
+    }
+  }
+
   // All checks passed: wake the employee
   // TODO (DL-1): Token rotation / credential lease plumbing (separate implementation)
   const ts = str(envelope.event?.ts);
@@ -1108,6 +1218,14 @@ export async function processSlackMentionEnvelope(
     return { handled: false, woke: 0, skipReason: "missing_event_or_id" };
   }
 
+  // P1 Channel Scope (CS3): membership events. Flag OFF ⇒ falls through to unsupported_event_type
+  // exactly as before (no claim, no DB access).
+  if (isChannelMembershipEventType(eventType) && isChannelScopeEnabled()) {
+    return processChannelMembershipEnvelope(envelope as ChannelMembershipEnvelope, {
+      claim: claimSlackMentionEvent,
+    });
+  }
+
   if (eventType !== "app_mention" && eventType !== "message") {
     console.info("slack_event_skip", {
       eventId,
@@ -1188,7 +1306,33 @@ export async function processSlackMentionEnvelope(
     isDirectMessage,
     userTokenAuth,
   });
-  const targets = wakeResult.targets;
+  let targets = wakeResult.targets;
+
+  // P1 Channel Scope (CS3): bot path channel scope (not DMs). Flag OFF ⇒ skipped entirely.
+  if (targets.length && !isDirectMessage && isChannelScopeEnabled()) {
+    const scoped = await filterBotPathTargetsByChannelScope({ targets, channel, eventId });
+    if (scoped.skipped.length) {
+      console.info("slack_event_skip", {
+        eventId,
+        eventType,
+        channel,
+        channelType,
+        reason: "channel_out_of_scope",
+        skipped: scoped.skipped.length,
+        remaining: scoped.allowed.length,
+      });
+    }
+    if (!scoped.allowed.length) {
+      return {
+        handled: true,
+        woke: 0,
+        skipReason: "channel_out_of_scope",
+        userToken: Boolean(userTokenAuth),
+        isDirectMessage,
+      };
+    }
+    targets = scoped.allowed;
+  }
 
   if (!targets.length) {
     const reason = isDirectMessage
