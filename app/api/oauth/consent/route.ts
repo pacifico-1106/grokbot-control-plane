@@ -33,7 +33,13 @@ export async function POST(req: Request) {
     },
     await defaultConsentDeps()
   );
-  if (out.type === "page") return oauthErrorPage(out.status, out.error, out.messageJa);
+  if (out.type === "page") {
+    // Hardening 2b: any decision error ends this rid for this browser (restart from the client).
+    const res = oauthErrorPage(out.status, out.error, out.messageJa);
+    const rid = str("rid");
+    if (rid && rid.length <= 128) res.headers.set("Set-Cookie", ridBindingClearCookie(rid));
+    return res;
+  }
   // rid is consumed → drop its browser-binding cookie.
   return redirect303(out.location, { "Set-Cookie": ridBindingClearCookie(str("rid")) });
 }

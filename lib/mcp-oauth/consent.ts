@@ -66,7 +66,7 @@ export type ConsentDeps = {
   now: () => Date;
 };
 
-export type ConsentPage = { type: "page"; status: number; error: string; messageJa: string };
+export type ConsentPage = { type: "page"; status: number; error: string; messageJa: string; reason?: "not_started_here" };
 export type ConsentRedirect = { type: "redirect"; location: string };
 
 export type ConsentEmployeeOption = {
@@ -95,6 +95,8 @@ export type ConsentView = {
   employees: ConsentEmployeeOption[];
   /** Always shown, for every client (hardening 2). */
   startedYourselfWarningJa: string;
+  /** Prominent "what you are approving": client/redirect host + eligible AI employee names (hardening 2b). */
+  approvalSummaryJa: string;
   /** null → may consent; otherwise the reason (shown, buttons disabled except deny). */
   blockedReason: null | "role" | "org_not_allowed" | "login_too_old" | "mfa_required" | "no_employees";
 };
@@ -109,11 +111,22 @@ function page(status: number, error: string, messageJa: string): ConsentPage {
 }
 
 export const STARTED_YOURSELF_WARNING_JA =
-  "⚠ この接続を自分で開始した場合（このブラウザで AI クライアントから始めた操作）だけ許可してください。他の人から送られてきたリンクなら拒否してください。";
+  "⚠ この接続を自分で開始した場合（このブラウザで AI クライアントから始めた操作）だけ許可してください。誰かからこのリンクが送られてきた場合は、許可しないでください（「拒否」を押してください）。";
+
+export const NOT_STARTED_HERE_MESSAGE_JA =
+  "この接続リクエストは、このブラウザで開始されたものではありません。誰かからリンクが送られてきた場合は、何もせずに閉じてください。自分で接続したい場合は、AI クライアントからこのブラウザでやり直してください。";
+
+function approvalSummary(clientHost: string, redirectHostName: string, employees: ConsentEmployeeOption[]): string {
+  const where = redirectHostName && redirectHostName !== clientHost ? `${clientHost}（送信先 ${redirectHostName}）` : clientHost || redirectHostName;
+  const names = employees.slice(0, 5).map((e) => `「${e.displayName}」`).join("");
+  const more = employees.length > 5 ? ` ほか ${employees.length - 5} 名` : "";
+  return employees.length
+    ? `許可すると、${where} の AI クライアントが、選んだ AI 社員（候補: ${names}${more}）として動けるようになります。`
+    : `許可すると、${where} の AI クライアントが AI 社員として動けるようになります。`;
+}
 export const LOOPBACK_WARNING_JA = "この接続はあなたの PC 上のアプリに渡されます。";
 
-const NOT_BOUND_PAGE = (): ConsentPage =>
-  page(403, "access_denied", "この接続リクエストは、このブラウザで開始されたものではありません。接続したい AI クライアントから、このブラウザでやり直してください。");
+const NOT_BOUND_PAGE = (): ConsentPage => ({ ...page(403, "access_denied", NOT_STARTED_HERE_MESSAGE_JA), reason: "not_started_here" });
 
 async function browserBound(deps: ConsentDeps, secret: string, rid: string): Promise<boolean> {
   if (!rid || rid.length > 128) return false;
@@ -220,6 +233,7 @@ export async function loadConsentView(rid: string, deps: ConsentDeps): Promise<C
       },
       employees,
       startedYourselfWarningJa: STARTED_YOURSELF_WARNING_JA,
+      approvalSummaryJa: approvalSummary(host, redirectHost(r.req.redirectUri), employees),
       blockedReason,
     },
   };

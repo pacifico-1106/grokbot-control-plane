@@ -95,3 +95,10 @@
 - **RS**: `MCP_OAUTH_DCR_ENABLED` を OFF にすると DCR クライアントの有効なアクセストークンも即拒否。社員は `status=active` のみ（consent と同じ）。
 - **CIMD 再取得**は既存の `status` を上書きしない（ブロックが再取得で戻らない）。
 - 許可リストは空なら fail-closed（上記）。
+
+### ハードニング 2b（PR-11 追加コミット）
+- 「このブラウザで開始されていない」画面は `/oauth/consent/not-started` で **HTTP 403**。同意 POST がエラーになったら、その rid の結び付け cookie を削除（AI クライアントからやり直し）。
+- 同意画面の上部に「許可すると <ホスト> の AI クライアントが AI 社員「…」として動けるようになります」と「誰かからこのリンクが送られてきた場合は許可しないでください」を枠付きで表示。チェックボックスの文言にも接続先ホストを表示。
+- 既存のまま確認済み: 許可には 15 分以内の Staffpass ログインが必要。新しい grant ごとに owner / admin へ通知メール（重複抑止なし）。
+- `oauth.refresh_replay_in_grace` は回転済みトークン 1 つにつき 1 行（DB カウンタ、1 時間窓、障害時は記録する側に倒す）。
+- 残余リスク（監査 run-1 `mcp-oauth/consent-rid-not-bound-to-user-agent`, needs_validation）: **authorize URL** を転送されると、被害者のブラウザが自分で cookie を受け取るため同意できてしまう。最終的な防御はクライアント側の state とユーザーセッションの結び付け（RFC 6749 §10.12）。Q9 の確認項目で検証します。

@@ -224,9 +224,10 @@ export async function handleTokenRequest(req: Request, deps: TokenDeps): Promise
       const rec = rotated.record;
       if (rotated.reason === "already_consumed" && rec && !rec.revokedAt && rec.rotatedAt) {
         const age = now.getTime() - Date.parse(rec.rotatedAt);
-        if (age <= REFRESH_REUSE_GRACE_SEC * 1000 && grant.status === "active") {
+        if (age <= REFRESH_REUSE_GRACE_SEC * 1000 && grant.status === "active" && (await firstReplayAudit(deps, hash))) {
           // Hardening 6: benign client retries inside the grace window are not
           // revoked, but they are recorded so a pattern of replays is visible.
+          // Hardening 2b: deduped to one row per rotated token (not per request).
           await deps.audit({
             orgId: grant.orgId,
             employeeId: grant.employeeId,
@@ -266,6 +267,20 @@ export async function handleTokenRequest(req: Request, deps: TokenDeps): Promise
   }
 
   return err(400, "unsupported_grant_type", "grant_type must be authorization_code or refresh_token");
+}
+
+/**
+ * One in-grace replay audit per rotated refresh token: a DB fixed-window counter
+ * keyed by the token hash (1 h window ≫ 30 s grace → practically once; at most
+ * twice if the grace straddles a window boundary). Fails open (audits) on error.
+ */
+async function firstReplayAudit(deps: TokenDeps, refreshHash: string): Promise<boolean> {
+  try {
+    const d = await deps.rateLimit(`refresh_replay_audit:${refreshHash.slice(0, 32)}`, 1, 3600);
+    return d.count <= 1;
+  } catch {
+    return true;
+  }
 }
 
 export async function handleRevokeRequest(req: Request, deps: TokenDeps): Promise<EndpointResult> {

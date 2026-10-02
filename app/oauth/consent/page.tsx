@@ -36,6 +36,11 @@ export default async function OAuthConsentPage({ searchParams }: { searchParams:
     redirect(`/login?next=${encodeURIComponent(`/oauth/consent?rid=${rid}`)}`);
   }
 
+  if (out.type === "page" && out.reason === "not_started_here") {
+    // Rendered by a route handler so the browser gets a real HTTP 403 (hardening 2b).
+    redirect("/oauth/consent/not-started");
+  }
+
   if (out.type === "page") {
     return (
       <main className="min-h-screen flex items-center justify-center px-4">
@@ -69,10 +74,13 @@ export default async function OAuthConsentPage({ searchParams }: { searchParams:
             )}
           </p>
           <p className="mt-1 text-3xl font-bold tracking-tight">{v.client.redirectHost}</p>
-          <p className="mt-2 text-sm font-semibold" role="alert">
-            {v.client.loopback ? `${LOOPBACK_WARNING_JA} ` : ""}
-            {v.startedYourselfWarningJa}
-          </p>
+          <div className="mt-3 rounded border-2 p-3" role="alert">
+            <p className="text-base font-bold">{v.approvalSummaryJa}</p>
+            <p className="mt-2 text-sm font-semibold">
+              {v.client.loopback ? `${LOOPBACK_WARNING_JA} ` : ""}
+              {v.startedYourselfWarningJa}
+            </p>
+          </div>
         </section>
 
         <section className="mt-6">
@@ -123,7 +131,9 @@ export default async function OAuthConsentPage({ searchParams }: { searchParams:
 
           <label className="flex items-start gap-2 text-sm">
             <input type="checkbox" name="confirm" value="yes" disabled={!canAllow} required={canAllow} />
-            <span>内容を確認しました。この AI クライアントに上記の AI 社員として行動させることを許可します。</span>
+            <span>
+              内容を確認しました。<strong>{v.client.redirectHost}</strong> の AI クライアントに、選んだ AI 社員として行動させることを許可します。
+            </span>
           </label>
 
           <div className="flex gap-3">
