@@ -1,23 +1,47 @@
 import { NextResponse } from "next/server";
+import { getSessionContext } from "@/lib/auth/session";
+import { isDemoMode } from "@/lib/mode";
 import { requireCapability } from "@/lib/team/demo-actor";
+import {
+  CREDENTIAL_ADMIN_REQUIRED_MESSAGE_JA,
+  CREDENTIAL_ADMIN_ROLES,
+} from "@/lib/team/rbac";
 import type { OrgMember } from "@/lib/types";
 
-/** Org roles allowed to mint / re-mint / bind 社員証 (employee credentials). */
-export const CREDENTIAL_ADMIN_ROLES: ReadonlyArray<OrgMember["role"]> = ["owner", "admin"];
+export { CREDENTIAL_ADMIN_ROLES };
 
 export type CredentialAdminGate =
-  | { ok: true; actor: OrgMember }
+  | { ok: true; actor: OrgMember; orgId: string }
   | { ok: false; response: NextResponse };
 
 /**
- * Gate for actions that put a usable employee secret (or an equivalent grant)
- * into someone's hands: owner/admin role AND hire_issue_credentials capability.
- * Fails closed (403) when either is missing.
+ * Gate for actions that put a usable secret (gb_emp_ / gb_adm_) or an
+ * equivalent grant into someone's hands: owner/admin role AND
+ * hire_issue_credentials capability.
+ *
+ * Production: a real Auth session with an active org membership is required
+ * first (401 auth_required otherwise) so the capability check never runs
+ * against the header/body actor fallback. Fails closed (403) when either the
+ * role or the capability is missing.
  */
 export async function requireCredentialAdmin(
   req: Request,
   bodyActorId?: string | null
 ): Promise<CredentialAdminGate> {
+  let orgId: string | null = null;
+  if (!isDemoMode()) {
+    const session = await getSessionContext();
+    if (!session.userId || !session.orgId || !session.member) {
+      return {
+        ok: false,
+        response: NextResponse.json(
+          { ok: false, error: "auth_required", message: "ログインと組織が必要です" },
+          { status: 401 }
+        ),
+      };
+    }
+    orgId = session.orgId;
+  }
   const gate = await requireCapability(req, "hire_issue_credentials", bodyActorId);
   if (!gate.ok) return gate;
   if (!CREDENTIAL_ADMIN_ROLES.includes(gate.actor.role)) {
@@ -28,11 +52,11 @@ export async function requireCredentialAdmin(
           ok: false,
           error: "role_denied",
           code: "owner_or_admin_required",
-          message: "社員証の再発行はオーナーまたは管理者のみ実行できます。",
+          message: CREDENTIAL_ADMIN_REQUIRED_MESSAGE_JA,
         },
         { status: 403 }
       ),
     };
   }
-  return gate;
+  return { ok: true, actor: gate.actor, orgId: orgId ?? gate.actor.orgId };
 }

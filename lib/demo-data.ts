@@ -453,7 +453,11 @@ export function setGatewayStatus(status: GatewayLinkStatus) {
   });
 }
 
-export function addRuntimeEmployee(employee: Employee, auditSummary: string) {
+export function addRuntimeEmployee(
+  employee: Employee,
+  auditSummary: string,
+  auditIdentity: Record<string, unknown> = {}
+) {
   runtimeEmployees.unshift(employee);
   ensureBindingRow(employee.id, employee.orgId);
   runtimeAudit.unshift({
@@ -465,6 +469,7 @@ export function addRuntimeEmployee(employee: Employee, auditSummary: string) {
     purpose: null,
     summary: auditSummary,
     metadata: {
+      ...auditIdentity,
       scopes: employee.scopes,
       purposes: employee.allowedPurposes,
       approvalPolicy: employee.approvalPolicy,
