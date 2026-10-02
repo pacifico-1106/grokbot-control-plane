@@ -375,7 +375,7 @@ export function ChatLauncher({
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
                   maxLength={2000}
-                  placeholder="任せたい業務を入力"
+                  placeholder="任せたい仕事やご質問を入力"
                   className="flex-1 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm"
                   aria-label="メッセージ"
                 />

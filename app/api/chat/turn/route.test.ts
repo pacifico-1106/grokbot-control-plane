@@ -257,3 +257,48 @@ describe("knowledge_search term fallback", () => {
     expect(r.citations?.[0].title).toBe("どんな仕事を頼める？");
   });
 });
+
+describe("consultative turn wiring (owner feedback 2026-10-02 21:19 JST)", () => {
+  test("a delegation question forces knowledge_search first; a handoff request still forces handoff_offer", async () => {
+    await turn("秘書業務", [{ role: "assistant", text: LP_CHAT_GREETING }]);
+    expect(openAiRequests[0].tool_choice).toEqual({ type: "function", function: { name: "knowledge_search" } } as never);
+    openAiRequests.length = 0;
+    await turn("Google");
+    expect(openAiRequests[0].tool_choice).toBe("auto");
+    openAiRequests.length = 0;
+    await turn("担当の方と話したいです");
+    expect(openAiRequests[0].tool_choice).toEqual({ type: "function", function: { name: "handoff_offer" } } as never);
+  });
+
+  test("forced tool answered with finish_reason stop + tool_calls still gets a written reply (gpt-4o-mini)", async () => {
+    const realFake = globalThis.fetch;
+    let n = 0;
+    globalThis.fetch = (async (_u: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as ReqBody;
+      openAiRequests.push(body);
+      n++;
+      if (n === 1)
+        return completion({ content: null, tool_calls: [{ id: "c1", type: "function", function: { name: "knowledge_search", arguments: JSON.stringify({ query: "業務" }) } }] }, "stop");
+      return completion({ content: "秘書業務なら、予定調整や議事録の下書きから任せられます。" }, "stop");
+    }) as typeof fetch;
+    try {
+      const { body } = await turn("秘書業務");
+      expect(openAiRequests.length).toBe(2);
+      expect(body.reply).toBe("秘書業務なら、予定調整や議事録の下書きから任せられます。");
+      expect(kbCalls).toEqual(["業務"]);
+      expect(recorded.at(-1)?.toolCalls).toEqual(["knowledge_search"]);
+    } finally {
+      globalThis.fetch = realFake;
+    }
+  });
+
+  test("requests use max_completion_tokens (gpt-5.x/gpt-6 reject max_tokens) and no temperature", async () => {
+    await turn("料金の目安も教えてください");
+    const req = openAiRequests[0] as ReqBody & Record<string, unknown>;
+    expect(req.model).toBe("gpt-4o-mini");
+    expect(req.max_completion_tokens).toBe(1024);
+    expect("max_tokens" in req).toBe(false);
+    expect("temperature" in req).toBe(false);
+    expect("reasoning_effort" in req).toBe(false);
+  });
+});

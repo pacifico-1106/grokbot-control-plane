@@ -26,13 +26,14 @@ export const TOOL_DEFINITIONS = [
     type: "function" as const,
     function: {
       name: "knowledge_search",
-      description: "Search the approved knowledge base for information about Staffpass AI社員. Returns citations.",
+      description:
+        "Search the approved Staffpass AI社員 knowledge base (what can be delegated, plan choice, start timing, external costs, guarantees). Call it before answering what the AI社員 can take on. Matching is by substring, so pass 1-4 short Japanese keywords separated by spaces. Returns citations.",
       parameters: {
         type: "object",
         properties: {
           query: {
             type: "string",
-            description: "Search query in Japanese (max 500 chars)",
+            description: "1-4 short Japanese keywords separated by spaces, e.g. 「秘書 予定調整 議事録 メール」 (max 500 chars)",
           },
           topic: {
             type: "string",
@@ -64,7 +65,8 @@ export const TOOL_DEFINITIONS = [
     type: "function" as const,
     function: {
       name: "recommend_plan",
-      description: "Recommend a plan based on user requirements. Returns recommendation with reasons.",
+      description:
+        "Suggest a candidate plan from the work discussed so far (infer the task areas from the conversation; tools and timing are optional). Returns the sku and reasons to explain to the visitor before any proposal card.",
       parameters: {
         type: "object",
         properties: {
@@ -96,7 +98,8 @@ export const TOOL_DEFINITIONS = [
     type: "function" as const,
     function: {
       name: "proposal_prepare",
-      description: "Prepare a proposal card for user review. Does not start payment.",
+      description:
+        "Show a proposal card (plan name, setup and monthly price from the catalog, link to review the application). Call it only after explaining the recommended plan and why. Does not start payment.",
       parameters: {
         type: "object",
         properties: {
@@ -174,12 +177,17 @@ export function splitSearchTerms(query: string): string[] {
   return [...new Set(terms)].slice(0, 4);
 }
 
-export async function executeKnowledgeSearch(args: { query?: string; topic?: string }): Promise<ToolResult> {
+export type KbSearchFn = (query: string, limit?: number) => Promise<KbSearchResult>;
+
+export async function executeKnowledgeSearch(
+  args: { query?: string; topic?: string },
+  search: KbSearchFn = searchKnowledgeBase
+): Promise<ToolResult> {
   if (!args.query || args.query.length > 500) {
     return { success: false, error: "invalid_query" };
   }
 
-  let result = await searchKnowledgeBase(args.query, 3);
+  let result = await search(args.query, 3);
 
   // search_published_kb is a substring match on the whole query, so a multi-word query
   // ("AI社員 業務 範囲") rarely matches. Fall back to the individual terms.
@@ -190,7 +198,7 @@ export async function executeKnowledgeSearch(args: { query?: string; topic?: str
       const passages: KbSearchResult["passages"] = [];
       let hit: KbSearchResult | null = null;
       for (const term of terms) {
-        const r = await searchKnowledgeBase(term, 3);
+        const r = await search(term, 3);
         if (r.status === "error") continue;
         for (const p of r.passages) {
           if (seen.has(p.documentId) || passages.length >= 3) continue;
