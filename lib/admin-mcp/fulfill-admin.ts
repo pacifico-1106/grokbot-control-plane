@@ -6,6 +6,8 @@ import {
   fulfillDeputyActivate as fulfillDeputyActivateHandler,
 } from "@/lib/approval-kind-routes/mcp-handlers";
 import { fulfillChannelScopePatch as fulfillChannelScopePatchHandler } from "@/lib/channel-scope/admin";
+import { markChannelHumanConfirmed } from "@/lib/channel-scope/data";
+import { isChannelScopeEnabled } from "@/lib/feature-flags";
 import { setOrgInternalAudienceRule, validateInternalAudienceRulePatch } from "@/lib/data/internal-audience-rule";
 /**
  * Fulfill admin MCP tickets after a different human approves.
@@ -691,6 +693,28 @@ async function fulfillChannel(approval: ApprovalRequest, args: Record<string, un
     classification,
     mixed: args.mixed === true,
   });
+  // P1 Channel Scope (CS4): a human-approved classification confirms the row. Until then,
+  // auto-joined Connect channels keep every send behind approval. Flag OFF ⇒ untouched.
+  let humanConfirmed = false;
+  if (surface === "slack" && isChannelScopeEnabled()) {
+    try {
+      humanConfirmed = await markChannelHumanConfirmed({ orgId: approval.orgId, surface: "slack", externalId });
+    } catch (error) {
+      // Fail-closed: the row simply stays unconfirmed (sends stay gated).
+      console.error("channel_scope_mark_confirmed_failed", error instanceof Error ? error.message : "unknown");
+    }
+    if (humanConfirmed) {
+      await appendAuditEvent({
+        orgId: approval.orgId,
+        employeeId: null,
+        credentialId: null,
+        action: "channel_scope.human_confirmed",
+        purpose: "admin.channel",
+        summary: `チャンネル分類を人が確定: ${externalId}`,
+        metadata: { auditClass: ADMIN_AUDIT_CLASS, approvalId: approval.id, externalId, classification: channel.classification, mixed: channel.mixed },
+      });
+    }
+  }
   const route = isSlackIm
     ? await syncSlackImEmployeeRoute({
         orgId: approval.orgId,
@@ -709,7 +733,7 @@ async function fulfillChannel(approval: ApprovalRequest, args: Record<string, un
     action: "admin.channel",
     purpose: "admin.channel",
     summary: `チャネル分類: ${channel.externalId}`,
-    metadata: { auditClass: ADMIN_AUDIT_CLASS, approvalId: approval.id, channelId: channel.id },
+    metadata: { auditClass: ADMIN_AUDIT_CLASS, approvalId: approval.id, channelId: channel.id, humanConfirmed },
   });
   return {
     ok: true,
