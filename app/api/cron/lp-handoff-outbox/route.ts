@@ -1,14 +1,15 @@
 /**
  * LP Handoff Outbox Processing Cron
  * 
- * POST /api/cron/lp-handoff-outbox - Process pending handoff notifications
+ * GET|POST /api/cron/lp-handoff-outbox - Process pending handoff notifications
  * 
- * Called by Vercel Cron or external scheduler.
+ * Called by Vercel Cron (GET, every 5 min via vercel.json) or an external scheduler (POST).
  * Requires CRON_SECRET for authentication.
  * 
  * Feature flag: LP_HANDOFF_ENABLED (default OFF)
  */
 
+import { timingSafeEqual } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { isLpHandoffEnabled } from "@/lib/feature-flags";
 import { processHandoffOutbox, type OutboxEntry } from "@/lib/lp/outbox-processor";
@@ -22,12 +23,18 @@ function validateCronSecret(request: NextRequest): boolean {
     return false;
   }
 
-  if (authHeader === `Bearer ${cronSecret}`) {
+  if (safeEqual(authHeader, `Bearer ${cronSecret}`)) {
     return true;
   }
 
-  const secretHeader = request.headers.get("x-cron-secret");
-  return secretHeader === cronSecret;
+  return safeEqual(request.headers.get("x-cron-secret"), cronSecret);
+}
+
+function safeEqual(given: string | null, expected: string): boolean {
+  if (!given) return false;
+  const a = Buffer.from(given);
+  const b = Buffer.from(expected);
+  return a.length === b.length && timingSafeEqual(a, b);
 }
 
 async function sendHandoffNotification(entry: OutboxEntry): Promise<{ success: boolean; error?: string }> {
@@ -133,9 +140,7 @@ export async function POST(request: NextRequest) {
   }
 }
 
+// Vercel Cron invokes GET with `Authorization: Bearer $CRON_SECRET`.
 export async function GET(request: NextRequest) {
-  return NextResponse.json(
-    { error: "method_not_allowed", message: "Use POST to trigger processing" },
-    { status: 405 }
-  );
+  return POST(request);
 }
