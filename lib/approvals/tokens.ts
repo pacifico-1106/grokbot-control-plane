@@ -1,4 +1,5 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { resolveAppOrigin } from "../app-url";
 
 /** Opaque status token for signed poll URLs (not a session cookie). */
 export function generateStatusToken(): string {
@@ -26,36 +27,14 @@ export function statusTokensEqual(a: string, b: string): boolean {
   }
 }
 
-/** Canonical public Staffpass host for MCP + Bot poll URLs. */
-export const STAFFPASS_PUBLIC_ORIGIN = "https://staffpass.sealith.com";
+export { STAFFPASS_PUBLIC_ORIGIN } from "../app-url";
 
-/** Public app origin for poll URLs (prod / local). */
+/**
+ * Public app origin for poll URLs (prod / local).
+ * Delegates to resolveAppOrigin: never localhost on VERCEL_ENV=production.
+ */
 export function getAppOrigin(): string {
-  const fromEnv = (process.env.NEXT_PUBLIC_APP_URL || "").trim().replace(/\/$/, "");
-  if (fromEnv) return fromEnv;
-  // Production: prefer documented Staffpass host over ephemeral *.vercel.app
-  // so Bot / MCP pollUrl stays stable across deploys.
-  if (
-    process.env.VERCEL_ENV === "production" ||
-    process.env.NODE_ENV === "production"
-  ) {
-    return STAFFPASS_PUBLIC_ORIGIN;
-  }
-  const prodHost = (process.env.VERCEL_PROJECT_PRODUCTION_URL || "")
-    .trim()
-    .replace(/^https?:\/\//, "")
-    .replace(/\/$/, "");
-  if (prodHost) {
-    if (prodHost.includes("staffpass") || prodHost.includes("sealith")) {
-      return `https://${prodHost}`;
-    }
-    return STAFFPASS_PUBLIC_ORIGIN;
-  }
-  if (process.env.VERCEL_URL) {
-    const host = process.env.VERCEL_URL.replace(/^https?:\/\//, "");
-    return `https://${host}`;
-  }
-  return "http://localhost:3000";
+  return resolveAppOrigin();
 }
 
 export function buildPollPath(approvalId: string, statusToken: string): string {

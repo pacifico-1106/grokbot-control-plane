@@ -126,7 +126,18 @@ export type IssueEmployeeInput = {
   secretPrefix: string;
   expiresAt: string | null;
   auditSummary: string;
+  /** Who issued (credential.issued audit). Never the secret. */
+  actorEmail?: string | null;
+  actorMemberId?: string | null;
 };
+
+/** 12-char hash prefix only — same shape as credential.rotated. */
+function issueAuditIdentity(input: IssueEmployeeInput): Record<string, unknown> {
+  return {
+    secretHashPrefix: input.secretHash.slice(0, 12),
+    actorMemberId: input.actorMemberId ?? null,
+  };
+}
 
 export type IssueEmployeeResult = {
   employee: Employee;
@@ -181,7 +192,10 @@ export async function issueEmployee(
       credentialId,
       createdAt: new Date().toISOString(),
     };
-    addRuntimeEmployee(employee, input.auditSummary);
+    addRuntimeEmployee(employee, input.auditSummary, {
+      ...issueAuditIdentity(input),
+      actorEmail: input.actorEmail ?? null,
+    });
     const { binding, generation } = rotateCredential(
       employeeId,
       DEMO_ORG.id,
@@ -268,9 +282,11 @@ export async function issueEmployee(
     org_id: orgId,
     employee_id: employeeId,
     credential_id: credentialId,
+    actor_email: input.actorEmail ?? null,
     action: "credential.issued",
     summary: input.auditSummary,
     metadata: {
+      ...issueAuditIdentity(input),
       scopes: input.scopes,
       purposes: input.allowedPurposes,
       approvalPolicy: effectivePolicy,

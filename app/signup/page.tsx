@@ -2,9 +2,41 @@ import Link from "next/link";
 import { BrandMark } from "@/components/BrandMark";
 import { isDemoMode } from "@/lib/mode";
 import { LegalLinks } from "@/components/LegalLinks";
+import Script from "next/script";
+import {
+  SIGNUP_HONEYPOT_FIELD,
+  SIGNUP_ORG_NAME_MAX,
+  SIGNUP_TURNSTILE_ACTION,
+} from "@/lib/auth/signup-guard";
 
-export default function SignupPage() {
+const TURNSTILE_SCRIPT_SRC = "https://challenges.cloudflare.com/turnstile/v0/api.js";
+
+/** Fixed messages keyed by error code — never echo request input back into the page. */
+const SIGNUP_ERROR_MESSAGES: Record<string, string> = {
+  signup_rejected: "登録を受け付けられませんでした。時間をおいて再度お試しください。",
+  invalid_org_name: "会社名を正しく入力してください（サンプルの会社名は使えません・100文字以内）。",
+  invalid_referral_code: "紹介コードは AIC-XXXX の形式で入力してください（不明な場合は空欄）。",
+  bot_protection_unavailable: "現在、新規登録を一時停止しています。お問い合わせフォームからご連絡ください。",
+  turnstile_required: "ロボットでないことの確認を完了してください。",
+  turnstile_failed: "確認に失敗しました。ページを再読み込みしてもう一度お試しください。",
+};
+
+function turnstileSiteKey(): string | null {
+  const key = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY?.trim();
+  if (!key || key.startsWith("replace_me")) return null;
+  return key;
+}
+
+export default async function SignupPage({
+  searchParams,
+}: {
+  searchParams?: Promise<{ error?: string }>;
+}) {
   const demo = isDemoMode();
+  const sp = (await searchParams) ?? {};
+  const errorMessage = sp.error ? SIGNUP_ERROR_MESSAGES[sp.error] ?? null : null;
+  const siteKey = demo ? null : turnstileSiteKey();
+  const signupClosed = !demo && !siteKey;
 
   return (
     <div className="min-h-screen bg-[var(--bg)] text-[var(--text)] flex items-center justify-center px-4">
@@ -19,13 +51,26 @@ export default function SignupPage() {
             ? "デモモードです。設定がなくてもダッシュボードへ進めます。本番では会社アカウントと管理者を作成します。"
             : "登録後はダッシュボードへ。会社アカウントを作成し、ウェルカムメールをお送りします。"}
         </p>
+        {errorMessage ? (
+          <p role="alert" className="mt-4 rounded-lg border border-[var(--border)] bg-[var(--bg-soft)] p-3 text-sm">
+            {errorMessage}
+          </p>
+        ) : null}
+        {signupClosed ? (
+          <p role="alert" className="mt-4 rounded-lg border border-[var(--border)] bg-[var(--bg-soft)] p-3 text-sm">
+            {SIGNUP_ERROR_MESSAGES.bot_protection_unavailable}
+          </p>
+        ) : null}
+        {siteKey ? <Script src={TURNSTILE_SCRIPT_SRC} strategy="afterInteractive" /> : null}
         <form action="/api/auth/signup" method="post" className="mt-6 space-y-4">
           <label className="block text-sm">
             <span className="muted">会社名</span>
             <input
               name="orgName"
               required
-              defaultValue="株式会社サンプル商事"
+              maxLength={SIGNUP_ORG_NAME_MAX}
+              placeholder="例: 株式会社〇〇"
+              autoComplete="organization"
               className="mt-1 w-full min-h-[44px] rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2.5 text-sm outline-none focus:border-[var(--text-faint)]"
             />
           </label>
@@ -83,7 +128,22 @@ export default function SignupPage() {
               <Link href="/legal/commercial-transactions" target="_blank" className="underline">特定商取引法に基づく表記</Link>を確認しました。
             </span>
           </label>
-          <button type="submit" className="btn btn-primary w-full">
+          {/* Honeypot: hidden from humans and assistive tech; bots that fill every field are rejected. */}
+          <div aria-hidden="true" style={{ position: "absolute", left: "-10000px", width: 1, height: 1, overflow: "hidden" }}>
+            <label>
+              Website
+              <input name={SIGNUP_HONEYPOT_FIELD} type="text" tabIndex={-1} autoComplete="off" defaultValue="" />
+            </label>
+          </div>
+          {siteKey ? (
+            <div
+              className="cf-turnstile"
+              data-sitekey={siteKey}
+              data-action={SIGNUP_TURNSTILE_ACTION}
+              data-language="ja"
+            />
+          ) : null}
+          <button type="submit" className="btn btn-primary w-full" disabled={signupClosed}>
             トライアルを開始してダッシュボードへ
           </button>
         </form>

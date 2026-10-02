@@ -11,7 +11,18 @@ export type SessionContext = {
   email: string | null;
   orgId: string | null;
   member: OrgMember | null;
+  /**
+   * Auth user was created via an invite (auth.users.invited_at set).
+   * Invited users must never get an auto-provisioned org — access comes only
+   * from the org_members row the inviter created.
+   */
+  invited?: boolean;
 };
+
+/** Invited Auth user with no active membership → no access (never auto-provision). */
+export function isInvitedWithoutMembership(session: SessionContext): boolean {
+  return Boolean(session.userId && session.invited && !session.orgId);
+}
 
 const OWNER_CAPS = [
   "view_dashboard",
@@ -146,6 +157,7 @@ export async function getSessionContext(): Promise<SessionContext> {
       email: user.email ?? null,
       orgId,
       member,
+      invited: Boolean((user as { invited_at?: string | null }).invited_at),
     };
   } catch {
     return {
@@ -296,12 +308,14 @@ export async function provisionOrgForUser(input: {
 export type EnsureOrgResult =
   | { status: "ok"; session: SessionContext }
   | { status: "unauthenticated" }
+  | { status: "no_membership"; session: SessionContext }
   | { status: "needs_schema"; session: SessionContext; error: string }
   | { status: "provision_failed"; session: SessionContext; error: string };
 
 /**
  * For /app layout: authenticated users without org_members get an org
- * auto-provisioned (same shape as signup). Never throws — soft status only.
+ * auto-provisioned (same shape as signup) — EXCEPT invited users
+ * (auth.users.invited_at), who get `no_membership`. Never throws — soft status only.
  */
 export async function ensureAuthenticatedOrg(): Promise<EnsureOrgResult> {
   if (isDemoMode()) {
@@ -331,6 +345,12 @@ export async function ensureAuthenticatedOrg(): Promise<EnsureOrgResult> {
       };
     }
     return { status: "ok", session };
+  }
+
+  // Org-membership guard: an invited user whose membership is missing /
+  // suspended must not silently become owner of a fresh trial org.
+  if (isInvitedWithoutMembership(session)) {
+    return { status: "no_membership", session };
   }
 
   try {
