@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { getCurrentOrgId } from "@/lib/auth/session";
+import { requireCredentialAdmin } from "@/lib/auth/require-credential-admin";
 import {
+  appendAuditEvent,
   bindingPublicView,
   getEmployee,
   rotateCredential,
@@ -13,13 +15,26 @@ export const runtime = "nodejs";
 /**
  * Reissue credential secret: generation++ only.
  * employeeId and agent link are preserved (never silently cleared).
+ *
+ * Authority = issuing: owner/admin + hire_issue_credentials (fail-closed).
+ * Every successful rotation writes a `credential.rotated` audit row that
+ * carries only a 12-char hash prefix — never the secret or the full hash.
  */
 export async function POST(
-  _req: Request,
+  req: Request,
   ctx: { params: Promise<{ id: string }> }
 ) {
-  const { id } = await ctx.params;
+  const rawBody = (await req.json().catch(() => ({}))) as Record<string, unknown>;
+  const gate = await requireCredentialAdmin(
+    req,
+    typeof rawBody.actorMemberId === "string" ? rawBody.actorMemberId : null
+  );
+  if (!gate.ok) return gate.response;
   const orgId = await getCurrentOrgId();
+  if (!orgId) {
+    return NextResponse.json({ error: "auth_required" }, { status: 401 });
+  }
+  const { id } = await ctx.params;
   const employee = await getEmployee(id, orgId);
   if (!employee) {
     return NextResponse.json({ error: "employee_not_found" }, { status: 404 });
@@ -27,9 +42,10 @@ export async function POST(
 
   try {
     const secret = mintOneTimeSecret();
+    const targetOrgId = employee.orgId || orgId;
     const { binding, generation } = await rotateCredential(
       id,
-      employee.orgId || orgId || "",
+      targetOrgId,
       secret.fingerprint,
       {
         secretPrefix: secret.prefix,
@@ -41,6 +57,20 @@ export async function POST(
         allowedAccounts: employee.allowedAccounts,
       }
     );
+    await appendAuditEvent({
+      orgId: targetOrgId,
+      employeeId: id,
+      credentialId: employee.credentialId ?? null,
+      actorEmail: gate.actor.email,
+      action: "credential.rotated",
+      purpose: null,
+      summary: `${employee.displayName} の社員証を再発行（世代 ${generation}）`,
+      metadata: {
+        generation,
+        secretHashPrefix: secret.fingerprint.slice(0, 12),
+        actorMemberId: gate.actor.id,
+      },
+    });
     return NextResponse.json({
       ok: true,
       demo: runtimeModeLabel() === "demo",

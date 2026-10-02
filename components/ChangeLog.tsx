@@ -17,6 +17,7 @@ const ACTION_LABEL: Record<string, string> = {
   "admin.link": "連携",
   "admin.role": "職務案",
   "credential.issued": "雇用",
+  "credential.rotated": "再発行",
   "employee.created": "雇用",
   "employee.updated": "権限",
   "employee.terminated": "失効",

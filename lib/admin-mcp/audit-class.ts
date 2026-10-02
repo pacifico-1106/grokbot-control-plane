@@ -76,6 +76,7 @@ const ADMIN_PREFIX = "admin.";
 export const ADMIN_CLASS_ALIASES = [
   "credential.issued",
   "credential.revoked",
+  "credential.rotated",
   "employee.created",
   "employee.updated",
   "employee.terminated",
