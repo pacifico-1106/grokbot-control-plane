@@ -247,7 +247,7 @@ describe("POST /api/oauth/consent", () => {
   });
 
   test("GET /oauth/consent/not-started → HTTP 403 HTML with the warning; flag OFF → 404", async () => {
-    const res = await notStarted.GET(new Request(`${ISSUER}/oauth/consent/not-started`));
+    const res = await notStarted.GET();
     expect(res.status).toBe(403);
     expect(res.headers.get("cache-control")).toBe("no-store");
     expect(res.headers.get("x-frame-options")).toBe("DENY");
@@ -255,7 +255,7 @@ describe("POST /api/oauth/consent", () => {
     expect(html).toContain("このブラウザで開始");
     expect(html).toContain("送られてきた");
     delete process.env.MCP_OAUTH_ENABLED;
-    expect((await notStarted.GET(new Request(`${ISSUER}/oauth/consent/not-started`))).status).toBe(404);
+    expect((await notStarted.GET()).status).toBe(404);
   });
 });
 
