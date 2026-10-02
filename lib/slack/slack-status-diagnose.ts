@@ -10,6 +10,7 @@ import { getAppOrigin } from "@/lib/approvals/tokens";
 import { resolveOrgSlackBotToken } from "@/lib/slack/bot-token";
 import { probeSlackFilesWrite } from "@/lib/slack/files-write-probe";
 import type { PostingAs } from "@/lib/types";
+import { diagnoseChannelScopeSetup, type ChannelScopeSetupStatus } from "@/lib/channel-scope/setup-status";
 
 export const DASHBOARD_BOT_TOKEN_PATH_JA =
   "つながり → チャンネルに書き込む（会社のBot）";
@@ -66,6 +67,8 @@ export type SlackStatusResult = {
   nextStepJa: string;
   authorizeUrlTemplate: string;
   dashboardBotTokenPathJa: string;
+  /** P1 Channel Scope (CS6). Present only when P1_CHANNEL_SCOPE_ENABLED is ON. */
+  channelScope?: ChannelScopeSetupStatus;
 };
 
 export function slackAuthorizeUrlTemplate(employeeId?: string): string {
@@ -104,6 +107,8 @@ export type SlackStatusNextStepInput = {
   postingMismatch: string[];
   employees: EmployeeSlackPathStatus[];
   pathBReadiness: PathBReadiness;
+  /** P1 Channel Scope step (null/undefined = none; flag OFF ⇒ always undefined). */
+  channelScopeNextStepJa?: string | null;
 };
 
 /** Canonical human-action order for Slack / Path B onboarding. */
@@ -158,6 +163,11 @@ export function computeSlackStatusNextStepJa(input: SlackStatusNextStepInput): s
       `Slack API → User Token Scopes に files:write を追加後、社員「${first.displayName}」（employeeId: ${first.employeeId}）が社員証から Slack 再連携（Authorize）してください。` +
       `URL テンプレート: ${first.authorizeUrlTemplate || slackAuthorizeUrlTemplate(first.employeeId)}`
     );
+  }
+
+  // P1 Channel Scope (CS6): choose the scope mode right before channels.classify.
+  if (input.channelScopeNextStepJa) {
+    return input.channelScopeNextStepJa;
   }
 
   if (input.imRoutesCount === 0) {
@@ -347,6 +357,14 @@ export async function diagnoseSlackStatus(orgId: string): Promise<SlackStatusRes
         fileUploadReadyCount === pathBEmployeesList.length),
   };
 
+  const channelScope = await diagnoseChannelScopeSetup({
+    orgId,
+    botToken: botTokenPresent && authTest?.ok ? botToken : "",
+    botUserId: authTest?.user_id ?? null,
+    employees: employeeStatuses.map((e) => ({ id: e.employeeId, displayName: e.displayName, slackIdentityLinked: e.slackIdentityLinked })),
+  }).catch(() => null);
+  if (channelScope) issues.push(...channelScope.issues);
+
   const nextStepJa = computeSlackStatusNextStepJa({
     botTokenPresent,
     authTest,
@@ -357,6 +375,7 @@ export async function diagnoseSlackStatus(orgId: string): Promise<SlackStatusRes
     postingMismatch,
     employees: employeeStatuses,
     pathBReadiness,
+    channelScopeNextStepJa: channelScope?.nextStepJa ?? null,
   });
 
   return {
@@ -380,5 +399,6 @@ export async function diagnoseSlackStatus(orgId: string): Promise<SlackStatusRes
     nextStepJa,
     authorizeUrlTemplate: slackAuthorizeUrlTemplate(),
     dashboardBotTokenPathJa: DASHBOARD_BOT_TOKEN_PATH_JA,
+    ...(channelScope ? { channelScope } : {}),
   };
 }
