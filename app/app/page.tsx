@@ -3,7 +3,8 @@ import { AppShell } from "@/components/AppShell";
 import { ChangeLog } from "@/components/ChangeLog";
 import { SetupKickoff } from "@/components/SetupKickoff";
 import { StatCard } from "@/components/StatCard";
-import { getCurrentOrgId } from "@/lib/auth/session";
+import { getSessionContext } from "@/lib/auth/session";
+import { canIssueEmployeeCredentials } from "@/lib/team/rbac";
 import {
   countNeedsReauth,
   getGatewayStatusForOrg,
@@ -20,7 +21,9 @@ import { orgNeedsSetup } from "@/lib/dashboard/setup-state";
 export const dynamic = "force-dynamic";
 
 export default async function DashboardPage() {
-  const orgId = await getCurrentOrgId();
+  const session = await getSessionContext();
+  const orgId = session.orgId;
+  const canIssueAdminCredential = session.demo || canIssueEmployeeCredentials(session.member);
   const org = await getOrgMeta(orgId);
   const employees = (await listEmployees(orgId)) ?? [];
   const concentration = buildConcentration(employees);
@@ -58,6 +61,7 @@ export default async function DashboardPage() {
           grokBotAgentId={adminAgent?.grokBotAgentId ?? null}
           opsDocLocation={adminAgent?.opsDocLocation ?? null}
           confirmedEmployeeCount={confirmedEmployeeCount}
+          canIssueAdminCredential={canIssueAdminCredential}
         />
       ) : (
         <>

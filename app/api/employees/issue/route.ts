@@ -20,7 +20,7 @@ import { defaultVoice, normalizeVoice } from "@/lib/employees/voice";
 import { defaultProjectAccess, normalizeProjectAccess } from "@/lib/employees/project-access";
 import { normalizePostingAs } from "@/lib/employees/posting-as";
 import { normalizeApproverUserIds, parseApprovalChannelId } from "@/lib/employees/approval-inbox";
-import { requireCapability } from "@/lib/team/demo-actor";
+import { requireCredentialAdmin } from "@/lib/auth/require-credential-admin";
 import type { ActionLimits, AllowedAccount, ApprovalPolicy, EmployeeScope, SpendLimits } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -34,12 +34,15 @@ function issueSecret(): { raw: string; hash: string; prefix: string } {
 /**
  * Confirm Draft → create employee + issue credential.
  * Dual-mode: DEMO in-memory / production Supabase via lib/data.
+ *
+ * Authority = same as rotate: owner/admin + hire_issue_credentials (fail-closed;
+ * 401 without a session). The credential.issued audit row names the actor and
+ * carries only a 12-char hash prefix — never the secret or the full hash.
  */
 export async function POST(req: Request) {
   const rawBody = (await req.json().catch(() => ({}))) as Record<string, unknown>;
-  const gate = await requireCapability(
+  const gate = await requireCredentialAdmin(
     req,
-    "hire_issue_credentials",
     typeof rawBody.actorMemberId === "string" ? rawBody.actorMemberId : null
   );
   if (!gate.ok) return gate.response;
@@ -85,6 +88,9 @@ export async function POST(req: Request) {
   const requestedApprovalPolicy = body.approvalPolicy || "risk_based";
   const toolApprovalDefaults = normalizeToolApprovalDefaults(body.toolApprovalDefaults);
   const orgId = await getCurrentOrgId();
+  if (!orgId) {
+    return NextResponse.json(policyErrorPayload("auth_required"), { status: 401 });
+  }
   const sodVerdict = evaluateSod(scopes, await getOrgSodWarnPolicy(orgId));
   if (
     sodAckRequired({
@@ -147,6 +153,8 @@ export async function POST(req: Request) {
       secretPrefix: secret.prefix,
       expiresAt,
       auditSummary: `${displayName} の社員証を発行`,
+      actorEmail: gate.actor.email,
+      actorMemberId: gate.actor.id,
     });
 
     const instructionsSnippet = buildHireInstructionsSnippet({
