@@ -235,6 +235,7 @@ export const PLAN_ADMIN_SCOPES: Record<PlanKey, readonly AdminMcpToolName[]> = {
     "internalAudienceRule.patch",
     "approvalRoutes.patch",
     "channelScope.patch",
+    "channelScope.reconcile",
   ],
   executive: [
     // All proper scopes
@@ -282,6 +283,7 @@ export const PLAN_ADMIN_SCOPES: Record<PlanKey, readonly AdminMcpToolName[]> = {
     "internalAudienceRule.patch",
     "approvalRoutes.patch",
     "channelScope.patch",
+    "channelScope.reconcile",
     // Executive additions: advanced operations
     "ingressHandoff.patch",
     "stuckWatch.patch",

@@ -40,6 +40,7 @@ const TOOL_TITLE_JA: Record<string, string> = {
   "approvalWorkflow.bindVoter": "承認者バインディング作成",
   "approvalWorkflow.unbindVoter": "承認者バインディング取り消し",
   "channelScope.patch": "チャンネル範囲設定の変更",
+  "channelScope.reconcile": "チャンネル範囲の照合結果の適用",
   "orgs.create": "テナント作成（プラットフォーム運用）",
   "orgs.issueAdminCredential": "管理MCP認証発行（プラットフォーム運用）",
 };

@@ -61,6 +61,7 @@ export const ADMIN_MCP_TOOL_NAMES = [
   "channelScope.get",
   "channelScope.patch",
   "channelScope.listMemberships",
+  "channelScope.reconcile",
   "orgs.create",
   "orgs.status",
   "orgs.patch",

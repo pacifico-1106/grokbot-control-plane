@@ -554,6 +554,39 @@ export async function listEmployeeChannelMemberships(
   return (data ?? []).map((row) => mapMembership(row as Record<string, unknown>));
 }
 
+/**
+ * CS5: every membership row of one employee (reconcile needs the full set, not the newest 500).
+ * Paged by id; capped at maxRows (truncated=true when more exist). Flag ON callers only.
+ */
+export async function listAllEmployeeChannelMemberships(
+  orgId: string,
+  employeeId: string,
+  maxRows = 5_000
+): Promise<{ rows: EmployeeChannelMembership[]; truncated: boolean }> {
+  if (!orgId || !employeeId) return { rows: [], truncated: false };
+  const cap = Math.max(1, Math.floor(maxRows));
+  if (isDemoMode()) {
+    const all = demoMemberships.filter((m) => m.orgId === orgId && m.employeeId === employeeId);
+    return { rows: all.slice(0, cap), truncated: all.length > cap };
+  }
+  const rows: EmployeeChannelMembership[] = [];
+  const page = MEMBERSHIP_LIST_MAX;
+  for (let offset = 0; offset < cap + 1; offset += page) {
+    const { data, error } = await admin()
+      .from("employee_channel_memberships")
+      .select("*")
+      .eq("org_id", orgId)
+      .eq("employee_id", employeeId)
+      .order("id", { ascending: true })
+      .range(offset, offset + page - 1);
+    if (error) throw new Error("channel_memberships_unavailable");
+    const batch = (data ?? []).map((row) => mapMembership(row as Record<string, unknown>));
+    rows.push(...batch);
+    if (batch.length < page) break;
+  }
+  return { rows: rows.slice(0, cap), truncated: rows.length > cap };
+}
+
 export interface UpsertMembershipInput {
   orgId: string;
   employeeId: string;

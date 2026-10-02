@@ -93,6 +93,12 @@ import {
   prepareChannelScopePatch,
 } from "@/lib/channel-scope/admin";
 import {
+  buildChannelScopeReconcileQueuedArgs,
+  CHANNEL_SCOPE_RECONCILE_TITLE_JA,
+  handleChannelScopeReconcilePreview,
+  prepareChannelScopeReconcileApply,
+} from "@/lib/channel-scope/reconcile-admin";
+import {
   getIdentityBindingStatus,
   checkFeatureEnabled as checkEmployeeIdentityFeatureEnabled,
 } from "@/lib/employees/employee-identity";
@@ -1121,6 +1127,22 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
         classification: { type: "string", enum: ["internal", "shared_external", "unknown"] },
         limit: { type: "integer", minimum: 1, maximum: 500 },
       },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "channelScope.reconcile",
+    description:
+      "Reconcile an AI employee's Slack channel memberships with users.conversations (always_human for apply; dryRun=true — the default — is read-only and files nothing). P1 チャンネル範囲 CS5: returns planned additions (missed join events / backfill), stricter classifications (later Slack Connect sharing), scope moves, and leaves / bot removals. dryRun=false files an approval ticket (approvalClass admin, kind=account, owner approves, self-approval forbidden); at approval time the channels are re-listed and only the approved items are applied, never wider than approved. Leaves are derived only from a complete listing. Automatic classification is stricter-only and never sets human confirmation. Feature flag P1_CHANNEL_SCOPE_ENABLED must be ON.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        employeeId: { type: "string", description: "AI employee ID (required)" },
+        dryRun: { type: "boolean", description: "Default true (read-only preview). false = file an approval ticket to apply" },
+        jobId: { type: "string" },
+        approvalId: { type: "string", description: "Re-invoke with approved ticket ID" },
+      },
+      required: ["employeeId"],
       additionalProperties: false,
     },
   },
@@ -2816,6 +2838,41 @@ export async function callAdminMcpTool(
     });
     return toolResult(
       { ...queueResult, ...(queueResult.code === "needs_approval" ? { diffSummary: prepared.snapshot.diffSummary } : {}) },
+      true
+    );
+  }
+
+  if (name === "channelScope.reconcile") {
+    // dryRun (default) is a read-only preview; only dryRun=false files an always_human ticket.
+    if (args.dryRun !== false) {
+      const preview = await handleChannelScopeReconcilePreview(cred.orgId, args);
+      if (!preview.ok) {
+        const { status: _status, ...body } = preview;
+        void _status;
+        return toolResult(body, true);
+      }
+      return toolResult(preview);
+    }
+    const prepared = await prepareChannelScopeReconcileApply(cred.orgId, args);
+    if (!prepared.ok) {
+      const { status: _status, ...body } = prepared;
+      void _status;
+      return toolResult(body, true);
+    }
+    const queueResult = await queueAdminTool({
+      cred,
+      tool: name,
+      args: buildChannelScopeReconcileQueuedArgs(args, prepared.snapshot),
+      title: CHANNEL_SCOPE_RECONCILE_TITLE_JA,
+      summary: prepared.summary,
+    });
+    return toolResult(
+      {
+        ...queueResult,
+        ...(queueResult.code === "needs_approval"
+          ? { planned: prepared.snapshot.counts, widening: prepared.snapshot.widening, summaryLines: prepared.snapshot.summaryLines }
+          : {}),
+      },
       true
     );
   }

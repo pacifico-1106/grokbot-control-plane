@@ -6,6 +6,7 @@ import {
   fulfillDeputyActivate as fulfillDeputyActivateHandler,
 } from "@/lib/approval-kind-routes/mcp-handlers";
 import { fulfillChannelScopePatch as fulfillChannelScopePatchHandler } from "@/lib/channel-scope/admin";
+import { fulfillChannelScopeReconcile } from "@/lib/channel-scope/reconcile-admin";
 import { markChannelHumanConfirmed } from "@/lib/channel-scope/data";
 import { isChannelScopeEnabled } from "@/lib/feature-flags";
 import { setOrgInternalAudienceRule, validateInternalAudienceRulePatch } from "@/lib/data/internal-audience-rule";
@@ -1850,6 +1851,13 @@ async function fulfillApprovedAdminCore(
         break;
       case "channelScope.patch": {
         const result = await fulfillChannelScopePatchHandler(approval, args);
+        fulfillment = result.ok
+          ? { ok: true, tool, at, summaryJa: result.message }
+          : { ok: false, tool, at, error: result.code, nextStepJa: result.message };
+        break;
+      }
+      case "channelScope.reconcile": {
+        const result = await fulfillChannelScopeReconcile(approval, args);
         fulfillment = result.ok
           ? { ok: true, tool, at, summaryJa: result.message }
           : { ok: false, tool, at, error: result.code, nextStepJa: result.message };
