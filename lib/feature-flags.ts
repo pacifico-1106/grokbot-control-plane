@@ -209,3 +209,96 @@ export function isTopicGatedPostingEnabled(): boolean {
 export function isPlanRailsEnabled(): boolean {
   return parseFlag(process.env.P1_PLAN_RAILS_ENABLED);
 }
+
+/**
+ * LP_INQUIRY_DB_ENABLED: Store LP inquiries in database.
+ *
+ * When ON:
+ * - LP inquiry form submissions are stored in lp_inquiries table.
+ * - Notifications go through notification_outbox for durability.
+ * - 90-day retention with cleanup cron.
+ *
+ * When OFF (default):
+ * - Existing email-only behavior preserved.
+ * - No database storage of inquiries.
+ */
+export function isLpInquiryDbEnabled(): boolean {
+  return parseFlag(process.env.LP_INQUIRY_DB_ENABLED);
+}
+
+/**
+ * LP_INQUIRY_BOT_PROTECTION_ENABLED: Bot protection for LP forms.
+ *
+ * When ON:
+ * - Cloudflare Turnstile verification required.
+ * - Per-IP-hash and global rate limits enforced.
+ * - Fail-closed for AI chat (reject if verification fails).
+ * - Fail-open for plain form (log but allow if keys missing).
+ *
+ * When OFF (default):
+ * - No Turnstile verification.
+ * - No rate limiting.
+ * - Existing behavior preserved.
+ */
+export function isLpInquiryBotProtectionEnabled(): boolean {
+  return parseFlag(process.env.LP_INQUIRY_BOT_PROTECTION_ENABLED);
+}
+
+/**
+ * LP_INQUIRY_CLEANUP_ENABLED: Enable cleanup of expired LP inquiries.
+ *
+ * When ON:
+ * - Cron job can delete inquiries past retention_until.
+ *
+ * When OFF (default):
+ * - No automatic cleanup.
+ */
+export function isLpInquiryCleanupEnabled(): boolean {
+  return parseFlag(process.env.LP_INQUIRY_CLEANUP_ENABLED);
+}
+
+/**
+ * LP_CATALOG_DB_ENABLED: Read catalog from database.
+ *
+ * When ON:
+ * - Checkout and pricing read from catalog_items table.
+ * - Catalog versioning enabled.
+ *
+ * When OFF (default):
+ * - Hardcoded constants used (existing behavior).
+ */
+export function isLpCatalogDbEnabled(): boolean {
+  return parseFlag(process.env.LP_CATALOG_DB_ENABLED);
+}
+
+/**
+ * LP_ORDER_LEDGER_ENABLED: Record LP orders and checkout attempts.
+ *
+ * When ON:
+ * - Orders, order_revisions, checkout_attempts, stripe_event_inbox tables used.
+ * - LP setup payments recorded from checkout.session.completed webhook.
+ * - Payment status updated only after verified signature and re-fetch.
+ *
+ * When OFF (default):
+ * - No order ledger.
+ * - Existing webhook behavior unchanged.
+ */
+export function isLpOrderLedgerEnabled(): boolean {
+  return parseFlag(process.env.LP_ORDER_LEDGER_ENABLED);
+}
+
+/**
+ * LP_CHAT_ENABLED: Enable AI consultation chat on LP.
+ *
+ * When ON:
+ * - Chat launcher component rendered on LP.
+ * - /api/journeys, /api/chat/turn endpoints active.
+ * - Requires OPENAI_API_KEY to be configured.
+ *
+ * When OFF (default):
+ * - No chat launcher.
+ * - Consultation form only.
+ */
+export function isLpChatEnabled(): boolean {
+  return parseFlag(process.env.LP_CHAT_ENABLED);
+}
