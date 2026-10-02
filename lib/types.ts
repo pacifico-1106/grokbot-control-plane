@@ -517,6 +517,8 @@ export type AuditAction =
   | "voter_binding.unlock_via_resend"
   | "approval_routes.patch"
   | "approval_routes.patch_conflict"
+  | "channel_scope.patch"
+  | "channel_scope.patch_conflict"
   | "topic_gate.triggered"
   | "decision.requested"
   | "decision.vote_recorded"

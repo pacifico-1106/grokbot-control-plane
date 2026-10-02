@@ -39,6 +39,7 @@ const TOOL_TITLE_JA: Record<string, string> = {
   "setup.lineApproval.demoteTelegram": "Telegram承認チャネルの無効化",
   "approvalWorkflow.bindVoter": "承認者バインディング作成",
   "approvalWorkflow.unbindVoter": "承認者バインディング取り消し",
+  "channelScope.patch": "チャンネル範囲設定の変更",
   "orgs.create": "テナント作成（プラットフォーム運用）",
   "orgs.issueAdminCredential": "管理MCP認証発行（プラットフォーム運用）",
 };
@@ -96,6 +97,42 @@ export async function queueAdminTool(input: {
   summary: string;
   jobId?: string;
 }): Promise<AdminQueueResult | AdminQueueSecretRejection | AdminPolicyRequiredRejection> {
+  return queueAdminToolForRequester({
+    orgId: input.cred.orgId,
+    requester: {
+      kind: "admin_agent",
+      credentialGeneration: input.cred.generation,
+      grokBotAgentId: input.cred.grokBotAgentId,
+      actorId: input.cred.actorId,
+    },
+    tool: input.tool,
+    args: input.args,
+    rawArgsForSecretScan: input.rawArgsForSecretScan,
+    title: input.title,
+    summary: input.summary,
+    jobId: input.jobId,
+  });
+}
+
+/**
+ * Same always_human queue as queueAdminTool, for callers that are not an admin MCP credential
+ * (e.g. a dashboard owner/admin filing a settings change via a Web API). The requester is
+ * recorded in metadata.adminRequester so the self-approval guard still applies
+ * (actorId = org_members.id of the filing human).
+ */
+export async function queueAdminToolForRequester(input: {
+  orgId: string;
+  requester: AdminRequester;
+  tool: string;
+  args: Record<string, unknown>;
+  rawArgsForSecretScan?: Record<string, unknown>;
+  title?: string;
+  summary: string;
+  jobId?: string;
+  /** Extra metadata merged into the approval (cannot override the admin-class keys). */
+  extraMetadata?: Record<string, unknown>;
+}): Promise<AdminQueueResult | AdminQueueSecretRejection | AdminPolicyRequiredRejection> {
+  const cred = { orgId: input.orgId };
   // P0-A: Secret-in-chat detector (fail-closed, before approval ticket creation)
   // Chat NEVER: passwords, refresh tokens, API keys, full employee/admin badge secrets
   // IMPORTANT: Scan raw user input (rawArgsForSecretScan), NOT the post-encryption args.
@@ -113,8 +150,8 @@ export async function queueAdminTool(input: {
   // P0 Item 1: Admin-class tickets require explicit account-approver policy
   // When ADMIN_APPROVER_POLICY_REQUIRED is ON, check for admin route policy or org owners
   if (isAdminApproverPolicyRequired()) {
-    const orgPolicy = await getOrgApprovalWorkflowPolicy(input.cred.orgId);
-    const orgOwnerIds = await getOrgOwnerIds(input.cred.orgId);
+    const orgPolicy = await getOrgApprovalWorkflowPolicy(cred.orgId);
+    const orgOwnerIds = await getOrgOwnerIds(cred.orgId);
     
     const policyCheck = checkAdminPolicyRequirement(
       {
@@ -129,7 +166,7 @@ export async function queueAdminTool(input: {
 
     if (!policyCheck.ok) {
       await appendAuditEvent({
-        orgId: input.cred.orgId,
+        orgId: cred.orgId,
         employeeId: null,
         credentialId: null,
         action: "admin.policy",
@@ -166,14 +203,9 @@ export async function queueAdminTool(input: {
     input.jobId ||
     (typeof input.args.jobId === "string" ? input.args.jobId : "") ||
     `admin_${input.tool}_${Date.now().toString(36)}`;
-  const requester: AdminRequester = {
-    kind: "admin_agent",
-    credentialGeneration: input.cred.generation,
-    grokBotAgentId: input.cred.grokBotAgentId,
-    actorId: input.cred.actorId,
-  };
+  const requester: AdminRequester = input.requester;
   const created = await createApproval({
-    orgId: input.cred.orgId,
+    orgId: cred.orgId,
     employeeId: "",
     credentialId: "",
     title,
@@ -183,6 +215,7 @@ export async function queueAdminTool(input: {
     tool: input.tool,
     jobId,
     metadata: {
+      ...(input.extraMetadata ?? {}),
       auditClass: ADMIN_AUDIT_CLASS,
       approvalClass: ADMIN_AUDIT_CLASS,
       auditAction,
@@ -195,7 +228,7 @@ export async function queueAdminTool(input: {
   });
 
   await appendAuditEvent({
-    orgId: input.cred.orgId,
+    orgId: cred.orgId,
     employeeId: null,
     credentialId: null,
     action: auditAction,

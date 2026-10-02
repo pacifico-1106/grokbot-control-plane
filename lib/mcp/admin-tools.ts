@@ -86,6 +86,13 @@ import {
 } from "@/lib/approval-kind-routes/mcp-handlers";
 import { isApprovalKindRoutesEnabled } from "@/lib/feature-flags";
 import {
+  buildChannelScopeQueuedArgs,
+  CHANNEL_SCOPE_TITLE_JA,
+  handleChannelScopeGet,
+  handleChannelScopeListMemberships,
+  prepareChannelScopePatch,
+} from "@/lib/channel-scope/admin";
+import {
   getIdentityBindingStatus,
   checkFeatureEnabled as checkEmployeeIdentityFeatureEnabled,
 } from "@/lib/employees/employee-identity";
@@ -1064,6 +1071,60 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
     },
   },
   {
+    name: "channelScope.get",
+    description:
+      "Read AI employee channel scope (read-only, no approval required). P1 チャンネル範囲: effective mode (registered_only / all_joined / +Slack Connect), source layer (employee/org/default), flag state, beforeStateHash for channelScope.patch, membership counts (with employeeId), unconfirmed auto-joined Connect channels. Omit employeeId for the tenant default. Feature flag P1_CHANNEL_SCOPE_ENABLED (OFF = registered_only, nothing stored is read).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        employeeId: { type: "string", description: "Optional AI employee ID (per-employee override)" },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "channelScope.patch",
+    description:
+      "Change AI employee channel scope after human approval (always_human, approvalClass admin, kind=account; owner approves, self-approval forbidden). P1 チャンネル範囲: mode registered_only | all_joined; includeSlackConnect only with all_joined and only when P1_CHANNEL_SCOPE_CONNECT_ENABLED is ON. Omit employeeId for the tenant default; employeeId + clearOverride=true removes the override. The approval card shows the before→after diff; a stale beforeStateHash (from channelScope.get) is rejected, and the before-state is re-checked at approval time. Feature flag P1_CHANNEL_SCOPE_ENABLED must be ON.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        employeeId: { type: "string", description: "Optional AI employee ID; omit for tenant default" },
+        clearOverride: { type: "boolean", description: "With employeeId: remove the override and inherit the tenant default" },
+        mode: { type: "string", enum: ["registered_only", "all_joined"], description: "Required unless clearOverride" },
+        includeSlackConnect: { type: "boolean", description: "Include Slack Connect channels (all_joined only). Omitted = false" },
+        connect: {
+          type: "object",
+          properties: {
+            egress: { type: "string", enum: ["needs_approval_until_confirmed", "matrix"] },
+            notifyApproverOnInvite: { type: "boolean" },
+            allowedExternalTeamIds: { type: "array", items: { type: "string" }, maxItems: 100 },
+          },
+          additionalProperties: false,
+        },
+        beforeStateHash: { type: "string", description: "beforeStateHash from channelScope.get; mismatch = before_state_mismatch" },
+        jobId: { type: "string" },
+        approvalId: { type: "string", description: "Re-invoke with approved ticket ID" },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "channelScope.listMemberships",
+    description:
+      "List AI employee channel memberships (read-only, no approval required). P1 チャンネル範囲: metadata only (channel ID, via user/bot, state, classification), never message bodies. Filters: employeeId, state (member/left/removed/out_of_scope), classification (internal/shared_external/unknown), limit (1-500, default 100). Feature flag P1_CHANNEL_SCOPE_ENABLED.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        employeeId: { type: "string" },
+        state: { type: "string", enum: ["member", "left", "removed", "out_of_scope"] },
+        classification: { type: "string", enum: ["internal", "shared_external", "unknown"] },
+        limit: { type: "integer", minimum: 1, maximum: 500 },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
     name: "orgs.create",
     description:
       "Create a new tenant (org + Auth owner + trial) after human approval (always_human). Platform super-admin only — normal tenant gb_adm_ is rejected (fail-closed). Reuses signup pipeline (createOrgWithOwner / provisionOrgForUser). Never returns or audits plaintext passwords. After success, issue AI employees via employees.issue in the new org.",
@@ -1263,6 +1324,8 @@ const ADMIN_READ_ONLY_TOOLS_SET = new Set<string>([
   "approvalWorkflow.inspect",
   "approvalWorkflow.listVoterBindings",
   "approvalRoutes.get",
+  "channelScope.get",
+  "channelScope.listMemberships",
   "setup.approverBindingStatus",
   "orgs.status",
   "orgs.patch",
@@ -2724,6 +2787,37 @@ export async function callAdminMcpTool(
       ].join("\n"),
     });
     return toolResult(queueResult, true);
+  }
+
+  // P1 Channel Scope
+  if (name === "channelScope.get") {
+    const result = await handleChannelScopeGet(cred.orgId, args);
+    return toolResult(result, !result.ok);
+  }
+
+  if (name === "channelScope.listMemberships") {
+    const result = await handleChannelScopeListMemberships(cred.orgId, args);
+    return toolResult(result, !result.ok);
+  }
+
+  if (name === "channelScope.patch") {
+    const prepared = await prepareChannelScopePatch(cred.orgId, args, "admin_mcp");
+    if (!prepared.ok) {
+      const { status: _status, ...body } = prepared;
+      void _status;
+      return toolResult(body, true);
+    }
+    const queueResult = await queueAdminTool({
+      cred,
+      tool: name,
+      args: buildChannelScopeQueuedArgs(args, prepared.snapshot),
+      title: CHANNEL_SCOPE_TITLE_JA,
+      summary: prepared.summary,
+    });
+    return toolResult(
+      { ...queueResult, ...(queueResult.code === "needs_approval" ? { diffSummary: prepared.snapshot.diffSummary } : {}) },
+      true
+    );
   }
 
   // P1 Decision Workflow - Deputy Activation

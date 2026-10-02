@@ -13,7 +13,7 @@
  */
 import { isDemoMode } from "@/lib/mode";
 import { createSupabaseAdminClient } from "@/lib/supabase";
-import { getOrgChannel } from "@/lib/data/directory";
+import { getOrgChannel, listOrgChannels } from "@/lib/data/directory";
 import type { ChannelClassification } from "@/lib/types";
 import type {
   ChannelScopeChannel,
@@ -205,6 +205,66 @@ export async function getChannelScopeChannel(
     .maybeSingle();
   if (error) throw new Error("channel_scope_channel_unavailable");
   return data ? mapScopeChannel(data as Record<string, unknown>) : null;
+}
+
+/** org_channels rows (scope columns) for the given external ids. Flag ON callers only. */
+export async function listChannelScopeChannels(
+  orgId: string,
+  surface: ChannelScopeSurface,
+  externalIds: string[]
+): Promise<ChannelScopeChannel[]> {
+  const ids = [...new Set(externalIds.map((x) => x.trim()).filter(Boolean))].slice(0, MEMBERSHIP_LIST_MAX);
+  if (!orgId || ids.length === 0) return [];
+  if (isDemoMode()) {
+    const out: ChannelScopeChannel[] = [];
+    for (const id of ids) {
+      const row = await getChannelScopeChannel(orgId, surface, id);
+      if (row) out.push(row);
+    }
+    return out;
+  }
+  const { data, error } = await admin()
+    .from("org_channels")
+    .select("external_id, classification, mixed, source, slack_team_id, external_team_ids, human_confirmed_at, last_inspected_at")
+    .eq("org_id", orgId)
+    .eq("surface", surface)
+    .in("external_id", ids);
+  if (error) throw new Error("channel_scope_channel_unavailable");
+  return (data ?? []).map((row) => mapScopeChannel(row as Record<string, unknown>));
+}
+
+/**
+ * Auto-registered Connect channels a human has not confirmed yet (sends stay approval-gated).
+ * Flag ON callers only.
+ */
+export async function listUnconfirmedConnectChannels(orgId: string, limit = 100): Promise<ChannelScopeChannel[]> {
+  if (!orgId) return [];
+  const cap = Math.min(Math.max(1, Math.floor(limit)), MEMBERSHIP_LIST_MAX);
+  const isUnconfirmedConnect = (c: ChannelScopeChannel) =>
+    (c.classification === "shared_external" || c.mixed) &&
+    (c.source ?? "manual") !== "manual" &&
+    !c.humanConfirmedAt;
+  if (isDemoMode()) {
+    const rows = await listOrgChannels(orgId);
+    const out: ChannelScopeChannel[] = [];
+    for (const row of rows) {
+      if (row.surface !== "slack") continue;
+      const scoped = await getChannelScopeChannel(orgId, "slack", row.externalId);
+      if (scoped && isUnconfirmedConnect(scoped)) out.push(scoped);
+    }
+    return out.slice(0, cap);
+  }
+  const { data, error } = await admin()
+    .from("org_channels")
+    .select("external_id, classification, mixed, source, slack_team_id, external_team_ids, human_confirmed_at, last_inspected_at")
+    .eq("org_id", orgId)
+    .eq("surface", "slack")
+    .neq("source", "manual")
+    .is("human_confirmed_at", null)
+    .or("classification.eq.shared_external,mixed.eq.true")
+    .limit(cap);
+  if (error) throw new Error("channel_scope_channel_unavailable");
+  return (data ?? []).map((row) => mapScopeChannel(row as Record<string, unknown>)).filter(isUnconfirmedConnect);
 }
 
 // ---------------------------------------------------------------------------
