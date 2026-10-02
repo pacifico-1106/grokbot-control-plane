@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { getCurrentOrgId } from "@/lib/auth/session";
 import { requireCredentialAdmin } from "@/lib/auth/require-credential-admin";
+import { isMcpOAuthEnabled } from "@/lib/mcp-oauth/config";
+import { revokeAllEmployeeGrants } from "@/lib/mcp-oauth/grant-admin";
 import {
   appendAuditEvent,
   bindingPublicView,
@@ -71,8 +73,25 @@ export async function POST(
         actorMemberId: gate.actor.id,
       },
     });
+    // Q3: rotation does NOT cut OAuth connections unless explicitly requested.
+    let oauthGrantsRevoked: number | undefined;
+    let oauthRevokeFailed = false;
+    if (rawBody.revokeOAuth === true && isMcpOAuthEnabled()) {
+      try {
+        oauthGrantsRevoked = await revokeAllEmployeeGrants({
+          orgId: targetOrgId,
+          employeeId: id,
+          byEmail: gate.actor.email,
+          reason: "rotate",
+        });
+      } catch {
+        oauthRevokeFailed = true; // rotation itself succeeded; surface so the admin can retry from the list
+      }
+    }
     return NextResponse.json({
       ok: true,
+      ...(oauthGrantsRevoked !== undefined ? { oauthGrantsRevoked } : {}),
+      ...(oauthRevokeFailed ? { oauthRevokeFailed } : {}),
       demo: runtimeModeLabel() === "demo",
       mode: runtimeModeLabel(),
       employeeId: id,

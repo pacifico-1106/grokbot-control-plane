@@ -46,7 +46,7 @@ mock.module("@/lib/auth/session", () => ({
   getSessionContext: async () => session,
   getCurrentOrgId: async () => session.orgId,
 }));
-mock.module("@/lib/mode", () => ({ isDemoMode: () => false }));
+mock.module("@/lib/mode", () => ({ isDemoMode: () => false, isSupabaseConfigured: () => true, runtimeModeLabel: () => "production", isStripeConfigured: () => false, isResendConfigured: () => false }));
 mock.module("@/lib/data/members", () => ({
   // Fail closed: no implicit owner fallback in this test.
   resolveActorMember: async () => member("member", ["view_dashboard"]),
@@ -171,4 +171,50 @@ test("cross-tenant employee id is not found for an admin of another org", async 
   const res = await call();
   expect(res.status).toBe(404);
   expect(rotateCalls.length).toBe(0);
+});
+
+// ---- PR-7 / Q3: rotation keeps OAuth connections unless explicitly asked ----
+const oauthData = await import("@/lib/data/oauth");
+
+async function seedGrant() {
+  const store = oauthData.createMemoryOAuthStore();
+  oauthData.__setOAuthStoreForTests(store);
+  await store.upsertClient({ clientId: "https://claude.ai/oauth/mcp-client.json", registrationType: "cimd", clientName: "Claude", clientUri: null, logoUri: null, redirectUris: [], tokenEndpointAuthMethod: "none", metadata: {}, metadataFetchedAt: null, metadataExpiresAt: null, status: "active", createdIpHash: null });
+  const g = await store.createGrant({ orgId: "org_a", employeeId: "emp_1", clientId: "https://claude.ai/oauth/mcp-client.json", credentialIdAtGrant: null, grantedByMemberId: null, grantedByEmail: "o@x", resource: "https://staffpass.sealith.com/api/mcp", scope: ["staffpass.employee"], expiresAt: new Date(Date.now() + 86400_000).toISOString() });
+  return { store, g };
+}
+
+function callWith(body: Record<string, unknown>) {
+  return POST(
+    new Request("https://staffpass.test/api/employees/emp_1/rotate", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }),
+    { params: Promise.resolve({ id: "emp_1" }) }
+  );
+}
+
+test("Q3: OAuth ON, rotate without checkbox keeps grants; with revokeOAuth:true revokes them", async () => {
+  const prev = process.env.MCP_OAUTH_ENABLED;
+  process.env.MCP_OAUTH_ENABLED = "true";
+  try {
+    session = { ...session, orgId: "org_a", member: member("owner", ALL_CAPS) };
+    const { store, g } = await seedGrant();
+    const keep = await (await callWith({})).json();
+    expect("oauthGrantsRevoked" in keep).toBe(false);
+    expect((await store.getGrant(g.id))?.status).toBe("active");
+    const cut = await (await callWith({ revokeOAuth: true })).json();
+    expect(cut.oauthGrantsRevoked).toBe(1);
+    expect((await store.getGrant(g.id))?.status).toBe("revoked");
+  } finally {
+    oauthData.__setOAuthStoreForTests(null);
+    if (prev === undefined) delete process.env.MCP_OAUTH_ENABLED;
+    else process.env.MCP_OAUTH_ENABLED = prev;
+  }
+});
+
+test("Q3: OAuth OFF, revokeOAuth is ignored (response shape unchanged)", async () => {
+  session = { ...session, orgId: "org_a", member: member("owner", ALL_CAPS) };
+  const { store, g } = await seedGrant();
+  const body = await (await callWith({ revokeOAuth: true })).json();
+  expect("oauthGrantsRevoked" in body).toBe(false);
+  expect((await store.getGrant(g.id))?.status).toBe("active");
+  oauthData.__setOAuthStoreForTests(null);
 });

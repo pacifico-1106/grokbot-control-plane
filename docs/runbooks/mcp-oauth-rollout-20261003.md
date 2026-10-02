@@ -64,3 +64,11 @@
   - client と IP あたり 60 回/分。応答は `Cache-Control: no-store`。
 - `POST /api/oauth/revoke`（RFC 7009）: 常に 200。refresh を取り消すと grant ごと取り消し（`oauth.grant_revoked`）、access はそのトークンだけ。
 - cron `/api/cron/oauth-purge`（毎日 03:00 JST、`CRON_SECRET` 必須）: 期限切れの認可リクエスト・code・トークンを削除。フラグ OFF の間は何もしません。
+
+## 接続の管理（PR-7）
+
+- 社員詳細画面「接続中の AI クライアント（OAuth）」: 一覧と個別の取り消し（`hire_issue_credentials` が必要、同じ組織の社員のみ）。API: `GET /api/employees/[id]/oauth-grants`、`DELETE /api/employees/[id]/oauth-grants/[grantId]`。
+- 契約終了（terminate）: その社員の OAuth 接続をすべて取り消し（監査 `oauth.grant_revoked` reason=terminate）。RS も停止中の社員を毎回拒否するので二重に止まります。
+- 社員証の再発行（Q3）: **既定では OAuth 接続を切りません**。「OAuth 接続（AI クライアント）もすべて取り消す」にチェックしたときだけ取り消します（reason=rotate）。
+- ゲートウェイの監査: OAuth 経由の invoke は全監査行の metadata に `authMethod: "oauth"`、`oauthGrantId`、`oauthClientHost` が付きます（社員証 `gb_emp_` 経由は従来どおり）。
+- いずれもフラグ OFF の間は何もしません（UI も非表示）。
