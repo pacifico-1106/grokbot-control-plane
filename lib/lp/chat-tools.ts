@@ -236,7 +236,10 @@ export async function executeKnowledgeSearch(
       success: true,
       data: {
         found: false,
-        message: "承認済みの情報が見つかりませんでした。詳細は相談窓口でご確認ください。",
+        // Guidance for the model, not visitor text: the old wording
+        // (「承認済みの情報が見つかりませんでした」) was echoed to visitors verbatim.
+        message:
+          "該当する掲載情報はありません。本文では調べた結果や内部の仕組みに触れず、推測で確約も否定もせず、「詳細は個別に確認のうえ、担当よりご回答いたします」と丁寧に伝えてください。",
       },
     };
   }

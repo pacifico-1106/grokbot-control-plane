@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  executeKnowledgeSearch,
   executeRecommendPlan,
   RECOMMEND_PLAN_UPGRADE_NOTE,
   TOOL_DEFINITIONS,
@@ -66,5 +67,20 @@ describe("recommend_plan", () => {
     const props = def.function.parameters.properties as unknown as Record<string, { items?: { enum?: string[] }; description?: string }>;
     expect(props.executiveSignals.items?.enum).toEqual(["decision_authority", "pre_decision_full", "heavy_model", "development"]);
     expect(props.executiveSignals.description).toContain("never an executive signal");
+  });
+});
+
+describe("knowledge_search not found", () => {
+  test("guidance tells the model to answer via staff without exposing internals", async () => {
+    const res = await executeKnowledgeSearch({ query: "GitHub 監視" }, async () => ({
+      releaseId: "rel",
+      releaseKey: "k",
+      status: "not_found",
+      passages: [],
+    }));
+    const data = res.data as { found: boolean; message: string };
+    expect(data.found).toBe(false);
+    expect(data.message).toContain("詳細は個別に確認のうえ、担当よりご回答いたします");
+    expect(data.message).not.toContain("承認済みの情報が見つかりませんでした");
   });
 });

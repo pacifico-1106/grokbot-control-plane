@@ -26,6 +26,7 @@ export const CONVERSATIONS: Array<{ name: string; turns: string[] }> = [
   { name: "担当者希望", turns: ["担当の方と話したいです"] },
   { name: "承認（勝手に送らない？）", turns: ["AI社員が勝手にメールを送ったりしませんか？"] },
   { name: "承認の緩和（聞かれたときだけ）", turns: ["承認なしで自動で進めることもできますか？"] },
+  { name: "未掲載の連携（GitHub監視・一次対応）", turns: ["GitHubと連携して、リポジトリの監視やアラートの一次対応までやってもらえますか？"] },
 ];
 
 const SEED = "supabase/migrations/20261001200000_lp_knowledge_base.sql";
