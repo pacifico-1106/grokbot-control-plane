@@ -373,3 +373,29 @@ export function isLpHandoffEnabled(): boolean {
 export function isLpWakeWebhookEnabled(): boolean {
   return parseFlag(process.env.LP_WAKE_WEBHOOK_ENABLED);
 }
+
+/**
+ * P1_CHANNEL_SCOPE_ENABLED: Per-AI-employee channel scope (registered_only / all_joined).
+ *
+ * When ON (CS2+ wiring):
+ * - Effective scope = employees.channel_scope_override → orgs.channel_scope_policy → registered_only.
+ * - channelScope.* Admin MCP tools, membership event handling, wake-side scope checks, reconcile cron.
+ *
+ * When OFF (default):
+ * - Effective scope is always registered_only and callers keep legacy checks (byte-identical).
+ * - lib/channel-scope data writes throw channel_scope_disabled; no new DB columns are read.
+ */
+export function isChannelScopeEnabled(): boolean {
+  return parseFlag(process.env.P1_CHANNEL_SCOPE_ENABLED);
+}
+
+/**
+ * P1_CHANNEL_SCOPE_CONNECT_ENABLED: Global kill switch for Slack Connect in channel scope.
+ *
+ * When ON: policy.includeSlackConnect (all_joined only) is honored.
+ * When OFF (default): includeSlackConnect is forced to false everywhere.
+ * Has no effect unless P1_CHANNEL_SCOPE_ENABLED is also ON.
+ */
+export function isChannelScopeConnectEnabled(): boolean {
+  return parseFlag(process.env.P1_CHANNEL_SCOPE_CONNECT_ENABLED);
+}

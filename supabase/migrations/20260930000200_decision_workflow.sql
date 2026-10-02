@@ -1,6 +1,8 @@
 -- P1 Decision Workflow: T1/T2/T3 tier decision system
 -- Feature flag P1_DECISION_WORKFLOW_ENABLED must be ON to use these features.
 -- Safe to re-run (IF NOT EXISTS / ADD COLUMN IF NOT EXISTS).
+-- 2026-10-02 fix (not yet applied in prod): the nonexistent "members" table was replaced by
+-- public.org_members (columns id / user_id / org_id / status are the same). Validated on PGlite.
 
 -- Decision requests table (稟議・決裁)
 create table if not exists decision_requests (
@@ -29,9 +31,9 @@ create table if not exists decision_requests (
   decision_number text,
   
   -- Deputy (職務代行)
-  deputy_user_id uuid references members(id),
+  deputy_user_id uuid references org_members(id),
   deputy_activated_at timestamptz,
-  deputy_activated_by uuid references members(id),
+  deputy_activated_by uuid references org_members(id),
   
   -- Status
   status text not null default 'pending' check (status in ('pending', 'approved', 'rejected', 'withdrawn')),
@@ -61,7 +63,7 @@ create table if not exists decision_ballots (
   id uuid primary key default gen_random_uuid(),
   decision_id uuid not null references decision_requests(id) on delete cascade,
   org_id uuid not null references orgs(id),
-  voter_user_id uuid not null references members(id),
+  voter_user_id uuid not null references org_members(id),
   
   -- Voting weight (T3 uses weights)
   vote_weight integer not null default 1,
@@ -176,7 +178,7 @@ drop policy if exists decision_requests_select_own_org on decision_requests;
 create policy decision_requests_select_own_org on decision_requests
   for select using (
     auth.uid() in (
-      select m.user_id from members m 
+      select m.user_id from org_members m 
       where m.org_id = decision_requests.org_id 
       and m.status = 'active'
     )
@@ -186,7 +188,7 @@ drop policy if exists decision_requests_insert_own_org on decision_requests;
 create policy decision_requests_insert_own_org on decision_requests
   for insert with check (
     auth.uid() in (
-      select m.user_id from members m 
+      select m.user_id from org_members m 
       where m.org_id = decision_requests.org_id 
       and m.status = 'active'
     )
@@ -199,7 +201,7 @@ drop policy if exists decision_ballots_select_own_org on decision_ballots;
 create policy decision_ballots_select_own_org on decision_ballots
   for select using (
     auth.uid() in (
-      select m.user_id from members m 
+      select m.user_id from org_members m 
       where m.org_id = decision_ballots.org_id 
       and m.status = 'active'
     )
@@ -208,13 +210,13 @@ create policy decision_ballots_select_own_org on decision_ballots
 drop policy if exists decision_ballots_insert_voter on decision_ballots;
 create policy decision_ballots_insert_voter on decision_ballots
   for insert with check (
-    auth.uid() = (select m.user_id from members m where m.id = voter_user_id)
+    auth.uid() = (select m.user_id from org_members m where m.id = voter_user_id)
   );
 
 drop policy if exists decision_ballots_update_voter on decision_ballots;
 create policy decision_ballots_update_voter on decision_ballots
   for update using (
-    auth.uid() = (select m.user_id from members m where m.id = voter_user_id)
+    auth.uid() = (select m.user_id from org_members m where m.id = voter_user_id)
     and vote is null -- Can only vote once
   );
 
@@ -225,7 +227,7 @@ drop policy if exists decision_results_select_own_org on decision_results;
 create policy decision_results_select_own_org on decision_results
   for select using (
     auth.uid() in (
-      select m.user_id from members m 
+      select m.user_id from org_members m 
       where m.org_id = decision_results.org_id 
       and m.status = 'active'
     )
@@ -238,7 +240,7 @@ drop policy if exists decision_minutes_select_own_org on decision_minutes;
 create policy decision_minutes_select_own_org on decision_minutes
   for select using (
     auth.uid() in (
-      select m.user_id from members m 
+      select m.user_id from org_members m 
       where m.org_id = decision_minutes.org_id 
       and m.status = 'active'
     )
