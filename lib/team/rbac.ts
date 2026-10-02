@@ -95,3 +95,21 @@ export function hasCapability(
 export function missingCapabilityMessage(cap: HumanCapability): string {
   return `権限がありません（デモ）: ${capabilityLabel(cap)} が必要です。チーム画面で職務・権限を確認してください。`;
 }
+
+/** Org roles allowed to mint / re-mint 社員証 (gb_emp_) and the tenant gb_adm_ bearer. */
+export const CREDENTIAL_ADMIN_ROLES: ReadonlyArray<OrgMember["role"]> = ["owner", "admin"];
+
+export const CREDENTIAL_ADMIN_REQUIRED_MESSAGE_JA =
+  "社員証・管理MCP用認証の発行／再発行は、オーナーまたは管理者で「雇う／社員証発行」の権限を持つ人だけが実行できます。必要な場合はオーナーに依頼してください。";
+
+/**
+ * UI + server shared predicate: owner/admin role AND hire_issue_credentials.
+ * The server gate (requireCredentialAdmin) is authoritative; this only drives
+ * button state so members are told up front instead of hitting a 403.
+ */
+export function canIssueEmployeeCredentials(
+  member: Pick<OrgMember, "role" | "capabilities"> | null | undefined
+): boolean {
+  if (!member) return false;
+  return CREDENTIAL_ADMIN_ROLES.includes(member.role) && hasCapability(member, "hire_issue_credentials");
+}

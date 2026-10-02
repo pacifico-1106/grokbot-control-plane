@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import {
   getSessionContext,
+  isInvitedWithoutMembership,
   provisionOrgForUser,
 } from "@/lib/auth/session";
 import { isDemoMode } from "@/lib/mode";
@@ -24,6 +25,11 @@ async function repair(req: Request) {
 
   if (session.orgId) {
     return NextResponse.redirect(new URL("/app", req.url), 303);
+  }
+
+  // Invited users never get a self-provisioned org (membership guard).
+  if (isInvitedWithoutMembership(session)) {
+    return NextResponse.redirect(new URL("/auth/no-access", req.url), 303);
   }
 
   try {
