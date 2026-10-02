@@ -1,5 +1,6 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { getAppOrigin } from "@/lib/approvals/tokens";
+import { isChannelScopeEnabled } from "@/lib/feature-flags";
 
 /**
  * User-token scopes for Staffpass Slack app (not Cursor Slack OAuth).
@@ -40,6 +41,21 @@ export const SLACK_USER_SCOPES =
  * スコープ追加後は、テナントが bot-install フローを再実行して xoxb をリフレッシュする必要があります。
  */
 export const SLACK_BOT_SCOPES = "im:write,app_mentions:read,channels:history,groups:history,im:history,chat:write,files:write";
+
+/**
+ * P1 Channel Scope (CS6): extra bot scopes, requested only while P1_CHANNEL_SCOPE_ENABLED is ON.
+ * - channels:read, groups:read: conversations.info / users.conversations (CS3 classification, CS5 reconcile)
+ * - users:read: users.info for the Connect inviter's team (CS4)
+ * Add them to the Slack app's Bot Token Scopes BEFORE turning the flag on, then tenants reinstall.
+ */
+export const SLACK_BOT_SCOPES_CHANNEL_SCOPE = "channels:read,groups:read,users:read";
+
+/** Bot scopes for the install URL. Flag OFF ⇒ exactly SLACK_BOT_SCOPES. */
+export function slackBotInstallScopes(): string {
+  if (!isChannelScopeEnabled()) return SLACK_BOT_SCOPES;
+  const scopes = new Set([...SLACK_BOT_SCOPES.split(","), ...SLACK_BOT_SCOPES_CHANNEL_SCOPE.split(",")]);
+  return [...scopes].join(",");
+}
 
 export const SLACK_OAUTH_COOKIE = "staffpass_slack_oauth";
 export const SLACK_BOT_INSTALL_COOKIE = "staffpass_slack_bot_install";
@@ -182,7 +198,7 @@ export function slackBotInstallAuthorizeUrl(state: string): string {
   const clientId = process.env.SLACK_CLIENT_ID?.trim() || "";
   const params = new URLSearchParams({
     client_id: clientId,
-    scope: SLACK_BOT_SCOPES,
+    scope: slackBotInstallScopes(),
     redirect_uri: slackBotInstallRedirectUrl(),
     state,
   });

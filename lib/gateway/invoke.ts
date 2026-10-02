@@ -115,6 +115,11 @@ import {
 import { isChannelScopeEnabled, isGoogleCalendarReadEnabled, isTopicGatedPostingEnabled } from "@/lib/feature-flags";
 import { checkTopicGate, buildTopicGateApprovalMetadata } from "@/lib/decision-workflow/topic-gate";
 import { evaluateConnectEgressGate } from "@/lib/channel-scope/egress-gate";
+import {
+  evaluateRemovedChannelGate,
+  REMOVED_CHANNEL_DENY_CODE,
+  removedChannelMessageJa,
+} from "@/lib/channel-scope/removed-gate";
 import { getOrgApprovalKindRoutesPolicy } from "@/lib/approval-kind-routes/data";
 import { getToolApprovalKind } from "@/lib/approval-kind-routes/tool-kind-map";
 import {
@@ -1046,6 +1051,45 @@ export async function runGatewayInvoke(
       },
       403
     );
+  }
+
+  // P1 Channel Scope (CS6, design §11.5): the employee was removed from the destination channel
+  // ⇒ deny, even with a prior approval (removal after approval). Flag OFF ⇒ no DB access.
+  if (isAudienceGatedTool(toolDef) && isChannelScopeEnabled()) {
+    const removedCtx = parseConversationContext(body, orgId || employee.orgId);
+    const removedGate = await evaluateRemovedChannelGate({
+      orgId: orgId || employee.orgId,
+      employeeId,
+      slackChannelId: removedCtx?.surface === "slack" ? removedCtx.slackChannelId : null,
+      postingAs: employee.postingAs,
+    });
+    if (removedGate.denied) {
+      const message = removedChannelMessageJa(removedGate, tool);
+      await appendAuditEvent({
+        orgId: orgId || employee.orgId,
+        employeeId,
+        credentialId: input.credentialId || employee.credentialId,
+        action: "channel_scope.removed_channel_denied",
+        purpose,
+        summary: message,
+        metadata: { tool, jobId, phase: "gateway.invoke", priorApproval: priorApprovalOk, channelScopeRemovedGate: removedGate },
+      });
+      return jsonResult(
+        {
+          ok: false,
+          code: REMOVED_CHANNEL_DENY_CODE,
+          error: removedGate.reason,
+          message,
+          needs_approval: false,
+          channelScopeRemovedGate: removedGate,
+          employeeId,
+          tool,
+          purpose,
+          jobId,
+        },
+        403
+      );
+    }
   }
 
   // Audience × information-class egress (after scope / SoD / action-limit / project wall).

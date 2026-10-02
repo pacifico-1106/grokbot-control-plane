@@ -532,6 +532,7 @@ export type AuditAction =
   | "channel_scope.reconcile_run"
   | "channel_scope.reconcile_applied"
   | "channel_scope.reconcile_failed"
+  | "channel_scope.removed_channel_denied"
   | "topic_gate.triggered"
   | "decision.requested"
   | "decision.vote_recorded"

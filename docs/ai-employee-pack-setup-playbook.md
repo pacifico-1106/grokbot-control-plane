@@ -80,6 +80,7 @@ LP「初期費用を払って申し込む」→ Stripe Checkout（初期費用�
 | 7 | AI社員証発行（`employees.issue`） | ✓ | | hire は `always_human` |
 | 8 | Gmail / Calendar OAuth 連携 | | ✓ | 社員側でブラウザ操作 |
 | 9 | **Slack Employee Authorize**（必要時） | | ✓ | Path B / `posting_as: user` 用 |
+| 9.5 | チャンネル範囲モード選択（`P1_CHANNEL_SCOPE_ENABLED` ON 時のみ） | ✓ | ✓* | `channelScope.patch`（registered_only / all_joined / +Connect）→ owner 承認 |
 | 10 | チャネル分類 + IM route 設定 | ✓ | | `channels.classify` + `employeeId` |
 | 11 | role / policy 初期提案 | ✓ | | プラン上限に収める |
 | 12 | 承認チャネル設定（メール / LINE / Slack） | ✓ | ✓ | 社長・管理者の通知先 |
@@ -102,6 +103,19 @@ LP「初期費用を払って申し込む」→ Stripe Checkout（初期費用�
 - Install と Authorize を混同 → チェックリストで明示的に分ける
 
 詳細: [`staffpass-slack-bot-install.md`](./staffpass-slack-bot-install.md)
+
+### チャンネル範囲（P1 Channel Scope、フラグ ON のテナントのみ）
+
+AI社員が「登録済みのチャンネルだけ」で動くか、「参加しているチャンネルすべて」で動くかを、`channels.classify` の前に決めます。
+
+1. Slack アプリに Bot Token Scopes `channels:read`, `groups:read`, `users:read` と、チャンネル参加イベント（bot: `member_joined_channel`, `member_left_channel`, `channel_left`, `group_left`, `channel_shared`, `channel_unshared` / on behalf of users: `member_joined_channel`, `member_left_channel`）が入っていることを確認（運営側で1回）
+2. テナントが **Bot 再インストール**（新スコープ付きの xoxb を取得）→ Staffpass に再登録
+3. `setup.slackStatus` の `channelScope.nextStepJa` に従う
+4. `channelScope.patch` でモードを申請（ダッシュボード `/app/settings` → チャンネル範囲 カードからも可）→ **owner 承認**（自己承認不可）
+5. 既に参加中のチャンネルは `channelScope.reconcile { dryRun: true }` で確認 → 適用（always_human）
+6. 自動で範囲に入った Slack Connect チャンネルは `channels.classify` で確認するまで送信が承認待ち
+
+手順の正本: [`tenant-slack-kickoff-rail.md`](./tenant-slack-kickoff-rail.md) ステップ3.5 / [`runbooks/channel-scope-rollout-20261002.md`](./runbooks/channel-scope-rollout-20261002.md)
 
 ---
 
@@ -207,6 +221,7 @@ Staffpass Org ID: org_XXXX
 - [ ] `setup.slackStatus.botHasFilesWrite` = `true`（ファイル添付を使う場合）
 - [ ] `setup.slackStatus.adapterEnabled` = `true`
 - [ ] テスト投稿が Bot 名義で成功している
+- [ ] （チャンネル範囲フラグ ON のテナント）`setup.slackStatus.channelScope.tenantDefault.chosen` = `true`、`channelScope.nextStepJa` が null
 
 ### Gmail / Calendar 連携完了条件（メール利用時）
 
@@ -305,3 +320,4 @@ AI社員パック初期費用の Stripe Price ID:
 | 日付 | 決定 | 内容 |
 |------|------|------|
 | 2026-09-18 | Kimura | AI社員パック商用ファネル v1 作成 |
+| 2026-10-02 | P1 Channel Scope | チャンネル範囲モード選択（9.5）と完了条件を追加 |
