@@ -1,5 +1,6 @@
 import Stripe from "stripe";
 import type { Subscription, SubscriptionStatus } from "./types";
+import { resolveAppOrigin } from "./app-url";
 
 /**
  * Stripe client stub.
@@ -41,8 +42,9 @@ export function describeJpPaymentMethods(): string {
     : "クレジットカードをご利用いただけます";
 }
 
+/** Absolute app origin for Stripe success/cancel/return URLs (never localhost in prod). */
 export function getAppUrl(): string {
-  return process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
+  return resolveAppOrigin();
 }
 
 export function getPriceId(

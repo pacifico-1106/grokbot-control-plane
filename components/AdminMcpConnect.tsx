@@ -3,15 +3,19 @@
 import { useState } from "react";
 import { CopyableValue } from "@/components/CopyableValue";
 import { STAFFPASS_ADMIN_MCP_URL } from "@/lib/mcp/admin-public";
+import { CREDENTIAL_ADMIN_REQUIRED_MESSAGE_JA } from "@/lib/team/rbac";
 
 export function AdminMcpConnect({
   connected,
   grokBotAgentId,
   embedded = false,
+  canIssue = true,
 }: {
   connected: boolean;
   grokBotAgentId: string | null;
   embedded?: boolean;
+  /** owner/admin + hire_issue_credentials (server is authoritative). */
+  canIssue?: boolean;
 }) {
   const [busy, setBusy] = useState(false);
   const [secret, setSecret] = useState<string | null>(null);
@@ -76,9 +80,18 @@ export function AdminMcpConnect({
         認証は <code className="text-[11px]">Authorization: Bearer gb_adm_…</code>
         。社員証の gb_emp_ は拒否します。
       </p>
-      <button type="button" className="btn btn-primary text-sm" disabled={busy} onClick={() => void issue()}>
-        {busy ? "処理中…" : "管理用の認証を発行"}
+      <button
+        type="button"
+        className="btn btn-primary text-sm"
+        disabled={busy || !canIssue}
+        title={canIssue ? undefined : CREDENTIAL_ADMIN_REQUIRED_MESSAGE_JA}
+        onClick={() => void issue()}
+      >
+        {!canIssue ? "発行はオーナー／管理者のみ" : busy ? "処理中…" : "管理用の認証を発行"}
       </button>
+      {!canIssue ? (
+        <p role="note" className="text-xs muted">{CREDENTIAL_ADMIN_REQUIRED_MESSAGE_JA}</p>
+      ) : null}
       {secret ? (
         <div className="space-y-1">
           <p className="text-xs muted">一度だけ表示（ログに残しません）</p>
