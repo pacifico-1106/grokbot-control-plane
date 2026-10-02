@@ -517,8 +517,9 @@ export type RunGatewayInvokeInput = {
 };
 
 /**
- * Core Gateway enforcement. Callers must already resolve employeeId
- * (via Bearer badge and/or x-employee-id).
+ * Core Gateway enforcement. Callers must already resolve employeeId from an
+ * authenticated source (Bearer 社員証, or server-side admin/session context).
+ * Never pass an unauthenticated client-supplied id (e.g. x-employee-id).
  */
 export async function runGatewayInvoke(
   input: RunGatewayInvokeInput
@@ -637,7 +638,7 @@ export async function runGatewayInvoke(
     );
   }
 
-  // Bot invokes often send x-employee-id only (no browser session).
+  // Bot invokes carry a 社員証 but no browser session.
   // Prefer session org, else binding.orgId, else admin PK lookup.
   const binding = await getBinding(employeeId);
   const orgId =

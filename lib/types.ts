@@ -450,6 +450,7 @@ export interface GatewayInvokeRequest {
 export type AuditAction =
   | "credential.issued"
   | "credential.revoked"
+  | "credential.rotated"
   | "tool.invoke"
   | "approval.requested"
   | "approval.resolved"

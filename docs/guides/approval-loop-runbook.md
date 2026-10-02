@@ -54,17 +54,18 @@
 
 ### curl 例（DEMO）
 
-シード `emp_sales` は linked。confirm/send 用 scope 付き。API キー不要（DEMO）。承認は `x-member-id: mem_1`。
+Gateway は社員証（`Authorization: Bearer gb_emp_…`）必須です（`x-employee-id` だけの呼び出しは 401 `credential_required`。2026-10 のセキュリティ修正）。DEMO でも `POST /api/employees/issue` か「社員証を出し直す」で得た秘密値を `EMP_SECRET` に入れてください（ログやチャットに貼らない）。承認は `x-member-id: mem_1`。
 
 ```bash
 BASE=https://grokbot-control-plane.vercel.app
 EMP=emp_sales
+# EMP_SECRET は issue / rotate の一度きり表示から環境変数に設定（表示・共有しない）
 JOB=job_e2e_$(date +%s)
 
 # A) invoke confirm → 402 needs_approval + pollUrl / pollPath
 curl -sS -X POST "$BASE/api/gateway/invoke" \
   -H 'Content-Type: application/json' \
-  -H "x-employee-id: $EMP" \
+  -H "Authorization: Bearer $EMP_SECRET" \
   -d "{\"employeeId\":\"$EMP\",\"tool\":\"calendar.confirm\",\"purpose\":\"sales.outreach\",\"jobId\":\"$JOB\"}"
 
 # 応答から approvalId / statusToken / pollPath を控える。pollUrl より pollPath を
@@ -82,7 +83,7 @@ curl -sS -X POST "$BASE/api/approvals/APPROVAL_ID/approve" \
 # D) re-invoke with approvalId
 curl -sS -X POST "$BASE/api/gateway/invoke" \
   -H 'Content-Type: application/json' \
-  -H "x-employee-id: $EMP" \
+  -H "Authorization: Bearer $EMP_SECRET" \
   -d "{\"employeeId\":\"$EMP\",\"tool\":\"calendar.confirm\",\"purpose\":\"sales.outreach\",\"jobId\":\"$JOB\",\"approvalId\":\"APPROVAL_ID\"}"
 
 # E) 期待成功: HTTP 200, ok:true, result.confirmed:true, priorApprovalId, meter.billable:true
