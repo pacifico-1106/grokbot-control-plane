@@ -7,6 +7,7 @@ import { assertPlatformOpsFromAdminCred } from "@/lib/admin/platform-ops-gate";
 import { getEmployee } from "@/lib/data/employees";
 import { employeeHasToolScope, resolveGatewayTool } from "@/lib/gateway/tools";
 import { assertBillingAllowsGateway } from "@/lib/billing/entitlements";
+import { isConfigChangeApproval } from "@/lib/config-change-request/core";
 
 export async function assertApprovalExecutionAuthority(approval: ApprovalRequest): Promise<void> {
   if (approval.status !== "approved") throw new Error("approval_not_approved");
@@ -25,6 +26,14 @@ export async function assertApprovalExecutionAuthority(approval: ApprovalRequest
       if (!agent || !(await assertPlatformOpsFromAdminCred({ orgId: agent.orgId, adminAgentId: agent.id,
         actorId: agent.id, grokBotAgentId: agent.grokBotAgentId, generation: agent.credentialGeneration,
         via: "bearer", agent })).allowed) throw new Error("platform_ops_forbidden");
+    }
+    return;
+  }
+  if (isConfigChangeApproval(approval)) {
+    // Not a gateway tool: the badge must still be current and the employee active.
+    const employee = await getEmployee(approval.employeeId, approval.orgId);
+    if (!employee || employee.orgId !== approval.orgId || employee.status !== "active") {
+      throw new Error("approval_authority_revoked");
     }
     return;
   }

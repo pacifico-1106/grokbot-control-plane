@@ -709,3 +709,42 @@ export async function listPendingT2Decisions(): Promise<ApprovalRequest[]> {
 }
 
 export { isDurableDemoApprovalsStore, getDemoApprovalsBackend };
+
+/**
+ * Approved tickets for one employee + tool, newest first (bounded).
+ * Used by config.change_request to read the applied-change ledger.
+ */
+export async function listApprovedApprovalsForEmployeeTool(
+  orgId: string,
+  employeeId: string,
+  tool: string,
+  limit = 50
+): Promise<ApprovalRequest[]> {
+  if (!orgId || !employeeId || !tool) return [];
+  const cap = Math.max(1, Math.min(200, Math.floor(limit)));
+  if (isDemoMode()) {
+    return (await demoListApprovals())
+      .filter(
+        (row) =>
+          row.orgId === orgId &&
+          row.employeeId === employeeId &&
+          row.tool === tool &&
+          row.status === "approved"
+      )
+      .sort((a, b) => String(b.resolvedAt || b.createdAt).localeCompare(String(a.resolvedAt || a.createdAt)))
+      .slice(0, cap);
+  }
+  const admin = createSupabaseAdminClient();
+  if (!admin) throw new Error("supabase_not_configured");
+  const { data, error } = await admin
+    .from("approval_requests")
+    .select("*")
+    .eq("org_id", orgId)
+    .eq("employee_id", employeeId)
+    .eq("tool", tool)
+    .eq("status", "approved")
+    .order("created_at", { ascending: false })
+    .limit(cap);
+  if (error) throw new Error("approval_ledger_unavailable");
+  return (data || []).map((r) => mapApprovalRow(r as Record<string, unknown>));
+}

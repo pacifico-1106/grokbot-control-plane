@@ -45,12 +45,8 @@ import { validateReplyPolicy } from "@/lib/gateway/reply-policy-validate";
 import { validateMailPolicy } from "@/lib/mail-policy/validate";
 import { normalizeStuckWatchPolicy } from "@/lib/stuck-watch/validate";
 import { linkAgent } from "@/lib/data/bindings";
-import { upsertOrgChannel, upsertOrgParty } from "@/lib/data/directory";
-import {
-  deleteSlackImEmployeeRoute,
-  isSlackImChannelId,
-  syncSlackImEmployeeRoute,
-} from "@/lib/data/slack-im-routes";
+import { upsertOrgParty } from "@/lib/data/directory";
+import { applyChannelClassification } from "@/lib/admin-mcp/channel-classify";
 import { normalizeAllowedAccounts } from "@/lib/employees/allowed-accounts";
 import { normalizeApproverUserIds, parseApprovalChannelId } from "@/lib/employees/approval-inbox";
 import { normalizeToolApprovalDefaults } from "@/lib/employees/approval-presets";
@@ -670,37 +666,15 @@ async function fulfillChannel(approval: ApprovalRequest, args: Record<string, un
   if (!externalId) throw new Error("external_id_required");
   const surface = String(args.surface || "slack") as ConversationSurface;
   const classification = String(args.classification || "unknown") as ChannelClassification;
-  const employeeId = String(args.employeeId || "").trim();
-  const slackTeamId = String(args.slackTeamId || "").trim();
-  const isSlackIm = surface === "slack" && isSlackImChannelId(externalId);
-  if (isSlackIm && employeeId && classification === "internal" && args.mixed !== true) {
-    const employee = await getEmployee(employeeId, approval.orgId);
-    if (!employee) throw new Error("employee_not_found");
-    if (employee.status !== "active") throw new Error("employee_not_active");
-  }
-  // Removing first makes an omitted employee fail closed even if a later
-  // classification write fails. A new route is installed only after success.
-  if (isSlackIm && (!employeeId || classification !== "internal" || args.mixed === true)) {
-    await deleteSlackImEmployeeRoute({ orgId: approval.orgId, slackChannelId: externalId });
-  }
-  const channel = await upsertOrgChannel({
+  const { channel, routeEmployeeId } = await applyChannelClassification({
     orgId: approval.orgId,
     surface,
     externalId,
     classification,
     mixed: args.mixed === true,
+    employeeId: String(args.employeeId || "").trim(),
+    slackTeamId: String(args.slackTeamId || "").trim(),
   });
-  const route = isSlackIm
-    ? await syncSlackImEmployeeRoute({
-        orgId: approval.orgId,
-        surface,
-        slackChannelId: externalId,
-        slackTeamId,
-        classification: channel.classification,
-        mixed: channel.mixed,
-        employeeId,
-      })
-    : null;
   await appendAuditEvent({
     orgId: approval.orgId,
     employeeId: null,
@@ -715,7 +689,7 @@ async function fulfillChannel(approval: ApprovalRequest, args: Record<string, un
     tool: "channels.classify",
     at: new Date().toISOString(),
     channelId: channel.id,
-    employeeId: route?.employeeId,
+    employeeId: routeEmployeeId ?? undefined,
   };
 }
 

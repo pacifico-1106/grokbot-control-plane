@@ -19,6 +19,14 @@ export function buildStaffpassWhoamiPayload(input: {
   generation?: number;
   projects?: OrgProject[];
   defaultProjectId?: string;
+  /**
+   * config.change_request (flag ON only): the human-approved Instructions
+   * overlay and the self-change rule. Omitted entirely when the flag is OFF.
+   */
+  configChange?: {
+    ruleJa: string;
+    approvedInstructions: { text: string; approvalId: string; appliedAt: string } | null;
+  } | null;
 }): Record<string, unknown> {
   const { employee, orgId, binding } = input;
   const status = binding?.status ?? "unlinked";
@@ -53,6 +61,12 @@ export function buildStaffpassWhoamiPayload(input: {
     voiceNoteJa: WHOAMI_VOICE_NOTE_JA,
     projectAccess,
     ...(resolvedProjects ? { projects: resolvedProjects } : {}),
+    ...(input.configChange
+      ? {
+          approvedInstructions: input.configChange.approvedInstructions,
+          configChangeRuleJa: input.configChange.ruleJa,
+        }
+      : {}),
     messageJa:
       status === "needs_reauth"
         ? "要再連携 — invoke は拒否されます"

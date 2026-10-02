@@ -34,6 +34,8 @@ import {
 import { isAudienceGatedTool, isSnsPublishTool, isConfirmClassTool, GATEWAY_TOOL_DEFS } from "@/lib/gateway/tools";
 import { fulfillApprovedAdmin } from "@/lib/admin-mcp/fulfill-admin";
 import { stampW2WatchIfUnfulfilled } from "@/lib/stuck-watch/w2-unfulfilled";
+import { isConfigChangeApproval } from "@/lib/config-change-request/core";
+import { fulfillConfigChangeApproval } from "@/lib/config-change-request/service";
 import type {
   ApprovalRequest,
   ConversationContext,
@@ -744,6 +746,13 @@ export async function fulfillIfApproved(
 ): Promise<ApprovalFulfillment | null> {
   if (decision !== "approved") return null;
 
+  // config.change_request: configuration, not a plan-gated gateway capability.
+  if (isConfigChangeApproval(approval)) {
+    const result = await fulfillConfigChangeApproval(approval);
+    if (result && !result.ok) await stampW2WatchIfUnfulfilled(approval);
+    return result;
+  }
+
   const tool = approval.tool || "";
   const isAdminTool = isAdminClassApproval(approval);
 
@@ -795,6 +804,9 @@ export async function fulfillIfApproved(
 }
 
 export async function fulfillApprovedInvoke(approval: ApprovalRequest): Promise<ApprovalFulfillment | null> {
+  if (approval.status === "approved" && isConfigChangeApproval(approval)) {
+    return fulfillConfigChangeApproval(approval);
+  }
   if (approval.status !== "approved" || !parseInvokeSnapshot(approval.metadata) || isAdminClassApproval(approval)) return null;
   try { return await executeApproval(approval, () => fulfillApprovedInvokeCore(approval)); }
   catch (error) {
