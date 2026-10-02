@@ -8,6 +8,13 @@ import {
   STAFFPASS_ADMIN_MCP_URL,
 } from "@/lib/mcp/admin-public";
 import { ADMIN_MCP_TOOLS, callAdminMcpTool } from "@/lib/mcp/admin-tools";
+import {
+  checkProtocolVersionHeader,
+  negotiateInitializeVersion,
+  noteUnexpectedOrigin,
+  presentToolsForList,
+  wantsSseStream,
+} from "@/lib/mcp/protocol";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -76,11 +83,19 @@ export async function OPTIONS() {
   return new NextResponse(null, { status: 204, headers: corsHeaders() });
 }
 
-export async function GET() {
+export async function GET(req: Request) {
+  if (wantsSseStream(req)) {
+    // Streamable HTTP: server either opens an SSE stream or answers 405.
+    return new NextResponse(null, {
+      status: 405,
+      headers: { ...corsHeaders(), Allow: "GET, POST, OPTIONS" },
+    });
+  }
   return NextResponse.json(serverInfo(), { headers: corsHeaders() });
 }
 
 export async function POST(req: Request) {
+  noteUnexpectedOrigin(req, "/api/mcp/admin");
   const body = (await req.json().catch(() => null)) as
     | JsonRpcRequest
     | JsonRpcRequest[]
@@ -100,13 +115,24 @@ export async function POST(req: Request) {
   if (!method) {
     return jsonRpcError(id, -32600, "Invalid Request: method required", undefined, 400);
   }
+
+  const protocolHeader = checkProtocolVersionHeader(req);
+  if (!protocolHeader.ok) {
+    return jsonRpcError(
+      id,
+      -32600,
+      protocolHeader.message,
+      { requested: protocolHeader.version },
+      400
+    );
+  }
   if (method.startsWith("notifications/")) {
     return new NextResponse(null, { status: 202, headers: corsHeaders() });
   }
 
   if (method === "initialize") {
     return jsonRpcResult(id, {
-      protocolVersion: MCP_PROTOCOL_VERSION,
+      protocolVersion: negotiateInitializeVersion(params.protocolVersion),
       capabilities: { tools: { listChanged: true } },
       serverInfo: {
         name: ADMIN_MCP_SERVER_NAME,
@@ -136,11 +162,7 @@ export async function POST(req: Request) {
 
     if (method === "tools/list") {
       return jsonRpcResult(id, {
-        tools: ADMIN_MCP_TOOLS.map((t) => ({
-          name: t.name,
-          description: t.description,
-          inputSchema: t.inputSchema,
-        })),
+        tools: presentToolsForList(ADMIN_MCP_TOOLS),
       });
     }
 

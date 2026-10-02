@@ -396,3 +396,22 @@ export function isLpWakeWebhookEnabled(): boolean {
 export function isConfigChangeRequestEnabled(): boolean {
   return parseFlag(process.env.P1_CONFIG_CHANGE_REQUEST_ENABLED);
 }
+
+/**
+ * MCP protocol version negotiation (legacy / initialize era).
+ *
+ * When ON:
+ * - initialize echoes the client's protocolVersion when it is one of
+ *   2025-11-25 / 2025-06-18 / 2025-03-26 / 2024-11-05, else answers 2025-11-25.
+ * - MCP-Protocol-Version request header: unsupported value → HTTP 400.
+ * - GET with Accept: text/event-stream → 405 (no SSE stream offered).
+ * - tools/list adds title + annotations (readOnlyHint / destructiveHint / openWorldHint)
+ *   so Cowork / ChatGPT do not treat read-only tools as writes.
+ * - Shared by /api/mcp and /api/mcp/admin.
+ *
+ * When OFF (default):
+ * - initialize always answers 2024-11-05; tools/list and GET exactly as today.
+ */
+export function isMcpProtocolNegotiationEnabled(): boolean {
+  return parseFlag(process.env.MCP_PROTOCOL_NEGOTIATION_ENABLED);
+}
