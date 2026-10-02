@@ -132,7 +132,7 @@ COMMENT ON TABLE public.lp_orders IS
 
 -- order_revisions: immutable order snapshots
 CREATE TABLE IF NOT EXISTS public.lp_order_revisions (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  id uuid NOT NULL DEFAULT gen_random_uuid() UNIQUE,
   order_id uuid NOT NULL REFERENCES public.lp_orders(id),
   tenant_id uuid NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001'::uuid,
   revision int NOT NULL,
@@ -151,10 +151,6 @@ CREATE TABLE IF NOT EXISTS public.lp_order_revisions (
   PRIMARY KEY (order_id, revision),
   CONSTRAINT lp_order_revisions_snapshot_size CHECK (pg_column_size(snapshot) <= 32768)
 );
-
--- Remove the duplicate primary key (using composite key)
-ALTER TABLE public.lp_order_revisions DROP CONSTRAINT IF EXISTS lp_order_revisions_pkey;
-ALTER TABLE public.lp_order_revisions ADD PRIMARY KEY (order_id, revision);
 
 COMMENT ON TABLE public.lp_order_revisions IS 
   'Immutable order revision snapshots. Never UPDATE/DELETE after acceptance.';
