@@ -5,7 +5,7 @@
  * Guest journeys use signed HttpOnly cookies (not Supabase anon login).
  */
 
-import { createHash, randomBytes, createHmac } from "node:crypto";
+import { createHash, randomBytes, createHmac, timingSafeEqual } from "node:crypto";
 import { createSupabaseAdminClient } from "@/lib/supabase";
 import { isLpChatEnabled } from "@/lib/feature-flags";
 
@@ -62,8 +62,9 @@ export function signToken(token: string): string {
 }
 
 export function verifySignature(token: string, signature: string): boolean {
-  const expected = signToken(token);
-  return expected === signature;
+  const expected = Buffer.from(signToken(token), "utf8");
+  const actual = Buffer.from(signature, "utf8");
+  return expected.length === actual.length && timingSafeEqual(expected, actual);
 }
 
 export function generateCsrfToken(): string {
@@ -272,6 +273,10 @@ export function formatGuestCookieValue(token: string): string {
   return `${token}.${signature}`;
 }
 
+/**
+ * Full Set-Cookie header string. For `cookies().set(name, value, opts)` use
+ * formatGuestCookieValue() instead: that API takes the bare value only.
+ */
 export function formatGuestCookie(token: string, options?: { maxAgeSeconds?: number }): string {
   const value = formatGuestCookieValue(token);
   const maxAge = options?.maxAgeSeconds ?? 86400; // 24 hours
