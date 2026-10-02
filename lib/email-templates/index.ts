@@ -1,10 +1,8 @@
+import { resolveAppOrigin } from "@/lib/app-url";
 import { renderStubHtml } from "@/lib/resend";
 
 function appBaseUrl(): string {
-  return (
-    process.env.NEXT_PUBLIC_APP_URL?.trim().replace(/\/$/, "") ||
-    "https://staffpass.sealith.com"
-  );
+  return resolveAppOrigin();
 }
 
 function dashboardCta(label: string): string {

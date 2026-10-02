@@ -46,7 +46,14 @@ export default async function LoginPage({
           initialError={sp.error}
           sessionNotice={sessionNotice}
         />
-        <p className="mt-4 text-xs faint">
+        {!demo ? (
+          <p className="mt-4 text-xs faint">
+            <Link href="/auth/forgot" className="underline">
+              パスワードをお忘れの方・初期パスワード未設定の方
+            </Link>
+          </p>
+        ) : null}
+        <p className="mt-2 text-xs faint">
           アカウント未作成の方は{" "}
           <Link href="/signup" className="underline">
             トライアル登録
