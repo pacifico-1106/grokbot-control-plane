@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { resolveEmployeeCredential } from "@/lib/auth/employee-credential";
+import { maybeLogUnauthInitialize } from "@/lib/mcp/unauth-init-log";
 import {
   callStaffpassMcpTool,
   MCP_PROTOCOL_VERSION,
@@ -123,6 +124,7 @@ export async function POST(req: Request) {
   }
 
   if (method === "initialize") {
+    maybeLogUnauthInitialize(req, params);
     return jsonRpcResult(id, {
       protocolVersion: MCP_PROTOCOL_VERSION,
       capabilities: {
