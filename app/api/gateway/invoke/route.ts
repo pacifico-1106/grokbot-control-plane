@@ -10,8 +10,11 @@ export const runtime = "nodejs";
 
 /**
  * Fail-closed tool invoke (P0 contract).
- * Prefers Bearer gb_emp_… / x-staffpass-credential when present;
- * falls back to x-employee-id / body.employeeId for legacy Bot wiring.
+ * Requires a 社員証 secret: Bearer gb_emp_… or x-staffpass-credential.
+ * x-employee-id / body.employeeId are NOT identity on their own (anyone can
+ * send them); when present alongside a credential they must match it.
+ * Server-side callers (remote MCP, stuck-watch retry, approvals fulfill) call
+ * runGatewayInvoke directly after their own auth and never go through HTTP.
  * Enforcement lives in lib/gateway/invoke (shared with remote MCP).
  */
 export async function POST(req: Request) {
@@ -19,50 +22,60 @@ export async function POST(req: Request) {
   const headerId = (req.headers.get("x-employee-id") || "").trim() || undefined;
   const bodyId = (body.employeeId || "").trim() || undefined;
 
-  const hasSecret = Boolean(extractEmployeeSecret(req));
-  let employeeId = bodyId || headerId || "";
-  let credentialId: string | null = null;
+  if (!extractEmployeeSecret(req)) {
+    return NextResponse.json(
+      {
+        ok: false,
+        code: "credential_required",
+        error: "credential_required",
+        message:
+          "社員証（Authorization: Bearer gb_emp_… または x-staffpass-credential）が必要です。x-employee-id だけでは実行できません (fail-closed)",
+      },
+      {
+        status: 401,
+        headers: { "WWW-Authenticate": 'Bearer realm="staffpass-gateway"' },
+      }
+    );
+  }
 
-  if (hasSecret) {
-    const auth = await resolveEmployeeCredential(req);
-    if (!auth.ok) {
-      return NextResponse.json(
-        {
-          ok: false,
-          code: auth.code,
-          error: auth.code,
-          message: auth.message,
-        },
-        { status: auth.httpStatus }
-      );
-    }
-    employeeId = auth.credential.employeeId;
-    credentialId = auth.credential.credentialId;
-    // Reject explicit mismatch with badge identity (fail-closed).
-    if (bodyId && bodyId !== employeeId) {
-      return NextResponse.json(
-        {
-          ok: false,
-          code: "employee_mismatch",
-          error: "employee_mismatch",
-          message:
-            "body.employeeId does not match Bearer credential employee (fail-closed)",
-        },
-        { status: 403 }
-      );
-    }
-    if (headerId && headerId !== employeeId) {
-      return NextResponse.json(
-        {
-          ok: false,
-          code: "employee_mismatch",
-          error: "employee_mismatch",
-          message:
-            "x-employee-id does not match Bearer credential employee (fail-closed)",
-        },
-        { status: 403 }
-      );
-    }
+  const auth = await resolveEmployeeCredential(req);
+  if (!auth.ok) {
+    return NextResponse.json(
+      {
+        ok: false,
+        code: auth.code,
+        error: auth.code,
+        message: auth.message,
+      },
+      { status: auth.httpStatus }
+    );
+  }
+  const employeeId = auth.credential.employeeId;
+  const credentialId = auth.credential.credentialId;
+  // Reject explicit mismatch with badge identity (fail-closed).
+  if (bodyId && bodyId !== employeeId) {
+    return NextResponse.json(
+      {
+        ok: false,
+        code: "employee_mismatch",
+        error: "employee_mismatch",
+        message:
+          "body.employeeId does not match Bearer credential employee (fail-closed)",
+      },
+      { status: 403 }
+    );
+  }
+  if (headerId && headerId !== employeeId) {
+    return NextResponse.json(
+      {
+        ok: false,
+        code: "employee_mismatch",
+        error: "employee_mismatch",
+        message:
+          "x-employee-id does not match Bearer credential employee (fail-closed)",
+      },
+      { status: 403 }
+    );
   }
 
   const result = await runGatewayInvoke({

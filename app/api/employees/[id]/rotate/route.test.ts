@@ -139,7 +139,7 @@ test("admin with hire_issue_credentials rotates and audit carries only a hash pr
   expect(res.status).toBe(200);
   const body = await res.json();
   expect(body.ok).toBe(true);
-  expect(String(body.credential.oneTimeSecret)).toStartWith("gb_emp_");
+  expect(String(body.credential.oneTimeSecret).startsWith("gb_emp_")).toBe(true);
   expect(rotateCalls.length).toBe(1);
 
   const rotated = auditRows.filter((r) => r.action === "credential.rotated");

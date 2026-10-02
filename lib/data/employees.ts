@@ -66,7 +66,7 @@ export async function getEmployee(
 
 /**
  * Admin lookup by primary key (no org filter).
- * Used by Gateway Bot invokes that have x-employee-id but no browser session org.
+ * Used by Gateway invokes authenticated by 社員証 (no browser session org).
  */
 export async function getEmployeeById(id: string): Promise<Employee | null> {
   if (isDemoMode()) {
