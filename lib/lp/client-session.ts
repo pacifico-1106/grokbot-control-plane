@@ -10,7 +10,7 @@ export const LP_CSRF_COOKIE = "lp_csrf";
 export const LP_CSRF_HEADER = "x-csrf-token";
 
 /** Version string recorded with the guest's privacy consent. Bump when /legal/privacy changes. */
-export const LP_PRIVACY_VERSION = "2026-09";
+export const LP_PRIVACY_VERSION = "2026-10";
 
 export function readCsrfCookie(cookieString: string): string | null {
   for (const part of cookieString.split(";")) {
