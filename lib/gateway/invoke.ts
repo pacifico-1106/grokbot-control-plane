@@ -10,7 +10,7 @@ import { sendApprovalNotifications } from "@/lib/notify/channels";
 import { getCurrentOrgId } from "@/lib/auth/session";
 import {
   assertExecutable,
-  appendAuditEvent,
+  appendAuditEvent as appendAuditEventBase,
   createApproval,
   getActionCounts,
   getApprovalById,
@@ -514,6 +514,12 @@ export type RunGatewayInvokeInput = {
   body: GatewayInvokeRequest;
   /** Optional credential id from Bearer resolution */
   credentialId?: string | null;
+  /**
+   * MCP OAuth (PR-7): when the caller authenticated with an OAuth access token,
+   * every audit row of this invoke carries authMethod/oauthGrantId/oauthClientHost.
+   * gb_emp_ callers leave this unset → audit rows unchanged.
+   */
+  oauth?: { grantId: string; clientHost: string } | null;
 };
 
 /**
@@ -524,6 +530,11 @@ export type RunGatewayInvokeInput = {
 export async function runGatewayInvoke(
   input: RunGatewayInvokeInput
 ): Promise<GatewayInvokeResult> {
+  const oauthMeta = input.oauth
+    ? { authMethod: "oauth", oauthGrantId: input.oauth.grantId, oauthClientHost: input.oauth.clientHost }
+    : null;
+  const appendAuditEvent: typeof appendAuditEventBase = (event) =>
+    appendAuditEventBase(oauthMeta ? { ...event, metadata: { ...(event.metadata ?? {}), ...oauthMeta } } : event);
   const body = input.body;
   const employeeId = (input.employeeId || "").trim();
 

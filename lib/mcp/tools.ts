@@ -576,10 +576,15 @@ export async function callStaffpassMcpTool(
         fileAttachment: resolveFileAttachment(args, payload),
       };
 
+      const oauthCred = cred as { authMethod?: string; oauthGrantId?: string; oauthClientHost?: string };
       const result = await runGatewayInvoke({
         employeeId: cred.employeeId,
         body,
         credentialId: cred.credentialId,
+        oauth:
+          oauthCred.authMethod === "oauth" && oauthCred.oauthGrantId
+            ? { grantId: oauthCred.oauthGrantId, clientHost: oauthCred.oauthClientHost || "" }
+            : null,
       });
 
       // Ensure approval return pipe fields are always present on needs_approval.
