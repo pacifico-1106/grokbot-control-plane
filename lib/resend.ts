@@ -1,4 +1,5 @@
 import { Resend } from "resend";
+import { escapeHtml, sanitizeEmailSubject } from "@/lib/html-escape";
 
 export type EmailTemplate =
   | "welcome"
@@ -45,16 +46,17 @@ export async function sendTransactionalEmail(input: SendEmailInput): Promise<{
   stub?: boolean;
   error?: string;
 }> {
+  const subject = sanitizeEmailSubject(input.subject);
   const resend = getResend();
   if (!resend) {
-    console.info("[resend:stub]", input.template, input.to, input.subject);
+    console.info("[resend:stub]", input.template, input.to, subject);
     return { ok: true, id: `stub_${Date.now()}`, stub: true };
   }
 
   const { data, error } = await resend.emails.send({
     from: getEmailFrom(),
     to: input.to,
-    subject: input.subject,
+    subject,
     html: input.html,
     text: input.text,
     tags: input.tags,
@@ -66,11 +68,15 @@ export async function sendTransactionalEmail(input: SendEmailInput): Promise<{
   return { ok: true, id: data?.id };
 }
 
+/**
+ * Wrap an email body. `title` is plain text and is escaped here; `body` is
+ * trusted HTML — callers must escape every user-controlled value in it.
+ */
 export function renderStubHtml(title: string, body: string): string {
   return `<!DOCTYPE html><html lang="ja"><body style="font-family:sans-serif;color:#111;background:#fafafa;padding:24px">
   <div style="max-width:560px;margin:0 auto;background:#fff;border:1px solid #e5e5e5;border-radius:12px;padding:24px">
     <p style="margin:0 0 8px;font-size:12px;color:#737373">AI社員 for Grok Bot</p>
-    <h1 style="margin:0 0 16px;font-size:20px;font-weight:600">${title}</h1>
+    <h1 style="margin:0 0 16px;font-size:20px;font-weight:600">${escapeHtml(title)}</h1>
     <div style="font-size:14px;line-height:1.6;color:#404040">${body}</div>
   </div>
 </body></html>`;

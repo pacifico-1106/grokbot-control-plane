@@ -27,6 +27,10 @@ export default async function AppSectionLayout({
     redirect("/login?next=/app&reason=session");
   }
 
+  if (result.status === "no_membership") {
+    redirect("/auth/no-access");
+  }
+
   if (result.status === "needs_schema") {
     redirect("/onboarding?reason=schema");
   }

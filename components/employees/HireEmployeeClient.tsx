@@ -28,6 +28,7 @@ import {
 } from "@/lib/employees/policy-draft";
 import { sanitizePurposes } from "@/lib/employees/purposes";
 import { DEFAULT_SPEND_LIMITS } from "@/lib/spend-gate";
+import { CREDENTIAL_ADMIN_REQUIRED_MESSAGE_JA } from "@/lib/team/rbac";
 import { evaluateSod, isComboSodWarn, sodNeedsOperatorAck } from "@/lib/employees/sod";
 import { defaultVoice, normalizeVoice } from "@/lib/employees/voice";
 import { defaultProjectAccess, normalizeProjectAccess } from "@/lib/employees/project-access";
@@ -68,11 +69,14 @@ export function HireEmployeeClient({
   projects = [],
   sodWarnPolicy = null,
   notificationChannels = [],
+  canIssue = true,
 }: {
   members?: OrgMember[];
   projects?: OrgProject[];
   sodWarnPolicy?: SodWarnPolicy | null;
   notificationChannels?: NotificationChannel[];
+  /** owner/admin + hire_issue_credentials (server is authoritative). */
+  canIssue?: boolean;
 }) {
   const [step, setStep] = useState<Step>("describe");
   const [managerId, setManagerId] = useState<string | null>(null);
@@ -199,6 +203,10 @@ export function HireEmployeeClient({
   }
 
   async function issueCredential() {
+    if (!canIssue) {
+      setError(CREDENTIAL_ADMIN_REQUIRED_MESSAGE_JA);
+      return;
+    }
     if (!displayName.trim() || !roleLabel.trim() || !scopes.length) {
       setError("名前・職務・できることは必須です");
       return;
@@ -264,6 +272,10 @@ export function HireEmployeeClient({
 
   async function issueSplitDrafts() {
     if (drafts.length < 2) return;
+    if (!canIssue) {
+      setError(CREDENTIAL_ADMIN_REQUIRED_MESSAGE_JA);
+      return;
+    }
     setLoading(true);
     setError("");
     try {
@@ -363,6 +375,16 @@ export function HireEmployeeClient({
         ))}
       </ol>
 
+      {!canIssue ? (
+        <p
+          role="note"
+          data-testid="issue-credential-blocked"
+          className="rounded-lg border border-[color-mix(in_oklab,var(--warn)_45%,var(--border))] bg-[var(--bg-soft)] px-3 py-2 text-sm"
+        >
+          {CREDENTIAL_ADMIN_REQUIRED_MESSAGE_JA} 案の作成と確認はできますが、社員証の発行ボタンは使えません。
+        </p>
+      ) : null}
+
       {error ? (
         <p className="rounded-lg border border-[color-mix(in_oklab,var(--danger)_40%,var(--border))] bg-[var(--bg-soft)] px-3 py-2 text-sm text-[var(--danger)]">
           {error}
@@ -439,10 +461,13 @@ export function HireEmployeeClient({
                 <button
                   type="button"
                   className="btn btn-primary text-xs shrink-0"
-                  disabled={loading}
+                  disabled={loading || !canIssue}
+                  title={canIssue ? undefined : CREDENTIAL_ADMIN_REQUIRED_MESSAGE_JA}
                   onClick={() => void issueSplitDrafts()}
                 >
-                  {loading ? "発行中…" : `${drafts.length}人の社員として雇う（推奨）`}
+                  {!canIssue
+                    ? "発行はオーナー／管理者のみ"
+                    : loading ? "発行中…" : `${drafts.length}人の社員として雇う（推奨）`}
                 </button>
               </div>
               <div className="mt-3 grid sm:grid-cols-2 gap-2">
@@ -915,10 +940,11 @@ export function HireEmployeeClient({
             <button
               type="button"
               className="btn btn-primary text-sm w-full sm:w-auto"
-              disabled={loading}
+              disabled={loading || !canIssue}
+              title={canIssue ? undefined : CREDENTIAL_ADMIN_REQUIRED_MESSAGE_JA}
               onClick={() => void issueCredential()}
             >
-              {loading ? "発行中…" : "確認して社員証を発行"}
+              {!canIssue ? "発行はオーナー／管理者のみ" : loading ? "発行中…" : "確認して社員証を発行"}
             </button>
           </div>
         </section>

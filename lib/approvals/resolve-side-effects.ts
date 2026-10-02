@@ -1,4 +1,5 @@
 import { sendApprovalNotification } from "@/lib/email";
+import { escapeHtml } from "@/lib/html-escape";
 import { sendTransactionalEmail, renderStubHtml } from "@/lib/resend";
 import { updateApprovalNotificationMessages } from "@/lib/notify/channels";
 import type { ApprovalRequest, Employee } from "@/lib/types";
@@ -111,7 +112,7 @@ export async function runApprovalResolveSideEffects(opts: {
         text: machineBody,
         html: renderStubHtml(
           `承認結果: ${statusLabel}`,
-          `<pre style="white-space:pre-wrap;font-size:12px">${machineBody}</pre>`
+          `<pre style="white-space:pre-wrap;font-size:12px">${escapeHtml(machineBody)}</pre>`
         ),
         tags: [
           { name: "template", value: "approval_resolved_machine" },

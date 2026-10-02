@@ -3,13 +3,16 @@ import { AppShell } from "@/components/AppShell";
 import { AdminMcpConnect } from "@/components/AdminMcpConnect";
 import { OpsDocLocationForm } from "@/components/OpsDocLocationForm";
 import { PlanGuidance } from "@/components/PlanGuidance";
-import { getCurrentOrgId } from "@/lib/auth/session";
+import { getSessionContext } from "@/lib/auth/session";
+import { canIssueEmployeeCredentials } from "@/lib/team/rbac";
 import { getOrgAdminAgent } from "@/lib/data";
 
 export const dynamic = "force-dynamic";
 
 export default async function GettingStartedPage() {
-  const orgId = await getCurrentOrgId();
+  const session = await getSessionContext();
+  const orgId = session.orgId;
+  const canIssue = session.demo || canIssueEmployeeCredentials(session.member);
   const adminAgent = await getOrgAdminAgent(orgId);
   const connected = adminAgent?.status === "linked" && Boolean(adminAgent.grokBotAgentId);
   return (
@@ -23,7 +26,7 @@ export default async function GettingStartedPage() {
           <p className="mt-2 text-sm muted leading-relaxed">会社名とメールで Staffpass に入ります。</p>
         </section>
 
-        <AdminMcpConnect connected={connected} grokBotAgentId={adminAgent?.grokBotAgentId ?? null} />
+        <AdminMcpConnect connected={connected} grokBotAgentId={adminAgent?.grokBotAgentId ?? null} canIssue={canIssue} />
 
         <section className="surface p-5 space-y-3" id="process-source">
           <p className="text-xs faint font-mono">STEP 03</p>
