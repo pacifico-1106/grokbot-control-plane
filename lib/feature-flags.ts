@@ -415,3 +415,37 @@ export function isConfigChangeRequestEnabled(): boolean {
 export function isMcpProtocolNegotiationEnabled(): boolean {
   return parseFlag(process.env.MCP_PROTOCOL_NEGOTIATION_ENABLED);
 }
+
+/**
+ * MCP OAuth 2.1 Authorization Server + Resource Server (design 2026-10-03).
+ *
+ * When ON (and not DEMO mode):
+ * - /.well-known/oauth-protected-resource[/api/mcp] and
+ *   /.well-known/oauth-authorization-server answer JSON.
+ * - /oauth/authorize, /oauth/consent, /api/oauth/{consent,token,revoke} are live.
+ * - /api/mcp accepts sp_at_ access tokens (bound to one AI employee by a tenant admin)
+ *   next to the unchanged gb_emp_ Bearer path; 401s carry WWW-Authenticate.
+ *
+ * When OFF (default): all of the above 404 / rejected; /api/mcp exactly as today.
+ */
+export function isMcpOAuthFlagOn(): boolean {
+  return parseFlag(process.env.MCP_OAUTH_ENABLED);
+}
+
+/** Dynamic Client Registration (RFC 7591; deprecated in MCP 2026-07-28). Default OFF. Needs MCP_OAUTH_ENABLED too. */
+export function isMcpOAuthDcrFlagOn(): boolean {
+  return parseFlag(process.env.MCP_OAUTH_DCR_ENABLED);
+}
+
+/**
+ * Escape hatch (Q4): keep unauthenticated initialize / ping / notifications at 200/202
+ * even when OAuth is ON. Default OFF (Claude only starts sign-in on a 401).
+ */
+export function isMcpOAuthLegacyUnauthInitialize(): boolean {
+  return parseFlag(process.env.MCP_OAUTH_LEGACY_UNAUTH_INITIALIZE);
+}
+
+/** Q2 hook: require MFA (aal2) for OAuth consent. Default OFF (no MFA yet). */
+export function isMcpOAuthConsentMfaRequired(): boolean {
+  return parseFlag(process.env.MCP_OAUTH_CONSENT_REQUIRE_MFA);
+}
