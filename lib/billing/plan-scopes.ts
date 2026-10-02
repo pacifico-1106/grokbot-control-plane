@@ -179,6 +179,8 @@ export const PLAN_ADMIN_SCOPES: Record<PlanKey, readonly AdminMcpToolName[]> = {
     "stuckWatch.list",
     "stuckWatch.inspect",
     "approvalRoutes.get",
+    "channelScope.get",
+    "channelScope.listMemberships",
     "orgs.status",
     "employeeIdentity.status",
     // Org management (always_human)
@@ -216,6 +218,8 @@ export const PLAN_ADMIN_SCOPES: Record<PlanKey, readonly AdminMcpToolName[]> = {
     "stuckWatch.list",
     "stuckWatch.inspect",
     "approvalRoutes.get",
+    "channelScope.get",
+    "channelScope.listMemberships",
     "orgs.status",
     "employeeIdentity.status",
     "orgs.patch",
@@ -230,6 +234,7 @@ export const PLAN_ADMIN_SCOPES: Record<PlanKey, readonly AdminMcpToolName[]> = {
     "mailPolicy.patch",
     "internalAudienceRule.patch",
     "approvalRoutes.patch",
+    "channelScope.patch",
   ],
   executive: [
     // All proper scopes
@@ -261,6 +266,8 @@ export const PLAN_ADMIN_SCOPES: Record<PlanKey, readonly AdminMcpToolName[]> = {
     "stuckWatch.list",
     "stuckWatch.inspect",
     "approvalRoutes.get",
+    "channelScope.get",
+    "channelScope.listMemberships",
     "orgs.status",
     "employeeIdentity.status",
     "orgs.patch",
@@ -274,6 +281,7 @@ export const PLAN_ADMIN_SCOPES: Record<PlanKey, readonly AdminMcpToolName[]> = {
     "mailPolicy.patch",
     "internalAudienceRule.patch",
     "approvalRoutes.patch",
+    "channelScope.patch",
     // Executive additions: advanced operations
     "ingressHandoff.patch",
     "stuckWatch.patch",
@@ -306,6 +314,7 @@ export const READ_ONLY_ADMIN_TOOLS: readonly AdminMcpToolName[] = [
   "stuckWatch.list",
   "stuckWatch.inspect",
   "approvalRoutes.get",
+  "channelScope.get",
   "orgs.status",
   "employeeIdentity.status",
 ];

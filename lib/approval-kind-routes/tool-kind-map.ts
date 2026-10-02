@@ -51,6 +51,8 @@ const _toolKindMap: Record<string, ApprovalKind> = {
   "employeeIdentity.upsert": "account",
   "employeeIdentity.bindMailbox": "account",
   "approvalRoutes.patch": "account",
+  "channelScope.patch": "account",
+  "channelScope.reconcile": "account",
 
   // Decision kind: decision workflow
   "decision.request": "decision",
@@ -95,6 +97,7 @@ export function getToolApprovalKind(tool: string | null | undefined): ApprovalKi
     "internalAudienceRule.",
     "approvalWorkflow.",
     "approvalRoutes.",
+    "channelScope.",
     "ingressHandoff.",
     "schedulingPolicy.",
     "replyPolicy.",

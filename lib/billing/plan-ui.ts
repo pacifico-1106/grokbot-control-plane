@@ -28,6 +28,7 @@ export type UiFeature =
   | "team_roles"
   | "policy_editor"
   | "approval_routes"
+  | "channel_scope"
   | "external_sharing"
   | "browser_automation"
   | "commerce"
@@ -41,6 +42,7 @@ export type UiFeature =
 const UI_FEATURE_MIN_PLAN: Partial<Record<UiFeature, PlanKey>> = {
   policy_editor: "proper",
   approval_routes: "proper",
+  channel_scope: "proper",
   audit_export: "executive",
   external_sharing: "executive",
   browser_automation: "executive",

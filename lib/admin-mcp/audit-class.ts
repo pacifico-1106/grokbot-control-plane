@@ -58,6 +58,7 @@ export const ADMIN_TOOL_AUDIT_ACTION: Record<string, AdminAuditAction> = {
   "approvals.proxyResolve": "admin.proxy_approve",
   "employeeIdentity.upsert": "admin.policy",
   "employeeIdentity.bindMailbox": "admin.policy",
+  "channelScope.patch": "admin.policy",
 };
 
 /** Operational / employee-badge class — never lead the dashboard change log. */
