@@ -1,5 +1,11 @@
 import { NextResponse } from "next/server";
-import { resolveEmployeeCredential } from "@/lib/auth/employee-credential";
+import { isMcpOAuthLegacyUnauthInitialize } from "@/lib/feature-flags";
+import { isMcpOAuthEnabled } from "@/lib/mcp-oauth/config";
+import {
+  hasAnyMcpCredential,
+  resolveMcpCredential,
+  wwwAuthenticate,
+} from "@/lib/mcp-oauth/resource-server";
 import {
   callStaffpassMcpTool,
   MCP_PROTOCOL_VERSION,
@@ -35,7 +41,9 @@ function corsHeaders(): HeadersInit {
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
     "Access-Control-Allow-Headers":
       "Authorization, Content-Type, Accept, Mcp-Session-Id, x-staffpass-credential",
-    "Access-Control-Expose-Headers": "Mcp-Session-Id",
+    "Access-Control-Expose-Headers": isMcpOAuthEnabled()
+      ? "Mcp-Session-Id, WWW-Authenticate"
+      : "Mcp-Session-Id",
     "Cache-Control": "no-store",
   };
 }
@@ -52,7 +60,8 @@ function jsonRpcError(
   code: number,
   message: string,
   data?: unknown,
-  httpStatus = 200
+  httpStatus = 200,
+  extraHeaders?: Record<string, string>
 ) {
   return NextResponse.json(
     {
@@ -60,7 +69,7 @@ function jsonRpcError(
       id: id ?? null,
       error: { code, message, data },
     },
-    { status: httpStatus, headers: corsHeaders() }
+    { status: httpStatus, headers: { ...corsHeaders(), ...(extraHeaders ?? {}) } }
   );
 }
 
@@ -143,6 +152,23 @@ export async function POST(req: Request) {
     );
   }
 
+  // OAuth ON: every unauthenticated request gets 401 + WWW-Authenticate so
+  // Claude / ChatGPT start the sign-in flow (they ignore challenges on 200).
+  if (isMcpOAuthEnabled() && !hasAnyMcpCredential(req)) {
+    const lifecycle =
+      method === "initialize" || method === "ping" || method.startsWith("notifications/");
+    if (!(lifecycle && isMcpOAuthLegacyUnauthInitialize())) {
+      return jsonRpcError(
+        id,
+        -32001,
+        "Authentication required (OAuth 2.1 or Authorization: Bearer gb_emp_…)",
+        { code: "missing_credential" },
+        401,
+        { "WWW-Authenticate": wwwAuthenticate() }
+      );
+    }
+  }
+
   // Notifications (no response body required by JSON-RPC; return 202 empty ack)
   if (method.startsWith("notifications/")) {
     return new NextResponse(null, { status: 202, headers: corsHeaders() });
@@ -172,14 +198,23 @@ export async function POST(req: Request) {
 
   // tools/* require employee badge
   if (method === "tools/list" || method === "tools/call") {
-    const auth = await resolveEmployeeCredential(req);
+    const auth = await resolveMcpCredential(req);
     if (!auth.ok) {
+      const challenge =
+        isMcpOAuthEnabled() && auth.httpStatus === 401
+          ? {
+              "WWW-Authenticate": wwwAuthenticate(
+                hasAnyMcpCredential(req) ? { error: "invalid_token", description: auth.code } : {}
+              ),
+            }
+          : undefined;
       return jsonRpcError(
         id,
         -32001,
         auth.message,
         { code: auth.code },
-        auth.httpStatus
+        auth.httpStatus,
+        challenge
       );
     }
 
