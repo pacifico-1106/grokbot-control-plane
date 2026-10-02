@@ -383,6 +383,13 @@ export function ChatLauncher({
                   送信
                 </button>
               </form>
+              {/* Chat text goes to the OpenAI API (see /legal/privacy 第5項); contact details belong in the handoff/consult forms. */}
+              <p className="px-3 pb-2 -mt-1 text-xs leading-snug faint" data-testid="lp-chat-pii-note">
+                個人情報（氏名・連絡先など）は入力しないでください。
+                <Link href="/legal/privacy" target="_blank" className="underline">
+                  プライバシーポリシー
+                </Link>
+              </p>
             </>
           )}
           {error && (

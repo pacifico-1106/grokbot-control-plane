@@ -30,7 +30,8 @@ export default function PrivacyPage() {
 
       <LegalArticle title="5. 委託先・外部サービス">
         <p>当社は、利用目的の達成に必要な範囲で、次の種類の事業者へ情報処理を委託または連携します。</p>
-        <ul><li><strong>ホスティング:</strong> Vercel等</li><li><strong>データベース・認証:</strong> Supabase</li><li><strong>決済:</strong> Stripe</li><li><strong>メール配信:</strong> Resend</li><li><strong>通知:</strong> 契約者が設定したTelegram、LINE等</li><li><strong>AI・業務連携:</strong> 契約者が選択または接続するGrok Bot、Googleその他のサービス</li></ul>
+        <ul><li><strong>ホスティング:</strong> Vercel等</li><li><strong>データベース・認証:</strong> Supabase</li><li><strong>決済:</strong> Stripe</li><li><strong>メール配信:</strong> Resend</li><li><strong>通知:</strong> 契約者が設定したTelegram、LINE等</li><li><strong>AI相談:</strong> OpenAI（LPのAI相談の回答生成）</li><li><strong>AI・業務連携:</strong> 契約者が選択または接続するGrok Bot、Googleその他のサービス</li></ul>
+        <p>LPのAI相談でチャット欄に入力された文章は、回答を作るためにOpenAIのAPIに送信します。お問い合わせフォームや相談依頼で入力いただく連絡先は、OpenAIには送信しません。チャット欄には、氏名や連絡先などの個人情報を入力しないでください。</p>
         <p>当社は、委託先の選定、契約、アクセス制御その他必要かつ適切な監督を行います。利用する事業者は、機能追加や提供条件の変更に伴い更新される場合があります。</p>
       </LegalArticle>
 
