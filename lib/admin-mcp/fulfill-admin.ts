@@ -73,6 +73,7 @@ import {
 } from "@/lib/approval-workflow/telegram-binding-verification";
 import { getNotificationChannelSecretsById } from "@/lib/data/notification-channels";
 import type { PlatformOpsActor } from "@/lib/admin/platform-ops-gate";
+import { fulfillSpamAccountsAction } from "@/lib/spam/admin-tool";
 import {
   createCardSetupSession,
   buildCardSetupMouthResponse,
@@ -1836,6 +1837,13 @@ async function fulfillApprovedAdminCore(
       case "employeeIdentity.bindMailbox":
         fulfillment = await fulfillEmployeeIdentityBindMailbox(approval, args);
         break;
+      case "accounts.suspend":
+      case "accounts.unsuspend":
+      case "accounts.delete": {
+        const spam = await fulfillSpamAccountsAction(approval, args);
+        fulfillment = { ok: spam.ok, tool, at: spam.at, error: spam.error, summaryJa: spam.summaryJa };
+        break;
+      }
       default:
         fulfillment = { ok: false, tool, at, error: "unknown_admin_tool" };
     }

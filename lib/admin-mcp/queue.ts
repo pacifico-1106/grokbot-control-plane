@@ -41,6 +41,9 @@ const TOOL_TITLE_JA: Record<string, string> = {
   "approvalWorkflow.unbindVoter": "承認者バインディング取り消し",
   "orgs.create": "テナント作成（プラットフォーム運用）",
   "orgs.issueAdminCredential": "管理MCP認証発行（プラットフォーム運用）",
+  "accounts.suspend": "スパム疑いアカウントの停止（プラットフォーム運用）",
+  "accounts.unsuspend": "アカウント停止の解除（プラットフォーム運用）",
+  "accounts.delete": "スパムアカウントの削除・不可逆（プラットフォーム運用）",
 };
 
 export type AdminQueueResult = {

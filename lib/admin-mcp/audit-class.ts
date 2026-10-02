@@ -27,6 +27,10 @@ export const ADMIN_AUDIT_ACTIONS = [
   "admin.billing",
   "admin.external_contract_card",
   "admin.portal",
+  "admin.spam_scan",
+  "admin.spam_suspend",
+  "admin.spam_unsuspend",
+  "admin.spam_delete",
 ] as const;
 
 export type AdminAuditAction = (typeof ADMIN_AUDIT_ACTIONS)[number];
@@ -58,6 +62,10 @@ export const ADMIN_TOOL_AUDIT_ACTION: Record<string, AdminAuditAction> = {
   "approvals.proxyResolve": "admin.proxy_approve",
   "employeeIdentity.upsert": "admin.policy",
   "employeeIdentity.bindMailbox": "admin.policy",
+  "spam.scan": "admin.spam_scan",
+  "accounts.suspend": "admin.spam_suspend",
+  "accounts.unsuspend": "admin.spam_unsuspend",
+  "accounts.delete": "admin.spam_delete",
 };
 
 /** Operational / employee-badge class — never lead the dashboard change log. */

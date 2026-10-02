@@ -121,6 +121,7 @@ import {
   type VoterBindingProvider,
 } from "@/lib/approval-workflow/voter-binding";
 import { getOrgOwnerIds } from "@/lib/data/members";
+import { handleSpamAdminTool, isSpamAdminTool, spamFeatureGate } from "@/lib/spam/admin-tool";
 
 export const ADMIN_MCP_TOOLS: McpToolDef[] = [
   {
@@ -1237,6 +1238,72 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
       additionalProperties: false,
     },
   },
+  {
+    name: "spam.scan",
+    description:
+      "Platform ops only, read-only (no approval). Score recent org signups for spam (default 30 days, max 180). Returns masked candidates (score >= 70) and watch list (40-69); never full emails. Requires SPAM_ADMIN_TOOLS_ENABLED and PLATFORM_OPS_ORG_ID caller.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        days: { type: "number", description: "Lookback window in days (1-180, default 30)" },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "accounts.suspend",
+    description:
+      "Platform ops only. always_human, approvalClass admin. Suspend spam tenant accounts: ban Auth users (876000h) then disable org memberships, with ledger + audit. dryRun defaults to true and returns a plan + previewHash; dryRun:false with the matching previewHash creates the approval ticket. Only users in SPAM_ACCOUNTS_APPROVER_USER_IDS can approve; plan is re-checked at fulfill. Refuses platform ops org, billing/Stripe orgs, orgs with AI employees, users in other orgs. Requires SPAM_ADMIN_TOOLS_ENABLED.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        orgIds: { type: "array", items: { type: "string" }, description: "Target org UUIDs (1-50)" },
+        reason: { type: "string", description: "Reason (4-500 chars)" },
+        dryRun: { type: "boolean", description: "Default true. false = create approval ticket" },
+        previewHash: { type: "string", description: "previewHash from the dryRun (required when dryRun:false)" },
+        jobId: { type: "string" },
+        approvalId: { type: "string", description: "Re-invoke with approved ticket ID" },
+      },
+      required: ["orgIds", "reason"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "accounts.unsuspend",
+    description:
+      "Platform ops only. always_human, approvalClass admin. Undo accounts.suspend: unban Auth users and re-activate disabled memberships. Requires a suspend record in the ledger. dryRun default true; dryRun:false needs previewHash. Only SPAM_ACCOUNTS_APPROVER_USER_IDS can approve. Requires SPAM_ADMIN_TOOLS_ENABLED.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        orgIds: { type: "array", items: { type: "string" } },
+        reason: { type: "string" },
+        dryRun: { type: "boolean" },
+        previewHash: { type: "string" },
+        jobId: { type: "string" },
+        approvalId: { type: "string", description: "Re-invoke with approved ticket ID" },
+      },
+      required: ["orgIds", "reason"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "accounts.delete",
+    description:
+      "Platform ops only. always_human, approvalClass admin. IRREVERSIBLE: delete spam orgs (cascade) and their Auth users. Only allowed when the latest ledger action is suspend and is at least 7 days old, every user is still banned and every membership disabled. dryRun default true; dryRun:false needs previewHash. Only SPAM_ACCOUNTS_APPROVER_USER_IDS can approve. Requires SPAM_ADMIN_TOOLS_ENABLED.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        orgIds: { type: "array", items: { type: "string" } },
+        reason: { type: "string" },
+        dryRun: { type: "boolean" },
+        previewHash: { type: "string" },
+        jobId: { type: "string" },
+        approvalId: { type: "string", description: "Re-invoke with approved ticket ID" },
+      },
+      required: ["orgIds", "reason"],
+      additionalProperties: false,
+    },
+  },
 ];
 
 /**
@@ -1271,6 +1338,7 @@ const ADMIN_READ_ONLY_TOOLS_SET = new Set<string>([
   "orgs.patch",
   "approvals.proxyResolve",
   "employeeIdentity.status",
+  "spam.scan",
 ]);
 
 /**
@@ -2025,9 +2093,25 @@ export async function callAdminMcpTool(
     const gate = await assertPlatformOpsFromAdminCred(cred);
     if (!gate.allowed) return toolResult({ ok: false, code: gate.code, message: gate.message }, true);
   }
+  // Spam sweep tools: flag gate first (default OFF), then platform-ops gate.
+  let spamActor: Awaited<ReturnType<typeof assertPlatformOpsFromAdminCred>> | null = null;
+  if (isSpamAdminTool(name)) {
+    const off = spamFeatureGate();
+    if (off) return toolResult(off.data, true);
+    spamActor = await assertPlatformOpsFromAdminCred(cred);
+    if (!spamActor.allowed) return toolResult({ ok: false, code: spamActor.code, message: spamActor.message }, true);
+  }
   const approvalId = extractApprovalId(args);
   if (approvalId && name !== "approvals.proxyResolve" && isAdminMutationTool(name)) {
     return handleAdminApprovalReinvoke(name, approvalId, cred);
+  }
+  if (isSpamAdminTool(name) && spamActor?.allowed) {
+    try {
+      const out = await handleSpamAdminTool(name, args, cred, spamActor.actor);
+      return toolResult(out.data, out.isError);
+    } catch (err) {
+      return toolResult({ ok: false, code: "spam_tool_failed", message: err instanceof Error ? err.message : "spam_tool_failed" }, true);
+    }
   }
 
   if (name === "policy.patch" || name === "link") {
