@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { notFound, redirect } from "next/navigation";
 import { BrandMark } from "@/components/BrandMark";
 import { isMcpOAuthEnabled } from "@/lib/mcp-oauth/config";
-import { defaultConsentDeps, loadConsentView, type ConsentView } from "@/lib/mcp-oauth/consent";
+import { LOOPBACK_WARNING_JA, defaultConsentDeps, loadConsentView, type ConsentView } from "@/lib/mcp-oauth/consent";
 
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "AI クライアント接続の許可 | Staffpass", robots: { index: false, follow: false } };
@@ -69,11 +69,10 @@ export default async function OAuthConsentPage({ searchParams }: { searchParams:
             )}
           </p>
           <p className="mt-1 text-3xl font-bold tracking-tight">{v.client.redirectHost}</p>
-          {v.client.loopback ? (
-            <p className="mt-2 text-sm font-semibold">
-              ⚠ この接続はあなたの PC 上のアプリに渡されます。自分で始めた操作でなければ拒否してください。
-            </p>
-          ) : null}
+          <p className="mt-2 text-sm font-semibold" role="alert">
+            {v.client.loopback ? `${LOOPBACK_WARNING_JA} ` : ""}
+            {v.startedYourselfWarningJa}
+          </p>
         </section>
 
         <section className="mt-6">

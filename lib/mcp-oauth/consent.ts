@@ -18,6 +18,7 @@ import {
   isOrgAllowedForOAuth,
   oauthStateSecret,
 } from "@/lib/mcp-oauth/config";
+import { ridBindingCookieName, verifyRidBinding } from "@/lib/mcp-oauth/browser-binding";
 import { mintConsentCsrf, verifyConsentCsrf } from "@/lib/mcp-oauth/csrf";
 import type { CurrentCredential } from "@/lib/mcp-oauth/employee-state";
 import { buildClientRedirect } from "@/lib/mcp-oauth/http";
@@ -60,6 +61,8 @@ export type ConsentDeps = {
   notify: (input: ConsentNotifyInput) => Promise<void>;
   rateLimit: (bucket: string, limit: number, windowSec: number) => Promise<RateDecision>;
   stateSecret: () => string | null;
+  /** Request cookie lookup (rid browser binding, hardening 2). */
+  getCookie: (name: string) => Promise<string | null>;
   now: () => Date;
 };
 
@@ -90,6 +93,8 @@ export type ConsentView = {
     loopback: boolean;
   };
   employees: ConsentEmployeeOption[];
+  /** Always shown, for every client (hardening 2). */
+  startedYourselfWarningJa: string;
   /** null → may consent; otherwise the reason (shown, buttons disabled except deny). */
   blockedReason: null | "role" | "org_not_allowed" | "login_too_old" | "mfa_required" | "no_employees";
 };
@@ -101,6 +106,18 @@ export type ConsentViewOutcome =
 
 function page(status: number, error: string, messageJa: string): ConsentPage {
   return { type: "page", status, error, messageJa };
+}
+
+export const STARTED_YOURSELF_WARNING_JA =
+  "⚠ この接続を自分で開始した場合（このブラウザで AI クライアントから始めた操作）だけ許可してください。他の人から送られてきたリンクなら拒否してください。";
+export const LOOPBACK_WARNING_JA = "この接続はあなたの PC 上のアプリに渡されます。";
+
+const NOT_BOUND_PAGE = (): ConsentPage =>
+  page(403, "access_denied", "この接続リクエストは、このブラウザで開始されたものではありません。接続したい AI クライアントから、このブラウザでやり直してください。");
+
+async function browserBound(deps: ConsentDeps, secret: string, rid: string): Promise<boolean> {
+  if (!rid || rid.length > 128) return false;
+  return verifyRidBinding(secret, rid, await deps.getCookie(ridBindingCookieName(rid)));
 }
 
 function clientHostOf(clientId: string): string {
@@ -173,6 +190,7 @@ export async function loadConsentView(rid: string, deps: ConsentDeps): Promise<C
 
   const r = await usableAuthRequest(deps, rid);
   if (!r.ok) return r.out;
+  if (!(await browserBound(deps, secret, rid))) return NOT_BOUND_PAGE();
   const now = deps.now();
 
   const employees = await eligibleEmployees(deps, session.orgId);
@@ -201,6 +219,7 @@ export async function loadConsentView(rid: string, deps: ConsentDeps): Promise<C
         loopback: isLoopbackRedirect(r.req.redirectUri),
       },
       employees,
+      startedYourselfWarningJa: STARTED_YOURSELF_WARNING_JA,
       blockedReason,
     },
   };
@@ -233,6 +252,7 @@ export async function processConsentDecision(
 
   const r = await usableAuthRequest(deps, input.rid);
   if (!r.ok) return r.out;
+  if (!(await browserBound(deps, secret, input.rid))) return NOT_BOUND_PAGE();
   const { req, client } = r;
   const clientHost = clientHostOf(client.clientId);
   const actorEmail = session.email || session.member.email;
@@ -376,6 +396,10 @@ export async function defaultConsentDeps(): Promise<ConsentDeps> {
     notify: notify.notifyOAuthConnected,
     rateLimit: (b, l, w) => rateLimit(b, l, w),
     stateSecret: oauthStateSecret,
+    getCookie: async (name) => {
+      const { cookies } = await import("next/headers");
+      return (await cookies()).get(name)?.value ?? null;
+    },
     now: () => new Date(),
   };
 }

@@ -58,16 +58,28 @@ export function protectedResourceMetadataUrl(): string {
 
 /**
  * Org allowlist for consent + token use (pilot safety valve).
- * Empty = every org. Q5 pilot: set to the TOKYO307 org id only.
+ * Q5 pilot: set to the TOKYO307 org id only.
  */
 export function oauthOrgAllowlist(): string[] {
   return csv(process.env.MCP_OAUTH_ORG_ALLOWLIST);
 }
 
+/**
+ * MCP_OAUTH_ORG_ALLOWLIST_REQUIRED (default true): an empty / missing allowlist
+ * denies EVERY org (fail closed if the env var is dropped during the pilot).
+ * Only an explicit "0" / "false" / "off" / "disabled" opens OAuth to all orgs
+ * when the list is empty. A non-empty list always applies.
+ */
+export function isOrgAllowlistRequired(): boolean {
+  const v = (process.env.MCP_OAUTH_ORG_ALLOWLIST_REQUIRED || "").trim().toLowerCase();
+  return !(v === "0" || v === "false" || v === "off" || v === "disabled");
+}
+
 export function isOrgAllowedForOAuth(orgId: string | null | undefined): boolean {
   if (!orgId) return false;
   const list = oauthOrgAllowlist();
-  return list.length === 0 || list.includes(orgId);
+  if (list.length === 0) return !isOrgAllowlistRequired();
+  return list.includes(orgId);
 }
 
 export const DEFAULT_CIMD_ALLOWED_HOSTS = ["chatgpt.com", "claude.ai", "claude.com", "anthropic.com"];

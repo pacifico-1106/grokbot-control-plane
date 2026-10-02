@@ -148,6 +148,8 @@ export async function resolveCimdClient(clientId: string, deps: CimdDeps = {}): 
     metadataExpiresAt: new Date(now.getTime() + ttl * 1000).toISOString(),
     status: "active",
     createdIpHash: null,
-  });
+  }, { preserveStatus: true });
+  // A block applied while we were fetching wins (hardening 3).
+  if (client.status !== "active") return { ok: false, error: "invalid_metadata" };
   return { ok: true, client, cached: false };
 }

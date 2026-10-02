@@ -1,5 +1,6 @@
 import { isMcpOAuthEnabled } from "@/lib/mcp-oauth/config";
 import { defaultConsentDeps, processConsentDecision } from "@/lib/mcp-oauth/consent";
+import { ridBindingClearCookie } from "@/lib/mcp-oauth/browser-binding";
 import { isSameOriginBrowserPost, oauthErrorPage, redirect303 } from "@/lib/mcp-oauth/http";
 
 export const runtime = "nodejs";
@@ -33,5 +34,6 @@ export async function POST(req: Request) {
     await defaultConsentDeps()
   );
   if (out.type === "page") return oauthErrorPage(out.status, out.error, out.messageJa);
-  return redirect303(out.location);
+  // rid is consumed → drop its browser-binding cookie.
+  return redirect303(out.location, { "Set-Cookie": ridBindingClearCookie(str("rid")) });
 }

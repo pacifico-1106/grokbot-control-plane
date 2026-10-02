@@ -458,6 +458,7 @@ export type AuditAction =
   | "oauth.token_issued"
   | "oauth.code_reuse_detected"
   | "oauth.refresh_reuse_detected"
+  | "oauth.refresh_replay_in_grace"
   | "tool.invoke"
   | "approval.requested"
   | "approval.resolved"

@@ -92,7 +92,15 @@ export type ConsumeResult<T> =
   | { ok: false; reason: "not_found" | "expired" | "already_consumed"; record?: T };
 
 export interface OAuthStore {
-  upsertClient(rec: Omit<OAuthClientRecord, "createdAt" | "lastUsedAt"> & { createdAt?: string }): Promise<OAuthClientRecord>;
+  /**
+   * Insert or update a client. `preserveStatus` (CIMD metadata refresh): on
+   * conflict the existing `status` is kept, so a block applied concurrently is
+   * never reverted; `rec.status` is used only for a fresh insert.
+   */
+  upsertClient(
+    rec: Omit<OAuthClientRecord, "createdAt" | "lastUsedAt"> & { createdAt?: string },
+    opts?: { preserveStatus?: boolean }
+  ): Promise<OAuthClientRecord>;
   getClient(clientId: string): Promise<OAuthClientRecord | null>;
   touchClient(clientId: string, at: string): Promise<void>;
   countDcrClientsSince(sinceIso: string, ipHash?: string | null): Promise<number>;
@@ -110,6 +118,8 @@ export interface OAuthStore {
   touchGrant(id: string, at: string): Promise<void>;
 
   createCode(rec: Omit<OAuthCodeRecord, "consumedAt">): Promise<void>;
+  /** Non-consuming read (token endpoint validates client/redirect/PKCE before consuming). */
+  getCode(codeHash: string): Promise<OAuthCodeRecord | null>;
   consumeCode(codeHash: string, nowIso: string): Promise<ConsumeResult<OAuthCodeRecord>>;
 
   createAccessToken(rec: Omit<OAuthAccessTokenRecord, "revokedAt">): Promise<void>;
@@ -146,10 +156,11 @@ export function createMemoryOAuthStore(): OAuthStore {
   const clone = <T>(v: T): T => structuredClone(v);
 
   return {
-    async upsertClient(rec) {
+    async upsertClient(rec, opts) {
       const prev = clients.get(rec.clientId);
       const next: OAuthClientRecord = {
         ...rec,
+        status: opts?.preserveStatus && prev ? prev.status : rec.status,
         createdAt: prev?.createdAt ?? rec.createdAt ?? new Date().toISOString(),
         lastUsedAt: prev?.lastUsedAt ?? null,
       };
@@ -247,6 +258,10 @@ export function createMemoryOAuthStore(): OAuthStore {
 
     async createCode(rec) {
       codes.set(rec.codeHash, { ...rec, consumedAt: null });
+    },
+    async getCode(hash) {
+      const c = codes.get(hash);
+      return c ? clone(c) : null;
     },
     async consumeCode(hash, now) {
       const c = codes.get(hash);
@@ -438,7 +453,29 @@ export function createSupabaseOAuthStore(): OAuthStore {
   }
 
   return {
-    async upsertClient(rec) {
+    async upsertClient(rec, opts) {
+      if (opts?.preserveStatus) {
+        // Insert-if-absent, then metadata-only update that never touches `status`
+        // (a concurrent admin block must win over a CIMD refresh).
+        const meta = {
+          registration_type: rec.registrationType,
+          client_name: rec.clientName,
+          client_uri: rec.clientUri,
+          logo_uri: rec.logoUri,
+          redirect_uris: rec.redirectUris,
+          token_endpoint_auth_method: "none",
+          metadata: rec.metadata,
+          metadata_fetched_at: rec.metadataFetchedAt,
+          metadata_expires_at: rec.metadataExpiresAt,
+        };
+        const ins = await db()
+          .from("oauth_clients")
+          .upsert({ client_id: rec.clientId, ...meta, status: rec.status, created_ip_hash: rec.createdIpHash }, { onConflict: "client_id", ignoreDuplicates: true });
+        if (ins.error) fail("upsert_client_insert", ins.error);
+        const { data, error } = await db().from("oauth_clients").update(meta).eq("client_id", rec.clientId).select("*").single();
+        if (error || !data) fail("upsert_client_refresh", error);
+        return mapClient(data as Row);
+      }
       const { data, error } = await db()
         .from("oauth_clients")
         .upsert(
@@ -581,6 +618,10 @@ export function createSupabaseOAuthStore(): OAuthStore {
         expires_at: rec.expiresAt,
       });
       if (error) fail("create_code", error);
+    },
+    async getCode(hash) {
+      const { data } = await db().from("oauth_authorization_codes").select("*").eq("code_hash", hash).maybeSingle();
+      return data ? mapCode(data as Row) : null;
     },
     consumeCode: (hash, now) => consume("oauth_authorization_codes", "code_hash", hash, "consumed_at", now, mapCode),
 

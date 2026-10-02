@@ -16,6 +16,7 @@ import {
   OAUTH_SCOPE_EMPLOYEE,
   allowedOAuthResources,
   isMcpOAuthEnabled,
+  isMcpOAuthDcrEnabled,
   isOrgAllowedForOAuth,
   protectedResourceMetadataUrl,
 } from "@/lib/mcp-oauth/config";
@@ -92,10 +93,13 @@ export async function resolveOAuthAccessToken(raw: string, now = new Date()): Pr
   // not only consent + refresh (audit run-1 candidate rs-blocked-client-token-still-valid).
   const client = await store.getClient(grant.clientId);
   if (!client || client.status !== "active") return invalid("client blocked or unknown");
+  // DCR kill switch must cut live tokens too, like token-endpoint activeClient (hardening 1).
+  if (client.registrationType === "dcr" && !isMcpOAuthDcrEnabled()) return invalid("client registration disabled");
 
   const employee = await getEmployeeById(grant.employeeId);
-  if (!employee || employee.orgId !== grant.orgId || employee.status === "suspended") {
-    return { ok: false, code: "employee_not_found", message: "employee not found or suspended (fail-closed)", httpStatus: 401, oauthError: "invalid_token" };
+  if (!employee || employee.orgId !== grant.orgId || employee.status !== "active") {
+    // allowlist, not denylist: same rule as consent (hardening 4)
+    return { ok: false, code: "employee_not_found", message: "employee not found or not active (fail-closed)", httpStatus: 401, oauthError: "invalid_token" };
   }
   const binding = (await getBinding(grant.employeeId)) ?? null;
   if (binding?.status === "revoked") {
