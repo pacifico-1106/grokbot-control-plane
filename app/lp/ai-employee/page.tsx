@@ -7,6 +7,8 @@ import { PricingSection } from "./PricingSection";
 // Temporary: early-bird 100 slots — remove when campaign ends
 import { CampaignBanner } from "./CampaignBanner";
 import { FloatingYouTubePromo } from "./FloatingYouTubePromo";
+import { ChatLauncher } from "./ChatLauncher";
+import { isLpChatEnabled, isLpHandoffEnabled } from "@/lib/feature-flags";
 
 export const metadata: Metadata = {
   title: "AI社員 導入パック — 中小企業336万社のミカタ | Staffpass",
@@ -807,7 +809,15 @@ export default function AIEmployeeLP() {
       </footer>
 
       {/* Floating YouTube promo player */}
-      <FloatingYouTubePromo />
+      <FloatingYouTubePromo liftForChatDock={isLpChatEnabled()} />
+
+      {/* AI consultation chat: rendered only when LP_CHAT_ENABLED is ON */}
+      {isLpChatEnabled() && (
+        <ChatLauncher
+          handoffEnabled={isLpHandoffEnabled()}
+          turnstileSiteKey={process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY?.trim() || undefined}
+        />
+      )}
     </div>
   );
 }

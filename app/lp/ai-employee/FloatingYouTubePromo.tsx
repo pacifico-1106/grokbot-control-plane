@@ -9,7 +9,11 @@ const YOUTUBE_EMBED_URL = `https://www.youtube-nocookie.com/embed/${YOUTUBE_VIDE
 const YOUTUBE_WATCH_URL = `https://youtu.be/${YOUTUBE_VIDEO_ID}`;
 const THUMBNAIL_SRC = "/lp/ai-employee/youtube-ai-agents-100cho.jpg";
 
-export function FloatingYouTubePromo() {
+/**
+ * @param liftForChatDock when the LP chat is ON, phones show a fixed bottom
+ *   dock (ChatLauncher); lift the promo above it so the two never overlap.
+ */
+export function FloatingYouTubePromo({ liftForChatDock = false }: { liftForChatDock?: boolean } = {}) {
   const [collapsed, setCollapsed] = useState(false);
   const [mounted, setMounted] = useState(false);
   const [isDesktop, setIsDesktop] = useState(false);
@@ -40,10 +44,12 @@ export function FloatingYouTubePromo() {
 
   if (!mounted) return null;
 
+  const bottomClass = liftForChatDock ? "bottom-[calc(var(--lp-chat-dock-h)+1rem)]" : "bottom-4";
+
   if (collapsed) {
     return (
       <div
-        className="fixed bottom-4 right-4 z-40 sm:bottom-6 sm:right-6 animate-fade-in"
+        className={`fixed right-4 z-40 sm:bottom-6 sm:right-6 animate-fade-in ${bottomClass}`}
         role="complementary"
         aria-label="YouTube動画プロモーション"
       >
@@ -54,7 +60,7 @@ export function FloatingYouTubePromo() {
 
   return (
     <div
-      className="fixed bottom-4 right-4 z-40 sm:bottom-6 sm:right-6 animate-fade-in"
+      className={`fixed right-4 z-40 sm:bottom-6 sm:right-6 animate-fade-in ${bottomClass}`}
       role="complementary"
       aria-label="YouTube動画プロモーション"
     >

@@ -18,6 +18,8 @@
   --danger: #f87171;
   --sidebar-w: 240px;
   --radius: 14px;
+  /* LP chat dock on phones (ChatLauncher): 8px + 44px button + 8px, plus the home-indicator inset */
+  --lp-chat-dock-h: calc(3.75rem + env(safe-area-inset-bottom));
   --radius-card: 18px;
   --font-jp: "Yu Gothic", YuGothic, "Yu Gothic Medium", "Hiragino Sans",
     "Hiragino Kaku Gothic ProN", var(--font-noto-sans-jp), Meiryo, sans-serif;
