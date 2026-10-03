@@ -35,6 +35,8 @@ export const ADMIN_TOOL_AUDIT_ACTION: Record<string, AdminAuditAction> = {
   "employees.issue": "admin.hire",
   link: "admin.link",
   "policy.patch": "admin.policy",
+  "employees.allowedAccounts.add": "admin.policy",
+  "employees.allowedAccounts.remove": "admin.policy",
   "parties.upsert": "admin.parties",
   "channels.classify": "admin.channel",
   "roles.propose": "admin.role",

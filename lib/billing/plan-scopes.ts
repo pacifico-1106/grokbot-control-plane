@@ -150,6 +150,9 @@ export const PLAN_ADMIN_SCOPES: Record<PlanKey, readonly AdminMcpToolName[]> = {
   intern: [
     // Basic setup
     "employees.issue",
+    "employees.allowedAccounts.add",
+    "employees.allowedAccounts.remove",
+    "employees.allowedAccounts.list",
     "link",
     "roles.propose",
     // Approval channels (Intern includes LINE from launch)
@@ -195,6 +198,9 @@ export const PLAN_ADMIN_SCOPES: Record<PlanKey, readonly AdminMcpToolName[]> = {
   proper: [
     // All intern scopes
     "employees.issue",
+    "employees.allowedAccounts.add",
+    "employees.allowedAccounts.remove",
+    "employees.allowedAccounts.list",
     "link",
     "roles.propose",
     "setup.slackStatus",
@@ -246,6 +252,9 @@ export const PLAN_ADMIN_SCOPES: Record<PlanKey, readonly AdminMcpToolName[]> = {
   executive: [
     // All proper scopes
     "employees.issue",
+    "employees.allowedAccounts.add",
+    "employees.allowedAccounts.remove",
+    "employees.allowedAccounts.list",
     "link",
     "roles.propose",
     "setup.slackStatus",
@@ -309,6 +318,7 @@ export const PLAN_ADMIN_SCOPES: Record<PlanKey, readonly AdminMcpToolName[]> = {
  */
 export const READ_ONLY_ADMIN_TOOLS: readonly AdminMcpToolName[] = [
   "setup.slackStatus",
+  "employees.allowedAccounts.list",
   "setup.slackDmApprovalStatus",
   "dmAutoroute.list",
   "setup.lineApprovalStatus",

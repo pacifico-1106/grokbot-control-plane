@@ -90,6 +90,7 @@ const READ_ONLY_TOOLS = [
   "employeeIdentity.status",
   "setup.slackDmApprovalStatus",
   "dmAutoroute.list",
+  "employees.allowedAccounts.list",
 ];
 // No-ticket WRITE actions (registry: no approvalClass). NOT always_human: they
 // act on an existing stuck watch item and write an audit row; retry also

@@ -618,6 +618,36 @@ async function fulfillLink(approval: ApprovalRequest, args: Record<string, unkno
   };
 }
 
+/** ADMIN_MCP_ALLOWED_ACCOUNTS_TOOLS_ENABLED: human-approved allowedAccounts add/remove. */
+async function fulfillAllowedAccountsTicket(
+  approval: ApprovalRequest,
+  args: Record<string, unknown>,
+  tool: "employees.allowedAccounts.add" | "employees.allowedAccounts.remove"
+): Promise<AdminFulfillment> {
+  const { fulfillAllowedAccountsChange } = await import("@/lib/admin-mcp/allowed-accounts-tools");
+  const result = await fulfillAllowedAccountsChange(approval, tool, args);
+  const at = new Date().toISOString();
+  if (!result.ok) {
+    return {
+      ok: false,
+      tool,
+      at,
+      error: result.code,
+      nextStepJa: result.nextStepJa ? `${result.messageJa}${result.nextStepJa}` : result.messageJa,
+      ...(result.noticeJa ? { noticeJa: result.noticeJa } : {}),
+    };
+  }
+  return {
+    ok: true,
+    tool,
+    at,
+    employeeId: result.employeeId,
+    summaryJa: result.summaryJa,
+    nextStepJa: result.nextStepJa ?? "employees.allowedAccounts.list で現在の許可アカウントを確認できます。",
+    ...(result.noticeJa ? { noticeJa: result.noticeJa } : {}),
+  };
+}
+
 async function fulfillPolicy(approval: ApprovalRequest, args: Record<string, unknown>): Promise<AdminFulfillment> {
   const employeeId = String(args.employeeId || "").trim();
   const scopes = asScopes(args.scopes);
@@ -1894,6 +1924,10 @@ async function fulfillApprovedAdminCore(
         break;
       case "policy.patch":
         fulfillment = await fulfillPolicy(approval, args);
+        break;
+      case "employees.allowedAccounts.add":
+      case "employees.allowedAccounts.remove":
+        fulfillment = await fulfillAllowedAccountsTicket(approval, args, tool);
         break;
       case "parties.upsert":
         fulfillment = await fulfillParty(approval, args);

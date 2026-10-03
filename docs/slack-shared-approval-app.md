@@ -123,6 +123,8 @@
 
 - 開発用ワークスペースに自分でインストールする必要はない。テナントは `install/start` から追加する。
 - 3 を済ませるまでは、アンインストールや token の取り消しが Events では届かない（配信時に `token_revoked` / `invalid_auth` / `account_inactive` が返ったときの検知は動く）。テナントにインストールしてもらう前に 3・4 を終えること。
+- manifest を貼る前に、Slack 画面の JSON / YAML タブを貼る形式に合わせる（JSON タブに YAML を貼るとエラーになる）。
+- events 付きの manifest で作ってもよい。そのときは、フラグ ON のあとに Event Subscriptions の Request URL で **Retry** を押す。
 
 ### manifest（events なし版・最初に使う）
 
