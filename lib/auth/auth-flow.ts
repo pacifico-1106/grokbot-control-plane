@@ -107,7 +107,10 @@ export function isSameOriginRequest(
 
   const origin = headers.get("origin");
   if (origin && origin !== "null") return allowed.has(origin);
-  if (origin === "null") return false;
+  // `Origin: null` (e.g. a form POST from a page served with
+  // Referrer-Policy: no-referrer, per the Fetch spec) or a missing Origin:
+  // fall back to the browser-controlled Sec-Fetch-Site header. Cross-site and
+  // sandboxed-iframe posts carry `cross-site` / `none`, so they stay rejected.
   return headers.get("sec-fetch-site") === "same-origin";
 }
 
@@ -206,7 +209,10 @@ export function renderConfirmInterstitial(input: {
 
 export const AUTH_PAGE_HEADERS: Record<string, string> = {
   "cache-control": "no-store",
-  "referrer-policy": "no-referrer",
+  // same-origin (not no-referrer): with no-referrer, browsers send `Origin: null`
+  // on the interstitial form POST, which the CSRF guard rejected (403).
+  // Cross-site requests still get no Referer.
+  "referrer-policy": "same-origin",
   "x-frame-options": "DENY",
   "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
   "x-content-type-options": "nosniff",

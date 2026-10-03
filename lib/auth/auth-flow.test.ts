@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import {
   destinationAfterVerify,
+  AUTH_PAGE_HEADERS,
   isSameOriginRequest,
   parseEmailLinkType,
   parseTokenHash,
@@ -64,6 +65,16 @@ describe("CSRF same-origin check", () => {
     expect(isSameOriginRequest(h({ origin: "https://staffpass.sealith.com" }), url, "https://staffpass.sealith.com")).toBe(true);
     expect(isSameOriginRequest(h({ origin: "https://evil.example" }), url, "https://staffpass.sealith.com")).toBe(false);
     expect(isSameOriginRequest(h({ origin: "null" }), url, "https://staffpass.sealith.com")).toBe(false);
+  });
+  test("Origin: null falls back to Sec-Fetch-Site (no-referrer form POST)", () => {
+    expect(isSameOriginRequest(h({ origin: "null", "sec-fetch-site": "same-origin" }), url, "https://staffpass.sealith.com")).toBe(true);
+    expect(isSameOriginRequest(h({ origin: "null", "sec-fetch-site": "cross-site" }), url, "https://staffpass.sealith.com")).toBe(false);
+    expect(isSameOriginRequest(h({ origin: "null", "sec-fetch-site": "same-site" }), url, "https://staffpass.sealith.com")).toBe(false);
+    expect(isSameOriginRequest(h({ origin: "null", "sec-fetch-site": "none" }), url, "https://staffpass.sealith.com")).toBe(false);
+    expect(isSameOriginRequest(h({ origin: "https://evil.example", "sec-fetch-site": "same-origin" }), url, "https://staffpass.sealith.com")).toBe(false);
+  });
+  test("auth pages do not use no-referrer (would make Origin null)", () => {
+    expect(AUTH_PAGE_HEADERS["referrer-policy"]).toBe("same-origin");
   });
   test("missing Origin requires Sec-Fetch-Site: same-origin", () => {
     expect(isSameOriginRequest(h({}), url, "https://staffpass.sealith.com")).toBe(false);
