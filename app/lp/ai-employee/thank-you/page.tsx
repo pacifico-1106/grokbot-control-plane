@@ -61,7 +61,7 @@ export default async function ThankYouPage({
               <span className="font-semibold">{planInfo.label}</span>プラン
               <br />
               <span className="text-sm muted">
-                初期費用 {formatPrice(planInfo.setupYen)}（税抜）
+                初期費用 {formatPrice(planInfo.setupYen)}（税別）
               </span>
             </p>
           )}

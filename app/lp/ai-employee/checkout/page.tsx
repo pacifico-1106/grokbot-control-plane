@@ -227,7 +227,7 @@ function CheckoutContent() {
             <h2 className="text-sm font-semibold">初期費用（セットアップ・研修）</h2>
             <p className="mt-2 text-3xl font-bold">
               {formatPrice(checkoutInfo.setupAmountExTax)}
-              <span className="text-sm font-normal muted ml-1">（税抜）</span>
+              <span className="text-sm font-normal muted ml-1">（税別）</span>
             </p>
             <p className="mt-3 text-xs muted">
               月額 {formatPrice(checkoutInfo.monthlyAmountExTax)}/人 は別途ご契約となります。
@@ -281,7 +281,7 @@ function CheckoutContent() {
             <h2 className="text-sm font-semibold">初期費用（セットアップ・研修）</h2>
             <p className="mt-2 text-3xl font-bold">
               {formatPrice(checkoutInfo.setupAmountExTax)}
-              <span className="text-sm font-normal muted ml-1">（税抜）</span>
+              <span className="text-sm font-normal muted ml-1">（税別）</span>
             </p>
             <p className="mt-3 text-xs muted">
               月額 {formatPrice(checkoutInfo.monthlyAmountExTax)}/人 は別途ご契約となります。

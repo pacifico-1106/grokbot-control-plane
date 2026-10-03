@@ -3,17 +3,13 @@
 import { useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import type { CheckoutPlanKey } from "@/lib/stripe";
+import Link from "next/link";
 import {
   CUSTOMER_PACKS,
-  CUSTOMER_ADDONS,
   TAX_EXCLUSIVE_NOTE_JA,
   formatYenJa,
   type PackId,
 } from "@/lib/billing/packs";
-import {
-  KICKOFF_PACK_LINES,
-  KICKOFF_PACK_NOTE_JA,
-} from "@/lib/billing/skus";
 import { LegalLinks } from "@/components/LegalLinks";
 
 type Props = {
@@ -92,9 +88,6 @@ export function BillingClient({
       setBusy(null);
     }
   }
-
-  const kickoffAddon = CUSTOMER_ADDONS.find((a) => a.id === "kickoff");
-  const careAddon = CUSTOMER_ADDONS.find((a) => a.id === "care");
 
   return (
     <>
@@ -185,52 +178,20 @@ export function BillingClient({
         </div>
       </section>
 
-      <section className="surface mt-4 overflow-hidden">
-        <header className="border-b border-[var(--border)] px-4 py-4 sm:px-5">
-          <h2 className="text-base font-bold">オプション</h2>
-          <p className="mt-1 text-xs muted">必要に応じて追加できます</p>
-        </header>
-        <div className="grid gap-3 p-3 sm:p-4 lg:grid-cols-2">
-          {kickoffAddon ? (
-            <article className="rounded-2xl border border-[var(--border-soft)] bg-[var(--bg)] p-5">
-              <div className="flex items-center justify-between gap-3">
-                <h3 className="font-bold">{kickoffAddon.displayName}</h3>
-                <span className="chip text-[10px]">任意</span>
-              </div>
-              <p className="mt-3 text-2xl font-bold">
-                {formatYenJa(kickoffAddon.yen)}
-                <span className="ml-1 text-xs muted">一式</span>
-              </p>
-              <p className="mt-3 text-xs muted leading-relaxed">{kickoffAddon.description}</p>
-              <details className="mt-4 border-t border-[var(--border-soft)] pt-3">
-                <summary className="cursor-pointer text-xs font-semibold">内訳を見る</summary>
-                <ul className="mt-3 space-y-2 text-xs muted">
-                  {KICKOFF_PACK_LINES.map((line) => (
-                    <li key={line.key} className="flex justify-between gap-3">
-                      <span>{line.labelJa}</span>
-                      <span className="shrink-0">{formatYenJa(line.yen)}</span>
-                    </li>
-                  ))}
-                </ul>
-                <p className="mt-3 text-[10px] faint">{KICKOFF_PACK_NOTE_JA}</p>
-              </details>
-            </article>
-          ) : null}
-
-          {careAddon ? (
-            <article className="rounded-2xl border border-[var(--border-soft)] bg-[var(--bg)] p-5">
-              <div className="flex items-center justify-between gap-3">
-                <h3 className="font-bold">{careAddon.displayName}</h3>
-                <span className="chip text-[10px]">任意</span>
-              </div>
-              <p className="mt-3 text-2xl font-bold">
-                +{formatYenJa(careAddon.yen)}
-                <span className="ml-1 text-xs muted">/ 月</span>
-              </p>
-              <p className="mt-3 text-xs muted leading-relaxed">{careAddon.description}</p>
-            </article>
-          ) : null}
-        </div>
+      {/*
+        旧SaaS体系の任意オプション（導入キックオフ ¥300,000 一式・Care ¥80,000/月）は
+        現行の AI社員 導入パック（LP・特定商取引法に基づく表記）に存在しないため表示しない。
+        初期費用はプランごとに LP / 特商法表記に記載の金額が正。
+      */}
+      <section className="surface mt-4 p-4 sm:p-5" data-testid="billing-current-pricing-note">
+        <h2 className="text-base font-bold">初期費用・料金について</h2>
+        <p className="mt-2 text-xs muted leading-relaxed">
+          初期費用（セットアップ・研修）を含む現行の料金は、
+          <Link href="/lp/ai-employee#pricing" className="underline">料金ページ</Link>
+          および
+          <Link href="/legal/commercial-transactions" className="underline">特定商取引法に基づく表記</Link>
+          をご確認ください。
+        </p>
       </section>
 
       <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">

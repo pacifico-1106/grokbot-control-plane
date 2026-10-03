@@ -42,7 +42,7 @@ declare global {
 const TURNSTILE_SRC = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
 
 function yen(n: number | null): string {
-  return n === null ? "—" : `${n.toLocaleString("ja-JP")}円（税抜）`;
+  return n === null ? "—" : `${n.toLocaleString("ja-JP")}円（税別）`;
 }
 
 export function ChatLauncher({
