@@ -1748,6 +1748,68 @@ async function fulfillEmployeeIdentityBindMailbox(
   };
 }
 
+/** PR-4: human-approved dmAutoroute.run. Org is the approval row's org. */
+async function fulfillDmAutorouteRun(
+  approval: ApprovalRequest,
+  args: Record<string, unknown>
+): Promise<AdminFulfillment> {
+  const { executeDmAutorouteRun } = await import("@/lib/admin-mcp/slack-dm-setup");
+  const employeeId = typeof args.employeeId === "string" ? args.employeeId.trim() : "";
+  const run = await executeDmAutorouteRun(approval.orgId, employeeId);
+  if (!run.ok) throw new Error(run.code);
+  const counts = run.counts;
+  await appendAuditEvent({
+    orgId: approval.orgId,
+    employeeId: employeeId || null,
+    credentialId: null,
+    action: "admin.channel",
+    purpose: "admin.channel",
+    summary: `管理MCPから DM 自動ルートを実行（人承認 / ${run.employees.length} 名）`,
+    metadata: {
+      auditClass: ADMIN_AUDIT_CLASS,
+      event: "admin_mcp.dm_autoroute.run",
+      approvalId: approval.id,
+      employeeIds: run.employees.map((e) => e.employeeId),
+      counts,
+    },
+  });
+  return {
+    ok: true,
+    tool: "dmAutoroute.run",
+    at: new Date().toISOString(),
+    ...(employeeId ? { employeeId } : {}),
+    summaryJa: `DM 自動ルート: 作成 ${counts.created ?? 0} / 既存 ${counts.already_routed ?? 0} / スキップ ${counts.skipped ?? 0} / 失敗 ${counts.failed ?? 0}`,
+    nextStepJa: "dmAutoroute.list で各相手の結果（skipped / failed の reason）を確認してください。",
+  };
+}
+
+/** PR-4: human-approved setup.approvalDelivery.autoResolve (always_human). */
+async function fulfillApprovalDeliveryAutoResolveTicket(
+  approval: ApprovalRequest,
+  args: Record<string, unknown>
+): Promise<AdminFulfillment> {
+  const { fulfillApprovalDeliveryAutoResolve } = await import("@/lib/admin-mcp/slack-dm-setup");
+  const result = await fulfillApprovalDeliveryAutoResolve({ orgId: approval.orgId, approvalId: approval.id, args });
+  if (!result.ok) {
+    return {
+      ok: false,
+      tool: "setup.approvalDelivery.autoResolve",
+      at: new Date().toISOString(),
+      error: result.code,
+      nextStepJa: result.messageJa + (result.deepLink ? ` ${result.deepLink}` : ""),
+    };
+  }
+  return {
+    ok: true,
+    tool: "setup.approvalDelivery.autoResolve",
+    at: new Date().toISOString(),
+    channelId: result.inboxId,
+    destinationPresent: true,
+    summaryJa: "承認口の宛先を承認 DM に設定し、「設定しました」を送りました。テスト承認は不要です。",
+    nextStepJa: "最初の本物の承認依頼が実地確認です。届かない・押せないときは承認されず、管理者に通知されます。",
+  };
+}
+
 async function fulfillApprovedAdminCore(
   approval: ApprovalRequest
 ): Promise<AdminFulfillment | null> {
@@ -1819,6 +1881,12 @@ async function fulfillApprovedAdminCore(
         break;
       case "setup.lineApproval.upsert":
         fulfillment = await fulfillLineApprovalUpsert(approval, args);
+        break;
+      case "dmAutoroute.run":
+        fulfillment = await fulfillDmAutorouteRun(approval, args);
+        break;
+      case "setup.approvalDelivery.autoResolve":
+        fulfillment = await fulfillApprovalDeliveryAutoResolveTicket(approval, args);
         break;
       case "setup.lineApproval.setEmployeeInbox":
         fulfillment = await fulfillLineApprovalSetEmployeeInbox(approval, args);

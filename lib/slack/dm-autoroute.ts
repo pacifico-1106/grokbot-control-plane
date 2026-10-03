@@ -11,7 +11,11 @@
  * Trust boundary / invariants:
  * - Triggers: (1) Slack OAuth callback after a human linked the identity
  *   (HMAC state), (2) fulfillment of a human-approved parties.upsert,
- *   (3) identity revoke by an org admin. No MCP tool, no agent-callable path.
+ *   (3) identity revoke by an org admin, (4) admin MCP dmAutoroute.run
+ *   (PR-4): fulfillment of a human-approved ticket, or — only when
+ *   ADMIN_MCP_DM_AUTOROUTE_AUDIT_ONLY is ON — directly with an audit row.
+ *   dryRun (read-only preview: auth.test + users.info only) needs neither.
+ *   Not on the employee MCP (/api/mcp).
  * - Counterparts come ONLY from org_parties(kind=slack_user, audience=internal)
  *   of the same org. internalAudienceRule (team auto-internal) is NOT a source.
  * - users.info (employee token): is_stranger, team_id ≠ employee's team,
@@ -53,9 +57,15 @@ export const DM_AUTOROUTE_MAX_COUNTERPARTS = 50;
 const SLACK_ID_RE = /^[A-Z0-9]{2,32}$/i;
 const ADMIN_AUDIT_CLASS = "admin";
 
-export type DmAutorouteTrigger = "identity_linked" | "party_upserted" | "party_external" | "identity_revoked";
+export type DmAutorouteTrigger =
+  | "identity_linked"
+  | "party_upserted"
+  | "party_external"
+  | "identity_revoked"
+  | "admin_mcp";
 
-export type DmAutorouteOutcome = "created" | "already_routed" | "skipped" | "failed" | "removed";
+/** would_open: dryRun only — eligible; a real run would open the DM and install the route. */
+export type DmAutorouteOutcome = "created" | "already_routed" | "skipped" | "failed" | "removed" | "would_open";
 
 export type DmAutorouteItem = {
   counterpartSlackUserId: string;
@@ -292,14 +302,19 @@ async function processCounterpart(input: {
 /**
  * Install DM routes for one linked employee. Idempotent. Never throws.
  * `onlyCounterpart` narrows to one party (parties.upsert trigger).
+ * `dryRun` (admin MCP preview): read-only — auth.test + users.info only, no
+ * conversations.open, no ledger/route write, no audit, works with the flag OFF
+ * and never reads the migration-added columns.
  */
 export async function syncAutoDmRoutesForEmployee(input: {
   orgId: string;
   employeeId: string;
   trigger: DmAutorouteTrigger;
   onlyCounterpart?: string;
+  dryRun?: boolean;
 }): Promise<DmAutorouteResult> {
-  if (!isSlackDmAutorouteEnabled()) return { status: "flag_off", items: [] };
+  const dryRun = input.dryRun === true;
+  if (!dryRun && !isSlackDmAutorouteEnabled()) return { status: "flag_off", items: [] };
   const orgId = (input.orgId || "").trim();
   const employeeId = (input.employeeId || "").trim();
   try {
@@ -314,7 +329,7 @@ export async function syncAutoDmRoutesForEmployee(input: {
         outcome: "skipped",
         reason,
       };
-      await finish(orgId, employeeId, input.trigger, [item]);
+      if (!dryRun) await finish(orgId, employeeId, input.trigger, [item]);
       return { status: "skipped", reason, items: [item] };
     };
     if (employee.status !== "active") return skipAll("employee_not_active");
@@ -367,6 +382,10 @@ export async function syncAutoDmRoutesForEmployee(input: {
         items.push({ counterpartSlackUserId: counterpart, outcome: "skipped", reason: "limit_exceeded" });
         continue;
       }
+      if (dryRun) {
+        items.push(await previewCounterpart({ token, counterpart, employeeTeamId }));
+        continue;
+      }
       items.push(
         await processCounterpart({
           orgId,
@@ -378,12 +397,29 @@ export async function syncAutoDmRoutesForEmployee(input: {
         })
       );
     }
-    await finish(orgId, employeeId, input.trigger, items);
+    if (!dryRun) await finish(orgId, employeeId, input.trigger, items);
     return { status: "done", items };
   } catch (error) {
     console.error("slack_dm_autoroute_failed", error instanceof Error ? errorCode(error.message) : "unknown");
     return { status: "error", reason: "unexpected_error", items: [] };
   }
+}
+
+/** dryRun: the same users.info verdict, without conversations.open or any write. */
+async function previewCounterpart(input: {
+  token: string;
+  counterpart: string;
+  employeeTeamId: string;
+}): Promise<DmAutorouteItem> {
+  const base = { counterpartSlackUserId: input.counterpart };
+  const info = await slackCall(input.token, "users.info", { user: input.counterpart });
+  if (!info.ok) return { ...base, outcome: "skipped", reason: `users_info_${info.error}` };
+  const verdict = evaluateSlackCounterpart(info.data.user as Record<string, unknown>, {
+    counterpartSlackUserId: input.counterpart,
+    employeeTeamId: input.employeeTeamId,
+  });
+  if (!verdict.ok) return { ...base, outcome: "skipped", reason: verdict.reason };
+  return { ...base, outcome: "would_open", reason: "internal_party" };
 }
 
 async function removeRoutes(
