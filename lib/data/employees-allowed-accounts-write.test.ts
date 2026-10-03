@@ -121,12 +121,14 @@ describe("updateEmployeeAllowedAccounts (Supabase) is fail-closed", () => {
     } catch (error) {
       caught = error;
     }
-    expect(caught).toBeInstanceOf(Error);
+    expect(caught instanceof Error).toBe(true);
     expect((caught as { code?: string }).code).toBe("allowed_accounts_credentials_update_failed");
     expect((caught as { rolledBack?: boolean }).rolledBack).toBe(true);
     const writes = employeeUpdates();
     expect(writes.at(-1)?.values?.allowed_accounts).toEqual(PREVIOUS);
-    expect(writes.at(-1)?.filters).toContainEqual(["eq", "org_id", ORG]);
+    expect(
+      (writes.at(-1)?.filters ?? []).some((f) => JSON.stringify(f) === JSON.stringify(["eq", "org_id", ORG])),
+    ).toBe(true);
     expect(state.employeeRow.allowed_accounts).toEqual(PREVIOUS);
   });
 
