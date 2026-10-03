@@ -39,7 +39,11 @@ employee override → org policy → default（外部 draft_only）
 
 ## 承認カード
 
-to / subject / body summary / 添付あり / sendMode を表示。
+宛先（to 系の全項目） / CC / BCC / 件名 / 本文先頭 / 添付あり / sendMode を表示。
+
+- CC・BCC は、値があるときだけ宛先の直後に1行ずつ表示する（2026-10-04〜）。
+- 表示面: Web の承認一覧・代理承認パネル・MCP / poll の `summary`（全件）、Slack・Telegram のカード（1行 500 文字で打ち切り、打ち切ったときは `CC（N件）:` と件数を表示）、LINE のカード（`summary` を表示するため、先頭 500 文字に含まれる範囲）。
+- 宛先・件名の改行や制御文字は空白にまとめて表示する（偽の「BCC:」行などを作らせないため）。
 
 ## 判定の詳細（2026-10-03 hardening、厳しくなる方向のみ）
 
@@ -61,6 +65,20 @@ to / subject / body summary / 添付あり / sendMode を表示。
   - 承認時のスナップショットに `cc` / `bcc`（文字列配列）・添付の有無・`sealithTransferId` も保存し、再判定に使う（この変更より前に作られた承認は `to` 系だけで再判定）。
 - **ツール設定 `deny` は送信系ツールすべてで即拒否**: 対象は `mail.send`・`agentmail.send`・`slack.post`・`slack.post_external`・`comm.reply`・`comm.send`・`sns.publish`・`drive.share_external`（`lib/gateway/tools.ts` の `OUTBOUND_SEND_TOOL_IDS`）。`mail.send` 以外のコードは 403 `tool_denied_by_tool_setting`。
   - `deny` は保存・読み込み時に捨てられなくなった（従来は `normalizeToolApprovalDefaults` が落として always_human 扱いになっていた）。送信系以外の選択可能ツール（`calendar.confirm` など）の `deny` は、invoke では従来どおり承認強制、承認済み案件の実行は停止される。
+
+## 承認済み送信の内容固定（2026-10-04、厳しくなる方向のみ）
+
+`approvalId` 付きで mail.send を再実行するとき、**承認された内容と完全に同じ**でなければ送信しない。
+
+- 承認作成時に `metadata.mailSendPin`（`v: 1`、項目ごとの SHA-256 ダイジェストのみ。宛先や本文の平文は持たない）を保存する。
+- 固定する項目: `args` のすべてのキー（`to` / `recipient` / `email` / `cc` / `bcc` / `subject` / `title` / `body` / `text` / `message` / `content` / `from` / `replyTo` / `attachments` などを含む）、トップレベルの `email`、`conversation.email`。
+  - 値は完全一致（大文字小文字・空白も区別）。オブジェクトのキー順は問わない。配列（cc / bcc など）は順序も含めて一致が必要。`null` と未指定は同じ扱い。
+  - 本文はスナップショットの切り詰め（10万文字）に関係なく全体を照合する。
+- 項目の追加・削除・値の変更・別キーへの移し替え（`body` → `text` など）は、すべて **409 `approved_send_content_mismatch`**。応答と監査ログ（`phase: reinvoke`）には一致しなかった**項目名だけ**（`mismatchedFields`、最大50件と総数 `mismatchCount`）を残し、値は残さない。
+- メールの項目を何も含まない再実行（`tool` / `purpose` / `jobId` / `approvalId` だけ）は、「承認された内容をそのまま実行する」として許可する（新しい内容を持ち込めないため）。現在のメールポリシーでの再判定は従来どおり行う。
+- **照合情報のない承認**（この変更より前に作られた承認。#232 以前の承認を含む）は、内容が同じでも **409 `approved_send_pin_missing`**（fail-closed）。承認を取り直す。
+- 照合は現在のメールポリシーの再判定（409 `approved_send_blocked_by_policy`）より先に行う。
+- 承認ボタン・Slack / LINE / Telegram 承認・W2 再実行の fulfill は、リクエストではなく承認時のスナップショットを使うため対象外（持ち込める内容がない）。
 
 ## AC
 

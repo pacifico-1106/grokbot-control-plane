@@ -28,6 +28,9 @@ export type ApprovalArtifact = {
   informationClass?: string;
   audience?: string;
   to?: string;
+  /** mail: CC / BCC recipients as given (trimmed, empty entries dropped). */
+  cc?: string[];
+  bcc?: string[];
   subject?: string;
   datetime?: string;
   counterpart?: string;
@@ -67,6 +70,28 @@ function firstString(...values: unknown[]): string | undefined {
     if (found) return found;
   }
   return undefined;
+}
+
+/** Recipient list from a string or string[] arg (same reading as the mail policy). */
+function recipientList(value: unknown): string[] {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed ? [trimmed] : [];
+  }
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => (typeof item === "string" ? item.trim() : ""))
+      .filter(Boolean);
+  }
+  return [];
+}
+
+/**
+ * Card values are agent-supplied: collapse control characters / line breaks so
+ * a recipient or subject cannot forge extra card lines (e.g. a fake "BCC:").
+ */
+export function oneLineCardValue(value: string): string {
+  return value.replace(/[\u0000-\u001f\u007f\u2028\u2029]+/g, " ").replace(/ {2,}/g, " ").trim();
 }
 
 function argsOf(body: GatewayInvokeRequest | undefined | null): Record<string, unknown> {
@@ -135,6 +160,10 @@ export function buildApprovalArtifact(
     const to = toSources.length ? toSources.join(", ") : undefined;
     const subject = firstString(args.subject, args.title);
     if (to) artifact.to = to;
+    const cc = recipientList(args.cc);
+    const bcc = recipientList(args.bcc);
+    if (cc.length) artifact.cc = cc;
+    if (bcc.length) artifact.bcc = bcc;
     if (subject) artifact.subject = subject;
     if (mailBody) artifact.body = mailBody;
     const sendMode = firstString(args.sendMode);
@@ -206,32 +235,106 @@ export function buildApprovalArtifact(
   return artifact;
 }
 
+/** Joined, one-line CC / BCC value for the card ("" when none). */
+export function mailCardList(value: unknown): string {
+  const list = Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string")
+    : typeof value === "string"
+      ? [value]
+      : [];
+  return list.map(oneLineCardValue).filter(Boolean).join(", ");
+}
+
+function capChars(value: string, max: number): { text: string; capped: boolean } {
+  const chars = Array.from(value);
+  if (!Number.isFinite(max) || chars.length <= max) return { text: value, capped: false };
+  return { text: `${chars.slice(0, Math.max(1, max - 1)).join("")}…`, capped: true };
+}
+
+/** "CC: …" / "BCC: …" card lines; a capped line shows the total count. */
+export function formatMailCcBccLines(
+  artifact: Pick<ApprovalArtifact, "cc" | "bcc">,
+  maxChars: number = Number.POSITIVE_INFINITY
+): string[] {
+  const lines: string[] = [];
+  for (const [label, list] of [["CC", artifact.cc], ["BCC", artifact.bcc]] as const) {
+    const joined = mailCardList(list);
+    if (!joined) continue;
+    const count = Array.isArray(list)
+      ? list.filter((item) => typeof item === "string" && oneLineCardValue(item)).length
+      : 1;
+    const { text, capped } = capChars(joined, maxChars);
+    lines.push(capped ? `${label}（${count}件）: ${text}` : `${label}: ${text}`);
+  }
+  return lines;
+}
+
+/**
+ * Mail card lines (宛先 / CC / BCC / 件名 / 本文先頭 / 添付 / sendMode).
+ * The stored summary (web dashboard etc.) uses no caps. Chat cards with a
+ * message-size limit (Slack / Telegram) pass caps; a capped CC / BCC line
+ * shows the total count so the approver knows the list continues.
+ */
+export function formatMailCardLines(
+  artifact: ApprovalArtifact,
+  caps: { recipientChars?: number; subjectChars?: number } = {}
+): string[] {
+  const recipientCap = caps.recipientChars ?? Number.POSITIVE_INFINITY;
+  const subjectCap = caps.subjectChars ?? Number.POSITIVE_INFINITY;
+  const lines: string[] = [];
+  if (artifact.to) lines.push(`宛先: ${capChars(oneLineCardValue(artifact.to), recipientCap).text}`);
+  lines.push(...formatMailCcBccLines(artifact, recipientCap));
+  if (artifact.subject) lines.push(`件名: ${capChars(oneLineCardValue(artifact.subject), subjectCap).text}`);
+  if (artifact.body) {
+    const preview = artifact.body.length > 200
+      ? artifact.body.slice(0, 200) + "…"
+      : artifact.body;
+    lines.push(`本文先頭: ${preview}`);
+  }
+  if (artifact.hasAttachments) lines.push("添付: あり");
+  if (artifact.sendMode) {
+    const sendModeJa =
+      artifact.sendMode === "draft_only"
+        ? "下書きのみ"
+        : artifact.sendMode === "needs_approval"
+          ? "承認必須"
+          : artifact.sendMode === "auto"
+            ? "自動送信"
+            : artifact.sendMode;
+    lines.push(`sendMode: ${sendModeJa}`);
+  }
+  return lines;
+}
+
+/** The stored mail artifact of an approval (mail.send / mail.draft), if any. */
+export function readMailArtifact(
+  metadata: Record<string, unknown> | null | undefined
+): ApprovalArtifact | null {
+  const raw = metadata?.artifact;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const rec = raw as Record<string, unknown>;
+  if (rec.tool !== "mail.send" && rec.tool !== "mail.draft") return null;
+  const text = (value: unknown) => (typeof value === "string" ? value : undefined);
+  const list = (value: unknown) =>
+    Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : undefined;
+  return {
+    tool: rec.tool,
+    to: text(rec.to),
+    cc: list(rec.cc),
+    bcc: list(rec.bcc),
+    subject: text(rec.subject),
+    body: text(rec.body),
+    hasAttachments: rec.hasAttachments === true ? true : undefined,
+    sendMode: text(rec.sendMode),
+  };
+}
+
 export function formatArtifactLines(artifact: ApprovalArtifact): string[] {
   const lines: string[] = [];
 
-  // mail.send: put to/subject/body first for judgment material visibility
+  // mail.send: put to/cc/bcc/subject/body first for judgment material visibility
   if (artifact.tool === "mail.send" || artifact.tool === "mail.draft") {
-    if (artifact.to) lines.push(`宛先: ${artifact.to}`);
-    if (artifact.subject) lines.push(`件名: ${artifact.subject}`);
-    if (artifact.body) {
-      const preview = artifact.body.length > 200
-        ? artifact.body.slice(0, 200) + "…"
-        : artifact.body;
-      lines.push(`本文先頭: ${preview}`);
-    }
-    if (artifact.hasAttachments) lines.push("添付: あり");
-    if (artifact.sendMode) {
-      const sendModeJa =
-        artifact.sendMode === "draft_only"
-          ? "下書きのみ"
-          : artifact.sendMode === "needs_approval"
-            ? "承認必須"
-            : artifact.sendMode === "auto"
-              ? "自動送信"
-              : artifact.sendMode;
-      lines.push(`sendMode: ${sendModeJa}`);
-    }
-    return lines;
+    return formatMailCardLines(artifact);
   }
 
   if (artifact.channelId) {

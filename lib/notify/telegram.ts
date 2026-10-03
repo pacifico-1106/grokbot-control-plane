@@ -1,3 +1,8 @@
+import {
+  formatMailCcBccLines,
+  readMailArtifact,
+  type ApprovalArtifact,
+} from "@/lib/approvals/summary";
 import { getAppOrigin } from "@/lib/approvals/tokens";
 import {
   getApprovalById,
@@ -63,28 +68,11 @@ function safeArtifactUrl(approval: ApprovalRequest): string | null {
 const TELEGRAM_MESSAGE_MAX = 4096;
 const TELEGRAM_OVERFLOW_SUFFIX = "…(続きはダッシュボード)";
 
-type ApprovalArtifact = {
-  tool?: string;
-  to?: string;
-  subject?: string;
-  body?: string;
-};
+/** Per CC / BCC line cap so a long list cannot push the card over 4096 chars. */
+const TELEGRAM_RECIPIENT_LINE_MAX = 500;
 
 function extractMailArtifact(approval: ApprovalRequest): ApprovalArtifact | null {
-  const artifact = approval.metadata?.artifact;
-  if (!artifact || typeof artifact !== "object" || Array.isArray(artifact)) {
-    return null;
-  }
-  const rec = artifact as Record<string, unknown>;
-  if (rec.tool !== "mail.send" && rec.tool !== "mail.draft") {
-    return null;
-  }
-  return {
-    tool: String(rec.tool),
-    to: typeof rec.to === "string" ? rec.to : undefined,
-    subject: typeof rec.subject === "string" ? rec.subject : undefined,
-    body: typeof rec.body === "string" ? rec.body : undefined,
-  };
+  return readMailArtifact(approval.metadata);
 }
 
 function composeApprovalTelegramMessage(
@@ -107,6 +95,9 @@ function composeApprovalTelegramMessage(
     lines.push("─");
     if (mailArtifact.to) {
       lines.push(`宛先: ${escapeTelegramHtml(mailArtifact.to)}`);
+    }
+    for (const line of formatMailCcBccLines(mailArtifact, TELEGRAM_RECIPIENT_LINE_MAX)) {
+      lines.push(escapeTelegramHtml(line));
     }
     if (mailArtifact.subject) {
       lines.push(`件名: ${escapeTelegramHtml(mailArtifact.subject)}`);
