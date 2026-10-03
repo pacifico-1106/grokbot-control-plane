@@ -1,36 +1,43 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { scopedModuleMocks } from "@/tests/helpers/scoped-module-mock";
 
 type Ch = { id: string; orgId: string; provider: "slack" | "telegram" | "line"; botToken?: string };
 let channelsByOrg: Record<string, Ch[]> = {};
 let members: Array<{ orgId: string; email: string; role: string; status: string }> = [];
 const sentTexts: Array<{ channelId: string; text: string }> = [];
 
-mock.module("@/lib/data/notification-channels", () => ({
+// File-scoped (see tests/helpers/scoped-module-mock.ts): bun's mock.module is
+// process-global, so plain partial mocks here broke other files in the same
+// bun process (and other files' mocks of this module broke this one).
+const scope = scopedModuleMocks();
+await scope.mock("@/lib/data/notification-channels", {
   getEnabledNotificationChannels: async (orgId: string) => channelsByOrg[orgId] ?? [],
-}));
-mock.module("@/lib/data/members", () => ({
+});
+await scope.mock("@/lib/data/members", {
   listMembers: async () => members,
-}));
-mock.module("@/lib/data/audit", () => ({ appendAuditEvent: async () => {} }));
-mock.module("@/lib/notify/slack", () => ({
+});
+await scope.mock("@/lib/data/audit", { appendAuditEvent: async () => {} });
+await scope.mock("@/lib/notify/slack", {
   sendSlackTextToChannel: async (c: Ch, text: string) => {
     sentTexts.push({ channelId: c.id, text });
     return { ok: true };
   },
-}));
-mock.module("@/lib/notify/telegram", () => ({
+});
+await scope.mock("@/lib/notify/telegram", {
   sendTelegramTextToChannel: async (c: Ch, text: string) => {
     sentTexts.push({ channelId: c.id, text });
     return { ok: true };
   },
-}));
-mock.module("@/lib/notify/line", () => ({
+});
+await scope.mock("@/lib/notify/line", {
   sendLineText: async (c: Ch, text: string) => {
     sentTexts.push({ channelId: c.id, text });
     return { ok: true };
   },
-}));
+});
 
+// Other files' mocks of this module are scoped too, so outside those files
+// this import resolves to (or delegates to) the real implementation.
 const mod = await import("./delivery-failure-alert");
 const { alertApprovalDeliveryFailure, resetApprovalAlertThrottleForTests, setApprovalAlertDepsForTests, APPROVAL_ALERT_WINDOW_MS } = mod;
 
