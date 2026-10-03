@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { channelErrorMessage } from "@/lib/notify/channel-errors";
+import { LineApproverLinkPanel } from "@/components/settings/LineApproverLinkPanel";
 import type { NotificationChannel, NotificationProvider } from "@/lib/types";
 
 type InboxDraft = {
@@ -334,6 +335,7 @@ export function NotificationChannelsClient({ initialChannels }: { initialChannel
               {saved && draft.provider !== "telegram" ? (
                 <p className="text-[11px] faint break-all">Webhook: {saved.webhookPath}</p>
               ) : null}
+              {isLine && saved?.id && saved.enabled ? <LineApproverLinkPanel channelId={saved.id} /> : null}
               {draft.provider === "slack" ? (
                 <p className="text-[11px] faint leading-relaxed">
                   会話への書き込みは下の「チャンネルに書き込む」で設定します。同じ Bot token で構いません。
