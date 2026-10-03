@@ -19,6 +19,10 @@ const SIGNUP_ERROR_MESSAGES: Record<string, string> = {
   bot_protection_unavailable: "現在、新規登録を一時停止しています。お問い合わせフォームからご連絡ください。",
   turnstile_required: "ロボットでないことの確認を完了してください。",
   turnstile_failed: "確認に失敗しました。ページを再読み込みしてもう一度お試しください。",
+  rate_limited: "短時間に多くの登録がありました。時間をおいて再度お試しください。",
+  disposable_domain: "このメールアドレスのドメインはご利用いただけません。会社のメールアドレスをお使いください。",
+  invalid_dots: "メールアドレスの形式が正しくありません。",
+  duplicate_normalized: "このメールアドレスは既に登録されています。ログインしてください。",
 };
 
 function turnstileSiteKey(): string | null {
