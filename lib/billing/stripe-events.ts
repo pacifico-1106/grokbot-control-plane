@@ -46,8 +46,11 @@ export async function isStripeEventProcessed(
     .maybeSingle();
 
   if (error) {
+    // Fail-closed: an unknown dedupe state must not be reported as "not
+    // processed" (that could create a duplicate upgrade ticket). Throw so the
+    // webhook returns 5xx and Stripe retries.
     console.error("[stripe-events] check error", { eventId, error: error.message });
-    return false;
+    throw new Error(`stripe_processed_events_check_failed: ${error.message}`);
   }
 
   return data !== null;
@@ -88,7 +91,9 @@ export async function markStripeEventProcessed(
   );
 
   if (error) {
+    // Fail-closed: without the dedupe record a retry would re-run the handler.
     console.error("[stripe-events] mark error", { eventId, error: error.message });
+    throw new Error(`stripe_processed_events_mark_failed: ${error.message}`);
   }
 }
 
