@@ -249,4 +249,29 @@ describe("replay protection", () => {
 
     expect(candidates[0].orgId).toBe(DEMO_ORG_ID);
   });
+
+  test("rejects ids that could inject PostgREST filter syntax", async () => {
+    setDemoInteractivityChannel({
+      id: DEMO_CHANNEL_ID,
+      orgId: DEMO_ORG_ID,
+      provider: "slack",
+      config: { apiAppId: DEMO_API_APP_ID, teamId: DEMO_TEAM_ID },
+      secrets: { botToken: "xoxb-test", signingSecret: "test-secret" },
+    });
+    expect(
+      await findChannelCandidatesByAppAndTeam(`${DEMO_API_APP_ID},id.not.is.null`, DEMO_TEAM_ID)
+    ).toEqual([]);
+    expect(
+      await findChannelCandidatesByAppAndTeam(DEMO_API_APP_ID, `${DEMO_TEAM_ID})`)
+    ).toEqual([]);
+  });
+
+  test("supabase filter compares jsonb keys as text (->>), not jsonb (->)", async () => {
+    const source = await Bun.file(
+      new URL("./interactivity-channel-resolver.ts", import.meta.url)
+    ).text();
+    expect(source).not.toMatch(/config->(apiAppId|teamId|expectedTeamId)\./);
+    expect(source).toContain("config->>apiAppId.eq.");
+    expect(source).toContain("config->>teamId.eq.");
+  });
 });

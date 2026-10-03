@@ -55,11 +55,18 @@ export function resetDemoInteractivityChannels(): void {
   demoChannels.length = 0;
 }
 
+const SLACK_ID_PATTERN = /^[A-Z0-9_]{2,64}$/;
+
 export async function findChannelCandidatesByAppAndTeam(
   apiAppId: string,
   teamId: string
 ): Promise<InteractivityChannelCandidate[]> {
   if (!apiAppId?.trim() || !teamId?.trim()) {
+    return [];
+  }
+  // Values come from the (not yet signature-verified) Slack payload and are
+  // interpolated into a PostgREST filter, so only accept Slack ID characters.
+  if (!SLACK_ID_PATTERN.test(apiAppId) || !SLACK_ID_PATTERN.test(teamId)) {
     return [];
   }
 
@@ -94,8 +101,12 @@ export async function findChannelCandidatesByAppAndTeam(
     .select("id, org_id, config")
     .eq("provider", "slack")
     .eq("enabled", true)
-    .or(`config->apiAppId.eq.${apiAppId},config->apiAppId.is.null`)
-    .or(`config->teamId.eq.${teamId},config->expectedTeamId.eq.${teamId},config->teamId.is.null`);
+    // ->> (text) is required: `config->key.eq.X` compares jsonb to a bare
+    // string and fails with 22P02, which silently returned zero candidates.
+    .or(`config->>apiAppId.eq.${apiAppId},config->>apiAppId.is.null`)
+    .or(
+      `config->>teamId.eq.${teamId},config->>expectedTeamId.eq.${teamId},config->>teamId.is.null`
+    );
 
   if (channelError || !channelRows || channelRows.length === 0) {
     return [];
