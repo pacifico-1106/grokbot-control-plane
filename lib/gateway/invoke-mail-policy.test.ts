@@ -103,7 +103,11 @@ describe("mail.send: mail policy auto does not override stricter guards", () => 
       { approvalPolicy: "risk_based", toolApprovalDefaults: { "mail.send": "deny" } },
       () =>
         withAutoConsentedMailPolicy(async () => {
-          expectQueuedNotSent(await sendMail("hint_deny"));
+          // Follow-up hardening: deny is now an immediate reject (stricter than queueing).
+          const result = await sendMail("hint_deny");
+          expect(result.httpStatus).toBe(403);
+          expect(result.body.code).toBe("mail_send_denied_by_tool_setting");
+          expect((result.body.result as { sent?: boolean } | undefined)?.sent).not.toBe(true);
         })
     );
   });

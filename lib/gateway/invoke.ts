@@ -167,6 +167,20 @@ function validateMailSendArtifact(body: GatewayInvokeRequest): {
     ? (body.args as Record<string, unknown>)
     : {};
 
+  // Fail-closed: a recipient field we cannot read (array / object / number)
+  // must not be skipped in favour of the next field.
+  const unreadableRecipientFields = (["to", "recipient", "email"] as const).filter(
+    (key) => args[key] !== undefined && args[key] !== null && typeof args[key] !== "string"
+  );
+  if (unreadableRecipientFields.length > 0) {
+    return {
+      ok: false,
+      missing: [],
+      code: "mail_recipient_invalid",
+      messageJa: `宛先は文字列で指定してください（複数宛先はカンマ区切り）。不正な項目: ${unreadableRecipientFields.join(", ")}`,
+    };
+  }
+
   const to = (
     typeof args.to === "string" ? args.to :
     typeof args.recipient === "string" ? args.recipient :
@@ -1194,6 +1208,34 @@ export async function runGatewayInvoke(
   // + toolApprovalDefaults + egress / spend limits only.
   const perToolHuman = toolRequiresHumanApproval(toolDef, employee.toolApprovalDefaults);
   const toolHint = employee.toolApprovalDefaults?.[toolDef.id];
+
+  // Per-tool "deny" on mail.send is a hard stop: no approval card, no draft
+  // demotion, and a prior approval does not reopen it (fail-closed).
+  if (tool === "mail.send" && toolHint === "deny") {
+    await appendAuditEvent({
+      orgId: orgId || employee.orgId,
+      employeeId,
+      credentialId: input.credentialId || employee.credentialId,
+      action: "tool.invoke",
+      purpose,
+      summary: `${tool} をツール設定（deny）で拒否`,
+      metadata: { tool, jobId, code: "mail_send_denied_by_tool_setting", toolHint },
+    });
+    return jsonResult(
+      {
+        ok: false,
+        code: "mail_send_denied_by_tool_setting",
+        error: "mail_send_denied_by_tool_setting",
+        message: "この社員はツール設定で mail.send が禁止（deny）されています。",
+        needs_approval: false,
+        employeeId,
+        tool,
+        purpose,
+        jobId,
+      },
+      403
+    );
+  }
   const amountJpy =
     tool === "commerce.order"
       ? body.amountJpy == null
@@ -1292,6 +1334,7 @@ export async function runGatewayInvoke(
       cc: recipients.cc,
       bcc: recipients.bcc,
       hasAttachments: recipients.hasAttachments,
+      malformedRecipients: recipients.malformed,
       internalAudienceRule: internalRule,
       ingressHandoffPolicy: d1Effective.policy,
       sealithTransferId,

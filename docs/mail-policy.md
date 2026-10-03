@@ -41,6 +41,14 @@ employee override → org policy → default（外部 draft_only）
 
 to / subject / body summary / 添付あり / sendMode を表示。
 
+## 判定の詳細（2026-10-03 hardening、厳しくなる方向のみ）
+
+- **全宛先を判定**: `to` / `cc` / `bcc` の全宛先を判定する（カンマ・セミコロン区切りの複数宛先も1件ずつ分解）。宛先ごとの判定のうち最も厳しいものを採用する（拒否 > 下書き降格 > 承認 > 自動）。1件でも外部宛があればメール全体を外部扱いにし、社内宛も外部向けルールで追加判定する。
+- **宛先の形式**: `local@domain.tld` の単純な形式だけを受け付ける。ドメインが取れない宛先、表示名付き（`Name <addr>`）、空要素（末尾カンマなど）、文字列以外の `cc` / `bcc` / `to` は **拒否**（`mail_recipient_invalid`）。
+- **一致するルールがない場合**: 先頭ルールの auto は流用しない。最低でも承認必須とし、従来の先頭ルールの結果のほうが厳しい（下書き降格・拒否）ときはそちらを採用する。
+- **`requireHumanFinalSend: true`**: `sendMode: auto` でも承認必須（`requireHumanFinalSend:true` 監査ラベル）。
+- **ツール設定 `toolApprovalDefaults["mail.send"] = "deny"`**: Gateway で即拒否（403 `mail_send_denied_by_tool_setting`）。承認カード・下書き降格にはしない。
+
 ## AC
 
 | ID | 内容 |
