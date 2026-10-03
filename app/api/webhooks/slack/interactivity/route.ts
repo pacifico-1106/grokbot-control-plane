@@ -35,7 +35,7 @@ import {
   findChannelCandidatesByAppAndTeam,
   type InteractivityChannelCandidate,
 } from "@/lib/slack/interactivity-channel-resolver";
-import { isSharedApprovalAppRequest } from "@/lib/slack/shared-approval-flags";
+import { isSharedApprovalAppRequest, isSharedApprovalAppRequestWhileDisabled } from "@/lib/slack/shared-approval-flags";
 import {
   sendEphemeralRejection,
   type SlackRejectionReason,
@@ -140,6 +140,14 @@ export async function POST(req: Request) {
 
   if (!apiAppId || !teamId) {
     return ack({ ignored: true, reason: "missing_app_or_team" });
+  }
+
+  if (isSharedApprovalAppRequestWhileDisabled(apiAppId)) {
+    // Review M1: a press on a card sent before the flag was turned OFF. Verified
+    // with the shared signing secret → #236 button alert for that org; always 401.
+    const { reportSharedApprovalPressWhileDisabled } = await import("@/lib/slack/shared-approval-interactivity");
+    await reportSharedApprovalPressWhileDisabled({ apiAppId, teamId, timestamp, rawBody, signature });
+    return NextResponse.json({ ok: false, error: "shared_approval_app_disabled" }, { status: 401 });
   }
 
   let channel: InteractivityChannelCandidate;

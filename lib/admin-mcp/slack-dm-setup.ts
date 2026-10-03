@@ -46,6 +46,7 @@ import {
 import { syncAutoDmRoutesForEmployee, type DmAutorouteItem, type DmAutorouteResult } from "@/lib/slack/dm-autoroute";
 import { isSlackDmAutorouteEnabled, isSlackUserScopeImWriteEnabled } from "@/lib/slack/dm-autoroute-flags";
 import { slackAuthorizeUrlTemplate } from "@/lib/slack/slack-status-diagnose";
+import { isSharedApprovalAppEnabled } from "@/lib/slack/shared-approval-flags";
 import type { NotificationChannel } from "@/lib/types";
 
 export const SLACK_DM_SETUP_TOOLS = [
@@ -191,6 +192,21 @@ export async function diagnoseSlackDmApprovalSetup(orgId: string): Promise<Recor
   let usersReadVerified = false;
   for (const inbox of inboxes) {
     const destination = str(inbox.config?.channelId);
+    if (inbox.config?.sharedApprovalApp === true && !isSharedApprovalAppEnabled()) {
+      // Review M1: shared app inbox suspended (flag OFF) — no token read, no probe.
+      approvalInboxes.push({
+        inboxId: inbox.id,
+        label: inbox.label,
+        enabled: inbox.enabled,
+        isDefault: inbox.isDefault,
+        suspended: "shared_approval_app_flag_off",
+        destinationKind: destinationKind(destination),
+        destinationPresent: Boolean(destination),
+        allowedUserCount: allowedUsers(inbox).length,
+        sharedApprovalApp: true,
+      });
+      continue;
+    }
     const secrets = inbox.hasCredentials ? await getNotificationChannelSecretsById(orgId, inbox.id) : {};
     const probe = await probeScopes(str(secrets.botToken));
     const appId = str(inbox.config?.apiAppId) || probe.appId;
@@ -629,6 +645,13 @@ export async function fulfillApprovalDeliveryAutoResolve(input: {
   }
   const inbox = await resolveInbox(orgId, str(input.args.inboxId));
   if ("kind" in inbox) return auditFail({ ok: false, code: "inbox_not_found", messageJa: "承認口が見つかりません。" });
+  if (inbox.config?.sharedApprovalApp === true && !isSharedApprovalAppEnabled()) {
+    return auditFail({
+      ok: false,
+      code: "shared_approval_app_disabled",
+      messageJa: "共通承認アプリ（SLACK_SHARED_APPROVAL_APP_ENABLED）が OFF のため、この承認口からは送れません。",
+    });
+  }
   const secrets = await getNotificationChannelSecretsById(orgId, inbox.id);
   const botToken = str(secrets.botToken);
   const appUrl = slackAppUrl(str(inbox.config?.apiAppId));

@@ -18,3 +18,10 @@ export function isSharedApprovalAppRequest(apiAppId: string): boolean {
   const appId = process.env.SLACK_SHARED_APPROVAL_APP_ID?.trim() || "";
   return Boolean(appId) && apiAppId === appId;
 }
+
+/** api_app_id names the shared approval app while the flag is OFF (review M1: old cards). */
+export function isSharedApprovalAppRequestWhileDisabled(apiAppId: string): boolean {
+  if (isSharedApprovalAppEnabled()) return false;
+  const appId = process.env.SLACK_SHARED_APPROVAL_APP_ID?.trim() || "";
+  return Boolean(appId) && apiAppId === appId;
+}

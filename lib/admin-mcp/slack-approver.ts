@@ -23,6 +23,7 @@ import {
   isSharedApprovalAppChannelConfig,
   listNotificationChannels,
   upsertNotificationChannel,
+  type UpsertNotificationChannelInput,
 } from "@/lib/data/notification-channels";
 import { openApprovalDeliveryDm, sendApprovalSetupNotice } from "@/lib/slack/approval-dm-open";
 import {
@@ -32,6 +33,7 @@ import {
   sharedApprovalInstallStartUrl,
   sharedApprovalMessage,
 } from "@/lib/slack/shared-approval-app";
+import { SHARED_APPROVAL_CONNECTION_LOST_NEXT_STEP_JA } from "@/lib/slack/shared-approval-revoke";
 import type { NotificationChannel } from "@/lib/types";
 
 export const SLACK_APPROVER_SET_TOOL = "setup.slackApprover.set" as const;
@@ -93,10 +95,16 @@ export async function sharedApprovalAppStatus(orgId: string): Promise<{ status: 
   const approvers = inbox && Array.isArray(inbox.config.allowedUserIds) ? inbox.config.allowedUserIds.map(String) : [];
   const destination = str(inbox?.config.channelId);
   const installUrl = sharedApprovalInstallStartUrl();
+  // Decision (要判断): the stored token was deleted (uninstall / revoke / dead
+  // token at delivery) → the inbox is cut off until re-install.
+  const tokenDeleted = Boolean(inbox && !inbox.hasCredentials && str(inbox.config.secretsPurgedAt));
   if (lastInstallError && (!inbox || !inbox.enabled)) {
     nextStepsJa.push(`${SHARED_APPROVAL_APP_NAME} のインストールが拒否されました（${lastInstallError.code}）: ${lastInstallError.messageJa}`);
   }
-  if (!inbox || !inbox.enabled) {
+  if (tokenDeleted) {
+    // Steps only, no full URL (same text as the #236 alert).
+    nextStepsJa.push(SHARED_APPROVAL_CONNECTION_LOST_NEXT_STEP_JA);
+  } else if (!inbox || !inbox.enabled) {
     nextStepsJa.push(
       `${SHARED_APPROVAL_APP_NAME} を Slack に追加: この組織の owner/admin が Staffpass にログインした状態で ${installUrl} を開き、Slack で「許可する」（1 回）。` +
         (inbox && !inbox.enabled ? `（前回の承認口は ${str(inbox.config.disabledReason) || "無効"} のため止まっています）` : "")
@@ -119,6 +127,10 @@ export async function sharedApprovalAppStatus(orgId: string): Promise<{ status: 
       destinationKind: destination.startsWith("D") ? "dm" : destination ? "channel" : "none",
       setupNoticeSent: typeof inbox?.config.setupNoticeAt === "string",
       disabledReason: inbox && !inbox.enabled ? str(inbox.config.disabledReason) || null : null,
+      tokenDeleted,
+      tokenDeletedAt: tokenDeleted ? str(inbox!.config.secretsPurgedAt) || null : null,
+      tokenDeletedReason: tokenDeleted ? str(inbox!.config.secretsPurgedReason) || null : null,
+      connectionLost: tokenDeleted,
       lastInstallError,
     },
     nextStepsJa,
@@ -174,6 +186,8 @@ export async function fulfillSlackApproverSet(input: {
   orgId: string;
   approvalId: string;
   args: Record<string, unknown>;
+  /** Tests only: replace the inbox save (to prove save-before-notice / save failure). */
+  deps?: { save?: (input: UpsertNotificationChannelInput) => Promise<NotificationChannel> };
 }): Promise<SlackApproverSetFulfillment> {
   const { orgId } = input;
   const auditFail = async (result: Extract<SlackApproverSetFulfillment, { ok: false }>) => {
@@ -202,26 +216,37 @@ export async function fulfillSlackApproverSet(input: {
   if (!teamId || opened.teamId !== teamId) {
     return auditFail({ ok: false, code: "team_mismatch", messageJa: "承認アプリの Slack ワークスペースが、インストールしたワークスペースと一致しません。" });
   }
-  const notice = await sendApprovalSetupNotice(botToken, opened.channelId);
-  if (!notice.ok) return auditFail({ ok: false, code: notice.code, messageJa: notice.messageJa, ...(notice.missingScope ? { missingScope: notice.missingScope } : {}) });
+  // Review 2: save the approver FIRST; 「設定しました」 only after the save stuck.
+  const save = input.deps?.save ?? upsertNotificationChannel;
   const at = new Date().toISOString();
-  await upsertNotificationChannel({
-    id: inbox.id,
-    orgId,
-    provider: "slack",
-    label: inbox.label,
-    enabled: true,
-    isDefault: inbox.isDefault,
-    config: {
-      ...inbox.config,
-      allowedUserIds: [slackUserId],
-      channelId: opened.channelId,
-      expectedTeamId: teamId,
-      autoOpened: { userId: opened.userId, at },
-      setupNoticeAt: at,
-    },
-    secrets: {},
-  });
+  const approverConfig: Record<string, unknown> = {
+    ...inbox.config,
+    allowedUserIds: [slackUserId],
+    channelId: opened.channelId,
+    expectedTeamId: teamId,
+    autoOpened: { userId: opened.userId, at },
+  };
+  delete approverConfig.setupNoticeAt;
+  const base = { id: inbox.id, orgId, provider: "slack" as const, label: inbox.label, enabled: true, isDefault: inbox.isDefault, secrets: {} };
+  try {
+    await save({ ...base, config: approverConfig });
+  } catch {
+    return auditFail({ ok: false, code: "save_failed", messageJa: "承認者を保存できませんでした。「設定しました」は送っていません。もう一度お試しください。" });
+  }
+  const notice = await sendApprovalSetupNotice(botToken, opened.channelId);
+  if (!notice.ok) {
+    return auditFail({
+      ok: false,
+      code: notice.code,
+      messageJa: `承認者は保存しましたが、「設定しました」を送れませんでした: ${notice.messageJa}`,
+      ...(notice.missingScope ? { missingScope: notice.missingScope } : {}),
+    });
+  }
+  try {
+    await save({ ...base, config: { ...approverConfig, setupNoticeAt: new Date().toISOString() } });
+  } catch {
+    // best effort: the approver is saved; only the "notice sent" marker is missing.
+  }
   await appendAuditEvent({
     orgId,
     employeeId: null,

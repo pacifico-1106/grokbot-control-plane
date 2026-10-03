@@ -53,8 +53,10 @@
 - 共通アプリの承認口がまだ無い場合は `shared_app_not_installed`（インストール URL 付き）を返します。直前のインストールが拒否されていた場合は、その理由（例: `team_bound_to_other_org` と上の文言）をそのまま返します。
 - 承認後は、#235 の `openApprovalDeliveryDm` を共通アプリの xoxb で呼びます。users.info で次を確認し、当てはまる人は拒否します: 同じワークスペースではない、ゲスト、bot、削除済み、Slack Connect。
   - DM の team が、インストールしたときの team と一致することも確認します。
-  - 確認が通ったら「設定しました」を 1 回送り、`allowedUserIds = [U…]` と `channelId = D…` を保存します。
-  - どこかで失敗したら何も保存しません。
+  - 確認が通ったら、**先に** `allowedUserIds = [U…]` と `channelId = D…` を保存し、保存できてから「設定しました」を 1 回送ります（送れたら `setupNoticeAt` を記録）。
+  - 保存に失敗したら「設定しました」は送らず、`save_failed` を返して監査（`shared_approval_app.approver_set_failed`）に残します。
+  - 保存のあとで「設定しました」だけ送れなかったときは、承認者は保存済みのまま失敗（Slack のエラーコード）を返します。`setupNoticeSent` は false のままなので、状態の確認で分かります。
+  - DM を開く段階（users.info・team の確認）で失敗したら何も保存しません。
 - ダッシュボードの「承認を受け取る」から共通アプリの承認口を上書き保存することはできません（`shared_app_inbox_managed`）。
 
 ### ボタン（Interactivity）: `/api/webhooks/slack/interactivity`（テナント別アプリと同じ URL）
@@ -66,17 +68,22 @@
    - 別の org の承認依頼は見つからないので、承認は通りません。
 
 - 共通アプリの承認口には signing secret が無いので、テナント別アプリの検証経路では絶対に通りません。逆に、テナント別アプリの secret で署名したリクエストを共通アプリの処理に入れても 401 になります。
-- フラグが OFF のときは、共通アプリからのリクエストはテナント別の経路に流れて 401 になります（fail-closed）。
+- フラグが OFF のときは、共通アプリからのリクエストは常に 401 `shared_approval_app_disabled` です（fail-closed）。共通アプリの Signing Secret で署名が通り、team から承認口が 1 つに決まったときだけ、その org に #236 のボタンのアラート（`approval_button.failed`、理由 `shared_approval_app_disabled`、30 分の間引きあり）を出します。署名が通らない押下ではアラートを出しません。
 
 ### Events: `/api/webhooks/slack/approval-app/events`
 
 - 最初に、共通アプリの Signing Secret で署名とタイムスタンプを検証します。署名が不正、またはタイムスタンプが古い場合は 401 です。
 - `url_verification` には challenge を返します。
 - 処理するイベントは `app_uninstalled` と `tokens_revoked`（bot token が含まれるもの）だけです。それ以外のイベントは 200 を返して無視します。team が分からないときも 200 で無視します。
-- 上の 2 つを受け取ったら、team_id からその org の共通アプリの承認口を引いて **無効**にします（`disabledReason` を記録）。そのうえで管理者向けの監査（`shared_approval_app.disabled`）と、#236 のアラート（`APPROVAL_DELIVERY_FAILURE_ALERT`）を出します。
-- 続けて、その承認口の **暗号化した secrets（`botToken`）を削除**します。監査（`shared_approval_app.secrets_purged`）に残すのは `teamId`、削除した日時（`deletedAt`）、理由（`reason`）、削除したキーの名前（`deletedKeys`、例: `["botToken"]`）だけで、token の値や先頭は残しません。
-- **ほかの検知経路:** 本物の承認依頼をこの承認口に送ったとき、Slack が `token_revoked` / `invalid_auth` / `account_inactive` を返した場合も、同じように無効化して secrets を削除します（理由はその Slack のエラー名）。`channel_not_found` など、それ以外のエラーでは何も消しません。フラグが OFF のときは何もしません。
-- 同じイベントが 2 回来ても安全です。2 回目は、承認口がもう無効で secrets も無いので、何もせず監査も書きません。
+- 上の 2 つを受け取ったら、team_id からその org の共通アプリの承認口を引き、その承認口の **暗号化した secrets（`botToken`）を削除**して **無効**にします（`disabledReason` / `disabledAt`、削除したときは `secretsPurgedAt` / `secretsPurgedReason` を記録）。監査は `shared_approval_app.disabled` と `shared_approval_app.secrets_purged` です。
+- **token を削除したときは、理由や経路にかかわらず必ず #236 のアラート**（`APPROVAL_DELIVERY_FAILURE_ALERT`）を出します（`app_uninstalled` / `tokens_revoked` / 配信時の `token_revoked` / `invalid_auth` / `account_inactive`）。削除は 1 回きりなので、直前に別の配信失敗で 30 分の間引き枠が使われていても、このアラートは間引かずに出します。すでに無効だった承認口でも、token が残っていて削除したならアラートを出します。
+  - アラートの文面とメール、監査の `nextStepJa` には、次の一手として「共通承認アプリの接続が切れました。owner/admin が Staffpass にログインした状態で install/start を開き、「許可する」を押せば戻ります」を出します。完全な URL は書きません。
+  - 同じ削除が 2 回目に来たとき（もう無効で token も無く、何もしないとき）はアラートを出しません。
+- `setup.slackDmApprovalStatus` の `sharedApprovalApp` には、削除された状態として `tokenDeleted: true`、`tokenDeletedAt`、`tokenDeletedReason`、`connectionLost: true` が出ます。次の手順（`nextStepsJa`）には、上と同じ文（URL なし）を、インストール URL 付きの手順の代わりに出します。再インストールすると `tokenDeleted: false` / `connectionLost: false` に戻ります。
+- 監査（`shared_approval_app.secrets_purged`）に残すのは `teamId`、削除した日時（`deletedAt`）、理由（`reason`）、削除したキーの名前（`deletedKeys`、例: `["botToken"]`）だけで、token の値や先頭は残しません。
+- **ほかの検知経路:** 本物の承認依頼をこの承認口に送ったとき、Slack が `token_revoked` / `invalid_auth` / `account_inactive` を返した場合も、同じように無効化して secrets を削除し、アラートを出します（理由はその Slack のエラー名）。`channel_not_found` など、それ以外のエラーでは何も消しません。フラグが OFF のときは、そもそも共通アプリの token で送らないので何も消しません。
+  - 消すのは、**そのエラーを返した共通アプリの承認口の token だけ**です。同じ org にあるテナント別アプリの承認口の token には触りません。テナント別アプリの承認口が `invalid_auth` などを返しても、何も削除しません（共通アプリの印が無い承認口は削除の対象外）。
+- 同じイベントが 2 回来ても安全です。2 回目は、承認口がもう無効で secrets も無いので、何もせず、監査もアラートも書きません。
 - 消すのは、その org の、共通アプリの印（`sharedApprovalApp`）が付いた承認口の secrets だけです。別の org の secrets や、同じ org のテナント別アプリの承認口には触りません。
 - 削除のあとは、#240 の `resolveApprovalAppBotToken` も token なしとして空を返し、承認 DM もリンク DM も送られません（fail-closed）。token なしで承認口を有効に戻そうとしても、保存の時点で拒否されます。
 
@@ -149,6 +156,19 @@ settings:
 - `org_deploy_enabled: false` で、Enterprise Grid の org 全体へのインストールを出さないようにしています。コード側でも拒否します。
 - `app_uninstalled` と `tokens_revoked` には追加のスコープは要りません。
 
+### フラグを OFF にしたとき（インストール済みでも全部止まる）
+
+`SLACK_SHARED_APPROVAL_APP_ENABLED` を OFF にすると、インストール済みの共通アプリの承認口（`config.sharedApprovalApp === true`）は「停止中」になり、どの経路からも共通アプリの token では送りません。token は消さないので、ON に戻せばそのまま再開します（ロールバックのスイッチ）。テナント別アプリの承認口には影響しません。
+
+止まる経路:
+- 承認依頼の配信（`sendApprovalNotifications`）: 停止中の承認口は配信先になりません。届かなかった扱い（`shared_approval_app_disabled`）にして #236 のアラートを出します（30 分の間引きあり）。
+- データ層: 有効な通知チャンネルの一覧（`getEnabledNotificationChannels` / `listAllEnabledNotificationChannels` / webhook 照会 / `resolveEmployeeApprovalChannel`）から外します。これで、アラートの送り先の候補、stuck-watch、decision-workflow、配信アダプタ、bot token の解決（`resolveOrgSlackBotToken`）、mention-ingress、設定画面のテスト送信、カードの更新も止まります。
+- token の取り出し（`getNotificationChannelSecretsById`）: 停止中の承認口には空を返し、#236 のアラートを出します。#240 の `resolveApprovalAppBotToken`（リンク DM）、`slack-delivery-adapter`、`approval-workflow/admin`、`fulfill-admin` はここを通るので止まります。行が確かめられないときも空を返します（fail-closed）。
+- 承認 DM の自動オープン（`setup.approvalDelivery.autoResolve`）: `shared_approval_app_disabled` で止めます。
+- 承認者の設定（`setup.slackApprover.set`）: `feature_disabled` で止めます（承認者の設定は消しません）。
+- 状態の確認（`setup.slackDmApprovalStatus`）: 停止中の承認口は `suspended: "shared_approval_app_flag_off"` と出し、token を読まず Slack にも問い合わせません。
+- 古いカードのボタン: 上の「ボタン」のとおり 401 とアラートです。
+
 ## Vercel env（Production）
 
 | 名前 | 値（どこから） | 必須 |
@@ -168,6 +188,10 @@ settings:
 `supabase/migrations/20261004110000_slack_shared_approval_app.sql` の中身:
 - `public.slack_oauth_state_uses`: nonce の sha256、purpose、org_id、期限。RLS 有効・policy なし・anon と authenticated は revoke（service role だけが使える）。
 - unique index `org_notification_channels_shared_approval_team_uidx`: `(config->>'apiAppId', config->>'teamId')` の組み合わせを一意にする。対象は provider が slack で、`sharedApprovalApp` が true の行だけ。
+
+**`slack_oauth_state_uses` の掃除:** 書き込みのついでに消します。インストールの state を使うたび、insert の前に `expires_at` が 1 時間（`SLACK_OAUTH_STATE_USE_RETENTION_MS`）より前の行を消します。cron、新しい route、新しい secret は足しません。
+- 理由: インストールはまれなので、行はほとんど増えません。state 自体は署名付きで 10 分で切れ、このテーブルを見る前の検証で拒否されます。そのため、期限切れの古い行を消しても、同じ state をもう一度使えるようにはなりません。
+- 掃除に失敗しても無視します。1 回きりの判定（insert）は止めませんし、通しもしません。
 
 適用順:
 1. PR を merge して deploy する（フラグは OFF のまま）
@@ -208,7 +232,9 @@ settings:
 1. **複数の org が 1 つのワークスペースを共有する場合**（例: 同じ会社の部署ごとに org を分ける）。今は**拒否**しています（1 ワークスペース = 1 org）。DB の unique index と、他 org の承認口・会話アダプタを見る検査の両方で拒否します。認めるには、team → org の解決に別の鍵（例: チャンネルごとの紐づけ）が必要になり、ボタンの org の取り違えリスクが上がります。
 2. **Enterprise Grid:** org 全体へのインストールは拒否しています。Grid の中の 1 ワークスペースへのインストールは、`team` が返るので**許可**しています。ただし、承認者が別ワークスペースのメンバーなら DM 自動オープンで拒否されます。
 3. **「別の org に紐づいている」の判定範囲:** 他 org の Slack 承認口（有効・無効どちらも、どのアプリでも）と、Slack 会話アダプタ（App A の bot install）を見ています。社員の Slack 連携（`employee_slack_identities`）は判定に**入れていません**。ワークスペースをまたいで働く社員がいると、誤って拒否してしまうためです。厳しくするかどうか。
+   - 注意: `teamId` も `expectedTeamId` も保存されていない古い承認口（テナント別アプリを昔の手順で保存したもの）は、この判定で見つけられません。
 4. **アンインストール時の扱い（回答済み）:** 承認口を無効にし、`teamId` は残します（別の org に乗っ取られないため）。暗号化した token（secrets）は削除します（上の「アンインストール後に残すもの / 消すもの」）。
+   - 追加の回答: `invalid_auth` も削除の対象のままです。削除したときは必ず #236 のアラート（次の一手つき・URL なし）を出し、2 回目の削除（何もしないとき）では出しません。削除するのは、エラーを返した共通アプリの承認口の token だけです。
 5. **承認者の人数（回答済み）:** 今は 1 人のままです。`setup.slackApprover.set` は 1 人に**置き換え**ます（今の承認者はチケットの要約に表示）。複数人はバックログに回しました。
 6. **承認者の制限:** 承認者は、人間の社員が自分の Slack を連携した U… でも構いません。人間の社員は自分の Slack を連携するためです。bot、ゲスト、社外、別ワークスペースは拒否します。自分で自分を承認する操作は、既存の押下時の検査で止まります。
 7. **既存のテナント別アプリからの移行**（みらい社中など）は後回しです。共通アプリの承認口はデフォルトを奪わないので、移行するときはデフォルトを切り替える操作が別に必要です。

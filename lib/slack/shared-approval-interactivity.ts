@@ -60,3 +60,42 @@ export async function resolveSharedApprovalInteractivity(input: {
     },
   };
 }
+
+/**
+ * Flag OFF (review M1): a signed press on an old shared-app card. Only after the
+ * shared signing secret verifies does it resolve team → org and raise a #236
+ * button alert (throttled). Forged / unknown-team presses raise nothing.
+ */
+export async function reportSharedApprovalPressWhileDisabled(input: {
+  apiAppId: string;
+  teamId: string;
+  timestamp: string;
+  rawBody: string;
+  signature: string;
+}): Promise<{ alerted: boolean }> {
+  try {
+    const config = sharedApprovalAppConfig();
+    if (!config || input.apiAppId !== config.appId) return { alerted: false };
+    const verified = verifySlackSignature({
+      signingSecret: config.signingSecret,
+      timestamp: input.timestamp,
+      rawBody: input.rawBody,
+      signature: input.signature,
+    });
+    if (!verified) return { alerted: false };
+    const inboxes = await findSharedApprovalChannelsByTeam({ appId: config.appId, teamId: input.teamId, enabledOnly: true });
+    if (inboxes.length !== 1) return { alerted: false };
+    const { alertApprovalDeliveryFailure } = await import("@/lib/notify/delivery-failure-alert");
+    await alertApprovalDeliveryFailure({
+      orgId: inboxes[0].orgId,
+      kind: "button_failed",
+      approvalId: null,
+      provider: "slack",
+      channelId: inboxes[0].id,
+      reason: "shared_approval_app_disabled",
+    });
+    return { alerted: true };
+  } catch {
+    return { alerted: false };
+  }
+}

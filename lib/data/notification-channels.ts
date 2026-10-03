@@ -7,6 +7,7 @@ import {
 } from "@/lib/notify/crypto";
 import { createSupabaseAdminClient } from "@/lib/supabase";
 import { mapApprovalRow } from "@/lib/data/mappers";
+import { isSharedApprovalAppEnabled } from "@/lib/slack/shared-approval-flags";
 import type {
   ApprovalRequest,
   NotificationChannel,
@@ -16,6 +17,45 @@ import type {
 export type NotificationChannelRuntime = NotificationChannel & {
   secrets: Record<string, string>;
 };
+
+/**
+ * SLACK_SHARED_APPROVAL_APP_ENABLED OFF (review M1): an installed shared approval
+ * app inbox is SUSPENDED — not a runtime channel and its token is never handed
+ * out, so nothing (approval cards, DM auto-open, #240 link DMs, other
+ * notifications, bot-token fallbacks) can send with the shared xoxb. Turning the
+ * flag back ON resumes it. Per-tenant inboxes are never affected.
+ */
+export const SHARED_APPROVAL_APP_SUSPENDED_REASON = "shared_approval_app_disabled";
+
+function isSuspendedSharedInbox(row: { provider?: unknown; config?: Record<string, unknown> | null } | null | undefined): boolean {
+  return Boolean(
+    row && row.provider === "slack" && row.config && row.config.sharedApprovalApp === true && !isSharedApprovalAppEnabled()
+  );
+}
+
+/** Someone tried to use a suspended shared inbox's token → treat as a delivery failure (#236, throttled). */
+async function reportSuspendedSharedInbox(orgId: string, channelId: string): Promise<void> {
+  try {
+    const { alertApprovalDeliveryFailure } = await import("@/lib/notify/delivery-failure-alert");
+    await alertApprovalDeliveryFailure({
+      orgId,
+      kind: "delivery_failed",
+      approvalId: null,
+      provider: "slack",
+      channelId,
+      reason: SHARED_APPROVAL_APP_SUSPENDED_REASON,
+    });
+  } catch {
+    // never throws
+  }
+}
+
+/** The org's enabled shared-app inbox while it is suspended (public fields only), else null. */
+export async function findSuspendedSharedApprovalInbox(orgId: string): Promise<NotificationChannel | null> {
+  if (!orgId || isSharedApprovalAppEnabled()) return null;
+  const rows = await listNotificationChannels(orgId);
+  return rows.find((row) => row.enabled && isSuspendedSharedInbox(row)) ?? null;
+}
 
 export type UpsertNotificationChannelInput = {
   orgId: string;
@@ -154,7 +194,8 @@ async function runtimeRows(
         (!filters.orgId || row.orgId === filters.orgId) &&
         (!filters.provider || row.provider === filters.provider) &&
         (!filters.webhookRef || row.webhookRef === filters.webhookRef) &&
-        row.enabled
+        row.enabled &&
+        !isSuspendedSharedInbox(row)
     );
   }
   const admin = createSupabaseAdminClient();
@@ -169,6 +210,7 @@ async function runtimeRows(
   const result: NotificationChannelRuntime[] = [];
   for (const row of data) {
     try {
+      if (isSuspendedSharedInbox(row as { provider?: unknown; config?: Record<string, unknown> })) continue;
       const ciphertext = credentials.get(String(row.id));
       if (!ciphertext) continue;
       result.push(
@@ -216,11 +258,31 @@ export async function getNotificationChannelSecretsById(
 ): Promise<Record<string, string>> {
   if (isDemoMode()) {
     const channel = demoChannels.find((row) => row.id === channelId && row.orgId === orgId);
+    if (isSuspendedSharedInbox(channel)) {
+      await reportSuspendedSharedInbox(orgId, channelId);
+      return {};
+    }
     return channel?.secrets || {};
   }
 
   const admin = createSupabaseAdminClient();
   if (!admin) return {};
+
+  if (!isSharedApprovalAppEnabled()) {
+    // Flag OFF: never hand out a shared-app token (review M1). Fail closed when
+    // the row cannot be checked.
+    const { data: row, error: rowError } = await admin
+      .from("org_notification_channels")
+      .select("provider,config")
+      .eq("org_id", orgId)
+      .eq("id", channelId)
+      .maybeSingle();
+    if (rowError) return {};
+    if (isSuspendedSharedInbox(row as { provider?: unknown; config?: Record<string, unknown> } | null)) {
+      await reportSuspendedSharedInbox(orgId, channelId);
+      return {};
+    }
+  }
 
   const { data } = await admin
     .from("org_notification_channel_secrets")
@@ -835,8 +897,10 @@ export async function findSharedApprovalChannelsByTeam(input: {
     String(row.config.apiAppId || "") === app &&
     String(row.config.teamId || "") === team &&
     (!input.enabledOnly || row.enabled);
+  // Flag OFF: rows are returned without secrets (callers only need the org binding).
+  const suspended = !isSharedApprovalAppEnabled();
   if (isDemoMode()) {
-    return demoChannels.filter(matches).map((row) => ({ ...row, secrets: { ...row.secrets } }));
+    return demoChannels.filter(matches).map((row) => ({ ...row, secrets: suspended ? {} : { ...row.secrets } }));
   }
   const admin = createSupabaseAdminClient();
   if (!admin) return [];
@@ -850,10 +914,10 @@ export async function findSharedApprovalChannelsByTeam(input: {
   if (input.enabledOnly) query = query.eq("enabled", true);
   const { data, error } = await query;
   if (error || !data) return [];
-  const credentials = await credentialsByChannelIds(data.map((row) => String(row.id)));
+  const credentials = suspended ? new Map<string, string>() : await credentialsByChannelIds(data.map((row) => String(row.id)));
   const out: NotificationChannelRuntime[] = [];
   for (const row of data) {
-    const ciphertext = credentials.get(String(row.id)) || "";
+    const ciphertext = suspended ? "" : credentials.get(String(row.id)) || "";
     try {
       const runtime = ciphertext
         ? mapRuntime({ ...(row as Record<string, unknown>), has_credentials: true, credentials_ciphertext: ciphertext })
