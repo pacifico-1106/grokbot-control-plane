@@ -83,6 +83,8 @@ describe("admin MCP always_human", () => {
       "approvalWorkflow.resendVoterVerification",
       "approvalRoutes.get",
       "employeeIdentity.status",
+      "setup.slackDmApprovalStatus",
+      "dmAutoroute.list",
     ];
     const mutatingTools = ADMIN_MCP_TOOLS.filter((t) => !readOnlyTools.includes(t.name));
     expect(mutatingTools.every((t) => t.description.includes("always_human"))).toBe(true);

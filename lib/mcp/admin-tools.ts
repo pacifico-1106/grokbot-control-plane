@@ -50,6 +50,7 @@ import {
 import { diagnoseLineApprovalStatus } from "@/lib/line/line-approval-status-diagnose";
 import { encryptNotificationSecrets } from "@/lib/notify/crypto";
 import { queueAdminTool } from "@/lib/admin-mcp/queue";
+import { handleSlackDmSetupTool, isSlackDmSetupTool } from "@/lib/admin-mcp/slack-dm-setup";
 import { fulfillApprovedAdmin, parseAdminFulfillment } from "@/lib/admin-mcp/fulfill-admin";
 import { auditActionForAdminTool } from "@/lib/admin-mcp/audit-class";
 import { buildPollUrl } from "@/lib/approvals/tokens";
@@ -1222,6 +1223,55 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
     },
   },
   {
+    name: "setup.slackDmApprovalStatus",
+    description:
+      "Diagnose Slack DM auto-route + approval-delivery setup for this org (read-only, no approval required). Returns feature flags, the approval app's (Slack App B) bot-scope check (chat:write, im:write, im:read, users:read) with missingScopes + Slack app deep link, approval inbox destination / auto-open / 「設定しました」 state, internal slack_user party count, per-employee Slack link + user-token missing scopes (im:write) + re-authorize URL, and ordered nextStepsJa. testApprovalRequired is always false: the first real approval is the live check. No secrets accepted or returned. Admin MCP only.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+  },
+  {
+    name: "dmAutoroute.list",
+    description:
+      "List this org's Slack IM routes (source auto_party / manual when SLACK_DM_AUTOROUTE_ENABLED) and recent DM auto-route results (created / skipped / failed / removed with reason) from the admin audit log (read-only, no approval required). Optional employeeId narrows to one AI社員 of this org. No secrets returned.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        employeeId: { type: "string", description: "Optional AI社員 ID (this org only)" },
+        limit: { type: "number", description: "Max rows (1-100, default 50)" },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "dmAutoroute.run",
+    description:
+      "Run the internal Slack DM auto-route for linked AI社員 (always_human for dryRun=false). dryRun=true (default) is a read-only preview: which human-approved internal slack_user parties would get a DM route (would_open) or why not (skipped). dryRun=false creates routes after human approval (requires SLACK_DM_AUTOROUTE_ENABLED); counterparts come only from org_parties(kind=slack_user, audience=internal); Slack Connect / guests / other workspaces / externally-shared DMs are skipped. Optional ADMIN_MCP_DM_AUTOROUTE_AUDIT_ONLY (default OFF) runs dryRun=false without a ticket and records an admin audit row instead (never for an AI社員 bound to this admin agent). Admin cannot self-approve. Re-invoke with approvalId to read the result.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        employeeId: { type: "string", description: "Optional AI社員 ID (this org only). Omit for all linked AI社員 (max 20)." },
+        dryRun: { type: "boolean", description: "Default true (read-only preview)." },
+        jobId: { type: "string" },
+        approvalId: { type: "string", description: "Re-invoke with approved ticket ID" },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "setup.approvalDelivery.autoResolve",
+    description:
+      "Resolve the Slack approval inbox destination automatically (always_human, regardless of any flag): after human approval, the approval app opens its DM with the approver (one of the inbox's allowed user IDs), sends a single 「設定しました」 notice, and saves that DM as the destination. Requires SLACK_APPROVAL_DM_AUTO_OPEN. The approver is checked with users.info (Slack Connect / guest / bot / other workspace → refused). No test approval. Never accepts a token: the approval app bot token must already be saved by a human in the dashboard. Missing scopes are reported with a Slack app deep link. Admin cannot self-approve.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        inboxId: { type: "string", description: "Slack approval inbox ID (optional when the org has exactly one enabled Slack inbox)" },
+        deliveryUserId: { type: "string", description: "Approver Slack user ID (U…); must be one of the inbox's allowed user IDs. Optional when there is exactly one." },
+        jobId: { type: "string" },
+        approvalId: { type: "string", description: "Re-invoke with approved ticket ID" },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
     name: "decision.deputyActivate",
     description:
       "Activate a deputy (代理人) for a pending decision request (always_human). Deputy can act on behalf of the requester. Security: self-approval forbidden (deputy cannot be requester), cross-org forbidden (deputy must be in same org). P1_DECISION_WORKFLOW_ENABLED must be ON.",
@@ -1271,6 +1321,8 @@ const ADMIN_READ_ONLY_TOOLS_SET = new Set<string>([
   "orgs.patch",
   "approvals.proxyResolve",
   "employeeIdentity.status",
+  "setup.slackDmApprovalStatus",
+  "dmAutoroute.list",
 ]);
 
 /**
@@ -2189,6 +2241,20 @@ export async function callAdminMcpTool(
       sideEffectsRan: Boolean(result.sideEffects),
       summaryJa: `${decision === "approved" ? "承認" : "却下"}しました（プラットフォーム代行・${mandate}）`,
     });
+  }
+
+  if (isSlackDmSetupTool(name)) {
+    // PR-4: org always from the credential; no secrets accepted or returned.
+    const outcome = await handleSlackDmSetupTool(name, args, cred);
+    if (outcome.kind === "result") return toolResult(outcome.data, outcome.isError === true);
+    const queued = await queueAdminTool({
+      cred,
+      tool: name,
+      args: { ...outcome.queuedArgs, ...(typeof args.jobId === "string" ? { jobId: args.jobId } : {}) },
+      rawArgsForSecretScan: args,
+      summary: outcome.summary,
+    });
+    return toolResult(queued, false);
   }
 
   if (name === "setup.slackStatus") {
