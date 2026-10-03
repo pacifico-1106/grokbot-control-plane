@@ -19,6 +19,12 @@ import {
   validateAllowedAccountInput,
 } from "@/lib/admin-mcp/allowed-accounts-tools";
 import { PLAN_ADMIN_SCOPES, READ_ONLY_ADMIN_TOOLS } from "@/lib/billing/plan-scopes";
+import {
+  ALLOWED_ACCOUNTS_SLACK_NEXT_STEP_JA,
+  ALLOWED_ACCOUNTS_SLACK_NEXT_STEP_TOOL_JA,
+  isAllowedAccountsAdminToolsFlagOn,
+  resolveAllowedAccountsSlackNextStep,
+} from "@/lib/slack/authorize-link-guidance";
 import { getApprovalById, listApprovals, resolveApproval } from "@/lib/data";
 import { linkAgent } from "@/lib/data/bindings";
 import {
@@ -624,5 +630,34 @@ describe("remove: an existing Slack identity stays linked", () => {
     expect(data(res).code).toBe("allowed_account_not_found");
     expect(data(res).slackIdentityNoticeJa).toBe(SLACK_NOTICE_JA);
     await revokeEmployeeSlackIdentity({ employeeId: emp.id, orgId: emp.orgId });
+  });
+});
+
+describe("#240 guidance with the real #242 registry and flag (after merge)", () => {
+  test("flag ON + registered → names employees.allowedAccounts.add", async () => {
+    process.env[ALLOWED_ACCOUNTS_TOOLS_FLAG] = "true";
+    expect(await resolveAllowedAccountsSlackNextStep()).toEqual({
+      nextStepJa: ALLOWED_ACCOUNTS_SLACK_NEXT_STEP_TOOL_JA,
+      allowedAccountsAdminTool: ADD,
+    });
+  });
+
+  test("flag OFF (unset / false) → dashboard guidance, no tool", async () => {
+    for (const value of [undefined, "", "false", "0", "off"]) {
+      if (value === undefined) delete process.env[ALLOWED_ACCOUNTS_TOOLS_FLAG];
+      else process.env[ALLOWED_ACCOUNTS_TOOLS_FLAG] = value;
+      expect(await resolveAllowedAccountsSlackNextStep()).toEqual({
+        nextStepJa: ALLOWED_ACCOUNTS_SLACK_NEXT_STEP_JA,
+        allowedAccountsAdminTool: null,
+      });
+    }
+  });
+
+  test("#240's flag parsing agrees with #242's for every value", () => {
+    for (const value of [undefined, "", "true", "TRUE", " 1 ", "on", "enabled", "false", "0", "off", "yes"]) {
+      if (value === undefined) delete process.env[ALLOWED_ACCOUNTS_TOOLS_FLAG];
+      else process.env[ALLOWED_ACCOUNTS_TOOLS_FLAG] = value;
+      expect(isAllowedAccountsAdminToolsFlagOn()).toBe(isEmployeesAllowedAccountsAdminToolAvailable());
+    }
   });
 });
