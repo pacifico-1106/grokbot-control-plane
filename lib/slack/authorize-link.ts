@@ -58,9 +58,13 @@ import {
   authorizeLinkFailedNoticeJa,
   isAuthorizeLinkConsumedFailureReason,
   resolveAllowedAccountsSlackNextStep,
+  resolveAuthorizeLinkFollowUpNextStep,
   type AuthorizeLinkConsumedFailureReason,
+  type AuthorizeLinkFollowUpStep,
 } from "@/lib/slack/authorize-link-guidance";
 import { isSlackAuthorizeLinkEnabled } from "@/lib/slack/authorize-link-flags";
+import { syncAutoDmRoutesForEmployee } from "@/lib/slack/dm-autoroute";
+import { isSlackDmAutorouteEnabled } from "@/lib/slack/dm-autoroute-flags";
 import type { Employee } from "@/lib/types";
 
 export const SLACK_AUTHORIZE_LINK_TTL_MS = 24 * 60 * 60 * 1000;
@@ -75,6 +79,9 @@ export {
   ALLOWED_ACCOUNTS_SLACK_NEXT_STEP_JA,
   ALLOWED_ACCOUNTS_SLACK_NEXT_STEP_TOOL_JA,
   AUTHORIZE_LINK_CONSUMED_FAILURE_REASONS,
+  AUTHORIZE_LINK_FOLLOW_UP_STEPS,
+  DM_AUTOROUTE_RUN_TOOL,
+  resolveAuthorizeLinkFollowUpNextStep,
   authorizeLinkApproverFailureNoticeJa,
   authorizeLinkFailedNoticeJa,
   resolveAllowedAccountsSlackNextStep,
@@ -160,6 +167,11 @@ function newLinkToken(): { token: string; tokenHash: string } {
 
 function linkUrl(token: string): string {
   return `${getAppOrigin()}${SLACK_AUTHORIZE_LINK_PATH}?t=${encodeURIComponent(token)}`;
+}
+
+/** Exception → safe code: only an already-safe snake_case message, else "exception". */
+function followUpErrorCode(error: unknown): string {
+  return code(error instanceof Error ? error.message : "", "exception");
 }
 
 function code(value: unknown, fallback: string): string {
@@ -482,6 +494,10 @@ export async function completeAuthorizeLinkCallback(input: {
   oauthError: string;
   exchange: (code: string) => Promise<SlackOAuthExchange>;
   authTest: (userToken: string) => Promise<SlackAuthTestIdentity>;
+  /** Route: next/server after(). Omitted → follow-ups run before returning. */
+  deferFollowUps?: (job: () => Promise<void>) => void;
+  /** Test seam for the #234 DM auto-route (defaults to syncAutoDmRoutesForEmployee). */
+  followUpDeps?: { dmAutoroute?: typeof syncAutoDmRoutesForEmployee };
 }): Promise<AuthorizeLinkCallbackResult> {
   const { orgId, employeeId, linkId } = input.state;
   if (!isSlackAuthorizeLinkEnabled()) return { ok: false, code: "authorize_link_flag_off", consumed: false };
@@ -566,40 +582,104 @@ export async function completeAuthorizeLinkCallback(input: {
       attemptedSlackUserId: slackUserId,
     });
   }
-  await finishSlackAuthorizeLink({ id: link.id, orgId, status: "completed", reason: "ok", boundSlackUserId: slackUserId });
-  const employee = await getEmployee(employeeId, orgId);
+  // ── Identity saved. Nothing below may send the burned-link notice, change
+  // the result (page = success) or skip another step (追記 3). ──
+  const failed: Array<{ step: AuthorizeLinkFollowUpStep; code: string }> = [];
+  const step = async (name: AuthorizeLinkFollowUpStep, run: () => Promise<string | null>) => {
+    try {
+      const failure = await run();
+      if (failure) failed.push({ step: name, code: code(failure, "error") });
+    } catch (error) {
+      failed.push({ step: name, code: followUpErrorCode(error) });
+    }
+  };
+  await step("link_status", async () => {
+    await finishSlackAuthorizeLink({ id: link.id, orgId, status: "completed", reason: "ok", boundSlackUserId: slackUserId });
+    return null;
+  });
+  const employee = await getEmployee(employeeId, orgId).catch(() => null);
   const name = employee?.displayName || employeeId;
   const wasPinned = Boolean(link.expectedSlackUserId);
-  await appendAuditEvent({
-    orgId,
-    employeeId,
-    credentialId: null,
-    action: "admin.link",
-    purpose: "admin.link",
-    summary: `AI社員「${name}」の Slack 連携が再認可リンクで完了（Slack ${slackUserId} / team ${teamId}${wasPinned ? "" : "・発行時はユーザー未固定"}）`,
-    metadata: {
-      auditClass: "admin",
-      event: "slack_authorize_link.completed",
-      linkId: link.id,
-      approvalId: link.approvalId,
-      boundSlackUserId: slackUserId,
-      teamId,
-      userPinnedAtIssue: wasPinned,
-      previousSlackUserId: previous && previous.orgId === orgId ? previous.slackUserId || null : null,
-    },
+  await step("completed_audit", async () => {
+    await appendAuditEvent({
+      orgId,
+      employeeId,
+      credentialId: null,
+      action: "admin.link",
+      purpose: "admin.link",
+      summary: `AI社員「${name}」の Slack 連携が再認可リンクで完了（Slack ${slackUserId} / team ${teamId}${wasPinned ? "" : "・発行時はユーザー未固定"}）`,
+      metadata: {
+        auditClass: "admin",
+        event: "slack_authorize_link.completed",
+        linkId: link.id,
+        approvalId: link.approvalId,
+        boundSlackUserId: slackUserId,
+        teamId,
+        userPinnedAtIssue: wasPinned,
+        previousSlackUserId: previous && previous.orgId === orgId ? previous.slackUserId || null : null,
+      },
+    });
+    return null;
   });
-  // Notify the approver in the approval-app DM (best effort, never throws).
-  const approverChannel = link.approverChannelId || link.deliveredChannelId;
-  if (link.deliveredInboxId && approverChannel) {
-    const botToken = await resolveApprovalAppBotToken(orgId, link.deliveredInboxId);
-    if (botToken) {
-      await postApprovalAppText(
+
+  // Completion DM + #234 DM auto-route: after the response when the route
+  // passes next/server after(); inline otherwise (tests / direct callers).
+  const dmAutoroute = input.followUpDeps?.dmAutoroute ?? syncAutoDmRoutesForEmployee;
+  const followUps = async () => {
+    await step("completion_notice", async () => {
+      const approverChannel = link.approverChannelId || link.deliveredChannelId;
+      if (!link.deliveredInboxId || !approverChannel) return "approver_channel_unknown";
+      const botToken = await resolveApprovalAppBotToken(orgId, link.deliveredInboxId);
+      if (!botToken) return "approval_bot_token_unavailable";
+      const sent = await postApprovalAppText(
         botToken,
         approverChannel,
         `✅ StaffPass: AI社員「${name}」の Slack 連携が完了しました（Slack ユーザー ${slackUserId}）。` +
           `心当たりがない場合は、ダッシュボードの社員ページで Slack 連携を解除してください。`
       );
+      return sent.ok ? null : sent.code;
+    });
+    if (isSlackDmAutorouteEnabled()) {
+      await step("dm_autoroute", async () => {
+        const result = await dmAutoroute({ orgId, employeeId, trigger: "identity_linked" });
+        if (result.status === "error") return result.reason || "unexpected_error";
+        if (result.items.some((item) => item.outcome === "failed")) return "routes_failed";
+        return null;
+      });
     }
+    if (failed.length === 0) return;
+    try {
+      const steps = failed.map((f) => f.step);
+      const next = await resolveAuthorizeLinkFollowUpNextStep(employeeId, steps);
+      await appendAuditEvent({
+        orgId,
+        employeeId,
+        credentialId: null,
+        action: "admin.link",
+        purpose: "admin.link",
+        summary: `AI社員「${name}」の Slack 連携は完了、後続の処理に失敗（${failed.map((f) => `${f.step}:${f.code}`).join(", ")}）`,
+        metadata: {
+          auditClass: "admin",
+          event: "slack_authorize_link.completed_with_errors",
+          linkId: link.id,
+          approvalId: link.approvalId,
+          failedSteps: failed.map((f) => ({ step: f.step, code: f.code })),
+          nextStepJa: next.nextStepJa,
+          recoveryAdminTool: next.recoveryAdminTool,
+        },
+      });
+    } catch {
+      console.error("slack_authorize_link_completed_with_errors_audit_failed");
+    }
+  };
+  if (input.deferFollowUps) {
+    try {
+      input.deferFollowUps(() => followUps().catch(() => undefined));
+    } catch {
+      await followUps().catch(() => undefined);
+    }
+  } else {
+    await followUps().catch(() => undefined);
   }
   return { ok: true, orgId, employeeId, slackUserId };
 }

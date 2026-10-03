@@ -141,3 +141,13 @@ URL 平文は MCP 結果・監査に出さない。`SLACK_AUTHORIZE_LINK_REISSUE
 - **(d)** 監査の `attemptedSlackUserId` は残す（乗っ取りの調査用）。通知とページには出さない（テストで確認）。
 - **allowedAccounts の次の手順**は `resolveAllowedAccountsSlackNextStep()`（`lib/slack/authorize-link-guidance.ts`）を通す。実行時に管理ツールの registry（`ADMIN_MCP_TOOL_NAMES` に名前があり、かつ `ADMIN_MCP_TOOLS` に定義がある）に `employees.allowedAccounts.add` があれば「`employees.allowedAccounts.add` で Slack の U… を追加してから、もう一度 setup.slackAuthorizeLink.issue で発行してください。」+ `allowedAccountsAdminTool: "employees.allowedAccounts.add"`、なければダッシュボードでの案内 + `null`。`setup.slackDmApprovalStatus` も同じ関数（社員行に `allowedAccountsAdminTool`）。
 
+
+### 追記 3（2026-10-04 木村指示：連携成功後の後続の処理）
+
+- identity の保存（`bindEmployeeSlackIdentity`）が成功したあとは、何が失敗しても失敗通知（「無効になりました」）は送らず、結果ページは成功（`ok`）のまま。
+- 保存後の処理は `AUTHORIZE_LINK_FOLLOW_UP_STEPS` = `link_status`（リンクを `completed` に）/ `completed_audit`（監査 `slack_authorize_link.completed`）/ `completion_notice`（承認者への完了 DM）/ `dm_autoroute`（#234 の DM ルート自動作成。`SLACK_DM_AUTOROUTE_ENABLED` が OFF なら実行しない＝失敗扱いにしない）。それぞれ独立した try で囲み、1 つが失敗しても残りは実行する。
+- `completion_notice` と `dm_autoroute` は、callback ルートが `next/server` の `after()` に渡し、応答のあとに実行する（従来の `scheduleDmAutoroute` は再認可リンク経路では使わない。セッション経路は従来どおり）。
+- どれか 1 つでも失敗したら、監査に `slack_authorize_link.completed_with_errors`（admin 監査）を追加で残す。`failedSteps: [{ step, code }]`（処理名と理由コードだけ。例外文は `^[a-z0-9_]+$` でなければ `exception`、DM ルートは `status:error` の reason か、失敗した相手があれば `routes_failed`）、`nextStepJa`、`recoveryAdminTool`。token・URL・U…（本人・相手とも）は入れない。すべて成功したときは `slack_authorize_link.completed` だけ。
+- nextStep は `resolveAuthorizeLinkFollowUpNextStep()`（`lib/slack/authorize-link-guidance.ts`）。実行時に registry（`ADMIN_MCP_TOOL_NAMES` と `ADMIN_MCP_TOOLS` の両方）に `dmAutoroute.run` があれば「`dmAutoroute.run`（employeeId=…, dryRun:false）で後から取り戻せます（人の承認 1 回。先に dryRun:true で確認できます）」、なければツール名を出さずに運営への連絡を案内（`recoveryAdminTool: null`）。完了 DM が失敗したときは「完了の DM は届いていない可能性があります」を添える。
+- `setup.slackDmApprovalStatus` は、社員ごとに最新の再認可リンクが `completed_with_errors` で、そのあと DM ルート自動作成（`slack_dm_autoroute.*`）も再連携（`completed`）も無い場合だけ、社員行に `authorizeLinkFollowUpErrors`（処理名）を出し、同じ関数の nextStep を案内する。
+- 社員本人への完了 DM は現状ない（完了 DM は承認者だけ）。

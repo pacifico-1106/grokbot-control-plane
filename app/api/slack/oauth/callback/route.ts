@@ -71,12 +71,21 @@ async function authTest(token: string): Promise<SlackAuthTest> {
 /**
  * SLACK_DM_AUTOROUTE_ENABLED (default OFF): install internal-party DM routes
  * after the response. Outcome is audited only; the response never changes.
- * Shared by the session flow and the re-authorize link flow.
+ * Session flow only; the re-authorize link flow runs it as an independent
+ * follow-up inside completeAuthorizeLinkCallback (completed_with_errors on failure).
  */
 function scheduleDmAutoroute(orgId: string, employeeId: string): void {
   if (!isSlackDmAutorouteEnabled()) return;
   const job = () =>
     syncAutoDmRoutesForEmployee({ orgId, employeeId, trigger: "identity_linked" }).then(() => undefined);
+  try {
+    after(job);
+  } catch {
+    void job().catch(() => undefined);
+  }
+}
+
+function deferAfterResponse(job: () => Promise<void>): void {
   try {
     after(job);
   } catch {
@@ -107,6 +116,9 @@ export async function GET(req: Request) {
       oauthError,
       exchange: exchangeCode,
       authTest,
+      // Completion DM + DM auto-route run after the response, each in its own
+      // try; failures → slack_authorize_link.completed_with_errors (page stays ok).
+      deferFollowUps: deferAfterResponse,
     }).catch(() => ({ ok: false as const, code: "error", consumed: false }));
     if (!result.ok) {
       // Every consumed failure → "burned" (same template as the DM notice, only
@@ -114,7 +126,6 @@ export async function GET(req: Request) {
       const kind = authorizeLinkPageKind(result.code);
       return authorizeLinkHtmlResponse(kind, kind === "denied" ? 200 : 400, result.code);
     }
-    scheduleDmAutoroute(result.orgId, result.employeeId);
     return authorizeLinkHtmlResponse("ok");
   }
   if (oauthError) {

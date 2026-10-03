@@ -98,3 +98,40 @@ export function authorizeLinkFailedNoticeJa(code: string | null | undefined): st
 export function authorizeLinkApproverFailureNoticeJa(employeeName: string, code: string | null | undefined): string {
   return `社員「${employeeName}」の再認可リンクが失敗しました（${safeReasonCode(code)}）。再発行してください`;
 }
+
+/**
+ * 追記 3: work that runs AFTER the identity is saved. Each step has its own
+ * try; one failing never skips the rest, never sends the burned-link notice,
+ * and never turns the result page into an error. Any failure →
+ * `slack_authorize_link.completed_with_errors` (step names + reason codes only).
+ */
+export const AUTHORIZE_LINK_FOLLOW_UP_STEPS = ["link_status", "completed_audit", "completion_notice", "dm_autoroute"] as const;
+export type AuthorizeLinkFollowUpStep = (typeof AUTHORIZE_LINK_FOLLOW_UP_STEPS)[number];
+
+/** Real admin MCP tool (lib/mcp/admin-tools.ts) that re-runs the #234 DM auto-route. */
+export const DM_AUTOROUTE_RUN_TOOL = "dmAutoroute.run";
+
+/**
+ * nextStep for completed_with_errors (audit + setup.slackDmApprovalStatus).
+ * Registry-checked at runtime: never names a tool that is not callable.
+ */
+export async function resolveAuthorizeLinkFollowUpNextStep(
+  employeeId: string,
+  failedSteps: readonly string[]
+): Promise<{ nextStepJa: string; recoveryAdminTool: string | null }> {
+  const noticeNote = failedSteps.includes("completion_notice")
+    ? "完了の DM は届いていない可能性があります（Slack 連携そのものは完了しています）。"
+    : "";
+  if (await isAdminMcpToolRegistered(DM_AUTOROUTE_RUN_TOOL)) {
+    return {
+      nextStepJa:
+        `Slack 連携は完了しています。後続の処理は ${DM_AUTOROUTE_RUN_TOOL}（employeeId=${employeeId}, dryRun:false）で後から取り戻せます` +
+        `（人の承認 1 回。先に dryRun:true で確認できます）。${noticeNote}`,
+      recoveryAdminTool: DM_AUTOROUTE_RUN_TOOL,
+    };
+  }
+  return {
+    nextStepJa: `Slack 連携は完了しています。後続の処理を取り戻す管理ツールがこの環境にありません。運営に連絡してください。${noticeNote}`,
+    recoveryAdminTool: null,
+  };
+}

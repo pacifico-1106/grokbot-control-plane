@@ -30,7 +30,10 @@ import {
   ALLOWED_ACCOUNTS_SLACK_NEXT_STEP_TOOL_JA,
   ALLOWED_ACCOUNTS_ADD_TOOL,
   AUTHORIZE_LINK_CONSUMED_FAILURE_REASONS,
+  AUTHORIZE_LINK_FOLLOW_UP_STEPS,
+  DM_AUTOROUTE_RUN_TOOL,
   SLACK_AUTHORIZE_LINK_PATH,
+  resolveAuthorizeLinkFollowUpNextStep,
   authorizeLinkApproverFailureNoticeJa,
   authorizeLinkFailedNoticeJa,
   authorizeLinkPageKind,
@@ -47,6 +50,7 @@ import { readFileSync } from "node:fs";
 import { signSlackOAuthState, verifySlackOAuthState } from "@/lib/slack/oauth";
 import type { ResolvedAdminCredential } from "@/lib/auth/admin-credential";
 import type { ResolvedEmployeeCredential } from "@/lib/auth/employee-credential";
+import type { DmAutorouteResult } from "@/lib/slack/dm-autoroute";
 import type { Employee } from "@/lib/types";
 
 const TOOL = "setup.slackAuthorizeLink.issue";
@@ -1056,6 +1060,205 @@ describe("allowedAccounts next step follows the admin tool registry at runtime",
       } finally {
         unregister();
       }
+    } finally {
+      for (const e of others) e.status = "active";
+    }
+  });
+});
+
+describe("追記 3: post-bind follow-ups (dmAutoroute + completion notice) are independent", () => {
+  type DmInput = { orgId: string; employeeId: string; trigger: string };
+  function dmSpy(impl: () => Promise<DmAutorouteResult>) {
+    const seen: DmInput[] = [];
+    const fn = async (input: DmInput) => {
+      seen.push(input);
+      return impl();
+    };
+    return { seen, fn };
+  }
+  const ok = async (): Promise<DmAutorouteResult> => ({ status: "done", items: [] });
+  function events(linkId: string, name: string) {
+    return getRuntimeAudit().filter((e) => e.metadata?.event === name && e.metadata?.linkId === linkId);
+  }
+  async function linkWith(
+    dm: (input: DmInput) => Promise<DmAutorouteResult>,
+    opts: { failNotice?: boolean; defer?: (job: () => Promise<void>) => void } = {}
+  ) {
+    const state = await startState(await issueViaTicket(empA.id));
+    calls = [];
+    postMessageFails = Boolean(opts.failNotice);
+    const result = await completeAuthorizeLinkCallback({
+      state,
+      code: "c",
+      oauthError: "",
+      exchange: exchangeWith(NEW_USER_TOKEN),
+      authTest: authTestAs(empASlack),
+      followUpDeps: { dmAutoroute: dm as never },
+      ...(opts.defer ? { deferFollowUps: opts.defer } : {}),
+    });
+    postMessageFails = false;
+    return { state, result };
+  }
+  function expectCleanErrorsAudit(row: { metadata?: Record<string, unknown>; summary?: string }) {
+    noSecrets(row);
+    const blob = JSON.stringify(row);
+    // Only step names + reason codes: no U… (not even the bound one), no URL.
+    expect(blob.includes(empASlack)).toBe(false);
+    expect(blob.includes(APPROVER)).toBe(false);
+    expect(blob.includes("https://")).toBe(false);
+  }
+
+  test("registry: dmAutoroute.run is a real admin MCP tool (name + definition)", () => {
+    expect(DM_AUTOROUTE_RUN_TOOL).toBe("dmAutoroute.run");
+    expect((ADMIN_MCP_TOOL_NAMES as readonly string[]).includes(DM_AUTOROUTE_RUN_TOOL)).toBe(true);
+    expect(ADMIN_MCP_TOOLS.some((t) => t.name === DM_AUTOROUTE_RUN_TOOL)).toBe(true);
+    expect([...AUTHORIZE_LINK_FOLLOW_UP_STEPS]).toEqual(["link_status", "completed_audit", "completion_notice", "dm_autoroute"]);
+  });
+
+  test("all succeed → only completed is recorded; both follow-ups ran", async () => {
+    process.env.SLACK_DM_AUTOROUTE_ENABLED = "true";
+    const dm = dmSpy(ok);
+    const { state, result } = await linkWith(dm.fn);
+    expect(result.ok).toBe(true);
+    expect(dm.seen).toEqual([{ orgId: ORG_A, employeeId: empA.id, trigger: "identity_linked" }]);
+    expect(posts().some((c) => String(c.body.text).includes("Slack 連携が完了しました"))).toBe(true);
+    expect(events(state.linkId, "slack_authorize_link.completed")).toHaveLength(1);
+    expect(events(state.linkId, "slack_authorize_link.completed_with_errors")).toHaveLength(0);
+  });
+
+  test("dmAutoroute flag OFF → not run, not an error (completed only)", async () => {
+    const dm = dmSpy(ok);
+    const { state } = await linkWith(dm.fn);
+    expect(dm.seen).toHaveLength(0);
+    expect(events(state.linkId, "slack_authorize_link.completed_with_errors")).toHaveLength(0);
+  });
+
+  test("completion notice fails → dmAutoroute still runs; completed_with_errors + nextStep; page/result still success; no failure notice", async () => {
+    process.env.SLACK_DM_AUTOROUTE_ENABLED = "true";
+    const dm = dmSpy(ok);
+    const { state, result } = await linkWith(dm.fn, { failNotice: true });
+    expect(result).toEqual({ ok: true, orgId: ORG_A, employeeId: empA.id, slackUserId: empASlack });
+    expect(dm.seen).toHaveLength(1);
+    expect((await getSlackAuthorizeLink(state.linkId, ORG_A))?.status).toBe("completed");
+    expect(await getLinkedSlackUserToken(empA.id)).toBe(NEW_USER_TOKEN);
+    expect(events(state.linkId, "slack_authorize_link.completed")).toHaveLength(1);
+    const errs = events(state.linkId, "slack_authorize_link.completed_with_errors");
+    expect(errs).toHaveLength(1);
+    expect(errs[0].metadata?.failedSteps).toEqual([{ step: "completion_notice", code: "channel_not_found" }]);
+    expect(errs[0].metadata?.recoveryAdminTool).toBe(DM_AUTOROUTE_RUN_TOOL);
+    expect(String(errs[0].metadata?.nextStepJa)).toContain(`${DM_AUTOROUTE_RUN_TOOL}（employeeId=${empA.id}, dryRun:false）で後から取り戻せます`);
+    expect(errs[0].metadata?.auditClass).toBe("admin");
+    expectCleanErrorsAudit(errs[0]);
+    // Bind succeeded → never the burned-link notice.
+    expect(posts().some((c) => String(c.body.text).includes("無効になりました"))).toBe(false);
+    expect(getRuntimeAudit().some((e) => e.metadata?.event === "slack_authorize_link.rejected" && e.metadata?.linkId === state.linkId)).toBe(false);
+  });
+
+  test("dmAutoroute throws → completion notice still sent; completed_with_errors names dm_autoroute", async () => {
+    process.env.SLACK_DM_AUTOROUTE_ENABLED = "true";
+    const dm = dmSpy(async () => {
+      throw new Error(`boom ${NEW_USER_TOKEN} ${empASlack}`);
+    });
+    const { state, result } = await linkWith(dm.fn);
+    expect(result.ok).toBe(true);
+    expect(dm.seen).toHaveLength(1);
+    expect(posts().some((c) => String(c.body.text).includes("Slack 連携が完了しました"))).toBe(true);
+    const errs = events(state.linkId, "slack_authorize_link.completed_with_errors");
+    expect(errs).toHaveLength(1);
+    expect(errs[0].metadata?.failedSteps).toEqual([{ step: "dm_autoroute", code: "exception" }]);
+    expect(String(errs[0].metadata?.nextStepJa)).toContain("dryRun:false");
+    expectCleanErrorsAudit(errs[0]);
+  });
+
+  test("dmAutoroute returns error / failed routes → reason code recorded", async () => {
+    process.env.SLACK_DM_AUTOROUTE_ENABLED = "true";
+    const a = await linkWith(dmSpy(async () => ({ status: "error", reason: "unexpected_error", items: [] })).fn);
+    expect(events(a.state.linkId, "slack_authorize_link.completed_with_errors")[0].metadata?.failedSteps).toEqual([
+      { step: "dm_autoroute", code: "unexpected_error" },
+    ]);
+    const b = await linkWith(
+      dmSpy(async () => ({
+        status: "done",
+        items: [{ counterpartSlackUserId: "UOTHERPERSON1", outcome: "failed", reason: "conversations_open_ratelimited" }],
+      })).fn
+    );
+    const row = events(b.state.linkId, "slack_authorize_link.completed_with_errors")[0];
+    expect(row.metadata?.failedSteps).toEqual([{ step: "dm_autoroute", code: "routes_failed" }]);
+    expect(JSON.stringify(row).includes("UOTHERPERSON1")).toBe(false);
+  });
+
+  test("both fail → both listed, in order; still success", async () => {
+    process.env.SLACK_DM_AUTOROUTE_ENABLED = "true";
+    const { state, result } = await linkWith(dmSpy(async () => ({ status: "error", reason: "unexpected_error", items: [] })).fn, { failNotice: true });
+    expect(result.ok).toBe(true);
+    expect(events(state.linkId, "slack_authorize_link.completed_with_errors")[0].metadata?.failedSteps).toEqual([
+      { step: "completion_notice", code: "channel_not_found" },
+      { step: "dm_autoroute", code: "unexpected_error" },
+    ]);
+  });
+
+  test("deferFollowUps: the callback returns before follow-ups run (route passes next/server after())", async () => {
+    process.env.SLACK_DM_AUTOROUTE_ENABLED = "true";
+    const dm = dmSpy(ok);
+    const jobs: Array<() => Promise<void>> = [];
+    const { state, result } = await linkWith(dm.fn, { defer: (job) => jobs.push(job) });
+    expect(result.ok).toBe(true);
+    expect(jobs).toHaveLength(1);
+    expect(dm.seen).toHaveLength(0);
+    expect(posts().some((c) => String(c.body.text).includes("Slack 連携が完了しました"))).toBe(false);
+    await jobs[0]();
+    expect(dm.seen).toHaveLength(1);
+    expect(posts().some((c) => String(c.body.text).includes("Slack 連携が完了しました"))).toBe(true);
+    expect(events(state.linkId, "slack_authorize_link.completed_with_errors")).toHaveLength(0);
+  });
+
+  test("route source: link branch hands follow-ups to after(), no separate dmAutoroute schedule", () => {
+    const src = readFileSync(new URL("../../app/api/slack/oauth/callback/route.ts", import.meta.url), "utf8");
+    const branch = src.slice(src.indexOf("if (parsed.linkId)"), src.indexOf("if (oauthError)"));
+    expect(branch).toContain("deferFollowUps");
+    expect(branch.includes("scheduleDmAutoroute(")).toBe(false);
+  });
+
+  test("nextStep resolver: registered → dmAutoroute.run guidance; not registered → no invented tool", async () => {
+    const step = await resolveAuthorizeLinkFollowUpNextStep(empA.id, ["completion_notice"]);
+    expect(step.recoveryAdminTool).toBe(DM_AUTOROUTE_RUN_TOOL);
+    expect(step.nextStepJa).toContain("dryRun:false");
+    expect(step.nextStepJa).toContain("完了の DM");
+    const names = ADMIN_MCP_TOOL_NAMES as unknown as string[];
+    const defs = ADMIN_MCP_TOOLS as unknown as Array<Record<string, unknown>>;
+    const n = names.indexOf(DM_AUTOROUTE_RUN_TOOL);
+    const d = defs.findIndex((t) => t.name === DM_AUTOROUTE_RUN_TOOL);
+    const [savedName] = names.splice(n, 1);
+    const [savedDef] = defs.splice(d, 1);
+    try {
+      const missing = await resolveAuthorizeLinkFollowUpNextStep(empA.id, ["dm_autoroute"]);
+      expect(missing.recoveryAdminTool).toBeNull();
+      expect(missing.nextStepJa.includes("dryRun:false")).toBe(false);
+    } finally {
+      names.splice(n, 0, savedName);
+      defs.splice(d, 0, savedDef);
+    }
+  });
+
+  test("setup.slackDmApprovalStatus: the employee whose last link completed_with_errors gets the dmAutoroute.run step; cleared after a clean re-link", async () => {
+    process.env.SLACK_DM_AUTOROUTE_ENABLED = "true";
+    const others = getRuntimeEmployees().filter((e) => e.orgId === ORG_A && e.id !== empA.id && e.status === "active");
+    for (const e of others) e.status = "suspended";
+    try {
+      await linkWith(dmSpy(async () => ({ status: "error", reason: "unexpected_error", items: [] })).fn);
+      const on = data(await callAdminMcpTool("setup.slackDmApprovalStatus", {}, cred()));
+      const steps = (on.nextStepsJa as string[]).join("\n");
+      expect(steps).toContain(`${empA.displayName}: `);
+      expect(steps).toContain(`${DM_AUTOROUTE_RUN_TOOL}（employeeId=${empA.id}, dryRun:false）で後から取り戻せます`);
+      const row = (on.employees as Array<Record<string, unknown>>).find((r) => r.employeeId === empA.id)!;
+      expect(row.authorizeLinkFollowUpErrors).toEqual(["dm_autoroute"]);
+      noSecrets(on);
+
+      await linkWith(dmSpy(ok).fn);
+      const after = data(await callAdminMcpTool("setup.slackDmApprovalStatus", {}, cred()));
+      const row2 = (after.employees as Array<Record<string, unknown>>).find((r) => r.employeeId === empA.id)!;
+      expect(row2.authorizeLinkFollowUpErrors).toEqual([]);
+      expect((after.nextStepsJa as string[]).join("\n").includes(`${DM_AUTOROUTE_RUN_TOOL}（employeeId=${empA.id}, dryRun:false）`)).toBe(false);
     } finally {
       for (const e of others) e.status = "active";
     }

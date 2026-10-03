@@ -45,10 +45,14 @@ import {
 } from "@/lib/slack/approval-dm-open";
 import { syncAutoDmRoutesForEmployee, type DmAutorouteItem, type DmAutorouteResult } from "@/lib/slack/dm-autoroute";
 import { isSlackAuthorizeLinkEnabled } from "@/lib/slack/authorize-link-flags";
-import { allowedSlackAccountIds, resolveAllowedAccountsSlackNextStep } from "@/lib/slack/authorize-link-guidance";
+import {
+  allowedSlackAccountIds,
+  resolveAllowedAccountsSlackNextStep,
+  resolveAuthorizeLinkFollowUpNextStep,
+} from "@/lib/slack/authorize-link-guidance";
 import { isSlackDmAutorouteEnabled, isSlackUserScopeImWriteEnabled } from "@/lib/slack/dm-autoroute-flags";
 import { slackAuthorizeUrlTemplate } from "@/lib/slack/slack-status-diagnose";
-import type { NotificationChannel } from "@/lib/types";
+import type { AuditEvent, NotificationChannel } from "@/lib/types";
 
 export const SLACK_DM_SETUP_TOOLS = [
   "setup.slackDmApprovalStatus",
@@ -182,6 +186,26 @@ function destinationKind(destination: string): "dm" | "channel" | "none" {
 // setup.slackDmApprovalStatus (read-only)
 // ---------------------------------------------------------------------------
 
+/**
+ * 追記 3: failed follow-up step names of the employee's latest re-authorize
+ * link, when it ended `completed_with_errors` and no DM auto-route ran since
+ * (events newest-first). Step names only — never codes with ids.
+ */
+function authorizeLinkFollowUpErrors(events: AuditEvent[], employeeId: string): string[] {
+  for (const event of events) {
+    if (event.employeeId !== employeeId && event.metadata?.employeeId !== employeeId) continue;
+    const name = String(event.metadata?.event || "");
+    if (name.startsWith("slack_dm_autoroute.") || name === "slack_authorize_link.completed") return [];
+    if (name === "slack_authorize_link.completed_with_errors") {
+      const steps = Array.isArray(event.metadata?.failedSteps) ? (event.metadata?.failedSteps as unknown[]) : [];
+      return steps
+        .map((item) => String((item as Record<string, unknown>)?.step || ""))
+        .filter((step) => /^[a-z_]{1,32}$/.test(step));
+    }
+  }
+  return [];
+}
+
 export async function diagnoseSlackDmApprovalSetup(orgId: string): Promise<Record<string, unknown>> {
   const flags = flagSnapshot();
   const nextStepsJa: string[] = [];
@@ -236,6 +260,10 @@ export async function diagnoseSlackDmApprovalSetup(orgId: string): Promise<Recor
   const employeeRows: Array<Record<string, unknown>> = [];
   // Same resolver as setup.slackAuthorizeLink.issue (registry-aware).
   const allowedAccountsStep = await resolveAllowedAccountsSlackNextStep();
+  // 追記 3: newest-first audit; one read for every employee row.
+  const linkEvents = employees.length
+    ? (await listAuditEvents(orgId, 500).catch(() => [])).filter((event) => event.orgId === orgId)
+    : [];
   for (const employee of employees) {
     const identity = await getEmployeeSlackIdentity(employee.id);
     const linked = Boolean(identity && identity.orgId === orgId && identity.status === "linked");
@@ -268,6 +296,7 @@ export async function diagnoseSlackDmApprovalSetup(orgId: string): Promise<Recor
       authorizeUrl: slackAuthorizeUrlTemplate(employee.id),
       allowedSlackAccounts: allowedSlackAccountIds(employee).length,
       allowedAccountsAdminTool: allowedAccountsStep.allowedAccountsAdminTool,
+      authorizeLinkFollowUpErrors: authorizeLinkFollowUpErrors(linkEvents, employee.id),
     });
   }
 
@@ -329,6 +358,12 @@ export async function diagnoseSlackDmApprovalSetup(orgId: string): Promise<Recor
           : `${row.displayName}: user token に ${missing} がありません。もう一度 Slack 連携をタップ（${row.authorizeUrl}）。`
       );
     }
+  }
+  for (const row of employeeRows) {
+    const failedSteps = row.authorizeLinkFollowUpErrors as string[];
+    if (!failedSteps.length) continue;
+    const next = await resolveAuthorizeLinkFollowUpNextStep(String(row.employeeId), failedSteps);
+    nextStepsJa.push(`${row.displayName}: 再認可リンクの後続の処理（${failedSteps.join(", ")}）が失敗しました。${next.nextStepJa}`);
   }
   if (flags.SLACK_DM_AUTOROUTE_ENABLED && parties.length > 0) {
     nextStepsJa.push("dmAutoroute.run（dryRun=true）で作られる DM を確認 → dryRun=false で実行。結果は dmAutoroute.list。");
