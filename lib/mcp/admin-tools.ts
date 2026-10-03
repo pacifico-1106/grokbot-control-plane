@@ -51,10 +51,10 @@ import { diagnoseLineApprovalStatus } from "@/lib/line/line-approval-status-diag
 import { encryptNotificationSecrets } from "@/lib/notify/crypto";
 import { queueAdminTool } from "@/lib/admin-mcp/queue";
 import { handleSlackDmSetupTool, isSlackDmSetupTool } from "@/lib/admin-mcp/slack-dm-setup";
-import { handleAllowedAccountsTool, isAllowedAccountsTool } from "@/lib/admin-mcp/allowed-accounts-tools";
 import { fulfillApprovedAdmin, parseAdminFulfillment } from "@/lib/admin-mcp/fulfill-admin";
 import { auditActionForAdminTool } from "@/lib/admin-mcp/audit-class";
 import { buildPollUrl } from "@/lib/approvals/tokens";
+import { handleAllowedAccountsTool, isAllowedAccountsTool } from "@/lib/admin-mcp/allowed-accounts-tools";
 import { ADMIN_MCP_TOOL_NAMES } from "@/lib/mcp/admin-public";
 import { buildEmployeePolicyDrafts } from "@/lib/employees/policy-draft";
 import { parseApprovalChannelId } from "@/lib/employees/approval-inbox";

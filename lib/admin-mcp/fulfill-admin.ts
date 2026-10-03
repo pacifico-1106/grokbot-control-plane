@@ -610,6 +610,28 @@ async function fulfillLink(approval: ApprovalRequest, args: Record<string, unkno
   };
 }
 
+/** ADMIN_MCP_ALLOWED_ACCOUNTS_TOOLS_ENABLED: human-approved allowedAccounts add/remove. */
+async function fulfillAllowedAccountsTicket(
+  approval: ApprovalRequest,
+  args: Record<string, unknown>,
+  tool: "employees.allowedAccounts.add" | "employees.allowedAccounts.remove"
+): Promise<AdminFulfillment> {
+  const { fulfillAllowedAccountsChange } = await import("@/lib/admin-mcp/allowed-accounts-tools");
+  const result = await fulfillAllowedAccountsChange(approval, tool, args);
+  const at = new Date().toISOString();
+  if (!result.ok) {
+    return { ok: false, tool, at, error: result.code, nextStepJa: result.messageJa };
+  }
+  return {
+    ok: true,
+    tool,
+    at,
+    employeeId: result.employeeId,
+    summaryJa: result.summaryJa,
+    nextStepJa: "employees.allowedAccounts.list で現在の許可アカウントを確認できます。",
+  };
+}
+
 async function fulfillPolicy(approval: ApprovalRequest, args: Record<string, unknown>): Promise<AdminFulfillment> {
   const employeeId = String(args.employeeId || "").trim();
   const scopes = asScopes(args.scopes);
@@ -1780,28 +1802,6 @@ async function fulfillDmAutorouteRun(
     ...(employeeId ? { employeeId } : {}),
     summaryJa: `DM 自動ルート: 作成 ${counts.created ?? 0} / 既存 ${counts.already_routed ?? 0} / スキップ ${counts.skipped ?? 0} / 失敗 ${counts.failed ?? 0}`,
     nextStepJa: "dmAutoroute.list で各相手の結果（skipped / failed の reason）を確認してください。",
-  };
-}
-
-/** ADMIN_MCP_ALLOWED_ACCOUNTS_TOOLS_ENABLED: human-approved allowedAccounts add/remove. */
-async function fulfillAllowedAccountsTicket(
-  approval: ApprovalRequest,
-  args: Record<string, unknown>,
-  tool: "employees.allowedAccounts.add" | "employees.allowedAccounts.remove"
-): Promise<AdminFulfillment> {
-  const { fulfillAllowedAccountsChange } = await import("@/lib/admin-mcp/allowed-accounts-tools");
-  const result = await fulfillAllowedAccountsChange(approval, tool, args);
-  const at = new Date().toISOString();
-  if (!result.ok) {
-    return { ok: false, tool, at, error: result.code, nextStepJa: result.messageJa };
-  }
-  return {
-    ok: true,
-    tool,
-    at,
-    employeeId: result.employeeId,
-    summaryJa: result.summaryJa,
-    nextStepJa: "employees.allowedAccounts.list で現在の許可アカウントを確認できます。",
   };
 }
 
