@@ -1,4 +1,5 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
+import { formatMailCardParts, MAIL_BODY_PREVIEW_LABEL, readMailArtifact } from "@/lib/approvals/summary";
 import { getAppOrigin } from "@/lib/approvals/tokens";
 import {
   getNotificationDelivery,
@@ -9,6 +10,9 @@ import type { ApprovalRequest, Employee } from "@/lib/types";
 
 const SLACK_TIMEOUT_MS = 5_000;
 const SLACK_API = "https://slack.com/api";
+/** Mail card caps (Slack section text max is 3000 chars). */
+const SLACK_RECIPIENT_LINE_MAX = 500;
+const SLACK_SUBJECT_LINE_MAX = 200;
 
 export type SlackNotifyResult = {
   ok: boolean;
@@ -135,12 +139,39 @@ function approvalBlocks(
   }
 ) {
   const workflowText = workflowProgressText(options?.workflow ?? null);
+  // mail.send / mail.draft: show 宛先 / CC / BCC / 件名 / 本文先頭 from the stored
+  // artifact (like Telegram) instead of the 400-char summary cut, so CC / BCC
+  // are always visible. Each recipient line is capped to stay under Slack's
+  // 3000-char section limit; the dashboard shows the full list.
+  // The body preview is a mrkdwn quote: each line is escaped first, then
+  // prefixed with ">" (escaping afterwards would turn it into "&gt;"), so a
+  // body line like "BCC: …" cannot pass for a header line.
+  const mailArtifact = readMailArtifact(approval.metadata);
+  const mailParts = mailArtifact
+    ? formatMailCardParts(mailArtifact, {
+        recipientChars: SLACK_RECIPIENT_LINE_MAX,
+        subjectChars: SLACK_SUBJECT_LINE_MAX,
+      })
+    : null;
+  const detail = mailParts
+    ? [
+        ...mailParts.header.map((line) => escapeSlackMrkdwn(line)),
+        ...(mailParts.bodyLines
+          ? [
+              MAIL_BODY_PREVIEW_LABEL,
+              ...mailParts.bodyLines.map((line) => (line ? `> ${escapeSlackMrkdwn(line)}` : ">")),
+            ]
+          : []),
+        ...mailParts.trailer.map((line) => escapeSlackMrkdwn(line)),
+        approval.jobId ? `ジョブID: ${escapeSlackMrkdwn(approval.jobId)}` : "",
+      ]
+    : [escapeSlackMrkdwn(truncate(approval.summary, 400))];
   const summary = [
     `*承認依頼* \`#${escapeSlackMrkdwn(approval.id.slice(0, 8))}\`  risk: ${escapeSlackMrkdwn(approval.risk)}`,
     `社員: ${escapeSlackMrkdwn(employee?.displayName || approval.employeeId)}`,
     `ツール: \`${escapeSlackMrkdwn(approval.tool || "unknown")}\``,
     `目的: ${escapeSlackMrkdwn(approval.purpose)}`,
-    escapeSlackMrkdwn(truncate(approval.summary, 400)),
+    ...detail,
     workflowText,
   ].filter(Boolean).join("\n");
   const section = {

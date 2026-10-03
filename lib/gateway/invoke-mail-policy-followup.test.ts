@@ -420,6 +420,9 @@ describe("item 3: approved re-invoke judges the approved snapshot and the reques
     await setPolicy([{ audience: "any", sendMode: "needs_approval", toDomainDenylist: ["blocked.example"] }]);
     const r = await invokeSales({ ...body, args: { ...body.args, bcc: ["z@mx.blocked.example"] }, approvalId });
     expect(r.httpStatus).toBe(409);
-    expect(r.body.blockedReason).toBe("mail_domain_denied");
+    // Since the approved-content pin (2026-10-04), any added recipient is
+    // rejected as a mismatch before the policy re-check runs.
+    expect(r.body.code).toBe("approved_send_content_mismatch");
+    expect(r.body.mismatchedFields).toEqual(["args.bcc"]);
   });
 });

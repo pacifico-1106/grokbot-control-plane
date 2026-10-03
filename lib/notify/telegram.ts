@@ -1,3 +1,9 @@
+import {
+  formatMailCardParts,
+  MAIL_BODY_PREVIEW_LABEL,
+  readMailArtifact,
+  type ApprovalArtifact,
+} from "@/lib/approvals/summary";
 import { getAppOrigin } from "@/lib/approvals/tokens";
 import {
   getApprovalById,
@@ -63,28 +69,13 @@ function safeArtifactUrl(approval: ApprovalRequest): string | null {
 const TELEGRAM_MESSAGE_MAX = 4096;
 const TELEGRAM_OVERFLOW_SUFFIX = "…(続きはダッシュボード)";
 
-type ApprovalArtifact = {
-  tool?: string;
-  to?: string;
-  subject?: string;
-  body?: string;
-};
+/** Per 宛先 / CC / BCC line cap so a long list cannot push the card over 4096 chars. */
+const TELEGRAM_RECIPIENT_LINE_MAX = 500;
+// Same cap as the Slack card; keeps a long subject under the 4096-char limit.
+const TELEGRAM_SUBJECT_LINE_MAX = 200;
 
 function extractMailArtifact(approval: ApprovalRequest): ApprovalArtifact | null {
-  const artifact = approval.metadata?.artifact;
-  if (!artifact || typeof artifact !== "object" || Array.isArray(artifact)) {
-    return null;
-  }
-  const rec = artifact as Record<string, unknown>;
-  if (rec.tool !== "mail.send" && rec.tool !== "mail.draft") {
-    return null;
-  }
-  return {
-    tool: String(rec.tool),
-    to: typeof rec.to === "string" ? rec.to : undefined,
-    subject: typeof rec.subject === "string" ? rec.subject : undefined,
-    body: typeof rec.body === "string" ? rec.body : undefined,
-  };
+  return readMailArtifact(approval.metadata);
 }
 
 function composeApprovalTelegramMessage(
@@ -105,17 +96,19 @@ function composeApprovalTelegramMessage(
   // mail.send: put 宛先/件名/本文先頭 first for judgment material
   if (mailArtifact) {
     lines.push("─");
-    if (mailArtifact.to) {
-      lines.push(`宛先: ${escapeTelegramHtml(mailArtifact.to)}`);
+    // 宛先 / CC / BCC / 件名 are one line each (agent values collapsed); the
+    // body preview is a <blockquote> so a body line like "BCC: …" cannot pass
+    // for a header line.
+    const parts = formatMailCardParts(mailArtifact, {
+      recipientChars: TELEGRAM_RECIPIENT_LINE_MAX,
+      subjectChars: TELEGRAM_SUBJECT_LINE_MAX,
+    });
+    for (const line of parts.header) {
+      lines.push(escapeTelegramHtml(line));
     }
-    if (mailArtifact.subject) {
-      lines.push(`件名: ${escapeTelegramHtml(mailArtifact.subject)}`);
-    }
-    if (mailArtifact.body) {
-      const preview = mailArtifact.body.length > 200
-        ? mailArtifact.body.slice(0, 200) + "…"
-        : mailArtifact.body;
-      lines.push(`本文先頭: ${escapeTelegramHtml(preview)}`);
+    if (parts.bodyLines) {
+      lines.push(MAIL_BODY_PREVIEW_LABEL);
+      lines.push(`<blockquote>${escapeTelegramHtml(parts.bodyLines.join("\n"))}</blockquote>`);
     }
     lines.push("─");
   } else {
