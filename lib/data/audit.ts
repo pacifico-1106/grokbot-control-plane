@@ -58,6 +58,53 @@ export async function listAuditEventsForStuckWatch(
   return data.map((r) => mapAuditRow(r as Record<string, unknown>));
 }
 
+/** Wake audits that record the Slack speaker (see mention-ingress postWake). */
+export const CONVERSATION_WAKE_ACTIONS = [
+  "slack.mention_wake",
+  "slack.internal_im_wake",
+  "slack.user_token_im_wake",
+  "slack.user_token_channel_wake",
+] as const;
+
+/**
+ * Recent wake audits for ONE employee of ONE org (config.change_request
+ * requester check). Returns null when the lookup fails so callers can fail
+ * closed instead of treating an error as "no record".
+ */
+export async function listRecentWakeAuditsForEmployee(
+  orgId: string,
+  employeeId: string,
+  sinceIso: string,
+  limit = 300
+): Promise<AuditEvent[] | null> {
+  if (!orgId || !employeeId) return null;
+  const actions = CONVERSATION_WAKE_ACTIONS as readonly string[];
+  if (isDemoMode()) {
+    return getRuntimeAudit()
+      .filter(
+        (event) =>
+          event.orgId === orgId &&
+          event.employeeId === employeeId &&
+          actions.includes(event.action) &&
+          event.createdAt >= sinceIso
+      )
+      .slice(0, limit);
+  }
+  const admin = createSupabaseAdminClient();
+  if (!admin) return null;
+  const { data, error } = await admin
+    .from("audit_events")
+    .select("*")
+    .eq("org_id", orgId)
+    .eq("employee_id", employeeId)
+    .in("action", [...actions])
+    .gte("created_at", sinceIso)
+    .order("created_at", { ascending: false })
+    .limit(limit);
+  if (error || !data) return null;
+  return data.map((r) => mapAuditRow(r as Record<string, unknown>));
+}
+
 export function isMentionWakeAudit(event: AuditEvent): boolean {
   return (
     STUCK_WATCH_WAKE_ACTIONS.includes(

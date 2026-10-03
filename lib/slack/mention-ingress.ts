@@ -546,6 +546,10 @@ async function postWake(
         ts: payload.ts,
         thread_ts: payload.thread_ts,
         eventId: payload.eventId,
+        // Who actually spoke (Slack-signed event.user). Lets later actions such as
+        // config.change_request check a self-declared requester against it.
+        speakerId: payload.speakerId || undefined,
+        speakerTeamId: payload.speakerTeamId || undefined,
         userTokenPath: trigger === "user_token_im",
         wakeParentStashed: payload.ts && !payload.thread_ts ? true : undefined,
         ...handoffMeta,

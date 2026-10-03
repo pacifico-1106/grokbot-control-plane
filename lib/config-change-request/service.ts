@@ -48,7 +48,11 @@ import {
   type ConfigChangeBefore,
   type ConfigChangeMetadata,
   type ParsedConfigChangeInput,
+  type RequesterVerification,
+  requesterNameForNoticeJa,
 } from "./core";
+import { isConfigChangeRequesterVerifyEnforced } from "./flags";
+import { verifyConfigChangeRequester } from "./requester-verify";
 
 export type ApproverResolution =
   | { ok: true; surface: "slack_dm" | "slack" | "telegram" | "line"; channelId: string | null }
@@ -92,11 +96,23 @@ async function defaultNotify(approval: ApprovalRequest, employee: Employee): Pro
 export type ConfigChangeDeps = {
   resolveApprover: (orgId: string, employee: Employee) => Promise<ApproverResolution>;
   notify: (approval: ApprovalRequest, employee: Employee) => Promise<boolean>;
+  verifyRequester: (input: {
+    orgId: string;
+    employeeId: string;
+    value: ParsedConfigChangeInput;
+  }) => Promise<RequesterVerification>;
 };
 
 const DEFAULT_DEPS: ConfigChangeDeps = {
   resolveApprover: resolveConfigChangeApprover,
   notify: defaultNotify,
+  verifyRequester: ({ orgId, employeeId, value }) =>
+    verifyConfigChangeRequester({
+      orgId,
+      employeeId,
+      requestedBy: value.requestedBy,
+      conversation: value.conversation,
+    }),
 };
 
 export type ApprovedInstructions = {
@@ -293,6 +309,34 @@ export async function createConfigChangeRequest(
     }
   }
 
+  // The requester the AI declares is self-reported; check it against the real
+  // Slack speaker recorded at wake time. Never throws; failure → unverified.
+  const verification = await d
+    .verifyRequester({ orgId: input.orgId, employeeId: employee.id, value })
+    .catch((): RequesterVerification => ({
+      status: "unverified",
+      reason: "lookup_failed",
+      declaredSlackUserId: null,
+      observedSpeakerIds: [],
+      checkedAt: new Date().toISOString(),
+    }));
+  const requesterName = requesterNameForNoticeJa(value.requestedBy, verification);
+  if (verification.status !== "verified" && isConfigChangeRequesterVerifyEnforced()) {
+    await auditRefusal(employee, input.credentialId, "requester_not_verified", {
+      requesterVerification: verification,
+    });
+    return {
+      ok: false,
+      code: "requester_not_verified",
+      applied: false,
+      requesterVerification: verification,
+      messageJa:
+        "依頼者を Slack の実際の発言者と照合できなかったため、この変更依頼は受け付けられません（変更は反映していません）。requestedBy.slackUserId に起こされた会話の speakerId を、conversation に同じ会話の slackChannelId と threadTs を入れて、もう一度依頼してください。",
+      requesterNoticeJa:
+        "ご依頼者さん、申し訳ありません。ご依頼者を確認できなかったため、この変更依頼は受け付けできませんでした。ご本人から改めてご依頼ください。",
+    };
+  }
+
   const approver = await d.resolveApprover(input.orgId, employee);
   if (!approver.ok) {
     await auditRefusal(employee, input.credentialId, "no_approver_resolvable", { reason: approver.reason });
@@ -303,7 +347,7 @@ export async function createConfigChangeRequest(
       reason: approver.reason,
       messageJa:
         "承認者に届ける経路（承認インボックス：Slack DM / Slack / Telegram / LINE）が設定されていないため、この変更依頼は受け付けられません。変更は反映していません。管理者に承認インボックスの設定を依頼してください。",
-      requesterNoticeJa: `${value.requestedBy.name || "ご依頼者"}さん、申し訳ありません。承認者に確認できる経路が未設定のため、この変更は反映できません。管理者に承認インボックスの設定をご依頼ください。`,
+      requesterNoticeJa: `${requesterName}さん、申し訳ありません。承認者に確認できる経路が未設定のため、この変更は反映できません。管理者に承認インボックスの設定をご依頼ください。`,
     };
   }
 
@@ -313,12 +357,14 @@ export async function createConfigChangeRequest(
     employeeDisplayName: employee.displayName,
     diffSummaryJa: diff.summaryJa,
     reason: value.reason,
+    verification,
   });
   const configChange: ConfigChangeMetadata = {
     version: 1,
     kind: proposal.kind,
     employeeId: employee.id,
     requestedBy: value.requestedBy,
+    requesterVerification: verification,
     reason: value.reason,
     conversation: value.conversation,
     proposal,
@@ -357,6 +403,7 @@ export async function createConfigChangeRequest(
       approvalId: created.approval.id,
       kind: proposal.kind,
       requestedBy: value.requestedBy,
+      requesterVerification: verification,
       approverSurface: approver.surface,
     },
   }).catch(() => null);
@@ -379,7 +426,7 @@ export async function createConfigChangeRequest(
     approverSurface: approver.surface,
     approverNotified: notified,
     messageJa: "変更依頼を承認者へ送りました。承認されるまで反映しません。staffpass_get_approval_status で結果を確認してください。",
-    requesterAckJa: `${value.requestedBy.name || "ご依頼者"}さん、ありがとうございます。この変更（${diff.summaryJa}）は承認者の確認が必要なため、承認後に反映いたします。`,
+    requesterAckJa: `${requesterName}さん、ありがとうございます。この変更（${diff.summaryJa}）は承認者の確認が必要なため、承認後に反映いたします。`,
   };
 }
 
@@ -542,7 +589,13 @@ export function requesterNoticeForApproval(approval: ApprovalRequest): string | 
             ? "expired"
             : null;
   if (!outcome) return null;
-  return buildRequesterNoticeJa({ requester: meta.requestedBy, diffSummaryJa: meta.diffSummaryJa, outcome });
+  return buildRequesterNoticeJa({
+    requester: meta.requestedBy,
+    // Tickets created before the requester check → treated as unverified.
+    verification: meta.requesterVerification ?? null,
+    diffSummaryJa: meta.diffSummaryJa,
+    outcome,
+  });
 }
 
 /**
