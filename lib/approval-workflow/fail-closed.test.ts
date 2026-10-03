@@ -27,6 +27,9 @@ mock.module("@/lib/data/approvals", () => ({
   resolveApproval: async () => ({ ...approval, status: "approved" }),
   getApprovalByTelegramRef: async () => null,
   getApprovalByTelegramMessageId: async () => null,
+  // Re-exported by @/lib/data (index.ts); missing names make the import a SyntaxError.
+  listPendingDecisionsWithDeadlines: async () => [],
+  listPendingT2Decisions: async () => [],
 }));
 mock.module("@/lib/supabase", () => ({ createSupabaseAdminClient: () => ({
   rpc: async (name: string) => {

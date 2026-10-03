@@ -44,10 +44,16 @@ import {
   sendApprovalSetupNotice,
 } from "@/lib/slack/approval-dm-open";
 import { syncAutoDmRoutesForEmployee, type DmAutorouteItem, type DmAutorouteResult } from "@/lib/slack/dm-autoroute";
+import { isSlackAuthorizeLinkEnabled } from "@/lib/slack/authorize-link-flags";
+import {
+  allowedSlackAccountIds,
+  resolveAllowedAccountsSlackNextStep,
+  resolveAuthorizeLinkFollowUpNextStep,
+} from "@/lib/slack/authorize-link-guidance";
 import { isSlackDmAutorouteEnabled, isSlackUserScopeImWriteEnabled } from "@/lib/slack/dm-autoroute-flags";
 import { slackAuthorizeUrlTemplate } from "@/lib/slack/slack-status-diagnose";
 import { isSharedApprovalAppEnabled } from "@/lib/slack/shared-approval-flags";
-import type { NotificationChannel } from "@/lib/types";
+import type { AuditEvent, NotificationChannel } from "@/lib/types";
 
 export const SLACK_DM_SETUP_TOOLS = [
   "setup.slackDmApprovalStatus",
@@ -158,6 +164,7 @@ function flagSnapshot() {
     APPROVAL_DELIVERY_FAILURE_ALERT: parseFlag(process.env.APPROVAL_DELIVERY_FAILURE_ALERT),
     ADMIN_MCP_DM_AUTOROUTE_AUDIT_ONLY: isAdminMcpDmAutorouteAuditOnlyEnabled(),
     SLACK_SHARED_APPROVAL_APP_ENABLED: parseFlag(process.env.SLACK_SHARED_APPROVAL_APP_ENABLED),
+    SLACK_AUTHORIZE_LINK_ENABLED: isSlackAuthorizeLinkEnabled(),
   };
 }
 
@@ -180,6 +187,26 @@ function destinationKind(destination: string): "dm" | "channel" | "none" {
 // ---------------------------------------------------------------------------
 // setup.slackDmApprovalStatus (read-only)
 // ---------------------------------------------------------------------------
+
+/**
+ * 追記 3: failed follow-up step names of the employee's latest re-authorize
+ * link, when it ended `completed_with_errors` and no DM auto-route ran since
+ * (events newest-first). Step names only — never codes with ids.
+ */
+function authorizeLinkFollowUpErrors(events: AuditEvent[], employeeId: string): string[] {
+  for (const event of events) {
+    if (event.employeeId !== employeeId && event.metadata?.employeeId !== employeeId) continue;
+    const name = String(event.metadata?.event || "");
+    if (name.startsWith("slack_dm_autoroute.") || name === "slack_authorize_link.completed") return [];
+    if (name === "slack_authorize_link.completed_with_errors") {
+      const steps = Array.isArray(event.metadata?.failedSteps) ? (event.metadata?.failedSteps as unknown[]) : [];
+      return steps
+        .map((item) => String((item as Record<string, unknown>)?.step || ""))
+        .filter((step) => /^[a-z_]{1,32}$/.test(step));
+    }
+  }
+  return [];
+}
 
 export async function diagnoseSlackDmApprovalSetup(orgId: string): Promise<Record<string, unknown>> {
   const flags = flagSnapshot();
@@ -254,6 +281,12 @@ export async function diagnoseSlackDmApprovalSetup(orgId: string): Promise<Recor
     .filter((employee) => employee.orgId === orgId && employee.status === "active")
     .slice(0, MAX_EMPLOYEES);
   const employeeRows: Array<Record<string, unknown>> = [];
+  // Same resolver as setup.slackAuthorizeLink.issue (registry-aware).
+  const allowedAccountsStep = await resolveAllowedAccountsSlackNextStep();
+  // 追記 3: newest-first audit; one read for every employee row.
+  const linkEvents = employees.length
+    ? (await listAuditEvents(orgId, 500).catch(() => [])).filter((event) => event.orgId === orgId)
+    : [];
   for (const employee of employees) {
     const identity = await getEmployeeSlackIdentity(employee.id);
     const linked = Boolean(identity && identity.orgId === orgId && identity.status === "linked");
@@ -284,6 +317,9 @@ export async function diagnoseSlackDmApprovalSetup(orgId: string): Promise<Recor
       imRoutes: routes.length,
       autoRoutes: flags.SLACK_DM_AUTOROUTE_ENABLED ? auto : null,
       authorizeUrl: slackAuthorizeUrlTemplate(employee.id),
+      allowedSlackAccounts: allowedSlackAccountIds(employee).length,
+      allowedAccountsAdminTool: allowedAccountsStep.allowedAccountsAdminTool,
+      authorizeLinkFollowUpErrors: authorizeLinkFollowUpErrors(linkEvents, employee.id),
     });
   }
 
@@ -325,13 +361,34 @@ export async function diagnoseSlackDmApprovalSetup(orgId: string): Promise<Recor
     nextStepsJa.push("社内の相手を parties.upsert（kind=slack_user, audience=internal）で登録してください（DM 自動ルートの相手はこの台帳だけ）。");
   }
   for (const row of employeeRows) {
-    if (!row.slackIdentityLinked) {
-      nextStepsJa.push(`${row.displayName}: 社員証の Slack 連携を人がタップ（${row.authorizeUrl}）。`);
-    } else if ((row.missingUserScopes as string[]).length) {
+    // SLACK_AUTHORIZE_LINK_ENABLED: point at the re-authorize link (approver gets
+    // it in the approval-app DM; the employee's Slack account only taps 「許可する」).
+    const linkStep = flags.SLACK_AUTHORIZE_LINK_ENABLED
+      ? `setup.slackAuthorizeLink.issue（employeeId=${row.employeeId}）で再認可リンクを発行（人の承認 1 回 → 承認アプリの DM で社員本人の Slack に届く（U… が 1 つに決まらないときは承認者）→ 社員本人の Slack で開いて「許可する」）。`
+      : "";
+    if (!row.slackIdentityLinked && linkStep && row.allowedSlackAccounts === 0) {
+      // No Slack U… on the badge: the link would be refused — say how to add it.
+      nextStepsJa.push(`${row.displayName}: 社員証の allowedAccounts に Slack アカウントがありません。${allowedAccountsStep.nextStepJa}`);
+    } else if (!row.slackIdentityLinked) {
       nextStepsJa.push(
-        `${row.displayName}: user token に ${(row.missingUserScopes as string[]).join(", ")} がありません。もう一度 Slack 連携をタップ（${row.authorizeUrl}）。`
+        linkStep
+          ? `${row.displayName}: Slack 未連携です。${linkStep}`
+          : `${row.displayName}: 社員証の Slack 連携を人がタップ（${row.authorizeUrl}）。`
+      );
+    } else if ((row.missingUserScopes as string[]).length) {
+      const missing = (row.missingUserScopes as string[]).join(", ");
+      nextStepsJa.push(
+        linkStep
+          ? `${row.displayName}: user token に ${missing} がありません。${linkStep}`
+          : `${row.displayName}: user token に ${missing} がありません。もう一度 Slack 連携をタップ（${row.authorizeUrl}）。`
       );
     }
+  }
+  for (const row of employeeRows) {
+    const failedSteps = row.authorizeLinkFollowUpErrors as string[];
+    if (!failedSteps.length) continue;
+    const next = await resolveAuthorizeLinkFollowUpNextStep(String(row.employeeId), failedSteps);
+    nextStepsJa.push(`${row.displayName}: 再認可リンクの後続の処理（${failedSteps.join(", ")}）が失敗しました。${next.nextStepJa}`);
   }
   if (flags.SLACK_DM_AUTOROUTE_ENABLED && parties.length > 0) {
     nextStepsJa.push("dmAutoroute.run（dryRun=true）で作られる DM を確認 → dryRun=false で実行。結果は dmAutoroute.list。");
@@ -742,3 +799,10 @@ export async function handleSlackDmSetupTool(
       return handleApprovalDeliveryAutoResolve(cred, args);
   }
 }
+
+// Shared with setup.slackAuthorizeLink.issue (lib/slack/authorize-link.ts).
+export {
+  resolveInbox as resolveSlackApprovalInbox,
+  allowedUsers as approvalInboxAllowedUsers,
+  probeScopes as probeSlackTokenScopes,
+};

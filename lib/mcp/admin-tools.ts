@@ -52,6 +52,7 @@ import { encryptNotificationSecrets } from "@/lib/notify/crypto";
 import { queueAdminTool } from "@/lib/admin-mcp/queue";
 import { handleSlackDmSetupTool, isSlackDmSetupTool } from "@/lib/admin-mcp/slack-dm-setup";
 import { SLACK_APPROVER_SET_TOOL, handleSlackApproverSet } from "@/lib/admin-mcp/slack-approver";
+import { SLACK_AUTHORIZE_LINK_TOOL, handleSlackAuthorizeLinkIssue } from "@/lib/admin-mcp/slack-authorize-link";
 import { fulfillApprovedAdmin, parseAdminFulfillment } from "@/lib/admin-mcp/fulfill-admin";
 import { auditActionForAdminTool } from "@/lib/admin-mcp/audit-class";
 import { buildPollUrl } from "@/lib/approvals/tokens";
@@ -804,7 +805,7 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
   {
     name: "stuckWatch.retry",
     description:
-      "Retry a stuck watch item (read-only action, no approval ticket). F7: ops_fault only auto path; expected_gate refused; config_drift notify/fix. W2 uses existing fulfill reinvoke; send/confirm re-evaluates gates.",
+      "Retry a stuck watch item. Writes: re-runs the already-approved fulfillment of the related approval (W2, or W1 with an approved ticket; counts toward maxAutoRetries) or re-submits the stored invoke snapshot through the gateway (W1 ops_fault). A fulfill re-run also updates the approval's stuck-watch retry count and records stuck_watch.w2_retry; the admin call records a stuck_watch.retry audit event. NOT always_human: no approval ticket of its own, because it only re-runs work that was already approved or goes back through the normal gateway, where gates are re-evaluated (a send may come back needs_approval). F7: ops_fault only; expected_gate refused; config_drift returns a fix hint without retrying; resolved items refused.",
     inputSchema: {
       type: "object",
       properties: {
@@ -817,7 +818,7 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
   {
     name: "stuckWatch.resolve",
     description:
-      "Mark a stuck watch item resolved (read-only action, no approval ticket). F7: excludes item from active watch until re-detected.",
+      "Mark a stuck watch item resolved. Writes: records a stuck_watch.resolve audit event (resolvedBy, optional note); the item is excluded from the active watch until re-detected. Does not retry, send, or change the underlying approval or job. NOT always_human: no approval ticket.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1289,22 +1290,61 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
     },
   },
   {
-    name: "decision.deputyActivate",
+    name: "setup.slackAuthorizeLink.issue",
     description:
-      "Activate a deputy (代理人) for a pending decision request (always_human). Deputy can act on behalf of the requester. Security: self-approval forbidden (deputy cannot be requester), cross-org forbidden (deputy must be in same org). P1_DECISION_WORKFLOW_ENABLED must be ON.",
+      "Issue an AI社員's Slack re-authorize link (always_human; requires SLACK_AUTHORIZE_LINK_ENABLED). After human approval the link is delivered ONLY as an approval-app DM: deliverTo \"employee\" (default) sends it to the AI社員's own Slack account (the pinned U…, only when exactly one is known; the approver gets a URL-free 「社員本人に送りました」 notice), otherwise — or with deliverTo \"approver\" — to an approver (one of the Slack approval inbox's allowed user IDs). Slack Connect / guest / bot recipients are refused; a fallback to the approver is recorded with its reason. If the link is opened by another account or the code exchange fails, the link is burned and the recipient is DM'd (the other account's ID is never shown). Per employee, single-use, expires in 24h, only a hash is stored; issuing again supersedes the previous link. Anti-takeover: the link is pinned to the approval app's Slack team and to the employee's known Slack user (existing identity or the single allowed Slack account); a different account/workspace is rejected and nothing is saved. The URL is never returned — the result says only where it was delivered (deliveryTarget employee/approver + deliveryFallbackReason). Completing it re-links the employee (gets im:write when SLACK_USER_SCOPE_IM_WRITE is ON) and the existing DM auto-route runs. Optional SLACK_AUTHORIZE_LINK_REISSUE_AUDIT_ONLY (default OFF) skips the ticket (admin audit row instead) only for an already-linked employee whose token lacks exactly im:write, never for an AI社員 bound to this admin agent. Never accepts a token. Admin cannot self-approve. Re-invoke with approvalId to read the result.",
     inputSchema: {
       type: "object",
       properties: {
-        approvalId: { type: "string", description: "Original decision request approval ID" },
-        deputyUserId: { type: "string", description: "User ID of the deputy (must be in same org, cannot be requester)" },
-        reason: { type: "string", description: "Reason for deputy activation" },
+        employeeId: { type: "string", description: "AI社員 ID (this org only)" },
+        inboxId: { type: "string", description: "Slack approval inbox ID (optional when the org has exactly one enabled Slack inbox)" },
+        deliveryUserId: { type: "string", description: "Approver Slack user ID (U…) who receives the DM (or the 「社員本人に送りました」 notice for deliverTo=employee); must be one of the inbox's allowed user IDs. Optional when there is exactly one." },
+        deliverTo: {
+          type: "string",
+          enum: ["employee", "approver"],
+          description: "employee (default): DM the link to the AI社員's own Slack U… via the approval app (falls back to approver when the U… is not exactly one). approver: DM the link to the approver.",
+        },
         jobId: { type: "string" },
+        approvalId: { type: "string", description: "Re-invoke with approved ticket ID" },
       },
-      required: ["approvalId", "deputyUserId"],
+      required: ["employeeId"],
       additionalProperties: false,
     },
   },
 ];
+
+/**
+ * decision.deputyActivate is NOT advertised on the Admin MCP (tools/list).
+ *
+ * It was listed in ADMIN_MCP_TOOLS but never added to ADMIN_MCP_TOOL_NAMES
+ * (admin-public.ts), so every call already failed closed with
+ * `unknown_mcp_tool`. Advertising an uncallable tool is misleading, and simply
+ * registering the name would not make it work either: its `approvalId`
+ * argument (the ORIGINAL decision request) is taken by the generic
+ * approvalId re-invoke path for mutation tools (handleAdminApprovalReinvoke),
+ * so handleDeputyActivate would never be reached (approval_tool_mismatch /
+ * the original ticket's status is returned instead).
+ * Wiring it needs its own reviewed change (argument rename or reinvoke
+ * exclusion + fulfillment test) and must add it to BOTH lists; the test
+ * `lib/mcp/admin-tools.test.ts` enforces advertised === callable.
+ * Behaviour is unchanged: still `unknown_mcp_tool`.
+ */
+export const DECISION_DEPUTY_ACTIVATE_TOOL_DEF_UNWIRED: McpToolDef = {
+  name: "decision.deputyActivate",
+  description:
+    "Activate a deputy (代理人) for a pending decision request (always_human). Deputy can act on behalf of the requester. Security: self-approval forbidden (deputy cannot be requester), cross-org forbidden (deputy must be in same org). P1_DECISION_WORKFLOW_ENABLED must be ON.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      approvalId: { type: "string", description: "Original decision request approval ID" },
+      deputyUserId: { type: "string", description: "User ID of the deputy (must be in same org, cannot be requester)" },
+      reason: { type: "string", description: "Reason for deputy activation" },
+      jobId: { type: "string" },
+    },
+    required: ["approvalId", "deputyUserId"],
+    additionalProperties: false,
+  },
+};
 
 /**
  * Admin MCP tools that do NOT create approval tickets.
@@ -2263,6 +2303,20 @@ export async function callAdminMcpTool(
   if (name === SLACK_APPROVER_SET_TOOL) {
     // SLACK_SHARED_APPROVAL_APP_ENABLED: org from the credential; always_human.
     const outcome = await handleSlackApproverSet(cred, args);
+    if (outcome.kind === "result") return toolResult(outcome.data, outcome.isError === true);
+    const queued = await queueAdminTool({
+      cred,
+      tool: name,
+      args: { ...outcome.queuedArgs, ...(typeof args.jobId === "string" ? { jobId: args.jobId } : {}) },
+      rawArgsForSecretScan: args,
+      summary: outcome.summary,
+    });
+    return toolResult(queued, false);
+  }
+
+  if (name === SLACK_AUTHORIZE_LINK_TOOL) {
+    // SLACK_AUTHORIZE_LINK_ENABLED: org from the credential; URL never returned.
+    const outcome = await handleSlackAuthorizeLinkIssue(cred, args);
     if (outcome.kind === "result") return toolResult(outcome.data, outcome.isError === true);
     const queued = await queueAdminTool({
       cred,

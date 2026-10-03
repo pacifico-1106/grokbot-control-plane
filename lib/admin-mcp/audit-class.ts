@@ -61,6 +61,7 @@ export const ADMIN_TOOL_AUDIT_ACTION: Record<string, AdminAuditAction> = {
   "dmAutoroute.run": "admin.channel",
   "setup.approvalDelivery.autoResolve": "admin.notificationChannel",
   "setup.slackApprover.set": "admin.notificationChannel",
+  "setup.slackAuthorizeLink.issue": "admin.link",
 };
 
 /** Operational / employee-badge class — never lead the dashboard change log. */

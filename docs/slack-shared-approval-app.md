@@ -102,24 +102,73 @@
 
 ## Slack アプリの作り方（八坂さん・手作業）
 
-1. https://api.slack.com/apps → **Create New App** → **From a manifest** を選び、Staffpass の開発用ワークスペースを選ぶ。
-2. 下の manifest（YAML）をそのまま貼り、**Create** を押す。
-3. **Basic Information** で次の 4 つを控える（チャットには貼らず、Vercel に直接入れる）:
-   - App ID
-   - Client ID
-   - Client Secret
-   - Signing Secret
-4. **Manage Distribution**（Settings → Manage Distribution）で、チェックリストを確認して **Activate Public Distribution** を押す。Slack Marketplace への申請は不要。
-5. **OAuth & Permissions** で次を確認する:
-   - 「Advanced token security via token rotation」が **OFF**（manifest の `token_rotation_enabled: false`）。ON にすると xoxb が 12 時間で失効し、承認が届かなくなる。
-   - Redirect URL が 1 件だけ入っている。
-   - Bot Token Scopes が 4 つ（chat:write、im:write、im:read、users:read）になっている。
-   - User Token Scopes は **空**のまま。
-6. Vercel に env を入れて deploy し、`SLACK_SHARED_APPROVAL_APP_ENABLED=1` にする（下の表）。その後 **Event Subscriptions** を開き、Request URL の **Retry**（または保存し直し）で Verified にする。
-   - アプリを作った直後は、env が未設定なので URL の確認に失敗するが、それで正常。
-7. 開発用ワークスペースに自分でインストールする必要はない。テナントは `install/start` から追加する。
+フラグが OFF のあいだは Events の URL 確認（`url_verification`）が通らない（404）ため、manifest に `event_subscriptions` を入れて作ると、作成の時点でエラーになります。そこで **events なしの manifest で作り、フラグを ON にしてから画面で Event Subscriptions を足します**。
 
-### manifest（Create app from manifest に貼り付け）
+1. **events なしの manifest でアプリを作る**
+   1. https://api.slack.com/apps → **Create New App** → **From a manifest** を選び、Staffpass の開発用ワークスペースを選ぶ。
+   2. 下の manifest（events なし版）を貼り、**Create** を押す。Slack の画面は **JSON** タブが最初に開くので、JSON 版をそのまま貼れば足ります（YAML タブに切り替えて YAML 版を貼っても中身は同じ）。
+   3. **Basic Information** で次の 4 つを控える（チャットには貼らず、Vercel に直接入れる）: App ID / Client ID / Client Secret / Signing Secret
+   4. **Manage Distribution**（Settings → Manage Distribution）で、チェックリストを確認して **Activate Public Distribution** を押す。Slack Marketplace への申請は不要。
+   5. **OAuth & Permissions** で次を確認する:
+      - 「Advanced token security via token rotation」が **OFF**（manifest の `token_rotation_enabled: false`）。ON にすると xoxb が 12 時間で失効し、承認が届かなくなる。
+      - Redirect URL が 1 件だけ入っている。
+      - Bot Token Scopes が 4 つ（chat:write、im:write、im:read、users:read）になっている。
+      - User Token Scopes は **空**のまま。
+2. **env 4 つを設定し、フラグを ON にする**: Vercel に env 4 つ（下の表）を入れて deploy し、`SLACK_SHARED_APPROVAL_APP_ENABLED=1` にして redeploy する。これで Events URL が `url_verification` に応答するようになる。
+3. **Slack のアプリ設定画面で Event Subscriptions を ON にする**
+   1. **Event Subscriptions** を開き、**Enable Events** を ON にする。
+   2. **Request URL** に `https://staffpass.sealith.com/api/webhooks/slack/approval-app/events` を入れる。すぐに確認が走り、**Verified** と出れば OK（出なければ、2 のフラグと env が反映されているか確認して **Retry**）。
+   3. **Subscribe to bot events** に `app_uninstalled` と `tokens_revoked` を足す（追加のスコープは要らない）。
+4. **Save Changes** を押して保存する。画面上部に reinstall を促す表示が出ても、開発用ワークスペースには入れていないので押さなくてよい。
+
+- 開発用ワークスペースに自分でインストールする必要はない。テナントは `install/start` から追加する。
+- 3 を済ませるまでは、アンインストールや token の取り消しが Events では届かない（配信時に `token_revoked` / `invalid_auth` / `account_inactive` が返ったときの検知は動く）。テナントにインストールしてもらう前に 3・4 を終えること。
+
+### manifest（events なし版・最初に使う）
+
+Slack の画面の初期表示は JSON タブです。JSON 版と YAML 版は同じ内容です（scopes・redirect URL・interactivity・settings が一致することを確認済み）。Events は手順 3 で画面から足すので、ここには入れていません。
+
+JSON 版:
+
+```json
+{
+  "display_information": {
+    "name": "Staffpass承認",
+    "description": "Staffpass の承認依頼を承認者の DM に届け、ボタンで承認・却下するためのアプリです。",
+    "background_color": "#1f2937"
+  },
+  "features": {
+    "bot_user": {
+      "display_name": "Staffpass承認",
+      "always_online": true
+    }
+  },
+  "oauth_config": {
+    "redirect_urls": [
+      "https://staffpass.sealith.com/api/slack/approval-app/callback"
+    ],
+    "scopes": {
+      "bot": [
+        "chat:write",
+        "im:write",
+        "im:read",
+        "users:read"
+      ]
+    }
+  },
+  "settings": {
+    "interactivity": {
+      "is_enabled": true,
+      "request_url": "https://staffpass.sealith.com/api/webhooks/slack/interactivity"
+    },
+    "org_deploy_enabled": false,
+    "socket_mode_enabled": false,
+    "token_rotation_enabled": false
+  }
+}
+```
+
+YAML 版:
 
 ```yaml
 display_information:
@@ -140,17 +189,23 @@ oauth_config:
       - im:read
       - users:read
 settings:
-  event_subscriptions:
-    request_url: https://staffpass.sealith.com/api/webhooks/slack/approval-app/events
-    bot_events:
-      - app_uninstalled
-      - tokens_revoked
   interactivity:
     is_enabled: true
     request_url: https://staffpass.sealith.com/api/webhooks/slack/interactivity
   org_deploy_enabled: false
   socket_mode_enabled: false
   token_rotation_enabled: false
+```
+
+手順 3・4 のあとの最終形（参考）: 上の `settings` に次が加わった状態になります。manifest を後から編集するときに比べるためのもので、**最初の作成には使いません**（フラグ OFF のままだと URL 確認でエラーになる）。
+
+```yaml
+settings:
+  event_subscriptions:
+    request_url: https://staffpass.sealith.com/api/webhooks/slack/approval-app/events
+    bot_events:
+      - app_uninstalled
+      - tokens_revoked
 ```
 
 - `org_deploy_enabled: false` で、Enterprise Grid の org 全体へのインストールを出さないようにしています。コード側でも拒否します。
@@ -198,7 +253,7 @@ settings:
 2. migration を適用する（#234、#240 の migration とは順不同。フラグ OFF のまま先に入れても害はない）
 3. env の 4 つを入れて deploy する
 4. `SLACK_SHARED_APPROVAL_APP_ENABLED=1` にする
-5. Slack の Event Subscriptions で Retry して Verified にする
+5. Slack のアプリ設定画面で Event Subscriptions を ON にし、Request URL（`/api/webhooks/slack/approval-app/events`）を入れて Verified を確認、bot events に `app_uninstalled` と `tokens_revoked` を足して保存する（上の「Slack アプリの作り方」の手順 3・4）
 
 ロールバックは、フラグを OFF にすれば足ります。テーブルと index を消す SQL は migration のコメントに書いてあります。
 
@@ -210,9 +265,9 @@ settings:
 |---|---|---|---|
 | 0 | 野木 | 事前確認（read-only SQL）。T07UGN964N5 が別の org に紐づいていないこと:<br>`select org_id, enabled, config->>'teamId' t, config->>'expectedTeamId' e from org_notification_channels where provider='slack' and (config->>'teamId'='T07UGN964N5' or config->>'expectedTeamId'='T07UGN964N5');`<br>`select org_id, enabled from org_conversation_adapters where surface='slack' and config->>'teamId'='T07UGN964N5';`<br>結果が 0 行か、`6d134a38-…` の行だけなら OK。スペースツリー自身の Slack の行が**別の** team を指していたら、インストールは `team_mismatch_org` で拒否されるので、先に運営で確認する。 | 0 クリック（SQL 2 本） |
 | 1 | 野木 | A と B（#240）を merge・deploy する。migration を適用する（#234 → #240 → A の順で問題ない） | — |
-| 2 | 八坂 | Slack で manifest からアプリを作る（貼って Create、1 回）。Activate Public Distribution（1 回）。4 つの値を Vercel に入れる | 約 3 回 |
+| 2 | 八坂 | Slack で **events なしの** manifest からアプリを作る（JSON 版を貼って Create、1 回）。Activate Public Distribution（1 回）。4 つの値を Vercel に入れる | 約 3 回 |
 | 3 | 野木 | `SLACK_SHARED_APPROVAL_APP_ENABLED=1`、`APPROVAL_DELIVERY_FAILURE_ALERT=1`、`SLACK_AUTHORIZE_LINK_ENABLED=1`（B）、`SLACK_USER_SCOPE_IM_WRITE=1` / `SLACK_DM_AUTOROUTE_ENABLED=1`（#234、必要なら）を入れて redeploy する | — |
-| 4 | 八坂 | Slack の Event Subscriptions → Retry（Verified になる） | 1 回 |
+| 4 | 八坂 | 3 のあと、Slack のアプリ設定画面で Event Subscriptions を ON → Request URL `https://staffpass.sealith.com/api/webhooks/slack/approval-app/events`（Verified になる）→ bot events に `app_uninstalled` / `tokens_revoked` を追加 → Save Changes | 約 4 回 |
 | 5 | 稲盛（スペースツリー org の owner/admin で、Slack にアプリを追加できる人） | Staffpass にログインした状態で `https://staffpass.sealith.com/api/slack/approval-app/install/start` を開き、Slack で「許可する」を押す | **2 回** |
 | 6 | 木村（スペースツリーの管理 AI 社員を使う） | `setup.slackDmApprovalStatus` で状態を見て、`setup.slackApprover.set { slackUserId: "<承認者の U…>" }` を出す | — |
 | 7 | スペースツリーの人間の承認者（owner/admin） | 6 のチケットを `/app/approvals` で承認する。承認者の Slack に「Staffpass承認」との DM が開き、「設定しました」が届く | **1 回** |

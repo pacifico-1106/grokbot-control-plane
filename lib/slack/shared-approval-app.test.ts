@@ -26,6 +26,7 @@ import { alertApprovalDeliveryFailure, resetApprovalAlertThrottleForTests, setAp
 import { diagnoseSlackDmApprovalSetup, fulfillApprovalDeliveryAutoResolve } from "@/lib/admin-mcp/slack-dm-setup";
 import { fulfillSlackApproverSet, sharedApprovalAppStatus } from "@/lib/admin-mcp/slack-approver";
 import { resolveOrgSlackBotToken } from "@/lib/slack/bot-token";
+import { resolveApprovalAppBotToken } from "@/lib/slack/authorize-link";
 import { SHARED_APPROVAL_CONNECTION_LOST_NEXT_STEP_JA } from "@/lib/slack/shared-approval-revoke";
 import { openApprovalDeliveryDm } from "@/lib/slack/approval-dm-open";
 import { signSlackBotInstallState } from "@/lib/slack/oauth";
@@ -40,7 +41,7 @@ import {
 import { handleSharedApprovalAppEvent } from "@/lib/slack/shared-approval-events";
 import { resolveSharedApprovalInteractivity } from "@/lib/slack/shared-approval-interactivity";
 import { POST as interactivityPOST } from "@/app/api/webhooks/slack/interactivity/route";
-import type { NotificationChannel } from "@/lib/types";
+import type { Employee, NotificationChannel } from "@/lib/types";
 
 const ORG = DEMO_ORG.id;
 const OTHER_ORG = "org_shared_app_other_fixture";
@@ -59,6 +60,9 @@ const ENV = [
   "APPROVAL_DELIVERY_FAILURE_ALERT",
   "SLACK_APPROVAL_DM_AUTO_OPEN",
   "SLACK_CLIENT_SECRET",
+  "SLACK_AUTHORIZE_LINK_ENABLED",
+  "SLACK_USER_SCOPE_IM_WRITE",
+  "SLACK_CLIENT_ID",
 ] as const;
 
 let saved: Record<string, string | undefined> = {};
@@ -1112,5 +1116,30 @@ describe("setup.slackDmApprovalStatus (shared app block)", () => {
     expect((after.nextStepsJa as string[]).join("\n")).not.toContain("setup.slackApprover.set");
     expect(after.sharedApprovalApp).toMatchObject({ installed: true, inboxEnabled: true, approverSlackUserIds: [APPROVER], destinationKind: "dm", setupNoticeSent: true });
     noSecrets(after);
+  });
+});
+
+describe("merged with #240 (main): the real resolveApprovalAppBotToken / link DM go through the flag-OFF token gate", () => {
+  test("flag ON → the shared xoxb; flag OFF → \"\" and setup.slackAuthorizeLink.issue stops at bot_token_required with no shared-xoxb call", async () => {
+    process.env.SLACK_AUTHORIZE_LINK_ENABLED = "true";
+    process.env.SLACK_USER_SCOPE_IM_WRITE = "true";
+    process.env.SLACK_CLIENT_ID = "a.b";
+    const inbox = await installAndSetApprover();
+    expect(await resolveApprovalAppBotToken(ORG, inbox.id)).toBe(BOT);
+    process.env.SLACK_SHARED_APPROVAL_APP_ENABLED = "false";
+    expect(await resolveApprovalAppBotToken(ORG, inbox.id)).toBe("");
+    const base = getRuntimeEmployees().find((e) => e.orgId === ORG && e.status === "active")!;
+    const emp: Employee = { ...base, id: `emp_shared_x240_${Date.now()}`, status: "active", allowedAccounts: [{ service: "slack", accountId: "UEMPSHARED01" }] };
+    getRuntimeEmployees().push(emp);
+    try {
+      calls = [];
+      const queued = data(await callAdminMcpTool("setup.slackAuthorizeLink.issue", { employeeId: emp.id }, cred()));
+      expect(queued).toMatchObject({ needs_approval: true });
+      const done = await approveTicket(String(queued.approvalId));
+      expect(done).toMatchObject({ ok: false, tool: "setup.slackAuthorizeLink.issue", error: "bot_token_required" });
+      expect(calls.filter((c) => c.auth === `Bearer ${BOT}`)).toEqual([]);
+    } finally {
+      emp.status = "suspended";
+    }
   });
 });
