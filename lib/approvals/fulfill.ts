@@ -12,7 +12,12 @@ import {
  */
 
 import { appendAuditEvent } from "@/lib/data/audit";
-import { updateApprovalMetadata } from "@/lib/data/approvals";
+import {
+  auditFulfillPolicyBlock,
+  recheckPolicyAtFulfill,
+  type FulfillPolicyRecheck,
+} from "@/lib/approvals/fulfill-policy-recheck";
+import { getApprovalById, updateApprovalMetadata } from "@/lib/data/approvals";
 import { normalizePostingAs } from "@/lib/employees/posting-as";
 import {
   looksLikeSlackTs,
@@ -76,7 +81,15 @@ const SNAPSHOT_ARG_KEYS = [
   "scheduledFor",
   "media",
   "snsSurface",
+  // mail.send re-check at fulfill needs the same inputs the gateway judged.
+  "cc",
+  "bcc",
+  "hasAttachments",
+  "sealithTransferId",
 ] as const;
+
+/** Keys whose string[] value is kept in the snapshot (recipient lists). */
+const LIST_ARG_KEYS = new Set<string>(["cc", "bcc"]);
 
 const BODY_KEYS = new Set(["text", "body", "message"]);
 const MAX_BODY_CHARS = 100_000;
@@ -153,7 +166,19 @@ function pickSnapshotArgs(args: Record<string, unknown>): Record<string, unknown
       typeof value === "boolean"
     ) {
       picked[key] = value;
+      continue;
     }
+    if (
+      LIST_ARG_KEYS.has(key) &&
+      Array.isArray(value) &&
+      value.every((v) => typeof v === "string")
+    ) {
+      picked[key] = (value as string[]).map((v) => clipString(v, MAX_FIELD_CHARS));
+    }
+  }
+  // Attachments themselves are never snapshotted; keep the fact that there were some.
+  if (Array.isArray(args.attachments) && args.attachments.length > 0) {
+    picked.hasAttachments = true;
   }
   return jsonClone(picked) ?? picked;
 }
@@ -572,6 +597,26 @@ async function fulfillMailSend(
   return fulfillment;
 }
 
+/** Record a fulfill-time policy stop: persisted on the approval + audited. */
+async function blockFulfillment(
+  approval: ApprovalRequest,
+  snapshot: InvokeSnapshot,
+  block: Extract<FulfillPolicyRecheck, { ok: false }>
+): Promise<ApprovalFulfillment> {
+  const fulfillment: ApprovalFulfillment = {
+    ok: false,
+    error: block.code,
+    at: new Date().toISOString(),
+  };
+  try {
+    await persistFulfillment(approval, fulfillment);
+  } catch {
+    approval.metadata = { ...approval.metadata, fulfillment };
+  }
+  await auditFulfillPolicyBlock(approval, snapshot, block).catch(() => undefined);
+  return fulfillment;
+}
+
 function isMailSendTool(tool: string): boolean {
   return tool === "mail.send";
 }
@@ -591,6 +636,11 @@ async function fulfillApprovedInvokeCore(
 
     const snapshot = parseInvokeSnapshot(approval.metadata);
     if (!snapshot) return null;
+
+    // Inside the execution claim: settings may have changed since the
+    // pre-claim check (TOCTOU). Stop before any provider call.
+    const recheck = await recheckPolicyAtFulfill(approval, snapshot);
+    if (!recheck.ok) return blockFulfillment(approval, snapshot, recheck);
 
     if (isSnsPublishTool(snapshot.tool || approval.tool || "")) {
       return fulfillSnsPublish(approval, snapshot);
@@ -807,7 +857,27 @@ export async function fulfillApprovedInvoke(approval: ApprovalRequest): Promise<
   if (approval.status === "approved" && isConfigChangeApproval(approval)) {
     return fulfillConfigChangeApproval(approval);
   }
-  if (approval.status !== "approved" || !parseInvokeSnapshot(approval.metadata) || isAdminClassApproval(approval)) return null;
+  const snapshot = approval.status === "approved" ? parseInvokeSnapshot(approval.metadata) : null;
+  if (approval.status !== "approved" || !snapshot || isAdminClassApproval(approval)) return null;
+  // Re-check tool settings / mail policy before taking the execution claim so
+  // a stop is audited with its reason (the authority check would otherwise
+  // throw a generic approval_authority_revoked) and the claim is not touched.
+  if (!parseFulfillment(approval.metadata)?.ok) {
+    try {
+      const recheck = await recheckPolicyAtFulfill(approval, snapshot);
+      if (!recheck.ok) {
+        // The caller's copy may be stale: never overwrite a fulfillment that
+        // already succeeded elsewhere (the send happened; report that instead).
+        const fresh = await getApprovalById(approval.id, approval.orgId).catch(() => null);
+        const done = fresh ? parseFulfillment(fresh.metadata) : null;
+        if (done?.ok) return done;
+        return await blockFulfillment(approval, snapshot, recheck);
+      }
+    } catch (error) {
+      return { ok: false, at: new Date().toISOString(),
+        error: error instanceof Error ? error.message : "fulfill_recheck_failed" };
+    }
+  }
   try { return await executeApproval(approval, () => fulfillApprovedInvokeCore(approval)); }
   catch (error) {
     return { ok: false, at: new Date().toISOString(),

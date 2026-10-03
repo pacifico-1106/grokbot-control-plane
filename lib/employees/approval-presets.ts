@@ -5,6 +5,7 @@
  */
 
 import type { ApprovalPolicy } from "@/lib/types";
+import { OUTBOUND_SEND_TOOL_IDS } from "@/lib/gateway/tools";
 
 export type ToolApprovalDefault =
   | "always_human"
@@ -242,7 +243,17 @@ export function choosableToolIsEnabled(
   }
 }
 
-/** New-hire / missing keys stay always_human for choosable tools. */
+/**
+ * New-hire / missing keys stay always_human for choosable tools.
+ *
+ * `deny` is preserved (2026-10-03 follow-up): it used to be dropped here, so a
+ * stored deny silently became always_human and the gateway's immediate reject
+ * never fired. Keeping it is stricter-only — every consumer treats deny at
+ * least as strictly as always_human (gateway: immediate 403 for outbound-send
+ * tools, otherwise forced approval; fulfill: stop). For outbound-send tools
+ * outside the choosable list (slack.* / comm.* / agentmail.send) only `deny`
+ * is accepted; other values keep being ignored for them.
+ */
 export function normalizeToolApprovalDefaults(
   value: unknown
 ): Record<string, ApprovalPolicy | "deny"> {
@@ -253,9 +264,13 @@ export function normalizeToolApprovalDefaults(
   const src = value as Record<string, unknown>;
   for (const tool of CHOOSABLE_TOOL_APPROVALS) {
     const raw = src[tool];
-    if (raw === "always_human" || raw === "risk_based" || raw === "auto") {
+    if (raw === "always_human" || raw === "risk_based" || raw === "auto" || raw === "deny") {
       out[tool] = raw;
     }
+  }
+  for (const tool of OUTBOUND_SEND_TOOL_IDS) {
+    if ((CHOOSABLE_TOOL_APPROVALS as readonly string[]).includes(tool)) continue;
+    if (src[tool] === "deny") out[tool] = "deny";
   }
   return out;
 }

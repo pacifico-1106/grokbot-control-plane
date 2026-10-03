@@ -17,18 +17,13 @@ import {
   getBinding,
   getEmployee,
   getEmployeeById,
-  getEffectiveIngressHandoffPolicy,
-  getEffectiveMailPolicy,
   runtimeModeLabel,
   incrementActionCounter,
   getOrgSodWarnPolicy,
   updateApprovalMetadata,
 } from "@/lib/data";
-import { getOrgInternalAudienceRule } from "@/lib/data/internal-audience-rule";
-import {
-  evaluateMailPolicy,
-  extractMailRecipients,
-} from "@/lib/mail-policy/apply";
+import { evaluateMailPolicyForRequest } from "@/lib/mail-policy/evaluate-request";
+import { collectMailToRecipients, extractMailRecipients } from "@/lib/mail-policy/apply";
 import type { MailPolicyDecision } from "@/lib/types";
 import {
   isBillableConfirmCompletion,
@@ -51,6 +46,7 @@ import {
   employeeHasToolScope,
   isAudienceGatedTool,
   isConfirmClassTool,
+  isOutboundSendTool,
   isSnsPublishTool,
   toolRequiresHumanApproval,
   resolveGatewayTool,
@@ -81,6 +77,7 @@ import {
   conversationDeliveryFromFulfillment,
   snsDeliveryFromFulfillment,
   parseFulfillment,
+  parseInvokeSnapshot,
   type ConversationDelivery,
 } from "@/lib/approvals/fulfill";
 import { evaluateAllowedAccountsForBrowser } from "@/lib/employees/allowed-accounts";
@@ -1209,9 +1206,13 @@ export async function runGatewayInvoke(
   const perToolHuman = toolRequiresHumanApproval(toolDef, employee.toolApprovalDefaults);
   const toolHint = employee.toolApprovalDefaults?.[toolDef.id];
 
-  // Per-tool "deny" on mail.send is a hard stop: no approval card, no draft
+  // Per-tool "deny" on any outbound-send tool (mail / Slack / conversation /
+  // SNS / external share) is a hard stop: no approval card, no draft
   // demotion, and a prior approval does not reopen it (fail-closed).
-  if (tool === "mail.send" && toolHint === "deny") {
+  // mail.send keeps its original code for existing clients.
+  if (toolHint === "deny" && isOutboundSendTool(toolDef)) {
+    const deniedCode =
+      tool === "mail.send" ? "mail_send_denied_by_tool_setting" : "tool_denied_by_tool_setting";
     await appendAuditEvent({
       orgId: orgId || employee.orgId,
       employeeId,
@@ -1219,14 +1220,20 @@ export async function runGatewayInvoke(
       action: "tool.invoke",
       purpose,
       summary: `${tool} をツール設定（deny）で拒否`,
-      metadata: { tool, jobId, code: "mail_send_denied_by_tool_setting", toolHint },
+      metadata: {
+        tool,
+        jobId,
+        code: deniedCode,
+        toolHint,
+        ...(priorApprovalId ? { approvalId: priorApprovalId, phase: "reinvoke" } : {}),
+      },
     });
     return jsonResult(
       {
         ok: false,
-        code: "mail_send_denied_by_tool_setting",
-        error: "mail_send_denied_by_tool_setting",
-        message: "この社員はツール設定で mail.send が禁止（deny）されています。",
+        code: deniedCode,
+        error: deniedCode,
+        message: `この社員はツール設定で ${tool} が禁止（deny）されています。`,
         needs_approval: false,
         employeeId,
         tool,
@@ -1282,6 +1289,77 @@ export async function runGatewayInvoke(
 
   let mailPolicyDecision: MailPolicyDecision | null = null;
 
+  // Approved re-invoke (approvalId): re-check what was approved (the invoke
+  // snapshot) plus any recipients in this request against the CURRENT mail
+  // policy. If it now rejects or demotes, stop: 409, audited, not sent.
+  if (tool === "mail.send" && priorApprovalOk && priorApproval) {
+    const approvedSnapshot = parseInvokeSnapshot(priorApproval.metadata);
+    const toJudge: Array<{ source: "approved_snapshot" | "request"; body: Parameters<typeof evaluateMailPolicyForRequest>[0]["body"] }> = [];
+    if (approvedSnapshot) {
+      toJudge.push({ source: "approved_snapshot", body: { args: approvedSnapshot.args, conversation: approvedSnapshot.conversation } });
+    }
+    const requestPrimary = collectMailToRecipients(body);
+    const requestExtra = extractMailRecipients(body);
+    const requestHasRecipients =
+      requestPrimary.sources.length > 0 ||
+      requestPrimary.malformed ||
+      requestExtra.cc.length > 0 ||
+      requestExtra.bcc.length > 0 ||
+      requestExtra.malformed;
+    if (!approvedSnapshot || requestHasRecipients) {
+      toJudge.push({ source: "request", body });
+    }
+    for (const item of toJudge) {
+      const { decision: recheck } = await evaluateMailPolicyForRequest({
+        orgId: orgId || employee.orgId,
+        employeeId,
+        body: item.body,
+      });
+      if (!recheck.rejected && !recheck.demotedToDraft) continue;
+      const blockedReason = recheck.rejected
+        ? recheck.rejectCode || "mail_policy_rejected"
+        : "mail_send_demoted_to_draft";
+      await appendAuditEvent({
+        orgId: orgId || employee.orgId,
+        employeeId,
+        credentialId: input.credentialId || employee.credentialId,
+        action: "tool.invoke",
+        purpose,
+        summary: "承認済みの mail.send を現在のメールポリシーで停止（未送信）",
+        metadata: {
+          tool,
+          jobId,
+          approvalId: priorApprovalId,
+          code: "approved_send_blocked_by_policy",
+          blockedReason,
+          judged: item.source,
+          phase: "reinvoke",
+          sendMode: recheck.sendMode,
+          audience: recheck.audience,
+          auditLabels: recheck.auditLabels,
+          appliedRules: recheck.appliedRules,
+        },
+      });
+      return jsonResult(
+        {
+          ok: false,
+          code: "approved_send_blocked_by_policy",
+          error: "approved_send_blocked_by_policy",
+          blockedReason,
+          message:
+            "承認後にメールポリシーが変わり、この送信は現在の設定では許可されないため停止しました（送信していません）。",
+          needs_approval: false,
+          approvalId: priorApprovalId,
+          employeeId,
+          tool,
+          purpose,
+          jobId,
+        },
+        409
+      );
+    }
+  }
+
   // B1 mail.policy: evaluate before approval gate (demote / reject / sendMode)
   if (tool === "mail.send" && !priorApprovalOk) {
     const mailValidation = validateMailSendArtifact(body);
@@ -1317,28 +1395,14 @@ export async function runGatewayInvoke(
       );
     }
 
-    const effectiveMail = await getEffectiveMailPolicy(orgId || employee.orgId, employeeId);
-    const internalRule = await getOrgInternalAudienceRule(orgId || employee.orgId);
-    const d1Effective = await getEffectiveIngressHandoffPolicy(orgId || employee.orgId, employeeId);
-    const recipients = extractMailRecipients(body);
-    const mailArgs =
-      body.args && typeof body.args === "object"
-        ? (body.args as Record<string, unknown>)
-        : {};
-    const sealithTransferId =
-      typeof mailArgs.sealithTransferId === "string" ? mailArgs.sealithTransferId : null;
-
-    mailPolicyDecision = evaluateMailPolicy({
-      policy: effectiveMail.policy,
-      to: mailValidation.to,
-      cc: recipients.cc,
-      bcc: recipients.bcc,
-      hasAttachments: recipients.hasAttachments,
-      malformedRecipients: recipients.malformed,
-      internalAudienceRule: internalRule,
-      ingressHandoffPolicy: d1Effective.policy,
-      sealithTransferId,
+    // Every primary recipient field (to / recipient / email / body.email /
+    // conversation.email) is judged, not only the first non-empty one.
+    const mailEval = await evaluateMailPolicyForRequest({
+      orgId: orgId || employee.orgId,
+      employeeId,
+      body,
     });
+    mailPolicyDecision = mailEval.decision;
 
     if (mailPolicyDecision.rejected) {
       await appendAuditEvent({
