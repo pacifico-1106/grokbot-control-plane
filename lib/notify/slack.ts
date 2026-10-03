@@ -1,5 +1,5 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
-import { formatMailCardLines, readMailArtifact } from "@/lib/approvals/summary";
+import { formatMailCardParts, MAIL_BODY_PREVIEW_LABEL, readMailArtifact } from "@/lib/approvals/summary";
 import { getAppOrigin } from "@/lib/approvals/tokens";
 import {
   getNotificationDelivery,
@@ -143,13 +143,26 @@ function approvalBlocks(
   // artifact (like Telegram) instead of the 400-char summary cut, so CC / BCC
   // are always visible. Each recipient line is capped to stay under Slack's
   // 3000-char section limit; the dashboard shows the full list.
+  // The body preview is a mrkdwn quote: each line is escaped first, then
+  // prefixed with ">" (escaping afterwards would turn it into "&gt;"), so a
+  // body line like "BCC: …" cannot pass for a header line.
   const mailArtifact = readMailArtifact(approval.metadata);
-  const detail = mailArtifact
+  const mailParts = mailArtifact
+    ? formatMailCardParts(mailArtifact, {
+        recipientChars: SLACK_RECIPIENT_LINE_MAX,
+        subjectChars: SLACK_SUBJECT_LINE_MAX,
+      })
+    : null;
+  const detail = mailParts
     ? [
-        ...formatMailCardLines(mailArtifact, {
-          recipientChars: SLACK_RECIPIENT_LINE_MAX,
-          subjectChars: SLACK_SUBJECT_LINE_MAX,
-        }).map((line) => escapeSlackMrkdwn(line)),
+        ...mailParts.header.map((line) => escapeSlackMrkdwn(line)),
+        ...(mailParts.bodyLines
+          ? [
+              MAIL_BODY_PREVIEW_LABEL,
+              ...mailParts.bodyLines.map((line) => (line ? `> ${escapeSlackMrkdwn(line)}` : ">")),
+            ]
+          : []),
+        ...mailParts.trailer.map((line) => escapeSlackMrkdwn(line)),
         approval.jobId ? `ジョブID: ${escapeSlackMrkdwn(approval.jobId)}` : "",
       ]
     : [escapeSlackMrkdwn(truncate(approval.summary, 400))];

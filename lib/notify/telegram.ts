@@ -1,5 +1,6 @@
 import {
-  formatMailCcBccLines,
+  formatMailCardParts,
+  MAIL_BODY_PREVIEW_LABEL,
   readMailArtifact,
   type ApprovalArtifact,
 } from "@/lib/approvals/summary";
@@ -68,8 +69,10 @@ function safeArtifactUrl(approval: ApprovalRequest): string | null {
 const TELEGRAM_MESSAGE_MAX = 4096;
 const TELEGRAM_OVERFLOW_SUFFIX = "…(続きはダッシュボード)";
 
-/** Per CC / BCC line cap so a long list cannot push the card over 4096 chars. */
+/** Per 宛先 / CC / BCC line cap so a long list cannot push the card over 4096 chars. */
 const TELEGRAM_RECIPIENT_LINE_MAX = 500;
+// Same cap as the Slack card; keeps a long subject under the 4096-char limit.
+const TELEGRAM_SUBJECT_LINE_MAX = 200;
 
 function extractMailArtifact(approval: ApprovalRequest): ApprovalArtifact | null {
   return readMailArtifact(approval.metadata);
@@ -93,20 +96,19 @@ function composeApprovalTelegramMessage(
   // mail.send: put 宛先/件名/本文先頭 first for judgment material
   if (mailArtifact) {
     lines.push("─");
-    if (mailArtifact.to) {
-      lines.push(`宛先: ${escapeTelegramHtml(mailArtifact.to)}`);
-    }
-    for (const line of formatMailCcBccLines(mailArtifact, TELEGRAM_RECIPIENT_LINE_MAX)) {
+    // 宛先 / CC / BCC / 件名 are one line each (agent values collapsed); the
+    // body preview is a <blockquote> so a body line like "BCC: …" cannot pass
+    // for a header line.
+    const parts = formatMailCardParts(mailArtifact, {
+      recipientChars: TELEGRAM_RECIPIENT_LINE_MAX,
+      subjectChars: TELEGRAM_SUBJECT_LINE_MAX,
+    });
+    for (const line of parts.header) {
       lines.push(escapeTelegramHtml(line));
     }
-    if (mailArtifact.subject) {
-      lines.push(`件名: ${escapeTelegramHtml(mailArtifact.subject)}`);
-    }
-    if (mailArtifact.body) {
-      const preview = mailArtifact.body.length > 200
-        ? mailArtifact.body.slice(0, 200) + "…"
-        : mailArtifact.body;
-      lines.push(`本文先頭: ${escapeTelegramHtml(preview)}`);
+    if (parts.bodyLines) {
+      lines.push(MAIL_BODY_PREVIEW_LABEL);
+      lines.push(`<blockquote>${escapeTelegramHtml(parts.bodyLines.join("\n"))}</blockquote>`);
     }
     lines.push("─");
   } else {
