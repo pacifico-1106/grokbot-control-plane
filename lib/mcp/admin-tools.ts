@@ -1271,23 +1271,40 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
       additionalProperties: false,
     },
   },
-  {
-    name: "decision.deputyActivate",
-    description:
-      "Activate a deputy (代理人) for a pending decision request (always_human). Deputy can act on behalf of the requester. Security: self-approval forbidden (deputy cannot be requester), cross-org forbidden (deputy must be in same org). P1_DECISION_WORKFLOW_ENABLED must be ON.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        approvalId: { type: "string", description: "Original decision request approval ID" },
-        deputyUserId: { type: "string", description: "User ID of the deputy (must be in same org, cannot be requester)" },
-        reason: { type: "string", description: "Reason for deputy activation" },
-        jobId: { type: "string" },
-      },
-      required: ["approvalId", "deputyUserId"],
-      additionalProperties: false,
-    },
-  },
 ];
+
+/**
+ * decision.deputyActivate is NOT advertised on the Admin MCP (tools/list).
+ *
+ * It was listed in ADMIN_MCP_TOOLS but never added to ADMIN_MCP_TOOL_NAMES
+ * (admin-public.ts), so every call already failed closed with
+ * `unknown_mcp_tool`. Advertising an uncallable tool is misleading, and simply
+ * registering the name would not make it work either: its `approvalId`
+ * argument (the ORIGINAL decision request) is taken by the generic
+ * approvalId re-invoke path for mutation tools (handleAdminApprovalReinvoke),
+ * so handleDeputyActivate would never be reached (approval_tool_mismatch /
+ * the original ticket's status is returned instead).
+ * Wiring it needs its own reviewed change (argument rename or reinvoke
+ * exclusion + fulfillment test) and must add it to BOTH lists; the test
+ * `lib/mcp/admin-tools.test.ts` enforces advertised === callable.
+ * Behaviour is unchanged: still `unknown_mcp_tool`.
+ */
+export const DECISION_DEPUTY_ACTIVATE_TOOL_DEF_UNWIRED: McpToolDef = {
+  name: "decision.deputyActivate",
+  description:
+    "Activate a deputy (代理人) for a pending decision request (always_human). Deputy can act on behalf of the requester. Security: self-approval forbidden (deputy cannot be requester), cross-org forbidden (deputy must be in same org). P1_DECISION_WORKFLOW_ENABLED must be ON.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      approvalId: { type: "string", description: "Original decision request approval ID" },
+      deputyUserId: { type: "string", description: "User ID of the deputy (must be in same org, cannot be requester)" },
+      reason: { type: "string", description: "Reason for deputy activation" },
+      jobId: { type: "string" },
+    },
+    required: ["approvalId", "deputyUserId"],
+    additionalProperties: false,
+  },
+};
 
 /**
  * Admin MCP tools that do NOT create approval tickets.
