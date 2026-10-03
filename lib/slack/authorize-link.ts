@@ -80,6 +80,8 @@ export {
   ALLOWED_ACCOUNTS_SLACK_NEXT_STEP_TOOL_JA,
   AUTHORIZE_LINK_CONSUMED_FAILURE_REASONS,
   AUTHORIZE_LINK_FOLLOW_UP_STEPS,
+  ALLOWED_ACCOUNTS_TOOLS_FLAG,
+  isAllowedAccountsAdminToolsFlagOn,
   DM_AUTOROUTE_RUN_TOOL,
   resolveAuthorizeLinkFollowUpNextStep,
   authorizeLinkApproverFailureNoticeJa,

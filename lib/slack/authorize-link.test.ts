@@ -29,7 +29,9 @@ import {
   ALLOWED_ACCOUNTS_SLACK_NEXT_STEP_JA,
   ALLOWED_ACCOUNTS_SLACK_NEXT_STEP_TOOL_JA,
   ALLOWED_ACCOUNTS_ADD_TOOL,
+  ALLOWED_ACCOUNTS_TOOLS_FLAG,
   AUTHORIZE_LINK_CONSUMED_FAILURE_REASONS,
+  isAllowedAccountsAdminToolsFlagOn,
   AUTHORIZE_LINK_FOLLOW_UP_STEPS,
   DM_AUTOROUTE_RUN_TOOL,
   SLACK_AUTHORIZE_LINK_PATH,
@@ -71,6 +73,7 @@ const FLAGS = [
   "SLACK_APPROVAL_DM_AUTO_OPEN",
   "SLACK_CLIENT_ID",
   "SLACK_CLIENT_SECRET",
+  "ADMIN_MCP_ALLOWED_ACCOUNTS_TOOLS_ENABLED",
 ] as const;
 // Old token lacks im:write (ともり case).
 const OLD_SCOPES = "chat:write,users:read,channels:read,groups:read,im:history,files:write,channels:history,groups:history";
@@ -150,6 +153,45 @@ function noSecrets(value: unknown) {
   }
 }
 
+/**
+ * 追記 4: put the admin tool registry in an explicit state for one test
+ * (independent of whether #242 is merged). Restores the exact original state.
+ */
+function setRegistry(tool: string, want: { name: boolean; def: boolean }): () => void {
+  const names = ADMIN_MCP_TOOL_NAMES as unknown as string[];
+  const defs = ADMIN_MCP_TOOLS as unknown as Array<Record<string, unknown>>;
+  const savedNames = [...names];
+  const savedDefs = [...defs];
+  const n = names.indexOf(tool);
+  if (want.name && n < 0) names.push(tool);
+  if (!want.name && n >= 0) names.splice(n, 1);
+  const d = defs.findIndex((t) => t.name === tool);
+  if (want.def && d < 0) defs.push({ name: tool, description: "mock (always_human)", inputSchema: { type: "object" } });
+  if (!want.def && d >= 0) defs.splice(d, 1);
+  return () => {
+    names.splice(0, names.length, ...savedNames);
+    defs.splice(0, defs.length, ...savedDefs);
+  };
+}
+async function withRegistry<T>(tool: string, want: { name: boolean; def: boolean }, run: () => Promise<T>): Promise<T> {
+  const restore = setRegistry(tool, want);
+  try {
+    return await run();
+  } finally {
+    restore();
+  }
+}
+const PRESENT = { name: true, def: true };
+const ABSENT = { name: false, def: false };
+function setAllowedAccountsToolsFlag(on: boolean) {
+  if (on) process.env.ADMIN_MCP_ALLOWED_ACCOUNTS_TOOLS_ENABLED = "true";
+  else delete process.env.ADMIN_MCP_ALLOWED_ACCOUNTS_TOOLS_ENABLED;
+}
+function setDmAutorouteFlag(on: boolean) {
+  if (on) process.env.SLACK_DM_AUTOROUTE_ENABLED = "true";
+  else delete process.env.SLACK_DM_AUTOROUTE_ENABLED;
+}
+
 async function seedInbox(orgId: string, token: string) {
   return upsertNotificationChannel({
     orgId,
@@ -197,6 +239,7 @@ beforeEach(async () => {
   process.env.SLACK_CLIENT_SECRET = "test-client-secret-at-least-32-characters";
   delete process.env.SLACK_AUTHORIZE_LINK_REISSUE_AUDIT_ONLY;
   delete process.env.SLACK_DM_AUTOROUTE_ENABLED;
+  delete process.env.ADMIN_MCP_ALLOWED_ACCOUNTS_TOOLS_ENABLED;
   savedFetch = globalThis.fetch;
   usersInfoOverride = {};
   postMessageFails = false;
@@ -722,6 +765,15 @@ describe("approval-app bot token resolution (single function)", () => {
 
 describe("allowedAccounts without Slack → next step guidance", () => {
   test("issue error names the real next step (no invented admin MCP tool)", async () => {
+    setAllowedAccountsToolsFlag(false);
+    const restore = setRegistry(ALLOWED_ACCOUNTS_ADD_TOOL, ABSENT);
+    try {
+      await issueErrorChecks();
+    } finally {
+      restore();
+    }
+  });
+  async function issueErrorChecks() {
     const bare = newEmployee(ORG_A, []);
     const res = data(await callAdminMcpTool(TOOL, { employeeId: bare.id }, cred()));
     expect(res.code).toBe("slack_account_not_allowed");
@@ -732,9 +784,11 @@ describe("allowedAccounts without Slack → next step guidance", () => {
     const names = ALLOWED_ACCOUNTS_SLACK_NEXT_STEP_JA.match(/\b[a-z][A-Za-z]*\.[a-z][A-Za-z.]*\b/g) ?? [];
     for (const name of names) expect((ADMIN_MCP_TOOL_NAMES as readonly string[]).includes(name)).toBe(true);
     expect(ALLOWED_ACCOUNTS_SLACK_NEXT_STEP_JA).toContain("ブラウザ・外部アカウント");
-  });
+  }
 
   test("setup.slackDmApprovalStatus shows the same guidance for that employee (flag ON)", async () => {
+    setAllowedAccountsToolsFlag(false);
+    const restore = setRegistry(ALLOWED_ACCOUNTS_ADD_TOOL, ABSENT);
     const bare = newEmployee(ORG_A, []);
     const others = getRuntimeEmployees().filter((e) => e.orgId === ORG_A && e.id !== bare.id && e.status === "active");
     for (const e of others) e.status = "suspended";
@@ -748,6 +802,7 @@ describe("allowedAccounts without Slack → next step guidance", () => {
       expect(row.allowedSlackAccounts).toBe(0);
     } finally {
       for (const e of others) e.status = "active";
+      restore();
     }
   });
 });
@@ -985,71 +1040,111 @@ describe("every consumed-failure reason: recipient notice + approver notice + pa
   });
 });
 
-describe("allowedAccounts next step follows the admin tool registry at runtime", () => {
-  function registerAddTool(opts: { name?: boolean; def?: boolean } = { name: true, def: true }) {
-    const names = ADMIN_MCP_TOOL_NAMES as unknown as string[];
-    const defs = ADMIN_MCP_TOOLS as unknown as Array<Record<string, unknown>>;
-    if (opts.name) names.push(ALLOWED_ACCOUNTS_ADD_TOOL);
-    if (opts.def) defs.push({ name: ALLOWED_ACCOUNTS_ADD_TOOL, description: "mock (always_human)", inputSchema: { type: "object" } });
-    return () => {
-      const n = names.indexOf(ALLOWED_ACCOUNTS_ADD_TOOL);
-      if (n >= 0) names.splice(n, 1);
-      const d = defs.findIndex((t) => t.name === ALLOWED_ACCOUNTS_ADD_TOOL);
-      if (d >= 0) defs.splice(d, 1);
-    };
-  }
-
-  test("not registered → dashboard guidance, allowedAccountsAdminTool null", async () => {
-    expect(await resolveAllowedAccountsSlackNextStep()).toEqual({ nextStepJa: ALLOWED_ACCOUNTS_SLACK_NEXT_STEP_JA, allowedAccountsAdminTool: null });
+describe("allowedAccounts next step: registry × ADMIN_MCP_ALLOWED_ACCOUNTS_TOOLS_ENABLED (追記 4)", () => {
+  const DASHBOARD = { nextStepJa: ALLOWED_ACCOUNTS_SLACK_NEXT_STEP_JA, allowedAccountsAdminTool: null };
+  const TOOL_STEP = { nextStepJa: ALLOWED_ACCOUNTS_SLACK_NEXT_STEP_TOOL_JA, allowedAccountsAdminTool: ALLOWED_ACCOUNTS_ADD_TOOL };
+  async function issueRefusal() {
     const bare = newEmployee(ORG_A, []);
     const res = data(await callAdminMcpTool(TOOL, { employeeId: bare.id }, cred()));
-    expect(res.nextStepJa).toBe(ALLOWED_ACCOUNTS_SLACK_NEXT_STEP_JA);
-    expect(res.allowedAccountsAdminTool).toBeNull();
-    expect(String(res.message).includes(ALLOWED_ACCOUNTS_ADD_TOOL)).toBe(false);
-  });
+    expect(res.code).toBe("slack_account_not_allowed");
+    return res;
+  }
 
-  test("registered (name + definition) → points at employees.allowedAccounts.add; tool name returned", async () => {
-    const unregister = registerAddTool();
-    try {
+  test("tool present × flag ON → points at employees.allowedAccounts.add; tool name returned", async () => {
+    setAllowedAccountsToolsFlag(true);
+    await withRegistry(ALLOWED_ACCOUNTS_ADD_TOOL, PRESENT, async () => {
       const step = await resolveAllowedAccountsSlackNextStep();
-      expect(step.allowedAccountsAdminTool).toBe(ALLOWED_ACCOUNTS_ADD_TOOL);
-      expect(step.nextStepJa).toBe(ALLOWED_ACCOUNTS_SLACK_NEXT_STEP_TOOL_JA);
+      expect(step).toEqual(TOOL_STEP);
       expect(step.nextStepJa).toContain(`${ALLOWED_ACCOUNTS_ADD_TOOL} で Slack の U… を追加してから`);
-      const bare = newEmployee(ORG_A, []);
-      const res = data(await callAdminMcpTool(TOOL, { employeeId: bare.id }, cred()));
-      expect(res.code).toBe("slack_account_not_allowed");
+      const res = await issueRefusal();
       expect(res.allowedAccountsAdminTool).toBe(ALLOWED_ACCOUNTS_ADD_TOOL);
       expect(res.nextStepJa).toBe(ALLOWED_ACCOUNTS_SLACK_NEXT_STEP_TOOL_JA);
       expect(String(res.message)).toContain(ALLOWED_ACCOUNTS_SLACK_NEXT_STEP_TOOL_JA);
       // Every dotted tool-like name in the guidance is registered.
       const names = step.nextStepJa.match(/\b[a-z][A-Za-z]*\.[a-z][A-Za-z.]*\b/g) ?? [];
       for (const name of names) expect((ADMIN_MCP_TOOL_NAMES as readonly string[]).includes(name)).toBe(true);
-    } finally {
-      unregister();
-    }
-    expect((await resolveAllowedAccountsSlackNextStep()).allowedAccountsAdminTool).toBeNull();
+    });
   });
 
-  test("advertised name without a callable definition (or vice versa) → still dashboard guidance", async () => {
-    for (const opts of [{ name: true, def: false }, { name: false, def: true }]) {
-      const unregister = registerAddTool(opts);
-      try {
-        expect((await resolveAllowedAccountsSlackNextStep()).allowedAccountsAdminTool).toBeNull();
-      } finally {
-        unregister();
-      }
+  test("tool present × flag OFF → dashboard guidance, allowedAccountsAdminTool null", async () => {
+    setAllowedAccountsToolsFlag(false);
+    await withRegistry(ALLOWED_ACCOUNTS_ADD_TOOL, PRESENT, async () => {
+      expect(await resolveAllowedAccountsSlackNextStep()).toEqual(DASHBOARD);
+      const res = await issueRefusal();
+      expect(res.nextStepJa).toBe(ALLOWED_ACCOUNTS_SLACK_NEXT_STEP_JA);
+      expect(res.allowedAccountsAdminTool).toBeNull();
+      expect(String(res.message).includes(ALLOWED_ACCOUNTS_ADD_TOOL)).toBe(false);
+    });
+  });
+
+  test("tool absent × flag ON → dashboard guidance, allowedAccountsAdminTool null", async () => {
+    setAllowedAccountsToolsFlag(true);
+    await withRegistry(ALLOWED_ACCOUNTS_ADD_TOOL, ABSENT, async () => {
+      expect(await resolveAllowedAccountsSlackNextStep()).toEqual(DASHBOARD);
+      const res = await issueRefusal();
+      expect(res.allowedAccountsAdminTool).toBeNull();
+      expect(String(res.message).includes(ALLOWED_ACCOUNTS_ADD_TOOL)).toBe(false);
+    });
+  });
+
+  test("tool absent × flag OFF → dashboard guidance, allowedAccountsAdminTool null", async () => {
+    setAllowedAccountsToolsFlag(false);
+    await withRegistry(ALLOWED_ACCOUNTS_ADD_TOOL, ABSENT, async () => {
+      expect(await resolveAllowedAccountsSlackNextStep()).toEqual(DASHBOARD);
+      expect((await issueRefusal()).allowedAccountsAdminTool).toBeNull();
+    });
+  });
+
+  test("flag ON but only the name or only the definition → still dashboard guidance", async () => {
+    setAllowedAccountsToolsFlag(true);
+    for (const want of [{ name: true, def: false }, { name: false, def: true }]) {
+      await withRegistry(ALLOWED_ACCOUNTS_ADD_TOOL, want, async () => {
+        expect(await resolveAllowedAccountsSlackNextStep()).toEqual(DASHBOARD);
+      });
     }
   });
 
-  test("setup.slackDmApprovalStatus uses the same resolver (both cases)", async () => {
+  test("flag parsing matches #242 (trim + lowercase; true / 1 / on / enabled)", async () => {
+    expect(ALLOWED_ACCOUNTS_TOOLS_FLAG).toBe("ADMIN_MCP_ALLOWED_ACCOUNTS_TOOLS_ENABLED");
+    const cases: Array<[string | undefined, boolean]> = [
+      [undefined, false], ["", false], ["true", true], [" TRUE ", true], ["1", true], ["on", true], ["On", true],
+      ["enabled", true], ["false", false], ["0", false], ["off", false], ["yes", false], ["truthy", false],
+    ];
+    // #242 present (merged) → compare with its own parser; absent → just the table.
+    const modulePath = "@/lib/admin-mcp/allowed-accounts-tools";
+    const theirs = await import(modulePath)
+      .then((m: Record<string, unknown>) =>
+        typeof m.isEmployeesAllowedAccountsAdminToolAvailable === "function"
+          ? (m.isEmployeesAllowedAccountsAdminToolAvailable as () => boolean)
+          : null
+      )
+      .catch(() => null);
+    for (const [value, expected] of cases) {
+      if (value === undefined) delete process.env.ADMIN_MCP_ALLOWED_ACCOUNTS_TOOLS_ENABLED;
+      else process.env.ADMIN_MCP_ALLOWED_ACCOUNTS_TOOLS_ENABLED = value;
+      expect(isAllowedAccountsAdminToolsFlagOn()).toBe(expected);
+      if (theirs) expect(theirs()).toBe(expected);
+    }
+  });
+
+  test("source guard: #240 does not import #242's module statically", () => {
+    for (const file of ["./authorize-link.ts", "./authorize-link-guidance.ts"]) {
+      const src = readFileSync(new URL(file, import.meta.url), "utf8");
+      expect(src.includes("allowed-accounts-tools")).toBe(false);
+    }
+  });
+
+  test("setup.slackDmApprovalStatus uses the same resolver (present × ON vs present × OFF)", async () => {
     const bare = newEmployee(ORG_A, []);
     const others = getRuntimeEmployees().filter((e) => e.orgId === ORG_A && e.id !== bare.id && e.status === "active");
     for (const e of others) e.status = "suspended";
     try {
-      const off = ((data(await callAdminMcpTool("setup.slackDmApprovalStatus", {}, cred())).nextStepsJa as string[]) || []).join("\n");
-      expect(off).toContain(ALLOWED_ACCOUNTS_SLACK_NEXT_STEP_JA);
-      const unregister = registerAddTool();
-      try {
+      await withRegistry(ALLOWED_ACCOUNTS_ADD_TOOL, PRESENT, async () => {
+        setAllowedAccountsToolsFlag(false);
+        const off = data(await callAdminMcpTool("setup.slackDmApprovalStatus", {}, cred()));
+        expect((off.nextStepsJa as string[]).join("\n")).toContain(ALLOWED_ACCOUNTS_SLACK_NEXT_STEP_JA);
+        expect((off.employees as Array<Record<string, unknown>>).find((r) => r.employeeId === bare.id)!.allowedAccountsAdminTool).toBeNull();
+        setAllowedAccountsToolsFlag(true);
         const on = data(await callAdminMcpTool("setup.slackDmApprovalStatus", {}, cred()));
         const steps = (on.nextStepsJa as string[]).join("\n");
         expect(steps).toContain(`${bare.displayName}: `);
@@ -1057,9 +1152,7 @@ describe("allowedAccounts next step follows the admin tool registry at runtime",
         expect(steps.includes(ALLOWED_ACCOUNTS_SLACK_NEXT_STEP_JA)).toBe(false);
         const row = (on.employees as Array<Record<string, unknown>>).find((r) => r.employeeId === bare.id)!;
         expect(row.allowedAccountsAdminTool).toBe(ALLOWED_ACCOUNTS_ADD_TOOL);
-      } finally {
-        unregister();
-      }
+      });
     } finally {
       for (const e of others) e.status = "active";
     }
@@ -1219,25 +1312,36 @@ describe("追記 3: post-bind follow-ups (dmAutoroute + completion notice) are i
     expect(branch.includes("scheduleDmAutoroute(")).toBe(false);
   });
 
-  test("nextStep resolver: registered → dmAutoroute.run guidance; not registered → no invented tool", async () => {
-    const step = await resolveAuthorizeLinkFollowUpNextStep(empA.id, ["completion_notice"]);
-    expect(step.recoveryAdminTool).toBe(DM_AUTOROUTE_RUN_TOOL);
-    expect(step.nextStepJa).toContain("dryRun:false");
-    expect(step.nextStepJa).toContain("完了の DM");
-    const names = ADMIN_MCP_TOOL_NAMES as unknown as string[];
-    const defs = ADMIN_MCP_TOOLS as unknown as Array<Record<string, unknown>>;
-    const n = names.indexOf(DM_AUTOROUTE_RUN_TOOL);
-    const d = defs.findIndex((t) => t.name === DM_AUTOROUTE_RUN_TOOL);
-    const [savedName] = names.splice(n, 1);
-    const [savedDef] = defs.splice(d, 1);
-    try {
-      const missing = await resolveAuthorizeLinkFollowUpNextStep(empA.id, ["dm_autoroute"]);
-      expect(missing.recoveryAdminTool).toBeNull();
-      expect(missing.nextStepJa.includes("dryRun:false")).toBe(false);
-    } finally {
-      names.splice(n, 0, savedName);
-      defs.splice(d, 0, savedDef);
+  test("nextStep resolver (追記 4): dmAutoroute.run only when registered AND SLACK_DM_AUTOROUTE_ENABLED is ON", async () => {
+    for (const present of [true, false]) {
+      for (const on of [true, false]) {
+        setDmAutorouteFlag(on);
+        await withRegistry(DM_AUTOROUTE_RUN_TOOL, present ? PRESENT : ABSENT, async () => {
+          const step = await resolveAuthorizeLinkFollowUpNextStep(empA.id, ["completion_notice"]);
+          expect(step.nextStepJa).toContain("完了の DM");
+          if (present && on) {
+            expect(step.recoveryAdminTool).toBe(DM_AUTOROUTE_RUN_TOOL);
+            expect(step.nextStepJa).toContain(`${DM_AUTOROUTE_RUN_TOOL}（employeeId=${empA.id}, dryRun:false）で後から取り戻せます`);
+          } else {
+            expect(step.recoveryAdminTool).toBeNull();
+            expect(step.nextStepJa.includes("dryRun:false")).toBe(false);
+            expect(step.nextStepJa.includes(DM_AUTOROUTE_RUN_TOOL)).toBe(false);
+          }
+        });
+      }
     }
+  });
+
+  test("completion notice fails while SLACK_DM_AUTOROUTE_ENABLED is OFF → completed_with_errors without the dmAutoroute.run step", async () => {
+    setDmAutorouteFlag(false);
+    const dm = dmSpy(ok);
+    const { state } = await linkWith(dm.fn, { failNotice: true });
+    expect(dm.seen).toHaveLength(0);
+    const errs = events(state.linkId, "slack_authorize_link.completed_with_errors");
+    expect(errs).toHaveLength(1);
+    expect(errs[0].metadata?.failedSteps).toEqual([{ step: "completion_notice", code: "channel_not_found" }]);
+    expect(errs[0].metadata?.recoveryAdminTool).toBeNull();
+    expect(String(errs[0].metadata?.nextStepJa).includes("dryRun:false")).toBe(false);
   });
 
   test("setup.slackDmApprovalStatus: the employee whose last link completed_with_errors gets the dmAutoroute.run step; cleared after a clean re-link", async () => {

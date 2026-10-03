@@ -155,3 +155,10 @@ URL 平文は MCP 結果・監査に出さない。`SLACK_AUTHORIZE_LINK_REISSUE
 ## バックログ
 
 - 社員本人への完了 DM：今回は送らない（本人は結果ページで成功を確認でき、AI 社員には不要）。人間の社員向けに必要かどうかは別途判断する（2026-10-04 木村）。
+
+### 追記 4（2026-10-04 木村指示：管理ツールの案内はフラグも見る）
+
+- `resolveAllowedAccountsSlackNextStep()` は、registry に `employees.allowedAccounts.add` の名前と定義があり、**かつ** `ADMIN_MCP_ALLOWED_ACCOUNTS_TOOLS_ENABLED` が ON のときだけ管理ツールを案内する。OFF ならツールがあってもダッシュボードの案内で `allowedAccountsAdminTool: null`。
+- フラグは #242 の関数を import せず、`lib/slack/authorize-link-guidance.ts` の `isAllowedAccountsAdminToolsFlagOn()` で読む。解釈は #242 の `isEmployeesAllowedAccountsAdminToolAvailable()` と同じ（前後の空白を除き小文字にして `true` / `1` / `on` / `enabled` のときだけ ON）。#242 がある環境では、テストで両者の結果が一致することも確かめる。
+- `resolveAuthorizeLinkFollowUpNextStep()` も同じ考え方にした。`dmAutoroute.run`（dryRun:false）は `SLACK_DM_AUTOROUTE_ENABLED` が OFF だと `dm_autoroute_flag_off` で止まるので、registry にあり、かつこのフラグが ON のときだけ案内する（OFF なら `recoveryAdminTool: null`、ツール名を出さない）。
+- テストは registry の中身とフラグを毎回明示的に設定する（ツールあり／なし × フラグ ON／OFF）。#242 がマージされていてもいなくても通る。

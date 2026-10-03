@@ -5,6 +5,7 @@
  */
 import { normalizeAllowedAccounts } from "@/lib/employees/allowed-accounts";
 import { ADMIN_MCP_TOOL_NAMES } from "@/lib/mcp/admin-public";
+import { isSlackDmAutorouteEnabled } from "@/lib/slack/dm-autoroute-flags";
 import type { Employee } from "@/lib/types";
 
 const SLACK_USER_ID_RE = /^[UW][A-Z0-9]{2,30}$/;
@@ -54,11 +55,30 @@ export async function isAdminMcpToolRegistered(name: string): Promise<boolean> {
  * THE allowedAccounts-without-Slack next step (issue error + status). Works
  * whether #240 or the employees.allowedAccounts.* PR merges first.
  */
+/**
+ * 追記 4: #242's ADMIN_MCP_ALLOWED_ACCOUNTS_TOOLS_ENABLED (default OFF; OFF →
+ * employees.allowedAccounts.* do nothing). Read here with the SAME parsing as
+ * #242's isEmployeesAllowedAccountsAdminToolAvailable() (trim + lowercase;
+ * true / 1 / on / enabled) instead of importing it, so #240 works whether or
+ * not #242 is merged.
+ */
+export const ALLOWED_ACCOUNTS_TOOLS_FLAG = "ADMIN_MCP_ALLOWED_ACCOUNTS_TOOLS_ENABLED";
+
+function parseFlag(value: string | undefined): boolean {
+  const v = (value ?? "").trim().toLowerCase();
+  return v === "true" || v === "1" || v === "on" || v === "enabled";
+}
+
+export function isAllowedAccountsAdminToolsFlagOn(): boolean {
+  return parseFlag(process.env[ALLOWED_ACCOUNTS_TOOLS_FLAG]);
+}
+
 export async function resolveAllowedAccountsSlackNextStep(): Promise<{
   nextStepJa: string;
   allowedAccountsAdminTool: string | null;
 }> {
-  return (await isAdminMcpToolRegistered(ALLOWED_ACCOUNTS_ADD_TOOL))
+  // Registered (name + definition) AND the flag ON → the tool actually works.
+  return isAllowedAccountsAdminToolsFlagOn() && (await isAdminMcpToolRegistered(ALLOWED_ACCOUNTS_ADD_TOOL))
     ? { nextStepJa: ALLOWED_ACCOUNTS_SLACK_NEXT_STEP_TOOL_JA, allowedAccountsAdminTool: ALLOWED_ACCOUNTS_ADD_TOOL }
     : { nextStepJa: ALLOWED_ACCOUNTS_SLACK_NEXT_STEP_JA, allowedAccountsAdminTool: null };
 }
@@ -122,7 +142,9 @@ export async function resolveAuthorizeLinkFollowUpNextStep(
   const noticeNote = failedSteps.includes("completion_notice")
     ? "完了の DM は届いていない可能性があります（Slack 連携そのものは完了しています）。"
     : "";
-  if (await isAdminMcpToolRegistered(DM_AUTOROUTE_RUN_TOOL)) {
+  // 追記 4: dmAutoroute.run dryRun:false refuses with dm_autoroute_flag_off
+  // unless SLACK_DM_AUTOROUTE_ENABLED is ON → only then name it.
+  if (isSlackDmAutorouteEnabled() && (await isAdminMcpToolRegistered(DM_AUTOROUTE_RUN_TOOL))) {
     return {
       nextStepJa:
         `Slack 連携は完了しています。後続の処理は ${DM_AUTOROUTE_RUN_TOOL}（employeeId=${employeeId}, dryRun:false）で後から取り戻せます` +
@@ -130,8 +152,13 @@ export async function resolveAuthorizeLinkFollowUpNextStep(
       recoveryAdminTool: DM_AUTOROUTE_RUN_TOOL,
     };
   }
+  if (!isSlackDmAutorouteEnabled()) {
+    // Flag OFF: no DM auto-route ran or can run now; nothing to re-run.
+    return { nextStepJa: `Slack 連携は完了しています。${noticeNote}`.trim(), recoveryAdminTool: null };
+  }
   return {
     nextStepJa: `Slack 連携は完了しています。後続の処理を取り戻す管理ツールがこの環境にありません。運営に連絡してください。${noticeNote}`,
     recoveryAdminTool: null,
   };
 }
+
