@@ -69,6 +69,41 @@ describe("サービス表記（Staffpass（AIエージェントの社員証）�
   });
 });
 
+describe("既定タイトルと社内ドキュメントの見出し（#231 レビュー反映）", () => {
+  test("app/layout.tsx: 既定タイトルは新しい表記、description も AI エージェントの表現に揃える", () => {
+    const src = read("app/layout.tsx");
+    expect(src).toContain('import { SERVICE_LABEL } from "@/lib/brand";');
+    expect(src).toContain("title: SERVICE_LABEL,");
+    expect(src).not.toContain("Sealith の AI社員 就業規則と日報");
+    expect(src).toContain(
+      "AIエージェントの権限、承認、行為上限、監査を一つの社員証で管理するコントロールプレーン。",
+    );
+  });
+
+  const heading = "Staffpass — AIエージェントの社員証（制御面）";
+  for (const p of [
+    "docs/internal-share/01-engineer-requirements.md",
+    "docs/internal-share/02-design-brief.md",
+    "docs/internal-share/03-sales-enablement.md",
+  ]) {
+    test(`${p}: プロダクト名は新しい表記`, () => {
+      const src = read(p);
+      expect(src).toContain(`**プロダクト:** ${heading}`);
+      expect(src).not.toMatch(/プロダクト仮称:\*\* AI社員 制御面（Grok Bot/);
+    });
+  }
+
+  test("docs/architecture.md: 見出しは新しい表記", () => {
+    expect(read("docs/architecture.md").split("\n")[0]).toBe(`# Architecture — ${heading}`);
+  });
+
+  test("営業資料: 「Grok Bot 特化」をやめ、他エージェントへの拡張を示す", () => {
+    const src = read("docs/internal-share/03-sales-enablement.md");
+    expect(src).not.toContain("Grok Bot 特化");
+    expect(src).toContain("まず Grok Bot に対応（他のエージェントにも拡張予定）");
+  });
+});
+
 // 旧表記がリポジトリに残っていないことを確認する（意図して残す箇所は許可リスト）。
 const OLD_LABEL_PATTERNS: RegExp[] = [
   /AI\s?社員\s?for\s?Grok\s?Bot/i,

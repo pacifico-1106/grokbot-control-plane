@@ -1,4 +1,4 @@
-# Architecture — Grok Bot Control Plane
+# Architecture — Staffpass — AIエージェントの社員証（制御面）
 
 ## なぜ制御面か
 

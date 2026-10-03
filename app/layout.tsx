@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { Geist_Mono, Noto_Sans_JP } from "next/font/google";
+import { SERVICE_LABEL } from "@/lib/brand";
 import "./globals.css";
 
 const notoSansJp = Noto_Sans_JP({
@@ -22,9 +23,9 @@ export const viewport: Viewport = {
 };
 
 export const metadata: Metadata = {
-  title: "Staffpass — Sealith の AI社員 就業規則と日報",
+  title: SERVICE_LABEL,
   description:
-    "AI社員の権限、承認、行為上限、監査を一つの社員証で管理するコントロールプレーン。",
+    "AIエージェントの権限、承認、行為上限、監査を一つの社員証で管理するコントロールプレーン。",
   icons: {
     icon: [{ url: "/brand/staffpass-mark-dark-v2.png", type: "image/png" }],
     apple: [{ url: "/brand/staffpass-mark-dark-v2.png" }],
