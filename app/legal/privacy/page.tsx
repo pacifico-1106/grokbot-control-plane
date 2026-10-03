@@ -1,13 +1,14 @@
 import type { Metadata } from "next";
 import { LegalArticle, LegalPage } from "@/components/legal/LegalPage";
 import { getLegalIdentity } from "@/lib/legal";
+import { LEGAL_LAST_REVISED } from "@/lib/legal-revisions";
 
 export const metadata: Metadata = { title: "プライバシーポリシー | Staffpass" };
 
 export default function PrivacyPage() {
   const identity = getLegalIdentity();
   return (
-    <LegalPage title="プライバシーポリシー" description="Staffpassにおける個人情報、契約者データ、認証・監査・課金情報の取扱いを説明します。" identity={identity}>
+    <LegalPage title="プライバシーポリシー" description="Staffpassにおける個人情報、契約者データ、認証・監査・課金情報の取扱いを説明します。" identity={identity} lastRevised={LEGAL_LAST_REVISED.privacy}>
       <p>{identity.providerName}（以下「当社」といいます。）は、個人情報の保護に関する法律その他の関係法令を遵守し、Staffpassに関連して取得する情報を本ポリシーに従って取り扱います。</p>
 
       <LegalArticle title="1. 適用範囲と当事者の役割">

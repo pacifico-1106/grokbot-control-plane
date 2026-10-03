@@ -7,11 +7,14 @@ export function LegalPage({
   title,
   description,
   identity,
+  lastRevised,
   children,
 }: {
   title: string;
   description: string;
   identity: LegalIdentity;
+  /** ページ本文の最終改定日。lib/legal-revisions.ts でページごとに管理する。 */
+  lastRevised: string;
   children: React.ReactNode;
 }) {
   return (
@@ -28,7 +31,7 @@ export function LegalPage({
         <p className="mt-4 max-w-3xl text-sm leading-relaxed muted">{description}</p>
         <div className="mt-4 flex flex-wrap gap-x-4 gap-y-1 text-xs faint">
           <span>制定・施行日: {identity.effectiveDate}</span>
-          <span>最終改定日: {identity.effectiveDate}</span>
+          <span>最終改定日: {lastRevised}</span>
         </div>
 
         {!identity.configured ? (
