@@ -2,7 +2,8 @@
  * PR-3: signature-verified Slack button failures raise the fail-closed alert;
  * the approval is never granted on those paths. Successful presses do not alert.
  */
-import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { beforeEach, describe, expect, test } from "bun:test";
+import { scopedModuleMocks } from "@/tests/helpers/scoped-module-mock";
 import { createHmac } from "node:crypto";
 
 const SECRET = "test_signing_secret_alert";
@@ -16,20 +17,25 @@ let approval: Record<string, unknown> | null = null;
 let delivery: Record<string, unknown> | null = null;
 const resolveCalls: unknown[] = [];
 
-mock.module("@/lib/notify/delivery-failure-alert", () => ({
+// File-scoped mocks (tests/helpers/scoped-module-mock.ts): bun's mock.module is
+// process-global; plain partial mocks here replaced "@/lib/data",
+// notification-channels and the alert module for every later file in the same
+// bun process. Overrides below are unchanged; they only apply while this file runs.
+const scope = scopedModuleMocks();
+await scope.mock("@/lib/notify/delivery-failure-alert", {
   isApprovalDeliveryFailureAlertEnabled: () => alertOn,
   alertApprovalDeliveryFailure: async (input: Record<string, unknown>) => {
     alerts.push(input);
     return { status: "sent" };
   },
-}));
-mock.module("@/lib/slack/interactivity-channel-resolver", () => ({
+});
+await scope.mock("@/lib/slack/interactivity-channel-resolver", {
   findChannelCandidatesByAppAndTeam: async (apiAppId: string, teamId: string) =>
     apiAppId === APP
       ? [{ id: "chn_a", orgId: "org_a", signingSecret: SECRET, apiAppId: APP, teamId, expectedTeamId: TEAM, allowedUserIds: [USER] }]
       : [],
-}));
-mock.module("@/lib/data", () => ({
+});
+await scope.mock("@/lib/data", {
   getApprovalByTelegramRef: async () => approval,
   getApprovalById: async () => approval,
   getEmployee: async () => ({ id: "emp_1", approverUserIds: [] }),
@@ -37,8 +43,8 @@ mock.module("@/lib/data", () => ({
     resolveCalls.push(args);
     return null;
   },
-}));
-mock.module("@/lib/data/notification-channels", () => ({
+});
+await scope.mock("@/lib/data/notification-channels", {
   getApprovalIdByDeliveryExternal: async () => null,
   getNotificationDelivery: async () => delivery,
   recordNotificationDelivery: async () => null,
@@ -56,13 +62,13 @@ mock.module("@/lib/data/notification-channels", () => ({
   findAwaitingRevisionApproval: async () => null,
   resetDemoNotificationChannels: () => {},
   resolveEmployeeApprovalChannel: async () => null,
-}));
-mock.module("@/lib/approvals/fulfill", () => ({ fulfillIfApproved: async () => {} }));
-mock.module("@/lib/approvals/resolve-side-effects", () => ({ runApprovalResolveSideEffects: async () => {} }));
-mock.module("@/lib/employees/approval-inbox", () => ({ extraApproversAllow: () => true }));
-mock.module("@/lib/admin-mcp/self-approval", () => ({ isSelfApprovalDenied: () => false }));
-mock.module("@/lib/approval-workflow", () => ({ getMemberIdFromVoterBinding: async () => null }));
-mock.module("@/lib/slack/ephemeral-rejection", () => ({ sendEphemeralRejection: async () => {} }));
+});
+await scope.mock("@/lib/approvals/fulfill", { fulfillIfApproved: async () => {} });
+await scope.mock("@/lib/approvals/resolve-side-effects", { runApprovalResolveSideEffects: async () => {} });
+await scope.mock("@/lib/employees/approval-inbox", { extraApproversAllow: () => true });
+await scope.mock("@/lib/admin-mcp/self-approval", { isSelfApprovalDenied: () => false });
+await scope.mock("@/lib/approval-workflow", { getMemberIdFromVoterBinding: async () => null });
+await scope.mock("@/lib/slack/ephemeral-rejection", { sendEphemeralRejection: async () => {} });
 
 const { POST } = await import("./route");
 
