@@ -13,6 +13,7 @@ type InboxDraft = {
   label: string;
   destination: string;
   allowedUsers: string;
+  deliveryUser: string;
   primarySecret: string;
   secondarySecret: string;
 };
@@ -62,6 +63,7 @@ function draftFromChannel(channel: NotificationChannel): InboxDraft {
     allowedUsers: Array.isArray(channel.config.allowedUserIds)
       ? channel.config.allowedUserIds.map(String).join(",")
       : "",
+    deliveryUser: "",
     primarySecret: "",
     secondarySecret: "",
   };
@@ -76,12 +78,20 @@ function emptyDraft(provider: NotificationProvider, makeDefault: boolean): Inbox
     label: defaultLabel(provider),
     destination: "",
     allowedUsers: "",
+    deliveryUser: "",
     primarySecret: "",
     secondarySecret: "",
   };
 }
 
-export function NotificationChannelsClient({ initialChannels }: { initialChannels: NotificationChannel[] }) {
+export function NotificationChannelsClient({
+  initialChannels,
+  slackDmAutoOpen = false,
+}: {
+  initialChannels: NotificationChannel[];
+  /** SLACK_APPROVAL_DM_AUTO_OPEN: empty Slack channel ID → server opens the approver DM. */
+  slackDmAutoOpen?: boolean;
+}) {
   const [channels, setChannels] = useState(initialChannels);
   const [drafts, setDrafts] = useState<InboxDraft[]>(
     initialChannels.length
@@ -143,6 +153,9 @@ export function NotificationChannelsClient({ initialChannels }: { initialChannel
               label: draft.label,
               channelId: draft.destination,
               allowedUserIds: draft.allowedUsers,
+              ...(slackDmAutoOpen && !draft.destination.trim() && draft.deliveryUser.trim()
+                ? { deliveryUserId: draft.deliveryUser.trim() }
+                : {}),
               botToken: draft.primarySecret,
               signingSecret: draft.secondarySecret,
             };
@@ -176,7 +189,11 @@ export function NotificationChannelsClient({ initialChannels }: { initialChannel
       setMessage(
         body.webhook?.ok === false
           ? "保存しましたが Webhook の登録に失敗しました"
-          : "保存しました"
+          : body.setupNotice?.ok
+            ? body.autoOpened
+              ? `保存しました。承認者（${body.autoOpened.userId}）との DM を開き、「設定しました」を送りました`
+              : "保存しました。承認口に「設定しました」を送りました"
+            : "保存しました"
       );
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "保存に失敗しました");
@@ -285,9 +302,28 @@ export function NotificationChannelsClient({ initialChannels }: { initialChannel
                   className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm font-mono"
                   value={draft.destination}
                   onChange={(event) => updateDraft(draft.key, { destination: event.target.value })}
-                  placeholder={isTelegram ? "-100... / 個人DM" : isLine ? "C... / R... / U..." : "C012..."}
+                  placeholder={
+                    isTelegram
+                      ? "-100... / 個人DM"
+                      : isLine
+                        ? "C... / R... / U..."
+                        : slackDmAutoOpen
+                          ? "空欄なら承認者との DM を自動で開きます"
+                          : "C012..."
+                  }
                 />
               </label>
+              {draft.provider === "slack" && slackDmAutoOpen && !draft.destination.trim() ? (
+                <label className="block text-xs muted">
+                  DM を開く相手（許可user ID が複数のときだけ。1 人なら空欄）
+                  <input
+                    className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm font-mono"
+                    value={draft.deliveryUser}
+                    onChange={(event) => updateDraft(draft.key, { deliveryUser: event.target.value })}
+                    placeholder="U..."
+                  />
+                </label>
+              ) : null}
               <label className="block text-xs muted">
                 許可user ID（カンマ区切り、空なら送信先内の全員）
                 <input
