@@ -1376,25 +1376,30 @@ export async function runGatewayInvoke(
     }
   }
 
-  let mailPolicyForceApproval: boolean | undefined;
-  if (tool === "mail.send" && mailPolicyDecision) {
-    if (mailPolicyDecision.needsApproval) {
-      mailPolicyForceApproval = true;
-    } else if (mailPolicyDecision.autoSend) {
-      mailPolicyForceApproval = false;
-    }
-  }
+  // B1 mail.policy can only tighten the gate, never loosen independent guards.
+  // - needs_approval (incl. auto without consent) → force approval.
+  // - auto + consent → lifts ONLY the tool-level always-human default for
+  //   mail.send (no per-tool hint, or an explicit auto / risk_based hint).
+  //   employee always_human, explicit always_human / deny hints, action limits,
+  //   spend and topic gate still force approval (stricter side wins, fail-closed).
+  const mailPolicyForceApproval =
+    tool === "mail.send" && mailPolicyDecision?.needsApproval === true;
+  const mailPolicyLiftsToolDefault =
+    tool === "mail.send" &&
+    mailPolicyDecision?.autoSend === true &&
+    mailPolicyDecision.needsApproval !== true &&
+    (toolHint == null || toolHint === "auto" || toolHint === "risk_based");
 
   // P1: Topic gate can force approval for posts with sensitive topics
   const topicGateForceApproval = topicGateResult?.requiresApproval ?? false;
 
   const forceApproval =
-    mailPolicyForceApproval ??
-    (perToolHuman ||
-      employee.approvalPolicy === "always_human" ||
-      actionLimit.decision === "needs_approval" ||
-      spend?.decision === "needs_approval" ||
-      topicGateForceApproval);
+    mailPolicyForceApproval ||
+    (mailPolicyLiftsToolDefault ? false : perToolHuman) ||
+    employee.approvalPolicy === "always_human" ||
+    actionLimit.decision === "needs_approval" ||
+    spend?.decision === "needs_approval" ||
+    topicGateForceApproval;
 
   if (
     forceApproval &&
