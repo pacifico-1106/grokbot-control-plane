@@ -1,18 +1,23 @@
 /**
  * PR-3: a real approval that reaches no inbox raises the fail-closed alert.
  */
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { scopedModuleMocks } from "@/tests/helpers/scoped-module-mock";
 import type { ApprovalRequest } from "@/lib/types";
 
 let alertOn = true;
 const alerts: Array<Record<string, unknown>> = [];
-mock.module("@/lib/notify/delivery-failure-alert", () => ({
+// File-scoped mock (tests/helpers/scoped-module-mock.ts): a plain mock.module
+// here replaced the real alert module for every later file in the same bun
+// process (delivery-failure-alert.test.ts then tested this fake).
+const scope = scopedModuleMocks();
+await scope.mock("@/lib/notify/delivery-failure-alert", {
   isApprovalDeliveryFailureAlertEnabled: () => alertOn,
   alertApprovalDeliveryFailure: async (input: Record<string, unknown>) => {
     alerts.push(input);
     return { status: "sent" };
   },
-}));
+});
 
 const { upsertNotificationChannel } = await import("@/lib/data/notification-channels");
 const { sendApprovalNotifications } = await import("@/lib/notify/channels");

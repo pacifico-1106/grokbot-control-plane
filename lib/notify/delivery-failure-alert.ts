@@ -68,9 +68,12 @@ function id(value: unknown): string | null {
   return /^[A-Za-z0-9_.:-]{1,80}$/.test(raw) ? raw : null;
 }
 
-function takeSlot(key: string, now: number): { allowed: true; suppressed: number } | { allowed: false } {
+function takeSlot(key: string, now: number, force = false): { allowed: true; suppressed: number } | { allowed: false } {
   const entry = throttle.get(key);
-  if (entry && now - entry.windowStart < APPROVAL_ALERT_WINDOW_MS) {
+  // force: a one-off event that must always alert (e.g. the shared approval app's
+  // token was deleted — idempotent, so it happens once per install). It still
+  // opens a window, so the follow-up generic alert for the same inbox is suppressed.
+  if (!force && entry && now - entry.windowStart < APPROVAL_ALERT_WINDOW_MS) {
     entry.suppressed += 1;
     return { allowed: false };
   }
@@ -102,6 +105,10 @@ export async function alertApprovalDeliveryFailure(input: {
   provider?: string | null;
   channelId?: string | null;
   reason?: string | null;
+  /** Short next step (Japanese, no URL) shown instead of the generic guidance. */
+  nextStepJa?: string | null;
+  /** Bypass the throttle window (still opens a new one). */
+  force?: boolean;
   now?: number;
 }): Promise<ApprovalAlertResult> {
   const result: ApprovalAlertResult = {
@@ -120,7 +127,8 @@ export async function alertApprovalDeliveryFailure(input: {
     const approvalId = id(input.approvalId);
     const channelId = id(input.channelId);
     const provider = code(input.provider, "unknown");
-    const slot = takeSlot(`${orgId}|${kind}|${channelId ?? "-"}`, input.now ?? Date.now());
+    const slot = takeSlot(`${orgId}|${kind}|${channelId ?? "-"}`, input.now ?? Date.now(), input.force === true);
+    const nextStepJa = typeof input.nextStepJa === "string" ? input.nextStepJa.replace(/[<>&]/g, "").trim().slice(0, 300) : "";
     if (!slot.allowed) return { ...result, status: "suppressed" };
 
     const event = kind === "button_failed" ? "approval_button.failed" : "approval_delivery.failed";
@@ -141,6 +149,7 @@ export async function alertApprovalDeliveryFailure(input: {
         channelId,
         reason,
         approvalGranted: false,
+        ...(nextStepJa ? { nextStepJa } : {}),
         suppressedSinceLast: slot.suppressed,
         suppressWindowMinutes: APPROVAL_ALERT_WINDOW_MS / 60_000,
       },
@@ -148,7 +157,9 @@ export async function alertApprovalDeliveryFailure(input: {
 
     const text =
       `⚠️ StaffPass: ${labelJa}（理由: ${reason}）。承認はされていません。` +
-      `/app/approvals で内容を確認し、承認口（/app/settings「承認を受け取る」）の設定を見直してください。` +
+      (nextStepJa
+        ? `${nextStepJa}。`
+        : `/app/approvals で内容を確認し、承認口（/app/settings「承認を受け取る」）の設定を見直してください。`) +
       (approvalId ? ` 承認ID: ${approvalId}` : "");
 
     const [{ getEnabledNotificationChannels }, { listMembers }, { sendSlackTextToChannel }, { sendTelegramTextToChannel }, { sendLineText }] =

@@ -82,6 +82,12 @@ export type SlackOAuthState = {
   employeeId: string;
   nonce: string;
   exp: number;
+  /**
+   * SLACK_AUTHORIZE_LINK_ENABLED: set only when the flow was started from a
+   * re-authorize link (/api/slack/oauth/link). The callback then takes the
+   * link branch (single-use + pinned Slack user/team). Absent = session flow.
+   */
+  linkId?: string;
 };
 
 export type SlackBotInstallState = {
@@ -95,12 +101,14 @@ export function signSlackOAuthState(input: {
   orgId: string;
   employeeId: string;
   nonce: string;
+  linkId?: string;
 }): string {
   const payload: SlackOAuthState = {
     orgId: input.orgId,
     employeeId: input.employeeId,
     nonce: input.nonce,
     exp: Date.now() + STATE_TTL_MS,
+    ...(input.linkId ? { linkId: input.linkId } : {}),
   };
   const encoded = Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
   const secret = signingSecret();
@@ -128,13 +136,14 @@ export function verifySlackOAuthState(
     if (!parsed?.orgId || !parsed?.employeeId || !parsed?.nonce) return null;
     if (parsed.nonce !== nonce) return null;
     if (!Number.isFinite(parsed.exp) || parsed.exp < Date.now()) return null;
+    if (parsed.linkId !== undefined && (typeof parsed.linkId !== "string" || !parsed.linkId)) return null;
     return parsed;
   } catch {
     return null;
   }
 }
 
-export function slackAuthorizeUrl(state: string): string {
+export function slackAuthorizeUrl(state: string, options: { teamId?: string } = {}): string {
   const clientId = process.env.SLACK_CLIENT_ID?.trim() || "";
   const params = new URLSearchParams({
     client_id: clientId,
@@ -142,6 +151,9 @@ export function slackAuthorizeUrl(state: string): string {
     redirect_uri: slackOAuthRedirectUrl(),
     state,
   });
+  // Pre-select the pinned workspace (UX only; the callback enforces the pin).
+  const team = (options.teamId || "").trim();
+  if (/^[TE][A-Z0-9]{2,30}$/.test(team)) params.set("team", team);
   return `https://slack.com/oauth/v2/authorize?${params.toString()}`;
 }
 
