@@ -2,7 +2,7 @@ import { cookies } from "next/headers";
 import { after, NextResponse } from "next/server";
 import { getAppOrigin } from "@/lib/approvals/tokens";
 import { bindEmployeeSlackIdentity } from "@/lib/data/slack-identities";
-import { authorizeLinkHtmlResponse, completeAuthorizeLinkCallback } from "@/lib/slack/authorize-link";
+import { authorizeLinkHtmlResponse, authorizeLinkPageKind, completeAuthorizeLinkCallback } from "@/lib/slack/authorize-link";
 import { syncAutoDmRoutesForEmployee } from "@/lib/slack/dm-autoroute";
 import { isSlackDmAutorouteEnabled } from "@/lib/slack/dm-autoroute-flags";
 import {
@@ -109,14 +109,9 @@ export async function GET(req: Request) {
       authTest,
     }).catch(() => ({ ok: false as const, code: "error", consumed: false }));
     if (!result.ok) {
-      const kind =
-        result.code === "denied"
-          ? "denied"
-          : result.code === "team_mismatch" || result.code === "user_mismatch" || result.code === "allowed_accounts_mismatch"
-            ? "mismatch"
-            : result.code === "invalid_link" || result.code === "authorize_link_flag_off"
-              ? "invalid"
-              : "error";
+      // user_mismatch / oauth_exchange_failed → "burned" (same text as the DM
+      // notice; never shows the other account's U…).
+      const kind = authorizeLinkPageKind(result.code);
       return authorizeLinkHtmlResponse(kind, kind === "denied" ? 200 : 400);
     }
     scheduleDmAutoroute(result.orgId, result.employeeId);

@@ -22,6 +22,11 @@ export type SlackAuthorizeLink = {
   deliveredInboxId: string | null;
   deliveredChannelId: string | null;
   deliveredUserId: string | null;
+  /** Who received the link: the employee's own Slack (default) or an approver. Legacy rows → approver. */
+  deliveredTarget: "employee" | "approver";
+  /** Approver DM (approval app) used for 「社員本人に送りました」 / completion notices. */
+  approverChannelId: string | null;
+  approverUserId: string | null;
   approvalId: string | null;
   issuedVia: "ticket" | "audit_only";
   expiresAt: string;
@@ -35,7 +40,7 @@ const demoLinks = new Map<string, DemoRow>();
 
 const COLUMNS =
   "id,org_id,employee_id,expected_slack_user_id,expected_team_id,status,result_reason,bound_slack_user_id," +
-  "delivered_inbox_id,delivered_channel_id,delivered_user_id,approval_id,issued_via,expires_at,consumed_at,created_at,updated_at";
+  "delivered_inbox_id,delivered_channel_id,delivered_user_id,delivered_target,approver_channel_id,approver_user_id,approval_id,issued_via,expires_at,consumed_at,created_at,updated_at";
 
 const STATUSES: SlackAuthorizeLinkStatus[] = ["issued", "consumed", "completed", "rejected", "superseded", "revoked"];
 
@@ -61,6 +66,9 @@ function mapRow(row: Record<string, unknown>): SlackAuthorizeLink {
     deliveredInboxId: strOrNull(row.delivered_inbox_id),
     deliveredChannelId: strOrNull(row.delivered_channel_id),
     deliveredUserId: strOrNull(row.delivered_user_id),
+    deliveredTarget: row.delivered_target === "employee" ? "employee" : "approver",
+    approverChannelId: strOrNull(row.approver_channel_id),
+    approverUserId: strOrNull(row.approver_user_id),
     approvalId: strOrNull(row.approval_id),
     issuedVia: row.issued_via === "audit_only" ? "audit_only" : "ticket",
     expiresAt: String(row.expires_at ?? ""),
@@ -90,6 +98,9 @@ export type CreateSlackAuthorizeLinkInput = {
   deliveredInboxId: string;
   deliveredChannelId: string;
   deliveredUserId: string;
+  deliveredTarget?: "employee" | "approver";
+  approverChannelId?: string | null;
+  approverUserId?: string | null;
   approvalId: string | null;
   issuedVia: "ticket" | "audit_only";
 };
@@ -121,6 +132,9 @@ export async function createSlackAuthorizeLink(input: CreateSlackAuthorizeLinkIn
       deliveredInboxId: input.deliveredInboxId,
       deliveredChannelId: input.deliveredChannelId,
       deliveredUserId: input.deliveredUserId,
+      deliveredTarget: input.deliveredTarget === "employee" ? "employee" : "approver",
+      approverChannelId: input.approverChannelId ?? null,
+      approverUserId: input.approverUserId ?? null,
       approvalId: input.approvalId,
       issuedVia: input.issuedVia,
       expiresAt: input.expiresAt,
@@ -152,6 +166,9 @@ export async function createSlackAuthorizeLink(input: CreateSlackAuthorizeLinkIn
       delivered_inbox_id: input.deliveredInboxId,
       delivered_channel_id: input.deliveredChannelId,
       delivered_user_id: input.deliveredUserId,
+      delivered_target: input.deliveredTarget === "employee" ? "employee" : "approver",
+      approver_channel_id: input.approverChannelId ?? null,
+      approver_user_id: input.approverUserId ?? null,
       approval_id: input.approvalId,
       issued_via: input.issuedVia,
       expires_at: input.expiresAt,

@@ -6,6 +6,12 @@
  *    approval, issueSlackAuthorizeLink():
  *    - opens the approval-app DM with an approver (allowedUserIds of the org's
  *      Slack approval inbox; internal member only — #235 checks),
+ *    - deliverTo "employee" (default): when the employee's Slack U… is exactly
+ *      one (the pinned user), the same approval-app bot also opens a DM with
+ *      that U… (same internal-member checks) and the link goes there; the
+ *      approver gets 「社員本人（<@U…>）に再認可リンクを送りました」 (no URL).
+ *      Zero / several candidates or an unopenable employee DM → approver
+ *      delivery with the fallback reason recorded. deliverTo "approver" → as before,
  *    - pins the expected Slack team (and user, when known: existing identity or
  *      the employee's single allowed Slack account),
  *    - stores ONLY sha256(token) with a 24h expiry, supersedes older links,
@@ -19,6 +25,11 @@
  *    allowedAccounts check still applies) → admin change log with the bound U…
  *    → approver is notified in the same approval-app DM. The caller then runs the
  *    existing #234 DM auto-route (SLACK_DM_AUTOROUTE_ENABLED).
+ *    user_mismatch / code-exchange failure burn the link and DM the recipient
+ *    (employee or approver) AUTHORIZE_LINK_FAILED_NOTICE_JA — never the other U….
+ *
+ * Bot token: every approval-app post (link, approver notice, completion /
+ * failure notice) gets its token from resolveApprovalAppBotToken() only.
  *
  * Secrets: the link token only appears in the approver DM text; tokens (link,
  * user, bot) never appear in results, audit metadata or logs.
@@ -27,7 +38,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { getAppOrigin } from "@/lib/approvals/tokens";
 import { appendAuditEvent } from "@/lib/data/audit";
 import { getEmployee } from "@/lib/data/employees";
-import { getNotificationChannelSecretsById } from "@/lib/data/notification-channels";
+import { getNotificationChannelSecretsById, listNotificationChannels } from "@/lib/data/notification-channels";
 import {
   consumeSlackAuthorizeLink,
   createSlackAuthorizeLink,
@@ -38,8 +49,12 @@ import {
 } from "@/lib/data/slack-authorize-links";
 import { bindEmployeeSlackIdentity, getEmployeeSlackIdentity } from "@/lib/data/slack-identities";
 import { approvalInboxAllowedUsers, resolveSlackApprovalInbox } from "@/lib/admin-mcp/slack-dm-setup";
-import { normalizeAllowedAccounts } from "@/lib/employees/allowed-accounts";
 import { openApprovalDeliveryDm } from "@/lib/slack/approval-dm-open";
+import {
+  ALLOWED_ACCOUNTS_SLACK_NEXT_STEP_JA,
+  AUTHORIZE_LINK_FAILED_NOTICE_JA,
+  allowedSlackAccountIds,
+} from "@/lib/slack/authorize-link-guidance";
 import { isSlackAuthorizeLinkEnabled } from "@/lib/slack/authorize-link-flags";
 import type { Employee } from "@/lib/types";
 
@@ -49,6 +64,80 @@ const TOKEN_RE = /^[A-Za-z0-9_-]{43}$/;
 const SLACK_USER_ID_RE = /^[UW][A-Z0-9]{2,30}$/;
 const SLACK_TEAM_ID_RE = /^[TE][A-Z0-9]{2,30}$/;
 const SLACK_TIMEOUT_MS = 5_000;
+
+export { ALLOWED_ACCOUNTS_SLACK_NEXT_STEP_JA, AUTHORIZE_LINK_FAILED_NOTICE_JA };
+
+export const AUTHORIZE_LINK_DELIVER_TO = ["employee", "approver"] as const;
+export type AuthorizeLinkDeliverTo = (typeof AUTHORIZE_LINK_DELIVER_TO)[number];
+export const DEFAULT_AUTHORIZE_LINK_DELIVER_TO: AuthorizeLinkDeliverTo = "employee";
+
+export function parseAuthorizeLinkDeliverTo(value: unknown): AuthorizeLinkDeliverTo | null {
+  const raw = typeof value === "string" ? value.trim() : "";
+  return (AUTHORIZE_LINK_DELIVER_TO as readonly string[]).includes(raw) ? (raw as AuthorizeLinkDeliverTo) : null;
+}
+
+/** Callback rejections that DM the link recipient (link stays used). */
+const FAILURE_NOTICE_REASONS = new Set(["user_mismatch", "oauth_exchange_failed"]);
+
+/**
+ * THE approval-app bot token resolution (single place). Every approval-app post
+ * of this flow — link DM to the employee or approver, the approver notice, the
+ * completion / failure notices — gets its xoxb here: the org's Slack approval
+ * inbox (notification channel) secret `botToken`. The shared approval app
+ * (separate PR) stores its xoxb under the same key of the org's notification
+ * channel secrets, so it plugs in here unchanged. Org-scoped (the channel must
+ * be an enabled Slack channel of `orgId`), never throws, "" when unusable.
+ */
+export async function resolveApprovalAppBotToken(orgId: string, inboxId: string | null | undefined): Promise<string> {
+  const id = (inboxId || "").trim();
+  if (!orgId || !id) return "";
+  try {
+    const owned = (await listNotificationChannels(orgId)).some(
+      (channel) => channel.id === id && channel.orgId === orgId && channel.provider === "slack" && channel.enabled
+    );
+    if (!owned) return "";
+    const secrets = await getNotificationChannelSecretsById(orgId, id);
+    const token = String(secrets?.botToken || "").trim();
+    return token.startsWith("xoxb-") ? token : "";
+  } catch {
+    return "";
+  }
+}
+
+export type AuthorizeLinkDeliveryChoice = {
+  target: AuthorizeLinkDeliverTo;
+  employeeUserId: string | null;
+  requested: AuthorizeLinkDeliverTo;
+  explicit: boolean;
+  fallbackReason: "employee_slack_user_missing" | "employee_slack_user_ambiguous" | null;
+};
+
+/**
+ * Where the link goes. "employee" only when the employee's Slack U… is exactly
+ * one; zero / several → approver with the reason (defaulted or explicit alike).
+ */
+export function chooseAuthorizeLinkDelivery(input: {
+  requested?: AuthorizeLinkDeliverTo | null;
+  employeeSlackUserIds: string[];
+}): AuthorizeLinkDeliveryChoice {
+  const explicit = Boolean(input.requested);
+  const requested = input.requested || DEFAULT_AUTHORIZE_LINK_DELIVER_TO;
+  if (requested === "approver") return { target: "approver", employeeUserId: null, requested, explicit, fallbackReason: null };
+  const candidates = [...new Set(input.employeeSlackUserIds.filter((id) => SLACK_USER_ID_RE.test(id)))];
+  if (candidates.length === 1) return { target: "employee", employeeUserId: candidates[0], requested, explicit, fallbackReason: null };
+  return {
+    target: "approver",
+    employeeUserId: null,
+    requested,
+    explicit,
+    fallbackReason: candidates.length === 0 ? "employee_slack_user_missing" : "employee_slack_user_ambiguous",
+  };
+}
+
+/** Employee U… candidates for employee delivery: the pinned user, else the allowed Slack accounts. */
+export function employeeDeliveryCandidates(pins: AuthorizeLinkPins, employee: Employee): string[] {
+  return pins.expectedSlackUserId ? [pins.expectedSlackUserId] : allowedSlackAccountIds(employee);
+}
 
 export function hashAuthorizeLinkToken(token: string): string {
   return createHash("sha256").update(token, "utf8").digest("hex");
@@ -89,12 +178,6 @@ export async function postApprovalAppText(
   }
 }
 
-function allowedSlackAccounts(employee: Employee): string[] {
-  return normalizeAllowedAccounts(employee.allowedAccounts)
-    .filter((row) => row.service.toLowerCase() === "slack" && SLACK_USER_ID_RE.test(row.accountId))
-    .map((row) => row.accountId);
-}
-
 export type AuthorizeLinkPins = {
   expectedSlackUserId: string | null;
   /** null → use the approval app's workspace team (resolved when the DM is opened). */
@@ -102,7 +185,9 @@ export type AuthorizeLinkPins = {
   linked: boolean;
 };
 
-export type PinsResult = ({ ok: true } & AuthorizeLinkPins) | { ok: false; code: string; messageJa: string };
+export type PinsResult =
+  | ({ ok: true } & AuthorizeLinkPins)
+  | { ok: false; code: string; messageJa: string; nextStepJa?: string };
 
 /**
  * Anti-takeover pins. Existing identity → its U… and T…. Otherwise the single
@@ -112,7 +197,7 @@ export type PinsResult = ({ ok: true } & AuthorizeLinkPins) | { ok: false; code:
  */
 export async function authorizeLinkPins(orgId: string, employee: Employee): Promise<PinsResult> {
   const identity = await getEmployeeSlackIdentity(employee.id);
-  const allowed = allowedSlackAccounts(employee);
+  const allowed = allowedSlackAccountIds(employee);
   if (identity && identity.orgId === orgId && identity.status !== "revoked" && SLACK_USER_ID_RE.test(identity.slackUserId)) {
     const team = SLACK_TEAM_ID_RE.test(identity.slackTeamId) ? identity.slackTeamId : null;
     return { ok: true, expectedSlackUserId: identity.slackUserId, expectedTeamId: team, linked: identity.status === "linked" };
@@ -121,8 +206,8 @@ export async function authorizeLinkPins(orgId: string, employee: Employee): Prom
     return {
       ok: false,
       code: "slack_account_not_allowed",
-      messageJa:
-        "この AI 社員には許可された Slack アカウント（allowedAccounts の slack U…）がありません。先に社員の許可アカウントに Slack の U… を登録してください（人の承認）。",
+      messageJa: `この AI 社員には許可された Slack アカウント（allowedAccounts の slack U…）がありません。${ALLOWED_ACCOUNTS_SLACK_NEXT_STEP_JA}`,
+      nextStepJa: ALLOWED_ACCOUNTS_SLACK_NEXT_STEP_JA,
     };
   }
   return { ok: true, expectedSlackUserId: allowed.length === 1 ? allowed[0] : null, expectedTeamId: null, linked: false };
@@ -134,10 +219,22 @@ export type IssueAuthorizeLinkResult =
       linkId: string;
       employeeId: string;
       expiresAt: string;
-      deliveredTo: { inboxId: string; channelKind: "dm"; deliveryUserId: string };
+      deliveredTo: {
+        inboxId: string;
+        channelKind: "dm";
+        /** Who actually received the link. */
+        target: AuthorizeLinkDeliverTo;
+        deliveryUserId: string;
+        approverUserId: string;
+        requested: AuthorizeLinkDeliverTo;
+        explicit: boolean;
+        fallbackReason: string | null;
+        /** employee delivery: 「社員本人に送りました」 posted to the approver. */
+        approverNoticeSent: boolean;
+      };
       pinned: { slackUserId: string | null; teamId: string };
     }
-  | { ok: false; code: string; messageJa: string; missingScope?: string };
+  | { ok: false; code: string; messageJa: string; missingScope?: string; nextStepJa?: string };
 
 /** Issue + deliver. Org comes from the caller (credential / approval row). */
 export async function issueSlackAuthorizeLink(input: {
@@ -150,6 +247,8 @@ export async function issueSlackAuthorizeLink(input: {
   actor?: { adminAgentId?: string | null; grokBotAgentId?: string | null };
   /** The pinned user the human approved (ticket). Different now → fail closed. */
   approvedExpectedSlackUserId?: string | null;
+  /** Explicit deliverTo; omitted → "employee" (default, falls back to approver). */
+  deliverTo?: AuthorizeLinkDeliverTo | null;
   now?: number;
 }): Promise<IssueAuthorizeLinkResult> {
   const { orgId } = input;
@@ -184,8 +283,7 @@ export async function issueSlackAuthorizeLink(input: {
   const inbox = await resolveSlackApprovalInbox(orgId, (input.inboxId || "").trim());
   if ("kind" in inbox) return failed({ ok: false, code: "inbox_not_found", messageJa: "有効な Slack 承認口が見つかりません。" });
   if (inbox.orgId !== orgId) return failed({ ok: false, code: "inbox_not_found", messageJa: "有効な Slack 承認口が見つかりません。" });
-  const secrets = inbox.hasCredentials ? await getNotificationChannelSecretsById(orgId, inbox.id) : {};
-  const botToken = String(secrets.botToken || "").trim();
+  const botToken = inbox.hasCredentials ? await resolveApprovalAppBotToken(orgId, inbox.id) : "";
   const opened = await openApprovalDeliveryDm({
     botToken,
     allowedUserIds: approvalInboxAllowedUsers(inbox),
@@ -204,6 +302,30 @@ export async function issueSlackAuthorizeLink(input: {
       messageJa: "承認アプリのワークスペースと社員の Slack ワークスペースが一致しません。リンクは発行していません。",
     });
   }
+  // Delivery target (default employee). The employee DM goes through the same
+  // approval-app bot and the same internal-member checks as the approver DM.
+  const choice = chooseAuthorizeLinkDelivery({
+    requested: input.deliverTo ?? null,
+    employeeSlackUserIds: employeeDeliveryCandidates(pins, employee),
+  });
+  let target: AuthorizeLinkDeliverTo = choice.target;
+  let fallbackReason: string | null = choice.fallbackReason;
+  let employeeDmError: string | null = null;
+  let recipient = { channelId: opened.channelId, userId: opened.userId };
+  if (choice.target === "employee" && choice.employeeUserId) {
+    const employeeDm = await openApprovalDeliveryDm({
+      botToken,
+      allowedUserIds: [choice.employeeUserId],
+      deliveryUserId: choice.employeeUserId,
+    });
+    if (employeeDm.ok && employeeDm.teamId === teamId && employeeDm.userId === choice.employeeUserId) {
+      recipient = { channelId: employeeDm.channelId, userId: employeeDm.userId };
+    } else {
+      target = "approver";
+      fallbackReason = "employee_dm_unavailable";
+      employeeDmError = employeeDm.ok ? "team_mismatch" : employeeDm.code;
+    }
+  }
   const { token, tokenHash } = newLinkToken();
   const expiresAt = new Date((input.now ?? Date.now()) + SLACK_AUTHORIZE_LINK_TTL_MS).toISOString();
   const link = await createSlackAuthorizeLink({
@@ -214,21 +336,40 @@ export async function issueSlackAuthorizeLink(input: {
     expectedTeamId: teamId,
     expiresAt,
     deliveredInboxId: inbox.id,
-    deliveredChannelId: opened.channelId,
-    deliveredUserId: opened.userId,
+    deliveredChannelId: recipient.channelId,
+    deliveredUserId: recipient.userId,
+    deliveredTarget: target,
+    approverChannelId: opened.channelId,
+    approverUserId: opened.userId,
     approvalId: input.approvalId,
     issuedVia: input.via,
   });
-  const who = pins.expectedSlackUserId ? `Slack ユーザー ${pins.expectedSlackUserId}` : "社員本人の Slack アカウント";
+  const who =
+    target === "employee"
+      ? "この Slack アカウント（社員本人）"
+      : pins.expectedSlackUserId
+        ? `Slack ユーザー ${pins.expectedSlackUserId}`
+        : "社員本人の Slack アカウント";
   const text =
     `🔐 StaffPass: AI社員「${employee.displayName}」の Slack 再認可リンクです（24時間・1回だけ有効）。\n` +
     `${who}でログインしたブラウザで開き、「許可する」を押してください。別のアカウントでは連携されません。\n` +
     `${linkUrl(token)}\n` +
     `心当たりがない場合は開かずに無視してください（期限が切れると使えなくなります）。`;
-  const posted = await postApprovalAppText(botToken, opened.channelId, text);
+  const posted = await postApprovalAppText(botToken, recipient.channelId, text);
   if (!posted.ok) {
     await finishSlackAuthorizeLink({ id: link.id, orgId, status: "revoked", reason: "delivery_failed" });
     return failed({ ok: false, code: "delivery_failed", messageJa: `承認アプリの DM にリンクを送れませんでした（${posted.code}）。リンクは無効化しました。` });
+  }
+  // Employee delivery: tell the approver where it went (never the URL). Best effort.
+  let approverNoticeSent = false;
+  if (target === "employee" && opened.channelId !== recipient.channelId) {
+    const notice = await postApprovalAppText(
+      botToken,
+      opened.channelId,
+      `📨 StaffPass: AI社員「${employee.displayName}」の社員本人（<@${recipient.userId}>）に再認可リンクを送りました` +
+        `（24時間・1回限り。URL はここには載せません）。連携が完了するとこの DM でお知らせします。`
+    );
+    approverNoticeSent = notice.ok;
   }
   await appendAuditEvent({
     orgId,
@@ -237,7 +378,8 @@ export async function issueSlackAuthorizeLink(input: {
     action: "admin.link",
     purpose: "admin.link",
     summary:
-      `Slack 再認可リンクを発行し、承認アプリの DM で ${opened.userId} に送信（24時間・1回限り・` +
+      `Slack 再認可リンクを発行し、承認アプリの DM で${target === "employee" ? "社員本人" : "承認者"} ${recipient.userId} に送信` +
+      `${fallbackReason ? `（社員本人に送れないため承認者へ: ${fallbackReason}）` : ""}（24時間・1回限り・` +
       `${pins.expectedSlackUserId ? `Slack ${pins.expectedSlackUserId} / ` : ""}team ${teamId} に固定${input.via === "audit_only" ? "・承認省略（監査のみ）" : ""}）`,
     metadata: {
       auditClass: "admin",
@@ -246,8 +388,16 @@ export async function issueSlackAuthorizeLink(input: {
       approvalId: input.approvalId,
       issuedVia: input.via,
       deliveredInboxId: inbox.id,
-      deliveredChannelId: opened.channelId,
-      deliveredUserId: opened.userId,
+      deliveredChannelId: recipient.channelId,
+      deliveredUserId: recipient.userId,
+      deliveredTarget: target,
+      deliverToRequested: choice.requested,
+      deliverToExplicit: choice.explicit,
+      deliveryFallbackReason: fallbackReason,
+      employeeDmError,
+      approverUserId: opened.userId,
+      approverChannelId: opened.channelId,
+      approverNoticeSent,
       expectedSlackUserId: pins.expectedSlackUserId,
       expectedTeamId: teamId,
       expiresAt,
@@ -260,7 +410,17 @@ export async function issueSlackAuthorizeLink(input: {
     linkId: link.id,
     employeeId: employee.id,
     expiresAt,
-    deliveredTo: { inboxId: inbox.id, channelKind: "dm", deliveryUserId: opened.userId },
+    deliveredTo: {
+      inboxId: inbox.id,
+      channelKind: "dm",
+      target,
+      deliveryUserId: recipient.userId,
+      approverUserId: opened.userId,
+      requested: choice.requested,
+      explicit: choice.explicit,
+      fallbackReason,
+      approverNoticeSent,
+    },
     pinned: { slackUserId: pins.expectedSlackUserId, teamId },
   };
 }
@@ -324,6 +484,13 @@ export async function completeAuthorizeLinkCallback(input: {
 
   const reject = async (reason: string, extra: Record<string, unknown> = {}): Promise<AuthorizeLinkCallbackResult> => {
     await finishSlackAuthorizeLink({ id: link.id, orgId, status: "rejected", reason });
+    // Tell whoever received the link that it is void (never the other U…).
+    // Best effort: a notice failure never changes the callback response.
+    let failureNotice: Record<string, unknown> = {};
+    if (FAILURE_NOTICE_REASONS.has(reason)) {
+      const sent = await sendAuthorizeLinkFailureNotice(link).catch(() => false);
+      failureNotice = { failureNoticeSent: sent, failureNoticeTarget: link.deliveredTarget };
+    }
     await appendAuditEvent({
       orgId,
       employeeId,
@@ -331,7 +498,7 @@ export async function completeAuthorizeLinkCallback(input: {
       action: "admin.link",
       purpose: "admin.link",
       summary: `Slack 再認可リンクでの連携を拒否（${reason}）。何も保存していません`,
-      metadata: { auditClass: "admin", event: "slack_authorize_link.rejected", linkId: link.id, reason, ...extra },
+      metadata: { auditClass: "admin", event: "slack_authorize_link.rejected", linkId: link.id, reason, ...extra, ...failureNotice },
     }).catch(() => undefined);
     return { ok: false, code: reason, consumed: true };
   };
@@ -398,14 +565,14 @@ export async function completeAuthorizeLinkCallback(input: {
       previousSlackUserId: previous && previous.orgId === orgId ? previous.slackUserId || null : null,
     },
   });
-  // Notify the approver in the same approval-app DM (best effort, never throws).
-  if (link.deliveredInboxId && link.deliveredChannelId) {
-    const secrets = await getNotificationChannelSecretsById(orgId, link.deliveredInboxId).catch(() => ({}) as Record<string, string>);
-    const botToken = String((secrets as Record<string, string>).botToken || "").trim();
+  // Notify the approver in the approval-app DM (best effort, never throws).
+  const approverChannel = link.approverChannelId || link.deliveredChannelId;
+  if (link.deliveredInboxId && approverChannel) {
+    const botToken = await resolveApprovalAppBotToken(orgId, link.deliveredInboxId);
     if (botToken) {
       await postApprovalAppText(
         botToken,
-        link.deliveredChannelId,
+        approverChannel,
         `✅ StaffPass: AI社員「${name}」の Slack 連携が完了しました（Slack ユーザー ${slackUserId}）。` +
           `心当たりがない場合は、ダッシュボードの社員ページで Slack 連携を解除してください。`
       );
@@ -414,12 +581,40 @@ export async function completeAuthorizeLinkCallback(input: {
   return { ok: true, orgId, employeeId, slackUserId };
 }
 
+/** DM the link recipient (employee or approver) that the link is void. Never throws. */
+async function sendAuthorizeLinkFailureNotice(link: SlackAuthorizeLink): Promise<boolean> {
+  try {
+    if (!link.deliveredInboxId || !link.deliveredChannelId) return false;
+    const botToken = await resolveApprovalAppBotToken(link.orgId, link.deliveredInboxId);
+    if (!botToken) return false;
+    const employee = await getEmployee(link.employeeId, link.orgId).catch(() => null);
+    const name = employee && employee.orgId === link.orgId ? employee.displayName : "";
+    const text = `⚠️ StaffPass${name ? `（AI社員「${name}」）` : ""}: ${AUTHORIZE_LINK_FAILED_NOTICE_JA}`;
+    const posted = await postApprovalAppText(botToken, link.deliveredChannelId, text);
+    return posted.ok;
+  } catch {
+    return false;
+  }
+}
+
+export type AuthorizeLinkPageKind = "ok" | "denied" | "mismatch" | "burned" | "invalid" | "error";
+
+/** Callback result code → result page kind. */
+export function authorizeLinkPageKind(code: string): Exclude<AuthorizeLinkPageKind, "ok"> {
+  if (code === "denied") return "denied";
+  if (FAILURE_NOTICE_REASONS.has(code)) return "burned";
+  if (code === "team_mismatch" || code === "allowed_accounts_mismatch") return "mismatch";
+  if (code === "invalid_link" || code === "authorize_link_flag_off") return "invalid";
+  return "error";
+}
+
 /** Minimal result page for the link flow (the clicker may have no Staffpass session). */
-export function authorizeLinkResultHtml(kind: "ok" | "denied" | "mismatch" | "invalid" | "error"): string {
+export function authorizeLinkResultHtml(kind: AuthorizeLinkPageKind): string {
   const messages: Record<typeof kind, string> = {
     ok: "Slack 連携が完了しました。このタブを閉じてください。",
     denied: "許可がキャンセルされました。もう一度リンクを開くとやり直せます。",
     mismatch: "このリンクは別の Slack アカウント／ワークスペース用です。連携は保存していません。承認者に再発行を依頼してください。",
+    burned: AUTHORIZE_LINK_FAILED_NOTICE_JA,
     invalid: "このリンクは無効か、期限切れ・使用済みです。承認者に再発行を依頼してください。",
     error: "Slack 連携を完了できませんでした。承認者に再発行を依頼してください。",
   };

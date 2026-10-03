@@ -45,6 +45,7 @@ import {
 } from "@/lib/slack/approval-dm-open";
 import { syncAutoDmRoutesForEmployee, type DmAutorouteItem, type DmAutorouteResult } from "@/lib/slack/dm-autoroute";
 import { isSlackAuthorizeLinkEnabled } from "@/lib/slack/authorize-link-flags";
+import { ALLOWED_ACCOUNTS_SLACK_NEXT_STEP_JA, allowedSlackAccountIds } from "@/lib/slack/authorize-link-guidance";
 import { isSlackDmAutorouteEnabled, isSlackUserScopeImWriteEnabled } from "@/lib/slack/dm-autoroute-flags";
 import { slackAuthorizeUrlTemplate } from "@/lib/slack/slack-status-diagnose";
 import type { NotificationChannel } from "@/lib/types";
@@ -263,6 +264,7 @@ export async function diagnoseSlackDmApprovalSetup(orgId: string): Promise<Recor
       imRoutes: routes.length,
       autoRoutes: flags.SLACK_DM_AUTOROUTE_ENABLED ? auto : null,
       authorizeUrl: slackAuthorizeUrlTemplate(employee.id),
+      allowedSlackAccounts: allowedSlackAccountIds(employee).length,
     });
   }
 
@@ -305,9 +307,12 @@ export async function diagnoseSlackDmApprovalSetup(orgId: string): Promise<Recor
     // SLACK_AUTHORIZE_LINK_ENABLED: point at the re-authorize link (approver gets
     // it in the approval-app DM; the employee's Slack account only taps 「許可する」).
     const linkStep = flags.SLACK_AUTHORIZE_LINK_ENABLED
-      ? `setup.slackAuthorizeLink.issue（employeeId=${row.employeeId}）で再認可リンクを発行（人の承認 1 回 → 承認者に承認アプリの DM で届く → 社員本人の Slack で開いて「許可する」）。`
+      ? `setup.slackAuthorizeLink.issue（employeeId=${row.employeeId}）で再認可リンクを発行（人の承認 1 回 → 承認アプリの DM で社員本人の Slack に届く（U… が 1 つに決まらないときは承認者）→ 社員本人の Slack で開いて「許可する」）。`
       : "";
-    if (!row.slackIdentityLinked) {
+    if (!row.slackIdentityLinked && linkStep && row.allowedSlackAccounts === 0) {
+      // No Slack U… on the badge: the link would be refused — say how to add it.
+      nextStepsJa.push(`${row.displayName}: 社員証の allowedAccounts に Slack アカウントがありません。${ALLOWED_ACCOUNTS_SLACK_NEXT_STEP_JA}`);
+    } else if (!row.slackIdentityLinked) {
       nextStepsJa.push(
         linkStep
           ? `${row.displayName}: Slack 未連携です。${linkStep}`

@@ -134,6 +134,9 @@ export type AdminFulfillment = {
   integrationMode?: string;
   summaryJa?: string;
   adminAgentId?: string;
+  /** setup.slackAuthorizeLink.issue: who actually received the link (no URL). */
+  deliveryTarget?: "employee" | "approver";
+  deliveryFallbackReason?: string | null;
 };
 
 const TOOL_NEXTSTEP_JA: Record<string, string> = {
@@ -503,6 +506,11 @@ export function parseAdminFulfillment(
       typeof rec.integrationMode === "string" ? rec.integrationMode : undefined,
     summaryJa: typeof rec.summaryJa === "string" ? rec.summaryJa : undefined,
     adminAgentId: typeof rec.adminAgentId === "string" ? rec.adminAgentId : undefined,
+    deliveryTarget: rec.deliveryTarget === "employee" || rec.deliveryTarget === "approver" ? rec.deliveryTarget : undefined,
+    deliveryFallbackReason:
+      rec.deliveryFallbackReason === null || typeof rec.deliveryFallbackReason === "string"
+        ? (rec.deliveryFallbackReason as string | null)
+        : undefined,
   };
 }
 
@@ -1791,7 +1799,7 @@ async function fulfillSlackAuthorizeLinkTicket(
   approval: ApprovalRequest,
   args: Record<string, unknown>
 ): Promise<AdminFulfillment> {
-  const { fulfillSlackAuthorizeLinkIssue } = await import("@/lib/admin-mcp/slack-authorize-link");
+  const { fulfillSlackAuthorizeLinkIssue, issueNextStepJa } = await import("@/lib/admin-mcp/slack-authorize-link");
   const result = await fulfillSlackAuthorizeLinkIssue({ orgId: approval.orgId, approvalId: approval.id, args });
   const at = new Date().toISOString();
   if (!result.ok) {
@@ -1803,13 +1811,18 @@ async function fulfillSlackAuthorizeLinkTicket(
       nextStepJa: result.messageJa,
     };
   }
+  const to = result.deliveredTo;
   return {
     ok: true,
     tool: "setup.slackAuthorizeLink.issue",
     at,
     employeeId: result.employeeId,
-    summaryJa: `Slack 再認可リンクを承認アプリの DM で ${result.deliveredTo.deliveryUserId} に送りました（${result.expiresAt} まで・1回限り）。URL は返しません。`,
-    nextStepJa: "社員本人の Slack アカウントでログインしたブラウザでリンクを開き「許可する」を押してください。完了すると変更履歴に記録され、承認者に通知されます。",
+    summaryJa:
+      `Slack 再認可リンクを承認アプリの DM で${to.target === "employee" ? "社員本人" : "承認者"} ${to.deliveryUserId} に送りました` +
+      `（${result.expiresAt} まで・1回限り${to.fallbackReason ? `・社員本人に送れないため承認者へ: ${to.fallbackReason}` : ""}）。URL は返しません。`,
+    nextStepJa: issueNextStepJa(result),
+    deliveryTarget: to.target,
+    deliveryFallbackReason: to.fallbackReason,
   };
 }
 

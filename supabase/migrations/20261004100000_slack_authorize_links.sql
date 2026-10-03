@@ -18,6 +18,11 @@ create table if not exists public.slack_authorize_links (
   delivered_inbox_id text,
   delivered_channel_id text check (delivered_channel_id is null or delivered_channel_id ~ '^D[A-Z0-9]{2,30}$'),
   delivered_user_id text check (delivered_user_id is null or delivered_user_id ~ '^[UW][A-Z0-9]{2,30}$'),
+  -- deliverTo（既定 employee）: 実際にリンクを受け取った相手。employee = 社員本人の Slack、approver = 承認者。
+  delivered_target text not null default 'approver' check (delivered_target in ('employee', 'approver')),
+  -- 承認者 DM（「社員本人に送りました」・完了通知の宛先）。
+  approver_channel_id text check (approver_channel_id is null or approver_channel_id ~ '^D[A-Z0-9]{2,30}$'),
+  approver_user_id text check (approver_user_id is null or approver_user_id ~ '^[UW][A-Z0-9]{2,30}$'),
   approval_id text,
   issued_via text not null default 'ticket' check (issued_via in ('ticket', 'audit_only')),
   expires_at timestamptz not null,
@@ -25,6 +30,15 @@ create table if not exists public.slack_authorize_links (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+-- 2026-10-04 追加（deliverTo）: 旧版の本 migration を先に適用済みの環境でも列がそろうように（冪等）。
+alter table public.slack_authorize_links
+  add column if not exists delivered_target text not null default 'approver'
+    check (delivered_target in ('employee', 'approver')),
+  add column if not exists approver_channel_id text
+    check (approver_channel_id is null or approver_channel_id ~ '^D[A-Z0-9]{2,30}$'),
+  add column if not exists approver_user_id text
+    check (approver_user_id is null or approver_user_id ~ '^[UW][A-Z0-9]{2,30}$');
 
 create index if not exists slack_authorize_links_employee_idx
   on public.slack_authorize_links (org_id, employee_id, status);

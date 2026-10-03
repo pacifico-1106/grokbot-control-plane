@@ -53,6 +53,9 @@ let calls: Array<{ method: string; auth: string; body: string }> = [];
 let emp: Employee;
 let empSlack = "";
 let seq = 0;
+/** Who auth.test says the NEW user token belongs to (default: the employee). */
+let newTokenUser = "";
+let exchangeOk = true;
 
 function installFetch() {
   calls = [];
@@ -63,9 +66,13 @@ function installFetch() {
     calls.push({ method, auth, body });
     const json = (payload: unknown, headers: Record<string, string> = {}) =>
       new Response(JSON.stringify(payload), { status: 200, headers: { "content-type": "application/json", ...headers } });
-    if (method === "oauth.v2.access") return json({ ok: true, authed_user: { id: empSlack, access_token: NEW }, team: { id: TEAM } });
+    if (method === "oauth.v2.access") {
+      if (!exchangeOk) return json({ ok: false, error: "invalid_code" });
+      return json({ ok: true, authed_user: { id: empSlack, access_token: NEW }, team: { id: TEAM } });
+    }
     if (method === "auth.test") {
-      if (auth.endsWith(NEW) || auth.endsWith(OLD)) return json({ ok: true, user_id: empSlack, team_id: TEAM, user: "emp" }, { "x-oauth-scopes": "chat:write,users:read,im:write" });
+      if (auth.endsWith(NEW)) return json({ ok: true, user_id: newTokenUser || empSlack, team_id: TEAM, user: "emp" }, { "x-oauth-scopes": "chat:write,users:read,im:write" });
+      if (auth.endsWith(OLD)) return json({ ok: true, user_id: empSlack, team_id: TEAM, user: "emp" }, { "x-oauth-scopes": "chat:write,users:read,im:write" });
       return json({ ok: true, user_id: "UBOT", team_id: TEAM, app_id: "AROUTE0001" }, { "x-oauth-scopes": "chat:write,im:write,im:read,users:read" });
     }
     if (method === "users.info") {
@@ -99,6 +106,8 @@ beforeEach(async () => {
   process.env.SLACK_CLIENT_SECRET = "route-client-secret-at-least-32-chars";
   delete process.env.SLACK_DM_AUTOROUTE_ENABLED;
   jar.clear();
+  newTokenUser = "";
+  exchangeOk = true;
   savedFetch = globalThis.fetch;
   installFetch();
   resetDemoNotificationChannels();
@@ -194,5 +203,38 @@ describe("/api/slack/oauth/callback (link branch)", () => {
     expect(calls.some((c) => c.method === "oauth.v2.access")).toBe(false);
     expect((await getSlackAuthorizeLink(linkId, ORG))?.status).toBe("issued");
     expect(await getLinkedSlackUserToken(emp.id)).toBe(OLD);
+  });
+
+  const BURNED = "再認可リンクが別のアカウントで開かれた（または認可に失敗した）ため無効になりました。管理者に再発行を依頼してください。";
+
+  test("user_mismatch → page + DM to the delivered recipient say the link is void; the other U… appears nowhere", async () => {
+    const { state, linkId } = await begin();
+    newTokenUser = "UROUTEATTK9";
+    calls = [];
+    const res = await callbackGET(new Request(`https://staffpass.test/api/slack/oauth/callback?code=abc&state=${encodeURIComponent(state)}`));
+    expect(res.status).toBe(400);
+    const html = await res.text();
+    expect(html).toContain(BURNED);
+    expect(html).not.toContain("UROUTEATTK9");
+    const notices = calls.filter((c) => c.method === "chat.postMessage");
+    expect(notices).toHaveLength(1);
+    expect(notices[0].auth).toBe(`Bearer ${BOT}`);
+    expect(notices[0].body).toContain(BURNED);
+    expect(notices[0].body).not.toContain("UROUTEATTK9");
+    expect((await getSlackAuthorizeLink(linkId, ORG))?.status).toBe("rejected");
+    expect(await getLinkedSlackUserToken(emp.id)).toBe(OLD);
+  });
+
+  test("code exchange failure → same page + notice; link stays used", async () => {
+    const { state, linkId } = await begin();
+    exchangeOk = false;
+    calls = [];
+    const res = await callbackGET(new Request(`https://staffpass.test/api/slack/oauth/callback?code=abc&state=${encodeURIComponent(state)}`));
+    expect(res.status).toBe(400);
+    expect(await res.text()).toContain(BURNED);
+    const notices = calls.filter((c) => c.method === "chat.postMessage");
+    expect(notices).toHaveLength(1);
+    expect(notices[0].body).toContain(BURNED);
+    expect((await getSlackAuthorizeLink(linkId, ORG))?.status).toBe("rejected");
   });
 });

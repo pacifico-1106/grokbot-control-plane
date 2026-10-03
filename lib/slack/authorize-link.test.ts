@@ -26,12 +26,18 @@ import { ADMIN_MCP_TOOL_NAMES } from "@/lib/mcp/admin-public";
 import { ADMIN_MCP_TOOLS, callAdminMcpTool } from "@/lib/mcp/admin-tools";
 import { callStaffpassMcpTool, listStaffpassMcpTools, STAFFPASS_MCP_TOOLS } from "@/lib/mcp/tools";
 import {
+  ALLOWED_ACCOUNTS_SLACK_NEXT_STEP_JA,
+  AUTHORIZE_LINK_FAILED_NOTICE_JA,
   SLACK_AUTHORIZE_LINK_PATH,
+  authorizeLinkResultHtml,
+  chooseAuthorizeLinkDelivery,
   completeAuthorizeLinkCallback,
   hashAuthorizeLinkToken,
   issueSlackAuthorizeLink,
+  resolveApprovalAppBotToken,
   resolveAuthorizeLinkStart,
 } from "@/lib/slack/authorize-link";
+import { readFileSync } from "node:fs";
 import { signSlackOAuthState, verifySlackOAuthState } from "@/lib/slack/oauth";
 import type { ResolvedAdminCredential } from "@/lib/auth/admin-credential";
 import type { ResolvedEmployeeCredential } from "@/lib/auth/employee-credential";
@@ -67,6 +73,9 @@ let seq = 0;
 let empA: Employee;
 let empASlack = "";
 let empB: Employee;
+/** Per-test Slack overrides (users.info per user; chat.postMessage failure). */
+let usersInfoOverride: Record<string, Record<string, unknown>> = {};
+let postMessageFails = false;
 
 function cred(orgId = ORG_A, grokBotAgentId = "grok_admin_authlink"): ResolvedAdminCredential {
   const agent = resetDemoAdminAgent({ grokBotAgentId, status: "linked" });
@@ -95,9 +104,12 @@ function installFetch() {
       if (auth.endsWith(OLD_USER_TOKEN)) return json({ ok: true, user_id: empASlack, team_id: TEAM }, { "x-oauth-scopes": OLD_SCOPES });
       return json({ ok: true, user_id: "UBOT", team_id: team, app_id: "AAUTHLINK1" }, { "x-oauth-scopes": "chat:write,im:write,im:read,users:read" });
     }
-    if (method === "users.info") return json({ ok: true, user: { id: String(body.user), team_id: team } });
+    if (method === "users.info") return json({ ok: true, user: { id: String(body.user), team_id: team, ...(usersInfoOverride[String(body.user)] ?? {}) } });
     if (method === "conversations.open") return json({ ok: true, channel: { id: `D${String(body.users).slice(1, 9)}`, is_im: true } });
-    if (method === "chat.postMessage") return json({ ok: true, ts: "1700000000.0002" });
+    if (method === "chat.postMessage") {
+      if (postMessageFails) return json({ ok: false, error: "channel_not_found" });
+      return json({ ok: true, ts: "1700000000.0002" });
+    }
     return json({ ok: false, error: "unknown_method" });
   }) as unknown as typeof fetch;
 }
@@ -176,6 +188,8 @@ beforeEach(async () => {
   delete process.env.SLACK_AUTHORIZE_LINK_REISSUE_AUDIT_ONLY;
   delete process.env.SLACK_DM_AUTOROUTE_ENABLED;
   savedFetch = globalThis.fetch;
+  usersInfoOverride = {};
+  postMessageFails = false;
   installFetch();
   resetDemoNotificationChannels();
   resetDemoSlackAuthorizeLinks();
@@ -252,8 +266,8 @@ describe("issue (always_human, delivery only via approval-app DM, no URL returne
     noSecrets(queued);
   });
 
-  test("after approval: DM to the approver carries the link (unfurl off); result/audit carry only where it went", async () => {
-    const queued = data(await callAdminMcpTool(TOOL, { employeeId: empA.id }, cred()));
+  test("deliverTo=approver (explicit): DM to the approver carries the link (unfurl off); result/audit carry only where it went", async () => {
+    const queued = data(await callAdminMcpTool(TOOL, { employeeId: empA.id, deliverTo: "approver" }, cred()));
     const fulfillment = await approveAndFulfill(String(queued.approvalId));
     expect(fulfillment?.ok).toBe(true);
     noSecrets(fulfillment);
@@ -269,8 +283,13 @@ describe("issue (always_human, delivery only via approval-app DM, no URL returne
     const reread = data(await callAdminMcpTool(TOOL, { approvalId: String(queued.approvalId) }, cred()));
     noSecrets(reread);
     expect(JSON.stringify(reread)).not.toContain(token);
+    expect(fulfillment?.deliveryTarget).toBe("approver");
+    expect(fulfillment?.deliveryFallbackReason ?? null).toBeNull();
+    expect(String(posts[0].body.text)).not.toContain("社員本人（");
     const issued = getRuntimeAudit().find((e) => e.metadata?.event === "slack_authorize_link.issued" && e.employeeId === empA.id)!;
     expect(issued.metadata?.deliveredUserId).toBe(APPROVER);
+    expect(issued.metadata?.deliveredTarget).toBe("approver");
+    expect(issued.metadata?.deliverToRequested).toBe("approver");
     expect(issued.metadata?.expectedSlackUserId).toBe(empASlack);
     expect(issued.metadata?.expectedTeamId).toBe(TEAM);
     expect(issued.metadata?.auditClass).toBe("admin");
@@ -522,5 +541,278 @@ describe("SLACK_AUTHORIZE_LINK_REISSUE_AUDIT_ONLY (default OFF, 要判断)", () 
   test("OFF (default) → ticket even for the im:write-only case", async () => {
     const out = data(await callAdminMcpTool(TOOL, { employeeId: empA.id }, cred()));
     expect(out.needs_approval).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 追加（2026-10-04 木村指示）: deliverTo / allowedAccounts next step / failure notices
+// ---------------------------------------------------------------------------
+
+function posts() {
+  return calls.filter((c) => c.method === "chat.postMessage");
+}
+function dmChannelFor(userId: string): string {
+  return `D${userId.slice(1, 9)}`;
+}
+function issuedAudit(employeeId: string) {
+  return getRuntimeAudit().find((e) => e.metadata?.event === "slack_authorize_link.issued" && e.employeeId === employeeId)!;
+}
+
+describe("deliverTo (default employee)", () => {
+  test("default → link DM to the pinned employee U… via the approval-app bot; approver gets 「社員本人に送りました」 (no URL)", async () => {
+    const queued = data(await callAdminMcpTool(TOOL, { employeeId: empA.id }, cred()));
+    expect(queued.needs_approval).toBe(true);
+    expect(String(queued.summary)).toContain("社員本人");
+    expect(String(queued.summary)).toContain(empASlack);
+    noSecrets(queued);
+    const fulfillment = await approveAndFulfill(String(queued.approvalId));
+    expect(fulfillment?.ok).toBe(true);
+    expect(fulfillment?.deliveryTarget).toBe("employee");
+    expect(fulfillment?.deliveryFallbackReason ?? null).toBeNull();
+    noSecrets(fulfillment);
+    const opened = calls.filter((c) => c.method === "conversations.open").map((c) => String(c.body.users));
+    expect(opened).toContain(empASlack);
+    expect(opened).toContain(APPROVER);
+    const sent = posts();
+    expect(sent).toHaveLength(2);
+    for (const post of sent) expect(post.auth).toBe(`Bearer ${BOT_TOKEN}`);
+    const linkPost = sent.find((c) => String(c.body.text).includes(SLACK_AUTHORIZE_LINK_PATH))!;
+    expect(linkPost.body.channel).toBe(dmChannelFor(empASlack));
+    expect(linkPost.body.unfurl_links).toBe(false);
+    const notice = sent.find((c) => c !== linkPost)!;
+    expect(notice.body.channel).toBe(dmChannelFor(APPROVER));
+    expect(String(notice.body.text)).toContain(`社員本人（<@${empASlack}>）に再認可リンクを送りました`);
+    expect(String(notice.body.text)).not.toContain(SLACK_AUTHORIZE_LINK_PATH);
+    expect(String(notice.body.text)).not.toContain("?t=");
+    const issued = issuedAudit(empA.id);
+    expect(issued.metadata?.deliveredTarget).toBe("employee");
+    expect(issued.metadata?.deliveredUserId).toBe(empASlack);
+    expect(issued.metadata?.approverUserId).toBe(APPROVER);
+    expect(issued.metadata?.deliverToRequested).toBe("employee");
+    expect(issued.metadata?.deliverToExplicit).toBe(false);
+    expect(issued.metadata?.deliveryFallbackReason ?? null).toBeNull();
+    expect(issued.metadata?.approverNoticeSent).toBe(true);
+    noSecrets(issued);
+    const link = await getSlackAuthorizeLink(String(issued.metadata?.linkId), ORG_A);
+    expect(link?.deliveredTarget).toBe("employee");
+    expect(link?.deliveredUserId).toBe(empASlack);
+    expect(link?.approverUserId).toBe(APPROVER);
+    const reread = data(await callAdminMcpTool(TOOL, { approvalId: String(queued.approvalId) }, cred()));
+    noSecrets(reread);
+    expect(JSON.stringify(reread)).not.toContain(deliveredToken());
+  });
+
+  test("direct issue result (no URL) records target + approver", async () => {
+    const res = await issueSlackAuthorizeLink({ orgId: ORG_A, employeeId: empA.id, approvalId: null, via: "ticket" });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.deliveredTo.target).toBe("employee");
+    expect(res.deliveredTo.deliveryUserId).toBe(empASlack);
+    expect(res.deliveredTo.approverUserId).toBe(APPROVER);
+    expect(res.deliveredTo.fallbackReason).toBeNull();
+    expect(JSON.stringify(res)).not.toContain(deliveredToken());
+    noSecrets(res);
+  });
+
+  test("several allowed Slack accounts (U… not unique), default → approver, reason recorded", async () => {
+    const fresh = newEmployee(ORG_A, ["UMULTIDLV1", "UMULTIDLV2"]);
+    const queued = data(await callAdminMcpTool(TOOL, { employeeId: fresh.id }, cred()));
+    expect(String(queued.summary)).toContain("employee_slack_user_ambiguous");
+    const fulfillment = await approveAndFulfill(String(queued.approvalId));
+    expect(fulfillment?.ok).toBe(true);
+    expect(fulfillment?.deliveryTarget).toBe("approver");
+    expect(fulfillment?.deliveryFallbackReason).toBe("employee_slack_user_ambiguous");
+    const sent = posts();
+    expect(sent).toHaveLength(1);
+    expect(sent[0].body.channel).toBe(dmChannelFor(APPROVER));
+    expect(calls.some((c) => c.method === "conversations.open" && String(c.body.users).startsWith("UMULTIDLV"))).toBe(false);
+    const issued = issuedAudit(fresh.id);
+    expect(issued.metadata?.deliveredTarget).toBe("approver");
+    expect(issued.metadata?.deliveryFallbackReason).toBe("employee_slack_user_ambiguous");
+    expect(issued.metadata?.deliverToExplicit).toBe(false);
+  });
+
+  test("explicit deliverTo=employee but U… not unique → approver, reason recorded as explicit", async () => {
+    const fresh = newEmployee(ORG_A, ["UMULTIDLV3", "UMULTIDLV4"]);
+    const queued = data(await callAdminMcpTool(TOOL, { employeeId: fresh.id, deliverTo: "employee" }, cred()));
+    const fulfillment = await approveAndFulfill(String(queued.approvalId));
+    expect(fulfillment?.deliveryTarget).toBe("approver");
+    expect(fulfillment?.deliveryFallbackReason).toBe("employee_slack_user_ambiguous");
+    const issued = issuedAudit(fresh.id);
+    expect(issued.metadata?.deliverToRequested).toBe("employee");
+    expect(issued.metadata?.deliverToExplicit).toBe(true);
+    expect(issued.metadata?.deliveryFallbackReason).toBe("employee_slack_user_ambiguous");
+  });
+
+  test("employee DM cannot be opened (e.g. guest) → approver, reason recorded", async () => {
+    usersInfoOverride[empASlack] = { is_restricted: true };
+    const res = await issueSlackAuthorizeLink({ orgId: ORG_A, employeeId: empA.id, approvalId: null, via: "ticket" });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.deliveredTo.target).toBe("approver");
+    expect(res.deliveredTo.deliveryUserId).toBe(APPROVER);
+    expect(res.deliveredTo.fallbackReason).toBe("employee_dm_unavailable");
+    expect(issuedAudit(empA.id).metadata?.employeeDmError).toBe("approval_user_guest");
+  });
+
+  test("chooseAuthorizeLinkDelivery: zero / many / one candidates; explicit approver", () => {
+    expect(chooseAuthorizeLinkDelivery({ employeeSlackUserIds: [] })).toEqual({
+      target: "approver", employeeUserId: null, requested: "employee", explicit: false, fallbackReason: "employee_slack_user_missing",
+    });
+    expect(chooseAuthorizeLinkDelivery({ requested: "employee", employeeSlackUserIds: ["UA1", "UB2"] }).fallbackReason).toBe("employee_slack_user_ambiguous");
+    expect(chooseAuthorizeLinkDelivery({ employeeSlackUserIds: ["UONE111"] })).toEqual({
+      target: "employee", employeeUserId: "UONE111", requested: "employee", explicit: false, fallbackReason: null,
+    });
+    expect(chooseAuthorizeLinkDelivery({ requested: "approver", employeeSlackUserIds: ["UONE111"] })).toEqual({
+      target: "approver", employeeUserId: null, requested: "approver", explicit: true, fallbackReason: null,
+    });
+  });
+
+  test("invalid deliverTo value → rejected before queueing", async () => {
+    const res = data(await callAdminMcpTool(TOOL, { employeeId: empA.id, deliverTo: "channel" }, cred()));
+    expect(res.code).toBe("invalid_deliver_to");
+    expect(res.needs_approval).toBeUndefined();
+  });
+
+  test("schema exposes deliverTo enum (employee default, approver)", () => {
+    const tool = ADMIN_MCP_TOOLS.find((t) => t.name === TOOL)!;
+    const props = (tool.inputSchema as { properties: Record<string, { enum?: string[] }> }).properties;
+    expect(props.deliverTo?.enum).toEqual(["employee", "approver"]);
+  });
+});
+
+describe("approval-app bot token resolution (single function)", () => {
+  test("resolveApprovalAppBotToken: org-scoped inbox token; other org / unknown inbox → empty", async () => {
+    const inboxA = (await upsertNotificationChannel({
+      orgId: ORG_A, provider: "slack", enabled: true, isDefault: false, label: "tok A",
+      config: { channelId: "", allowedUserIds: [APPROVER] }, secrets: { botToken: BOT_TOKEN, signingSecret: "s-SECRET" },
+    })) as { id: string };
+    expect(await resolveApprovalAppBotToken(ORG_A, inboxA.id)).toBe(BOT_TOKEN);
+    expect(await resolveApprovalAppBotToken(ORG_B, inboxA.id)).toBe("");
+    expect(await resolveApprovalAppBotToken(ORG_A, "")).toBe("");
+    expect(await resolveApprovalAppBotToken(ORG_A, "nbx_missing")).toBe("");
+  });
+
+  test("source guard: notification-channel secrets are read only inside resolveApprovalAppBotToken", () => {
+    const src = readFileSync(new URL("./authorize-link.ts", import.meta.url), "utf8");
+    const reads = src.match(/getNotificationChannelSecretsById\(/g) ?? [];
+    expect(reads).toHaveLength(1);
+    const fn = src.slice(src.indexOf("export async function resolveApprovalAppBotToken"));
+    expect(fn.slice(0, 600)).toContain("getNotificationChannelSecretsById(");
+  });
+
+  test("employee link DM, approver notice and completion notice all use the same approval-app token", async () => {
+    const state = await startState(await issueViaTicket(empA.id));
+    await completeAuthorizeLinkCallback({ state, code: "c", oauthError: "", exchange: exchangeWith(NEW_USER_TOKEN), authTest: authTestAs(empASlack) });
+    const sent = posts();
+    expect(sent.length).toBeGreaterThanOrEqual(3);
+    for (const post of sent) expect(post.auth).toBe(`Bearer ${BOT_TOKEN}`);
+  });
+});
+
+describe("allowedAccounts without Slack → next step guidance", () => {
+  test("issue error names the real next step (no invented admin MCP tool)", async () => {
+    const bare = newEmployee(ORG_A, []);
+    const res = data(await callAdminMcpTool(TOOL, { employeeId: bare.id }, cred()));
+    expect(res.code).toBe("slack_account_not_allowed");
+    expect(String(res.message)).toContain(ALLOWED_ACCOUNTS_SLACK_NEXT_STEP_JA);
+    expect(res.nextStepJa).toBe(ALLOWED_ACCOUNTS_SLACK_NEXT_STEP_JA);
+    expect(res.allowedAccountsAdminTool ?? null).toBeNull();
+    // Every dotted tool-like name in the guidance must be a real admin MCP tool.
+    const names = ALLOWED_ACCOUNTS_SLACK_NEXT_STEP_JA.match(/\b[a-z][A-Za-z]*\.[a-z][A-Za-z.]*\b/g) ?? [];
+    for (const name of names) expect((ADMIN_MCP_TOOL_NAMES as readonly string[]).includes(name)).toBe(true);
+    expect(ALLOWED_ACCOUNTS_SLACK_NEXT_STEP_JA).toContain("ブラウザ・外部アカウント");
+  });
+
+  test("setup.slackDmApprovalStatus shows the same guidance for that employee (flag ON)", async () => {
+    const bare = newEmployee(ORG_A, []);
+    const others = getRuntimeEmployees().filter((e) => e.orgId === ORG_A && e.id !== bare.id && e.status === "active");
+    for (const e of others) e.status = "suspended";
+    try {
+      const on = data(await callAdminMcpTool("setup.slackDmApprovalStatus", {}, cred()));
+      const steps = (on.nextStepsJa as string[]).join("\n");
+      expect(steps).toContain(`${bare.displayName}: `);
+      expect(steps).toContain(ALLOWED_ACCOUNTS_SLACK_NEXT_STEP_JA);
+      expect(steps.includes(`setup.slackAuthorizeLink.issue（employeeId=${bare.id}）`)).toBe(false);
+      const row = (on.employees as Array<Record<string, unknown>>).find((r) => r.employeeId === bare.id)!;
+      expect(row.allowedSlackAccounts).toBe(0);
+    } finally {
+      for (const e of others) e.status = "active";
+    }
+  });
+});
+
+describe("failure notices (user_mismatch / exchange failure)", () => {
+  test("user_mismatch (employee delivery) → notice to the employee DM without the other U…; link stays used", async () => {
+    const state = await startState(await issueViaTicket(empA.id));
+    calls = [];
+    const res = await completeAuthorizeLinkCallback({ state, code: "c", oauthError: "", exchange: exchangeWith(NEW_USER_TOKEN), authTest: authTestAs("UATTACKER1") });
+    expect(res).toEqual({ ok: false, code: "user_mismatch", consumed: true });
+    const sent = posts();
+    expect(sent).toHaveLength(1);
+    expect(sent[0].body.channel).toBe(dmChannelFor(empASlack));
+    expect(sent[0].auth).toBe(`Bearer ${BOT_TOKEN}`);
+    expect(String(sent[0].body.text)).toContain(AUTHORIZE_LINK_FAILED_NOTICE_JA);
+    expect(String(sent[0].body.text)).not.toContain("UATTACKER1");
+    expect((await getSlackAuthorizeLink(state.linkId, ORG_A))?.status).toBe("rejected");
+    const rejected = getRuntimeAudit().find((e) => e.metadata?.event === "slack_authorize_link.rejected" && e.metadata?.linkId === state.linkId)!;
+    expect(rejected.metadata?.failureNoticeSent).toBe(true);
+    expect(rejected.metadata?.failureNoticeTarget).toBe("employee");
+  });
+
+  test("exchange failure (approver delivery) → notice to the approver DM", async () => {
+    const queued = data(await callAdminMcpTool(TOOL, { employeeId: empA.id, deliverTo: "approver" }, cred()));
+    await approveAndFulfill(String(queued.approvalId));
+    const state = await startState(deliveredToken());
+    calls = [];
+    const res = await completeAuthorizeLinkCallback({ state, code: "c", oauthError: "", exchange: async () => ({ ok: false }), authTest: authTestAs(empASlack) });
+    expect(res).toEqual({ ok: false, code: "oauth_exchange_failed", consumed: true });
+    const sent = posts();
+    expect(sent).toHaveLength(1);
+    expect(sent[0].body.channel).toBe(dmChannelFor(APPROVER));
+    expect(String(sent[0].body.text)).toContain(AUTHORIZE_LINK_FAILED_NOTICE_JA);
+    expect((await getSlackAuthorizeLink(state.linkId, ORG_A))?.status).toBe("rejected");
+  });
+
+  test("exchange throws → same notice; notice send failure never breaks the callback", async () => {
+    const state = await startState(await issueViaTicket(empA.id));
+    calls = [];
+    postMessageFails = true;
+    const res = await completeAuthorizeLinkCallback({
+      state, code: "c", oauthError: "",
+      exchange: async () => { throw new Error("boom"); },
+      authTest: authTestAs(empASlack),
+    });
+    expect(res).toEqual({ ok: false, code: "oauth_exchange_failed", consumed: true });
+    const rejected = getRuntimeAudit().find((e) => e.metadata?.event === "slack_authorize_link.rejected" && e.metadata?.linkId === state.linkId)!;
+    expect(rejected.metadata?.failureNoticeSent).toBe(false);
+  });
+
+  test("notice token lookup throwing never breaks the callback", async () => {
+    const state = await startState(await issueViaTicket(empA.id));
+    globalThis.fetch = (async () => { throw new Error("network down"); }) as unknown as typeof fetch;
+    const res = await completeAuthorizeLinkCallback({ state, code: "c", oauthError: "", exchange: exchangeWith(NEW_USER_TOKEN), authTest: authTestAs("UATTACKER2") });
+    expect(res).toEqual({ ok: false, code: "user_mismatch", consumed: true });
+  });
+
+  test("result page shows the same message for the burned kinds", () => {
+    const html = authorizeLinkResultHtml("burned");
+    expect(html).toContain(AUTHORIZE_LINK_FAILED_NOTICE_JA);
+    expect(AUTHORIZE_LINK_FAILED_NOTICE_JA).toBe(
+      "再認可リンクが別のアカウントで開かれた（または認可に失敗した）ため無効になりました。管理者に再発行を依頼してください。"
+    );
+  });
+});
+
+describe("audit_only path keeps its gate; delivery follows deliverTo", () => {
+  test("ON: im:write-only re-issue without ticket delivers to the employee and records it (no URL)", async () => {
+    process.env.SLACK_AUTHORIZE_LINK_REISSUE_AUDIT_ONLY = "true";
+    const out = data(await callAdminMcpTool(TOOL, { employeeId: empA.id }, cred()));
+    expect(out.auditOnly).toBe(true);
+    expect(out.deliveryTarget).toBe("employee");
+    expect((out.deliveredTo as Record<string, unknown>).target).toBe("employee");
+    expect(out.urlReturned).toBe(false);
+    noSecrets(out);
+    expect(issuedAudit(empA.id).metadata?.issuedVia).toBe("audit_only");
   });
 });
