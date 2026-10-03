@@ -5,7 +5,11 @@ import { normalizeActionLimits } from "@/lib/action-gate";
 import { requireCapability } from "@/lib/team/demo-actor";
 import { normalizeAllowedAccounts } from "@/lib/employees/allowed-accounts";
 import { ALL_SCOPES } from "@/lib/employees/policy-draft";
-import { policyErrorPayload } from "@/lib/employees/policy-errors";
+import {
+  employeePolicyWriteFailure,
+  employeePolicyWriteFailurePayload,
+  policyErrorPayload,
+} from "@/lib/employees/policy-errors";
 import { evaluateSod } from "@/lib/employees/sod";
 import { samePolicyFields, sodAckRequiredOnPatch } from "@/lib/employees/sod-override";
 import { getOrgSodWarnPolicy } from "@/lib/data";
@@ -121,31 +125,39 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
     nextApprovalChannelId = parsedInbox.id;
   }
 
-  const updated = await updateEmployeePolicy({
-    orgId,
-    employeeId: id,
-    scopes,
-    allowedPurposes,
-    approvalPolicy,
-    ...(toolApprovalDefaults !== undefined ? { toolApprovalDefaults } : {}),
-    sodOverrideAcknowledged: sodOverrideAcknowledged || policyUnchanged,
-    actionLimits: normalizeActionLimits(body.actionLimits),
-    ...(allowedAccounts !== undefined ? { allowedAccounts } : {}),
-    ...(spend !== undefined ? { spend } : {}),
-    managerId: body.managerId === undefined ? undefined : (body.managerId ? String(body.managerId) : null),
-    voice: body.voice === undefined ? undefined : normalizeVoice(body.voice),
-    projectAccess:
-      body.projectAccess === undefined ? undefined : normalizeProjectAccess(body.projectAccess),
-    ...(body.postingAs !== undefined ? { postingAs: normalizePostingAs(body.postingAs) } : {}),
-    ...(displayName !== undefined ? { displayName } : {}),
-    ...(roleLabel !== undefined ? { roleLabel } : {}),
-    ...(nextApprovalChannelId !== undefined
-      ? { approvalChannelId: nextApprovalChannelId }
-      : {}),
-    ...(body.approverUserIds !== undefined
-      ? { approverUserIds: normalizeApproverUserIds(body.approverUserIds) }
-      : {}),
-  });
+  let updated: Awaited<ReturnType<typeof updateEmployeePolicy>>;
+  try {
+    updated = await updateEmployeePolicy({
+      orgId,
+      employeeId: id,
+      scopes,
+      allowedPurposes,
+      approvalPolicy,
+      ...(toolApprovalDefaults !== undefined ? { toolApprovalDefaults } : {}),
+      sodOverrideAcknowledged: sodOverrideAcknowledged || policyUnchanged,
+      actionLimits: normalizeActionLimits(body.actionLimits),
+      ...(allowedAccounts !== undefined ? { allowedAccounts } : {}),
+      ...(spend !== undefined ? { spend } : {}),
+      managerId: body.managerId === undefined ? undefined : (body.managerId ? String(body.managerId) : null),
+      voice: body.voice === undefined ? undefined : normalizeVoice(body.voice),
+      projectAccess:
+        body.projectAccess === undefined ? undefined : normalizeProjectAccess(body.projectAccess),
+      ...(body.postingAs !== undefined ? { postingAs: normalizePostingAs(body.postingAs) } : {}),
+      ...(displayName !== undefined ? { displayName } : {}),
+      ...(roleLabel !== undefined ? { roleLabel } : {}),
+      ...(nextApprovalChannelId !== undefined
+        ? { approvalChannelId: nextApprovalChannelId }
+        : {}),
+      ...(body.approverUserIds !== undefined
+        ? { approverUserIds: normalizeApproverUserIds(body.approverUserIds) }
+        : {}),
+    });
+  } catch (error) {
+    // Fail-closed: a failed write is never reported as saved (no audit row).
+    const failure = employeePolicyWriteFailure(error);
+    console.error(failure.code, id, error instanceof Error ? error.message : error);
+    return NextResponse.json(employeePolicyWriteFailurePayload(failure), { status: 500 });
+  }
   if (!updated) return fail("employee_not_found", 404);
   const identityUpdated = displayName !== undefined || roleLabel !== undefined;
   const summary = identityUpdated

@@ -322,6 +322,25 @@ export async function issueEmployee(
   };
 }
 
+/**
+ * Thrown by updateEmployeePolicy when a write fails (fail-closed: a failed
+ * write is never reported as success, and a read/write error is never
+ * reported as "employee not found"). `rolledBack` tells whether the employees
+ * columns were put back after a credentials write failure. Same shape as
+ * AllowedAccountsWriteError. Callers map it with employeePolicyWriteFailure()
+ * (lib/employees/policy-errors.ts) and never show the storage detail.
+ */
+export class EmployeePolicyWriteError extends Error {
+  readonly code: "employee_policy_update_failed" | "employee_policy_credentials_update_failed";
+  readonly rolledBack: boolean;
+  constructor(code: EmployeePolicyWriteError["code"], detail: string, rolledBack = false) {
+    super(`${code}: ${detail}`);
+    this.name = "EmployeePolicyWriteError";
+    this.code = code;
+    this.rolledBack = rolledBack;
+  }
+}
+
 export async function updateEmployeePolicy(input: {
   orgId: string;
   employeeId: string;
@@ -386,53 +405,96 @@ export async function updateEmployeePolicy(input: {
   }
   const admin = createSupabaseAdminClient();
   if (!admin) return null;
+  const employeePatch: Record<string, unknown> = {
+    scopes: input.scopes,
+    allowed_purposes: input.allowedPurposes,
+    approval_policy: effectivePolicy,
+    ...(input.toolApprovalDefaults !== undefined
+      ? { tool_approval_defaults: normalizeToolApprovalDefaults(input.toolApprovalDefaults) }
+      : {}),
+    sod_level: verdict.level,
+    action_limits: actionLimits,
+    ...(input.managerId !== undefined ? { manager_id: input.managerId } : {}),
+    ...(input.voice !== undefined ? { voice: normalizeVoice(input.voice) } : {}),
+    ...(input.projectAccess !== undefined
+      ? { project_access: normalizeProjectAccess(input.projectAccess) }
+      : {}),
+    ...(input.postingAs !== undefined ? { posting_as: normalizePostingAs(input.postingAs) } : {}),
+    ...(input.displayName !== undefined ? { display_name: input.displayName.trim() } : {}),
+    ...(input.roleLabel !== undefined ? { role_label: input.roleLabel.trim() } : {}),
+    ...(input.allowedAccounts !== undefined ? { allowed_accounts: input.allowedAccounts } : {}),
+    ...(input.spend !== undefined ? { spend: input.spend } : {}),
+    ...(input.approvalChannelId !== undefined
+      ? { approval_channel_id: input.approvalChannelId?.trim() || null }
+      : {}),
+    ...(input.approverUserIds !== undefined
+      ? { approver_user_ids: normalizeApproverUserIds(input.approverUserIds) }
+      : {}),
+  };
+  const columns = Object.keys(employeePatch);
+  // Previous values (org-scoped) of exactly the columns written below, so a
+  // failed credentials write can be undone.
+  const { data: current, error: readError } = await admin
+    .from("employees")
+    .select(columns.join(","))
+    .eq("id", input.employeeId)
+    .eq("org_id", input.orgId)
+    .maybeSingle();
+  if (readError) {
+    throw new EmployeePolicyWriteError("employee_policy_update_failed", readError.message || "read_failed");
+  }
+  if (!current) return null;
+  const currentRow = current as unknown as Record<string, unknown>;
+  const previous = Object.fromEntries(columns.map((column) => [column, currentRow[column] ?? null]));
   const { data, error } = await admin
     .from("employees")
-    .update({
-      scopes: input.scopes,
-      allowed_purposes: input.allowedPurposes,
-      approval_policy: effectivePolicy,
-      ...(input.toolApprovalDefaults !== undefined
-        ? { tool_approval_defaults: normalizeToolApprovalDefaults(input.toolApprovalDefaults) }
-        : {}),
-      sod_level: verdict.level,
-      action_limits: actionLimits,
-      ...(input.managerId !== undefined ? { manager_id: input.managerId } : {}),
-      ...(input.voice !== undefined ? { voice: normalizeVoice(input.voice) } : {}),
-      ...(input.projectAccess !== undefined
-        ? { project_access: normalizeProjectAccess(input.projectAccess) }
-        : {}),
-      ...(input.postingAs !== undefined ? { posting_as: normalizePostingAs(input.postingAs) } : {}),
-      ...(input.displayName !== undefined ? { display_name: input.displayName.trim() } : {}),
-      ...(input.roleLabel !== undefined ? { role_label: input.roleLabel.trim() } : {}),
-      ...(input.allowedAccounts !== undefined ? { allowed_accounts: input.allowedAccounts } : {}),
-      ...(input.spend !== undefined ? { spend: input.spend } : {}),
-      ...(input.approvalChannelId !== undefined
-        ? { approval_channel_id: input.approvalChannelId?.trim() || null }
-        : {}),
-      ...(input.approverUserIds !== undefined
-        ? { approver_user_ids: normalizeApproverUserIds(input.approverUserIds) }
-        : {}),
-      updated_at: new Date().toISOString(),
-    })
+    .update({ ...employeePatch, updated_at: new Date().toISOString() })
     .eq("id", input.employeeId)
     .eq("org_id", input.orgId)
     .select("*")
     .maybeSingle();
-  if (error || !data) return null;
-  await admin
-    .from("credentials")
-    .update({
-      scopes: input.scopes,
-      allowed_purposes: input.allowedPurposes,
-      approval_policy: effectivePolicy,
-      action_limits: actionLimits,
-      ...(input.allowedAccounts !== undefined ? { allowed_accounts: input.allowedAccounts } : {}),
-      ...(input.spend !== undefined ? { spend: input.spend } : {}),
-    })
-    .eq("employee_id", input.employeeId)
-    .eq("org_id", input.orgId)
-    .is("revoked_at", null);
+  if (error) {
+    throw new EmployeePolicyWriteError("employee_policy_update_failed", error.message || "employees_update_failed");
+  }
+  if (!data) return null;
+  let credentialsError: { message?: string } | null = null;
+  try {
+    const { error: updateError } = await admin
+      .from("credentials")
+      .update({
+        scopes: input.scopes,
+        allowed_purposes: input.allowedPurposes,
+        approval_policy: effectivePolicy,
+        action_limits: actionLimits,
+        ...(input.allowedAccounts !== undefined ? { allowed_accounts: input.allowedAccounts } : {}),
+        ...(input.spend !== undefined ? { spend: input.spend } : {}),
+      })
+      .eq("employee_id", input.employeeId)
+      .eq("org_id", input.orgId)
+      .is("revoked_at", null);
+    credentialsError = updateError ?? null;
+  } catch (thrown) {
+    credentialsError = { message: thrown instanceof Error ? thrown.message : "credentials_update_threw" };
+  }
+  if (credentialsError) {
+    // Never leave employees and the active badge disagreeing: put employees back.
+    let rolledBack = false;
+    try {
+      const { error: rollbackError } = await admin
+        .from("employees")
+        .update({ ...previous, updated_at: new Date().toISOString() })
+        .eq("id", input.employeeId)
+        .eq("org_id", input.orgId);
+      rolledBack = !rollbackError;
+    } catch {
+      rolledBack = false;
+    }
+    throw new EmployeePolicyWriteError(
+      "employee_policy_credentials_update_failed",
+      credentialsError.message || "credentials_update_failed",
+      rolledBack
+    );
+  }
   return mapEmployeeRow(data as Record<string, unknown>);
 }
 

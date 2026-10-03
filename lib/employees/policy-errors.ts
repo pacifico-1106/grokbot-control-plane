@@ -24,7 +24,74 @@ export const POLICY_ERROR_MESSAGES: Record<string, string> = {
   approval_channel_not_found: "指定の承認インボックスが見つかりません",
   admin_mcp_required: "権限（できること・使う理由・行為上限）の変更は管理MCPの人承認です",
   directory_admin_mcp_required: "相手台帳の変更は管理MCPの人承認です",
+  employee_policy_update_failed: "保存に失敗しました（変更は反映していません）。時間をおいてもう一度お試しください",
+  employee_policy_credentials_update_failed:
+    "社員証への反映に失敗したため、変更を元に戻しました。時間をおいてもう一度お試しください",
 };
+
+export type EmployeePolicyWriteFailureCode =
+  | "employee_policy_update_failed"
+  | "employee_policy_credentials_update_failed";
+
+export type EmployeePolicyWriteFailure = {
+  code: EmployeePolicyWriteFailureCode;
+  /** Only for credentials failures: whether employees was put back. */
+  rolledBack?: boolean;
+  /** Dashboard message (Japanese, no storage detail). */
+  messageJa: string;
+  /** Admin MCP next step (Japanese, no storage detail). */
+  nextStepJa: string;
+};
+
+/**
+ * Map an error thrown by updateEmployeePolicy (EmployeePolicyWriteError, or
+ * anything unexpected) to a code + Japanese text for callers. Fail-closed:
+ * every error is a failure; the storage detail (error.message) is never
+ * returned — log it server-side instead.
+ */
+export function employeePolicyWriteFailure(error: unknown): EmployeePolicyWriteFailure {
+  const rec = (error && typeof error === "object" ? error : {}) as { code?: unknown; rolledBack?: unknown };
+  if (rec.code === "employee_policy_credentials_update_failed") {
+    if (rec.rolledBack === true) {
+      return {
+        code: rec.code,
+        rolledBack: true,
+        messageJa: POLICY_ERROR_MESSAGES.employee_policy_credentials_update_failed,
+        nextStepJa: "社員証への反映に失敗したため、変更を元に戻しました（変更していません）。時間をおいて、もう一度依頼してください。",
+      };
+    }
+    return {
+      code: rec.code,
+      rolledBack: false,
+      messageJa: "社員証への反映に失敗し、元に戻すこともできませんでした。画面を再読み込みして、現在の設定を確認してください",
+      nextStepJa:
+        "社員証への反映に失敗し、元に戻すこともできませんでした。ダッシュボードの AI 社員ページで現在の設定を確認してください。",
+    };
+  }
+  if (rec.code === "employee_policy_update_failed") {
+    return {
+      code: rec.code,
+      messageJa: POLICY_ERROR_MESSAGES.employee_policy_update_failed,
+      nextStepJa: "保存に失敗したため、変更していません。時間をおいて、もう一度依頼してください。",
+    };
+  }
+  // Unexpected error: we cannot tell what was applied.
+  return {
+    code: "employee_policy_update_failed",
+    messageJa: "保存に失敗しました。画面を再読み込みして、現在の設定を確認してください",
+    nextStepJa: "保存に失敗しました。ダッシュボードの AI 社員ページで現在の設定を確認してください。",
+  };
+}
+
+/** JSON body for a dashboard route (same shape as policyErrorPayload + rolledBack). */
+export function employeePolicyWriteFailurePayload(
+  failure: EmployeePolicyWriteFailure
+): { error: string; message: string; rolledBack?: boolean } {
+  return {
+    ...policyErrorPayload(failure.code, failure.messageJa),
+    ...(failure.rolledBack !== undefined ? { rolledBack: failure.rolledBack } : {}),
+  };
+}
 
 export function looksJapanese(value: string): boolean {
   return JP.test(value);
