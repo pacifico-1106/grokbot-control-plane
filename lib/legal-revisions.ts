@@ -9,6 +9,8 @@
  * - commercialTransactions: PR #199（b1534ca, 2026-10-03 02:26 JST マージ）
  * - terms:                  PR #199（b1534ca, 2026-10-03 02:26 JST マージ）
  * - privacy:                PR #201（5c441ec, 2026-10-03 02:26 JST マージ）
+ * - commercialTransactions / terms はサービス表記の変更（「Staffpass（AIエージェントの社員証）」、
+ *   2026-10-03 八坂決定）でも本文を変更した。同じ 2026-10-03 のため日付は据え置き。
  */
 export const LEGAL_LAST_REVISED = {
   commercialTransactions: "2026年10月3日",

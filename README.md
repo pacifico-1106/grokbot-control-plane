@@ -1,6 +1,6 @@
-# AI社員 for Grok Bot — Control Plane
+# Staffpass（AIエージェントの社員証） — Control Plane
 
-中小企業向けに、Grok Bot を「説明できる AI 社員」として運用するための制御面です。
+中小企業向けに、Grok Bot などの AI エージェントを「説明できる AI 社員」として運用するための制御面です。
 
 **キャッチ:** 「AIを入れるな。AI社員を雇え。」
 

@@ -1,5 +1,6 @@
 import { Resend } from "resend";
 import { escapeHtml, sanitizeEmailSubject } from "@/lib/html-escape";
+import { SERVICE_LABEL } from "@/lib/brand";
 
 export type EmailTemplate =
   | "welcome"
@@ -30,7 +31,7 @@ function getResend(): Resend | null {
 export function getEmailFrom(): string {
   return (
     process.env.EMAIL_FROM ||
-    "AI社員 for Grok Bot <noreply@example.com>"
+    `${SERVICE_LABEL} <noreply@example.com>`
   );
 }
 
@@ -73,7 +74,7 @@ export async function sendTransactionalEmail(input: SendEmailInput): Promise<{
 export function renderStubHtml(title: string, body: string): string {
   return `<!DOCTYPE html><html lang="ja"><body style="font-family:sans-serif;color:#111;background:#fafafa;padding:24px">
   <div style="max-width:560px;margin:0 auto;background:#fff;border:1px solid #e5e5e5;border-radius:12px;padding:24px">
-    <p style="margin:0 0 8px;font-size:12px;color:#737373">AI社員 for Grok Bot</p>
+    <p style="margin:0 0 8px;font-size:12px;color:#737373">${escapeHtml(SERVICE_LABEL)}</p>
     <h1 style="margin:0 0 16px;font-size:20px;font-weight:600">${escapeHtml(title)}</h1>
     <div style="font-size:14px;line-height:1.6;color:#404040">${body}</div>
   </div>
