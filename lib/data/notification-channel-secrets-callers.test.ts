@@ -46,7 +46,15 @@ function splitTopLevelArgs(text: string): string[] {
   return args;
 }
 
-type CallSite = { file: string; line: number; args: string[] };
+type CallSite = { file: string; line: number; fn: string; args: string[] };
+
+/** Name of the innermost named function declared before `index` (good enough for top-level helpers). */
+function enclosingFunction(src: string, index: number): string {
+  const head = src.slice(0, index);
+  let name = "";
+  for (const m of head.matchAll(/(?:^|\n)\s*(?:export\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)/g)) name = m[1];
+  return name;
+}
 
 function callSites(): CallSite[] {
   const sites: CallSite[] = [];
@@ -71,6 +79,7 @@ function callSites(): CallSite[] {
         sites.push({
           file: relative(ROOT, file),
           line: before.split("\n").length,
+          fn: enclosingFunction(src, m.index!),
           args: splitTopLevelArgs(src.slice(start, i - 1)),
         });
       }
@@ -79,11 +88,38 @@ function callSites(): CallSite[] {
   return sites;
 }
 
+/**
+ * Every production call site, pinned (file + enclosing function + org argument).
+ * A new caller must be added here — and must pass an org-scoped first argument.
+ * #240 / #241 (merged into main) added the last two.
+ */
+const EXPECTED_CALL_SITES = [
+  "app/api/settings/notification-channels/route.ts PUT gate.orgId",
+  "app/api/settings/notification-channels/route.ts PUT gate.orgId",
+  "lib/admin-mcp/fulfill-admin.ts fulfillVoterBind approval.orgId",
+  "lib/admin-mcp/fulfill-admin.ts fulfillVoterBind approval.orgId",
+  "lib/admin-mcp/slack-dm-setup.ts diagnoseSlackDmApprovalSetup orgId",
+  "lib/admin-mcp/slack-dm-setup.ts fulfillApprovalDeliveryAutoResolve orgId",
+  "lib/approval-workflow/admin.ts resendVoterVerification input.orgId",
+  "lib/approval-workflow/admin.ts resendVoterVerification input.orgId",
+  // #241 shared approval app: setup.slackApprover.set fulfillment (approver DM via the shared xoxb)
+  "lib/admin-mcp/slack-approver.ts fulfillSlackApproverSet orgId",
+  // #240 authorize link: the only token reader for the link DM / completion notice
+  "lib/slack/authorize-link.ts resolveApprovalAppBotToken orgId",
+].sort();
+
 describe("callers", () => {
+  test("the call-site list is exactly the pinned one (incl. #240 / #241 callers)", () => {
+    const actual = callSites()
+      .map((site) => `${site.file} ${site.fn} ${site.args[0]}`)
+      .sort();
+    expect(actual).toEqual(EXPECTED_CALL_SITES);
+  });
+
   test("every call passes (orgId, channelId) with an org-scoped first argument", () => {
     const sites = callSites();
-    // Sanity: the scan really finds the known callers on main.
-    expect(sites.length).toBeGreaterThanOrEqual(8);
+    // Sanity: the scan really finds the known callers on main (8 before #240/#241, 10 after).
+    expect(sites.length).toBeGreaterThanOrEqual(10);
     for (const site of sites) {
       expect({ site: `${site.file}:${site.line}`, argc: site.args.length }).toEqual({ site: `${site.file}:${site.line}`, argc: 2 });
       expect({ site: `${site.file}:${site.line}`, org: /(^|\.)orgId$/.test(site.args[0]) }).toEqual({
