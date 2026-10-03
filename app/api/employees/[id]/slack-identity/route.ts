@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { removeAutoDmRoutesForEmployee } from "@/lib/slack/dm-autoroute";
 import { getCurrentOrgId } from "@/lib/auth/session";
 import { appendAuditEvent, getEmployee, updateEmployeePolicy } from "@/lib/data";
 import {
@@ -87,6 +88,8 @@ export async function DELETE(req: Request, ctx: { params: Promise<{ id: string }
   const existing = await getEmployee(id, orgId);
   if (!existing) return NextResponse.json(policyErrorPayload("employee_not_found"), { status: 404 });
   await revokeEmployeeSlackIdentity({ employeeId: id, orgId });
+  // SLACK_DM_AUTOROUTE_ENABLED (default OFF): drop routes auto-derived for this employee.
+  await removeAutoDmRoutesForEmployee({ orgId, employeeId: id });
   await appendAuditEvent({
     orgId,
     employeeId: id,

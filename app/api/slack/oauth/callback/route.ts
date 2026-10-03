@@ -1,7 +1,9 @@
 import { cookies } from "next/headers";
-import { NextResponse } from "next/server";
+import { after, NextResponse } from "next/server";
 import { getAppOrigin } from "@/lib/approvals/tokens";
 import { bindEmployeeSlackIdentity } from "@/lib/data/slack-identities";
+import { syncAutoDmRoutesForEmployee } from "@/lib/slack/dm-autoroute";
+import { isSlackDmAutorouteEnabled } from "@/lib/slack/dm-autoroute-flags";
 import {
   SLACK_OAUTH_COOKIE,
   slackOAuthRedirectUrl,
@@ -111,6 +113,21 @@ export async function GET(req: Request) {
       displayName: identity.user || exchanged.team?.name || "",
       userToken,
     });
+    // SLACK_DM_AUTOROUTE_ENABLED (default OFF): install internal-party DM routes
+    // after the response. Outcome is audited only; the redirect never changes.
+    if (isSlackDmAutorouteEnabled()) {
+      const job = () =>
+        syncAutoDmRoutesForEmployee({
+          orgId: parsed.orgId,
+          employeeId: parsed.employeeId,
+          trigger: "identity_linked",
+        }).then(() => undefined);
+      try {
+        after(job);
+      } catch {
+        void job().catch(() => undefined);
+      }
+    }
     return redirectEmployee(parsed.employeeId, "ok");
   } catch (error) {
     const message = error instanceof Error ? error.message : "";
