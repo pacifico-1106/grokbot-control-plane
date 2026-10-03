@@ -51,6 +51,7 @@ import { diagnoseLineApprovalStatus } from "@/lib/line/line-approval-status-diag
 import { encryptNotificationSecrets } from "@/lib/notify/crypto";
 import { queueAdminTool } from "@/lib/admin-mcp/queue";
 import { handleSlackDmSetupTool, isSlackDmSetupTool } from "@/lib/admin-mcp/slack-dm-setup";
+import { handleAllowedAccountsTool, isAllowedAccountsTool } from "@/lib/admin-mcp/allowed-accounts-tools";
 import { fulfillApprovedAdmin, parseAdminFulfillment } from "@/lib/admin-mcp/fulfill-admin";
 import { auditActionForAdminTool } from "@/lib/admin-mcp/audit-class";
 import { buildPollUrl } from "@/lib/approvals/tokens";
@@ -178,6 +179,60 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
       },
       required: ["employeeId", "scopes", "approvalPolicy"],
       additionalProperties: true,
+    },
+  },
+  {
+    name: "employees.allowedAccounts.add",
+    description:
+      "Add one account to an existing AI employee badge's allowedAccounts after human approval (always_human, approvalClass admin; requires ADMIN_MCP_ALLOWED_ACCOUNTS_TOOLS_ENABLED). Same storage and rules as the dashboard AI社員ページ「ブラウザ・外部アカウント」. provider is one of slack | google | microsoft365 | line | x | note | linkedin | youtube | instagram | facebook (free-text services stay dashboard-only). Strict format: slack = Slack user ID (U…/W…, uppercase), google/microsoft365 = email, others = handle without spaces/URLs. The employee must belong to this org (from the credential; no orgId argument). Already present → ok with alreadyPresent (no ticket, no duplicate). The change is applied only when a human approves; it is re-validated at that time and recorded in the admin change log (before/after, approver, ticket). Admin cannot edit the badge bound to itself. Re-invoke with approvalId to read the result.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        employeeId: { type: "string", description: "AI社員 ID (this org only)" },
+        provider: {
+          type: "string",
+          enum: ["slack", "google", "microsoft365", "line", "x", "note", "linkedin", "youtube", "instagram", "facebook"],
+        },
+        accountId: { type: "string", description: "slack: U…/W… user ID; google/microsoft365: email; others: handle" },
+        label: { type: "string", description: "Optional display label (max 80 chars)" },
+        jobId: { type: "string" },
+        approvalId: { type: "string", description: "Re-invoke with approved ticket ID" },
+      },
+      required: ["employeeId", "provider", "accountId"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "employees.allowedAccounts.remove",
+    description:
+      "Remove one account from an existing AI employee badge's allowedAccounts after human approval (always_human, approvalClass admin; requires ADMIN_MCP_ALLOWED_ACCOUNTS_TOOLS_ENABLED). Same storage and rules as the dashboard「ブラウザ・外部アカウント」; a browser:use badge cannot be left with zero accounts. Not present → allowed_account_not_found (no ticket). The employee must belong to this org (from the credential; no orgId argument). Applied only when a human approves, re-validated at that time, and recorded in the admin change log. Does not unlink an existing Slack identity. Admin cannot edit the badge bound to itself. Re-invoke with approvalId to read the result.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        employeeId: { type: "string", description: "AI社員 ID (this org only)" },
+        provider: {
+          type: "string",
+          enum: ["slack", "google", "microsoft365", "line", "x", "note", "linkedin", "youtube", "instagram", "facebook"],
+        },
+        accountId: { type: "string" },
+        jobId: { type: "string" },
+        approvalId: { type: "string", description: "Re-invoke with approved ticket ID" },
+      },
+      required: ["employeeId", "provider", "accountId"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "employees.allowedAccounts.list",
+    description:
+      "List an AI employee badge's allowedAccounts (read-only, no approval; requires ADMIN_MCP_ALLOWED_ACCOUNTS_TOOLS_ENABLED). This org only (from the credential). Returns service / accountId / label / browserRequired. No secrets.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        employeeId: { type: "string", description: "AI社員 ID (this org only)" },
+      },
+      required: ["employeeId"],
+      additionalProperties: false,
     },
   },
   {
@@ -1323,6 +1378,7 @@ const ADMIN_READ_ONLY_TOOLS_SET = new Set<string>([
   "employeeIdentity.status",
   "setup.slackDmApprovalStatus",
   "dmAutoroute.list",
+  "employees.allowedAccounts.list",
 ]);
 
 /**
@@ -2080,6 +2136,21 @@ export async function callAdminMcpTool(
   const approvalId = extractApprovalId(args);
   if (approvalId && name !== "approvals.proxyResolve" && isAdminMutationTool(name)) {
     return handleAdminApprovalReinvoke(name, approvalId, cred);
+  }
+
+  if (isAllowedAccountsTool(name)) {
+    // ADMIN_MCP_ALLOWED_ACCOUNTS_TOOLS_ENABLED: org from the credential only.
+    const outcome = await handleAllowedAccountsTool(name, args, cred);
+    if (outcome.kind === "result") return toolResult(outcome.data, outcome.isError === true);
+    const queued = await queueAdminTool({
+      cred,
+      tool: name,
+      args: { ...outcome.queuedArgs, ...(typeof args.jobId === "string" ? { jobId: args.jobId } : {}) },
+      rawArgsForSecretScan: args,
+      title: outcome.title,
+      summary: outcome.summary,
+    });
+    return toolResult(queued, false);
   }
 
   if (name === "policy.patch" || name === "link") {

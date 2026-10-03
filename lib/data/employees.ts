@@ -436,6 +436,46 @@ export async function updateEmployeePolicy(input: {
   return mapEmployeeRow(data as Record<string, unknown>);
 }
 
+/**
+ * Replace ONLY allowedAccounts on an employee badge (same storage as the
+ * dashboard PATCH /api/employees/[id]/policy → updateEmployeePolicy:
+ * employees.allowed_accounts + the active credentials row). Org-scoped:
+ * returns null when the employee is not in `orgId`. Callers validate and
+ * normalize (normalizeAllowedAccounts) before calling.
+ */
+export async function updateEmployeeAllowedAccounts(input: {
+  orgId: string;
+  employeeId: string;
+  allowedAccounts: NonNullable<Employee["allowedAccounts"]>;
+}): Promise<Employee | null> {
+  const orgId = input.orgId?.trim();
+  const employeeId = input.employeeId?.trim();
+  if (!orgId || !employeeId) return null;
+  if (isDemoMode()) {
+    const employee = getRuntimeEmployees().find((item) => item.id === employeeId && item.orgId === orgId);
+    if (!employee) return null;
+    employee.allowedAccounts = input.allowedAccounts.map((row) => ({ ...row }));
+    return employee;
+  }
+  const admin = createSupabaseAdminClient();
+  if (!admin) return null;
+  const { data, error } = await admin
+    .from("employees")
+    .update({ allowed_accounts: input.allowedAccounts, updated_at: new Date().toISOString() })
+    .eq("id", employeeId)
+    .eq("org_id", orgId)
+    .select("*")
+    .maybeSingle();
+  if (error || !data) return null;
+  await admin
+    .from("credentials")
+    .update({ allowed_accounts: input.allowedAccounts })
+    .eq("employee_id", employeeId)
+    .eq("org_id", orgId)
+    .is("revoked_at", null);
+  return mapEmployeeRow(data as Record<string, unknown>);
+}
+
 export async function terminateEmployee(input: {
   orgId: string;
   employeeId: string;

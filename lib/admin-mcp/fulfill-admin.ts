@@ -1783,6 +1783,28 @@ async function fulfillDmAutorouteRun(
   };
 }
 
+/** ADMIN_MCP_ALLOWED_ACCOUNTS_TOOLS_ENABLED: human-approved allowedAccounts add/remove. */
+async function fulfillAllowedAccountsTicket(
+  approval: ApprovalRequest,
+  args: Record<string, unknown>,
+  tool: "employees.allowedAccounts.add" | "employees.allowedAccounts.remove"
+): Promise<AdminFulfillment> {
+  const { fulfillAllowedAccountsChange } = await import("@/lib/admin-mcp/allowed-accounts-tools");
+  const result = await fulfillAllowedAccountsChange(approval, tool, args);
+  const at = new Date().toISOString();
+  if (!result.ok) {
+    return { ok: false, tool, at, error: result.code, nextStepJa: result.messageJa };
+  }
+  return {
+    ok: true,
+    tool,
+    at,
+    employeeId: result.employeeId,
+    summaryJa: result.summaryJa,
+    nextStepJa: "employees.allowedAccounts.list で現在の許可アカウントを確認できます。",
+  };
+}
+
 /** PR-4: human-approved setup.approvalDelivery.autoResolve (always_human). */
 async function fulfillApprovalDeliveryAutoResolveTicket(
   approval: ApprovalRequest,
@@ -1831,6 +1853,10 @@ async function fulfillApprovedAdminCore(
         break;
       case "policy.patch":
         fulfillment = await fulfillPolicy(approval, args);
+        break;
+      case "employees.allowedAccounts.add":
+      case "employees.allowedAccounts.remove":
+        fulfillment = await fulfillAllowedAccountsTicket(approval, args, tool);
         break;
       case "parties.upsert":
         fulfillment = await fulfillParty(approval, args);
