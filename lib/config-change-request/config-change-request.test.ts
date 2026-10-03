@@ -10,7 +10,7 @@ import {
 import { callAdminMcpTool } from "@/lib/mcp/admin-tools";
 import { resetDemoAdminAgent } from "@/lib/data/admin-agents";
 import { getApprovalById, resolveApproval } from "@/lib/data/approvals";
-import { listAuditEvents } from "@/lib/data/audit";
+import { appendAuditEvent, listAuditEvents } from "@/lib/data/audit";
 import { getOrgChannel, upsertOrgChannel } from "@/lib/data/directory";
 import { fulfillApprovedInvoke, fulfillIfApproved } from "@/lib/approvals/fulfill";
 import { runApprovalResolveSideEffects } from "@/lib/approvals/resolve-side-effects";
@@ -124,6 +124,21 @@ function demoAdminCred(): ResolvedAdminCredential {
 
 const requester = { name: "田中", slackUserId: "U0TANAKA" };
 
+/**
+ * Since 2026-10-03 the declared requester is checked against the real Slack
+ * speaker (woke audit). Seed one so tests that expect 「田中さん」 are verified.
+ */
+async function verifiedConversation(employeeId: string) {
+  const channel = uniq("C_REQ");
+  const ts = "1700000000.0001";
+  await appendAuditEvent({
+    orgId: ORG, employeeId, credentialId: null, action: "slack.mention_wake", purpose: "slack.mention",
+    summary: "Slackメンションで社員を起こした",
+    metadata: { reason: "woke", channel, ts, thread_ts: null, eventId: uniq("Ev"), speakerId: requester.slackUserId },
+  });
+  return { surface: "slack", slackChannelId: channel, threadTs: ts };
+}
+
 async function auditActions(): Promise<Array<{ action: string; metadata: Record<string, unknown> }>> {
   const events = await listAuditEvents(ORG, 5000);
   return events.map((e) => ({ action: e.action, metadata: (e.metadata || {}) as Record<string, unknown> }));
@@ -217,6 +232,7 @@ describe("flag ON → pending approval, nothing applied until approved", () => {
           kind: "instructions",
           jobId: uniq("job-"),
           requestedBy: requester,
+          conversation: await verifiedConversation(empId),
           reason: "敬語を統一したい",
           instructions: { mode: "replace", text: "お客様には必ず敬語で返信する。" },
         },
@@ -357,7 +373,7 @@ describe("flag ON → pending approval, nothing applied until approved", () => {
       okDeps
     );
     const instr = await createConfigChangeRequest(
-      { orgId: ORG, employeeId: empId, credentialId: null, args: { kind: "instructions", jobId: uniq("job-"), requestedBy: requester, instructions: { text: "勝手な指示" } } },
+      { orgId: ORG, employeeId: empId, credentialId: null, args: { kind: "instructions", jobId: uniq("job-"), requestedBy: requester, conversation: await verifiedConversation(empId), instructions: { text: "勝手な指示" } } },
       okDeps
     );
     assertPending(created);
