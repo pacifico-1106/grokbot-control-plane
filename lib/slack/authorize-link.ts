@@ -25,8 +25,10 @@
  *    allowedAccounts check still applies) → admin change log with the bound U…
  *    → approver is notified in the same approval-app DM. The caller then runs the
  *    existing #234 DM auto-route (SLACK_DM_AUTOROUTE_ENABLED).
- *    user_mismatch / code-exchange failure burn the link and DM the recipient
- *    (employee or approver) AUTHORIZE_LINK_FAILED_NOTICE_JA — never the other U….
+ *    Every post-consume failure (AUTHORIZE_LINK_CONSUMED_FAILURE_REASONS) keeps
+ *    the link used, DMs the recipient authorizeLinkFailedNoticeJa(code) and —
+ *    when the link went to the employee — the approver too
+ *    (authorizeLinkApproverFailureNoticeJa); never the other account's U… / URL.
  *
  * Bot token: every approval-app post (link, approver notice, completion /
  * failure notice) gets its token from resolveApprovalAppBotToken() only.
@@ -51,9 +53,12 @@ import { bindEmployeeSlackIdentity, getEmployeeSlackIdentity } from "@/lib/data/
 import { approvalInboxAllowedUsers, resolveSlackApprovalInbox } from "@/lib/admin-mcp/slack-dm-setup";
 import { openApprovalDeliveryDm } from "@/lib/slack/approval-dm-open";
 import {
-  ALLOWED_ACCOUNTS_SLACK_NEXT_STEP_JA,
-  AUTHORIZE_LINK_FAILED_NOTICE_JA,
   allowedSlackAccountIds,
+  authorizeLinkApproverFailureNoticeJa,
+  authorizeLinkFailedNoticeJa,
+  isAuthorizeLinkConsumedFailureReason,
+  resolveAllowedAccountsSlackNextStep,
+  type AuthorizeLinkConsumedFailureReason,
 } from "@/lib/slack/authorize-link-guidance";
 import { isSlackAuthorizeLinkEnabled } from "@/lib/slack/authorize-link-flags";
 import type { Employee } from "@/lib/types";
@@ -65,7 +70,15 @@ const SLACK_USER_ID_RE = /^[UW][A-Z0-9]{2,30}$/;
 const SLACK_TEAM_ID_RE = /^[TE][A-Z0-9]{2,30}$/;
 const SLACK_TIMEOUT_MS = 5_000;
 
-export { ALLOWED_ACCOUNTS_SLACK_NEXT_STEP_JA, AUTHORIZE_LINK_FAILED_NOTICE_JA };
+export {
+  ALLOWED_ACCOUNTS_ADD_TOOL,
+  ALLOWED_ACCOUNTS_SLACK_NEXT_STEP_JA,
+  ALLOWED_ACCOUNTS_SLACK_NEXT_STEP_TOOL_JA,
+  AUTHORIZE_LINK_CONSUMED_FAILURE_REASONS,
+  authorizeLinkApproverFailureNoticeJa,
+  authorizeLinkFailedNoticeJa,
+  resolveAllowedAccountsSlackNextStep,
+} from "@/lib/slack/authorize-link-guidance";
 
 export const AUTHORIZE_LINK_DELIVER_TO = ["employee", "approver"] as const;
 export type AuthorizeLinkDeliverTo = (typeof AUTHORIZE_LINK_DELIVER_TO)[number];
@@ -75,9 +88,6 @@ export function parseAuthorizeLinkDeliverTo(value: unknown): AuthorizeLinkDelive
   const raw = typeof value === "string" ? value.trim() : "";
   return (AUTHORIZE_LINK_DELIVER_TO as readonly string[]).includes(raw) ? (raw as AuthorizeLinkDeliverTo) : null;
 }
-
-/** Callback rejections that DM the link recipient (link stays used). */
-const FAILURE_NOTICE_REASONS = new Set(["user_mismatch", "oauth_exchange_failed"]);
 
 /**
  * THE approval-app bot token resolution (single place). Every approval-app post
@@ -187,7 +197,7 @@ export type AuthorizeLinkPins = {
 
 export type PinsResult =
   | ({ ok: true } & AuthorizeLinkPins)
-  | { ok: false; code: string; messageJa: string; nextStepJa?: string };
+  | { ok: false; code: string; messageJa: string; nextStepJa?: string; allowedAccountsAdminTool?: string | null };
 
 /**
  * Anti-takeover pins. Existing identity → its U… and T…. Otherwise the single
@@ -203,11 +213,13 @@ export async function authorizeLinkPins(orgId: string, employee: Employee): Prom
     return { ok: true, expectedSlackUserId: identity.slackUserId, expectedTeamId: team, linked: identity.status === "linked" };
   }
   if (allowed.length === 0) {
+    const step = await resolveAllowedAccountsSlackNextStep();
     return {
       ok: false,
       code: "slack_account_not_allowed",
-      messageJa: `この AI 社員には許可された Slack アカウント（allowedAccounts の slack U…）がありません。${ALLOWED_ACCOUNTS_SLACK_NEXT_STEP_JA}`,
-      nextStepJa: ALLOWED_ACCOUNTS_SLACK_NEXT_STEP_JA,
+      messageJa: `この AI 社員には許可された Slack アカウント（allowedAccounts の slack U…）がありません。${step.nextStepJa}`,
+      nextStepJa: step.nextStepJa,
+      allowedAccountsAdminTool: step.allowedAccountsAdminTool,
     };
   }
   return { ok: true, expectedSlackUserId: allowed.length === 1 ? allowed[0] : null, expectedTeamId: null, linked: false };
@@ -482,15 +494,25 @@ export async function completeAuthorizeLinkCallback(input: {
   const link = await consumeSlackAuthorizeLink({ id: linkId, orgId, employeeId });
   if (!link) return { ok: false, code: "invalid_link", consumed: false };
 
-  const reject = async (reason: string, extra: Record<string, unknown> = {}): Promise<AuthorizeLinkCallbackResult> => {
+  // Every exit below is post-consume: the link stays used, so every one notifies.
+  const reject = async (
+    reason: AuthorizeLinkConsumedFailureReason,
+    extra: Record<string, unknown> = {}
+  ): Promise<AuthorizeLinkCallbackResult> => {
     await finishSlackAuthorizeLink({ id: link.id, orgId, status: "rejected", reason });
-    // Tell whoever received the link that it is void (never the other U…).
-    // Best effort: a notice failure never changes the callback response.
-    let failureNotice: Record<string, unknown> = {};
-    if (FAILURE_NOTICE_REASONS.has(reason)) {
-      const sent = await sendAuthorizeLinkFailureNotice(link).catch(() => false);
-      failureNotice = { failureNoticeSent: sent, failureNoticeTarget: link.deliveredTarget };
-    }
+    // Tell the recipient (and the approver for employee delivery) that it is
+    // void — never the other U… / URL. Best effort: never changes the response.
+    const notices = await sendAuthorizeLinkFailureNotices(link, reason).catch(() => ({
+      recipientSent: false,
+      approverSent: false,
+      approverSkipped: null as string | null,
+    }));
+    const failureNotice: Record<string, unknown> = {
+      failureNoticeSent: notices.recipientSent,
+      failureNoticeTarget: link.deliveredTarget,
+      approverFailureNoticeSent: notices.approverSent,
+      ...(notices.approverSkipped ? { approverFailureNoticeSkipped: notices.approverSkipped } : {}),
+    };
     await appendAuditEvent({
       orgId,
       employeeId,
@@ -527,7 +549,8 @@ export async function completeAuthorizeLinkCallback(input: {
   if (link.expectedSlackUserId && slackUserId !== link.expectedSlackUserId) {
     return reject("user_mismatch", { expectedSlackUserId: link.expectedSlackUserId, attemptedSlackUserId: slackUserId });
   }
-  const previous = await getEmployeeSlackIdentity(employeeId);
+  // Audit-only context; a lookup failure must not strand the consumed link.
+  const previous = await getEmployeeSlackIdentity(employeeId).catch(() => null);
   try {
     await bindEmployeeSlackIdentity({
       employeeId,
@@ -581,48 +604,79 @@ export async function completeAuthorizeLinkCallback(input: {
   return { ok: true, orgId, employeeId, slackUserId };
 }
 
-/** DM the link recipient (employee or approver) that the link is void. Never throws. */
-async function sendAuthorizeLinkFailureNotice(link: SlackAuthorizeLink): Promise<boolean> {
+/**
+ * Failure DMs for a burned link. Never throws.
+ * - recipient (employee or approver, `delivered_channel_id`): authorizeLinkFailedNoticeJa(code)
+ * - approver (only when the link went to the employee): authorizeLinkApproverFailureNoticeJa(name, code)
+ *   → an approver-delivered link gets exactly one notice (no duplicate).
+ */
+async function sendAuthorizeLinkFailureNotices(
+  link: SlackAuthorizeLink,
+  reason: AuthorizeLinkConsumedFailureReason
+): Promise<{ recipientSent: boolean; approverSent: boolean; approverSkipped: string | null }> {
+  const result = { recipientSent: false, approverSent: false, approverSkipped: null as string | null };
   try {
-    if (!link.deliveredInboxId || !link.deliveredChannelId) return false;
+    const approverChannel =
+      link.deliveredTarget === "employee" && link.approverChannelId && link.approverChannelId !== link.deliveredChannelId
+        ? link.approverChannelId
+        : null;
+    if (!approverChannel) {
+      result.approverSkipped = link.deliveredTarget === "employee" ? "approver_channel_unknown" : "delivered_to_approver";
+    }
+    if (!link.deliveredInboxId) return result;
     const botToken = await resolveApprovalAppBotToken(link.orgId, link.deliveredInboxId);
-    if (!botToken) return false;
+    if (!botToken) return result;
     const employee = await getEmployee(link.employeeId, link.orgId).catch(() => null);
     const name = employee && employee.orgId === link.orgId ? employee.displayName : "";
-    const text = `⚠️ StaffPass${name ? `（AI社員「${name}」）` : ""}: ${AUTHORIZE_LINK_FAILED_NOTICE_JA}`;
-    const posted = await postApprovalAppText(botToken, link.deliveredChannelId, text);
-    return posted.ok;
+    if (link.deliveredChannelId) {
+      const posted = await postApprovalAppText(
+        botToken,
+        link.deliveredChannelId,
+        `⚠️ StaffPass${name ? `（AI社員「${name}」）` : ""}: ${authorizeLinkFailedNoticeJa(reason)}`
+      );
+      result.recipientSent = posted.ok;
+    }
+    if (approverChannel) {
+      const posted = await postApprovalAppText(
+        botToken,
+        approverChannel,
+        `⚠️ StaffPass: ${authorizeLinkApproverFailureNoticeJa(name || link.employeeId, reason)}`
+      );
+      result.approverSent = posted.ok;
+    }
+    return result;
   } catch {
-    return false;
+    return result;
   }
 }
 
-export type AuthorizeLinkPageKind = "ok" | "denied" | "mismatch" | "burned" | "invalid" | "error";
+export type AuthorizeLinkPageKind = "ok" | "denied" | "burned" | "invalid" | "error";
 
-/** Callback result code → result page kind. */
+/** Callback result code → result page kind (every consumed failure → "burned"). */
 export function authorizeLinkPageKind(code: string): Exclude<AuthorizeLinkPageKind, "ok"> {
   if (code === "denied") return "denied";
-  if (FAILURE_NOTICE_REASONS.has(code)) return "burned";
-  if (code === "team_mismatch" || code === "allowed_accounts_mismatch") return "mismatch";
+  if (isAuthorizeLinkConsumedFailureReason(code)) return "burned";
   if (code === "invalid_link" || code === "authorize_link_flag_off") return "invalid";
   return "error";
 }
 
-/** Minimal result page for the link flow (the clicker may have no Staffpass session). */
-export function authorizeLinkResultHtml(kind: AuthorizeLinkPageKind): string {
+/**
+ * Minimal result page for the link flow (the clicker may have no Staffpass
+ * session). "burned" uses the same template as the DM; only the code varies.
+ */
+export function authorizeLinkResultHtml(kind: AuthorizeLinkPageKind, code?: string): string {
   const messages: Record<typeof kind, string> = {
     ok: "Slack 連携が完了しました。このタブを閉じてください。",
     denied: "許可がキャンセルされました。もう一度リンクを開くとやり直せます。",
-    mismatch: "このリンクは別の Slack アカウント／ワークスペース用です。連携は保存していません。承認者に再発行を依頼してください。",
-    burned: AUTHORIZE_LINK_FAILED_NOTICE_JA,
+    burned: authorizeLinkFailedNoticeJa(code),
     invalid: "このリンクは無効か、期限切れ・使用済みです。承認者に再発行を依頼してください。",
     error: "Slack 連携を完了できませんでした。承認者に再発行を依頼してください。",
   };
   return `<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="robots" content="noindex"><title>StaffPass</title></head><body><p>${messages[kind]}</p></body></html>`;
 }
 
-export function authorizeLinkHtmlResponse(kind: Parameters<typeof authorizeLinkResultHtml>[0], status = 200): Response {
-  return new Response(authorizeLinkResultHtml(kind), {
+export function authorizeLinkHtmlResponse(kind: AuthorizeLinkPageKind, status = 200, code?: string): Response {
+  return new Response(authorizeLinkResultHtml(kind, code), {
     status,
     headers: {
       "content-type": "text/html; charset=utf-8",

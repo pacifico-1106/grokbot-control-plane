@@ -45,7 +45,7 @@ import {
 } from "@/lib/slack/approval-dm-open";
 import { syncAutoDmRoutesForEmployee, type DmAutorouteItem, type DmAutorouteResult } from "@/lib/slack/dm-autoroute";
 import { isSlackAuthorizeLinkEnabled } from "@/lib/slack/authorize-link-flags";
-import { ALLOWED_ACCOUNTS_SLACK_NEXT_STEP_JA, allowedSlackAccountIds } from "@/lib/slack/authorize-link-guidance";
+import { allowedSlackAccountIds, resolveAllowedAccountsSlackNextStep } from "@/lib/slack/authorize-link-guidance";
 import { isSlackDmAutorouteEnabled, isSlackUserScopeImWriteEnabled } from "@/lib/slack/dm-autoroute-flags";
 import { slackAuthorizeUrlTemplate } from "@/lib/slack/slack-status-diagnose";
 import type { NotificationChannel } from "@/lib/types";
@@ -234,6 +234,8 @@ export async function diagnoseSlackDmApprovalSetup(orgId: string): Promise<Recor
     .filter((employee) => employee.orgId === orgId && employee.status === "active")
     .slice(0, MAX_EMPLOYEES);
   const employeeRows: Array<Record<string, unknown>> = [];
+  // Same resolver as setup.slackAuthorizeLink.issue (registry-aware).
+  const allowedAccountsStep = await resolveAllowedAccountsSlackNextStep();
   for (const employee of employees) {
     const identity = await getEmployeeSlackIdentity(employee.id);
     const linked = Boolean(identity && identity.orgId === orgId && identity.status === "linked");
@@ -265,6 +267,7 @@ export async function diagnoseSlackDmApprovalSetup(orgId: string): Promise<Recor
       autoRoutes: flags.SLACK_DM_AUTOROUTE_ENABLED ? auto : null,
       authorizeUrl: slackAuthorizeUrlTemplate(employee.id),
       allowedSlackAccounts: allowedSlackAccountIds(employee).length,
+      allowedAccountsAdminTool: allowedAccountsStep.allowedAccountsAdminTool,
     });
   }
 
@@ -311,7 +314,7 @@ export async function diagnoseSlackDmApprovalSetup(orgId: string): Promise<Recor
       : "";
     if (!row.slackIdentityLinked && linkStep && row.allowedSlackAccounts === 0) {
       // No Slack U… on the badge: the link would be refused — say how to add it.
-      nextStepsJa.push(`${row.displayName}: 社員証の allowedAccounts に Slack アカウントがありません。${ALLOWED_ACCOUNTS_SLACK_NEXT_STEP_JA}`);
+      nextStepsJa.push(`${row.displayName}: 社員証の allowedAccounts に Slack アカウントがありません。${allowedAccountsStep.nextStepJa}`);
     } else if (!row.slackIdentityLinked) {
       nextStepsJa.push(
         linkStep

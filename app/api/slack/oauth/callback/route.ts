@@ -109,10 +109,10 @@ export async function GET(req: Request) {
       authTest,
     }).catch(() => ({ ok: false as const, code: "error", consumed: false }));
     if (!result.ok) {
-      // user_mismatch / oauth_exchange_failed → "burned" (same text as the DM
-      // notice; never shows the other account's U…).
+      // Every consumed failure → "burned" (same template as the DM notice, only
+      // the reason code varies; never shows the other account's U…).
       const kind = authorizeLinkPageKind(result.code);
-      return authorizeLinkHtmlResponse(kind, kind === "denied" ? 200 : 400);
+      return authorizeLinkHtmlResponse(kind, kind === "denied" ? 200 : 400, result.code);
     }
     scheduleDmAutoroute(result.orgId, result.employeeId);
     return authorizeLinkHtmlResponse("ok");

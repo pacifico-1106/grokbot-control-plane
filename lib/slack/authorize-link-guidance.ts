@@ -4,6 +4,7 @@
  * setup.slackDmApprovalStatus diagnosis without a circular import).
  */
 import { normalizeAllowedAccounts } from "@/lib/employees/allowed-accounts";
+import { ADMIN_MCP_TOOL_NAMES } from "@/lib/mcp/admin-public";
 import type { Employee } from "@/lib/types";
 
 const SLACK_USER_ID_RE = /^[UW][A-Z0-9]{2,30}$/;
@@ -15,11 +16,14 @@ export function allowedSlackAccountIds(employee: Pick<Employee, "allowedAccounts
     .map((row) => row.accountId);
 }
 
+/** Admin MCP tool that adds an allowed account (shipped by a separate PR). */
+export const ALLOWED_ACCOUNTS_ADD_TOOL = "employees.allowedAccounts.add";
+
 /**
- * Next step when the badge has no Slack account in allowedAccounts.
- * There is NO admin MCP tool that edits allowedAccounts of an existing badge
- * (employees.issue sets them only at issue time; policy.patch does not touch
- * them). The only path today is the dashboard employee page (human).
+ * Next step when the badge has no Slack account in allowedAccounts and
+ * ALLOWED_ACCOUNTS_ADD_TOOL is NOT registered: no admin MCP tool edits
+ * allowedAccounts of an existing badge (employees.issue sets them only at issue
+ * time; policy.patch does not touch them) → dashboard employee page (human).
  */
 export const ALLOWED_ACCOUNTS_SLACK_NEXT_STEP_JA =
   "社員証の許可アカウント（allowedAccounts）に Slack の U… を追加してください。" +
@@ -27,6 +31,70 @@ export const ALLOWED_ACCOUNTS_SLACK_NEXT_STEP_JA =
   "ダッシュボードの AI 社員ページ「ブラウザ・外部アカウント」で、人が Slack を選び社員本人の U… を入れて保存してください。" +
   "保存後に setup.slackAuthorizeLink.issue をもう一度呼んでください。";
 
-/** Shown on the result page and DM'd to the link recipient when a link is burned. */
-export const AUTHORIZE_LINK_FAILED_NOTICE_JA =
-  "再認可リンクが別のアカウントで開かれた（または認可に失敗した）ため無効になりました。管理者に再発行を依頼してください。";
+/** Next step when ALLOWED_ACCOUNTS_ADD_TOOL is registered in the admin tool registry. */
+export const ALLOWED_ACCOUNTS_SLACK_NEXT_STEP_TOOL_JA =
+  `${ALLOWED_ACCOUNTS_ADD_TOOL} で Slack の U… を追加してから、もう一度 setup.slackAuthorizeLink.issue で発行してください。`;
+
+/**
+ * Runtime check: advertised (ADMIN_MCP_TOOL_NAMES) AND defined/callable
+ * (ADMIN_MCP_TOOLS). Lazy import keeps this module free of a load-time cycle
+ * (admin-tools → … → authorize-link → here). Never throws.
+ */
+export async function isAdminMcpToolRegistered(name: string): Promise<boolean> {
+  try {
+    if (!(ADMIN_MCP_TOOL_NAMES as readonly string[]).includes(name)) return false;
+    const { ADMIN_MCP_TOOLS } = await import("@/lib/mcp/admin-tools");
+    return ADMIN_MCP_TOOLS.some((tool) => tool.name === name);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * THE allowedAccounts-without-Slack next step (issue error + status). Works
+ * whether #240 or the employees.allowedAccounts.* PR merges first.
+ */
+export async function resolveAllowedAccountsSlackNextStep(): Promise<{
+  nextStepJa: string;
+  allowedAccountsAdminTool: string | null;
+}> {
+  return (await isAdminMcpToolRegistered(ALLOWED_ACCOUNTS_ADD_TOOL))
+    ? { nextStepJa: ALLOWED_ACCOUNTS_SLACK_NEXT_STEP_TOOL_JA, allowedAccountsAdminTool: ALLOWED_ACCOUNTS_ADD_TOOL }
+    : { nextStepJa: ALLOWED_ACCOUNTS_SLACK_NEXT_STEP_JA, allowedAccountsAdminTool: null };
+}
+
+/**
+ * Every callback outcome AFTER the atomic consume that ends without a bind
+ * (the link stays used). Each one DMs the recipient (+ approver when the link
+ * went to the employee) and shows the "burned" page — one template, the code
+ * is the only variable.
+ */
+export const AUTHORIZE_LINK_CONSUMED_FAILURE_REASONS = [
+  "oauth_exchange_failed",
+  "user_token_missing",
+  "auth_test_failed",
+  "team_mismatch",
+  "user_mismatch",
+  "allowed_accounts_mismatch",
+  "bind_failed",
+] as const;
+export type AuthorizeLinkConsumedFailureReason = (typeof AUTHORIZE_LINK_CONSUMED_FAILURE_REASONS)[number];
+
+export function isAuthorizeLinkConsumedFailureReason(code: string): code is AuthorizeLinkConsumedFailureReason {
+  return (AUTHORIZE_LINK_CONSUMED_FAILURE_REASONS as readonly string[]).includes(code);
+}
+
+function safeReasonCode(code: string | null | undefined): string {
+  const raw = (code || "").trim();
+  return /^[a-z0-9_]{1,64}$/.test(raw) ? raw : "unknown";
+}
+
+/** Recipient DM + result page (single template; only the code varies). */
+export function authorizeLinkFailedNoticeJa(code: string | null | undefined): string {
+  return `再認可リンクが別のアカウントで開かれた（または認可に失敗した）ため無効になりました（${safeReasonCode(code)}）。管理者に再発行を依頼してください。`;
+}
+
+/** Approver DM when the failed link had been delivered to the employee. */
+export function authorizeLinkApproverFailureNoticeJa(employeeName: string, code: string | null | undefined): string {
+  return `社員「${employeeName}」の再認可リンクが失敗しました（${safeReasonCode(code)}）。再発行してください`;
+}

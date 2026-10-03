@@ -27,9 +27,15 @@ import { ADMIN_MCP_TOOLS, callAdminMcpTool } from "@/lib/mcp/admin-tools";
 import { callStaffpassMcpTool, listStaffpassMcpTools, STAFFPASS_MCP_TOOLS } from "@/lib/mcp/tools";
 import {
   ALLOWED_ACCOUNTS_SLACK_NEXT_STEP_JA,
-  AUTHORIZE_LINK_FAILED_NOTICE_JA,
+  ALLOWED_ACCOUNTS_SLACK_NEXT_STEP_TOOL_JA,
+  ALLOWED_ACCOUNTS_ADD_TOOL,
+  AUTHORIZE_LINK_CONSUMED_FAILURE_REASONS,
   SLACK_AUTHORIZE_LINK_PATH,
+  authorizeLinkApproverFailureNoticeJa,
+  authorizeLinkFailedNoticeJa,
+  authorizeLinkPageKind,
   authorizeLinkResultHtml,
+  resolveAllowedAccountsSlackNextStep,
   chooseAuthorizeLinkDelivery,
   completeAuthorizeLinkCallback,
   hashAuthorizeLinkToken,
@@ -749,15 +755,16 @@ describe("failure notices (user_mismatch / exchange failure)", () => {
     const res = await completeAuthorizeLinkCallback({ state, code: "c", oauthError: "", exchange: exchangeWith(NEW_USER_TOKEN), authTest: authTestAs("UATTACKER1") });
     expect(res).toEqual({ ok: false, code: "user_mismatch", consumed: true });
     const sent = posts();
-    expect(sent).toHaveLength(1);
-    expect(sent[0].body.channel).toBe(dmChannelFor(empASlack));
-    expect(sent[0].auth).toBe(`Bearer ${BOT_TOKEN}`);
-    expect(String(sent[0].body.text)).toContain(AUTHORIZE_LINK_FAILED_NOTICE_JA);
-    expect(String(sent[0].body.text)).not.toContain("UATTACKER1");
+    expect(sent).toHaveLength(2);
+    const toEmployee = sent.find((c) => c.body.channel === dmChannelFor(empASlack))!;
+    expect(toEmployee.auth).toBe(`Bearer ${BOT_TOKEN}`);
+    expect(String(toEmployee.body.text)).toContain(authorizeLinkFailedNoticeJa("user_mismatch"));
+    for (const post of sent) expect(String(post.body.text)).not.toContain("UATTACKER1");
     expect((await getSlackAuthorizeLink(state.linkId, ORG_A))?.status).toBe("rejected");
     const rejected = getRuntimeAudit().find((e) => e.metadata?.event === "slack_authorize_link.rejected" && e.metadata?.linkId === state.linkId)!;
     expect(rejected.metadata?.failureNoticeSent).toBe(true);
     expect(rejected.metadata?.failureNoticeTarget).toBe("employee");
+    expect(rejected.metadata?.approverFailureNoticeSent).toBe(true);
   });
 
   test("exchange failure (approver delivery) → notice to the approver DM", async () => {
@@ -770,8 +777,13 @@ describe("failure notices (user_mismatch / exchange failure)", () => {
     const sent = posts();
     expect(sent).toHaveLength(1);
     expect(sent[0].body.channel).toBe(dmChannelFor(APPROVER));
-    expect(String(sent[0].body.text)).toContain(AUTHORIZE_LINK_FAILED_NOTICE_JA);
+    expect(String(sent[0].body.text)).toContain(authorizeLinkFailedNoticeJa("oauth_exchange_failed"));
     expect((await getSlackAuthorizeLink(state.linkId, ORG_A))?.status).toBe("rejected");
+    // Delivered to the approver → no second (approver) notice.
+    const rejected = getRuntimeAudit().find((e) => e.metadata?.event === "slack_authorize_link.rejected" && e.metadata?.linkId === state.linkId)!;
+    expect(rejected.metadata?.failureNoticeTarget).toBe("approver");
+    expect(rejected.metadata?.approverFailureNoticeSent).toBe(false);
+    expect(rejected.metadata?.approverFailureNoticeSkipped).toBe("delivered_to_approver");
   });
 
   test("exchange throws → same notice; notice send failure never breaks the callback", async () => {
@@ -795,12 +807,18 @@ describe("failure notices (user_mismatch / exchange failure)", () => {
     expect(res).toEqual({ ok: false, code: "user_mismatch", consumed: true });
   });
 
-  test("result page shows the same message for the burned kinds", () => {
-    const html = authorizeLinkResultHtml("burned");
-    expect(html).toContain(AUTHORIZE_LINK_FAILED_NOTICE_JA);
-    expect(AUTHORIZE_LINK_FAILED_NOTICE_JA).toBe(
-      "再認可リンクが別のアカウントで開かれた（または認可に失敗した）ため無効になりました。管理者に再発行を依頼してください。"
+  test("one template, only the reason code varies (notice + page)", () => {
+    expect(authorizeLinkFailedNoticeJa("user_mismatch")).toBe(
+      "再認可リンクが別のアカウントで開かれた（または認可に失敗した）ため無効になりました（user_mismatch）。管理者に再発行を依頼してください。"
     );
+    expect(authorizeLinkApproverFailureNoticeJa("社員X", "team_mismatch")).toBe(
+      "社員「社員X」の再認可リンクが失敗しました（team_mismatch）。再発行してください"
+    );
+    const html = authorizeLinkResultHtml("burned", "team_mismatch");
+    expect(html).toContain(authorizeLinkFailedNoticeJa("team_mismatch"));
+    // Untrusted / odd code never reaches the page or DM verbatim.
+    expect(authorizeLinkFailedNoticeJa("<script>")).toContain("（unknown）");
+    expect(authorizeLinkResultHtml("burned", "<b>x</b>")).not.toContain("<b>");
   });
 });
 
@@ -814,5 +832,232 @@ describe("audit_only path keeps its gate; delivery follows deliverTo", () => {
     expect(out.urlReturned).toBe(false);
     noSecrets(out);
     expect(issuedAudit(empA.id).metadata?.issuedVia).toBe("audit_only");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 追加 2（2026-10-04 木村回答）: 使用済み理由すべてに失敗通知 / 承認者通知 / registry 連動の次の手順
+// ---------------------------------------------------------------------------
+
+const ATTACKER = "UOUTSIDER9";
+
+type ReasonCase = {
+  code: string;
+  /** Builds the scenario; returns callback inputs and whether delivery went to the employee. */
+  run: () => Promise<{ state: { orgId: string; employeeId: string; linkId: string }; viaEmployee: boolean; employeeName: string; cleanup?: () => void; input: Partial<Parameters<typeof completeAuthorizeLinkCallback>[0]> }>;
+};
+
+async function employeeLinkState() {
+  const state = await startState(await issueViaTicket(empA.id));
+  return { state, viaEmployee: true, employeeName: empA.displayName };
+}
+
+const REASON_CASES: ReasonCase[] = [
+  { code: "oauth_exchange_failed", run: async () => ({ ...(await employeeLinkState()), input: { exchange: async () => ({ ok: false }) } }) },
+  { code: "user_token_missing", run: async () => ({ ...(await employeeLinkState()), input: { exchange: exchangeWith("xoxb-not-user-SECRET") } }) },
+  { code: "auth_test_failed", run: async () => ({ ...(await employeeLinkState()), input: { authTest: async () => ({ ok: false }) } }) },
+  { code: "team_mismatch", run: async () => ({ ...(await employeeLinkState()), input: { authTest: authTestAs(ATTACKER, "TOTHERWS01") } }) },
+  { code: "user_mismatch", run: async () => ({ ...(await employeeLinkState()), input: { authTest: authTestAs(ATTACKER) } }) },
+  {
+    code: "allowed_accounts_mismatch",
+    run: async () => {
+      // Several allowed accounts → team-only pin → approver delivery (ambiguous).
+      const fresh = newEmployee(ORG_A, ["UAAMULTI01", "UAAMULTI02"]);
+      const state = await startState(await issueViaTicket(fresh.id));
+      return { state, viaEmployee: false, employeeName: fresh.displayName, input: { authTest: authTestAs(ATTACKER) } };
+    },
+  },
+  {
+    code: "bind_failed",
+    run: async () => {
+      const base = await employeeLinkState();
+      // Employee row disappears between link start and bind → bind throws (not a mismatch).
+      const list = getRuntimeEmployees();
+      const index = list.findIndex((e) => e.id === empA.id);
+      const [removed] = list.splice(index, 1);
+      return { ...base, cleanup: () => list.push(removed), input: {} };
+    },
+  },
+];
+
+describe("every consumed-failure reason: recipient notice + approver notice + page (one template)", () => {
+  test("reason list covers every reject() path in the callback", () => {
+    expect([...AUTHORIZE_LINK_CONSUMED_FAILURE_REASONS].sort()).toEqual(REASON_CASES.map((c) => c.code).sort());
+    // Scan only the callback (post-consume) body: every reject("…") code, incl. the bind ternary.
+    const full = readFileSync(new URL("./authorize-link.ts", import.meta.url), "utf8");
+    const start = full.indexOf("export async function completeAuthorizeLinkCallback");
+    const src = full.slice(start, full.indexOf("\n}\n", start));
+    const used = new Set([
+      ...[...src.matchAll(/reject\("([a-z0-9_]+)"/g)].map((m) => m[1]),
+      ...[...src.matchAll(/return reject\([^,)]*\? "([a-z0-9_]+)" : "([a-z0-9_]+)"/g)].flatMap((m) => [m[1], m[2]]),
+    ]);
+    expect([...used].sort()).toEqual([...AUTHORIZE_LINK_CONSUMED_FAILURE_REASONS].sort());
+  });
+
+  for (const reason of REASON_CASES) {
+    test(`${reason.code}: link burned; recipient + (employee delivery only) approver notified; no other U…; page same template`, async () => {
+      const scenario = await reason.run();
+      calls = [];
+      try {
+        const res = await completeAuthorizeLinkCallback({
+          state: scenario.state,
+          code: "c",
+          oauthError: "",
+          exchange: exchangeWith(NEW_USER_TOKEN),
+          authTest: authTestAs(empASlack),
+          ...scenario.input,
+        });
+        expect(res).toEqual({ ok: false, code: reason.code, consumed: true });
+        expect((await getSlackAuthorizeLink(scenario.state.linkId, ORG_A))?.status).toBe("rejected");
+        const sent = posts();
+        for (const post of sent) {
+          expect(post.auth).toBe(`Bearer ${BOT_TOKEN}`);
+          expect(String(post.body.text)).not.toContain(ATTACKER);
+          expect(String(post.body.text)).not.toContain(SLACK_AUTHORIZE_LINK_PATH);
+          expect(String(post.body.text)).not.toContain("?t=");
+        }
+        const approverPosts = sent.filter((c) => c.body.channel === dmChannelFor(APPROVER));
+        if (scenario.viaEmployee) {
+          expect(sent).toHaveLength(2);
+          const toEmployee = sent.find((c) => c.body.channel === dmChannelFor(empASlack))!;
+          expect(String(toEmployee.body.text)).toContain(authorizeLinkFailedNoticeJa(reason.code));
+          expect(approverPosts).toHaveLength(1);
+          expect(String(approverPosts[0].body.text)).toContain(
+            authorizeLinkApproverFailureNoticeJa(reason.code === "bind_failed" ? empA.id : scenario.employeeName, reason.code)
+          );
+        } else {
+          // Delivered to the approver: exactly one notice (no duplicate).
+          expect(sent).toHaveLength(1);
+          expect(approverPosts).toHaveLength(1);
+          expect(String(approverPosts[0].body.text)).toContain(authorizeLinkFailedNoticeJa(reason.code));
+        }
+        const rejected = getRuntimeAudit().find(
+          (e) => e.metadata?.event === "slack_authorize_link.rejected" && e.metadata?.linkId === scenario.state.linkId
+        )!;
+        expect(rejected.metadata?.reason).toBe(reason.code);
+        expect(rejected.metadata?.failureNoticeSent).toBe(true);
+        expect(rejected.metadata?.approverFailureNoticeSent).toBe(scenario.viaEmployee);
+        noSecrets(rejected);
+        const kind = authorizeLinkPageKind(reason.code);
+        expect(kind).toBe("burned");
+        const html = authorizeLinkResultHtml(kind, reason.code);
+        expect(html).toContain(authorizeLinkFailedNoticeJa(reason.code));
+        expect(html).not.toContain(ATTACKER);
+      } finally {
+        scenario.cleanup?.();
+      }
+    });
+  }
+
+  test("(d) audit keeps attemptedSlackUserId for takeover investigation; notices and page never show it", async () => {
+    for (const code of ["user_mismatch", "allowed_accounts_mismatch"]) {
+      const scenario = await REASON_CASES.find((c) => c.code === code)!.run();
+      calls = [];
+      await completeAuthorizeLinkCallback({
+        state: scenario.state, code: "c", oauthError: "", exchange: exchangeWith(NEW_USER_TOKEN), authTest: authTestAs(ATTACKER),
+      });
+      const rejected = getRuntimeAudit().find(
+        (e) => e.metadata?.event === "slack_authorize_link.rejected" && e.metadata?.linkId === scenario.state.linkId
+      )!;
+      expect(rejected.metadata?.attemptedSlackUserId).toBe(ATTACKER);
+      expect(JSON.stringify(posts())).not.toContain(ATTACKER);
+      expect(authorizeLinkResultHtml(authorizeLinkPageKind(code), code)).not.toContain(ATTACKER);
+    }
+  });
+
+  test("approver notice failure never breaks the callback; recorded as not sent", async () => {
+    const state = await startState(await issueViaTicket(empA.id));
+    postMessageFails = true;
+    const res = await completeAuthorizeLinkCallback({ state, code: "c", oauthError: "", exchange: exchangeWith(NEW_USER_TOKEN), authTest: authTestAs(ATTACKER, "TOTHERWS01") });
+    expect(res).toEqual({ ok: false, code: "team_mismatch", consumed: true });
+    const rejected = getRuntimeAudit().find((e) => e.metadata?.event === "slack_authorize_link.rejected" && e.metadata?.linkId === state.linkId)!;
+    expect(rejected.metadata?.approverFailureNoticeSent).toBe(false);
+  });
+
+  test("non-consumed outcomes are not failure-burned (denied / invalid)", () => {
+    expect(authorizeLinkPageKind("denied")).toBe("denied");
+    expect(authorizeLinkPageKind("invalid_link")).toBe("invalid");
+    expect(authorizeLinkPageKind("authorize_link_flag_off")).toBe("invalid");
+  });
+});
+
+describe("allowedAccounts next step follows the admin tool registry at runtime", () => {
+  function registerAddTool(opts: { name?: boolean; def?: boolean } = { name: true, def: true }) {
+    const names = ADMIN_MCP_TOOL_NAMES as unknown as string[];
+    const defs = ADMIN_MCP_TOOLS as unknown as Array<Record<string, unknown>>;
+    if (opts.name) names.push(ALLOWED_ACCOUNTS_ADD_TOOL);
+    if (opts.def) defs.push({ name: ALLOWED_ACCOUNTS_ADD_TOOL, description: "mock (always_human)", inputSchema: { type: "object" } });
+    return () => {
+      const n = names.indexOf(ALLOWED_ACCOUNTS_ADD_TOOL);
+      if (n >= 0) names.splice(n, 1);
+      const d = defs.findIndex((t) => t.name === ALLOWED_ACCOUNTS_ADD_TOOL);
+      if (d >= 0) defs.splice(d, 1);
+    };
+  }
+
+  test("not registered → dashboard guidance, allowedAccountsAdminTool null", async () => {
+    expect(await resolveAllowedAccountsSlackNextStep()).toEqual({ nextStepJa: ALLOWED_ACCOUNTS_SLACK_NEXT_STEP_JA, allowedAccountsAdminTool: null });
+    const bare = newEmployee(ORG_A, []);
+    const res = data(await callAdminMcpTool(TOOL, { employeeId: bare.id }, cred()));
+    expect(res.nextStepJa).toBe(ALLOWED_ACCOUNTS_SLACK_NEXT_STEP_JA);
+    expect(res.allowedAccountsAdminTool).toBeNull();
+    expect(String(res.message).includes(ALLOWED_ACCOUNTS_ADD_TOOL)).toBe(false);
+  });
+
+  test("registered (name + definition) → points at employees.allowedAccounts.add; tool name returned", async () => {
+    const unregister = registerAddTool();
+    try {
+      const step = await resolveAllowedAccountsSlackNextStep();
+      expect(step.allowedAccountsAdminTool).toBe(ALLOWED_ACCOUNTS_ADD_TOOL);
+      expect(step.nextStepJa).toBe(ALLOWED_ACCOUNTS_SLACK_NEXT_STEP_TOOL_JA);
+      expect(step.nextStepJa).toContain(`${ALLOWED_ACCOUNTS_ADD_TOOL} で Slack の U… を追加してから`);
+      const bare = newEmployee(ORG_A, []);
+      const res = data(await callAdminMcpTool(TOOL, { employeeId: bare.id }, cred()));
+      expect(res.code).toBe("slack_account_not_allowed");
+      expect(res.allowedAccountsAdminTool).toBe(ALLOWED_ACCOUNTS_ADD_TOOL);
+      expect(res.nextStepJa).toBe(ALLOWED_ACCOUNTS_SLACK_NEXT_STEP_TOOL_JA);
+      expect(String(res.message)).toContain(ALLOWED_ACCOUNTS_SLACK_NEXT_STEP_TOOL_JA);
+      // Every dotted tool-like name in the guidance is registered.
+      const names = step.nextStepJa.match(/\b[a-z][A-Za-z]*\.[a-z][A-Za-z.]*\b/g) ?? [];
+      for (const name of names) expect((ADMIN_MCP_TOOL_NAMES as readonly string[]).includes(name)).toBe(true);
+    } finally {
+      unregister();
+    }
+    expect((await resolveAllowedAccountsSlackNextStep()).allowedAccountsAdminTool).toBeNull();
+  });
+
+  test("advertised name without a callable definition (or vice versa) → still dashboard guidance", async () => {
+    for (const opts of [{ name: true, def: false }, { name: false, def: true }]) {
+      const unregister = registerAddTool(opts);
+      try {
+        expect((await resolveAllowedAccountsSlackNextStep()).allowedAccountsAdminTool).toBeNull();
+      } finally {
+        unregister();
+      }
+    }
+  });
+
+  test("setup.slackDmApprovalStatus uses the same resolver (both cases)", async () => {
+    const bare = newEmployee(ORG_A, []);
+    const others = getRuntimeEmployees().filter((e) => e.orgId === ORG_A && e.id !== bare.id && e.status === "active");
+    for (const e of others) e.status = "suspended";
+    try {
+      const off = ((data(await callAdminMcpTool("setup.slackDmApprovalStatus", {}, cred())).nextStepsJa as string[]) || []).join("\n");
+      expect(off).toContain(ALLOWED_ACCOUNTS_SLACK_NEXT_STEP_JA);
+      const unregister = registerAddTool();
+      try {
+        const on = data(await callAdminMcpTool("setup.slackDmApprovalStatus", {}, cred()));
+        const steps = (on.nextStepsJa as string[]).join("\n");
+        expect(steps).toContain(`${bare.displayName}: `);
+        expect(steps).toContain(ALLOWED_ACCOUNTS_SLACK_NEXT_STEP_TOOL_JA);
+        expect(steps.includes(ALLOWED_ACCOUNTS_SLACK_NEXT_STEP_JA)).toBe(false);
+        const row = (on.employees as Array<Record<string, unknown>>).find((r) => r.employeeId === bare.id)!;
+        expect(row.allowedAccountsAdminTool).toBe(ALLOWED_ACCOUNTS_ADD_TOOL);
+      } finally {
+        unregister();
+      }
+    } finally {
+      for (const e of others) e.status = "active";
+    }
   });
 });

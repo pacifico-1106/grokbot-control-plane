@@ -205,7 +205,8 @@ describe("/api/slack/oauth/callback (link branch)", () => {
     expect(await getLinkedSlackUserToken(emp.id)).toBe(OLD);
   });
 
-  const BURNED = "再認可リンクが別のアカウントで開かれた（または認可に失敗した）ため無効になりました。管理者に再発行を依頼してください。";
+  const burned = (code: string) =>
+    `再認可リンクが別のアカウントで開かれた（または認可に失敗した）ため無効になりました（${code}）。管理者に再発行を依頼してください。`;
 
   test("user_mismatch → page + DM to the delivered recipient say the link is void; the other U… appears nowhere", async () => {
     const { state, linkId } = await begin();
@@ -214,13 +215,17 @@ describe("/api/slack/oauth/callback (link branch)", () => {
     const res = await callbackGET(new Request(`https://staffpass.test/api/slack/oauth/callback?code=abc&state=${encodeURIComponent(state)}`));
     expect(res.status).toBe(400);
     const html = await res.text();
-    expect(html).toContain(BURNED);
+    expect(html).toContain(burned("user_mismatch"));
     expect(html).not.toContain("UROUTEATTK9");
     const notices = calls.filter((c) => c.method === "chat.postMessage");
-    expect(notices).toHaveLength(1);
-    expect(notices[0].auth).toBe(`Bearer ${BOT}`);
-    expect(notices[0].body).toContain(BURNED);
-    expect(notices[0].body).not.toContain("UROUTEATTK9");
+    // Delivered to the employee → employee notice + approver notice.
+    expect(notices).toHaveLength(2);
+    for (const notice of notices) {
+      expect(notice.auth).toBe(`Bearer ${BOT}`);
+      expect(notice.body).not.toContain("UROUTEATTK9");
+    }
+    expect(notices.some((n) => n.body.includes(burned("user_mismatch")))).toBe(true);
+    expect(notices.some((n) => n.body.includes("の再認可リンクが失敗しました（user_mismatch）。再発行してください"))).toBe(true);
     expect((await getSlackAuthorizeLink(linkId, ORG))?.status).toBe("rejected");
     expect(await getLinkedSlackUserToken(emp.id)).toBe(OLD);
   });
@@ -231,10 +236,30 @@ describe("/api/slack/oauth/callback (link branch)", () => {
     calls = [];
     const res = await callbackGET(new Request(`https://staffpass.test/api/slack/oauth/callback?code=abc&state=${encodeURIComponent(state)}`));
     expect(res.status).toBe(400);
-    expect(await res.text()).toContain(BURNED);
+    expect(await res.text()).toContain(burned("oauth_exchange_failed"));
     const notices = calls.filter((c) => c.method === "chat.postMessage");
-    expect(notices).toHaveLength(1);
-    expect(notices[0].body).toContain(BURNED);
+    expect(notices).toHaveLength(2);
+    expect(notices.some((n) => n.body.includes(burned("oauth_exchange_failed")))).toBe(true);
     expect((await getSlackAuthorizeLink(linkId, ORG))?.status).toBe("rejected");
+  });
+
+  test("team_mismatch (other workspace) → same template page with its code; other U… not shown", async () => {
+    const { state } = await begin();
+    calls = [];
+    const saved = globalThis.fetch;
+    globalThis.fetch = (async (url: string | URL, init?: RequestInit) => {
+      const auth = String((init?.headers as Record<string, string> | undefined)?.authorization || "");
+      if (String(url).endsWith("auth.test") && auth.endsWith(NEW)) {
+        return new Response(JSON.stringify({ ok: true, user_id: "UROUTEATTK8", team_id: "TOTHERWS99", user: "x" }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      return saved(url, init);
+    }) as unknown as typeof fetch;
+    const res = await callbackGET(new Request(`https://staffpass.test/api/slack/oauth/callback?code=abc&state=${encodeURIComponent(state)}`));
+    globalThis.fetch = saved;
+    expect(res.status).toBe(400);
+    const html = await res.text();
+    expect(html).toContain(burned("team_mismatch"));
+    expect(html).not.toContain("UROUTEATTK8");
+    expect(JSON.stringify(calls)).not.toContain("UROUTEATTK8");
   });
 });

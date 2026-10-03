@@ -123,7 +123,11 @@ export async function handleSlackAuthorizeLinkIssue(
   if (!employee || employee.orgId !== orgId) return fail("employee_not_found", "この組織の AI 社員ではありません。");
   const pins = await authorizeLinkPins(orgId, employee);
   if (!pins.ok) {
-    return fail(pins.code, pins.messageJa, pins.nextStepJa ? { nextStepJa: pins.nextStepJa, allowedAccountsAdminTool: null } : {});
+    return fail(
+      pins.code,
+      pins.messageJa,
+      pins.nextStepJa ? { nextStepJa: pins.nextStepJa, allowedAccountsAdminTool: pins.allowedAccountsAdminTool ?? null } : {}
+    );
   }
   const inbox = await resolveSlackApprovalInbox(orgId, inboxId);
   if ("kind" in inbox) return inbox;
