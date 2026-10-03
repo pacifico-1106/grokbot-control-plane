@@ -1,4 +1,8 @@
 import {
+  alertApprovalDeliveryFailure,
+  isApprovalDeliveryFailureAlertEnabled,
+} from "@/lib/notify/delivery-failure-alert";
+import {
   appendAuditEvent,
   getEnabledNotificationChannels,
   getTokyo307PilotOrgId,
@@ -145,7 +149,26 @@ export async function sendApprovalNotifications(
     results.push(result);
     await auditFailure(approval, result);
   }
+  await alertIfUndelivered(approval, results);
   return results;
+}
+
+/**
+ * PR-3: a real approval that reached no inbox is the live-check failure
+ * (there is no test approval). Flag-gated inside; never throws.
+ */
+async function alertIfUndelivered(approval: ApprovalRequest, results: NotificationDispatchResult[]) {
+  if (!isApprovalDeliveryFailureAlertEnabled()) return;
+  if (results.some((r) => r.ok)) return;
+  const failed = results.find((r) => !r.ok && !r.skipped) ?? results[0];
+  await alertApprovalDeliveryFailure({
+    orgId: approval.orgId,
+    kind: "delivery_failed",
+    approvalId: approval.id,
+    provider: failed?.provider ?? null,
+    channelId: failed?.channelId ?? null,
+    reason: failed ? failed.error || (failed.skipped ? "delivery_skipped" : "delivery_failed") : "no_approval_inbox",
+  }).catch(() => undefined);
 }
 
 /** Refresh the existing card without sending completion callbacks or issuing new actions. */
