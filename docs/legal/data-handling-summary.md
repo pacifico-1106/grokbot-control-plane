@@ -5,7 +5,7 @@
 > 大企業調達・入札・セキュリティ審査では、本資料のみで代替せず、正式 DPA／再委託一覧／越境移転条項を別途用意してください。  
 > プレースホルダ（`{{ }}`）は公開・送付前に置換すること。登記番号や実在しない住所は記載しない。
 
-**サービス:** {{SERVICE_NAME}}（Staffpass／AI社員 for Grok Bot）  
+**サービス:** {{SERVICE_NAME}}（Staffpass（AIエージェントの社員証））  
 **運営:** {{PROVIDER_LEGAL_NAME}}  
 **連絡先:** {{PROVIDER_CONTACT_EMAIL}}  
 **関連:** [利用規約雛形](./terms-of-service-template.md) 別紙A／プライバシーポリシー（別途）

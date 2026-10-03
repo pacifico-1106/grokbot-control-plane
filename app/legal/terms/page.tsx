@@ -9,7 +9,7 @@ export default function TermsPage() {
   const identity = getLegalIdentity();
   return (
     <LegalPage title="Staffpass 利用規約" description="AI社員の権限、承認、上限、監査を管理するStaffpassの提供条件を定めます。法人・団体および個人事業主による業務利用を主な対象とします。" identity={identity} lastRevised={LEGAL_LAST_REVISED.terms}>
-      <p>{identity.providerName}（以下「当社」といいます。）は、Staffpass（別名「AI社員 for Grok Bot」。以下「本サービス」といいます。）の利用条件を、以下のとおり定めます。</p>
+      <p>{identity.providerName}（以下「当社」といいます。）は、Staffpass（AIエージェントの社員証。以下「本サービス」といいます。）の利用条件を、以下のとおり定めます。</p>
 
       <LegalArticle title="第1条（適用）">
         <ol><li>本規約は、本サービスの利用に関する当社と契約者との間の権利義務関係に適用されます。</li><li>申込画面、料金画面、注文書、見積書、ガイドラインその他当社が提示する個別条件は本規約の一部を構成し、矛盾する場合は個別条件が優先します。</li><li>個人情報の取扱いには、別途掲載するプライバシーポリシーが適用されます。</li></ol>

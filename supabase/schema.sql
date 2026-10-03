@@ -1,4 +1,4 @@
--- AI社員 for Grok Bot — control plane schema (Supabase Postgres)
+-- Staffpass（AIエージェントの社員証） — control plane schema (Supabase Postgres)
 -- Apply via Supabase SQL editor or `supabase db push`.
 -- Fresh apply includes production-ready columns + RLS.
 -- Existing projects: also apply supabase/migrations/20260823_production_ready.sql

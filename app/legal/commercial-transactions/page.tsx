@@ -19,7 +19,7 @@ export default function CommercialTransactionsPage() {
       <div className="table-scroll"><table><tbody>
         {rows.map(([label, key]) => <tr key={key}><th>{label}</th><td>{identity[key]}</td></tr>)}
         <tr><th>お問い合わせ</th><td><a href={`mailto:${identity.contactEmail}`}>{identity.contactEmail}</a><br /><span className="text-xs faint">受付内容を確認し、原則として遅滞なく返信します。</span></td></tr>
-        <tr><th>サービス名</th><td>Staffpass（AI社員 for Grok Bot）</td></tr>
+        <tr><th>サービス名</th><td>Staffpass（AIエージェントの社員証）</td></tr>
         <tr><th>販売価格・役務の対価</th><td><ul><li>インターン: 初期費用 ¥150,000（税別）／月額 ¥50,000（年一括なら月あたり ¥45,000（10%オフ）・年額 ¥540,000）</li><li>プロパー: 初期費用 ¥150,000（税別）／月額 ¥150,000（年一括なら月あたり ¥135,000（10%オフ）・年額 ¥1,620,000）</li><li>エグゼクティブ: 初期費用 ¥300,000（税別）／月額 ¥300,000（年一括なら月あたり ¥270,000（10%オフ）・年額 ¥3,240,000）</li><li>カスタマイズ: 個別見積（初期費用: 個別見積）</li></ul><p className="mt-2 text-xs faint">※ 価格は税別です。初期費用はセットアップ・研修費用で、導入時に一度だけお支払いいただきます。月額はAI社員の利用料金で、毎月または年払いでお支払いいただきます。年払いなら月額が10%オフになります。実際の契約価格は、お支払い手続きの最終確認画面、見積書または注文書に表示された金額が優先します。価格確定前に課金することはありません。</p></td></tr>
         <tr><th>対価以外に必要な費用</th><td>Google Workspace（会社負担）、Slackワークスペース（会社負担）、Cursor/Grok Botの従量課金分、LINE公式アカウント費用（ご利用の場合）は、プラン料金とは別に実費としてかかります。その他、業務において必要となるアカウントに応じ変動します。このほか、インターネット接続・通信費、端末費用、契約者が利用するGrok Bot、Google、Telegram、LINEその他外部サービスの料金は契約者の負担となります。確定アクションの超過料金を導入する場合は、申込み前に単価と計測条件を明示します（現時点では自動の超過請求は未実装です）。</td></tr>
         <tr><th>支払方法</th><td>オンラインクレジットカード決済。銀行振込その他の方法は、当社が個別に認めた場合に利用できます。<br /><span className="text-xs faint">決済処理には外部の決済代行サービス（Stripe）を使用しています。</span></td></tr>

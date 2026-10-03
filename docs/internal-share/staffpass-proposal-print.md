@@ -1,6 +1,6 @@
 # Staffpass ご提案書
 
-**説明できる AI 社員 — for Grok Bot**  
+**説明できる AI 社員 — Staffpass（AIエージェントの社員証）**  
 対象：中小企業の社長・経営者の方へ  
 作成日：2026年8月23日  
 ブランド：Staffpass
