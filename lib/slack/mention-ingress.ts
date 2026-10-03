@@ -55,6 +55,8 @@ import { isDemoMode } from "@/lib/mode";
 import { verifySlackSignature } from "@/lib/notify/slack";
 import { createSupabaseAdminClient } from "@/lib/supabase";
 import { addLookingReaction } from "@/lib/slack/reaction-stamps";
+import { isSlackImNoRouteAuditEnabled } from "@/lib/feature-flags";
+import { recordImNoRouteAudit } from "@/lib/slack/im-no-route-audit";
 
 const WAKE_TIMEOUT_MS = 10_000;
 const MENTION_RE = /<@([UW][A-Z0-9_]+)(?:\|[^>]+)?>/gi;
@@ -1242,6 +1244,31 @@ export async function processSlackMentionEnvelope(
           channelLooksLikeIm,
         },
       }).catch(() => undefined);
+    }
+
+    // SLACK_IM_NO_ROUTE_AUDIT (default OFF): user-token DM with no route has no
+    // org context above, so nothing was audited. When ON, record to the org of the
+    // uniquely-linked authorized employee only (never message text). Never throws;
+    // the outcome below is identical whether this records, skips, or fails.
+    if (
+      isDirectMessage &&
+      wakeResult.imSkipReason === "im_no_route" &&
+      userTokenAuth &&
+      isSlackImNoRouteAuditEnabled()
+    ) {
+      const noRouteAudit = await recordImNoRouteAudit({
+        authorizations: envelope.authorizations,
+        envelopeTeamId: teamId,
+        channel,
+        channelType,
+        eventType,
+        eventId,
+      }).catch(() => ({ status: "error" as const }));
+      console.info("slack_im_no_route_audit", {
+        eventId,
+        channel,
+        status: noRouteAudit.status,
+      });
     }
 
     return {

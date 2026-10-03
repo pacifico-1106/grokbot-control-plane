@@ -338,3 +338,14 @@ export async function listLinkedSlackIdentitiesForTeam(
     data.map((row) => withBinding(mapPublic(row as Record<string, unknown>)))
   );
 }
+
+/** Test-only (demo memory): change a bound identity's status, e.g. to needs_reauth. */
+export function setDemoSlackIdentityStatusForTests(
+  employeeId: string,
+  status: SlackIdentityStatus
+): void {
+  if (!isDemoMode()) return;
+  const row = demoIdentities.get(employeeId.trim());
+  if (!row) return;
+  row.public = { ...row.public, status };
+}

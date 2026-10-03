@@ -396,3 +396,23 @@ export function isLpWakeWebhookEnabled(): boolean {
 export function isConfigChangeRequestEnabled(): boolean {
   return parseFlag(process.env.P1_CONFIG_CHANGE_REQUEST_ENABLED);
 }
+
+/**
+ * SLACK_IM_NO_ROUTE_AUDIT: user-token DM の im_no_route を org の監査ログに残す。
+ *
+ * When ON:
+ * - Slack user-token 経由の message.im がルートなし（im_no_route）で起動しなかったとき、
+ *   envelope.authorizations の user（is_bot=false）が linked 状態の社員に「一意に」
+ *   対応する場合に限り、その社員の org に slack.im_wake_skipped を記録する。
+ * - 0件・複数件・unlinked（needs_reauth / revoked）・team 不一致は記録しない（テナント分離）。
+ * - metadata は reason / channel / teamId / eventType / eventId / 現在の分類 /
+ *   channels.classify の推奨アクションのみ。本文・blocks・ts・発言者IDは入れない。
+ * - 同じ org×team×DM は 10 分に 1 件（インスタンス内のベストエフォート抑制）。
+ * - 記録の失敗は握りつぶし、DM 処理本体の結果は変えない。
+ *
+ * When OFF (default):
+ * - 追加の DB 参照も監査書き込みもしない。既存挙動と完全に同じ。
+ */
+export function isSlackImNoRouteAuditEnabled(): boolean {
+  return parseFlag(process.env.SLACK_IM_NO_ROUTE_AUDIT);
+}
