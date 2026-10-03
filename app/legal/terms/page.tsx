@@ -1,13 +1,14 @@
 import type { Metadata } from "next";
 import { LegalArticle, LegalPage } from "@/components/legal/LegalPage";
 import { getLegalIdentity } from "@/lib/legal";
+import { LEGAL_LAST_REVISED } from "@/lib/legal-revisions";
 
 export const metadata: Metadata = { title: "利用規約 | Staffpass" };
 
 export default function TermsPage() {
   const identity = getLegalIdentity();
   return (
-    <LegalPage title="Staffpass 利用規約" description="AI社員の権限、承認、上限、監査を管理するStaffpassの提供条件を定めます。法人・団体および個人事業主による業務利用を主な対象とします。" identity={identity}>
+    <LegalPage title="Staffpass 利用規約" description="AI社員の権限、承認、上限、監査を管理するStaffpassの提供条件を定めます。法人・団体および個人事業主による業務利用を主な対象とします。" identity={identity} lastRevised={LEGAL_LAST_REVISED.terms}>
       <p>{identity.providerName}（以下「当社」といいます。）は、Staffpass（別名「AI社員 for Grok Bot」。以下「本サービス」といいます。）の利用条件を、以下のとおり定めます。</p>
 
       <LegalArticle title="第1条（適用）">

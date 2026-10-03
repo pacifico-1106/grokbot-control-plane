@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { LegalArticle, LegalPage } from "@/components/legal/LegalPage";
 import { getLegalIdentity } from "@/lib/legal";
+import { LEGAL_LAST_REVISED } from "@/lib/legal-revisions";
 
 export const metadata: Metadata = { title: "特定商取引法に基づく表記 | Staffpass" };
 
@@ -14,7 +15,7 @@ const rows = [
 export default function CommercialTransactionsPage() {
   const identity = getLegalIdentity();
   return (
-    <LegalPage title="特定商取引法に基づく表記" description="Staffpassのオンライン申込みおよび継続課金に関する販売条件です。主として法人・団体・個人事業主向けですが、適用される強行法規上の権利を妨げません。" identity={identity}>
+    <LegalPage title="特定商取引法に基づく表記" description="Staffpassのオンライン申込みおよび継続課金に関する販売条件です。主として法人・団体・個人事業主向けですが、適用される強行法規上の権利を妨げません。" identity={identity} lastRevised={LEGAL_LAST_REVISED.commercialTransactions}>
       <div className="table-scroll"><table><tbody>
         {rows.map(([label, key]) => <tr key={key}><th>{label}</th><td>{identity[key]}</td></tr>)}
         <tr><th>お問い合わせ</th><td><a href={`mailto:${identity.contactEmail}`}>{identity.contactEmail}</a><br /><span className="text-xs faint">受付内容を確認し、原則として遅滞なく返信します。</span></td></tr>
