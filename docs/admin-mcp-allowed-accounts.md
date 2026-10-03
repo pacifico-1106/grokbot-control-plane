@@ -37,3 +37,22 @@
 - 承認後の処理結果：反映の直前にもう一度確かめ、残っていれば `noticeJa` / `nextStepJa` と `summaryJa` に出します。
 - 監査（`employee.allowed_accounts.removed`）：`slackIdentityRemains`（true / false）、残っていれば `slackIdentityNoticeJa`、summary にも追記します。
 - 止め方：ダッシュボードの AI社員詳細 →「Slack 連携（Authorize）」→「連携を解除」。
+
+## バックログ
+
+- [ ] **remove したら実行時も止まるようにする**（紐づけを自動で無効化するか、実行時に毎回確認するか）。どちらの方式にするかは八坂さんの確認を待ち、別PRで対応します（#238〜#243 のセットには入れません）。それまでは上の案内（「既存の Slack 紐づけは残っています。止めるにはダッシュボードで解除してください」）で対応します。
+  - 対象の経路（2026-10-04 調査。#242 head `1e4a4e2` と #240 head `ea103d5` の行番号）：
+
+    | 区分 | 経路 | 毎回 allowedAccounts を見るか | file:line |
+    |---|---|---|---|
+    | 受信 | events（mention / channel） | 見ていない | `lib/slack/mention-ingress.ts:376,378`（`getEmployeesBySlackUserIds`）、`:417`（`listLinkedSlackIdentitiesForTeam`）→ `lib/data/slack-identities.ts:274-317`、`:320-340` |
+    | 受信 | user-token channel ingress | 見ていない | `lib/slack/mention-ingress.ts:818`（`getEmployeesBySlackUserIds`） |
+    | 受信 | DM（IM ルート / user-token IM） | 見ていない | `lib/slack/mention-ingress.ts:343,354` → `lib/data/slack-im-routes.ts:323-379` → `lib/data/slack-identities.ts:232-254`（`getSlackWakeTargetByEmployeeId`） |
+    | 受信 | cross-team ウェイク（G7） | 見ていない | `lib/data/cross-team-wake-bindings.ts:134`（`getSlackWakeTargetByEmployeeId`） |
+    | 受信 | IM no-route 監査 | 見ていない | `lib/slack/im-no-route-audit.ts:171`（`getEmployeesBySlackUserIds`） |
+    | 送信 | chat.postMessage（postingAs=user） | 見ていない | `lib/gateway/invoke.ts:1848` → `lib/gateway/adapters/slack.ts:95-100`（`resolveConversationToken`）→ `lib/data/slack-identities.ts:67-98`（`getLinkedSlackUserToken`、status=linked だけ）。`lib/gateway/invoke.ts:882-918` の allowedAccounts チェックは browser.use 専用 |
+    | 送信 | ファイル | 見ていない | `lib/gateway/adapters/slack-file-upload.ts:348`（`resolveConversationToken`） |
+    | 送信 | リアクション | 見ていない | `lib/slack/reaction-stamps.ts:65`（`getLinkedSlackUserToken`） |
+    | user token 利用 | DM 自動ルート | 見ていない | `lib/slack/dm-autoroute.ts:365`（`getLinkedSlackUserToken`。auth.test で紐づけの U… と比べるだけ） |
+    | 認可 | OAuth callback | 見ている（紐づけのたび） | `app/api/slack/oauth/callback/route.ts:108` → `lib/data/slack-identities.ts:117`（`employeeAllowsSlackUser`、合わなければ `slack_identity_mismatch`） |
+    | 認可 | #240 の再認可リンク | 見ている（紐づけのたび） | #240 `lib/slack/authorize-link.ts:573`（`bindEmployeeSlackIdentity`、合わなければ `:583` で `allowed_accounts_mismatch`）。リンク発行時の `:222-228`（`authorizeLinkPins`）は既存の紐づけの U… を固定するだけで、allowedAccounts は callback の bind で確かめる |
