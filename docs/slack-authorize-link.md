@@ -151,3 +151,7 @@ URL 平文は MCP 結果・監査に出さない。`SLACK_AUTHORIZE_LINK_REISSUE
 - nextStep は `resolveAuthorizeLinkFollowUpNextStep()`（`lib/slack/authorize-link-guidance.ts`）。実行時に registry（`ADMIN_MCP_TOOL_NAMES` と `ADMIN_MCP_TOOLS` の両方）に `dmAutoroute.run` があれば「`dmAutoroute.run`（employeeId=…, dryRun:false）で後から取り戻せます（人の承認 1 回。先に dryRun:true で確認できます）」、なければツール名を出さずに運営への連絡を案内（`recoveryAdminTool: null`）。完了 DM が失敗したときは「完了の DM は届いていない可能性があります」を添える。
 - `setup.slackDmApprovalStatus` は、社員ごとに最新の再認可リンクが `completed_with_errors` で、そのあと DM ルート自動作成（`slack_dm_autoroute.*`）も再連携（`completed`）も無い場合だけ、社員行に `authorizeLinkFollowUpErrors`（処理名）を出し、同じ関数の nextStep を案内する。
 - 社員本人への完了 DM は現状ない（完了 DM は承認者だけ）。
+
+## バックログ
+
+- 社員本人への完了 DM：今回は送らない（本人は結果ページで成功を確認でき、AI 社員には不要）。人間の社員向けに必要かどうかは別途判断する（2026-10-04 木村）。
