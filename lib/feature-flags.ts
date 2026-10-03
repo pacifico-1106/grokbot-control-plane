@@ -448,3 +448,26 @@ export function isSignupRateLimitEnabled(): boolean {
 export function isSignupDomainCheckEnabled(): boolean {
   return parseFlag(process.env.SIGNUP_DOMAIN_CHECK_ENABLED);
 }
+
+/**
+ * SPAM_ADMIN_TOOLS_ENABLED: platform-ops Admin MCP tools spam.scan (read-only)
+ * and accounts.suspend / accounts.unsuspend / accounts.delete (always_human,
+ * approver restricted to SPAM_ACCOUNTS_APPROVER_USER_IDS, dry-run first).
+ *
+ * When OFF (default): the tools return feature_disabled and approved tickets
+ * are not fulfilled.
+ */
+export function isSpamAdminToolsEnabled(): boolean {
+  return parseFlag(process.env.SPAM_ADMIN_TOOLS_ENABLED);
+}
+
+/**
+ * SPAM_SWEEP_ENABLED: daily /api/cron/spam-sweep scan + report + optional
+ * suspend-proposal ticket in PLATFORM_OPS_ORG_ID. The cron never suspends,
+ * unsuspends or deletes on its own.
+ *
+ * When OFF (default): the cron returns { skipped: "flag_off" }.
+ */
+export function isSpamSweepEnabled(): boolean {
+  return parseFlag(process.env.SPAM_SWEEP_ENABLED);
+}
