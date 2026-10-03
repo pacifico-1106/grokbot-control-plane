@@ -7,6 +7,7 @@ import {
 } from "@/lib/notify/crypto";
 import { createSupabaseAdminClient } from "@/lib/supabase";
 import { mapApprovalRow } from "@/lib/data/mappers";
+import { isSharedApprovalAppEnabled } from "@/lib/slack/shared-approval-flags";
 import type {
   ApprovalRequest,
   NotificationChannel,
@@ -16,6 +17,45 @@ import type {
 export type NotificationChannelRuntime = NotificationChannel & {
   secrets: Record<string, string>;
 };
+
+/**
+ * SLACK_SHARED_APPROVAL_APP_ENABLED OFF (review M1): an installed shared approval
+ * app inbox is SUSPENDED — not a runtime channel and its token is never handed
+ * out, so nothing (approval cards, DM auto-open, #240 link DMs, other
+ * notifications, bot-token fallbacks) can send with the shared xoxb. Turning the
+ * flag back ON resumes it. Per-tenant inboxes are never affected.
+ */
+export const SHARED_APPROVAL_APP_SUSPENDED_REASON = "shared_approval_app_disabled";
+
+function isSuspendedSharedInbox(row: { provider?: unknown; config?: Record<string, unknown> | null } | null | undefined): boolean {
+  return Boolean(
+    row && row.provider === "slack" && row.config && row.config.sharedApprovalApp === true && !isSharedApprovalAppEnabled()
+  );
+}
+
+/** Someone tried to use a suspended shared inbox's token → treat as a delivery failure (#236, throttled). */
+async function reportSuspendedSharedInbox(orgId: string, channelId: string): Promise<void> {
+  try {
+    const { alertApprovalDeliveryFailure } = await import("@/lib/notify/delivery-failure-alert");
+    await alertApprovalDeliveryFailure({
+      orgId,
+      kind: "delivery_failed",
+      approvalId: null,
+      provider: "slack",
+      channelId,
+      reason: SHARED_APPROVAL_APP_SUSPENDED_REASON,
+    });
+  } catch {
+    // never throws
+  }
+}
+
+/** The org's enabled shared-app inbox while it is suspended (public fields only), else null. */
+export async function findSuspendedSharedApprovalInbox(orgId: string): Promise<NotificationChannel | null> {
+  if (!orgId || isSharedApprovalAppEnabled()) return null;
+  const rows = await listNotificationChannels(orgId);
+  return rows.find((row) => row.enabled && isSuspendedSharedInbox(row)) ?? null;
+}
 
 export type UpsertNotificationChannelInput = {
   orgId: string;
@@ -154,7 +194,8 @@ async function runtimeRows(
         (!filters.orgId || row.orgId === filters.orgId) &&
         (!filters.provider || row.provider === filters.provider) &&
         (!filters.webhookRef || row.webhookRef === filters.webhookRef) &&
-        row.enabled
+        row.enabled &&
+        !isSuspendedSharedInbox(row)
     );
   }
   const admin = createSupabaseAdminClient();
@@ -169,6 +210,7 @@ async function runtimeRows(
   const result: NotificationChannelRuntime[] = [];
   for (const row of data) {
     try {
+      if (isSuspendedSharedInbox(row as { provider?: unknown; config?: Record<string, unknown> })) continue;
       const ciphertext = credentials.get(String(row.id));
       if (!ciphertext) continue;
       result.push(
@@ -216,11 +258,31 @@ export async function getNotificationChannelSecretsById(
 ): Promise<Record<string, string>> {
   if (isDemoMode()) {
     const channel = demoChannels.find((row) => row.id === channelId && row.orgId === orgId);
+    if (isSuspendedSharedInbox(channel)) {
+      await reportSuspendedSharedInbox(orgId, channelId);
+      return {};
+    }
     return channel?.secrets || {};
   }
 
   const admin = createSupabaseAdminClient();
   if (!admin) return {};
+
+  if (!isSharedApprovalAppEnabled()) {
+    // Flag OFF: never hand out a shared-app token (review M1). Fail closed when
+    // the row cannot be checked.
+    const { data: row, error: rowError } = await admin
+      .from("org_notification_channels")
+      .select("provider,config")
+      .eq("org_id", orgId)
+      .eq("id", channelId)
+      .maybeSingle();
+    if (rowError) return {};
+    if (isSuspendedSharedInbox(row as { provider?: unknown; config?: Record<string, unknown> } | null)) {
+      await reportSuspendedSharedInbox(orgId, channelId);
+      return {};
+    }
+  }
 
   const { data } = await admin
     .from("org_notification_channel_secrets")
@@ -304,7 +366,8 @@ async function applyTelegramPilotEnvReuse(input: {
 function assertProviderSecrets(
   provider: NotificationProvider,
   enabled: boolean,
-  secrets: Record<string, string>
+  secrets: Record<string, string>,
+  sharedAppConfig = false
 ) {
   if (!enabled) return;
   if (provider === "telegram" && (!secrets.botToken || !secrets.webhookSecret)) {
@@ -313,9 +376,20 @@ function assertProviderSecrets(
   if (provider === "line" && (!secrets.channelAccessToken || !secrets.channelSecret)) {
     throw new Error("line_credentials_incomplete");
   }
-  if (provider === "slack" && (!secrets.botToken || !secrets.signingSecret)) {
+  if (provider === "slack" && !secrets.botToken) {
     throw new Error("slack_credentials_incomplete");
   }
+  // SLACK_SHARED_APPROVAL_APP_ENABLED: a shared-approval-app inbox has no per-inbox
+  // signing secret (requests are verified with the shared app's env secret only).
+  // Every other Slack inbox still needs both.
+  if (provider === "slack" && !secrets.signingSecret && !sharedAppConfig) {
+    throw new Error("slack_credentials_incomplete");
+  }
+}
+
+/** Marker written only by the shared approval app install callback (never by the dashboard). */
+export function isSharedApprovalAppChannelConfig(config: Record<string, unknown> | null | undefined): boolean {
+  return Boolean(config && config.sharedApprovalApp === true);
 }
 
 function markOrgDefaultDemo(orgId: string, channelId: string) {
@@ -363,7 +437,7 @@ export async function upsertNotificationChannel(
       createdAt: existing?.createdAt || now,
       updatedAt: now,
     };
-    assertProviderSecrets(input.provider, input.enabled, row.secrets);
+    assertProviderSecrets(input.provider, input.enabled, row.secrets, isSharedApprovalAppChannelConfig(applied.config));
     row.webhookPath = webhookPath(row.provider, row.webhookRef);
     if (idx >= 0) demoChannels[idx] = row;
     else demoChannels.push(row);
@@ -409,7 +483,7 @@ export async function upsertNotificationChannel(
   if (input.enabled && Object.keys(secrets).length === 0) {
     throw new Error("notification_credentials_required");
   }
-  assertProviderSecrets(input.provider, input.enabled, secrets);
+  assertProviderSecrets(input.provider, input.enabled, secrets, isSharedApprovalAppChannelConfig(applied.config));
   const encryptedSecrets = Object.keys(secrets).length > 0
     ? encryptNotificationSecrets(secrets)
     : "";
@@ -715,4 +789,143 @@ export async function resolveEmployeeApprovalChannel(
     if (chosen) return chosen;
   }
   return channels.find((channel) => channel.isDefault) ?? channels[0] ?? null;
+}
+
+const SLACK_TEAM_RE = /^T[A-Z0-9]{2,30}$/;
+const SLACK_APP_RE = /^A[A-Z0-9]{2,30}$/;
+
+/**
+ * SLACK_SHARED_APPROVAL_APP_ENABLED: after the shared approval app was removed /
+ * its bot token revoked, delete that inbox's encrypted secrets (botToken; a
+ * shared inbox stores nothing else). Scoped to (orgId, channelId) AND to a row
+ * carrying the shared-app marker — another org's row, or a per-tenant Slack
+ * inbox, is never touched. Returns the deleted key NAMES only (never values).
+ * Idempotent: no secrets left → []. Throws on a storage error (caller logs).
+ */
+export async function purgeSharedApprovalChannelSecrets(input: {
+  orgId: string;
+  channelId: string;
+}): Promise<{ deletedKeys: string[] }> {
+  const orgId = (input.orgId || "").trim();
+  const channelId = (input.channelId || "").trim();
+  if (!orgId || !channelId) return { deletedKeys: [] };
+  if (isDemoMode()) {
+    const row = demoChannels.find((item) => item.id === channelId && item.orgId === orgId);
+    if (!row || row.provider !== "slack" || !isSharedApprovalAppChannelConfig(row.config)) return { deletedKeys: [] };
+    const deletedKeys = Object.keys(row.secrets || {}).sort();
+    row.secrets = {};
+    row.hasCredentials = false;
+    if (deletedKeys.length > 0) row.updatedAt = new Date().toISOString();
+    return { deletedKeys };
+  }
+  const admin = createSupabaseAdminClient();
+  if (!admin) throw new Error("supabase_not_configured");
+  const { data: channel, error: channelError } = await admin
+    .from("org_notification_channels")
+    .select("id,org_id,provider,config")
+    .eq("org_id", orgId)
+    .eq("id", channelId)
+    .maybeSingle();
+  if (channelError) throw new Error("shared_inbox_lookup_failed");
+  const row = channel as { id?: unknown; org_id?: unknown; provider?: unknown; config?: Record<string, unknown> } | null;
+  if (!row || String(row.org_id) !== orgId || row.provider !== "slack" || !isSharedApprovalAppChannelConfig(row.config ?? null)) {
+    return { deletedKeys: [] };
+  }
+  const { data: secretRow, error: secretError } = await admin
+    .from("org_notification_channel_secrets")
+    .select("credentials_ciphertext")
+    .eq("channel_id", channelId)
+    .maybeSingle();
+  if (secretError) throw new Error("shared_inbox_secret_lookup_failed");
+  const ciphertext = String(secretRow?.credentials_ciphertext || "");
+  if (!ciphertext) return { deletedKeys: [] };
+  let deletedKeys: string[];
+  try {
+    deletedKeys = Object.keys(decryptNotificationSecrets(ciphertext)).sort();
+  } catch {
+    deletedKeys = ["credentials_ciphertext"];
+  }
+  const { error: deleteError } = await admin.from("org_notification_channel_secrets").delete().eq("channel_id", channelId);
+  if (deleteError) throw new Error("shared_inbox_secret_delete_failed");
+  return { deletedKeys };
+}
+
+/**
+ * Slack inboxes of ANY org (enabled or not) that are pinned to `teamId`
+ * (config.teamId or config.expectedTeamId). Public fields only — no secrets.
+ * Used by the shared approval app install to refuse a workspace already bound
+ * to another org.
+ */
+export async function findSlackNotificationChannelsByTeam(teamId: string): Promise<NotificationChannel[]> {
+  const team = (teamId || "").trim();
+  if (!SLACK_TEAM_RE.test(team)) return [];
+  const matches = (config: Record<string, unknown>) =>
+    String(config.teamId || "") === team || String(config.expectedTeamId || "") === team;
+  if (isDemoMode()) {
+    return demoChannels.filter((row) => row.provider === "slack" && matches(row.config)).map(demoPublic);
+  }
+  const admin = createSupabaseAdminClient();
+  if (!admin) throw new Error("supabase_not_configured");
+  const { data, error } = await admin
+    .from("org_notification_channels")
+    .select("*")
+    .eq("provider", "slack")
+    .or(`config->>teamId.eq.${team},config->>expectedTeamId.eq.${team}`);
+  // Fail closed: a lookup error must not look like "no other org uses this team".
+  if (error || !data) throw new Error("team_binding_lookup_failed");
+  return data
+    .map((row) => mapPublic({ ...(row as Record<string, unknown>), has_credentials: false }))
+    .filter((row) => row.provider === "slack" && matches(row.config));
+}
+
+/**
+ * Shared approval app inboxes for (appId, teamId), with secrets (bot token only —
+ * a shared inbox never stores a signing secret). Bounded: only rows carrying the
+ * shared marker + this app + this team are decrypted.
+ */
+export async function findSharedApprovalChannelsByTeam(input: {
+  appId: string;
+  teamId: string;
+  enabledOnly: boolean;
+}): Promise<NotificationChannelRuntime[]> {
+  const team = (input.teamId || "").trim();
+  const app = (input.appId || "").trim();
+  if (!SLACK_TEAM_RE.test(team) || !SLACK_APP_RE.test(app)) return [];
+  const matches = (row: { provider: NotificationProvider; config: Record<string, unknown>; enabled: boolean }) =>
+    row.provider === "slack" &&
+    isSharedApprovalAppChannelConfig(row.config) &&
+    String(row.config.apiAppId || "") === app &&
+    String(row.config.teamId || "") === team &&
+    (!input.enabledOnly || row.enabled);
+  // Flag OFF: rows are returned without secrets (callers only need the org binding).
+  const suspended = !isSharedApprovalAppEnabled();
+  if (isDemoMode()) {
+    return demoChannels.filter(matches).map((row) => ({ ...row, secrets: suspended ? {} : { ...row.secrets } }));
+  }
+  const admin = createSupabaseAdminClient();
+  if (!admin) return [];
+  let query = admin
+    .from("org_notification_channels")
+    .select("*")
+    .eq("provider", "slack")
+    .eq("config->>sharedApprovalApp", "true")
+    .eq("config->>apiAppId", app)
+    .eq("config->>teamId", team);
+  if (input.enabledOnly) query = query.eq("enabled", true);
+  const { data, error } = await query;
+  if (error || !data) return [];
+  const credentials = suspended ? new Map<string, string>() : await credentialsByChannelIds(data.map((row) => String(row.id)));
+  const out: NotificationChannelRuntime[] = [];
+  for (const row of data) {
+    const ciphertext = suspended ? "" : credentials.get(String(row.id)) || "";
+    try {
+      const runtime = ciphertext
+        ? mapRuntime({ ...(row as Record<string, unknown>), has_credentials: true, credentials_ciphertext: ciphertext })
+        : { ...mapPublic({ ...(row as Record<string, unknown>), has_credentials: false }), secrets: {} };
+      if (matches(runtime)) out.push(runtime);
+    } catch (error) {
+      console.error("notification_channel_decrypt_failed", String((row as { id?: unknown }).id), error);
+    }
+  }
+  return out;
 }

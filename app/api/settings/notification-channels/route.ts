@@ -67,6 +67,17 @@ export async function PUT(req: Request) {
   const existingChannel = inboxId
     ? channels.find((channel) => channel.id === inboxId)
     : undefined;
+  // The shared approval app inbox (「Staffpass承認」) is managed only by its install
+  // callback + setup.slackApprover.set; a dashboard save would drop its markers.
+  if (existingChannel?.config?.sharedApprovalApp === true) {
+    return NextResponse.json(
+      channelErrorPayload(
+        "shared_app_inbox_managed",
+        "この承認口は共通承認アプリ（Staffpass承認）用です。承認者の変更は管理AI社員の setup.slackApprover.set で行ってください。"
+      ),
+      { status: 400 }
+    );
+  }
   // SLACK_APPROVAL_DM_AUTO_OPEN (default OFF): empty Slack channel ID → open the
   // approval app ↔ approver DM with the approval bot token and use that D….
   const autoOpenDm =
