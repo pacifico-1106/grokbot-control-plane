@@ -1,5 +1,6 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { getAppOrigin } from "@/lib/approvals/tokens";
+import { isSlackUserScopeImWriteEnabled } from "@/lib/slack/dm-autoroute-flags";
 
 /**
  * User-token scopes for Staffpass Slack app (not Cursor Slack OAuth).
@@ -39,6 +40,17 @@ export const SLACK_USER_SCOPES =
  * docs/tenant-slack-kickoff-rail.md の Bot Token Scopes と一致させること。
  * スコープ追加後は、テナントが bot-install フローを再実行して xoxb をリフレッシュする必要があります。
  */
+/**
+ * User scopes actually requested at authorize time. Same as SLACK_USER_SCOPES
+ * unless SLACK_USER_SCOPE_IM_WRITE is ON, which appends `im:write` (needed for
+ * SLACK_DM_AUTOROUTE_ENABLED: conversations.open with the employee user token).
+ */
+export function slackUserScopesForAuthorize(): string {
+  if (!isSlackUserScopeImWriteEnabled()) return SLACK_USER_SCOPES;
+  const scopes = SLACK_USER_SCOPES.split(",");
+  return scopes.includes("im:write") ? SLACK_USER_SCOPES : [...scopes, "im:write"].join(",");
+}
+
 export const SLACK_BOT_SCOPES = "im:write,app_mentions:read,channels:history,groups:history,im:history,chat:write,files:write";
 
 export const SLACK_OAUTH_COOKIE = "staffpass_slack_oauth";
@@ -126,7 +138,7 @@ export function slackAuthorizeUrl(state: string): string {
   const clientId = process.env.SLACK_CLIENT_ID?.trim() || "";
   const params = new URLSearchParams({
     client_id: clientId,
-    user_scope: SLACK_USER_SCOPES,
+    user_scope: slackUserScopesForAuthorize(),
     redirect_uri: slackOAuthRedirectUrl(),
     state,
   });
