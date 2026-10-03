@@ -66,6 +66,10 @@ export const ADMIN_MCP_TOOL_NAMES = [
   "employeeIdentity.status",
   "employeeIdentity.upsert",
   "employeeIdentity.bindMailbox",
+  "setup.slackDmApprovalStatus",
+  "dmAutoroute.list",
+  "dmAutoroute.run",
+  "setup.approvalDelivery.autoResolve",
 ] as const;
 
 export type AdminMcpToolName = (typeof ADMIN_MCP_TOOL_NAMES)[number];
