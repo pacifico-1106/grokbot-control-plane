@@ -38,7 +38,7 @@
 
 | フラグ | 意味 |
 |---|---|
-| `SLACK_AUTHORIZE_LINK_ENABLED` | 本機能全体（ツール・`/api/slack/oauth/link`・callback のリンク分岐・next step 文言）。OFF ならツールは `feature_disabled`、link route は 404、既存の callback は従来通り |
+| `SLACK_AUTHORIZE_LINK_ENABLED` | 本機能全体（ツール・`/api/slack/oauth/link`・callback のリンク分岐・next step 文言）。OFF ならツールは `authorize_link_flag_off`、link route は 404、callback のリンク分岐はリンクを消費せず `authorize_link_flag_off`（無効ページ）。リンクを使わない従来の callback は変わらない |
 | `SLACK_AUTHORIZE_LINK_REISSUE_AUDIT_ONLY` | 要判断。連携済み・トークンに足りないのが `im:write` だけ・`SLACK_USER_SCOPE_IM_WRITE` ON・呼び出し元の管理 AI 社員自身ではない・scope が読める、を全部満たすときだけチケットなし（audit_only）で発行。ピンは既存 identity に固定されるので新しい人を紐付けることはできない |
 
 関連（既存）: `SLACK_USER_SCOPE_IM_WRITE`（#234）, `SLACK_DM_AUTOROUTE_ENABLED`（#234）, `SLACK_APPROVAL_DM_AUTO_OPEN`（#235）。
@@ -162,3 +162,10 @@ URL 平文は MCP 結果・監査に出さない。`SLACK_AUTHORIZE_LINK_REISSUE
 - フラグは #242 の関数を import せず、`lib/slack/authorize-link-guidance.ts` の `isAllowedAccountsAdminToolsFlagOn()` で読む。解釈は #242 の `isEmployeesAllowedAccountsAdminToolAvailable()` と同じ（前後の空白を除き小文字にして `true` / `1` / `on` / `enabled` のときだけ ON）。#242 がある環境では、テストで両者の結果が一致することも確かめる。
 - `resolveAuthorizeLinkFollowUpNextStep()` も同じ考え方にした。`dmAutoroute.run`（dryRun:false）は `SLACK_DM_AUTOROUTE_ENABLED` が OFF だと `dm_autoroute_flag_off` で止まるので、registry にあり、かつこのフラグが ON のときだけ案内する（OFF なら `recoveryAdminTool: null`、ツール名を出さない）。
 - テストは registry の中身とフラグを毎回明示的に設定する（ツールあり／なし × フラグ ON／OFF）。#242 がマージされていてもいなくても通る。
+
+### 追記 5（2026-10-04 木村レビュー：有効なリンクは 1 本だけ）
+
+- 方式: **部分ユニーク index**（`slack_authorize_links_one_issued_per_employee` = `(org_id, employee_id) WHERE status = 'issued'`、migration `20261004100000` に追記）。理由: RPC にまとめても、READ COMMITTED で 2 つの発行が同時に「無効化 → 追加」を走らせると両方が追加できてしまい、行ロックや advisory lock を別に足す必要がある。index ならデータベースが最終的に 2 本目を必ず拒否するので、アプリ側の順序に関係なく「有効なリンクは 1 本」が保証される。既存の supabase-js の呼び方のままで済み、新しい関数（SECURITY DEFINER の権限設計）も要らない。
+- アプリ側（`createSlackAuthorizeLinkWithStore`）: 無効化 → 追加。追加が一意制約違反（`23505`）なら、無効化からもう一度やり直す（`SLACK_AUTHORIZE_LINK_MAX_ISSUE_ATTEMPTS = 2`、新しい発行が勝つ＝通常の再発行と同じ）。それでも違反なら `slack_authorize_link_conflict` を投げ、発行処理は `link_issue_conflict` を返す。それ以外の保存エラーは `link_save_failed`、無効化の失敗は追加をしない。どの失敗でもリンクの DM は送らない（fail-closed）。demo のストアも同じ規則で動く。
+- 既存データの重複: index を作る前に、`(org_id, employee_id)` ごとに最新 1 本（`created_at desc, id desc`）だけ残し、残りを `revoked`（`result_reason = 'duplicate_issued'`）にする。どちらも冪等。旧版の migration を先に適用済みの環境では、この追記分（重複の revoked と index）をもう一度流す必要がある。
+- フラグ OFF のときのツールのエラーコードの記載が誤っていたので `authorize_link_flag_off` に直した（フラグ表）。ほかのコードも実装と照らし合わせた（下の表の理由コード・`pins_changed` など）。

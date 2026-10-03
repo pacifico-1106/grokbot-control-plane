@@ -43,6 +43,27 @@ alter table public.slack_authorize_links
 create index if not exists slack_authorize_links_employee_idx
   on public.slack_authorize_links (org_id, employee_id, status);
 
+-- 2026-10-04 追加（木村レビュー）: AI社員ごとに有効（issued）なリンクは最大 1 本。
+-- 「古いリンクの無効化 → 新しいリンクの追加」が同時に走っても 2 本目は一意制約違反になり、
+-- アプリ側は無効化からやり直す（1 回まで）か、発行せずに失敗を返す（fail-closed・何も送らない）。
+-- 既存データに重複があると index を作れないので、先に最新 1 本だけ残して revoked にする（冪等）。
+-- 本機能はフラグ OFF のまま適用する前提（適用中に新規発行が走らない）。途中で失敗しても再実行で揃う。
+with ranked as (
+  select id,
+         row_number() over (partition by org_id, employee_id order by created_at desc, id desc) as rn
+    from public.slack_authorize_links
+   where status = 'issued'
+)
+update public.slack_authorize_links as l
+   set status = 'revoked', result_reason = 'duplicate_issued', updated_at = now()
+  from ranked
+ where l.id = ranked.id
+   and ranked.rn > 1;
+
+create unique index if not exists slack_authorize_links_one_issued_per_employee
+  on public.slack_authorize_links (org_id, employee_id)
+  where status = 'issued';
+
 alter table public.slack_authorize_links enable row level security;
 -- No policies: anon / authenticated get nothing; service role bypasses RLS.
 revoke all on public.slack_authorize_links from anon, authenticated;

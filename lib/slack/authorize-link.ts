@@ -354,22 +354,36 @@ export async function issueSlackAuthorizeLink(input: {
   }
   const { token, tokenHash } = newLinkToken();
   const expiresAt = new Date((input.now ?? Date.now()) + SLACK_AUTHORIZE_LINK_TTL_MS).toISOString();
-  const link = await createSlackAuthorizeLink({
-    orgId,
-    employeeId: employee.id,
-    tokenHash,
-    expectedSlackUserId: pins.expectedSlackUserId,
-    expectedTeamId: teamId,
-    expiresAt,
-    deliveredInboxId: inbox.id,
-    deliveredChannelId: recipient.channelId,
-    deliveredUserId: recipient.userId,
-    deliveredTarget: target,
-    approverChannelId: opened.channelId,
-    approverUserId: opened.userId,
-    approvalId: input.approvalId,
-    issuedVia: input.via,
-  });
+  // 追記 5: at most one issued link per employee (partial unique index).
+  // A lost race / save error → fail closed: nothing is delivered.
+  let link: SlackAuthorizeLink;
+  try {
+    link = await createSlackAuthorizeLink({
+      orgId,
+      employeeId: employee.id,
+      tokenHash,
+      expectedSlackUserId: pins.expectedSlackUserId,
+      expectedTeamId: teamId,
+      expiresAt,
+      deliveredInboxId: inbox.id,
+      deliveredChannelId: recipient.channelId,
+      deliveredUserId: recipient.userId,
+      deliveredTarget: target,
+      approverChannelId: opened.channelId,
+      approverUserId: opened.userId,
+      approvalId: input.approvalId,
+      issuedVia: input.via,
+    });
+  } catch (error) {
+    const conflict = error instanceof Error && error.message === "slack_authorize_link_conflict";
+    return failed({
+      ok: false,
+      code: conflict ? "link_issue_conflict" : "link_save_failed",
+      messageJa: conflict
+        ? "同じ AI社員の再認可リンクが同時に発行されたため、このリンクは発行していません（何も送っていません）。必要ならもう一度発行してください。"
+        : "再認可リンクを保存できませんでした（何も送っていません）。時間をおいてもう一度発行してください。",
+    });
+  }
   const who =
     target === "employee"
       ? "この Slack アカウント（社員本人）"

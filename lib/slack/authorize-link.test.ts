@@ -14,7 +14,16 @@ import { resolveApproval } from "@/lib/data";
 import { linkAgent } from "@/lib/data/bindings";
 import { resetDemoAdminAgent } from "@/lib/data/admin-agents";
 import { resetDemoNotificationChannels, upsertNotificationChannel } from "@/lib/data/notification-channels";
-import { getSlackAuthorizeLink, resetDemoSlackAuthorizeLinks } from "@/lib/data/slack-authorize-links";
+import {
+  SLACK_AUTHORIZE_LINK_MAX_ISSUE_ATTEMPTS,
+  createSlackAuthorizeLink,
+  createSlackAuthorizeLinkWithStore,
+  getSlackAuthorizeLink,
+  resetDemoSlackAuthorizeLinks,
+  setSlackAuthorizeLinkIssueStoreForTests,
+  type CreateSlackAuthorizeLinkInput,
+  type SlackAuthorizeLinkIssueStore,
+} from "@/lib/data/slack-authorize-links";
 import {
   bindEmployeeSlackIdentity,
   getEmployeeSlackIdentity,
@@ -1366,5 +1375,139 @@ describe("追記 3: post-bind follow-ups (dmAutoroute + completion notice) are i
     } finally {
       for (const e of others) e.status = "active";
     }
+  });
+});
+
+describe("追記 5: at most one live (issued) link per employee — partial unique index + fail-closed retry", () => {
+  const MIGRATION = "../../supabase/migrations/20261004100000_slack_authorize_links.sql";
+  function input(employeeId: string, n: number): CreateSlackAuthorizeLinkInput {
+    return {
+      orgId: ORG_A,
+      employeeId,
+      tokenHash: hashAuthorizeLinkToken(`tok-${employeeId}-${n}-${"x".repeat(40)}`),
+      expectedSlackUserId: empASlack,
+      expectedTeamId: TEAM,
+      expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+      deliveredInboxId: "inbox_x",
+      deliveredChannelId: "DAUTHLINK01",
+      deliveredUserId: empASlack,
+      approvalId: null,
+      issuedVia: "ticket",
+    };
+  }
+  /** Fake store: scripted insert outcomes; counts calls. */
+  function fakeStore(outcomes: Array<"ok" | "conflict" | "error">, opts: { supersedeThrows?: boolean } = {}) {
+    const calls = { supersede: 0, insert: 0 };
+    const store: SlackAuthorizeLinkIssueStore = {
+      async supersedeLive() {
+        calls.supersede += 1;
+        if (opts.supersedeThrows) throw new Error("db down");
+      },
+      async insertIssued(row) {
+        calls.insert += 1;
+        const outcome = outcomes[Math.min(calls.insert - 1, outcomes.length - 1)];
+        if (outcome === "conflict") return { ok: false, conflict: true };
+        if (outcome === "error") return { ok: false, conflict: false };
+        return {
+          ok: true,
+          link: {
+            id: `sal_fake_${calls.insert}`, orgId: row.orgId, employeeId: row.employeeId, expectedSlackUserId: row.expectedSlackUserId,
+            expectedTeamId: row.expectedTeamId, status: "issued", resultReason: null, boundSlackUserId: null,
+            deliveredInboxId: row.deliveredInboxId, deliveredChannelId: row.deliveredChannelId, deliveredUserId: row.deliveredUserId,
+            deliveredTarget: "approver", approverChannelId: null, approverUserId: null, approvalId: null, issuedVia: "ticket",
+            expiresAt: row.expiresAt, consumedAt: null, createdAt: "", updatedAt: "",
+          },
+        };
+      },
+    };
+    return { store, calls };
+  }
+
+  test("migration: duplicates of issued are revoked first, then a partial unique index (org_id, employee_id) WHERE status='issued'", () => {
+    const sql = readFileSync(new URL(MIGRATION, import.meta.url), "utf8").replace(/--[^\n]*/g, "");
+    const dedupe = sql.search(/update\s+public\.slack_authorize_links[\s\S]*?set\s+status\s*=\s*'revoked'/i);
+    const index = sql.search(
+      /create\s+unique\s+index\s+if\s+not\s+exists\s+slack_authorize_links_one_issued_per_employee\s+on\s+public\.slack_authorize_links\s*\(\s*org_id\s*,\s*employee_id\s*\)\s*where\s+status\s*=\s*'issued'/i
+    );
+    expect(dedupe).toBeGreaterThan(-1);
+    expect(index).toBeGreaterThan(dedupe);
+    const cte = sql.search(/with\s+ranked\s+as/i);
+    expect(cte).toBeGreaterThan(-1);
+    expect(cte).toBeLessThan(dedupe);
+    const dedupeSql = sql.slice(cte, index);
+    expect(dedupeSql).toMatch(/partition\s+by\s+org_id\s*,\s*employee_id/i);
+    expect(dedupeSql).toMatch(/order\s+by\s+created_at\s+desc/i);
+    expect(dedupeSql).toMatch(/rn\s*>\s*1/i);
+    expect(dedupeSql).toContain("'duplicate_issued'");
+  });
+
+  test("conflict once (a concurrent issue won the insert) → supersede again and retry → one link", async () => {
+    const { store, calls } = fakeStore(["conflict", "ok"]);
+    const link = await createSlackAuthorizeLinkWithStore(store, input(empA.id, 1));
+    expect(link.status).toBe("issued");
+    expect(calls).toEqual({ supersede: 2, insert: 2 });
+  });
+
+  test("conflict on every attempt → fail closed (bounded retries, typed error, nothing returned)", async () => {
+    const { store, calls } = fakeStore(["conflict"]);
+    await expect(createSlackAuthorizeLinkWithStore(store, input(empA.id, 2))).rejects.toThrow("slack_authorize_link_conflict");
+    expect(SLACK_AUTHORIZE_LINK_MAX_ISSUE_ATTEMPTS).toBe(2);
+    expect(calls).toEqual({ supersede: 2, insert: 2 });
+  });
+
+  test("other insert error → save_failed without retry; supersede error → no insert at all", async () => {
+    const a = fakeStore(["error"]);
+    await expect(createSlackAuthorizeLinkWithStore(a.store, input(empA.id, 3))).rejects.toThrow("slack_authorize_link_save_failed");
+    expect(a.calls).toEqual({ supersede: 1, insert: 1 });
+    const b = fakeStore(["ok"], { supersedeThrows: true });
+    await expect(createSlackAuthorizeLinkWithStore(b.store, input(empA.id, 4))).rejects.toThrow("slack_authorize_link_supersede_failed");
+    expect(b.calls).toEqual({ supersede: 1, insert: 0 });
+  });
+
+  test("demo store enforces the same partial unique rule; concurrent issues leave exactly one issued link", async () => {
+    const results = await Promise.allSettled([1, 2, 3, 4, 5].map((n) => createSlackAuthorizeLink(input(empA.id, 10 + n))));
+    const made = results.filter((r): r is PromiseFulfilledResult<Awaited<ReturnType<typeof createSlackAuthorizeLink>>> => r.status === "fulfilled");
+    const rejected = results.filter((r): r is PromiseRejectedResult => r.status === "rejected");
+    for (const r of rejected) expect(String(r.reason?.message)).toBe("slack_authorize_link_conflict");
+    expect(made.length).toBeGreaterThanOrEqual(1);
+    const statuses = await Promise.all(made.map((r) => getSlackAuthorizeLink(r.value.id, ORG_A).then((l) => l?.status)));
+    expect(statuses.filter((st) => st === "issued")).toHaveLength(1);
+  });
+
+  test("issue flow: store conflict → ok:false link_issue_conflict, audited, and no link DM is sent", async () => {
+    const { store } = fakeStore(["conflict"]);
+    setSlackAuthorizeLinkIssueStoreForTests(store);
+    try {
+      calls = [];
+      const res = await issueSlackAuthorizeLink({ orgId: ORG_A, employeeId: empA.id, approvalId: null, via: "ticket" });
+      expect(res.ok).toBe(false);
+      if (res.ok) return;
+      expect(res.code).toBe("link_issue_conflict");
+      expect(res.messageJa).toContain("もう一度");
+      expect(posts().some((c) => String(c.body.text).includes(SLACK_AUTHORIZE_LINK_PATH))).toBe(false);
+      noSecrets(res);
+    } finally {
+      setSlackAuthorizeLinkIssueStoreForTests(null);
+    }
+  });
+
+  test("issue flow: other save failure → ok:false link_save_failed, no link DM", async () => {
+    const { store } = fakeStore(["error"]);
+    setSlackAuthorizeLinkIssueStoreForTests(store);
+    try {
+      calls = [];
+      const res = await issueSlackAuthorizeLink({ orgId: ORG_A, employeeId: empA.id, approvalId: null, via: "ticket" });
+      expect(res.ok).toBe(false);
+      if (!res.ok) expect(res.code).toBe("link_save_failed");
+      expect(posts().some((c) => String(c.body.text).includes(SLACK_AUTHORIZE_LINK_PATH))).toBe(false);
+    } finally {
+      setSlackAuthorizeLinkIssueStoreForTests(null);
+    }
+  });
+
+  test("docs: flag-off code is authorize_link_flag_off (no feature_disabled)", () => {
+    const doc = readFileSync(new URL("../../docs/slack-authorize-link.md", import.meta.url), "utf8");
+    expect(doc.includes("feature_disabled")).toBe(false);
+    expect(doc).toContain("`authorize_link_flag_off`");
   });
 });
