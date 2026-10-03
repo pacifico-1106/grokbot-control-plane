@@ -52,6 +52,7 @@ import { normalizeAllowedAccounts } from "@/lib/employees/allowed-accounts";
 import { normalizeApproverUserIds, parseApprovalChannelId } from "@/lib/employees/approval-inbox";
 import { normalizeToolApprovalDefaults } from "@/lib/employees/approval-presets";
 import { ALL_SCOPES } from "@/lib/employees/policy-draft";
+import { employeePolicyWriteFailure } from "@/lib/employees/policy-errors";
 import { defaultProjectAccess, normalizeProjectAccess } from "@/lib/employees/project-access";
 import { normalizePostingAs } from "@/lib/employees/posting-as";
 import { defaultVoice, normalizeVoice } from "@/lib/employees/voice";
@@ -339,6 +340,24 @@ async function fulfillLineApprovalUpsert(
   };
 }
 
+/**
+ * updateEmployeePolicy threw (fail-closed write): report ok:false with the
+ * code only (the storage detail stays in the server log, never in the
+ * persisted fulfillment / MCP result). No success audit is written.
+ */
+function employeePolicyWriteFailedFulfillment(tool: string, employeeId: string, error: unknown): AdminFulfillment {
+  const failure = employeePolicyWriteFailure(error);
+  console.error(failure.code, tool, employeeId, error instanceof Error ? error.message : error);
+  return {
+    ok: false,
+    tool,
+    at: new Date().toISOString(),
+    error: failure.code,
+    employeeId,
+    nextStepJa: failure.nextStepJa,
+  };
+}
+
 async function fulfillLineApprovalSetEmployeeInbox(
   approval: ApprovalRequest,
   args: Record<string, unknown>
@@ -355,14 +374,19 @@ async function fulfillLineApprovalSetEmployeeInbox(
   );
   if (!parsed.ok) throw new Error("line_approval_channel_not_found");
 
-  const updated = await updateEmployeePolicy({
-    orgId: approval.orgId,
-    employeeId,
-    scopes: employee.scopes,
-    allowedPurposes: employee.allowedPurposes,
-    approvalPolicy: employee.approvalPolicy,
-    approvalChannelId: parsed.id,
-  });
+  let updated: Awaited<ReturnType<typeof updateEmployeePolicy>>;
+  try {
+    updated = await updateEmployeePolicy({
+      orgId: approval.orgId,
+      employeeId,
+      scopes: employee.scopes,
+      allowedPurposes: employee.allowedPurposes,
+      approvalPolicy: employee.approvalPolicy,
+      approvalChannelId: parsed.id,
+    });
+  } catch (error) {
+    return employeePolicyWriteFailedFulfillment("setup.lineApproval.setEmployeeInbox", employeeId, error);
+  }
   if (!updated) throw new Error("employee_not_found");
 
   await appendAuditEvent({
@@ -655,21 +679,26 @@ async function fulfillPolicy(approval: ApprovalRequest, args: Record<string, unk
   if (!employeeId || !scopes.length || !["auto", "risk_based", "always_human"].includes(approvalPolicy)) {
     throw new Error("invalid_policy_payload");
   }
-  const updated = await updateEmployeePolicy({
-    orgId: approval.orgId,
-    employeeId,
-    scopes,
-    allowedPurposes: Array.isArray(args.allowedPurposes)
-      ? args.allowedPurposes.map(String).filter(Boolean)
-      : [],
-    approvalPolicy,
-    toolApprovalDefaults:
-      args.toolApprovalDefaults !== undefined
-        ? normalizeToolApprovalDefaults(args.toolApprovalDefaults)
-        : undefined,
-    sodOverrideAcknowledged: args.sodOverrideAcknowledged === true,
-    actionLimits: normalizeActionLimits(args.actionLimits as ActionLimits),
-  });
+  let updated: Awaited<ReturnType<typeof updateEmployeePolicy>>;
+  try {
+    updated = await updateEmployeePolicy({
+      orgId: approval.orgId,
+      employeeId,
+      scopes,
+      allowedPurposes: Array.isArray(args.allowedPurposes)
+        ? args.allowedPurposes.map(String).filter(Boolean)
+        : [],
+      approvalPolicy,
+      toolApprovalDefaults:
+        args.toolApprovalDefaults !== undefined
+          ? normalizeToolApprovalDefaults(args.toolApprovalDefaults)
+          : undefined,
+      sodOverrideAcknowledged: args.sodOverrideAcknowledged === true,
+      actionLimits: normalizeActionLimits(args.actionLimits as ActionLimits),
+    });
+  } catch (error) {
+    return employeePolicyWriteFailedFulfillment("policy.patch", employeeId, error);
+  }
   if (!updated) throw new Error("employee_not_found");
   await appendAuditEvent({
     orgId: approval.orgId,

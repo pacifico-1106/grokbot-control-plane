@@ -6,7 +6,11 @@ import {
   getEmployeeSlackIdentity,
   revokeEmployeeSlackIdentity,
 } from "@/lib/data/slack-identities";
-import { policyErrorPayload } from "@/lib/employees/policy-errors";
+import {
+  employeePolicyWriteFailure,
+  employeePolicyWriteFailurePayload,
+  policyErrorPayload,
+} from "@/lib/employees/policy-errors";
 import { normalizePostingAs } from "@/lib/employees/posting-as";
 import { slackOAuthConfigured } from "@/lib/slack/oauth";
 import { requireCapability } from "@/lib/team/demo-actor";
@@ -45,15 +49,23 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
     return NextResponse.json(policyErrorPayload("employee_terminated"), { status: 403 });
   }
   const postingAs = normalizePostingAs(body.postingAs);
-  const updated = await updateEmployeePolicy({
-    orgId,
-    employeeId: id,
-    scopes: existing.scopes,
-    allowedPurposes: existing.allowedPurposes,
-    approvalPolicy: existing.approvalPolicy,
-    actionLimits: existing.actionLimits,
-    postingAs,
-  });
+  let updated: Awaited<ReturnType<typeof updateEmployeePolicy>>;
+  try {
+    updated = await updateEmployeePolicy({
+      orgId,
+      employeeId: id,
+      scopes: existing.scopes,
+      allowedPurposes: existing.allowedPurposes,
+      approvalPolicy: existing.approvalPolicy,
+      actionLimits: existing.actionLimits,
+      postingAs,
+    });
+  } catch (error) {
+    // Fail-closed: a failed write is never reported as saved (no audit row).
+    const failure = employeePolicyWriteFailure(error);
+    console.error(failure.code, id, error instanceof Error ? error.message : error);
+    return NextResponse.json(employeePolicyWriteFailurePayload(failure), { status: 500 });
+  }
   if (!updated) return NextResponse.json(policyErrorPayload("employee_not_found"), { status: 404 });
   await appendAuditEvent({
     orgId,
