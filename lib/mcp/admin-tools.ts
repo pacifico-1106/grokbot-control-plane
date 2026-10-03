@@ -803,7 +803,7 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
   {
     name: "stuckWatch.retry",
     description:
-      "Retry a stuck watch item. Writes: re-runs the already-approved fulfillment of the related approval (W2, or W1 with an approved ticket; counts toward maxAutoRetries) or re-submits the stored invoke snapshot through the gateway (W1 ops_fault), and records a stuck_watch.retry audit event. NOT always_human: no approval ticket of its own, because it only re-runs work that was already approved or goes back through the normal gateway, where gates are re-evaluated (a send may come back needs_approval). F7: ops_fault only; expected_gate refused; config_drift returns a fix hint without retrying; resolved items refused.",
+      "Retry a stuck watch item. Writes: re-runs the already-approved fulfillment of the related approval (W2, or W1 with an approved ticket; counts toward maxAutoRetries) or re-submits the stored invoke snapshot through the gateway (W1 ops_fault). A fulfill re-run also updates the approval's stuck-watch retry count and records stuck_watch.w2_retry; the admin call records a stuck_watch.retry audit event. NOT always_human: no approval ticket of its own, because it only re-runs work that was already approved or goes back through the normal gateway, where gates are re-evaluated (a send may come back needs_approval). F7: ops_fault only; expected_gate refused; config_drift returns a fix hint without retrying; resolved items refused.",
     inputSchema: {
       type: "object",
       properties: {

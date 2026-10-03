@@ -237,7 +237,7 @@ export const STAFFPASS_MCP_TOOLS: McpToolDef[] = [
   {
     name: "staffpass_stuck_retry",
     description:
-      "Retry a stuck watch item owned by this employee badge. Writes: re-runs the already-approved fulfillment (W2) or re-submits the stored invoke snapshot through the gateway (W1 ops_fault), and records a stuck_watch.retry audit event. No approval ticket of its own; gates are re-evaluated, so a send may come back needs_approval. F7: ops_fault only; expected_gate refused; config_drift returns fix hint. Cannot retry other employees' items.",
+      "Retry a stuck watch item owned by this employee badge. Writes: re-runs the already-approved fulfillment (W2) or re-submits the stored invoke snapshot through the gateway (W1 ops_fault); a fulfill re-run updates the approval's retry count, and audit events are recorded. No approval ticket of its own; gates are re-evaluated, so a send may come back needs_approval. F7: ops_fault only; expected_gate refused; config_drift returns fix hint. Cannot retry other employees' items.",
     inputSchema: {
       type: "object",
       properties: {
