@@ -26,6 +26,10 @@ import {
 import { extraApproversAllow } from "@/lib/employees/approval-inbox";
 import { verifySlackSignature } from "@/lib/notify/slack";
 import { isSelfApprovalDenied } from "@/lib/admin-mcp/self-approval";
+import {
+  alertApprovalDeliveryFailure,
+  isApprovalDeliveryFailureAlertEnabled,
+} from "@/lib/notify/delivery-failure-alert";
 import { getMemberIdFromVoterBinding } from "@/lib/approval-workflow";
 import {
   findChannelCandidatesByAppAndTeam,
@@ -153,11 +157,13 @@ export async function POST(req: Request) {
   const channel = verifyResult.channel;
 
   if (payload.api_app_id !== channel.apiAppId) {
+    await alertButtonFailure(channel, "app_mismatch");
     return NextResponse.json({ ok: false, error: "app_mismatch" }, { status: 403 });
   }
 
   const expectedTeamId = channel.expectedTeamId || channel.teamId;
   if (expectedTeamId && teamId !== expectedTeamId) {
+    await alertButtonFailure(channel, "team_mismatch");
     return NextResponse.json({ ok: false, error: "team_mismatch" }, { status: 403 });
   }
 
@@ -167,8 +173,30 @@ export async function POST(req: Request) {
     await handleBlockActions(channel, payload, rawBody, timestamp, signature);
   } catch (error) {
     console.error("slack_interactivity_handle_failed", error);
+    await alertButtonFailure(channel, "handler_error");
   }
   return ack();
+}
+
+/**
+ * PR-3 (APPROVAL_DELIVERY_FAILURE_ALERT): a signature-verified press that could
+ * not be processed. The approval is NOT granted (unchanged); this only makes
+ * the failure visible to tenant admins / operators. Never throws.
+ */
+async function alertButtonFailure(
+  channel: InteractivityChannelCandidate,
+  reason: string,
+  approvalId?: string | null
+): Promise<void> {
+  if (!isApprovalDeliveryFailureAlertEnabled()) return;
+  await alertApprovalDeliveryFailure({
+    orgId: channel.orgId,
+    kind: "button_failed",
+    approvalId: approvalId ?? null,
+    provider: "slack",
+    channelId: channel.id,
+    reason,
+  }).catch(() => undefined);
 }
 
 async function handleBlockActions(
@@ -192,6 +220,7 @@ async function handleBlockActions(
     if (responseUrl) {
       await sendEphemeralRejection(responseUrl, "not_in_allowed_list" as SlackRejectionReason);
     }
+    await alertButtonFailure(channel, "not_in_allowed_list");
     return;
   }
 
@@ -200,6 +229,7 @@ async function handleBlockActions(
     if (responseUrl) {
       await sendEphemeralRejection(responseUrl, "external_team_user" as SlackRejectionReason);
     }
+    await alertButtonFailure(channel, "external_team_user");
     return;
   }
 
@@ -272,6 +302,7 @@ async function handleBlockActions(
     if (responseUrl) {
       await sendEphemeralRejection(responseUrl, "delivery_mismatch" as SlackRejectionReason);
     }
+    await alertButtonFailure(channel, "delivery_mismatch", approval.id);
     return;
   }
 
@@ -280,6 +311,7 @@ async function handleBlockActions(
     if (responseUrl) {
       await sendEphemeralRejection(responseUrl, "card_expired" as SlackRejectionReason);
     }
+    await alertButtonFailure(channel, "card_expired", approval.id);
     return;
   }
 
@@ -288,6 +320,7 @@ async function handleBlockActions(
     if (responseUrl) {
       await sendEphemeralRejection(responseUrl, "not_in_allowed_list" as SlackRejectionReason);
     }
+    await alertButtonFailure(channel, "approver_not_allowed", approval.id);
     return;
   }
 
