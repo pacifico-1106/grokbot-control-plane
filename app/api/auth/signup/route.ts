@@ -4,6 +4,13 @@ import {
   provisionOrgForUser,
 } from "@/lib/auth/session";
 import { evaluateSignupGuard, SIGNUP_HONEYPOT_FIELD } from "@/lib/auth/signup-guard";
+import {
+  anySignupLayer2Enabled,
+  createSupabaseSignupAttemptStore,
+  evaluateSignupLayer2,
+  fingerprintSignup,
+  recordSignupAttempt,
+} from "@/lib/signup/attempts";
 import { setOrgReferralCodeIfEmpty } from "@/lib/data/org-context";
 import { DEMO_ORG } from "@/lib/demo-data";
 import { sendTrialStartedEmail, sendWelcomeEmail } from "@/lib/email";
@@ -110,6 +117,20 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "invalid_email" }, { status: 400 });
   }
 
+  // Layer 2 (flags default OFF): attempt log / rate limit / domain checks.
+  const attemptStore = anySignupLayer2Enabled() ? createSupabaseSignupAttemptStore() : null;
+  const fingerprint = fingerprintSignup(req, email);
+
+  function rejectToForm(code: string, status: number, message: string) {
+    if (!contentType.includes("application/json")) {
+      // Plain HTML form: back to /signup with a fixed error code (no echo of input).
+      const back = new URL("/signup", req.url);
+      back.searchParams.set("error", code);
+      return NextResponse.redirect(back, 303);
+    }
+    return NextResponse.json({ error: code, message }, { status });
+  }
+
   // Bot protection runs before any Auth user / org / email side effect.
   // Not behind a flag (P0 hotfix spam-sample-20261003); Turnstile fail-closed outside DEMO.
   const guard = await evaluateSignupGuard(
@@ -127,19 +148,25 @@ export async function POST(req: Request) {
     }
   );
   if (!guard.ok) {
-    if (!contentType.includes("application/json")) {
-      // Plain HTML form: back to /signup with a fixed error code (no echo of input).
-      const back = new URL("/signup", req.url);
-      back.searchParams.set("error", guard.error);
-      return NextResponse.redirect(back, 303);
-    }
-    return NextResponse.json(
-      { error: guard.error, message: guard.message },
-      { status: guard.status }
-    );
+    await recordSignupAttempt(attemptStore, fingerprint, "rejected_guard", {
+      reason: guard.error,
+      honeypot: guard.error === "signup_rejected",
+      turnstileOk: guard.error === "turnstile_failed" ? false : null,
+    });
+    return rejectToForm(guard.error, guard.status, guard.message);
   }
   orgName = guard.orgName;
   referralCode = guard.referralCode ?? "";
+
+  const layer2 = await evaluateSignupLayer2(attemptStore, fingerprint);
+  if (!layer2.ok) {
+    await recordSignupAttempt(attemptStore, fingerprint, layer2.outcome, {
+      reason: layer2.reason,
+      turnstileOk: isDemoMode() ? null : true,
+    });
+    const code = layer2.outcome === "rejected_domain" ? layer2.reason : layer2.outcome;
+    return rejectToForm(code, layer2.status, layer2.message);
+  }
 
   if (isDemoMode()) {
     if (referralCode) {
@@ -226,7 +253,7 @@ export async function POST(req: Request) {
   }
 
   try {
-    const { orgId } = await createOrgWithOwner({
+    const { orgId, userId } = await createOrgWithOwner({
       email,
       password,
       orgName: orgName || "新しい組織",
@@ -234,9 +261,18 @@ export async function POST(req: Request) {
       displayName: displayName || undefined,
       referralCode: referralCode || null,
     });
+    await recordSignupAttempt(attemptStore, fingerprint, "created", {
+      turnstileOk: isDemoMode() ? null : true,
+      orgId,
+      userId,
+    });
     return await finishOk(orgId);
   } catch (e) {
     const message = e instanceof Error ? e.message : "signup_failed";
+    await recordSignupAttempt(attemptStore, fingerprint, "error", {
+      reason: message.split(":")[0].slice(0, 40),
+      turnstileOk: isDemoMode() ? null : true,
+    });
 
     // Auth created, org failed mid-signup — session + provision or soft onboarding.
     if (message.startsWith("auth_ok_org_failed:")) {

@@ -5,6 +5,17 @@
  * draft_only on mail.send demotes to mail.draft (never silent).
  * Pure reject only for denylist / hard violations.
  * D1 attachment: stricter side wins (forbid / Sealith).
+ *
+ * Hardening (2026-10-03, follow-up to PR #223) — every change is stricter-only:
+ * - Every recipient in to / cc / bcc is parsed (comma / semicolon lists of
+ *   plain addresses) and judged; the strictest per-recipient outcome wins.
+ *   Any external recipient makes the whole mail external, and every recipient
+ *   is additionally judged under the mail audience.
+ * - A recipient without a parseable domain rejects the mail
+ *   (mail_recipient_invalid).
+ * - No matching rule never yields auto: approval is the floor, and the legacy
+ *   first-rule outcome is kept only when it is stricter (draft / reject).
+ * - rule.requireHumanFinalSend forces approval on auto.
  */
 import type {
   AttachmentHandoff,
@@ -28,12 +39,39 @@ export interface EvaluateMailPolicyInput {
   internalAudienceRule?: OrgInternalAudienceRule | null;
   ingressHandoffPolicy?: OrgIngressHandoffPolicy | null;
   sealithTransferId?: string | null;
+  /** cc / bcc were present in args but not a string / string[] (fail-closed). */
+  malformedRecipients?: boolean;
 }
 
-function emailDomain(email: string): string | undefined {
-  const at = email.lastIndexOf("@");
-  if (at <= 0 || at === email.length - 1) return undefined;
-  return email.slice(at + 1).trim().toLowerCase() || undefined;
+type ParsedRecipient = { address: string; domain: string };
+
+const ADDRESS_RE =
+  /^[^\s@<>()[\]\\,;:"]+@((?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)$/i;
+
+/**
+ * Parse a recipient list string. Splits on "," and ";". Each segment must be a
+ * plain addr-spec with a dotted ASCII domain. Display names ("Name <addr>"),
+ * quoted local parts, IDN, bare hosts and empty segments (e.g. a trailing
+ * comma) are invalid on purpose (fail-closed): legacy judged such strings by
+ * the text after the last "@", so accepting them here could be looser.
+ */
+export function parseMailRecipientList(raw: string): {
+  recipients: ParsedRecipient[];
+  invalid: string[];
+} {
+  const recipients: ParsedRecipient[] = [];
+  const invalid: string[] = [];
+  if (!raw.trim()) return { recipients, invalid };
+  for (const segment of raw.split(/[,;]/)) {
+    const candidate = segment.trim();
+    const match = ADDRESS_RE.exec(candidate);
+    if (!match) {
+      invalid.push(candidate || "(empty)");
+      continue;
+    }
+    recipients.push({ address: candidate.toLowerCase(), domain: match[1].toLowerCase() });
+  }
+  return { recipients, invalid };
 }
 
 function classifyAudience(
@@ -49,8 +87,8 @@ function classifyAudience(
 function selectRule(
   policy: OrgMailPolicy,
   audience: "internal" | "external",
-  domain: string | undefined
-): MailPolicyRule | null {
+  domain: string
+): { rule: MailPolicyRule | null; matched: boolean } {
   const sorted = [...policy.rules].sort(
     (a, b) => (a.priority ?? 0) - (b.priority ?? 0)
   );
@@ -60,22 +98,21 @@ function selectRule(
       !rule.audience || rule.audience === "any" || rule.audience === audience;
     if (!audienceMatch) continue;
 
-    if (rule.toDomainDenylist?.length && domain) {
-      if (rule.toDomainDenylist.includes(domain)) {
-        return rule;
-      }
+    if (rule.toDomainDenylist?.length && rule.toDomainDenylist.includes(domain)) {
+      return { rule, matched: true };
     }
 
-    if (rule.toDomainAllowlist?.length && domain) {
-      if (!rule.toDomainAllowlist.includes(domain)) {
-        continue;
-      }
+    if (rule.toDomainAllowlist?.length && !rule.toDomainAllowlist.includes(domain)) {
+      continue;
     }
 
-    return rule;
+    return { rule, matched: true };
   }
 
-  return sorted[0] ?? null;
+  // No rule matched. The first rule is NOT applied as-is: the caller treats
+  // this as approval-required and only keeps the legacy first-rule outcome
+  // when it is stricter (draft / reject). See evaluateForRecipient.
+  return { rule: sorted[0] ?? null, matched: false };
 }
 
 function resolveD1Attachment(
@@ -134,37 +171,19 @@ export function resolveMailAttachmentPolicy(
   return { allowed: true, effective: mailRef ?? "inherit_d1" };
 }
 
-export function evaluateMailPolicy(
+function evaluateRule(
+  policy: OrgMailPolicy,
+  rule: MailPolicyRule,
+  audience: "internal" | "external",
+  domain: string,
   input: EvaluateMailPolicyInput
 ): MailPolicyDecision {
-  const policy = input.policy ?? defaultMailPolicy();
-  const audience = classifyAudience(input.to, input.internalAudienceRule);
-  const domain = emailDomain(input.to);
-  const rule = selectRule(policy, audience, domain);
-
   const auditLabels: string[] = [`audience:${audience}`];
-  const appliedRules: string[] = rule ? [rule.id] : [];
-
-  if (!rule) {
-    return {
-      allowed: true,
-      rejected: false,
-      demotedToDraft: audience === "external",
-      needsApproval: false,
-      autoSend: false,
-      sendMode: "draft_only",
-      audience,
-      attachmentAllowed: true,
-      effectiveAttachmentPolicy: "inherit_d1",
-      auditLabels: [...auditLabels, "sendMode:draft_only"],
-      appliedRules,
-      code: audience === "external" ? "mail_send_demoted_to_draft" : undefined,
-    };
-  }
+  const appliedRules: string[] = [rule.id];
 
   auditLabels.push(`sendMode:${rule.sendMode}`);
 
-  if (rule.toDomainDenylist?.length && domain && rule.toDomainDenylist.includes(domain)) {
+  if (rule.toDomainDenylist?.length && rule.toDomainDenylist.includes(domain)) {
     return {
       allowed: false,
       rejected: true,
@@ -182,7 +201,7 @@ export function evaluateMailPolicy(
     };
   }
 
-  if (rule.toDomainAllowlist?.length && domain && !rule.toDomainAllowlist.includes(domain)) {
+  if (rule.toDomainAllowlist?.length && !rule.toDomainAllowlist.includes(domain)) {
     return {
       allowed: false,
       rejected: true,
@@ -297,7 +316,8 @@ export function evaluateMailPolicy(
   }
 
   const hasConsent = Boolean(policy.highRiskConsentAt && policy.highRiskConsentBy);
-  const autoSend = hasConsent;
+  const requireHuman = rule.requireHumanFinalSend === true;
+  const autoSend = hasConsent && !requireHuman;
 
   return {
     allowed: true,
@@ -309,21 +329,160 @@ export function evaluateMailPolicy(
     audience,
     attachmentAllowed: attachment.allowed,
     effectiveAttachmentPolicy: attachment.effective,
-    auditLabels: [...auditLabels, autoSend ? "auto:consented" : "auto:no_consent"],
+    auditLabels: [
+      ...auditLabels,
+      hasConsent ? "auto:consented" : "auto:no_consent",
+      ...(requireHuman ? ["requireHumanFinalSend:true"] : []),
+    ],
     appliedRules,
+  };
+}
+
+/** Strictness rank: reject > draft > approval > defer-to-gate > auto. */
+function decisionRank(d: MailPolicyDecision): number {
+  if (d.rejected) return 4;
+  if (d.demotedToDraft) return 3;
+  if (d.needsApproval) return 2;
+  if (!d.autoSend) return 1;
+  return 0;
+}
+
+/** Turn any non-reject / non-draft outcome into approval-required. */
+function floorToApproval(d: MailPolicyDecision, label: string): MailPolicyDecision {
+  if (d.rejected || d.demotedToDraft || d.needsApproval) {
+    return { ...d, auditLabels: [...d.auditLabels, label] };
+  }
+  return {
+    ...d,
+    allowed: true,
+    needsApproval: true,
+    autoSend: false,
+    auditLabels: [...d.auditLabels, label],
+  };
+}
+
+function evaluateForRecipient(
+  policy: OrgMailPolicy,
+  audience: "internal" | "external",
+  domain: string,
+  input: EvaluateMailPolicyInput
+): MailPolicyDecision {
+  const { rule, matched } = selectRule(policy, audience, domain);
+
+  if (!rule) {
+    // Empty rule list: external stays draft (legacy), internal needs approval.
+    return {
+      allowed: true,
+      rejected: false,
+      demotedToDraft: audience === "external",
+      needsApproval: audience !== "external",
+      autoSend: false,
+      sendMode: audience === "external" ? "draft_only" : "needs_approval",
+      audience,
+      attachmentAllowed: true,
+      effectiveAttachmentPolicy: "inherit_d1",
+      auditLabels: [`audience:${audience}`, "rule:no_match", `sendMode:${audience === "external" ? "draft_only" : "needs_approval"}`],
+      appliedRules: [],
+      code: audience === "external" ? "mail_send_demoted_to_draft" : undefined,
+    };
+  }
+
+  const decision = evaluateRule(policy, rule, audience, domain, input);
+  return matched ? decision : floorToApproval(decision, "rule:no_match");
+}
+
+function invalidRecipientDecision(
+  audience: "internal" | "external",
+  invalid: string[]
+): MailPolicyDecision {
+  return {
+    allowed: false,
+    rejected: true,
+    rejectReason:
+      invalid.length > 0
+        ? `Recipient without a valid domain: ${invalid.slice(0, 3).join(", ")}`
+        : "No valid recipient",
+    rejectCode: "mail_recipient_invalid",
+    demotedToDraft: false,
+    needsApproval: false,
+    autoSend: false,
+    sendMode: "draft_only",
+    audience,
+    attachmentAllowed: false,
+    effectiveAttachmentPolicy: "forbid",
+    auditLabels: [`audience:${audience}`, "recipient:invalid"],
+    appliedRules: [],
+  };
+}
+
+export function evaluateMailPolicy(
+  input: EvaluateMailPolicyInput
+): MailPolicyDecision {
+  const policy = input.policy ?? defaultMailPolicy();
+
+  const parsedTo = parseMailRecipientList(typeof input.to === "string" ? input.to : "");
+  const parsedCc = (input.cc ?? []).map((v) => parseMailRecipientList(v));
+  const parsedBcc = (input.bcc ?? []).map((v) => parseMailRecipientList(v));
+  const all = [parsedTo, ...parsedCc, ...parsedBcc];
+  const recipients = all.flatMap((p) => p.recipients);
+  const invalid = all.flatMap((p) => p.invalid);
+
+  // Fail-closed: unparseable recipient, malformed cc/bcc container, or no "to".
+  if (input.malformedRecipients || invalid.length > 0 || parsedTo.recipients.length === 0) {
+    return invalidRecipientDecision("external", invalid);
+  }
+
+  const withAudience = recipients.map((r) => ({
+    ...r,
+    audience: classifyAudience(r.address, input.internalAudienceRule),
+  }));
+  const mailAudience: "internal" | "external" = withAudience.some((r) => r.audience === "external")
+    ? "external"
+    : "internal";
+
+  let chosen: MailPolicyDecision | null = null;
+  const appliedRules: string[] = [];
+  for (const r of withAudience) {
+    const audiences = r.audience === mailAudience ? [r.audience] : [r.audience, mailAudience];
+    for (const aud of audiences) {
+      const d = evaluateForRecipient(policy, aud, r.domain, input);
+      for (const id of d.appliedRules) if (!appliedRules.includes(id)) appliedRules.push(id);
+      if (!chosen || decisionRank(d) > decisionRank(chosen)) chosen = d;
+    }
+  }
+
+  const decision = chosen as MailPolicyDecision;
+  return {
+    ...decision,
+    audience: mailAudience,
+    auditLabels: [
+      `audience:${mailAudience}`,
+      ...decision.auditLabels.filter((l) => !l.startsWith("audience:")),
+      `recipients:${withAudience.length}`,
+    ],
+    appliedRules: [...decision.appliedRules, ...appliedRules.filter((id) => !decision.appliedRules.includes(id))],
   };
 }
 
 export function extractMailRecipients(body: {
   args?: Record<string, unknown>;
-}): { cc: string[]; bcc: string[]; hasAttachments: boolean } {
+}): { cc: string[]; bcc: string[]; hasAttachments: boolean; malformed: boolean } {
   const args = body.args && typeof body.args === "object" ? body.args : {};
   const cc = normalizeEmailList(args.cc);
   const bcc = normalizeEmailList(args.bcc);
   const hasAttachments =
     Array.isArray(args.attachments) && args.attachments.length > 0 ||
     args.hasAttachments === true;
-  return { cc, bcc, hasAttachments };
+  // Fail-closed: a cc / bcc we cannot read must not be silently dropped.
+  const malformed = isMalformedEmailList(args.cc) || isMalformedEmailList(args.bcc);
+  return { cc, bcc, hasAttachments, malformed };
+}
+
+function isMalformedEmailList(value: unknown): boolean {
+  if (value === undefined || value === null) return false;
+  if (typeof value === "string") return false;
+  if (Array.isArray(value)) return value.some((v) => typeof v !== "string");
+  return true;
 }
 
 function normalizeEmailList(value: unknown): string[] {

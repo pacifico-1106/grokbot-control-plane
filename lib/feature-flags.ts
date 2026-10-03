@@ -416,3 +416,35 @@ export function isConfigChangeRequestEnabled(): boolean {
 export function isSlackImNoRouteAuditEnabled(): boolean {
   return parseFlag(process.env.SLACK_IM_NO_ROUTE_AUDIT);
 }
+
+/**
+ * SIGNUP_ATTEMPT_LOG_ENABLED: write public.signup_attempts (hashed IP/UA/mailbox,
+ * outcome, signals) for every POST /api/auth/signup.
+ *
+ * When OFF (default): nothing is written.
+ */
+export function isSignupAttemptLogEnabled(): boolean {
+  return parseFlag(process.env.SIGNUP_ATTEMPT_LOG_ENABLED);
+}
+
+/**
+ * SIGNUP_RATE_LIMIT_ENABLED: DB-backed signup rate limits (per IP hash, per
+ * normalized mailbox, global created/hour). Reads signup_attempts, so it is only
+ * effective together with SIGNUP_ATTEMPT_LOG_ENABLED. Fails open on DB errors.
+ *
+ * When OFF (default): no signup rate limiting beyond Turnstile.
+ */
+export function isSignupRateLimitEnabled(): boolean {
+  return parseFlag(process.env.SIGNUP_RATE_LIMIT_ENABLED);
+}
+
+/**
+ * SIGNUP_DOMAIN_CHECK_ENABLED: reject disposable domains and invalid dotted
+ * local parts; reject a normalized-mailbox duplicate (Gmail dot/+tag variants)
+ * of an account created in the last 30 days.
+ *
+ * When OFF (default): no domain checks.
+ */
+export function isSignupDomainCheckEnabled(): boolean {
+  return parseFlag(process.env.SIGNUP_DOMAIN_CHECK_ENABLED);
+}
