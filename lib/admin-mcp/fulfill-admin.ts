@@ -1783,6 +1783,36 @@ async function fulfillDmAutorouteRun(
   };
 }
 
+/**
+ * SLACK_AUTHORIZE_LINK_ENABLED: human-approved setup.slackAuthorizeLink.issue.
+ * The link URL is delivered only in the approval-app DM; never in this result.
+ */
+async function fulfillSlackAuthorizeLinkTicket(
+  approval: ApprovalRequest,
+  args: Record<string, unknown>
+): Promise<AdminFulfillment> {
+  const { fulfillSlackAuthorizeLinkIssue } = await import("@/lib/admin-mcp/slack-authorize-link");
+  const result = await fulfillSlackAuthorizeLinkIssue({ orgId: approval.orgId, approvalId: approval.id, args });
+  const at = new Date().toISOString();
+  if (!result.ok) {
+    return {
+      ok: false,
+      tool: "setup.slackAuthorizeLink.issue",
+      at,
+      error: result.code,
+      nextStepJa: result.messageJa,
+    };
+  }
+  return {
+    ok: true,
+    tool: "setup.slackAuthorizeLink.issue",
+    at,
+    employeeId: result.employeeId,
+    summaryJa: `Slack 再認可リンクを承認アプリの DM で ${result.deliveredTo.deliveryUserId} に送りました（${result.expiresAt} まで・1回限り）。URL は返しません。`,
+    nextStepJa: "社員本人の Slack アカウントでログインしたブラウザでリンクを開き「許可する」を押してください。完了すると変更履歴に記録され、承認者に通知されます。",
+  };
+}
+
 /** PR-4: human-approved setup.approvalDelivery.autoResolve (always_human). */
 async function fulfillApprovalDeliveryAutoResolveTicket(
   approval: ApprovalRequest,
@@ -1887,6 +1917,9 @@ async function fulfillApprovedAdminCore(
         break;
       case "setup.approvalDelivery.autoResolve":
         fulfillment = await fulfillApprovalDeliveryAutoResolveTicket(approval, args);
+        break;
+      case "setup.slackAuthorizeLink.issue":
+        fulfillment = await fulfillSlackAuthorizeLinkTicket(approval, args);
         break;
       case "setup.lineApproval.setEmployeeInbox":
         fulfillment = await fulfillLineApprovalSetEmployeeInbox(approval, args);

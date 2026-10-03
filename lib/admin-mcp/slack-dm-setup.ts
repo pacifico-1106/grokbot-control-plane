@@ -44,6 +44,7 @@ import {
   sendApprovalSetupNotice,
 } from "@/lib/slack/approval-dm-open";
 import { syncAutoDmRoutesForEmployee, type DmAutorouteItem, type DmAutorouteResult } from "@/lib/slack/dm-autoroute";
+import { isSlackAuthorizeLinkEnabled } from "@/lib/slack/authorize-link-flags";
 import { isSlackDmAutorouteEnabled, isSlackUserScopeImWriteEnabled } from "@/lib/slack/dm-autoroute-flags";
 import { slackAuthorizeUrlTemplate } from "@/lib/slack/slack-status-diagnose";
 import type { NotificationChannel } from "@/lib/types";
@@ -156,6 +157,7 @@ function flagSnapshot() {
     SLACK_APPROVAL_DM_AUTO_OPEN: isSlackApprovalDmAutoOpenEnabled(),
     APPROVAL_DELIVERY_FAILURE_ALERT: parseFlag(process.env.APPROVAL_DELIVERY_FAILURE_ALERT),
     ADMIN_MCP_DM_AUTOROUTE_AUDIT_ONLY: isAdminMcpDmAutorouteAuditOnlyEnabled(),
+    SLACK_AUTHORIZE_LINK_ENABLED: isSlackAuthorizeLinkEnabled(),
   };
 }
 
@@ -300,11 +302,23 @@ export async function diagnoseSlackDmApprovalSetup(orgId: string): Promise<Recor
     nextStepsJa.push("社内の相手を parties.upsert（kind=slack_user, audience=internal）で登録してください（DM 自動ルートの相手はこの台帳だけ）。");
   }
   for (const row of employeeRows) {
+    // SLACK_AUTHORIZE_LINK_ENABLED: point at the re-authorize link (approver gets
+    // it in the approval-app DM; the employee's Slack account only taps 「許可する」).
+    const linkStep = flags.SLACK_AUTHORIZE_LINK_ENABLED
+      ? `setup.slackAuthorizeLink.issue（employeeId=${row.employeeId}）で再認可リンクを発行（人の承認 1 回 → 承認者に承認アプリの DM で届く → 社員本人の Slack で開いて「許可する」）。`
+      : "";
     if (!row.slackIdentityLinked) {
-      nextStepsJa.push(`${row.displayName}: 社員証の Slack 連携を人がタップ（${row.authorizeUrl}）。`);
-    } else if ((row.missingUserScopes as string[]).length) {
       nextStepsJa.push(
-        `${row.displayName}: user token に ${(row.missingUserScopes as string[]).join(", ")} がありません。もう一度 Slack 連携をタップ（${row.authorizeUrl}）。`
+        linkStep
+          ? `${row.displayName}: Slack 未連携です。${linkStep}`
+          : `${row.displayName}: 社員証の Slack 連携を人がタップ（${row.authorizeUrl}）。`
+      );
+    } else if ((row.missingUserScopes as string[]).length) {
+      const missing = (row.missingUserScopes as string[]).join(", ");
+      nextStepsJa.push(
+        linkStep
+          ? `${row.displayName}: user token に ${missing} がありません。${linkStep}`
+          : `${row.displayName}: user token に ${missing} がありません。もう一度 Slack 連携をタップ（${row.authorizeUrl}）。`
       );
     }
   }
@@ -709,3 +723,10 @@ export async function handleSlackDmSetupTool(
       return handleApprovalDeliveryAutoResolve(cred, args);
   }
 }
+
+// Shared with setup.slackAuthorizeLink.issue (lib/slack/authorize-link.ts).
+export {
+  resolveInbox as resolveSlackApprovalInbox,
+  allowedUsers as approvalInboxAllowedUsers,
+  probeScopes as probeSlackTokenScopes,
+};

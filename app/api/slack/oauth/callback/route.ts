@@ -2,6 +2,7 @@ import { cookies } from "next/headers";
 import { after, NextResponse } from "next/server";
 import { getAppOrigin } from "@/lib/approvals/tokens";
 import { bindEmployeeSlackIdentity } from "@/lib/data/slack-identities";
+import { authorizeLinkHtmlResponse, completeAuthorizeLinkCallback } from "@/lib/slack/authorize-link";
 import { syncAutoDmRoutesForEmployee } from "@/lib/slack/dm-autoroute";
 import { isSlackDmAutorouteEnabled } from "@/lib/slack/dm-autoroute-flags";
 import {
@@ -67,6 +68,22 @@ async function authTest(token: string): Promise<SlackAuthTest> {
   return (await response.json().catch(() => ({}))) as SlackAuthTest;
 }
 
+/**
+ * SLACK_DM_AUTOROUTE_ENABLED (default OFF): install internal-party DM routes
+ * after the response. Outcome is audited only; the response never changes.
+ * Shared by the session flow and the re-authorize link flow.
+ */
+function scheduleDmAutoroute(orgId: string, employeeId: string): void {
+  if (!isSlackDmAutorouteEnabled()) return;
+  const job = () =>
+    syncAutoDmRoutesForEmployee({ orgId, employeeId, trigger: "identity_linked" }).then(() => undefined);
+  try {
+    after(job);
+  } catch {
+    void job().catch(() => undefined);
+  }
+}
+
 export async function GET(req: Request) {
   const url = new URL(req.url);
   const code = url.searchParams.get("code")?.trim() || "";
@@ -79,6 +96,31 @@ export async function GET(req: Request) {
   const parsed = verifySlackOAuthState(state, nonce);
   if (!parsed) {
     return NextResponse.redirect(new URL("/app/employees?slack=error", getAppOrigin()));
+  }
+  if (parsed.linkId) {
+    // SLACK_AUTHORIZE_LINK_ENABLED: re-authorize link (single use, pinned Slack
+    // user / team). Fails closed when the flag is OFF; never falls through to
+    // the session flow below.
+    const result = await completeAuthorizeLinkCallback({
+      state: { orgId: parsed.orgId, employeeId: parsed.employeeId, linkId: parsed.linkId },
+      code,
+      oauthError,
+      exchange: exchangeCode,
+      authTest,
+    }).catch(() => ({ ok: false as const, code: "error", consumed: false }));
+    if (!result.ok) {
+      const kind =
+        result.code === "denied"
+          ? "denied"
+          : result.code === "team_mismatch" || result.code === "user_mismatch" || result.code === "allowed_accounts_mismatch"
+            ? "mismatch"
+            : result.code === "invalid_link" || result.code === "authorize_link_flag_off"
+              ? "invalid"
+              : "error";
+      return authorizeLinkHtmlResponse(kind, kind === "denied" ? 200 : 400);
+    }
+    scheduleDmAutoroute(result.orgId, result.employeeId);
+    return authorizeLinkHtmlResponse("ok");
   }
   if (oauthError) {
     return redirectEmployee(parsed.employeeId, oauthError === "access_denied" ? "denied" : "error");
@@ -113,21 +155,7 @@ export async function GET(req: Request) {
       displayName: identity.user || exchanged.team?.name || "",
       userToken,
     });
-    // SLACK_DM_AUTOROUTE_ENABLED (default OFF): install internal-party DM routes
-    // after the response. Outcome is audited only; the redirect never changes.
-    if (isSlackDmAutorouteEnabled()) {
-      const job = () =>
-        syncAutoDmRoutesForEmployee({
-          orgId: parsed.orgId,
-          employeeId: parsed.employeeId,
-          trigger: "identity_linked",
-        }).then(() => undefined);
-      try {
-        after(job);
-      } catch {
-        void job().catch(() => undefined);
-      }
-    }
+    scheduleDmAutoroute(parsed.orgId, parsed.employeeId);
     return redirectEmployee(parsed.employeeId, "ok");
   } catch (error) {
     const message = error instanceof Error ? error.message : "";
