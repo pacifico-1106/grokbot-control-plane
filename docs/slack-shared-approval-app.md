@@ -177,7 +177,7 @@ settings:
 | 6 | 木村（スペースツリーの管理 AI 社員を使う） | `setup.slackDmApprovalStatus` で状態を見て、`setup.slackApprover.set { slackUserId: "<承認者の U…>" }` を出す | — |
 | 7 | スペースツリーの人間の承認者（owner/admin） | 6 のチケットを `/app/approvals` で承認する。承認者の Slack に「Staffpass承認」との DM が開き、「設定しました」が届く | **1 回** |
 | 8 | 人（ダッシュボード） | 稲盛の社員証の allowedAccounts に、Slack の `U0C1RN0AHE1` を**ダッシュボードで**追加する。allowedAccounts を編集する管理 MCP ツールはまだ無い。**#240 のリンクを出す前に**やる | 1 回 |
-| 9 | 木村（管理 AI 社員） | `setup.slackAuthorizeLink.issue { employeeId: <稲盛の社員 ID> }`（#240）を出し、人が 1 回承認する。リンクは「Staffpass承認」の DM で届く（#240 の deliverTo の設定に従う） | 承認 1 回 |
+| 9 | 木村（管理 AI 社員） | 8 が済んでから `setup.slackAuthorizeLink.issue { employeeId: <稲盛の社員 ID> }`（#240）を出し、人が 1 回承認する。#240 の deliverTo は既定で `employee` なので、リンクは「Staffpass承認」から稲盛（`U0C1RN0AHE1`）への DM で届く。承認者には URL なしの「社員本人に送りました」が届く。8 が済んでいないと U… が分からないので、承認者に届く（理由 `employee_slack_user_missing`） | 承認 1 回 |
 | 10 | 稲盛 | 届いたリンクを、自分の Slack にログインしたブラウザで開き、「許可する」を押す | **1 回** |
 | 11 | — | 連携が完了し、DM ルートが自動で作られる（#234）。最初に来た本物の承認依頼が「Staffpass承認」の DM に届き、ボタンで承認できれば完了（テスト承認は不要） | — |
 
