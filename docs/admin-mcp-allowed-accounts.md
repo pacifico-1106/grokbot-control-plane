@@ -17,3 +17,23 @@
 - 変更ログ（audit_events, action `admin.policy`, auditClass `admin`）: event `employee.allowed_accounts.added` / `.removed` / `.unchanged` / `.rejected`、`actor`（管理エージェント）、`approver`、`employeeId`、`provider`、`accountId`、`before` / `after`、`approvalId`。
 - 管理エージェントは、自分の Grok Bot に紐づく社員証を変更できません（`cannot_target_self`）。
 - remove は既存の Slack 連携（employee_slack_identities）を解除しません。
+
+## Slack の U… を remove したとき
+
+実行時の Slack の処理は、そのたびに allowedAccounts を見ていません。allowedAccounts を見るのは、紐づけるとき（`bindEmployeeSlackIdentity`）だけです。
+
+| 経路 | 毎回 allowedAccounts を見るか | 根拠 |
+|---|---|---|
+| 受信（mention / channel / user-token channel） | 見ていない | `lib/slack/mention-ingress.ts` の `getEmployeesBySlackUserIds` / `listLinkedSlackIdentitiesForTeam` → `lib/data/slack-identities.ts`（identity の linked 行だけ） |
+| 受信（DM / IM ルート） | 見ていない | `lib/data/slack-im-routes.ts` の `resolveSlackImWakeTarget` / `resolveSlackUserTokenImWakeTarget` → `getSlackWakeTargetByEmployeeId` |
+| 送信（user token: chat.postMessage、ファイル、リアクション） | 見ていない | `lib/gateway/adapters/slack.ts` の `resolveConversationToken` → `getLinkedSlackUserToken`（status=linked だけ） |
+| 認可（OAuth callback） | 見ている（紐づけのたび） | `app/api/slack/oauth/callback/route.ts` → `bindEmployeeSlackIdentity` → `employeeAllowsSlackUser` |
+| 認可（#240 の再認可リンク） | 見ている（紐づけのたび） | `lib/slack/authorize-link.ts` の `completeAuthorizeLinkCallback` → `bindEmployeeSlackIdentity` |
+
+そのため、その U… に linked の紐づけが残っている間は、remove 後も受信と送信で使われ続けます。remove の結果には、次の案内を出します（自動解除はしません）。
+
+- 出す条件：provider が slack で、その社員に同じ U… の **linked** の紐づけが同じ org で残っているとき。needs_reauth（token もウェイクも使われない）や、別の U… の紐づけのときは出しません。
+- MCP の結果：`slackIdentityRemains: true`、`slackIdentityNoticeJa`「既存の Slack 紐づけは残っています。止めるにはダッシュボードで解除してください」、`nextStepJa`、チケットの要約にも追記します。既に許可アカウントから外れている（`allowed_account_not_found`）ときも同じ案内を付けます。
+- 承認後の処理結果：反映の直前にもう一度確かめ、残っていれば `noticeJa` / `nextStepJa` と `summaryJa` に出します。
+- 監査（`employee.allowed_accounts.removed`）：`slackIdentityRemains`（true / false）、残っていれば `slackIdentityNoticeJa`、summary にも追記します。
+- 止め方：ダッシュボードの AI社員詳細 →「Slack 連携（Authorize）」→「連携を解除」。

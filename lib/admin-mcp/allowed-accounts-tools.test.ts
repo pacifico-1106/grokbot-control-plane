@@ -9,7 +9,7 @@
  * fulfillment re-validation, admin change-log audit entry, flag OFF.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { fulfillApprovedAdmin } from "@/lib/admin-mcp/fulfill-admin";
+import { fulfillApprovedAdmin, parseAdminFulfillment } from "@/lib/admin-mcp/fulfill-admin";
 import { auditActionForAdminTool } from "@/lib/admin-mcp/audit-class";
 import {
   ALLOWED_ACCOUNTS_TOOLS,
@@ -21,6 +21,13 @@ import {
 import { PLAN_ADMIN_SCOPES, READ_ONLY_ADMIN_TOOLS } from "@/lib/billing/plan-scopes";
 import { getApprovalById, listApprovals, resolveApproval } from "@/lib/data";
 import { linkAgent } from "@/lib/data/bindings";
+import {
+  bindEmployeeSlackIdentity,
+  getEmployeesBySlackUserIds,
+  getLinkedSlackUserToken,
+  revokeEmployeeSlackIdentity,
+  setDemoSlackIdentityStatusForTests,
+} from "@/lib/data/slack-identities";
 import { resetDemoAdminAgent } from "@/lib/data/admin-agents";
 import { DEMO_ORG, getRuntimeAudit, getRuntimeEmployees } from "@/lib/demo-data";
 import { ADMIN_MCP_TOOL_NAMES } from "@/lib/mcp/admin-public";
@@ -483,5 +490,139 @@ describe("list (read-only)", () => {
       allowedAccounts: [{ service: "slack", accountId: SLACK_U, label: "Slack", browserRequired: false }],
     });
     expect(await approvalCount()).toBe(before);
+  });
+});
+
+/**
+ * Runtime Slack paths do NOT re-check allowedAccounts: they read
+ * employee_slack_identities (+ its user token) only. allowedAccounts is checked
+ * when an identity is bound (OAuth callback / #240 re-authorize, both through
+ * bindEmployeeSlackIdentity). So removing a Slack U… does not stop an identity
+ * that is already linked — remove must say so (no auto-unlink in this PR).
+ */
+const SLACK_NOTICE_JA = "既存の Slack 紐づけは残っています。止めるにはダッシュボードで解除してください";
+const TEAM = "T0ALLOWEDAA1";
+
+async function linkSlack(emp: Employee, slackUserId = SLACK_U) {
+  await bindEmployeeSlackIdentity({
+    employeeId: emp.id,
+    orgId: emp.orgId,
+    slackUserId,
+    slackTeamId: TEAM,
+    displayName: "inamori",
+    userToken: "xoxp-test-user-token-aa",
+  });
+}
+
+function removedAudit(approvalId: string) {
+  return getRuntimeAudit().find((e) => e.metadata?.event === "employee.allowed_accounts.removed" && e.metadata?.approvalId === approvalId);
+}
+
+describe("remove: an existing Slack identity stays linked", () => {
+  test("evidence: after removal the linked identity is still used by ingress and user-token send", async () => {
+    const keep = { service: "google", accountId: "sales@example.co.jp", browserRequired: true };
+    const emp = newEmployee(ORG_A, [keep, { service: "slack", accountId: SLACK_U }]);
+    await linkSlack(emp);
+    const out = data(await callAdminMcpTool(REMOVE, { employeeId: emp.id, provider: "slack", accountId: SLACK_U }, cred()));
+    expect((await approveAndFulfill(String(out.approvalId)))?.ok).toBe(true);
+    expect(runtimeEmployee(emp.id)!.allowedAccounts).toEqual([keep]);
+    // Send path (resolveConversationToken → getLinkedSlackUserToken): token still returned.
+    expect(await getLinkedSlackUserToken(emp.id)).toBe("xoxp-test-user-token-aa");
+    // Ingress path (mention / user-token channel): still resolves to this employee.
+    const targets = await getEmployeesBySlackUserIds([SLACK_U], TEAM);
+    expect(targets.map((t) => t.employeeId)).toContain(emp.id);
+    await revokeEmployeeSlackIdentity({ employeeId: emp.id, orgId: emp.orgId });
+  });
+
+  test("linked identity for the removed U…: MCP result, ticket, fulfillment and audit carry the notice", async () => {
+    const keep = { service: "google", accountId: "sales@example.co.jp", browserRequired: true };
+    const emp = newEmployee(ORG_A, [keep, { service: "slack", accountId: SLACK_U }]);
+    await linkSlack(emp);
+    const out = data(await callAdminMcpTool(REMOVE, { employeeId: emp.id, provider: "slack", accountId: SLACK_U }, cred()));
+    expect(out.code).toBe("needs_approval");
+    expect(out.slackIdentityRemains).toBe(true);
+    expect(out.slackIdentityNoticeJa).toBe(SLACK_NOTICE_JA);
+    expect(String(out.summary)).toContain(SLACK_NOTICE_JA);
+    const approvalId = String(out.approvalId);
+    const ticket = await getApprovalById(approvalId, ORG_A);
+    expect(String(ticket?.summary)).toContain(SLACK_NOTICE_JA);
+
+    const fulfillment = await approveAndFulfill(approvalId);
+    expect(fulfillment?.ok).toBe(true);
+    expect(fulfillment?.noticeJa).toBe(SLACK_NOTICE_JA);
+    expect(String(fulfillment?.summaryJa)).toContain(SLACK_NOTICE_JA);
+    // Persisted on the ticket (what approval polling returns).
+    const persisted = parseAdminFulfillment((await getApprovalById(approvalId, ORG_A))?.metadata);
+    expect(persisted?.noticeJa).toBe(SLACK_NOTICE_JA);
+    expect(String(persisted?.nextStepJa)).toContain("連携を解除");
+    const audit = removedAudit(approvalId);
+    expect(audit?.metadata).toMatchObject({ slackIdentityRemains: true, slackIdentityNoticeJa: SLACK_NOTICE_JA });
+    expect(String(audit?.summary)).toContain(SLACK_NOTICE_JA);
+    await revokeEmployeeSlackIdentity({ employeeId: emp.id, orgId: emp.orgId });
+  });
+
+  test("no identity: no notice anywhere", async () => {
+    const keep = { service: "google", accountId: "sales@example.co.jp", browserRequired: true };
+    const emp = newEmployee(ORG_A, [keep, { service: "slack", accountId: SLACK_U }]);
+    const out = data(await callAdminMcpTool(REMOVE, { employeeId: emp.id, provider: "slack", accountId: SLACK_U }, cred()));
+    expect(out.code).toBe("needs_approval");
+    expect(out.slackIdentityRemains).toBeUndefined();
+    expect(out.slackIdentityNoticeJa).toBeUndefined();
+    expect(String(out.summary)).not.toContain(SLACK_NOTICE_JA);
+    const fulfillment = await approveAndFulfill(String(out.approvalId));
+    expect(fulfillment?.ok).toBe(true);
+    expect(fulfillment?.noticeJa).toBeUndefined();
+    expect(removedAudit(String(out.approvalId))?.metadata?.slackIdentityRemains).toBe(false);
+  });
+
+  test("identity linked to a different U… or a non-Slack removal: no notice", async () => {
+    const emp = newEmployee(ORG_A, [
+      { service: "slack", accountId: SLACK_U },
+      { service: "slack", accountId: "U0OTHERAA01" },
+      { service: "google", accountId: "sales@example.co.jp", browserRequired: true },
+    ]);
+    await linkSlack(emp, SLACK_U);
+    const other = data(await callAdminMcpTool(REMOVE, { employeeId: emp.id, provider: "slack", accountId: "U0OTHERAA01" }, cred()));
+    expect(other.code).toBe("needs_approval");
+    expect(other.slackIdentityNoticeJa).toBeUndefined();
+    const google = data(await callAdminMcpTool(REMOVE, { employeeId: emp.id, provider: "google", accountId: "sales@example.co.jp" }, cred()));
+    expect(google.code).toBe("needs_approval");
+    expect(google.slackIdentityNoticeJa).toBeUndefined();
+    await revokeEmployeeSlackIdentity({ employeeId: emp.id, orgId: emp.orgId });
+  });
+
+  test("needs_reauth identity is not in use (no token, no wake): no notice", async () => {
+    const keep = { service: "google", accountId: "sales@example.co.jp", browserRequired: true };
+    const emp = newEmployee(ORG_A, [keep, { service: "slack", accountId: SLACK_U }]);
+    await linkSlack(emp);
+    setDemoSlackIdentityStatusForTests(emp.id, "needs_reauth");
+    expect(await getLinkedSlackUserToken(emp.id)).toBe("");
+    const out = data(await callAdminMcpTool(REMOVE, { employeeId: emp.id, provider: "slack", accountId: SLACK_U }, cred()));
+    expect(out.slackIdentityNoticeJa).toBeUndefined();
+    await revokeEmployeeSlackIdentity({ employeeId: emp.id, orgId: emp.orgId });
+  });
+
+  test("checked again at fulfillment: unlinked on the dashboard before approval → no notice", async () => {
+    const keep = { service: "google", accountId: "sales@example.co.jp", browserRequired: true };
+    const emp = newEmployee(ORG_A, [keep, { service: "slack", accountId: SLACK_U }]);
+    await linkSlack(emp);
+    const out = data(await callAdminMcpTool(REMOVE, { employeeId: emp.id, provider: "slack", accountId: SLACK_U }, cred()));
+    expect(out.slackIdentityNoticeJa).toBe(SLACK_NOTICE_JA);
+    await revokeEmployeeSlackIdentity({ employeeId: emp.id, orgId: emp.orgId });
+    const fulfillment = await approveAndFulfill(String(out.approvalId));
+    expect(fulfillment?.ok).toBe(true);
+    expect(fulfillment?.noticeJa).toBeUndefined();
+    expect(removedAudit(String(out.approvalId))?.metadata?.slackIdentityRemains).toBe(false);
+  });
+
+  test("already removed from allowedAccounts but still linked: the not-found error carries the notice", async () => {
+    const emp = newEmployee(ORG_A, [{ service: "slack", accountId: SLACK_U }]);
+    await linkSlack(emp);
+    runtimeEmployee(emp.id)!.allowedAccounts = [{ service: "google", accountId: "sales@example.co.jp" }];
+    const res = await callAdminMcpTool(REMOVE, { employeeId: emp.id, provider: "slack", accountId: SLACK_U }, cred());
+    expect(res.isError).toBe(true);
+    expect(data(res).code).toBe("allowed_account_not_found");
+    expect(data(res).slackIdentityNoticeJa).toBe(SLACK_NOTICE_JA);
+    await revokeEmployeeSlackIdentity({ employeeId: emp.id, orgId: emp.orgId });
   });
 });

@@ -2150,7 +2150,8 @@ export async function callAdminMcpTool(
       title: outcome.title,
       summary: outcome.summary,
     });
-    return toolResult(queued, false);
+    const queuedOk = (queued as { code?: string }).code === "needs_approval";
+    return toolResult(queuedOk && outcome.resultExtra ? { ...queued, ...outcome.resultExtra } : queued, false);
   }
 
   if (name === "policy.patch" || name === "link") {

@@ -620,7 +620,14 @@ async function fulfillAllowedAccountsTicket(
   const result = await fulfillAllowedAccountsChange(approval, tool, args);
   const at = new Date().toISOString();
   if (!result.ok) {
-    return { ok: false, tool, at, error: result.code, nextStepJa: result.messageJa };
+    return {
+      ok: false,
+      tool,
+      at,
+      error: result.code,
+      nextStepJa: result.nextStepJa ? `${result.messageJa}${result.nextStepJa}` : result.messageJa,
+      ...(result.noticeJa ? { noticeJa: result.noticeJa } : {}),
+    };
   }
   return {
     ok: true,
@@ -628,7 +635,8 @@ async function fulfillAllowedAccountsTicket(
     at,
     employeeId: result.employeeId,
     summaryJa: result.summaryJa,
-    nextStepJa: "employees.allowedAccounts.list で現在の許可アカウントを確認できます。",
+    nextStepJa: result.nextStepJa ?? "employees.allowedAccounts.list で現在の許可アカウントを確認できます。",
+    ...(result.noticeJa ? { noticeJa: result.noticeJa } : {}),
   };
 }
 

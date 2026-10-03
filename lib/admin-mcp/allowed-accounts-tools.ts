@@ -27,6 +27,7 @@ import { rejectUnsafeArgs } from "@/lib/admin-mcp/slack-dm-setup";
 import { appendAuditEvent } from "@/lib/data/audit";
 import { getBinding } from "@/lib/data/bindings";
 import { getEmployee, updateEmployeeAllowedAccounts } from "@/lib/data/employees";
+import { getEmployeeSlackIdentity } from "@/lib/data/slack-identities";
 import { normalizeAllowedAccounts, serviceLabel } from "@/lib/employees/allowed-accounts";
 import type { AllowedAccount, ApprovalRequest, Employee } from "@/lib/types";
 
@@ -174,10 +175,53 @@ function browserUseNeedsAccounts(employee: Employee, after: AllowedAccount[]): b
 // ---------------------------------------------------------------------------
 // Tool handler (queue phase) — called from callAdminMcpTool
 // ---------------------------------------------------------------------------
+// Existing Slack identity notice (remove)
+// ---------------------------------------------------------------------------
+
+/**
+ * Runtime Slack paths do not re-check allowedAccounts: inbound wake
+ * (getEmployeesBySlackUserIds / IM routes) and user-token sending
+ * (getLinkedSlackUserToken) only read employee_slack_identities.
+ * allowedAccounts is enforced when an identity is bound
+ * (bindEmployeeSlackIdentity: OAuth callback and the #240 re-authorize link).
+ * So removing a Slack U… leaves an already linked identity working; we say so
+ * instead of silently implying it stopped. No auto-unlink here.
+ */
+export const SLACK_IDENTITY_REMAINS_NOTICE_JA =
+  "既存の Slack 紐づけは残っています。止めるにはダッシュボードで解除してください";
+export const SLACK_IDENTITY_UNLINK_NEXT_STEP_JA =
+  "ダッシュボードの AI社員詳細 →「Slack 連携（Authorize）」→「連携を解除」で止められます。";
+
+/** True only when this employee has a LINKED identity for exactly this Slack user, in this org. */
+async function slackIdentityRemainsFor(employee: Employee, provider: string, accountId: string): Promise<boolean> {
+  if (provider !== "slack") return false;
+  const identity = await getEmployeeSlackIdentity(employee.id).catch(() => null);
+  return Boolean(
+    identity &&
+      identity.orgId === employee.orgId &&
+      identity.status === "linked" &&
+      identity.slackUserId.trim().toUpperCase() === accountId.trim().toUpperCase()
+  );
+}
+
+function slackNoticeFields(remains: boolean): Record<string, unknown> {
+  return remains
+    ? { slackIdentityRemains: true, slackIdentityNoticeJa: SLACK_IDENTITY_REMAINS_NOTICE_JA, nextStepJa: SLACK_IDENTITY_UNLINK_NEXT_STEP_JA }
+    : {};
+}
+
+// ---------------------------------------------------------------------------
 
 export type AllowedAccountsToolOutcome =
   | { kind: "result"; data: Record<string, unknown>; isError?: boolean }
-  | { kind: "queue"; queuedArgs: Record<string, unknown>; summary: string; title: string };
+  | {
+      kind: "queue";
+      queuedArgs: Record<string, unknown>;
+      summary: string;
+      title: string;
+      /** Extra fields merged into the MCP result once the ticket is queued. */
+      resultExtra?: Record<string, unknown>;
+    };
 
 function fail(code: string, message: string, extra: Record<string, unknown> = {}): AllowedAccountsToolOutcome {
   return { kind: "result", data: { ok: false, code, message, ...extra }, isError: true };
@@ -272,10 +316,12 @@ export async function handleAllowedAccountsTool(
     };
   }
 
+  const slackRemains = await slackIdentityRemainsFor(employee, parsed.provider, parsed.accountId);
   if (!present) {
     return fail(
       "allowed_account_not_found",
-      `社員「${displayNameJa(employee)}」の許可アカウントに ${serviceLabel(parsed.provider)} ${parsed.accountId} はありません。employees.allowedAccounts.list で確認してください。`
+      `社員「${displayNameJa(employee)}」の許可アカウントに ${serviceLabel(parsed.provider)} ${parsed.accountId} はありません。employees.allowedAccounts.list で確認してください。${slackRemains ? SLACK_IDENTITY_REMAINS_NOTICE_JA + "。" : ""}`,
+      slackNoticeFields(slackRemains)
     );
   }
   const after = current.filter((row) => !sameAccount(row, parsed.provider, parsed.accountId, parsed.kind));
@@ -289,7 +335,8 @@ export async function handleAllowedAccountsTool(
     kind: "queue",
     title: "AI社員の許可アカウント削除",
     queuedArgs: { employeeId: employee.id, provider: parsed.provider, accountId: parsed.accountId },
-    summary: `${changeJa("remove", employee, parsed.provider, parsed.accountId)}します（現在 ${current.length} 件 → ${after.length} 件）。承認すると反映されます。`,
+    summary: `${changeJa("remove", employee, parsed.provider, parsed.accountId)}します（現在 ${current.length} 件 → ${after.length} 件）。承認すると反映されます。${slackRemains ? SLACK_IDENTITY_REMAINS_NOTICE_JA + "。" : ""}`,
+    ...(slackRemains ? { resultExtra: slackNoticeFields(true) } : {}),
   };
 }
 
@@ -298,8 +345,8 @@ export async function handleAllowedAccountsTool(
 // ---------------------------------------------------------------------------
 
 export type AllowedAccountsFulfillment =
-  | { ok: true; employeeId: string; changed: boolean; summaryJa: string }
-  | { ok: false; code: string; messageJa: string };
+  | { ok: true; employeeId: string; changed: boolean; summaryJa: string; noticeJa?: string; nextStepJa?: string }
+  | { ok: false; code: string; messageJa: string; noticeJa?: string; nextStepJa?: string };
 
 function requesterOf(approval: ApprovalRequest): { kind: "admin_agent"; adminAgentId: string | null; grokBotAgentId: string | null } {
   const raw = approval.metadata?.adminRequester;
@@ -377,12 +424,20 @@ export async function fulfillAllowedAccountsChange(
     });
     return { ok: true, employeeId: employee.id, changed: false, summaryJa: `${change}する依頼でしたが、既に登録済みのため変更しませんでした。` };
   }
+  // Remove: is a linked Slack identity for this U… still there (checked now, not at queue time)?
+  const slackRemains =
+    tool === ALLOWED_ACCOUNTS_REMOVE_TOOL && (await slackIdentityRemainsFor(employee, parsed.provider, parsed.accountId));
+  const noticeSuffix = slackRemains ? `${SLACK_IDENTITY_REMAINS_NOTICE_JA}。` : "";
+  const noticeOut = slackRemains
+    ? { noticeJa: SLACK_IDENTITY_REMAINS_NOTICE_JA, nextStepJa: SLACK_IDENTITY_UNLINK_NEXT_STEP_JA }
+    : {};
   if (tool === ALLOWED_ACCOUNTS_REMOVE_TOOL && !present) {
-    return failWith(
+    const failed = await failWith(
       "allowed_account_not_found",
-      `承認待ちの間に ${serviceLabel(parsed.provider)} ${parsed.accountId} が許可アカウントから外れていたため、反映しませんでした。`,
+      `承認待ちの間に ${serviceLabel(parsed.provider)} ${parsed.accountId} が許可アカウントから外れていたため、反映しませんでした。${noticeSuffix}`,
       employee.id
     );
+    return { ...failed, ...noticeOut };
   }
 
   const after =
@@ -411,13 +466,22 @@ export async function fulfillAllowedAccountsChange(
     actorEmail: approver ?? undefined,
     action: "admin.policy",
     purpose: "admin.policy",
-    summary: `${change}（管理MCP・人承認）`,
+    summary: `${change}（管理MCP・人承認）${noticeSuffix}`,
     metadata: {
       ...auditBase,
       event: tool === ALLOWED_ACCOUNTS_ADD_TOOL ? "employee.allowed_accounts.added" : "employee.allowed_accounts.removed",
       before,
       after,
+      ...(tool === ALLOWED_ACCOUNTS_REMOVE_TOOL
+        ? { slackIdentityRemains: slackRemains, ...(slackRemains ? { slackIdentityNoticeJa: SLACK_IDENTITY_REMAINS_NOTICE_JA } : {}) }
+        : {}),
     },
   });
-  return { ok: true, employeeId: employee.id, changed: true, summaryJa: `${change}しました（${before.length} 件 → ${after.length} 件）。` };
+  return {
+    ok: true,
+    employeeId: employee.id,
+    changed: true,
+    summaryJa: `${change}しました（${before.length} 件 → ${after.length} 件）。${noticeSuffix}`,
+    ...noticeOut,
+  };
 }
