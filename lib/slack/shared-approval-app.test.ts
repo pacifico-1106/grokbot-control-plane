@@ -60,6 +60,8 @@ let calls: Array<{ method: string; auth: string; body: Record<string, unknown> }
 let team = "";
 let seq = 0;
 let usersInfoTeam: string | null = null;
+/** chat.postMessage failure code for the delivery-path revocation tests. */
+let postMessageError: string | null = null;
 
 function newTeam(): string {
   seq += 1;
@@ -85,7 +87,10 @@ function installFetch() {
     }
     if (method === "users.info") return json({ ok: true, user: { id: String(body.user), team_id: usersInfoTeam ?? team } });
     if (method === "conversations.open") return json({ ok: true, channel: { id: DM, is_im: true } });
-    if (method === "chat.postMessage") return json({ ok: true, channel: String(body.channel || DM), ts: `17000000${calls.length}.0001` });
+    if (method === "chat.postMessage") {
+      if (postMessageError) return json({ ok: false, error: postMessageError });
+      return json({ ok: true, channel: String(body.channel || DM), ts: `17000000${calls.length}.0001` });
+    }
     if (method === "chat.update") return json({ ok: true });
     if (method === "auth.revoke") return json({ ok: true, revoked: true });
     return json({ ok: false, error: "unknown_method" });
@@ -159,6 +164,7 @@ beforeEach(() => {
   installFetch();
   team = newTeam();
   usersInfoTeam = null;
+  postMessageError = null;
   revoked.length = 0;
   resetDemoNotificationChannels(ORG);
   resetDemoNotificationChannels(OTHER_ORG);
@@ -615,6 +621,169 @@ describe("events (app_uninstalled / tokens_revoked)", () => {
     await installAndSetApprover();
     expect(await event({ type: "event_callback", api_app_id: APP, team_id: team, event: { type: "tokens_revoked", tokens: { bot: ["USHAREDBOT1"] } } })).toMatchObject({ status: 200, body: { disabled: 1 } });
     expect((await sharedInbox())!.enabled).toBe(false);
+  });
+});
+
+describe("revocation → the shared app's encrypted secrets are deleted (要判断 4)", () => {
+  async function event(type: "app_uninstalled" | "tokens_revoked", teamId = team) {
+    const payload =
+      type === "app_uninstalled"
+        ? { type: "event_callback", api_app_id: APP, team_id: teamId, event: { type } }
+        : { type: "event_callback", api_app_id: APP, team_id: teamId, event: { type, tokens: { bot: ["USHAREDBOT1"] } } };
+    const rawBody = JSON.stringify(payload);
+    return handleSharedApprovalAppEvent({ rawBody, ...sign(rawBody) });
+  }
+  // Exact replica of #240 resolveApprovalAppBotToken (head de313e4).
+  async function resolveApprovalAppBotToken(orgId: string, inboxId: string): Promise<string> {
+    const owned = (await listNotificationChannels(orgId)).some(
+      (channel) => channel.id === inboxId && channel.orgId === orgId && channel.provider === "slack" && channel.enabled
+    );
+    if (!owned) return "";
+    const token = String((await getNotificationChannelSecretsById(orgId, inboxId))?.botToken || "").trim();
+    return token.startsWith("xoxb-") ? token : "";
+  }
+  // Demo audit is shared across tests → scope to this test's inbox(es).
+  async function purgeAudits(orgId = ORG, inboxId?: string) {
+    const id = inboxId ?? (await sharedInbox(orgId))?.id;
+    return (await listAuditEvents(orgId, 200)).filter(
+      (e) => (e.metadata as Record<string, unknown>)?.event === "shared_approval_app.secrets_purged" && (!id || (e.metadata as Record<string, unknown>)?.inboxId === id)
+    );
+  }
+
+  test("app_uninstalled → botToken deleted; audit has only teamId / deletedAt / reason / key names (no token)", async () => {
+    const inbox = await installAndSetApprover();
+    expect(await getNotificationChannelSecretsById(ORG, inbox.id)).toEqual({ botToken: BOT });
+    const result = await event("app_uninstalled");
+    expect(result).toMatchObject({ status: 200, body: { ok: true, disabled: 1, purged: 1 } });
+    expect(await getNotificationChannelSecretsById(ORG, inbox.id)).toEqual({});
+    const after = (await sharedInbox())!;
+    expect(after.enabled).toBe(false);
+    expect(after.hasCredentials).toBe(false);
+    expect(after.config).toMatchObject({ teamId: team, disabledReason: "app_uninstalled" });
+    const audits = await purgeAudits();
+    expect(audits.length).toBe(1);
+    const meta = audits[0].metadata as Record<string, unknown>;
+    expect(meta).toMatchObject({ teamId: team, reason: "app_uninstalled", deletedKeys: ["botToken"], inboxId: inbox.id });
+    expect(typeof meta.deletedAt).toBe("string");
+    expect(Number.isNaN(Date.parse(String(meta.deletedAt)))).toBe(false);
+    noSecrets(audits);
+    expect(JSON.stringify(audits)).not.toContain("xoxb-");
+  });
+
+  test("tokens_revoked (bot) → deleted with reason tokens_revoked", async () => {
+    const inbox = await installAndSetApprover();
+    expect(await event("tokens_revoked")).toMatchObject({ status: 200, body: { purged: 1 } });
+    expect(await getNotificationChannelSecretsById(ORG, inbox.id)).toEqual({});
+    expect((await purgeAudits())[0].metadata).toMatchObject({ reason: "tokens_revoked", deletedKeys: ["botToken"] });
+  });
+
+  test("idempotent: the same event twice → second is a no-op (one disable audit, one purge audit, still no secrets)", async () => {
+    process.env.APPROVAL_DELIVERY_FAILURE_ALERT = "true";
+    const inbox = await installAndSetApprover();
+    expect(await event("app_uninstalled")).toMatchObject({ status: 200, body: { disabled: 1, purged: 1 } });
+    expect(await event("app_uninstalled")).toMatchObject({ status: 200, body: { ok: true, disabled: 0, purged: 0 } });
+    expect(await event("tokens_revoked")).toMatchObject({ status: 200, body: { ok: true, disabled: 0, purged: 0 } });
+    expect(await getNotificationChannelSecretsById(ORG, inbox.id)).toEqual({});
+    expect((await purgeAudits()).length).toBe(1);
+    const disabledAudits = (await listAuditEvents(ORG, 200)).filter(
+      (e) => (e.metadata as Record<string, unknown>)?.event === "shared_approval_app.disabled" && (e.metadata as Record<string, unknown>)?.inboxId === inbox.id
+    );
+    expect(disabledAudits.length).toBe(1);
+    expect((await sharedInbox())!.config).toMatchObject({ disabledReason: "app_uninstalled" });
+  });
+
+  test("other orgs' secrets and this org's per-tenant Slack inbox are never touched", async () => {
+    // Other org: its own per-tenant Slack app in another workspace.
+    const otherTeam = newTeam();
+    const otherInbox = await upsertNotificationChannel({
+      orgId: OTHER_ORG,
+      provider: "slack",
+      enabled: true,
+      label: "other org app",
+      config: { channelId: "", allowedUserIds: ["UOTHER0001"], teamId: otherTeam, expectedTeamId: otherTeam },
+      secrets: { botToken: "xoxb-other-org-SECRET-9", signingSecret: "other-sign-SECRET" },
+    });
+    const inbox = await installAndSetApprover();
+    // This org's per-tenant approval app in the SAME workspace (allowed in parallel).
+    const tenantInbox = await upsertNotificationChannel({
+      orgId: ORG,
+      provider: "slack",
+      enabled: true,
+      label: "tenant app",
+      config: { channelId: "", allowedUserIds: [APPROVER], teamId: team, expectedTeamId: team },
+      secrets: { botToken: "xoxb-tenant-app-SECRET-8", signingSecret: "tenant-sign-SECRET" },
+    });
+    expect(await event("app_uninstalled")).toMatchObject({ status: 200, body: { purged: 1 } });
+    expect(await getNotificationChannelSecretsById(ORG, inbox.id)).toEqual({});
+    expect(await getNotificationChannelSecretsById(OTHER_ORG, otherInbox.id)).toEqual({ botToken: "xoxb-other-org-SECRET-9", signingSecret: "other-sign-SECRET" });
+    expect(await getNotificationChannelSecretsById(ORG, tenantInbox.id)).toEqual({ botToken: "xoxb-tenant-app-SECRET-8", signingSecret: "tenant-sign-SECRET" });
+    expect((await listNotificationChannels(ORG)).find((r) => r.id === tenantInbox.id)!.enabled).toBe(true);
+    // An event for the other org's workspace never reaches its (non-shared) inbox.
+    expect(await event("app_uninstalled", otherTeam)).toMatchObject({ status: 200, body: { ignored: true, reason: "unknown_team" } });
+    expect(await getNotificationChannelSecretsById(OTHER_ORG, otherInbox.id)).toEqual({ botToken: "xoxb-other-org-SECRET-9", signingSecret: "other-sign-SECRET" });
+    expect((await purgeAudits(OTHER_ORG, otherInbox.id)).length).toBe(0);
+  });
+
+  test("after deletion the #240 resolver gets no token (fail-closed), even if the row were enabled again; re-enable without a token is refused", async () => {
+    const inbox = await installAndSetApprover();
+    expect(await resolveApprovalAppBotToken(ORG, inbox.id)).toBe(BOT);
+    await event("app_uninstalled");
+    expect(await resolveApprovalAppBotToken(ORG, inbox.id)).toBe("");
+    // Token absence alone is enough: the secrets read returns nothing for the row.
+    expect(String((await getNotificationChannelSecretsById(ORG, inbox.id)).botToken || "")).toBe("");
+    // Turning the row back on without a new install is refused (no bot token).
+    const row = (await sharedInbox())!;
+    await expect(
+      upsertNotificationChannel({ id: row.id, orgId: ORG, provider: "slack", label: row.label, enabled: true, config: row.config, secrets: {} })
+    ).rejects.toThrow("slack_credentials_incomplete");
+    // The approver DM cannot be opened with no token.
+    expect(await openApprovalDeliveryDm({ botToken: await resolveApprovalAppBotToken(ORG, inbox.id), allowedUserIds: [APPROVER] })).toMatchObject({ ok: false, code: "bot_token_required" });
+  });
+
+  test("re-install by the same org restores it: new xoxb stored, inbox enabled, approver kept, #240 resolver returns the new token", async () => {
+    const inbox = await installAndSetApprover();
+    await event("app_uninstalled");
+    const NEW_BOT = "xoxb-shared-approval-reinstalled-SECRET-4";
+    const again = await completeSharedApprovalInstall({ orgId: ORG, code: "c2", deps: deps(goodExchange({ access_token: NEW_BOT })) });
+    expect(again.ok).toBe(true);
+    const restored = (await sharedInbox())!;
+    expect(restored.id).toBe(inbox.id);
+    expect(restored.enabled).toBe(true);
+    expect(restored.config.disabledReason).toBeUndefined();
+    expect(restored.config.allowedUserIds).toEqual([APPROVER]);
+    expect(await getNotificationChannelSecretsById(ORG, inbox.id)).toEqual({ botToken: NEW_BOT });
+    expect(await resolveApprovalAppBotToken(ORG, inbox.id)).toBe(NEW_BOT);
+  });
+
+  test("delivery path: Slack answers token_revoked to a real approval → same disable + delete; other errors delete nothing", async () => {
+    const inbox = await installAndSetApprover();
+    const employee = getRuntimeEmployees().find((e) => e.orgId === ORG && e.status === "active")!;
+    const make = async (title: string) =>
+      (await createApproval({ orgId: ORG, employeeId: employee.id, credentialId: "cred_shared_revoke", title, purpose: "fixture", summary: "fixture", risk: "medium" })).approval;
+    // A non-revocation error (e.g. channel_not_found) keeps the token.
+    postMessageError = "channel_not_found";
+    await sendApprovalNotifications(await make("not revoked"), employee);
+    expect(await getNotificationChannelSecretsById(ORG, inbox.id)).toEqual({ botToken: BOT });
+    expect((await sharedInbox())!.enabled).toBe(true);
+    // token_revoked from Slack → disabled + deleted.
+    postMessageError = "token_revoked";
+    await sendApprovalNotifications(await make("revoked"), employee);
+    expect(await getNotificationChannelSecretsById(ORG, inbox.id)).toEqual({});
+    const after = (await sharedInbox())!;
+    expect(after.enabled).toBe(false);
+    expect(after.config).toMatchObject({ disabledReason: "token_revoked", teamId: team });
+    expect((await purgeAudits())[0].metadata).toMatchObject({ teamId: team, reason: "token_revoked", deletedKeys: ["botToken"] });
+    noSecrets(await purgeAudits());
+  });
+
+  test("delivery path: flag OFF → nothing is deleted even on token_revoked", async () => {
+    const inbox = await installAndSetApprover();
+    const employee = getRuntimeEmployees().find((e) => e.orgId === ORG && e.status === "active")!;
+    process.env.SLACK_SHARED_APPROVAL_APP_ENABLED = "false";
+    postMessageError = "token_revoked";
+    const { approval } = await createApproval({ orgId: ORG, employeeId: employee.id, credentialId: "cred_shared_revoke", title: "off", purpose: "fixture", summary: "fixture", risk: "medium" });
+    await sendApprovalNotifications(approval, employee);
+    expect(await getNotificationChannelSecretsById(ORG, inbox.id)).toEqual({ botToken: BOT });
   });
 });
 

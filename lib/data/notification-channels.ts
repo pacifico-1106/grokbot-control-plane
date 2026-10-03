@@ -733,6 +733,62 @@ const SLACK_TEAM_RE = /^T[A-Z0-9]{2,30}$/;
 const SLACK_APP_RE = /^A[A-Z0-9]{2,30}$/;
 
 /**
+ * SLACK_SHARED_APPROVAL_APP_ENABLED: after the shared approval app was removed /
+ * its bot token revoked, delete that inbox's encrypted secrets (botToken; a
+ * shared inbox stores nothing else). Scoped to (orgId, channelId) AND to a row
+ * carrying the shared-app marker — another org's row, or a per-tenant Slack
+ * inbox, is never touched. Returns the deleted key NAMES only (never values).
+ * Idempotent: no secrets left → []. Throws on a storage error (caller logs).
+ */
+export async function purgeSharedApprovalChannelSecrets(input: {
+  orgId: string;
+  channelId: string;
+}): Promise<{ deletedKeys: string[] }> {
+  const orgId = (input.orgId || "").trim();
+  const channelId = (input.channelId || "").trim();
+  if (!orgId || !channelId) return { deletedKeys: [] };
+  if (isDemoMode()) {
+    const row = demoChannels.find((item) => item.id === channelId && item.orgId === orgId);
+    if (!row || row.provider !== "slack" || !isSharedApprovalAppChannelConfig(row.config)) return { deletedKeys: [] };
+    const deletedKeys = Object.keys(row.secrets || {}).sort();
+    row.secrets = {};
+    row.hasCredentials = false;
+    if (deletedKeys.length > 0) row.updatedAt = new Date().toISOString();
+    return { deletedKeys };
+  }
+  const admin = createSupabaseAdminClient();
+  if (!admin) throw new Error("supabase_not_configured");
+  const { data: channel, error: channelError } = await admin
+    .from("org_notification_channels")
+    .select("id,org_id,provider,config")
+    .eq("org_id", orgId)
+    .eq("id", channelId)
+    .maybeSingle();
+  if (channelError) throw new Error("shared_inbox_lookup_failed");
+  const row = channel as { id?: unknown; org_id?: unknown; provider?: unknown; config?: Record<string, unknown> } | null;
+  if (!row || String(row.org_id) !== orgId || row.provider !== "slack" || !isSharedApprovalAppChannelConfig(row.config ?? null)) {
+    return { deletedKeys: [] };
+  }
+  const { data: secretRow, error: secretError } = await admin
+    .from("org_notification_channel_secrets")
+    .select("credentials_ciphertext")
+    .eq("channel_id", channelId)
+    .maybeSingle();
+  if (secretError) throw new Error("shared_inbox_secret_lookup_failed");
+  const ciphertext = String(secretRow?.credentials_ciphertext || "");
+  if (!ciphertext) return { deletedKeys: [] };
+  let deletedKeys: string[];
+  try {
+    deletedKeys = Object.keys(decryptNotificationSecrets(ciphertext)).sort();
+  } catch {
+    deletedKeys = ["credentials_ciphertext"];
+  }
+  const { error: deleteError } = await admin.from("org_notification_channel_secrets").delete().eq("channel_id", channelId);
+  if (deleteError) throw new Error("shared_inbox_secret_delete_failed");
+  return { deletedKeys };
+}
+
+/**
  * Slack inboxes of ANY org (enabled or not) that are pinned to `teamId`
  * (config.teamId or config.expectedTeamId). Public fields only — no secrets.
  * Used by the shared approval app install to refuse a workspace already bound

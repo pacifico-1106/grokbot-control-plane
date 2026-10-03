@@ -8,16 +8,18 @@
  * 2. url_verification → challenge.
  * 3. app_uninstalled / tokens_revoked (bot tokens) → team_id → that workspace's
  *    shared-app inbox(es) → disabled (approvals can no longer be sent through
- *    it) + admin audit + #236 alert (APPROVAL_DELIVERY_FAILURE_ALERT).
+ *    it) + admin audit + #236 alert (APPROVAL_DELIVERY_FAILURE_ALERT), then its
+ *    encrypted secrets (botToken) are deleted (audit: teamId / deletedAt /
+ *    reason / key names only). See lib/slack/shared-approval-revoke.ts.
  *    The org's binding to the workspace is kept (config.teamId stays), so a
  *    re-install by the same org reuses it and another org still cannot take it.
+ *    Idempotent: a repeated event does nothing.
  * 4. Any other event / unknown team → 200 and ignored.
  */
-import { appendAuditEvent } from "@/lib/data/audit";
-import { findSharedApprovalChannelsByTeam, upsertNotificationChannel } from "@/lib/data/notification-channels";
-import { alertApprovalDeliveryFailure } from "@/lib/notify/delivery-failure-alert";
+import { findSharedApprovalChannelsByTeam } from "@/lib/data/notification-channels";
 import { verifySlackSignature } from "@/lib/notify/slack";
 import { isSharedApprovalAppEnabled, sharedApprovalAppConfig } from "@/lib/slack/shared-approval-app";
+import { retireSharedApprovalInbox } from "@/lib/slack/shared-approval-revoke";
 
 export const SHARED_APPROVAL_APP_BOT_EVENTS = ["app_uninstalled", "tokens_revoked"] as const;
 
@@ -77,43 +79,12 @@ export async function handleSharedApprovalAppEvent(input: {
   if (inboxes.length === 0) return { status: 200, body: { ok: true, ignored: true, reason: "unknown_team" } };
 
   let disabled = 0;
+  let purged = 0;
   for (const inbox of inboxes) {
-    if (!inbox.enabled) continue;
-    const at = new Date().toISOString();
-    try {
-      await upsertNotificationChannel({
-        id: inbox.id,
-        orgId: inbox.orgId,
-        provider: "slack",
-        label: inbox.label,
-        enabled: false,
-        isDefault: inbox.isDefault,
-        config: { ...inbox.config, disabledReason: reason, disabledAt: at },
-        secrets: {},
-      });
-      disabled += 1;
-    } catch (error) {
-      console.error("slack_shared_approval_disable_failed", inbox.id, String((error as Error)?.message || ""));
-      continue;
-    }
-    await appendAuditEvent({
-      orgId: inbox.orgId,
-      employeeId: null,
-      credentialId: null,
-      actorEmail: "slack_shared_approval_events",
-      action: "admin.notificationChannel",
-      purpose: "admin.notificationChannel",
-      summary: `共通承認アプリが Slack から外されたため承認口を無効にしました（${reason}）。承認依頼は届きません`,
-      metadata: { auditClass: "admin", event: "shared_approval_app.disabled", reason, inboxId: inbox.id, teamId },
-    }).catch(() => undefined);
-    await alertApprovalDeliveryFailure({
-      orgId: inbox.orgId,
-      kind: "delivery_failed",
-      approvalId: null,
-      provider: "slack",
-      channelId: inbox.id,
-      reason,
-    }).catch(() => undefined);
+    // Idempotent: an already-disabled inbox with no secrets left is a no-op.
+    const retired = await retireSharedApprovalInbox({ inbox, reason, source: "events" });
+    if (retired.disabled) disabled += 1;
+    if (retired.deletedKeys.length > 0) purged += 1;
   }
-  return { status: 200, body: { ok: true, disabled } };
+  return { status: 200, body: { ok: true, disabled, purged } };
 }

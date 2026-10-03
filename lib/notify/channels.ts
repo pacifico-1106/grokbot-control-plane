@@ -142,6 +142,13 @@ export async function sendApprovalNotifications(
     const result = { ...sent, provider: channel.provider, channelId: channel.id } as NotificationDispatchResult;
     results.push(result);
     await auditFailure(approval, result);
+    if (!result.ok && channel.provider === "slack" && channel.config?.sharedApprovalApp === true) {
+      // SLACK_SHARED_APPROVAL_APP_ENABLED: Slack says the shared app's token is gone
+      // (token_revoked / invalid_auth / account_inactive) → disable + delete secrets.
+      // Lazy import: flag-gated inside, never throws.
+      const { retireSharedApprovalInboxOnDeliveryError } = await import("@/lib/slack/shared-approval-revoke");
+      await retireSharedApprovalInboxOnDeliveryError(channel, result.error);
+    }
   }
   if (!channel && await isTokyo307PilotOrg(approval.orgId)) {
     const sent = await sendApprovalToTelegram(approval, employee);
