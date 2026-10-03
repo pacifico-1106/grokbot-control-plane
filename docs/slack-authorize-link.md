@@ -87,3 +87,35 @@
 9. `dmAutoroute.list` で確認
 
 稲盛（未連携）は `allowedAccounts` に本人の Slack U… が 1 件入っていること（なければ発行拒否）。
+
+## 追加（2026-10-04 木村指示）
+
+### 1. `deliverTo`（既定 `employee`）
+
+| `deliverTo` | 社員の U… | 届け先 | 承認者への通知 |
+|---|---|---|---|
+| 省略 / `employee` | ちょうど 1 つ（ピン済み U…） | **社員本人の Slack**（承認アプリ bot が社員 U… と DM を開く。社外・ゲスト・bot・別ワークスペースは拒否＝承認者と同じ検査） | 「社員本人（<@U…>）に再認可リンクを送りました」（URL なし） |
+| 省略 / `employee` | 0 件・複数 | 承認者（`deliveryFallbackReason`: `employee_slack_user_missing` / `employee_slack_user_ambiguous`） | — |
+| 省略 / `employee` | 1 つだが DM を開けない（ゲスト等） | 承認者（`employee_dm_unavailable`、監査に `employeeDmError`） | — |
+| `approver` | — | 承認者（従来どおり） | — |
+
+- 明示 `employee` で 1 つに決まらないときも承認者へフォールバックし、`deliverToExplicit: true` と理由を記録。
+- MCP 結果（URL なし）: `deliveredTo.{target, deliveryUserId, approverUserId, requested, explicit, fallbackReason, approverNoticeSent}`, `deliveryTarget`, `deliveryFallbackReason`。承認後の fulfillment にも `deliveryTarget` / `deliveryFallbackReason`。
+- 監査 `slack_authorize_link.issued`: `deliveredTarget`, `deliverToRequested`, `deliverToExplicit`, `deliveryFallbackReason`, `employeeDmError`, `approverUserId`, `approverChannelId`, `approverNoticeSent`。
+- 連携完了通知は承認者 DM（`approver_channel_id`）へ。
+- **bot token の解決は `resolveApprovalAppBotToken(orgId, inboxId)`（`lib/slack/authorize-link.ts`）の 1 か所だけ**。社員 DM・承認者 DM・完了／失敗通知すべてこれを通る。値は org の Slack 承認口（notification channel）secrets の `botToken`（`xoxb-`）。org 所有・有効な Slack チャネルでなければ空。共有承認アプリ（別 PR）も同じキーに xoxb を保存すればそのまま使える。
+- migration: `slack_authorize_links` に `delivered_target`（既定 `approver`）, `approver_channel_id`, `approver_user_id` を追加（同じ migration 内、`add column if not exists` で冪等）。
+
+### 2. `allowedAccounts` に Slack が無いときの次の手順
+
+**既存の社員証の `allowedAccounts` を編集する管理 MCP ツールはありません**（`employees.issue` は発行時のみ、`policy.patch` は `allowedAccounts` を変更しない）。エラー `slack_account_not_allowed` と `setup.slackDmApprovalStatus` の next step に、ダッシュボードの AI 社員ページ「ブラウザ・外部アカウント」で人が Slack の U… を追加 → 保存 → `setup.slackAuthorizeLink.issue` を再実行、と出す（`nextStepJa`, `allowedAccountsAdminTool: null`）。status の社員行には `allowedSlackAccounts`（件数）。
+
+### 3. 失敗通知
+
+`user_mismatch` と code 交換失敗（`oauth_exchange_failed`）では、リンクは使用済みのまま、リンクを受け取った相手（社員本人 or 承認者）に承認アプリの DM で
+「再認可リンクが別のアカウントで開かれた（または認可に失敗した）ため無効になりました。管理者に再発行を依頼してください。」
+を送り、結果ページにも同じ文言を出す。別アカウントの U… は通知・ページに出さない（監査 `slack_authorize_link.rejected` の `attemptedSlackUserId` は従来どおり admin 監査のみ）。通知の失敗は callback の応答に影響しない（監査に `failureNoticeSent` / `failureNoticeTarget`）。
+
+### 4. 変わらないもの
+
+URL 平文は MCP 結果・監査に出さない。`SLACK_AUTHORIZE_LINK_REISSUE_AUDIT_ONLY` の発動条件は不変（届け先だけ `deliverTo` に従う）。どちらのフラグも既定 OFF。
