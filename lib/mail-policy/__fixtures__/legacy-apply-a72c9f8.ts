@@ -1,4 +1,11 @@
 /**
+ * TEST FIXTURE ONLY — frozen copy of lib/mail-policy/apply.ts as of
+ * origin/main a72c9f8 (after #223 + #227 merged).
+ * Used by mail-policy-followup tests to prove the follow-up hardening is never
+ * looser than current main for any input in the test grid.
+ * Do not import from production code.
+ */
+/**
  * B1 Mail Policy — outbound mail send/draft evaluation.
  *
  * Fail-closed: default external → draft_only.
@@ -16,14 +23,6 @@
  * - No matching rule never yields auto: approval is the floor, and the legacy
  *   first-rule outcome is kept only when it is stricter (draft / reject).
  * - rule.requireHumanFinalSend forces approval on auto.
- *
- * Follow-up (2026-10-03, after #227) — stricter-only:
- * - toDomainDenylist also matches subdomains on an exact label boundary
- *   (deny "example.com" blocks "mail.example.com", never "badexample.com").
- *   The allowlist stays exact on purpose (widening it would loosen).
- * - Every primary recipient field (args.to / recipient / email, body.email,
- *   conversation.email) is judged, not only the first non-empty one
- *   (collectMailToRecipients).
  */
 import type {
   AttachmentHandoff,
@@ -36,7 +35,7 @@ import type {
   SealithHandoff,
 } from "@/lib/types";
 import { isEmailDomainInternal } from "@/lib/data/internal-audience-rule";
-import { defaultMailPolicy } from "./validate";
+import { defaultMailPolicy } from "../validate";
 
 export interface EvaluateMailPolicyInput {
   policy?: OrgMailPolicy | null;
@@ -82,42 +81,6 @@ export function parseMailRecipientList(raw: string): {
   return { recipients, invalid };
 }
 
-/**
- * Normalize one denylist entry. Tolerates "@example.com", "*.example.com",
- * ".example.com", a trailing dot and any case. Normalizing can only make the
- * denylist match more domains (stricter); it is never used for the allowlist.
- */
-function normalizeDenyEntry(entry: unknown): string {
-  if (typeof entry !== "string") return "";
-  let e = entry.trim().toLowerCase();
-  if (e.startsWith("@")) e = e.slice(1);
-  if (e.startsWith("*.")) e = e.slice(2);
-  while (e.startsWith(".")) e = e.slice(1);
-  while (e.endsWith(".")) e = e.slice(0, -1);
-  return e;
-}
-
-/**
- * Denylist match on an exact DNS label boundary: the domain equals the entry
- * or ends with "." + entry. "mail.example.com" matches "example.com";
- * "badexample.com" does not (no substring / suffix-without-dot matching).
- */
-export function isDomainDenylisted(
-  domain: string,
-  denylist: readonly unknown[] | null | undefined
-): boolean {
-  if (!denylist?.length) return false;
-  let d = domain.trim().toLowerCase();
-  while (d.endsWith(".")) d = d.slice(0, -1);
-  if (!d) return false;
-  for (const raw of denylist) {
-    const entry = normalizeDenyEntry(raw);
-    if (!entry) continue;
-    if (d === entry || d.endsWith(`.${entry}`)) return true;
-  }
-  return false;
-}
-
 function classifyAudience(
   to: string,
   internalRule?: OrgInternalAudienceRule | null
@@ -142,7 +105,7 @@ function selectRule(
       !rule.audience || rule.audience === "any" || rule.audience === audience;
     if (!audienceMatch) continue;
 
-    if (isDomainDenylisted(domain, rule.toDomainDenylist)) {
+    if (rule.toDomainDenylist?.length && rule.toDomainDenylist.includes(domain)) {
       return { rule, matched: true };
     }
 
@@ -227,7 +190,7 @@ function evaluateRule(
 
   auditLabels.push(`sendMode:${rule.sendMode}`);
 
-  if (isDomainDenylisted(domain, rule.toDomainDenylist)) {
+  if (rule.toDomainDenylist?.length && rule.toDomainDenylist.includes(domain)) {
     return {
       allowed: false,
       rejected: true,
@@ -506,46 +469,6 @@ export function evaluateMailPolicy(
     ],
     appliedRules: [...decision.appliedRules, ...appliedRules.filter((id) => !decision.appliedRules.includes(id))],
   };
-}
-
-/**
- * Primary recipient fields, in the legacy precedence order. Legacy judged only
- * the first non-empty one; every present one is now judged (strictest wins).
- */
-const PRIMARY_RECIPIENT_FIELDS = ["to", "recipient", "email"] as const;
-
-/**
- * Collect every primary recipient source for mail policy evaluation:
- * args.to, args.recipient, args.email, body.email, body.conversation.email.
- * Returns them joined as one comma list (parsed by parseMailRecipientList) so a
- * second field can never hide an external / denied address. A present but
- * non-string source sets `malformed` (fail-closed reject).
- */
-export function collectMailToRecipients(body: {
-  args?: Record<string, unknown>;
-  email?: unknown;
-  conversation?: { email?: unknown } | null;
-}): { to: string; sources: string[]; malformed: boolean } {
-  const args = body.args && typeof body.args === "object" ? body.args : {};
-  const conversation =
-    body.conversation && typeof body.conversation === "object" ? body.conversation : null;
-  const raw: unknown[] = [
-    ...PRIMARY_RECIPIENT_FIELDS.map((key) => args[key]),
-    body.email,
-    conversation?.email,
-  ];
-  const sources: string[] = [];
-  let malformed = false;
-  for (const value of raw) {
-    if (value === undefined || value === null) continue;
-    if (typeof value !== "string") {
-      malformed = true;
-      continue;
-    }
-    const trimmed = value.trim();
-    if (trimmed && !sources.includes(trimmed)) sources.push(trimmed);
-  }
-  return { to: sources.join(", "), sources, malformed };
 }
 
 export function extractMailRecipients(body: {

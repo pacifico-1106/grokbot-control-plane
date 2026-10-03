@@ -125,13 +125,14 @@ export function buildApprovalArtifact(
   }
 
   if (tool === "mail.send" || tool === "mail.draft") {
-    const to = firstString(
-      args.to,
-      args.recipient,
-      args.email,
-      body?.email,
-      conversation?.email
-    );
+    // Show every primary recipient field the gateway judges (not only the
+    // first), so the approver sees each address that the mail policy checked.
+    const toSources: string[] = [];
+    for (const value of [args.to, args.recipient, args.email, body?.email, conversation?.email]) {
+      const found = str(value);
+      if (found && !toSources.includes(found)) toSources.push(found);
+    }
+    const to = toSources.length ? toSources.join(", ") : undefined;
     const subject = firstString(args.subject, args.title);
     if (to) artifact.to = to;
     if (subject) artifact.subject = subject;

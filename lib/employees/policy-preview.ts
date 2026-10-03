@@ -48,6 +48,7 @@ function choosablePreview(
   hints?: Record<string, ApprovalPolicy | "deny"> | null
 ): { value: string; tone: PolicyPreviewTone } {
   const hint = hints?.[tool];
+  if (hint === "deny") return { value: "禁止（即拒否）", tone: "danger" };
   if (hint === "auto") return { value: "自動", tone: "warn" };
   if (hint === "risk_based") return { value: "危ないときだけ人が見る", tone: "warn" };
   return { value: "必ず人が見る", tone: "danger" };
