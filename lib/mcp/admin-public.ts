@@ -20,6 +20,9 @@ export const ADMIN_MCP_TOOL_NAMES = [
   "employees.issue",
   "link",
   "policy.patch",
+  "employees.allowedAccounts.add",
+  "employees.allowedAccounts.remove",
+  "employees.allowedAccounts.list",
   "parties.upsert",
   "channels.classify",
   "roles.propose",
@@ -70,6 +73,8 @@ export const ADMIN_MCP_TOOL_NAMES = [
   "dmAutoroute.list",
   "dmAutoroute.run",
   "setup.approvalDelivery.autoResolve",
+  "setup.slackApprover.set",
+  "setup.slackAuthorizeLink.issue",
 ] as const;
 
 export type AdminMcpToolName = (typeof ADMIN_MCP_TOOL_NAMES)[number];

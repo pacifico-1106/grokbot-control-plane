@@ -134,6 +134,9 @@ export type AdminFulfillment = {
   integrationMode?: string;
   summaryJa?: string;
   adminAgentId?: string;
+  /** setup.slackAuthorizeLink.issue: who actually received the link (no URL). */
+  deliveryTarget?: "employee" | "approver";
+  deliveryFallbackReason?: string | null;
 };
 
 const TOOL_NEXTSTEP_JA: Record<string, string> = {
@@ -503,6 +506,11 @@ export function parseAdminFulfillment(
       typeof rec.integrationMode === "string" ? rec.integrationMode : undefined,
     summaryJa: typeof rec.summaryJa === "string" ? rec.summaryJa : undefined,
     adminAgentId: typeof rec.adminAgentId === "string" ? rec.adminAgentId : undefined,
+    deliveryTarget: rec.deliveryTarget === "employee" || rec.deliveryTarget === "approver" ? rec.deliveryTarget : undefined,
+    deliveryFallbackReason:
+      rec.deliveryFallbackReason === null || typeof rec.deliveryFallbackReason === "string"
+        ? (rec.deliveryFallbackReason as string | null)
+        : undefined,
   };
 }
 
@@ -607,6 +615,36 @@ async function fulfillLink(approval: ApprovalRequest, args: Record<string, unkno
     employeeId,
     noticeJa: TOOL_NOTICE_JA.link,
     nextStepJa: TOOL_NEXTSTEP_JA.link,
+  };
+}
+
+/** ADMIN_MCP_ALLOWED_ACCOUNTS_TOOLS_ENABLED: human-approved allowedAccounts add/remove. */
+async function fulfillAllowedAccountsTicket(
+  approval: ApprovalRequest,
+  args: Record<string, unknown>,
+  tool: "employees.allowedAccounts.add" | "employees.allowedAccounts.remove"
+): Promise<AdminFulfillment> {
+  const { fulfillAllowedAccountsChange } = await import("@/lib/admin-mcp/allowed-accounts-tools");
+  const result = await fulfillAllowedAccountsChange(approval, tool, args);
+  const at = new Date().toISOString();
+  if (!result.ok) {
+    return {
+      ok: false,
+      tool,
+      at,
+      error: result.code,
+      nextStepJa: result.nextStepJa ? `${result.messageJa}${result.nextStepJa}` : result.messageJa,
+      ...(result.noticeJa ? { noticeJa: result.noticeJa } : {}),
+    };
+  }
+  return {
+    ok: true,
+    tool,
+    at,
+    employeeId: result.employeeId,
+    summaryJa: result.summaryJa,
+    nextStepJa: result.nextStepJa ?? "employees.allowedAccounts.list で現在の許可アカウントを確認できます。",
+    ...(result.noticeJa ? { noticeJa: result.noticeJa } : {}),
   };
 }
 
@@ -1783,6 +1821,61 @@ async function fulfillDmAutorouteRun(
   };
 }
 
+/** SLACK_SHARED_APPROVAL_APP_ENABLED: human-approved setup.slackApprover.set. */
+async function fulfillSlackApproverSetTicket(
+  approval: ApprovalRequest,
+  args: Record<string, unknown>
+): Promise<AdminFulfillment> {
+  const { fulfillSlackApproverSet } = await import("@/lib/admin-mcp/slack-approver");
+  const result = await fulfillSlackApproverSet({ orgId: approval.orgId, approvalId: approval.id, args });
+  const at = new Date().toISOString();
+  if (!result.ok) {
+    return { ok: false, tool: "setup.slackApprover.set", at, error: result.code, nextStepJa: result.messageJa };
+  }
+  return {
+    ok: true,
+    tool: "setup.slackApprover.set",
+    at,
+    summaryJa: `Staffpass承認 の承認者を ${result.approverSlackUserId} に設定し、承認 DM に「設定しました」を送りました。`,
+    nextStepJa: "テスト承認は不要です。最初に届いた本物の承認依頼のボタンで、そのまま承認・却下してください。",
+  };
+}
+
+/**
+ * SLACK_AUTHORIZE_LINK_ENABLED: human-approved setup.slackAuthorizeLink.issue.
+ * The link URL is delivered only in the approval-app DM; never in this result.
+ */
+async function fulfillSlackAuthorizeLinkTicket(
+  approval: ApprovalRequest,
+  args: Record<string, unknown>
+): Promise<AdminFulfillment> {
+  const { fulfillSlackAuthorizeLinkIssue, issueNextStepJa } = await import("@/lib/admin-mcp/slack-authorize-link");
+  const result = await fulfillSlackAuthorizeLinkIssue({ orgId: approval.orgId, approvalId: approval.id, args });
+  const at = new Date().toISOString();
+  if (!result.ok) {
+    return {
+      ok: false,
+      tool: "setup.slackAuthorizeLink.issue",
+      at,
+      error: result.code,
+      nextStepJa: result.messageJa,
+    };
+  }
+  const to = result.deliveredTo;
+  return {
+    ok: true,
+    tool: "setup.slackAuthorizeLink.issue",
+    at,
+    employeeId: result.employeeId,
+    summaryJa:
+      `Slack 再認可リンクを承認アプリの DM で${to.target === "employee" ? "社員本人" : "承認者"} ${to.deliveryUserId} に送りました` +
+      `（${result.expiresAt} まで・1回限り${to.fallbackReason ? `・社員本人に送れないため承認者へ: ${to.fallbackReason}` : ""}）。URL は返しません。`,
+    nextStepJa: issueNextStepJa(result),
+    deliveryTarget: to.target,
+    deliveryFallbackReason: to.fallbackReason,
+  };
+}
+
 /** PR-4: human-approved setup.approvalDelivery.autoResolve (always_human). */
 async function fulfillApprovalDeliveryAutoResolveTicket(
   approval: ApprovalRequest,
@@ -1831,6 +1924,10 @@ async function fulfillApprovedAdminCore(
         break;
       case "policy.patch":
         fulfillment = await fulfillPolicy(approval, args);
+        break;
+      case "employees.allowedAccounts.add":
+      case "employees.allowedAccounts.remove":
+        fulfillment = await fulfillAllowedAccountsTicket(approval, args, tool);
         break;
       case "parties.upsert":
         fulfillment = await fulfillParty(approval, args);
@@ -1887,6 +1984,12 @@ async function fulfillApprovedAdminCore(
         break;
       case "setup.approvalDelivery.autoResolve":
         fulfillment = await fulfillApprovalDeliveryAutoResolveTicket(approval, args);
+        break;
+      case "setup.slackApprover.set":
+        fulfillment = await fulfillSlackApproverSetTicket(approval, args);
+        break;
+      case "setup.slackAuthorizeLink.issue":
+        fulfillment = await fulfillSlackAuthorizeLinkTicket(approval, args);
         break;
       case "setup.lineApproval.setEmployeeInbox":
         fulfillment = await fulfillLineApprovalSetEmployeeInbox(approval, args);

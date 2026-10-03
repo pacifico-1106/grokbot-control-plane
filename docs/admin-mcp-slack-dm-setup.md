@@ -7,6 +7,8 @@ token / secret は**受け取らず、返しません**（キー名・値が秘�
 | ツール | 種別 | 内容 |
 | --- | --- | --- |
 | `setup.slackDmApprovalStatus` | read-only | フラグ、承認アプリ（App B）の Bot スコープ確認（`chat:write, im:write, im:read, users:read`）、承認口の宛先・自動オープン・「設定しました」の状態、社内 slack_user 相手数、社員ごとの Slack 連携と user token の不足スコープ（`im:write`）＋再認可 URL、`missingScopes`（スコープ名＋Slack アプリの deep link）、順番つき `nextStepsJa`。`testApprovalRequired` は常に false。 |
+| `setup.slackApprover.set` | always_human | 共通承認アプリ「Staffpass承認」の承認者（Slack U… 1 人）を設定。人の承認後に承認 DM を自動で開き「設定しました」を 1 回送る。`SLACK_SHARED_APPROVAL_APP_ENABLED`（既定 OFF）。詳細は `docs/slack-shared-approval-app.md`。 |
+| `setup.slackAuthorizeLink.issue` | always_human | 社員ごとの Slack 再認可リンク（24h・1 回限り・hash のみ保存・user/team ピン）を承認アプリの DM で社員本人の Slack に届ける（U… が 1 つに決まらない・社員と DM を開けないときは承認者。`deliverTo: "approver"` で承認者に固定）。URL は MCP 結果に出さない。`SLACK_AUTHORIZE_LINK_ENABLED`（既定 OFF）。詳細は `docs/slack-authorize-link.md`。 |
 | `dmAutoroute.list` | read-only | IM ルート一覧（フラグ ON 時は `auto_party` / `manual`）と、監査ログからの直近の自動ルート結果（created / skipped / failed / removed と reason）。 |
 | `dmAutoroute.run` | dryRun=true（既定）: read-only / dryRun=false: always_human | dryRun は auth.test と users.info だけで「開く予定（would_open）」と「スキップ理由」を返す（DM を開かない・書き込まない・監査しない）。dryRun=false は人の承認後に PR-1 と同じロジックで実行（`SLACK_DM_AUTOROUTE_ENABLED` 必須）。 |
 | `setup.approvalDelivery.autoResolve` | **always_human（フラグに関係なく）** | 人の承認後、承認アプリが許可 user ID の承認者と DM を開き、「設定しました」を 1 回送り、その D… を宛先に保存。`SLACK_APPROVAL_DM_AUTO_OPEN` 必須。token は人がダッシュボードで保存済みのものだけを使う。 |

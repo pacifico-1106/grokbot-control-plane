@@ -24,6 +24,7 @@ import {
 } from "@/lib/data";
 import { evaluateMailPolicyForRequest } from "@/lib/mail-policy/evaluate-request";
 import { collectMailToRecipients, extractMailRecipients } from "@/lib/mail-policy/apply";
+import { buildMailSendPin, checkApprovedMailSendPin } from "@/lib/mail-policy/approved-send-pin";
 import type { MailPolicyDecision } from "@/lib/types";
 import {
   isBillableConfirmCompletion,
@@ -423,6 +424,12 @@ async function createNeedsApprovalResponse(opts: {
           informationClass: opts.egress?.informationClass,
           fidelity: opts.egress?.fidelity,
         }),
+        // mail.send: pin the exact approved content (digests only) so an
+        // approved re-invoke cannot change recipients / subject / body.
+        // Set last so nothing earlier in metadata can supply it.
+        ...(opts.tool === "mail.send"
+          ? { mailSendPin: opts.body ? buildMailSendPin(opts.body) : undefined }
+          : {}),
       },
     });
     createdApproval = created.approval;
@@ -1293,6 +1300,54 @@ export async function runGatewayInvoke(
   // snapshot) plus any recipients in this request against the CURRENT mail
   // policy. If it now rejects or demotes, stop: 409, audited, not sent.
   if (tool === "mail.send" && priorApprovalOk && priorApproval) {
+    // Pin first: the re-invoke must carry exactly the approved mail (every
+    // recipient field, cc / bcc, subject, body and other args), or no mail
+    // fields at all (= send the approved mail as-is). Approvals without a pin
+    // (created before pinning) fail closed. Field names only, never values.
+    const pinCheck = checkApprovedMailSendPin({ metadata: priorApproval.metadata, body });
+    if (!pinCheck.ok) {
+      const mismatch = pinCheck.code === "approved_send_content_mismatch" ? pinCheck : null;
+      await appendAuditEvent({
+        orgId: orgId || employee.orgId,
+        employeeId,
+        credentialId: input.credentialId || employee.credentialId,
+        action: "tool.invoke",
+        purpose,
+        summary: mismatch
+          ? "承認済みの mail.send を承認内容との不一致で停止（未送信）"
+          : "承認済みの mail.send を照合情報なしのため停止（未送信・再承認が必要）",
+        metadata: {
+          tool,
+          jobId,
+          approvalId: priorApprovalId,
+          code: pinCheck.code,
+          phase: "reinvoke",
+          ...(mismatch
+            ? { mismatchedFields: mismatch.mismatchedFields, mismatchCount: mismatch.mismatchCount }
+            : {}),
+        },
+      });
+      return jsonResult(
+        {
+          ok: false,
+          code: pinCheck.code,
+          error: pinCheck.code,
+          ...(mismatch
+            ? { mismatchedFields: mismatch.mismatchedFields, mismatchCount: mismatch.mismatchCount }
+            : {}),
+          message: mismatch
+            ? "承認された内容（宛先・CC・BCC・件名・本文など）と異なるため送信しませんでした。承認時とまったく同じ内容で再実行するか、新しい内容で承認を依頼し直してください。"
+            : "この承認には内容の照合情報がないため（照合の導入前に作成された承認）、送信しませんでした。もう一度承認を依頼してください。",
+          needs_approval: false,
+          approvalId: priorApprovalId,
+          employeeId,
+          tool,
+          purpose,
+          jobId,
+        },
+        409
+      );
+    }
     const approvedSnapshot = parseInvokeSnapshot(priorApproval.metadata);
     const toJudge: Array<{ source: "approved_snapshot" | "request"; body: Parameters<typeof evaluateMailPolicyForRequest>[0]["body"] }> = [];
     if (approvedSnapshot) {

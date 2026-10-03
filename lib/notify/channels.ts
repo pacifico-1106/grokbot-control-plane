@@ -19,6 +19,7 @@ import type { ApprovalRequest, Employee, WorkflowProgress } from "@/lib/types";
 import { getApprovalWorkflowProgress, getCurrentStageVoterUserIds } from "@/lib/approval-workflow/resolve";
 import { isInboxRoutingEnabled } from "@/lib/feature-flags";
 import { routeInboxToResponsibleHuman } from "@/lib/notify/inbox-routing";
+import { isSharedApprovalAppEnabled } from "@/lib/slack/shared-approval-flags";
 /**
  * Org notification channels (Telegram / LINE / Slack).
  * Slack here is the approval *inbox* only. Conversation posting uses
@@ -142,6 +143,32 @@ export async function sendApprovalNotifications(
     const result = { ...sent, provider: channel.provider, channelId: channel.id } as NotificationDispatchResult;
     results.push(result);
     await auditFailure(approval, result);
+    if (!result.ok && channel.provider === "slack" && channel.config?.sharedApprovalApp === true) {
+      // SLACK_SHARED_APPROVAL_APP_ENABLED: Slack says the shared app's token is gone
+      // (token_revoked / invalid_auth / account_inactive) → disable + delete secrets.
+      // Lazy import: flag-gated inside, never throws.
+      const { retireSharedApprovalInboxOnDeliveryError } = await import("@/lib/slack/shared-approval-revoke");
+      await retireSharedApprovalInboxOnDeliveryError(channel, result.error);
+    }
+  }
+  if (!channel && !isSharedApprovalAppEnabled()) {
+    // Review M1: the org's shared approval app inbox is suspended (flag OFF) —
+    // nothing was sent with its token; count it as a delivery failure (#236 below).
+    const { findSuspendedSharedApprovalInbox } = await import("@/lib/data/notification-channels");
+    const suspended =
+      typeof findSuspendedSharedApprovalInbox === "function"
+        ? await findSuspendedSharedApprovalInbox(approval.orgId).catch(() => null)
+        : null;
+    if (suspended) {
+      const result: NotificationDispatchResult = {
+        ok: false,
+        provider: "slack",
+        channelId: suspended.id,
+        error: "shared_approval_app_disabled",
+      };
+      results.push(result);
+      await auditFailure(approval, result);
+    }
   }
   if (!channel && await isTokyo307PilotOrg(approval.orgId)) {
     const sent = await sendApprovalToTelegram(approval, employee);
@@ -195,6 +222,25 @@ export async function updateApprovalNotificationMessages(
         ? await resolveLineApprovalMessage(approval, decision, actor, channel)
         : await editSlackApprovalForChannel(approval, decision, actor, channel);
     results.push({ ...sent, provider: channel.provider, channelId: channel.id });
+  }
+  if (!channel && !isSharedApprovalAppEnabled()) {
+    // Review M1: the org's shared approval app inbox is suspended (flag OFF) —
+    // nothing was sent with its token; count it as a delivery failure (#236 below).
+    const { findSuspendedSharedApprovalInbox } = await import("@/lib/data/notification-channels");
+    const suspended =
+      typeof findSuspendedSharedApprovalInbox === "function"
+        ? await findSuspendedSharedApprovalInbox(approval.orgId).catch(() => null)
+        : null;
+    if (suspended) {
+      const result: NotificationDispatchResult = {
+        ok: false,
+        provider: "slack",
+        channelId: suspended.id,
+        error: "shared_approval_app_disabled",
+      };
+      results.push(result);
+      await auditFailure(approval, result);
+    }
   }
   if (!channel && await isTokyo307PilotOrg(approval.orgId)) {
     const { editTelegramApprovalMessage } = await import("@/lib/notify/telegram");
