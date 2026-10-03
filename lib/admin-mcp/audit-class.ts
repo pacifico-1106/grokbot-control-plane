@@ -60,6 +60,7 @@ export const ADMIN_TOOL_AUDIT_ACTION: Record<string, AdminAuditAction> = {
   "employeeIdentity.bindMailbox": "admin.policy",
   "dmAutoroute.run": "admin.channel",
   "setup.approvalDelivery.autoResolve": "admin.notificationChannel",
+  "setup.slackApprover.set": "admin.notificationChannel",
 };
 
 /** Operational / employee-badge class — never lead the dashboard change log. */

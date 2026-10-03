@@ -1783,6 +1783,26 @@ async function fulfillDmAutorouteRun(
   };
 }
 
+/** SLACK_SHARED_APPROVAL_APP_ENABLED: human-approved setup.slackApprover.set. */
+async function fulfillSlackApproverSetTicket(
+  approval: ApprovalRequest,
+  args: Record<string, unknown>
+): Promise<AdminFulfillment> {
+  const { fulfillSlackApproverSet } = await import("@/lib/admin-mcp/slack-approver");
+  const result = await fulfillSlackApproverSet({ orgId: approval.orgId, approvalId: approval.id, args });
+  const at = new Date().toISOString();
+  if (!result.ok) {
+    return { ok: false, tool: "setup.slackApprover.set", at, error: result.code, nextStepJa: result.messageJa };
+  }
+  return {
+    ok: true,
+    tool: "setup.slackApprover.set",
+    at,
+    summaryJa: `Staffpass承認 の承認者を ${result.approverSlackUserId} に設定し、承認 DM に「設定しました」を送りました。`,
+    nextStepJa: "テスト承認は不要です。最初に届いた本物の承認依頼のボタンで、そのまま承認・却下してください。",
+  };
+}
+
 /** PR-4: human-approved setup.approvalDelivery.autoResolve (always_human). */
 async function fulfillApprovalDeliveryAutoResolveTicket(
   approval: ApprovalRequest,
@@ -1887,6 +1907,9 @@ async function fulfillApprovedAdminCore(
         break;
       case "setup.approvalDelivery.autoResolve":
         fulfillment = await fulfillApprovalDeliveryAutoResolveTicket(approval, args);
+        break;
+      case "setup.slackApprover.set":
+        fulfillment = await fulfillSlackApproverSetTicket(approval, args);
         break;
       case "setup.lineApproval.setEmployeeInbox":
         fulfillment = await fulfillLineApprovalSetEmployeeInbox(approval, args);

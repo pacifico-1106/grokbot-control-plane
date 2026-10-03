@@ -156,6 +156,7 @@ function flagSnapshot() {
     SLACK_APPROVAL_DM_AUTO_OPEN: isSlackApprovalDmAutoOpenEnabled(),
     APPROVAL_DELIVERY_FAILURE_ALERT: parseFlag(process.env.APPROVAL_DELIVERY_FAILURE_ALERT),
     ADMIN_MCP_DM_AUTOROUTE_AUDIT_ONLY: isAdminMcpDmAutorouteAuditOnlyEnabled(),
+    SLACK_SHARED_APPROVAL_APP_ENABLED: parseFlag(process.env.SLACK_SHARED_APPROVAL_APP_ENABLED),
   };
 }
 
@@ -215,9 +216,15 @@ export async function diagnoseSlackDmApprovalSetup(orgId: string): Promise<Recor
       autoOpened: Boolean(inbox.config?.autoOpened),
       setupNoticeSent: typeof inbox.config?.setupNoticeAt === "string",
       slackAppConfigUrl: slackAppUrl(appId),
+      sharedApprovalApp: inbox.config?.sharedApprovalApp === true,
     });
   }
   const enabledInbox = approvalInboxes.find((inbox) => inbox.enabled);
+  // SLACK_SHARED_APPROVAL_APP_ENABLED: shared app 「Staffpass承認」 status + steps.
+  const { sharedApprovalAppStatus } = await import("@/lib/admin-mcp/slack-approver");
+  const shared = await sharedApprovalAppStatus(orgId);
+  const sharedOn = shared.status.enabled === true;
+  nextStepsJa.push(...shared.nextStepsJa);
 
   // Employees (linked identity + user token scopes).
   const parties = (await listOrgParties(orgId)).filter(
@@ -265,13 +272,13 @@ export async function diagnoseSlackDmApprovalSetup(orgId: string): Promise<Recor
   }
 
   // nextStepsJa (ordered; humans tap, the agent never handles secrets).
-  if (inboxes.length === 0) {
+  if (inboxes.length === 0 && !sharedOn) {
     nextStepsJa.push(
       `承認アプリ（Slack App B）を作り、Bot Token Scopes に ${APPROVAL_DM_REQUIRED_BOT_SCOPES.join(", ")} を入れて Install。` +
         `ダッシュボード「承認を受け取る」（${dashboardUrl("/app/settings")}）で Bot token と許可 user ID（承認者の U…）を人が入力し、チャンネル ID は空欄で保存。`
     );
   }
-  if (!usersReadVerified) {
+  if (!usersReadVerified && !(sharedOn && (inboxes.length === 0 || enabledInbox?.sharedApprovalApp))) {
     nextStepsJa.push(
       `承認アプリの Bot Token Scopes に users:read を追加し、Reinstall to Workspace してください（承認者が社外・ゲスト・bot でないかを確かめるのに必要。無いと DM 自動オープンは止まります）。${String(enabledInbox?.slackAppConfigUrl || SLACK_APPS_CONSOLE_URL)}`
     );
@@ -280,10 +287,12 @@ export async function diagnoseSlackDmApprovalSetup(orgId: string): Promise<Recor
   if (otherMissing.length) {
     nextStepsJa.push(`承認アプリの Bot Token Scopes に ${otherMissing.join(", ")} を追加して Reinstall してください。`);
   }
-  if (!flags.SLACK_APPROVAL_DM_AUTO_OPEN) {
+  if (!flags.SLACK_APPROVAL_DM_AUTO_OPEN && !(sharedOn && enabledInbox?.sharedApprovalApp)) {
     nextStepsJa.push("運営: SLACK_APPROVAL_DM_AUTO_OPEN を ON にする（チャンネル ID 空欄で承認 DM を自動で開く）。");
   }
-  if (enabledInbox && !enabledInbox.destinationPresent) {
+  if (enabledInbox?.sharedApprovalApp && sharedOn) {
+    // Covered by the shared app steps above (setup.slackApprover.set).
+  } else if (enabledInbox && !enabledInbox.destinationPresent) {
     nextStepsJa.push("承認口の宛先が未設定です。setup.approvalDelivery.autoResolve（人の承認 1 回）か、ダッシュボードでチャンネル ID 空欄のまま保存し直してください。");
   } else if (enabledInbox && flags.SLACK_APPROVAL_DM_AUTO_OPEN && !enabledInbox.setupNoticeSent) {
     nextStepsJa.push("承認口に「設定しました」がまだ届いていません。setup.approvalDelivery.autoResolve か、ダッシュボードで保存し直してください。");
@@ -327,6 +336,7 @@ export async function diagnoseSlackDmApprovalSetup(orgId: string): Promise<Recor
     approvalBotRequiredScopes: [...APPROVAL_DM_REQUIRED_BOT_SCOPES],
     approvalBotUsersReadVerified: usersReadVerified,
     approvalInboxes,
+    sharedApprovalApp: shared.status,
     internalSlackParties: parties.length,
     imRoutesTotal: allRoutes.length,
     employees: employeeRows,

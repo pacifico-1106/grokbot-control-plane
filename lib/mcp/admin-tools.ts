@@ -51,6 +51,7 @@ import { diagnoseLineApprovalStatus } from "@/lib/line/line-approval-status-diag
 import { encryptNotificationSecrets } from "@/lib/notify/crypto";
 import { queueAdminTool } from "@/lib/admin-mcp/queue";
 import { handleSlackDmSetupTool, isSlackDmSetupTool } from "@/lib/admin-mcp/slack-dm-setup";
+import { SLACK_APPROVER_SET_TOOL, handleSlackApproverSet } from "@/lib/admin-mcp/slack-approver";
 import { fulfillApprovedAdmin, parseAdminFulfillment } from "@/lib/admin-mcp/fulfill-admin";
 import { auditActionForAdminTool } from "@/lib/admin-mcp/audit-class";
 import { buildPollUrl } from "@/lib/approvals/tokens";
@@ -1272,6 +1273,22 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
     },
   },
   {
+    name: "setup.slackApprover.set",
+    description:
+      "Set the approver of this org's shared approval app 「Staffpass承認」 inbox (always_human; requires SLACK_SHARED_APPROVAL_APP_ENABLED and the app installed by an owner/admin via \"Add to Slack\"). After human approval: opens the approval-app ↔ approver DM (users.info: same workspace, not guest / bot / Slack Connect), posts exactly one 「設定しました」, then saves the approver (replaces the previous one) and the DM destination. Nothing is saved if any step fails. Bots / guests / other workspaces are refused. No test approval is needed: the first real approval is the live check. Never accepts or returns a token. Org from the credential. Admin cannot self-approve. Re-invoke with approvalId to read the result.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        slackUserId: { type: "string", description: "Approver's Slack user ID (U…), a human in the installed workspace" },
+        inboxId: { type: "string", description: "Shared-app inbox ID (optional; only needed if there are several)" },
+        jobId: { type: "string" },
+        approvalId: { type: "string", description: "Re-invoke with approved ticket ID" },
+      },
+      required: ["slackUserId"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "decision.deputyActivate",
     description:
       "Activate a deputy (代理人) for a pending decision request (always_human). Deputy can act on behalf of the requester. Security: self-approval forbidden (deputy cannot be requester), cross-org forbidden (deputy must be in same org). P1_DECISION_WORKFLOW_ENABLED must be ON.",
@@ -2241,6 +2258,20 @@ export async function callAdminMcpTool(
       sideEffectsRan: Boolean(result.sideEffects),
       summaryJa: `${decision === "approved" ? "承認" : "却下"}しました（プラットフォーム代行・${mandate}）`,
     });
+  }
+
+  if (name === SLACK_APPROVER_SET_TOOL) {
+    // SLACK_SHARED_APPROVAL_APP_ENABLED: org from the credential; always_human.
+    const outcome = await handleSlackApproverSet(cred, args);
+    if (outcome.kind === "result") return toolResult(outcome.data, outcome.isError === true);
+    const queued = await queueAdminTool({
+      cred,
+      tool: name,
+      args: { ...outcome.queuedArgs, ...(typeof args.jobId === "string" ? { jobId: args.jobId } : {}) },
+      rawArgsForSecretScan: args,
+      summary: outcome.summary,
+    });
+    return toolResult(queued, false);
   }
 
   if (isSlackDmSetupTool(name)) {

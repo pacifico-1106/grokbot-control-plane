@@ -35,6 +35,7 @@ import {
   findChannelCandidatesByAppAndTeam,
   type InteractivityChannelCandidate,
 } from "@/lib/slack/interactivity-channel-resolver";
+import { isSharedApprovalAppRequest } from "@/lib/slack/shared-approval-flags";
 import {
   sendEphemeralRejection,
   type SlackRejectionReason,
@@ -141,20 +142,32 @@ export async function POST(req: Request) {
     return ack({ ignored: true, reason: "missing_app_or_team" });
   }
 
-  const candidates = await findChannelCandidatesByAppAndTeam(apiAppId, teamId);
-  
-  const verifyResult = await verifySignatureWithCandidates(
-    candidates,
-    timestamp,
-    rawBody,
-    signature
-  );
+  let channel: InteractivityChannelCandidate;
+  if (isSharedApprovalAppRequest(apiAppId)) {
+    // SLACK_SHARED_APPROVAL_APP_ENABLED: shared signing secret FIRST, then team → org.
+    // Lazy: no new module edges on the per-tenant path / while the flag is OFF.
+    const { resolveSharedApprovalInteractivity } = await import("@/lib/slack/shared-approval-interactivity");
+    const shared = await resolveSharedApprovalInteractivity({ apiAppId, teamId, timestamp, rawBody, signature });
+    if (!shared.ok) {
+      return NextResponse.json({ ok: false, error: shared.error }, { status: shared.status });
+    }
+    channel = shared.channel;
+  } else {
+    const candidates = await findChannelCandidatesByAppAndTeam(apiAppId, teamId);
 
-  if (!verifyResult.ok) {
-    return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
+    const verifyResult = await verifySignatureWithCandidates(
+      candidates,
+      timestamp,
+      rawBody,
+      signature
+    );
+
+    if (!verifyResult.ok) {
+      return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
+    }
+
+    channel = verifyResult.channel;
   }
-
-  const channel = verifyResult.channel;
 
   if (payload.api_app_id !== channel.apiAppId) {
     await alertButtonFailure(channel, "app_mismatch");
