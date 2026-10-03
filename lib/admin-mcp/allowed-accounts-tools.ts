@@ -146,7 +146,6 @@ function parseLabel(value: unknown): ParsedLabel {
   if (value === undefined || value === null) return { ok: true };
   if (typeof value !== "string") return { ok: false };
   const label = value.trim();
-  // eslint-disable-next-line no-control-regex
   if (label.length > MAX_LABEL || /[\u0000-\u001f\u007f]/.test(label)) return { ok: false };
   return { ok: true, label: label || undefined };
 }
@@ -456,7 +455,21 @@ export async function fulfillAllowedAccountsChange(
     return failWith("allowed_accounts_required", "browser:use がある社員証の許可アカウントは 0 件にできません。", employee.id);
   }
 
-  const updated = await updateEmployeeAllowedAccounts({ orgId, employeeId: employee.id, allowedAccounts: after });
+  let updated: Awaited<ReturnType<typeof updateEmployeeAllowedAccounts>>;
+  try {
+    updated = await updateEmployeeAllowedAccounts({ orgId, employeeId: employee.id, allowedAccounts: after });
+  } catch (error) {
+    // Fail-closed: a failed write is never reported as applied.
+    const rolledBack = (error as { rolledBack?: unknown })?.rolledBack;
+    console.error("allowed_accounts_update_failed", employee.id, error instanceof Error ? error.message : error);
+    return failWith(
+      "allowed_accounts_update_failed",
+      rolledBack === false
+        ? `${change}できませんでした（保存に失敗し、元に戻すこともできませんでした）。ダッシュボードの「ブラウザ・外部アカウント」で現在の状態を確認してください。`
+        : `${change}できませんでした（保存に失敗したため、変更していません）。時間をおいて、もう一度依頼してください。`,
+      employee.id
+    );
+  }
   if (!updated) return failWith(NOT_FOUND.code, NOT_FOUND.message, null);
 
   await appendAuditEvent({

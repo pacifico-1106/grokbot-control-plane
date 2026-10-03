@@ -443,6 +443,22 @@ export async function updateEmployeePolicy(input: {
  * returns null when the employee is not in `orgId`. Callers validate and
  * normalize (normalizeAllowedAccounts) before calling.
  */
+/**
+ * Thrown by updateEmployeeAllowedAccounts when a write fails (fail-closed: a
+ * failed write is never reported as success). `rolledBack` tells whether
+ * employees.allowed_accounts was put back after a credentials write failure.
+ */
+export class AllowedAccountsWriteError extends Error {
+  readonly code: "allowed_accounts_update_failed" | "allowed_accounts_credentials_update_failed";
+  readonly rolledBack: boolean;
+  constructor(code: AllowedAccountsWriteError["code"], detail: string, rolledBack = false) {
+    super(`${code}: ${detail}`);
+    this.name = "AllowedAccountsWriteError";
+    this.code = code;
+    this.rolledBack = rolledBack;
+  }
+}
+
 export async function updateEmployeeAllowedAccounts(input: {
   orgId: string;
   employeeId: string;
@@ -459,6 +475,16 @@ export async function updateEmployeeAllowedAccounts(input: {
   }
   const admin = createSupabaseAdminClient();
   if (!admin) return null;
+  // Previous value (org-scoped) so a failed credentials write can be undone.
+  const { data: current, error: readError } = await admin
+    .from("employees")
+    .select("allowed_accounts")
+    .eq("id", employeeId)
+    .eq("org_id", orgId)
+    .maybeSingle();
+  if (readError) throw new AllowedAccountsWriteError("allowed_accounts_update_failed", readError.message || "read_failed");
+  if (!current) return null;
+  const previous = (current as { allowed_accounts?: unknown }).allowed_accounts ?? [];
   const { data, error } = await admin
     .from("employees")
     .update({ allowed_accounts: input.allowedAccounts, updated_at: new Date().toISOString() })
@@ -466,13 +492,27 @@ export async function updateEmployeeAllowedAccounts(input: {
     .eq("org_id", orgId)
     .select("*")
     .maybeSingle();
-  if (error || !data) return null;
-  await admin
+  if (error) throw new AllowedAccountsWriteError("allowed_accounts_update_failed", error.message || "employees_update_failed");
+  if (!data) return null;
+  const { error: credentialsError } = await admin
     .from("credentials")
     .update({ allowed_accounts: input.allowedAccounts })
     .eq("employee_id", employeeId)
     .eq("org_id", orgId)
     .is("revoked_at", null);
+  if (credentialsError) {
+    // Never leave employees and the active badge disagreeing: put employees back.
+    const { error: rollbackError } = await admin
+      .from("employees")
+      .update({ allowed_accounts: previous, updated_at: new Date().toISOString() })
+      .eq("id", employeeId)
+      .eq("org_id", orgId);
+    throw new AllowedAccountsWriteError(
+      "allowed_accounts_credentials_update_failed",
+      credentialsError.message || "credentials_update_failed",
+      !rollbackError
+    );
+  }
   return mapEmployeeRow(data as Record<string, unknown>);
 }
 
