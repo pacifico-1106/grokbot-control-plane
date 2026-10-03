@@ -10,6 +10,8 @@ import {
   isSlackImChannelId,
   syncSlackImEmployeeRoute,
 } from "@/lib/data/slack-im-routes";
+import { isSlackDmAutorouteEnabled } from "@/lib/slack/dm-autoroute-flags";
+import type { SlackImRouteSource } from "@/lib/data/slack-im-routes";
 import type { ChannelClassification, ConversationSurface, OrgChannel } from "@/lib/types";
 
 export type ApplyChannelClassificationInput = {
@@ -21,6 +23,14 @@ export type ApplyChannelClassificationInput = {
   /** Bound employee for an internal Slack 1:1 only. Omitted → IM ingress removed (fail-closed). */
   employeeId?: string | null;
   slackTeamId?: string | null;
+  /**
+   * Route provenance. Only SLACK_DM_AUTOROUTE (lib/slack/dm-autoroute.ts) passes
+   * "auto_party". Human channels.classify leaves it unset: while the auto-route
+   * flag is ON (migration applied) it is recorded as "manual" so a human decision
+   * is never later removed by the auto-route cleanup.
+   */
+  routeSource?: SlackImRouteSource;
+  counterpartSlackUserId?: string | null;
 };
 
 export type ApplyChannelClassificationResult = {
@@ -62,6 +72,11 @@ export async function applyChannelClassification(
         classification: channel.classification,
         mixed: channel.mixed,
         employeeId,
+        ...(input.routeSource !== undefined
+          ? { source: input.routeSource, counterpartSlackUserId: input.counterpartSlackUserId ?? null }
+          : isSlackDmAutorouteEnabled()
+            ? { source: "manual" as const, counterpartSlackUserId: null }
+            : {}),
       })
     : null;
   return { channel, routeEmployeeId: route?.employeeId ?? null };

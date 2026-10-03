@@ -46,6 +46,7 @@ import { validateMailPolicy } from "@/lib/mail-policy/validate";
 import { normalizeStuckWatchPolicy } from "@/lib/stuck-watch/validate";
 import { linkAgent } from "@/lib/data/bindings";
 import { upsertOrgParty } from "@/lib/data/directory";
+import { onSlackUserPartyUpserted } from "@/lib/slack/dm-autoroute";
 import { applyChannelClassification } from "@/lib/admin-mcp/channel-classify";
 import { normalizeAllowedAccounts } from "@/lib/employees/allowed-accounts";
 import { normalizeApproverUserIds, parseApprovalChannelId } from "@/lib/employees/approval-inbox";
@@ -662,6 +663,14 @@ async function fulfillParty(approval: ApprovalRequest, args: Record<string, unkn
     purpose: "admin.parties",
     summary: `相手台帳を更新: ${party.identifier}`,
     metadata: { auditClass: ADMIN_AUDIT_CLASS, approvalId: approval.id, partyId: party.id },
+  });
+  // SLACK_DM_AUTOROUTE_ENABLED (default OFF; no-op otherwise). Derives DM routes
+  // only from this human-approved classification; never throws, audits itself.
+  await onSlackUserPartyUpserted({
+    orgId: approval.orgId,
+    kind: party.kind,
+    identifier: party.identifier,
+    audience: party.audience,
   });
   return { ok: true, tool: "parties.upsert", at: new Date().toISOString(), partyId: party.id };
 }

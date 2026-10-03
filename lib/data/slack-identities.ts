@@ -339,6 +339,26 @@ export async function listLinkedSlackIdentitiesForTeam(
   );
 }
 
+/** Linked identities of one org only (public columns; never secrets). */
+export async function listLinkedSlackIdentitiesForOrg(
+  orgId: string
+): Promise<EmployeeSlackIdentity[]> {
+  const org = orgId.trim();
+  if (!org) return [];
+  if (isDemoMode()) return demoLinked().filter((row) => row.orgId === org);
+  const admin = createSupabaseAdminClient();
+  if (!admin) return [];
+  const { data, error } = await admin
+    .from("employee_slack_identities")
+    .select("employee_id,org_id,slack_user_id,slack_team_id,display_name,status,updated_at")
+    .eq("org_id", org)
+    .eq("status", "linked");
+  if (error || !data) return [];
+  return data
+    .map((row) => mapPublic(row as Record<string, unknown>))
+    .filter((row) => row.orgId === org && row.status === "linked");
+}
+
 /** Test-only (demo memory): change a bound identity's status, e.g. to needs_reauth. */
 export function setDemoSlackIdentityStatusForTests(
   employeeId: string,
