@@ -102,7 +102,7 @@
 
 ## Slack アプリの作り方（八坂さん・手作業）
 
-フラグが OFF のあいだは Events の URL 確認（`url_verification`）が通らない（404）ため、manifest に `event_subscriptions` を入れて作ると、作成の時点でエラーになります。そこで **events なしの manifest で作り、フラグを ON にしてから画面で Event Subscriptions を足します**。
+**events なしの manifest で作るのが確実です**（下の手順はこの作り方です）。events 付きの manifest で作っても構いませんが、フラグが OFF のあいだは Event Subscriptions の Request URL の確認（`url_verification`）が通らない（404）ので、フラグを ON にしたあとに Request URL の **Retry** を押してください。
 
 1. **events なしの manifest でアプリを作る**
    1. https://api.slack.com/apps → **Create New App** → **From a manifest** を選び、Staffpass の開発用ワークスペースを選ぶ。
@@ -124,7 +124,6 @@
 - 開発用ワークスペースに自分でインストールする必要はない。テナントは `install/start` から追加する。
 - 3 を済ませるまでは、アンインストールや token の取り消しが Events では届かない（配信時に `token_revoked` / `invalid_auth` / `account_inactive` が返ったときの検知は動く）。テナントにインストールしてもらう前に 3・4 を終えること。
 - manifest を貼る前に、Slack 画面の JSON / YAML タブを貼る形式に合わせる（JSON タブに YAML を貼るとエラーになる）。
-- events 付きの manifest で作ってもよい。そのときは、フラグ ON のあとに Event Subscriptions の Request URL で **Retry** を押す。
 
 ### manifest（events なし版・最初に使う）
 
@@ -199,7 +198,7 @@ settings:
   token_rotation_enabled: false
 ```
 
-手順 3・4 のあとの最終形（参考）: 上の `settings` に次が加わった状態になります。manifest を後から編集するときに比べるためのもので、**最初の作成には使いません**（フラグ OFF のままだと URL 確認でエラーになる）。
+手順 3・4 のあとの最終形（参考）: 上の `settings` に次が加わった状態になります。manifest を後から編集するときに比べるためのものです。最初からこれを含めて作る場合は、上に書いたとおり、フラグ ON のあとに Request URL の **Retry** を押します。
 
 ```yaml
 settings:

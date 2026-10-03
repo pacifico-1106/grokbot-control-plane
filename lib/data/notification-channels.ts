@@ -245,21 +245,33 @@ export async function getNotificationChannelByWebhookRef(
 }
 
 /**
- * Get stored secrets for an existing notification channel by ID.
+ * Get stored secrets for an existing notification channel, scoped to an org.
  * Used to retrieve bot token for validation when updating without re-entering credentials.
  *
- * @param orgId Organization ID
- * @param channelId Channel ID
- * @returns Decrypted secrets or empty object if not found
+ * Defense in depth: org_notification_channel_secrets has no org_id column, so
+ * ownership is proven first on org_notification_channels (id AND org_id) and
+ * only then is the ciphertext read. Org mismatch, unknown channel, blank ids
+ * and decrypt failures all return {} (same as not found).
+ * The same single row read also blocks a shared-approval-app inbox while
+ * SLACK_SHARED_APPROVAL_APP_ENABLED is OFF (#241 M1): returns {} and raises
+ * the delivery-failure alert.
+ *
+ * @param orgId Organization ID (required; must own the channel)
+ * @param channelId Channel ID (org_notification_channels.id)
+ * @returns Decrypted secrets or empty object if not found / not in this org
  */
 export async function getNotificationChannelSecretsById(
   orgId: string,
   channelId: string
 ): Promise<Record<string, string>> {
+  const org = typeof orgId === "string" ? orgId.trim() : "";
+  const id = typeof channelId === "string" ? channelId.trim() : "";
+  if (!org || !id) return {};
+
   if (isDemoMode()) {
-    const channel = demoChannels.find((row) => row.id === channelId && row.orgId === orgId);
+    const channel = demoChannels.find((row) => row.id === id && row.orgId === org);
     if (isSuspendedSharedInbox(channel)) {
-      await reportSuspendedSharedInbox(orgId, channelId);
+      await reportSuspendedSharedInbox(org, id);
       return {};
     }
     return channel?.secrets || {};
@@ -268,26 +280,26 @@ export async function getNotificationChannelSecretsById(
   const admin = createSupabaseAdminClient();
   if (!admin) return {};
 
-  if (!isSharedApprovalAppEnabled()) {
-    // Flag OFF: never hand out a shared-app token (review M1). Fail closed when
-    // the row cannot be checked.
-    const { data: row, error: rowError } = await admin
-      .from("org_notification_channels")
-      .select("provider,config")
-      .eq("org_id", orgId)
-      .eq("id", channelId)
-      .maybeSingle();
-    if (rowError) return {};
-    if (isSuspendedSharedInbox(row as { provider?: unknown; config?: Record<string, unknown> } | null)) {
-      await reportSuspendedSharedInbox(orgId, channelId);
-      return {};
-    }
+  // One read of the channel row proves both:
+  //   - #243 ownership: id AND org_id (secrets table has no org_id column)
+  //   - #241 M1: a shared-app inbox while SLACK_SHARED_APPROVAL_APP_ENABLED is OFF
+  // Org mismatch / unknown row / read error / suspended → {} (fail closed).
+  const { data: owned, error: ownedError } = await admin
+    .from("org_notification_channels")
+    .select("id,provider,config")
+    .eq("id", id)
+    .eq("org_id", org)
+    .maybeSingle();
+  if (ownedError || !owned?.id) return {};
+  if (isSuspendedSharedInbox(owned as { provider?: unknown; config?: Record<string, unknown> | null })) {
+    await reportSuspendedSharedInbox(org, id);
+    return {};
   }
 
   const { data } = await admin
     .from("org_notification_channel_secrets")
     .select("credentials_ciphertext")
-    .eq("channel_id", channelId)
+    .eq("channel_id", String(owned.id))
     .maybeSingle();
 
   if (!data?.credentials_ciphertext) return {};
