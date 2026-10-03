@@ -82,8 +82,6 @@ const READ_ONLY_TOOLS = [
   "stuckWatch.list",
   "stuckWatch.inspect",
   "stuckWatch.classify",
-  "stuckWatch.retry",
-  "stuckWatch.resolve",
   "orgs.status",
   "approvalWorkflow.get",
   "approvalWorkflow.inspect",
@@ -93,6 +91,11 @@ const READ_ONLY_TOOLS = [
   "setup.slackDmApprovalStatus",
   "dmAutoroute.list",
 ];
+// No-ticket WRITE actions (registry: no approvalClass). NOT always_human: they
+// act on an existing stuck watch item and write an audit row; retry also
+// re-runs an already-approved fulfill or re-submits the stored invoke through
+// the gateway (gates re-evaluated). Their descriptions must not say read-only.
+const NO_TICKET_WRITE_TOOLS = ["stuckWatch.retry", "stuckWatch.resolve"];
 // Platform super-admin direct actions: NOT always_human by design (the
 // platform-ops human is the decider), fail-closed for tenant admins.
 const PLATFORM_OPS_DIRECT_TOOLS = ["orgs.patch", "approvals.proxyResolve"];
@@ -121,17 +124,23 @@ describe("admin MCP always_human", () => {
 
   test("the only no-ticket tools are the reviewed read-only + platform-ops lists", () => {
     expect(noTicketToolNames(ADMIN_MCP_TOOLS)).toEqual(
-      [...READ_ONLY_TOOLS, ...PLATFORM_OPS_DIRECT_TOOLS].sort()
+      [...READ_ONLY_TOOLS, ...NO_TICKET_WRITE_TOOLS, ...PLATFORM_OPS_DIRECT_TOOLS].sort()
     );
   });
 
   test("every other (execute) tool is approvalClass admin and always_human", () => {
     const executeTools = ADMIN_MCP_TOOLS.filter(
-      (t) => !READ_ONLY_TOOLS.includes(t.name) && !PLATFORM_OPS_DIRECT_TOOLS.includes(t.name)
+      (t) =>
+        !READ_ONLY_TOOLS.includes(t.name) &&
+        !NO_TICKET_WRITE_TOOLS.includes(t.name) &&
+        !PLATFORM_OPS_DIRECT_TOOLS.includes(t.name)
     );
     // Sanity: the check really covers the tool set (incl. #237 tools).
     expect(executeTools.length).toBe(
-      ADMIN_MCP_TOOLS.length - READ_ONLY_TOOLS.length - PLATFORM_OPS_DIRECT_TOOLS.length
+      ADMIN_MCP_TOOLS.length -
+        READ_ONLY_TOOLS.length -
+        NO_TICKET_WRITE_TOOLS.length -
+        PLATFORM_OPS_DIRECT_TOOLS.length
     );
     for (const name of SLACK_DM_SETUP_EXECUTE_TOOLS) {
       expect(executeTools.map((t) => t.name)).toContain(name);
@@ -163,6 +172,20 @@ describe("admin MCP always_human", () => {
         alwaysHuman: false,
       });
     }
+  });
+
+  test("no-ticket write tools (stuckWatch.retry / resolve) say they write, are explicit NOT always_human, never read-only", () => {
+    for (const toolName of NO_TICKET_WRITE_TOOLS) {
+      const tool = ADMIN_MCP_TOOLS.find((t) => t.name === toolName);
+      expect(tool?.approvalClass).toBeUndefined();
+      expect({ toolName, readOnly: /read-only/i.test(tool?.description || "") }).toEqual({ toolName, readOnly: false });
+      expect(tool?.description).toMatch(NOT_ALWAYS_HUMAN_RE);
+      expect(tool?.description).toContain("Writes:");
+      expect(tool?.description).toContain(`${toolName.replace("stuckWatch.", "stuck_watch.")} audit event`);
+    }
+    const retry = ADMIN_MCP_TOOLS.find((t) => t.name === "stuckWatch.retry");
+    expect(retry?.description).toContain("already-approved fulfillment");
+    expect(retry?.description).toContain("gates are re-evaluated");
   });
 
   test("platform-ops direct tools are explicit NOT always_human and fail closed for a tenant admin", async () => {
