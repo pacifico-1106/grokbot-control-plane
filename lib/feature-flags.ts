@@ -521,7 +521,10 @@ export function isCommReplyDedupEnabled(): boolean {
  *   attempt, no redirects), ids + status only, deduped by eventId, re-checked
  *   against the badge on every attempt (revocation stops delivery at once).
  * - The approval.resolved callback payload gains the same `eventId` (dedupe).
- * - /api/cron/mcp-events-deliver retries pending deliveries.
+ * - /api/cron/mcp-events-deliver retries pending deliveries (Bearer CRON_SECRET via
+ *   lib/security/cron-secret.ts) and deletes finished delivery rows after 7 days.
+ * - A revocation re-check that cannot run (DB read error) defers the attempt;
+ *   only a positively known revocation stops subscriptions.
  * Requires migration 20261005000000_mcp_event_subscriptions.sql and
  * NOTIFICATION_CONFIG_ENCRYPTION_KEY (receiver secrets are stored encrypted).
  *

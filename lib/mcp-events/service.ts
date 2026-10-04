@@ -14,9 +14,11 @@
  *   signature with the receiver's secret (encrypted at rest), webhook-id =
  *   eventId (stable across retries), fresh timestamp/signature per attempt,
  *   bounded retries (4 attempts / 15 min), 410 / 413 / 3xx never retried.
- * - The badge is re-checked on every attempt; on failure every subscription
- *   of that employee is revoked (sticky: refresh → -32012) and pending
- *   deliveries are dropped. ChatGPT has no `terminated`, so this is the stop.
+ * - The badge is re-checked on every attempt; on a POSITIVELY KNOWN
+ *   revocation every subscription of that employee is revoked (sticky:
+ *   refresh → -32012) and pending deliveries are dropped. ChatGPT has no
+ *   `terminated`, so this is the stop. A check that cannot run (read error)
+ *   defers the attempt instead (not counted, nothing revoked).
  * - Error responses and lastError are fixed categories, never raw receiver text.
  */
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
@@ -152,7 +154,12 @@ export async function handleEventsSubscribe(cred: ResolvedEmployeeCredential, pa
     orgId: cred.orgId, employeeId: cred.employeeId, credentialGeneration: cred.generation,
     credentialFingerprint: cred.fingerprint, credentialId: cred.credentialId,
   }, now);
-  if (!live.ok) return err(-32012, "Forbidden", { reason: "revoked" });
+  if (!live.ok) {
+    // A read error is not a revocation: answer a retryable internal error and
+    // change nothing (the client retries the subscribe).
+    if (live.kind === "unavailable") return err(-32603, "Internal error", { reason: live.reason });
+    return err(-32012, "Forbidden", { reason: "revoked" });
+  }
 
   if (args.approvalId) {
     const approval = await getApprovalById(args.approvalId, cred.orgId).catch(() => null);
@@ -320,7 +327,7 @@ export async function emitApprovalEvent(
 }
 
 // ---- delivery ------------------------------------------------------------
-type AttemptOutcome = "delivered" | "retry" | "abandoned" | "dropped" | "skipped";
+type AttemptOutcome = "delivered" | "retry" | "abandoned" | "dropped" | "deferred" | "skipped";
 
 async function revokeEmployeeSubscriptions(orgId: string, employeeId: string, reason: string, nowIso: string): Promise<void> {
   const ids = await store.markRevokedForEmployee(orgId, employeeId, reason, nowIso);
@@ -346,33 +353,81 @@ function signingKeys(sub: store.SubscriptionRow, now: number): Buffer[] {
   return keys;
 }
 
+class PreSendUnavailable extends Error {
+  constructor(readonly reason: string, readonly detail: string) { super(reason); }
+}
+
+/**
+ * One delivery attempt.
+ *
+ * Attempt accounting (木村 review, 2026-10-05):
+ * - `claimDelivery` counts the attempt (attempts + 1) atomically with the
+ *   lease, so a worker that dies after claiming still used it up; a claim past
+ *   maxAttempts sends nothing and abandons (max_attempts_exceeded).
+ * - Before anything is sent, a check that could not run (revocation re-check
+ *   read error, store error) DEFERS the attempt: the count is restored, the
+ *   row is due again after deferMs, nothing is revoked or dropped. Deferrals
+ *   are bounded by the same retry window (15 min from enqueue); past it the
+ *   delivery is abandoned with reason revocation_check_unavailable.
+ * - Once the POST may have left (DNS resolved and the request started), the
+ *   attempt always counts.
+ */
 async function attemptDelivery(id: string): Promise<AttemptOutcome> {
   const now = nowMs();
   const nowIso = iso(now);
-  const d = await store.claimDelivery(id, nowIso, iso(now + 60_000));
+  const d = await store.claimDelivery(id, nowIso, iso(now + L.leaseMs));
   if (!d) return "skipped";
+  const attempt = d.attempts;
+  const sentBefore = attempt - 1;
+  const meta = { eventId: d.eventId, eventName: d.eventName, approvalId: d.approvalId, subscriptionId: d.subscriptionId };
+
+  const abandon = async (input: { attempts: number; reason: string; lastError: string; status?: number | null; receiverHost?: string }) => {
+    await store.updateDelivery(id, { status: "abandoned", attempts: input.attempts, lastStatus: input.status ?? null, lastError: input.reason, leaseUntil: null, updatedAt: nowIso });
+    await audit({
+      orgId: d.orgId, employeeId: d.employeeId, action: "mcp_events.delivery_abandoned",
+      summary: "MCP Events の配信をあきらめた（再送上限 / 再送しない応答 / 確認できない状態が続いた）",
+      metadata: { ...meta, receiverHost: input.receiverHost ?? null, attempts: input.attempts, lastError: input.lastError, reason: input.reason },
+    });
+    return "abandoned" as const;
+  };
   const drop = async (reason: string) => {
-    await store.updateDelivery(id, { status: "dropped", lastError: reason, leaseUntil: null, updatedAt: nowIso });
+    await store.updateDelivery(id, { status: "dropped", attempts: sentBefore, lastError: reason, leaseUntil: null, updatedAt: nowIso });
     return "dropped" as const;
   };
-  const sub = await store.getEventSubscription(d.subscriptionId);
-  if (!sub || sub.orgId !== d.orgId || sub.employeeId !== d.employeeId) return drop("subscription_missing");
-  if (sub.status !== "active") return drop(`subscription_${sub.status}`);
-  if (Date.parse(sub.refreshBefore) <= now) {
-    await store.updateEventSubscription(sub.id, { status: "expired", updatedAt: nowIso });
-    return drop("subscription_expired");
+
+  if (attempt > L.maxAttempts) {
+    return abandon({ attempts: sentBefore, reason: "max_attempts_exceeded", lastError: d.lastError ?? "max_attempts_exceeded" });
   }
-  const principal = await checkSubscriptionPrincipal(sub, now);
-  if (!principal.ok) {
-    await revokeEmployeeSubscriptions(sub.orgId, sub.employeeId, principal.reason, nowIso);
-    return drop("subscription_revoked");
-  }
+
+  // ---- pre-send checks: nothing has been sent yet ----
+  let sub: store.SubscriptionRow;
   let keys: Buffer[];
-  try { keys = signingKeys(sub, now); } catch { keys = []; }
+  try {
+    const found = await store.getEventSubscription(d.subscriptionId).catch(() => { throw new PreSendUnavailable("store_unavailable", "subscription_read"); });
+    if (!found || found.orgId !== d.orgId || found.employeeId !== d.employeeId) return drop("subscription_missing");
+    if (found.status !== "active") return drop(`subscription_${found.status}`);
+    if (Date.parse(found.refreshBefore) <= now) {
+      await store.updateEventSubscription(found.id, { status: "expired", updatedAt: nowIso });
+      return drop("subscription_expired");
+    }
+    const principal = await checkSubscriptionPrincipal(found, now);
+    if (!principal.ok && principal.kind === "unavailable") throw new PreSendUnavailable(principal.reason, principal.detail);
+    if (!principal.ok) {
+      // Positively known revocation only: stop every subscription of this employee.
+      await revokeEmployeeSubscriptions(found.orgId, found.employeeId, principal.reason, nowIso);
+      return drop("subscription_revoked");
+    }
+    sub = found;
+    try { keys = signingKeys(sub, now); } catch { keys = []; }
+  } catch (e) {
+    const reason = e instanceof PreSendUnavailable ? e.reason : "store_unavailable";
+    const detail = e instanceof PreSendUnavailable ? e.detail : "pre_send_threw";
+    return defer({ d, attempt, now, nowIso, reason, detail, abandon });
+  }
   if (!keys.length) return drop("secret_unavailable");
 
+  // ---- send: from here on the attempt counts ----
   const ts = Math.floor(now / 1000);
-  const attempt = d.attempts + 1;
   const res = await postWebhook(sub.deliveryUrl, d.body, {
     "content-type": "application/json",
     "webhook-id": d.eventId,
@@ -387,7 +442,7 @@ async function attemptDelivery(id: string): Promise<AttemptOutcome> {
     await audit({
       orgId: d.orgId, employeeId: d.employeeId, action: "mcp_events.delivered",
       summary: "MCP Events で AI を起こした（承認の結果）",
-      metadata: { eventId: d.eventId, eventName: d.eventName, approvalId: d.approvalId, subscriptionId: sub.id, receiverHost: sub.deliveryHost, attempt, status: res.status },
+      metadata: { ...meta, subscriptionId: sub.id, receiverHost: sub.deliveryHost, attempt, status: res.status },
     });
     return "delivered";
   }
@@ -396,31 +451,65 @@ async function attemptDelivery(id: string): Promise<AttemptOutcome> {
   const giveUp = !res.retryable || attempt >= L.maxAttempts || nextAt - Date.parse(d.createdAt) > L.retryWindowMs;
   await store.updateEventSubscription(sub.id, { lastError: res.category, failedSince: sub.failedSince ?? nowIso, updatedAt: nowIso });
   if (giveUp) {
-    await store.updateDelivery(id, { status: "abandoned", attempts: attempt, lastStatus: res.status ?? null, lastError: res.reason, leaseUntil: null, updatedAt: nowIso });
-    await audit({
-      orgId: d.orgId, employeeId: d.employeeId, action: "mcp_events.delivery_abandoned",
-      summary: "MCP Events の配信をあきらめた（再送上限 / 再送しない応答）",
-      metadata: { eventId: d.eventId, eventName: d.eventName, approvalId: d.approvalId, subscriptionId: sub.id, receiverHost: sub.deliveryHost, attempts: attempt, lastError: res.category, reason: res.reason },
-    });
-    return "abandoned";
+    return abandon({ attempts: attempt, reason: res.reason, lastError: res.category, status: res.status ?? null, receiverHost: sub.deliveryHost });
   }
   await store.updateDelivery(id, { status: "pending", attempts: attempt, lastStatus: res.status ?? null, lastError: res.reason, nextAttemptAt: iso(nextAt), leaseUntil: null, updatedAt: nowIso });
   return "retry";
 }
 
+async function defer(input: {
+  d: store.DeliveryRow; attempt: number; now: number; nowIso: string; reason: string; detail: string;
+  abandon: (i: { attempts: number; reason: string; lastError: string }) => Promise<"abandoned">;
+}): Promise<AttemptOutcome> {
+  const { d, attempt, now, nowIso, reason, detail } = input;
+  const nextAt = now + L.deferMs;
+  console.warn("mcp_events_delivery_deferred", { eventId: d.eventId, subscriptionId: d.subscriptionId, reason, detail });
+  if (nextAt - Date.parse(d.createdAt) > L.retryWindowMs) {
+    return input.abandon({ attempts: attempt - 1, reason, lastError: reason });
+  }
+  const first = d.lastError !== reason;
+  await store.releaseDeferredDelivery(d.id, attempt, { nextAttemptAt: iso(nextAt), lastError: reason, updatedAt: nowIso });
+  if (first) {
+    // Audited once per delivery (the first deferral); every deferral is logged.
+    await audit({
+      orgId: d.orgId, employeeId: d.employeeId, action: "mcp_events.delivery_deferred",
+      summary: "権限の確認ができなかったため配信を延期（取り消しはしていない）",
+      metadata: { eventId: d.eventId, eventName: d.eventName, approvalId: d.approvalId, subscriptionId: d.subscriptionId, reason, detail, nextAttemptAt: iso(nextAt), attemptsSoFar: attempt - 1 },
+    });
+  }
+  return "deferred";
+}
+
 export async function deliverDueEvents(opts: { limit?: number } = {}): Promise<
-  { skipped: "disabled" } | { attempted: number; delivered: number; retry: number; abandoned: number; dropped: number }
+  { skipped: "disabled" } | { attempted: number; delivered: number; retry: number; abandoned: number; dropped: number; deferred: number; errors: number }
 > {
   if (!isMcpEventsEnabled()) return { skipped: "disabled" };
   const ids = await store.listDueDeliveryIds(iso(nowMs()), Math.min(Math.max(opts.limit ?? 50, 1), 200));
-  const out = { attempted: 0, delivered: 0, retry: 0, abandoned: 0, dropped: 0 };
+  const out = { attempted: 0, delivered: 0, retry: 0, abandoned: 0, dropped: 0, deferred: 0, errors: 0 };
   for (const id of ids) {
-    const r = await attemptDelivery(id);
+    let r: AttemptOutcome;
+    try {
+      r = await attemptDelivery(id);
+    } catch {
+      // e.g. the store failed after the POST: the claimed attempt stays counted and
+      // the lease expires, so the next run retries it (receivers dedupe by webhook-id).
+      out.errors++;
+      continue;
+    }
     if (r === "skipped") continue;
+    if (r === "deferred") { out.deferred++; continue; }
     out.attempted++;
     out[r]++;
   }
   return out;
+}
+
+/** Retention (deliveryRetentionMs, 7 days): delete finished delivery rows. Called by the deliver cron. */
+export async function pruneFinishedDeliveries(opts: { limit?: number } = {}): Promise<{ deleted: number }> {
+  if (!isMcpEventsEnabled()) return { deleted: 0 };
+  const cutoff = iso(nowMs() - L.deliveryRetentionMs);
+  const deleted = await store.deleteFinishedDeliveriesBefore(cutoff, Math.min(Math.max(opts.limit ?? 500, 1), 1000));
+  return { deleted };
 }
 
 // ---- "what woke the AI" ----------------------------------------------------
@@ -469,9 +558,4 @@ export async function listSubscriptionLedger(orgId: string) {
     createdAt: s.createdAt,
     updatedAt: s.updatedAt,
   }));
-}
-
-export async function pruneFinishedDeliveries(_opts: { limit?: number } = {}): Promise<{ deleted: number }> {
-  void _opts;
-  throw new Error("not_implemented");
 }

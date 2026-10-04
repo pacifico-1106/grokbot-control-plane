@@ -126,6 +126,11 @@ do $$ begin
   if not (select bool_and(relrowsecurity) from pg_class where oid in ('public.mcp_event_subscriptions'::regclass, 'public.mcp_event_deliveries'::regclass)) then
     raise exception 'mcp events: RLS must be enabled';
   end if;
+  -- retention: the deliver cron deletes finished rows by updated_at (partial index on finished statuses)
+  if not exists (select 1 from pg_indexes where schemaname = 'public' and tablename = 'mcp_event_deliveries'
+                 and indexname = 'mcp_event_deliveries_retention_idx' and indexdef like '%(updated_at)%' and indexdef like '%delivered%abandoned%dropped%') then
+    raise exception 'mcp events: retention index missing';
+  end if;
 end $$;
 
 -- cleanup (cascade from orgs)

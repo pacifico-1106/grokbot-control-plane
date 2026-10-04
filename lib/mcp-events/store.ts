@@ -253,24 +253,62 @@ export async function enqueueDelivery(row: DeliveryRow): Promise<boolean> {
   return false;
 }
 
-/** Lease a pending, due delivery for one attempt (cron and inline never send the same attempt twice). */
+/**
+ * Lease a pending, due delivery for one attempt AND count that attempt
+ * (attempts + 1) in the same compare-and-set. Counting at claim time means a
+ * worker that dies after claiming (timeout, crash, lost update) still used up
+ * the attempt, so a delivery can never be retried forever. An attempt that is
+ * deferred BEFORE anything is sent (revocation check unavailable) is handed
+ * back with `releaseDeferredDelivery`, which restores the count.
+ * Concurrency: the update matches the attempts value that was read, so of two
+ * concurrent claimers exactly one wins (cron and inline never send the same
+ * attempt twice).
+ */
 export async function claimDelivery(id: string, nowIso: string, leaseUntilIso: string): Promise<DeliveryRow | null> {
   if (isDemoMode()) {
     const d = demoDeliveries.get(id);
     if (!d || d.status !== "pending") return null;
     if (d.nextAttemptAt && t(d.nextAttemptAt) > t(nowIso)) return null;
     if (d.leaseUntil && t(d.leaseUntil) > t(nowIso)) return null;
-    const leased = { ...d, leaseUntil: leaseUntilIso, updatedAt: nowIso };
+    const leased = { ...d, attempts: d.attempts + 1, leaseUntil: leaseUntilIso, updatedAt: nowIso };
     demoDeliveries.set(id, leased);
     return { ...leased };
   }
-  const { data, error } = await admin().from("mcp_event_deliveries")
-    .update({ lease_until: leaseUntilIso, updated_at: nowIso })
+  const db = admin();
+  const { data: cur, error: readError } = await db.from("mcp_event_deliveries").select("*")
     .eq("id", id).eq("status", "pending").lte("next_attempt_at", nowIso)
     .or(`lease_until.is.null,lease_until.lt.${nowIso}`)
-    .select("*");
+    .maybeSingle();
+  if (readError) throw new Error("mcp_events_store_error");
+  if (!cur) return null;
+  const read = delFromDb(cur as Record<string, unknown>);
+  let q = db.from("mcp_event_deliveries")
+    .update({ attempts: read.attempts + 1, lease_until: leaseUntilIso, updated_at: nowIso })
+    .eq("id", id).eq("status", "pending").eq("attempts", read.attempts);
+  q = read.leaseUntil === null ? q.is("lease_until", null) : q.eq("lease_until", read.leaseUntil);
+  const { data, error } = await q.select("*");
   if (error) throw new Error("mcp_events_store_error");
   return data && data.length ? delFromDb(data[0] as Record<string, unknown>) : null;
+}
+
+/**
+ * Hand back a claimed attempt that was deferred before anything was sent:
+ * the attempt count is restored (the deferral is not a delivery attempt), the
+ * lease is released and the row is due again at `nextAttemptAt`.
+ */
+export async function releaseDeferredDelivery(id: string, claimedAttempts: number, patch: { nextAttemptAt: string; lastError: string; updatedAt: string }): Promise<void> {
+  const restored = Math.max(0, claimedAttempts - 1);
+  if (isDemoMode()) {
+    const cur = demoDeliveries.get(id);
+    if (cur && cur.status === "pending" && cur.attempts === claimedAttempts) {
+      demoDeliveries.set(id, { ...cur, attempts: restored, leaseUntil: null, nextAttemptAt: patch.nextAttemptAt, lastError: patch.lastError, updatedAt: patch.updatedAt });
+    }
+    return;
+  }
+  const { error } = await admin().from("mcp_event_deliveries")
+    .update({ attempts: restored, lease_until: null, next_attempt_at: patch.nextAttemptAt, last_error: patch.lastError, updated_at: patch.updatedAt })
+    .eq("id", id).eq("status", "pending").eq("attempts", claimedAttempts);
+  if (error) throw new Error("mcp_events_store_error");
 }
 
 export async function updateDelivery(id: string, patch: Partial<DeliveryRow>): Promise<void> {
@@ -350,7 +388,30 @@ export function __listDeliveriesForTests(): DeliveryRow[] {
   return [...demoDeliveries.values()].map((d) => ({ ...d })).sort((a, b) => t(a.createdAt) - t(b.createdAt));
 }
 
-export async function deleteFinishedDeliveriesBefore(_cutoffIso: string, _limit: number): Promise<number> {
-  void _cutoffIso; void _limit;
-  throw new Error("not_implemented");
+export const FINISHED_DELIVERY_STATUSES: readonly DeliveryStatus[] = ["delivered", "abandoned", "dropped"];
+
+/**
+ * Retention: delete finished (delivered / abandoned / dropped) delivery rows
+ * last updated before `cutoffIso`, at most `limit` per call. Pending rows are
+ * never deleted. The audit log (mcp_events.*) keeps the long-term record.
+ */
+export async function deleteFinishedDeliveriesBefore(cutoffIso: string, limit: number): Promise<number> {
+  if (isDemoMode()) {
+    let n = 0;
+    for (const d of [...demoDeliveries.values()]) {
+      if (n >= limit) break;
+      if (FINISHED_DELIVERY_STATUSES.includes(d.status) && t(d.updatedAt) < t(cutoffIso)) { demoDeliveries.delete(d.id); n++; }
+    }
+    return n;
+  }
+  const db = admin();
+  const { data, error } = await db.from("mcp_event_deliveries").select("id")
+    .in("status", [...FINISHED_DELIVERY_STATUSES]).lt("updated_at", cutoffIso).order("updated_at", { ascending: true }).limit(limit);
+  if (error) throw new Error("mcp_events_store_error");
+  const ids = (data || []).map((d) => String((d as { id: string }).id));
+  if (!ids.length) return 0;
+  const { data: deleted, error: delError } = await db.from("mcp_event_deliveries").delete()
+    .in("id", ids).in("status", [...FINISHED_DELIVERY_STATUSES]).lt("updated_at", cutoffIso).select("id");
+  if (delError) throw new Error("mcp_events_store_error");
+  return (deleted || []).length;
 }

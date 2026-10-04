@@ -530,6 +530,7 @@ export type AuditAction =
   | "mcp_events.unsubscribed"
   | "mcp_events.delivered"
   | "mcp_events.delivery_abandoned"
+  | "mcp_events.delivery_deferred"
   | "mcp_events.subscription_revoked"
   | "mcp_events.triggered_action"
   | "mcp_handoff.not_connected_notify"

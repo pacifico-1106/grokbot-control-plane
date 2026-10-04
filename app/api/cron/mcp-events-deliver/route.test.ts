@@ -23,7 +23,8 @@ describe("cron /api/cron/mcp-events-deliver: shared helper (lib/security/cron-se
     process.env.CRON_SECRET = "replace_me_with_a_secret";
     expect((await GET(req({ authorization: "Bearer replace_me_with_a_secret" }))).status).toBe(401);
     process.env.CRON_SECRET = "cron-secret-test-value";
-    for (const h of [{ "x-cron-secret": "cron-secret-test-value" }, { authorization: "cron-secret-test-value" }, { authorization: "bearer cron-secret-test-value" }]) {
+    const refused: Array<Record<string, string>> = [{ "x-cron-secret": "cron-secret-test-value" }, { authorization: "cron-secret-test-value" }, { authorization: "bearer cron-secret-test-value" }];
+    for (const h of refused) {
       res = await GET(req(h));
       expect(res.status).toBe(401);
       expect(await res.json()).toEqual({ ok: false, error: "unauthorized" });

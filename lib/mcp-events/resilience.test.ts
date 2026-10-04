@@ -182,43 +182,7 @@ describe("1. transient revocation-check failures defer, never revoke", () => {
   });
 });
 
-describe("1. production reader: read errors are not 'no row'", () => {
-  type Res = { data: unknown; error: unknown };
-  function fakeClient(byTable: Record<string, Res | "throw">) {
-    return {
-      from(table: string) {
-        const res = byTable[table];
-        const chain: Record<string, unknown> = {};
-        for (const m of ["select", "eq", "is", "order", "limit"]) chain[m] = () => chain;
-        chain.maybeSingle = async () => { if (res === "throw") throw new Error("fetch failed"); return res; };
-        return chain;
-      },
-    };
-  }
-  test("error → error, no row → missing, row → found", async () => {
-    const err = { data: null, error: { message: "timeout", code: "57014" } };
-    const none = { data: null, error: null };
-    const r1 = principal.supabasePrincipalReader(fakeClient({ employee_bindings: err, employees: err, credentials: err }) as never);
-    expect((await r1.binding("emp_x")).state).toBe("error");
-    expect((await r1.employee("emp_x")).state).toBe("error");
-    expect((await r1.credential("cred_x", "emp_x")).state).toBe("error");
-    const r2 = principal.supabasePrincipalReader(fakeClient({ employee_bindings: none, employees: none, credentials: none }) as never);
-    expect((await r2.binding("emp_x")).state).toBe("missing");
-    expect((await r2.employee("emp_x")).state).toBe("missing");
-    expect((await r2.credential("cred_x", "emp_x")).state).toBe("missing");
-    const r3 = principal.supabasePrincipalReader(fakeClient({
-      employee_bindings: { data: { employee_id: "emp_x", org_id: "org_1", status: "active", credential_generation: 3, credential_fingerprint: "fp" }, error: null },
-      employees: { data: { id: "emp_x", org_id: "org_1", status: "active" }, error: null },
-      credentials: { data: { revoked_at: null, expires_at: null }, error: null },
-    }) as never);
-    expect(await r3.binding("emp_x")).toMatchObject({ state: "found", value: { orgId: "org_1", status: "active", credentialGeneration: 3, credentialFingerprint: "fp" } });
-    expect(await r3.employee("emp_x")).toMatchObject({ state: "found", value: { orgId: "org_1", status: "active" } });
-    expect(await r3.credential("cred_x", "emp_x")).toMatchObject({ state: "found", value: { revokedAt: null, expiresAt: null } });
-    const r4 = principal.supabasePrincipalReader(fakeClient({ employee_bindings: "throw", employees: "throw", credentials: "throw" }) as never);
-    expect((await r4.binding("emp_x")).state).toBe("error");
-    const r5 = principal.supabasePrincipalReader(null);
-    expect((await r5.binding("emp_x")).state).toBe("error");
-  });
+describe("1. checkSubscriptionPrincipal kinds (production reader: principal-reader.test.ts)", () => {
   test("checkSubscriptionPrincipal: error → unavailable (kind), missing → revoked", async () => {
     const subRow = { orgId: ORG, employeeId: "emp_sales", credentialGeneration: 1, credentialFingerprint: "fp", credentialId: null };
     principal.__setPrincipalReaderForTests(failing("binding"));

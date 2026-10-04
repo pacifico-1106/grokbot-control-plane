@@ -18,6 +18,8 @@ export const MCP_EVENTS_LIMITS = {
   /** delay before attempt 2, 3, 4 */
   backoffMs: [30_000, 2 * 60_000, 8 * 60_000],
   attemptTimeoutMs: 5_000,
+  /** lease per claimed attempt (> attempt timeout + DNS; a dead worker's attempt is retried after this) */
+  leaseMs: 60_000,
   verificationCacheMs: 24 * 60 * 60_000,
   verificationsPerHostPerMinute: 30,
   attributionWindowMs: 30 * 60_000,

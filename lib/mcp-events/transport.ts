@@ -4,16 +4,19 @@
  * - https, port 443, no userinfo / fragment, hostname (not an IP literal),
  *   no single-label / internal-only names, URL ≤ 2048 chars;
  * - DNS is resolved on EVERY attempt; EVERY answer must be globally routable
+ *   (a non-public answer is a permanent failure: address_blocked, not retried)
  *   (lib/security/public-file-download.ts isPublicDownloadAddress: private,
  *   loopback, link-local / metadata, CGNAT, ULA, mapped, documentation … are
  *   refused); the checked answer is pinned for the TCP connection and the
  *   hostname is sent only as TLS SNI + Host, so a rebinding answer between
  *   check and connect cannot be used;
  * - redirects are never followed (3xx = failure, not retried);
- * - request body ≤ 256 KiB, response read ≤ 64 KiB, ~5 s timeout;
+ * - request body ≤ 256 KiB, response read ≤ 64 KiB, ~5 s OVERALL timeout
+ *   after which the response, the request and its socket are destroyed;
  * - failures surface as fixed categories only (never raw endpoint text).
  */
 import { lookup as dnsLookup } from "node:dns/promises";
+import type { ClientRequest, IncomingMessage } from "node:http";
 import { request as httpsRequest, type RequestOptions } from "node:https";
 import { isIP } from "node:net";
 import { isPublicDownloadAddress } from "@/lib/security/public-file-download";
@@ -91,8 +94,19 @@ export function buildPinnedRequestOptions(req: PinnedRequest): RequestOptions {
   };
 }
 
-/** Production transport: system resolver (all answers) + pinned node:https request. */
-export function defaultWebhookTransport(): WebhookTransport {
+const timeoutError = () => Object.assign(new Error("timeout"), { code: "ETIMEDOUT" });
+
+/**
+ * node:https transport with the pinned options. Two timers:
+ * - `setTimeout` on the request = socket idle timeout;
+ * - an OVERALL deadline (req.timeoutMs from the start) that destroys the
+ *   response stream, the request and its socket even when data keeps
+ *   trickling in (an idle timer alone never fires for a slow-drip receiver).
+ * An aborted `req.signal` (postWebhook's own deadline) tears down the same way.
+ * `deps.request` is a test seam (defaults to node:https request).
+ */
+export function createNodeWebhookTransport(deps: { request?: typeof httpsRequest } = {}): WebhookTransport {
+  const doRequest = deps.request ?? httpsRequest;
   return {
     lookup: async (hostname) =>
       (await dnsLookup(hostname, { all: true, verbatim: true })).map((a) => ({
@@ -101,24 +115,56 @@ export function defaultWebhookTransport(): WebhookTransport {
       })),
     request: (req) =>
       new Promise((resolve, reject) => {
-        const r = httpsRequest(buildPinnedRequestOptions(req), (res) => {
+        let settled = false;
+        let response: IncomingMessage | null = null;
+        let r: ClientRequest | null = null;
+        // OVERALL deadline from the start (not an idle timer).
+        const deadline = setTimeout(() => teardown(timeoutError()), req.timeoutMs);
+        const finish = (fn: () => void) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(deadline);
+          req.signal?.removeEventListener("abort", onAbort);
+          fn();
+        };
+        const teardown = (e: Error) => {
+          finish(() => reject(e));
+          try { response?.destroy(); } catch { /* already gone */ }
+          try { r?.destroy(e); } catch { /* already gone */ }
+        };
+        const onAbort = () => teardown(timeoutError());
+        const request = doRequest(buildPinnedRequestOptions(req), (res) => {
+          response = res;
           const chunks: Buffer[] = [];
           let size = 0;
           res.on("data", (chunk: Buffer) => {
             size += chunk.length;
             if (size > req.maxResponseBytes) {
+              const status = res.statusCode || 0;
+              const body = Buffer.concat(chunks);
+              finish(() => resolve({ status, body }));
               res.destroy();
-              resolve({ status: res.statusCode || 0, body: Buffer.concat(chunks) });
+              request.destroy();
             } else chunks.push(chunk);
           });
-          res.on("end", () => resolve({ status: res.statusCode || 0, body: Buffer.concat(chunks) }));
-          res.on("error", (e) => reject(e));
+          res.on("end", () => finish(() => resolve({ status: res.statusCode || 0, body: Buffer.concat(chunks) })));
+          res.on("error", (e) => teardown(e instanceof Error ? e : new Error("response_error")));
         });
-        r.setTimeout(req.timeoutMs, () => r.destroy(Object.assign(new Error("timeout"), { code: "ETIMEDOUT" })));
-        r.on("error", (e) => reject(e));
-        r.end(req.body);
+        r = request;
+        request.setTimeout(req.timeoutMs, () => teardown(timeoutError())); // socket idle timeout
+        request.on("error", (e: Error) => finish(() => reject(e)));
+        if (req.signal) {
+          if (req.signal.aborted) { teardown(timeoutError()); return; }
+          req.signal.addEventListener("abort", onAbort, { once: true });
+        }
+        request.end(req.body);
       }),
   };
+}
+
+/** Production transport: system resolver (all answers) + pinned node:https request. */
+export function defaultWebhookTransport(): WebhookTransport {
+  return createNodeWebhookTransport();
 }
 
 function categorizeError(e: unknown): { category: DeliveryErrorCategory; reason: string } {
@@ -130,13 +176,17 @@ function categorizeError(e: unknown): { category: DeliveryErrorCategory; reason:
   return { category: "connection_refused", reason: "connect_failed" };
 }
 
-async function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+/** Race against a deadline; on expiry the controller is aborted so the transport tears the connection down. */
+async function withTimeout<T>(p: Promise<T>, ms: number, controller?: AbortController): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
       p,
       new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(Object.assign(new Error("timeout"), { code: "ETIMEDOUT" })), ms);
+        timer = setTimeout(() => {
+          controller?.abort();
+          reject(timeoutError());
+        }, ms);
       }),
     ]);
   } finally {
@@ -165,11 +215,15 @@ export async function postWebhook(
   } catch {
     return { ok: false, category: "connection_refused", reason: "dns_failed", retryable: true };
   }
-  if (!answers.length || answers.some((a) => !isPublicDownloadAddress(a.address))) {
-    return { ok: false, category: "connection_refused", reason: "address_blocked", retryable: true };
+  if (!answers.length) return { ok: false, category: "connection_refused", reason: "dns_failed", retryable: true };
+  // A non-public answer is permanent for this delivery (never retried): the
+  // receiver resolves to an internal / metadata address, or is rebinding.
+  if (answers.some((a) => !isPublicDownloadAddress(a.address))) {
+    return { ok: false, category: "connection_refused", reason: "address_blocked", retryable: false };
   }
   const pinned = answers[0];
   let res: { status: number; body: Buffer };
+  const controller = new AbortController();
   try {
     res = await withTimeout(
       transport.request({
@@ -181,8 +235,10 @@ export async function postWebhook(
         body: bytes,
         timeoutMs,
         maxResponseBytes: MAX_RESPONSE,
+        signal: controller.signal,
       }),
-      timeoutMs + 500
+      timeoutMs + 500,
+      controller
     );
   } catch (e) {
     return { ok: false, ...categorizeError(e), retryable: true };
@@ -193,9 +249,4 @@ export async function postWebhook(
   if (status === 410 || status === 413) return { ok: false, category: "http_4xx", reason: `http_${status}`, retryable: false, status };
   if (status >= 500) return { ok: false, category: "http_5xx", reason: "http_5xx", retryable: true, status };
   return { ok: false, category: "http_4xx", reason: "http_4xx", retryable: true, status };
-}
-
-export function createNodeWebhookTransport(_deps: { request?: typeof httpsRequest } = {}): WebhookTransport {
-  void _deps;
-  throw new Error("not_implemented");
 }

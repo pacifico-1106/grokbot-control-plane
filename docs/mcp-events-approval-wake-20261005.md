@@ -3,6 +3,7 @@
 - 依頼: 木村（八坂 GO 2026-10-05）
 - 対象: Staffpass（AIエージェントの社員証）の社員用 MCP `/api/mcp`
 - 状態: **プロトタイプ（フラグ `MCP_EVENTS_ENABLED`、既定 OFF）**。本番の設定・DB は変えていない
+- 改訂: 2026-10-05 木村レビュー反映（§5・§8・§9・§12・§14・§16）。再送 cron の認証は PR #264 の共通ヘルパーを使うため、**この PR は #264 に依存**する（§16）
 - 仕様の出典: 調査メモ `/workspace/docs/mcp-events-2026-10/application.md`（box 内）／OpenAI「MCP Events」
   （https://developers.openai.com/plugins/build/mcp-events）／MCP「Triggers & Events」拡張の下書き
   （MCP 2026-07-28 上の拡張。OpenAI DevDay 2026-09-29 で ChatGPT が対応を発表した版）／Standard Webhooks
@@ -21,7 +22,7 @@
 | 中身 | **ID と状態だけ**（承認の題名・本文・差し戻しメモ・承認者・statusToken・秘密は入れない）。詳細は AI が自分の社員証で `staffpass_get_approval_status` を呼んで読む |
 | 出す場所 | 判断の共通処理 `runApprovalResolveSideEffects`（Web／Slack／LINE／Telegram／代理承認がすべてここを通る）と、期限切れの共通処理 `auditApprovalClosed`、判断期限の自動却下 `decision-workflow/expiry.ts` の 3 か所だけ。**チャネル別の実装はゼロ** |
 | 期限 | `refreshBefore` は**必ず有限**。通常 既定 1 時間・最大 24 時間、危険な設定は 既定 15 分・最大 1 時間、最短 5 分 |
-| 権限の取り消し | **配信のたびに**社員証を確認し直す。取り消し・再発行・停止を見つけたら、その AI 社員の購読を全部止め（以後の更新は `-32012`）、未送信分を捨てる。ChatGPT は `terminated` 非対応なので、止めるのはサーバーの責任 |
+| 権限の取り消し | **配信のたびに**社員証を確認し直す。取り消し・再発行・停止が**確実に分かったときだけ**、その AI 社員の購読を全部止め（以後の更新は `-32012`）、未送信分を捨てる。DB の読み取りエラーなどで確認できないときは止めずに延期する（§8）。ChatGPT は `terminated` 非対応なので、止めるのはサーバーの責任 |
 | 監査 | 購読・更新・停止・配信・配信断念・取り消し・「配信のあと AI が最初にしたこと」（`mcp_events.triggered_action`）を audit_events に残す |
 | 既存との関係 | 会話の起こす webhook・W1・W2・自動 fulfil は**そのまま**。承認結果の callback（`callbackUrl`）とメールは**共存**（同じ `eventId` を載せて重複を判定できる）。置き換えは段階的に（§10） |
 | 2026-07-28 対応 | **現状どちらの MCP も非対応**（§13）。ChatGPT と実際につなぐには別 PR で `server/discover` などが必要 |
@@ -112,7 +113,7 @@
 | メソッド | 認証 | 主な処理 | エラー |
 |---|---|---|---|
 | `events/list` | 社員証 | 2 種類のイベント定義を返す | 社員証なし → `-32012`（HTTP 401/403） |
-| `events/subscribe` | 社員証 | 形式チェック → 社員証の再確認 → approvalId の持ち主確認 → 購読 ID 計算 → 取り消し済みなら拒否 → 上限確認 → 宛先確認（24 時間キャッシュ、ホストごとに毎分 30 回まで） → 秘密を暗号化して保存 → 期限を決めて返す | `-32602` 形式不正（https 以外・whsec_ 不正・未知の arguments など）、`-32011` 未知のイベント、`-32014` webhook 以外、`-32012` 他人の承認・取り消し済み、`-32013` 上限（`subscriptions` 20 件／`verification_rate`）、`-32015` 宛先確認の失敗（理由は固定の分類だけ） |
+| `events/subscribe` | 社員証 | 形式チェック → 社員証の再確認 → approvalId の持ち主確認 → 購読 ID 計算 → 取り消し済みなら拒否 → 上限確認 → 宛先確認（24 時間キャッシュ、ホストごとに毎分 30 回まで） → 秘密を暗号化して保存 → 期限を決めて返す | `-32602` 形式不正（https 以外・whsec_ 不正・未知の arguments など）、`-32011` 未知のイベント、`-32014` webhook 以外、`-32012` 他人の承認・取り消し済み、`-32013` 上限（`subscriptions` 20 件／`verification_rate`）、`-32015` 宛先確認の失敗（理由は固定の分類だけ）、`-32603` `{reason: "revocation_check_unavailable"}` 社員証の確認が DB エラーなどでできない（一時的。何も記録・拒否しないので、受け手はそのまま再試行できる） |
 | `events/unsubscribe` | 社員証 | 有効な購読なら停止し、未送信分を捨てる | 見つからなくても `{}`（冪等。他人の購読があるかどうかも分からない） |
 
 - 更新（同じキーでの再 subscribe）では、秘密が変わっていれば**古い秘密でも 10 分間は二重署名**する。期限は毎回決め直す。止まっていた購読も再開する（`deliveryStatus` に `lastDeliveryAt` と `lastError` を返す）。
@@ -129,7 +130,10 @@
 | webhook-id | `eventId` = `evt_` + sha256(org, 承認, イベント名, 状態) の先頭 32 桁。**再送でも、同じ判断をもう一度流しても同じ** | `lib/mcp-events/ids.ts` |
 | 重複防止 | `mcp_event_deliveries` に unique(subscription_id, event_id)。2 回目の emit は 0 件 | migration |
 | 本文 | 1 イベント 1 リクエスト、256KiB を超えるものは送らない（DB でも 262144 バイトで拒否）。再送は同じ本文 | `transport.ts` / migration |
-| 再送 | 1 回目は即時、以後 30 秒 → 2 分 → 8 分（最大 4 回・15 分以内）。`410`・`413`・`3xx` は再送しない。1 回 約 5 秒で打ち切り | `service.ts` / `policy.ts` |
+| 再送 | 1 回目は即時、以後 30 秒 → 2 分 → 8 分（最大 4 回・15 分以内）。`410`・`413`・`3xx`、**送る時点の名前解決で公開されていないアドレスが返った場合（`address_blocked`）**は再送しない（その配信は `abandoned`、理由つきで監査） | `service.ts` / `policy.ts` / `transport.ts` |
+| 打ち切り | 1 回の送信は**全体で約 5 秒**（DNS を含む）。期限が来たら応答の読み込み・リクエスト・ソケットをすべて破棄する（少しずつデータを返し続ける受け手でも止まる）。ソケットの無通信タイマーとは別 | `transport.ts` |
+| 回数の数え方 | **取り出し（claim）の時点で 1 回と数える**（lease と同じ compare-and-set）。送信中に関数が落ちても、その回は使ったことになり、lease（60 秒）が切れた後の再送は次の回。上限を超えて取り出されたものは送らずに `abandoned`（`max_attempts_exceeded`）。**送る前の確認ができなかった回（延期）は数えない**（回数を戻す）。延期も 15 分の再送の枠に入り、枠を超えたら `abandoned`（`revocation_check_unavailable`） | `store.ts` `claimDelivery` / `releaseDeferredDelivery` |
+| 配信の行の保持 | `delivered` / `abandoned` / `dropped` の行は、最後の更新から **7 日**（`deliveryRetentionMs`）で削除。再送 cron が毎回最大 500 行ずつ削除する。`pending` は削除しない。長期の記録は監査（`mcp_events.*`）に残る。7 日を過ぎた後に同じ eventId が再び出ても DB の unique では止まらないが、イベントは判断のときに 1 回だけ出るので実際には起きない（受け手も eventId で重複を捨てる） | `service.ts` `pruneFinishedDeliveries` / cron |
 | 期限 | §7 | `policy.ts` |
 | cursor | 常に `null`、`truncated: false`（再生なし。ChatGPT も gap 非対応） | |
 
@@ -160,9 +164,9 @@
 | `MCP_EVENTS_ENABLED` | この機能全体 | OFF |
 | `MCP_EVENTS_TRUSTED_RECEIVER_HOSTS` | 「信頼できる受け手」のホスト名（完全一致、カンマ区切り）。例: 受け手が公開している受信ホスト | なし（＝全部「危険な設定」扱い） |
 | `NOTIFICATION_CONFIG_ENCRYPTION_KEY` | 秘密の暗号化（既存） | 必須。ないと subscribe は `-32603` |
-| `CRON_SECRET` | 再送 cron の認証（既存） | 必須 |
+| `CRON_SECRET` | 再送 cron の認証（既存）。`Authorization: Bearer <CRON_SECRET>` のみ（PR #264 の共通ヘルパー）。未設定 → 503、`replace_me…` のまま → 401 | 必須 |
 
-上限: AI 社員 1 人あたり有効な購読 20 件、宛先確認はホストごとに毎分 30 回（インスタンス単位）。
+上限: AI 社員 1 人あたり有効な購読 20 件、宛先確認の POST はホストごとに毎分 30 回（この回数だけはインスタンスのメモリで数える。§12.3 N3）。
 
 ---
 
@@ -193,7 +197,11 @@ ChatGPT は `terminated` 通知に対応していないので、**サーバー�
 
 1. **送る直前に毎回**、購読した社員証を確かめ直す（`lib/mcp-events/principal.ts`）:
    紐づけ（binding）が取り消されていない／社員証の世代と指紋が購読時と同じ（再発行されていない）／AI 社員が同じ org にいて停止されていない／（本番）credential の行が取り消し・期限切れでない。
-2. どれかが崩れていたら、その AI 社員の**有効な購読を全部 `revoked`** にし、未送信の配信を捨て、`mcp_events.subscription_revoked`（理由つき）を記録する。そのイベントは送らない。
+2. 崩れていることが**確実に分かったら**（行がないと確認できた・取り消し済み・世代か指紋が違う・社員が停止中・credential が取り消し済みか期限切れ）、その AI 社員の**有効な購読を全部 `revoked`** にし、未送信の配信を捨て、`mcp_events.subscription_revoked`（理由つき）を記録する。そのイベントは送らない。
+   - **確認できなかったとき**（DB の読み取りエラー、service role のクライアントがない、例外）は「行がない」とは扱わない。既存の `getBinding` / `getEmployeeById` はエラーを握りつぶして「ない」を返すので、ここでは使わず、エラーと「ない」を分けて返す専用の読み取り（`supabasePrincipalReader`）を使う。
+   - そのときは**その回だけ延期**する: 送らない・取り消さない・他の配信も捨てない。回数は数えず、60 秒後（`deferMs`）にもう一度試す。配信の行に `lastError: revocation_check_unavailable` を残し、最初の延期だけ `mcp_events.delivery_deferred` を監査に記録する（毎回の延期はログ `mcp_events_delivery_deferred`）。
+   - 15 分の再送の枠を超えても確認できなければ、その配信だけ `abandoned`（理由 `revocation_check_unavailable`）。購読は止めない。確認できないまま送ることはしない（fail closed）。
+   - subscribe のときに確認できなければ `-32603`（`revocation_check_unavailable`）を返す。`-32012` ではないので、受け手は再試行できる。
 3. `revoked` は戻らない。同じキーで更新が来ても **`-32012 Forbidden`**。社員証を再発行した後の購読は、世代が違う別の主体なので、宛先確認からやり直しになる。
 4. subscribe のときも同じ確認をする（古い社員証から購読を始められない）。
 5. 配信の直前に、承認がまだ同じ org・同じ社員のものであることも確かめる（購読の照合は org と社員の両方で行う）。
@@ -208,7 +216,8 @@ ChatGPT は `terminated` 通知に対応していないので、**サーバー�
 | `mcp_events.subscribed` | 購読・更新 | subscriptionId, eventName, receiverHost, receiverUrlHash, arguments, risk, riskReasons, grantedTtlMs, ttlCapped, refresh, secretRotated, verification（challenge / cached） |
 | `mcp_events.unsubscribed` | 停止 | subscriptionId, eventName, receiverHost |
 | `mcp_events.delivered` | 配信成功 | eventId, eventName, approvalId, subscriptionId, receiverHost, attempt, status |
-| `mcp_events.delivery_abandoned` | 再送をあきらめた | 上記 ＋ attempts, lastError（分類）, reason |
+| `mcp_events.delivery_abandoned` | 再送をあきらめた | 上記 ＋ attempts, lastError（分類）, reason（`http_5xx` / `address_blocked` / `redirect_refused` / `max_attempts_exceeded` / `revocation_check_unavailable` など） |
+| `mcp_events.delivery_deferred` | 社員証の確認ができず延期した（配信ごとに最初の 1 回） | eventId, eventName, approvalId, subscriptionId, reason（`revocation_check_unavailable` / `store_unavailable`）, detail（`binding_read_error` などの固定値）, nextAttemptAt, attemptsSoFar |
 | `mcp_events.subscription_revoked` | 権限の変化で停止 | reason（binding_revoked / credential_rotated / employee_suspended / …）, subscriptionIds, droppedDeliveries |
 | `mcp_events.triggered_action` | 配信のあと 30 分以内の、その社員証の**最初の** tools/call | eventId, eventName, approvalId, subscriptionId, tool, lagMs, `basis: "first_tool_call_after_delivery"` |
 
@@ -256,7 +265,7 @@ ChatGPT は `terminated` 通知に対応していないので、**サーバー�
 | 他人の URL を狙う | 攻撃者（自分の社員証で他人の URL を購読） | 第三者の受信口 | 宛先確認（challenge の往復）、ホストごとの回数制限、24 時間のキャッシュは（主体, URL）ごと |
 | テナントの境目 | org A の AI | org B の承認 | 照合は org と社員の両方。DB のトリガーでも「社員は購読の org の人」「配信の org・社員＝購読の org・社員」を強制 |
 | 秘密 | DB を読める人・ログ | 受け手の署名鍵 | AES-256-GCM で保存（平文は DB の check で拒否）、監査・一覧・応答に出さない、RLS on・ポリシーなし・anon/authenticated 権限なし |
-| 権限の変化 | 取り消された社員証 | 以後のイベント | 配信のたびの再確認、取り消しは戻らない、期限は必ず有限 |
+| 権限の変化 | 取り消された社員証 | 以後のイベント | 配信のたびの再確認（確実に分かったときだけ取り消し、確認できないときは送らずに延期）、取り消しは戻らない、期限は必ず有限 |
 
 ### 12.2 脅威と対策（このプロトタイプで閉じたもの）
 
@@ -265,15 +274,20 @@ ChatGPT は `terminated` 通知に対応していないので、**サーバー�
 | SSRF（内部・ループバック・リンクローカル・メタデータ 169.254.169.254 / fd00:ec2::254 / 100.100.100.200） | `isPublicDownloadAddress`（既存）を**全**アドレスに適用。IP 直書き URL・内部向けホスト名は形式で拒否 | `transport.test.ts`（11 種類のアドレス） |
 | DNS リバインディング | 送るたびに名前解決 → 確認した IP に直接接続（`hostname: IP`、`servername`/`Host` は元の名前、`agent:false`） | 「1 回目は公開 → 2 回目は内部」で 2 回目が拒否されること、接続オプションの固定 |
 | リダイレクトで内部へ | `node:https` はリダイレクトしない。3xx は失敗・再送なし | テスト |
+| 送る時点で内部のアドレスに解決される受け手 | `address_blocked` は恒久的な失敗。その配信は再送せず `abandoned`（理由つきで監査）。次のイベントでもまた名前解決から確認する | `resilience.test.ts`（3b）、`transport.test.ts` |
+| 応答を引き延ばす受け手（slowloris 型） | 全体の期限で応答・リクエスト・ソケットを破棄。`postWebhook` 側の期限でも AbortSignal で同じ破棄をする | `transport.test.ts`（3a） |
+| DB の一時的な障害で購読が消える（可用性） | 読み取りエラーは「行がない」と区別し、延期だけする。取り消しは確実なときだけ | `resilience.test.ts`、`principal-reader.test.ts` |
+| 送信中に落ちた回を数えず無限に再送 | 取り出しの時点で数える。上限を超えたら送らない | `resilience.test.ts`（3c） |
 | 応答を使った内部の探索 | 応答本文・ヘッダーは返さない・保存しない。分類 6 種類だけ（DB の check でも固定） | テスト（「internal detail」が漏れない） |
 | 他人の URL への大量送信 | 宛先確認が通るまで送らない。確認 POST はホストごとに毎分 30 回まで | テスト |
 | 署名の偽造・再生 | 受け手の秘密で HMAC。時刻を毎回付け直す。受け手は 5 分より古いものを捨て、webhook-id で重複を捨てる | 仕様のテストベクトル |
 | テナントをまたぐ通知 | アプリ（org と社員で照合し、配信直前にも確認）と DB（トリガー）の二重 | `service.test.ts`（別 org の偽の行に届かない）、`db-mcp-events.sql` |
 | 本文からの漏えい | ID と状態だけ。jobId / tool も安全な文字だけ | テスト（題名・本文・承認者・statusToken・whsec が入らない） |
-| 取り消し後の配信 | §8 | テスト（binding 取り消し・社員証の再発行） |
+| 取り消し後の配信 | §8 | テスト（binding 取り消し・行がない・社員証の再発行・社員の停止・credential の取り消し） |
 | プロンプトインジェクション | 本文に自由文がない。説明文はスキーマの説明だけ | — |
 | 購読の乗っ取り | キーに主体を含めるので、他人は同じ購読を更新・停止できない。`id` は入力にしない | `ids.test.ts` |
-| 資源の食いつぶし | 社員 1 人 20 件、期限は有限、本文 256KiB、再送は 4 回 15 分まで | テスト |
+| 資源の食いつぶし | 社員 1 人 20 件、期限は有限、本文 256KiB、再送は 4 回 15 分まで、終わった配信の行は 7 日で削除 | テスト |
+| 再送 cron の不正な呼び出し | PR #264 の共通ヘルパー（SHA-256 の digest を `timingSafeEqual` で比較、Bearer のみ、未設定 503、placeholder 401）。以前の独自実装は `x-cron-secret` も受け付け、長さの比較を先にしていた | `route.test.ts` |
 
 ### 12.3 残っている点・確認が要る点（重大度は付けない＝needs_validation）
 
@@ -281,8 +295,9 @@ ChatGPT は `terminated` 通知に対応していないので、**サーバー�
 |---|---|---|---|
 | N1 | **既存**: 承認結果の callback（`employee.callbackUrl`、`lib/approvals/resolve-side-effects.ts`）は URL の形式チェックがなく（https 以外も入る）、名前解決後の IP 確認もなく、`fetch` の既定でリダイレクトに従う。設定できるのはテナントの管理者（社員の発行時）。approve の応答に `callback.status` / エラー文が入るため、内部向けの到達確認に使える可能性がある | needs_validation（Vercel の実行環境から内部に届くかはリポジトリの外の事実） | 実行環境のネットワーク構成の確認。直すなら `lib/mcp-events/transport.ts` の `postWebhook` を使い、応答の `callback.error` を分類だけにする |
 | N2 | **既存**: 会話の起こす webhook（`lib/slack/mention-ingress.ts`）も https だけ確認し、IP 確認なし・リダイレクトに従う | 同上 | 同上 |
-| N3 | 宛先確認の回数制限・確認のキャッシュはインスタンスのメモリなので、サーバーレスでは台数ぶん緩くなる | 設計上の制限 | 本番前に Upstash などの共有の数え方に移すか判断 |
-| N4 | 送信の 1 回目はバックグラウンド（`waitUntil`）。実行環境が止まると cron の再送まで遅れる | 設計上の制限 | cron の間隔を決める（§15） |
+| N3 | **宛先確認のキャッシュは DB にある**（`isVerifiedFor`: `mcp_event_subscriptions` から、同じ主体・同じ URL で取り消されておらず、`verified_at` が 24 時間以内の行を探す）。したがってインスタンスをまたいで共有され、主体（社員証の世代）ごとに分かれている。**インスタンスのメモリにあるのは、宛先確認の POST の回数制限（ホストごとに毎分 30 回、`takeVerificationBudget`）だけ**で、サーバーレスでは台数ぶん緩くなる | 設計上の制限（回数制限のみ） | 本番前に回数制限を Upstash などの共有の数え方に移すか判断（D11） |
+| N4 | 送信の 1 回目はバックグラウンド（`waitUntil`）。実行環境が止まると cron の再送まで遅れる。取り出した回は数えるので、無限には再送しない | 設計上の制限 | cron の間隔を決める（§15） |
+| N7 | 延期の監査は配信ごとに最初の 1 回だけ（DB 障害中に監査も書けない可能性があるため、毎回の延期はログ）。障害が長いと、延期の監査が残らずにログだけになることがある | 設計上の制限 | 本番の監視でログ `mcp_events_delivery_deferred` を拾う |
 | N5 | 秘密の暗号化鍵は既存の `NOTIFICATION_CONFIG_ENCRYPTION_KEY` を共用。鍵を替える手順は既存の秘密と同じ扱い | 既存方針に合わせた | — |
 | N6 | `events/*` はまだ 2026-07-28 のヘッダー（`MCP-Protocol-Version` / `Mcp-Method`）を確認していない（§13 の別 PR） | 未対応 | 別 PR |
 
@@ -358,11 +373,11 @@ ChatGPT は `terminated` 通知に対応していないので、**サーバー�
 | `lib/mcp-events/standard-webhooks.ts` | whsec_ の検証・署名・検証 |
 | `lib/mcp-events/transport.ts` | SSRF 対策つきの送信 |
 | `lib/mcp-events/policy.ts` | 期限・危険度・上限 |
-| `lib/mcp-events/principal.ts` | 社員証の再確認 |
+| `lib/mcp-events/principal.ts` | 社員証の再確認（エラーと「ない」を分ける専用の読み取り。結果は `ok` / `revoked` / `unavailable`） |
 | `lib/mcp-events/store.ts` | 保存（デモはメモリ、本番は service_role のテーブル） |
 | `lib/mcp-events/service.ts` | events/* の処理・emit・配信・監査・一覧 |
 | `app/api/mcp/route.ts` | events/* の受け口（フラグ ON のときだけ）、tools/call の「直後の操作」記録 |
-| `app/api/cron/mcp-events-deliver/route.ts` | 再送の cron（CRON_SECRET 必須、フラグ OFF なら何もしない） |
+| `app/api/cron/mcp-events-deliver/route.ts` | 再送と保持期間の削除の cron（`rejectUnauthorizedCron`＝PR #264 の共通ヘルパー、フラグ OFF なら何もしない） |
 | `lib/approvals/resolve-side-effects.ts` | approval.decided を出す（＋ callback に eventId） |
 | `lib/comm-reply-dedup/approvals.ts` / `lib/decision-workflow/expiry.ts` | approval.expired を出す |
 | `supabase/migrations/20261005000000_mcp_event_subscriptions.sql` | テーブル 2 つ・トリガー（ロールバックつき）。**PR では適用しない** |
@@ -392,4 +407,27 @@ ChatGPT は `terminated` 通知に対応していないので、**サーバー�
 | D8 | 管理用 MCP にも Events を出すか | 出さない（管理の操作は人の承認が前提で、AI を自動で起こす理由が薄い） |
 | D9 | 既存の callback・起こす webhook の SSRF 対策（§12.3 N1・N2）を直すか | 直す（`postWebhook` に寄せる）。別 PR |
 | D10 | 古い版の例（§13.2）をどこまで直すか | この PR は `docs/mcp.md` の注記だけ。コードの版は D1 の PR で |
-| D11 | 宛先確認の回数制限を共有の数え方（Upstash 等）にするか | 本番の前に |
+| D11 | 宛先確認の POST の回数制限を共有の数え方（Upstash 等）にするか（確認のキャッシュはすでに DB） | 本番の前に |
+| D12 | 配信の行の保持期間（7 日）と、延期の間隔（60 秒） | 案のとおり |
+
+---
+
+## 16. 他の PR との関係（2026-10-05 時点）
+
+### 16.1 PR #264 に依存する
+
+- 再送 cron は `lib/security/cron-secret.ts`（`rejectUnauthorizedCron`、PR #264）を使う。そのため #264 のブランチ `fix/cron-secret-constant-time-20261004`（head `38b91f4`、remote でも同じことを確認）を、この PR のブランチに**通常の merge コミット**で取り込んだ（rebase なし）。
+- **#264 を先にマージする必要がある。** #264 が main に入れば、この PR の差分から #264 のコミット（9 ファイル）は消える。
+- 挙動の変化: `CRON_SECRET` が未設定のとき 401 → **503 `cron_not_configured`**、`x-cron-secret` ヘッダーは受け付けない（Bearer のみ）、`replace_me…` のままなら 401。この cron は vercel.json にまだ登録しておらず、呼び出し元はない。
+
+### 16.2 PR #265 と衝突する（後からマージする側が解消する）
+
+#265（`fix/member-invite-activation-20261004`、head `7cf9b60`、#263 の上に積んである）をこのブランチに試しに merge した（使い捨ての worktree、merge 後に削除。#265 は変更していない）。衝突は 3 ファイルで、どれも「同じ場所にそれぞれ追加した」だけ。
+
+| ファイル | 衝突する箇所 | 解消のしかた |
+|---|---|---|
+| `lib/feature-flags.ts` | ファイル末尾。こちらは `isMcpEventsEnabled`（`MCP_EVENTS_ENABLED`）、#265 は `isMemberInviteActivationEnabled`（`MEMBER_INVITE_ACTIVATION_ENABLED`）を同じ位置に追加 | **両方の関数を残す**（それぞれの doc コメントごと。順番はどちらでもよい） |
+| `scripts/test-db-all-migrations.py` | (1) 定数の定義の位置: こちらの `ADDITIVE = [("20261005000000_", "tests/security/db-mcp-events.sql", (...))]` と #265 の `POST_APPLY_TESTS = ("tests/security/db-member-guard.sql", "tests/security/db-member-invite-activation.sql")`。(2) FIXES の PASS 表示の直後: こちらは main 側の `+ "; service_role reads/writes all.")))`（閉じ括弧 3 つ）、#265 は古い形の `...all.")` の後に `for test_file in POST_APPLY_TESTS:` のループを追加 | (1) **両方の定数を残す**。(2) **こちら（main 側）の閉じ括弧 3 つの行を残し、その後に #265 の `POST_APPLY_TESTS` のループを足す**。`ADDITIVE` のループ（全履歴の後の SQL テスト・再適用・ROLLBACK・再適用）はそのまま |
+| `scripts/test-db-local.py` | `db-rls-write-holes-phase2.sql` の後: こちらは main 側の LP 2 本（`20261001000000_lp_inquiries.sql`、`20261004800000_lp_tables_server_only.sql`）と MCP Events（適用・再適用・SQL テスト・ROLLBACK・削除の確認・再適用）、#265 は招待の active 化（fail-first・適用・並列・runbook・ROLLBACK・再適用）を同じ位置に追加 | **両方のブロックを残す**（こちらのブロックの後に #265 のブロック）。#265 の側は main の LP 2 本を持っていないので、こちらの側の LP の行を消さないこと |
+
+試しの解消（上の方針どおり）で `test-db-local.py` と `test-db-all-migrations.py` を実行し、どちらも PASS した（schema.sql ＋ 63/64 の migration、`db-member-invite-activation.sql` と `db-mcp-events.sql` の両方が全履歴の上で PASS）。ほかのファイル（`lib/types.ts`、`lib/data/index.ts`、`lib/security/tenant-table-write-paths.test.ts`）は自動で merge できた。

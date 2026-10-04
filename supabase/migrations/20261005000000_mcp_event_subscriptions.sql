@@ -92,6 +92,9 @@ create table if not exists public.mcp_event_deliveries (
 );
 create index if not exists mcp_event_deliveries_due_idx
   on public.mcp_event_deliveries (next_attempt_at) where status = 'pending';
+-- retention (deliver cron deletes finished rows older than 7 days)
+create index if not exists mcp_event_deliveries_retention_idx
+  on public.mcp_event_deliveries (updated_at) where status in ('delivered', 'abandoned', 'dropped');
 create index if not exists mcp_event_deliveries_attribution_idx
   on public.mcp_event_deliveries (org_id, employee_id, delivered_at desc) where status = 'delivered' and attributed_at is null;
 
