@@ -162,6 +162,9 @@ describe("app: no user-session writes to tenant tables", () => {
       "lib/approval-kind-routes/data.ts:orgs:update",
       "lib/approval-workflow/data.ts:orgs:update",
       // org bootstrap at signup (service role, new org only)
+      // compensating delete of a just-created org whose owner insert failed
+      // (pre-migration fallback of provisionOrgForUser, 20261004900000)
+      "lib/auth/session.ts:orgs:delete",
       "lib/auth/session.ts:orgs:insert",
       "lib/auth/session.ts:subscriptions:insert",
       // Stripe plan downgrade → cancel pending approvals for revoked tools

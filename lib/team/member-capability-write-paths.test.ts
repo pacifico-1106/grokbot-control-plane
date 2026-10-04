@@ -64,10 +64,34 @@ describe("org_members write inventory", () => {
     const text = src("lib/auth/session.ts");
     const provision = text.slice(text.indexOf("export async function provisionOrgForUser"), text.indexOf("export type EnsureOrgResult"));
     const guardAt = provision.indexOf("evaluateMemberChange(");
-    const insertAt = provision.search(/\.from\("org_members"\)\s*\.insert/);
     expect(guardAt).toBeGreaterThan(-1);
-    expect(insertAt).toBeGreaterThan(guardAt);
     expect(provision).toContain("SYSTEM_BOOTSTRAP_ACTOR");
+    // Atomic RPC (20261004900000) and the pre-migration two-step fallback both
+    // run after the guard and write exactly the guard's role / capabilities.
+    expect(provision.indexOf('rpc("provision_org_with_owner"')).toBeGreaterThan(guardAt);
+    expect(provision).toContain("p_capabilities: bootstrap.capabilitiesAfter");
+    const twoStepCall = provision.indexOf("provisionOrgTwoStep({");
+    expect(twoStepCall).toBeGreaterThan(guardAt);
+    expect(provision.slice(twoStepCall)).toMatch(/role: bootstrap\.roleAfter,\s*capabilities: bootstrap\.capabilitiesAfter/);
+    const helper = text.slice(text.indexOf("async function provisionOrgTwoStep"), text.indexOf("function isSchemaMissingError"));
+    expect(helper).toMatch(/\.from\("org_members"\)\s*\.insert/);
+    expect(helper).toMatch(/role: input\.role,/);
+    expect(helper).toMatch(/capabilities: input\.capabilities,/);
+    expect([...text.matchAll(/provisionOrgTwoStep\(/g)].length).toBe(2); // definition + the one guarded call
+  });
+
+  test("org_members RPC writers: invite claim only via invite-claim.ts, org bootstrap only after evaluateMemberChange", () => {
+    const rpcSites = (fn: string) =>
+      files.filter((f) => new RegExp(`\\.rpc\\(\\s*["'\`]${fn}["'\`]`).test(readFileSync(f, "utf8"))).map(rel).sort();
+    expect(rpcSites("claim_member_invites")).toEqual(["lib/auth/invite-claim.ts"]);
+    expect(rpcSites("provision_org_with_owner")).toEqual(["lib/auth/session.ts"]);
+    const text = src("lib/auth/session.ts");
+    const provision = text.slice(text.indexOf("export async function provisionOrgForUser"), text.indexOf("export type EnsureOrgResult"));
+    const guardAt = provision.indexOf("evaluateMemberChange(");
+    expect(guardAt).toBeGreaterThan(-1);
+    expect(provision.indexOf('rpc("provision_org_with_owner"')).toBeGreaterThan(guardAt);
+    // the claim RPC takes the user id only — never an email
+    expect(src("lib/auth/invite-claim.ts")).not.toMatch(/p_email/);
   });
 
   test("writeMemberRow is only called from applyMemberChange, which calls evaluateMemberChange first", () => {

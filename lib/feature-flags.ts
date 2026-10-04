@@ -487,3 +487,26 @@ export function isApprovalAttachmentReconcileEnabled(): boolean {
 export function isMcpEndpointHandoffEnabled(): boolean {
   return parseFlag(process.env.MCP_ENDPOINT_HANDOFF_ENABLED);
 }
+
+/**
+ * Member invite activation (木村 2026-10-04 #1). Needs migration
+ * 20261004900000_member_invite_activation.sql applied first.
+ *
+ * When ON:
+ * - A NEW team invite (POST /api/team/members, after the member-change guard)
+ *   sends the Supabase Auth invite email (Invite template → /auth/confirm →
+ *   set password → /app). Outcome in the response (`inviteEmail`) + audit
+ *   `member.invite_email`.
+ * - An invite-created Auth user (auth.users.invited_at) with no active
+ *   membership has ONE matching pending invite bound on /app (or
+ *   /api/auth/repair-org) by the DB RPC claim_member_invites: verified email
+ *   = invite email after NFKC/trim/lower, role + capabilities exactly as
+ *   invited, audit `member.invite_claimed`, idempotent, race-safe.
+ *
+ * When OFF (default):
+ * - No invite email, no claim call; invited users still get /auth/no-access
+ *   (exact current behaviour).
+ */
+export function isMemberInviteActivationEnabled(): boolean {
+  return parseFlag(process.env.MEMBER_INVITE_ACTIVATION_ENABLED);
+}

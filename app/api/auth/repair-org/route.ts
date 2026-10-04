@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import {
+  activatePendingInvite,
   getSessionContext,
   isInvitedWithoutMembership,
   provisionOrgForUser,
@@ -24,6 +25,11 @@ async function repair(req: Request) {
   }
 
   if (session.orgId) {
+    return NextResponse.redirect(new URL("/app", req.url), 303);
+  }
+
+  // Invite activation (flag): bind the invited user's matching pending invite.
+  if (await activatePendingInvite(session)) {
     return NextResponse.redirect(new URL("/app", req.url), 303);
   }
 

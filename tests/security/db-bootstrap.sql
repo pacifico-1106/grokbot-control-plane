@@ -2,7 +2,10 @@ create role anon nologin;
 create role authenticated nologin;
 create role service_role nologin bypassrls;
 create schema auth;
-create table auth.users(id uuid primary key, banned_until timestamptz, deleted_at timestamptz);
+-- Subset of Supabase's auth.users (email / email_confirmed_at / invited_at are
+-- read by public.claim_member_invites, migration 20261004900000).
+create table auth.users(id uuid primary key, banned_until timestamptz, deleted_at timestamptz,
+  email text, email_confirmed_at timestamptz, invited_at timestamptz, last_sign_in_at timestamptz);
 create role authenticator nologin;
 create function auth.uid() returns uuid language sql stable as
 $$ select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid $$;
