@@ -69,24 +69,15 @@ describe("supported versions (spec revisions)", () => {
 });
 
 describe("initialize negotiation (legacy lifecycle rule)", () => {
-  test.each([
-    ["2024-11-05", "2024-11-05"],
-    ["2025-03-26", "2025-03-26"],
-    ["2025-06-18", "2025-06-18"],
-    ["2025-11-25", "2025-11-25"],
-  ])("supported %s is echoed", (requested, answer) => {
-    expect(negotiateInitializeVersion(requested)).toBe(answer);
-  });
-  test.each([
-    ["2026-07-28"],
-    ["2099-01-01"],
-    ["1900-01-01"],
-    ["2024-10-07"],
-    ["latest"],
-    [""],
-    ["x".repeat(5000)],
-  ])("unsupported %s → latest initialize-era version 2025-11-25", (requested) => {
-    expect(negotiateInitializeVersion(requested)).toBe("2025-11-25");
+  for (const v of ["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"]) {
+    test(`supported ${v} is echoed`, () => {
+      expect(negotiateInitializeVersion(v)).toBe(v);
+    });
+  }
+  test("unsupported versions → latest initialize-era version 2025-11-25", () => {
+    for (const requested of ["2026-07-28", "2099-01-01", "1900-01-01", "2024-10-07", "latest", "", "x".repeat(5000)]) {
+      expect(negotiateInitializeVersion(requested)).toBe("2025-11-25");
+    }
   });
   test("missing / non-string protocolVersion → 2024-11-05 (unchanged from before D1)", () => {
     expect(negotiateInitializeVersion(undefined)).toBe("2024-11-05");
@@ -241,11 +232,12 @@ describe("checkMcpProtocolRequest — modern requests (2026-07-28)", () => {
     const params = { name: "staffpass_whoami", _meta: MODERN_META };
     expect(checkMcpProtocolRequest(req(), "tools/call", params)).toEqual({ ok: true, era: "modern", version: "2026-07-28" });
     process.env.MCP_STRICT_REQUEST_HEADERS = "true";
-    for (const headers of [
+    const partialHeaders: Array<Record<string, string>> = [
       {},
       { "mcp-protocol-version": "2026-07-28" },
       { "mcp-protocol-version": "2026-07-28", "mcp-method": "tools/call" },
-    ]) {
+    ];
+    for (const headers of partialHeaders) {
       const r = checkMcpProtocolRequest(req(headers), "tools/call", params);
       expect(r.ok).toBe(false);
       if (!r.ok) expect([r.httpStatus, r.code]).toEqual([400, MCP_ERR_HEADER_MISMATCH]);

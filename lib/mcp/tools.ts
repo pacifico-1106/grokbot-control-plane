@@ -47,8 +47,14 @@ import {
   getApprovedInstructions,
   requesterNoticeForApproval,
 } from "@/lib/config-change-request/service";
+import { MCP_LATEST_PROTOCOL_VERSION } from "@/lib/mcp/protocol-negotiation";
 
-export const MCP_PROTOCOL_VERSION = "2024-11-05";
+/**
+ * Latest MCP protocol revision this server speaks (GET server cards). Per-request
+ * negotiation lives in lib/mcp/protocol-negotiation.ts (initialize echoes a
+ * supported initialize-era version; 2026-07-28 is served per request).
+ */
+export const MCP_PROTOCOL_VERSION = MCP_LATEST_PROTOCOL_VERSION;
 export const MCP_SERVER_NAME = "staffpass";
 export const MCP_SERVER_VERSION = "1.0.0";
 

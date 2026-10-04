@@ -10,6 +10,7 @@
 import { afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const { DEMO_ORG } = await import("@/lib/demo-data");
 const { rotateCredential } = await import("@/lib/data");
@@ -49,6 +50,10 @@ const AUTH = {
   admin: { authorization: `Bearer ${DEMO_ADMIN_SECRET}` },
 };
 
+// JSON-RPC bodies are inspected loosely in these tests.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type JsonBody = Record<string, any>;
+
 let nextId = 1;
 async function rpc(
   surface: Surface,
@@ -68,7 +73,7 @@ async function rpc(
     })
   );
   const text = await res.text();
-  return { res, id, json: text ? (JSON.parse(text) as Record<string, any>) : null };
+  return { res, id, json: text ? (JSON.parse(text) as JsonBody) : null };
 }
 
 const modernMeta = (clientInfo = { name: "chatgpt-style-client", version: "2026.10" }) => ({
@@ -150,10 +155,10 @@ const LEGACY_CLIENTS: Array<{
   },
 ];
 
-describe.each(["employee", "admin"] as const)("%s MCP — legacy (initialize-era) clients", (surface) => {
-  test.each(LEGACY_CLIENTS.map((c) => [c.label, c] as const))(
-    "%s: initialize answers a valid, legacy-shaped result; tools/list still works",
-    async (_label, client) => {
+for (const surface of ["employee", "admin"] as const) describe(`${surface} MCP — legacy (initialize-era) clients`, () => {
+  for (const client of LEGACY_CLIENTS) test(
+    `${client.label}: initialize answers a valid, legacy-shaped result; tools/list still works`,
+    async () => {
       const init = await rpc(surface, "initialize", client.init, { ...AUTH[surface], ...client.initHeaders });
       expect(init.res.status).toBe(200);
       expect(init.json!.id).toBe(init.id);
@@ -211,7 +216,7 @@ describe.each(["employee", "admin"] as const)("%s MCP — legacy (initialize-era
   });
 });
 
-describe.each(["employee", "admin"] as const)("%s MCP — ChatGPT-style 2026-07-28 (modern) client", (surface) => {
+for (const surface of ["employee", "admin"] as const) describe(`${surface} MCP — ChatGPT-style 2026-07-28 (modern) client`, () => {
   test("server/discover → supportedVersions + the same capabilities/instructions as initialize", async () => {
     const discover = await rpc(surface, "server/discover", { _meta: modernMeta() }, modernHeaders("server/discover"));
     expect(discover.res.status).toBe(200);
@@ -382,7 +387,7 @@ describe("auth behaviour is unchanged", () => {
 });
 
 describe("CORS and GET server cards", () => {
-  test.each(["employee", "admin"] as const)("%s OPTIONS allows the 2026-07-28 headers; Mcp-Session-Id gone", async (surface) => {
+  for (const surface of ["employee", "admin"] as const) test(`${surface} OPTIONS allows the 2026-07-28 headers; Mcp-Session-Id gone`, async () => {
     const route = surface === "employee" ? employeeRoute : adminRoute;
     const res = await route.OPTIONS();
     expect(res.status).toBe(204);
@@ -395,7 +400,7 @@ describe("CORS and GET server cards", () => {
     expect(res.headers.get("access-control-expose-headers")).toBeNull();
   });
 
-  test.each(["employee", "admin"] as const)("%s GET card advertises 2026-07-28 + supportedProtocolVersions", async (surface) => {
+  for (const surface of ["employee", "admin"] as const) test(`${surface} GET card advertises 2026-07-28 + supportedProtocolVersions`, async () => {
     const route = surface === "employee" ? employeeRoute : adminRoute;
     const card = await (await route.GET()).json();
     expect(card.protocolVersion).toBe("2026-07-28");
@@ -404,8 +409,8 @@ describe("CORS and GET server cards", () => {
 });
 
 describe("static server cards and docs (D10)", () => {
-  const root = resolve(import.meta.dir, "../../..");
-  test.each(["server-card.json", "admin-server-card.json"])("public/.well-known/mcp/%s lists supportedProtocolVersions", (file) => {
+  const root = fileURLToPath(new URL("../../..", import.meta.url));
+  for (const file of ["server-card.json", "admin-server-card.json"]) test(`public/.well-known/mcp/${file} lists supportedProtocolVersions`, () => {
     const card = JSON.parse(readFileSync(resolve(root, "public/.well-known/mcp", file), "utf8"));
     expect(card.transport.supportedProtocolVersions).toEqual(SUPPORTED);
   });
@@ -418,6 +423,7 @@ describe("static server cards and docs (D10)", () => {
     expect(md).toContain("Mcp-Name: staffpass_whoami");
     expect(md).toContain('"io.modelcontextprotocol/protocolVersion": "2026-07-28"');
     expect(md).not.toContain('"protocolVersion": "2024-11-05"');
-    expect(md).not.toMatch(/Mcp-Session-Id/i);
+    // No example sends a session header (the server never mints sessions).
+    expect(md).not.toMatch(/^\s*(-H\s+')?Mcp-Session-Id:/im);
   });
 });
