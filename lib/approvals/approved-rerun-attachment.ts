@@ -37,6 +37,7 @@ import {
 } from "@/lib/gateway/adapters/slack-file-upload";
 import { parseInvokeSnapshot } from "@/lib/approvals/fulfill";
 import { isDefinitePreShareSlackError } from "@/lib/slack/definite-errors";
+import { isApprovalAttachmentReconcileEnabled } from "@/lib/feature-flags";
 import {
   describeRequestAttachment,
   openSnapshotAttachmentRef,
@@ -53,8 +54,19 @@ export const APPROVAL_ATTACHMENT_UPLOAD_IN_PROGRESS = "approval_attachment_uploa
 export const APPROVAL_ATTACHMENT_UPLOAD_UNCERTAIN = "approval_attachment_upload_uncertain";
 export const APPROVAL_ATTACHMENT_CLAIM_UNAVAILABLE = "approval_attachment_claim_unavailable";
 
-const UNCERTAIN_MESSAGE_JA =
-  "添付ファイルの送信結果を確認できませんでした（Slack 側で共有された可能性があります）。二重送信を防ぐため自動では再送しません。チャンネルを確認し、必要なら管理者が対応してください。";
+const UNCERTAIN_PREFIX_JA =
+  "添付ファイルの送信結果を確認できませんでした（Slack 側で共有された可能性があります）。二重送信を防ぐため自動では再送しません。";
+
+/**
+ * 木村 4 (2026-10-04): while APPROVAL_ATTACHMENT_RECONCILE_ENABLED is ON the
+ * scheduled reconcile settles the record by itself, so the message says so.
+ * OFF → the previous wording, unchanged. Evaluated per call (flag at run time).
+ */
+export function uncertainMessageJa(): string {
+  return isApprovalAttachmentReconcileEnabled()
+    ? `${UNCERTAIN_PREFIX_JA}Staffpass が自動で確認し、送信済みか未送信かを確定します。`
+    : `${UNCERTAIN_PREFIX_JA}チャンネルを確認し、必要なら管理者が対応してください。`;
+}
 
 /**
  * uploadSlackFile returns before files.completeUploadExternal for every other
@@ -272,7 +284,7 @@ export async function deliverApprovedRerunAttachment(input: {
         code: APPROVAL_ATTACHMENT_UPLOAD_UNCERTAIN,
         reason: APPROVAL_ATTACHMENT_UPLOAD_UNCERTAIN,
         status: "uncertain",
-        messageJa: UNCERTAIN_MESSAGE_JA,
+        messageJa: uncertainMessageJa(),
       },
     };
   }
@@ -314,7 +326,7 @@ export async function deliverApprovedRerunAttachment(input: {
         code: APPROVAL_ATTACHMENT_UPLOAD_UNCERTAIN,
         reason: code,
         status: "uncertain" as const,
-        messageJa: UNCERTAIN_MESSAGE_JA,
+        messageJa: uncertainMessageJa(),
       },
     };
   };
@@ -340,7 +352,10 @@ export async function deliverApprovedRerunAttachment(input: {
   }
   if (!uploaded.ok) {
     if (outcomeUnknown(uploaded)) return markUncertain(uploaded.code, uploaded.error);
-    await finishAttachmentUpload(approval, claim.claimId, "failed", { ...display, code: uploaded.code });
+    // slackError / slackNeeded are kept only for a definite pre-share error (pickResult) → reinvokeReason (木村 5)
+    await finishAttachmentUpload(approval, claim.claimId, "failed", {
+      ...display, code: uploaded.code, slackError: uploaded.slackError, slackNeeded: uploaded.slackNeeded,
+    });
     await audit("slack.file_upload_failed", `承認済み添付のアップロードに失敗: ${uploaded.error}`, {
       code: uploaded.code,
       error: uploaded.error,

@@ -851,7 +851,7 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
   {
     name: "stuckWatch.list",
     description:
-      "List open stuck watch items (read-only, no approval required). F7: W1 mention-unanswered + W2 approved-unfulfilled + A1 approved-attachment upload that the scheduled reconcile could not check (status=notified; settled automatically by a later reconcile, never re-uploaded by stuckWatch.retry; this list is its only notification). Returns summaryJa/nextStepJa per item.",
+      "List open stuck watch items (read-only, no approval required). F7: W1 mention-unanswered + W2 approved-unfulfilled + A1 approved-attachment upload that the scheduled reconcile could not check (status=notified; settled automatically by a later reconcile — re-checked with backoff 10m→20m→40m… until 24h after the notification, see metadata.recheckAttempts / nextCheckAt / recheckStopped — never re-uploaded by stuckWatch.retry; ambiguous / unsupported or stopped items are closed with stuckWatch.resolve; this list is its only notification). Returns summaryJa/nextStepJa per item.",
     inputSchema: {
       type: "object",
       properties: {

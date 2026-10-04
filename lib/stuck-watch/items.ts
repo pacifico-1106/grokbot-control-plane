@@ -3,7 +3,7 @@
  */
 import { listApprovals } from "@/lib/data";
 import { readCardAttachment } from "@/lib/approvals/attachment-card";
-import { attachmentUncertainItemId, readAttachmentUpload } from "@/lib/approvals/attachment-upload-claim";
+import { ATTACHMENT_RECHECK_WINDOW_MS, attachmentUncertainItemId, readAttachmentUpload } from "@/lib/approvals/attachment-upload-claim";
 import { isMentionWakeAudit, listAuditEventsForStuckWatch } from "@/lib/data/audit";
 import { getOrgStuckWatchPolicy } from "@/lib/data/stuck-watch-policy";
 import { isDecisionWorkflowEnabled } from "@/lib/feature-flags";
@@ -351,8 +351,12 @@ function nextStepA1Ja(code: string): string {
   if (code === "reconcile_surface_unsupported" || code === "reconcile_destination_unsupported") {
     return "この宛先は自動照合に未対応です。二重送信を防ぐため自動再送しません。対応を決めたら stuckWatch.resolve で解決済みにしてください。";
   }
-  return "一時的に確認できませんでした（Slack 応答エラー等）。定期確認が自動で再確認します（通知はこの1回のみ）。";
+  return "一時的に確認できませんでした（Slack 応答エラー等）。定期確認が間隔を倍にしながら自動で再確認します（通知から24時間まで・通知はこの1回のみ）。";
 }
+
+/** 木村 2: no automatic re-check any more (last one done, or 24 h since the notification). */
+const A1_RECHECK_STOPPED_JA =
+  "自動の再確認は終了しました（通知から24時間までの再確認をすべて実施済み・以後は自動で確定しません）。状況を確認し、対応を決めたら stuckWatch.resolve で解決済みにしてください。手作業での再送・SQL 修正はしないでください。";
 
 function buildA1Item(
   approval: ApprovalRequest,
@@ -365,6 +369,8 @@ function buildA1Item(
   const resolvedAt = resolved.get(itemId);
   const code = upload.code || "reconcile_unknown";
   const card = readCardAttachment(approval.metadata);
+  const recheckStopped = Boolean(upload.recheckStoppedAt)
+    || now.getTime() >= Date.parse(upload.adminNotifiedAt) + ATTACHMENT_RECHECK_WINDOW_MS;
   return {
     id: itemId,
     orgId: approval.orgId,
@@ -382,11 +388,15 @@ function buildA1Item(
     resolvedAt: resolvedAt ?? null,
     minutesOpen: Math.max(0, Math.floor((now.getTime() - Date.parse(upload.adminNotifiedAt)) / 60_000)),
     summaryJa: `A1 承認済み添付の送信結果を自動確認できません: ${approval.tool} / approvalId=${approval.id.slice(0, 8)} / code=${code}`,
-    nextStepJa: nextStepA1Ja(code),
+    nextStepJa: recheckStopped ? A1_RECHECK_STOPPED_JA : nextStepA1Ja(code),
     metadata: {
       ...(card?.kind === "present" ? { filename: card.filename, ...(card.bytes !== undefined ? { bytes: card.bytes } : {}) } : {}),
       claimedAt: upload.claimedAt ?? null,
       reconciledAt: upload.reconciledAt ?? null,
+      // re-check backoff (木村 2)
+      recheckAttempts: upload.recheckAttempts ?? 0,
+      nextCheckAt: recheckStopped ? null : upload.nextCheckAt ?? null,
+      recheckStopped,
     },
   };
 }

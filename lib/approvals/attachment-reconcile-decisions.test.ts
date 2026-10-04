@@ -273,7 +273,7 @@ describe("2. re-check backoff after the admin-agent notification", () => {
     for (const m of [30, 70, 150, 310, 630, 1270]) await reconcileAt(approvalId, at(t0, m));
     const stopped = await find();
     expect(stopped?.metadata).toMatchObject({ recheckAttempts: 7, nextCheckAt: null, recheckStopped: true });
-    expect(String(stopped?.nextStepJa)).toContain("24 時間");
+    expect(String(stopped?.nextStepJa)).toContain("24時間");
     expect(String(stopped?.nextStepJa)).toContain("stuckWatch.resolve");
     noSecrets(JSON.stringify(stopped));
   });

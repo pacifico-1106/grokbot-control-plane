@@ -28,6 +28,7 @@ import { isDemoMode } from "@/lib/mode";
 import { createSupabaseAdminClient } from "@/lib/supabase";
 import { getApprovalById, updateApprovalMetadata } from "@/lib/data/approvals";
 import type { ApprovalRequest } from "@/lib/types";
+import { isDefinitePreShareSlackError, sanitizeSlackScopes } from "@/lib/slack/definite-errors";
 
 export type AttachmentUploadState = "running" | "succeeded" | "failed" | "uncertain";
 export type AttachmentUploadRecord = {
@@ -44,8 +45,34 @@ export type AttachmentUploadRecord = {
   reconciledAt?: string;
   /** Set once, when the reconcile could not check and told the admin agent (stuck-watch a1 item). */
   adminNotifiedAt?: string;
+  /**
+   * 木村 2: re-checks after the notification back off. recheckAttempts = re-checks
+   * done (0 at the notification), nextCheckAt = when the next one is due,
+   * recheckStoppedAt = set (and nextCheckAt removed) once the next one would fall
+   * past adminNotifiedAt + 24 h.
+   */
+  recheckAttempts?: number;
+  nextCheckAt?: string;
+  recheckStoppedAt?: string;
+  /** 木村 5: failed because Slack answered a definite pre-share error (lib/slack/definite-errors.ts). */
+  slackError?: string;
+  /** missing_scope only: Slack's `needed` scope names (sanitized). */
+  slackNeeded?: string[];
 };
-export type AttachmentUploadResult = { fileId?: string; filename?: string; bytes?: number; code?: string };
+export type AttachmentUploadResult = {
+  fileId?: string;
+  filename?: string;
+  bytes?: number;
+  code?: string;
+  slackError?: string;
+  slackNeeded?: string[];
+};
+/** Re-check schedule written with an uncertain reconcile outcome (木村 2). */
+export type AttachmentRecheckSchedule = { recheckAttempts: number; nextCheckAt?: string };
+
+/** 木村 2: no automatic re-check later than this after the admin-agent notification. */
+export const ATTACHMENT_RECHECK_WINDOW_MS = 24 * 60 * 60_000;
+const MAX_RECHECK_ATTEMPTS = 100;
 
 export type AttachmentUploadClaim =
   | { kind: "claimed"; claimId: string }
@@ -73,13 +100,26 @@ export function readAttachmentUpload(metadata: Record<string, unknown> | null | 
   const rec = obj(metadata?.attachmentUpload);
   if (!rec || !STATES.includes(rec.state as AttachmentUploadState)) return null;
   const out: AttachmentUploadRecord = { state: rec.state as AttachmentUploadState };
-  for (const k of ["claimId", "refSha256", "claimedAt", "finishedAt", "fileId", "filename", "code", "reconciledAt", "adminNotifiedAt"] as const) {
+  for (const k of ["claimId", "refSha256", "claimedAt", "finishedAt", "fileId", "filename", "code", "reconciledAt",
+    "adminNotifiedAt", "nextCheckAt", "recheckStoppedAt"] as const) {
     const v = str(rec[k]);
     if (v) out[k] = v;
   }
   const bytes = num(rec.bytes);
   if (bytes !== undefined) out.bytes = bytes;
+  const attempts = num(rec.recheckAttempts);
+  if (attempts !== undefined && Number.isInteger(attempts) && attempts >= 0 && attempts <= MAX_RECHECK_ATTEMPTS) {
+    out.recheckAttempts = attempts;
+  }
+  Object.assign(out, slackFields(rec.slackError, rec.slackNeeded));
   return out;
+}
+
+/** Only a definite pre-share Slack error code, and scope names for missing_scope (never anything else). */
+function slackFields(error: unknown, needed: unknown): Pick<AttachmentUploadRecord, "slackError" | "slackNeeded"> {
+  if (typeof error !== "string" || !isDefinitePreShareSlackError(error)) return {};
+  const scopes = error === "missing_scope" ? sanitizeSlackScopes(needed) : undefined;
+  return { slackError: error, ...(scopes ? { slackNeeded: scopes } : {}) };
 }
 
 /** #252 wrote `attachmentFulfillment` after a successful upload (records already in production). */
@@ -96,6 +136,7 @@ function pickResult(result: AttachmentUploadResult): AttachmentUploadResult {
   if (str(result.filename)) out.filename = result.filename;
   if (num(result.bytes) !== undefined) out.bytes = result.bytes;
   if (str(result.code)) out.code = result.code;
+  Object.assign(out, slackFields(result.slackError, result.slackNeeded));
   return out;
 }
 
@@ -193,7 +234,15 @@ export async function finishAttachmentUpload(
 export type FulfillmentFileUpload =
   | { status: "not_sent"; reason: "rerun_required"; filename: string; bytes?: number }
   | { status: "sent"; fileId: string; filename: string; bytes?: number }
-  | { status: "in_progress" | "uncertain" | "failed"; filename?: string; bytes?: number; code?: string };
+  | {
+      status: "in_progress" | "uncertain" | "failed";
+      filename?: string;
+      bytes?: number;
+      code?: string;
+      /** failed only: the definite Slack error (→ pollHint reinvoke_with_approvalId + reinvokeReason). */
+      slackError?: string;
+      slackNeeded?: string[];
+    };
 
 export function parseStoredFileUpload(value: unknown): FulfillmentFileUpload | undefined {
   const rec = obj(value);
@@ -220,7 +269,11 @@ export function liveFileUpload(
   if (upload?.state === "running") return { status: "in_progress", ...display(upload) };
   if (upload?.state === "uncertain") return { status: "uncertain", ...display(upload), ...(upload.code ? { code: upload.code } : {}) };
   if (upload?.state === "failed") {
-    return stored ?? { status: "failed", ...display(upload), ...(upload.code ? { code: upload.code } : {}) };
+    return stored ?? {
+      status: "failed", ...display(upload), ...(upload.code ? { code: upload.code } : {}),
+      ...(upload.slackError ? { slackError: upload.slackError } : {}),
+      ...(upload.slackNeeded ? { slackNeeded: upload.slackNeeded } : {}),
+    };
   }
   const legacy = obj(metadata?.attachmentFulfillment);
   if (legacy?.ok === true && str(legacy.fileId)) {
@@ -243,8 +296,14 @@ export function attachmentAlreadyUploaded(metadata: Record<string, unknown> | nu
  * unavailable → nothing written, fail closed).
  *
  *   running|uncertain → succeeded (fileId required) | failed
- *   running|uncertain → uncertain: records adminNotifiedAt; refused when it is
- *                       already set, so the admin agent is told once per claim
+ *   running|uncertain → uncertain: records adminNotifiedAt (+ recheckAttempts 0,
+ *                       nextCheckAt); refused when it is already set, so the
+ *                       admin agent is told once per claim
+ *   uncertain (notified) → uncertain re-check (木村 2): only with
+ *                       schedule.recheckAttempts = stored attempts + 1
+ *                       (compare-and-set) and nextCheckAt within
+ *                       adminNotifiedAt + 24 h; no nextCheckAt = stop
+ *                       (recheckStoppedAt)
  *
  * Production: RPC reconcile_approval_attachment_upload (row lock), see
  * supabase/migrations/20261004400000_approval_attachment_reconcile.sql.
@@ -253,17 +312,19 @@ export async function reconcileAttachmentUpload(
   approval: ApprovalRequest,
   expected: { state: "running" | "uncertain"; claimId?: string },
   state: Exclude<AttachmentUploadState, "running">,
-  result: AttachmentUploadResult
+  result: AttachmentUploadResult,
+  opts: { schedule?: AttachmentRecheckSchedule; at?: Date } = {}
 ): Promise<boolean> {
   const picked = pickResult(result);
   if (state === "succeeded" && !picked.fileId) return false;
+  const schedule = state === "uncertain" ? cleanSchedule(opts.schedule) : undefined;
   if (!isDemoMode()) {
     const admin = createSupabaseAdminClient();
     if (!admin) return false;
     try {
       const { data, error } = await admin.rpc("reconcile_approval_attachment_upload", {
         p_id: approval.id, p_org: approval.orgId, p_expected_state: expected.state,
-        p_expected_claim: expected.claimId ?? null, p_state: state, p_result: picked,
+        p_expected_claim: expected.claimId ?? null, p_state: state, p_result: { ...picked, ...(schedule ?? {}) },
       });
       return !error && data === true;
     } catch {
@@ -276,17 +337,45 @@ export async function reconcileAttachmentUpload(
   const key = `${approval.orgId}:${approval.id}`;
   const record = demoClaims.get(key) ?? readAttachmentUpload(current.metadata);
   if (!record || record.state !== expected.state || (record.claimId ?? null) !== (expected.claimId ?? null)) return false;
-  if (state === "uncertain" && record.adminNotifiedAt) return false;
-  const at = new Date().toISOString();
-  const next: AttachmentUploadRecord = {
-    ...record, ...picked, state, reconciledAt: at,
-    ...(record.state === "running" ? { finishedAt: at } : {}),
-    ...(state === "uncertain" ? { adminNotifiedAt: at } : {}),
-  };
+  const at = (opts.at ?? new Date()).toISOString();
+  let next: AttachmentUploadRecord;
+  if (state === "uncertain" && record.adminNotifiedAt) {
+    // re-check of a notified record: compare-and-set on the attempt count
+    if (!schedule || schedule.recheckAttempts !== (record.recheckAttempts ?? 0) + 1) return false;
+    if (schedule.nextCheckAt && !withinRecheckWindow(record.adminNotifiedAt, schedule.nextCheckAt)) return false;
+    const rest: AttachmentUploadRecord = { ...record };
+    delete rest.nextCheckAt;
+    next = {
+      ...rest, ...picked, reconciledAt: at, recheckAttempts: schedule.recheckAttempts,
+      ...(schedule.nextCheckAt ? { nextCheckAt: schedule.nextCheckAt } : { recheckStoppedAt: at }),
+    };
+  } else {
+    next = {
+      ...record, ...picked, state, reconciledAt: at,
+      ...(record.state === "running" ? { finishedAt: at } : {}),
+      ...(state === "uncertain"
+        ? { adminNotifiedAt: at, recheckAttempts: 0, ...(schedule?.nextCheckAt ? { nextCheckAt: schedule.nextCheckAt } : {}) }
+        : {}),
+    };
+  }
   demoClaims.set(key, next);
   // ---------------------------------------------------------------------------
   await updateApprovalMetadata(current, { attachmentUpload: next }).catch(() => undefined);
   return true;
+}
+
+function cleanSchedule(schedule: AttachmentRecheckSchedule | undefined): AttachmentRecheckSchedule | undefined {
+  if (!schedule) return undefined;
+  const { recheckAttempts, nextCheckAt } = schedule;
+  if (!Number.isInteger(recheckAttempts) || recheckAttempts < 0 || recheckAttempts > MAX_RECHECK_ATTEMPTS) return undefined;
+  const at = nextCheckAt !== undefined ? Date.parse(nextCheckAt) : NaN;
+  return { recheckAttempts, ...(Number.isFinite(at) ? { nextCheckAt: new Date(at).toISOString() } : {}) };
+}
+
+function withinRecheckWindow(adminNotifiedAt: string, nextCheckAt: string): boolean {
+  const t0 = Date.parse(adminNotifiedAt);
+  const next = Date.parse(nextCheckAt);
+  return Number.isFinite(t0) && Number.isFinite(next) && next > t0 && next <= t0 + ATTACHMENT_RECHECK_WINDOW_MS;
 }
 
 /**

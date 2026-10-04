@@ -16,6 +16,15 @@
  *                     Admin MCP stuck-watch list (item a1:<approvalId>). No
  *                     human channel is used. Later runs re-check (and may
  *                     still settle it) but never notify again.
+ *    Re-check backoff (木村 2): after the notification at T0 the k-th re-check
+ *    is due at the previous check + N·2^k minutes (N = the stale minutes:
+ *    T0+10, +20, +40 … → T0+10, 30, 70, 150, 310, 630, 1270 min with N=10);
+ *    a re-check whose next one would fall past T0 + 24 h is the last one
+ *    (recheckStoppedAt). The schedule (recheckAttempts / nextCheckAt) is
+ *    written with the uncertain outcome as a compare-and-set on the attempt
+ *    count. Items that can never be settled automatically (ambiguous /
+ *    similar candidates, unsupported destination) are closed by the admin
+ *    agent with stuckWatch.resolve.
  *    Every write is conditional on the state + claimId that was read
  *    (reconcileAttachmentUpload), so concurrent runs / a re-run that took a new
  *    claim / the original holder finishing late can never be overwritten.
@@ -30,11 +39,13 @@
  * is told once (code reconcile_surface_unsupported).
  */
 import {
+  ATTACHMENT_RECHECK_WINDOW_MS,
   attachmentUncertainItemId,
   markAttachmentNotSent,
   needsAttachmentNotSentMarker,
   readAttachmentUpload,
   reconcileAttachmentUpload,
+  type AttachmentRecheckSchedule,
   type AttachmentUploadRecord,
 } from "@/lib/approvals/attachment-upload-claim";
 import { readCardAttachment, sanitizeCardFilename } from "@/lib/approvals/attachment-card";
@@ -57,6 +68,8 @@ export type AttachmentReconcileResult = {
   code: string;
   /** true only for the run that told the admin agent. */
   notified?: boolean;
+  /** Re-check of an already-notified record (木村 2): attempt number + next due time (null = stopped). */
+  recheck?: { attempts: number; nextCheckAt: string | null };
   /** false: the record changed since it was read (or was already notified) → nothing written. */
   applied: boolean;
 };
@@ -113,9 +126,31 @@ const VERIFIERS: Readonly<Record<string, AttachmentShareVerifier>> = { slack: sl
 
 type Candidate = { approval: ApprovalRequest; record: AttachmentUploadRecord & { state: "running" | "uncertain" } };
 
+/** Already told the admin agent: due only per the backoff schedule, never after T0 + 24 h. */
+function recheckDue(record: AttachmentUploadRecord, now: Date, staleMs: number): boolean {
+  const t0 = Date.parse(record.adminNotifiedAt ?? "");
+  if (!Number.isFinite(t0) || record.recheckStoppedAt) return false;
+  if (now.getTime() >= t0 + ATTACHMENT_RECHECK_WINDOW_MS) return false;
+  const next = Date.parse(record.nextCheckAt ?? "");
+  // written before the schedule existed → first re-check N minutes after the notification
+  return now.getTime() >= (Number.isFinite(next) ? next : t0 + staleMs);
+}
+
+/** attempt k (1-based) → next = now + N·2^k, or stop when that is past T0 + 24 h. */
+export function nextRecheckSchedule(record: AttachmentUploadRecord, now: Date, staleMs: number): AttachmentRecheckSchedule {
+  const attempts = (record.recheckAttempts ?? 0) + 1;
+  const t0 = Date.parse(record.adminNotifiedAt ?? "");
+  const next = now.getTime() + staleMs * 2 ** attempts;
+  if (!Number.isFinite(t0) || next > t0 + ATTACHMENT_RECHECK_WINDOW_MS) return { recheckAttempts: attempts };
+  return { recheckAttempts: attempts, nextCheckAt: new Date(next).toISOString() };
+}
+
 function staleCandidate(approval: ApprovalRequest, now: Date, staleMs: number): Candidate | null {
   const record = readAttachmentUpload(approval.metadata);
   if (!record || (record.state !== "running" && record.state !== "uncertain")) return null;
+  if (record.state === "uncertain" && record.adminNotifiedAt) {
+    return recheckDue(record, now, staleMs) ? { approval, record: record as Candidate["record"] } : null;
+  }
   const since = Date.parse((record.state === "running" ? record.claimedAt : record.finishedAt ?? record.claimedAt) ?? "");
   if (!Number.isFinite(since) || now.getTime() - since < staleMs) return null;
   return { approval, record: record as Candidate["record"] };
@@ -173,7 +208,7 @@ async function audit(approval: ApprovalRequest, action: AuditAction, summary: st
   }).catch(() => undefined);
 }
 
-async function reconcileOne(candidate: Candidate): Promise<AttachmentReconcileResult> {
+async function reconcileOne(candidate: Candidate, now: Date, staleMs: number): Promise<AttachmentReconcileResult> {
   const { approval, record } = candidate;
   const from = record.state;
   const expected = { state: from, ...(record.claimId ? { claimId: record.claimId } : {}) };
@@ -185,14 +220,27 @@ async function reconcileOne(candidate: Candidate): Promise<AttachmentReconcileRe
     const code = lookup.kind === "found" ? "reconcile_found" : "reconcile_not_found";
     const applied = await reconcileAttachmentUpload(approval, expected, outcome, {
       ...shown, code, ...(lookup.kind === "found" ? { fileId: lookup.fileId } : {}),
-    });
+    }, { at: now });
     if (applied) await audit(approval, "approval.attachment_reconciled", OUTCOME_SUMMARY_JA[outcome], { outcome, from, ...shown, code });
     return { approvalId: approval.id, from, outcome, code, applied };
   }
 
-  // Cannot check: stay uncertain, tell the admin agent once (refused when already notified).
   const code = lookup.code;
-  const applied = await reconcileAttachmentUpload(approval, expected, "uncertain", { ...shown, code });
+  if (record.adminNotifiedAt) {
+    // Re-check of a notified record: record the next (doubled) due time, never notify again.
+    const schedule = nextRecheckSchedule(record, now, staleMs);
+    const applied = await reconcileAttachmentUpload(approval, expected, "uncertain", { ...shown, code }, { schedule, at: now });
+    return {
+      approvalId: approval.id, from, outcome: "uncertain", code, applied, notified: false,
+      recheck: { attempts: schedule.recheckAttempts, nextCheckAt: schedule.nextCheckAt ?? null },
+    };
+  }
+
+  // Cannot check: stay uncertain, tell the admin agent once (refused when already notified).
+  const applied = await reconcileAttachmentUpload(approval, expected, "uncertain", { ...shown, code }, {
+    schedule: { recheckAttempts: 0, nextCheckAt: new Date(now.getTime() + staleMs).toISOString() },
+    at: now,
+  });
   if (applied) {
     await audit(approval, "approval.attachment_reconciled", OUTCOME_SUMMARY_JA.uncertain, { outcome: "uncertain", from, ...shown, code });
     await audit(approval, "stuck_watch.attachment_uncertain_notify",
@@ -236,7 +284,7 @@ export async function runApprovalAttachmentReconcile(
   for (const approval of approvals) {
     const candidate = staleCandidate(approval, now, staleMs);
     if (candidate) {
-      results.push(await reconcileOne(candidate));
+      results.push(await reconcileOne(candidate, now, staleMs));
       continue;
     }
     if (approval.status !== "approved" || !needsAttachmentNotSentMarker(approval.metadata)) continue;

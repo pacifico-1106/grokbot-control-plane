@@ -16,6 +16,7 @@ import { downloadPublicFile, MAX_FILE_BYTES } from "@/lib/security/public-file-d
  */
 
 import { resolveConversationToken } from "@/lib/gateway/adapters/slack";
+import { sanitizeSlackScopes } from "@/lib/slack/definite-errors";
 import type { Audience, PostingAs } from "@/lib/types";
 
 const SLACK_TIMEOUT_MS = 30_000;
@@ -61,6 +62,8 @@ export interface SlackFileUploadError {
    * a JSON body (never for a timeout / network error / non-JSON answer).
    */
   slackError?: string;
+  /** missing_scope only: Slack's `needed` scopes, sanitized (lib/slack/definite-errors.ts). */
+  slackNeeded?: string[];
 }
 
 export type SlackFileUploadOutcome = SlackFileUploadResult | SlackFileUploadError;
@@ -204,13 +207,24 @@ export function evaluateFileAttachmentEgress(
 /**
  * Slack files.getUploadURLExternal API call.
  */
+/**
+ * Slack answered `ok:false` with a JSON body: keep its `error` code, and for
+ * missing_scope its `needed` scope names (sanitized; `provided` is never kept).
+ */
+function slackErrorFields(body: { error?: unknown; needed?: unknown }): { slackError?: string; slackNeeded?: string[] } {
+  const slackError = typeof body.error === "string" && body.error ? body.error : undefined;
+  if (!slackError) return {};
+  const slackNeeded = slackError === "missing_scope" ? sanitizeSlackScopes(body.needed) : undefined;
+  return { slackError, ...(slackNeeded ? { slackNeeded } : {}) };
+}
+
 async function getUploadUrl(
   token: string,
   filename: string,
   length: number
 ): Promise<
   | { ok: true; uploadUrl: string; fileId: string }
-  | { ok: false; error: string }
+  | { ok: false; error: string; slackError?: string; slackNeeded?: string[] }
 > {
   try {
     const response = await fetch(
@@ -231,11 +245,12 @@ async function getUploadUrl(
     const body = (await response.json().catch(() => ({}))) as {
       ok?: boolean;
       error?: string;
+      needed?: unknown;
       upload_url?: string;
       file_id?: string;
     };
     if (!body.ok || !body.upload_url || !body.file_id) {
-      return { ok: false, error: body.error || "get_upload_url_failed" };
+      return { ok: false, error: body.error || "get_upload_url_failed", ...slackErrorFields(body) };
     }
     return { ok: true, uploadUrl: body.upload_url, fileId: body.file_id };
   } catch (error) {
@@ -287,7 +302,7 @@ async function completeUpload(
   initialComment?: string
 ): Promise<
   | { ok: true; ts?: string }
-  | { ok: false; error: string; slackError?: string }
+  | { ok: false; error: string; slackError?: string; slackNeeded?: string[] }
 > {
   try {
     const files = [{ id: fileId, title: title || undefined }];
@@ -311,11 +326,11 @@ async function completeUpload(
     const body = (await response.json().catch(() => ({}))) as {
       ok?: boolean;
       error?: string;
+      needed?: unknown;
       files?: Array<{ id?: string; timestamp?: string }>;
     };
     if (!body.ok) {
-      const slackError = typeof body.error === "string" && body.error ? body.error : undefined;
-      return { ok: false, error: slackError || "complete_upload_failed", ...(slackError ? { slackError } : {}) };
+      return { ok: false, error: (typeof body.error === "string" && body.error) || "complete_upload_failed", ...slackErrorFields(body) };
     }
     return { ok: true, ts: body.files?.[0]?.timestamp };
   } catch (error) {
@@ -444,6 +459,8 @@ export async function uploadSlackFile(
       ok: false,
       error: uploadUrlResult.error,
       code: "get_upload_url_failed",
+      ...(uploadUrlResult.slackError ? { slackError: uploadUrlResult.slackError } : {}),
+      ...(uploadUrlResult.slackNeeded ? { slackNeeded: uploadUrlResult.slackNeeded } : {}),
     };
   }
 
@@ -474,6 +491,7 @@ export async function uploadSlackFile(
       error: completeResult.error,
       code: "complete_upload_failed",
       ...(completeResult.slackError ? { slackError: completeResult.slackError } : {}),
+      ...(completeResult.slackNeeded ? { slackNeeded: completeResult.slackNeeded } : {}),
     };
   }
 

@@ -6,7 +6,7 @@ import { parseAdminFulfillment } from "@/lib/admin-mcp/fulfill-admin";
 import { isAdminClassApproval } from "@/lib/admin-mcp/audit-class";
 import { redactMetadata } from "@/lib/data/redaction";
 import { attachmentStatusField } from "@/lib/approvals/attachment-card";
-import { approvalPollHint } from "@/lib/approvals/poll-hint";
+import { approvalPollFields } from "@/lib/approvals/poll-hint";
 
 export const runtime = "nodejs";
 
@@ -126,7 +126,8 @@ export async function GET(req: Request) {
     // Approved attachment: snapshot filename + size only (null = none / not recorded).
     attachment: attachmentStatusField(approval.metadata),
     ...(fulfillmentResult ? { fulfillment: redactMetadata(fulfillmentResult) } : {}),
-    pollHint: approvalPollHint({ status, approvalId: approval.id, fulfillmentResult, adminResultRequired }),
+    // pollHint (+ reinvokeReason for a definite Slack failure; 木村 5) — same shape as the MCP tool / status API
+    ...approvalPollFields({ status, approvalId: approval.id, fulfillmentResult, adminResultRequired }),
   };
 
   if (workflowProgress) {
