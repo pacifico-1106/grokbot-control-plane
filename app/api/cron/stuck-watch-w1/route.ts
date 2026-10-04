@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { rejectUnauthorizedCron } from "@/lib/security/cron-secret";
 import { processW1MentionWatchAllOrgs } from "@/lib/stuck-watch/w1-mention-unanswered";
 import { listPendingT2Decisions } from "@/lib/data/approvals";
 import { checkAndExpireT2Decision } from "@/lib/decision-workflow/expiry";
@@ -14,16 +15,8 @@ export const dynamic = "force-dynamic";
  * Does not auto-retry expected_gate (notification only).
  */
 export async function GET(req: Request) {
-  const secret = process.env.CRON_SECRET?.trim() || "";
-  if (!secret) {
-    return NextResponse.json(
-      { ok: false, error: "cron_not_configured" },
-      { status: 503 }
-    );
-  }
-  if (req.headers.get("authorization") !== `Bearer ${secret}`) {
-    return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
-  }
+  const rejected = rejectUnauthorizedCron(req);
+  if (rejected) return rejected;
 
   try {
     const results = await processW1MentionWatchAllOrgs();
