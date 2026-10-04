@@ -7,7 +7,7 @@
  * UI / LP / terms / billing copy is out of scope (separate review).
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ApprovalRequest } from "@/lib/types";
@@ -134,9 +134,23 @@ describe("REST: employees issue / link, gateway link / health", () => {
   });
 });
 
+/**
+ * The employee server card. On main it is the static public/.well-known/mcp/server-card.json;
+ * #256 replaces it with lib/mcp/server-card.ts (+ a production fixture). Read whichever exists so
+ * this test keeps guarding the note after #256 lands (see PR body: conflict notes).
+ */
+async function loadServerCard(): Promise<{ notes: string[] }> {
+  const builder = join(ROOT, "lib/mcp/server-card.ts");
+  if (existsSync(builder)) {
+    const mod = (await import(builder)) as { buildServerCard: (env: Record<string, string | undefined>) => { notes: string[] } };
+    return mod.buildServerCard({ VERCEL_ENV: "production" });
+  }
+  return JSON.parse(readFileSync(join(ROOT, "public/.well-known/mcp/server-card.json"), "utf8")) as { notes: string[] };
+}
+
 describe("server card note: neutral, Grok Bot only as an example", () => {
-  test("public server-card notes", () => {
-    const card = JSON.parse(readFileSync(join(ROOT, "public/.well-known/mcp/server-card.json"), "utf8")) as { notes: string[] };
+  test("server-card notes", async () => {
+    const card = await loadServerCard();
     expect(card.notes[0]).toBe("Public HTTPS only — register this URL in your AI agent's MCP connector settings (e.g. Grok Bot Plugins); no local stdio.");
     const grokNotes = card.notes.filter((n) => GROK.test(n));
     expect(grokNotes).toEqual([card.notes[0]]);
@@ -150,9 +164,18 @@ describe("server card note: neutral, Grok Bot only as an example", () => {
  * comments excluded). lib/mcp/endpoint-handoff*.ts are covered by #256 (endpoint-handoff.wording.test.ts).
  */
 const SCAN_DIRS = ["app/api", "lib/mcp", "lib/admin-mcp", "lib/gateway", "lib/approvals"];
-const SCAN_FILES = ["lib/bindings.ts", "lib/data/bindings.ts", "lib/demo-data.ts", "public/.well-known/mcp/server-card.json", "public/.well-known/mcp/admin-server-card.json"];
+const SCAN_FILES = [
+  "lib/bindings.ts", "lib/data/bindings.ts", "lib/demo-data.ts",
+  // Server cards: static JSON on main; lib/mcp/server-card.ts + fixtures after #256 (scanned via lib/mcp).
+  "public/.well-known/mcp/server-card.json", "public/.well-known/mcp/admin-server-card.json",
+  "lib/mcp/__fixtures__/server-card.production.json", "lib/mcp/__fixtures__/admin-server-card.production.json",
+];
 const SKIP_FILES = new Set(["lib/mcp/endpoint-handoff.ts", "lib/mcp/endpoint-handoff-block.ts"]);
-const ALLOWED_LINES: Array<[string, string]> = [["public/.well-known/mcp/server-card.json", "(e.g. Grok Bot Plugins)"]];
+const ALLOWED_LINES: Array<[string, string]> = [
+  ["public/.well-known/mcp/server-card.json", "(e.g. Grok Bot Plugins)"],
+  ["lib/mcp/server-card.ts", "(e.g. Grok Bot Plugins)"],
+  ["lib/mcp/__fixtures__/server-card.production.json", "(e.g. Grok Bot Plugins)"],
+];
 
 function walk(dir: string, out: string[] = []): string[] {
   for (const entry of readdirSync(join(ROOT, dir), { withFileTypes: true })) {
@@ -165,7 +188,7 @@ function walk(dir: string, out: string[] = []): string[] {
 
 describe("source scan (MCP / API paths)", () => {
   test("no Grok in non-comment lines except field names and the server-card example", () => {
-    const files = [...SCAN_DIRS.flatMap((d) => walk(d)), ...SCAN_FILES].filter((f) => !SKIP_FILES.has(f));
+    const files = [...SCAN_DIRS.flatMap((d) => walk(d)), ...SCAN_FILES.filter((f) => existsSync(join(ROOT, f)))].filter((f) => !SKIP_FILES.has(f));
     expect(files.length).toBeGreaterThan(50);
     const hits: string[] = [];
     for (const file of files) {
