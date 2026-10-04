@@ -39,13 +39,11 @@ function member(id: string, role: OrgMember["role"], capabilities: HumanCapabili
 }
 
 const OWNER = member("22222222-2222-4222-8222-222222222222", "owner", ALL_CAPS);
-const ORG_MEMBERS = [OWNER];
 
 let session: SessionContext;
 let gateReads = 0;
 
 const realSession = await import("@/lib/auth/session");
-const realMembers = await import("@/lib/data/members");
 mock.module("@/lib/auth/session", () => ({
   ...realSession,
   getSessionContext: async () => session,
@@ -55,19 +53,6 @@ mock.module("@/lib/auth/session", () => ({
   },
 }));
 mock.module("@/lib/mode", () => ({ isDemoMode: () => false }));
-mock.module("@/lib/data/members", () => ({
-  ...realMembers,
-  // Mirrors main's production resolveActorMember: exact id in org, else owner.
-  resolveActorMember: async (actorId: string | null | undefined, orgId?: string | null) => {
-    const list = orgId === ORG ? ORG_MEMBERS : [];
-    return (
-      list.find((m) => m.id === actorId) ??
-      list.find((m) => m.role === "owner") ??
-      list[0] ?? { ...member("unknown", "member", []), orgId: orgId || "" }
-    );
-  },
-}));
-
 type Handler = (req: Request, ctx: { params: Promise<{ id: string }> }) => Promise<Response>;
 type Caller = {
   name: string;

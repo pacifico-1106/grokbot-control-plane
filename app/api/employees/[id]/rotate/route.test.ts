@@ -47,10 +47,6 @@ mock.module("@/lib/auth/session", () => ({
   getCurrentOrgId: async () => session.orgId,
 }));
 mock.module("@/lib/mode", () => ({ isDemoMode: () => false }));
-mock.module("@/lib/data/members", () => ({
-  // Fail closed: no implicit owner fallback in this test.
-  resolveActorMember: async () => member("member", ["view_dashboard"]),
-}));
 mock.module("@/lib/data", () => ({
   getEmployee: async (id: string, orgId: string | null) =>
     id === "emp_1" && orgId === "org_a"

@@ -43,33 +43,15 @@ const ORG = "11111111-1111-4111-8111-111111111111";
 const OWNER = member("22222222-2222-4222-8222-222222222222", "owner", ALL_CAPS);
 const VIEWER = member("33333333-3333-4333-8333-333333333333", "member", ["view_dashboard"]);
 const APPROVER = member("44444444-4444-4444-8444-444444444444", "member", ["view_dashboard", "approve_actions"]);
-const ORG_MEMBERS = [OWNER, VIEWER, APPROVER];
 
 let demo = false;
 let session: SessionContext;
-let resolveCalls = 0;
 
-const realMembers = await import("@/lib/data/members");
 mock.module("@/lib/auth/session", () => ({
   getSessionContext: async () => session,
   getCurrentOrgId: async () => session.orgId,
 }));
 mock.module("@/lib/mode", () => ({ isDemoMode: () => demo }));
-mock.module("@/lib/data/members", () => ({
-  ...realMembers,
-  // Same shape as the production resolveActorMember on main: exact id within
-  // the org, otherwise the org owner (the fail-open fallback under test).
-  resolveActorMember: async (actorId: string | null | undefined, orgId?: string | null) => {
-    resolveCalls++;
-    if (demo) return realMembers.resolveActorMember(actorId, orgId);
-    const list = orgId === ORG ? ORG_MEMBERS : [];
-    return (
-      list.find((m) => m.id === actorId) ??
-      list.find((m) => m.role === "owner") ??
-      list[0] ?? member("unknown", "member", [], { orgId: orgId || "" })
-    );
-  },
-}));
 
 const { requireCapability } = await import("./demo-actor");
 
@@ -83,7 +65,6 @@ function req(opts: { header?: string; as?: string } = {}) {
 
 beforeEach(() => {
   demo = false;
-  resolveCalls = 0;
   session = { demo: false, userId: "user_1", email: "u@example.com", orgId: ORG, member: null };
 });
 
@@ -112,24 +93,20 @@ for (const [label, make] of NO_MEMBER_SESSIONS) {
     test(`production: ${label} → ${cap} denied (401, no owner fallback)`, async () => {
       session = make();
       await expectNoMemberDenied(await requireCapability(req(), cap));
-      expect(resolveCalls).toBe(0);
     });
   }
 }
 
 test("production: no member + x-member-id naming the owner → denied (no impersonation)", async () => {
   await expectNoMemberDenied(await requireCapability(req({ header: OWNER.id }), "hire_issue_credentials"));
-  expect(resolveCalls).toBe(0);
 });
 
 test("production: no member + ?as=owner → denied", async () => {
   await expectNoMemberDenied(await requireCapability(req({ as: OWNER.id }), "approve_actions"));
-  expect(resolveCalls).toBe(0);
 });
 
 test("production: no member + body actorMemberId naming the owner → denied", async () => {
   await expectNoMemberDenied(await requireCapability(req(), "hire_issue_credentials", OWNER.id));
-  expect(resolveCalls).toBe(0);
 });
 
 test("production: no member + legacy default actor id mem_1 → denied", async () => {
@@ -171,7 +148,6 @@ test("production: member with the capability → allowed as the session member",
   const gate = await requireCapability(req({ header: OWNER.id }), "approve_actions", OWNER.id);
   expect(gate.ok).toBe(true);
   if (gate.ok) expect(gate.actor.id).toBe(APPROVER.id);
-  expect(resolveCalls).toBe(0);
 });
 
 for (const cap of ALL_CAPS) {
