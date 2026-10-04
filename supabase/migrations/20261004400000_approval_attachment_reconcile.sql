@@ -9,14 +9,19 @@
 -- extend this file instead of a later migration.
 --
 -- org_settings_changes (new, 木村 third round h): one row per org = the time of
---   the last settings change (a settings-changing admin tool succeeded, a Slack
---   authorize link was completed, or the Slack adapter was saved from the
---   dashboard). RLS enabled with NO policy and anon / authenticated revoked, so
---   only service_role (the server) can read or write it — an org member cannot
---   forge a reset (the audit log is no longer read for this).
+--   the last Slack-related settings change. RLS enabled with NO policy and
+--   anon / authenticated revoked, so only service_role (the server) can read or
+--   write it — an org member cannot forge a reset (the audit log is no longer
+--   read for this). The (tool, source) check is the explicit allow-list
+--   (木村 fourth round 3):
+--     setup.slackAdapter.setBotToken / setup.slackApprover.set /
+--     employees.postingIdentity.set  + admin_fulfillment (approved + fulfilled)
+--     setup.slackAuthorizeLink.issue + authorize_link_completed (completion only)
+--     dashboard.conversationAdapter.slack + dashboard_settings
 -- record_org_settings_change (new): upsert of that row (changed_at = now(),
---   never moves back). tool must look like a tool name, source is one of the
---   four server-side sources.
+--   never moves back). source must be one of the three server-side sources
+--   (else invalid_settings_change_source) and (tool, source) one of the pairs
+--   above (else invalid_settings_change_tool).
 --
 -- reconcile_approval_attachment_upload: change metadata.attachmentUpload ONLY
 --   when it is still exactly what the caller read (state = p_expected_state,
@@ -60,8 +65,14 @@ begin;
 create table if not exists public.org_settings_changes (
   org_id uuid primary key references public.orgs(id) on delete cascade,
   changed_at timestamptz not null default now(),
-  tool text not null check (tool ~ '^[a-z][A-Za-z0-9._]{0,79}$'),
-  source text not null check (source in ('admin_fulfillment','admin_tool','authorize_link_completed','dashboard_settings'))
+  tool text not null,
+  source text not null check (source in ('admin_fulfillment','authorize_link_completed','dashboard_settings')),
+  constraint org_settings_changes_signal check ((tool, source) in (
+    ('setup.slackAdapter.setBotToken','admin_fulfillment'),
+    ('setup.slackApprover.set','admin_fulfillment'),
+    ('employees.postingIdentity.set','admin_fulfillment'),
+    ('setup.slackAuthorizeLink.issue','authorize_link_completed'),
+    ('dashboard.conversationAdapter.slack','dashboard_settings')))
 );
 alter table public.org_settings_changes enable row level security;
 revoke all on public.org_settings_changes from public, anon, authenticated;
@@ -71,9 +82,17 @@ create or replace function public.record_org_settings_change(p_org uuid, p_tool 
 returns boolean language plpgsql security invoker set search_path = pg_catalog, public as $$
 begin
   if p_org is null then raise exception 'invalid_settings_change_org'; end if;
-  if p_tool is null or p_tool !~ '^[a-z][A-Za-z0-9._]{0,79}$' then raise exception 'invalid_settings_change_tool'; end if;
-  if p_source is null or p_source not in ('admin_fulfillment','admin_tool','authorize_link_completed','dashboard_settings') then
+  if p_source is null or p_source not in ('admin_fulfillment','authorize_link_completed','dashboard_settings') then
     raise exception 'invalid_settings_change_source';
+  end if;
+  -- 木村 fourth round 3: explicit Slack-related allow-list (same pairs as the table check)
+  if p_tool is null or (p_tool, p_source) not in (
+    ('setup.slackAdapter.setBotToken','admin_fulfillment'),
+    ('setup.slackApprover.set','admin_fulfillment'),
+    ('employees.postingIdentity.set','admin_fulfillment'),
+    ('setup.slackAuthorizeLink.issue','authorize_link_completed'),
+    ('dashboard.conversationAdapter.slack','dashboard_settings')) then
+    raise exception 'invalid_settings_change_tool';
   end if;
   insert into public.org_settings_changes as c (org_id, changed_at, tool, source)
     values (p_org, now(), p_tool, p_source)

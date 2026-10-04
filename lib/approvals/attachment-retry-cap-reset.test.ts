@@ -1,9 +1,11 @@
 /**
- * 2026-10-04 (木村, #255 second round, decision 4): the retry-cap reset trigger
- * from the admin MCP dispatcher. Third round (木村 e): read-only setup tools
- * (setup.slackStatus …) never reset, even when they answer ok; a queued ticket,
- * a not-ok answer, or flag OFF records nothing either. diagnoseSlackStatus is stubbed
- * (no Slack). Demo mode, no network.
+ * 2026-10-04 (木村, #255): the admin MCP dispatcher never records the retry-cap
+ * reset signal. Third round (木村 e): read-only setup tools (setup.slackStatus …)
+ * never reset, even when they answer ok; fourth round 4: the dispatcher-side
+ * `admin_tool` source was removed (resets come only from approved fulfillment,
+ * the authorize-link completion and the dashboard save). A queued ticket, a
+ * not-ok answer, or flag OFF records nothing either. diagnoseSlackStatus is
+ * stubbed (no Slack). Demo mode, no network.
  */
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 

@@ -2097,7 +2097,8 @@ async function fulfillApprovedAdminCore(
     }
     await persist(approval, fulfillment);
     // 木村 #255 second round: a settings-type tool succeeded → retry-cap reset
-    // marker (flag + tool checks inside; best effort, never changes the result).
+    // marker (flag + the Slack-only allow-list are checked inside, 木村 fourth
+    // round 3; best effort, never changes the result).
     if (fulfillment.ok) {
       await recordSetupToolSucceeded({ orgId: approval.orgId, tool, source: "admin_fulfillment", approvalId: approval.id })
         .catch(() => undefined);

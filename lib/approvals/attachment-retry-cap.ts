@@ -17,48 +17,50 @@
  * members can insert audit rows); the `setup.tool_succeeded` audit row is only
  * a trail.
  *
- * What counts as a settings change (generic, no tenant hardcoding):
- *   - a registered admin MCP tool that is NOT read-only (READ_ONLY_ADMIN_TOOLS)
- *     in the setup.* family, or employees.postingIdentity.set — SETTINGS_RESET_TOOLS
- *     (read-only setup.slackStatus / …Status / connectInternalBase never count; 木村 e)
+ * What counts as a settings change (木村 fourth round 3): an EXPLICIT allow-list
+ * of Slack-related (tool, source) pairs — SETTINGS_RESET_SIGNALS — mirrored by
+ * the record_org_settings_change validation and the table check in
+ * 20261004400000 (anything else raises there). Generic, no tenant hardcoding:
+ *   - setup.slackAdapter.setBotToken / setup.slackApprover.set /
+ *     employees.postingIdentity.set, fulfilled after approval (admin_fulfillment)
  *   - setup.slackAuthorizeLink.issue only on COMPLETION (the employee pressed
- *     「許可する」 and the user token was saved) — issuing the link changes nothing
- *   - the dashboard save of the Slack conversation adapter (bot token; 木村 d)
+ *     「許可する」 and the user token was saved; authorize_link_completed) —
+ *     issuing the link changes nothing
+ *   - the dashboard save of the Slack conversation adapter (dashboard_settings),
+ *     only when it enables the adapter or includes a bot token (木村 fourth round
+ *     1; the route decides — a save that only sets enabled:false is no signal)
+ * Not counted: LINE setup tools, setup.approvalDelivery.autoResolve, read-only
+ * tools (setup.slackStatus / …Status), any other tool or source.
  */
 import { appendAuditEvent } from "@/lib/data/audit";
-import { READ_ONLY_ADMIN_TOOLS } from "@/lib/billing/plan-scopes";
 import { isApprovalAttachmentReconcileEnabled } from "@/lib/feature-flags";
-import { ADMIN_MCP_TOOL_NAMES } from "@/lib/mcp/admin-public";
 import { isDemoMode } from "@/lib/mode";
 import { createSupabaseAdminClient } from "@/lib/supabase";
 
 export const ATTACHMENT_RETRY_CAP = 3;
 export const SETUP_TOOL_SUCCEEDED_AUDIT = "setup.tool_succeeded" as const;
-export type SettingsChangeSource = "admin_fulfillment" | "admin_tool" | "authorize_link_completed" | "dashboard_settings";
+export type SettingsChangeSource = "admin_fulfillment" | "authorize_link_completed" | "dashboard_settings";
 /** Dashboard save of the Slack conversation adapter (bot token); 木村 third round d. */
 export const DASHBOARD_SLACK_ADAPTER_SAVE = "dashboard.conversationAdapter.slack" as const;
 
-const AUTHORIZE_LINK_TOOL = "setup.slackAuthorizeLink.issue";
-/** Settings tools outside the setup.* namespace that change what a Slack upload uses. */
-const SETTINGS_TOOLS_OUTSIDE_SETUP: ReadonlySet<string> = new Set(["employees.postingIdentity.set"]);
-const READ_ONLY: ReadonlySet<string> = new Set(READ_ONLY_ADMIN_TOOLS as readonly string[]);
+export type SettingsResetSignal = { readonly tool: string; readonly source: SettingsChangeSource };
 
-/** The admin tools whose success resets the cap (derived from the registry; listed in the PR). */
-export const SETTINGS_RESET_TOOLS: readonly string[] = (ADMIN_MCP_TOOL_NAMES as readonly string[])
-  .filter((t) => (t.startsWith("setup.") || SETTINGS_TOOLS_OUTSIDE_SETUP.has(t)) && !READ_ONLY.has(t));
-const RESET_TOOLS: ReadonlySet<string> = new Set(SETTINGS_RESET_TOOLS);
-export type SettingsResetSignal = { tool: string; source: SettingsChangeSource };
-/** TDD stub (fourth round): the explicit allow-list is implemented in the next commit. */
-export const SETTINGS_RESET_SIGNALS: readonly SettingsResetSignal[] = [];
+/**
+ * The only (tool, source) pairs that reset the cap (木村 fourth round 3). Keep in
+ * sync with record_org_settings_change / the org_settings_changes check in
+ * 20261004400000 (a test compares both).
+ */
+export const SETTINGS_RESET_SIGNALS: readonly SettingsResetSignal[] = Object.freeze([
+  { tool: "setup.slackAdapter.setBotToken", source: "admin_fulfillment" },
+  { tool: "setup.slackApprover.set", source: "admin_fulfillment" },
+  { tool: "employees.postingIdentity.set", source: "admin_fulfillment" },
+  { tool: "setup.slackAuthorizeLink.issue", source: "authorize_link_completed" },
+  { tool: DASHBOARD_SLACK_ADAPTER_SAVE, source: "dashboard_settings" },
+] as const);
+const SIGNAL_KEYS: ReadonlySet<string> = new Set(SETTINGS_RESET_SIGNALS.map((s) => `${s.tool}|${s.source}`));
 
 export function countsAsSettingsChange(tool: string, source: SettingsChangeSource): boolean {
-  if (source === "dashboard_settings" || tool === DASHBOARD_SLACK_ADAPTER_SAVE) {
-    return source === "dashboard_settings" && tool === DASHBOARD_SLACK_ADAPTER_SAVE;
-  }
-  if (tool === AUTHORIZE_LINK_TOOL || source === "authorize_link_completed") {
-    return tool === AUTHORIZE_LINK_TOOL && source === "authorize_link_completed";
-  }
-  return RESET_TOOLS.has(tool);
+  return SIGNAL_KEYS.has(`${tool}|${source}`);
 }
 
 /** Demo mirror of public.org_settings_changes (org → last change, ms). */
