@@ -95,7 +95,6 @@ export {
 export {
   listMembers,
   getMemberById,
-  resolveActorMember,
   isUuid,
   normalizeMemberEmail,
   resolveProductionMemberId,
