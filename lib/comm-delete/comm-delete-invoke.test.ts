@@ -97,6 +97,20 @@ function auditsFor(action: string) {
   return getRuntimeAudit().filter((e) => e.action === action);
 }
 
+function setMaxAge(hours: string) {
+  process.env.COMM_DELETE_MAX_AGE_HOURS = hours;
+  restorers.push(() => { delete process.env.COMM_DELETE_MAX_AGE_HOURS; });
+}
+
+/** A post record audit row (dummy ids) created `hoursAgo` hours ago. */
+function seedRecord(opts: { ts: string; hoursAgo: number; employeeId?: string; orgId?: string; channel?: string; postedVia?: "user" | "bot" }) {
+  return pushRuntimeAuditEvent({
+    orgId: opts.orgId ?? DEMO_ORG.id, employeeId: opts.employeeId ?? "emp_comm", credentialId: "cred_comm", action: "tool.invoke",
+    purpose: "comm.internal", summary: "seed", createdAt: new Date(Date.now() - opts.hoursAgo * 3600_000).toISOString(),
+    metadata: { postRecord: { v: 1, surface: "slack", channel: opts.channel ?? "C_INTERNAL", messageId: opts.ts, postedVia: opts.postedVia ?? "bot" } },
+  });
+}
+
 let uniq = 0;
 const fakeTs = () => `1787800000.${String(++uniq).padStart(6, "0")}`;
 
@@ -280,17 +294,15 @@ describe("authorization: only own recorded posts (no IDOR, no cross-org)", () =>
     await expectNotFound({ channel: "C_INTERNAL", ts });
   });
 
-  test("record older than COMM_DELETE_MAX_AGE_HOURS → 404", async () => {
+  test("someone else's record older than the window → the same 404 (age is never checked before ownership)", async () => {
     await mockSlack();
-    process.env.COMM_DELETE_MAX_AGE_HOURS = "1";
-    restorers.push(() => { delete process.env.COMM_DELETE_MAX_AGE_HOURS; });
+    setMaxAge("1");
     const ts = fakeTs();
-    pushRuntimeAuditEvent({
-      orgId: DEMO_ORG.id, employeeId: "emp_comm", credentialId: "cred_comm", action: "tool.invoke", purpose: "comm.internal",
-      summary: "seed", createdAt: new Date(Date.now() - 2 * 3600_000).toISOString(),
-      metadata: { postRecord: { v: 1, surface: "slack", channel: "C_INTERNAL", messageId: ts, postedVia: "bot" } },
-    });
-    await expectNotFound({ channel: "C_INTERNAL", ts });
+    seedRecord({ employeeId: "emp_ops", ts, hoursAgo: 2 });
+    const other = await expectNotFound({ channel: "C_INTERNAL", ts });
+    const unknown = await invoke(deleteBody({ channel: "C_INTERNAL", ts: fakeTs() }));
+    expect(other.body.message).toBe(unknown.body.message);
+    expect(other.body.maxAgeHours).toBeUndefined();
   });
 
   test("the target in conversation{} is ignored: only args are the target (no egress / wake confusion)", async () => {
@@ -302,6 +314,138 @@ describe("authorization: only own recorded posts (no IDOR, no cross-org)", () =>
     });
     expect(r.httpStatus).toBe(400);
     expect(r.body.code).toBe("invalid_delete_target");
+    expect(deletes().length).toBe(0);
+  });
+});
+
+describe("too_old: only after ownership is confirmed (no existence probing)", () => {
+  async function expectNotFound(target: Record<string, unknown>) {
+    const r = await invoke(deleteBody(target));
+    expect(r.httpStatus).toBe(404);
+    expect(r.body.code).toBe("post_not_found_or_not_owned");
+    expect(r.body.maxAgeHours).toBeUndefined();
+    expect(deletes().length).toBe(0);
+    return r;
+  }
+
+  test("own record older than COMM_DELETE_MAX_AGE_HOURS → 403 too_old (no Slack call), audited with the record id", async () => {
+    await mockSlack();
+    setMaxAge("1");
+    const ts = fakeTs();
+    const seeded = seedRecord({ ts, hoursAgo: 2 });
+    const r = await invoke(deleteBody({ channel: "C_INTERNAL", ts }));
+    expect(r.httpStatus).toBe(403);
+    expect(r.body.ok).toBe(false);
+    expect(r.body.code).toBe("too_old");
+    expect(r.body.status).toBe("refused");
+    expect(r.body.maxAgeHours).toBe(1);
+    expect(r.body.target).toEqual({ surface: "slack", channel: "C_INTERNAL", messageId: ts });
+    expect(deletes().length).toBe(0);
+    const audit = auditsFor("comm.delete.refused").find((e) => (e.metadata as { messageId?: string }).messageId === ts);
+    expect((audit?.metadata as { code?: string }).code).toBe("too_old");
+    expect((audit?.metadata as { recordAuditId?: string }).recordAuditId).toBe(seeded.id);
+  });
+
+  test("default window is 72h: own record 73h old → too_old; 71h old → deleted", async () => {
+    await mockSlack();
+    const oldTs = fakeTs();
+    seedRecord({ ts: oldTs, hoursAgo: 73 });
+    const old = await invoke(deleteBody({ channel: "C_INTERNAL", ts: oldTs }));
+    expect(old.body.code).toBe("too_old");
+    expect(old.body.maxAgeHours).toBe(72);
+    const freshTs = fakeTs();
+    seedRecord({ ts: freshTs, hoursAgo: 71 });
+    const fresh = await invoke(deleteBody({ channel: "C_INTERNAL", ts: freshTs }));
+    expect(fresh.body.status).toBe("deleted");
+  });
+
+  test("old record of the same employee id in another org → 404, not too_old", async () => {
+    await mockSlack();
+    setMaxAge("1");
+    const ts = fakeTs();
+    seedRecord({ ts, hoursAgo: 2, orgId: "org_someone_else" });
+    await expectNotFound({ channel: "C_INTERNAL", ts });
+  });
+
+  test("own old record for a different channel → 404, not too_old", async () => {
+    await mockSlack();
+    setMaxAge("1");
+    const ts = fakeTs();
+    seedRecord({ ts, hoursAgo: 2, channel: "C0OTHER001" });
+    await expectNotFound({ channel: "C_INTERNAL", ts });
+  });
+
+  test("old legacy slack.posted whose approval belongs to someone else → 404, not too_old", async () => {
+    await mockSlack();
+    setMaxAge("1");
+    const ts = fakeTs();
+    pushRuntimeAuditEvent({
+      orgId: DEMO_ORG.id, employeeId: "emp_comm", credentialId: "cred_comm", action: "slack.posted", purpose: "comm.internal",
+      summary: "legacy", createdAt: new Date(Date.now() - 2 * 3600_000).toISOString(),
+      metadata: { tool: "comm.reply", approvalId: "apr_does_not_exist", channel: "C_INTERNAL", ts, phase: "approval.fulfill" },
+    });
+    await expectNotFound({ channel: "C_INTERNAL", ts });
+  });
+
+  test("an old audit row without a post record never yields too_old", async () => {
+    await mockSlack();
+    setMaxAge("1");
+    const ts = fakeTs();
+    pushRuntimeAuditEvent({
+      orgId: DEMO_ORG.id, employeeId: "emp_comm", credentialId: "cred_comm", action: "tool.invoke", purpose: "comm.internal",
+      summary: "seed", createdAt: new Date(Date.now() - 2 * 3600_000).toISOString(), metadata: { channel: "C_INTERNAL", ts },
+    });
+    await expectNotFound({ channel: "C_INTERNAL", ts });
+  });
+
+  test("own record beyond the 30-day record lookback → 404 (lookup stays bounded)", async () => {
+    await mockSlack();
+    const ts = fakeTs();
+    seedRecord({ ts, hoursAgo: 24 * 31 });
+    await expectNotFound({ channel: "C_INTERNAL", ts });
+  });
+
+  test("own post already deleted, now past the window → 200 already_deleted (repeat stays idempotent)", async () => {
+    await mockSlack();
+    const { channel, ts } = await seedOwnPost();
+    const first = await invoke(deleteBody({ channel, ts }));
+    expect(first.body.status).toBe("deleted");
+    for (const row of getRuntimeAudit()) {
+      const m = row.metadata as { postRecord?: { messageId?: string }; deleteRecord?: { messageId?: string } };
+      if (m.postRecord?.messageId === ts || m.deleteRecord?.messageId === ts) row.createdAt = new Date(Date.now() - 2 * 3600_000).toISOString();
+    }
+    setMaxAge("1");
+    const again = await invoke(deleteBody({ channel, ts }));
+    expect(again.httpStatus).toBe(200);
+    expect(again.body.status).toBe("already_deleted");
+    expect(deletes().length).toBe(1);
+  });
+
+  test("approval path: own old record → too_old before any approval card", async () => {
+    await mockSlack();
+    setMaxAge("1");
+    patchEmployee({ approvalPolicy: "always_human" });
+    const ts = fakeTs();
+    seedRecord({ ts, hoursAgo: 2 });
+    const r = await invoke(deleteBody({ channel: "C_INTERNAL", ts }));
+    expect(r.httpStatus).toBe(403);
+    expect(r.body.code).toBe("too_old");
+    expect(r.body.approvalId).toBeUndefined();
+  });
+
+  test("approved delete whose record ages out before fulfill → too_old, nothing deleted", async () => {
+    await mockSlack();
+    patchEmployee({ approvalPolicy: "always_human" });
+    const ts = fakeTs();
+    const seeded = seedRecord({ ts, hoursAgo: 0.5 });
+    const queued = await invoke(deleteBody({ channel: "C_INTERNAL", ts }));
+    expect(queued.httpStatus).toBe(402);
+    const approved = await resolveApproval(String(queued.body.approvalId), "approved", "ando@example.com", DEMO_ORG.id);
+    seeded.createdAt = new Date(Date.now() - 2 * 3600_000).toISOString();
+    setMaxAge("1");
+    const f = await fulfillApprovedInvoke(approved!);
+    expect(f?.ok).toBe(false);
+    expect(f?.error).toBe("too_old");
     expect(deletes().length).toBe(0);
   });
 });

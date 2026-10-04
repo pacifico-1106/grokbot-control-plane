@@ -4,7 +4,9 @@
  * No network, demo mode, dummy ids.
  */
 import { afterEach, describe, expect, test } from "bun:test";
+import * as commDeleteConfig from "@/lib/comm-delete/config";
 import { commDeleteMaxAgeHours, isCommDeleteEnabled } from "@/lib/comm-delete/config";
+import { isRetryableApprovalFailure } from "@/lib/approvals/execution";
 import { commDeleteSurfaceSupport } from "@/lib/comm-delete/surfaces";
 import { parseCommDeleteTarget } from "@/lib/comm-delete/target";
 import { buildSlackPostRecord } from "@/lib/comm-delete/post-record";
@@ -49,6 +51,19 @@ describe("COMM_DELETE_ENABLED (default OFF)", () => {
     expect(commDeleteMaxAgeHours()).toBe(720);
     process.env.COMM_DELETE_MAX_AGE_HOURS = "abc";
     expect(commDeleteMaxAgeHours()).toBe(72);
+  });
+});
+
+describe("too_old support", () => {
+  test("record lookback is a fixed 720h (30 days), never shorter than the max window", () => {
+    const lookback = (commDeleteConfig as Record<string, unknown>).COMM_DELETE_RECORD_LOOKBACK_HOURS;
+    expect(lookback).toBe(720);
+    process.env.COMM_DELETE_MAX_AGE_HOURS = "100000";
+    expect(commDeleteMaxAgeHours()).toBeLessThanOrEqual(720);
+  });
+  test("an approved delete refused as too_old precedes any provider call (claim may run again)", () => {
+    expect(isRetryableApprovalFailure("comm.delete", "too_old")).toBe(true);
+    expect(isRetryableApprovalFailure("mail.send", "too_old")).toBe(false);
   });
 });
 
