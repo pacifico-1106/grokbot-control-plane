@@ -76,6 +76,26 @@ action limit asks for one. Ownership is checked **before** the approval card is
 created and again at execution time. An approved re-invoke replays the stored
 result (no second delete).
 
+What was approved is exactly what gets deleted. The card saves
+`metadata.commDeleteTarget = { surface, channel, messageId, employeeId }`. At
+execution the target comes from that saved value, not from the snapshot args:
+
+- missing or malformed (not an object, a field missing or not a string, not in
+  canonical form) → `approved_target_missing`;
+- the snapshot args name a different surface / channel / messageId, or no
+  longer parse, or the saved employee is not the approval's employee →
+  `approved_target_mismatch` (audit `mismatch`: which fields).
+
+Both stop before any provider call (nothing deleted, no Slack call) and come
+back as `409` on the approved re-invoke. The claim stays re-runnable, but a
+re-run is refused again unless the saved target and the snapshot agree.
+
+Resend after delete: deleting a post does not remove its comm.reply dedup
+record (#260). Once `COMM_REPLY_DEDUP_ENABLED` is on, resending the same body
+(or, in `similar` mode, a similar one) to the same conversation right after the
+delete gets `409 duplicate_reply_suppressed` until the dedup window (default 30
+minutes, counted from the original send) has passed.
+
 ## Responses
 
 | HTTP | code | status |
@@ -88,6 +108,7 @@ result (no second delete).
 | 403 | `too_old` (+ `maxAgeHours`; own post only) | `refused` |
 | 404 | `post_not_found_or_not_owned` | `refused` |
 | 409 | `slack_identity_unbound` | `failed` |
+| 409 | `approved_target_missing` / `approved_target_mismatch` (approved re-invoke) | `failed` |
 | 422 | `not_supported` (+ `reason`) | `not_supported` |
 | 502 | provider code (e.g. `cant_delete_message`) | `failed` |
 | 503 | `comm_delete_unavailable` / `slack_token_missing` | `refused` / `failed` |

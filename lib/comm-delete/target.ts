@@ -48,3 +48,25 @@ export function parseCommDeleteTarget(args: Record<string, unknown> | undefined 
   }
   return { ok: true, target: { surface, channel, messageId } };
 }
+
+/** What the human approved: saved on the approval as metadata.commDeleteTarget when the card was created. */
+export type ApprovedCommDeleteTarget = { target: CommDeleteTarget; employeeId: string };
+
+/**
+ * Strictly read metadata.commDeleteTarget. Anything other than a plain object
+ * with string surface / channel / messageId / employeeId that is already in
+ * canonical form (re-parses to exactly the same values) is rejected: the
+ * approved target is never repaired or guessed.
+ */
+export function parseApprovedCommDeleteTarget(raw: unknown): ApprovedCommDeleteTarget | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const r = raw as Record<string, unknown>;
+  const { surface, channel, messageId, employeeId } = r;
+  if (typeof surface !== "string" || typeof channel !== "string" || typeof messageId !== "string") return null;
+  if (typeof employeeId !== "string" || !employeeId.trim() || employeeId !== employeeId.trim()) return null;
+  const parsed = parseCommDeleteTarget({ surface, channel, messageId });
+  if (!parsed.ok) return null;
+  const t = parsed.target;
+  if (t.surface !== surface || t.channel !== channel || t.messageId !== messageId) return null;
+  return { target: t, employeeId };
+}

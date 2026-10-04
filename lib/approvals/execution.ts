@@ -33,6 +33,8 @@ const retryableByTool: Record<string, ReadonlySet<string>> = {
   // re-run can never delete anything beyond the approved own post.
   "comm.delete": new Set([
     "comm_delete_disabled", "invalid_delete_target", "not_supported", "post_not_found_or_not_owned", "too_old",
+    // approved-target check in lib/comm-delete/fulfill.ts: stops before any provider call.
+    "approved_target_missing", "approved_target_mismatch",
     "comm_delete_unavailable", "cant_delete_message", "slack_token_identity_mismatch",
     "slack_delete_timeout", "slack_delete_fetch_failed",
   ]),

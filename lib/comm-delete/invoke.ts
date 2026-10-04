@@ -121,7 +121,7 @@ export async function runCommDeleteInvoke(input: CommDeleteInvokeInput): Promise
       risk: "low",
       message: "自分の投稿の削除には人の承認が必要です（設定により）",
       summaryPrefix: `削除対象: ${target.surface} ${target.channel} の投稿（ID ${target.messageId}）。この社員自身が投稿し Staffpass に記録された投稿であることを確認済みです。本文は保存していません。`,
-      metadata: { commDeleteTarget: target },
+      metadata: { commDeleteTarget: { ...target, employeeId: employee.id } },
       extra: { target, toolKind: input.toolDef.kind, approvalPolicy: employee.approvalPolicy },
     });
   }
