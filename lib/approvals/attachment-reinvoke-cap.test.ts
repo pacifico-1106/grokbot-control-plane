@@ -632,7 +632,13 @@ describe("migration 20261004400000 (static, 木村 second round)", () => {
     // still applied after #253's 300000, and no later migration was needed
     const names = readdirSync(new URL("../../supabase/migrations/", import.meta.url)).filter((f: string) => f.endsWith(".sql")).sort();
     expect(names.indexOf("20261004400000_approval_attachment_reconcile.sql")).toBeGreaterThan(names.indexOf("20261004300000_approval_attachment_upload_claim.sql"));
-    expect(names[names.length - 1]).toBe("20261004400000_approval_attachment_reconcile.sql");
+    // "No later migration was needed": later migrations (500000 / 600000 RLS,
+    // 700000 comm-reply dedup, …) must not redefine the attachment claim functions.
+    // (Was "is the last migration", which broke as soon as any later migration landed.)
+    for (const later of names.slice(names.indexOf("20261004400000_approval_attachment_reconcile.sql") + 1)) {
+      const laterSql = readFileSync(new URL(`../../supabase/migrations/${later}`, import.meta.url), "utf8");
+      expect(laterSql).not.toMatch(/approval_attachment_upload|approval_attachment_recheck/);
+    }
   });
 });
 
