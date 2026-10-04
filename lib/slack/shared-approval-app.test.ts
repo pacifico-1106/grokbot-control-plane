@@ -42,6 +42,7 @@ import { handleSharedApprovalAppEvent } from "@/lib/slack/shared-approval-events
 import { resolveSharedApprovalInteractivity } from "@/lib/slack/shared-approval-interactivity";
 import { POST as interactivityPOST } from "@/app/api/webhooks/slack/interactivity/route";
 import type { Employee, NotificationChannel } from "@/lib/types";
+import { slackApiArgs } from "@/tests/helpers/slack-api-args";
 
 const ORG = DEMO_ORG.id;
 const OTHER_ORG = "org_shared_app_other_fixture";
@@ -83,12 +84,7 @@ function installFetch() {
   calls = [];
   globalThis.fetch = (async (url: string | URL, init?: RequestInit) => {
     const method = String(url).replace("https://slack.com/api/", "");
-    let body: Record<string, unknown> = {};
-    try {
-      body = init?.body ? JSON.parse(String(init.body)) : {};
-    } catch {
-      body = {};
-    }
+    const body = slackApiArgs(method, init);
     const auth = String((init?.headers as Record<string, string> | undefined)?.authorization || "");
     calls.push({ method, auth, body });
     const json = (payload: unknown, headers: Record<string, string> = {}) =>
