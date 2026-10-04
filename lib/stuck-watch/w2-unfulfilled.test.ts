@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { defaultStuckWatchPolicy } from "@/lib/stuck-watch/validate";
+import * as w2 from "@/lib/stuck-watch/w2-unfulfilled";
 import {
   evaluateW2Eligibility,
   isApprovedUnfulfilled,
@@ -153,5 +154,65 @@ describe("evaluateW2Eligibility", () => {
     });
     expect(result.eligible).toBe(false);
     expect(result.reason).toBe("disabled");
+  });
+});
+
+describe("W2 auto-retry exclusion (manual re-invoke only)", () => {
+  const policy = defaultStuckWatchPolicy();
+  const tenMinutesAgo = () => new Date(Date.now() - 10 * 60_000).toISOString();
+
+  function adminApproval(tool: string): ApprovalRequest {
+    const at = tenMinutesAgo();
+    return makeApproval({
+      id: `apr_w2_admin_${tool}`,
+      tool,
+      purpose: "admin.policy",
+      resolvedAt: at,
+      metadata: {
+        approvalClass: "admin",
+        auditClass: "admin",
+        always_human: true,
+        adminTool: tool,
+        adminMutation: {},
+        adminFulfillment: { ok: false, tool, at, error: "user_token_missing" },
+        stuckWatch: { w2: { firstDetectedAt: at, retryCount: 0 } },
+      },
+    });
+  }
+
+  test("the exclusion list is explicit and holds only employees.postingIdentity.set", () => {
+    const list = (w2 as Record<string, unknown>).W2_MANUAL_REINVOKE_ONLY_TOOLS as ReadonlySet<string> | undefined;
+    expect(list instanceof Set).toBe(true);
+    expect([...(list ?? [])]).toEqual(["employees.postingIdentity.set"]);
+  });
+
+  test("employees.postingIdentity.set: still tracked as unfulfilled, never eligible (retries left, policy on)", () => {
+    const approval = adminApproval("employees.postingIdentity.set");
+    expect(isApprovedUnfulfilled(approval)).toBe(true);
+    const result = evaluateW2Eligibility({ approval, policy, now: new Date() });
+    expect(result).toMatchObject({ eligible: false, reason: "manual_reinvoke_required", retryCount: 0 });
+  });
+
+  test("other tools are unchanged: admin tools and business invokes stay eligible", () => {
+    for (const tool of ["policy.patch", "employees.allowedAccounts.add", "setup.slackAuthorizeLink.issue"]) {
+      const result = evaluateW2Eligibility({ approval: adminApproval(tool), policy, now: new Date() });
+      expect({ tool, eligible: result.eligible, reason: result.reason }).toEqual({ tool, eligible: true, reason: undefined });
+    }
+    const at = tenMinutesAgo();
+    const invoke = makeApproval({
+      resolvedAt: at,
+      metadata: { ...makeApproval().metadata, stuckWatch: { w2: { firstDetectedAt: at, retryCount: 0 } } },
+    });
+    expect(evaluateW2Eligibility({ approval: invoke, policy, now: new Date() }).eligible).toBe(true);
+    // Existing reasons keep their order for other tools.
+    expect(evaluateW2Eligibility({ approval: adminApproval("policy.patch"), policy: { ...policy, enabled: false }, now: new Date() }).reason).toBe("disabled");
+    expect(evaluateW2Eligibility({ approval: adminApproval("policy.patch"), policy: { ...policy, maxAutoRetries: 0 }, now: new Date() }).reason).toBe("max_retries");
+  });
+
+  test("the excluded tool also reports disabled / not_unfulfilled first (no new state for those)", () => {
+    const approval = adminApproval("employees.postingIdentity.set");
+    expect(evaluateW2Eligibility({ approval, policy: { ...policy, enabled: false }, now: new Date() }).reason).toBe("disabled");
+    const done = { ...approval, metadata: { ...approval.metadata, adminFulfillment: { ok: true, tool: approval.tool, at: tenMinutesAgo() } } };
+    expect(evaluateW2Eligibility({ approval: done, policy, now: new Date() }).reason).toBe("not_unfulfilled");
   });
 });

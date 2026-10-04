@@ -18,6 +18,8 @@ import {
 import {
   evaluateW2Eligibility,
   isApprovedUnfulfilled,
+  w2ManualReinvokeNextStepJa,
+  w2ManualReinvokeOnlyTool,
 } from "@/lib/stuck-watch/w2-unfulfilled";
 import type {
   AuditEvent,
@@ -170,7 +172,9 @@ function buildW2Item(
 
   const status = resolvedAt ? "resolved" : "open";
   const faultClass: FaultClass = "ops_fault";
-  const stuckHint: StuckHint = "retryable";
+  // Excluded from W2 auto retry → needs a person (explicit re-invoke).
+  const manualTool = eligibility.reason === "manual_reinvoke_required" ? w2ManualReinvokeOnlyTool(approval) : null;
+  const stuckHint: StuckHint = manualTool ? "fix" : "retryable";
 
   return {
     id: itemId,
@@ -189,7 +193,7 @@ function buildW2Item(
     resolvedAt: resolvedAt ?? null,
     minutesOpen: Math.floor(minutesOpen),
     summaryJa: summarizeW2Ja(approval),
-    nextStepJa: nextStepW2Ja(faultClass),
+    nextStepJa: manualTool ? w2ManualReinvokeNextStepJa(manualTool) : nextStepW2Ja(faultClass),
     metadata: {
       retryCount: eligibility.retryCount,
       w2Eligible: eligibility.eligible,

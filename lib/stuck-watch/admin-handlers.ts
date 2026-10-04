@@ -23,7 +23,11 @@ import {
   canAutoRetryOpsFault,
   prepareOpsFaultRetryInvokeBody,
 } from "@/lib/stuck-watch/retry-eligibility";
-import { runW2FulfillRetry } from "@/lib/stuck-watch/w2-unfulfilled";
+import {
+  runW2FulfillRetry,
+  w2ManualReinvokeNextStepJa,
+  w2ManualReinvokeOnlyTool,
+} from "@/lib/stuck-watch/w2-unfulfilled";
 import { runGatewayInvoke } from "@/lib/gateway/invoke";
 import { parseInvokeSnapshot } from "@/lib/approvals/fulfill";
 import type { FaultClass, StuckWatchItem } from "@/lib/types";
@@ -333,6 +337,18 @@ export async function runStuckWatchRetry(
       };
     }
     const result = await runW2FulfillRetry(approval, policy);
+    if (result.skipped && result.reason === "manual_reinvoke_required") {
+      const tool = w2ManualReinvokeOnlyTool(approval) ?? String(approval.tool || "");
+      return {
+        ok: false,
+        code: "manual_reinvoke_required",
+        message: "このツールは Stuck Watch から再実行しません",
+        item,
+        faultClass: item.faultClass,
+        summaryJa: `${tool} は自動・Stuck Watch の再実行の対象外です。`,
+        nextStepJa: w2ManualReinvokeNextStepJa(tool),
+      };
+    }
     await appendAuditEvent({
       orgId,
       employeeId: item.employeeId,

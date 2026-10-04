@@ -161,7 +161,7 @@ function changeJa(kind: "add" | "remove", employee: Employee, provider: string, 
     : `社員「${displayNameJa(employee)}」の許可アカウントから ${serviceLabel(provider)} ${accountId} を削除`;
 }
 
-function selfBound(adminGrokBotAgentId: string | null | undefined, bound: string | null | undefined): boolean {
+export function selfBound(adminGrokBotAgentId: string | null | undefined, bound: string | null | undefined): boolean {
   const mine = (adminGrokBotAgentId || "").trim();
   const theirs = (bound || "").trim();
   return Boolean(mine && theirs && mine === theirs);
@@ -347,7 +347,7 @@ export type AllowedAccountsFulfillment =
   | { ok: true; employeeId: string; changed: boolean; summaryJa: string; noticeJa?: string; nextStepJa?: string }
   | { ok: false; code: string; messageJa: string; noticeJa?: string; nextStepJa?: string };
 
-function requesterOf(approval: ApprovalRequest): { kind: "admin_agent"; adminAgentId: string | null; grokBotAgentId: string | null } {
+export function requesterOf(approval: ApprovalRequest): { kind: "admin_agent"; adminAgentId: string | null; grokBotAgentId: string | null } {
   const raw = approval.metadata?.adminRequester;
   const r = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
   return {

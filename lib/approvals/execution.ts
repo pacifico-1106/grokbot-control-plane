@@ -16,6 +16,28 @@ const retryable = new Set(["slack_token_missing", "slack_conversation_bot_token_
   "invalid_auth", "token_revoked", "account_inactive", "slack_identity_unbound", "slack_identity_not_linked", "posting_identity_unlinked",
   // Fulfill-time policy stops (lib/approvals/fulfill-policy-recheck.ts) happen before any provider call.
   "fulfill_blocked_tool_denied", "fulfill_blocked_mail_policy", "fulfill_blocked_employee_unavailable"]);
+// Per-tool additions: refusals that tool returns BEFORE any write and that it
+// re-checks from scratch on every run (so the same approvalId may run again,
+// e.g. after the employee re-authorizes Slack). Scoped by tool so the same
+// code from another tool keeps that tool's rule.
+// employees.postingIdentity.set: POSTING_IDENTITY_RETRYABLE_REFUSAL_CODES
+// (lib/admin-mcp/posting-identity-tool.ts; equality pinned by its test).
+const retryableByTool: Record<string, ReadonlySet<string>> = {
+  "employees.postingIdentity.set": new Set([
+    "user_token_missing", "user_token_invalid", "user_token_scope_check_failed",
+    "missing_scope_chat_write", "slack_account_not_allowed",
+  ]),
+};
+
+/** Failure → claim state "failed" (may run again) instead of "uncertain". */
+export function isRetryableApprovalFailure(tool: string, code: string): boolean {
+  if (!code) return false;
+  return retryable.has(code) || Boolean(retryableByTool[tool]?.has(code));
+}
+
+function approvalToolName(approval: ApprovalRequest): string {
+  return String(approval.metadata?.adminTool || approval.tool || "").trim();
+}
 
 /** All immediate, MCP reinvoke, proxy and W2 fulfillment shares this DB claim. */
 export async function executeApproval<T extends Result>(
@@ -62,6 +84,9 @@ export async function executeApproval<T extends Result>(
   let result: T | null;
   try { result = await execute(); }
   catch { await finish("uncertain"); throw new Error("approval_execution_outcome_unknown"); }
-  await finish(result?.ok ? "succeeded" : !result || retryable.has(result.error || "") ? "failed" : "uncertain", result);
+  await finish(
+    result?.ok ? "succeeded" : !result || isRetryableApprovalFailure(approvalToolName(approval), result.error || "") ? "failed" : "uncertain",
+    result
+  );
   return result;
 }
