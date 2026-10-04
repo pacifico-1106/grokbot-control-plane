@@ -127,12 +127,20 @@ describe("install callback", () => {
     const html = await res.text();
     expect(html).toContain("Staffpass承認 を追加しました");
     expect(html).not.toContain(BOT);
+    // Success never shows an error code; it says what the person does next.
+    expect(html).not.toContain("エラーコード");
+    expect(html).not.toContain("問い合わせコード");
+    expect(html).toContain("承認者の設定は AI が申請します。確認が届いたら 1 回押すだけです");
+    expect(html).not.toContain(ORG);
     expect(res.headers.get("cache-control")).toBe("no-store");
     expect((await listNotificationChannels(ORG)).some((row) => row.config?.sharedApprovalApp === true)).toBe(true);
     jar.set(SHARED_APPROVAL_INSTALL_COOKIE, nonce);
     const replay = await callback({ code: "code-2", state });
     expect(replay.status).toBe(400);
-    expect(await replay.text()).toContain("state_reused");
+    const replayHtml = await replay.text();
+    expect(replayHtml).toContain("state_reused");
+    expect(replayHtml).toContain("次にやること");
+    expect(replayHtml).not.toContain(ORG);
   });
 
   test("bad / missing state or nonce → 400, nothing exchanged", async () => {
@@ -160,7 +168,12 @@ describe("install callback", () => {
     const { state } = await start();
     const res = await callback({ code: "c", state });
     expect(res.status).toBe(409);
-    expect(await res.text()).toContain("このSlackワークスペースは別の組織に接続済みです。運営に連絡してください。");
+    const html = await res.text();
+    expect(html).toContain("この Slack ワークスペースは、別の組織ですでに使われています。");
+    expect(html).toContain("Staffpass の運営に連絡してください");
+    expect(html).toContain("<code>team_bound_to_other_org</code>");
+    expect(html).not.toContain(OTHER);
+    expect(html).not.toContain("xoxb-other");
     expect((await listNotificationChannels(ORG)).some((row) => row.config?.sharedApprovalApp === true)).toBe(false);
     expect((await listNotificationChannels(OTHER)).find((r) => r.id === other.id)?.config).toEqual(other.config);
     expect(methods).toContain("auth.revoke");
