@@ -14,7 +14,16 @@ import { auditActionForAdminTool } from "@/lib/admin-mcp/audit-class";
 import { POSTING_IDENTITY_RETRYABLE_REFUSAL_CODES, POSTING_IDENTITY_SET_TOOL } from "@/lib/admin-mcp/posting-identity-tool";
 import { isRetryableApprovalFailure } from "@/lib/approvals/execution";
 import { PLAN_ADMIN_SCOPES, READ_ONLY_ADMIN_TOOLS } from "@/lib/billing/plan-scopes";
-import { getApprovalById, listApprovals, resolveApproval } from "@/lib/data";
+import { getApprovalById, listApprovals, resolveApproval, updateApprovalMetadata } from "@/lib/data";
+import { runStuckWatchRetry } from "@/lib/stuck-watch/admin-handlers";
+import { getStuckWatchItem } from "@/lib/stuck-watch/items";
+import { defaultStuckWatchPolicy } from "@/lib/stuck-watch/validate";
+import {
+  evaluateW2Eligibility,
+  isApprovedUnfulfilled,
+  processW2RetriesForApprovals,
+  runW2FulfillRetry,
+} from "@/lib/stuck-watch/w2-unfulfilled";
 import { linkAgent } from "@/lib/data/bindings";
 import {
   bindEmployeeSlackIdentity,
@@ -776,5 +785,106 @@ describe("execution claim: which failures may be re-run with the same approvalId
     }
     expect(isRetryableApprovalFailure(TOOL, "slack_token_missing")).toBe(true);
     expect(isRetryableApprovalFailure("anything", "missing_scope")).toBe(true);
+  });
+});
+
+/**
+ * 木村 decision: a posting identity switch changes what the other side sees,
+ * so a person must know when it happens. W2 (stuck-watch auto retry) never
+ * re-runs this tool's re-runnable ticket; only an explicit re-invoke with the
+ * approvalId does.
+ */
+describe("W2 never re-runs employees.postingIdentity.set (explicit approvalId re-invoke only)", () => {
+  async function reinvoke(approvalId: string) {
+    return data(await callAdminMcpTool(TOOL, { approvalId }, cred()));
+  }
+
+  /** A re-runnable ticket (failed with user_token_missing), aged past W2's threshold, cause fixed. */
+  async function failedTicketReadyForW2() {
+    const emp = newEmployee(ORG_A, "bot");
+    await linkSlack(emp);
+    const out = data(await callAdminMcpTool(TOOL, { employeeId: emp.id, postingAs: "user" }, cred()));
+    const approvalId = String(out.approvalId);
+    await revokeEmployeeSlackIdentity({ employeeId: emp.id, orgId: emp.orgId });
+    expect((await approveAndFulfill(approvalId))?.error).toBe("user_token_missing");
+    await linkSlack(emp); // re-authorized: a W2 run would now succeed
+    const stored = (await getApprovalById(approvalId, ORG_A))!;
+    const tenMinutesAgo = new Date(Date.now() - 10 * 60_000).toISOString();
+    await updateApprovalMetadata(stored, {
+      ...stored.metadata,
+      stuckWatch: { w2: { firstDetectedAt: tenMinutesAgo, retryCount: 0 } },
+    });
+    const approval = (await getApprovalById(approvalId, ORG_A))!;
+    return { emp, approvalId, approval };
+  }
+
+  function w2Audits(approvalId: string) {
+    return getRuntimeAudit().filter((e) => e.action === "stuck_watch.w2_retry" && e.metadata?.approvalId === approvalId);
+  }
+
+  test("cron path: W2 skips the re-runnable ticket even with retries left; nothing runs or changes", async () => {
+    const { emp, approvalId, approval } = await failedTicketReadyForW2();
+    expect(isApprovedUnfulfilled(approval)).toBe(true);
+    expect(evaluateW2Eligibility({ approval, policy: defaultStuckWatchPolicy(), now: new Date() })).toMatchObject({
+      eligible: false,
+      reason: "manual_reinvoke_required",
+      retryCount: 0,
+    });
+    const authBefore = slackAuthTestCalls().length;
+    expect(await processW2RetriesForApprovals([approval])).toEqual([]);
+    expect(await runW2FulfillRetry(approval, defaultStuckWatchPolicy())).toMatchObject({
+      ok: false,
+      skipped: true,
+      reason: "manual_reinvoke_required",
+      retryCount: 0,
+    });
+    expect(slackAuthTestCalls().length).toBe(authBefore);
+    expect(runtimeEmployee(emp.id)!.postingAs).toBe("bot");
+    expect(auditFor(approvalId, "employee.posting_as.changed")).toBeUndefined();
+    expect(w2Audits(approvalId)).toEqual([]);
+    const after = (await getApprovalById(approvalId, ORG_A))!;
+    expect((after.metadata?.stuckWatch as { w2?: { retryCount?: number } })?.w2?.retryCount).toBe(0);
+    expect(parseAdminFulfillment(after.metadata)?.error).toBe("user_token_missing");
+    await revokeEmployeeSlackIdentity({ employeeId: emp.id, orgId: emp.orgId });
+  });
+
+  test("stuck-watch item says manual re-invoke is needed; stuckWatch.retry does not run it either", async () => {
+    const { emp, approvalId } = await failedTicketReadyForW2();
+    const itemId = `w2:${approvalId}`;
+    const item = await getStuckWatchItem(ORG_A, itemId);
+    expect(item).not.toBeNull();
+    expect(item!.status).toBe("open");
+    expect(item!.stuckHint).toBe("fix");
+    expect(item!.metadata).toMatchObject({ w2Eligible: false, w2Reason: "manual_reinvoke_required" });
+    expect(item!.nextStepJa).toContain(TOOL);
+    expect(item!.nextStepJa).toContain("approvalId");
+    const authBefore = slackAuthTestCalls().length;
+    const res = await runStuckWatchRetry(ORG_A, { itemId }, "mem_human_pi");
+    expect(res.ok).toBe(false);
+    expect((res as { code?: string }).code).toBe("manual_reinvoke_required");
+    expect(String((res as { nextStepJa?: string }).nextStepJa)).toContain(TOOL);
+    expect(slackAuthTestCalls().length).toBe(authBefore);
+    expect(runtimeEmployee(emp.id)!.postingAs).toBe("bot");
+    expect(w2Audits(approvalId)).toEqual([]);
+    await revokeEmployeeSlackIdentity({ employeeId: emp.id, orgId: emp.orgId });
+  });
+
+  test("after W2 skipped it, an explicit re-invoke with the approvalId still runs and redoes every check", async () => {
+    const { emp, approvalId, approval } = await failedTicketReadyForW2();
+    expect(await processW2RetriesForApprovals([approval])).toEqual([]);
+    // Re-check proves it runs again from scratch: removed from allowedAccounts → refused.
+    runtimeEmployee(emp.id)!.allowedAccounts = [{ service: "slack", accountId: "U0OTHERPI03" }];
+    expect((await reinvoke(approvalId)).ok).toBe(false);
+    expect(parseAdminFulfillment((await getApprovalById(approvalId, ORG_A))?.metadata)?.error).toBe("slack_account_not_allowed");
+    expect(runtimeEmployee(emp.id)!.postingAs).toBe("bot");
+    // Fixed → the same approvalId succeeds (token + scope checked again).
+    runtimeEmployee(emp.id)!.allowedAccounts = [{ service: "slack", accountId: SLACK_U }];
+    const authBefore = slackAuthTestCalls().length;
+    expect((await reinvoke(approvalId)).ok).toBe(true);
+    expect(slackAuthTestCalls().length).toBe(authBefore + 1);
+    expect(runtimeEmployee(emp.id)!.postingAs).toBe("user");
+    expect(auditFor(approvalId, "employee.posting_as.changed")?.metadata).toMatchObject({ from: "bot", to: "user", approvalId });
+    expect(w2Audits(approvalId)).toEqual([]);
+    await revokeEmployeeSlackIdentity({ employeeId: emp.id, orgId: emp.orgId });
   });
 });

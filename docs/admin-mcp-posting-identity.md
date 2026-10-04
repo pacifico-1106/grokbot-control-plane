@@ -50,7 +50,8 @@ always_human のチケットで人が 1 回承認するまで何も変わりま�
 - 書き込みに失敗した場合（`employee_policy_update_failed` など）は、途中まで書けたかもしれないので「uncertain」のままで、再実行しません（これまでどおり）。
 - 成功した結果は保存され、呼び直しても再実行せずにその結果を返します。
 - 呼び直したときの結果は共通の形（`ok`、`nextStepJa` など）で、コードそのものはチケットの実行結果と監査（`.rejected` の `code`）に残ります。
-- 同じ「failed」のチケットは F7 の滞留監視（W2）の対象にもなり得ます。その場合も毎回すべてチェックします。
+- F7 の滞留監視（W2）はこのツールのチケットを**再実行しません**（木村さんの判断。名義が変わると相手に見えるものが変わるので、切り替えの時点を人が必ず把握する）。再実行の上限内でも、cron でも `stuckWatch.retry` でも動かず、Stuck Watch の項目は open のまま `stuckHint: "fix"`、`w2Reason: "manual_reinvoke_required"`、「approvalId 付きで呼び直してください」という nextStepJa で残ります。`stuckWatch.retry` は `manual_reinvoke_required` を返します。再実行は、管理エージェントが `employees.postingIdentity.set { approvalId }` を明示的に呼んだときだけです。
+- 除外は `lib/stuck-watch/w2-unfulfilled.ts` の `W2_MANUAL_REINVOKE_ONLY_TOOLS`（チケットの `metadata.adminTool`、なければ `tool` で判定）で、ほかのツールの W2 の動きは変わりません。
 
 ### `bot` に切り替えるとき
 
