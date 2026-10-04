@@ -468,3 +468,12 @@ export function isSignupDomainCheckEnabled(): boolean {
 export function isMcpEndpointHandoffEnabled(): boolean {
   return parseFlag(process.env.MCP_ENDPOINT_HANDOFF_ENABLED);
 }
+
+/**
+ * Duplicate-reply prevention for conversation tools (comm.reply / comm.send /
+ * slack.post / slack.post_external), channel-independent (Slack / LINE / Telegram).
+ * STUB (TDD red phase).
+ */
+export function isCommReplyDedupEnabled(): boolean {
+  return false;
+}
