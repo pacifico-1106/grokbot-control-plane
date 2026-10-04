@@ -7,13 +7,18 @@
  * nothing else changes.
  *
  * COMM_DELETE_MAX_AGE_HOURS (default 72, 1..720): only posts recorded within
- * this window can be deleted (bounds the record lookup and the blast radius).
+ * this window can be deleted. An own post that is older answers too_old — but
+ * only after ownership is confirmed (lib/comm-delete/run.ts).
+ *
+ * COMM_DELETE_RECORD_LOOKBACK_HOURS (fixed 720 = the max window): how far back
+ * the record lookup goes, so the query stays bounded. Older → the same 404.
  */
 export const COMM_DELETE_TOOL_ID = "comm.delete" as const;
 
 const DEFAULT_MAX_AGE_HOURS = 72;
 const MIN_MAX_AGE_HOURS = 1;
 const MAX_MAX_AGE_HOURS = 720;
+export const COMM_DELETE_RECORD_LOOKBACK_HOURS = MAX_MAX_AGE_HOURS;
 
 function parseFlag(value: string | undefined): boolean {
   const v = (value ?? "").trim().toLowerCase();

@@ -46,6 +46,7 @@ function outcomeBody(input: CommDeleteInvokeInput, o: CommDeleteOutcome): Record
     ...(o.reason ? { reason: o.reason } : {}),
     ...(o.source ? { source: o.source } : {}),
     ...(o.needed ? { needed: o.needed } : {}),
+    ...(o.maxAgeHours !== undefined ? { maxAgeHours: o.maxAgeHours } : {}),
     needs_approval: false,
     employeeId: input.employee.id,
     tool: COMM_DELETE_TOOL_ID,

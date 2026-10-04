@@ -27,16 +27,25 @@ A delete runs only when **all** of these hold:
    `tools:invoke` + `slack:post`, purpose, plan, action limits). The per-tool
    setting `deny` rejects immediately (403).
 3. Staffpass has a **post record** for exactly this surface + channel + message
-   id, written for **this employee in this org**, within
-   `COMM_DELETE_MAX_AGE_HOURS` (default 72 h):
+   id, written for **this employee in this org** (looked up within the last
+   720 h = 30 days, so the query stays bounded):
    - auto posts: `tool.invoke` audit row with `metadata.postRecord`
    - approved posts: `slack.posted` audit row with `metadata.postRecord`
    - approved posts made before this change: `slack.posted` row whose approval
      belongs to the same org + employee and whose stored fulfillment posted the
      same channel + ts (posting identity read from the approval snapshot).
    Anything else (someone else's post, another employee's, another org's,
-   unrecorded, too old) gets the same `404 post_not_found_or_not_owned`.
+   unrecorded, older than the 30-day lookback) gets the same
+   `404 post_not_found_or_not_owned`.
 4. It was not already deleted (`200 already_deleted`, no provider call).
+5. The own record is within `COMM_DELETE_MAX_AGE_HOURS` (default 72 h). An own
+   post that is older gets `403 too_old` (with `maxAgeHours`).
+
+**Ordering (no existence probing):** the age is checked only after step 3 has
+confirmed the record is the caller's own (same org, same employee, same
+channel + id, same legacy cross-checks). Before that, every case — including
+someone else's old post — gets the identical 404 with no age information, so
+`too_old` can only ever describe the caller's own post.
 
 Post records hold ids only: `{v:1, surface, channel, messageId, postedVia}`.
 
@@ -76,6 +85,7 @@ result (no second delete).
 | 400 | `invalid_delete_target` | `refused` |
 | 402 | `needs_approval` | approval card created (risk low) |
 | 403 | `comm_delete_disabled` / `tool_denied_by_tool_setting` | `refused` |
+| 403 | `too_old` (+ `maxAgeHours`; own post only) | `refused` |
 | 404 | `post_not_found_or_not_owned` | `refused` |
 | 409 | `slack_identity_unbound` | `failed` |
 | 422 | `not_supported` (+ `reason`) | `not_supported` |

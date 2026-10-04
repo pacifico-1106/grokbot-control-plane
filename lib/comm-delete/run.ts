@@ -3,18 +3,22 @@
  *
  * Order (fail closed at each step, provider called last):
  *   1. surface support (LINE / Telegram → not_supported with the reason)
- *   2. the employee's OWN post record for exactly this target, same org,
- *      within COMM_DELETE_MAX_AGE_HOURS (else post_not_found_or_not_owned —
- *      the same answer for "someone else's", "other org" and "unknown")
+ *   2. ownership: the employee's OWN post record for exactly this target,
+ *      same org (looked up within COMM_DELETE_RECORD_LOOKBACK_HOURS). Else
+ *      post_not_found_or_not_owned — the same answer for "someone else's",
+ *      "other org", "unknown" and "older than the lookback". Age is NOT
+ *      checked before this point, so too_old cannot be used to probe
+ *      whether someone else's post exists.
  *   3. already deleted by this employee → already_deleted (no provider call)
- *   4. provider delete with the token that made the post
+ *   4. own record older than COMM_DELETE_MAX_AGE_HOURS → too_old
+ *   5. provider delete with the token that made the post
  *
  * Every attempt is audited (comm.delete.*) with ids and a target hash only.
  */
 import { createHash } from "node:crypto";
 import { appendAuditEvent } from "@/lib/data/audit";
 import type { AuditAction } from "@/lib/types";
-import { commDeleteMaxAgeHours, COMM_DELETE_TOOL_ID } from "./config";
+import { commDeleteMaxAgeHours, COMM_DELETE_RECORD_LOOKBACK_HOURS, COMM_DELETE_TOOL_ID } from "./config";
 import { buildDeleteRecord, findOwnDeleteDone, findOwnPostRecord, type FoundPostRecord } from "./post-record";
 import { deleteSlackPost } from "./slack";
 import { commDeleteSurfaceSupport } from "./surfaces";
@@ -34,6 +38,8 @@ export type CommDeleteOutcome = {
   reason?: string;
   source?: string;
   needed?: string;
+  /** Only on too_old (the caller's own post). */
+  maxAgeHours?: number;
 };
 
 export type CommDeleteContext = {
@@ -113,6 +119,20 @@ function failureMessage(code: string, needed?: string): string {
   }
 }
 
+function lookupScope(ctx: CommDeleteContext, target: CommDeleteTarget) {
+  return {
+    orgId: ctx.orgId,
+    employeeId: ctx.employeeId,
+    target,
+    sinceIso: new Date(Date.now() - COMM_DELETE_RECORD_LOOKBACK_HOURS * 3600_000).toISOString(),
+  };
+}
+
+function withinWindow(postedAt: string, maxAgeHours: number): boolean {
+  const t = new Date(postedAt).getTime();
+  return Number.isFinite(t) && t >= Date.now() - maxAgeHours * 3600_000;
+}
+
 export async function executeCommDelete(ctx: CommDeleteContext, target: CommDeleteTarget): Promise<CommDeleteOutcome> {
   const support = commDeleteSurfaceSupport(target.surface);
   if (!support.supported) {
@@ -125,12 +145,7 @@ export async function executeCommDelete(ctx: CommDeleteContext, target: CommDele
   }
 
   const maxAgeHours = commDeleteMaxAgeHours();
-  const scope = {
-    orgId: ctx.orgId,
-    employeeId: ctx.employeeId,
-    target,
-    sinceIso: new Date(Date.now() - maxAgeHours * 3600_000).toISOString(),
-  };
+  const scope = lookupScope(ctx, target);
 
   const record = await findOwnPostRecord(scope);
   if (!record.ok) {
@@ -141,7 +156,7 @@ export async function executeCommDelete(ctx: CommDeleteContext, target: CommDele
     });
   }
   if (!record.found) {
-    await auditCommDelete(ctx, "comm.delete.refused", target, { code: "post_not_found_or_not_owned", maxAgeHours },
+    await auditCommDelete(ctx, "comm.delete.refused", target, { code: "post_not_found_or_not_owned", lookbackHours: COMM_DELETE_RECORD_LOOKBACK_HOURS },
       "自分の記録済み投稿ではないため削除を拒否");
     return outcome(target, {
       ok: false, status: "refused", code: "post_not_found_or_not_owned", httpStatus: 404, messageJa: NOT_OWNED_MESSAGE_JA,
@@ -170,6 +185,16 @@ export async function executeCommDelete(ctx: CommDeleteContext, target: CommDele
     return outcome(target, {
       ok: true, status: "already_deleted", code: "already_deleted", httpStatus: 200,
       messageJa: "この投稿はすでに削除されています。", deletedVia: found.postedVia,
+    });
+  }
+
+  // Ownership is confirmed above; only now may the age be revealed.
+  if (!withinWindow(found.postedAt, maxAgeHours)) {
+    await auditCommDelete(ctx, "comm.delete.refused", target, { code: "too_old", maxAgeHours, ...recordDetail },
+      `自分の投稿だが ${maxAgeHours} 時間を過ぎているため削除を拒否`);
+    return outcome(target, {
+      ok: false, status: "refused", code: "too_old", httpStatus: 403, maxAgeHours,
+      messageJa: `この投稿は投稿から ${maxAgeHours} 時間を過ぎているため削除できません（削除できるのは ${maxAgeHours} 時間以内の自分の投稿です）。`,
     });
   }
 
@@ -217,13 +242,8 @@ export async function executeCommDelete(ctx: CommDeleteContext, target: CommDele
 export async function precheckCommDelete(ctx: CommDeleteContext, target: CommDeleteTarget): Promise<CommDeleteOutcome | null> {
   const support = commDeleteSurfaceSupport(target.surface);
   if (!support.supported) return executeCommDelete(ctx, target);
-  const record = await findOwnPostRecord({
-    orgId: ctx.orgId,
-    employeeId: ctx.employeeId,
-    target,
-    sinceIso: new Date(Date.now() - commDeleteMaxAgeHours() * 3600_000).toISOString(),
-  });
-  if (record.ok && record.found) return null;
-  // Same refusal (and audit) as the direct path.
+  const record = await findOwnPostRecord(lookupScope(ctx, target));
+  if (record.ok && record.found && withinWindow(record.found.postedAt, commDeleteMaxAgeHours())) return null;
+  // Same refusal / too_old / already_deleted (and audit) as the direct path.
   return executeCommDelete(ctx, target);
 }

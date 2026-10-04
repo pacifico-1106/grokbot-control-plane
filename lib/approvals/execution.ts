@@ -32,7 +32,7 @@ const retryableByTool: Record<string, ReadonlySet<string>> = {
   // second chat.delete of a gone message maps to already_deleted — so a
   // re-run can never delete anything beyond the approved own post.
   "comm.delete": new Set([
-    "comm_delete_disabled", "invalid_delete_target", "not_supported", "post_not_found_or_not_owned",
+    "comm_delete_disabled", "invalid_delete_target", "not_supported", "post_not_found_or_not_owned", "too_old",
     "comm_delete_unavailable", "cant_delete_message", "slack_token_identity_mismatch",
     "slack_delete_timeout", "slack_delete_fetch_failed",
   ]),
