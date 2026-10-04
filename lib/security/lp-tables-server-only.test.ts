@@ -9,17 +9,53 @@
  *   `*_service_all` policies (using auth.role() = 'service_role') are dropped.
  *   They admit no user session, and service_role bypasses RLS, so they are
  *   redundant; RLS stays enabled (no policy = sessions see / write nothing).
+ *   SELECT is revoked from anon / authenticated as well (木村 2026-10-04): no
+ *   user-session or anon client reads them — every reader is a server module
+ *   on the service-role client, reached only from routes with their own
+ *   checks (read inventory + callers pinned below).
  */
 import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
-import { scanTableAccess, WRITE_OPS, type SourceFile } from "../../tests/helpers/table-write-scan";
+import { clientComponentsImportingSupabase, scanTableAccess, WRITE_OPS, type SourceFile } from "../../tests/helpers/table-write-scan";
 
 const ROOT = fileURLToPath(new URL("../..", import.meta.url));
 const STAMP = "20261004800000";
 const REVOKED = ["lp_inquiries", "notification_outbox"];
 const LP_TABLES = ["lp_handoffs", "lp_wake_webhook_configs", "lp_wake_webhook_events"];
+const LP_LIST = LP_TABLES.map((t) => `public.${t}`).join(", ");
+/** every app access (read and write) to the 3 lp_* tables: `file:table:op` */
+const LP_ACCESS = [
+  "lib/lp/handoffs.ts:lp_handoffs:insert",
+  "lib/lp/handoffs.ts:lp_handoffs:select",
+  "lib/lp/handoffs.ts:lp_handoffs:update",
+  "lib/lp/wake-webhook.ts:lp_wake_webhook_configs:insert",
+  "lib/lp/wake-webhook.ts:lp_wake_webhook_configs:select",
+  "lib/lp/wake-webhook.ts:lp_wake_webhook_configs:update",
+  "lib/lp/wake-webhook.ts:lp_wake_webhook_events:insert",
+  "lib/lp/wake-webhook.ts:lp_wake_webhook_events:select",
+  "lib/lp/wake-webhook.ts:lp_wake_webhook_events:update",
+];
+/** exported functions of the 2 lp_* modules -> modules that call them (outside the module itself) */
+const LP_MODULE_CALLERS: Record<string, Record<string, string[]>> = {
+  "lib/lp/handoffs.ts": {
+    createHandoff: ["app/api/lp/handoff/route.ts"],
+    getHandoff: ["app/api/lp/handoff/route.ts"],
+    getHandoffByJourney: [],
+    confirmHandoff: ["app/api/lp/handoff/route.ts"],
+    cancelHandoff: ["app/api/lp/handoff/route.ts"],
+    updateHandoffStatus: ["lib/lp/outbox-processor.ts"],
+    getConfirmedHandoffsForOutbox: [],
+  },
+  "lib/lp/wake-webhook.ts": {
+    validateWebhookRequest: ["app/api/webhooks/lp-wake/[path]/route.ts"],
+    checkIdempotency: [],
+    recordWebhookEvent: ["app/api/webhooks/lp-wake/[path]/route.ts"],
+    updateWebhookEventStatus: ["app/api/webhooks/lp-wake/[path]/route.ts"],
+    createWebhookConfig: [],
+  },
+};
 /** [table, policy] exactly as created by 20261001400000_lp_handoffs.sql */
 const DROPPED = [
   ["lp_handoffs", "lp_handoffs_service_all"],
@@ -91,6 +127,52 @@ describe("app: lp_inquiries / notification_outbox (and lp_*) are accessed only s
   });
 });
 
+describe("app: lp_handoffs / lp_wake_* are read (and written) only by service-role server code", () => {
+  const lpSites = sites.filter((s) => LP_TABLES.includes(s.table));
+
+  test("no user-session / anon / unknown client reads them", () => {
+    expect(lpSites.filter((s) => s.op === "select").length).toBeGreaterThanOrEqual(LP_TABLES.length);
+    expect(lpSites.filter((s) => s.clientKind !== "service_role")).toEqual([]);
+    for (const f of ["lib/lp/handoffs.ts", "lib/lp/wake-webhook.ts"]) {
+      expect(src(f)).toContain('import { createSupabaseAdminClient } from "@/lib/supabase";');
+      expect(src(f)).not.toMatch(/createSupabase(Browser|Server)Client|createRouteSupabase|NEXT_PUBLIC_SUPABASE_ANON_KEY|["']use client["']/);
+    }
+  });
+
+  test("read + write inventory is pinned (readers: lib/lp/handoffs.ts, lib/lp/wake-webhook.ts)", () => {
+    expect([...new Set(lpSites.map((s) => `${s.file}:${s.table}:${s.op}`))].sort()).toEqual(LP_ACCESS);
+  });
+
+  test("the lp_* modules are reached only from server routes with their own checks, never from a client module", () => {
+    for (const [mod, fns] of Object.entries(LP_MODULE_CALLERS)) {
+      const exported = [...src(mod).matchAll(/^export (?:async )?function (\w+)/gm)].map((m) => m[1]).sort();
+      expect(exported).toEqual(Object.keys(fns).sort());
+      for (const [fn, expected] of Object.entries(fns)) {
+        const found = sources
+          .filter((f) => f.path !== mod && new RegExp(`\\b${fn}\\s*\\(`).test(f.text))
+          .map((f) => f.path)
+          .sort();
+        expect(`${fn}: ${found.join(", ")}`).toBe(`${fn}: ${expected.join(", ")}`);
+      }
+    }
+    const importers = sources
+      .filter((f) => /["']@\/lib\/lp\/(handoffs|wake-webhook)["']|["'][./]+(lp\/)?(handoffs|wake-webhook)["']/.test(f.text))
+      .map((f) => f.path)
+      .sort();
+    expect(importers).toEqual(["app/api/lp/handoff/route.ts", "app/api/webhooks/lp-wake/[path]/route.ts", "lib/lp/outbox-processor.ts"]);
+    for (const f of importers) expect(`${f}:${/^\s*["']use client["']/m.test(src(f))}`).toBe(`${f}:false`);
+    expect(clientComponentsImportingSupabase(sources).filter((f) => /\blp\b|lp-|\/lp\//.test(f))).toEqual([]);
+    // guest handoff: journey cookie (+ CSRF on writes) and ownership check before any read is returned
+    const handoff = src("app/api/lp/handoff/route.ts");
+    expect(handoff).toContain("resolveGuestJourney(request, { requireCsrf: true })");
+    expect(handoff.match(/journeyId !== session\.journey\.id/g)?.length).toBe(3);
+    // wake webhook: per-endpoint secret, compared as a hash in constant time
+    const wake = src("app/api/webhooks/lp-wake/[path]/route.ts");
+    expect(wake).toContain("validateWebhookRequest(endpointPath, secret)");
+    expect(src("lib/lp/wake-webhook.ts")).toContain("timingSafeEqual(storedHashBuffer, providedHashBuffer)");
+  });
+});
+
 describe(`migration ${STAMP}: LP tables server-only`, () => {
   const dir = join(ROOT, "supabase", "migrations");
   const names = readdirSync(dir).filter((n) => n.endsWith(".sql")).sort();
@@ -124,6 +206,12 @@ describe(`migration ${STAMP}: LP tables server-only`, () => {
     expect(executable).not.toMatch(/create policy|grant |insert into|update public\.|delete from|alter table|truncate public|disable row level security/);
   });
 
+  test("revokes SELECT on the 3 lp_* tables from anon / authenticated (service_role untouched)", () => {
+    expect(executable).toContain(`revoke select on ${LP_LIST} from anon, authenticated;`);
+    expect(executable).not.toMatch(/service_role/);
+    expect(executable).not.toMatch(/revoke [^;]*\bon public\.(lp_handoffs|lp_wake_webhook_configs|lp_wake_webhook_events)\b[^;]*from [^;]*\b(public|postgres)\b/);
+  });
+
   test("RLS stays enabled on all 5 tables (never disabled by any migration)", () => {
     const all = exec(names.map((n) => readFileSync(join(dir, n), "utf8")).join("\n"));
     for (const t of [...REVOKED, ...LP_TABLES]) {
@@ -146,7 +234,9 @@ describe(`migration ${STAMP}: LP tables server-only`, () => {
       expect(down).toContain(`create policy ${policy} on public.${table} for all using (auth.role() = 'service_role');`);
     }
     expect(down).toContain(`grant insert, update, delete, truncate on ${REVOKED.map((t) => `public.${t}`).join(", ")} to anon, authenticated;`);
+    expect(down).toContain(`grant select on ${LP_LIST} to anon, authenticated;`);
     expect(down.match(/create policy/g)?.length).toBe(3);
+    expect(down.match(/\bgrant /g)?.length).toBe(2);
   });
 
   test("verification SQL exists and is read-only", () => {
@@ -155,5 +245,15 @@ describe(`migration ${STAMP}: LP tables server-only`, () => {
     expect(body).toContain("begin read only;");
     expect(body).not.toMatch(/\b(insert into|update public\.|delete from|create |drop |grant |revoke |alter )/);
     expect(body).toContain("rolbypassrls");
+  });
+
+  test("verification SQL checks effective session SELECT on the 3 lp_* tables and documents the expected values", () => {
+    const v = src(`supabase/verification/${STAMP}_lp_tables_server_only_check.sql`);
+    const body = exec(v);
+    expect(body).toContain("has_table_privilege(r, 'public.' || t, 'select')");
+    expect(body).toContain("has_any_column_privilege(r, 'public.' || t, 'select')");
+    expect(body).toContain("unnest(array['lp_handoffs','lp_wake_webhook_configs','lp_wake_webhook_events']) t");
+    expect(v).toContain("no SELECT on lp_handoffs / lp_wake_webhook_configs / lp_wake_webhook_events");
+    expect(v).toMatch(/After:[\s\S]*\(6\) all f/);
   });
 });

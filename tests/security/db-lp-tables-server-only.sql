@@ -2,7 +2,8 @@
 -- lp_inquiries / notification_outbox: no anon / authenticated write privilege
 -- (table- or column-level). lp_handoffs / lp_wake_webhook_configs /
 -- lp_wake_webhook_events: the redundant *_service_all policies are gone, RLS
--- stays enabled. As `authenticated` (member / admin / owner style JWTs; the LP
+-- stays enabled, and anon / authenticated hold no SELECT (table- or
+-- column-level; 木村 2026-10-04: every reader is service-role). As `authenticated` (member / admin / owner style JWTs; the LP
 -- tables are not org-scoped, so the role is what matters) and as `anon`, every
 -- INSERT / UPDATE / DELETE on all 5 tables must fail (permission denied or RLS
 -- leaving 0 rows) and no row may be readable; `service_role` (BYPASSRLS) must
@@ -123,14 +124,20 @@ begin
   end loop;
 end $$;
 
--- 1) surface: write privileges on lp_inquiries / notification_outbox, and any
---    policy left on the 5 tables (the 3 service-role ones are expected gone)
+-- 1) surface: write privileges on lp_inquiries / notification_outbox, SELECT
+--    on the 3 lp_* tables, and any policy left on the 5 tables (the 3
+--    service-role ones are expected gone)
 insert into rls_write_violations
 select role || ':grant', t || ' ' || lower(p), 'GRANTED'
 from unnest(array['anon','authenticated']) role, unnest(array['lp_inquiries','notification_outbox']) t,
      unnest(array['INSERT','UPDATE','DELETE','TRUNCATE']) p
 where has_table_privilege(role, 'public.' || t, p)
    or (p in ('INSERT','UPDATE') and has_any_column_privilege(role, 'public.' || t, p));
+insert into rls_write_violations
+select role || ':grant', t || ' select', 'GRANTED'
+from unnest(array['anon','authenticated']) role, unnest(array['lp_handoffs','lp_wake_webhook_configs','lp_wake_webhook_events']) t
+where has_table_privilege(role, 'public.' || t, 'SELECT')
+   or has_any_column_privilege(role, 'public.' || t, 'SELECT');
 insert into rls_write_violations
 select 'policy:' || tablename, policyname, 'PRESENT ' || cmd
 from pg_policies where schemaname = 'public' and tablename in (select t from lp3_tables);

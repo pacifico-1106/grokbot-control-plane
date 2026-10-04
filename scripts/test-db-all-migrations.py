@@ -75,15 +75,19 @@ FIXES = [
         "test": "tests/security/db-lp-tables-server-only.sql",
         "fixture": "a8000000-",
         # write privileges revoked here; the lp_* tables lose their (redundant)
-        # service-role-only policies
+        # service-role-only policies and their session SELECT
         "tables": ("lp_inquiries", "notification_outbox"),
         "policies": ("lp_handoffs_service_all", "lp_wake_configs_service_all", "lp_wake_events_service_all"),
+        "extra_privs": (("public.lp_handoffs", "SELECT"), ("public.lp_wake_webhook_configs", "SELECT"),
+                        ("public.lp_wake_webhook_events", "SELECT")),
         # anon + authenticated x INSERT/UPDATE/DELETE/TRUNCATE x 2 tables (surface; RLS with no
-        # policy already blocks the rows) + the 3 service-role-only policies; 0 session writes
-        "reopened": 2 * 4 * 2 + 3,
-        "unit": "surface findings (grants / policies; session writes: 0)",
-        "summary": ("anon/authenticated hold no write grant on lp_inquiries / notification_outbox; no policy on the "
-                    "5 LP tables, RLS on; sessions read/write nothing; service_role (BYPASSRLS) reads/writes all 5."),
+        # policy already blocks the rows) + the 3 service-role-only policies + anon + authenticated
+        # x SELECT x 3 lp_* tables (surface; no row was visible); 0 session writes / reads
+        "reopened": 2 * 4 * 2 + 3 + 2 * 3,
+        "unit": "surface findings (grants / policies; session writes and reads: 0)",
+        "summary": ("anon/authenticated hold no write grant on lp_inquiries / notification_outbox and no SELECT on "
+                    "lp_handoffs / lp_wake_webhook_configs / lp_wake_webhook_events; no policy on the 5 LP tables, "
+                    "RLS on; sessions read/write nothing; service_role (BYPASSRLS) reads/writes all 5."),
         "cleanup": ("delete from public.lp_wake_webhook_events where id::text like 'a8000000-%';"
                     "delete from public.lp_wake_webhook_configs where id::text like 'a8000000-%';"
                     "delete from public.lp_handoffs where id::text like 'a8000000-%';"
