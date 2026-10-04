@@ -7,7 +7,8 @@
   "documentationUrl": "https://staffpass.sealith.com/docs/mcp",
   "transport": {
     "type": "streamable-http",
-    "url": "https://staffpass.sealith.com/api/mcp/admin"
+    "url": "https://staffpass.sealith.com/api/mcp/admin",
+    "supportedProtocolVersions": ["2026-07-28", "2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"]
   },
   "authentication": {
     "type": "http",

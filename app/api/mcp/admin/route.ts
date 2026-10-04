@@ -8,6 +8,15 @@ import {
   STAFFPASS_ADMIN_MCP_URL,
 } from "@/lib/mcp/admin-public";
 import { ADMIN_MCP_TOOLS, callAdminMcpTool } from "@/lib/mcp/admin-tools";
+import {
+  MCP_SUPPORTED_PROTOCOL_VERSIONS,
+  MCP_TOOLS_LIST_CACHE,
+  buildDiscoverResult,
+  checkMcpProtocolRequest,
+  mcpCorsAllowHeaders,
+  negotiateInitializeVersion,
+  shapeModernResult,
+} from "@/lib/mcp/protocol-negotiation";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -24,9 +33,8 @@ function corsHeaders(): HeadersInit {
   return {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-    "Access-Control-Allow-Headers":
-      "Authorization, Content-Type, Accept, Mcp-Session-Id, x-staffpass-admin-credential",
-    "Access-Control-Expose-Headers": "Mcp-Session-Id",
+    // MCP 2026-07-28 request headers. No Mcp-Session-Id: this server never mints sessions.
+    "Access-Control-Allow-Headers": mcpCorsAllowHeaders("x-staffpass-admin-credential"),
     "Cache-Control": "no-store",
   };
 }
@@ -62,6 +70,7 @@ function serverInfo() {
     mcpEndpoint: STAFFPASS_ADMIN_MCP_URL,
     protocolVersion: MCP_PROTOCOL_VERSION,
     tools: ADMIN_MCP_TOOLS.map((t) => t.name),
+    supportedProtocolVersions: MCP_SUPPORTED_PROTOCOL_VERSIONS,
     auth: {
       type: "bearer",
       scheme: "Authorization: Bearer gb_adm_…",
@@ -70,6 +79,27 @@ function serverInfo() {
       employeeBadgeHeader: "gb_emp_ is rejected (fail-closed)",
     },
   };
+}
+
+/** Server identity for initialize `serverInfo` and modern `_meta` serverInfo. */
+function serverIdentity() {
+  return {
+    name: ADMIN_MCP_SERVER_NAME,
+    version: ADMIN_MCP_SERVER_VERSION,
+    title: ADMIN_MCP_SERVER_TITLE,
+  };
+}
+
+/**
+ * The one capabilities object for initialize AND server/discover (keep them
+ * identical: add new capabilities here only).
+ */
+function serverCapabilities(): Record<string, unknown> {
+  return { tools: { listChanged: true } };
+}
+
+function serverInstructions(): string {
+  return "Staffpass Admin MCP is a separate mouth from the employee badge MCP. Authenticate with Authorization: Bearer gb_adm_… — never gb_emp_. All tools are always_human: they create an approval ticket and do not mutate until a different human approves. Do not mix with staffpass_whoami / staffpass_invoke.";
 }
 
 export async function OPTIONS() {
@@ -104,22 +134,39 @@ export async function POST(req: Request) {
     return new NextResponse(null, { status: 202, headers: corsHeaders() });
   }
 
+  // MCP 2026-07-28: header ↔ body validation + era (lib/mcp/protocol-negotiation.ts).
+  // Runs before auth and before any work; never reflects header / _meta values.
+  const protocol = checkMcpProtocolRequest(req, method, params);
+  if (!protocol.ok) {
+    return jsonRpcError(id, protocol.code, protocol.message, protocol.data, protocol.httpStatus);
+  }
+  const modern = protocol.era === "modern";
+  const reply = (result: Record<string, unknown>) =>
+    jsonRpcResult(id, modern ? shapeModernResult(result, serverIdentity()) : result);
+
   if (method === "initialize") {
     return jsonRpcResult(id, {
-      protocolVersion: MCP_PROTOCOL_VERSION,
-      capabilities: { tools: { listChanged: true } },
-      serverInfo: {
-        name: ADMIN_MCP_SERVER_NAME,
-        version: ADMIN_MCP_SERVER_VERSION,
-        title: ADMIN_MCP_SERVER_TITLE,
-      },
-      instructions:
-        "Staffpass Admin MCP is a separate mouth from the employee badge MCP. Authenticate with Authorization: Bearer gb_adm_… — never gb_emp_. All tools are always_human: they create an approval ticket and do not mutate until a different human approves. Do not mix with staffpass_whoami / staffpass_invoke.",
+      protocolVersion: negotiateInitializeVersion(params.protocolVersion),
+      capabilities: serverCapabilities(),
+      serverInfo: serverIdentity(),
+      instructions: serverInstructions(),
     });
   }
 
+  // Public metadata, same as initialize (no credential), any era.
+  if (method === "server/discover") {
+    return jsonRpcResult(
+      id,
+      buildDiscoverResult({
+        capabilities: serverCapabilities(),
+        serverInfo: serverIdentity(),
+        instructions: serverInstructions(),
+      })
+    );
+  }
+
   if (method === "ping") {
-    return jsonRpcResult(id, {});
+    return reply({});
   }
 
   if (method === "tools/list" || method === "tools/call") {
@@ -135,12 +182,13 @@ export async function POST(req: Request) {
     }
 
     if (method === "tools/list") {
-      return jsonRpcResult(id, {
+      return reply({
         tools: ADMIN_MCP_TOOLS.map((t) => ({
           name: t.name,
           description: t.description,
           inputSchema: t.inputSchema,
         })),
+        ...(modern ? MCP_TOOLS_LIST_CACHE : {}),
       });
     }
 
@@ -169,12 +217,13 @@ export async function POST(req: Request) {
     }
     try {
       const result = await callAdminMcpTool(toolName, toolArgs, auth.credential);
-      return jsonRpcResult(id, result);
+      return reply(result as Record<string, unknown>);
     } catch (e) {
       const message = e instanceof Error ? e.message : "tool_call_failed";
       return jsonRpcError(id, -32000, message, undefined, 500);
     }
   }
 
-  return jsonRpcError(id, -32601, `Method not found: ${method}`);
+  // Modern requests: unknown method → HTTP 404 (spec). Legacy: HTTP 200 as before.
+  return jsonRpcError(id, -32601, `Method not found: ${method}`, undefined, modern ? 404 : 200);
 }
