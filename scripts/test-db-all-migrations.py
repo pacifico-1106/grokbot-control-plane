@@ -1,8 +1,13 @@
 """Disposable PostgreSQL: apply schema.sql + EVERY migration, then prove the
-RLS write holes on orgs / subscriptions / audit_events / approval_requests
-are closed (tests/security/db-rls-write-holes.sql), that the migration is
-re-applicable, and that its documented rollback block restores the previous
-state exactly (and is then re-closed).
+RLS write-hole fixes are closed:
+  #258  20261004500000  orgs / subscriptions / audit_events / approval_requests
+        (tests/security/db-rls-write-holes.sql)
+  phase 2 20261004600000  14 tenant config / credential tables
+        (tests/security/db-rls-write-holes-phase2.sql)
+For each fix: its SQL test FAILS just before the fix migration is applied
+(the open holes are recorded), passes after, the migration is re-applicable,
+its documented rollback block reopens EXACTLY the recorded set (and nothing
+of the other fix), and re-applying closes it again.
 
 Never reads PG*/DATABASE_URL or .env. Uses a newly created directory and a
 Unix socket only (no TCP listener); no existing DB is touched. The server is
@@ -24,9 +29,37 @@ BIN = next(Path(p) for p in CANDIDATE_BINS if p and (Path(p) / "initdb").exists(
 env = {key: os.environ[key] for key in ("PATH", "TMPDIR", "LANG") if key in os.environ}
 env.update({"LC_ALL": "C", "PGCONNECT_TIMEOUT": "5", "PGOPTIONS": "-c client_min_messages=warning"})
 PORT = "55438"
-RLS_FIX_PREFIX = "20261004500000_"
-FOUR = ("orgs", "subscriptions", "audit_events", "approval_requests")
-FOUR_POLICIES = ("approvals_write_member", "audit_insert_member", "orgs_update_admin", "subscriptions_write_admin")
+FIXES = [
+    {
+        "name": "#258",
+        "prefix": "20261004500000_",
+        "test": "tests/security/db-rls-write-holes.sql",
+        "fixture": "a5000000-",
+        "tables": ("orgs", "subscriptions", "audit_events", "approval_requests"),
+        "policies": ("approvals_write_member", "audit_insert_member", "orgs_update_admin", "subscriptions_write_admin"),
+        "reopened": 27,
+    },
+    {
+        "name": "phase 2",
+        "prefix": "20261004600000_",
+        "test": "tests/security/db-rls-write-holes-phase2.sql",
+        "fixture": "a6000000-",
+        "tables": ("credentials", "org_admin_agents", "employees", "employee_bindings", "org_parties", "org_channels",
+                   "information_assets", "org_notification_channels", "org_conversation_adapters", "org_sns_adapters",
+                   "employee_slack_identities", "org_external_contract_payment_methods", "org_projects",
+                   "audit_external_contract_card_events"),
+        "policies": ("credentials_write_admin", "org_admin_agents_write_admin", "employees_write_admin",
+                     "bindings_write_admin", "org_parties_write_admin", "org_channels_write_admin",
+                     "information_assets_write_admin", "notification_channels_write_admin",
+                     "conversation_adapters_write_admin", "sns_adapters_write_admin",
+                     "employee_slack_identities_write_admin", "org_ext_contract_pm_write_admin",
+                     "org_projects_write_admin", "audit_ext_card_insert_member"),
+        # admin + owner x (insert, update, delete) x 13 FOR ALL tables, member/admin/owner
+        # card-audit insert, admin + owner x 4 targeted HIGH-table takeovers
+        "reopened": 2 * 3 * 13 + 3 + 2 * 4,
+    },
+]
+ALL_FIX_TABLES = tuple(t for f in FIXES for t in f["tables"])
 
 # Un-timestamped legacy names do not sort in dependency order (see
 # scripts/test-db-local.py); everything after this list sorts correctly.
@@ -110,7 +143,7 @@ def rollback_block(text):
 def report_other_tables():
     rows = query(f"""select tablename, policyname, cmd, permissive, roles::text, coalesce(qual,'-'), coalesce(with_check,'-')
         from pg_policies where schemaname='public' and cmd <> 'SELECT'
-          and tablename not in ({','.join(repr(t) for t in FOUR)}) order by 1,2;""")
+          and tablename not in ({','.join(repr(t) for t in ALL_FIX_TABLES)}) order by 1,2;""")
     print("REPORT non-SELECT policies on other tables (table|policy|cmd|permissive|roles|using|with_check):")
     for row in rows.splitlines():
         print("REPORT   " + row)
@@ -121,14 +154,26 @@ def report_other_tables():
     print("REPORT tables without RLS that anon/authenticated can write: " + (", ".join(rows.splitlines()) or "none"))
 
 
-def assert_holes_state(open_):
+def assert_holes_state(fix, open_):
     policies = query(f"""select count(*) from pg_policies where schemaname='public'
-        and policyname in ({','.join(repr(p) for p in FOUR_POLICIES)});""")
-    privs = query("""select count(*) from unnest(array['anon','authenticated']) r,
-        unnest(array['public.orgs','public.subscriptions','public.audit_events','public.approval_requests']) t,
+        and policyname in ({','.join(repr(p) for p in fix["policies"])});""")
+    privs = query(f"""select count(*) from unnest(array['anon','authenticated']) r,
+        unnest(array[{','.join(repr('public.' + t) for t in fix["tables"])}]) t,
         unnest(array['INSERT','UPDATE','DELETE','TRUNCATE']) p where has_table_privilege(r, t, p);""")
-    expected = ("4", "32") if open_ else ("0", "0")
-    assert (policies, privs) == expected, f"policies={policies} privileges={privs}, expected {expected}"
+    expected = (str(len(fix["policies"])), str(len(fix["tables"]) * 8)) if open_ else ("0", "0")
+    assert (policies, privs) == expected, f"{fix['name']}: policies={policies} privileges={privs}, expected {expected}"
+    return policies, privs
+
+
+def open_holes(fix):
+    """Run the fix's SQL test expecting failure; return the exact set of open holes."""
+    result = sql_file(ROOT / fix["test"], expect_error="session writes not blocked")
+    m = re.search(r"session writes not blocked \((\d+) case\(s\)\):\n(.*?)\n(?:CONTEXT|psql)", result.stderr, re.S)
+    assert m, result.stderr
+    cases = sorted(m.group(2).splitlines())
+    assert len(cases) == int(m.group(1)), (m.group(1), cases)
+    query(f"delete from public.orgs where id::text like '{fix['fixture']}%';")  # fixtures left by the expected failure
+    return cases
 
 
 try:
@@ -141,8 +186,28 @@ try:
     sql_file(ROOT / "tests/security/db-bootstrap.sql")
     sql_file(ROOT / "supabase/schema.sql")
     order = migration_order()
-    fix = next((n for n in order if n.startswith(RLS_FIX_PREFIX)), None)
+    files = {f["name"]: next((n for n in order if n.startswith(f["prefix"])), None) for f in FIXES}
+    before = {}
     for name in order:
+        fix = next((f for f in FIXES if name == files[f["name"]]), None)
+        if fix:
+            # Production pre-state = the migrations' write policies + Supabase's
+            # default anon/authenticated table grants. schema.sql (fresh installs)
+            # already revokes them once the fix is in, so re-grant them here to
+            # record what the fix closes on an existing database.
+            tables = ", ".join("public." + t for t in fix["tables"])
+            policies, privs = query(f"""select (select count(*) from pg_policies where schemaname='public'
+                and policyname in ({','.join(repr(p) for p in fix["policies"])})),
+                (select count(*) from unnest(array['anon','authenticated']) r, unnest(string_to_array('{tables}', ', ')) t,
+                 unnest(array['INSERT','UPDATE','DELETE','TRUNCATE']) p where has_table_privilege(r, t, p));""").split("|")
+            print(f"NOTE before {name}: {policies}/{len(fix['policies'])} write policies present, {privs}/{len(fix['tables']) * 8} "
+                  "anon/authenticated write grants (Supabase default grants re-applied for the pre-fix measurement)")
+            query(f"grant insert, update, delete, truncate on {tables} to anon, authenticated;")
+            assert_holes_state(fix, open_=True)
+            before[fix["name"]] = open_holes(fix)
+            print(f"PASS before {name}: {len(before[fix['name']])} session writes allowed (expected {fix['reopened']}) — "
+                  + ", ".join(sorted({c.split(' ', 1)[1].split(':')[0].rsplit(' ', 1)[0] for c in before[fix['name']]})))
+            assert len(before[fix["name"]]) == fix["reopened"], before[fix["name"]]
         if name in KNOWN_BROKEN:
             sql_file(MIGRATIONS / name, single=True, expect_error=KNOWN_BROKEN[name])
             print(f"NOTE {name}: not applicable on main as written ({KNOWN_BROKEN[name]}); rolled back, skipped")
@@ -151,24 +216,33 @@ try:
     print(f"PASS applied schema.sql + {len(order) - len(KNOWN_BROKEN)}/{len(order)} migrations in order (last: {order[-1]})")
     report_other_tables()
 
-    sql_file(ROOT / "tests/security/db-rls-write-holes.sql")
-    print("PASS authenticated (member/admin/owner JWT) and anon: INSERT/UPDATE/DELETE on orgs, subscriptions, audit_events, approval_requests denied; own-org reads intact; service_role writes all four.")
-    assert fix, "RLS fix migration missing"
-    assert_holes_state(open_=False)
-    sql_file(MIGRATIONS / fix)
-    sql_file(ROOT / "tests/security/db-rls-write-holes.sql")
-    print(f"PASS {fix} re-applied (idempotent); checks still pass.")
+    for fix in FIXES:
+        sql_file(ROOT / fix["test"])
+        print(f"PASS {fix['name']}: authenticated (member/admin/owner JWT) and anon: INSERT/UPDATE/DELETE denied on "
+              f"{len(fix['tables'])} tables; reads intact; service_role writes all.")
+    missing = [f["name"] for f in FIXES if not files[f["name"]]]
+    assert not missing, f"RLS fix migration missing: {missing}"
 
-    sql_text(rollback_block((MIGRATIONS / fix).read_text()), single=False)
-    assert_holes_state(open_=True)
-    reopened = sql_file(ROOT / "tests/security/db-rls-write-holes.sql", expect_error="session writes not blocked")
-    count = re.search(r"session writes not blocked \((\d+) case", reopened.stderr).group(1)
-    print(f"PASS documented rollback restores the 4 policies + anon/authenticated write grants ({count} session writes allowed again).")
-    query("delete from public.orgs where id::text like 'a5000000-%';")  # fixtures left by the expected failure
-    sql_file(MIGRATIONS / fix)
-    assert_holes_state(open_=False)
-    sql_file(ROOT / "tests/security/db-rls-write-holes.sql")
-    print("PASS re-applied after rollback; checks pass again. Fixture rows cleaned up by the SQL file.")
+    for fix in FIXES:
+        name = files[fix["name"]]
+        assert_holes_state(fix, open_=False)
+        sql_file(MIGRATIONS / name)
+        sql_file(ROOT / fix["test"])
+        print(f"PASS {name} re-applied (idempotent); checks still pass.")
+        sql_text(rollback_block((MIGRATIONS / name).read_text()), single=False)
+        policies, privs = assert_holes_state(fix, open_=True)
+        reopened = open_holes(fix)
+        assert reopened == before[fix["name"]], "rollback reopened a different set:\n" + "\n".join(
+            sorted(set(reopened) ^ set(before[fix["name"]])))
+        for other in FIXES:
+            if other is not fix:
+                sql_file(ROOT / other["test"])  # rolling back one fix never reopens the other
+        print(f"PASS {fix['name']} rollback restores {policies} policies + {privs} anon/authenticated write grants; "
+              f"{len(reopened)} session writes allowed again = exactly the pre-fix set; other fix still closed.")
+        sql_file(MIGRATIONS / name)
+        assert_holes_state(fix, open_=False)
+        sql_file(ROOT / fix["test"])
+        print(f"PASS {fix['name']} re-applied after rollback; checks pass again. Fixture rows cleaned up by the SQL file.")
 finally:
     if started:
         run([BIN / "pg_ctl", "-D", cluster / "data", "-m", "fast", "-w", "stop"], stdout=subprocess.DEVNULL)
