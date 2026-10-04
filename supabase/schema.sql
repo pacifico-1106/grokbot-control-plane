@@ -648,15 +648,15 @@ drop policy if exists employees_select on employees;
 drop policy if exists employees_write_admin on employees;
 create policy employees_select on employees
   for select using (public.is_org_member(org_id));
-create policy employees_write_admin on employees
-  for all using (public.is_org_admin(org_id));
+-- No authenticated write policy on employees: written only by the service role from
+-- server routes — migration 20261004600000.
 
 drop policy if exists credentials_select on credentials;
 drop policy if exists credentials_write_admin on credentials;
 create policy credentials_select on credentials
   for select using (public.is_org_member(org_id));
-create policy credentials_write_admin on credentials
-  for all using (public.is_org_admin(org_id));
+-- No authenticated write policy on credentials: written only by the service role from
+-- server routes — migration 20261004600000.
 
 drop policy if exists action_counters_select on action_counters;
 create policy action_counters_select on action_counters
@@ -674,9 +674,8 @@ drop policy if exists notification_channels_select on org_notification_channels;
 drop policy if exists notification_channels_write_admin on org_notification_channels;
 create policy notification_channels_select on org_notification_channels
   for select using (public.is_org_member(org_id));
-create policy notification_channels_write_admin on org_notification_channels
-  for all using (public.is_org_admin(org_id))
-  with check (public.is_org_admin(org_id));
+-- No authenticated write policy on org_notification_channels: written only by the service role from
+-- server routes — migration 20261004600000.
 
 drop policy if exists notification_deliveries_select on approval_notification_deliveries;
 create policy notification_deliveries_select on approval_notification_deliveries
@@ -686,25 +685,22 @@ drop policy if exists conversation_adapters_select on org_conversation_adapters;
 drop policy if exists conversation_adapters_write_admin on org_conversation_adapters;
 create policy conversation_adapters_select on org_conversation_adapters
   for select using (public.is_org_member(org_id));
-create policy conversation_adapters_write_admin on org_conversation_adapters
-  for all using (public.is_org_admin(org_id))
-  with check (public.is_org_admin(org_id));
+-- No authenticated write policy on org_conversation_adapters: written only by the service role from
+-- server routes — migration 20261004600000.
 
 drop policy if exists sns_adapters_select on org_sns_adapters;
 drop policy if exists sns_adapters_write_admin on org_sns_adapters;
 create policy sns_adapters_select on org_sns_adapters
   for select using (public.is_org_member(org_id));
-create policy sns_adapters_write_admin on org_sns_adapters
-  for all using (public.is_org_admin(org_id))
-  with check (public.is_org_admin(org_id));
+-- No authenticated write policy on org_sns_adapters: written only by the service role from
+-- server routes — migration 20261004600000.
 
 drop policy if exists employee_slack_identities_select on employee_slack_identities;
 drop policy if exists employee_slack_identities_write_admin on employee_slack_identities;
 create policy employee_slack_identities_select on employee_slack_identities
   for select using (public.is_org_member(org_id));
-create policy employee_slack_identities_write_admin on employee_slack_identities
-  for all using (public.is_org_admin(org_id))
-  with check (public.is_org_admin(org_id));
+-- No authenticated write policy on employee_slack_identities: written only by the service role from
+-- server routes — migration 20261004600000.
 
 drop policy if exists audit_select on audit_events;
 drop policy if exists audit_insert_member on audit_events;
@@ -735,48 +731,49 @@ drop policy if exists bindings_select on employee_bindings;
 drop policy if exists bindings_write_admin on employee_bindings;
 create policy bindings_select on employee_bindings
   for select using (public.is_org_member(org_id));
-create policy bindings_write_admin on employee_bindings
-  for all using (public.is_org_admin(org_id));
+-- No authenticated write policy on employee_bindings: written only by the service role from
+-- server routes — migration 20261004600000.
 
 drop policy if exists org_admin_agents_select on org_admin_agents;
 drop policy if exists org_admin_agents_write_admin on org_admin_agents;
 create policy org_admin_agents_select on org_admin_agents
   for select using (public.is_org_member(org_id));
-create policy org_admin_agents_write_admin on org_admin_agents
-  for all using (public.is_org_admin(org_id))
-  with check (public.is_org_admin(org_id));
+-- No authenticated write policy on org_admin_agents: written only by the service role from
+-- server routes — migration 20261004600000.
 
 drop policy if exists org_parties_select on org_parties;
 drop policy if exists org_parties_write_admin on org_parties;
 create policy org_parties_select on org_parties
   for select using (public.is_org_member(org_id));
-create policy org_parties_write_admin on org_parties
-  for all using (public.is_org_admin(org_id))
-  with check (public.is_org_admin(org_id));
+-- No authenticated write policy on org_parties: written only by the service role from
+-- server routes — migration 20261004600000.
 
 drop policy if exists org_channels_select on org_channels;
 drop policy if exists org_channels_write_admin on org_channels;
 create policy org_channels_select on org_channels
   for select using (public.is_org_member(org_id));
-create policy org_channels_write_admin on org_channels
-  for all using (public.is_org_admin(org_id))
-  with check (public.is_org_admin(org_id));
+-- No authenticated write policy on org_channels: written only by the service role from
+-- server routes — migration 20261004600000.
 
 drop policy if exists information_assets_select on information_assets;
 drop policy if exists information_assets_write_admin on information_assets;
 create policy information_assets_select on information_assets
   for select using (public.is_org_member(org_id));
-create policy information_assets_write_admin on information_assets
-  for all using (public.is_org_admin(org_id))
-  with check (public.is_org_admin(org_id));
+-- No authenticated write policy on information_assets: written only by the service role from
+-- server routes — migration 20261004600000.
 
 drop policy if exists org_projects_select on org_projects;
 drop policy if exists org_projects_write_admin on org_projects;
 create policy org_projects_select on org_projects
   for select using (public.is_org_member(org_id));
-create policy org_projects_write_admin on org_projects
-  for all using (public.is_org_admin(org_id))
-  with check (public.is_org_admin(org_id));
+-- No authenticated write policy on org_projects: written only by the service role from
+-- server routes — migration 20261004600000.
+
+-- Tenant config / credential tables: tenant session JWTs (anon key + PostgREST)
+-- never write these; the service role keeps its grants (migration 20261004600000).
+-- org_external_contract_payment_methods / audit_external_contract_card_events
+-- are created by migrations only (20260923) and revoked there by 20261004600000.
+revoke insert, update, delete, truncate on public.credentials, public.org_admin_agents, public.employees, public.employee_bindings, public.org_parties, public.org_channels, public.information_assets, public.org_notification_channels, public.org_conversation_adapters, public.org_sns_adapters, public.employee_slack_identities, public.org_projects from anon, authenticated;
 
 create or replace function public.increment_action_counter(
   p_org_id uuid,
