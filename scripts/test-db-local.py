@@ -113,6 +113,11 @@ try:
         votes = list(pool.map(query, commands))
     assert votes == ["true", "true"], votes
     assert query("select current_stage_index from approval_workflow_instances where approval_id='40000000-0000-4000-8000-000000000014';") == "1"
+    member_guard = ROOT / "supabase/migrations/20261004200000_org_members_capability_guard.sql"
+    sql(member_guard)
+    sql(member_guard)  # re-applicable
+    sql(ROOT / "tests/security/db-member-guard.sql")
+    print("PASS: org_members has no authenticated write path; last active owner cannot be demoted/disabled/deleted; org cascade still works.")
     print(f"PASS: F8 parent state={args.f8_parent_state}; 3 explicit UNIQUE constraints; existing constraint/index OIDs preserved across apply/reapply.")
     print("PASS: #80 ACL/authority/metadata regressions; 12 claims and 12 secret readers each have 1 winner. F8 W1, multi-stage/finalGo, rejection, current voter/binding, self-approval, same-org FKs, direct access denial, atomic rollback and recovery pass. 12 duplicate votes count once; 2 concurrent voters advance once. All migrations reapplied.")
 
