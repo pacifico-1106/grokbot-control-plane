@@ -632,8 +632,9 @@ drop policy if exists orgs_select_member on orgs;
 drop policy if exists orgs_update_admin on orgs;
 create policy orgs_select_member on orgs
   for select using (public.is_org_member(id));
-create policy orgs_update_admin on orgs
-  for update using (public.is_org_admin(id));
+-- No authenticated write policy on orgs: name / plan / billing / org policies
+-- are written only by the service role from server routes (Stripe webhook,
+-- super-admin, approval-gated admin fulfilment) — migration 20261004500000.
 
 drop policy if exists org_members_select on org_members;
 drop policy if exists org_members_write_admin on org_members;
@@ -665,8 +666,9 @@ drop policy if exists approvals_select on approval_requests;
 drop policy if exists approvals_write_member on approval_requests;
 create policy approvals_select on approval_requests
   for select using (public.is_org_member(org_id));
-create policy approvals_write_member on approval_requests
-  for all using (public.is_org_member(org_id));
+-- No authenticated write policy on approval_requests: tickets are created /
+-- resolved only by the service role behind requireCapability("approve_actions")
+-- or verified channel webhooks — migration 20261004500000.
 
 drop policy if exists notification_channels_select on org_notification_channels;
 drop policy if exists notification_channels_write_admin on org_notification_channels;
@@ -708,15 +710,19 @@ drop policy if exists audit_select on audit_events;
 drop policy if exists audit_insert_member on audit_events;
 create policy audit_select on audit_events
   for select using (public.is_org_member(org_id));
-create policy audit_insert_member on audit_events
-  for insert with check (public.is_org_member(org_id));
+-- No authenticated insert policy on audit_events: rows are appended only by
+-- the service role (appendAuditEvent) — migration 20261004500000.
 
 drop policy if exists subscriptions_select on subscriptions;
 drop policy if exists subscriptions_write_admin on subscriptions;
 create policy subscriptions_select on subscriptions
   for select using (public.is_org_member(org_id));
-create policy subscriptions_write_admin on subscriptions
-  for all using (public.is_org_admin(org_id));
+-- No authenticated write policy on subscriptions: written only by the Stripe
+-- webhook / trial cron / super-admin via the service role — migration 20261004500000.
+
+-- Tenant session JWTs (anon key + PostgREST) never write these tables; the
+-- service role keeps its grants (migration 20261004500000).
+revoke insert, update, delete, truncate on public.orgs, public.subscriptions, public.audit_events, public.approval_requests from anon, authenticated;
 
 drop policy if exists gateway_select on gateway_links;
 drop policy if exists gateway_write_admin on gateway_links;

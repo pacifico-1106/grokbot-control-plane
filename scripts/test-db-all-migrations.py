@@ -159,10 +159,12 @@ try:
     sql_file(ROOT / "tests/security/db-rls-write-holes.sql")
     print(f"PASS {fix} re-applied (idempotent); checks still pass.")
 
-    sql_text(rollback_block((MIGRATIONS / fix).read_text()))
+    sql_text(rollback_block((MIGRATIONS / fix).read_text()), single=False)
     assert_holes_state(open_=True)
-    sql_file(ROOT / "tests/security/db-rls-write-holes.sql", expect_error="session writes not blocked")
-    print("PASS documented rollback restores the 4 policies + anon/authenticated write grants (holes reproducible again).")
+    reopened = sql_file(ROOT / "tests/security/db-rls-write-holes.sql", expect_error="session writes not blocked")
+    count = re.search(r"session writes not blocked \((\d+) case", reopened.stderr).group(1)
+    print(f"PASS documented rollback restores the 4 policies + anon/authenticated write grants ({count} session writes allowed again).")
+    query("delete from public.orgs where id::text like 'a5000000-%';")  # fixtures left by the expected failure
     sql_file(MIGRATIONS / fix)
     assert_holes_state(open_=False)
     sql_file(ROOT / "tests/security/db-rls-write-holes.sql")

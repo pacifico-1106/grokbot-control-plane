@@ -117,6 +117,11 @@ try:
     sql(member_guard)
     sql(member_guard)  # re-applicable
     sql(ROOT / "tests/security/db-member-guard.sql")
+    tenant_writes = ROOT / "supabase/migrations/20261004500000_tenant_tables_server_only_writes.sql"
+    sql(tenant_writes)
+    sql(tenant_writes)  # re-applicable
+    sql(ROOT / "tests/security/db-rls-write-holes.sql")
+    print("PASS: orgs / subscriptions / audit_events / approval_requests have no anon/authenticated write path (member/admin/owner JWT denied); service_role writes all four. Full-history check: scripts/test-db-all-migrations.py.")
     print("PASS: org_members has no authenticated write path; last active owner cannot be demoted/disabled/deleted; org cascade still works.")
     print(f"PASS: F8 parent state={args.f8_parent_state}; 3 explicit UNIQUE constraints; existing constraint/index OIDs preserved across apply/reapply.")
     print("PASS: #80 ACL/authority/metadata regressions; 12 claims and 12 secret readers each have 1 winner. F8 W1, multi-stage/finalGo, rejection, current voter/binding, self-approval, same-org FKs, direct access denial, atomic rollback and recovery pass. 12 duplicate votes count once; 2 concurrent voters advance once. All migrations reapplied.")

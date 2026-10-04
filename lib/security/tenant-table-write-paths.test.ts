@@ -257,7 +257,14 @@ describe("migration 20261004500000: drop direct PostgREST write policies", () =>
   });
 
   test("each write policy's last drop comes after its last create (migrations in order)", () => {
-    const all = names.map((n) => readFileSync(join(dir, n), "utf8")).join("\n").toLowerCase();
+    // executable SQL only: the rollback block in the migration is commented out
+    const all = names
+      .map((n) => readFileSync(join(dir, n), "utf8"))
+      .join("\n")
+      .split("\n")
+      .filter((l) => !/^\s*--/.test(l))
+      .join("\n")
+      .toLowerCase();
     for (const [table, policy] of POLICIES) {
       const lastCreate = all.lastIndexOf(`create policy ${policy}`);
       const lastDrop = all.lastIndexOf(`drop policy if exists ${policy} on public.${table}`);
