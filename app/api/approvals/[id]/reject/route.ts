@@ -60,6 +60,7 @@ export async function POST(
         decision: "rejected",
         actorEmail: gate.actor.email,
         employee,
+        surface: "web",
       })
     : { notified: [] };
 

@@ -62,6 +62,7 @@ export async function POST(
     decision: "revision_requested",
     actorEmail: gate.actor.email,
     employee,
+    surface: "web",
   });
 
   return NextResponse.json({

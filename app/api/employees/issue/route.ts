@@ -21,6 +21,8 @@ import { defaultProjectAccess, normalizeProjectAccess } from "@/lib/employees/pr
 import { normalizePostingAs } from "@/lib/employees/posting-as";
 import { normalizeApproverUserIds, parseApprovalChannelId } from "@/lib/employees/approval-inbox";
 import { requireCredentialAdmin } from "@/lib/auth/require-credential-admin";
+import { isMcpEndpointHandoffEnabled } from "@/lib/feature-flags";
+import { buildMcpHandoff } from "@/lib/mcp/endpoint-handoff-block";
 import type { ActionLimits, AllowedAccount, ApprovalPolicy, EmployeeScope, SpendLimits } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -223,6 +225,10 @@ export async function POST(req: Request) {
       notice:
         "この秘密値は一度だけ表示されます。Grok Bot 側の連携設定に貼り付け、安全に保管してください。employeeId は生涯不変です。Instructions / Routine の承認待ちルールも必ず貼ってください。",
       actorId: gate.actor.id,
+      // MCP endpoint handoff: secret-free; the badge stays only in credential.oneTimeSecret.
+      ...(isMcpEndpointHandoffEnabled()
+        ? { mcpHandoff: buildMcpHandoff({ employeeId: result.employee.id }) }
+        : {}),
     });
   } catch (e) {
     const raw = e instanceof Error ? e.message : "issue_failed";

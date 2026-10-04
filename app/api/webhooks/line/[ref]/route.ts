@@ -92,7 +92,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ ref: string }>
         if (updated) {
           await fulfillIfApproved(updated, decision);
           const employee = await getEmployee(updated.employeeId, channel.orgId);
-          await runApprovalResolveSideEffects({ approval: updated, decision, actorEmail: actor, employee });
+          await runApprovalResolveSideEffects({ approval: updated, decision, actorEmail: actor, employee, surface: "line" });
         }
         if (event.replyToken) await sendLineText(channel, updated ? (decision === "approved" ? "承認しました。" : "却下しました。") : result.ok ? "投票を記録しました（合議は継続中です）。" : "投票を記録できませんでした。", event.replyToken);
       } catch (error) {
@@ -133,7 +133,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ ref: string }>
         });
         if (updated) {
           const employee = await getEmployee(updated.employeeId, channel.orgId);
-          await runApprovalResolveSideEffects({ approval: updated, decision: "revision_requested", actorEmail: actor, employee });
+          await runApprovalResolveSideEffects({ approval: updated, decision: "revision_requested", actorEmail: actor, employee, surface: "line" });
         }
         if (event.replyToken) await sendLineText(channel, updated ? "修正依頼を登録しました。" : "対象は処理済みです。", event.replyToken);
       } catch (error) {

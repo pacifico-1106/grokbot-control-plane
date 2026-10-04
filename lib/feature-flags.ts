@@ -467,3 +467,23 @@ export function isSignupDomainCheckEnabled(): boolean {
 export function isApprovalAttachmentReconcileEnabled(): boolean {
   return parseFlag(process.env.APPROVAL_ATTACHMENT_RECONCILE_ENABLED);
 }
+
+/**
+ * MCP endpoint handoff (木村 request / 八坂 GO, 2026-10-04).
+ *
+ * When ON:
+ * - employees.issue / link results (Admin MCP + REST) and every agent wake
+ *   (Slack user-token channel / user-token IM / bot mention / internal IM and
+ *   approval.resolved callback + machine email from Slack / LINE / Telegram / Web /
+ *   proxy) carry a secret-free `mcpHandoff` block (endpoint from resolveAppOrigin,
+ *   connection steps, staffpass_whoami connectivity check).
+ * - Authenticated MCP tools/list|call record a throttled `mcp.client_seen` audit.
+ * - The stuck-watch cron flags handoff wakes with no later credential activity and
+ *   sends one next-step notice per employee per 24h to a human channel (no re-wake).
+ *
+ * When OFF (default):
+ * - No payload, audit, notification or response changes (exact current behavior).
+ */
+export function isMcpEndpointHandoffEnabled(): boolean {
+  return parseFlag(process.env.MCP_ENDPOINT_HANDOFF_ENABLED);
+}

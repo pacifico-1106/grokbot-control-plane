@@ -272,6 +272,7 @@ async function handleCallback(update: TelegramUpdate): Promise<void> {
       decision,
       actorEmail: actor,
       employee,
+      surface: "telegram",
     });
     await answer(decision === "approved" ? "承認しました" : "却下しました");
   } catch (error) {
@@ -338,6 +339,7 @@ async function handleReply(update: TelegramUpdate): Promise<void> {
       decision: "revision_requested",
       actorEmail: actor,
       employee,
+      surface: "telegram",
     });
   } catch (error) {
     await auditTelegramError(approval, error, actor);

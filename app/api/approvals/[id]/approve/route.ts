@@ -67,6 +67,7 @@ export async function POST(
         decision: result.workflowApproved ? "approved" : "rejected",
         actorEmail: gate.actor.email,
         employee,
+        surface: "web",
       })
     : { notified: [] };
 

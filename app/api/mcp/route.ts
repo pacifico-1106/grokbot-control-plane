@@ -10,6 +10,7 @@ import {
 } from "@/lib/mcp/tools";
 import { STAFFPASS_MCP_URL } from "@/lib/mcp/public";
 import { isConfigChangeRequestEnabled } from "@/lib/feature-flags";
+import { recordMcpClientSeen } from "@/lib/mcp/endpoint-handoff";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -158,6 +159,14 @@ export async function POST(req: Request) {
         auth.httpStatus
       );
     }
+
+    // MCP endpoint handoff: "the bot reached Staffpass MCP with its badge" signal
+    // (flag-gated, throttled, never stores the secret). Best-effort.
+    await recordMcpClientSeen(
+      auth.credential,
+      method,
+      method === "tools/call" ? String(params.name || "").trim() : undefined
+    ).catch(() => undefined);
 
     if (method === "tools/list") {
       return jsonRpcResult(id, {

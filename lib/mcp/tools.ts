@@ -29,7 +29,9 @@ import { isAdminClassApproval } from "@/lib/admin-mcp/audit-class";
 import { parseAdminFulfillment } from "@/lib/admin-mcp/fulfill-admin";
 import { parseFulfillment } from "@/lib/approvals/fulfill";
 import { handleDecisionRequest, type DecisionRequestInput } from "@/lib/decision-workflow";
-import { isConfigChangeRequestEnabled } from "@/lib/feature-flags";
+import { isConfigChangeRequestEnabled, isMcpEndpointHandoffEnabled } from "@/lib/feature-flags";
+import { resolveAppOrigin } from "@/lib/app-url";
+import { resolveMcpEndpointUrl } from "@/lib/mcp/endpoint-handoff-block";
 import {
   CONFIG_CHANGE_KINDS,
   CONFIG_CHANGE_MCP_TOOL,
@@ -781,7 +783,10 @@ export async function callStaffpassMcpTool(
           : null,
         mcpEndpoint: "/api/mcp",
         gatewayEndpoint: "/api/gateway/invoke",
-        publicOrigin: "https://staffpass.sealith.com",
+        // MCP endpoint handoff ON: origin from app config (no hardcode) + absolute URL.
+        ...(isMcpEndpointHandoffEnabled()
+          ? { publicOrigin: resolveAppOrigin(), mcpEndpointUrl: resolveMcpEndpointUrl() }
+          : { publicOrigin: "https://staffpass.sealith.com" }),
       });
     }
     case "staffpass_stuck_list": {
