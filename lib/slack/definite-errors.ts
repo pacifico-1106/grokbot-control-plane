@@ -16,6 +16,7 @@
  * uncertain and the scheduled reconcile re-checks it on the next cron.
  */
 import { isApprovalAttachmentReconcileEnabled } from "@/lib/feature-flags";
+import { isSlackAuthorizeLinkEnabled } from "@/lib/slack/authorize-link-flags";
 
 export type SlackFixKind =
   | "slack_channel"
@@ -78,28 +79,42 @@ export function isSlackTokenType(value: unknown): value is SlackTokenType {
 }
 
 /**
- * Credential errors (the table's setBotToken rows) are split by the token that
- * failed while APPROVAL_ATTACHMENT_RECONCILE_ENABLED is ON:
+ * Token-dependent guidance while APPROVAL_ATTACHMENT_RECONCILE_ENABLED is ON
+ * (木村 #255 second + third round). Credential errors (the table's setBotToken rows):
  *   bot     → setup.slackAdapter.setBotToken (the table entry, unchanged)
- *   user    → setup.slackAuthorizeLink.issue (the employee re-authorizes; the
- *             link tool itself needs SLACK_AUTHORIZE_LINK_ENABLED)
- *   unknown → setup.slackStatus: diagnose first. Safe fallback — read-only, no
- *             approval, and it reports which token each employee posts with, so
- *             a valid Bot token is never replaced on a guess.
+ *   user    → setup.slackAuthorizeLink.issue (the employee re-authorizes) — only
+ *             while SLACK_AUTHORIZE_LINK_ENABLED is ON; OFF → setup.slackStatus
+ *             (never point at a tool that would answer authorize_link_flag_off)
+ *   unknown → setup.slackStatus: diagnose first (read-only; a valid Bot token is
+ *             never replaced on a guess)
+ * not_allowed_token_type → setup.slackStatus for every token (the wrong token
+ *   KIND is in use: diagnose which one before replacing anything; third round c).
+ * missing_scope → user token: setup.slackAuthorizeLink.issue (re-authorizing adds
+ *   the scopes; link flag OFF → setup.slackStatus); bot / unknown: setup.slackStatus.
+ * fix.tokenType is set for credential errors and missing_scope.
  * Flag OFF → the table entry for every token (da97a12 behavior).
  */
-const SLACK_USER_TOKEN_FIX: Readonly<Record<string, { kind: SlackFixKind; nextTool: SlackSetupTool }>> = {
-  invalid_auth: { kind: "slack_user_token", nextTool: "setup.slackAuthorizeLink.issue" },
-  not_authed: { kind: "slack_user_token", nextTool: "setup.slackAuthorizeLink.issue" },
-  account_inactive: { kind: "slack_user_token", nextTool: "setup.slackAuthorizeLink.issue" },
-  token_revoked: { kind: "slack_user_token", nextTool: "setup.slackAuthorizeLink.issue" },
-  token_expired: { kind: "slack_user_token", nextTool: "setup.slackAuthorizeLink.issue" },
-  not_allowed_token_type: { kind: "slack_token_type", nextTool: "setup.slackAuthorizeLink.issue" },
-};
 const UNKNOWN_TOKEN_FIX = { kind: "slack_token", nextTool: "setup.slackStatus" } as const;
 
 function isCredentialError(error: SlackDefiniteError): boolean {
   return SLACK_DEFINITE_ERROR_FIXES[error].nextTool === "setup.slackAdapter.setBotToken";
+}
+
+/** The authorize link when it can be used, else the read-only diagnosis. */
+function userReauthorizeTool(): SlackSetupTool {
+  return isSlackAuthorizeLinkEnabled() ? "setup.slackAuthorizeLink.issue" : "setup.slackStatus";
+}
+
+function tokenDependentFix(
+  error: SlackDefiniteError,
+  token: SlackTokenType | "unknown"
+): { kind: SlackFixKind; nextTool: SlackSetupTool } {
+  const entry = SLACK_DEFINITE_ERROR_FIXES[error];
+  if (error === "not_allowed_token_type") return { kind: entry.kind, nextTool: "setup.slackStatus" };
+  if (error === "missing_scope") return { kind: entry.kind, nextTool: token === "user" ? userReauthorizeTool() : entry.nextTool };
+  if (token === "user") return { kind: "slack_user_token", nextTool: userReauthorizeTool() };
+  if (token === "unknown") return { ...UNKNOWN_TOKEN_FIX };
+  return entry;
 }
 
 /**
@@ -107,7 +122,7 @@ function isCredentialError(error: SlackDefiniteError): boolean {
  * with nextTool (admin MCP), then re-invoke with the approvalId. Built only
  * from the table above and sanitized scope names — never a token / secret.
  * fix.tokenType ("user" | "bot" | "unknown") is present for credential errors
- * while the reconcile flag is ON.
+ * and missing_scope while the reconcile flag is ON.
  */
 export type SlackReinvokeReason = {
   code: SlackDefiniteError;
@@ -125,10 +140,9 @@ export function slackReinvokeReason(
   if (!isDefinitePreShareSlackError(error)) return null;
   let { kind, nextTool }: { kind: SlackFixKind; nextTool: SlackSetupTool } = SLACK_DEFINITE_ERROR_FIXES[error];
   let token: SlackReinvokeReason["fix"]["tokenType"];
-  if (isCredentialError(error) && isApprovalAttachmentReconcileEnabled()) {
+  if ((isCredentialError(error) || error === "missing_scope") && isApprovalAttachmentReconcileEnabled()) {
     token = isSlackTokenType(tokenType) ? tokenType : "unknown";
-    if (token === "user") ({ kind, nextTool } = SLACK_USER_TOKEN_FIX[error]);
-    else if (token === "unknown") ({ kind, nextTool } = UNKNOWN_TOKEN_FIX);
+    ({ kind, nextTool } = tokenDependentFix(error, token));
   }
   const scopes = error === "missing_scope" ? sanitizeSlackScopes(needed) : undefined;
   return {

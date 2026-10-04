@@ -378,7 +378,8 @@ describe("3. the re-run response carries the same reinvokeReason (one builder)",
     const { body, approvalId, statusToken } = await approved();
     getUrl = { json: { ok: false, error: "missing_scope", needed: "files:write", provided: "chat:write,xoxb-leak-1" } };
     const rerun = fileUpload(await invokeComm({ ...body, approvalId }));
-    const expected = reason("missing_scope", { kind: "slack_scope", needed: ["files:write"] }, "setup.slackStatus");
+    // third round: missing_scope carries the failing token type (bot here)
+    const expected = reason("missing_scope", { kind: "slack_scope", needed: ["files:write"], tokenType: "bot" }, "setup.slackStatus");
     expect(rerun?.reinvokeReason).toEqual(expected);
     const p = await poll(approvalId, statusToken);
     expect(p.web.reinvokeReason).toEqual(expected);
@@ -733,7 +734,8 @@ describe("5. third round: guidance (a–c), resets (d, e, h), poll = re-run (f),
 
   test("(d) flag OFF: a dashboard save records no reset signal", async () => {
     delete process.env.APPROVAL_ATTACHMENT_RECONCILE_ENABLED;
-    const since = new Date(Date.now() - 1).toISOString();
+    await tick(); // the previous test's (flag ON) save must be older than `since`
+    const since = new Date().toISOString();
     await tick();
     const res = await adapterPUT(new Request("http://localhost/api/settings/conversation-adapters", {
       method: "PUT", headers: { "content-type": "application/json" },
@@ -855,6 +857,7 @@ describe("5. third round: guidance (a–c), resets (d, e, h), poll = re-run (f),
     expect((await failTimes(1, a))[0]).toMatchObject({ code: "approval_attachment_retry_capped" });
     expect(completes).toBe(3);
     expect(await settingsChangedSince(DEMO_ORG.id, since)).toBe(false);
+    await tick();
     await recordSetupToolSucceeded({ orgId: DEMO_ORG.id, tool: "setup.slackAdapter.setBotToken", source: "admin_fulfillment" });
     expect(await settingsChangedSince(DEMO_ORG.id, since)).toBe(true);
     expect((await failTimes(1, a))[0]).toMatchObject({ ok: true, fileId: "F_CAP_UP" });

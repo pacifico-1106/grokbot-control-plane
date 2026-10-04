@@ -35,7 +35,8 @@ afterEach(() => { delete process.env.APPROVAL_ATTACHMENT_RECONCILE_ENABLED; });
 
 describe("setup-type tool succeeded → retry-cap reset marker", () => {
   test("read-only setup.slackStatus ok → no reset (木村 third round e): no setup.tool_succeeded row, no reset signal", async () => {
-    const since = new Date(Date.now() - 1).toISOString();
+    await new Promise((r) => setTimeout(r, 5)); // any earlier signal must be older than `since`
+    const since = new Date().toISOString();
     await new Promise((r) => setTimeout(r, 5));
     const before = rows("setup.slackStatus").length;
     const res = await callAdminMcpTool("setup.slackStatus", {}, adminCred());

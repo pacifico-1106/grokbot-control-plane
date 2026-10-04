@@ -34,7 +34,8 @@ import {
   sanitizeSlackScopes,
   type SlackTokenType,
 } from "@/lib/slack/definite-errors";
-import { hasSetupToolSucceededSince } from "@/lib/approvals/attachment-retry-cap";
+import { settingsChangedSince } from "@/lib/approvals/attachment-retry-cap";
+import { isApprovalAttachmentReconcileEnabled } from "@/lib/feature-flags";
 
 export type AttachmentUploadState = "running" | "succeeded" | "failed" | "uncertain";
 export type AttachmentUploadRecord = {
@@ -223,9 +224,10 @@ function fromRpc(data: unknown): AttachmentUploadClaim | null {
 /**
  * opts.retryCap (木村 #255 second round, reconcile flag ON): refuse ("capped")
  * while the failed record's definite error has repeated retryCap times in a
- * row and no setup-type tool succeeded in the org after the last of them; a
- * success since then clears the streak and the claim proceeds. Production:
- * RPC claim_approval_attachment_upload_capped (same row lock, then #253's claim).
+ * row and the org's settings-change signal (public.org_settings_changes,
+ * service_role only; 木村 third round h) is not newer than the last of them; a
+ * newer signal clears the streak and the claim proceeds. Production: RPC
+ * claim_approval_attachment_upload_capped (same row lock, then #253's claim).
  */
 export async function claimAttachmentUpload(
   approval: ApprovalRequest,
@@ -261,7 +263,7 @@ export async function claimAttachmentUpload(
     const streak = demoStreaks.has(key) ? demoStreaks.get(key)! : readAttachmentUploadStreak(current.metadata);
     const rec = demoClaims.get(key) ?? readAttachmentUpload(current.metadata);
     if (rec?.state === "failed" && streak && streak.code === rec.slackError && streak.count >= cap) {
-      if (!(await hasSetupToolSucceededSince(approval.orgId, streak.lastAt))) {
+      if (!(await settingsChangedSince(approval.orgId, streak.lastAt))) {
         return current.status === "approved" ? { kind: "capped", code: streak.code, count: streak.count } : { kind: "denied" };
       }
       resetStreak = true;
@@ -373,7 +375,11 @@ export function liveFileUpload(
   if (upload?.state === "running") return { status: "in_progress", ...display(upload) };
   if (upload?.state === "uncertain") return { status: "uncertain", ...display(upload), ...(upload.code ? { code: upload.code } : {}) };
   if (upload?.state === "failed") {
-    return stored ?? {
+    // 木村 #255 third round f: a definite Slack failure is more specific than the
+    // generic not_sent marker, so (reconcile flag ON) the poll shows the same
+    // record the re-run reads → the same reinvokeReason from the one builder.
+    const definite = Boolean(upload.slackError) && isApprovalAttachmentReconcileEnabled();
+    return (definite ? undefined : stored) ?? {
       status: "failed", ...display(upload), ...(upload.code ? { code: upload.code } : {}),
       ...(upload.slackError ? { slackError: upload.slackError } : {}),
       ...(upload.slackNeeded ? { slackNeeded: upload.slackNeeded } : {}),

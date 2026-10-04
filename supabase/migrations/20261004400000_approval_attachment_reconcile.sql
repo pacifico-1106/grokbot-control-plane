@@ -1,11 +1,22 @@
 -- Additive expansion (2026-10-04, #253 follow-up: scheduled attachment reconcile).
 -- Apply after 20261004300000_approval_attachment_upload_claim.sql and before
--- enabling APPROVAL_ATTACHMENT_RECONCILE_ENABLED. No table, column, grant on
--- tables, RLS policy or business constraint is changed: the five functions
--- only rewrite approval_requests.metadata keys under the row lock (the capped
--- claim also reads audit_events). Not applied in production yet, so the
--- 木村 #255 second-round additions (slackTokenType, retry streak, capped claim,
--- re-check stop) extend this file instead of a later migration.
+-- enabling APPROVAL_ATTACHMENT_RECONCILE_ENABLED. No existing table, column,
+-- grant on tables, RLS policy or business constraint is changed: five
+-- functions rewrite approval_requests.metadata keys under the row lock, and one
+-- NEW service_role-only table holds the retry-cap reset signal. Not applied in
+-- production yet, so the 木村 #255 second / third-round additions
+-- (slackTokenType, retry streak, capped claim, re-check stop, reset signal)
+-- extend this file instead of a later migration.
+--
+-- org_settings_changes (new, 木村 third round h): one row per org = the time of
+--   the last settings change (a settings-changing admin tool succeeded, a Slack
+--   authorize link was completed, or the Slack adapter was saved from the
+--   dashboard). RLS enabled with NO policy and anon / authenticated revoked, so
+--   only service_role (the server) can read or write it — an org member cannot
+--   forge a reset (the audit log is no longer read for this).
+-- record_org_settings_change (new): upsert of that row (changed_at = now(),
+--   never moves back). tool must look like a tool name, source is one of the
+--   four server-side sources.
 --
 -- reconcile_approval_attachment_upload: change metadata.attachmentUpload ONLY
 --   when it is still exactly what the caller read (state = p_expected_state,
@@ -33,9 +44,9 @@
 --   attachmentUpload, so a new claim (which rewrites attachmentUpload) keeps it.
 -- claim_approval_attachment_upload_capped (new, flag ON callers only): under the
 --   row lock — not approved → denied; the failed record's slackError has a streak
---   with count ≥ p_cap (1..10) → if an audit row action 'setup.tool_succeeded'
---   of the same org was created after the streak's lastAt, remove the streak
---   and continue, else → {state:'capped', code, count} (no claim, no upload).
+--   with count ≥ p_cap (1..10) → if the org's org_settings_changes.changed_at is
+--   after the streak's lastAt, remove the streak and continue, else →
+--   {state:'capped', code, count} (no claim, no upload).
 --   Then #253's claim_approval_attachment_upload (same transaction, same lock).
 -- stop_approval_attachment_recheck (new): a notified uncertain record whose
 --   schedule is still running → recheckStoppedAt + recheckStopReason
@@ -45,6 +56,31 @@
 --   (fulfillment.ok = true), there is no fulfillment.fileUpload, no
 --   attachmentUpload and no #252 attachmentFulfillment success. → true once.
 begin;
+
+create table if not exists public.org_settings_changes (
+  org_id uuid primary key references public.orgs(id) on delete cascade,
+  changed_at timestamptz not null default now(),
+  tool text not null check (tool ~ '^[a-z][A-Za-z0-9._]{0,79}$'),
+  source text not null check (source in ('admin_fulfillment','admin_tool','authorize_link_completed','dashboard_settings'))
+);
+alter table public.org_settings_changes enable row level security;
+revoke all on public.org_settings_changes from public, anon, authenticated;
+grant select, insert, update on public.org_settings_changes to service_role;
+
+create or replace function public.record_org_settings_change(p_org uuid, p_tool text, p_source text)
+returns boolean language plpgsql security invoker set search_path = pg_catalog, public as $$
+begin
+  if p_org is null then raise exception 'invalid_settings_change_org'; end if;
+  if p_tool is null or p_tool !~ '^[a-z][A-Za-z0-9._]{0,79}$' then raise exception 'invalid_settings_change_tool'; end if;
+  if p_source is null or p_source not in ('admin_fulfillment','admin_tool','authorize_link_completed','dashboard_settings') then
+    raise exception 'invalid_settings_change_source';
+  end if;
+  insert into public.org_settings_changes as c (org_id, changed_at, tool, source)
+    values (p_org, now(), p_tool, p_source)
+    on conflict (org_id) do update
+      set changed_at = greatest(c.changed_at, excluded.changed_at), tool = excluded.tool, source = excluded.source;
+  return true;
+end $$;
 
 create or replace function public.reconcile_approval_attachment_upload(
   p_id uuid, p_org uuid, p_expected_state text, p_expected_claim text, p_state text, p_result jsonb)
@@ -164,9 +200,8 @@ begin
   s := a.metadata->'attachmentUploadStreak';
   if u->>'state' = 'failed' and jsonb_typeof(s) = 'object' and s->>'code' = u->>'slackError'
      and (s->>'count') ~ '^[0-9]{1,4}$' and (s->>'count')::int >= p_cap then
-    if exists (select 1 from public.audit_events e
-               where e.org_id = p_org and e.action = 'setup.tool_succeeded'
-                 and e.created_at > (s->>'lastAt')::timestamptz) then
+    if exists (select 1 from public.org_settings_changes c
+               where c.org_id = p_org and c.changed_at > (s->>'lastAt')::timestamptz) then
       -- settings changed since the last failure: count from 0 again
       update public.approval_requests set metadata = metadata - 'attachmentUploadStreak'
         where id=p_id and org_id=p_org;
@@ -226,9 +261,11 @@ revoke all on function public.mark_approval_attachment_not_sent(uuid,uuid,jsonb)
 revoke all on function public.finish_approval_attachment_upload(uuid,uuid,uuid,text,jsonb) from public,anon,authenticated;
 revoke all on function public.claim_approval_attachment_upload_capped(uuid,uuid,uuid,text,int) from public,anon,authenticated;
 revoke all on function public.stop_approval_attachment_recheck(uuid,uuid,text) from public,anon,authenticated;
+revoke all on function public.record_org_settings_change(uuid,text,text) from public,anon,authenticated;
 grant execute on function public.reconcile_approval_attachment_upload(uuid,uuid,text,text,text,jsonb) to service_role;
 grant execute on function public.mark_approval_attachment_not_sent(uuid,uuid,jsonb) to service_role;
 grant execute on function public.finish_approval_attachment_upload(uuid,uuid,uuid,text,jsonb) to service_role;
 grant execute on function public.claim_approval_attachment_upload_capped(uuid,uuid,uuid,text,int) to service_role;
 grant execute on function public.stop_approval_attachment_recheck(uuid,uuid,text) to service_role;
+grant execute on function public.record_org_settings_change(uuid,text,text) to service_role;
 commit;

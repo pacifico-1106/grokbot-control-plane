@@ -473,7 +473,8 @@ describe("callback (single use, pinned user / team)", () => {
     process.env.APPROVAL_ATTACHMENT_RECONCILE_ENABLED = "true";
     try {
       const before = resetRows().length;
-      const since = new Date(Date.now() - 1).toISOString();
+      await new Promise((r) => setTimeout(r, 5)); // any earlier signal must be older than `since`
+      const since = new Date().toISOString();
       await new Promise((r) => setTimeout(r, 5));
       const token = await issueViaTicket(empA.id);
       expect(resetRows().length).toBe(before); // the link is only delivered: nothing changed yet

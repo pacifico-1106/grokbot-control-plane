@@ -358,7 +358,7 @@ describe("5. definite failure → reinvoke_with_approvalId + reinvokeReason (sta
     expect(await record(approvalId)).toMatchObject({
       state: "failed", code: "get_upload_url_failed", slackError: "missing_scope", slackNeeded: ["files:write"] });
     const p = await poll(approvalId, statusToken);
-    const reason = { code: "missing_scope", fix: { kind: "slack_scope", needed: ["files:write"] },
+    const reason = { code: "missing_scope", fix: { kind: "slack_scope", needed: ["files:write"], tokenType: "bot" }, // third round: + tokenType
       nextTool: "setup.slackStatus", nextToolEndpoint: "/api/mcp/admin", retryAfterFix: true };
     expect(p.web.pollHint).toBe("reinvoke_with_approvalId");
     expect(p.mcp.pollHint).toBe("reinvoke_with_approvalId");
