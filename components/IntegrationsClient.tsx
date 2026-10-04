@@ -50,10 +50,16 @@ export function IntegrationsClient({
   initialStatus,
   initialMode,
   bindingRows = [],
+  canManage = false,
 }: {
   initialStatus: GatewayLinkStatus;
   initialMode: IntegrationMode;
   bindingRows?: BindingRow[];
+  /**
+   * Server-decided (isOrgAdminSession). POST /api/gateway/link is owner/admin
+   * only, so members get no connect / handshake / disconnect controls at all.
+   */
+  canManage?: boolean;
 }) {
   const [status, setStatus] = useState(initialStatus);
   const [mode, setMode] = useState<IntegrationMode>(initialMode);
@@ -94,6 +100,7 @@ export function IntegrationsClient({
             <label className="flex gap-3 rounded-lg border border-[var(--border)] p-3 cursor-pointer">
               <input
                 type="radio"
+                disabled={!canManage}
                 name="mode"
                 checked={mode === "managed"}
                 onChange={() => setMode("managed")}
@@ -109,6 +116,7 @@ export function IntegrationsClient({
             <label className="flex gap-3 rounded-lg border border-[var(--border)] p-3 cursor-pointer">
               <input
                 type="radio"
+                disabled={!canManage}
                 name="mode"
                 checked={mode === "byo"}
                 onChange={() => setMode("byo")}
@@ -142,32 +150,38 @@ export function IntegrationsClient({
               {STATUS_LABEL[status]}
             </span>
           </div>
-          <div className="mt-5 flex flex-col sm:flex-row flex-wrap gap-2">
-            <button
-              type="button"
-              className="btn btn-primary text-sm w-full sm:w-auto"
-              disabled={busy || status === "linked"}
-              onClick={() => void run("connect")}
-            >
-              Grok Botへ連携
-            </button>
-            <button
-              type="button"
-              className="btn btn-ghost text-sm w-full sm:w-auto"
-              disabled={busy || status !== "pending"}
-              onClick={() => void run("handshake")}
-            >
-              戻る（ゲートウェイ連携を完了）
-            </button>
-            <button
-              type="button"
-              className="btn btn-ghost text-sm w-full sm:w-auto"
-              disabled={busy || status === "disconnected"}
-              onClick={() => void run("disconnect")}
-            >
-              切断
-            </button>
-          </div>
+          {canManage ? (
+            <div className="mt-5 flex flex-col sm:flex-row flex-wrap gap-2">
+              <button
+                type="button"
+                className="btn btn-primary text-sm w-full sm:w-auto"
+                disabled={busy || status === "linked"}
+                onClick={() => void run("connect")}
+              >
+                Grok Botへ連携
+              </button>
+              <button
+                type="button"
+                className="btn btn-ghost text-sm w-full sm:w-auto"
+                disabled={busy || status !== "pending"}
+                onClick={() => void run("handshake")}
+              >
+                戻る（ゲートウェイ連携を完了）
+              </button>
+              <button
+                type="button"
+                className="btn btn-ghost text-sm w-full sm:w-auto"
+                disabled={busy || status === "disconnected"}
+                onClick={() => void run("disconnect")}
+              >
+                切断
+              </button>
+            </div>
+          ) : (
+            <p className="mt-5 text-xs muted leading-relaxed">
+              ゲートウェイとのつなぎ替えは、組織のオーナーまたは管理者が行います（表示のみ）。
+            </p>
+          )}
           {message ? <p className="mt-3 text-xs muted">{message}</p> : null}
           <p className="mt-4 text-xs faint leading-relaxed">
             ここは組織と Grok Bot ゲートウェイのつなぎです。Plugins（リモート MCP）の URL

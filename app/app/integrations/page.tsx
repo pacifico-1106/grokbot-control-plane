@@ -1,7 +1,8 @@
 import { AppShell } from "@/components/AppShell";
 import { IntegrationsClient } from "@/components/IntegrationsClient";
 import { McpSetupContent } from "@/components/mcp/McpSetupContent";
-import { getCurrentOrgId } from "@/lib/auth/session";
+import { isOrgAdminSession } from "@/lib/auth/require-org";
+import { getSessionContext } from "@/lib/auth/session";
 import {
   ensureBindingRow,
   getBinding,
@@ -13,7 +14,10 @@ import {
 export const dynamic = "force-dynamic";
 
 export default async function IntegrationsPage() {
-  const orgId = await getCurrentOrgId();
+  const session = await getSessionContext();
+  const orgId = session.orgId;
+  // POST /api/gateway/link is owner/admin only → members get no controls.
+  const canManage = isOrgAdminSession(session);
   const org = await getOrgMeta(orgId);
   const employees = await listEmployees(orgId);
   const bindingRows = [];
@@ -41,6 +45,7 @@ export default async function IntegrationsPage() {
         initialStatus={await getGatewayStatusForOrg(orgId)}
         initialMode={org.integrationMode}
         bindingRows={bindingRows}
+        canManage={canManage}
       />
       <section className="surface p-5 mt-4">
         <h2 className="text-sm font-medium">Staffpass（制御）の考え方</h2>
