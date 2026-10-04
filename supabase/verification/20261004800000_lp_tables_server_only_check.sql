@@ -3,11 +3,15 @@
 -- Before: (0) 5 tables non-null and service_role rolbypassrls = t (STOP if f:
 -- the migration drops the only policies service_role could use); (1) the 3
 -- lp_*_service_all policies; (2) keep as the grant snapshot (decides whether
--- the rollback grant line is needed); (5) 0 rows (nothing depends on the
--- policies).
+-- the rollback grant lines are needed); (5) 0 rows (nothing depends on the
+-- policies); (6) keep as the session SELECT snapshot (expected t on the 3
+-- lp_* tables with Supabase's default grants).
 -- After: (0) unchanged; (1) 0 rows; (2) anon / authenticated have no
 -- INSERT / UPDATE / DELETE / TRUNCATE on lp_inquiries / notification_outbox
--- (other tables / SELECT unchanged); (3) 0 rows; (4) all t; (5) 0 rows.
+-- and no SELECT on lp_handoffs / lp_wake_webhook_configs / lp_wake_webhook_events
+-- (anon / authenticated rows absent for those 3 tables; service_role rows
+-- unchanged); (3) 0 rows; (4) all t; (5) 0 rows; (6) all f (no table-,
+-- column-, PUBLIC- or inherited SELECT for sessions; STOP and report any t).
 begin read only;
 -- (0) tables exist; service_role bypasses RLS
 select t as table_name, to_regclass('public.' || t) as regclass
@@ -44,4 +48,11 @@ order by 1;
 select d.classid::regclass, d.objid, p.polname
 from pg_depend d join pg_policy p on d.refclassid = 'pg_policy'::regclass and d.refobjid = p.oid
 where p.polname in ('lp_handoffs_service_all','lp_wake_configs_service_all','lp_wake_events_service_all');
+-- (6) effective session SELECT on the 3 lp_* tables (table- or any column-level,
+--     including grants via PUBLIC / role membership)
+select r as role, t as table_name,
+       has_table_privilege(r, 'public.' || t, 'SELECT') as table_select,
+       has_any_column_privilege(r, 'public.' || t, 'SELECT') as any_column_select
+from unnest(array['anon','authenticated']) r, unnest(array['lp_handoffs','lp_wake_webhook_configs','lp_wake_webhook_events']) t
+order by 1, 2;
 commit;
