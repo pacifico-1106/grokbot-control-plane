@@ -5,6 +5,8 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { channelErrorMessage } from "@/lib/notify/channel-errors";
 import { actorLabel } from "@/lib/employees/actor-label";
+import { ApprovalAttachmentNotice } from "@/components/approvals/ApprovalAttachmentNotice";
+import type { PublicApproval } from "@/lib/approvals/public";
 import type { ApprovalRequest, Employee } from "@/lib/types";
 
 function pollUrlFor(a: ApprovalRequest): string {
@@ -20,7 +22,7 @@ export function ApprovalsClient({
   demoDurable = true,
   demoStore = null,
 }: {
-  initial: ApprovalRequest[];
+  initial: PublicApproval[];
   employees: Employee[];
   /** DEMO: false when only in-memory (Vercel isolate split risk). */
   demoDurable?: boolean;
@@ -42,7 +44,7 @@ export function ApprovalsClient({
       const res = await fetch("/api/approvals", { cache: "no-store" });
       if (!res.ok) return;
       const body = (await res.json()) as {
-        approvals?: ApprovalRequest[];
+        approvals?: PublicApproval[];
         durable?: boolean;
         demoStore?: "upstash" | "github" | "http" | "memory" | null;
       };
@@ -249,6 +251,8 @@ export function ApprovalsClient({
                     <h3 className="mt-2 text-sm font-medium leading-snug break-words">
                       {a.title || "承認依頼"}
                     </h3>
+                    {/* Approved attachment: server-side snapshot field, never parsed from the summary. */}
+                    <ApprovalAttachmentNotice attachment={a.cardAttachment} />
                     <pre className="mt-2 text-xs muted leading-relaxed whitespace-pre-wrap break-words font-sans">
                       {a.summary}
                     </pre>

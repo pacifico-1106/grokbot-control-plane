@@ -2,6 +2,8 @@
  * F7 stuck watch item aggregation for Admin MCP list/inspect.
  */
 import { listApprovals } from "@/lib/data";
+import { readCardAttachment } from "@/lib/approvals/attachment-card";
+import { ATTACHMENT_RECHECK_WINDOW_MS, attachmentUncertainItemId, readAttachmentUpload } from "@/lib/approvals/attachment-upload-claim";
 import { isMentionWakeAudit, listAuditEventsForStuckWatch } from "@/lib/data/audit";
 import { getOrgStuckWatchPolicy } from "@/lib/data/stuck-watch-policy";
 import { isDecisionWorkflowEnabled } from "@/lib/feature-flags";
@@ -324,6 +326,83 @@ function buildD1Item(
   };
 }
 
+/**
+ * A1 (#253 follow-up): the scheduled reconcile could not check whether the
+ * approved attachment was shared, and told the admin agent (adminNotifiedAt on
+ * metadata.attachmentUpload, written once by the reconcile). Built from the
+ * approval record itself, so it disappears as soon as a later reconcile
+ * settles the claim. Only this Admin MCP list carries it — no human channel.
+ */
+const A1_CONFIG_CODES = /^reconcile_(token_|slack_(missing_scope|invalid_auth|not_authed|account_inactive|token_revoked|token_expired|not_in_channel|channel_not_found|no_permission)$|destination_unsupported$|thread_missing$)/;
+
+function nextStepA1Ja(code: string): string {
+  if (/^reconcile_(token_|slack_(invalid_auth|not_authed|account_inactive|token_revoked|token_expired)$)/.test(code)) {
+    return "会話用 Slack トークンを確認できません。会話アダプタ（Slack Bot トークン）を接続し直すと、次回の定期確認で自動的に確定します。手作業での再送・SQL 修正はしないでください。";
+  }
+  if (code === "reconcile_slack_missing_scope" || code === "reconcile_slack_no_permission") {
+    return "会話用 Slack トークンに履歴読み取り権限（channels:history / groups:history / im:history / mpim:history）がありません。権限を追加すると次回の定期確認で自動的に確定します。";
+  }
+  if (code === "reconcile_slack_not_in_channel" || code === "reconcile_slack_channel_not_found") {
+    return "承認された宛先チャンネルを Bot が読めません。Bot をチャンネルに追加すると次回の定期確認で自動的に確定します。";
+  }
+  if (code === "reconcile_ambiguous_match" || code === "reconcile_file_details_hidden") {
+    return "同名・同サイズ等の紛らわしいファイルがあり、自動では一意に判定できません。二重送信を防ぐため自動再送しません。対応を決めたら stuckWatch.resolve で解決済みにしてください。";
+  }
+  if (code === "reconcile_surface_unsupported" || code === "reconcile_destination_unsupported") {
+    return "この宛先は自動照合に未対応です。二重送信を防ぐため自動再送しません。対応を決めたら stuckWatch.resolve で解決済みにしてください。";
+  }
+  return "一時的に確認できませんでした（Slack 応答エラー等）。定期確認が間隔を倍にしながら自動で再確認します（通知から24時間まで・通知はこの1回のみ）。";
+}
+
+/** 木村 2: no automatic re-check any more (last one done, or 24 h since the notification). */
+const A1_RECHECK_STOPPED_JA =
+  "自動の再確認は終了しました（通知から24時間までの再確認をすべて実施済み・以後は自動で確定しません）。状況を確認し、対応を決めたら stuckWatch.resolve で解決済みにしてください。手作業での再送・SQL 修正はしないでください。";
+
+function buildA1Item(
+  approval: ApprovalRequest,
+  resolved: Map<string, string>,
+  now: Date
+): StuckWatchItem | null {
+  const upload = readAttachmentUpload(approval.metadata);
+  if (upload?.state !== "uncertain" || !upload.adminNotifiedAt) return null;
+  const itemId = attachmentUncertainItemId(approval.id);
+  const resolvedAt = resolved.get(itemId);
+  const code = upload.code || "reconcile_unknown";
+  const card = readCardAttachment(approval.metadata);
+  const recheckStopped = Boolean(upload.recheckStoppedAt)
+    || now.getTime() >= Date.parse(upload.adminNotifiedAt) + ATTACHMENT_RECHECK_WINDOW_MS;
+  return {
+    id: itemId,
+    orgId: approval.orgId,
+    kind: "a1_attachment_uncertain",
+    employeeId: approval.employeeId,
+    jobId: approval.jobId,
+    approvalId: approval.id,
+    tool: approval.tool,
+    faultClass: A1_CONFIG_CODES.test(code) ? "config_drift" : "ops_fault",
+    stuckHint: "fix",
+    code,
+    status: resolvedAt ? "resolved" : "notified",
+    detectedAt: upload.adminNotifiedAt,
+    notifiedAt: upload.adminNotifiedAt,
+    resolvedAt: resolvedAt ?? null,
+    minutesOpen: Math.max(0, Math.floor((now.getTime() - Date.parse(upload.adminNotifiedAt)) / 60_000)),
+    summaryJa: `A1 承認済み添付の送信結果を自動確認できません: ${approval.tool} / approvalId=${approval.id.slice(0, 8)} / code=${code}`,
+    nextStepJa: recheckStopped ? A1_RECHECK_STOPPED_JA : nextStepA1Ja(code),
+    metadata: {
+      ...(card?.kind === "present" ? { filename: card.filename, ...(card.bytes !== undefined ? { bytes: card.bytes } : {}) } : {}),
+      claimedAt: upload.claimedAt ?? null,
+      reconciledAt: upload.reconciledAt ?? null,
+      // re-check backoff (木村 2)
+      recheckAttempts: upload.recheckAttempts ?? 0,
+      nextCheckAt: recheckStopped ? null : upload.nextCheckAt ?? null,
+      recheckStopped,
+      // 木村 #255 second round: stopped early because the item was resolved
+      recheckStopReason: upload.recheckStopReason ?? null,
+    },
+  };
+}
+
 export async function listStuckWatchItems(
   orgId: string,
   options?: { includeResolved?: boolean }
@@ -364,6 +443,13 @@ export async function listStuckWatchItems(
   }
 
   for (const approval of approvals) {
+    const item = buildA1Item(approval, resolved, now);
+    if (!item) continue;
+    if (!options?.includeResolved && item.status === "resolved") continue;
+    items.push(item);
+  }
+
+  for (const approval of approvals) {
     const item = buildD1Item(approval, resolved, now);
     if (!item) continue;
     if (!options?.includeResolved && item.status === "resolved") continue;
@@ -387,5 +473,6 @@ export function stuckWatchKindFromItemId(itemId: string): StuckWatchKind | null 
   if (itemId.startsWith("w1:")) return "w1_mention_unanswered";
   if (itemId.startsWith("w2:")) return "w2_approved_unfulfilled";
   if (itemId.startsWith("d1:")) return "d1_decision_stalled";
+  if (itemId.startsWith("a1:")) return "a1_attachment_uncertain";
   return null;
 }

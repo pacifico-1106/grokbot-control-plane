@@ -467,6 +467,39 @@ describe("callback (single use, pinned user / team)", () => {
     expect((await resolveAuthorizeLinkStart(token)).ok).toBe(false);
   });
 
+  test("木村 #255 (retry-cap reset): the completion — not the issue — records setup.tool_succeeded while APPROVAL_ATTACHMENT_RECONCILE_ENABLED is ON", async () => {
+    const resetRows = () => getRuntimeAudit().filter((e) => e.action === "setup.tool_succeeded" && e.orgId === ORG_A
+      && e.metadata?.tool === TOOL);
+    process.env.APPROVAL_ATTACHMENT_RECONCILE_ENABLED = "true";
+    try {
+      const before = resetRows().length;
+      await new Promise((r) => setTimeout(r, 5)); // any earlier signal must be older than `since`
+      const since = new Date().toISOString();
+      await new Promise((r) => setTimeout(r, 5));
+      const token = await issueViaTicket(empA.id);
+      expect(resetRows().length).toBe(before); // the link is only delivered: nothing changed yet
+      const { settingsChangedSince } = await import("@/lib/approvals/attachment-retry-cap");
+      expect(await settingsChangedSince(ORG_A, since)).toBe(false);
+      const state = await startState(token);
+      const ok = await completeAuthorizeLinkCallback({ state, code: "c-reset", oauthError: "", exchange: exchangeWith(NEW_USER_TOKEN), authTest: authTestAs(empASlack) });
+      expect(ok.ok).toBe(true);
+      const rows = resetRows();
+      expect(rows.length).toBe(before + 1);
+      expect(rows.find((e) => e.metadata?.source === "authorize_link_completed")?.employeeId).toBe(empA.id);
+      noSecrets(rows);
+      // 木村 third round h: the reset signal itself is the service-side marker, not the audit row
+      expect(await settingsChangedSince(ORG_A, since)).toBe(true);
+      // flag OFF: a completion records nothing
+      delete process.env.APPROVAL_ATTACHMENT_RECONCILE_ENABLED;
+      calls = []; // deliveredToken() reads the newest link DM only
+      const state2 = await startState(await issueViaTicket(empA.id));
+      expect((await completeAuthorizeLinkCallback({ state: state2, code: "c-reset2", oauthError: "", exchange: exchangeWith(NEW_USER_TOKEN), authTest: authTestAs(empASlack) })).ok).toBe(true);
+      expect(resetRows().length).toBe(before + 1);
+    } finally {
+      delete process.env.APPROVAL_ATTACHMENT_RECONCILE_ENABLED;
+    }
+  });
+
   test("different Slack user → rejected, nothing saved, link burned, audit shows the attempt", async () => {
     const state = await startState(await issueViaTicket(empA.id));
     const res = await completeAuthorizeLinkCallback({ state, code: "c", oauthError: "", exchange: exchangeWith(NEW_USER_TOKEN), authTest: authTestAs("UATTACKER1") });

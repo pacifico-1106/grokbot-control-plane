@@ -20,6 +20,7 @@ export const SLACK_FORM_METHODS: ReadonlySet<string> = new Set([
   "users.conversations",
   "conversations.info",
   "conversations.members",
+  "conversations.replies",
   "team.info",
 ]);
 

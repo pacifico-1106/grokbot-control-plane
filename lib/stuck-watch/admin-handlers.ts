@@ -30,6 +30,8 @@ import {
 } from "@/lib/stuck-watch/w2-unfulfilled";
 import { runGatewayInvoke } from "@/lib/gateway/invoke";
 import { parseInvokeSnapshot } from "@/lib/approvals/fulfill";
+import { stopAttachmentRechecks } from "@/lib/approvals/attachment-upload-claim";
+import { isApprovalAttachmentReconcileEnabled } from "@/lib/feature-flags";
 import type { FaultClass, StuckWatchItem } from "@/lib/types";
 
 export type StuckWatchAdminResult = {
@@ -97,6 +99,8 @@ export async function runStuckWatchList(
     items = items.filter((item) => item.kind === "w1_mention_unanswered");
   } else if (kind === "w2" || kind === "w2_approved_unfulfilled") {
     items = items.filter((item) => item.kind === "w2_approved_unfulfilled");
+  } else if (kind === "a1" || kind === "a1_attachment_uncertain") {
+    items = items.filter((item) => item.kind === "a1_attachment_uncertain");
   }
   const limit =
     typeof args.limit === "number" && Number.isFinite(args.limit)
@@ -259,6 +263,14 @@ export async function runStuckWatchResolve(
       resolvedAt: now,
     },
   });
+  // 木村 #255 second round (reconcile flag ON): resolving the A1 item also stops
+  // its scheduled re-checks. Best effort — the resolve itself never fails on it.
+  if (item.kind === "a1_attachment_uncertain" && item.approvalId && isApprovalAttachmentReconcileEnabled()) {
+    const approval = await getApprovalById(item.approvalId, orgId).catch(() => null);
+    if (approval && approval.orgId === orgId) {
+      await stopAttachmentRechecks(approval, "stuck_watch_resolved").catch(() => false);
+    }
+  }
   const resolved = { ...item, status: "resolved" as const, resolvedAt: now };
   return {
     ok: true,
@@ -296,6 +308,17 @@ export async function runStuckWatchRetry(
       message: "既に解決済みです",
       item,
       nextStepJa: "stuckWatch.list で open 項目を確認してください。",
+    };
+  }
+  if (item.kind === "a1_attachment_uncertain") {
+    // Never re-uploads: the scheduled reconcile settles it once it can check.
+    return {
+      ok: false,
+      code: "a1_no_retry",
+      message: "添付の送信結果は定期確認が自動で照合します。二重送信を防ぐため retry では再送しません",
+      item,
+      summaryJa: item.summaryJa,
+      nextStepJa: item.nextStepJa,
     };
   }
   if (item.faultClass === "expected_gate") {

@@ -88,7 +88,6 @@ import {
   type ConversationDelivery,
 } from "@/lib/approvals/fulfill";
 import { approvedRerunConversationDelivery } from "@/lib/approvals/approved-rerun-delivery";
-import { attachmentSummaryLine } from "@/lib/approvals/attachment-card";
 import {
   auditLegacySnapshotAttachmentBlock,
   deliverApprovedRerunAttachment,
@@ -402,14 +401,10 @@ async function createNeedsApprovalResponse(opts: {
     informationClass: opts.egress?.informationClass,
     fidelity: opts.egress?.fidelity,
   });
+  // The approved attachment is NOT a summary line (#253 follow-up 5): every
+  // surface renders it on its own from the snapshot (lib/approvals/attachment-card.ts),
+  // so it cannot be confused with "添付ファイル:" text inside the message body.
   const extraLines = formatArtifactLines(artifact);
-  // The approver sees which attachment is approved (filename + size from the
-  // snapshot only), placed before the body so a long body cannot hide it.
-  const attachmentLine = attachmentSummaryLine({ invoke: invokeSnapshot });
-  if (attachmentLine) {
-    const bodyAt = extraLines.indexOf("本文:");
-    extraLines.splice(bodyAt >= 0 ? bodyAt : extraLines.length, 0, attachmentLine);
-  }
   const baseSummary = buildRichApprovalSummary({
     tool: opts.tool,
     purpose: opts.purpose,

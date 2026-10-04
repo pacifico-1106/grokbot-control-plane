@@ -460,7 +460,10 @@ export type AuditAction =
   | "approval.attachment_upload_in_progress"
   | "approval.attachment_upload_uncertain"
   | "approval.attachment_not_sent"
+  | "approval.attachment_reconciled"
   | "approval.attachment_request_ignored"
+  | "approval.attachment_upload_capped"
+  | "setup.tool_succeeded"
   | "notification.channel_updated"
   | "notification.test_sent"
   | "notification.delivery_failed"
@@ -516,6 +519,7 @@ export type AuditAction =
   | "agent.approval_wake"
   | "stuck_watch.audience_ledger_retry"
   | "stuck_watch.w4_notify"
+  | "stuck_watch.attachment_uncertain_notify"
   | "stuck_watch.retry"
   | "stuck_watch.resolve"
   | "calendar.freebusy_read"
@@ -1372,7 +1376,9 @@ export interface ApprovalStuckWatchMeta {
 export type StuckWatchKind =
   | "w1_mention_unanswered"
   | "w2_approved_unfulfilled"
-  | "d1_decision_stalled";
+  | "d1_decision_stalled"
+  /** Approved attachment upload outcome could not be checked automatically (admin agent only). */
+  | "a1_attachment_uncertain";
 
 /** Aggregated stuck watch item for Admin MCP list/inspect. */
 export interface StuckWatchItem {
