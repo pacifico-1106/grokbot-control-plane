@@ -86,6 +86,7 @@ export const PLAN_GATEWAY_SCOPES: Record<PlanKey, readonly GatewayToolId[]> = {
     "files.read",
     "slack.post",
     "comm.reply",
+    "comm.delete",
     "knowledge.search",
     "approvals.request",
   ],
@@ -99,6 +100,7 @@ export const PLAN_GATEWAY_SCOPES: Record<PlanKey, readonly GatewayToolId[]> = {
     "files.read",
     "slack.post",
     "comm.reply",
+    "comm.delete",
     "knowledge.search",
     "approvals.request",
     // Proper additions (always_human where marked in tools.ts)
@@ -117,6 +119,7 @@ export const PLAN_GATEWAY_SCOPES: Record<PlanKey, readonly GatewayToolId[]> = {
     "files.read",
     "slack.post",
     "comm.reply",
+    "comm.delete",
     "knowledge.search",
     "approvals.request",
     "calendar.confirm",

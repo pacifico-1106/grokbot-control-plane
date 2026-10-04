@@ -115,6 +115,8 @@ import { getOrgStuckWatchPolicy } from "@/lib/data/stuck-watch-policy";
 import type { DualEgressVerdict, Employee, EgressVerdict, GatewayInvokeRequest } from "@/lib/types";
 import { createHash } from "node:crypto";
 import { createSupabaseAdminClient } from "@/lib/supabase";
+import { runCommDeleteInvoke } from "@/lib/comm-delete/invoke";
+import { buildSlackPostRecord } from "@/lib/comm-delete/post-record";
 import {
   CrossProductEventError,
   normalizeCommerceAuthorization,
@@ -1129,6 +1131,44 @@ export async function runGatewayInvoke(
       purpose,
       jobId,
     }, 403);
+  }
+
+  // comm.delete: delete the employee's OWN recorded post. Own module (flag,
+  // ownership by record, token of the record, idempotency, audit). Never
+  // reaches the egress / posting logic below.
+  if (tool === "comm.delete") {
+    return runCommDeleteInvoke({
+      employee,
+      orgId: orgId || employee.orgId,
+      credentialId: input.credentialId || employee.credentialId,
+      purpose,
+      jobId,
+      args: (body.args || {}) as Record<string, unknown>,
+      toolDef,
+      priorApprovalId,
+      priorApprovalOk,
+      priorApproval,
+      actionLimitNeedsApproval: actionLimit.decision === "needs_approval",
+      json: jsonResult,
+      requestApproval: (opts) =>
+        createNeedsApprovalResponse({
+          employeeId,
+          orgId: orgId || employee.orgId,
+          credentialId: input.credentialId || employee.credentialId,
+          employeeDisplayName: employee.displayName,
+          employee,
+          tool,
+          purpose,
+          jobId,
+          risk: opts.risk,
+          message: opts.message,
+          summaryPrefix: opts.summaryPrefix,
+          parentApprovalId: parentApprovalId || null,
+          metadata: { ...opts.metadata, actionLimit },
+          body,
+          extra: { ...opts.extra, actionLimit },
+        }),
+    });
   }
 
   // Project wall (WHICH) before Slack post. Deny wins over class/voice allow.
@@ -2467,6 +2507,12 @@ export async function runGatewayInvoke(
         approvalPolicy: employee.approvalPolicy,
         egress,
         dualEgress,
+        // Ids + the token that posted (no body): lets comm.delete prove the
+        // post is this employee's own and delete it with the same token.
+        ...(() => {
+          const postRecord = buildSlackPostRecord(conversationDelivery);
+          return postRecord ? { postRecord } : {};
+        })(),
       },
     });
   }
