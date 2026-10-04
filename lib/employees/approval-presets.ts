@@ -75,6 +75,12 @@ export const JP_SME_STRICT_APPROVAL_PRESETS: ApprovalPresetRow[] = [
     defaultMode: "risk_based",
   },
   {
+    tool: "comm.delete",
+    labelJa: "自分の投稿の削除（Staffpass が記録した自分の投稿のみ）",
+    defaultMode: "risk_based",
+    note: "低リスク。他人・他組織の投稿は不可。COMM_DELETE_ENABLED で有効化（既定 OFF）",
+  },
+  {
     tool: "commerce.order",
     labelJa: "課金・購入・決済",
     defaultMode: "always_human",
@@ -277,6 +283,11 @@ export function normalizeToolApprovalDefaults(
   }
   for (const tool of AUDIENCE_GATED_ALWAYS_HUMAN_HINT_TOOL_IDS) {
     if (src[tool] === "always_human") out[tool] = "always_human";
+  }
+  // comm.delete (own recorded posts): risk_based by default; only the
+  // stricter hints are kept (deny = immediate 403, always_human = approval).
+  if (src["comm.delete"] === "deny" || src["comm.delete"] === "always_human") {
+    out["comm.delete"] = src["comm.delete"];
   }
   return out;
 }

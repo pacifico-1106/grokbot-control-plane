@@ -88,14 +88,14 @@ export const STAFFPASS_MCP_TOOLS: McpToolDef[] = [
   {
     name: "staffpass_invoke",
     description:
-      "Invoke a Staffpass Gateway tool under the employee badge. Requires purpose + jobId. Unknown tools are rejected. Confirm/send/order (and always_human policy) STOP for human approval — the result includes approvalId, statusToken, pollUrl, pollHint, title, and summary so you can poll without relying on prose Instructions. Re-invoke with approvalId after status=approved. Never bypasses Gateway enforcement. Slack replies: use tool comm.reply and copy the wake's channel / ts / thread_ts / speakerId / speakerTeamId into conversation:{surface:\"slack\", slackChannelId, speakerId, speakerTeamId, ts, thread_ts} (slackChannelId = wake channel; omit thread_ts when null). The wake's slackUserId is yourself (the employee) — never use it as the recipient.",
+      "Invoke a Staffpass Gateway tool under the employee badge. Requires purpose + jobId. Unknown tools are rejected. Confirm/send/order (and always_human policy) STOP for human approval — the result includes approvalId, statusToken, pollUrl, pollHint, title, and summary so you can poll without relying on prose Instructions. Re-invoke with approvalId after status=approved. Never bypasses Gateway enforcement. Slack replies: use tool comm.reply and copy the wake's channel / ts / thread_ts / speakerId / speakerTeamId into conversation:{surface:\"slack\", slackChannelId, speakerId, speakerTeamId, ts, thread_ts} (slackChannelId = wake channel; omit thread_ts when null). The wake's slackUserId is yourself (the employee) — never use it as the recipient. To delete one of your OWN posts that Staffpass recorded (e.g. a duplicate send), use tool comm.delete with payload {surface:\"slack\", channel, ts} (channel/ts from the post's result); other people's posts and unrecorded posts are refused, LINE / Telegram return not_supported, a repeat returns status already_deleted. Disabled unless the operator turns it on.",
     inputSchema: {
       type: "object",
       properties: {
         tool: {
           type: "string",
           description:
-            "Gateway tool id (e.g. mail.draft, mail.send, calendar.propose, calendar.confirm, commerce.order, tools.ping).",
+            "Gateway tool id (e.g. mail.draft, mail.send, calendar.propose, calendar.confirm, commerce.order, comm.reply, comm.send, comm.delete, tools.ping).",
         },
         purpose: {
           type: "string",

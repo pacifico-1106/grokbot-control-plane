@@ -27,7 +27,14 @@ export const SLACK_TOKEN_MISSING = "slack_token_missing";
 
 export type SlackConversationPostResult =
   | { ok: true; delivery: "stub" }
-  | { ok: true; delivery: "slack"; channel: string; ts: string }
+  | {
+      ok: true;
+      delivery: "slack";
+      channel: string;
+      ts: string;
+      /** Which token made the post (comm.delete must delete with the same one). */
+      postedVia?: PostingAs;
+    }
   | { ok: false; error: string };
 
 export function looksLikeSlackTs(value: string | undefined | null): boolean {
@@ -236,7 +243,7 @@ export async function postConversationMessage(input: {
   const posted = await postSlackMessage(token, dest, text, input.threadTs);
 
   if (posted.ok) {
-    return { ok: true, delivery: "slack", channel: posted.channel, ts: posted.ts };
+    return { ok: true, delivery: "slack", channel: posted.channel, ts: posted.ts, postedVia: resolved.effectivePostingAs };
   }
 
   // Path A app DM retry: When user token gets channel_not_found on a DM channel,
@@ -265,7 +272,7 @@ export async function postConversationMessage(input: {
       }
       const retried = await postSlackMessage(token, openResult.channelId, text, input.threadTs);
       if (retried.ok) {
-        return { ok: true, delivery: "slack", channel: retried.channel, ts: retried.ts };
+        return { ok: true, delivery: "slack", channel: retried.channel, ts: retried.ts, postedVia: "bot" };
       }
       return { ok: false, error: retried.error };
     }
@@ -287,7 +294,7 @@ export async function postConversationMessage(input: {
 
   const retried = await postSlackMessage(botToken, openResult.channelId, text, input.threadTs);
   if (retried.ok) {
-    return { ok: true, delivery: "slack", channel: retried.channel, ts: retried.ts };
+    return { ok: true, delivery: "slack", channel: retried.channel, ts: retried.ts, postedVia: "bot" };
   }
 
   return { ok: false, error: retried.error };
@@ -408,7 +415,7 @@ export function requiresSplitDelivery(routing: MouthRoutingDecision): boolean {
  * B2: Reply policy-aware message posting result.
  */
 export type ReplyPolicyAwarePostResult =
-  | { ok: true; delivery: "slack"; channel: string; ts: string; replyDecision: ReplyPolicyDecision }
+  | { ok: true; delivery: "slack"; channel: string; ts: string; postedVia?: PostingAs; replyDecision: ReplyPolicyDecision }
   | { ok: true; delivery: "draft"; replyDecision: ReplyPolicyDecision; draftText: string }
   | { ok: true; delivery: "stub"; replyDecision: ReplyPolicyDecision }
   | { ok: false; error: string; replyDecision?: ReplyPolicyDecision }
@@ -502,6 +509,7 @@ export async function postConversationMessageWithReplyPolicy(input: {
     delivery: "slack",
     channel: postResult.channel,
     ts: postResult.ts,
+    ...(postResult.postedVia ? { postedVia: postResult.postedVia } : {}),
     replyDecision,
   };
 }

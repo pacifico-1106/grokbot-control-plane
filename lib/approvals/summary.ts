@@ -459,6 +459,8 @@ export function buildApprovalTitle(tool: string, purpose: string): string {
 }
 
 export function inferRiskForTool(tool: string): ApprovalRequest["risk"] {
+  // Deleting the employee's own recorded post (ownership checked first).
+  if (tool === "comm.delete") return "low";
   if (
     tool === "commerce.order" ||
     tool === "mail.send" ||
