@@ -70,7 +70,7 @@ export function IntegrationsClient({
         body: JSON.stringify({ action, mode }),
       });
       const body = await res.json();
-      if (!res.ok) throw new Error(body.error || "failed");
+      if (!res.ok) throw new Error(body.message || body.error || "failed");
       setStatus(body.status);
       setMessage(body.message || "");
     } catch (e) {
