@@ -1,9 +1,14 @@
 /**
  * LP cron secrets are compared in constant time (木村 2026-10-04).
- * Every app/api/cron/lp-* route must compare CRON_SECRET with
- * crypto.timingSafeEqual over equal-length buffers (never `===` / `!==`), and a
- * wrong, missing, different-length or multi-byte secret must get exactly the
- * same 401 response as before (no throw, no 500, no different body).
+ * Every app/api/cron/lp-* route checks CRON_SECRET through the shared helper
+ * lib/security/cron-secret.ts (SHA-256 both sides + timingSafeEqual, no length
+ * leak) instead of a local comparison, and a wrong, missing, different-length or
+ * multi-byte secret gets exactly the same 401 response as before (no throw, no
+ * 500, no different body). LP specifics kept via explicit helper options:
+ * lp-inquiry-cleanup also accepts the raw secret (allowRawSecret), lp-handoff-
+ * outbox also accepts the `x-cron-secret` header (rawSecretHeader), and both
+ * keep the untrimmed CRON_SECRET (trimSecret: false) and their 401 bodies
+ * (no 503) for unset / placeholder secrets.
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
@@ -49,16 +54,30 @@ describe("LP cron routes: inventory and source", () => {
     expect(lpCrons).toEqual(["lp-handoff-outbox", "lp-inquiry-cleanup"]);
   });
 
-  test("each compares CRON_SECRET with timingSafeEqual over equal-length buffers, never === / !==", () => {
+  test("each checks CRON_SECRET through the shared helper (no local comparison, no node:crypto)", () => {
     for (const name of lpCrons) {
       const text = readFileSync(join(CRON_DIR, name, "route.ts"), "utf8");
-      expect(`${name}:${/import \{[^}]*\btimingSafeEqual\b[^}]*\} from "node:crypto"/.test(text)}`).toBe(`${name}:true`);
-      expect(`${name}:${/\btimingSafeEqual\s*\(/.test(text)}`).toBe(`${name}:true`);
+      expect(`${name}:${/import \{[^}]*\bcheckCronRequest\b[^}]*\} from "@\/lib\/security\/cron-secret"/.test(text)}`).toBe(`${name}:true`);
+      expect(`${name}:${/\bcheckCronRequest\s*\(/.test(text)}`).toBe(`${name}:true`);
+      expect(`${name}:${/trimSecret:\s*false/.test(text)}`).toBe(`${name}:true`);
+      // the local comparisons from before the helper are gone
+      expect(`${name}:${/from "node:crypto"/.test(text)}`).toBe(`${name}:false`);
+      expect(`${name}:${/\b(?:secretsEqual|safeEqual|timingSafeEqual|createHash)\b/.test(text)}`).toBe(`${name}:false`);
+      expect(`${name}:${/process\.env\.CRON_SECRET\b/.test(text)}`).toBe(`${name}:false`);
       // no direct comparison of the secret / token / header with ===, !==, == or !=
       expect(
         `${name}:${/(?:[!=]==?)\s*(?:cronSecret|secret|token|`Bearer)|(?:cronSecret|secret|token|authHeader)\s*[!=]==?(?!=)/.test(text)}`
       ).toBe(`${name}:false`);
     }
+  });
+
+  test("route-specific options: inquiry allows the raw secret, outbox keeps x-cron-secret", () => {
+    const inquiry = readFileSync(join(CRON_DIR, "lp-inquiry-cleanup", "route.ts"), "utf8");
+    const outbox = readFileSync(join(CRON_DIR, "lp-handoff-outbox", "route.ts"), "utf8");
+    expect(inquiry).toMatch(/allowRawSecret:\s*true/);
+    expect(inquiry).not.toMatch(/rawSecretHeader/);
+    expect(outbox).toMatch(/rawSecretHeader:\s*"x-cron-secret"/);
+    expect(outbox).not.toMatch(/allowRawSecret/);
   });
 });
 
@@ -102,13 +121,55 @@ describe("lp-inquiry-cleanup: CRON_SECRET", () => {
     const res = await cleanupGET(req("lp-inquiry-cleanup", { authorization: SECRET }));
     expect(res.status).toBe(200);
   });
+
+  test("still 401: lowercase bearer, double space, Bearer twice, raw secret + suffix", async () => {
+    process.env.CRON_SECRET = SECRET;
+    for (const authorization of [`bearer ${SECRET}`, `Bearer  ${SECRET}`, `Bearer Bearer ${SECRET}`, `${SECRET}x`]) {
+      const res = await cleanupGET(req("lp-inquiry-cleanup", { authorization }));
+      expect(`${authorization}:${res.status}`).toBe(`${authorization}:401`);
+      expect(await res.json()).toEqual({ error: "unauthorized" });
+    }
+  });
+
+  test("stricter: `Bearer ` in the middle of the header no longer matches (old .replace quirk)", async () => {
+    process.env.CRON_SECRET = SECRET;
+    delete process.env.LP_INQUIRY_CLEANUP_ENABLED;
+    for (const authorization of [`${SECRET.slice(0, 4)}Bearer ${SECRET.slice(4)}`, `${SECRET}Bearer `]) {
+      const res = await cleanupGET(req("lp-inquiry-cleanup", { authorization }));
+      expect(`${authorization}:${res.status}`).toBe(`${authorization}:401`);
+      expect(await res.json()).toEqual({ error: "unauthorized" });
+    }
+  });
+
+  test("unchanged: CRON_SECRET is not trimmed, so a padded secret matches nothing (401)", async () => {
+    process.env.CRON_SECRET = ` ${SECRET} `;
+    for (const authorization of [`Bearer ${SECRET}`, SECRET]) {
+      const res = await cleanupGET(req("lp-inquiry-cleanup", { authorization }));
+      expect(`${authorization}:${res.status}`).toBe(`${authorization}:401`);
+      expect(await res.json()).toEqual({ error: "unauthorized" });
+    }
+  });
+
+  test("unchanged: unset / placeholder -> 401 also for the raw form (never 503)", async () => {
+    delete process.env.CRON_SECRET;
+    let res = await cleanupGET(req("lp-inquiry-cleanup", { authorization: SECRET }));
+    expect(res.status).toBe(401);
+    expect(await res.json()).toEqual({ error: "unauthorized" });
+    process.env.CRON_SECRET = "replace_me_cron_secret";
+    res = await cleanupGET(req("lp-inquiry-cleanup", { authorization: "replace_me_cron_secret" }));
+    expect(res.status).toBe(401);
+    expect(await res.json()).toEqual({ error: "unauthorized" });
+  });
 });
 
-describe("lp-handoff-outbox: CRON_SECRET (already constant time; pinned)", () => {
+describe("lp-handoff-outbox: CRON_SECRET", () => {
   for (const [label, headers] of [
     ...WRONG,
     ["x-cron-secret wrong", { "x-cron-secret": `${SECRET}0` }] as [string, Record<string, string>],
     ["x-cron-secret multi-byte", { "x-cron-secret": `${SECRET.slice(0, -1)}é` }] as [string, Record<string, string>],
+    ["x-cron-secret with Bearer prefix", { "x-cron-secret": `Bearer ${SECRET}` }] as [string, Record<string, string>],
+    ["raw secret in Authorization", { authorization: SECRET }] as [string, Record<string, string>],
+    ["lowercase bearer", { authorization: `bearer ${SECRET}` }] as [string, Record<string, string>],
   ]) {
     test(`${label} -> 401 {"error":"unauthorized"} (GET and POST)`, async () => {
       process.env.CRON_SECRET = SECRET;
@@ -120,21 +181,51 @@ describe("lp-handoff-outbox: CRON_SECRET (already constant time; pinned)", () =>
     });
   }
 
-  test("CRON_SECRET unset -> 401", async () => {
+  test("CRON_SECRET unset -> 401 (never 503), GET and POST, either header form", async () => {
     delete process.env.CRON_SECRET;
-    const res = await outboxGET(req("lp-handoff-outbox", { authorization: "Bearer " }));
-    expect(res.status).toBe(401);
-    expect(await res.json()).toEqual({ error: "unauthorized" });
+    for (const handler of [outboxGET, outboxPOST]) {
+      for (const headers of [{ authorization: "Bearer " }, { "x-cron-secret": "" }, {}] as Record<string, string>[]) {
+        const res = await handler(req("lp-handoff-outbox", headers));
+        expect(res.status).toBe(401);
+        expect(await res.json()).toEqual({ error: "unauthorized" });
+      }
+    }
+  });
+
+  test("stricter: a replace_me placeholder CRON_SECRET authenticates nothing (401), GET and POST", async () => {
+    process.env.CRON_SECRET = "replace_me_cron_secret";
+    delete process.env.LP_HANDOFF_ENABLED;
+    for (const handler of [outboxGET, outboxPOST]) {
+      for (const headers of [
+        { authorization: "Bearer replace_me_cron_secret" },
+        { "x-cron-secret": "replace_me_cron_secret" },
+      ] as Record<string, string>[]) {
+        const res = await handler(req("lp-handoff-outbox", headers));
+        expect(`${JSON.stringify(headers)}:${res.status}`).toBe(`${JSON.stringify(headers)}:401`);
+        expect(await res.json()).toEqual({ error: "unauthorized" });
+      }
+    }
+  });
+
+  test("unchanged: CRON_SECRET is not trimmed, so a padded secret matches nothing (401)", async () => {
+    process.env.CRON_SECRET = ` ${SECRET} `;
+    for (const headers of [{ authorization: `Bearer ${SECRET}` }, { "x-cron-secret": SECRET }] as Record<string, string>[]) {
+      const res = await outboxPOST(req("lp-handoff-outbox", headers));
+      expect(res.status).toBe(401);
+      expect(await res.json()).toEqual({ error: "unauthorized" });
+    }
   });
 
   test("correct secret (Bearer or x-cron-secret) passes the gate (flag off -> skipped)", async () => {
     process.env.CRON_SECRET = SECRET;
     delete process.env.LP_HANDOFF_ENABLED;
     const accepted: Record<string, string>[] = [{ authorization: `Bearer ${SECRET}` }, { "x-cron-secret": SECRET }];
-    for (const headers of accepted) {
-      const res = await outboxGET(req("lp-handoff-outbox", headers));
-      expect(res.status).toBe(200);
-      expect(await res.json()).toEqual({ status: "skipped", reason: "feature_disabled" });
+    for (const handler of [outboxGET, outboxPOST]) {
+      for (const headers of accepted) {
+        const res = await handler(req("lp-handoff-outbox", headers));
+        expect(res.status).toBe(200);
+        expect(await res.json()).toEqual({ status: "skipped", reason: "feature_disabled" });
+      }
     }
   });
 });
