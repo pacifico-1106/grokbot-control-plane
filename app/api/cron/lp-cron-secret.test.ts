@@ -130,7 +130,8 @@ describe("lp-handoff-outbox: CRON_SECRET (already constant time; pinned)", () =>
   test("correct secret (Bearer or x-cron-secret) passes the gate (flag off -> skipped)", async () => {
     process.env.CRON_SECRET = SECRET;
     delete process.env.LP_HANDOFF_ENABLED;
-    for (const headers of [{ authorization: `Bearer ${SECRET}` }, { "x-cron-secret": SECRET }]) {
+    const accepted: Record<string, string>[] = [{ authorization: `Bearer ${SECRET}` }, { "x-cron-secret": SECRET }];
+    for (const headers of accepted) {
       const res = await outboxGET(req("lp-handoff-outbox", headers));
       expect(res.status).toBe(200);
       expect(await res.json()).toEqual({ status: "skipped", reason: "feature_disabled" });
