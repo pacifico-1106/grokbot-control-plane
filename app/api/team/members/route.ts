@@ -72,7 +72,7 @@ export async function POST(req: Request) {
   const who = await resolveMemberChangeActor(req, body.actorMemberId);
   if (!who.ok) {
     return NextResponse.json(
-      { ok: false, error: who.code, code: who.code, message: who.messageJa },
+      { ok: false, error: who.error, code: who.code, message: who.messageJa },
       { status: who.httpStatus }
     );
   }

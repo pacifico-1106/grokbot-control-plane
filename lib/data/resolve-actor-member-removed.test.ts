@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
-import { join, relative, resolve } from "node:path";
+import { join, relative } from "node:path";
+import { fileURLToPath } from "node:url";
 
 /**
  * 木村 decision (PR #263, 5): resolveActorMember is deleted. It carried the
@@ -8,8 +9,8 @@ import { join, relative, resolve } from "node:path";
  * (demo uses resolveDemoActor in lib/team/demo-actor.ts).
  */
 
-const ROOT = resolve(import.meta.dir, "../..");
-const SELF = relative(ROOT, import.meta.path);
+const ROOT = fileURLToPath(new URL("../..", import.meta.url));
+const SELF = relative(ROOT, fileURLToPath(import.meta.url));
 
 function files(dir: string): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap((e) => {

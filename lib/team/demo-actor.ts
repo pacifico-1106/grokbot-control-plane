@@ -4,6 +4,7 @@ import {
   getRuntimeMembers,
 } from "@/lib/demo-data";
 import { getSessionContext } from "@/lib/auth/session";
+import { activeMemberRequiredResponse, activeSessionMember } from "@/lib/auth/active-member";
 import { isDemoMode } from "@/lib/mode";
 import type { HumanCapability, OrgMember } from "@/lib/types";
 import { hasCapability, missingCapabilityMessage } from "@/lib/team/rbac";
@@ -17,22 +18,6 @@ function actorIdFromRequest(
   const url = new URL(req.url);
   const queryId = url.searchParams.get("as") || "";
   return (bodyActorId || headerId || queryId || "mem_1").trim();
-}
-
-export const ACTIVE_MEMBER_REQUIRED_MESSAGE_JA =
-  "ログインと組織メンバーシップが必要です。再ログインしてください。";
-
-/** Production: no session / no active org_members row for the session org. */
-function activeMemberRequiredResponse(): NextResponse {
-  return NextResponse.json(
-    {
-      ok: false,
-      error: "auth_required",
-      code: "active_member_required",
-      message: ACTIVE_MEMBER_REQUIRED_MESSAGE_JA,
-    },
-    { status: 401 }
-  );
 }
 
 /** DEMO-only sync resolver (in-memory members). */
@@ -90,15 +75,8 @@ export async function requireCapability(
   if (isDemoMode()) {
     actor = resolveDemoActor(req, bodyActorId);
   } else {
-    const session = await getSessionContext();
-    const member = session.member;
-    if (
-      !session.userId ||
-      !session.orgId ||
-      !member ||
-      member.orgId !== session.orgId ||
-      member.status !== "active"
-    ) {
+    const member = activeSessionMember(await getSessionContext());
+    if (!member) {
       return { ok: false, response: activeMemberRequiredResponse() };
     }
     actor = member;

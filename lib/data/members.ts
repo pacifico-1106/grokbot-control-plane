@@ -1,5 +1,4 @@
 import {
-  DEMO_ORG,
   getRuntimeMemberById,
   getRuntimeMembers,
   setRuntimeMember,
@@ -207,46 +206,4 @@ export async function getOrgOwnerIds(orgId: string): Promise<string[]> {
 export async function getOrgOwners(orgId: string): Promise<OrgMember[]> {
   const members = await listMembers(orgId);
   return members.filter((m) => m.role === "owner");
-}
-
-/**
- * Resolve an actor by member id. DEMO falls back to mem_1 (unchanged).
- * Production returns null unless actorId is an active member of orgId.
- */
-export async function resolveActorMember(
-  actorId: string | null | undefined,
-  orgId?: string | null
-): Promise<OrgMember | null> {
-  if (isDemoMode()) {
-    return (
-      getRuntimeMemberById(actorId || "mem_1") ??
-      getRuntimeMembers().find((m) => m.role === "owner") ??
-      getRuntimeMembers()[0] ?? {
-        id: "mem_1",
-        orgId: DEMO_ORG.id,
-        email: "owner@example.com",
-        displayName: "山田 太郎",
-        role: "owner" as const,
-        jobRole: "owner" as const,
-        capabilities: [
-          "view_dashboard",
-          "view_employees",
-          "view_audit",
-          "approve_actions",
-          "manage_spend_limits",
-          "hire_issue_credentials",
-          "manage_team",
-          "manage_billing",
-        ],
-        status: "active" as const,
-      }
-    );
-  }
-  // Production: exact, active member of that org only — never the owner /
-  // first-member fallback (fail closed; requireCapability no longer calls this).
-  if (!actorId || !orgId) return null;
-  const members = await listMembers(orgId);
-  const found = members.find((m) => m.id === actorId);
-  if (!found || found.orgId !== orgId || found.status !== "active") return null;
-  return found;
 }

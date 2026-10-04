@@ -14,6 +14,13 @@ import {
 import { isDemoMode } from "@/lib/mode";
 import { resolveDemoActor } from "@/lib/team/demo-actor";
 import {
+  ACTIVE_MEMBER_REQUIRED_CODE,
+  ACTIVE_MEMBER_REQUIRED_ERROR,
+  ACTIVE_MEMBER_REQUIRED_MESSAGE_JA,
+  ACTIVE_MEMBER_REQUIRED_STATUS,
+  activeSessionMember,
+} from "@/lib/auth/active-member";
+import {
   denyMemberChange,
   evaluateMemberChange,
   memberChangeEditability,
@@ -86,27 +93,42 @@ export function countActiveOwners(members: readonly OrgMember[]): number {
 }
 
 /**
- * Actor for member changes. Production: the session's org_members row only —
- * x-member-id / ?as= / body actorMemberId are ignored and there is no owner
- * fallback. DEMO: the in-memory demo actor (demo has no Auth).
+ * Actor for member changes. Production: the session's active org_members row
+ * only — x-member-id / ?as= / body actorMemberId are ignored and there is no
+ * owner fallback. No active member row for the session org → 401
+ * auth_required / active_member_required (same contract as requireCapability).
+ * A member who lacks the permission is decided later by evaluateMemberChange
+ * (403). DEMO: the in-memory demo actor (demo has no Auth).
  */
 export async function resolveMemberChangeActor(
   req?: Request | null,
   bodyActorId?: string | null
 ): Promise<
   | { ok: true; actor: OrgMember; authEmail: string | null }
-  | { ok: false; code: MemberChangeDenyCode; messageJa: string; httpStatus: number }
+  | {
+      ok: false;
+      error: typeof ACTIVE_MEMBER_REQUIRED_ERROR;
+      code: typeof ACTIVE_MEMBER_REQUIRED_CODE;
+      messageJa: string;
+      httpStatus: typeof ACTIVE_MEMBER_REQUIRED_STATUS;
+    }
 > {
   if (isDemoMode()) {
     const demoReq = req ?? new Request("http://demo.invalid/app/team");
     return { ok: true, actor: resolveDemoActor(demoReq, bodyActorId), authEmail: null };
   }
   const session = await getSessionContext();
-  if (!session.userId || !session.orgId || !session.member || session.member.orgId !== session.orgId) {
-    const d = denyMemberChange("actor_not_active_member");
-    return { ok: false, code: d.code, messageJa: d.messageJa, httpStatus: 403 };
+  const member = activeSessionMember(session);
+  if (!member) {
+    return {
+      ok: false,
+      error: ACTIVE_MEMBER_REQUIRED_ERROR,
+      code: ACTIVE_MEMBER_REQUIRED_CODE,
+      messageJa: ACTIVE_MEMBER_REQUIRED_MESSAGE_JA,
+      httpStatus: ACTIVE_MEMBER_REQUIRED_STATUS,
+    };
   }
-  return { ok: true, actor: session.member, authEmail: session.email ?? null };
+  return { ok: true, actor: member, authEmail: session.email ?? null };
 }
 
 async function auditDenied(
