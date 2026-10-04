@@ -1,3 +1,5 @@
+import { buildMcpHandoff, parseMcpHandoff, type McpHandoff } from "@/lib/mcp/endpoint-handoff-block";
+import { isMcpEndpointHandoffEnabled } from "@/lib/feature-flags";
 import { isDemoMode } from "@/lib/mode";
 import { executeApproval } from "@/lib/approvals/execution";
 import { fulfillWorkflowMutation } from "@/lib/approval-workflow/admin";
@@ -138,7 +140,17 @@ export type AdminFulfillment = {
   /** setup.slackAuthorizeLink.issue: who actually received the link (no URL). */
   deliveryTarget?: "employee" | "approver";
   deliveryFallbackReason?: string | null;
+  /** MCP_ENDPOINT_HANDOFF_ENABLED: secret-free MCP endpoint + connection steps (issue / link). */
+  mcpHandoff?: McpHandoff;
 };
+
+/** issue / link: attach the shared MCP handoff block (flag OFF → nothing). */
+function mcpHandoffFields(employeeId: string, nextStepJa?: string): Pick<AdminFulfillment, "mcpHandoff" | "nextStepJa"> {
+  if (!isMcpEndpointHandoffEnabled()) return nextStepJa === undefined ? {} : { nextStepJa };
+  const mcpHandoff = buildMcpHandoff({ employeeId });
+  const line = `MCP 接続先: ${mcpHandoff.mcp.url}（Streamable HTTP、Authorization: Bearer に社員証）。接続確認は staffpass_whoami。詳細は mcpHandoff を参照。`;
+  return { mcpHandoff, nextStepJa: nextStepJa ? `${nextStepJa} ${line}` : line };
+}
 
 const TOOL_NEXTSTEP_JA: Record<string, string> = {
   "employees.issue":
@@ -535,6 +547,7 @@ export function parseAdminFulfillment(
       rec.deliveryFallbackReason === null || typeof rec.deliveryFallbackReason === "string"
         ? (rec.deliveryFallbackReason as string | null)
         : undefined,
+    ...(parseMcpHandoff(rec.mcpHandoff) ? { mcpHandoff: parseMcpHandoff(rec.mcpHandoff) } : {}),
   };
 }
 
@@ -606,7 +619,7 @@ async function fulfillIssue(approval: ApprovalRequest, args: Record<string, unkn
     employeeId: result.employee.id,
     secretPrefix: secret.prefix,
     oneTimeSecret: secret.raw,
-    nextStepJa: TOOL_NEXTSTEP_JA["employees.issue"],
+    ...mcpHandoffFields(result.employee.id, TOOL_NEXTSTEP_JA["employees.issue"]),
   };
 }
 
@@ -638,7 +651,7 @@ async function fulfillLink(approval: ApprovalRequest, args: Record<string, unkno
     at: new Date().toISOString(),
     employeeId,
     noticeJa: TOOL_NOTICE_JA.link,
-    nextStepJa: TOOL_NEXTSTEP_JA.link,
+    ...mcpHandoffFields(employeeId, TOOL_NEXTSTEP_JA.link),
   };
 }
 

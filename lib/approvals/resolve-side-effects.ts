@@ -7,7 +7,15 @@ import { deliverAuthorityDecision } from "@/lib/commerce/authority-events";
 import { appendAuditEvent } from "@/lib/data/audit";
 import { isConfigChangeApproval } from "@/lib/config-change-request/core";
 import { recordConfigChangeResolution } from "@/lib/config-change-request/service";
-import { isDecisionWorkflowEnabled } from "@/lib/feature-flags";
+import { isDecisionWorkflowEnabled, isMcpEndpointHandoffEnabled } from "@/lib/feature-flags";
+import {
+  APPROVAL_WAKE_ACTION,
+  MCP_HANDOFF_SCHEMA,
+  isMcpHandoffSurface,
+  resolveMcpEndpointUrl,
+  withMcpHandoff,
+  type McpHandoffSurface,
+} from "@/lib/mcp/endpoint-handoff";
 import { isDecisionRequest } from "@/lib/decision-workflow/notify";
 import {
   recordDecisionResult,
@@ -51,11 +59,54 @@ export type ResolveSideEffectsResult = {
  * Best-effort notifications after approve/reject/revision request.
  * Never throws — resolve API must succeed even if notify/callback fails.
  */
+/**
+ * Machine-readable approval e-mail body. With MCP_ENDPOINT_HANDOFF_ENABLED the
+ * Staffpass MCP endpoint + connectivity check lines are appended (no secrets).
+ */
+function buildApprovalMachineBody(
+  approval: ApprovalRequest,
+  statusLabel: string,
+  actorEmail: string
+): string {
+  return [
+    `status=${statusLabel}`,
+    `approvalId=${approval.id}`,
+    `employeeId=${approval.employeeId}`,
+    `tool=${approval.tool ?? ""}`,
+    `jobId=${approval.jobId ?? ""}`,
+    `purpose=${approval.purpose}`,
+    `risk=${approval.risk}`,
+    `resolvedBy=${actorEmail}`,
+    ...(approval.revisionNote
+      ? [`revisionNote=${approval.revisionNote.replace(/\n/g, " | ")}`]
+      : []),
+    `revisionCount=${approval.revisionCount}`,
+    `summary=${approval.summary.replace(/\n/g, " | ")}`,
+    ...(isMcpEndpointHandoffEnabled()
+      ? [
+          `mcpEndpoint=${resolveMcpEndpointUrl()}`,
+          "mcpConnectivityCheck=staffpass_whoami",
+          `mcpHandoffSchema=${MCP_HANDOFF_SCHEMA}`,
+        ]
+      : []),
+  ].join("\n");
+}
+
+export const buildApprovalMachineBodyForTests = buildApprovalMachineBody;
+
+/** Fallback when a caller did not pass surface (actor prefix is set by each webhook). */
+function inferSurface(actorEmail: string): McpHandoffSurface {
+  const prefix = actorEmail.split(":")[0];
+  return isMcpHandoffSurface(prefix) ? prefix : "web";
+}
+
 export async function runApprovalResolveSideEffects(opts: {
   approval: ApprovalRequest;
   decision: "approved" | "rejected" | "revision_requested";
   actorEmail: string;
   employee?: Employee | null;
+  /** Channel the human decided on (Slack / LINE / Telegram / Web / proxy). Used for MCP handoff. */
+  surface?: McpHandoffSurface;
 }): Promise<ResolveSideEffectsResult> {
   const { approval, decision, actorEmail, employee } = opts;
   const title = approval.title || approval.summary.slice(0, 80);
@@ -90,21 +141,7 @@ export async function runApprovalResolveSideEffects(opts: {
   const notifyTo = employee?.approvalNotifyEmail?.trim();
   if (notifyTo) {
     try {
-      const machineBody = [
-        `status=${statusLabel}`,
-        `approvalId=${approval.id}`,
-        `employeeId=${approval.employeeId}`,
-        `tool=${approval.tool ?? ""}`,
-        `jobId=${approval.jobId ?? ""}`,
-        `purpose=${approval.purpose}`,
-        `risk=${approval.risk}`,
-        `resolvedBy=${actorEmail}`,
-        ...(approval.revisionNote
-          ? [`revisionNote=${approval.revisionNote.replace(/\n/g, " | ")}`]
-          : []),
-        `revisionCount=${approval.revisionCount}`,
-        `summary=${approval.summary.replace(/\n/g, " | ")}`,
-      ].join("\n");
+      const machineBody = buildApprovalMachineBody(approval, statusLabel, actorEmail);
       employeeEmail = await sendTransactionalEmail({
         to: notifyTo,
         template: "approval_resolved",
@@ -132,9 +169,11 @@ export async function runApprovalResolveSideEffects(opts: {
     skipped: true,
   };
   const callbackUrl = employee?.callbackUrl?.trim();
+  let handoffSurface: McpHandoffSurface = "web";
+  let handoffAttached = false;
   if (callbackUrl) {
     try {
-      const payload = {
+      const basePayload = {
         type: "approval.resolved",
         status: statusLabel,
         approvalId: approval.id,
@@ -154,6 +193,16 @@ export async function runApprovalResolveSideEffects(opts: {
           ? { requesterNoticeJa: configChange.requesterNoticeJa }
           : {}),
       };
+      // Shared, channel-independent MCP endpoint handoff (flag OFF → same object).
+      handoffSurface = opts.surface ?? inferSurface(actorEmail);
+      const payload = await withMcpHandoff(basePayload, {
+        orgId: approval.orgId,
+        employeeId: approval.employeeId,
+        surface: handoffSurface,
+        kind: "approval_resolved",
+        trigger: statusLabel,
+      });
+      handoffAttached = Boolean(payload.mcpHandoff);
       const res = await fetch(callbackUrl, {
         method: "POST",
         headers: {
@@ -170,6 +219,27 @@ export async function runApprovalResolveSideEffects(opts: {
         skipped: false,
         error: e instanceof Error ? e.message : "callback_failed",
       };
+    }
+    if (handoffAttached) {
+      // Wake audit for the shared not-connected watcher (only when the block was sent).
+      await appendAuditEvent({
+        orgId: approval.orgId,
+        employeeId: approval.employeeId,
+        credentialId: null,
+        action: APPROVAL_WAKE_ACTION,
+        purpose: "approval.resolved",
+        summary: callback.ok
+          ? "承認結果で社員を起こした（MCP handoff 付き）"
+          : "承認結果の起こす callback に失敗",
+        metadata: {
+          reason: callback.ok ? "woke" : "wake_failed",
+          status: callback.status,
+          approvalId: approval.id,
+          decision: statusLabel,
+          surface: handoffSurface,
+          mcpHandoff: true,
+        },
+      }).catch(() => undefined);
     }
   }
 

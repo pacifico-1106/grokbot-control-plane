@@ -370,6 +370,7 @@ async function handleBlockActions(
           decision: "revision_requested",
           actorEmail: actor,
           employee,
+          surface: "slack",
         });
       }
       return;
@@ -389,6 +390,7 @@ async function handleBlockActions(
         decision,
         actorEmail: actor,
         employee,
+        surface: "slack",
       });
     }
   } catch (error) {
