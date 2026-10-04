@@ -403,10 +403,15 @@ export function isSnsPublishTool(def: GatewayToolDef | string): boolean {
 /**
  * Audience-gated tools whose explicit per-tool `always_human` setting is honoured.
  * Stricter-only: it can add a human approval, never remove one; auto / risk_based /
- * unset keep the audience × class decision. Other audience-gated tools
- * (comm.send / slack.*) are intentionally not included yet (open decision).
+ * unset keep the audience × class decision. Covers every audience-gated tool
+ * (木村 2026-10-04, #249).
  */
-export const AUDIENCE_GATED_ALWAYS_HUMAN_HINT_TOOL_IDS = ["comm.reply"] as const satisfies readonly GatewayToolId[];
+export const AUDIENCE_GATED_ALWAYS_HUMAN_HINT_TOOL_IDS = [
+  "comm.reply",
+  "comm.send",
+  "slack.post",
+  "slack.post_external",
+] as const satisfies readonly GatewayToolId[];
 
 function honorsAlwaysHumanHint(id: GatewayToolId): boolean {
   return (AUDIENCE_GATED_ALWAYS_HUMAN_HINT_TOOL_IDS as readonly GatewayToolId[]).includes(id);
@@ -415,7 +420,7 @@ function honorsAlwaysHumanHint(id: GatewayToolId): boolean {
 /**
  * Per-tool hints can loosen choosable always-human tools (send / confirm / order / write / browser).
  * Audience-gated tools never force from the tool name; employee policy + egress decide
- * (an explicit always_human on comm.reply is employee policy and forces approval).
+ * (an explicit always_human on comm.* / slack.* is employee policy and forces approval).
  * Missing hints keep the strict always-human defaults.
  */
 export function toolRequiresHumanApproval(

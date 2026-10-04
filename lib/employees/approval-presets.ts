@@ -253,8 +253,9 @@ export function choosableToolIsEnabled(
  * tools, otherwise forced approval; fulfill: stop). For outbound-send tools
  * outside the choosable list (slack.* / comm.* / agentmail.send) only `deny`
  * is accepted; other values keep being ignored for them — except
- * `always_human` on comm.reply (2026-10-04), which the gateway honours and is
- * stricter-only (auto / risk_based there stay ignored).
+ * `always_human` on comm.reply / comm.send / slack.post / slack.post_external
+ * (2026-10-04), which the gateway honours and is stricter-only
+ * (auto / risk_based there stay ignored).
  */
 export function normalizeToolApprovalDefaults(
   value: unknown
