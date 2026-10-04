@@ -170,7 +170,9 @@ describe("item 4: deny survives normalization (before: silently became always_hu
       // … and an outbound-send tool now carries the deny that rejects immediately.
       if (isOutboundSendTool(id)) expect(after[id]).toBe("deny");
       // a non-outbound tool keeps deny only if it is choosable (forced approval, as before)
-      else if (after[id] === "deny") expect(id in before).toBe(true);
+      // comm.delete keeps deny too: its own module rejects immediately (403,
+      // lib/comm-delete/invoke.ts) and fulfill re-checks it (comm-delete tests).
+      else if (after[id] === "deny") expect(id in before || id === "comm.delete").toBe(true);
     }
   });
 

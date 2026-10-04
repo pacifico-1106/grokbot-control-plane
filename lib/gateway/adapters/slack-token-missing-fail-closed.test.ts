@@ -168,7 +168,7 @@ describe("decision 1: production fails closed with slack_token_missing", () => {
   test("control: the org's own conversation adapter token still posts", async () => {
     adapterTokens.set(ORG, "xoxb-own-adapter");
     const result = await slack.postConversationMessage({ orgId: ORG, postingAs: "bot", channel: "C0INTERNAL1", text: "hi" });
-    expect(result).toEqual({ ok: true, delivery: "slack", channel: "C0INTERNAL1", ts: "1503435956.000247" });
+    expect(result).toEqual({ ok: true, delivery: "slack", channel: "C0INTERNAL1", ts: "1503435956.000247", postedVia: "bot" });
     expect(calls.map((call) => call.auth)).toEqual(["Bearer xoxb-own-adapter"]);
   });
 

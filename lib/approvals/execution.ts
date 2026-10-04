@@ -29,6 +29,17 @@ const retryableByTool: Record<string, ReadonlySet<string>> = {
     "user_token_missing", "user_token_invalid", "user_token_scope_check_failed",
     "missing_scope_chat_write", "slack_account_not_allowed",
   ]),
+  // comm.delete (lib/comm-delete/run.ts): every run re-checks the flag, the
+  // employee, the own-post record and "already deleted" from scratch, and a
+  // second chat.delete of a gone message maps to already_deleted — so a
+  // re-run can never delete anything beyond the approved own post.
+  "comm.delete": new Set([
+    "comm_delete_disabled", "invalid_delete_target", "not_supported", "post_not_found_or_not_owned", "too_old",
+    // approved-target check in lib/comm-delete/fulfill.ts: stops before any provider call.
+    "approved_target_missing", "approved_target_mismatch",
+    "comm_delete_unavailable", "cant_delete_message", "slack_token_identity_mismatch",
+    "slack_delete_timeout", "slack_delete_fetch_failed",
+  ]),
 };
 
 /** Failure → claim state "failed" (may run again) instead of "uncertain". */

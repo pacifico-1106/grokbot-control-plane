@@ -228,6 +228,7 @@ describe("Slack conversation adapter", () => {
       delivery: "slack",
       channel: "C_INTERNAL",
       ts: "1503435956.000247",
+      postedVia: "bot",
     });
     expect(auth).toBe("Bearer xoxb-notify");
     expect(payload.blocks).toBe(undefined);

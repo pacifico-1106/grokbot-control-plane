@@ -27,6 +27,7 @@ export type GatewayToolId =
   | "slack.post_external"
   | "comm.reply"
   | "comm.send"
+  | "comm.delete"
   | "sns.publish"
   | "drive.share_external"
   | "knowledge.search"
@@ -218,6 +219,14 @@ export const GATEWAY_TOOL_DEFS: Record<GatewayToolId, GatewayToolDef> = {
     forceNeedsApproval: false,
     mayAuto: true,
   },
+  "comm.delete": {
+    id: "comm.delete",
+    labelJa: "自分の投稿の削除（記録済みの自分の投稿のみ）",
+    kind: "mutate",
+    requiredScopes: ["tools:invoke", "slack:post"],
+    forceNeedsApproval: false,
+    mayAuto: true,
+  },
   "sns.publish": {
     id: "sns.publish",
     labelJa: "個人SNS投稿（X / note / LinkedIn / YouTube）",
@@ -284,6 +293,8 @@ const ALIASES: Record<string, GatewayToolId> = {
   "comm:send": "comm.send",
   "comm.reply": "comm.reply",
   "comm.send": "comm.send",
+  "comm:delete": "comm.delete",
+  "comm.delete": "comm.delete",
   "sns:publish": "sns.publish",
   "sns.publish": "sns.publish",
   "drive:share_external": "drive.share_external",
@@ -381,6 +392,8 @@ export const NON_OUTBOUND_TOOL_REASONS: Readonly<Record<Exclude<GatewayToolId, O
   "knowledge.search": "社内検索のみ",
   "approvals.request": "社内の承認依頼（承認者向け通知面。外部送信ではない）",
   "audit.append": "監査追記（社内記録）",
+  "comm.delete":
+    "自分の記録済み投稿の削除。新たな送信・開示はしない（記録で本人の投稿に限定。deny は即時拒否・承認後も再確認、lib/comm-delete）",
 };
 
 /** slack.* / comm.* share one audience resolver — tool name is not the boundary. */
