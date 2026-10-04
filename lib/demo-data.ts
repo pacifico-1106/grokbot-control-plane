@@ -251,7 +251,7 @@ export const DEMO_AUDIT: AuditEvent[] = [
     credentialId: null,
     action: "gateway.link_changed",
     purpose: null,
-    summary: "Grok Bot 連携ステータスが linked になりました",
+    summary: "AI エージェント連携ステータスが linked になりました",
     metadata: { from: "pending", to: "linked", mode: "managed" },
     createdAt: new Date(Date.now() - 86400000 * 2).toISOString(),
   },
@@ -452,7 +452,7 @@ export function setGatewayStatus(status: GatewayLinkStatus) {
     credentialId: null,
     action: "gateway.link_changed",
     purpose: null,
-    summary: `Grok Bot 連携ステータスが ${status} になりました`,
+    summary: `AI エージェント連携ステータスが ${status} になりました`,
     metadata: { to: status },
     createdAt: new Date().toISOString(),
   });

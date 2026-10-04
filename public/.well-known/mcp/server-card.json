@@ -28,7 +28,7 @@
     "tools": true
   },
   "notes": [
-    "Public HTTPS only — no local stdio for Grok Bot Plugins / grok.com connectors.",
+    "Public HTTPS only — register this URL in your AI agent's MCP connector settings (e.g. Grok Bot Plugins); no local stdio.",
     "clients should set allowed_tools to staffpass_* tools (whoami, invoke, get_approval_status, health, stuck_list, stuck_retry).",
     "On needs_approval, poll pollUrl / staffpass_get_approval_status; do not complete confirm/send/order while pending."
   ]
