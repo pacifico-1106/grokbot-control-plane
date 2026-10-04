@@ -254,9 +254,13 @@ async function closeAtFulfill(
   meta: Record<string, unknown>
 ): Promise<void> {
   const closed = await closeApprovalWithoutSend({ approval, from: ["approved"], to, meta }).catch(() => null);
-  // The caller's copy must not look approved any more (W2 stamp / re-runs skip it).
+  // Nothing is sent either way. Only a close that actually happened changes the
+  // caller's copy (W2 stamp / re-runs then skip it) and is audited; when the
+  // store refused or failed, the copy stays as stored (approved) and the next
+  // fulfill re-checks and stops again.
+  if (!closed) return;
   approval.status = to;
-  if (closed) approval.metadata = closed.metadata;
+  approval.metadata = closed.metadata;
   await auditApprovalClosed(approval, to === "superseded" ? "approval.superseded" : "approval.expired", meta);
 }
 

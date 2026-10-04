@@ -740,6 +740,7 @@ async function fulfillApprovedInvokeCore(
   options: FulfillInvokeOptions = {}
 ): Promise<ApprovalFulfillment | null> {
   let dedupGate: FulfillDedupGate | null = null;
+  let postAttempted = false;
   try {
     const existing = parseFulfillment(approval.metadata);
     if (existing?.ok) return existing;
@@ -765,16 +766,6 @@ async function fulfillApprovedInvokeCore(
 
     if (!isAudienceGatedTool(snapshot.tool || approval.tool || "")) {
       return null;
-    }
-
-    // COMM_REPLY_DEDUP_ENABLED: expired, or the conversation already got a reply
-    // after this approval was created → closed without sending. Claims the send
-    // in the hash-only ledger otherwise. Fail closed when the ledger is down.
-    dedupGate = await fulfillDedupGate(approval, snapshot, invokeSnapshotOutboundText(snapshot, approval.purpose));
-    if (!dedupGate.ok) {
-      const blocked: ApprovalFulfillment = { ok: false, error: dedupGate.code, at: new Date().toISOString() };
-      if (dedupGate.code === FULFILL_BLOCKED_DEDUP_UNAVAILABLE) await persistFulfillment(approval, blocked);
-      return blocked;
     }
 
     const snapshotArgs = snapshot.args ?? {};
@@ -819,7 +810,24 @@ async function fulfillApprovedInvokeCore(
 
     const dest = destValidation.dest;
 
+    // COMM_REPLY_DEDUP_ENABLED: expired, or the conversation already got a reply
+    // with the same / a similar body after this approval was created → closed
+    // without sending. Claims the send in the hash-only ledger otherwise. Fail
+    // closed when the ledger is down. Taken only after every check that can
+    // refuse the send without throwing (destination validation above), so a
+    // refused send never leaves a claim behind (木村 review on #260): from
+    // here on every path finishes the claim — sent / failed after the post,
+    // failed on a throw before the post, uncertain on a throw from the post.
+    dedupGate = await fulfillDedupGate(approval, snapshot, invokeSnapshotOutboundText(snapshot, approval.purpose));
+    if (!dedupGate.ok) {
+      const blocked: ApprovalFulfillment = { ok: false, error: dedupGate.code, at: new Date().toISOString() };
+      if (dedupGate.code === FULFILL_BLOCKED_DEDUP_UNAVAILABLE) await persistFulfillment(approval, blocked);
+      return blocked;
+    }
+
     const threadResult = await threadOf(snapshot, dest);
+
+    postAttempted = true;
 
     const posted = await postConversationMessage({
       orgId: snapshot.orgId || approval.orgId,
@@ -887,8 +895,12 @@ async function fulfillApprovedInvokeCore(
     }
     return fulfillment;
   } catch (error) {
-    // A ledger claim taken before an unknown outcome stays (never re-sent blindly).
-    if (dedupGate) await fulfillDedupFinish(dedupGate, approval, "uncertain").catch(() => undefined);
+    // Ledger claim still open: a throw from the post itself = unknown outcome →
+    // kept as uncertain (never re-sent blindly); a throw before the post (thread
+    // / reply-policy lookup) sent nothing → released.
+    if (dedupGate) {
+      await fulfillDedupFinish(dedupGate, approval, postAttempted ? "uncertain" : "failed").catch(() => undefined);
+    }
     const at = new Date().toISOString();
     const message = error instanceof Error ? error.message : "fulfill_failed";
     const fulfillment: ApprovalFulfillment = { ok: false, error: message, at };
