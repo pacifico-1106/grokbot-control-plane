@@ -47,6 +47,9 @@ const READ_ONLY: ReadonlySet<string> = new Set(READ_ONLY_ADMIN_TOOLS as readonly
 export const SETTINGS_RESET_TOOLS: readonly string[] = (ADMIN_MCP_TOOL_NAMES as readonly string[])
   .filter((t) => (t.startsWith("setup.") || SETTINGS_TOOLS_OUTSIDE_SETUP.has(t)) && !READ_ONLY.has(t));
 const RESET_TOOLS: ReadonlySet<string> = new Set(SETTINGS_RESET_TOOLS);
+export type SettingsResetSignal = { tool: string; source: SettingsChangeSource };
+/** TDD stub (fourth round): the explicit allow-list is implemented in the next commit. */
+export const SETTINGS_RESET_SIGNALS: readonly SettingsResetSignal[] = [];
 
 export function countsAsSettingsChange(tool: string, source: SettingsChangeSource): boolean {
   if (source === "dashboard_settings" || tool === DASHBOARD_SLACK_ADAPTER_SAVE) {

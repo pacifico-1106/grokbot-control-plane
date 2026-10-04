@@ -43,7 +43,7 @@ const { ADMIN_MCP_TOOL_NAMES } = await import("@/lib/mcp/admin-public");
 const { slackReinvokeReason, SLACK_DEFINITE_ERROR_FIXES } = await import("@/lib/slack/definite-errors");
 const { reinvokeReasonForFileUpload } = await import("@/lib/approvals/poll-hint");
 const {
-  ATTACHMENT_RETRY_CAP, SETUP_TOOL_SUCCEEDED_AUDIT, SETTINGS_RESET_TOOLS, DASHBOARD_SLACK_ADAPTER_SAVE,
+  ATTACHMENT_RETRY_CAP, SETUP_TOOL_SUCCEEDED_AUDIT, SETTINGS_RESET_SIGNALS, DASHBOARD_SLACK_ADAPTER_SAVE,
   countsAsSettingsChange, recordSetupToolSucceeded, settingsChangedSince,
 } = await import("@/lib/approvals/attachment-retry-cap");
 const { READ_ONLY_ADMIN_TOOLS } = await import("@/lib/billing/plan-scopes");
@@ -437,11 +437,10 @@ describe("4. retry cap: the same definite error 3× in a row", () => {
     expect(SETUP_TOOL_SUCCEEDED_AUDIT).toBe("setup.tool_succeeded");
     expect(countsAsSettingsChange("setup.slackAdapter.setBotToken", "admin_fulfillment")).toBe(true);
     expect(countsAsSettingsChange("setup.slackApprover.set", "admin_fulfillment")).toBe(true);
-    expect(countsAsSettingsChange("setup.lineApproval.upsert", "admin_fulfillment")).toBe(true);
-    expect(countsAsSettingsChange("setup.slackStatus", "admin_tool")).toBe(false); // read-only (third round e)
+    expect(countsAsSettingsChange("setup.lineApproval.upsert", "admin_fulfillment")).toBe(false); // fourth round 3: Slack-related only
+    expect(countsAsSettingsChange("setup.slackStatus", "admin_fulfillment")).toBe(false); // read-only (third round e)
     expect(countsAsSettingsChange("employees.postingIdentity.set", "admin_fulfillment")).toBe(true);
     expect(countsAsSettingsChange("setup.slackAuthorizeLink.issue", "admin_fulfillment")).toBe(false);
-    expect(countsAsSettingsChange("setup.slackAuthorizeLink.issue", "admin_tool")).toBe(false);
     expect(countsAsSettingsChange("setup.slackAuthorizeLink.issue", "authorize_link_completed")).toBe(true);
     expect(countsAsSettingsChange("policy.patch", "admin_fulfillment")).toBe(false);
     expect(countsAsSettingsChange("comm.reply", "admin_fulfillment")).toBe(false);
@@ -745,30 +744,16 @@ describe("5. third round: guidance (a–c), resets (d, e, h), poll = re-run (f),
     expect(await settingsChangedSince(DEMO_ORG.id, since)).toBe(false);
   });
 
-  test("(e) the reset tools: settings-changing admin tools only (read-only setup tools never reset)", () => {
-    expect([...SETTINGS_RESET_TOOLS].sort()).toEqual([
-      "employees.postingIdentity.set",
-      "setup.approvalDelivery.autoResolve",
-      "setup.lineApproval.demoteTelegram",
-      "setup.lineApproval.setEmployeeInbox",
-      "setup.lineApproval.upsert",
-      "setup.slackAdapter.setBotToken",
-      "setup.slackApprover.set",
-      "setup.slackAuthorizeLink.issue",
-    ]);
-    for (const tool of SETTINGS_RESET_TOOLS) {
-      expect((ADMIN_MCP_TOOL_NAMES as readonly string[]).includes(tool)).toBe(true);
-      expect((READ_ONLY_ADMIN_TOOLS as readonly string[]).includes(tool)).toBe(false);
-    }
+  test("(e) read-only setup tools never reset (any source)", () => {
     const readOnlySetup = (READ_ONLY_ADMIN_TOOLS as readonly string[]).filter((t) => t.startsWith("setup."));
     expect(readOnlySetup).toContain("setup.slackStatus");
     for (const tool of readOnlySetup) {
-      for (const source of ["admin_fulfillment", "admin_tool", "authorize_link_completed", "dashboard_settings"] as const) {
+      for (const source of ["admin_fulfillment", "authorize_link_completed", "dashboard_settings"] as const) {
         expect(countsAsSettingsChange(tool, source)).toBe(false);
       }
     }
     expect(countsAsSettingsChange(DASHBOARD_SLACK_ADAPTER_SAVE, "dashboard_settings")).toBe(true);
-    expect(countsAsSettingsChange(DASHBOARD_SLACK_ADAPTER_SAVE, "admin_tool")).toBe(false);
+    expect(countsAsSettingsChange(DASHBOARD_SLACK_ADAPTER_SAVE, "admin_fulfillment")).toBe(false);
     expect(countsAsSettingsChange("setup.slackAdapter.setBotToken", "dashboard_settings")).toBe(false);
   });
 
@@ -779,7 +764,6 @@ describe("5. third round: guidance (a–c), resets (d, e, h), poll = re-run (f),
     complete = { json: { ok: false, error: "token_revoked" } };
     await failTimes(3, a);
     await tick();
-    await recordSetupToolSucceeded({ orgId: DEMO_ORG.id, tool: "setup.slackStatus", source: "admin_tool" });
     await recordSetupToolSucceeded({ orgId: DEMO_ORG.id, tool: "setup.slackStatus", source: "admin_fulfillment" });
     complete = OK_COMPLETE;
     expect((await failTimes(1, a))[0]).toMatchObject({ code: "approval_attachment_retry_capped" });
@@ -877,5 +861,144 @@ describe("5. third round: guidance (a–c), resets (d, e, h), poll = re-run (f),
     expect(sql).toContain("create or replace function public.record_org_settings_change(p_org uuid, p_tool text, p_source text)");
     expect(sql).toContain("revoke all on function public.record_org_settings_change(uuid,text,text) from public,anon,authenticated;");
     expect(sql).toContain("grant execute on function public.record_org_settings_change(uuid,text,text) to service_role;");
+  });
+});
+
+// ---------------------------------------------------------------------------
+describe("6. fourth round: narrower resets (1 dashboard, 3 Slack-only allow-list), admin_tool source removed (4)", () => {
+  async function failTimes(n: number, a: { body: GatewayInvokeRequest; approvalId: string }) {
+    const out: Array<Record<string, unknown> | undefined> = [];
+    for (let i = 0; i < n; i++) out.push(fileUpload(await invokeComm({ ...a.body, approvalId: a.approvalId })));
+    return out;
+  }
+  const tick = () => new Promise((r) => setTimeout(r, 5));
+  const put = (body: Record<string, unknown>) => adapterPUT(new Request("http://localhost/api/settings/conversation-adapters", {
+    method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ surface: "slack", label: "会話投稿（ダミー）", ...body }),
+  }));
+  const ALLOW = [
+    { tool: "dashboard.conversationAdapter.slack", source: "dashboard_settings" },
+    { tool: "employees.postingIdentity.set", source: "admin_fulfillment" },
+    { tool: "setup.slackAdapter.setBotToken", source: "admin_fulfillment" },
+    { tool: "setup.slackApprover.set", source: "admin_fulfillment" },
+    { tool: "setup.slackAuthorizeLink.issue", source: "authorize_link_completed" },
+  ];
+  const key = (x: { tool: string; source: string }) => `${x.tool}|${x.source}`;
+
+  test("(1) a dashboard save that only sets enabled:false (no token) is NOT a reset: no signal, the cap stays", async () => {
+    installSlack();
+    await setToken(true);
+    const a = await approved();
+    complete = { json: { ok: false, error: "token_revoked" } };
+    await failTimes(3, a);
+    await tick();
+    const since = new Date().toISOString();
+    await tick();
+    const res = await put({ enabled: false });
+    expect(res.status).toBe(200);
+    expect(await settingsChangedSince(DEMO_ORG.id, since)).toBe(false);
+    expect((await listAuditEvents(DEMO_ORG.id, 100_000)).filter((e) => e.action === SETUP_TOOL_SUCCEEDED_AUDIT
+      && Date.parse(e.createdAt) > Date.parse(since))).toHaveLength(0);
+    await setToken(true); // re-enable through the data layer (no route, no signal)
+    complete = OK_COMPLETE;
+    expect((await failTimes(1, a))[0]).toMatchObject({ code: "approval_attachment_retry_capped" });
+    expect(completes).toBe(3);
+  });
+
+  test("(1) a save that enables the adapter (no new token) is a reset", async () => {
+    installSlack();
+    await setToken(true);
+    await tick();
+    const since = new Date().toISOString();
+    await tick();
+    expect((await put({ enabled: true })).status).toBe(200);
+    expect(await settingsChangedSince(DEMO_ORG.id, since)).toBe(true);
+  });
+
+  test("(1) a save that includes a token is a reset even with enabled:false", async () => {
+    installSlack();
+    await setToken(true);
+    await tick();
+    const since = new Date().toISOString();
+    await tick();
+    expect((await put({ enabled: false, botToken: TOKEN })).status).toBe(200);
+    expect(await settingsChangedSince(DEMO_ORG.id, since)).toBe(true);
+  });
+
+  test("(1) a whitespace-only token with enabled:false is not a token: no reset", async () => {
+    installSlack();
+    await setToken(true);
+    await tick();
+    const since = new Date().toISOString();
+    await tick();
+    expect((await put({ enabled: false, botToken: "   " })).status).toBe(200);
+    expect(await settingsChangedSince(DEMO_ORG.id, since)).toBe(false);
+  });
+
+  test("(3) explicit allow-list: Slack-related signals only (exact tool + source pairs)", () => {
+    expect([...SETTINGS_RESET_SIGNALS].map(key).sort()).toEqual(ALLOW.map(key).sort());
+    for (const s of ALLOW) expect(countsAsSettingsChange(s.tool, s.source as "admin_fulfillment")).toBe(true);
+    for (const tool of ["setup.lineApproval.upsert", "setup.lineApproval.setEmployeeInbox", "setup.lineApproval.demoteTelegram",
+      "setup.approvalDelivery.autoResolve", "setup.slackStatus", "setup.slackDmApprovalStatus", "policy.patch"]) {
+      for (const source of ["admin_fulfillment", "authorize_link_completed", "dashboard_settings"] as const) {
+        expect(countsAsSettingsChange(tool, source)).toBe(false);
+      }
+    }
+    // a listed tool with another source is not a signal
+    expect(countsAsSettingsChange("setup.slackAuthorizeLink.issue", "admin_fulfillment")).toBe(false);
+    expect(countsAsSettingsChange("setup.slackApprover.set", "dashboard_settings")).toBe(false);
+    // registered names (no typo in the allow-list)
+    for (const s of ALLOW.filter((x) => x.source !== "dashboard_settings")) {
+      expect((ADMIN_MCP_TOOL_NAMES as readonly string[]).includes(s.tool)).toBe(true);
+    }
+  });
+
+  test("(3) LINE setup tools and setup.approvalDelivery.autoResolve no longer reset the cap", async () => {
+    installSlack();
+    await setToken(true);
+    const a = await approved();
+    complete = { json: { ok: false, error: "token_revoked" } };
+    await failTimes(3, a);
+    await tick();
+    const since = new Date().toISOString();
+    for (const tool of ["setup.lineApproval.upsert", "setup.lineApproval.setEmployeeInbox", "setup.lineApproval.demoteTelegram", "setup.approvalDelivery.autoResolve"]) {
+      await recordSetupToolSucceeded({ orgId: DEMO_ORG.id, tool, source: "admin_fulfillment" });
+    }
+    expect(await settingsChangedSince(DEMO_ORG.id, since)).toBe(false);
+    complete = OK_COMPLETE;
+    expect((await failTimes(1, a))[0]).toMatchObject({ code: "approval_attachment_retry_capped" });
+    expect(completes).toBe(3);
+  });
+
+  test("(3) migration: record_org_settings_change and the table check accept exactly the same tool + source pairs", async () => {
+    const { readFileSync } = await import("node:fs");
+    const sql = readFileSync(new URL("../../supabase/migrations/20261004400000_approval_attachment_reconcile.sql", import.meta.url), "utf8");
+    const pairs = (text: string) => [...text.matchAll(/\('([a-z][A-Za-z0-9._]*)',\s*'([a-z_]+)'\)/g)].map((m) => `${m[1]}|${m[2]}`).sort();
+    const table = sql.slice(sql.indexOf("create table if not exists public.org_settings_changes"), sql.indexOf("alter table public.org_settings_changes"));
+    const fnStart = sql.indexOf("create or replace function public.record_org_settings_change");
+    const fn = sql.slice(fnStart, sql.indexOf("end $$;", fnStart));
+    expect(pairs(table)).toEqual(ALLOW.map(key).sort());
+    expect(pairs(fn)).toEqual(ALLOW.map(key).sort());
+    expect(fn).toContain("raise exception 'invalid_settings_change_tool'");
+    expect(fn).toContain("raise exception 'invalid_settings_change_source'");
+  });
+
+  test("(4) the admin_tool source is gone (code, migration validation)", async () => {
+    const { readFileSync } = await import("node:fs");
+    const read = (rel: string) => readFileSync(new URL(rel, import.meta.url), "utf8");
+    expect(read("../../supabase/migrations/20261004400000_approval_attachment_reconcile.sql")).not.toContain("admin_tool");
+    expect(read("./attachment-retry-cap.ts")).not.toContain("admin_tool");
+    const adminTools = read("../mcp/admin-tools.ts");
+    expect(adminTools).not.toContain("admin_tool\"");
+    expect(adminTools).not.toContain("recordSetupToolSucceeded");
+    expect(adminTools).not.toContain("callAdminMcpToolCore");
+  });
+
+  test("(4) a caller passing the old admin_tool source records nothing", async () => {
+    await tick();
+    const since = new Date().toISOString();
+    await tick();
+    expect(countsAsSettingsChange("setup.slackAdapter.setBotToken", "admin_tool" as never)).toBe(false);
+    await recordSetupToolSucceeded({ orgId: DEMO_ORG.id, tool: "setup.slackAdapter.setBotToken", source: "admin_tool" as never });
+    expect(await settingsChangedSince(DEMO_ORG.id, since)).toBe(false);
   });
 });
