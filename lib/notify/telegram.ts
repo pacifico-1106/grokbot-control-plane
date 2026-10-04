@@ -1,3 +1,4 @@
+import { attachmentCardLine, readCardAttachment, withoutAttachmentSummaryLine } from "@/lib/approvals/attachment-card";
 import {
   formatMailCardParts,
   MAIL_BODY_PREVIEW_LABEL,
@@ -92,6 +93,12 @@ function composeApprovalTelegramMessage(
     `ツール: <code>${escapeTelegramHtml(approval.tool || "unknown")}</code>`,
     `目的: ${escapeTelegramHtml(approval.purpose)}`,
   ];
+  // Approved attachment (filename + size from the snapshot only), outside the
+  // summary so the 4096-char trim can never drop it.
+  const attachment = readCardAttachment(approval.metadata);
+  if (attachment) {
+    lines.push(attachmentCardLine(attachment, (name) => `<code>${escapeTelegramHtml(name)}</code>`));
+  }
 
   // mail.send: put 宛先/件名/本文先頭 first for judgment material
   if (mailArtifact) {
@@ -138,7 +145,7 @@ export function buildApprovalTelegramMessage(
   employee: Employee | null
 ): string {
   // Keep the full body in DB summary; only trim the Telegram send payload.
-  const summary = approval.summary || "";
+  const summary = withoutAttachmentSummaryLine(approval.summary || "", approval.metadata);
   let text = composeApprovalTelegramMessage(approval, employee, summary);
   if (Array.from(text).length <= TELEGRAM_MESSAGE_MAX) return text;
   const suffix = TELEGRAM_OVERFLOW_SUFFIX;

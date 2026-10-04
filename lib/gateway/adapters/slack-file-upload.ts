@@ -76,6 +76,13 @@ export type FileUploadResponse =
       code: string;
       reason: string;
       messageJa: string;
+      /**
+       * Approved re-run attachment claim (lib/approvals/attachment-upload-claim.ts):
+       * failed = not shared, a later re-run may upload; in_progress = another
+       * re-run holds the upload; uncertain = outcome unknown, never retried
+       * automatically. Absent on other paths.
+       */
+      status?: "failed" | "in_progress" | "uncertain";
     };
 
 /**

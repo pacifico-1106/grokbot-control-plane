@@ -5,6 +5,7 @@ import { parseFulfillment } from "@/lib/approvals/fulfill";
 import { parseAdminFulfillment } from "@/lib/admin-mcp/fulfill-admin";
 import { isAdminClassApproval } from "@/lib/admin-mcp/audit-class";
 import { redactMetadata } from "@/lib/data/redaction";
+import { attachmentStatusField } from "@/lib/approvals/attachment-card";
 
 export const runtime = "nodejs";
 
@@ -91,6 +92,7 @@ export async function GET(req: Request) {
           ...(invokeFulfill.ts ? { ts: invokeFulfill.ts } : {}),
           ...(invokeFulfill.id ? { id: invokeFulfill.id } : {}),
           ...(invokeFulfill.surface ? { surface: invokeFulfill.surface } : {}),
+          ...(invokeFulfill.fileUpload ? { fileUpload: invokeFulfill.fileUpload } : {}),
         };
       } else if (invokeFulfill && !invokeFulfill.ok) {
         fulfillmentResult = {
@@ -120,6 +122,8 @@ export async function GET(req: Request) {
     revisionNote: approval.revisionNote,
     revisionCount: approval.revisionCount,
     parentApprovalId: approval.parentApprovalId,
+    // Approved attachment: snapshot filename + size only (null = none / not recorded).
+    attachment: attachmentStatusField(approval.metadata),
     ...(fulfillmentResult ? { fulfillment: redactMetadata(fulfillmentResult) } : {}),
     pollHint:
       status === "pending"

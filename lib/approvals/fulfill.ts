@@ -2,6 +2,13 @@ import { isDemoMode } from "@/lib/mode";
 import { isAdminClassApproval } from "@/lib/admin-mcp/audit-class";
 import { executeApproval } from "@/lib/approvals/execution";
 import {
+  attachmentAlreadyUploaded,
+  liveFileUpload,
+  parseStoredFileUpload,
+  type FulfillmentFileUpload,
+} from "@/lib/approvals/attachment-upload-claim";
+import { readCardAttachment, sanitizeCardFilename } from "@/lib/approvals/attachment-card";
+import {
   recheckGatewayToolAtFulfill,
   recheckAdminToolAtFulfill,
 } from "@/lib/billing/plan-fulfill-recheck";
@@ -21,6 +28,7 @@ import { getApprovalById, updateApprovalMetadata } from "@/lib/data/approvals";
 import { normalizePostingAs } from "@/lib/employees/posting-as";
 import {
   buildSnapshotAttachment,
+  snapshotAttachmentState,
   type SnapshotAttachment,
 } from "@/lib/approvals/snapshot-attachment";
 import {
@@ -143,6 +151,13 @@ export type ApprovalFulfillment = {
   error?: string;
   at: string;
   threadTsSource?: "client" | "wake_stash";
+  /**
+   * Approved attachment (conversation tools). Paths that post the approved text
+   * only (approval callback, W2) record `not_sent` / `rerun_required`; the live
+   * upload state (sent / in_progress / uncertain / failed) is derived from
+   * metadata.attachmentUpload by parseFulfillment.
+   */
+  fileUpload?: FulfillmentFileUpload;
 };
 
 export type ConversationDelivery =
@@ -338,6 +353,8 @@ export function parseFulfillment(
   if (rec.threadTsSource === "client" || rec.threadTsSource === "wake_stash") {
     fulfillment.threadTsSource = rec.threadTsSource;
   }
+  const fileUpload = liveFileUpload(metadata, parseStoredFileUpload(rec.fileUpload));
+  if (fileUpload) fulfillment.fileUpload = fileUpload;
   return fulfillment;
 }
 
@@ -652,11 +669,60 @@ function isMailSendTool(tool: string): boolean {
 }
 
 /**
+ * Only the approved text is posted here. When the snapshot carries an approved
+ * attachment that is not uploaded yet, say so (result + audit) instead of
+ * staying silent; the agent re-run with the approvalId uploads it.
+ */
+function attachmentNotSent(approval: ApprovalRequest): FulfillmentFileUpload | undefined {
+  const state = snapshotAttachmentState(approval.metadata?.invoke);
+  if (state.kind !== "present" || attachmentAlreadyUploaded(approval.metadata)) return undefined;
+  const card = readCardAttachment(approval.metadata);
+  const filename = card?.kind === "present" ? card.filename : sanitizeCardFilename(state.attachment.filename);
+  return {
+    status: "not_sent",
+    reason: "rerun_required",
+    filename,
+    ...(state.attachment.bytes !== undefined ? { bytes: state.attachment.bytes } : {}),
+  };
+}
+
+async function auditAttachmentNotSent(
+  approval: ApprovalRequest,
+  snapshot: InvokeSnapshot,
+  fileUpload: FulfillmentFileUpload
+): Promise<void> {
+  await appendAuditEvent({
+    orgId: approval.orgId,
+    employeeId: approval.employeeId,
+    credentialId: approval.credentialId,
+    action: "approval.attachment_not_sent",
+    purpose: approval.purpose,
+    summary: "承認済みの本文のみ投稿し、承認された添付は未送信（エージェントの approvalId 付き再実行で送信）",
+    metadata: {
+      approvalId: approval.id,
+      tool: snapshot.tool,
+      jobId: snapshot.jobId,
+      reason: "rerun_required",
+      // filename / bytes only: never the reference, its host or its hash.
+      filename: "filename" in fileUpload ? fileUpload.filename : undefined,
+      bytes: "bytes" in fileUpload ? fileUpload.bytes : undefined,
+      phase: "approval.fulfill",
+    },
+  });
+}
+
+type FulfillInvokeOptions = {
+  /** The caller uploads the approved attachment itself (agent re-run). */
+  attachmentHandledByCaller?: boolean;
+};
+
+/**
  * After resolveApproval(approved): post the snapshotted Slack/etc. message.
  * Never throws — the human already said yes; failures are recorded on metadata.
  */
 async function fulfillApprovedInvokeCore(
-  approval: ApprovalRequest
+  approval: ApprovalRequest,
+  options: FulfillInvokeOptions = {}
 ): Promise<ApprovalFulfillment | null> {
   try {
     const existing = parseFulfillment(approval.metadata);
@@ -741,6 +807,7 @@ async function fulfillApprovedInvokeCore(
     });
 
     const at = new Date().toISOString();
+    const notSent = posted.ok && !options.attachmentHandledByCaller ? attachmentNotSent(approval) : undefined;
     const fulfillment: ApprovalFulfillment = posted.ok
       ? posted.delivery === "slack"
         ? {
@@ -749,14 +816,16 @@ async function fulfillApprovedInvokeCore(
             channel: posted.channel,
             ts: posted.ts,
             at,
+            ...(notSent ? { fileUpload: notSent } : {}),
           }
-        : { ok: true, delivery: "stub", at }
+        : { ok: true, delivery: "stub", at, ...(notSent ? { fileUpload: notSent } : {}) }
       : { ok: false, error: posted.error || "slack_post_failed", at };
 
     await persistFulfillment(approval, {
       ...fulfillment,
       threadTsSource: threadResult.source !== "none" ? threadResult.source : undefined,
     } as ApprovalFulfillment);
+    if (notSent) await auditAttachmentNotSent(approval, snapshot, notSent).catch(() => undefined);
     if (!posted.ok) {
       await auditFulfillmentFailure(
         approval,
@@ -883,7 +952,10 @@ export async function fulfillIfApproved(
   return invoke;
 }
 
-export async function fulfillApprovedInvoke(approval: ApprovalRequest): Promise<ApprovalFulfillment | null> {
+export async function fulfillApprovedInvoke(
+  approval: ApprovalRequest,
+  options: FulfillInvokeOptions = {}
+): Promise<ApprovalFulfillment | null> {
   if (approval.status === "approved" && isConfigChangeApproval(approval)) {
     return fulfillConfigChangeApproval(approval);
   }
@@ -908,7 +980,7 @@ export async function fulfillApprovedInvoke(approval: ApprovalRequest): Promise<
         error: error instanceof Error ? error.message : "fulfill_recheck_failed" };
     }
   }
-  try { return await executeApproval(approval, () => fulfillApprovedInvokeCore(approval)); }
+  try { return await executeApproval(approval, () => fulfillApprovedInvokeCore(approval, options)); }
   catch (error) {
     return { ok: false, at: new Date().toISOString(),
       error: error instanceof Error ? error.message : "approval_execution_failed" };
