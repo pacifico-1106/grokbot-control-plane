@@ -98,6 +98,17 @@ interface ReplyPolicyRule {
 }
 ```
 
+## DM の返信をスレッドにしない（`SLACK_DM_REPLY_INLINE_ENABLED`、既定 OFF）
+
+`threadAffinity: "prefer_thread"` は、DM でも受け取ったメッセージの下にスレッドで返します。reply_policy を `channel_root` に変えると、チャンネルでの返し方まで変わってしまいます。そこで、DM だけを対象にしたフラグを用意しました。
+
+- **ON のとき**: Slack の DM への返信（`comm.reply` / `slack.post` など、相手ゲート付きの会話ツール）は、`prefer_thread` でも `thread_ts` を付けず、DM の元の流れに投稿します。wake parent stash も使いません。
+  - DM の判定: 宛先が `D…`（`isSlackDmChannel`）、または `channel_type: "im"` が渡されていて、宛先が `C…` / `G…` でないとき。`C…` / `G…` は、何と申告されても DM 扱いにしません。
+  - 受け取ったメッセージがすでにスレッドの中にある場合（`thread_ts` があり、`ts` と違う）は、そのスレッドに返します。`thread_ts == ts` や、`messageTs` だけが渡された場合は、スレッドの中とはみなしません。
+  - 承認を経た送信（`lib/approvals/fulfill.ts` の `threadOf`）も同じ判定です。
+- **OFF のとき（既定）、およびチャンネルへの返信**: これまでどおりです。
+- 実装: `lib/slack/dm-reply-inline.ts`。呼び出し元は `lib/gateway/invoke.ts`（返信先のスレッドの決定）と `lib/approvals/fulfill.ts`。
+
 ## 高リスク設定
 
 `afterHoursMode: "allow_send"` は営業時間外でも自動送信を許可します。この設定には明示的なテナント承諾が必要です：
