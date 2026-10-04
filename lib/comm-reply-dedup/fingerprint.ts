@@ -82,3 +82,21 @@ export function sketchSimilarity(a: number[] | null, b: number[] | null): number
   for (let i = 0; i < SKETCH_SIZE; i++) if (a[i] === b[i]) equal++;
   return equal / SKETCH_SIZE;
 }
+
+export type FingerprintMatch = { match: "exact" | "similar"; similarity: number };
+
+/**
+ * The duplicate criterion, shared by duplicate suppression and superseding:
+ * same keyed body hash, or (threshold set, both sketches present) sketch
+ * similarity ≥ threshold. threshold null = exact mode.
+ */
+export function compareFingerprints(
+  a: Pick<ReplyFingerprint, "bodyHash" | "sketch">,
+  b: Pick<ReplyFingerprint, "bodyHash" | "sketch">,
+  threshold: number | null
+): FingerprintMatch | null {
+  if (a.bodyHash === b.bodyHash) return { match: "exact", similarity: 1 };
+  if (threshold == null || !a.sketch || !b.sketch) return null;
+  const similarity = sketchSimilarity(a.sketch, b.sketch);
+  return similarity >= threshold ? { match: "similar", similarity } : null;
+}

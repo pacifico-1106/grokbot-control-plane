@@ -20,9 +20,10 @@ and a `comm.reply` with the same body to the same conversation are duplicates.
 | Two identical sends at the same time | an atomic claim lets only one post |
 | Post failed (provider error) | claim released, so a retry is not a duplicate |
 | Post threw (outcome unknown) | claim kept (`uncertain`), so it is never re-sent blindly |
-| New approval requested for a conversation | older **pending** approvals of the same employee + conversation become `superseded` (`newer_approval_requested`) |
-| Reply sent to a conversation (direct or via approval) | pending approvals of the same employee + conversation become `superseded` (`newer_reply_sent`) |
-| Approved approval fulfilled after a reply already went to that conversation (W2 / re-run) | not sent; closed as `superseded` (`replied_after_approval`), error `approval_superseded` |
+| New approval requested for a conversation | older **pending** approvals of the same employee + conversation **whose body is the same or similar** become `superseded` (`newer_approval_requested`, audit `match` / `similarity`) |
+| Reply sent to a conversation (direct or via approval) | pending approvals of the same employee + conversation **whose body is the same or similar** become `superseded` (`newer_reply_sent`) |
+| Reply / new approval about **another matter** in the same conversation | older pending approvals stay pending and are sent normally when approved |
+| Approved approval fulfilled after a reply **with the same / a similar body** already went to that conversation (W2 / re-run; not limited to the window) | not sent; closed as `superseded` (`replied_after_approval`), error `approval_superseded`. A later reply about another matter does not stop it (the duplicate window check still applies) |
 | Pending / approved conversation approval older than the TTL | not sent; closed as `expired` (sweep on invoke + W2 cron; re-checked at fulfill), error `approval_expired` |
 | Flag ON but no HMAC key, or the ledger is unavailable | **fail closed**: `503 duplicate_check_unavailable` on invoke, `fulfill_blocked_dedup_unavailable` on fulfill, audit `comm_reply.dedup_unavailable` |
 
@@ -74,8 +75,18 @@ Ledger retention is max(window, TTL) + 1 h, cleaned up opportunistically on clai
 
 Why 0.6: in the incident, the same-DM re-written pairs had 3-gram Jaccard
 0.71–0.73 (MinHash estimates 0.66–0.84 across random keys). Messages that are
-merely related stay well below 0.3. Note that the incident is fully covered by
-the supersede rules even in exact mode.
+merely related stay well below 0.3.
+
+Supersede criterion (木村, 2026-10-04): the same keyed check as duplicates —
+identical keyed body hash, or (similar mode) keyed sketch similarity ≥ the
+threshold; bodies under 20 normalized characters compare exactly only. The
+pending approval's body is fingerprinted in memory from its own invoke
+snapshot (which it already holds to be sent); nothing new is stored. At
+fulfill the RPC compares the ledger rows created after the approval the same
+way. In exact mode (`COMM_REPLY_DEDUP_MODE=exact`) only identical bodies
+supersede, so the incident's re-written messages would no longer be closed.
+With 128-value sketches a pair at Jaccard 0.71–0.74 falls under 0.6 for about
+0.03–0.25 % of keys (binomial spread), i.e. it would then be sent.
 
 ## Database (migration `20261004700000_comm_reply_dedup.sql`)
 
@@ -115,6 +126,6 @@ rollback only if the schema must go.
 
 - Replies sent while the flag was OFF are not in the ledger.
 - Slack / Telegram approval cards are not edited when a ticket is superseded.
-  Pressing them resolves nothing, but the card still looks open.
+  Pressing them resolves nothing, but the card still looks open (backlog).
 - Superseding is per employee. Two employees replying in the same conversation
   are not deduplicated against each other.

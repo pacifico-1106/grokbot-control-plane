@@ -413,6 +413,15 @@ export function snsDeliveryFromFulfillment(
   return null;
 }
 
+/**
+ * The text a conversation approval posts when fulfilled. Also used to compare
+ * a pending approval with a newer reply (COMM_REPLY_DEDUP_ENABLED supersede):
+ * the body itself is never stored by the dedup code, only fingerprinted.
+ */
+export function invokeSnapshotOutboundText(snapshot: InvokeSnapshot, fallbackPurpose: string): string {
+  return outboundText(snapshot.args ?? {}, snapshot.purpose || fallbackPurpose);
+}
+
 function outboundText(args: Record<string, unknown>, fallback: string): string {
   const raw = [args.text, args.body, args.message].find(
     (value) => typeof value === "string" && value.trim()
@@ -761,11 +770,7 @@ async function fulfillApprovedInvokeCore(
     // COMM_REPLY_DEDUP_ENABLED: expired, or the conversation already got a reply
     // after this approval was created → closed without sending. Claims the send
     // in the hash-only ledger otherwise. Fail closed when the ledger is down.
-    dedupGate = await fulfillDedupGate(
-      approval,
-      snapshot,
-      outboundText(snapshot.args ?? {}, snapshot.purpose || approval.purpose)
-    );
+    dedupGate = await fulfillDedupGate(approval, snapshot, invokeSnapshotOutboundText(snapshot, approval.purpose));
     if (!dedupGate.ok) {
       const blocked: ApprovalFulfillment = { ok: false, error: dedupGate.code, at: new Date().toISOString() };
       if (dedupGate.code === FULFILL_BLOCKED_DEDUP_UNAVAILABLE) await persistFulfillment(approval, blocked);

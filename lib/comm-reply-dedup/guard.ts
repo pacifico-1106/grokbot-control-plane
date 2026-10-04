@@ -205,7 +205,7 @@ export async function claimDirectCommReplySend(prepared: PreparedCommReplyDedup,
   return { state: "unavailable", reason: res.state === "denied" ? "claim_denied" : "claim_failed" };
 }
 
-/** After the post: failed releases the claim; sent supersedes pending approvals for the conversation. */
+/** After the post: failed releases the claim; sent supersedes pending approvals for the conversation with a similar body. */
 export async function finishDirectCommReplySend(
   prepared: PreparedCommReplyDedup,
   claimId: string | null,
@@ -219,12 +219,14 @@ export async function finishDirectCommReplySend(
     orgId: prepared.orgId,
     employeeId: prepared.employeeId,
     conversationKey: prepared.conversationKey,
+    fingerprint: prepared.fingerprint,
+    settings: prepared.settings,
     reason: "newer_reply_sent",
     supersededBy: opts.jobId ? `job:${opts.jobId}` : null,
   }).catch(() => []);
 }
 
-/** Invoke, after a new conversation approval was queued: older pending ones for the conversation close. */
+/** Invoke, after a new conversation approval was queued: older pending ones for the conversation with a similar body close. */
 export async function supersedeOlderOnNewApproval(
   prepared: PreparedCommReplyDedup,
   newApprovalId: string | null | undefined
@@ -234,6 +236,8 @@ export async function supersedeOlderOnNewApproval(
     orgId: prepared.orgId,
     employeeId: prepared.employeeId,
     conversationKey: prepared.conversationKey,
+    fingerprint: prepared.fingerprint,
+    settings: prepared.settings,
     reason: "newer_approval_requested",
     excludeApprovalId: newApprovalId,
     supersededBy: newApprovalId,
@@ -259,8 +263,10 @@ async function closeAtFulfill(
 /**
  * Approval fulfill, inside the execution claim and before the post:
  * 1. expired (created + TTL < now) → closed as expired, nothing sent
- * 2. a reply was already sent to the conversation after the approval was
- *    created (or the same body within the window) → closed as superseded
+ * 2. a reply with the same / a similar body (same criterion as duplicates) was
+ *    already sent to the conversation after the approval was created, or the
+ *    same / a similar body within the window → closed as superseded. A reply
+ *    about another matter does not stop it.
  * 3. otherwise the send is claimed in the ledger (finish with fulfillDedupFinish)
  */
 export async function fulfillDedupGate(
@@ -318,9 +324,9 @@ export async function fulfillDedupGate(
   if (res.state === "superseded" || res.state === "duplicate") {
     const meta = {
       reason: res.state === "superseded" ? "replied_after_approval" : "duplicate_of_recent_reply",
-      ...(res.state === "superseded"
-        ? { repliedAt: res.repliedAt }
-        : { match: res.match, similarity: Math.round(res.similarity * 1000) / 1000, matchedAt: res.matchedAt }),
+      match: res.match,
+      similarity: Math.round(res.similarity * 1000) / 1000,
+      ...(res.state === "superseded" ? { repliedAt: res.repliedAt } : { matchedAt: res.matchedAt }),
       phase: "approval.fulfill",
       ...dedupAuditMeta(prepared),
     };
@@ -331,7 +337,7 @@ export async function fulfillDedupGate(
   return { ok: false, code: FULFILL_BLOCKED_DEDUP_UNAVAILABLE };
 }
 
-/** After the fulfill post. Sent → also supersede other pending approvals for the conversation. */
+/** After the fulfill post. Sent → also supersede other pending approvals for the conversation with a similar body. */
 export async function fulfillDedupFinish(
   gate: FulfillDedupGate,
   approval: ApprovalRequest,
@@ -344,6 +350,8 @@ export async function fulfillDedupFinish(
     orgId: gate.prepared.orgId,
     employeeId: gate.prepared.employeeId,
     conversationKey: gate.prepared.conversationKey,
+    fingerprint: gate.prepared.fingerprint,
+    settings: gate.prepared.settings,
     reason: "newer_reply_sent",
     excludeApprovalId: approval.id,
     supersededBy: approval.id,

@@ -15,7 +15,7 @@ import { randomUUID } from "node:crypto";
 import { isDemoMode } from "@/lib/mode";
 import { createSupabaseAdminClient } from "@/lib/supabase";
 import { commReplyDedupNow } from "@/lib/comm-reply-dedup/config";
-import { sketchSimilarity } from "@/lib/comm-reply-dedup/fingerprint";
+import { compareFingerprints, sketchSimilarity } from "@/lib/comm-reply-dedup/fingerprint";
 
 export type CommReplySendRow = {
   id: string;
@@ -37,7 +37,10 @@ export type CommReplyClaimInput = {
   bodyHash: string;
   sketch: number[] | null;
   tool: string;
-  /** Set when fulfilling an approval: rows created after the approval → superseded. */
+  /**
+   * Set when fulfilling an approval: a row created after the approval with the
+   * same / a similar body (same criterion as duplicates) → superseded.
+   */
   approvalId?: string | null;
   /** Demo store only (production reads approval_requests.created_at itself). */
   approvalCreatedAt?: string | null;
@@ -57,7 +60,7 @@ export type CommReplyDuplicate = {
 export type CommReplyClaimResult =
   | { state: "claimed"; id: string }
   | CommReplyDuplicate
-  | { state: "superseded"; repliedAt: string }
+  | { state: "superseded"; repliedAt: string; match: "exact" | "similar"; similarity: number }
   | { state: "denied" }
   | { state: "unavailable"; reason: string };
 
@@ -122,8 +125,25 @@ function demoClaim(input: CommReplyClaimInput): CommReplyClaimResult {
           r.approvalId !== input.approvalId &&
           r.createdAtMs > createdMs
       )
-      .sort((a, b) => a.createdAtMs - b.createdAtMs)[0];
-    if (after) return { state: "superseded", repliedAt: new Date(after.createdAtMs).toISOString() };
+      .sort((a, b) => a.createdAtMs - b.createdAtMs);
+    // Same order as the RPC: earliest identical row, else the most similar one.
+    const exact = after.find((r) => r.bodyHash === input.bodyHash);
+    if (exact) {
+      return { state: "superseded", repliedAt: new Date(exact.createdAtMs).toISOString(), match: "exact", similarity: 1 };
+    }
+    let best: { row: CommReplySendRow; similarity: number } | null = null;
+    for (const row of after) {
+      const m = compareFingerprints(input, row, input.similarityThreshold);
+      if (m && (!best || m.similarity > best.similarity)) best = { row, similarity: m.similarity };
+    }
+    if (best) {
+      return {
+        state: "superseded",
+        repliedAt: new Date(best.row.createdAtMs).toISOString(),
+        match: "similar",
+        similarity: best.similarity,
+      };
+    }
   }
   const dup = demoMatch(input, nowMs);
   if (dup) return dup;
@@ -180,7 +200,12 @@ export async function claimCommReplySend(input: CommReplyClaimInput): Promise<Co
           matchedAt: String(row.matched_at ?? ""),
         };
       case "superseded":
-        return { state: "superseded", repliedAt: String(row.replied_at ?? "") };
+        return {
+          state: "superseded",
+          repliedAt: String(row.replied_at ?? ""),
+          match: row.match === "similar" ? "similar" : "exact",
+          similarity: typeof row.similarity === "number" ? row.similarity : 1,
+        };
       case "denied":
         return { state: "denied" };
       default:

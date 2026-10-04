@@ -2,7 +2,12 @@
  * Pending conversation approvals that must never go out late
  * (COMM_REPLY_DEDUP_ENABLED; callers check the flag):
  * - supersede: a newer reply was sent / a newer approval was requested for the
- *   same conversation (same org + employee + conversation key)
+ *   same conversation (same org + employee + conversation key) AND its body is
+ *   the same or similar to the pending approval's body (木村 2026-10-04: the
+ *   duplicate criterion — keyed hash, or keyed sketch similarity ≥ threshold).
+ *   A pending approval about another matter in the same conversation stays
+ *   pending. The pending body is fingerprinted in memory from the approval's
+ *   own invoke snapshot (which it needs to send); nothing new is stored.
  * - expire: older than COMM_REPLY_APPROVAL_TTL_MINUTES (default 24 h)
  * Closing is conditional on the current status, so a concurrent approve wins
  * the race and is then re-checked at fulfill (lib/comm-reply-dedup/guard.ts).
@@ -11,8 +16,14 @@ import type { ApprovalRequest } from "@/lib/types";
 import { appendAuditEvent } from "@/lib/data/audit";
 import { closeApprovalWithoutSend, listPendingApprovalsForTools } from "@/lib/data/approvals";
 import { audienceGatedToolIds } from "@/lib/gateway/tools";
-import { parseInvokeSnapshot } from "@/lib/approvals/fulfill";
-import { commReplyDedupNow, commReplyDedupSettings, resolveCommReplyDedupKey } from "./config";
+import { invokeSnapshotOutboundText, parseInvokeSnapshot } from "@/lib/approvals/fulfill";
+import {
+  commReplyDedupNow,
+  commReplyDedupSettings,
+  resolveCommReplyDedupKey,
+  type CommReplyDedupSettings,
+} from "./config";
+import { compareFingerprints, fingerprintReplyBody, type FingerprintMatch, type ReplyFingerprint } from "./fingerprint";
 import { conversationKey, conversationKeyInputFromSnapshot } from "./conversation-key";
 
 export type SupersedeReason = "newer_reply_sent" | "newer_approval_requested" | "replied_after_approval";
@@ -23,6 +34,23 @@ export function approvalConversationKey(approval: ApprovalRequest, key: Buffer):
   if (!snapshot) return null;
   const input = conversationKeyInputFromSnapshot(snapshot, approval.orgId);
   return input ? conversationKey(input, key) : null;
+}
+
+/**
+ * Does the newer reply / approval body match this pending approval's body
+ * (exact, or sketch similarity ≥ threshold; threshold null = exact mode)?
+ * In memory only; no snapshot → null (never superseded on a guess).
+ */
+export function approvalBodyMatch(
+  approval: ApprovalRequest,
+  newer: Pick<ReplyFingerprint, "bodyHash" | "sketch">,
+  key: Buffer,
+  settings: Pick<CommReplyDedupSettings, "mode" | "similarityThreshold" | "minSimilarityChars">
+): FingerprintMatch | null {
+  const snapshot = parseInvokeSnapshot(approval.metadata);
+  if (!snapshot) return null;
+  const pending = fingerprintReplyBody(invokeSnapshotOutboundText(snapshot, approval.purpose), key, settings.minSimilarityChars);
+  return compareFingerprints(newer, pending, settings.mode === "similar" ? settings.similarityThreshold : null);
 }
 
 export async function auditApprovalClosed(
@@ -38,7 +66,7 @@ export async function auditApprovalClosed(
     purpose: approval.purpose,
     summary:
       action === "approval.superseded"
-        ? "会話承認を置き換え済みとして送信せずに終了（同じ会話で新しい返信 / 承認依頼あり）"
+        ? "会話承認を置き換え済みとして送信せずに終了（同じ会話で同じ / 類似の内容の返信 / 承認依頼あり）"
         : "会話承認を期限切れとして送信せずに終了",
     metadata: { approvalId: approval.id, tool: approval.tool, jobId: approval.jobId, ...meta },
   }).catch(() => undefined);
@@ -48,6 +76,9 @@ export async function supersedePendingConversationApprovals(input: {
   orgId: string;
   employeeId: string;
   conversationKey: string;
+  /** Fingerprint of the newer reply / approval body (hash-only). */
+  fingerprint: Pick<ReplyFingerprint, "bodyHash" | "sketch">;
+  settings: Pick<CommReplyDedupSettings, "mode" | "similarityThreshold" | "minSimilarityChars">;
   reason: "newer_reply_sent" | "newer_approval_requested";
   excludeApprovalId?: string | null;
   supersededBy?: string | null;
@@ -69,8 +100,13 @@ export async function supersedePendingConversationApprovals(input: {
   for (const approval of pending) {
     if (approval.id === input.excludeApprovalId) continue;
     if (approvalConversationKey(approval, key) !== input.conversationKey) continue;
+    // Another matter in the same conversation stays pending.
+    const matched = approvalBodyMatch(approval, input.fingerprint, key, input.settings);
+    if (!matched) continue;
     const meta = {
       reason: input.reason,
+      match: matched.match,
+      similarity: Math.round(matched.similarity * 1000) / 1000,
       supersededBy: input.supersededBy ?? null,
       conversationKeyPrefix: input.conversationKey.slice(0, 12),
       phase: "invoke",

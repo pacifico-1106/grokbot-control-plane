@@ -19,6 +19,10 @@
 --    claim → denied     invalid input, employee not in org, approval not in org/employee
 --            superseded p_approval given and the conversation already has a ledger
 --                       row created after that approval (other than its own)
+--                       whose body is the same (hash) or similar (sketch
+--                       similarity ≥ p_similarity) — the same criterion as
+--                       duplicate. A reply about another matter does not
+--                       supersede (木村 2026-10-04); not limited to the window.
 --            duplicate  same body hash (exact) or sketch similarity ≥ p_similarity
 --                       within p_window_seconds
 --            claimed    a 'reserved' row was inserted; finish with sent|failed|uncertain
@@ -117,12 +121,35 @@ begin
     where created_at < now() - make_interval(secs => p_retention_seconds);
 
   if p_approval is not null then
+    -- Replied after the approval was created with the same / a similar body.
     select f.created_at into best_at from public.comm_reply_send_fingerprints f
       where f.org_id = p_org and f.employee_id = p_employee and f.conversation_key = p_conversation_key
         and f.created_at > a_created and f.approval_id is distinct from p_approval
+        and f.body_hash = p_body_hash
       order by f.created_at asc limit 1;
     if found then
-      return jsonb_build_object('state', 'superseded', 'replied_at', best_at);
+      return jsonb_build_object('state', 'superseded', 'replied_at', best_at, 'match', 'exact', 'similarity', 1);
+    end if;
+    if p_similarity is not null and p_sketch is not null then
+      best_at := null;
+      for r in
+        select f.sketch, f.created_at from public.comm_reply_send_fingerprints f
+          where f.org_id = p_org and f.employee_id = p_employee and f.conversation_key = p_conversation_key
+            and f.created_at > a_created and f.approval_id is distinct from p_approval
+            and f.sketch is not null
+          order by f.created_at asc limit 200
+      loop
+        select count(*)::double precision / 128 into sim
+          from unnest(r.sketch, p_sketch) as u(x, y) where u.x = u.y;
+        if sim >= p_similarity and sim > best_sim then
+          best_sim := sim;
+          best_at := r.created_at;
+        end if;
+      end loop;
+      if best_at is not null then
+        return jsonb_build_object('state', 'superseded', 'replied_at', best_at, 'match', 'similar', 'similarity', best_sim);
+      end if;
+      best_sim := 0;
     end if;
   end if;
 

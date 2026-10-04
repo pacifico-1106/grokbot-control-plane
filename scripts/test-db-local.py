@@ -131,7 +131,7 @@ try:
     assert query("select status from public.approval_requests where id='82000000-0000-4000-8000-000000000002';") == "expired"
     assert "superseded" not in query("select pg_get_constraintdef(oid) from pg_constraint where conname='approval_requests_status_check';")
     sql(comm_reply_dedup)  # forward again after rollback
-    print("PASS: comm reply dedup ledger: superseded status + guard, anon/authenticated denied, org/employee isolation, exact/similar/superseded, 12 concurrent identical claims have 1 winner; rollback + re-apply.")
+    print("PASS: comm reply dedup ledger: superseded status + guard, anon/authenticated denied, org/employee isolation, exact/similar, superseded-after-approval only for an identical / similar reply (7 cases), 12 concurrent identical claims have 1 winner; rollback + re-apply.")
     member_guard = ROOT / "supabase/migrations/20261004200000_org_members_capability_guard.sql"
     sql(member_guard)
     sql(member_guard)  # re-applicable
