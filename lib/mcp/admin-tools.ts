@@ -1,4 +1,5 @@
 import { consumeAdminApprovalSecret } from "@/lib/admin-mcp/consume-secret";
+import { recordSetupToolSucceeded } from "@/lib/approvals/attachment-retry-cap";
 import { canReadAdminApproval } from "@/lib/admin-mcp/result-authority";
 import { assertAdminToolAllowedForPlan } from "@/lib/billing/plan-gate";
 /**
@@ -2169,7 +2170,34 @@ async function runApprovalWorkflowInspect(
   };
 }
 
+/**
+ * 木村 #255 second round: a settings-type tool (setup.*) that answers ok
+ * directly — not a queued ticket (needs_approval / approvalId), not an error —
+ * records the attachment retry-cap reset marker (e.g. setup.slackStatus with
+ * everything ready after a fix done in Slack itself). Approved tickets record
+ * it on fulfillment (lib/admin-mcp/fulfill-admin.ts). Flag / tool checks are
+ * inside recordSetupToolSucceeded; best effort, the result is never changed.
+ */
 export async function callAdminMcpTool(
+  name: string,
+  args: Record<string, unknown>,
+  cred: ResolvedAdminCredential
+): Promise<{
+  content: Array<{ type: "text"; text: string }>;
+  structuredContent?: unknown;
+  isError?: boolean;
+}> {
+  const result = await callAdminMcpToolCore(name, args, cred);
+  if (name.startsWith("setup.") && !result.isError) {
+    const data = result.structuredContent as Record<string, unknown> | undefined;
+    if (data?.ok === true && data.needs_approval !== true && data.approvalId === undefined) {
+      await recordSetupToolSucceeded({ orgId: cred.orgId, tool: name, source: "admin_tool" }).catch(() => undefined);
+    }
+  }
+  return result;
+}
+
+async function callAdminMcpToolCore(
   name: string,
   args: Record<string, unknown>,
   cred: ResolvedAdminCredential

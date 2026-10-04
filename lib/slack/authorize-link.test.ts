@@ -484,6 +484,7 @@ describe("callback (single use, pinned user / team)", () => {
       noSecrets(rows);
       // flag OFF: a completion records nothing
       delete process.env.APPROVAL_ATTACHMENT_RECONCILE_ENABLED;
+      calls = []; // deliveredToken() reads the newest link DM only
       const state2 = await startState(await issueViaTicket(empA.id));
       expect((await completeAuthorizeLinkCallback({ state: state2, code: "c-reset2", oauthError: "", exchange: exchangeWith(NEW_USER_TOKEN), authTest: authTestAs(empASlack) })).ok).toBe(true);
       expect(resetRows().length).toBe(before + 1);

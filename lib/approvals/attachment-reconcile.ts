@@ -20,7 +20,10 @@
  *    is due at the previous check + N·2^k minutes (N = the stale minutes:
  *    T0+10, +20, +40 … → T0+10, 30, 70, 150, 310, 630, 1270 min with N=10);
  *    a re-check whose next one would fall past T0 + 24 h is the last one
- *    (recheckStoppedAt). The schedule (recheckAttempts / nextCheckAt) is
+ *    (recheckStoppedAt). 木村 #255 second round: re-checks also stop when the
+ *    approval is no longer "approved" (never a candidate) or the admin agent
+ *    resolves the A1 item (stuckWatch.resolve → recheckStopReason
+ *    stuck_watch_resolved, written by stopAttachmentRechecks). The schedule (recheckAttempts / nextCheckAt) is
  *    written with the uncertain outcome as a compare-and-set on the attempt
  *    count. Items that can never be settled automatically (ambiguous /
  *    similar candidates, unsupported destination) are closed by the admin
@@ -146,6 +149,10 @@ export function nextRecheckSchedule(record: AttachmentUploadRecord, now: Date, s
 }
 
 function staleCandidate(approval: ApprovalRequest, now: Date, staleMs: number): Candidate | null {
+  // 木村 #255 second round: only an approval that is still "approved" can ever
+  // upload (the claim RPC denies anything else), so a closed one (rejected /
+  // expired / revision_requested / pending) is never checked or re-scheduled.
+  if (approval.status !== "approved") return null;
   const record = readAttachmentUpload(approval.metadata);
   if (!record || (record.state !== "running" && record.state !== "uncertain")) return null;
   if (record.state === "uncertain" && record.adminNotifiedAt) {

@@ -1,8 +1,11 @@
 -- Additive expansion (2026-10-04, #253 follow-up: scheduled attachment reconcile).
 -- Apply after 20261004300000_approval_attachment_upload_claim.sql and before
 -- enabling APPROVAL_ATTACHMENT_RECONCILE_ENABLED. No table, column, grant on
--- tables, RLS policy or business constraint is changed: the three functions
--- only rewrite approval_requests.metadata keys under the row lock.
+-- tables, RLS policy or business constraint is changed: the five functions
+-- only rewrite approval_requests.metadata keys under the row lock (the capped
+-- claim also reads audit_events). Not applied in production yet, so the
+-- 木村 #255 second-round additions (slackTokenType, retry streak, capped claim,
+-- re-check stop) extend this file instead of a later migration.
 --
 -- reconcile_approval_attachment_upload: change metadata.attachmentUpload ONLY
 --   when it is still exactly what the caller read (state = p_expected_state,
@@ -16,11 +19,27 @@
 --                         (compare-and-set) and nextCheckAt is within
 --                         adminNotifiedAt + 24 h; no nextCheckAt = last re-check
 --                         (recheckStoppedAt). Anything else → false.
+--                         A stopped schedule (recheckStoppedAt set) is never
+--                         re-scheduled (→ false).
 --   p_result keeps fileId / filename / bytes / code (+ the schedule) only.
 -- finish_approval_attachment_upload (same signature as 20261004300000, 木村 5):
 --   additionally keeps slackError (a Slack error code, ^[a-z_]{1,64}$) and
 --   slackNeeded (≤ 10 scope names, ^[a-z][a-z0-9._:-]{0,63}$, never xox…).
 --   Anything else is dropped (not an error: the claim must still close).
+--   木村 #255 second round: + slackTokenType ('user' | 'bot', only next to
+--   slackError) and metadata.attachmentUploadStreak = {code, count, lastAt}:
+--   failed + slackError → same code as the stored streak: count + 1 (≤ 9999),
+--   other code: 1; every other outcome removes the streak. Outside
+--   attachmentUpload, so a new claim (which rewrites attachmentUpload) keeps it.
+-- claim_approval_attachment_upload_capped (new, flag ON callers only): under the
+--   row lock — not approved → denied; the failed record's slackError has a streak
+--   with count ≥ p_cap (1..10) → if an audit row action 'setup.tool_succeeded'
+--   of the same org was created after the streak's lastAt, remove the streak
+--   and continue, else → {state:'capped', code, count} (no claim, no upload).
+--   Then #253's claim_approval_attachment_upload (same transaction, same lock).
+-- stop_approval_attachment_recheck (new): a notified uncertain record whose
+--   schedule is still running → recheckStoppedAt + recheckStopReason
+--   (p_reason 'stuck_watch_resolved' only), nextCheckAt removed. → true once.
 -- mark_approval_attachment_not_sent: set metadata.fulfillment.fileUpload to the
 --   not_sent marker ONLY while the approval is approved, the text was posted
 --   (fulfillment.ok = true), there is no fulfillment.fileUpload, no
@@ -57,6 +76,8 @@ begin
     return false;
   end if;
   if p_state = 'uncertain' and coalesce(u->>'adminNotifiedAt','') <> '' then
+    -- stopped schedule (ran out, or the A1 item was resolved): never re-scheduled
+    if u ? 'recheckStoppedAt' then return false; end if;
     -- re-check of a notified record (木村 2): compare-and-set on the attempt count
     n := coalesce((u->>'recheckAttempts')::int, 0) + 1;
     if (r->>'recheckAttempts')::int is distinct from n then return false; end if;
@@ -87,7 +108,7 @@ end $$;
 
 create or replace function public.finish_approval_attachment_upload(p_id uuid, p_org uuid, p_claim uuid, p_state text, p_result jsonb)
 returns boolean language plpgsql security invoker set search_path = pg_catalog, public as $$
-declare a public.approval_requests; u jsonb; r jsonb; se jsonb; sn jsonb;
+declare a public.approval_requests; u jsonb; r jsonb; se jsonb; sn jsonb; st jsonb; s jsonb; n int;
 begin
   if p_state not in ('succeeded','failed','uncertain') then raise exception 'invalid_attachment_upload_state'; end if;
   r := coalesce(p_result,'{}'::jsonb);
@@ -100,6 +121,10 @@ begin
       where jsonb_typeof(e) = 'string' and (e #>> '{}') ~ '^[a-z][a-z0-9._:-]{0,63}$' and (e #>> '{}') !~ '^xox'
       limit 10) s;
   end if;
+  -- 木村 #255 second round: which token Slack answered for (never the token itself)
+  if se is not null and jsonb_typeof(r->'slackTokenType') = 'string' and (r->>'slackTokenType') in ('user','bot') then
+    st := r->'slackTokenType';
+  end if;
   select * into a from public.approval_requests where id=p_id and org_id=p_org for update;
   if not found then return false; end if;
   u := a.metadata->'attachmentUpload';
@@ -108,8 +133,65 @@ begin
   end if;
   u := u || jsonb_strip_nulls(jsonb_build_object(
       'fileId', r->'fileId', 'filename', r->'filename', 'bytes', r->'bytes', 'code', r->'code',
-      'slackError', se, 'slackNeeded', sn))
+      'slackError', se, 'slackNeeded', sn, 'slackTokenType', st))
     || jsonb_build_object('state', p_state, 'finishedAt', now());
+  if p_state = 'failed' and se is not null then
+    -- consecutive definite failures of this approval with this Slack error code
+    s := a.metadata->'attachmentUploadStreak';
+    n := case when jsonb_typeof(s) = 'object' and s->>'code' = (se #>> '{}') and (s->>'count') ~ '^[0-9]{1,4}$'
+              then least((s->>'count')::int + 1, 9999) else 1 end;
+    update public.approval_requests
+      set metadata = metadata || jsonb_build_object('attachmentUpload', u)
+        || jsonb_build_object('attachmentUploadStreak', jsonb_build_object('code', se, 'count', n, 'lastAt', now()))
+      where id=p_id and org_id=p_org;
+  else
+    update public.approval_requests
+      set metadata = (metadata || jsonb_build_object('attachmentUpload', u)) - 'attachmentUploadStreak'
+      where id=p_id and org_id=p_org;
+  end if;
+  return true;
+end $$;
+
+create or replace function public.claim_approval_attachment_upload_capped(p_id uuid, p_org uuid, p_claim uuid, p_ref text, p_cap int)
+returns jsonb language plpgsql security invoker set search_path = pg_catalog, public as $$
+declare a public.approval_requests; u jsonb; s jsonb;
+begin
+  if p_cap is null or p_cap < 1 or p_cap > 10 then raise exception 'invalid_attachment_retry_cap'; end if;
+  if p_ref is null or p_ref !~ '^[0-9a-f]{64}$' then raise exception 'invalid_attachment_ref'; end if;
+  select * into a from public.approval_requests where id=p_id and org_id=p_org for update;
+  if not found or a.status <> 'approved' then return jsonb_build_object('state','denied'); end if;
+  u := a.metadata->'attachmentUpload';
+  s := a.metadata->'attachmentUploadStreak';
+  if u->>'state' = 'failed' and jsonb_typeof(s) = 'object' and s->>'code' = u->>'slackError'
+     and (s->>'count') ~ '^[0-9]{1,4}$' and (s->>'count')::int >= p_cap then
+    if exists (select 1 from public.audit_events e
+               where e.org_id = p_org and e.action = 'setup.tool_succeeded'
+                 and e.created_at > (s->>'lastAt')::timestamptz) then
+      -- settings changed since the last failure: count from 0 again
+      update public.approval_requests set metadata = metadata - 'attachmentUploadStreak'
+        where id=p_id and org_id=p_org;
+    else
+      return jsonb_build_object('state','capped','code', s->'code','count', (s->>'count')::int);
+    end if;
+  end if;
+  return public.claim_approval_attachment_upload(p_id, p_org, p_claim, p_ref);
+end $$;
+
+create or replace function public.stop_approval_attachment_recheck(p_id uuid, p_org uuid, p_reason text)
+returns boolean language plpgsql security invoker set search_path = pg_catalog, public as $$
+declare a public.approval_requests; u jsonb;
+begin
+  if p_reason is null or p_reason not in ('stuck_watch_resolved') then
+    raise exception 'invalid_attachment_recheck_stop_reason';
+  end if;
+  select * into a from public.approval_requests where id=p_id and org_id=p_org for update;
+  if not found then return false; end if;
+  u := a.metadata->'attachmentUpload';
+  if u is null or jsonb_typeof(u) <> 'object' or u->>'state' is distinct from 'uncertain'
+     or coalesce(u->>'adminNotifiedAt','') = '' or u ? 'recheckStoppedAt' then
+    return false;
+  end if;
+  u := (u - 'nextCheckAt') || jsonb_build_object('recheckStoppedAt', now(), 'recheckStopReason', p_reason);
   update public.approval_requests set metadata = metadata || jsonb_build_object('attachmentUpload', u)
     where id=p_id and org_id=p_org;
   return true;
@@ -142,7 +224,11 @@ end $$;
 revoke all on function public.reconcile_approval_attachment_upload(uuid,uuid,text,text,text,jsonb) from public,anon,authenticated;
 revoke all on function public.mark_approval_attachment_not_sent(uuid,uuid,jsonb) from public,anon,authenticated;
 revoke all on function public.finish_approval_attachment_upload(uuid,uuid,uuid,text,jsonb) from public,anon,authenticated;
+revoke all on function public.claim_approval_attachment_upload_capped(uuid,uuid,uuid,text,int) from public,anon,authenticated;
+revoke all on function public.stop_approval_attachment_recheck(uuid,uuid,text) from public,anon,authenticated;
 grant execute on function public.reconcile_approval_attachment_upload(uuid,uuid,text,text,text,jsonb) to service_role;
 grant execute on function public.mark_approval_attachment_not_sent(uuid,uuid,jsonb) to service_role;
 grant execute on function public.finish_approval_attachment_upload(uuid,uuid,uuid,text,jsonb) to service_role;
+grant execute on function public.claim_approval_attachment_upload_capped(uuid,uuid,uuid,text,int) to service_role;
+grant execute on function public.stop_approval_attachment_recheck(uuid,uuid,text) to service_role;
 commit;

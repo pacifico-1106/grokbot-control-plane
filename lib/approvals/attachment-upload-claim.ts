@@ -28,7 +28,13 @@ import { isDemoMode } from "@/lib/mode";
 import { createSupabaseAdminClient } from "@/lib/supabase";
 import { getApprovalById, updateApprovalMetadata } from "@/lib/data/approvals";
 import type { ApprovalRequest } from "@/lib/types";
-import { isDefinitePreShareSlackError, sanitizeSlackScopes } from "@/lib/slack/definite-errors";
+import {
+  isDefinitePreShareSlackError,
+  isSlackTokenType,
+  sanitizeSlackScopes,
+  type SlackTokenType,
+} from "@/lib/slack/definite-errors";
+import { hasSetupToolSucceededSince } from "@/lib/approvals/attachment-retry-cap";
 
 export type AttachmentUploadState = "running" | "succeeded" | "failed" | "uncertain";
 export type AttachmentUploadRecord = {
@@ -54,13 +60,20 @@ export type AttachmentUploadRecord = {
   recheckAttempts?: number;
   nextCheckAt?: string;
   recheckStoppedAt?: string;
+  /**
+   * 木村 #255 second round: why the schedule stopped before it ran out —
+   * stuck_watch_resolved = the admin agent closed the A1 item (stuckWatch.resolve).
+   */
+  recheckStopReason?: RecheckStopReason;
   /** 木村 5: failed because Slack answered a definite pre-share error (lib/slack/definite-errors.ts). */
   slackError?: string;
   /** missing_scope only: Slack's `needed` scope names (sanitized). */
   slackNeeded?: string[];
-  /** STUB (test commit): which token failed (木村 #255 second round). */
-  slackTokenType?: "user" | "bot";
+  /** With slackError only: which token Slack answered for (木村 #255 second round). */
+  slackTokenType?: SlackTokenType;
 };
+export type RecheckStopReason = "stuck_watch_resolved";
+const RECHECK_STOP_REASONS: readonly RecheckStopReason[] = ["stuck_watch_resolved"];
 export type AttachmentUploadResult = {
   fileId?: string;
   filename?: string;
@@ -68,6 +81,7 @@ export type AttachmentUploadResult = {
   code?: string;
   slackError?: string;
   slackNeeded?: string[];
+  slackTokenType?: SlackTokenType;
 };
 /** Re-check schedule written with an uncertain reconcile outcome (木村 2). */
 export type AttachmentRecheckSchedule = { recheckAttempts: number; nextCheckAt?: string };
@@ -82,7 +96,35 @@ export type AttachmentUploadClaim =
   | { kind: "running" }
   | { kind: "uncertain" }
   | { kind: "denied" }
-  | { kind: "unavailable" };
+  | { kind: "unavailable" }
+  /** 木村 #255 second round: same definite error `count` times in a row, no settings change since → no upload. */
+  | { kind: "capped"; code: string; count: number };
+
+/**
+ * Consecutive definite failures of ONE approval with ONE Slack error code
+ * (metadata.attachmentUploadStreak — outside attachmentUpload, so a new claim
+ * does not wipe it). Written only by finish (row lock): failed + definite error
+ * → same code: count + 1, other code: 1; any other outcome removes it.
+ */
+export type AttachmentUploadStreak = { code: string; count: number; lastAt: string };
+const MAX_STREAK = 9999;
+
+export function readAttachmentUploadStreak(metadata: Record<string, unknown> | null | undefined): AttachmentUploadStreak | null {
+  const rec = obj(metadata?.attachmentUploadStreak);
+  if (!rec) return null;
+  const code = str(rec.code);
+  const count = num(rec.count);
+  const lastAt = str(rec.lastAt);
+  if (!code || !isDefinitePreShareSlackError(code) || count === undefined || !Number.isInteger(count) || count < 1 || count > MAX_STREAK) return null;
+  if (!lastAt || !Number.isFinite(Date.parse(lastAt))) return null;
+  return { code, count, lastAt };
+}
+
+function nextStreak(prev: AttachmentUploadStreak | null, state: Exclude<AttachmentUploadState, "running">, picked: AttachmentUploadResult, at: string) {
+  if (state !== "failed" || !picked.slackError) return undefined;
+  const count = prev?.code === picked.slackError ? Math.min(prev.count + 1, MAX_STREAK) : 1;
+  return { code: picked.slackError, count, lastAt: at };
+}
 
 /** Admin MCP stuck-watch item id for an attachment the reconcile could not check. */
 export function attachmentUncertainItemId(approvalId: string): string {
@@ -91,6 +133,8 @@ export function attachmentUncertainItemId(approvalId: string): string {
 
 const STATES: readonly AttachmentUploadState[] = ["running", "succeeded", "failed", "uncertain"];
 const demoClaims = new Map<string, AttachmentUploadRecord>();
+/** Demo mirror of metadata.attachmentUploadStreak (null = cleared). */
+const demoStreaks = new Map<string, AttachmentUploadStreak | null>();
 
 function obj(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
@@ -113,15 +157,29 @@ export function readAttachmentUpload(metadata: Record<string, unknown> | null | 
   if (attempts !== undefined && Number.isInteger(attempts) && attempts >= 0 && attempts <= MAX_RECHECK_ATTEMPTS) {
     out.recheckAttempts = attempts;
   }
-  Object.assign(out, slackFields(rec.slackError, rec.slackNeeded));
+  if (RECHECK_STOP_REASONS.includes(rec.recheckStopReason as RecheckStopReason)) {
+    out.recheckStopReason = rec.recheckStopReason as RecheckStopReason;
+  }
+  Object.assign(out, slackFields(rec.slackError, rec.slackNeeded, rec.slackTokenType));
   return out;
 }
 
-/** Only a definite pre-share Slack error code, and scope names for missing_scope (never anything else). */
-function slackFields(error: unknown, needed: unknown): Pick<AttachmentUploadRecord, "slackError" | "slackNeeded"> {
+/**
+ * Only a definite pre-share Slack error code, scope names for missing_scope and
+ * the token type ("user" | "bot") — never anything else.
+ */
+function slackFields(
+  error: unknown,
+  needed: unknown,
+  tokenType: unknown
+): Pick<AttachmentUploadRecord, "slackError" | "slackNeeded" | "slackTokenType"> {
   if (typeof error !== "string" || !isDefinitePreShareSlackError(error)) return {};
   const scopes = error === "missing_scope" ? sanitizeSlackScopes(needed) : undefined;
-  return { slackError: error, ...(scopes ? { slackNeeded: scopes } : {}) };
+  return {
+    slackError: error,
+    ...(scopes ? { slackNeeded: scopes } : {}),
+    ...(isSlackTokenType(tokenType) ? { slackTokenType: tokenType } : {}),
+  };
 }
 
 /** #252 wrote `attachmentFulfillment` after a successful upload (records already in production). */
@@ -138,7 +196,7 @@ function pickResult(result: AttachmentUploadResult): AttachmentUploadResult {
   if (str(result.filename)) out.filename = result.filename;
   if (num(result.bytes) !== undefined) out.bytes = result.bytes;
   if (str(result.code)) out.code = result.code;
-  Object.assign(out, slackFields(result.slackError, result.slackNeeded));
+  Object.assign(out, slackFields(result.slackError, result.slackNeeded, result.slackTokenType));
   return out;
 }
 
@@ -148,6 +206,11 @@ function fromRpc(data: unknown): AttachmentUploadClaim | null {
     case "running": return { kind: "running" };
     case "uncertain": return { kind: "uncertain" };
     case "denied": return { kind: "denied" };
+    case "capped": {
+      const count = num(rec.count);
+      const code = str(rec.code);
+      return code && count !== undefined ? { kind: "capped", code, count } : null;
+    }
     case "succeeded": {
       const upload = obj(rec.upload) ?? {};
       const fileId = str(upload.fileId);
@@ -157,15 +220,32 @@ function fromRpc(data: unknown): AttachmentUploadClaim | null {
   }
 }
 
-export async function claimAttachmentUpload(approval: ApprovalRequest, refSha256: string): Promise<AttachmentUploadClaim> {
+/**
+ * opts.retryCap (木村 #255 second round, reconcile flag ON): refuse ("capped")
+ * while the failed record's definite error has repeated retryCap times in a
+ * row and no setup-type tool succeeded in the org after the last of them; a
+ * success since then clears the streak and the claim proceeds. Production:
+ * RPC claim_approval_attachment_upload_capped (same row lock, then #253's claim).
+ */
+export async function claimAttachmentUpload(
+  approval: ApprovalRequest,
+  refSha256: string,
+  opts: { retryCap?: number } = {}
+): Promise<AttachmentUploadClaim> {
   const claimId = randomUUID();
+  const cap = opts.retryCap !== undefined && Number.isInteger(opts.retryCap) && opts.retryCap >= 1 && opts.retryCap <= 10
+    ? opts.retryCap : undefined;
   if (!isDemoMode()) {
     const admin = createSupabaseAdminClient();
     if (!admin) return { kind: "unavailable" };
     try {
-      const { data, error } = await admin.rpc("claim_approval_attachment_upload", {
-        p_id: approval.id, p_org: approval.orgId, p_claim: claimId, p_ref: refSha256,
-      });
+      const { data, error } = cap === undefined
+        ? await admin.rpc("claim_approval_attachment_upload", {
+            p_id: approval.id, p_org: approval.orgId, p_claim: claimId, p_ref: refSha256,
+          })
+        : await admin.rpc("claim_approval_attachment_upload_capped", {
+            p_id: approval.id, p_org: approval.orgId, p_claim: claimId, p_ref: refSha256, p_cap: cap,
+          });
       if (error || !data) return { kind: "unavailable" };
       if (obj(data)?.state === "claimed") return { kind: "claimed", claimId };
       return fromRpc(data) ?? { kind: "unavailable" };
@@ -175,9 +255,21 @@ export async function claimAttachmentUpload(approval: ApprovalRequest, refSha256
   }
 
   const current = await getApprovalById(approval.id, approval.orgId).catch(() => null);
+  const key = `${approval.orgId}:${approval.id}`;
+  let resetStreak = false;
+  if (cap !== undefined && current) {
+    const streak = demoStreaks.has(key) ? demoStreaks.get(key)! : readAttachmentUploadStreak(current.metadata);
+    const rec = demoClaims.get(key) ?? readAttachmentUpload(current.metadata);
+    if (rec?.state === "failed" && streak && streak.code === rec.slackError && streak.count >= cap) {
+      if (!(await hasSetupToolSucceededSince(approval.orgId, streak.lastAt))) {
+        return current.status === "approved" ? { kind: "capped", code: streak.code, count: streak.count } : { kind: "denied" };
+      }
+      resetStreak = true;
+    }
+  }
   // ---- synchronous check-and-set (no await until the claim is recorded) ----
   if (!current || current.status !== "approved") return { kind: "denied" };
-  const key = `${approval.orgId}:${approval.id}`;
+  if (resetStreak) demoStreaks.set(key, null);
   const record = demoClaims.get(key) ?? readAttachmentUpload(current.metadata);
   const prior = legacySuccess(current.metadata, refSha256);
   if (prior) return { kind: "succeeded", ...prior };
@@ -188,7 +280,9 @@ export async function claimAttachmentUpload(approval: ApprovalRequest, refSha256
   const claimed: AttachmentUploadRecord = { state: "running", claimId, refSha256, claimedAt: new Date().toISOString() };
   demoClaims.set(key, claimed);
   // ---------------------------------------------------------------------------
-  await updateApprovalMetadata(current, { attachmentUpload: claimed }).catch(() => undefined);
+  await updateApprovalMetadata(current, {
+    attachmentUpload: claimed, ...(resetStreak ? { attachmentUploadStreak: undefined } : {}),
+  }).catch(() => undefined);
   return { kind: "claimed", claimId };
 }
 
@@ -219,10 +313,16 @@ export async function finishAttachmentUpload(
   const key = `${approval.orgId}:${approval.id}`;
   const record = demoClaims.get(key);
   if (!record || record.state !== "running" || record.claimId !== claimId) return false;
-  const next: AttachmentUploadRecord = { ...record, ...picked, state, finishedAt: new Date().toISOString() };
+  const at = new Date().toISOString();
+  const next: AttachmentUploadRecord = { ...record, ...picked, state, finishedAt: at };
   demoClaims.set(key, next);
   const current = await getApprovalById(approval.id, approval.orgId).catch(() => null);
-  if (current) await updateApprovalMetadata(current, { attachmentUpload: next }).catch(() => undefined);
+  const prevStreak = demoStreaks.has(key) ? demoStreaks.get(key)! : readAttachmentUploadStreak(current?.metadata);
+  const streak = nextStreak(prevStreak, state, picked, at);
+  demoStreaks.set(key, streak ?? null);
+  if (current) {
+    await updateApprovalMetadata(current, { attachmentUpload: next, attachmentUploadStreak: streak }).catch(() => undefined);
+  }
   return true;
 }
 
@@ -244,6 +344,8 @@ export type FulfillmentFileUpload =
       /** failed only: the definite Slack error (→ pollHint reinvoke_with_approvalId + reinvokeReason). */
       slackError?: string;
       slackNeeded?: string[];
+      /** failed only, with slackError: which token failed (user | bot). */
+      slackTokenType?: SlackTokenType;
     };
 
 export function parseStoredFileUpload(value: unknown): FulfillmentFileUpload | undefined {
@@ -275,6 +377,7 @@ export function liveFileUpload(
       status: "failed", ...display(upload), ...(upload.code ? { code: upload.code } : {}),
       ...(upload.slackError ? { slackError: upload.slackError } : {}),
       ...(upload.slackNeeded ? { slackNeeded: upload.slackNeeded } : {}),
+      ...(upload.slackTokenType ? { slackTokenType: upload.slackTokenType } : {}),
     };
   }
   const legacy = obj(metadata?.attachmentFulfillment);
@@ -342,6 +445,8 @@ export async function reconcileAttachmentUpload(
   const at = (opts.at ?? new Date()).toISOString();
   let next: AttachmentUploadRecord;
   if (state === "uncertain" && record.adminNotifiedAt) {
+    // stopped (schedule ran out, or the A1 item was resolved): never re-scheduled
+    if (record.recheckStoppedAt) return false;
     // re-check of a notified record: compare-and-set on the attempt count
     if (!schedule || schedule.recheckAttempts !== (record.recheckAttempts ?? 0) + 1) return false;
     if (schedule.nextCheckAt && !withinRecheckWindow(record.adminNotifiedAt, schedule.nextCheckAt)) return false;
@@ -362,6 +467,42 @@ export async function reconcileAttachmentUpload(
   }
   demoClaims.set(key, next);
   // ---------------------------------------------------------------------------
+  await updateApprovalMetadata(current, { attachmentUpload: next }).catch(() => undefined);
+  return true;
+}
+
+/**
+ * 木村 #255 second round: stop the re-check schedule of a notified uncertain
+ * record (A1 item resolved by the admin agent). Sets recheckStoppedAt +
+ * recheckStopReason and removes nextCheckAt; the state is not changed (still
+ * uncertain → a re-run never uploads). true only for the write that stopped it;
+ * already stopped / not a notified uncertain record / store error → false.
+ * Production: RPC stop_approval_attachment_recheck (row lock).
+ */
+export async function stopAttachmentRechecks(approval: ApprovalRequest, reason: RecheckStopReason): Promise<boolean> {
+  if (!RECHECK_STOP_REASONS.includes(reason)) return false;
+  if (!isDemoMode()) {
+    const admin = createSupabaseAdminClient();
+    if (!admin) return false;
+    try {
+      const { data, error } = await admin.rpc("stop_approval_attachment_recheck", {
+        p_id: approval.id, p_org: approval.orgId, p_reason: reason,
+      });
+      return !error && data === true;
+    } catch {
+      return false;
+    }
+  }
+  const current = await getApprovalById(approval.id, approval.orgId).catch(() => null);
+  if (!current) return false;
+  // ---- synchronous check-and-set ----
+  const key = `${approval.orgId}:${approval.id}`;
+  const record = demoClaims.get(key) ?? readAttachmentUpload(current.metadata);
+  if (!record || record.state !== "uncertain" || !record.adminNotifiedAt || record.recheckStoppedAt) return false;
+  const next: AttachmentUploadRecord = { ...record, recheckStoppedAt: new Date().toISOString(), recheckStopReason: reason };
+  delete next.nextCheckAt;
+  demoClaims.set(key, next);
+  // -----------------------------------
   await updateApprovalMetadata(current, { attachmentUpload: next }).catch(() => undefined);
   return true;
 }

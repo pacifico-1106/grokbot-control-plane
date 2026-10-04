@@ -23,6 +23,7 @@ import { getApprovalById } from "@/lib/data/approvals";
 import {
   claimAttachmentUpload,
   finishAttachmentUpload,
+  liveFileUpload,
   readAttachmentUpload,
 } from "@/lib/approvals/attachment-upload-claim";
 import { appendAuditEvent } from "@/lib/data/audit";
@@ -37,6 +38,8 @@ import {
 } from "@/lib/gateway/adapters/slack-file-upload";
 import { parseInvokeSnapshot } from "@/lib/approvals/fulfill";
 import { isDefinitePreShareSlackError } from "@/lib/slack/definite-errors";
+import { reinvokeReasonForFileUpload } from "@/lib/approvals/poll-hint";
+import { ATTACHMENT_RETRY_CAP } from "@/lib/approvals/attachment-retry-cap";
 import { isApprovalAttachmentReconcileEnabled } from "@/lib/feature-flags";
 import {
   describeRequestAttachment,
@@ -53,6 +56,12 @@ export const APPROVAL_ATTACHMENT_UNAVAILABLE = "approval_attachment_unavailable"
 export const APPROVAL_ATTACHMENT_UPLOAD_IN_PROGRESS = "approval_attachment_upload_in_progress";
 export const APPROVAL_ATTACHMENT_UPLOAD_UNCERTAIN = "approval_attachment_upload_uncertain";
 export const APPROVAL_ATTACHMENT_CLAIM_UNAVAILABLE = "approval_attachment_claim_unavailable";
+export const APPROVAL_ATTACHMENT_RETRY_CAPPED = "approval_attachment_retry_capped";
+
+function retryCappedMessageJa(code: string, count: number): string {
+  return `同じ承認で同じ Slack エラー（${code}）が${count}回続いたため、設定が変わるまで Slack には送信しません（添付は未送信）。` +
+    "reinvokeReason の nextTool で設定を直してから、approvalId 付きでもう一度実行してください。";
+}
 
 const UNCERTAIN_PREFIX_JA =
   "添付ファイルの送信結果を確認できませんでした（Slack 側で共有された可能性があります）。二重送信を防ぐため自動では再送しません。";
@@ -257,8 +266,33 @@ export async function deliverApprovedRerunAttachment(input: {
   }
 
   // One upload per approval: take the claim before downloading anything.
-  const claim = await claimAttachmentUpload(latest ?? approval, approved.refSha256);
+  // 木村 #255 second round (reconcile flag ON): the claim also enforces the
+  // retry cap (same definite Slack error ATTACHMENT_RETRY_CAP× in a row → no Slack call).
+  const reconcileOn = isApprovalAttachmentReconcileEnabled();
+  const claim = await claimAttachmentUpload(latest ?? approval, approved.refSha256,
+    reconcileOn ? { retryCap: ATTACHMENT_RETRY_CAP } : {});
   const display = { filename: approved.filename, ...(approved.bytes !== undefined ? { bytes: approved.bytes } : {}) };
+  if (claim.kind === "capped") {
+    // Same reason as the poll: built from the stored failed record by the one builder.
+    const current = await getApprovalById(approval.id, approval.orgId).catch(() => null);
+    const reinvokeReason = reinvokeReasonForFileUpload(liveFileUpload((current ?? latest ?? approval).metadata, undefined));
+    await audit("approval.attachment_upload_capped",
+      `承認後再実行: 同じ Slack エラー（${claim.code}）が${claim.count}回続いたため、設定が変わるまで添付を送信しません`, {
+        ...display, code: claim.code, consecutive: claim.count, limit: ATTACHMENT_RETRY_CAP,
+      });
+    return {
+      received: true,
+      fileUpload: {
+        ok: false,
+        code: APPROVAL_ATTACHMENT_RETRY_CAPPED,
+        reason: claim.code,
+        status: "failed",
+        messageJa: retryCappedMessageJa(claim.code, claim.count),
+        ...(reinvokeReason ? { reinvokeReason } : {}),
+        retryCap: { consecutive: claim.count, limit: ATTACHMENT_RETRY_CAP },
+      },
+    };
+  }
   if (claim.kind === "succeeded") {
     return { received: true, fileUpload: { ok: true, fileId: claim.fileId, filename: claim.filename, bytes: claim.bytes } };
   }
@@ -355,6 +389,7 @@ export async function deliverApprovedRerunAttachment(input: {
     // slackError / slackNeeded are kept only for a definite pre-share error (pickResult) → reinvokeReason (木村 5)
     await finishAttachmentUpload(approval, claim.claimId, "failed", {
       ...display, code: uploaded.code, slackError: uploaded.slackError, slackNeeded: uploaded.slackNeeded,
+      slackTokenType: uploaded.slackTokenType,
     });
     await audit("slack.file_upload_failed", `承認済み添付のアップロードに失敗: ${uploaded.error}`, {
       code: uploaded.code,
@@ -364,7 +399,16 @@ export async function deliverApprovedRerunAttachment(input: {
       threadTs,
     });
     const failed = buildFileUploadFailed(uploaded);
-    return { received: true, fileUpload: failed.ok ? failed : { ...failed, status: "failed" } };
+    // 木村 #255 second round: the re-run says why too — same builder as the poll / MCP.
+    const reinvokeReason = reconcileOn && isDefinitePreShareSlackError(uploaded.slackError)
+      ? reinvokeReasonForFileUpload({
+          status: "failed", slackError: uploaded.slackError, slackNeeded: uploaded.slackNeeded, slackTokenType: uploaded.slackTokenType,
+        })
+      : null;
+    return {
+      received: true,
+      fileUpload: failed.ok ? failed : { ...failed, status: "failed", ...(reinvokeReason ? { reinvokeReason } : {}) },
+    };
   }
   const recorded = await finishAttachmentUpload(approval, claim.claimId, "succeeded", {
     fileId: uploaded.fileId,

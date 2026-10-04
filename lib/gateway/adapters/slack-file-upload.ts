@@ -16,7 +16,7 @@ import { downloadPublicFile, MAX_FILE_BYTES } from "@/lib/security/public-file-d
  */
 
 import { resolveConversationToken } from "@/lib/gateway/adapters/slack";
-import { sanitizeSlackScopes } from "@/lib/slack/definite-errors";
+import { sanitizeSlackScopes, type SlackReinvokeReason, type SlackTokenType } from "@/lib/slack/definite-errors";
 import type { Audience, PostingAs } from "@/lib/types";
 
 const SLACK_TIMEOUT_MS = 30_000;
@@ -64,6 +64,12 @@ export interface SlackFileUploadError {
   slackError?: string;
   /** missing_scope only: Slack's `needed` scopes, sanitized (lib/slack/definite-errors.ts). */
   slackNeeded?: string[];
+  /**
+   * Set together with slackError: which token Slack answered for ("user" = the
+   * employee's linked user token, "bot" = the org Bot token), from the same
+   * resolution that picked the token (木村 #255 second round). Never the token.
+   */
+  slackTokenType?: SlackTokenType;
 }
 
 export type SlackFileUploadOutcome = SlackFileUploadResult | SlackFileUploadError;
@@ -91,6 +97,14 @@ export type FileUploadResponse =
        * automatically. Absent on other paths.
        */
       status?: "failed" | "in_progress" | "uncertain";
+      /**
+       * Approved re-run, APPROVAL_ATTACHMENT_RECONCILE_ENABLED ON: a definite
+       * Slack failure carries the same reinvokeReason as the status poll / MCP
+       * (one builder: reinvokeReasonForFileUpload in lib/approvals/poll-hint.ts).
+       */
+      reinvokeReason?: SlackReinvokeReason;
+      /** code approval_attachment_retry_capped: Slack was not called (same definite error `limit` times in a row). */
+      retryCap?: { consecutive: number; limit: number };
     };
 
 /**
@@ -390,6 +404,7 @@ export async function uploadSlackFile(
   }
 
   const token = resolved.token;
+  const tokenType: SlackTokenType = resolved.effectivePostingAs === "user" ? "user" : "bot";
   if (!token) {
     return {
       ok: false,
@@ -459,7 +474,7 @@ export async function uploadSlackFile(
       ok: false,
       error: uploadUrlResult.error,
       code: "get_upload_url_failed",
-      ...(uploadUrlResult.slackError ? { slackError: uploadUrlResult.slackError } : {}),
+      ...(uploadUrlResult.slackError ? { slackError: uploadUrlResult.slackError, slackTokenType: tokenType } : {}),
       ...(uploadUrlResult.slackNeeded ? { slackNeeded: uploadUrlResult.slackNeeded } : {}),
     };
   }
@@ -490,7 +505,7 @@ export async function uploadSlackFile(
       ok: false,
       error: completeResult.error,
       code: "complete_upload_failed",
-      ...(completeResult.slackError ? { slackError: completeResult.slackError } : {}),
+      ...(completeResult.slackError ? { slackError: completeResult.slackError, slackTokenType: tokenType } : {}),
       ...(completeResult.slackNeeded ? { slackNeeded: completeResult.slackNeeded } : {}),
     };
   }

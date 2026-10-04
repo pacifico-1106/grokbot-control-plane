@@ -36,6 +36,7 @@
  * Secrets: the link token only appears in the approver DM text; tokens (link,
  * user, bot) never appear in results, audit metadata or logs.
  */
+import { recordSetupToolSucceeded } from "@/lib/approvals/attachment-retry-cap";
 import { createHash, randomBytes } from "node:crypto";
 import { getAppOrigin } from "@/lib/approvals/tokens";
 import { appendAuditEvent } from "@/lib/data/audit";
@@ -638,6 +639,11 @@ export async function completeAuthorizeLinkCallback(input: {
     });
     return null;
   });
+  // 木村 #255 second round: the user token changed → retry-cap reset marker
+  // (APPROVAL_ATTACHMENT_RECONCILE_ENABLED only; best effort, never changes the result).
+  await recordSetupToolSucceeded({
+    orgId, employeeId, tool: "setup.slackAuthorizeLink.issue", source: "authorize_link_completed", approvalId: link.approvalId,
+  }).catch(() => undefined);
 
   // Completion DM + #234 DM auto-route: after the response when the route
   // passes next/server after(); inline otherwise (tests / direct callers).

@@ -1,3 +1,4 @@
+import { recordSetupToolSucceeded } from "@/lib/approvals/attachment-retry-cap";
 import { isDemoMode } from "@/lib/mode";
 import { executeApproval } from "@/lib/approvals/execution";
 import { fulfillWorkflowMutation } from "@/lib/approval-workflow/admin";
@@ -2082,6 +2083,12 @@ async function fulfillApprovedAdminCore(
         fulfillment = { ok: false, tool, at, error: "unknown_admin_tool" };
     }
     await persist(approval, fulfillment);
+    // 木村 #255 second round: a settings-type tool succeeded → retry-cap reset
+    // marker (flag + tool checks inside; best effort, never changes the result).
+    if (fulfillment.ok) {
+      await recordSetupToolSucceeded({ orgId: approval.orgId, tool, source: "admin_fulfillment", approvalId: approval.id })
+        .catch(() => undefined);
+    }
     return fulfillment;
   } catch (error) {
     const message = error instanceof Error ? error.message : "fulfill_failed";

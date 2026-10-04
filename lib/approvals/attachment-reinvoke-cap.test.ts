@@ -540,6 +540,7 @@ describe("4. retry cap: the same definite error 3× in a row", () => {
     const a = await approved();
     complete = { json: { ok: false, error: "token_revoked" } };
     await failTimes(3, a);
+    await new Promise((r) => setTimeout(r, 5)); // demo audit clock is ms; the reset must be AFTER the last failure
     await recordSetupToolSucceeded({ orgId: DEMO_ORG.id, tool: "setup.slackApprover.set", source: "admin_fulfillment" });
     await failTimes(1, a);
     expect(completes).toBe(4);

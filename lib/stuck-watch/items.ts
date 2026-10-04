@@ -397,6 +397,8 @@ function buildA1Item(
       recheckAttempts: upload.recheckAttempts ?? 0,
       nextCheckAt: recheckStopped ? null : upload.nextCheckAt ?? null,
       recheckStopped,
+      // 木村 #255 second round: stopped early because the item was resolved
+      recheckStopReason: upload.recheckStopReason ?? null,
     },
   };
 }

@@ -14,7 +14,7 @@
  * next) so the agent decides its next step itself. Use approvalPollFields so
  * both surfaces return the same shape.
  */
-import { slackReinvokeReason, type SlackReinvokeReason } from "@/lib/slack/definite-errors";
+import { isSlackTokenType, slackReinvokeReason, type SlackReinvokeReason } from "@/lib/slack/definite-errors";
 
 type PollInput = {
   status: string;
@@ -61,15 +61,27 @@ function attachmentNotSent(fileUpload: unknown): boolean {
 
 /** failed + a definite pre-share Slack error → the reason (fix it, then re-invoke). */
 function definiteFailure(fileUpload: unknown): SlackReinvokeReason | null {
-  if (!fileUpload || typeof fileUpload !== "object") return null;
-  const { status, slackError, slackNeeded } = fileUpload as { status?: unknown; slackError?: unknown; slackNeeded?: unknown };
-  if (status !== "failed" || typeof slackError !== "string") return null;
-  return slackReinvokeReason(slackError, Array.isArray(slackNeeded) ? slackNeeded.filter((s): s is string => typeof s === "string") : undefined);
+  return reinvokeReasonForFileUpload(fileUpload);
 }
 
 export const RECONCILE_NOT_FOUND = "reconcile_not_found";
 
-/** STUB (test commit, 木村 #255 second round): one builder for the poll and the re-run. */
-export function reinvokeReasonForFileUpload(_fileUpload: unknown): SlackReinvokeReason | null {
-  return null;
+/**
+ * THE builder of reinvokeReason (木村 #255 second round, decision 3): the status
+ * poll / MCP (via approvalPollFields) and the approved re-run response
+ * (lib/approvals/approved-rerun-attachment.ts) both pass the fulfillment-style
+ * view of the upload record ({ status:"failed", slackError, slackNeeded?,
+ * slackTokenType? }) through this one function.
+ */
+export function reinvokeReasonForFileUpload(fileUpload: unknown): SlackReinvokeReason | null {
+  if (!fileUpload || typeof fileUpload !== "object") return null;
+  const { status, slackError, slackNeeded, slackTokenType } = fileUpload as {
+    status?: unknown; slackError?: unknown; slackNeeded?: unknown; slackTokenType?: unknown;
+  };
+  if (status !== "failed" || typeof slackError !== "string") return null;
+  return slackReinvokeReason(
+    slackError,
+    Array.isArray(slackNeeded) ? slackNeeded.filter((s): s is string => typeof s === "string") : undefined,
+    isSlackTokenType(slackTokenType) ? slackTokenType : undefined
+  );
 }

@@ -30,6 +30,8 @@ import {
 } from "@/lib/stuck-watch/w2-unfulfilled";
 import { runGatewayInvoke } from "@/lib/gateway/invoke";
 import { parseInvokeSnapshot } from "@/lib/approvals/fulfill";
+import { stopAttachmentRechecks } from "@/lib/approvals/attachment-upload-claim";
+import { isApprovalAttachmentReconcileEnabled } from "@/lib/feature-flags";
 import type { FaultClass, StuckWatchItem } from "@/lib/types";
 
 export type StuckWatchAdminResult = {
@@ -261,6 +263,14 @@ export async function runStuckWatchResolve(
       resolvedAt: now,
     },
   });
+  // 木村 #255 second round (reconcile flag ON): resolving the A1 item also stops
+  // its scheduled re-checks. Best effort — the resolve itself never fails on it.
+  if (item.kind === "a1_attachment_uncertain" && item.approvalId && isApprovalAttachmentReconcileEnabled()) {
+    const approval = await getApprovalById(item.approvalId, orgId).catch(() => null);
+    if (approval && approval.orgId === orgId) {
+      await stopAttachmentRechecks(approval, "stuck_watch_resolved").catch(() => false);
+    }
+  }
   const resolved = { ...item, status: "resolved" as const, resolvedAt: now };
   return {
     ok: true,

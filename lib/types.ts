@@ -462,6 +462,8 @@ export type AuditAction =
   | "approval.attachment_not_sent"
   | "approval.attachment_reconciled"
   | "approval.attachment_request_ignored"
+  | "approval.attachment_upload_capped"
+  | "setup.tool_succeeded"
   | "notification.channel_updated"
   | "notification.test_sent"
   | "notification.delivery_failed"
