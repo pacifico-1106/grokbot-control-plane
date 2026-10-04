@@ -56,6 +56,11 @@ export interface SlackFileUploadError {
   ok: false;
   error: string;
   code: string;
+  /**
+   * The Slack `error` code, set only when Slack itself answered `ok:false` with
+   * a JSON body (never for a timeout / network error / non-JSON answer).
+   */
+  slackError?: string;
 }
 
 export type SlackFileUploadOutcome = SlackFileUploadResult | SlackFileUploadError;
@@ -282,7 +287,7 @@ async function completeUpload(
   initialComment?: string
 ): Promise<
   | { ok: true; ts?: string }
-  | { ok: false; error: string }
+  | { ok: false; error: string; slackError?: string }
 > {
   try {
     const files = [{ id: fileId, title: title || undefined }];
@@ -309,7 +314,8 @@ async function completeUpload(
       files?: Array<{ id?: string; timestamp?: string }>;
     };
     if (!body.ok) {
-      return { ok: false, error: body.error || "complete_upload_failed" };
+      const slackError = typeof body.error === "string" && body.error ? body.error : undefined;
+      return { ok: false, error: slackError || "complete_upload_failed", ...(slackError ? { slackError } : {}) };
     }
     return { ok: true, ts: body.files?.[0]?.timestamp };
   } catch (error) {
@@ -467,6 +473,7 @@ export async function uploadSlackFile(
       ok: false,
       error: completeResult.error,
       code: "complete_upload_failed",
+      ...(completeResult.slackError ? { slackError: completeResult.slackError } : {}),
     };
   }
 

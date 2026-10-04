@@ -851,13 +851,13 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
   {
     name: "stuckWatch.list",
     description:
-      "List open stuck watch items (read-only, no approval required). F7: W1 mention-unanswered + W2 approved-unfulfilled. Returns summaryJa/nextStepJa per item.",
+      "List open stuck watch items (read-only, no approval required). F7: W1 mention-unanswered + W2 approved-unfulfilled + A1 approved-attachment upload that the scheduled reconcile could not check (status=notified; settled automatically by a later reconcile, never re-uploaded by stuckWatch.retry; this list is its only notification). Returns summaryJa/nextStepJa per item.",
     inputSchema: {
       type: "object",
       properties: {
         kind: {
           type: "string",
-          description: "Optional filter: w1 | w2 | w1_mention_unanswered | w2_approved_unfulfilled",
+          description: "Optional filter: w1 | w2 | a1 | w1_mention_unanswered | w2_approved_unfulfilled | a1_attachment_uncertain",
         },
         includeResolved: { type: "boolean", description: "Include manually resolved items" },
         limit: { type: "number", description: "Max items (default 50, max 100)" },

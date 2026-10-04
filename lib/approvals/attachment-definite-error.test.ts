@@ -60,7 +60,7 @@ afterEach(async () => { globalThis.fetch = originalFetch; await setToken(false).
 
 const jid = () => `job_def_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
 const invokeComm = (body: GatewayInvokeRequest) => runGatewayInvoke({ employeeId: "emp_comm", credentialId: "cred_comm", body });
-async function approved(fileAttachment: FileAttachment | undefined = FILE) {
+async function approved(fileAttachment: FileAttachment | null = FILE) {
   const body: GatewayInvokeRequest = {
     tool: "comm.reply", purpose: "comm.internal", jobId: jid(),
     conversation: { surface: "slack", orgId: DEMO_ORG.id, slackChannelId: "C_INTERNAL", threadId: "1787911797.502889" },
@@ -179,7 +179,7 @@ describe("4. pollHint while the attachment is not_sent", () => {
   test("no attachment approved → fulfilled (unchanged)", async () => {
     installSlack();
     await setToken(true);
-    const { approvalId, approval, statusToken } = await approved(undefined);
+    const { approvalId, approval, statusToken } = await approved(null);
     await fulfillIfApproved(approval, "approved");
     const p = await poll(approvalId, statusToken);
     expect(p.web.pollHint).toBe("fulfilled");

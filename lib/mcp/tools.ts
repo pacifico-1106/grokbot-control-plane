@@ -1,5 +1,6 @@
 import { redactMetadata } from "@/lib/data/redaction";
 import { attachmentStatusField } from "@/lib/approvals/attachment-card";
+import { approvalPollHint } from "@/lib/approvals/poll-hint";
 /**
  * Staffpass remote MCP tool surface (narrow control-plane only).
  * Confirm/send/order always stop for human approval via shared Gateway invoke.
@@ -185,7 +186,7 @@ export const STAFFPASS_MCP_TOOLS: McpToolDef[] = [
   {
     name: "staffpass_get_approval_status",
     description:
-      "Poll a human approval ticket with approvalId + statusToken (same as GET /api/approvals/status). Returns pending|approved|rejected|revision_requested|expired and pollHint. When status=approved and the action has been auto-fulfilled (by the approval webhook), the fulfillment result is included in the response with pollHint=fulfilled. Admin credential secrets are never returned by this employee MCP: when resultRetrieval is present, authenticate to /api/mcp/admin and re-invoke the indicated admin tool with approvalId. If pollHint=reinvoke_with_approvalId, re-invoke with approvalId. On revision_requested, revise per revisionNote and re-invoke with the same jobId and parentApprovalId.",
+      "Poll a human approval ticket with approvalId + statusToken (same as GET /api/approvals/status). Returns pending|approved|rejected|revision_requested|expired and pollHint. When status=approved and the action has been auto-fulfilled (by the approval webhook), the fulfillment result is included in the response with pollHint=fulfilled — except while fulfillment.fileUpload.status=not_sent (only the approved text was posted): then pollHint=reinvoke_with_approvalId, and re-invoking with approvalId uploads the approved attachment once. Admin credential secrets are never returned by this employee MCP: when resultRetrieval is present, authenticate to /api/mcp/admin and re-invoke the indicated admin tool with approvalId. If pollHint=reinvoke_with_approvalId, re-invoke with approvalId. On revision_requested, revise per revisionNote and re-invoke with the same jobId and parentApprovalId.",
     inputSchema: {
       type: "object",
       properties: {
@@ -752,16 +753,7 @@ export async function callStaffpassMcpTool(
         ...(adminResultRequired ? { resultRetrieval: {
           endpoint: "/api/mcp/admin", tool: fulfillmentResult?.tool, approvalId: approval.id, requiresAdminCredential: true,
         } } : {}),
-        pollHint:
-          status === "pending"
-            ? "continue_polling"
-            : status === "approved"
-              ? fulfillmentResult && !adminResultRequired
-                ? "fulfilled"
-                : "reinvoke_with_approvalId"
-              : status === "revision_requested"
-                ? `Revise the artifact per revisionNote and re-invoke with the same jobId and parentApprovalId=${approval.id}.`
-                : "abort_job",
+        pollHint: approvalPollHint({ status, approvalId: approval.id, fulfillmentResult, adminResultRequired }),
       });
     }
     case "staffpass_health": {

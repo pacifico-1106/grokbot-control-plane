@@ -1,3 +1,4 @@
+import { oneLineCardValue } from "@/lib/approvals/card-text";
 import { outboundConversationText } from "@/lib/employees/voice";
 import { parseSnsSurface, snsSurfaceLabelJa } from "@/lib/gateway/adapters/sns";
 import { resolveConversationThreadId } from "@/lib/gateway/audience";
@@ -90,10 +91,7 @@ function recipientList(value: unknown): string[] {
  * Card values are agent-supplied: collapse control characters / line breaks so
  * a recipient or subject cannot forge extra card lines (e.g. a fake "BCC:").
  */
-export function oneLineCardValue(value: string): string {
-  // C0 + DEL + C1 (incl. NEL U+0085) + LS / PS
-  return value.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, " ").replace(/ {2,}/g, " ").trim();
-}
+export { oneLineCardValue };
 
 function argsOf(body: GatewayInvokeRequest | undefined | null): Record<string, unknown> {
   return body?.args && typeof body.args === "object"

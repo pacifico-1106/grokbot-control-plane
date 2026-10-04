@@ -163,7 +163,7 @@ describe("Slack lookup: read-only, form-encoded, token only in the Authorization
     expect(p.get("ts")).toBe(THREAD);
     expect(Number(p.get("oldest"))).toBeLessThanOrEqual(Date.parse(claimedAt) / 1000);
     expect(Number(p.get("oldest"))).toBeGreaterThan(Date.parse(claimedAt) / 1000 - 600);
-    expect([posts, getUrls, completes]).toEqual([1, 1, 1]); // nothing posted / uploaded by the check
+    expect([posts, getUrls, completes, downloads]).toEqual([1, 1, 1, 1]); // nothing posted / downloaded / uploaded by the check
   });
 });
 
@@ -216,7 +216,7 @@ describe("uncertain → complete scan, nothing similar → failed; the next re-r
   test("failed + audit; re-run uploads once; the one after does not", async () => {
     installSlack();
     await setToken(true);
-    const { body, approvalId } = await uncertainApproval();
+    const { body, approvalId, statusToken } = await uncertainApproval();
     replies = () => ({ ok: true, has_more: false, messages: [
       { type: "message", ts: slackTs(10), user: "U_HUMAN", text: "返信" },
       fileMsg({ id: "F_OTHER", name: "other.png", size: 999, user: "U_HUMAN" }, slackTs(20), "U_HUMAN"),
@@ -228,6 +228,10 @@ describe("uncertain → complete scan, nothing similar → failed; the next re-r
     expect(ev.length).toBe(1);
     expect(ev[0].metadata).toMatchObject({ outcome: "failed", filename: "approved.pdf", bytes: 25, code: "reconcile_not_found" });
     noSecrets(JSON.stringify(ev));
+    const res = await statusGET(new Request(`http://localhost/api/approvals/status?id=${approvalId}&token=${statusToken}`));
+    const status = (await res.json()) as { pollHint?: string; fulfillment?: { fileUpload?: unknown } };
+    expect(status.fulfillment?.fileUpload).toMatchObject({ status: "failed", code: "reconcile_not_found" });
+    expect(status.pollHint).toBe("reinvoke_with_approvalId");
 
     expect(fileUpload(await invokeComm({ ...body, approvalId }))).toMatchObject({ ok: true, fileId: "F_RC_UP" });
     expect(fileUpload(await invokeComm({ ...body, approvalId }))).toMatchObject({ ok: true, fileId: "F_RC_UP" });
@@ -447,5 +451,19 @@ describe("flag OFF (default) → nothing changes", () => {
     const on = (await (await w2Cron(new Request("http://localhost/api/cron/stuck-watch-w2", { headers: { authorization: "Bearer cron-test-secret" } }))).json()) as Record<string, unknown>;
     expect(on.attachmentReconcile).toMatchObject({ enabled: true });
     delete process.env.CRON_SECRET;
+  });
+});
+
+describe("migration 20261004400000 (static)", () => {
+  test("row lock, security invoker, service_role only", async () => {
+    const { readFileSync } = await import("node:fs");
+    const sql = readFileSync(new URL("../../supabase/migrations/20261004400000_approval_attachment_reconcile.sql", import.meta.url), "utf8");
+    for (const fn of ["reconcile_approval_attachment_upload(uuid,uuid,text,text,text,jsonb)", "mark_approval_attachment_not_sent(uuid,uuid,jsonb)"]) {
+      expect(sql).toContain(`revoke all on function public.${fn} from public,anon,authenticated;`);
+      expect(sql).toContain(`grant execute on function public.${fn} to service_role;`);
+    }
+    expect(sql.match(/security invoker set search_path = pg_catalog, public/g)?.length).toBe(2);
+    expect(sql.match(/for update;/g)?.length).toBe(2);
+    expect(sql).not.toMatch(/security definer|alter table|create table|create policy/i);
   });
 });

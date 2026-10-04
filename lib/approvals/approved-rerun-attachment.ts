@@ -13,8 +13,11 @@
  * "Once" holds under concurrent re-runs (#252 follow-up): an upload claim is
  * taken before anything is downloaded (lib/approvals/attachment-upload-claim.ts).
  * A re-run that cannot take it does not upload (in_progress). An unknown
- * outcome (exception / completion step failed or timed out) is recorded as
- * "uncertain" and never retried automatically.
+ * outcome (exception / completion step timed out / 5xx / unknown error) is
+ * recorded as "uncertain" and never re-uploaded by a re-run; a Slack error
+ * known to precede sharing (lib/slack/definite-errors.ts) is "failed". With
+ * APPROVAL_ATTACHMENT_RECONCILE_ENABLED the W2 cron settles stale running /
+ * uncertain claims by checking the conversation (lib/approvals/attachment-reconcile.ts).
  */
 import { getApprovalById } from "@/lib/data/approvals";
 import {
@@ -33,6 +36,7 @@ import {
   type FileUploadResponse,
 } from "@/lib/gateway/adapters/slack-file-upload";
 import { parseInvokeSnapshot } from "@/lib/approvals/fulfill";
+import { isDefinitePreShareSlackError } from "@/lib/slack/definite-errors";
 import {
   describeRequestAttachment,
   openSnapshotAttachmentRef,
@@ -55,9 +59,15 @@ const UNCERTAIN_MESSAGE_JA =
 /**
  * uploadSlackFile returns before files.completeUploadExternal for every other
  * failure, so the file was never shared. At (or after) the completion step the
- * outcome is unknown: a timeout or an error answer may follow a share.
+ * outcome is unknown (a timeout, a 5xx or an unknown error may follow a
+ * share) — unless Slack answered one of the errors known to precede sharing
+ * (lib/slack/definite-errors.ts, #253 follow-up 3): then it is "failed".
  */
 const OUTCOME_UNKNOWN_CODES = new Set(["complete_upload_failed"]);
+
+function outcomeUnknown(uploaded: { code: string; slackError?: string }): boolean {
+  return OUTCOME_UNKNOWN_CODES.has(uploaded.code) && !isDefinitePreShareSlackError(uploaded.slackError);
+}
 
 const SLACK_TS = /^\d+\.\d+$/;
 
@@ -329,7 +339,7 @@ export async function deliverApprovedRerunAttachment(input: {
     return markUncertain("upload_exception", error instanceof Error ? error.name : "upload_exception");
   }
   if (!uploaded.ok) {
-    if (OUTCOME_UNKNOWN_CODES.has(uploaded.code)) return markUncertain(uploaded.code, uploaded.error);
+    if (outcomeUnknown(uploaded)) return markUncertain(uploaded.code, uploaded.error);
     await finishAttachmentUpload(approval, claim.claimId, "failed", { ...display, code: uploaded.code });
     await audit("slack.file_upload_failed", `承認済み添付のアップロードに失敗: ${uploaded.error}`, {
       code: uploaded.code,

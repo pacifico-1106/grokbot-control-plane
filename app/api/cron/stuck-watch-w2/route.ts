@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
+import { runApprovalAttachmentReconcile } from "@/lib/approvals/attachment-reconcile";
 import { listApprovalsForTelegramDigest } from "@/lib/data/approvals";
+import { isApprovalAttachmentReconcileEnabled } from "@/lib/feature-flags";
 import {
   isApprovedUnfulfilled,
   processW2RetriesForApprovals,
@@ -28,6 +30,10 @@ export async function GET(req: Request) {
     const approvals = await listApprovalsForTelegramDigest();
     const candidates = approvals.filter(isApprovedUnfulfilled);
     const results = await processW2RetriesForApprovals(candidates);
+    // #253 follow-up: approved-attachment reconcile (OFF by default → not run, response unchanged).
+    const attachmentReconcile = isApprovalAttachmentReconcileEnabled()
+      ? await runApprovalAttachmentReconcile(approvals)
+      : null;
 
     return NextResponse.json({
       ok: true,
@@ -35,6 +41,7 @@ export async function GET(req: Request) {
       candidates: candidates.length,
       retried: results.length,
       results,
+      ...(attachmentReconcile ? { attachmentReconcile } : {}),
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "unknown_error";

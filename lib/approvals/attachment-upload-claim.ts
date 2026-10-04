@@ -12,7 +12,9 @@
  *   succeeded → uploaded: never upload again (return the stored file id)
  *   failed    → failed before Slack could share the file: a later re-run may claim again
  *   uncertain → the outcome is unknown (the upload may have been shared):
- *               never retried automatically; a human checks the channel
+ *               never retried automatically; the scheduled reconcile
+ *               (lib/approvals/attachment-reconcile.ts) checks the conversation
+ *               and settles it, or tells the admin agent once
  *
  * Production: atomic conditional update in the DB (RPC
  * claim_approval_attachment_upload / finish_approval_attachment_upload: row lock
@@ -38,6 +40,10 @@ export type AttachmentUploadRecord = {
   filename?: string;
   bytes?: number;
   code?: string;
+  /** Set by the scheduled reconcile (#253 follow-up): when it last settled / re-checked the record. */
+  reconciledAt?: string;
+  /** Set once, when the reconcile could not check and told the admin agent (stuck-watch a1 item). */
+  adminNotifiedAt?: string;
 };
 export type AttachmentUploadResult = { fileId?: string; filename?: string; bytes?: number; code?: string };
 
@@ -48,6 +54,11 @@ export type AttachmentUploadClaim =
   | { kind: "uncertain" }
   | { kind: "denied" }
   | { kind: "unavailable" };
+
+/** Admin MCP stuck-watch item id for an attachment the reconcile could not check. */
+export function attachmentUncertainItemId(approvalId: string): string {
+  return `a1:${approvalId}`;
+}
 
 const STATES: readonly AttachmentUploadState[] = ["running", "succeeded", "failed", "uncertain"];
 const demoClaims = new Map<string, AttachmentUploadRecord>();
@@ -62,7 +73,7 @@ export function readAttachmentUpload(metadata: Record<string, unknown> | null | 
   const rec = obj(metadata?.attachmentUpload);
   if (!rec || !STATES.includes(rec.state as AttachmentUploadState)) return null;
   const out: AttachmentUploadRecord = { state: rec.state as AttachmentUploadState };
-  for (const k of ["claimId", "refSha256", "claimedAt", "finishedAt", "fileId", "filename", "code"] as const) {
+  for (const k of ["claimId", "refSha256", "claimedAt", "finishedAt", "fileId", "filename", "code", "reconciledAt", "adminNotifiedAt"] as const) {
     const v = str(rec[k]);
     if (v) out[k] = v;
   }
@@ -222,4 +233,108 @@ export function liveFileUpload(
 /** True when the approved attachment is already uploaded (claim record or #252 record). */
 export function attachmentAlreadyUploaded(metadata: Record<string, unknown> | null | undefined): boolean {
   return liveFileUpload(metadata, undefined)?.status === "sent";
+}
+
+/**
+ * Scheduled reconcile (#253 follow-up 1+2): change the record ONLY when it is
+ * still exactly what the reconcile read (same state + same claimId). Returns
+ * true for the single caller whose write was applied, false otherwise (state
+ * moved on, a re-run took a new claim, already notified, or the store is
+ * unavailable → nothing written, fail closed).
+ *
+ *   running|uncertain → succeeded (fileId required) | failed
+ *   running|uncertain → uncertain: records adminNotifiedAt; refused when it is
+ *                       already set, so the admin agent is told once per claim
+ *
+ * Production: RPC reconcile_approval_attachment_upload (row lock), see
+ * supabase/migrations/20261004400000_approval_attachment_reconcile.sql.
+ */
+export async function reconcileAttachmentUpload(
+  approval: ApprovalRequest,
+  expected: { state: "running" | "uncertain"; claimId?: string },
+  state: Exclude<AttachmentUploadState, "running">,
+  result: AttachmentUploadResult
+): Promise<boolean> {
+  const picked = pickResult(result);
+  if (state === "succeeded" && !picked.fileId) return false;
+  if (!isDemoMode()) {
+    const admin = createSupabaseAdminClient();
+    if (!admin) return false;
+    try {
+      const { data, error } = await admin.rpc("reconcile_approval_attachment_upload", {
+        p_id: approval.id, p_org: approval.orgId, p_expected_state: expected.state,
+        p_expected_claim: expected.claimId ?? null, p_state: state, p_result: picked,
+      });
+      return !error && data === true;
+    } catch {
+      return false;
+    }
+  }
+  const current = await getApprovalById(approval.id, approval.orgId).catch(() => null);
+  if (!current) return false;
+  // ---- synchronous check-and-set (no await until the record is replaced) ----
+  const key = `${approval.orgId}:${approval.id}`;
+  const record = demoClaims.get(key) ?? readAttachmentUpload(current.metadata);
+  if (!record || record.state !== expected.state || (record.claimId ?? null) !== (expected.claimId ?? null)) return false;
+  if (state === "uncertain" && record.adminNotifiedAt) return false;
+  const at = new Date().toISOString();
+  const next: AttachmentUploadRecord = {
+    ...record, ...picked, state, reconciledAt: at,
+    ...(record.state === "running" ? { finishedAt: at } : {}),
+    ...(state === "uncertain" ? { adminNotifiedAt: at } : {}),
+  };
+  demoClaims.set(key, next);
+  // ---------------------------------------------------------------------------
+  await updateApprovalMetadata(current, { attachmentUpload: next }).catch(() => undefined);
+  return true;
+}
+
+/**
+ * Text posted, approved attachment present, and nothing says what happened to
+ * it: no upload record, no #252 record, no stored fileUpload marker.
+ */
+export function needsAttachmentNotSentMarker(metadata: Record<string, unknown> | null | undefined): boolean {
+  const fulfillment = obj(metadata?.fulfillment);
+  if (!fulfillment || fulfillment.ok !== true || fulfillment.fileUpload !== undefined) return false;
+  if (metadata?.attachmentUpload !== undefined) return false;
+  if (obj(metadata?.attachmentFulfillment)?.ok === true) return false;
+  return true;
+}
+
+const demoNotSentMarks = new Set<string>();
+
+/**
+ * Scheduled not_sent marking (#253 follow-up 6): writes
+ * fulfillment.fileUpload = marker only while needsAttachmentNotSentMarker still
+ * holds, so exactly one caller gets true (one audit). Production: RPC
+ * mark_approval_attachment_not_sent (row lock). Errors → false (nothing written).
+ */
+export async function markAttachmentNotSent(
+  approval: ApprovalRequest,
+  marker: Extract<FulfillmentFileUpload, { status: "not_sent" }>
+): Promise<boolean> {
+  const clean = parseStoredFileUpload(marker);
+  if (!clean) return false;
+  if (!isDemoMode()) {
+    const admin = createSupabaseAdminClient();
+    if (!admin) return false;
+    try {
+      const { data, error } = await admin.rpc("mark_approval_attachment_not_sent", {
+        p_id: approval.id, p_org: approval.orgId, p_marker: clean,
+      });
+      return !error && data === true;
+    } catch {
+      return false;
+    }
+  }
+  const current = await getApprovalById(approval.id, approval.orgId).catch(() => null);
+  if (!current || current.status !== "approved") return false;
+  // ---- synchronous check-and-set ----
+  const key = `${approval.orgId}:${approval.id}`;
+  if (demoNotSentMarks.has(key) || demoClaims.has(key) || !needsAttachmentNotSentMarker(current.metadata)) return false;
+  demoNotSentMarks.add(key);
+  // -----------------------------------
+  const fulfillment = obj(current.metadata?.fulfillment) ?? {};
+  await updateApprovalMetadata(current, { fulfillment: { ...fulfillment, fileUpload: clean } }).catch(() => undefined);
+  return true;
 }

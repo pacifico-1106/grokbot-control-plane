@@ -37,7 +37,7 @@ afterEach(() => { globalThis.fetch = originalFetch; delete process.env.APPROVAL_
 
 const jid = () => `job_sw_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
 /** Approved; the text is recorded as posted, the attachment left without any record. */
-async function textPostedOnly(fileAttachment: FileAttachment | undefined = FILE) {
+async function textPostedOnly(fileAttachment: FileAttachment | null = FILE) {
   const body: GatewayInvokeRequest = {
     tool: "comm.reply", purpose: "comm.internal", jobId: jid(),
     conversation: { surface: "slack", orgId: DEMO_ORG.id, slackChannelId: "C_INTERNAL", threadId: "1787911797.502889" },
@@ -103,7 +103,7 @@ describe("scheduled not_sent marking", () => {
   });
 
   test("no approved attachment → not marked", async () => {
-    const { approvalId } = await textPostedOnly(undefined);
+    const { approvalId } = await textPostedOnly(null);
     expect((await sweep(approvalId)).notSentMarked).toEqual([]);
   });
 
