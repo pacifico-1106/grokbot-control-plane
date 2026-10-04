@@ -10,9 +10,12 @@
 --
 -- Requires all 5 tables (20261001000000_lp_inquiries.sql,
 -- 20261001400000_lp_handoffs.sql); if one is missing the whole migration fails
--- atomically. Run the verification SQL first: service_role must have
--- BYPASSRLS (Supabase default) — otherwise dropping the policies below would
--- lock the server out of the lp_* tables.
+-- atomically: everything runs in one explicit transaction (begin; ... commit;),
+-- so a failing statement leaves no partial revoke / drop behind. Only
+-- transactional statements (revoke / drop policy if exists); nothing like
+-- CREATE INDEX CONCURRENTLY or VACUUM. Run the verification SQL first:
+-- service_role must have BYPASSRLS (Supabase default) — otherwise dropping the
+-- policies below would lock the server out of the lp_* tables.
 --
 -- 1) lp_inquiries / notification_outbox (PII: inquiry contact data, outbound
 --    notification recipients): RLS on, no policy, so sessions already get no
@@ -40,6 +43,8 @@
 --    "permission denied" (rows and columns, e.g. secret_hash /
 --    summary_draft), and a future permissive policy cannot expose them.
 
+begin;
+
 -- 1) write privileges
 revoke insert, update, delete, truncate on public.lp_inquiries, public.notification_outbox from anon, authenticated;
 
@@ -50,6 +55,8 @@ drop policy if exists lp_wake_events_service_all on public.lp_wake_webhook_event
 
 -- 3) no session SELECT on the 3 lp_* tables (service_role keeps its grants)
 revoke select on public.lp_handoffs, public.lp_wake_webhook_configs, public.lp_wake_webhook_events from anon, authenticated;
+
+commit;
 
 -- ROLLBACK (down) — restores the pre-migration state: the 3 policies exactly as
 -- created by 20261001400000_lp_handoffs.sql, Supabase's default write grants
