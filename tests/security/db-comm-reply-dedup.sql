@@ -73,6 +73,8 @@ declare
   sk integer[] := array_fill(7, array[128]);
   sk_close integer[];
   sk_far integer[];
+  sk_other integer[] := array(select 5000 + g from generate_series(1,128) g);  -- similarity 0 to all of the above
+  fails text[] := '{}';
   r jsonb;
   id1 uuid;
 begin
@@ -112,9 +114,42 @@ begin
   if r->>'state' <> 'denied' then raise exception 'cross-org approval: %', r; end if;
   r := security_test.claim(e2, org_a, conv, repeat('4',64), sk_far, '82000000-0000-4000-8000-000000000001', 0.6);
   if r->>'state' <> 'denied' then raise exception 'other employee approval: %', r; end if;
-  -- approval created 20 min ago; replies were sent since → superseded
+  -- Fulfill re-check (木村 2026-10-04): approval 01 was created 20 min ago and replies
+  -- were sent since. Superseded ONLY when such a reply is identical or similar
+  -- (same keyed check as duplicates); a reply about another matter does not stop it.
+  -- Failures are collected so the count is reported.
+  r := security_test.claim(e1, org_a, conv, repeat('5',64), sk_other, '82000000-0000-4000-8000-000000000001', 0.6);
+  if r->>'state' <> 'claimed' then fails := fails || format('different body after approval → %s', r); end if;
+  if r->>'state' = 'claimed' then perform public.finish_comm_reply_send((r->>'id')::uuid, org_a::uuid, 'failed'); end if;
   r := security_test.claim(e1, org_a, conv, repeat('5',64), null, '82000000-0000-4000-8000-000000000001', 0.6);
-  if r->>'state' <> 'superseded' then raise exception 'superseded: %', r; end if;
+  if r->>'state' <> 'claimed' then fails := fails || format('different body (no sketch) after approval → %s', r); end if;
+  if r->>'state' = 'claimed' then perform public.finish_comm_reply_send((r->>'id')::uuid, org_a::uuid, 'failed'); end if;
+  r := security_test.claim(e1, org_a, conv, repeat('5',64), sk_close, '82000000-0000-4000-8000-000000000001', 0.6);
+  if r->>'state' <> 'superseded' or r->>'match' is distinct from 'similar' or (r->>'similarity')::float < 0.6 then
+    fails := fails || format('similar body after approval → %s', r); end if;
+  r := security_test.claim(e1, org_a, conv, repeat('1',64), null, '82000000-0000-4000-8000-000000000001', 0.6);
+  if r->>'state' <> 'superseded' or r->>'match' is distinct from 'exact' then fails := fails || format('identical body after approval → %s', r); end if;
+  -- exact mode (threshold null): a similar-but-not-identical later reply does not supersede
+  r := security_test.claim(e1, org_a, conv, repeat('5',64), sk_close, '82000000-0000-4000-8000-000000000001', null);
+  if r->>'state' <> 'claimed' then fails := fails || format('exact mode, similar body → %s', r); end if;
+  if r->>'state' = 'claimed' then perform public.finish_comm_reply_send((r->>'id')::uuid, org_a::uuid, 'failed'); end if;
+  -- after the approval but outside the duplicate window (60 s here): still superseded when identical
+  r := security_test.claim(e1, org_a, repeat('e',64), repeat('8',64), sk, null, 0.6);
+  if r->>'state' <> 'claimed' then raise exception 'setup e: %', r; end if;
+  perform public.finish_comm_reply_send((r->>'id')::uuid, org_a::uuid, 'sent');
+  update public.comm_reply_send_fingerprints set created_at = now() - interval '10 minutes' where id = (r->>'id')::uuid;
+  r := public.claim_comm_reply_send(org_a::uuid, e1::uuid, repeat('e',64), repeat('8',64), null, 'comm.send',
+    '82000000-0000-4000-8000-000000000001'::uuid, 60, 0.6, 172800);
+  if r->>'state' <> 'superseded' or r->>'match' is distinct from 'exact' then fails := fails || format('identical, outside window → %s', r); end if;
+  -- a reply sent BEFORE the approval was created never supersedes
+  update public.comm_reply_send_fingerprints set created_at = now() - interval '30 minutes' where conversation_key = repeat('e',64);
+  r := public.claim_comm_reply_send(org_a::uuid, e1::uuid, repeat('e',64), repeat('8',64), null, 'comm.send',
+    '82000000-0000-4000-8000-000000000001'::uuid, 60, 0.6, 172800);
+  if r->>'state' <> 'claimed' then fails := fails || format('identical, before approval → %s', r); end if;
+  delete from public.comm_reply_send_fingerprints where conversation_key = repeat('e',64);
+  if cardinality(fails) > 0 then
+    raise exception 'fulfill re-check: % case(s) wrong: %', cardinality(fails), array_to_string(fails, ' | ');
+  end if;
   -- an approval created now (no later reply) and a new body → claimed
   r := security_test.claim(e1, org_a, repeat('c',64), repeat('6',64), null, '82000000-0000-4000-8000-000000000002', 0.6);
   if r->>'state' <> 'claimed' then raise exception 'fresh approval: %', r; end if;

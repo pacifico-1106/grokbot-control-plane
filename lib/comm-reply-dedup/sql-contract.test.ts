@@ -39,6 +39,15 @@ describe("comm reply dedup migration", () => {
     expect(sql).toMatch(/revoke all on function public\.claim_comm_reply_send\([^)]*\) from public, anon, authenticated/);
     expect(sql).toMatch(/grant execute on function public\.claim_comm_reply_send\([^)]*\) to service_role/);
   });
+  test("fulfill re-check: replied_after_approval only for a similar / identical reply (木村, same criterion as duplicates)", () => {
+    const claim = sql.slice(sql.indexOf("create or replace function public.claim_comm_reply_send"));
+    const branch = claim.slice(claim.indexOf("if p_approval is not null then", claim.indexOf("pg_advisory_xact_lock")));
+    const block = branch.slice(0, branch.indexOf("'superseded'") + 200);
+    expect(block).toMatch(/f\.created_at > a_created/);
+    expect(block).toMatch(/f\.body_hash = p_body_hash/);
+    expect(block).toMatch(/p_similarity is not null and p_sketch is not null/);
+    expect(block).toMatch(/'match'/);
+  });
   test("documents the rollback", () => {
     expect(sql).toMatch(/-- Rollback/);
   });

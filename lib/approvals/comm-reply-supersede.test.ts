@@ -10,6 +10,14 @@
  *  - a sent reply supersedes pending approvals for that conversation
  *  - fulfill re-checks: a reply already sent after the approval was created → superseded, not sent
  *  - pending conversation approvals expire (default 24 h)
+ * 木村 (2026-10-04): superseding needs the bodies to be similar (the same keyed
+ * check as duplicate replies: exact, or sketch similarity ≥ 0.6). A pending
+ * approval about another matter in the same conversation stays pending and is
+ * still sent when approved; the fulfill re-check uses the same criterion.
+ * The incident texts are not stored anywhere; the fixtures below are synthetic
+ * re-writes with the measured shape (normalized length ~90, 3-gram Jaccard
+ * 0.72 between the two queued versions, 0.74 between the second one and the
+ * reply). The reply ↔ approval similarity of the real incident is unknown.
  * Demo mode, dummy values, Slack fetch recorded, no network.
  */
 import { afterAll, afterEach, beforeAll, describe, expect, mock, test } from "bun:test";
@@ -40,9 +48,17 @@ type ResolvedEmployeeCredential = import("@/lib/auth/employee-credential").Resol
 const FLAG = "COMM_REPLY_DEDUP_ENABLED";
 const DM_A = "D0SUPERSEDEA"; // 野木さん DM shape
 const DM_B = "D0SUPERSEDEB"; // 八坂さん DM shape
-const CAL_TEXT_1 = "本日の打ち合わせ資料をカレンダーに共有しました。ご確認ください。";
-const CAL_TEXT_2 = "本日の打ち合わせ資料をカレンダーで共有しました。お手すきの際にご確認ください。";
-const REPLY_TEXT = "カレンダーに資料を共有しました。ご確認お願いします。";
+// 3-gram Jaccard (normalized): TEXT_1 ↔ TEXT_2 0.720, TEXT_2 ↔ REPLY 0.737, TEXT_1 ↔ REPLY 0.683.
+const CAL_TEXT_1 =
+  "山田さん、明日10時からの定例会議の資料をカレンダーの予定に添付しました。議題は来期の予算配分と採用計画の2点です。事前にお目通しいただき、ご不明点があればこのDMでお知らせください。";
+const CAL_TEXT_2 =
+  "山田さん、明日10時からの定例会議の資料をカレンダーの予定に添付しております。議題は来期の予算配分と採用計画の2点です。事前にご確認いただき、ご不明な点があればこのDMでお知らせください。";
+const REPLY_TEXT =
+  "山田さん、明日10時からの定例会議の資料をカレンダーの予定に添付しております。議題は来期の予算配分と採用の2点です。事前にお目通しいただき、ご不明な点があればこちらでお知らせください。";
+// Another matter in the same DM (Jaccard ≈ 0 with all of the above).
+const OTHER_TOPIC_TEXT =
+  "経費精算の締め切りが今週金曜日に変更になりました。領収書の提出がまだの場合は、木曜日までに経理部へ提出をお願いします。";
+const OTHER_TOPIC_TEXT_2 = "来週月曜の全社朝礼は会議室Bに変更です。オンライン参加のURLは前回と同じものをご利用ください。";
 
 const originalFetch = globalThis.fetch;
 let posts: Array<{ channel?: string; text?: string }> = [];
@@ -156,9 +172,13 @@ describe("incident reproduction (flag ON)", () => {
     expect(posts.length).toBe(1);
     expect(await status(id)).toBe("superseded");
     const events = await listAuditEvents(DEMO_ORG.id, 200);
-    expect(
-      events.some((e) => e.action === "approval.superseded" && e.metadata?.approvalId === id && e.metadata?.reason === "replied_after_approval")
-    ).toBe(true);
+    const atFulfill = events.find(
+      (e) => e.action === "approval.superseded" && e.metadata?.approvalId === id && e.metadata?.reason === "replied_after_approval"
+    );
+    expect(atFulfill).toBeTruthy();
+    // the later reply was a re-write of this approval's body (same keyed check as duplicates)
+    expect(atFulfill?.metadata?.match).toBe("similar");
+    expect(Number(atFulfill?.metadata?.similarity)).toBeGreaterThanOrEqual(0.6);
 
     // The employee's approved re-run with approvalId does not post either.
     const rerun = await invoke({ ...convBody("comm.send", DM_A, CAL_TEXT_1), approvalId: id });
@@ -206,6 +226,105 @@ describe("scope of superseding", () => {
   });
 });
 
+describe("supersede only when the bodies are similar (木村, 2026-10-04)", () => {
+  test("a pending approval about another matter in the same DM survives a new reply and is still sent when approved", async () => {
+    setFlag(true);
+    recordSlack();
+    const id = await queue(DM_A, CAL_TEXT_1);
+    expect((await invoke(convBody("comm.reply", DM_A, OTHER_TOPIC_TEXT))).httpStatus).toBe(200);
+    expect(posts.length).toBe(1);
+    expect(await status(id)).toBe("pending");
+    const result = await approveAndFulfill(id);
+    expect(result?.ok).toBe(true);
+    expect(posts.length).toBe(2);
+    expect(posts[1]?.text).toContain("定例会議");
+    expect(await status(id)).toBe("approved");
+    const events = await listAuditEvents(DEMO_ORG.id, 200);
+    expect(events.some((e) => e.action === "approval.superseded" && e.metadata?.approvalId === id)).toBe(false);
+  });
+
+  test("a newer approval request about another matter leaves the older one pending (both sent when approved)", async () => {
+    setFlag(true);
+    recordSlack();
+    const first = await queue(DM_A, CAL_TEXT_1);
+    const second = await queue(DM_A, OTHER_TOPIC_TEXT_2);
+    expect(await status(first)).toBe("pending");
+    expect(await status(second)).toBe("pending");
+    expect((await approveAndFulfill(first))?.ok).toBe(true);
+    expect((await approveAndFulfill(second))?.ok).toBe(true);
+    expect(posts.length).toBe(2);
+  });
+
+  test("a similar reply supersedes; the audit carries match + similarity, never the body", async () => {
+    setFlag(true);
+    recordSlack();
+    const id = await queue(DM_A, CAL_TEXT_2);
+    expect((await invoke(convBody("comm.reply", DM_A, REPLY_TEXT))).httpStatus).toBe(200);
+    expect(await status(id)).toBe("superseded");
+    expect(await resolveApproval(id, "approved", "slack:U_APPROVER", DEMO_ORG.id)).toBeNull();
+    expect(posts.length).toBe(1);
+    const events = await listAuditEvents(DEMO_ORG.id, 200);
+    const sup = events.find((e) => e.action === "approval.superseded" && e.metadata?.approvalId === id);
+    expect(sup?.metadata?.reason).toBe("newer_reply_sent");
+    expect(sup?.metadata?.match).toBe("similar");
+    expect(Number(sup?.metadata?.similarity)).toBeGreaterThanOrEqual(0.6);
+    const raw = JSON.stringify(sup);
+    expect(raw).not.toContain("定例会議");
+    expect(raw).not.toContain("山田さん");
+  });
+
+  test("the same body requested again supersedes with match exact; a different matter in the same DM is untouched", async () => {
+    setFlag(true);
+    recordSlack();
+    const other = await queue(DM_A, OTHER_TOPIC_TEXT);
+    const first = await queue(DM_A, CAL_TEXT_1);
+    const again = await queue(DM_A, CAL_TEXT_1);
+    expect(await status(first)).toBe("superseded");
+    expect(await status(again)).toBe("pending");
+    expect(await status(other)).toBe("pending");
+    const events = await listAuditEvents(DEMO_ORG.id, 200);
+    const sup = events.find((e) => e.action === "approval.superseded" && e.metadata?.approvalId === first);
+    expect(sup?.metadata).toMatchObject({ reason: "newer_approval_requested", match: "exact", similarity: 1 });
+  });
+
+  test("fulfill re-check: a reply about another matter sent after the approval was created does not stop it", async () => {
+    setFlag(true);
+    recordSlack();
+    const id = await queue(DM_A, CAL_TEXT_1);
+    failPosts = true;
+    expect(await approveAndFulfill(id)).toMatchObject({ ok: false, error: "slack_token_missing" });
+    failPosts = false;
+    expect((await invoke(convBody("comm.reply", DM_A, OTHER_TOPIC_TEXT))).httpStatus).toBe(200);
+    expect(posts.length).toBe(1);
+    const approval = await getApprovalById(id, DEMO_ORG.id);
+    expect(approval?.status).toBe("approved");
+    const retry = await fulfillApprovedInvoke(approval!);
+    expect(retry?.ok).toBe(true);
+    expect(posts.length).toBe(2);
+    expect(await status(id)).toBe("approved");
+  });
+
+  test("fulfill re-check: the same body already sent after the approval (outside the 30 min window) → superseded", async () => {
+    setFlag(true);
+    recordSlack();
+    const base = Date.now();
+    const id = await queue(DM_A, CAL_TEXT_1);
+    failPosts = true;
+    expect(await approveAndFulfill(id)).toMatchObject({ ok: false, error: "slack_token_missing" });
+    failPosts = false;
+    setCommReplyDedupClockForTests(() => base + 5 * 60_000);
+    expect((await invoke(convBody("comm.reply", DM_A, CAL_TEXT_1))).httpStatus).toBe(200);
+    // 45 min after that reply: the duplicate window (30 min) has passed, the approval is still < 24 h old.
+    setCommReplyDedupClockForTests(() => base + 50 * 60_000);
+    const retry = await fulfillApprovedInvoke((await getApprovalById(id, DEMO_ORG.id))!);
+    expect(retry).toMatchObject({ ok: false, error: "approval_superseded" });
+    expect(posts.length).toBe(1);
+    const events = await listAuditEvents(DEMO_ORG.id, 200);
+    const sup = events.find((e) => e.action === "approval.superseded" && e.metadata?.approvalId === id);
+    expect(sup?.metadata).toMatchObject({ reason: "replied_after_approval", match: "exact" });
+  });
+});
+
 describe("expiry of pending conversation approvals (default 24 h)", () => {
   test("sweep expires an old pending approval; younger ones stay", async () => {
     setFlag(true);
@@ -241,6 +360,23 @@ describe("expiry of pending conversation approvals (default 24 h)", () => {
 });
 
 describe("flag OFF: unchanged behaviour", () => {
+  test("similar and different-topic approvals plus replies: nothing is closed, every approval still posts", async () => {
+    setFlag(false);
+    recordSlack();
+    const a1 = await queue(DM_A, CAL_TEXT_1);
+    const a2 = await queue(DM_A, CAL_TEXT_2);
+    const other = await queue(DM_A, OTHER_TOPIC_TEXT);
+    expect((await invoke(convBody("comm.reply", DM_A, REPLY_TEXT))).httpStatus).toBe(200);
+    expect((await invoke(convBody("comm.reply", DM_A, REPLY_TEXT))).httpStatus).toBe(200);
+    for (const id of [a1, a2, other]) expect(await status(id)).toBe("pending");
+    for (const id of [a1, a2, other]) expect((await approveAndFulfill(id))?.ok).toBe(true);
+    expect(posts.length).toBe(5);
+    const events = await listAuditEvents(DEMO_ORG.id, 300);
+    for (const id of [a1, a2, other]) {
+      expect(events.some((e) => e.action === "approval.superseded" && e.metadata?.approvalId === id)).toBe(false);
+    }
+  });
+
   test("held approval approved after a reply still posts (legacy behaviour kept)", async () => {
     setFlag(false);
     recordSlack();

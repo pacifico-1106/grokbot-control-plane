@@ -94,15 +94,43 @@ describe("claimCommReplySend", () => {
     expect((await claimCommReplySend(base)).state).toBe("duplicate");
   });
 
-  test("approval fulfill: any reply to the conversation after the approval was created → superseded", async () => {
+  test("approval fulfill: a reply about another matter sent after the approval was created does NOT supersede (木村)", async () => {
     setCommReplyDedupClockForTests(() => now);
     const createdAt = new Date(now).toISOString();
     now += 18_000;
-    await sent({ ...base, bodyHash: H("9"), sketch: SK(99) }); // a different body
+    await sent({ ...base, bodyHash: H("9"), sketch: SK(99) }); // a different body (similarity 0)
     now += 17 * 60_000;
     const res = await claimCommReplySend({ ...base, approvalId: "apr_1", approvalCreatedAt: createdAt });
-    expect(res.state).toBe("superseded");
-    // The same reply sent BEFORE the approval was created does not supersede (dedup window decides).
+    expect(res.state).toBe("claimed");
+  });
+
+  test("approval fulfill: a similar or identical reply sent after the approval was created → superseded (with match)", async () => {
+    setCommReplyDedupClockForTests(() => now);
+    const createdAt = new Date(now).toISOString();
+    now += 18_000;
+    await sent({ ...base, bodyHash: H("2"), sketch: SK(7, 30) }); // re-written: 98/128 ≈ 0.77
+    // 45 min later: outside the 30 min duplicate window, still "after the approval"
+    now += 45 * 60_000;
+    expect(await claimCommReplySend({ ...base, approvalId: "apr_1", approvalCreatedAt: createdAt })).toMatchObject({
+      state: "superseded",
+      match: "similar",
+    });
+    // identical body → exact
+    await sent({ ...base, bodyHash: H("4"), sketch: SK(44) });
+    now += 60_000;
+    expect(
+      await claimCommReplySend({ ...base, bodyHash: H("4"), sketch: SK(44), approvalId: "apr_2", approvalCreatedAt: createdAt })
+    ).toMatchObject({ state: "superseded", match: "exact", similarity: 1 });
+    // exact mode (threshold null): only an identical body supersedes
+    expect(
+      (await claimCommReplySend({ ...base, similarityThreshold: null, approvalId: "apr_3", approvalCreatedAt: createdAt })).state
+    ).toBe("claimed");
+  });
+
+  test("approval fulfill: a reply sent BEFORE the approval was created never supersedes (the dedup window decides)", async () => {
+    setCommReplyDedupClockForTests(() => now);
+    await sent();
+    now += 60_000;
     const later = await claimCommReplySend({
       ...base, bodyHash: H("3"), sketch: SK(3), approvalId: "apr_2", approvalCreatedAt: new Date(now).toISOString(),
     });

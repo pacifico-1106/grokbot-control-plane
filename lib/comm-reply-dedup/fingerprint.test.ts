@@ -3,6 +3,8 @@
  * keyed body hash and keyed MinHash sketch. Only hashes leave this module.
  */
 import { describe, expect, test } from "bun:test";
+import { createHmac } from "node:crypto";
+import { resolveCommReplyDedupKey } from "./config";
 import {
   SKETCH_SIZE,
   fingerprintReplyBody,
@@ -76,5 +78,61 @@ describe("sketchSimilarity", () => {
     expect(sketchSimilarity(base, fingerprintReplyBody(PARAPHRASE, KEY).sketch)).toBeGreaterThanOrEqual(0.6);
     expect(sketchSimilarity(base, fingerprintReplyBody(UNRELATED, KEY).sketch)).toBeLessThan(0.3);
     expect(sketchSimilarity(base, null)).toBe(0);
+  });
+});
+
+describe("incident-shaped re-writes under the keyed sketch (木村: supersede only when similar)", () => {
+  // Synthetic stand-ins with the measured shape (normalized length ~90; the two
+  // queued versions in one DM had 3-gram Jaccard 0.714 / 0.729). Same fixtures as
+  // lib/approvals/comm-reply-supersede.test.ts.
+  const Q1 =
+    "山田さん、明日10時からの定例会議の資料をカレンダーの予定に添付しました。議題は来期の予算配分と採用計画の2点です。事前にお目通しいただき、ご不明点があればこのDMでお知らせください。";
+  const Q2 =
+    "山田さん、明日10時からの定例会議の資料をカレンダーの予定に添付しております。議題は来期の予算配分と採用計画の2点です。事前にご確認いただき、ご不明な点があればこのDMでお知らせください。";
+  const REPLY =
+    "山田さん、明日10時からの定例会議の資料をカレンダーの予定に添付しております。議題は来期の予算配分と採用の2点です。事前にお目通しいただき、ご不明な点があればこちらでお知らせください。";
+  const OTHER = "経費精算の締め切りが今週金曜日に変更になりました。領収書の提出がまだの場合は、木曜日までに経理部へ提出をお願いします。";
+  const grams = (t: string) => {
+    const c = Array.from(normalizeReplyBody(t));
+    const g = new Set<string>();
+    for (let i = 0; i + 3 <= c.length; i++) g.add(c.slice(i, i + 3).join(""));
+    return g;
+  };
+  const jaccard = (a: string, b: string) => {
+    const A = grams(a);
+    const B = grams(b);
+    let n = 0;
+    for (const x of A) if (B.has(x)) n++;
+    return n / (A.size + B.size - n);
+  };
+  const sim = (a: string, b: string, key: Buffer) =>
+    sketchSimilarity(fingerprintReplyBody(a, key).sketch, fingerprintReplyBody(b, key).sketch);
+
+  test("fixtures have the incident's shape (Jaccard ≈ 0.71–0.74) and are not exact duplicates", () => {
+    expect(jaccard(Q1, Q2)).toBeGreaterThanOrEqual(0.71);
+    expect(jaccard(Q1, Q2)).toBeLessThanOrEqual(0.73);
+    expect(jaccard(Q2, REPLY)).toBeGreaterThanOrEqual(0.71);
+    expect(jaccard(Q2, REPLY)).toBeLessThanOrEqual(0.74);
+    expect(fingerprintReplyBody(Q1, KEY).bodyHash).not.toBe(fingerprintReplyBody(Q2, KEY).bodyHash);
+  });
+
+  test("similar (≥ 0.6) under the test key and the demo key; another matter is not (< 0.1)", () => {
+    const demoKey = resolveCommReplyDedupKey(); // demo mode in tests: the fixed dev key the gateway tests use
+    expect(demoKey).not.toBeNull();
+    for (const key of [KEY, OTHER_KEY, demoKey!]) {
+      expect(sim(Q1, Q2, key)).toBeGreaterThanOrEqual(0.6);
+      expect(sim(Q2, REPLY, key)).toBeGreaterThanOrEqual(0.6);
+      expect(sim(Q1, OTHER, key)).toBeLessThan(0.1);
+    }
+  });
+
+  test("across 500 keys: Jaccard ≈ 0.72 re-writes clear 0.6 for ≥ 99% of keys (MinHash spread)", () => {
+    let below = 0;
+    for (let i = 0; i < 500; i++) {
+      const key = createHmac("sha256", "fixture-key-sweep").update(String(i)).digest();
+      if (sim(Q1, Q2, key) < 0.6) below++;
+      if (sim(Q2, REPLY, key) < 0.6) below++;
+    }
+    expect(below / 1000).toBeLessThanOrEqual(0.01);
   });
 });
