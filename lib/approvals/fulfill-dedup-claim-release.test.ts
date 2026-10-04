@@ -126,7 +126,7 @@ async function queueApproved(dm: string, text: string): Promise<ApprovalRequest>
 /** Re-point the stored snapshot at a user ID only (no channel), optionally with an explicit DM intent. */
 async function retargetToUser(approval: ApprovalRequest, dmIntent: boolean): Promise<ApprovalRequest> {
   const invokeSnap = approval.metadata.invoke as Record<string, unknown>;
-  const conversation = { ...(invokeSnap.conversation as Record<string, unknown>), slackUserId: USER_ONLY };
+  const conversation: Record<string, unknown> = { ...(invokeSnap.conversation as Record<string, unknown>), slackUserId: USER_ONLY };
   delete conversation.slackChannelId;
   const args = { ...(invokeSnap.args as Record<string, unknown>), ...(dmIntent ? { dm: true } : {}) };
   const updated = await updateApprovalMetadata(approval, { invoke: { ...invokeSnap, conversation, args } });
