@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { rejectUnauthorizedCron } from "@/lib/security/cron-secret";
 import { runApprovalAttachmentReconcile } from "@/lib/approvals/attachment-reconcile";
 import { listApprovalsForTelegramDigest } from "@/lib/data/approvals";
 import { isApprovalAttachmentReconcileEnabled, isCommReplyDedupEnabled } from "@/lib/feature-flags";
@@ -16,16 +17,8 @@ export const dynamic = "force-dynamic";
  * Integrates with existing fulfill paths (#53 family); does not duplicate them.
  */
 export async function GET(req: Request) {
-  const secret = process.env.CRON_SECRET?.trim() || "";
-  if (!secret) {
-    return NextResponse.json(
-      { ok: false, error: "cron_not_configured" },
-      { status: 503 }
-    );
-  }
-  if (req.headers.get("authorization") !== `Bearer ${secret}`) {
-    return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
-  }
+  const rejected = rejectUnauthorizedCron(req);
+  if (rejected) return rejected;
 
   try {
     // COMM_REPLY_DEDUP_ENABLED: pending conversation approvals older than the

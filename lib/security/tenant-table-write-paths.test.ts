@@ -227,7 +227,7 @@ describe("app: no user-session writes to tenant tables", () => {
       .sort();
     expect(handlers).toEqual(["lib/billing/stripe-plan-webhook.ts"]);
     expect(src("app/api/webhooks/stripe/route.ts")).toContain("stripe.webhooks.constructEvent(");
-    expect(src("app/api/cron/expire-trials/route.ts")).toContain("`Bearer ${secret}`");
+    expect(src("app/api/cron/expire-trials/route.ts")).toContain("rejectUnauthorizedCron(req)");
     expect(src("app/api/admin/trial-extension/route.ts")).toContain("getSuperAdminAccess()");
   });
 
