@@ -25,7 +25,7 @@ const member = (role: OrgMember["role"]): OrgMember => ({
 let demo = false;
 let session: SessionContext = { demo: false, userId: null, email: null, orgId: null, member: null };
 let writes: string[] = [];
-const linked = { employeeId: "emp-1", orgId: "org-a", status: "linked", grokBotAgentId: "agent-x", lastSuccessAt: null };
+const linked = { employeeId: "emp-1", orgId: "org-a", status: "linked", grokBotAgentId: "agent-x", lastSuccessAt: null, lastError: null };
 let stored: typeof linked | undefined = linked;
 
 mock.module("@/lib/mode", () => ({
@@ -173,6 +173,18 @@ describe("GET is read-only", () => {
     });
     expect(other.status).toBe(404);
     expect(writes).toEqual([]);
+  });
+
+  test("member-visible response is pinned: status fields + bindingPublicView only (no fingerprint / secret)", async () => {
+    as("member");
+    const body = await (await get()).json();
+    expect(Object.keys(body).sort()).toEqual(
+      ["binding", "demo", "healthy", "lastError", "lastSuccessAt", "mode", "ok", "persisted", "readOnly", "status"]
+    );
+    const src = readFileSync(new URL("./route.ts", import.meta.url), "utf8");
+    const getBody = src.slice(src.indexOf("export async function GET"));
+    expect(getBody).toContain("binding: bindingPublicView(binding)");
+    expect(getBody).not.toMatch(/credentialFingerprint|secret|token/i);
   });
 
   test("GET handler does not delegate to POST or call a writer", () => {
