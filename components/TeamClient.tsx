@@ -10,6 +10,13 @@ import {
   capabilityLabel,
   jobRoleLabel,
 } from "@/lib/team/rbac";
+import {
+  KNOWN_CAPABILITIES,
+  KNOWN_ROLES,
+  PRIVILEGED_CAPABILITIES,
+  memberChangeEditability,
+  type MemberChangeActor,
+} from "@/lib/team/member-change-guard";
 import type {
   HumanCapability,
   HumanJobRole,
@@ -21,7 +28,24 @@ function uniqueCaps(caps: HumanCapability[]): HumanCapability[] {
   return [...new Set(caps)];
 }
 
-export function TeamClient({ initialMembers }: { initialMembers: OrgMember[] }) {
+const NO_ACTOR: MemberChangeActor = {
+  kind: "member",
+  id: "",
+  orgId: "",
+  role: "member",
+  capabilities: [],
+  status: "disabled",
+  emails: [],
+};
+
+export function TeamClient({
+  initialMembers,
+  viewer = null,
+}: {
+  initialMembers: OrgMember[];
+  /** Session member (server-resolved). Drives checkbox state; the API re-checks. */
+  viewer?: MemberChangeActor | null;
+}) {
   const router = useRouter();
   const [members, setMembers] = useState<OrgMember[]>(initialMembers);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -42,15 +66,48 @@ export function TeamClient({ initialMembers }: { initialMembers: OrgMember[] }) 
     [members, editingId]
   );
 
+  // Same pure guard as the server (lib/team/member-change-guard.ts).
+  const editable = useMemo(() => {
+    const ownerCount = members.filter((m) => m.role === "owner" && m.status === "active").length;
+    return memberChangeEditability({
+      actor: viewer ?? NO_ACTOR,
+      before: editing
+        ? {
+            id: editing.id,
+            userId: editing.userId ?? null,
+            orgId: editing.orgId,
+            email: editing.email,
+            role: editing.role,
+            capabilities: editing.capabilities ?? [],
+            status: editing.status,
+          }
+        : null,
+      ownerCount,
+    });
+  }, [members, editing, viewer]);
+  const baselineCaps = useMemo<HumanCapability[]>(
+    () => (editing?.capabilities ?? []).filter((c) => KNOWN_CAPABILITIES.includes(c)),
+    [editing]
+  );
+  const isSelfEdit = Boolean(viewer && viewer.kind === "member" && editing && editing.id === viewer.id);
+
+  /** Locked boxes keep the current value; only editable boxes take the new state. */
+  function lockAware(next: HumanCapability[]): HumanCapability[] {
+    return KNOWN_CAPABILITIES.filter((c) =>
+      editable.capabilities[c] ? next.includes(c) : baselineCaps.includes(c)
+    );
+  }
+
   function applyJobRole(role: HumanJobRole) {
     setJobRole(role);
-    setCapabilities(capabilitiesForJobRole(role));
-    if (role === "owner") setCoarseRole("owner");
-    else if (role === "ops_ai" || role === "admin_affairs") setCoarseRole("admin");
-    else setCoarseRole("member");
+    setCapabilities(lockAware(capabilitiesForJobRole(role)));
+    const nextRole: OrgMemberRole =
+      role === "owner" ? "owner" : role === "ops_ai" || role === "admin_affairs" ? "admin" : "member";
+    if (editable.roles[nextRole]) setCoarseRole(nextRole);
   }
 
   function toggleCap(cap: HumanCapability) {
+    if (!editable.capabilities[cap]) return;
     setCapabilities((cur) =>
       cur.includes(cap) ? cur.filter((c) => c !== cap) : [...cur, cap]
     );
@@ -60,7 +117,15 @@ export function TeamClient({ initialMembers }: { initialMembers: OrgMember[] }) 
     setEditingId(null);
     setEmail("");
     setDisplayName("");
-    applyJobRole("sales");
+    setJobRole("sales");
+    // Invite defaults: only boxes the viewer may set (privileged ones are owner-only).
+    const invite = memberChangeEditability({
+      actor: viewer ?? NO_ACTOR,
+      before: null,
+      ownerCount: members.filter((m) => m.role === "owner" && m.status === "active").length,
+    });
+    setCapabilities(capabilitiesForJobRole("sales").filter((c) => invite.capabilities[c]));
+    setCoarseRole("member");
     setJobLabel("");
     setError("");
   }
@@ -71,7 +136,7 @@ export function TeamClient({ initialMembers }: { initialMembers: OrgMember[] }) 
     setDisplayName(m.displayName);
     setJobRole(m.jobRole ?? "custom");
     setJobLabel(m.jobLabel ?? "");
-    setCapabilities(uniqueCaps(m.capabilities ?? []));
+    setCapabilities(uniqueCaps((m.capabilities ?? []).filter((c) => KNOWN_CAPABILITIES.includes(c))));
     setCoarseRole(m.role);
     setError("");
   }
@@ -234,14 +299,14 @@ export function TeamClient({ initialMembers }: { initialMembers: OrgMember[] }) 
           <button
             type="button"
             className="chip text-[11px]"
-            onClick={() => setCapabilities([...VIEW_ONLY_CAPABILITIES])}
+            onClick={() => setCapabilities(lockAware([...VIEW_ONLY_CAPABILITIES]))}
           >
             閲覧のみ
           </button>
           <button
             type="button"
             className="chip text-[11px]"
-            onClick={() => setCapabilities(capabilitiesForJobRole(jobRole))}
+            onClick={() => setCapabilities(lockAware(capabilitiesForJobRole(jobRole)))}
           >
             職務パックを再適用
           </button>
@@ -249,23 +314,37 @@ export function TeamClient({ initialMembers }: { initialMembers: OrgMember[] }) 
 
         <div>
           <div className="text-sm muted mb-2">権限</div>
+          {isSelfEdit ? (
+            <p className="mb-2 text-[11px] faint">自分自身の権限は上げられません（外すことはできます）。</p>
+          ) : null}
           <ul className="space-y-2">
-            {CAPABILITY_DEFS.map((c) => (
-              <li key={c.key}>
-                <label className="flex items-start gap-2 text-sm cursor-pointer">
-                  <input
-                    type="checkbox"
-                    className="mt-1"
-                    checked={capabilities.includes(c.key)}
-                    onChange={() => toggleCap(c.key)}
-                  />
-                  <span>
-                    <span className="font-medium">{c.label}</span>
-                    <span className="block text-[11px] faint">{c.group}</span>
-                  </span>
-                </label>
-              </li>
-            ))}
+            {CAPABILITY_DEFS.map((c) => {
+              const locked = !editable.capabilities[c.key];
+              return (
+                <li key={c.key}>
+                  <label className={`flex items-start gap-2 text-sm ${locked ? "opacity-60 cursor-not-allowed" : "cursor-pointer"}`}>
+                    <input
+                      type="checkbox"
+                      className="mt-1"
+                      checked={capabilities.includes(c.key)}
+                      disabled={locked}
+                      onChange={() => toggleCap(c.key)}
+                    />
+                    <span>
+                      <span className="font-medium">{c.label}</span>
+                      <span className="block text-[11px] faint">
+                        {c.group}
+                        {locked && PRIVILEGED_CAPABILITIES.includes(c.key) && viewer?.kind === "member" && viewer.role !== "owner"
+                          ? " · オーナーのみ変更できます"
+                          : locked && isSelfEdit
+                            ? " · 自分には付けられません"
+                            : null}
+                      </span>
+                    </span>
+                  </label>
+                </li>
+              );
+            })}
           </ul>
         </div>
 
@@ -276,9 +355,12 @@ export function TeamClient({ initialMembers }: { initialMembers: OrgMember[] }) 
             onChange={(e) => setCoarseRole(e.target.value as OrgMemberRole)}
             className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm"
           >
-            <option value="owner">owner</option>
-            <option value="admin">admin</option>
-            <option value="member">member</option>
+            {KNOWN_ROLES.map((r) => (
+              <option key={r} value={r} disabled={!editable.roles[r] && r !== coarseRole}>
+                {r}
+                {!editable.roles[r] && r !== coarseRole ? "（変更不可）" : ""}
+              </option>
+            ))}
           </select>
         </label>
 
