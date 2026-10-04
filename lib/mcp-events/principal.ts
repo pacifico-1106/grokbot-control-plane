@@ -44,3 +44,14 @@ export async function checkSubscriptionPrincipal(
   }
   return { ok: true };
 }
+
+// ---- reader seam (stubs; implemented in the fix commit) ----------------------
+export type Read<T> = { state: "found"; value: T } | { state: "missing" } | { state: "error"; detail: string };
+export type PrincipalReader = {
+  binding(employeeId: string): Promise<Read<{ orgId: string | null; status: string; credentialGeneration: number; credentialFingerprint: string | null }>>;
+  employee(employeeId: string): Promise<Read<{ orgId: string; status: string }>>;
+  credential(credentialId: string, employeeId: string): Promise<Read<{ revokedAt: string | null; expiresAt: string | null }>>;
+};
+export function defaultPrincipalReader(): PrincipalReader { throw new Error("not_implemented"); }
+export function supabasePrincipalReader(_client: unknown): PrincipalReader { void _client; throw new Error("not_implemented"); }
+export function __setPrincipalReaderForTests(_r: PrincipalReader | null): void { void _r; }

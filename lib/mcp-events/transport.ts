@@ -37,6 +37,7 @@ export type PinnedRequest = {
   body: Buffer;
   timeoutMs: number;
   maxResponseBytes: number;
+  signal?: AbortSignal;
 };
 export type WebhookTransport = {
   lookup: (hostname: string) => Promise<ResolvedAddress[]>;
@@ -192,4 +193,9 @@ export async function postWebhook(
   if (status === 410 || status === 413) return { ok: false, category: "http_4xx", reason: `http_${status}`, retryable: false, status };
   if (status >= 500) return { ok: false, category: "http_5xx", reason: "http_5xx", retryable: true, status };
   return { ok: false, category: "http_4xx", reason: "http_4xx", retryable: true, status };
+}
+
+export function createNodeWebhookTransport(_deps: { request?: typeof httpsRequest } = {}): WebhookTransport {
+  void _deps;
+  throw new Error("not_implemented");
 }

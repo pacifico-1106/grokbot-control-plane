@@ -21,6 +21,10 @@ export const MCP_EVENTS_LIMITS = {
   verificationCacheMs: 24 * 60 * 60_000,
   verificationsPerHostPerMinute: 30,
   attributionWindowMs: 30 * 60_000,
+  /** a delivery attempt deferred because the revocation re-check could not run is retried after this (not counted as an attempt) */
+  deferMs: 60_000,
+  /** delivered / abandoned / dropped delivery rows are deleted after this (pruned by the deliver cron) */
+  deliveryRetentionMs: 7 * 24 * 60 * 60_000,
 } as const;
 
 export type SubscriptionRisk = "standard" | "elevated";

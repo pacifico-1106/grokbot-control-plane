@@ -344,3 +344,13 @@ export async function markAttributed(id: string, nowIso: string): Promise<boolea
   if (error) throw new Error("mcp_events_store_error");
   return Boolean(data && data.length);
 }
+
+/** Test helper (demo store only). */
+export function __listDeliveriesForTests(): DeliveryRow[] {
+  return [...demoDeliveries.values()].map((d) => ({ ...d })).sort((a, b) => t(a.createdAt) - t(b.createdAt));
+}
+
+export async function deleteFinishedDeliveriesBefore(_cutoffIso: string, _limit: number): Promise<number> {
+  void _cutoffIso; void _limit;
+  throw new Error("not_implemented");
+}

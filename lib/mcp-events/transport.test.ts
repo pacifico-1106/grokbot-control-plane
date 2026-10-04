@@ -5,8 +5,10 @@
  * redirects, bounded body. Fake DNS / transport only (no network).
  */
 import { describe, expect, test } from "bun:test";
+import { EventEmitter } from "node:events";
 import {
   buildPinnedRequestOptions,
+  createNodeWebhookTransport,
   postWebhook,
   validateCallbackUrl,
   type WebhookTransport,
@@ -59,6 +61,8 @@ describe("DNS check on every attempt (rebinding), private / metadata answers ref
       if (r.ok) return;
       expect(r.reason).toBe("address_blocked");
       expect(r.category).toBe("connection_refused");
+      // 3b: a non-public answer is a permanent failure (never retried)
+      expect(r.retryable).toBe(false);
       expect(seen).toHaveLength(0);
     });
   }
@@ -132,5 +136,65 @@ describe("responses", () => {
     const { t, lookups } = fakeTransport([PUBLIC4]);
     expect((await postWebhook("http://hooks.example.com/a", "{}", {}, t)).ok).toBe(false);
     expect(lookups()).toBe(0);
+  });
+});
+
+describe("3a. overall timeout destroys the request and the socket", () => {
+  class FakeRes extends EventEmitter { statusCode = 200; destroyed = false; destroy() { this.destroyed = true; return this; } }
+  class FakeReq extends EventEmitter {
+    destroyed = false; destroyError: unknown = null; idleTimeoutMs = 0;
+    setTimeout(ms: number) { this.idleTimeoutMs = ms; return this; }
+    destroy(e?: unknown) { if (this.destroyed) return this; this.destroyed = true; this.destroyError = e; queueMicrotask(() => this.emit("error", e ?? new Error("destroyed"))); return this; }
+    end() { return this; }
+  }
+  const pinned = (timeoutMs: number): PinnedRequest => ({
+    address: "93.184.216.34", family: 4, hostname: "hooks.example.com", path: "/a", headers: {}, body: Buffer.from("{}"), timeoutMs, maxResponseBytes: 1024,
+  });
+  test("no response at all → request destroyed at the overall deadline (ETIMEDOUT)", async () => {
+    let req: FakeReq | null = null;
+    const t = createNodeWebhookTransport({ request: (() => { req = new FakeReq(); return req; }) as never });
+    const started = Date.now();
+    const err = await t.request(pinned(60)).then(() => null, (e: unknown) => e);
+    expect((err as { code?: string })?.code).toBe("ETIMEDOUT");
+    expect(req!.destroyed).toBe(true);
+    expect(Date.now() - started).toBeLessThan(1000);
+  });
+  test("a response that keeps trickling (idle timer never fires) is cut at the overall deadline: response + request destroyed", async () => {
+    let req: FakeReq | null = null;
+    const res = new FakeRes();
+    const t = createNodeWebhookTransport({
+      request: ((_opts: unknown, cb: (r: FakeRes) => void) => {
+        req = new FakeReq();
+        setTimeout(() => {
+          cb(res);
+          const timer = setInterval(() => { if (res.destroyed) clearInterval(timer); else res.emit("data", Buffer.from("x")); }, 5);
+        }, 1);
+        return req;
+      }) as never,
+    });
+    const err = await t.request(pinned(80)).then(() => null, (e: unknown) => e);
+    expect((err as { code?: string })?.code).toBe("ETIMEDOUT");
+    expect(res.destroyed).toBe(true);
+    expect(req!.destroyed).toBe(true);
+  });
+  test("postWebhook aborts the transport's signal when its own deadline passes", async () => {
+    let signal: AbortSignal | undefined;
+    const t: WebhookTransport = {
+      lookup: async () => PUBLIC4,
+      request: (req) => { signal = req.signal; return new Promise(() => undefined); },
+    };
+    const r = await postWebhook("https://hooks.example.com/a", "{}", {}, t, { timeoutMs: 50 });
+    expect(r).toMatchObject({ ok: false, category: "timeout", retryable: true });
+    expect(signal?.aborted).toBe(true);
+  });
+  test("an aborted signal destroys the in-flight node request", async () => {
+    let req: FakeReq | null = null;
+    const t = createNodeWebhookTransport({ request: (() => { req = new FakeReq(); return req; }) as never });
+    const ac = new AbortController();
+    const p = t.request({ ...pinned(10_000), signal: ac.signal }).then(() => null, (e: unknown) => e);
+    ac.abort();
+    const err = await p;
+    expect(err).toBeTruthy();
+    expect(req!.destroyed).toBe(true);
   });
 });

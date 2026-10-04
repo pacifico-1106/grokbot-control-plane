@@ -470,3 +470,8 @@ export async function listSubscriptionLedger(orgId: string) {
     updatedAt: s.updatedAt,
   }));
 }
+
+export async function pruneFinishedDeliveries(_opts: { limit?: number } = {}): Promise<{ deleted: number }> {
+  void _opts;
+  throw new Error("not_implemented");
+}
