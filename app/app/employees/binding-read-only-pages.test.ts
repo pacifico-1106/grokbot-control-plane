@@ -43,7 +43,7 @@ let seq = 0;
 /** a fresh demo employee that has no binding row yet */
 function employeeWithoutBinding(): string {
   const id = `emp_nobind_${++seq}`;
-  getRuntimeEmployees().unshift({ ...DEMO_EMPLOYEES[0], id, displayName: `未連携テスト${seq}`, credentialId: undefined });
+  getRuntimeEmployees().unshift({ ...DEMO_EMPLOYEES[0], id, displayName: `未連携テスト${seq}`, credentialId: null });
   expect(storedBinding(id)).toBeUndefined();
   return id;
 }
