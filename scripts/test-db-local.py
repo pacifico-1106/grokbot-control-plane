@@ -113,6 +113,25 @@ try:
         votes = list(pool.map(query, commands))
     assert votes == ["true", "true"], votes
     assert query("select current_stage_index from approval_workflow_instances where approval_id='40000000-0000-4000-8000-000000000014';") == "1"
+    comm_reply_dedup = ROOT / "supabase/migrations/20261004700000_comm_reply_dedup.sql"
+    sql(comm_reply_dedup)
+    sql(comm_reply_dedup)  # re-applicable
+    sql(ROOT / "tests/security/db-comm-reply-dedup.sql")
+    dedup_org = "80000000-0000-4000-8000-0000000000a1"
+    dedup_emp = "81000000-0000-4000-8000-000000000001"
+    command = (f"set role service_role; select public.claim_comm_reply_send('{dedup_org}','{dedup_emp}',"
+               f"repeat('d',64),repeat('e',64),null,'comm.reply',null,1800,0.6,172800)->>'state';")
+    with ThreadPoolExecutor(max_workers=12) as pool:
+        states = list(pool.map(query, [command]*12))
+    assert states.count("claimed") == 1 and states.count("duplicate") == 11, states
+    query("update public.approval_requests set status='superseded' where id='82000000-0000-4000-8000-000000000002';")
+    sql(ROOT / "supabase/verification/20261004700000_comm_reply_dedup_rollback.sql")
+    assert query("select to_regclass('public.comm_reply_send_fingerprints') is null;") == "t"
+    assert query("select count(*) from public.approval_requests where status='superseded';") == "0"
+    assert query("select status from public.approval_requests where id='82000000-0000-4000-8000-000000000002';") == "expired"
+    assert "superseded" not in query("select pg_get_constraintdef(oid) from pg_constraint where conname='approval_requests_status_check';")
+    sql(comm_reply_dedup)  # forward again after rollback
+    print("PASS: comm reply dedup ledger: superseded status + guard, anon/authenticated denied, org/employee isolation, exact/similar, superseded-after-approval only for an identical / similar reply (7 cases), 12 concurrent identical claims have 1 winner; rollback + re-apply.")
     member_guard = ROOT / "supabase/migrations/20261004200000_org_members_capability_guard.sql"
     sql(member_guard)
     sql(member_guard)  # re-applicable
