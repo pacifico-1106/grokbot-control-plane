@@ -11,6 +11,7 @@
  */
 
 import { createHash, randomBytes, createHmac } from "node:crypto";
+import { resolveAppOrigin } from "@/lib/app-url";
 
 export type SetupLinkKind =
   | "org_kickoff"
@@ -75,13 +76,20 @@ const KIND_PATHS: Record<SetupLinkKind, string> = {
   slack_bot_token_setup: "/app/settings/conversation-adapters",
 };
 
-/** STUB (TDD): setup link base URL via resolveAppOrigin(). */
+/**
+ * Setup link base URL via resolveAppOrigin() (no hardcoded host, never request headers).
+ * Legacy override names (STAFFPASS_PUBLIC_ORIGIN / NEXT_PUBLIC_BASE_URL) keep precedence
+ * but get the same production fail-safe (no loopback / non-https → canonical host).
+ */
 export function resolveSetupLinkBaseUrl(env: Record<string, string | undefined> = process.env): string {
-  return env.STAFFPASS_PUBLIC_ORIGIN || env.NEXT_PUBLIC_BASE_URL || "https://staffpass.sealith.com";
+  return resolveAppOrigin({
+    ...env,
+    NEXT_PUBLIC_APP_URL: env.STAFFPASS_PUBLIC_ORIGIN || env.NEXT_PUBLIC_BASE_URL || env.NEXT_PUBLIC_APP_URL,
+  });
 }
 
 function getBaseUrl(): string {
-  return process.env.STAFFPASS_PUBLIC_ORIGIN || process.env.NEXT_PUBLIC_BASE_URL || "https://staffpass.sealith.com";
+  return resolveSetupLinkBaseUrl(process.env);
 }
 
 function signPayload(payload: string): string {

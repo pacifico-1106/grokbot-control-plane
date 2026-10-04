@@ -6,6 +6,7 @@ import { PlanGuidance } from "@/components/PlanGuidance";
 import { getSessionContext } from "@/lib/auth/session";
 import { canIssueEmployeeCredentials } from "@/lib/team/rbac";
 import { getOrgAdminAgent } from "@/lib/data";
+import { staffpassAdminMcpUrl } from "@/lib/mcp/admin-public";
 
 export const dynamic = "force-dynamic";
 
@@ -26,7 +27,12 @@ export default async function GettingStartedPage() {
           <p className="mt-2 text-sm muted leading-relaxed">会社名とメールで Staffpass に入ります。</p>
         </section>
 
-        <AdminMcpConnect connected={connected} grokBotAgentId={adminAgent?.grokBotAgentId ?? null} canIssue={canIssue} />
+        <AdminMcpConnect
+          connected={connected}
+          grokBotAgentId={adminAgent?.grokBotAgentId ?? null}
+          canIssue={canIssue}
+          adminMcpUrl={staffpassAdminMcpUrl()}
+        />
 
         <section className="surface p-5 space-y-3" id="process-source">
           <p className="text-xs faint font-mono">STEP 03</p>

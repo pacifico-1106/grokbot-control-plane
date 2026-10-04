@@ -3,25 +3,22 @@
  * Auth is org-admin (gb_adm_…), NEVER the employee badge header (gb_emp_…).
  * Do not share Authorization: Bearer gb_emp_ with this endpoint.
  */
-export const STAFFPASS_ADMIN_MCP_URL = "https://staffpass.sealith.com/api/mcp/admin";
-export const STAFFPASS_ADMIN_MCP_SERVER_CARD =
-  "https://staffpass.sealith.com/.well-known/mcp/admin-server-card.json";
+import { resolveAppOrigin } from "@/lib/app-url";
+
 export const STAFFPASS_ADMIN_MCP_PATH = "/api/mcp/admin";
 export const STAFFPASS_ADMIN_MCP_TRANSPORT = "Streamable HTTP";
 export const STAFFPASS_ADMIN_MCP_SERVER_CARD_PATH = "/.well-known/mcp/admin-server-card.json";
 
 type Env = Record<string, string | undefined>;
 
-/** STUB (TDD): absolute admin MCP URL. */
+/** Absolute admin MCP URL (`<app origin>/api/mcp/admin`) from config (resolveAppOrigin). */
 export function staffpassAdminMcpUrl(env: Env = process.env): string {
-  void env;
-  return STAFFPASS_ADMIN_MCP_URL;
+  return `${resolveAppOrigin(env)}${STAFFPASS_ADMIN_MCP_PATH}`;
 }
 
-/** STUB (TDD): absolute admin server card URL. */
+/** Absolute admin MCP server card URL. */
 export function staffpassAdminMcpServerCardUrl(env: Env = process.env): string {
-  void env;
-  return STAFFPASS_ADMIN_MCP_SERVER_CARD;
+  return `${resolveAppOrigin(env)}${STAFFPASS_ADMIN_MCP_SERVER_CARD_PATH}`;
 }
 
 export const ADMIN_MCP_SERVER_NAME = "staffpass-admin";

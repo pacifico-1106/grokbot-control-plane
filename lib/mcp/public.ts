@@ -1,27 +1,24 @@
 /**
  * Public MCP facts for dashboard + /docs/mcp (no secrets).
- * Keep in sync with public/.well-known/mcp/server-card.json.
+ * Absolute URLs are built from the app origin config (resolveAppOrigin) — never a
+ * hardcoded host and never request headers. Production with the env unset resolves
+ * to the canonical host (same values as before). Server card: lib/mcp/server-card.ts.
  */
-
-export const STAFFPASS_MCP_URL = "https://staffpass.sealith.com/api/mcp";
-export const STAFFPASS_MCP_SERVER_CARD =
-  "https://staffpass.sealith.com/.well-known/mcp/server-card.json";
+import { resolveAppOrigin } from "@/lib/app-url";
 export const STAFFPASS_MCP_DOCS_PATH = "/docs/mcp";
 export const STAFFPASS_MCP_PATH = "/api/mcp";
 export const STAFFPASS_MCP_SERVER_CARD_PATH = "/.well-known/mcp/server-card.json";
 
 type Env = Record<string, string | undefined>;
 
-/** STUB (TDD): absolute employee-badge MCP URL. */
+/** Absolute employee-badge MCP URL (`<app origin>/api/mcp`). */
 export function staffpassMcpUrl(env: Env = process.env): string {
-  void env;
-  return STAFFPASS_MCP_URL;
+  return `${resolveAppOrigin(env)}${STAFFPASS_MCP_PATH}`;
 }
 
-/** STUB (TDD): absolute server card URL. */
+/** Absolute employee MCP server card URL. */
 export function staffpassMcpServerCardUrl(env: Env = process.env): string {
-  void env;
-  return STAFFPASS_MCP_SERVER_CARD;
+  return `${resolveAppOrigin(env)}${STAFFPASS_MCP_SERVER_CARD_PATH}`;
 }
 export const STAFFPASS_MCP_TRANSPORT = "Streamable HTTP";
 

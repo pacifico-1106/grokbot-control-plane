@@ -6,6 +6,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { readFileSync, readdirSync } from "node:fs";
 import { join, relative } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   staffpassMcpServerCardUrl,
   staffpassMcpUrl,
@@ -16,7 +17,7 @@ import {
 } from "@/lib/mcp/admin-public";
 import { buildAdminServerCard, buildServerCard } from "@/lib/mcp/server-card";
 
-const ROOT = join(import.meta.dir, "..", "..");
+const ROOT = fileURLToPath(new URL("../..", import.meta.url));
 const PROD_ORIGIN = "https://staffpass.sealith.com";
 const ALT = "https://alt-origin.example.test";
 const PROD_ENVS: Array<Record<string, string | undefined>> = [

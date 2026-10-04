@@ -5,8 +5,9 @@ import {
   ADMIN_MCP_SERVER_NAME,
   ADMIN_MCP_SERVER_TITLE,
   ADMIN_MCP_SERVER_VERSION,
-  STAFFPASS_ADMIN_MCP_URL,
+  staffpassAdminMcpUrl,
 } from "@/lib/mcp/admin-public";
+import { resolveAppOrigin } from "@/lib/app-url";
 import { ADMIN_MCP_TOOLS, callAdminMcpTool } from "@/lib/mcp/admin-tools";
 
 export const runtime = "nodejs";
@@ -58,8 +59,9 @@ function serverInfo() {
     title: ADMIN_MCP_SERVER_TITLE,
     description:
       "Staffpass Admin MCP — tenant admin mouth (hire / link / policy / parties / channels / roles.propose). Always human. Not the employee badge MCP.",
-    websiteUrl: "https://staffpass.sealith.com",
-    mcpEndpoint: STAFFPASS_ADMIN_MCP_URL,
+    // Origin from app config (resolveAppOrigin) — never hardcoded, never request headers.
+    websiteUrl: resolveAppOrigin(),
+    mcpEndpoint: staffpassAdminMcpUrl(),
     protocolVersion: MCP_PROTOCOL_VERSION,
     tools: ADMIN_MCP_TOOLS.map((t) => t.name),
     auth: {

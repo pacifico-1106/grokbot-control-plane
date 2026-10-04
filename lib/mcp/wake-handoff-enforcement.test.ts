@@ -12,10 +12,11 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { readFileSync, readdirSync } from "node:fs";
 import { join, relative } from "node:path";
+import { fileURLToPath } from "node:url";
 import { withMcpHandoff } from "@/lib/mcp/endpoint-handoff";
 import { deliverAgentWake } from "@/lib/mcp/wake-delivery";
 
-const ROOT = join(import.meta.dir, "..", "..");
+const ROOT = fileURLToPath(new URL("../..", import.meta.url));
 const SENDER = "lib/mcp/wake-delivery.ts";
 const BRAND_MODULE = "lib/mcp/endpoint-handoff.ts";
 const FLAG = "MCP_ENDPOINT_HANDOFF_ENABLED";

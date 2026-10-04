@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { AdminMcpConnect } from "@/components/AdminMcpConnect";
 import { OpsDocLocationForm } from "@/components/OpsDocLocationForm";
+import { staffpassAdminMcpUrl } from "@/lib/mcp/admin-public";
 import { SETUP_STEPS } from "@/lib/dashboard/setup-state";
 
 export function SetupKickoff({
@@ -38,7 +39,13 @@ export function SetupKickoff({
           <h3 className="text-sm font-medium">{step.title}</h3>
           <p className="text-sm muted leading-relaxed">{step.body}</p>
           {step.id === "admin-mcp" ? (
-            <AdminMcpConnect connected={adminConnected} grokBotAgentId={grokBotAgentId} embedded canIssue={canIssueAdminCredential} />
+            <AdminMcpConnect
+              connected={adminConnected}
+              grokBotAgentId={grokBotAgentId}
+              embedded
+              canIssue={canIssueAdminCredential}
+              adminMcpUrl={staffpassAdminMcpUrl()}
+            />
           ) : null}
           {step.id === "process-source" ? <OpsDocLocationForm initial={opsDocLocation} /> : null}
           {step.id === "confirm-employees" ? (

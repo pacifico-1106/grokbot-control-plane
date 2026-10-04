@@ -2,10 +2,10 @@ import Link from "next/link";
 import { CopyableValue } from "@/components/CopyableValue";
 import {
   STAFFPASS_MCP_DOCS_PATH,
-  STAFFPASS_MCP_SERVER_CARD,
   STAFFPASS_MCP_TOOL_NAMES,
   STAFFPASS_MCP_TRANSPORT,
-  STAFFPASS_MCP_URL,
+  staffpassMcpServerCardUrl,
+  staffpassMcpUrl,
 } from "@/lib/mcp/public";
 
 const TOOL_BLURB: Record<(typeof STAFFPASS_MCP_TOOL_NAMES)[number], string> = {
@@ -40,7 +40,7 @@ export function McpSetupContent({
           <p className="text-xs muted mb-1.5">
             MCP URL（{STAFFPASS_MCP_TRANSPORT}）
           </p>
-          <CopyableValue value={STAFFPASS_MCP_URL} />
+          <CopyableValue value={staffpassMcpUrl()} />
         </div>
         <p className="text-xs muted leading-relaxed">
           認証は{" "}
@@ -104,7 +104,7 @@ export function McpSetupContent({
         {isPublic ? (
           <div className="pt-1 space-y-2">
             <p className="text-xs muted">server-card</p>
-            <CopyableValue value={STAFFPASS_MCP_SERVER_CARD} />
+            <CopyableValue value={staffpassMcpServerCardUrl()} />
           </div>
         ) : (
           <p className="text-xs muted leading-relaxed">

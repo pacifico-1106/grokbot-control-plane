@@ -368,6 +368,9 @@ describe("not-connected next step reaches Slack / LINE / Telegram mouths alike",
   for (const p of PROVIDERS) {
     test(`${p.provider} mouth: one next-step notice with the endpoint; deduped; no re-wake`, async () => {
       process.env[FLAG] = "true";
+      // The watcher clock below jumps ahead by hours; start from a clean audit so wakes left by
+      // earlier tests in this file do not escalate into this mouth.
+      getRuntimeAudit().splice(0);
       const employeeId = p.employeeId;
       const mouth = await upsertNotificationChannel({ orgId: DEMO_ORG.id, provider: p.provider, label: `Mouth ${p.provider}`,
         enabled: true, config: p.config, secrets: p.secrets });

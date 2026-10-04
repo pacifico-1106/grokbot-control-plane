@@ -204,11 +204,14 @@ describe("stage 1: reconnect prompt on the next wake (no human, no re-wake)", ()
 
   test("approval.resolved wake after arming (LINE surface) carries the stronger prompt too", async () => {
     process.env[FLAG] = "true";
-    pushWake("emp_sales", Date.now() - 20 * MIN);
-    await processMcpNotConnectedWatchForOrg(DEMO_ORG.id);
     const emp = getRuntimeEmployees().find((e) => e.id === "emp_sales")!;
+    // The approval was requested (with the badge) an hour ago; since then the bot went silent.
     const a = (await createApproval({ orgId: DEMO_ORG.id, employeeId: "emp_sales", credentialId: "cred_sales", title: "rc",
       purpose: "fixture", summary: "Fixture", risk: "low", tool: "comm.reply", jobId: crypto.randomUUID() })).approval;
+    for (const e of getRuntimeAudit()) e.createdAt = new Date(Date.now() - 60 * MIN).toISOString();
+    pushWake("emp_sales", Date.now() - 20 * MIN);
+    const armed = await processMcpNotConnectedWatchForOrg(DEMO_ORG.id);
+    expect(armed.find((r) => r.employeeId === "emp_sales")?.stage).toBe("armed");
     await runApprovalResolveSideEffects({ approval: { ...a, status: "rejected" }, decision: "rejected",
       actorEmail: "line:approver", employee: { ...emp, callbackUrl: CALLBACK_URL }, surface: "line" });
     const cb = calls.filter((c) => c.url === CALLBACK_URL).map((c) => JSON.parse(c.body) as { mcpHandoff?: McpHandoff });

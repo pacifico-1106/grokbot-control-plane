@@ -146,7 +146,12 @@ describe("W1 cron notifies an unanswered user-token channel mention", () => {
         authorizations: [{ is_bot: false, user_id: "U_W1_BOUND", team_id: "T_DEMO" }],
         event: { type: "message", channel_type: "channel", user: "U_W1_HUMAN", text: "<@U_W1_BOUND> 見て", ts: "1787911900.000300", channel: "C_W1_REAL" },
       });
-      const rows = getRuntimeAudit().filter((e) => e.action === "slack.user_token_channel_wake" && e.employeeId === emp.id);
+      const rows = getRuntimeAudit().filter((e) => {
+        if (e.action !== "slack.user_token_channel_wake" || e.employeeId !== emp.id) return false;
+        const ch = e.metadata?.channel as unknown;
+        // postWake row: channel = "C…"; DL-3 detail row: channel = { channelId }.
+        return ch === "C_W1_REAL" || (typeof ch === "object" && ch !== null && (ch as { channelId?: string }).channelId === "C_W1_REAL");
+      });
       expect(rows.length).toBeGreaterThanOrEqual(2); // postWake row + DL-3 detail row
       const woke = rows.filter((e) => e.metadata?.reason === "woke");
       expect(woke.length).toBe(1);
