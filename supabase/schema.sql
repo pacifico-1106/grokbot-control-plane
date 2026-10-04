@@ -653,10 +653,10 @@ create policy employees_select on employees
 
 drop policy if exists credentials_select on credentials;
 drop policy if exists credentials_write_admin on credentials;
-create policy credentials_select on credentials
-  for select using (public.is_org_member(org_id));
--- No authenticated write policy on credentials: written only by the service role from
--- server routes — migration 20261004600000.
+-- No policy at all on credentials (and no anon / authenticated SELECT grant, see
+-- the revoke after agentmail_inboxes): read and written only by the service role
+-- from server code — migration 20261004600000. secret_hash is never readable
+-- from a user session.
 
 drop policy if exists action_counters_select on action_counters;
 create policy action_counters_select on action_counters
@@ -724,8 +724,8 @@ drop policy if exists gateway_select on gateway_links;
 drop policy if exists gateway_write_admin on gateway_links;
 create policy gateway_select on gateway_links
   for select using (public.is_org_member(org_id));
-create policy gateway_write_admin on gateway_links
-  for all using (public.is_org_admin(org_id));
+-- No authenticated write policy on gateway_links: written only by the service role
+-- (session bootstrap / POST /api/gateway/link, owner/admin) — migration 20261004600000.
 
 drop policy if exists bindings_select on employee_bindings;
 drop policy if exists bindings_write_admin on employee_bindings;
@@ -769,11 +769,8 @@ create policy org_projects_select on org_projects
 -- No authenticated write policy on org_projects: written only by the service role from
 -- server routes — migration 20261004600000.
 
--- Tenant config / credential tables: tenant session JWTs (anon key + PostgREST)
--- never write these; the service role keeps its grants (migration 20261004600000).
--- org_external_contract_payment_methods / audit_external_contract_card_events
--- are created by migrations only (20260923) and revoked there by 20261004600000.
-revoke insert, update, delete, truncate on public.credentials, public.org_admin_agents, public.employees, public.employee_bindings, public.org_parties, public.org_channels, public.information_assets, public.org_notification_channels, public.org_conversation_adapters, public.org_sns_adapters, public.employee_slack_identities, public.org_projects from anon, authenticated;
+-- Tenant config / credential table write revokes: after agentmail_inboxes below
+-- (migration 20261004600000).
 
 create or replace function public.increment_action_counter(
   p_org_id uuid,
@@ -835,8 +832,17 @@ drop policy if exists agentmail_select on agentmail_inboxes;
 drop policy if exists agentmail_write_admin on agentmail_inboxes;
 create policy agentmail_select on agentmail_inboxes
   for select using (public.is_org_member(org_id));
-create policy agentmail_write_admin on agentmail_inboxes
-  for all using (public.is_org_admin(org_id));
+-- No authenticated write policy on agentmail_inboxes — migration 20261004600000.
+
+-- Tenant config / credential tables (+ gateway_links, agentmail_inboxes): tenant
+-- session JWTs (anon key + PostgREST) never write these; the service role keeps
+-- its grants (migration 20261004600000).
+-- org_external_contract_payment_methods / audit_external_contract_card_events
+-- (20260923) and lp_* (20261001400000) are created by migrations only and
+-- revoked there by 20261004600000.
+revoke insert, update, delete, truncate on public.credentials, public.org_admin_agents, public.employees, public.employee_bindings, public.org_parties, public.org_channels, public.information_assets, public.org_notification_channels, public.org_conversation_adapters, public.org_sns_adapters, public.employee_slack_identities, public.org_projects, public.gateway_links, public.agentmail_inboxes from anon, authenticated;
+-- credentials: not readable from any user session either (rows or secret_hash).
+revoke select on public.credentials from anon, authenticated;
 
 -- Last active owner cannot be removed (20261004200000_org_members_capability_guard.sql).
 create or replace function public.org_members_keep_last_owner()

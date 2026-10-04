@@ -31,9 +31,9 @@
 | Method | Path | 内容 |
 |--------|------|------|
 | GET | `/api/employees/[id]/binding` | バインディング JSON |
-| POST | `/api/employees/[id]/link` | agent / workspace 紐付け |
+| POST | `/api/employees/[id]/link` | agent / workspace 紐付け（組織オーナー / 管理者のみ。メンバーは 403 admin_required） |
 | POST | `/api/employees/[id]/rotate` | 秘密再発行・generation++ |
-| POST | `/api/employees/[id]/health?forceFail=1` | ヘルス（デモ破綻可） |
+| POST | `/api/employees/[id]/health` | ヘルス（バインディングを書き込むため組織オーナー / 管理者のみ）。`?forceFail=1` はデモモードでのみ有効（本番では無視） |
 | POST | `/api/gateway/invoke` | fail-closed 実行スタブ |
 
 ## データ
