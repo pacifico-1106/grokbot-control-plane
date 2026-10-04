@@ -13,11 +13,13 @@
  *   server module; no user-session client writes them (inventory pinned)
  * - the user-facing routes that reach those writers carry an explicit
  *   server-side authz check
- * - migration 20261004600000 drops the 14 write policies and revokes table
- *   write privileges from anon / authenticated (documented rollback); SELECT
- *   policies and service_role stay
- * - LOW tables (agentmail_inboxes, gateway_links, lp_*) are listed only and
- *   not touched by this migration
+ * - migration 20261004600000 drops the write policies and revokes table write
+ *   privileges from anon / authenticated on the 14 config tables AND the
+ *   formerly-LOW tables (gateway_links, agentmail_inboxes, lp_*) (documented
+ *   rollback); SELECT policies and service_role stay
+ * - credentials are unreadable from any user session: credentials_select is
+ *   dropped and SELECT is revoked from anon / authenticated (no app code reads
+ *   credentials with a user-session client — pinned below)
  */
 import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync, statSync } from "node:fs";
@@ -27,7 +29,7 @@ import { scanTableAccess, WRITE_OPS, type SourceFile } from "../../tests/helpers
 
 const ROOT = fileURLToPath(new URL("../..", import.meta.url));
 const STAMP = "20261004600000";
-/** [table, write policy, using, with check | null, command] exactly as created before this migration */
+/** [table, write policy, command, using | null, with check | null] exactly as created before this migration */
 const POLICIES = [
   ["credentials", "credentials_write_admin", "all", "public.is_org_admin(org_id)", null],
   ["org_admin_agents", "org_admin_agents_write_admin", "all", "public.is_org_admin(org_id)", "public.is_org_admin(org_id)"],
@@ -43,14 +45,19 @@ const POLICIES = [
   ["org_external_contract_payment_methods", "org_ext_contract_pm_write_admin", "all", "public.is_org_admin(org_id)", "public.is_org_admin(org_id)"],
   ["org_projects", "org_projects_write_admin", "all", "public.is_org_admin(org_id)", "public.is_org_admin(org_id)"],
   ["audit_external_contract_card_events", "audit_ext_card_insert_member", "insert", null, "public.is_org_member(org_id)"],
+  ["gateway_links", "gateway_write_admin", "all", "public.is_org_admin(org_id)", null],
+  ["agentmail_inboxes", "agentmail_write_admin", "all", "public.is_org_admin(org_id)", null],
+  // read policy: credentials become unreadable from any session
+  ["credentials", "credentials_select", "select", "public.is_org_member(org_id)", null],
 ] as const;
-const TABLES = POLICIES.map(([t]) => t) as readonly string[];
-const TABLE_LIST = TABLES.map((t) => `public.${t}`).join(", ");
-/** LOW (木村): listed in the PR only; this migration must not touch them */
-const LOW_TABLES = ["agentmail_inboxes", "gateway_links", "lp_handoffs", "lp_wake_webhook_configs", "lp_wake_webhook_events"];
+/** the 14 tenant config / credential tables (HIGH / MED-HIGH / MEDIUM) */
+const TABLES = POLICIES.slice(0, 14).map(([t]) => t) as readonly string[];
+/** formerly LOW (木村): closed in the same migration */
+const LOW_TABLES = ["gateway_links", "agentmail_inboxes", "lp_handoffs", "lp_wake_webhook_configs", "lp_wake_webhook_events"];
+const REVOKED = [...TABLES, ...LOW_TABLES];
+const TABLE_LIST = REVOKED.map((t) => `public.${t}`).join(", ");
 /** SELECT policies that must survive (schema.sql / migrations) */
 const SELECT_POLICIES = [
-  "credentials_select",
   "org_admin_agents_select",
   "employees_select",
   "bindings_select",
@@ -64,7 +71,17 @@ const SELECT_POLICIES = [
   "org_ext_contract_pm_select",
   "org_projects_select",
   "audit_ext_card_select",
+  "gateway_select",
+  "agentmail_select",
 ];
+/** server modules that read credentials (all via createSupabaseAdminClient) */
+const CREDENTIAL_READERS = [
+  "lib/auth/approval-authority.ts",
+  "lib/auth/employee-credential.ts",
+  "lib/data/employees.ts",
+];
+/** lp_* only admit the service_role JWT (never a session) — kept as-is */
+const LP_SERVICE_POLICIES = ["lp_handoffs_service_all", "lp_wake_configs_service_all", "lp_wake_events_service_all"];
 
 function walk(dir: string): string[] {
   return readdirSync(dir).flatMap((name) => {
@@ -159,7 +176,7 @@ describe("app: tenant config / credential tables are written only server-side", 
     ]);
   });
 
-  test("LOW tables inventory is pinned (listed only, unchanged here)", () => {
+  test("formerly-LOW tables inventory is pinned (all service_role)", () => {
     expect(pin(lowWrites)).toEqual([
       "lib/auth/session.ts:gateway_links:insert",
       "lib/data/org-context.ts:gateway_links:upsert",
@@ -192,6 +209,11 @@ describe("app: tenant config / credential tables are written only server-side", 
     has("app/api/slack/bot-install/callback/route.ts", /verifySlackBotInstallState\(state, nonce\)/);
     // (d) gateway status is tenant-level integration state → owner/admin only
     has("app/api/gateway/link/route.ts", /export async function POST[\s\S]*requireOrgAdminSession\(\)/);
+    // employee binding link / health probe write employee_bindings → owner/admin only
+    has("app/api/employees/[id]/link/route.ts", /export async function POST[\s\S]*requireOrgAdminSession\(\)/);
+    has("app/api/employees/[id]/health/route.ts", /export async function POST[\s\S]*requireOrgAdminSession\(\)/);
+    // ?forceFail is a demo-only switch (lib/mode isDemoMode)
+    has("app/api/employees/[id]/health/route.ts", /const forceFail =\s*isDemoMode\(\) &&/);
   });
 });
 
@@ -211,7 +233,7 @@ describe(`migration ${STAMP}: drop direct PostgREST write policies (phase 2)`, (
     expect(names.indexOf(file!)).toBeGreaterThan(names.findIndex((n) => n.startsWith("20261004500000_")));
   });
 
-  test("each write policy's last drop comes after its last create (migrations in order)", () => {
+  test("each dropped policy's last drop comes after its last create (migrations in order)", () => {
     const all = names
       .map((n) => readFileSync(join(dir, n), "utf8"))
       .join("\n")
@@ -227,12 +249,13 @@ describe(`migration ${STAMP}: drop direct PostgREST write policies (phase 2)`, (
     }
   });
 
-  test("table write privileges are revoked from anon / authenticated; no new policy, grant or data change", () => {
+  test("write privileges revoked on the 14 config + 5 formerly-LOW tables; credentials SELECT revoked; no new policy, grant or data change", () => {
+    expect(REVOKED.length).toBe(19);
     expect(executable).toContain(`revoke insert, update, delete, truncate on ${TABLE_LIST} from anon, authenticated;`);
+    expect(executable).toContain("revoke select on public.credentials from anon, authenticated;");
     expect(executable).not.toMatch(/create policy|grant |insert into|update public\.|delete from|alter table|truncate public/);
-    // SELECT policies are not dropped; LOW tables are not touched
-    for (const p of SELECT_POLICIES) expect(executable).not.toContain(`drop policy if exists ${p} `);
-    for (const t of LOW_TABLES) expect(executable).not.toContain(t);
+    // other SELECT policies are not dropped; lp_* service-role-only policies are kept
+    for (const p of [...SELECT_POLICIES, ...LP_SERVICE_POLICIES]) expect(executable).not.toContain(`drop policy if exists ${p} `);
   });
 
   test("a documented rollback block restores exactly the previous policies and grants", () => {
@@ -254,28 +277,80 @@ describe(`migration ${STAMP}: drop direct PostgREST write policies (phase 2)`, (
       expect(down).toContain(body);
     }
     expect(down).toContain(`grant insert, update, delete, truncate on ${TABLE_LIST} to anon, authenticated;`);
+    expect(down).toContain("grant select on public.credentials to anon, authenticated;");
     expect(down.match(/create policy/g)?.length).toBe(POLICIES.length);
   });
 
-  test("schema.sql (fresh installs) no longer creates the write policies and revokes writes; SELECT policies stay", () => {
-    const schema = src("supabase/schema.sql").toLowerCase();
-    const schemaExec = schema
+  test("schema.sql (fresh installs) no longer creates the dropped policies and revokes; other SELECT policies stay", () => {
+    const schemaExec = src("supabase/schema.sql")
+      .toLowerCase()
       .split("\n")
       .filter((l) => !/^\s*--/.test(l))
       .join("\n");
-    for (const [table, policy] of POLICIES) {
+    for (const [, policy] of POLICIES) {
       expect(schemaExec).not.toContain(`create policy ${policy} `);
-      if (schemaExec.includes(`create table if not exists ${table} `) || schemaExec.includes(`create table if not exists public.${table} `)) {
-        expect(schemaExec).toContain(`public.${table}`);
-      }
     }
-    const inSchema = TABLES.filter((t) => new RegExp(`create table if not exists (public\\.)?${t}\\s*\\(`).test(schemaExec));
-    expect(inSchema.length).toBe(12); // the two external-contract-card tables live only in migrations
+    const inSchema = REVOKED.filter((t) => new RegExp(`create table if not exists (public\\.)?${t}\\s*\\(`).test(schemaExec));
+    // ext-contract (2) and lp_* (3) tables live only in migrations
+    expect(inSchema.length).toBe(14);
     expect(schemaExec).toContain(
       `revoke insert, update, delete, truncate on ${inSchema.map((t) => `public.${t}`).join(", ")} from anon, authenticated;`
     );
+    expect(schemaExec).toContain("revoke select on public.credentials from anon, authenticated;");
     for (const p of SELECT_POLICIES.filter((p) => !/^(org_ext_contract_pm|audit_ext_card)_/.test(p))) {
       expect(schemaExec).toContain(`create policy ${p} `);
+    }
+  });
+});
+
+describe("credentials are read only by server code (service role)", () => {
+  const reads = sites.filter((s) => s.table === "credentials" && s.op === "select");
+
+  test("no user-session / unknown client reads credentials", () => {
+    expect(reads.length).toBeGreaterThan(0);
+    expect(reads.filter((s) => s.clientKind !== "service_role")).toEqual([]);
+    expect(sites.filter((s) => s.clientKind === "user_session")).toEqual([]);
+  });
+
+  test("credentials reader inventory is pinned", () => {
+    expect([...new Set(reads.map((s) => s.file))].sort()).toEqual(CREDENTIAL_READERS);
+  });
+});
+
+describe("formerly-LOW tables: write paths are server routes with their own checks", () => {
+  const callers = (fn: string) =>
+    sources
+      .filter((f) => new RegExp(`\\b${fn}\\s*\\(`).test(f.text) && !f.path.startsWith("lib/lp/"))
+      .map((f) => f.path)
+      .sort();
+
+  test("gateway_links writers use the service-role client", () => {
+    for (const f of ["lib/auth/session.ts", "lib/data/org-context.ts"]) {
+      const gw = sites.filter((s) => s.file === f && s.table === "gateway_links" && WRITE_OPS.has(s.op));
+      expect(gw.length).toBe(1);
+      expect(gw[0].clientKind).toBe("service_role");
+    }
+  });
+
+  test("LP handoff / wake-webhook writers are reached only from their API routes (guest session + CSRF / secret)", () => {
+    for (const fn of ["createHandoff", "confirmHandoff", "cancelHandoff"]) {
+      expect(callers(fn)).toEqual(["app/api/lp/handoff/route.ts"]);
+    }
+    expect(callers("recordWebhookEvent")).toEqual(["app/api/webhooks/lp-wake/[path]/route.ts"]);
+    expect(callers("updateWebhookEventStatus")).toEqual(["app/api/webhooks/lp-wake/[path]/route.ts"]);
+    expect(callers("createWebhookConfig")).toEqual([]);
+    const handoff = src("app/api/lp/handoff/route.ts");
+    for (const verb of ["POST", "PUT"]) {
+      expect(handoff).toMatch(new RegExp(`export async function ${verb}[\\s\\S]*?resolveGuestJourney\\(request, \\{ requireCsrf: true \\}\\)`));
+    }
+    expect(src("app/api/webhooks/lp-wake/[path]/route.ts")).toContain("validateWebhookRequest(endpointPath, secret)");
+  });
+
+  test("LP client components never talk to Supabase directly (only fetch to /api routes)", () => {
+    const lpClient = sources.filter((f) => f.path.startsWith("app/lp/") && /^["']use client["']/m.test(f.text));
+    expect(lpClient.length).toBeGreaterThan(0);
+    for (const f of lpClient) {
+      expect(`${f.path}:${/supabase/i.test(f.text)}`).toBe(`${f.path}:false`);
     }
   });
 });

@@ -47,16 +47,27 @@ FIXES = [
         "tables": ("credentials", "org_admin_agents", "employees", "employee_bindings", "org_parties", "org_channels",
                    "information_assets", "org_notification_channels", "org_conversation_adapters", "org_sns_adapters",
                    "employee_slack_identities", "org_external_contract_payment_methods", "org_projects",
-                   "audit_external_contract_card_events"),
+                   "audit_external_contract_card_events",
+                   # formerly LOW
+                   "gateway_links", "agentmail_inboxes", "lp_handoffs", "lp_wake_webhook_configs", "lp_wake_webhook_events"),
         "policies": ("credentials_write_admin", "org_admin_agents_write_admin", "employees_write_admin",
                      "bindings_write_admin", "org_parties_write_admin", "org_channels_write_admin",
                      "information_assets_write_admin", "notification_channels_write_admin",
                      "conversation_adapters_write_admin", "sns_adapters_write_admin",
                      "employee_slack_identities_write_admin", "org_ext_contract_pm_write_admin",
-                     "org_projects_write_admin", "audit_ext_card_insert_member"),
-        # admin + owner x (insert, update, delete) x 13 FOR ALL tables, member/admin/owner
-        # card-audit insert, admin + owner x 4 targeted HIGH-table takeovers
-        "reopened": 2 * 3 * 13 + 3 + 2 * 4,
+                     "org_projects_write_admin", "audit_ext_card_insert_member",
+                     "gateway_write_admin", "agentmail_write_admin", "credentials_select"),
+        # session SELECT on credentials is revoked too
+        "extra_privs": (("public.credentials", "SELECT"),),
+        # admin + owner x (insert, update, delete) x 15 FOR ALL tables (13 config + gateway_links +
+        # agentmail_inboxes), member/admin/owner card-audit insert, admin + owner x 4 targeted
+        # HIGH-table takeovers, member/admin/owner read credentials rows, member/admin/owner/anon
+        # can select credentials.secret_hash
+        "reopened": 2 * 3 * 15 + 3 + 2 * 4 + 3 + 4,
+        # lp_* rows are not org-scoped; left over only if the SQL test aborts
+        "cleanup": ("delete from public.lp_wake_webhook_events where id::text like 'a6300000-%';"
+                    "delete from public.lp_wake_webhook_configs where id::text like 'a6300000-%';"
+                    "delete from public.lp_handoffs where id::text like 'a6300000-%';"),
     },
 ]
 ALL_FIX_TABLES = tuple(t for f in FIXES for t in f["tables"])
@@ -154,13 +165,22 @@ def report_other_tables():
     print("REPORT tables without RLS that anon/authenticated can write: " + (", ".join(rows.splitlines()) or "none"))
 
 
+def privileges_sql(fix):
+    """SQL counting anon/authenticated session privileges the fix removes."""
+    writes = f"""select count(*) from unnest(array['anon','authenticated']) r,
+        unnest(array[{','.join(repr('public.' + t) for t in fix["tables"])}]) t,
+        unnest(array['INSERT','UPDATE','DELETE','TRUNCATE']) p where has_table_privilege(r, t, p)"""
+    extra = " + ".join(f"(select count(*) from unnest(array['anon','authenticated']) r where has_table_privilege(r, '{t}', '{p}'))"
+                       for t, p in fix.get("extra_privs", ()))
+    return f"select ({writes})" + (f" + {extra}" if extra else "") + ";"
+
+
 def assert_holes_state(fix, open_):
     policies = query(f"""select count(*) from pg_policies where schemaname='public'
         and policyname in ({','.join(repr(p) for p in fix["policies"])});""")
-    privs = query(f"""select count(*) from unnest(array['anon','authenticated']) r,
-        unnest(array[{','.join(repr('public.' + t) for t in fix["tables"])}]) t,
-        unnest(array['INSERT','UPDATE','DELETE','TRUNCATE']) p where has_table_privilege(r, t, p);""")
-    expected = (str(len(fix["policies"])), str(len(fix["tables"]) * 8)) if open_ else ("0", "0")
+    privs = query(privileges_sql(fix))
+    full = len(fix["tables"]) * 8 + 2 * len(fix.get("extra_privs", ()))
+    expected = (str(len(fix["policies"])), str(full)) if open_ else ("0", "0")
     assert (policies, privs) == expected, f"{fix['name']}: policies={policies} privileges={privs}, expected {expected}"
     return policies, privs
 
@@ -172,7 +192,7 @@ def open_holes(fix):
     assert m, result.stderr
     cases = sorted(m.group(2).splitlines())
     assert len(cases) == int(m.group(1)), (m.group(1), cases)
-    query(f"delete from public.orgs where id::text like '{fix['fixture']}%';")  # fixtures left by the expected failure
+    query(fix.get("cleanup", "") + f"delete from public.orgs where id::text like '{fix['fixture']}%';")  # fixtures left by the expected failure
     return cases
 
 
@@ -196,13 +216,14 @@ try:
             # already revokes them once the fix is in, so re-grant them here to
             # record what the fix closes on an existing database.
             tables = ", ".join("public." + t for t in fix["tables"])
-            policies, privs = query(f"""select (select count(*) from pg_policies where schemaname='public'
-                and policyname in ({','.join(repr(p) for p in fix["policies"])})),
-                (select count(*) from unnest(array['anon','authenticated']) r, unnest(string_to_array('{tables}', ', ')) t,
-                 unnest(array['INSERT','UPDATE','DELETE','TRUNCATE']) p where has_table_privilege(r, t, p));""").split("|")
-            print(f"NOTE before {name}: {policies}/{len(fix['policies'])} write policies present, {privs}/{len(fix['tables']) * 8} "
-                  "anon/authenticated write grants (Supabase default grants re-applied for the pre-fix measurement)")
-            query(f"grant insert, update, delete, truncate on {tables} to anon, authenticated;")
+            policies = query(f"""select count(*) from pg_policies where schemaname='public'
+                and policyname in ({','.join(repr(p) for p in fix["policies"])});""")
+            privs = query(privileges_sql(fix))
+            full = len(fix["tables"]) * 8 + 2 * len(fix.get("extra_privs", ()))
+            print(f"NOTE before {name}: {policies}/{len(fix['policies'])} policies present, {privs}/{full} "
+                  "anon/authenticated grants (Supabase default grants re-applied for the pre-fix measurement)")
+            query(f"grant insert, update, delete, truncate on {tables} to anon, authenticated;"
+                  + "".join(f"grant {p.lower()} on {t} to anon, authenticated;" for t, p in fix.get("extra_privs", ())))
             assert_holes_state(fix, open_=True)
             before[fix["name"]] = open_holes(fix)
             print(f"PASS before {name}: {len(before[fix['name']])} session writes allowed (expected {fix['reopened']}) — "
@@ -219,7 +240,9 @@ try:
     for fix in FIXES:
         sql_file(ROOT / fix["test"])
         print(f"PASS {fix['name']}: authenticated (member/admin/owner JWT) and anon: INSERT/UPDATE/DELETE denied on "
-              f"{len(fix['tables'])} tables; reads intact; service_role writes all.")
+              f"{len(fix['tables'])} tables; reads intact"
+              + ("; credentials unreadable (rows + secret_hash)" if fix.get("extra_privs") else "")
+              + "; service_role reads/writes all.")
     missing = [f["name"] for f in FIXES if not files[f["name"]]]
     assert not missing, f"RLS fix migration missing: {missing}"
 
@@ -237,7 +260,7 @@ try:
         for other in FIXES:
             if other is not fix:
                 sql_file(ROOT / other["test"])  # rolling back one fix never reopens the other
-        print(f"PASS {fix['name']} rollback restores {policies} policies + {privs} anon/authenticated write grants; "
+        print(f"PASS {fix['name']} rollback restores {policies} policies + {privs} anon/authenticated grants; "
               f"{len(reopened)} session writes allowed again = exactly the pre-fix set; other fix still closed.")
         sql_file(MIGRATIONS / name)
         assert_holes_state(fix, open_=False)
