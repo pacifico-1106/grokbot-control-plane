@@ -48,6 +48,7 @@ import {
   type SlackImEmployeeRoute,
 } from "@/lib/data/slack-im-routes";
 import { isSlackDmAutorouteEnabled } from "@/lib/slack/dm-autoroute-flags";
+import { slackRequestBody } from "@/lib/slack/web-api-request";
 import type { AuditEvent } from "@/lib/types";
 
 const SLACK_API = "https://slack.com/api";
@@ -104,13 +105,15 @@ async function slackCall(
   body: Record<string, unknown>
 ): Promise<{ ok: boolean; error: string; data: Record<string, unknown>; scopes: string[] | null }> {
   try {
+    // users.info / auth.test → form (Slack ignores JSON args there); others stay JSON.
+    const request = slackRequestBody(method, body);
     const response = await fetch(`${SLACK_API}/${method}`, {
       method: "POST",
       headers: {
         authorization: `Bearer ${token}`,
-        "content-type": "application/json; charset=utf-8",
+        "content-type": request.contentType,
       },
-      body: JSON.stringify(body),
+      body: request.body,
       signal: AbortSignal.timeout(SLACK_TIMEOUT_MS),
     });
     const data = ((await response.json().catch(() => ({}))) ?? {}) as Record<string, unknown>;

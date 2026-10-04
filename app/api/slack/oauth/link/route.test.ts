@@ -38,6 +38,7 @@ const { DEMO_ORG, getRuntimeEmployees } = await import("@/lib/demo-data");
 const { callAdminMcpTool } = await import("@/lib/mcp/admin-tools");
 const { SLACK_OAUTH_COOKIE, verifySlackOAuthState } = await import("@/lib/slack/oauth");
 import type { Employee } from "@/lib/types";
+import { slackApiArgs } from "@/tests/helpers/slack-api-args";
 
 const ORG = DEMO_ORG.id;
 const TEAM = "TLINKROUTE1";
@@ -76,7 +77,7 @@ function installFetch() {
       return json({ ok: true, user_id: "UBOT", team_id: TEAM, app_id: "AROUTE0001" }, { "x-oauth-scopes": "chat:write,im:write,im:read,users:read" });
     }
     if (method === "users.info") {
-      const user = JSON.parse(body || "{}").user ?? new URLSearchParams(body).get("user");
+      const user = slackApiArgs(method, init).user;
       return json({ ok: true, user: { id: String(user), team_id: TEAM } });
     }
     if (method === "conversations.open") return json({ ok: true, channel: { id: `DROUTE${calls.length}`, is_im: true } });
