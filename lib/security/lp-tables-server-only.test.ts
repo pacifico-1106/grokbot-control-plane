@@ -206,6 +206,19 @@ describe(`migration ${STAMP}: LP tables server-only`, () => {
     expect(executable).not.toMatch(/create policy|grant |insert into|update public\.|delete from|alter table|truncate public|disable row level security/);
   });
 
+  test("runs as one explicit transaction (begin; ... commit;) with nothing that cannot run inside one", () => {
+    const statements = executable
+      .split(";")
+      .map((x) => x.replace(/\s+/g, " ").trim())
+      .filter(Boolean);
+    expect(statements[0]).toBe("begin");
+    expect(statements[statements.length - 1]).toBe("commit");
+    expect(statements.filter((x) => /^(begin|commit|rollback|end|start transaction|savepoint)\b/.test(x))).toEqual(["begin", "commit"]);
+    expect(executable).not.toMatch(
+      /\bconcurrently\b|\bvacuum\b|alter system|(create|drop) database|(create|drop) tablespace|alter type [^;]* add value|\breindex\b|\bcluster\b/
+    );
+  });
+
   test("revokes SELECT on the 3 lp_* tables from anon / authenticated (service_role untouched)", () => {
     expect(executable).toContain(`revoke select on ${LP_LIST} from anon, authenticated;`);
     expect(executable).not.toMatch(/service_role/);
