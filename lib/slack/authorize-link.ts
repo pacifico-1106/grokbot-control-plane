@@ -66,6 +66,7 @@ import { isSlackAuthorizeLinkEnabled } from "@/lib/slack/authorize-link-flags";
 import { syncAutoDmRoutesForEmployee } from "@/lib/slack/dm-autoroute";
 import { isSlackDmAutorouteEnabled } from "@/lib/slack/dm-autoroute-flags";
 import type { Employee } from "@/lib/types";
+import { renderStandaloneResultPage, standaloneResultPageHeaders } from "@/lib/ui/standalone-result-page";
 
 export const SLACK_AUTHORIZE_LINK_TTL_MS = 24 * 60 * 60 * 1000;
 export const SLACK_AUTHORIZE_LINK_PATH = "/api/slack/oauth/link";
@@ -756,30 +757,100 @@ export function authorizeLinkPageKind(code: string): Exclude<AuthorizeLinkPageKi
   return "error";
 }
 
+const REISSUE_JA = "このリンクはもう使えません。管理者に再発行を頼んでください。";
+
+/** Burned page: why it failed + what to do next, per consumed failure reason. */
+const AUTHORIZE_LINK_BURNED_PAGE_COPY: Record<AuthorizeLinkConsumedFailureReason, { why: string; next: string[] }> = {
+  oauth_exchange_failed: {
+    why: "Slack との確認に失敗しました。",
+    next: [REISSUE_JA, "新しいリンクが届いたら、連携する Slack アカウントでログインしたブラウザで開いてください。"],
+  },
+  user_token_missing: {
+    why: "Slack から必要な許可が返ってきませんでした。",
+    next: [REISSUE_JA, "新しいリンクが届いたら、Slack の画面で「許可する」を押してください。"],
+  },
+  auth_test_failed: {
+    why: "Slack でアカウントの確認ができませんでした。",
+    next: [REISSUE_JA, "新しいリンクが届いたら、連携する Slack アカウントでログインしたブラウザで開いてください。"],
+  },
+  team_mismatch: {
+    why: "連携するはずの Slack ワークスペースと違うワークスペースで開かれました。",
+    next: [REISSUE_JA, "新しいリンクは、正しいワークスペースにログインしたブラウザで開いてください。"],
+  },
+  user_mismatch: {
+    why: "連携するはずのアカウントと違う Slack アカウントで開かれました。",
+    next: [REISSUE_JA, "新しいリンクは、連携する Slack アカウントでログインしたブラウザで開いてください。"],
+  },
+  allowed_accounts_mismatch: {
+    why: "この Slack アカウントは、連携してよいアカウントに入っていません。",
+    next: [REISSUE_JA, "このアカウントで連携したいときは、管理者に「連携してよいアカウント」への追加も頼んでください。"],
+  },
+  bind_failed: {
+    why: "連携の保存に失敗しました。",
+    next: [REISSUE_JA, "何度も続くときは、管理者から Staffpass の運営に連絡してもらってください（下の問い合わせコードを伝えてください）。"],
+  },
+};
+
+/** Support code shown on a failure page: a known code for that kind, else the kind's default. */
+function authorizeLinkPageSupportCode(kind: Exclude<AuthorizeLinkPageKind, "ok">, code?: string): string {
+  const raw = String(code ?? "");
+  if (kind === "burned") return isAuthorizeLinkConsumedFailureReason(raw) ? raw : "error";
+  if (kind === "denied") return "denied";
+  if (kind === "invalid") return raw === "authorize_link_flag_off" ? raw : "invalid_link";
+  return raw === "oauth_error" ? raw : "error";
+}
+
 /**
- * Minimal result page for the link flow (the clicker may have no Staffpass
- * session). "burned" uses the same template as the DM; only the code varies.
+ * Result page for the link flow (the clicker may have no Staffpass session,
+ * so no dashboard links). "burned" keeps the DM sentence
+ * (authorizeLinkFailedNoticeJa) and adds why + next step per reason. Only
+ * fixed copy for known codes reaches the page.
  */
 export function authorizeLinkResultHtml(kind: AuthorizeLinkPageKind, code?: string): string {
-  const messages: Record<typeof kind, string> = {
-    ok: "Slack 連携が完了しました。このタブを閉じてください。",
-    denied: "許可がキャンセルされました。もう一度リンクを開くとやり直せます。",
-    burned: authorizeLinkFailedNoticeJa(code),
-    invalid: "このリンクは無効か、期限切れ・使用済みです。承認者に再発行を依頼してください。",
-    error: "Slack 連携を完了できませんでした。承認者に再発行を依頼してください。",
+  if (kind === "ok") {
+    return renderStandaloneResultPage({
+      ok: true,
+      title: "Slack 連携が完了しました",
+      lead: "Slack アカウントの連携が終わりました。",
+      nextSteps: ["このタブは閉じてかまいません。ほかにやることはありません。"],
+    });
+  }
+  const supportCode = authorizeLinkPageSupportCode(kind, code);
+  if (kind === "burned") {
+    const copy = isAuthorizeLinkConsumedFailureReason(supportCode) ? AUTHORIZE_LINK_BURNED_PAGE_COPY[supportCode] : null;
+    return renderStandaloneResultPage({
+      ok: false,
+      title: "Slack 連携を完了できませんでした",
+      lead: authorizeLinkFailedNoticeJa(supportCode),
+      details: copy ? [{ label: "理由", value: copy.why }] : [],
+      nextSteps: copy ? copy.next : [REISSUE_JA],
+      supportCode,
+    });
+  }
+  const pages: Record<"denied" | "invalid" | "error", { title: string; lead: string; next: string[] }> = {
+    denied: {
+      title: "Slack 連携をキャンセルしました",
+      lead: "Slack の画面でキャンセルされたため、連携していません。",
+      next: [
+        "連携するときは、同じリンクをもう一度開いて、Slack の画面で「許可する」を押してください。",
+        "リンクの期限が切れていたら、管理者に再発行を頼んでください。",
+      ],
+    },
+    invalid: {
+      title: "このリンクは使えません",
+      lead: "このリンクは無効か、期限切れ、またはすでに使われています。",
+      next: ["管理者に新しいリンクの発行を頼んでください。"],
+    },
+    error: {
+      title: "Slack 連携を完了できませんでした",
+      lead: "途中でエラーが起きたため、連携できませんでした。",
+      next: ["少し待ってから、同じリンクをもう一度開いてください。", "それでもうまくいかないときは、管理者に再発行を頼んでください。"],
+    },
   };
-  return `<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="robots" content="noindex"><title>StaffPass</title></head><body><p>${messages[kind]}</p></body></html>`;
+  const page = pages[kind];
+  return renderStandaloneResultPage({ ok: false, title: page.title, lead: page.lead, nextSteps: page.next, supportCode });
 }
 
 export function authorizeLinkHtmlResponse(kind: AuthorizeLinkPageKind, status = 200, code?: string): Response {
-  return new Response(authorizeLinkResultHtml(kind, code), {
-    status,
-    headers: {
-      "content-type": "text/html; charset=utf-8",
-      "cache-control": "no-store",
-      "referrer-policy": "no-referrer",
-      "content-security-policy": "default-src 'none'",
-      "x-robots-tag": "noindex",
-    },
-  });
+  return new Response(authorizeLinkResultHtml(kind, code), { status, headers: standaloneResultPageHeaders() });
 }

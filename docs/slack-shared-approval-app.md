@@ -37,8 +37,9 @@
   | この org がすでに**別の**ワークスペースを使っている | `team_mismatch_org` |
   | 確認のための照会に失敗した（fail-closed） | `lookup_failed` |
 
-  `team_bound_to_other_org` のときに出す文言（結果ページと MCP 結果で同じ）:
+  `team_bound_to_other_org` のときに MCP 結果に出す文言:
   「このSlackワークスペースは別の組織に接続済みです。運営に連絡してください。」
+  結果ページ（`/api/slack/approval-app/callback`）は別の文言です（下の「結果ページ」）。
 - **成功時の保存先:** その org の Slack 承認口に、`config` = `{ sharedApprovalApp: true, apiAppId, teamId, expectedTeamId, teamName, channelId: "", allowedUserIds: [] }` と、暗号化した `secrets.botToken` を保存します。
   - signing secret は承認口に保存しません。共通アプリへのリクエストは env の secret だけで検証します。
   - 承認口が 1 つも無い org では、これがデフォルトの承認口になります。
@@ -282,6 +283,16 @@ settings:
 - `dmAutoroute.list`
 
 インストールが拒否されたときは、その理由が `setup.slackDmApprovalStatus.sharedApprovalApp.lastInstallError` と次の手順に出ます。
+
+## 結果ページ
+
+`/api/slack/approval-app/callback` と `install/start`（env 未設定の 503）が返す HTML（`sharedApprovalResultHtml`）。表示だけの話で、成功・失敗の判定、state の検証、ステータスコードは変わりません。
+
+- 見た目はアプリと同じ（`lib/ui/standalone-result-page.ts`。`app/globals.css` のトークンと `.surface` / `.btn` / `.chip` をそのまま写し、ずれるとテストが落ちる）。
+- 成功の画面にはエラーコードを出さない。次にやること:「承認者の設定は AI が申請します。確認が届いたら 1 回押すだけです。」
+- 失敗の画面は、理由コードごとに「何が起きたか」と「次にやること」（もう一度押す / 管理者に頼む / 運営に連絡）を出し、最後に問い合わせコード（知っているコードだけ。それ以外は `unknown`）。押し直しで直る理由だけ「もう一度追加する」ボタン（`install/start`）を出す。
+- クエリの値、DB / Slack API の生のエラー、token、orgId は出さない。値はすべてエスケープ。文言は `SHARED_APPROVAL_RESULT_PAGE_COPY`。
+- 再認可リンク（#240）の結果ページ（`authorizeLinkResultHtml`）も同じ部品を使う。
 
 ## 要判断
 

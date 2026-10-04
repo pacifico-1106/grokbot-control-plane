@@ -35,6 +35,7 @@ import {
 import type { NotificationChannel } from "@/lib/types";
 
 import { isSharedApprovalAppEnabled } from "@/lib/slack/shared-approval-flags";
+import { renderStandaloneResultPage, standaloneResultPageHeaders } from "@/lib/ui/standalone-result-page";
 
 export { isSharedApprovalAppEnabled };
 
@@ -434,31 +435,149 @@ export async function completeSharedApprovalInstall(input: {
 }
 
 // ---------------------------------------------------------------------------
-// Result page
+// Result page (display only: status codes / decisions are made by the callers)
 // ---------------------------------------------------------------------------
 
-function escapeHtml(value: string): string {
-  return value.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] as string);
+type SharedApprovalResultPageCopy = {
+  /** What happened. */
+  lead: string;
+  /** 「次にやること」 for the person who pressed install. */
+  next: string[];
+  /** Offer 「もう一度追加する」 (only when pressing again can fix it). */
+  retry: boolean;
+};
+
+const CONTACT_OPS = "何度やってもうまくいかないときは、Staffpass の運営に連絡してください（下の問い合わせコードを伝えてください）。";
+const RETRY_LATER = "少し待ってから、下の「もう一度追加する」を押してください。";
+
+/**
+ * Result page copy per known code. Unknown codes fall back to `unknown` (the
+ * raw code is never shown). MCP results keep SHARED_APPROVAL_INSTALL_MESSAGES.
+ */
+export const SHARED_APPROVAL_RESULT_PAGE_COPY: Record<string, SharedApprovalResultPageCopy> = {
+  installed: {
+    lead: "共通承認アプリ「Staffpass承認」を Slack ワークスペースに追加しました。",
+    next: ["承認者の設定は AI が申請します。確認が届いたら 1 回押すだけです。", "この画面は閉じてかまいません。"],
+    retry: false,
+  },
+  denied: {
+    lead: "Slack の画面でキャンセルされたため、追加していません。",
+    next: ["追加するときは、下の「もう一度追加する」を押して、Slack の画面で「許可する」を押してください。"],
+    retry: true,
+  },
+  state_invalid: {
+    lead: "時間切れか、別のブラウザで開かれたため、確認できませんでした。何も保存していません。",
+    next: ["下の「もう一度追加する」を押して、同じブラウザのまま 10 分以内に「許可する」まで進めてください。"],
+    retry: true,
+  },
+  state_reused: {
+    lead: "この追加の画面はすでに使われています（再読み込みや戻るボタンで同じ画面を開いたときに出ます）。",
+    next: [
+      "すでに「追加しました」の画面が出ていたなら、何もしなくてかまいません。",
+      "まだ追加できていないときは、下の「もう一度追加する」を押してください。",
+    ],
+    retry: true,
+  },
+  session_mismatch: {
+    lead: "Staffpass に、この組織の管理者としてログインしていなかったため、追加していません。",
+    next: [
+      "この組織の owner か管理者のアカウントで Staffpass にログインしてから、下の「もう一度追加する」を押してください。",
+      "管理者でないときは、組織の管理者に追加を頼んでください。",
+    ],
+    retry: true,
+  },
+  team_bound_to_other_org: {
+    lead: "この Slack ワークスペースは、別の組織ですでに使われています。何も変更していません。",
+    next: ["もう一度押しても直りません。Staffpass の運営に連絡してください（下の問い合わせコードを伝えてください）。"],
+    retry: false,
+  },
+  enterprise_install_not_supported: {
+    lead: "Enterprise Grid の組織全体へのインストールには対応していません。何も保存していません。",
+    next: [
+      "下の「もう一度追加する」を押して、Slack の画面でワークスペースを 1 つ選んでから「許可する」を押してください。",
+      "分からないときは、Staffpass の運営に連絡してください。",
+    ],
+    retry: true,
+  },
+  team_mismatch_org: {
+    lead: "この組織がいつも使っている Slack ワークスペースと違うワークスペースが選ばれました。何も保存していません。",
+    next: [
+      "下の「もう一度追加する」を押して、Slack の画面右上でいつものワークスペースを選んでください。",
+      "ワークスペースを変えたいときは、Staffpass の運営に連絡してください。",
+    ],
+    retry: true,
+  },
+  not_bot_token: {
+    lead: "Slack から必要な許可が返ってこなかったため、追加していません。",
+    next: [RETRY_LATER, CONTACT_OPS],
+    retry: true,
+  },
+  app_mismatch: {
+    lead: "別の Slack アプリの許可が返ってきたため、追加していません。",
+    next: ["下の「もう一度追加する」から開き直して、「Staffpass承認」の画面で「許可する」を押してください。", CONTACT_OPS],
+    retry: true,
+  },
+  auth_failed: {
+    lead: "Slack で追加の確認ができなかったため、追加していません。",
+    next: [RETRY_LATER, CONTACT_OPS],
+    retry: true,
+  },
+  exchange_failed: {
+    lead: "Slack との接続に失敗したため、追加していません。",
+    next: [RETRY_LATER, CONTACT_OPS],
+    retry: true,
+  },
+  lookup_failed: {
+    lead: "確認の途中でエラーが起きたため、安全のため保存していません。",
+    next: [RETRY_LATER, CONTACT_OPS],
+    retry: true,
+  },
+  save_failed: {
+    lead: "保存に失敗したため、追加できていません。",
+    next: [RETRY_LATER, CONTACT_OPS],
+    retry: true,
+  },
+  flag_off: {
+    lead: "共通承認アプリはまだ使えません（運営の設定待ち）。",
+    next: ["もう一度押しても直りません。Staffpass の運営に連絡してください。"],
+    retry: false,
+  },
+  unconfigured: {
+    lead: "共通承認アプリの設定が、運営側でまだ終わっていません。",
+    next: ["もう一度押しても直りません。Staffpass の運営に連絡してください（下の問い合わせコードを伝えてください）。"],
+    retry: false,
+  },
+  unknown: {
+    lead: "途中でエラーが起きたため、追加できませんでした。",
+    next: [RETRY_LATER, CONTACT_OPS],
+    retry: true,
+  },
+};
+
+/** Known failure code, or "unknown" (never a raw / query value). */
+function sharedApprovalPageCode(ok: boolean, code: string): string {
+  if (ok) return "installed";
+  return code !== "installed" && Object.prototype.hasOwnProperty.call(SHARED_APPROVAL_RESULT_PAGE_COPY, code) ? code : "unknown";
+}
+
+export function sharedApprovalResultPageBody(input: { ok: boolean; code: string; teamName?: string }): string {
+  const code = sharedApprovalPageCode(input.ok, input.code);
+  const copy = SHARED_APPROVAL_RESULT_PAGE_COPY[code];
+  const origin = getAppOrigin();
+  return renderStandaloneResultPage({
+    ok: input.ok,
+    title: input.ok ? `${SHARED_APPROVAL_APP_NAME} を追加しました` : `${SHARED_APPROVAL_APP_NAME} を追加できませんでした`,
+    lead: copy.lead,
+    details: input.ok && input.teamName ? [{ label: "Slack ワークスペース", value: input.teamName }] : [],
+    nextSteps: copy.next,
+    actions: [
+      ...(copy.retry ? [{ href: `${origin}${SHARED_APPROVAL_INSTALL_START_PATH}`, label: "もう一度追加する", primary: true }] : []),
+      { href: `${origin}/app/settings`, label: "設定画面へ戻る", primary: input.ok },
+    ],
+    supportCode: input.ok ? null : code,
+  });
 }
 
 export function sharedApprovalResultHtml(input: { ok: boolean; code: string; teamName?: string }, status = 200): Response {
-  const title = input.ok ? "Staffpass承認 を追加しました" : "Staffpass承認 を追加できませんでした";
-  const body =
-    `<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="robots" content="noindex">` +
-    `<meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)}</title></head>` +
-    `<body><h1>${escapeHtml(title)}</h1>` +
-    (input.teamName ? `<p>Slack ワークスペース: ${escapeHtml(input.teamName)}</p>` : "") +
-    `<p>${escapeHtml(sharedApprovalMessage(input.code))}</p>` +
-    `<p>エラーコード: <code>${escapeHtml(input.code)}</code></p>` +
-    `<p><a href="${escapeHtml(`${getAppOrigin()}/app/settings`)}">設定画面へ戻る</a></p></body></html>`;
-  return new Response(body, {
-    status,
-    headers: {
-      "content-type": "text/html; charset=utf-8",
-      "cache-control": "no-store",
-      "referrer-policy": "no-referrer",
-      "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'",
-      "x-robots-tag": "noindex",
-    },
-  });
+  return new Response(sharedApprovalResultPageBody(input), { status, headers: standaloneResultPageHeaders() });
 }
