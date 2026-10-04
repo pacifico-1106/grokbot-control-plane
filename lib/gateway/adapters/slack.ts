@@ -5,6 +5,7 @@ import {
   resolveOrgSlackBotTokenDetailed,
 } from "@/lib/slack/bot-token";
 import { normalizePostingAs } from "@/lib/employees/posting-as";
+import { isDemoMode } from "@/lib/mode";
 import type { MouthRoutingDecision, OrgReplyPolicy, PostingAs, ReplyPolicyDecision } from "@/lib/types";
 import {
   evaluateReplyPolicy,
@@ -16,6 +17,13 @@ import {
 } from "@/lib/gateway/reply-policy";
 
 const SLACK_TIMEOUT_MS = 5_000;
+
+/**
+ * No conversation token for the org (no adapter / own notify inbox token).
+ * Production fails closed with this code; the stub ok is demo-mode only.
+ * Also listed as retryable in lib/approvals/execution.ts (precedes any Slack call).
+ */
+export const SLACK_TOKEN_MISSING = "slack_token_missing";
 
 export type SlackConversationPostResult =
   | { ok: true; delivery: "stub" }
@@ -216,7 +224,10 @@ export async function postConversationMessage(input: {
   });
   if ("error" in resolved) return { ok: false, error: resolved.error };
   const token = resolved.token;
-  if (!token) return { ok: true, delivery: "stub" };
+  // Production: a clear failure, never a stub ok that looks like a sent post
+  // (comm.reply / comm.send / slack.post / approval fulfill all come through here).
+  // Demo mode (Supabase not configured: local / tests) keeps the stub.
+  if (!token) return isDemoMode() ? { ok: true, delivery: "stub" } : { ok: false, error: SLACK_TOKEN_MISSING };
 
   const text = input.summarize
     ? `【要約のみ】\n${input.text || ""}`

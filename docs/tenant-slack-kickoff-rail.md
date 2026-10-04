@@ -250,7 +250,7 @@ Slack API サイトで Staffpass Slack アプリを設定します。
 
 > **混同防止**: これは AI社員が相手と話す **会話投稿アダプタ**（上記ダッシュボードパス）用です。**承認を受け取る**（Telegram / LINE / Slack 承認インボックス）のトークンとは別物です。会話口と承認通知口は混ぜません。
 
-> アダプタトークンは環境変数 `SLACK_BOT_TOKEN` より優先されます。Bot Token Scopes 変更・再インストール後は、新しい xoxb をここで更新してください。反映後は `setup.slackStatus` で `botTokenPresent` / `authTest` / `adapterEnabled` を確認してください。
+> 会話投稿に使う Bot は組織自身のトークン（このアダプタ、または組織自身の Slack 承認インボックス）だけです。環境変数 `SLACK_BOT_TOKEN` / `SLACK_CONVERSATION_BOT_TOKEN` へのフォールバックは 2026-10-04 に廃止しました（マルチテナント本番では別ワークスペースの Bot になり得るため）。トークンが無い組織の投稿は本番では `slack_token_missing` で失敗します（デモモードのみ stub）。Bot Token Scopes 変更・再インストール後は、新しい xoxb をここで更新してください。反映後は `setup.slackStatus` で `botTokenPresent` / `authTest` / `adapterEnabled` を確認してください。
 
 **症状（Token未登録・期限切れ）**:
 - `auth.test` 失敗
@@ -845,7 +845,7 @@ Staffpass Slack アプリは **Public Distribution Activated** ですが、App D
 
 6. **Bot events: `message.im`** - App Home DM 受信に必須。`app_mention` は追加で必要に応じて
 7. **Bot scopes: `im:history`, `chat:write`, `im:write`, `files:write`** - スコープ変更後は再インストール必須。bot-install OAuth も `files:write` を要求するように更新済み
-8. **Bot Token 二重登録** - ダッシュボード「チャンネルに書き込む」(アダプタ) AND 環境変数 `SLACK_BOT_TOKEN`。アダプタトークンが優先
+8. **Bot Token はアダプタに登録** - ダッシュボード「チャンネルに書き込む」(アダプタ) に組織の xoxb を登録する。環境変数 `SLACK_BOT_TOKEN` は会話投稿に使われない（2026-10-04 廃止。未登録だと本番は `slack_token_missing`）
 9. **App Home Messages Tab** - `messages_tab_read_only_enabled: false` でないとユーザーがDMを送れない
 10. **posting_as: bot** - Bot DM への返信には必須。User token では Bot DM を見られない
 

@@ -17,10 +17,15 @@ export type OrgSlackBotTokenResolution = {
 
 /**
  * Conversation-plane org bot token (xoxb): conversation adapter → per-tenant
- * Slack notify inbox → SLACK_BOT_TOKEN env. The shared approval app
- * ("Staffpass承認", `config.sharedApprovalApp === true`) is NEVER a candidate:
- * its xoxb belongs to the approval plane only (docs/slack-shared-approval-app.md).
- * Approval-plane senders read their inbox secrets directly and are unaffected.
+ * Slack notify inbox. Only the org's OWN tokens are candidates:
+ * - The shared approval app ("Staffpass承認", `config.sharedApprovalApp === true`)
+ *   is NEVER a candidate: its xoxb belongs to the approval plane only
+ *   (docs/slack-shared-approval-app.md). Approval-plane senders read their inbox
+ *   secrets directly and are unaffected.
+ * - The process-wide SLACK_BOT_TOKEN / SLACK_CONVERSATION_BOT_TOKEN env is NEVER
+ *   a candidate (removed 2026-10-04): in multi-tenant production it is one
+ *   workspace's bot and would post another tenant's messages through it.
+ *   An org that needs a bot registers its own xoxb on the conversation adapter.
  */
 export async function resolveOrgSlackBotTokenDetailed(orgId: string): Promise<OrgSlackBotTokenResolution> {
   const adapter = await getEnabledConversationAdapter(orgId, "slack");
@@ -39,13 +44,7 @@ export async function resolveOrgSlackBotTokenDetailed(orgId: string): Promise<Or
       ?.secrets.botToken?.trim() || "";
   if (notifyToken) return { token: notifyToken, skippedSharedApprovalApp };
 
-  return {
-    token:
-      process.env.SLACK_BOT_TOKEN?.trim() ||
-      process.env.SLACK_CONVERSATION_BOT_TOKEN?.trim() ||
-      "",
-    skippedSharedApprovalApp,
-  };
+  return { token: "", skippedSharedApprovalApp };
 }
 
 /** Conversation-plane org bot token (xoxb) only; never the shared approval app. "" when none. */

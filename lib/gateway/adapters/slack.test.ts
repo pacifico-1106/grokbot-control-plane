@@ -240,11 +240,12 @@ describe("Slack conversation adapter", () => {
     });
   });
 
-  test("falls back to SLACK_BOT_TOKEN env when no adapter or notify token", async () => {
+  test("never falls back to SLACK_BOT_TOKEN / SLACK_CONVERSATION_BOT_TOKEN env (2026-10-04: may be another workspace's bot)", async () => {
     process.env.SLACK_BOT_TOKEN = "xoxb-env";
-    let auth = "";
+    process.env.SLACK_CONVERSATION_BOT_TOKEN = "xoxb-env-conversation";
+    const auths: string[] = [];
     globalThis.fetch = (async (_input, init) => {
-      auth = String((init?.headers as Record<string, string> | undefined)?.authorization || "");
+      auths.push(String((init?.headers as Record<string, string> | undefined)?.authorization || ""));
       return Response.json({ ok: true, channel: "C_INTERNAL", ts: "1503435956.000247" });
     }) as typeof fetch;
     const result = await postConversationMessage({
@@ -252,9 +253,9 @@ describe("Slack conversation adapter", () => {
       channel: "C_INTERNAL",
       text: "hello",
     });
-    expect(result.ok).toBe(true);
-    if (result.ok) expect(result.delivery).toBe("slack");
-    expect(auth).toBe("Bearer xoxb-env");
+    // Demo mode keeps the no-token stub; production fails closed (slack-token-missing-fail-closed.test.ts).
+    expect(result).toEqual({ ok: true, delivery: "stub" });
+    expect(auths).toEqual([]);
   });
 
   test("maps Slack not_in_channel to slack_not_in_channel", async () => {
