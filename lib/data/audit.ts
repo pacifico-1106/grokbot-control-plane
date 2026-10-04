@@ -58,6 +58,64 @@ export async function listAuditEventsForStuckWatch(
   return data.map((r) => mapAuditRow(r as Record<string, unknown>));
 }
 
+/** Recent audits of one employee (MCP endpoint handoff connection state). */
+export async function listEmployeeAuditEvents(
+  orgId: string,
+  employeeId: string,
+  limit = 200
+): Promise<AuditEvent[]> {
+  if (!orgId || !employeeId) return [];
+  if (isDemoMode()) {
+    return getRuntimeAudit()
+      .filter((event) => event.orgId === orgId && event.employeeId === employeeId)
+      .slice(0, limit);
+  }
+  const admin = createSupabaseAdminClient();
+  if (!admin) return [];
+  const { data, error } = await admin
+    .from("audit_events")
+    .select("*")
+    .eq("org_id", orgId)
+    .eq("employee_id", employeeId)
+    .order("created_at", { ascending: false })
+    .limit(limit);
+  if (error || !data) return [];
+  return data.map((r) => mapAuditRow(r as Record<string, unknown>));
+}
+
+/** Audits of one action since an ISO time (MCP handoff notify cooldown). */
+export async function listAuditEventsByActionSince(
+  orgId: string,
+  action: string,
+  sinceIso: string,
+  limit = 200
+): Promise<AuditEvent[]> {
+  if (!orgId || !action) return [];
+  const since = new Date(sinceIso).getTime();
+  if (isDemoMode()) {
+    return getRuntimeAudit()
+      .filter(
+        (event) =>
+          event.orgId === orgId &&
+          event.action === action &&
+          new Date(event.createdAt).getTime() >= since
+      )
+      .slice(0, limit);
+  }
+  const admin = createSupabaseAdminClient();
+  if (!admin) return [];
+  const { data, error } = await admin
+    .from("audit_events")
+    .select("*")
+    .eq("org_id", orgId)
+    .eq("action", action)
+    .gte("created_at", sinceIso)
+    .order("created_at", { ascending: false })
+    .limit(limit);
+  if (error || !data) return [];
+  return data.map((r) => mapAuditRow(r as Record<string, unknown>));
+}
+
 export function isMentionWakeAudit(event: AuditEvent): boolean {
   return (
     STUCK_WATCH_WAKE_ACTIONS.includes(

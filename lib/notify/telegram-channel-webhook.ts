@@ -126,7 +126,7 @@ export async function handleTelegramChannelUpdate(
       if (updated) {
         await fulfillIfApproved(updated, decision);
         const employee = await getEmployee(updated.employeeId, channel.orgId);
-        await runApprovalResolveSideEffects({ approval: updated, decision, actorEmail: actor, employee });
+        await runApprovalResolveSideEffects({ approval: updated, decision, actorEmail: actor, employee, surface: "telegram" });
       }
       await answerTelegramCallbackForChannel(
         channel,
@@ -190,6 +190,7 @@ export async function handleTelegramChannelUpdate(
         decision: "revision_requested",
         actorEmail: actor,
         employee,
+        surface: "telegram",
       });
     }
   } catch (error) {

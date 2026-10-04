@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireOrgSession } from "@/lib/auth/require-org";
+import { isMcpEndpointHandoffEnabled } from "@/lib/feature-flags";
+import { buildMcpHandoff } from "@/lib/mcp/endpoint-handoff-block";
 import {
   bindingPublicView,
   getBinding,
@@ -40,6 +42,7 @@ export async function POST(
       mode: runtimeModeLabel(),
       binding: bindingPublicView(binding),
       message: "Grok Bot エージェントを連携しました（employeeId は不変）",
+      ...(isMcpEndpointHandoffEnabled() ? { mcpHandoff: buildMcpHandoff({ employeeId: id }) } : {}),
     });
   } catch (e) {
     const code = (e as { code?: string }).code;
@@ -79,5 +82,6 @@ export async function GET(
     ok: true,
     binding: bindingPublicView(binding),
     mode: runtimeModeLabel(),
+    ...(isMcpEndpointHandoffEnabled() ? { mcpHandoff: buildMcpHandoff({ employeeId: id }) } : {}),
   });
 }

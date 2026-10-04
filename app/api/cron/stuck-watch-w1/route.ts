@@ -2,7 +2,8 @@ import { NextResponse } from "next/server";
 import { processW1MentionWatchAllOrgs } from "@/lib/stuck-watch/w1-mention-unanswered";
 import { listPendingT2Decisions } from "@/lib/data/approvals";
 import { checkAndExpireT2Decision } from "@/lib/decision-workflow/expiry";
-import { isDecisionWorkflowEnabled } from "@/lib/feature-flags";
+import { isDecisionWorkflowEnabled, isMcpEndpointHandoffEnabled } from "@/lib/feature-flags";
+import { processMcpNotConnectedWatchAllOrgs } from "@/lib/mcp/endpoint-handoff";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -43,12 +44,19 @@ export async function GET(req: Request) {
       }
     }
 
+    // MCP endpoint handoff: woken-but-never-connected → one next-step notice
+    // per employee per 24h to a human channel (no re-wake). Flag OFF → skipped.
+    const mcpHandoff = isMcpEndpointHandoffEnabled()
+      ? await processMcpNotConnectedWatchAllOrgs().catch(() => [])
+      : null;
+
     return NextResponse.json({
       ok: true,
       scanned: results.length,
       notified: notified.length,
       results,
       t2Expiry,
+      ...(mcpHandoff ? { mcpHandoffNotConnected: mcpHandoff } : {}),
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "unknown_error";

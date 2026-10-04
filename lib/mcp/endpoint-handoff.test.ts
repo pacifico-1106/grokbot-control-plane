@@ -267,7 +267,7 @@ describe("evaluateMcpNotConnected (fail-safe)", () => {
     for (const act of [
       audit({ action: "mcp.client_seen", at: wakeAt + MIN, credentialId: "c" }),
       audit({ action: "tool.invoke", at: wakeAt + 2 * MIN }),
-      audit({ action: "approval.created", at: wakeAt + 2 * MIN, credentialId: "c" }),
+      audit({ action: "approval.requested", at: wakeAt + 2 * MIN, credentialId: "c" }),
     ]) {
       const r = evaluateMcpNotConnected({ wake, audits: [act, wake, old], now: new Date(now), complete: false });
       expect(r).toMatchObject({ eligible: false, reason: "activity_seen" });

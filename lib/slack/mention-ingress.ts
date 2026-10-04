@@ -20,6 +20,7 @@
  * - Records sealithHandoff intent in wake metadata (suggest | required | off)
  */
 
+import { mcpHandoffWakeAuditMeta, withMcpHandoff, type McpHandoff } from "@/lib/mcp/endpoint-handoff";
 import { appendAuditEvent } from "@/lib/data/audit";
 import { getEffectiveIngressHandoffPolicy } from "@/lib/data/ingress-handoff";
 import { getOrgChannel } from "@/lib/data/directory";
@@ -126,6 +127,12 @@ export type SlackWakePayload = {
     pendingManagerApproval?: boolean;
     channelClassification: ChannelClassification;
   };
+  /**
+   * MCP endpoint handoff (MCP_ENDPOINT_HANDOFF_ENABLED). Secret-free block with the
+   * Staffpass MCP URL, connection steps and the staffpass_whoami connectivity check.
+   * Added only by the shared lib/mcp/endpoint-handoff module; absent when the flag is OFF.
+   */
+  mcpHandoff?: McpHandoff;
 };
 
 type SlackEvent = {
@@ -481,11 +488,20 @@ async function postWake(
     "content-type": "application/json",
   };
   if (secret) headers.authorization = `Bearer ${secret}`;
+  // Shared, channel-independent MCP endpoint handoff (flag OFF → same object).
+  const wakeBody = await withMcpHandoff(payload, {
+    orgId: target.orgId,
+    employeeId: target.employeeId,
+    surface: "slack",
+    kind: "conversation",
+    trigger,
+  });
+  const handoffAuditMeta = mcpHandoffWakeAuditMeta(wakeBody, "slack");
   try {
     const response = await fetch(url, {
       method: "POST",
       headers,
-      body: JSON.stringify(payload),
+      body: JSON.stringify(wakeBody),
       signal: AbortSignal.timeout(WAKE_TIMEOUT_MS),
     });
     if (!response.ok) {
@@ -502,6 +518,7 @@ async function postWake(
           status: response.status,
           eventId: payload.eventId,
           ...handoffMeta,
+          ...handoffAuditMeta,
         },
       }).catch(() => undefined);
       return;
@@ -549,6 +566,7 @@ async function postWake(
         userTokenPath: trigger === "user_token_im",
         wakeParentStashed: payload.ts && !payload.thread_ts ? true : undefined,
         ...handoffMeta,
+        ...handoffAuditMeta,
       },
     }).catch(() => undefined);
   } catch (error) {
@@ -565,6 +583,7 @@ async function postWake(
         error: error instanceof Error ? error.message : "wake_failed",
         eventId: payload.eventId,
         ...handoffMeta,
+        ...handoffAuditMeta,
       },
     }).catch(() => undefined);
   }

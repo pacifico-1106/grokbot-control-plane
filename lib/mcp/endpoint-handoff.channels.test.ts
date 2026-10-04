@@ -9,6 +9,7 @@
 import { createHmac } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import type { ApprovalRequest } from "@/lib/types";
+import type { McpHandoff } from "@/lib/mcp/endpoint-handoff";
 
 mock.module("@/lib/approvals/fulfill", () => ({
   fulfillIfApproved: async () => undefined,
@@ -125,7 +126,7 @@ async function routeIm(employeeId: string, channel: string) {
 }
 
 function assertHandoff(payload: Record<string, unknown>, surface: string, kind: string, trigger: string) {
-  const h = payload.mcpHandoff as Record<string, any>;
+  const h = payload.mcpHandoff as McpHandoff;
   expect(h).toBeTruthy();
   expect(h.schema).toBe("staffpass.mcp_handoff.v1");
   expect(h.mcp.url).toBe(MCP_URL);
@@ -355,12 +356,12 @@ describe("approval.resolved wake (Slack / LINE / Telegram) goes through the shar
 });
 
 describe("not-connected next step reaches Slack / LINE / Telegram mouths alike", () => {
-  const PROVIDERS = [
-    { provider: "slack" as const, employeeId: "emp_ops", api: "https://slack.com/api/chat.postMessage",
+  const PROVIDERS: Array<{ provider: "slack" | "line" | "telegram"; employeeId: string; api: string; config: Record<string, string>; secrets: Record<string, string> }> = [
+    { provider: "slack", employeeId: "emp_ops", api: "https://slack.com/api/chat.postMessage",
       config: { channelId: "C_MOUTH" }, secrets: { botToken: "xoxb-mouth", signingSecret: "s" } },
-    { provider: "line" as const, employeeId: "emp_sns", api: "https://api.line.me/",
+    { provider: "line", employeeId: "emp_sns", api: "https://api.line.me/",
       config: { destinationId: "G_MOUTH" }, secrets: { channelAccessToken: "line-mouth", channelSecret: "s" } },
-    { provider: "telegram" as const, employeeId: "emp_comm", api: "https://api.telegram.org/",
+    { provider: "telegram", employeeId: "emp_comm", api: "https://api.telegram.org/",
       config: { chatId: "-10099" }, secrets: { botToken: "tg-mouth", webhookSecret: "s" } },
   ];
 
