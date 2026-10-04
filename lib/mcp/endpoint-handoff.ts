@@ -91,6 +91,46 @@ export type McpWakeContext = {
   trigger: string;
 };
 
+/** STUB (TDD): wake body that went through withMcpHandoff. */
+export type McpHandoffWakeBody<T extends object> = T & { mcpHandoff?: McpHandoff };
+
+/** STUB (TDD): stage-1 "reconnect prompt armed" audit (no human notice yet). */
+export const MCP_RECONNECT_ARMED_ACTION = "mcp_handoff.reconnect_armed" as const;
+/** STUB (TDD): fallback escalation when no follow-up wake arrives after arming. */
+export const MCP_RECONNECT_ESCALATE_MS = 60 * 60_000;
+
+export type NotConnectedNotice = {
+  headline: string;
+  action: string;
+  copyLine: string;
+  footer: string;
+};
+export type NoticeFormat = "slack" | "telegram" | "line" | "plain";
+
+/** STUB (TDD) */
+export function buildNotConnectedNotice(input: {
+  employeeId: string;
+  displayName?: string | null;
+  surface: McpHandoffSurface;
+  minutesSinceWake: number;
+  via?: "reconnect_wake" | "no_followup_wake";
+  env?: Env;
+}): NotConnectedNotice {
+  void input;
+  return { headline: "", action: "", copyLine: "", footer: "" };
+}
+
+/** STUB (TDD) */
+export function renderNotConnectedNotice(notice: NotConnectedNotice, format: NoticeFormat): string {
+  void format;
+  return [notice.headline, notice.action, notice.copyLine, notice.footer].join("\n");
+}
+
+/** STUB (TDD): machine e-mail lines (flag OFF → []). */
+export function mcpHandoffMachineLines(): string[] {
+  return [];
+}
+
 export type McpSeenCredential = {
   employeeId: string;
   orgId: string;

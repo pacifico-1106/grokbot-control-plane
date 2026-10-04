@@ -165,11 +165,11 @@ describe("staffpass_health endpoint", () => {
     return JSON.parse((r.content[0] as { text: string }).text) as Record<string, unknown>;
   };
 
-  test("flag OFF → unchanged (relative path + canonical origin)", async () => {
+  test("flag OFF → relative path unchanged; publicOrigin from config (#254 follow-up 1)", async () => {
     delete process.env[FLAG];
     const h = await read();
     expect(h.mcpEndpoint).toBe("/api/mcp");
-    expect(h.publicOrigin).toBe("https://staffpass.sealith.com");
+    expect(h.publicOrigin).toBe(ORIGIN);
     expect(h.mcpEndpointUrl).toBeUndefined();
   });
 

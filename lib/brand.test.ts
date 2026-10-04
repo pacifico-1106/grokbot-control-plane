@@ -3,6 +3,7 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { extname, join } from "node:path";
 import { SERVICE_LABEL, SERVICE_LABEL_EN } from "./brand";
 import { getEmailFrom, renderStubHtml } from "./resend";
+import { buildServerCard } from "./mcp/server-card";
 
 const ROOT = process.cwd();
 const read = (p: string) => readFileSync(join(ROOT, p), "utf8");
@@ -61,9 +62,8 @@ describe("サービス表記（Staffpass（AIエージェントの社員証）�
   test("package.json / server-card の英語説明は新しい表記", () => {
     const pkg = JSON.parse(read("package.json")) as { description: string };
     expect(pkg.description.startsWith(SERVICE_LABEL_EN)).toBe(true);
-    const card = JSON.parse(read("public/.well-known/mcp/server-card.json")) as {
-      description: string;
-    };
+    // #254 follow-up: the server card is built from resolveAppOrigin() (was a static JSON).
+    const card = buildServerCard({ VERCEL_ENV: "production" }) as { description: string };
     expect(card.description.startsWith(`Staffpass remote MCP — ID badges for AI agents.`)).toBe(true);
     expect(card.description).not.toMatch(/for Grok Bot/i);
   });
@@ -114,7 +114,8 @@ const OLD_LABEL_PATTERNS: RegExp[] = [
 
 // [ファイル, 行に含まれる文字列]。Grok Bot との接続や技術的な事実を述べる箇所だけ。
 const ALLOWED: Array<[string, string]> = [
-  ["public/.well-known/mcp/server-card.json", "no local stdio for Grok Bot Plugins"],
+  ["lib/mcp/server-card.ts", "no local stdio for Grok Bot Plugins"],
+  ["lib/mcp/__fixtures__/server-card.production.json", "no local stdio for Grok Bot Plugins"],
   ["lib/employees/policy-draft.ts", "scopes rewritten for Grok Bot"],
 ];
 

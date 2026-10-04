@@ -75,6 +75,11 @@ const KIND_PATHS: Record<SetupLinkKind, string> = {
   slack_bot_token_setup: "/app/settings/conversation-adapters",
 };
 
+/** STUB (TDD): setup link base URL via resolveAppOrigin(). */
+export function resolveSetupLinkBaseUrl(env: Record<string, string | undefined> = process.env): string {
+  return env.STAFFPASS_PUBLIC_ORIGIN || env.NEXT_PUBLIC_BASE_URL || "https://staffpass.sealith.com";
+}
+
 function getBaseUrl(): string {
   return process.env.STAFFPASS_PUBLIC_ORIGIN || process.env.NEXT_PUBLIC_BASE_URL || "https://staffpass.sealith.com";
 }

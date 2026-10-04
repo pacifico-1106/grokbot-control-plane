@@ -8,6 +8,21 @@ export const STAFFPASS_ADMIN_MCP_SERVER_CARD =
   "https://staffpass.sealith.com/.well-known/mcp/admin-server-card.json";
 export const STAFFPASS_ADMIN_MCP_PATH = "/api/mcp/admin";
 export const STAFFPASS_ADMIN_MCP_TRANSPORT = "Streamable HTTP";
+export const STAFFPASS_ADMIN_MCP_SERVER_CARD_PATH = "/.well-known/mcp/admin-server-card.json";
+
+type Env = Record<string, string | undefined>;
+
+/** STUB (TDD): absolute admin MCP URL. */
+export function staffpassAdminMcpUrl(env: Env = process.env): string {
+  void env;
+  return STAFFPASS_ADMIN_MCP_URL;
+}
+
+/** STUB (TDD): absolute admin server card URL. */
+export function staffpassAdminMcpServerCardUrl(env: Env = process.env): string {
+  void env;
+  return STAFFPASS_ADMIN_MCP_SERVER_CARD;
+}
 
 export const ADMIN_MCP_SERVER_NAME = "staffpass-admin";
 export const ADMIN_MCP_SERVER_TITLE = "Staffpass Admin";
