@@ -12,6 +12,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import type { ResolvedEmployeeCredential } from "@/lib/auth/employee-credential";
 import { fulfillApprovedInvoke, parseFulfillment } from "@/lib/approvals/fulfill";
 import { getApprovalById, resolveApproval } from "@/lib/data";
+import { updateApprovalMetadata } from "@/lib/data/approvals";
 import { upsertConversationAdapter } from "@/lib/data/conversation-adapters";
 import { bindEmployeeSlackIdentity, revokeEmployeeSlackIdentity } from "@/lib/data/slack-identities";
 import { DEMO_ORG, getRuntimeAudit, getRuntimeEmployees, pushRuntimeAuditEvent } from "@/lib/demo-data";
@@ -706,5 +707,118 @@ describe("MCP staffpass_invoke", () => {
     expect(data.ok).toBe(true);
     expect(data.status).toBe("deleted");
     expect(deletes().length).toBe(1);
+  });
+});
+
+describe("approved delete: only the approved target (metadata.commDeleteTarget) is ever deleted (木村 #262 review 2)", () => {
+  /** Queue an always_human delete of a real own post and approve it. */
+  async function approvedDelete() {
+    await mockSlack();
+    const own = await seedOwnPost();
+    const other = await seedOwnPost("別の自分の投稿");
+    patchEmployee({ approvalPolicy: "always_human" });
+    const queued = await invoke(deleteBody({ surface: "slack", channel: own.channel, ts: own.ts }));
+    expect(queued.httpStatus).toBe(402);
+    const approvalId = String(queued.body.approvalId);
+    const approved = (await resolveApproval(approvalId, "approved", "ando@example.com", DEMO_ORG.id))!;
+    return { own, other, approvalId, approved };
+  }
+
+  /** Overwrite stored metadata keys, then fulfill the stored approval. Nothing may reach Slack. */
+  async function tamperAndFulfill(approvalId: string, patch: Record<string, unknown>) {
+    const current = (await getApprovalById(approvalId, DEMO_ORG.id))!;
+    await updateApprovalMetadata(current, patch);
+    const tampered = (await getApprovalById(approvalId, DEMO_ORG.id))!;
+    calls = [];
+    const f = await fulfillApprovedInvoke(tampered);
+    expect(calls).toEqual([]);
+    expect(deletes().length).toBe(0);
+    return f;
+  }
+
+  const refusals = (approvalId: string) =>
+    auditsFor("comm.delete.refused").filter((e) => e.metadata?.approvalId === approvalId).map((e) => e.metadata?.code);
+
+  test("the approval card stores the target together with the employee", async () => {
+    const { own, approved } = await approvedDelete();
+    expect(approved.metadata.commDeleteTarget).toEqual({ surface: "slack", channel: own.channel, messageId: own.ts, employeeId: "emp_comm" });
+  });
+
+  test("tampered snapshot args (another real own post) → approved_target_mismatch, nothing deleted, no Slack call", async () => {
+    const { approvalId, other } = await approvedDelete();
+    const current = (await getApprovalById(approvalId, DEMO_ORG.id))!;
+    const inv = current.metadata.invoke as Record<string, unknown>;
+    const f = await tamperAndFulfill(approvalId, { invoke: { ...inv, args: { surface: "slack", channel: other.channel, ts: other.ts } } });
+    expect(f?.ok).toBe(false);
+    expect(f?.error).toBe("approved_target_mismatch");
+    expect(f?.commDelete).toEqual({ status: "refused", code: "approved_target_mismatch" });
+    expect(refusals(approvalId)).toContain("approved_target_mismatch");
+  });
+
+  test("snapshot args that no longer parse → approved_target_mismatch, nothing deleted", async () => {
+    const { approvalId } = await approvedDelete();
+    const current = (await getApprovalById(approvalId, DEMO_ORG.id))!;
+    const inv = current.metadata.invoke as Record<string, unknown>;
+    const f = await tamperAndFulfill(approvalId, { invoke: { ...inv, args: {} } });
+    expect(f?.error).toBe("approved_target_mismatch");
+  });
+
+  test("metadata.commDeleteTarget missing → approved_target_missing, nothing deleted, no Slack call", async () => {
+    const { approvalId } = await approvedDelete();
+    const f = await tamperAndFulfill(approvalId, { commDeleteTarget: undefined });
+    expect(f?.ok).toBe(false);
+    expect(f?.error).toBe("approved_target_missing");
+    expect(f?.commDelete).toEqual({ status: "refused", code: "approved_target_missing" });
+    expect(refusals(approvalId)).toContain("approved_target_missing");
+  });
+
+  test("metadata.commDeleteTarget malformed (string / no employeeId / bad ts / non-string channel / unknown surface) → approved_target_missing", async () => {
+    const { approvalId, own } = await approvedDelete();
+    const good = { surface: "slack", channel: own.channel, messageId: own.ts, employeeId: "emp_comm" };
+    for (const bad of [
+      "C_INTERNAL",
+      ["slack", own.channel, own.ts],
+      { surface: "slack", channel: own.channel, messageId: own.ts },
+      { ...good, messageId: "not-a-ts" },
+      { ...good, channel: 123 },
+      { ...good, surface: "email" },
+      { ...good, employeeId: "" },
+    ]) {
+      const f = await tamperAndFulfill(approvalId, { commDeleteTarget: bad });
+      expect(`${JSON.stringify(bad)}:${f?.error}`).toBe(`${JSON.stringify(bad)}:approved_target_missing`);
+    }
+  });
+
+  test("approved channel differs from the snapshot → approved_target_mismatch", async () => {
+    const { approvalId, own } = await approvedDelete();
+    const f = await tamperAndFulfill(approvalId, {
+      commDeleteTarget: { surface: "slack", channel: "C_OTHER01", messageId: own.ts, employeeId: "emp_comm" },
+    });
+    expect(f?.error).toBe("approved_target_mismatch");
+  });
+
+  test("approved ts differs from the snapshot → approved_target_mismatch", async () => {
+    const { approvalId, own } = await approvedDelete();
+    const f = await tamperAndFulfill(approvalId, {
+      commDeleteTarget: { surface: "slack", channel: own.channel, messageId: "1787800099.000001", employeeId: "emp_comm" },
+    });
+    expect(f?.error).toBe("approved_target_mismatch");
+  });
+
+  test("approved employee differs from the approval's employee → approved_target_mismatch", async () => {
+    const { approvalId, own } = await approvedDelete();
+    const f = await tamperAndFulfill(approvalId, {
+      commDeleteTarget: { surface: "slack", channel: own.channel, messageId: own.ts, employeeId: "emp_other" },
+    });
+    expect(f?.error).toBe("approved_target_mismatch");
+  });
+
+  test("untouched approval still deletes exactly the approved target once", async () => {
+    const { approvalId, own } = await approvedDelete();
+    const stored = (await getApprovalById(approvalId, DEMO_ORG.id))!;
+    calls = [];
+    const f = await fulfillApprovedInvoke(stored);
+    expect(f?.ok).toBe(true);
+    expect(deletes().map((c) => c.payload)).toEqual([{ channel: own.channel, ts: own.ts }]);
   });
 });
