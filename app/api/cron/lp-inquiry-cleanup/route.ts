@@ -6,40 +6,27 @@
  * Protected by CRON_SECRET header.
  */
 
-import { createHash, timingSafeEqual } from "node:crypto";
 import { NextResponse } from "next/server";
 import { createSupabaseAdminClient } from "@/lib/supabase";
 import { isLpInquiryCleanupEnabled } from "@/lib/feature-flags";
+import { checkCronRequest, readCronSecret } from "@/lib/security/cron-secret";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-function verifyCronSecret(req: Request): boolean {
-  const cronSecret = process.env.CRON_SECRET;
-  if (!cronSecret || cronSecret.startsWith("replace_me")) {
-    console.warn("[lp-inquiry-cleanup] CRON_SECRET not configured");
-    return false;
-  }
-  
-  const authHeader = req.headers.get("authorization");
-  if (!authHeader) {
-    return false;
-  }
-  
-  const token = authHeader.replace("Bearer ", "");
-  return secretsEqual(token, cronSecret);
-}
-
 /**
- * Constant-time comparison. Both sides are hashed to 32-byte SHA-256 digests,
- * so timingSafeEqual always gets equal-length buffers (never throws on
- * different-length or multi-byte input) and the secret's length is not
- * revealed by an early return.
+ * CRON_SECRET check through the shared constant-time helper. Accepts
+ * `Authorization: Bearer <CRON_SECRET>` or the raw `<CRON_SECRET>` (the caller
+ * is unknown, so the raw form stays). CRON_SECRET is not trimmed, as before.
+ * Unset / placeholder secrets keep answering 401 here (not the 503 the
+ * non-LP crons use).
  */
-function secretsEqual(given: string, expected: string): boolean {
-  const a = createHash("sha256").update(given, "utf8").digest();
-  const b = createHash("sha256").update(expected, "utf8").digest();
-  return timingSafeEqual(a, b);
+function verifyCronSecret(req: Request): boolean {
+  const decision = checkCronRequest(req, { allowRawSecret: true, trimSecret: false });
+  if (decision !== "ok" && readCronSecret({ trim: false }).state !== "set") {
+    console.warn("[lp-inquiry-cleanup] CRON_SECRET not configured");
+  }
+  return decision === "ok";
 }
 
 export async function GET(req: Request) {

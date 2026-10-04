@@ -9,32 +9,23 @@
  * Feature flag: LP_HANDOFF_ENABLED (default OFF)
  */
 
-import { timingSafeEqual } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { isLpHandoffEnabled } from "@/lib/feature-flags";
 import { processHandoffOutbox, type OutboxEntry } from "@/lib/lp/outbox-processor";
+import { checkCronRequest, readCronSecret } from "@/lib/security/cron-secret";
 
+/**
+ * CRON_SECRET check through the shared constant-time helper. Accepts
+ * `Authorization: Bearer <CRON_SECRET>` (Vercel Cron) or
+ * `x-cron-secret: <CRON_SECRET>` (external POST scheduler). CRON_SECRET is not
+ * trimmed, as before. Unset and `replace_me…` placeholder secrets answer 401.
+ */
 function validateCronSecret(request: NextRequest): boolean {
-  const authHeader = request.headers.get("authorization");
-  const cronSecret = process.env.CRON_SECRET;
-  
-  if (!cronSecret) {
+  const decision = checkCronRequest(request, { rawSecretHeader: "x-cron-secret", trimSecret: false });
+  if (decision !== "ok" && readCronSecret({ trim: false }).state !== "set") {
     console.warn("[lp-handoff-outbox] CRON_SECRET not configured");
-    return false;
   }
-
-  if (safeEqual(authHeader, `Bearer ${cronSecret}`)) {
-    return true;
-  }
-
-  return safeEqual(request.headers.get("x-cron-secret"), cronSecret);
-}
-
-function safeEqual(given: string | null, expected: string): boolean {
-  if (!given) return false;
-  const a = Buffer.from(given);
-  const b = Buffer.from(expected);
-  return a.length === b.length && timingSafeEqual(a, b);
+  return decision === "ok";
 }
 
 async function sendHandoffNotification(entry: OutboxEntry): Promise<{ success: boolean; error?: string }> {
