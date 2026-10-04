@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { removeAutoDmRoutesForEmployee } from "@/lib/slack/dm-autoroute";
 import { getCurrentOrgId } from "@/lib/auth/session";
-import { appendAuditEvent, getEmployee, updateEmployeePolicy } from "@/lib/data";
+import { appendAuditEvent, getEmployee } from "@/lib/data";
 import {
   getEmployeeSlackIdentity,
   revokeEmployeeSlackIdentity,
@@ -12,6 +12,11 @@ import {
   policyErrorPayload,
 } from "@/lib/employees/policy-errors";
 import { normalizePostingAs } from "@/lib/employees/posting-as";
+import {
+  currentPostingAs,
+  postingAsChangeMetadata,
+  writeEmployeePostingAs,
+} from "@/lib/employees/posting-identity";
 import { slackOAuthConfigured } from "@/lib/slack/oauth";
 import { requireCapability } from "@/lib/team/demo-actor";
 
@@ -49,17 +54,11 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
     return NextResponse.json(policyErrorPayload("employee_terminated"), { status: 403 });
   }
   const postingAs = normalizePostingAs(body.postingAs);
-  let updated: Awaited<ReturnType<typeof updateEmployeePolicy>>;
+  const from = currentPostingAs(existing);
+  let updated: Awaited<ReturnType<typeof writeEmployeePostingAs>>;
   try {
-    updated = await updateEmployeePolicy({
-      orgId,
-      employeeId: id,
-      scopes: existing.scopes,
-      allowedPurposes: existing.allowedPurposes,
-      approvalPolicy: existing.approvalPolicy,
-      actionLimits: existing.actionLimits,
-      postingAs,
-    });
+    // Shared with the admin MCP tool employees.postingIdentity.set.
+    updated = await writeEmployeePostingAs({ orgId, employee: existing, postingAs });
   } catch (error) {
     // Fail-closed: a failed write is never reported as saved (no audit row).
     const failure = employeePolicyWriteFailure(error);
@@ -75,7 +74,7 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
     action: "employee.updated",
     purpose: null,
     summary: `${updated.displayName} の Slack 投稿名義を更新`,
-    metadata: { postingAs },
+    metadata: postingAsChangeMetadata(from, postingAs),
   });
   const identity = await getEmployeeSlackIdentity(id);
   return NextResponse.json({

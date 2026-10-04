@@ -120,6 +120,7 @@ Staffpass Slack 連携には2つの OAuth フローがあり、役割が異な�
 | `employees.issue` | AI社員証の発行 | always_human |
 | `link` | 社員証とGrok Bot連携 | always_human |
 | `policy.patch` | 権限更新 | always_human |
+| `employees.postingIdentity.set` | Slack 投稿名義（`bot` / `user`）の切り替え（`user` は本人トークン + chat:write を確認） | always_human |
 | `parties.upsert` | 相手台帳登録 | always_human |
 | `channels.classify` | チャネル分類 + 1:1 IM受口設定 | always_human |
 | `roles.propose` | 職務案の提案 | always_human |
@@ -327,7 +328,7 @@ App DM（Staffpassアプリへの直接DM）への返信には `posting_as: bot`
 
 社員のSlackポスティング設定:
 - ダッシュボード → 社員 → Slack Identity → **投稿者** を `Bot` に設定
-- または `policy.patch` で `postingAs: "bot"` を指定
+- または管理 MCP の `employees.postingIdentity.set` で `postingAs: "bot"` を指定（always_human。`policy.patch` は投稿名義を変更しません）
 
 **症状（posting_as: user のまま）**:
 - Bot DM への返信が見えない
@@ -341,7 +342,7 @@ App DM（Staffpassアプリへの直接DM）への返信には `posting_as: bot`
 1. **User Token Scopes** に `im:history` を追加（OAuth & Permissions）
 2. **Subscribe to events on behalf of users** に `message.im` を追加（Event Subscriptions）
 3. 社員が Staffpass ダッシュボードから **Slack 再認可**（新スコープ付与）
-4. 社員バッジの `posting_as` を `user` に設定
+4. 社員バッジの `posting_as` を `user` に設定（ダッシュボード、または管理 MCP の `employees.postingIdentity.set { employeeId, postingAs: "user" }`。管理 MCP は本人トークンと chat:write がないと `user_token_missing` / `missing_scope_chat_write` で止まります）
 5. `channels.classify` で人↔人DMを `internal` 分類、`employeeId` 指定
 
 #### チャネル / Slack Connect
