@@ -113,6 +113,25 @@ try:
         votes = list(pool.map(query, commands))
     assert votes == ["true", "true"], votes
     assert query("select current_stage_index from approval_workflow_instances where approval_id='40000000-0000-4000-8000-000000000014';") == "1"
+    comm_reply_dedup = ROOT / "supabase/migrations/20261004700000_comm_reply_dedup.sql"
+    sql(comm_reply_dedup)
+    sql(comm_reply_dedup)  # re-applicable
+    sql(ROOT / "tests/security/db-comm-reply-dedup.sql")
+    dedup_org = "80000000-0000-4000-8000-0000000000a1"
+    dedup_emp = "81000000-0000-4000-8000-000000000001"
+    command = (f"set role service_role; select public.claim_comm_reply_send('{dedup_org}','{dedup_emp}',"
+               f"repeat('d',64),repeat('e',64),null,'comm.reply',null,1800,0.6,172800)->>'state';")
+    with ThreadPoolExecutor(max_workers=12) as pool:
+        states = list(pool.map(query, [command]*12))
+    assert states.count("claimed") == 1 and states.count("duplicate") == 11, states
+    query("update public.approval_requests set status='superseded' where id='82000000-0000-4000-8000-000000000002';")
+    sql(ROOT / "supabase/verification/20261004700000_comm_reply_dedup_rollback.sql")
+    assert query("select to_regclass('public.comm_reply_send_fingerprints') is null;") == "t"
+    assert query("select count(*) from public.approval_requests where status='superseded';") == "0"
+    assert query("select status from public.approval_requests where id='82000000-0000-4000-8000-000000000002';") == "expired"
+    assert "superseded" not in query("select pg_get_constraintdef(oid) from pg_constraint where conname='approval_requests_status_check';")
+    sql(comm_reply_dedup)  # forward again after rollback
+    print("PASS: comm reply dedup ledger: superseded status + guard, anon/authenticated denied, org/employee isolation, exact/similar, superseded-after-approval only for an identical / similar reply (7 cases), 12 concurrent identical claims have 1 winner; rollback + re-apply.")
     member_guard = ROOT / "supabase/migrations/20261004200000_org_members_capability_guard.sql"
     sql(member_guard)
     sql(member_guard)  # re-applicable
@@ -127,8 +146,14 @@ try:
     sql(config_writes)
     sql(config_writes)  # re-applicable
     sql(ROOT / "tests/security/db-rls-write-holes-phase2.sql")
+    sql(ROOT / "supabase/migrations/20261001000000_lp_inquiries.sql")  # lp_inquiries / notification_outbox not in schema.sql
+    lp_server_only = ROOT / "supabase/migrations/20261004800000_lp_tables_server_only.sql"
+    sql(lp_server_only)
+    sql(lp_server_only)  # re-applicable
+    sql(ROOT / "tests/security/db-lp-tables-server-only.sql")
     print("PASS: orgs / subscriptions / audit_events / approval_requests have no anon/authenticated write path (member/admin/owner JWT denied); service_role writes all four. Full-history check: scripts/test-db-all-migrations.py.")
     print("PASS: 14 tenant config / credential tables (credentials, employees, bindings, admin agents, directory, adapters, channels, projects, card setup/audit) + gateway_links, agentmail_inboxes, lp_handoffs, lp_wake_webhook_configs, lp_wake_webhook_events have no anon/authenticated write path; other reads unchanged; credentials (rows and secret_hash) unreadable from any session; service_role reads/writes all.")
+    print("PASS: lp_inquiries / notification_outbox have no anon/authenticated write grant; lp_handoffs / lp_wake_* have no policy (RLS on) and no anon/authenticated SELECT; sessions read/write none of the 5 LP tables; service_role (BYPASSRLS) reads/writes all.")
     print("PASS: org_members has no authenticated write path; last active owner cannot be demoted/disabled/deleted; org cascade still works.")
     print(f"PASS: F8 parent state={args.f8_parent_state}; 3 explicit UNIQUE constraints; existing constraint/index OIDs preserved across apply/reapply.")
     print("PASS: #80 ACL/authority/metadata regressions; 12 claims and 12 secret readers each have 1 winner. F8 W1, multi-stage/finalGo, rejection, current voter/binding, self-approval, same-org FKs, direct access denial, atomic rollback and recovery pass. 12 duplicate votes count once; 2 concurrent voters advance once. All migrations reapplied.")

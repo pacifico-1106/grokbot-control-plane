@@ -84,16 +84,13 @@ export function countNeedsReauth(orgId?: string): number {
 }
 
 /**
- * Ensure a binding row exists for employeeId.
- * Never invents a new employeeId — caller must pass the stable id.
+ * In-memory "unlinked" view for an employee that has no binding row yet.
+ * NOT stored anywhere — read paths (pages, GET routes) show this instead of
+ * creating a row; rows are created only by admin actions (link / health POST,
+ * issue / rotate).
  */
-export function ensureBindingRow(
-  employeeId: string,
-  orgId: string
-): EmployeeBinding {
-  const existing = runtimeBindings.get(employeeId);
-  if (existing) return existing;
-  const created: EmployeeBinding = {
+export function unlinkedBinding(employeeId: string, orgId: string): EmployeeBinding {
+  return {
     employeeId,
     orgId,
     grokBotAgentId: null,
@@ -108,6 +105,19 @@ export function ensureBindingRow(
     createdAt: nowIso(),
     updatedAt: nowIso(),
   };
+}
+
+/**
+ * Ensure a binding row exists for employeeId.
+ * Never invents a new employeeId — caller must pass the stable id.
+ */
+export function ensureBindingRow(
+  employeeId: string,
+  orgId: string
+): EmployeeBinding {
+  const existing = runtimeBindings.get(employeeId);
+  if (existing) return existing;
+  const created = unlinkedBinding(employeeId, orgId);
   runtimeBindings.set(employeeId, created);
   return created;
 }

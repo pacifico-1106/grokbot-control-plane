@@ -188,7 +188,7 @@ export const STAFFPASS_MCP_TOOLS: McpToolDef[] = [
   {
     name: "staffpass_get_approval_status",
     description:
-      "Poll a human approval ticket with approvalId + statusToken (same as GET /api/approvals/status). Returns pending|approved|rejected|revision_requested|expired and pollHint. When status=approved and the action has been auto-fulfilled (by the approval webhook), the fulfillment result is included in the response with pollHint=fulfilled — except while fulfillment.fileUpload.status=not_sent (only the approved text was posted): then pollHint=reinvoke_with_approvalId, and re-invoking with approvalId uploads the approved attachment once. The same hint when fulfillment.fileUpload.status=failed because Slack answered a definite error before sharing: then reinvokeReason={code, fix:{kind, needed?}, nextTool, nextToolEndpoint:\"/api/mcp/admin\", retryAfterFix} says what to fix and which admin tool to run first (no token / secret); re-invoke with approvalId after the fix. Admin credential secrets are never returned by this employee MCP: when resultRetrieval is present, authenticate to /api/mcp/admin and re-invoke the indicated admin tool with approvalId. If pollHint=reinvoke_with_approvalId, re-invoke with approvalId. On revision_requested, revise per revisionNote and re-invoke with the same jobId and parentApprovalId.",
+      "Poll a human approval ticket with approvalId + statusToken (same as GET /api/approvals/status). Returns pending|approved|rejected|revision_requested|expired|superseded and pollHint (superseded / expired = closed without sending: a newer reply or request for the same conversation replaced it, or it timed out; pollHint=abort_job, do not re-send the same content). When status=approved and the action has been auto-fulfilled (by the approval webhook), the fulfillment result is included in the response with pollHint=fulfilled — except while fulfillment.fileUpload.status=not_sent (only the approved text was posted): then pollHint=reinvoke_with_approvalId, and re-invoking with approvalId uploads the approved attachment once. The same hint when fulfillment.fileUpload.status=failed because Slack answered a definite error before sharing: then reinvokeReason={code, fix:{kind, needed?}, nextTool, nextToolEndpoint:\"/api/mcp/admin\", retryAfterFix} says what to fix and which admin tool to run first (no token / secret); re-invoke with approvalId after the fix. Admin credential secrets are never returned by this employee MCP: when resultRetrieval is present, authenticate to /api/mcp/admin and re-invoke the indicated admin tool with approvalId. If pollHint=reinvoke_with_approvalId, re-invoke with approvalId. On revision_requested, revise per revisionNote and re-invoke with the same jobId and parentApprovalId.",
     inputSchema: {
       type: "object",
       properties: {
@@ -629,6 +629,8 @@ export async function callStaffpassMcpTool(
         approval.status === "pending" ||
         approval.status === "expired"
         || approval.status === "revision_requested"
+        // Closed without sending (COMM_REPLY_DEDUP_ENABLED): terminal → abort_job.
+        || approval.status === "superseded"
           ? approval.status
           : "pending";
 

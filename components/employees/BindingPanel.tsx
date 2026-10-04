@@ -33,12 +33,18 @@ export function BindingPanel({
   employeeId,
   initial,
   canManageBinding = false,
+  canRotateCredential = false,
+  canEditWakeWebhook = false,
   demoMode = false,
 }: {
   employeeId: string;
   initial: EmployeeBinding;
   /** Server-decided (isOrgAdminSession): link / health are owner/admin only. */
   canManageBinding?: boolean;
+  /** Server-decided, same as requireCredentialAdmin on POST rotate. */
+  canRotateCredential?: boolean;
+  /** Server-decided, same as requireCapability("hire_issue_credentials") on PATCH binding. */
+  canEditWakeWebhook?: boolean;
   /** ?forceFail is honoured by the API only in demo mode. */
   demoMode?: boolean;
 }) {
@@ -253,37 +259,49 @@ export function BindingPanel({
             Grok Bot の webhook ルーチンからコピー。Cursor Slack 接続は不要。
           </p>
         </div>
-        <label className="block text-sm">
-          <span className="text-xs muted">URL</span>
-          <input
-            className="mt-1 w-full rounded-lg border border-[var(--border)] bg-transparent px-3 py-2 text-sm font-mono"
-            value={wakeUrl}
-            onChange={(e) => setWakeUrl(e.target.value)}
-            placeholder="https://"
-            autoComplete="off"
-            disabled={busy || binding.status === "revoked"}
-          />
-        </label>
-        <label className="block text-sm">
-          <span className="text-xs muted">送信キー（secret）</span>
-          <input
-            type="password"
-            className="mt-1 w-full rounded-lg border border-[var(--border)] bg-transparent px-3 py-2 text-sm font-mono"
-            value={wakeSecret}
-            onChange={(e) => setWakeSecret(e.target.value)}
-            placeholder={hasWakeWebhook ? "保存済み（変更するときだけ入力）" : "Grok Bot の送信キー"}
-            autoComplete="new-password"
-            disabled={busy || binding.status === "revoked"}
-          />
-        </label>
-        <button
-          type="button"
-          className="btn btn-ghost text-sm"
-          disabled={busy || binding.status === "revoked"}
-          onClick={() => void saveWake()}
-        >
-          起こす webhook を保存
-        </button>
+        {canEditWakeWebhook ? (
+          <>
+            <label className="block text-sm">
+              <span className="text-xs muted">URL</span>
+              <input
+                className="mt-1 w-full rounded-lg border border-[var(--border)] bg-transparent px-3 py-2 text-sm font-mono"
+                value={wakeUrl}
+                onChange={(e) => setWakeUrl(e.target.value)}
+                placeholder="https://"
+                autoComplete="off"
+                disabled={busy || binding.status === "revoked"}
+              />
+            </label>
+            <label className="block text-sm">
+              <span className="text-xs muted">送信キー（secret）</span>
+              <input
+                type="password"
+                className="mt-1 w-full rounded-lg border border-[var(--border)] bg-transparent px-3 py-2 text-sm font-mono"
+                value={wakeSecret}
+                onChange={(e) => setWakeSecret(e.target.value)}
+                placeholder={hasWakeWebhook ? "保存済み（変更するときだけ入力）" : "Grok Bot の送信キー"}
+                autoComplete="new-password"
+                disabled={busy || binding.status === "revoked"}
+              />
+            </label>
+            <button
+              type="button"
+              className="btn btn-ghost text-sm"
+              disabled={busy || binding.status === "revoked"}
+              onClick={() => void saveWake()}
+            >
+              起こす webhook を保存
+            </button>
+          </>
+        ) : (
+          <p className="text-xs muted break-all">
+            URL: <span className="font-mono">{binding.wakeWebhookUrl || "未設定"}</span>
+            {binding.hasWakeWebhook ? "（送信キー保存済み）" : ""}
+            <span className="block mt-1 faint">
+              変更は「雇う／社員証発行」の権限を持つ人が行います。
+            </span>
+          </p>
+        )}
       </div>
 
       <div className="flex flex-col sm:flex-row flex-wrap gap-2">
@@ -307,14 +325,16 @@ export function BindingPanel({
             </button>
           </>
         ) : null}
-        <button
-          type="button"
-          className="btn btn-ghost text-sm w-full sm:w-auto"
-          disabled={busy || binding.status === "revoked"}
-          onClick={() => void rotate()}
-        >
-          社員証を再発行
-        </button>
+        {canRotateCredential ? (
+          <button
+            type="button"
+            className="btn btn-ghost text-sm w-full sm:w-auto"
+            disabled={busy || binding.status === "revoked"}
+            onClick={() => void rotate()}
+          >
+            社員証を再発行
+          </button>
+        ) : null}
         {canManageBinding && demoMode ? (
           <button
             type="button"

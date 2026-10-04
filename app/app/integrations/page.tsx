@@ -4,8 +4,7 @@ import { McpSetupContent } from "@/components/mcp/McpSetupContent";
 import { isOrgAdminSession } from "@/lib/auth/require-org";
 import { getSessionContext } from "@/lib/auth/session";
 import {
-  ensureBindingRow,
-  getBinding,
+  getBindingForDisplay,
   getGatewayStatusForOrg,
   getOrgMeta,
   listEmployees,
@@ -22,9 +21,8 @@ export default async function IntegrationsPage() {
   const employees = await listEmployees(orgId);
   const bindingRows = [];
   for (const e of employees) {
-    const binding =
-      (await getBinding(e.id)) ??
-      (await ensureBindingRow(e.id, e.orgId || org.id));
+    // Read-only: a missing row shows as 未接続; only admin actions create it.
+    const binding = await getBindingForDisplay(e.id, e.orgId || org.id);
     bindingRows.push({
       employeeId: e.id,
       displayName: e.displayName,

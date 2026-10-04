@@ -397,6 +397,11 @@ export const NON_OUTBOUND_TOOL_REASONS: Readonly<Record<Exclude<GatewayToolId, O
 };
 
 /** slack.* / comm.* share one audience resolver — tool name is not the boundary. */
+/** Conversation tools (one shared duplicate-reply ledger, lib/comm-reply-dedup). */
+export function audienceGatedToolIds(): GatewayToolId[] {
+  return [...AUDIENCE_GATED_TOOL_IDS];
+}
+
 export function isAudienceGatedTool(def: GatewayToolDef | string): boolean {
   const id = typeof def === "string" ? def : def.id;
   return AUDIENCE_GATED_TOOL_IDS.has(id as GatewayToolId);

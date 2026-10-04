@@ -1,11 +1,12 @@
 import { NextResponse } from "next/server";
 import { runApprovalAttachmentReconcile } from "@/lib/approvals/attachment-reconcile";
 import { listApprovalsForTelegramDigest } from "@/lib/data/approvals";
-import { isApprovalAttachmentReconcileEnabled } from "@/lib/feature-flags";
+import { isApprovalAttachmentReconcileEnabled, isCommReplyDedupEnabled } from "@/lib/feature-flags";
 import {
   isApprovedUnfulfilled,
   processW2RetriesForApprovals,
 } from "@/lib/stuck-watch/w2-unfulfilled";
+import { expireStaleConversationApprovals } from "@/lib/comm-reply-dedup/approvals";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -27,6 +28,11 @@ export async function GET(req: Request) {
   }
 
   try {
+    // COMM_REPLY_DEDUP_ENABLED: pending conversation approvals older than the
+    // TTL (default 24 h) are closed as expired, never sent late. Best effort.
+    const expiredConversationApprovals = isCommReplyDedupEnabled()
+      ? (await expireStaleConversationApprovals({ phase: "sweep" }).catch(() => [])).length
+      : undefined;
     const approvals = await listApprovalsForTelegramDigest();
     const candidates = approvals.filter(isApprovedUnfulfilled);
     const results = await processW2RetriesForApprovals(candidates);
@@ -42,6 +48,7 @@ export async function GET(req: Request) {
       retried: results.length,
       results,
       ...(attachmentReconcile ? { attachmentReconcile } : {}),
+      ...(expiredConversationApprovals !== undefined ? { expiredConversationApprovals } : {}),
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "unknown_error";

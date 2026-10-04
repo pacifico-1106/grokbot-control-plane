@@ -367,7 +367,7 @@ export function ApprovalsClient({
                   className={`chip shrink-0 ${
                     a.status === "approved"
                       ? "chip-ok"
-                      : a.status === "revision_requested"
+                      : a.status === "revision_requested" || a.status === "superseded" || a.status === "expired"
                         ? "chip-warn"
                         : "chip-danger"
                   }`}
@@ -378,6 +378,10 @@ export function ApprovalsClient({
                       ? "却下"
                       : a.status === "revision_requested"
                         ? "修正依頼"
+                      : a.status === "superseded"
+                        ? "置き換え済み"
+                      : a.status === "expired"
+                        ? "期限切れ"
                       : a.status}
                 </span>
                 <div className="min-w-0">

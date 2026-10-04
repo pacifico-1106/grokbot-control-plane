@@ -9,7 +9,9 @@ export type ApprovalStatus =
   | "approved"
   | "rejected"
   | "expired"
-  | "revision_requested";
+  | "revision_requested"
+  /** Closed without sending: the conversation moved on (COMM_REPLY_DEDUP_ENABLED). */
+  | "superseded";
 
 export type ApprovalPolicy = "auto" | "always_human" | "risk_based";
 
@@ -460,6 +462,10 @@ export type AuditAction =
   | "approval.requested"
   | "approval.resolved"
   | "approval.revision_requested"
+  | "approval.superseded"
+  | "approval.expired"
+  | "comm_reply.duplicate_suppressed"
+  | "comm_reply.dedup_unavailable"
   | "approval.telegram_error"
   | "approval.snapshot_missing_attachment"
   | "approval.attachment_upload_in_progress"

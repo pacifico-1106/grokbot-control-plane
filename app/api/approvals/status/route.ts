@@ -46,6 +46,8 @@ export async function GET(req: Request) {
     approval.status === "pending" ||
     approval.status === "expired"
     || approval.status === "revision_requested"
+    // Closed without sending (COMM_REPLY_DEDUP_ENABLED): terminal → abort_job.
+    || approval.status === "superseded"
       ? approval.status
       : "pending";
 
@@ -126,6 +128,7 @@ export async function GET(req: Request) {
     // Approved attachment: snapshot filename + size only (null = none / not recorded).
     attachment: attachmentStatusField(approval.metadata),
     ...(fulfillmentResult ? { fulfillment: redactMetadata(fulfillmentResult) } : {}),
+    ...(status === "superseded" || status === "expired" ? closedWithoutSendField(approval.metadata) : {}),
     // pollHint (+ reinvokeReason for a definite Slack failure; 木村 5) — same shape as the MCP tool / status API
     ...approvalPollFields({ status, approvalId: approval.id, fulfillmentResult, adminResultRequired }),
   };
@@ -157,4 +160,12 @@ export async function GET(req: Request) {
   }
 
   return NextResponse.json(response);
+}
+
+/** Why a conversation approval was closed without sending (reason only, no ids / hashes). */
+function closedWithoutSendField(metadata: Record<string, unknown> | null | undefined): Record<string, unknown> {
+  const closed = metadata?.closedWithoutSend;
+  if (!closed || typeof closed !== "object" || Array.isArray(closed)) return {};
+  const reason = (closed as Record<string, unknown>).reason;
+  return typeof reason === "string" ? { closedWithoutSend: { reason } } : {};
 }
