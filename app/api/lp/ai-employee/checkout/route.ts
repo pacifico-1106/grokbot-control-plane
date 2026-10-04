@@ -1,20 +1,21 @@
 import { NextResponse } from "next/server";
 import { getStripe, getAppUrl, getCheckoutPaymentMethodTypes } from "@/lib/stripe";
+import { resolveAppOrigin, STAFFPASS_PUBLIC_ORIGIN } from "@/lib/app-url";
 import { getCatalogItem, getSetupPriceId, getPlanLabel, isValidCheckoutPlan, type CheckoutPlan } from "@/lib/lp/catalog";
 import { isLpOrderLedgerEnabled } from "@/lib/feature-flags";
 import { createOrder, createCheckoutAttempt, updateCheckoutAttemptStatus } from "@/lib/lp/order-ledger";
 
-const ALLOWED_ORIGINS = [
-  process.env.NEXT_PUBLIC_APP_URL,
-  "https://staffpass.sealith.com",
-].filter(Boolean);
+/** Allowed browser origins: app origin config (resolveAppOrigin) + the canonical host. No literal host. */
+function allowedOrigins(): string[] {
+  return [resolveAppOrigin(), STAFFPASS_PUBLIC_ORIGIN];
+}
 
 function verifyOrigin(req: Request): boolean {
   const origin = req.headers.get("origin");
   if (!origin) return true;
   
   const appUrl = getAppUrl();
-  const allowed = [appUrl, ...ALLOWED_ORIGINS];
+  const allowed = [appUrl, ...allowedOrigins()];
   
   return allowed.some((allowedOrigin) => {
     if (!allowedOrigin) return false;

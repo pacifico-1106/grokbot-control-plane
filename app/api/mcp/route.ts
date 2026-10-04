@@ -8,7 +8,8 @@ import {
   MCP_SERVER_VERSION,
   listStaffpassMcpTools,
 } from "@/lib/mcp/tools";
-import { STAFFPASS_MCP_URL } from "@/lib/mcp/public";
+import { resolveAppOrigin } from "@/lib/app-url";
+import { staffpassMcpUrl } from "@/lib/mcp/public";
 import { isConfigChangeRequestEnabled } from "@/lib/feature-flags";
 import { recordMcpClientSeen } from "@/lib/mcp/endpoint-handoff";
 
@@ -66,8 +67,9 @@ function serverInfo() {
     title: "Staffpass",
     description:
       "Staffpass remote MCP — AI employee control plane (whoami, invoke, approval poll, health). Fail-closed Gateway enforcement; confirm/send/order require human approval.",
-    websiteUrl: "https://staffpass.sealith.com",
-    mcpEndpoint: STAFFPASS_MCP_URL,
+    // Origin from app config (resolveAppOrigin) — never hardcoded, never request headers.
+    websiteUrl: resolveAppOrigin(),
+    mcpEndpoint: staffpassMcpUrl(),
     protocolVersion: MCP_PROTOCOL_VERSION,
     tools: listStaffpassMcpTools().map((t) => t.name),
     auth: {

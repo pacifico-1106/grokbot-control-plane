@@ -29,7 +29,7 @@ const { upsertNotificationChannel, recordNotificationDelivery } = await import("
 const { resetDemoWorkflowData } = await import("@/lib/approval-workflow/data");
 const { runApprovalResolveSideEffects } = await import("@/lib/approvals/resolve-side-effects");
 const { setOrgStuckWatchPolicy, resetDemoStuckWatchPolicy } = await import("@/lib/data/stuck-watch-policy");
-const { processMcpNotConnectedWatchForOrg } = await import("@/lib/mcp/endpoint-handoff");
+const { MCP_RECONNECT_ESCALATE_MS, processMcpNotConnectedWatchForOrg } = await import("@/lib/mcp/endpoint-handoff");
 const { POST: slackRef } = await import("@/app/api/webhooks/slack/[ref]/route");
 const { POST: lineRef } = await import("@/app/api/webhooks/line/[ref]/route");
 const { POST: telegramRef } = await import("@/app/api/webhooks/telegram/[ref]/route");
@@ -368,6 +368,9 @@ describe("not-connected next step reaches Slack / LINE / Telegram mouths alike",
   for (const p of PROVIDERS) {
     test(`${p.provider} mouth: one next-step notice with the endpoint; deduped; no re-wake`, async () => {
       process.env[FLAG] = "true";
+      // The watcher clock below jumps ahead by hours; start from a clean audit so wakes left by
+      // earlier tests in this file do not escalate into this mouth.
+      getRuntimeAudit().splice(0);
       const employeeId = p.employeeId;
       const mouth = await upsertNotificationChannel({ orgId: DEMO_ORG.id, provider: p.provider, label: `Mouth ${p.provider}`,
         enabled: true, config: p.config, secrets: p.secrets });
@@ -378,7 +381,13 @@ describe("not-connected next step reaches Slack / LINE / Telegram mouths alike",
         summary: "wake", createdAt: new Date(wakeAt).toISOString(),
         metadata: { reason: "woke", surface: p.provider, mcpHandoff: true, approvalId: `apr_${p.provider}` },
       });
-      const first = await processMcpNotConnectedWatchForOrg(DEMO_ORG.id);
+      // #254 follow-up: first pass only arms the reconnect prompt (no human, no re-wake).
+      const armedAt = Date.now();
+      const armed = await processMcpNotConnectedWatchForOrg(DEMO_ORG.id, { now: new Date(armedAt) });
+      expect(armed.filter((r) => r.employeeId === employeeId).map((r) => r.stage)).toEqual(["armed"]);
+      expect(calls.filter((c) => c.url.startsWith(p.api)).length).toBe(0);
+      // No follow-up wake within the escalation window → the one human notice.
+      const first = await processMcpNotConnectedWatchForOrg(DEMO_ORG.id, { now: new Date(armedAt + MCP_RECONNECT_ESCALATE_MS + 60_000) });
       const mine = first.filter((r) => r.employeeId === employeeId);
       expect(mine.length).toBe(1);
       expect(mine[0].notified).toBe(true);
@@ -393,7 +402,7 @@ describe("not-connected next step reaches Slack / LINE / Telegram mouths alike",
       expect(notify?.metadata?.mouthDelivered).toBe(true);
 
       calls = [];
-      const second = await processMcpNotConnectedWatchForOrg(DEMO_ORG.id);
+      const second = await processMcpNotConnectedWatchForOrg(DEMO_ORG.id, { now: new Date(armedAt + 2 * MCP_RECONNECT_ESCALATE_MS) });
       expect(second.filter((r) => r.employeeId === employeeId).length).toBe(0);
       expect(calls.filter((c) => c.url.startsWith(p.api)).length).toBe(0);
     });

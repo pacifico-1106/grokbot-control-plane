@@ -7,8 +7,11 @@
  *     channel / user-token IM / bot mention / internal IM, and approval.resolved
  *     callbacks + machine e-mail from Slack / LINE / Telegram / Web / proxy);
  *  2. records the "bot actually reached Staffpass MCP" signal (`mcp.client_seen`);
- *  3. detects "woken but never connected" and tells a human the next step through
- *     the org's configured notification mouth (Slack / LINE / Telegram alike).
+ *  3. detects "woken but never connected": first arms a stronger reconnect prompt on
+ *     the employee's NEXT wake (no human, no re-wake); only if that also fails, tells a
+ *     human ONE action through the org's notification mouth (Slack / LINE / Telegram alike);
+ *  4. brands every wake body (McpHandoffWakeBody) so the shared sender
+ *     (lib/mcp/wake-delivery.ts) refuses anything that skipped withMcpHandoff().
  *
  * Channel code only passes its surface name. Flag: MCP_ENDPOINT_HANDOFF_ENABLED
  * (default OFF → every function here is a no-op / identity).
@@ -17,6 +20,7 @@
  * Never includes secrets (badge, wake secret, status tokens, signed URLs, tokens).
  */
 import {
+  MCP_HANDOFF_SCHEMA,
   SURFACE_LABEL_JA,
   buildMcpHandoff,
   isMcpHandoffSurface,
@@ -91,6 +95,114 @@ export type McpWakeContext = {
   trigger: string;
 };
 
+/**
+ * Brand: only withMcpHandoff() can produce this type (the symbol is not exported and
+ * has no runtime value). deliverAgentWake() only accepts it, so a new channel wake that
+ * skips the wrapper fails `tsc` / `next build`.
+ */
+declare const MCP_HANDOFF_WAKE: unique symbol;
+export type McpHandoffWakeBody<T extends object> = T & { mcpHandoff?: McpHandoff } & {
+  readonly [MCP_HANDOFF_WAKE]: true;
+};
+
+/** Runtime half of the brand (casts cannot forge membership). */
+const HANDED_OFF_WAKES = new WeakSet<object>();
+
+/** True only for the exact object returned by withMcpHandoff(). */
+export function isHandedOffWake(body: unknown): boolean {
+  return typeof body === "object" && body !== null && HANDED_OFF_WAKES.has(body);
+}
+
+function brand<T extends object>(body: T): McpHandoffWakeBody<T> {
+  HANDED_OFF_WAKES.add(body);
+  return body as McpHandoffWakeBody<T>;
+}
+
+/** Stage-1 "reconnect prompt armed" audit (nobody notified, nothing re-woken). */
+export const MCP_RECONNECT_ARMED_ACTION = "mcp_handoff.reconnect_armed" as const;
+/** Fallback: no further wake within this window after arming → the one human notice. */
+export const MCP_RECONNECT_ESCALATE_MS = 60 * 60_000;
+
+export type NotConnectedNotice = {
+  headline: string;
+  action: string;
+  copyLine: string;
+  footer: string;
+};
+export type NoticeFormat = "slack" | "telegram" | "line" | "plain";
+
+export type McpNotConnectedVia = "reconnect_wake" | "no_followup_wake";
+
+function plainName(raw: string): string {
+  return raw.replace(/[<>&]/g, "").slice(0, 80);
+}
+
+function plainId(raw: string): string {
+  return raw.replace(/[^A-Za-z0-9_.:-]/g, "").slice(0, 80);
+}
+
+/**
+ * The human notice (last resort): exactly ONE thing to do — paste one line into this
+ * employee's AI agent chat. Agent-neutral wording (Staffpass works with any MCP-capable agent;
+ * 木村 decision 5). The line is secret-free (endpoint URL + whoami check only).
+ * Same wording on every channel; renderNotConnectedNotice() only escapes.
+ */
+export function buildNotConnectedNotice(input: {
+  employeeId: string;
+  displayName?: string | null;
+  surface: McpHandoffSurface;
+  minutesSinceWake: number;
+  via?: McpNotConnectedVia;
+  env?: Env;
+}): NotConnectedNotice {
+  const url = resolveMcpEndpointUrl(input.env ?? process.env);
+  const employeeId = plainId(input.employeeId);
+  const name = plainName(input.displayName || employeeId);
+  const minutes = Math.max(0, Math.floor(input.minutesSinceWake));
+  const surface = SURFACE_LABEL_JA[input.surface];
+  const why =
+    input.via === "reconnect_wake"
+      ? `${surface} から起こしてから ${minutes} 分、接続を促す合図付きで起こしても社員証での呼び出しがありません`
+      : `${surface} から起こした後、社員証での呼び出しが一度もありません（${minutes} 分経過）`;
+  return {
+    headline: `⚠️ Staffpass: AI社員「${name}」の AI エージェントが Staffpass MCP に接続していません。${why}。`,
+    action: `やることは 1 つです。この社員（${name}）の AI エージェントのチャットに、次の 1 行をそのまま送ってください。`,
+    copyLine: `Staffpass MCP に接続して: MCP サーバー（コネクタ）に ${url} を追加し（Streamable HTTP、認証は発行済みの社員証を Authorization: Bearer で設定）、staffpass_whoami を呼んで employeeId=${employeeId} が返ることを確認して。`,
+    footer: "この通知は同じ AI 社員につき 24 時間に 1 回までです。Staffpass が自動で起こし直すことはありません。",
+  };
+}
+
+function escapeSlack(value: string): string {
+  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function escapeTelegram(value: string): string {
+  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+/** Same text everywhere; only escaping / the copyable wrapper differs per channel. */
+export function renderNotConnectedNotice(notice: NotConnectedNotice, format: NoticeFormat): string {
+  const { headline, action, copyLine, footer } = notice;
+  if (format === "slack") {
+    return [escapeSlack(headline), escapeSlack(action), "```\n" + escapeSlack(copyLine) + "\n```", escapeSlack(footer)].join("\n");
+  }
+  if (format === "telegram") {
+    return [escapeTelegram(headline), escapeTelegram(action), `<code>${escapeTelegram(copyLine)}</code>`, escapeTelegram(footer)].join("\n");
+  }
+  // LINE / plain: no markup.
+  return [headline, action, copyLine, footer].join("\n");
+}
+
+/** Machine e-mail lines (flag OFF → []). Same values as before; owned here. */
+export function mcpHandoffMachineLines(): string[] {
+  if (!isMcpEndpointHandoffEnabled()) return [];
+  return [
+    `mcpEndpoint=${resolveMcpEndpointUrl()}`,
+    "mcpConnectivityCheck=staffpass_whoami",
+    `mcpHandoffSchema=${MCP_HANDOFF_SCHEMA}`,
+  ];
+}
+
 export type McpSeenCredential = {
   employeeId: string;
   orgId: string;
@@ -117,6 +229,13 @@ function ts(event: AuditEvent): number {
   return Number.isFinite(t) ? t : 0;
 }
 
+/** Arm time = the watcher clock that armed it (metadata.armedAt), else the row time. */
+function armTs(event: AuditEvent): number {
+  const raw = event.metadata?.armedAt;
+  const t = typeof raw === "string" ? new Date(raw).getTime() : NaN;
+  return Number.isFinite(t) ? t : ts(event);
+}
+
 /** Anything the employee's own credential did (MCP or Gateway). */
 export function isEmployeeCredentialActivity(event: AuditEvent, employeeId: string): boolean {
   if (!employeeId || event.employeeId !== employeeId) return false;
@@ -130,11 +249,18 @@ export function isEmployeeCredentialActivity(event: AuditEvent, employeeId: stri
 /**
  * Connection state for the wake payload. Fail-safe: any error / timeout → unknown.
  */
+export type McpConnectionState = {
+  status: McpConnectionStatus;
+  lastSeenAt: string | null;
+  /** A reconnect arm / notice (last 24h) is newer than the last MCP activity → stronger prompt. */
+  reconnectRequired: boolean;
+};
+
 export async function getMcpConnectionState(
   orgId: string,
   employeeId: string
-): Promise<{ status: McpConnectionStatus; lastSeenAt: string | null }> {
-  const unknown = { status: "unknown" as const, lastSeenAt: null };
+): Promise<McpConnectionState> {
+  const unknown = { status: "unknown" as const, lastSeenAt: null, reconnectRequired: false };
   if (!orgId || !employeeId) return unknown;
   const events = await withTimeout(
     listEmployeeAuditEvents(orgId, employeeId, 200).then((rows) => rows as AuditEvent[] | null),
@@ -144,17 +270,28 @@ export async function getMcpConnectionState(
   if (!events) return unknown;
   let lastSeen = 0;
   let lastNotify = 0;
+  let lastArm = 0;
   for (const e of events) {
     const t = ts(e);
     if (isEmployeeCredentialActivity(e, employeeId)) lastSeen = Math.max(lastSeen, t);
     if (e.action === MCP_NOT_CONNECTED_NOTIFY_ACTION && e.employeeId === employeeId) {
       lastNotify = Math.max(lastNotify, t);
     }
+    if (
+      e.action === MCP_RECONNECT_ARMED_ACTION &&
+      e.employeeId === employeeId &&
+      Date.now() - t <= MCP_NOT_CONNECTED_COOLDOWN_MS
+    ) {
+      lastArm = Math.max(lastArm, t, armTs(e));
+    }
   }
   const lastSeenAt = lastSeen ? new Date(lastSeen).toISOString() : null;
-  if (lastNotify && lastNotify > lastSeen) return { status: "not_connected_suspected", lastSeenAt };
-  if (lastSeen) return { status: "seen", lastSeenAt };
-  return { status: "not_seen", lastSeenAt: null };
+  const lastSignal = Math.max(lastNotify, lastArm);
+  if (lastSignal && lastSignal > lastSeen) {
+    return { status: "not_connected_suspected", lastSeenAt, reconnectRequired: true };
+  }
+  if (lastSeen) return { status: "seen", lastSeenAt, reconnectRequired: false };
+  return { status: "not_seen", lastSeenAt: null, reconnectRequired: false };
 }
 
 /**
@@ -164,30 +301,36 @@ export async function getMcpConnectionState(
 export async function withMcpHandoff<T extends object>(
   payload: T,
   ctx: McpWakeContext
-): Promise<T & { mcpHandoff?: McpHandoff }> {
-  if (!isMcpEndpointHandoffEnabled()) return payload;
+): Promise<McpHandoffWakeBody<T>> {
+  if (!isMcpEndpointHandoffEnabled()) return brand(payload);
   try {
-    const connection = await getMcpConnectionState(ctx.orgId, ctx.employeeId);
-    return {
+    const { status, lastSeenAt, reconnectRequired } = await getMcpConnectionState(ctx.orgId, ctx.employeeId);
+    return brand({
       ...payload,
       mcpHandoff: buildMcpHandoff({
         employeeId: ctx.employeeId,
         wake: { surface: ctx.surface, kind: ctx.kind, trigger: ctx.trigger },
-        connection,
+        connection: { status, lastSeenAt },
+        reconnectRequired,
       }),
-    };
+    });
   } catch {
     // Never block a wake because of the handoff block.
-    return payload;
+    return brand(payload);
   }
 }
 
-/** Audit metadata to mark a wake that carried the handoff block. */
+/** Audit metadata to mark a wake that carried the handoff block (and the reconnect prompt). */
 export function mcpHandoffWakeAuditMeta(
   body: { mcpHandoff?: McpHandoff },
   surface: McpHandoffSurface
 ): Record<string, unknown> {
-  return body.mcpHandoff ? { mcpHandoff: true, surface } : {};
+  if (!body.mcpHandoff) return {};
+  return {
+    mcpHandoff: true,
+    surface,
+    ...(body.mcpHandoff.reconnectRequired ? { mcpReconnectRequired: true } : {}),
+  };
 }
 
 const seenThrottle = new Map<string, number>();
@@ -219,7 +362,7 @@ export async function recordMcpClientSeen(
     credentialId: cred.credentialId,
     action: MCP_CLIENT_SEEN_ACTION,
     purpose: "mcp",
-    summary: "Grok Bot が社員証で Staffpass MCP に接続",
+    summary: "AI エージェントが社員証で Staffpass MCP に接続",
     metadata: {
       method,
       ...(tool ? { tool: tool.slice(0, 64) } : {}),
@@ -295,37 +438,29 @@ export function evaluateMcpNotConnected(input: {
   return { eligible: true, itemId };
 }
 
-function plainName(raw: string): string {
-  return raw.replace(/[<>&]/g, "").slice(0, 80);
-}
-
+/** Plain-text notice (kept for callers of the #254 API). */
 export function buildNotConnectedNextStepJa(input: {
   employeeId: string;
   displayName?: string | null;
   surface: McpHandoffSurface;
   minutesSinceWake: number;
+  via?: McpNotConnectedVia;
   env?: Env;
 }): string {
-  const url = resolveMcpEndpointUrl(input.env ?? process.env);
-  const name = plainName(input.displayName || input.employeeId);
-  return [
-    `⚠️ Staffpass: AI社員「${name}」の Grok Bot が Staffpass MCP に接続していません`,
-    `${SURFACE_LABEL_JA[input.surface]} から起こしてから ${Math.floor(input.minutesSinceWake)} 分、社員証での Staffpass 呼び出しが一度もありません（返信 comm.reply もできません）。社員証の鍵ではなく、MCP の接続先が未設定の可能性が高いです。`,
-    "次の一手:",
-    `1. Grok Bot の MCP（コネクタ）設定に ${url} を追加（Streamable HTTP）`,
-    "2. 認証ヘッダー Authorization: Bearer に発行済みの社員証（gb_emp_…）を設定（チャットに貼らない）",
-    `3. Grok Bot で staffpass_whoami を実行し employeeId=${input.employeeId} が返ることを確認`,
-    `employeeId=${input.employeeId}`,
-    "この通知は同じ AI 社員につき 24 時間に 1 回までです。Staffpass が自動で起こし直すことはありません。",
-  ].join("\n");
+  return renderNotConnectedNotice(buildNotConnectedNotice(input), "plain");
 }
+
+export type McpNotConnectedStage = "armed" | "notified";
 
 export type McpNotConnectedResult = {
   ok: boolean;
   employeeId: string;
   itemId: string;
   surface: McpHandoffSurface;
+  /** armed = reconnect prompt queued for the next wake (nobody told); notified = the one human notice. */
+  stage: McpNotConnectedStage;
   notified: boolean;
+  via?: McpNotConnectedVia;
   reason?: string;
 };
 
@@ -343,6 +478,100 @@ async function resolveNotifyChannelId(
   return channels.find((c) => c.isDefault)?.id ?? null;
 }
 
+type WakeFacts = {
+  itemId: string;
+  wakeAuditId: string | null;
+  wakeAction: string | null;
+  surface: McpHandoffSurface;
+  wakeAt: number;
+};
+
+export type McpEscalationDecision =
+  | { kind: "arm"; facts: WakeFacts }
+  | { kind: "notify"; via: McpNotConnectedVia; facts: WakeFacts; armAuditId: string }
+  | { kind: "wait" | "skip"; reason: string };
+
+function wakeFacts(wake: AuditEvent, itemId: string): WakeFacts {
+  return { itemId, wakeAuditId: wake.id, wakeAction: wake.action, surface: wakeSurface(wake), wakeAt: ts(wake) };
+}
+
+function armFacts(arm: AuditEvent): WakeFacts {
+  const m = arm.metadata || {};
+  const wakeAt = typeof m.wakeAt === "string" ? new Date(m.wakeAt).getTime() : NaN;
+  return {
+    itemId: typeof m.itemId === "string" ? m.itemId : `mcp_nc:${arm.employeeId || "-"}:${arm.id}`,
+    wakeAuditId: typeof m.wakeAuditId === "string" ? m.wakeAuditId : null,
+    wakeAction: typeof m.wakeAction === "string" ? m.wakeAction : null,
+    surface: isMcpHandoffSurface(m.surface) ? m.surface : "web",
+    wakeAt: Number.isFinite(wakeAt) ? wakeAt : armTs(arm),
+  };
+}
+
+/**
+ * Pure escalation ladder for ONE employee (bounded, never re-wakes):
+ *  - a notice in the last 24h → skip (one notice per 24h, unchanged);
+ *  - no valid arm (arm newer than the last MCP activity, < 24h old) → arm on the latest
+ *    eligible wake (stage 1: the NEXT wake carries reconnectRequired; nobody is told);
+ *  - armed + a delivered reconnect wake that is also ≥10 min silent → notify (reconnect_wake);
+ *  - armed + a reconnect wake still inside its 10 minutes → wait;
+ *  - armed + no reconnect wake for MCP_RECONNECT_ESCALATE_MS → notify (no_followup_wake).
+ * `wakes` = this employee's handoff wakes; `audits` = org audits incl. arms / notices.
+ */
+export function decideMcpNotConnectedStage(input: {
+  employeeId: string;
+  wakes: AuditEvent[];
+  audits: AuditEvent[];
+  now: Date;
+  complete: boolean;
+}): McpEscalationDecision {
+  const { employeeId, audits, complete } = input;
+  const now = input.now.getTime();
+  const mine = (a: AuditEvent) => a.employeeId === employeeId;
+  if (audits.some((a) => mine(a) && a.action === MCP_NOT_CONNECTED_NOTIFY_ACTION && now - ts(a) < MCP_NOT_CONNECTED_COOLDOWN_MS)) {
+    return { kind: "skip", reason: "cooldown" };
+  }
+  let lastActivity = 0;
+  for (const a of audits) if (isEmployeeCredentialActivity(a, employeeId)) lastActivity = Math.max(lastActivity, ts(a));
+  const arm = audits
+    .filter(
+      (a) =>
+        mine(a) &&
+        a.action === MCP_RECONNECT_ARMED_ACTION &&
+        now - armTs(a) <= MCP_NOT_CONNECTED_MAX_WAKE_AGE_MS &&
+        armTs(a) > lastActivity
+    )
+    .sort((a, b) => armTs(b) - armTs(a))[0];
+  const wakes = [...input.wakes].sort((a, b) => ts(a) - ts(b));
+
+  if (!arm) {
+    for (const wake of [...wakes].reverse()) {
+      const verdict = evaluateMcpNotConnected({ wake, audits, now: input.now, complete });
+      if (verdict.eligible) return { kind: "arm", facts: wakeFacts(wake, verdict.itemId) };
+    }
+    return { kind: "skip", reason: "no_eligible_wake" };
+  }
+
+  const armAt = armTs(arm);
+  const reconnectWakes = wakes.filter(
+    (w) => w.metadata?.mcpReconnectRequired === true && w.metadata?.reason === "woke" && ts(w) >= armAt
+  );
+  if (reconnectWakes.length) {
+    for (const wake of reconnectWakes) {
+      const verdict = evaluateMcpNotConnected({ wake, audits, now: input.now, complete });
+      if (verdict.eligible) {
+        return { kind: "notify", via: "reconnect_wake", facts: wakeFacts(wake, verdict.itemId), armAuditId: arm.id };
+      }
+    }
+    return { kind: "wait", reason: "reconnect_wake_pending" };
+  }
+  if (now - armAt < MCP_RECONNECT_ESCALATE_MS) return { kind: "wait", reason: "armed_waiting_for_next_wake" };
+  // Fail-safe: a truncated history that does not reach back before the arm → do not notify.
+  if (!complete && !audits.some((a) => ts(a) <= armAt - MCP_ACTIVITY_LOOKBEHIND_MS)) {
+    return { kind: "skip", reason: "insufficient_history" };
+  }
+  return { kind: "notify", via: "no_followup_wake", facts: armFacts(arm), armAuditId: arm.id };
+}
+
 export async function processMcpNotConnectedWatchForOrg(
   orgId: string,
   opts?: { now?: Date }
@@ -351,20 +580,30 @@ export async function processMcpNotConnectedWatchForOrg(
   const now = opts?.now ?? new Date();
   const recent = await listAuditEventsForStuckWatch(orgId, WATCH_AUDIT_LIMIT);
   const complete = recent.length < WATCH_AUDIT_LIMIT;
-  const priorNotices = await listAuditEventsByActionSince(
-    orgId,
-    MCP_NOT_CONNECTED_NOTIFY_ACTION,
-    new Date(now.getTime() - MCP_NOT_CONNECTED_COOLDOWN_MS).toISOString()
-  ).catch(() => [] as AuditEvent[]);
+  const sinceIso = new Date(now.getTime() - MCP_NOT_CONNECTED_COOLDOWN_MS).toISOString();
+  const [priorNotices, priorArms] = await Promise.all([
+    listAuditEventsByActionSince(orgId, MCP_NOT_CONNECTED_NOTIFY_ACTION, sinceIso).catch(() => [] as AuditEvent[]),
+    listAuditEventsByActionSince(orgId, MCP_RECONNECT_ARMED_ACTION, sinceIso).catch(() => [] as AuditEvent[]),
+  ]);
   const seenIds = new Set(recent.map((a) => a.id));
-  const audits = [...recent, ...priorNotices.filter((a) => !seenIds.has(a.id))];
+  const audits = [...recent];
+  for (const a of [...priorNotices, ...priorArms]) {
+    if (!seenIds.has(a.id)) {
+      seenIds.add(a.id);
+      audits.push(a);
+    }
+  }
 
   const wakes = recent
     .filter((a) => a.orgId === orgId && isMcpHandoffWakeAudit(a))
     .sort((a, b) => ts(a) - ts(b));
-  const handled = new Set<string>();
+  const employeeIds: string[] = [];
+  for (const a of [...wakes, ...audits.filter((x) => x.action === MCP_RECONNECT_ARMED_ACTION && x.orgId === orgId)]) {
+    const id = a.employeeId || "";
+    if (id && !employeeIds.includes(id)) employeeIds.push(id);
+  }
   const results: McpNotConnectedResult[] = [];
-  if (!wakes.length) return results;
+  if (!employeeIds.length) return results;
 
   const [{ getEmployee }, { getOrgStuckWatchPolicy }, { notifyStuckWatchMouth }] = await Promise.all([
     import("@/lib/data/employees"),
@@ -373,30 +612,72 @@ export async function processMcpNotConnectedWatchForOrg(
   ]);
   const policy = await getOrgStuckWatchPolicy(orgId);
 
-  for (const wake of wakes) {
-    const employeeId = wake.employeeId || "";
-    if (!employeeId || handled.has(employeeId)) continue;
-    const verdict = evaluateMcpNotConnected({ wake, audits, now, complete });
-    if (!verdict.eligible) continue;
-    handled.add(employeeId);
+  for (const employeeId of employeeIds) {
+    const decision = decideMcpNotConnectedStage({
+      employeeId,
+      wakes: wakes.filter((w) => w.employeeId === employeeId),
+      audits,
+      now,
+      complete,
+    });
+    if (decision.kind !== "arm" && decision.kind !== "notify") continue;
     // Tenant isolation: the employee must belong to this org.
     const employee = await getEmployee(employeeId, orgId).catch(() => null);
     if (!employee || (employee.orgId && employee.orgId !== orgId)) continue;
+    const { facts } = decision;
+    const minutesSinceWake = Math.max(0, (now.getTime() - facts.wakeAt) / 60_000);
 
-    const surface = wakeSurface(wake);
-    const minutesSinceWake = (now.getTime() - ts(wake)) / 60_000;
-    const message = buildNotConnectedNextStepJa({
+    if (decision.kind === "arm") {
+      // Stage 1: nobody is told, nothing is re-woken. The next natural wake (any channel)
+      // carries reconnectRequired + the stronger prompt (getMcpConnectionState).
+      const arm = {
+        orgId,
+        employeeId,
+        credentialId: null,
+        action: MCP_RECONNECT_ARMED_ACTION,
+        purpose: "mcp_handoff",
+        summary: `MCP 未接続の疑い: 次の起動時に接続の再確認を促す（${SURFACE_LABEL_JA[facts.surface]} wake 後 ${Math.floor(minutesSinceWake)} 分活動なし）`,
+        metadata: {
+          itemId: facts.itemId,
+          kind: "mcp_not_connected",
+          stage: "armed",
+          armedAt: now.toISOString(),
+          wakeAuditId: facts.wakeAuditId,
+          wakeAction: facts.wakeAction,
+          wakeAt: new Date(facts.wakeAt).toISOString(),
+          surface: facts.surface,
+          minutesSinceWake,
+          nextAction: "reconnect_prompt_on_next_wake",
+        },
+      };
+      await appendAuditEvent(arm).catch(() => undefined);
+      audits.push({ ...arm, id: `local_arm_${facts.itemId}`, createdAt: now.toISOString() } as AuditEvent);
+      results.push({ ok: true, employeeId, itemId: facts.itemId, surface: facts.surface, stage: "armed", notified: false });
+      continue;
+    }
+
+    // Stage 2 (last resort): ONE notice with exactly one action, same text on every mouth.
+    const notice = buildNotConnectedNotice({
       employeeId,
       displayName: employee.displayName,
-      surface,
+      surface: facts.surface,
       minutesSinceWake,
+      via: decision.via,
     });
+    const plain = renderNotConnectedNotice(notice, "plain");
     const channelId = await resolveNotifyChannelId(orgId, policy.notifyMouth, employee.approvalChannelId);
     const mouth = channelId
-      ? await notifyStuckWatchMouth(orgId, { ...policy, notifyMouth: channelId }, message, {
-          itemId: verdict.itemId,
-          kind: "mcp_not_connected",
-        }).catch((error: unknown) => ({
+      ? await notifyStuckWatchMouth(
+          orgId,
+          { ...policy, notifyMouth: channelId },
+          plain,
+          { itemId: facts.itemId, kind: "mcp_not_connected" },
+          {
+            slack: renderNotConnectedNotice(notice, "slack"),
+            line: renderNotConnectedNotice(notice, "line"),
+            telegram: renderNotConnectedNotice(notice, "telegram"),
+          }
+        ).catch((error: unknown) => ({
           ok: false,
           skipped: false,
           error: error instanceof Error ? error.message : "notify_failed",
@@ -404,33 +685,44 @@ export async function processMcpNotConnectedWatchForOrg(
       : { ok: true, skipped: true, reason: "no_human_channel" };
     const delivered = mouth.ok && !mouth.skipped;
 
-    const notice = {
+    const row = {
       orgId,
       employeeId,
       credentialId: null,
       action: MCP_NOT_CONNECTED_NOTIFY_ACTION,
       purpose: "mcp_handoff",
-      summary: `MCP 未接続の可能性（${SURFACE_LABEL_JA[surface]} wake 後 ${Math.floor(minutesSinceWake)} 分活動なし）`,
+      summary: `MCP 未接続の可能性（${SURFACE_LABEL_JA[facts.surface]} wake 後 ${Math.floor(minutesSinceWake)} 分活動なし）`,
       metadata: {
-        itemId: verdict.itemId,
+        itemId: facts.itemId,
         kind: "mcp_not_connected",
-        wakeAuditId: wake.id,
-        wakeAction: wake.action,
-        surface,
+        stage: "notified",
+        via: decision.via,
+        armAuditId: decision.armAuditId,
+        wakeAuditId: facts.wakeAuditId,
+        wakeAction: facts.wakeAction,
+        surface: facts.surface,
         minutesSinceWake,
         notifyChannelId: channelId,
         mouthDelivered: delivered,
         mouthSkipped: mouth.skipped === true,
         mouthError: "error" in mouth ? mouth.error : undefined,
         mcpEndpointUrl: resolveMcpEndpointUrl(),
-        nextAction: "register_mcp_endpoint",
+        nextAction: "send_one_line_to_main_bot",
       },
     };
-    await appendAuditEvent(notice).catch(() => undefined);
-    // Keep the in-memory view consistent for later wakes in this run.
-    audits.push({ ...notice, id: `local_${verdict.itemId}`, createdAt: now.toISOString() } as AuditEvent);
+    await appendAuditEvent(row).catch(() => undefined);
+    // Keep the in-memory view consistent for the rest of this run.
+    audits.push({ ...row, id: `local_${facts.itemId}`, createdAt: now.toISOString() } as AuditEvent);
 
-    results.push({ ok: true, employeeId, itemId: verdict.itemId, surface, notified: delivered });
+    results.push({
+      ok: true,
+      employeeId,
+      itemId: facts.itemId,
+      surface: facts.surface,
+      stage: "notified",
+      via: decision.via,
+      notified: delivered,
+    });
   }
   return results;
 }

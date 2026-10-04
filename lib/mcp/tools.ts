@@ -786,10 +786,10 @@ export async function callStaffpassMcpTool(
           : null,
         mcpEndpoint: "/api/mcp",
         gatewayEndpoint: "/api/gateway/invoke",
-        // MCP endpoint handoff ON: origin from app config (no hardcode) + absolute URL.
-        ...(isMcpEndpointHandoffEnabled()
-          ? { publicOrigin: resolveAppOrigin(), mcpEndpointUrl: resolveMcpEndpointUrl() }
-          : { publicOrigin: "https://staffpass.sealith.com" }),
+        // Origin always from app config (resolveAppOrigin; production with the env unset
+        // = the canonical host, as before). Handoff ON adds the absolute endpoint URL.
+        publicOrigin: resolveAppOrigin(),
+        ...(isMcpEndpointHandoffEnabled() ? { mcpEndpointUrl: resolveMcpEndpointUrl() } : {}),
       });
     }
     case "staffpass_stuck_list": {

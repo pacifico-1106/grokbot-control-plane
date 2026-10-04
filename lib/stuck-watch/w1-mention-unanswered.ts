@@ -367,6 +367,9 @@ export async function processW1MentionWatchForOrg(
   const { resolvedItemIds, notifiedItemIds } = stuckWatchStateFromAudits(audits);
   const now = new Date();
   const results: W1NotifyResult[] = [];
+  // One notice per item per run even if the same channel/ts was woken twice
+  // (e.g. a mention wake and a user-token channel wake for the same message).
+  const handledThisRun = new Set<string>();
 
   for (const wake of audits) {
     if (!isMentionWakeAudit(wake)) continue;
@@ -380,6 +383,8 @@ export async function processW1MentionWatchForOrg(
       notifiedItemIds,
     });
     if (!eligibility.eligible) continue;
+    if (handledThisRun.has(eligibility.itemId)) continue;
+    handledThisRun.add(eligibility.itemId);
     results.push(await runW1MentionNotify(wake, policy));
   }
 

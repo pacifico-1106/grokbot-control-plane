@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import { CopyableValue } from "@/components/CopyableValue";
-import { STAFFPASS_ADMIN_MCP_URL } from "@/lib/mcp/admin-public";
 import { CREDENTIAL_ADMIN_REQUIRED_MESSAGE_JA } from "@/lib/team/rbac";
 
 export function AdminMcpConnect({
@@ -10,12 +9,15 @@ export function AdminMcpConnect({
   grokBotAgentId,
   embedded = false,
   canIssue = true,
+  adminMcpUrl,
 }: {
   connected: boolean;
   grokBotAgentId: string | null;
   embedded?: boolean;
   /** owner/admin + hire_issue_credentials (server is authoritative). */
   canIssue?: boolean;
+  /** Absolute admin MCP URL, resolved server-side from app origin config (staffpassAdminMcpUrl()). */
+  adminMcpUrl: string;
 }) {
   const [busy, setBusy] = useState(false);
   const [secret, setSecret] = useState<string | null>(null);
@@ -74,7 +76,7 @@ export function AdminMcpConnect({
       )}
       <div>
         <p className="text-xs muted mb-1.5">管理MCP URL</p>
-        <CopyableValue value={STAFFPASS_ADMIN_MCP_URL} />
+        <CopyableValue value={adminMcpUrl} />
       </div>
       <p className="text-xs muted">
         認証は <code className="text-[11px]">Authorization: Bearer gb_adm_…</code>

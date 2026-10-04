@@ -16,11 +16,15 @@ export type NotifyMouthResult = {
   error?: string;
 };
 
+/** Optional per-provider rendering of the SAME text (only escaping differs). */
+export type NotifyMouthFormatted = Partial<Record<"slack" | "line" | "telegram", string>>;
+
 export async function notifyStuckWatchMouth(
   orgId: string,
   policy: OrgStuckWatchPolicy,
   message: string,
-  metadata: Record<string, unknown>
+  metadata: Record<string, unknown>,
+  formatted?: NotifyMouthFormatted
 ): Promise<NotifyMouthResult> {
   const mouth = (policy.notifyMouth || "").trim();
   if (!mouth) {
@@ -47,12 +51,16 @@ export async function notifyStuckWatchMouth(
     };
   }
 
+  const text =
+    (channel.provider === "telegram" || channel.provider === "line" || channel.provider === "slack"
+      ? formatted?.[channel.provider]
+      : undefined) ?? message;
   const sent =
     channel.provider === "telegram"
-      ? await sendTelegramTextToChannel(channel, message)
+      ? await sendTelegramTextToChannel(channel, text)
       : channel.provider === "line"
-        ? await sendLineText(channel, message)
-        : await sendSlackTextToChannel(channel, message);
+        ? await sendLineText(channel, text)
+        : await sendSlackTextToChannel(channel, text);
 
   if (!sent.ok) {
     await appendAuditEvent({

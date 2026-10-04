@@ -7,15 +7,16 @@ import { deliverAuthorityDecision } from "@/lib/commerce/authority-events";
 import { appendAuditEvent } from "@/lib/data/audit";
 import { isConfigChangeApproval } from "@/lib/config-change-request/core";
 import { recordConfigChangeResolution } from "@/lib/config-change-request/service";
-import { isDecisionWorkflowEnabled, isMcpEndpointHandoffEnabled } from "@/lib/feature-flags";
+import { isDecisionWorkflowEnabled } from "@/lib/feature-flags";
 import {
   APPROVAL_WAKE_ACTION,
-  MCP_HANDOFF_SCHEMA,
   isMcpHandoffSurface,
-  resolveMcpEndpointUrl,
+  mcpHandoffMachineLines,
+  mcpHandoffWakeAuditMeta,
   withMcpHandoff,
   type McpHandoffSurface,
 } from "@/lib/mcp/endpoint-handoff";
+import { deliverAgentWake } from "@/lib/mcp/wake-delivery";
 import { isDecisionRequest } from "@/lib/decision-workflow/notify";
 import {
   recordDecisionResult,
@@ -82,13 +83,8 @@ function buildApprovalMachineBody(
       : []),
     `revisionCount=${approval.revisionCount}`,
     `summary=${approval.summary.replace(/\n/g, " | ")}`,
-    ...(isMcpEndpointHandoffEnabled()
-      ? [
-          `mcpEndpoint=${resolveMcpEndpointUrl()}`,
-          "mcpConnectivityCheck=staffpass_whoami",
-          `mcpHandoffSchema=${MCP_HANDOFF_SCHEMA}`,
-        ]
-      : []),
+    // Flag OFF → no lines. Owned by the shared handoff module (same values as before).
+    ...mcpHandoffMachineLines(),
   ].join("\n");
 }
 
@@ -170,7 +166,7 @@ export async function runApprovalResolveSideEffects(opts: {
   };
   const callbackUrl = employee?.callbackUrl?.trim();
   let handoffSurface: McpHandoffSurface = "web";
-  let handoffAttached = false;
+  let handoffAuditMeta: Record<string, unknown> = {};
   if (callbackUrl) {
     try {
       const basePayload = {
@@ -202,15 +198,16 @@ export async function runApprovalResolveSideEffects(opts: {
         kind: "approval_resolved",
         trigger: statusLabel,
       });
-      handoffAttached = Boolean(payload.mcpHandoff);
-      const res = await fetch(callbackUrl, {
-        method: "POST",
+      handoffAuditMeta = mcpHandoffWakeAuditMeta(payload, handoffSurface);
+      // Shared sender: refuses any body that did not come out of withMcpHandoff().
+      const res = await deliverAgentWake({
+        url: callbackUrl,
+        body: payload,
         headers: {
           "content-type": "application/json",
           "user-agent": "Staffpass-ApprovalHook/1.0",
         },
-        body: JSON.stringify(payload),
-        signal: AbortSignal.timeout(4000),
+        timeoutMs: 4000,
       });
       callback = { ok: res.ok, status: res.status, skipped: false };
     } catch (e) {
@@ -220,7 +217,7 @@ export async function runApprovalResolveSideEffects(opts: {
         error: e instanceof Error ? e.message : "callback_failed",
       };
     }
-    if (handoffAttached) {
+    if (handoffAuditMeta.mcpHandoff === true) {
       // Wake audit for the shared not-connected watcher (only when the block was sent).
       await appendAuditEvent({
         orgId: approval.orgId,
@@ -236,8 +233,7 @@ export async function runApprovalResolveSideEffects(opts: {
           status: callback.status,
           approvalId: approval.id,
           decision: statusLabel,
-          surface: handoffSurface,
-          mcpHandoff: true,
+          ...handoffAuditMeta,
         },
       }).catch(() => undefined);
     }

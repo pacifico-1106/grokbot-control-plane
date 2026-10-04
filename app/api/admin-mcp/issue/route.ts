@@ -3,7 +3,7 @@ import { getCurrentOrgId } from "@/lib/auth/session";
 import { requireCredentialAdmin } from "@/lib/auth/require-credential-admin";
 import { appendAuditEvent } from "@/lib/data";
 import { adminAgentPublicView, issueOrgAdminAgent, mintAdminSecret } from "@/lib/data/admin-agents";
-import { ADMIN_CREDENTIAL_PREFIX, STAFFPASS_ADMIN_MCP_URL } from "@/lib/mcp/admin-public";
+import { ADMIN_CREDENTIAL_PREFIX, staffpassAdminMcpUrl } from "@/lib/mcp/admin-public";
 
 export const runtime = "nodejs";
 
@@ -49,7 +49,7 @@ export async function POST(req: Request) {
   return NextResponse.json({
     ok: true,
     agent: adminAgentPublicView(agent),
-    mcpUrl: STAFFPASS_ADMIN_MCP_URL,
+    mcpUrl: staffpassAdminMcpUrl(),
     auth: {
       type: "bearer",
       scheme: `Authorization: Bearer ${ADMIN_CREDENTIAL_PREFIX}…`,

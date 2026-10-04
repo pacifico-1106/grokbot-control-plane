@@ -21,6 +21,7 @@
  */
 
 import { mcpHandoffWakeAuditMeta, withMcpHandoff, type McpHandoff } from "@/lib/mcp/endpoint-handoff";
+import { deliverAgentWake } from "@/lib/mcp/wake-delivery";
 import { appendAuditEvent } from "@/lib/data/audit";
 import { getEffectiveIngressHandoffPolicy } from "@/lib/data/ingress-handoff";
 import { getOrgChannel } from "@/lib/data/directory";
@@ -498,12 +499,8 @@ async function postWake(
   });
   const handoffAuditMeta = mcpHandoffWakeAuditMeta(wakeBody, "slack");
   try {
-    const response = await fetch(url, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(wakeBody),
-      signal: AbortSignal.timeout(WAKE_TIMEOUT_MS),
-    });
+    // Shared sender: refuses any body that did not come out of withMcpHandoff().
+    const response = await deliverAgentWake({ url, body: wakeBody, headers, timeoutMs: WAKE_TIMEOUT_MS });
     if (!response.ok) {
       console.error("slack_mention_wake_http", target.employeeId, response.status);
       await appendAuditEvent({

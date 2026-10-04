@@ -510,6 +510,7 @@ export type AuditAction =
   | "stuck_watch.w1_notify"
   | "mcp.client_seen"
   | "mcp_handoff.not_connected_notify"
+  | "mcp_handoff.reconnect_armed"
   | "agent.approval_wake"
   | "stuck_watch.audience_ledger_retry"
   | "stuck_watch.w4_notify"

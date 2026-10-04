@@ -8,6 +8,8 @@ const STUCK_WATCH_WAKE_ACTIONS = [
   "slack.mention_wake",
   "slack.internal_im_wake",
   "slack.user_token_im_wake",
+  // Path C (DL-2): user-token channel @mention wake — same W1 unanswered detection.
+  "slack.user_token_channel_wake",
 ] as const;
 
 export async function listAuditEvents(
