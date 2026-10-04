@@ -91,12 +91,13 @@ function pushWake(employeeId: string, at: number, extra: Record<string, unknown>
 describe("the one-action notice", () => {
   const n = () => buildNotConnectedNotice({ employeeId: "emp_ops", displayName: "運用<!channel>&*太郎*", surface: "line", minutesSinceWake: 25 });
 
-  test("exactly one action: send this one line to the main bot's chat", () => {
+  test("exactly one action: send this one line to this employee's AI agent chat", () => {
     process.env.NEXT_PUBLIC_APP_URL = ORIGIN;
     const notice = n();
     expect(notice.action).toContain("1 つ");
     expect(notice.action).toContain("次の 1 行");
-    expect(notice.action).toContain("メインの Grok Bot のチャット");
+    expect(notice.action).toContain("この社員（運用!channel*太郎*）の AI エージェントのチャット");
+    expect(notice.action).not.toMatch(/grok/i);
     expect(notice.copyLine).not.toContain("\n");
     expect(notice.copyLine).toContain(MCP_URL);
     expect(notice.copyLine).toContain("staffpass_whoami");

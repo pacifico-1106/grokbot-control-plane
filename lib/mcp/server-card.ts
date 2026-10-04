@@ -11,6 +11,15 @@ import { STAFFPASS_MCP_DOCS_PATH, STAFFPASS_MCP_PATH } from "@/lib/mcp/public";
 
 type Env = Record<string, string | undefined>;
 
+/**
+ * Server cards are revalidated about once an hour (木村 decision 2). Next.js segment config
+ * must be a static literal, so each route writes `export const revalidate = 3600;` itself;
+ * the route test pins it to this constant.
+ */
+export const SERVER_CARD_REVALIDATE_SECONDS = 3600;
+/** Matching Cache-Control for the card responses (browser + CDN, same hour). */
+export const SERVER_CARD_CACHE_CONTROL = `public, max-age=${SERVER_CARD_REVALIDATE_SECONDS}, s-maxage=${SERVER_CARD_REVALIDATE_SECONDS}`;
+
 export function buildServerCard(env: Env = process.env): Record<string, unknown> {
   const origin = resolveAppOrigin(env);
   return {
