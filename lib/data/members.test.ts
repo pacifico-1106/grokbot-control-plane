@@ -5,7 +5,7 @@ import {
   listMembers,
   normalizeMemberEmail,
   resolveProductionMemberId,
-  upsertMember,
+  writeMemberRow,
 } from "./members";
 
 describe("isUuid", () => {
@@ -44,9 +44,9 @@ describe("production member id / email helpers", () => {
 });
 
 describe("demo upsertRuntime path", () => {
-  test("upsertMember keeps mem_ ids on the demo path", async () => {
+  test("writeMemberRow keeps mem_ ids on the demo path", async () => {
     const id = `mem_${crypto.randomUUID().slice(0, 8)}`;
-    const saved = await upsertMember({
+    const saved = await writeMemberRow({
       id,
       orgId: "org_demo",
       email: "Invitee@Example.com",
@@ -56,10 +56,27 @@ describe("demo upsertRuntime path", () => {
       jobLabel: null,
       capabilities: ["view_dashboard"],
       status: "invited",
-    });
+    }, "org_demo", "new");
     expect(saved.id).toBe(id);
+    expect(saved.email).toBe("invitee@example.com");
     expect(saved.status).toBe("invited");
     expect(getRuntimeMembers().some((m) => m.id === id)).toBe(true);
+  });
+
+  test("writeMemberRow (demo) refuses a stale expectation and an insert over an existing id", async () => {
+    const id = `mem_${crypto.randomUUID().slice(0, 8)}`;
+    const row = {
+      id, orgId: "org_demo", email: "stale@example.com", displayName: "stale",
+      role: "member" as const, jobRole: "custom" as const, jobLabel: null,
+      capabilities: ["view_dashboard" as const], status: "invited" as const,
+    };
+    await writeMemberRow(row, "org_demo", "new");
+    await expect(writeMemberRow(row, "org_demo", "new")).rejects.toThrow("member_concurrent_modification");
+    await expect(
+      writeMemberRow({ ...row, capabilities: ["view_dashboard", "approve_actions"] }, "org_demo", { role: "member", capabilities: ["view_audit"] })
+    ).rejects.toThrow("member_concurrent_modification");
+    const ok = await writeMemberRow({ ...row, capabilities: ["view_audit"] }, "org_demo", { role: "member", capabilities: ["view_dashboard"] });
+    expect(ok.capabilities).toEqual(["view_audit"]);
   });
 
   test("listMembers still returns invited rows (no active-only filter)", async () => {

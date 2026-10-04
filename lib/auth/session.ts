@@ -4,6 +4,11 @@ import { createSupabaseAdminClient, createSupabaseServerClient } from "../supaba
 import { DEMO_ORG } from "../demo-data";
 import type { OrgMember } from "../types";
 import { mapMemberRow } from "../data/mappers";
+import { appendAuditEvent } from "../data/audit";
+import {
+  SYSTEM_BOOTSTRAP_ACTOR,
+  evaluateMemberChange,
+} from "../team/member-change-guard";
 
 export type SessionContext = {
   demo: boolean;
@@ -265,6 +270,19 @@ export async function provisionOrgForUser(input: {
 
   const orgId = String((org as { id: string }).id);
 
+  // Same decision function as every other role/capability write: the system
+  // bootstrap actor may only create the FIRST owner of an org it just created
+  // (owner count is 0 by construction — the org row was inserted above).
+  const bootstrap = evaluateMemberChange({
+    actor: SYSTEM_BOOTSTRAP_ACTOR(orgId),
+    before: null,
+    after: { orgId, email: input.email, role: "owner", capabilities: OWNER_CAPS },
+    ownerCount: 0,
+  });
+  if (!bootstrap.ok) {
+    throw new Error(bootstrap.code);
+  }
+
   const { data: memberRow, error: memErr } = await admin
     .from("org_members")
     .insert({
@@ -272,9 +290,9 @@ export async function provisionOrgForUser(input: {
       user_id: input.userId,
       email: input.email,
       display_name: input.displayName || input.email.split("@")[0],
-      role: "owner",
+      role: bootstrap.roleAfter,
       job_role: "owner",
-      capabilities: OWNER_CAPS,
+      capabilities: bootstrap.capabilitiesAfter,
       status: "active",
     })
     .select("*")
@@ -298,6 +316,27 @@ export async function provisionOrgForUser(input: {
   });
 
   const member = mapMemberRow(memberRow as Record<string, unknown>);
+  await appendAuditEvent({
+    orgId,
+    employeeId: null,
+    credentialId: null,
+    action: "member.invited",
+    purpose: null,
+    summary: `組織作成: 初期オーナー ${member.displayName}`,
+    actorEmail: input.email,
+    metadata: {
+      memberId: member.id,
+      source: "org_bootstrap",
+      actorMemberId: null,
+      capabilities: bootstrap.capabilitiesAfter,
+      capabilitiesBefore: [],
+      capabilitiesAfter: bootstrap.capabilitiesAfter,
+      added: bootstrap.added,
+      removed: [],
+      roleBefore: null,
+      roleAfter: bootstrap.roleAfter,
+    },
+  }).catch(() => null);
   return {
     orgId,
     memberId: member.id,

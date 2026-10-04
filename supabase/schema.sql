@@ -639,8 +639,9 @@ drop policy if exists org_members_select on org_members;
 drop policy if exists org_members_write_admin on org_members;
 create policy org_members_select on org_members
   for select using (public.is_org_member(org_id));
-create policy org_members_write_admin on org_members
-  for all using (public.is_org_admin(org_id));
+-- No authenticated write policy on org_members: role / capabilities are
+-- written only by the service role after lib/team/member-change-guard.ts
+-- (migration 20261004200000_org_members_capability_guard.sql).
 
 drop policy if exists employees_select on employees;
 drop policy if exists employees_write_admin on employees;
@@ -833,3 +834,41 @@ create policy agentmail_select on agentmail_inboxes
   for select using (public.is_org_member(org_id));
 create policy agentmail_write_admin on agentmail_inboxes
   for all using (public.is_org_admin(org_id));
+
+-- Last active owner cannot be removed (20261004200000_org_members_capability_guard.sql).
+create or replace function public.org_members_keep_last_owner()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  remaining integer;
+begin
+  if old.role is distinct from 'owner' or old.status is distinct from 'active' then
+    return coalesce(new, old);
+  end if;
+  if tg_op = 'UPDATE' and new.role = 'owner' and new.status = 'active' and new.org_id = old.org_id then
+    return new;
+  end if;
+  if not exists (select 1 from public.orgs o where o.id = old.org_id) then
+    return coalesce(new, old);
+  end if;
+  perform pg_advisory_xact_lock(hashtextextended('org_members_owner:' || old.org_id::text, 0));
+  select count(*) into remaining
+    from public.org_members m
+   where m.org_id = old.org_id
+     and m.id <> old.id
+     and m.role = 'owner'
+     and m.status = 'active';
+  if remaining = 0 then
+    raise exception 'last_owner_required' using errcode = 'check_violation';
+  end if;
+  return coalesce(new, old);
+end;
+$$;
+
+drop trigger if exists org_members_keep_last_owner on public.org_members;
+create trigger org_members_keep_last_owner
+  before update of role, status, org_id or delete on public.org_members
+  for each row execute function public.org_members_keep_last_owner();
