@@ -121,7 +121,14 @@ try:
     sql(tenant_writes)
     sql(tenant_writes)  # re-applicable
     sql(ROOT / "tests/security/db-rls-write-holes.sql")
+    sql(ROOT / "supabase/migrations/20260923_external_contract_card_setup.sql")  # phase-2 tables not in schema.sql
+    sql(ROOT / "supabase/migrations/20261001400000_lp_handoffs.sql")  # lp_* (formerly LOW) not in schema.sql
+    config_writes = ROOT / "supabase/migrations/20261004600000_tenant_config_tables_server_only_writes.sql"
+    sql(config_writes)
+    sql(config_writes)  # re-applicable
+    sql(ROOT / "tests/security/db-rls-write-holes-phase2.sql")
     print("PASS: orgs / subscriptions / audit_events / approval_requests have no anon/authenticated write path (member/admin/owner JWT denied); service_role writes all four. Full-history check: scripts/test-db-all-migrations.py.")
+    print("PASS: 14 tenant config / credential tables (credentials, employees, bindings, admin agents, directory, adapters, channels, projects, card setup/audit) + gateway_links, agentmail_inboxes, lp_handoffs, lp_wake_webhook_configs, lp_wake_webhook_events have no anon/authenticated write path; other reads unchanged; credentials (rows and secret_hash) unreadable from any session; service_role reads/writes all.")
     print("PASS: org_members has no authenticated write path; last active owner cannot be demoted/disabled/deleted; org cascade still works.")
     print(f"PASS: F8 parent state={args.f8_parent_state}; 3 explicit UNIQUE constraints; existing constraint/index OIDs preserved across apply/reapply.")
     print("PASS: #80 ACL/authority/metadata regressions; 12 claims and 12 secret readers each have 1 winner. F8 W1, multi-stage/finalGo, rejection, current voter/binding, self-approval, same-org FKs, direct access denial, atomic rollback and recovery pass. 12 duplicate votes count once; 2 concurrent voters advance once. All migrations reapplied.")

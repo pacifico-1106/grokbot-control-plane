@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { requireOrgSession } from "@/lib/auth/require-org";
+import { requireOrgAdminSession, requireOrgSession } from "@/lib/auth/require-org";
 import {
   getGatewayStatusForOrg,
   runtimeModeLabel,
@@ -17,8 +17,12 @@ export async function GET() {
   });
 }
 
+/**
+ * Changes tenant-level integration state (orgs.gateway_status / gateway_links)
+ * → org owner/admin only (server-side; members get 403 admin_required).
+ */
 export async function POST(req: Request) {
-  const gate = await requireOrgSession();
+  const gate = await requireOrgAdminSession();
   if (!gate.ok) return gate.response;
   const body = (await req.json().catch(() => ({}))) as {
     action?: "connect" | "disconnect" | "handshake";

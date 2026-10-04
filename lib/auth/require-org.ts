@@ -40,19 +40,34 @@ export async function requireAuthenticatedOrg(): Promise<
   return { ok: true, orgId: session.orgId, session };
 }
 
+type OrgAdminDecision = "ok" | "auth_required" | "admin_required";
+
+function orgAdminDecision(session: SessionContext): OrgAdminDecision {
+  if (session.demo && session.orgId) return "ok";
+  if (!session.userId || !session.orgId || !session.member) return "auth_required";
+  if (session.member.role !== "owner" && session.member.role !== "admin") return "admin_required";
+  return "ok";
+}
+
+/**
+ * Same rule as requireOrgAdminSession, for server-rendered UI decisions
+ * (e.g. render tenant-level integration controls only for owners/admins).
+ */
+export function isOrgAdminSession(session: SessionContext): boolean {
+  return orgAdminDecision(session) === "ok";
+}
+
 /** Owner/admin-only browser session for tenant-level secrets and integrations. */
 export async function requireOrgAdminSession(): Promise<
   | { ok: true; orgId: string; email: string }
   | { ok: false; response: NextResponse }
 > {
   const session = await getSessionContext();
-  if (session.demo && session.orgId) {
-    return { ok: true, orgId: session.orgId, email: session.email || "owner@example.com" };
-  }
-  if (!session.userId || !session.orgId || !session.member) {
+  const decision = orgAdminDecision(session);
+  if (decision === "auth_required") {
     return { ok: false, response: authRequiredResponse() };
   }
-  if (session.member.role !== "owner" && session.member.role !== "admin") {
+  if (decision === "admin_required") {
     return {
       ok: false,
       response: NextResponse.json(
@@ -61,5 +76,8 @@ export async function requireOrgAdminSession(): Promise<
       ),
     };
   }
-  return { ok: true, orgId: session.orgId, email: session.email || session.member.email };
+  if (session.demo) {
+    return { ok: true, orgId: session.orgId!, email: session.email || "owner@example.com" };
+  }
+  return { ok: true, orgId: session.orgId!, email: session.email || session.member!.email };
 }

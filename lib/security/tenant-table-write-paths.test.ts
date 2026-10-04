@@ -248,10 +248,12 @@ describe("migration 20261004500000: drop direct PostgREST write policies", () =>
   const migration = file ? readFileSync(join(dir, file), "utf8") : "";
   const executable = migration.split("\n").filter((l) => !/^\s*--/.test(l)).join("\n");
 
-  test("migration exists and is the latest timestamp", () => {
+  test("migration exists and sorts after every migration it was written against", () => {
     expect(file).toBeDefined();
-    const stamps = names.map((n) => n.split("_")[0]).filter((s) => s.length === 14 && s !== "20261004500000");
-    expect(stamps.every((s) => s < "20261004500000")).toBe(true);
+    // later migrations (phase 2: 20261004600000, …) are allowed; the next test
+    // proves none of them re-creates the four policies
+    const stamps = names.map((n) => n.split("_")[0]).filter((s) => s.length === 14 && s < "20261004500000");
+    expect(stamps.length).toBeGreaterThan(0);
     // #255's pending 20261004400000 must still sort before this one
     expect("20261004400000" < "20261004500000").toBe(true);
   });

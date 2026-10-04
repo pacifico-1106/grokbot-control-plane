@@ -13,7 +13,9 @@ import { EmployeeTerminateForm } from "@/components/employees/EmployeeTerminateF
 import { EmployeeIngressHandoffStatus } from "@/components/employees/EmployeeIngressHandoffStatus";
 import { SlackIdentityForm } from "@/components/employees/SlackIdentityForm";
 import { GoogleCalendarIdentityForm } from "@/components/employees/GoogleCalendarIdentityForm";
-import { getCurrentOrgId } from "@/lib/auth/session";
+import { isOrgAdminSession } from "@/lib/auth/require-org";
+import { getSessionContext } from "@/lib/auth/session";
+import { isDemoMode } from "@/lib/mode";
 import {
   ensureBindingRow,
   getBinding,
@@ -49,7 +51,10 @@ export default async function EmployeeDetailPage({
     redirect("/app/getting-started");
   }
 
-  const orgId = await getCurrentOrgId();
+  const session = await getSessionContext();
+  const orgId = session.orgId;
+  // link / health write the binding → owner/admin only (server-enforced too)
+  const canManageBinding = isOrgAdminSession(session);
   const members = await listMembers(orgId);
   const projects = await listOrgProjects(orgId);
   const sodWarnPolicy = await getOrgSodWarnPolicy(orgId);
@@ -290,7 +295,12 @@ export default async function EmployeeDetailPage({
       </section>
 
 
-      <BindingPanel employeeId={employee.id} initial={binding} />
+      <BindingPanel
+        employeeId={employee.id}
+        initial={binding}
+        canManageBinding={canManageBinding}
+        demoMode={isDemoMode()}
+      />
 
       <EmployeeTerminateForm employee={employee} />
 
