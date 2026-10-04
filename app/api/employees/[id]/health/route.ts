@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { requireOrgAdminSession } from "@/lib/auth/require-org";
+import { requireOrgAdminSession, requireOrgSession } from "@/lib/auth/require-org";
 import {
   bindingPublicView,
   ensureBindingRow,
@@ -8,6 +8,7 @@ import {
   recordHealthFailure,
   recordHealthSuccess,
   runtimeModeLabel,
+  unlinkedBinding,
 } from "@/lib/data";
 import { isDemoMode } from "@/lib/mode";
 
@@ -88,9 +89,39 @@ export async function POST(
   });
 }
 
+/**
+ * Read-only health status (org members may read). Returns the current binding
+ * health as stored — never probes, never writes (no ensure row, no
+ * success / failure record, ?forceFail ignored). A missing row is reported as
+ * unlinked with persisted=false; only POST (owner/admin) changes state.
+ */
 export async function GET(
-  req: Request,
+  _req: Request,
   ctx: { params: Promise<{ id: string }> }
 ) {
-  return POST(req, ctx);
+  const gate = await requireOrgSession();
+  if (!gate.ok) return gate.response;
+  const { id } = await ctx.params;
+  const employee = await getEmployee(id, gate.orgId);
+  if (!employee) {
+    return NextResponse.json({ error: "employee_not_found" }, { status: 404 });
+  }
+  const orgId = employee.orgId || gate.orgId;
+  const stored = await getBinding(id);
+  if (stored && stored.orgId !== orgId) {
+    return NextResponse.json({ error: "binding_not_found" }, { status: 404 });
+  }
+  const binding = stored ?? unlinkedBinding(id, orgId);
+  return NextResponse.json({
+    ok: true,
+    readOnly: true,
+    persisted: Boolean(stored),
+    demo: runtimeModeLabel() === "demo",
+    mode: runtimeModeLabel(),
+    healthy: binding.status === "linked",
+    status: binding.status,
+    lastSuccessAt: binding.lastSuccessAt,
+    lastError: binding.lastError,
+    binding: bindingPublicView(binding),
+  });
 }

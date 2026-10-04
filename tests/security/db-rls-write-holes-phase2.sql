@@ -71,7 +71,8 @@ end $$;
 -- (or the lp fixture row); insert_sql would succeed if allowed (org A2 has only
 -- employee E2 → no unique / one-per-org clash) and ins_target matches its row.
 -- read: member = members of A/A2 see their orgs' rows; none = no session sees
--- rows (lp_*); denied = no session may read at all (credentials).
+-- rows (lp_*: 0 rows, or permission denied once 20261004800000 revokes their
+-- SELECT); denied = no session may read at all (credentials).
 create temporary table rls2_tables (t text primary key, ord int not null, scope text not null, target text not null,
   ins_target text not null, insert_sql text not null, read text not null, noop_col text not null);
 grant select on rls2_tables to public;
@@ -175,7 +176,9 @@ begin
 
     for r in select b.visible, t.* from rls2_before b join rls2_tables t using (t) order by t.ord loop
       -- reads unchanged: exactly the caller's orgs' rows (B invisible); anon / lp_* none
-      if r.read <> 'denied' then
+      if r.read = 'none' then
+        perform security_test.read_blocked(r.t || ' read', format('select count(*) from public.%I where %s', r.t, r.scope), false);
+      elsif r.read = 'member' then
         execute format('select count(*) from public.%I where %s', r.t, r.scope) into n;
         if n <> (case when sub is null then 0 else r.visible end) then
           raise exception 'read of % broken for %: saw % row(s), expected %', r.t, coalesce(sub, 'anon'), n, case when sub is null then 0 else r.visible end;
@@ -236,8 +239,9 @@ begin
                     and p.cmd = 'SELECT' and p.qual = 'is_org_member(org_id)') <> 1 loop
     raise exception 'SELECT policy changed on %', r.t;
   end loop;
+  -- (lp_* are read = 'none': their session SELECT may be revoked by 20261004800000)
   for r in select role, t from unnest(array['anon','authenticated']) role, rls2_tables
-           where read <> 'denied' and not has_table_privilege(role, 'public.' || t, 'SELECT') loop
+           where read = 'member' and not has_table_privilege(role, 'public.' || t, 'SELECT') loop
     raise exception '% lost SELECT on %', r.role, r.t;
   end loop;
   -- credentials: no policy at all, no table or column SELECT for sessions
