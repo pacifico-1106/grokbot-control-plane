@@ -57,6 +57,7 @@ import { fulfillApprovedAdmin, parseAdminFulfillment } from "@/lib/admin-mcp/ful
 import { auditActionForAdminTool } from "@/lib/admin-mcp/audit-class";
 import { buildPollUrl } from "@/lib/approvals/tokens";
 import { handleAllowedAccountsTool, isAllowedAccountsTool } from "@/lib/admin-mcp/allowed-accounts-tools";
+import { POSTING_IDENTITY_SET_TOOL, handlePostingIdentityTool } from "@/lib/admin-mcp/posting-identity-tool";
 import { ADMIN_MCP_TOOL_NAMES } from "@/lib/mcp/admin-public";
 import { buildEmployeePolicyDrafts } from "@/lib/employees/policy-draft";
 import { parseApprovalChannelId } from "@/lib/employees/approval-inbox";
@@ -234,6 +235,26 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
         employeeId: { type: "string", description: "AI社員 ID (this org only)" },
       },
       required: ["employeeId"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "employees.postingIdentity.set",
+    description:
+      "Switch an AI employee's Slack posting identity (employees.posting_as) between bot (company Bot token) and user (the employee's own Slack user token) after human approval (always_human, approvalClass admin). Same storage as the dashboard AI社員ページ「Slack 投稿名義」 (policy.patch does not change it). The employee must belong to this org (from the credential; no orgId argument). postingAs \"user\" is refused without a change unless the employee has a linked Slack identity with a saved user token (OAuth / setup.slackAuthorizeLink.issue) whose granted scopes include chat:write: codes user_token_missing, user_token_invalid, user_token_scope_check_failed, missing_scope_chat_write (with nextStepJa). If the badge's allowedAccounts has any Slack row, the linked Slack user ID must be one of them (same match as Slack binding: service slack, exact U…/W…), else slack_account_not_allowed; no Slack row → no such check. This is checked when the ticket is proposed and again right before the change after approval. A run refused with one of these codes changes nothing and may be re-run by re-invoking the same approvalId after fixing the cause (every run re-checks everything); stuck-watch (W2 / stuckWatch.retry) never re-runs it, only an explicit re-invoke does; a successful run is returned as stored. postingAs \"bot\" needs no token check. Already set → ok already_set (no ticket). Recorded in the admin change log (from / to, approver, ticket). Admin cannot switch the badge bound to itself. No token is accepted or returned. Re-invoke with approvalId to read the result.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        employeeId: { type: "string", description: "AI社員 ID (this org only)" },
+        postingAs: {
+          type: "string",
+          enum: ["bot", "user"],
+          description: "bot = 会社のBot（xoxb）, user = 本人の Slack ユーザートークン（chat:write 必須）",
+        },
+        jobId: { type: "string" },
+        approvalId: { type: "string", description: "Re-invoke with approved ticket ID" },
+      },
+      required: ["employeeId", "postingAs"],
       additionalProperties: false,
     },
   },
@@ -2209,6 +2230,21 @@ export async function callAdminMcpTool(
     });
     const queuedOk = (queued as { code?: string }).code === "needs_approval";
     return toolResult(queuedOk && outcome.resultExtra ? { ...queued, ...outcome.resultExtra } : queued, false);
+  }
+
+  if (name === POSTING_IDENTITY_SET_TOOL) {
+    // Org from the credential only; user-token check before the ticket.
+    const outcome = await handlePostingIdentityTool(args, cred);
+    if (outcome.kind === "result") return toolResult(outcome.data, outcome.isError === true);
+    const queued = await queueAdminTool({
+      cred,
+      tool: name,
+      args: { ...outcome.queuedArgs, ...(typeof args.jobId === "string" ? { jobId: args.jobId } : {}) },
+      rawArgsForSecretScan: args,
+      title: outcome.title,
+      summary: outcome.summary,
+    });
+    return toolResult(queued, false);
   }
 
   if (name === "policy.patch" || name === "link") {

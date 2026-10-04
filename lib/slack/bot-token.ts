@@ -1,26 +1,56 @@
 import { getEnabledConversationAdapter } from "@/lib/data/conversation-adapters";
-import { getEnabledNotificationChannels } from "@/lib/data/notification-channels";
+import {
+  getEnabledNotificationChannels,
+  isSharedApprovalAppChannelConfig,
+} from "@/lib/data/notification-channels";
 
 const SLACK_TIMEOUT_MS = 5_000;
 
-/** Org bot token (xoxb) only. Notify / SLACK_BOT_TOKEN fallback stays on this path. */
-export async function resolveOrgSlackBotToken(orgId: string): Promise<string> {
+/** Fail-closed code when the only org Slack bot is the shared approval app (approval plane only). */
+export const CONVERSATION_BOT_TOKEN_MISSING = "slack_conversation_bot_token_missing";
+
+export type OrgSlackBotTokenResolution = {
+  token: string;
+  /** True when a shared approval app inbox with a bot token was skipped (it is never a conversation bot). */
+  skippedSharedApprovalApp: boolean;
+};
+
+/**
+ * Conversation-plane org bot token (xoxb): conversation adapter → per-tenant
+ * Slack notify inbox → SLACK_BOT_TOKEN env. The shared approval app
+ * ("Staffpass承認", `config.sharedApprovalApp === true`) is NEVER a candidate:
+ * its xoxb belongs to the approval plane only (docs/slack-shared-approval-app.md).
+ * Approval-plane senders read their inbox secrets directly and are unaffected.
+ */
+export async function resolveOrgSlackBotTokenDetailed(orgId: string): Promise<OrgSlackBotTokenResolution> {
   const adapter = await getEnabledConversationAdapter(orgId, "slack");
   const adapterToken = adapter?.secrets.botToken?.trim() || "";
-  if (adapterToken) return adapterToken;
+  if (adapterToken) return { token: adapterToken, skippedSharedApprovalApp: false };
 
-  const notifyChannels = await getEnabledNotificationChannels(orgId);
-  const notifyToken =
-    notifyChannels
-      .find((channel) => channel.provider === "slack")
-      ?.secrets.botToken?.trim() || "";
-  if (notifyToken) return notifyToken;
-
-  return (
-    process.env.SLACK_BOT_TOKEN?.trim() ||
-    process.env.SLACK_CONVERSATION_BOT_TOKEN?.trim() ||
-    ""
+  const slackChannels = (await getEnabledNotificationChannels(orgId)).filter(
+    (channel) => channel.provider === "slack"
   );
+  const skippedSharedApprovalApp = slackChannels.some(
+    (channel) => isSharedApprovalAppChannelConfig(channel.config) && Boolean(channel.secrets.botToken?.trim())
+  );
+  const notifyToken =
+    slackChannels
+      .find((channel) => !isSharedApprovalAppChannelConfig(channel.config))
+      ?.secrets.botToken?.trim() || "";
+  if (notifyToken) return { token: notifyToken, skippedSharedApprovalApp };
+
+  return {
+    token:
+      process.env.SLACK_BOT_TOKEN?.trim() ||
+      process.env.SLACK_CONVERSATION_BOT_TOKEN?.trim() ||
+      "",
+    skippedSharedApprovalApp,
+  };
+}
+
+/** Conversation-plane org bot token (xoxb) only; never the shared approval app. "" when none. */
+export async function resolveOrgSlackBotToken(orgId: string): Promise<string> {
+  return (await resolveOrgSlackBotTokenDetailed(orgId)).token;
 }
 
 /**

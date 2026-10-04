@@ -1,5 +1,9 @@
 import { getLinkedSlackUserToken } from "@/lib/data/slack-identities";
-import { resolveOrgSlackBotToken } from "@/lib/slack/bot-token";
+import {
+  CONVERSATION_BOT_TOKEN_MISSING,
+  resolveOrgSlackBotToken,
+  resolveOrgSlackBotTokenDetailed,
+} from "@/lib/slack/bot-token";
 import { normalizePostingAs } from "@/lib/employees/posting-as";
 import type { MouthRoutingDecision, OrgReplyPolicy, PostingAs, ReplyPolicyDecision } from "@/lib/types";
 import {
@@ -89,7 +93,10 @@ export async function resolveConversationToken(input: {
   orgId: string;
   employeeId?: string;
   postingAs?: PostingAs | string | null;
-}): Promise<{ token: string; effectivePostingAs: PostingAs } | { error: "slack_identity_unbound" }> {
+}): Promise<
+  | { token: string; effectivePostingAs: PostingAs }
+  | { error: "slack_identity_unbound" | typeof CONVERSATION_BOT_TOKEN_MISSING }
+> {
   const requestedPostingAs = normalizePostingAs(input.postingAs);
 
   if (requestedPostingAs === "user") {
@@ -99,8 +106,11 @@ export async function resolveConversationToken(input: {
     if (!userToken) return { error: "slack_identity_unbound" };
     return { token: userToken, effectivePostingAs: requestedPostingAs };
   }
-  const botToken = await resolveOrgSlackBotToken(input.orgId);
-  return { token: botToken, effectivePostingAs: requestedPostingAs };
+  const bot = await resolveOrgSlackBotTokenDetailed(input.orgId);
+  // Only the shared approval app is installed: fail closed with a reason instead
+  // of the silent stub, so nobody believes a conversation post went out.
+  if (!bot.token && bot.skippedSharedApprovalApp) return { error: CONVERSATION_BOT_TOKEN_MISSING };
+  return { token: bot.token, effectivePostingAs: requestedPostingAs };
 }
 
 function mapSlackApiError(error: string | undefined, httpStatus: number): string {
@@ -252,7 +262,8 @@ export async function postConversationMessage(input: {
     return { ok: false, error: posted.error };
   }
 
-  // Fall back to bot token for Path A app DM
+  // Fall back to bot token for Path A app DM (conversation bot only — never the
+  // shared approval app; with none, keep the user-token error = fail closed).
   const botToken = await resolveOrgSlackBotToken(input.orgId);
   if (!botToken) {
     return { ok: false, error: posted.error };

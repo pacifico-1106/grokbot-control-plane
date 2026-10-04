@@ -84,7 +84,7 @@ export const STAFFPASS_MCP_TOOLS: McpToolDef[] = [
   {
     name: "staffpass_invoke",
     description:
-      "Invoke a Staffpass Gateway tool under the employee badge. Requires purpose + jobId. Unknown tools are rejected. Confirm/send/order (and always_human policy) STOP for human approval — the result includes approvalId, statusToken, pollUrl, pollHint, title, and summary so you can poll without relying on prose Instructions. Re-invoke with approvalId after status=approved. Never bypasses Gateway enforcement.",
+      "Invoke a Staffpass Gateway tool under the employee badge. Requires purpose + jobId. Unknown tools are rejected. Confirm/send/order (and always_human policy) STOP for human approval — the result includes approvalId, statusToken, pollUrl, pollHint, title, and summary so you can poll without relying on prose Instructions. Re-invoke with approvalId after status=approved. Never bypasses Gateway enforcement. Slack replies: use tool comm.reply and copy the wake's channel / ts / thread_ts / speakerId / speakerTeamId into conversation:{surface:\"slack\", slackChannelId, speakerId, speakerTeamId, ts, thread_ts} (slackChannelId = wake channel; omit thread_ts when null). The wake's slackUserId is yourself (the employee) — never use it as the recipient.",
     inputSchema: {
       type: "object",
       properties: {

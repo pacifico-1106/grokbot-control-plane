@@ -39,6 +39,11 @@ import {
   resolveParentMessageTs,
 } from "@/lib/gateway/audience";
 import { lookupWakeParent, consumeWakeParent } from "@/lib/data/wake-parent-stash";
+import {
+  isSlackDmReplyInlineEnabled,
+  isSlackDmReplyTarget,
+  resolveSlackDmInlineThreadTs,
+} from "@/lib/slack/dm-reply-inline";
 import { getEffectiveReplyPolicy } from "@/lib/data/reply-policy";
 import { resolveInformationDisclosure } from "@/lib/gateway/information-class";
 import { evaluateProjectScope } from "@/lib/gateway/project-scope";
@@ -1866,7 +1871,16 @@ export async function runGatewayInvoke(
 
       let replyThreadTs = explicitThreadTs;
       threadTsSource = "none";
-      if (!looksLikeSlackTs(replyThreadTs) && ctx?.surface === "slack") {
+      if (
+        isSlackDmReplyInlineEnabled() &&
+        isSlackDmReplyTarget({ channelId: dest, conversation: body.conversation, args })
+      ) {
+        // G4 (SLACK_DM_REPLY_INLINE_ENABLED): DM replies go to the DM's main flow;
+        // only a message already inside a thread (thread_ts ≠ ts) keeps its thread.
+        const inline = resolveSlackDmInlineThreadTs({ conversation: ctx, args, body });
+        replyThreadTs = inline.threadTs;
+        threadTsSource = inline.source;
+      } else if (!looksLikeSlackTs(replyThreadTs) && ctx?.surface === "slack") {
         const replyPolicyResult = await getEffectiveReplyPolicy(
           orgId || employee.orgId,
           employeeId

@@ -63,6 +63,7 @@ type FaultClass =
 
 - W1 メンション未返信（デフォルト15分）
 - W2 承認後未fulfill（デフォルト5分）→ 自動reinvoke max2・#53系と統合
+  - 例外: `W2_MANUAL_REINVOKE_ONLY_TOOLS`（`lib/stuck-watch/w2-unfulfilled.ts`）のツールは自動でも `stuckWatch.retry` でも再実行しない。項目は open のまま `stuckHint: "fix"`・`w2Reason: "manual_reinvoke_required"` で残り、管理エージェントが approvalId 付きで呼び直したときだけ動く。今は `employees.postingIdentity.set` だけ（相手に見える名義が変わるため、人が切り替えを把握する）。
 - W3 ops_fault連続（K=2で停止）
 - W4 config_driftは通知のみ
 

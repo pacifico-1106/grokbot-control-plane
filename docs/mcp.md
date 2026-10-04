@@ -283,6 +283,7 @@ xAI API の remote MCP も同じ URL / Bearer を指定してください。
 | `employees.issue` | always_human | AI社員証の発行 |
 | `link` | always_human | 社員証とGrok Bot連携 |
 | `policy.patch` | always_human | 権限更新 |
+| `employees.postingIdentity.set` | always_human | Slack 投稿名義（`bot` / `user`）の切り替え。`user` は本人の Slack ユーザートークン（chat:write）を提案時と反映直前に確認。詳細は `docs/admin-mcp-posting-identity.md` |
 | `parties.upsert` | always_human | 相手台帳登録 |
 | `channels.classify` | always_human | チャネル分類 + 1:1 IM受口設定 |
 | `roles.propose` | always_human | 職務案の提案 |

@@ -30,6 +30,11 @@ import {
   resolveParentMessageTs,
 } from "@/lib/gateway/audience";
 import { lookupWakeParent, consumeWakeParent } from "@/lib/data/wake-parent-stash";
+import {
+  isSlackDmReplyInlineEnabled,
+  isSlackDmReplyTarget,
+  resolveSlackDmInlineThreadTs,
+} from "@/lib/slack/dm-reply-inline";
 import { getEffectiveReplyPolicy } from "@/lib/data/reply-policy";
 import {
   parseSnsSurface,
@@ -400,10 +405,21 @@ function destinationOf(snapshot: InvokeSnapshot): string {
  * For durable prefer_thread, agents should pass thread_ts=wake.ts on invoke.
  */
 async function threadOf(
-  snapshot: InvokeSnapshot
+  snapshot: InvokeSnapshot,
+  dest?: string
 ): Promise<{ threadTs: string | undefined; source: "client" | "wake_stash" | "none" }> {
   const conv = snapshot.conversation;
   const args = snapshot.args;
+
+  // G4 (SLACK_DM_REPLY_INLINE_ENABLED): same DM rule as invoke — main flow,
+  // unless the message is already inside a thread (thread_ts ≠ ts).
+  if (
+    conv?.surface === "slack" &&
+    isSlackDmReplyInlineEnabled() &&
+    isSlackDmReplyTarget({ channelId: dest || conv.slackChannelId, conversation: conv, args })
+  ) {
+    return resolveSlackDmInlineThreadTs({ conversation: conv, args });
+  }
 
   const explicitThreadTs = resolveConversationThreadId({
     conversation: conv,
@@ -697,7 +713,7 @@ async function fulfillApprovedInvokeCore(
 
     const dest = destValidation.dest;
 
-    const threadResult = await threadOf(snapshot);
+    const threadResult = await threadOf(snapshot, dest);
 
     const posted = await postConversationMessage({
       orgId: snapshot.orgId || approval.orgId,
