@@ -5,7 +5,7 @@
  */
 
 import type { ApprovalPolicy } from "@/lib/types";
-import { OUTBOUND_SEND_TOOL_IDS } from "@/lib/gateway/tools";
+import { AUDIENCE_GATED_ALWAYS_HUMAN_HINT_TOOL_IDS, OUTBOUND_SEND_TOOL_IDS } from "@/lib/gateway/tools";
 
 export type ToolApprovalDefault =
   | "always_human"
@@ -252,7 +252,10 @@ export function choosableToolIsEnabled(
  * least as strictly as always_human (gateway: immediate 403 for outbound-send
  * tools, otherwise forced approval; fulfill: stop). For outbound-send tools
  * outside the choosable list (slack.* / comm.* / agentmail.send) only `deny`
- * is accepted; other values keep being ignored for them.
+ * is accepted; other values keep being ignored for them — except
+ * `always_human` on comm.reply / comm.send / slack.post / slack.post_external
+ * (2026-10-04), which the gateway honours and is stricter-only
+ * (auto / risk_based there stay ignored).
  */
 export function normalizeToolApprovalDefaults(
   value: unknown
@@ -271,6 +274,9 @@ export function normalizeToolApprovalDefaults(
   for (const tool of OUTBOUND_SEND_TOOL_IDS) {
     if ((CHOOSABLE_TOOL_APPROVALS as readonly string[]).includes(tool)) continue;
     if (src[tool] === "deny") out[tool] = "deny";
+  }
+  for (const tool of AUDIENCE_GATED_ALWAYS_HUMAN_HINT_TOOL_IDS) {
+    if (src[tool] === "always_human") out[tool] = "always_human";
   }
   return out;
 }

@@ -174,7 +174,7 @@ describe("item 4: deny survives normalization (before: silently became always_hu
     }
   });
 
-  test("normalizeToolApprovalDefaults keeps deny for choosable and outbound tools only", () => {
+  test("normalizeToolApprovalDefaults keeps deny for choosable and outbound tools (plus always_human for audience-gated)", () => {
     const n = normalizeToolApprovalDefaults({
       "mail.send": "deny",
       "calendar.confirm": "deny",
@@ -191,7 +191,8 @@ describe("item 4: deny survives normalization (before: silently became always_hu
     expect(n["comm.reply"]).toBe("deny");
     expect(n["agentmail.send"]).toBe("deny");
     expect(n["slack.post_external"]).toBeUndefined(); // only deny is accepted for non-choosable tools
-    expect(n["comm.send"]).toBeUndefined();
+    // since 2026-10-04 (#249) always_human is kept for the audience-gated tools (stricter-only)
+    expect(n["comm.send"]).toBe("always_human");
     expect(n["files.read"]).toBeUndefined(); // not choosable / not outbound
     expect(n["sns.publish"]).toBe("always_human"); // strict default kept
   });
