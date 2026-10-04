@@ -489,6 +489,25 @@ export function isMcpEndpointHandoffEnabled(): boolean {
 }
 
 /**
+ * MCP 2026-07-28 strict request headers (D1, 2026-10-05; lib/mcp/protocol-negotiation.ts).
+ * /api/mcp and /api/mcp/admin always reject headers that DISAGREE with the body
+ * (HTTP 400, -32020) and unsupported per-request versions (HTTP 400, -32022).
+ *
+ * When ON, additionally (spec MUSTs that could reject a client that works today):
+ * - a modern request (body `_meta` protocolVersion 2026-07-28) without
+ *   MCP-Protocol-Version / Mcp-Method / Mcp-Name (tools/call) → 400 -32020;
+ *   without `_meta` clientCapabilities → 400 -32602
+ * - `MCP-Protocol-Version: 2026-07-28` with no `_meta` protocolVersion → 400 -32602
+ * - an unknown MCP-Protocol-Version on an initialize-era request → 400 -32022
+ *
+ * When OFF (default): those requests are served as before (missing headers are
+ * tolerated; an unknown header version on an initialize-era request is ignored).
+ */
+export function isMcpStrictRequestHeadersEnabled(): boolean {
+  return parseFlag(process.env.MCP_STRICT_REQUEST_HEADERS);
+}
+
+/**
  * Duplicate-reply prevention for conversation tools (comm.reply / comm.send /
  * slack.post / slack.post_external), channel-independent (Slack / LINE / Telegram).
  *
