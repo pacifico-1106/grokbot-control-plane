@@ -58,6 +58,8 @@ export type AttachmentUploadRecord = {
   slackError?: string;
   /** missing_scope only: Slack's `needed` scope names (sanitized). */
   slackNeeded?: string[];
+  /** STUB (test commit): which token failed (木村 #255 second round). */
+  slackTokenType?: "user" | "bot";
 };
 export type AttachmentUploadResult = {
   fileId?: string;

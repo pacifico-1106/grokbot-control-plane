@@ -319,8 +319,10 @@ describe("5. reinvokeReason: one mapping table", () => {
     for (const [code, [kind, nextTool]] of Object.entries(EXPECTED)) {
       expect(SLACK_DEFINITE_ERROR_FIXES[code as keyof typeof SLACK_DEFINITE_ERROR_FIXES]).toEqual({ kind, nextTool });
       expect((ADMIN_MCP_TOOL_NAMES as readonly string[]).includes(nextTool)).toBe(true);
-      expect(slackReinvokeReason(code)).toEqual({
-        code, fix: { kind }, nextTool, nextToolEndpoint: "/api/mcp/admin", retryAfterFix: true,
+      // 木村 #255 second round: credential errors carry the failing token type (bot here)
+      const credential = nextTool === "setup.slackAdapter.setBotToken";
+      expect(slackReinvokeReason(code, undefined, "bot")).toEqual({
+        code, fix: { kind, ...(credential ? { tokenType: "bot" } : {}) }, nextTool, nextToolEndpoint: "/api/mcp/admin", retryAfterFix: true,
       });
     }
   });
@@ -430,8 +432,9 @@ describe("migration 20261004400000 (static, decisions 2 + 5)", () => {
     expect(sql).toContain("'slackNeeded'");
     expect(sql).toContain("revoke all on function public.finish_approval_attachment_upload(uuid,uuid,uuid,text,jsonb) from public,anon,authenticated;");
     expect(sql).toContain("grant execute on function public.finish_approval_attachment_upload(uuid,uuid,uuid,text,jsonb) to service_role;");
-    expect(sql.match(/security invoker set search_path = pg_catalog, public/g)?.length).toBe(3);
-    expect(sql.match(/for update;/g)?.length).toBe(3);
+    // + claim_approval_attachment_upload_capped / stop_approval_attachment_recheck (木村 #255 second round)
+    expect(sql.match(/security invoker set search_path = pg_catalog, public/g)?.length).toBe(5);
+    expect(sql.match(/for update;/g)?.length).toBe(5);
     expect(sql).not.toMatch(/security definer|alter table|create table|create policy/i);
   });
 });

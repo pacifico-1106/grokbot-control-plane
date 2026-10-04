@@ -68,3 +68,8 @@ function definiteFailure(fileUpload: unknown): SlackReinvokeReason | null {
 }
 
 export const RECONCILE_NOT_FOUND = "reconcile_not_found";
+
+/** STUB (test commit, 木村 #255 second round): one builder for the poll and the re-run. */
+export function reinvokeReasonForFileUpload(_fileUpload: unknown): SlackReinvokeReason | null {
+  return null;
+}

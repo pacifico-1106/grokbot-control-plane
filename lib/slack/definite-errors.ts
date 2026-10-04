@@ -72,9 +72,13 @@ export type SlackReinvokeReason = {
   retryAfterFix: true;
 };
 
+/** STUB (test commit): the token type that failed (木村 #255 second round). */
+export type SlackTokenType = "user" | "bot";
+
 export function slackReinvokeReason(
   error: string | null | undefined,
-  needed?: readonly string[]
+  needed?: readonly string[],
+  _tokenType?: SlackTokenType | null
 ): SlackReinvokeReason | null {
   if (!isDefinitePreShareSlackError(error)) return null;
   const { kind, nextTool } = SLACK_DEFINITE_ERROR_FIXES[error];
