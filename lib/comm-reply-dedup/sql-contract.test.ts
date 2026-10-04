@@ -13,9 +13,14 @@ const NAME = "20261004700000_comm_reply_dedup.sql";
 
 describe("comm reply dedup migration", () => {
   const sql = readFileSync(resolve(DIR, NAME), "utf8");
-  test("is the newest timestamped migration (after 20261004300000; leaves 400000–600000 to parallel PRs)", () => {
+  test("sorts after every earlier migration (300000 on main; 400000 / 500000 / 600000 are parallel PRs)", () => {
+    // Not "the newest": later migrations must not break this test.
     const stamped = readdirSync(DIR).filter((f) => /^\d{14}_/.test(f)).sort();
-    expect(stamped[stamped.length - 1]).toBe(NAME);
+    expect(stamped).toContain(NAME);
+    for (const earlier of ["20261004300000", "20261004400000", "20261004500000", "20261004600000"]) {
+      expect(earlier < NAME.slice(0, 14)).toBe(true);
+    }
+    for (const f of stamped) if (f.slice(0, 14) <= "20261004600000") expect(f < NAME).toBe(true);
   });
   test("adds superseded to approval_requests status (keeps every existing status)", () => {
     expect(sql).toMatch(/'pending',\s*'approved',\s*'rejected',\s*'expired',\s*'revision_requested',\s*'superseded'/);
