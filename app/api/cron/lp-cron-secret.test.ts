@@ -207,6 +207,20 @@ describe("lp-handoff-outbox: CRON_SECRET", () => {
     }
   });
 
+  test("stricter (both LP crons): a whitespace-led ` replace_me` CRON_SECRET is the placeholder too (401)", async () => {
+    process.env.CRON_SECRET = " replace_me";
+    delete process.env.LP_HANDOFF_ENABLED;
+    delete process.env.LP_INQUIRY_CLEANUP_ENABLED;
+    for (const headers of [{ authorization: "Bearer  replace_me" }, { "x-cron-secret": " replace_me" }] as Record<string, string>[]) {
+      const res = await outboxPOST(req("lp-handoff-outbox", headers));
+      expect(`${JSON.stringify(headers)}:${res.status}`).toBe(`${JSON.stringify(headers)}:401`);
+      expect(await res.json()).toEqual({ error: "unauthorized" });
+    }
+    const res = await cleanupGET(req("lp-inquiry-cleanup", { authorization: "Bearer  replace_me" }));
+    expect(res.status).toBe(401);
+    expect(await res.json()).toEqual({ error: "unauthorized" });
+  });
+
   test("unchanged: CRON_SECRET is not trimmed, so a padded secret matches nothing (401)", async () => {
     process.env.CRON_SECRET = ` ${SECRET} `;
     for (const headers of [{ authorization: `Bearer ${SECRET}` }, { "x-cron-secret": SECRET }] as Record<string, string>[]) {

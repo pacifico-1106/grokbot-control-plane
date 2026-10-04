@@ -180,6 +180,10 @@ describe("checkCronAuthorization options (LP crons)", () => {
     expect(checkCronAuthorization("Bearer    ", { trimSecret: false })).toBe("not_configured");
     process.env.CRON_SECRET = "replace_me ";
     expect(readCronSecret({ trim: false })).toEqual({ state: "placeholder" });
+    process.env.CRON_SECRET = " replace_me";
+    expect(readCronSecret({ trim: false })).toEqual({ state: "placeholder" });
+    expect(checkCronAuthorization("Bearer  replace_me", { trimSecret: false, allowRawSecret: true })).toBe("unauthorized");
+    expect(checkCronAuthorization(" replace_me", { trimSecret: false, allowRawSecret: true })).toBe("unauthorized");
     process.env.CRON_SECRET = ` ${SECRET}`;
     expect(readCronSecret({ trim: false })).toEqual({ state: "set", secret: ` ${SECRET}` });
   });
