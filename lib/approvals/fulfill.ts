@@ -56,6 +56,12 @@ import {
 import { isAudienceGatedTool, isSnsPublishTool, isConfirmClassTool, GATEWAY_TOOL_DEFS } from "@/lib/gateway/tools";
 import { fulfillApprovedAdmin } from "@/lib/admin-mcp/fulfill-admin";
 import { stampW2WatchIfUnfulfilled } from "@/lib/stuck-watch/w2-unfulfilled";
+import {
+  FULFILL_BLOCKED_DEDUP_UNAVAILABLE,
+  fulfillDedupFinish,
+  fulfillDedupGate,
+  type FulfillDedupGate,
+} from "@/lib/comm-reply-dedup/guard";
 import { isConfigChangeApproval } from "@/lib/config-change-request/core";
 import { fulfillConfigChangeApproval } from "@/lib/config-change-request/service";
 import type {
@@ -407,6 +413,15 @@ export function snsDeliveryFromFulfillment(
   return null;
 }
 
+/**
+ * The text a conversation approval posts when fulfilled. Also used to compare
+ * a pending approval with a newer reply (COMM_REPLY_DEDUP_ENABLED supersede):
+ * the body itself is never stored by the dedup code, only fingerprinted.
+ */
+export function invokeSnapshotOutboundText(snapshot: InvokeSnapshot, fallbackPurpose: string): string {
+  return outboundText(snapshot.args ?? {}, snapshot.purpose || fallbackPurpose);
+}
+
 function outboundText(args: Record<string, unknown>, fallback: string): string {
   const raw = [args.text, args.body, args.message].find(
     (value) => typeof value === "string" && value.trim()
@@ -724,6 +739,8 @@ async function fulfillApprovedInvokeCore(
   approval: ApprovalRequest,
   options: FulfillInvokeOptions = {}
 ): Promise<ApprovalFulfillment | null> {
+  let dedupGate: FulfillDedupGate | null = null;
+  let postAttempted = false;
   try {
     const existing = parseFulfillment(approval.metadata);
     if (existing?.ok) return existing;
@@ -793,7 +810,24 @@ async function fulfillApprovedInvokeCore(
 
     const dest = destValidation.dest;
 
+    // COMM_REPLY_DEDUP_ENABLED: expired, or the conversation already got a reply
+    // with the same / a similar body after this approval was created → closed
+    // without sending. Claims the send in the hash-only ledger otherwise. Fail
+    // closed when the ledger is down. Taken only after every check that can
+    // refuse the send without throwing (destination validation above), so a
+    // refused send never leaves a claim behind (木村 review on #260): from
+    // here on every path finishes the claim — sent / failed after the post,
+    // failed on a throw before the post, uncertain on a throw from the post.
+    dedupGate = await fulfillDedupGate(approval, snapshot, invokeSnapshotOutboundText(snapshot, approval.purpose));
+    if (!dedupGate.ok) {
+      const blocked: ApprovalFulfillment = { ok: false, error: dedupGate.code, at: new Date().toISOString() };
+      if (dedupGate.code === FULFILL_BLOCKED_DEDUP_UNAVAILABLE) await persistFulfillment(approval, blocked);
+      return blocked;
+    }
+
     const threadResult = await threadOf(snapshot, dest);
+
+    postAttempted = true;
 
     const posted = await postConversationMessage({
       orgId: snapshot.orgId || approval.orgId,
@@ -805,6 +839,9 @@ async function fulfillApprovedInvokeCore(
       // Human already approved the full mention-reply body.
       summarize: false,
     });
+    const gateAfterPost = dedupGate;
+    dedupGate = null;
+    await fulfillDedupFinish(gateAfterPost, approval, posted.ok ? "sent" : "failed").catch(() => undefined);
 
     const at = new Date().toISOString();
     const notSent = posted.ok && !options.attachmentHandledByCaller ? attachmentNotSent(approval) : undefined;
@@ -858,6 +895,12 @@ async function fulfillApprovedInvokeCore(
     }
     return fulfillment;
   } catch (error) {
+    // Ledger claim still open: a throw from the post itself = unknown outcome →
+    // kept as uncertain (never re-sent blindly); a throw before the post (thread
+    // / reply-policy lookup) sent nothing → released.
+    if (dedupGate) {
+      await fulfillDedupFinish(dedupGate, approval, postAttempted ? "uncertain" : "failed").catch(() => undefined);
+    }
     const at = new Date().toISOString();
     const message = error instanceof Error ? error.message : "fulfill_failed";
     const fulfillment: ApprovalFulfillment = { ok: false, error: message, at };

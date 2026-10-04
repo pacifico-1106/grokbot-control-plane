@@ -13,6 +13,7 @@ import {
   rotateCredential as demoRotate,
   updateWakeWebhook as demoUpdateWakeWebhook,
   getWakeWebhookSecret as demoGetWakeWebhookSecret,
+  unlinkedBinding,
 } from "../bindings";
 import { isDemoMode } from "../mode";
 import {
@@ -31,7 +32,7 @@ import type {
   SpendLimits,
 } from "../types";
 
-export { bindingPublicView };
+export { bindingPublicView, unlinkedBinding };
 
 export async function getBinding(
   employeeId: string
@@ -48,6 +49,17 @@ export async function getBinding(
   return mapBindingRow(data as Record<string, unknown>);
 }
 
+
+/**
+ * Read-only binding for display (pages / GET routes): the stored row, or an
+ * unlinked placeholder that is NOT persisted. Never writes.
+ */
+export async function getBindingForDisplay(
+  employeeId: string,
+  orgId: string
+): Promise<EmployeeBinding> {
+  return (await getBinding(employeeId)) ?? unlinkedBinding(employeeId, orgId);
+}
 
 export async function findBindingByCredentialFingerprint(
   fingerprint: string
