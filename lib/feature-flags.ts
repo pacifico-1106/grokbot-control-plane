@@ -535,3 +535,32 @@ export function isCommReplyDedupEnabled(): boolean {
 export function isMcpEventsEnabled(): boolean {
   return parseFlag(process.env.MCP_EVENTS_ENABLED);
 }
+
+/**
+ * D9 (八坂 GO 2026-10-05): hardened delivery for the two pre-existing outbound
+ * webhooks — the approval.resolved callback (employee.callbackUrl) and the
+ * conversation wake webhook (binding.wakeWebhookUrl).
+ *
+ * When ON:
+ * - Both go through #267's postWebhook (lib/mcp-events/transport.ts): https on
+ *   443 only, hostname (no IP literal / internal names), EVERY DNS answer must
+ *   be public, the checked address is pinned for the connection, redirects are
+ *   never followed, 256 KiB body cap, overall timeout with socket teardown.
+ * - Standard Webhooks headers (webhook-id / -timestamp / -signature). Callback
+ *   key: the employee's minted callback secret (employee_webhook_settings) →
+ *   else the existing wake-webhook secret → else unsigned. Wake key: the
+ *   existing wake-webhook secret (the Bearer header is still sent).
+ * - The callback body is minimal (ids + status) unless the employee's config
+ *   opts into callback_payload = legacy_full (today's body).
+ * - webhook-id for the callback = the MCP Events eventId when there is one (D7).
+ * Requires migration 20261005100000_employee_webhook_settings.sql (settings
+ * that cannot be read → the callback is not sent, category config_unavailable).
+ *
+ * When OFF (default): receivers get exactly today's requests (fetch, same
+ * headers and body). Independent of the flag, the approver-facing result and
+ * audit rows carry only a failure category (never raw error text, the
+ * receiver's status or body).
+ */
+export function isWebhookHardeningEnabled(): boolean {
+  return parseFlag(process.env.WEBHOOK_HARDENING_ENABLED);
+}

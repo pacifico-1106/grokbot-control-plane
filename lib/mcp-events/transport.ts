@@ -41,6 +41,8 @@ export type PinnedRequest = {
   timeoutMs: number;
   maxResponseBytes: number;
   signal?: AbortSignal;
+  /** D9: the legacy callback / wake keep their own User-Agent (default Staffpass-MCP-Events/1.0). */
+  userAgent?: string;
 };
 export type WebhookTransport = {
   lookup: (hostname: string) => Promise<ResolvedAddress[]>;
@@ -89,7 +91,7 @@ export function buildPinnedRequestOptions(req: PinnedRequest): RequestOptions {
       host: req.hostname,
       "content-length": String(req.body.length),
       "accept-encoding": "identity",
-      "user-agent": "Staffpass-MCP-Events/1.0",
+      "user-agent": req.userAgent || "Staffpass-MCP-Events/1.0",
     },
   };
 }
@@ -199,7 +201,7 @@ export async function postWebhook(
   body: string,
   headers: Record<string, string>,
   transport: WebhookTransport,
-  opts: { timeoutMs?: number } = {}
+  opts: { timeoutMs?: number; userAgent?: string } = {}
 ): Promise<PostResult> {
   const checked = validateCallbackUrl(rawUrl);
   if (!checked.ok) return { ok: false, category: "connection_refused", reason: checked.reason, retryable: false };
@@ -236,6 +238,7 @@ export async function postWebhook(
         timeoutMs,
         maxResponseBytes: MAX_RESPONSE,
         signal: controller.signal,
+        ...(opts.userAgent ? { userAgent: opts.userAgent } : {}),
       }),
       timeoutMs + 500,
       controller

@@ -533,6 +533,8 @@ export type AuditAction =
   | "mcp_events.delivery_deferred"
   | "mcp_events.subscription_revoked"
   | "mcp_events.triggered_action"
+  | "employee.webhook_secret_minted"
+  | "employee.webhook_payload_mode_set"
   | "mcp_handoff.not_connected_notify"
   | "agent.approval_wake"
   | "stuck_watch.audience_ledger_retry"
