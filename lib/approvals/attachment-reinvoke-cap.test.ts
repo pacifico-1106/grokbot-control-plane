@@ -43,8 +43,12 @@ const { ADMIN_MCP_TOOL_NAMES } = await import("@/lib/mcp/admin-public");
 const { slackReinvokeReason, SLACK_DEFINITE_ERROR_FIXES } = await import("@/lib/slack/definite-errors");
 const { reinvokeReasonForFileUpload } = await import("@/lib/approvals/poll-hint");
 const {
-  ATTACHMENT_RETRY_CAP, SETUP_TOOL_SUCCEEDED_AUDIT, countsAsSettingsChange, recordSetupToolSucceeded,
+  ATTACHMENT_RETRY_CAP, SETUP_TOOL_SUCCEEDED_AUDIT, SETTINGS_RESET_TOOLS, DASHBOARD_SLACK_ADAPTER_SAVE,
+  countsAsSettingsChange, recordSetupToolSucceeded, settingsChangedSince,
 } = await import("@/lib/approvals/attachment-retry-cap");
+const { READ_ONLY_ADMIN_TOOLS } = await import("@/lib/billing/plan-scopes");
+const { appendAuditEvent } = await import("@/lib/data/audit");
+const { PUT: adapterPUT } = await import("@/app/api/settings/conversation-adapters/route");
 type GatewayInvokeRequest = import("@/lib/types").GatewayInvokeRequest;
 type FileAttachment = NonNullable<GatewayInvokeRequest["fileAttachment"]>;
 type ApprovalRequest = import("@/lib/types").ApprovalRequest;
@@ -181,29 +185,37 @@ async function asUserToken<T>(run: () => Promise<T>): Promise<T> {
 
 const CREDENTIAL = ["invalid_auth", "not_authed", "account_inactive", "token_revoked", "token_expired", "not_allowed_token_type"] as const;
 const NON_CREDENTIAL = ["channel_not_found", "not_in_channel", "is_archived", "missing_scope", "no_permission"] as const;
+/** credential errors fixed by replacing the token (not_allowed_token_type is diagnosed first: third round c). */
+const TOKEN_CREDENTIAL = CREDENTIAL.filter((c) => c !== "not_allowed_token_type");
 
 // ---------------------------------------------------------------------------
 describe("1. auth-error guidance by the failing token's type", () => {
-  test("user → setup.slackAuthorizeLink.issue; bot → setup.slackAdapter.setBotToken; unknown → setup.slackStatus", () => {
-    for (const code of CREDENTIAL) {
-      const bot = SLACK_DEFINITE_ERROR_FIXES[code];
-      expect(slackReinvokeReason(code, undefined, "user")).toEqual(reason(code,
-        { kind: code === "not_allowed_token_type" ? "slack_token_type" : "slack_user_token", tokenType: "user" },
-        "setup.slackAuthorizeLink.issue"));
-      expect(slackReinvokeReason(code, undefined, "bot")).toEqual(reason(code, { kind: bot.kind, tokenType: "bot" }, "setup.slackAdapter.setBotToken"));
-      expect(slackReinvokeReason(code)).toEqual(reason(code, { kind: "slack_token", tokenType: "unknown" }, "setup.slackStatus"));
+  test("user → setup.slackAuthorizeLink.issue (link flag ON); bot → setup.slackAdapter.setBotToken; unknown → setup.slackStatus", () => {
+    process.env.SLACK_AUTHORIZE_LINK_ENABLED = "true";
+    try {
+      for (const code of TOKEN_CREDENTIAL) {
+        const bot = SLACK_DEFINITE_ERROR_FIXES[code];
+        expect(slackReinvokeReason(code, undefined, "user")).toEqual(reason(code, { kind: "slack_user_token", tokenType: "user" },
+          "setup.slackAuthorizeLink.issue"));
+        expect(slackReinvokeReason(code, undefined, "bot")).toEqual(reason(code, { kind: bot.kind, tokenType: "bot" }, "setup.slackAdapter.setBotToken"));
+        expect(slackReinvokeReason(code)).toEqual(reason(code, { kind: "slack_token", tokenType: "unknown" }, "setup.slackStatus"));
+      }
+    } finally {
+      delete process.env.SLACK_AUTHORIZE_LINK_ENABLED;
     }
     for (const tool of ["setup.slackAuthorizeLink.issue", "setup.slackAdapter.setBotToken", "setup.slackStatus"]) {
       expect((ADMIN_MCP_TOOL_NAMES as readonly string[]).includes(tool)).toBe(true);
     }
   });
 
-  test("destination / permission errors do not depend on the token type", () => {
+  test("destination / permission errors do not depend on the token type (missing_scope with a user token: see section 5)", () => {
     for (const code of NON_CREDENTIAL) {
       const { kind, nextTool } = SLACK_DEFINITE_ERROR_FIXES[code];
-      for (const t of ["user", "bot", undefined] as const) {
+      for (const t of (code === "missing_scope" ? ["bot", undefined] : ["user", "bot", undefined]) as Array<"user" | "bot" | undefined>) {
         const r = slackReinvokeReason(code, code === "missing_scope" ? ["files:write"] : undefined, t);
-        expect(r).toEqual(reason(code, { kind, ...(code === "missing_scope" ? { needed: ["files:write"] } : {}) }, nextTool));
+        expect(r).toEqual(reason(code, {
+          kind, ...(code === "missing_scope" ? { needed: ["files:write"], tokenType: t ?? "unknown" } : {}),
+        }, nextTool));
       }
     }
   });
@@ -230,6 +242,7 @@ describe("1. auth-error guidance by the failing token's type", () => {
   test("user token (postingAs user, linked identity): completion token_revoked → slackTokenType user → setup.slackAuthorizeLink.issue (poll = MCP = re-run)", async () => {
     installSlack();
     await setToken(true);
+    process.env.SLACK_AUTHORIZE_LINK_ENABLED = "true";
     await asUserToken(async () => {
       const { body, approvalId, statusToken } = await approved();
       complete = { json: { ok: false, error: "token_revoked" } };
@@ -244,7 +257,7 @@ describe("1. auth-error guidance by the failing token's type", () => {
       expect(rerun).toMatchObject({ ok: false, status: "failed" });
       expect(rerun?.reinvokeReason).toEqual(expected);
       noSecrets(JSON.stringify({ p, rerun }));
-    });
+    }).finally(() => { delete process.env.SLACK_AUTHORIZE_LINK_ENABLED; });
   });
 
   test("bot token: getUploadURLExternal invalid_auth → slackTokenType bot → setup.slackAdapter.setBotToken", async () => {
@@ -418,13 +431,13 @@ describe("4. retry cap: the same definite error 3× in a row", () => {
     return out;
   }
 
-  test("cap is 3; reset trigger is generic (setup.* succeeded; the link issue counts only on completion)", () => {
+  test("cap is 3; reset trigger is generic (settings-changing setup tool succeeded; the link issue counts only on completion)", () => {
     expect(ATTACHMENT_RETRY_CAP).toBe(3);
     expect(SETUP_TOOL_SUCCEEDED_AUDIT).toBe("setup.tool_succeeded");
     expect(countsAsSettingsChange("setup.slackAdapter.setBotToken", "admin_fulfillment")).toBe(true);
     expect(countsAsSettingsChange("setup.slackApprover.set", "admin_fulfillment")).toBe(true);
     expect(countsAsSettingsChange("setup.lineApproval.upsert", "admin_fulfillment")).toBe(true);
-    expect(countsAsSettingsChange("setup.slackStatus", "admin_tool")).toBe(true);
+    expect(countsAsSettingsChange("setup.slackStatus", "admin_tool")).toBe(false); // read-only (third round e)
     expect(countsAsSettingsChange("employees.postingIdentity.set", "admin_fulfillment")).toBe(true);
     expect(countsAsSettingsChange("setup.slackAuthorizeLink.issue", "admin_fulfillment")).toBe(false);
     expect(countsAsSettingsChange("setup.slackAuthorizeLink.issue", "admin_tool")).toBe(false);
@@ -598,8 +611,8 @@ describe("migration 20261004400000 (static, 木村 second round)", () => {
     // 4: streak per approval + code, written by finish under the row lock
     expect(sql).toContain("'attachmentUploadStreak'");
     expect(sql).toContain("create or replace function public.claim_approval_attachment_upload_capped(p_id uuid, p_org uuid, p_claim uuid, p_ref text, p_cap int)");
-    expect(sql).toContain("'setup.tool_succeeded'");
-    expect(sql).toMatch(/created_at > \(s->>'lastAt'\)::timestamptz/);
+    expect(sql).toContain("from public.org_settings_changes c");
+    expect(sql).toMatch(/c\.changed_at > \(s->>'lastAt'\)::timestamptz/);
     expect(sql).toContain("return public.claim_approval_attachment_upload(p_id, p_org, p_claim, p_ref);");
     expect(sql).toContain("'capped'");
     // 2: stop
@@ -613,12 +626,253 @@ describe("migration 20261004400000 (static, 木村 second round)", () => {
       expect(sql).toContain(`revoke all on function public.${sig} from public,anon,authenticated;`);
       expect(sql).toContain(`grant execute on function public.${sig} to service_role;`);
     }
-    expect(sql.match(/security invoker set search_path = pg_catalog, public/g)?.length).toBe(5);
+    expect(sql.match(/security invoker set search_path = pg_catalog, public/g)?.length).toBe(6);
     expect(sql.match(/for update;/g)?.length).toBe(5);
-    expect(sql).not.toMatch(/security definer|alter table|create table|create policy|drop function/i);
+    expect(sql).not.toMatch(/security definer|create policy|drop function/i);
     // still applied after #253's 300000, and no later migration was needed
     const names = readdirSync(new URL("../../supabase/migrations/", import.meta.url)).filter((f: string) => f.endsWith(".sql")).sort();
     expect(names.indexOf("20261004400000_approval_attachment_reconcile.sql")).toBeGreaterThan(names.indexOf("20261004300000_approval_attachment_upload_claim.sql"));
     expect(names[names.length - 1]).toBe("20261004400000_approval_attachment_reconcile.sql");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 木村 third round on #255 (answers to open decisions a–h)
+describe("5. third round: guidance (a–c), resets (d, e, h), poll = re-run (f), fixed cap (g)", () => {
+  const BOT_REVOKED = reason("token_revoked", { kind: "slack_bot_token", tokenType: "bot" }, "setup.slackAdapter.setBotToken");
+  async function failTimes(n: number, a: { body: GatewayInvokeRequest; approvalId: string }) {
+    const out: Array<Record<string, unknown> | undefined> = [];
+    for (let i = 0; i < n; i++) out.push(fileUpload(await invokeComm({ ...a.body, approvalId: a.approvalId })));
+    return out;
+  }
+  const tick = () => new Promise((r) => setTimeout(r, 5)); // demo clocks are ms: the reset must be AFTER the last failure
+  afterEach(() => { delete process.env.SLACK_AUTHORIZE_LINK_ENABLED; });
+
+  test("(a) user-token credential errors: authorize-link flag OFF → setup.slackStatus (never an unusable tool); ON → setup.slackAuthorizeLink.issue", () => {
+    for (const code of TOKEN_CREDENTIAL) {
+      delete process.env.SLACK_AUTHORIZE_LINK_ENABLED;
+      expect(slackReinvokeReason(code, undefined, "user")).toEqual(reason(code, { kind: "slack_user_token", tokenType: "user" }, "setup.slackStatus"));
+      process.env.SLACK_AUTHORIZE_LINK_ENABLED = "true";
+      expect(slackReinvokeReason(code, undefined, "user")).toEqual(reason(code, { kind: "slack_user_token", tokenType: "user" }, "setup.slackAuthorizeLink.issue"));
+      // bot / unknown do not depend on the link flag
+      expect(slackReinvokeReason(code, undefined, "bot")?.nextTool).toBe("setup.slackAdapter.setBotToken");
+      expect(slackReinvokeReason(code)?.nextTool).toBe("setup.slackStatus");
+    }
+  });
+
+  test("(b) missing_scope: user token → setup.slackAuthorizeLink.issue (re-auth adds scopes; flag OFF → setup.slackStatus); bot / unknown → setup.slackStatus", () => {
+    const needed = ["files:write"];
+    process.env.SLACK_AUTHORIZE_LINK_ENABLED = "true";
+    expect(slackReinvokeReason("missing_scope", needed, "user")).toEqual(reason("missing_scope",
+      { kind: "slack_scope", needed, tokenType: "user" }, "setup.slackAuthorizeLink.issue"));
+    expect(slackReinvokeReason("missing_scope", needed, "bot")).toEqual(reason("missing_scope",
+      { kind: "slack_scope", needed, tokenType: "bot" }, "setup.slackStatus"));
+    expect(slackReinvokeReason("missing_scope", needed)).toEqual(reason("missing_scope",
+      { kind: "slack_scope", needed, tokenType: "unknown" }, "setup.slackStatus"));
+    delete process.env.SLACK_AUTHORIZE_LINK_ENABLED;
+    expect(slackReinvokeReason("missing_scope", needed, "user")).toEqual(reason("missing_scope",
+      { kind: "slack_scope", needed, tokenType: "user" }, "setup.slackStatus"));
+  });
+
+  test("(c) not_allowed_token_type → setup.slackStatus for user, bot and unknown (link flag ON or OFF)", () => {
+    for (const link of [true, false]) {
+      if (link) process.env.SLACK_AUTHORIZE_LINK_ENABLED = "true"; else delete process.env.SLACK_AUTHORIZE_LINK_ENABLED;
+      for (const t of ["user", "bot", undefined] as const) {
+        expect(slackReinvokeReason("not_allowed_token_type", undefined, t)).toEqual(reason("not_allowed_token_type",
+          { kind: "slack_token_type", tokenType: t ?? "unknown" }, "setup.slackStatus"));
+      }
+    }
+  });
+
+  test("(a–c) reconcile flag OFF: the da97a12 table for every token (no tokenType)", () => {
+    delete process.env.APPROVAL_ATTACHMENT_RECONCILE_ENABLED;
+    process.env.SLACK_AUTHORIZE_LINK_ENABLED = "true";
+    for (const t of ["user", "bot", undefined] as const) {
+      expect(slackReinvokeReason("not_allowed_token_type", undefined, t)).toEqual(reason("not_allowed_token_type",
+        { kind: "slack_token_type" }, "setup.slackAdapter.setBotToken"));
+      expect(slackReinvokeReason("missing_scope", ["files:write"], t)).toEqual(reason("missing_scope",
+        { kind: "slack_scope", needed: ["files:write"] }, "setup.slackStatus"));
+    }
+  });
+
+  test("(b) end to end: user token getUploadURLExternal missing_scope → poll = MCP = re-run → setup.slackAuthorizeLink.issue with needed", async () => {
+    installSlack();
+    await setToken(true);
+    process.env.SLACK_AUTHORIZE_LINK_ENABLED = "true";
+    await asUserToken(async () => {
+      const { body, approvalId, statusToken } = await approved();
+      getUrl = { json: { ok: false, error: "missing_scope", needed: "files:write", provided: "chat:write" } };
+      const rerun = fileUpload(await invokeComm({ ...body, approvalId }));
+      expect(uploadAuth).toEqual([`Bearer ${USER_TOKEN}`]);
+      const expected = reason("missing_scope", { kind: "slack_scope", needed: ["files:write"], tokenType: "user" }, "setup.slackAuthorizeLink.issue");
+      expect(rerun?.reinvokeReason).toEqual(expected);
+      const p = await poll(approvalId, statusToken);
+      expect(p.web.reinvokeReason).toEqual(expected);
+      expect(p.mcp.reinvokeReason).toEqual(expected);
+      noSecrets(JSON.stringify({ rerun, p }));
+    });
+  });
+
+  test("(d) saving the Slack bot token from the dashboard (PUT /api/settings/conversation-adapters) resets the cap", async () => {
+    installSlack();
+    await setToken(true);
+    const a = await approved();
+    complete = { json: { ok: false, error: "token_revoked" } };
+    await failTimes(4, a);
+    expect(completes).toBe(3);
+    await tick();
+    const res = await adapterPUT(new Request("http://localhost/api/settings/conversation-adapters", {
+      method: "PUT", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ surface: "slack", label: "会話投稿（ダミー）", enabled: true, botToken: TOKEN }),
+    }));
+    expect(res.status).toBe(200);
+    complete = OK_COMPLETE;
+    expect((await failTimes(1, a))[0]).toMatchObject({ ok: true, fileId: "F_CAP_UP" });
+    expect(completes).toBe(4);
+  });
+
+  test("(d) flag OFF: a dashboard save records no reset signal", async () => {
+    delete process.env.APPROVAL_ATTACHMENT_RECONCILE_ENABLED;
+    const since = new Date(Date.now() - 1).toISOString();
+    await tick();
+    const res = await adapterPUT(new Request("http://localhost/api/settings/conversation-adapters", {
+      method: "PUT", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ surface: "slack", label: "x", enabled: true, botToken: TOKEN }),
+    }));
+    expect(res.status).toBe(200);
+    expect(await settingsChangedSince(DEMO_ORG.id, since)).toBe(false);
+  });
+
+  test("(e) the reset tools: settings-changing admin tools only (read-only setup tools never reset)", () => {
+    expect([...SETTINGS_RESET_TOOLS].sort()).toEqual([
+      "employees.postingIdentity.set",
+      "setup.approvalDelivery.autoResolve",
+      "setup.lineApproval.demoteTelegram",
+      "setup.lineApproval.setEmployeeInbox",
+      "setup.lineApproval.upsert",
+      "setup.slackAdapter.setBotToken",
+      "setup.slackApprover.set",
+      "setup.slackAuthorizeLink.issue",
+    ]);
+    for (const tool of SETTINGS_RESET_TOOLS) {
+      expect((ADMIN_MCP_TOOL_NAMES as readonly string[]).includes(tool)).toBe(true);
+      expect((READ_ONLY_ADMIN_TOOLS as readonly string[]).includes(tool)).toBe(false);
+    }
+    const readOnlySetup = (READ_ONLY_ADMIN_TOOLS as readonly string[]).filter((t) => t.startsWith("setup."));
+    expect(readOnlySetup).toContain("setup.slackStatus");
+    for (const tool of readOnlySetup) {
+      for (const source of ["admin_fulfillment", "admin_tool", "authorize_link_completed", "dashboard_settings"] as const) {
+        expect(countsAsSettingsChange(tool, source)).toBe(false);
+      }
+    }
+    expect(countsAsSettingsChange(DASHBOARD_SLACK_ADAPTER_SAVE, "dashboard_settings")).toBe(true);
+    expect(countsAsSettingsChange(DASHBOARD_SLACK_ADAPTER_SAVE, "admin_tool")).toBe(false);
+    expect(countsAsSettingsChange("setup.slackAdapter.setBotToken", "dashboard_settings")).toBe(false);
+  });
+
+  test("(e) read-only setup.slackStatus succeeding does not reset the cap", async () => {
+    installSlack();
+    await setToken(true);
+    const a = await approved();
+    complete = { json: { ok: false, error: "token_revoked" } };
+    await failTimes(3, a);
+    await tick();
+    await recordSetupToolSucceeded({ orgId: DEMO_ORG.id, tool: "setup.slackStatus", source: "admin_tool" });
+    await recordSetupToolSucceeded({ orgId: DEMO_ORG.id, tool: "setup.slackStatus", source: "admin_fulfillment" });
+    complete = OK_COMPLETE;
+    expect((await failTimes(1, a))[0]).toMatchObject({ code: "approval_attachment_retry_capped" });
+    expect(completes).toBe(3);
+  });
+
+  test("(f) a not_sent marker next to a definite failure: the poll returns the same reason as the re-run (one builder)", async () => {
+    installSlack();
+    await setToken(true);
+    const a = await approved();
+    complete = { json: { ok: false, error: "token_revoked" } };
+    const first = (await failTimes(1, a))[0];
+    expect(first?.reinvokeReason).toEqual(BOT_REVOKED);
+    const cur = await latest(a.approvalId);
+    const fulfillment = (cur.metadata.fulfillment ?? {}) as Record<string, unknown>;
+    expect(fulfillment.ok).toBe(true);
+    await updateApprovalMetadata(cur, {
+      fulfillment: { ...fulfillment, fileUpload: { status: "not_sent", reason: "rerun_required", filename: "approved.pdf", bytes: 25 } },
+    });
+    const p = await poll(a.approvalId, a.statusToken);
+    expect(p.web.pollHint).toBe("reinvoke_with_approvalId");
+    expect(p.web.reinvokeReason).toEqual(BOT_REVOKED);
+    expect(p.mcp.reinvokeReason).toEqual(BOT_REVOKED);
+    const again = (await failTimes(1, a))[0];
+    expect(again?.reinvokeReason).toEqual(p.web.reinvokeReason);
+  });
+
+  test("(f) flag OFF: the stored not_sent marker still wins in the poll (unchanged)", async () => {
+    installSlack();
+    await setToken(true);
+    const a = await approved();
+    complete = { json: { ok: false, error: "token_revoked" } };
+    await failTimes(1, a);
+    delete process.env.APPROVAL_ATTACHMENT_RECONCILE_ENABLED;
+    const cur = await latest(a.approvalId);
+    const fulfillment = (cur.metadata.fulfillment ?? {}) as Record<string, unknown>;
+    await updateApprovalMetadata(cur, {
+      fulfillment: { ...fulfillment, fileUpload: { status: "not_sent", reason: "rerun_required", filename: "approved.pdf", bytes: 25 } },
+    });
+    const p = await poll(a.approvalId, a.statusToken);
+    expect(p.web.pollHint).toBe("reinvoke_with_approvalId");
+    expect(p.web.reinvokeReason).toBeUndefined();
+  });
+
+  test("(g) the cap stays 3: env values are ignored", async () => {
+    process.env.APPROVAL_ATTACHMENT_RETRY_CAP = "10";
+    process.env.ATTACHMENT_RETRY_CAP = "10";
+    try {
+      installSlack();
+      await setToken(true);
+      const a = await approved();
+      complete = { json: { ok: false, error: "token_revoked" } };
+      const out = await failTimes(4, a);
+      expect(completes).toBe(3);
+      expect(out[3]).toMatchObject({ code: "approval_attachment_retry_capped", retryCap: { consecutive: 3, limit: 3 } });
+    } finally {
+      delete process.env.APPROVAL_ATTACHMENT_RETRY_CAP;
+      delete process.env.ATTACHMENT_RETRY_CAP;
+    }
+  });
+
+  test("(h) an audit row 'setup.tool_succeeded' written directly (as an org member could) is NOT a reset; only the service-side signal is", async () => {
+    installSlack();
+    await setToken(true);
+    const a = await approved();
+    complete = { json: { ok: false, error: "token_revoked" } };
+    await failTimes(3, a);
+    await tick();
+    const since = new Date().toISOString();
+    await appendAuditEvent({
+      orgId: DEMO_ORG.id, employeeId: null, credentialId: null, action: SETUP_TOOL_SUCCEEDED_AUDIT, purpose: "setup",
+      summary: "forged", metadata: { tool: "setup.slackAdapter.setBotToken", source: "admin_fulfillment" },
+    });
+    complete = OK_COMPLETE;
+    expect((await failTimes(1, a))[0]).toMatchObject({ code: "approval_attachment_retry_capped" });
+    expect(completes).toBe(3);
+    expect(await settingsChangedSince(DEMO_ORG.id, since)).toBe(false);
+    await recordSetupToolSucceeded({ orgId: DEMO_ORG.id, tool: "setup.slackAdapter.setBotToken", source: "admin_fulfillment" });
+    expect(await settingsChangedSince(DEMO_ORG.id, since)).toBe(true);
+    expect((await failTimes(1, a))[0]).toMatchObject({ ok: true, fileId: "F_CAP_UP" });
+    expect(completes).toBe(4);
+  });
+
+  test("(h) migration: the reset signal is a service_role-only table read by the capped claim (not audit_events)", async () => {
+    const { readFileSync } = await import("node:fs");
+    const sql = readFileSync(new URL("../../supabase/migrations/20261004400000_approval_attachment_reconcile.sql", import.meta.url), "utf8");
+    expect(sql).toContain("create table if not exists public.org_settings_changes");
+    expect(sql).toContain("org_id uuid primary key references public.orgs(id) on delete cascade");
+    expect(sql).toContain("alter table public.org_settings_changes enable row level security;");
+    expect(sql).toContain("revoke all on public.org_settings_changes from public, anon, authenticated;");
+    expect(sql).toContain("grant select, insert, update on public.org_settings_changes to service_role;");
+    expect(sql).not.toMatch(/create policy/i);
+    expect(sql).not.toContain("audit_events");
+    expect(sql).toContain("create or replace function public.record_org_settings_change(p_org uuid, p_tool text, p_source text)");
+    expect(sql).toContain("revoke all on function public.record_org_settings_change(uuid,text,text) from public,anon,authenticated;");
+    expect(sql).toContain("grant execute on function public.record_org_settings_change(uuid,text,text) to service_role;");
   });
 });

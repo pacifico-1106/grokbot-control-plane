@@ -1,9 +1,8 @@
 /**
  * 2026-10-04 (木村, #255 second round, decision 4): the retry-cap reset trigger
- * from the admin MCP dispatcher. A setup-type tool that answers ok directly
- * (e.g. setup.slackStatus with everything ready — the reason's nextTool for
- * destination / scope errors) records `setup.tool_succeeded`; a queued ticket,
- * a not-ok answer, or flag OFF records nothing. diagnoseSlackStatus is stubbed
+ * from the admin MCP dispatcher. Third round (木村 e): read-only setup tools
+ * (setup.slackStatus …) never reset, even when they answer ok; a queued ticket,
+ * a not-ok answer, or flag OFF records nothing either. diagnoseSlackStatus is stubbed
  * (no Slack). Demo mode, no network.
  */
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
@@ -18,7 +17,7 @@ mock.module("@/lib/slack/slack-status-diagnose", () => ({
 const { DEMO_ORG, getRuntimeAudit } = await import("@/lib/demo-data");
 const { callAdminMcpTool } = await import("@/lib/mcp/admin-tools");
 const { resetDemoAdminAgent } = await import("@/lib/data/admin-agents");
-const { SETUP_TOOL_SUCCEEDED_AUDIT } = await import("@/lib/approvals/attachment-retry-cap");
+const { SETUP_TOOL_SUCCEEDED_AUDIT, settingsChangedSince } = await import("@/lib/approvals/attachment-retry-cap");
 type ResolvedAdminCredential = import("@/lib/auth/admin-credential").ResolvedAdminCredential;
 
 function adminCred(): ResolvedAdminCredential {
@@ -35,14 +34,14 @@ beforeEach(() => { process.env.APPROVAL_ATTACHMENT_RECONCILE_ENABLED = "true"; d
 afterEach(() => { delete process.env.APPROVAL_ATTACHMENT_RECONCILE_ENABLED; });
 
 describe("setup-type tool succeeded → retry-cap reset marker", () => {
-  test("setup.slackStatus ok → one setup.tool_succeeded row (source admin_tool, no secrets)", async () => {
+  test("read-only setup.slackStatus ok → no reset (木村 third round e): no setup.tool_succeeded row, no reset signal", async () => {
+    const since = new Date(Date.now() - 1).toISOString();
+    await new Promise((r) => setTimeout(r, 5));
     const before = rows("setup.slackStatus").length;
     const res = await callAdminMcpTool("setup.slackStatus", {}, adminCred());
     expect((res.structuredContent as Record<string, unknown>).ok).toBe(true);
-    const after = rows("setup.slackStatus");
-    expect(after.length).toBe(before + 1);
-    expect(after.find((e) => (e.metadata as Record<string, unknown>)?.source === "admin_tool")).toBeTruthy();
-    expect(JSON.stringify(after)).not.toMatch(/xox[abp]-/);
+    expect(rows("setup.slackStatus").length).toBe(before);
+    expect(await settingsChangedSince(DEMO_ORG.id, since)).toBe(false);
   });
 
   test("setup.slackStatus not ok → nothing recorded", async () => {

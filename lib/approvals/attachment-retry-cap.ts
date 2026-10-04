@@ -27,7 +27,16 @@ import { createSupabaseAdminClient } from "@/lib/supabase";
 
 export const ATTACHMENT_RETRY_CAP = 3;
 export const SETUP_TOOL_SUCCEEDED_AUDIT = "setup.tool_succeeded" as const;
-export type SettingsChangeSource = "admin_fulfillment" | "admin_tool" | "authorize_link_completed";
+export type SettingsChangeSource = "admin_fulfillment" | "admin_tool" | "authorize_link_completed" | "dashboard_settings";
+/** Dashboard save of the Slack conversation adapter (bot token); 木村 third round d. */
+export const DASHBOARD_SLACK_ADAPTER_SAVE = "dashboard.conversationAdapter.slack" as const;
+/** STUB (third round, failing-test commit): the settings-changing tools that reset the cap. */
+export const SETTINGS_RESET_TOOLS: readonly string[] = [];
+
+/** STUB (third round, failing-test commit): reset signal recorded after sinceIso. */
+export async function settingsChangedSince(_orgId: string, _sinceIso: string): Promise<boolean> {
+  return false;
+}
 
 const AUTHORIZE_LINK_TOOL = "setup.slackAuthorizeLink.issue";
 /** Settings tools outside the setup.* namespace that change what a Slack upload uses. */

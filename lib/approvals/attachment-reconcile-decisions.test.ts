@@ -308,7 +308,7 @@ describe("5. reinvokeReason: one mapping table", () => {
     account_inactive: ["slack_bot_token", "setup.slackAdapter.setBotToken"],
     token_revoked: ["slack_bot_token", "setup.slackAdapter.setBotToken"],
     token_expired: ["slack_bot_token", "setup.slackAdapter.setBotToken"],
-    not_allowed_token_type: ["slack_token_type", "setup.slackAdapter.setBotToken"],
+    not_allowed_token_type: ["slack_token_type", "setup.slackAdapter.setBotToken"], // flag ON: setup.slackStatus (third round c)
     missing_scope: ["slack_scope", "setup.slackStatus"],
     no_permission: ["slack_permission", "setup.slackStatus"],
   };
@@ -321,14 +321,17 @@ describe("5. reinvokeReason: one mapping table", () => {
       expect((ADMIN_MCP_TOOL_NAMES as readonly string[]).includes(nextTool)).toBe(true);
       // 木村 #255 second round: credential errors carry the failing token type (bot here)
       const credential = nextTool === "setup.slackAdapter.setBotToken";
+      const tokenTyped = credential || code === "missing_scope";
       expect(slackReinvokeReason(code, undefined, "bot")).toEqual({
-        code, fix: { kind, ...(credential ? { tokenType: "bot" } : {}) }, nextTool, nextToolEndpoint: "/api/mcp/admin", retryAfterFix: true,
+        code, fix: { kind, ...(tokenTyped ? { tokenType: "bot" } : {}) },
+        nextTool: code === "not_allowed_token_type" ? "setup.slackStatus" : nextTool, // 木村 third round c
+        nextToolEndpoint: "/api/mcp/admin", retryAfterFix: true,
       });
     }
   });
 
   test("missing_scope carries Slack's `needed` (sanitized); other codes never do", () => {
-    expect(slackReinvokeReason("missing_scope", ["files:write"])?.fix).toEqual({ kind: "slack_scope", needed: ["files:write"] });
+    expect(slackReinvokeReason("missing_scope", ["files:write"])?.fix).toEqual({ kind: "slack_scope", needed: ["files:write"], tokenType: "unknown" });
     expect(slackReinvokeReason("not_in_channel", ["files:write"])?.fix).toEqual({ kind: "slack_channel_membership" });
     expect(sanitizeSlackScopes("files:write,chat:write.public")).toEqual(["files:write", "chat:write.public"]);
     expect(sanitizeSlackScopes("files:write, files:write ,xoxb-123-456-abc,Bearer x,<script>,")).toEqual(["files:write"]);
@@ -433,8 +436,10 @@ describe("migration 20261004400000 (static, decisions 2 + 5)", () => {
     expect(sql).toContain("revoke all on function public.finish_approval_attachment_upload(uuid,uuid,uuid,text,jsonb) from public,anon,authenticated;");
     expect(sql).toContain("grant execute on function public.finish_approval_attachment_upload(uuid,uuid,uuid,text,jsonb) to service_role;");
     // + claim_approval_attachment_upload_capped / stop_approval_attachment_recheck (木村 #255 second round)
-    expect(sql.match(/security invoker set search_path = pg_catalog, public/g)?.length).toBe(5);
+    // + record_org_settings_change (木村 #255 third round h: service_role-only reset signal table)
+    expect(sql.match(/security invoker set search_path = pg_catalog, public/g)?.length).toBe(6);
     expect(sql.match(/for update;/g)?.length).toBe(5);
-    expect(sql).not.toMatch(/security definer|alter table|create table|create policy/i);
+    expect(sql).not.toMatch(/security definer|create policy/i);
+    expect(sql.match(/create table/gi)?.length).toBe(1);
   });
 });

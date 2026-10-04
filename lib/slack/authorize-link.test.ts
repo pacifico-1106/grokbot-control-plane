@@ -473,8 +473,12 @@ describe("callback (single use, pinned user / team)", () => {
     process.env.APPROVAL_ATTACHMENT_RECONCILE_ENABLED = "true";
     try {
       const before = resetRows().length;
+      const since = new Date(Date.now() - 1).toISOString();
+      await new Promise((r) => setTimeout(r, 5));
       const token = await issueViaTicket(empA.id);
       expect(resetRows().length).toBe(before); // the link is only delivered: nothing changed yet
+      const { settingsChangedSince } = await import("@/lib/approvals/attachment-retry-cap");
+      expect(await settingsChangedSince(ORG_A, since)).toBe(false);
       const state = await startState(token);
       const ok = await completeAuthorizeLinkCallback({ state, code: "c-reset", oauthError: "", exchange: exchangeWith(NEW_USER_TOKEN), authTest: authTestAs(empASlack) });
       expect(ok.ok).toBe(true);
@@ -482,6 +486,8 @@ describe("callback (single use, pinned user / team)", () => {
       expect(rows.length).toBe(before + 1);
       expect(rows.find((e) => e.metadata?.source === "authorize_link_completed")?.employeeId).toBe(empA.id);
       noSecrets(rows);
+      // 木村 third round h: the reset signal itself is the service-side marker, not the audit row
+      expect(await settingsChangedSince(ORG_A, since)).toBe(true);
       // flag OFF: a completion records nothing
       delete process.env.APPROVAL_ATTACHMENT_RECONCILE_ENABLED;
       calls = []; // deliveredToken() reads the newest link DM only

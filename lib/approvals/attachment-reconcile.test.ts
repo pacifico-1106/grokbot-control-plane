@@ -465,8 +465,10 @@ describe("migration 20261004400000 (static)", () => {
     }
     // + finish_approval_attachment_upload (same signature, keeps slackError / slackNeeded; 木村 5)
     // + claim_approval_attachment_upload_capped / stop_approval_attachment_recheck (木村 #255 second round)
-    expect(sql.match(/security invoker set search_path = pg_catalog, public/g)?.length).toBe(5);
+    // + record_org_settings_change (木村 #255 third round h: service_role-only reset signal table)
+    expect(sql.match(/security invoker set search_path = pg_catalog, public/g)?.length).toBe(6);
     expect(sql.match(/for update;/g)?.length).toBe(5);
-    expect(sql).not.toMatch(/security definer|alter table|create table|create policy/i);
+    expect(sql).not.toMatch(/security definer|create policy/i);
+    expect(sql.match(/create table/gi)?.length).toBe(1);
   });
 });
