@@ -69,6 +69,27 @@ FIXES = [
                     "delete from public.lp_wake_webhook_configs where id::text like 'a6300000-%';"
                     "delete from public.lp_handoffs where id::text like 'a6300000-%';"),
     },
+    {
+        "name": "lp server-only",
+        "prefix": "20261004800000_",
+        "test": "tests/security/db-lp-tables-server-only.sql",
+        "fixture": "a8000000-",
+        # write privileges revoked here; the lp_* tables lose their (redundant)
+        # service-role-only policies
+        "tables": ("lp_inquiries", "notification_outbox"),
+        "policies": ("lp_handoffs_service_all", "lp_wake_configs_service_all", "lp_wake_events_service_all"),
+        # anon + authenticated x INSERT/UPDATE/DELETE/TRUNCATE x 2 tables (surface; RLS with no
+        # policy already blocks the rows) + the 3 service-role-only policies; 0 session writes
+        "reopened": 2 * 4 * 2 + 3,
+        "unit": "surface findings (grants / policies; session writes: 0)",
+        "summary": ("anon/authenticated hold no write grant on lp_inquiries / notification_outbox; no policy on the "
+                    "5 LP tables, RLS on; sessions read/write nothing; service_role (BYPASSRLS) reads/writes all 5."),
+        "cleanup": ("delete from public.lp_wake_webhook_events where id::text like 'a8000000-%';"
+                    "delete from public.lp_wake_webhook_configs where id::text like 'a8000000-%';"
+                    "delete from public.lp_handoffs where id::text like 'a8000000-%';"
+                    "delete from public.notification_outbox where id::text like 'a8000000-%';"
+                    "delete from public.lp_inquiries where id::text like 'a8000000-%';"),
+    },
 ]
 ALL_FIX_TABLES = tuple(t for f in FIXES for t in f["tables"])
 
@@ -226,7 +247,7 @@ try:
                   + "".join(f"grant {p.lower()} on {t} to anon, authenticated;" for t, p in fix.get("extra_privs", ())))
             assert_holes_state(fix, open_=True)
             before[fix["name"]] = open_holes(fix)
-            print(f"PASS before {name}: {len(before[fix['name']])} session writes allowed (expected {fix['reopened']}) — "
+            print(f"PASS before {name}: {len(before[fix['name']])} {fix.get('unit', 'session writes allowed')} (expected {fix['reopened']}) — "
                   + ", ".join(sorted({c.split(' ', 1)[1].split(':')[0].rsplit(' ', 1)[0] for c in before[fix['name']]})))
             assert len(before[fix["name"]]) == fix["reopened"], before[fix["name"]]
         if name in KNOWN_BROKEN:
@@ -239,10 +260,11 @@ try:
 
     for fix in FIXES:
         sql_file(ROOT / fix["test"])
-        print(f"PASS {fix['name']}: authenticated (member/admin/owner JWT) and anon: INSERT/UPDATE/DELETE denied on "
+        print(f"PASS {fix['name']}: " + (fix.get("summary") or (
+              f"authenticated (member/admin/owner JWT) and anon: INSERT/UPDATE/DELETE denied on "
               f"{len(fix['tables'])} tables; reads intact"
               + ("; credentials unreadable (rows + secret_hash)" if fix.get("extra_privs") else "")
-              + "; service_role reads/writes all.")
+              + "; service_role reads/writes all.")))
     missing = [f["name"] for f in FIXES if not files[f["name"]]]
     assert not missing, f"RLS fix migration missing: {missing}"
 
@@ -261,7 +283,7 @@ try:
             if other is not fix:
                 sql_file(ROOT / other["test"])  # rolling back one fix never reopens the other
         print(f"PASS {fix['name']} rollback restores {policies} policies + {privs} anon/authenticated grants; "
-              f"{len(reopened)} session writes allowed again = exactly the pre-fix set; other fix still closed.")
+              f"{len(reopened)} {fix.get('unit', 'session writes allowed')} again = exactly the pre-fix set; other fixes still closed.")
         sql_file(MIGRATIONS / name)
         assert_holes_state(fix, open_=False)
         sql_file(ROOT / fix["test"])
