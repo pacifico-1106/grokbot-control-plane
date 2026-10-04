@@ -4,7 +4,7 @@ import {
   getRuntimeMembers,
 } from "@/lib/demo-data";
 import { getSessionContext } from "@/lib/auth/session";
-import { resolveActorMember } from "@/lib/data/members";
+import { activeMemberRequiredResponse, activeSessionMember } from "@/lib/auth/active-member";
 import { isDemoMode } from "@/lib/mode";
 import type { HumanCapability, OrgMember } from "@/lib/types";
 import { hasCapability, missingCapabilityMessage } from "@/lib/team/rbac";
@@ -52,8 +52,16 @@ export function resolveDemoActor(
 }
 
 /**
- * Capability gate: DEMO → in-memory mem_*; production → session member
- * (falls back to org owner via resolveActorMember).
+ * Capability gate.
+ *
+ * DEMO (isDemoMode()): the in-memory demo actor chosen by body actorMemberId /
+ * x-member-id / ?as= (default mem_1). Demo has no Auth; unchanged.
+ *
+ * Production: ONLY the session's own active org_members row. Fails closed —
+ * no session, no active member row, or a member row that does not belong to
+ * the session org → 401 auth_required (same contract as requireOrgSession /
+ * requireCredentialAdmin). There is no owner fallback and x-member-id / ?as= /
+ * body actorMemberId are ignored. Missing capability → 403 capability_denied.
  */
 export async function requireCapability(
   req: Request,
@@ -67,17 +75,11 @@ export async function requireCapability(
   if (isDemoMode()) {
     actor = resolveDemoActor(req, bodyActorId);
   } else {
-    const session = await getSessionContext();
-    if (session.member) {
-      actor = session.member;
-    } else {
-      const headerOrBody = actorIdFromRequest(req, bodyActorId);
-      const id =
-        headerOrBody === "mem_1" && !bodyActorId && !req.headers.get("x-member-id")
-          ? null
-          : headerOrBody;
-      actor = await resolveActorMember(id, session.orgId);
+    const member = activeSessionMember(await getSessionContext());
+    if (!member) {
+      return { ok: false, response: activeMemberRequiredResponse() };
     }
+    actor = member;
   }
 
   if (!hasCapability(actor, cap)) {

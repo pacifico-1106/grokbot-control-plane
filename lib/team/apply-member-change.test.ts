@@ -159,7 +159,11 @@ describe("resolveMemberChangeActor (production)", () => {
     session = { userId: "u-x", email: "x@fixture.invalid", orgId: ORG_A, member: null };
     const r = await resolveMemberChangeActor(new Request("https://fixture.invalid/", { headers: { "x-member-id": id(1) } }), id(1));
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.code).toBe("actor_not_active_member");
+    if (!r.ok) {
+      expect(r.code).toBe("active_member_required");
+      expect(r.error).toBe("auth_required");
+      expect(r.httpStatus).toBe(401);
+    }
   });
 });
 

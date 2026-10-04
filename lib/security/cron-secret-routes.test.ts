@@ -4,9 +4,9 @@
  * bodies for wrong / missing / unset secrets are unchanged; a `replace_me…`
  * placeholder CRON_SECRET no longer authenticates anything (401).
  *
- * The LP crons (lp-inquiry-cleanup, lp-handoff-outbox) are deliberately not
- * covered here: PR #261 changes lp-inquiry-cleanup and they move to the helper
- * after it merges.
+ * The LP crons (lp-inquiry-cleanup, lp-handoff-outbox) also use the helper,
+ * with LP-specific options and their own 401 bodies; they are covered in
+ * app/api/cron/lp-cron-secret.test.ts.
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";

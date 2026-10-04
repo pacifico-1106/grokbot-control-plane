@@ -48,10 +48,6 @@ mock.module("@/lib/auth/session", () => ({
   getCurrentOrgId: async () => session.orgId,
 }));
 mock.module("@/lib/mode", () => ({ isDemoMode: () => false }));
-mock.module("@/lib/data/members", () => ({
-  // Fail closed: no implicit owner fallback in this test.
-  resolveActorMember: async () => member("member", ["view_dashboard"]),
-}));
 mock.module("@/lib/billing/entitlements", () => ({
   assertBillingAllows: async () => ({ ok: true, entitlements: {} }),
 }));
