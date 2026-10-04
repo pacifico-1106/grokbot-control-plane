@@ -96,7 +96,9 @@ describe("flag ON", () => {
     process.env.MCP_EVENTS_ENABLED = "true";
     const list = await (await modernRpc("events/list")).json();
     expect(list.result.resultType).toBe("complete");
-    expect(list.result._meta[SERVER_INFO_KEY]).toEqual({ name: expect.any(String), version: expect.any(String) });
+    const info = list.result._meta[SERVER_INFO_KEY] as { name: unknown; version: unknown };
+    expect(typeof info.name).toBe("string");
+    expect(typeof info.version).toBe("string");
     expect(list.result.events.map((e: { name: string }) => e.name)).toEqual(["approval.decided", "approval.expired"]);
     // Same serverInfo as tools/list on the same era.
     const tools = await (await modernRpc("tools/list")).json();
