@@ -9,7 +9,8 @@
 -- After: (0) unchanged; (1) 0 rows; (2) anon / authenticated have no
 -- INSERT / UPDATE / DELETE / TRUNCATE on lp_inquiries / notification_outbox
 -- and no SELECT on lp_handoffs / lp_wake_webhook_configs / lp_wake_webhook_events
--- (anon / authenticated rows absent for those 3 tables; service_role rows
+-- (their anon / authenticated rows keep only Supabase's default
+-- REFERENCES,TRIGGER, which this migration does not touch; service_role rows
 -- unchanged); (3) 0 rows; (4) all t; (5) 0 rows; (6) all f (no table-,
 -- column-, PUBLIC- or inherited SELECT for sessions; STOP and report any t).
 begin read only;
