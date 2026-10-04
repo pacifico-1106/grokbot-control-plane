@@ -58,6 +58,8 @@ import { fulfillApprovedAdmin } from "@/lib/admin-mcp/fulfill-admin";
 import { stampW2WatchIfUnfulfilled } from "@/lib/stuck-watch/w2-unfulfilled";
 import { isConfigChangeApproval } from "@/lib/config-change-request/core";
 import { fulfillConfigChangeApproval } from "@/lib/config-change-request/service";
+import { buildSlackPostRecord } from "@/lib/comm-delete/post-record";
+import { fulfillCommDeleteApproval } from "@/lib/comm-delete/fulfill";
 import type {
   ApprovalRequest,
   ConversationContext,
@@ -103,6 +105,10 @@ const SNAPSHOT_ARG_KEYS = [
   "bcc",
   "hasAttachments",
   "sealithTransferId",
+  // comm.delete target (ids only).
+  "messageId",
+  "message_id",
+  "chatId",
 ] as const;
 
 /** Keys whose string[] value is kept in the snapshot (recipient lists). */
@@ -158,11 +164,13 @@ export type ApprovalFulfillment = {
    * metadata.attachmentUpload by parseFulfillment.
    */
   fileUpload?: FulfillmentFileUpload;
+  /** comm.delete outcome (ids / status only). */
+  commDelete?: { status: string; code: string; deletedVia?: "user" | "bot" };
 };
 
 export type ConversationDelivery =
   | { ok: true; delivery: "stub" }
-  | { ok: true; delivery: "slack"; channel?: string; ts?: string }
+  | { ok: true; delivery: "slack"; channel?: string; ts?: string; postedVia?: PostingAs }
   | { ok: true; delivery: "mail"; channel?: string; ts?: string };
 
 function jsonClone<T>(value: T): T | undefined {
@@ -355,6 +363,17 @@ export function parseFulfillment(
   }
   const fileUpload = liveFileUpload(metadata, parseStoredFileUpload(rec.fileUpload));
   if (fileUpload) fulfillment.fileUpload = fileUpload;
+  const cd = rec.commDelete;
+  if (cd && typeof cd === "object" && !Array.isArray(cd)) {
+    const c = cd as Record<string, unknown>;
+    if (typeof c.status === "string" && typeof c.code === "string") {
+      fulfillment.commDelete = {
+        status: c.status,
+        code: c.code,
+        ...(c.deletedVia === "user" || c.deletedVia === "bot" ? { deletedVia: c.deletedVia } : {}),
+      };
+    }
+  }
   return fulfillment;
 }
 
@@ -742,6 +761,13 @@ async function fulfillApprovedInvokeCore(
       return fulfillSnsPublish(approval, snapshot);
     }
 
+    // comm.delete: re-check flag / ownership / idempotency at execution time.
+    if ((snapshot.tool || approval.tool) === "comm.delete") {
+      const fulfillment = await fulfillCommDeleteApproval(approval, snapshot.args ?? {});
+      await persistFulfillment(approval, fulfillment);
+      return fulfillment;
+    }
+
     // mail.send: honest stub fulfillment (live send not yet implemented)
     if (isMailSendTool(snapshot.tool || approval.tool || "")) {
       return fulfillMailSend(approval, snapshot);
@@ -853,6 +879,10 @@ async function fulfillApprovedInvokeCore(
           ts: posted.ts,
           destKind,
           phase: "approval.fulfill",
+          ...(() => {
+            const postRecord = buildSlackPostRecord(posted);
+            return postRecord ? { postRecord } : {};
+          })(),
         },
       }).catch(() => undefined);
     }

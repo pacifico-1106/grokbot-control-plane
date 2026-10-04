@@ -34,7 +34,7 @@ function patchEmployee(patch: Partial<Employee>) {
   const previous = { ...emp };
   Object.assign(emp, patch);
   restorers.push(() => {
-    for (const key of Object.keys(emp)) delete (emp as Record<string, unknown>)[key];
+    for (const key of Object.keys(emp)) delete (emp as unknown as Record<string, unknown>)[key];
     Object.assign(emp, previous);
   });
 }
@@ -439,6 +439,26 @@ describe("per-tool settings and approval (risk_based, low risk)", () => {
   });
 });
 
+describe("approved delete: a refused run may run again once the cause is fixed", () => {
+  test("flag OFF at fulfill → refused (no delete); flag ON again → same approval deletes once", async () => {
+    await mockSlack();
+    const { channel, ts } = await seedOwnPost();
+    patchEmployee({ approvalPolicy: "always_human" });
+    const queued = await invoke(deleteBody({ channel, ts }));
+    const approved = await resolveApproval(String(queued.body.approvalId), "approved", "ando@example.com", DEMO_ORG.id);
+    delete process.env.COMM_DELETE_ENABLED;
+    const first = await fulfillApprovedInvoke(approved!);
+    expect(first?.error).toBe("comm_delete_disabled");
+    process.env.COMM_DELETE_ENABLED = "true";
+    const second = await fulfillApprovedInvoke(approved!);
+    expect(second?.ok).toBe(true);
+    expect(second?.commDelete?.status).toBe("deleted");
+    const third = await fulfillApprovedInvoke(approved!);
+    expect(third?.ok).toBe(true);
+    expect(deletes().length).toBe(1);
+  });
+});
+
 describe("approved conversation posts are recorded too", () => {
   test("fulfilled comm.reply (approval) writes a post record; it can then be deleted with its token", async () => {
     await mockSlack();
@@ -469,6 +489,30 @@ describe("approved conversation posts are recorded too", () => {
       args: { slackChannelId: "C_INTERNAL", text: "旧形式の記録", threadId: "1787911797.502889" },
     });
     const approvalId = String(queued.body.approvalId);
+    const approved = await resolveApproval(approvalId, "approved", "ando@example.com", DEMO_ORG.id);
+    const f = await fulfillApprovedInvoke(approved!);
+    expect(f?.ok).toBe(true);
+    const ts = String(f?.ts);
+    // Simulate a row written before this PR: drop the post record. The legacy
+    // path must then prove ownership through the approval (same org + employee,
+    // fulfillment ok with the same channel + ts) and read postingAs from it.
+    const row = auditsFor("slack.posted").find((e) => (e.metadata as { ts?: string }).ts === ts)!;
+    delete (row.metadata as Record<string, unknown>).postRecord;
+    const r = await invoke(deleteBody({ channel: "C_INTERNAL", ts }));
+    expect(r.httpStatus).toBe(200);
+    expect(r.body.deletedVia).toBe("bot");
+    expect(deletes()[0].auth).toBe(`Bearer ${BOT}`);
+  });
+
+  test("legacy slack.posted whose approval did not post that ts → 404", async () => {
+    await mockSlack();
+    patchEmployee({ toolApprovalDefaults: { "comm.reply": "always_human" } as Employee["toolApprovalDefaults"] });
+    const queued = await invoke({
+      tool: "comm.reply", purpose: "comm.internal", jobId: jid("legacy2"),
+      conversation: { surface: "slack", orgId: DEMO_ORG.id, slackChannelId: "C_INTERNAL", threadId: "1787911797.502889" },
+      args: { slackChannelId: "C_INTERNAL", text: "旧形式の記録（別 ts）", threadId: "1787911797.502889" },
+    });
+    const approvalId = String(queued.body.approvalId);
     await resolveApproval(approvalId, "approved", "ando@example.com", DEMO_ORG.id);
     const ts = fakeTs();
     pushRuntimeAuditEvent({
@@ -476,9 +520,8 @@ describe("approved conversation posts are recorded too", () => {
       summary: "legacy", metadata: { tool: "comm.reply", approvalId, channel: "C_INTERNAL", ts, phase: "approval.fulfill" },
     });
     const r = await invoke(deleteBody({ channel: "C_INTERNAL", ts }));
-    expect(r.httpStatus).toBe(200);
-    expect(r.body.deletedVia).toBe("bot");
-    expect(deletes()[0].auth).toBe(`Bearer ${BOT}`);
+    expect(r.httpStatus).toBe(404);
+    expect(deletes().length).toBe(0);
   });
 
   test("legacy slack.posted pointing at another employee's approval → 404", async () => {
