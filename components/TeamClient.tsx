@@ -38,6 +38,13 @@ const NO_ACTOR: MemberChangeActor = {
   emails: [],
 };
 
+/** POST /api/team/members `inviteEmail` (only present when invite activation is ON). */
+const INVITE_EMAIL_NOTICE: Record<string, string> = {
+  sent: "招待メールを送信しました。受け取った方はメールのリンクを開いてパスワードを設定すると、この組織に参加できます。",
+  existing_account: "このメールアドレスには既にアカウントがあるため、招待メールは送信していません。",
+  failed: "招待メールの送信に失敗しました。メンバーは「招待中」として保存されています。",
+};
+
 export function TeamClient({
   initialMembers,
   viewer = null,
@@ -182,6 +189,9 @@ export function TeamClient({
       if (body.demo === true) {
         setError("デモモードのため、データベースには保存されていません。");
       }
+      const inviteNotice =
+        typeof body.inviteEmail === "string" ? INVITE_EMAIL_NOTICE[body.inviteEmail] : undefined;
+      if (inviteNotice) setError(inviteNotice);
       router.refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : "save_failed");

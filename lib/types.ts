@@ -494,6 +494,8 @@ export type AuditAction =
   | "member.invited"
   | "member.updated"
   | "member.change_denied"
+  | "member.invite_claimed"
+  | "member.invite_email"
   | "commerce.projection_received"
   | "authority.event_delivery"
   | "admin.hire"

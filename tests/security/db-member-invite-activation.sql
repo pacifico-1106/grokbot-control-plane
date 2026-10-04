@@ -208,7 +208,7 @@ do $$
 declare f text;
 begin
   foreach f in array array['public.claim_member_invites(uuid)',
-    'public.provision_org_with_owner(uuid,text,text,text,text,timestamptz,text,text[])'] loop
+    'public.provision_org_with_owner(uuid,uuid,text,text,text,text,timestamptz,text,text[])'] loop
     if has_function_privilege('anon', f, 'execute') or has_function_privilege('authenticated', f, 'execute') then
       raise exception '% executable by a session role', f;
     end if;
@@ -272,7 +272,7 @@ insert into auth.users (id, email, email_confirmed_at) values
 do $$
 declare r jsonb; r2 jsonb; m public.org_members;
 begin
-  r := public.provision_org_with_owner('a9100000-0000-4000-8000-000000000041', 'p41@fixture.invalid', 'P41',
+  r := public.provision_org_with_owner(gen_random_uuid(), 'a9100000-0000-4000-8000-000000000041', 'p41@fixture.invalid', 'P41',
          'invite-fixture-p41', 'managed', now() + interval '14 days', 'AIC-TEST', '{view_dashboard,manage_team,manage_billing}');
   if (r->>'created')::boolean is not true then raise exception 'not created: %', r; end if;
   select * into m from public.org_members where id = (r->'member'->>'id')::uuid;
@@ -284,7 +284,7 @@ begin
         and integration_mode = 'managed' and gateway_status = 'pending' and trial_ends_at is not null) <> 1 then
     raise exception 'org row wrong';
   end if;
-  r2 := public.provision_org_with_owner('a9100000-0000-4000-8000-000000000041', 'p41@fixture.invalid', 'P41',
+  r2 := public.provision_org_with_owner(gen_random_uuid(), 'a9100000-0000-4000-8000-000000000041', 'p41@fixture.invalid', 'P41',
          'invite-fixture-p41-again', 'managed', now() + interval '14 days', null, '{view_dashboard}');
   if (r2->>'created')::boolean is not false or r2->>'org_id' <> r->>'org_id' then raise exception 'not idempotent: %', r2; end if;
   if exists (select 1 from public.orgs where name = 'invite-fixture-p41-again') then raise exception 'second org created'; end if;
@@ -295,7 +295,7 @@ do $$
 begin
   begin
     -- member insert fails (email is NOT NULL) after the org insert
-    perform public.provision_org_with_owner('a9100000-0000-4000-8000-000000000042', null, 'P42',
+    perform public.provision_org_with_owner(gen_random_uuid(), 'a9100000-0000-4000-8000-000000000042', null, 'P42',
          'invite-fixture-p42', 'managed', now() + interval '14 days', null, '{view_dashboard}');
     raise exception 'provision with a failing member insert succeeded';
   exception when not_null_violation then null;

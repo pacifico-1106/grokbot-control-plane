@@ -169,7 +169,7 @@ try:
     assert query("select count(*) from public.audit_events where action = 'member.invite_claimed' and org_id = 'a9000000-0000-4000-8000-0000000000c1';") == "1"
     # 8 parallel provisions for one user → exactly one org
     query("insert into auth.users (id, email, email_confirmed_at) values ('a9100000-0000-4000-8000-0000000000c3', 'race-provision@fixture.invalid', now());")
-    command = ("set role service_role; select public.provision_org_with_owner('a9100000-0000-4000-8000-0000000000c3', "
+    command = ("set role service_role; select public.provision_org_with_owner(gen_random_uuid(), 'a9100000-0000-4000-8000-0000000000c3', "
                "'race-provision@fixture.invalid', 'R', 'invite-race-provision', 'managed', now(), null, '{manage_team}')->>'created';")
     with ThreadPoolExecutor(max_workers=8) as pool:
         created = list(pool.map(query, [command] * 8))

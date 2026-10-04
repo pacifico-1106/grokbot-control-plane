@@ -1,6 +1,7 @@
 import { revalidatePath } from "next/cache";
 import { NextResponse } from "next/server";
 import { requireOrgSession } from "@/lib/auth/require-org";
+import { sendMemberInviteEmail } from "@/lib/auth/invite-email";
 import { assertBillingAllows } from "@/lib/billing/entitlements";
 import { listMembers, runtimeModeLabel } from "@/lib/data";
 import {
@@ -124,9 +125,19 @@ export async function POST(req: Request) {
       );
     }
     revalidatePath("/app/team");
+    // NEW invite only (never on edits): Supabase invite email, flag-gated.
+    const inviteEmail = result.before
+      ? "disabled"
+      : await sendMemberInviteEmail({
+          orgId: gate.orgId,
+          memberId: result.member.id,
+          email: result.member.email,
+          actorEmail: who.actor.email,
+        });
     return NextResponse.json({
       ok: true,
       member: result.member,
+      ...(inviteEmail !== "disabled" ? { inviteEmail } : {}),
       demo: runtimeModeLabel() === "demo",
       mode: runtimeModeLabel(),
       actorId: who.actor.id,

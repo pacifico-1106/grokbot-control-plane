@@ -89,6 +89,7 @@ test("org + owner are created by ONE transactional RPC (no separate orgs / org_m
   expect(r.member.role).toBe("owner");
   expect(rpcCalls.map((c) => c.fn)).toEqual(["provision_org_with_owner"]);
   const args = rpcCalls[0].args;
+  expect(String(args.p_org_id)).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
   expect(args.p_user_id).toBe("u_1");
   expect(args.p_email).toBe("owner@fixture.invalid");
   expect(args.p_org_name).toBe("Fixture Org");
@@ -124,7 +125,7 @@ test("RPC not deployed yet → legacy two-step; member insert failure deletes th
   await expect(provisionOrgForUser(input)).rejects.toThrow(/insert failed/);
   const deletes = writes("orgs", "delete");
   expect(deletes.length).toBe(1);
-  expect(deletes[0].filters).toContainEqual(["id", "o_legacy"]);
+  expect(deletes[0].filters).toEqual([["id", "o_legacy"]]);
   expect(writes("subscriptions")).toEqual([]);
   expect(writes("gateway_links")).toEqual([]);
 });
