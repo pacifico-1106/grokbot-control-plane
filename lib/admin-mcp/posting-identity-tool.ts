@@ -17,6 +17,10 @@
  *   and granted scopes (auth.test x-oauth-scopes) that include chat:write.
  *   Anything else refuses without a change: user_token_missing /
  *   user_token_invalid / user_token_scope_check_failed / missing_scope_chat_write.
+ * - Also for "user": when allowedAccounts has at least one Slack row, the
+ *   linked Slack user ID must be one of them (slack_account_not_allowed).
+ * - Every run re-checks everything; a run refused with one of the codes above
+ *   may be re-run with the same approvalId (POSTING_IDENTITY_RETRYABLE_REFUSAL_CODES).
  * - Switching to "bot" needs no token check (no Slack call).
  * - The token is a local variable only (auth.test probe); it is never put in
  *   the ticket, the MCP result, or the audit row.
@@ -24,14 +28,20 @@
  *   audit row: from / to, actor (admin agent), approver, approvalId.
  */
 import type { ResolvedAdminCredential } from "@/lib/auth/admin-credential";
-import { requesterOf, selfBound } from "@/lib/admin-mcp/allowed-accounts-tools";
+import {
+  isEmployeesAllowedAccountsAdminToolAvailable,
+  requesterOf,
+  selfBound,
+} from "@/lib/admin-mcp/allowed-accounts-tools";
 import { ADMIN_AUDIT_CLASS } from "@/lib/admin-mcp/audit-class";
 import { probeSlackTokenScopes, rejectUnsafeArgs } from "@/lib/admin-mcp/slack-dm-setup";
 import { appendAuditEvent } from "@/lib/data/audit";
 import { getBinding } from "@/lib/data/bindings";
 import { getEmployee } from "@/lib/data/employees";
 import { getEmployeeSlackIdentity, getLinkedSlackUserToken } from "@/lib/data/slack-identities";
+import { normalizeAllowedAccounts } from "@/lib/employees/allowed-accounts";
 import { employeePolicyWriteFailure } from "@/lib/employees/policy-errors";
+import { employeeAllowsSlackUser } from "@/lib/employees/posting-as";
 import {
   POSTING_AS_LABEL_JA,
   currentPostingAs,
@@ -50,9 +60,24 @@ export const POSTING_IDENTITY_REQUIRED_USER_SCOPE = "chat:write";
 
 export type PostingIdentityRefusalCode =
   | "user_token_missing"
+  | "slack_account_not_allowed"
   | "user_token_invalid"
   | "user_token_scope_check_failed"
   | "missing_scope_chat_write";
+
+/**
+ * Pre-write refusals that every run re-checks from scratch: after a run fails
+ * with one of these, re-invoking the same approvalId runs the fulfillment
+ * again (lib/approvals/execution.ts retryableByTool). Any other failure,
+ * notably a failed write, stays "uncertain" and is not re-run.
+ */
+export const POSTING_IDENTITY_RETRYABLE_REFUSAL_CODES: readonly PostingIdentityRefusalCode[] = [
+  "user_token_missing",
+  "slack_account_not_allowed",
+  "user_token_invalid",
+  "user_token_scope_check_failed",
+  "missing_scope_chat_write",
+];
 
 /** auth.test errors that mean "this token is no longer usable" (re-authorize). */
 const TOKEN_UNUSABLE_ERRORS = new Set(["invalid_auth", "not_authed", "token_revoked", "token_expired", "account_inactive"]);
@@ -109,6 +134,24 @@ export async function checkUserPostingReadiness(employee: Employee): Promise<Use
   };
   const identity = await getEmployeeSlackIdentity(employee.id).catch(() => null);
   if (!identity || identity.orgId !== employee.orgId || identity.status !== "linked" || !identity.slackUserId) return missing;
+
+  // allowedAccounts (木村 decision): when the badge lists any Slack account,
+  // the linked Slack user must be one of them. Same match as binding
+  // (bindEmployeeSlackIdentity → employeeAllowsSlackUser): service "slack"
+  // case-insensitive, accountId exactly the U… / W… (trimmed). No Slack row → no check.
+  const slackRows = normalizeAllowedAccounts(employee.allowedAccounts).filter((row) => row.service.toLowerCase() === "slack");
+  if (slackRows.length > 0 && !employeeAllowsSlackUser(employee.allowedAccounts, identity.slackUserId)) {
+    const slackUserId = identity.slackUserId.trim();
+    return {
+      ok: false,
+      code: "slack_account_not_allowed",
+      messageJa: `連携している Slack アカウント（${slackUserId}）が、この社員証の許可アカウント（Slack ${slackRows.length} 件）にありません。変更していません。`,
+      nextStepJa: isEmployeesAllowedAccountsAdminToolAvailable()
+        ? `employees.allowedAccounts.add（provider: slack, accountId: ${slackUserId}）で許可アカウントに追加するか、許可アカウントにある Slack アカウントで連携し直してから、もう一度 ${POSTING_IDENTITY_SET_TOOL} を依頼してください。`
+        : `ダッシュボードの AI社員ページ「ブラウザ・外部アカウント」で Slack ${slackUserId} を追加するか、許可アカウントにある Slack アカウントで連携し直してから、もう一度 ${POSTING_IDENTITY_SET_TOOL} を依頼してください。`,
+      extra: { slackUserId, allowedSlackAccountCount: slackRows.length },
+    };
+  }
   const token = await getLinkedSlackUserToken(employee.id).catch(() => "");
   if (!token) return missing;
 

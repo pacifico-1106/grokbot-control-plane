@@ -11,7 +11,8 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { fulfillApprovedAdmin, parseAdminFulfillment } from "@/lib/admin-mcp/fulfill-admin";
 import { auditActionForAdminTool } from "@/lib/admin-mcp/audit-class";
-import { POSTING_IDENTITY_SET_TOOL } from "@/lib/admin-mcp/posting-identity-tool";
+import { POSTING_IDENTITY_RETRYABLE_REFUSAL_CODES, POSTING_IDENTITY_SET_TOOL } from "@/lib/admin-mcp/posting-identity-tool";
+import { isRetryableApprovalFailure } from "@/lib/approvals/execution";
 import { PLAN_ADMIN_SCOPES, READ_ONLY_ADMIN_TOOLS } from "@/lib/billing/plan-scopes";
 import { getApprovalById, listApprovals, resolveApproval } from "@/lib/data";
 import { linkAgent } from "@/lib/data/bindings";
@@ -537,5 +538,243 @@ describe("org boundary", () => {
     expect(res.code).toBe("user_token_missing");
     expect(slackAuthTestCalls()).toHaveLength(0);
     await revokeEmployeeSlackIdentity({ employeeId: emp.id, orgId: ORG_B });
+  });
+});
+
+/**
+ * 木村 decision 2: when the badge's allowedAccounts has at least one Slack row,
+ * the linked identity's Slack user ID must be one of them (same exact match as
+ * bindEmployeeSlackIdentity / employeeAllowsSlackUser). No Slack row at all →
+ * unchanged behavior. Checked at propose time and right before the write.
+ */
+describe("switch to user: linked Slack user must be in allowedAccounts (when it has Slack rows)", () => {
+  const OTHER_U = "U0OTHERPI01";
+
+  test("Slack rows exist but not the linked U… → slack_account_not_allowed, no ticket, no Slack call", async () => {
+    const emp = newEmployee(ORG_A, "bot", { allowedAccounts: [{ service: "slack", accountId: SLACK_U }] });
+    await linkSlack(emp);
+    // Removed from allowedAccounts after linking (the identity stays linked, #242).
+    runtimeEmployee(emp.id)!.allowedAccounts = [{ service: "slack", accountId: OTHER_U }];
+    const before = await approvalCount();
+    const res = await callAdminMcpTool(TOOL, { employeeId: emp.id, postingAs: "user" }, cred());
+    expect(res.isError).toBe(true);
+    expect(data(res).code).toBe("slack_account_not_allowed");
+    expect(String(data(res).message)).toContain(SLACK_U);
+    expect(String(data(res).nextStepJa || "")).not.toBe("");
+    expect(await approvalCount()).toBe(before);
+    expect(slackAuthTestCalls()).toHaveLength(0);
+    expect(runtimeEmployee(emp.id)!.postingAs).toBe("bot");
+    await revokeEmployeeSlackIdentity({ employeeId: emp.id, orgId: emp.orgId });
+  });
+
+  test("linked U… is among several Slack rows → allowed (ticket)", async () => {
+    const emp = newEmployee(ORG_A, "bot", {
+      allowedAccounts: [
+        { service: "slack", accountId: OTHER_U },
+        { service: "slack", accountId: SLACK_U },
+        { service: "google", accountId: "sales@example.co.jp", browserRequired: true },
+      ],
+    });
+    await linkSlack(emp);
+    const res = data(await callAdminMcpTool(TOOL, { employeeId: emp.id, postingAs: "user" }, cred()));
+    expect(res.code).toBe("needs_approval");
+    await revokeEmployeeSlackIdentity({ employeeId: emp.id, orgId: emp.orgId });
+  });
+
+  test("no Slack row at all (empty, or only other services) → today's behavior (ticket)", async () => {
+    for (const accounts of [[], [{ service: "google", accountId: "sales@example.co.jp", browserRequired: true }]]) {
+      const emp = newEmployee(ORG_A, "bot", { allowedAccounts: [{ service: "slack", accountId: SLACK_U }] });
+      await linkSlack(emp);
+      runtimeEmployee(emp.id)!.allowedAccounts = accounts;
+      const res = data(await callAdminMcpTool(TOOL, { employeeId: emp.id, postingAs: "user" }, cred()));
+      expect({ accounts: accounts.length, code: res.code }).toEqual({ accounts: accounts.length, code: "needs_approval" });
+      await revokeEmployeeSlackIdentity({ employeeId: emp.id, orgId: emp.orgId });
+    }
+  });
+
+  test("Slack rows are matched like bind: service case-insensitive, accountId exact (non-U… formats do not match → refused)", async () => {
+    const cases: Array<{ row: { service: string; accountId: string }; code: string }> = [
+      { row: { service: " Slack ", accountId: ` ${SLACK_U} ` }, code: "needs_approval" },
+      { row: { service: "SLACK", accountId: SLACK_U.toLowerCase() }, code: "slack_account_not_allowed" },
+      { row: { service: "slack", accountId: `<@${SLACK_U}>` }, code: "slack_account_not_allowed" },
+      { row: { service: "slack", accountId: `${TEAM}/${SLACK_U}` }, code: "slack_account_not_allowed" },
+    ];
+    for (const c of cases) {
+      const emp = newEmployee(ORG_A, "bot", { allowedAccounts: [{ service: "slack", accountId: SLACK_U }] });
+      await linkSlack(emp);
+      runtimeEmployee(emp.id)!.allowedAccounts = [c.row];
+      const res = data(await callAdminMcpTool(TOOL, { employeeId: emp.id, postingAs: "user" }, cred()));
+      expect({ row: c.row, code: res.code }).toEqual({ row: c.row, code: c.code });
+      await revokeEmployeeSlackIdentity({ employeeId: emp.id, orgId: emp.orgId });
+    }
+  });
+
+  test("removed from allowedAccounts after propose → refused right before the write, .rejected audit, no change", async () => {
+    const emp = newEmployee(ORG_A, "bot");
+    await linkSlack(emp);
+    const out = data(await callAdminMcpTool(TOOL, { employeeId: emp.id, postingAs: "user" }, cred()));
+    expect(out.code).toBe("needs_approval");
+    const approvalId = String(out.approvalId);
+    runtimeEmployee(emp.id)!.allowedAccounts = [{ service: "slack", accountId: OTHER_U }];
+    const fulfillment = await approveAndFulfill(approvalId);
+    expect(fulfillment?.ok).toBe(false);
+    expect(fulfillment?.error).toBe("slack_account_not_allowed");
+    expect(runtimeEmployee(emp.id)!.postingAs).toBe("bot");
+    expect(auditFor(approvalId, "employee.posting_as.changed")).toBeUndefined();
+    expect(auditFor(approvalId, "employee.posting_as.rejected")?.metadata).toMatchObject({
+      code: "slack_account_not_allowed",
+      from: "bot",
+      to: "user",
+      tool: TOOL,
+    });
+    await revokeEmployeeSlackIdentity({ employeeId: emp.id, orgId: emp.orgId });
+  });
+
+  test("稲盛 case: U0C1RN0AHE1 is on the list → not affected", async () => {
+    const emp = newEmployee(ORG_A, "bot", { allowedAccounts: [{ service: "slack", accountId: "U0C1RN0AHE1" }] });
+    await linkSlack(emp);
+    const out = data(await callAdminMcpTool(TOOL, { employeeId: emp.id, postingAs: "user" }, cred()));
+    expect(out.code).toBe("needs_approval");
+    expect((await approveAndFulfill(String(out.approvalId)))?.ok).toBe(true);
+    expect(runtimeEmployee(emp.id)!.postingAs).toBe("user");
+    await revokeEmployeeSlackIdentity({ employeeId: emp.id, orgId: emp.orgId });
+  });
+
+  test("switching to bot ignores allowedAccounts", async () => {
+    const emp = newEmployee(ORG_A, "user", { allowedAccounts: [{ service: "slack", accountId: OTHER_U }] });
+    const out = data(await callAdminMcpTool(TOOL, { employeeId: emp.id, postingAs: "bot" }, cred()));
+    expect(out.code).toBe("needs_approval");
+    expect((await approveAndFulfill(String(out.approvalId)))?.ok).toBe(true);
+    expect(runtimeEmployee(emp.id)!.postingAs).toBe("bot");
+  });
+});
+
+/**
+ * 木村 decision 3: re-invoking with the same approvalId after a FAILED run
+ * re-runs the fulfillment, and every run redoes every check against the
+ * current state. A SUCCESSFUL run is stored and returned as is (no re-run).
+ */
+describe("re-invoke with the same approvalId redoes every check", () => {
+  const OTHER_U = "U0OTHERPI02";
+
+  async function reinvoke(approvalId: string) {
+    return data(await callAdminMcpTool(TOOL, { approvalId }, cred()));
+  }
+
+  // The shared re-invoke response (readApprovedAdminResult) returns ok +
+  // nextStepJa but not the code; the code of the latest run is in the stored result.
+  async function storedError(approvalId: string) {
+    return parseAdminFulfillment((await getApprovalById(approvalId, ORG_A))?.metadata)?.error;
+  }
+
+  test("token missing at the first run → fails; after re-authorizing, the same approvalId succeeds", async () => {
+    const emp = newEmployee(ORG_A, "bot");
+    await linkSlack(emp);
+    const out = data(await callAdminMcpTool(TOOL, { employeeId: emp.id, postingAs: "user" }, cred()));
+    const approvalId = String(out.approvalId);
+    await revokeEmployeeSlackIdentity({ employeeId: emp.id, orgId: emp.orgId });
+    const first = await approveAndFulfill(approvalId);
+    expect(first?.error).toBe("user_token_missing");
+    expect(runtimeEmployee(emp.id)!.postingAs).toBe("bot");
+    // Re-authorized (e.g. #240 link) → re-invoke the same ticket.
+    await linkSlack(emp);
+    const second = await reinvoke(approvalId);
+    expect(second.ok).toBe(true);
+    expect(runtimeEmployee(emp.id)!.postingAs).toBe("user");
+    expect(auditFor(approvalId, "employee.posting_as.changed")?.metadata).toMatchObject({ from: "bot", to: "user", approvalId });
+    await revokeEmployeeSlackIdentity({ employeeId: emp.id, orgId: emp.orgId });
+  });
+
+  test("scope missing at the first run → fails; after re-authorizing with chat:write, the same approvalId succeeds", async () => {
+    const emp = newEmployee(ORG_A, "bot");
+    await linkSlack(emp);
+    const out = data(await callAdminMcpTool(TOOL, { employeeId: emp.id, postingAs: "user" }, cred()));
+    const approvalId = String(out.approvalId);
+    await linkSlack(emp, TOKEN_NO_CHAT_WRITE);
+    expect((await approveAndFulfill(approvalId))?.error).toBe("missing_scope_chat_write");
+    expect(runtimeEmployee(emp.id)!.postingAs).toBe("bot");
+    await linkSlack(emp, TOKEN_OK);
+    const authBefore = slackAuthTestCalls().length;
+    expect((await reinvoke(approvalId)).ok).toBe(true);
+    expect(slackAuthTestCalls().length).toBe(authBefore + 1);
+    expect(runtimeEmployee(emp.id)!.postingAs).toBe("user");
+    await revokeEmployeeSlackIdentity({ employeeId: emp.id, orgId: emp.orgId });
+  });
+
+  test("token + allowedAccounts passed at the first run (failed on scope); on the re-call the token is gone → user_token_missing", async () => {
+    const emp = newEmployee(ORG_A, "bot");
+    await linkSlack(emp);
+    const out = data(await callAdminMcpTool(TOOL, { employeeId: emp.id, postingAs: "user" }, cred()));
+    const approvalId = String(out.approvalId);
+    await linkSlack(emp, TOKEN_NO_CHAT_WRITE);
+    expect((await approveAndFulfill(approvalId))?.error).toBe("missing_scope_chat_write");
+    await revokeEmployeeSlackIdentity({ employeeId: emp.id, orgId: emp.orgId });
+    const second = await reinvoke(approvalId);
+    expect(second.ok).toBe(false);
+    expect(await storedError(approvalId)).toBe("user_token_missing");
+    expect(runtimeEmployee(emp.id)!.postingAs).toBe("bot");
+    const rejected = getRuntimeAudit().filter((e) => e.metadata?.approvalId === approvalId && e.metadata?.event === "employee.posting_as.rejected");
+    const codes = rejected.map((e) => e.metadata?.code);
+    expect(codes).toContain("missing_scope_chat_write");
+    expect(codes).toContain("user_token_missing");
+  });
+
+  test("token + allowedAccounts passed at the first run (failed on scope); on the re-call the account was removed from allowedAccounts → slack_account_not_allowed", async () => {
+    const emp = newEmployee(ORG_A, "bot");
+    await linkSlack(emp);
+    const out = data(await callAdminMcpTool(TOOL, { employeeId: emp.id, postingAs: "user" }, cred()));
+    const approvalId = String(out.approvalId);
+    await linkSlack(emp, TOKEN_NO_CHAT_WRITE);
+    expect((await approveAndFulfill(approvalId))?.error).toBe("missing_scope_chat_write");
+    // Re-authorized with chat:write, but the U… was removed from allowedAccounts meanwhile.
+    await linkSlack(emp, TOKEN_OK);
+    runtimeEmployee(emp.id)!.allowedAccounts = [{ service: "slack", accountId: OTHER_U }];
+    const second = await reinvoke(approvalId);
+    expect(second.ok).toBe(false);
+    expect(await storedError(approvalId)).toBe("slack_account_not_allowed");
+    expect(runtimeEmployee(emp.id)!.postingAs).toBe("bot");
+    await revokeEmployeeSlackIdentity({ employeeId: emp.id, orgId: emp.orgId });
+  });
+
+  test("a successful run is stored: re-invoking later returns it without re-running or writing again", async () => {
+    const emp = newEmployee(ORG_A, "bot");
+    await linkSlack(emp);
+    const out = data(await callAdminMcpTool(TOOL, { employeeId: emp.id, postingAs: "user" }, cred()));
+    const approvalId = String(out.approvalId);
+    expect((await approveAndFulfill(approvalId))?.ok).toBe(true);
+    await revokeEmployeeSlackIdentity({ employeeId: emp.id, orgId: emp.orgId });
+    runtimeEmployee(emp.id)!.postingAs = "bot";
+    const authBefore = slackAuthTestCalls().length;
+    const again = await reinvoke(approvalId);
+    expect(again.ok).toBe(true);
+    expect(slackAuthTestCalls().length).toBe(authBefore);
+    expect(runtimeEmployee(emp.id)!.postingAs).toBe("bot");
+    expect(getRuntimeAudit().filter((e) => e.metadata?.approvalId === approvalId && e.metadata?.event === "employee.posting_as.changed")).toHaveLength(1);
+  });
+});
+
+describe("execution claim: which failures may be re-run with the same approvalId", () => {
+  test("the five pre-write refusals of this tool are re-runnable (state failed), only for this tool", () => {
+    expect([...POSTING_IDENTITY_RETRYABLE_REFUSAL_CODES].sort()).toEqual([
+      "missing_scope_chat_write",
+      "slack_account_not_allowed",
+      "user_token_invalid",
+      "user_token_missing",
+      "user_token_scope_check_failed",
+    ]);
+    for (const code of POSTING_IDENTITY_RETRYABLE_REFUSAL_CODES) {
+      expect({ code, retry: isRetryableApprovalFailure(TOOL, code) }).toEqual({ code, retry: true });
+      // Other tools keep their own rules (e.g. #240 also has slack_account_not_allowed / user_token_missing).
+      expect({ code, retry: isRetryableApprovalFailure("setup.slackAuthorizeLink.issue", code) }).toEqual({ code, retry: false });
+      expect({ code, retry: isRetryableApprovalFailure("employees.allowedAccounts.add", code) }).toEqual({ code, retry: false });
+    }
+  });
+
+  test("a failed write is NOT re-runnable (outcome may be partial → uncertain); shared codes unchanged", () => {
+    for (const code of ["employee_policy_update_failed", "employee_policy_credentials_update_failed", "invalid_posting_as", "employee_not_found", ""]) {
+      expect({ code, retry: isRetryableApprovalFailure(TOOL, code) }).toEqual({ code, retry: false });
+    }
+    expect(isRetryableApprovalFailure(TOOL, "slack_token_missing")).toBe(true);
+    expect(isRetryableApprovalFailure("anything", "missing_scope")).toBe(true);
   });
 });
