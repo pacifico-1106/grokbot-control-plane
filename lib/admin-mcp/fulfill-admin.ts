@@ -672,6 +672,31 @@ async function fulfillAllowedAccountsTicket(
   };
 }
 
+/** Human-approved Slack posting identity switch (bot | user); re-checked right before the write. */
+async function fulfillPostingIdentityTicket(approval: ApprovalRequest, args: Record<string, unknown>): Promise<AdminFulfillment> {
+  const { fulfillPostingIdentityChange, POSTING_IDENTITY_SET_TOOL } = await import("@/lib/admin-mcp/posting-identity-tool");
+  const result = await fulfillPostingIdentityChange(approval, args);
+  const at = new Date().toISOString();
+  if (!result.ok) {
+    return {
+      ok: false,
+      tool: POSTING_IDENTITY_SET_TOOL,
+      at,
+      error: result.code,
+      ...(result.employeeId ? { employeeId: result.employeeId } : {}),
+      nextStepJa: result.nextStepJa ? `${result.messageJa}${result.nextStepJa}` : result.messageJa,
+    };
+  }
+  return {
+    ok: true,
+    tool: POSTING_IDENTITY_SET_TOOL,
+    at,
+    employeeId: result.employeeId,
+    summaryJa: result.summaryJa,
+    ...(result.nextStepJa ? { nextStepJa: result.nextStepJa } : {}),
+  };
+}
+
 async function fulfillPolicy(approval: ApprovalRequest, args: Record<string, unknown>): Promise<AdminFulfillment> {
   const employeeId = String(args.employeeId || "").trim();
   const scopes = asScopes(args.scopes);
@@ -1957,6 +1982,9 @@ async function fulfillApprovedAdminCore(
       case "employees.allowedAccounts.add":
       case "employees.allowedAccounts.remove":
         fulfillment = await fulfillAllowedAccountsTicket(approval, args, tool);
+        break;
+      case "employees.postingIdentity.set":
+        fulfillment = await fulfillPostingIdentityTicket(approval, args);
         break;
       case "parties.upsert":
         fulfillment = await fulfillParty(approval, args);

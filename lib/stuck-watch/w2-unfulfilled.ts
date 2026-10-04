@@ -15,6 +15,34 @@ import type {
   OrgStuckWatchPolicy,
 } from "@/lib/types";
 
+/**
+ * Tools W2 must never re-run on its own, even with retries left: a re-run
+ * ticket of these runs only when an admin agent explicitly re-invokes the tool
+ * with its approvalId. W2 still tracks them (stuck-watch item, stuckHint
+ * "fix", reason manual_reinvoke_required) but never fulfills them — neither
+ * the cron nor stuckWatch.retry.
+ *
+ * - employees.postingIdentity.set: switching the Slack posting identity changes
+ *   what the other side sees, so a person must know when it happens (木村).
+ */
+export const W2_MANUAL_REINVOKE_ONLY_TOOLS: ReadonlySet<string> = new Set([
+  "employees.postingIdentity.set",
+]);
+
+function approvalToolName(approval: ApprovalRequest): string {
+  return String(approval.metadata?.adminTool || approval.tool || "").trim();
+}
+
+/** The tool name when W2 must leave this approval to an explicit re-invoke, else null. */
+export function w2ManualReinvokeOnlyTool(approval: ApprovalRequest): string | null {
+  const tool = approvalToolName(approval);
+  return W2_MANUAL_REINVOKE_ONLY_TOOLS.has(tool) ? tool : null;
+}
+
+export function w2ManualReinvokeNextStepJa(tool: string): string {
+  return `自動再実行の対象外です（相手に見える名義が変わるため）。原因を直してから、管理エージェントが ${tool} を approvalId 付きで呼び直してください（その時点ですべて確認し直します）。`;
+}
+
 function parseStuckWatchMeta(
   metadata: Record<string, unknown> | null | undefined
 ): ApprovalStuckWatchMeta {
@@ -77,7 +105,8 @@ export type W2EligibilityResult = {
     | "not_unfulfilled"
     | "too_soon"
     | "max_retries"
-    | "backoff";
+    | "backoff"
+    | "manual_reinvoke_required";
   retryCount: number;
   minutesSinceResolved: number;
 };
@@ -97,6 +126,15 @@ export function evaluateW2Eligibility(
     return {
       eligible: false,
       reason: "not_unfulfilled",
+      retryCount,
+      minutesSinceResolved: 0,
+    };
+  }
+
+  if (w2ManualReinvokeOnlyTool(approval)) {
+    return {
+      eligible: false,
+      reason: "manual_reinvoke_required",
       retryCount,
       minutesSinceResolved: 0,
     };

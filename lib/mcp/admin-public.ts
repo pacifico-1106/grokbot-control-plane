@@ -23,6 +23,7 @@ export const ADMIN_MCP_TOOL_NAMES = [
   "employees.allowedAccounts.add",
   "employees.allowedAccounts.remove",
   "employees.allowedAccounts.list",
+  "employees.postingIdentity.set",
   "parties.upsert",
   "channels.classify",
   "roles.propose",

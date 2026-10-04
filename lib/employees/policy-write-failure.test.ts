@@ -196,6 +196,20 @@ describe("PATCH /api/employees/[id]/slack-identity when the write fails", () => 
     expect(text).not.toContain("internal_table_x");
     expect(await updatedAudits(employee.id)).toHaveLength(0);
   });
+
+  test("without a failure: saved through the shared posting-identity write; audit records from / to (dashboard still allows user without a token)", async () => {
+    const employee = await hire("slack_identity_ok");
+    expect((await getEmployee(employee.id, ORG))?.postingAs).toBe("bot");
+    const res = await patchSlackIdentity(req(`/api/employees/${employee.id}/slack-identity`, { postingAs: "user" }), {
+      params: Promise.resolve({ id: employee.id }),
+    });
+    expect(res.status).toBe(200);
+    expect((await getEmployee(employee.id, ORG))?.postingAs).toBe("user");
+    const audits = await updatedAudits(employee.id);
+    expect(audits).toHaveLength(1);
+    expect(audits[0].metadata?.actorEmail).toBe("owner@example.com");
+    expect(audits[0].metadata).toMatchObject({ postingAs: "user", from: "bot", to: "user" });
+  });
 });
 
 describe("admin MCP fulfillment when the write fails", () => {
@@ -234,6 +248,34 @@ describe("admin MCP fulfillment when the write fails", () => {
     );
     expect(audits).toHaveLength(0);
     expect((await getEmployee(employee.id, ORG))?.approvalPolicy).toBe("risk_based");
+  });
+
+  test("employees.postingIdentity.set → ok:false with the code (no storage detail), no change audit, postingAs unchanged", async () => {
+    const employee = await hire("mcp_posting_identity");
+    await realData.updateEmployeePolicy({
+      orgId: ORG,
+      employeeId: employee.id,
+      scopes: employee.scopes,
+      allowedPurposes: employee.allowedPurposes,
+      approvalPolicy: employee.approvalPolicy,
+      actionLimits: employee.actionLimits,
+      postingAs: "user",
+    });
+    const queued = await callAdminMcpTool("employees.postingIdentity.set", { employeeId: employee.id, postingAs: "bot" }, demoCred());
+    const approvalId = String((queued.structuredContent as Record<string, unknown>).approvalId);
+    expect(approvalId.length).toBeGreaterThan(0);
+    const approved = await resolveApproval(approvalId, "approved", "owner@example.com", ORG, { actorId: "mem_human_1" });
+    const fulfillment = await withFailure({ code: "employee_policy_credentials_update_failed", rolledBack: true }, () =>
+      fulfillApprovedAdmin(approved!)
+    );
+    expect(fulfillment?.ok).toBe(false);
+    expect(fulfillment?.error).toBe("employee_policy_credentials_update_failed");
+    expect(JSON.stringify(fulfillment)).not.toContain("internal_table_x");
+    const changed = (await listAuditEvents(ORG, 500)).filter(
+      (event) => event.employeeId === employee.id && event.metadata?.event === "employee.posting_as.changed"
+    );
+    expect(changed).toHaveLength(0);
+    expect((await getEmployee(employee.id, ORG))?.postingAs).toBe("user");
   });
 
   test("setup.lineApproval.setEmployeeInbox → ok:false with the code, no admin.notificationChannel audit", async () => {
