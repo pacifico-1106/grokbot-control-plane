@@ -29,6 +29,7 @@ import { APPROVAL_SETUP_NOTICE_TEXT } from "@/lib/slack/approval-dm-open";
 import type { ResolvedAdminCredential } from "@/lib/auth/admin-credential";
 import type { ResolvedEmployeeCredential } from "@/lib/auth/employee-credential";
 import type { Employee } from "@/lib/types";
+import { slackApiArgs } from "@/tests/helpers/slack-api-args";
 
 const ORG_A = DEMO_ORG.id;
 const ORG_B = "org_pr4_other_tenant";
@@ -80,7 +81,7 @@ function installFetch() {
   calls = [];
   globalThis.fetch = (async (url: string | URL, init?: RequestInit) => {
     const method = String(url).replace("https://slack.com/api/", "");
-    const body = init?.body ? JSON.parse(String(init.body) || "{}") : {};
+    const body = slackApiArgs(method, init);
     const auth = String((init?.headers as Record<string, string> | undefined)?.authorization || "");
     calls.push({ method, body, auth });
     const json = (data: unknown, headers: Record<string, string> = {}) =>

@@ -63,7 +63,7 @@
 - state は既存の HMAC 署名 state（org + employee + nonce + 期限）に `linkId` を追加し、nonce cookie と突き合わせ。リンク本体は 1 回限り（原子的 consume）、期限 24h、新規発行で旧リンクは `superseded`。
 - DB はトークンの sha256 のみ。URL・トークン・Slack token は MCP 結果・監査・ログに出さない。
 - 不一致・期限切れ・別 org・フラグ OFF・交換失敗はすべて保存なしで終わる（fail-closed）。交換失敗でもリンクは消費済みになるので再発行が必要。
-- 開始ページ・結果ページは `Cache-Control: no-store`, `Referrer-Policy: no-referrer`, CSP `default-src 'none'`, noindex。
+- 開始ページ・結果ページは `Cache-Control: no-store`, `Referrer-Policy: no-referrer`, CSP `default-src 'none'; style-src 'unsafe-inline'`（アプリと同じ見た目のインライン style だけ許可）, noindex。ページは `lib/ui/standalone-result-page.ts` で作り、どの結果にも「次にやること」を出す。失敗のときだけ問い合わせコード（知っているコードだけ）を出す。
 
 ## 要判断
 
@@ -136,7 +136,7 @@ URL 平文は MCP 結果・監査に出さない。`SLACK_AUTHORIZE_LINK_REISSUE
   | `allowed_accounts_mismatch` | 連携処理で `allowedAccounts` 外（`slack_identity_mismatch`） |
   | `bind_failed` | 連携処理のそれ以外のエラー |
 
-  文面は 1 つのテンプレート `authorizeLinkFailedNoticeJa(code)`（受取人の DM と結果ページで共通）で、理由コードだけを差し替える。承認者向けは `authorizeLinkApproverFailureNoticeJa(name, code)`。理由コードは `^[a-z0-9_]+$` 以外なら `unknown`。結果ページは使用済みの理由すべてで kind `burned`（従来の `mismatch` 文言は廃止）。
+  文面は 1 つのテンプレート `authorizeLinkFailedNoticeJa(code)`（受取人の DM と結果ページで共通）で、理由コードだけを差し替える。結果ページはこの文に加えて、理由ごとの「理由」と「次にやること」（再発行を頼む、など）を出す。承認者向けは `authorizeLinkApproverFailureNoticeJa(name, code)`。理由コードは `^[a-z0-9_]+$` 以外なら `unknown`。結果ページは使用済みの理由すべてで kind `burned`（従来の `mismatch` 文言は廃止）。
   使用済みにならない経路: `access_denied` / code なし（リンクはそのまま使える）、不正・期限切れ・別 org・flag OFF（consume されない）。連携処理が成功したあとの例外はリンクを `consumed` のまま残し、identity は保存済み（失敗通知は送らない）。発行時の `delivery_failed`（revoked）と再発行（superseded）は callback を経由しない。
 - **(d)** 監査の `attemptedSlackUserId` は残す（乗っ取りの調査用）。通知とページには出さない（テストで確認）。
 - **allowedAccounts の次の手順**は `resolveAllowedAccountsSlackNextStep()`（`lib/slack/authorize-link-guidance.ts`）を通す。実行時に管理ツールの registry（`ADMIN_MCP_TOOL_NAMES` に名前があり、かつ `ADMIN_MCP_TOOLS` に定義がある）に `employees.allowedAccounts.add` があれば「`employees.allowedAccounts.add` で Slack の U… を追加してから、もう一度 setup.slackAuthorizeLink.issue で発行してください。」+ `allowedAccountsAdminTool: "employees.allowedAccounts.add"`、なければダッシュボードでの案内 + `null`。`setup.slackDmApprovalStatus` も同じ関数（社員行に `allowedAccountsAdminTool`）。

@@ -27,6 +27,7 @@ import {
 } from "@/lib/slack/dm-autoroute";
 import { SLACK_USER_SCOPES, slackAuthorizeUrl, slackUserScopesForAuthorize } from "@/lib/slack/oauth";
 import type { AuditEvent, Employee } from "@/lib/types";
+import { slackApiArgs, slackRequestHeader } from "@/tests/helpers/slack-api-args";
 
 const TEAM = "TAUTOTEAM1";
 const OTHER_TEAM = "TEVILTEAM9";
@@ -34,7 +35,7 @@ const TOKEN = "xoxp-autoroute-SECRET-token-777";
 const FLAGS = ["SLACK_DM_AUTOROUTE_ENABLED", "SLACK_USER_SCOPE_IM_WRITE"] as const;
 
 type SlackUser = Record<string, unknown>;
-type Call = { method: string; body: Record<string, unknown>; auth: string };
+type Call = { method: string; body: Record<string, unknown>; auth: string; raw: string; contentType: string };
 
 let saved: Record<string, string | undefined> = {};
 let savedFetch: typeof globalThis.fetch;
@@ -59,9 +60,9 @@ function installFetch() {
   calls = [];
   globalThis.fetch = (async (url: string | URL, init?: RequestInit) => {
     const method = String(url).replace("https://slack.com/api/", "").split("?")[0];
-    const body = init?.body ? JSON.parse(String(init.body)) : {};
-    const auth = String((init?.headers as Record<string, string> | undefined)?.authorization || "");
-    calls.push({ method, body, auth });
+    const body = slackApiArgs(method, init);
+    const auth = slackRequestHeader(init, "authorization");
+    calls.push({ method, body, auth, raw: init?.body == null ? "" : String(init.body), contentType: slackRequestHeader(init, "content-type") });
     const json = (data: unknown, headers: Record<string, string> = {}) =>
       new Response(JSON.stringify(data), { status: 200, headers: { "content-type": "application/json", ...headers } });
     if (method === "auth.test") {
@@ -214,6 +215,37 @@ describe("Plan A create", () => {
     expect(audits[0].metadata?.auditClass).toBe("admin");
     expect(audits[0].metadata?.event).toBe("slack_dm_autoroute.created");
     expect(audits[0].metadata?.trigger).toBe("identity_linked");
+    await t.cleanup();
+  });
+
+  test("hotfix: users.info / auth.test are form-encoded (user=U… in the body); conversations.open stays JSON; token only in the header", async () => {
+    const t = await tenant();
+    const counterpart = await internalParty(t.orgId, member(uid("UCP")));
+    const result = await syncAutoDmRoutesForEmployee({ orgId: t.orgId, employeeId: t.employee.id, trigger: "identity_linked" });
+    expect(result.items.map((item) => item.outcome)).toEqual(["created"]);
+    const info = calls.find((c) => c.method === "users.info")!;
+    expect(info.contentType).toBe("application/x-www-form-urlencoded");
+    expect(info.raw).toBe(`user=${counterpart}`);
+    expect(calls.find((c) => c.method === "auth.test")!.contentType).toBe("application/x-www-form-urlencoded");
+    const open = calls.find((c) => c.method === "conversations.open")!;
+    expect(open.contentType).toBe("application/json; charset=utf-8");
+    expect(JSON.parse(open.raw)).toMatchObject({ users: counterpart });
+    for (const call of calls) {
+      expect(call.raw).not.toContain(TOKEN);
+      expect(call.raw).not.toContain("token");
+    }
+    await t.cleanup();
+  });
+
+  test("hotfix: dryRun preview sends users.info form-encoded and would_open an internal member", async () => {
+    const t = await tenant();
+    const counterpart = await internalParty(t.orgId, member(uid("UCP")));
+    const result = await syncAutoDmRoutesForEmployee({ orgId: t.orgId, employeeId: t.employee.id, trigger: "identity_linked", dryRun: true });
+    expect(result.items).toEqual([{ counterpartSlackUserId: counterpart, outcome: "would_open", reason: "internal_party" }]);
+    const info = calls.find((c) => c.method === "users.info")!;
+    expect(info.contentType).toBe("application/x-www-form-urlencoded");
+    expect(info.raw).toBe(`user=${counterpart}`);
+    expect(methods()).not.toContain("conversations.open");
     await t.cleanup();
   });
 

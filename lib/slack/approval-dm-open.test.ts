@@ -12,6 +12,7 @@ import {
   pickApprovalDeliveryUser,
   sendApprovalSetupNotice,
 } from "@/lib/slack/approval-dm-open";
+import { slackApiArgs, slackRequestHeader } from "@/tests/helpers/slack-api-args";
 
 const TEAM = "TAPPROVE1";
 const TOKEN = "xoxb-approval-SECRET-777";
@@ -19,7 +20,7 @@ const SIGNING = "signing-SECRET-888";
 const APPROVER = "UAPPROVER1";
 const DM = "DAPPROVEDM1";
 
-type Call = { method: string; body: Record<string, unknown>; auth: string };
+type Call = { method: string; body: Record<string, unknown>; auth: string; raw: string; contentType: string };
 let calls: Call[] = [];
 let savedFetch: typeof globalThis.fetch;
 let savedFlag: string | undefined;
@@ -33,9 +34,9 @@ function installFetch() {
   globalThis.fetch = (async (url: string | URL, init?: RequestInit) => {
     const href = String(url);
     const method = href.replace("https://slack.com/api/", "").split("?")[0];
-    const body = init?.body ? JSON.parse(String(init.body)) : {};
-    const auth = String((init?.headers as Record<string, string> | undefined)?.authorization || "");
-    calls.push({ method, body, auth });
+    const body = slackApiArgs(method, init);
+    const auth = slackRequestHeader(init, "authorization");
+    calls.push({ method, body, auth, raw: init?.body == null ? "" : String(init.body), contentType: slackRequestHeader(init, "content-type") });
     const json = (data: unknown) => new Response(JSON.stringify(data), { status: 200 });
     if (failures[method]) {
       const [error, needed] = failures[method].split("|");
@@ -152,6 +153,34 @@ describe("openApprovalDeliveryDm (fail-closed)", () => {
     expect(await openApprovalDeliveryDm({ botToken: "xoxp-user-token", allowedUserIds: [APPROVER] })).toMatchObject({ ok: false, code: "bot_token_required" });
     expect(await openApprovalDeliveryDm({ botToken: "", allowedUserIds: [APPROVER] })).toMatchObject({ ok: false, code: "bot_token_required" });
     expect(calls.length).toBe(0);
+  });
+
+  test("hotfix: users.info / auth.test are form-encoded (user=U… in the body), token only in the header", async () => {
+    const result = await openApprovalDeliveryDm({ botToken: TOKEN, allowedUserIds: [APPROVER] });
+    expect(result).toMatchObject({ ok: true, userId: APPROVER });
+    const info = calls.find((c) => c.method === "users.info")!;
+    expect(info.contentType).toBe("application/x-www-form-urlencoded");
+    expect(new URLSearchParams(info.raw).get("user")).toBe(APPROVER);
+    expect(info.raw).toBe(`user=${APPROVER}`);
+    const auth = calls.find((c) => c.method === "auth.test")!;
+    expect(auth.contentType).toBe("application/x-www-form-urlencoded");
+    for (const call of calls) {
+      expect(call.raw).not.toContain(TOKEN);
+      expect(call.raw).not.toContain("token");
+      expect(call.auth).toBe(`Bearer ${TOKEN}`);
+    }
+  });
+
+  test("hotfix: conversations.open / chat.postMessage stay JSON", async () => {
+    await openApprovalDeliveryDm({ botToken: TOKEN, allowedUserIds: [APPROVER] });
+    await sendApprovalSetupNotice(TOKEN, DM);
+    const open = calls.find((c) => c.method === "conversations.open")!;
+    expect(open.contentType).toBe("application/json; charset=utf-8");
+    expect(JSON.parse(open.raw)).toEqual({ users: APPROVER, return_im: true });
+    const post = calls.find((c) => c.method === "chat.postMessage")!;
+    expect(post.contentType).toBe("application/json; charset=utf-8");
+    expect(JSON.parse(post.raw)).toEqual({ channel: DM, text: APPROVAL_SETUP_NOTICE_TEXT });
+    expect(open.raw + post.raw).not.toContain(TOKEN);
   });
 
   test("setup notice posts the fixed text once; failure is reported", async () => {
