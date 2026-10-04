@@ -111,11 +111,10 @@ function noSecrets(text: string) {
 }
 
 describe("card shows the approved attachment (filename + size) on every surface", () => {
-  test("stored summary (Web dashboard): one line before the body, nothing secret", async () => {
+  test("stored summary: no attachment line (#253 follow-up 5: Web renders publicApproval.cardAttachment)", async () => {
     const { approval } = await queue(GOOD);
-    expect(lines(approval.summary, "添付ファイル:")).toEqual(["添付ファイル: 見積書_2026.pdf（120.6 KB）"]);
-    const summaryLines = approval.summary.split("\n");
-    expect(summaryLines.indexOf("添付ファイル: 見積書_2026.pdf（120.6 KB）")).toBeLessThan(summaryLines.indexOf("本文:"));
+    expect(lines(approval.summary, "添付ファイル:")).toEqual([]);
+    expect(publicApproval(approval).cardAttachment).toMatchObject({ kind: "present", filename: "見積書_2026.pdf", sizeLabel: "120.6 KB" });
     noSecrets(approval.summary);
   });
 
@@ -168,10 +167,12 @@ describe("card shows the approved attachment (filename + size) on every surface"
 describe("hostile filename: escaped per surface, one line, capped", () => {
   const SAFE_PREFIX = "evil *承認済み* <!channel> `x` <https://evil.example|click> <b>bold</b> &amp; fdp.exe";
 
-  test("summary: control / bidi / zero-width removed, capped at 100 chars", async () => {
+  test("Web field: control / bidi / zero-width removed, capped at 100 chars; summary has no line", async () => {
     const { approval } = await queue(EVIL);
-    const [line] = lines(approval.summary, "添付ファイル:");
-    const name = line.replace(/^添付ファイル: /, "").replace(/（2 KB）$/, "");
+    expect(lines(approval.summary, "添付ファイル:")).toEqual([]);
+    const card = publicApproval(approval).cardAttachment as { filename: string; sizeLabel?: string };
+    const line = `添付ファイル: ${card.filename}（${card.sizeLabel}）`;
+    const name = card.filename;
     expect(name.startsWith(SAFE_PREFIX)).toBe(true);
     expect(Array.from(name).length).toBe(100);
     expect(name.endsWith("…")).toBe(true);
@@ -201,9 +202,10 @@ describe("hostile filename: escaped per surface, one line, capped", () => {
 });
 
 describe("no attachment / legacy", () => {
-  test("approved without an attachment → 添付ファイル: なし on summary, Slack, Telegram, LINE; status attachment null", async () => {
+  test("approved without an attachment → 添付ファイル: なし on Web field, Slack, Telegram, LINE; status attachment null", async () => {
     const { approval, statusToken } = await queue();
-    expect(lines(approval.summary, "添付ファイル:")).toEqual(["添付ファイル: なし"]);
+    expect(lines(approval.summary, "添付ファイル:")).toEqual([]);
+    expect(publicApproval(approval).cardAttachment).toEqual({ kind: "none" });
     expect(lines(await slackText(approval), "添付ファイル:")).toEqual(["添付ファイル: なし"]);
     expect(lines(buildApprovalTelegramMessage(approval, null), "添付ファイル:")).toEqual(["添付ファイル: なし"]);
     expect((await lineTexts(approval))).toContain("添付ファイル: なし");
