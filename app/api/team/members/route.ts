@@ -27,13 +27,13 @@ function memberErrorMessage(raw: string): string {
   }
 }
 
-export async function GET(req?: Request) {
+export async function GET(req: Request) {
   const gate = await requireOrgSession();
   if (!gate.ok) return gate.response;
   try {
     const members = await listMembers(gate.orgId);
     // Checkbox state only; POST re-evaluates every change server-side.
-    const viewer = await resolveMemberChangeActor(req ?? null).catch(() => null);
+    const viewer = await resolveMemberChangeActor(req).catch(() => null);
     const actor = viewer?.ok ? viewer.actor : null;
     const editability = teamEditability(actor, members, viewer?.ok ? viewer.authEmail : null);
     return NextResponse.json({
