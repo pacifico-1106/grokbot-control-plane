@@ -76,7 +76,7 @@ rollback;
 ```
 
 ```sql
--- readonly:pending-invites (what a claim would bind; run before inviting 上原 / 仙田 and after they sign in)
+-- readonly:pending-invites (what a claim would bind; run before inviting 上原 / 仲田 and after they sign in)
 begin transaction read only;
 select o.name as org_name, m.id as member_id, m.email, m.role, m.capabilities, m.status, m.user_id, m.invited_at,
        (select string_agg(u.id::text || ' invited_at=' || coalesce(u.invited_at::text, '-')
