@@ -88,6 +88,7 @@ import {
   type ConversationDelivery,
 } from "@/lib/approvals/fulfill";
 import { approvedRerunConversationDelivery } from "@/lib/approvals/approved-rerun-delivery";
+import { attachmentSummaryLine } from "@/lib/approvals/attachment-card";
 import {
   auditLegacySnapshotAttachmentBlock,
   deliverApprovedRerunAttachment,
@@ -389,7 +390,26 @@ async function createNeedsApprovalResponse(opts: {
     const recipients = opts.body ? extractMailRecipients(opts.body) : { hasAttachments: false };
     if (recipients.hasAttachments) artifact.hasAttachments = true;
   }
+  const invokeSnapshot = buildInvokeSnapshot({
+    tool: opts.tool,
+    purpose: opts.purpose,
+    jobId: opts.jobId,
+    employeeId: opts.employeeId,
+    orgId: opts.orgId,
+    employee: opts.employee,
+    body: opts.body,
+    conversation,
+    informationClass: opts.egress?.informationClass,
+    fidelity: opts.egress?.fidelity,
+  });
   const extraLines = formatArtifactLines(artifact);
+  // The approver sees which attachment is approved (filename + size from the
+  // snapshot only), placed before the body so a long body cannot hide it.
+  const attachmentLine = attachmentSummaryLine({ invoke: invokeSnapshot });
+  if (attachmentLine) {
+    const bodyAt = extraLines.indexOf("本文:");
+    extraLines.splice(bodyAt >= 0 ? bodyAt : extraLines.length, 0, attachmentLine);
+  }
   const baseSummary = buildRichApprovalSummary({
     tool: opts.tool,
     purpose: opts.purpose,
@@ -425,18 +445,7 @@ async function createNeedsApprovalResponse(opts: {
       metadata: {
         ...(opts.metadata ?? {}),
         artifact,
-        invoke: buildInvokeSnapshot({
-          tool: opts.tool,
-          purpose: opts.purpose,
-          jobId: opts.jobId,
-          employeeId: opts.employeeId,
-          orgId: opts.orgId,
-          employee: opts.employee,
-          body: opts.body,
-          conversation,
-          informationClass: opts.egress?.informationClass,
-          fidelity: opts.egress?.fidelity,
-        }),
+        invoke: invokeSnapshot,
         // mail.send: pin the exact approved content (digests only) so an
         // approved re-invoke cannot change recipients / subject / body.
         // Set last so nothing earlier in metadata can supply it.
@@ -1758,7 +1767,11 @@ export async function runGatewayInvoke(
       return jsonResult({ ok: false, code: legacyBlock.code, error: legacyBlock.code, message: legacyBlock.messageJa,
         approvalId: priorApproval.id, employeeId, tool, purpose, jobId }, 409);
     }
-    const fulfilled = await fulfillApprovedInvoke(priorApproval);
+    // Conversation tools: this re-run uploads the approved attachment itself
+    // (deliverApprovedRerunAttachment below), so no "not_sent" marker here.
+    const fulfilled = await fulfillApprovedInvoke(priorApproval, {
+      attachmentHandledByCaller: isAudienceGatedTool(toolDef),
+    });
     if (!fulfilled?.ok) return jsonResult({ ok: false, code: fulfilled?.error || "approval_execution_failed",
       error: fulfilled?.error || "approval_execution_failed", employeeId, tool, purpose, jobId }, 409);
     if (isAudienceGatedTool(toolDef)) {

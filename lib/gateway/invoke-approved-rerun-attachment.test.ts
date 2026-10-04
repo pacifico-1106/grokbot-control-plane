@@ -251,7 +251,8 @@ describe("R. re-run uploads only the approved attachment", () => {
       expect(resultOf(again).fileUpload).toMatchObject({ ok: true, fileId: "F_ATTACH_1" });
       expect(posts.length).toBe(1);
       const stored = await getApprovalById(approvalId, DEMO_ORG.id);
-      expect(stored!.metadata.attachmentFulfillment).toMatchObject({ ok: true, fileId: "F_ATTACH_1" });
+      // #252 follow-up: the upload is recorded by the upload claim (metadata.attachmentUpload).
+      expect(stored!.metadata.attachmentUpload).toMatchObject({ state: "succeeded", fileId: "F_ATTACH_1" });
     });
   }
 });

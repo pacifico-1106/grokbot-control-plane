@@ -6,6 +6,7 @@ import { assertApprovalExecutionAuthority } from "@/lib/approvals/execution-auth
 import { fulfillApprovedInvoke } from "@/lib/approvals/fulfill";
 import { parseFulfillment, parseInvokeSnapshot } from "@/lib/approvals/fulfill";
 import { fulfillApprovedAdmin } from "@/lib/admin-mcp/fulfill-admin";
+import type { FulfillmentFileUpload } from "@/lib/approvals/attachment-upload-claim";
 import { isAdminClassApproval } from "@/lib/admin-mcp/audit-class";
 import { appendAuditEvent, updateApprovalMetadata } from "@/lib/data";
 import { getOrgStuckWatchPolicy } from "@/lib/data/stuck-watch-policy";
@@ -238,6 +239,8 @@ export type W2RetryResult = {
   reason?: string;
   retryCount: number;
   fulfillmentOk?: boolean;
+  /** Approved attachment: W2 posts the approved text only (not_sent / rerun_required). */
+  fileUpload?: FulfillmentFileUpload;
 };
 
 /**
@@ -276,12 +279,14 @@ export async function runW2FulfillRetry(
   });
 
   let fulfillmentOk = false;
+  let fileUpload: FulfillmentFileUpload | undefined;
   if (isAdminClassApproval(approval)) {
     const admin = await fulfillApprovedAdmin(approval);
     fulfillmentOk = admin?.ok === true;
   } else {
     const invoke = await fulfillApprovedInvoke(approval);
     fulfillmentOk = invoke?.ok === true;
+    fileUpload = invoke?.fileUpload;
   }
 
   await appendAuditEvent({
@@ -308,6 +313,7 @@ export async function runW2FulfillRetry(
     ok: fulfillmentOk,
     retryCount: nextRetryCount,
     fulfillmentOk,
+    ...(fileUpload ? { fileUpload } : {}),
   };
 }
 

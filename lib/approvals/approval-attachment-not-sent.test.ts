@@ -99,8 +99,8 @@ describe("approval callback (fulfillIfApproved: Slack button / Telegram / LINE /
     noSecrets(JSON.stringify(result));
 
     const res = await statusGET(new Request(`http://localhost/api/approvals/status?id=${approvalId}&token=${statusToken}`));
-    const status = (await res.json()) as { fulfillmentResult?: { fileUpload?: unknown } };
-    expect(status.fulfillmentResult?.fileUpload).toEqual(NOT_SENT);
+    const status = (await res.json()) as { fulfillment?: { fileUpload?: unknown } };
+    expect(status.fulfillment?.fileUpload).toEqual(NOT_SENT);
 
     // A second callback for the same approval: nothing re-posted, no second audit.
     await fulfillIfApproved((await getApprovalById(approvalId, DEMO_ORG.id))!, "approved");
@@ -117,8 +117,8 @@ describe("approval callback (fulfillIfApproved: Slack button / Telegram / LINE /
     expect(((r.body.result || {}) as { fileUpload?: unknown }).fileUpload).toMatchObject({ ok: true, fileId: "F_NS_1" });
     expect([posts, uploads]).toEqual([1, 1]);
     const res = await statusGET(new Request(`http://localhost/api/approvals/status?id=${approvalId}&token=${statusToken}`));
-    const status = (await res.json()) as { fulfillmentResult?: { fileUpload?: unknown } };
-    expect(status.fulfillmentResult?.fileUpload).toEqual({ status: "sent", fileId: "F_NS_1", filename: "approved.pdf", bytes: 25 });
+    const status = (await res.json()) as { fulfillment?: { fileUpload?: unknown } };
+    expect(status.fulfillment?.fileUpload).toEqual({ status: "sent", fileId: "F_NS_1", filename: "approved.pdf", bytes: 25 });
   });
 
   test("no attachment approved → no marker, no audit", async () => {

@@ -82,7 +82,7 @@ describe("migration", () => {
     expect(sql).toContain("create or replace function public.finish_approval_attachment_upload(p_id uuid, p_org uuid, p_claim uuid, p_state text, p_result jsonb)");
     expect(sql).toMatch(/for update/);
     expect(sql).toContain("security invoker");
-    expect(sql).toContain("state' = 'running'");
+    expect(sql).toContain("u->>'state' is distinct from 'running'");
     expect(sql).toMatch(/revoke all on function public\.claim_approval_attachment_upload\(uuid,uuid,uuid,text\) from public,anon,authenticated/);
     expect(sql).toMatch(/grant execute on function public\.finish_approval_attachment_upload\(uuid,uuid,uuid,text,jsonb\) to service_role/);
     expect(sql).not.toMatch(/create table|alter table/i);

@@ -1,5 +1,6 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { formatMailCardParts, MAIL_BODY_PREVIEW_LABEL, readMailArtifact } from "@/lib/approvals/summary";
+import { attachmentCardLine, readCardAttachment, withoutAttachmentSummaryLine } from "@/lib/approvals/attachment-card";
 import { getAppOrigin } from "@/lib/approvals/tokens";
 import {
   getNotificationDelivery,
@@ -165,12 +166,20 @@ function approvalBlocks(
         ...mailParts.trailer.map((line) => escapeSlackMrkdwn(line)),
         approval.jobId ? `ジョブID: ${escapeSlackMrkdwn(approval.jobId)}` : "",
       ]
-    : [escapeSlackMrkdwn(truncate(approval.summary, 400))];
+    : [escapeSlackMrkdwn(truncate(withoutAttachmentSummaryLine(approval.summary, approval.metadata), 400))];
+  // Approved attachment (filename + size from the snapshot only), rendered on
+  // its own so the 400-char summary cut can never hide it. Inline code keeps
+  // * _ ~ literal; backticks are replaced so the name cannot close the span.
+  const attachment = readCardAttachment(approval.metadata);
+  const attachmentLine = attachment
+    ? attachmentCardLine(attachment, (name) => `\`${escapeSlackMrkdwn(name.replace(/`/g, "'"))}\``)
+    : "";
   const summary = [
     `*承認依頼* \`#${escapeSlackMrkdwn(approval.id.slice(0, 8))}\`  risk: ${escapeSlackMrkdwn(approval.risk)}`,
     `社員: ${escapeSlackMrkdwn(employee?.displayName || approval.employeeId)}`,
     `ツール: \`${escapeSlackMrkdwn(approval.tool || "unknown")}\``,
     `目的: ${escapeSlackMrkdwn(approval.purpose)}`,
+    attachmentLine,
     ...detail,
     workflowText,
   ].filter(Boolean).join("\n");

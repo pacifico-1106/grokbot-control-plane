@@ -9,8 +9,19 @@
  *   snapshot present                     → upload the approved file once, to the
  *       approved destination/thread, under the approval-time file egress rule;
  *       a differing request attachment is ignored and audited.
+ *
+ * "Once" holds under concurrent re-runs (#252 follow-up): an upload claim is
+ * taken before anything is downloaded (lib/approvals/attachment-upload-claim.ts).
+ * A re-run that cannot take it does not upload (in_progress). An unknown
+ * outcome (exception / completion step failed or timed out) is recorded as
+ * "uncertain" and never retried automatically.
  */
-import { getApprovalById, updateApprovalMetadata } from "@/lib/data/approvals";
+import { getApprovalById } from "@/lib/data/approvals";
+import {
+  claimAttachmentUpload,
+  finishAttachmentUpload,
+  readAttachmentUpload,
+} from "@/lib/approvals/attachment-upload-claim";
 import { appendAuditEvent } from "@/lib/data/audit";
 import {
   buildFileUploadAuditPayload,
@@ -34,6 +45,19 @@ import type { ApprovalRequest, Audience, AuditAction, GatewayInvokeRequest } fro
 export const APPROVAL_SNAPSHOT_MISSING_ATTACHMENT = "approval_snapshot_missing_attachment";
 export const APPROVAL_ATTACHMENT_NOT_APPROVED = "approval_attachment_not_approved";
 export const APPROVAL_ATTACHMENT_UNAVAILABLE = "approval_attachment_unavailable";
+export const APPROVAL_ATTACHMENT_UPLOAD_IN_PROGRESS = "approval_attachment_upload_in_progress";
+export const APPROVAL_ATTACHMENT_UPLOAD_UNCERTAIN = "approval_attachment_upload_uncertain";
+export const APPROVAL_ATTACHMENT_CLAIM_UNAVAILABLE = "approval_attachment_claim_unavailable";
+
+const UNCERTAIN_MESSAGE_JA =
+  "添付ファイルの送信結果を確認できませんでした（Slack 側で共有された可能性があります）。二重送信を防ぐため自動では再送しません。チャンネルを確認し、必要なら管理者が対応してください。";
+
+/**
+ * uploadSlackFile returns before files.completeUploadExternal for every other
+ * failure, so the file was never shared. At (or after) the completion step the
+ * outcome is unknown: a timeout or an error answer may follow a share.
+ */
+const OUTCOME_UNKNOWN_CODES = new Set(["complete_upload_failed"]);
 
 const SLACK_TS = /^\d+\.\d+$/;
 
@@ -86,14 +110,20 @@ export async function auditLegacySnapshotAttachmentBlock(
   }).catch(() => undefined);
 }
 
-type AttachmentFulfillment = { ok: true; fileId: string; filename: string; bytes: number; refSha256: string; at: string };
-
-function priorAttachmentFulfillment(approval: ApprovalRequest | null, refSha256: string): AttachmentFulfillment | null {
-  const raw = approval?.metadata?.attachmentFulfillment;
+/** Stored success: this follow-up's claim record, or #252's attachmentFulfillment. */
+function priorUpload(
+  approval: ApprovalRequest,
+  refSha256: string
+): { fileId: string; filename: string; bytes: number } | null {
+  const upload = readAttachmentUpload(approval.metadata);
+  if (upload?.state === "succeeded" && upload.fileId) {
+    return { fileId: upload.fileId, filename: upload.filename ?? "", bytes: upload.bytes ?? 0 };
+  }
+  const raw = approval.metadata?.attachmentFulfillment;
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
   const rec = raw as Record<string, unknown>;
   return rec.ok === true && typeof rec.fileId === "string" && rec.refSha256 === refSha256
-    ? (rec as unknown as AttachmentFulfillment)
+    ? { fileId: rec.fileId, filename: String(rec.filename ?? ""), bytes: typeof rec.bytes === "number" ? rec.bytes : 0 }
     : null;
 }
 
@@ -160,12 +190,11 @@ export async function deliverApprovedRerunAttachment(input: {
       });
   }
 
-  // Idempotent: a re-run after a successful upload never uploads again.
+  // Fast path: already uploaded → never upload again (the claim below is the
+  // authoritative check; this only skips the egress / reference work).
   const latest = await getApprovalById(approval.id, approval.orgId).catch(() => null);
-  const done = priorAttachmentFulfillment(latest ?? approval, approved.refSha256);
-  if (done) {
-    return { received: true, fileUpload: { ok: true, fileId: done.fileId, filename: done.filename, bytes: done.bytes } };
-  }
+  const done = priorUpload(latest ?? approval, approved.refSha256);
+  if (done) return { received: true, fileUpload: { ok: true, ...done } };
 
   const snapshot = parseInvokeSnapshot(approval.metadata);
   const dest = snapshot?.conversation?.slackChannelId || snapshot?.conversation?.slackUserId || "";
@@ -205,21 +234,103 @@ export async function deliverApprovedRerunAttachment(input: {
     };
   }
 
-  const uploaded = await uploadSlackFile({
-    orgId: snapshot?.orgId || approval.orgId,
-    employeeId: snapshot?.employeeId || ctx.employeeId,
-    postingAs: snapshot?.postingAs,
-    channel: dest,
-    threadTs,
-    fileRef,
-    fileUrl: fileRef.startsWith("http") ? fileRef : undefined,
-    filename: approved.filename,
-    mimeType: approved.mimeType,
-    title: approved.title,
-    initialComment: approved.initialComment,
-    expectedBytes: approved.bytes,
-  });
+  // One upload per approval: take the claim before downloading anything.
+  const claim = await claimAttachmentUpload(latest ?? approval, approved.refSha256);
+  const display = { filename: approved.filename, ...(approved.bytes !== undefined ? { bytes: approved.bytes } : {}) };
+  if (claim.kind === "succeeded") {
+    return { received: true, fileUpload: { ok: true, fileId: claim.fileId, filename: claim.filename, bytes: claim.bytes } };
+  }
+  if (claim.kind === "running") {
+    await audit("approval.attachment_upload_in_progress",
+      "承認後再実行: 同じ承認の添付を別の実行がアップロード中のため、アップロードしませんでした", display);
+    return {
+      received: true,
+      fileUpload: {
+        ok: false,
+        code: APPROVAL_ATTACHMENT_UPLOAD_IN_PROGRESS,
+        reason: APPROVAL_ATTACHMENT_UPLOAD_IN_PROGRESS,
+        status: "in_progress",
+        messageJa: "同じ承認の添付ファイルを別の実行が送信中です。二重送信を防ぐため、この実行では送信していません。",
+      },
+    };
+  }
+  if (claim.kind === "uncertain") {
+    return {
+      received: true,
+      fileUpload: {
+        ok: false,
+        code: APPROVAL_ATTACHMENT_UPLOAD_UNCERTAIN,
+        reason: APPROVAL_ATTACHMENT_UPLOAD_UNCERTAIN,
+        status: "uncertain",
+        messageJa: UNCERTAIN_MESSAGE_JA,
+      },
+    };
+  }
+  if (claim.kind !== "claimed") {
+    // denied (no longer approved) or the claim store is unavailable → fail closed.
+    await audit("slack.file_upload_failed", "承認済み添付の送信権を確保できないためアップロードしませんでした", {
+      code: APPROVAL_ATTACHMENT_CLAIM_UNAVAILABLE,
+      claim: claim.kind,
+      ...display,
+    });
+    return {
+      received: true,
+      fileUpload: {
+        ok: false,
+        code: APPROVAL_ATTACHMENT_CLAIM_UNAVAILABLE,
+        reason: claim.kind,
+        status: "failed",
+        messageJa: "添付ファイルの送信を確保できなかったため、添付は送信していません（本文の送信結果は別に返します）。",
+      },
+    };
+  }
+
+  const markUncertain = async (code: string, error: string) => {
+    const recorded = await finishAttachmentUpload(approval, claim.claimId, "uncertain", { ...display, code });
+    await audit("approval.attachment_upload_uncertain",
+      "承認後再実行: 添付の送信結果が不明のため uncertain として停止（自動再送しません）", {
+        ...display,
+        code,
+        error,
+        channel: dest,
+        threadTs,
+        claimRecorded: recorded,
+        nextAction: "manual_check",
+      });
+    return {
+      received: true,
+      fileUpload: {
+        ok: false as const,
+        code: APPROVAL_ATTACHMENT_UPLOAD_UNCERTAIN,
+        reason: code,
+        status: "uncertain" as const,
+        messageJa: UNCERTAIN_MESSAGE_JA,
+      },
+    };
+  };
+
+  let uploaded: Awaited<ReturnType<typeof uploadSlackFile>>;
+  try {
+    uploaded = await uploadSlackFile({
+      orgId: snapshot?.orgId || approval.orgId,
+      employeeId: snapshot?.employeeId || ctx.employeeId,
+      postingAs: snapshot?.postingAs,
+      channel: dest,
+      threadTs,
+      fileRef,
+      fileUrl: fileRef.startsWith("http") ? fileRef : undefined,
+      filename: approved.filename,
+      mimeType: approved.mimeType,
+      title: approved.title,
+      initialComment: approved.initialComment,
+      expectedBytes: approved.bytes,
+    });
+  } catch (error) {
+    return markUncertain("upload_exception", error instanceof Error ? error.name : "upload_exception");
+  }
   if (!uploaded.ok) {
+    if (OUTCOME_UNKNOWN_CODES.has(uploaded.code)) return markUncertain(uploaded.code, uploaded.error);
+    await finishAttachmentUpload(approval, claim.claimId, "failed", { ...display, code: uploaded.code });
     await audit("slack.file_upload_failed", `承認済み添付のアップロードに失敗: ${uploaded.error}`, {
       code: uploaded.code,
       error: uploaded.error,
@@ -227,24 +338,24 @@ export async function deliverApprovedRerunAttachment(input: {
       channel: dest,
       threadTs,
     });
-    return { received: true, fileUpload: buildFileUploadFailed(uploaded) };
+    const failed = buildFileUploadFailed(uploaded);
+    return { received: true, fileUpload: failed.ok ? failed : { ...failed, status: "failed" } };
   }
-  await updateApprovalMetadata(latest ?? approval, {
-    attachmentFulfillment: {
-      ok: true,
-      fileId: uploaded.fileId,
-      filename: uploaded.filename,
-      bytes: uploaded.bytes,
-      refSha256: approved.refSha256,
-      at: new Date().toISOString(),
-    } satisfies AttachmentFulfillment,
-  }).catch(() => undefined);
-  await audit("slack.file_uploaded", `承認済み添付をアップロード: ${uploaded.filename}`,
-    buildFileUploadAuditPayload(uploaded, {
+  const recorded = await finishAttachmentUpload(approval, claim.claimId, "succeeded", {
+    fileId: uploaded.fileId,
+    filename: uploaded.filename,
+    bytes: uploaded.bytes,
+  });
+  await audit("slack.file_uploaded", `承認済み添付をアップロード: ${uploaded.filename}`, {
+    ...buildFileUploadAuditPayload(uploaded, {
       jobId: ctx.jobId,
       audience: fileAudience.audience,
       mimeType: approved.mimeType,
       fileRef,
-    }));
+    }),
+    // false: uploaded, but the claim could not be closed — it stays "running",
+    // which keeps blocking further uploads (fail closed; clear manually).
+    claimRecorded: recorded,
+  });
   return { received: true, fileUpload: buildFileUploadSuccess(uploaded) };
 }

@@ -1,4 +1,5 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
+import { attachmentCardLine, readCardAttachment, withoutAttachmentSummaryLine } from "@/lib/approvals/attachment-card";
 import { updateApprovalTelegramState } from "@/lib/data/approvals";
 import {
   getNotificationDelivery,
@@ -83,6 +84,7 @@ export async function sendApprovalToLineChannel(
   const cfg = target(channel);
   if (!cfg.destinationId || !approval.telegramRef) return { ok: false, skipped: true };
   const altText = `承認依頼: ${approval.title}`;
+  const attachment = readCardAttachment(approval.metadata);
   const result = await callLine(channel, "/v2/bot/message/push", {
     to: cfg.destinationId,
     messages: [{
@@ -100,7 +102,10 @@ export async function sendApprovalToLineChannel(
             { type: "text", text: `社員: ${employee?.displayName || approval.employeeId}`, size: "sm", wrap: true },
             { type: "text", text: `ツール: ${approval.tool || "unknown"}`, size: "sm", wrap: true },
             { type: "text", text: `目的: ${approval.purpose}`, size: "sm", wrap: true },
-            { type: "text", text: truncate(approval.summary, 500), size: "sm", color: "#666666", wrap: true },
+            // Approved attachment (snapshot filename + size only), its own row
+            // so the 500-char summary cut cannot hide it. Flex text is plain.
+            ...(attachment ? [{ type: "text", text: attachmentCardLine(attachment), size: "sm", wrap: true }] : []),
+            { type: "text", text: truncate(withoutAttachmentSummaryLine(approval.summary, approval.metadata), 500), size: "sm", color: "#666666", wrap: true },
           ],
         },
         footer: {

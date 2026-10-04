@@ -221,11 +221,14 @@ describe("no attachment / legacy", () => {
     expect(lines(buildApprovalTelegramMessage(plain, null), "添付ファイル:")).toEqual([]);
   });
 
-  test("non-conversation tool (mail.send) gets no conversation attachment line", async () => {
-    const r = await runGatewayInvoke({ employeeId: "emp_comm", credentialId: "cred_comm", body: {
-      tool: "mail.send", purpose: "comm.internal", jobId: jid(), args: { to: "a@example.org", subject: "s", body: "b" } } });
-    if (r.httpStatus !== 402) return; // policy may deny mail.send for this fixture; nothing to render then
-    const approval = (await getApprovalById(String(r.body.approvalId), DEMO_ORG.id))!;
-    expect(lines(approval.summary, "添付ファイル:")).toEqual([]);
+  test("non-conversation tool (mail.send): snapshot records no conversation attachment → no line", async () => {
+    const { buildInvokeSnapshot } = await import("@/lib/approvals/fulfill");
+    const { attachmentSummaryLine, readCardAttachment } = await import("@/lib/approvals/attachment-card");
+    const invoke = buildInvokeSnapshot({
+      tool: "mail.send", purpose: "sales.outreach", jobId: jid(), employeeId: "emp_sales", orgId: DEMO_ORG.id,
+      body: { tool: "mail.send", purpose: "sales.outreach", jobId: "j", args: { to: "a@example.org", subject: "s", body: "b" }, fileAttachment: GOOD },
+    });
+    expect(readCardAttachment({ invoke })).toBeNull();
+    expect(attachmentSummaryLine({ invoke })).toBeNull();
   });
 });

@@ -1,4 +1,5 @@
 import { redactMetadata } from "@/lib/data/redaction";
+import { attachmentStatusField } from "@/lib/approvals/attachment-card";
 /**
  * Staffpass remote MCP tool surface (narrow control-plane only).
  * Confirm/send/order always stop for human approval via shared Gateway invoke.
@@ -693,6 +694,7 @@ export async function callStaffpassMcpTool(
               ...(invokeFulfill.ts ? { ts: invokeFulfill.ts } : {}),
               ...(invokeFulfill.id ? { id: invokeFulfill.id } : {}),
               ...(invokeFulfill.surface ? { surface: invokeFulfill.surface } : {}),
+              ...(invokeFulfill.fileUpload ? { fileUpload: invokeFulfill.fileUpload } : {}),
             };
           } else if (invokeFulfill && !invokeFulfill.ok) {
             fulfillmentResult = {
@@ -744,6 +746,8 @@ export async function callStaffpassMcpTool(
         revisionNote: approval.revisionNote,
         revisionCount: approval.revisionCount,
         parentApprovalId: approval.parentApprovalId,
+        // Approved attachment: snapshot filename + size only (null = none / not recorded).
+        attachment: attachmentStatusField(approval.metadata),
         ...(fulfillmentResult ? { fulfillment: redactMetadata(fulfillmentResult) } : {}),
         ...(adminResultRequired ? { resultRetrieval: {
           endpoint: "/api/mcp/admin", tool: fulfillmentResult?.tool, approvalId: approval.id, requiresAdminCredential: true,
