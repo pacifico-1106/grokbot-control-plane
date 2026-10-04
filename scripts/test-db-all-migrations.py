@@ -71,6 +71,9 @@ FIXES = [
     },
 ]
 ALL_FIX_TABLES = tuple(t for f in FIXES for t in f["tables"])
+# Run after every migration is applied: last-owner guard (20261004200000) and
+# invite activation / last-owner user_id / atomic provisioning (20261004900000).
+POST_APPLY_TESTS = ("tests/security/db-member-guard.sql", "tests/security/db-member-invite-activation.sql")
 
 # Un-timestamped legacy names do not sort in dependency order (see
 # scripts/test-db-local.py); everything after this list sorts correctly.
@@ -197,7 +200,7 @@ def open_holes(fix):
 
 
 try:
-    run([BIN / "initdb", "-D", cluster / "data", "-U", "test_admin", "--auth=trust", "--no-locale"], stdout=subprocess.DEVNULL)
+    run([BIN / "initdb", "-D", cluster / "data", "-U", "test_admin", "--auth=trust", "--no-locale", "-E", "UTF8"], stdout=subprocess.DEVNULL)
     run([BIN / "pg_ctl", "-D", cluster / "data", "-l", cluster / "server.log",
          "-o", f"-F -c listen_addresses='' -k {cluster} -p {PORT}", "-w", "start"], stdout=subprocess.DEVNULL)
     started = True
@@ -243,6 +246,10 @@ try:
               f"{len(fix['tables'])} tables; reads intact"
               + ("; credentials unreadable (rows + secret_hash)" if fix.get("extra_privs") else "")
               + "; service_role reads/writes all.")
+    # Full-history checks of later security migrations (fixture data, self-cleaning).
+    for test_file in POST_APPLY_TESTS:
+        sql_file(ROOT / test_file)
+        print(f"PASS {test_file} on the full migration history")
     missing = [f["name"] for f in FIXES if not files[f["name"]]]
     assert not missing, f"RLS fix migration missing: {missing}"
 

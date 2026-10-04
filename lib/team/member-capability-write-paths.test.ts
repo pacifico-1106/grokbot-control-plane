@@ -70,6 +70,20 @@ describe("org_members write inventory", () => {
     expect(provision).toContain("SYSTEM_BOOTSTRAP_ACTOR");
   });
 
+  test("org_members RPC writers: invite claim only via invite-claim.ts, org bootstrap only after evaluateMemberChange", () => {
+    const rpcSites = (fn: string) =>
+      files.filter((f) => new RegExp(`\\.rpc\\(\\s*["'\`]${fn}["'\`]`).test(readFileSync(f, "utf8"))).map(rel).sort();
+    expect(rpcSites("claim_member_invites")).toEqual(["lib/auth/invite-claim.ts"]);
+    expect(rpcSites("provision_org_with_owner")).toEqual(["lib/auth/session.ts"]);
+    const text = src("lib/auth/session.ts");
+    const provision = text.slice(text.indexOf("export async function provisionOrgForUser"), text.indexOf("export type EnsureOrgResult"));
+    const guardAt = provision.indexOf("evaluateMemberChange(");
+    expect(guardAt).toBeGreaterThan(-1);
+    expect(provision.indexOf('rpc("provision_org_with_owner"')).toBeGreaterThan(guardAt);
+    // the claim RPC takes the user id only — never an email
+    expect(src("lib/auth/invite-claim.ts")).not.toMatch(/p_email/);
+  });
+
   test("writeMemberRow is only called from applyMemberChange, which calls evaluateMemberChange first", () => {
     const callers = files.filter((f) => /\bwriteMemberRow\s*\(/.test(readFileSync(f, "utf8"))).map(rel).sort();
     expect(callers).toEqual(["lib/data/members.ts", "lib/team/apply-member-change.ts"]);

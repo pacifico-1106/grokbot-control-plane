@@ -40,7 +40,7 @@ def parent_constraints():
         and pg_get_constraintdef(oid)='UNIQUE (id, org_id)' order by conrelid, conname;""")
 
 try:
-    run([BIN / "initdb", "-D", cluster / "data", "-U", "test_admin", "--auth=trust", "--no-locale"], stdout=subprocess.DEVNULL)
+    run([BIN / "initdb", "-D", cluster / "data", "-U", "test_admin", "--auth=trust", "--no-locale", "-E", "UTF8"], stdout=subprocess.DEVNULL)
     run([BIN / "pg_ctl", "-D", cluster / "data", "-l", cluster / "server.log",
          "-o", f"-F -c listen_addresses='' -k {cluster} -p 55439", "-w", "start"], stdout=subprocess.DEVNULL)
     started = True
@@ -127,6 +127,80 @@ try:
     sql(config_writes)
     sql(config_writes)  # re-applicable
     sql(ROOT / "tests/security/db-rls-write-holes-phase2.sql")
+
+    # Member invite activation / last-owner user_id / atomic org provisioning (20261004900000).
+    import re
+    invite_test = ROOT / "tests/security/db-member-invite-activation.sql"
+    invite_migration = ROOT / "supabase/migrations/20261004900000_member_invite_activation.sql"
+    def psql_capture(path):
+        return subprocess.run([str(x) for x in [BIN / "psql", "-X", "-q", "-v", "ON_ERROR_STOP=1", "-h", cluster,
+            "-p", "55439", "-U", "test_admin", "-d", "postgres", "-f", path]], env=env, capture_output=True, text=True)
+    def invite_failures():
+        result = psql_capture(invite_test)
+        if result.returncode == 0:
+            return []
+        m = re.search(r"member invite activation checks failed \((\d+) case\(s\)\):\n(.*?)\n(?:CONTEXT|psql)", result.stderr, re.S)
+        assert m, result.stderr
+        cases = m.group(2).splitlines()
+        assert len(cases) == int(m.group(1)), cases
+        return cases
+    before = invite_failures()  # fail-first: the checks must fail before the migration
+    assert before, "invite activation checks passed without the migration"
+    print(f"PASS before 20261004900000: {len(before)} invite/owner/provision checks fail as expected:")
+    for case in before:
+        print("       " + case[:160])
+    sql(invite_migration)
+    sql(invite_migration)  # re-applicable
+    assert invite_failures() == [], "invite activation checks fail after the migration"
+    sql(ROOT / "tests/security/db-member-guard.sql")  # earlier last-owner checks still hold
+
+    # concurrency: 12 parallel claims of one invite → exactly 1 binding + 1 audit row
+    query("""insert into public.orgs (id, name) values ('a9000000-0000-4000-8000-0000000000c1', 'invite-race');
+      insert into auth.users (id, email, email_confirmed_at, invited_at) values
+        ('a9100000-0000-4000-8000-0000000000c1', 'race@fixture.invalid', now(), now()),
+        ('a9100000-0000-4000-8000-0000000000c2', 'race-owner@fixture.invalid', now(), null);
+      insert into public.org_members (id, org_id, user_id, email, role, capabilities, status, invited_at) values
+        ('a9200000-0000-4000-8000-0000000000c0', 'a9000000-0000-4000-8000-0000000000c1', 'a9100000-0000-4000-8000-0000000000c2', 'race-owner@fixture.invalid', 'owner', '{manage_team}', 'active', null),
+        ('a9200000-0000-4000-8000-0000000000c1', 'a9000000-0000-4000-8000-0000000000c1', null, 'race@fixture.invalid', 'member', '{view_dashboard}', 'invited', now());""")
+    command = "set role service_role; select public.claim_member_invites('a9100000-0000-4000-8000-0000000000c1')->>'status';"
+    with ThreadPoolExecutor(max_workers=12) as pool:
+        states = list(pool.map(query, [command] * 12))
+    assert states.count("claimed") == 1 and states.count("none") == 11, states
+    assert query("select count(*) from public.audit_events where action = 'member.invite_claimed' and org_id = 'a9000000-0000-4000-8000-0000000000c1';") == "1"
+    # 8 parallel provisions for one user → exactly one org
+    query("insert into auth.users (id, email, email_confirmed_at) values ('a9100000-0000-4000-8000-0000000000c3', 'race-provision@fixture.invalid', now());")
+    command = ("set role service_role; select public.provision_org_with_owner('a9100000-0000-4000-8000-0000000000c3', "
+               "'race-provision@fixture.invalid', 'R', 'invite-race-provision', 'managed', now(), null, '{manage_team}')->>'created';")
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        created = list(pool.map(query, [command] * 8))
+    assert created.count("true") == 1 and created.count("false") == 7, created
+    assert query("select count(*) from public.orgs where name = 'invite-race-provision';") == "1"
+    query("delete from public.orgs where id = 'a9000000-0000-4000-8000-0000000000c1' or name = 'invite-race-provision'; delete from auth.users where id::text like 'a9100000-%';")
+
+    # documented read-only production SQL runs (and is read-only)
+    runbook = (ROOT / "docs/runbooks/member-invite-activation-20261004.md").read_text()
+    blocks = re.findall(r"```sql\n(-- readonly:[^\n]*\n.*?)```", runbook, re.S)
+    assert len(blocks) >= 3, "runbook read-only SQL blocks missing"
+    for block in blocks:
+        assert block.lstrip().splitlines()[1].strip().lower() == "begin transaction read only;", block
+        sql_text = cluster / "readonly.sql"
+        sql_text.write_text(block)
+        sql(sql_text)
+
+    # documented rollback: restores the previous trigger + drops the RPCs; re-apply closes again
+    text = invite_migration.read_text()
+    m = re.search(r"^-- ROLLBACK \(down\).*?$(.*?)^-- END ROLLBACK", text, re.S | re.M)
+    assert m, "migration has no rollback block"
+    rollback = cluster / "rollback.sql"
+    rollback.write_text("\n".join(ln[5:] for ln in m.group(1).splitlines() if ln.startswith("--   ")) + "\n")
+    sql(rollback)
+    assert query("select count(*) from pg_proc where proname in ('claim_member_invites', 'provision_org_with_owner', 'normalize_identity_email');") == "0"
+    assert "user_id" not in query("select pg_get_triggerdef(oid) from pg_trigger where tgname = 'org_members_keep_last_owner';")
+    sql(ROOT / "tests/security/db-member-guard.sql")
+    assert invite_failures(), "rollback did not restore the previous behaviour"
+    sql(invite_migration)
+    assert invite_failures() == []
+    print("PASS 20261004900000: invite claim binds only a verified invitee's own pending invite (role/caps kept, audited, idempotent); 12 parallel claims bind once; last active owner's user_id cannot be re-pointed/nulled (unbound owners never count) while null-user_id binding works; org + owner provisioned atomically (failed owner insert leaves no org; 8 parallel provisions create 1 org); RPCs service_role only; runbook read-only SQL runs; rollback restores the previous state; re-apply passes.")
     print("PASS: orgs / subscriptions / audit_events / approval_requests have no anon/authenticated write path (member/admin/owner JWT denied); service_role writes all four. Full-history check: scripts/test-db-all-migrations.py.")
     print("PASS: 14 tenant config / credential tables (credentials, employees, bindings, admin agents, directory, adapters, channels, projects, card setup/audit) + gateway_links, agentmail_inboxes, lp_handoffs, lp_wake_webhook_configs, lp_wake_webhook_events have no anon/authenticated write path; other reads unchanged; credentials (rows and secret_hash) unreadable from any session; service_role reads/writes all.")
     print("PASS: org_members has no authenticated write path; last active owner cannot be demoted/disabled/deleted; org cascade still works.")

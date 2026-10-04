@@ -24,7 +24,16 @@ mock.module("../supabase", () => {
     return q;
   };
   return {
-    createSupabaseAdminClient: () => ({ from: chain }),
+    createSupabaseAdminClient: () => ({
+      from: chain,
+      rpc: async (fn: string) => {
+        inserts.push(`rpc:${fn}`);
+        return {
+          data: { created: true, org_id: "orgs_new", member: { id: "m_new", org_id: "orgs_new", user_id: "u_invited", email: "invitee@example.com", role: "owner", status: "active" } },
+          error: null,
+        };
+      },
+    }),
     createSupabaseServerClient: () => ({
       auth: {
         getUser: async () => ({
@@ -52,7 +61,8 @@ test("non-invited (self-signup) user without org still gets repair-provisioned",
   invitedAt = null;
   const r = await ensureAuthenticatedOrg();
   expect(r.status).not.toBe("no_membership");
-  expect(inserts).toContain("orgs");
+  // org + owner row in one transaction (migration 20261004900000)
+  expect(inserts).toContain("rpc:provision_org_with_owner");
 });
 
 test("helper", () => {
