@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { requireOrgSession } from "@/lib/auth/require-org";
+import { requireOrgAdminSession, requireOrgSession } from "@/lib/auth/require-org";
 import { isMcpEndpointHandoffEnabled } from "@/lib/feature-flags";
 import { buildMcpHandoff } from "@/lib/mcp/endpoint-handoff-block";
 import {
@@ -12,11 +12,15 @@ import {
 
 export const runtime = "nodejs";
 
+/**
+ * Re-points the employee's binding at a Grok Bot agent (employee_bindings)
+ * → org owner/admin only (server-side; members get 403 admin_required).
+ */
 export async function POST(
   req: Request,
   ctx: { params: Promise<{ id: string }> }
 ) {
-  const gate = await requireOrgSession();
+  const gate = await requireOrgAdminSession();
   if (!gate.ok) return gate.response;
 
   const { id } = await ctx.params;

@@ -6,6 +6,7 @@ import { parseAdminFulfillment } from "@/lib/admin-mcp/fulfill-admin";
 import { isAdminClassApproval } from "@/lib/admin-mcp/audit-class";
 import { redactMetadata } from "@/lib/data/redaction";
 import { attachmentStatusField } from "@/lib/approvals/attachment-card";
+import { approvalPollFields } from "@/lib/approvals/poll-hint";
 
 export const runtime = "nodejs";
 
@@ -128,16 +129,8 @@ export async function GET(req: Request) {
     attachment: attachmentStatusField(approval.metadata),
     ...(fulfillmentResult ? { fulfillment: redactMetadata(fulfillmentResult) } : {}),
     ...(status === "superseded" || status === "expired" ? closedWithoutSendField(approval.metadata) : {}),
-    pollHint:
-      status === "pending"
-        ? "continue_polling"
-        : status === "approved"
-          ? fulfillmentResult && !adminResultRequired
-            ? "fulfilled"
-            : "reinvoke_with_approvalId"
-          : status === "revision_requested"
-            ? `Revise the artifact per revisionNote and re-invoke with the same jobId and parentApprovalId=${approval.id}.`
-          : "abort_job",
+    // pollHint (+ reinvokeReason for a definite Slack failure; 木村 5) — same shape as the MCP tool / status API
+    ...approvalPollFields({ status, approvalId: approval.id, fulfillmentResult, adminResultRequired }),
   };
 
   if (workflowProgress) {

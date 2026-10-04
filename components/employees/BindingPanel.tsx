@@ -32,9 +32,15 @@ function formatTs(iso: string | null): string {
 export function BindingPanel({
   employeeId,
   initial,
+  canManageBinding = false,
+  demoMode = false,
 }: {
   employeeId: string;
   initial: EmployeeBinding;
+  /** Server-decided (isOrgAdminSession): link / health are owner/admin only. */
+  canManageBinding?: boolean;
+  /** ?forceFail is honoured by the API only in demo mode. */
+  demoMode?: boolean;
 }) {
   const [binding, setBinding] = useState<EmployeeBinding>(initial);
   const [agentId, setAgentId] = useState(initial.grokBotAgentId ?? "");
@@ -281,22 +287,26 @@ export function BindingPanel({
       </div>
 
       <div className="flex flex-col sm:flex-row flex-wrap gap-2">
-        <button
-          type="button"
-          className="btn btn-primary text-sm w-full sm:w-auto"
-          disabled={busy || binding.status === "revoked" || !agentId.trim()}
-          onClick={() => void link()}
-        >
-          連携する
-        </button>
-        <button
-          type="button"
-          className="btn btn-ghost text-sm w-full sm:w-auto"
-          disabled={busy || binding.status === "revoked"}
-          onClick={() => void health(false)}
-        >
-          接続を確認
-        </button>
+        {canManageBinding ? (
+          <>
+            <button
+              type="button"
+              className="btn btn-primary text-sm w-full sm:w-auto"
+              disabled={busy || binding.status === "revoked" || !agentId.trim()}
+              onClick={() => void link()}
+            >
+              連携する
+            </button>
+            <button
+              type="button"
+              className="btn btn-ghost text-sm w-full sm:w-auto"
+              disabled={busy || binding.status === "revoked"}
+              onClick={() => void health(false)}
+            >
+              接続を確認
+            </button>
+          </>
+        ) : null}
         <button
           type="button"
           className="btn btn-ghost text-sm w-full sm:w-auto"
@@ -305,16 +315,23 @@ export function BindingPanel({
         >
           社員証を再発行
         </button>
-        <button
-          type="button"
-          className="btn btn-ghost text-xs w-full sm:w-auto"
-          disabled={busy}
-          onClick={() => void health(true)}
-          title="デモ用: 接続切れを試す"
-        >
-          接続切れを試す（デモ）
-        </button>
+        {canManageBinding && demoMode ? (
+          <button
+            type="button"
+            className="btn btn-ghost text-xs w-full sm:w-auto"
+            disabled={busy}
+            onClick={() => void health(true)}
+            title="デモ用: 接続切れを試す"
+          >
+            接続切れを試す（デモ）
+          </button>
+        ) : null}
       </div>
+      {canManageBinding ? null : (
+        <p className="text-[11px] muted">
+          連携と接続確認は、組織のオーナーまたは管理者が行います。
+        </p>
+      )}
 
       <p className="text-[11px] faint leading-relaxed">
         社員証を出し直しても、AI社員の番号は変わりません。未接続・取消・再接続待ちのときは、承認されるまで実行しません。

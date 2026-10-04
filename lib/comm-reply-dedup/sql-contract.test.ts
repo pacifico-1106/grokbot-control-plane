@@ -21,6 +21,8 @@ describe("comm reply dedup migration", () => {
       expect(earlier < NAME.slice(0, 14)).toBe(true);
     }
     for (const f of stamped) if (f.slice(0, 14) <= "20261004600000") expect(f < NAME).toBe(true);
+    // No other migration shares this timestamp (e.g. a parallel PR).
+    expect(stamped.filter((f) => f.startsWith("20261004700000_"))).toEqual([NAME]);
   });
   test("adds superseded to approval_requests status (keeps every existing status)", () => {
     expect(sql).toMatch(/'pending',\s*'approved',\s*'rejected',\s*'expired',\s*'revision_requested',\s*'superseded'/);

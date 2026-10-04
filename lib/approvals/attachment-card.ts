@@ -9,11 +9,15 @@
  *   none    → "添付ファイル: なし"           (approved without an attachment)
  *   legacy / non-conversation tool → no line (nothing was recorded)
  *
+ * Never part of the stored summary (#253 follow-up 5): Slack / Telegram / LINE
+ * render the line on their own, Web renders `publicApproval().cardAttachment`
+ * in its own element (components/approvals/ApprovalAttachmentNotice.tsx).
+ *
  * The filename is agent-supplied: it is collapsed to one line, stripped of
  * bidi / zero-width controls and capped here; each surface escapes it again for
  * its own markup (Slack mrkdwn, Telegram HTML; Web / LINE render plain text).
  */
-import { oneLineCardValue } from "@/lib/approvals/summary";
+import { oneLineCardValue } from "@/lib/approvals/card-text";
 import { snapshotAttachmentState } from "@/lib/approvals/snapshot-attachment";
 
 export const CARD_ATTACHMENT_LABEL = "添付ファイル";
@@ -70,17 +74,33 @@ export function attachmentCardLine(card: CardAttachment, renderName: (name: stri
   return `${CARD_ATTACHMENT_LABEL}: ${renderName(card.filename)}${card.sizeLabel ? `（${card.sizeLabel}）` : ""}`;
 }
 
-/** Plain line for the stored summary, or null when nothing was recorded. */
+/** The plain card line, or null when nothing was recorded. */
 export function attachmentSummaryLine(metadata: Record<string, unknown> | null | undefined): string | null {
   const card = readCardAttachment(metadata);
   return card ? attachmentCardLine(card) : null;
 }
 
-/** Remove the plain line from a summary when the surface renders it on its own. */
+/** Fixed last line of buildRichApprovalSummary (lib/approvals/summary.ts). */
+const SUMMARY_FOOTER_PREFIX = "Staffpass 承認後にのみ";
+
+/**
+ * Summaries stored while #253's builder still added the card line (the builder
+ * no longer does, #253 follow-up 5): hide that one line, because every surface
+ * renders the attachment on its own. Only the builder position counts — the
+ * line right before "本文:" (or before the fixed footer when there is no body)
+ * — so the same text written inside the message body is never removed.
+ */
 export function withoutAttachmentSummaryLine(summary: string, metadata: Record<string, unknown> | null | undefined): string {
   const line = attachmentSummaryLine(metadata);
   if (!line) return summary;
-  return summary.split("\n").filter((l) => l !== line).join("\n");
+  const lines = summary.split("\n");
+  const bodyAt = lines.indexOf("本文:");
+  const at = bodyAt >= 0
+    ? bodyAt - 1
+    : lines.findIndex((l) => l.startsWith(SUMMARY_FOOTER_PREFIX)) - 1;
+  if (at < 0 || lines[at] !== line) return summary;
+  lines.splice(at, 1);
+  return lines.join("\n");
 }
 
 /** Status / MCP output: `{ filename, bytes?, sizeLabel? }`, or null (none / not recorded). */

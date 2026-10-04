@@ -1,3 +1,4 @@
+import { recordSetupToolSucceeded } from "@/lib/approvals/attachment-retry-cap";
 import { buildMcpHandoff, parseMcpHandoff, type McpHandoff } from "@/lib/mcp/endpoint-handoff-block";
 import { isMcpEndpointHandoffEnabled } from "@/lib/feature-flags";
 import { isDemoMode } from "@/lib/mode";
@@ -2095,6 +2096,13 @@ async function fulfillApprovedAdminCore(
         fulfillment = { ok: false, tool, at, error: "unknown_admin_tool" };
     }
     await persist(approval, fulfillment);
+    // 木村 #255 second round: a settings-type tool succeeded → retry-cap reset
+    // marker (flag + the Slack-only allow-list are checked inside, 木村 fourth
+    // round 3; best effort, never changes the result).
+    if (fulfillment.ok) {
+      await recordSetupToolSucceeded({ orgId: approval.orgId, tool, source: "admin_fulfillment", approvalId: approval.id })
+        .catch(() => undefined);
+    }
     return fulfillment;
   } catch (error) {
     const message = error instanceof Error ? error.message : "fulfill_failed";

@@ -28,6 +28,6 @@ Authorization: Bearer gb_emp_<id>_<secret>
 ## ゲートウェイ
 
 - GET /api/gateway/health — 連携ヘルス
-- POST /api/gateway/link — linked / pending / disconnected
+- POST /api/gateway/link — linked / pending / disconnected（組織オーナー / 管理者のみ。メンバーは 403 admin_required）
 
 本番の Cursor Grok Bot パートナー API が利用可能になったら、ここを OAuth / workspace 紐付けに置き換えます。

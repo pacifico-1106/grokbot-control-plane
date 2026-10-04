@@ -450,6 +450,25 @@ export function isSignupDomainCheckEnabled(): boolean {
 }
 
 /**
+ * Approved-attachment auto reconcile (2026-10-04, #253 follow-up).
+ *
+ * When ON, the W2 cron (app/api/cron/stuck-watch-w2) also:
+ * - checks stale `running` and `uncertain` upload claims
+ *   (metadata.attachmentUpload) against the Slack conversation with read-only
+ *   Slack Web API calls (auth.test + conversations.replies) using the org's
+ *   conversation token, and settles them (succeeded / failed / uncertain +
+ *   one admin-agent stuck-watch item);
+ * - records the not_sent marker for approvals whose approved text was posted
+ *   while the approved attachment has no upload record.
+ * Needs migration 20261004400000_approval_attachment_reconcile.sql.
+ *
+ * When OFF (default): no Slack call, no record change, no audit (unchanged).
+ */
+export function isApprovalAttachmentReconcileEnabled(): boolean {
+  return parseFlag(process.env.APPROVAL_ATTACHMENT_RECONCILE_ENABLED);
+}
+
+/**
  * MCP endpoint handoff (木村 request / 八坂 GO, 2026-10-04).
  *
  * When ON:

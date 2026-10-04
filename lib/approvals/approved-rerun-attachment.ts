@@ -13,13 +13,17 @@
  * "Once" holds under concurrent re-runs (#252 follow-up): an upload claim is
  * taken before anything is downloaded (lib/approvals/attachment-upload-claim.ts).
  * A re-run that cannot take it does not upload (in_progress). An unknown
- * outcome (exception / completion step failed or timed out) is recorded as
- * "uncertain" and never retried automatically.
+ * outcome (exception / completion step timed out / 5xx / unknown error) is
+ * recorded as "uncertain" and never re-uploaded by a re-run; a Slack error
+ * known to precede sharing (lib/slack/definite-errors.ts) is "failed". With
+ * APPROVAL_ATTACHMENT_RECONCILE_ENABLED the W2 cron settles stale running /
+ * uncertain claims by checking the conversation (lib/approvals/attachment-reconcile.ts).
  */
 import { getApprovalById } from "@/lib/data/approvals";
 import {
   claimAttachmentUpload,
   finishAttachmentUpload,
+  liveFileUpload,
   readAttachmentUpload,
 } from "@/lib/approvals/attachment-upload-claim";
 import { appendAuditEvent } from "@/lib/data/audit";
@@ -33,6 +37,10 @@ import {
   type FileUploadResponse,
 } from "@/lib/gateway/adapters/slack-file-upload";
 import { parseInvokeSnapshot } from "@/lib/approvals/fulfill";
+import { isDefinitePreShareSlackError } from "@/lib/slack/definite-errors";
+import { reinvokeReasonForFileUpload } from "@/lib/approvals/poll-hint";
+import { ATTACHMENT_RETRY_CAP } from "@/lib/approvals/attachment-retry-cap";
+import { isApprovalAttachmentReconcileEnabled } from "@/lib/feature-flags";
 import {
   describeRequestAttachment,
   openSnapshotAttachmentRef,
@@ -48,16 +56,39 @@ export const APPROVAL_ATTACHMENT_UNAVAILABLE = "approval_attachment_unavailable"
 export const APPROVAL_ATTACHMENT_UPLOAD_IN_PROGRESS = "approval_attachment_upload_in_progress";
 export const APPROVAL_ATTACHMENT_UPLOAD_UNCERTAIN = "approval_attachment_upload_uncertain";
 export const APPROVAL_ATTACHMENT_CLAIM_UNAVAILABLE = "approval_attachment_claim_unavailable";
+export const APPROVAL_ATTACHMENT_RETRY_CAPPED = "approval_attachment_retry_capped";
 
-const UNCERTAIN_MESSAGE_JA =
-  "添付ファイルの送信結果を確認できませんでした（Slack 側で共有された可能性があります）。二重送信を防ぐため自動では再送しません。チャンネルを確認し、必要なら管理者が対応してください。";
+function retryCappedMessageJa(code: string, count: number): string {
+  return `同じ承認で同じ Slack エラー（${code}）が${count}回続いたため、設定が変わるまで Slack には送信しません（添付は未送信）。` +
+    "reinvokeReason の nextTool で設定を直してから、approvalId 付きでもう一度実行してください。";
+}
+
+const UNCERTAIN_PREFIX_JA =
+  "添付ファイルの送信結果を確認できませんでした（Slack 側で共有された可能性があります）。二重送信を防ぐため自動では再送しません。";
+
+/**
+ * 木村 4 (2026-10-04): while APPROVAL_ATTACHMENT_RECONCILE_ENABLED is ON the
+ * scheduled reconcile settles the record by itself, so the message says so.
+ * OFF → the previous wording, unchanged. Evaluated per call (flag at run time).
+ */
+export function uncertainMessageJa(): string {
+  return isApprovalAttachmentReconcileEnabled()
+    ? `${UNCERTAIN_PREFIX_JA}Staffpass が自動で確認し、送信済みか未送信かを確定します。`
+    : `${UNCERTAIN_PREFIX_JA}チャンネルを確認し、必要なら管理者が対応してください。`;
+}
 
 /**
  * uploadSlackFile returns before files.completeUploadExternal for every other
  * failure, so the file was never shared. At (or after) the completion step the
- * outcome is unknown: a timeout or an error answer may follow a share.
+ * outcome is unknown (a timeout, a 5xx or an unknown error may follow a
+ * share) — unless Slack answered one of the errors known to precede sharing
+ * (lib/slack/definite-errors.ts, #253 follow-up 3): then it is "failed".
  */
 const OUTCOME_UNKNOWN_CODES = new Set(["complete_upload_failed"]);
+
+function outcomeUnknown(uploaded: { code: string; slackError?: string }): boolean {
+  return OUTCOME_UNKNOWN_CODES.has(uploaded.code) && !isDefinitePreShareSlackError(uploaded.slackError);
+}
 
 const SLACK_TS = /^\d+\.\d+$/;
 
@@ -235,8 +266,33 @@ export async function deliverApprovedRerunAttachment(input: {
   }
 
   // One upload per approval: take the claim before downloading anything.
-  const claim = await claimAttachmentUpload(latest ?? approval, approved.refSha256);
+  // 木村 #255 second round (reconcile flag ON): the claim also enforces the
+  // retry cap (same definite Slack error ATTACHMENT_RETRY_CAP× in a row → no Slack call).
+  const reconcileOn = isApprovalAttachmentReconcileEnabled();
+  const claim = await claimAttachmentUpload(latest ?? approval, approved.refSha256,
+    reconcileOn ? { retryCap: ATTACHMENT_RETRY_CAP } : {});
   const display = { filename: approved.filename, ...(approved.bytes !== undefined ? { bytes: approved.bytes } : {}) };
+  if (claim.kind === "capped") {
+    // Same reason as the poll: built from the stored failed record by the one builder.
+    const current = await getApprovalById(approval.id, approval.orgId).catch(() => null);
+    const reinvokeReason = reinvokeReasonForFileUpload(liveFileUpload((current ?? latest ?? approval).metadata, undefined));
+    await audit("approval.attachment_upload_capped",
+      `承認後再実行: 同じ Slack エラー（${claim.code}）が${claim.count}回続いたため、設定が変わるまで添付を送信しません`, {
+        ...display, code: claim.code, consecutive: claim.count, limit: ATTACHMENT_RETRY_CAP,
+      });
+    return {
+      received: true,
+      fileUpload: {
+        ok: false,
+        code: APPROVAL_ATTACHMENT_RETRY_CAPPED,
+        reason: claim.code,
+        status: "failed",
+        messageJa: retryCappedMessageJa(claim.code, claim.count),
+        ...(reinvokeReason ? { reinvokeReason } : {}),
+        retryCap: { consecutive: claim.count, limit: ATTACHMENT_RETRY_CAP },
+      },
+    };
+  }
   if (claim.kind === "succeeded") {
     return { received: true, fileUpload: { ok: true, fileId: claim.fileId, filename: claim.filename, bytes: claim.bytes } };
   }
@@ -262,7 +318,7 @@ export async function deliverApprovedRerunAttachment(input: {
         code: APPROVAL_ATTACHMENT_UPLOAD_UNCERTAIN,
         reason: APPROVAL_ATTACHMENT_UPLOAD_UNCERTAIN,
         status: "uncertain",
-        messageJa: UNCERTAIN_MESSAGE_JA,
+        messageJa: uncertainMessageJa(),
       },
     };
   }
@@ -304,7 +360,7 @@ export async function deliverApprovedRerunAttachment(input: {
         code: APPROVAL_ATTACHMENT_UPLOAD_UNCERTAIN,
         reason: code,
         status: "uncertain" as const,
-        messageJa: UNCERTAIN_MESSAGE_JA,
+        messageJa: uncertainMessageJa(),
       },
     };
   };
@@ -329,8 +385,12 @@ export async function deliverApprovedRerunAttachment(input: {
     return markUncertain("upload_exception", error instanceof Error ? error.name : "upload_exception");
   }
   if (!uploaded.ok) {
-    if (OUTCOME_UNKNOWN_CODES.has(uploaded.code)) return markUncertain(uploaded.code, uploaded.error);
-    await finishAttachmentUpload(approval, claim.claimId, "failed", { ...display, code: uploaded.code });
+    if (outcomeUnknown(uploaded)) return markUncertain(uploaded.code, uploaded.error);
+    // slackError / slackNeeded are kept only for a definite pre-share error (pickResult) → reinvokeReason (木村 5)
+    await finishAttachmentUpload(approval, claim.claimId, "failed", {
+      ...display, code: uploaded.code, slackError: uploaded.slackError, slackNeeded: uploaded.slackNeeded,
+      slackTokenType: uploaded.slackTokenType,
+    });
     await audit("slack.file_upload_failed", `承認済み添付のアップロードに失敗: ${uploaded.error}`, {
       code: uploaded.code,
       error: uploaded.error,
@@ -339,7 +399,16 @@ export async function deliverApprovedRerunAttachment(input: {
       threadTs,
     });
     const failed = buildFileUploadFailed(uploaded);
-    return { received: true, fileUpload: failed.ok ? failed : { ...failed, status: "failed" } };
+    // 木村 #255 second round: the re-run says why too — same builder as the poll / MCP.
+    const reinvokeReason = reconcileOn && isDefinitePreShareSlackError(uploaded.slackError)
+      ? reinvokeReasonForFileUpload({
+          status: "failed", slackError: uploaded.slackError, slackNeeded: uploaded.slackNeeded, slackTokenType: uploaded.slackTokenType,
+        })
+      : null;
+    return {
+      received: true,
+      fileUpload: failed.ok ? failed : { ...failed, status: "failed", ...(reinvokeReason ? { reinvokeReason } : {}) },
+    };
   }
   const recorded = await finishAttachmentUpload(approval, claim.claimId, "succeeded", {
     fileId: uploaded.fileId,
