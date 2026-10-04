@@ -88,6 +88,11 @@ import {
   type ConversationDelivery,
 } from "@/lib/approvals/fulfill";
 import { approvedRerunConversationDelivery } from "@/lib/approvals/approved-rerun-delivery";
+import {
+  auditLegacySnapshotAttachmentBlock,
+  deliverApprovedRerunAttachment,
+  legacySnapshotAttachmentBlock,
+} from "@/lib/approvals/approved-rerun-attachment";
 import { isDemoMode } from "@/lib/mode";
 import { evaluateAllowedAccountsForBrowser } from "@/lib/employees/allowed-accounts";
 import { evaluateSpend } from "@/lib/spend-gate";
@@ -1739,6 +1744,20 @@ export async function runGatewayInvoke(
   // used to fall through to a fresh post of the request text).
   let approvedRerunDelivery: ConversationDelivery | undefined;
   if (priorApprovalOk && priorApproval && (isAudienceGatedTool(toolDef) || isSnsPublishTool(toolDef))) {
+    // Legacy approval (snapshot predates attachment recording) + a request
+    // attachment: the approved attachment is unknown → post NOTHING (no text,
+    // no file) and ask for re-approval. Checked before the text is fulfilled.
+    const legacyBlock = isAudienceGatedTool(toolDef)
+      ? legacySnapshotAttachmentBlock(priorApproval, body)
+      : null;
+    if (legacyBlock) {
+      await auditLegacySnapshotAttachmentBlock(priorApproval, body, {
+        orgId: orgId || employee.orgId, employeeId,
+        credentialId: input.credentialId || employee.credentialId, tool, purpose, jobId,
+      });
+      return jsonResult({ ok: false, code: legacyBlock.code, error: legacyBlock.code, message: legacyBlock.messageJa,
+        approvalId: priorApproval.id, employeeId, tool, purpose, jobId }, 409);
+    }
     const fulfilled = await fulfillApprovedInvoke(priorApproval);
     if (!fulfilled?.ok) return jsonResult({ ok: false, code: fulfilled?.error || "approval_execution_failed",
       error: fulfilled?.error || "approval_execution_failed", employeeId, tool, purpose, jobId }, 409);
@@ -2001,12 +2020,26 @@ export async function runGatewayInvoke(
   // File attachment handling for comm.reply / comm.send (Slack only, P0: internal thread required)
   // P0 contract: when fileAttachment was present, ALWAYS include fileUpload in response
   let fileUploadResponse: FileUploadResponse | undefined;
-  const fileAttachmentReceived = Boolean(
+  // Approved re-run: only the APPROVED attachment (snapshot) is ever uploaded;
+  // the request's fileAttachment is never used (lib/approvals/approved-rerun-attachment.ts).
+  const approvedRerunAttachment = Boolean(priorApprovalOk && priorApproval && isAudienceGatedTool(toolDef));
+  let fileAttachmentReceived = Boolean(
     isAudienceGatedTool(toolDef) &&
     body.fileAttachment?.fileRef &&
     body.fileAttachment?.filename
   );
-  if (fileAttachmentReceived && body.fileAttachment) {
+  if (approvedRerunAttachment && priorApproval) {
+    const rerunAttachment = await deliverApprovedRerunAttachment({
+      approval: priorApproval,
+      body,
+      ctx: {
+        orgId: orgId || employee.orgId, employeeId,
+        credentialId: input.credentialId || employee.credentialId, tool, purpose, jobId,
+      },
+    });
+    fileAttachmentReceived = rerunAttachment.received;
+    fileUploadResponse = rerunAttachment.fileUpload;
+  } else if (fileAttachmentReceived && body.fileAttachment) {
     const ctx = parseConversationContext(body, orgId || employee.orgId);
     const dest = ctx?.slackChannelId || ctx?.slackUserId || "";
     const replyThreadTs = resolveConversationThreadId({
@@ -2665,6 +2698,8 @@ export async function runGatewayInvoke(
                           delivery: conversationDelivery?.delivery,
                           conversationDelivery,
                           threadTsSource: threadTsSource || undefined,
+                          fileAttachmentReceived: fileAttachmentReceived || undefined,
+                          fileUpload: fileUploadResponse,
                         },
     message:
       egress?.decision === "summarize"

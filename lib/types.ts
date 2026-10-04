@@ -456,6 +456,8 @@ export type AuditAction =
   | "approval.resolved"
   | "approval.revision_requested"
   | "approval.telegram_error"
+  | "approval.snapshot_missing_attachment"
+  | "approval.attachment_request_ignored"
   | "notification.channel_updated"
   | "notification.test_sent"
   | "notification.delivery_failed"

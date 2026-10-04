@@ -38,6 +38,8 @@ export interface SlackFileUploadInput {
   mimeType?: string;
   title?: string;
   initialComment?: string;
+  /** Approved re-run: the size the approver saw. A different download is refused. */
+  expectedBytes?: number;
 }
 
 export interface SlackFileUploadResult {
@@ -414,6 +416,9 @@ export async function uploadSlackFile(
   }
 
   if (fileBuffer.length > MAX_FILE_BYTES) return { ok: false, code: "file_too_large", error: "file_too_large" };
+  if (typeof input.expectedBytes === "number" && fileBuffer.length !== input.expectedBytes) {
+    return { ok: false, code: "file_content_mismatch", error: "file_content_mismatch" };
+  }
   const mimeType = input.mimeType || "application/octet-stream";
 
   const uploadUrlResult = await getUploadUrl(
