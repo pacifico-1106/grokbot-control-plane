@@ -72,7 +72,7 @@ describe("unauthenticated API 401s", () => {
   test("GET /api/team/members without session → 401", async () => {
     state.orgId = null;
     state.userId = null;
-    const res = await getTeamMembers();
+    const res = await getTeamMembers(new Request("http://localhost/api/team/members"));
     expect(res.status).toBe(401);
     const body = await res.json();
     expect(body.error).toBe("auth_required");
