@@ -65,6 +65,9 @@ mock.module("@/lib/data/notification-channels", () => ({
   findAwaitingRevisionApproval: async () => null,
   resetDemoNotificationChannels: () => {},
   resolveEmployeeApprovalChannel: async () => null,
+  // lib/slack/bot-token.ts (conversation token) skips shared approval app inboxes.
+  isSharedApprovalAppChannelConfig: (config?: Record<string, unknown> | null) =>
+    Boolean(config && config.sharedApprovalApp === true),
 }));
 
 mock.module("@/lib/approvals/fulfill", () => ({

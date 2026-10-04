@@ -6,6 +6,7 @@
 2. 管理 AI 社員が `setup.slackApprover.set` を出し、人が 1 回承認する
 
 - 社員用アプリ（App A, `A0BU8TABSV6`）とは**別アプリ**です。client、secret、env 名がすべて別なので、承認の経路（このアプリの xoxb）と会話の経路（App A）のトークンは混ざりません。
+- 会話の bot token の解決（`resolveOrgSlackBotToken`、`lib/slack/bot-token.ts`）は、フラグが ON でも共通アプリの承認口（`config.sharedApprovalApp === true`）を**候補にしません**（2026-10-04 G1）。対象は、comm.reply / slack.post の bot 投稿、user token が `channel_not_found` を返したときの bot への切り替え、リアクション、ファイル添付、ext-shared の確認、`setup.slackStatus` の診断です。会話用の bot（会話アダプタ、テナント別の Slack 承認口、env）が無く、共通アプリだけがある org では、bot 投稿は `slack_conversation_bot_token_missing` で止まります（fail-closed）。承認の経路（承認 DM、「設定しました」、#240 のリンク DM）は承認口の secrets を直接読むので、これまでどおり共通アプリを使います。
 - テナント別の承認アプリ（みらい社中など）は、今までどおり並行して動きます。共通アプリへの移行は後で別途行います。
 - 承認 DM の送信、「設定しました」の送信、#240 の再認可リンクの DM 送信は、どれも org の Slack 承認口（`org_notification_channels`、provider `slack`）にある secrets の **`botToken`** を使います。共通アプリをインストールすると、その xoxb が同じ provider・同じキーに保存されます。#240 の `resolveApprovalAppBotToken(orgId, inboxId)` も、そのまま共通アプリの xoxb を使います。
 
