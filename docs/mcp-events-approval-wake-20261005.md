@@ -25,7 +25,7 @@
 | 権限の取り消し | **配信のたびに**社員証を確認し直す。取り消し・再発行・停止が**確実に分かったときだけ**、その AI 社員の購読を全部止め（以後の更新は `-32012`）、未送信分を捨てる。DB の読み取りエラーなどで確認できないときは止めずに延期する（§8）。ChatGPT は `terminated` 非対応なので、止めるのはサーバーの責任 |
 | 監査 | 購読・更新・停止・配信・配信断念・取り消し・「配信のあと AI が最初にしたこと」（`mcp_events.triggered_action`）を audit_events に残す |
 | 既存との関係 | 会話の起こす webhook・W1・W2・自動 fulfil は**そのまま**。承認結果の callback（`callbackUrl`）とメールは**共存**（同じ `eventId` を載せて重複を判定できる）。置き換えは段階的に（§10） |
-| 2026-07-28 対応 | **#268（D1）をこのブランチに取り込んだ**（§16.3）。社員用 `/api/mcp` は 2026-07-28 の `_meta` の要求と `server/discover` に応答し、フラグ ON なら `server/discover` と `initialize` の両方の `capabilities` に `events: {}` が出る。§13.1 は取り込み前の main の記録 |
+| 2026-07-28 対応 | **#268（D1）は main にマージ済み、このブランチにも取り込み済み**（§16.3）。社員用 `/api/mcp` は 2026-07-28 の `_meta` の要求と `server/discover` に応答し、フラグ ON なら `server/discover` と `initialize` の両方の `capabilities` に `events: {}` が出る。§13.1 は取り込み前の main の記録 |
 
 ---
 
@@ -397,7 +397,7 @@ ChatGPT は `terminated` 通知に対応していないので、**サーバー�
 1. migration `20261005000000` を適用（追加のみ。戻すときは migration 末尾の ROLLBACK か `supabase/verification/20261005000000_mcp_event_subscriptions_rollback.sql`。先にフラグを OFF）。**フラグを ON にする前に必ず適用する**（未適用で ON にすると、回数制限のテーブルに届かないので宛先確認はすべて `-32603 verification_rate_unavailable` で断られる＝fail closed）。
 2. cron はこの PR で `vercel.json` に毎分で登録済み（D6）。マージ後のデプロイから毎分呼ばれるが、フラグ OFF の間は `skipped` を返すだけで DB に触らない。
 3. 必要なら `MCP_EVENTS_TRUSTED_RECEIVER_HOSTS` を設定。
-4. 2026-07-28 対応は #268（D1）。**#268 を先にマージする**（この PR は #268 を取り込み済み、§16.3）。
+4. 2026-07-28 対応は #268（D1、マージ済み）。
 5. `MCP_EVENTS_ENABLED=true`。
 
 ---
@@ -406,7 +406,7 @@ ChatGPT は `terminated` 通知に対応していないので、**サーバー�
 
 | # | 内容 | 状態 | 内容 |
 |---|---|---|---|
-| D1 | 2026-07-28 対応（`server/discover` など）を**別 PR** にするか | **別 PR #268（承認済み、#267 より先にマージ）** | #268 をこのブランチに通常の merge で取り込み、`app/api/mcp/route.ts` の衝突を解消した（§16.3） |
+| D1 | 2026-07-28 対応（`server/discover` など）を**別 PR** にするか | **別 PR #268（マージ済み、main `face511`）** | #268 をこのブランチに通常の merge で取り込み、`app/api/mcp/route.ts` の衝突を解消した（§16.3） |
 | D2 | 期限の数字（standard 1 時間／最大 24 時間、elevated 15 分／最大 1 時間、最短 5 分） | **決定（2026-10-05 八坂 GO）** | 案のとおり |
 | D3 | 「危険な設定」の 3 条件（許可リスト外の受け手・high を含む・無期限の希望） | **決定（2026-10-05 八坂 GO）** | 案のとおり。許可リストは最初は空（全部 elevated） |
 | D4 | 宛先は 443 番だけにするか | **決定（2026-10-05 八坂 GO）** | 443 だけ |
@@ -443,7 +443,9 @@ ChatGPT は `terminated` 通知に対応していないので、**サーバー�
 
 試しの解消（上の方針どおり）で `test-db-local.py` と `test-db-all-migrations.py` を実行し、どちらも PASS した（schema.sql ＋ 63/64 の migration、`db-member-invite-activation.sql` と `db-mcp-events.sql` の両方が全履歴の上で PASS）。ほかのファイル（`lib/types.ts`、`lib/data/index.ts`、`lib/security/tenant-table-write-paths.test.ts`）は自動で merge できた。
 
-### 16.3 PR #268（D1、2026-07-28 対応）に依存する — **#268 を先にマージする**
+### 16.3 PR #268（D1、2026-07-28 対応）— **マージ済み**（main `face511`）。衝突は木村の 3 点のとおり解消
+
+- #268 は main にマージ済み（`face511`）。その後 origin/main を通常の merge コミット `ed1428a` で取り込んだ（中身は先に取り込んだ #268 のブランチと同じなので、差分は変わらない）。以下は取り込みの記録。
 
 - 木村の指示（2026-10-05）: #268 は承認済みで #267 より先にマージする。`git ls-remote` で `feat/mcp-protocol-2026-07-28-d1` の head が `7300679` であることを確認し、このブランチに**通常の merge コミット**で取り込んだ（rebase なし）。#268 が main に入れば、この PR の差分から #268 のコミットは消える。
 - 衝突は `app/api/mcp/route.ts` の 1 ファイルだけ（`lib/feature-flags.ts`・`docs/mcp.md` は自動で merge）。解消のしかた:
@@ -453,3 +455,7 @@ ChatGPT は `terminated` 通知に対応していないので、**サーバー�
 - `events-route.test.ts` の修正: `initialize` に `2026-07-28` を送ると、#268 以降は `2025-11-25`（initialize の世代の最新）が返る。
 - 追加したテスト（`events-route.test.ts`）: フラグ OFF の `server/discover` に events がない（legacy・modern）、フラグ ON の `server/discover` が `initialize` と同じ `capabilities`（`events: {}`）、modern の events/* が `reply()` の形、legacy の events/* は形が変わらない、不明なメソッドは modern で HTTP 404・legacy で HTTP 200（`-32601`）、フラグ OFF の modern の events/* は 404。
 - 管理用 MCP（`/api/mcp/admin`）には events を出さない（D8）。#268 の管理用の `serverCapabilities()` は変えていない。
+
+### 16.4 PR #269（`fix/mcp-nonstring-method-20261005`）
+
+- 両方の MCP の route の method の読み取りの近くを 4 行ずつ変える。#267 より先に入るかもしれない。このブランチ（`ed1428a`）に試しに merge したところ（使い捨ての worktree）、**衝突なしで自動 merge できた**。#269 が先にマージされたら、main をもう一度通常の merge で取り込む。
