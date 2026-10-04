@@ -669,10 +669,6 @@ function isMailSendTool(tool: string): boolean {
 }
 
 /**
- * After resolveApproval(approved): post the snapshotted Slack/etc. message.
- * Never throws — the human already said yes; failures are recorded on metadata.
- */
-/**
  * Only the approved text is posted here. When the snapshot carries an approved
  * attachment that is not uploaded yet, say so (result + audit) instead of
  * staying silent; the agent re-run with the approvalId uploads it.
@@ -720,6 +716,10 @@ type FulfillInvokeOptions = {
   attachmentHandledByCaller?: boolean;
 };
 
+/**
+ * After resolveApproval(approved): post the snapshotted Slack/etc. message.
+ * Never throws — the human already said yes; failures are recorded on metadata.
+ */
 async function fulfillApprovedInvokeCore(
   approval: ApprovalRequest,
   options: FulfillInvokeOptions = {}
