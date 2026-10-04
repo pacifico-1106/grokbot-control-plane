@@ -9,7 +9,7 @@ import {
   listStaffpassMcpTools,
 } from "@/lib/mcp/tools";
 import { STAFFPASS_MCP_URL } from "@/lib/mcp/public";
-import { isConfigChangeRequestEnabled } from "@/lib/feature-flags";
+import { isConfigChangeRequestEnabled, isMcpEventsEnabled } from "@/lib/feature-flags";
 import { recordMcpClientSeen } from "@/lib/mcp/endpoint-handoff";
 
 export const runtime = "nodejs";
@@ -130,6 +130,9 @@ export async function POST(req: Request) {
       protocolVersion: MCP_PROTOCOL_VERSION,
       capabilities: {
         tools: { listChanged: true },
+        // MCP Events (flag OFF → absent). Advertised here for clients that
+        // read it from initialize; the negotiated protocolVersion is unchanged.
+        ...(isMcpEventsEnabled() ? { events: {} } : {}),
       },
       serverInfo: {
         name: MCP_SERVER_NAME,
@@ -145,6 +148,27 @@ export async function POST(req: Request) {
 
   if (method === "ping") {
     return jsonRpcResult(id, {});
+  }
+
+  // MCP Events (flag MCP_EVENTS_ENABLED; OFF → falls through to -32601).
+  // Same badge as tools/*; unauthenticated → -32012 Forbidden (spec), HTTP 401/403.
+  if (isMcpEventsEnabled() && (method === "events/list" || method === "events/subscribe" || method === "events/unsubscribe")) {
+    const auth = await resolveEmployeeCredential(req);
+    if (!auth.ok) {
+      return jsonRpcError(id, -32012, "Forbidden", { code: auth.code }, auth.httpStatus);
+    }
+    const events = await import("@/lib/mcp-events/service");
+    try {
+      const out =
+        method === "events/list"
+          ? await events.handleEventsList(auth.credential)
+          : method === "events/subscribe"
+            ? await events.handleEventsSubscribe(auth.credential, params)
+            : await events.handleEventsUnsubscribe(auth.credential, params);
+      return out.ok ? jsonRpcResult(id, out.result) : jsonRpcError(id, out.code, out.message, out.data);
+    } catch {
+      return jsonRpcError(id, -32603, "Internal error", undefined, 500);
+    }
   }
 
   // tools/* require employee badge
@@ -188,6 +212,14 @@ export async function POST(req: Request) {
 
     if (!toolName) {
       return jsonRpcError(id, -32602, "tools/call requires params.name");
+    }
+
+    // MCP Events: link the first tool call after a delivery to that event
+    // ("what woke the AI"). Flag OFF → no-op. Best-effort.
+    if (isMcpEventsEnabled()) {
+      await import("@/lib/mcp-events/service")
+        .then((events) => events.recordTriggeredAction(auth.credential, toolName))
+        .catch(() => undefined);
     }
 
     try {

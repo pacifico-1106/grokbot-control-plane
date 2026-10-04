@@ -130,7 +130,7 @@ describe("events/subscribe", () => {
     expect((again.result as { id: string }).id).toBe((first.result as { id: string }).id);
     expect(posts).toHaveLength(1);
     expect((again.result as { deliveryStatus?: unknown }).deliveryStatus).toEqual({ active: true, lastDeliveryAt: null, lastError: null });
-    const row = await store.getSubscription((first.result as { id: string }).id);
+    const row = await store.getEventSubscription((first.result as { id: string }).id);
     expect(row?.secretCiphertext.startsWith("v1.")).toBe(true);
     expect(JSON.stringify(row)).not.toContain(secret2.slice(6));
     expect(row?.previousSecretCiphertext).toBeTruthy();
@@ -195,8 +195,8 @@ describe("emit + delivery", () => {
     const mine = await sub(await credFor("emp_sales"), {}, secret);
     await sub(await credFor("emp_comm"), { delivery: { mode: "webhook", url: "https://hooks.example.com/mcp/comm", secret: whsec() } });
     // A forged row for the same employee id in ANOTHER org must never match.
-    const forged = await store.getSubscription((mine as { result: { id: string } }).result.id);
-    await store.upsertSubscription({ ...forged!, id: "sub_" + "f".repeat(32), orgId: "org_other", deliveryUrl: "https://hooks.example.com/mcp/other", principal: "emp:org_other:emp_sales:g1" });
+    const forged = await store.getEventSubscription((mine as { result: { id: string } }).result.id);
+    await store.upsertEventSubscription({ ...forged!, id: "sub_" + "f".repeat(32), orgId: "org_other", deliveryUrl: "https://hooks.example.com/mcp/other", principal: "emp:org_other:emp_sales:g1" });
     posts.length = 0;
     const approval = await decide("emp_sales");
     const out = await svc.emitApprovalEvent({ approval, name: "approval.decided" }, { deliver: "inline" });

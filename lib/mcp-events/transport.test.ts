@@ -45,20 +45,23 @@ describe("callback URL syntax", () => {
 });
 
 describe("DNS check on every attempt (rebinding), private / metadata answers refused", () => {
-  test.each([
+  const blocked: Array<[string, string, 4 | 6]> = [
     ["loopback", "127.0.0.1", 4], ["rfc1918", "10.1.2.3", 4], ["rfc1918-172", "172.16.0.5", 4], ["rfc1918-192", "192.168.1.1", 4],
     ["link-local / IMDS", "169.254.169.254", 4], ["CGNAT / Alibaba IMDS", "100.100.100.200", 4], ["unspecified", "0.0.0.0", 4],
     ["v6 loopback", "::1", 6], ["v6 ULA / AWS IMDS v6", "fd00:ec2::254", 6], ["v6 link-local", "fe80::1", 6],
     ["v4-mapped loopback", "::ffff:127.0.0.1", 6],
-  ] as const)("%s %s is refused before connecting", async (_label, address, family) => {
-    const { t, seen } = fakeTransport([[...PUBLIC4, { address, family }]]);
-    const r = await postWebhook("https://hooks.example.com/a", "{}", {}, t);
-    expect(r.ok).toBe(false);
-    if (r.ok) return;
-    expect(r.reason).toBe("address_blocked");
-    expect(r.category).toBe("connection_refused");
-    expect(seen).toHaveLength(0);
-  });
+  ];
+  for (const [label, address, family] of blocked) {
+    test(`${label} ${address} is refused before connecting`, async () => {
+      const { t, seen } = fakeTransport([[...PUBLIC4, { address, family }]]);
+      const r = await postWebhook("https://hooks.example.com/a", "{}", {}, t);
+      expect(r.ok).toBe(false);
+      if (r.ok) return;
+      expect(r.reason).toBe("address_blocked");
+      expect(r.category).toBe("connection_refused");
+      expect(seen).toHaveLength(0);
+    });
+  }
   test("public at check #1, private at check #2 → second attempt refused", async () => {
     const { t, seen, lookups } = fakeTransport([PUBLIC4, [{ address: "10.0.0.7", family: 4 }]]);
     expect((await postWebhook("https://hooks.example.com/a", "{}", {}, t)).ok).toBe(true);

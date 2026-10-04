@@ -16,6 +16,7 @@ import type { ApprovalRequest } from "@/lib/types";
 import { appendAuditEvent } from "@/lib/data/audit";
 import { closeApprovalWithoutSend, listPendingApprovalsForTools } from "@/lib/data/approvals";
 import { audienceGatedToolIds } from "@/lib/gateway/tools";
+import { isMcpEventsEnabled } from "@/lib/feature-flags";
 import { invokeSnapshotOutboundText, parseInvokeSnapshot } from "@/lib/approvals/fulfill";
 import {
   commReplyDedupNow,
@@ -70,6 +71,17 @@ export async function auditApprovalClosed(
         : "会話承認を期限切れとして送信せずに終了",
     metadata: { approvalId: approval.id, tool: approval.tool, jobId: approval.jobId, ...meta },
   }).catch(() => undefined);
+  // MCP Events (flag OFF → nothing): the single close point for expired
+  // approvals (TTL sweep / invoke and closed-at-fulfil). Superseded is not an
+  // event (a newer reply / approval already covers the conversation).
+  if (action === "approval.expired" && isMcpEventsEnabled()) {
+    try {
+      const { emitApprovalEvent, expiredReasonFromMeta } = await import("@/lib/mcp-events/service");
+      await emitApprovalEvent({ approval, name: "approval.expired", reason: expiredReasonFromMeta(meta) });
+    } catch {
+      // best-effort; closing the approval already succeeded
+    }
+  }
 }
 
 export async function supersedePendingConversationApprovals(input: {

@@ -506,3 +506,29 @@ export function isMcpEndpointHandoffEnabled(): boolean {
 export function isCommReplyDedupEnabled(): boolean {
   return parseFlag(process.env.COMM_REPLY_DEDUP_ENABLED);
 }
+
+/**
+ * MCP Events (2026-10-05, design: docs/mcp-events-approval-wake-20261005.md).
+ * Wakes the AI through MCP Events webhooks (Triggers & Events extension, as
+ * implemented by ChatGPT) when one of its approvals is decided or expires.
+ *
+ * When ON:
+ * - /api/mcp answers events/list, events/subscribe, events/unsubscribe behind
+ *   the employee badge and advertises capabilities.events in initialize.
+ * - The shared decision side effects (Web / Slack / LINE / Telegram / proxy)
+ *   emit approval.decided; closing an approval as expired emits approval.expired.
+ *   Deliveries are Standard Webhooks signed, SSRF-guarded (DNS pinned on every
+ *   attempt, no redirects), ids + status only, deduped by eventId, re-checked
+ *   against the badge on every attempt (revocation stops delivery at once).
+ * - The approval.resolved callback payload gains the same `eventId` (dedupe).
+ * - /api/cron/mcp-events-deliver retries pending deliveries.
+ * Requires migration 20261005000000_mcp_event_subscriptions.sql and
+ * NOTIFICATION_CONFIG_ENCRYPTION_KEY (receiver secrets are stored encrypted).
+ *
+ * When OFF (default):
+ * - No method, capability, payload, audit, table access or outbound request
+ *   changes (exact current behavior).
+ */
+export function isMcpEventsEnabled(): boolean {
+  return parseFlag(process.env.MCP_EVENTS_ENABLED);
+}

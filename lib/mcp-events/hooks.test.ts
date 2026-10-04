@@ -62,7 +62,7 @@ async function approved() {
 const events = () => posts.filter((p) => !String(p.headers["webhook-id"]).startsWith("msg_verification_")).map((p) => JSON.parse(p.body.toString()));
 
 describe("approval.decided from the shared decision side effects", () => {
-  test.each(["slack", "line", "telegram", "web"] as const)("decided on %s → same event shape", async (surface) => {
+  for (const surface of ["slack", "line", "telegram", "web"] as const) test(`decided on ${surface} → same event shape`, async () => {
     const approval = await approved();
     await runApprovalResolveSideEffects({ approval, decision: "approved", actorEmail: `${surface}:actor`, employee: null, surface });
     await svc.__flushMcpEventsBackgroundForTests();
