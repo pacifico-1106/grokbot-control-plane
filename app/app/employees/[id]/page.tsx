@@ -13,12 +13,10 @@ import { EmployeeTerminateForm } from "@/components/employees/EmployeeTerminateF
 import { EmployeeIngressHandoffStatus } from "@/components/employees/EmployeeIngressHandoffStatus";
 import { SlackIdentityForm } from "@/components/employees/SlackIdentityForm";
 import { GoogleCalendarIdentityForm } from "@/components/employees/GoogleCalendarIdentityForm";
-import { isOrgAdminSession } from "@/lib/auth/require-org";
 import { getSessionContext } from "@/lib/auth/session";
 import { isDemoMode } from "@/lib/mode";
 import {
-  ensureBindingRow,
-  getBinding,
+  getBindingForDisplay,
   getEmployee,
   getEmployeeSlackIdentity,
   getOrgSodWarnPolicy,
@@ -38,6 +36,7 @@ import { APPROVAL_POLICY_LABELS } from "@/lib/employees/policy-draft";
 import { buildConcentration } from "@/lib/employees/concentration";
 import { DOMAIN_LABELS } from "@/lib/gateway/domains";
 import { evaluateSod, isComboSodWarn } from "@/lib/employees/sod";
+import { bindingPanelPermissions } from "@/lib/employees/binding-panel-permissions";
 
 export const dynamic = "force-dynamic";
 
@@ -53,8 +52,8 @@ export default async function EmployeeDetailPage({
 
   const session = await getSessionContext();
   const orgId = session.orgId;
-  // link / health write the binding → owner/admin only (server-enforced too)
-  const canManageBinding = isOrgAdminSession(session);
+  // Same gates as the APIs (link / health, rotate, wake webhook); server-enforced too.
+  const bindingPermissions = bindingPanelPermissions(session);
   const members = await listMembers(orgId);
   const projects = await listOrgProjects(orgId);
   const sodWarnPolicy = await getOrgSodWarnPolicy(orgId);
@@ -65,9 +64,8 @@ export default async function EmployeeDetailPage({
   const concentration = buildConcentration(await listEmployees(orgId));
   const concentrationRow = concentration.employees.find((row) => row.employeeId === employee.id);
 
-  const binding =
-    (await getBinding(employee.id)) ??
-    (await ensureBindingRow(employee.id, employee.orgId || orgId || ""));
+  // Read-only: a missing row shows as 未接続; only admin actions create it.
+  const binding = await getBindingForDisplay(employee.id, employee.orgId || orgId || "");
   const slackIdentity = await getEmployeeSlackIdentity(employee.id);
   const slackOauthConfigured = slackOAuthConfigured();
   const googleIdentity = await getEmployeeGoogleIdentity(employee.id);
@@ -298,7 +296,7 @@ export default async function EmployeeDetailPage({
       <BindingPanel
         employeeId={employee.id}
         initial={binding}
-        canManageBinding={canManageBinding}
+        {...bindingPermissions}
         demoMode={isDemoMode()}
       />
 

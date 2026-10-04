@@ -3,8 +3,7 @@ import { getCurrentOrgId } from "@/lib/auth/session";
 import {
   appendAuditEvent,
   bindingPublicView,
-  ensureBindingRow,
-  getBinding,
+  getBindingForDisplay,
   getEmployee,
   runtimeModeLabel,
   updateWakeWebhook,
@@ -24,9 +23,8 @@ export async function GET(
   if (!employee) {
     return NextResponse.json({ error: "employee_not_found" }, { status: 404 });
   }
-  const binding =
-    (await getBinding(id)) ??
-    (await ensureBindingRow(id, employee.orgId || orgId || ""));
+  // Read-only: a missing row is reported as unlinked, not created.
+  const binding = await getBindingForDisplay(id, employee.orgId || orgId || "");
   return NextResponse.json({
     ok: true,
     demo: runtimeModeLabel() === "demo",

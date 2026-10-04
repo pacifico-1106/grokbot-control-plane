@@ -102,6 +102,8 @@ export {
 } from "./members";
 export {
   getBinding,
+  getBindingForDisplay,
+  unlinkedBinding,
   findBindingByCredentialFingerprint,
   listBindingsForOrg,
   countNeedsReauth,

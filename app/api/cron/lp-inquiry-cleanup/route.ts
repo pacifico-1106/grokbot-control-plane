@@ -6,6 +6,7 @@
  * Protected by CRON_SECRET header.
  */
 
+import { createHash, timingSafeEqual } from "node:crypto";
 import { NextResponse } from "next/server";
 import { createSupabaseAdminClient } from "@/lib/supabase";
 import { isLpInquiryCleanupEnabled } from "@/lib/feature-flags";
@@ -26,7 +27,19 @@ function verifyCronSecret(req: Request): boolean {
   }
   
   const token = authHeader.replace("Bearer ", "");
-  return token === cronSecret;
+  return secretsEqual(token, cronSecret);
+}
+
+/**
+ * Constant-time comparison. Both sides are hashed to 32-byte SHA-256 digests,
+ * so timingSafeEqual always gets equal-length buffers (never throws on
+ * different-length or multi-byte input) and the secret's length is not
+ * revealed by an early return.
+ */
+function secretsEqual(given: string, expected: string): boolean {
+  const a = createHash("sha256").update(given, "utf8").digest();
+  const b = createHash("sha256").update(expected, "utf8").digest();
+  return timingSafeEqual(a, b);
 }
 
 export async function GET(req: Request) {

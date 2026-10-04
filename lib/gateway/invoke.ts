@@ -123,7 +123,7 @@ import {
   detectSecretInPayload,
   buildSecretDetectionErrorResponse,
 } from "@/lib/security/secret-detector";
-import { isGoogleCalendarReadEnabled, isTopicGatedPostingEnabled } from "@/lib/feature-flags";
+import { isCommReplyDedupEnabled, isGoogleCalendarReadEnabled, isTopicGatedPostingEnabled } from "@/lib/feature-flags";
 import { checkTopicGate, buildTopicGateApprovalMetadata } from "@/lib/decision-workflow/topic-gate";
 import { getOrgApprovalKindRoutesPolicy } from "@/lib/approval-kind-routes/data";
 import { getToolApprovalKind } from "@/lib/approval-kind-routes/tool-kind-map";
@@ -133,6 +133,22 @@ import {
 } from "@/lib/slack/reaction-stamps";
 import { assertGatewayToolAllowedForPlan } from "@/lib/billing/plan-gate";
 import { readCalendarFreebusy } from "@/lib/google/calendar-read";
+import {
+  auditDedupUnavailable,
+  auditDuplicateSuppressed,
+  claimDirectCommReplySend,
+  DUPLICATE_CHECK_UNAVAILABLE,
+  DUPLICATE_CHECK_UNAVAILABLE_MESSAGE_JA,
+  DUPLICATE_REPLY_SUPPRESSED,
+  DUPLICATE_REPLY_SUPPRESSED_MESSAGE_JA,
+  finishDirectCommReplySend,
+  precheckCommReplyDuplicate,
+  prepareCommReplyDedupFromBody,
+  supersedeOlderOnNewApproval,
+  type DirectSendClaim,
+  type PreparedCommReplyDedup,
+} from "@/lib/comm-reply-dedup/guard";
+import { expireStaleConversationApprovals } from "@/lib/comm-reply-dedup/approvals";
 import {
   addCalendarReadGrant,
   revokeCalendarReadGrant,
@@ -479,6 +495,18 @@ async function createNeedsApprovalResponse(opts: {
     );
   }
 
+  // COMM_REPLY_DEDUP_ENABLED: the newer approval request replaces older pending
+  // ones for the same conversation (same employee). Best effort, audited.
+  if (createdApproval && opts.body && isAudienceGatedTool(opts.tool)) {
+    const preparedForSupersede = prepareCommReplyDedupFromBody({
+      orgId: opts.orgId,
+      employeeId: opts.employeeId,
+      body: opts.body,
+      text: conversationOutboundText(opts.body, opts.purpose),
+    });
+    await supersedeOlderOnNewApproval(preparedForSupersede, createdApproval.id);
+  }
+
   // Best-effort human notify (Resend stub in DEMO).
   const notifyTo =
     process.env.BILLING_NOTIFY_EMAIL ||
@@ -542,6 +570,61 @@ async function createNeedsApprovalResponse(opts: {
     },
     opts.httpStatus ?? 402
   );
+}
+
+/** The text a conversation tool posts (same rule as the post and the approval fulfill). */
+function conversationOutboundText(body: GatewayInvokeRequest, purpose: string): string {
+  const args = body.args && typeof body.args === "object" ? (body.args as Record<string, unknown>) : {};
+  const raw = [args.text, args.body, args.message].find((value) => typeof value === "string" && value.trim());
+  return (typeof raw === "string" ? raw : "").trim() || purpose;
+}
+
+/** Duplicate / unavailable claim → the response to return (nothing is posted); null = go ahead. */
+async function directSendDedupResponse(
+  claim: DirectSendClaim,
+  prepared: PreparedCommReplyDedup,
+  ctx: { orgId: string; employeeId: string; credentialId: string | null; purpose: string; tool: string; jobId: string }
+) {
+  const auditCtx = { ...ctx, phase: "invoke" as const };
+  if (claim.state === "unavailable") {
+    await auditDedupUnavailable(auditCtx, claim.reason);
+    return jsonResult(
+      {
+        ok: false,
+        code: DUPLICATE_CHECK_UNAVAILABLE,
+        error: DUPLICATE_CHECK_UNAVAILABLE,
+        message: DUPLICATE_CHECK_UNAVAILABLE_MESSAGE_JA,
+        needs_approval: false,
+        employeeId: ctx.employeeId,
+        tool: ctx.tool,
+        purpose: ctx.purpose,
+        jobId: ctx.jobId,
+      },
+      503
+    );
+  }
+  if (claim.state === "duplicate" && prepared.kind === "ready") {
+    await auditDuplicateSuppressed(auditCtx, prepared, claim);
+    return jsonResult(
+      {
+        ok: false,
+        code: DUPLICATE_REPLY_SUPPRESSED,
+        error: DUPLICATE_REPLY_SUPPRESSED,
+        message: DUPLICATE_REPLY_SUPPRESSED_MESSAGE_JA,
+        needs_approval: false,
+        match: claim.match,
+        similarity: Math.round(claim.similarity * 1000) / 1000,
+        matchedAt: claim.matchedAt,
+        windowMinutes: prepared.settings.windowMinutes,
+        employeeId: ctx.employeeId,
+        tool: ctx.tool,
+        purpose: ctx.purpose,
+        jobId: ctx.jobId,
+      },
+      409
+    );
+  }
+  return null;
 }
 
 export type RunGatewayInvokeInput = {
@@ -1267,6 +1350,69 @@ export async function runGatewayInvoke(
       403
     );
   }
+  // COMM_REPLY_DEDUP_ENABLED: the same (or a re-written) body was already sent
+  // to this conversation within the window → not sent, no approval card.
+  // Read-only here; the atomic claim happens right before the live post.
+  let commReplyDedup: PreparedCommReplyDedup = { kind: "off" };
+  if (isAudienceGatedTool(toolDef) && !priorApprovalOk && isCommReplyDedupEnabled()) {
+    const dedupOrgId = orgId || employee.orgId;
+    await expireStaleConversationApprovals({ orgId: dedupOrgId, employeeId, phase: "invoke" }).catch(() => []);
+    commReplyDedup = prepareCommReplyDedupFromBody({
+      orgId: dedupOrgId,
+      employeeId,
+      body,
+      text: conversationOutboundText(body, purpose),
+    });
+    const dedupCtx = {
+      orgId: dedupOrgId,
+      employeeId,
+      credentialId: input.credentialId || employee.credentialId,
+      purpose,
+      tool,
+      jobId,
+      phase: "invoke" as const,
+    };
+    const pre = await precheckCommReplyDuplicate(commReplyDedup);
+    if (pre.state === "unavailable") {
+      await auditDedupUnavailable(dedupCtx, pre.reason);
+      return jsonResult(
+        {
+          ok: false,
+          code: DUPLICATE_CHECK_UNAVAILABLE,
+          error: DUPLICATE_CHECK_UNAVAILABLE,
+          message: DUPLICATE_CHECK_UNAVAILABLE_MESSAGE_JA,
+          needs_approval: false,
+          employeeId,
+          tool,
+          purpose,
+          jobId,
+        },
+        503
+      );
+    }
+    if (pre.state === "duplicate" && commReplyDedup.kind === "ready") {
+      await auditDuplicateSuppressed(dedupCtx, commReplyDedup, pre);
+      return jsonResult(
+        {
+          ok: false,
+          code: DUPLICATE_REPLY_SUPPRESSED,
+          error: DUPLICATE_REPLY_SUPPRESSED,
+          message: DUPLICATE_REPLY_SUPPRESSED_MESSAGE_JA,
+          needs_approval: false,
+          match: pre.match,
+          similarity: Math.round(pre.similarity * 1000) / 1000,
+          matchedAt: pre.matchedAt,
+          windowMinutes: commReplyDedup.settings.windowMinutes,
+          employeeId,
+          tool,
+          purpose,
+          jobId,
+        },
+        409
+      );
+    }
+  }
+
   const amountJpy =
     tool === "commerce.order"
       ? body.amountJpy == null
@@ -1954,16 +2100,37 @@ export async function runGatewayInvoke(
         threadTsSource = "client";
       }
 
-      const posted = await postConversationMessage({
+      // COMM_REPLY_DEDUP_ENABLED: atomic claim right before the post (two
+      // concurrent identical sends → only one is posted). Fail closed.
+      const dedupClaim = await claimDirectCommReplySend(commReplyDedup, tool);
+      const dedupResponse = await directSendDedupResponse(dedupClaim, commReplyDedup, {
         orgId: orgId || employee.orgId,
         employeeId,
-        postingAs: employee.postingAs || "bot",
-        channel: dest,
-        text: (rawText || "").trim() || purpose,
-        threadTs: looksLikeSlackTs(replyThreadTs) ? replyThreadTs : undefined,
-        summarize: egress?.decision === "summarize",
-        slackUserId: ctx?.slackUserId,
+        credentialId: input.credentialId || employee.credentialId,
+        purpose,
+        tool,
+        jobId,
       });
+      if (dedupResponse) return dedupResponse;
+      const dedupClaimId = dedupClaim.state === "claimed" ? dedupClaim.id : null;
+      let posted: Awaited<ReturnType<typeof postConversationMessage>>;
+      try {
+        posted = await postConversationMessage({
+          orgId: orgId || employee.orgId,
+          employeeId,
+          postingAs: employee.postingAs || "bot",
+          channel: dest,
+          text: (rawText || "").trim() || purpose,
+          threadTs: looksLikeSlackTs(replyThreadTs) ? replyThreadTs : undefined,
+          summarize: egress?.decision === "summarize",
+          slackUserId: ctx?.slackUserId,
+        });
+      } catch (error) {
+        // Outcome unknown (the provider may have accepted it): keep the claim.
+        await finishDirectCommReplySend(commReplyDedup, dedupClaimId, "uncertain", { jobId });
+        throw error;
+      }
+      await finishDirectCommReplySend(commReplyDedup, dedupClaimId, posted.ok ? "sent" : "failed", { jobId });
       if (!posted.ok) {
         const postedError = posted.error || "slack_post_failed";
         const code =
@@ -2022,6 +2189,20 @@ export async function runGatewayInvoke(
         }).catch(() => undefined);
       }
       }
+    } else if (!dest && egressAllowsPost && commReplyDedup.kind !== "off") {
+      // Surfaces without a gateway post (LINE / Telegram / mail): the allowed
+      // reply is delivered by the caller, so it is recorded here as sent.
+      const dedupClaim = await claimDirectCommReplySend(commReplyDedup, tool);
+      const dedupResponse = await directSendDedupResponse(dedupClaim, commReplyDedup, {
+        orgId: orgId || employee.orgId,
+        employeeId,
+        credentialId: input.credentialId || employee.credentialId,
+        purpose,
+        tool,
+        jobId,
+      });
+      if (dedupResponse) return dedupResponse;
+      await finishDirectCommReplySend(commReplyDedup, dedupClaim.state === "claimed" ? dedupClaim.id : null, "sent", { jobId });
     }
   }
 
