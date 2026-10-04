@@ -14,12 +14,9 @@
  */
 import { createHash } from "node:crypto";
 import { parseWhsecSecret, signStandardWebhook } from "@/lib/mcp-events/standard-webhooks";
-import {
-  defaultWebhookTransport,
-  postWebhook,
-  type PostResult,
-  type WebhookTransport,
-} from "@/lib/mcp-events/transport";
+// Type-only: the transport (and its SSRF address check) is loaded lazily in
+// postHardenedWebhook, so the flag-OFF path never loads it (D9).
+import type { PostResult, WebhookTransport } from "@/lib/mcp-events/transport";
 
 export const WEBHOOK_FAILURE_CATEGORIES = [
   "invalid_url",
@@ -129,6 +126,7 @@ export async function postHardenedWebhook(
 ): Promise<HardenedPostResult> {
   let res: PostResult;
   try {
+    const { defaultWebhookTransport, postWebhook } = await import("@/lib/mcp-events/transport");
     res = await postWebhook(url, body, headers, transportOverride ?? defaultWebhookTransport(), opts);
   } catch {
     return { ok: false, category: "connection_failed" };
