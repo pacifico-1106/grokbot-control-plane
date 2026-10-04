@@ -37,3 +37,8 @@ call `/api/mcp` `initialize` with no credential header.
 - `docs/mcp.md` の curl `initialize` 例に `Authorization` ヘッダが無い（OAuth ON 後は 401。PR-8 で docs 更新）。
 - Cursor / Claude Code / xAI remote MCP の文書化された設定は静的ヘッダ方式なので、initialize にも Bearer が付く想定。
 - アプリ側には initialize の記録が無いため、本番での実数はこのフラグで初めて分かる。
+- MCP `2026-07-28` のクライアントは `initialize` を呼びません（2026-10-05 D1 で対応）。認証なしの `server/discover`
+  （公開メタデータ、認証不要のまま）や、認証なしの `tools/list` → 401 として現れ、このログには出ません。
+  `protocolVersion` 欄は `initialize` の要求値です（サーバーの回答は対応版ならその値、`2026-07-28` や未知の版なら `2025-11-25`）。 /
+  MCP `2026-07-28` clients never call `initialize`; they show up as unauthenticated `server/discover` (public, stays
+  unauthenticated) or as a 401 on `tools/list`, not in this log.

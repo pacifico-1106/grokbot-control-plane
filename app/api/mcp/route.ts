@@ -11,6 +11,15 @@ import {
 import { STAFFPASS_MCP_URL } from "@/lib/mcp/public";
 import { isConfigChangeRequestEnabled, isMcpEventsEnabled } from "@/lib/feature-flags";
 import { recordMcpClientSeen } from "@/lib/mcp/endpoint-handoff";
+import {
+  MCP_SUPPORTED_PROTOCOL_VERSIONS,
+  MCP_TOOLS_LIST_CACHE,
+  buildDiscoverResult,
+  checkMcpProtocolRequest,
+  mcpCorsAllowHeaders,
+  negotiateInitializeVersion,
+  shapeModernResult,
+} from "@/lib/mcp/protocol-negotiation";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -28,9 +37,8 @@ function corsHeaders(): HeadersInit {
   return {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-    "Access-Control-Allow-Headers":
-      "Authorization, Content-Type, Accept, Mcp-Session-Id, x-staffpass-credential",
-    "Access-Control-Expose-Headers": "Mcp-Session-Id",
+    // MCP 2026-07-28 request headers. No Mcp-Session-Id: this server never mints sessions.
+    "Access-Control-Allow-Headers": mcpCorsAllowHeaders("x-staffpass-credential"),
     "Cache-Control": "no-store",
   };
 }
@@ -70,12 +78,40 @@ function serverInfo() {
     mcpEndpoint: STAFFPASS_MCP_URL,
     protocolVersion: MCP_PROTOCOL_VERSION,
     tools: listStaffpassMcpTools().map((t) => t.name),
+    supportedProtocolVersions: MCP_SUPPORTED_PROTOCOL_VERSIONS,
     auth: {
       type: "bearer",
       scheme: "Authorization: Bearer gb_emp_…",
       alternateHeader: "x-staffpass-credential",
     },
   };
+}
+
+/** Server identity for initialize `serverInfo` and modern `_meta` serverInfo. */
+function serverIdentity() {
+  return { name: MCP_SERVER_NAME, version: MCP_SERVER_VERSION };
+}
+
+/**
+ * The one capabilities object for initialize AND server/discover (keep them
+ * identical: add new capabilities here only).
+ */
+function serverCapabilities(): Record<string, unknown> {
+  return {
+    tools: { listChanged: true },
+    // MCP Events (#267; flag MCP_EVENTS_ENABLED OFF → absent). Lives here so
+    // initialize and server/discover always advertise the same thing.
+    ...(isMcpEventsEnabled() ? { events: {} } : {}),
+  };
+}
+
+function serverInstructions(): string {
+  return (
+    "Staffpass is a fail-closed AI employee control plane. Authenticate with Authorization: Bearer gb_emp_…. Use staffpass_whoami then staffpass_invoke with purpose+jobId. On needs_approval, poll staffpass_get_approval_status with approvalId+statusToken (pollUrl in the result) until approved|rejected|revision_requested|expired — do not complete confirm/send/order while pending. On revision_requested, revise per revisionNote and re-invoke with the same jobId and parentApprovalId. Restrict clients with allowed_tools to the four staffpass_* tools." +
+    (isConfigChangeRequestEnabled()
+      ? " Never change your own Instructions/policy text or channel ledger/classification yourself: file staffpass_config_change_request and wait for the human approver; approvers/permissions/billing are not requestable."
+      : "")
+  );
 }
 
 export async function OPTIONS() {
@@ -124,34 +160,47 @@ export async function POST(req: Request) {
     return new NextResponse(null, { status: 202, headers: corsHeaders() });
   }
 
+  // MCP 2026-07-28: header ↔ body validation + era (lib/mcp/protocol-negotiation.ts).
+  // Runs before auth and before any work; never reflects header / _meta values.
+  const protocol = checkMcpProtocolRequest(req, method, params);
+  if (!protocol.ok) {
+    return jsonRpcError(id, protocol.code, protocol.message, protocol.data, protocol.httpStatus);
+  }
+  const modern = protocol.era === "modern";
+  const reply = (result: Record<string, unknown>) =>
+    jsonRpcResult(id, modern ? shapeModernResult(result, serverIdentity()) : result);
+
   if (method === "initialize") {
     maybeLogUnauthInitialize(req, params);
     return jsonRpcResult(id, {
-      protocolVersion: MCP_PROTOCOL_VERSION,
-      capabilities: {
-        tools: { listChanged: true },
-        // MCP Events (flag OFF → absent). Advertised here for clients that
-        // read it from initialize; the negotiated protocolVersion is unchanged.
-        ...(isMcpEventsEnabled() ? { events: {} } : {}),
-      },
-      serverInfo: {
-        name: MCP_SERVER_NAME,
-        version: MCP_SERVER_VERSION,
-      },
-      instructions:
-        "Staffpass is a fail-closed AI employee control plane. Authenticate with Authorization: Bearer gb_emp_…. Use staffpass_whoami then staffpass_invoke with purpose+jobId. On needs_approval, poll staffpass_get_approval_status with approvalId+statusToken (pollUrl in the result) until approved|rejected|revision_requested|expired — do not complete confirm/send/order while pending. On revision_requested, revise per revisionNote and re-invoke with the same jobId and parentApprovalId. Restrict clients with allowed_tools to the four staffpass_* tools." +
-        (isConfigChangeRequestEnabled()
-          ? " Never change your own Instructions/policy text or channel ledger/classification yourself: file staffpass_config_change_request and wait for the human approver; approvers/permissions/billing are not requestable."
-          : ""),
+      protocolVersion: negotiateInitializeVersion(params.protocolVersion),
+      capabilities: serverCapabilities(),
+      serverInfo: serverIdentity(),
+      instructions: serverInstructions(),
     });
   }
 
-  if (method === "ping") {
-    return jsonRpcResult(id, {});
+  // Public metadata, same as initialize (no credential), any era.
+  if (method === "server/discover") {
+    return jsonRpcResult(
+      id,
+      buildDiscoverResult({
+        capabilities: serverCapabilities(),
+        serverInfo: serverIdentity(),
+        instructions: serverInstructions(),
+      })
+    );
   }
 
-  // MCP Events (flag MCP_EVENTS_ENABLED; OFF → falls through to -32601).
+  if (method === "ping") {
+    return reply({});
+  }
+
+  // MCP Events (flag MCP_EVENTS_ENABLED; OFF → falls through to the final
+  // -32601 below, which stays the LAST branch: HTTP 404 for modern requests).
   // Same badge as tools/*; unauthenticated → -32012 Forbidden (spec), HTTP 401/403.
+  // Results go through reply(): modern (2026-07-28 _meta) requests get the same
+  // shape as tools/* (resultType, _meta serverInfo); legacy requests unchanged.
   if (isMcpEventsEnabled() && (method === "events/list" || method === "events/subscribe" || method === "events/unsubscribe")) {
     const auth = await resolveEmployeeCredential(req);
     if (!auth.ok) {
@@ -165,7 +214,7 @@ export async function POST(req: Request) {
           : method === "events/subscribe"
             ? await events.handleEventsSubscribe(auth.credential, params)
             : await events.handleEventsUnsubscribe(auth.credential, params);
-      return out.ok ? jsonRpcResult(id, out.result) : jsonRpcError(id, out.code, out.message, out.data);
+      return out.ok ? reply(out.result as Record<string, unknown>) : jsonRpcError(id, out.code, out.message, out.data);
     } catch {
       return jsonRpcError(id, -32603, "Internal error", undefined, 500);
     }
@@ -193,12 +242,13 @@ export async function POST(req: Request) {
     ).catch(() => undefined);
 
     if (method === "tools/list") {
-      return jsonRpcResult(id, {
+      return reply({
         tools: listStaffpassMcpTools().map((t) => ({
           name: t.name,
           description: t.description,
           inputSchema: t.inputSchema,
         })),
+        ...(modern ? MCP_TOOLS_LIST_CACHE : {}),
       });
     }
 
@@ -228,12 +278,13 @@ export async function POST(req: Request) {
         toolArgs,
         auth.credential
       );
-      return jsonRpcResult(id, result);
+      return reply(result as Record<string, unknown>);
     } catch (e) {
       const message = e instanceof Error ? e.message : "tool_call_failed";
       return jsonRpcError(id, -32000, message, undefined, 500);
     }
   }
 
-  return jsonRpcError(id, -32601, `Method not found: ${method}`);
+  // Modern requests: unknown method → HTTP 404 (spec). Legacy: HTTP 200 as before.
+  return jsonRpcError(id, -32601, `Method not found: ${method}`, undefined, modern ? 404 : 200);
 }

@@ -10,7 +10,8 @@ Sealith の「社員証 = Bearer・MCP が第一級」という世界観を踏�
 |--|--|
 | **Endpoint** | `https://staffpass.sealith.com/api/mcp` |
 | **Server card** | `https://staffpass.sealith.com/.well-known/mcp/server-card.json` |
-| **Transport** | Streamable HTTP JSON-RPC（`initialize` / `tools/list` / `tools/call` / `ping`） |
+| **Transport** | Streamable HTTP JSON-RPC（`server/discover` / `initialize` / `tools/list` / `tools/call` / `ping`） |
+| **Protocol** | MCP `2026-07-28`（リクエストごとの `_meta`）と従来版 `2025-11-25` / `2025-06-18` / `2025-03-26` / `2024-11-05`（`initialize`）。詳細は下の「プロトコルバージョン」 |
 | **Auth** | `Authorization: Bearer gb_emp_…`（または `x-staffpass-credential`） |
 
 ローカル stdio は **Grok Bot 向けには使いません**（公開 HTTPS のみ）。
@@ -100,11 +101,37 @@ staffpass_health
 
 ---
 
+## プロトコルバージョン（MCP 2026-07-28 対応）
+
+社員証 MCP（`/api/mcp`）と管理 MCP（`/api/mcp/admin`）は、MCP `2026-07-28` と従来版の両方に対応しています（仕様でいう dual-era サーバー）。
+
+| クライアントの送り方 | サーバーの答え |
+|---|---|
+| `initialize` で `2024-11-05` / `2025-03-26` / `2025-06-18` / `2025-11-25` | 同じ版をそのまま返す |
+| `initialize` で `2026-07-28` や未知の版 | `2025-11-25`（`initialize` を使う版の最新。`2026-07-28` には `initialize` がないため） |
+| `initialize` で `protocolVersion` なし | `2024-11-05`（従来どおり） |
+| リクエストの `_meta["io.modelcontextprotocol/protocolVersion"]` が `2026-07-28` | そのまま処理（結果に `resultType: "complete"` とサーバー情報。`tools/list` はキャッシュ目安 `ttlMs` / `cacheScope: "private"` つき） |
+| `_meta` の版が未対応（例 `2027-01-01`） | HTTP 400 + `-32022`（Unsupported protocol version）。`data.supported` に対応版の一覧 |
+| `server/discover` | 対応版の一覧（`supportedVersions`）、`initialize` と同じ `capabilities` と `instructions`、サーバー情報。認証不要 |
+
+ヘッダの扱い（Streamable HTTP）:
+
+- `MCP-Protocol-Version` / `Mcp-Method` / `Mcp-Name` が本文と食い違うと HTTP 400 + `-32020`（Header mismatch）。`Mcp-Name` の `=?base64?…?=` 形式は復号してから比べます。
+- `MCP-Protocol-Version` がない従来クライアントは、これまでどおり処理します。
+- `2026-07-28` のリクエストでヘッダが欠けている場合も、既定では処理します。`MCP_STRICT_REQUEST_HEADERS=true` にすると仕様どおり 400 で拒否します（既定 OFF）。
+- `2026-07-28` のリクエストで未知のメソッドは HTTP 404 + `-32601`。従来版は HTTP 200 + `-32601` のまま。
+- `_meta` は 16 KiB / 64 キーまで。知らないキーは読まずに無視し、応答には返しません。
+- セッション（`Mcp-Session-Id`）は発行しません。
+
+---
+
 ## curl 例（プレースホルダ）
 
 秘密値は発行 UI の一度きりの表示を使い、ここに実値を貼らないでください。
 
-### 1) initialize
+### 1) initialize（従来版のクライアント）
+
+`2026-07-28` のクライアントは `initialize` を使いません（下の「2026-07-28 の例」を参照）。
 
 > 2026-10-05 時点: サーバーはどの `protocolVersion` を送っても `2024-11-05` で応答します（MCP `2026-07-28` の
 > `server/discover` は未対応）。対応方針は `docs/mcp-events-approval-wake-20261005.md` §13 を参照してください。
@@ -118,7 +145,7 @@ curl -sS -X POST 'https://staffpass.sealith.com/api/mcp' \
     "id": 1,
     "method": "initialize",
     "params": {
-      "protocolVersion": "2024-11-05",
+      "protocolVersion": "2025-11-25",
       "capabilities": {},
       "clientInfo": { "name": "curl", "version": "0.0.1" }
     }
@@ -201,6 +228,60 @@ curl -sS -X POST 'https://staffpass.sealith.com/api/mcp' \
 
 （同等の HTTP）`GET https://staffpass.sealith.com/api/approvals/status?id=…&token=…`
 
+### 2026-07-28 の例（initialize なし。毎回ヘッダと `_meta` を付ける）
+
+`server/discover`（任意。対応版と capabilities を先に知りたいとき。認証不要）:
+
+```bash
+curl -sS -X POST 'https://staffpass.sealith.com/api/mcp' \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json, text/event-stream' \
+  -H 'MCP-Protocol-Version: 2026-07-28' \
+  -H 'Mcp-Method: server/discover' \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": "discover-1",
+    "method": "server/discover",
+    "params": {
+      "_meta": {
+        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+        "io.modelcontextprotocol/clientInfo": { "name": "curl", "version": "0.0.1" },
+        "io.modelcontextprotocol/clientCapabilities": {}
+      }
+    }
+  }'
+```
+
+`tools/call` — whoami（`Mcp-Name` はツール名と同じ値）:
+
+```http
+POST /api/mcp HTTP/1.1
+Host: staffpass.sealith.com
+Content-Type: application/json
+Accept: application/json, text/event-stream
+Authorization: Bearer gb_emp_YOUR_SECRET_HERE
+MCP-Protocol-Version: 2026-07-28
+Mcp-Method: tools/call
+Mcp-Name: staffpass_whoami
+
+{
+  "jsonrpc": "2.0",
+  "id": 6,
+  "method": "tools/call",
+  "params": {
+    "name": "staffpass_whoami",
+    "arguments": {},
+    "_meta": {
+      "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+      "io.modelcontextprotocol/clientInfo": { "name": "curl", "version": "0.0.1" },
+      "io.modelcontextprotocol/clientCapabilities": {}
+    }
+  }
+}
+```
+
+結果には `resultType: "complete"` と `_meta["io.modelcontextprotocol/serverInfo"]` が付きます。中身（`content` など）は従来版と同じです。
+
 ---
 
 ## Connect from Grok Bot（Plugins）
@@ -278,6 +359,7 @@ xAI API の remote MCP も同じ URL / Bearer を指定してください。
 | **Endpoint** | `https://staffpass.sealith.com/api/mcp/admin` |
 | **Auth** | `Authorization: Bearer gb_adm_…`（社員証 `gb_emp_` は fail-closed で拒否） |
 | **Server name** | `staffpass-admin` |
+| **Protocol** | 社員証 MCP と同じ（MCP `2026-07-28` + 従来版、`server/discover` 対応） |
 
 ツール:
 
