@@ -81,10 +81,9 @@ function pushWake(employeeId: string, at: number, extra: Record<string, unknown>
   });
 }
 
-/** The channel-independent part of a block (wake.surface is the only per-channel field). */
+/** The channel-independent part of a block: everything except wake (per channel) and connection (state, timestamps). */
 function textOf(h: McpHandoff): string {
-  const { wake: _wake, ...rest } = h;
-  return JSON.stringify(rest);
+  return JSON.stringify({ ...h, wake: undefined, connection: undefined });
 }
 
 describe("notice: neutral wording (no Grok), addressed to the employee's AI agent chat", () => {

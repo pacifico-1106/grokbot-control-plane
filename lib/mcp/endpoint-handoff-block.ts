@@ -108,7 +108,7 @@ export function buildMcpHandoff(input: {
     setupSteps: [
       {
         id: "register_mcp_server",
-        ja: `Grok Bot の MCP（コネクタ）設定に Staffpass を追加し、URL に ${url} を指定する（transport: Streamable HTTP）。`,
+        ja: `AI エージェントの MCP サーバー（コネクタ）設定に Staffpass を追加し、URL に ${url} を指定する（transport: Streamable HTTP）。`,
       },
       {
         id: "attach_badge",
@@ -119,7 +119,7 @@ export function buildMcpHandoff(input: {
         ja: `staffpass_whoami を引数なしで呼び、employeeId=${employeeId} が返れば接続完了。失敗したら staffpass_health で状態を確認する。`,
       },
     ],
-    ifNotConnectedJa: `staffpass_whoami を呼べない場合は Staffpass MCP に未接続です（comm.reply も呼べません）。管理者に「Grok Bot の MCP 設定に ${url} を登録し、発行済みの社員証を Authorization: Bearer に設定してください」と伝えてください。`,
+    ifNotConnectedJa: `staffpass_whoami を呼べない場合は Staffpass MCP に未接続です（comm.reply も呼べません）。管理者に「AI エージェントの MCP サーバー（コネクタ）設定に ${url} を登録し、発行済みの社員証を Authorization: Bearer に設定してください」と伝えてください。`,
   };
   if (input.wake) block.wake = input.wake;
   if (input.connection) block.connection = input.connection;
@@ -137,7 +137,7 @@ export function buildMcpHandoff(input: {
 export function buildReconnectPromptJa(url: string, employeeId: string): string {
   return [
     "【最優先・接続の再確認】前回起こされた後、この社員証での Staffpass MCP 呼び出しが確認できていません。",
-    `返信や他の作業より先に、MCP（コネクタ）設定に ${url} が登録され（Streamable HTTP）、発行済みの社員証が Authorization: Bearer に設定されているか確認し、`,
+    `返信や他の作業より先に、MCP サーバー（コネクタ）設定に ${url} が登録され（Streamable HTTP）、発行済みの社員証が Authorization: Bearer に設定されているか確認し、`,
     `staffpass_whoami を引数なしで呼んで employeeId=${employeeId} が返ることを確かめてください。`,
     "この件は会話の相手には伝えないでください。",
   ].join("");

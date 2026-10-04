@@ -142,8 +142,9 @@ function plainId(raw: string): string {
 }
 
 /**
- * The human notice (last resort): exactly ONE thing to do — paste one line into the main
- * Grok Bot chat. The line is secret-free (endpoint URL + whoami check only).
+ * The human notice (last resort): exactly ONE thing to do — paste one line into this
+ * employee's AI agent chat. Agent-neutral wording (Staffpass works with any MCP-capable agent;
+ * 木村 decision 5). The line is secret-free (endpoint URL + whoami check only).
  * Same wording on every channel; renderNotConnectedNotice() only escapes.
  */
 export function buildNotConnectedNotice(input: {
@@ -164,9 +165,9 @@ export function buildNotConnectedNotice(input: {
       ? `${surface} から起こしてから ${minutes} 分、接続を促す合図付きで起こしても社員証での呼び出しがありません`
       : `${surface} から起こした後、社員証での呼び出しが一度もありません（${minutes} 分経過）`;
   return {
-    headline: `⚠️ Staffpass: AI社員「${name}」の Grok Bot が Staffpass MCP に接続していません。${why}。`,
-    action: "やることは 1 つです。次の 1 行をそのまま、メインの Grok Bot のチャットに送ってください。",
-    copyLine: `Staffpass MCP に接続して: コネクタに ${url} を追加し（Streamable HTTP、認証は発行済みの社員証を Authorization: Bearer で設定）、staffpass_whoami を呼んで employeeId=${employeeId} が返ることを確認して。`,
+    headline: `⚠️ Staffpass: AI社員「${name}」の AI エージェントが Staffpass MCP に接続していません。${why}。`,
+    action: `やることは 1 つです。この社員（${name}）の AI エージェントのチャットに、次の 1 行をそのまま送ってください。`,
+    copyLine: `Staffpass MCP に接続して: MCP サーバー（コネクタ）に ${url} を追加し（Streamable HTTP、認証は発行済みの社員証を Authorization: Bearer で設定）、staffpass_whoami を呼んで employeeId=${employeeId} が返ることを確認して。`,
     footer: "この通知は同じ AI 社員につき 24 時間に 1 回までです。Staffpass が自動で起こし直すことはありません。",
   };
 }
@@ -361,7 +362,7 @@ export async function recordMcpClientSeen(
     credentialId: cred.credentialId,
     action: MCP_CLIENT_SEEN_ACTION,
     purpose: "mcp",
-    summary: "Grok Bot が社員証で Staffpass MCP に接続",
+    summary: "AI エージェントが社員証で Staffpass MCP に接続",
     metadata: {
       method,
       ...(tool ? { tool: tool.slice(0, 64) } : {}),
