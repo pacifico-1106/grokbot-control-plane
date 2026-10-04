@@ -748,3 +748,96 @@ export async function listApprovedApprovalsForEmployeeTool(
   if (error) throw new Error("approval_ledger_unavailable");
   return (data || []).map((r) => mapApprovalRow(r as Record<string, unknown>));
 }
+
+/**
+ * Pending approvals for conversation tools (COMM_REPLY_DEDUP_ENABLED), newest
+ * first, bounded. employeeId / orgId null = any (expiry sweep from cron only).
+ * createdBeforeIso: only rows created strictly before this time.
+ */
+export async function listPendingApprovalsForTools(input: {
+  orgId?: string | null;
+  employeeId?: string | null;
+  tools: readonly string[];
+  createdBeforeIso?: string | null;
+  limit?: number;
+}): Promise<ApprovalRequest[]> {
+  const cap = Math.max(1, Math.min(500, Math.floor(input.limit ?? 200)));
+  if (!input.tools.length) return [];
+  if (isDemoMode()) {
+    const before = input.createdBeforeIso ? Date.parse(input.createdBeforeIso) : Number.POSITIVE_INFINITY;
+    return (await demoListApprovals())
+      .filter(
+        (row) =>
+          row.status === "pending" &&
+          (!input.orgId || row.orgId === input.orgId) &&
+          (!input.employeeId || row.employeeId === input.employeeId) &&
+          input.tools.includes(String(row.tool || "")) &&
+          Date.parse(row.createdAt) < before
+      )
+      .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
+      .slice(0, cap);
+  }
+  const admin = createSupabaseAdminClient();
+  if (!admin) throw new Error("supabase_not_configured");
+  let query = admin
+    .from("approval_requests")
+    .select("*")
+    .eq("status", "pending")
+    .in("tool", [...input.tools]);
+  if (input.orgId) query = query.eq("org_id", input.orgId);
+  if (input.employeeId) query = query.eq("employee_id", input.employeeId);
+  if (input.createdBeforeIso) query = query.lt("created_at", input.createdBeforeIso);
+  const { data, error } = await query.order("created_at", { ascending: false }).limit(cap);
+  if (error) throw new Error("approval_list_unavailable");
+  return (data || []).map((r) => mapApprovalRow(r as Record<string, unknown>));
+}
+
+/**
+ * Close an approval WITHOUT sending: pending|approved → superseded|expired.
+ * Conditional on the current status (a concurrent approve / fulfill wins), so
+ * it never reopens or overrides a decided ticket. Returns the closed row or
+ * null when the status had already moved. Metadata gets `closedWithoutSend`.
+ */
+export async function closeApprovalWithoutSend(input: {
+  approval: Pick<ApprovalRequest, "id" | "orgId">;
+  from: ReadonlyArray<"pending" | "approved">;
+  to: "superseded" | "expired";
+  meta: Record<string, unknown>;
+}): Promise<ApprovalRequest | null> {
+  const { approval, from, to } = input;
+  if (!approval?.id || !approval.orgId || !from.length) return null;
+  const at = new Date().toISOString();
+  const closedWithoutSend = { status: to, at, ...input.meta };
+  if (isDemoMode()) {
+    const current = await demoGetApproval(approval.id);
+    if (!current || current.orgId !== approval.orgId) return null;
+    if (!(from as readonly string[]).includes(current.status)) return null;
+    return demoUpdateApproval(approval.id, {
+      status: to,
+      resolvedAt: at,
+      metadata: { ...current.metadata, closedWithoutSend },
+    });
+  }
+  const admin = createSupabaseAdminClient();
+  if (!admin) throw new Error("supabase_not_configured");
+  const { data, error } = await admin
+    .from("approval_requests")
+    .update({ status: to, resolved_at: at })
+    .eq("id", approval.id)
+    .eq("org_id", approval.orgId)
+    .in("status", [...from])
+    .select("*")
+    .maybeSingle();
+  if (error) throw new Error("approval_close_failed");
+  if (!data) return null;
+  const closed = mapApprovalRow(data as Record<string, unknown>);
+  try {
+    const merged = await admin.rpc("merge_approval_metadata", {
+      p_id: approval.id, p_org: approval.orgId, p_patch: { closedWithoutSend },
+    });
+    if (!merged.error && merged.data) return mapApprovalRow(merged.data as Record<string, unknown>);
+  } catch {
+    // Status is already closed; the audit event carries the reason.
+  }
+  return closed;
+}

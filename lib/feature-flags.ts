@@ -472,8 +472,18 @@ export function isMcpEndpointHandoffEnabled(): boolean {
 /**
  * Duplicate-reply prevention for conversation tools (comm.reply / comm.send /
  * slack.post / slack.post_external), channel-independent (Slack / LINE / Telegram).
- * STUB (TDD red phase).
+ *
+ * When ON:
+ * - the same employee sending a normalized-equal (or, in similar mode, a
+ *   near-equal) body to the same conversation within the window is not sent:
+ *   `duplicate_reply_suppressed` + audit (hashes only, never the body)
+ * - a newer reply / approval request for a conversation supersedes older pending
+ *   conversation approvals; fulfill re-checks and closes stale ones as superseded
+ * - pending conversation approvals expire (COMM_REPLY_APPROVAL_TTL_MINUTES)
+ *
+ * When OFF (default): no change. Requires migration 20261004700000.
+ * Details: docs/comm-reply-dedup.md
  */
 export function isCommReplyDedupEnabled(): boolean {
-  return false;
+  return parseFlag(process.env.COMM_REPLY_DEDUP_ENABLED);
 }

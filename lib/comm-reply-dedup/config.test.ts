@@ -59,7 +59,7 @@ describe("flag and defaults", () => {
 
 describe("HMAC key", () => {
   test("demo mode has a fixed dev key", () => {
-    expect(resolveCommReplyDedupKey()).toBeInstanceOf(Buffer);
+    expect(Buffer.isBuffer(resolveCommReplyDedupKey())).toBe(true);
   });
 
   test("production: explicit key (≥ 32 chars) wins; else derived from the notification key; else null (fail closed)", () => {
@@ -71,7 +71,7 @@ describe("HMAC key", () => {
     expect(resolveCommReplyDedupKey()).toBeNull();
     process.env.NOTIFICATION_CONFIG_ENCRYPTION_KEY = "n".repeat(40);
     const derived = resolveCommReplyDedupKey();
-    expect(derived).toBeInstanceOf(Buffer);
+    expect(Buffer.isBuffer(derived)).toBe(true);
     expect(derived?.toString("utf8").includes("n".repeat(40))).toBe(false); // derived, not the raw key
     process.env.COMM_REPLY_DEDUP_HMAC_KEY = "k".repeat(40);
     const explicit = resolveCommReplyDedupKey();

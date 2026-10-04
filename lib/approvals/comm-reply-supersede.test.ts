@@ -33,7 +33,9 @@ const { resetDemoCommReplySends } = await import("@/lib/data/comm-reply-sends");
 const { setCommReplyDedupClockForTests } = await import("@/lib/comm-reply-dedup/config");
 const { expireStaleConversationApprovals } = await import("@/lib/comm-reply-dedup/approvals");
 const { GET: statusGET } = await import("@/app/api/approvals/status/route");
+const { callStaffpassMcpTool } = await import("@/lib/mcp/tools");
 type GatewayInvokeRequest = import("@/lib/types").GatewayInvokeRequest;
+type ResolvedEmployeeCredential = import("@/lib/auth/employee-credential").ResolvedEmployeeCredential;
 
 const FLAG = "COMM_REPLY_DEDUP_ENABLED";
 const DM_A = "D0SUPERSEDEA"; // 野木さん DM shape
@@ -174,6 +176,20 @@ describe("incident reproduction (flag ON)", () => {
     const polled = await (await statusGET(new Request(url))).json();
     expect(polled.status).toBe("superseded");
     expect(polled.pollHint).toBe("abort_job");
+    expect(polled.closedWithoutSend).toEqual({ reason: "newer_approval_requested" });
+    // MCP staffpass_get_approval_status must not report it as pending either.
+    const now = new Date().toISOString();
+    const cred = {
+      employeeId: "emp_comm", orgId: DEMO_ORG.id, credentialId: "cred_emp_comm", generation: 1,
+      fingerprint: "fixture-hash", secretPrefix: "gb_emp_fixture",
+      binding: { status: "linked", employeeId: "emp_comm", orgId: DEMO_ORG.id, credentialGeneration: 1,
+        grokBotAgentId: "agent_test", grokBotWorkspaceId: null, credentialFingerprint: null, lastSuccessAt: null,
+        lastError: null, wakeWebhookUrl: null, hasWakeWebhook: false, createdAt: now, updatedAt: now },
+    } as ResolvedEmployeeCredential;
+    const mcp = await callStaffpassMcpTool("staffpass_get_approval_status", { approvalId: id, statusToken: String(res.body.statusToken) }, cred);
+    const out = mcp.structuredContent as Record<string, unknown>;
+    expect(out.status).toBe("superseded");
+    expect(out.pollHint).toBe("abort_job");
   });
 });
 

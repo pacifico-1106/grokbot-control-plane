@@ -8,7 +8,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
 
-const DIR = resolve(import.meta.dir, "../../supabase/migrations");
+const DIR = resolve(process.cwd(), "supabase/migrations");
 const NAME = "20261004700000_comm_reply_dedup.sql";
 
 describe("comm reply dedup migration", () => {

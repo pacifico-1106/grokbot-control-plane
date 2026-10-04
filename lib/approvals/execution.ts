@@ -15,7 +15,9 @@ const demoClaims = new Map<string, { state: State; result?: Result | null }>();
 const retryable = new Set(["slack_token_missing", "slack_conversation_bot_token_missing", "missing_scope", "not_in_channel", "channel_not_found",
   "invalid_auth", "token_revoked", "account_inactive", "slack_identity_unbound", "slack_identity_not_linked", "posting_identity_unlinked",
   // Fulfill-time policy stops (lib/approvals/fulfill-policy-recheck.ts) happen before any provider call.
-  "fulfill_blocked_tool_denied", "fulfill_blocked_mail_policy", "fulfill_blocked_employee_unavailable"]);
+  "fulfill_blocked_tool_denied", "fulfill_blocked_mail_policy", "fulfill_blocked_employee_unavailable",
+  // Duplicate-reply prevention (lib/comm-reply-dedup/guard.ts): closed / stopped before any provider call.
+  "approval_superseded", "approval_expired", "fulfill_blocked_dedup_unavailable"]);
 // Per-tool additions: refusals that tool returns BEFORE any write and that it
 // re-checks from scratch on every run (so the same approvalId may run again,
 // e.g. after the employee re-authorizes Slack). Scoped by tool so the same
