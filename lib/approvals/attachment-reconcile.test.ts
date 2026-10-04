@@ -304,7 +304,8 @@ describe("cannot check → stays uncertain, ONE admin-agent stuck-watch item, ne
     replies = () => ({ ok: false, error: "missing_scope" });
     await reconcile([approvalId]);
     replies = () => ({ ok: true, has_more: false, messages: [fileMsg(theFile())] });
-    await reconcile([approvalId]);
+    // re-checks back off (木村 2): the first one is due 10 min after the notification
+    await reconcile([approvalId], new Date(Date.now() + 22 * 60_000));
     expect(await record(approvalId)).toMatchObject({ state: "succeeded", fileId: "F_SHARED_1" });
     expect((await audits(approvalId, "stuck_watch.attachment_uncertain_notify")).length).toBe(1);
     const list = await runStuckWatchList(DEMO_ORG.id, { kind: "a1" });
@@ -462,8 +463,9 @@ describe("migration 20261004400000 (static)", () => {
       expect(sql).toContain(`revoke all on function public.${fn} from public,anon,authenticated;`);
       expect(sql).toContain(`grant execute on function public.${fn} to service_role;`);
     }
-    expect(sql.match(/security invoker set search_path = pg_catalog, public/g)?.length).toBe(2);
-    expect(sql.match(/for update;/g)?.length).toBe(2);
+    // + finish_approval_attachment_upload (same signature, keeps slackError / slackNeeded; 木村 5)
+    expect(sql.match(/security invoker set search_path = pg_catalog, public/g)?.length).toBe(3);
+    expect(sql.match(/for update;/g)?.length).toBe(3);
     expect(sql).not.toMatch(/security definer|alter table|create table|create policy/i);
   });
 });

@@ -32,3 +32,12 @@ export const SLACK_DEFINITE_PRE_SHARE_ERRORS: ReadonlySet<string> = new Set([
 export function isDefinitePreShareSlackError(error: string | null | undefined): boolean {
   return typeof error === "string" && SLACK_DEFINITE_PRE_SHARE_ERRORS.has(error);
 }
+
+// ---- stubs (木村 5, failing first) ----
+export const SLACK_DEFINITE_ERROR_FIXES: Readonly<Record<string, { kind: string; nextTool: string }>> = {};
+export function slackReinvokeReason(_error: string | null | undefined, _needed?: readonly string[]): Record<string, unknown> | null {
+  return null;
+}
+export function sanitizeSlackScopes(_value: unknown): string[] | undefined {
+  return undefined;
+}
