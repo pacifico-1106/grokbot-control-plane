@@ -23,6 +23,8 @@ import { normalizePostingAs } from "@/lib/employees/posting-as";
 import type { PostingAs } from "@/lib/types";
 
 const SLACK_TIMEOUT_MS = 5_000;
+/** Same code as setup.slackStatus; next step: setup.slackAdapter.setBotToken. */
+const CONVERSATION_BOT_TOKEN_NOT_REGISTERED = "conversation_bot_token_not_registered";
 const SLACK_API = "https://slack.com/api";
 
 export type ReactionType = "looking" | "completed" | "waiting_approval";
@@ -96,7 +98,8 @@ export async function addReaction(input: {
   });
 
   if (!token) {
-    return { ok: true, added: false };
+    // No org-own token (the env bot fallback is gone): say so, never a quiet ok.
+    return { ok: false, error: CONVERSATION_BOT_TOKEN_NOT_REGISTERED, degraded: true };
   }
 
   const emoji = REACTION_EMOJI[reaction];
@@ -180,7 +183,8 @@ export async function removeReaction(input: {
   });
 
   if (!token) {
-    return { ok: true, removed: false };
+    // No org-own token (the env bot fallback is gone): say so, never a quiet ok.
+    return { ok: false, error: CONVERSATION_BOT_TOKEN_NOT_REGISTERED, degraded: true };
   }
 
   const emoji = REACTION_EMOJI[reaction];

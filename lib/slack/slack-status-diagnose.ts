@@ -45,9 +45,29 @@ export type PathBReadiness = {
   ready: boolean;
 };
 
+/** Explicit code + next step when the org has no conversation bot token of its own. */
+export const CONVERSATION_BOT_TOKEN_NOT_REGISTERED = "conversation_bot_token_not_registered";
+export const SET_BOT_TOKEN_TOOL = "setup.slackAdapter.setBotToken";
+
+/**
+ * Conversation-plane bot token status. Only the org's OWN token counts (the env
+ * SLACK_BOT_TOKEN fallback and the shared approval app are never candidates), so
+ * an org without one is `not_registered` and never reported ok / ready.
+ */
+export type ConversationBotTokenStatus =
+  | { status: "registered" }
+  | {
+      status: "not_registered";
+      code: typeof CONVERSATION_BOT_TOKEN_NOT_REGISTERED;
+      nextTool: typeof SET_BOT_TOKEN_TOOL;
+    };
+
 export type SlackStatusResult = {
   ok: boolean;
   botTokenPresent: boolean;
+  conversationBotToken: ConversationBotTokenStatus;
+  /** Admin MCP tool for the next human-approved step (null when none is fixed). */
+  nextTool: string | null;
   authTest: SlackAuthTestResult | null;
   botHasFilesWrite: boolean;
   botFilesWriteCode: string;
@@ -112,6 +132,8 @@ export function computeSlackStatusNextStepJa(input: SlackStatusNextStepInput): s
 
   if (!input.botTokenPresent) {
     return (
+      `conversation bot token not registered（この組織の会話投稿Botトークンが未登録です。環境変数のBotは使いません）。` +
+      `Admin MCP の ${SET_BOT_TOKEN_TOOL} で登録してください（人の承認が必要）。` +
       `Slack API → OAuth & Permissions → Bot Token Scopes に files:write（および im:history, chat:write, im:write）を追加し、` +
       `Install to Workspace で再インストールしてください。その後 Bot User OAuth Token (xoxb-...) をダッシュボード「${path}」に登録してください。`
     );
@@ -207,8 +229,17 @@ export async function diagnoseSlackStatus(orgId: string): Promise<SlackStatusRes
       issues.push(`auth.test 失敗: ${authTest.error || "unknown"}`);
     }
   } else {
-    issues.push("Bot Token が設定されていません");
+    issues.push(
+      `conversation bot token not registered: この組織の会話投稿Botトークンが未登録です（${SET_BOT_TOKEN_TOOL} で登録）`
+    );
   }
+  const conversationBotToken: ConversationBotTokenStatus = botTokenPresent
+    ? { status: "registered" }
+    : {
+        status: "not_registered",
+        code: CONVERSATION_BOT_TOKEN_NOT_REGISTERED,
+        nextTool: SET_BOT_TOKEN_TOOL,
+      };
 
   let botFilesWriteCode = "not_probed";
   let botFilesWriteNeeded: string | null = null;
@@ -360,8 +391,10 @@ export async function diagnoseSlackStatus(orgId: string): Promise<SlackStatusRes
   });
 
   return {
-    ok: issues.length === 0,
+    ok: botTokenPresent && issues.length === 0,
     botTokenPresent,
+    conversationBotToken,
+    nextTool: botTokenPresent ? null : SET_BOT_TOKEN_TOOL,
     authTest,
     botHasFilesWrite,
     botFilesWriteCode,

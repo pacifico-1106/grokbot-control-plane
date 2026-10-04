@@ -179,7 +179,8 @@ describe("conversation bot token never falls back to the shared approval app", (
       timestamp: "1503435956.000247",
       reaction: "completed",
     });
-    expect(result.ok).toBe(true);
+    // #252: no org-own token is reported explicitly (fire-and-forget callers).
+    expect(result).toEqual({ ok: false, error: "conversation_bot_token_not_registered", degraded: true });
     expect(sharedTokenUsed()).toBe(false);
   });
 

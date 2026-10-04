@@ -88,7 +88,9 @@ describe("addReaction", () => {
     }
   });
 
-  test("returns added=false when no token available", async () => {
+  test("no org-own token → explicit not-registered (never a quiet ok)", async () => {
+    // 2026-10-04 (#252): with the env fallback gone, "no token" is reported
+    // explicitly; callers are fire-and-forget so the flow is unaffected.
     process.env.SLACK_REACTION_STAMPS = "true";
     const result = await addReaction({
       orgId: "org_nonexistent",
@@ -96,10 +98,7 @@ describe("addReaction", () => {
       timestamp: "1234567890.123456",
       reaction: "looking",
     });
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.added).toBe(false);
-    }
+    expect(result).toEqual({ ok: false, error: "conversation_bot_token_not_registered", degraded: true });
   });
 
   test("handles already_reacted response gracefully", async () => {

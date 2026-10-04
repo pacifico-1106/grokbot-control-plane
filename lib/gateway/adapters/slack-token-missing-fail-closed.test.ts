@@ -151,10 +151,10 @@ describe("decision 1: production fails closed with slack_token_missing", () => {
     expect(calls).toEqual([]);
   });
 
-  test("reactions stay optional: ok without adding one, no Slack call (unchanged)", async () => {
+  test("reactions stay optional for callers but never a quiet ok: explicit not-registered, no Slack call", async () => {
     process.env.SLACK_REACTION_STAMPS = "true";
     const result = await addReaction({ orgId: ORG, channel: "C0INTERNAL1", timestamp: "1503435956.000247", reaction: "completed" });
-    expect(result).toEqual({ ok: true, added: false });
+    expect(result).toEqual({ ok: false, error: "conversation_bot_token_not_registered", degraded: true });
     expect(calls).toEqual([]);
   });
 
