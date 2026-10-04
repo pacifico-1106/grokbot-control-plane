@@ -2,6 +2,7 @@ import {
   DEMO_ORG,
   getRuntimeMemberById,
   getRuntimeMembers,
+  setRuntimeMember,
   upsertRuntimeMember,
 } from "../demo-data";
 import { isDemoMode } from "../mode";
@@ -73,68 +74,64 @@ type MemberWriteFields = {
   capabilities: NonNullable<OrgMember["capabilities"]>;
 };
 
-async function writeMemberAudit(
-  oid: string,
-  member: OrgMember,
-  savedId: string
-): Promise<void> {
-  const admin = createSupabaseAdminClient();
-  if (!admin) return;
-  await admin.from("audit_events").insert({
-    org_id: oid,
-    action: "member.invited",
-    summary: `チーム更新: ${member.displayName}（${member.jobRole ?? member.role}）`,
-    metadata: {
-      memberId: savedId,
-      jobRole: member.jobRole,
-      capabilities: member.capabilities ?? [],
-    },
-  });
+/**
+ * What the guard decision was based on. The write only lands if the row still
+ * matches (TOCTOU): `"new"` = insert only (never fall back to updating an
+ * existing row), otherwise a conditional update on role + capability set.
+ */
+export type MemberWriteExpectation =
+  | "new"
+  | { role: OrgMember["role"]; capabilities: readonly string[] };
+
+export class MemberConcurrentModificationError extends Error {
+  constructor() {
+    super("member_concurrent_modification");
+  }
 }
 
-async function findOrgMemberByEmail(
-  admin: NonNullable<ReturnType<typeof createSupabaseAdminClient>>,
-  oid: string,
-  email: string
-): Promise<Record<string, unknown> | null> {
-  const { data, error } = await admin
-    .from("org_members")
-    .select("*")
-    .eq("org_id", oid)
-    .eq("email", email)
-    .maybeSingle();
-  if (error) {
-    throw new Error(error.message || "member_lookup_failed");
+/** DB trigger org_members_keep_last_owner (migration 20261004200000) refused the write. */
+export class MemberLastOwnerError extends Error {
+  constructor() {
+    super("last_owner_required");
   }
-  if (data) return data as Record<string, unknown>;
-
-  const { data: rows, error: listErr } = await admin
-    .from("org_members")
-    .select("*")
-    .eq("org_id", oid);
-  if (listErr) {
-    throw new Error(listErr.message || "member_lookup_failed");
-  }
-  const hit = (rows ?? []).find(
-    (r: { email?: string }) =>
-      String(r.email ?? "").trim().toLowerCase() === email
-  );
-  return hit ? (hit as Record<string, unknown>) : null;
 }
 
-export async function upsertMember(
+function sameCapabilitySet(a: readonly string[] | undefined, b: readonly string[]): boolean {
+  const x = new Set(a ?? []);
+  const y = new Set(b);
+  return x.size === y.size && [...x].every((c) => y.has(c));
+}
+
+/**
+ * Low-level org_members writer for role / capabilities.
+ * ONLY call from lib/team/apply-member-change.ts after evaluateMemberChange
+ * (enforced by tests/security/member-capability-write-paths.test.ts).
+ * Audit is written by the caller (before/after + actor).
+ */
+export async function writeMemberRow(
   member: OrgMember,
-  orgId?: string | null
+  orgId: string,
+  expected: MemberWriteExpectation
 ): Promise<OrgMember> {
   if (isDemoMode()) {
-    return upsertRuntimeMember({
-      ...member,
-      email: normalizeMemberEmail(member.email),
-    });
+    const current = getRuntimeMemberById(member.id);
+    if (expected === "new") {
+      if (current) throw new MemberConcurrentModificationError();
+    } else if (
+      !current ||
+      current.orgId !== orgId ||
+      current.role !== expected.role ||
+      !sameCapabilitySet(current.capabilities, expected.capabilities)
+    ) {
+      throw new MemberConcurrentModificationError();
+    }
+    const saved = { ...member, email: normalizeMemberEmail(member.email) };
+    if (current) setRuntimeMember(saved);
+    else upsertRuntimeMember(saved, { audit: false });
+    return saved;
   }
   const admin = createSupabaseAdminClient();
-  const oid = orgId || member.orgId;
-  if (!oid || oid === "org_demo") {
+  if (!orgId || orgId === "org_demo") {
     throw new Error("org_id_required");
   }
   if (!admin) {
@@ -143,7 +140,7 @@ export async function upsertMember(
 
   const email = normalizeMemberEmail(member.email);
   const writeFields: MemberWriteFields = {
-    org_id: oid,
+    org_id: orgId,
     email,
     display_name: member.displayName,
     role: member.role,
@@ -152,33 +149,31 @@ export async function upsertMember(
     capabilities: member.capabilities ?? [],
   };
 
-  const updateExisting = async (id: string) => {
+  if (expected !== "new") {
+    if (!isUuid(member.id)) throw new Error("member_upsert_failed");
+    const expectedCaps = [...new Set(expected.capabilities)];
     const { data, error } = await admin
       .from("org_members")
       .update(writeFields)
-      .eq("id", id)
-      .eq("org_id", oid)
+      .eq("id", member.id)
+      .eq("org_id", orgId)
+      .eq("role", expected.role)
+      .contains("capabilities", expectedCaps)
+      .containedBy("capabilities", expectedCaps)
       .select("*")
       .maybeSingle();
     if (error) {
+      if (/last_owner_required/.test(error.message || "")) throw new MemberLastOwnerError();
       throw new Error(error.message || "member_upsert_failed");
     }
-    return data as Record<string, unknown> | null;
-  };
-
-  if (isUuid(member.id)) {
-    const updated = await updateExisting(member.id);
-    if (updated) {
-      await writeMemberAudit(oid, member, String(updated.id));
-      return mapMemberRow(updated);
-    }
+    if (!data) throw new MemberConcurrentModificationError();
+    return mapMemberRow(data as Record<string, unknown>);
   }
 
-  const insertId = resolveProductionMemberId(member.id);
   const { data: inserted, error: insertError } = await admin
     .from("org_members")
     .insert({
-      id: insertId,
+      id: resolveProductionMemberId(member.id),
       ...writeFields,
       status: member.status || "invited",
       invited_at: new Date().toISOString(),
@@ -187,23 +182,11 @@ export async function upsertMember(
     .single();
 
   if (!insertError && inserted) {
-    await writeMemberAudit(oid, member, String((inserted as { id: string }).id));
     return mapMemberRow(inserted as Record<string, unknown>);
   }
-
-  if (isUniqueViolation(insertError)) {
-    const existing = await findOrgMemberByEmail(admin, oid, email);
-    if (!existing?.id) {
-      throw new Error(insertError?.message || "member_upsert_failed");
-    }
-    const updated = await updateExisting(String(existing.id));
-    if (!updated) {
-      throw new Error("member_upsert_failed");
-    }
-    await writeMemberAudit(oid, member, String(updated.id));
-    return mapMemberRow(updated);
-  }
-
+  // A row with this (org_id, email) appeared after the guard decided: never
+  // turn the invite into an unchecked update of that row.
+  if (isUniqueViolation(insertError)) throw new MemberConcurrentModificationError();
   throw new Error(insertError?.message || "member_upsert_failed");
 }
 

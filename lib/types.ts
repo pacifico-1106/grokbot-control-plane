@@ -484,6 +484,8 @@ export type AuditAction =
   | "employee.updated"
   | "employee.terminated"
   | "member.invited"
+  | "member.updated"
+  | "member.change_denied"
   | "commerce.projection_received"
   | "authority.event_delivery"
   | "admin.hire"
