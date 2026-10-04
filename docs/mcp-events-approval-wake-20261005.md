@@ -166,7 +166,16 @@
 | `NOTIFICATION_CONFIG_ENCRYPTION_KEY` | 秘密の暗号化（既存） | 必須。ないと subscribe は `-32603` |
 | `CRON_SECRET` | 再送 cron の認証（既存）。`Authorization: Bearer <CRON_SECRET>` のみ（PR #264 の共通ヘルパー）。未設定 → 503、`replace_me…` のまま → 401 | 必須 |
 
-上限: AI 社員 1 人あたり有効な購読 20 件、宛先確認の POST はホストごとに毎分 30 回（この回数だけはインスタンスのメモリで数える。§12.3 N3）。
+上限: AI 社員 1 人あたり有効な購読 20 件、宛先確認の POST はホストごとに毎分 30 回（**全インスタンスで共有**。D11、下の「宛先確認の回数制限」）。
+
+#### 宛先確認の回数制限（D11、2026-10-05 八坂 GO で実装）
+
+- 数える場所: テーブル `mcp_event_verification_windows`（`host`, `window_start`, `count`、主キー `(host, window_start)`）。migration `20261005000000` に追加（新しい migration は作らない）。RLS は ON、ポリシーなし、anon / authenticated は権限なし（テーブルも関数も）、service_role だけ。
+- 数え方: **固定の 1 分の窓**。`window_start` はアプリの時刻を分で切り捨てたもの（UTC）。宛先確認の POST を送る前に、RPC `mcp_events_take_verification_budget(host, window_start, 30)` を 1 回だけ呼ぶ。中身は **1 つの SQL 文** `INSERT … ON CONFLICT (host, window_start) DO UPDATE SET count = count + 1 WHERE count < 30 RETURNING count`。同時に来ても同じ行の上で順番に処理されるので、読んでから書く競合はない（40 並列で呼んで、ちょうど 30 だけ true になることを `test-db-local.py` で確認）。満杯の窓は何も更新せず false を返す。関数は security invoker、ホストは小文字・1〜253 文字、窓は分ちょうど、上限は 1〜10000 でなければ例外。
+- 結果: true → POST する。false → `-32013 Verification rate limit`（今までどおり）。**テーブルや RPC に届かない・エラー・おかしな答え → POST せず `-32603` `{ reason: "verification_rate_unavailable", retryable: true }`**（fail closed。購読は作らない。エラーの中身は返さない）。インスタンスのメモリに逃げる経路はない。
+- 片づけ: 再送 cron が毎回、開始から 10 分より古い窓を消す（`MCP_EVENTS_LIMITS.verificationWindowRetentionMs`、応答の `prunedVerificationWindows`）。1 行はホスト名と回数だけ。
+- 固定の窓なので、窓の境目をまたぐと最大 60 回／60 秒になりうる（滑る窓より緩い）。受け手を守る目的（大量の確認 POST の防止）には十分と判断。
+- デモ（Supabase なし）は同じ固定の窓をメモリで数える。
 
 ---
 
@@ -295,7 +304,7 @@ ChatGPT は `terminated` 通知に対応していないので、**サーバー�
 |---|---|---|---|
 | N1 | **既存**: 承認結果の callback（`employee.callbackUrl`、`lib/approvals/resolve-side-effects.ts`）は URL の形式チェックがなく（https 以外も入る）、名前解決後の IP 確認もなく、`fetch` の既定でリダイレクトに従う。設定できるのはテナントの管理者（社員の発行時）。approve の応答に `callback.status` / エラー文が入るため、内部向けの到達確認に使える可能性がある | needs_validation（Vercel の実行環境から内部に届くかはリポジトリの外の事実） | 実行環境のネットワーク構成の確認。直すなら `lib/mcp-events/transport.ts` の `postWebhook` を使い、応答の `callback.error` を分類だけにする |
 | N2 | **既存**: 会話の起こす webhook（`lib/slack/mention-ingress.ts`）も https だけ確認し、IP 確認なし・リダイレクトに従う | 同上 | 同上 |
-| N3 | **宛先確認のキャッシュは DB にある**（`isVerifiedFor`: `mcp_event_subscriptions` から、同じ主体・同じ URL で取り消されておらず、`verified_at` が 24 時間以内の行を探す）。したがってインスタンスをまたいで共有され、主体（社員証の世代）ごとに分かれている。**インスタンスのメモリにあるのは、宛先確認の POST の回数制限（ホストごとに毎分 30 回、`takeVerificationBudget`）だけ**で、サーバーレスでは台数ぶん緩くなる | 設計上の制限（回数制限のみ） | 本番前に回数制限を Upstash などの共有の数え方に移すか判断（D11） |
+| N3 | **宛先確認のキャッシュは DB にある**（`isVerifiedFor`: `mcp_event_subscriptions` から、同じ主体・同じ URL で取り消されておらず、`verified_at` が 24 時間以内の行を探す）。したがってインスタンスをまたいで共有され、主体（社員証の世代）ごとに分かれている。宛先確認の POST の回数制限（ホストごとに毎分 30 回）も **DB で共有**（`mcp_event_verification_windows`、D11）。届かないときは確認を断る | 解消（D11、2026-10-05） | `test-db-local.py` の 40 並列 → 30 件、`verification-budget.test.ts` |
 | N4 | 送信の 1 回目はバックグラウンド（`waitUntil`）。実行環境が止まると cron の再送まで遅れる。取り出した回は数えるので、無限には再送しない | 設計上の制限 | cron の間隔を決める（§15） |
 | N7 | 延期の監査は配信ごとに最初の 1 回だけ（DB 障害中に監査も書けない可能性があるため、毎回の延期はログ）。障害が長いと、延期の監査が残らずにログだけになることがある | 設計上の制限 | 本番の監視でログ `mcp_events_delivery_deferred` を拾う |
 | N5 | 秘密の暗号化鍵は既存の `NOTIFICATION_CONFIG_ENCRYPTION_KEY` を共用。鍵を替える手順は既存の秘密と同じ扱い | 既存方針に合わせた | — |
@@ -377,38 +386,38 @@ ChatGPT は `terminated` 通知に対応していないので、**サーバー�
 | `lib/mcp-events/store.ts` | 保存（デモはメモリ、本番は service_role のテーブル） |
 | `lib/mcp-events/service.ts` | events/* の処理・emit・配信・監査・一覧 |
 | `app/api/mcp/route.ts` | events/* の受け口（フラグ ON のときだけ）、tools/call の「直後の操作」記録 |
-| `app/api/cron/mcp-events-deliver/route.ts` | 再送と保持期間の削除の cron（`rejectUnauthorizedCron`＝PR #264 の共通ヘルパー、フラグ OFF なら何もしない） |
+| `app/api/cron/mcp-events-deliver/route.ts` | 再送・保持期間の削除・回数制限の古い窓の削除の cron（`rejectUnauthorizedCron`＝PR #264 の共通ヘルパー）。`vercel.json` に毎分で登録。フラグ OFF なら `skipped` を返すだけ（service を読み込まず、Supabase のクライアントも作らない） |
 | `lib/approvals/resolve-side-effects.ts` | approval.decided を出す（＋ callback に eventId） |
 | `lib/comm-reply-dedup/approvals.ts` / `lib/decision-workflow/expiry.ts` | approval.expired を出す |
-| `supabase/migrations/20261005000000_mcp_event_subscriptions.sql` | テーブル 2 つ・トリガー（ロールバックつき）。**PR では適用しない** |
+| `supabase/migrations/20261005000000_mcp_event_subscriptions.sql` | テーブル 3 つ（購読・配信・回数制限の窓）・トリガー・回数制限の関数（ロールバックつき）。**PR では適用しない** |
 | `tests/security/db-mcp-events.sql` ほか | テスト |
 
-### 本番で有効にする手順（八坂の判断のあと・この PR ではしない）
+### 本番で有効にする手順（この PR ではしない）
 
-1. migration `20261005000000` を適用（追加のみ。戻すときは migration 末尾の ROLLBACK か `supabase/verification/20261005000000_mcp_event_subscriptions_rollback.sql`。先にフラグを OFF）。
-2. `vercel.json` に `/api/cron/mcp-events-deliver` を追加（間隔は §15）。
+1. migration `20261005000000` を適用（追加のみ。戻すときは migration 末尾の ROLLBACK か `supabase/verification/20261005000000_mcp_event_subscriptions_rollback.sql`。先にフラグを OFF）。**フラグを ON にする前に必ず適用する**（未適用で ON にすると、回数制限のテーブルに届かないので宛先確認はすべて `-32603 verification_rate_unavailable` で断られる＝fail closed）。
+2. cron はこの PR で `vercel.json` に毎分で登録済み（D6）。マージ後のデプロイから毎分呼ばれるが、フラグ OFF の間は `skipped` を返すだけで DB に触らない。
 3. 必要なら `MCP_EVENTS_TRUSTED_RECEIVER_HOSTS` を設定。
 4. 2026-07-28 対応（§13.3）を先に出す。
 5. `MCP_EVENTS_ENABLED=true`。
 
 ---
 
-## 15. 八坂に決めてほしいこと
+## 15. 八坂の判断（2026-10-05 08:08 八坂 GO、木村経由）
 
-| # | 内容 | 案 |
-|---|---|---|
-| D1 | 2026-07-28 対応（`server/discover` など）を**別 PR** にするか | 別 PR（両 MCP に影響し、互換の確認が要る）。それまで ChatGPT との実接続はできない |
-| D2 | 期限の数字（standard 1 時間／最大 24 時間、elevated 15 分／最大 1 時間、最短 5 分） | 案のとおり |
-| D3 | 「危険な設定」の 3 条件（許可リスト外の受け手・high を含む・無期限の希望） | 案のとおり。許可リストは最初は空（全部 elevated） |
-| D4 | 宛先は 443 番だけにするか | 443 だけ |
-| D5 | 置き換え（superseded）でもイベントを出すか | 出さない（期限切れだけ） |
-| D6 | 再送 cron の追加と間隔 | 毎分（vercel.json の追加は本番手順で） |
-| D7 | callback と MCP Events を両方使っている社員の扱い（二重に起きる可能性） | 当面は eventId で受け手がまとめる。次に「MCP Events を使うなら callback を止める」社員ごとの設定 |
-| D8 | 管理用 MCP にも Events を出すか | 出さない（管理の操作は人の承認が前提で、AI を自動で起こす理由が薄い） |
-| D9 | 既存の callback・起こす webhook の SSRF 対策（§12.3 N1・N2）を直すか | 直す（`postWebhook` に寄せる）。別 PR |
-| D10 | 古い版の例（§13.2）をどこまで直すか | この PR は `docs/mcp.md` の注記だけ。コードの版は D1 の PR で |
-| D11 | 宛先確認の POST の回数制限を共有の数え方（Upstash 等）にするか（確認のキャッシュはすでに DB） | 本番の前に |
-| D12 | 配信の行の保持期間（7 日）と、延期の間隔（60 秒） | 案のとおり |
+| # | 内容 | 状態 | 内容 |
+|---|---|---|---|
+| D1 | 2026-07-28 対応（`server/discover` など）を**別 PR** にするか | 案（未決） | 別 PR（両 MCP に影響し、互換の確認が要る）。それまで ChatGPT との実接続はできない |
+| D2 | 期限の数字（standard 1 時間／最大 24 時間、elevated 15 分／最大 1 時間、最短 5 分） | **決定（2026-10-05 八坂 GO）** | 案のとおり |
+| D3 | 「危険な設定」の 3 条件（許可リスト外の受け手・high を含む・無期限の希望） | **決定（2026-10-05 八坂 GO）** | 案のとおり。許可リストは最初は空（全部 elevated） |
+| D4 | 宛先は 443 番だけにするか | **決定（2026-10-05 八坂 GO）** | 443 だけ |
+| D5 | 置き換え（superseded）でもイベントを出すか | **決定（2026-10-05 八坂 GO）** | 出さない（期限切れだけ） |
+| D6 | 再送 cron の追加と間隔 | **決定（2026-10-05 八坂 GO）** | 毎分。**この PR で `vercel.json` に登録した**（当初案の「本番手順で追加」から変更、GO の指示どおり）。フラグ OFF の間は `skipped` で DB に触らない（`route-flag-off.test.ts`） |
+| D7 | callback と MCP Events を両方使っている社員の扱い（二重に起きる可能性） | **決定（2026-10-05 八坂 GO）** | 当面は eventId で受け手がまとめる。次に「MCP Events を使うなら callback を止める」社員ごとの設定 |
+| D8 | 管理用 MCP にも Events を出すか | **決定（2026-10-05 八坂 GO）** | 出さない（管理の操作は人の承認が前提で、AI を自動で起こす理由が薄い） |
+| D9 | 既存の callback・起こす webhook の SSRF 対策（§12.3 N1・N2）を直すか | **GO（別 PR、この PR の上に積む）** | `postWebhook` に寄せる。ブランチ `fix/webhook-postwebhook-d9-20261005` |
+| D10 | 古い版の例（§13.2）をどこまで直すか | 案（未決） | この PR は `docs/mcp.md` の注記だけ。コードの版は D1 の PR で |
+| D11 | 宛先確認の POST の回数制限を共有の数え方にするか（確認のキャッシュはすでに DB） | **決定・実装済み（2026-10-05 八坂 GO）** | Upstash ではなく **Supabase のテーブル**（`mcp_event_verification_windows`）と 1 文の RPC。固定 1 分の窓、届かなければ fail closed。§6 の「宛先確認の回数制限」 |
+| D12 | 配信の行の保持期間（7 日）と、延期の間隔（60 秒） | **決定（2026-10-05 八坂 GO）** | 案のとおり |
 
 ---
 
@@ -418,7 +427,7 @@ ChatGPT は `terminated` 通知に対応していないので、**サーバー�
 
 - 再送 cron は `lib/security/cron-secret.ts`（`rejectUnauthorizedCron`、PR #264）を使う。そのため #264 のブランチ `fix/cron-secret-constant-time-20261004`（head `38b91f4`、remote でも同じことを確認）を、この PR のブランチに**通常の merge コミット**で取り込んだ（rebase なし）。
 - **#264 を先にマージする必要がある。** #264 が main に入れば、この PR の差分から #264 のコミット（9 ファイル）は消える。
-- 挙動の変化: `CRON_SECRET` が未設定のとき 401 → **503 `cron_not_configured`**、`x-cron-secret` ヘッダーは受け付けない（Bearer のみ）、`replace_me…` のままなら 401。この cron は vercel.json にまだ登録しておらず、呼び出し元はない。
+- 挙動の変化: `CRON_SECRET` が未設定のとき 401 → **503 `cron_not_configured`**、`x-cron-secret` ヘッダーは受け付けない（Bearer のみ）、`replace_me…` のままなら 401。この cron は D6 で vercel.json に毎分で登録した（フラグ OFF の間は `skipped`）。
 
 ### 16.2 PR #265 と衝突する（後からマージする側が解消する）
 

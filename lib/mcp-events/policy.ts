@@ -21,7 +21,10 @@ export const MCP_EVENTS_LIMITS = {
   /** lease per claimed attempt (> attempt timeout + DNS; a dead worker's attempt is retried after this) */
   leaseMs: 60_000,
   verificationCacheMs: 24 * 60 * 60_000,
+  /** verification POSTs per receiver host per fixed 1-minute window, shared across instances (D11: mcp_event_verification_windows) */
   verificationsPerHostPerMinute: 30,
+  /** verification-budget windows that started longer ago than this are deleted by the deliver cron */
+  verificationWindowRetentionMs: 10 * 60_000,
   attributionWindowMs: 30 * 60_000,
   /** a delivery attempt deferred because the revocation re-check could not run is retried after this (not counted as an attempt) */
   deferMs: 60_000,

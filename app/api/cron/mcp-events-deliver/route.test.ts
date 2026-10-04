@@ -34,7 +34,7 @@ describe("cron /api/cron/mcp-events-deliver: shared helper (lib/security/cron-se
     process.env.CRON_SECRET = "cron-secret-test-value";
     process.env.MCP_EVENTS_ENABLED = "true";
     const body = await (await GET(req({ authorization: "Bearer cron-secret-test-value" }))).json();
-    expect(body).toMatchObject({ status: "completed", attempted: 0, deferred: 0, pruned: 0 });
+    expect(body).toMatchObject({ status: "completed", attempted: 0, deferred: 0, pruned: 0, prunedVerificationWindows: 0 });
   });
 });
 

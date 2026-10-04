@@ -66,25 +66,73 @@ export type DeliveryRow = {
 
 const demoSubs = new Map<string, SubscriptionRow>();
 const demoDeliveries = new Map<string, DeliveryRow>();
-const verificationsByHost = new Map<string, number[]>();
+/** demo-only budget windows: `${host}\n${windowStartMs}` → count */
+const demoVerificationWindows = new Map<string, number>();
 
 export function __resetMcpEventsStoreForTests(): void {
   demoSubs.clear();
   demoDeliveries.clear();
-  verificationsByHost.clear();
+  demoVerificationWindows.clear();
 }
 
-/** Per-host verification POST budget (in-memory, per instance; anti-flooding). */
-export function takeVerificationBudget(host: string, nowMs: number, perMinute: number): boolean {
-  const recent = (verificationsByHost.get(host) || []).filter((t) => nowMs - t < 60_000);
-  if (recent.length >= perMinute) {
-    verificationsByHost.set(host, recent);
-    return false;
+// ---- verification budget (D11) ---------------------------------------------
+/**
+ * "ok" = this challenge may be sent; "limited" = the host's window is full;
+ * "unavailable" = the shared counter could not be reached → the caller refuses
+ * the challenge (fail closed, retryable). There is no per-instance fallback.
+ */
+export type VerificationBudget = "ok" | "limited" | "unavailable";
+type BudgetFn = (host: string, nowMs: number, perMinute: number) => Promise<VerificationBudget>;
+let budgetOverride: BudgetFn | null = null;
+export function __setVerificationBudgetForTests(fn: BudgetFn | null): void { budgetOverride = fn; }
+
+const WINDOW_MS = 60_000;
+const windowStartOf = (nowMs: number) => Math.floor(nowMs / WINDOW_MS) * WINDOW_MS;
+
+/**
+ * Per-host verification POST budget over a fixed 1-minute window, shared by
+ * every instance: production = one atomic RPC
+ * (public.mcp_events_take_verification_budget — a single
+ * INSERT … ON CONFLICT DO UPDATE … WHERE count < limit; no read-then-write).
+ */
+export async function takeVerificationBudget(host: string, nowMs: number, perMinute: number): Promise<VerificationBudget> {
+  if (budgetOverride) return budgetOverride(host, nowMs, perMinute);
+  const h = host.toLowerCase();
+  const windowStart = windowStartOf(nowMs);
+  if (isDemoMode()) {
+    const key = `${h}\n${windowStart}`;
+    const n = demoVerificationWindows.get(key) ?? 0;
+    if (n >= perMinute) return "limited";
+    demoVerificationWindows.set(key, n + 1);
+    if (demoVerificationWindows.size > 5000) demoVerificationWindows.delete(demoVerificationWindows.keys().next().value as string);
+    return "ok";
   }
-  recent.push(nowMs);
-  verificationsByHost.set(host, recent);
-  if (verificationsByHost.size > 5000) verificationsByHost.delete(verificationsByHost.keys().next().value as string);
-  return true;
+  try {
+    const db = admin();
+    const { data, error } = await db.rpc("mcp_events_take_verification_budget", {
+      p_host: h, p_window_start: new Date(windowStart).toISOString(), p_limit: perMinute,
+    });
+    if (error || typeof data !== "boolean") return "unavailable";
+    return data ? "ok" : "limited";
+  } catch {
+    return "unavailable";
+  }
+}
+
+/** Deletes budget windows that started before `cutoffIso` (deliver cron). Returns the number deleted. */
+export async function deleteVerificationWindowsBefore(cutoffIso: string): Promise<number> {
+  const cutoff = Date.parse(cutoffIso);
+  if (isDemoMode()) {
+    let n = 0;
+    for (const key of [...demoVerificationWindows.keys()]) {
+      if (Number(key.slice(key.lastIndexOf("\n") + 1)) < cutoff) { demoVerificationWindows.delete(key); n++; }
+    }
+    return n;
+  }
+  const db = admin();
+  const { data, error } = await db.from("mcp_event_verification_windows").delete().lt("window_start", cutoffIso).select("host");
+  if (error) throw new Error("mcp_events_store_error");
+  return (data || []).length;
 }
 
 // ---- mapping -------------------------------------------------------------

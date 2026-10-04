@@ -3,8 +3,8 @@
 -- docs/mcp-events-approval-wake-20261005.md). After 20261004800000 (main);
 -- 20261004900000 is taken by #265.
 --
--- NOT APPLIED BY THE PR. Additive only: two new server-only tables, one
--- trigger function. No existing table, row, policy or grant is touched.
+-- NOT APPLIED BY THE PR. Additive only: three new server-only tables, one
+-- trigger function, one budget function (D11). No existing table, row, policy or grant is touched.
 -- Apply BEFORE setting MCP_EVENTS_ENABLED=true; with the flag OFF the
 -- application never reads or writes these tables. Re-runnable
 -- (create … if not exists / create or replace / drop trigger if exists).
@@ -21,11 +21,19 @@
 --   unique (subscription_id, event_id) makes re-emit / concurrent emit a
 --   no-op, and every retry re-sends the same body + webhook-id (= event_id).
 --   body ≤ 256 KiB and carries ids + status only (application invariant).
+-- mcp_event_verification_windows — D11 (八坂 GO 2026-10-05): the shared
+--   per-host budget for endpoint-verification POSTs (30 per host per fixed
+--   1-minute window, all instances). One row per (host, window_start);
+--   mcp_events_take_verification_budget() takes one unit in a SINGLE
+--   INSERT … ON CONFLICT DO UPDATE … WHERE count < limit (atomic, no
+--   read-then-write; returns false when the window is full). Windows older than
+--   10 minutes are deleted by the deliver cron. Holds hostnames + counts only.
 -- Tenant isolation in the schema: a subscription's employee must belong to
 -- its org, and a delivery's org / employee must equal its subscription's
 -- (trigger mcp_events_same_org → 'mcp_events_cross_org').
--- RLS on, NO policy, anon / authenticated have no privilege at all; only
--- service_role (BYPASSRLS, server code via createSupabaseAdminClient) uses them.
+-- RLS on, NO policy, anon / authenticated have no privilege at all (tables and
+-- functions); only service_role (BYPASSRLS, server code via
+-- createSupabaseAdminClient) uses them.
 
 begin;
 
@@ -122,21 +130,58 @@ drop trigger if exists mcp_event_deliveries_same_org on public.mcp_event_deliver
 create trigger mcp_event_deliveries_same_org before insert or update of org_id, employee_id, subscription_id
   on public.mcp_event_deliveries for each row execute function public.mcp_events_same_org();
 
+-- D11: shared per-host verification budget (fixed 1-minute windows).
+create table if not exists public.mcp_event_verification_windows (
+  host text not null check (length(host) between 1 and 253 and host = lower(host)),
+  window_start timestamptz not null check (window_start = date_trunc('minute', window_start)),
+  count integer not null check (count >= 0),
+  primary key (host, window_start)
+);
+create index if not exists mcp_event_verification_windows_start_idx on public.mcp_event_verification_windows (window_start);
+
+create or replace function public.mcp_events_take_verification_budget(p_host text, p_window_start timestamptz, p_limit integer)
+returns boolean language plpgsql security invoker set search_path = pg_catalog, public as $mcpbudget$
+declare
+  taken integer;
+begin
+  if p_host is null or length(p_host) not between 1 and 253 or p_host <> lower(p_host) then
+    raise exception 'mcp_events_bad_host';
+  end if;
+  if p_window_start is null or p_window_start <> date_trunc('minute', p_window_start) then
+    raise exception 'mcp_events_bad_window';
+  end if;
+  if p_limit is null or p_limit < 1 or p_limit > 10000 then
+    raise exception 'mcp_events_bad_limit';
+  end if;
+  -- One statement: concurrent callers serialize on the (host, window_start) row;
+  -- a full window updates nothing and returns no row.
+  insert into public.mcp_event_verification_windows as w (host, window_start, count)
+  values (p_host, p_window_start, 1)
+  on conflict (host, window_start) do update set count = w.count + 1 where w.count < p_limit
+  returning w.count into taken;
+  return taken is not null;
+end $mcpbudget$;
+revoke all on function public.mcp_events_take_verification_budget(text, timestamptz, integer) from public, anon, authenticated;
+grant execute on function public.mcp_events_take_verification_budget(text, timestamptz, integer) to service_role;
+
 alter table public.mcp_event_subscriptions enable row level security;
 alter table public.mcp_event_deliveries enable row level security;
-revoke all on public.mcp_event_subscriptions, public.mcp_event_deliveries from anon, authenticated;
-grant select, insert, update, delete on public.mcp_event_subscriptions, public.mcp_event_deliveries to service_role;
+alter table public.mcp_event_verification_windows enable row level security;
+revoke all on public.mcp_event_subscriptions, public.mcp_event_deliveries, public.mcp_event_verification_windows from anon, authenticated;
+grant select, insert, update, delete on public.mcp_event_subscriptions, public.mcp_event_deliveries, public.mcp_event_verification_windows to service_role;
 
 commit;
 
--- ROLLBACK (down) — removes everything this migration added (the two tables,
--- their indexes / triggers, the trigger function). Nothing else depends on
--- them. Turn MCP_EVENTS_ENABLED off first; pending deliveries and
+-- ROLLBACK (down) — removes everything this migration added (the three
+-- tables, their indexes / triggers, the trigger function, the budget
+-- function). Nothing else depends on them. Turn MCP_EVENTS_ENABLED off first; pending deliveries and
 -- subscriptions are discarded (receivers simply stop getting events; the
 -- existing wake paths are unchanged). Run as one transaction:
 --   begin;
 --   drop table if exists public.mcp_event_deliveries;
 --   drop table if exists public.mcp_event_subscriptions;
+--   drop function if exists public.mcp_events_take_verification_budget(text, timestamptz, integer);
+--   drop table if exists public.mcp_event_verification_windows;
 --   drop function if exists public.mcp_events_same_org();
 --   commit;
 -- END ROLLBACK

@@ -3,5 +3,7 @@
 begin;
 drop table if exists public.mcp_event_deliveries;
 drop table if exists public.mcp_event_subscriptions;
+drop function if exists public.mcp_events_take_verification_budget(text, timestamptz, integer);
+drop table if exists public.mcp_event_verification_windows;
 drop function if exists public.mcp_events_same_org();
 commit;

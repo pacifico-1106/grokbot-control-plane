@@ -10,6 +10,11 @@
 --  (4) one delivery per (subscription, event): a duplicate insert is a no-op
 --  (5) delivery bodies over 256 KiB, malformed ids, unknown events / statuses,
 --      non-https URLs and plaintext-looking secrets are rejected
+--  (6) D11 shared verification budget (mcp_event_verification_windows +
+--      mcp_events_take_verification_budget): fixed 1-minute window per host,
+--      the 31st call in a window answers false, hosts / windows independent,
+--      non-minute-aligned / bad input rejected, RLS on / no policy, anon /
+--      authenticated cannot read the table or execute the function
 \set ON_ERROR_STOP 1
 reset role;
 
@@ -132,6 +137,62 @@ do $$ begin
     raise exception 'mcp events: retention index missing';
   end if;
 end $$;
+
+-- (6) D11 shared verification budget ------------------------------------------
+set role service_role;
+do $$
+declare ok boolean; n int := 0; w timestamptz := date_trunc('minute', now());
+begin
+  for i in 1..31 loop
+    ok := public.mcp_events_take_verification_budget('a9-test.example.org', w, 30);
+    if ok then n := n + 1; end if;
+    if i <= 30 and not ok then raise exception 'mcp events budget: call % refused below the limit', i; end if;
+    if i = 31 and ok then raise exception 'mcp events budget: 31st call in the window accepted'; end if;
+  end loop;
+  if (select count from public.mcp_event_verification_windows where host = 'a9-test.example.org' and window_start = w) <> 30 then
+    raise exception 'mcp events budget: counter must stop at the limit';
+  end if;
+  if not public.mcp_events_take_verification_budget('a9-other.example.org', w, 30) then raise exception 'mcp events budget: hosts must be independent'; end if;
+  if not public.mcp_events_take_verification_budget('a9-test.example.org', w + interval '1 minute', 30) then raise exception 'mcp events budget: windows must be independent'; end if;
+  if (select count(*) from public.mcp_event_verification_windows where host like 'a9-%') <> 3 then raise exception 'mcp events budget: one row per (host, window)'; end if;
+end $$;
+select security_test.mcpev_rejects($c$select public.mcp_events_take_verification_budget('a9-test.example.org', date_trunc('minute', now()) + interval '7 seconds', 30)$c$, 'mcp_events_bad_window');
+select security_test.mcpev_rejects($c$select public.mcp_events_take_verification_budget('', date_trunc('minute', now()), 30)$c$, 'mcp_events_bad_host');
+select security_test.mcpev_rejects($c$select public.mcp_events_take_verification_budget(repeat('a', 254), date_trunc('minute', now()), 30)$c$, 'mcp_events_bad_host');
+select security_test.mcpev_rejects($c$select public.mcp_events_take_verification_budget('A9-Upper.example.org', date_trunc('minute', now()), 30)$c$, 'mcp_events_bad_host');
+select security_test.mcpev_rejects($c$select public.mcp_events_take_verification_budget('a9-test.example.org', date_trunc('minute', now()), 0)$c$, 'mcp_events_bad_limit');
+select security_test.mcpev_rejects($c$select public.mcp_events_take_verification_budget('a9-test.example.org', null, 30)$c$, 'mcp_events_bad_window');
+select security_test.mcpev_rejects($c$insert into public.mcp_event_verification_windows (host, window_start, count) values ('a9-x.example.org', date_trunc('minute', now()), -1)$c$, 'check');
+reset role;
+set role anon;
+select security_test.mcpev_denied($c$select * from public.mcp_event_verification_windows$c$);
+select security_test.mcpev_denied($c$select public.mcp_events_take_verification_budget('a9-anon.example.org', date_trunc('minute', now()), 30)$c$);
+select security_test.mcpev_denied($c$delete from public.mcp_event_verification_windows$c$);
+reset role;
+set role authenticated;
+select security_test.mcpev_denied($c$select * from public.mcp_event_verification_windows$c$);
+select security_test.mcpev_denied($c$insert into public.mcp_event_verification_windows (host, window_start, count) values ('a9-auth.example.org', date_trunc('minute', now()), 0)$c$);
+select security_test.mcpev_denied($c$update public.mcp_event_verification_windows set count = 0$c$);
+select security_test.mcpev_denied($c$select public.mcp_events_take_verification_budget('a9-auth.example.org', date_trunc('minute', now()), 30)$c$);
+reset role;
+do $$ begin
+  if exists (select 1 from pg_policies where schemaname = 'public' and tablename = 'mcp_event_verification_windows') then
+    raise exception 'mcp events budget: table must have no policy';
+  end if;
+  if not (select relrowsecurity from pg_class where oid = 'public.mcp_event_verification_windows'::regclass) then
+    raise exception 'mcp events budget: RLS must be enabled';
+  end if;
+  if has_function_privilege('public', 'public.mcp_events_take_verification_budget(text, timestamptz, integer)', 'execute') then
+    raise exception 'mcp events budget: PUBLIC must not execute the function';
+  end if;
+  if not has_function_privilege('service_role', 'public.mcp_events_take_verification_budget(text, timestamptz, integer)', 'execute') then
+    raise exception 'mcp events budget: service_role must execute the function';
+  end if;
+  if (select prosecdef from pg_proc where oid = 'public.mcp_events_take_verification_budget(text, timestamptz, integer)'::regprocedure) then
+    raise exception 'mcp events budget: function must be security invoker';
+  end if;
+end $$;
+delete from public.mcp_event_verification_windows where host like 'a9-%';
 
 -- cleanup (cascade from orgs)
 delete from public.orgs where id::text like 'a9000000-%';

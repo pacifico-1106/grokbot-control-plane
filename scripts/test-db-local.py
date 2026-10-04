@@ -155,14 +155,24 @@ try:
     sql(mcp_events)
     sql(mcp_events)  # re-applicable
     sql(ROOT / "tests/security/db-mcp-events.sql")
+    # D11: 40 concurrent budget calls for one host in one window → exactly 30 accepted (atomic upsert, no read-then-write).
+    command = ("set role service_role; select public.mcp_events_take_verification_budget("
+               "'race.example.org', date_trunc('minute', now()) + interval '5 minutes', 30);")
+    with ThreadPoolExecutor(max_workers=40) as pool:
+        answers = list(pool.map(query, [command]*40))
+    assert answers.count("t") == 30 and answers.count("f") == 10, answers
+    assert query("select count from public.mcp_event_verification_windows where host='race.example.org';") == "30"
+    query("delete from public.mcp_event_verification_windows where host='race.example.org';")
     sql(ROOT / "supabase/verification/20261005000000_mcp_event_subscriptions_rollback.sql")
-    assert query("select to_regclass('public.mcp_event_subscriptions') is null and to_regclass('public.mcp_event_deliveries') is null;") == "t"
+    assert query("select to_regclass('public.mcp_event_subscriptions') is null and to_regclass('public.mcp_event_deliveries') is null"
+                 " and to_regclass('public.mcp_event_verification_windows') is null"
+                 " and to_regprocedure('public.mcp_events_take_verification_budget(text,timestamptz,integer)') is null;") == "t"
     sql(mcp_events)  # forward again after rollback
     sql(ROOT / "tests/security/db-mcp-events.sql")
     print("PASS: orgs / subscriptions / audit_events / approval_requests have no anon/authenticated write path (member/admin/owner JWT denied); service_role writes all four. Full-history check: scripts/test-db-all-migrations.py.")
     print("PASS: 14 tenant config / credential tables (credentials, employees, bindings, admin agents, directory, adapters, channels, projects, card setup/audit) + gateway_links, agentmail_inboxes, lp_handoffs, lp_wake_webhook_configs, lp_wake_webhook_events have no anon/authenticated write path; other reads unchanged; credentials (rows and secret_hash) unreadable from any session; service_role reads/writes all.")
     print("PASS: lp_inquiries / notification_outbox have no anon/authenticated write grant; lp_handoffs / lp_wake_* have no policy (RLS on) and no anon/authenticated SELECT; sessions read/write none of the 5 LP tables; service_role (BYPASSRLS) reads/writes all.")
-    print("PASS: mcp_event_subscriptions / mcp_event_deliveries: RLS on, no policy, anon/authenticated denied (rows and secret_ciphertext), service_role reads/writes; cross-org subscription / delivery rejected; one delivery per (subscription, event); 256 KiB body cap; id / event / status / https / ciphertext / lastError-category checks; org delete cascades; rollback + re-apply.")
+    print("PASS: mcp_event_subscriptions / mcp_event_deliveries: RLS on, no policy, anon/authenticated denied (rows and secret_ciphertext), service_role reads/writes; cross-org subscription / delivery rejected; one delivery per (subscription, event); 256 KiB body cap; id / event / status / https / ciphertext / lastError-category checks; org delete cascades; D11 verification budget: 30/host/minute window, hosts and windows independent, bad input rejected, anon/authenticated denied (table + function), 40 concurrent takes → exactly 30 accepted; rollback (3 tables + 2 functions) + re-apply.")
     print("PASS: org_members has no authenticated write path; last active owner cannot be demoted/disabled/deleted; org cascade still works.")
     print(f"PASS: F8 parent state={args.f8_parent_state}; 3 explicit UNIQUE constraints; existing constraint/index OIDs preserved across apply/reapply.")
     print("PASS: #80 ACL/authority/metadata regressions; 12 claims and 12 secret readers each have 1 winner. F8 W1, multi-stage/finalGo, rejection, current voter/binding, self-approval, same-org FKs, direct access denial, atomic rollback and recovery pass. 12 duplicate votes count once; 2 concurrent voters advance once. All migrations reapplied.")

@@ -179,6 +179,39 @@ describe("events/subscribe", () => {
     expect(posts).toHaveLength(30);
   });
 
+  test("D11 fail closed: shared budget unreachable → -32603 verification_rate_unavailable (retryable), no POST, nothing stored", async () => {
+    const cred = await credFor("emp_sales");
+    store.__setVerificationBudgetForTests(async () => "unavailable");
+    try {
+      const r = await sub(cred);
+      expect(r).toMatchObject({ ok: false, code: -32603, data: { reason: "verification_rate_unavailable", retryable: true } });
+      expect(JSON.stringify(r)).not.toMatch(/relation|does not exist|42P01/);
+      expect(posts).toHaveLength(0);
+      expect(await svc.listSubscriptionLedger(ORG)).toHaveLength(0);
+      store.__setVerificationBudgetForTests(async () => "limited");
+      expect(await sub(cred)).toMatchObject({ ok: false, code: -32013, data: { limit: "verification_rate" } });
+      expect(posts).toHaveLength(0);
+    } finally {
+      store.__setVerificationBudgetForTests(null);
+    }
+    expect((await sub(cred)).ok).toBe(true);
+  });
+
+  test("D11 budget is asked once per challenge with host + limit 30; a cached verification asks nothing", async () => {
+    const seen: Array<[string, number]> = [];
+    store.__setVerificationBudgetForTests(async (host, _now, limit) => { seen.push([host, limit]); return "ok"; });
+    try {
+      const cred = await credFor("emp_sales");
+      const secret = whsec();
+      expect((await sub(cred, {}, secret)).ok).toBe(true);
+      expect(seen).toEqual([["hooks.example.com", 30]]);
+      expect((await sub(cred, {}, secret)).ok).toBe(true); // refresh within the 24 h cache: no challenge
+      expect(seen).toHaveLength(1);
+    } finally {
+      store.__setVerificationBudgetForTests(null);
+    }
+  });
+
   test("per-employee subscription cap → -32013", async () => {
     const cred = await credFor("emp_sales");
     for (let i = 0; i < 20; i++) {

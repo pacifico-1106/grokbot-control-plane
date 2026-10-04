@@ -9,7 +9,8 @@
  * - Tenant isolation: a subscription is keyed by the badge principal and
  *   matched only by (org_id, employee_id, event); deliveries re-check both.
  * - Endpoint verification (signed challenge) before any delivery; cached per
- *   (principal, url) for 24 h; verification POSTs are rate-limited per host.
+ *   (principal, url) for 24 h; verification POSTs are rate-limited per host
+ *   (30 / fixed minute, shared across instances via the DB; fail closed).
  * - Deliveries: one event per request, ids + status only, Standard Webhooks
  *   signature with the receiver's secret (encrypted at rest), webhook-id =
  *   eventId (stable across retries), fresh timestamp/signature per attempt,
@@ -116,9 +117,10 @@ function parseKey(params: Record<string, unknown>, requireSecret: boolean):
 }
 
 async function verifyEndpoint(input: { url: string; host: string; key: Buffer; subscriptionId: string; now: number }): Promise<McpEventsRpcResult | null> {
-  if (!store.takeVerificationBudget(input.host, input.now, L.verificationsPerHostPerMinute)) {
-    return err(-32013, "Verification rate limit", { limit: "verification_rate" });
-  }
+  // D11: shared per-host budget (all instances). Unreachable counter → refuse (fail closed, retryable).
+  const budget = await store.takeVerificationBudget(input.host, input.now, L.verificationsPerHostPerMinute);
+  if (budget === "unavailable") return err(-32603, "Internal error", { reason: "verification_rate_unavailable", retryable: true });
+  if (budget === "limited") return err(-32013, "Verification rate limit", { limit: "verification_rate" });
   const challenge = randomBytes(24).toString("base64url");
   const body = JSON.stringify({ type: "verification", challenge });
   const msgId = `msg_verification_${randomBytes(16).toString("base64url")}`;
@@ -509,6 +511,13 @@ export async function pruneFinishedDeliveries(opts: { limit?: number } = {}): Pr
   if (!isMcpEventsEnabled()) return { deleted: 0 };
   const cutoff = iso(nowMs() - L.deliveryRetentionMs);
   const deleted = await store.deleteFinishedDeliveriesBefore(cutoff, Math.min(Math.max(opts.limit ?? 500, 1), 1000));
+  return { deleted };
+}
+
+/** D11: deletes per-host verification-budget windows older than verificationWindowRetentionMs (deliver cron). */
+export async function pruneVerificationWindows(): Promise<{ deleted: number }> {
+  if (!isMcpEventsEnabled()) return { deleted: 0 };
+  const deleted = await store.deleteVerificationWindowsBefore(iso(nowMs() - L.verificationWindowRetentionMs));
   return { deleted };
 }
 

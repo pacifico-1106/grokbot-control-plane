@@ -265,3 +265,21 @@ describe("3d. retention of finished delivery rows", () => {
     expect(left.map((r) => r.status)).toEqual(["pending"]);
   });
 });
+
+describe("3e. D11 verification-window cleanup", () => {
+  test("pruneVerificationWindows drops windows that started more than verificationWindowRetentionMs ago; the current window stays", async () => {
+    expect(MCP_EVENTS_LIMITS.verificationWindowRetentionMs).toBe(10 * 60_000);
+    const cred = await credFor("emp_sales");
+    await sub(cred, { ttlMs: 24 * 3_600_000 }); // one challenge → one window row for the host
+    expect((await svc.pruneVerificationWindows()).deleted).toBe(0);
+    clock += MCP_EVENTS_LIMITS.verificationWindowRetentionMs + 60_000;
+    await sub(cred, { delivery: { mode: "webhook", url: "https://other.example.net/mcp", secret: whsec() } }); // a fresh window
+    expect((await svc.pruneVerificationWindows()).deleted).toBe(1);
+    expect((await svc.pruneVerificationWindows()).deleted).toBe(0);
+  });
+  test("flag off → no-op", async () => {
+    const before = process.env.MCP_EVENTS_ENABLED;
+    process.env.MCP_EVENTS_ENABLED = "false";
+    try { expect(await svc.pruneVerificationWindows()).toEqual({ deleted: 0 }); } finally { process.env.MCP_EVENTS_ENABLED = before; }
+  });
+});
