@@ -169,6 +169,16 @@ try:
                  " and to_regprocedure('public.mcp_events_take_verification_budget(text,timestamptz,integer)') is null;") == "t"
     sql(mcp_events)  # forward again after rollback
     sql(ROOT / "tests/security/db-mcp-events.sql")
+    webhook_settings = ROOT / "supabase/migrations/20261005100000_employee_webhook_settings.sql"
+    sql(webhook_settings)
+    sql(webhook_settings)  # re-applicable
+    sql(ROOT / "tests/security/db-webhook-settings.sql")
+    sql(ROOT / "supabase/verification/20261005100000_employee_webhook_settings_rollback.sql")
+    assert query("select to_regclass('public.employee_webhook_settings') is null"
+                 " and to_regprocedure('public.employee_webhook_settings_same_org()') is null;") == "t"
+    sql(webhook_settings)  # forward again after rollback
+    sql(ROOT / "tests/security/db-webhook-settings.sql")
+    print("PASS: employee_webhook_settings (D9): RLS on, no policy, anon/authenticated denied, service_role reads/writes/upserts; cross-org row rejected; payload mode minimal|legacy_full (default minimal); ciphertext-only secret + fingerprint pair; employee delete cascades; rollback + re-apply.")
     print("PASS: orgs / subscriptions / audit_events / approval_requests have no anon/authenticated write path (member/admin/owner JWT denied); service_role writes all four. Full-history check: scripts/test-db-all-migrations.py.")
     print("PASS: 14 tenant config / credential tables (credentials, employees, bindings, admin agents, directory, adapters, channels, projects, card setup/audit) + gateway_links, agentmail_inboxes, lp_handoffs, lp_wake_webhook_configs, lp_wake_webhook_events have no anon/authenticated write path; other reads unchanged; credentials (rows and secret_hash) unreadable from any session; service_role reads/writes all.")
     print("PASS: lp_inquiries / notification_outbox have no anon/authenticated write grant; lp_handoffs / lp_wake_* have no policy (RLS on) and no anon/authenticated SELECT; sessions read/write none of the 5 LP tables; service_role (BYPASSRLS) reads/writes all.")

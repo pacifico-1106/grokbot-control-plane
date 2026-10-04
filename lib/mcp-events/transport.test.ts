@@ -198,3 +198,14 @@ describe("3a. overall timeout destroys the request and the socket", () => {
     expect(req!.destroyed).toBe(true);
   });
 });
+
+describe("D9: user-agent option (callback / wake keep their own UA)", () => {
+  const base = { address: "93.184.216.34", family: 4 as const, hostname: "hooks.example.com", path: "/x", body: Buffer.from("{}"), timeoutMs: 1000, maxResponseBytes: 10 };
+  test("default stays Staffpass-MCP-Events/1.0; userAgent overrides; caller headers cannot override UA or Host", async () => {
+    const { buildPinnedRequestOptions: build } = await import("@/lib/mcp-events/transport");
+    expect((build({ ...base, headers: {} }).headers as Record<string, string>)["user-agent"]).toBe("Staffpass-MCP-Events/1.0");
+    const o = build({ ...base, headers: { "user-agent": "evil", host: "internal" }, userAgent: "Staffpass-ApprovalHook/1.0" });
+    expect((o.headers as Record<string, string>)["user-agent"]).toBe("Staffpass-ApprovalHook/1.0");
+    expect((o.headers as Record<string, string>).host).toBe("hooks.example.com");
+  });
+});
