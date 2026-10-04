@@ -12,7 +12,7 @@ type State = "running" | "succeeded" | "failed" | "uncertain";
 const demoClaims = new Map<string, { state: State; result?: Result | null }>();
 // These failures are known to precede provider effects. Unknown outcomes are
 // never auto-retried: a timeout may have happened AFTER the provider accepted.
-const retryable = new Set(["slack_token_missing", "missing_scope", "not_in_channel", "channel_not_found",
+const retryable = new Set(["slack_token_missing", "slack_conversation_bot_token_missing", "missing_scope", "not_in_channel", "channel_not_found",
   "invalid_auth", "token_revoked", "account_inactive", "slack_identity_unbound", "slack_identity_not_linked", "posting_identity_unlinked",
   // Fulfill-time policy stops (lib/approvals/fulfill-policy-recheck.ts) happen before any provider call.
   "fulfill_blocked_tool_denied", "fulfill_blocked_mail_policy", "fulfill_blocked_employee_unavailable"]);

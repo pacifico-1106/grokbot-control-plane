@@ -20,6 +20,10 @@ import {
 import { getApprovalById, updateApprovalMetadata } from "@/lib/data/approvals";
 import { normalizePostingAs } from "@/lib/employees/posting-as";
 import {
+  buildSnapshotAttachment,
+  type SnapshotAttachment,
+} from "@/lib/approvals/snapshot-attachment";
+import {
   looksLikeSlackTs,
   postConversationMessage,
   validateSlackPostDestination,
@@ -121,6 +125,12 @@ export type InvokeSnapshot = {
   args: Record<string, unknown>;
   informationClass?: InformationClass;
   fidelity?: DisclosureFidelity;
+  /**
+   * Conversation tools only: the approved attachment (sealed reference +
+   * metadata), `null` = approved with no attachment, absent = legacy record.
+   * See lib/approvals/snapshot-attachment.ts.
+   */
+  fileAttachment?: SnapshotAttachment | null;
 };
 
 export type ApprovalFulfillment = {
@@ -249,6 +259,10 @@ export function buildInvokeSnapshot(input: {
   const fidelity = input.fidelity || input.body?.disclosure || undefined;
   if (informationClass) snapshot.informationClass = informationClass;
   if (fidelity) snapshot.fidelity = fidelity;
+  // Always recorded for conversation tools so "no attachment" is explicit (null).
+  if (isAudienceGatedTool(input.tool)) {
+    snapshot.fileAttachment = buildSnapshotAttachment(input.body?.fileAttachment);
+  }
   return jsonClone(snapshot) ?? snapshot;
 }
 

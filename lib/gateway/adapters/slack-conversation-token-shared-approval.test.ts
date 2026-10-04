@@ -179,7 +179,8 @@ describe("conversation bot token never falls back to the shared approval app", (
       timestamp: "1503435956.000247",
       reaction: "completed",
     });
-    expect(result.ok).toBe(true);
+    // #252: no org-own token is reported explicitly (fire-and-forget callers).
+    expect(result).toEqual({ ok: false, error: "conversation_bot_token_not_registered", degraded: true });
     expect(sharedTokenUsed()).toBe(false);
   });
 
@@ -249,12 +250,15 @@ describe("ordinary conversation bots keep working", () => {
     expect(calls.map((call) => call.auth)).toEqual(["Bearer xoxb-tenant-notify"]);
   });
 
-  test("env SLACK_BOT_TOKEN fallback is unchanged for a shared-only org", async () => {
+  test("env SLACK_BOT_TOKEN is never a fallback, even for a shared-only org (2026-10-04)", async () => {
     process.env.SLACK_BOT_TOKEN = "xoxb-env-conversation";
-    expect(await resolveOrgSlackBotToken("org_shared_only")).toBe("xoxb-env-conversation");
+    process.env.SLACK_CONVERSATION_BOT_TOKEN = "xoxb-env-conversation-2";
+    expect(await resolveOrgSlackBotToken("org_shared_only")).toBe("");
+    const resolved = await resolveConversationToken({ orgId: "org_shared_only", postingAs: "bot" });
+    expect(resolved).toEqual({ error: "slack_conversation_bot_token_missing" });
   });
 
-  test("org with no Slack token at all keeps the existing stub behavior", async () => {
+  test("org with no Slack token at all keeps the stub in demo mode only (production: slack_token_missing)", async () => {
     recordFetch(() => Response.json({ ok: true }));
     const result = await postConversationMessage({
       orgId: "org_no_slack_at_all",

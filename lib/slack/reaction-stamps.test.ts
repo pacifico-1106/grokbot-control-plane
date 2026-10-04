@@ -15,6 +15,16 @@ import {
   REACTION_EMOJI,
   resetScopeMissingLog,
 } from "./reaction-stamps";
+import { upsertConversationAdapter } from "@/lib/data/conversation-adapters";
+
+// The org's own conversation adapter supplies the bot token. The env
+// SLACK_BOT_TOKEN fallback was removed on 2026-10-04 (another workspace's bot).
+async function useOrgBotToken(botToken: string) {
+  await upsertConversationAdapter({ orgId: "org_123", surface: "slack", enabled: true, secrets: { botToken } });
+}
+async function clearOrgBotToken() {
+  await upsertConversationAdapter({ orgId: "org_123", surface: "slack", enabled: false, secrets: {} });
+}
 
 const makeMockFetch = (body: unknown, status = 200) =>
   (() =>
@@ -78,7 +88,9 @@ describe("addReaction", () => {
     }
   });
 
-  test("returns added=false when no token available", async () => {
+  test("no org-own token → explicit not-registered (never a quiet ok)", async () => {
+    // 2026-10-04 (#252): with the env fallback gone, "no token" is reported
+    // explicitly; callers are fire-and-forget so the flow is unaffected.
     process.env.SLACK_REACTION_STAMPS = "true";
     const result = await addReaction({
       orgId: "org_nonexistent",
@@ -86,15 +98,12 @@ describe("addReaction", () => {
       timestamp: "1234567890.123456",
       reaction: "looking",
     });
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.added).toBe(false);
-    }
+    expect(result).toEqual({ ok: false, error: "conversation_bot_token_not_registered", degraded: true });
   });
 
   test("handles already_reacted response gracefully", async () => {
     process.env.SLACK_REACTION_STAMPS = "true";
-    process.env.SLACK_BOT_TOKEN = "xoxb-test-token";
+    await useOrgBotToken("xoxb-test-token");
     globalThis.fetch = makeMockFetch({ ok: false, error: "already_reacted" }) as typeof fetch;
 
     const result = await addReaction({
@@ -110,12 +119,12 @@ describe("addReaction", () => {
       expect(result.alreadyReacted).toBe(true);
     }
 
-    delete process.env.SLACK_BOT_TOKEN;
+    await clearOrgBotToken();
   });
 
   test("degrades silently when missing_scope", async () => {
     process.env.SLACK_REACTION_STAMPS = "true";
-    process.env.SLACK_BOT_TOKEN = "xoxb-test-token";
+    await useOrgBotToken("xoxb-test-token");
     globalThis.fetch = makeMockFetch({ ok: false, error: "missing_scope" }) as typeof fetch;
 
     const result = await addReaction({
@@ -131,12 +140,12 @@ describe("addReaction", () => {
       expect(result.degraded).toBe(true);
     }
 
-    delete process.env.SLACK_BOT_TOKEN;
+    await clearOrgBotToken();
   });
 
   test("handles channel_not_found gracefully", async () => {
     process.env.SLACK_REACTION_STAMPS = "true";
-    process.env.SLACK_BOT_TOKEN = "xoxb-test-token";
+    await useOrgBotToken("xoxb-test-token");
     globalThis.fetch = makeMockFetch({ ok: false, error: "channel_not_found" }) as typeof fetch;
 
     const result = await addReaction({
@@ -151,12 +160,12 @@ describe("addReaction", () => {
       expect(result.added).toBe(false);
     }
 
-    delete process.env.SLACK_BOT_TOKEN;
+    await clearOrgBotToken();
   });
 
   test("handles not_in_channel gracefully", async () => {
     process.env.SLACK_REACTION_STAMPS = "true";
-    process.env.SLACK_BOT_TOKEN = "xoxb-test-token";
+    await useOrgBotToken("xoxb-test-token");
     globalThis.fetch = makeMockFetch({ ok: false, error: "not_in_channel" }) as typeof fetch;
 
     const result = await addReaction({
@@ -171,12 +180,12 @@ describe("addReaction", () => {
       expect(result.added).toBe(false);
     }
 
-    delete process.env.SLACK_BOT_TOKEN;
+    await clearOrgBotToken();
   });
 
   test("handles restricted_action gracefully (Slack Connect)", async () => {
     process.env.SLACK_REACTION_STAMPS = "true";
-    process.env.SLACK_BOT_TOKEN = "xoxb-test-token";
+    await useOrgBotToken("xoxb-test-token");
     globalThis.fetch = makeMockFetch({ ok: false, error: "restricted_action" }) as typeof fetch;
 
     const result = await addReaction({
@@ -191,12 +200,12 @@ describe("addReaction", () => {
       expect(result.added).toBe(false);
     }
 
-    delete process.env.SLACK_BOT_TOKEN;
+    await clearOrgBotToken();
   });
 
   test("successfully adds reaction", async () => {
     process.env.SLACK_REACTION_STAMPS = "true";
-    process.env.SLACK_BOT_TOKEN = "xoxb-test-token";
+    await useOrgBotToken("xoxb-test-token");
     globalThis.fetch = makeMockFetch({ ok: true }) as typeof fetch;
 
     const result = await addReaction({
@@ -211,7 +220,7 @@ describe("addReaction", () => {
       expect(result.added).toBe(true);
     }
 
-    delete process.env.SLACK_BOT_TOKEN;
+    await clearOrgBotToken();
   });
 });
 
@@ -244,7 +253,7 @@ describe("removeReaction", () => {
 
   test("handles no_reaction response gracefully", async () => {
     process.env.SLACK_REACTION_STAMPS = "true";
-    process.env.SLACK_BOT_TOKEN = "xoxb-test-token";
+    await useOrgBotToken("xoxb-test-token");
     globalThis.fetch = makeMockFetch({ ok: false, error: "no_reaction" }) as typeof fetch;
 
     const result = await removeReaction({
@@ -260,12 +269,12 @@ describe("removeReaction", () => {
       expect(result.notReacted).toBe(true);
     }
 
-    delete process.env.SLACK_BOT_TOKEN;
+    await clearOrgBotToken();
   });
 
   test("successfully removes reaction", async () => {
     process.env.SLACK_REACTION_STAMPS = "true";
-    process.env.SLACK_BOT_TOKEN = "xoxb-test-token";
+    await useOrgBotToken("xoxb-test-token");
     globalThis.fetch = makeMockFetch({ ok: true }) as typeof fetch;
 
     const result = await removeReaction({
@@ -280,7 +289,7 @@ describe("removeReaction", () => {
       expect(result.removed).toBe(true);
     }
 
-    delete process.env.SLACK_BOT_TOKEN;
+    await clearOrgBotToken();
   });
 });
 
@@ -295,7 +304,7 @@ describe("transitionReaction", () => {
 
   test("removes old reaction and adds new one", async () => {
     process.env.SLACK_REACTION_STAMPS = "true";
-    process.env.SLACK_BOT_TOKEN = "xoxb-test-token";
+    await useOrgBotToken("xoxb-test-token");
     globalThis.fetch = makeMockFetch({ ok: true }) as typeof fetch;
 
     const result = await transitionReaction({
@@ -313,7 +322,7 @@ describe("transitionReaction", () => {
       expect(result.addResult.added).toBe(true);
     }
 
-    delete process.env.SLACK_BOT_TOKEN;
+    await clearOrgBotToken();
   });
 });
 
@@ -328,7 +337,7 @@ describe("helper functions", () => {
 
   test("addLookingReaction adds eyes emoji", async () => {
     process.env.SLACK_REACTION_STAMPS = "true";
-    process.env.SLACK_BOT_TOKEN = "xoxb-test-token";
+    await useOrgBotToken("xoxb-test-token");
 
     let calledEmoji = "";
     globalThis.fetch = ((url: string, init: RequestInit) => {
@@ -348,12 +357,12 @@ describe("helper functions", () => {
 
     expect(calledEmoji).toBe(REACTION_EMOJI.looking);
 
-    delete process.env.SLACK_BOT_TOKEN;
+    await clearOrgBotToken();
   });
 
   test("addCompletedReaction transitions from looking to check mark", async () => {
     process.env.SLACK_REACTION_STAMPS = "true";
-    process.env.SLACK_BOT_TOKEN = "xoxb-test-token";
+    await useOrgBotToken("xoxb-test-token");
 
     const calledEmojis: string[] = [];
     globalThis.fetch = ((url: string, init: RequestInit) => {
@@ -374,12 +383,12 @@ describe("helper functions", () => {
     expect(calledEmojis).toContain(REACTION_EMOJI.looking);
     expect(calledEmojis).toContain(REACTION_EMOJI.completed);
 
-    delete process.env.SLACK_BOT_TOKEN;
+    await clearOrgBotToken();
   });
 
   test("addWaitingApprovalReaction transitions from looking to hourglass", async () => {
     process.env.SLACK_REACTION_STAMPS = "true";
-    process.env.SLACK_BOT_TOKEN = "xoxb-test-token";
+    await useOrgBotToken("xoxb-test-token");
 
     const calledEmojis: string[] = [];
     globalThis.fetch = ((url: string, init: RequestInit) => {
@@ -400,7 +409,7 @@ describe("helper functions", () => {
     expect(calledEmojis).toContain(REACTION_EMOJI.looking);
     expect(calledEmojis).toContain(REACTION_EMOJI.waiting_approval);
 
-    delete process.env.SLACK_BOT_TOKEN;
+    await clearOrgBotToken();
   });
 });
 
@@ -469,7 +478,7 @@ describe("INVARIANT: Silent degradation on scope errors", () => {
 
   test("INVARIANT: missing_scope error degrades silently (no throw)", async () => {
     process.env.SLACK_REACTION_STAMPS = "true";
-    process.env.SLACK_BOT_TOKEN = "xoxb-test-token";
+    await useOrgBotToken("xoxb-test-token");
     globalThis.fetch = makeMockFetch({ ok: false, error: "missing_scope" }) as typeof fetch;
 
     const result = await addReaction({
@@ -484,12 +493,12 @@ describe("INVARIANT: Silent degradation on scope errors", () => {
       expect(result.degraded).toBe(true);
     }
 
-    delete process.env.SLACK_BOT_TOKEN;
+    await clearOrgBotToken();
   });
 
   test("INVARIANT: not_allowed_token_type error degrades silently", async () => {
     process.env.SLACK_REACTION_STAMPS = "true";
-    process.env.SLACK_BOT_TOKEN = "xoxb-test-token";
+    await useOrgBotToken("xoxb-test-token");
     globalThis.fetch = makeMockFetch({ ok: false, error: "not_allowed_token_type" }) as typeof fetch;
 
     const result = await addReaction({
@@ -504,7 +513,7 @@ describe("INVARIANT: Silent degradation on scope errors", () => {
       expect(result.degraded).toBe(true);
     }
 
-    delete process.env.SLACK_BOT_TOKEN;
+    await clearOrgBotToken();
   });
 });
 
@@ -519,7 +528,7 @@ describe("INVARIANT: No reactions on inaccessible channels", () => {
 
   test("INVARIANT: channel_not_found returns ok without adding", async () => {
     process.env.SLACK_REACTION_STAMPS = "true";
-    process.env.SLACK_BOT_TOKEN = "xoxb-test-token";
+    await useOrgBotToken("xoxb-test-token");
     globalThis.fetch = makeMockFetch({ ok: false, error: "channel_not_found" }) as typeof fetch;
 
     const result = await addReaction({
@@ -534,12 +543,12 @@ describe("INVARIANT: No reactions on inaccessible channels", () => {
       expect(result.added).toBe(false);
     }
 
-    delete process.env.SLACK_BOT_TOKEN;
+    await clearOrgBotToken();
   });
 
   test("INVARIANT: not_in_channel returns ok without adding", async () => {
     process.env.SLACK_REACTION_STAMPS = "true";
-    process.env.SLACK_BOT_TOKEN = "xoxb-test-token";
+    await useOrgBotToken("xoxb-test-token");
     globalThis.fetch = makeMockFetch({ ok: false, error: "not_in_channel" }) as typeof fetch;
 
     const result = await addReaction({
@@ -554,12 +563,12 @@ describe("INVARIANT: No reactions on inaccessible channels", () => {
       expect(result.added).toBe(false);
     }
 
-    delete process.env.SLACK_BOT_TOKEN;
+    await clearOrgBotToken();
   });
 
   test("INVARIANT: message_not_found returns ok without adding", async () => {
     process.env.SLACK_REACTION_STAMPS = "true";
-    process.env.SLACK_BOT_TOKEN = "xoxb-test-token";
+    await useOrgBotToken("xoxb-test-token");
     globalThis.fetch = makeMockFetch({ ok: false, error: "message_not_found" }) as typeof fetch;
 
     const result = await addReaction({
@@ -574,12 +583,12 @@ describe("INVARIANT: No reactions on inaccessible channels", () => {
       expect(result.added).toBe(false);
     }
 
-    delete process.env.SLACK_BOT_TOKEN;
+    await clearOrgBotToken();
   });
 
   test("INVARIANT: restricted_action (Slack Connect) returns ok without adding", async () => {
     process.env.SLACK_REACTION_STAMPS = "true";
-    process.env.SLACK_BOT_TOKEN = "xoxb-test-token";
+    await useOrgBotToken("xoxb-test-token");
     globalThis.fetch = makeMockFetch({ ok: false, error: "restricted_action" }) as typeof fetch;
 
     const result = await addReaction({
@@ -594,7 +603,7 @@ describe("INVARIANT: No reactions on inaccessible channels", () => {
       expect(result.added).toBe(false);
     }
 
-    delete process.env.SLACK_BOT_TOKEN;
+    await clearOrgBotToken();
   });
 });
 

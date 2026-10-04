@@ -3,6 +3,7 @@ const sensitiveKeys = new Set([
   "secrethash", "credentialfingerprint", "onetimesecret", "password",
   "bottoken", "webhooksecret", "channelaccesstoken", "channelsecret",
   "credentialsciphertext", "bottokenciphertext", "secretsciphertext",
+  "filerefciphertext",
 ]);
 export function redactMetadata(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(redactMetadata);
