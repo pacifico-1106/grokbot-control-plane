@@ -264,7 +264,7 @@ describe("every detector path", () => {
   }
 
   test("a secret placed in jobId is not echoed back in the response or the audit row", async () => {
-    const jobId = `job-AWS-secret-${FAKE_SECRET}`;
+    const jobId = `job aws_secret_access_key=${FAKE_SECRET}`;
     const r = await runGatewayInvoke({
       employeeId: EMP,
       credentialId: null,
