@@ -24,6 +24,7 @@ import { mcpHandoffWakeAuditMeta, withMcpHandoff, type McpHandoff } from "@/lib/
 import { appendAuditEvent } from "@/lib/data/audit";
 import { getEffectiveIngressHandoffPolicy } from "@/lib/data/ingress-handoff";
 import { getOrgChannel } from "@/lib/data/directory";
+import { isChannelClassifyProposalsEnabled } from "@/lib/channel-classify/flags";
 import { storeWakeParent } from "@/lib/data/wake-parent-stash";
 import { resolveIngressHandoffSync } from "@/lib/ingress-handoff/resolve";
 import { applyBodyMode } from "@/lib/ingress-handoff/apply";
@@ -66,7 +67,6 @@ import { verifySlackSignature } from "@/lib/notify/slack";
 import { createSupabaseAdminClient } from "@/lib/supabase";
 import { addLookingReaction } from "@/lib/slack/reaction-stamps";
 import { isSlackImNoRouteAuditEnabled, isWebhookHardeningEnabled } from "@/lib/feature-flags";
-import { isChannelClassifyProposalsEnabled } from "@/lib/channel-classify/flags";
 import { recordImNoRouteAudit } from "@/lib/slack/im-no-route-audit";
 
 const WAKE_TIMEOUT_MS = 10_000;
