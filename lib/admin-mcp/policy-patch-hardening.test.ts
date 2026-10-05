@@ -218,7 +218,7 @@ describe("5. SoD acknowledgement = the human approval of the card (agent flag ig
     const e = await hire();
     const id = await legacyTicket({
       employeeId: e.id, scopes: SOD_SCOPES, approvalPolicy: "risk_based",
-      policyPatchCard: { version: 1, sodLevel: "ok", sodDomains: [], sodNeedsAck: false },
+      policyPatchCard: { version: 2, sodLevel: "ok", sodDomains: [], sodNeedsAck: false, fitsAllSurfaces: true, summaryChars: 11 },
     });
     const f = await approveAndFulfil(id);
     expect(f).toMatchObject({ ok: false, error: "sod_changed_since_card" });
@@ -258,5 +258,220 @@ describe("6. org from the credential; the admin cannot grant its own badge (regr
     expect(d.code).toBe("employee_not_found");
     expect(newTickets).toBe(0);
     expect((await getEmployee(other.id, OTHER_ORG))?.approvalPolicy).toBe("risk_based");
+  });
+});
+
+/* ------------------------------------------------------------------------ *
+ * 木村 review 2026-10-05 10:39 (#275 follow-up): B1 card truncation, B2
+ * wording, partial update, self-grant by actorId, allowedPurposes limits,
+ * BOLA / self-approval.
+ * ------------------------------------------------------------------------ */
+const SLACK_SUMMARY_CUT = 400;
+const LINE_SUMMARY_CUT = 500;
+const chars = (s: string) => Array.from(s).length;
+const ticketSummary = async (id: string) => String((await getApprovalById(id, ORG))?.summary);
+/** 9+ scopes changed: remove 3 base scopes, add 9 others (comm_external + money + commit → SoD warn). */
+const NINE_ADDED: EmployeeScope[] = [
+  "mail:draft", "mail:send", "calendar:propose", "calendar:confirm", "files:read", "files:write",
+  "commerce:quote", "commerce:order", "knowledge:search",
+];
+
+describe("7. B1: SoD verdict + approval policy right after the heading; nothing can be cut on any surface", () => {
+  test("9+ scopes changed: the card fits Slack (400) / LINE (500), SoD + policy lines come straight after the heading", async () => {
+    const e = await hire();
+    const { d, newTickets } = await call({ employeeId: e.id, scopes: NINE_ADDED, approvalPolicy: "risk_based" });
+    expect(d.code).toBe("needs_approval");
+    expect(newTickets).toBe(1);
+    const summary = await ticketSummary(String(d.approvalId));
+    expect(chars(summary)).toBeLessThanOrEqual(SLACK_SUMMARY_CUT);
+    expect(chars(summary)).toBeLessThanOrEqual(LINE_SUMMARY_CUT);
+    const lines = summary.split("\n");
+    expect(lines[0]).toContain("権限の変更依頼");
+    expect(lines[1]).toContain("職務分離(SoD): 警告");
+    expect(lines[2]).toContain("承認すると、この職務分離の警告を確認したものとして扱います");
+    expect(lines[3]).toContain("承認方針:");
+    // every changed scope is still listed (ids at least), nothing silently dropped
+    for (const s of [...NINE_ADDED, "tools:read", "approvals:request", "audit:append"]) expect(summary).toContain(s);
+    const card = ((await getApprovalById(String(d.approvalId), ORG))?.metadata?.adminMutation as Record<string, unknown>).policyPatchCard;
+    expect(card).toMatchObject({ version: 2, sodLevel: "warn", sodNeedsAck: true, fitsAllSurfaces: true, summaryChars: chars(summary) });
+  });
+  test("a card that cannot fit without being cut → refused before any ticket (code, nextStepJa, retryable)", async () => {
+    const e = await hire();
+    const purposes = Array.from({ length: 12 }, (_, i) => `purpose.very_long_purpose_key_number_${String(i).padStart(2, "0")}`);
+    const { r, d, newTickets } = await call({ employeeId: e.id, scopes: NINE_ADDED, approvalPolicy: "risk_based", allowedPurposes: purposes });
+    expect(r.isError).toBe(true);
+    expect(d).toMatchObject({ ok: false, code: "policy_patch_card_too_long", retryable: true, maxChars: SLACK_SUMMARY_CUT });
+    expect(Number(d.cardChars)).toBeGreaterThan(SLACK_SUMMARY_CUT);
+    expect(String(d.nextStepJa)).toContain("分けて");
+    expect(newTickets).toBe(0);
+  });
+  test("fulfil: a stored card whose summary would be cut (> 400 chars) is refused — SoD never counts as shown", async () => {
+    const e = await hire();
+    const longSummary = `管理エージェントから権限の変更依頼\n${"・できること: 追加: mail:send\n".repeat(30)}・職務分離(SoD): 警告`;
+    const created = await createApproval({
+      orgId: ORG, employeeId: "", credentialId: "", title: "権限の更新", purpose: "admin.policy", summary: longSummary,
+      risk: "high", tool: "policy.patch", jobId: `job_pph_long_${++seq}`,
+      metadata: {
+        auditClass: ADMIN_AUDIT_CLASS, approvalClass: ADMIN_AUDIT_CLASS, auditAction: "admin.policy", always_human: true,
+        adminTool: "policy.patch", isAdminMcpTool: true,
+        adminMutation: {
+          employeeId: e.id, scopes: SOD_SCOPES, approvalPolicy: "risk_based",
+          policyPatchCard: { version: 2, sodLevel: "warn", sodDomains: ["comm_external", "commit"], sodNeedsAck: true, fitsAllSurfaces: true, summaryChars: 120 },
+        },
+        adminRequester: { kind: "admin_agent", grokBotAgentId: "grok_admin_policy_patch", actorId: "adm_pph" },
+      },
+    });
+    const f = await approveAndFulfil(created.approval.id);
+    expect(f).toMatchObject({ ok: false, error: "card_truncated" });
+    expect(String((f as Record<string, unknown>).nextStepJa)).toContain("変更は行われていません");
+    expect([...((await getEmployee(e.id, ORG))?.scopes ?? [])].sort()).toEqual([...BASE_SCOPES].sort());
+  });
+  test("fulfil: a card snapshot marked as not fully shown (or an older v1 snapshot) is refused, even when no SoD ack is needed", async () => {
+    for (const snapshot of [
+      { version: 2, sodLevel: "ok", sodDomains: [], sodNeedsAck: false, fitsAllSurfaces: false, summaryChars: 900 },
+      { version: 1, sodLevel: "ok", sodDomains: [], sodNeedsAck: false },
+    ]) {
+      const e = await hire();
+      const id = await legacyTicket({ employeeId: e.id, scopes: BASE_SCOPES, approvalPolicy: "always_human", policyPatchCard: snapshot });
+      const f = await approveAndFulfil(id);
+      expect([snapshot.version, f?.ok, (f as Record<string, unknown>)?.error]).toEqual([snapshot.version, false, "card_truncated"]);
+      expect((await getEmployee(e.id, ORG))?.approvalPolicy).toBe("risk_based");
+    }
+  });
+});
+
+describe("8. B2: the no-ack wording follows the requested approvalPolicy", () => {
+  test("always_human → 'always_human なので確認不要'", async () => {
+    const e = await hire();
+    const { d } = await call({ employeeId: e.id, scopes: SOD_SCOPES, approvalPolicy: "always_human" });
+    const summary = await ticketSummary(String(d.approvalId));
+    expect(summary).toContain("承認方針が always_human");
+  });
+  test("risk_based → auto with a single-domain warning: never claims always_human", async () => {
+    const e = await hire();
+    // browser:use alone → warn (browser session), no operator ack needed
+    const { d } = await call({ employeeId: e.id, scopes: [...BASE_SCOPES, "browser:use"], approvalPolicy: "auto" });
+    expect(d.code).toBe("needs_approval");
+    const summary = await ticketSummary(String(d.approvalId));
+    expect(summary).toContain("職務分離(SoD): ");
+    expect(summary).toContain("承認方針: risk_based → auto");
+    expect(summary).not.toContain("always_human");
+    expect(summary).not.toContain("確認したものとして扱います");
+    expect(summary).toContain("組み合わせではない");
+  });
+});
+
+describe("9. partial update: omitted allowedPurposes / actionLimits keep the current value", () => {
+  const LIMITS = { "mail.send": { perDay: 5 } };
+  async function hireWithLimits() {
+    const e = await hire();
+    getRuntimeEmployees().find((x) => x.id === e.id)!.actionLimits = structuredClone(LIMITS);
+    return e;
+  }
+  test("omitted → card says unchanged, fulfil keeps ['ops.admin'] and the limits", async () => {
+    const e = await hireWithLimits();
+    const { d } = await call({ employeeId: e.id, scopes: [...BASE_SCOPES, "files:read"], approvalPolicy: "risk_based" });
+    expect(d.code).toBe("needs_approval");
+    const summary = await ticketSummary(String(d.approvalId));
+    expect(summary).toContain("・用途: 変更なし");
+    expect(summary).toContain("・実行上限: 変更なし");
+    expect(summary).not.toContain("⚠");
+    const mutation = (await getApprovalById(String(d.approvalId), ORG))?.metadata?.adminMutation as Record<string, unknown>;
+    expect("allowedPurposes" in mutation).toBe(false);
+    expect("actionLimits" in mutation).toBe(false);
+    expect((await approveAndFulfil(String(d.approvalId)))?.ok).toBe(true);
+    const after = await getEmployee(e.id, ORG);
+    expect(after?.scopes).toContain("files:read");
+    expect(after?.allowedPurposes).toEqual(["ops.admin"]);
+    expect(after?.actionLimits).toEqual(LIMITS);
+  });
+  test("legacy ticket without the two fields keeps them too", async () => {
+    const e = await hireWithLimits();
+    const id = await legacyTicket({ employeeId: e.id, scopes: BASE_SCOPES, approvalPolicy: "always_human" });
+    expect((await approveAndFulfil(id))?.ok).toBe(true);
+    const after = await getEmployee(e.id, ORG);
+    expect(after?.allowedPurposes).toEqual(["ops.admin"]);
+    expect(after?.actionLimits).toEqual(LIMITS);
+  });
+  test("explicit [] / {} clears them, and the card warns before approval", async () => {
+    const e = await hireWithLimits();
+    const { d } = await call({ employeeId: e.id, scopes: BASE_SCOPES, approvalPolicy: "risk_based", allowedPurposes: [], actionLimits: {} });
+    const summary = await ticketSummary(String(d.approvalId));
+    const lines = summary.split("\n");
+    const warnAt = lines.findIndex((l) => l.startsWith("⚠"));
+    expect(warnAt).toBeGreaterThan(0);
+    expect(warnAt).toBeLessThan(lines.findIndex((l) => l.startsWith("・できること")));
+    expect(summary).toContain("用途の制限をすべて外します");
+    expect(summary).toContain("実行上限をすべて外します");
+    expect((await approveAndFulfil(String(d.approvalId)))?.ok).toBe(true);
+    const after = await getEmployee(e.id, ORG);
+    expect(after?.allowedPurposes).toEqual([]);
+    expect(after?.actionLimits).toEqual({});
+  });
+});
+
+describe("10. allowedPurposes: strings only, purpose-key format, bounded count / length", () => {
+  test("non-string, bad format, over-long item, too many items → invalid_allowed_purposes (no ticket)", async () => {
+    const e = await hire();
+    const cases: unknown[] = [
+      ["ops.admin", 3],
+      "ops.admin",
+      ["mail:send"],
+      ["has space"],
+      [`p${"x".repeat(60)}`],
+      Array.from({ length: 21 }, (_, i) => `p.item${i}`),
+    ];
+    for (const allowedPurposes of cases) {
+      const { d, newTickets } = await call({ employeeId: e.id, scopes: BASE_SCOPES, approvalPolicy: "risk_based", allowedPurposes });
+      expect([JSON.stringify(allowedPurposes).slice(0, 40), d.code, newTickets]).toEqual([JSON.stringify(allowedPurposes).slice(0, 40), "invalid_allowed_purposes", 0]);
+    }
+  });
+  test("valid keys (trimmed, deduped) are queued", async () => {
+    const e = await hire();
+    const { d } = await call({ employeeId: e.id, scopes: BASE_SCOPES, approvalPolicy: "risk_based", allowedPurposes: [" ops.admin ", "sales.followup", "sales.followup"] });
+    expect(d.code).toBe("needs_approval");
+    const mutation = (await getApprovalById(String(d.approvalId), ORG))?.metadata?.adminMutation as Record<string, unknown>;
+    expect(mutation.allowedPurposes).toEqual(["ops.admin", "sales.followup"]);
+  });
+});
+
+describe("11. self-grant (grokBotAgentId AND actorId), BOLA, self-approval", () => {
+  test("badge bound under the admin's actorId → refused at intake and at fulfil", async () => {
+    const cred = demoCred();
+    const e = await hire();
+    await linkAgent(e.id, { orgId: ORG, grokBotAgentId: cred.actorId });
+    const r = await callAdminMcpTool("policy.patch", { employeeId: e.id, scopes: SOD_SCOPES, approvalPolicy: "auto" }, cred);
+    expect(data(r).code).toBe("cannot_grant_self_scopes");
+    const e2 = await hire();
+    const { d } = await call({ employeeId: e2.id, scopes: SOD_SCOPES, approvalPolicy: "always_human" });
+    expect(d.code).toBe("needs_approval");
+    await linkAgent(e2.id, { orgId: ORG, grokBotAgentId: demoCred().actorId });
+    const f = await approveAndFulfil(String(d.approvalId));
+    expect(f).toMatchObject({ ok: false, error: "cannot_grant_self_scopes" });
+    expect((await getEmployee(e2.id, ORG))?.approvalPolicy).toBe("risk_based");
+  });
+  test("BOLA: a ticket of this org naming another org's employee writes nothing to that employee", async () => {
+    const other = await hire();
+    getRuntimeEmployees().find((x) => x.id === other.id)!.orgId = OTHER_ORG;
+    const id = await legacyTicket({ employeeId: other.id, scopes: SOD_SCOPES, approvalPolicy: "always_human" });
+    const f = await approveAndFulfil(id).catch((error: unknown) => ({ ok: false, error: String((error as Error).message) }));
+    expect(f?.ok).toBe(false);
+    const after = await getEmployee(other.id, OTHER_ORG);
+    expect(after?.approvalPolicy).toBe("risk_based");
+    expect([...(after?.scopes ?? [])].sort()).toEqual([...BASE_SCOPES].sort());
+  });
+  test("self-approval: the requesting admin agent cannot approve its own policy.patch card", async () => {
+    const cred = demoCred();
+    const e = await hire();
+    const { d } = await call({ employeeId: e.id, scopes: SOD_SCOPES, approvalPolicy: "risk_based" });
+    let thrown: unknown = null;
+    try {
+      await resolveApproval(String(d.approvalId), "approved", "agent", ORG, { actorId: cred.actorId, grokBotAgentId: cred.grokBotAgentId });
+    } catch (error) {
+      thrown = error;
+    }
+    expect((thrown as { code?: string } | null)?.code).toBe("self_approval_denied");
+    expect((await getApprovalById(String(d.approvalId), ORG))?.status).toBe("pending");
+    expect([...((await getEmployee(e.id, ORG))?.scopes ?? [])].sort()).toEqual([...BASE_SCOPES].sort());
   });
 });
