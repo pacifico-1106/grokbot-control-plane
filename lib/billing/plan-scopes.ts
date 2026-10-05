@@ -198,6 +198,8 @@ export const PLAN_ADMIN_SCOPES: Record<PlanKey, readonly AdminMcpToolName[]> = {
     "orgs.patch",
     "orgs.issueAdminCredential",
     "approvals.proxyResolve",
+    // Directory ledger removal (same plans as channels.classify; always_human)
+    "channels.remove",
   ],
   proper: [
     // All intern scopes
@@ -253,6 +255,9 @@ export const PLAN_ADMIN_SCOPES: Record<PlanKey, readonly AdminMcpToolName[]> = {
     "mailPolicy.patch",
     "internalAudienceRule.patch",
     "approvalRoutes.patch",
+    "channels.remove",
+    // Same plans as parties.upsert (always_human)
+    "parties.remove",
   ],
   executive: [
     // All proper scopes
@@ -315,6 +320,8 @@ export const PLAN_ADMIN_SCOPES: Record<PlanKey, readonly AdminMcpToolName[]> = {
     "stuckWatch.classify",
     "employeeIdentity.upsert",
     "employeeIdentity.bindMailbox",
+    "channels.remove",
+    "parties.remove",
   ],
 };
 

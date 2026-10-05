@@ -58,6 +58,12 @@ import { auditActionForAdminTool } from "@/lib/admin-mcp/audit-class";
 import { buildPollUrl } from "@/lib/approvals/tokens";
 import { handleAllowedAccountsTool, isAllowedAccountsTool } from "@/lib/admin-mcp/allowed-accounts-tools";
 import { POSTING_IDENTITY_SET_TOOL, handlePostingIdentityTool } from "@/lib/admin-mcp/posting-identity-tool";
+import {
+  CHANNELS_REMOVE_TOOL_DEF,
+  PARTIES_REMOVE_TOOL_DEF,
+  handleDirectoryRemoveTool,
+  isDirectoryRemoveTool,
+} from "@/lib/admin-mcp/directory-remove-tools";
 import { ADMIN_MCP_TOOL_NAMES } from "@/lib/mcp/admin-public";
 import { buildEmployeePolicyDrafts } from "@/lib/employees/policy-draft";
 import { parseApprovalChannelId } from "@/lib/employees/approval-inbox";
@@ -1387,6 +1393,10 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
       additionalProperties: false,
     },
   },
+  // ADMIN_MCP_DIRECTORY_REMOVE_TOOLS_ENABLED (default OFF): definitions live in
+  // lib/admin-mcp/directory-remove-tools.ts.
+  CHANNELS_REMOVE_TOOL_DEF,
+  PARTIES_REMOVE_TOOL_DEF,
 ];
 
 /**
@@ -2230,6 +2240,22 @@ export async function callAdminMcpTool(
     });
     const queuedOk = (queued as { code?: string }).code === "needs_approval";
     return toolResult(queuedOk && outcome.resultExtra ? { ...queued, ...outcome.resultExtra } : queued, false);
+  }
+
+  if (isDirectoryRemoveTool(name)) {
+    // ADMIN_MCP_DIRECTORY_REMOVE_TOOLS_ENABLED: org from the credential only;
+    // the row is looked up in that org before any ticket.
+    const outcome = await handleDirectoryRemoveTool(name, args, cred);
+    if (outcome.kind === "result") return toolResult(outcome.data, outcome.isError === true);
+    const queued = await queueAdminTool({
+      cred,
+      tool: name,
+      args: { ...outcome.queuedArgs, ...(typeof args.jobId === "string" ? { jobId: args.jobId } : {}) },
+      rawArgsForSecretScan: args,
+      title: outcome.title,
+      summary: outcome.summary,
+    });
+    return toolResult(queued, false);
   }
 
   if (name === POSTING_IDENTITY_SET_TOOL) {

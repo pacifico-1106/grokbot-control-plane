@@ -76,6 +76,8 @@ export const ADMIN_MCP_TOOL_NAMES = [
   "setup.approvalDelivery.autoResolve",
   "setup.slackApprover.set",
   "setup.slackAuthorizeLink.issue",
+  "channels.remove",
+  "parties.remove",
 ] as const;
 
 export type AdminMcpToolName = (typeof ADMIN_MCP_TOOL_NAMES)[number];

@@ -1971,6 +1971,25 @@ async function fulfillApprovalDeliveryAutoResolveTicket(
   };
 }
 
+/** ADMIN_MCP_DIRECTORY_REMOVE_TOOLS_ENABLED: human-approved channel / party ledger removal. */
+async function fulfillDirectoryRemoveTicket(
+  approval: ApprovalRequest,
+  args: Record<string, unknown>,
+  tool: "channels.remove" | "parties.remove"
+): Promise<AdminFulfillment> {
+  const { fulfillChannelRemove, fulfillPartyRemove } = await import("@/lib/admin-mcp/directory-remove-tools");
+  const result = tool === "channels.remove" ? await fulfillChannelRemove(approval, args) : await fulfillPartyRemove(approval, args);
+  const at = new Date().toISOString();
+  if (!result.ok) return { ok: false, tool, at, error: result.code, nextStepJa: result.messageJa };
+  return {
+    ok: true,
+    tool,
+    at,
+    ...(tool === "channels.remove" ? { channelId: result.id } : { partyId: result.id }),
+    summaryJa: result.summaryJa,
+  };
+}
+
 async function fulfillApprovedAdminCore(
   approval: ApprovalRequest
 ): Promise<AdminFulfillment | null> {
@@ -2091,6 +2110,10 @@ async function fulfillApprovedAdminCore(
         break;
       case "employeeIdentity.bindMailbox":
         fulfillment = await fulfillEmployeeIdentityBindMailbox(approval, args);
+        break;
+      case "channels.remove":
+      case "parties.remove":
+        fulfillment = await fulfillDirectoryRemoveTicket(approval, args, tool);
         break;
       default:
         fulfillment = { ok: false, tool, at, error: "unknown_admin_tool" };
