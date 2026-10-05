@@ -26,6 +26,29 @@ export function normalizeReplyBody(text: string): string {
   return s.replace(/[\s\p{P}\p{S}\p{C}]+/gu, "");
 }
 
+/**
+ * v2 normalization (DUPLICATE_GUARD_V2_ENABLED), v1 plus — so trivial variants
+ * of short replies compare equal:
+ * - Slack mention / channel / broadcast markup keeps only the id
+ *   (`<@U1|野木>` = `<@U1>`, `<#C1|general>` = `<#C1>`, `<!here|@here>` = `<!here>`):
+ *   the label is display text, the addressee is not trivial
+ * - emoji shortcodes (`:+1:`, `:skin-tone-2:`) and pictographic emoji incl.
+ *   modifiers, variation selectors, ZWJ and keycap marks are decoration
+ * Time-like text (`10:30:00`) is not a shortcode (a shortcode starts with a letter).
+ */
+export function normalizeReplyBodyV2(text: string): string {
+  let s = (text || "").normalize("NFKC").toLowerCase();
+  s = s.replace(/<((?:https?|mailto):[^|>\s]+)\|[^>]*>/g, "$1").replace(/<((?:https?|mailto):[^>\s]+)>/g, "$1");
+  s = s
+    .replace(/<@([uw][a-z0-9]+)(?:\|[^>]*)?>/g, " @$1 ")
+    .replace(/<#([cg][a-z0-9]+)(?:\|[^>]*)?>/g, " #$1 ")
+    .replace(/<!subteam\^([a-z0-9]+)(?:\|[^>]*)?>/g, " @$1 ")
+    .replace(/<!(here|channel|everyone)(?:\|[^>]*)?>/g, " @$1 ");
+  s = s.replace(/:(?:[a-z][a-z0-9_+\-']*|\+1|-1):/g, " ");
+  s = s.replace(/[\p{Extended_Pictographic}\p{Emoji_Modifier}\u{1F1E6}-\u{1F1FF}\u200d\ufe0e\ufe0f\u20e3]/gu, "");
+  return s.replace(/[\s\p{P}\p{S}\p{C}]+/gu, "");
+}
+
 function fmix32(h: number): number {
   h ^= h >>> 16;
   h = Math.imul(h, 0x85ebca6b);
@@ -65,8 +88,13 @@ function sketchOf(normalized: string, key: Buffer): number[] {
   return mins.map((v) => v | 0);
 }
 
-export function fingerprintReplyBody(text: string, key: Buffer, minSimilarityChars = 20): ReplyFingerprint {
-  const normalized = normalizeReplyBody(text);
+export function fingerprintReplyBody(
+  text: string,
+  key: Buffer,
+  minSimilarityChars = 20,
+  version: 1 | 2 = 1
+): ReplyFingerprint {
+  const normalized = version === 2 ? normalizeReplyBodyV2(text) : normalizeReplyBody(text);
   const length = Array.from(normalized).length;
   return {
     bodyHash: createHmac("sha256", key).update(`body:${normalized}`).digest("hex"),

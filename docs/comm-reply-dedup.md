@@ -128,4 +128,82 @@ rollback only if the schema must go.
 - Slack / Telegram approval cards are not edited when a ticket is superseded.
   Pressing them resolves nothing, but the card still looks open (backlog).
 - Superseding is per employee. Two employees replying in the same conversation
-  are not deduplicated against each other.
+  are not deduplicated against each other (v1). v2 below detects it: warning +
+  audit under v1, blocked by default under `DUPLICATE_GUARD_V2_ENABLED`.
+
+# Duplicate post guard v2 (`DUPLICATE_GUARD_V2_ENABLED`, default OFF)
+
+Yasaka / 木村 2026-10-05 (PR-A). Same ledger, one mechanism for every AI posting
+path. Turning v2 ON also turns the ledger ON (`COMM_REPLY_DEDUP_ENABLED` is
+implied). Apply `supabase/migrations/20261005300000_duplicate_post_guard_v2.sql`
+first. While v2 is OFF the app never calls it.
+
+| Hole (v1) | v2 rule |
+|---|---|
+| (1) After 30 min the same post goes out again | Default window **6 h** (`COMM_REPLY_DEDUP_WINDOW_MINUTES`, 1–1440). **Same jobId + same / similar body + same channel** → once, regardless of time (job key = HMAC of org + employee + jobId; kept `COMM_REPLY_DEDUP_JOB_RETENTION_DAYS`, default 30, max 30). The same job may still post another message. At fulfil the window also reaches back from the approval's creation. |
+| (2) Top-level vs thread are different keys | **Channel key** = HMAC of org + surface + destination without the thread. Long bodies compare across the channel (`scope: "cross_thread"`). Short bodies stay per thread. |
+| (3) Per employee only | Another employee's same / similar long body to the same channel: **blocked** (`scope: "cross_employee"`), or with `COMM_REPLY_DEDUP_CROSS_EMPLOYEE=warn` posted with `duplicateWarning`. Audit `comm_reply.cross_employee_duplicate` (`decision: warn \| block`). Under v1 (no v2) the same detection is a warning only. The other employee's row id is never returned. |
+| (4) Short bodies (< 20 normalized chars): exact only | v2 normalization adds: Slack mention / channel / broadcast markup keeps only the id (`<@U1\|野木>` = `<@U1>`), emoji shortcodes (`:+1:`, `:skin-tone-2:`) and pictographic emoji (incl. skin tones, ZWJ, VS16, keycaps) are dropped, on top of v1's width / case / whitespace / punctuation. **Short tier**: exact v2 hash only, **same thread only, 2 min window** (`COMM_REPLY_DEDUP_SHORT_WINDOW_MINUTES`, 1–60), never across employees. |
+| (5) A failed send deletes the fingerprint | Adapters return `sendState: "not_sent" \| "unknown"`. Only `not_sent` (nothing submitted, DNS / connection refused, or a documented Slack pre-post error; SNS 4xx except 408 / 429) releases the row. Anything else is kept as `uncertain`: `502 post_outcome_unknown` with `uncertainRef`, and a later matching post gets `409 duplicate_post_uncertain`. After the AI verifies the message is absent it resends once with `duplicateGuard: { confirmedNotDelivered: uncertainRef }` (MCP: inside `payload`), which releases only that employee's own uncertain row (audit `comm_reply.uncertain_released`). |
+| (6) Only 4 tools | Also `sns.publish` (invoke + fulfil) and Slack file uploads with a message. Inventory: `lib/comm-reply-dedup/inventory.ts` (a test fails if an outbound-send tool has no decision). |
+
+### Why the short-body rule
+
+An identical "OK" / "了解です" to the same thread within 2 minutes is a retry or
+a loop. A few minutes later it is a new reply to a new message, and in another
+thread or from another employee it is never a duplicate. v1 blocked a second
+"OK" for 30 minutes (a false positive) while `了解です 👍` vs `了解です` (or a
+mention label) slipped through. The addressee is kept, so `<@A> 了解です` and
+`<@B> 了解です` are different messages. The jobId rule still applies to short
+bodies (the same job never sends the same "OK" twice).
+
+### Response fields (every stop)
+
+`code` = `reasonCode`, `nextAction` (`none` \| `retry_later` \|
+`verify_then_confirm`), `nextStep` (instruction for the AI), `retryable`, and for
+duplicates `scope`, `match`, `similarity`, `matchedAt`, `windowMinutes`. These
+fields are additive and also returned under v1.
+
+| Code | HTTP | Meaning |
+|---|---|---|
+| `duplicate_reply_suppressed` | 409 | already posted; do not resend |
+| `duplicate_post_uncertain` | 409 | an earlier matching post has an unknown outcome; verify first |
+| `post_outcome_unknown` | 502 | this post's outcome is unknown; row kept; verify first |
+| `duplicate_check_unavailable` | 503 | store / key unavailable; nothing posted; `retryable: true` |
+
+At fulfil: `approval_superseded` (closed, nothing sent), `duplicate_post_uncertain`
+(approval stays approved, re-runnable), `post_outcome_unknown` (execution claim
+uncertain, not re-run), `fulfill_blocked_dedup_unavailable`.
+
+### Settings (v2)
+
+| Env | Default with v2 | Bounds |
+|---|---|---|
+| `DUPLICATE_GUARD_V2_ENABLED` | OFF | `true` / `1` / `on` |
+| `COMM_REPLY_DEDUP_WINDOW_MINUTES` | 360 | 1–1440 |
+| `COMM_REPLY_DEDUP_SHORT_WINDOW_MINUTES` | 2 | 1–60 |
+| `COMM_REPLY_DEDUP_CROSS_EMPLOYEE` | `block` | `warn` (anything else → block) |
+| `COMM_REPLY_DEDUP_JOB_RETENTION_DAYS` | 30 | 1–30 |
+
+### Database (migration `20261005300000_duplicate_post_guard_v2.sql`)
+
+Additive: nullable `channel_key` / `job_key` (64-hex checks), tool check +
+`sns.publish`, two partial indexes, `claim_outbound_send_v2` (advisory lock per
+org + channel, dry-run mode for the read-only pre-check) and
+`release_uncertain_outbound_send`, both service_role only. Rollback:
+`supabase/verification/20261005300000_duplicate_post_guard_v2_rollback.sql`
+(v1 keeps working). Tested by `scripts/test-db-local.py`.
+
+### Production steps (v2)
+
+1. Apply the migration (no effect while the flag is OFF).
+2. Optional: `COMM_REPLY_DEDUP_CROSS_EMPLOYEE=warn` for a first observation period.
+3. Set `DUPLICATE_GUARD_V2_ENABLED=true`. Rows written by v1 have no channel /
+   job key, and v2 normalizes emoji / mentions differently, so for the first
+   window a v1 row is only matched on the same conversation key with the same
+   v1-normal body.
+4. Watch `comm_reply.duplicate_suppressed` (by `scope`),
+   `comm_reply.cross_employee_duplicate`, `comm_reply.post_outcome_unknown`,
+   `comm_reply.uncertain_released` and `comm_reply.dedup_unavailable`.
+
+Rollback: flag OFF (immediate). SQL rollback only if the schema must go.

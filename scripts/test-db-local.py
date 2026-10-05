@@ -132,6 +132,28 @@ try:
     assert query("select status from public.approval_requests where id='82000000-0000-4000-8000-000000000002';") == "expired"
     assert "superseded" not in query("select pg_get_constraintdef(oid) from pg_constraint where conname='approval_requests_status_check';")
     sql(comm_reply_dedup)  # forward again after rollback
+    guard_v2 = ROOT / "supabase/migrations/20261005300000_duplicate_post_guard_v2.sql"
+    sql(guard_v2)
+    sql(guard_v2)  # re-applicable
+    sql(ROOT / "tests/security/db-duplicate-guard-v2.sql")
+    # 12 concurrent identical claims by two employees in one channel (cross-employee block): 1 winner.
+    commands = [(f"set role service_role; select public.claim_outbound_send_v2('{dedup_org}','{emp}',"
+                 f"repeat('7',64),repeat('7',64),null,repeat('e',64),null,'comm.reply',null,21600,0.6,2592000,true,'block',false)->>'state';")
+                for emp in [dedup_emp, "81000000-0000-4000-8000-000000000002"] * 6]
+    with ThreadPoolExecutor(max_workers=12) as pool:
+        states = list(pool.map(query, commands))
+    assert states.count("claimed") == 1 and states.count("duplicate") == 11, states
+    sql(ROOT / "supabase/verification/20261005300000_duplicate_post_guard_v2_rollback.sql")
+    assert query("select to_regprocedure('public.claim_outbound_send_v2(uuid,uuid,text,text,text,text,integer[],text,uuid,integer,double precision,integer,boolean,text,boolean)') is null;") == "t"
+    assert query("select count(*) from information_schema.columns where table_schema='public' and table_name='comm_reply_send_fingerprints' and column_name in ('channel_key','job_key');") == "0"
+    assert query("select count(*) from public.comm_reply_send_fingerprints where tool='sns.publish';") == "0"
+    # v1 keeps working after the v2 rollback
+    command = (f"set role service_role; select public.claim_comm_reply_send('{dedup_org}','{dedup_emp}',"
+               f"repeat('d',64),repeat('e',64),null,'comm.reply',null,1800,0.6,172800)->>'state';")
+    assert query(command) == "claimed"
+    query("delete from public.comm_reply_send_fingerprints where conversation_key=repeat('d',64);")
+    sql(guard_v2)  # forward again after rollback
+    print("PASS: duplicate post guard v2: anon/authenticated denied, same job regardless of window, cross-thread, cross-employee block/warn/off, uncertain rows reported + released only by their owner, fulfil uncertain vs superseded, sns.publish allowed, invalid input denied, 12 concurrent claims by 2 employees have 1 winner; rollback (v1 still works) + re-apply.")
     print("PASS: comm reply dedup ledger: superseded status + guard, anon/authenticated denied, org/employee isolation, exact/similar, superseded-after-approval only for an identical / similar reply (7 cases), 12 concurrent identical claims have 1 winner; rollback + re-apply.")
     member_guard = ROOT / "supabase/migrations/20261004200000_org_members_capability_guard.sql"
     sql(member_guard)
@@ -179,6 +201,29 @@ try:
                  " and to_regprocedure('public.employee_webhook_settings_same_org()') is null;") == "t"
     sql(webhook_settings)  # forward again after rollback
     sql(ROOT / "tests/security/db-webhook-settings.sql")
+    channel_classify = ROOT / "supabase/migrations/20261005200000_channel_classify_proposals.sql"
+    sql(channel_classify)
+    sql(channel_classify)  # re-applicable
+    sql(ROOT / "tests/security/db-channel-classify.sql")
+    ccp_org = "c5000000-0000-4000-8000-0000000000c1"
+    query(f"insert into public.orgs(id, name) values ('{ccp_org}', 'channel-classify-race');")
+    command = (f"set role service_role; select public.claim_channel_classify_proposal("
+               f"'{ccp_org}', 'channel:slack:C0RACE0001', repeat('a', 64), 600)->>'state';")
+    with ThreadPoolExecutor(max_workers=12) as pool:
+        claims = list(pool.map(query, [command]*12))
+    assert claims.count("claimed") == 1 and claims.count("in_flight") == 11, claims
+    query(f"delete from public.orgs where id='{ccp_org}';")
+    sql(ROOT / "supabase/verification/20261005200000_channel_classify_proposals_rollback.sql")
+    assert query("select to_regclass('public.channel_classify_proposals') is null"
+                 " and to_regclass('public.channel_stuck_notice_windows') is null"
+                 " and to_regprocedure('public.claim_channel_classify_proposal(uuid,text,text,integer)') is null"
+                 " and to_regprocedure('public.attach_channel_classify_proposal(uuid,text,uuid)') is null"
+                 " and to_regprocedure('public.release_channel_classify_proposal(uuid,text)') is null"
+                 " and to_regprocedure('public.take_channel_stuck_notice(uuid,text,integer)') is null;") == "t"
+    assert "telegram" not in query("select pg_get_constraintdef(oid) from pg_constraint"
+                                   " where conname='org_channels_surface_check';")
+    sql(channel_classify)  # forward again after rollback
+    sql(ROOT / "tests/security/db-channel-classify.sql")
     # PR-D approver authority: needs the P0 admin-approver RPC it replaces.
     sql(ROOT / "supabase/migrations/20260927000300_admin_approver_enforcement.sql")
     approver_authority = ROOT / "supabase/migrations/20261005500000_approver_authority.sql"
@@ -200,6 +245,7 @@ try:
     sql(ROOT / "tests/security/db-approver-authority.sql")
     print("PASS: approver authority (PR-D): owner / designated admin decision table; flag-OFF 7-argument W1 call unchanged; standard ticket → designated admin stored, others refused; owner ticket → designated admin endorsed once and kept pending, owner approves and is stored; zero owners stop; multiple owners: any one owner other than the requester (requesting owner refused; a sole owner's own approval counts; several owners all requesters → no_owner_other_than_requester); reject / non-target not gated; record_approver_authority verified/endorse; one RPC overload; EXECUTE service_role only; rollback restores the 7-argument RPC + re-apply.")
     print("PASS: employee_webhook_settings (D9): RLS on, no policy, anon/authenticated denied, service_role reads/writes/upserts; cross-org row rejected; payload mode minimal|legacy_full (default minimal); ciphertext-only secret + fingerprint pair; employee delete cascades; rollback + re-apply.")
+    print("PASS: channel_classify_proposals / channel_stuck_notice_windows (PR-B): RLS on, anon/authenticated denied (tables + 4 RPCs); org_channels accepts telegram; claim states claimed/in_flight/pending/decided, facts change reopens, other org isolated; attach same-org only; release unattached only; notice window once then suppressed; bad input denied; org delete cascades; 12 concurrent claims → exactly 1 claimed; rollback (2 tables + 4 RPCs + telegram surface) + re-apply.")
     print("PASS: orgs / subscriptions / audit_events / approval_requests have no anon/authenticated write path (member/admin/owner JWT denied); service_role writes all four. Full-history check: scripts/test-db-all-migrations.py.")
     print("PASS: 14 tenant config / credential tables (credentials, employees, bindings, admin agents, directory, adapters, channels, projects, card setup/audit) + gateway_links, agentmail_inboxes, lp_handoffs, lp_wake_webhook_configs, lp_wake_webhook_events have no anon/authenticated write path; other reads unchanged; credentials (rows and secret_hash) unreadable from any session; service_role reads/writes all.")
     print("PASS: lp_inquiries / notification_outbox have no anon/authenticated write grant; lp_handoffs / lp_wake_* have no policy (RLS on) and no anon/authenticated SELECT; sessions read/write none of the 5 LP tables; service_role (BYPASSRLS) reads/writes all.")

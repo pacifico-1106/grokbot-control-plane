@@ -91,6 +91,8 @@ const READ_ONLY_TOOLS = [
   "setup.slackDmApprovalStatus",
   "dmAutoroute.list",
   "employees.allowedAccounts.list",
+  "channels.list",
+  "parties.list",
   // PR-D (APPROVER_AUTHORITY_ENABLED): 指定管理者 list, read-only
   "approvers.designatedAdmins.get",
 ];
@@ -123,6 +125,22 @@ describe("admin MCP always_human", () => {
     expect(advertised).toEqual([...ADMIN_MCP_TOOL_NAMES]);
     expect(new Set(advertised).size).toBe(advertised.length);
     for (const name of advertised) expect(isAdminMcpToolName(name)).toBe(true);
+  });
+
+  test("every advertised tool is dispatched (callable): none answers unknown_mcp_tool or throws", async () => {
+    // Empty args: each tool must reach its own handler (validation error,
+    // needs_approval, feature_disabled, platform_ops_forbidden …), never the
+    // unknown-tool fallback. Org comes only from the credential.
+    for (const name of ADMIN_MCP_TOOL_NAMES) {
+      let code: unknown;
+      try {
+        const result = await callAdminMcpTool(name, {}, demoCred());
+        code = (result.structuredContent as Record<string, unknown> | undefined)?.code;
+      } catch (error) {
+        code = `threw:${error instanceof Error ? error.message : String(error)}`;
+      }
+      expect({ name, unknown: code === "unknown_mcp_tool", threw: String(code ?? "").startsWith("threw:") }).toEqual({ name, unknown: false, threw: false });
+    }
   });
 
   test("the only no-ticket tools are the reviewed read-only + platform-ops lists", () => {
@@ -610,5 +628,25 @@ describe("ingressHandoff per-employee admin MCP", () => {
     expect(result.isError).toBe(true);
     const data = result.structuredContent as Record<string, unknown>;
     expect(data.code).toBe("rules_required");
+  });
+});
+
+describe("every advertised admin MCP tool is callable", () => {
+  // tools/list must never advertise a name the dispatcher does not handle:
+  // with empty arguments every tool answers (a validation error, a gate, a
+  // ticket or data) — never unknown_mcp_tool and never a thrown error.
+  test("callAdminMcpTool(name, {}) answers for every tool in ADMIN_MCP_TOOLS", async () => {
+    const unhandled: string[] = [];
+    for (const tool of ADMIN_MCP_TOOLS) {
+      let code: unknown;
+      try {
+        const result = await callAdminMcpTool(tool.name, {}, demoCred());
+        code = (result.structuredContent as Record<string, unknown> | undefined)?.code;
+      } catch (error) {
+        code = `threw:${error instanceof Error ? error.message : String(error)}`;
+      }
+      if (code === "unknown_mcp_tool" || String(code).startsWith("threw:")) unhandled.push(`${tool.name}=${String(code)}`);
+    }
+    expect(unhandled).toEqual([]);
   });
 });

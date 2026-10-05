@@ -10,7 +10,7 @@ import { inspectSlackChannelExtShared } from "@/lib/slack/bot-token";
 import type {
   Audience,
   ChannelClassification,
-  ConversationSurface,
+  ChannelLedgerSurface,
   InformationAsset,
   InformationClass,
   OrgChannel,
@@ -41,15 +41,16 @@ const PARTY_KINDS: OrgPartyKind[] = [
   "line",
   "mail_address",
 ];
-const SURFACES: ConversationSurface[] = ["slack", "line", "mail", "phone", "web"];
+/** org_channels.surface (migration 20261005200000 adds telegram to the check). */
+const SURFACES: ChannelLedgerSurface[] = ["slack", "line", "mail", "phone", "web", "telegram"];
 const CHANNEL_CLASSES: ChannelClassification[] = ["internal", "shared_external", "unknown"];
 const INFO_CLASSES: InformationClass[] = ["public", "internal", "confidential", "verbatim"];
 
 function isPartyKind(value: string): value is OrgPartyKind {
   return PARTY_KINDS.includes(value as OrgPartyKind);
 }
-function isSurface(value: string): value is ConversationSurface {
-  return SURFACES.includes(value as ConversationSurface);
+function isSurface(value: string): value is ChannelLedgerSurface {
+  return SURFACES.includes(value as ChannelLedgerSurface);
 }
 function isChannelClass(value: string): value is ChannelClassification {
   return CHANNEL_CLASSES.includes(value as ChannelClassification);
@@ -196,7 +197,7 @@ function mapChannelRow(row: Record<string, unknown>): OrgChannel {
   return {
     id: String(row.id),
     orgId: String(row.org_id),
-    surface: isSurface(String(row.surface)) ? (row.surface as ConversationSurface) : "web",
+    surface: isSurface(String(row.surface)) ? (row.surface as ChannelLedgerSurface) : "web",
     externalId: String(row.external_id ?? ""),
     classification,
     mixed: Boolean(row.mixed),
@@ -360,9 +361,76 @@ export async function listOrgChannels(orgId?: string | null): Promise<OrgChannel
   return data.map((row) => mapChannelRow(row as Record<string, unknown>));
 }
 
+export type LedgerPage<T> = { rows: T[]; hasMore: boolean };
+
+/**
+ * One page of the org's channel ledger (admin MCP channels.list). Ordered by
+ * surface, external id. Throws on a store error (the tool reports it instead
+ * of answering an empty list).
+ */
+export async function pageOrgChannels(
+  orgId: string,
+  opts: { offset: number; limit: number; surface?: ChannelLedgerSurface; classification?: ChannelClassification }
+): Promise<LedgerPage<OrgChannel>> {
+  if (!orgId) return { rows: [], hasMore: false };
+  const { offset, limit } = opts;
+  if (isDemoMode()) {
+    const all = runtimeChannels
+      .filter(
+        (row) =>
+          row.orgId === orgId &&
+          (!opts.surface || row.surface === opts.surface) &&
+          (!opts.classification || row.classification === opts.classification)
+      )
+      .sort((a, b) => a.surface.localeCompare(b.surface) || a.externalId.localeCompare(b.externalId));
+    return { rows: all.slice(offset, offset + limit), hasMore: all.length > offset + limit };
+  }
+  const admin = createSupabaseAdminClient();
+  if (!admin) throw new Error("supabase_not_configured");
+  let query = admin.from("org_channels").select("*").eq("org_id", orgId);
+  if (opts.surface) query = query.eq("surface", opts.surface);
+  if (opts.classification) query = query.eq("classification", opts.classification);
+  const { data, error } = await query
+    .order("surface")
+    .order("external_id")
+    .range(offset, offset + limit); // one extra row → hasMore
+  if (error || !data) throw new Error("channel_list_failed");
+  const rows = data.map((row) => mapChannelRow(row as Record<string, unknown>));
+  return { rows: rows.slice(0, limit), hasMore: rows.length > limit };
+}
+
+/** One page of the org's party directory (admin MCP parties.list). Throws on a store error. */
+export async function pageOrgParties(
+  orgId: string,
+  opts: { offset: number; limit: number; kind?: OrgPartyKind; audience?: "internal" | "external" }
+): Promise<LedgerPage<OrgParty>> {
+  if (!orgId) return { rows: [], hasMore: false };
+  const { offset, limit } = opts;
+  if (isDemoMode()) {
+    const all = runtimeParties
+      .filter(
+        (row) =>
+          row.orgId === orgId &&
+          (!opts.kind || row.kind === opts.kind) &&
+          (!opts.audience || row.audience === opts.audience)
+      )
+      .sort((a, b) => a.kind.localeCompare(b.kind) || a.identifier.localeCompare(b.identifier));
+    return { rows: all.slice(offset, offset + limit), hasMore: all.length > offset + limit };
+  }
+  const admin = createSupabaseAdminClient();
+  if (!admin) throw new Error("supabase_not_configured");
+  let query = admin.from("org_parties").select("*").eq("org_id", orgId);
+  if (opts.kind) query = query.eq("kind", opts.kind);
+  if (opts.audience) query = query.eq("audience", opts.audience);
+  const { data, error } = await query.order("kind").order("identifier").range(offset, offset + limit);
+  if (error || !data) throw new Error("party_list_failed");
+  const rows = data.map((row) => mapPartyRow(row as Record<string, unknown>));
+  return { rows: rows.slice(0, limit), hasMore: rows.length > limit };
+}
+
 export async function getOrgChannel(
   orgId: string,
-  surface: ConversationSurface,
+  surface: ChannelLedgerSurface,
   externalId: string
 ): Promise<OrgChannel | null> {
   const id = externalId.trim();
@@ -389,7 +457,7 @@ export async function getOrgChannel(
 
 export async function upsertOrgChannel(input: {
   orgId: string;
-  surface: ConversationSurface;
+  surface: ChannelLedgerSurface;
   externalId: string;
   classification: ChannelClassification;
   mixed?: boolean;
@@ -398,7 +466,10 @@ export async function upsertOrgChannel(input: {
   if (!isSurface(input.surface)) throw new Error("invalid_surface");
   const externalId = input.externalId.trim();
   if (!externalId) throw new Error("external_id_required");
-  let classification = isChannelClass(input.classification) ? input.classification : "unknown";
+  // A typo must never become "unknown" silently (PR-B): callers validate at
+  // request time; this is the last line of defence.
+  if (!isChannelClass(String(input.classification))) throw new Error("invalid_classification");
+  let classification: ChannelClassification = input.classification;
   if (!input.skipInspect && input.surface === "slack") {
     const extShared = await inspectSlackChannelExtShared(input.orgId, externalId);
     if (extShared === true) {
