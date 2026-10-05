@@ -7,6 +7,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { DEMO_ORG } from "@/lib/demo-data";
 import { createApproval } from "@/lib/data/approvals";
+import { listAuditEvents } from "@/lib/data/audit";
 import { resetDemoChannelClassifyStore } from "@/lib/data/channel-classify";
 import { handleChannelJoin } from "@/lib/channel-classify/join";
 import { defaultHasAdminApprover, setProposalDepsForTests } from "@/lib/channel-classify/proposals";
@@ -74,7 +75,8 @@ describe("N3 no approver → no system ticket", () => {
     expect(mails[0].text).toContain(s.externalId);
     // ids only: no summary / facts / member data
     expect(mails[0].text.length).toBeLessThan(600);
-    expect(audits.some((a) => a.orgId === ORG && a.action === "channel_classify.proposal_failed" && a.metadata?.reason === "no_admin_approver")).toBe(true);
+    const tenantAudit = (await listAuditEvents(ORG)).filter((a) => a.action === "channel_classify.proposal_failed");
+    expect(tenantAudit.some((a) => (a.metadata as Record<string, unknown> | undefined)?.reason === "no_admin_approver")).toBe(true);
   });
 
   test("ops notice is rate-limited per org (second channel → no second mail)", async () => {

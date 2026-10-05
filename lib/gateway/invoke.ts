@@ -162,8 +162,12 @@ import {
 import { egressDenyNextStep, onEgressDenied } from "@/lib/channel-classify/deny-hook";
 
 /** PR-B: informational nextStep (channels.classify) on an external-treated deny. */
-function denyNextStepFields(body: GatewayInvokeRequest, egress: { decision?: string; reason?: string; audience?: string }) {
-  const next = egressDenyNextStep(body, egress);
+async function denyNextStepFields(
+  body: GatewayInvokeRequest,
+  egress: { decision?: string; reason?: string; audience?: string },
+  orgId: string
+) {
+  const next = await egressDenyNextStep(body, egress, orgId).catch(() => null);
   return next ? { nextStep: next, nextStepJa: next.messageJa } : {};
 }
 
@@ -1279,7 +1283,7 @@ export async function runGatewayInvoke(
           ledgerRetry.invokeResult.body,
           ledgerRetry.invokeResult.httpStatus
         );
-        return { httpStatus: failed.httpStatus, body: { ...failed.body, ...denyNextStepFields(body, egress) } };
+        return { httpStatus: failed.httpStatus, body: { ...failed.body, ...(await denyNextStepFields(body, egress, effectiveOrgId)) } };
       }
       return ledgerRetry.invokeResult;
     }
@@ -1306,7 +1310,7 @@ export async function runGatewayInvoke(
         purpose,
         jobId,
         hasInternalLedger,
-        ...denyNextStepFields(body, egress),
+        ...(await denyNextStepFields(body, egress, effectiveOrgId)),
       },
       403
     );

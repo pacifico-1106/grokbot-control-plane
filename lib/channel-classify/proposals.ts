@@ -11,6 +11,13 @@
  * - Dedupe store unavailable → no ticket (cannot prove it is not a duplicate).
  * - Requester is "system" (no admin agent), so no agent can self-approve it;
  *   resolution goes through the normal admin-class approver rules.
+ * - (follow-up N3) No admin approver for the org (no admin route with voters
+ *   and no owner; lookup error counts as none) → no ticket, ids-only ops
+ *   notice, tenant audit row. Checked here regardless of
+ *   ADMIN_APPROVER_POLICY_REQUIRED.
+ * - (follow-up H1) Per-org hourly cap on new tickets
+ *   (CHANNEL_CLASSIFY_MAX_PROPOSALS_PER_HOUR, all triggers): over the cap →
+ *   claim released, no ticket, ONE summary notice per window.
  */
 import { isChannelClassifyProposalsEnabled } from "@/lib/channel-classify/flags";
 import { createApproval as createApprovalRow } from "@/lib/data/approvals";
@@ -31,6 +38,11 @@ import {
   type ProposedTicket,
 } from "@/lib/channel-classify/core";
 import { createHash } from "node:crypto";
+import { maxProposalsPerHour, takeOrgBudget } from "@/lib/channel-classify/budget";
+import { notifyChannelStuck, notifyOpsIdsOnly } from "@/lib/channel-classify/stuck-notify";
+import { canProceedWithAdminApproval } from "@/lib/approval-workflow/admin-policy";
+import { getOrgApprovalWorkflowPolicy } from "@/lib/approval-workflow/data";
+import { getOrgOwnerIds } from "@/lib/data/members";
 import type { ApprovalRequest } from "@/lib/types";
 
 export type ProposalTrigger =
@@ -42,7 +54,17 @@ export type ProposalTrigger =
   | "egress_denied";
 
 export type ProposalOutcome = {
-  state: "created" | "pending" | "decided" | "in_flight" | "registered" | "skipped" | "flag_off" | "error";
+  state:
+    | "created"
+    | "pending"
+    | "decided"
+    | "in_flight"
+    | "registered"
+    | "skipped"
+    | "flag_off"
+    | "rate_limited"
+    | "no_approver"
+    | "error";
   approvalId?: string;
   partyApprovalIds?: string[];
   decidedStatus?: string;
@@ -54,6 +76,7 @@ export const MAX_PARTY_PROPOSALS = 5;
 type Deps = {
   createApproval: typeof createApprovalRow;
   notifyApproval: (approval: ApprovalRequest) => Promise<boolean>;
+  hasApprover: (orgId: string) => Promise<boolean>;
 };
 
 async function defaultNotify(approval: ApprovalRequest): Promise<boolean> {
@@ -62,7 +85,18 @@ async function defaultNotify(approval: ApprovalRequest): Promise<boolean> {
   return results.some((row) => row.ok);
 }
 
-const DEFAULT_DEPS: Deps = { createApproval: createApprovalRow, notifyApproval: defaultNotify };
+/** Same rule as the admin MCP queue: an admin route with voters, else an org owner. Errors → false. */
+export async function defaultHasAdminApprover(orgId: string): Promise<boolean> {
+  if (!orgId) return false;
+  try {
+    const [policy, owners] = await Promise.all([getOrgApprovalWorkflowPolicy(orgId), getOrgOwnerIds(orgId)]);
+    return canProceedWithAdminApproval(policy, owners);
+  } catch {
+    return false;
+  }
+}
+
+const DEFAULT_DEPS: Deps = { createApproval: createApprovalRow, notifyApproval: defaultNotify, hasApprover: defaultHasAdminApprover };
 let deps: Deps = DEFAULT_DEPS;
 
 export function setProposalDepsForTests(override: Partial<Deps> | null): void {
@@ -154,6 +188,22 @@ async function audit(orgId: string, action: "channel_classify.proposed" | "chann
   }).catch(() => undefined);
 }
 
+/** H1: take one unit of the org's hourly proposal budget; the first overflow sends the one summary. */
+async function withinProposalBudget(orgId: string, trigger: ProposalTrigger): Promise<boolean> {
+  const limit = maxProposalsPerHour();
+  const verdict = await takeOrgBudget(orgId, "proposals", limit);
+  if (verdict === "allowed") return true;
+  if (verdict === "over_first") {
+    await audit(orgId, "channel_classify.proposal_failed", `分類提案が 1 時間あたりの上限（${limit}件）に達したため停止`, {
+      reason: "proposals_per_hour",
+      limit,
+      trigger,
+    });
+    await notifyChannelStuck({ orgId, kind: "proposal_rate_limited", reason: "proposals_per_hour", limit, dedupeKey: "org" });
+  }
+  return false;
+}
+
 export async function proposeChannelClassification(input: {
   orgId: string;
   facts: ChannelFacts;
@@ -170,6 +220,15 @@ export async function proposeChannelClassification(input: {
     }
     const proposal = buildChannelProposal(facts, { registeredPartyIds, maxParties: MAX_PARTY_PROPOSALS });
     if (proposal.skip) return { state: "skipped", reason: proposal.skip };
+    if (!(await deps.hasApprover(orgId).catch(() => false))) {
+      await audit(orgId, "channel_classify.proposal_failed", `管理承認者が未設定のため分類提案を作りませんでした（${facts.externalId}）`, {
+        key: proposal.classify.key,
+        reason: "no_admin_approver",
+        trigger,
+      });
+      await notifyOpsIdsOnly({ orgId, reason: "no_admin_approver", ref: { surface: facts.surface, externalId: facts.externalId }, trigger });
+      return { state: "no_approver", reason: "no_admin_approver" };
+    }
     const factsHash = channelFactsHash(facts);
     const claim = await claimChannelClassifyProposal({ orgId, key: proposal.classify.key, factsHash });
     if (claim.state === "pending") return { state: "pending", approvalId: claim.approvalId };
@@ -182,6 +241,10 @@ export async function proposeChannelClassification(input: {
         trigger,
       });
       return { state: "error", reason: `dedupe_${claim.state}` };
+    }
+    if (!(await withinProposalBudget(orgId, trigger))) {
+      await releaseChannelClassifyProposal({ orgId, key: proposal.classify.key });
+      return { state: "rate_limited", reason: "proposals_per_hour" };
     }
 
     const summary = await buildChannelClassifyCardSummaryJa(
@@ -228,6 +291,10 @@ export async function proposeChannelClassification(input: {
       const hash = createHash("sha256").update(`${ticket.key}:internal`).digest("hex");
       const partyClaim = await claimChannelClassifyProposal({ orgId, key: ticket.key, factsHash: hash });
       if (partyClaim.state !== "claimed") continue;
+      if (!(await withinProposalBudget(orgId, trigger))) {
+        await releaseChannelClassifyProposal({ orgId, key: ticket.key });
+        break;
+      }
       const identifier = String(ticket.args.identifier);
       const partySummary = await buildPartyUpsertCardSummaryJa(
         orgId,
@@ -260,5 +327,3 @@ export async function proposeChannelClassification(input: {
     return { state: "error", reason: "proposal_failed" };
   }
 }
-// TDD stub (replaced in the implementation commit).
-export async function defaultHasAdminApprover(_orgId: string): Promise<boolean> { return true; }

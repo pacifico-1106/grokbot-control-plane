@@ -7,9 +7,16 @@ Status: shipped behind flags, **both OFF by default**.
 | `CHANNEL_CLASSIFY_PROPOSALS_ENABLED` | OFF | Join events, the backfill and unregistered-channel denies open `channels.classify` tickets (plus `parties.upsert` for mixed Slack channels). |
 | `CHANNEL_STUCK_NOTIFY_ENABLED` | OFF | Stuck notices (unregistered-channel deny, ledger / backfill / proposal failure, unset `notifyMouth`). |
 
-Migration `20261005200000_channel_classify_proposals.sql` must be applied
-**before** either flag is turned on (rollback:
-`supabase/verification/20261005200000_channel_classify_proposals_rollback.sql`).
+Migrations `20261005200000_channel_classify_proposals.sql` and
+`20261005400000_channel_classify_budget.sql` must be applied **before** either
+flag is turned on (rollbacks:
+`supabase/verification/20261005200000_channel_classify_proposals_rollback.sql`,
+`supabase/verification/20261005400000_channel_classify_budget_rollback.sql`).
+
+| Env (optional) | Default | Bounds | Effect |
+| --- | --- | --- | --- |
+| `CHANNEL_CLASSIFY_MAX_PROPOSALS_PER_HOUR` | 20 | 1–200 | New proposal tickets per org per hour (all triggers; each `parties.upsert` ticket counts). Over → no ticket, one summary notice per hour. |
+| `CHANNEL_STUCK_MAX_NOTICES_PER_HOUR` | 30 | 1–200 | Stuck notices per org per hour (after the per-channel window). Over → one summary notice, then nothing until the hour rolls. |
 
 Not flag-gated (always on, strictly additive or stricter):
 
@@ -140,12 +147,57 @@ The approval card always shows before → after (`未登録（社外扱い）` w
 channel is not registered) and the channel's sharing state (Slack Connect /
 private / guests / members of other workspaces) — no message content, no tokens.
 
-## 5. Enabling
+## 5. Hardening required before the flags go ON (follow-up to the first PR)
 
-1. Apply migration `20261005200000`.
+- **Per-org hourly caps (H1).** `channel_classify_budget_windows` /
+  `take_channel_classify_budget` (atomic, service_role only). Proposals take
+  one unit after the dedupe claim; over the cap the claim is released (the
+  channel can be proposed in a later hour) and the org gets ONE
+  `proposal_rate_limited` notice per window. Notices take one unit after the
+  per-channel window; the first overflow is replaced by a summary notice,
+  later ones return `rate_limited`. DB unavailable → per-instance window with
+  the same limits (never unlimited).
+- **Telegram adder (H1).** `my_chat_member.from` must be a known member of
+  the inbox's org: in the inbox's `allowedUserIds`, or holding a verified,
+  unexpired, unrevoked voter binding on that inbox. An empty
+  `allowedUserIds` does not mean "everyone" here. Unknown → nothing (audit
+  `channel_classify.join_ignored`, once per hour per org, ids only).
+- **Slack bot identity (N7).** A join event counts only if `api_app_id` is the
+  org's own conversation bot's app (`auth.test` → `bots.info` with the org's
+  own token, cached 10 min), any bot authorization is that bot user, and the
+  team matches; the own-bot path also needs `event.user` == that bot.
+  Unknown identity → nothing. The shared approval app id never counts.
+- **No approver (N3).** No admin route with voters and no owner (lookup error
+  counts as none) → no ticket, tenant audit `channel_classify.proposal_failed`
+  (`no_admin_approver`), ids-only ops notice (PLATFORM_OPS_ORG_ID mirror +
+  APPROVAL_ALERT_OPS_EMAILS, once per 6 h per org). Checked regardless of
+  `ADMIN_APPROVER_POLICY_REQUIRED`.
+- **Card time budget (N1).** Every Slack lookup for a card (channel facts,
+  `slack_channel` / `slack_user` party) shares one 5 s budget; at the budget
+  the in-flight Slack calls are aborted and no further call starts.
+- **Deny wording (N2).** The `classification=internal` example is shown only
+  for an unregistered channel (or one registered as `unknown`, not mixed). A
+  channel registered as `shared_external` / mixed (or via an external party)
+  gets `tool: "channels.list"`, `registered: {...}` and its own wording (it
+  cannot become internal). No org / lookup error → neutral wording.
+- **Backfill pacing (N4).** Per-method spacing (`SLACK_MIN_INTERVAL_MS`),
+  sequential `users.info`, 1 s between channels, 20 members inspected per
+  channel; Slack `ratelimited` stops that org's run (`stoppedReason:
+  rate_limited`, Retry-After kept, no failure notice); one 240 s budget for
+  the whole cron run (orgs shuffled; `deferredOrgs` in the response).
+- **Schema enums (N5).** `channels.classify` (`surface`, `classification`)
+  and `parties.upsert` (`kind`, `audience`) advertise the same enums the
+  request-time validation enforces.
+
+## 6. Enabling
+
+1. Apply migrations `20261005200000` and `20261005400000`.
 2. Slack app: subscribe to `member_joined_channel` (and `channel_joined` /
    `group_joined` for user-token apps); scopes `channels:read`, `groups:read`,
    `users:read` (plus `mpim:read` / `im:read` for the backfill listing).
+   `users:read` also covers `bots.info` (bot identity check). An org whose
+   conversation bot is a different app than the one delivering events gets
+   no join proposals (by design).
 3. Telegram: re-register each inbox webhook after enabling (`setWebhook` then
    includes `my_chat_member` in `allowed_updates`).
 4. Turn on `CHANNEL_STUCK_NOTIFY_ENABLED`, then `CHANNEL_CLASSIFY_PROPOSALS_ENABLED`.

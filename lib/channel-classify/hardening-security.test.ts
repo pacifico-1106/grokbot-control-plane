@@ -118,13 +118,13 @@ describe("RLS: new budget table is server-only", () => {
 
 describe("self-approval: system tickets cannot be resolved by whoever triggered them", () => {
   test("the Telegram adder is not recorded as requester; a non-owner adder cannot resolve the admin ticket", async () => {
-    setJoinDepsForTests({ telegramVoterMember: async (orgId, key, userId) => (userId === "777" ? "member_adder" : null) });
-    const outcome = await handleTelegramMyChatMember(tgInbox(ORG, []), tgUpdate(777, -1007770003));
+    setJoinDepsForTests({ telegramVoterMember: async (orgId, key, userId) => (userId === "5151" ? "member_adder" : null) });
+    const outcome = await handleTelegramMyChatMember(tgInbox(ORG, []), tgUpdate(5151, -1007770003));
     expect(outcome.state).toBe("created");
     const approval = await getApprovalById(outcome.approvalId!, ORG);
     expect(approval?.metadata?.proposalRequester).toEqual({ kind: "system", source: "telegram_my_chat_member" });
     expect(JSON.stringify(approval?.metadata ?? {})).not.toContain("member_adder");
-    expect(JSON.stringify(approval?.metadata ?? {})).not.toContain("777");
+    expect(JSON.stringify(approval?.metadata ?? {})).not.toContain("5151");
     expect(approval?.status).toBe("pending");
     const verdict = canResolverResolveAdminApproval("member_adder", approval!, null, ["member_owner"], true);
     expect(verdict.allowed).toBe(false);
