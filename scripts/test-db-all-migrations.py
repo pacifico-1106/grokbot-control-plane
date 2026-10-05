@@ -99,6 +99,7 @@ ALL_FIX_TABLES = tuple(t for f in FIXES for t in f["tables"])
 # Additive migrations (new server-only tables): (filename prefix, SQL test, tables).
 ADDITIVE = [
     ("20261005000000_", "tests/security/db-mcp-events.sql", ("mcp_event_subscriptions", "mcp_event_deliveries", "mcp_event_verification_windows")),
+    ("20261005100000_", "tests/security/db-webhook-settings.sql", ("employee_webhook_settings",)),
 ]
 
 # Un-timestamped legacy names do not sort in dependency order (see

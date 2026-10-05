@@ -7,7 +7,9 @@ import { deliverAuthorityDecision } from "@/lib/commerce/authority-events";
 import { appendAuditEvent } from "@/lib/data/audit";
 import { isConfigChangeApproval } from "@/lib/config-change-request/core";
 import { recordConfigChangeResolution } from "@/lib/config-change-request/service";
-import { isDecisionWorkflowEnabled, isMcpEndpointHandoffEnabled, isMcpEventsEnabled } from "@/lib/feature-flags";
+import { isDecisionWorkflowEnabled, isMcpEndpointHandoffEnabled, isMcpEventsEnabled, isWebhookHardeningEnabled } from "@/lib/feature-flags";
+import { categorizeFetchError, categorizeHttpStatus, type WebhookFailureCategory } from "@/lib/webhooks/outbound";
+import { deliverHardenedApprovalCallback } from "@/lib/webhooks/approval-callback";
 import {
   APPROVAL_WAKE_ACTION,
   MCP_HANDOFF_SCHEMA,
@@ -36,7 +38,11 @@ function orgNotifyEmail(): string {
 export type ResolveSideEffectsResult = {
   orgEmail: { ok: boolean; stub?: boolean; error?: string };
   employeeEmail: { ok: boolean; stub?: boolean; skipped?: boolean; error?: string };
-  callback: { ok: boolean; skipped?: boolean; status?: number; error?: string };
+  /**
+   * Approver-facing: a failure CATEGORY only (lib/webhooks/outbound.ts) — never
+   * raw error text, the receiver's HTTP status or its body (D9, flag ON and OFF).
+   */
+  callback: { ok: boolean; skipped?: boolean; error?: WebhookFailureCategory };
   telegram: { ok: boolean; skipped?: boolean; error?: string };
   notifications: Array<{ ok: boolean; provider: string; error?: string }>;
   authorityEvent: {
@@ -186,6 +192,12 @@ export async function runApprovalResolveSideEffects(opts: {
   let handoffSurface: McpHandoffSurface = "web";
   let handoffAttached = false;
   if (callbackUrl) {
+    // D9: WEBHOOK_HARDENING_ENABLED OFF → the request below is exactly today's
+    // (fetch, same headers / body). ON → lib/webhooks/approval-callback.ts
+    // (#267 postWebhook: https:443, public answers only, pinned, no redirects;
+    // Standard Webhooks signature; minimal body unless the config opts in).
+    const hardened = isWebhookHardeningEnabled();
+    let failure: WebhookFailureCategory | null = null;
     try {
       const basePayload = {
         type: "approval.resolved",
@@ -218,23 +230,33 @@ export async function runApprovalResolveSideEffects(opts: {
         trigger: statusLabel,
       });
       handoffAttached = Boolean(payload.mcpHandoff);
-      const res = await fetch(callbackUrl, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "user-agent": "Staffpass-ApprovalHook/1.0",
-        },
-        body: JSON.stringify(payload),
-        signal: AbortSignal.timeout(4000),
-      });
-      callback = { ok: res.ok, status: res.status, skipped: false };
+      if (hardened) {
+        failure = await deliverHardenedApprovalCallback({
+          url: callbackUrl,
+          orgId: approval.orgId,
+          employeeId: approval.employeeId,
+          approvalId: approval.id,
+          status: statusLabel,
+          resolvedAt: approval.resolvedAt,
+          eventId: mcpEventId,
+          payload: payload as Record<string, unknown>,
+        });
+      } else {
+        const res = await fetch(callbackUrl, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "user-agent": "Staffpass-ApprovalHook/1.0",
+          },
+          body: JSON.stringify(payload),
+          signal: AbortSignal.timeout(4000),
+        });
+        failure = categorizeHttpStatus(res.status);
+      }
     } catch (e) {
-      callback = {
-        ok: false,
-        skipped: false,
-        error: e instanceof Error ? e.message : "callback_failed",
-      };
+      failure = hardened ? "connection_failed" : categorizeFetchError(e);
     }
+    callback = failure ? { ok: false, skipped: false, error: failure } : { ok: true, skipped: false };
     if (handoffAttached) {
       // Wake audit for the shared not-connected watcher (only when the block was sent).
       await appendAuditEvent({
@@ -248,7 +270,8 @@ export async function runApprovalResolveSideEffects(opts: {
           : "承認結果の起こす callback に失敗",
         metadata: {
           reason: callback.ok ? "woke" : "wake_failed",
-          status: callback.status,
+          ...(failure ? { category: failure } : {}),
+          ...(hardened ? { hardened: true } : {}),
           approvalId: approval.id,
           decision: statusLabel,
           surface: handoffSurface,

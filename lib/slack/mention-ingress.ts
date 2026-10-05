@@ -35,6 +35,15 @@ import {
 } from "@/lib/data/slack-identities";
 import { getWakeWebhookSecret } from "@/lib/data/bindings";
 import {
+  categorizeFetchError,
+  categorizeHttpStatus,
+  postHardenedWebhook,
+  signingKeyFromSecret,
+  stableWebhookId,
+  standardWebhookHeaders,
+  type WebhookFailureCategory,
+} from "@/lib/webhooks/outbound";
+import {
   isSlackImChannelId,
   resolveSlackImWakeTarget,
   resolveSlackUserTokenImWakeTarget,
@@ -56,10 +65,11 @@ import { isDemoMode } from "@/lib/mode";
 import { verifySlackSignature } from "@/lib/notify/slack";
 import { createSupabaseAdminClient } from "@/lib/supabase";
 import { addLookingReaction } from "@/lib/slack/reaction-stamps";
-import { isSlackImNoRouteAuditEnabled } from "@/lib/feature-flags";
+import { isSlackImNoRouteAuditEnabled, isWebhookHardeningEnabled } from "@/lib/feature-flags";
 import { recordImNoRouteAudit } from "@/lib/slack/im-no-route-audit";
 
 const WAKE_TIMEOUT_MS = 10_000;
+const WAKE_USER_AGENT = "Staffpass-Wake/1.0";
 const MENTION_RE = /<@([UW][A-Z0-9_]+)(?:\|[^>]+)?>/gi;
 const USER_ID_RE = /^[UW][A-Z0-9_]+$/i;
 const SKIP_SUBTYPES = new Set([
@@ -497,15 +507,34 @@ async function postWake(
     trigger,
   });
   const handoffAuditMeta = mcpHandoffWakeAuditMeta(wakeBody, "slack");
+  // D9: WEBHOOK_HARDENING_ENABLED OFF → exactly today's request (fetch, Bearer).
+  // ON → #267 postWebhook (https:443, public answers only, pinned, no redirects)
+  // + Standard Webhooks signature with the same wake secret (Bearer kept).
+  // Audit rows carry a failure category only (flag ON and OFF).
+  const hardened = isWebhookHardeningEnabled();
   try {
-    const response = await fetch(url, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(wakeBody),
-      signal: AbortSignal.timeout(WAKE_TIMEOUT_MS),
-    });
-    if (!response.ok) {
-      console.error("slack_mention_wake_http", target.employeeId, response.status);
+    let failure: WebhookFailureCategory | null;
+    if (!hardened) {
+      const response = await fetch(url, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(wakeBody),
+        signal: AbortSignal.timeout(WAKE_TIMEOUT_MS),
+      });
+      failure = response.ok ? null : categorizeHttpStatus(response.status) ?? "http_4xx";
+      if (failure) console.error("slack_mention_wake_http", target.employeeId, response.status);
+    } else {
+      const body = JSON.stringify(wakeBody);
+      const msgId = stableWebhookId("wake", [target.orgId, target.employeeId, payload.eventId]);
+      const signed = {
+        ...headers,
+        ...standardWebhookHeaders(signingKeyFromSecret(secret), msgId, Math.floor(Date.now() / 1000), body),
+      };
+      const r = await postHardenedWebhook(url, body, signed, { timeoutMs: WAKE_TIMEOUT_MS, userAgent: WAKE_USER_AGENT });
+      failure = r.ok ? null : r.category;
+      if (failure) console.error("slack_mention_wake_failed", target.employeeId, failure);
+    }
+    if (failure) {
       await appendAuditEvent({
         orgId: target.orgId,
         employeeId: target.employeeId,
@@ -515,7 +544,8 @@ async function postWake(
         summary: "起こす webhook の送信に失敗",
         metadata: {
           reason: "wake_failed",
-          status: response.status,
+          category: failure,
+          ...(hardened ? { hardened: true } : {}),
           eventId: payload.eventId,
           ...handoffMeta,
           ...handoffAuditMeta,
@@ -565,6 +595,7 @@ async function postWake(
         eventId: payload.eventId,
         userTokenPath: trigger === "user_token_im",
         wakeParentStashed: payload.ts && !payload.thread_ts ? true : undefined,
+        ...(hardened ? { hardened: true } : {}),
         ...handoffMeta,
         ...handoffAuditMeta,
       },
@@ -580,7 +611,8 @@ async function postWake(
       summary: "起こす webhook の送信に失敗",
       metadata: {
         reason: "wake_failed",
-        error: error instanceof Error ? error.message : "wake_failed",
+        category: hardened ? "connection_failed" : categorizeFetchError(error),
+        ...(hardened ? { hardened: true } : {}),
         eventId: payload.eventId,
         ...handoffMeta,
         ...handoffAuditMeta,
