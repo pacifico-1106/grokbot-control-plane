@@ -56,7 +56,12 @@ import { normalizeAllowedAccounts } from "@/lib/employees/allowed-accounts";
 import { normalizeApproverUserIds, parseApprovalChannelId } from "@/lib/employees/approval-inbox";
 import { normalizeToolApprovalDefaults } from "@/lib/employees/approval-presets";
 import { ALL_SCOPES } from "@/lib/employees/policy-draft";
-import { checkPolicyPatchSodAck, parsePolicyPatchArgs } from "@/lib/admin-mcp/policy-patch-guard";
+import {
+  boundToRequestingAdmin,
+  checkPolicyPatchCardShown,
+  checkPolicyPatchSodAck,
+  parsePolicyPatchArgs,
+} from "@/lib/admin-mcp/policy-patch-guard";
 import { getOrgSodWarnPolicy } from "@/lib/data/org-context";
 import { employeePolicyWriteFailure } from "@/lib/employees/policy-errors";
 import { defaultProjectAccess, normalizeProjectAccess } from "@/lib/employees/project-access";
@@ -730,13 +735,16 @@ async function fulfillPolicy(approval: ApprovalRequest, args: Record<string, unk
   const { employeeId, scopes, allowedPurposes, approvalPolicy } = parsed.value;
   const requester = parseAdminRequester(approval.metadata);
   const binding = await getBinding(employeeId);
-  const requesterAgent = (requester?.grokBotAgentId || "").trim();
-  if (requesterAgent && requesterAgent === (binding?.grokBotAgentId || "").trim()) {
+  // Same rule as intake: grokBotAgentId or actorId of the requesting admin.
+  if (boundToRequestingAdmin(requester, binding?.grokBotAgentId)) {
     return {
       ok: false, tool: "policy.patch", at, employeeId, error: "cannot_grant_self_scopes",
       nextStepJa: "管理エージェントは自分に紐づいた社員証の権限を変更できません。変更は行われていません。",
     };
   }
+  // B1: nothing on a card that may have been cut counts as shown (SoD included).
+  const cardGate = checkPolicyPatchCardShown(args, approval.summary);
+  if (!cardGate.ok) return { ok: false, tool: "policy.patch", at, employeeId, error: cardGate.error, nextStepJa: cardGate.nextStepJa };
   const sodGate = checkPolicyPatchSodAck(args, parsed.value, await getOrgSodWarnPolicy(approval.orgId));
   if (!sodGate.ok) return { ok: false, tool: "policy.patch", at, employeeId, error: sodGate.error, nextStepJa: sodGate.nextStepJa };
   const { verdict, needsAck } = sodGate;
@@ -746,7 +754,8 @@ async function fulfillPolicy(approval: ApprovalRequest, args: Record<string, unk
       orgId: approval.orgId,
       employeeId,
       scopes,
-      allowedPurposes,
+      // Omitted = keep the stored value; explicit [] / {} clears (card warned).
+      ...(allowedPurposes !== undefined ? { allowedPurposes } : {}),
       approvalPolicy,
       toolApprovalDefaults:
         parsed.value.toolApprovalDefaults !== undefined
@@ -754,7 +763,9 @@ async function fulfillPolicy(approval: ApprovalRequest, args: Record<string, unk
           : undefined,
       // The human who approved the card that showed this verdict.
       sodOverrideAcknowledged: needsAck,
-      actionLimits: normalizeActionLimits(parsed.value.actionLimits as ActionLimits),
+      ...(parsed.value.actionLimits !== undefined
+        ? { actionLimits: normalizeActionLimits(parsed.value.actionLimits as ActionLimits) }
+        : {}),
     });
   } catch (error) {
     return employeePolicyWriteFailedFulfillment("policy.patch", employeeId, error);

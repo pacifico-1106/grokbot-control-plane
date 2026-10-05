@@ -1,6 +1,7 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { formatMailCardParts, MAIL_BODY_PREVIEW_LABEL, readMailArtifact } from "@/lib/approvals/summary";
 import { attachmentCardLine, readCardAttachment, withoutAttachmentSummaryLine } from "@/lib/approvals/attachment-card";
+import { SLACK_APPROVAL_SUMMARY_MAX_CHARS } from "@/lib/approvals/summary-limits";
 import { getAppOrigin } from "@/lib/approvals/tokens";
 import {
   getNotificationDelivery,
@@ -166,7 +167,7 @@ function approvalBlocks(
         ...mailParts.trailer.map((line) => escapeSlackMrkdwn(line)),
         approval.jobId ? `ジョブID: ${escapeSlackMrkdwn(approval.jobId)}` : "",
       ]
-    : [escapeSlackMrkdwn(truncate(withoutAttachmentSummaryLine(approval.summary, approval.metadata), 400))];
+    : [escapeSlackMrkdwn(truncate(withoutAttachmentSummaryLine(approval.summary, approval.metadata), SLACK_APPROVAL_SUMMARY_MAX_CHARS))];
   // Approved attachment (filename + size from the snapshot only), rendered on
   // its own so the 400-char summary cut can never hide it. Inline code keeps
   // * _ ~ literal; backticks are replaced so the name cannot close the span.

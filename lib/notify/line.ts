@@ -1,5 +1,6 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { attachmentCardLine, readCardAttachment, withoutAttachmentSummaryLine } from "@/lib/approvals/attachment-card";
+import { LINE_APPROVAL_SUMMARY_MAX_CHARS } from "@/lib/approvals/summary-limits";
 import { updateApprovalTelegramState } from "@/lib/data/approvals";
 import {
   getNotificationDelivery,
@@ -105,7 +106,7 @@ export async function sendApprovalToLineChannel(
             // Approved attachment (snapshot filename + size only), its own row
             // so the 500-char summary cut cannot hide it. Flex text is plain.
             ...(attachment ? [{ type: "text", text: attachmentCardLine(attachment), size: "sm", wrap: true }] : []),
-            { type: "text", text: truncate(withoutAttachmentSummaryLine(approval.summary, approval.metadata), 500), size: "sm", color: "#666666", wrap: true },
+            { type: "text", text: truncate(withoutAttachmentSummaryLine(approval.summary, approval.metadata), LINE_APPROVAL_SUMMARY_MAX_CHARS), size: "sm", color: "#666666", wrap: true },
           ],
         },
         footer: {

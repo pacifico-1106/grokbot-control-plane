@@ -64,7 +64,14 @@ import { parseApprovalChannelId } from "@/lib/employees/approval-inbox";
 import { parseRolesProposeInput } from "@/lib/mcp/roles-propose";
 import { ALL_SCOPES } from "@/lib/employees/policy-draft";
 import { ADMIN_AUDIT_CLASS } from "@/lib/admin-mcp/audit-class";
-import { buildPolicyPatchCard, parsePolicyPatchArgs, policyPatchInputSchema, POLICY_PATCH_CARD_KEY } from "@/lib/admin-mcp/policy-patch-guard";
+import {
+  boundToRequestingAdmin,
+  buildPolicyPatchCard,
+  parsePolicyPatchArgs,
+  policyPatchCardTooLong,
+  policyPatchInputSchema,
+  POLICY_PATCH_CARD_KEY,
+} from "@/lib/admin-mcp/policy-patch-guard";
 import { getOrgSodWarnPolicy } from "@/lib/data/org-context";
 import { getEffectiveReplyPolicy, type ReplyPolicySource } from "@/lib/data/reply-policy";
 import { getEffectiveMailPolicy, type MailPolicySource } from "@/lib/data/mail-policy";
@@ -2255,7 +2262,13 @@ export async function callAdminMcpTool(
         );
       }
       const binding = await getBinding(employeeId);
-      if (adminCannotTargetSelf(cred, binding?.grokBotAgentId)) {
+      // policy.patch: the badge must not belong to this admin agent by
+      // grokBotAgentId or actorId (fulfil re-checks the same way).
+      if (
+        name === "policy.patch"
+          ? boundToRequestingAdmin(cred, binding?.grokBotAgentId)
+          : adminCannotTargetSelf(cred, binding?.grokBotAgentId)
+      ) {
         return toolResult(
           {
             ok: false,
@@ -3355,6 +3368,8 @@ export async function callAdminMcpTool(
       );
     }
     const card = buildPolicyPatchCard(employee, parsed.value, await getOrgSodWarnPolicy(cred.orgId));
+    // B1: a card any surface would cut is never queued (SoD must be shown).
+    if (!card.fitsAllSurfaces) return toolResult(policyPatchCardTooLong(card.summaryChars), true);
     queuedArgs = { ...parsed.value, [POLICY_PATCH_CARD_KEY]: card.snapshot };
     summary = card.summaryJa;
     if (parsed.ignoredKeys.length) {

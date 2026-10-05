@@ -345,10 +345,12 @@ export async function updateEmployeePolicy(input: {
   orgId: string;
   employeeId: string;
   scopes: Employee["scopes"];
-  allowedPurposes: string[];
+  /** undefined = keep the stored value ([] clears). */
+  allowedPurposes?: string[];
   approvalPolicy: Employee["approvalPolicy"];
   toolApprovalDefaults?: Employee["toolApprovalDefaults"];
   sodOverrideAcknowledged?: boolean;
+  /** undefined = keep the stored limits ({} clears). */
   actionLimits?: ActionLimits;
   allowedAccounts?: Employee["allowedAccounts"];
   spend?: Employee["spend"];
@@ -367,19 +369,24 @@ export async function updateEmployeePolicy(input: {
     requested: input.approvalPolicy,
     acknowledged: input.sodOverrideAcknowledged,
   });
-  const actionLimits = normalizeActionLimits(input.actionLimits);
+  // Omitted allowedPurposes / actionLimits keep the stored value (木村
+  // 2026-10-05): writing [] / {} would remove every purpose restriction and
+  // limit. Clearing is an explicit [] / {}.
+  const actionLimits = input.actionLimits !== undefined ? normalizeActionLimits(input.actionLimits) : undefined;
+  const purposesPatch = input.allowedPurposes !== undefined ? { allowed_purposes: input.allowedPurposes } : {};
+  const limitsPatch = actionLimits !== undefined ? { action_limits: actionLimits } : {};
   if (isDemoMode()) {
     const employee = getRuntimeEmployees().find((item) => item.id === input.employeeId && item.orgId === input.orgId);
     if (!employee) return null;
     Object.assign(employee, {
       scopes: input.scopes,
-      allowedPurposes: input.allowedPurposes,
+      ...(input.allowedPurposes !== undefined ? { allowedPurposes: input.allowedPurposes } : {}),
       approvalPolicy: effectivePolicy,
       ...(input.toolApprovalDefaults !== undefined
         ? { toolApprovalDefaults: normalizeToolApprovalDefaults(input.toolApprovalDefaults) }
         : {}),
       sodLevel: verdict.level,
-      actionLimits,
+      ...(actionLimits !== undefined ? { actionLimits } : {}),
       managerId: input.managerId === undefined ? employee.managerId : input.managerId,
       voice:
         input.voice === undefined
@@ -407,13 +414,13 @@ export async function updateEmployeePolicy(input: {
   if (!admin) return null;
   const employeePatch: Record<string, unknown> = {
     scopes: input.scopes,
-    allowed_purposes: input.allowedPurposes,
+    ...purposesPatch,
     approval_policy: effectivePolicy,
     ...(input.toolApprovalDefaults !== undefined
       ? { tool_approval_defaults: normalizeToolApprovalDefaults(input.toolApprovalDefaults) }
       : {}),
     sod_level: verdict.level,
-    action_limits: actionLimits,
+    ...limitsPatch,
     ...(input.managerId !== undefined ? { manager_id: input.managerId } : {}),
     ...(input.voice !== undefined ? { voice: normalizeVoice(input.voice) } : {}),
     ...(input.projectAccess !== undefined
@@ -463,9 +470,9 @@ export async function updateEmployeePolicy(input: {
       .from("credentials")
       .update({
         scopes: input.scopes,
-        allowed_purposes: input.allowedPurposes,
+        ...purposesPatch,
         approval_policy: effectivePolicy,
-        action_limits: actionLimits,
+        ...limitsPatch,
         ...(input.allowedAccounts !== undefined ? { allowed_accounts: input.allowedAccounts } : {}),
         ...(input.spend !== undefined ? { spend: input.spend } : {}),
       })
