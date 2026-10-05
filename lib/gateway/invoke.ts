@@ -115,6 +115,11 @@ import { enrichInvokeFailureBody } from "@/lib/stuck-watch/enrich";
 import { getOrgStuckWatchPolicy } from "@/lib/data/stuck-watch-policy";
 import type { DualEgressVerdict, Employee, EgressVerdict, GatewayInvokeRequest } from "@/lib/types";
 import { createHash } from "node:crypto";
+import {
+  auditSecretDetectionBlocked,
+  auditSecretDetectionSuspected,
+  safeEcho,
+} from "@/lib/security/secret-detection-audit";
 import { createSupabaseAdminClient } from "@/lib/supabase";
 import { runCommDeleteInvoke } from "@/lib/comm-delete/invoke";
 import { buildSlackPostRecord } from "@/lib/comm-delete/post-record";
@@ -642,6 +647,22 @@ export type RunGatewayInvokeInput = {
 };
 
 /**
+ * Org for secret-detection audit rows: the authenticated employee's own org
+ * (record, else credential binding). Never a client-supplied org. Errors → null
+ * (the rejection still stands; the row is skipped).
+ */
+async function secretAuditOrgId(employeeId: string): Promise<string | null> {
+  try {
+    const emp = await getEmployeeById(employeeId);
+    if (emp?.orgId) return emp.orgId;
+    const binding = await getBinding(employeeId);
+    return binding?.orgId ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Core Gateway enforcement. Callers must already resolve employeeId from an
  * authenticated source (Bearer 社員証, or server-side admin/session context).
  * Never pass an unauthenticated client-supplied id (e.g. x-employee-id).
@@ -709,18 +730,34 @@ export async function runGatewayInvoke(
 
   // P0-A: Secret-in-chat detector (fail-closed, before any data logging)
   // Chat NEVER: passwords, refresh tokens, API keys, full employee/admin badge secrets
+  // 2026-10-05: every rejection writes one secret_detection.blocked audit row
+  // (org of the authenticated employee, never the body's), with no value; a
+  // failed write never turns the rejection into a pass. tool / purpose / jobId
+  // are echoed only when they are clean themselves.
   const secretDetection = detectSecretInPayload(body);
-  if (!secretDetection.ok) {
-    return jsonResult(
-      {
-        ...buildSecretDetectionErrorResponse(secretDetection),
-        employeeId,
-        tool: toolRaw,
-        purpose,
-        jobId,
-      },
-      400
-    );
+  if (!secretDetection.ok || secretDetection.suspected) {
+    const scope = {
+      orgId: await secretAuditOrgId(employeeId),
+      employeeId,
+      credentialId: input.credentialId ?? null,
+      surface: "gateway_invoke" as const,
+      tool: toolRaw,
+      jobId,
+    };
+    if (!secretDetection.ok) {
+      await auditSecretDetectionBlocked(scope, secretDetection);
+      return jsonResult(
+        {
+          ...buildSecretDetectionErrorResponse(secretDetection),
+          employeeId,
+          tool: safeEcho(toolRaw),
+          purpose: safeEcho(purpose),
+          jobId: safeEcho(jobId),
+        },
+        400
+      );
+    }
+    await auditSecretDetectionSuspected(scope, secretDetection.suspected ?? []);
   }
 
   const resolved = resolveGatewayTool(toolRaw);

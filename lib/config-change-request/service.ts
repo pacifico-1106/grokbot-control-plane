@@ -29,6 +29,7 @@ import { getIdentityBinding } from "@/lib/employees/employee-identity";
 import { applyChannelClassification } from "@/lib/admin-mcp/channel-classify";
 import { executeApproval } from "@/lib/approvals/execution";
 import { detectSecretInPayload, buildSecretDetectionErrorResponse } from "@/lib/security/secret-detector";
+import { auditSecretDetectionBlocked, auditSecretDetectionSuspected } from "@/lib/security/secret-detection-audit";
 import type { ApprovalRequest, Employee } from "@/lib/types";
 import {
   CONFIG_CHANGE_APPROVAL_CLASS,
@@ -251,11 +252,22 @@ export async function createConfigChangeRequest(
     reason: value.reason,
     instructions: value.proposal.kind === "instructions" ? value.proposal.text : null,
   });
+  const secretScope = {
+    orgId: employee.orgId,
+    employeeId: employee.id,
+    credentialId: input.credentialId,
+    surface: "config_change_request" as const,
+    tool: CONFIG_CHANGE_TOOL,
+    jobId: value.jobId,
+  };
   if (!secret.ok) {
+    // 2026-10-05: exactly one row (secret_detection.blocked replaces the
+    // config.change_refused row for this code); no value; a failed write still rejects.
     const rejection = buildSecretDetectionErrorResponse(secret);
-    await auditRefusal(employee, input.credentialId, "secret_detected_in_payload");
+    await auditSecretDetectionBlocked(secretScope, secret);
     return { ...rejection, ok: false, applied: false, messageJa: rejection.messageJa };
   }
+  if (secret.suspected) await auditSecretDetectionSuspected(secretScope, secret.suspected);
 
   const before = await snapshotBefore(input.orgId, employee.id, value);
   const proposal = value.proposal;

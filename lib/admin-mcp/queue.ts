@@ -21,6 +21,11 @@ import {
   detectSecretInPayload,
   buildSecretDetectionErrorResponse,
 } from "@/lib/security/secret-detector";
+import {
+  auditSecretDetectionBlocked,
+  auditSecretDetectionSuspected,
+  safeEcho,
+} from "@/lib/security/secret-detection-audit";
 import { checkAdminPolicyRequirement } from "@/lib/approval-workflow/admin-policy";
 import { getOrgApprovalWorkflowPolicy } from "@/lib/approval-workflow/data";
 import { isAdminApproverPolicyRequired } from "@/lib/feature-flags";
@@ -69,9 +74,14 @@ export type AdminQueueSecretRejection = {
   code: "secret_detected_in_payload";
   error: "secret_detected_in_payload";
   pattern: string;
+  /** Constant; never characters of the value. */
   redactedPreview: string;
+  fieldPath: string;
+  matchLength: number;
   messageJa: string;
   nextStepJa: string;
+  nextStep: string;
+  retryable: false;
   tool: string;
 };
 
@@ -105,13 +115,27 @@ export async function queueAdminTool(input: {
   // IMPORTANT: Scan raw user input (rawArgsForSecretScan), NOT the post-encryption args.
   // Server-generated ciphertext (*Ciphertext fields from lib/notify/crypto) must not trigger.
   const argsToScan = input.rawArgsForSecretScan ?? input.args;
+  // 2026-10-05: one secret_detection.blocked row per rejection (credential org,
+  // no value); a failed write still rejects.
   const secretDetection = detectSecretInPayload(argsToScan);
-  if (!secretDetection.ok) {
-    const errorResponse = buildSecretDetectionErrorResponse(secretDetection);
-    return {
-      ...errorResponse,
+  if (!secretDetection.ok || secretDetection.suspected) {
+    const scope = {
+      orgId: input.cred.orgId || null,
+      employeeId: null,
+      credentialId: null,
+      surface: "admin_queue" as const,
       tool: input.tool,
+      jobId: input.jobId ?? null,
     };
+    if (!secretDetection.ok) {
+      await auditSecretDetectionBlocked(scope, secretDetection);
+      const errorResponse = buildSecretDetectionErrorResponse(secretDetection);
+      return {
+        ...errorResponse,
+        tool: safeEcho(input.tool) ?? input.tool,
+      };
+    }
+    await auditSecretDetectionSuspected(scope, secretDetection.suspected ?? []);
   }
 
   // P0 Item 1: Admin-class tickets require explicit account-approver policy

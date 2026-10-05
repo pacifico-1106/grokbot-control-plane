@@ -593,7 +593,9 @@ export type AuditAction =
   | "config.change_refused"
   | "config.change_applied"
   | "config.change_apply_failed"
-  | "config.change_rejected";
+  | "config.change_rejected"
+  | "secret_detection.blocked"
+  | "secret_detection.suspected";
 
 export interface Org {
   id: string;
