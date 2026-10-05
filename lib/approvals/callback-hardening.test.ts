@@ -15,6 +15,8 @@ process.env.NOTIFICATION_CONFIG_ENCRYPTION_KEY = "test-notification-key-01234567
 const { DEMO_ORG, getRuntimeAudit, getRuntimeEmployees } = await import("@/lib/demo-data");
 const { createApproval, resolveApproval } = await import("@/lib/data/approvals");
 const { updateWakeWebhook } = await import("@/lib/data");
+const bindingsData = await import("@/lib/data/bindings");
+const signingRoute = await import("@/app/api/employees/[id]/webhook-signing/route");
 const { runApprovalResolveSideEffects } = await import("@/lib/approvals/resolve-side-effects");
 const ob = await import("@/lib/webhooks/outbound");
 const settings = await import("@/lib/webhooks/settings");
@@ -48,8 +50,10 @@ beforeEach(() => {
     request: async (r) => { sent.push(r); return { status: receiverStatus, body: Buffer.from("receiver internal detail 10.1.2.3") }; },
   });
   settings.__resetWebhookSettingsForTests();
+  bindingsData.__setWakeSecretReadFailureForTests(null);
 });
 afterEach(async () => {
+  bindingsData.__setWakeSecretReadFailureForTests(null);
   globalThis.fetch = originalFetch;
   ob.__setOutboundWebhookTransportForTests(null);
   for (const k of ENV) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; }
@@ -109,6 +113,42 @@ describe("flag OFF (default): the receiver sees exactly today's request", () => 
     const audit = wakeAudit(a.id);
     expect(audit?.metadata).toMatchObject({ reason: "wake_failed", category: "http_5xx" });
     expect(audit?.metadata && "status" in audit.metadata).toBe(false);
+  });
+});
+
+describe("flag OFF: payload mode can be marked ahead of the flip (Kimura #2) — delivery unchanged", () => {
+  const setMode = (mode: string) =>
+    signingRoute.POST(
+      new Request("https://staffpass.test/api/employees/emp_sales/webhook-signing", {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-member-id": "mem_1", origin: "https://staffpass.test" },
+        body: JSON.stringify({ action: "set_callback_payload", mode }),
+      }),
+      { params: Promise.resolve({ id: "emp_sales" }) }
+    );
+  test("legacy_full / minimal saved with the flag OFF; the receiver still sees exactly today's request", async () => {
+    for (const mode of ["legacy_full", "minimal"]) {
+      const res = await setMode(mode);
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ ok: true, callbackPayload: mode });
+      const cfg = await settings.getCallbackWebhookConfig("emp_sales", ORG);
+      expect(cfg).toMatchObject({ state: "ok", payload: mode });
+      fetchCalls = [];
+      const a = await decided();
+      const r = await run(a);
+      expect(cbFetches()).toHaveLength(1);
+      expect(cbFetches()[0].init.headers).toEqual({ "content-type": "application/json", "user-agent": "Staffpass-ApprovalHook/1.0" });
+      expect(cbFetches()[0].init.body).toBe(legacyBody(a));
+      expect(sent).toHaveLength(0);
+      expect(r.callback).toEqual({ ok: true, skipped: false });
+    }
+  });
+  test("flag OFF: a wake-secret read failure does not change today's callback either", async () => {
+    bindingsData.__setWakeSecretReadFailureForTests("read_error");
+    const a = await decided();
+    await run(a);
+    expect(cbFetches()).toHaveLength(1);
+    expect(cbFetches()[0].init.body).toBe(legacyBody(a));
   });
 });
 
@@ -210,6 +250,50 @@ describe("flag ON: hardened delivery", () => {
     } finally {
       settings.__setWebhookSettingsFailureForTests(false);
     }
+  });
+  test("Kimura MUST: wake-secret read error / undecryptable → not sent (no silent unsigned), config_unavailable, audited + logged", async () => {
+    await updateWakeWebhook("emp_sales", { orgId: ORG, url: "https://wake.example.com/w", secret: "sender-key-d9" });
+    const errors: unknown[][] = [];
+    const origError = console.error;
+    console.error = (...args: unknown[]) => { errors.push(args); };
+    try {
+      for (const [failure, reason] of [["read_error", "wake_secret_read_error"], ["undecryptable", "wake_secret_undecryptable"]] as const) {
+        bindingsData.__setWakeSecretReadFailureForTests(failure);
+        const a = await decided();
+        const r = await run(a);
+        expect(r.callback).toEqual({ ok: false, skipped: false, error: "config_unavailable" });
+        expect(sent).toHaveLength(0);
+        expect(cbFetches()).toHaveLength(0);
+        const audit = getRuntimeAudit().find((e) => e.action === "approval.callback_config_unavailable" && e.metadata?.approvalId === a.id);
+        expect(audit?.metadata).toMatchObject({ target: "approval_callback", category: "config_unavailable", reason, hardened: true });
+        expect(JSON.stringify(audit)).not.toContain("sender-key-d9");
+        expect(errors.some((args) => args[0] === "approval_callback_config_unavailable" && args.includes(reason))).toBe(true);
+      }
+    } finally {
+      console.error = origError;
+    }
+  });
+  test("settings-table failure is audited the same way (reason settings_read_error)", async () => {
+    settings.__setWebhookSettingsFailureForTests(true);
+    try {
+      const a = await decided();
+      await run(a);
+      const audit = getRuntimeAudit().find((e) => e.action === "approval.callback_config_unavailable" && e.metadata?.approvalId === a.id);
+      expect(audit?.metadata).toMatchObject({ category: "config_unavailable", reason: "settings_read_error" });
+    } finally {
+      settings.__setWebhookSettingsFailureForTests(false);
+    }
+  });
+  test("genuinely no secret → still sent unsigned (as designed); secret present → signed", async () => {
+    let a = await decided();
+    await run(a);
+    expect(sent).toHaveLength(1);
+    expect(sent[0].headers["webhook-signature"]).toBeUndefined();
+    await updateWakeWebhook("emp_sales", { orgId: ORG, url: "https://wake.example.com/w", secret: "sender-key-d9" });
+    a = await decided();
+    await run(a);
+    expect(sent).toHaveLength(2);
+    expect(sent[1].headers["webhook-signature"]).toMatch(/^v1,/);
   });
   test("handoff block survives in the minimal body; wake audit carries the category", async () => {
     process.env.MCP_ENDPOINT_HANDOFF_ENABLED = "true";

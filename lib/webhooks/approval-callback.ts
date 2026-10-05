@@ -11,7 +11,11 @@
  * a receiver that gets both dedupes on it); otherwise a stable hash of
  * (org, approval, status, resolvedAt) so repeats of one decision share it.
  * Transport: postHardenedWebhook (#267 postWebhook). No retries (as before).
+ * Config / secret unreadable (incl. the wake-secret fallback) → not sent,
+ * category config_unavailable, logged + audited with a fixed reason (never
+ * silently unsigned, never the secret).
  */
+import { appendAuditEvent } from "@/lib/data/audit";
 import { getCallbackWebhookConfig } from "./settings";
 import {
   postHardenedWebhook,
@@ -49,7 +53,19 @@ export async function deliverHardenedApprovalCallback(input: {
 }): Promise<WebhookFailureCategory | null> {
   try {
     const cfg = await getCallbackWebhookConfig(input.employeeId, input.orgId);
-    if (cfg.state === "error") return "config_unavailable";
+    if (cfg.state === "error") {
+      console.error("approval_callback_config_unavailable", input.employeeId, cfg.reason);
+      await appendAuditEvent({
+        orgId: input.orgId,
+        employeeId: input.employeeId,
+        credentialId: null,
+        action: "approval.callback_config_unavailable",
+        purpose: "approval.resolved",
+        summary: "承認結果の callback を送らなかった（署名の設定を読めない）",
+        metadata: { target: "approval_callback", category: "config_unavailable", reason: cfg.reason, approvalId: input.approvalId, hardened: true },
+      }).catch(() => undefined);
+      return "config_unavailable";
+    }
     const body = JSON.stringify(cfg.payload === "legacy_full" ? input.payload : minimalCallbackBody(input.payload));
     const msgId = input.eventId || stableWebhookId("cb", [input.orgId, input.approvalId, input.status, input.resolvedAt ?? ""]);
     const headers = {

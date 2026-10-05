@@ -535,6 +535,7 @@ export type AuditAction =
   | "mcp_events.triggered_action"
   | "employee.webhook_secret_minted"
   | "employee.webhook_payload_mode_set"
+  | "approval.callback_config_unavailable"
   | "mcp_handoff.not_connected_notify"
   | "agent.approval_wake"
   | "stuck_watch.audience_ledger_retry"

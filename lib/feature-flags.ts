@@ -574,6 +574,11 @@ export function isMcpEventsEnabled(): boolean {
  * - webhook-id for the callback = the MCP Events eventId when there is one (D7).
  * Requires migration 20261005100000_employee_webhook_settings.sql (settings
  * that cannot be read → the callback is not sent, category config_unavailable).
+ * The signing secret is read strictly: a read error or an undecryptable secret
+ * (callback secret or the wake-secret fallback, and the wake webhook's own
+ * secret) → not sent, config_unavailable, audited — never silently unsigned.
+ * Only a genuinely absent secret means unsigned.
+ * The legacy_full setting can be stored while OFF (no delivery effect).
  *
  * When OFF (default): receivers get exactly today's requests (fetch, same
  * headers and body). Independent of the flag, the approver-facing result and
