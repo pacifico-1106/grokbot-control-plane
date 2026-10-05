@@ -172,9 +172,19 @@ export function detectCardLikeString(value: string): CardLikeDetectionResult {
 // a URL used to skip every pattern, so keys in query strings / after the URL
 // were never scanned. Bare URLs now go through the named patterns and the AWS
 // rule; see isBareUrl for the generic length-only patterns.)
+//
+// 2026-10-05 (木村): the date rule was `^\d{4}-\d{2}-\d{2}` with no end anchor,
+// so ANY value that merely started with a date (e.g. a "2026-10-05 週報 …"
+// report, or "2026-10-05 xoxb-…") skipped the whole detector. It now skips
+// only a value that IS an ISO-8601 date or timestamp — what the rule was
+// added for (P0-A 2026-09-22: "2026-09-22", "2026-09-22T10:30:00Z"):
+// date, optional time (HH:MM[:SS[.fraction]]), optional Z / ±HH[:]MM.
+const ISO_DATE_OR_TIMESTAMP =
+  /^\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d{1,9})?)?(?:Z|[+-]\d{2}:?\d{2})?)?$/;
+
 const ALLOWLIST_PATTERNS = [
   /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z]{2,}$/i,
-  /^\d{4}-\d{2}-\d{2}/,
+  ISO_DATE_OR_TIMESTAMP,
   /^[A-Z0-9]{2,10}$/,
 ];
 
