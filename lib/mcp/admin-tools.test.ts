@@ -628,3 +628,23 @@ describe("ingressHandoff per-employee admin MCP", () => {
     expect(data.code).toBe("rules_required");
   });
 });
+
+describe("every advertised admin MCP tool is callable", () => {
+  // tools/list must never advertise a name the dispatcher does not handle:
+  // with empty arguments every tool answers (a validation error, a gate, a
+  // ticket or data) — never unknown_mcp_tool and never a thrown error.
+  test("callAdminMcpTool(name, {}) answers for every tool in ADMIN_MCP_TOOLS", async () => {
+    const unhandled: string[] = [];
+    for (const tool of ADMIN_MCP_TOOLS) {
+      let code: unknown;
+      try {
+        const result = await callAdminMcpTool(tool.name, {}, demoCred());
+        code = (result.structuredContent as Record<string, unknown> | undefined)?.code;
+      } catch (error) {
+        code = `threw:${error instanceof Error ? error.message : String(error)}`;
+      }
+      if (code === "unknown_mcp_tool" || String(code).startsWith("threw:")) unhandled.push(`${tool.name}=${String(code)}`);
+    }
+    expect(unhandled).toEqual([]);
+  });
+});
