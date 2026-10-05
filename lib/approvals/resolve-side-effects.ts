@@ -9,6 +9,7 @@ import { isConfigChangeApproval } from "@/lib/config-change-request/core";
 import { recordConfigChangeResolution } from "@/lib/config-change-request/service";
 import { isDecisionWorkflowEnabled, isMcpEndpointHandoffEnabled, isMcpEventsEnabled, isWebhookHardeningEnabled } from "@/lib/feature-flags";
 import { categorizeFetchError, categorizeHttpStatus, type WebhookFailureCategory } from "@/lib/webhooks/outbound";
+import { withLinkLocalGuard } from "@/lib/webhooks/link-local-guard";
 import { deliverHardenedApprovalCallback } from "@/lib/webhooks/approval-callback";
 import {
   APPROVAL_WAKE_ACTION,
@@ -242,7 +243,9 @@ export async function runApprovalResolveSideEffects(opts: {
           payload: payload as Record<string, unknown>,
         });
       } else {
-        const res = await fetch(callbackUrl, {
+        // No flag: link-local / cloud-metadata destinations are refused at
+        // connect time on every hop (lib/webhooks/link-local-guard.ts).
+        const res = await fetch(callbackUrl, withLinkLocalGuard({
           method: "POST",
           headers: {
             "content-type": "application/json",
@@ -250,7 +253,7 @@ export async function runApprovalResolveSideEffects(opts: {
           },
           body: JSON.stringify(payload),
           signal: AbortSignal.timeout(4000),
-        });
+        }));
         failure = categorizeHttpStatus(res.status);
       }
     } catch (e) {

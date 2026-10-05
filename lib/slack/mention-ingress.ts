@@ -66,6 +66,7 @@ import { verifySlackSignature } from "@/lib/notify/slack";
 import { createSupabaseAdminClient } from "@/lib/supabase";
 import { addLookingReaction } from "@/lib/slack/reaction-stamps";
 import { isSlackImNoRouteAuditEnabled, isWebhookHardeningEnabled } from "@/lib/feature-flags";
+import { withLinkLocalGuard } from "@/lib/webhooks/link-local-guard";
 import { recordImNoRouteAudit } from "@/lib/slack/im-no-route-audit";
 
 const WAKE_TIMEOUT_MS = 10_000;
@@ -525,12 +526,14 @@ async function postWake(
   try {
     let failure: WebhookFailureCategory | null;
     if (!hardened) {
-      const response = await fetch(url, {
+      // No flag: link-local / cloud-metadata destinations are refused at
+      // connect time on every hop (lib/webhooks/link-local-guard.ts).
+      const response = await fetch(url, withLinkLocalGuard({
         method: "POST",
         headers,
         body: JSON.stringify(wakeBody),
         signal: AbortSignal.timeout(WAKE_TIMEOUT_MS),
-      });
+      }));
       failure = response.ok ? null : categorizeHttpStatus(response.status) ?? "http_4xx";
       if (failure) console.error("slack_mention_wake_http", target.employeeId, response.status);
     } else if (secretUnavailable) {
