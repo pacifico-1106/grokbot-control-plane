@@ -89,6 +89,8 @@ export const APPROVER_AUTHORITY_RESULT_REASONS = [
   "no_owner_other_than_requester",
   "approver_is_requester",
   "approver_identity_unverified",
+  // members.promoteOwner: the member being promoted may not approve their own promotion.
+  "approver_is_target",
 ] as const;
 
 export type ApproverAuthorityResultReason = (typeof APPROVER_AUTHORITY_RESULT_REASONS)[number];
@@ -113,4 +115,28 @@ export function requesterMemberIdsFromMetadata(metadata: Record<string, unknown>
   const member = metadata?.requesterMemberId;
   if (typeof member === "string" && member.trim()) out.add(member.trim());
   return [...out];
+}
+
+/**
+ * members.promoteOwner (八坂 10:11): neither the requester nor the member being
+ * promoted may approve — no sole-owner exception (the requester may never be
+ * the approver here). Dependency-free; checked at approval time and again at
+ * fulfil. Returns null when there is no conflict (or the ticket is another tool).
+ */
+export const PROMOTE_OWNER_TOOL_NAME = "members.promoteOwner";
+
+export function promoteOwnerApproverConflict(
+  approval: { tool?: string | null; metadata?: Record<string, unknown> | null },
+  approverMemberId: string | null | undefined
+): "approver_is_target" | "approver_is_requester" | null {
+  if (approval.tool !== PROMOTE_OWNER_TOOL_NAME) return null;
+  const approver = String(approverMemberId || "").trim();
+  if (!approver) return null; // missing approver is refused elsewhere (fail closed)
+  const mutation = approval.metadata?.adminMutation;
+  const target = mutation && typeof mutation === "object" && !Array.isArray(mutation)
+    ? String((mutation as Record<string, unknown>).memberId || "").trim()
+    : "";
+  if (target && approver === target) return "approver_is_target";
+  if (requesterMemberIdsFromMetadata(approval.metadata).includes(approver)) return "approver_is_requester";
+  return null;
 }

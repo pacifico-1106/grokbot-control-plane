@@ -636,3 +636,15 @@ export function isWebhookHardeningEnabled(): boolean {
 export function isApproverAuthorityEnabled(): boolean {
   return parseFlag(process.env.APPROVER_AUTHORITY_ENABLED);
 }
+
+/**
+ * OWNER_PROMOTION_ENABLED: admin MCP members.promoteOwner (make an existing
+ * active member an owner after ONE existing owner approves; not the requester,
+ * not the target). Also requires APPROVER_AUTHORITY_ENABLED — without PR-D's
+ * approver check the ticket could be approved by a non-owner, so the tool
+ * refuses at filing AND at fulfil unless both are ON. Default OFF.
+ * No removal / transfer of ownership.
+ */
+export function isOwnerPromotionEnabled(): boolean {
+  return parseFlag(process.env.OWNER_PROMOTION_ENABLED) && isApproverAuthorityEnabled();
+}

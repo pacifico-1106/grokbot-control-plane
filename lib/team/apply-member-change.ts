@@ -30,9 +30,10 @@ import {
   type MemberChangeEditability,
   type MemberSnapshot,
 } from "@/lib/team/member-change-guard";
+import { JOB_ROLE_CAPABILITY_PACKS } from "@/lib/team/rbac";
 import type { HumanJobRole, OrgMember } from "@/lib/types";
 
-export type MemberChangeSource = "team_api";
+export type MemberChangeSource = "team_api" | "admin_mcp_promote_owner";
 
 export type MemberChangeRequest = {
   orgId: string;
@@ -291,4 +292,106 @@ export function teamEditability(
     byMemberId[m.id] = memberChangeEditability({ actor, before: snapshot(m), ownerCount });
   }
   return { byMemberId, invite: memberChangeEditability({ actor, before: null, ownerCount }) };
+}
+
+/** Standard owner capabilities (same pack as the owner job role / org bootstrap). */
+export const OWNER_STANDARD_CAPABILITIES: readonly string[] = JOB_ROLE_CAPABILITY_PACKS.owner;
+
+export type OwnerPromotionRequest = {
+  orgId: string;
+  /** The owner who approved the ticket (verified approver on the approval row). */
+  approverMemberId: string;
+  targetMemberId: string;
+  /** Target role / capabilities captured at filing; the row must still match. */
+  expectedRole: string;
+  expectedCapabilities: readonly string[];
+  approvalId: string;
+};
+
+export type OwnerPromotionResult =
+  | { ok: true; member: OrgMember; before: OrgMember; approver: OrgMember }
+  | { ok: false; code: MemberChangeDenyCode | "approver_not_owner" | "member_not_active" | "already_owner"; messageJa: string };
+
+/**
+ * members.promoteOwner fulfil: fresh org-scoped read → the approving owner is
+ * the guard actor → evaluateMemberChange (owner-only owner role, privileged
+ * capabilities, no self-escalation) → conditional write (role + capabilities
+ * must still equal what the ticket showed) → audit. Same single guard as
+ * applyMemberChange; nothing else can set role=owner from the admin MCP.
+ */
+export async function applyOwnerPromotion(req: OwnerPromotionRequest): Promise<OwnerPromotionResult> {
+  const inOrg = (await listMembers(req.orgId)).filter((m) => m.orgId === req.orgId);
+  const approver = inOrg.find((m) => m.id === req.approverMemberId) ?? null;
+  const before = inOrg.find((m) => m.id === req.targetMemberId) ?? null;
+  const auditReq: MemberChangeRequest = {
+    orgId: req.orgId,
+    actor: approver ?? ({ id: req.approverMemberId, orgId: req.orgId, email: "", displayName: "", role: "member", status: "disabled", capabilities: [] } as OrgMember),
+    targetId: req.targetMemberId,
+    email: before?.email ?? "",
+    displayName: before?.displayName ?? "",
+    role: "owner",
+    capabilities: [...OWNER_STANDARD_CAPABILITIES],
+    source: "admin_mcp_promote_owner",
+  };
+  const deny = async (code: Exclude<OwnerPromotionResult, { ok: true }>["code"], messageJa?: string): Promise<OwnerPromotionResult> => {
+    await auditDenied(auditReq, auditReq.actor, before, code as MemberChangeDenyCode, { approvalId: req.approvalId });
+    return { ok: false, code, messageJa: messageJa ?? denyMemberChange(code as MemberChangeDenyCode).messageJa };
+  };
+  if (!approver || approver.status !== "active" || approver.role !== "owner") {
+    return deny("approver_not_owner", "承認したオーナーを、この組織の有効なオーナーとして確認できません。");
+  }
+  if (!before) return deny("target_not_found");
+  if (before.status !== "active") return deny("member_not_active", "対象のメンバーが有効ではありません（招待中・停止中）。");
+  if (before.role === "owner") return deny("already_owner", "対象のメンバーはすでにオーナーです。");
+  if (before.role !== req.expectedRole || !sameCaps(before.capabilities ?? [], req.expectedCapabilities)) {
+    return deny("concurrent_modification");
+  }
+  const decision = evaluateMemberChange({
+    actor: guardActorFromMember(approver),
+    before: snapshot(before),
+    after: { orgId: req.orgId, email: normalizeIdentityEmail(before.email), role: "owner", capabilities: [...OWNER_STANDARD_CAPABILITIES] },
+    ownerCount: countActiveOwners(inOrg),
+  });
+  if (!decision.ok) return deny(decision.code);
+  const next: OrgMember = { ...before, role: decision.roleAfter, capabilities: decision.capabilitiesAfter };
+  let saved: OrgMember;
+  try {
+    saved = await writeMemberRow(next, req.orgId, { role: before.role, capabilities: [...(before.capabilities ?? [])] });
+  } catch (e) {
+    if (e instanceof MemberConcurrentModificationError) return deny("concurrent_modification");
+    throw e;
+  }
+  await appendAuditEvent({
+    orgId: req.orgId,
+    employeeId: null,
+    credentialId: null,
+    action: "member.updated",
+    purpose: null,
+    summary: `オーナーを追加: ${saved.displayName || saved.id}（オーナー承認）`,
+    actorEmail: approver.email,
+    metadata: {
+      memberId: saved.id,
+      source: "admin_mcp_promote_owner",
+      approvalId: req.approvalId,
+      actorMemberId: approver.id,
+      actorUserId: approver.userId ?? null,
+      actorRole: approver.role,
+      self: decision.isSelf,
+      jobRole: saved.jobRole ?? null,
+      capabilities: decision.capabilitiesAfter,
+      capabilitiesBefore: decision.capabilitiesBefore,
+      capabilitiesAfter: decision.capabilitiesAfter,
+      added: decision.added,
+      removed: decision.removed,
+      roleBefore: decision.roleBefore,
+      roleAfter: decision.roleAfter,
+    },
+  }).catch(() => null);
+  return { ok: true, member: saved, before, approver };
+}
+
+function sameCaps(a: readonly string[], b: readonly string[]): boolean {
+  const x = new Set(a);
+  const y = new Set(b);
+  return x.size === y.size && [...x].every((c) => y.has(c));
 }

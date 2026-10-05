@@ -19,7 +19,7 @@ import { resolveApprovalWithoutWorkflow as baseResolveApproval, getApprovalById 
 import * as approvalsData from "@/lib/data/approvals";
 import { isApproverAuthorityEnabled } from "@/lib/feature-flags";
 import { checkApproverAuthority, recordApproverAuthority, verifyApproverIdentity } from "@/lib/approver-authority/verify";
-import { requesterMemberIdsFromMetadata } from "@/lib/approver-authority/decide";
+import { promoteOwnerApproverConflict, requesterMemberIdsFromMetadata } from "@/lib/approver-authority/decide";
 import { isDemoMode } from "@/lib/mode";
 import { createSupabaseAdminClient } from "@/lib/supabase";
 import { withDemoWorkflowLock } from "@/lib/approval-workflow/lock";
@@ -166,6 +166,10 @@ async function resolveWorkflow(
     const identity = await verifyApproverIdentity(orgId, opts);
     if (!identity.ok) return authorityStop(approval, identity.reason, false);
     opts = { ...opts, memberId: identity.memberId };
+    // members.promoteOwner: neither the requester nor the target may approve
+    // (no sole-owner exception). Before any ballot / W1 write.
+    const conflict = promoteOwnerApproverConflict(approval, identity.memberId || opts.voterUserId);
+    if (conflict) return authorityStop(approval, conflict, false);
   }
 
   // Idempotent snapshot initialization is also required for tickets created by

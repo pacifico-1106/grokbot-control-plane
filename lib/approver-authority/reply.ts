@@ -24,6 +24,7 @@ const REASON_JA: Record<ApproverAuthorityResultReason, string> = {
   approver_is_requester: "申請者は自分の申請を承認できません。申請者以外のオーナーが承認してください。",
   approver_identity_unverified:
     "押した方の Slack / LINE / Telegram アカウントが、承認できるメンバー本人に紐づいていることを確認できないため止めました。",
+  approver_is_target: "オーナーに追加される本人は、この申請を承認できません。",
 };
 
 /** What to do next, for reasons where the person can act. */
@@ -34,6 +35,7 @@ const NEXT_STEP_JA: Partial<Record<ApproverAuthorityResultReason, string>> = {
   approver_is_requester: "申請者以外のオーナー（または、標準の変更なら指定管理者）に承認を依頼してください。",
   approver_not_authorized: "オーナーまたは指定管理者に承認を依頼してください。",
   approver_identity_unverified: "承認者登録（approvalWorkflow.bindVoter）で、このアカウントをご本人のメンバーに紐づけてから押してください。",
+  approver_is_target: "対象者と申請者以外の既存オーナーに承認を依頼してください。",
 };
 
 /** nextStep for the reply / API response; null when there is nothing specific to do. */
@@ -67,5 +69,22 @@ export function approverAuthorityApprovedNoticeJa(input: {
     `対象: ${tool}（申請 #${String(input.approvalId).slice(0, 8)}）`,
     `承認者: ${name ? `${name}（${role}）` : role}`,
     "詳細は管理画面の承認履歴で確認してください。",
+  ].join("\n");
+}
+
+/** members.promoteOwner applied — names + short ticket id only (no args / secrets). */
+export function ownerPromotedNoticeJa(input: {
+  approvalId: string;
+  targetDisplayName?: string | null;
+  approverDisplayName?: string | null;
+}): string {
+  const clean = (v: string | null | undefined) => String(v || "").replace(/[\r\n]+/g, " ").trim().slice(0, 60);
+  const target = clean(input.targetDisplayName) || "(名前なし)";
+  const approver = clean(input.approverDisplayName);
+  return [
+    "👑 オーナーを追加しました",
+    `新しいオーナー: ${target}`,
+    `承認: ${approver ? `${approver}（オーナー）` : "オーナー"}（申請 #${String(input.approvalId).slice(0, 8)}）`,
+    "オーナー標準の権限が付きました。心当たりがない場合は管理画面のチーム設定と監査ログを確認してください。",
   ].join("\n");
 }

@@ -68,6 +68,7 @@ export const ADMIN_TOOL_AUDIT_ACTION: Record<string, AdminAuditAction> = {
   "channels.remove": "admin.channel",
   "parties.remove": "admin.parties",
   "approvers.designatedAdmins.set": "admin.policy",
+  "members.promoteOwner": "admin.policy",
 };
 
 /** Operational / employee-badge class — never lead the dashboard change log. */

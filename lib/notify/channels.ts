@@ -363,7 +363,6 @@ export async function notifyOwnersApproverAuthorityApproved(
   approval: ApprovalRequest
 ): Promise<OwnerApprovedNoticeResult> {
   const { getOrgOwners, getMemberById } = await import("@/lib/data/members");
-  const { listVoterBindings } = await import("@/lib/approval-workflow/voter-binding");
   const { approverAuthorityApprovedNoticeJa } = await import("@/lib/approver-authority/reply");
   const approverId = (approval.approverMemberId || "").trim();
   const approver = approverId ? await getMemberById(approverId, approval.orgId).catch(() => null) : null;
@@ -379,19 +378,10 @@ export async function notifyOwnersApproverAuthorityApproved(
   const result: OwnerApprovedNoticeResult = { owners: owners.length, slackDmSent: 0, slackDmFailed: 0, ownersWithoutSlack: 0, channelPost: null };
   if (owners.length === 0) return result;
   const channels = await getEnabledNotificationChannels(approval.orgId);
-  for (const owner of owners) {
-    const bindings = (await listVoterBindings({ orgId: approval.orgId, memberId: owner.id, provider: "slack" }).catch(() => []))
-      .filter((b) => b.status === "active" && b.memberId === owner.id);
-    const binding = bindings.find((b) => channels.some((c) => c.id === b.channelKey && c.provider === "slack"));
-    if (!binding) {
-      result.ownersWithoutSlack++;
-      continue;
-    }
-    const channel = channels.find((c) => c.id === binding.channelKey && c.provider === "slack")!;
-    const sent = await sendSlackDmToUser(channel, binding.externalUserId, text).catch(() => ({ ok: false }));
-    if (sent.ok) result.slackDmSent++;
-    else result.slackDmFailed++;
-  }
+  const dm = await dmMembersViaVerifiedSlack(approval.orgId, owners.map((o) => o.id), text, channels);
+  result.slackDmSent = dm.sent;
+  result.slackDmFailed = dm.failed;
+  result.ownersWithoutSlack = dm.withoutSlack;
   const inbox = await resolveApprovalNotificationChannel(approval, null).catch(() => null);
   if (inbox && (inbox.provider === "line" || inbox.provider === "telegram")) {
     const sent = inbox.provider === "telegram"
@@ -407,6 +397,94 @@ export async function notifyOwnersApproverAuthorityApproved(
     purpose: "approver_authority.owner_notice",
     summary: `承認の事後通知（オーナー ${result.owners} 人）`,
     metadata: { approvalId: approval.id, tool: approval.tool ?? null, ...result },
+  }).catch(() => undefined);
+  return result;
+}
+
+/**
+ * Slack DM to members via each member's verified (active) Slack voter binding,
+ * sent with that binding's own approval inbox bot. No binding → counted, skipped.
+ */
+async function dmMembersViaVerifiedSlack(
+  orgId: string,
+  memberIds: readonly string[],
+  text: string,
+  channels: Awaited<ReturnType<typeof getEnabledNotificationChannels>>
+): Promise<{ sent: number; failed: number; withoutSlack: number }> {
+  const { listVoterBindings } = await import("@/lib/approval-workflow/voter-binding");
+  const out = { sent: 0, failed: 0, withoutSlack: 0 };
+  for (const memberId of memberIds) {
+    const bindings = (await listVoterBindings({ orgId, memberId, provider: "slack" }).catch(() => []))
+      .filter((b) => b.status === "active" && b.memberId === memberId);
+    const binding = bindings.find((b) => channels.some((c) => c.id === b.channelKey && c.provider === "slack"));
+    if (!binding) {
+      out.withoutSlack++;
+      continue;
+    }
+    const channel = channels.find((c) => c.id === binding.channelKey && c.provider === "slack")!;
+    const sent = await sendSlackDmToUser(channel, binding.externalUserId, text).catch(() => ({ ok: false }));
+    if (sent.ok) out.sent++;
+    else out.failed++;
+  }
+  return out;
+}
+
+export type OwnerPromotedNoticeResult = {
+  recipients: number;
+  slackDmSent: number;
+  slackDmFailed: number;
+  withoutSlack: number;
+  channelPost: { provider: "line" | "telegram"; ok: boolean } | null;
+};
+
+/**
+ * members.promoteOwner applied: tell every active owner (the new one included)
+ * and the target — Slack DM via verified bindings + the org's LINE / Telegram
+ * approval inbox. Names + short ticket id only (ownerPromotedNoticeJa). Audit
+ * records counts only. Best effort: never undoes the promotion.
+ */
+export async function notifyOwnerPromoted(
+  approval: ApprovalRequest,
+  input: { targetMemberId: string; approverMemberId: string }
+): Promise<OwnerPromotedNoticeResult> {
+  const { getOrgOwners, getMemberById } = await import("@/lib/data/members");
+  const { ownerPromotedNoticeJa } = await import("@/lib/approver-authority/reply");
+  const [target, approver] = await Promise.all([
+    getMemberById(input.targetMemberId, approval.orgId).catch(() => null),
+    getMemberById(input.approverMemberId, approval.orgId).catch(() => null),
+  ]);
+  const text = ownerPromotedNoticeJa({
+    approvalId: approval.id,
+    targetDisplayName: target?.displayName ?? null,
+    approverDisplayName: approver?.displayName ?? null,
+  });
+  const ids = new Set(
+    (await getOrgOwners(approval.orgId))
+      .filter((m) => m.orgId === approval.orgId && m.status === "active")
+      .map((m) => m.id)
+  );
+  ids.add(input.targetMemberId);
+  const result: OwnerPromotedNoticeResult = { recipients: ids.size, slackDmSent: 0, slackDmFailed: 0, withoutSlack: 0, channelPost: null };
+  const channels = await getEnabledNotificationChannels(approval.orgId);
+  const dm = await dmMembersViaVerifiedSlack(approval.orgId, [...ids], text, channels);
+  result.slackDmSent = dm.sent;
+  result.slackDmFailed = dm.failed;
+  result.withoutSlack = dm.withoutSlack;
+  const inbox = await resolveApprovalNotificationChannel(approval, null).catch(() => null);
+  if (inbox && (inbox.provider === "line" || inbox.provider === "telegram")) {
+    const sent = inbox.provider === "telegram"
+      ? await sendTelegramTextToChannel(inbox, escapeTelegramHtml(text)).catch(() => ({ ok: false }))
+      : await sendLineText(inbox, text).catch(() => ({ ok: false }));
+    result.channelPost = { provider: inbox.provider, ok: Boolean(sent.ok) };
+  }
+  await appendAuditEvent({
+    orgId: approval.orgId,
+    employeeId: null,
+    credentialId: null,
+    action: "admin.policy",
+    purpose: "owner_promotion.notice",
+    summary: `オーナー追加の通知（${result.recipients} 人）`,
+    metadata: { approvalId: approval.id, tool: "members.promoteOwner", targetMemberId: input.targetMemberId, ...result },
   }).catch(() => undefined);
   return result;
 }

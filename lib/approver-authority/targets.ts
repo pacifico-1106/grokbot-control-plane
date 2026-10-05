@@ -21,6 +21,8 @@ export const REQUIRED_APPROVER_KINDS: readonly RequiredApproverKind[] = [
 
 export const DESIGNATED_ADMINS_GET_TOOL = "approvers.designatedAdmins.get";
 export const DESIGNATED_ADMINS_SET_TOOL = "approvers.designatedAdmins.set";
+/** オーナー追加 (existing active member → owner). Owner approval only; never with an invite. */
+export const PROMOTE_OWNER_TOOL = "members.promoteOwner";
 
 /**
  * All approver-authority targets. Append only (parallel PRs add rows).
@@ -69,6 +71,7 @@ export const APPROVER_AUTHORITY_TARGETS = {
     "decision.deputyActivate",
     "members.invite",
     DESIGNATED_ADMINS_SET_TOOL,
+    PROMOTE_OWNER_TOOL,
   ],
   moneyApprovalKinds: ["decision", "other"],
   nonMoneyApprovalKinds: ["post", "mail", "account"],

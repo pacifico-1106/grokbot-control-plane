@@ -1,5 +1,6 @@
 import { consumeAdminApprovalSecret } from "@/lib/admin-mcp/consume-secret";
 import { handleDesignatedAdminsTool, isDesignatedAdminsTool } from "@/lib/admin-mcp/designated-admins-tool";
+import { handlePromoteOwnerTool, PROMOTE_OWNER_TOOL } from "@/lib/admin-mcp/promote-owner-tool";
 import { canReadAdminApproval } from "@/lib/admin-mcp/result-authority";
 import { assertAdminToolAllowedForPlan } from "@/lib/billing/plan-gate";
 /**
@@ -1453,6 +1454,21 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
       additionalProperties: false,
     },
   },
+  {
+    name: "members.promoteOwner",
+    description:
+      "File a request to make an EXISTING ACTIVE member of this org an owner (オーナー追加; always_human; requires OWNER_PROMOTION_ENABLED and APPROVER_AUTHORITY_ENABLED). memberId only — no invite (cannot add a new person as owner), no role / capabilities / orgId arguments. Exactly one existing owner approves; the requester and the member being promoted cannot approve, and a designated admin's approval leaves it オーナー承認待ち. When applied: role owner with the standard owner capabilities, re-checked against the current member row (unchanged since filing, still active, not already owner) through the team member-change guard; every owner and the member are notified; audited (before/after, approving owner, ticket). Removing an owner or transferring ownership is not available. Org from the credential. Re-invoke with approvalId to read the result.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        memberId: { type: "string", description: "org_members ID of an active non-owner member of this org" },
+        jobId: { type: "string" },
+        approvalId: { type: "string", description: "Re-invoke with approved ticket ID" },
+      },
+      required: ["memberId"],
+      additionalProperties: false,
+    },
+  },
 ];
 
 /**
@@ -2305,6 +2321,21 @@ export async function callAdminMcpTool(
   if (name === POSTING_IDENTITY_SET_TOOL) {
     // Org from the credential only; user-token check before the ticket.
     const outcome = await handlePostingIdentityTool(args, cred);
+    if (outcome.kind === "result") return toolResult(outcome.data, outcome.isError === true);
+    const queued = await queueAdminTool({
+      cred,
+      tool: name,
+      args: { ...outcome.queuedArgs, ...(typeof args.jobId === "string" ? { jobId: args.jobId } : {}) },
+      rawArgsForSecretScan: args,
+      title: outcome.title,
+      summary: outcome.summary,
+    });
+    return toolResult(queued, false);
+  }
+
+  if (name === PROMOTE_OWNER_TOOL) {
+    // オーナー追加 (OWNER_PROMOTION_ENABLED + APPROVER_AUTHORITY_ENABLED). Org from the credential only.
+    const outcome = await handlePromoteOwnerTool(args, cred);
     if (outcome.kind === "result") return toolResult(outcome.data, outcome.isError === true);
     const queued = await queueAdminTool({
       cred,
