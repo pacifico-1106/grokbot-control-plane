@@ -131,6 +131,28 @@ try:
     assert query("select status from public.approval_requests where id='82000000-0000-4000-8000-000000000002';") == "expired"
     assert "superseded" not in query("select pg_get_constraintdef(oid) from pg_constraint where conname='approval_requests_status_check';")
     sql(comm_reply_dedup)  # forward again after rollback
+    guard_v2 = ROOT / "supabase/migrations/20261005300000_duplicate_post_guard_v2.sql"
+    sql(guard_v2)
+    sql(guard_v2)  # re-applicable
+    sql(ROOT / "tests/security/db-duplicate-guard-v2.sql")
+    # 12 concurrent identical claims by two employees in one channel (cross-employee block): 1 winner.
+    commands = [(f"set role service_role; select public.claim_outbound_send_v2('{dedup_org}','{emp}',"
+                 f"repeat('7',64),repeat('7',64),null,repeat('e',64),null,'comm.reply',null,21600,0.6,2592000,true,'block',false)->>'state';")
+                for emp in [dedup_emp, "81000000-0000-4000-8000-000000000002"] * 6]
+    with ThreadPoolExecutor(max_workers=12) as pool:
+        states = list(pool.map(query, commands))
+    assert states.count("claimed") == 1 and states.count("duplicate") == 11, states
+    sql(ROOT / "supabase/verification/20261005300000_duplicate_post_guard_v2_rollback.sql")
+    assert query("select to_regprocedure('public.claim_outbound_send_v2(uuid,uuid,text,text,text,text,integer[],text,uuid,integer,double precision,integer,boolean,text,boolean)') is null;") == "t"
+    assert query("select count(*) from information_schema.columns where table_schema='public' and table_name='comm_reply_send_fingerprints' and column_name in ('channel_key','job_key');") == "0"
+    assert query("select count(*) from public.comm_reply_send_fingerprints where tool='sns.publish';") == "0"
+    # v1 keeps working after the v2 rollback
+    command = (f"set role service_role; select public.claim_comm_reply_send('{dedup_org}','{dedup_emp}',"
+               f"repeat('d',64),repeat('e',64),null,'comm.reply',null,1800,0.6,172800)->>'state';")
+    assert query(command) == "claimed"
+    query("delete from public.comm_reply_send_fingerprints where conversation_key=repeat('d',64);")
+    sql(guard_v2)  # forward again after rollback
+    print("PASS: duplicate post guard v2: anon/authenticated denied, same job regardless of window, cross-thread, cross-employee block/warn/off, uncertain rows reported + released only by their owner, fulfil uncertain vs superseded, sns.publish allowed, invalid input denied, 12 concurrent claims by 2 employees have 1 winner; rollback (v1 still works) + re-apply.")
     print("PASS: comm reply dedup ledger: superseded status + guard, anon/authenticated denied, org/employee isolation, exact/similar, superseded-after-approval only for an identical / similar reply (7 cases), 12 concurrent identical claims have 1 winner; rollback + re-apply.")
     member_guard = ROOT / "supabase/migrations/20261004200000_org_members_capability_guard.sql"
     sql(member_guard)

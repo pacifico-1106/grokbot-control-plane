@@ -451,6 +451,13 @@ export interface GatewayInvokeRequest {
     /** Optional initial comment posted with the file */
     initialComment?: string;
   };
+  /**
+   * Duplicate post guard v2 (DUPLICATE_GUARD_V2_ENABLED): after a
+   * post_outcome_unknown / duplicate_post_uncertain answer, the AI checked the
+   * conversation and the earlier post is NOT there → resend once with the
+   * uncertainRef it was given. Releases only that employee's own uncertain row.
+   */
+  duplicateGuard?: { confirmedNotDelivered?: string };
   /** F7: set internally to prevent audience ledger 補完 loops (stripped before persistence). */
   _audienceLedgerSupplemented?: boolean;
 }
@@ -472,6 +479,10 @@ export type AuditAction =
   | "approval.expired"
   | "comm_reply.duplicate_suppressed"
   | "comm_reply.dedup_unavailable"
+  // Duplicate post guard v2 (hashes only)
+  | "comm_reply.cross_employee_duplicate"
+  | "comm_reply.post_outcome_unknown"
+  | "comm_reply.uncertain_released"
   | "approval.telegram_error"
   | "approval.snapshot_missing_attachment"
   | "approval.attachment_upload_in_progress"

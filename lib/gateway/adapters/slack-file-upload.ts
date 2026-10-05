@@ -16,7 +16,7 @@ import { downloadPublicFile, MAX_FILE_BYTES } from "@/lib/security/public-file-d
  */
 
 import { resolveConversationToken } from "@/lib/gateway/adapters/slack";
-import { sanitizeSlackScopes, type SlackReinvokeReason, type SlackTokenType } from "@/lib/slack/definite-errors";
+import { isDefinitePreShareSlackError, sanitizeSlackScopes, type SlackReinvokeReason, type SlackTokenType } from "@/lib/slack/definite-errors";
 import type { Audience, PostingAs } from "@/lib/types";
 
 const SLACK_TIMEOUT_MS = 30_000;
@@ -78,6 +78,17 @@ export type SlackFileUploadOutcome = SlackFileUploadResult | SlackFileUploadErro
  * Unified file upload response for invoke result.
  * Always included in response when fileAttachment was present on invoke body.
  */
+/**
+ * Duplicate post guard (5): uploadSlackFile fails before
+ * files.completeUploadExternal for every code but "complete_upload_failed"
+ * (nothing was shared); at completion the outcome is unknown unless Slack
+ * answered an error known to precede sharing (lib/slack/definite-errors.ts).
+ * Same rule as lib/approvals/approved-rerun-attachment.ts.
+ */
+export function fileUploadFailureSendState(uploaded: { code: string; slackError?: string }): "not_sent" | "unknown" {
+  return uploaded.code === "complete_upload_failed" && !isDefinitePreShareSlackError(uploaded.slackError) ? "unknown" : "not_sent";
+}
+
 export type FileUploadResponse =
   | {
       ok: true;

@@ -199,7 +199,7 @@ describe("Slack conversation adapter", () => {
       channel: "C_MISSING",
       text: "hello",
     });
-    expect(result).toEqual({ ok: false, error: "channel_not_found" });
+    expect(result).toEqual({ ok: false, error: "channel_not_found", sendState: "not_sent" });
   });
 
   test("falls back to enabled notify Slack botToken when conversation adapter is missing", async () => {
@@ -273,7 +273,7 @@ describe("Slack conversation adapter", () => {
       channel: "C_CONNECT",
       text: "hello",
     });
-    expect(result).toEqual({ ok: false, error: "slack_not_in_channel" });
+    expect(result).toEqual({ ok: false, error: "slack_not_in_channel", sendState: "not_sent" });
   });
 
   test("user path uses bound OAuth token as Authorization bearer", async () => {
@@ -328,7 +328,7 @@ describe("Slack conversation adapter", () => {
       channel: "C_INTERNAL",
       text: "hello",
     });
-    expect(result).toEqual({ ok: false, error: "slack_identity_unbound" });
+    expect(result).toEqual({ ok: false, error: "slack_identity_unbound", sendState: "not_sent" });
   });
 
   test("bot path still stubs when no xoxb is configured", async () => {
@@ -480,7 +480,7 @@ describe("Slack conversation adapter", () => {
         channel: "D_NO_USERID",
         text: "no slackUserId provided",
       });
-      expect(result).toEqual({ ok: false, error: "channel_not_found" });
+      expect(result).toEqual({ ok: false, error: "channel_not_found", sendState: "not_sent" });
       expect(callCount).toBe(1);
     } finally {
       emp.allowedAccounts = previousAccounts;
@@ -548,7 +548,7 @@ describe("Slack conversation adapter", () => {
       text: "no retry",
       slackUserId: "U_COUNTERPART",
     });
-    expect(result).toEqual({ ok: false, error: "channel_not_found" });
+    expect(result).toEqual({ ok: false, error: "channel_not_found", sendState: "not_sent" });
     expect(callCount).toBe(1);
   });
 
@@ -569,7 +569,7 @@ describe("Slack conversation adapter", () => {
       channel: "D_MISSING",
       text: "no user id",
     });
-    expect(result).toEqual({ ok: false, error: "channel_not_found" });
+    expect(result).toEqual({ ok: false, error: "channel_not_found", sendState: "not_sent" });
     expect(callCount).toBe(1);
   });
 });

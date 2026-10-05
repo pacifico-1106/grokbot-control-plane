@@ -23,6 +23,13 @@ export const SNS_SURFACE_LABELS: Record<SnsSurface, string> = {
 
 const SNS_TIMEOUT_MS = 8_000;
 
+/** fetch threw: only "never reached the host" (DNS / refused) is not_sent. */
+function fetchErrorSendState(error: unknown): "not_sent" | "unknown" {
+  const cause = error && typeof error === "object" ? (error as { cause?: { code?: unknown } }).cause : undefined;
+  const code = cause && typeof cause === "object" ? String(cause.code ?? "") : "";
+  return ["ENOTFOUND", "EAI_AGAIN", "ECONNREFUSED"].includes(code) ? "not_sent" : "unknown";
+}
+
 export type SnsPublishInput = {
   orgId?: string;
   employeeId?: string;
@@ -34,7 +41,17 @@ export type SnsPublishInput = {
 
 export type SnsPublishResult =
   | { ok: true; delivery: "stub" | "sns"; surface: SnsSurface; id?: string }
-  | { ok: false; error: string; surface?: SnsSurface };
+  | {
+      ok: false;
+      error: string;
+      surface?: SnsSurface;
+      /**
+       * Duplicate post guard (5): "not_sent" only when nothing was submitted or
+       * the API refused it with a 4xx (except 408 / 429, kept ambiguous like
+       * Slack ratelimited); 5xx, timeouts and network errors are "unknown".
+       */
+      sendState?: "not_sent" | "unknown";
+    };
 
 export function parseSnsSurface(raw: unknown): SnsSurface | null {
   const value = typeof raw === "string" ? raw.trim().toLowerCase() : "";
@@ -149,10 +166,12 @@ async function postToX(token: string, text: string): Promise<SnsPublishResult> {
         body.detail ||
         body.title ||
         `http_${response.status}`;
+      const definite = response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429;
       return {
         ok: false,
         error: `X への投稿に失敗しました（${apiError}）`,
         surface: "x",
+        sendState: definite ? "not_sent" : "unknown",
       };
     }
     return {
@@ -169,6 +188,7 @@ async function postToX(token: string, text: string): Promise<SnsPublishResult> {
           ? `X への投稿に失敗しました（${error.message}）`
           : "X への投稿に失敗しました",
       surface: "x",
+      sendState: fetchErrorSendState(error),
     };
   }
 }
@@ -183,11 +203,12 @@ export async function publishSnsPost(input: SnsPublishInput): Promise<SnsPublish
     return {
       ok: false,
       error: "媒体が指定されていません。x / note / linkedin / youtube のいずれかを指定してください。",
+      sendState: "not_sent",
     };
   }
   const text = (input.text || "").trim();
   if (!text) {
-    return { ok: false, error: "投稿本文が空です。", surface };
+    return { ok: false, error: "投稿本文が空です。", surface, sendState: "not_sent" };
   }
 
   const secrets = await loadAdapterSecrets(input.orgId, surface);
@@ -197,18 +218,18 @@ export async function publishSnsPost(input: SnsPublishInput): Promise<SnsPublish
 
   const token = tokenFromSecrets(secrets) || envTokenFor(surface);
   if (!token) {
-    return { ok: false, error: missingCredentialError(surface), surface };
+    return { ok: false, error: missingCredentialError(surface), surface, sendState: "not_sent" };
   }
 
   if (isFutureScheduled(input.scheduledAt)) {
-    return { ok: false, error: scheduledUnsupportedError(surface), surface };
+    return { ok: false, error: scheduledUnsupportedError(surface), surface, sendState: "not_sent" };
   }
 
   if (surface === "x") {
     return postToX(token, text);
   }
 
-  return { ok: false, error: unimplementedOfficialApiError(surface), surface };
+  return { ok: false, error: unimplementedOfficialApiError(surface), surface, sendState: "not_sent" };
 }
 
 export const postSnsMessage = publishSnsPost;

@@ -24,6 +24,9 @@ export type ConversationKeyInput = {
   telegramThreadId?: string;
   email?: string;
   phone?: string;
+  /** sns.publish: the employee's own account on that medium is the "conversation". */
+  snsSurface?: string;
+  snsEmployeeId?: string;
 };
 
 const str = (value: unknown): string | undefined => {
@@ -111,6 +114,12 @@ function destinationOf(input: ConversationKeyInput): [string, string, boolean] |
       const phone = str(input.phone)?.replace(/[^\d+]/g, "");
       return phone ? ["phone", phone, true] : null;
     }
+    case "sns": {
+      const media = str(input.snsSurface)?.toLowerCase();
+      const employee = str(input.snsEmployeeId);
+      // One timeline per employee account: never shared with another employee.
+      return media && employee ? ["sns", `${media}:${employee}`, true] : null;
+    }
     default: {
       const any = str(input.slackChannelId) || str(input.lineId) || str(input.email) || str(input.phone);
       return any ? ["other", any, false] : null;
@@ -126,4 +135,26 @@ export function conversationKey(input: ConversationKeyInput, key: Buffer): strin
   return createHmac("sha256", key)
     .update(["conv", "v1", input.orgId, input.surface ?? "", kind, id, thread].join("\u0000"))
     .digest("hex");
+}
+
+/**
+ * Channel-level key (duplicate post guard v2): the destination without the
+ * thread, so a top-level post and a thread post in the same channel compare.
+ * For 1:1 destinations it names the same place as conversationKey.
+ * Separate HMAC domain ("chan"), so it never equals a conversation key.
+ */
+export function channelKey(input: ConversationKeyInput, key: Buffer): string | null {
+  const dest = destinationOf(input);
+  if (!dest || !input.orgId) return null;
+  const [kind, id] = dest;
+  return createHmac("sha256", key)
+    .update(["chan", "v1", input.orgId, input.surface ?? "", kind, id].join("\u0000"))
+    .digest("hex");
+}
+
+/** sns.publish: surface "sns", medium + employee (accounts are per employee). */
+export function snsConversationKeyInput(orgId: string, employeeId: string, media: unknown): ConversationKeyInput | null {
+  const m = str(media);
+  if (!m || !employeeId) return null;
+  return { orgId, surface: "sns", snsSurface: m.toLowerCase() === "twitter" ? "x" : m.toLowerCase(), snsEmployeeId: employeeId };
 }
