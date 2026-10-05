@@ -50,19 +50,22 @@ minimal の本文は `type`・`status`・`approvalId`・`employeeId`・`tool`・
 POST /api/employees/<employeeId>/webhook-signing   { "action": "set_callback_payload", "mode": "legacy_full" }
 ```
 
-（owner/admin＋`hire_issue_credentials`。フラグ OFF の間は 404 なので、この段階は **ステージングで先に ON にしてから**か、ON と同時に行う。）`GET` で今の設定を確認できる（秘密は返さない）。
+（owner/admin＋`hire_issue_credentials`。**フラグ OFF のままで設定できる**: OFF の間は保存するだけで、送り方は今のまま（OFF の callback はこの設定を読まない）。ON にする前に、本文が全部要る受け手をここで印を付けておく。結果は応答の `callbackPayload` と監査 `employee.webhook_payload_mode_set`（`metadata.flagOn`）で確認する。`GET` と `mint_callback_secret` はフラグ ON のときだけ（OFF は 404）。）
+`POST` は同じ origin からだけ受け付ける（`isSameOriginRequest`、`/api/auth/set-password` と同じ判定。違う origin・`Origin: null`・`Origin` も `Sec-Fetch-Site: same-origin` も無い要求は 403 `forbidden`）。管理画面のブラウザから呼ぶか、手で呼ぶときはアプリの origin を `Origin` に付ける。
 
 ### 4. 署名の鍵（任意）
 - callback の鍵の順: その社員の callback 用の秘密（下で作る）→ 起こす webhook の秘密（`employee_binding_secrets`）→ なし（署名なし。`webhook-id`・`webhook-timestamp` だけ付く）。
 - callback 用の秘密を作る: `POST …/webhook-signing { "action": "mint_callback_secret" }` → `whsec_…` が **1 回だけ**返る（`Cache-Control: no-store`）。DB には `lib/notify/crypto.ts` の暗号文と sha256 だけ。もう一度呼ぶと作り直し（前の秘密は使われなくなる）。監査には指紋の先頭 12 文字だけ。
 - 起こす webhook の秘密で署名する場合、標準のライブラリで検証するには `whsec_` + base64(秘密の UTF-8) を鍵として使う（秘密そのものが `whsec_…` ならそのまま）。
 - 受け手は署名を検証しなくても動く（ヘッダーが増えるだけ）。
+- フラグ ON で、署名に使う秘密を **読めない**とき（DB の一時的なエラー、復号できない暗号文。callback 用の秘密・起こす webhook の秘密の両方）は、署名なしで送ったりせず **送らない**。種類は `config_unavailable`。callback は監査 `approval.callback_config_unavailable`（`metadata.reason` = `settings_read_error` / `callback_secret_undecryptable` / `wake_secret_read_error` / `wake_secret_undecryptable`）、起こす webhook は `wake_failed` の行の `metadata.configReason`。秘密が **本当に無い**ときだけ署名なしで送る（設計どおり）。
 
 ### 5. フラグを ON（ステージング → 本番）
 1. ステージングで `WEBHOOK_HARDENING_ENABLED=true`。承認を 1 件決めて callback が届くこと、Slack でメンションして起こす webhook が届くことを確認。
 2. 本番で ON。最初の 24 時間は監査を見る:
    - `agent.approval_wake`（`APPROVAL_WAKE_ACTION`）の `metadata.reason = "wake_failed"`・`metadata.hardened = true` の `metadata.category`
    - 起こす webhook の `summary = "起こす webhook の送信に失敗"` の `metadata.category`
+   - `approval.callback_config_unavailable`（callback を送らなかった。`metadata.reason` を見て、DB の一時的なエラーか暗号の鍵の問題かを切り分ける）
    - `address_blocked`・`invalid_url`・`redirect_refused` が出たら、その宛先は段階 2 で見落としたもの。
 3. 問題があれば **フラグを OFF にすれば即座に元の送り方に戻る**（DB はそのままでよい）。
 

@@ -33,7 +33,7 @@ import {
   listLinkedSlackIdentitiesForTeam,
   type SlackMentionTarget,
 } from "@/lib/data/slack-identities";
-import { getWakeWebhookSecret } from "@/lib/data/bindings";
+import { getWakeWebhookSecret, readWakeWebhookSecretStrict } from "@/lib/data/bindings";
 import {
   categorizeFetchError,
   categorizeHttpStatus,
@@ -493,7 +493,18 @@ async function postWake(
     }).catch(() => undefined);
     return;
   }
-  const secret = await getWakeWebhookSecret(target.employeeId);
+  // D9: flag OFF → today's lenient read. ON → strict read: a read error or an
+  // undecryptable secret is NOT "no secret" (never send silently unsigned).
+  const hardened = isWebhookHardeningEnabled();
+  let secret = "";
+  let secretUnavailable: "wake_secret_read_error" | "wake_secret_undecryptable" | null = null;
+  if (hardened) {
+    const read = await readWakeWebhookSecretStrict(target.employeeId);
+    if (read.state === "ok") secret = read.secret;
+    else if (read.state === "error") secretUnavailable = read.reason === "undecryptable" ? "wake_secret_undecryptable" : "wake_secret_read_error";
+  } else {
+    secret = await getWakeWebhookSecret(target.employeeId);
+  }
   const headers: Record<string, string> = {
     "content-type": "application/json",
   };
@@ -511,7 +522,6 @@ async function postWake(
   // ON → #267 postWebhook (https:443, public answers only, pinned, no redirects)
   // + Standard Webhooks signature with the same wake secret (Bearer kept).
   // Audit rows carry a failure category only (flag ON and OFF).
-  const hardened = isWebhookHardeningEnabled();
   try {
     let failure: WebhookFailureCategory | null;
     if (!hardened) {
@@ -523,6 +533,9 @@ async function postWake(
       });
       failure = response.ok ? null : categorizeHttpStatus(response.status) ?? "http_4xx";
       if (failure) console.error("slack_mention_wake_http", target.employeeId, response.status);
+    } else if (secretUnavailable) {
+      failure = "config_unavailable";
+      console.error("slack_mention_wake_config_unavailable", target.employeeId, secretUnavailable);
     } else {
       const body = JSON.stringify(wakeBody);
       const msgId = stableWebhookId("wake", [target.orgId, target.employeeId, payload.eventId]);
@@ -546,6 +559,7 @@ async function postWake(
           reason: "wake_failed",
           category: failure,
           ...(hardened ? { hardened: true } : {}),
+          ...(secretUnavailable ? { configReason: secretUnavailable } : {}),
           eventId: payload.eventId,
           ...handoffMeta,
           ...handoffAuditMeta,

@@ -13,11 +13,14 @@
  * - Signing-key order for the callback: minted callback secret → the existing
  *   wake-webhook secret (employee_binding_secrets, same encryption) → none.
  * Reads that fail (DB error, no client, undecryptable secret) return
- * { state: "error" } and the caller does not send (fail closed). A missing row
- * means defaults.
+ * { state: "error", reason } and the caller does not send (fail closed). This
+ * includes the wake-secret fallback (readWakeWebhookSecretStrict): a transient
+ * read error must never turn into an unsigned callback. Only a genuinely
+ * absent secret means unsigned. A missing settings row means defaults.
+ * The payload mode can be stored while the flag is OFF (no delivery effect).
  */
 import { createHash, randomBytes } from "node:crypto";
-import { getWakeWebhookSecret } from "@/lib/data/bindings";
+import { readWakeWebhookSecretStrict } from "@/lib/data/bindings";
 import { isDemoMode } from "@/lib/mode";
 import { decryptNotificationSecrets, encryptNotificationSecrets } from "@/lib/notify/crypto";
 import { createSupabaseAdminClient } from "@/lib/supabase";
@@ -25,9 +28,21 @@ import { createSupabaseAdminClient } from "@/lib/supabase";
 export const CALLBACK_PAYLOAD_MODES = ["minimal", "legacy_full"] as const;
 export type CallbackPayloadMode = (typeof CALLBACK_PAYLOAD_MODES)[number];
 export type CallbackSecretSource = "callback_secret" | "wake_secret" | "none";
+export type CallbackConfigErrorReason =
+  | "settings_read_error"
+  | "callback_secret_undecryptable"
+  | "wake_secret_read_error"
+  | "wake_secret_undecryptable";
 export type CallbackWebhookConfig =
   | { state: "ok"; payload: CallbackPayloadMode; signingSecret: string | null; secretSource: CallbackSecretSource }
-  | { state: "error" };
+  | { state: "error"; reason: CallbackConfigErrorReason };
+
+/** Wake-secret fallback, strict: error → reason, absent → "", present → secret. */
+async function wakeFallback(employeeId: string): Promise<{ ok: true; secret: string } | { ok: false; reason: CallbackConfigErrorReason }> {
+  const r = await readWakeWebhookSecretStrict(employeeId);
+  if (r.state === "error") return { ok: false, reason: r.reason === "undecryptable" ? "wake_secret_undecryptable" : "wake_secret_read_error" };
+  return { ok: true, secret: r.state === "ok" ? r.secret : "" };
+}
 
 type Row = { payload: CallbackPayloadMode; secretCiphertext: string | null; secretFingerprint: string | null };
 const demoRows = new Map<string, Row>();
@@ -72,20 +87,21 @@ async function readRow(employeeId: string, orgId: string): Promise<{ ok: true; r
 /** Settings the hardened callback needs. Never throws. */
 export async function getCallbackWebhookConfig(employeeId: string, orgId: string): Promise<CallbackWebhookConfig> {
   const read = await readRow(employeeId, orgId);
-  if (!read.ok) return { state: "error" };
+  if (!read.ok) return { state: "error", reason: "settings_read_error" };
   const payload = read.row?.payload ?? "minimal";
   if (read.row?.secretCiphertext) {
     try {
       const secret = decryptNotificationSecrets(read.row.secretCiphertext).callbackSigningSecret?.trim() || "";
-      if (!secret) return { state: "error" };
+      if (!secret) return { state: "error", reason: "callback_secret_undecryptable" };
       return { state: "ok", payload, signingSecret: secret, secretSource: "callback_secret" };
     } catch {
-      return { state: "error" };
+      return { state: "error", reason: "callback_secret_undecryptable" };
     }
   }
-  const wake = (await getWakeWebhookSecret(employeeId).catch(() => "")).trim();
-  return wake
-    ? { state: "ok", payload, signingSecret: wake, secretSource: "wake_secret" }
+  const wake = await wakeFallback(employeeId);
+  if (!wake.ok) return { state: "error", reason: wake.reason };
+  return wake.secret
+    ? { state: "ok", payload, signingSecret: wake.secret, secretSource: "wake_secret" }
     : { state: "ok", payload, signingSecret: null, secretSource: "none" };
 }
 
@@ -130,7 +146,12 @@ export async function getWebhookSettingsView(employeeId: string, orgId: string):
   const read = await readRow(employeeId, orgId);
   if (!read.ok) return null;
   const hasOwn = Boolean(read.row?.secretCiphertext);
-  const wake = hasOwn ? "" : (await getWakeWebhookSecret(employeeId).catch(() => "")).trim();
+  let wake = "";
+  if (!hasOwn) {
+    const w = await wakeFallback(employeeId);
+    if (!w.ok) return null; // never show a false "none" when the wake secret cannot be read
+    wake = w.secret;
+  }
   return {
     callbackSigning: hasOwn ? "callback_secret" : wake ? "wake_secret" : "none",
     callbackSecretFingerprint: hasOwn && read.row?.secretFingerprint ? read.row.secretFingerprint.slice(0, 12) : null,
