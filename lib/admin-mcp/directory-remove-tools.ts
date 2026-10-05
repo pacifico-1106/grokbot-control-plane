@@ -25,9 +25,26 @@
  * - Fulfillment re-reads the row by id in the approval's org with a strict
  *   lookup (a DB error is an error, never "already removed"). Already gone →
  *   ok no-op; a row re-created later (new id) is never touched.
+ * - A delete never makes the gateway judge the destination LESS restrictive
+ *   (external / mixed / guest / outside-domain → internal): the post-delete
+ *   audience is computed at request AND at fulfillment
+ *   (directory-remove-audience.ts) → directory_remove_relaxes_audience.
+ * - Rows are selected by what channels.list / parties.list return
+ *   (surface + externalId / kind + identifier; the lists carry no row ids).
+ *   channelId / partyId stay accepted.
  */
 import type { ResolvedAdminCredential } from "@/lib/auth/admin-credential";
 import { ADMIN_AUDIT_CLASS } from "@/lib/admin-mcp/audit-class";
+import {
+  afterRemoveCardLine,
+  channelAudienceAfterRemove,
+  DIRECTORY_REMOVE_AUDIENCE_CHECK_FAILED,
+  partyAudienceAfterRemove,
+  relaxRefusal,
+  removeRelaxesAudience,
+  type AudienceAfterRemove,
+} from "@/lib/admin-mcp/directory-remove-audience";
+import { CHANNEL_LEDGER_SURFACES } from "@/lib/channel-classify/core";
 import { rejectUnsafeArgs } from "@/lib/admin-mcp/slack-dm-setup";
 import { appendAuditEvent } from "@/lib/data/audit";
 import {
@@ -50,7 +67,7 @@ import type { McpToolDef } from "@/lib/mcp/tools";
 import type {
   ApprovalRequest,
   ChannelClassification,
-  ConversationSurface,
+  ChannelLedgerSurface,
   OrgChannel,
   OrgParty,
   OrgPartyKind,
@@ -77,7 +94,8 @@ export function isAdminMcpDirectoryRemoveToolsEnabled(): boolean {
   return parseFlag(process.env[DIRECTORY_REMOVE_TOOLS_FLAG]);
 }
 
-const SURFACES: readonly ConversationSurface[] = ["slack", "line", "mail", "phone", "web"];
+/** org_channels.surface (incl. telegram since #276). */
+const SURFACES: readonly ChannelLedgerSurface[] = CHANNEL_LEDGER_SURFACES;
 const PARTY_KINDS: readonly OrgPartyKind[] = [
   "email_domain",
   "slack_channel",
@@ -111,13 +129,13 @@ const PARTY_FAIL_SAFE_JA =
 export const CHANNELS_REMOVE_TOOL_DEF: McpToolDef = {
   name: CHANNELS_REMOVE_TOOL,
   description:
-    "Remove one channel from this org's channel ledger (org_channels) after human approval (always_human, approvalClass admin; requires ADMIN_MCP_DIRECTORY_REMOVE_TOOLS_ENABLED, otherwise directory_remove_tools_disabled). Select the row by channelId (ledger row id) or by externalId (+ surface, default slack). The row must belong to this org (from the credential; no orgId argument); a missing row or another org's row → channel_not_found (no ticket). The approval card shows the external ID, current classification / mixed flag and that afterwards the channel is unregistered and falls back to the party ledger / internal-audience rule, otherwise external (fail-safe). For a Slack 1:1 DM (D…) its DM ingress route is removed first; if that fails nothing is deleted. Applied only when a human approves, re-checked then (already gone → ok no-op; a channel re-classified later is not touched), recorded in the admin change log (admin.channel, op remove). Admin cannot self-approve. Re-invoke with approvalId to read the result.",
+    "Remove one channel from this org's channel ledger (org_channels) after human approval (always_human, approvalClass admin; requires ADMIN_MCP_DIRECTORY_REMOVE_TOOLS_ENABLED, otherwise directory_remove_tools_disabled). Select the row by externalId + surface exactly as channels.list returns them (surface default slack; channels.list carries no row ids), or by channelId (ledger row id) when you already have it. The row must belong to this org (from the credential; no orgId argument); a missing row or another org's row → channel_not_found (no ticket). The approval card shows the external ID, current classification / mixed flag and how the channel will be judged after the delete. A delete that would turn an external / mixed / unknown channel internal (e.g. an internal slack_channel party would take over) is refused with directory_remove_relaxes_audience (no ticket; re-checked at fulfillment) — change the classification explicitly with channels.classify instead. For a Slack 1:1 DM (D…) its DM ingress route is removed first; if that fails nothing is deleted. Applied only when a human approves, re-checked then (already gone → ok no-op; a channel re-classified later is not touched), recorded in the admin change log (admin.channel, op remove). Admin cannot self-approve. Re-invoke with approvalId to read the result.",
   inputSchema: {
     type: "object",
     properties: {
-      channelId: { type: "string", description: "Channel ledger row id (from the ledger / channels.classify result)" },
-      externalId: { type: "string", description: "Channel external ID (e.g. Slack C…/G…/D…), used when channelId is omitted" },
-      surface: { type: "string", enum: [...SURFACES], description: "Surface of externalId (default slack)" },
+      channelId: { type: "string", description: "Channel ledger row id (not returned by channels.list; use externalId + surface from channels.list instead)" },
+      externalId: { type: "string", description: "Channel external ID as returned by channels.list (e.g. Slack C…/G…/D…, Telegram chat id), used when channelId is omitted" },
+      surface: { type: "string", enum: [...SURFACES], description: "Surface of externalId as returned by channels.list (default slack)" },
       jobId: { type: "string" },
       approvalId: { type: "string", description: "Re-invoke with approved ticket ID" },
     },
@@ -128,11 +146,11 @@ export const CHANNELS_REMOVE_TOOL_DEF: McpToolDef = {
 export const PARTIES_REMOVE_TOOL_DEF: McpToolDef = {
   name: PARTIES_REMOVE_TOOL,
   description:
-    "Remove one party from this org's party ledger (org_parties) after human approval (always_human, approvalClass admin; requires ADMIN_MCP_DIRECTORY_REMOVE_TOOLS_ENABLED, otherwise directory_remove_tools_disabled). Select the row by partyId or by kind + identifier. The row must belong to this org (from the credential; no orgId argument); a missing row or another org's row → party_not_found (no ticket). The approval card shows kind, identifier, current audience and that afterwards the party is unregistered and falls back to the internal-audience rule, otherwise external (fail-safe). For a slack_user party its auto-created 1:1 DM routes (SLACK_DM_AUTOROUTE_ENABLED) are removed first; if that fails the party is kept (dm_route_remove_failed). Applied only when a human approves, re-checked then (already gone → ok no-op), recorded in the admin change log (admin.parties, op remove). Admin cannot self-approve. Re-invoke with approvalId to read the result.",
+    "Remove one party from this org's party ledger (org_parties) after human approval (always_human, approvalClass admin; requires ADMIN_MCP_DIRECTORY_REMOVE_TOOLS_ENABLED, otherwise directory_remove_tools_disabled). Select the row by kind + identifier exactly as parties.list returns them (parties.list carries no row ids), or by partyId when you already have it. The row must belong to this org (from the credential; no orgId argument); a missing row or another org's row → party_not_found (no ticket). The approval card shows kind, identifier, current audience and how the destination will be judged after the delete. A delete that would turn an external party internal (a guest of the own Slack workspace with auto-internal teams, an address inside an internal email domain / internal email_domain party, an external domain the org rule lists as internal) is refused with directory_remove_relaxes_audience (no ticket; re-checked at fulfillment) — use parties.upsert to change the audience explicitly instead. For a slack_user party its auto-created 1:1 DM routes (SLACK_DM_AUTOROUTE_ENABLED) are removed first; if that fails the party is kept (dm_route_remove_failed). Applied only when a human approves, re-checked then (already gone → ok no-op), recorded in the admin change log (admin.parties, op remove). Admin cannot self-approve. Re-invoke with approvalId to read the result.",
   inputSchema: {
     type: "object",
     properties: {
-      partyId: { type: "string", description: "Party ledger row id" },
+      partyId: { type: "string", description: "Party ledger row id (not returned by parties.list; use kind + identifier from parties.list instead)" },
       kind: { type: "string", enum: [...PARTY_KINDS], description: "Party kind, used with identifier when partyId is omitted" },
       identifier: { type: "string", description: "Party identifier (e.g. Slack U…, example.co.jp)" },
       jobId: { type: "string" },
@@ -199,7 +217,7 @@ function mapChannel(row: Record<string, unknown>): OrgChannel {
   return {
     id: String(row.id),
     orgId: String(row.org_id),
-    surface: String(row.surface) as ConversationSurface,
+    surface: String(row.surface) as ChannelLedgerSurface,
     externalId: String(row.external_id),
     classification: String(row.classification || "unknown") as ChannelClassification,
     mixed: row.mixed === true,
@@ -254,10 +272,11 @@ async function findPartyById(orgId: string, id: string): Promise<OrgParty | null
 
 // --- approval cards (separate from the checks) ---
 
-export function buildChannelRemoveCard(channel: OrgChannel, imRouteEmployeeId: string | null): string {
+export function buildChannelRemoveCard(channel: OrgChannel, imRouteEmployeeId: string | null, after?: AudienceAfterRemove): string {
   const cls = `${CLASSIFICATION_JA[channel.classification] ?? channel.classification}${channel.mixed ? "・混在" : ""}`;
   const lines = [
     `チャネル台帳から削除します: ${channel.surface} ${channel.externalId}（現在の分類: ${cls}）。`,
+    ...(after ? [afterRemoveCardLine(after)] : []),
     CHANNEL_FAIL_SAFE_JA,
   ];
   if (channel.surface === "slack" && isSlackImChannelId(channel.externalId)) {
@@ -270,9 +289,10 @@ export function buildChannelRemoveCard(channel: OrgChannel, imRouteEmployeeId: s
   return lines.join("\n");
 }
 
-export function buildPartyRemoveCard(party: OrgParty): string {
+export function buildPartyRemoveCard(party: OrgParty, after?: AudienceAfterRemove): string {
   const lines = [
     `相手台帳から削除します: ${PARTY_KIND_JA[party.kind] ?? party.kind} ${party.identifier}（現在: ${party.audience === "internal" ? "社内" : "社外"}）。`,
+    ...(after ? [afterRemoveCardLine(after)] : []),
     PARTY_FAIL_SAFE_JA,
   ];
   if (party.kind === "slack_user") {
@@ -309,7 +329,7 @@ async function requestChannelRemove(orgId: string, args: Record<string, unknown>
   if (!(SURFACES as readonly string[]).includes(surfaceRaw)) {
     return fail("invalid_surface", `surface は ${SURFACES.join(" / ")} のいずれかです`);
   }
-  const surface = surfaceRaw as ConversationSurface;
+  const surface = surfaceRaw as ChannelLedgerSurface;
   let channel: OrgChannel | null;
   try {
     channel = channelId ? await findChannelById(orgId, channelId) : await getOrgChannel(orgId, surface, externalId);
@@ -322,12 +342,25 @@ async function requestChannelRemove(orgId: string, args: Record<string, unknown>
   if (!channel || channel.orgId !== orgId) {
     return fail("channel_not_found", "このテナントのチャネル台帳に見つかりません");
   }
+  let after: AudienceAfterRemove;
+  try {
+    after = await channelAudienceAfterRemove(orgId, channel);
+  } catch {
+    return fail(DIRECTORY_REMOVE_AUDIENCE_CHECK_FAILED, "削除後の判定を確認できませんでした（台帳を読めませんでした）。", {
+      retryable: true,
+      nextStepJa: "少し待ってから、もう一度依頼してください。",
+    });
+  }
+  if (removeRelaxesAudience(after)) {
+    const refusal = relaxRefusal(CHANNELS_REMOVE_TOOL, `チャネル ${channel.externalId}`, after);
+    return fail(refusal.code, refusal.messageJa, refusal);
+  }
   const isIm = channel.surface === "slack" && isSlackImChannelId(channel.externalId);
   const route = isIm ? await getSlackImEmployeeRoute(orgId, channel.externalId) : null;
   return {
     kind: "queue",
     title: "チャネル台帳から削除",
-    summary: buildChannelRemoveCard(channel, route?.employeeId ?? null),
+    summary: buildChannelRemoveCard(channel, route?.employeeId ?? null, after),
     queuedArgs: {
       channelId: channel.id,
       surface: channel.surface,
@@ -356,10 +389,23 @@ async function requestPartyRemove(orgId: string, args: Record<string, unknown>):
   if (!party || party.orgId !== orgId) {
     return fail("party_not_found", "このテナントの相手台帳に見つかりません");
   }
+  let after: AudienceAfterRemove;
+  try {
+    after = await partyAudienceAfterRemove(orgId, party);
+  } catch {
+    return fail(DIRECTORY_REMOVE_AUDIENCE_CHECK_FAILED, "削除後の判定を確認できませんでした（台帳・社内判定ルールを読めませんでした）。", {
+      retryable: true,
+      nextStepJa: "少し待ってから、もう一度依頼してください。",
+    });
+  }
+  if (removeRelaxesAudience(after)) {
+    const refusal = relaxRefusal(PARTIES_REMOVE_TOOL, `${PARTY_KIND_JA[party.kind] ?? party.kind} ${party.identifier}`, after, party.kind);
+    return fail(refusal.code, refusal.messageJa, refusal);
+  }
   return {
     kind: "queue",
     title: "相手台帳から削除",
-    summary: buildPartyRemoveCard(party),
+    summary: buildPartyRemoveCard(party, after),
     queuedArgs: {
       partyId: party.id,
       kind: party.kind,
@@ -373,13 +419,43 @@ async function requestPartyRemove(orgId: string, args: Record<string, unknown>):
 
 export type DirectoryRemoveFulfillment =
   | { ok: true; id: string; summaryJa: string; alreadyRemoved: boolean }
-  | { ok: false; code: string; messageJa: string };
+  | { ok: false; code: string; messageJa: string; nextStepJa?: string; retryable?: boolean };
 
 const DISABLED_AT_FULFIL: DirectoryRemoveFulfillment = {
   ok: false,
   code: "directory_remove_tools_disabled",
   messageJa: `${DIRECTORY_REMOVE_TOOLS_FLAG} が OFF のため削除しませんでした。`,
 };
+
+/** Fulfillment-time post-delete audience check; null = may delete. */
+async function recheckAfterRemove(
+  compute: () => Promise<AudienceAfterRemove>,
+  subject: string,
+  tool: DirectoryRemoveTool,
+  kind?: OrgPartyKind
+): Promise<DirectoryRemoveFulfillment | null> {
+  let after: AudienceAfterRemove;
+  try {
+    after = await compute();
+  } catch {
+    return {
+      ok: false,
+      code: DIRECTORY_REMOVE_AUDIENCE_CHECK_FAILED,
+      messageJa: "削除後の判定を確認できなかったため、削除しませんでした。",
+      nextStepJa: "少し待ってから、もう一度依頼してください。",
+      retryable: true,
+    };
+  }
+  if (!removeRelaxesAudience(after)) return null;
+  const refusal = relaxRefusal(tool, subject, after, kind);
+  return {
+    ok: false,
+    code: refusal.code,
+    messageJa: `承認後に台帳・社内判定ルールが変わりました。${refusal.messageJa}`,
+    nextStepJa: refusal.nextStepJa,
+    retryable: false,
+  };
+}
 
 export async function fulfillChannelRemove(
   approval: ApprovalRequest,
@@ -393,6 +469,9 @@ export async function fulfillChannelRemove(
   if (!current) {
     return { ok: true, id: channelId, alreadyRemoved: true, summaryJa: "このチャネルはすでに削除済みでした（変更なし）。" };
   }
+  // Re-check with the state at approval time (the row / parties may have changed).
+  const gate = await recheckAfterRemove(() => channelAudienceAfterRemove(orgId, current), `チャネル ${current.externalId}`, CHANNELS_REMOVE_TOOL);
+  if (gate) return gate;
   const d = deps();
   const isIm = current.surface === "slack" && isSlackImChannelId(current.externalId);
   let routeEmployeeId: string | null = null;
@@ -445,6 +524,13 @@ export async function fulfillPartyRemove(
   if (!current) {
     return { ok: true, id: partyId, alreadyRemoved: true, summaryJa: "この相手はすでに削除済みでした（変更なし）。" };
   }
+  const gate = await recheckAfterRemove(
+    () => partyAudienceAfterRemove(orgId, current),
+    `${PARTY_KIND_JA[current.kind] ?? current.kind} ${current.identifier}`,
+    PARTIES_REMOVE_TOOL,
+    current.kind
+  );
+  if (gate) return gate;
   const d = deps();
   let dmAutoroute: { status: string; removed: number } | null = null;
   if (current.kind === "slack_user") {

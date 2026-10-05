@@ -71,6 +71,25 @@ export async function getOrgInternalAudienceRule(
   );
 }
 
+/**
+ * Same rule as getOrgInternalAudienceRule, but a store error throws instead of
+ * reading as the empty default. For checks where "no internal domains / teams"
+ * would be the permissive answer (admin MCP channels.remove / parties.remove
+ * post-delete audience check).
+ */
+export async function getOrgInternalAudienceRuleStrict(orgId: string): Promise<OrgInternalAudienceRule> {
+  if (isDemoMode()) return getOrgInternalAudienceRule(orgId);
+  const admin = createSupabaseAdminClient();
+  if (!admin || !orgId) throw new Error("internal_audience_rule_unavailable");
+  const { data, error } = await admin
+    .from("orgs")
+    .select("internal_audience_rule")
+    .eq("id", orgId)
+    .maybeSingle();
+  if (error) throw new Error("internal_audience_rule_read_failed");
+  return normalizeRule((data as { internal_audience_rule?: unknown } | null)?.internal_audience_rule);
+}
+
 /** Reject malformed security policy rather than coercing it into a wider audience. */
 export function validateInternalAudienceRulePatch(raw: Record<string, unknown>): Partial<OrgInternalAudienceRule> {
   const out: Partial<OrgInternalAudienceRule> = {};

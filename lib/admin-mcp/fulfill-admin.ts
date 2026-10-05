@@ -120,6 +120,8 @@ export type AdminFulfillment = {
   channelId?: string;
   draft?: unknown;
   nextStepJa?: string;
+  /** Whether re-requesting can succeed without a change (e.g. directory_remove_relaxes_audience: false). */
+  retryable?: boolean;
   noticeJa?: string;
   adapterId?: string;
   surface?: string;
@@ -1980,7 +1982,16 @@ async function fulfillDirectoryRemoveTicket(
   const { fulfillChannelRemove, fulfillPartyRemove } = await import("@/lib/admin-mcp/directory-remove-tools");
   const result = tool === "channels.remove" ? await fulfillChannelRemove(approval, args) : await fulfillPartyRemove(approval, args);
   const at = new Date().toISOString();
-  if (!result.ok) return { ok: false, tool, at, error: result.code, nextStepJa: result.messageJa };
+  if (!result.ok) {
+    return {
+      ok: false,
+      tool,
+      at,
+      error: result.code,
+      nextStepJa: result.nextStepJa ? `${result.messageJa}${result.nextStepJa}` : result.messageJa,
+      ...(result.retryable !== undefined ? { retryable: result.retryable } : {}),
+    };
+  }
   return {
     ok: true,
     tool,
