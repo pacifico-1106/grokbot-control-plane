@@ -135,7 +135,7 @@ rollback only if the schema must go.
 
 Yasaka / 木村 2026-10-05 (PR-A). Same ledger, one mechanism for every AI posting
 path. Turning v2 ON also turns the ledger ON (`COMM_REPLY_DEDUP_ENABLED` is
-implied). Apply `supabase/migrations/20261005200000_duplicate_post_guard_v2.sql`
+implied). Apply `supabase/migrations/20261005300000_duplicate_post_guard_v2.sql`
 first. While v2 is OFF the app never calls it.
 
 | Hole (v1) | v2 rule |
@@ -185,13 +185,13 @@ uncertain, not re-run), `fulfill_blocked_dedup_unavailable`.
 | `COMM_REPLY_DEDUP_CROSS_EMPLOYEE` | `block` | `warn` (anything else → block) |
 | `COMM_REPLY_DEDUP_JOB_RETENTION_DAYS` | 30 | 1–30 |
 
-### Database (migration `20261005200000_duplicate_post_guard_v2.sql`)
+### Database (migration `20261005300000_duplicate_post_guard_v2.sql`)
 
 Additive: nullable `channel_key` / `job_key` (64-hex checks), tool check +
 `sns.publish`, two partial indexes, `claim_outbound_send_v2` (advisory lock per
 org + channel, dry-run mode for the read-only pre-check) and
 `release_uncertain_outbound_send`, both service_role only. Rollback:
-`supabase/verification/20261005200000_duplicate_post_guard_v2_rollback.sql`
+`supabase/verification/20261005300000_duplicate_post_guard_v2_rollback.sql`
 (v1 keeps working). Tested by `scripts/test-db-local.py`.
 
 ### Production steps (v2)

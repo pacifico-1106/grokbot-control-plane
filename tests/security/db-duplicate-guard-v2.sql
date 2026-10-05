@@ -1,4 +1,4 @@
--- Duplicate post guard v2 (migration 20261005200000). Synthetic fixtures only;
+-- Duplicate post guard v2 (migration 20261005300000). Synthetic fixtures only;
 -- runs inside scripts/test-db-local.py's disposable cluster after
 -- db-comm-reply-dedup.sql (reuses its orgs / employees a1 / a2 / b1).
 \set ON_ERROR_STOP 1

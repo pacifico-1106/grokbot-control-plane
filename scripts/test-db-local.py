@@ -131,7 +131,7 @@ try:
     assert query("select status from public.approval_requests where id='82000000-0000-4000-8000-000000000002';") == "expired"
     assert "superseded" not in query("select pg_get_constraintdef(oid) from pg_constraint where conname='approval_requests_status_check';")
     sql(comm_reply_dedup)  # forward again after rollback
-    guard_v2 = ROOT / "supabase/migrations/20261005200000_duplicate_post_guard_v2.sql"
+    guard_v2 = ROOT / "supabase/migrations/20261005300000_duplicate_post_guard_v2.sql"
     sql(guard_v2)
     sql(guard_v2)  # re-applicable
     sql(ROOT / "tests/security/db-duplicate-guard-v2.sql")
@@ -142,7 +142,7 @@ try:
     with ThreadPoolExecutor(max_workers=12) as pool:
         states = list(pool.map(query, commands))
     assert states.count("claimed") == 1 and states.count("duplicate") == 11, states
-    sql(ROOT / "supabase/verification/20261005200000_duplicate_post_guard_v2_rollback.sql")
+    sql(ROOT / "supabase/verification/20261005300000_duplicate_post_guard_v2_rollback.sql")
     assert query("select to_regprocedure('public.claim_outbound_send_v2(uuid,uuid,text,text,text,text,integer[],text,uuid,integer,double precision,integer,boolean,text,boolean)') is null;") == "t"
     assert query("select count(*) from information_schema.columns where table_schema='public' and table_name='comm_reply_send_fingerprints' and column_name in ('channel_key','job_key');") == "0"
     assert query("select count(*) from public.comm_reply_send_fingerprints where tool='sns.publish';") == "0"

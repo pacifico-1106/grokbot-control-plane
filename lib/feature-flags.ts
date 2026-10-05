@@ -541,7 +541,7 @@ export function isCommReplyDedupEnabled(): boolean {
  *   keeps its fingerprint; a resend needs duplicateGuard.confirmedNotDelivered
  * - every posting tool path (sns.publish, file uploads with a message) uses
  *   the same ledger; ledger errors fail closed
- * Turning it ON also turns the v1 ledger on. Requires migration 20261005200000.
+ * Turning it ON also turns the v1 ledger on. Requires migration 20261005300000.
  * Details: docs/comm-reply-dedup.md ("v2")
  */
 export function isDuplicateGuardV2Enabled(): boolean {

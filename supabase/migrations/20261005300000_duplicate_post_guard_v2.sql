@@ -252,7 +252,7 @@ grant execute on function public.release_uncertain_outbound_send(uuid, uuid, uui
 
 commit;
 
--- Rollback: supabase/verification/20261005200000_duplicate_post_guard_v2_rollback.sql
+-- Rollback: supabase/verification/20261005300000_duplicate_post_guard_v2_rollback.sql
 -- (run only after DUPLICATE_GUARD_V2_ENABLED is OFF everywhere). Drops the v2
 -- RPCs and indexes, deletes sns.publish rows, restores the v1 tool check and
 -- drops channel_key / job_key. v1 (claim_comm_reply_send) keeps working.

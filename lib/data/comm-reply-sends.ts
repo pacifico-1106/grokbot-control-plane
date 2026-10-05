@@ -28,7 +28,7 @@ export type CommReplySendRow = {
   approvalId: string | null;
   state: "reserved" | "sent" | "uncertain";
   createdAtMs: number;
-  /** v2 (migration 20261005200000): channel-level key (no thread) and job key. */
+  /** v2 (migration 20261005300000): channel-level key (no thread) and job key. */
   channelKey?: string | null;
   jobKey?: string | null;
 };
@@ -278,7 +278,7 @@ export async function finishCommReplySend(input: {
 
 // ------------------------------------------------- duplicate post guard v2
 // RPC claim_outbound_send_v2 / release_uncertain_outbound_send (migration
-// 20261005200000, service_role only). Used only with DUPLICATE_GUARD_V2_ENABLED.
+// 20261005300000, service_role only). Used only with DUPLICATE_GUARD_V2_ENABLED.
 
 export type DuplicateScope = "same_conversation" | "cross_thread" | "cross_employee" | "same_job";
 export type CrossEmployeeMode = "off" | "warn" | "block";

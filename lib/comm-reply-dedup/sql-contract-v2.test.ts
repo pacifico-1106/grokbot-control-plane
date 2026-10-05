@@ -9,16 +9,19 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
 
 const DIR = resolve(process.cwd(), "supabase/migrations");
-const NAME = "20261005200000_duplicate_post_guard_v2.sql";
-const ROLLBACK = resolve(process.cwd(), "supabase/verification/20261005200000_duplicate_post_guard_v2_rollback.sql");
+const NAME = "20261005300000_duplicate_post_guard_v2.sql";
+const ROLLBACK = resolve(process.cwd(), "supabase/verification/20261005300000_duplicate_post_guard_v2_rollback.sql");
 
 describe("duplicate post guard v2 migration", () => {
   const sql = existsSync(resolve(DIR, NAME)) ? readFileSync(resolve(DIR, NAME), "utf8") : "";
-  test("exists and sorts after every migration on main (20261005100000)", () => {
+  test("exists, has a unique timestamp, and sorts after main + PR-B #276 (20261005200000)", () => {
     const stamped = readdirSync(DIR).filter((f) => /^\d{14}_/.test(f)).sort();
     expect(stamped).toContain(NAME);
-    for (const f of stamped) if (f.slice(0, 14) <= "20261005100000") expect(f < NAME).toBe(true);
-    expect(stamped.filter((f) => f.startsWith("20261005200000_"))).toEqual([NAME]);
+    for (const f of stamped) if (f.slice(0, 14) <= "20261005200000") expect(f < NAME).toBe(true);
+    expect(stamped.filter((f) => f.startsWith("20261005300000_"))).toEqual([NAME]);
+    // PR-B #276 already uses 20261005200000; no two migrations may share a 14-digit prefix.
+    const prefixes = stamped.map((f) => f.slice(0, 14));
+    expect(new Set(prefixes).size).toBe(prefixes.length);
   });
   test("additive: new nullable hash columns, no body column, re-applicable DDL", () => {
     expect(sql).toMatch(/add column if not exists channel_key text/);

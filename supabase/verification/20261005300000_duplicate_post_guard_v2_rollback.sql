@@ -1,4 +1,4 @@
--- Rollback for supabase/migrations/20261005200000_duplicate_post_guard_v2.sql.
+-- Rollback for supabase/migrations/20261005300000_duplicate_post_guard_v2.sql.
 -- Run only after DUPLICATE_GUARD_V2_ENABLED is OFF in every environment
 -- (COMM_REPLY_DEDUP_ENABLED v1 keeps working: claim_comm_reply_send and
 -- finish_comm_reply_send are untouched). Exercised by scripts/test-db-local.py
