@@ -19,6 +19,7 @@ import {
 } from "@/lib/gateway/audience";
 import { prepareOpsFaultRetryInvokeBody } from "@/lib/stuck-watch/retry-eligibility";
 import { notifyStuckWatchMouth } from "@/lib/stuck-watch/notify-mouth";
+import { isChannelStuckNotifyEnabled } from "@/lib/channel-classify/flags";
 import type {
   ConversationContext,
   EgressVerdict,
@@ -205,18 +206,36 @@ export async function attemptAudienceLedgerRetry(
     return { attempted: false, skippedReason: "policy_disabled" };
   }
 
-  const hasLedger = await orgHasInternalAudienceLedger(input.orgId);
-  if (!hasLedger) {
-    return { attempted: false, skippedReason: "no_ledger" };
+  let supplementedBody: GatewayInvokeRequest;
+  let resolvedAudience: string;
+  try {
+    const hasLedger = await orgHasInternalAudienceLedger(input.orgId);
+    if (!hasLedger) {
+      return { attempted: false, skippedReason: "no_ledger" };
+    }
+    supplementedBody = await supplementInvokeBodyFromLedger(input.orgId, input.body);
+    const ctx = parseConversationContext(supplementedBody, input.orgId);
+    const resolved = await resolveAudience(ctx, { requireDestination: true });
+    resolvedAudience = resolved.audience;
+  } catch (error) {
+    // PR-B: a ledger read failure keeps the caller's deny (no retry) and is
+    // reported instead of surfacing as an unexplained error.
+    if (isChannelStuckNotifyEnabled()) {
+      try {
+        const { notifyChannelStuck } = await import("@/lib/channel-classify/stuck-notify");
+        const { channelRefFromInvokeBody } = await import("@/lib/channel-classify/deny-hook");
+        await notifyChannelStuck({
+          orgId: input.orgId,
+          kind: "ledger_read_failed",
+          ref: channelRefFromInvokeBody(input.body),
+          reason: error instanceof Error ? error.message : "ledger_read_failed",
+        });
+      } catch {
+        /* never throws out of the retry helper */
+      }
+    }
+    return { attempted: false, skippedReason: "ledger_error" };
   }
-
-  const supplementedBody = await supplementInvokeBodyFromLedger(
-    input.orgId,
-    input.body
-  );
-  const ctx = parseConversationContext(supplementedBody, input.orgId);
-  const resolved = await resolveAudience(ctx, { requireDestination: true });
-  const resolvedAudience = resolved.audience;
 
   const retryBody = prepareOpsFaultRetryInvokeBody({
     ...supplementedBody,

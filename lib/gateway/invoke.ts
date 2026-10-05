@@ -75,9 +75,10 @@ import {
   buildFileUploadEgressDenied,
   buildFileUploadFailed,
   buildFileUploadSkipped,
+  fileUploadFailureSendState,
   type FileUploadResponse,
 } from "@/lib/gateway/adapters/slack-file-upload";
-import { publishSnsPost, type SnsPublishResult } from "@/lib/gateway/adapters/sns";
+import { parseSnsSurface, publishSnsPost, type SnsPublishResult } from "@/lib/gateway/adapters/sns";
 import {
   buildInvokeSnapshot,
   fulfillApprovedInvoke,
@@ -125,7 +126,12 @@ import {
   detectSecretInPayload,
   buildSecretDetectionErrorResponse,
 } from "@/lib/security/secret-detector";
-import { isCommReplyDedupEnabled, isGoogleCalendarReadEnabled, isTopicGatedPostingEnabled } from "@/lib/feature-flags";
+import {
+  isCommReplyDedupEnabled,
+  isDuplicateGuardV2Enabled,
+  isGoogleCalendarReadEnabled,
+  isTopicGatedPostingEnabled,
+} from "@/lib/feature-flags";
 import { checkTopicGate, buildTopicGateApprovalMetadata } from "@/lib/decision-workflow/topic-gate";
 import { getOrgApprovalKindRoutesPolicy } from "@/lib/approval-kind-routes/data";
 import { getToolApprovalKind } from "@/lib/approval-kind-routes/tool-kind-map";
@@ -136,18 +142,28 @@ import {
 import { assertGatewayToolAllowedForPlan } from "@/lib/billing/plan-gate";
 import { readCalendarFreebusy } from "@/lib/google/calendar-read";
 import {
+  auditCrossEmployee,
   auditDedupUnavailable,
   auditDuplicateSuppressed,
+  auditPostOutcomeUnknown,
   claimDirectCommReplySend,
-  DUPLICATE_CHECK_UNAVAILABLE,
-  DUPLICATE_CHECK_UNAVAILABLE_MESSAGE_JA,
-  DUPLICATE_REPLY_SUPPRESSED,
-  DUPLICATE_REPLY_SUPPRESSED_MESSAGE_JA,
+  confirmedNotDeliveredRef,
+  dedupStopBody,
+  duplicateWarningBody,
   finishDirectCommReplySend,
+  ledgerOutcomeAfterPost,
+  postOutcomeUnknownBody,
   precheckCommReplyDuplicate,
   prepareCommReplyDedupFromBody,
+  prepareFileUploadDedup,
+  prepareSnsPublishDedup,
+  releaseConfirmedUncertain,
+  releaseConfirmedUncertainForScope,
   supersedeOlderOnNewApproval,
+  type DedupAuditCtx,
   type DirectSendClaim,
+  type GuardCheck,
+  type GuardDuplicate,
   type PreparedCommReplyDedup,
 } from "@/lib/comm-reply-dedup/guard";
 import { expireStaleConversationApprovals } from "@/lib/comm-reply-dedup/approvals";
@@ -159,6 +175,13 @@ import {
   applySchedulingPolicyToPropose,
   type ProposeInput,
 } from "@/lib/scheduling-policy/propose";
+import { egressDenyNextStep, onEgressDenied } from "@/lib/channel-classify/deny-hook";
+
+/** PR-B: informational nextStep (channels.classify) on an external-treated deny. */
+function denyNextStepFields(body: GatewayInvokeRequest, egress: { decision?: string; reason?: string; audience?: string }) {
+  const next = egressDenyNextStep(body, egress);
+  return next ? { nextStep: next, nextStepJa: next.messageJa } : {};
+}
 
 export type GatewayInvokeResult = {
   httpStatus: number;
@@ -581,52 +604,34 @@ function conversationOutboundText(body: GatewayInvokeRequest, purpose: string): 
   return (typeof raw === "string" ? raw : "").trim() || purpose;
 }
 
-/** Duplicate / unavailable claim → the response to return (nothing is posted); null = go ahead. */
+/**
+ * Duplicate / unavailable check → the response to return (nothing is posted);
+ * null = go ahead. Audited here (hashes only). Every stop carries code /
+ * reasonCode, nextAction and nextStep (lib/comm-reply-dedup/guard.ts).
+ */
 async function directSendDedupResponse(
-  claim: DirectSendClaim,
+  claim: DirectSendClaim | GuardCheck,
   prepared: PreparedCommReplyDedup,
   ctx: { orgId: string; employeeId: string; credentialId: string | null; purpose: string; tool: string; jobId: string }
 ) {
-  const auditCtx = { ...ctx, phase: "invoke" as const };
-  if (claim.state === "unavailable") {
-    await auditDedupUnavailable(auditCtx, claim.reason);
-    return jsonResult(
-      {
-        ok: false,
-        code: DUPLICATE_CHECK_UNAVAILABLE,
-        error: DUPLICATE_CHECK_UNAVAILABLE,
-        message: DUPLICATE_CHECK_UNAVAILABLE_MESSAGE_JA,
-        needs_approval: false,
-        employeeId: ctx.employeeId,
-        tool: ctx.tool,
-        purpose: ctx.purpose,
-        jobId: ctx.jobId,
-      },
-      503
-    );
+  const auditCtx: DedupAuditCtx = { ...ctx, phase: "invoke" };
+  const stop = dedupStopBody(claim, prepared);
+  if (!stop) return null;
+  if (claim.state === "unavailable") await auditDedupUnavailable(auditCtx, claim.reason);
+  else if (claim.state === "duplicate" && prepared.kind === "ready") {
+    await auditDuplicateSuppressed(auditCtx, prepared, claim as GuardDuplicate);
   }
-  if (claim.state === "duplicate" && prepared.kind === "ready") {
-    await auditDuplicateSuppressed(auditCtx, prepared, claim);
-    return jsonResult(
-      {
-        ok: false,
-        code: DUPLICATE_REPLY_SUPPRESSED,
-        error: DUPLICATE_REPLY_SUPPRESSED,
-        message: DUPLICATE_REPLY_SUPPRESSED_MESSAGE_JA,
-        needs_approval: false,
-        match: claim.match,
-        similarity: Math.round(claim.similarity * 1000) / 1000,
-        matchedAt: claim.matchedAt,
-        windowMinutes: prepared.settings.windowMinutes,
-        employeeId: ctx.employeeId,
-        tool: ctx.tool,
-        purpose: ctx.purpose,
-        jobId: ctx.jobId,
-      },
-      409
-    );
-  }
-  return null;
+  return jsonResult(
+    {
+      ...stop.body,
+      needs_approval: false,
+      employeeId: ctx.employeeId,
+      tool: ctx.tool,
+      purpose: ctx.purpose,
+      jobId: ctx.jobId,
+    },
+    stop.status
+  );
 }
 
 export type RunGatewayInvokeInput = {
@@ -1272,11 +1277,14 @@ export async function runGatewayInvoke(
           ledgerRetry.invokeResult.body,
           ledgerRetry.invokeResult.httpStatus
         );
-        return { httpStatus: failed.httpStatus, body: failed.body };
+        return { httpStatus: failed.httpStatus, body: { ...failed.body, ...denyNextStepFields(body, egress) } };
       }
       return ledgerRetry.invokeResult;
     }
 
+    // PR-B: unregistered channel → classification proposal + stuck notice
+    // (flags OFF → no-op). Bounded, never throws; the 403 below is unchanged.
+    await onEgressDenied({ orgId: effectiveOrgId, employee, body, egress });
     const stuckPolicy = await getOrgStuckWatchPolicy(effectiveOrgId);
     const hasInternalLedger =
       stuckPolicy.inferInternalAudienceFromLedger &&
@@ -1296,6 +1304,7 @@ export async function runGatewayInvoke(
         purpose,
         jobId,
         hasInternalLedger,
+        ...denyNextStepFields(body, egress),
       },
       403
     );
@@ -1393,16 +1402,31 @@ export async function runGatewayInvoke(
   // COMM_REPLY_DEDUP_ENABLED: the same (or a re-written) body was already sent
   // to this conversation within the window → not sent, no approval card.
   // Read-only here; the atomic claim happens right before the live post.
+  // DUPLICATE_GUARD_V2_ENABLED: same jobId, channel-level, other employees,
+  // short-body tier, unknown-outcome rows — and sns.publish (same ledger).
   let commReplyDedup: PreparedCommReplyDedup = { kind: "off" };
-  if (isAudienceGatedTool(toolDef) && !priorApprovalOk && isCommReplyDedupEnabled()) {
+  let duplicateWarning: Record<string, unknown> | undefined;
+  const snsGuarded = isSnsPublishTool(toolDef) && isDuplicateGuardV2Enabled();
+  if ((isAudienceGatedTool(toolDef) || snsGuarded) && !priorApprovalOk && isCommReplyDedupEnabled()) {
     const dedupOrgId = orgId || employee.orgId;
-    await expireStaleConversationApprovals({ orgId: dedupOrgId, employeeId, phase: "invoke" }).catch(() => []);
-    commReplyDedup = prepareCommReplyDedupFromBody({
-      orgId: dedupOrgId,
-      employeeId,
-      body,
-      text: conversationOutboundText(body, purpose),
-    });
+    if (isAudienceGatedTool(toolDef)) {
+      await expireStaleConversationApprovals({ orgId: dedupOrgId, employeeId, phase: "invoke" }).catch(() => []);
+    }
+    const dedupArgs = body.args && typeof body.args === "object" ? (body.args as Record<string, unknown>) : {};
+    commReplyDedup = snsGuarded
+      ? prepareSnsPublishDedup({
+          orgId: dedupOrgId,
+          employeeId,
+          surface: parseSnsSurface(dedupArgs.surface ?? dedupArgs.snsSurface ?? dedupArgs.media),
+          text: conversationOutboundText(body, purpose),
+          jobId,
+        })
+      : prepareCommReplyDedupFromBody({
+          orgId: dedupOrgId,
+          employeeId,
+          body,
+          text: conversationOutboundText(body, purpose),
+        });
     const dedupCtx = {
       orgId: dedupOrgId,
       employeeId,
@@ -1410,46 +1434,18 @@ export async function runGatewayInvoke(
       purpose,
       tool,
       jobId,
-      phase: "invoke" as const,
     };
-    const pre = await precheckCommReplyDuplicate(commReplyDedup);
-    if (pre.state === "unavailable") {
-      await auditDedupUnavailable(dedupCtx, pre.reason);
-      return jsonResult(
-        {
-          ok: false,
-          code: DUPLICATE_CHECK_UNAVAILABLE,
-          error: DUPLICATE_CHECK_UNAVAILABLE,
-          message: DUPLICATE_CHECK_UNAVAILABLE_MESSAGE_JA,
-          needs_approval: false,
-          employeeId,
-          tool,
-          purpose,
-          jobId,
-        },
-        503
-      );
-    }
-    if (pre.state === "duplicate" && commReplyDedup.kind === "ready") {
-      await auditDuplicateSuppressed(dedupCtx, commReplyDedup, pre);
-      return jsonResult(
-        {
-          ok: false,
-          code: DUPLICATE_REPLY_SUPPRESSED,
-          error: DUPLICATE_REPLY_SUPPRESSED,
-          message: DUPLICATE_REPLY_SUPPRESSED_MESSAGE_JA,
-          needs_approval: false,
-          match: pre.match,
-          similarity: Math.round(pre.similarity * 1000) / 1000,
-          matchedAt: pre.matchedAt,
-          windowMinutes: commReplyDedup.settings.windowMinutes,
-          employeeId,
-          tool,
-          purpose,
-          jobId,
-        },
-        409
-      );
+    // (5) The AI verified that its earlier unknown-outcome post is absent: release
+    // that one row (own org + employee only); a wrong ref releases nothing.
+    const confirmedRef = confirmedNotDeliveredRef(body);
+    if (confirmedRef) await releaseConfirmedUncertain(commReplyDedup, confirmedRef, { ...dedupCtx, phase: "invoke" });
+    const pre = await precheckCommReplyDuplicate(commReplyDedup, tool);
+    const stopped = await directSendDedupResponse(pre, commReplyDedup, dedupCtx);
+    if (stopped) return stopped;
+    if (pre.state === "none" && pre.warning && commReplyDedup.kind === "ready") {
+      // (3) another employee already posted it: posted with a warning (v1, or v2 warn mode).
+      await auditCrossEmployee({ ...dedupCtx, phase: "invoke" }, commReplyDedup, "warn", pre.warning);
+      duplicateWarning = duplicateWarningBody(pre.warning);
     }
   }
 
@@ -1948,6 +1944,21 @@ export async function runGatewayInvoke(
       return jsonResult({ ok: false, code: legacyBlock.code, error: legacyBlock.code, message: legacyBlock.messageJa,
         approvalId: priorApproval.id, employeeId, tool, purpose, jobId }, 409);
     }
+    // Duplicate post guard v2: the AI verified an earlier unknown-outcome post
+    // is absent → release that row (own org + employee only) before the
+    // approved snapshot is fulfilled (its gate would stop on it otherwise).
+    const rerunConfirmedRef = confirmedNotDeliveredRef(body);
+    if (rerunConfirmedRef) {
+      await releaseConfirmedUncertainForScope(
+        { orgId: orgId || employee.orgId, employeeId },
+        rerunConfirmedRef,
+        {
+          orgId: orgId || employee.orgId, employeeId,
+          credentialId: input.credentialId || employee.credentialId, purpose, tool, jobId,
+          approvalId: priorApproval.id, phase: "invoke",
+        }
+      );
+    }
     // Conversation tools: this re-run uploads the approved attachment itself
     // (deliverApprovedRerunAttachment below), so no "not_sent" marker here.
     const fulfilled = await fulfillApprovedInvoke(priorApproval, {
@@ -2170,7 +2181,39 @@ export async function runGatewayInvoke(
         await finishDirectCommReplySend(commReplyDedup, dedupClaimId, "uncertain", { jobId });
         throw error;
       }
-      await finishDirectCommReplySend(commReplyDedup, dedupClaimId, posted.ok ? "sent" : "failed", { jobId });
+      // v1: failed releases the claim. v2: only a provider-confirmed "not sent"
+      // releases it; an unknown outcome is kept (uncertain) and reported.
+      const ledgerOutcome = ledgerOutcomeAfterPost(commReplyDedup, posted);
+      await finishDirectCommReplySend(commReplyDedup, dedupClaimId, ledgerOutcome, { jobId });
+      if (!posted.ok && ledgerOutcome === "uncertain" && commReplyDedup.kind === "ready") {
+        const dedupAudit: DedupAuditCtx = {
+          orgId: orgId || employee.orgId, employeeId,
+          credentialId: input.credentialId || employee.credentialId, purpose, tool, jobId, phase: "invoke",
+        };
+        if (dedupClaimId) await auditPostOutcomeUnknown(dedupAudit, commReplyDedup, dedupClaimId);
+        await appendAuditEvent({
+          orgId: orgId || employee.orgId,
+          employeeId,
+          credentialId: input.credentialId || employee.credentialId,
+          action: "slack.post_failed",
+          purpose,
+          summary: "Slack会話投稿の結果が不明（再送は確認後のみ）",
+          metadata: { tool, jobId, error: posted.error || "slack_post_failed", dest, code: "post_outcome_unknown" },
+        });
+        return jsonResult(
+          {
+            ...postOutcomeUnknownBody(dedupClaimId, posted.error || "slack_post_failed"),
+            needs_approval: false,
+            egress,
+            ...(voice ? { voice } : {}),
+            employeeId,
+            tool,
+            purpose,
+            jobId,
+          },
+          502
+        );
+      }
       if (!posted.ok) {
         const postedError = posted.error || "slack_post_failed";
         const code =
@@ -2307,7 +2350,31 @@ export async function runGatewayInvoke(
         },
       });
     } else if (dest && replyThreadTs && looksLikeSlackTs(replyThreadTs)) {
-      const uploaded = await uploadSlackFile({
+      // (6) v2: the same file + comment to the same place goes out once (same ledger;
+      // own "upload:" fingerprint domain, so it never matches a text post).
+      const uploadDedup = prepareFileUploadDedup(commReplyDedup, body.fileAttachment);
+      const uploadClaim = await claimDirectCommReplySend(uploadDedup, tool);
+      const uploadStop = dedupStopBody(uploadClaim, uploadDedup);
+      if (uploadStop) {
+        const uploadCtx: DedupAuditCtx = {
+          orgId: orgId || employee.orgId, employeeId,
+          credentialId: input.credentialId || employee.credentialId, purpose, tool, jobId, phase: "invoke",
+        };
+        if (uploadClaim.state === "unavailable") await auditDedupUnavailable(uploadCtx, uploadClaim.reason);
+        else if (uploadClaim.state === "duplicate" && uploadDedup.kind === "ready") {
+          await auditDuplicateSuppressed(uploadCtx, uploadDedup, uploadClaim as GuardDuplicate);
+        }
+        fileUploadResponse = {
+          ok: false,
+          code: String(uploadStop.body.code),
+          reason: String(uploadStop.body.reasonCode),
+          messageJa: `ファイルは共有していません: ${String(uploadStop.body.message)}`,
+        };
+      } else {
+      const uploadClaimId = uploadClaim.state === "claimed" ? uploadClaim.id : null;
+      let uploaded: Awaited<ReturnType<typeof uploadSlackFile>>;
+      try {
+      uploaded = await uploadSlackFile({
         orgId: orgId || employee.orgId,
         employeeId,
         postingAs: employee.postingAs || "bot",
@@ -2322,6 +2389,16 @@ export async function runGatewayInvoke(
         title: body.fileAttachment.title,
         initialComment: body.fileAttachment.initialComment,
       });
+      } catch (error) {
+        await finishDirectCommReplySend(uploadDedup, uploadClaimId, "uncertain", { jobId });
+        throw error;
+      }
+      await finishDirectCommReplySend(
+        uploadDedup,
+        uploadClaimId,
+        uploaded.ok ? "sent" : fileUploadFailureSendState(uploaded) === "not_sent" ? "failed" : "uncertain",
+        { jobId }
+      );
 
       if (uploaded.ok) {
         fileUploadResponse = buildFileUploadSuccess(uploaded);
@@ -2359,6 +2436,7 @@ export async function runGatewayInvoke(
             audience: egress?.audience,
           },
         });
+      }
       }
     } else {
       fileUploadResponse = buildFileUploadSkipped({
@@ -2403,15 +2481,39 @@ export async function runGatewayInvoke(
       const rawText = [args.text, args.body, args.message].find(
         (value) => typeof value === "string" && value.trim()
       );
-      const posted = await publishSnsPost({
-        orgId: orgId || employee.orgId,
-        employeeId,
-        surface: args.surface ?? args.snsSurface ?? args.media,
-        text: typeof rawText === "string" ? rawText : purpose,
-        scheduledAt: args.scheduledAt ?? args.scheduled_at ?? args.scheduledFor,
-        title: args.title,
-      });
+      // (6) v2: the same ledger as conversation posts (claim right before the post).
+      const snsCtx = {
+        orgId: orgId || employee.orgId, employeeId,
+        credentialId: input.credentialId || employee.credentialId, purpose, tool, jobId,
+      };
+      const snsClaim = await claimDirectCommReplySend(commReplyDedup, tool);
+      const snsStop = await directSendDedupResponse(snsClaim, commReplyDedup, snsCtx);
+      if (snsStop) return snsStop;
+      const snsClaimId = snsClaim.state === "claimed" ? snsClaim.id : null;
+      let posted: SnsPublishResult;
+      try {
+        posted = await publishSnsPost({
+          orgId: orgId || employee.orgId,
+          employeeId,
+          surface: args.surface ?? args.snsSurface ?? args.media,
+          text: typeof rawText === "string" ? rawText : purpose,
+          scheduledAt: args.scheduledAt ?? args.scheduled_at ?? args.scheduledFor,
+          title: args.title,
+        });
+      } catch (error) {
+        await finishDirectCommReplySend(commReplyDedup, snsClaimId, "uncertain", { jobId });
+        throw error;
+      }
+      const snsLedgerOutcome = ledgerOutcomeAfterPost(commReplyDedup, posted);
+      await finishDirectCommReplySend(commReplyDedup, snsClaimId, snsLedgerOutcome, { jobId });
       snsDelivery = posted;
+      if (!posted.ok && snsLedgerOutcome === "uncertain" && commReplyDedup.kind === "ready") {
+        if (snsClaimId) await auditPostOutcomeUnknown({ ...snsCtx, phase: "invoke" }, commReplyDedup, snsClaimId);
+        return jsonResult(
+          { ...postOutcomeUnknownBody(snsClaimId, posted.error), needs_approval: false, employeeId, tool, purpose, jobId },
+          502
+        );
+      }
       if (!posted.ok) {
         await appendAuditEvent({
           orgId: orgId || employee.orgId,
@@ -2882,6 +2984,7 @@ export async function runGatewayInvoke(
       : {}),
     conversationDelivery,
     snsDelivery,
+    ...(duplicateWarning ? { duplicateWarning } : {}),
     result:
       tool === "tools.ping"
         ? { pong: true }

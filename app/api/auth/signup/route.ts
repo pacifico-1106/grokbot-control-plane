@@ -49,7 +49,7 @@ async function establishSession(email: string, password: string) {
 
 /**
  * Production signup: auth user + org + owner member, then session cookie.
- * DEMO: redirect to /app like /api/trial (no hard crash).
+ * DEMO: redirect to /app (no hard crash).
  *
  * Recovery:
  * - If Auth user was created but org insert failed previously (`email_exists`

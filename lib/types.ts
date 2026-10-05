@@ -196,6 +196,12 @@ export type EmailLayer = "human_gmail" | "agentmail" | "staffpass_resend";
 export type ConversationSurface = "slack" | "line" | "mail" | "phone" | "web";
 
 /**
+ * Surfaces the channel ledger (org_channels) can classify. Telegram groups can
+ * be classified (PR-B join proposals) but are not a conversation surface.
+ */
+export type ChannelLedgerSurface = ConversationSurface | "telegram";
+
+/**
  * Destination of an outbound conversation. Ingress audience is independent.
  * Unknown / missing destination → treat as external (fail-closed).
  */
@@ -293,7 +299,7 @@ export type ChannelClassification = "internal" | "shared_external" | "unknown";
 export interface OrgChannel {
   id: string;
   orgId: string;
-  surface: ConversationSurface;
+  surface: ChannelLedgerSurface;
   externalId: string;
   classification: ChannelClassification;
   mixed: boolean;
@@ -445,6 +451,13 @@ export interface GatewayInvokeRequest {
     /** Optional initial comment posted with the file */
     initialComment?: string;
   };
+  /**
+   * Duplicate post guard v2 (DUPLICATE_GUARD_V2_ENABLED): after a
+   * post_outcome_unknown / duplicate_post_uncertain answer, the AI checked the
+   * conversation and the earlier post is NOT there → resend once with the
+   * uncertainRef it was given. Releases only that employee's own uncertain row.
+   */
+  duplicateGuard?: { confirmedNotDelivered?: string };
   /** F7: set internally to prevent audience ledger 補完 loops (stripped before persistence). */
   _audienceLedgerSupplemented?: boolean;
 }
@@ -466,6 +479,10 @@ export type AuditAction =
   | "approval.expired"
   | "comm_reply.duplicate_suppressed"
   | "comm_reply.dedup_unavailable"
+  // Duplicate post guard v2 (hashes only)
+  | "comm_reply.cross_employee_duplicate"
+  | "comm_reply.post_outcome_unknown"
+  | "comm_reply.uncertain_released"
   | "approval.telegram_error"
   | "approval.snapshot_missing_attachment"
   | "approval.attachment_upload_in_progress"
@@ -478,6 +495,9 @@ export type AuditAction =
   | "notification.channel_updated"
   | "notification.test_sent"
   | "notification.delivery_failed"
+  | "channel_classify.proposed"
+  | "channel_classify.proposal_failed"
+  | "channel_stuck.notice"
   | "conversation.adapter_updated"
   | "conversation.adapter_installed"
   | "slack.posted"

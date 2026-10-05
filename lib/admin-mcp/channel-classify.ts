@@ -12,11 +12,11 @@ import {
 } from "@/lib/data/slack-im-routes";
 import { isSlackDmAutorouteEnabled } from "@/lib/slack/dm-autoroute-flags";
 import type { SlackImRouteSource } from "@/lib/data/slack-im-routes";
-import type { ChannelClassification, ConversationSurface, OrgChannel } from "@/lib/types";
+import type { ChannelClassification, ChannelLedgerSurface, OrgChannel } from "@/lib/types";
 
 export type ApplyChannelClassificationInput = {
   orgId: string;
-  surface: ConversationSurface;
+  surface: ChannelLedgerSurface;
   externalId: string;
   classification: ChannelClassification;
   mixed: boolean;
@@ -66,7 +66,7 @@ export async function applyChannelClassification(
   const route = isSlackIm
     ? await syncSlackImEmployeeRoute({
         orgId: input.orgId,
-        surface: input.surface,
+        surface: "slack",
         slackChannelId: externalId,
         slackTeamId,
         classification: channel.classification,
