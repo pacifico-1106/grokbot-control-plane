@@ -520,10 +520,32 @@ export function isMcpStrictRequestHeadersEnabled(): boolean {
  * - pending conversation approvals expire (COMM_REPLY_APPROVAL_TTL_MINUTES)
  *
  * When OFF (default): no change. Requires migration 20261004700000.
+ * DUPLICATE_GUARD_V2_ENABLED implies this (v2 is a superset of the ledger).
  * Details: docs/comm-reply-dedup.md
  */
 export function isCommReplyDedupEnabled(): boolean {
-  return parseFlag(process.env.COMM_REPLY_DEDUP_ENABLED);
+  return parseFlag(process.env.COMM_REPLY_DEDUP_ENABLED) || isDuplicateGuardV2Enabled();
+}
+
+/**
+ * Duplicate post guard v2 (Yasaka / 木村 2026-10-05, PR-A). Default OFF.
+ * Everything here can stop a post that v1 lets through, so it is flagged:
+ * - window 6 h (v1 30 min); the same jobId + same body to the same channel goes
+ *   out once regardless of time (job key, kept 30 days)
+ * - a top-level post and a thread post in one channel are compared
+ * - another employee posting the same content to the same conversation is
+ *   blocked (COMM_REPLY_DEDUP_CROSS_EMPLOYEE=warn keeps it to a warning)
+ * - short bodies (< 20 normalized chars): mention / emoji / shortcode
+ *   normalization, same thread only, short window (2 min)
+ * - a post with an unknown outcome (timeout, 5xx, network error after submit)
+ *   keeps its fingerprint; a resend needs duplicateGuard.confirmedNotDelivered
+ * - every posting tool path (sns.publish, file uploads with a message) uses
+ *   the same ledger; ledger errors fail closed
+ * Turning it ON also turns the v1 ledger on. Requires migration 20261005200000.
+ * Details: docs/comm-reply-dedup.md ("v2")
+ */
+export function isDuplicateGuardV2Enabled(): boolean {
+  return parseFlag(process.env.DUPLICATE_GUARD_V2_ENABLED);
 }
 
 /**

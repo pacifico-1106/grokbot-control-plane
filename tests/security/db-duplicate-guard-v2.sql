@@ -88,7 +88,8 @@ begin
   r := security_test.claim2(e1, org_a, top, chan, job, repeat('3',64), sk_other, null, 60, true, 'block', true);
   if r->>'state' <> 'duplicate' or r->>'scope' is distinct from 'same_job' then fails := fails || format('same job outside window → %s', r); end if;
   -- same job, another message → not a duplicate; another job, same body outside the window → not a duplicate
-  r := security_test.claim2(e1, org_a, top, chan, job, repeat('4',64), sk, null, 60, true, 'block', true);
+  -- (another body: hash '4', no sketch — the fixture sketch `sk` belongs to the body '1' row above)
+  r := security_test.claim2(e1, org_a, top, chan, job, repeat('4',64), null, null, 60, true, 'block', true);
   if r->>'state' <> 'none' then fails := fails || format('same job, other body → %s', r); end if;
   r := security_test.claim2(e1, org_a, top, chan, repeat('8',64), repeat('3',64), sk_other, null, 60, true, 'block', true);
   if r->>'state' <> 'none' then fails := fails || format('other job outside window → %s', r); end if;

@@ -57,9 +57,12 @@ import { isAudienceGatedTool, isSnsPublishTool, isConfirmClassTool, GATEWAY_TOOL
 import { fulfillApprovedAdmin } from "@/lib/admin-mcp/fulfill-admin";
 import { stampW2WatchIfUnfulfilled } from "@/lib/stuck-watch/w2-unfulfilled";
 import {
+  DUPLICATE_POST_UNCERTAIN,
   FULFILL_BLOCKED_DEDUP_UNAVAILABLE,
+  POST_OUTCOME_UNKNOWN,
   fulfillDedupFinish,
   fulfillDedupGate,
+  ledgerOutcomeAfterPost,
   type FulfillDedupGate,
 } from "@/lib/comm-reply-dedup/guard";
 import { isConfigChangeApproval } from "@/lib/config-change-request/core";
@@ -172,6 +175,11 @@ export type ApprovalFulfillment = {
   fileUpload?: FulfillmentFileUpload;
   /** comm.delete outcome (ids / status only). */
   commDelete?: { status: string; code: string; deletedVia?: "user" | "bot" };
+  /**
+   * Duplicate post guard v2: error "post_outcome_unknown" — the ledger row id
+   * kept as uncertain (verify the post, then resend with confirmedNotDelivered).
+   */
+  uncertainRef?: string;
 };
 
 export type ConversationDelivery =
@@ -575,14 +583,35 @@ async function fulfillSnsPublish(
   snapshot: InvokeSnapshot
 ): Promise<ApprovalFulfillment> {
   const args = snapshot.args;
-  const posted = await publishSnsPost({
-    orgId: snapshot.orgId || approval.orgId,
-    employeeId: snapshot.employeeId || approval.employeeId,
-    surface: args.surface ?? args.snsSurface ?? args.media,
-    text: outboundText(args, snapshot.purpose || approval.purpose),
-    scheduledAt: args.scheduledAt ?? args.scheduled_at ?? args.scheduledFor,
-    title: args.title,
-  });
+  const text = outboundText(args, snapshot.purpose || approval.purpose);
+  // Duplicate post guard v2 (DUPLICATE_GUARD_V2_ENABLED; OFF → no-op): the same
+  // ledger as conversation posts — same / similar post after this approval was
+  // created or within the window, same jobId, or an unknown-outcome post.
+  const gate = await fulfillDedupGate(approval, snapshot, text);
+  if (!gate.ok) {
+    const blocked: ApprovalFulfillment = { ok: false, error: gate.code, at: new Date().toISOString() };
+    if (gate.code === FULFILL_BLOCKED_DEDUP_UNAVAILABLE || gate.code === DUPLICATE_POST_UNCERTAIN) {
+      await persistFulfillment(approval, blocked);
+    }
+    return blocked;
+  }
+  let posted: SnsPublishResult;
+  try {
+    posted = await publishSnsPost({
+      orgId: snapshot.orgId || approval.orgId,
+      employeeId: snapshot.employeeId || approval.employeeId,
+      surface: args.surface ?? args.snsSurface ?? args.media,
+      text,
+      scheduledAt: args.scheduledAt ?? args.scheduled_at ?? args.scheduledFor,
+      title: args.title,
+    });
+  } catch (error) {
+    await fulfillDedupFinish(gate, approval, "uncertain").catch(() => undefined);
+    throw error;
+  }
+  const outcome = ledgerOutcomeAfterPost(gate.prepared, posted);
+  await fulfillDedupFinish(gate, approval, outcome).catch(() => undefined);
+  const unknown = !posted.ok && outcome === "uncertain" && gate.prepared.kind === "ready";
   const at = new Date().toISOString();
   const fulfillment: ApprovalFulfillment = posted.ok
     ? {
@@ -594,7 +623,8 @@ async function fulfillSnsPublish(
       }
     : {
         ok: false,
-        error: posted.error,
+        error: unknown ? POST_OUTCOME_UNKNOWN : posted.error,
+        ...(unknown && gate.claimId ? { uncertainRef: gate.claimId } : {}),
         ...(posted.surface ? { surface: posted.surface } : {}),
         at,
       };
@@ -847,7 +877,11 @@ async function fulfillApprovedInvokeCore(
     dedupGate = await fulfillDedupGate(approval, snapshot, invokeSnapshotOutboundText(snapshot, approval.purpose));
     if (!dedupGate.ok) {
       const blocked: ApprovalFulfillment = { ok: false, error: dedupGate.code, at: new Date().toISOString() };
-      if (dedupGate.code === FULFILL_BLOCKED_DEDUP_UNAVAILABLE) await persistFulfillment(approval, blocked);
+      // Stopped before any provider call, approval kept approved (re-runnable):
+      // record why. Superseded / expired are recorded by the close itself.
+      if (dedupGate.code === FULFILL_BLOCKED_DEDUP_UNAVAILABLE || dedupGate.code === DUPLICATE_POST_UNCERTAIN) {
+        await persistFulfillment(approval, blocked);
+      }
       return blocked;
     }
 
@@ -867,7 +901,13 @@ async function fulfillApprovedInvokeCore(
     });
     const gateAfterPost = dedupGate;
     dedupGate = null;
-    await fulfillDedupFinish(gateAfterPost, approval, posted.ok ? "sent" : "failed").catch(() => undefined);
+    // v1: failed releases the claim. v2: only a provider-confirmed "not sent"
+    // releases it; an unknown outcome (timeout / 5xx after submit) is kept as
+    // uncertain so neither a re-run nor a direct resend goes out blindly.
+    const ledgerOutcome = gateAfterPost.ok ? ledgerOutcomeAfterPost(gateAfterPost.prepared, posted) : posted.ok ? "sent" : "failed";
+    await fulfillDedupFinish(gateAfterPost, approval, ledgerOutcome).catch(() => undefined);
+    const outcomeUnknown =
+      !posted.ok && ledgerOutcome === "uncertain" && gateAfterPost.ok && gateAfterPost.prepared.kind === "ready";
 
     const at = new Date().toISOString();
     const notSent = posted.ok && !options.attachmentHandledByCaller ? attachmentNotSent(approval) : undefined;
@@ -882,7 +922,14 @@ async function fulfillApprovedInvokeCore(
             ...(notSent ? { fileUpload: notSent } : {}),
           }
         : { ok: true, delivery: "stub", at, ...(notSent ? { fileUpload: notSent } : {}) }
-      : { ok: false, error: posted.error || "slack_post_failed", at };
+      : outcomeUnknown
+        ? {
+            ok: false,
+            error: POST_OUTCOME_UNKNOWN,
+            ...(gateAfterPost.ok && gateAfterPost.claimId ? { uncertainRef: gateAfterPost.claimId } : {}),
+            at,
+          }
+        : { ok: false, error: posted.error || "slack_post_failed", at };
 
     await persistFulfillment(approval, {
       ...fulfillment,

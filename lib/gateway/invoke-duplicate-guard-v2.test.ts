@@ -25,10 +25,12 @@ mock.module("@/lib/gateway/adapters/slack-file-upload", () => ({
   },
 }));
 let storeDown = false;
+// Captured before mock.module: bun rebinds the namespace export to the mock.
+const realClaimV2 = realSends.claimOutboundSendV2;
 mock.module("@/lib/data/comm-reply-sends", () => ({
   ...realSends,
   claimOutboundSendV2: async (input: Parameters<typeof realSends.claimOutboundSendV2>[0]) =>
-    storeDown ? { state: "unavailable" as const, reason: "claim_failed" } : realSends.claimOutboundSendV2(input),
+    storeDown ? { state: "unavailable" as const, reason: "claim_failed" } : realClaimV2(input),
 }));
 
 const { DEMO_ORG, getRuntimeEmployees } = await import("@/lib/demo-data");
@@ -36,6 +38,7 @@ const { runGatewayInvoke } = await import("@/lib/gateway/invoke");
 const { listAuditEvents } = await import("@/lib/data");
 const { upsertConversationAdapter } = await import("@/lib/data/conversation-adapters");
 const { upsertOrgChannel } = await import("@/lib/data/directory");
+const { linkAgent } = await import("@/lib/data/bindings");
 const { demoCommReplySendsForTests, resetDemoCommReplySends } = await import("@/lib/data/comm-reply-sends");
 const { setCommReplyDedupClockForTests } = await import("@/lib/comm-reply-dedup/config");
 type GatewayInvokeRequest = import("@/lib/types").GatewayInvokeRequest;
@@ -93,6 +96,7 @@ beforeAll(async () => {
   if (!getRuntimeEmployees().some((e) => e.id === "emp_comm2")) {
     getRuntimeEmployees().push({ ...comm, id: "emp_comm2", displayName: "社内連絡AI社員2", credentialId: "cred_comm2" });
   }
+  await linkAgent("emp_comm2", { orgId: DEMO_ORG.id, grokBotAgentId: "agent_guard_v2_comm2" });
 });
 afterEach(() => {
   globalThis.fetch = originalFetch;
@@ -356,7 +360,7 @@ describe("(6) file upload with a message", () => {
     expect(second.httpStatus).toBe(200);
     expect(posts.length).toBe(2);
     expect(uploads.length).toBe(1);
-    expect(second.body.fileUpload).toMatchObject({ ok: false, code: "duplicate_reply_suppressed" });
+    expect((second.body.result as Record<string, unknown>).fileUpload).toMatchObject({ ok: false, code: "duplicate_reply_suppressed" });
   });
 });
 

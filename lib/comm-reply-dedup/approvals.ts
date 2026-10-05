@@ -46,11 +46,17 @@ export function approvalBodyMatch(
   approval: ApprovalRequest,
   newer: Pick<ReplyFingerprint, "bodyHash" | "sketch">,
   key: Buffer,
-  settings: Pick<CommReplyDedupSettings, "mode" | "similarityThreshold" | "minSimilarityChars">
+  settings: Pick<CommReplyDedupSettings, "mode" | "similarityThreshold" | "minSimilarityChars"> & Partial<Pick<CommReplyDedupSettings, "v2">>
 ): FingerprintMatch | null {
   const snapshot = parseInvokeSnapshot(approval.metadata);
   if (!snapshot) return null;
-  const pending = fingerprintReplyBody(invokeSnapshotOutboundText(snapshot, approval.purpose), key, settings.minSimilarityChars);
+  // Same normalization as the newer body's fingerprint (v2 when DUPLICATE_GUARD_V2_ENABLED).
+  const pending = fingerprintReplyBody(
+    invokeSnapshotOutboundText(snapshot, approval.purpose),
+    key,
+    settings.minSimilarityChars,
+    settings.v2 ? 2 : 1
+  );
   return compareFingerprints(newer, pending, settings.mode === "similar" ? settings.similarityThreshold : null);
 }
 
@@ -90,7 +96,7 @@ export async function supersedePendingConversationApprovals(input: {
   conversationKey: string;
   /** Fingerprint of the newer reply / approval body (hash-only). */
   fingerprint: Pick<ReplyFingerprint, "bodyHash" | "sketch">;
-  settings: Pick<CommReplyDedupSettings, "mode" | "similarityThreshold" | "minSimilarityChars">;
+  settings: Pick<CommReplyDedupSettings, "mode" | "similarityThreshold" | "minSimilarityChars"> & Partial<Pick<CommReplyDedupSettings, "v2">>;
   reason: "newer_reply_sent" | "newer_approval_requested";
   excludeApprovalId?: string | null;
   supersededBy?: string | null;

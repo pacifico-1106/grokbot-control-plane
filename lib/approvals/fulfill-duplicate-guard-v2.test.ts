@@ -134,7 +134,12 @@ describe("(1) window + same jobId at fulfil", () => {
     expect(posts.length).toBe(1);
   });
 
-  test("v2: same jobId + same body is caught at fulfil even outside the window", async () => {
+  // The direct row was written under v1 (no job key), so what catches it is the
+  // approval-relative window: at fulfil the window also reaches back from the
+  // approval's creation (a held copy of a body sent 40 min before it was
+  // requested is a duplicate however late it is approved). The job-key rule
+  // itself is covered at invoke (invoke-duplicate-guard-v2.test.ts) and in SQL.
+  test("v2: same job + same body sent before the approval is caught at fulfil 7 h later (approval-relative window)", async () => {
     v1();
     recordFetch();
     now = Date.now();

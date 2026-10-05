@@ -110,7 +110,7 @@ describe("conversation bot token never falls back to the shared approval app", (
       text: "会話の返信",
       slackUserId: "U_COUNTERPART",
     });
-    expect(result).toEqual({ ok: false, error: "slack_conversation_bot_token_missing" });
+    expect(result).toEqual({ ok: false, error: "slack_conversation_bot_token_missing", sendState: "not_sent" });
     expect(calls.length).toBe(0);
     expect(sharedTokenUsed()).toBe(false);
   });
@@ -158,7 +158,7 @@ describe("conversation bot token never falls back to the shared approval app", (
         text: "DM 返信",
         slackUserId: "U_COUNTERPART",
       });
-      expect(result).toEqual({ ok: false, error: "channel_not_found" });
+      expect(result).toEqual({ ok: false, error: "channel_not_found", sendState: "not_sent" });
       expect(calls.length).toBe(1);
       expect(calls[0].auth).toBe("Bearer xoxp-user-g1");
       expect(sharedTokenUsed()).toBe(false);

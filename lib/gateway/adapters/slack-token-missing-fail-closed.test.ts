@@ -92,7 +92,7 @@ describe("decision 1: production fails closed with slack_token_missing", () => {
 
   test("postConversationMessage (comm.reply / comm.send / slack.post / approval fulfill) → failure, no Slack call", async () => {
     const result = await slack.postConversationMessage({ orgId: ORG, postingAs: "bot", channel: "C0INTERNAL1", text: "hi" });
-    expect(result).toEqual({ ok: false, error: "slack_token_missing" });
+    expect(result).toEqual({ ok: false, error: "slack_token_missing", sendState: "not_sent" });
     expect(calls).toEqual([]);
   });
 
@@ -132,7 +132,7 @@ describe("decision 1: production fails closed with slack_token_missing", () => {
       internalFullText: "full",
       routing,
     });
-    expect(result.channelDelivery).toEqual({ ok: false, error: "slack_token_missing" });
+    expect(result.channelDelivery).toEqual({ ok: false, error: "slack_token_missing", sendState: "not_sent" });
     expect(calls).toEqual([]);
   });
 
@@ -161,7 +161,7 @@ describe("decision 1: production fails closed with slack_token_missing", () => {
   test("shared-approval-only org keeps its specific code (slack_conversation_bot_token_missing)", async () => {
     notifyChannels.set(ORG, [{ provider: "slack", config: { sharedApprovalApp: true, teamId: "T_SHARED" }, secrets: { botToken: "xoxb-shared-SECRET" } }]);
     const result = await slack.postConversationMessage({ orgId: ORG, postingAs: "bot", channel: "C0INTERNAL1", text: "hi" });
-    expect(result).toEqual({ ok: false, error: "slack_conversation_bot_token_missing" });
+    expect(result).toEqual({ ok: false, error: "slack_conversation_bot_token_missing", sendState: "not_sent" });
     expect(calls).toEqual([]);
   });
 
@@ -187,7 +187,7 @@ describe("decision 2: env SLACK_BOT_TOKEN / SLACK_CONVERSATION_BOT_TOKEN is neve
       expect(await resolveOrgSlackBotToken(ORG)).toBe("");
       expect(await resolveOrgSlackBotTokenDetailed(ORG)).toEqual({ token: "", skippedSharedApprovalApp: false });
       const result = await slack.postConversationMessage({ orgId: ORG, postingAs: "bot", channel: "C0INTERNAL1", text: "hi" });
-      expect(result).toEqual({ ok: false, error: "slack_token_missing" });
+      expect(result).toEqual({ ok: false, error: "slack_token_missing", sendState: "not_sent" });
       process.env.SLACK_REACTION_STAMPS = "true";
       await addReaction({ orgId: ORG, channel: "C0INTERNAL1", timestamp: "1503435956.000247", reaction: "completed" });
       expect(calls.some((call) => call.auth.includes("xoxb-env-OTHER-WORKSPACE"))).toBe(false);
@@ -199,7 +199,7 @@ describe("decision 2: env SLACK_BOT_TOKEN / SLACK_CONVERSATION_BOT_TOKEN is neve
     process.env.SLACK_BOT_TOKEN = "xoxb-env-OTHER-WORKSPACE";
     notifyChannels.set(ORG, [{ provider: "slack", config: { sharedApprovalApp: true, teamId: "T_SHARED" }, secrets: { botToken: "xoxb-shared-SECRET" } }]);
     const result = await slack.postConversationMessage({ orgId: ORG, postingAs: "bot", channel: "C0INTERNAL1", text: "hi" });
-    expect(result).toEqual({ ok: false, error: "slack_conversation_bot_token_missing" });
+    expect(result).toEqual({ ok: false, error: "slack_conversation_bot_token_missing", sendState: "not_sent" });
     expect(calls).toEqual([]);
   });
 
@@ -209,7 +209,7 @@ describe("decision 2: env SLACK_BOT_TOKEN / SLACK_CONVERSATION_BOT_TOKEN is neve
     const result = await slack.postConversationMessage({
       orgId: ORG, employeeId: "emp_x", postingAs: "user", channel: "D0DM00001", text: "hi", slackUserId: "U0AAAA",
     });
-    expect(result).toEqual({ ok: false, error: "slack_identity_unbound" });
+    expect(result).toEqual({ ok: false, error: "slack_identity_unbound", sendState: "not_sent" });
     expect(calls).toEqual([]);
   });
 });
