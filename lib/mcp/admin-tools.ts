@@ -64,6 +64,8 @@ import { parseApprovalChannelId } from "@/lib/employees/approval-inbox";
 import { parseRolesProposeInput } from "@/lib/mcp/roles-propose";
 import { ALL_SCOPES } from "@/lib/employees/policy-draft";
 import { ADMIN_AUDIT_CLASS } from "@/lib/admin-mcp/audit-class";
+import { buildPolicyPatchCard, parsePolicyPatchArgs, policyPatchInputSchema, POLICY_PATCH_CARD_KEY } from "@/lib/admin-mcp/policy-patch-guard";
+import { getOrgSodWarnPolicy } from "@/lib/data/org-context";
 import { getEffectiveReplyPolicy, type ReplyPolicySource } from "@/lib/data/reply-policy";
 import { getEffectiveMailPolicy, type MailPolicySource } from "@/lib/data/mail-policy";
 import { getOrgInternalAudienceRule } from "@/lib/data/internal-audience-rule";
@@ -91,8 +93,6 @@ import {
 } from "@/lib/approval-kind-routes/mcp-handlers";
 import { isApprovalKindRoutesEnabled, isConfigChangeRequestEnabled } from "@/lib/feature-flags";
 import { buildDiff } from "@/lib/config-change-request/core";
-import { buildPolicyPatchCard, parsePolicyPatchArgs, policyPatchInputSchema, POLICY_PATCH_CARD_KEY } from "@/lib/admin-mcp/policy-patch-guard";
-import { getOrgSodWarnPolicy } from "@/lib/data/org-context";
 import { getOrgChannel } from "@/lib/data/directory";
 import type { ChannelClassification, ConversationSurface } from "@/lib/types";
 import {
