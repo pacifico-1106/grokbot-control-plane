@@ -124,11 +124,13 @@ export async function POST(req: Request) {
   }
 
   const id = (body.id ?? null) as JsonRpcId;
-  const method = (body.method || "").trim();
+  const method = typeof body.method === "string" ? body.method.trim() : "";
   const params = (body.params || {}) as Record<string, unknown>;
 
   if (!method) {
-    return jsonRpcError(id, -32600, "Invalid Request: method required", undefined, 400);
+    // Non-string / missing method → Invalid Request; echo id only if it is a valid JSON-RPC id.
+    const safeId = typeof body.id === "string" || typeof body.id === "number" ? body.id : null;
+    return jsonRpcError(safeId, -32600, "Invalid Request: method required", undefined, 400);
   }
   if (method.startsWith("notifications/")) {
     return new NextResponse(null, { status: 202, headers: corsHeaders() });
