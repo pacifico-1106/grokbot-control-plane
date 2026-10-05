@@ -2123,6 +2123,7 @@ async function fulfillApprovedAdminCore(
       case "channels.remove":
       case "parties.remove":
         fulfillment = await fulfillDirectoryRemoveTicket(approval, args, tool);
+        break;
       case "approvers.designatedAdmins.set":
         fulfillment = await fulfillDesignatedAdminsTicket(approval, args);
         break;
