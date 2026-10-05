@@ -8,17 +8,21 @@ import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 const realDirectory = await import("@/lib/data/directory");
 const realBotToken = await import("@/lib/slack/bot-token");
 const realPolicy = await import("@/lib/data/stuck-watch-policy");
+// bun's mock.module patches the live namespace, so keep the originals first.
+const realUpsertOrgChannel = realDirectory.upsertOrgChannel;
+const realListOrgParties = realDirectory.listOrgParties;
+const realGetOrgStuckWatchPolicy = realPolicy.getOrgStuckWatchPolicy;
 let failUpsert = false;
 let failList = false;
 mock.module("@/lib/data/directory", () => ({
   ...realDirectory,
   upsertOrgChannel: async (input: Parameters<typeof realDirectory.upsertOrgChannel>[0]) => {
     if (failUpsert) throw new Error("ledger_write_down");
-    return realDirectory.upsertOrgChannel(input);
+    return realUpsertOrgChannel(input);
   },
   listOrgParties: async (orgId?: string | null) => {
     if (failList) throw new Error("ledger_read_down");
-    return realDirectory.listOrgParties(orgId);
+    return realListOrgParties(orgId);
   },
 }));
 mock.module("@/lib/slack/bot-token", () => ({
@@ -27,7 +31,7 @@ mock.module("@/lib/slack/bot-token", () => ({
 }));
 mock.module("@/lib/data/stuck-watch-policy", () => ({
   ...realPolicy,
-  getOrgStuckWatchPolicy: async (orgId: string) => ({ ...(await realPolicy.getOrgStuckWatchPolicy(orgId)), inferInternalAudienceFromLedger: true }),
+  getOrgStuckWatchPolicy: async (orgId: string) => ({ ...(await realGetOrgStuckWatchPolicy(orgId)), inferInternalAudienceFromLedger: true }),
 }));
 
 const { DEMO_ORG } = await import("@/lib/demo-data");

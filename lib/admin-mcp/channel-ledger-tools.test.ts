@@ -170,3 +170,32 @@ describe("approval card (always, independent of P1_CONFIG_CHANGE_REQUEST_ENABLED
     expect(summary).toContain("U0CARDP001");
   });
 });
+
+describe("09:34 additions: org from the credential only, titles", () => {
+  test("channels.classify / parties.upsert with an orgId argument → unknown_argument, no approval created", async () => {
+    const before = (await listApprovals(DEMO_ORG.id)).length;
+    const c = await callAdminMcpTool("channels.classify", { externalId: "C0ORGARG01", classification: "internal", orgId: OTHER }, cred());
+    expect(c.isError).toBe(true);
+    expect(data(c).code).toBe("unknown_argument");
+    expect(data(c).field).toBe("orgId");
+    expect(String(data(c).nextStep)).toContain("channels.classify");
+    const p = await callAdminMcpTool("parties.upsert", { kind: "slack_user", identifier: "U0ORGARG1", audience: "internal", orgId: OTHER }, cred());
+    expect(data(p).code).toBe("unknown_argument");
+    expect((await listApprovals(DEMO_ORG.id)).length).toBe(before);
+  });
+
+  test("the queued ticket belongs to the credential's org and stores normalized args", async () => {
+    const r = data(await callAdminMcpTool("channels.classify", { externalId: " C0NORM0001 ", classification: "internal" }, cred()));
+    expect(r.code).toBe("needs_approval");
+    const row = (await listApprovals(DEMO_ORG.id)).find((a) => a.id === r.approvalId);
+    expect(row?.orgId).toBe(DEMO_ORG.id);
+    expect(row?.metadata?.adminMutation).toMatchObject({ surface: "slack", externalId: "C0NORM0001", classification: "internal", mixed: false });
+  });
+
+  test("TOOL_TITLE_JA has a Japanese title for classify / upsert / both list tools", async () => {
+    const { ADMIN_TOOL_TITLE_JA } = await import("@/lib/admin-mcp/queue");
+    for (const name of ["channels.classify", "parties.upsert", "channels.list", "parties.list"]) {
+      expect(typeof ADMIN_TOOL_TITLE_JA[name]).toBe("string");
+    }
+  });
+});

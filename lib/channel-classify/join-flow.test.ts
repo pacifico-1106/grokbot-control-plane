@@ -7,7 +7,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { DEMO_ORG } from "@/lib/demo-data";
 import { getApprovalById, listApprovals } from "@/lib/data";
-import { resolveApprovalWithoutWorkflow } from "@/lib/data/approvals";
+import { createApproval, resolveApprovalWithoutWorkflow } from "@/lib/data/approvals";
 import { getOrgChannel, upsertOrgChannel } from "@/lib/data/directory";
 import { resetDemoChannelClassifyStore } from "@/lib/data/channel-classify";
 import {
@@ -230,12 +230,22 @@ describe("dedupe, flag, isolation, fail-closed", () => {
   });
 
   test("dedupe is per org: another tenant's pending ticket for the same id never blocks / leaks", async () => {
+    // The demo approval store is single-tenant (rows land in DEMO_ORG), so the
+    // tenant of each ticket is asserted on the createApproval input instead.
+    const ticketOrgs: string[] = [];
+    setProposalDepsForTests({
+      notifyApproval: async () => true,
+      createApproval: async (input) => {
+        ticketOrgs.push(input.orgId);
+        return createApproval(input);
+      },
+    });
     const outcomeA = await handleChannelJoin({ orgId: ORG, surface: "line", externalId: "Csharedid0001", trigger: "line_join" });
     const outcomeB = await handleChannelJoin({ orgId: OTHER_ORG, surface: "line", externalId: "Csharedid0001", trigger: "line_join" });
     expect(outcomeA.state).toBe("created");
     expect(outcomeB.state).toBe("created");
     expect(outcomeB.approvalId).not.toBe(outcomeA.approvalId);
-    expect(await getApprovalById(outcomeB.approvalId!, ORG)).toBeNull();
+    expect(ticketOrgs).toEqual([ORG, OTHER_ORG]);
   });
 
   test("ticket creation failure → error outcome, claim released (next join can propose)", async () => {
