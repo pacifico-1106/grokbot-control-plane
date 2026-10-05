@@ -148,7 +148,7 @@ const ALLOWED_ARGS: Record<DirectoryRemoveTool, readonly string[]> = {
 };
 
 const DISABLED_NEXT_STEP_JA =
-  "運営が ADMIN_MCP_DIRECTORY_REMOVE_TOOLS_ENABLED を ON にするまでは、ダッシュボードの台帳画面から人が削除してください。";
+  "運営が ADMIN_MCP_DIRECTORY_REMOVE_TOOLS_ENABLED を ON にするまでは使えません。チャネルなら、社員証側の staffpass_config_change_request（kind=channel_remove、人の承認つき）でも外せます。";
 
 export type DirectoryRemoveToolOutcome =
   | { kind: "result"; data: Record<string, unknown>; isError?: boolean }
