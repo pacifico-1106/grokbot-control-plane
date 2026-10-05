@@ -9,7 +9,7 @@ import {
   listStaffpassMcpTools,
 } from "@/lib/mcp/tools";
 import { STAFFPASS_MCP_URL } from "@/lib/mcp/public";
-import { isConfigChangeRequestEnabled } from "@/lib/feature-flags";
+import { isConfigChangeRequestEnabled, isMcpEventsEnabled } from "@/lib/feature-flags";
 import { recordMcpClientSeen } from "@/lib/mcp/endpoint-handoff";
 import {
   MCP_SUPPORTED_PROTOCOL_VERSIONS,
@@ -99,6 +99,9 @@ function serverIdentity() {
 function serverCapabilities(): Record<string, unknown> {
   return {
     tools: { listChanged: true },
+    // MCP Events (#267; flag MCP_EVENTS_ENABLED OFF → absent). Lives here so
+    // initialize and server/discover always advertise the same thing.
+    ...(isMcpEventsEnabled() ? { events: {} } : {}),
   };
 }
 
@@ -193,6 +196,30 @@ export async function POST(req: Request) {
     return reply({});
   }
 
+  // MCP Events (flag MCP_EVENTS_ENABLED; OFF → falls through to the final
+  // -32601 below, which stays the LAST branch: HTTP 404 for modern requests).
+  // Same badge as tools/*; unauthenticated → -32012 Forbidden (spec), HTTP 401/403.
+  // Results go through reply(): modern (2026-07-28 _meta) requests get the same
+  // shape as tools/* (resultType, _meta serverInfo); legacy requests unchanged.
+  if (isMcpEventsEnabled() && (method === "events/list" || method === "events/subscribe" || method === "events/unsubscribe")) {
+    const auth = await resolveEmployeeCredential(req);
+    if (!auth.ok) {
+      return jsonRpcError(id, -32012, "Forbidden", { code: auth.code }, auth.httpStatus);
+    }
+    const events = await import("@/lib/mcp-events/service");
+    try {
+      const out =
+        method === "events/list"
+          ? await events.handleEventsList(auth.credential)
+          : method === "events/subscribe"
+            ? await events.handleEventsSubscribe(auth.credential, params)
+            : await events.handleEventsUnsubscribe(auth.credential, params);
+      return out.ok ? reply(out.result as Record<string, unknown>) : jsonRpcError(id, out.code, out.message, out.data);
+    } catch {
+      return jsonRpcError(id, -32603, "Internal error", undefined, 500);
+    }
+  }
+
   // tools/* require employee badge
   if (method === "tools/list" || method === "tools/call") {
     const auth = await resolveEmployeeCredential(req);
@@ -235,6 +262,14 @@ export async function POST(req: Request) {
 
     if (!toolName) {
       return jsonRpcError(id, -32602, "tools/call requires params.name");
+    }
+
+    // MCP Events: link the first tool call after a delivery to that event
+    // ("what woke the AI"). Flag OFF → no-op. Best-effort.
+    if (isMcpEventsEnabled()) {
+      await import("@/lib/mcp-events/service")
+        .then((events) => events.recordTriggeredAction(auth.credential, toolName))
+        .catch(() => undefined);
     }
 
     try {

@@ -96,6 +96,10 @@ FIXES = [
     },
 ]
 ALL_FIX_TABLES = tuple(t for f in FIXES for t in f["tables"])
+# Additive migrations (new server-only tables): (filename prefix, SQL test, tables).
+ADDITIVE = [
+    ("20261005000000_", "tests/security/db-mcp-events.sql", ("mcp_event_subscriptions", "mcp_event_deliveries", "mcp_event_verification_windows")),
+]
 
 # Un-timestamped legacy names do not sort in dependency order (see
 # scripts/test-db-local.py); everything after this list sorts correctly.
@@ -292,6 +296,22 @@ try:
         assert_holes_state(fix, open_=False)
         sql_file(ROOT / fix["test"])
         print(f"PASS {fix['name']} re-applied after rollback; checks pass again. Fixture rows cleaned up by the SQL file.")
+    # Additive (create-table) migrations: SQL test after the full history,
+    # re-apply, documented rollback block removes exactly their objects, re-apply.
+    for prefix, test, tables in ADDITIVE:
+        name = next((n for n in order if n.startswith(prefix)), None)
+        assert name, f"additive migration missing: {prefix}"
+        sql_file(ROOT / test)
+        sql_file(MIGRATIONS / name)
+        sql_file(ROOT / test)
+        sql_text(rollback_block((MIGRATIONS / name).read_text()), single=False)
+        gone = query("select " + " and ".join(f"to_regclass('public.{t}') is null" for t in tables) + ";")
+        assert gone == "t", f"{name}: rollback left tables behind"
+        for fix in FIXES:
+            sql_file(ROOT / fix["test"])  # rolling back an additive migration never reopens a fix
+        sql_file(MIGRATIONS / name)
+        sql_file(ROOT / test)
+        print(f"PASS {name}: {test} passes after the full history, re-applied, rollback drops {', '.join(tables)}, re-applied; fixes still closed.")
 finally:
     if started:
         run([BIN / "pg_ctl", "-D", cluster / "data", "-m", "fast", "-w", "stop"], stdout=subprocess.DEVNULL)

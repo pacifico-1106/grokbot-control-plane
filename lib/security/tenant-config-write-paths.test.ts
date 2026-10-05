@@ -79,6 +79,9 @@ const CREDENTIAL_READERS = [
   "lib/auth/approval-authority.ts",
   "lib/auth/employee-credential.ts",
   "lib/data/employees.ts",
+  // MCP Events (2026-10-05): service-role read of revoked_at / expires_at only,
+  // re-checking the subscribing badge on every delivery attempt (never secret_hash).
+  "lib/mcp-events/principal.ts",
 ];
 /** lp_* only admit the service_role JWT (never a session) — kept as-is */
 const LP_SERVICE_POLICIES = ["lp_handoffs_service_all", "lp_wake_configs_service_all", "lp_wake_events_service_all"];

@@ -133,6 +133,9 @@ staffpass_health
 
 `2026-07-28` のクライアントは `initialize` を使いません（下の「2026-07-28 の例」を参照）。
 
+> 2026-10-05 時点: サーバーはどの `protocolVersion` を送っても `2024-11-05` で応答します（MCP `2026-07-28` の
+> `server/discover` は未対応）。対応方針は `docs/mcp-events-approval-wake-20261005.md` §13 を参照してください。
+
 ```bash
 curl -sS -X POST 'https://staffpass.sealith.com/api/mcp' \
   -H 'Content-Type: application/json' \

@@ -7,7 +7,7 @@ import { deliverAuthorityDecision } from "@/lib/commerce/authority-events";
 import { appendAuditEvent } from "@/lib/data/audit";
 import { isConfigChangeApproval } from "@/lib/config-change-request/core";
 import { recordConfigChangeResolution } from "@/lib/config-change-request/service";
-import { isDecisionWorkflowEnabled, isMcpEndpointHandoffEnabled } from "@/lib/feature-flags";
+import { isDecisionWorkflowEnabled, isMcpEndpointHandoffEnabled, isMcpEventsEnabled } from "@/lib/feature-flags";
 import {
   APPROVAL_WAKE_ACTION,
   MCP_HANDOFF_SCHEMA,
@@ -164,6 +164,20 @@ export async function runApprovalResolveSideEffects(opts: {
     }
   }
 
+  // MCP Events (flag MCP_EVENTS_ENABLED): one channel-independent emit for every
+  // decision surface (Web / Slack / LINE / Telegram / proxy all land here).
+  // Enqueue is awaited; the signed delivery runs in the background. The same
+  // eventId is added to the legacy callback below so a receiver can dedupe.
+  let mcpEventId: string | null = null;
+  if (isMcpEventsEnabled()) {
+    try {
+      const { emitApprovalEvent } = await import("@/lib/mcp-events/service");
+      mcpEventId = (await emitApprovalEvent({ approval, name: "approval.decided" })).eventId;
+    } catch {
+      mcpEventId = null;
+    }
+  }
+
   let callback: ResolveSideEffectsResult["callback"] = {
     ok: true,
     skipped: true,
@@ -192,6 +206,7 @@ export async function runApprovalResolveSideEffects(opts: {
         ...(configChange?.requesterNoticeJa
           ? { requesterNoticeJa: configChange.requesterNoticeJa }
           : {}),
+        ...(mcpEventId ? { eventId: mcpEventId } : {}),
       };
       // Shared, channel-independent MCP endpoint handoff (flag OFF → same object).
       handoffSurface = opts.surface ?? inferSurface(actorEmail);

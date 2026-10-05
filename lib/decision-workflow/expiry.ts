@@ -15,7 +15,7 @@
  * - Only active when P1_DECISION_WORKFLOW_ENABLED is ON
  */
 
-import { isDecisionWorkflowEnabled } from "@/lib/feature-flags";
+import { isDecisionWorkflowEnabled, isMcpEventsEnabled } from "@/lib/feature-flags";
 import { listApprovals, resolveApproval } from "@/lib/data/approvals";
 import { appendAuditEvent } from "@/lib/data/audit";
 import { getOrgApprovalKindRoutesPolicy } from "@/lib/approval-kind-routes/data";
@@ -224,6 +224,17 @@ async function processDecisionExpiry(
         onExpire,
       },
     });
+
+    // MCP Events (flag OFF → nothing): a decision deadline that auto-rejects is
+    // reported as approval.expired (status rejected, reason deadline_exceeded).
+    if (isMcpEventsEnabled()) {
+      try {
+        const { emitApprovalEvent } = await import("@/lib/mcp-events/service");
+        await emitApprovalEvent({ approval: resolved, name: "approval.expired", reason: "deadline_exceeded" });
+      } catch {
+        // best-effort
+      }
+    }
 
     return {
       approvalId: approval.id,
