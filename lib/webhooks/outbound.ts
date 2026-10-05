@@ -13,6 +13,7 @@
  *   overall timeout with socket teardown) + Standard Webhooks headers.
  */
 import { createHash } from "node:crypto";
+import { ADDRESS_BLOCKED_CODE } from "@/lib/webhooks/link-local-guard";
 import { parseWhsecSecret, signStandardWebhook } from "@/lib/mcp-events/standard-webhooks";
 // Type-only: the transport (and its SSRF address check) is loaded lazily in
 // postHardenedWebhook, so the flag-OFF path never loads it (D9).
@@ -74,6 +75,8 @@ export function categorizeFetchError(e: unknown): WebhookFailureCategory {
   const name = String(err?.name || "");
   if (name === "TimeoutError" || name === "AbortError") return "timeout";
   const code = String(err?.cause?.code || err?.code || "");
+  // Link-local / metadata destination refused at connect time (no flag).
+  if (code === ADDRESS_BLOCKED_CODE) return "address_blocked";
   if (code === "ERR_INVALID_URL") return "invalid_url";
   if (code === "ENOTFOUND" || code === "EAI_AGAIN" || code === "EAI_NONAME") return "dns_failed";
   if (code === "ETIMEDOUT" || code === "UND_ERR_CONNECT_TIMEOUT" || code === "UND_ERR_HEADERS_TIMEOUT") return "timeout";
