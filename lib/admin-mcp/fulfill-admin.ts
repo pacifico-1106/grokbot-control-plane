@@ -47,7 +47,8 @@ import { validateSchedulingPolicy } from "@/lib/scheduling-policy/validate";
 import { validateReplyPolicy } from "@/lib/gateway/reply-policy-validate";
 import { validateMailPolicy } from "@/lib/mail-policy/validate";
 import { normalizeStuckWatchPolicy } from "@/lib/stuck-watch/validate";
-import { linkAgent } from "@/lib/data/bindings";
+import { getBinding, linkAgent } from "@/lib/data/bindings";
+import { parseAdminRequester } from "@/lib/admin-mcp/self-approval";
 import { upsertOrgParty } from "@/lib/data/directory";
 import { onSlackUserPartyUpserted } from "@/lib/slack/dm-autoroute";
 import { applyChannelClassification } from "@/lib/admin-mcp/channel-classify";
@@ -55,6 +56,8 @@ import { normalizeAllowedAccounts } from "@/lib/employees/allowed-accounts";
 import { normalizeApproverUserIds, parseApprovalChannelId } from "@/lib/employees/approval-inbox";
 import { normalizeToolApprovalDefaults } from "@/lib/employees/approval-presets";
 import { ALL_SCOPES } from "@/lib/employees/policy-draft";
+import { checkPolicyPatchSodAck, parsePolicyPatchArgs } from "@/lib/admin-mcp/policy-patch-guard";
+import { getOrgSodWarnPolicy } from "@/lib/data/org-context";
 import { employeePolicyWriteFailure } from "@/lib/employees/policy-errors";
 import { defaultProjectAccess, normalizeProjectAccess } from "@/lib/employees/project-access";
 import { normalizePostingAs } from "@/lib/employees/posting-as";
@@ -712,28 +715,46 @@ async function fulfillPostingIdentityTicket(approval: ApprovalRequest, args: Rec
 }
 
 async function fulfillPolicy(approval: ApprovalRequest, args: Record<string, unknown>): Promise<AdminFulfillment> {
-  const employeeId = String(args.employeeId || "").trim();
-  const scopes = asScopes(args.scopes);
-  const approvalPolicy = args.approvalPolicy as ApprovalPolicy;
-  if (!employeeId || !scopes.length || !["auto", "risk_based", "always_human"].includes(approvalPolicy)) {
-    throw new Error("invalid_policy_payload");
+  const at = new Date().toISOString();
+  // PR-C: re-validate the stored ticket (no silent scope filtering), refuse a
+  // badge bound to the requesting admin agent, and take the SoD
+  // acknowledgement only from the human approval of a card that showed the
+  // same verdict (the agent's sodOverrideAcknowledged is never used).
+  const parsed = parsePolicyPatchArgs(args, { fromTicket: true });
+  if (!parsed.ok) {
+    if (parsed.code === "employee_id_required" || parsed.code === "scopes_required" || parsed.code === "invalid_approval_policy") {
+      throw new Error("invalid_policy_payload");
+    }
+    return { ok: false, tool: "policy.patch", at, error: parsed.code, nextStepJa: parsed.message };
   }
+  const { employeeId, scopes, allowedPurposes, approvalPolicy } = parsed.value;
+  const requester = parseAdminRequester(approval.metadata);
+  const binding = await getBinding(employeeId);
+  const requesterAgent = (requester?.grokBotAgentId || "").trim();
+  if (requesterAgent && requesterAgent === (binding?.grokBotAgentId || "").trim()) {
+    return {
+      ok: false, tool: "policy.patch", at, employeeId, error: "cannot_grant_self_scopes",
+      nextStepJa: "管理エージェントは自分に紐づいた社員証の権限を変更できません。変更は行われていません。",
+    };
+  }
+  const sodGate = checkPolicyPatchSodAck(args, parsed.value, await getOrgSodWarnPolicy(approval.orgId));
+  if (!sodGate.ok) return { ok: false, tool: "policy.patch", at, employeeId, error: sodGate.error, nextStepJa: sodGate.nextStepJa };
+  const { verdict, needsAck } = sodGate;
   let updated: Awaited<ReturnType<typeof updateEmployeePolicy>>;
   try {
     updated = await updateEmployeePolicy({
       orgId: approval.orgId,
       employeeId,
       scopes,
-      allowedPurposes: Array.isArray(args.allowedPurposes)
-        ? args.allowedPurposes.map(String).filter(Boolean)
-        : [],
+      allowedPurposes,
       approvalPolicy,
       toolApprovalDefaults:
-        args.toolApprovalDefaults !== undefined
-          ? normalizeToolApprovalDefaults(args.toolApprovalDefaults)
+        parsed.value.toolApprovalDefaults !== undefined
+          ? normalizeToolApprovalDefaults(parsed.value.toolApprovalDefaults)
           : undefined,
-      sodOverrideAcknowledged: args.sodOverrideAcknowledged === true,
-      actionLimits: normalizeActionLimits(args.actionLimits as ActionLimits),
+      // The human who approved the card that showed this verdict.
+      sodOverrideAcknowledged: needsAck,
+      actionLimits: normalizeActionLimits(parsed.value.actionLimits as ActionLimits),
     });
   } catch (error) {
     return employeePolicyWriteFailedFulfillment("policy.patch", employeeId, error);
@@ -746,7 +767,13 @@ async function fulfillPolicy(approval: ApprovalRequest, args: Record<string, unk
     action: "admin.policy",
     purpose: "admin.policy",
     summary: `${updated.displayName} の権限を人確認のうえで更新`,
-    metadata: { auditClass: ADMIN_AUDIT_CLASS, approvalId: approval.id, scopes: updated.scopes },
+    metadata: {
+      auditClass: ADMIN_AUDIT_CLASS,
+      approvalId: approval.id,
+      scopes: updated.scopes,
+      sodLevel: verdict.level,
+      sodAckSource: needsAck ? "approver_card" : "not_required",
+    },
   });
   return { ok: true, tool: "policy.patch", at: new Date().toISOString(), employeeId };
 }
