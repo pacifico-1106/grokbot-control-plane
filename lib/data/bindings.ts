@@ -325,7 +325,7 @@ export async function assertExecutable(
     return {
       ok: false,
       code: "unbound",
-      message: "employee not linked to Grok Bot agent; refuse invoke (fail-closed)",
+      message: "employee not linked to an AI agent; refuse invoke (fail-closed)",
     };
   }
   if (binding.status === "needs_reauth") {

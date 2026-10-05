@@ -153,7 +153,7 @@ function mcpHandoffFields(employeeId: string, nextStepJa?: string): Pick<AdminFu
 
 const TOOL_NEXTSTEP_JA: Record<string, string> = {
   "employees.issue":
-    "次は手足をこの社員証につなぎます。Grok Botを1体用意して、管理MCPの link に grokBotAgentId を渡してください。人がやるのは承認タップだけです。社員証の秘密はチャットに貼らない。連携後、Slackの口を設定する場合は setup.slackStatus で現状を診断し、docs/tenant-slack-kickoff-rail.md の手順に従ってください。",
+    "次は手足をこの社員証につなぎます。AI エージェントを1体用意して、管理MCPの link にその AI エージェントの ID（grokBotAgentId）を渡してください。人がやるのは承認タップだけです。社員証の秘密はチャットに貼らない。連携後、Slackの口を設定する場合は setup.slackStatus で現状を診断し、docs/tenant-slack-kickoff-rail.md の手順に従ってください。",
   link: "次はコネクタ認証です（OAuthは人がタップ、承認チケットとは別）。Slackの口を設定する場合は setup.slackStatus で現状を診断し、channels.classify で employeeId を指定してください。詳細: docs/tenant-slack-kickoff-rail.md",
   "setup.slackAdapter.setBotToken":
     `Bot token を登録しました。setup.slackStatus で botTokenPresent / authTest / adapterEnabled を確認してください。これは会話投稿アダプタ（「${DASHBOARD_BOT_TOKEN_PATH_JA}」）であり、「承認を受け取る」のSlackではありません。`,
@@ -637,7 +637,7 @@ async function fulfillLink(approval: ApprovalRequest, args: Record<string, unkno
     credentialId: null,
     action: "admin.link",
     purpose: "admin.link",
-    summary: "Grok Bot エージェントを連携（人承認後）",
+    summary: "AI エージェントを連携（人承認後）",
     metadata: {
       auditClass: ADMIN_AUDIT_CLASS,
       approvalId: approval.id,

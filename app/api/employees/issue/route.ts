@@ -223,7 +223,7 @@ export async function POST(req: Request) {
           "needs_approval 時は作業を止め、署名付き status poll URL を承認/却下まで待つ。Partner webhook が来るまで poll が必須です。",
       },
       notice:
-        "この秘密値は一度だけ表示されます。Grok Bot 側の連携設定に貼り付け、安全に保管してください。employeeId は生涯不変です。Instructions / Routine の承認待ちルールも必ず貼ってください。",
+        "この秘密値は一度だけ表示されます。AI エージェント側の連携設定に貼り付け、安全に保管してください。employeeId は生涯不変です。Instructions / Routine の承認待ちルールも必ず貼ってください。",
       actorId: gate.actor.id,
       // MCP endpoint handoff: secret-free; the badge stays only in credential.oneTimeSecret.
       ...(isMcpEndpointHandoffEnabled()

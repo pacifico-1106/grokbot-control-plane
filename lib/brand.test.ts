@@ -66,6 +66,11 @@ describe("サービス表記（Staffpass（AIエージェントの社員証）�
     };
     expect(card.description.startsWith(`Staffpass remote MCP — ID badges for AI agents.`)).toBe(true);
     expect(card.description).not.toMatch(/for Grok Bot/i);
+    // notes: neutral; Grok Bot appears only as one example of an AI agent's MCP connector.
+    // (static JSON on main; after #256 the same note lives in lib/mcp/server-card.ts + its fixture)
+    const notes = (JSON.parse(read("public/.well-known/mcp/server-card.json")) as { notes: string[] }).notes;
+    expect(notes.join("\n")).not.toMatch(/for Grok Bot/i);
+    expect(notes.join("\n")).toContain("your AI agent's MCP connector settings (e.g. Grok Bot Plugins)");
   });
 });
 
@@ -114,7 +119,6 @@ const OLD_LABEL_PATTERNS: RegExp[] = [
 
 // [ファイル, 行に含まれる文字列]。Grok Bot との接続や技術的な事実を述べる箇所だけ。
 const ALLOWED: Array<[string, string]> = [
-  ["public/.well-known/mcp/server-card.json", "no local stdio for Grok Bot Plugins"],
   ["lib/employees/policy-draft.ts", "scopes rewritten for Grok Bot"],
 ];
 

@@ -137,7 +137,7 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
   {
     name: "employees.issue",
     description:
-      "Issue an AI employee badge after human approval (always_human). Call roles.propose first to get human-confirmed role drafts, then issue with those drafts. After issue succeeds, tell the human to prepare one Grok Bot and call link with grokBotAgentId. Staffpass only issues/links badges — creating Grok bots is out of scope. Admin cannot self-approve or grant itself extra scopes.",
+      "Issue an AI employee badge after human approval (always_human). Call roles.propose first to get human-confirmed role drafts, then issue with those drafts. After issue succeeds, tell the human to prepare one AI agent and call link with its agent ID (grokBotAgentId). Staffpass only issues/links badges — creating AI agents is out of scope. Admin cannot self-approve or grant itself extra scopes.",
     inputSchema: {
       type: "object",
       properties: {
@@ -159,7 +159,7 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
   {
     name: "link",
     description:
-      "Bind grokBotAgentId to an existing employee badge after human approval (always_human). Human must prepare one Grok Bot on the agent side first. After link succeeds, proceed to connector OAuth (human taps, separate from approval tickets). Does not create Grok bots. Admin cannot self-approve.",
+      "Bind an AI agent ID (grokBotAgentId) to an existing employee badge after human approval (always_human). Human must prepare one AI agent on the agent side first. After link succeeds, proceed to connector OAuth (human taps, separate from approval tickets). Does not create AI agents. Admin cannot self-approve.",
     inputSchema: {
       type: "object",
       properties: {
