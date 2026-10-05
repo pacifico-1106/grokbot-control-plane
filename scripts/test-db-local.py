@@ -7,6 +7,7 @@ import subprocess
 import tempfile
 import shutil
 import argparse
+import re
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--f8-parent-state", choices=("fresh", "legacy-indexes", "mismatched-indexes", "existing-constraints"), default="fresh")
@@ -178,6 +179,26 @@ try:
                  " and to_regprocedure('public.employee_webhook_settings_same_org()') is null;") == "t"
     sql(webhook_settings)  # forward again after rollback
     sql(ROOT / "tests/security/db-webhook-settings.sql")
+    # PR-D approver authority: needs the P0 admin-approver RPC it replaces.
+    sql(ROOT / "supabase/migrations/20260927000300_admin_approver_enforcement.sql")
+    approver_authority = ROOT / "supabase/migrations/20261005200000_approver_authority.sql"
+    sql(approver_authority)
+    sql(approver_authority)  # re-applicable
+    sql(ROOT / "tests/security/db-approver-authority.sql")
+    rollback = re.search(r"^-- ROLLBACK \(down\).*?$(.*?)^-- END ROLLBACK", approver_authority.read_text(), re.S | re.M)
+    assert rollback, "approver authority migration has no rollback block"
+    rollback_sql = cluster / "approver-authority-rollback.sql"
+    rollback_sql.write_text("\n".join(ln[5:] for ln in rollback.group(1).splitlines() if ln.startswith("--   ")) + "\n")
+    sql(rollback_sql)
+    assert query("select to_regprocedure('public.resolve_approval_w1_checked(uuid,uuid,uuid,text,text,text,text)') is not null"
+                 " and to_regprocedure('public.resolve_approval_w1_checked(uuid,uuid,uuid,text,text,text,text,boolean)') is null"
+                 " and to_regprocedure('public.approver_authority_check(uuid,uuid,text,text[])') is null"
+                 " and to_regprocedure('public.approver_authority_requester_ids(jsonb)') is null"
+                 " and not exists (select 1 from information_schema.columns where table_schema='public'"
+                 " and column_name in ('required_approver_kind','approver_member_id','approver_role','approver_authority','designated_admin_member_ids'));") == "t"
+    sql(approver_authority)  # forward again after rollback
+    sql(ROOT / "tests/security/db-approver-authority.sql")
+    print("PASS: approver authority (PR-D): owner / designated admin decision table; flag-OFF 7-argument W1 call unchanged; standard ticket → designated admin stored, others refused; owner ticket → designated admin endorsed once and kept pending, owner approves and is stored; zero owners stop; multiple owners: any one owner other than the requester (requesting owner refused; a sole owner's own approval counts; several owners all requesters → no_owner_other_than_requester); reject / non-target not gated; record_approver_authority verified/endorse; one RPC overload; EXECUTE service_role only; rollback restores the 7-argument RPC + re-apply.")
     print("PASS: employee_webhook_settings (D9): RLS on, no policy, anon/authenticated denied, service_role reads/writes/upserts; cross-org row rejected; payload mode minimal|legacy_full (default minimal); ciphertext-only secret + fingerprint pair; employee delete cascades; rollback + re-apply.")
     print("PASS: orgs / subscriptions / audit_events / approval_requests have no anon/authenticated write path (member/admin/owner JWT denied); service_role writes all four. Full-history check: scripts/test-db-all-migrations.py.")
     print("PASS: 14 tenant config / credential tables (credentials, employees, bindings, admin agents, directory, adapters, channels, projects, card setup/audit) + gateway_links, agentmail_inboxes, lp_handoffs, lp_wake_webhook_configs, lp_wake_webhook_events have no anon/authenticated write path; other reads unchanged; credentials (rows and secret_hash) unreadable from any session; service_role reads/writes all.")
