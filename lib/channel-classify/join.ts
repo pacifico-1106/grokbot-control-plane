@@ -161,3 +161,7 @@ export async function handleChannelJoin(signal: ChannelJoinSignal): Promise<Prop
     return { state: "error", reason: "join_failed" };
   }
 }
+// TDD stubs (replaced in the implementation commit).
+export async function handleTelegramMyChatMember(_channel: unknown, _update: unknown): Promise<ProposalOutcome> { return { state: "error" }; }
+export async function resolveAdapterBotIdentity(_orgId: string): Promise<null> { return null; }
+export function resetAdapterBotIdentityCacheForTests(): void {}

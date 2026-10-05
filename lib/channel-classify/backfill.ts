@@ -59,3 +59,5 @@ export async function backfillOrgChannelProposals(orgId: string): Promise<Backfi
   }
   return result;
 }
+// TDD stub (replaced in the implementation commit).
+export function setBackfillDepsForTests(_override: unknown): void {}

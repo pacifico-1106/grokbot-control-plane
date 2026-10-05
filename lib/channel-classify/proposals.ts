@@ -260,3 +260,5 @@ export async function proposeChannelClassification(input: {
     return { state: "error", reason: "proposal_failed" };
   }
 }
+// TDD stub (replaced in the implementation commit).
+export async function defaultHasAdminApprover(_orgId: string): Promise<boolean> { return true; }

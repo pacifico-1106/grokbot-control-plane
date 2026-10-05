@@ -102,3 +102,5 @@ export async function buildPartyUpsertCardSummaryJa(
     `${head}: 相手台帳 ${value.kind} ${value.identifier} を ${before} → ${value.audience}。${sharing ? `${sharing}。` : ""}${warning}反映しますか？`
   );
 }
+// TDD stub (replaced in the implementation commit).
+export function setCardBudgetMsForTests(_ms: number | null): void {}

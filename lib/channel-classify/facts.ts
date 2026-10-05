@@ -211,3 +211,5 @@ export async function listSlackBotChannels(orgId: string, maxChannels: number): 
   }
   return out;
 }
+// TDD stub (replaced in the implementation commit).
+export const SLACK_MIN_INTERVAL_MS: Record<string, number> = {};
