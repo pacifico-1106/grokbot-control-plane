@@ -144,7 +144,7 @@ first. While v2 is OFF the app never calls it.
 | (2) Top-level vs thread are different keys | **Channel key** = HMAC of org + surface + destination without the thread. Long bodies compare across the channel (`scope: "cross_thread"`). Short bodies stay per thread. |
 | (3) Per employee only | Another employee's same / similar long body to the same channel: **blocked** (`scope: "cross_employee"`), or with `COMM_REPLY_DEDUP_CROSS_EMPLOYEE=warn` posted with `duplicateWarning`. Audit `comm_reply.cross_employee_duplicate` (`decision: warn \| block`). Under v1 (no v2) the same detection is a warning only. The other employee's row id is never returned. |
 | (4) Short bodies (< 20 normalized chars): exact only | v2 normalization adds: Slack mention / channel / broadcast markup keeps only the id (`<@U1\|野木>` = `<@U1>`), emoji shortcodes (`:+1:`, `:skin-tone-2:`) and pictographic emoji (incl. skin tones, ZWJ, VS16, keycaps) are dropped, on top of v1's width / case / whitespace / punctuation. **Short tier**: exact v2 hash only, **same thread only, 2 min window** (`COMM_REPLY_DEDUP_SHORT_WINDOW_MINUTES`, 1–60), never across employees. |
-| (5) A failed send deletes the fingerprint | Adapters return `sendState: "not_sent" \| "unknown"`. Only `not_sent` (nothing submitted, DNS / connection refused, or a documented Slack pre-post error; SNS 4xx except 408 / 429) releases the row. Anything else is kept as `uncertain`: `502 post_outcome_unknown` with `uncertainRef`, and a later matching post gets `409 duplicate_post_uncertain`. After the AI verifies the message is absent it resends once with `duplicateGuard: { confirmedNotDelivered: uncertainRef }` (MCP: inside `payload`), which releases only that employee's own uncertain row (audit `comm_reply.uncertain_released`). |
+| (5) A failed send deletes the fingerprint | Adapters return `sendState: "not_sent" \| "unknown"`. Only `not_sent` (nothing submitted, DNS / connection refused, or a documented Slack pre-post error incl. `ratelimited` / `rate_limited` below HTTP 500; SNS JSON 4xx except 408, 429 included) releases the row. Anything else is kept as `uncertain`: `502 post_outcome_unknown` with `uncertainRef`, and a later matching post gets `409 duplicate_post_uncertain`. After the AI verifies the message is absent it resends once with `duplicateGuard: { confirmedNotDelivered: uncertainRef }` (MCP: inside `payload`), which releases only that employee's own uncertain row (audit `comm_reply.uncertain_released`). |
 | (6) Only 4 tools | Also `sns.publish` (invoke + fulfil) and Slack file uploads with a message. Inventory: `lib/comm-reply-dedup/inventory.ts` (a test fails if an outbound-send tool has no decision). |
 
 ### Why the short-body rule
@@ -194,15 +194,73 @@ org + channel, dry-run mode for the read-only pre-check) and
 `supabase/verification/20261005300000_duplicate_post_guard_v2_rollback.sql`
 (v1 keeps working). Tested by `scripts/test-db-local.py`.
 
+### Rate limits (429 = not sent, 木村 2026-10-05)
+
+Reverses the 10/4 call ("ratelimited stays unknown"):
+
+| Answer | sendState | AI gets |
+|---|---|---|
+| Slack `chat.postMessage` `ok:false` + `ratelimited` / `rate_limited`, HTTP < 500 | `not_sent` (row released) | `429 provider_rate_limited`, `retryable: true`, `nextAction: "retry_later"`, `retryAfterSeconds`, `nextStep` naming the wait |
+| X HTTP 429 with a JSON body | `not_sent` (row released) | same |
+| Any JSON body on a 5xx (incl. `ratelimited`), 408, timeout, network error after connect, non-JSON answer | `unknown` (row kept uncertain under v2) | `502 post_outcome_unknown` (v2) |
+
+- `retryAfterSeconds`: `Retry-After` (delta seconds or HTTP date), else
+  `x-rate-limit-reset` (epoch seconds), else 60; clamped to 1–3600
+  (`lib/gateway/adapters/rate-limit.ts`).
+- No automatic retry loop. The AI is told to wait. An approved post that was
+  rate-limited ends its execution claim as `failed` (re-runnable,
+  `provider_rate_limited` is retryable) and records the wait in the
+  fulfilment; a re-run inside the wait stops before the provider call and
+  before any ledger claim (`429 provider_rate_limited` with the remaining
+  seconds).
+- Surfaced with the flags OFF too (the error body is new information only;
+  without v2 every failure already released the row).
+- File-upload reconciliation (`lib/slack/definite-errors.ts`) is unchanged:
+  `ratelimited` there stays uncertain and the next cron re-checks.
+
+### HMAC key (where v2 gets it)
+
+v2 adds no key of its own: conversation key, channel key, job key, body hash,
+sketch and the file-upload identity all use `resolveCommReplyDedupKey()`
+(`lib/comm-reply-dedup/config.ts`), the same key as v1:
+
+1. `COMM_REPLY_DEDUP_HMAC_KEY` if ≥ 32 chars after trim →
+   `HMAC-SHA256(key, "staffpass:comm-reply-dedup:v1")`.
+   A set-but-shorter value is ignored (falls through to 2).
+2. else `NOTIFICATION_CONFIG_ENCRYPTION_KEY` if ≥ 32 chars →
+   `HMAC-SHA256(key, "staffpass:comm-reply-dedup:v1:derived")` (domain-separated;
+   the raw notification key is never used as the HMAC key).
+3. else demo mode only (Supabase not configured): a fixed dev key.
+4. else `null` → **fail closed**: every guarded send (invoke, approval fulfil,
+   sns.publish, file upload) returns `duplicate_check_unavailable` /
+   `fulfill_blocked_dedup_unavailable` and nothing is posted (audit
+   `comm_reply.dedup_unavailable`). The supersede sweep just does nothing.
+
+Production today (`COMM_REPLY_DEDUP_ENABLED=true`, `COMM_REPLY_DEDUP_HMAC_KEY`
+unset) therefore runs on the key derived from
+`NOTIFICATION_CONFIG_ENCRYPTION_KEY` (rule 2) — if that were missing or short,
+every comm.reply would already be failing closed with 503. Turning v2 ON does
+not change the key, so v1 rows keep matching. Rotating the notification key
+also rotates the dedup key (dedup history resets for at most one window / the
+job-key retention). To decouple them, set a dedicated
+`COMM_REPLY_DEDUP_HMAC_KEY` (≥ 32 random chars) — that is a one-time history
+reset too, so do it before v2 goes ON or accept one window without history.
+
 ### Production steps (v2)
 
 1. Apply the migration (no effect while the flag is OFF).
-2. Optional: `COMM_REPLY_DEDUP_CROSS_EMPLOYEE=warn` for a first observation period.
+2. Set `COMM_REPLY_DEDUP_CROSS_EMPLOYEE=warn` (木村 2026-10-05).
 3. Set `DUPLICATE_GUARD_V2_ENABLED=true`. Rows written by v1 have no channel /
    job key, and v2 normalizes emoji / mentions differently, so for the first
    window a v1 row is only matched on the same conversation key with the same
-   v1-normal body.
-4. Watch `comm_reply.duplicate_suppressed` (by `scope`),
+   v1-normal body. Approved windows (code defaults, no env needed): 6 h
+   (`COMM_REPLY_DEDUP_WINDOW_MINUTES`), 2 min for short bodies
+   (`COMM_REPLY_DEDUP_SHORT_WINDOW_MINUTES`), 30 d job-key retention
+   (`COMM_REPLY_DEDUP_JOB_RETENTION_DAYS`).
+4. After 1 week on `warn`, review `comm_reply.cross_employee_duplicate`
+   (`decision: warn`) and switch `COMM_REPLY_DEDUP_CROSS_EMPLOYEE` to `block`
+   (or unset it: the code default is block).
+5. Watch `comm_reply.duplicate_suppressed` (by `scope`),
    `comm_reply.cross_employee_duplicate`, `comm_reply.post_outcome_unknown`,
    `comm_reply.uncertain_released` and `comm_reply.dedup_unavailable`.
 

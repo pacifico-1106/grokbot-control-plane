@@ -1,4 +1,5 @@
 import { isDemoMode } from "@/lib/mode";
+import { PROVIDER_RATE_LIMITED, rateLimitWaitRemainingSeconds } from "@/lib/gateway/adapters/rate-limit";
 import { isAdminClassApproval } from "@/lib/admin-mcp/audit-class";
 import { executeApproval } from "@/lib/approvals/execution";
 import {
@@ -180,6 +181,12 @@ export type ApprovalFulfillment = {
    * kept as uncertain (verify the post, then resend with confirmedNotDelivered).
    */
   uncertainRef?: string;
+  /**
+   * error "provider_rate_limited" (Slack ratelimited / X 429, nothing posted):
+   * the provider's wait in seconds, counted from `at`. A re-run inside that
+   * wait stops before the provider call (rateLimitWaitStop).
+   */
+  retryAfterSeconds?: number;
 };
 
 export type ConversationDelivery =
@@ -372,6 +379,9 @@ export function parseFulfillment(
   if (typeof rec.id === "string") fulfillment.id = rec.id;
   if (typeof rec.surface === "string") fulfillment.surface = rec.surface;
   if (typeof rec.error === "string") fulfillment.error = rec.error;
+  if (typeof rec.retryAfterSeconds === "number" && Number.isFinite(rec.retryAfterSeconds)) {
+    fulfillment.retryAfterSeconds = rec.retryAfterSeconds;
+  }
   if (rec.threadTsSource === "client" || rec.threadTsSource === "wake_stash") {
     fulfillment.threadTsSource = rec.threadTsSource;
   }
@@ -578,10 +588,25 @@ async function auditFulfillmentFailure(
   });
 }
 
+/**
+ * The last run of this approval was rate-limited (nothing posted) and the
+ * provider's wait is not over → stop before any provider call or ledger claim.
+ * Not persisted: the recorded rate-limit (and its `at`) stays the reference.
+ * The execution claim ends "failed" (provider_rate_limited is retryable), so
+ * the approval runs again once the wait is over. No automatic retry.
+ */
+function rateLimitWaitStop(approval: ApprovalRequest): ApprovalFulfillment | null {
+  const remaining = rateLimitWaitRemainingSeconds(parseFulfillment(approval.metadata));
+  if (!remaining) return null;
+  return { ok: false, error: PROVIDER_RATE_LIMITED, retryAfterSeconds: remaining, at: new Date().toISOString() };
+}
+
 async function fulfillSnsPublish(
   approval: ApprovalRequest,
   snapshot: InvokeSnapshot
 ): Promise<ApprovalFulfillment> {
+  const waitStop = rateLimitWaitStop(approval);
+  if (waitStop) return waitStop;
   const args = snapshot.args;
   const text = outboundText(args, snapshot.purpose || approval.purpose);
   // Duplicate post guard v2 (DUPLICATE_GUARD_V2_ENABLED; OFF → no-op): the same
@@ -623,8 +648,9 @@ async function fulfillSnsPublish(
       }
     : {
         ok: false,
-        error: unknown ? POST_OUTCOME_UNKNOWN : posted.error,
+        error: unknown ? POST_OUTCOME_UNKNOWN : posted.retryAfterSeconds !== undefined ? PROVIDER_RATE_LIMITED : posted.error,
         ...(unknown && gate.claimId ? { uncertainRef: gate.claimId } : {}),
+        ...(!unknown && posted.retryAfterSeconds !== undefined ? { retryAfterSeconds: posted.retryAfterSeconds } : {}),
         ...(posted.surface ? { surface: posted.surface } : {}),
         at,
       };
@@ -866,6 +892,10 @@ async function fulfillApprovedInvokeCore(
 
     const dest = destValidation.dest;
 
+    // Rate-limited last time and the provider's wait is not over: no post, no claim.
+    const waitStop = rateLimitWaitStop(approval);
+    if (waitStop) return waitStop;
+
     // COMM_REPLY_DEDUP_ENABLED: expired, or the conversation already got a reply
     // with the same / a similar body after this approval was created → closed
     // without sending. Claims the send in the hash-only ledger otherwise. Fail
@@ -929,7 +959,9 @@ async function fulfillApprovedInvokeCore(
             ...(gateAfterPost.ok && gateAfterPost.claimId ? { uncertainRef: gateAfterPost.claimId } : {}),
             at,
           }
-        : { ok: false, error: posted.error || "slack_post_failed", at };
+        : posted.retryAfterSeconds !== undefined
+          ? { ok: false, error: PROVIDER_RATE_LIMITED, retryAfterSeconds: posted.retryAfterSeconds, at }
+          : { ok: false, error: posted.error || "slack_post_failed", at };
 
     await persistFulfillment(approval, {
       ...fulfillment,
