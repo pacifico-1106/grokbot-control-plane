@@ -26,6 +26,8 @@ export const ADMIN_MCP_TOOL_NAMES = [
   "employees.postingIdentity.set",
   "parties.upsert",
   "channels.classify",
+  "channels.list",
+  "parties.list",
   "roles.propose",
   "setup.slackStatus",
   "setup.slackAdapter.setBotToken",

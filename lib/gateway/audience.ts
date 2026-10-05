@@ -21,6 +21,7 @@ import {
   isSlackTeamInternal,
 } from "@/lib/data/internal-audience-rule";
 import { inspectSlackChannelExtShared } from "@/lib/slack/bot-token";
+import { isChannelStuckNotifyEnabled } from "@/lib/channel-classify/flags";
 import type {
   Audience,
   ConversationContext,
@@ -448,8 +449,22 @@ export async function resolveAudience(
           mixed: true,
           skipInspect: true,
         });
-      } catch {
-        /* ledger update is best-effort; audience is already external */
+      } catch (error) {
+        /* audience is already external (fail-closed); PR-B: report, do not swallow */
+        if (isChannelStuckNotifyEnabled()) {
+          const orgId = ctx.orgId;
+          const channelId = ctx.slackChannelId;
+          void import("@/lib/channel-classify/stuck-notify")
+            .then(({ notifyChannelStuck }) =>
+              notifyChannelStuck({
+                orgId,
+                kind: "ledger_write_failed",
+                ref: { surface: "slack", externalId: channelId },
+                reason: error instanceof Error ? error.message : "ledger_write_failed",
+              })
+            )
+            .catch(() => undefined);
+        }
       }
     }
   }

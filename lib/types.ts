@@ -196,6 +196,12 @@ export type EmailLayer = "human_gmail" | "agentmail" | "staffpass_resend";
 export type ConversationSurface = "slack" | "line" | "mail" | "phone" | "web";
 
 /**
+ * Surfaces the channel ledger (org_channels) can classify. Telegram groups can
+ * be classified (PR-B join proposals) but are not a conversation surface.
+ */
+export type ChannelLedgerSurface = ConversationSurface | "telegram";
+
+/**
  * Destination of an outbound conversation. Ingress audience is independent.
  * Unknown / missing destination → treat as external (fail-closed).
  */
@@ -293,7 +299,7 @@ export type ChannelClassification = "internal" | "shared_external" | "unknown";
 export interface OrgChannel {
   id: string;
   orgId: string;
-  surface: ConversationSurface;
+  surface: ChannelLedgerSurface;
   externalId: string;
   classification: ChannelClassification;
   mixed: boolean;
@@ -478,6 +484,9 @@ export type AuditAction =
   | "notification.channel_updated"
   | "notification.test_sent"
   | "notification.delivery_failed"
+  | "channel_classify.proposed"
+  | "channel_classify.proposal_failed"
+  | "channel_stuck.notice"
   | "conversation.adapter_updated"
   | "conversation.adapter_installed"
   | "slack.posted"

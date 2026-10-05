@@ -25,12 +25,14 @@ import { checkAdminPolicyRequirement } from "@/lib/approval-workflow/admin-polic
 import { getOrgApprovalWorkflowPolicy } from "@/lib/approval-workflow/data";
 import { isAdminApproverPolicyRequired } from "@/lib/feature-flags";
 
-const TOOL_TITLE_JA: Record<string, string> = {
+export const ADMIN_TOOL_TITLE_JA: Record<string, string> = {
   "employees.issue": "AI社員の発行",
   link: "AI社員の連携",
   "policy.patch": "権限の更新",
   "parties.upsert": "相手台帳の更新",
   "channels.classify": "チャネル分類",
+  "channels.list": "チャネル分類台帳の一覧（読み取り）",
+  "parties.list": "相手台帳の一覧（読み取り）",
   "roles.propose": "職務案の提案",
   "ingressHandoff.patch": "受信の渡し方",
   "setup.slackAdapter.setBotToken": "Slack会話投稿Botトークン",
@@ -161,7 +163,7 @@ export async function queueAdminTool(input: {
   }
 
   const auditAction = auditActionForAdminTool(input.tool);
-  const title = input.title || TOOL_TITLE_JA[input.tool] || input.tool;
+  const title = input.title || ADMIN_TOOL_TITLE_JA[input.tool] || input.tool;
   const jobId =
     input.jobId ||
     (typeof input.args.jobId === "string" ? input.args.jobId : "") ||

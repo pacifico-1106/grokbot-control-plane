@@ -122,6 +122,12 @@ describe("Slack join → proposal", () => {
     expect(notified).toContain(outcome.approvalId!);
     // never applied automatically
     expect(await getOrgChannel(ORG, "slack", channel)).toBeNull();
+    // a human approval applies it through the normal admin fulfillment
+    const approved = await resolveApprovalWithoutWorkflow(outcome.approvalId!, "approved", "fixture-human", ORG);
+    const { fulfillApprovedAdmin } = await import("@/lib/admin-mcp/fulfill-admin");
+    const fulfilled = await fulfillApprovedAdmin(approved!);
+    expect(fulfilled?.ok).toBe(true);
+    expect((await getOrgChannel(ORG, "slack", channel))?.classification).toBe("internal");
   });
 
   test("the org's own bot joining (authorizations is_bot) resolves the org by team", async () => {
