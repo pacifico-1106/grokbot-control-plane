@@ -1,6 +1,9 @@
 /**
  * D9: signing secret + payload mode for the employee's approval callback
- * (employee_webhook_settings). Behind WEBHOOK_HARDENING_ENABLED (404 when OFF).
+ * (employee_webhook_settings). Behind WEBHOOK_HARDENING_ENABLED (404 when
+ * OFF), except set_callback_payload: admins can mark receivers that need
+ * legacy_full BEFORE the flag is turned on. With the flag OFF the mode is only
+ * stored; delivery is unchanged (the OFF callback path never reads it).
  *
  * GET  → secret-free view: which key signs the callback (callback_secret |
  *        wake_secret | none), a 12-char fingerprint prefix, the payload mode.
@@ -14,9 +17,12 @@
  * Authority = issuing / rotating a credential: owner/admin +
  * hire_issue_credentials (requireCredentialAdmin, fail-closed). The employee
  * must be in the caller's org. Audit rows carry no secret.
+ * POST (every action, flag ON or OFF) is same-origin only (CSRF):
+ * isSameOriginRequest, the same check as /api/auth/set-password → 403.
  */
 import { NextResponse } from "next/server";
 import { getCurrentOrgId } from "@/lib/auth/session";
+import { isSameOriginRequest } from "@/lib/auth/auth-flow";
 import { requireCredentialAdmin } from "@/lib/auth/require-credential-admin";
 import { appendAuditEvent, getEmployee } from "@/lib/data";
 import { isWebhookHardeningEnabled } from "@/lib/feature-flags";
@@ -54,8 +60,13 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
 }
 
 export async function POST(req: Request, ctx: { params: Promise<{ id: string }> }) {
-  if (!isWebhookHardeningEnabled()) return disabled();
+  if (!isSameOriginRequest(req.headers, req.url)) {
+    return NextResponse.json({ ok: false, error: "forbidden" }, { status: 403 });
+  }
+  const flagOn = isWebhookHardeningEnabled();
   const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
+  // Flag OFF: only the payload-mode setting is available (stored, no delivery effect).
+  if (!flagOn && body.action !== "set_callback_payload") return disabled();
   const { id } = await ctx.params;
   const t = await resolveTarget(req, id, typeof body.actorMemberId === "string" ? body.actorMemberId : null);
   if (!t.ok) return t.response;
@@ -101,7 +112,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
       action: "employee.webhook_payload_mode_set",
       purpose: "webhook.payload",
       summary: mode === "legacy_full" ? "承認結果の callback を互換の本文（件名・要約・承認者を含む）に設定" : "承認結果の callback を最小の本文に設定",
-      metadata: { target: "approval_callback", mode, actorId: t.actor.id },
+      metadata: { target: "approval_callback", mode, actorId: t.actor.id, flagOn },
     }).catch(() => undefined);
     return NextResponse.json({ ok: true, callbackPayload: mode });
   }
