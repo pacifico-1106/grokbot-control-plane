@@ -5,6 +5,7 @@
 
 import { DEMO_ORG } from "@/lib/demo-data";
 import { isDemoMode } from "@/lib/mode";
+import { getOrgProject } from "@/lib/data/projects";
 import { createSupabaseAdminClient } from "@/lib/supabase";
 import { inspectSlackChannelExtShared } from "@/lib/slack/bot-token";
 import type {
@@ -504,6 +505,14 @@ export async function getInformationAsset(orgId: string, ref: string): Promise<I
   return mapAssetRow(data as Record<string, unknown>);
 }
 
+/** Thrown when a projectId does not name a project of the asset's org (→ 404 at the route). */
+export const PROJECT_NOT_FOUND = "project_not_found" as const;
+
+/**
+ * projectId is caller input: a non-null value must name an org_projects row of
+ * input.orgId (another org's project or an unknown id → project_not_found,
+ * nothing written). null clears to the org default; undefined leaves it as is.
+ */
 export async function upsertInformationAsset(input: {
   orgId: string;
   ref: string;
@@ -519,6 +528,10 @@ export async function upsertInformationAsset(input: {
       : input.projectId
         ? String(input.projectId).trim() || null
         : null;
+  if (projectId) {
+    const project = await getOrgProject(input.orgId, projectId);
+    if (!project || project.orgId !== input.orgId) throw new Error(PROJECT_NOT_FOUND);
+  }
   if (isDemoMode()) {
     const existing = runtimeAssets.find((row) => row.orgId === input.orgId && row.ref === ref);
     if (existing) {

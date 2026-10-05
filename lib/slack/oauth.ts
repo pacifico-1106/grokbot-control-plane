@@ -88,6 +88,12 @@ export type SlackOAuthState = {
    * link branch (single-use + pinned Slack user/team). Absent = session flow.
    */
   linkId?: string;
+  /**
+   * Session flow: the org member who started the link (hire_issue_credentials
+   * at start). The callback completes only for that same member's current
+   * session. Absent on re-authorize-link states (linkId set).
+   */
+  actorMemberId?: string;
 };
 
 export type SlackBotInstallState = {
@@ -102,6 +108,7 @@ export function signSlackOAuthState(input: {
   employeeId: string;
   nonce: string;
   linkId?: string;
+  actorMemberId?: string;
 }): string {
   const payload: SlackOAuthState = {
     orgId: input.orgId,
@@ -109,6 +116,7 @@ export function signSlackOAuthState(input: {
     nonce: input.nonce,
     exp: Date.now() + STATE_TTL_MS,
     ...(input.linkId ? { linkId: input.linkId } : {}),
+    ...(input.actorMemberId ? { actorMemberId: input.actorMemberId } : {}),
   };
   const encoded = Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
   const secret = signingSecret();
@@ -137,6 +145,12 @@ export function verifySlackOAuthState(
     if (parsed.nonce !== nonce) return null;
     if (!Number.isFinite(parsed.exp) || parsed.exp < Date.now()) return null;
     if (parsed.linkId !== undefined && (typeof parsed.linkId !== "string" || !parsed.linkId)) return null;
+    if (
+      parsed.actorMemberId !== undefined &&
+      (typeof parsed.actorMemberId !== "string" || !parsed.actorMemberId)
+    ) {
+      return null;
+    }
     return parsed;
   } catch {
     return null;

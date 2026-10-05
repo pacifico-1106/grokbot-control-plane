@@ -36,6 +36,7 @@ import { APPROVAL_POLICY_LABELS } from "@/lib/employees/policy-draft";
 import { buildConcentration } from "@/lib/employees/concentration";
 import { DOMAIN_LABELS } from "@/lib/gateway/domains";
 import { evaluateSod, isComboSodWarn } from "@/lib/employees/sod";
+import { identityLinkPermissions } from "@/lib/employees/identity-link-permissions";
 import { bindingPanelPermissions } from "@/lib/employees/binding-panel-permissions";
 
 export const dynamic = "force-dynamic";
@@ -54,6 +55,8 @@ export default async function EmployeeDetailPage({
   const orgId = session.orgId;
   // Same gates as the APIs (link / health, rotate, wake webhook); server-enforced too.
   const bindingPermissions = bindingPanelPermissions(session);
+  // Slack / Google identity connect + disconnect: same gate as the APIs (hire_issue_credentials).
+  const { canManageIdentityLinks } = identityLinkPermissions(session);
   const members = await listMembers(orgId);
   const projects = await listOrgProjects(orgId);
   const sodWarnPolicy = await getOrgSodWarnPolicy(orgId);
@@ -210,6 +213,7 @@ export default async function EmployeeDetailPage({
           initialIdentity={slackIdentity}
           oauthConfigured={slackOauthConfigured}
           disabled={employee.status === "suspended"}
+          canManage={canManageIdentityLinks}
         />
       </section>
 
@@ -221,6 +225,7 @@ export default async function EmployeeDetailPage({
           oauthConfigured={googleOauthConfigured}
           flagEnabled={googleCalendarEnabled}
           disabled={employee.status === "suspended"}
+          canManage={canManageIdentityLinks}
         />
       </section>
 
