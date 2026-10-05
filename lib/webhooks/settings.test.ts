@@ -14,7 +14,7 @@ import { encryptNotificationSecrets } from "@/lib/notify/crypto";
 process.env.NOTIFICATION_CONFIG_ENCRYPTION_KEY = "test-notification-key-0123456789abcdef-webhooks";
 type Res = { data: unknown; error: unknown };
 let settingsRead: Res | "throw" = { data: null, error: null };
-let wakeRead: Res = { data: null, error: null };
+let wakeRead: Res | "throw" = { data: null, error: null };
 let clientAvailable = true;
 const writes: Array<{ table: string; op: string; row: Record<string, unknown>; filters: Array<[string, unknown]> }> = [];
 let writeError: unknown = null;
@@ -27,7 +27,7 @@ function fakeClient() {
       chain.eq = (c: string, v: unknown) => { filters.push([c, v]); return chain; };
       chain.maybeSingle = async () => {
         if (table === "employee_webhook_settings") { if (settingsRead === "throw") throw new Error("fetch failed"); return settingsRead; }
-        if (table === "employee_binding_secrets") return wakeRead;
+        if (table === "employee_binding_secrets") { if (wakeRead === "throw") throw new Error("fetch failed"); return wakeRead; }
         return { data: null, error: null };
       };
       chain.upsert = async (row: Record<string, unknown>) => { writes.push({ table, op: "upsert", row, filters }); return { error: writeError }; };
@@ -49,6 +49,7 @@ afterAll(() => {
   }
 });
 const settings = await import("@/lib/webhooks/settings");
+const bindings = await import("@/lib/data/bindings");
 const EMP = "11111111-1111-4111-8111-111111111111";
 const ORG = "22222222-2222-4222-8222-222222222222";
 
@@ -74,15 +75,89 @@ describe("production reads", () => {
   test("fail closed: read error / throw / no client / undecryptable secret / unknown mode → error (the caller does not send)", async () => {
     prodMode();
     settingsRead = { data: null, error: { message: "relation \"employee_webhook_settings\" does not exist" } };
-    expect(await settings.getCallbackWebhookConfig(EMP, ORG)).toEqual({ state: "error" });
+    expect(await settings.getCallbackWebhookConfig(EMP, ORG)).toEqual({ state: "error", reason: "settings_read_error" });
     settingsRead = "throw";
-    expect(await settings.getCallbackWebhookConfig(EMP, ORG)).toEqual({ state: "error" });
+    expect(await settings.getCallbackWebhookConfig(EMP, ORG)).toEqual({ state: "error", reason: "settings_read_error" });
     settingsRead = { data: { callback_payload: "minimal", callback_secret_ciphertext: "v1.bad.bad.bad" }, error: null };
-    expect(await settings.getCallbackWebhookConfig(EMP, ORG)).toEqual({ state: "error" });
+    expect(await settings.getCallbackWebhookConfig(EMP, ORG)).toEqual({ state: "error", reason: "callback_secret_undecryptable" });
+    settingsRead = { data: { callback_payload: "minimal", callback_secret_ciphertext: encryptNotificationSecrets({}) }, error: null };
+    expect(await settings.getCallbackWebhookConfig(EMP, ORG)).toEqual({ state: "error", reason: "callback_secret_undecryptable" });
     settingsRead = { data: { callback_payload: "everything", callback_secret_ciphertext: null }, error: null };
-    expect(await settings.getCallbackWebhookConfig(EMP, ORG)).toEqual({ state: "error" });
+    expect(await settings.getCallbackWebhookConfig(EMP, ORG)).toEqual({ state: "error", reason: "settings_read_error" });
     clientAvailable = false;
-    expect(await settings.getCallbackWebhookConfig(EMP, ORG)).toEqual({ state: "error" });
+    expect(await settings.getCallbackWebhookConfig(EMP, ORG)).toEqual({ state: "error", reason: "settings_read_error" });
+  });
+});
+
+describe("wake-secret fallback is read strictly (Kimura MUST: a transient error must not mean unsigned)", () => {
+  const wakeCipher = (v: Record<string, string>) => ({ data: { credentials_ciphertext: encryptNotificationSecrets(v) }, error: null });
+  test("wake-secret read error / throw → error wake_secret_read_error (not 'none'); the callback is not sent", async () => {
+    prodMode();
+    wakeRead = { data: null, error: { message: "canceling statement due to statement timeout" } };
+    expect(await settings.getCallbackWebhookConfig(EMP, ORG)).toEqual({ state: "error", reason: "wake_secret_read_error" });
+    wakeRead = "throw";
+    expect(await settings.getCallbackWebhookConfig(EMP, ORG)).toEqual({ state: "error", reason: "wake_secret_read_error" });
+  });
+  test("wake secret undecryptable (bad ciphertext / decrypts to no secret) → error wake_secret_undecryptable", async () => {
+    prodMode();
+    wakeRead = { data: { credentials_ciphertext: "v1.bad.bad.bad" }, error: null };
+    expect(await settings.getCallbackWebhookConfig(EMP, ORG)).toEqual({ state: "error", reason: "wake_secret_undecryptable" });
+    wakeRead = wakeCipher({});
+    expect(await settings.getCallbackWebhookConfig(EMP, ORG)).toEqual({ state: "error", reason: "wake_secret_undecryptable" });
+  });
+  test("genuinely no wake secret (no row / empty ciphertext column) → ok, unsigned as designed", async () => {
+    prodMode();
+    wakeRead = { data: null, error: null };
+    expect(await settings.getCallbackWebhookConfig(EMP, ORG)).toEqual({ state: "ok", payload: "minimal", signingSecret: null, secretSource: "none" });
+    wakeRead = { data: { credentials_ciphertext: null }, error: null };
+    expect(await settings.getCallbackWebhookConfig(EMP, ORG)).toEqual({ state: "ok", payload: "minimal", signingSecret: null, secretSource: "none" });
+  });
+  test("wake secret present (wakeSecret or legacy sender field) → signs with it", async () => {
+    prodMode();
+    wakeRead = wakeCipher({ wakeSecret: "sender-key-x" });
+    expect(await settings.getCallbackWebhookConfig(EMP, ORG)).toEqual({ state: "ok", payload: "minimal", signingSecret: "sender-key-x", secretSource: "wake_secret" });
+    wakeRead = wakeCipher({ sender: "legacy-sender-key" });
+    expect(await settings.getCallbackWebhookConfig(EMP, ORG)).toEqual({ state: "ok", payload: "minimal", signingSecret: "legacy-sender-key", secretSource: "wake_secret" });
+  });
+  test("a dedicated callback secret does not depend on the wake read (wake read error is irrelevant then)", async () => {
+    prodMode();
+    const secret = `whsec_${Buffer.alloc(32, 9).toString("base64")}`;
+    settingsRead = { data: { callback_payload: "minimal", callback_secret_ciphertext: encryptNotificationSecrets({ callbackSigningSecret: secret }) }, error: null };
+    wakeRead = { data: null, error: { message: "boom" } };
+    expect(await settings.getCallbackWebhookConfig(EMP, ORG)).toEqual({ state: "ok", payload: "minimal", signingSecret: secret, secretSource: "callback_secret" });
+  });
+  test("admin view: wake read error / undecryptable → null (route answers 503), never a false 'none'", async () => {
+    prodMode();
+    wakeRead = { data: null, error: { message: "boom" } };
+    expect(await settings.getWebhookSettingsView(EMP, ORG)).toBeNull();
+    wakeRead = { data: { credentials_ciphertext: "v1.bad.bad.bad" }, error: null };
+    expect(await settings.getWebhookSettingsView(EMP, ORG)).toBeNull();
+    wakeRead = { data: null, error: null };
+    expect(await settings.getWebhookSettingsView(EMP, ORG)).toEqual({ callbackSigning: "none", callbackSecretFingerprint: null, callbackPayload: "minimal" });
+    wakeRead = wakeCipher({ wakeSecret: "sender-key-x" });
+    expect((await settings.getWebhookSettingsView(EMP, ORG))?.callbackSigning).toBe("wake_secret");
+  });
+  test("strict reader: ok / absent / error kinds; never returns the ciphertext; no client → error", async () => {
+    prodMode();
+    wakeRead = wakeCipher({ wakeSecret: " k1 " });
+    expect(await bindings.readWakeWebhookSecretStrict(EMP)).toEqual({ state: "ok", secret: "k1" });
+    wakeRead = { data: null, error: null };
+    expect(await bindings.readWakeWebhookSecretStrict(EMP)).toEqual({ state: "absent" });
+    wakeRead = { data: null, error: { message: "x" } };
+    expect(await bindings.readWakeWebhookSecretStrict(EMP)).toEqual({ state: "error", reason: "read_error" });
+    wakeRead = { data: { credentials_ciphertext: "v1.bad.bad.bad" }, error: null };
+    expect(await bindings.readWakeWebhookSecretStrict(EMP)).toEqual({ state: "error", reason: "undecryptable" });
+    clientAvailable = false;
+    expect(await bindings.readWakeWebhookSecretStrict(EMP)).toEqual({ state: "error", reason: "read_error" });
+  });
+  test("legacy getWakeWebhookSecret (flag-OFF callers) is unchanged: errors still read as ''", async () => {
+    prodMode();
+    wakeRead = { data: null, error: { message: "x" } };
+    expect(await bindings.getWakeWebhookSecret(EMP)).toBe("");
+    wakeRead = { data: { credentials_ciphertext: "v1.bad.bad.bad" }, error: null };
+    expect(await bindings.getWakeWebhookSecret(EMP)).toBe("");
+    wakeRead = wakeCipher({ wakeSecret: "k2" });
+    expect(await bindings.getWakeWebhookSecret(EMP)).toBe("k2");
   });
 });
 
