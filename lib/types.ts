@@ -735,6 +735,17 @@ export interface ApprovalRequest {
   createdAt: string;
   resolvedAt: string | null;
   resolvedBy: string | null;
+  /**
+   * PR-D (APPROVER_AUTHORITY_ENABLED): required approver kind recorded at
+   * filing. null / absent = not an approver-authority target (or filed while OFF).
+   */
+  requiredApproverKind?: "owner_or_designated_admin" | "owner" | null;
+  /** PR-D: verified approver (org_members.id) stored at approval time. */
+  approverMemberId?: string | null;
+  /** PR-D: what the approver counted as when verified. */
+  approverRole?: "owner" | "designated_admin" | null;
+  /** PR-D: classification reasons, designated-admin endorsements, verification record. */
+  approverAuthority?: Record<string, unknown> | null;
 }
 
 export interface AuditEvent {

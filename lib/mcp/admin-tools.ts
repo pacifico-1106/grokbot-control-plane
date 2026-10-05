@@ -1,4 +1,5 @@
 import { consumeAdminApprovalSecret } from "@/lib/admin-mcp/consume-secret";
+import { handleDesignatedAdminsTool, isDesignatedAdminsTool } from "@/lib/admin-mcp/designated-admins-tool";
 import { canReadAdminApproval } from "@/lib/admin-mcp/result-authority";
 import { assertAdminToolAllowedForPlan } from "@/lib/billing/plan-gate";
 /**
@@ -1387,6 +1388,31 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
       additionalProperties: false,
     },
   },
+  {
+    name: "approvers.designatedAdmins.get",
+    description:
+      "This tool is read-only (no ticket; requires APPROVER_AUTHORITY_ENABLED): this org's 指定管理者 (designated admins) — the admin members who, besides the owner, may approve changes to approvers and permissions. Returns member IDs with display name / role / status. Org from the credential.",
+    inputSchema: {
+      type: "object",
+      properties: {},
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "approvers.designatedAdmins.set",
+    description:
+      "Replace this org's 指定管理者 (designated admins) list after OWNER approval (always_human; requires APPROVER_AUTHORITY_ENABLED). Only an owner can approve this ticket — a designated admin's approval leaves it オーナー承認待ち. memberIds: org_members IDs of ACTIVE members of this org with role admin (max 20; empty list clears it). Re-validated against the current members when applied; the change is audited (before/after, approving owner). Org from the credential. Admin cannot self-approve. Re-invoke with approvalId to read the result.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        memberIds: { type: "array", items: { type: "string" }, description: "org_members IDs (role admin, active, this org)" },
+        jobId: { type: "string" },
+        approvalId: { type: "string", description: "Re-invoke with approved ticket ID" },
+      },
+      required: ["memberIds"],
+      additionalProperties: false,
+    },
+  },
 ];
 
 /**
@@ -1457,6 +1483,7 @@ const ADMIN_READ_ONLY_TOOLS_SET = new Set<string>([
   "setup.slackDmApprovalStatus",
   "dmAutoroute.list",
   "employees.allowedAccounts.list",
+  "approvers.designatedAdmins.get",
 ]);
 
 /**
@@ -2235,6 +2262,21 @@ export async function callAdminMcpTool(
   if (name === POSTING_IDENTITY_SET_TOOL) {
     // Org from the credential only; user-token check before the ticket.
     const outcome = await handlePostingIdentityTool(args, cred);
+    if (outcome.kind === "result") return toolResult(outcome.data, outcome.isError === true);
+    const queued = await queueAdminTool({
+      cred,
+      tool: name,
+      args: { ...outcome.queuedArgs, ...(typeof args.jobId === "string" ? { jobId: args.jobId } : {}) },
+      rawArgsForSecretScan: args,
+      title: outcome.title,
+      summary: outcome.summary,
+    });
+    return toolResult(queued, false);
+  }
+
+  if (isDesignatedAdminsTool(name)) {
+    // PR-D (APPROVER_AUTHORITY_ENABLED): owner-approved 指定管理者 list. Org from the credential only.
+    const outcome = await handleDesignatedAdminsTool(name, args, cred);
     if (outcome.kind === "result") return toolResult(outcome.data, outcome.isError === true);
     const queued = await queueAdminTool({
       cred,

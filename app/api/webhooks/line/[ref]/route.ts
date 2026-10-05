@@ -1,3 +1,4 @@
+import { approverAuthorityReplyJa } from "@/lib/approver-authority/reply";
 import { resolveApprovalWithWorkflow } from "@/lib/approvals/workflow-integration";
 import { initializeWorkflowForApproval } from "@/lib/approval-workflow/resolve";
 import { getMemberIdFromVoterBinding } from "@/lib/approval-workflow";
@@ -94,7 +95,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ ref: string }>
           const employee = await getEmployee(updated.employeeId, channel.orgId);
           await runApprovalResolveSideEffects({ approval: updated, decision, actorEmail: actor, employee, surface: "line" });
         }
-        if (event.replyToken) await sendLineText(channel, updated ? (decision === "approved" ? "承認しました。" : "却下しました。") : result.ok ? "投票を記録しました（合議は継続中です）。" : "投票を記録できませんでした。", event.replyToken);
+        if (event.replyToken) await sendLineText(channel, updated ? (decision === "approved" ? "承認しました。" : "却下しました。") : approverAuthorityReplyJa(result.reason) ?? (result.ok ? "投票を記録しました（合議は継続中です）。" : "投票を記録できませんでした。"), event.replyToken);
       } catch (error) {
         if (isSelfApprovalDenied(error)) {
           if (event.replyToken) await sendLineText(channel, SELF_APPROVAL_MESSAGE_JA, event.replyToken);

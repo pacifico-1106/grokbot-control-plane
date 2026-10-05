@@ -1,3 +1,4 @@
+import { approverRequirementCardLinesJa } from "@/lib/approver-authority/card";
 import { attachmentCardLine, readCardAttachment, withoutAttachmentSummaryLine } from "@/lib/approvals/attachment-card";
 import {
   formatMailCardParts,
@@ -92,6 +93,8 @@ function composeApprovalTelegramMessage(
     `社員: ${escapeTelegramHtml(employee?.displayName || approval.employeeId)}`,
     `ツール: <code>${escapeTelegramHtml(approval.tool || "unknown")}</code>`,
     `目的: ${escapeTelegramHtml(approval.purpose)}`,
+    // PR-D: 「オーナー承認が必要」 and whose approval is pending (empty when flag OFF / not a target).
+    ...approverRequirementCardLinesJa(approval).map((line) => escapeTelegramHtml(line)),
   ];
   // Approved attachment (filename + size from the snapshot only), outside the
   // summary so the 4096-char trim can never drop it.

@@ -91,6 +91,8 @@ const READ_ONLY_TOOLS = [
   "setup.slackDmApprovalStatus",
   "dmAutoroute.list",
   "employees.allowedAccounts.list",
+  // PR-D (APPROVER_AUTHORITY_ENABLED): 指定管理者 list, read-only
+  "approvers.designatedAdmins.get",
 ];
 // No-ticket WRITE actions (registry: no approvalClass). NOT always_human: they
 // act on an existing stuck watch item and write an audit row; retry also

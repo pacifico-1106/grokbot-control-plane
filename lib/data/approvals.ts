@@ -25,6 +25,10 @@ import { assertNotSelfApproval } from "@/lib/admin-mcp/self-approval";
 import { isAdminClassApproval } from "@/lib/admin-mcp/audit-class";
 import { initializeWorkflowForApproval } from "@/lib/approval-workflow/resolve";
 import { resolveApprovalWithWorkflow, type WorkflowResolverOptions } from "@/lib/approvals/workflow-integration";
+import { isApproverAuthorityEnabled } from "@/lib/feature-flags";
+import { approverRequirementForFiling } from "@/lib/approver-authority/filing";
+import { checkApproverAuthority, recordApproverAuthority } from "@/lib/approver-authority/verify";
+import { requesterMemberIdsFromMetadata } from "@/lib/approver-authority/decide";
 
 function looksLikeUuid(value: string | null | undefined): boolean {
   return Boolean(
@@ -145,6 +149,12 @@ export async function createApproval(
     }
   }
   const revisionCount = parent?.revisionCount ?? 0;
+  // PR-D: required approver kind (null when APPROVER_AUTHORITY_ENABLED is OFF or not a target).
+  const approverRequirement = await approverRequirementForFiling({
+    orgId: input.orgId,
+    tool: input.tool,
+    metadata: input.metadata ?? null,
+  });
 
   if (isDemoMode()) {
     const demoInput: CreateRuntimeApprovalInput = {
@@ -162,7 +172,14 @@ export async function createApproval(
       telegramRef,
       metadata: input.metadata,
     };
-    const approval = await demoCreateApproval(demoInput);
+    let approval = await demoCreateApproval(demoInput);
+    if (approverRequirement) {
+      const patch = {
+        requiredApproverKind: approverRequirement.kind,
+        approverAuthority: { reasons: approverRequirement.reasons, requiredApprovals: approverRequirement.requiredApprovals },
+      };
+      approval = (await demoUpdateApproval(approval.id, patch)) ?? { ...approval, ...patch };
+    }
     await initializeWorkflowForApproval(approval, input.employeeId || null);
     return {
       approval,
@@ -207,12 +224,25 @@ export async function createApproval(
     status_token: statusToken,
     metadata,
   };
+  if (approverRequirement) {
+    insertPayload.required_approver_kind = approverRequirement.kind;
+    insertPayload.approver_authority = {
+      reasons: approverRequirement.reasons,
+      requiredApprovals: approverRequirement.requiredApprovals,
+    };
+  }
 
   let { data, error } = await admin
     .from("approval_requests")
     .insert(insertPayload)
     .select("*")
     .maybeSingle();
+
+  // PR-D: never fall back to the legacy insert when an approver requirement must
+  // be recorded — the requirement would be silently lost (fail open).
+  if (error && approverRequirement) {
+    throw new Error("approval_create_failed_approver_authority");
+  }
 
   // Fallback: older schema without new columns — metadata only.
   if (error) {
@@ -312,10 +342,15 @@ export async function createApproval(
 
 export async function resolveApproval(
   id: string, status: "approved" | "rejected" | "revision_requested", resolvedBy: string,
-  orgId?: string | null, opts: WorkflowResolverOptions = {}
+  orgId?: string | null, opts: WorkflowResolverOptions & {
+    /** PR-D: receives the full result (e.g. the approver-authority reason) — callers keep the old return type. */
+    onResolveResult?: (result: { ok: boolean; workflowComplete: boolean; reason: string }) => void;
+  } = {}
 ): Promise<ApprovalRequest | null> {
   if (!id || !orgId) return null;
-  const result = await resolveApprovalWithWorkflow(id, status, resolvedBy, orgId, opts);
+  const { onResolveResult, ...workflowOpts } = opts;
+  const result = await resolveApprovalWithWorkflow(id, status, resolvedBy, orgId, workflowOpts);
+  onResolveResult?.(result);
   // Old callers only run fulfillment/notifications when a ticket actually resolves.
   return result.ok && result.workflowComplete ? result.approval : null;
 }
@@ -341,22 +376,41 @@ export async function resolveApprovalWithoutWorkflow(
   status: "approved" | "rejected" | "revision_requested",
   resolvedBy: string,
   orgId?: string | null,
-  opts: {
-    memberId?: string | null;
-    revisionNote?: string;
-    grokBotAgentId?: string | null;
-    actorId?: string | null;
-    decisionId?: string;
-    externalVoter?: { provider: "slack" | "telegram" | "line"; channelKey: string; userId: string };
-  } = {}
+  opts: ResolveWithoutWorkflowOptions = {}
 ): Promise<ApprovalRequest | null> {
-  if (!id || !orgId) return null;
+  return (await resolveApprovalWithoutWorkflowDetailed(id, status, resolvedBy, orgId, opts)).approval;
+}
+
+type ResolveWithoutWorkflowOptions = {
+  memberId?: string | null;
+  revisionNote?: string;
+  grokBotAgentId?: string | null;
+  actorId?: string | null;
+  decisionId?: string;
+  externalVoter?: { provider: "slack" | "telegram" | "line"; channelKey: string; userId: string };
+};
+
+/**
+ * Same as resolveApprovalWithoutWorkflow, plus the reason when nothing was
+ * resolved (PR-D: owner_approval_required / approver_not_authorized / … so every
+ * channel can tell the approver the same thing).
+ */
+export async function resolveApprovalWithoutWorkflowDetailed(
+  id: string,
+  status: "approved" | "rejected" | "revision_requested",
+  resolvedBy: string,
+  orgId?: string | null,
+  opts: ResolveWithoutWorkflowOptions = {}
+): Promise<{ approval: ApprovalRequest | null; reason: string }> {
+  if (!id || !orgId) return { approval: null, reason: "resolve_failed" };
   const revisionNote = opts.revisionNote?.trim() || null;
-  if (status === "revision_requested" && !revisionNote) return null;
+  if (status === "revision_requested" && !revisionNote) return { approval: null, reason: "resolve_failed" };
+  // PR-D: only approvals are gated; reject / revise keep today's rules (nothing is applied).
+  const enforceAuthority = status === "approved" && isApproverAuthorityEnabled();
   if (isDemoMode()) {
     const existing = await demoGetApproval(id);
-    if (!existing || existing.orgId !== orgId) return null;
-    if (existing.status !== "pending") return null;
+    if (!existing || existing.orgId !== orgId) return { approval: null, reason: "resolve_failed" };
+    if (existing.status !== "pending") return { approval: null, reason: "resolve_failed" };
     if (isAdminClassApproval(existing)) {
       assertNotSelfApproval(existing.metadata, {
         actor: resolvedBy,
@@ -364,13 +418,32 @@ export async function resolveApprovalWithoutWorkflow(
         grokBotAgentId: opts.grokBotAgentId,
       });
     }
-    return demoResolveApproval(id, status, resolvedBy, revisionNote || undefined);
+    if (enforceAuthority && existing.requiredApproverKind) {
+      const decision = await checkApproverAuthority({
+        orgId,
+        memberId: opts.memberId,
+        requiredKind: existing.requiredApproverKind,
+        requesterMemberIds: requesterMemberIdsFromMetadata(existing.metadata),
+      });
+      if (decision.outcome === "deny") return { approval: null, reason: decision.reason };
+      if (decision.outcome === "endorse") {
+        const recorded = await recordApproverAuthority(existing, String(opts.memberId), "endorse");
+        return { approval: null, reason: recorded.ok ? decision.reason : recorded.reason };
+      }
+      const resolved = await demoResolveApproval(id, status, resolvedBy, revisionNote || undefined);
+      if (!resolved) return { approval: null, reason: "resolve_failed" };
+      const recorded = await recordApproverAuthority(resolved, String(opts.memberId), "verified");
+      if (!recorded.ok) return { approval: null, reason: recorded.reason };
+      return { approval: resolved, reason: "resolved_no_workflow" };
+    }
+    const resolved = await demoResolveApproval(id, status, resolvedBy, revisionNote || undefined);
+    return { approval: resolved, reason: resolved ? "resolved_no_workflow" : "resolve_failed" };
   }
   const admin = createSupabaseAdminClient();
-  if (!admin) return null;
+  if (!admin) return { approval: null, reason: "resolve_failed" };
 
   const existing = await getApprovalById(id, orgId);
-  if (!existing || existing.status !== "pending") return null;
+  if (!existing || existing.status !== "pending") return { approval: null, reason: "resolve_failed" };
   if (isAdminClassApproval(existing)) {
     assertNotSelfApproval(existing.metadata, {
       actor: resolvedBy,
@@ -381,6 +454,8 @@ export async function resolveApprovalWithoutWorkflow(
 
   // Use the security definer RPC for atomic authorization check and update
   // This ensures admin-class tickets with enforcement ON have a verified resolver
+  // PR-D: p_enforce_approver_authority is only sent when the flag is ON, so the
+  // flag-OFF call is byte-for-byte today's 7-argument call.
   const { data: rpcResult, error: rpcError } = await admin.rpc("resolve_approval_w1_checked", {
     p_id: id,
     p_org: orgId,
@@ -389,22 +464,23 @@ export async function resolveApprovalWithoutWorkflow(
     p_actor: resolvedBy,
     p_revision_note: revisionNote,
     p_decision_id: opts.decisionId || null,
+    ...(enforceAuthority ? { p_enforce_approver_authority: true } : {}),
   });
 
   if (rpcError) {
     console.error("resolve_approval_w1_checked_error", rpcError);
-    return null;
+    return { approval: null, reason: enforceAuthority ? "approver_unverified" : "resolve_failed" };
   }
 
   const result = rpcResult as { ok: boolean; reason?: string; approval_id?: string };
   if (!result.ok) {
     console.warn("resolve_approval_w1_checked_rejected", { id, orgId, reason: result.reason });
-    return null;
+    return { approval: null, reason: String(result.reason || "resolve_failed") };
   }
 
   // Fetch the updated approval
   const updated = await getApprovalById(id, orgId);
-  if (!updated) return null;
+  if (!updated) return { approval: null, reason: "resolve_failed" };
 
   // Insert audit event
   await admin.from("audit_events").insert({
@@ -427,6 +503,7 @@ export async function resolveApprovalWithoutWorkflow(
       decision: status,
       resolvedBy,
       memberId: opts.memberId || null,
+      ...(updated.approverRole ? { approverRole: updated.approverRole } : {}),
       tool: updated.tool ?? null,
       jobId: updated.jobId ?? null,
       revisionNote: updated.revisionNote,
@@ -435,7 +512,7 @@ export async function resolveApprovalWithoutWorkflow(
   });
 
   updated.resolvedBy = resolvedBy;
-  return updated;
+  return { approval: updated, reason: "resolved_no_workflow" };
 }
 
 export async function getApprovalByTelegramRef(

@@ -198,6 +198,8 @@ export const PLAN_ADMIN_SCOPES: Record<PlanKey, readonly AdminMcpToolName[]> = {
     "orgs.patch",
     "orgs.issueAdminCredential",
     "approvals.proxyResolve",
+    // PR-D: 指定管理者 (owner approval; APPROVER_AUTHORITY_ENABLED)
+    "approvers.designatedAdmins.set",
   ],
   proper: [
     // All intern scopes
@@ -253,6 +255,8 @@ export const PLAN_ADMIN_SCOPES: Record<PlanKey, readonly AdminMcpToolName[]> = {
     "mailPolicy.patch",
     "internalAudienceRule.patch",
     "approvalRoutes.patch",
+    // PR-D: 指定管理者 (owner approval; APPROVER_AUTHORITY_ENABLED)
+    "approvers.designatedAdmins.set",
   ],
   executive: [
     // All proper scopes
@@ -315,6 +319,8 @@ export const PLAN_ADMIN_SCOPES: Record<PlanKey, readonly AdminMcpToolName[]> = {
     "stuckWatch.classify",
     "employeeIdentity.upsert",
     "employeeIdentity.bindMailbox",
+    // PR-D: 指定管理者 (owner approval; APPROVER_AUTHORITY_ENABLED)
+    "approvers.designatedAdmins.set",
   ],
 };
 
@@ -344,6 +350,7 @@ export const READ_ONLY_ADMIN_TOOLS: readonly AdminMcpToolName[] = [
   "approvalRoutes.get",
   "orgs.status",
   "employeeIdentity.status",
+  "approvers.designatedAdmins.get",
 ];
 
 /**

@@ -686,6 +686,15 @@ async function fulfillAllowedAccountsTicket(
   };
 }
 
+/** PR-D: owner-approved 指定管理者 list; re-validated and owner-checked right before the write. */
+async function fulfillDesignatedAdminsTicket(approval: ApprovalRequest, args: Record<string, unknown>): Promise<AdminFulfillment> {
+  const { fulfillDesignatedAdminsSet, DESIGNATED_ADMINS_SET_TOOL } = await import("@/lib/admin-mcp/designated-admins-tool");
+  const result = await fulfillDesignatedAdminsSet(approval, args);
+  const at = new Date().toISOString();
+  if (!result.ok) return { ok: false, tool: DESIGNATED_ADMINS_SET_TOOL, at, error: result.code, nextStepJa: result.messageJa };
+  return { ok: true, tool: DESIGNATED_ADMINS_SET_TOOL, at, summaryJa: result.summaryJa };
+}
+
 /** Human-approved Slack posting identity switch (bot | user); re-checked right before the write. */
 async function fulfillPostingIdentityTicket(approval: ApprovalRequest, args: Record<string, unknown>): Promise<AdminFulfillment> {
   const { fulfillPostingIdentityChange, POSTING_IDENTITY_SET_TOOL } = await import("@/lib/admin-mcp/posting-identity-tool");
@@ -2091,6 +2100,9 @@ async function fulfillApprovedAdminCore(
         break;
       case "employeeIdentity.bindMailbox":
         fulfillment = await fulfillEmployeeIdentityBindMailbox(approval, args);
+        break;
+      case "approvers.designatedAdmins.set":
+        fulfillment = await fulfillDesignatedAdminsTicket(approval, args);
         break;
       default:
         fulfillment = { ok: false, tool, at, error: "unknown_admin_tool" };

@@ -161,6 +161,8 @@ describe("app: no user-session writes to tenant tables", () => {
       // approval-gated policy writers (admin MCP fulfilment / service paths)
       "lib/approval-kind-routes/data.ts:orgs:update",
       "lib/approval-workflow/data.ts:orgs:update",
+      // PR-D 指定管理者 list: written only by the owner-approved approvers.designatedAdmins.set fulfil
+      "lib/approver-authority/designated-admins.ts:orgs:update",
       // org bootstrap at signup (service role, new org only)
       "lib/auth/session.ts:orgs:insert",
       "lib/auth/session.ts:subscriptions:insert",
