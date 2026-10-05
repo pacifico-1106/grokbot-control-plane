@@ -24,6 +24,7 @@ import { mcpHandoffWakeAuditMeta, withMcpHandoff, type McpHandoff } from "@/lib/
 import { appendAuditEvent } from "@/lib/data/audit";
 import { getEffectiveIngressHandoffPolicy } from "@/lib/data/ingress-handoff";
 import { getOrgChannel } from "@/lib/data/directory";
+import { isChannelClassifyProposalsEnabled } from "@/lib/channel-classify/flags";
 import { storeWakeParent } from "@/lib/data/wake-parent-stash";
 import { resolveIngressHandoffSync } from "@/lib/ingress-handoff/resolve";
 import { applyBodyMode } from "@/lib/ingress-handoff/apply";
@@ -1176,6 +1177,19 @@ export async function processSlackMentionEnvelope(
       reason: "missing_event_or_id",
     });
     return { handled: false, woke: 0, skipReason: "missing_event_or_id" };
+  }
+
+  // PR-B (CHANNEL_CLASSIFY_PROPOSALS_ENABLED): join events → shared
+  // classification-proposal flow (signature already verified). Never wakes.
+  if (
+    (eventType === "member_joined_channel" || eventType === "channel_joined" || eventType === "group_joined") &&
+    isChannelClassifyProposalsEnabled()
+  ) {
+    const { slackJoinSignals, handleChannelJoin } = await import("@/lib/channel-classify/join");
+    const signals = await slackJoinSignals(envelope).catch(() => []);
+    for (const signal of signals) await handleChannelJoin(signal);
+    console.info("slack_event_channel_join", { eventId, eventType, orgs: signals.length });
+    return { handled: true, woke: 0, skipReason: "channel_join" };
   }
 
   if (eventType !== "app_mention" && eventType !== "message") {

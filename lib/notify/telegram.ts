@@ -18,6 +18,7 @@ import {
   type NotificationChannelRuntime,
 } from "@/lib/data/notification-channels";
 import type { ApprovalRequest, Employee } from "@/lib/types";
+import { isChannelClassifyProposalsEnabled } from "@/lib/channel-classify/flags";
 
 const TELEGRAM_TIMEOUT_MS = 5_000;
 
@@ -374,7 +375,10 @@ export async function registerTelegramWebhook(
   const result = await callTelegram("setWebhook", {
     url: absoluteWebhookUrl,
     secret_token: secret,
-    allowed_updates: ["message", "callback_query"],
+    // PR-B: my_chat_member (bot added to a group) only when join proposals are ON.
+    allowed_updates: isChannelClassifyProposalsEnabled()
+      ? ["message", "callback_query", "my_chat_member"]
+      : ["message", "callback_query"],
   }, target.token);
   return result.ok ? { ok: true } : { ok: false, error: result.error };
 }

@@ -102,12 +102,10 @@ import type {
   AllowedAccount,
   ApprovalPolicy,
   ApprovalRequest,
-  ChannelClassification,
-  ConversationSurface,
   EmployeeScope,
-  OrgPartyKind,
   SpendLimits,
 } from "@/lib/types";
+import { validateChannelsClassifyArgs, validatePartiesUpsertArgs } from "@/lib/channel-classify/core";
 
 export type AdminFulfillment = {
   ok: boolean;
@@ -752,14 +750,15 @@ async function fulfillPolicy(approval: ApprovalRequest, args: Record<string, unk
 }
 
 async function fulfillParty(approval: ApprovalRequest, args: Record<string, unknown>): Promise<AdminFulfillment> {
-  const identifier = String(args.identifier || "").trim();
-  const kind = String(args.kind || "") as OrgPartyKind;
-  if (!identifier) throw new Error("identifier_required");
+  // Defense in depth (request-time validation is the first gate): refuse an
+  // invalid kind / audience instead of coercing it.
+  const checked = validatePartiesUpsertArgs(args);
+  if (!checked.ok) throw new Error(checked.code);
   const party = await upsertOrgParty({
     orgId: approval.orgId,
-    kind,
-    identifier,
-    audience: args.audience === "internal" ? "internal" : "external",
+    kind: checked.value.kind,
+    identifier: checked.value.identifier,
+    audience: checked.value.audience,
   });
   await appendAuditEvent({
     orgId: approval.orgId,
@@ -782,16 +781,17 @@ async function fulfillParty(approval: ApprovalRequest, args: Record<string, unkn
 }
 
 async function fulfillChannel(approval: ApprovalRequest, args: Record<string, unknown>): Promise<AdminFulfillment> {
-  const externalId = String(args.externalId || args.identifier || "").trim();
-  if (!externalId) throw new Error("external_id_required");
-  const surface = String(args.surface || "slack") as ConversationSurface;
-  const classification = String(args.classification || "unknown") as ChannelClassification;
+  // Defense in depth: an invalid surface / classification is refused here too
+  // (never silently written as "unknown").
+  const checked = validateChannelsClassifyArgs(args);
+  if (!checked.ok) throw new Error(checked.code);
+  const { surface, externalId, classification } = checked.value;
   const { channel, routeEmployeeId } = await applyChannelClassification({
     orgId: approval.orgId,
     surface,
     externalId,
     classification,
-    mixed: args.mixed === true,
+    mixed: checked.value.mixed,
     employeeId: String(args.employeeId || "").trim(),
     slackTeamId: String(args.slackTeamId || "").trim(),
   });

@@ -2,6 +2,7 @@ import { resolveApprovalWithWorkflow } from "@/lib/approvals/workflow-integratio
 import { initializeWorkflowForApproval } from "@/lib/approval-workflow/resolve";
 import { getMemberIdFromVoterBinding } from "@/lib/approval-workflow";
 import { NextResponse } from "next/server";
+import { isChannelClassifyProposalsEnabled } from "@/lib/channel-classify/flags";
 import { fulfillIfApproved } from "@/lib/approvals/fulfill";
 import { runApprovalResolveSideEffects } from "@/lib/approvals/resolve-side-effects";
 import {
@@ -51,6 +52,18 @@ export async function POST(req: Request, ctx: { params: Promise<{ ref: string }>
   }
   for (const event of body.events || []) {
     const source = event.source || {};
+    // PR-B: the inbox bot joined a group / room (signature verified above) →
+    // shared classification-proposal flow. The approval group itself is skipped.
+    if (event.type === "join" && isChannelClassifyProposalsEnabled()) {
+      const destinationId = String((channel.config as Record<string, unknown>)?.destinationId || "");
+      const joinedId = source.groupId || source.roomId || "";
+      if (joinedId && joinedId !== destinationId) {
+        const { lineJoinSignal, handleChannelJoin } = await import("@/lib/channel-classify/join");
+        const signal = lineJoinSignal({ orgId: channel.orgId }, event);
+        if (signal) await handleChannelJoin(signal);
+      }
+      continue;
+    }
     if (!isAllowedLineSource(channel, source)) continue;
     const userId = source.userId || "unknown";
     const actor = `line:${userId}`;

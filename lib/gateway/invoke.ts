@@ -159,6 +159,13 @@ import {
   applySchedulingPolicyToPropose,
   type ProposeInput,
 } from "@/lib/scheduling-policy/propose";
+import { egressDenyNextStep, onEgressDenied } from "@/lib/channel-classify/deny-hook";
+
+/** PR-B: informational nextStep (channels.classify) on an external-treated deny. */
+function denyNextStepFields(body: GatewayInvokeRequest, egress: { decision?: string; reason?: string; audience?: string }) {
+  const next = egressDenyNextStep(body, egress);
+  return next ? { nextStep: next, nextStepJa: next.messageJa } : {};
+}
 
 export type GatewayInvokeResult = {
   httpStatus: number;
@@ -1272,11 +1279,14 @@ export async function runGatewayInvoke(
           ledgerRetry.invokeResult.body,
           ledgerRetry.invokeResult.httpStatus
         );
-        return { httpStatus: failed.httpStatus, body: failed.body };
+        return { httpStatus: failed.httpStatus, body: { ...failed.body, ...denyNextStepFields(body, egress) } };
       }
       return ledgerRetry.invokeResult;
     }
 
+    // PR-B: unregistered channel → classification proposal + stuck notice
+    // (flags OFF → no-op). Bounded, never throws; the 403 below is unchanged.
+    await onEgressDenied({ orgId: effectiveOrgId, employee, body, egress });
     const stuckPolicy = await getOrgStuckWatchPolicy(effectiveOrgId);
     const hasInternalLedger =
       stuckPolicy.inferInternalAudienceFromLedger &&
@@ -1296,6 +1306,7 @@ export async function runGatewayInvoke(
         purpose,
         jobId,
         hasInternalLedger,
+        ...denyNextStepFields(body, egress),
       },
       403
     );
