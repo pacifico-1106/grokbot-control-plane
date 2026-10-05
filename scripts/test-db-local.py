@@ -181,7 +181,7 @@ try:
     sql(ROOT / "tests/security/db-webhook-settings.sql")
     # PR-D approver authority: needs the P0 admin-approver RPC it replaces.
     sql(ROOT / "supabase/migrations/20260927000300_admin_approver_enforcement.sql")
-    approver_authority = ROOT / "supabase/migrations/20261005200000_approver_authority.sql"
+    approver_authority = ROOT / "supabase/migrations/20261005500000_approver_authority.sql"
     sql(approver_authority)
     sql(approver_authority)  # re-applicable
     sql(ROOT / "tests/security/db-approver-authority.sql")

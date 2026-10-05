@@ -1,6 +1,6 @@
 /**
  * PR-D: pure approver-authority decision. Mirrors SQL
- * public.approver_authority_check (migration 20261005200000) so demo and
+ * public.approver_authority_check (migration 20261005500000) so demo and
  * production decide identically; both are pinned by the same case table.
  */
 import { isRequiredApproverKind, type RequiredApproverKind } from "./targets";

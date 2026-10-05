@@ -606,7 +606,7 @@ export function isWebhookHardeningEnabled(): boolean {
  * - Fulfil re-verifies the stored approver right before execution.
  * - Zero active owners, an unverifiable approver or an unreadable setting → stop.
  * - approvers.designatedAdmins.get / .set (admin MCP) are available.
- * Requires migration 20261005200000_approver_authority.sql (without it, filing
+ * Requires migration 20261005500000_approver_authority.sql (without it, filing
  * a target ticket fails instead of silently dropping the requirement).
  *
  * When OFF (default): behaviour is unchanged (nothing recorded, nothing checked).

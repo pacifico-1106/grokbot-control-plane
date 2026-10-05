@@ -1,4 +1,4 @@
--- PR-D approver authority (migration 20261005200000). Fixture data only.
+-- PR-D approver authority (migration 20261005500000). Fixture data only.
 -- Org A: owner O, designated admin D, admin N (not designated), member M, disabled admin X (designated).
 -- Org B: admin only (no owner).
 -- Org C: two owners C1 / C2 + designated admin CD (multiple owners, 八坂 2026-10-05).

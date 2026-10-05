@@ -316,7 +316,7 @@ try:
     # PR-D approver authority (columns + functions, replaces resolve_approval_w1_checked):
     # SQL test after the full history, re-apply, rollback restores the 7-argument
     # RPC and drops the columns, fixes still closed, re-apply.
-    name = next((n for n in order if n.startswith("20261005200000_")), None)
+    name = next((n for n in order if n.startswith("20261005500000_")), None)
     assert name, "approver authority migration missing"
     test = "tests/security/db-approver-authority.sql"
     sql_file(ROOT / test)
