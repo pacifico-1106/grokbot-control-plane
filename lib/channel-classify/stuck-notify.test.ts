@@ -189,12 +189,12 @@ describe("deny hook", () => {
     await expect(onEgressDenied({ orgId: ORG, employee: { id: "emp_comm" }, body: { tool: "comm.reply", conversation: { surface: "slack", slackChannelId: "C0UNREG00010" }, args: {} } as never, egress: { decision: "deny", reason: "external_confidential_denied" } })).resolves.toBeUndefined();
   });
 
-  test("nextStep points to channels.classify with the channel id and an example call", () => {
-    const next = egressDenyNextStep({ tool: "comm.reply", conversation: { surface: "slack", slackChannelId: "C0UNREG00011" }, args: {} } as never, { decision: "deny", reason: "external_confidential_denied", audience: "unknown" });
+  test("nextStep points to channels.classify with the channel id and an example call", async () => {
+    const next = await egressDenyNextStep({ tool: "comm.reply", conversation: { surface: "slack", slackChannelId: "C0UNREG00011" }, args: {} } as never, { decision: "deny", reason: "external_confidential_denied", audience: "unknown" }, ORG);
     expect(next?.tool).toBe("channels.classify");
     expect(next?.externalId).toBe("C0UNREG00011");
     expect(next?.example).toEqual({ name: "channels.classify", arguments: { surface: "slack", externalId: "C0UNREG00011", classification: "internal", mixed: false } });
     expect(next?.messageJa).toContain("C0UNREG00011");
-    expect(egressDenyNextStep({ tool: "comm.reply", conversation: { surface: "slack", slackChannelId: "C1" }, args: {} } as never, { decision: "deny", reason: "internal_verbatim_unnamed" })).toBeNull();
+    expect(await egressDenyNextStep({ tool: "comm.reply", conversation: { surface: "slack", slackChannelId: "C1" }, args: {} } as never, { decision: "deny", reason: "internal_verbatim_unnamed" }, ORG)).toBeNull();
   });
 });

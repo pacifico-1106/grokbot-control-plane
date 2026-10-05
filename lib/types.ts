@@ -497,6 +497,7 @@ export type AuditAction =
   | "notification.delivery_failed"
   | "channel_classify.proposed"
   | "channel_classify.proposal_failed"
+  | "channel_classify.join_ignored"
   | "channel_stuck.notice"
   | "conversation.adapter_updated"
   | "conversation.adapter_installed"
