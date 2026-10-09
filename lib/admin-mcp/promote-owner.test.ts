@@ -7,17 +7,21 @@
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { scopedModuleMocks } from "../../tests/helpers/scoped-module-mock";
-import { DEMO_ORG, getRuntimeApprovals, getRuntimeAudit, getRuntimeMemberById, resetRuntimeMembers, upsertRuntimeMember } from "@/lib/demo-data";
+import { DEMO_ORG, getRuntimeApprovals, getRuntimeAudit, getRuntimeMemberById, resetRuntimeMembers, setRuntimeMember, upsertRuntimeMember } from "@/lib/demo-data";
 import type { ApprovalRequest, OrgMember } from "@/lib/types";
 
 const promotedNotices: Array<{ approvalId: string; target: string }> = [];
+const approvedNotices: string[] = [];
 const mocks = scopedModuleMocks();
 await mocks.mock("@/lib/notify/channels", {
   sendApprovalNotifications: async () => [{ ok: true, provider: "slack" }],
   refreshWorkflowNotification: async () => {},
   updateApprovalNotificationMessages: async () => [],
   notifyOwnerApprovalPending: async () => ({ ok: true, provider: "slack" }),
-  notifyOwnersApproverAuthorityApproved: async () => ({ owners: 0, slackDmSent: 0, slackDmFailed: 0, ownersWithoutSlack: 0, channelPost: null }),
+  notifyOwnersApproverAuthorityApproved: async (a: ApprovalRequest) => {
+    approvedNotices.push(a.id);
+    return { owners: 0, slackDmSent: 0, slackDmFailed: 0, ownersWithoutSlack: 0, channelPost: null };
+  },
   notifyOwnerPromoted: async (a: ApprovalRequest, input: { targetMemberId: string }) => {
     promotedNotices.push({ approvalId: a.id, target: input.targetMemberId });
     return { recipients: 0, slackDmSent: 0, slackDmFailed: 0, withoutSlack: 0, channelPost: null };
@@ -32,6 +36,7 @@ const { fulfillApprovedAdmin } = await import("@/lib/admin-mcp/fulfill-admin");
 const { writeDesignatedAdminMemberIds, resetDemoDesignatedAdminsForTests } = await import("@/lib/approver-authority/designated-admins");
 const { JOB_ROLE_CAPABILITY_PACKS } = await import("@/lib/team/rbac");
 const { fulfillPromoteOwner } = await import("@/lib/admin-mcp/promote-owner-tool");
+const { writeMemberRow, MemberConcurrentModificationError } = await import("@/lib/data/members");
 
 const ORG = DEMO_ORG.id;
 const OWNER = "mem_1";
@@ -61,6 +66,7 @@ beforeEach(() => {
   upsertRuntimeMember(member("mem_po_other_org", "member", "active", "org_other"), { audit: false });
   resetDemoDesignatedAdminsForTests();
   promotedNotices.length = 0;
+  approvedNotices.length = 0;
 });
 afterEach(() => {
   for (const k of FLAGS) {
@@ -101,7 +107,7 @@ describe("filing", () => {
     const ticket = (await getApprovalById(String(queued.approvalId), ORG))!;
     expect(ticket.requiredApproverKind).toBe("owner");
     expect(ticket.metadata.always_human).toBe(true);
-    expect(ticket.metadata.adminMutation).toEqual({ memberId: TARGET, beforeRole: "admin", beforeCapabilities: ["view_dashboard", "manage_team"] });
+    expect(ticket.metadata.adminMutation).toEqual({ memberId: TARGET, beforeRole: "admin", beforeCapabilities: ["view_dashboard", "manage_team"], beforeStatus: "active" });
   });
 });
 
@@ -122,6 +128,8 @@ describe("approval and fulfil", () => {
     expect(promoted.role).toBe("owner");
     expect([...(promoted.capabilities ?? [])].sort()).toEqual([...JOB_ROLE_CAPABILITY_PACKS.owner].sort());
     expect(promotedNotices).toEqual([{ approvalId: id, target: TARGET }]);
+    // ONE owner notice, on promotion only (the after-approval notice is merged into it)
+    expect(approvedNotices).toEqual([]);
     const audit = getRuntimeAudit().find((e) => e.action === "member.updated" && e.metadata?.source === "admin_mcp_promote_owner");
     expect(audit?.metadata).toMatchObject({ memberId: TARGET, roleBefore: "admin", roleAfter: "owner", approvalId: id, actorMemberId: OWNER });
     // idempotent: a second fulfil does not re-apply or re-notify
@@ -136,7 +144,10 @@ describe("approval and fulfil", () => {
     const args = approved.metadata.adminMutation as Record<string, unknown>;
     expect(codeOf(await fulfillPromoteOwner({ ...approved, approverRole: "designated_admin" }, args))).toBe("owner_approval_required");
     expect(codeOf(await fulfillPromoteOwner({ ...approved, approverMemberId: TARGET }, args))).toBe("approver_is_target");
+    // sole owner who is also the requester: allowed now (not refused here)
+    upsertRuntimeMember(member("mem_po_owner2", "owner"), { audit: false });
     expect(codeOf(await fulfillPromoteOwner({ ...approved, metadata: { ...approved.metadata, requesterMemberId: OWNER } }, args))).toBe("approver_is_requester");
+    setRuntimeMember({ ...member("mem_po_owner2", "owner"), status: "disabled" });
     upsertRuntimeMember({ ...member(TARGET, "member") }, { audit: false });
     expect(codeOf(await fulfillPromoteOwner(approved, args))).toBe("concurrent_modification");
     upsertRuntimeMember({ ...member(TARGET, "admin", "disabled") }, { audit: false });
@@ -148,26 +159,79 @@ describe("approval and fulfil", () => {
   });
 });
 
-describe("requester may never approve (no sole-owner exception)", () => {
-  test("sole owner who is the requesting member cannot approve; ticket stays pending, nothing applied", async () => {
-    const id = String((await promote({ memberId: TARGET })).approvalId);
+describe("who may approve (木村 2026-10-09)", () => {
+  const markRequester = (id: string, memberId: string) => {
     const row = getRuntimeApprovals().find((a) => a.id === id)!;
-    row.metadata = { ...row.metadata, requesterMemberId: OWNER };
+    row.metadata = { ...row.metadata, requesterMemberId: memberId };
+  };
+  const promotionAudit = (id: string) => getRuntimeAudit().find(
+    (e) => e.action === "member.updated" && e.metadata?.source === "admin_mcp_promote_owner" && e.metadata?.approvalId === id
+  );
+
+  test("single owner MAY approve even as the requester → promoted; audit carries singleOwnerApproval: true", async () => {
+    const id = String((await promote({ memberId: TARGET })).approvalId);
+    markRequester(id, OWNER);
     const r = await approve(id, OWNER);
-    expect(r.ok).toBe(false);
-    expect(r.reason).toBe("approver_is_requester");
+    expect(r.ok && r.workflowComplete).toBe(true);
+    expect((await fulfillApprovedAdmin((await getApprovalById(id, ORG))!))?.ok).toBe(true);
+    expect(getRuntimeMemberById(TARGET)?.role).toBe("owner");
+    expect(promotionAudit(id)?.metadata?.singleOwnerApproval).toBe(true);
+    expect(promotedNotices).toEqual([{ approvalId: id, target: TARGET }]);
+    expect(approvedNotices).toEqual([]);
+  });
+
+  test("2+ owners: the requesting owner is refused; another owner approves; singleOwnerApproval: false", async () => {
+    upsertRuntimeMember(member("mem_po_owner2", "owner"), { audit: false });
+    const id = String((await promote({ memberId: TARGET })).approvalId);
+    markRequester(id, OWNER);
+    const refused = await approve(id, OWNER);
+    expect(refused.ok).toBe(false);
+    expect(refused.reason).toBe("approver_is_requester");
     expect((await getApprovalById(id, ORG))?.status).toBe("pending");
+    const ok = await approve(id, "mem_po_owner2");
+    expect(ok.ok && ok.workflowComplete).toBe(true);
+    expect((await fulfillApprovedAdmin((await getApprovalById(id, ORG))!))?.ok).toBe(true);
+    expect(promotionAudit(id)?.metadata?.singleOwnerApproval).toBe(false);
+  });
+
+  test("the member being promoted can NEVER approve (even as a designated admin, even with one owner)", async () => {
+    await writeDesignatedAdminMemberIds(ORG, [TARGET]);
+    const id = String((await promote({ memberId: TARGET })).approvalId);
+    markRequester(id, TARGET);
+    const r = await approve(id, TARGET);
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe("approver_is_target");
     expect(getRuntimeMemberById(TARGET)?.role).toBe("admin");
   });
 
-  test("conflict helper: only for members.promoteOwner; target and requester ids", async () => {
+  test("nobody can approve (no active owner) → refused at filing with a next step; nothing queued", async () => {
+    setRuntimeMember({ ...getRuntimeMemberById(OWNER)!, status: "disabled" });
+    const before = getRuntimeApprovals().length;
+    const r = await promote({ memberId: TARGET });
+    expect(r.ok).toBe(false);
+    expect(String(r.code)).toMatch(/owner/);
+    expect(String(r.nextStepJa || "")).not.toBe("");
+    expect(getRuntimeApprovals().length).toBe(before);
+  });
+
+  test("conflict helper: only the target is a promoteOwner-specific conflict (requester follows the general single-owner rule)", async () => {
     const { promoteOwnerApproverConflict } = await import("@/lib/approver-authority/decide");
     const meta = { adminMutation: { memberId: TARGET }, requesterMemberId: "mem_req", adminRequester: { actorId: "agent_x" } };
     expect(promoteOwnerApproverConflict({ tool: "members.promoteOwner", metadata: meta }, TARGET)).toBe("approver_is_target");
-    expect(promoteOwnerApproverConflict({ tool: "members.promoteOwner", metadata: meta }, "mem_req")).toBe("approver_is_requester");
-    expect(promoteOwnerApproverConflict({ tool: "members.promoteOwner", metadata: meta }, "agent_x")).toBe("approver_is_requester");
+    expect(promoteOwnerApproverConflict({ tool: "members.promoteOwner", metadata: meta }, "mem_req")).toBeNull();
     expect(promoteOwnerApproverConflict({ tool: "members.promoteOwner", metadata: meta }, OWNER)).toBeNull();
     expect(promoteOwnerApproverConflict({ tool: "plan.upgrade", metadata: meta }, TARGET)).toBeNull();
+  });
+
+  test("'unchanged since filing' includes status: the conditional write refuses a member whose status changed", async () => {
+    const current = getRuntimeMemberById(TARGET)!;
+    setRuntimeMember({ ...current, status: "disabled" });
+    await expect(writeMemberRow(
+      { ...current, role: "owner", capabilities: [...JOB_ROLE_CAPABILITY_PACKS.owner] },
+      ORG,
+      { role: "admin", capabilities: [...(current.capabilities ?? [])], status: "active" } as never
+    )).rejects.toBeInstanceOf(MemberConcurrentModificationError);
+    expect(getRuntimeMemberById(TARGET)?.role).toBe("admin");
   });
 
   test("notice text: names + short ticket id only", async () => {
