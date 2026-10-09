@@ -582,7 +582,7 @@ describe("post-delete audience: a delete never relaxes external / mixed / guest 
     // The guard above refused with no Slack bot token at all: it never depends
     // on Slack being reachable (team rule ON → a slack_user delete may relax).
     await deleteOrgParty(ORG_A, party.id);
-    // Oracle. Since #284 (7214eb7) resolveAudience trusts only the team Slack
+    // Oracle. Since #298 (7214eb7) resolveAudience trusts only the team Slack
     // itself reports (users.info); the AI-supplied slackTeamId is ignored, so
     // without a verifiable team the row-less guest stays external…
     expect(await audienceOf({ slackUserId: guest, slackTeamId: OWN_TEAM })).toBe("external");
@@ -593,19 +593,28 @@ describe("post-delete audience: a delete never relaxes external / mixed / guest 
     const { resetSlackUserTeamCacheForTests } = await import("@/lib/slack/bot-token");
     await upsertConversationAdapter({ orgId: ORG_A, surface: "slack", enabled: true, secrets: { botToken: "xoxb-guest-oracle" } });
     const realFetch = globalThis.fetch;
-    let slackTeam = OWN_TEAM;
+    let slackTeam: string | null = OWN_TEAM;
     globalThis.fetch = (async (input: unknown) => {
       const url = String(input);
-      if (url.includes("users.info")) return Response.json({ ok: true, user: { id: guest, team_id: slackTeam } });
+      if (url.includes("users.info")) {
+        return slackTeam
+          ? Response.json({ ok: true, user: { id: guest, team_id: slackTeam } })
+          : Response.json({ ok: false, error: "user_not_found" });
+      }
       return Response.json({ ok: false, error: "not_mocked" });
     }) as typeof fetch;
     try {
       resetSlackUserTeamCacheForTests();
       expect(await audienceOf({ slackUserId: guest })).toBe("internal");
-      // Control: a user Slack reports in another workspace stays external.
+      // AI-supplied slackTeamId alone never makes it internal (fail-closed):
+      // users.info cannot find the user → external…
+      resetSlackUserTeamCacheForTests();
+      slackTeam = null;
+      expect(await audienceOf({ slackUserId: guest, slackTeamId: OWN_TEAM })).toBe("external");
+      // …and Slack reports another workspace → external, whatever the AI claims.
       resetSlackUserTeamCacheForTests();
       slackTeam = "T0OTHERTEAM";
-      expect(await audienceOf({ slackUserId: guest })).toBe("external");
+      expect(await audienceOf({ slackUserId: guest, slackTeamId: OWN_TEAM })).toBe("external");
     } finally {
       globalThis.fetch = realFetch;
       resetSlackUserTeamCacheForTests();
