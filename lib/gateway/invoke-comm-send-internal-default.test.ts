@@ -145,16 +145,36 @@ describe("flag ON: not verified by the channel ledger → unchanged (confidentia
 });
 
 describe("木村 #297 answer 1: only the channel ledger counts — party / team rule stay confidential", () => {
-  test("team rule (speaker's Slack team in slackTeamIds) + party-ledger internal channel → still confidential, approval", async () => {
+  test("team rule (speaker's Slack team in slackTeamIds) + party-ledger internal channel → refused 403 egress_denied (never internal)", async () => {
     const before = await getOrgInternalAudienceRule(DEMO_ORG.id);
     await setOrgInternalAudienceRule(DEMO_ORG.id, { slackTeamIds: ["T0TEAMRULE297"] }, "test");
     restorers.push(() => { void setOrgInternalAudienceRule(DEMO_ORG.id, { slackTeamIds: before.slackTeamIds }, "test"); });
     const ch = cid("C0TRL");
     await upsertOrgParty({ orgId: DEMO_ORG.id, kind: "slack_channel", identifier: ch, audience: "internal" });
     const r = await invoke(send(ch, "社内向けのお知らせです", {}, { speakerId: cid("U0TRL"), speakerTeamId: "T0TEAMRULE297" }));
-    // never relaxed: approval (402, confidential) or refused earlier (403)
-    expect([402, 403]).toContain(r.httpStatus);
-    expect(egressOf(r.body).informationClass ?? "confidential").not.toBe("internal");
+    // Pinned (木村 review of #297): refused before approval — 403 egress_denied,
+    // audience external, class confidential. Never relaxed to internal.
+    expect(r.httpStatus).toBe(403);
+    expect(r.body).toMatchObject({ code: "egress_denied", error: "external_confidential_denied", needs_approval: false });
+    expect(egressOf(r.body)).toMatchObject({ decision: "deny", audience: "external", informationClass: "confidential" });
+    expect(posts.length).toBe(0);
+  });
+
+  test("team rule ONLY (speaker's team in slackTeamIds, no channel / party ledger row) → 403 egress_denied, same with flag OFF", async () => {
+    const before = await getOrgInternalAudienceRule(DEMO_ORG.id);
+    await setOrgInternalAudienceRule(DEMO_ORG.id, { slackTeamIds: ["T0TEAMRULE297"] }, "test");
+    restorers.push(() => { void setOrgInternalAudienceRule(DEMO_ORG.id, { slackTeamIds: before.slackTeamIds }, "test"); });
+    const ch = cid("C0TRO");
+    const conv = { speakerId: cid("U0TRO"), speakerTeamId: "T0TEAMRULE297" };
+    const r = await invoke(send(ch, "社内向けのお知らせです", {}, conv));
+    expect(r.httpStatus).toBe(403);
+    expect(r.body).toMatchObject({ code: "egress_denied", error: "external_confidential_denied", needs_approval: false });
+    expect(egressOf(r.body)).toMatchObject({ decision: "deny", informationClass: "confidential" });
+    expect(egressOf(r.body).informationClass).not.toBe("internal");
+    delete process.env[FLAG];
+    const off = await invoke(send(ch, "社内向けのお知らせです", {}, conv));
+    expect(off.httpStatus).toBe(403);
+    expect(egressOf(off.body)).toMatchObject({ decision: "deny", informationClass: "confidential" });
     expect(posts.length).toBe(0);
   });
 
