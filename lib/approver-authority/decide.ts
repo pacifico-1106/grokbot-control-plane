@@ -118,9 +118,10 @@ export function requesterMemberIdsFromMetadata(metadata: Record<string, unknown>
 }
 
 /**
- * members.promoteOwner (八坂 10:11): neither the requester nor the member being
- * promoted may approve — no sole-owner exception (the requester may never be
- * the approver here). Dependency-free; checked at approval time and again at
+ * members.promoteOwner (木村 2026-10-09): the member being promoted may NEVER
+ * approve. The requester follows the general rule (checkApproverAuthority):
+ * a sole owner may approve their own request; with 2+ owners, an owner other
+ * than the requester. Dependency-free; checked at approval time and again at
  * fulfil. Returns null when there is no conflict (or the ticket is another tool).
  */
 export const PROMOTE_OWNER_TOOL_NAME = "members.promoteOwner";
@@ -128,7 +129,7 @@ export const PROMOTE_OWNER_TOOL_NAME = "members.promoteOwner";
 export function promoteOwnerApproverConflict(
   approval: { tool?: string | null; metadata?: Record<string, unknown> | null },
   approverMemberId: string | null | undefined
-): "approver_is_target" | "approver_is_requester" | null {
+): "approver_is_target" | null {
   if (approval.tool !== PROMOTE_OWNER_TOOL_NAME) return null;
   const approver = String(approverMemberId || "").trim();
   if (!approver) return null; // missing approver is refused elsewhere (fail closed)
@@ -137,6 +138,5 @@ export function promoteOwnerApproverConflict(
     ? String((mutation as Record<string, unknown>).memberId || "").trim()
     : "";
   if (target && approver === target) return "approver_is_target";
-  if (requesterMemberIdsFromMetadata(approval.metadata).includes(approver)) return "approver_is_requester";
   return null;
 }

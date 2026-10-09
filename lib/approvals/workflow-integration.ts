@@ -93,7 +93,8 @@ export async function resolveApprovalWithWorkflow(
     // PR-D 確定仕様: 事後通知 to every other owner (Slack DM + LINE / Telegram inbox).
     try {
       const fresh = await getApprovalById(id, orgId);
-      if (fresh && fresh.status === "approved" && fresh.requiredApproverKind && fresh.approverMemberId) {
+      // members.promoteOwner: owners get ONE notice, on promotion (fulfil) only.
+      if (fresh && fresh.status === "approved" && fresh.requiredApproverKind && fresh.approverMemberId && fresh.tool !== "members.promoteOwner") {
         const { notifyOwnersApproverAuthorityApproved } = await import("@/lib/notify/channels");
         await notifyOwnersApproverAuthorityApproved(fresh);
       }
@@ -166,8 +167,8 @@ async function resolveWorkflow(
     const identity = await verifyApproverIdentity(orgId, opts);
     if (!identity.ok) return authorityStop(approval, identity.reason, false);
     opts = { ...opts, memberId: identity.memberId };
-    // members.promoteOwner: neither the requester nor the target may approve
-    // (no sole-owner exception). Before any ballot / W1 write.
+    // members.promoteOwner: the member being promoted may never approve.
+    // (The requester follows the general single-owner rule.) Before any ballot / W1 write.
     const conflict = promoteOwnerApproverConflict(approval, identity.memberId || opts.voterUserId);
     if (conflict) return authorityStop(approval, conflict, false);
   }

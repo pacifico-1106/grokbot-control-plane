@@ -305,7 +305,11 @@ export type OwnerPromotionRequest = {
   /** Target role / capabilities captured at filing; the row must still match. */
   expectedRole: string;
   expectedCapabilities: readonly string[];
+  /** Target status at filing (default "active"); the row must still match. */
+  expectedStatus?: OrgMember["status"];
   approvalId: string;
+  /** Audit marker: the org had exactly one active owner when this was approved/applied. */
+  singleOwnerApproval?: boolean;
 };
 
 export type OwnerPromotionResult =
@@ -343,7 +347,8 @@ export async function applyOwnerPromotion(req: OwnerPromotionRequest): Promise<O
   if (!before) return deny("target_not_found");
   if (before.status !== "active") return deny("member_not_active", "対象のメンバーが有効ではありません（招待中・停止中）。");
   if (before.role === "owner") return deny("already_owner", "対象のメンバーはすでにオーナーです。");
-  if (before.role !== req.expectedRole || !sameCaps(before.capabilities ?? [], req.expectedCapabilities)) {
+  const expectedStatus = req.expectedStatus ?? "active";
+  if (before.role !== req.expectedRole || before.status !== expectedStatus || !sameCaps(before.capabilities ?? [], req.expectedCapabilities)) {
     return deny("concurrent_modification");
   }
   const decision = evaluateMemberChange({
@@ -356,7 +361,7 @@ export async function applyOwnerPromotion(req: OwnerPromotionRequest): Promise<O
   const next: OrgMember = { ...before, role: decision.roleAfter, capabilities: decision.capabilitiesAfter };
   let saved: OrgMember;
   try {
-    saved = await writeMemberRow(next, req.orgId, { role: before.role, capabilities: [...(before.capabilities ?? [])] });
+    saved = await writeMemberRow(next, req.orgId, { role: before.role, capabilities: [...(before.capabilities ?? [])], status: expectedStatus });
   } catch (e) {
     if (e instanceof MemberConcurrentModificationError) return deny("concurrent_modification");
     throw e;
@@ -373,6 +378,7 @@ export async function applyOwnerPromotion(req: OwnerPromotionRequest): Promise<O
       memberId: saved.id,
       source: "admin_mcp_promote_owner",
       approvalId: req.approvalId,
+      singleOwnerApproval: req.singleOwnerApproval === true,
       actorMemberId: approver.id,
       actorUserId: approver.userId ?? null,
       actorRole: approver.role,

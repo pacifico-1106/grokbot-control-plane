@@ -3,8 +3,11 @@
  *
  *   Admin MCP files "make an EXISTING ACTIVE member of this org an owner".
  *   always_human; owner approval only (APPROVER_AUTHORITY_TARGETS.sensitiveTools).
- *   One existing owner approves; neither the requester nor the target may
- *   (approval time: workflow-integration; again here at fulfil).
+ *   One existing owner approves (木村 2026-10-09): the member being promoted may
+ *   NEVER approve; a sole owner may approve even their own request (same rule
+ *   as PR-D, audited with singleOwnerApproval: true); with 2+ owners, an owner
+ *   other than the requester. Nobody eligible → refused at filing (PR-D filing
+ *   stop). Checked at approval time (workflow-integration) and again at fulfil.
  *   Fulfil: role=owner + the standard owner capabilities through the single
  *   member-change guard (applyOwnerPromotion → evaluateMemberChange), then
  *   every owner and the target are notified, and the change is audited.
@@ -22,7 +25,7 @@ import { appendAuditEvent } from "@/lib/data/audit";
 import { listMembers } from "@/lib/data/members";
 import { isOwnerPromotionEnabled } from "@/lib/feature-flags";
 import { getVerifiedApprover } from "@/lib/approver-authority";
-import { promoteOwnerApproverConflict } from "@/lib/approver-authority/decide";
+import { promoteOwnerApproverConflict, requesterMemberIdsFromMetadata } from "@/lib/approver-authority/decide";
 import { PROMOTE_OWNER_TOOL } from "@/lib/approver-authority/targets";
 import type { ApprovalRequest } from "@/lib/types";
 
@@ -58,11 +61,11 @@ export async function handlePromoteOwnerTool(
   return {
     kind: "queue",
     title: "オーナーの追加（既存オーナーの承認が必要）",
-    queuedArgs: { memberId: target.id, beforeRole: target.role, beforeCapabilities },
+    queuedArgs: { memberId: target.id, beforeRole: target.role, beforeCapabilities, beforeStatus: target.status },
     summary: [
       `既存のメンバー「${(target.displayName || "(名前なし)").replace(/[\r\n]+/g, " ").slice(0, 60)}」をオーナーにします。`,
-      "承認できるのは既存のオーナー1名です。申請者と対象者本人は承認できません。",
-      "承認されると、オーナー標準の権限が付き、オーナー全員と対象者に通知されます。",
+      "承認できるのは既存のオーナー1名です。対象者本人は承認できません。オーナーが2人以上いるときは、申請者以外のオーナーが承認します。",
+      "承認されると、オーナー標準の権限が付き、オーナー全員と対象者に1回だけ通知されます。",
       "",
       `■ 現在の席種別: ${target.role}`,
       "■ 変更後: owner（オーナー標準の権限）",
@@ -103,7 +106,12 @@ export async function fulfillPromoteOwner(
     approver.memberId
   );
   if (conflict === "approver_is_target") return stop(conflict, "オーナーに追加される本人は、この申請を承認できません。");
-  if (conflict === "approver_is_requester") return stop(conflict, "申請者は、このオーナー追加を承認できません。");
+  // Requester: a sole owner may approve their own request; with 2+ owners, not.
+  const activeOwners = (await listMembers(orgId)).filter((m) => m.orgId === orgId && m.role === "owner" && m.status === "active");
+  const singleOwnerApproval = activeOwners.length === 1;
+  if (!singleOwnerApproval && requesterMemberIdsFromMetadata(approval.metadata).includes(approver.memberId)) {
+    return stop("approver_is_requester", "オーナーが2人以上いるときは、申請者以外のオーナーが承認してください。");
+  }
 
   const { applyOwnerPromotion } = await import("@/lib/team/apply-member-change");
   const applied = await applyOwnerPromotion({
@@ -112,7 +120,10 @@ export async function fulfillPromoteOwner(
     targetMemberId: memberId,
     expectedRole: typeof args.beforeRole === "string" ? args.beforeRole : "",
     expectedCapabilities: Array.isArray(args.beforeCapabilities) ? args.beforeCapabilities.map(String) : [],
+    // Tickets filed before beforeStatus existed: the target had to be active to be filed.
+    expectedStatus: typeof args.beforeStatus === "string" ? (args.beforeStatus as "active") : "active",
     approvalId: approval.id,
+    singleOwnerApproval,
   });
   if (!applied.ok) return stop(applied.code, applied.messageJa);
 
