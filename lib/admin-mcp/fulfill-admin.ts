@@ -122,6 +122,8 @@ export type AdminFulfillment = {
   nextStepJa?: string;
   /** Whether re-requesting can succeed without a change (e.g. directory_remove_relaxes_audience: false). */
   retryable?: boolean;
+  /** Admin tool to run first (e.g. channels.classify for an unknown channel row). */
+  nextTool?: string;
   noticeJa?: string;
   adapterId?: string;
   surface?: string;
@@ -528,6 +530,7 @@ export function parseAdminFulfillment(
     channelId: typeof rec.channelId === "string" ? rec.channelId : undefined,
     draft: rec.draft,
     nextStepJa: typeof rec.nextStepJa === "string" ? rec.nextStepJa : undefined,
+    ...(typeof rec.nextTool === "string" ? { nextTool: rec.nextTool } : {}),
     noticeJa: typeof rec.noticeJa === "string" ? rec.noticeJa : undefined,
     enabled: typeof rec.enabled === "boolean" ? rec.enabled : undefined,
     destinationPresent: typeof rec.destinationPresent === "boolean" ? rec.destinationPresent : undefined,
@@ -1990,6 +1993,7 @@ async function fulfillDirectoryRemoveTicket(
       error: result.code,
       nextStepJa: result.nextStepJa ? `${result.messageJa}${result.nextStepJa}` : result.messageJa,
       ...(result.retryable !== undefined ? { retryable: result.retryable } : {}),
+      ...(result.nextTool ? { nextTool: result.nextTool } : {}),
     };
   }
   return {

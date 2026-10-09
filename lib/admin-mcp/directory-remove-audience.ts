@@ -167,12 +167,22 @@ const BEFORE_KIND_JA: Record<string, string> = {
   internal: "社内",
 };
 
+/**
+ * An unknown (unclassified) row is treated as external; deleting it can make a
+ * party / rule judge the channel internal. 木村 #287 (2026-10-09): keep refusing,
+ * and say explicitly that the fix is to classify it first with channels.classify.
+ */
+export const UNKNOWN_CHANNEL_NEXT_STEP_JA =
+  "このチャネルは台帳で未分類（unknown）です。削除ではなく、先に channels.classify で分類してください（社内だけなら internal、社外の人がいるなら shared_external。人の承認つき）。分類すれば削除は不要です。";
+
 /** Refusal body (request and fulfillment share code / wording). */
 export function relaxRefusal(tool: "channels.remove" | "parties.remove", subject: string, check: AudienceAfterRemove, kind?: OrgPartyKind) {
   const beforeJa = BEFORE_KIND_JA[check.beforeKind] ?? "社外";
   const messageJa = `${subject} を削除すると、いま ${beforeJa} の判定が社内に変わります（${check.afterReasonJa}）。削除しませんでした。`;
-  const nextStepJa =
-    tool === "channels.remove"
+  const unknownChannel = tool === "channels.remove" && check.beforeKind === "unknown";
+  const nextStepJa = unknownChannel
+    ? UNKNOWN_CHANNEL_NEXT_STEP_JA
+    : tool === "channels.remove"
       ? "社内扱いが正しければ channels.classify で分類を明示的に変えてください（人の承認つき）。社外のまま台帳から外したい場合は、先に parties.upsert で slack_channel の登録を社外にしてから依頼し直してください。"
       : kind === "slack_user"
         ? "社内扱いが正しければ parties.upsert で audience=internal に変えてください（人の承認つき）。社外のままにする場合は、この登録を残してください（自社ワークスペースのゲストなどを社外扱いにしている登録です）。"
@@ -185,5 +195,6 @@ export function relaxRefusal(tool: "channels.remove" | "parties.remove", subject
     beforeKind: check.beforeKind,
     messageJa,
     nextStepJa,
+    ...(unknownChannel ? { nextTool: "channels.classify" as const } : {}),
   };
 }

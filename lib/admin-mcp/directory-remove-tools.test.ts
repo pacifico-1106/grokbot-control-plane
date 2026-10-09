@@ -521,7 +521,8 @@ describe("post-delete audience: a delete never relaxes external / mixed / guest 
     expect(fulfillment?.ok).toBe(false);
     expect(fulfillment?.error).toBe(RELAX);
     expect(fulfillment?.nextTool).toBe("channels.classify");
-    expect(String(fulfillment?.nextStepJa).startsWith(UNKNOWN_NEXT_STEP_PREFIX)).toBe(true);
+    // fulfil prefixes the refusal message (existing shape: messageJa + nextStepJa)
+    expect(String(fulfillment?.nextStepJa)).toContain(UNKNOWN_NEXT_STEP_PREFIX);
     expect(await getOrgChannel(ORG_A, "slack", externalId)).not.toBeNull();
   });
 

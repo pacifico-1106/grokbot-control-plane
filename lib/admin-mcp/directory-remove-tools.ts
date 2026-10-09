@@ -419,7 +419,7 @@ async function requestPartyRemove(orgId: string, args: Record<string, unknown>):
 
 export type DirectoryRemoveFulfillment =
   | { ok: true; id: string; summaryJa: string; alreadyRemoved: boolean }
-  | { ok: false; code: string; messageJa: string; nextStepJa?: string; retryable?: boolean };
+  | { ok: false; code: string; messageJa: string; nextStepJa?: string; retryable?: boolean; nextTool?: string };
 
 const DISABLED_AT_FULFIL: DirectoryRemoveFulfillment = {
   ok: false,
@@ -454,6 +454,7 @@ async function recheckAfterRemove(
     messageJa: `承認後に台帳・社内判定ルールが変わりました。${refusal.messageJa}`,
     nextStepJa: refusal.nextStepJa,
     retryable: false,
+    ...(refusal.nextTool ? { nextTool: refusal.nextTool } : {}),
   };
 }
 
