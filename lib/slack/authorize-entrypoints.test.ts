@@ -9,11 +9,14 @@
 import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
+import { fileURLToPath } from "node:url";
 import { mintSetupLink, buildSetupGuidance, getSetupLinkNextStepJa } from "@/lib/security/setup-links";
 import { computeSlackStatusNextStepJa, slackAuthorizeUrlTemplate } from "@/lib/slack/slack-status-diagnose";
 import { SLACK_AUTHORIZE_LINK_PATH } from "@/lib/slack/authorize-link";
 
 const START = "/api/slack/oauth/start";
+/** A string literal / template that builds the start URL (comments may name the route). */
+const START_LITERAL = /["'`][^"'`\n]*\/api\/slack\/oauth\/start/;
 
 describe("setup link kind slack_authorize", () => {
   test("points at the re-authorize link path, not the session start route", () => {
@@ -74,13 +77,13 @@ describe("Slack diagnose template", () => {
 
 describe("no human-facing builder hands out the session start route", () => {
   test("lib/** (non-test) never builds a /api/slack/oauth/start URL", () => {
-    const root = join(import.meta.dir, "..");
+    const root = fileURLToPath(new URL("..", import.meta.url));
     const offenders: string[] = [];
     const walk = (dir: string) => {
       for (const name of readdirSync(dir)) {
         const path = join(dir, name);
         if (statSync(path).isDirectory()) walk(path);
-        else if (/\.(ts|tsx)$/.test(name) && !/\.test\.tsx?$/.test(name) && readFileSync(path, "utf8").includes(START)) {
+        else if (/\.(ts|tsx)$/.test(name) && !/\.test\.tsx?$/.test(name) && START_LITERAL.test(readFileSync(path, "utf8"))) {
           offenders.push(relative(root, path));
         }
       }
