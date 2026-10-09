@@ -258,6 +258,10 @@ export function ApprovalsClient({
                     {a.cardReasons ? (
                       <p className="mt-2 text-xs font-medium break-words">{a.cardReasons}</p>
                     ) : null}
+                    {/* 木村 R1: matched topics, regardless of APPROVAL_REASONS_ENABLED. */}
+                    {a.cardTopics ? (
+                      <p className="mt-1 text-xs break-words">{a.cardTopics}</p>
+                    ) : null}
                     <pre className="mt-2 text-xs muted leading-relaxed whitespace-pre-wrap break-words font-sans">
                       {a.summary}
                     </pre>
