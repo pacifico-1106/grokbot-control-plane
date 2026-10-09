@@ -13,4 +13,12 @@ describe("thread single-flight coverage", () => {
       expect({ id: p.id, ok: ["leased", "same_reply"].includes(THREAD_GUARD_COVERAGE[p.id].coverage) }).toEqual({ id: p.id, ok: true });
     }
   });
+  // 木村 #286 pre-flag item 4: approved LINE / Telegram replies are a listed
+  // path in BOTH inventories, and the fulfil-time thread guard covers them.
+  test("pre-flag 4: approved caller-delivered replies are listed and leased at fulfil", () => {
+    const path = POSTING_PATH_INVENTORY.find((p) => p.id === "fulfill.caller_delivered");
+    expect(path?.surfaces).toEqual(expect.arrayContaining(["line", "telegram"]));
+    expect(THREAD_GUARD_COVERAGE["fulfill.caller_delivered"]?.coverage).toBe("leased");
+    expect(THREAD_GUARD_COVERAGE["invoke.caller_delivered"]?.where).toMatch(/TTL/);
+  });
 });
