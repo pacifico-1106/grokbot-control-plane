@@ -203,8 +203,13 @@ function isBareUrl(value: string): boolean {
   return /^https?:\/\/\S+$/i.test(value.trim());
 }
 
-/** host + path of a URL (scheme optional); group 1 = the path. Query / fragment excluded. */
-const URL_PATH_SPAN = /(?:https?:\/\/)?(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,}(?::\d+)?(\/[^\s?#"'<>]*)/g;
+/**
+ * host + path of a URL (scheme optional); group 1 = the path. Query / fragment excluded.
+ * Labels are bounded (DNS: ≤63 chars, ≤10 labels, TLD ≤24): the unbounded
+ * `[A-Za-z0-9-]+\.` backtracked quadratically over long dot-less runs
+ * (200k chars took ~15 s; 2026-10-09 #281 follow-up).
+ */
+const URL_PATH_SPAN = /(?:https?:\/\/)?(?:[A-Za-z0-9-]{1,63}\.){1,10}[A-Za-z]{2,24}(?::\d{1,5})?(\/[^\s?#"'<>]*)/g;
 
 /**
  * For the generic length-only patterns: inside a URL path '/' is a separator,
@@ -238,6 +243,13 @@ export const AWS_KEYWORD_WINDOW_BEFORE = 100;
 export const AWS_KEYWORD_WINDOW_AFTER = 30;
 const AWS_SECRET_CANDIDATE = /(?<![A-Za-z0-9\/+_-])[A-Za-z0-9\/+]{40}(?![A-Za-z0-9\/+=_-])/g;
 const AWS_SECRET_KEYWORD = /aws[\s_.-]*secret|secret[\s_.-]*access[\s_.-]*key/i;
+/**
+ * #281 follow-up item 2 (木村 2026-10-05): weaker context words. `secret: <key>`
+ * and `AWSのシークレットキーは <key>` must block. They count for a candidate
+ * that is NOT part of a URL host/path (a 40-char run inside a link next to
+ * the word 秘密 is a document path, not a key).
+ */
+const AWS_SECRET_CONTEXT_WEAK = /secret|シークレット|秘密|アクセスキー/i;
 const AWS_ACCESS_KEY_ID = /(?<![A-Za-z0-9])(?:AKIA|ASIA)[0-9A-Z]{16}(?![A-Za-z0-9])/;
 
 function decodeKeyChars(value: string): string {
@@ -249,7 +261,20 @@ function isMixedCharset(value: string): boolean {
 }
 
 export function hasAwsAccessKeyId(value: string): boolean {
-  return AWS_ACCESS_KEY_ID.test(decodeKeyChars(value));
+  if (value.length > MAX_SCAN_LENGTH) return false;
+  if (AWS_ACCESS_KEY_ID.test(decodeKeyChars(value))) return true;
+  const normalized = normalizeForScan(value);
+  return normalized !== value && AWS_ACCESS_KEY_ID.test(normalized);
+}
+
+/** [start, end) spans of URL host + path in `text` (for the weak-keyword exclusion). */
+function urlHostPathSpans(text: string): Array<[number, number]> {
+  const spans: Array<[number, number]> = [];
+  for (const m of text.matchAll(URL_PATH_SPAN)) {
+    const start = m.index ?? 0;
+    spans.push([start, start + m[0].length]);
+  }
+  return spans;
 }
 
 function detectAwsSecretKey(
@@ -258,16 +283,23 @@ function detectAwsSecretKey(
 ): { kind: 'block' | 'suspect'; length: number } | null {
   const text = decodeKeyChars(value);
   let suspect: { kind: 'suspect'; length: number } | null = null;
-  const pathHasKeyword = AWS_SECRET_KEYWORD.test(ctx.fieldPath ?? '');
+  const fieldPathText = ctx.fieldPath ?? '';
+  const pathHasKeyword = AWS_SECRET_KEYWORD.test(fieldPathText) || AWS_SECRET_CONTEXT_WEAK.test(fieldPathText);
   const idInPayload = ctx.hasAwsAccessKeyId === true || AWS_ACCESS_KEY_ID.test(text);
+  let urlSpans: Array<[number, number]> | null = null;
   for (const m of text.matchAll(AWS_SECRET_CANDIDATE)) {
     const candidate = m[0];
     if (!isMixedCharset(candidate)) continue;
     const start = m.index ?? 0;
+    const end = start + candidate.length;
     const before = text.slice(Math.max(0, start - AWS_KEYWORD_WINDOW_BEFORE), start);
-    const after = text.slice(start + candidate.length, start + candidate.length + AWS_KEYWORD_WINDOW_AFTER);
+    const after = text.slice(end, end + AWS_KEYWORD_WINDOW_AFTER);
     if (idInPayload || pathHasKeyword || AWS_SECRET_KEYWORD.test(before) || AWS_SECRET_KEYWORD.test(after)) {
       return { kind: 'block', length: candidate.length };
+    }
+    if (AWS_SECRET_CONTEXT_WEAK.test(before) || AWS_SECRET_CONTEXT_WEAK.test(after)) {
+      urlSpans ??= urlHostPathSpans(text);
+      if (!urlSpans.some(([a, b]) => a <= start && end <= b)) return { kind: 'block', length: candidate.length };
     }
     suspect = { kind: 'suspect', length: candidate.length };
   }
@@ -325,9 +357,73 @@ function cardLikeMatch(value: string): { patternName: string; length: number } |
   return null;
 }
 
+// ---------------------------------------------------------------------------
+// #281 follow-up item 1 (木村 2026-10-05). `%20sk-…`, `token%3Dsk-…`, `\nsk-…`
+// (a literal backslash-n) and `id%3DAKIA…` slipped past the left boundary of
+// the named patterns. Every value is now scanned twice:
+// - raw: all patterns, exactly as before;
+// - normalized (only when it differs): literal `\n` `\t` `\r` → space and
+//   JSON `\/` → `/`; %XX percent-decoded over the whole value (UTF-8, at most
+//   2 passes so `%253D` is caught; malformed or truncated sequences become
+//   U+FFFD and never throw); escapes replaced again. Named patterns and the
+//   AWS rule run on this form. The generic length-only patterns
+//   (base64/hex/card) do not, so decoding a long signed setup-link token never
+//   creates a new false positive.
+// Linear time (one regex pass per step). Values longer than MAX_SCAN_LENGTH
+// are refused without scanning (fail-closed).
+// ---------------------------------------------------------------------------
+export const MAX_SCAN_LENGTH = 1_000_000;
+const PERCENT_RUN = /(?:%[0-9A-Fa-f]{2})+/g;
+const UTF8 = new TextDecoder('utf-8', { fatal: false, ignoreBOM: true });
+
+function replaceLiteralEscapes(value: string): string {
+  return value.replace(/\\[ntr]/g, ' ').replace(/\\\//g, '/');
+}
+
+function percentDecodeOnce(value: string): string {
+  return value.replace(PERCENT_RUN, (run: string) => {
+    const bytes = new Uint8Array(run.length / 3);
+    for (let i = 0; i < bytes.length; i++) bytes[i] = parseInt(run.slice(i * 3 + 1, i * 3 + 3), 16);
+    return UTF8.decode(bytes);
+  });
+}
+
+/** Normalized form for the second scan. Returns `value` itself when nothing changes. */
+export function normalizeForScan(value: string): string {
+  if (!value.includes('%') && !value.includes('\\')) return value;
+  let text = replaceLiteralEscapes(value);
+  for (let pass = 0; pass < 2 && text.includes('%'); pass++) {
+    const decoded = percentDecodeOnce(text);
+    if (decoded === text) break;
+    text = decoded;
+  }
+  text = replaceLiteralEscapes(text);
+  return text === value ? value : text;
+}
+
 export function detectSecretInString(value: string, ctx: SecretScanContext = {}): SecretDetectionResult {
-  if (isAllowlisted(value)) return { ok: true };
   const fieldPath = (ctx.fieldPath ?? '').slice(0, 200);
+  if (value.length > MAX_SCAN_LENGTH) {
+    return {
+      ...blockedResult('value_too_long_to_scan', fieldPath, value.length),
+      messageJa: `値が長すぎるため（上限 ${MAX_SCAN_LENGTH} 文字）秘密情報の検査ができません。分割するか短くして再送してください。`,
+    };
+  }
+  if (isAllowlisted(value)) return { ok: true };
+  const raw = scanString(value, ctx, fieldPath, true);
+  if (!raw.ok) return raw;
+  let suspected = raw.suspected ?? [];
+  const normalized = normalizeForScan(value);
+  if (normalized !== value) {
+    const decoded = scanString(normalized, ctx, fieldPath, false);
+    if (!decoded.ok) return decoded;
+    if (suspected.length === 0 && decoded.suspected) suspected = decoded.suspected;
+  }
+  return suspected.length > 0 ? { ok: true, suspected } : { ok: true };
+}
+
+/** One scan. `full` = raw value (all patterns); otherwise named patterns + AWS rule only. */
+function scanString(value: string, ctx: SecretScanContext, fieldPath: string, full: boolean): SecretDetectionResult {
   const bareUrl = isBareUrl(value);
   let genericText: string | null = null;
   const suspected: SecretFinding[] = [];
@@ -340,7 +436,7 @@ export function detectSecretInString(value: string, ctx: SecretScanContext = {})
       continue;
     }
     const isGeneric = name === 'base64_long_secret' || name === 'hex_long_secret';
-    if (isGeneric && bareUrl) continue;
+    if (isGeneric && (bareUrl || !full)) continue;
     if (isGeneric && genericText === null) genericText = splitUrlPaths(value);
     const match = (isGeneric ? (genericText as string) : value).match(pattern);
     if (match) {
@@ -354,7 +450,7 @@ export function detectSecretInString(value: string, ctx: SecretScanContext = {})
     }
   }
 
-  if (!bareUrl) {
+  if (full && !bareUrl) {
     const card = cardLikeMatch(value);
     if (card) {
       return {
