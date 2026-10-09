@@ -23,6 +23,10 @@ const retryable = new Set(["slack_token_missing", "slack_conversation_bot_token_
   // again once that post is verified absent (released) or ages out.
   // ("post_outcome_unknown" is NOT here: that post may have gone out.)
   "duplicate_post_uncertain",
+  // Provider rate limit (Slack ratelimited / X 429 with a JSON answer, 木村
+  // 2026-10-05): refused before posting. The re-run waits out retryAfterSeconds
+  // (fulfil stops before the provider call until then; lib/gateway/adapters/rate-limit.ts).
+  "provider_rate_limited",
   // Thread single-flight (THREAD_SINGLE_FLIGHT_ENABLED, lib/thread-guard): stopped
   // before any provider call. busy / unavailable → may run again. moved_on
   // closes the approval as superseded (terminal); only when that close lost a
