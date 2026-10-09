@@ -14,7 +14,8 @@ import {
   recordSelfPost,
   releaseThreadLease,
 } from "./store";
-import { setThreadGuardClockForTests } from "./config";
+import * as threadGuardConfig from "./config";
+const { setThreadGuardClockForTests } = threadGuardConfig;
 
 const ORG_A = "00000000-0000-4000-8000-00000000aa01";
 const ORG_B = "00000000-0000-4000-8000-00000000bb01";
@@ -84,6 +85,52 @@ describe("lease", () => {
   });
 });
 
+// 木村 #293 decision 1: a caller-delivered reply holds the lease for its TTL;
+// the SAME job (same employee + job key) may reuse its own held lease, but only
+// within SAME_JOB_EXCLUSION_WINDOW_SECONDS of that job's first post in the thread.
+describe("same-job lease reuse (#293 decision 1)", () => {
+  const J1 = "1".repeat(64);
+  const J2 = "2".repeat(64);
+  const nowMicros = () => BigInt(now) * BigInt(1000);
+  test("same job within the window reuses its held lease (new lease id, TTL from now)", async () => {
+    setThreadGuardClockForTests(() => now);
+    const first = await acquireThreadLease({ orgId: ORG_A, employeeId: "emp_1", threadKey: KEY, ttlSeconds: 60, jobKey: J1 } as never);
+    expect(first.state).toBe("acquired");
+    await recordSelfPost({ orgId: ORG_A, employeeId: "emp_1", threadKey: KEY, micros: nowMicros(), jobKey: J1 });
+    tick(5_000);
+    const again = await acquireThreadLease({ orgId: ORG_A, employeeId: "emp_1", threadKey: KEY, ttlSeconds: 60, jobKey: J1 } as never);
+    expect(again.state).toBe("acquired");
+    if (first.state === "acquired" && again.state === "acquired") {
+      expect(again.leaseId).not.toBe(first.leaseId);
+      expect(again.expiresAtMs).toBe(now + 60_000);
+    }
+  });
+  test("after the window from the job's FIRST post → busy", async () => {
+    setThreadGuardClockForTests(() => now);
+    await recordSelfPost({ orgId: ORG_A, employeeId: "emp_1", threadKey: KEY, micros: nowMicros(), jobKey: J1 });
+    tick(570_000); // 9.5 min: the old lease is long gone, a normal acquire
+    expect((await acquireThreadLease({ orgId: ORG_A, employeeId: "emp_1", threadKey: KEY, ttlSeconds: 60, jobKey: J1 } as never)).state).toBe("acquired");
+    await recordSelfPost({ orgId: ORG_A, employeeId: "emp_1", threadKey: KEY, micros: nowMicros(), jobKey: J1 });
+    tick(40_000); // 10 min 10 s after the first post, lease still held (TTL 60 s)
+    expect((await acquireThreadLease({ orgId: ORG_A, employeeId: "emp_1", threadKey: KEY, ttlSeconds: 60, jobKey: J1 } as never)).state).toBe("busy");
+  });
+  test("a different job, another employee with the same job key, or a job with no post yet → busy", async () => {
+    setThreadGuardClockForTests(() => now);
+    await acquireThreadLease({ orgId: ORG_A, employeeId: "emp_1", threadKey: KEY, ttlSeconds: 60, jobKey: J1 } as never);
+    expect((await acquireThreadLease({ orgId: ORG_A, employeeId: "emp_1", threadKey: KEY, ttlSeconds: 60, jobKey: J1 } as never)).state).toBe("busy"); // no post yet
+    await recordSelfPost({ orgId: ORG_A, employeeId: "emp_1", threadKey: KEY, micros: nowMicros(), jobKey: J1 });
+    expect((await acquireThreadLease({ orgId: ORG_A, employeeId: "emp_1", threadKey: KEY, ttlSeconds: 60, jobKey: J2 } as never)).state).toBe("busy");
+    expect((await acquireThreadLease({ orgId: ORG_A, employeeId: "emp_2", threadKey: KEY, ttlSeconds: 60, jobKey: J1 } as never)).state).toBe("busy");
+    expect((await acquireThreadLease({ orgId: ORG_A, employeeId: "emp_2", threadKey: KEY, ttlSeconds: 60, jobKey: null } as never)).state).toBe("busy");
+  });
+  test("BOLA: another org's post with the same job key never lets a job re-enter", async () => {
+    setThreadGuardClockForTests(() => now);
+    await acquireThreadLease({ orgId: ORG_A, employeeId: "emp_1", threadKey: KEY, ttlSeconds: 60, jobKey: J1 } as never);
+    await recordSelfPost({ orgId: ORG_B, employeeId: "emp_1", threadKey: KEY, micros: nowMicros(), jobKey: J1 });
+    expect((await acquireThreadLease({ orgId: ORG_A, employeeId: "emp_1", threadKey: KEY, ttlSeconds: 60, jobKey: J1 } as never)).state).toBe("busy");
+  });
+});
+
 describe("self posts", () => {
   test("per org × employee × thread, only moves forward", async () => {
     await recordSelfPost({ orgId: ORG_A, employeeId: "emp_1", threadKey: KEY, micros: BigInt(2_000), jobKey: "j1" });
@@ -104,9 +151,45 @@ describe("latest AI post in the thread (木村 decision 4: other AI employees of
     const any = await readLatestAiPostAfter({ orgId: ORG_A, threadKey: KEY, afterMicros: BigInt(100), excludeJobKey: null });
     expect(any).toEqual({ ok: true, post: { micros: BigInt(300), jobKey: J1, employeeId: "emp_1" } });
     // emp_1's own same-job post is exempt, emp_2's later post still counts
-    const skip = await readLatestAiPostAfter({ orgId: ORG_A, threadKey: KEY, afterMicros: BigInt(100), excludeJobKey: J1 });
+    const skip = await readLatestAiPostAfter({ orgId: ORG_A, threadKey: KEY, afterMicros: BigInt(100), excludeJobKey: J1, nowMicros: BigInt(400) });
     expect(skip).toEqual({ ok: true, post: { micros: BigInt(200), jobKey: J2, employeeId: "emp_2" } });
     expect(await readLatestAiPostAfter({ orgId: ORG_A, threadKey: KEY, afterMicros: BigInt(300), excludeJobKey: null })).toEqual({ ok: true, post: null });
+  });
+  // 木村 #286 pre-flag item 2: the same-job exemption was unlimited, so reusing a
+  // jobId switched the moved_on check off for good. Now it applies only within
+  // SAME_JOB_EXCLUSION_WINDOW_SECONDS of that job's FIRST post in the thread.
+  test("pre-flag 2: the same-job exemption lasts only the window from the job's FIRST post", async () => {
+    const MIN = BigInt(60_000_000);
+    const t0 = BigInt(1_791_105_000_000_000);
+    expect((threadGuardConfig as Record<string, unknown>).SAME_JOB_EXCLUSION_WINDOW_SECONDS).toBe(600);
+    await recordSelfPost({ orgId: ORG_A, employeeId: "emp_1", threadKey: KEY, micros: t0, jobKey: J1 });
+    const after = (nowMicros: bigint) =>
+      readLatestAiPostAfter({ orgId: ORG_A, threadKey: KEY, afterMicros: t0 - MIN, excludeJobKey: J1, nowMicros });
+    expect(await after(t0 + BigInt(5) * MIN)).toEqual({ ok: true, post: null }); // multi-part reply: still exempt
+    expect(await after(t0 + BigInt(10) * MIN)).toEqual({ ok: true, post: null }); // window edge
+    expect(await after(t0 + BigInt(10) * MIN + BigInt(1))).toEqual({ ok: true, post: { micros: t0, jobKey: J1, employeeId: "emp_1" } });
+    // later posts of the SAME job keep the first-post anchor (no sliding window)
+    await recordSelfPost({ orgId: ORG_A, employeeId: "emp_1", threadKey: KEY, micros: t0 + BigInt(9) * MIN, jobKey: J1 });
+    expect(await after(t0 + BigInt(11) * MIN)).toEqual({ ok: true, post: { micros: t0 + BigInt(9) * MIN, jobKey: J1, employeeId: "emp_1" } });
+    // a different job's post re-anchors (it is that job's first post)
+    await recordSelfPost({ orgId: ORG_A, employeeId: "emp_1", threadKey: KEY, micros: t0 + BigInt(20) * MIN, jobKey: J2 });
+    expect(
+      await readLatestAiPostAfter({ orgId: ORG_A, threadKey: KEY, afterMicros: t0, excludeJobKey: J2, nowMicros: t0 + BigInt(25) * MIN })
+    ).toEqual({ ok: true, post: null });
+    // a post without a job key is never exempt
+    await recordSelfPost({ orgId: ORG_A, employeeId: "emp_2", threadKey: KEY, micros: t0 + BigInt(21) * MIN, jobKey: null });
+    expect(
+      (await readLatestAiPostAfter({ orgId: ORG_A, threadKey: KEY, afterMicros: t0, excludeJobKey: J2, nowMicros: t0 + BigInt(22) * MIN })).ok
+    ).toBe(true);
+  });
+  test("pre-flag 2: default clock is the guard clock (no caller-supplied time needed)", async () => {
+    const t0 = BigInt(now) * BigInt(1000);
+    setThreadGuardClockForTests(() => now);
+    await recordSelfPost({ orgId: ORG_A, employeeId: "emp_1", threadKey: KEY2, micros: t0, jobKey: J1 });
+    const q = () => readLatestAiPostAfter({ orgId: ORG_A, threadKey: KEY2, afterMicros: t0 - BigInt(1), excludeJobKey: J1 });
+    expect((await q()).ok && (await q() as { post: unknown }).post).toBeNull();
+    tick(601_000);
+    expect(((await q()) as { post: { micros: bigint } | null }).post?.micros).toBe(t0);
   });
   test("BOLA: another org's posts on the same key never count", async () => {
     await recordSelfPost({ orgId: ORG_B, employeeId: "emp_b", threadKey: KEY, micros: BigInt(900), jobKey: null });
