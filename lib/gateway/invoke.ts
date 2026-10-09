@@ -6,6 +6,11 @@ import {
   formatArtifactLines,
   inferRiskForTool,
 } from "@/lib/approvals/summary";
+import { readThroughFromBody } from "@/lib/thread-guard/read-through";
+import { THREAD_GUARD_UNAVAILABLE, THREAD_MOVED_ON, beginThreadSend, threadGuardStopBody, type ThreadGuardStop } from "@/lib/thread-guard/guard";
+import { closedByThreadMovedOn } from "@/lib/approvals/closed-without-send";
+import { auditThreadGuardHeld, auditThreadGuardStop, isThreadGuardCode, type ThreadGuardAuditCtx } from "@/lib/thread-guard/respond";
+import { conversationKeyInputFromBody } from "@/lib/comm-reply-dedup/conversation-key";
 import { sendApprovalNeededEmail } from "@/lib/email";
 import { sendApprovalNotifications } from "@/lib/notify/channels";
 import { getCurrentOrgId } from "@/lib/auth/session";
@@ -137,6 +142,7 @@ import {
   isCommReplyDedupEnabled,
   isDuplicateGuardV2Enabled,
   isGoogleCalendarReadEnabled,
+  isThreadSingleFlightEnabled,
   isTopicGatedPostingEnabled,
   isApprovalReasonsEnabled,
   isCommSendInternalDefaultEnabled,
@@ -204,6 +210,15 @@ export type GatewayInvokeResult = {
   httpStatus: number;
   body: Record<string, unknown>;
 };
+
+/** Thread single-flight stop (nothing sent): audit + error body with nextStep / retryable. */
+async function threadGuardStopResponse(stop: ThreadGuardStop, ctx: ThreadGuardAuditCtx): Promise<GatewayInvokeResult> {
+  await auditThreadGuardStop(stop, ctx);
+  return jsonResult(
+    { ...stop.body, needs_approval: false, employeeId: ctx.employeeId, tool: ctx.tool, purpose: ctx.purpose, jobId: ctx.jobId },
+    stop.httpStatus
+  );
+}
 
 function jsonResult(
   body: Record<string, unknown>,
@@ -1259,6 +1274,31 @@ async function runGatewayInvokeInner(
     }
   }
 
+  // Thread single-flight (木村 #286 decision 2): an approval closed at fulfil
+  // because the thread moved on is terminal. A re-run with its approvalId
+  // sends nothing and opens no new approval; the AI re-reads the thread and
+  // files a new request (new jobId) if a reply is still needed. Own approvals
+  // only (getApprovalById is org-scoped; another employee's id falls through).
+  if (
+    priorApproval &&
+    priorApproval.status === "superseded" &&
+    priorApproval.employeeId === employeeId &&
+    closedByThreadMovedOn(priorApproval.metadata)
+  ) {
+    return jsonResult(
+      {
+        ...threadGuardStopBody(THREAD_MOVED_ON, { approvalStatus: "superseded" }),
+        approvalId: priorApproval.id,
+        needs_approval: false,
+        employeeId,
+        tool,
+        purpose,
+        jobId,
+      },
+      409
+    );
+  }
+
   const actionCounts = await getActionCounts({
     orgId: orgId || employee.orgId,
     employeeId,
@@ -2154,6 +2194,12 @@ async function runGatewayInvokeInner(
     const fulfilled = await fulfillApprovedInvoke(priorApproval, {
       attachmentHandledByCaller: isAudienceGatedTool(toolDef),
     });
+    if (fulfilled && !fulfilled.ok && isThreadGuardCode(fulfilled.error)) {
+      // Thread single-flight stopped the approved post at fulfil (nothing sent).
+      return jsonResult({ ...threadGuardStopBody(fulfilled.error, fulfilled.threadGuard ?? {}),
+        approvalId: priorApproval.id, needs_approval: false, employeeId, tool, purpose, jobId },
+        fulfilled.error === THREAD_GUARD_UNAVAILABLE ? 503 : 409);
+    }
     if (!fulfilled?.ok) return jsonResult({ ok: false, code: fulfilled?.error || "approval_execution_failed",
       error: fulfilled?.error || "approval_execution_failed", employeeId, tool, purpose, jobId }, 409);
     if (isAudienceGatedTool(toolDef)) {
@@ -2341,6 +2387,33 @@ async function runGatewayInvokeInner(
         threadTsSource = "client";
       }
 
+      // THREAD_SINGLE_FLIGHT_ENABLED: one send per thread (lease) and the
+      // "already moved on" check, before the dedup claim so a stop here leaves
+      // no ledger row. The lease is released in `finally` on every path below.
+      const threadSend = await beginThreadSend({
+        orgId: orgId || employee.orgId,
+        employeeId,
+        jobId,
+        keyInput: {
+          orgId: orgId || employee.orgId,
+          surface: "slack",
+          slackChannelId: dest,
+          threadId: looksLikeSlackTs(replyThreadTs) ? replyThreadTs : undefined,
+        },
+        readThrough: readThroughFromBody(body as unknown as Record<string, unknown>),
+      });
+      if (threadSend.kind === "stop") {
+        return threadGuardStopResponse(threadSend, {
+          orgId: orgId || employee.orgId, employeeId,
+          credentialId: input.credentialId || employee.credentialId, purpose, tool, jobId, phase: "invoke",
+        });
+      }
+      await auditThreadGuardHeld(threadSend, {
+        orgId: orgId || employee.orgId, employeeId,
+        credentialId: input.credentialId || employee.credentialId, purpose, tool, jobId, phase: "invoke",
+      });
+      let threadSent: { sent: boolean; messageTs?: string } = { sent: false };
+      try {
       // COMM_REPLY_DEDUP_ENABLED: atomic claim right before the post (two
       // concurrent identical sends → only one is posted). Fail closed.
       const dedupClaim = await claimDirectCommReplySend(commReplyDedup, tool);
@@ -2371,6 +2444,7 @@ async function runGatewayInvokeInner(
         await finishDirectCommReplySend(commReplyDedup, dedupClaimId, "uncertain", { jobId });
         throw error;
       }
+      if (posted.ok && posted.delivery === "slack") threadSent = { sent: true, messageTs: posted.ts };
       // v1: failed releases the claim. v2: only a provider-confirmed "not sent"
       // releases it; an unknown outcome is kept (uncertain) and reported.
       const ledgerOutcome = ledgerOutcomeAfterPost(commReplyDedup, posted);
@@ -2461,21 +2535,51 @@ async function runGatewayInvokeInner(
           timestamp: originalTs,
         }).catch(() => undefined);
       }
+      } finally {
+        if (threadSend.kind === "held") await threadSend.handle.finish(threadSent);
       }
-    } else if (!dest && egressAllowsPost && commReplyDedup.kind !== "off") {
+      }
+    } else if (!dest && egressAllowsPost && (commReplyDedup.kind !== "off" || isThreadSingleFlightEnabled())) {
       // Surfaces without a gateway post (LINE / Telegram / mail): the allowed
       // reply is delivered by the caller, so it is recorded here as sent.
-      const dedupClaim = await claimDirectCommReplySend(commReplyDedup, tool);
-      const dedupResponse = await directSendDedupResponse(dedupClaim, commReplyDedup, {
+      // Thread single-flight: same lease + moved-on check; the allowed reply is
+      // recorded as this employee's latest post (server time) and the lease released.
+      const threadSend = await beginThreadSend({
         orgId: orgId || employee.orgId,
         employeeId,
-        credentialId: input.credentialId || employee.credentialId,
-        purpose,
-        tool,
         jobId,
+        keyInput: conversationKeyInputFromBody(body, orgId || employee.orgId),
+        readThrough: readThroughFromBody(body as unknown as Record<string, unknown>),
       });
-      if (dedupResponse) return dedupResponse;
-      await finishDirectCommReplySend(commReplyDedup, dedupClaim.state === "claimed" ? dedupClaim.id : null, "sent", { jobId });
+      if (threadSend.kind === "stop") {
+        return threadGuardStopResponse(threadSend, {
+          orgId: orgId || employee.orgId, employeeId,
+          credentialId: input.credentialId || employee.credentialId, purpose, tool, jobId, phase: "invoke",
+        });
+      }
+      await auditThreadGuardHeld(threadSend, {
+        orgId: orgId || employee.orgId, employeeId,
+        credentialId: input.credentialId || employee.credentialId, purpose, tool, jobId, phase: "invoke",
+      });
+      let allowed = false;
+      try {
+        if (commReplyDedup.kind !== "off") {
+          const dedupClaim = await claimDirectCommReplySend(commReplyDedup, tool);
+          const dedupResponse = await directSendDedupResponse(dedupClaim, commReplyDedup, {
+            orgId: orgId || employee.orgId,
+            employeeId,
+            credentialId: input.credentialId || employee.credentialId,
+            purpose,
+            tool,
+            jobId,
+          });
+          if (dedupResponse) return dedupResponse;
+          await finishDirectCommReplySend(commReplyDedup, dedupClaim.state === "claimed" ? dedupClaim.id : null, "sent", { jobId });
+        }
+        allowed = true;
+      } finally {
+        if (threadSend.kind === "held") await threadSend.handle.finish({ sent: allowed });
+      }
     }
   }
 
