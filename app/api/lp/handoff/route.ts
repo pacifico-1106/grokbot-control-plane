@@ -20,10 +20,12 @@ import {
 import { enqueueHandoffNotification } from "@/lib/lp/outbox-processor";
 import { resolveGuestJourney, type GuestSessionResult } from "@/lib/lp/guest-session";
 import { hashIp } from "@/lib/lp/rate-limit";
+import { IP_HASH_UNAVAILABLE, isIpHashKeyConfigured } from "@/lib/security/ip-hash-key";
 import { createHash } from "node:crypto";
 
 function sessionError(session: Extract<GuestSessionResult, { ok: false }>) {
-  return NextResponse.json({ error: session.error }, { status: session.status });
+  const body = "message" in session ? { error: session.error, message: session.message } : { error: session.error };
+  return NextResponse.json(body, { status: session.status });
 }
 
 const NOT_FOUND = { error: "not_found", message: "Handoff not found" } as const;
@@ -74,6 +76,10 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    if (!isIpHashKeyConfigured()) {
+      console.error("[lp/handoff] IP_HASH_KEY not configured; refusing");
+      return NextResponse.json({ ...IP_HASH_UNAVAILABLE }, { status: 503 });
+    }
     const ip = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "unknown";
     const userAgent = request.headers.get("user-agent") || "unknown";
 
