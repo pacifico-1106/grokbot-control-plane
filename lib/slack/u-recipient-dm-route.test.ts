@@ -3,7 +3,9 @@
  * U… user id (put in the channel field) is mapped to the employee's internal
  * 1:1 DM route — ONLY when the party ledger has that user as an INTERNAL
  * slack_user of the same org. Everyone else stops with a nextStep.
- * Gated by SLACK_DM_AUTOROUTE_ENABLED (OFF by default).
+ * Gated by SLACK_U_TO_DM_SEND_ENABLED (NEW, OFF by default), effective only
+ * when SLACK_DM_AUTOROUTE_ENABLED is also ON (production already has
+ * SLACK_DM_AUTOROUTE_ENABLED=1 and SLACK_USER_SCOPE_IM_WRITE=1).
  *
  * Demo mode, dummy ids, Slack Web API mocked (no network).
  */
@@ -19,6 +21,7 @@ import { callStaffpassMcpTool } from "@/lib/mcp/tools";
 import type { ResolvedEmployeeCredential } from "@/lib/auth/employee-credential";
 import type { Employee, GatewayInvokeRequest } from "@/lib/types";
 import { slackApiArgs, slackRequestHeader } from "@/tests/helpers/slack-api-args";
+import { syncAutoDmRoutesForEmployee } from "@/lib/slack/dm-autoroute";
 
 const ORG = DEMO_ORG.id;
 const EMP = "emp_comm";
@@ -28,6 +31,8 @@ const USER_TOKEN = "xoxp-udm-SECRET-user-token-1";
 const BOT_TOKEN = "xoxb-udm-bot-token-1";
 const TEXT = "来週の定例の議題を共有します。";
 const FLAG = "SLACK_DM_AUTOROUTE_ENABLED";
+const SEND_FLAG = "SLACK_U_TO_DM_SEND_ENABLED";
+const IM_WRITE_FLAG = "SLACK_USER_SCOPE_IM_WRITE";
 
 type Call = { method: string; args: Record<string, unknown>; auth: string };
 let calls: Call[] = [];
@@ -39,6 +44,8 @@ let postSeq = 0;
 const originalFetch = globalThis.fetch;
 const restorers: Array<() => void> = [];
 const savedFlag = process.env[FLAG];
+const savedSendFlag = process.env[SEND_FLAG];
+const savedImWriteFlag = process.env[IM_WRITE_FLAG];
 
 function uid(prefix: string): string {
   seq += 1;
@@ -135,6 +142,8 @@ function expectIdsOnlyAudit(jobId: string, code: string) {
 
 beforeEach(async () => {
   process.env[FLAG] = "1";
+  process.env[SEND_FLAG] = "1";
+  process.env[IM_WRITE_FLAG] = "1";
   scopes = "chat:write,users:read,im:history,im:write";
   users = new Map();
   openResponse = (counterpart) => ({ ok: true, channel: { id: dmFor(counterpart), is_im: true, user: counterpart } });
@@ -151,6 +160,10 @@ afterEach(async () => {
   globalThis.fetch = originalFetch;
   if (savedFlag === undefined) delete process.env[FLAG];
   else process.env[FLAG] = savedFlag;
+  if (savedSendFlag === undefined) delete process.env[SEND_FLAG];
+  else process.env[SEND_FLAG] = savedSendFlag;
+  if (savedImWriteFlag === undefined) delete process.env[IM_WRITE_FLAG];
+  else process.env[IM_WRITE_FLAG] = savedImWriteFlag;
   await upsertConversationAdapter({ orgId: ORG, surface: "slack", enabled: false, secrets: {} }).catch(() => undefined);
   await revokeEmployeeSlackIdentity({ employeeId: EMP, orgId: ORG }).catch(() => undefined);
 });
@@ -427,5 +440,99 @@ describe("flag OFF: unchanged", () => {
     expect(r.body.code).toBe("egress_denied");
     expect(methods()).not.toContain("conversations.open");
     expect(posts().length).toBe(0);
+  });
+});
+
+const NEW_CODES = [
+  "slack_recipient_not_internal_party",
+  "slack_recipient_not_eligible",
+  "slack_dm_reauthorize_required",
+  "slack_dm_open_failed",
+  "slack_dm_route_mismatch",
+  "slack_dm_autoroute_identity_required",
+];
+
+/** Today's main for a U… in the channel field: looked up as a channel, unknown → 403 egress_denied. */
+function expectTodaysMain(r: Awaited<ReturnType<typeof invoke>>, u: string) {
+  expect(r.httpStatus).toBe(403);
+  expect(r.body.code).toBe("egress_denied");
+  expect(NEW_CODES).not.toContain(String(r.body.code));
+  for (const m of ["auth.test", "users.info", "conversations.open"]) expect(methods()).not.toContain(m);
+  expect(posts().length).toBe(0);
+  expect(calls.some((c) => String(c.args.channel || "").startsWith("D"))).toBe(false);
+  return getSlackImEmployeeRoute(ORG, dmFor(u)).then((route) => expect(route).toBeNull());
+}
+
+describe("SLACK_U_TO_DM_SEND_ENABLED gate (production: autoroute + im:write already ON)", () => {
+  test("new flag OFF + SLACK_DM_AUTOROUTE_ENABLED ON + SLACK_USER_SCOPE_IM_WRITE ON → internal U… unchanged (403 egress_denied)", async () => {
+    delete process.env[SEND_FLAG];
+    const u = await party("internal");
+    await expectTodaysMain(await invoke(sendTo(u)), u);
+  });
+
+  test("new flag OFF + existing flags ON → external / unknown U… unchanged (403 egress_denied, no Slack lookup)", async () => {
+    delete process.env[SEND_FLAG];
+    const ext = await party("external");
+    await expectTodaysMain(await invoke(sendTo(ext)), ext);
+    const unknown = uid("UUNK");
+    await expectTodaysMain(await invoke(sendTo(unknown)), unknown);
+  });
+
+  test("new flag OFF + existing flags ON: no slack.post_failed autoroute audit is written", async () => {
+    delete process.env[SEND_FLAG];
+    const u = await party("internal");
+    const body = sendTo(u);
+    await invoke(body);
+    expect(autorouteAudits(String(body.jobId)).filter((a) => (a.metadata as Record<string, unknown>)?.dmAutoroute === true).length).toBe(0);
+  });
+
+  test("new flag ON + SLACK_DM_AUTOROUTE_ENABLED OFF → unchanged (403 egress_denied)", async () => {
+    process.env[SEND_FLAG] = "1";
+    delete process.env[FLAG];
+    const u = await party("internal");
+    await expectTodaysMain(await invoke(sendTo(u)), u);
+  });
+
+  test("both ON → the U… is rewritten to the internal DM route and sent there", async () => {
+    process.env[SEND_FLAG] = "true";
+    process.env[FLAG] = "1";
+    const u = await party("internal");
+    const r = await invoke(sendTo(u));
+    expect(r.httpStatus).toBe(200);
+    expect(r.body.ok).toBe(true);
+    expect(posts().length).toBe(1);
+    expect(posts()[0].args.channel).toBe(dmFor(u));
+  });
+});
+
+describe("#234 sync (syncAutoDmRoutesForEmployee) without the new flag = today's main", () => {
+  // The strict 1:1-IM re-check applies only to send-time resolution
+  // (requireImWithCounterpart, reachable only with SLACK_U_TO_DM_SEND_ENABLED ON).
+  // The already-live #234 sync must behave exactly as on main.
+  test("new flag OFF: identity_linked sync with a D… whose `user` differs is handled exactly as main (route created)", async () => {
+    delete process.env[SEND_FLAG];
+    const other = uid("UOTH");
+    openResponse = (counterpart) => ({ ok: true, channel: { id: dmFor(counterpart), is_im: true, user: other } });
+    const u = await party("internal");
+    const result = await syncAutoDmRoutesForEmployee({ orgId: ORG, employeeId: EMP, trigger: "party_upserted", onlyCounterpart: u });
+    expect(result.items[0]?.outcome).toBe("created");
+    expect(result.items[0]?.reason).not.toBe("dm_user_mismatch");
+  });
+
+  test("new flag OFF: sync with is_im=false on a D… id is handled exactly as main (route created)", async () => {
+    delete process.env[SEND_FLAG];
+    openResponse = (counterpart) => ({ ok: true, channel: { id: dmFor(counterpart), is_im: false, user: counterpart } });
+    const u = await party("internal");
+    const result = await syncAutoDmRoutesForEmployee({ orgId: ORG, employeeId: EMP, trigger: "party_upserted", onlyCounterpart: u });
+    expect(result.items[0]?.outcome).toBe("created");
+  });
+
+  test("new flag ON: the #234 sync path is still unchanged (strict check is send-time only)", async () => {
+    process.env[SEND_FLAG] = "1";
+    const other = uid("UOTH");
+    openResponse = (counterpart) => ({ ok: true, channel: { id: dmFor(counterpart), is_im: true, user: other } });
+    const u = await party("internal");
+    const result = await syncAutoDmRoutesForEmployee({ orgId: ORG, employeeId: EMP, trigger: "party_upserted", onlyCounterpart: u });
+    expect(result.items[0]?.outcome).toBe("created");
   });
 });
