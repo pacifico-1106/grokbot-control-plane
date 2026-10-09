@@ -14,6 +14,7 @@ import { setOrgApprovalKindRoutesPolicy } from "@/lib/approval-kind-routes/data"
 import type { OrgApprovalKindRoutesPolicy } from "@/lib/approval-kind-routes/types";
 import { upsertConversationAdapter } from "@/lib/data/conversation-adapters";
 import { upsertOrgChannel, upsertOrgParty } from "@/lib/data/directory";
+import { getOrgInternalAudienceRule, setOrgInternalAudienceRule } from "@/lib/data/internal-audience-rule";
 import { DEMO_ORG, getRuntimeEmployees } from "@/lib/demo-data";
 import { runGatewayInvoke } from "@/lib/gateway/invoke";
 import type { Employee, GatewayInvokeRequest } from "@/lib/types";
@@ -139,6 +140,31 @@ describe("flag ON: not verified by the channel ledger → unchanged (confidentia
     await upsertOrgChannel({ orgId: OTHER_ORG, surface: "slack", externalId: ch, classification: "internal", mixed: false, skipInspect: true });
     const r = await invoke(send(ch, "社内向けのお知らせです", {}, { orgId: OTHER_ORG }));
     expect(r.httpStatus).not.toBe(200);
+    expect(posts.length).toBe(0);
+  });
+});
+
+describe("木村 #297 answer 1: only the channel ledger counts — party / team rule stay confidential", () => {
+  test("team rule (speaker's Slack team in slackTeamIds) + party-ledger internal channel → still confidential, approval", async () => {
+    const before = await getOrgInternalAudienceRule(DEMO_ORG.id);
+    await setOrgInternalAudienceRule(DEMO_ORG.id, { slackTeamIds: ["T0TEAMRULE297"] }, "test");
+    restorers.push(() => { void setOrgInternalAudienceRule(DEMO_ORG.id, { slackTeamIds: before.slackTeamIds }, "test"); });
+    const ch = cid("C0TRL");
+    await upsertOrgParty({ orgId: DEMO_ORG.id, kind: "slack_channel", identifier: ch, audience: "internal" });
+    const r = await invoke(send(ch, "社内向けのお知らせです", {}, { speakerId: cid("U0TRL"), speakerTeamId: "T0TEAMRULE297" }));
+    // never relaxed: approval (402, confidential) or refused earlier (403)
+    expect([402, 403]).toContain(r.httpStatus);
+    expect(egressOf(r.body).informationClass ?? "confidential").not.toBe("internal");
+    expect(posts.length).toBe(0);
+  });
+
+  test("party-ledger internal slack_user as the only destination (no channel-ledger row) → confidential, approval", async () => {
+    const user = cid("U0PTU");
+    await upsertOrgParty({ orgId: DEMO_ORG.id, kind: "slack_user", identifier: user, audience: "internal" });
+    const ch = cid("D0PTU");
+    const r = await invoke(send(ch, "社内向けのお知らせです", {}, { speakerId: user }));
+    expect(r.httpStatus).not.toBe(200);
+    expect(egressOf(r.body).informationClass).toBe("confidential");
     expect(posts.length).toBe(0);
   });
 });
