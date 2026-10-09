@@ -114,7 +114,10 @@ describe("flag ON: every reason is returned and stored", () => {
     expect(posts.length).toBe(0);
     const reasons = reasonsOf(r.body);
     expect(reasons.map((x) => x.code)).toEqual(["topic_gate", "egress", "always_human"]);
-    expect(reasons[0].topics).toEqual(["支払"]);
+    // AI-facing: category names only (木村 2026-10-09 23:05-23:10); the card keeps the keywords.
+    expect((reasons[0] as Record<string, unknown>).categories).toEqual(["金銭"]);
+    expect(reasons[0].topics).toBeUndefined();
+    expect(JSON.stringify(reasons)).not.toContain("支払");
     expect(reasons[1]).toMatchObject({
       reason: "internal_confidential_source",
       informationClass: "confidential",
@@ -123,7 +126,9 @@ describe("flag ON: every reason is returned and stored", () => {
     });
     expect(reasons[2]).toMatchObject({ source: "employee_policy" });
     const stored = await getApprovalById(String(r.body.approvalId), DEMO_ORG.id);
-    expect(stored?.metadata.approvalReasons).toEqual(reasons);
+    const storedReasons = stored?.metadata.approvalReasons as Reason[];
+    expect(storedReasons[0].topics).toEqual(["支払"]);
+    expect(storedReasons.slice(1)).toEqual(reasons.slice(1));
   });
 
   test("egress only (no topic, no policy) → just the egress reason", async () => {

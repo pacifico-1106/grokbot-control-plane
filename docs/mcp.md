@@ -49,7 +49,7 @@ staffpass_invoke ──► lib/gateway/invoke (同一 Gateway 強制パス)
 
 - `pollHint` が `fulfilled` なら、承認された操作は Staffpass が実行済みです（Slack 投稿は承認時に自動送信されます）。それで完了なので、再実行しないでください（二重送信になります）。
 - `pollHint` が `reinvoke_with_approvalId` のときだけ、同じ `jobId` で `staffpass_invoke` に `approvalId` を付けて再実行します。`reinvokeReason` が返っているときは、そこに書かれた修正（管理ツールなど）を先に行ってから再実行します。`reinvokeReason` が無いまま `reinvoke_with_approvalId` になることもあります。そのときは同じ approvalId と同じ内容で、一度だけ再実行します。理由は `reinvokeCode` で返ることがあります（`pending_attachment` = 承認済み添付の未送信分、`not_executed_yet` = 承認済みだが未実行、`admin_result_required` = 管理 MCP で再実行）。
-- `needs_approval` の応答に `approvalReasons[]` があれば、承認が必要な理由がすべて入っています（`topic_gate` / `egress` / `always_human` / `action_limit` など）。情報区分は AI の指定では下げられません（上げることはできます）。機密話題の設定有無と大まかな分類（金銭・人事・契約など）は `staffpass_sensitive_topics`（参照専用）で確認できます。語の一覧は返しません。該当しそうなら、言い換えずに承認に回してください。
+- `needs_approval` の応答に `approvalReasons[]` があれば、承認が必要な理由がすべて入っています（`topic_gate` / `egress` / `always_human` / `action_limit` など）。情報区分は AI の指定では下げられません（上げることはできます）。機密話題の設定有無と大まかな分類（金銭・人事・契約など）は `staffpass_sensitive_topics`（参照専用）で確認できます。語の一覧は返しません。該当しそうなら、言い換えずに承認に回してください。機密話題で承認になったときも、応答（`message` / `topicGate.categories` / `approvalReasons[].topic_gate.categories`）には分類名だけが入り、該当した語は返しません（語は承認者のカードと監査ログにだけ残ります）。
 
 ---
 
