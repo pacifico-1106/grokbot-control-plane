@@ -1,0 +1,236 @@
+/**
+ * 木村 2026-10-05 #284 decision 4: every write of project_access.projectIds
+ * must name projects of the SAME org as the employee being written. Any id
+ * that is not (another org's, unknown, deleted, moved) → refused, nothing
+ * written, ONE audit row with IDs only, Japanese nextStep. Admin MCP queue:
+ * checked at filing and again at fulfil. Demo mode, no network.
+ */
+import { describe, expect, mock, test } from "bun:test";
+import type { ApprovalRequest, OrgProject } from "@/lib/types";
+
+const { DEMO_ORG, getRuntimeAudit, getRuntimeEmployees, getRuntimeApprovals } = await import("@/lib/demo-data");
+
+const realSession = await import("@/lib/auth/session");
+const realDemoActor = await import("@/lib/team/demo-actor");
+mock.module("@/lib/auth/session", () => ({
+  ...realSession,
+  getCurrentOrgId: async () => DEMO_ORG.id,
+  getSessionContext: async () => ({ demo: true, userId: null, email: "owner@example.com", orgId: DEMO_ORG.id, member: null }),
+}));
+mock.module("@/lib/team/demo-actor", () => ({
+  ...realDemoActor,
+  requireCapability: async () => ({
+    ok: true as const,
+    actor: { id: "mem_1", orgId: DEMO_ORG.id, email: "owner@example.com", displayName: "山田 太郎", role: "owner",
+      jobRole: "owner", capabilities: ["hire_issue_credentials"], status: "active" },
+  }),
+}));
+
+const { POST: issuePost } = await import("@/app/api/employees/issue/route");
+const { PATCH: policyPatch } = await import("@/app/api/employees/[id]/policy/route");
+const { issueEmployee, updateEmployeePolicy, getEmployee } = await import("@/lib/data/employees");
+const { upsertOrgProject, deleteOrgProject, DEMO_PROJECT_A_ID } = await import("@/lib/data/projects");
+const { fulfillApprovedAdmin } = await import("@/lib/admin-mcp/fulfill-admin");
+const { callAdminMcpTool } = await import("@/lib/mcp/admin-tools");
+const { resetDemoAdminAgent } = await import("@/lib/data/admin-agents");
+
+const OTHER_ORG = "00000000-0000-4000-8000-0000000bb0b1";
+const AUDIT_ACTION = "employee.project_access_refused";
+const CODE = "project_access_cross_org";
+
+const otherOrgProject = await upsertOrgProject({ orgId: OTHER_ORG, name: `他社案件 ${Date.now()}` });
+async function ownProject(): Promise<OrgProject> {
+  return upsertOrgProject({ orgId: DEMO_ORG.id, name: `自社案件 ${Date.now()} ${Math.random().toString(36).slice(2, 6)}` });
+}
+const selected = (...projectIds: string[]) => ({ mode: "selected", projectIds });
+const refusals = () => getRuntimeAudit().filter((e) => e.action === AUDIT_ACTION);
+
+function issueReq(projectAccess: unknown, name = `PA ${Math.random().toString(36).slice(2, 8)}`) {
+  return issuePost(new Request("https://x.invalid/api/employees/issue", {
+    method: "POST",
+    body: JSON.stringify({ displayName: name, roleLabel: "テスト", scopes: ["mail:draft"], projectAccess }),
+  }));
+}
+async function newEmployee() {
+  const r = await issueEmployee({
+    orgId: DEMO_ORG.id, displayName: `PA対象 ${Math.random().toString(36).slice(2, 8)}`, roleLabel: "テスト",
+    scopes: ["mail:draft"], allowedPurposes: [], approvalPolicy: "risk_based", spend: null, allowedAccounts: [],
+    secretHash: "b".repeat(64), secretPrefix: "gb_emp_pa", expiresAt: null, auditSummary: "pa test",
+  });
+  return r.employee;
+}
+function patchReq(id: string, projectAccess: unknown) {
+  return policyPatch(
+    new Request(`https://x.invalid/api/employees/${id}/policy`, {
+      method: "PATCH",
+      body: JSON.stringify({ scopes: ["mail:draft"], allowedPurposes: [], approvalPolicy: "risk_based", projectAccess }),
+    }),
+    { params: Promise.resolve({ id }) }
+  );
+}
+function adminApproval(mutation: Record<string, unknown>): ApprovalRequest {
+  return {
+    id: `apr_pa_${Math.random().toString(36).slice(2, 8)}`,
+    orgId: DEMO_ORG.id, employeeId: "emp_ops", credentialId: null, title: "employees.issue", summary: "employees.issue",
+    purpose: "admin.employees.issue", risk: "high", tool: "employees.issue", status: "approved", createdAt: new Date().toISOString(),
+    metadata: { approvalClass: "admin", adminTool: "employees.issue", adminMutation: mutation },
+  } as unknown as ApprovalRequest;
+}
+function demoCred() {
+  const agent = resetDemoAdminAgent({ grokBotAgentId: "grok_admin_demo", status: "linked" });
+  return { orgId: DEMO_ORG.id, adminAgentId: agent.id, grokBotAgentId: agent.grokBotAgentId, actorId: agent.id,
+    generation: agent.credentialGeneration, via: "bearer", agent } as unknown as Parameters<typeof callAdminMcpTool>[2];
+}
+function expectRefusedBody(body: Record<string, unknown>) {
+  expect(body.ok).toBe(false);
+  expect(body.code).toBe(CODE);
+  expect(String(body.nextStep)).toMatch(/この組織のプロジェクト/);
+  expect(String(body.nextStep)).toMatch(/保存していません|発行していません/);
+}
+function expectOneAuditIdsOnly(before: number, refusedIds: string[], path: string) {
+  const rows = refusals().slice(before);
+  expect(rows).toHaveLength(1);
+  const m = rows[0].metadata as Record<string, unknown>;
+  expect(m.path).toBe(path);
+  expect(m.refusedProjectIds).toEqual(refusedIds);
+  // IDs only: no project names, no free text
+  expect(JSON.stringify(rows[0])).not.toContain(otherOrgProject.name);
+}
+
+describe("web POST /api/employees/issue", () => {
+  test("BOLA: another org's project id → 400, nothing issued, one IDs-only audit row", async () => {
+    const before = getRuntimeEmployees().length;
+    const audits = refusals().length;
+    const res = await issueReq(selected(otherOrgProject.id));
+    expect(res.status).toBe(400);
+    expectRefusedBody(await res.json());
+    expect(getRuntimeEmployees().length).toBe(before);
+    expectOneAuditIdsOnly(audits, [otherOrgProject.id], "web.employees.issue");
+  });
+  test("an unknown id → 400, nothing issued", async () => {
+    const before = getRuntimeEmployees().length;
+    const res = await issueReq(selected("prj_does_not_exist"));
+    expect(res.status).toBe(400);
+    expectRefusedBody(await res.json());
+    expect(getRuntimeEmployees().length).toBe(before);
+  });
+  test("a mix of valid and invalid ids → refused as a whole, nothing issued; only the bad ids are named", async () => {
+    const own = await ownProject();
+    const before = getRuntimeEmployees().length;
+    const audits = refusals().length;
+    const res = await issueReq(selected(own.id, otherOrgProject.id, "prj_unknown_x"));
+    expect(res.status).toBe(400);
+    expect(getRuntimeEmployees().length).toBe(before);
+    expectOneAuditIdsOnly(audits, [otherOrgProject.id, "prj_unknown_x"], "web.employees.issue");
+  });
+  test("valid same-org ids still work", async () => {
+    const own = await ownProject();
+    const audits = refusals().length;
+    const res = await issueReq(selected(DEMO_PROJECT_A_ID, own.id));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.employee.projectAccess).toEqual(selected(DEMO_PROJECT_A_ID, own.id));
+    expect(refusals().length).toBe(audits);
+  });
+  test("mode company / all ignore projectIds (unchanged behaviour)", async () => {
+    const res = await issueReq({ mode: "all", projectIds: [otherOrgProject.id] });
+    expect(res.status).toBe(200);
+    expect((await res.json()).employee.projectAccess).toEqual({ mode: "all", projectIds: [] });
+  });
+});
+
+describe("web PATCH /api/employees/[id]/policy", () => {
+  test("BOLA / mix → 400, the employee's policy is not touched, one audit row", async () => {
+    const emp = await newEmployee();
+    const own = await ownProject();
+    await updateEmployeePolicy({ orgId: DEMO_ORG.id, employeeId: emp.id, scopes: emp.scopes, allowedPurposes: [],
+      approvalPolicy: emp.approvalPolicy, projectAccess: selected(own.id) as never });
+    const snapshot = JSON.stringify(await getEmployee(emp.id, DEMO_ORG.id));
+    const audits = refusals().length;
+    const res = await patchReq(emp.id, selected(own.id, otherOrgProject.id));
+    expect(res.status).toBe(400);
+    expectRefusedBody(await res.json());
+    expect(JSON.stringify(await getEmployee(emp.id, DEMO_ORG.id))).toBe(snapshot);
+    expectOneAuditIdsOnly(audits, [otherOrgProject.id], "web.employees.policy");
+    expect(refusals().slice(audits)[0].employeeId).toBe(emp.id);
+  });
+  test("valid same-org ids still save", async () => {
+    const emp = await newEmployee();
+    const own = await ownProject();
+    const res = await patchReq(emp.id, selected(own.id));
+    expect(res.status).toBe(200);
+    expect((await getEmployee(emp.id, DEMO_ORG.id))?.projectAccess).toEqual(selected(own.id));
+  });
+});
+
+describe("data writers refuse on their own (defence in depth for any caller)", () => {
+  test("issueEmployee / updateEmployeePolicy throw before writing", async () => {
+    const before = getRuntimeEmployees().length;
+    const issued = await issueEmployee({
+      orgId: DEMO_ORG.id, displayName: "直書き", roleLabel: "テスト", scopes: ["mail:draft"], allowedPurposes: [],
+      approvalPolicy: "risk_based", spend: null, allowedAccounts: [], projectAccess: selected(otherOrgProject.id) as never,
+      secretHash: "c".repeat(64), secretPrefix: "gb_emp_pa2", expiresAt: null, auditSummary: "t",
+    }).then(() => null, (e: unknown) => e as { code?: string });
+    expect(issued?.code).toBe(CODE);
+    expect(getRuntimeEmployees().length).toBe(before);
+    const emp = await newEmployee();
+    const updated = await updateEmployeePolicy({ orgId: DEMO_ORG.id, employeeId: emp.id, scopes: emp.scopes,
+      allowedPurposes: [], approvalPolicy: emp.approvalPolicy, projectAccess: selected(otherOrgProject.id) as never,
+    }).then(() => null, (e: unknown) => e as { code?: string });
+    expect(updated?.code).toBe(CODE);
+    expect((await getEmployee(emp.id, DEMO_ORG.id))?.projectAccess).toEqual({ mode: "company", projectIds: [] });
+  });
+});
+
+describe("Admin MCP employees.issue: checked at filing and at fulfil", () => {
+  test("filing: another org's id → refused, no approval queued, one audit row", async () => {
+    const approvals = getRuntimeApprovals().length;
+    const audits = refusals().length;
+    const r = await callAdminMcpTool("employees.issue", {
+      displayName: "MCP他社", roleLabel: "テスト", scopes: ["mail:draft"], projectAccess: selected(otherOrgProject.id),
+    }, demoCred());
+    expect(r.isError).toBe(true);
+    expectRefusedBody(r.structuredContent as Record<string, unknown>);
+    expect(getRuntimeApprovals().length).toBe(approvals);
+    expectOneAuditIdsOnly(audits, [otherOrgProject.id], "admin_mcp.employees.issue");
+    expect((refusals().slice(audits)[0].metadata as Record<string, unknown>).phase).toBe("file");
+  });
+  test("filing: valid same-org ids → queued for approval as today", async () => {
+    const own = await ownProject();
+    const r = await callAdminMcpTool("employees.issue", {
+      displayName: "MCP自社", roleLabel: "テスト", scopes: ["mail:draft"], projectAccess: selected(own.id),
+    }, demoCred());
+    expect((r.structuredContent as Record<string, unknown>).needs_approval).toBe(true);
+  });
+  test("fulfil: the project was deleted after filing → not issued, nextStepJa, audit (phase fulfil)", async () => {
+    const own = await ownProject();
+    expect(await deleteOrgProject(DEMO_ORG.id, own.id)).toBe(true);
+    const before = getRuntimeEmployees().length;
+    const audits = refusals().length;
+    const approval = adminApproval({ displayName: "削除後", roleLabel: "テスト", scopes: ["mail:draft"], projectAccess: selected(own.id) });
+    const r = await fulfillApprovedAdmin(approval);
+    expect(r?.ok).toBe(false);
+    expect(r?.error).toBe(CODE);
+    expect(String(r?.nextStepJa)).toMatch(/この組織のプロジェクト/);
+    expect(getRuntimeEmployees().length).toBe(before);
+    expectOneAuditIdsOnly(audits, [own.id], "admin_mcp.employees.issue");
+    const m = refusals().slice(audits)[0].metadata as Record<string, unknown>;
+    expect(m.phase).toBe("fulfil");
+    expect(m.approvalId).toBe(approval.id);
+  });
+  test("fulfil: the project moved to another org after filing → not issued", async () => {
+    const own = await ownProject();
+    own.orgId = OTHER_ORG; // demo row moved
+    const before = getRuntimeEmployees().length;
+    const r = await fulfillApprovedAdmin(adminApproval({ displayName: "移動後", roleLabel: "テスト", scopes: ["mail:draft"], projectAccess: selected(own.id) }));
+    expect(r?.ok).toBe(false);
+    expect(r?.error).toBe(CODE);
+    expect(getRuntimeEmployees().length).toBe(before);
+  });
+  test("fulfil: valid same-org ids → issued with that access", async () => {
+    const own = await ownProject();
+    const r = await fulfillApprovedAdmin(adminApproval({ displayName: "正常", roleLabel: "テスト", scopes: ["mail:draft"], projectAccess: selected(own.id) }));
+    expect(r?.ok).toBe(true);
+    expect((await getEmployee(String(r?.employeeId), DEMO_ORG.id))?.projectAccess).toEqual(selected(own.id));
+  });
+});
