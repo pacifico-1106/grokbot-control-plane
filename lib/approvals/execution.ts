@@ -24,9 +24,9 @@ const retryable = new Set(["slack_token_missing", "slack_conversation_bot_token_
   // ("post_outcome_unknown" is NOT here: that post may have gone out.)
   "duplicate_post_uncertain",
   // Thread single-flight (THREAD_SINGLE_FLIGHT_ENABLED, lib/thread-guard): stopped
-  // before any provider call. busy / unavailable → may run again; moved_on is
-  // re-checked on every run against the approved read point, so a re-run never
-  // posts into a thread this employee has since replied in.
+  // before any provider call. busy / unavailable → may run again. moved_on
+  // closes the approval as superseded (terminal); only when that close lost a
+  // race does the approval stay approved, and the next run re-checks and closes.
   "thread_busy", "thread_moved_on", "thread_guard_unavailable"]);
 // Per-tool additions: refusals that tool returns BEFORE any write and that it
 // re-checks from scratch on every run (so the same approvalId may run again,

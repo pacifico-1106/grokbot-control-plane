@@ -8,9 +8,13 @@
  *  1. thread key = HMAC (dedup key, own "thread" domain) of the org-scoped
  *     conversation key — the same place the duplicate post guard compares
  *  2. lease (TTL) on org × thread key — busy → 409 thread_busy (retryable)
- *  3. under the lease: has this employee posted in the thread after the read
- *     point (readThroughTs, else the inbound ts)? The same job's own earlier
- *     post does not count. Yes → 409 thread_moved_on (re-read first)
+ *  3. under the lease: has an AI employee of this org (this employee or
+ *     another one; 木村 #286 decision 4) posted in the thread after the read
+ *     point (readThroughTs, else the inbound ts)? Human posts are never
+ *     recorded, so they do not count; the caller's same-job earlier post does
+ *     not count. Yes → 409 thread_moved_on (re-read first). No read point at
+ *     all → lease only, and the held send says readPointUnknown so the caller
+ *     audits it (decision 1: thread_guard.read_point_unknown)
  *  then the caller posts and calls handle.finish(): a confirmed post is
  *  recorded as the employee's latest post in the thread, then the lease is
  *  released. Every caller releases in `finally` (finish is idempotent).
@@ -26,7 +30,7 @@ import { resolveCommReplyDedupKey } from "@/lib/comm-reply-dedup/config";
 import { conversationKey, type ConversationKeyInput } from "@/lib/comm-reply-dedup/conversation-key";
 import { threadGuardNow, threadLeaseTtlSeconds } from "./config";
 import { microsToTs, type ReadThrough } from "./read-through";
-import { acquireThreadLease, readLastSelfPost, recordSelfPost, releaseThreadLease } from "./store";
+import { acquireThreadLease, readLatestAiPostAfter, recordSelfPost, releaseThreadLease } from "./store";
 
 export const THREAD_BUSY = "thread_busy";
 export const THREAD_MOVED_ON = "thread_moved_on";
@@ -35,14 +39,18 @@ export type ThreadGuardCode = typeof THREAD_BUSY | typeof THREAD_MOVED_ON | type
 
 export const THREAD_BUSY_MESSAGE_JA = "同じスレッドへの別の返信を送信中のため、送信しませんでした。";
 export const THREAD_MOVED_ON_MESSAGE_JA =
-  "読んだ時点より後に、このスレッドへ自分の投稿がすでにあるため、送信しませんでした。スレッドを読み直してください。";
+  "読んだ時点より後に、このスレッドへ AI 社員（自分または同じ組織の別の AI 社員）の投稿がすでにあるため、送信しませんでした。スレッドを読み直してください。";
+export const THREAD_MOVED_ON_CLOSED_MESSAGE_JA =
+  "承認後、送信する前に、読んだ時点より後のスレッドへ AI 社員の投稿があったため、この承認は古くなったものとして送信せずに終了しました。";
 export const THREAD_GUARD_UNAVAILABLE_MESSAGE_JA = "スレッドの同時送信チェックが利用できないため、送信を止めました（fail-closed）。";
 
 function nextStepBusy(seconds: number): string {
   return `Nothing was posted: another reply to this thread is being sent right now. Wait ${seconds} seconds, re-read the thread (including any new reply from yourself), then send only if your reply is still needed, with readThroughTs set to the latest message you read.`;
 }
 const NEXT_STEP_MOVED_ON =
-  "Nothing was posted: you already posted in this thread after the point you read (readThroughTs, or the message you were woken by). Re-read the thread, then send a new reply only if it is still needed, with readThroughTs set to the latest message you read. Do not resend this reply as is.";
+  "Nothing was posted: an AI employee (you, or another AI employee of your organization; postedBy says which) already posted in this thread after the point you read (readThroughTs, or the message you were woken by). Re-read the thread, then send a new reply only if it is still needed, with readThroughTs set to the latest message you read. Do not resend this reply as is.";
+export const NEXT_STEP_MOVED_ON_CLOSED =
+  "Nothing was posted and this approval is closed as stale (status superseded): after the approved read point an AI employee posted in this thread. Do not re-run this approvalId. Re-read the thread and file a new request only if a reply is still needed, with readThroughTs set to the latest message you read.";
 const NEXT_STEP_UNAVAILABLE =
   "Nothing was posted. The thread single-flight check is unavailable; retry the same request later (it is safe to retry).";
 
@@ -76,7 +84,16 @@ export type ThreadSendHandle = {
   finish(result: { sent: boolean; messageTs?: string | null }): Promise<void>;
 };
 
-export type BeginThreadSend = { kind: "off" } | ThreadGuardStop | { kind: "held"; handle: ThreadSendHandle };
+export type BeginThreadSend =
+  | { kind: "off" }
+  | ThreadGuardStop
+  | {
+      kind: "held";
+      handle: ThreadSendHandle;
+      /** No read point at all (lease only): the caller audits thread_guard.read_point_unknown. */
+      readPointUnknown: boolean;
+      threadKeyRef: string;
+    };
 
 export function threadGuardStopBody(code: ThreadGuardCode, extra: Record<string, unknown> = {}): Record<string, unknown> {
   const base = { ok: false, code, error: code, reasonCode: code };
@@ -85,7 +102,15 @@ export function threadGuardStopBody(code: ThreadGuardCode, extra: Record<string,
     return { ...base, message: THREAD_BUSY_MESSAGE_JA, retryable: true, nextAction: "retry_later", retryAfterSeconds: seconds, nextStep: nextStepBusy(seconds) };
   }
   if (code === THREAD_MOVED_ON) {
-    return { ...base, message: THREAD_MOVED_ON_MESSAGE_JA, retryable: false, nextAction: "reread_thread", ...extra, nextStep: NEXT_STEP_MOVED_ON };
+    const closed = extra.approvalStatus === "superseded";
+    return {
+      ...base,
+      message: closed ? THREAD_MOVED_ON_CLOSED_MESSAGE_JA : THREAD_MOVED_ON_MESSAGE_JA,
+      retryable: false,
+      nextAction: "reread_thread",
+      ...extra,
+      nextStep: closed ? NEXT_STEP_MOVED_ON_CLOSED : NEXT_STEP_MOVED_ON,
+    };
   }
   return { ...base, message: THREAD_GUARD_UNAVAILABLE_MESSAGE_JA, retryable: true, nextAction: "retry_later", nextStep: NEXT_STEP_UNAVAILABLE };
 }
@@ -104,17 +129,18 @@ export async function beginThreadSend(input: {
   if (!isThreadSingleFlightEnabled()) return { kind: "off" };
   if (!input.keyInput) return { kind: "off" }; // no conversation destination: nothing to serialize
   const readThroughSource = input.readThrough?.source ?? "none";
-  if (!input.orgId || !input.employeeId) return stop(THREAD_GUARD_UNAVAILABLE, {}, { reason: "scope_missing", readThroughSource });
-  if (!resolveCommReplyDedupKey()) return stop(THREAD_GUARD_UNAVAILABLE, {}, { reason: "thread_key_missing", readThroughSource });
+  const readPoint = input.readThrough ? "known" : "unknown";
+  if (!input.orgId || !input.employeeId) return stop(THREAD_GUARD_UNAVAILABLE, {}, { reason: "scope_missing", readThroughSource, readPoint });
+  if (!resolveCommReplyDedupKey()) return stop(THREAD_GUARD_UNAVAILABLE, {}, { reason: "thread_key_missing", readThroughSource, readPoint });
   const threadKey = threadKeyFor({ ...input.keyInput, orgId: input.orgId });
   if (!threadKey) return { kind: "off" };
   const keyRef = threadKey.slice(0, 12);
 
   const lease = await acquireThreadLease({ orgId: input.orgId, employeeId: input.employeeId, threadKey, ttlSeconds: threadLeaseTtlSeconds() });
   if (lease.state === "busy") {
-    return stop(THREAD_BUSY, { retryAfterSeconds: lease.retryAfterSeconds }, { retryAfterSeconds: lease.retryAfterSeconds, threadKeyRef: keyRef, readThroughSource });
+    return stop(THREAD_BUSY, { retryAfterSeconds: lease.retryAfterSeconds }, { retryAfterSeconds: lease.retryAfterSeconds, threadKeyRef: keyRef, readThroughSource, readPoint });
   }
-  if (lease.state !== "acquired") return stop(THREAD_GUARD_UNAVAILABLE, {}, { reason: lease.reason, threadKeyRef: keyRef, readThroughSource });
+  if (lease.state !== "acquired") return stop(THREAD_GUARD_UNAVAILABLE, {}, { reason: lease.reason, threadKeyRef: keyRef, readThroughSource, readPoint });
 
   let done = false;
   const release = async () => {
@@ -126,29 +152,32 @@ export async function beginThreadSend(input: {
 
   try {
     if (input.readThrough) {
-      const last = await readLastSelfPost({ orgId: input.orgId, employeeId: input.employeeId, threadKey });
+      const last = await readLatestAiPostAfter({ orgId: input.orgId, threadKey, afterMicros: input.readThrough.micros, excludeJobKey: jobKey });
       if (!last.ok) {
         await release();
-        return stop(THREAD_GUARD_UNAVAILABLE, {}, { reason: "self_post_read_failed", threadKeyRef: keyRef, readThroughSource });
+        return stop(THREAD_GUARD_UNAVAILABLE, {}, { reason: "self_post_read_failed", threadKeyRef: keyRef, readThroughSource, readPoint });
       }
-      const newer = last.post && last.post.micros > input.readThrough.micros && !(jobKey && last.post.jobKey === jobKey);
-      if (newer && last.post) {
+      if (last.post) {
         await release();
-        const selfPostedTs = microsToTs(last.post.micros);
+        const aiPostedTs = microsToTs(last.post.micros);
+        // Never the other employee's id: only whether it was the caller.
+        const postedBy = last.post.employeeId === input.employeeId ? "self" : "other_ai_employee";
         return stop(
           THREAD_MOVED_ON,
-          { readThroughTs: input.readThrough.ts, selfPostedTs },
-          { threadKeyRef: keyRef, readThroughSource, readThroughTs: input.readThrough.ts, selfPostedTs }
+          { readThroughTs: input.readThrough.ts, aiPostedTs, postedBy },
+          { threadKeyRef: keyRef, readThroughSource, readPoint, readThroughTs: input.readThrough.ts, aiPostedTs, postedBy }
         );
       }
     }
   } catch {
     await release();
-    return stop(THREAD_GUARD_UNAVAILABLE, {}, { reason: "self_post_read_failed", threadKeyRef: keyRef, readThroughSource });
+    return stop(THREAD_GUARD_UNAVAILABLE, {}, { reason: "self_post_read_failed", threadKeyRef: keyRef, readThroughSource, readPoint });
   }
 
   return {
     kind: "held",
+    readPointUnknown: !input.readThrough,
+    threadKeyRef: keyRef,
     handle: {
       async finish(result) {
         if (done) return;

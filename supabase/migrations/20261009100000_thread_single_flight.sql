@@ -6,8 +6,10 @@
 --    to that thread is in flight. thread_key = keyed HMAC (64 hex) of the
 --    org-scoped conversation; no channel / thread id, no text. RLS on, no
 --    policy; anon / authenticated have no access; service_role only.
--- 2. thread_self_posts: per org × employee × thread key, the employee's latest
+-- 2. thread_self_posts: per org × employee × thread key, the AI employee's latest
 --    post time in µs (Slack ts precision) + keyed job hash. Same access rules.
+--    The application reads all AI employees of the SAME org for one thread key
+--    (other AI employees' posts count; human posts are never recorded).
 -- 3. acquire_thread_send_lease(org, thread_key, employee, lease, ttl) → jsonb
 --    {state: acquired | busy | denied, expires_at, retry_after_seconds}.
 --    Atomic: inserts, or takes over ONLY an expired row of the same org × key
@@ -49,6 +51,9 @@ create table if not exists public.thread_self_posts (
   primary key (org_id, employee_id, thread_key)
 );
 create index if not exists thread_self_posts_updated_idx on public.thread_self_posts (org_id, updated_at);
+-- "Already replied after the read point" reads every AI employee of the org in one
+-- thread (木村 #286 decision 4): org × thread key, newest first.
+create index if not exists thread_self_posts_thread_idx on public.thread_self_posts (org_id, thread_key, message_micros desc);
 alter table public.thread_self_posts enable row level security;
 revoke all on table public.thread_self_posts from public, anon, authenticated;
 grant select, insert, update, delete on table public.thread_self_posts to service_role;

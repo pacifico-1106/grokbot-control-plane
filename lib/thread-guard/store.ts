@@ -6,8 +6,11 @@
  * - thread_send_leases: one row per org × thread key; acquire is atomic in
  *   acquire_thread_send_lease (insert, or take over only an expired row);
  *   release deletes only the holder's row (org + key + lease id).
- * - thread_self_posts: the employee's latest post per org × thread key
+ * - thread_self_posts: each AI employee's latest post per org × thread key
  *   (µs timestamp + keyed job hash); record_thread_self_post only moves forward.
+ *   Only posts made through Staffpass are recorded, so human posts never count.
+ *   readLatestAiPostAfter reads every AI employee of the SAME org (木村 #286
+ *   decision 4); another org's rows are never read.
  * Every function is scoped by org (and employee for posts): another org's
  * rows are never read, taken over or released. service_role only.
  * Demo mode keeps the same semantics in memory.
@@ -23,13 +26,14 @@ export type LeaseResult =
   | { state: "unavailable"; reason: string };
 
 export type SelfPost = { micros: bigint; jobKey: string | null };
+export type AiPost = SelfPost & { employeeId: string };
 
 const HEX64 = /^[0-9a-f]{64}$/;
 const valid = (orgId: string, threadKey: string) => Boolean(orgId) && HEX64.test(threadKey);
 
 type DemoLease = { leaseId: string; employeeId: string; expiresAtMs: number };
 const demoLeases = new Map<string, DemoLease>();
-const demoPosts = new Map<string, SelfPost>();
+const demoPosts = new Map<string, AiPost>();
 type Failure = null | "acquire" | "read" | "release" | "record";
 let failure: Failure = null;
 
@@ -120,7 +124,7 @@ export async function readLastSelfPost(input: {
   if (!valid(input.orgId, input.threadKey) || !input.employeeId) return { ok: false };
   if (isDemoMode()) {
     const post = demoPosts.get(postKey(input.orgId, input.employeeId, input.threadKey));
-    return { ok: true, post: post ? { ...post } : null };
+    return { ok: true, post: post ? { micros: post.micros, jobKey: post.jobKey } : null };
   }
   const admin = createSupabaseAdminClient();
   if (!admin) return { ok: false };
@@ -142,6 +146,56 @@ export async function readLastSelfPost(input: {
   }
 }
 
+/**
+ * The newest AI post in this thread (any employee of THIS org) strictly after
+ * `afterMicros`, skipping the row whose job key is `excludeJobKey` (the
+ * caller's own same-job post: a multi-part reply). null = none.
+ */
+export async function readLatestAiPostAfter(input: {
+  orgId: string;
+  threadKey: string;
+  afterMicros: bigint;
+  excludeJobKey: string | null;
+}): Promise<{ ok: true; post: AiPost | null } | { ok: false }> {
+  if (failure === "read") return { ok: false };
+  if (!valid(input.orgId, input.threadKey)) return { ok: false };
+  const keep = (p: AiPost) => p.micros > input.afterMicros && !(input.excludeJobKey && p.jobKey === input.excludeJobKey);
+  if (isDemoMode()) {
+    const prefix = `${input.orgId}\u0000`;
+    const suffix = `\u0000${input.threadKey}`;
+    let best: AiPost | null = null;
+    for (const [k, p] of demoPosts) {
+      if (!k.startsWith(prefix) || !k.endsWith(suffix) || !keep(p)) continue;
+      if (!best || p.micros > best.micros) best = p;
+    }
+    return { ok: true, post: best ? { ...best } : null };
+  }
+  const admin = createSupabaseAdminClient();
+  if (!admin) return { ok: false };
+  try {
+    const { data, error } = await admin
+      .from("thread_self_posts")
+      .select("message_micros, job_key, employee_id")
+      .eq("org_id", input.orgId)
+      .eq("thread_key", input.threadKey)
+      .gt("message_micros", input.afterMicros.toString())
+      .order("message_micros", { ascending: false })
+      .limit(25);
+    if (error || !Array.isArray(data)) return { ok: false };
+    for (const raw of data as Array<{ message_micros?: number | string; job_key?: string | null; employee_id?: string }>) {
+      const post: AiPost = {
+        micros: BigInt(String(raw.message_micros ?? "0").split(".")[0] || "0"),
+        jobKey: raw.job_key ?? null,
+        employeeId: String(raw.employee_id ?? ""),
+      };
+      if (keep(post)) return { ok: true, post };
+    }
+    return { ok: true, post: null };
+  } catch {
+    return { ok: false };
+  }
+}
+
 /** The employee's post in this thread (only moves forward). false = not recorded. */
 export async function recordSelfPost(input: {
   orgId: string;
@@ -155,7 +209,7 @@ export async function recordSelfPost(input: {
   if (isDemoMode()) {
     const k = postKey(input.orgId, input.employeeId, input.threadKey);
     const prev = demoPosts.get(k);
-    if (!prev || input.micros > prev.micros) demoPosts.set(k, { micros: input.micros, jobKey: input.jobKey });
+    if (!prev || input.micros > prev.micros) demoPosts.set(k, { micros: input.micros, jobKey: input.jobKey, employeeId: input.employeeId });
     return true;
   }
   const admin = createSupabaseAdminClient();

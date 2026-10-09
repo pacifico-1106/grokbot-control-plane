@@ -5,7 +5,7 @@
  */
 import { appendAuditEvent } from "@/lib/data";
 import type { AuditAction } from "@/lib/types";
-import { THREAD_BUSY, THREAD_GUARD_UNAVAILABLE, THREAD_MOVED_ON, type ThreadGuardCode, type ThreadGuardStop } from "./guard";
+import { THREAD_BUSY, THREAD_GUARD_UNAVAILABLE, THREAD_MOVED_ON, type BeginThreadSend, type ThreadGuardCode, type ThreadGuardStop } from "./guard";
 
 export function isThreadGuardCode(code: unknown): code is ThreadGuardCode {
   return code === THREAD_BUSY || code === THREAD_MOVED_ON || code === THREAD_GUARD_UNAVAILABLE;
@@ -47,6 +47,31 @@ export async function auditThreadGuardStop(stop: ThreadGuardStop, ctx: ThreadGua
       ...(ctx.approvalId ? { approvalId: ctx.approvalId } : {}),
       phase: ctx.phase,
       ...stop.audit,
+    },
+  }).catch(() => undefined);
+}
+
+/**
+ * 木村 #286 decision 1: a send with no read point at all (no readThroughTs and
+ * no inbound ts) goes ahead under the lease only; this marker lets the weekly
+ * report count them. Written for held sends only; a no-op otherwise.
+ */
+export async function auditThreadGuardHeld(send: BeginThreadSend, ctx: ThreadGuardAuditCtx): Promise<void> {
+  if (send.kind !== "held" || !send.readPointUnknown) return;
+  await appendAuditEvent({
+    orgId: ctx.orgId,
+    employeeId: ctx.employeeId,
+    credentialId: ctx.credentialId ?? null,
+    action: "thread_guard.read_point_unknown",
+    purpose: ctx.purpose,
+    summary: "読んだ時点が不明（readThroughTs も受信時刻もなし）のため、スレッドのリースのみで確認",
+    metadata: {
+      tool: ctx.tool,
+      jobId: ctx.jobId,
+      ...(ctx.approvalId ? { approvalId: ctx.approvalId } : {}),
+      phase: ctx.phase,
+      readPoint: "unknown",
+      threadKeyRef: send.threadKeyRef,
     },
   }).catch(() => undefined);
 }

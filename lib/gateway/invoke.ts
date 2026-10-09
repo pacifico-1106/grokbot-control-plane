@@ -6,8 +6,9 @@ import {
   inferRiskForTool,
 } from "@/lib/approvals/summary";
 import { readThroughFromBody } from "@/lib/thread-guard/read-through";
-import { THREAD_GUARD_UNAVAILABLE, beginThreadSend, threadGuardStopBody, type ThreadGuardStop } from "@/lib/thread-guard/guard";
-import { auditThreadGuardStop, isThreadGuardCode, type ThreadGuardAuditCtx } from "@/lib/thread-guard/respond";
+import { THREAD_GUARD_UNAVAILABLE, THREAD_MOVED_ON, beginThreadSend, threadGuardStopBody, type ThreadGuardStop } from "@/lib/thread-guard/guard";
+import { closedByThreadMovedOn } from "@/lib/approvals/closed-without-send";
+import { auditThreadGuardHeld, auditThreadGuardStop, isThreadGuardCode, type ThreadGuardAuditCtx } from "@/lib/thread-guard/respond";
 import { conversationKeyInputFromBody } from "@/lib/comm-reply-dedup/conversation-key";
 import { sendApprovalNeededEmail } from "@/lib/email";
 import { sendApprovalNotifications } from "@/lib/notify/channels";
@@ -1159,6 +1160,31 @@ export async function runGatewayInvoke(
     }
   }
 
+  // Thread single-flight (木村 #286 decision 2): an approval closed at fulfil
+  // because the thread moved on is terminal. A re-run with its approvalId
+  // sends nothing and opens no new approval; the AI re-reads the thread and
+  // files a new request (new jobId) if a reply is still needed. Own approvals
+  // only (getApprovalById is org-scoped; another employee's id falls through).
+  if (
+    priorApproval &&
+    priorApproval.status === "superseded" &&
+    priorApproval.employeeId === employeeId &&
+    closedByThreadMovedOn(priorApproval.metadata)
+  ) {
+    return jsonResult(
+      {
+        ...threadGuardStopBody(THREAD_MOVED_ON, { approvalStatus: "superseded" }),
+        approvalId: priorApproval.id,
+        needs_approval: false,
+        employeeId,
+        tool,
+        purpose,
+        jobId,
+      },
+      409
+    );
+  }
+
   const actionCounts = await getActionCounts({
     orgId: orgId || employee.orgId,
     employeeId,
@@ -2233,6 +2259,10 @@ export async function runGatewayInvoke(
           credentialId: input.credentialId || employee.credentialId, purpose, tool, jobId, phase: "invoke",
         });
       }
+      await auditThreadGuardHeld(threadSend, {
+        orgId: orgId || employee.orgId, employeeId,
+        credentialId: input.credentialId || employee.credentialId, purpose, tool, jobId, phase: "invoke",
+      });
       let threadSent: { sent: boolean; messageTs?: string } = { sent: false };
       try {
       // COMM_REPLY_DEDUP_ENABLED: atomic claim right before the post (two
@@ -2378,6 +2408,10 @@ export async function runGatewayInvoke(
           credentialId: input.credentialId || employee.credentialId, purpose, tool, jobId, phase: "invoke",
         });
       }
+      await auditThreadGuardHeld(threadSend, {
+        orgId: orgId || employee.orgId, employeeId,
+        credentialId: input.credentialId || employee.credentialId, purpose, tool, jobId, phase: "invoke",
+      });
       let allowed = false;
       try {
         if (commReplyDedup.kind !== "off") {

@@ -485,6 +485,7 @@ export type AuditAction =
   | "thread_guard.busy"
   | "thread_guard.moved_on"
   | "thread_guard.unavailable"
+  | "thread_guard.read_point_unknown"
   | "comm_reply.uncertain_released"
   | "approval.telegram_error"
   | "approval.snapshot_missing_attachment"

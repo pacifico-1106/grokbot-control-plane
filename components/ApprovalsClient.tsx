@@ -6,6 +6,7 @@ import { useCallback, useEffect, useState } from "react";
 import { channelErrorMessage } from "@/lib/notify/channel-errors";
 import { actorLabel } from "@/lib/employees/actor-label";
 import { ApprovalAttachmentNotice } from "@/components/approvals/ApprovalAttachmentNotice";
+import { closedWithoutSendInfo } from "@/lib/approvals/closed-without-send";
 import type { PublicApproval } from "@/lib/approvals/public";
 import type { ApprovalRequest, Employee } from "@/lib/types";
 
@@ -397,6 +398,16 @@ export function ApprovalsClient({
                   <p className="text-xs muted mt-0.5 break-words">
                     {[a.tool, a.purpose, a.jobId].filter(Boolean).join(" · ")}
                   </p>
+                  {a.status === "superseded" || a.status === "expired" ? (
+                    (() => {
+                      const closed = closedWithoutSendInfo(a.metadata);
+                      return closed ? (
+                        <p className="text-xs mt-0.5 break-words" data-closed-without-send={closed.reason}>
+                          {closed.messageJa}
+                        </p>
+                      ) : null;
+                    })()
+                  ) : null}
                   {a.revisionNote ? (
                     <p className="text-xs mt-1 break-words">
                       修正指示: {a.revisionNote}

@@ -1,8 +1,9 @@
 import { isDemoMode } from "@/lib/mode";
 import { isThreadSingleFlightEnabled } from "@/lib/feature-flags";
-import { beginThreadSend, type ThreadSendHandle } from "@/lib/thread-guard/guard";
+import { THREAD_MOVED_ON, beginThreadSend, type ThreadSendHandle } from "@/lib/thread-guard/guard";
 import { readThroughFromBody, readThroughFromSnapshot } from "@/lib/thread-guard/read-through";
-import { auditThreadGuardStop } from "@/lib/thread-guard/respond";
+import { auditThreadGuardHeld, auditThreadGuardStop } from "@/lib/thread-guard/respond";
+import { THREAD_MOVED_ON_CLOSE_REASON } from "@/lib/approvals/closed-without-send";
 import { isAdminClassApproval } from "@/lib/admin-mcp/audit-class";
 import { executeApproval } from "@/lib/approvals/execution";
 import {
@@ -28,7 +29,7 @@ import {
   recheckPolicyAtFulfill,
   type FulfillPolicyRecheck,
 } from "@/lib/approvals/fulfill-policy-recheck";
-import { getApprovalById, updateApprovalMetadata } from "@/lib/data/approvals";
+import { closeApprovalWithoutSend, getApprovalById, updateApprovalMetadata } from "@/lib/data/approvals";
 import { normalizePostingAs } from "@/lib/employees/posting-as";
 import {
   buildSnapshotAttachment,
@@ -192,7 +193,8 @@ export type ApprovalFulfillment = {
   uncertainRef?: string;
   /**
    * Thread single-flight stop at fulfil (error thread_busy / thread_moved_on /
-   * thread_guard_unavailable): retryAfterSeconds or readThroughTs + selfPostedTs.
+   * thread_guard_unavailable): retryAfterSeconds, or readThroughTs + aiPostedTs +
+   * postedBy (+ approvalStatus "superseded" when moved_on closed the approval).
    */
   threadGuard?: Record<string, unknown>;
 };
@@ -894,8 +896,10 @@ async function fulfillApprovedInvokeCore(
 
     // THREAD_SINGLE_FLIGHT_ENABLED: the same lease + "already moved on" check
     // as a direct post, against the APPROVED snapshot's read point. Before the
-    // ledger claim, so a stop leaves nothing behind. Stops keep the approval
-    // approved (re-runnable once the thread is free / re-read).
+    // ledger claim, so a stop leaves nothing behind. busy / unavailable keep the
+    // approval approved (re-runnable). moved_on CLOSES it as superseded (stale,
+    // terminal, nothing sent; 木村 #286 decision 2); if the close loses a race
+    // the stop is recorded and the next run re-checks.
     let earlyThread: Awaited<ReturnType<typeof threadOf>> | null = null;
     if (isThreadSingleFlightEnabled()) {
       earlyThread = await threadOf(snapshot, dest);
@@ -911,12 +915,46 @@ async function fulfillApprovedInvokeCore(
         },
         readThrough: readThroughFromSnapshot(snapshot),
       });
+      const threadAuditCtx = {
+        orgId: approval.orgId,
+        employeeId: approval.employeeId,
+        credentialId: approval.credentialId,
+        purpose: approval.purpose,
+        tool: snapshot.tool,
+        jobId: snapshot.jobId,
+        approvalId: approval.id,
+        phase: "fulfil" as const,
+      };
       if (threadSend.kind === "stop") {
-        const guardExtra = Object.fromEntries(
-          ["retryAfterSeconds", "readThroughTs", "selfPostedTs"]
+        const guardExtra: Record<string, unknown> = Object.fromEntries(
+          ["retryAfterSeconds", "readThroughTs", "aiPostedTs", "postedBy"]
             .filter((k) => threadSend.body[k] !== undefined)
             .map((k) => [k, threadSend.body[k]])
         );
+        await auditThreadGuardStop(threadSend, threadAuditCtx);
+        if (threadSend.code === THREAD_MOVED_ON) {
+          const meta = { reason: THREAD_MOVED_ON_CLOSE_REASON, phase: "approval.fulfill", ...guardExtra };
+          const closed = await closeApprovalWithoutSend({ approval, from: ["approved"], to: "superseded", meta }).catch(() => null);
+          if (closed) {
+            approval.status = "superseded";
+            approval.metadata = closed.metadata;
+            await appendAuditEvent({
+              orgId: approval.orgId,
+              employeeId: approval.employeeId,
+              credentialId: approval.credentialId,
+              action: "approval.superseded",
+              purpose: approval.purpose,
+              summary: "承認済みの会話投稿を、スレッドが先に進んだ（読んだ時点より後に AI 社員の投稿あり）ため古いものとして送信せずに終了",
+              metadata: { approvalId: approval.id, tool: snapshot.tool, jobId: snapshot.jobId, ...meta },
+            }).catch(() => undefined);
+            return {
+              ok: false,
+              error: threadSend.code,
+              threadGuard: { ...guardExtra, approvalStatus: "superseded" },
+              at: new Date().toISOString(),
+            };
+          }
+        }
         const blocked: ApprovalFulfillment = {
           ok: false,
           error: threadSend.code,
@@ -924,19 +962,12 @@ async function fulfillApprovedInvokeCore(
           at: new Date().toISOString(),
         };
         await persistFulfillment(approval, blocked);
-        await auditThreadGuardStop(threadSend, {
-          orgId: approval.orgId,
-          employeeId: approval.employeeId,
-          credentialId: approval.credentialId,
-          purpose: approval.purpose,
-          tool: snapshot.tool,
-          jobId: snapshot.jobId,
-          approvalId: approval.id,
-          phase: "fulfil",
-        });
         return blocked;
       }
-      if (threadSend.kind === "held") threadHandle = threadSend.handle;
+      if (threadSend.kind === "held") {
+        threadHandle = threadSend.handle;
+        await auditThreadGuardHeld(threadSend, threadAuditCtx);
+      }
     }
 
     // COMM_REPLY_DEDUP_ENABLED: expired, or the conversation already got a reply

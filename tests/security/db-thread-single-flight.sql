@@ -72,6 +72,15 @@ select security_test.tsf_check((select message_micros = 1791105000000002 and job
 select security_test.tsf_check(not public.record_thread_self_post('c7000000-0000-4000-8000-0000000000a2', 'c7100000-0000-4000-8000-000000000001',
   repeat('a', 64), 1791105000000009, null), 'employee of another org refused');
 select security_test.tsf_check((select count(*) = 0 from public.thread_self_posts where org_id = 'c7000000-0000-4000-8000-0000000000a2'), 'no cross-org row');
+-- the same query the app runs (decision 4): newest post after a point, any employee of THIS org
+select security_test.tsf_check(public.record_thread_self_post('c7000000-0000-4000-8000-0000000000a1', 'c7100000-0000-4000-8000-000000000002',
+  repeat('a', 64), 1791105000000005, null), 'other employee records');
+select security_test.tsf_check(public.record_thread_self_post('c7000000-0000-4000-8000-0000000000a2', 'c7100000-0000-4000-8000-000000000003',
+  repeat('a', 64), 1791105000000099, null), 'other org records on the same key');
+select security_test.tsf_check((select employee_id = 'c7100000-0000-4000-8000-000000000002' from public.thread_self_posts
+  where org_id = 'c7000000-0000-4000-8000-0000000000a1' and thread_key = repeat('a', 64) and message_micros > 1791105000000001
+  order by message_micros desc limit 1), 'latest AI post across employees of the org; other org not visible');
+select security_test.tsf_check(to_regclass('public.thread_self_posts_thread_idx') is not null, 'thread index');
 -- (5)
 select security_test.tsf_check(public.acquire_thread_send_lease('c7000000-0000-4000-8000-0000000000a1', 'not-a-key',
   'c7100000-0000-4000-8000-000000000001', 'c7200000-0000-4000-8000-000000000008', 60)->>'state' = 'denied', 'bad key');

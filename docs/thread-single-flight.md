@@ -15,28 +15,42 @@ against a stale read of the thread, are stopped **before** the provider call.
    id, thread id or text is stored). The lease is across employees: one reply
    per thread at a time. If it is held → **409 `thread_busy`**
    (`retryable: true`, `nextAction: retry_later`, `retryAfterSeconds`).
-   TTL: `THREAD_SINGLE_FLIGHT_LEASE_TTL_SECONDS` (default 60, clamped 15–300) —
+   TTL: `THREAD_SINGLE_FLIGHT_LEASE_TTL_SECONDS` (default 60, kept per decision 5; clamped 15–300) —
    bounds how long a crashed holder can block. Released in `finally` on every
    path (posted, provider error, timeout, dedup stop, egress refusal, throw);
    only the holder (org + key + lease id) can release.
-2. **thread_moved_on.** After a successful post the employee's own post time
+2. **thread_moved_on.** After a successful post the AI employee's post time
    (Slack ts in µs; server time for caller-delivered surfaces) is recorded per
-   org × employee × thread (forward-only). Before the next post, if this
-   employee already posted in the thread **after the read point** → **409
-   `thread_moved_on`** (`retryable: false`, `nextAction: reread_thread`,
-   `readThroughTs`, `selfPostedTs`). Read point: explicit `readThroughTs`
+   org × employee × thread (forward-only). Before the next post, if **any AI
+   employee of the same org** (this one or another; 木村 decision 4) already
+   posted in the thread **after the read point** → **409 `thread_moved_on`**
+   (`retryable: false`, `nextAction: reread_thread`, `readThroughTs`,
+   `aiPostedTs`, `postedBy: self | other_ai_employee` — never the other
+   employee's id). Human posts are never recorded, so they do not count;
+   another org's posts are never read (BOLA). Read point: explicit `readThroughTs`
    (top level, `conversation.readThroughTs` or payload) wins; otherwise the
    inbound message ts. A value more than 120 s in the future is ignored (it
-   could otherwise switch the check off). A newer self post from the **same
-   jobId** does not count (one job posting several parts).
+   could otherwise switch the check off). The caller's own newer post from the
+   **same jobId** does not count (one job posting several parts).
+   `readThroughTs` stays optional (decision 1). With **no read point at all**
+   the send is serialized by the lease only and audited as
+   `thread_guard.read_point_unknown` (`readPoint: "unknown"`) so the weekly
+   report can count it; every stop's audit row carries `readPoint` too.
 3. **Fulfil-time recheck.** For sends that go through approval the explicit
    read point is stored in the approval snapshot, and the lease + moved_on
    check run again at fulfil (webhook auto-fulfil and the approved re-run). A
-   stop is persisted as the fulfilment result (`error: thread_busy |
-   thread_moved_on | thread_guard_unavailable`), audited with
-   `phase: "fulfil"`, and is re-runnable (these codes are in the execution
-   claim's retryable set); the re-run is checked again and can never move the
-   read point (it comes from the approved snapshot, not the re-run request).
+   `thread_busy` / `thread_guard_unavailable` stop is persisted as the
+   fulfilment result, audited with `phase: "fulfil"`, and is re-runnable.
+   **`thread_moved_on` closes the approval** (decision 2): status
+   `superseded`, `closedWithoutSend.reason = "thread_moved_on"`, nothing sent,
+   terminal. A re-run with that approvalId returns 409 `thread_moved_on`
+   (`approvalStatus: "superseded"`) without sending or opening a new approval;
+   the nextStep tells the AI to re-read the thread and file a new request if a
+   reply is still needed. The approver sees "送信していません: …スレッドが先に進みました"
+   on the Web result page, and the status API / employee MCP status return
+   `closedWithoutSend {reason, messageJa, nextStep}` with `pollHint: abort_job`.
+   Audited as `approval.superseded` (`reason: thread_moved_on`). If the close
+   loses a race, the stop is recorded and the next run re-checks.
 
 Order: the thread guard runs **before** the #260 / #278 dedup claim at invoke
 and at fulfil, so a thread stop never leaves a dedup ledger row, and a dedup
@@ -70,7 +84,7 @@ Every id in `lib/comm-reply-dedup/inventory.ts` has a decision in
 | invoke.slack_post (comm.reply / comm.send / slack.post / slack.post_external, bot and posting_as=user) | leased |
 | invoke.caller_delivered (LINE / Telegram / mail / phone) | leased (recorded at server time when allowed) |
 | fulfill.slack_post (approved sends) | leased + recheck at fulfil |
-| invoke.file_upload, rerun.attachment_upload | same reply (only after that reply passed the guard) |
+| invoke.file_upload, rerun.attachment_upload | same reply (only after that reply passed the guard; no separate lease, decision 3) |
 | sns.publish | no thread (dedup v2 applies) |
 | mail send / drive share | no live send |
 | notifications | not AI posting |
@@ -91,15 +105,16 @@ readThroughSource, …}` — hash prefixes only, no text / channel / thread id.
 - No new endpoint, no new approval or override path; the request cannot skip
   the guard (unknown fields are ignored).
 
-## Production steps (operator)
+## Production steps (木村, after 八坂 GO)
 
-1. Apply `20261009100000_thread_single_flight.sql` (additive; re-applicable).
-2. Confirm `COMM_REPLY_DEDUP_HMAC_KEY` (≥ 32 chars) or
-   `NOTIFICATION_CONFIG_ENCRYPTION_KEY` is set (otherwise every guarded post
-   fails closed).
-3. Set `THREAD_SINGLE_FLIGHT_ENABLED=true` (optionally
-   `THREAD_SINGLE_FLIGHT_LEASE_TTL_SECONDS`), redeploy.
-4. Watch `thread_guard.*` audit events; `thread_guard.unavailable` should be ~0.
+1. Merge with the flag OFF (nothing changes).
+2. Apply `20261009100000_thread_single_flight.sql` (additive; re-applicable).
+   The thread key uses `NOTIFICATION_CONFIG_ENCRYPTION_KEY` (confirmed present
+   in prod) unless `COMM_REPLY_DEDUP_HMAC_KEY` is set.
+3. Set `THREAD_SINGLE_FLIGHT_ENABLED=true` (TTL default 60 s), redeploy.
+4. Watch `thread_guard.*` audit events (`thread_guard.unavailable` ~0;
+   `thread_guard.read_point_unknown` is the weekly-report count) and
+   `approval.superseded` with `reason: thread_moved_on`.
 
 Rollback: set the flag OFF (immediate), then optionally run
 `supabase/verification/20261009100000_thread_single_flight_rollback.sql`.

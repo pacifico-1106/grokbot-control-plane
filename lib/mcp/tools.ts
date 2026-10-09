@@ -1,6 +1,7 @@
 import { redactMetadata } from "@/lib/data/redaction";
 import { attachmentStatusField } from "@/lib/approvals/attachment-card";
 import { approvalPollFields } from "@/lib/approvals/poll-hint";
+import { closedByThreadMovedOn, closedWithoutSendInfo } from "@/lib/approvals/closed-without-send";
 /**
  * Staffpass remote MCP tool surface (narrow control-plane only).
  * Confirm/send/order always stop for human approval via shared Gateway invoke.
@@ -94,7 +95,7 @@ export const STAFFPASS_MCP_TOOLS: McpToolDef[] = [
   {
     name: "staffpass_invoke",
     description:
-      "Invoke a Staffpass Gateway tool under the employee badge. Requires purpose + jobId. Unknown tools are rejected. Confirm/send/order (and always_human policy) STOP for human approval — the result includes approvalId, statusToken, pollUrl, pollHint, title, and summary so you can poll without relying on prose Instructions. Re-invoke with approvalId after status=approved. Never bypasses Gateway enforcement. Slack replies: use tool comm.reply and copy the wake's channel / ts / thread_ts / speakerId / speakerTeamId into conversation:{surface:\"slack\", slackChannelId, speakerId, speakerTeamId, ts, thread_ts} (slackChannelId = wake channel; omit thread_ts when null). Optional conversation.readThroughTs (the newest message ts you actually read) lets Staffpass refuse a reply when you already posted in that thread after it; when the operator enables the thread guard a reply can return 409 thread_busy (another reply to the same thread is in flight: retryable, wait retryAfterSeconds) or 409 thread_moved_on (you already replied after readThroughTs: not retryable, re-read the thread and decide again) — follow nextStep. The wake's slackUserId is yourself (the employee) — never use it as the recipient. To delete one of your OWN posts that Staffpass recorded (e.g. a duplicate send), use tool comm.delete with payload {surface:\"slack\", channel, ts} (channel/ts from the post's result); other people's posts and unrecorded posts are refused, LINE / Telegram return not_supported, a repeat returns status already_deleted. Disabled unless the operator turns it on.",
+      "Invoke a Staffpass Gateway tool under the employee badge. Requires purpose + jobId. Unknown tools are rejected. Confirm/send/order (and always_human policy) STOP for human approval — the result includes approvalId, statusToken, pollUrl, pollHint, title, and summary so you can poll without relying on prose Instructions. Re-invoke with approvalId after status=approved. Never bypasses Gateway enforcement. Slack replies: use tool comm.reply and copy the wake's channel / ts / thread_ts / speakerId / speakerTeamId into conversation:{surface:\"slack\", slackChannelId, speakerId, speakerTeamId, ts, thread_ts} (slackChannelId = wake channel; omit thread_ts when null). Optional conversation.readThroughTs (the newest message ts you actually read) lets Staffpass refuse a reply when you already posted in that thread after it; when the operator enables the thread guard a reply can return 409 thread_busy (another reply to the same thread is in flight: retryable, wait retryAfterSeconds) or 409 thread_moved_on (you or another AI employee of your organization already replied after readThroughTs: not retryable, re-read the thread and decide again; for an approved send the approval is then closed as stale — do not re-run it, file a new request if still needed) — follow nextStep. The wake's slackUserId is yourself (the employee) — never use it as the recipient. To delete one of your OWN posts that Staffpass recorded (e.g. a duplicate send), use tool comm.delete with payload {surface:\"slack\", channel, ts} (channel/ts from the post's result); other people's posts and unrecorded posts are refused, LINE / Telegram return not_supported, a repeat returns status already_deleted. Disabled unless the operator turns it on.",
     inputSchema: {
       type: "object",
       properties: {
@@ -760,6 +761,10 @@ export async function callStaffpassMcpTool(
         // Approved attachment: snapshot filename + size only (null = none / not recorded).
         attachment: attachmentStatusField(approval.metadata),
         ...(fulfillmentResult ? { fulfillment: redactMetadata(fulfillmentResult) } : {}),
+        // Thread single-flight (#286 decision 2): closed at fulfil because the thread moved on.
+        ...(status === "superseded" && closedByThreadMovedOn(approval.metadata)
+          ? { closedWithoutSend: closedWithoutSendInfo(approval.metadata) }
+          : {}),
         ...(adminResultRequired ? { resultRetrieval: {
           endpoint: "/api/mcp/admin", tool: fulfillmentResult?.tool, approvalId: approval.id, requiresAdminCredential: true,
         } } : {}),
