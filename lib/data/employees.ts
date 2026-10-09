@@ -19,6 +19,7 @@ import { normalizePostingAs } from "@/lib/employees/posting-as";
 import { normalizeToolApprovalDefaults } from "@/lib/employees/approval-presets";
 import { normalizeApproverUserIds } from "@/lib/employees/approval-inbox";
 import type { ActionLimits, Employee, EmployeeProjectAccess, PostingAs } from "../types";
+import { requireApprovalNotifyEmail } from "@/lib/employees/approval-notify-email";
 import {
   ApproverContextWriteRefusedError,
   assertDemoContextUnchanged,
@@ -178,6 +179,12 @@ export async function issueEmployee(
     acknowledged: input.sodOverrideAcknowledged,
   });
   const actionLimits = normalizeActionLimits(input.actionLimits);
+  // Members-only recipient (2026-10-09): every caller of this writer is checked
+  // here, whatever route it came from. Throws ApprovalNotifyEmailError.
+  const approvalNotifyEmail = await requireApprovalNotifyEmail(
+    isDemoMode() ? (input.orgId ?? DEMO_ORG.id) : input.orgId,
+    input.approvalNotifyEmail
+  );
   if (isDemoMode()) {
     const { randomBytes } = await import("node:crypto");
     const employeeId = `emp_${randomBytes(4).toString("hex")}`;
@@ -197,7 +204,7 @@ export async function issueEmployee(
       actionLimits,
       spend: input.spend,
       allowedAccounts: input.allowedAccounts ?? [],
-      approvalNotifyEmail: input.approvalNotifyEmail ?? null,
+      approvalNotifyEmail,
       callbackUrl: input.callbackUrl ?? null,
       approvalRoutineText: input.approvalRoutineText ?? null,
       managerId: input.managerId ?? null,
@@ -243,7 +250,7 @@ export async function issueEmployee(
       action_limits: actionLimits,
       spend: input.spend ?? null,
       allowed_accounts: input.allowedAccounts ?? [],
-      approval_notify_email: input.approvalNotifyEmail ?? null,
+      approval_notify_email: approvalNotifyEmail,
       callback_url: input.callbackUrl ?? null,
       approval_routine_text: input.approvalRoutineText ?? null,
       manager_id: input.managerId ?? null,

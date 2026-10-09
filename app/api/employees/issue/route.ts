@@ -25,6 +25,7 @@ import { ProjectAccessOrgError, projectAccessRefusalBody, projectAccessRefusalSt
 import { requireCredentialAdmin } from "@/lib/auth/require-credential-admin";
 import { isMcpEndpointHandoffEnabled } from "@/lib/feature-flags";
 import { buildMcpHandoff } from "@/lib/mcp/endpoint-handoff-block";
+import { ApprovalNotifyEmailError, APPROVAL_NOTIFY_EMAIL_MESSAGES_JA, validateApprovalNotifyEmail } from "@/lib/employees/approval-notify-email";
 import type { ActionLimits, AllowedAccount, ApprovalPolicy, EmployeeScope, SpendLimits } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -123,6 +124,16 @@ export async function POST(req: Request) {
     return NextResponse.json(policyErrorPayload("sod_ack_required"), { status: 400 });
   }
 
+  // Members-only recipient: an ACTIVE member of this org (case-insensitive).
+  // The address is never echoed back in the error.
+  const notifyEmail = await validateApprovalNotifyEmail(orgId, body.approvalNotifyEmail);
+  if (!notifyEmail.ok) {
+    return NextResponse.json(
+      { ok: false, error: notifyEmail.code, code: notifyEmail.code, message: notifyEmail.messageJa },
+      { status: notifyEmail.code === "approval_notify_email_unverified" ? 503 : 400 }
+    );
+  }
+
   const secret = issueSecret();
   const expiresInDays = Math.min(365, Math.max(1, body.expiresInDays || 30));
   const expiresAt = new Date(
@@ -158,7 +169,7 @@ export async function POST(req: Request) {
       actionLimits,
       spend,
       allowedAccounts,
-      approvalNotifyEmail: body.approvalNotifyEmail?.trim() || null,
+      approvalNotifyEmail: notifyEmail.email,
       callbackUrl: body.callbackUrl?.trim() || null,
       approvalRoutineText,
       managerId: body.managerId?.trim() || null,
@@ -253,6 +264,14 @@ export async function POST(req: Request) {
   } catch (e) {
     if (e instanceof ProjectAccessOrgError) {
       return NextResponse.json(projectAccessRefusalBody(e), { status: projectAccessRefusalStatus(e) });
+    }
+    if (e instanceof ApprovalNotifyEmailError) {
+      // The writer re-checks; a lookup failure there is "could not verify"
+      // (503, retry later), never "not a member" (400).
+      return NextResponse.json(
+        { ok: false, error: e.code, code: e.code, message: APPROVAL_NOTIFY_EMAIL_MESSAGES_JA[e.code] },
+        { status: e.code === "approval_notify_email_unverified" ? 503 : 400 }
+      );
     }
     const raw = e instanceof Error ? e.message : "issue_failed";
     const code = raw in POLICY_ERROR_MESSAGES ? raw : "issue_failed";
