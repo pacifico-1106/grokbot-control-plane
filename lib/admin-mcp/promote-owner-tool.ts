@@ -28,6 +28,7 @@ import { getVerifiedApprover } from "@/lib/approver-authority";
 import { promoteOwnerApproverConflict, requesterMemberIdsFromMetadata } from "@/lib/approver-authority/decide";
 import { PROMOTE_OWNER_TOOL } from "@/lib/approver-authority/targets";
 import type { ApprovalRequest } from "@/lib/types";
+import { requesterCardLineJa, requesterMetadata, resolveAdminRequester, SLACK_USER_ID_FORMAT } from "@/lib/admin-mcp/requester-identity";
 
 export { PROMOTE_OWNER_TOOL };
 
@@ -41,11 +42,20 @@ function fail(code: string, message: string): ToolOutcome & { title?: string } {
 export async function handlePromoteOwnerTool(
   args: Record<string, unknown>,
   cred: ResolvedAdminCredential
-): Promise<ToolOutcome & { title?: string }> {
+): Promise<ToolOutcome & { title?: string; extraMetadata?: Record<string, unknown> }> {
   if (!isOwnerPromotionEnabled()) return fail("feature_disabled", FLAG_OFF_MESSAGE);
   // { memberId } only: no invite (email / role / capabilities), no orgId.
-  const unsafe = rejectUnsafeArgs(args, ["memberId", "jobId"]);
+  // requesterSlackUserId: the person who asked the admin agent (#289 review). Never a member id.
+  const unsafe = rejectUnsafeArgs(args, ["memberId", "jobId", "requesterSlackUserId"]);
   if (unsafe) return unsafe;
+  let requesterSlackUserId: string | null = null;
+  if (args.requesterSlackUserId !== undefined && args.requesterSlackUserId !== null && args.requesterSlackUserId !== "") {
+    const raw = typeof args.requesterSlackUserId === "string" ? args.requesterSlackUserId.trim().toUpperCase() : "";
+    if (!SLACK_USER_ID_FORMAT.test(raw)) {
+      return fail("invalid_requester_slack_user_id", "requesterSlackUserId は依頼した人の Slack user ID（U…）で指定してください。");
+    }
+    requesterSlackUserId = raw;
+  }
   const memberId = typeof args.memberId === "string" ? args.memberId.trim() : "";
   if (!memberId || memberId.length > 128) {
     return fail("member_id_required", "memberId（この組織の既存メンバーの ID）を指定してください。招待と同時のオーナー追加はできません。");
@@ -58,8 +68,10 @@ export async function handlePromoteOwnerTool(
   }
   if (target.role === "owner") return fail("already_owner", "このメンバーはすでにオーナーです。");
   const beforeCapabilities = [...(target.capabilities ?? [])];
+  const requester = await resolveAdminRequester(cred.orgId, requesterSlackUserId);
   return {
     kind: "queue",
+    extraMetadata: requesterMetadata(requester),
     title: "オーナーの追加（既存オーナーの承認が必要）",
     queuedArgs: { memberId: target.id, beforeRole: target.role, beforeCapabilities, beforeStatus: target.status },
     summary: [
@@ -67,6 +79,7 @@ export async function handlePromoteOwnerTool(
       "承認できるのは既存のオーナー1名です。対象者本人は承認できません。オーナーが2人以上いるときは、申請者以外のオーナーが承認します。",
       "承認されると、オーナー標準の権限が付き、オーナー全員と対象者に1回だけ通知されます。",
       "",
+      requesterCardLineJa(requester),
       `■ 現在の席種別: ${target.role}`,
       "■ 変更後: owner（オーナー標準の権限）",
     ].join("\n"),

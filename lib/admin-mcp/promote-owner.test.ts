@@ -163,7 +163,6 @@ describe("approval and fulfil", () => {
     expect(codeOf(await fulfillPromoteOwner({ ...approved, approverMemberId: TARGET }, args))).toBe("approver_is_target");
     // 2 owners: the recorded requester as approver is refused at fulfil too
     expect(codeOf(await fulfillPromoteOwner({ ...approved, approverMemberId: OWNER }, args))).toBe("approver_is_requester");
-    setRuntimeMember({ ...member("mem_po_owner2", "owner"), status: "disabled" });
     upsertRuntimeMember({ ...member(TARGET, "member") }, { audit: false });
     expect(codeOf(await fulfillPromoteOwner(approved, args))).toBe("concurrent_modification");
     upsertRuntimeMember({ ...member(TARGET, "admin", "disabled") }, { audit: false });
@@ -201,7 +200,7 @@ describe("who may approve (木村 2026-10-09) — requester recorded through the
     const ticket = await ticketOf(await promote({ memberId: TARGET, requesterSlackUserId: REQ_SLACK }));
     expect(ticket.metadata.requesterMemberId).toBe(OWNER);
     expect(ticket.metadata.requesterIdentity).toMatchObject({ source: "admin_agent_declared_slack_user", matchedBy: "verified_voter_binding", memberId: OWNER });
-    expect(ticket.summary).toContain("依頼者: mem_1");
+    expect(ticket.summary).toContain("依頼者: 山田 太郎");
     const refused = await approve(ticket.id, OWNER);
     expect(refused.ok).toBe(false);
     expect(refused.reason).toBe("approver_is_requester");

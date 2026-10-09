@@ -1465,11 +1465,15 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
   {
     name: "members.promoteOwner",
     description:
-      "File a request to make an EXISTING ACTIVE member of this org an owner (オーナー追加; always_human; requires OWNER_PROMOTION_ENABLED and APPROVER_AUTHORITY_ENABLED). memberId only — no invite (cannot add a new person as owner), no role / capabilities / orgId arguments. Exactly one existing owner approves; the requester and the member being promoted cannot approve, and a designated admin's approval leaves it オーナー承認待ち. When applied: role owner with the standard owner capabilities, re-checked against the current member row (unchanged since filing, still active, not already owner) through the team member-change guard; every owner and the member are notified; audited (before/after, approving owner, ticket). Removing an owner or transferring ownership is not available. Org from the credential. Re-invoke with approvalId to read the result.",
+      "File a request to make an EXISTING ACTIVE member of this org an owner (オーナー追加; always_human; requires OWNER_PROMOTION_ENABLED and APPROVER_AUTHORITY_ENABLED). memberId only — no invite (cannot add a new person as owner), no role / capabilities / orgId arguments. Exactly one existing owner approves. The member being promoted can never approve. With 2+ owners the requester cannot approve — the requester is known only when you pass requesterSlackUserId and it matches this org's verified approver registration; otherwise the card says the requester cannot be identified. A sole owner may approve their own request. A designated admin's approval leaves it オーナー承認待ち. When applied: role owner with the standard owner capabilities, re-checked against the current member row (unchanged since filing, still active, not already owner) through the team member-change guard; every owner and the member are notified; audited (before/after, approving owner, ticket). Removing an owner or transferring ownership is not available. Org from the credential. Re-invoke with approvalId to read the result.",
     inputSchema: {
       type: "object",
       properties: {
         memberId: { type: "string", description: "org_members ID of an active non-owner member of this org" },
+        requesterSlackUserId: {
+          type: "string",
+          description: "Slack user ID (U…) of the person who asked you to file this. Pass it whenever you know it: it is matched to a member only through this org's verified approver registration, and that member then cannot approve when the org has 2+ owners. Without it the card says the requester cannot be identified.",
+        },
         jobId: { type: "string" },
         approvalId: { type: "string", description: "Re-invoke with approved ticket ID" },
       },
@@ -2352,6 +2356,7 @@ export async function callAdminMcpTool(
       rawArgsForSecretScan: args,
       title: outcome.title,
       summary: outcome.summary,
+      extraMetadata: outcome.extraMetadata,
     });
     return toolResult(queued, false);
   }
