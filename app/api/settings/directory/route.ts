@@ -6,27 +6,13 @@ import {
   listOrgParties,
   upsertInformationAsset,
 } from "@/lib/data";
-import { PROJECT_NOT_FOUND } from "@/lib/data/directory";
 import type { InformationClass } from "@/lib/types";
 import { DASHBOARD_DIRECTORY_LOCKED_JA } from "@/lib/dashboard/policy-lock";
-
-/**
- * Another org's project and an unknown id get the same 404, so the response
- * never confirms that a foreign project id exists.
- */
-function projectNotFound() {
-  return NextResponse.json(
-    {
-      ok: false,
-      error: PROJECT_NOT_FOUND,
-      code: PROJECT_NOT_FOUND,
-      message: "指定したプロジェクトはこの組織にありません",
-      nextStep: "Pick a project from this org's project list (GET /api/settings/projects), or send projectId: null for the default project.",
-      retryable: false,
-    },
-    { status: 404 }
-  );
-}
+import {
+  ProjectAccessOrgError,
+  projectAccessRefusalBody,
+  projectAccessRefusalStatus,
+} from "@/lib/employees/project-access-org";
 
 function directoryLocked() {
   return NextResponse.json(
@@ -72,13 +58,16 @@ export async function PUT(req: Request) {
         ref,
         class: infoClass,
         projectId,
+        projectAudit: { path: "web.settings.directory", actorEmail: gate.email },
       });
       return NextResponse.json({ ok: true, asset });
     }
     return NextResponse.json({ error: "invalid_record" }, { status: 400 });
   } catch (error) {
+    if (error instanceof ProjectAccessOrgError) {
+      return NextResponse.json(projectAccessRefusalBody(error), { status: projectAccessRefusalStatus(error) });
+    }
     const message = error instanceof Error ? error.message : "upsert_failed";
-    if (message === PROJECT_NOT_FOUND) return projectNotFound();
     return NextResponse.json({ error: message }, { status: 400 });
   }
 }

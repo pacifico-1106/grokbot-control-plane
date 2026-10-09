@@ -1,7 +1,8 @@
 /**
  * PR-SEC2: PUT /api/settings/directory (record=asset) must not trust
  * body.projectId. A project that is not in the caller's org (another org's
- * project, or an unknown id) is 404 project_not_found — the same answer for
+ * project, or an unknown id) is 400 project_access_cross_org (#296's check,
+ * kept when #284 and #296 met in upsertInformationAsset) — the same answer for
  * both, so the response does not confirm that another org's id exists — and
  * nothing is written. The org always comes from the session, never the body.
  *
@@ -68,31 +69,31 @@ describe("PUT /api/settings/directory record=asset projectId", () => {
     expect(body.asset.orgId).toBe(ORG);
   });
 
-  test("BOLA: another org's project → 404 project_not_found, nothing written", async () => {
+  test("BOLA: another org's project → 400 project_access_cross_org, nothing written", async () => {
     const r = ref();
     const res = await put({ record: "asset", ref: r, class: "internal", projectId: foreignProjectId });
-    expect(res.status).toBe(404);
+    expect(res.status).toBe(400);
     const body = await res.json();
-    expect(body.error).toBe("project_not_found");
-    expect(body.retryable).toBe(false);
+    expect(body.ok).toBe(false);
+    expect(body.error).toBe("project_access_cross_org");
     expect(typeof body.nextStep).toBe("string");
     expect((await listInformationAssets(ORG)).some((a) => a.ref === r)).toBe(false);
   });
 
-  test("BOLA: re-pointing an existing asset at another org's project → 404, asset unchanged", async () => {
+  test("BOLA: re-pointing an existing asset at another org's project → 400, asset unchanged", async () => {
     const r = ref();
     expect((await put({ record: "asset", ref: r, class: "internal", projectId: DEMO_PROJECT_A_ID })).status).toBe(200);
     const res = await put({ record: "asset", ref: r, class: "restricted", projectId: foreignProjectId });
-    expect(res.status).toBe(404);
+    expect(res.status).toBe(400);
     const row = (await listInformationAssets(ORG)).find((a) => a.ref === r);
     expect(row?.projectId).toBe(DEMO_PROJECT_A_ID);
     expect(row?.class).toBe("internal");
   });
 
-  test("unknown project id → the same 404 (no existence oracle)", async () => {
+  test("unknown project id → the same 400 (no existence oracle)", async () => {
     const res = await put({ record: "asset", ref: ref(), projectId: "prj_does_not_exist" });
-    expect(res.status).toBe(404);
-    expect((await res.json()).error).toBe("project_not_found");
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toBe("project_access_cross_org");
   });
 
   test("projectId null / omitted → 200 (org default project), unchanged", async () => {
@@ -109,7 +110,7 @@ describe("PUT /api/settings/directory record=asset projectId", () => {
     expect((await listInformationAssets(ORG)).some((a) => a.ref === r)).toBe(false);
     // …and cannot point at the demo org's project either.
     const cross = await put({ record: "asset", ref: ref(), projectId: DEMO_PROJECT_A_ID });
-    expect(cross.status).toBe(404);
+    expect(cross.status).toBe(400);
   });
 
   test("plain member → 403; unauthenticated → 401 (gate unchanged)", async () => {
@@ -122,10 +123,10 @@ describe("PUT /api/settings/directory record=asset projectId", () => {
 });
 
 describe("upsertInformationAsset (data layer) re-checks project ownership", () => {
-  test("another org's project → throws project_not_found, nothing written", async () => {
+  test("another org's project → throws project_access_cross_org, nothing written", async () => {
     const r = ref();
     await expect(upsertInformationAsset({ orgId: ORG, ref: r, class: "internal", projectId: foreignProjectId })).rejects.toThrow(
-      "project_not_found"
+      "project_access_cross_org"
     );
     expect((await listInformationAssets(ORG)).some((a) => a.ref === r)).toBe(false);
   });

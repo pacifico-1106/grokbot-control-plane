@@ -5,7 +5,6 @@
 
 import { DEMO_ORG } from "@/lib/demo-data";
 import { isDemoMode } from "@/lib/mode";
-import { getOrgProject } from "@/lib/data/projects";
 import { createSupabaseAdminClient } from "@/lib/supabase";
 import { inspectSlackChannelExtShared } from "@/lib/slack/bot-token";
 import type {
@@ -576,19 +575,20 @@ export async function getInformationAsset(orgId: string, ref: string): Promise<I
   return mapAssetRow(data as Record<string, unknown>);
 }
 
-/** Thrown when a projectId does not name a project of the asset's org (→ 404 at the route). */
-export const PROJECT_NOT_FOUND = "project_not_found" as const;
-
 /**
  * projectId is caller input: a non-null value must name an org_projects row of
- * input.orgId (another org's project or an unknown id → project_not_found,
- * nothing written). null clears to the org default; undefined leaves it as is.
+ * input.orgId. Another org's project or an unknown id → ProjectAccessOrgError
+ * project_access_cross_org (one IDs-only audit row, nothing written); lookup
+ * error → project_access_unverified. null clears to the org default;
+ * undefined leaves it as is. (#284 and #296 both added this check; #296's is kept.)
  */
 export async function upsertInformationAsset(input: {
   orgId: string;
   ref: string;
   class: InformationClass;
   projectId?: string | null;
+  /** Audit context for a project_id refusal (IDs only). */
+  projectAudit?: { path: string; actorEmail?: string | null };
 }): Promise<InformationAsset> {
   const ref = input.ref.trim();
   if (!ref) throw new Error("ref_required");
@@ -599,9 +599,14 @@ export async function upsertInformationAsset(input: {
       : input.projectId
         ? String(input.projectId).trim() || null
         : null;
+  // project_id must be a project of this org (null = 会社全般). Refuse before any write.
   if (projectId) {
-    const project = await getOrgProject(input.orgId, projectId);
-    if (!project || project.orgId !== input.orgId) throw new Error(PROJECT_NOT_FOUND);
+    const { assertAssetProjectSameOrg } = await import("@/lib/employees/project-access-org");
+    await assertAssetProjectSameOrg({
+      orgId: input.orgId,
+      projectId,
+      audit: input.projectAudit ?? { path: "data.upsertInformationAsset" },
+    });
   }
   if (isDemoMode()) {
     const existing = runtimeAssets.find((row) => row.orgId === input.orgId && row.ref === ref);

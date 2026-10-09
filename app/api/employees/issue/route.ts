@@ -21,6 +21,7 @@ import { defaultVoice, normalizeVoice } from "@/lib/employees/voice";
 import { defaultProjectAccess, normalizeProjectAccess } from "@/lib/employees/project-access";
 import { normalizePostingAs } from "@/lib/employees/posting-as";
 import { normalizeApproverUserIds, parseApprovalChannelId } from "@/lib/employees/approval-inbox";
+import { ProjectAccessOrgError, projectAccessRefusalBody, projectAccessRefusalStatus } from "@/lib/employees/project-access-org";
 import { requireCredentialAdmin } from "@/lib/auth/require-credential-admin";
 import { isMcpEndpointHandoffEnabled } from "@/lib/feature-flags";
 import { buildMcpHandoff } from "@/lib/mcp/endpoint-handoff-block";
@@ -173,6 +174,7 @@ export async function POST(req: Request) {
       approvalRoutineText,
       managerId: body.managerId?.trim() || null,
       voice: body.voice == null ? defaultVoice() : normalizeVoice(body.voice),
+      projectAccessAudit: { path: "web.employees.issue", phase: "write", actorEmail: gate.actor.email ?? null },
       projectAccess:
         body.projectAccess == null
           ? defaultProjectAccess()
@@ -260,6 +262,9 @@ export async function POST(req: Request) {
         : {}),
     });
   } catch (e) {
+    if (e instanceof ProjectAccessOrgError) {
+      return NextResponse.json(projectAccessRefusalBody(e), { status: projectAccessRefusalStatus(e) });
+    }
     if (e instanceof ApprovalNotifyEmailError) {
       // The writer re-checks; a lookup failure there is "could not verify"
       // (503, retry later), never "not a member" (400).

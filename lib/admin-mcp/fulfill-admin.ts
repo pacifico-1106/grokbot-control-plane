@@ -1,3 +1,4 @@
+import { ProjectAccessOrgError, projectAccessRefusalBody } from "@/lib/employees/project-access-org";
 import { recordSetupToolSucceeded } from "@/lib/approvals/attachment-retry-cap";
 import { buildMcpHandoff, parseMcpHandoff, type McpHandoff } from "@/lib/mcp/endpoint-handoff-block";
 import { isMcpEndpointHandoffEnabled } from "@/lib/feature-flags";
@@ -578,8 +579,11 @@ async function fulfillIssue(approval: ApprovalRequest, args: Record<string, unkn
   const spend = hasOrder
     ? normalizeSpendLimits((args.spend as Partial<SpendLimits> | null) ?? {})
     : null;
-  const result = await issueEmployee({
+  let result: Awaited<ReturnType<typeof issueEmployee>>;
+  try {
+  result = await issueEmployee({
     orgId: approval.orgId,
+    projectAccessAudit: { path: "admin_mcp.employees.issue", phase: "fulfil", approvalId: approval.id, actorEmail: approval.resolvedBy ?? null },
     displayName,
     roleLabel,
     jobDescription: String(args.jobDescription || ""),
@@ -613,6 +617,15 @@ async function fulfillIssue(approval: ApprovalRequest, args: Record<string, unkn
     auditSummary: `${displayName} の社員証を発行（管理MCP・人承認後）`,
     actorEmail: approval.resolvedBy ?? null,
   });
+  } catch (error) {
+    // Same-org projectIds re-checked at fulfil (#284 decision 4): a project
+    // deleted / moved since filing → not issued (audited inside, IDs only).
+    if (error instanceof ProjectAccessOrgError) {
+      const body = projectAccessRefusalBody(error);
+      return { ok: false, tool: "employees.issue", at: new Date().toISOString(), error: body.code, nextStepJa: `${body.message}${body.nextStep}` };
+    }
+    throw error;
+  }
   await appendAuditEvent({
     orgId: approval.orgId,
     employeeId: result.employee.id,
