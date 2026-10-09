@@ -7,7 +7,7 @@ import {
   APPROVER_AUTHORITY_TARGETS,
   classifyApproverRequirement,
   isApproverAuthorityTargetTool,
-  schedulingCostCapsSignature,
+  schedulingRulesState,
 } from "@/lib/approver-authority/targets";
 
 const kind = (tool: string, adminMutation?: Record<string, unknown>, extra: Record<string, unknown> = {}, context?: Parameters<typeof classifyApproverRequirement>[0]["context"]) =>
@@ -190,7 +190,10 @@ describe("木村 2026-10-09 22:48 decision 2: eight more tools are targets; defa
     "orgs.patch": { orgId: "org_x", name: "New name" },
     "stuckWatch.patch": { enabled: true, maxAutoRetries: 2, autoRetryFaultClasses: ["ops_fault"] },
   };
-  const noCaps = { schedulingCostCaps: { current: schedulingCostCapsSignature({ rules: [] }), ifCleared: schedulingCostCapsSignature({ rules: [] }) } };
+  const sched = (current: unknown, ifCleared: unknown = { rules: [] }) => ({
+    schedulingRules: { current: schedulingRulesState(current as never), ifCleared: schedulingRulesState(ifCleared as never) },
+  });
+  const noCaps = sched({ rules: [] });
   for (const tool of EIGHT) {
     test(`${tool}: standard target`, () => {
       expect(isApproverAuthorityTargetTool(tool)).toBe(true);
@@ -199,28 +202,59 @@ describe("木村 2026-10-09 22:48 decision 2: eight more tools are targets; defa
     });
   }
 
+  const classifySched = (mutation: Record<string, unknown>, context: Record<string, unknown> | null) =>
+    classifyApproverRequirement({ tool: "schedulingPolicy.patch", metadata: { adminMutation: mutation }, context: context as never });
+  const withCap = (cap: unknown) => ({ policyName: "P", rules: [{ id: "r1", confirmAutomation: "manual", costCapJpy: cap }] });
+
   test("schedulingPolicy.patch: a cost cap (costCapJpy) added, changed or removed → owner; unchanged → standard", () => {
-    const withCap = (cap: number) => ({ policyName: "P", rules: [{ id: "r1", confirmAutomation: "manual", costCapJpy: cap }] });
-    const current5000 = { schedulingCostCaps: { current: schedulingCostCapsSignature(withCap(5000)), ifCleared: schedulingCostCapsSignature({ rules: [] }) } };
-    const classify = (mutation: Record<string, unknown>, context: Record<string, unknown> | null) =>
-      classifyApproverRequirement({ tool: "schedulingPolicy.patch", metadata: { adminMutation: mutation }, context: context as never });
+    const current5000 = sched(withCap(5000));
     // added
-    expect(classify(withCap(5000), noCaps)).toEqual({ kind: "owner", reasons: ["money_cost_cap"] });
+    expect(classifySched(withCap(5000), noCaps)).toEqual({ kind: "owner", reasons: ["money_cost_cap"] });
     // changed
-    expect(classify(withCap(9000), current5000)?.kind).toBe("owner");
+    expect(classifySched(withCap(9000), current5000)?.kind).toBe("owner");
     // removed (rules without a cap replace a capped policy)
-    expect(classify(typical["schedulingPolicy.patch"], current5000)?.kind).toBe("owner");
+    expect(classifySched(typical["schedulingPolicy.patch"], current5000)?.kind).toBe("owner");
     // unchanged
-    expect(classify(withCap(5000), current5000)?.kind).toBe("owner_or_designated_admin");
-    // clearOverride inherits the org policy: caps differ → owner; same → standard
-    expect(classify({ employeeId: "emp_1", clearOverride: true }, current5000)?.kind).toBe("owner");
-    expect(classify({ employeeId: "emp_1", clearOverride: true }, noCaps)?.kind).toBe("owner_or_designated_admin");
+    expect(classifySched(withCap(5000), current5000)?.kind).toBe("owner_or_designated_admin");
+    // clearOverride (with employeeId) inherits the org policy: rules differ under a cap → owner; same → standard
+    expect(classifySched({ employeeId: "emp_1", clearOverride: true }, current5000)?.kind).toBe("owner");
+    expect(classifySched({ employeeId: "emp_1", clearOverride: true }, noCaps)?.kind).toBe("owner_or_designated_admin");
     // current policy unreadable → cannot tell whether a cap changes → owner
-    expect(classify(typical["schedulingPolicy.patch"], null)).toEqual({ kind: "owner", reasons: ["money_cost_cap_unverified"] });
+    expect(classifySched(typical["schedulingPolicy.patch"], null)).toEqual({ kind: "owner", reasons: ["money_cost_cap_unverified"] });
+  });
+
+  // 木村 round 3 F1: apply.ts keeps a candidate if ANY rule passes, so an extra
+  // uncapped rule (or a looser sibling rule) defeats a cap without touching it.
+  test("F1: with a cap before or after, ANY rules change → owner (an added uncapped rule; a loosened sibling rule)", () => {
+    const r1 = { id: "r1", confirmAutomation: "manual", costCapJpy: 5000 };
+    const r2 = { id: "r2", confirmAutomation: "manual", travelBufferMinutes: 30 };
+    const current = sched({ rules: [r1] });
+    expect(classifySched({ policyName: "P", rules: [r1, { id: "r2", confirmAutomation: "manual" }] }, current)).toEqual({ kind: "owner", reasons: ["money_cost_cap"] });
+    const withSibling = sched({ rules: [r1, r2] });
+    expect(classifySched({ policyName: "P", rules: [r1, { ...r2, travelBufferMinutes: 0 }] }, withSibling)?.kind).toBe("owner");
+    // same rules, keys in a different order → not a change
+    expect(classifySched({ policyName: "P2", rules: [{ costCapJpy: 5000, confirmAutomation: "manual", id: "r1" }, { travelBufferMinutes: 30, id: "r2", confirmAutomation: "manual" }] }, withSibling)?.kind)
+      .toBe("owner_or_designated_admin");
+    // no cap before or after → rule edits stay standard
+    expect(classifySched({ policyName: "P", rules: [r2, { id: "r3", confirmAutomation: "manual" }] }, sched({ rules: [r2] }))?.kind).toBe("owner_or_designated_admin");
+  });
+
+  // 木村 round 3 F3: save-time validation turns costCapJpy: null into a cap of 0
+  // (Number(null)); clearOverride only inherits when employeeId is present.
+  test("F3: costCapJpy null counts as a cap of 0 (as at save); clearOverride without employeeId is a normal replace", () => {
+    expect(classifySched(withCap(null), noCaps)).toEqual({ kind: "owner", reasons: ["money_cost_cap"] });
+    expect(classifySched(withCap(null), sched(withCap(0)))?.kind).toBe("owner_or_designated_admin");
+    expect(schedulingRulesState(withCap(null)).capped).toBe(true);
+    // no employeeId: the handler saves args.rules to the org → compared as a replace, not with ifCleared
+    const capped = sched(withCap(5000), { rules: [] });
+    expect(classifySched({ clearOverride: true, ...withCap(5000) }, capped)?.kind).toBe("owner_or_designated_admin");
+    expect(classifySched({ clearOverride: true }, capped)?.kind).toBe("owner");
+    expect(classifySched({ clearOverride: true, employeeId: "  " }, capped)?.kind).toBe("owner");
   });
 
   test("no other money field in the eight: content that only looks risky stays standard", () => {
-    // stuckWatch retries re-evaluate approval gates (approvalId stripped), so retry settings do not weaken money approval
+    // stuckWatch W2 re-runs re-verify the stored approver and re-execute with the same jobId (no new approval gate);
+    // money tools are in W2_MANUAL_REINVOKE_ONLY_TOOLS, so retry settings never re-run a money ticket on their own
     expect(kind("stuckWatch.patch", { enabled: true, maxAutoRetries: 5, autoRetryFaultClasses: ["ops_fault", "config_drift"] })).toBe("owner_or_designated_admin");
     // ingress Sealith hints (contract / quote) choose how a document is handed over, not who approves money
     expect(kind("ingressHandoff.patch", { policyName: "P", rules: [{ id: "r1", applyTo: "all", body: "none", attachment: "none", sealith: "required", sealithRequiredHints: ["quote"] }] })).toBe("owner_or_designated_admin");

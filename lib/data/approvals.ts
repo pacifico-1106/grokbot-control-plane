@@ -26,7 +26,7 @@ import { isAdminClassApproval } from "@/lib/admin-mcp/audit-class";
 import { initializeWorkflowForApproval } from "@/lib/approval-workflow/resolve";
 import { resolveApprovalWithWorkflow, type WorkflowResolverOptions } from "@/lib/approvals/workflow-integration";
 import { isApproverAuthorityEnabled } from "@/lib/feature-flags";
-import { approverRequirementForFiling } from "@/lib/approver-authority/filing";
+import { approverAuthorityRecordForFiling, approverRequirementForFiling } from "@/lib/approver-authority/filing";
 import { checkApproverAuthority, recordApproverAuthority } from "@/lib/approver-authority/verify";
 import { requesterMemberIdsFromMetadata } from "@/lib/approver-authority/decide";
 
@@ -176,7 +176,7 @@ export async function createApproval(
     if (approverRequirement) {
       const patch = {
         requiredApproverKind: approverRequirement.kind,
-        approverAuthority: { reasons: approverRequirement.reasons, requiredApprovals: approverRequirement.requiredApprovals },
+        approverAuthority: approverAuthorityRecordForFiling(approverRequirement),
       };
       approval = (await demoUpdateApproval(approval.id, patch)) ?? { ...approval, ...patch };
     }
@@ -226,10 +226,7 @@ export async function createApproval(
   };
   if (approverRequirement) {
     insertPayload.required_approver_kind = approverRequirement.kind;
-    insertPayload.approver_authority = {
-      reasons: approverRequirement.reasons,
-      requiredApprovals: approverRequirement.requiredApprovals,
-    };
+    insertPayload.approver_authority = approverAuthorityRecordForFiling(approverRequirement);
   }
 
   let { data, error } = await admin

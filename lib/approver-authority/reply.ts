@@ -27,6 +27,8 @@ const REASON_JA: Record<ApproverAuthorityResultReason, string> = {
   approver_is_target: "オーナーに追加される本人は、この申請を承認できません。",
   approver_class_missing:
     "この申請は承認者チェックを有効にする前に出されたもので、誰が承認できるかの条件が記録されていないため実行しませんでした。",
+  approver_context_changed:
+    "申請のあとに対象の今の設定が変わった（または確認できなかった）ため実行しませんでした。このまま反映すると、その後の変更を元に戻してしまうおそれがあります。",
   requester_not_identified:
     "オーナーが2人以上いるため申請者以外のオーナーの承認が必要ですが、この申請の依頼者を確認できないため止めました（まだ反映していません）。",
 };
@@ -41,6 +43,7 @@ const NEXT_STEP_JA: Partial<Record<ApproverAuthorityResultReason, string>> = {
   approver_identity_unverified: "承認者登録（approvalWorkflow.bindVoter）で、このアカウントをご本人のメンバーに紐づけてから押してください。",
   approver_is_target: "対象者以外の既存オーナー（オーナーが2人以上いるときは申請者以外）に承認を依頼してください。",
   approver_class_missing: "同じ内容でもう一度申請してください（新しい申請にはオーナーまたは指定管理者の承認条件が付きます）。",
+  approver_context_changed: "今の設定を確認して、必要な変更をもう一度申請してください。",
   requester_not_identified: "依頼した人の Slack ID を requesterSlackUserId に入れて申請し直してください",
 };
 

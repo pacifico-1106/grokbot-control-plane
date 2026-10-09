@@ -207,6 +207,36 @@ export async function assertApproverAuthorityForExecution(approval: ApprovalRequ
   });
   if (decision.outcome === "endorse") throw new ApproverAuthorityExecutionError("owner_approval_required");
   if (decision.outcome === "deny") throw new ApproverAuthorityExecutionError(decision.reason);
+  await assertApproverContextUnchanged(approval);
+}
+
+function hasSucceededFulfillment(approval: ApprovalRequest): boolean {
+  const metadata = approval.metadata ?? {};
+  for (const key of ["adminFulfillment", "fulfillment"] as const) {
+    const value = metadata[key];
+    if (value && typeof value === "object" && (value as { ok?: unknown }).ok === true) return true;
+  }
+  return false;
+}
+
+/**
+ * 木村 round 3 F2: for tools judged on current state (scheduling rules / caps,
+ * employee scopes), re-read that state and compare with what was recorded at
+ * filing. Changed, unreadable now, or never recorded → approver_context_changed
+ * (approving the old ticket would put the old state back; file again).
+ */
+async function assertApproverContextUnchanged(approval: ApprovalRequest): Promise<void> {
+  const { CONTEXT_PINNED_TOOLS, approverContextFingerprint, loadApproverClassificationContext } = await import("./filing");
+  const tool = String(approval.metadata?.adminTool || approval.tool || "").trim();
+  if (!CONTEXT_PINNED_TOOLS.has(tool)) return;
+  // Already applied: executeApproval only hands back the stored result (the
+  // claim is "succeeded"), and the applied change itself is not a change since filing.
+  if (hasSucceededFulfillment(approval)) return;
+  const recorded = approval.approverAuthority?.contextFingerprint;
+  if (typeof recorded !== "string" || !recorded) throw new ApproverAuthorityExecutionError("approver_context_changed");
+  const context = await loadApproverClassificationContext(approval.orgId, tool, approval.metadata);
+  const now = approverContextFingerprint(tool, context);
+  if (now === null || now !== recorded) throw new ApproverAuthorityExecutionError("approver_context_changed");
 }
 
 export type ApproverIdentityResult =

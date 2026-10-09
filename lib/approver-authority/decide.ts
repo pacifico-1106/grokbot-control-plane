@@ -19,7 +19,9 @@ export type ApproverAuthorityDenyReason =
   | "approver_is_requester"
   | "approver_unverified"
   /** Review 2026-10-09 item 4: target tool ticket filed before the flag was ON (no approver class). */
-  | "approver_class_missing";
+  | "approver_class_missing"
+  /** 木村 round 3 F2: the state the ticket was judged on changed (or cannot be read) since filing. */
+  | "approver_context_changed";
 
 export type ApproverAuthorityDecision =
   | { outcome: "allow"; approverRole: ApproverAuthorityRole }
@@ -94,6 +96,7 @@ export const APPROVER_AUTHORITY_RESULT_REASONS = [
   // members.promoteOwner: the member being promoted may not approve their own promotion.
   "approver_is_target",
   "approver_class_missing",
+  "approver_context_changed",
   // members.promoteOwner (木村 round 3 G1): 2+ active owners and the requester is not identified.
   "requester_not_identified",
 ] as const;
