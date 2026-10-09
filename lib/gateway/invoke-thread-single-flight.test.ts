@@ -30,8 +30,11 @@ import {
   __resetThreadGuardStoreForTests,
   __setThreadGuardStoreFailureForTests,
   acquireThreadLease,
+  recordSelfPost,
   releaseThreadLease,
 } from "@/lib/thread-guard/store";
+import { callStaffpassMcpTool } from "@/lib/mcp/tools";
+import type { ResolvedEmployeeCredential } from "@/lib/auth/employee-credential";
 import type { GatewayInvokeRequest } from "@/lib/types";
 
 const CHANNEL = "C0THREADSF01";
@@ -211,13 +214,14 @@ describe("thread_moved_on", () => {
     expect(stale.body.retryable).toBe(false);
     expect(stale.body.nextAction).toBe("reread_thread");
     expect(String(stale.body.nextStep)).toMatch(/readThroughTs/);
-    expect(typeof stale.body.selfPostedTs).toBe("string");
-    expect(stale.body.selfPostedTs).toBe(firstTs);
+    expect(stale.body.postedBy).toBe("self");
+    expect(stale.body.aiPostedTs).toBe(firstTs);
+    expect(stale.body.selfPostedTs).toBeUndefined();
     expect(posts.length).toBe(1);
     const events = await listAuditEvents(DEMO_ORG.id, 50);
     expect(events.some((e) => e.action === "thread_guard.moved_on" && e.metadata?.jobId === stale.body.jobId)).toBe(true);
 
-    const caughtUp = await invoke(threadReply(B_TEXT, { readThroughTs: String(stale.body.selfPostedTs) }));
+    const caughtUp = await invoke(threadReply(B_TEXT, { readThroughTs: String(stale.body.aiPostedTs) }));
     expect(caughtUp.httpStatus).toBe(200);
     expect(posts.length).toBe(2);
   });
@@ -231,11 +235,35 @@ describe("thread_moved_on", () => {
     expect(woken.body.code).toBe("thread_moved_on");
   });
 
-  test("no read point at all → lease only (allowed)", async () => {
+  test("no read point at all → lease only (allowed), audited with readPoint 'unknown' (木村 decision 1)", async () => {
     on();
     recordSlack();
-    expect((await invoke(threadReply(A_TEXT))).httpStatus).toBe(200);
-    expect((await invoke(threadReply(B_TEXT))).httpStatus).toBe(200);
+    const a = await invoke(threadReply(A_TEXT));
+    const b = await invoke(threadReply(B_TEXT));
+    expect([a.httpStatus, b.httpStatus]).toEqual([200, 200]);
+    const events = await listAuditEvents(DEMO_ORG.id, 80);
+    for (const r of [a, b]) {
+      const row = events.find((e) => e.action === "thread_guard.read_point_unknown" && e.metadata?.jobId === r.body.jobId);
+      expect(row?.metadata?.readPoint).toBe("unknown");
+      expect(row?.metadata?.phase).toBe("invoke");
+      expect(String(row?.metadata?.threadKeyRef ?? "")).toMatch(/^[0-9a-f]{12}$/);
+    }
+    // a known read point writes no marker; stops carry readPoint too
+    const known = await invoke(threadReply(C_TEXT, { readThroughTs: fresh() }));
+    expect(known.httpStatus).toBe(200);
+    const after = await listAuditEvents(DEMO_ORG.id, 80);
+    expect(after.some((e) => e.action === "thread_guard.read_point_unknown" && e.metadata?.jobId === known.body.jobId)).toBe(false);
+  });
+
+  test("a stop without a read point is marked readPoint 'unknown' on its audit row", async () => {
+    on();
+    recordSlack();
+    const held = await acquireThreadLease({ orgId: DEMO_ORG.id, employeeId: "emp_comm2", threadKey: threadKey(), ttlSeconds: 60 });
+    const busy = await invoke(threadReply(A_TEXT));
+    expect(busy.body.code).toBe("thread_busy");
+    const events = await listAuditEvents(DEMO_ORG.id, 80);
+    expect(events.find((e) => e.action === "thread_guard.busy" && e.metadata?.jobId === busy.body.jobId)?.metadata?.readPoint).toBe("unknown");
+    if (held.state === "acquired") await releaseThreadLease({ orgId: DEMO_ORG.id, threadKey: threadKey(), leaseId: held.leaseId });
   });
 
   test("the same job's own earlier post does not count (multi-part reply)", async () => {
@@ -255,11 +283,38 @@ describe("thread_moved_on", () => {
     expect(res.body.code).toBe("thread_moved_on");
   });
 
-  test("another employee's post in the thread is not 'self' (no moved_on for me)", async () => {
+  test("another AI employee of the SAME org posted after my read point → thread_moved_on (木村 decision 4)", async () => {
     on();
     recordSlack();
-    expect((await invoke(threadReply(A_TEXT), "emp_comm2")).httpStatus).toBe(200);
-    expect((await invoke(threadReply(B_TEXT, { readThroughTs: old() }))).httpStatus).toBe(200);
+    const other = await invoke(threadReply(A_TEXT), "emp_comm2");
+    expect(other.httpStatus).toBe(200);
+    const otherTs = String((other.body.conversationDelivery as { ts?: string } | undefined)?.ts ?? "");
+    const mine = await invoke(threadReply(B_TEXT, { readThroughTs: old() }));
+    expect(mine.httpStatus).toBe(409);
+    expect(mine.body.code).toBe("thread_moved_on");
+    expect(mine.body.postedBy).toBe("other_ai_employee");
+    expect(mine.body.aiPostedTs).toBe(otherTs);
+    expect(JSON.stringify(mine.body)).not.toContain("emp_comm2");
+    expect(posts.length).toBe(1);
+    // having read through that post, my reply goes out
+    expect((await invoke(threadReply(B_TEXT, { readThroughTs: otherTs }))).httpStatus).toBe(200);
+  });
+
+  test("human posts do not count: a newer human message in the thread (never recorded) does not stop the reply", async () => {
+    on();
+    recordSlack();
+    // woken by a fresh human message, read point explicitly older; no AI post after it
+    const res = await invoke(threadReply(A_TEXT, { readThroughTs: old(), inboundTs: fresh() }));
+    expect(res.httpStatus).toBe(200);
+  });
+
+  test("BOLA: another org's AI posts in a thread with the same ids never count", async () => {
+    on();
+    recordSlack();
+    for (const key of [threadKey(OTHER_ORG), threadKey()]) {
+      expect(await recordSelfPost({ orgId: OTHER_ORG, employeeId: "emp_other", threadKey: key, micros: BigInt(nowS() + 5) * BigInt(1_000_000), jobKey: null })).toBe(true);
+    }
+    expect((await invoke(threadReply(A_TEXT, { readThroughTs: old() }))).httpStatus).toBe(200);
   });
 
   test("LINE (caller-delivered): the allowed reply is recorded; a stale second reply is thread_moved_on", async () => {
@@ -391,7 +446,7 @@ describe("approval sends: the same check at fulfil", () => {
     return approved ? fulfillIfApproved(approved, "approved") : null;
   };
 
-  test("self posted after the approved read point → fulfil stops with thread_moved_on; approval stays approved; a re-run cannot move the read point", async () => {
+  test("AI posted after the approved read point → fulfil CLOSES the approval as superseded (stale), nothing sent, terminal (木村 decision 2)", async () => {
     on();
     recordSlack();
     const { approvalId, body } = await queue(old());
@@ -401,13 +456,54 @@ describe("approval sends: the same check at fulfil", () => {
     expect(result?.ok).toBe(false);
     expect(result?.error).toBe("thread_moved_on");
     expect(posts.length).toBe(1);
-    expect((await getApprovalById(approvalId, DEMO_ORG.id))?.status).toBe("approved");
-    // The re-run carries a newer readThroughTs: ignored, the approved snapshot decides.
+    const closed = await getApprovalById(approvalId, DEMO_ORG.id);
+    expect(closed?.status).toBe("superseded");
+    expect((closed?.metadata?.closedWithoutSend as Record<string, unknown> | undefined)?.reason).toBe("thread_moved_on");
+    const events = await listAuditEvents(DEMO_ORG.id, 80);
+    expect(events.some((e) => e.action === "approval.superseded" && e.metadata?.approvalId === approvalId && e.metadata?.reason === "thread_moved_on")).toBe(true);
+    // Terminal: a re-run (even with a newer readThroughTs) sends nothing and opens no new approval.
     const rerun = await invoke({ ...body, approvalId, args: { ...(body.args as object), readThroughTs: fresh() } } as GatewayInvokeRequest);
     expect(rerun.httpStatus).toBe(409);
     expect(rerun.body.code).toBe("thread_moved_on");
+    expect(rerun.body.approvalStatus).toBe("superseded");
+    expect(rerun.body.retryable).toBe(false);
     expect(rerun.body.nextAction).toBe("reread_thread");
+    expect(String(rerun.body.nextStep)).toMatch(/new request/i);
+    expect(rerun.body.approvalId).toBe(approvalId);
+    expect(rerun.body.needs_approval).toBe(false);
     expect(posts.length).toBe(1);
+  });
+
+  test("another AI employee's post after the approved read point also closes it at fulfil", async () => {
+    on();
+    recordSlack();
+    const { approvalId } = await queue(old());
+    expect((await invoke(dm("comm.reply", A_TEXT), "emp_comm2")).httpStatus).toBe(200);
+    expect((await approve(approvalId))?.error).toBe("thread_moved_on");
+    expect((await getApprovalById(approvalId, DEMO_ORG.id))?.status).toBe("superseded");
+    expect(posts.length).toBe(1);
+  });
+
+  test("the approver and the AI see it was not sent because it went stale (status API + MCP status)", async () => {
+    on();
+    recordSlack();
+    const res = await invoke(dm("comm.send", B_TEXT, old()));
+    const approvalId = String(res.body.approvalId);
+    const statusToken = String(res.body.statusToken);
+    expect((await invoke(dm("comm.reply", A_TEXT))).httpStatus).toBe(200);
+    await approve(approvalId);
+    const { GET } = await import("@/app/api/approvals/status/route");
+    const api = await (await GET(new Request(`http://localhost/api/approvals/status?id=${approvalId}&token=${statusToken}`) as never)).json();
+    expect(api.status).toBe("superseded");
+    expect(api.pollHint).toBe("abort_job");
+    expect(api.closedWithoutSend?.reason).toBe("thread_moved_on");
+    expect(String(api.closedWithoutSend?.messageJa)).toMatch(/送信していません/);
+    const cred = { employeeId: "emp_comm", orgId: DEMO_ORG.id, credentialId: "cred_comm", generation: 1, fingerprint: "fixture", secretPrefix: "gb_emp_fixture", binding: null } as unknown as ResolvedEmployeeCredential;
+    const mcp = (await callStaffpassMcpTool("staffpass_get_approval_status", { approvalId, statusToken }, cred)).structuredContent as Record<string, unknown>;
+    expect(mcp.status).toBe("superseded");
+    expect(mcp.pollHint).toBe("abort_job");
+    expect((mcp.closedWithoutSend as Record<string, unknown>)?.reason).toBe("thread_moved_on");
+    expect(String((mcp.closedWithoutSend as Record<string, unknown>)?.nextStep)).toMatch(/new request/i);
   });
 
   test("self-approval: no approval (whoever resolves it, incl. the requesting employee's own identity) skips the recheck; no request field disables it", async () => {
@@ -421,6 +517,7 @@ describe("approval sends: the same check at fulfil", () => {
     const result = await approve(approvalId, "agent:agent_comm_self");
     expect(result?.ok).toBe(false);
     expect(result?.error).toBe("thread_moved_on");
+    expect((await getApprovalById(approvalId, DEMO_ORG.id))?.status).toBe("superseded");
     expect(posts.length).toBe(1);
     const events = await listAuditEvents(DEMO_ORG.id, 80);
     expect(events.some((e) => e.action === "thread_guard.moved_on" && e.metadata?.approvalId === approvalId && e.metadata?.phase === "fulfil")).toBe(true);

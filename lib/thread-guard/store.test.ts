@@ -10,6 +10,7 @@ import {
   __resetThreadGuardStoreForTests,
   acquireThreadLease,
   readLastSelfPost,
+  readLatestAiPostAfter,
   recordSelfPost,
   releaseThreadLease,
 } from "./store";
@@ -91,5 +92,27 @@ describe("self posts", () => {
     expect(await readLastSelfPost({ orgId: ORG_A, employeeId: "emp_2", threadKey: KEY })).toEqual({ ok: true, post: null });
     expect(await readLastSelfPost({ orgId: ORG_B, employeeId: "emp_1", threadKey: KEY })).toEqual({ ok: true, post: null });
     expect(await readLastSelfPost({ orgId: ORG_A, employeeId: "emp_1", threadKey: KEY2 })).toEqual({ ok: true, post: null });
+  });
+});
+
+describe("latest AI post in the thread (木村 decision 4: other AI employees of the same org count)", () => {
+  const J1 = "1".repeat(64);
+  const J2 = "2".repeat(64);
+  test("newest post after the point by ANY employee of the org; the caller's same-job post is skipped", async () => {
+    await recordSelfPost({ orgId: ORG_A, employeeId: "emp_1", threadKey: KEY, micros: BigInt(300), jobKey: J1 });
+    await recordSelfPost({ orgId: ORG_A, employeeId: "emp_2", threadKey: KEY, micros: BigInt(200), jobKey: J2 });
+    const any = await readLatestAiPostAfter({ orgId: ORG_A, threadKey: KEY, afterMicros: BigInt(100), excludeJobKey: null });
+    expect(any).toEqual({ ok: true, post: { micros: BigInt(300), jobKey: J1, employeeId: "emp_1" } });
+    // emp_1's own same-job post is exempt, emp_2's later post still counts
+    const skip = await readLatestAiPostAfter({ orgId: ORG_A, threadKey: KEY, afterMicros: BigInt(100), excludeJobKey: J1 });
+    expect(skip).toEqual({ ok: true, post: { micros: BigInt(200), jobKey: J2, employeeId: "emp_2" } });
+    expect(await readLatestAiPostAfter({ orgId: ORG_A, threadKey: KEY, afterMicros: BigInt(300), excludeJobKey: null })).toEqual({ ok: true, post: null });
+  });
+  test("BOLA: another org's posts on the same key never count", async () => {
+    await recordSelfPost({ orgId: ORG_B, employeeId: "emp_b", threadKey: KEY, micros: BigInt(900), jobKey: null });
+    expect(await readLatestAiPostAfter({ orgId: ORG_A, threadKey: KEY, afterMicros: BigInt(1), excludeJobKey: null })).toEqual({ ok: true, post: null });
+  });
+  test("bad input → not ok (fail closed)", async () => {
+    expect((await readLatestAiPostAfter({ orgId: ORG_A, threadKey: "x", afterMicros: BigInt(1), excludeJobKey: null })).ok).toBe(false);
   });
 });
