@@ -93,8 +93,12 @@ export const APPROVER_AUTHORITY_RESULT_REASONS = [
   "no_owner_other_than_requester",
   "approver_is_requester",
   "approver_identity_unverified",
+  // members.promoteOwner: the member being promoted may not approve their own promotion.
+  "approver_is_target",
   "approver_class_missing",
   "approver_context_changed",
+  // members.promoteOwner (木村 round 3 G1): 2+ active owners and the requester is not identified.
+  "requester_not_identified",
 ] as const;
 
 export type ApproverAuthorityResultReason = (typeof APPROVER_AUTHORITY_RESULT_REASONS)[number];
@@ -119,4 +123,47 @@ export function requesterMemberIdsFromMetadata(metadata: Record<string, unknown>
   const member = metadata?.requesterMemberId;
   if (typeof member === "string" && member.trim()) out.add(member.trim());
   return [...out];
+}
+
+/**
+ * members.promoteOwner (木村 2026-10-09): the member being promoted may NEVER
+ * approve. The requester follows the general rule (checkApproverAuthority):
+ * a sole owner may approve their own request; with 2+ owners, an owner other
+ * than the requester. Dependency-free; checked at approval time and again at
+ * fulfil. Returns null when there is no conflict (or the ticket is another tool).
+ */
+export const PROMOTE_OWNER_TOOL_NAME = "members.promoteOwner";
+
+export function promoteOwnerApproverConflict(
+  approval: { tool?: string | null; metadata?: Record<string, unknown> | null },
+  approverMemberId: string | null | undefined
+): "approver_is_target" | null {
+  if (approval.tool !== PROMOTE_OWNER_TOOL_NAME) return null;
+  const approver = String(approverMemberId || "").trim();
+  if (!approver) return null; // missing approver is refused elsewhere (fail closed)
+  const mutation = approval.metadata?.adminMutation;
+  const target = mutation && typeof mutation === "object" && !Array.isArray(mutation)
+    ? String((mutation as Record<string, unknown>).memberId || "").trim()
+    : "";
+  if (target && approver === target) return "approver_is_target";
+  return null;
+}
+
+/**
+ * 木村 2026-10-09 round 3 G1: with 2+ active owners, "an owner other than the
+ * requester" needs a known requester. A ticket filed while there was one owner
+ * (unidentified requester allowed then) must not be approved or run once a 2nd
+ * owner exists — checked at approval time and again at fulfil.
+ */
+export function promoteOwnerRequesterUnidentified(
+  approval: { tool?: string | null; metadata?: Record<string, unknown> | null },
+  activeOwnerCount: number
+): boolean {
+  if (approval.tool !== PROMOTE_OWNER_TOOL_NAME) return false;
+  if (activeOwnerCount < 2) return false;
+  const identity = approval.metadata?.requesterIdentity;
+  const identified = identity && typeof identity === "object" && !Array.isArray(identity)
+    ? (identity as Record<string, unknown>).identified === true
+    : false;
+  return !identified;
 }

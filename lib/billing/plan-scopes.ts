@@ -204,6 +204,8 @@ export const PLAN_ADMIN_SCOPES: Record<PlanKey, readonly AdminMcpToolName[]> = {
     "channels.remove",
     // PR-D: 指定管理者 (owner approval; APPROVER_AUTHORITY_ENABLED)
     "approvers.designatedAdmins.set",
+    // オーナー追加 (existing owner approval; OWNER_PROMOTION_ENABLED + APPROVER_AUTHORITY_ENABLED)
+    "members.promoteOwner",
   ],
   proper: [
     // All intern scopes
@@ -266,6 +268,8 @@ export const PLAN_ADMIN_SCOPES: Record<PlanKey, readonly AdminMcpToolName[]> = {
     "parties.remove",
     // PR-D: 指定管理者 (owner approval; APPROVER_AUTHORITY_ENABLED)
     "approvers.designatedAdmins.set",
+    // オーナー追加 (existing owner approval; OWNER_PROMOTION_ENABLED + APPROVER_AUTHORITY_ENABLED)
+    "members.promoteOwner",
   ],
   executive: [
     // All proper scopes
@@ -334,6 +338,8 @@ export const PLAN_ADMIN_SCOPES: Record<PlanKey, readonly AdminMcpToolName[]> = {
     "parties.remove",
     // PR-D: 指定管理者 (owner approval; APPROVER_AUTHORITY_ENABLED)
     "approvers.designatedAdmins.set",
+    // オーナー追加 (existing owner approval; OWNER_PROMOTION_ENABLED + APPROVER_AUTHORITY_ENABLED)
+    "members.promoteOwner",
   ],
 };
 

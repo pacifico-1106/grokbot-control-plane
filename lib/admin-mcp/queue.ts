@@ -125,6 +125,11 @@ export async function queueAdminTool(input: {
   title?: string;
   summary: string;
   jobId?: string;
+  /**
+   * #289 review: requester identity resolved server-side by the tool handler
+   * (requesterMemberId / requesterIdentity only; any other key is dropped).
+   */
+  extraMetadata?: Record<string, unknown>;
 }): Promise<AdminQueueResult | AdminQueueSecretRejection | AdminPolicyRequiredRejection | ApproverAuthorityFilingRejection> {
   // P0-A: Secret-in-chat detector (fail-closed, before approval ticket creation)
   // Chat NEVER: passwords, refresh tokens, API keys, full employee/admin badge secrets
@@ -217,10 +222,14 @@ export async function queueAdminTool(input: {
     actorId: input.cred.actorId,
   };
   // PR-D: nobody other than the requester could approve → stop with a nextStep.
+  const requesterExtra: Record<string, unknown> = {};
+  for (const key of ["requesterMemberId", "requesterIdentity"] as const) {
+    if (input.extraMetadata && input.extraMetadata[key] !== undefined) requesterExtra[key] = input.extraMetadata[key];
+  }
   const authorityStop = await approverFilingStop({
     orgId: input.cred.orgId,
     tool: input.tool,
-    metadata: { adminMutation: input.args, adminRequester: requester },
+    metadata: { adminMutation: input.args, adminRequester: requester, ...requesterExtra },
   });
   if (authorityStop) {
     await appendAuditEvent({
@@ -267,6 +276,7 @@ export async function queueAdminTool(input: {
       isAdminMcpTool: true,
       adminMutation: input.args,
       adminRequester: requester,
+      ...requesterExtra,
     },
   });
 

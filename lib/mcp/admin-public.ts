@@ -82,6 +82,7 @@ export const ADMIN_MCP_TOOL_NAMES = [
   "parties.remove",
   "approvers.designatedAdmins.get",
   "approvers.designatedAdmins.set",
+  "members.promoteOwner",
 ] as const;
 
 export type AdminMcpToolName = (typeof ADMIN_MCP_TOOL_NAMES)[number];

@@ -654,6 +654,18 @@ export function isApproverAuthorityEnabled(): boolean {
 }
 
 /**
+ * OWNER_PROMOTION_ENABLED: admin MCP members.promoteOwner (make an existing
+ * active member an owner after ONE existing owner approves; not the requester,
+ * not the target). Also requires APPROVER_AUTHORITY_ENABLED — without PR-D's
+ * approver check the ticket could be approved by a non-owner, so the tool
+ * refuses at filing AND at fulfil unless both are ON. Default OFF.
+ * No removal / transfer of ownership.
+ */
+export function isOwnerPromotionEnabled(): boolean {
+  return parseFlag(process.env.OWNER_PROMOTION_ENABLED) && isApproverAuthorityEnabled();
+}
+
+/**
  * 木村 2026-10-09 B (triage #3): needs_approval answers carry approvalReasons[]
  * (every reason, structured), tickets store the same list, every approval card
  * shows one 「承認が必要な理由」 line, and the employee MCP lists the tenant's

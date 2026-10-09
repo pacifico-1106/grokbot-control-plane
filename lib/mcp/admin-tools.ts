@@ -1,5 +1,6 @@
 import { consumeAdminApprovalSecret } from "@/lib/admin-mcp/consume-secret";
 import { handleDesignatedAdminsTool, isDesignatedAdminsTool } from "@/lib/admin-mcp/designated-admins-tool";
+import { handlePromoteOwnerTool, PROMOTE_OWNER_TOOL } from "@/lib/admin-mcp/promote-owner-tool";
 import { canReadAdminApproval } from "@/lib/admin-mcp/result-authority";
 import { assertAdminToolAllowedForPlan } from "@/lib/billing/plan-gate";
 /**
@@ -1465,6 +1466,25 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
       additionalProperties: false,
     },
   },
+  {
+    name: "members.promoteOwner",
+    description:
+      "File a request to make an EXISTING ACTIVE member of this org an owner (オーナー追加; always_human; requires OWNER_PROMOTION_ENABLED and APPROVER_AUTHORITY_ENABLED). memberId only — no invite (cannot add a new person as owner), no role / capabilities / orgId arguments. Exactly one existing owner approves. The member being promoted can never approve. With 2+ owners the requester cannot approve, so requesterSlackUserId is REQUIRED then: it must match this org's verified approver registration (active Slack voter binding of an active member), otherwise filing is refused with code requester_not_identified and nextStepJa (pass the Slack ID of the person who asked and file again). A sole owner may approve their own request, and with a sole owner an unidentified requester is still filed (the card says the requester cannot be identified). A designated admin's approval leaves it オーナー承認待ち. When applied: role owner with the standard owner capabilities, re-checked against the current member row (unchanged since filing, still active, not already owner) through the team member-change guard; every owner and the member are notified; audited (before/after, approving owner, ticket). Removing an owner or transferring ownership is not available. Org from the credential. Re-invoke with approvalId to read the result.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        memberId: { type: "string", description: "org_members ID of an active non-owner member of this org" },
+        requesterSlackUserId: {
+          type: "string",
+          description: "Slack user ID (U…) of the person who asked you to file this. Pass it whenever you know it: it is matched to a member only through this org's verified approver registration, and that member then cannot approve when the org has 2+ owners. Required when the org has 2+ active owners (otherwise refused: requester_not_identified). With a sole owner it is optional; without it the card says the requester cannot be identified, and if a 2nd owner is added before approval or execution the ticket is refused (requester_not_identified) — so pass it whenever you can.",
+        },
+        jobId: { type: "string" },
+        approvalId: { type: "string", description: "Re-invoke with approved ticket ID" },
+      },
+      required: ["memberId"],
+      additionalProperties: false,
+    },
+  },
 ];
 
 /**
@@ -2325,6 +2345,22 @@ export async function callAdminMcpTool(
       rawArgsForSecretScan: args,
       title: outcome.title,
       summary: outcome.summary,
+    });
+    return toolResult(queued, false);
+  }
+
+  if (name === PROMOTE_OWNER_TOOL) {
+    // オーナー追加 (OWNER_PROMOTION_ENABLED + APPROVER_AUTHORITY_ENABLED). Org from the credential only.
+    const outcome = await handlePromoteOwnerTool(args, cred);
+    if (outcome.kind === "result") return toolResult(outcome.data, outcome.isError === true);
+    const queued = await queueAdminTool({
+      cred,
+      tool: name,
+      args: { ...outcome.queuedArgs, ...(typeof args.jobId === "string" ? { jobId: args.jobId } : {}) },
+      rawArgsForSecretScan: args,
+      title: outcome.title,
+      summary: outcome.summary,
+      extraMetadata: outcome.extraMetadata,
     });
     return toolResult(queued, false);
   }

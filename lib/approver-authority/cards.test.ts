@@ -17,7 +17,7 @@ await mocks.mock("@/lib/data", { getEnabledNotificationChannels: async () => cha
 const { buildApprovalTelegramMessage } = await import("@/lib/notify/telegram");
 const { sendApprovalToSlackChannel } = await import("@/lib/notify/slack");
 const { sendApprovalToLineChannel } = await import("@/lib/notify/line");
-const { notifyOwnersApproverAuthorityApproved } = await import("@/lib/notify/channels");
+const { notifyOwnersApproverAuthorityApproved, notifyOwnerPromoted } = await import("@/lib/notify/channels");
 const { approverRequirementCardLinesJa, approverAuthorityApprovedNoticeJa } = await import("@/lib/approver-authority/card");
 const { createPendingVoterBinding, verifyVoterBinding, resetDemoVoterBindings } = await import("@/lib/approval-workflow/voter-binding");
 
@@ -115,6 +115,34 @@ describe("事後通知 to other owners", () => {
     expect(opened).toEqual(["UPDO2"]);
     const all = JSON.stringify(posted.map((p) => p.body));
     expect(all).toContain("事後通知");
+    expect(all).not.toContain(SECRET_TITLE);
+    expect(all).not.toContain(SECRET_SUMMARY);
+    expect(all).not.toContain("xoxb-fixture-not-real");
+  });
+});
+
+describe("オーナー追加の通知 (members.promoteOwner)", () => {
+  test("every active owner (approver and new owner included) and the target; Slack DM via verified binding + LINE inbox; no title / summary", async () => {
+    const base = { orgId: DEMO_ORG.id, email: "x@fixture.invalid", status: "active" as const, capabilities: [] };
+    upsertRuntimeMember({ ...base, id: "mem_po_new", displayName: "NewOwner", role: "owner" }, { audit: false });
+    upsertRuntimeMember({ ...base, id: "mem_po_o2", displayName: "O2", role: "owner" }, { audit: false }); // no Slack binding
+    upsertRuntimeMember({ ...base, id: "mem_po_off", displayName: "Off", role: "owner", status: "disabled" }, { audit: false });
+    for (const [memberId, user] of [["mem_po_new", "UPONEW"], ["mem_1", "UPOAPPROVER"], ["mem_po_off", "UPOOFF"]] as const) {
+      const created = await createPendingVoterBinding({ orgId: DEMO_ORG.id, provider: "slack", channelKey: slackChannel.id, externalUserId: user, memberId });
+      if (created.ok) await verifyVoterBinding({ orgId: DEMO_ORG.id, provider: "slack", channelKey: slackChannel.id, externalUserId: user, verificationCode: created.verificationCode });
+    }
+    channels = [lineChannel, slackChannel];
+    const approved = ticket({ status: "approved", tool: "members.promoteOwner", approverMemberId: "mem_1", approverRole: "owner" });
+    const result = await notifyOwnerPromoted(approved, { targetMemberId: "mem_po_new", approverMemberId: "mem_1" });
+    expect(result.recipients).toBe(3); // mem_1 + mem_po_new + mem_po_o2; disabled owner excluded
+    expect(result.slackDmSent).toBe(2);
+    expect(result.withoutSlack).toBe(1);
+    expect(result.channelPost).toEqual({ provider: "line", ok: true });
+    const opened = posted.filter((p) => p.url.endsWith("conversations.open")).map((p) => p.body.users).sort();
+    expect(opened).toEqual(["UPOAPPROVER", "UPONEW"]);
+    const all = JSON.stringify(posted.map((p) => p.body));
+    expect(all).toContain("オーナーを追加しました");
+    expect(all).toContain("NewOwner");
     expect(all).not.toContain(SECRET_TITLE);
     expect(all).not.toContain(SECRET_SUMMARY);
     expect(all).not.toContain("xoxb-fixture-not-real");

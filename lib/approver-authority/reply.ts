@@ -24,10 +24,13 @@ const REASON_JA: Record<ApproverAuthorityResultReason, string> = {
   approver_is_requester: "申請者は自分の申請を承認できません。申請者以外のオーナーが承認してください。",
   approver_identity_unverified:
     "押した方の Slack / LINE / Telegram アカウントが、承認できるメンバー本人に紐づいていることを確認できないため止めました。",
+  approver_is_target: "オーナーに追加される本人は、この申請を承認できません。",
   approver_class_missing:
     "この申請は承認者チェックを有効にする前に出されたもので、誰が承認できるかの条件が記録されていないため実行しませんでした。",
   approver_context_changed:
     "申請のあとに対象の今の設定が変わった（または確認できなかった）ため実行しませんでした。このまま反映すると、その後の変更を元に戻してしまうおそれがあります。",
+  requester_not_identified:
+    "オーナーが2人以上いるため申請者以外のオーナーの承認が必要ですが、この申請の依頼者を確認できないため止めました（まだ反映していません）。",
 };
 
 /** What to do next, for reasons where the person can act. */
@@ -38,8 +41,10 @@ const NEXT_STEP_JA: Partial<Record<ApproverAuthorityResultReason, string>> = {
   approver_is_requester: "申請者以外のオーナー（または、標準の変更なら指定管理者）に承認を依頼してください。",
   approver_not_authorized: "オーナーまたは指定管理者に承認を依頼してください。",
   approver_identity_unverified: "承認者登録（approvalWorkflow.bindVoter）で、このアカウントをご本人のメンバーに紐づけてから押してください。",
+  approver_is_target: "対象者以外の既存オーナー（オーナーが2人以上いるときは申請者以外）に承認を依頼してください。",
   approver_class_missing: "同じ内容でもう一度申請してください（新しい申請にはオーナーまたは指定管理者の承認条件が付きます）。",
   approver_context_changed: "ポリシーが変わったので、今の内容を読み直して申請し直してください。",
+  requester_not_identified: "依頼した人の Slack ID を requesterSlackUserId に入れて申請し直してください",
 };
 
 /** nextStep for the reply / API response; null when there is nothing specific to do. */
@@ -73,5 +78,22 @@ export function approverAuthorityApprovedNoticeJa(input: {
     `対象: ${tool}（申請 #${String(input.approvalId).slice(0, 8)}）`,
     `承認者: ${name ? `${name}（${role}）` : role}`,
     "詳細は管理画面の承認履歴で確認してください。",
+  ].join("\n");
+}
+
+/** members.promoteOwner applied — names + short ticket id only (no args / secrets). */
+export function ownerPromotedNoticeJa(input: {
+  approvalId: string;
+  targetDisplayName?: string | null;
+  approverDisplayName?: string | null;
+}): string {
+  const clean = (v: string | null | undefined) => String(v || "").replace(/[\r\n]+/g, " ").trim().slice(0, 60);
+  const target = clean(input.targetDisplayName) || "(名前なし)";
+  const approver = clean(input.approverDisplayName);
+  return [
+    "👑 オーナーを追加しました",
+    `新しいオーナー: ${target}`,
+    `承認: ${approver ? `${approver}（オーナー）` : "オーナー"}（申請 #${String(input.approvalId).slice(0, 8)}）`,
+    "オーナー標準の権限が付きました。心当たりがない場合は管理画面のチーム設定と監査ログを確認してください。",
   ].join("\n");
 }

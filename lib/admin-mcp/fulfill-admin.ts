@@ -698,6 +698,15 @@ async function fulfillDesignatedAdminsTicket(approval: ApprovalRequest, args: Re
   return { ok: true, tool: DESIGNATED_ADMINS_SET_TOOL, at, summaryJa: result.summaryJa };
 }
 
+/** オーナー追加: owner-approved; approver ≠ requester / target and the member guard re-checked right before the write. */
+async function fulfillPromoteOwnerTicket(approval: ApprovalRequest, args: Record<string, unknown>): Promise<AdminFulfillment> {
+  const { fulfillPromoteOwner, PROMOTE_OWNER_TOOL } = await import("@/lib/admin-mcp/promote-owner-tool");
+  const result = await fulfillPromoteOwner(approval, args);
+  const at = new Date().toISOString();
+  if (!result.ok) return { ok: false, tool: PROMOTE_OWNER_TOOL, at, error: result.code, nextStepJa: result.messageJa };
+  return { ok: true, tool: PROMOTE_OWNER_TOOL, at, summaryJa: result.summaryJa };
+}
+
 /** Human-approved Slack posting identity switch (bot | user); re-checked right before the write. */
 async function fulfillPostingIdentityTicket(approval: ApprovalRequest, args: Record<string, unknown>): Promise<AdminFulfillment> {
   const { fulfillPostingIdentityChange, POSTING_IDENTITY_SET_TOOL } = await import("@/lib/admin-mcp/posting-identity-tool");
@@ -2161,6 +2170,9 @@ async function fulfillApprovedAdminCore(
         break;
       case "approvers.designatedAdmins.set":
         fulfillment = await fulfillDesignatedAdminsTicket(approval, args);
+        break;
+      case "members.promoteOwner":
+        fulfillment = await fulfillPromoteOwnerTicket(approval, args);
         break;
       default:
         fulfillment = { ok: false, tool, at, error: "unknown_admin_tool" };
