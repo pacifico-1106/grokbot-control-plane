@@ -355,6 +355,25 @@ try:
     sql_file(MIGRATIONS / name)
     sql_file(ROOT / test)
     print(f"PASS {name}: {test} passes after the full history, re-applied, rollback restores the 7-argument resolve_approval_w1_checked and drops the PR-D columns/functions, re-applied; fixes still closed.")
+    # TOCTOU follow-up (20261010100000, approval-executed policy writes as a
+    # compare-and-swap): SQL test after the full history, re-apply, rollback
+    # drops exactly the two RPCs (PR-D stays), fixes still closed, re-apply.
+    name = next((n for n in order if n.startswith("20261010100000_")), None)
+    assert name, "approver context CAS migration missing"
+    test = "tests/security/db-approver-context-cas.sql"
+    sql_file(ROOT / test)
+    sql_file(MIGRATIONS / name)
+    sql_file(ROOT / test)
+    sql_text(rollback_block((MIGRATIONS / name).read_text()), single=False)
+    gone = query("select to_regprocedure('public.approver_cas_write_employee_policy(uuid,uuid,uuid,text,jsonb,text[],text[],text,jsonb,text,jsonb)') is null"
+                 " and to_regprocedure('public.approver_cas_write_scheduling_policy(uuid,uuid,uuid,text,jsonb,text,jsonb)') is null"
+                 " and to_regprocedure('public.approver_authority_check(uuid,uuid,text,text[])') is not null;")
+    assert gone == "t", f"{name}: rollback did not drop exactly the CAS RPCs"
+    for fix in FIXES:
+        sql_file(ROOT / fix["test"])
+    sql_file(MIGRATIONS / name)
+    sql_file(ROOT / test)
+    print(f"PASS {name}: {test} passes after the full history, re-applied, rollback drops the two CAS RPCs (PR-D untouched), re-applied; fixes still closed.")
 finally:
     if started:
         run([BIN / "pg_ctl", "-D", cluster / "data", "-m", "fast", "-w", "stop"], stdout=subprocess.DEVNULL)

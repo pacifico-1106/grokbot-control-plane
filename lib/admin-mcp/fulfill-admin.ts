@@ -732,6 +732,30 @@ async function fulfillPostingIdentityTicket(approval: ApprovalRequest, args: Rec
   };
 }
 
+/**
+ * TOCTOU follow-up (APPROVER_AUTHORITY_ENABLED): the guard pins the judged
+ * state for a compare-and-swap write. Flag OFF / not pinned → null (today's
+ * write). Changed since filing / between check and write → the F2 reply.
+ */
+async function contextGuardFor(approval: ApprovalRequest) {
+  const { approverContextGuardForWrite } = await import("@/lib/approver-authority/filing");
+  return approverContextGuardForWrite(approval);
+}
+
+async function contextChangedFulfillment(error: unknown, tool: string, employeeId: string | null): Promise<AdminFulfillment | null> {
+  const { ApproverContextChangedError } = await import("@/lib/approver-authority/context-cas");
+  if (!(error instanceof ApproverContextChangedError)) return null;
+  const { approverAuthorityNextStepJa } = await import("@/lib/approver-authority/reply");
+  return {
+    ok: false,
+    tool,
+    at: new Date().toISOString(),
+    error: "approver_context_changed",
+    ...(employeeId ? { employeeId } : {}),
+    nextStepJa: approverAuthorityNextStepJa("approver_context_changed") ?? "",
+  };
+}
+
 async function fulfillPolicy(approval: ApprovalRequest, args: Record<string, unknown>): Promise<AdminFulfillment> {
   const employeeId = String(args.employeeId || "").trim();
   const scopes = asScopes(args.scopes);
@@ -752,10 +776,28 @@ async function fulfillPolicy(approval: ApprovalRequest, args: Record<string, unk
     current = await getEmployee(employeeId, approval.orgId);
     if (!current || current.orgId !== approval.orgId) throw new Error("employee_not_found");
   }
+  let contextGuard: Awaited<ReturnType<typeof contextGuardFor>>;
+  try {
+    contextGuard = await contextGuardFor(approval);
+  } catch (error) {
+    const changed = await contextChangedFulfillment(error, "policy.patch", employeeId);
+    if (changed) return changed;
+    throw error;
+  }
+  // Kept values under the CAS guard (actionLimits, and allowedPurposes since
+  // 2026-10-10 item 2(a)): use the value the guard pinned. The RPC compares
+  // it with the locked row and writes only if equal, so what is written is
+  // the locked row's value — never the earlier read, never a value changed
+  // in between (that is refused with approver_context_changed).
+  const pinnedPurposes = contextGuard?.expected.allowed_purposes;
+  const keptPurposes = contextGuard
+    ? (Array.isArray(pinnedPurposes) ? pinnedPurposes : []).map(String)
+    : [...(current?.allowedPurposes ?? [])];
   const allowedPurposes: string[] = Array.isArray(args.allowedPurposes)
     ? args.allowedPurposes.map(String).filter(Boolean)
-    : [...(current?.allowedPurposes ?? [])];
-  const actionLimits = normalizeActionLimits((keepLimits ? current?.actionLimits : args.actionLimits) as ActionLimits);
+    : keptPurposes;
+  const keptLimits = contextGuard ? contextGuard.expected.action_limits : current?.actionLimits;
+  const actionLimits = normalizeActionLimits((keepLimits ? keptLimits : args.actionLimits) as ActionLimits);
   let updated: Awaited<ReturnType<typeof updateEmployeePolicy>>;
   try {
     updated = await updateEmployeePolicy({
@@ -770,8 +812,15 @@ async function fulfillPolicy(approval: ApprovalRequest, args: Record<string, unk
           : undefined,
       sodOverrideAcknowledged: args.sodOverrideAcknowledged === true,
       actionLimits,
+      ...(contextGuard ? { contextGuard } : {}),
     });
   } catch (error) {
+    const changed = await contextChangedFulfillment(error, "policy.patch", employeeId);
+    if (changed) return changed;
+    const { ApproverContextWriteRefusedError } = await import("@/lib/approver-authority/context-cas");
+    if (error instanceof ApproverContextWriteRefusedError) {
+      return { ok: false, tool: "policy.patch", at: new Date().toISOString(), error: error.reason, employeeId };
+    }
     return employeePolicyWriteFailedFulfillment("policy.patch", employeeId, error);
   }
   if (!updated) throw new Error("employee_not_found");
@@ -1264,9 +1313,25 @@ async function fulfillSchedulingPolicy(
     ? args.employeeId.trim()
     : null;
   const clearOverride = args.clearOverride === true;
+  try {
+    return await fulfillSchedulingPolicyWrite(approval, args, employeeId, clearOverride, await contextGuardFor(approval));
+  } catch (error) {
+    const changed = await contextChangedFulfillment(error, "schedulingPolicy.patch", employeeId);
+    if (changed) return changed;
+    throw error;
+  }
+}
 
+async function fulfillSchedulingPolicyWrite(
+  approval: ApprovalRequest,
+  args: Record<string, unknown>,
+  employeeId: string | null,
+  clearOverride: boolean,
+  contextGuard: Awaited<ReturnType<typeof contextGuardFor>>
+): Promise<AdminFulfillment> {
+  const writeOptions = contextGuard ? { contextGuard } : {};
   if (clearOverride && employeeId) {
-    await setEmployeeSchedulingPolicy(employeeId, approval.orgId, null);
+    await setEmployeeSchedulingPolicy(employeeId, approval.orgId, null, writeOptions);
     await appendAuditEvent({
       orgId: approval.orgId,
       employeeId,
@@ -1303,7 +1368,7 @@ async function fulfillSchedulingPolicy(
   const hasHighRiskConsent = Boolean(validation.policy.highRiskConsentAt);
 
   if (employeeId) {
-    const policy = await setEmployeeSchedulingPolicy(employeeId, approval.orgId, validation.policy);
+    const policy = await setEmployeeSchedulingPolicy(employeeId, approval.orgId, validation.policy, writeOptions);
     await appendAuditEvent({
       orgId: approval.orgId,
       employeeId,
@@ -1330,7 +1395,7 @@ async function fulfillSchedulingPolicy(
     };
   }
 
-  const policy = await setOrgSchedulingPolicy(approval.orgId, validation.policy);
+  const policy = await setOrgSchedulingPolicy(approval.orgId, validation.policy, writeOptions);
   const consentNote = hasHighRiskConsent ? "（高リスク承諾あり）" : "";
   await appendAuditEvent({
     orgId: approval.orgId,
