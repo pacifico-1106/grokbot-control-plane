@@ -21,7 +21,14 @@ const EMP = "emp_sales";
 const AWS_EX_ID = "AKIAIOSFODNN7EXAMPLE";
 const AWS_EX_SECRET = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY";
 const FAKE_SECRET = "q7Vx2Lm9Pw4Rt8Ky3Hn6Bd1Fg5Jc0Ws7Te5Qa8Mz";
-const SLACK_TOKEN = "xoxb-123456789012-1234567890123-abcdefghij";
+/**
+ * Built at runtime (GitHub push protection rejects literal xoxb tokens). The
+ * varying part is uppercase letters only, without T and Z: audit rows carry
+ * epoch-ms digits (row id), ISO timestamps (digits, "-", ":", ".", "T", "Z")
+ * and lowercase base36 / hex randomness, none of which can then form a
+ * 3-character window of the secret. See the forced-clock test at the bottom.
+ */
+const SLACK_TOKEN = ["xoxb", "QKWPRMVGNHJX", "YUQKWPRMVGNHJ", "LPKQXWVRMN"].join("-");
 const FLAG = "P1_CONFIG_CHANGE_REQUEST_ENABLED";
 const flagBackup = process.env[FLAG];
 
@@ -174,6 +181,12 @@ afterEach(() => {
   Object.assign(console, originals);
   if (flagBackup === undefined) delete process.env[FLAG];
   else process.env[FLAG] = flagBackup;
+});
+
+test("the fake Slack token's varying part is uppercase letters only, never T or Z (no clock / random-id collision)", () => {
+  const varying = SLACK_TOKEN.slice(5);
+  expect(/^[A-SU-Y-]+$/.test(varying)).toBe(true);
+  expect(detectSecretInString(SLACK_TOKEN).ok).toBe(false);
 });
 
 test("fixed jobIds share no 3-character substring with any secret", () => {
