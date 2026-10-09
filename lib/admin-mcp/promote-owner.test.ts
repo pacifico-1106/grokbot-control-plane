@@ -265,11 +265,12 @@ describe("who may approve (木村 2026-10-09) — requester recorded through the
   test("'unchanged since filing' includes status: the conditional write refuses a member whose status changed", async () => {
     const current = getRuntimeMemberById(TARGET)!;
     setRuntimeMember({ ...current, status: "disabled" });
-    await expect(writeMemberRow(
+    const thrown = await writeMemberRow(
       { ...current, role: "owner", capabilities: [...JOB_ROLE_CAPABILITY_PACKS.owner] },
       ORG,
       { role: "admin", capabilities: [...(current.capabilities ?? [])], status: "active" } as never
-    )).rejects.toBeInstanceOf(MemberConcurrentModificationError);
+    ).then(() => null, (error: unknown) => error);
+    expect(thrown).toBeInstanceOf(MemberConcurrentModificationError);
     expect(getRuntimeMemberById(TARGET)?.role).toBe("admin");
   });
 
