@@ -1,4 +1,4 @@
-import { cardApprovalReasonsLine } from "@/lib/approvals/approval-reasons";
+import { cardApprovalReasonsLine, cardDetectedTopicsLine } from "@/lib/approvals/approval-reasons";
 import { attachmentCardLine, readCardAttachment, withoutAttachmentSummaryLine } from "@/lib/approvals/attachment-card";
 import {
   formatMailCardParts,
@@ -104,6 +104,9 @@ function composeApprovalTelegramMessage(
   // 木村 B: every reason, outside the summary trim.
   const reasonsLine = cardApprovalReasonsLine(approval.metadata, approval.summary);
   if (reasonsLine) lines.push(escapeTelegramHtml(reasonsLine));
+  // 木村 R1: matched topics, regardless of APPROVAL_REASONS_ENABLED.
+  const topicsLine = cardDetectedTopicsLine(approval.metadata);
+  if (topicsLine) lines.push(escapeTelegramHtml(topicsLine));
 
   // mail.send: put 宛先/件名/本文先頭 first for judgment material
   if (mailArtifact) {

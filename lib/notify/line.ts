@@ -1,4 +1,4 @@
-import { cardApprovalReasonsLine } from "@/lib/approvals/approval-reasons";
+import { cardApprovalReasonsLine, cardDetectedTopicsLine } from "@/lib/approvals/approval-reasons";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { attachmentCardLine, readCardAttachment, withoutAttachmentSummaryLine } from "@/lib/approvals/attachment-card";
 import { updateApprovalTelegramState } from "@/lib/data/approvals";
@@ -87,6 +87,7 @@ export async function sendApprovalToLineChannel(
   const altText = `承認依頼: ${approval.title}`;
   const attachment = readCardAttachment(approval.metadata);
   const reasonsLine = cardApprovalReasonsLine(approval.metadata, approval.summary);
+  const topicsLine = cardDetectedTopicsLine(approval.metadata);
   const result = await callLine(channel, "/v2/bot/message/push", {
     to: cfg.destinationId,
     messages: [{
@@ -109,6 +110,7 @@ export async function sendApprovalToLineChannel(
             ...(attachment ? [{ type: "text", text: attachmentCardLine(attachment), size: "sm", wrap: true }] : []),
             // 木村 B: every reason, own row (plain Flex text).
             ...(reasonsLine ? [{ type: "text", text: reasonsLine, size: "sm", wrap: true }] : []),
+            ...(topicsLine ? [{ type: "text", text: topicsLine, size: "sm", wrap: true }] : []),
             { type: "text", text: truncate(withoutAttachmentSummaryLine(approval.summary, approval.metadata), 500), size: "sm", color: "#666666", wrap: true },
           ],
         },

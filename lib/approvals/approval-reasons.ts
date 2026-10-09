@@ -319,6 +319,33 @@ function adminChangeLine(source: AdminChangeSource): string {
  * nothing to show. Admin / system tickets: derived line, dropped when
  * summary + line would exceed ADMIN_CARD_TOTAL_MAX_CHARS.
  */
+/** Strip C0/C1 controls and bidi / zero-width formatting chars; collapse whitespace to one space. */
+function oneLineTopic(value: string): string {
+  return value
+    .replace(/[\u0000-\u001F\u007F-\u009F]/g, " ")
+    .replace(/[\u200B-\u200F\u202A-\u202E\u2060-\u2069\uFEFF]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * 木村 2026-10-09 R1 (#303): the approver sees WHICH topics the gate matched —
+ * on every card surface, REGARDLESS of APPROVAL_REASONS_ENABLED. Reads only
+ * stored `metadata.topicGate.matchedTopics`; null when none. Approver-facing
+ * only — never put this into an AI-facing payload (those carry categories).
+ * Each surface escapes the returned plain text itself.
+ */
+export function cardDetectedTopicsLine(metadata: unknown): string | null {
+  if (!metadata || typeof metadata !== "object") return null;
+  const gate = (metadata as Record<string, unknown>).topicGate;
+  if (!gate || typeof gate !== "object") return null;
+  const raw = (gate as Record<string, unknown>).matchedTopics;
+  if (!Array.isArray(raw)) return null;
+  const topics = cleanTopics(raw.map((t) => (typeof t === "string" ? oneLineTopic(t) : t)));
+  if (topics.length === 0) return null;
+  return clipText(`検出された話題: ${topics.join(", ")}`, APPROVAL_REASONS_CARD_MAX_CHARS);
+}
+
 export function cardApprovalReasonsLine(metadata: unknown, summary?: string | null): string | null {
   if (!isApprovalReasonsEnabled()) return null;
   const reasons = readApprovalReasons(metadata);

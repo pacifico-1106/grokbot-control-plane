@@ -143,13 +143,14 @@ describe("every approver surface shows the line, flag OFF and ON", () => {
       expect(readFileSync(file, "utf8")).toContain("cardTopics");
     }
   });
-  test("surface escaping: Slack mrkdwn / Telegram HTML cannot be injected through a topic", async () => {
+  test("surface escaping: no Slack mention/link or Telegram HTML can be injected through a topic", async () => {
     const evil = approval({ topicGate: { matchedTopics: ["<!channel> *承認済み* <b>x</b> &"] } });
     const slack = await slackText(evil);
     const line = slack.split("\n").find((l) => l.includes(LABEL)) || "";
     expect(line).toContain(LABEL);
     expect(line).not.toContain("<!channel>");
-    expect(line).not.toContain("*承認済み*");
+    // escapeSlackMrkdwn's convention (same as the reasons / 目的 lines): & < > only — no mention / link / tag.
+    expect(line).toContain("&lt;!channel&gt;");
     const tg = buildApprovalTelegramMessage(evil, null).split("\n").find((l) => l.includes(LABEL)) || "";
     expect(tg).toContain(LABEL);
     expect(tg).not.toContain("<b>");
