@@ -24,7 +24,7 @@ describe("targets constant", () => {
       "employees.allowedAccounts.add", "employees.allowedAccounts.remove",
       "members.update", "employees.leave", "employees.reinstate",
     ]) expect((APPROVER_AUTHORITY_TARGETS.standardTools as readonly string[]).includes(tool)).toBe(true);
-    for (const tool of ["employees.spend.set", "plan.upgrade", "members.invite", "approvers.designatedAdmins.set", "cardSetup.mintLink"]) {
+    for (const tool of ["employees.spend.set", "plan.upgrade", "members.invite", "approvers.designatedAdmins.set", "cardSetup.mintLink", "members.promoteOwner"]) {
       expect((APPROVER_AUTHORITY_TARGETS.sensitiveTools as readonly string[]).includes(tool)).toBe(true);
     }
     expect([...APPROVER_AUTHORITY_TARGETS.strongCapabilities].sort()).toEqual(["approve_actions", "manage_billing", "manage_spend_limits"]);
