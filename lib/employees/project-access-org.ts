@@ -183,6 +183,12 @@ export async function assertAssetProjectSameOrg(input: {
 
 /** How many refused ids the nextStep spells out (the rest are counted). */
 const NEXT_STEP_MAX_IDS = 20;
+/** Each listed id is cut to this many characters (+ "…"); a uuid (36) is never cut. */
+const NEXT_STEP_ID_MAX_CHARS = 40;
+function shortId(id: string): string {
+  const chars = Array.from(id);
+  return chars.length > NEXT_STEP_ID_MAX_CHARS ? `${chars.slice(0, NEXT_STEP_ID_MAX_CHARS).join("")}…` : id;
+}
 
 /**
  * Japanese nextStep. For a cross-org refusal it lists the project IDs to
@@ -192,7 +198,7 @@ const NEXT_STEP_MAX_IDS = 20;
 export function projectAccessRefusalNextStep(error: ProjectAccessOrgError): string {
   const text = PROJECT_ACCESS_ORG_MESSAGES_JA[error.code];
   if (error.code !== PROJECT_ACCESS_CROSS_ORG || !error.refusedProjectIds.length) return text.nextStep;
-  const shown = error.refusedProjectIds.slice(0, NEXT_STEP_MAX_IDS);
+  const shown = error.refusedProjectIds.slice(0, NEXT_STEP_MAX_IDS).map(shortId);
   const rest = error.refusedProjectIds.length - shown.length;
   return `何も保存・発行していません。この組織のプロジェクトではない ID: ${shown.join("、")}${rest > 0 ? ` ほか ${rest} 件` : ""}。これらのプロジェクト ID を除いて保存し直してください。`;
 }
