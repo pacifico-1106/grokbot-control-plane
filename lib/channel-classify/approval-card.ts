@@ -34,19 +34,33 @@ function classLabel(classification: string, mixed: boolean): string {
   return mixed || classification === "shared_external" ? `${classification}（混在）` : classification;
 }
 
-/** The card is built in the request path: Slack facts get a hard time budget (else "確認できません"). */
+/**
+ * The card is built in the request path: every Slack lookup for a card
+ * (channel facts, slack_channel party, slack_user party) shares one hard
+ * overall budget (else "確認できません"). Hitting it aborts the background
+ * Slack calls too (follow-up N1): nothing keeps running after the card is
+ * returned.
+ */
 export const CARD_FACTS_BUDGET_MS = 5_000;
-async function withinCardBudget<T>(work: Promise<T | null>): Promise<T | null> {
+let cardBudgetMs = CARD_FACTS_BUDGET_MS;
+
+export function setCardBudgetMsForTests(ms: number | null): void {
+  cardBudgetMs = ms ?? CARD_FACTS_BUDGET_MS;
+}
+
+async function withinCardBudget<T>(work: (signal: AbortSignal) => Promise<T | null>): Promise<T | null> {
+  const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
-      work.catch(() => null),
+      work(controller.signal).catch(() => null),
       new Promise<null>((resolve) => {
-        timer = setTimeout(() => resolve(null), CARD_FACTS_BUDGET_MS);
+        timer = setTimeout(() => resolve(null), cardBudgetMs);
       }),
     ]);
   } finally {
     if (timer) clearTimeout(timer);
+    controller.abort(); // done or over budget: stop anything still in flight
   }
 }
 
@@ -59,7 +73,9 @@ export async function buildChannelClassifyCardSummaryJa(
   const before = current ? classLabel(current.classification, current.mixed) : "未登録（社外扱い）";
   const after = classLabel(value.classification, value.mixed);
   let facts = opts.facts ?? null;
-  if (!facts && value.surface === "slack") facts = await withinCardBudget(collectSlackChannelFacts(orgId, value.externalId));
+  if (!facts && value.surface === "slack") {
+    facts = await withinCardBudget((signal) => collectSlackChannelFacts(orgId, value.externalId, { signal }));
+  }
   const sharing = facts ? describeSharingJa(facts) : "共有状態: 確認できません";
   const warnings: string[] = [];
   if (value.classification === "internal" && facts && (facts.isExtShared || (facts.guestMembers ?? 0) > 0 || (facts.externalMembers ?? 0) > 0)) {
@@ -85,10 +101,10 @@ export async function buildPartyUpsertCardSummaryJa(
   const before = current ? current.audience : "未登録（社外扱い）";
   let sharing = "";
   if (value.kind === "slack_channel") {
-    const facts = await withinCardBudget(collectSlackChannelFacts(orgId, value.identifier));
+    const facts = await withinCardBudget((signal) => collectSlackChannelFacts(orgId, value.identifier, { signal }));
     sharing = facts ? describeSharingJa(facts) : "共有状態: 確認できません";
   } else if (value.kind === "slack_user") {
-    const user = await inspectSlackUserFacts(orgId, value.identifier);
+    const user = await withinCardBudget((signal) => inspectSlackUserFacts(orgId, value.identifier, { signal }));
     sharing = user
       ? `ゲスト: ${user.guest ? "はい" : "いいえ"} / 社外ワークスペース: ${user.external === null ? "不明" : user.external ? "はい" : "いいえ"}`
       : "Slack 上の所属: 確認できません";
