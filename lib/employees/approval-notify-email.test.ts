@@ -22,6 +22,18 @@ await mocks.mock("@/lib/resend", {
   },
 });
 
+// 木村 2026-10-09 (#295 a/b): member lookup failures. null = real lookup;
+// N = the first N calls succeed, every later call throws.
+let memberLookupFailAfter: number | null = null;
+let memberLookupCalls = 0;
+const realMembers = { ...(await import("@/lib/data/members")) };
+await mocks.mock("@/lib/data/members", {
+  listMembers: async (orgId?: string | null) => {
+    if (memberLookupFailAfter !== null && memberLookupCalls++ >= memberLookupFailAfter) throw new Error("member_list_failed");
+    return realMembers.listMembers(orgId);
+  },
+});
+
 const {
   DEMO_ORG,
   getRuntimeAudit,
@@ -374,5 +386,49 @@ describe("write-path inventory (every set/update path is known and checked)", ()
       "lib/mcp/admin-tools.ts",
       "lib/types.ts",
     ]);
+  });
+});
+
+describe("member lookup failure (木村 2026-10-09 #295)", () => {
+  const resetLookup = () => { memberLookupFailAfter = null; memberLookupCalls = 0; };
+  test("(a) web: pre-check passes, the lookup inside issueEmployee fails → 503 unverified, nothing issued", async () => {
+    resetLookup();
+    const before = getRuntimeEmployees().length;
+    memberLookupFailAfter = 1; // the route's pre-check succeeds, the writer's re-check fails
+    try {
+      const res = await issuePost(new Request("https://x.invalid/api/employees/issue", {
+        method: "POST",
+        body: JSON.stringify({ displayName: "照会失敗", roleLabel: "テスト", scopes: ["mail:draft"], approvalNotifyEmail: member("mem_2").email }),
+      }));
+      expect(memberLookupCalls).toBeGreaterThanOrEqual(2);
+      expect(res.status).toBe(503);
+      const body = await res.json();
+      expect(body.code).toBe("approval_notify_email_unverified");
+      expect(getRuntimeEmployees().length).toBe(before);
+    } finally {
+      resetLookup();
+    }
+  });
+  test("(b) send time: lookup fails → not sent; audit says could not verify (not 'not member'), IDs only", async () => {
+    resetLookup();
+    const a = approval();
+    memberLookupFailAfter = 0;
+    try {
+      const res = await runApprovalResolveSideEffects({
+        approval: a, decision: "approved", actorEmail: "web:owner@example.com", employee: employeeWith(member("mem_2").email),
+      });
+      expect(res.employeeEmail.ok).toBe(false);
+      expect(sent.filter((m) => m.to.toLowerCase() === member("mem_2").email.toLowerCase())).toHaveLength(0);
+      const rows = getRuntimeAudit().filter((e) => e.metadata?.approvalId === a.id);
+      expect(rows.some((e) => e.purpose === "approval_notify_email.recipient_not_member")).toBe(false);
+      const row = rows.find((e) => e.purpose === "approval_notify_email.recipient_unverified");
+      expect(row).toBeTruthy();
+      expect(String(row?.summary)).toContain("確認できなかった");
+      expect(String(row?.summary)).not.toContain("メンバーではない");
+      expect(row?.metadata?.reason).toBe("approval_notify_email_unverified");
+      expect(JSON.stringify(row)).not.toContain("@");
+    } finally {
+      resetLookup();
+    }
   });
 });
