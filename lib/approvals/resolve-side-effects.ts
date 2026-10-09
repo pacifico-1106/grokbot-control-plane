@@ -1,21 +1,19 @@
 import { sendApprovalNotification } from "@/lib/email";
-import { escapeHtml } from "@/lib/html-escape";
-import { sendTransactionalEmail, renderStubHtml } from "@/lib/resend";
+import { sendTransactionalEmail } from "@/lib/resend";
+import { buildApprovalNotifyEmail, validateApprovalNotifyEmail } from "@/lib/employees/approval-notify-email";
 import { updateApprovalNotificationMessages } from "@/lib/notify/channels";
 import type { ApprovalRequest, Employee } from "@/lib/types";
 import { deliverAuthorityDecision } from "@/lib/commerce/authority-events";
 import { appendAuditEvent } from "@/lib/data/audit";
 import { isConfigChangeApproval } from "@/lib/config-change-request/core";
 import { recordConfigChangeResolution } from "@/lib/config-change-request/service";
-import { isDecisionWorkflowEnabled, isMcpEndpointHandoffEnabled, isMcpEventsEnabled, isWebhookHardeningEnabled } from "@/lib/feature-flags";
+import { isDecisionWorkflowEnabled, isMcpEventsEnabled, isWebhookHardeningEnabled } from "@/lib/feature-flags";
 import { categorizeFetchError, categorizeHttpStatus, type WebhookFailureCategory } from "@/lib/webhooks/outbound";
 import { withLinkLocalGuard } from "@/lib/webhooks/link-local-guard";
 import { deliverHardenedApprovalCallback } from "@/lib/webhooks/approval-callback";
 import {
   APPROVAL_WAKE_ACTION,
-  MCP_HANDOFF_SCHEMA,
   isMcpHandoffSurface,
-  resolveMcpEndpointUrl,
   withMcpHandoff,
   type McpHandoffSurface,
 } from "@/lib/mcp/endpoint-handoff";
@@ -66,40 +64,6 @@ export type ResolveSideEffectsResult = {
  * Best-effort notifications after approve/reject/revision request.
  * Never throws — resolve API must succeed even if notify/callback fails.
  */
-/**
- * Machine-readable approval e-mail body. With MCP_ENDPOINT_HANDOFF_ENABLED the
- * Staffpass MCP endpoint + connectivity check lines are appended (no secrets).
- */
-function buildApprovalMachineBody(
-  approval: ApprovalRequest,
-  statusLabel: string,
-  actorEmail: string
-): string {
-  return [
-    `status=${statusLabel}`,
-    `approvalId=${approval.id}`,
-    `employeeId=${approval.employeeId}`,
-    `tool=${approval.tool ?? ""}`,
-    `jobId=${approval.jobId ?? ""}`,
-    `purpose=${approval.purpose}`,
-    `risk=${approval.risk}`,
-    `resolvedBy=${actorEmail}`,
-    ...(approval.revisionNote
-      ? [`revisionNote=${approval.revisionNote.replace(/\n/g, " | ")}`]
-      : []),
-    `revisionCount=${approval.revisionCount}`,
-    `summary=${approval.summary.replace(/\n/g, " | ")}`,
-    ...(isMcpEndpointHandoffEnabled()
-      ? [
-          `mcpEndpoint=${resolveMcpEndpointUrl()}`,
-          "mcpConnectivityCheck=staffpass_whoami",
-          `mcpHandoffSchema=${MCP_HANDOFF_SCHEMA}`,
-        ]
-      : []),
-  ].join("\n");
-}
-
-export const buildApprovalMachineBodyForTests = buildApprovalMachineBody;
 
 /** Fallback when a caller did not pass surface (actor prefix is set by each webhook). */
 function inferSurface(actorEmail: string): McpHandoffSurface {
@@ -145,24 +109,36 @@ export async function runApprovalResolveSideEffects(opts: {
     ok: true,
     skipped: true,
   };
-  const notifyTo = employee?.approvalNotifyEmail?.trim();
-  if (notifyTo) {
+  // Members-only recipient (2026-10-09): re-checked right before sending. A
+  // non-member (removed since, or written before the rule) is not sent to and
+  // the audit row carries IDs only — never the address.
+  const configured = employee?.approvalNotifyEmail?.trim();
+  if (configured) {
     try {
-      const machineBody = buildApprovalMachineBody(approval, statusLabel, actorEmail);
-      employeeEmail = await sendTransactionalEmail({
-        to: notifyTo,
-        template: "approval_resolved",
-        subject: `[AI社員] approval ${statusLabel}: ${approval.id}`,
-        text: machineBody,
-        html: renderStubHtml(
-          `承認結果: ${statusLabel}`,
-          `<pre style="white-space:pre-wrap;font-size:12px">${escapeHtml(machineBody)}</pre>`
-        ),
-        tags: [
-          { name: "template", value: "approval_resolved_machine" },
-          { name: "approval_id", value: approval.id.slice(0, 48) },
-        ],
-      });
+      const check = await validateApprovalNotifyEmail(employee?.orgId ?? approval.orgId, configured);
+      if (!check.ok || !check.email) {
+        const reason = check.ok ? "approval_notify_email_invalid" : check.code;
+        employeeEmail = { ok: false, skipped: true, error: reason };
+        await appendAuditEvent({
+          orgId: approval.orgId,
+          employeeId: approval.employeeId,
+          credentialId: null,
+          action: "notification.delivery_failed",
+          purpose: "approval_notify_email.recipient_not_member",
+          summary: "承認結果メールを送らなかった（通知先がこの組織の有効なメンバーではない）",
+          metadata: { approvalId: approval.id, employeeId: approval.employeeId, reason },
+        }).catch(() => undefined);
+      } else {
+        const mail = buildApprovalNotifyEmail();
+        employeeEmail = await sendTransactionalEmail({
+          to: check.email,
+          template: "approval_resolved",
+          subject: mail.subject,
+          text: mail.text,
+          html: mail.html,
+          tags: [{ name: "template", value: "approval_resolved_member" }],
+        });
+      }
     } catch (e) {
       employeeEmail = {
         ok: false,

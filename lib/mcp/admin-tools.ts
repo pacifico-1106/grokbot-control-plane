@@ -158,6 +158,10 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
         actionLimits: { type: "object", additionalProperties: true },
         spend: { type: "object", additionalProperties: true },
         allowedAccounts: { type: "array" },
+        approvalNotifyEmail: {
+          type: "string",
+          description: "Optional. Approval-result email. Must be the address of an ACTIVE member of this org (case-insensitive); anything else is refused.",
+        },
         jobId: { type: "string" },
       },
       required: ["displayName", "roleLabel", "scopes"],
@@ -2346,6 +2350,14 @@ export async function callAdminMcpTool(
         { ok: false, code: "scopes_required", message: "できることを1つ以上選んでください" },
         true
       );
+    }
+    if (args.approvalNotifyEmail !== undefined && args.approvalNotifyEmail !== null) {
+      // Members-only recipient, checked at filing (again at fulfil by issueEmployee).
+      const { validateApprovalNotifyEmail } = await import("@/lib/employees/approval-notify-email");
+      const notify = await validateApprovalNotifyEmail(cred.orgId, args.approvalNotifyEmail);
+      if (!notify.ok) {
+        return toolResult({ ok: false, code: notify.code, message: notify.messageJa }, true);
+      }
     }
   }
 
