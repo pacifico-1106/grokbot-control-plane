@@ -11,6 +11,9 @@
 import { isDemoMode } from "@/lib/mode";
 import { createSupabaseAdminClient } from "@/lib/supabase";
 import { getApprovalById } from "@/lib/data/approvals";
+import { resetDemoChannelClassifyBudgetStore } from "@/lib/data/channel-classify-budget";
+
+export { takeChannelClassifyBudget, type BudgetTake } from "@/lib/data/channel-classify-budget";
 
 export const PROPOSAL_KEY_RE = /^(channel|party):[a-z_]{2,20}:[A-Za-z0-9_.:@+-]{1,128}$/;
 export const NOTICE_KEY_RE = /^[A-Za-z0-9_.:@+|-]{1,200}$/;
@@ -34,6 +37,7 @@ let demoChain: Promise<unknown> = Promise.resolve();
 export function resetDemoChannelClassifyStore(): void {
   demoProposals.clear();
   demoWindows.clear();
+  resetDemoChannelClassifyBudgetStore();
 }
 
 function serialize<T>(fn: () => Promise<T> | T): Promise<T> {

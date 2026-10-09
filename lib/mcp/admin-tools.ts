@@ -98,7 +98,15 @@ import {
 } from "@/lib/approval-kind-routes/mcp-handlers";
 import { isApprovalKindRoutesEnabled } from "@/lib/feature-flags";
 import { handleChannelLedgerList } from "@/lib/admin-mcp/channel-ledger-list";
-import { rejectUnknownArgs, validateChannelsClassifyArgs, validatePartiesUpsertArgs } from "@/lib/channel-classify/core";
+import {
+  CHANNEL_CLASSIFICATIONS,
+  CHANNEL_LEDGER_SURFACES,
+  PARTY_AUDIENCES,
+  PARTY_KINDS,
+  rejectUnknownArgs,
+  validateChannelsClassifyArgs,
+  validatePartiesUpsertArgs,
+} from "@/lib/channel-classify/core";
 import { buildChannelClassifyCardSummaryJa, buildPartyUpsertCardSummaryJa } from "@/lib/channel-classify/approval-card";
 import {
   getIdentityBindingStatus,
@@ -272,9 +280,9 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
     inputSchema: {
       type: "object",
       properties: {
-        kind: { type: "string" },
+        kind: { type: "string", enum: [...PARTY_KINDS] },
         identifier: { type: "string" },
-        audience: { type: "string", description: "internal | external" },
+        audience: { type: "string", enum: [...PARTY_AUDIENCES], description: "internal | external" },
         jobId: { type: "string" },
       },
       required: ["kind", "identifier"],
@@ -288,10 +296,10 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
     inputSchema: {
       type: "object",
       properties: {
-        surface: { type: "string" },
+        surface: { type: "string", enum: [...CHANNEL_LEDGER_SURFACES] },
         externalId: { type: "string" },
         identifier: { type: "string" },
-        classification: { type: "string" },
+        classification: { type: "string", enum: [...CHANNEL_CLASSIFICATIONS] },
         mixed: { type: "boolean", description: "true for shared_external / Connect / ゲスト招待。混在chは相手台帳必須" },
         employeeId: { type: "string", description: "Bound employee for an internal Slack 1:1 only" },
         slackTeamId: { type: "string", description: "Slack workspace id when known" },

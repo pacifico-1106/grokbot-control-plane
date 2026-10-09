@@ -25,21 +25,6 @@ export async function requireOrgSession(): Promise<
   return { ok: true, orgId };
 }
 
-/**
- * Real Auth user + org. Refuses DEMO synthetic session so open Relays
- * (email / trial stubs) cannot send without a logged-in org.
- */
-export async function requireAuthenticatedOrg(): Promise<
-  | { ok: true; orgId: string; session: SessionContext }
-  | { ok: false; response: NextResponse }
-> {
-  const session = await getSessionContext();
-  if (!session.userId || !session.orgId) {
-    return { ok: false, response: authRequiredResponse() };
-  }
-  return { ok: true, orgId: session.orgId, session };
-}
-
 type OrgAdminDecision = "ok" | "auth_required" | "admin_required";
 
 function orgAdminDecision(session: SessionContext): OrgAdminDecision {
