@@ -910,7 +910,7 @@ async function fulfillApprovedInvokeCore(
       earlyThread = await threadOf(approval, snapshot, dest);
       const threadSend = await beginThreadSend({
         orgId: approval.orgId,
-        employeeId: snapshot.employeeId || approval.employeeId,
+        employeeId: approval.employeeId,
         jobId: snapshot.jobId || approval.jobId,
         keyInput: {
           orgId: approval.orgId,
