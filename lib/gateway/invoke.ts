@@ -1,3 +1,4 @@
+import { withSlackUserTeamMemo } from "@/lib/slack/bot-token";
 import {
   buildApprovalArtifact,
   buildApprovalTitle,
@@ -34,6 +35,7 @@ import { assertBillingAllowsGateway } from "@/lib/billing/entitlements";
 import { evaluateDualEgress } from "@/lib/gateway/egress";
 import {
   parseConversationContext,
+  conversationOrgMismatch,
   resolveAudience,
   resolveConversationThreadId,
   resolveParentMessageTs,
@@ -136,8 +138,13 @@ import {
   isDuplicateGuardV2Enabled,
   isGoogleCalendarReadEnabled,
   isTopicGatedPostingEnabled,
+  isApprovalReasonsEnabled,
+  isCommSendInternalDefaultEnabled,
 } from "@/lib/feature-flags";
 import { checkTopicGate, buildTopicGateApprovalMetadata } from "@/lib/decision-workflow/topic-gate";
+import { getOrgChannel } from "@/lib/data/directory";
+import { buildApprovalReasons, type ApprovalReason } from "@/lib/approvals/approval-reasons";
+import { isInformationClass } from "@/lib/gateway/information-class";
 import { getOrgApprovalKindRoutesPolicy } from "@/lib/approval-kind-routes/data";
 import { getToolApprovalKind } from "@/lib/approval-kind-routes/tool-kind-map";
 import {
@@ -357,6 +364,28 @@ function extractChannelIdForTopicGate(body: GatewayInvokeRequest): string | null
  * Returns both the effective verdict (external-safe for behavior) and
  * the dual verdict (for audit when channelMixed).
  */
+/**
+ * 木村 B (COMM_SEND_INTERNAL_DEFAULT_ENABLED, default OFF): is the comm.send
+ * destination one Staffpass itself verified as internal? Only the channel
+ * ledger of the CREDENTIAL org (never conversation.orgId) counts: an internal,
+ * not-mixed Slack channel or internal DM route. Party ledger / team rule alone
+ * are not "verified". The audience must also have resolved to internal, so an
+ * external speaker in a ledger-internal channel stays confidential.
+ */
+async function isVerifiedInternalSlackDestination(input: {
+  orgId: string;
+  tool: string;
+  ctx: ReturnType<typeof parseConversationContext>;
+  audience: string;
+}): Promise<boolean> {
+  if (input.tool !== "comm.send" || !isCommSendInternalDefaultEnabled()) return false;
+  if (input.audience !== "internal") return false;
+  const ctx = input.ctx;
+  if (!ctx || ctx.surface !== "slack" || !ctx.slackChannelId || !input.orgId) return false;
+  const row = await getOrgChannel(input.orgId, "slack", ctx.slackChannelId).catch(() => null);
+  return Boolean(row && row.orgId === input.orgId && row.classification === "internal" && row.mixed === false);
+}
+
 async function evaluateInvokeEgress(input: {
   orgId: string;
   tool: string;
@@ -376,6 +405,12 @@ async function evaluateInvokeEgress(input: {
     tool: input.tool,
     body: input.body,
     audience: audience.audience,
+    verifiedInternalDestination: await isVerifiedInternalSlackDestination({
+      orgId: input.orgId,
+      tool: input.tool,
+      ctx,
+      audience: audience.audience,
+    }),
   });
 
   const dualEgress = evaluateDualEgress({
@@ -674,6 +709,13 @@ async function secretAuditOrgId(employeeId: string): Promise<string | null> {
 export async function runGatewayInvoke(
   input: RunGatewayInvokeInput
 ): Promise<GatewayInvokeResult> {
+  // One users.info per (org, Slack user) per invoke; see fetchVerifiedSlackUserTeamId.
+  return withSlackUserTeamMemo(() => runGatewayInvokeInner(input));
+}
+
+async function runGatewayInvokeInner(
+  input: RunGatewayInvokeInput
+): Promise<GatewayInvokeResult> {
   const body = input.body;
   const employeeId = (input.employeeId || "").trim();
 
@@ -804,12 +846,13 @@ export async function runGatewayInvoke(
     );
   }
 
-  // Bot invokes carry a 社員証 but no browser session.
-  // Prefer session org, else binding.orgId, else admin PK lookup.
+  // The 社員証 (badge) is the principal: its org drives billing, plan gate,
+  // audit and the approval row. A browser session cookie never overrides it;
+  // a cookie naming a different org is refused below (session_org_mismatch).
   const binding = await getBinding(employeeId);
-  const orgId =
-    (await getCurrentOrgId()) || binding?.orgId || decision.binding.orgId || null;
-  let employee = await getEmployee(employeeId, orgId);
+  const sessionOrgId = await getCurrentOrgId();
+  const badgeOrgId = binding?.orgId || decision.binding.orgId || null;
+  let employee = await getEmployee(employeeId, badgeOrgId || sessionOrgId);
   if (!employee) {
     employee = await getEmployeeById(employeeId);
   }
@@ -827,6 +870,76 @@ export async function runGatewayInvoke(
         tool,
       },
       401
+    );
+  }
+
+  const orgId: string = employee.orgId;
+  if (sessionOrgId && sessionOrgId.trim() && sessionOrgId.trim().toLowerCase() !== orgId.toLowerCase()) {
+    await appendAuditEvent({
+      orgId,
+      employeeId,
+      credentialId: input.credentialId || employee.credentialId,
+      action: "gateway.session_org_mismatch",
+      purpose,
+      summary: `${tool} をログイン中の組織と社員証の組織の不一致で拒否（fail-closed）`,
+      metadata: { tool, jobId, code: "session_org_mismatch" },
+    }).catch(() => undefined);
+    return jsonResult(
+      {
+        ok: false,
+        code: "session_org_mismatch",
+        error: "session_org_mismatch",
+        message:
+          "The signed-in organization does not match the organization of this credential; the request was refused (nothing was sent).",
+        nextStepJa:
+          "ログイン中の組織と社員証の組織が違います。社員証の組織でログインし直すか、ログアウトした状態（社員証のみ）で同じ jobId で再実行してください。",
+        employeeId,
+        tool,
+        purpose,
+        jobId,
+      },
+      403
+    );
+  }
+
+  // Tenant isolation (BOLA): the org that drives audience / ledger / Slack
+  // token / dedup / approval snapshot is the authenticated employee's org.
+  // An AI-supplied conversation.orgId naming another org is refused before
+  // anything is read or written for it. The answer never depends on whether
+  // that org exists (no lookup), and only a hash of it is audited, under the
+  // authenticated org.
+  const principalOrgId = employee.orgId;
+  const orgMismatch = conversationOrgMismatch(body.conversation, principalOrgId);
+  if (orgMismatch) {
+    await appendAuditEvent({
+      orgId: principalOrgId,
+      employeeId,
+      credentialId: input.credentialId || employee.credentialId,
+      action: "gateway.conversation_org_mismatch",
+      purpose,
+      summary: `${tool} を会話コンテキストの組織不一致で拒否（fail-closed）`,
+      metadata: {
+        tool,
+        jobId,
+        code: "conversation_org_mismatch",
+        suppliedOrgIdSha256: createHash("sha256").update(orgMismatch.suppliedOrgId).digest("hex"),
+      },
+    }).catch(() => undefined);
+    return jsonResult(
+      {
+        ok: false,
+        code: "conversation_org_mismatch",
+        error: "conversation_org_mismatch",
+        message:
+          "conversation.orgId does not match the organization of this credential; the request was refused (nothing was sent).",
+        nextStepJa:
+          "conversation.orgId は省略してください（社員証の組織が自動で使われます）。別の組織の会話には送信できません。orgId を外して同じ jobId で再実行してください。",
+        employeeId,
+        tool,
+        purpose,
+        jobId,
+      },
+      403
     );
   }
 
@@ -1256,7 +1369,7 @@ export async function runGatewayInvoke(
   // slack.* aliases share this resolver — tool name is not the boundary.
   // S2: evaluateInvokeEgress now returns both egress (effective) and dualEgress (audit).
   const { egress, dualEgress } = await evaluateInvokeEgress({
-    orgId: orgId || employee.orgId,
+    orgId: principalOrgId,
     tool,
     toolDef,
     body,
@@ -1275,7 +1388,7 @@ export async function runGatewayInvoke(
       metadata: { tool, jobId, egress, dualEgress, managerId },
     });
 
-    const effectiveOrgId = orgId || employee.orgId;
+    const effectiveOrgId = principalOrgId;
     const ledgerRetry = await attemptAudienceLedgerRetry(
       {
         orgId: effectiveOrgId,
@@ -1795,6 +1908,31 @@ export async function runGatewayInvoke(
   // P1: Topic gate can force approval for posts with sensitive topics
   const topicGateForceApproval = topicGateResult?.requiresApproval ?? false;
 
+  // 木村 B: APPROVAL_REASONS_ENABLED → every reason, computed here only (never
+  // from the request). Describes the decision; never changes it.
+  const requestedArgs = (body.args && typeof body.args === "object" ? body.args : {}) as Record<string, unknown>;
+  const requestedInformationClass =
+    (isInformationClass(body.informationClass) && body.informationClass) ||
+    (isInformationClass(requestedArgs.informationClass) && requestedArgs.informationClass) ||
+    (isInformationClass(requestedArgs.class) && requestedArgs.class) ||
+    null;
+  const toolLevelHuman = !mailPolicyLiftsToolDefault && perToolHuman;
+  const approvalReasonsFields = (): { approvalReasons: ApprovalReason[] } | Record<string, never> =>
+    isApprovalReasonsEnabled()
+      ? {
+          approvalReasons: buildApprovalReasons({
+            topicGate: topicGateResult,
+            egress,
+            employeeAlwaysHuman: employee.approvalPolicy === "always_human",
+            toolAlwaysHuman: toolLevelHuman ? (toolHint === "always_human" ? "tool_setting" : "tool_default") : null,
+            actionLimit,
+            spend,
+            mailPolicyForceApproval,
+            requestedInformationClass,
+          }),
+        }
+      : {};
+
   const forceApproval =
     mailPolicyForceApproval ||
     (mailPolicyLiftsToolDefault ? false : perToolHuman) ||
@@ -1850,10 +1988,10 @@ export async function runGatewayInvoke(
         amountJpy: Number.isFinite(amountJpy) ? amountJpy : null,
         message: actionLimit.decision === "needs_approval" ? actionLimit.message : (spend?.message ?? "発注には人の確認が必要です"),
         parentApprovalId: parentApprovalId || null,
-        metadata: { ...invokeMetadata, sodVerdict, actionLimit, egress, dualEgress, managerId },
+        metadata: { ...invokeMetadata, sodVerdict, actionLimit, egress, dualEgress, managerId, ...approvalReasonsFields() },
         body,
         egress,
-        extra: { spend, actionLimit, sodVerdict, egress, dualEgress, managerId, ...(voice ? { voice } : {}), toolKind: toolDef.kind, approvalPolicy: employee.approvalPolicy },
+        extra: { spend, actionLimit, sodVerdict, egress, dualEgress, managerId, ...(voice ? { voice } : {}), toolKind: toolDef.kind, approvalPolicy: employee.approvalPolicy, ...approvalReasonsFields() },
       });
     }
 
@@ -1891,6 +2029,7 @@ export async function runGatewayInvoke(
               },
             }
           : {}),
+        ...approvalReasonsFields(),
       },
       body,
       egress,
@@ -1929,6 +2068,7 @@ export async function runGatewayInvoke(
               },
             }
           : {}),
+        ...approvalReasonsFields(),
       },
     });
   }
@@ -1946,7 +2086,7 @@ export async function runGatewayInvoke(
       risk: "high",
       message: egress.messageJa,
       parentApprovalId: parentApprovalId || null,
-      metadata: { ...invokeMetadata, sodVerdict, actionLimit, egress, dualEgress, managerId },
+      metadata: { ...invokeMetadata, sodVerdict, actionLimit, egress, dualEgress, managerId, ...approvalReasonsFields() },
       body,
       egress,
       extra: {
@@ -1958,6 +2098,7 @@ export async function runGatewayInvoke(
         dualEgress,
         managerId,
         ...(voice ? { voice } : {}),
+        ...approvalReasonsFields(),
       },
     });
   }
@@ -2028,7 +2169,7 @@ export async function runGatewayInvoke(
   let conversationDelivery: ConversationDelivery | undefined;
   let threadTsSource: "client" | "wake_stash" | "none" | undefined;
   if (isAudienceGatedTool(toolDef)) {
-    const ctx = parseConversationContext(body, orgId || employee.orgId);
+    const ctx = parseConversationContext(body, principalOrgId);
     const args =
       body.args && typeof body.args === "object"
         ? (body.args as Record<string, unknown>)
@@ -2353,7 +2494,7 @@ export async function runGatewayInvoke(
     fileAttachmentReceived = rerunAttachment.received;
     fileUploadResponse = rerunAttachment.fileUpload;
   } else if (fileAttachmentReceived && body.fileAttachment) {
-    const ctx = parseConversationContext(body, orgId || employee.orgId);
+    const ctx = parseConversationContext(body, principalOrgId);
     const dest = ctx?.slackChannelId || ctx?.slackUserId || "";
     const replyThreadTs = resolveConversationThreadId({
       conversation: ctx,
@@ -2619,7 +2760,7 @@ export async function runGatewayInvoke(
   }
 
   if (!priorApprovalOk) {
-    const destCtx = parseConversationContext(body, orgId || employee.orgId);
+    const destCtx = parseConversationContext(body, principalOrgId);
     const deliveryChannel =
       conversationDelivery && "channel" in conversationDelivery
         ? conversationDelivery.channel

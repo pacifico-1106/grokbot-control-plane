@@ -29,7 +29,10 @@ import { isAdminClassApproval } from "@/lib/admin-mcp/audit-class";
 import { parseAdminFulfillment } from "@/lib/admin-mcp/fulfill-admin";
 import { parseFulfillment } from "@/lib/approvals/fulfill";
 import { handleDecisionRequest, type DecisionRequestInput } from "@/lib/decision-workflow";
-import { isConfigChangeRequestEnabled, isMcpEndpointHandoffEnabled } from "@/lib/feature-flags";
+import { isApprovalReasonsEnabled, isConfigChangeRequestEnabled, isMcpEndpointHandoffEnabled, isTopicGatedPostingEnabled } from "@/lib/feature-flags";
+import { getOrgApprovalKindRoutesPolicy } from "@/lib/approval-kind-routes/data";
+import type { OrgApprovalKindRoutesPolicy } from "@/lib/approval-kind-routes/types";
+import { categorizeSensitiveTopics } from "@/lib/approvals/sensitive-topic-categories";
 import { resolveAppOrigin } from "@/lib/app-url";
 import { resolveMcpEndpointUrl } from "@/lib/mcp/endpoint-handoff-block";
 import {
@@ -94,7 +97,7 @@ export const STAFFPASS_MCP_TOOLS: McpToolDef[] = [
   {
     name: "staffpass_invoke",
     description:
-      "Invoke a Staffpass Gateway tool under the employee badge. Requires purpose + jobId. Unknown tools are rejected. Confirm/send/order (and always_human policy) STOP for human approval — the result includes approvalId, statusToken, pollUrl, pollHint, title, and summary so you can poll without relying on prose Instructions. Re-invoke with approvalId after status=approved. Never bypasses Gateway enforcement. Slack replies: use tool comm.reply and copy the wake's channel / ts / thread_ts / speakerId / speakerTeamId into conversation:{surface:\"slack\", slackChannelId, speakerId, speakerTeamId, ts, thread_ts} (slackChannelId = wake channel; omit thread_ts when null). The wake's slackUserId is yourself (the employee) — never use it as the recipient. To delete one of your OWN posts that Staffpass recorded (e.g. a duplicate send), use tool comm.delete with payload {surface:\"slack\", channel, ts} (channel/ts from the post's result); other people's posts and unrecorded posts are refused, LINE / Telegram return not_supported, a repeat returns status already_deleted. Disabled unless the operator turns it on.",
+      "Invoke a Staffpass Gateway tool under the employee badge. Requires purpose + jobId. Unknown tools are rejected. Confirm/send/order (and always_human policy) STOP for human approval — the result includes approvalId, statusToken, pollUrl, pollHint, title, and summary so you can poll without relying on prose Instructions. After approval, poll staffpass_get_approval_status: pollHint=fulfilled means the approved action was already executed by Staffpass (Slack posts are sent automatically on approval) — the job is done, do not re-invoke. Re-invoke with the same jobId + approvalId ONLY when pollHint=reinvoke_with_approvalId (if reinvokeReason is present, fix what it names first). When needs_approval carries approvalReasons[], it lists every reason (topic_gate, egress, always_human, action_limit, …); an AI-specified informationClass can raise but never lower the class. Never bypasses Gateway enforcement. Slack replies: use tool comm.reply and copy the wake's channel / ts / thread_ts / speakerId / speakerTeamId into conversation:{surface:\"slack\", slackChannelId, speakerId, speakerTeamId, ts, thread_ts} (slackChannelId = wake channel; omit thread_ts when null). The wake's slackUserId is yourself (the employee) — never use it as the recipient. To delete one of your OWN posts that Staffpass recorded (e.g. a duplicate send), use tool comm.delete with payload {surface:\"slack\", channel, ts} (channel/ts from the post's result); other people's posts and unrecorded posts are refused, LINE / Telegram return not_supported, a repeat returns status already_deleted. Disabled unless the operator turns it on.",
     inputSchema: {
       type: "object",
       properties: {
@@ -115,7 +118,7 @@ export const STAFFPASS_MCP_TOOLS: McpToolDef[] = [
         approvalId: {
           type: "string",
           description:
-            "Prior human approval id after poll returns approved; unlocks confirm/send/order completion.",
+            "Prior human approval id. Pass it only when staffpass_get_approval_status returned pollHint=reinvoke_with_approvalId (not on pollHint=fulfilled: that action was already executed).",
         },
         parentApprovalId: {
           type: "string",
@@ -194,7 +197,7 @@ export const STAFFPASS_MCP_TOOLS: McpToolDef[] = [
   {
     name: "staffpass_get_approval_status",
     description:
-      "Poll a human approval ticket with approvalId + statusToken (same as GET /api/approvals/status). Returns pending|approved|rejected|revision_requested|expired|superseded and pollHint (superseded / expired = closed without sending: a newer reply or request for the same conversation replaced it, or it timed out; pollHint=abort_job, do not re-send the same content). When status=approved and the action has been auto-fulfilled (by the approval webhook), the fulfillment result is included in the response with pollHint=fulfilled — except while fulfillment.fileUpload.status=not_sent (only the approved text was posted): then pollHint=reinvoke_with_approvalId, and re-invoking with approvalId uploads the approved attachment once. The same hint when fulfillment.fileUpload.status=failed because Slack answered a definite error before sharing: then reinvokeReason={code, fix:{kind, needed?}, nextTool, nextToolEndpoint:\"/api/mcp/admin\", retryAfterFix} says what to fix and which admin tool to run first (no token / secret); re-invoke with approvalId after the fix. Admin credential secrets are never returned by this employee MCP: when resultRetrieval is present, authenticate to /api/mcp/admin and re-invoke the indicated admin tool with approvalId. If pollHint=reinvoke_with_approvalId, re-invoke with approvalId. On revision_requested, revise per revisionNote and re-invoke with the same jobId and parentApprovalId.",
+      "Poll a human approval ticket with approvalId + statusToken (same as GET /api/approvals/status). Returns pending|approved|rejected|revision_requested|expired|superseded and pollHint (superseded / expired = closed without sending: a newer reply or request for the same conversation replaced it, or it timed out; pollHint=abort_job, do not re-send the same content). When status=approved and the action has been auto-fulfilled (by the approval webhook), the fulfillment result is included in the response with pollHint=fulfilled — except while fulfillment.fileUpload.status=not_sent (only the approved text was posted): then pollHint=reinvoke_with_approvalId, and re-invoking with approvalId uploads the approved attachment once. The same hint when fulfillment.fileUpload.status=failed because Slack answered a definite error before sharing: then reinvokeReason={code, fix:{kind, needed?}, nextTool, nextToolEndpoint:\"/api/mcp/admin\", retryAfterFix} says what to fix and which admin tool to run first (no token / secret); re-invoke with approvalId after the fix. Admin credential secrets are never returned by this employee MCP: when resultRetrieval is present, authenticate to /api/mcp/admin and re-invoke the indicated admin tool with approvalId. If pollHint=reinvoke_with_approvalId, re-invoke with approvalId. When reinvoke_with_approvalId comes without reinvokeReason, reinvokeCode (pending_attachment / not_executed_yet / admin_result_required) may say why: re-invoke with the same approvalId and the same content, exactly once. If pollHint=fulfilled, the approved action is already done (e.g. the Slack post was sent automatically) — do not re-invoke. On revision_requested, revise per revisionNote and re-invoke with the same jobId and parentApprovalId.",
     inputSchema: {
       type: "object",
       properties: {
@@ -396,11 +399,38 @@ export const CONFIG_CHANGE_REQUEST_MCP_TOOL_DEF: McpToolDef = {
   approvalClass: "business",
 };
 
-/** Employee MCP tools/list. Flag OFF → exactly STAFFPASS_MCP_TOOLS. */
+export const SENSITIVE_TOPICS_MCP_TOOL = "staffpass_sensitive_topics";
+
+/** 木村 B (APPROVAL_REASONS_ENABLED): read-only view of this org's sensitive-topic list. */
+export const SENSITIVE_TOPICS_MCP_TOOL_DEF: McpToolDef = {
+  name: SENSITIVE_TOPICS_MCP_TOOL,
+  description:
+    "Read-only: whether your organization's sensitive-topic gate is configured / active, and the broad categories it covers (e.g. 金銭 / 人事 / 契約). The keywords themselves are never returned. If a post might fall in one of these categories, do not rephrase it to avoid the gate — send it for human approval. The organization comes from your credential; this tool takes no input and cannot change anything. A failed read returns isError with retryable=true (never configured:false).",
+  inputSchema: { type: "object", properties: {}, additionalProperties: false },
+};
+
+type SensitiveTopicsLookup = (orgId: string) => Promise<OrgApprovalKindRoutesPolicy | null>;
+let sensitiveTopicsLookup: SensitiveTopicsLookup = getOrgApprovalKindRoutesPolicy;
+
+/** Test hook: replace the policy lookup (null → the real one). */
+export function setSensitiveTopicsLookupForTests(fn: SensitiveTopicsLookup | null): void {
+  sensitiveTopicsLookup = fn ?? getOrgApprovalKindRoutesPolicy;
+}
+
+export const SENSITIVE_TOPICS_GUIDANCE_JA =
+  "該当しそうなら、言い換えずに承認に回してください。分類名だけを示しています（語の一覧は公開しません）。";
+
+const SENSITIVE_TOPICS_NOTE_JA =
+  "この一覧は参照専用です。AI 社員からは変更できません（変更は組織の管理者のみ）。一覧の語を含む投稿は承認に回ります。";
+
+/** Employee MCP tools/list. Flags OFF → exactly STAFFPASS_MCP_TOOLS. */
 export function listStaffpassMcpTools(): McpToolDef[] {
-  return isConfigChangeRequestEnabled()
-    ? [...STAFFPASS_MCP_TOOLS, CONFIG_CHANGE_REQUEST_MCP_TOOL_DEF]
-    : STAFFPASS_MCP_TOOLS;
+  if (!isConfigChangeRequestEnabled() && !isApprovalReasonsEnabled()) return STAFFPASS_MCP_TOOLS;
+  return [
+    ...STAFFPASS_MCP_TOOLS,
+    ...(isConfigChangeRequestEnabled() ? [CONFIG_CHANGE_REQUEST_MCP_TOOL_DEF] : []),
+    ...(isApprovalReasonsEnabled() ? [SENSITIVE_TOPICS_MCP_TOOL_DEF] : []),
+  ];
 }
 
 function toolResult(data: unknown, isError = false) {
@@ -844,6 +874,47 @@ export async function callStaffpassMcpTool(
       };
       const result = await handleDecisionRequest(cred, input);
       return toolResult(result, !result.ok);
+    }
+    case SENSITIVE_TOPICS_MCP_TOOL: {
+      if (!isApprovalReasonsEnabled()) {
+        return toolResult({ ok: false, code: "tool_disabled", message: "APPROVAL_REASONS_ENABLED is OFF" }, true);
+      }
+      // Org from the credential only; all arguments are ignored (read-only).
+      const orgId = cred.orgId;
+      if (!orgId) {
+        return toolResult({ ok: false, code: "org_not_resolved", message: "credential has no org (fail-closed)" }, true);
+      }
+      let policy: OrgApprovalKindRoutesPolicy | null;
+      try {
+        policy = await sensitiveTopicsLookup(orgId);
+      } catch {
+        // Never "not configured" on a failed read: the AI must not conclude the gate is off.
+        return toolResult(
+          {
+            ok: false,
+            code: "sensitive_topics_unavailable",
+            retryable: true,
+            message: "sensitive topic settings could not be read; retry later. Until then, treat sensitive-looking posts as needing approval.",
+            guidanceJa: SENSITIVE_TOPICS_GUIDANCE_JA,
+          },
+          true
+        );
+      }
+      const gate = policy?.topicGate ?? null;
+      // 木村 22:41: categories only — the keywords are never returned.
+      const { categories, categoriesSource } = categorizeSensitiveTopics(gate?.sensitiveTopics);
+      return toolResult({
+        ok: true,
+        readOnly: true,
+        topicGate: {
+          configured: Boolean(gate),
+          active: Boolean(gate?.enabled) && isTopicGatedPostingEnabled(),
+          categories,
+          categoriesSource,
+        },
+        guidanceJa: SENSITIVE_TOPICS_GUIDANCE_JA,
+        noteJa: SENSITIVE_TOPICS_NOTE_JA,
+      });
     }
     case CONFIG_CHANGE_MCP_TOOL: {
       if (!isConfigChangeRequestEnabled()) {

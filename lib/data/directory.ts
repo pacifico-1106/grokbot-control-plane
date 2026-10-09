@@ -575,6 +575,13 @@ export async function getInformationAsset(orgId: string, ref: string): Promise<I
   return mapAssetRow(data as Record<string, unknown>);
 }
 
+/**
+ * projectId is caller input: a non-null value must name an org_projects row of
+ * input.orgId. Another org's project or an unknown id → ProjectAccessOrgError
+ * project_access_cross_org (one IDs-only audit row, nothing written); lookup
+ * error → project_access_unverified. null clears to the org default;
+ * undefined leaves it as is. (#284 and #296 both added this check; #296's is kept.)
+ */
 export async function upsertInformationAsset(input: {
   orgId: string;
   ref: string;
