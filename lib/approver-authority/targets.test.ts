@@ -7,6 +7,7 @@ import {
   APPROVER_AUTHORITY_TARGETS,
   classifyApproverRequirement,
   isApproverAuthorityTargetTool,
+  schedulingCostCapsSignature,
 } from "@/lib/approver-authority/targets";
 
 const kind = (tool: string, adminMutation?: Record<string, unknown>, extra: Record<string, unknown> = {}, context?: Parameters<typeof classifyApproverRequirement>[0]["context"]) =>
@@ -159,7 +160,7 @@ describe("2026-10-09 gap closure: tools that change approvers / permissions but 
   });
 
   test("still not targets: read-only, directory and AI-identity tools", () => {
-    for (const tool of ["channels.remove", "parties.remove", "employeeIdentity.upsert", "approvalWorkflow.remind", "approvalWorkflow.resendVoterVerification"]) {
+    for (const tool of ["channels.remove", "parties.remove", "approvalWorkflow.remind", "approvalWorkflow.resendVoterVerification"]) {
       expect(isApproverAuthorityTargetTool(tool)).toBe(false);
     }
   });
@@ -172,4 +173,58 @@ describe("2026-10-09 review item 3: five more MCP tools are targets (owner or de
       expect((APPROVER_AUTHORITY_TARGETS.standardTools as readonly string[]).includes(tool)).toBe(true);
     });
   }
+});
+
+describe("木村 2026-10-09 22:48 decision 2: eight more tools are targets; default owner or designated admin", () => {
+  const EIGHT = [
+    "replyPolicy.patch", "schedulingPolicy.patch", "ingressHandoff.patch", "setup.slackAdapter.setBotToken",
+    "employeeIdentity.upsert", "employeeIdentity.bindMailbox", "orgs.patch", "stuckWatch.patch",
+  ];
+  const typical: Record<string, Record<string, unknown>> = {
+    "replyPolicy.patch": { policyName: "P", rules: [{ id: "r1", afterHoursMode: "draft_only", shortReplyMode: "allow", emojiMode: "allow", threadAffinity: "prefer_thread" }] },
+    "schedulingPolicy.patch": { policyName: "P", rules: [{ id: "r1", confirmAutomation: "manual", travelBufferMinutes: 30 }] },
+    "ingressHandoff.patch": { policyName: "P", rules: [{ id: "r1", applyTo: "all", body: "full", attachment: "meta", sealith: "off" }] },
+    "setup.slackAdapter.setBotToken": { enabled: true, label: "main" },
+    "employeeIdentity.upsert": { employeeId: "emp_1", responsibleMemberId: "mem_1" },
+    "employeeIdentity.bindMailbox": { employeeId: "emp_1", mailboxId: "mbx_1" },
+    "orgs.patch": { orgId: "org_x", name: "New name" },
+    "stuckWatch.patch": { enabled: true, maxAutoRetries: 2, autoRetryFaultClasses: ["ops_fault"] },
+  };
+  const noCaps = { schedulingCostCaps: { current: schedulingCostCapsSignature({ rules: [] }), ifCleared: schedulingCostCapsSignature({ rules: [] }) } };
+  for (const tool of EIGHT) {
+    test(`${tool}: standard target`, () => {
+      expect(isApproverAuthorityTargetTool(tool)).toBe(true);
+      expect((APPROVER_AUTHORITY_TARGETS.standardTools as readonly string[]).includes(tool)).toBe(true);
+      expect(kind(tool, typical[tool], {}, noCaps)).toBe("owner_or_designated_admin");
+    });
+  }
+
+  test("schedulingPolicy.patch: a cost cap (costCapJpy) added, changed or removed → owner; unchanged → standard", () => {
+    const withCap = (cap: number) => ({ policyName: "P", rules: [{ id: "r1", confirmAutomation: "manual", costCapJpy: cap }] });
+    const current5000 = { schedulingCostCaps: { current: schedulingCostCapsSignature(withCap(5000)), ifCleared: schedulingCostCapsSignature({ rules: [] }) } };
+    const classify = (mutation: Record<string, unknown>, context: Record<string, unknown> | null) =>
+      classifyApproverRequirement({ tool: "schedulingPolicy.patch", metadata: { adminMutation: mutation }, context: context as never });
+    // added
+    expect(classify(withCap(5000), noCaps)).toEqual({ kind: "owner", reasons: ["money_cost_cap"] });
+    // changed
+    expect(classify(withCap(9000), current5000)?.kind).toBe("owner");
+    // removed (rules without a cap replace a capped policy)
+    expect(classify(typical["schedulingPolicy.patch"], current5000)?.kind).toBe("owner");
+    // unchanged
+    expect(classify(withCap(5000), current5000)?.kind).toBe("owner_or_designated_admin");
+    // clearOverride inherits the org policy: caps differ → owner; same → standard
+    expect(classify({ employeeId: "emp_1", clearOverride: true }, current5000)?.kind).toBe("owner");
+    expect(classify({ employeeId: "emp_1", clearOverride: true }, noCaps)?.kind).toBe("owner_or_designated_admin");
+    // current policy unreadable → cannot tell whether a cap changes → owner
+    expect(classify(typical["schedulingPolicy.patch"], null)).toEqual({ kind: "owner", reasons: ["money_cost_cap_unverified"] });
+  });
+
+  test("no other money field in the eight: content that only looks risky stays standard", () => {
+    // stuckWatch retries re-evaluate approval gates (approvalId stripped), so retry settings do not weaken money approval
+    expect(kind("stuckWatch.patch", { enabled: true, maxAutoRetries: 5, autoRetryFaultClasses: ["ops_fault", "config_drift"] })).toBe("owner_or_designated_admin");
+    // ingress Sealith hints (contract / quote) choose how a document is handed over, not who approves money
+    expect(kind("ingressHandoff.patch", { policyName: "P", rules: [{ id: "r1", applyTo: "all", body: "none", attachment: "none", sealith: "required", sealithRequiredHints: ["quote"] }] })).toBe("owner_or_designated_admin");
+    // a strong capability anywhere still → owner (unchanged rule)
+    expect(kind("employeeIdentity.upsert", { employeeId: "emp_1", note: "manage_billing" })).toBe("owner");
+  });
 });

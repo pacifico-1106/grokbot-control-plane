@@ -99,7 +99,17 @@ describe("filing", () => {
     expect(s.requiredApproverKind).toBe("owner");
     expect(s.approverAuthority?.reasons).toEqual(["sensitive_target_tool"]);
     expect((await getApprovalById(s.id, ORG))?.requiredApproverKind).toBe("owner");
-    expect((await file("replyPolicy.patch", {})).requiredApproverKind ?? null).toBeNull();
+    expect((await file("stuckWatch.retry", {})).requiredApproverKind ?? null).toBeNull();
+    // 木村 2026-10-09 22:48: replyPolicy.patch and seven more are now targets
+    expect((await file("replyPolicy.patch", {})).requiredApproverKind).toBe("owner_or_designated_admin");
+  });
+
+  test("schedulingPolicy.patch: the current cost caps are read at filing; a new costCapJpy → owner, none → standard", async () => {
+    const rule = { id: "r1", confirmAutomation: "manual", travelBufferMinutes: 15 };
+    expect((await file("schedulingPolicy.patch", { policyName: "P", rules: [rule] })).requiredApproverKind).toBe("owner_or_designated_admin");
+    const capped = await file("schedulingPolicy.patch", { policyName: "P", rules: [{ ...rule, costCapJpy: 3000 }] });
+    expect(capped.requiredApproverKind).toBe("owner");
+    expect(capped.approverAuthority?.reasons).toEqual(["money_cost_cap"]);
   });
 
   test("flag OFF: nothing recorded", async () => {
