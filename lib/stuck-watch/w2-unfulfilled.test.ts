@@ -180,10 +180,26 @@ describe("W2 auto-retry exclusion (manual re-invoke only)", () => {
     });
   }
 
-  test("the exclusion list is explicit and holds only employees.postingIdentity.set", () => {
+  // 木村 2026-10-09 round 3: money tools are re-run only by an explicit re-invoke too.
+  const MONEY_TOOLS = ["employees.spend.set", "plan.upgrade", "cardSetup.mintLink", "cardSetup.mintPortalLink", "commerce.order"];
+
+  test("the exclusion list is explicit: employees.postingIdentity.set + the money tools", () => {
     const list = (w2 as Record<string, unknown>).W2_MANUAL_REINVOKE_ONLY_TOOLS as ReadonlySet<string> | undefined;
     expect(list instanceof Set).toBe(true);
-    expect([...(list ?? [])]).toEqual(["employees.postingIdentity.set"]);
+    expect([...(list ?? [])].sort()).toEqual(["employees.postingIdentity.set", ...MONEY_TOOLS].sort());
+  });
+
+  test("money tools: tracked as unfulfilled, never auto re-run; the next step says why (money)", () => {
+    for (const tool of MONEY_TOOLS) {
+      const approval = adminApproval(tool);
+      expect(isApprovedUnfulfilled(approval)).toBe(true);
+      const result = evaluateW2Eligibility({ approval, policy, now: new Date() });
+      expect({ tool, ...result }).toMatchObject({ tool, eligible: false, reason: "manual_reinvoke_required" });
+      const next = w2.w2ManualReinvokeNextStepJa(tool);
+      expect(next).toContain("お金");
+      expect(next).toContain(tool);
+    }
+    expect(w2.w2ManualReinvokeNextStepJa("employees.postingIdentity.set")).toContain("名義");
   });
 
   test("employees.postingIdentity.set: still tracked as unfulfilled, never eligible (retries left, policy on)", () => {

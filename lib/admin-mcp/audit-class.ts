@@ -67,6 +67,7 @@ export const ADMIN_TOOL_AUDIT_ACTION: Record<string, AdminAuditAction> = {
   "setup.slackAuthorizeLink.issue": "admin.link",
   "channels.remove": "admin.channel",
   "parties.remove": "admin.parties",
+  "approvers.designatedAdmins.set": "admin.policy",
 };
 
 /** Operational / employee-badge class — never lead the dashboard change log. */

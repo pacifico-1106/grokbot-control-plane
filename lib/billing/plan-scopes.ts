@@ -202,6 +202,8 @@ export const PLAN_ADMIN_SCOPES: Record<PlanKey, readonly AdminMcpToolName[]> = {
     "approvals.proxyResolve",
     // Directory ledger removal (same plans as channels.classify; always_human)
     "channels.remove",
+    // PR-D: 指定管理者 (owner approval; APPROVER_AUTHORITY_ENABLED)
+    "approvers.designatedAdmins.set",
   ],
   proper: [
     // All intern scopes
@@ -262,6 +264,8 @@ export const PLAN_ADMIN_SCOPES: Record<PlanKey, readonly AdminMcpToolName[]> = {
     "channels.remove",
     // Same plans as parties.upsert (always_human)
     "parties.remove",
+    // PR-D: 指定管理者 (owner approval; APPROVER_AUTHORITY_ENABLED)
+    "approvers.designatedAdmins.set",
   ],
   executive: [
     // All proper scopes
@@ -328,6 +332,8 @@ export const PLAN_ADMIN_SCOPES: Record<PlanKey, readonly AdminMcpToolName[]> = {
     "employeeIdentity.bindMailbox",
     "channels.remove",
     "parties.remove",
+    // PR-D: 指定管理者 (owner approval; APPROVER_AUTHORITY_ENABLED)
+    "approvers.designatedAdmins.set",
   ],
 };
 
@@ -359,6 +365,7 @@ export const READ_ONLY_ADMIN_TOOLS: readonly AdminMcpToolName[] = [
   "approvalRoutes.get",
   "orgs.status",
   "employeeIdentity.status",
+  "approvers.designatedAdmins.get",
 ];
 
 /**

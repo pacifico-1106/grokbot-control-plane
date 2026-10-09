@@ -628,6 +628,32 @@ export function isWebhookHardeningEnabled(): boolean {
 }
 
 /**
+ * APPROVER_AUTHORITY_ENABLED (PR-D): who may approve changes to approvers and
+ * permissions (lib/approver-authority).
+ *
+ * When ON:
+ * - Filing records approval_requests.required_approver_kind for the targets in
+ *   APPROVER_AUTHORITY_TARGETS: "owner_or_designated_admin" (standard) or
+ *   "owner" (sensitive, decided from the content of the change).
+ * - Approving such a ticket (W1 RPC resolve_approval_w1_checked with
+ *   p_enforce_approver_authority, or the F8 vote path) requires a verified
+ *   member who is an active owner, or an active admin listed in
+ *   orgs.designated_admin_member_ids. A designated admin on an owner ticket is
+ *   recorded as an endorsement and the ticket stays オーナー承認待ち. The
+ *   approver's member id + role are stored on the ticket.
+ * - Fulfil re-verifies the stored approver right before execution.
+ * - Zero active owners, an unverifiable approver or an unreadable setting → stop.
+ * - approvers.designatedAdmins.get / .set (admin MCP) are available.
+ * Requires migration 20261005500000_approver_authority.sql (without it, filing
+ * a target ticket fails instead of silently dropping the requirement).
+ *
+ * When OFF (default): behaviour is unchanged (nothing recorded, nothing checked).
+ */
+export function isApproverAuthorityEnabled(): boolean {
+  return parseFlag(process.env.APPROVER_AUTHORITY_ENABLED);
+}
+
+/**
  * 木村 2026-10-09 B (triage #3): needs_approval answers carry approvalReasons[]
  * (every reason, structured), tickets store the same list, every approval card
  * shows one 「承認が必要な理由」 line, and the employee MCP lists the tenant's

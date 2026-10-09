@@ -334,6 +334,27 @@ try:
         sql_file(ROOT / test)
         dropped = "its RPC + column (previous state restored)" if isinstance(tables, str) else ", ".join(tables)
         print(f"PASS {name}: {test} passes after the full history, re-applied, rollback drops {dropped}, re-applied; fixes still closed.")
+    # PR-D approver authority (columns + functions, replaces resolve_approval_w1_checked):
+    # SQL test after the full history, re-apply, rollback restores the 7-argument
+    # RPC and drops the columns, fixes still closed, re-apply.
+    name = next((n for n in order if n.startswith("20261005500000_")), None)
+    assert name, "approver authority migration missing"
+    test = "tests/security/db-approver-authority.sql"
+    sql_file(ROOT / test)
+    sql_file(MIGRATIONS / name)
+    sql_file(ROOT / test)
+    sql_text(rollback_block((MIGRATIONS / name).read_text()), single=False)
+    restored = query("select to_regprocedure('public.resolve_approval_w1_checked(uuid,uuid,uuid,text,text,text,text)') is not null"
+                     " and to_regprocedure('public.resolve_approval_w1_checked(uuid,uuid,uuid,text,text,text,text,boolean)') is null"
+                     " and to_regprocedure('public.record_approver_authority(uuid,uuid,uuid,text)') is null"
+                     " and not exists (select 1 from information_schema.columns where table_schema='public'"
+                     " and column_name in ('required_approver_kind','approver_member_id','approver_role','approver_authority','designated_admin_member_ids'));")
+    assert restored == "t", f"{name}: rollback did not restore the previous RPC / drop the columns"
+    for fix in FIXES:
+        sql_file(ROOT / fix["test"])
+    sql_file(MIGRATIONS / name)
+    sql_file(ROOT / test)
+    print(f"PASS {name}: {test} passes after the full history, re-applied, rollback restores the 7-argument resolve_approval_w1_checked and drops the PR-D columns/functions, re-applied; fixes still closed.")
 finally:
     if started:
         run([BIN / "pg_ctl", "-D", cluster / "data", "-m", "fast", "-w", "stop"], stdout=subprocess.DEVNULL)

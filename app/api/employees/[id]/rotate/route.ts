@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { assertWebActorApproverAuthority, webDirectDeniedBody } from "@/lib/approver-authority/web-direct";
 import { getCurrentOrgId } from "@/lib/auth/session";
 import { requireCredentialAdmin } from "@/lib/auth/require-credential-admin";
 import {
@@ -39,6 +40,14 @@ export async function POST(
   if (!employee) {
     return NextResponse.json({ error: "employee_not_found" }, { status: 404 });
   }
+  // Review 2026-10-09 item 2: a new credential carries the employee's permissions.
+  const authority = await assertWebActorApproverAuthority({
+    orgId,
+    memberId: gate.actor.id,
+    changes: [{ tool: "web.employeeRotate", adminMutation: {}, kind: "owner_or_designated_admin" }],
+    surface: "employees.rotate",
+  });
+  if (!authority.ok) return NextResponse.json(webDirectDeniedBody(authority), { status: 403 });
 
   try {
     const secret = mintOneTimeSecret();

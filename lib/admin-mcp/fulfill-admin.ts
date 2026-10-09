@@ -689,6 +689,15 @@ async function fulfillAllowedAccountsTicket(
   };
 }
 
+/** PR-D: owner-approved 指定管理者 list; re-validated and owner-checked right before the write. */
+async function fulfillDesignatedAdminsTicket(approval: ApprovalRequest, args: Record<string, unknown>): Promise<AdminFulfillment> {
+  const { fulfillDesignatedAdminsSet, DESIGNATED_ADMINS_SET_TOOL } = await import("@/lib/admin-mcp/designated-admins-tool");
+  const result = await fulfillDesignatedAdminsSet(approval, args);
+  const at = new Date().toISOString();
+  if (!result.ok) return { ok: false, tool: DESIGNATED_ADMINS_SET_TOOL, at, error: result.code, nextStepJa: result.messageJa };
+  return { ok: true, tool: DESIGNATED_ADMINS_SET_TOOL, at, summaryJa: result.summaryJa };
+}
+
 /** Human-approved Slack posting identity switch (bot | user); re-checked right before the write. */
 async function fulfillPostingIdentityTicket(approval: ApprovalRequest, args: Record<string, unknown>): Promise<AdminFulfillment> {
   const { fulfillPostingIdentityChange, POSTING_IDENTITY_SET_TOOL } = await import("@/lib/admin-mcp/posting-identity-tool");
@@ -721,25 +730,37 @@ async function fulfillPolicy(approval: ApprovalRequest, args: Record<string, unk
   if (!employeeId || !scopes.length || !["auto", "risk_based", "always_human"].includes(approvalPolicy)) {
     throw new Error("invalid_policy_payload");
   }
+  // 木村 2026-10-09 23:58: allowedPurposes left out keeps the current value
+  // (it used to be written as [] — an omission silently emptied it).
+  // 木村 2026-10-10: actionLimits left out keeps the current value too. It is
+  // passed explicitly, so policy.patch does not depend on what
+  // updateEmployeePolicy does with an undefined actionLimits (root fix on
+  // main); the Problem A classification treats an omission as "no change".
+  const keepPurposes = !Array.isArray(args.allowedPurposes);
+  const keepLimits = args.actionLimits === undefined;
+  let current: Awaited<ReturnType<typeof getEmployee>> = null;
+  if (keepPurposes || keepLimits) {
+    current = await getEmployee(employeeId, approval.orgId);
+    if (!current || current.orgId !== approval.orgId) throw new Error("employee_not_found");
+  }
+  const allowedPurposes: string[] = Array.isArray(args.allowedPurposes)
+    ? args.allowedPurposes.map(String).filter(Boolean)
+    : [...(current?.allowedPurposes ?? [])];
+  const actionLimits = normalizeActionLimits((keepLimits ? current?.actionLimits : args.actionLimits) as ActionLimits);
   let updated: Awaited<ReturnType<typeof updateEmployeePolicy>>;
   try {
     updated = await updateEmployeePolicy({
       orgId: approval.orgId,
       employeeId,
       scopes,
-      allowedPurposes: Array.isArray(args.allowedPurposes)
-        ? args.allowedPurposes.map(String).filter(Boolean)
-        : [],
+      allowedPurposes,
       approvalPolicy,
       toolApprovalDefaults:
         args.toolApprovalDefaults !== undefined
           ? normalizeToolApprovalDefaults(args.toolApprovalDefaults)
           : undefined,
       sodOverrideAcknowledged: args.sodOverrideAcknowledged === true,
-      // Omitted → keep the stored limits (it used to be written as {}); an
-      // explicit value, including {}, is applied.
-      actionLimits:
-        args.actionLimits === undefined ? undefined : normalizeActionLimits(args.actionLimits as ActionLimits),
+      actionLimits,
     });
   } catch (error) {
     return employeePolicyWriteFailedFulfillment("policy.patch", employeeId, error);
@@ -1065,6 +1086,11 @@ async function fulfillOrgIssueAdminCredential(
   approval: ApprovalRequest,
   args: Record<string, unknown>
 ): Promise<AdminFulfillment> {
+  // Operator-only: re-check platform auth at fulfil (an approved ticket alone
+  // is not enough; the ticket's org must still pass the platform-ops gate).
+  const { assertPlatformOpsFromAdminCred } = await import("@/lib/admin/platform-ops-gate");
+  const operatorGate = await assertPlatformOpsFromAdminCred({ orgId: approval.orgId } as Parameters<typeof assertPlatformOpsFromAdminCred>[0]);
+  if (!operatorGate.allowed) throw new Error("platform_ops_forbidden");
   const actor = platformActorFromQueuedArgs(args);
   const issued = await fulfillOrgIssueAdminCredentialFromQueuedArgs(args, actor);
 
@@ -2132,6 +2158,9 @@ async function fulfillApprovedAdminCore(
       case "channels.remove":
       case "parties.remove":
         fulfillment = await fulfillDirectoryRemoveTicket(approval, args, tool);
+        break;
+      case "approvers.designatedAdmins.set":
+        fulfillment = await fulfillDesignatedAdminsTicket(approval, args);
         break;
       default:
         fulfillment = { ok: false, tool, at, error: "unknown_admin_tool" };

@@ -7,6 +7,7 @@ import subprocess
 import tempfile
 import shutil
 import argparse
+import re
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--f8-parent-state", choices=("fresh", "legacy-indexes", "mismatched-indexes", "existing-constraints"), default="fresh")
@@ -297,6 +298,26 @@ try:
     sql(ROOT / "tests/security/db-thread-single-flight.sql")  # #286 intact after rolling back only the follow-up
     sql(preflag)  # forward again after rollback
     sql(ROOT / "tests/security/db-thread-single-flight-preflag.sql")
+    # PR-D approver authority: needs the P0 admin-approver RPC it replaces.
+    sql(ROOT / "supabase/migrations/20260927000300_admin_approver_enforcement.sql")
+    approver_authority = ROOT / "supabase/migrations/20261005500000_approver_authority.sql"
+    sql(approver_authority)
+    sql(approver_authority)  # re-applicable
+    sql(ROOT / "tests/security/db-approver-authority.sql")
+    rollback = re.search(r"^-- ROLLBACK \(down\).*?$(.*?)^-- END ROLLBACK", approver_authority.read_text(), re.S | re.M)
+    assert rollback, "approver authority migration has no rollback block"
+    rollback_sql = cluster / "approver-authority-rollback.sql"
+    rollback_sql.write_text("\n".join(ln[5:] for ln in rollback.group(1).splitlines() if ln.startswith("--   ")) + "\n")
+    sql(rollback_sql)
+    assert query("select to_regprocedure('public.resolve_approval_w1_checked(uuid,uuid,uuid,text,text,text,text)') is not null"
+                 " and to_regprocedure('public.resolve_approval_w1_checked(uuid,uuid,uuid,text,text,text,text,boolean)') is null"
+                 " and to_regprocedure('public.approver_authority_check(uuid,uuid,text,text[])') is null"
+                 " and to_regprocedure('public.approver_authority_requester_ids(jsonb)') is null"
+                 " and not exists (select 1 from information_schema.columns where table_schema='public'"
+                 " and column_name in ('required_approver_kind','approver_member_id','approver_role','approver_authority','designated_admin_member_ids'));") == "t"
+    sql(approver_authority)  # forward again after rollback
+    sql(ROOT / "tests/security/db-approver-authority.sql")
+    print("PASS: approver authority (PR-D): owner / designated admin decision table; flag-OFF 7-argument W1 call unchanged; standard ticket → designated admin stored, others refused; owner ticket → designated admin endorsed once and kept pending, owner approves and is stored; zero owners stop; multiple owners: any one owner other than the requester (requesting owner refused; a sole owner's own approval counts; several owners all requesters → no_owner_other_than_requester); reject / non-target not gated; record_approver_authority verified/endorse; one RPC overload; EXECUTE service_role only; rollback restores the 7-argument RPC + re-apply.")
     print("PASS: employee_webhook_settings (D9): RLS on, no policy, anon/authenticated denied, service_role reads/writes/upserts; cross-org row rejected; payload mode minimal|legacy_full (default minimal); ciphertext-only secret + fingerprint pair; employee delete cascades; rollback + re-apply.")
     print("PASS: channel_classify_proposals / channel_stuck_notice_windows (PR-B): RLS on, anon/authenticated denied (tables + 4 RPCs); org_channels accepts telegram; claim states claimed/in_flight/pending/decided, facts change reopens, other org isolated; attach same-org only; release unattached only; notice window once then suppressed; bad input denied; org delete cascades; 12 concurrent claims → exactly 1 claimed; rollback (2 tables + 4 RPCs + telegram surface) + re-apply.")
     print("PASS: channel_classify_budget_windows (PR-B follow-up H1): RLS on, no policy, anon/authenticated denied (table + RPC); allowed up to max → over_first once → over; per org / per key independent; expired window resets; bad input denied; org delete cascades; 20 concurrent takes (max 5) → exactly 5 allowed + 1 over_first; rollback (table + RPC, PR-B tables untouched) + re-apply.")

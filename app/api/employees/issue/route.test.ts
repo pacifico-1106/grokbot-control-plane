@@ -48,6 +48,12 @@ mock.module("@/lib/auth/session", () => ({
   getCurrentOrgId: async () => session.orgId,
 }));
 mock.module("@/lib/mode", () => ({ isDemoMode: () => false }));
+// Approver-authority guard (review 2026-10-09) is covered in lib/approver-authority/web-direct.test.ts; here: flag OFF.
+mock.module("@/lib/approver-authority/web-direct", () => ({
+  assertWebActorApproverAuthority: async () => ({ ok: true, requirement: null }),
+  webDirectDeniedBody: () => ({}),
+  webSessionActorMemberId: async () => null,
+}));
 mock.module("@/lib/billing/entitlements", () => ({
   assertBillingAllows: async () => ({ ok: true, entitlements: {} }),
 }));

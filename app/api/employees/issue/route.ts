@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
+import { assertWebActorApproverAuthority, webDirectDeniedBody } from "@/lib/approver-authority/web-direct";
 import { NextResponse } from "next/server";
 import { getCurrentOrgId } from "@/lib/auth/session";
 import { assertBillingAllows } from "@/lib/billing/entitlements";
@@ -93,6 +94,23 @@ export async function POST(req: Request) {
   if (!orgId) {
     return NextResponse.json(policyErrorPayload("auth_required"), { status: 401 });
   }
+  // Review 2026-10-09 item 1: same guard / same content rule as MCP employees.issue.
+  const issueAuthority = await assertWebActorApproverAuthority({
+    orgId: orgId,
+    memberId: gate.actor.id,
+    changes: [{
+      tool: "employees.issue",
+      adminMutation: {
+        scopes,
+        ...(body.spend !== undefined ? { spend: body.spend } : {}),
+        ...(body.actionLimits !== undefined ? { actionLimits: body.actionLimits } : {}),
+        ...(body.toolApprovalDefaults !== undefined ? { toolApprovalDefaults: body.toolApprovalDefaults } : {}),
+        ...(body.approvalPolicy !== undefined ? { approvalPolicy: body.approvalPolicy } : {}),
+      },
+    }],
+    surface: "employees.issue",
+  });
+  if (!issueAuthority.ok) return NextResponse.json(webDirectDeniedBody(issueAuthority), { status: 403 });
   const sodVerdict = evaluateSod(scopes, await getOrgSodWarnPolicy(orgId));
   if (
     sodAckRequired({

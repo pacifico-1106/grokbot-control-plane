@@ -29,6 +29,7 @@ import {
 import { checkAdminPolicyRequirement } from "@/lib/approval-workflow/admin-policy";
 import { getOrgApprovalWorkflowPolicy } from "@/lib/approval-workflow/data";
 import { isAdminApproverPolicyRequired } from "@/lib/feature-flags";
+import { approverFilingStop } from "@/lib/approver-authority/filing";
 
 export const ADMIN_TOOL_TITLE_JA: Record<string, string> = {
   "employees.issue": "AI社員の発行",
@@ -100,6 +101,21 @@ export type AdminPolicyRequiredRejection = {
   auditClass: typeof ADMIN_AUDIT_CLASS;
 };
 
+/**
+ * PR-D (APPROVER_AUTHORITY_ENABLED): nobody other than the requester could
+ * approve the ticket (zero owners / every owner is the requester).
+ */
+export type ApproverAuthorityFilingRejection = {
+  ok: false;
+  code: "org_has_no_owner" | "no_owner_other_than_requester";
+  error: "org_has_no_owner" | "no_owner_other_than_requester";
+  reason: "org_has_no_owner" | "no_owner_other_than_requester";
+  messageJa: string;
+  nextStepJa: string;
+  tool: string;
+  auditClass: typeof ADMIN_AUDIT_CLASS;
+};
+
 export async function queueAdminTool(input: {
   cred: ResolvedAdminCredential;
   tool: string;
@@ -109,7 +125,7 @@ export async function queueAdminTool(input: {
   title?: string;
   summary: string;
   jobId?: string;
-}): Promise<AdminQueueResult | AdminQueueSecretRejection | AdminPolicyRequiredRejection> {
+}): Promise<AdminQueueResult | AdminQueueSecretRejection | AdminPolicyRequiredRejection | ApproverAuthorityFilingRejection> {
   // P0-A: Secret-in-chat detector (fail-closed, before approval ticket creation)
   // Chat NEVER: passwords, refresh tokens, API keys, full employee/admin badge secrets
   // IMPORTANT: Scan raw user input (rawArgsForSecretScan), NOT the post-encryption args.
@@ -200,6 +216,38 @@ export async function queueAdminTool(input: {
     grokBotAgentId: input.cred.grokBotAgentId,
     actorId: input.cred.actorId,
   };
+  // PR-D: nobody other than the requester could approve → stop with a nextStep.
+  const authorityStop = await approverFilingStop({
+    orgId: input.cred.orgId,
+    tool: input.tool,
+    metadata: { adminMutation: input.args, adminRequester: requester },
+  });
+  if (authorityStop) {
+    await appendAuditEvent({
+      orgId: input.cred.orgId,
+      employeeId: null,
+      credentialId: null,
+      action: "admin.policy",
+      purpose: auditAction,
+      summary: `承認者権限により申請を停止: ${input.tool}`,
+      metadata: {
+        tool: input.tool,
+        code: authorityStop.reason,
+        requiredApproverKind: authorityStop.requiredApproverKind,
+        auditClass: ADMIN_AUDIT_CLASS,
+      },
+    });
+    return {
+      ok: false,
+      code: authorityStop.reason,
+      error: authorityStop.reason,
+      reason: authorityStop.reason,
+      messageJa: authorityStop.messageJa,
+      nextStepJa: authorityStop.nextStepJa,
+      tool: input.tool,
+      auditClass: ADMIN_AUDIT_CLASS,
+    };
+  }
   const created = await createApproval({
     orgId: input.cred.orgId,
     employeeId: "",
