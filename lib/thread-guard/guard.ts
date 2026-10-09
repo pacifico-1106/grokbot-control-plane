@@ -18,6 +18,10 @@
  *  then the caller posts and calls handle.finish(): a confirmed post is
  *  recorded as the employee's latest post in the thread, then the lease is
  *  released. Every caller releases in `finally` (finish is idempotent).
+ *  Caller-delivered replies (LINE / mail: the AI delivers after Staffpass
+ *  allows) pass `holdLease`: Staffpass cannot observe that delivery, so the
+ *  lease is kept until its TTL instead of being released at allowance
+ *  (木村 #286 pre-flag item 3; the TTL is the delivery window).
  *
  * Lease-store / key errors FAIL CLOSED (503 thread_guard_unavailable, nothing
  * sent): a post cannot be taken back, the flag exists to stop the double reply,
@@ -29,8 +33,8 @@ import { isThreadSingleFlightEnabled } from "@/lib/feature-flags";
 import { resolveCommReplyDedupKey } from "@/lib/comm-reply-dedup/config";
 import { conversationKey, type ConversationKeyInput } from "@/lib/comm-reply-dedup/conversation-key";
 import { threadGuardNow, threadLeaseTtlSeconds } from "./config";
-import { microsToTs, type ReadThrough } from "./read-through";
-import { acquireThreadLease, readLatestAiPostAfter, recordSelfPost, releaseThreadLease } from "./store";
+import { microsToTs, parseThreadTimestamp, type ReadThrough } from "./read-through";
+import { acquireThreadLease, readLatestAiPostAfter, readWakePoint, recordSelfPost, recordWakePoint, releaseThreadLease } from "./store";
 
 export const THREAD_BUSY = "thread_busy";
 export const THREAD_MOVED_ON = "thread_moved_on";
@@ -55,6 +59,27 @@ const NEXT_STEP_UNAVAILABLE =
   "Nothing was posted. The thread single-flight check is unavailable; retry the same request later (it is safe to retry).";
 
 /** Separate HMAC domain: never equal to a duplicate-ledger key. */
+/** 200-response hint when a send had no read point at all (#293 review item 2). */
+export const NEXT_STEP_READ_POINT_UNKNOWN =
+  "Sent, but the thread guard could not tell what you had read (no readThroughTs, no inbound ts, no wake for this thread). Next time pass conversation.readThroughTs = the newest message ts you actually read, so a reply that is already stale is stopped.";
+
+/**
+ * Record the inbound ts of a wake Staffpass DELIVERED to this employee for this
+ * conversation (#293 review item 2). Flag OFF → no-op (false). Hash-only key.
+ */
+export async function recordThreadWake(input: {
+  orgId: string;
+  employeeId: string;
+  keyInput: ConversationKeyInput | null;
+  ts: unknown;
+}): Promise<boolean> {
+  if (!isThreadSingleFlightEnabled() || !input.keyInput || !input.orgId || !input.employeeId) return false;
+  const micros = parseThreadTimestamp(input.ts);
+  const threadKey = threadKeyFor({ ...input.keyInput, orgId: input.orgId });
+  if (micros == null || !threadKey) return false;
+  return recordWakePoint({ orgId: input.orgId, employeeId: input.employeeId, threadKey, micros }).catch(() => false);
+}
+
 export function threadKeyFor(input: ConversationKeyInput | null): string | null {
   const key = resolveCommReplyDedupKey();
   if (!key || !input) return null;
@@ -80,8 +105,12 @@ export type ThreadGuardStop = {
 };
 
 export type ThreadSendHandle = {
-  /** Record a confirmed post (messageTs = provider ts; absent = server time) and release. Idempotent. */
-  finish(result: { sent: boolean; messageTs?: string | null }): Promise<void>;
+  /**
+   * Record a confirmed post (messageTs = provider ts; absent = server time) and
+   * release. Idempotent. `holdLease` (only with sent): record, but keep the
+   * lease until it expires — the delivery happens outside Staffpass.
+   */
+  finish(result: { sent: boolean; messageTs?: string | null }, options?: { holdLease?: boolean }): Promise<void>;
 };
 
 export type BeginThreadSend =
@@ -125,18 +154,27 @@ export async function beginThreadSend(input: {
   jobId?: string | null;
   keyInput: ConversationKeyInput | null;
   readThrough: ReadThrough | null;
+  /**
+   * When the request was received (approval fulfil: the approval's createdAt).
+   * Caps a wake read point, and the same-job window is measured at this time
+   * so a late approval does not close the same job's continuation (#293
+   * review item 1). Default: now (guard clock).
+   */
+  receivedAtMs?: number;
 }): Promise<BeginThreadSend> {
   if (!isThreadSingleFlightEnabled()) return { kind: "off" };
   if (!input.keyInput) return { kind: "off" }; // no conversation destination: nothing to serialize
-  const readThroughSource = input.readThrough?.source ?? "none";
-  const readPoint = input.readThrough ? "known" : "unknown";
+  let readThroughSource: string = input.readThrough?.source ?? "none";
+  let readPoint = input.readThrough ? "known" : "unknown";
+  let readThrough = input.readThrough;
   if (!input.orgId || !input.employeeId) return stop(THREAD_GUARD_UNAVAILABLE, {}, { reason: "scope_missing", readThroughSource, readPoint });
   if (!resolveCommReplyDedupKey()) return stop(THREAD_GUARD_UNAVAILABLE, {}, { reason: "thread_key_missing", readThroughSource, readPoint });
   const threadKey = threadKeyFor({ ...input.keyInput, orgId: input.orgId });
   if (!threadKey) return { kind: "off" };
   const keyRef = threadKey.slice(0, 12);
 
-  const lease = await acquireThreadLease({ orgId: input.orgId, employeeId: input.employeeId, threadKey, ttlSeconds: threadLeaseTtlSeconds() });
+  const jobKey = jobKeyOf(input.orgId, input.employeeId, input.jobId);
+  const lease = await acquireThreadLease({ orgId: input.orgId, employeeId: input.employeeId, threadKey, ttlSeconds: threadLeaseTtlSeconds(), jobKey });
   if (lease.state === "busy") {
     return stop(THREAD_BUSY, { retryAfterSeconds: lease.retryAfterSeconds }, { retryAfterSeconds: lease.retryAfterSeconds, threadKeyRef: keyRef, readThroughSource, readPoint });
   }
@@ -148,11 +186,26 @@ export async function beginThreadSend(input: {
     done = true;
     await releaseThreadLease({ orgId: input.orgId, threadKey, leaseId: lease.leaseId }).catch(() => false);
   };
-  const jobKey = jobKeyOf(input.orgId, input.employeeId, input.jobId);
-
   try {
-    if (input.readThrough) {
-      const last = await readLatestAiPostAfter({ orgId: input.orgId, threadKey, afterMicros: input.readThrough.micros, excludeJobKey: jobKey });
+    if (!readThrough) {
+      // No explicit / inbound read point: the latest wake delivered to this
+      // employee in this thread, capped at the receive time.
+      const wake = await readWakePoint({ orgId: input.orgId, employeeId: input.employeeId, threadKey });
+      if (!wake.ok) {
+        await release();
+        return stop(THREAD_GUARD_UNAVAILABLE, {}, { reason: "wake_read_failed", threadKeyRef: keyRef, readThroughSource, readPoint });
+      }
+      if (wake.micros != null) {
+        const cap = BigInt(Math.floor(input.receivedAtMs ?? Date.now())) * BigInt(1_000);
+        const micros = wake.micros > cap ? cap : wake.micros;
+        readThrough = { micros, ts: microsToTs(micros), source: "wake" };
+        readThroughSource = "wake";
+        readPoint = "known";
+      }
+    }
+    if (readThrough) {
+      const nowMicros = BigInt(Math.floor(input.receivedAtMs ?? threadGuardNow())) * BigInt(1_000);
+      const last = await readLatestAiPostAfter({ orgId: input.orgId, threadKey, afterMicros: readThrough.micros, excludeJobKey: jobKey, nowMicros });
       if (!last.ok) {
         await release();
         return stop(THREAD_GUARD_UNAVAILABLE, {}, { reason: "self_post_read_failed", threadKeyRef: keyRef, readThroughSource, readPoint });
@@ -164,8 +217,8 @@ export async function beginThreadSend(input: {
         const postedBy = last.post.employeeId === input.employeeId ? "self" : "other_ai_employee";
         return stop(
           THREAD_MOVED_ON,
-          { readThroughTs: input.readThrough.ts, aiPostedTs, postedBy },
-          { threadKeyRef: keyRef, readThroughSource, readPoint, readThroughTs: input.readThrough.ts, aiPostedTs, postedBy }
+          { readThroughTs: readThrough.ts, aiPostedTs, postedBy },
+          { threadKeyRef: keyRef, readThroughSource, readPoint, readThroughTs: readThrough.ts, aiPostedTs, postedBy }
         );
       }
     }
@@ -176,11 +229,12 @@ export async function beginThreadSend(input: {
 
   return {
     kind: "held",
-    readPointUnknown: !input.readThrough,
+    readPointUnknown: !readThrough,
     threadKeyRef: keyRef,
     handle: {
-      async finish(result) {
+      async finish(result, options) {
         if (done) return;
+        const hold = Boolean(options?.holdLease && result.sent);
         try {
           if (result.sent) {
             const ts = (result.messageTs ?? "").trim();
@@ -190,7 +244,8 @@ export async function beginThreadSend(input: {
             if (!recorded) console.warn("[thread-guard] self post not recorded (moved_on may miss this post)", { threadKeyRef: keyRef });
           }
         } finally {
-          await release();
+          if (hold) done = true; // expires at its TTL (the caller's delivery window)
+          else await release();
         }
       },
     },

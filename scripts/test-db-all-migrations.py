@@ -98,6 +98,19 @@ FIXES = [
 ALL_FIX_TABLES = tuple(t for f in FIXES for t in f["tables"])
 # Additive migrations (new server-only tables): (filename prefix, SQL test, tables).
 ADDITIVE = [
+    # Listed first: it alters #286's table, and #286's own rollback/re-apply
+    # below would drop its column. A str instead of a table tuple = the SQL
+    # condition that must hold after its rollback (it adds no table).
+    ("20261009150000_", "tests/security/db-thread-single-flight-preflag.sql",
+     "to_regprocedure('public.close_approval_without_send(uuid,uuid,text[],text,jsonb)') is null"
+     " and to_regclass('public.thread_wake_points') is null"
+     " and to_regprocedure('public.record_thread_wake_point(uuid,uuid,text,bigint)') is null"
+     " and to_regprocedure('public.acquire_thread_send_lease(uuid,text,uuid,uuid,integer,text)') is null"
+     " and not exists (select 1 from information_schema.columns where table_schema = 'public'"
+     " and table_name = 'thread_send_leases' and column_name = 'job_key')"
+     " and to_regclass('public.thread_self_posts') is not null"
+     " and not exists (select 1 from information_schema.columns where table_schema = 'public'"
+     " and table_name = 'thread_self_posts' and column_name = 'job_first_micros')"),
     ("20261005000000_", "tests/security/db-mcp-events.sql", ("mcp_event_subscriptions", "mcp_event_deliveries", "mcp_event_verification_windows")),
     ("20261005100000_", "tests/security/db-webhook-settings.sql", ("employee_webhook_settings",)),
     ("20261005200000_", "tests/security/db-channel-classify.sql", ("channel_classify_proposals", "channel_stuck_notice_windows")),
@@ -309,13 +322,18 @@ try:
         sql_file(MIGRATIONS / name)
         sql_file(ROOT / test)
         sql_text(rollback_block((MIGRATIONS / name).read_text()), single=False)
-        gone = query("select " + " and ".join(f"to_regclass('public.{t}') is null" for t in tables) + ";")
-        assert gone == "t", f"{name}: rollback left tables behind"
+        if isinstance(tables, str):
+            gone = query(f"select {tables};")
+            assert gone == "t", f"{name}: rollback did not restore the previous state"
+        else:
+            gone = query("select " + " and ".join(f"to_regclass('public.{t}') is null" for t in tables) + ";")
+            assert gone == "t", f"{name}: rollback left tables behind"
         for fix in FIXES:
             sql_file(ROOT / fix["test"])  # rolling back an additive migration never reopens a fix
         sql_file(MIGRATIONS / name)
         sql_file(ROOT / test)
-        print(f"PASS {name}: {test} passes after the full history, re-applied, rollback drops {', '.join(tables)}, re-applied; fixes still closed.")
+        dropped = "its RPC + column (previous state restored)" if isinstance(tables, str) else ", ".join(tables)
+        print(f"PASS {name}: {test} passes after the full history, re-applied, rollback drops {dropped}, re-applied; fixes still closed.")
 finally:
     if started:
         run([BIN / "pg_ctl", "-D", cluster / "data", "-m", "fast", "-w", "stop"], stdout=subprocess.DEVNULL)
