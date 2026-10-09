@@ -372,3 +372,29 @@ describe("policy.patch never applies projectAccess (pinned)", () => {
     }
   });
 });
+
+// 木村 2026-10-09 22:55 (#296 nit): each id listed in nextStep is cut to ~40 chars.
+describe("nextStep truncates each listed id to ~40 chars", () => {
+  const PHRASE = "これらのプロジェクト ID を除いて保存し直してください";
+  test("a long id is cut (40 chars + …), short / uuid ids stay whole, phrase kept", async () => {
+    const { ProjectAccessOrgError: E, projectAccessRefusalNextStep } = await import("@/lib/employees/project-access-org");
+    const long = "x".repeat(37) + "ABCDEFGHIJ" + "y".repeat(200);
+    const uuid = otherOrgProject.id;
+    const text = projectAccessRefusalNextStep(new E("project_access_cross_org", [long, uuid, "prj_short"]));
+    expect(text).toContain(PHRASE);
+    expect(text).toContain(`${long.slice(0, 40)}…`);
+    expect(text).not.toContain(long.slice(0, 41));
+    expect(text).toContain(uuid);
+    expect(text).toContain("prj_short");
+    expect(text.length).toBeLessThan(400);
+  });
+  test("web issue with a very long unknown id: nextStep stays short, the id is cut", async () => {
+    const long = `prj_${"z".repeat(5000)}`;
+    const res = await issueReq(selected(long));
+    expect(res.status).toBe(400);
+    const nextStep = String((await res.json()).nextStep);
+    expect(nextStep).toContain(PHRASE);
+    expect(nextStep).toContain(`${long.slice(0, 40)}…`);
+    expect(nextStep.length).toBeLessThan(300);
+  });
+});
