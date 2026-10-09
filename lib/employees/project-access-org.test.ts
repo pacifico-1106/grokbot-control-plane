@@ -279,3 +279,96 @@ describe("nextStep lists the refused project IDs (IDs only, never names)", () =>
     expect(JSON.stringify(f)).not.toContain(gone.name);
   });
 });
+
+// 木村 2026-10-09 #296 follow-ups.
+// (1) information_assets.project_id from web settings/directory: same org only.
+// (3) policy.patch never applies projectAccess.
+const { PUT: directoryPut } = await import("@/app/api/settings/directory/route");
+const { upsertInformationAsset, getInformationAsset } = await import("@/lib/data/directory");
+const ASSET_AUDIT_ACTION = "information_asset.project_refused";
+const assetRefusals = () => getRuntimeAudit().filter((e) => e.action === ASSET_AUDIT_ACTION);
+function assetReq(body: Record<string, unknown>) {
+  return directoryPut(new Request("https://x.invalid/api/settings/directory", {
+    method: "PUT", body: JSON.stringify({ record: "asset", class: "internal", ...body }),
+  }));
+}
+const assetRef = () => `asset-${Math.random().toString(36).slice(2, 10)}`;
+
+describe("web PUT /api/settings/directory asset: project_id must be a project of this org", () => {
+  const PHRASE = "これらのプロジェクト ID を除いて保存し直してください";
+  test("BOLA: another org's project id → 400, asset not written, one IDs-only audit row, nextStep lists the id", async () => {
+    const ref = assetRef();
+    const before = new Set(assetRefusals());
+    const res = await assetReq({ ref, projectId: otherOrgProject.id });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe(CODE);
+    expect(String(body.nextStep)).toContain(PHRASE);
+    expect(String(body.nextStep)).toContain(otherOrgProject.id);
+    expect(JSON.stringify(body)).not.toContain(otherOrgProject.name);
+    expect(await getInformationAsset(DEMO_ORG.id, ref)).toBeNull();
+    const rows = assetRefusals().filter((e) => !before.has(e));
+    expect(rows).toHaveLength(1);
+    const m = rows[0].metadata as Record<string, unknown>;
+    expect(m.path).toBe("web.settings.directory");
+    expect(m.refusedProjectIds).toEqual([otherOrgProject.id]);
+    expect(m.assetRef).toBeUndefined();
+    expect(JSON.stringify(rows[0])).not.toContain(otherOrgProject.name);
+    expect(JSON.stringify(rows[0])).not.toContain(ref);
+  });
+  test("an unknown id → 400; an existing asset keeps its project and class", async () => {
+    const own = await ownProject();
+    const ref = assetRef();
+    expect((await assetReq({ ref, projectId: own.id })).status).toBe(200);
+    const res = await assetReq({ ref, projectId: "prj_unknown_asset", class: "public" });
+    expect(res.status).toBe(400);
+    const kept = await getInformationAsset(DEMO_ORG.id, ref);
+    expect(kept?.projectId).toBe(own.id);
+    expect(kept?.class).toBe("internal");
+  });
+  test("valid same-org id saves; null clears; omitted leaves it (unchanged behaviour)", async () => {
+    const own = await ownProject();
+    const ref = assetRef();
+    expect((await assetReq({ ref, projectId: own.id })).status).toBe(200);
+    expect((await getInformationAsset(DEMO_ORG.id, ref))?.projectId).toBe(own.id);
+    expect((await assetReq({ ref, class: "public" })).status).toBe(200);
+    expect((await getInformationAsset(DEMO_ORG.id, ref))?.projectId).toBe(own.id);
+    expect((await assetReq({ ref, projectId: null })).status).toBe(200);
+    expect((await getInformationAsset(DEMO_ORG.id, ref))?.projectId).toBeNull();
+  });
+  test("data writer refuses on its own (any caller)", async () => {
+    const ref = assetRef();
+    const e = await upsertInformationAsset({ orgId: DEMO_ORG.id, ref, class: "internal", projectId: otherOrgProject.id })
+      .then(() => null, (x: unknown) => x as { code?: string });
+    expect(e?.code).toBe(CODE);
+    expect(await getInformationAsset(DEMO_ORG.id, ref)).toBeNull();
+  });
+});
+
+describe("policy.patch never applies projectAccess (pinned)", () => {
+  function policyPatchApproval(mutation: Record<string, unknown>): ApprovalRequest {
+    return {
+      id: `apr_pp_${Math.random().toString(36).slice(2, 8)}`,
+      orgId: DEMO_ORG.id, employeeId: "emp_ops", credentialId: null, title: "policy.patch", summary: "policy.patch",
+      purpose: "admin.policy.patch", risk: "high", tool: "policy.patch", status: "approved", createdAt: new Date().toISOString(),
+      metadata: { approvalClass: "admin", adminTool: "policy.patch", adminMutation: mutation },
+    } as unknown as ApprovalRequest;
+  }
+  test("fulfil: projectAccess in the ticket (widening to all, or another org's id) is ignored; no project check runs", async () => {
+    const emp = await newEmployee();
+    const own = await ownProject();
+    await updateEmployeePolicy({ orgId: DEMO_ORG.id, employeeId: emp.id, scopes: emp.scopes, allowedPurposes: [],
+      approvalPolicy: emp.approvalPolicy, projectAccess: selected(own.id) as never });
+    for (const projectAccess of [{ mode: "all", projectIds: [] }, selected(otherOrgProject.id)]) {
+      snapshotRefusals();
+      const r = await fulfillApprovedAdmin(policyPatchApproval({
+        employeeId: emp.id, scopes: ["mail:draft", "tools:read"], allowedPurposes: [], approvalPolicy: "risk_based", projectAccess,
+      }));
+      expect(r?.ok).toBe(true);
+      const after = await getEmployee(emp.id, DEMO_ORG.id);
+      expect(after?.scopes).toContain("tools:read");
+      expect(after?.projectAccess).toEqual(selected(own.id));
+      expect(newRefusals()).toHaveLength(0);
+    }
+  });
+});

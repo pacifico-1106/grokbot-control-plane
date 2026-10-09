@@ -77,3 +77,54 @@ describe("production lookup", () => {
     expect(calls).toHaveLength(0);
   });
 });
+
+// 木村 2026-10-09 #296 follow-ups (2) empty orgId and (1) information_assets.project_id.
+describe("empty orgId → refused up front (no lookup, no audit with an empty org)", () => {
+  for (const orgId of ["", "   "]) {
+    test(`orgId ${JSON.stringify(orgId)}: project_access_org_required`, async () => {
+      const e = await assertProjectAccessSameOrg({ orgId, projectAccess: { mode: "selected", projectIds: [P1] }, audit: { path: "t" } })
+        .then(() => null, (x: unknown) => x);
+      expect(e instanceof ProjectAccessOrgError).toBe(true);
+      expect((e as InstanceType<typeof ProjectAccessOrgError>).code).toBe("project_access_org_required");
+      expect(calls).toHaveLength(0);
+      expect(audits).toHaveLength(0);
+    });
+  }
+  test("no project ids to check → still nothing to refuse (company / all)", async () => {
+    await assertProjectAccessSameOrg({ orgId: "", projectAccess: { mode: "company", projectIds: [] }, audit: { path: "t" } });
+    expect(audits).toHaveLength(0);
+  });
+});
+
+describe("information_assets.project_id (production lookup)", () => {
+  test("same-org project → ok, one org-scoped query, no audit", async () => {
+    const pa = await import("@/lib/employees/project-access-org");
+    await pa.assertAssetProjectSameOrg({ orgId: ORG, projectId: P1, audit: { path: "t" } });
+    expect(calls[0].eq).toEqual([["org_id", ORG]]);
+    expect(audits).toHaveLength(0);
+  });
+  test("another org's / unknown → project_access_cross_org, one IDs-only audit row", async () => {
+    const pa = await import("@/lib/employees/project-access-org");
+    const e = await pa.assertAssetProjectSameOrg({ orgId: ORG, projectId: P2, audit: { path: "t" } }).then(() => null, (x: unknown) => x);
+    expect((e as { code?: string }).code).toBe("project_access_cross_org");
+    expect(audits).toHaveLength(1);
+    expect(audits[0].action).toBe("information_asset.project_refused");
+    expect((audits[0].metadata as Record<string, unknown>).refusedProjectIds).toEqual([P2]);
+  });
+  test("lookup error → project_access_unverified (503)", async () => {
+    const pa = await import("@/lib/employees/project-access-org");
+    failWith = "error";
+    const e = await pa.assertAssetProjectSameOrg({ orgId: ORG, projectId: P1, audit: { path: "t" } }).then(() => null, (x: unknown) => x);
+    expect((e as { code?: string }).code).toBe("project_access_unverified");
+    expect(pa.projectAccessRefusalStatus(e as InstanceType<typeof ProjectAccessOrgError>)).toBe(503);
+  });
+  test("null / empty projectId → nothing to check; empty orgId with an id → org_required, no query", async () => {
+    const pa = await import("@/lib/employees/project-access-org");
+    await pa.assertAssetProjectSameOrg({ orgId: ORG, projectId: null, audit: { path: "t" } });
+    expect(calls).toHaveLength(0);
+    const e = await pa.assertAssetProjectSameOrg({ orgId: "", projectId: P1, audit: { path: "t" } }).then(() => null, (x: unknown) => x);
+    expect((e as { code?: string }).code).toBe("project_access_org_required");
+    expect(calls).toHaveLength(0);
+    expect(audits).toHaveLength(0);
+  });
+});
