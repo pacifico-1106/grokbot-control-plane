@@ -27,6 +27,7 @@
  * conditions the tenant cannot be told through its own approval channel
  * (no admin approver). Rate-limited per org × reason.
  */
+import { classifyRejectGuidanceNoticeJa } from "@/lib/channel-classify/reject-guidance";
 import { isChannelStuckNotifyEnabled } from "@/lib/channel-classify/flags";
 import { takeChannelStuckNoticeSlot } from "@/lib/data/channel-classify";
 import { buildUnregisteredDenyNoticeJa, surfaceLabel, type ProposalState } from "@/lib/channel-classify/core";
@@ -184,7 +185,7 @@ export function buildStuckNoticeTextJa(input: StuckNoticeInput, ref: { surface: 
         `理由: ${reason} — 未登録のチャネルでは安全のため社員を起こしません。本文は含めていません。`,
       ];
       if (approvalId && (input.proposalState === undefined || input.proposalState === "created" || input.proposalState === "pending")) {
-        lines.push(`対処: 承認窓口に届いている分類チケット（channels.classify）を承認すると、以降のメンションで起きるようになります（承認ID: ${approvalId}）。社外の場合は社外として分類してください（管理エージェントで channels.classify に classification=shared_external を指定）。却下は、この AI 社員にこのチャネルを対応させたくない場合だけにしてください。`);
+        lines.push(`対処: 承認窓口に届いている分類チケット（channels.classify）を承認すると、以降のメンションで起きるようになります（承認ID: ${approvalId}）。${classifyRejectGuidanceNoticeJa()}`);
       } else if (approvalId && input.proposalState === "decided") {
         lines.push(`分類チケットは処理済みです（承認ID: ${approvalId}）。変える場合は管理エージェントで channels.classify を依頼してください。`);
       } else if (ref) {
