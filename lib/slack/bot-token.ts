@@ -81,3 +81,37 @@ export async function inspectSlackChannelExtShared(
     return null;
   }
 }
+
+/**
+ * The Slack team a user actually belongs to, as reported by Slack itself
+ * (users.info with the org's OWN conversation bot token). Used instead of any
+ * AI-supplied slackTeamId / speakerTeamId. null = could not verify (no token,
+ * missing users:read, Slack error, timeout); callers treat that as NOT internal.
+ */
+export async function fetchVerifiedSlackUserTeamId(
+  orgId: string,
+  slackUserId: string
+): Promise<string | null> {
+  const user = slackUserId.trim();
+  if (!orgId || !user) return null;
+  const token = await resolveOrgSlackBotToken(orgId);
+  if (!token) return null;
+  try {
+    const url = `https://slack.com/api/users.info?user=${encodeURIComponent(user)}`;
+    const response = await fetch(url, {
+      method: "GET",
+      headers: { authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(SLACK_TIMEOUT_MS),
+    });
+    const body = (await response.json().catch(() => ({}))) as {
+      ok?: boolean;
+      user?: { id?: string; team_id?: string; deleted?: boolean };
+    };
+    if (!body.ok || !body.user || body.user.deleted) return null;
+    if (body.user.id && body.user.id.toUpperCase() !== user.toUpperCase()) return null;
+    const team = typeof body.user.team_id === "string" ? body.user.team_id.trim().toUpperCase() : "";
+    return team || null;
+  } catch {
+    return null;
+  }
+}

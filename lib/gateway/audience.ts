@@ -20,7 +20,7 @@ import {
   isEmailDomainInternal,
   isSlackTeamInternal,
 } from "@/lib/data/internal-audience-rule";
-import { inspectSlackChannelExtShared } from "@/lib/slack/bot-token";
+import { fetchVerifiedSlackUserTeamId, inspectSlackChannelExtShared } from "@/lib/slack/bot-token";
 import { isChannelStuckNotifyEnabled } from "@/lib/channel-classify/flags";
 import type {
   Audience,
@@ -392,8 +392,15 @@ export async function resolveAudience(
       continue;
     }
 
-    if (item.kind === "slack_user" && ctx.slackTeamId) {
-      if (isSlackTeamInternal(internalAudienceRule, ctx.slackTeamId)) {
+    // Only a team reported by Slack itself counts; the AI-supplied
+    // ctx.slackTeamId / speakerTeamId is never trusted for the verdict.
+    if (
+      item.kind === "slack_user" &&
+      internalAudienceRule.autoSlackTeamInternal &&
+      internalAudienceRule.slackTeamIds.length > 0
+    ) {
+      const verifiedTeam = await fetchVerifiedSlackUserTeamId(ctx.orgId, item.identifier);
+      if (isSlackTeamInternal(internalAudienceRule, verifiedTeam)) {
         signals.push("internal");
         partySignals.push({
           kind: item.kind,

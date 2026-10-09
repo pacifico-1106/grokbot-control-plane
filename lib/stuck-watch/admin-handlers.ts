@@ -475,7 +475,11 @@ export async function runStuckWatchRetry(
             purpose: snapshot.purpose,
             jobId: snapshot.jobId,
             employeeId: snapshot.employeeId,
-            conversation: snapshot.conversation ?? undefined,
+            // Never trust a (possibly pre-fix) snapshot's conversation.orgId:
+            // the approval ROW's org is the authenticated one.
+            conversation: snapshot.conversation
+              ? { ...snapshot.conversation, orgId: withSnapshot!.orgId }
+              : undefined,
             args: snapshot.args,
           });
 

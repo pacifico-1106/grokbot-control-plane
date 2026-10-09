@@ -805,12 +805,13 @@ export async function runGatewayInvoke(
     );
   }
 
-  // Bot invokes carry a 社員証 but no browser session.
-  // Prefer session org, else binding.orgId, else admin PK lookup.
+  // The 社員証 (badge) is the principal: its org drives billing, plan gate,
+  // audit and the approval row. A browser session cookie never overrides it;
+  // a cookie naming a different org is refused below (session_org_mismatch).
   const binding = await getBinding(employeeId);
-  const orgId =
-    (await getCurrentOrgId()) || binding?.orgId || decision.binding.orgId || null;
-  let employee = await getEmployee(employeeId, orgId);
+  const sessionOrgId = await getCurrentOrgId();
+  const badgeOrgId = binding?.orgId || decision.binding.orgId || null;
+  let employee = await getEmployee(employeeId, badgeOrgId || sessionOrgId);
   if (!employee) {
     employee = await getEmployeeById(employeeId);
   }
@@ -828,6 +829,35 @@ export async function runGatewayInvoke(
         tool,
       },
       401
+    );
+  }
+
+  const orgId: string = employee.orgId;
+  if (sessionOrgId && sessionOrgId.trim() && sessionOrgId.trim().toLowerCase() !== orgId.toLowerCase()) {
+    await appendAuditEvent({
+      orgId,
+      employeeId,
+      credentialId: input.credentialId || employee.credentialId,
+      action: "gateway.session_org_mismatch",
+      purpose,
+      summary: `${tool} をログイン中の組織と社員証の組織の不一致で拒否（fail-closed）`,
+      metadata: { tool, jobId, code: "session_org_mismatch" },
+    }).catch(() => undefined);
+    return jsonResult(
+      {
+        ok: false,
+        code: "session_org_mismatch",
+        error: "session_org_mismatch",
+        message:
+          "The signed-in organization does not match the organization of this credential; the request was refused (nothing was sent).",
+        nextStepJa:
+          "ログイン中の組織と社員証の組織が違います。社員証の組織でログインし直すか、ログアウトした状態（社員証のみ）で同じ jobId で再実行してください。",
+        employeeId,
+        tool,
+        purpose,
+        jobId,
+      },
+      403
     );
   }
 
