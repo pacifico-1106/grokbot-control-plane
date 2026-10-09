@@ -32,7 +32,8 @@ export async function PUT(req: Request) {
     return NextResponse.json({ ok: true, project });
   } catch (error) {
     const message = error instanceof Error ? error.message : "upsert_failed";
-    const status = message === "cannot_delete_default" ? 400 : 400;
+    // Another org's project id and an unknown id → the same 404 (no existence oracle).
+    const status = message === "project_not_found" ? 404 : 400;
     return NextResponse.json({ error: message }, { status });
   }
 }

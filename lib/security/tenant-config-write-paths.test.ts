@@ -210,6 +210,14 @@ describe("app: tenant config / credential tables are written only server-side", 
     }
     has("app/api/slack/oauth/callback/route.ts", /verifySlackOAuthState\(state, nonce\)/);
     has("app/api/slack/bot-install/callback/route.ts", /verifySlackBotInstallState\(state, nonce\)/);
+    // PR-SEC2: employee identity connect / disconnect → hire_issue_credentials; callbacks re-check the initiator
+    for (const r of ["slack/oauth/start", "google/oauth/start", "google/oauth/disconnect"]) {
+      has(`app/api/${r}/route.ts`, /requireIdentityLinkManager\(req\)/);
+    }
+    for (const r of ["slack/oauth/callback", "google/oauth/callback"]) {
+      has(`app/api/${r}/route.ts`, /verifyIdentityLinkCallbackActor\(parsed\)/);
+    }
+    has("app/api/slack/bot-install/callback/route.ts", /requireOrgAdminSession\(\)[\s\S]*session\.orgId !== parsed\.orgId/);
     // (d) gateway status is tenant-level integration state → owner/admin only
     has("app/api/gateway/link/route.ts", /export async function POST[\s\S]*requireOrgAdminSession\(\)/);
     // employee binding link / health probe write employee_bindings → owner/admin only
