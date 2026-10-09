@@ -124,11 +124,30 @@ export async function assertProjectAccessSameOrg(input: {
   throw new ProjectAccessOrgError(code, refused);
 }
 
+/** How many refused ids the nextStep spells out (the rest are counted). */
+const NEXT_STEP_MAX_IDS = 20;
+
+/**
+ * Japanese nextStep. For a cross-org refusal it lists the project IDs to
+ * remove (IDs only — the ids the caller sent; never a project name, which for
+ * another org's project would leak that org's data).
+ */
+export function projectAccessRefusalNextStep(error: ProjectAccessOrgError): string {
+  const text = PROJECT_ACCESS_ORG_MESSAGES_JA[error.code];
+  if (error.code !== PROJECT_ACCESS_CROSS_ORG || !error.refusedProjectIds.length) return text.nextStep;
+  const shown = error.refusedProjectIds.slice(0, NEXT_STEP_MAX_IDS);
+  const rest = error.refusedProjectIds.length - shown.length;
+  return `何も保存・発行していません。この組織のプロジェクトではない ID: ${shown.join("、")}${rest > 0 ? ` ほか ${rest} 件` : ""}。これらのプロジェクト ID を除いて保存し直してください。`;
+}
+
 export function projectAccessRefusalBody(error: ProjectAccessOrgError): {
   ok: false; code: ProjectAccessOrgCode; error: ProjectAccessOrgCode; message: string; nextStep: string; refusedProjectIds: string[];
 } {
   const text = PROJECT_ACCESS_ORG_MESSAGES_JA[error.code];
-  return { ok: false, code: error.code, error: error.code, message: text.message, nextStep: text.nextStep, refusedProjectIds: error.refusedProjectIds };
+  return {
+    ok: false, code: error.code, error: error.code, message: text.message,
+    nextStep: projectAccessRefusalNextStep(error), refusedProjectIds: error.refusedProjectIds,
+  };
 }
 
 export function projectAccessRefusalStatus(error: ProjectAccessOrgError): number {
