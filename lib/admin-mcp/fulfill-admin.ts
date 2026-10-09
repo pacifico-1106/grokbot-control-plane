@@ -59,6 +59,7 @@ import { ALL_SCOPES } from "@/lib/employees/policy-draft";
 import {
   boundToRequestingAdmin,
   checkPolicyPatchCardShown,
+  checkPolicyPatchNotStale,
   checkPolicyPatchSodAck,
   parsePolicyPatchArgs,
 } from "@/lib/admin-mcp/policy-patch-guard";
@@ -743,6 +744,12 @@ async function fulfillPolicy(approval: ApprovalRequest, args: Record<string, unk
   // B1: nothing on a card that may have been cut counts as shown (SoD included).
   const cardGate = checkPolicyPatchCardShown(args, approval.summary);
   if (!cardGate.ok) return { ok: false, tool: "policy.patch", at, employeeId, error: cardGate.error, nextStepJa: cardGate.nextStepJa };
+  const current = await getEmployee(employeeId, approval.orgId);
+  if (!current) throw new Error("employee_not_found");
+  const staleGate = checkPolicyPatchNotStale(args, current);
+  if (!staleGate.ok) {
+    return { ok: false, tool: "policy.patch", at, employeeId, error: staleGate.error, nextStepJa: staleGate.nextStepJa };
+  }
   const sodGate = checkPolicyPatchSodAck(args, parsed.value, await getOrgSodWarnPolicy(approval.orgId));
   if (!sodGate.ok) return { ok: false, tool: "policy.patch", at, employeeId, error: sodGate.error, nextStepJa: sodGate.nextStepJa };
   const { verdict, needsAck } = sodGate;

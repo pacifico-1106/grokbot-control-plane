@@ -281,7 +281,67 @@ export type PolicyPatchCardSnapshot = {
   summaryChars: number;
   /** Fields the patch empties on purpose (explicit [] / {}), warned on the card. */
   clears: Array<"allowedPurposes" | "actionLimits">;
+  /** Filing-time values the card diff was computed from (stale check at fulfil). */
+  base?: PolicyPatchBase;
 };
+
+/** The employee values a policy.patch card diffs against (canonical order). */
+export type PolicyPatchBase = { scopes: string[]; allowedPurposes: string[]; actionLimits: unknown };
+
+function canonical(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonical);
+  if (isPlainObject(value)) {
+    return Object.fromEntries(Object.keys(value).sort().map((k) => [k, canonical(value[k])]));
+  }
+  return value;
+}
+
+export function policyPatchBase(employee: Pick<CardEmployee, "scopes" | "allowedPurposes" | "actionLimits">): PolicyPatchBase {
+  return {
+    scopes: [...(employee.scopes ?? [])].map(String).sort(),
+    allowedPurposes: [...(employee.allowedPurposes ?? [])].map(String).sort(),
+    actionLimits: canonical(normalizeActionLimits(employee.actionLimits)),
+  };
+}
+
+const BASE_FIELD_JA: Record<keyof PolicyPatchBase, string> = {
+  scopes: "できること（scopes）",
+  allowedPurposes: "用途（allowedPurposes）",
+  actionLimits: "実行上限（actionLimits）",
+};
+
+/**
+ * Fulfil-time stale check (木村 2026-10-09): the card showed a diff against
+ * the filing-time scopes / allowedPurposes / actionLimits. If any of them
+ * changed since, applying would silently drop or overwrite that change →
+ * refused, nothing written. A card snapshot without the base is refused too
+ * (fail-closed). Tickets with no card snapshot at all (older builds, never
+ * filed while the flag was ON) keep the legacy path.
+ */
+export type PolicyPatchStaleGate =
+  | { ok: true }
+  | { ok: false; error: "policy_patch_stale"; changed: Array<keyof PolicyPatchBase>; nextStepJa: string };
+export function checkPolicyPatchNotStale(
+  args: Record<string, unknown>,
+  current: Pick<CardEmployee, "scopes" | "allowedPurposes" | "actionLimits">
+): PolicyPatchStaleGate {
+  const card = readPolicyPatchCard(args);
+  if (card === undefined) return { ok: true };
+  const fields = Object.keys(BASE_FIELD_JA) as Array<keyof PolicyPatchBase>;
+  const base = isPlainObject(card) && isPlainObject(card.base) ? (card.base as Record<string, unknown>) : null;
+  const now = policyPatchBase(current);
+  const changed = base
+    ? fields.filter((f) => JSON.stringify(canonical(base[f])) !== JSON.stringify(now[f]))
+    : fields;
+  if (!changed.length) return { ok: true };
+  const what = base ? changed.map((f) => BASE_FIELD_JA[f]).join("・") : "依頼時の値（記録なし）";
+  return {
+    ok: false,
+    error: "policy_patch_stale",
+    changed,
+    nextStepJa: `依頼の後に ${what} が変わったため、承認カードの差分が今の設定と合いません。変更は行われていません。いまの設定をもとに policy.patch をもう一度依頼してください。`,
+  };
+}
 
 export function policyPatchSod(scopes: EmployeeScope[], approvalPolicy: ApprovalPolicy, sodPolicy: SodWarnPolicy | null) {
   const verdict = evaluateSod(scopes, sodPolicy);
@@ -486,6 +546,7 @@ export function buildPolicyPatchCard(
       fitsAllSurfaces,
       summaryChars,
       clears: card.clears,
+      base: policyPatchBase(employee),
     },
   };
 }

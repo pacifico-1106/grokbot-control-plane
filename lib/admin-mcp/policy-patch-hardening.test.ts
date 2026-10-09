@@ -14,6 +14,7 @@
 import { describe, expect, test } from "bun:test";
 import { ADMIN_AUDIT_CLASS } from "@/lib/admin-mcp/audit-class";
 import { fulfillApprovedAdmin } from "@/lib/admin-mcp/fulfill-admin";
+import { policyPatchBase } from "@/lib/admin-mcp/policy-patch-guard";
 import type { ResolvedAdminCredential } from "@/lib/auth/admin-credential";
 import { createApproval, getApprovalById, getEmployee, linkAgent, listApprovals, listAuditEvents, resolveApproval } from "@/lib/data";
 import { issueEmployee } from "@/lib/data/employees";
@@ -218,7 +219,8 @@ describe("5. SoD acknowledgement = the human approval of the card (agent flag ig
     const e = await hire();
     const id = await legacyTicket({
       employeeId: e.id, scopes: SOD_SCOPES, approvalPolicy: "risk_based",
-      policyPatchCard: { version: 2, sodLevel: "ok", sodDomains: [], sodNeedsAck: false, fitsAllSurfaces: true, summaryChars: 11 },
+      // base matches (not stale) so this exercises the SoD gate
+      policyPatchCard: { version: 2, sodLevel: "ok", sodDomains: [], sodNeedsAck: false, fitsAllSurfaces: true, summaryChars: 11, base: policyPatchBase(e) },
     });
     const f = await approveAndFulfil(id);
     expect(f).toMatchObject({ ok: false, error: "sod_changed_since_card" });
