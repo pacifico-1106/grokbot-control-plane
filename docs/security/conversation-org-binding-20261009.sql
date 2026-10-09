@@ -61,3 +61,23 @@ select ar.org_id,
 from approval_requests ar
 group by ar.org_id
 order by mismatched desc, with_conv_org desc;
+
+-- Q5 (#5 session cookie vs badge). Approval rows created in an org other than
+--     the requesting employee's (badge) org: the pre-fix session-cookie
+--     override. Read-only; expected 0.
+select ar.id as approval_id, ar.org_id as approval_org_id, e.org_id as employee_org_id,
+       ar.employee_id, ar.tool, ar.status, ar.created_at
+from approval_requests ar
+join employees e on e.id = ar.employee_id
+where e.org_id <> ar.org_id
+order by ar.created_at desc;
+
+-- Q6. Slack-team self-assertion exposure: orgs that relied on
+--     autoSlackTeamInternal (now requires Slack users.info verification with
+--     the org's own bot token; missing users:read → speakers fall back to
+--     unknown → approval).
+select o.id as org_id,
+       o.internal_audience_rule->'slackTeamIds' as slack_team_ids,
+       o.internal_audience_rule->>'autoSlackTeamInternal' as auto_internal
+from orgs o
+where coalesce((o.internal_audience_rule->>'autoSlackTeamInternal')::boolean, false);
