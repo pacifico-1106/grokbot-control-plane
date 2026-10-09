@@ -96,9 +96,9 @@ export async function POST(req: Request, ctx: { params: Promise<{ ref: string }>
     if (isChannelClassifyProposalsEnabled()) {
       const approvalChatId = String((channel.config as Record<string, unknown>)?.chatId || "");
       if (String(memberUpdate.chat?.id ?? "") !== approvalChatId) {
-        const { telegramJoinSignal, handleChannelJoin } = await import("@/lib/channel-classify/join");
-        const signal = telegramJoinSignal({ orgId: channel.orgId }, update as Parameters<typeof telegramJoinSignal>[1]);
-        if (signal) await handleChannelJoin(signal);
+        // Follow-up H1: only when the person who added the bot is a known member.
+        const { handleTelegramMyChatMember } = await import("@/lib/channel-classify/join");
+        await handleTelegramMyChatMember(channel, update as Parameters<typeof handleTelegramMyChatMember>[1]);
       }
     }
     return NextResponse.json({ ok: true });

@@ -1,4 +1,6 @@
 import { NextResponse } from "next/server";
+// PR-D: namespace access (mocks of the flag module elsewhere stay valid).
+import * as featureFlags from "@/lib/feature-flags";
 import { getCurrentOrgId } from "@/lib/auth/session";
 import { appendAuditEvent, getEmployee, listNotificationChannels, updateEmployeePolicy } from "@/lib/data";
 import { normalizeActionLimits } from "@/lib/action-gate";
@@ -123,6 +125,38 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
     );
     if (!parsedInbox.ok) return fail("approval_channel_not_found", 400);
     nextApprovalChannelId = parsedInbox.id;
+  }
+
+  if (featureFlags.isApproverAuthorityEnabled?.()) {
+    // PR-D: approver / permission fields saved directly from the dashboard
+    // need someone who could have approved them (owner / designated admin;
+    // money-related → owner). Only fields that actually change are judged.
+    const { assertWebActorApproverAuthority, webDirectDeniedBody, sameJson, sameSet } = await import("@/lib/approver-authority/web-direct");
+    const changes: Array<{ tool: string; adminMutation: Record<string, unknown> }> = [];
+    if (!sameSet(scopes, existing.scopes)) changes.push({ tool: "policy.patch", adminMutation: { scopes } });
+    if (approvalPolicy !== existing.approvalPolicy) changes.push({ tool: "policy.patch", adminMutation: { approvalPolicy } });
+    if (toolApprovalDefaults !== undefined && !sameJson(toolApprovalDefaults, normalizeToolApprovalDefaults(existing.toolApprovalDefaults ?? {}))) {
+      changes.push({ tool: "policy.patch", adminMutation: { toolApprovalDefaults } });
+    }
+    const nextActionLimits = normalizeActionLimits(body.actionLimits);
+    if (!sameJson(nextActionLimits, normalizeActionLimits(existing.actionLimits))) {
+      changes.push({ tool: "policy.patch", adminMutation: { actionLimits: nextActionLimits } });
+    }
+    if (spend !== undefined && !sameJson(spend, existing.spend ?? null)) changes.push({ tool: "employees.spend.set", adminMutation: {} });
+    if (
+      (nextApprovalChannelId !== undefined && nextApprovalChannelId !== (existing.approvalChannelId ?? null)) ||
+      (body.approverUserIds !== undefined && !sameSet(normalizeApproverUserIds(body.approverUserIds), existing.approverUserIds ?? []))
+    ) {
+      changes.push({ tool: "setup.lineApproval.setEmployeeInbox", adminMutation: {} });
+    }
+    const authority = await assertWebActorApproverAuthority({
+      orgId,
+      memberId: gate.actor.id,
+      changes,
+      context: { currentEmployeeScopes: existing.scopes, currentEmployeeApprovalPolicy: existing.approvalPolicy },
+      surface: "employees.policy",
+    });
+    if (!authority.ok) return NextResponse.json(webDirectDeniedBody(authority), { status: 403 });
   }
 
   let updated: Awaited<ReturnType<typeof updateEmployeePolicy>>;

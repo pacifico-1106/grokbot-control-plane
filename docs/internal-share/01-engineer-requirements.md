@@ -199,13 +199,13 @@ Grok Bot / MCP Client
 
 ## 7. API（方針）
 
-- `POST /api/trial` — トライアル org 発行
+- ~~`POST /api/trial`~~ — 2026-10-05 SEC1 で削除（メール中継になるため）。トライアル開始は `POST /api/auth/signup`
 - `POST /api/gateway/invoke` — **ゲート経由実行（P0 の核）**。purpose + jobId 必須、ツール allowlist
 - `GET /api/gateway/health` — 契約ヒント（allowlist / requirePurpose 等）
 - `GET/POST /api/approvals/*`
 - `GET` 監査系 (+ export は P1)
 - `POST /api/webhooks/stripe` — **SaaS サブスク**用（commerce:order ではない）
-- `POST /api/email` またはサーバ内 Resend ヘルパ（層 C のみ）
+- メール送信はサーバ内 Resend ヘルパのみ（層 C）。`POST /api/email` は 2026-10-05 SEC1 で削除
 - MCP: 将来 `invoke_tool` / `get_job_audit` 等（自前契約）
 
 認証: ダッシュボードは Supabase Auth。エージェント実行は Employee Credential Bearer。

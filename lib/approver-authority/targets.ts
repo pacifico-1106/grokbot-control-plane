@@ -62,6 +62,10 @@ export const APPROVER_AUTHORITY_TARGETS = {
     "members.update",
     "employees.leave",
     "employees.reinstate",
+    // 2026-10-09 gap closure: these change approvers / permissions too.
+    "setup.approvalDelivery.autoResolve",
+    "setup.lineApproval.demoteTelegram",
+    "employees.issue",
   ],
   sensitiveTools: [
     "employees.spend.set",
@@ -125,7 +129,8 @@ export type ApproverRequirementReason =
   | "money_tool_limits"
   | "unknown_policy_key"
   | "employee_has_money_scope"
-  | "classification_failed";
+  | "classification_failed"
+  | "money_spend_limit";
 
 export interface ApproverRequirement {
   kind: RequiredApproverKind;
@@ -329,6 +334,26 @@ function classifyPolicyPatch(
   }
 }
 
+/**
+ * employees.issue grants a NEW employee its scopes / approval policy / limits:
+ * same money rules as policy.patch with "no current scopes" (everything is an
+ * addition), plus any spend limit → owner (employees.spend.set is owner-only).
+ */
+function classifyEmployeeIssue(args: Record<string, unknown>, reasons: Set<ApproverRequirementReason>) {
+  if (args.scopes !== undefined && !Array.isArray(args.scopes)) reasons.add("unknown_policy_key");
+  const scopes = Array.isArray(args.scopes) ? args.scopes : [];
+  if (hasMoneyScope(scopes)) reasons.add("money_scope_change");
+  if (args.spend !== undefined && args.spend !== null) reasons.add("money_spend_limit");
+  if (args.toolApprovalDefaults !== undefined) {
+    if (!isRecord(args.toolApprovalDefaults)) reasons.add("money_approval_weakened");
+    else for (const key of Object.keys(args.toolApprovalDefaults)) if (!isNonMoneyToolKey(key)) reasons.add("money_approval_weakened");
+  }
+  if (args.actionLimits !== undefined && args.actionLimits !== null) {
+    if (!isRecord(args.actionLimits)) reasons.add("money_tool_limits");
+    else for (const key of Object.keys(args.actionLimits)) if (!isNonMoneyToolKey(key)) reasons.add("money_tool_limits");
+  }
+}
+
 function classifyUnsafe(input: ApproverClassificationInput): ApproverRequirement | null {
   const tool = (input.tool || "").trim();
   if (!isApproverAuthorityTargetTool(tool)) return null;
@@ -339,6 +364,7 @@ function classifyUnsafe(input: ApproverClassificationInput): ApproverRequirement
   if (mentionsStrongCapability(mutation)) reasons.add("strong_capability");
   if (tool === "approvalRoutes.patch") classifyApprovalRoutes(metadata, reasons);
   if (tool === "policy.patch") classifyPolicyPatch(mutation, input.context, reasons);
+  if (tool === "employees.issue") classifyEmployeeIssue(mutation, reasons);
   if (tool === "employees.reinstate") {
     const scopes = input.context?.currentEmployeeScopes;
     if (!scopes) reasons.add("money_scope_unverified");

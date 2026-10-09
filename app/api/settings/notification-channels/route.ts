@@ -1,4 +1,6 @@
 import { randomBytes } from "node:crypto";
+// PR-D: namespace access (mocks of the flag module elsewhere stay valid).
+import * as featureFlags from "@/lib/feature-flags";
 import { NextResponse } from "next/server";
 import {
   appendAuditEvent,
@@ -43,6 +45,18 @@ export async function GET() {
 export async function PUT(req: Request) {
   const gate = await requireOrgAdminSession();
   if (!gate.ok) return gate.response;
+  if (featureFlags.isApproverAuthorityEnabled?.()) {
+    // PR-D: the approval inbox (destination / allowed approvers) is an approver
+    // setting → only an owner or designated admin may save it directly.
+    const { assertWebActorApproverAuthority, webDirectDeniedBody, webSessionActorMemberId } = await import("@/lib/approver-authority/web-direct");
+    const authority = await assertWebActorApproverAuthority({
+      orgId: gate.orgId,
+      memberId: await webSessionActorMemberId(req),
+      changes: [{ tool: "setup.slackApprover.set", adminMutation: {} }],
+      surface: "settings.notification_channels",
+    });
+    if (!authority.ok) return NextResponse.json(webDirectDeniedBody(authority), { status: 403 });
+  }
   const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
   const provider = body.provider as NotificationProvider;
   if (provider !== "telegram" && provider !== "line" && provider !== "slack") {
