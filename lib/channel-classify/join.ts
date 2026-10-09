@@ -32,6 +32,7 @@ import { findSlackConversationAdaptersByTeam } from "@/lib/data/conversation-ada
 import { unverifiedFacts, type ChannelFacts, type ConversationType, type JoinSurface } from "@/lib/channel-classify/core";
 import { callOrgSlack, collectSlackChannelFacts, resolveFactsToken } from "@/lib/channel-classify/facts";
 import { getMemberIdFromVoterBinding } from "@/lib/approval-workflow/data";
+import { getMemberById } from "@/lib/data/members";
 import { appendAuditEvent } from "@/lib/data/audit";
 import { takeChannelStuckNoticeSlot } from "@/lib/data/channel-classify";
 import { proposeChannelClassification, type ProposalOutcome, type ProposalTrigger } from "@/lib/channel-classify/proposals";
@@ -56,6 +57,8 @@ type Deps = {
   findOrgsBySlackTeam: (teamId: string) => Promise<string[]>;
   adapterBotIdentity: (orgId: string) => Promise<AdapterBotIdentity | null>;
   telegramVoterMember: (orgId: string, channelKey: string, userId: string) => Promise<string | null>;
+  /** #280 pre-flag (木村 #281 review): the binding's member is still active in THIS org. */
+  memberActiveInOrg: (orgId: string, memberId: string) => Promise<boolean>;
 };
 
 const IDENTITY_TTL_MS = 10 * 60 * 1000;
@@ -109,6 +112,10 @@ const DEFAULT_DEPS: Deps = {
   adapterBotIdentity: resolveAdapterBotIdentity,
   telegramVoterMember: (orgId, channelKey, userId) =>
     getMemberIdFromVoterBinding(orgId, { provider: "telegram", channelKey, userId }),
+  memberActiveInOrg: async (orgId, memberId) => {
+    const member = await getMemberById(memberId, orgId);
+    return Boolean(member && member.id === memberId && member.orgId === orgId && member.status === "active");
+  },
 };
 let deps: Deps = DEFAULT_DEPS;
 
@@ -234,7 +241,13 @@ export function telegramJoinSignal(channel: { orgId: string }, update: TelegramU
 
 type TelegramInbox = { id: string; orgId: string; config?: Record<string, unknown> | null };
 
-async function auditIgnoredJoin(orgId: string, surface: string, externalId: string, reason: string): Promise<void> {
+async function auditIgnoredJoin(
+  orgId: string,
+  surface: string,
+  externalId: string,
+  reason: string,
+  ids: { memberId?: string } = {}
+): Promise<void> {
   // Once per hour per org × reason: an outsider adding the bot to many groups cannot flood the audit log.
   const slot = await takeChannelStuckNoticeSlot({ orgId, key: `join_ignored|${surface}|${reason}`, windowSeconds: 3600 }).catch(() => null);
   if (!slot || slot.state !== "ok" || !slot.allowed) return;
@@ -245,7 +258,7 @@ async function auditIgnoredJoin(orgId: string, surface: string, externalId: stri
     action: "channel_classify.join_ignored",
     purpose: "admin.channel",
     summary: `参加イベントを無視しました（${reason}）: ${surface} ${externalId}`,
-    metadata: { auditClass: "admin", surface, externalId, reason },
+    metadata: { auditClass: "admin", surface, externalId, reason, ...(ids.memberId ? { memberId: ids.memberId } : {}) },
   }).catch(() => undefined);
 }
 
@@ -264,8 +277,20 @@ export async function handleTelegramMyChatMember(channel: TelegramInbox, update:
     if (Number.isSafeInteger(fromId) && from?.is_bot !== true) {
       const allowed = Array.isArray(channel.config?.allowedUserIds) ? (channel.config!.allowedUserIds as unknown[]).map(String) : [];
       known = allowed.includes(String(fromId));
-      if (!known && channel.id) {
-        known = Boolean(await deps.telegramVoterMember(channel.orgId, channel.id, String(fromId)).catch(() => null));
+      // #280 pre-flag (木村 #281 review): a binding counts only while its
+      // member is still active in THIS org. A binding to a removed / disabled /
+      // invited / other-org member refuses — even for an allowlisted adder
+      // (the binding is the fresher signal). Lookup error → refused.
+      const memberId = channel.id
+        ? await deps.telegramVoterMember(channel.orgId, channel.id, String(fromId)).catch(() => null)
+        : null;
+      if (memberId) {
+        const active = await deps.memberActiveInOrg(channel.orgId, memberId).catch(() => false);
+        if (!active) {
+          await auditIgnoredJoin(channel.orgId, "telegram", signal.externalId, "adder_member_inactive", { memberId });
+          return { state: "skipped", reason: "adder_member_inactive" };
+        }
+        known = true;
       }
     }
     if (!known) {

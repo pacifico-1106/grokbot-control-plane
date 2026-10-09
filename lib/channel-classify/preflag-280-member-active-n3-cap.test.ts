@@ -72,7 +72,7 @@ function bindTo(memberId: string, userId = "222") {
 }
 
 async function auditRows(orgId: string, action: string, reason: string) {
-  return (await listAuditEvents(orgId)).filter(
+  return (await listAuditEvents(orgId, 1_000_000)).filter(
     (a) => a.action === action && (a.metadata as Record<string, unknown> | undefined)?.reason === reason
   );
 }
@@ -120,16 +120,19 @@ describe("1. Telegram binding: the tied member must still be active in the same 
     patchMember("mem_3", { status: "disabled" });
     bindTo("mem_3");
     const before = (await auditRows(ORG, "channel_classify.join_ignored", "adder_member_inactive")).length;
-    const outcome = await handleTelegramMyChatMember(channel, update(222));
+    const u = update(222);
+    const outcome = await handleTelegramMyChatMember(channel, u);
     expect(outcome).toMatchObject({ state: "skipped", reason: "adder_member_inactive" });
     expect(ticketOrgs.length).toBe(0);
     const rows = await auditRows(ORG, "channel_classify.join_ignored", "adder_member_inactive");
     expect(rows.length).toBe(before + 1);
-    const meta = rows[rows.length - 1].metadata as Record<string, unknown>;
+    const row = rows.find((r) => (r.metadata as Record<string, unknown>).externalId === String(u.my_chat_member.chat.id))!;
+    expect(row).toBeTruthy();
+    const meta = row.metadata as Record<string, unknown>;
     expect(meta.memberId).toBe("mem_3");
     expect(meta.surface).toBe("telegram");
     // ids only: no name / email of the member
-    const json = JSON.stringify(rows[rows.length - 1]);
+    const json = JSON.stringify(row);
     const m3 = getRuntimeMemberById("mem_3")!;
     expect(json).not.toContain(m3.email);
     expect(json).not.toContain(`"${m3.displayName}"`);
@@ -227,12 +230,12 @@ describe("flags OFF → unchanged", () => {
     delete process.env.CHANNEL_CLASSIFY_PROPOSALS_ENABLED;
     patchMember("mem_3", { status: "disabled" });
     bindTo("mem_3");
-    const before = (await listAuditEvents(ORG)).length;
+    const before = (await listAuditEvents(ORG, 1_000_000)).length;
     expect((await handleTelegramMyChatMember(channel, update(222))).state).toBe("flag_off");
     hasApprover = false;
     const org = `org_n3cap_${Date.now()}_off`;
     expect((await handleChannelJoin({ orgId: org, surface: "line", externalId: "Cn3capoff0001", trigger: "line_join" })).state).toBe("flag_off");
-    expect((await listAuditEvents(ORG)).length).toBe(before);
+    expect((await listAuditEvents(ORG, 1_000_000)).length).toBe(before);
     expect((await listAuditEvents(org)).length).toBe(0);
     expect(ticketOrgs.length).toBe(0);
   });
