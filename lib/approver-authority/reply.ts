@@ -37,7 +37,7 @@ const NEXT_STEP_JA: Partial<Record<ApproverAuthorityResultReason, string>> = {
   approver_is_requester: "申請者以外のオーナー（または、標準の変更なら指定管理者）に承認を依頼してください。",
   approver_not_authorized: "オーナーまたは指定管理者に承認を依頼してください。",
   approver_identity_unverified: "承認者登録（approvalWorkflow.bindVoter）で、このアカウントをご本人のメンバーに紐づけてから押してください。",
-  approver_is_target: "対象者と申請者以外の既存オーナーに承認を依頼してください。",
+  approver_is_target: "対象者以外の既存オーナー（オーナーが2人以上いるときは申請者以外）に承認を依頼してください。",
   approver_class_missing: "同じ内容でもう一度申請してください（新しい申請にはオーナーまたは指定管理者の承認条件が付きます）。",
 };
 
