@@ -342,8 +342,9 @@ describe("21:53 review (1): notice wording — classify as external instead of r
     const channel = channelId();
     await skip(channel);
     expect(sent.length).toBe(1);
-    expect(sent[0]).toContain("社外の場合は社外として分類してください");
-    expect(sent[0]).toContain("対応させたくない場合だけ");
+    // 22:13: wording aligned with the shared_external card (reject-guidance.ts)
+    expect(sent[0]).toContain("却下するのは、この AI 社員に対応させたくないときだけ。分類が違うときは、正しい区分で分類し直してください");
+    expect(sent[0]).toContain("classification=shared_external");
     expect(sent[0]).not.toContain("社外と共有されているなら却下");
   });
 
@@ -357,7 +358,7 @@ describe("21:53 review (1): notice wording — classify as external instead of r
     expect(text).not.toContain("社外と共有されているなら却下");
     const { buildUnregisteredDenyNoticeJa } = await import("@/lib/channel-classify/core");
     const deny = buildUnregisteredDenyNoticeJa({ ref: { surface: "slack", externalId: "C0WORDING1" }, reason: "unclassified_channel", approvalId: "apr_wording_2", proposalState: "created" });
-    expect(deny).toContain("社外の場合は社外として分類してください");
+    expect(deny).toContain("却下するのは、この AI 社員に対応させたくないときだけ");
     expect(deny).not.toContain("社外と共有されているなら却下");
   });
 });
