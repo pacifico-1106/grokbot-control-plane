@@ -22,7 +22,12 @@ const retryable = new Set(["slack_token_missing", "slack_conversation_bot_token_
   // and stopped before any provider call; the approval stays approved and may run
   // again once that post is verified absent (released) or ages out.
   // ("post_outcome_unknown" is NOT here: that post may have gone out.)
-  "duplicate_post_uncertain"]);
+  "duplicate_post_uncertain",
+  // Thread single-flight (THREAD_SINGLE_FLIGHT_ENABLED, lib/thread-guard): stopped
+  // before any provider call. busy / unavailable → may run again; moved_on is
+  // re-checked on every run against the approved read point, so a re-run never
+  // posts into a thread this employee has since replied in.
+  "thread_busy", "thread_moved_on", "thread_guard_unavailable"]);
 // Per-tool additions: refusals that tool returns BEFORE any write and that it
 // re-checks from scratch on every run (so the same approvalId may run again,
 // e.g. after the employee re-authorizes Slack). Scoped by tool so the same

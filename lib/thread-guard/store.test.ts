@@ -85,9 +85,9 @@ describe("lease", () => {
 
 describe("self posts", () => {
   test("per org × employee × thread, only moves forward", async () => {
-    await recordSelfPost({ orgId: ORG_A, employeeId: "emp_1", threadKey: KEY, micros: 2_000n, jobKey: "j1" });
-    await recordSelfPost({ orgId: ORG_A, employeeId: "emp_1", threadKey: KEY, micros: 1_000n, jobKey: "j0" });
-    expect(await readLastSelfPost({ orgId: ORG_A, employeeId: "emp_1", threadKey: KEY })).toEqual({ ok: true, post: { micros: 2_000n, jobKey: "j1" } });
+    await recordSelfPost({ orgId: ORG_A, employeeId: "emp_1", threadKey: KEY, micros: BigInt(2_000), jobKey: "j1" });
+    await recordSelfPost({ orgId: ORG_A, employeeId: "emp_1", threadKey: KEY, micros: BigInt(1_000), jobKey: "j0" });
+    expect(await readLastSelfPost({ orgId: ORG_A, employeeId: "emp_1", threadKey: KEY })).toEqual({ ok: true, post: { micros: BigInt(2_000), jobKey: "j1" } });
     expect(await readLastSelfPost({ orgId: ORG_A, employeeId: "emp_2", threadKey: KEY })).toEqual({ ok: true, post: null });
     expect(await readLastSelfPost({ orgId: ORG_B, employeeId: "emp_1", threadKey: KEY })).toEqual({ ok: true, post: null });
     expect(await readLastSelfPost({ orgId: ORG_A, employeeId: "emp_1", threadKey: KEY2 })).toEqual({ ok: true, post: null });

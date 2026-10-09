@@ -14,14 +14,14 @@ const NOW_S = Math.floor(NOW / 1000);
 
 describe("parseThreadTimestamp", () => {
   test("Slack ts keeps microseconds exactly", () => {
-    expect(parseThreadTimestamp("1791105000.000001")).toBe(1791105000000001n);
-    expect(parseThreadTimestamp("1791105000.5")).toBe(1791105000500000n);
-    expect(microsToTs(1791105000000001n)).toBe("1791105000.000001");
+    expect(parseThreadTimestamp("1791105000.000001")).toBe(BigInt(1791105000000001));
+    expect(parseThreadTimestamp("1791105000.5")).toBe(BigInt(1791105000500000));
+    expect(microsToTs(BigInt(1791105000000001))).toBe("1791105000.000001");
   });
   test("epoch seconds / milliseconds / ISO", () => {
-    expect(parseThreadTimestamp("1791105000")).toBe(1791105000000000n);
-    expect(parseThreadTimestamp(1791105000123)).toBe(1791105000123000n);
-    expect(parseThreadTimestamp("2026-10-09T12:00:00.000Z")).toBe(BigInt(NOW) * 1000n);
+    expect(parseThreadTimestamp("1791105000")).toBe(BigInt(1791105000000000));
+    expect(parseThreadTimestamp(1791105000123)).toBe(BigInt(1791105000123000));
+    expect(parseThreadTimestamp("2026-10-09T12:00:00.000Z")).toBe(BigInt(NOW) * BigInt(1000));
   });
   test("garbage → null", () => {
     for (const v of ["", "abc", "12", "-1791105000.1", null, undefined, {}, "1791105000.1234567"]) {

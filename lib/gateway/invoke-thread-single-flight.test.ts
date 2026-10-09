@@ -410,14 +410,20 @@ describe("approval sends: the same check at fulfil", () => {
     expect(posts.length).toBe(1);
   });
 
-  test("the recheck runs whoever approved (incl. a self-approval attempt) — approval never skips it", async () => {
+  test("self-approval: no approval (whoever resolves it, incl. the requesting employee's own identity) skips the recheck; no request field disables it", async () => {
     on();
     recordSlack();
-    const { approvalId } = await queue(old());
+    // A request-side "skip" field does not exist: it is ignored.
+    const res = await invoke({ ...dm("comm.send", B_TEXT, old()), threadGuard: { skip: true } } as unknown as GatewayInvokeRequest);
+    expect(res.httpStatus).toBe(402);
+    const approvalId = String(res.body.approvalId);
     expect((await invoke(dm("comm.reply", A_TEXT))).httpStatus).toBe(200);
-    const result = await approve(approvalId, "agent:emp_comm").catch((e: unknown) => ({ ok: false, error: String((e as Error).message) }));
+    const result = await approve(approvalId, "agent:agent_comm_self");
     expect(result?.ok).toBe(false);
+    expect(result?.error).toBe("thread_moved_on");
     expect(posts.length).toBe(1);
+    const events = await listAuditEvents(DEMO_ORG.id, 80);
+    expect(events.some((e) => e.action === "thread_guard.moved_on" && e.metadata?.approvalId === approvalId && e.metadata?.phase === "fulfil")).toBe(true);
   });
 
   test("nothing newer → fulfil posts and records the post (a later stale direct reply is moved_on)", async () => {
