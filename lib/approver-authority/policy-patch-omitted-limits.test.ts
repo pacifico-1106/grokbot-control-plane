@@ -10,11 +10,14 @@
  * explicitly. The tests run the fulfil against both
  *   - "legacy": today's updateEmployeePolicy (undefined → written as {}), and
  *   - "root-fix": a stand-in that keeps the current value when undefined,
- * and expect the same result. Sending actionLimits explicitly (incl. {} / null)
+ * and expect the same result. Sending actionLimits explicitly (incl. {})
  * still replaces the map and is still classified (a removed money cap → owner).
+ * null is refused by parsePolicyPatchArgs at intake and fulfil (#275); the
+ * classifier still treats it as a change (fail-safe, asserted below).
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { scopedModuleMocks } from "../../tests/helpers/scoped-module-mock";
+import { policyPatchTicket } from "../../tests/helpers/policy-patch-ticket";
 import { DEMO_ORG, resetRuntimeMembers } from "@/lib/demo-data";
 import { normalizeToolApprovalDefaults } from "@/lib/employees/approval-presets";
 import type { ApprovalRequest } from "@/lib/types";
@@ -82,9 +85,11 @@ afterEach(async () => {
   resetRuntimeMembers();
 });
 
-async function fileAndApprove(adminMutation: Record<string, unknown>): Promise<ApprovalRequest> {
+async function fileAndApprove(mutation: Record<string, unknown>): Promise<ApprovalRequest> {
+  // What intake stores since #275 (card record + card text).
+  const { adminMutation, summary } = await policyPatchTicket(ORG, mutation);
   const { approval } = await createApproval({
-    orgId: ORG, employeeId: "", credentialId: "", title: "policy.patch", purpose: "admin.policy", summary: "policy.patch", risk: "high", tool: "policy.patch",
+    orgId: ORG, employeeId: "", credentialId: "", title: "policy.patch", purpose: "admin.policy", summary, risk: "high", tool: "policy.patch",
     jobId: crypto.randomUUID(),
     metadata: {
       auditClass: "admin", approvalClass: "admin", always_human: true, adminTool: "policy.patch", isAdminMcpTool: true, adminMutation,
@@ -115,6 +120,7 @@ describe("policy.patch: omitted actionLimits keeps the current value", () => {
     expect(omitted?.kind).toBe("owner_or_designated_admin");
     expect(omitted?.reasons ?? []).not.toContain("money_tool_limits");
     expect(classify({ actionLimits: {} })?.reasons).toContain("money_tool_limits");
+    // null never reaches a ticket (parsePolicyPatchArgs refuses it); if it did, still owner.
     expect(classify({ actionLimits: null })?.reasons).toContain("money_tool_limits");
     expect(classify({ actionLimits: { "slack.post": { perDay: 50 } } })?.reasons).toContain("money_tool_limits");
   });

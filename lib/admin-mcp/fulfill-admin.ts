@@ -48,7 +48,8 @@ import { validateSchedulingPolicy } from "@/lib/scheduling-policy/validate";
 import { validateReplyPolicy } from "@/lib/gateway/reply-policy-validate";
 import { validateMailPolicy } from "@/lib/mail-policy/validate";
 import { normalizeStuckWatchPolicy } from "@/lib/stuck-watch/validate";
-import { linkAgent } from "@/lib/data/bindings";
+import { getBinding, linkAgent } from "@/lib/data/bindings";
+import { parseAdminRequester } from "@/lib/admin-mcp/self-approval";
 import { upsertOrgParty } from "@/lib/data/directory";
 import { onSlackUserPartyUpserted } from "@/lib/slack/dm-autoroute";
 import { applyChannelClassification } from "@/lib/admin-mcp/channel-classify";
@@ -56,6 +57,14 @@ import { normalizeAllowedAccounts } from "@/lib/employees/allowed-accounts";
 import { normalizeApproverUserIds, parseApprovalChannelId } from "@/lib/employees/approval-inbox";
 import { normalizeToolApprovalDefaults } from "@/lib/employees/approval-presets";
 import { ALL_SCOPES } from "@/lib/employees/policy-draft";
+import {
+  boundToRequestingAdmin,
+  checkPolicyPatchCardShown,
+  checkPolicyPatchNotStale,
+  checkPolicyPatchSodAck,
+  parsePolicyPatchArgs,
+} from "@/lib/admin-mcp/policy-patch-guard";
+import { getOrgSodWarnPolicy } from "@/lib/data/org-context";
 import { employeePolicyWriteFailure } from "@/lib/employees/policy-errors";
 import { defaultProjectAccess, normalizeProjectAccess } from "@/lib/employees/project-access";
 import { normalizePostingAs } from "@/lib/employees/posting-as";
@@ -771,25 +780,43 @@ async function contextChangedFulfillment(error: unknown, tool: string, employeeI
 }
 
 async function fulfillPolicy(approval: ApprovalRequest, args: Record<string, unknown>): Promise<AdminFulfillment> {
-  const employeeId = String(args.employeeId || "").trim();
-  const scopes = asScopes(args.scopes);
-  const approvalPolicy = args.approvalPolicy as ApprovalPolicy;
-  if (!employeeId || !scopes.length || !["auto", "risk_based", "always_human"].includes(approvalPolicy)) {
-    throw new Error("invalid_policy_payload");
+  const at = new Date().toISOString();
+  // PR-C: re-validate the stored ticket (no silent scope filtering), refuse a
+  // badge bound to the requesting admin agent, and take the SoD
+  // acknowledgement only from the human approval of a card that showed the
+  // same verdict (the agent's sodOverrideAcknowledged is never used).
+  const parsed = parsePolicyPatchArgs(args, { fromTicket: true });
+  if (!parsed.ok) {
+    if (parsed.code === "employee_id_required" || parsed.code === "scopes_required" || parsed.code === "invalid_approval_policy") {
+      throw new Error("invalid_policy_payload");
+    }
+    return { ok: false, tool: "policy.patch", at, error: parsed.code, nextStepJa: parsed.message };
   }
-  // 木村 2026-10-09 23:58: allowedPurposes left out keeps the current value
-  // (it used to be written as [] — an omission silently emptied it).
-  // 木村 2026-10-10: actionLimits left out keeps the current value too. It is
-  // passed explicitly, so policy.patch does not depend on what
-  // updateEmployeePolicy does with an undefined actionLimits (root fix on
-  // main); the Problem A classification treats an omission as "no change".
-  const keepPurposes = !Array.isArray(args.allowedPurposes);
-  const keepLimits = args.actionLimits === undefined;
-  let current: Awaited<ReturnType<typeof getEmployee>> = null;
-  if (keepPurposes || keepLimits) {
-    current = await getEmployee(employeeId, approval.orgId);
-    if (!current || current.orgId !== approval.orgId) throw new Error("employee_not_found");
+  const { employeeId, scopes, approvalPolicy } = parsed.value;
+  // Check order (木村 2026-10-10 #275 × main 734149a): ticket parse →
+  // requesting-admin binding → card shown → employee + org → stale (card base)
+  // → SoD (card ack) → CAS guard (approver authority, flag ON).
+  const requester = parseAdminRequester(approval.metadata);
+  const binding = await getBinding(employeeId);
+  // Same rule as intake: grokBotAgentId or actorId of the requesting admin.
+  if (boundToRequestingAdmin(requester, binding?.grokBotAgentId)) {
+    return {
+      ok: false, tool: "policy.patch", at, employeeId, error: "cannot_grant_self_scopes",
+      nextStepJa: "管理エージェントは自分に紐づいた社員証の権限を変更できません。変更は行われていません。",
+    };
   }
+  // B1: nothing on a card that may have been cut counts as shown (SoD included).
+  const cardGate = checkPolicyPatchCardShown(args, approval.summary);
+  if (!cardGate.ok) return { ok: false, tool: "policy.patch", at, employeeId, error: cardGate.error, nextStepJa: cardGate.nextStepJa };
+  const current = await getEmployee(employeeId, approval.orgId);
+  if (!current || current.orgId !== approval.orgId) throw new Error("employee_not_found");
+  const staleGate = checkPolicyPatchNotStale(args, current);
+  if (!staleGate.ok) {
+    return { ok: false, tool: "policy.patch", at, employeeId, error: staleGate.error, nextStepJa: staleGate.nextStepJa };
+  }
+  const sodGate = checkPolicyPatchSodAck(args, parsed.value, await getOrgSodWarnPolicy(approval.orgId));
+  if (!sodGate.ok) return { ok: false, tool: "policy.patch", at, employeeId, error: sodGate.error, nextStepJa: sodGate.nextStepJa };
+  const { verdict, needsAck } = sodGate;
   let contextGuard: Awaited<ReturnType<typeof contextGuardFor>>;
   try {
     contextGuard = await contextGuardFor(approval);
@@ -798,20 +825,22 @@ async function fulfillPolicy(approval: ApprovalRequest, args: Record<string, unk
     if (changed) return changed;
     throw error;
   }
-  // Kept values under the CAS guard (actionLimits, and allowedPurposes since
-  // 2026-10-10 item 2(a)): use the value the guard pinned. The RPC compares
-  // it with the locked row and writes only if equal, so what is written is
-  // the locked row's value — never the earlier read, never a value changed
-  // in between (that is refused with approver_context_changed).
+  // Omitted allowedPurposes / actionLimits keep the stored value and are
+  // passed explicitly (the CAS RPC refuses null; explicit [] / {} clears).
+  // Under the CAS guard the kept value is the one the guard pinned: the RPC
+  // compares it with the locked row and writes only if equal, so what is
+  // written is the locked row's value — never the earlier read, never a value
+  // changed in between (refused with approver_context_changed). Without the
+  // guard it is the value read above.
   const pinnedPurposes = contextGuard?.expected.allowed_purposes;
   const keptPurposes = contextGuard
     ? (Array.isArray(pinnedPurposes) ? pinnedPurposes : []).map(String)
-    : [...(current?.allowedPurposes ?? [])];
-  const allowedPurposes: string[] = Array.isArray(args.allowedPurposes)
-    ? args.allowedPurposes.map(String).filter(Boolean)
-    : keptPurposes;
-  const keptLimits = contextGuard ? contextGuard.expected.action_limits : current?.actionLimits;
-  const actionLimits = normalizeActionLimits((keepLimits ? keptLimits : args.actionLimits) as ActionLimits);
+    : [...(current.allowedPurposes ?? [])];
+  const allowedPurposes: string[] = parsed.value.allowedPurposes ?? keptPurposes;
+  const keptLimits = contextGuard ? contextGuard.expected.action_limits : current.actionLimits;
+  const actionLimits = normalizeActionLimits(
+    (parsed.value.actionLimits !== undefined ? parsed.value.actionLimits : keptLimits) as ActionLimits
+  );
   let updated: Awaited<ReturnType<typeof updateEmployeePolicy>>;
   try {
     updated = await updateEmployeePolicy({
@@ -821,10 +850,11 @@ async function fulfillPolicy(approval: ApprovalRequest, args: Record<string, unk
       allowedPurposes,
       approvalPolicy,
       toolApprovalDefaults:
-        args.toolApprovalDefaults !== undefined
-          ? normalizeToolApprovalDefaults(args.toolApprovalDefaults)
+        parsed.value.toolApprovalDefaults !== undefined
+          ? normalizeToolApprovalDefaults(parsed.value.toolApprovalDefaults)
           : undefined,
-      sodOverrideAcknowledged: args.sodOverrideAcknowledged === true,
+      // The human who approved the card that showed this verdict.
+      sodOverrideAcknowledged: needsAck,
       actionLimits,
       ...(contextGuard ? { contextGuard } : {}),
     });
@@ -845,7 +875,13 @@ async function fulfillPolicy(approval: ApprovalRequest, args: Record<string, unk
     action: "admin.policy",
     purpose: "admin.policy",
     summary: `${updated.displayName} の権限を人確認のうえで更新`,
-    metadata: { auditClass: ADMIN_AUDIT_CLASS, approvalId: approval.id, scopes: updated.scopes },
+    metadata: {
+      auditClass: ADMIN_AUDIT_CLASS,
+      approvalId: approval.id,
+      scopes: updated.scopes,
+      sodLevel: verdict.level,
+      sodAckSource: needsAck ? "approver_card" : "not_required",
+    },
   });
   return { ok: true, tool: "policy.patch", at: new Date().toISOString(), employeeId };
 }
