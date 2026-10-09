@@ -48,7 +48,6 @@ const PLAIN_MEMBER: OrgMember = {
   status: "active",
 } as OrgMember;
 const PLAIN_SESSION: SessionContext = { demo: false, userId: "user-plain", email: PLAIN_MEMBER.email, orgId: ORG, member: PLAIN_MEMBER };
-const NO_SESSION: SessionContext = { demo: false, userId: null, email: null, orgId: null, member: null };
 let session: SessionContext = PLAIN_SESSION;
 const realSession = await import("@/lib/auth/session");
 mock.module("@/lib/auth/session", () => ({
