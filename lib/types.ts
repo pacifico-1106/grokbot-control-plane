@@ -517,6 +517,8 @@ export type AuditAction =
   | "employee.sod_override"
   | "action_limit.reached"
   | "action_limit.denied"
+  | "gateway.conversation_org_mismatch"
+  | "gateway.session_org_mismatch"
   | "billing.updated"
   | "email.sent"
   | "gateway.link_changed"

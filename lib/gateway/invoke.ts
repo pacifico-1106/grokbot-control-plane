@@ -1,3 +1,4 @@
+import { withSlackUserTeamMemo } from "@/lib/slack/bot-token";
 import {
   buildApprovalArtifact,
   buildApprovalTitle,
@@ -34,6 +35,7 @@ import { assertBillingAllowsGateway } from "@/lib/billing/entitlements";
 import { evaluateDualEgress } from "@/lib/gateway/egress";
 import {
   parseConversationContext,
+  conversationOrgMismatch,
   resolveAudience,
   resolveConversationThreadId,
   resolveParentMessageTs,
@@ -674,6 +676,13 @@ async function secretAuditOrgId(employeeId: string): Promise<string | null> {
 export async function runGatewayInvoke(
   input: RunGatewayInvokeInput
 ): Promise<GatewayInvokeResult> {
+  // One users.info per (org, Slack user) per invoke; see fetchVerifiedSlackUserTeamId.
+  return withSlackUserTeamMemo(() => runGatewayInvokeInner(input));
+}
+
+async function runGatewayInvokeInner(
+  input: RunGatewayInvokeInput
+): Promise<GatewayInvokeResult> {
   const body = input.body;
   const employeeId = (input.employeeId || "").trim();
 
@@ -804,12 +813,13 @@ export async function runGatewayInvoke(
     );
   }
 
-  // Bot invokes carry a 社員証 but no browser session.
-  // Prefer session org, else binding.orgId, else admin PK lookup.
+  // The 社員証 (badge) is the principal: its org drives billing, plan gate,
+  // audit and the approval row. A browser session cookie never overrides it;
+  // a cookie naming a different org is refused below (session_org_mismatch).
   const binding = await getBinding(employeeId);
-  const orgId =
-    (await getCurrentOrgId()) || binding?.orgId || decision.binding.orgId || null;
-  let employee = await getEmployee(employeeId, orgId);
+  const sessionOrgId = await getCurrentOrgId();
+  const badgeOrgId = binding?.orgId || decision.binding.orgId || null;
+  let employee = await getEmployee(employeeId, badgeOrgId || sessionOrgId);
   if (!employee) {
     employee = await getEmployeeById(employeeId);
   }
@@ -827,6 +837,76 @@ export async function runGatewayInvoke(
         tool,
       },
       401
+    );
+  }
+
+  const orgId: string = employee.orgId;
+  if (sessionOrgId && sessionOrgId.trim() && sessionOrgId.trim().toLowerCase() !== orgId.toLowerCase()) {
+    await appendAuditEvent({
+      orgId,
+      employeeId,
+      credentialId: input.credentialId || employee.credentialId,
+      action: "gateway.session_org_mismatch",
+      purpose,
+      summary: `${tool} をログイン中の組織と社員証の組織の不一致で拒否（fail-closed）`,
+      metadata: { tool, jobId, code: "session_org_mismatch" },
+    }).catch(() => undefined);
+    return jsonResult(
+      {
+        ok: false,
+        code: "session_org_mismatch",
+        error: "session_org_mismatch",
+        message:
+          "The signed-in organization does not match the organization of this credential; the request was refused (nothing was sent).",
+        nextStepJa:
+          "ログイン中の組織と社員証の組織が違います。社員証の組織でログインし直すか、ログアウトした状態（社員証のみ）で同じ jobId で再実行してください。",
+        employeeId,
+        tool,
+        purpose,
+        jobId,
+      },
+      403
+    );
+  }
+
+  // Tenant isolation (BOLA): the org that drives audience / ledger / Slack
+  // token / dedup / approval snapshot is the authenticated employee's org.
+  // An AI-supplied conversation.orgId naming another org is refused before
+  // anything is read or written for it. The answer never depends on whether
+  // that org exists (no lookup), and only a hash of it is audited, under the
+  // authenticated org.
+  const principalOrgId = employee.orgId;
+  const orgMismatch = conversationOrgMismatch(body.conversation, principalOrgId);
+  if (orgMismatch) {
+    await appendAuditEvent({
+      orgId: principalOrgId,
+      employeeId,
+      credentialId: input.credentialId || employee.credentialId,
+      action: "gateway.conversation_org_mismatch",
+      purpose,
+      summary: `${tool} を会話コンテキストの組織不一致で拒否（fail-closed）`,
+      metadata: {
+        tool,
+        jobId,
+        code: "conversation_org_mismatch",
+        suppliedOrgIdSha256: createHash("sha256").update(orgMismatch.suppliedOrgId).digest("hex"),
+      },
+    }).catch(() => undefined);
+    return jsonResult(
+      {
+        ok: false,
+        code: "conversation_org_mismatch",
+        error: "conversation_org_mismatch",
+        message:
+          "conversation.orgId does not match the organization of this credential; the request was refused (nothing was sent).",
+        nextStepJa:
+          "conversation.orgId は省略してください（社員証の組織が自動で使われます）。別の組織の会話には送信できません。orgId を外して同じ jobId で再実行してください。",
+        employeeId,
+        tool,
+        purpose,
+        jobId,
+      },
+      403
     );
   }
 
@@ -1256,7 +1336,7 @@ export async function runGatewayInvoke(
   // slack.* aliases share this resolver — tool name is not the boundary.
   // S2: evaluateInvokeEgress now returns both egress (effective) and dualEgress (audit).
   const { egress, dualEgress } = await evaluateInvokeEgress({
-    orgId: orgId || employee.orgId,
+    orgId: principalOrgId,
     tool,
     toolDef,
     body,
@@ -1275,7 +1355,7 @@ export async function runGatewayInvoke(
       metadata: { tool, jobId, egress, dualEgress, managerId },
     });
 
-    const effectiveOrgId = orgId || employee.orgId;
+    const effectiveOrgId = principalOrgId;
     const ledgerRetry = await attemptAudienceLedgerRetry(
       {
         orgId: effectiveOrgId,
@@ -2028,7 +2108,7 @@ export async function runGatewayInvoke(
   let conversationDelivery: ConversationDelivery | undefined;
   let threadTsSource: "client" | "wake_stash" | "none" | undefined;
   if (isAudienceGatedTool(toolDef)) {
-    const ctx = parseConversationContext(body, orgId || employee.orgId);
+    const ctx = parseConversationContext(body, principalOrgId);
     const args =
       body.args && typeof body.args === "object"
         ? (body.args as Record<string, unknown>)
@@ -2353,7 +2433,7 @@ export async function runGatewayInvoke(
     fileAttachmentReceived = rerunAttachment.received;
     fileUploadResponse = rerunAttachment.fileUpload;
   } else if (fileAttachmentReceived && body.fileAttachment) {
-    const ctx = parseConversationContext(body, orgId || employee.orgId);
+    const ctx = parseConversationContext(body, principalOrgId);
     const dest = ctx?.slackChannelId || ctx?.slackUserId || "";
     const replyThreadTs = resolveConversationThreadId({
       conversation: ctx,
@@ -2619,7 +2699,7 @@ export async function runGatewayInvoke(
   }
 
   if (!priorApprovalOk) {
-    const destCtx = parseConversationContext(body, orgId || employee.orgId);
+    const destCtx = parseConversationContext(body, principalOrgId);
     const deliveryChannel =
       conversationDelivery && "channel" in conversationDelivery
         ? conversationDelivery.channel
