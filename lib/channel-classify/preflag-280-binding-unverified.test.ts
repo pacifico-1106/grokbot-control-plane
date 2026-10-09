@@ -6,7 +6,7 @@
  *      1-hour window (same as no_admin_approver) instead of dropping the row.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { DEMO_ORG, getRuntimeMemberById, setRuntimeMember } from "@/lib/demo-data";
+import { DEMO_ORG } from "@/lib/demo-data";
 import { createApproval } from "@/lib/data/approvals";
 import { listAuditEvents } from "@/lib/data/audit";
 import { resetDemoChannelClassifyStore } from "@/lib/data/channel-classify";
@@ -15,10 +15,8 @@ import { setProposalDepsForTests } from "@/lib/channel-classify/proposals";
 import { setStuckNotifyDepsForTests } from "@/lib/channel-classify/stuck-notify";
 import { resetChannelClassifyBudgetFallbackForTests } from "@/lib/channel-classify/budget";
 import type { NotificationChannelRuntime } from "@/lib/data/notification-channels";
-import type { OrgMember } from "@/lib/types";
 
 const ORG = DEMO_ORG.id;
-const OTHER_ORG = "org_preflag280_other";
 let ticketOrgs: string[] = [];
 let hasApprover = true;
 let seq = 0;
@@ -43,27 +41,6 @@ function update(fromId: number) {
       new_chat_member: { status: "member", user: { id: 42, is_bot: true } },
     },
   };
-}
-
-function patchMember(id: string, patch: Partial<OrgMember>) {
-  const current = getRuntimeMemberById(id);
-  if (current) {
-    const before = { ...current };
-    setRuntimeMember({ ...current, ...patch });
-    restorers.push(() => setRuntimeMember(before));
-  } else {
-    setRuntimeMember({
-      id, orgId: ORG, email: `${id}@example.com`, displayName: id, role: "member", status: "active", ...patch,
-    } as OrgMember);
-  }
-}
-
-/** Binding for the given telegram user on THIS inbox / org → memberId. */
-function bindTo(memberId: string, userId = "222") {
-  setJoinDepsForTests({
-    telegramVoterMember: async (orgId, channelKey, uid) =>
-      orgId === ORG && channelKey === channel.id && uid === userId ? memberId : null,
-  });
 }
 
 async function auditRows(orgId: string, action: string, reason: string) {
