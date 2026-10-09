@@ -102,6 +102,7 @@ import {
   legacySnapshotAttachmentBlock,
 } from "@/lib/approvals/approved-rerun-attachment";
 import { isDemoMode } from "@/lib/mode";
+import { resolveSlackUserRecipient } from "@/lib/slack/u-recipient-dm-route";
 import { evaluateAllowedAccountsForBrowser } from "@/lib/employees/allowed-accounts";
 import { evaluateSpend } from "@/lib/spend-gate";
 import { evaluateActionLimit } from "@/lib/action-gate";
@@ -732,7 +733,9 @@ export async function runGatewayInvoke(
 async function runGatewayInvokeInner(
   input: RunGatewayInvokeInput
 ): Promise<GatewayInvokeResult> {
-  const body = input.body;
+  // `let`: a U… Slack recipient may be resolved to the internal DM route below
+  // (SLACK_U_TO_DM_SEND_ENABLED + SLACK_DM_AUTOROUTE_ENABLED); every later layer then sees the same D….
+  let body = input.body;
   const employeeId = (input.employeeId || "").trim();
 
   if (!employeeId) {
@@ -1369,6 +1372,53 @@ async function runGatewayInvokeInner(
           extra: { ...opts.extra, actionLimit },
         }),
     });
+  }
+
+  // Item C (SLACK_U_TO_DM_SEND_ENABLED, default OFF, and only with
+  // SLACK_DM_AUTOROUTE_ENABLED ON; otherwise a no-op = main): a U… in the Slack channel
+  // field → the employee's internal 1:1 DM route, only for an internal
+  // slack_user of the org's party ledger (re-verified as a 1:1 IM with that
+  // user). Anyone else stops here with a nextStep. Before egress so egress,
+  // dedup and thread single-flight all see the resolved D….
+  if (isAudienceGatedTool(toolDef)) {
+    const uRecipient = await resolveSlackUserRecipient({ orgId: orgId || employee.orgId, employee, body });
+    if (uRecipient.kind === "stopped") {
+      await appendAuditEvent({
+        orgId: orgId || employee.orgId,
+        employeeId,
+        credentialId: input.credentialId || employee.credentialId,
+        action: "slack.post_failed",
+        purpose,
+        summary: `${tool} の U… 宛てを社内 DM に引き当てずに停止（${uRecipient.code}）`,
+        metadata: {
+          tool,
+          jobId,
+          code: uRecipient.code,
+          reason: uRecipient.reason,
+          counterpartSlackUserId: uRecipient.counterpartSlackUserId,
+          dmAutoroute: true,
+        },
+      });
+      return jsonResult(
+        {
+          ok: false,
+          code: uRecipient.code,
+          error: uRecipient.code,
+          message: uRecipient.messageJa,
+          reason: uRecipient.reason,
+          nextStep: uRecipient.nextStep,
+          nextStepJa: uRecipient.nextStepJa,
+          retryable: uRecipient.retryable,
+          needs_approval: false,
+          employeeId,
+          tool,
+          purpose,
+          jobId,
+        },
+        uRecipient.httpStatus
+      );
+    }
+    if (uRecipient.kind === "resolved") body = uRecipient.body;
   }
 
   // Project wall (WHICH) before Slack post. Deny wins over class/voice allow.

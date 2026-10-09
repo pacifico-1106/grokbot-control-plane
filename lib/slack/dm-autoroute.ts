@@ -63,7 +63,9 @@ export type DmAutorouteTrigger =
   | "party_upserted"
   | "party_external"
   | "identity_revoked"
-  | "admin_mcp";
+  | "admin_mcp"
+  /** Item C: a send to a U… of an internal party (lib/slack/u-recipient-dm-route.ts). */
+  | "send_recipient";
 
 /** would_open: dryRun only — eligible; a real run would open the DM and install the route. */
 export type DmAutorouteOutcome = "created" | "already_routed" | "skipped" | "failed" | "removed" | "would_open";
@@ -227,6 +229,7 @@ async function processCounterpart(input: {
   employeeTeamId: string;
   token: string;
   counterpart: string;
+  requireImWithCounterpart?: boolean;
 }): Promise<DmAutorouteItem> {
   const base = { counterpartSlackUserId: input.counterpart };
   const info = await slackCall(input.token, "users.info", { user: input.counterpart });
@@ -246,6 +249,18 @@ async function processCounterpart(input: {
   const channelId = slackId(channel.id);
   if (!channelId || !isSlackImChannelId(channelId)) {
     return { ...base, outcome: "skipped", reason: "not_a_dm" };
+  }
+  // Send-time resolution only (item C, SLACK_U_TO_DM_SEND_ENABLED): the opened
+  // conversation must be the 1:1 IM with exactly this counterpart (is_im true,
+  // user === counterpart; missing → unverifiable → refused). The #234 sync
+  // (already live under SLACK_DM_AUTOROUTE_ENABLED) is deliberately unchanged.
+  if (input.requireImWithCounterpart) {
+    const imUser = typeof channel.user === "string" ? channel.user.trim().toUpperCase() : "";
+    if (channel.is_im === false) return { ...base, outcome: "skipped", reason: "not_a_dm" };
+    if (imUser && imUser !== input.counterpart.toUpperCase()) {
+      return { ...base, outcome: "skipped", reason: "dm_user_mismatch" };
+    }
+    if (channel.is_im !== true || !imUser) return { ...base, outcome: "skipped", reason: "dm_user_unverified" };
   }
   if (dmLooksExternal(channel)) {
     return { ...base, channelId, outcome: "skipped", reason: "dm_externally_shared" };
@@ -315,6 +330,8 @@ export async function syncAutoDmRoutesForEmployee(input: {
   trigger: DmAutorouteTrigger;
   onlyCounterpart?: string;
   dryRun?: boolean;
+  /** Send-time resolution: conversations.open must return is_im + user === counterpart. */
+  requireImWithCounterpart?: boolean;
 }): Promise<DmAutorouteResult> {
   const dryRun = input.dryRun === true;
   if (!dryRun && !isSlackDmAutorouteEnabled()) return { status: "flag_off", items: [] };
@@ -397,6 +414,7 @@ export async function syncAutoDmRoutesForEmployee(input: {
           employeeTeamId,
           token,
           counterpart,
+          requireImWithCounterpart: input.requireImWithCounterpart === true,
         })
       );
     }
