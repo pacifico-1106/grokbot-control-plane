@@ -549,6 +549,22 @@ export function isDuplicateGuardV2Enabled(): boolean {
 }
 
 /**
+ * Thread single-flight (木村 2026-10-09 A, 八坂 GO; triage #2). Default OFF.
+ * For conversation posts (comm.reply / comm.send / slack.post /
+ * slack.post_external — direct, caller-delivered and approval fulfil):
+ * - one send per thread at a time: a short lease (TTL
+ *   THREAD_SINGLE_FLIGHT_LEASE_TTL_SECONDS, default 60) → 409 thread_busy
+ * - right before sending: the employee already posted in the thread after the
+ *   point the AI read through (readThroughTs, else the inbound ts) →
+ *   409 thread_moved_on; at fulfil the approved snapshot's read point is used
+ * - lease-store errors fail closed (503 thread_guard_unavailable)
+ * Requires migration 20261009100000. Details: docs/thread-single-flight.md
+ */
+export function isThreadSingleFlightEnabled(): boolean {
+  return parseFlag(process.env.THREAD_SINGLE_FLIGHT_ENABLED);
+}
+
+/**
  * MCP Events (2026-10-05, design: docs/mcp-events-approval-wake-20261005.md).
  * Wakes the AI through MCP Events webhooks (Triggers & Events extension, as
  * implemented by ChatGPT) when one of its approvals is decided or expires.
@@ -609,4 +625,24 @@ export function isMcpEventsEnabled(): boolean {
  */
 export function isWebhookHardeningEnabled(): boolean {
   return parseFlag(process.env.WEBHOOK_HARDENING_ENABLED);
+}
+
+/**
+ * 木村 2026-10-09 B (triage #3): needs_approval answers carry approvalReasons[]
+ * (every reason, structured), tickets store the same list, every approval card
+ * shows one 「承認が必要な理由」 line, and the employee MCP lists the tenant's
+ * sensitive topics read-only (staffpass_sensitive_topics). Default OFF.
+ */
+export function isApprovalReasonsEnabled(): boolean {
+  return parseFlag(process.env.APPROVAL_REASONS_ENABLED);
+}
+
+/**
+ * 木村 2026-10-09 B (triage #1④): comm.send with no explicit class defaults to
+ * internal + summary only when the destination is internal in the credential
+ * org's channel ledger (internal channel / internal DM route) and the resolved
+ * audience is internal. Default OFF (changes a default → new flag).
+ */
+export function isCommSendInternalDefaultEnabled(): boolean {
+  return parseFlag(process.env.COMM_SEND_INTERNAL_DEFAULT_ENABLED);
 }

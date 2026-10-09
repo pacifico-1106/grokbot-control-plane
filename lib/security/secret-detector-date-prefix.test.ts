@@ -150,8 +150,15 @@ const PATHS: Array<{ name: string; run: (text: string, jobId: string) => Promise
   },
 ];
 
-let seq = 0;
-const uniqJob = (p: string) => `${p}-${Date.now().toString(36)}-${++seq}`;
+/**
+ * Fixed jobIds (木村 2026-10-09): the old `${p}-${Date.now().toString(36)}-${seq}`
+ * sometimes contained "2-1", a 3-char substring of SLACK_TOKEN, so
+ * expectNoSubstring flagged the jobId (echoed in the response / audit row) as
+ * a leak. Every character is separated by "_", which no secret here contains,
+ * so no 3-char window of a jobId can ever match a secret. Unique per test
+ * through the path / case index.
+ */
+const fixedJob = (...parts: Array<string | number>) => ["d", "p", ...parts].join("_");
 let logs: string[] = [];
 const originals = { log: console.log, warn: console.warn, error: console.error, info: console.info, debug: console.debug };
 
@@ -169,11 +176,17 @@ afterEach(() => {
   else process.env[FLAG] = flagBackup;
 });
 
+test("fixed jobIds share no 3-character substring with any secret", () => {
+  const ids = PATHS.flatMap((_, pi) => [...DATE_LED_SECRETS.map((__, ci) => fixedJob("b", pi, ci)), fixedJob("r", pi), fixedJob("i", pi)]);
+  expect(new Set(ids).size).toBe(ids.length);
+  for (const id of ids) for (const [, , secret] of DATE_LED_SECRETS) expectNoSubstring(id, secret);
+});
+
 describe("every detector path", () => {
-  for (const p of PATHS) {
-    for (const [label, text, secret] of DATE_LED_SECRETS) {
+  for (const [pi, p] of PATHS.entries()) {
+    for (const [ci, [label, text, secret]] of DATE_LED_SECRETS.entries()) {
       test(`${p.name}: date-led ${label} → blocked, exactly one audit row, no value characters`, async () => {
-        const jobId = uniqJob("dp-block");
+        const jobId = fixedJob("b", pi, ci);
         const { blocked, out } = await p.run(text, jobId);
         expect(blocked).toBe(true);
         const rows = (await listAuditEvents(null, 100000)).filter(
@@ -188,13 +201,13 @@ describe("every detector path", () => {
     }
 
     test(`${p.name}: the date-led weekly report with westjr URLs is not blocked`, async () => {
-      const jobId = uniqJob("dp-report");
+      const jobId = fixedJob("r", pi);
       const { blocked } = await p.run(WEEKLY_REPORT, jobId);
       expect(blocked).toBe(false);
     });
 
     test(`${p.name}: a pure ISO timestamp value is not blocked`, async () => {
-      const jobId = uniqJob("dp-iso");
+      const jobId = fixedJob("i", pi);
       const { blocked } = await p.run("2026-10-05T10:27:00+09:00", jobId);
       expect(blocked).toBe(false);
     });

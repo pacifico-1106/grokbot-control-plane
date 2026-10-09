@@ -21,6 +21,7 @@
  */
 import type { ResolvedAdminCredential } from "@/lib/auth/admin-credential";
 import { getAppOrigin } from "@/lib/approvals/tokens";
+import { hasJwtHeaderSegment } from "@/lib/security/secret-detector";
 import { appendAuditEvent, listAuditEvents } from "@/lib/data/audit";
 import { getBinding } from "@/lib/data/bindings";
 import { listOrgParties } from "@/lib/data/directory";
@@ -51,7 +52,6 @@ import {
   resolveAuthorizeLinkFollowUpNextStep,
 } from "@/lib/slack/authorize-link-guidance";
 import { isSlackDmAutorouteEnabled, isSlackUserScopeImWriteEnabled } from "@/lib/slack/dm-autoroute-flags";
-import { slackAuthorizeUrlTemplate } from "@/lib/slack/slack-status-diagnose";
 import { isSharedApprovalAppEnabled } from "@/lib/slack/shared-approval-flags";
 import type { AuditEvent, NotificationChannel } from "@/lib/types";
 
@@ -89,7 +89,9 @@ const MAX_INBOXES = 5;
 const SLACK_TIMEOUT_MS = 5_000;
 const SLACK_USER_ID_RE = /^[UW][A-Z0-9]{2,30}$/;
 const SAFE_ID_RE = /^[A-Za-z0-9_.:-]{1,80}$/;
-const SECRETISH_RE = /(xox[a-z]-|xapp-|gb_(adm|emp)_|sk_(live|test)_|-----BEGIN|eyJ[A-Za-z0-9_-]{10,}\.)/i;
+// The JWT-header alternative (eyJ[A-Za-z0-9_-]{10,}\.) is checked by
+// hasJwtHeaderSegment: as a regex it was quadratic on repeated "eyJ" (2026-10-09).
+const SECRETISH_RE = /(xox[a-z]-|xapp-|gb_(adm|emp)_|sk_(live|test)_|-----BEGIN)/i;
 const SECRETISH_KEY_RE = /(token|secret|password|credential|signing|apikey|api_key|authorization|cookie)/i;
 export const SLACK_APPS_CONSOLE_URL = "https://api.slack.com/apps";
 
@@ -110,7 +112,7 @@ export function rejectUnsafeArgs(args: Record<string, unknown>, allowed: readonl
     if (!allowed.includes(key)) {
       return fail("unexpected_argument", `未対応の引数です: ${key.slice(0, 40)}`);
     }
-    if (typeof value === "string" && SECRETISH_RE.test(value)) {
+    if (typeof value === "string" && (SECRETISH_RE.test(value) || hasJwtHeaderSegment(value))) {
       return fail("secret_not_accepted", "このツールは token / secret を受け取りません。チャットに貼らず、ダッシュボードで人が入力してください。");
     }
   }
@@ -316,7 +318,9 @@ export async function diagnoseSlackDmApprovalSetup(orgId: string): Promise<Recor
       missingUserScopes,
       imRoutes: routes.length,
       autoRoutes: flags.SLACK_DM_AUTOROUTE_ENABLED ? auto : null,
-      authorizeUrl: slackAuthorizeUrlTemplate(employee.id),
+      // Employee page where a hire_issue_credentials holder connects Slack. The
+      // single-use re-authorize link itself only travels by DM (never in output).
+      authorizeUrl: dashboardUrl(`/app/employees/${encodeURIComponent(employee.id)}`),
       allowedSlackAccounts: allowedSlackAccountIds(employee).length,
       allowedAccountsAdminTool: allowedAccountsStep.allowedAccountsAdminTool,
       authorizeLinkFollowUpErrors: authorizeLinkFollowUpErrors(linkEvents, employee.id),
@@ -373,14 +377,14 @@ export async function diagnoseSlackDmApprovalSetup(orgId: string): Promise<Recor
       nextStepsJa.push(
         linkStep
           ? `${row.displayName}: Slack 未連携です。${linkStep}`
-          : `${row.displayName}: 社員証の Slack 連携を人がタップ（${row.authorizeUrl}）。`
+          : `${row.displayName}: 社員証画面（${row.authorizeUrl}）で「雇う／社員証発行」の権限を持つ人が Slack 連携をタップしてください（社員本人など権限のない人に渡せる単回の再認可リンクは SLACK_AUTHORIZE_LINK_ENABLED が ON のときに使えます）。`
       );
     } else if ((row.missingUserScopes as string[]).length) {
       const missing = (row.missingUserScopes as string[]).join(", ");
       nextStepsJa.push(
         linkStep
           ? `${row.displayName}: user token に ${missing} がありません。${linkStep}`
-          : `${row.displayName}: user token に ${missing} がありません。もう一度 Slack 連携をタップ（${row.authorizeUrl}）。`
+          : `${row.displayName}: user token に ${missing} がありません。社員証画面（${row.authorizeUrl}）で「雇う／社員証発行」の権限を持つ人がもう一度 Slack 連携をタップしてください（権限のない人に渡せる単回の再認可リンクは SLACK_AUTHORIZE_LINK_ENABLED が ON のときに使えます）。`
       );
     }
   }

@@ -26,7 +26,12 @@ const retryable = new Set(["slack_token_missing", "slack_conversation_bot_token_
   // Provider rate limit (Slack ratelimited / X 429 with a JSON answer, 木村
   // 2026-10-05): refused before posting. The re-run waits out retryAfterSeconds
   // (fulfil stops before the provider call until then; lib/gateway/adapters/rate-limit.ts).
-  "provider_rate_limited"]);
+  "provider_rate_limited",
+  // Thread single-flight (THREAD_SINGLE_FLIGHT_ENABLED, lib/thread-guard): stopped
+  // before any provider call. busy / unavailable → may run again. moved_on
+  // closes the approval as superseded (terminal); only when that close lost a
+  // race does the approval stay approved, and the next run re-checks and closes.
+  "thread_busy", "thread_moved_on", "thread_guard_unavailable"]);
 // Per-tool additions: refusals that tool returns BEFORE any write and that it
 // re-checks from scratch on every run (so the same approvalId may run again,
 // e.g. after the employee re-authorizes Slack). Scoped by tool so the same
