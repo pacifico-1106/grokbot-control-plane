@@ -475,3 +475,60 @@ describe("11. self-grant (grokBotAgentId AND actorId), BOLA, self-approval", () 
     expect([...((await getEmployee(e.id, ORG))?.scopes ?? [])].sort()).toEqual([...BASE_SCOPES].sort());
   });
 });
+
+describe("11. stale ticket: scopes / allowedPurposes / actionLimits changed since filing → refused at fulfil (木村 2026-10-09)", () => {
+  const LIMITS = { "mail.send": { perDay: 5 } };
+  const runtime = (id: string) => getRuntimeEmployees().find((x) => x.id === id)!;
+  async function filed() {
+    const e = await hire();
+    runtime(e.id).actionLimits = structuredClone(LIMITS);
+    const { d } = await call({ employeeId: e.id, scopes: [...BASE_SCOPES, "files:read"], approvalPolicy: "risk_based" });
+    expect(d.code).toBe("needs_approval");
+    return { e, approvalId: String(d.approvalId) };
+  }
+  async function expectStale(employeeId: string, approvalId: string, field: string) {
+    const before = structuredClone(await getEmployee(employeeId, ORG));
+    const out = (await approveAndFulfil(approvalId)) as Record<string, unknown> | null;
+    expect(out?.ok).toBe(false);
+    expect(out?.error).toBe("policy_patch_stale");
+    expect(String(out?.nextStepJa)).toContain("変更は行われていません");
+    expect(String(out?.nextStepJa)).toContain(field);
+    const after = await getEmployee(employeeId, ORG);
+    expect(after?.scopes).toEqual(before!.scopes);
+    expect(after?.allowedPurposes).toEqual(before!.allowedPurposes);
+    expect(after?.actionLimits).toEqual(before!.actionLimits);
+  }
+  test("scopes changed after filing → stale, nothing written", async () => {
+    const { e, approvalId } = await filed();
+    runtime(e.id).scopes = [...BASE_SCOPES, "mail:send"];
+    await expectStale(e.id, approvalId, "できること");
+  });
+  test("allowedPurposes changed after filing (patch omitted it) → stale, the new purposes are not silently kept/dropped", async () => {
+    const { e, approvalId } = await filed();
+    runtime(e.id).allowedPurposes = ["ops.admin", "comm.internal"];
+    await expectStale(e.id, approvalId, "用途");
+  });
+  test("actionLimits changed after filing → stale", async () => {
+    const { e, approvalId } = await filed();
+    runtime(e.id).actionLimits = { "mail.send": { perDay: 1 } };
+    await expectStale(e.id, approvalId, "実行上限");
+  });
+  test("unchanged (including key order / purpose order) → applied", async () => {
+    const { e, approvalId } = await filed();
+    runtime(e.id).actionLimits = structuredClone(LIMITS);
+    expect((await approveAndFulfil(approvalId))?.ok).toBe(true);
+    expect((await getEmployee(e.id, ORG))?.scopes).toContain("files:read");
+  });
+  test("a v2 card snapshot without the filing-time base → stale (fail-closed)", async () => {
+    const { e, approvalId } = await filed();
+    const approval = await getApprovalById(approvalId, ORG);
+    const mutation = approval!.metadata!.adminMutation as Record<string, unknown>;
+    const card = { ...(mutation.policyPatchCard as Record<string, unknown>) };
+    delete card.base;
+    const id = await legacyTicket({ ...mutation, policyPatchCard: card });
+    const out = (await approveAndFulfil(id)) as Record<string, unknown> | null;
+    expect(out?.ok).toBe(false);
+    expect(out?.error).toBe("policy_patch_stale");
+    expect((await getEmployee(e.id, ORG))?.scopes).not.toContain("files:read");
+  });
+});
