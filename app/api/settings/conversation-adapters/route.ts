@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { assertWebActorApproverAuthority, webDirectDeniedBody, webSessionActorMemberId } from "@/lib/approver-authority/web-direct";
 import { appendAuditEvent, listConversationAdapters, upsertConversationAdapter } from "@/lib/data";
 import { requireOrgAdminSession } from "@/lib/auth/require-org";
 import { DASHBOARD_SLACK_ADAPTER_SAVE, recordSetupToolSucceeded } from "@/lib/approvals/attachment-retry-cap";
@@ -25,6 +26,14 @@ export async function PUT(req: Request) {
   }
   const enabled = body.enabled === true;
   const botToken = String(body.botToken || "").trim();
+  // Review 2026-10-09 item 2: where notices / conversation posts go (notify destination).
+  const authority = await assertWebActorApproverAuthority({
+    orgId: gate.orgId,
+    memberId: await webSessionActorMemberId(req),
+    changes: [{ tool: "web.conversationAdapter", adminMutation: {}, kind: "owner_or_designated_admin" }],
+    surface: "settings.conversation_adapters",
+  });
+  if (!authority.ok) return NextResponse.json(webDirectDeniedBody(authority), { status: 403 });
   try {
     const saved = await upsertConversationAdapter({
       orgId: gate.orgId,

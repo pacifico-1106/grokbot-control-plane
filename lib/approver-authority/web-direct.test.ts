@@ -16,6 +16,12 @@ const { PATCH: patchPolicy } = await import("@/app/api/employees/[id]/policy/rou
 const { getEmployee } = await import("@/lib/data");
 const { writeDesignatedAdminMemberIds, resetDemoDesignatedAdminsForTests } = await import("@/lib/approver-authority/designated-admins");
 const { assertWebActorApproverAuthority } = await import("@/lib/approver-authority/web-direct");
+const { POST: issuePost } = await import("@/app/api/employees/issue/route");
+const { PUT: putSodPolicy } = await import("@/app/api/settings/sod-warn-policy/route");
+const { PUT: putAdapters } = await import("@/app/api/settings/conversation-adapters/route");
+const { PATCH: patchBinding } = await import("@/app/api/employees/[id]/binding/route");
+const { POST: rotatePost } = await import("@/app/api/employees/[id]/rotate/route");
+const { POST: terminatePost } = await import("@/app/api/employees/[id]/terminate/route");
 
 const ORG = DEMO_ORG.id;
 const OWNER = "mem_1";
@@ -118,5 +124,46 @@ describe("helper", () => {
     expect(r.ok).toBe(false);
     expect((await assertWebActorApproverAuthority({ orgId: ORG, memberId: null, changes: [] })).ok).toBe(true);
     expect((await assertWebActorApproverAuthority({ orgId: ORG, memberId: ADMIN, changes: [{ tool: "mail.send", adminMutation: {} }] })).ok).toBe(true);
+  });
+});
+
+// 木村 2026-10-09 review #279 items 1–2: the rest of the dashboard writes that change
+// permissions / approvers / where notices go. terminate stays owner/admin (emergency stop).
+const json = (url: string, method: string, actor: string, body: Record<string, unknown>) =>
+  new Request(url, { method, headers: { "content-type": "application/json", "x-member-id": actor }, body: JSON.stringify({ actorMemberId: actor, ...body }) });
+const params = (id: string) => ({ params: Promise.resolve({ id }) });
+
+const surfaces: Array<{ name: string; call: (actor: string) => Promise<Response> }> = [
+  { name: "POST /api/employees/issue", call: (a) => issuePost(json("http://localhost/api/employees/issue", "POST", a, { displayName: "wd発行", roleLabel: "テスト", scopes: ["mail:draft"] })) },
+  { name: "PUT /api/settings/sod-warn-policy", call: (a) => putSodPolicy(json("http://localhost/api/settings/sod-warn-policy", "PUT", a, { level: "warn" })) },
+  { name: "PUT /api/settings/conversation-adapters", call: (a) => putAdapters(json("http://localhost/api/settings/conversation-adapters", "PUT", a, { surface: "slack", enabled: false, label: "wd" })) },
+  { name: "PATCH /api/employees/[id]/binding", call: (a) => patchBinding(json("http://localhost/api/employees/emp_sales/binding", "PATCH", a, { wakeWebhookUrl: "https://wake.example.com/hook" }), params("emp_sales")) },
+  { name: "POST /api/employees/[id]/rotate", call: (a) => rotatePost(json("http://localhost/api/employees/emp_ops/rotate", "POST", a, {}), params("emp_ops")) },
+];
+
+describe("dashboard writes (review items 1–2)", () => {
+  for (const s of surfaces) {
+    test(`${s.name}: plain admin refused; designated admin and owner pass the gate; flag OFF unchanged`, async () => {
+      const d = await denied(await s.call(ADMIN));
+      expect(d?.error).toBe("approver_authority_denied");
+      expect(d?.reason).toBe("approver_not_authorized");
+      expect((await denied(await s.call(DADMIN)))?.error).not.toBe("approver_authority_denied");
+      expect((await denied(await s.call(OWNER)))?.error).not.toBe("approver_authority_denied");
+      delete process.env[FLAG];
+      expect((await denied(await s.call(ADMIN)))?.error).not.toBe("approver_authority_denied");
+    });
+  }
+
+  test("POST /api/employees/issue: same content rule as MCP employees.issue — money scope → owner only", async () => {
+    const call = (a: string) => issuePost(json("http://localhost/api/employees/issue", "POST", a, {
+      displayName: "wd発注", roleLabel: "テスト", scopes: ["commerce:order"], spend: { monthlyLimitJpy: 1000 }, sodOverrideAcknowledged: true,
+    }));
+    expect((await denied(await call(DADMIN)))?.reason).toBe("owner_approval_required");
+    expect((await denied(await call(OWNER)))?.error).not.toBe("approver_authority_denied");
+  });
+
+  test("terminate stays owner/admin (emergency stop): a plain admin is not refused by this guard", async () => {
+    const res = await terminatePost(json("http://localhost/api/employees/emp_comm/terminate", "POST", ADMIN, {}), params("emp_comm"));
+    expect((await denied(res))?.error).not.toBe("approver_authority_denied");
   });
 });

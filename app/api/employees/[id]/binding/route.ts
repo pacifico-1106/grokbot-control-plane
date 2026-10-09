@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { assertWebActorApproverAuthority, webDirectDeniedBody } from "@/lib/approver-authority/web-direct";
 import { getCurrentOrgId } from "@/lib/auth/session";
 import {
   appendAuditEvent,
@@ -81,6 +82,14 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
   if (patch.url === undefined && patch.secret === undefined) {
     return NextResponse.json(policyErrorPayload("wake_webhook_url_required"), { status: 400 });
   }
+  // Review 2026-10-09 item 2: the wake destination decides where the employee is woken / notified.
+  const authority = await assertWebActorApproverAuthority({
+    orgId,
+    memberId: gate.actor.id,
+    changes: [{ tool: "web.employeeBinding", adminMutation: {}, kind: "owner_or_designated_admin" }],
+    surface: "employees.binding",
+  });
+  if (!authority.ok) return NextResponse.json(webDirectDeniedBody(authority), { status: 403 });
 
   try {
     const binding = await updateWakeWebhook(id, patch);

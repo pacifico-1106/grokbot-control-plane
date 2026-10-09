@@ -25,6 +25,8 @@ const REASON_JA: Record<ApproverAuthorityResultReason, string> = {
   approver_identity_unverified:
     "押した方の Slack / LINE / Telegram アカウントが、承認できるメンバー本人に紐づいていることを確認できないため止めました。",
   approver_is_target: "オーナーに追加される本人は、この申請を承認できません。",
+  approver_class_missing:
+    "この申請は承認者チェックを有効にする前に出されたもので、誰が承認できるかの条件が記録されていないため実行しませんでした。",
 };
 
 /** What to do next, for reasons where the person can act. */
@@ -36,6 +38,7 @@ const NEXT_STEP_JA: Partial<Record<ApproverAuthorityResultReason, string>> = {
   approver_not_authorized: "オーナーまたは指定管理者に承認を依頼してください。",
   approver_identity_unverified: "承認者登録（approvalWorkflow.bindVoter）で、このアカウントをご本人のメンバーに紐づけてから押してください。",
   approver_is_target: "対象者と申請者以外の既存オーナーに承認を依頼してください。",
+  approver_class_missing: "同じ内容でもう一度申請してください（新しい申請にはオーナーまたは指定管理者の承認条件が付きます）。",
 };
 
 /** nextStep for the reply / API response; null when there is nothing specific to do. */

@@ -17,7 +17,9 @@ export type ApproverAuthorityDenyReason =
   | "approver_inactive"
   | "approver_not_authorized"
   | "approver_is_requester"
-  | "approver_unverified";
+  | "approver_unverified"
+  /** Review 2026-10-09 item 4: target tool ticket filed before the flag was ON (no approver class). */
+  | "approver_class_missing";
 
 export type ApproverAuthorityDecision =
   | { outcome: "allow"; approverRole: ApproverAuthorityRole }
@@ -91,6 +93,7 @@ export const APPROVER_AUTHORITY_RESULT_REASONS = [
   "approver_identity_unverified",
   // members.promoteOwner: the member being promoted may not approve their own promotion.
   "approver_is_target",
+  "approver_class_missing",
 ] as const;
 
 export type ApproverAuthorityResultReason = (typeof APPROVER_AUTHORITY_RESULT_REASONS)[number];
