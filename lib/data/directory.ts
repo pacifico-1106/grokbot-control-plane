@@ -580,6 +580,8 @@ export async function upsertInformationAsset(input: {
   ref: string;
   class: InformationClass;
   projectId?: string | null;
+  /** Audit context for a project_id refusal (IDs only). */
+  projectAudit?: { path: string; actorEmail?: string | null };
 }): Promise<InformationAsset> {
   const ref = input.ref.trim();
   if (!ref) throw new Error("ref_required");
@@ -590,6 +592,15 @@ export async function upsertInformationAsset(input: {
       : input.projectId
         ? String(input.projectId).trim() || null
         : null;
+  // project_id must be a project of this org (null = 会社全般). Refuse before any write.
+  if (projectId) {
+    const { assertAssetProjectSameOrg } = await import("@/lib/employees/project-access-org");
+    await assertAssetProjectSameOrg({
+      orgId: input.orgId,
+      projectId,
+      audit: input.projectAudit ?? { path: "data.upsertInformationAsset" },
+    });
+  }
   if (isDemoMode()) {
     const existing = runtimeAssets.find((row) => row.orgId === input.orgId && row.ref === ref);
     if (existing) {

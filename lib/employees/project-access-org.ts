@@ -14,8 +14,15 @@ import { normalizeProjectAccess } from "./project-access";
 
 export const PROJECT_ACCESS_CROSS_ORG = "project_access_cross_org";
 export const PROJECT_ACCESS_UNVERIFIED = "project_access_unverified";
-export type ProjectAccessOrgCode = typeof PROJECT_ACCESS_CROSS_ORG | typeof PROJECT_ACCESS_UNVERIFIED;
+/** No org to check against (caller bug / lost session): refused before any lookup or audit. */
+export const PROJECT_ACCESS_ORG_REQUIRED = "project_access_org_required";
+export type ProjectAccessOrgCode =
+  | typeof PROJECT_ACCESS_CROSS_ORG
+  | typeof PROJECT_ACCESS_UNVERIFIED
+  | typeof PROJECT_ACCESS_ORG_REQUIRED;
 export const PROJECT_ACCESS_REFUSED_AUDIT_ACTION = "employee.project_access_refused";
+/** information_assets.project_id refused (web settings/directory and any other caller of upsertInformationAsset). */
+export const ASSET_PROJECT_REFUSED_AUDIT_ACTION = "information_asset.project_refused";
 
 export const PROJECT_ACCESS_ORG_MESSAGES_JA: Record<ProjectAccessOrgCode, { message: string; nextStep: string }> = {
   project_access_cross_org: {
@@ -26,6 +33,10 @@ export const PROJECT_ACCESS_ORG_MESSAGES_JA: Record<ProjectAccessOrgCode, { mess
   project_access_unverified: {
     message: "プロジェクトの所属を確認できませんでした。",
     nextStep: "何も保存・発行していません。少し時間をおいてから、この組織のプロジェクトを指定してもう一度お試しください。",
+  },
+  project_access_org_required: {
+    message: "組織を特定できなかったため、プロジェクトの所属を確認できませんでした。",
+    nextStep: "何も保存・発行していません。ログインし直す（または組織を選び直す）してから、もう一度お試しください。",
   },
 };
 
@@ -92,7 +103,10 @@ export async function assertProjectAccessSameOrg(input: {
   if (input.projectAccess === undefined || input.projectAccess === null) return;
   const access = normalizeProjectAccess(input.projectAccess);
   if (access.mode !== "selected" || !access.projectIds.length) return;
-  const check = await findProjectIdsOutsideOrg(input.orgId, access.projectIds);
+  // Up front: no org → nothing to check against and no org to audit under.
+  const orgId = (input.orgId || "").trim();
+  if (!orgId) throw new ProjectAccessOrgError(PROJECT_ACCESS_ORG_REQUIRED, []);
+  const check = await findProjectIdsOutsideOrg(orgId, access.projectIds);
   const code: ProjectAccessOrgCode | null = !check.ok
     ? PROJECT_ACCESS_UNVERIFIED
     : check.outside.length
@@ -101,7 +115,7 @@ export async function assertProjectAccessSameOrg(input: {
   if (!code) return;
   const refused = check.ok ? check.outside : [];
   await appendAuditEvent({
-    orgId: input.orgId,
+    orgId,
     employeeId: input.audit.employeeId ?? null,
     credentialId: input.audit.credentialId ?? null,
     ...(input.audit.actorEmail ? { actorEmail: input.audit.actorEmail } : {}),
@@ -119,6 +133,49 @@ export async function assertProjectAccessSameOrg(input: {
       refusedProjectIds: refused.slice(0, 50),
       refusedCount: refused.length,
       requestedCount: access.projectIds.length,
+    },
+  }).catch(() => undefined);
+  throw new ProjectAccessOrgError(code, refused);
+}
+
+/**
+ * information_assets.project_id must be null (= 会社全般) or a project of
+ * `orgId`. Same lookup, same codes, ONE audit row with IDs only (no asset ref,
+ * no names). Stricter-only, no flag.
+ */
+export async function assertAssetProjectSameOrg(input: {
+  orgId: string;
+  projectId: string | null | undefined;
+  audit: Pick<ProjectAccessAuditContext, "path" | "actorEmail">;
+}): Promise<void> {
+  const projectId = typeof input.projectId === "string" ? input.projectId.trim() : "";
+  if (!projectId) return;
+  const orgId = (input.orgId || "").trim();
+  if (!orgId) throw new ProjectAccessOrgError(PROJECT_ACCESS_ORG_REQUIRED, []);
+  const check = await findProjectIdsOutsideOrg(orgId, [projectId]);
+  const code: ProjectAccessOrgCode | null = !check.ok
+    ? PROJECT_ACCESS_UNVERIFIED
+    : check.outside.length
+      ? PROJECT_ACCESS_CROSS_ORG
+      : null;
+  if (!code) return;
+  const refused = check.ok ? check.outside : [];
+  await appendAuditEvent({
+    orgId,
+    employeeId: null,
+    credentialId: null,
+    ...(input.audit.actorEmail ? { actorEmail: input.audit.actorEmail } : {}),
+    action: ASSET_PROJECT_REFUSED_AUDIT_ACTION,
+    purpose: null,
+    summary:
+      code === PROJECT_ACCESS_CROSS_ORG
+        ? "この組織のものではないプロジェクトが指定されたため、情報資産のプロジェクトを保存しなかった"
+        : "プロジェクトの所属を確認できなかったため、情報資産のプロジェクトを保存しなかった",
+    metadata: {
+      reason: code,
+      path: input.audit.path,
+      refusedProjectIds: refused,
+      refusedCount: refused.length,
     },
   }).catch(() => undefined);
   throw new ProjectAccessOrgError(code, refused);
@@ -151,5 +208,5 @@ export function projectAccessRefusalBody(error: ProjectAccessOrgError): {
 }
 
 export function projectAccessRefusalStatus(error: ProjectAccessOrgError): number {
-  return error.code === PROJECT_ACCESS_UNVERIFIED ? 503 : 400;
+  return error.code === PROJECT_ACCESS_UNVERIFIED ? 503 : 400; // cross_org / org_required → 400
 }

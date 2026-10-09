@@ -1,4 +1,5 @@
--- READ-ONLY (木村 2026-10-05 #284 decision 4). Lists existing
+-- READ-ONLY (木村 2026-10-05 #284 decision 4; 2026-10-09 follow-up adds
+-- information_assets.project_id at the end). Lists existing
 -- employees.project_access.projectIds entries that are NOT a project of the
 -- employee's own org (another org's project, or an id that no longer exists).
 -- SELECT only: no writes. Output is IDs + a reason code (no project names).
@@ -62,3 +63,19 @@ where a.status in ('pending', 'approved')
     where p.org_id = a.org_id and p.id::text = lower(btrim(pid))
   )
 order by a.org_id, a.id;
+
+-- information_assets.project_id pointing at a project of ANOTHER org
+-- (木村 2026-10-09 #296 follow-up 1). The FK only checks that the project
+-- exists, not its org. A deleted project is set to null by the FK
+-- (on delete set null), so only 'other_org_project' can appear here.
+-- IDs only: no asset ref, no project name.
+select ia.id as asset_id,
+       ia.org_id,
+       ia.project_id,
+       p.org_id as project_org_id,
+       'other_org_project' as reason
+from public.information_assets ia
+join public.org_projects p on p.id = ia.project_id
+where ia.project_id is not null
+  and p.org_id <> ia.org_id
+order by ia.org_id, ia.id;
