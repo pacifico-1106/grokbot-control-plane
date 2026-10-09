@@ -71,6 +71,8 @@ import { renderStandaloneResultPage, standaloneResultPageHeaders } from "@/lib/u
 
 export const SLACK_AUTHORIZE_LINK_TTL_MS = 24 * 60 * 60 * 1000;
 export const SLACK_AUTHORIZE_LINK_PATH = "/api/slack/oauth/link";
+/** The query parameter /api/slack/oauth/link reads the single-use token from. */
+export const SLACK_AUTHORIZE_LINK_TOKEN_PARAM = "t";
 const TOKEN_RE = /^[A-Za-z0-9_-]{43}$/;
 const SLACK_USER_ID_RE = /^[UW][A-Z0-9]{2,30}$/;
 const SLACK_TEAM_ID_RE = /^[TE][A-Z0-9]{2,30}$/;
@@ -169,8 +171,13 @@ function newLinkToken(): { token: string; tokenHash: string } {
   return { token, tokenHash: hashAuthorizeLinkToken(token) };
 }
 
-function linkUrl(token: string): string {
-  return `${getAppOrigin()}${SLACK_AUTHORIZE_LINK_PATH}?t=${encodeURIComponent(token)}`;
+/**
+ * The ONLY builder of a re-authorize URL (used by issueSlackAuthorizeLink when
+ * it DMs the link). Same param the route reads; the token must be one this
+ * module issued (hashed, single-use, org + employee bound).
+ */
+export function slackAuthorizeLinkUrl(token: string): string {
+  return `${getAppOrigin()}${SLACK_AUTHORIZE_LINK_PATH}?${SLACK_AUTHORIZE_LINK_TOKEN_PARAM}=${encodeURIComponent(token)}`;
 }
 
 /** Exception → safe code: only an already-safe snake_case message, else "exception". */
@@ -395,7 +402,7 @@ export async function issueSlackAuthorizeLink(input: {
   const text =
     `🔐 StaffPass: AI社員「${employee.displayName}」の Slack 再認可リンクです（24時間・1回だけ有効）。\n` +
     `${who}でログインしたブラウザで開き、「許可する」を押してください。別のアカウントでは連携されません。\n` +
-    `${linkUrl(token)}\n` +
+    `${slackAuthorizeLinkUrl(token)}\n` +
     `心当たりがない場合は開かずに無視してください（期限が切れると使えなくなります）。`;
   const posted = await postApprovalAppText(botToken, recipient.channelId, text);
   if (!posted.ok) {

@@ -7,7 +7,11 @@
 import { randomBytes } from "node:crypto";
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
-import { authorizeLinkHtmlResponse, resolveAuthorizeLinkStart } from "@/lib/slack/authorize-link";
+import {
+  SLACK_AUTHORIZE_LINK_TOKEN_PARAM,
+  authorizeLinkHtmlResponse,
+  resolveAuthorizeLinkStart,
+} from "@/lib/slack/authorize-link";
 import {
   SLACK_OAUTH_COOKIE,
   signSlackOAuthState,
@@ -19,7 +23,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET(req: Request) {
-  const token = new URL(req.url).searchParams.get("t") || "";
+  const token = new URL(req.url).searchParams.get(SLACK_AUTHORIZE_LINK_TOKEN_PARAM) || "";
   const start = await resolveAuthorizeLinkStart(token);
   if (!start.ok) return authorizeLinkHtmlResponse("invalid", start.code === "authorize_link_flag_off" ? 404 : 410);
   if (!slackOAuthConfigured()) return authorizeLinkHtmlResponse("error", 503);

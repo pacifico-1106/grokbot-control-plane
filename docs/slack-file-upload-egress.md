@@ -23,7 +23,7 @@ Path B（`posting_as: user`）での PDF 添付前に、管理 MCP の **`setup.
 1. Slack API → Bot Token Scopes に `files:write` → Reinstall
 2. ダッシュボード **つながり → チャンネルに書き込む（会社のBot）** で xoxb 登録（または管理MCP `setup.slackAdapter.setBotToken` + 人承認。**承認を受け取る**のSlackとは別）
 3. Slack API → User Token Scopes に `files:write`
-4. 社員証から Slack Authorize（`/api/slack/oauth/start?employeeId={employeeId}` — 人間がブラウザでタップ）
+4. 社員本人の Slack 再認可リンク（`/api/slack/oauth/link?t=…`、単回・期限付き）: Admin MCP `setup.slackAuthorizeLink.issue`（`employeeId` 指定・人の承認 1 回）で発行 → 承認アプリの DM で届いたリンクを社員本人の Slack で開いて「許可する」（人間がブラウザでタップ）。`SLACK_AUTHORIZE_LINK_ENABLED` が OFF の間は、`hire_issue_credentials` を持つ人が社員証画面（`/app/employees/{employeeId}`）から接続
 5. 任意: `comm.reply` + `fileAttachment` で e2e
 
 詳細 RAIL: [tenant-slack-kickoff-rail.md](./tenant-slack-kickoff-rail.md)
@@ -77,7 +77,7 @@ Path B（`posting_as: user`）での PDF 添付前に、管理 MCP の **`setup.
 1. [Slack API Dashboard](https://api.slack.com/apps) → 対象アプリ（`A0BU8TABSV6`）
 2. **OAuth & Permissions** → **User Token Scopes**
 3. `files:write` を追加
-4. **リンク済み社員に re-OAuth を依頼**: 既存の User Token には新スコープが含まれないため、社員が社員証画面から **Authorize**（`/api/slack/oauth/start?employeeId={employeeId}`）を実行し、新しい User Token を取得する必要があります（人間がブラウザでタップ。サーバーが OAuth しない）
+4. **リンク済み社員に re-OAuth を依頼**: 既存の User Token には新スコープが含まれないため、社員本人が **Slack 再認可リンク（`/api/slack/oauth/link?t=…`、単回・期限付き）** で再認可し、新しい User Token を取得する必要があります。Admin MCP `setup.slackAuthorizeLink.issue`（`employeeId` 指定・人の承認 1 回）で発行 → 承認アプリの DM で届いたリンクを社員本人の Slack で開いて「許可する」（人間がブラウザでタップ。サーバーが OAuth しない）。`SLACK_AUTHORIZE_LINK_ENABLED` が OFF の間は、`hire_issue_credentials` を持つ人が社員証画面（`/app/employees/{employeeId}`）から接続
 5. `setup.slackStatus` で `employees[].fileUploadReady === true` を確認
 
 ### 設定手順（Bot Token Scopes）

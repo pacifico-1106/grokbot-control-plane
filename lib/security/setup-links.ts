@@ -69,9 +69,10 @@ const NEXTSTEP_JA: Record<SetupLinkKind, string> = {
 const KIND_PATHS: Record<SetupLinkKind, string> = {
   org_kickoff: "/app/getting-started",
   employee_connector_oauth: "/app/employees/[employeeId]/connector",
-  // Admin-issued single-use re-authorize link (lib/slack/authorize-link.ts
-  // SLACK_AUTHORIZE_LINK_PATH). Never the session start route, which requires
-  // hire_issue_credentials (#284): a recipient without it would be refused.
+  // Not minted here (see NOT_MINTABLE): the admin-issued single-use
+  // re-authorize link (lib/slack/authorize-link.ts slackAuthorizeLinkUrl) is
+  // the only URL for this kind. Never the session start route, which requires
+  // hire_issue_credentials (#284).
   slack_authorize: "/api/slack/oauth/link",
   workspace_bot_install: "/api/slack/bot-install/start",
   approval_inbox_setup: "/app/settings/notifications",
@@ -97,7 +98,35 @@ function verifySignature(payload: string, signature: string): boolean {
   return result === 0;
 }
 
+/**
+ * #284 follow-up (木村 2026-10-09): kinds whose landing route does NOT accept a
+ * setup-link token. `slack_authorize` lands on /api/slack/oauth/link, which
+ * reads `?t=` and accepts only a hashed, single-use token issued by
+ * setup.slackAuthorizeLink.issue after one human approval
+ * (lib/slack/authorize-link.ts). A stateless setup token there would always be
+ * an invalid page — and minting real link tokens here would bypass that
+ * approval — so this minter refuses the kind (guidance only).
+ */
+const NOT_MINTABLE: ReadonlySet<SetupLinkKind> = new Set<SetupLinkKind>(["slack_authorize"]);
+
+export class SetupLinkKindNotMintableError extends Error {
+  readonly code = "slack_authorize_requires_issue";
+  readonly kind: SetupLinkKind;
+  readonly nextStepJa: string;
+  constructor(kind: SetupLinkKind) {
+    super("slack_authorize_requires_issue: issue the single-use link with setup.slackAuthorizeLink.issue");
+    this.name = "SetupLinkKindNotMintableError";
+    this.kind = kind;
+    this.nextStepJa = NEXTSTEP_JA[kind];
+  }
+}
+
+export function isSetupLinkKindMintable(kind: SetupLinkKind): boolean {
+  return !NOT_MINTABLE.has(kind);
+}
+
 export function mintSetupLink(config: SetupLinkConfig): MintedSetupLink {
+  if (!isSetupLinkKindMintable(config.kind)) throw new SetupLinkKindNotMintableError(config.kind);
   const expiresInSeconds = Math.min(
     config.expiresInSeconds ?? DEFAULT_EXPIRY_SECONDS,
     MAX_EXPIRY_SECONDS
@@ -243,7 +272,7 @@ export function buildSetupGuidance(
     nextStepJa: NEXTSTEP_JA[kind],
   };
 
-  if (options?.mintLink && options.orgId) {
+  if (options?.mintLink && options.orgId && isSetupLinkKindMintable(kind)) {
     const link = mintSetupLink({
       kind,
       orgId: options.orgId,
