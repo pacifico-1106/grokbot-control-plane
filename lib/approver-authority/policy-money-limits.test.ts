@@ -3,7 +3,7 @@
  * admin remove money limits.
  * - actionLimits, when sent, replaces the whole map with
  *   normalizeActionLimits(args.actionLimits), so a map without commerce.order
- *   (or {} / null) empties that cap. 2026-10-10: LEFT OUT keeps the current
+ *   (or {}) empties that cap (null is refused by parsePolicyPatchArgs since #275). 2026-10-10: LEFT OUT keeps the current
  *   value (fulfillPolicy passes it explicitly), so omission is not a change
  *   (policy-patch-omitted-limits.test.ts).
  * - toolApprovalDefaults, when sent, replaces the whole map with

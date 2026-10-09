@@ -44,7 +44,7 @@ const { createApproval, getApprovalById, listApprovals, listAuditEvents } = awai
 const { getEmployee, issueEmployee } = await import("@/lib/data/employees");
 const { resetDemoAdminAgent } = await import("@/lib/data/admin-agents");
 const { DEMO_ORG, getRuntimeEmployees, resetRuntimeMembers } = await import("@/lib/demo-data");
-const { callAdminMcpTool } = await import("@/lib/mcp/admin-tools");
+const { ADMIN_MCP_TOOLS, callAdminMcpTool } = await import("@/lib/mcp/admin-tools");
 const { resolveApprovalWithWorkflow } = await import("@/lib/approvals/workflow-integration");
 const { classifyApproverRequirement } = await import("@/lib/approver-authority/targets");
 
@@ -257,6 +257,17 @@ describe("fulfil order: earlier gates win", () => {
 });
 
 describe("actionLimits null is refused (only an explicit {} clears)", () => {
+  test("tool description / schema: one merged description; {} clears, null is refused; PROMOTE_OWNER-era money note kept", () => {
+    const tool = ADMIN_MCP_TOOLS.find((t) => t.name === "policy.patch")!;
+    expect(tool.description).toContain("only an explicit {} removes every cap");
+    expect(tool.description).toContain("null is refused (invalid_action_limits)");
+    expect(tool.description).not.toContain("{} or null");
+    expect(tool.description).toContain("use_dedicated_tool");
+    expect(tool.description).toContain("APPROVER_AUTHORITY_ENABLED");
+    const schema = tool.inputSchema as { properties: Record<string, { description?: string }>; additionalProperties: unknown };
+    expect(schema.additionalProperties).toBe(false);
+    expect(schema.properties.actionLimits.description).toContain("null is refused");
+  });
   test("intake: null → invalid_action_limits, no ticket; the message says to use {}", async () => {
     const e = await hire();
     const { r, d, newTickets } = await file({ employeeId: e.id, scopes: BASE_SCOPES, approvalPolicy: "risk_based", actionLimits: null });

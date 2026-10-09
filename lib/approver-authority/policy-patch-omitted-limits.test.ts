@@ -10,8 +10,10 @@
  * explicitly. The tests run the fulfil against both
  *   - "legacy": today's updateEmployeePolicy (undefined → written as {}), and
  *   - "root-fix": a stand-in that keeps the current value when undefined,
- * and expect the same result. Sending actionLimits explicitly (incl. {} / null)
+ * and expect the same result. Sending actionLimits explicitly (incl. {})
  * still replaces the map and is still classified (a removed money cap → owner).
+ * null is refused by parsePolicyPatchArgs at intake and fulfil (#275); the
+ * classifier still treats it as a change (fail-safe, asserted below).
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { scopedModuleMocks } from "../../tests/helpers/scoped-module-mock";
@@ -118,6 +120,7 @@ describe("policy.patch: omitted actionLimits keeps the current value", () => {
     expect(omitted?.kind).toBe("owner_or_designated_admin");
     expect(omitted?.reasons ?? []).not.toContain("money_tool_limits");
     expect(classify({ actionLimits: {} })?.reasons).toContain("money_tool_limits");
+    // null never reaches a ticket (parsePolicyPatchArgs refuses it); if it did, still owner.
     expect(classify({ actionLimits: null })?.reasons).toContain("money_tool_limits");
     expect(classify({ actionLimits: { "slack.post": { perDay: 50 } } })?.reasons).toContain("money_tool_limits");
   });
