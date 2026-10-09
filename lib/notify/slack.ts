@@ -1,3 +1,4 @@
+import { cardApprovalReasonsLine } from "@/lib/approvals/approval-reasons";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { formatMailCardParts, MAIL_BODY_PREVIEW_LABEL, readMailArtifact } from "@/lib/approvals/summary";
 import { attachmentCardLine, readCardAttachment, withoutAttachmentSummaryLine } from "@/lib/approvals/attachment-card";
@@ -180,6 +181,11 @@ function approvalBlocks(
     `ツール: \`${escapeSlackMrkdwn(approval.tool || "unknown")}\``,
     `目的: ${escapeSlackMrkdwn(approval.purpose)}`,
     attachmentLine,
+    // 木村 B: every reason, own line (outside the 400-char summary cut).
+    (() => {
+      const line = cardApprovalReasonsLine(approval.metadata);
+      return line ? escapeSlackMrkdwn(line) : "";
+    })(),
     ...detail,
     workflowText,
   ].filter(Boolean).join("\n");

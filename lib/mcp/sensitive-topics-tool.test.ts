@@ -63,7 +63,7 @@ describe("staffpass_sensitive_topics", () => {
 
   test("returns this org's list, whether the gate is active, and the note that the AI cannot change it", async () => {
     const r = await callStaffpassMcpTool(TOOL, {}, cred(DEMO_ORG.id));
-    expect(r.isError).toBeFalsy();
+    expect(r.isError).toBe(false);
     const d = data(r);
     expect(d.ok).toBe(true);
     expect(d.readOnly).toBe(true);

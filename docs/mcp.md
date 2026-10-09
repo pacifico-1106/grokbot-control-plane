@@ -45,7 +45,11 @@ staffpass_invoke ──► lib/gateway/invoke (同一 Gateway 強制パス)
 - `pollHint`（`continue_polling` / 後続は status ツール）
 - `title` / `summary`（日本語サマリ）
 
-承認後は `staffpass_get_approval_status` で `approved` を確認し、同じ `jobId` で `staffpass_invoke` に `approvalId` を付けて再実行します。
+承認後は `staffpass_get_approval_status` をポーリングします。
+
+- `pollHint` が `fulfilled` なら、承認された操作は Staffpass が実行済みです（Slack 投稿は承認時に自動送信されます）。それで完了なので、再実行しないでください（二重送信になります）。
+- `pollHint` が `reinvoke_with_approvalId` のときだけ、同じ `jobId` で `staffpass_invoke` に `approvalId` を付けて再実行します。`reinvokeReason` が返っているときは、そこに書かれた修正（管理ツールなど）を先に行ってから再実行します。`reinvokeReason` が無いまま `reinvoke_with_approvalId` になることもあります（例: 承認済み添付の未送信分）。そのときはそのまま再実行します。
+- `needs_approval` の応答に `approvalReasons[]` があれば、承認が必要な理由がすべて入っています（`topic_gate` / `egress` / `always_human` / `action_limit` など）。情報区分は AI の指定では下げられません（上げることはできます）。機密話題の一覧は `staffpass_sensitive_topics`（参照専用）で確認できます。
 
 ---
 

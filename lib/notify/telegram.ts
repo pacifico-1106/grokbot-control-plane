@@ -1,3 +1,4 @@
+import { cardApprovalReasonsLine } from "@/lib/approvals/approval-reasons";
 import { attachmentCardLine, readCardAttachment, withoutAttachmentSummaryLine } from "@/lib/approvals/attachment-card";
 import {
   formatMailCardParts,
@@ -100,6 +101,9 @@ function composeApprovalTelegramMessage(
   if (attachment) {
     lines.push(attachmentCardLine(attachment, (name) => `<code>${escapeTelegramHtml(name)}</code>`));
   }
+  // 木村 B: every reason, outside the summary trim.
+  const reasonsLine = cardApprovalReasonsLine(approval.metadata);
+  if (reasonsLine) lines.push(escapeTelegramHtml(reasonsLine));
 
   // mail.send: put 宛先/件名/本文先頭 first for judgment material
   if (mailArtifact) {

@@ -136,8 +136,13 @@ import {
   isDuplicateGuardV2Enabled,
   isGoogleCalendarReadEnabled,
   isTopicGatedPostingEnabled,
+  isApprovalReasonsEnabled,
+  isCommSendInternalDefaultEnabled,
 } from "@/lib/feature-flags";
 import { checkTopicGate, buildTopicGateApprovalMetadata } from "@/lib/decision-workflow/topic-gate";
+import { getOrgChannel } from "@/lib/data/directory";
+import { buildApprovalReasons, type ApprovalReason } from "@/lib/approvals/approval-reasons";
+import { isInformationClass } from "@/lib/gateway/information-class";
 import { getOrgApprovalKindRoutesPolicy } from "@/lib/approval-kind-routes/data";
 import { getToolApprovalKind } from "@/lib/approval-kind-routes/tool-kind-map";
 import {
@@ -357,6 +362,28 @@ function extractChannelIdForTopicGate(body: GatewayInvokeRequest): string | null
  * Returns both the effective verdict (external-safe for behavior) and
  * the dual verdict (for audit when channelMixed).
  */
+/**
+ * 木村 B (COMM_SEND_INTERNAL_DEFAULT_ENABLED, default OFF): is the comm.send
+ * destination one Staffpass itself verified as internal? Only the channel
+ * ledger of the CREDENTIAL org (never conversation.orgId) counts: an internal,
+ * not-mixed Slack channel or internal DM route. Party ledger / team rule alone
+ * are not "verified". The audience must also have resolved to internal, so an
+ * external speaker in a ledger-internal channel stays confidential.
+ */
+async function isVerifiedInternalSlackDestination(input: {
+  orgId: string;
+  tool: string;
+  ctx: ReturnType<typeof parseConversationContext>;
+  audience: string;
+}): Promise<boolean> {
+  if (input.tool !== "comm.send" || !isCommSendInternalDefaultEnabled()) return false;
+  if (input.audience !== "internal") return false;
+  const ctx = input.ctx;
+  if (!ctx || ctx.surface !== "slack" || !ctx.slackChannelId || !input.orgId) return false;
+  const row = await getOrgChannel(input.orgId, "slack", ctx.slackChannelId).catch(() => null);
+  return Boolean(row && row.orgId === input.orgId && row.classification === "internal" && row.mixed === false);
+}
+
 async function evaluateInvokeEgress(input: {
   orgId: string;
   tool: string;
@@ -376,6 +403,12 @@ async function evaluateInvokeEgress(input: {
     tool: input.tool,
     body: input.body,
     audience: audience.audience,
+    verifiedInternalDestination: await isVerifiedInternalSlackDestination({
+      orgId: input.orgId,
+      tool: input.tool,
+      ctx,
+      audience: audience.audience,
+    }),
   });
 
   const dualEgress = evaluateDualEgress({
@@ -1795,6 +1828,31 @@ export async function runGatewayInvoke(
   // P1: Topic gate can force approval for posts with sensitive topics
   const topicGateForceApproval = topicGateResult?.requiresApproval ?? false;
 
+  // 木村 B: APPROVAL_REASONS_ENABLED → every reason, computed here only (never
+  // from the request). Describes the decision; never changes it.
+  const requestedArgs = (body.args && typeof body.args === "object" ? body.args : {}) as Record<string, unknown>;
+  const requestedInformationClass =
+    (isInformationClass(body.informationClass) && body.informationClass) ||
+    (isInformationClass(requestedArgs.informationClass) && requestedArgs.informationClass) ||
+    (isInformationClass(requestedArgs.class) && requestedArgs.class) ||
+    null;
+  const toolLevelHuman = !mailPolicyLiftsToolDefault && perToolHuman;
+  const approvalReasonsFields = (): { approvalReasons: ApprovalReason[] } | Record<string, never> =>
+    isApprovalReasonsEnabled()
+      ? {
+          approvalReasons: buildApprovalReasons({
+            topicGate: topicGateResult,
+            egress,
+            employeeAlwaysHuman: employee.approvalPolicy === "always_human",
+            toolAlwaysHuman: toolLevelHuman ? (toolHint === "always_human" ? "tool_setting" : "tool_default") : null,
+            actionLimit,
+            spend,
+            mailPolicyForceApproval,
+            requestedInformationClass,
+          }),
+        }
+      : {};
+
   const forceApproval =
     mailPolicyForceApproval ||
     (mailPolicyLiftsToolDefault ? false : perToolHuman) ||
@@ -1850,10 +1908,10 @@ export async function runGatewayInvoke(
         amountJpy: Number.isFinite(amountJpy) ? amountJpy : null,
         message: actionLimit.decision === "needs_approval" ? actionLimit.message : (spend?.message ?? "発注には人の確認が必要です"),
         parentApprovalId: parentApprovalId || null,
-        metadata: { ...invokeMetadata, sodVerdict, actionLimit, egress, dualEgress, managerId },
+        metadata: { ...invokeMetadata, sodVerdict, actionLimit, egress, dualEgress, managerId, ...approvalReasonsFields() },
         body,
         egress,
-        extra: { spend, actionLimit, sodVerdict, egress, dualEgress, managerId, ...(voice ? { voice } : {}), toolKind: toolDef.kind, approvalPolicy: employee.approvalPolicy },
+        extra: { spend, actionLimit, sodVerdict, egress, dualEgress, managerId, ...(voice ? { voice } : {}), toolKind: toolDef.kind, approvalPolicy: employee.approvalPolicy, ...approvalReasonsFields() },
       });
     }
 
@@ -1891,6 +1949,7 @@ export async function runGatewayInvoke(
               },
             }
           : {}),
+        ...approvalReasonsFields(),
       },
       body,
       egress,
@@ -1929,6 +1988,7 @@ export async function runGatewayInvoke(
               },
             }
           : {}),
+        ...approvalReasonsFields(),
       },
     });
   }
@@ -1946,7 +2006,7 @@ export async function runGatewayInvoke(
       risk: "high",
       message: egress.messageJa,
       parentApprovalId: parentApprovalId || null,
-      metadata: { ...invokeMetadata, sodVerdict, actionLimit, egress, dualEgress, managerId },
+      metadata: { ...invokeMetadata, sodVerdict, actionLimit, egress, dualEgress, managerId, ...approvalReasonsFields() },
       body,
       egress,
       extra: {
@@ -1958,6 +2018,7 @@ export async function runGatewayInvoke(
         dualEgress,
         managerId,
         ...(voice ? { voice } : {}),
+        ...approvalReasonsFields(),
       },
     });
   }

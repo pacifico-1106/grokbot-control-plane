@@ -64,11 +64,11 @@ describe("buildApprovalReasons: every reason, not just the first", () => {
   });
 
   test("tool-level always_human: explicit setting vs the tool's default (confirm / send / order)", () => {
-    expect(buildApprovalReasons({ toolAlwaysHuman: "tool_setting" }).map((r) => r)).toEqual([
-      expect.objectContaining({ code: "always_human", source: "tool_setting" }),
+    expect(buildApprovalReasons({ toolAlwaysHuman: "tool_setting" })).toMatchObject([
+      { code: "always_human", source: "tool_setting" },
     ]);
-    expect(buildApprovalReasons({ toolAlwaysHuman: "tool_default" })).toEqual([
-      expect.objectContaining({ code: "always_human", source: "tool_default" }),
+    expect(buildApprovalReasons({ toolAlwaysHuman: "tool_default" })).toMatchObject([
+      { code: "always_human", source: "tool_default" },
     ]);
     // employee-wide always_human wins the source label, never listed twice
     expect(buildApprovalReasons({ employeeAlwaysHuman: true, toolAlwaysHuman: "tool_default" }).length).toBe(1);
@@ -111,7 +111,7 @@ describe("readApprovalReasons: strict reader for stored metadata", () => {
     expect(read).not.toBeNull();
     expect(read!.length).toBeLessThanOrEqual(10);
     expect(JSON.stringify(read)).not.toContain("xoxb-leak");
-    expect(read![0]).toEqual(expect.objectContaining({ code: "topic_gate", topics: ["支払"] }));
+    expect(read![0]).toMatchObject({ code: "topic_gate", topics: ["支払"] });
   });
   test("absent / not an array → null", () => {
     expect(readApprovalReasons({})).toBeNull();
