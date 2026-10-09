@@ -138,3 +138,29 @@ test("classification never throws; failure on a target → owner", () => {
   expect(classifyApproverRequirement({ tool: "policy.patch", metadata: evil })).toEqual({ kind: "owner", reasons: ["classification_failed"] });
   expect(classifyApproverRequirement({ tool: "mail.send", metadata: evil })).toBeNull();
 });
+
+describe("2026-10-09 gap closure: tools that change approvers / permissions but were untargeted", () => {
+  test("approval inbox changes are standard targets", () => {
+    for (const tool of ["setup.approvalDelivery.autoResolve", "setup.lineApproval.demoteTelegram"]) {
+      expect(isApproverAuthorityTargetTool(tool)).toBe(true);
+      expect(kind(tool, {})).toBe("owner_or_designated_admin");
+    }
+  });
+
+  test("employees.issue grants scopes: standard; money scope / spend / weaker money approval / unknown limits → owner", () => {
+    expect(isApproverAuthorityTargetTool("employees.issue")).toBe(true);
+    expect(kind("employees.issue", { displayName: "A", scopes: ["slack:post"], approvalPolicy: "risky_only" })).toBe("owner_or_designated_admin");
+    expect(kind("employees.issue", { displayName: "A", scopes: ["commerce:order"], approvalPolicy: "always_human" })).toBe("owner");
+    expect(kind("employees.issue", { displayName: "A", scopes: ["slack:post"], spend: { monthlyLimitJpy: 1000 } })).toBe("owner");
+    expect(kind("employees.issue", { displayName: "A", scopes: ["slack:post"], actionLimits: { "commerce.order": { perDay: 3 } } })).toBe("owner");
+    expect(kind("employees.issue", { displayName: "A", scopes: ["slack:post"], actionLimits: { "slack.post": { perDay: 3 } } })).toBe("owner_or_designated_admin");
+    expect(kind("employees.issue", { displayName: "A", scopes: "commerce:order" })).toBe("owner");
+    expect(kind("employees.issue", { displayName: "A", capabilities: ["manage_billing"] })).toBe("owner");
+  });
+
+  test("still not targets: read-only, directory and AI-identity tools", () => {
+    for (const tool of ["channels.remove", "parties.remove", "employeeIdentity.upsert", "approvalWorkflow.remind", "approvalWorkflow.resendVoterVerification"]) {
+      expect(isApproverAuthorityTargetTool(tool)).toBe(false);
+    }
+  });
+});
