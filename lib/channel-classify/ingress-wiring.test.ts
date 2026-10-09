@@ -15,7 +15,7 @@ const LINE_CHANNEL = {
 };
 const TG_CHANNEL = {
   id: "nc_tg_fixture", orgId: "org_demo_placeholder", provider: "telegram", label: "tg", enabled: true, isDefault: false,
-  config: { chatId: "-100111" },
+  config: { chatId: "-100111", allowedUserIds: ["9001"] },
   secrets: { botToken: "tg-token-fixture", webhookSecret: "tg-secret-fixture" },
 };
 mock.module("@/lib/data", () => ({
@@ -57,6 +57,7 @@ beforeEach(() => {
   setJoinDepsForTests({
     findEmployeeOrgsBySlackUser: async (userId) => (userId === "U0WIREEMP" ? [{ orgId: DEMO_ORG.id, employeeId: "emp_comm" }] : []),
     findOrgsBySlackTeam: async () => [],
+    adapterBotIdentity: async () => ({ appId: "A0WIREAPP", botUserId: "U0WIREBOT", teamId: "T0WIRETEAM" }),
   });
 });
 
@@ -71,6 +72,8 @@ describe("Slack Events → shared flow", () => {
   const envelope = (channel: string) => ({
     type: "event_callback",
     team_id: "T0WIRETEAM",
+    api_app_id: "A0WIREAPP",
+    authorizations: [{ team_id: "T0WIRETEAM", user_id: "U0WIREBOT", is_bot: true }],
     event_id: `EvWire${channel}`,
     event: { type: "member_joined_channel", user: "U0WIREEMP", channel, channel_type: "C", team: "T0WIRETEAM" },
   });
@@ -119,9 +122,10 @@ describe("Telegram webhook → shared flow", () => {
   function tgRequest(body: unknown, secret = "tg-secret-fixture") {
     return new Request("https://example.test/api/webhooks/telegram/tgref", { method: "POST", body: JSON.stringify(body), headers: { "x-telegram-bot-api-secret-token": secret, "content-type": "application/json" } });
   }
-  const added = (chatId: number) => ({
+  const added = (chatId: number, fromId = 9001) => ({
     my_chat_member: {
       chat: { id: chatId, type: "group" },
+      from: { id: fromId, is_bot: false },
       old_chat_member: { status: "left", user: { id: 7, is_bot: true } },
       new_chat_member: { status: "member", user: { id: 7, is_bot: true } },
     },
@@ -131,6 +135,12 @@ describe("Telegram webhook → shared flow", () => {
     const res = await telegramPost(tgRequest(added(-100222)), { params: Promise.resolve({ ref: "tgref" }) });
     expect(res.status).toBe(200);
     expect(proposalsFor(await listApprovals(DEMO_ORG.id), "-100222").length).toBe(1);
+  });
+
+  test("follow-up H1: an adder who is not a known member → 200, nothing proposed", async () => {
+    const res = await telegramPost(tgRequest(added(-100444, 123456)), { params: Promise.resolve({ ref: "tgref" }) });
+    expect(res.status).toBe(200);
+    expect(proposalsFor(await listApprovals(DEMO_ORG.id), "-100444").length).toBe(0);
   });
 
   test("wrong secret → 401; the approval chat itself is not proposed", async () => {
