@@ -164,3 +164,12 @@ describe("2026-10-09 gap closure: tools that change approvers / permissions but 
     }
   });
 });
+
+describe("2026-10-09 review item 3: five more MCP tools are targets (owner or designated admin)", () => {
+  for (const tool of ["internalAudienceRule.patch", "parties.upsert", "channels.classify", "employees.postingIdentity.set", "mailPolicy.patch"]) {
+    test(tool, () => {
+      expect(isApproverAuthorityTargetTool(tool)).toBe(true);
+      expect((APPROVER_AUTHORITY_TARGETS.standardTools as readonly string[]).includes(tool)).toBe(true);
+    });
+  }
+});
