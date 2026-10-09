@@ -676,7 +676,7 @@ export async function runGatewayInvoke(
   input: RunGatewayInvokeInput
 ): Promise<GatewayInvokeResult> {
   // `let`: a U… Slack recipient may be resolved to the internal DM route below
-  // (SLACK_DM_AUTOROUTE_ENABLED); every later layer then sees the same D….
+  // (SLACK_U_TO_DM_SEND_ENABLED + SLACK_DM_AUTOROUTE_ENABLED); every later layer then sees the same D….
   let body = input.body;
   const employeeId = (input.employeeId || "").trim();
 
@@ -1220,7 +1220,8 @@ export async function runGatewayInvoke(
     });
   }
 
-  // Item C (SLACK_DM_AUTOROUTE_ENABLED, OFF → no-op): a U… in the Slack channel
+  // Item C (SLACK_U_TO_DM_SEND_ENABLED, default OFF, and only with
+  // SLACK_DM_AUTOROUTE_ENABLED ON; otherwise a no-op = main): a U… in the Slack channel
   // field → the employee's internal 1:1 DM route, only for an internal
   // slack_user of the org's party ledger (re-verified as a 1:1 IM with that
   // user). Anyone else stops here with a nextStep. Before egress so egress,

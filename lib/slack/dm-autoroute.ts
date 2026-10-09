@@ -250,15 +250,17 @@ async function processCounterpart(input: {
   if (!channelId || !isSlackImChannelId(channelId)) {
     return { ...base, outcome: "skipped", reason: "not_a_dm" };
   }
-  // The opened conversation must be the 1:1 IM with exactly this counterpart.
-  // A different `user` is always refused; strict mode (send-time resolution)
-  // also refuses a missing `user` / is_im (unverifiable).
-  const imUser = typeof channel.user === "string" ? channel.user.trim().toUpperCase() : "";
-  if (channel.is_im === false || (imUser && imUser !== input.counterpart.toUpperCase())) {
-    return { ...base, outcome: "skipped", reason: channel.is_im === false ? "not_a_dm" : "dm_user_mismatch" };
-  }
-  if (input.requireImWithCounterpart && (channel.is_im !== true || !imUser)) {
-    return { ...base, outcome: "skipped", reason: "dm_user_unverified" };
+  // Send-time resolution only (item C, SLACK_U_TO_DM_SEND_ENABLED): the opened
+  // conversation must be the 1:1 IM with exactly this counterpart (is_im true,
+  // user === counterpart; missing → unverifiable → refused). The #234 sync
+  // (already live under SLACK_DM_AUTOROUTE_ENABLED) is deliberately unchanged.
+  if (input.requireImWithCounterpart) {
+    const imUser = typeof channel.user === "string" ? channel.user.trim().toUpperCase() : "";
+    if (channel.is_im === false) return { ...base, outcome: "skipped", reason: "not_a_dm" };
+    if (imUser && imUser !== input.counterpart.toUpperCase()) {
+      return { ...base, outcome: "skipped", reason: "dm_user_mismatch" };
+    }
+    if (channel.is_im !== true || !imUser) return { ...base, outcome: "skipped", reason: "dm_user_unverified" };
   }
   if (dmLooksExternal(channel)) {
     return { ...base, channelId, outcome: "skipped", reason: "dm_externally_shared" };

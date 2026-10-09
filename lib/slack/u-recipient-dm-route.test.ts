@@ -463,6 +463,9 @@ function expectTodaysMain(r: Awaited<ReturnType<typeof invoke>>, u: string) {
   return getSlackImEmployeeRoute(ORG, dmFor(u)).then((route) => expect(route).toBeNull());
 }
 
+/** dmFor() truncates and can collide across tests; the #234 sync tests need a fresh D…. */
+const dmUnique = (counterpart: string) => `D${counterpart.slice(-12)}Y`.toUpperCase();
+
 describe("SLACK_U_TO_DM_SEND_ENABLED gate (production: autoroute + im:write already ON)", () => {
   test("new flag OFF + SLACK_DM_AUTOROUTE_ENABLED ON + SLACK_USER_SCOPE_IM_WRITE ON → internal U… unchanged (403 egress_denied)", async () => {
     delete process.env[SEND_FLAG];
@@ -512,7 +515,7 @@ describe("#234 sync (syncAutoDmRoutesForEmployee) without the new flag = today's
   test("new flag OFF: identity_linked sync with a D… whose `user` differs is handled exactly as main (route created)", async () => {
     delete process.env[SEND_FLAG];
     const other = uid("UOTH");
-    openResponse = (counterpart) => ({ ok: true, channel: { id: dmFor(counterpart), is_im: true, user: other } });
+    openResponse = (counterpart) => ({ ok: true, channel: { id: dmUnique(counterpart), is_im: true, user: other } });
     const u = await party("internal");
     const result = await syncAutoDmRoutesForEmployee({ orgId: ORG, employeeId: EMP, trigger: "party_upserted", onlyCounterpart: u });
     expect(result.items[0]?.outcome).toBe("created");
@@ -521,7 +524,7 @@ describe("#234 sync (syncAutoDmRoutesForEmployee) without the new flag = today's
 
   test("new flag OFF: sync with is_im=false on a D… id is handled exactly as main (route created)", async () => {
     delete process.env[SEND_FLAG];
-    openResponse = (counterpart) => ({ ok: true, channel: { id: dmFor(counterpart), is_im: false, user: counterpart } });
+    openResponse = (counterpart) => ({ ok: true, channel: { id: dmUnique(counterpart), is_im: false, user: counterpart } });
     const u = await party("internal");
     const result = await syncAutoDmRoutesForEmployee({ orgId: ORG, employeeId: EMP, trigger: "party_upserted", onlyCounterpart: u });
     expect(result.items[0]?.outcome).toBe("created");
@@ -530,7 +533,7 @@ describe("#234 sync (syncAutoDmRoutesForEmployee) without the new flag = today's
   test("new flag ON: the #234 sync path is still unchanged (strict check is send-time only)", async () => {
     process.env[SEND_FLAG] = "1";
     const other = uid("UOTH");
-    openResponse = (counterpart) => ({ ok: true, channel: { id: dmFor(counterpart), is_im: true, user: other } });
+    openResponse = (counterpart) => ({ ok: true, channel: { id: dmUnique(counterpart), is_im: true, user: other } });
     const u = await party("internal");
     const result = await syncAutoDmRoutesForEmployee({ orgId: ORG, employeeId: EMP, trigger: "party_upserted", onlyCounterpart: u });
     expect(result.items[0]?.outcome).toBe("created");

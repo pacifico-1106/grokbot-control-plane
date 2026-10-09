@@ -1,5 +1,6 @@
 /**
- * Item C (木村 2026-10-09, triage #5 / T6) — SLACK_DM_AUTOROUTE_ENABLED.
+ * Item C (木村 2026-10-09, triage #5 / T6) — SLACK_U_TO_DM_SEND_ENABLED (default OFF),
+ * effective only with SLACK_DM_AUTOROUTE_ENABLED ON (already ON in production).
  *
  * A Slack send whose channel field holds a U…/W… user id (e.g. comm.reply
  * `slackChannelId: "U…"`) is mapped to the employee's INTERNAL 1:1 DM route:
@@ -31,7 +32,7 @@
 import { getOrgChannel, getOrgParty } from "@/lib/data/directory";
 import { getSlackImEmployeeRoute, isSlackImChannelId } from "@/lib/data/slack-im-routes";
 import { parseConversationContext } from "@/lib/gateway/audience";
-import { isSlackDmAutorouteEnabled } from "@/lib/slack/dm-autoroute-flags";
+import { isSlackUToDmSendEnabled } from "@/lib/slack/dm-autoroute-flags";
 import { syncAutoDmRoutesForEmployee } from "@/lib/slack/dm-autoroute";
 import type { Employee, GatewayInvokeRequest } from "@/lib/types";
 
@@ -221,7 +222,8 @@ export async function resolveSlackUserRecipient(input: {
   employee: Employee;
   body: GatewayInvokeRequest;
 }): Promise<SlackUserRecipientResolution> {
-  if (!isSlackDmAutorouteEnabled()) return { kind: "unchanged" };
+  // SLACK_U_TO_DM_SEND_ENABLED AND SLACK_DM_AUTOROUTE_ENABLED; otherwise today's main.
+  if (!isSlackUToDmSendEnabled()) return { kind: "unchanged" };
   const counterpart = slackUserIdInChannelField(input.body);
   if (!counterpart) return { kind: "unchanged" };
   const ctx = parseConversationContext(input.body, input.orgId);
