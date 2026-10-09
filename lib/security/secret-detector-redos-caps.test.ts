@@ -73,6 +73,7 @@ const SEEDS: Record<string, string[]> = {
   aws_secret_keyword: ["aws ", "aws_", "secret access ", "secret_access_"],
   aws_secret_context_weak: ["secret", "Secret", "SECRET", "clientSecret"],
   aws_access_key_id: ["AKIA", "ASIA0"],
+  jwt_run: ["a", "a.", "eyJ"],
   percent_run: ["%2", "%41", "%"],
   allowlist_email: ["a", "a@", "a.", "a@a."],
   allowlist_iso_date: ["2026-10-05", "0"],
@@ -156,6 +157,18 @@ describe("item 1: adversarial timing for every pattern the detector runs", () =>
     }
     // In-run eyJ (not at the start of the first segment) still counts, as before.
     expect(det.detectSecretInString("zzzeyJa.eyJb.c").ok).toBe(false);
+  });
+
+  test("hasJwtHeaderSegment (admin slack-dm-setup guard) keeps /eyJ[A-Za-z0-9_-]{10,}\\./i and is linear", () => {
+    expect(det.hasJwtHeaderSegment("eyJhbGciOiJIUzI1NiJ9.x")).toBe(true);
+    expect(det.hasJwtHeaderSegment("abceyJ0123456789.")).toBe(true);
+    expect(det.hasJwtHeaderSegment("EYJ0123456789.")).toBe(true);
+    expect(det.hasJwtHeaderSegment("eyJ012345678.")).toBe(false);
+    expect(det.hasJwtHeaderSegment("eyJ0123456789")).toBe(false);
+    expect(det.hasJwtHeaderSegment("eyJ01234 56789.")).toBe(false);
+    const t0 = performance.now();
+    det.hasJwtHeaderSegment(fill("eyJ", 1_000_000));
+    expect(performance.now() - t0).toBeLessThan(PER_STRING_MS);
   });
 
   test("the per-string cap is lowered from 1M and the payload caps exist", () => {
