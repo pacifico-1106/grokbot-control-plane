@@ -189,6 +189,18 @@ describe("guard snapshot (production read)", () => {
     });
   });
 
+  test("2026-10-10 item 2(a): allowed_purposes is read and pinned in the expected snapshot (the RPC compares it under the lock)", async () => {
+    tableResponder = (table) => (table === "employees" ? { data: employeeRow, error: null } : { data: null, error: null });
+    const snapshot = await readApproverContextSnapshot(ORG, "policy.patch", { adminMutation: { employeeId: EMP } });
+    const read = calls.find((c) => c.kind === "from" && c.name === "employees")!;
+    const selected = String(read.opArgs[read.ops.indexOf("select")]?.[0] ?? "").split(",").map((c) => c.trim());
+    expect(selected).toContain("allowed_purposes");
+    expect(snapshot!.expected).toEqual({
+      scopes: employeeRow.scopes, allowed_purposes: employeeRow.allowed_purposes, approval_policy: employeeRow.approval_policy,
+      action_limits: employeeRow.action_limits, tool_approval_defaults: employeeRow.tool_approval_defaults,
+    });
+  });
+
   test("recorded fingerprint differs / missing / row unreadable → approver_context_changed", async () => {
     tableResponder = (table) => (table === "employees" ? { data: employeeRow, error: null } : { data: null, error: null });
     await expect(approverContextGuardForWrite(approval("0".repeat(64)))).rejects.toThrow("approver_context_changed");

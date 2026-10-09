@@ -49,9 +49,9 @@ declare
   pol jsonb := '{"policyName":"P","rules":[{"id":"r1","costCapJpy":9000}]}';
   c record;
 begin
-  -- the snapshot the application pins (the four judged columns, raw)
-  select jsonb_build_object('scopes', to_jsonb(x.scopes), 'approval_policy', to_jsonb(x.approval_policy),
-    'action_limits', x.action_limits, 'tool_approval_defaults', x.tool_approval_defaults)
+  -- the snapshot the application pins (the five compared columns, raw; allowed_purposes added 2026-10-10)
+  select jsonb_build_object('scopes', to_jsonb(x.scopes), 'allowed_purposes', to_jsonb(x.allowed_purposes),
+    'approval_policy', to_jsonb(x.approval_policy), 'action_limits', x.action_limits, 'tool_approval_defaults', x.tool_approval_defaults)
     into snap from public.employees x where x.id = e;
 
   -- (1) a concurrent change between the check and the write → refused, nothing written
@@ -64,14 +64,32 @@ begin
   if (select to_jsonb(x) - 'updated_at' from public.employees x where x.id = e) <> row_before then raise exception 'employee written on refusal'; end if;
   if (select jsonb_agg(to_jsonb(x) order by x.id) from public.credentials x where x.employee_id = e) <> cred_before then raise exception 'credentials written on refusal'; end if;
 
+  -- (1b) 2026-10-10 item 2(a): a concurrent allowed_purposes change alone → refused, nothing written
+  select jsonb_build_object('scopes', to_jsonb(x.scopes), 'allowed_purposes', to_jsonb(x.allowed_purposes),
+    'approval_policy', to_jsonb(x.approval_policy), 'action_limits', x.action_limits, 'tool_approval_defaults', x.tool_approval_defaults)
+    into snap from public.employees x where x.id = e;
+  update public.employees set allowed_purposes = '{finance.close}' where id = e;  -- the owner saves right now
+  select to_jsonb(x) - 'updated_at' into row_before from public.employees x where x.id = e;
+  select jsonb_agg(to_jsonb(x) order by x.id) into cred_before from public.credentials x where x.employee_id = e;
+  r := public.approver_cas_write_employee_policy(a, e, t_policy, 'fp-policy', snap,
+    '{mail:draft}', '{sales.outreach}', 'risk_based', null, 'ok', '{}');
+  if (r->>'ok')::boolean or r->>'reason' <> 'approver_context_changed' then raise exception 'concurrent purposes change not refused: %', r; end if;
+  if (select to_jsonb(x) - 'updated_at' from public.employees x where x.id = e) <> row_before then raise exception 'employee written on purposes refusal'; end if;
+  if (select jsonb_agg(to_jsonb(x) order by x.id) from public.credentials x where x.employee_id = e) <> cred_before then raise exception 'credentials written on purposes refusal'; end if;
+  -- a snapshot without allowed_purposes (the old four-key shape) never matches
+  r := public.approver_cas_write_employee_policy(a, e, t_policy, 'fp-policy', snap - 'allowed_purposes' ,
+    '{mail:draft}', '{sales.outreach}', 'risk_based', null, 'ok', '{}');
+  if (r->>'ok')::boolean or r->>'reason' <> 'approver_context_changed' then raise exception 'four-key snapshot accepted: %', r; end if;
+  update public.employees set allowed_purposes = '{sales.outreach}' where id = e;
+
   -- (2) unchanged → written atomically: employee + active credential; revoked credential untouched
-  select jsonb_build_object('scopes', to_jsonb(x.scopes), 'approval_policy', to_jsonb(x.approval_policy),
-    'action_limits', x.action_limits, 'tool_approval_defaults', x.tool_approval_defaults)
+  select jsonb_build_object('scopes', to_jsonb(x.scopes), 'allowed_purposes', to_jsonb(x.allowed_purposes),
+    'approval_policy', to_jsonb(x.approval_policy), 'action_limits', x.action_limits, 'tool_approval_defaults', x.tool_approval_defaults)
     into snap from public.employees x where x.id = e;
   -- key order of the snapshot does not matter (jsonb equality)
   r := public.approver_cas_write_employee_policy(a, e, t_policy, 'fp-policy',
     jsonb_build_object('tool_approval_defaults', snap->'tool_approval_defaults', 'action_limits', snap->'action_limits',
-      'approval_policy', snap->'approval_policy', 'scopes', snap->'scopes'),
+      'approval_policy', snap->'approval_policy', 'allowed_purposes', snap->'allowed_purposes', 'scopes', snap->'scopes'),
     '{mail:draft}', '{sales.outreach}', 'risk_based', null, 'warn', '{"mail.send":{"perDay":3}}');
   if not (r->>'ok')::boolean or r->'employee'->>'id' <> e::text then raise exception 'unchanged write refused: %', r; end if;
   if not exists (select 1 from public.employees x where x.id = e and x.scopes = '{mail:draft}' and x.approval_policy = 'risk_based'
@@ -89,8 +107,8 @@ begin
     '{mail:draft}', '{}', 'always_human', null, 'ok', '{}');
   if (r->>'ok')::boolean or r->>'reason' <> 'approver_context_changed' then raise exception 'stale snapshot accepted: %', r; end if;
 
-  select jsonb_build_object('scopes', to_jsonb(x.scopes), 'approval_policy', to_jsonb(x.approval_policy),
-    'action_limits', x.action_limits, 'tool_approval_defaults', x.tool_approval_defaults)
+  select jsonb_build_object('scopes', to_jsonb(x.scopes), 'allowed_purposes', to_jsonb(x.allowed_purposes),
+    'approval_policy', to_jsonb(x.approval_policy), 'action_limits', x.action_limits, 'tool_approval_defaults', x.tool_approval_defaults)
     into snap from public.employees x where x.id = e;
   select to_jsonb(x) - 'updated_at' into row_before from public.employees x where x.id = e;
   -- (3) ticket binding: fingerprint, missing fingerprint, status, tool, target, org — all refused, nothing written

@@ -334,7 +334,7 @@ try:
           f"  '{{\"adminTool\":\"policy.patch\",\"adminMutation\":{{\"employeeId\":\"{cas_emp}\"}}}}'),"
           f" ('{cas_sched}', '{cas_org}', 'admin.policy', 'race', 'high', 'approved', 'schedulingPolicy.patch', 'owner', '{{\"contextFingerprint\":\"fp\"}}',"
           f"  '{{\"adminTool\":\"schedulingPolicy.patch\",\"adminMutation\":{{}}}}');")
-    snap = query(f"select jsonb_build_object('scopes', to_jsonb(scopes), 'approval_policy', to_jsonb(approval_policy), 'action_limits', action_limits,"
+    snap = query(f"select jsonb_build_object('scopes', to_jsonb(scopes), 'allowed_purposes', to_jsonb(allowed_purposes), 'approval_policy', to_jsonb(approval_policy), 'action_limits', action_limits,"
                  f" 'tool_approval_defaults', tool_approval_defaults)::text from public.employees where id='{cas_emp}';")
     command = (f"set role service_role; select public.approver_cas_write_employee_policy('{cas_org}','{cas_emp}','{cas_ticket}','fp','{snap}'::jsonb,"
                f"'{{mail:draft}}','{{}}','risk_based',null,'ok','{{}}')->>'reason';")

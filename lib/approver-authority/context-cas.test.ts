@@ -29,6 +29,25 @@ await mocks.mock("@/lib/data/org-context", {
   },
 });
 
+// 2026-10-10 item 2(a): a one-shot hook right AFTER fulfillPolicy's own
+// early getEmployee read (before the guard reads and pins the snapshot), to
+// prove a kept value never comes from that earlier read.
+let afterFulfilRead: (() => void) | null = null;
+const realEmployees = { ...(await import("@/lib/data/employees")) };
+await mocks.mock("@/lib/data/employees", {
+  getEmployee: async (...args: unknown[]) => {
+    const live = await (realEmployees.getEmployee as (...a: unknown[]) => Promise<unknown>)(...args);
+    // The demo store hands out its live object; a real read is a copy.
+    const result = live === null || live === undefined ? live : structuredClone(live);
+    if (afterFulfilRead && (new Error().stack ?? "").includes("fulfillPolicy")) {
+      const hook = afterFulfilRead;
+      afterFulfilRead = null;
+      hook();
+    }
+    return result;
+  },
+});
+
 const { createApproval, getApprovalById } = await import("@/lib/data/approvals");
 const { resolveApprovalWithWorkflow } = await import("@/lib/approvals/workflow-integration");
 const { setOrgSchedulingPolicy, setEmployeeSchedulingPolicy, getOrgSchedulingPolicy, getEmployeeSchedulingPolicy, resetDemoSchedulingPolicy } =
@@ -53,6 +72,7 @@ beforeEach(() => {
   savedFlag = process.env[FLAG];
   process.env[FLAG] = "true";
   concurrentChange = null;
+  afterFulfilRead = null;
   resetRuntimeMembers();
   resetDemoSchedulingPolicy();
   savedEmployee = structuredClone(runtimeEmployee());
@@ -158,6 +178,58 @@ describe("policy.patch with actionLimits left out (kept, 2026-10-10) under the g
     expect(concurrentChange).toBeNull();
     expect(runtimeEmployee().actionLimits).toEqual(lowered as never);
     expect(policyAuditFor(t.id)).toEqual([]);
+  });
+});
+
+describe("policy.patch: allowedPurposes is compared too (2026-10-10 item 2(a))", () => {
+  const omittedPurposes = async (change: Record<string, unknown> = {}) => {
+    const args: Record<string, unknown> = await policyPatchArgs({ approvalPolicy: "always_human", ...change });
+    delete args.allowedPurposes;
+    return args;
+  };
+  test("explicit purposes: a concurrent purposes change in the window → approver_context_changed, nothing written", async () => {
+    runtimeEmployee().allowedPurposes = ["sales.outreach"];
+    const t = await fileApproved("policy.patch", await policyPatchArgs({ allowedPurposes: ["sales.outreach", "support.reply"] }));
+    concurrentChange = () => { runtimeEmployee().allowedPurposes = ["finance.close"]; };
+    expect(await fulfillApprovedAdmin(t)).toMatchObject({ ok: false, error: "approver_context_changed", nextStepJa: NEXT_STEP });
+    expect(concurrentChange).toBeNull();
+    expect(runtimeEmployee().allowedPurposes).toEqual(["finance.close"]);
+    expect(policyAuditFor(t.id)).toEqual([]);
+  });
+  test("purposes left out, nothing changed → the current purposes are kept, written", async () => {
+    runtimeEmployee().allowedPurposes = ["sales.outreach", "support.reply"];
+    const t = await fileApproved("policy.patch", await omittedPurposes());
+    expect(await fulfillApprovedAdmin(t)).toMatchObject({ ok: true, tool: "policy.patch" });
+    expect(runtimeEmployee().allowedPurposes).toEqual(["sales.outreach", "support.reply"]);
+  });
+  test("purposes left out, a concurrent purposes change in the window → approver_context_changed; the kept value never overwrites it", async () => {
+    runtimeEmployee().allowedPurposes = ["sales.outreach"];
+    const t = await fileApproved("policy.patch", await omittedPurposes());
+    concurrentChange = () => { runtimeEmployee().allowedPurposes = ["finance.close"]; };
+    expect(await fulfillApprovedAdmin(t)).toMatchObject({ ok: false, error: "approver_context_changed", nextStepJa: NEXT_STEP });
+    expect(concurrentChange).toBeNull();
+    expect(runtimeEmployee().allowedPurposes).toEqual(["finance.close"]);
+    expect(policyAuditFor(t.id)).toEqual([]);
+  });
+  test("purposes left out: the kept value is the one the guard pinned (compared under the lock), not fulfil's earlier read", async () => {
+    runtimeEmployee().allowedPurposes = ["sales.outreach"];
+    const t = await fileApproved("policy.patch", await omittedPurposes());
+    afterFulfilRead = () => { runtimeEmployee().allowedPurposes = ["finance.close"]; };
+    expect(await fulfillApprovedAdmin(t)).toMatchObject({ ok: true, tool: "policy.patch" });
+    expect(afterFulfilRead).toBeNull(); // the change really landed between the early read and the guard
+    expect(runtimeEmployee().allowedPurposes).toEqual(["finance.close"]); // the stale early read was not written back
+  });
+  test("actionLimits left out: same — the kept caps are the pinned ones, not fulfil's earlier read", async () => {
+    runtimeEmployee().actionLimits = { "commerce.order": { perDay: 3, perMonth: 20 } } as never;
+    const args: Record<string, unknown> = await policyPatchArgs({ approvalPolicy: "always_human" });
+    delete args.actionLimits;
+    const t = await fileApproved("policy.patch", args);
+    const lowered = { "commerce.order": { perDay: 1, perMonth: 5 } };
+    afterFulfilRead = () => { runtimeEmployee().actionLimits = structuredClone(lowered) as never; };
+    // The caps are judged state (in the fingerprint), so the guard refuses; the stale read is never written.
+    expect(await fulfillApprovedAdmin(t)).toMatchObject({ ok: false, error: "approver_context_changed" });
+    expect(afterFulfilRead).toBeNull();
+    expect(runtimeEmployee().actionLimits).toEqual(lowered as never);
   });
 });
 
