@@ -595,7 +595,8 @@ async function fulfillIssue(approval: ApprovalRequest, args: Record<string, unkn
     allowedAccounts: normalizeAllowedAccounts(
       Array.isArray(args.allowedAccounts) ? (args.allowedAccounts as AllowedAccount[]) : []
     ),
-    approvalNotifyEmail: typeof args.approvalNotifyEmail === "string" ? args.approvalNotifyEmail : null,
+    // Passed as given: issueEmployee re-checks it (members only) and refuses non-strings.
+    approvalNotifyEmail: (args.approvalNotifyEmail ?? null) as string | null,
     callbackUrl: typeof args.callbackUrl === "string" ? args.callbackUrl : null,
     managerId: typeof args.managerId === "string" ? args.managerId : null,
     voice: args.voice == null ? defaultVoice() : normalizeVoice(args.voice),

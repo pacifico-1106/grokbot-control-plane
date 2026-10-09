@@ -47,7 +47,13 @@ mock.module("@/lib/auth/session", () => ({
   getSessionContext: async () => session,
   getCurrentOrgId: async () => session.orgId,
 }));
-mock.module("@/lib/mode", () => ({ isDemoMode: () => false }));
+mock.module("@/lib/mode", () => ({
+  isDemoMode: () => false,
+  isSupabaseConfigured: () => true,
+  isStripeConfigured: () => false,
+  isResendConfigured: () => false,
+  runtimeModeLabel: () => "production",
+}));
 // Approver-authority guard (review 2026-10-09) is covered in lib/approver-authority/web-direct.test.ts; here: flag OFF.
 mock.module("@/lib/approver-authority/web-direct", () => ({
   assertWebActorApproverAuthority: async () => ({ ok: true, requirement: null }),
