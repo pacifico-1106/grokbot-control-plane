@@ -878,7 +878,7 @@ async function fulfillApprovedInvokeCore(
     const runFulfilThreadGuard = async (keyInput: ConversationKeyInput | null): Promise<ApprovalFulfillment | null> => {
       const threadSend = await beginThreadSend({
         orgId: approval.orgId,
-        employeeId: snapshot.employeeId || approval.employeeId,
+        employeeId: approval.employeeId,
         jobId: snapshot.jobId || approval.jobId,
         keyInput,
         readThrough: readThroughFromSnapshot(snapshot, approvalReceivedAtMs(approval.createdAt)),
