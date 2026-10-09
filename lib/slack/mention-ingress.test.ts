@@ -683,6 +683,69 @@ describe("Slack mention ingress", () => {
     expect(outcome.skipReason).toBe("ignored_subtype:bot_message");
   });
 
+  // 木村 2026-10-09 item 4 (#303): an approval card the Staffpass app posts into a
+  // channel where an AI employee is present must never wake that AI — even when
+  // the card text @mentions the AI and carries the 「検出された話題」 keywords.
+  // Slack sets bot_id / bot_profile on chat.postMessage by a bot token (no
+  // subtype), and chat.update on resolve arrives as message_changed.
+  for (const route of ["bot-token", "user-token channel"] as const) {
+    test(`Staffpass approval card (bot_id/bot_profile, mentions the AI, has keywords) never wakes — ${route}`, async () => {
+      process.env.SLACK_SIGNING_SECRET = SIGNING_SECRET;
+      const { restore } = await bindAndo();
+      const wake = mockWake();
+      try {
+        const outcome = await processSlackMentionEnvelope({
+          type: "event_callback",
+          team_id: TEAM,
+          event_id: `Ev_card_${route.replace(/\W/g, "_")}_${Date.now()}`,
+          ...(route === "user-token channel"
+            ? { authorizations: [{ is_bot: false, user_id: BOUND_USER, team_id: TEAM }] }
+            : {}),
+          event: {
+            type: "message",
+            user: "U_STAFFPASS_APP",
+            bot_id: "B_STAFFPASS",
+            bot_profile: { id: "B_STAFFPASS", name: "Staffpass承認" },
+            text: `承認依頼 <@${BOUND_USER}>\n検出された話題: 支払, 金額`,
+            ts: "1787911800.000040",
+            channel: CHANNEL,
+            channel_type: "channel",
+          },
+        });
+        expect(outcome.woke).toBe(0);
+        expect(outcome.skipReason).toBe("bot_message");
+        expect(wake.calls().length).toBe(0);
+      } finally {
+        await restore();
+      }
+    });
+  }
+
+  test("card edit on resolve (message_changed) never wakes", async () => {
+    process.env.SLACK_SIGNING_SECRET = SIGNING_SECRET;
+    const { restore } = await bindAndo();
+    const wake = mockWake();
+    try {
+      const outcome = await processSlackMentionEnvelope({
+        type: "event_callback",
+        team_id: TEAM,
+        event_id: `Ev_card_edit_${Date.now()}`,
+        event: {
+          type: "message",
+          subtype: "message_changed",
+          text: `承認済み <@${BOUND_USER}>\n検出された話題: 支払`,
+          ts: "1787911800.000041",
+          channel: CHANNEL,
+        },
+      });
+      expect(outcome.woke).toBe(0);
+      expect(outcome.skipReason).toBe("ignored_subtype:message_changed");
+      expect(wake.calls().length).toBe(0);
+    } finally {
+      await restore();
+    }
+  });
+
   test("skipReason is returned for unbound mentions", async () => {
     process.env.SLACK_SIGNING_SECRET = SIGNING_SECRET;
     const outcome = await processSlackMentionEnvelope({
