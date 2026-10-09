@@ -253,11 +253,15 @@ const AWS_SECRET_KEYWORD = /aws[\s_.-]*secret|secret[\s_.-]*access[\s_.-]*key/i;
  * that is NOT part of a URL host/path (a 40-char run inside a link next to
  * the word 秘密 is a document path, not a key).
  */
-// 2026-10-09 (木村 #285 follow-up 2): `secret` as a word only — not `secretary`,
-// `secrets`, `topsecret`. Word edges: start / non-letter, or a camelCase hump
-// (`clientSecret`, `secretKey`); `_` and digits are edges (`client_secret`, `SECRET_KEY`).
+// 21:53 review (木村 2026-10-09): `secret` anywhere counts again — plural
+// (`secrets`, `SECRETS`), glued (`secretkey`, `topsecret`), acronym + Secret
+// (`APISecret`, `JWTSecret`), `client_secret`, `clientSecret`. Only plain
+// English words stay out: secretary / secretaries / secretariat (`secretar…`),
+// secrete(s|d) / secreting / secretion(s), secretly, secretive — matched
+// case-sensitively in lower / Capitalized / UPPER form, so a camelCase hump
+// (`secretArn`, `secretEnv`) still counts. Linear (fixed-length lookaheads).
 const AWS_SECRET_CONTEXT_WEAK =
-  /(?<![A-Za-z])[Ss]ecret(?![a-z])|(?<=[a-z0-9])Secret(?![a-z])|(?<![A-Za-z])SECRET(?![A-Za-z])|シークレット|秘密|アクセスキー/;
+  /[Ss]ecret(?!ar|e[ds]?(?![a-z])|ing|ions?|ly|ive)|SECRET(?!AR|E[DS]?(?![A-Z])|ING|IONS?|LY|IVE)|シークレット|秘密|アクセスキー/;
 const AWS_ACCESS_KEY_ID = /(?<![A-Za-z0-9])(?:AKIA|ASIA)[0-9A-Z]{16}(?![A-Za-z0-9])/;
 
 function decodeKeyChars(value: string): string {
@@ -367,7 +371,7 @@ function safeKeySegment(key: string): string {
   return key;
 }
 
-function extractAllStrings(obj: unknown, path: string = '', depth: number = 0, maxDepth: number = 10): StringAtPath[] {
+function extractAllStrings(obj: unknown, path: string = '', depth: number = 0, maxDepth: number = MAX_SCAN_DEPTH): StringAtPath[] {
   if (depth > maxDepth) return [];
   if (typeof obj === 'string') return [{ path, value: obj }];
   if (Array.isArray(obj)) {
@@ -531,11 +535,24 @@ function scanString(value: string, ctx: SecretScanContext, fieldPath: string, fu
   return suspected.length > 0 ? { ok: true, suspected } : { ok: true };
 }
 
-type PayloadSize = { chars: number; strings: number; longest: number };
+type PayloadSize = { chars: number; strings: number; longest: number; tooDeep: boolean };
 
-/** Counts string values + keys (same depth as the scan); stops as soon as a cap is passed. */
+/**
+ * 21:53 review (木村 2026-10-09): the scan reads MAX_SCAN_DEPTH levels (root = 0).
+ * Anything deeper used to be skipped silently (11 levels carried an xoxb token
+ * and a 5M-char value past every check into the approval snapshot). Any value
+ * below that depth now refuses the whole payload, unscanned, like the size caps.
+ * No current caller nests deeper than 4 (gateway / MCP / admin / config-change).
+ */
+export const MAX_SCAN_DEPTH = 10;
+
+/** Counts string values + keys (same depth as the scan); stops as soon as a cap is passed or a value is too deep. */
 function measurePayload(obj: unknown, size: PayloadSize, depth: number, maxDepth: number): boolean {
-  if (depth > maxDepth) return true;
+  if (depth > maxDepth) {
+    if (obj === undefined) return true;
+    size.tooDeep = true;
+    return false;
+  }
   if (typeof obj === 'string') {
     size.chars += obj.length;
     size.strings += 1;
@@ -564,12 +581,18 @@ export function checkPayloadScanLimits(
   payload: unknown,
   options: { perString?: boolean } = {}
 ): (SecretDetectionResult & { ok: false }) | null {
-  const size: PayloadSize = { chars: 0, strings: 0, longest: 0 };
-  if (measurePayload(payload, size, 0, 10)) {
+  const size: PayloadSize = { chars: 0, strings: 0, longest: 0, tooDeep: false };
+  if (measurePayload(payload, size, 0, MAX_SCAN_DEPTH)) {
     if (!options.perString || size.longest <= MAX_SCAN_LENGTH) return null;
     return {
       ...blockedResult('value_too_long_to_scan', '', size.longest),
       messageJa: `値が長すぎるため（上限 ${MAX_SCAN_LENGTH} 文字）秘密情報の検査ができません。分割するか短くして再送してください。`,
+    };
+  }
+  if (size.tooDeep) {
+    return {
+      ...blockedResult('payload_too_deep_to_scan', '', 0),
+      messageJa: `入れ子が深すぎるため（上限 ${MAX_SCAN_DEPTH} 階層）秘密情報の検査ができません。構造を浅くして再送してください。`,
     };
   }
   return {
