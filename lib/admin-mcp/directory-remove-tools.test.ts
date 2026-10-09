@@ -627,3 +627,29 @@ describe("aligned with #276 (telegram surface, list → remove by natural key)",
     expect(await getOrgParty(ORG_A, "email_domain", identifier)).toBeNull();
   });
 });
+
+describe("self-approval", () => {
+  test("the requesting admin agent cannot approve its own channels.remove / parties.remove ticket; rows kept, ticket pending", async () => {
+    const c = cred();
+    const channel = await upsertOrgChannel({ orgId: ORG_A, surface: "slack", externalId: uid("C"), classification: "internal", skipInspect: true });
+    const identifier = `${uid("selfappr").toLowerCase()}.example.com`;
+    await upsertOrgParty({ orgId: ORG_A, kind: "email_domain", identifier, audience: "external" });
+    const tickets = [
+      data(await callAdminMcpTool(CH_REMOVE, { externalId: channel.externalId }, c)),
+      data(await callAdminMcpTool(PTY_REMOVE, { kind: "email_domain", identifier }, c)),
+    ];
+    for (const out of tickets) {
+      expect(out.code).toBe("needs_approval");
+      let thrown: unknown = null;
+      try {
+        await resolveApproval(String(out.approvalId), "approved", "agent", ORG_A, { actorId: c.actorId, grokBotAgentId: c.grokBotAgentId });
+      } catch (error) {
+        thrown = error;
+      }
+      expect((thrown as { code?: string } | null)?.code).toBe("self_approval_denied");
+      expect((await getApprovalById(String(out.approvalId), ORG_A))?.status).toBe("pending");
+    }
+    expect(await getOrgChannel(ORG_A, "slack", channel.externalId)).not.toBeNull();
+    expect(await getOrgParty(ORG_A, "email_domain", identifier)).not.toBeNull();
+  });
+});
