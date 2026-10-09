@@ -18,6 +18,7 @@ import {
 } from "@/lib/lp/journeys";
 import { verifyTurnstileToken, getClientIp, getTurnstileConfig } from "@/lib/lp/turnstile";
 import { hashIp, checkRateLimits } from "@/lib/lp/rate-limit";
+import { IP_HASH_UNAVAILABLE, isIpHashKeyConfigured } from "@/lib/security/ip-hash-key";
 import { getPublishedRelease } from "@/lib/lp/knowledge-base";
 
 const GUEST_COOKIE_NAME = "lp_guest";
@@ -46,6 +47,12 @@ export async function POST(req: Request) {
 
   const clientIp = getClientIp(req);
   const botProtectionEnabled = isLpBotProtectionEnabled();
+
+  // IP_HASH_KEY required (no dev fallback): refuse before rate limiting or any write.
+  if (clientIp && !isIpHashKeyConfigured()) {
+    console.error("[journeys] IP_HASH_KEY not configured; refusing");
+    return NextResponse.json({ ok: false, ...IP_HASH_UNAVAILABLE }, { status: 503 });
+  }
 
   if (botProtectionEnabled && clientIp) {
     const ipHash = hashIp(clientIp);
