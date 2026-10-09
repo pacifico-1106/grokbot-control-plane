@@ -31,6 +31,8 @@ import { parseFulfillment } from "@/lib/approvals/fulfill";
 import { handleDecisionRequest, type DecisionRequestInput } from "@/lib/decision-workflow";
 import { isApprovalReasonsEnabled, isConfigChangeRequestEnabled, isMcpEndpointHandoffEnabled, isTopicGatedPostingEnabled } from "@/lib/feature-flags";
 import { getOrgApprovalKindRoutesPolicy } from "@/lib/approval-kind-routes/data";
+import type { OrgApprovalKindRoutesPolicy } from "@/lib/approval-kind-routes/types";
+import { categorizeSensitiveTopics } from "@/lib/approvals/sensitive-topic-categories";
 import { resolveAppOrigin } from "@/lib/app-url";
 import { resolveMcpEndpointUrl } from "@/lib/mcp/endpoint-handoff-block";
 import {
@@ -403,9 +405,20 @@ export const SENSITIVE_TOPICS_MCP_TOOL = "staffpass_sensitive_topics";
 export const SENSITIVE_TOPICS_MCP_TOOL_DEF: McpToolDef = {
   name: SENSITIVE_TOPICS_MCP_TOOL,
   description:
-    "Read-only: list your organization's sensitive topics (topic gate). A post whose text contains one of them goes to human approval (approvalReasons code topic_gate) when the gate is active. The organization comes from your credential; this tool takes no input and cannot change the list (only the organization's admin can).",
+    "Read-only: whether your organization's sensitive-topic gate is configured / active, and the broad categories it covers (e.g. 金銭 / 人事 / 契約). The keywords themselves are never returned. If a post might fall in one of these categories, do not rephrase it to avoid the gate — send it for human approval. The organization comes from your credential; this tool takes no input and cannot change anything. A failed read returns isError with retryable=true (never configured:false).",
   inputSchema: { type: "object", properties: {}, additionalProperties: false },
 };
+
+type SensitiveTopicsLookup = (orgId: string) => Promise<OrgApprovalKindRoutesPolicy | null>;
+let sensitiveTopicsLookup: SensitiveTopicsLookup = getOrgApprovalKindRoutesPolicy;
+
+/** Test hook: replace the policy lookup (null → the real one). */
+export function setSensitiveTopicsLookupForTests(fn: SensitiveTopicsLookup | null): void {
+  sensitiveTopicsLookup = fn ?? getOrgApprovalKindRoutesPolicy;
+}
+
+export const SENSITIVE_TOPICS_GUIDANCE_JA =
+  "該当しそうなら、言い換えずに承認に回してください。分類名だけを示しています（語の一覧は公開しません）。";
 
 const SENSITIVE_TOPICS_NOTE_JA =
   "この一覧は参照専用です。AI 社員からは変更できません（変更は組織の管理者のみ）。一覧の語を含む投稿は承認に回ります。";
@@ -871,19 +884,35 @@ export async function callStaffpassMcpTool(
       if (!orgId) {
         return toolResult({ ok: false, code: "org_not_resolved", message: "credential has no org (fail-closed)" }, true);
       }
-      const policy = await getOrgApprovalKindRoutesPolicy(orgId).catch(() => null);
+      let policy: OrgApprovalKindRoutesPolicy | null;
+      try {
+        policy = await sensitiveTopicsLookup(orgId);
+      } catch {
+        // Never "not configured" on a failed read: the AI must not conclude the gate is off.
+        return toolResult(
+          {
+            ok: false,
+            code: "sensitive_topics_unavailable",
+            retryable: true,
+            message: "sensitive topic settings could not be read; retry later. Until then, treat sensitive-looking posts as needing approval.",
+            guidanceJa: SENSITIVE_TOPICS_GUIDANCE_JA,
+          },
+          true
+        );
+      }
       const gate = policy?.topicGate ?? null;
-      const sensitiveTopics = Array.isArray(gate?.sensitiveTopics)
-        ? gate!.sensitiveTopics.filter((t): t is string => typeof t === "string" && t.trim().length > 0)
-        : [];
+      // 木村 22:41: categories only — the keywords are never returned.
+      const { categories, categoriesSource } = categorizeSensitiveTopics(gate?.sensitiveTopics);
       return toolResult({
         ok: true,
         readOnly: true,
         topicGate: {
           configured: Boolean(gate),
           active: Boolean(gate?.enabled) && isTopicGatedPostingEnabled(),
-          sensitiveTopics,
+          categories,
+          categoriesSource,
         },
+        guidanceJa: SENSITIVE_TOPICS_GUIDANCE_JA,
         noteJa: SENSITIVE_TOPICS_NOTE_JA,
       });
     }
@@ -925,6 +954,3 @@ export async function callStaffpassMcpTool(
       );
   }
 }
-
-/** Test hook (stub; replaced in the implementation commit). */
-export function setSensitiveTopicsLookupForTests(_fn: ((orgId: string) => Promise<unknown>) | null): void {}
