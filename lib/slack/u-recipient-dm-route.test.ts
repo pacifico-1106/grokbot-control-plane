@@ -220,10 +220,22 @@ describe("everyone else stops with a nextStep (BOLA / fail-closed)", () => {
 
   test("another org's INTERNAL party → refused (the ledger is read for the employee's org only)", async () => {
     const u = await party("internal", { orgId: "org_udm_other" });
-    const r = await invoke(sendTo(u, { conversation: { orgId: "org_udm_other" } }));
+    const r = await invoke(sendTo(u));
     expect(r.httpStatus).toBe(403);
     expectStopped(r, "slack_recipient_not_internal_party");
     expect(methods()).not.toContain("conversations.open");
+  });
+
+  test("another org's INTERNAL party + AI-supplied conversation.orgId of that org → refused earlier by the org binding (#298), no DM opened", async () => {
+    const u = await party("internal", { orgId: "org_udm_other" });
+    const r = await invoke(sendTo(u, { conversation: { orgId: "org_udm_other" } }));
+    expect(r.httpStatus).toBe(403);
+    expect(r.body.ok).toBe(false);
+    expect(r.body.code).toBe("conversation_org_mismatch");
+    expect(typeof r.body.nextStepJa).toBe("string");
+    expect(posts().length).toBe(0);
+    expect(methods()).not.toContain("conversations.open");
+    expect(JSON.stringify(r.body)).not.toContain(TEXT);
   });
 
   test("guest (ledger says internal, Slack says restricted) → refused, no DM opened", async () => {
