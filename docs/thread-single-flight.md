@@ -51,7 +51,10 @@ against a stale read of the thread, are stopped **before** the provider call.
    for Slack and for approved LINE / Telegram / mail replies (pre-flag item 4;
    those have no gateway delivery today and stop at `slack_channel_required`,
    so a stale one is now closed as superseded and any future delivery is
-   already behind the lease). A
+   already behind the lease). They stay fail-closed: the approved re-run returns
+   409 with `reasonCode: approved_reply_surface_not_supported`,
+   `retryable: false` and a nextStep starting
+   「この窓口では承認後の返信にまだ対応していません」 (#293 decision 2). A
    `thread_busy` / `thread_guard_unavailable` stop is persisted as the
    fulfilment result, audited with `phase: "fulfil"`, and is re-runnable.
    **`thread_moved_on` closes the approval** (decision 2): status
@@ -98,7 +101,7 @@ Every id in `lib/comm-reply-dedup/inventory.ts` has a decision in
 | path | coverage |
 |---|---|
 | invoke.slack_post (comm.reply / comm.send / slack.post / slack.post_external, bot and posting_as=user) | leased |
-| invoke.caller_delivered (LINE / Telegram / mail / phone) | leased (recorded at server time when allowed; the lease is **held until its TTL** because the caller's delivery is not observable — pre-flag item 3) |
+| invoke.caller_delivered (LINE / Telegram / mail / phone) | leased (recorded at server time when allowed; the lease is **held until its TTL** because the caller's delivery is not observable — pre-flag item 3; the **same job** (same employee + jobId) may reuse its own held lease within 10 min of its first post in the thread, any other job gets `thread_busy` — #293 decision 1) |
 | fulfill.slack_post (approved sends) | leased + recheck at fulfil |
 | fulfill.caller_delivered (approved LINE / Telegram / mail replies) | leased + recheck at fulfil (no gateway delivery today: dedup inventory says no_live_send) |
 | invoke.file_upload, rerun.attachment_upload | same reply (only after that reply passed the guard; no separate lease, decision 3) |

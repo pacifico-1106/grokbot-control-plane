@@ -7,7 +7,10 @@
 --  (2) a failing close leaves no partial state (one statement: all or nothing)
 --  (3) record_thread_self_post keeps job_first_micros = the job's FIRST post;
 --      a different job (or no job key) re-anchors
---  (4) anon / authenticated: no EXECUTE on close_approval_without_send
+--  (3b) same-job lease reuse: the same employee + job key re-enters its held
+--      lease within 10 min of its first post; after that, a different job,
+--      another employee, no job key or no post yet → busy; other org denied
+--  (4) anon / authenticated: no EXECUTE on close_approval_without_send / 6-arg acquire
 \set ON_ERROR_STOP 1
 reset role;
 create or replace function security_test.tsfp_check(ok boolean, label text) returns void language plpgsql as $$
@@ -130,13 +133,53 @@ select security_test.tsfp_check(not public.record_thread_self_post('c7500000-000
   repeat('a', 64), 1791105900000000, repeat('d', 64)), 'employee of another org refused');
 reset role;
 
+-- (3b) same-job lease reuse (#293 decision 1): 6-arg acquire with a job key
+set role service_role;
+select security_test.tsfp_check(public.acquire_thread_send_lease('c7500000-0000-4000-8000-0000000000a1', repeat('b', 64),
+  'c7600000-0000-4000-8000-000000000001', 'c7800000-0000-4000-8000-000000000001', 60, repeat('d', 64))->>'state' = 'acquired', 'job d acquires');
+select security_test.tsfp_check(public.acquire_thread_send_lease('c7500000-0000-4000-8000-0000000000a1', repeat('b', 64),
+  'c7600000-0000-4000-8000-000000000001', 'c7800000-0000-4000-8000-000000000002', 60, repeat('d', 64))->>'state' = 'busy', 'no post yet → busy');
+reset role;
+insert into public.thread_self_posts(org_id, employee_id, thread_key, message_micros, job_key, job_first_micros)
+  values ('c7500000-0000-4000-8000-0000000000a1', 'c7600000-0000-4000-8000-000000000001', repeat('b', 64),
+          (extract(epoch from now()) * 1000000)::bigint, repeat('d', 64), (extract(epoch from now()) * 1000000)::bigint - 60000000);
+insert into public.employees(id, org_id, display_name, role_label) values
+ ('c7600000-0000-4000-8000-000000000002', 'c7500000-0000-4000-8000-0000000000a1', 'TSFP A2', 'fixture');
+set role service_role;
+select security_test.tsfp_check(public.acquire_thread_send_lease('c7500000-0000-4000-8000-0000000000a1', repeat('b', 64),
+  'c7600000-0000-4000-8000-000000000001', 'c7800000-0000-4000-8000-000000000003', 60, repeat('e', 64))->>'state' = 'busy', 'different job → busy');
+select security_test.tsfp_check(public.acquire_thread_send_lease('c7500000-0000-4000-8000-0000000000a1', repeat('b', 64),
+  'c7600000-0000-4000-8000-000000000002', 'c7800000-0000-4000-8000-000000000004', 60, repeat('d', 64))->>'state' = 'busy', 'other employee, same job key → busy');
+select security_test.tsfp_check(public.acquire_thread_send_lease('c7500000-0000-4000-8000-0000000000a1', repeat('b', 64),
+  'c7600000-0000-4000-8000-000000000001', 'c7800000-0000-4000-8000-000000000005', 60, null)->>'state' = 'busy', 'no job key → busy');
+select security_test.tsfp_check(public.acquire_thread_send_lease('c7500000-0000-4000-8000-0000000000a1', repeat('b', 64),
+  'c7600000-0000-4000-8000-000000000001', 'c7800000-0000-4000-8000-000000000006', 60, repeat('d', 64))->>'state' = 'acquired', 'same job within 10 min re-enters');
+select security_test.tsfp_check(not public.release_thread_send_lease('c7500000-0000-4000-8000-0000000000a1', repeat('b', 64),
+  'c7800000-0000-4000-8000-000000000001'), 'the replaced lease id can no longer release');
+reset role;
+update public.thread_self_posts set job_first_micros = (extract(epoch from now()) * 1000000)::bigint - 601000000
+  where org_id = 'c7500000-0000-4000-8000-0000000000a1' and thread_key = repeat('b', 64);
+set role service_role;
+select security_test.tsfp_check(public.acquire_thread_send_lease('c7500000-0000-4000-8000-0000000000a1', repeat('b', 64),
+  'c7600000-0000-4000-8000-000000000001', 'c7800000-0000-4000-8000-000000000007', 60, repeat('d', 64))->>'state' = 'busy', 'same job after 10 min → busy');
+-- BOLA: org B's post with the same job key on the same thread key never lets org A's lease be re-entered by org B
+select security_test.tsfp_check(public.acquire_thread_send_lease('c7500000-0000-4000-8000-0000000000a2', repeat('b', 64),
+  'c7600000-0000-4000-8000-000000000003', 'c7800000-0000-4000-8000-000000000008', 60, repeat('d', 64))->>'state' = 'acquired', 'other org independent');
+select security_test.tsfp_check(public.acquire_thread_send_lease('c7500000-0000-4000-8000-0000000000a1', repeat('b', 64),
+  'c7600000-0000-4000-8000-000000000003', 'c7800000-0000-4000-8000-000000000009', 60, repeat('d', 64))->>'state' = 'denied', 'employee of another org denied');
+select security_test.tsfp_check(public.acquire_thread_send_lease('c7500000-0000-4000-8000-0000000000a1', repeat('c', 64),
+  'c7600000-0000-4000-8000-000000000001', 'c7800000-0000-4000-8000-00000000000a', 60, 'not-hex')->>'state' = 'denied', 'bad job key denied');
+reset role;
+
 -- (4)
 set role anon;
+select security_test.tsfp_denied($c$select public.acquire_thread_send_lease('c7500000-0000-4000-8000-0000000000a1', repeat('b', 64), 'c7600000-0000-4000-8000-000000000001', 'c7800000-0000-4000-8000-00000000000c', 60, repeat('d', 64))$c$);
 select security_test.tsfp_denied($c$select public.close_approval_without_send('c7700000-0000-4000-8000-000000000003', 'c7500000-0000-4000-8000-0000000000a1', array['approved'], 'superseded', '{}'::jsonb)$c$);
 reset role;
 set role authenticated;
 select security_test.tsfp_denied($c$select public.close_approval_without_send('c7700000-0000-4000-8000-000000000003', 'c7500000-0000-4000-8000-0000000000a1', array['approved'], 'superseded', '{}'::jsonb)$c$);
 select security_test.tsfp_denied($c$update public.thread_self_posts set job_first_micros = 1$c$);
+select security_test.tsfp_denied($c$select public.acquire_thread_send_lease('c7500000-0000-4000-8000-0000000000a1', repeat('b', 64), 'c7600000-0000-4000-8000-000000000001', 'c7800000-0000-4000-8000-00000000000b', 60, repeat('d', 64))$c$);
 reset role;
 
 delete from public.approval_requests where id::text like 'c7700000-%';

@@ -681,6 +681,12 @@ async function secretAuditOrgId(employeeId: string): Promise<string | null> {
   }
 }
 
+/** 木村 #293 decision 2: approved replies on surfaces the gateway cannot deliver to. */
+const APPROVED_REPLY_SURFACE_NOT_SUPPORTED = "approved_reply_surface_not_supported";
+const APPROVED_REPLY_SURFACE_NOT_SUPPORTED_JA = "この窓口では承認後の返信にまだ対応していません。承認済みの返信は送信していません。";
+const APPROVED_REPLY_SURFACE_NOT_SUPPORTED_NEXT_STEP =
+  "この窓口では承認後の返信にまだ対応していません。この承認IDで再実行しても送信されません。必要なら承認不要の内容で返信するか、担当者に直接対応を依頼してください。";
+
 /**
  * Core Gateway enforcement. Callers must already resolve employeeId from an
  * authenticated source (Bearer 社員証, or server-side admin/session context).
@@ -2050,6 +2056,19 @@ export async function runGatewayInvoke(
       return jsonResult({ ...threadGuardStopBody(fulfilled.error, fulfilled.threadGuard ?? {}),
         approvalId: priorApproval.id, needs_approval: false, employeeId, tool, purpose, jobId },
         fulfilled.error === THREAD_GUARD_UNAVAILABLE ? 503 : 409);
+    }
+    if (!fulfilled?.ok && isAudienceGatedTool(toolDef)) {
+      // Approved LINE / Telegram / mail replies: the gateway has no delivery
+      // for them yet, so they stay fail-closed (nothing sent). Tell the AI so
+      // in plain words instead of a Slack-only code (木村 #293 decision 2).
+      const approvedSurface = (parseInvokeSnapshot(priorApproval.metadata)?.conversation?.surface || "").toLowerCase();
+      if (approvedSurface && approvedSurface !== "slack") {
+        return jsonResult({ ok: false, code: fulfilled?.error || "approval_execution_failed",
+          error: fulfilled?.error || "approval_execution_failed", reasonCode: APPROVED_REPLY_SURFACE_NOT_SUPPORTED,
+          message: APPROVED_REPLY_SURFACE_NOT_SUPPORTED_JA, retryable: false, nextAction: "stop",
+          nextStep: APPROVED_REPLY_SURFACE_NOT_SUPPORTED_NEXT_STEP, approvalId: priorApproval.id,
+          employeeId, tool, purpose, jobId }, 409);
+      }
     }
     if (!fulfilled?.ok) return jsonResult({ ok: false, code: fulfilled?.error || "approval_execution_failed",
       error: fulfilled?.error || "approval_execution_failed", employeeId, tool, purpose, jobId }, 409);

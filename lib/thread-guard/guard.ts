@@ -144,7 +144,8 @@ export async function beginThreadSend(input: {
   if (!threadKey) return { kind: "off" };
   const keyRef = threadKey.slice(0, 12);
 
-  const lease = await acquireThreadLease({ orgId: input.orgId, employeeId: input.employeeId, threadKey, ttlSeconds: threadLeaseTtlSeconds() });
+  const jobKey = jobKeyOf(input.orgId, input.employeeId, input.jobId);
+  const lease = await acquireThreadLease({ orgId: input.orgId, employeeId: input.employeeId, threadKey, ttlSeconds: threadLeaseTtlSeconds(), jobKey });
   if (lease.state === "busy") {
     return stop(THREAD_BUSY, { retryAfterSeconds: lease.retryAfterSeconds }, { retryAfterSeconds: lease.retryAfterSeconds, threadKeyRef: keyRef, readThroughSource, readPoint });
   }
@@ -156,8 +157,6 @@ export async function beginThreadSend(input: {
     done = true;
     await releaseThreadLease({ orgId: input.orgId, threadKey, leaseId: lease.leaseId }).catch(() => false);
   };
-  const jobKey = jobKeyOf(input.orgId, input.employeeId, input.jobId);
-
   try {
     if (input.readThrough) {
       const last = await readLatestAiPostAfter({ orgId: input.orgId, threadKey, afterMicros: input.readThrough.micros, excludeJobKey: jobKey });

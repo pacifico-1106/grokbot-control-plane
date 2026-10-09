@@ -103,6 +103,9 @@ ADDITIVE = [
     # condition that must hold after its rollback (it adds no table).
     ("20261009150000_", "tests/security/db-thread-single-flight-preflag.sql",
      "to_regprocedure('public.close_approval_without_send(uuid,uuid,text[],text,jsonb)') is null"
+     " and to_regprocedure('public.acquire_thread_send_lease(uuid,text,uuid,uuid,integer,text)') is null"
+     " and not exists (select 1 from information_schema.columns where table_schema = 'public'"
+     " and table_name = 'thread_send_leases' and column_name = 'job_key')"
      " and to_regclass('public.thread_self_posts') is not null"
      " and not exists (select 1 from information_schema.columns where table_schema = 'public'"
      " and table_name = 'thread_self_posts' and column_name = 'job_first_micros')"),

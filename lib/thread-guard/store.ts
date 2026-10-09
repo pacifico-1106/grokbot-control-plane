@@ -34,7 +34,7 @@ export type AiPost = SelfPost & { employeeId: string };
 const HEX64 = /^[0-9a-f]{64}$/;
 const valid = (orgId: string, threadKey: string) => Boolean(orgId) && HEX64.test(threadKey);
 
-type DemoLease = { leaseId: string; employeeId: string; expiresAtMs: number };
+type DemoLease = { leaseId: string; employeeId: string; expiresAtMs: number; jobKey: string | null };
 const demoLeases = new Map<string, DemoLease>();
 const demoPosts = new Map<string, AiPost & { jobFirstMicros: bigint }>();
 type Failure = null | "acquire" | "read" | "release" | "record";
@@ -53,11 +53,20 @@ export function __setThreadGuardStoreFailureForTests(kind: Failure): void {
 const leaseKey = (orgId: string, threadKey: string) => `${orgId}\u0000${threadKey}`;
 const postKey = (orgId: string, employeeId: string, threadKey: string) => `${orgId}\u0000${employeeId}\u0000${threadKey}`;
 
+/**
+ * Acquire the thread lease. A held lease is busy, except for the SAME job
+ * (same employee + job key) re-entering its own lease within
+ * SAME_JOB_EXCLUSION_WINDOW_SECONDS of that job's first post in the thread
+ * (木村 #293 decision 1: a caller-delivered reply holds the lease for its TTL,
+ * and a multi-part reply of the same job must not wait for it). Re-entry
+ * replaces the lease id and restarts the TTL.
+ */
 export async function acquireThreadLease(input: {
   orgId: string;
   employeeId: string;
   threadKey: string;
   ttlSeconds: number;
+  jobKey?: string | null;
 }): Promise<LeaseResult> {
   if (failure === "acquire") return { state: "unavailable", reason: "lease_store_error" };
   if (!valid(input.orgId, input.threadKey) || !input.employeeId) return { state: "unavailable", reason: "invalid_input" };
@@ -66,11 +75,20 @@ export async function acquireThreadLease(input: {
     const now = threadGuardNow();
     const k = leaseKey(input.orgId, input.threadKey);
     const held = demoLeases.get(k);
+    const jobKey = input.jobKey ?? null;
     if (held && held.expiresAtMs > now) {
-      return { state: "busy", retryAfterSeconds: Math.max(1, Math.ceil((held.expiresAtMs - now) / 1000)) };
+      const post = demoPosts.get(postKey(input.orgId, input.employeeId, input.threadKey));
+      const windowMicros = BigInt(SAME_JOB_EXCLUSION_WINDOW_SECONDS) * BigInt(1_000_000);
+      const reentry =
+        jobKey !== null &&
+        held.employeeId === input.employeeId &&
+        held.jobKey === jobKey &&
+        post?.jobKey === jobKey &&
+        BigInt(Math.floor(now)) * BigInt(1_000) - post.jobFirstMicros <= windowMicros;
+      if (!reentry) return { state: "busy", retryAfterSeconds: Math.max(1, Math.ceil((held.expiresAtMs - now) / 1000)) };
     }
     const expiresAtMs = now + input.ttlSeconds * 1000;
-    demoLeases.set(k, { leaseId, employeeId: input.employeeId, expiresAtMs });
+    demoLeases.set(k, { leaseId, employeeId: input.employeeId, expiresAtMs, jobKey });
     return { state: "acquired", leaseId, expiresAtMs };
   }
   const admin = createSupabaseAdminClient();
@@ -82,6 +100,7 @@ export async function acquireThreadLease(input: {
       p_employee: input.employeeId,
       p_lease: leaseId,
       p_ttl_seconds: input.ttlSeconds,
+      p_job_key: input.jobKey ?? null,
     });
     const r = (data ?? {}) as { state?: string; retry_after_seconds?: number; expires_at?: string };
     if (error || !r.state) return { state: "unavailable", reason: "lease_store_error" };

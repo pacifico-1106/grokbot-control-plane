@@ -2,6 +2,9 @@
 -- migration's ROLLBACK block). Turn THREAD_SINGLE_FLIGHT_ENABLED off first.
 begin;
 drop function if exists public.close_approval_without_send(uuid, uuid, text[], text, jsonb);
+drop function if exists public.acquire_thread_send_lease(uuid, text, uuid, uuid, integer, text);
+alter table public.thread_send_leases drop constraint if exists thread_send_leases_job_key_check;
+alter table public.thread_send_leases drop column if exists job_key;
 create or replace function public.record_thread_self_post(
   p_org uuid, p_employee uuid, p_thread_key text, p_message_micros bigint, p_job_key text)
 returns boolean language plpgsql security invoker set search_path = pg_catalog, public as $f$

@@ -15,6 +15,14 @@
 --    both land or neither does (the two separate writes before could leave
 --    "superseded" with no reason). Conditional on org + current status; null
 --    when the status moved or the id belongs to another org.
+-- 3. thread_send_leases.job_key + acquire_thread_send_lease(org, key, employee,
+--    lease, ttl, job_key) (6 args; #286's 5-arg version is left as is): a held
+--    lease is busy, except for the SAME job (same employee + job key) re-entering
+--    its own lease while that job's first post in the thread
+--    (thread_self_posts.job_first_micros) is at most 10 minutes old (木村 #293
+--    decision 1: caller-delivered replies hold the lease for its TTL; a
+--    multi-part reply of the same job must not wait). Re-entry replaces the
+--    lease id and restarts the TTL.
 -- Functions: security invoker, fixed search_path, EXECUTE for service_role only.
 begin;
 
@@ -83,6 +91,62 @@ begin
   return to_jsonb(a);
 end $$;
 
+-- 3 ----------------------------------------------------------------------------
+alter table public.thread_send_leases add column if not exists job_key text;
+do $$ begin
+  if not exists (select 1 from pg_constraint where conname = 'thread_send_leases_job_key_check'
+                 and conrelid = 'public.thread_send_leases'::regclass) then
+    alter table public.thread_send_leases add constraint thread_send_leases_job_key_check
+      check (job_key is null or job_key ~ '^[0-9a-f]{64}$');
+  end if;
+end $$;
+
+create or replace function public.acquire_thread_send_lease(
+  p_org uuid, p_thread_key text, p_employee uuid, p_lease uuid, p_ttl_seconds integer, p_job_key text)
+returns jsonb language plpgsql security invoker set search_path = pg_catalog, public as $$
+declare
+  r public.thread_send_leases;
+  now_micros bigint := (extract(epoch from clock_timestamp()) * 1000000)::bigint;
+begin
+  if p_org is null or p_employee is null or p_lease is null
+    or p_thread_key is null or p_thread_key !~ '^[0-9a-f]{64}$'
+    or p_ttl_seconds is null or p_ttl_seconds < 5 or p_ttl_seconds > 600
+    or (p_job_key is not null and p_job_key !~ '^[0-9a-f]{64}$') then
+    return jsonb_build_object('state', 'denied');
+  end if;
+  if not exists (select 1 from public.employees e where e.id = p_employee and e.org_id = p_org) then
+    return jsonb_build_object('state', 'denied');
+  end if;
+  delete from public.thread_send_leases
+    where org_id = p_org and expires_at < now() - interval '1 hour';
+  insert into public.thread_send_leases as l (org_id, thread_key, lease_id, employee_id, acquired_at, expires_at, job_key)
+    values (p_org, p_thread_key, p_lease, p_employee, now(), now() + make_interval(secs => p_ttl_seconds), p_job_key)
+    on conflict (org_id, thread_key) do update
+      set lease_id = excluded.lease_id, employee_id = excluded.employee_id,
+          acquired_at = excluded.acquired_at, expires_at = excluded.expires_at, job_key = excluded.job_key
+      where l.expires_at <= now()
+         or (excluded.job_key is not null
+             and l.employee_id = excluded.employee_id
+             and l.job_key = excluded.job_key
+             and exists (
+               select 1 from public.thread_self_posts p
+               where p.org_id = l.org_id and p.employee_id = l.employee_id and p.thread_key = l.thread_key
+                 and p.job_key = excluded.job_key
+                 and p.job_first_micros is not null
+                 and now_micros - p.job_first_micros <= 600000000))
+    returning * into r;
+  if found and r.lease_id = p_lease then
+    return jsonb_build_object('state', 'acquired', 'expires_at', r.expires_at);
+  end if;
+  select * into r from public.thread_send_leases where org_id = p_org and thread_key = p_thread_key;
+  return jsonb_build_object(
+    'state', 'busy',
+    'expires_at', r.expires_at,
+    'retry_after_seconds', greatest(1, ceil(extract(epoch from (coalesce(r.expires_at, now()) - now())))::integer));
+end $$;
+
+revoke all on function public.acquire_thread_send_lease(uuid, text, uuid, uuid, integer, text) from public, anon, authenticated;
+grant execute on function public.acquire_thread_send_lease(uuid, text, uuid, uuid, integer, text) to service_role;
 revoke all on function public.record_thread_self_post(uuid, uuid, text, bigint, text) from public, anon, authenticated;
 grant execute on function public.record_thread_self_post(uuid, uuid, text, bigint, text) to service_role;
 revoke all on function public.close_approval_without_send(uuid, uuid, text[], text, jsonb) from public, anon, authenticated;
@@ -90,13 +154,18 @@ grant execute on function public.close_approval_without_send(uuid, uuid, text[],
 
 commit;
 
--- ROLLBACK (down) — turn THREAD_SINGLE_FLIGHT_ENABLED off first. The app falls
+-- ROLLBACK (down) — turn THREAD_SINGLE_FLIGHT_ENABLED off first (with the flag
+-- ON and this rolled back, every guarded post fails closed: the app calls the
+-- 6-arg acquire). The app falls
 -- back to one PostgREST UPDATE for the close when the RPC is missing; with the
 -- flag ON and the column gone the thread guard fails closed. Restores #286's
 -- record_thread_self_post. Same statements as
 -- supabase/verification/20261009150000_thread_single_flight_preflag_rollback.sql:
 --   begin;
 --   drop function if exists public.close_approval_without_send(uuid, uuid, text[], text, jsonb);
+--   drop function if exists public.acquire_thread_send_lease(uuid, text, uuid, uuid, integer, text);
+--   alter table public.thread_send_leases drop constraint if exists thread_send_leases_job_key_check;
+--   alter table public.thread_send_leases drop column if exists job_key;
 --   create or replace function public.record_thread_self_post(
 --     p_org uuid, p_employee uuid, p_thread_key text, p_message_micros bigint, p_job_key text)
 --   returns boolean language plpgsql security invoker set search_path = pg_catalog, public as $f$
