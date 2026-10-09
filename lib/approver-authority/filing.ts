@@ -39,6 +39,9 @@ export async function loadApproverClassificationContext(
     return {
       currentEmployeeScopes: [...(employee.scopes ?? [])],
       currentEmployeeApprovalPolicy: employee.approvalPolicy ?? null,
+      // Problem A: raw stored values (normalized by the classifier like the save path).
+      currentEmployeeActionLimits: { ...((employee.actionLimits ?? {}) as Record<string, unknown>) },
+      currentEmployeeToolApprovalDefaults: { ...((employee.toolApprovalDefaults ?? {}) as Record<string, unknown>) },
     };
   } catch {
     return null;
@@ -108,6 +111,19 @@ async function loadSchedulingContext(
  */
 export const CONTEXT_PINNED_TOOLS: ReadonlySet<string> = new Set(["schedulingPolicy.patch", "policy.patch"]);
 
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+/** Key-sorted JSON so the fingerprint does not depend on stored key order. */
+function canonicalJson(value: unknown): string {
+  const sort = (v: unknown): unknown =>
+    Array.isArray(v) ? v.map(sort)
+      : isPlainRecord(v) ? Object.fromEntries(Object.keys(v).sort().filter((k) => v[k] !== undefined).map((k) => [k, sort(v[k])]))
+      : v;
+  return JSON.stringify(sort(value));
+}
+
 /** sha256 of the judged state; null = unreadable (never matches → fail closed). */
 export function approverContextFingerprint(tool: string, context: ApproverClassificationContext | null): string | null {
   if (!context) return null;
@@ -115,7 +131,15 @@ export function approverContextFingerprint(tool: string, context: ApproverClassi
   if (tool === "schedulingPolicy.patch" && context.schedulingRules) {
     material = JSON.stringify(["scheduling", context.schedulingRules.current.rules, context.schedulingRules.ifCleared.rules]);
   } else if (tool === "policy.patch" && context.currentEmployeeScopes) {
-    material = JSON.stringify(["policy", [...context.currentEmployeeScopes].sort(), context.currentEmployeeApprovalPolicy ?? null]);
+    if (!isPlainRecord(context.currentEmployeeActionLimits) || !isPlainRecord(context.currentEmployeeToolApprovalDefaults)) return null;
+    material = JSON.stringify([
+      "policy",
+      [...context.currentEmployeeScopes].sort(),
+      context.currentEmployeeApprovalPolicy ?? null,
+      // Problem A: money limits are part of the judged state too.
+      canonicalJson(context.currentEmployeeActionLimits),
+      canonicalJson(context.currentEmployeeToolApprovalDefaults),
+    ]);
   }
   return material === null ? null : createHash("sha256").update(material).digest("hex");
 }

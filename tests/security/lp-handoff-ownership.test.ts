@@ -5,6 +5,8 @@
  * the signed guest cookie), never on a journeyId / handoffId alone.
  */
 import { describe, expect, test, beforeEach, mock } from "bun:test";
+// IP_HASH_KEY is required (no dev fallback); fixture key for this test process.
+process.env.IP_HASH_KEY = "test-ip-hash-key-fixture-0123456789";
 
 const OWN_JOURNEY = { id: "journey-own", tenantId: "t", tokenHash: "h", activeAgent: "ai" };
 let cookieJar: Record<string, string> = {};

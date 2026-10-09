@@ -120,6 +120,10 @@ export type AdminFulfillment = {
   channelId?: string;
   draft?: unknown;
   nextStepJa?: string;
+  /** Whether re-requesting can succeed without a change (e.g. directory_remove_relaxes_audience: false). */
+  retryable?: boolean;
+  /** Admin tool to run first (e.g. channels.classify for an unknown channel row). */
+  nextTool?: string;
   noticeJa?: string;
   adapterId?: string;
   surface?: string;
@@ -526,6 +530,7 @@ export function parseAdminFulfillment(
     channelId: typeof rec.channelId === "string" ? rec.channelId : undefined,
     draft: rec.draft,
     nextStepJa: typeof rec.nextStepJa === "string" ? rec.nextStepJa : undefined,
+    ...(typeof rec.nextTool === "string" ? { nextTool: rec.nextTool } : {}),
     noticeJa: typeof rec.noticeJa === "string" ? rec.noticeJa : undefined,
     enabled: typeof rec.enabled === "boolean" ? rec.enabled : undefined,
     destinationPresent: typeof rec.destinationPresent === "boolean" ? rec.destinationPresent : undefined,
@@ -734,15 +739,22 @@ async function fulfillPolicy(approval: ApprovalRequest, args: Record<string, unk
   if (!employeeId || !scopes.length || !["auto", "risk_based", "always_human"].includes(approvalPolicy)) {
     throw new Error("invalid_policy_payload");
   }
+  // 木村 2026-10-09 23:58: allowedPurposes left out keeps the current value
+  // (it used to be written as [] — an omission silently emptied it).
+  let allowedPurposes: string[];
+  if (Array.isArray(args.allowedPurposes)) allowedPurposes = args.allowedPurposes.map(String).filter(Boolean);
+  else {
+    const current = await getEmployee(employeeId, approval.orgId);
+    if (!current || current.orgId !== approval.orgId) throw new Error("employee_not_found");
+    allowedPurposes = [...(current.allowedPurposes ?? [])];
+  }
   let updated: Awaited<ReturnType<typeof updateEmployeePolicy>>;
   try {
     updated = await updateEmployeePolicy({
       orgId: approval.orgId,
       employeeId,
       scopes,
-      allowedPurposes: Array.isArray(args.allowedPurposes)
-        ? args.allowedPurposes.map(String).filter(Boolean)
-        : [],
+      allowedPurposes,
       approvalPolicy,
       toolApprovalDefaults:
         args.toolApprovalDefaults !== undefined
@@ -2003,7 +2015,17 @@ async function fulfillDirectoryRemoveTicket(
   const { fulfillChannelRemove, fulfillPartyRemove } = await import("@/lib/admin-mcp/directory-remove-tools");
   const result = tool === "channels.remove" ? await fulfillChannelRemove(approval, args) : await fulfillPartyRemove(approval, args);
   const at = new Date().toISOString();
-  if (!result.ok) return { ok: false, tool, at, error: result.code, nextStepJa: result.messageJa };
+  if (!result.ok) {
+    return {
+      ok: false,
+      tool,
+      at,
+      error: result.code,
+      nextStepJa: result.nextStepJa ? `${result.messageJa}${result.nextStepJa}` : result.messageJa,
+      ...(result.retryable !== undefined ? { retryable: result.retryable } : {}),
+      ...(result.nextTool ? { nextTool: result.nextTool } : {}),
+    };
+  }
   return {
     ok: true,
     tool,

@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+// IP_HASH_KEY is required (no dev fallback); fixture key for this test process.
+process.env.IP_HASH_KEY = "test-ip-hash-key-fixture-0123456789";
 import { normalizeEmail, keyedHash } from "./email-normalize";
 import { isDisposableDomain } from "./disposable-domains";
 

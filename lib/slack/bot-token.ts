@@ -1,3 +1,5 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+import { createHash } from "node:crypto";
 import { getEnabledConversationAdapter } from "@/lib/data/conversation-adapters";
 import {
   getEnabledNotificationChannels,
@@ -77,6 +79,111 @@ export async function inspectSlackChannelExtShared(
     };
     if (!body.ok || !body.channel) return null;
     return Boolean(body.channel.is_ext_shared || body.channel.is_ext_shared_plus);
+  } catch {
+    return null;
+  }
+}
+
+/** How long a VERIFIED users.info team id may be reused across invokes. */
+export const SLACK_USER_TEAM_CACHE_TTL_MS = 60_000;
+const SLACK_USER_TEAM_CACHE_MAX = 5_000;
+
+/**
+ * Cross-invoke cache: ONLY verified (non-null) team ids are stored, keyed by
+ * (orgId, bot-token fingerprint, slackUserId) so one org's answer can never
+ * serve another org and a token switch invalidates earlier answers at once.
+ * Unverifiable results (no token, Slack error, timeout) are never cached here,
+ * so they cannot outlive the invoke that saw them, and they stay "external".
+ */
+const verifiedTeamCache = new Map<string, { teamId: string; expiresAt: number }>();
+
+/**
+ * Per-invoke memo: one users.info per (org, user) per invoke, including a null
+ * (unverifiable) result, which is reused only inside that same invoke.
+ */
+const invokeMemo = new AsyncLocalStorage<Map<string, Promise<string | null>>>();
+
+/**
+ * Short, non-reversible bot-token fingerprint (first 12 hex chars of sha256).
+ * A token switch (reinstall, other workspace) changes the key, so earlier answers
+ * stop being served immediately. The raw token never enters a key or a log line.
+ */
+function botTokenFingerprint(token: string): string {
+  return createHash("sha256").update(token).digest("hex").slice(0, 12);
+}
+
+function slackUserTeamKey(orgId: string, tokenFingerprint: string, slackUserId: string): string {
+  return JSON.stringify([orgId, tokenFingerprint, slackUserId.toUpperCase()]);
+}
+
+/** Run fn with a fresh per-invoke users.info memo (nested scopes reuse the outer one). */
+export function withSlackUserTeamMemo<T>(fn: () => Promise<T>): Promise<T> {
+  if (invokeMemo.getStore()) return fn();
+  return invokeMemo.run(new Map(), fn);
+}
+
+export function resetSlackUserTeamCacheForTests(): void {
+  verifiedTeamCache.clear();
+}
+
+export function slackUserTeamCacheKeysForTests(): string[] {
+  return [...verifiedTeamCache.keys()];
+}
+
+/**
+ * The Slack team a user actually belongs to, as reported by Slack itself
+ * (users.info with the org's OWN conversation bot token). Used instead of any
+ * AI-supplied slackTeamId / speakerTeamId. null = could not verify (no token,
+ * missing users:read, Slack error, timeout); callers treat that as NOT internal.
+ */
+export async function fetchVerifiedSlackUserTeamId(
+  orgId: string,
+  slackUserId: string
+): Promise<string | null> {
+  const user = slackUserId.trim();
+  if (!orgId || !user) return null;
+  const token = await resolveOrgSlackBotToken(orgId);
+  if (!token) return null;
+  const key = slackUserTeamKey(orgId, botTokenFingerprint(token), user);
+  const now = Date.now();
+  const cached = verifiedTeamCache.get(key);
+  if (cached) {
+    if (cached.expiresAt > now) return cached.teamId;
+    verifiedTeamCache.delete(key);
+  }
+  const memo = invokeMemo.getStore();
+  const pending = memo?.get(key);
+  if (pending) return pending;
+  const lookup = fetchSlackUserTeamIdUncached(token, user).then((teamId) => {
+    if (teamId) {
+      if (verifiedTeamCache.size >= SLACK_USER_TEAM_CACHE_MAX) {
+        const oldest = verifiedTeamCache.keys().next().value;
+        if (oldest !== undefined) verifiedTeamCache.delete(oldest);
+      }
+      verifiedTeamCache.set(key, { teamId, expiresAt: Date.now() + SLACK_USER_TEAM_CACHE_TTL_MS });
+    }
+    return teamId;
+  });
+  memo?.set(key, lookup);
+  return lookup;
+}
+
+async function fetchSlackUserTeamIdUncached(token: string, user: string): Promise<string | null> {
+  try {
+    const url = `https://slack.com/api/users.info?user=${encodeURIComponent(user)}`;
+    const response = await fetch(url, {
+      method: "GET",
+      headers: { authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(SLACK_TIMEOUT_MS),
+    });
+    const body = (await response.json().catch(() => ({}))) as {
+      ok?: boolean;
+      user?: { id?: string; team_id?: string; deleted?: boolean };
+    };
+    if (!body.ok || !body.user || body.user.deleted) return null;
+    if (body.user.id && body.user.id.toUpperCase() !== user.toUpperCase()) return null;
+    const team = typeof body.user.team_id === "string" ? body.user.team_id.trim().toUpperCase() : "";
+    return team || null;
   } catch {
     return null;
   }

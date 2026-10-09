@@ -10,6 +10,8 @@
 import { PRIVILEGED_CAPABILITIES } from "@/lib/team/member-change-guard";
 import { SCOPE_DOMAINS } from "@/lib/gateway/domains";
 import type { EmployeeScope } from "@/lib/types";
+import { normalizeActionLimits } from "@/lib/action-gate";
+import { normalizeToolApprovalDefaults } from "@/lib/employees/approval-presets";
 
 /** Stored on approval_requests.required_approver_kind. */
 export type RequiredApproverKind = "owner_or_designated_admin" | "owner";
@@ -151,7 +153,8 @@ export type ApproverRequirementReason =
   | "classification_failed"
   | "money_spend_limit"
   | "money_cost_cap"
-  | "money_cost_cap_unverified";
+  | "money_cost_cap_unverified"
+  | "money_limits_unverified";
 
 export interface ApproverRequirement {
   kind: RequiredApproverKind;
@@ -183,6 +186,13 @@ export interface ApproverClassificationContext {
   /** Current scopes of the target employee (policy.patch / employees.reinstate). */
   currentEmployeeScopes?: readonly string[] | null;
   currentEmployeeApprovalPolicy?: string | null;
+  /**
+   * policy.patch (木村 2026-10-09 23:58, Problem A): the employee's stored
+   * actionLimits / toolApprovalDefaults (raw; normalized here exactly like the
+   * save path). Missing → money limits cannot be judged → owner.
+   */
+  currentEmployeeActionLimits?: Record<string, unknown> | null;
+  currentEmployeeToolApprovalDefaults?: Record<string, unknown> | null;
   /**
    * schedulingPolicy.patch: schedulingRulesState() of the policy in force now
    * (`current`) and of what clearOverride would inherit (`ifCleared`).
@@ -343,20 +353,53 @@ function classifyPolicyPatch(
       reasons.add("money_approval_weakened");
     }
   }
-  if (args.toolApprovalDefaults !== undefined) {
-    if (!isRecord(args.toolApprovalDefaults)) reasons.add("money_approval_weakened");
-    else {
-      for (const key of Object.keys(args.toolApprovalDefaults)) {
-        if (!isNonMoneyToolKey(key)) reasons.add("money_approval_weakened");
-      }
-    }
+  classifyPolicyMoneyLimits(args, context, reasons);
+}
+
+/** Money keys whose normalized value differs between current and next (union of keys). */
+function changedMoneyKeys(current: Record<string, unknown>, next: Record<string, unknown>): string[] {
+  const keys = new Set([...Object.keys(current), ...Object.keys(next)]);
+  return [...keys].filter((key) => !isNonMoneyToolKey(key) && canonical(current[key]) !== canonical(next[key]));
+}
+
+/**
+ * 木村 2026-10-09 23:58 (Problem A). Compare what is stored now with what the
+ * save path (fulfillPolicy → updateEmployeePolicy) would write:
+ * - actionLimits is ALWAYS written as normalizeActionLimits(args.actionLimits),
+ *   so leaving it out empties every cap → a stored money cap counts as changed.
+ * - toolApprovalDefaults, when sent, REPLACES the map with
+ *   normalizeToolApprovalDefaults(args.toolApprovalDefaults); left out = kept.
+ *   The current map is normalized the same way, plus any stored key the
+ *   normalizer would drop (dropping it on save is a change too).
+ * Any money key (anything not in nonMoneyToolKeys) that changes → owner.
+ * Current values unreadable → owner (money_limits_unverified).
+ */
+function classifyPolicyMoneyLimits(
+  args: Record<string, unknown>,
+  context: ApproverClassificationContext | null | undefined,
+  reasons: Set<ApproverRequirementReason>
+) {
+  if (args.actionLimits !== undefined && args.actionLimits !== null && !isRecord(args.actionLimits)) reasons.add("money_tool_limits");
+  if (args.toolApprovalDefaults !== undefined && !isRecord(args.toolApprovalDefaults)) reasons.add("money_approval_weakened");
+  const rawLimits = context?.currentEmployeeActionLimits;
+  const rawDefaults = context?.currentEmployeeToolApprovalDefaults;
+  if (!isRecord(rawLimits) || !isRecord(rawDefaults)) {
+    reasons.add("money_limits_unverified");
+    return;
   }
-  if (args.actionLimits !== undefined && args.actionLimits !== null) {
-    if (!isRecord(args.actionLimits)) reasons.add("money_tool_limits");
-    else {
-      for (const key of Object.keys(args.actionLimits)) {
-        if (!isNonMoneyToolKey(key)) reasons.add("money_tool_limits");
-      }
+  const nextLimits = normalizeActionLimits(args.actionLimits) as Record<string, unknown>;
+  if (changedMoneyKeys(normalizeActionLimits(rawLimits) as Record<string, unknown>, nextLimits).length) {
+    reasons.add("money_tool_limits");
+  }
+  if (args.toolApprovalDefaults !== undefined) {
+    const currentDefaults: Record<string, unknown> = { ...normalizeToolApprovalDefaults(rawDefaults) };
+    for (const [key, value] of Object.entries(rawDefaults)) if (!(key in currentDefaults)) currentDefaults[key] = value;
+    const nextDefaults = normalizeToolApprovalDefaults(args.toolApprovalDefaults) as Record<string, unknown>;
+    if (changedMoneyKeys(currentDefaults, nextDefaults).length) reasons.add("money_approval_weakened");
+    // A money key the save path would not even keep (unknown / billing tool):
+    // unclear intent → owner (unchanged from before).
+    if (isRecord(args.toolApprovalDefaults)) {
+      for (const key of Object.keys(args.toolApprovalDefaults)) if (!isNonMoneyToolKey(key) && !(key in nextDefaults)) reasons.add("money_approval_weakened");
     }
   }
 }

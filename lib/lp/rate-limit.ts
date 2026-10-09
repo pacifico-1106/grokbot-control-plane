@@ -6,6 +6,7 @@
  * IP addresses are hashed with IP_HASH_KEY to avoid storing raw IPs.
  */
 
+import { requireIpHashKey } from "@/lib/security/ip-hash-key";
 import { createHash } from "node:crypto";
 
 export interface RateLimitConfig {
@@ -51,8 +52,9 @@ function startCleanup() {
   }, 60 * 1000);
 }
 
+/** Throws IpHashKeyMissingError when IP_HASH_KEY is missing / blank / placeholder (no fallback). */
 export function hashIp(ip: string): string {
-  const key = process.env.IP_HASH_KEY || "default_hash_key_for_dev";
+  const key = requireIpHashKey();
   return createHash("sha256").update(`${key}:${ip}`).digest("hex").slice(0, 16);
 }
 

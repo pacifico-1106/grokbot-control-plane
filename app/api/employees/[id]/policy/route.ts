@@ -133,12 +133,15 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
     // money-related → owner). Only fields that actually change are judged.
     const { assertWebActorApproverAuthority, webDirectDeniedBody, sameJson, sameSet } = await import("@/lib/approver-authority/web-direct");
     const changes: Array<{ tool: string; adminMutation: Record<string, unknown> }> = [];
-    if (!sameSet(scopes, existing.scopes)) changes.push({ tool: "policy.patch", adminMutation: { scopes } });
-    if (approvalPolicy !== existing.approvalPolicy) changes.push({ tool: "policy.patch", adminMutation: { approvalPolicy } });
-    if (toolApprovalDefaults !== undefined && !sameJson(toolApprovalDefaults, normalizeToolApprovalDefaults(existing.toolApprovalDefaults ?? {}))) {
-      changes.push({ tool: "policy.patch", adminMutation: { toolApprovalDefaults } });
-    }
+    // This route always writes normalizeActionLimits(body.actionLimits), so
+    // every policy.patch change carries it (Problem A: the classifier treats a
+    // missing actionLimits as "emptied", like the admin MCP save path).
     const nextActionLimits = normalizeActionLimits(body.actionLimits);
+    if (!sameSet(scopes, existing.scopes)) changes.push({ tool: "policy.patch", adminMutation: { scopes, actionLimits: nextActionLimits } });
+    if (approvalPolicy !== existing.approvalPolicy) changes.push({ tool: "policy.patch", adminMutation: { approvalPolicy, actionLimits: nextActionLimits } });
+    if (toolApprovalDefaults !== undefined && !sameJson(toolApprovalDefaults, normalizeToolApprovalDefaults(existing.toolApprovalDefaults ?? {}))) {
+      changes.push({ tool: "policy.patch", adminMutation: { toolApprovalDefaults, actionLimits: nextActionLimits } });
+    }
     if (!sameJson(nextActionLimits, normalizeActionLimits(existing.actionLimits))) {
       changes.push({ tool: "policy.patch", adminMutation: { actionLimits: nextActionLimits } });
     }
@@ -153,7 +156,12 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
       orgId,
       memberId: gate.actor.id,
       changes,
-      context: { currentEmployeeScopes: existing.scopes, currentEmployeeApprovalPolicy: existing.approvalPolicy },
+      context: {
+        currentEmployeeScopes: existing.scopes,
+        currentEmployeeApprovalPolicy: existing.approvalPolicy,
+        currentEmployeeActionLimits: { ...((existing.actionLimits ?? {}) as Record<string, unknown>) },
+        currentEmployeeToolApprovalDefaults: { ...((existing.toolApprovalDefaults ?? {}) as Record<string, unknown>) },
+      },
       surface: "employees.policy",
     });
     if (!authority.ok) return NextResponse.json(webDirectDeniedBody(authority), { status: 403 });
