@@ -104,7 +104,10 @@ describe("employee policy PATCH", () => {
   });
 
   test("BOLA: another org's employee id → 404 before any authority decision", async () => {
-    const res = await policyPatch(OWNER, { approvalPolicy: "always_human" }, "emp_not_in_this_org");
+    const res = await patchPolicy(new Request("http://localhost/api/employees/emp_not_in_this_org/policy", {
+      method: "PATCH", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ scopes: ["slack:post"], allowedPurposes: [], approvalPolicy: "always_human", actorMemberId: OWNER }),
+    }), { params: Promise.resolve({ id: "emp_not_in_this_org" }) });
     expect(res.status).toBe(404);
   });
 });
