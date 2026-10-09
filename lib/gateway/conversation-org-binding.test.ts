@@ -53,7 +53,7 @@ afterEach(async () => {
   await upsertConversationAdapter({ orgId: ORG_A, surface: "slack", enabled: false, secrets: {} }).catch(() => undefined);
 });
 
-function slackBody(orgId: string | undefined, channel = B_CHANNEL, jobId = `job_bola_${Math.random().toString(36).slice(2)}`): GatewayInvokeRequest {
+function slackBody(orgId: string | undefined, channel = B_CHANNEL, jobId = `job_bola_${Math.random().toString(36).slice(2, 8)}`): GatewayInvokeRequest {
   return {
     tool: "comm.reply",
     purpose: "comm.internal",

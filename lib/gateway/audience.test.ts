@@ -496,7 +496,16 @@ describe("org internal audience rule (stablo-scale)", () => {
     clearDemoRule();
   });
 
-  test("autoSlackTeamInternal=true + matching slackTeamId → internal", async () => {
+  test("autoSlackTeamInternal=true + Slack-verified matching team (users.info) → internal", async () => {
+    const { upsertConversationAdapter } = await import("@/lib/data/conversation-adapters");
+    await upsertConversationAdapter({ orgId: DEMO_ORG.id, surface: "slack", enabled: true, secrets: { botToken: "xoxb-team-verify" } });
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: unknown) => {
+      const url = String(input);
+      if (url.includes("users.info")) return Response.json({ ok: true, user: { id: "U_STABLO_MEMBER", team_id: "TSTABLO307" } });
+      return Response.json({ ok: false, error: "not_mocked" });
+    }) as typeof fetch;
+    try {
     await setOrgInternalAudienceRule(
       DEMO_ORG.id,
       {
@@ -528,6 +537,24 @@ describe("org internal audience rule (stablo-scale)", () => {
     );
     expect(signal?.audience).toBe("internal");
     expect(signal?.resolved).toBe(true);
+    } finally {
+      globalThis.fetch = realFetch;
+      await upsertConversationAdapter({ orgId: DEMO_ORG.id, surface: "slack", enabled: false, secrets: {} });
+    }
+  });
+
+  test("autoSlackTeamInternal=true + AI-claimed matching slackTeamId only (Slack cannot verify) → NOT internal", async () => {
+    await setOrgInternalAudienceRule(DEMO_ORG.id, { slackTeamIds: ["TSTABLO307"], autoSlackTeamInternal: true }, "test@example.com");
+    const ctx = parseConversationContext(
+      body({
+        conversation: { surface: "slack", orgId: DEMO_ORG.id, slackChannelId: "C_SHARED", slackUserId: "U_STABLO_MEMBER" },
+        args: { slackTeamId: "TSTABLO307" },
+      }),
+      DEMO_ORG.id
+    );
+    const resolved = await resolveAudience(ctx);
+    const signal = resolved.dualAudience?.partySignals.find((s) => s.kind === "slack_user");
+    expect(signal?.audience).not.toBe("internal");
   });
 
   test("autoSlackTeamInternal=true + different slackTeamId → external (Connect guest)", async () => {
