@@ -269,9 +269,12 @@ export function buildInvokeSnapshot(input: {
     input.body?.args && typeof input.body.args === "object"
       ? (input.body.args as Record<string, unknown>)
       : {};
-  const parsed =
+  // Tenant isolation: the snapshot's conversation org is always the approval
+  // row's org (input.orgId), never a caller- or AI-supplied value.
+  const parsedRaw =
     input.conversation ??
     (input.body ? parseConversationContext(input.body, input.orgId) : null);
+  const parsed = parsedRaw ? { ...parsedRaw, orgId: input.orgId } : null;
   const resolvedThread = resolveConversationThreadId({
     conversation: parsed,
     args,

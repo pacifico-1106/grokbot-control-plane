@@ -218,13 +218,13 @@ describe("approval fulfil path", () => {
     const approvalId = String(queued.body.approvalId);
     // Simulate a prod row created before the fix with a forged org in the snapshot.
     const stored = await getApprovalById(approvalId, ORG_A);
-    const inv = (stored!.metadata as Record<string, any>).invoke;
-    inv.conversation.orgId = ORG_B;
+    type SnapMeta = { invoke: { conversation: { orgId?: string } } };
+    (stored!.metadata as unknown as SnapMeta).invoke.conversation.orgId = ORG_B;
     await upsertConversationAdapter({ orgId: ORG_A, surface: "slack", enabled: true, secrets: { botToken: "xoxb-org-a" } });
     await upsertConversationAdapter({ orgId: ORG_B, surface: "slack", enabled: true, secrets: { botToken: B_TOKEN } });
     mockSlack(true);
     const approved = await resolveApproval(approvalId, "approved", "ando@example.com", ORG_A);
-    (approved!.metadata as Record<string, any>).invoke.conversation.orgId = ORG_B;
+    (approved!.metadata as unknown as SnapMeta).invoke.conversation.orgId = ORG_B;
     const fulfillment = await fulfillApprovedInvoke(approved!);
     expect(fulfillment?.ok).toBe(false);
     expect(fulfillment?.error).toBe("fulfill_blocked_conversation_org_mismatch");

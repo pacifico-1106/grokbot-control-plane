@@ -34,6 +34,7 @@ import { assertBillingAllowsGateway } from "@/lib/billing/entitlements";
 import { evaluateDualEgress } from "@/lib/gateway/egress";
 import {
   parseConversationContext,
+  conversationOrgMismatch,
   resolveAudience,
   resolveConversationThreadId,
   resolveParentMessageTs,
@@ -830,6 +831,47 @@ export async function runGatewayInvoke(
     );
   }
 
+  // Tenant isolation (BOLA): the org that drives audience / ledger / Slack
+  // token / dedup / approval snapshot is the authenticated employee's org.
+  // An AI-supplied conversation.orgId naming another org is refused before
+  // anything is read or written for it. The answer never depends on whether
+  // that org exists (no lookup), and only a hash of it is audited, under the
+  // authenticated org.
+  const principalOrgId = employee.orgId;
+  const orgMismatch = conversationOrgMismatch(body.conversation, principalOrgId);
+  if (orgMismatch) {
+    await appendAuditEvent({
+      orgId: principalOrgId,
+      employeeId,
+      credentialId: input.credentialId || employee.credentialId,
+      action: "gateway.conversation_org_mismatch",
+      purpose,
+      summary: `${tool} を会話コンテキストの組織不一致で拒否（fail-closed）`,
+      metadata: {
+        tool,
+        jobId,
+        code: "conversation_org_mismatch",
+        suppliedOrgIdSha256: createHash("sha256").update(orgMismatch.suppliedOrgId).digest("hex"),
+      },
+    }).catch(() => undefined);
+    return jsonResult(
+      {
+        ok: false,
+        code: "conversation_org_mismatch",
+        error: "conversation_org_mismatch",
+        message:
+          "conversation.orgId does not match the organization of this credential; the request was refused (nothing was sent).",
+        nextStepJa:
+          "conversation.orgId は省略してください（社員証の組織が自動で使われます）。別の組織の会話には送信できません。orgId を外して同じ jobId で再実行してください。",
+        employeeId,
+        tool,
+        purpose,
+        jobId,
+      },
+      403
+    );
+  }
+
   const billingGate = await assertBillingAllowsGateway(orgId || employee.orgId, tool);
   if (!billingGate.ok) {
     return jsonResult(
@@ -1256,7 +1298,7 @@ export async function runGatewayInvoke(
   // slack.* aliases share this resolver — tool name is not the boundary.
   // S2: evaluateInvokeEgress now returns both egress (effective) and dualEgress (audit).
   const { egress, dualEgress } = await evaluateInvokeEgress({
-    orgId: orgId || employee.orgId,
+    orgId: principalOrgId,
     tool,
     toolDef,
     body,
@@ -1275,7 +1317,7 @@ export async function runGatewayInvoke(
       metadata: { tool, jobId, egress, dualEgress, managerId },
     });
 
-    const effectiveOrgId = orgId || employee.orgId;
+    const effectiveOrgId = principalOrgId;
     const ledgerRetry = await attemptAudienceLedgerRetry(
       {
         orgId: effectiveOrgId,
@@ -2028,7 +2070,7 @@ export async function runGatewayInvoke(
   let conversationDelivery: ConversationDelivery | undefined;
   let threadTsSource: "client" | "wake_stash" | "none" | undefined;
   if (isAudienceGatedTool(toolDef)) {
-    const ctx = parseConversationContext(body, orgId || employee.orgId);
+    const ctx = parseConversationContext(body, principalOrgId);
     const args =
       body.args && typeof body.args === "object"
         ? (body.args as Record<string, unknown>)
@@ -2353,7 +2395,7 @@ export async function runGatewayInvoke(
     fileAttachmentReceived = rerunAttachment.received;
     fileUploadResponse = rerunAttachment.fileUpload;
   } else if (fileAttachmentReceived && body.fileAttachment) {
-    const ctx = parseConversationContext(body, orgId || employee.orgId);
+    const ctx = parseConversationContext(body, principalOrgId);
     const dest = ctx?.slackChannelId || ctx?.slackUserId || "";
     const replyThreadTs = resolveConversationThreadId({
       conversation: ctx,
@@ -2619,7 +2661,7 @@ export async function runGatewayInvoke(
   }
 
   if (!priorApprovalOk) {
-    const destCtx = parseConversationContext(body, orgId || employee.orgId);
+    const destCtx = parseConversationContext(body, principalOrgId);
     const deliveryChannel =
       conversationDelivery && "channel" in conversationDelivery
         ? conversationDelivery.channel

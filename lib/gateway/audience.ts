@@ -169,6 +169,29 @@ function inferSurface(body: GatewayInvokeRequest, args: Record<string, unknown>)
  * the speaker's identity (the human who mentioned/messaged) is used for
  * audience resolution, not the AI employee's bound Slack user ID.
  */
+function normalizeOrgId(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+/**
+ * Tenant isolation: the AI-supplied conversation.orgId, when present, must be
+ * the authenticated org. Returns the supplied value when it names a different
+ * org (callers refuse and audit only its hash), null when absent or equal.
+ * Never looks the supplied org up, so the answer cannot reveal whether it exists.
+ */
+export function conversationOrgMismatch(
+  conversation: unknown,
+  authOrgId: string
+): { suppliedOrgId: string } | null {
+  const conv = asRecord(conversation);
+  const raw = conv.orgId;
+  if (raw === undefined || raw === null) return null;
+  const supplied = typeof raw === "string" ? raw : String(raw);
+  if (!supplied.trim()) return null;
+  if (normalizeOrgId(supplied) === normalizeOrgId(authOrgId)) return null;
+  return { suppliedOrgId: supplied };
+}
+
 export function parseConversationContext(
   body: GatewayInvokeRequest,
   orgId: string
@@ -205,7 +228,10 @@ export function parseConversationContext(
 
   return {
     surface,
-    orgId: str(conv.orgId) || orgId,
+    // Tenant isolation: the org is ALWAYS the authenticated one passed in by the
+    // caller. An AI-supplied conversation.orgId is never trusted here (a
+    // mismatching one is refused upstream: conversationOrgMismatch).
+    orgId,
     threadId,
     email,
     slackChannelId,
