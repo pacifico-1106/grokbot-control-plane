@@ -9,7 +9,7 @@ import { getOrgApprovalKindRoutesPolicy, setOrgApprovalKindRoutesPolicy } from "
 import type { OrgApprovalKindRoutesPolicy } from "@/lib/approval-kind-routes/types";
 import type { ResolvedEmployeeCredential } from "@/lib/auth/employee-credential";
 import { DEMO_ORG } from "@/lib/demo-data";
-import { callStaffpassMcpTool, listStaffpassMcpTools } from "@/lib/mcp/tools";
+import { callStaffpassMcpTool, listStaffpassMcpTools, setSensitiveTopicsLookupForTests } from "@/lib/mcp/tools";
 
 const FLAG = "APPROVAL_REASONS_ENABLED";
 const TOPIC_FLAG = "P1_TOPIC_GATED_POSTING_ENABLED";
@@ -61,34 +61,44 @@ describe("staffpass_sensitive_topics", () => {
     expect(listStaffpassMcpTools().some((t) => t.name === TOOL)).toBe(false);
   });
 
-  test("returns this org's list, whether the gate is active, and the note that the AI cannot change it", async () => {
+  test("returns configured / active / broad categories only — never the keywords — plus the 言い換えずに guidance", async () => {
     const r = await callStaffpassMcpTool(TOOL, {}, cred(DEMO_ORG.id));
     expect(r.isError).toBe(false);
     const d = data(r);
     expect(d.ok).toBe(true);
     expect(d.readOnly).toBe(true);
     const gate = d.topicGate as Record<string, unknown>;
-    expect(gate.sensitiveTopics).toEqual(["支払", "金額"]);
+    expect(gate.configured).toBe(true);
     expect(gate.active).toBe(true);
+    expect(gate.categories).toEqual(["金銭"]);
+    expect(gate.sensitiveTopics).toBeUndefined();
+    expect(String(d.guidanceJa)).toContain("該当しそうなら、言い換えずに承認に回してください");
     expect(String(d.noteJa)).toContain("変更できません");
+    // pinned: no keyword anywhere in the output (structured or text)
+    const all = JSON.stringify(r);
+    for (const kw of ["支払", "金額"]) expect(all).not.toContain(kw);
   });
 
-  test("gate flag OFF or org gate disabled → active false (list still shown as configured)", async () => {
+  test("gate flag OFF or org gate disabled → active false (still configured, categories only)", async () => {
     delete process.env[TOPIC_FLAG];
     expect((data(await callStaffpassMcpTool(TOOL, {}, cred(DEMO_ORG.id))).topicGate as Record<string, unknown>).active).toBe(false);
     process.env[TOPIC_FLAG] = "true";
     await setOrgApprovalKindRoutesPolicy(DEMO_ORG.id, policy(DEMO_ORG.id, ["支払"], false));
-    const gate = data(await callStaffpassMcpTool(TOOL, {}, cred(DEMO_ORG.id))).topicGate as Record<string, unknown>;
+    const r = await callStaffpassMcpTool(TOOL, {}, cred(DEMO_ORG.id));
+    const gate = data(r).topicGate as Record<string, unknown>;
     expect(gate.active).toBe(false);
-    expect(gate.sensitiveTopics).toEqual(["支払"]);
+    expect(gate.configured).toBe(true);
+    expect(gate.categories).toEqual(["金銭"]);
+    expect(JSON.stringify(r)).not.toContain("支払");
   });
 
   test("BOLA: the org comes from the credential; an orgId argument is ignored; never another org's topics", async () => {
     const r = await callStaffpassMcpTool(TOOL, { orgId: OTHER_ORG }, cred(DEMO_ORG.id));
-    expect(JSON.stringify(data(r))).not.toContain(OTHER_TOPIC);
+    expect(JSON.stringify(r)).not.toContain(OTHER_TOPIC);
+    expect((data(r).topicGate as Record<string, unknown>).categories).toEqual(["金銭"]);
     const other = await callStaffpassMcpTool(TOOL, {}, cred(OTHER_ORG));
-    expect((data(other).topicGate as Record<string, unknown>).sensitiveTopics).toEqual([OTHER_TOPIC]);
-    expect(JSON.stringify(data(other))).not.toContain("支払");
+    expect(JSON.stringify(other)).not.toContain(OTHER_TOPIC);
+    expect(JSON.stringify(other)).not.toContain("支払");
   });
 
   test("read-only: passing a new list does not change the policy", async () => {
@@ -98,12 +108,50 @@ describe("staffpass_sensitive_topics", () => {
     expect(after?.topicGate?.enabled).toBe(true);
   });
 
-  test("no topic gate configured → empty list, configured false", async () => {
+  test("no topic gate configured → configured false, no categories, active false", async () => {
     const r = await callStaffpassMcpTool(TOOL, {}, cred("org_sensitive_topics_unconfigured"));
+    expect(r.isError).toBe(false);
     const gate = data(r).topicGate as Record<string, unknown>;
     expect(gate.configured).toBe(false);
-    expect(gate.sensitiveTopics).toEqual([]);
+    expect(gate.categories).toEqual([]);
     expect(gate.active).toBe(false);
+  });
+
+  test("mapping: several areas map to their categories; unmapped words become その他 — no keyword leaks", async () => {
+    const words = ["給与", "NDA", "請求書", "プロジェクトX極秘"];
+    await setOrgApprovalKindRoutesPolicy(DEMO_ORG.id, policy(DEMO_ORG.id, words));
+    const r = await callStaffpassMcpTool(TOOL, {}, cred(DEMO_ORG.id));
+    const gate = data(r).topicGate as Record<string, unknown>;
+    expect(gate.categories).toEqual(["金銭", "人事", "契約", "その他の機密事項"]);
+    expect(gate.categoriesSource).toBe("mapped");
+    const all = JSON.stringify(r);
+    for (const kw of words) expect(all).not.toContain(kw);
+  });
+
+  test("no clean mapping → a generic category set, labelled as generic", async () => {
+    const words = ["コードネームZ", "青い鳥計画"];
+    await setOrgApprovalKindRoutesPolicy(DEMO_ORG.id, policy(DEMO_ORG.id, words));
+    const r = await callStaffpassMcpTool(TOOL, {}, cred(DEMO_ORG.id));
+    const gate = data(r).topicGate as Record<string, unknown>;
+    expect(gate.categoriesSource).toBe("generic");
+    expect(gate.categories).toEqual(["金銭", "人事", "契約", "その他の機密事項"]);
+    const all = JSON.stringify(r);
+    for (const kw of words) expect(all).not.toContain(kw);
+  });
+
+  test("lookup failure → isError, retryable (never configured:false)", async () => {
+    setSensitiveTopicsLookupForTests(async () => { throw new Error("kind_routes_policy_unavailable"); });
+    try {
+      const r = await callStaffpassMcpTool(TOOL, {}, cred(DEMO_ORG.id));
+      expect(r.isError).toBe(true);
+      const d = data(r);
+      expect(d.code).toBe("sensitive_topics_unavailable");
+      expect(d.retryable).toBe(true);
+      expect(d.topicGate).toBeUndefined();
+      expect(JSON.stringify(r)).not.toContain("configured");
+    } finally {
+      setSensitiveTopicsLookupForTests(null);
+    }
   });
 
   test("flag OFF → the call is refused (tool_disabled), no list", async () => {

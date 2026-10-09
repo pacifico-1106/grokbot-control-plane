@@ -925,3 +925,6 @@ export async function callStaffpassMcpTool(
       );
   }
 }
+
+/** Test hook (stub; replaced in the implementation commit). */
+export function setSensitiveTopicsLookupForTests(_fn: ((orgId: string) => Promise<unknown>) | null): void {}
