@@ -662,6 +662,88 @@ describe("pre-flag-ON fixes (木村 #286 follow-up)", () => {
     });
   });
 
+  // 木村 #293 review item 1: the approval path measures the same-job window
+  // from the approval's creation, not the execution clock.
+  test("2b. a late approval (executed > 10 min after creation) of the same job's continuation still goes out", async () => {
+    on();
+    recordSlack();
+    const jobId = jid("late-apr");
+    expect((await invoke(dm("comm.reply", A_TEXT, old(), jobId))).httpStatus).toBe(200);
+    const queued = await invoke(dm("comm.send", B_TEXT, old(), jobId));
+    expect(queued.httpStatus).toBe(402);
+    later(15 * 60_000);
+    const result = await approveAs(String(queued.body.approvalId));
+    expect(result?.ok).toBe(true);
+    expect((await getApprovalById(String(queued.body.approvalId), DEMO_ORG.id))?.status).not.toBe("superseded");
+    expect(posts.length).toBe(2);
+  });
+
+  // 木村 #293 review item 2: no readThroughTs and no inbound ts → the latest
+  // wake Staffpass delivered to this employee in this thread is the read point.
+  describe("2c. read point from the latest wake", () => {
+    const recordWake = async (employeeId: string, ts: string, orgId = DEMO_ORG.id) => {
+      const guard = (await import("@/lib/thread-guard/guard")) as Record<string, unknown>;
+      const fn = guard.recordThreadWake as undefined | ((i: unknown) => Promise<boolean>);
+      if (typeof fn !== "function") throw new Error("recordThreadWake missing");
+      return fn({ orgId, employeeId, keyInput: { orgId, surface: "slack", slackChannelId: CHANNEL, threadId: THREAD }, ts });
+    };
+    test("a wake exists: an AI post after the wake ts → thread_moved_on (the check applies)", async () => {
+      on();
+      recordSlack();
+      expect(await recordWake("emp_comm", old())).toBe(true);
+      expect((await invoke(threadReply(A_TEXT), "emp_comm2")).httpStatus).toBe(200);
+      const res = await invoke(threadReply(B_TEXT));
+      expect(res.httpStatus).toBe(409);
+      expect(res.body.code).toBe("thread_moved_on");
+      expect(posts.length).toBe(1);
+    });
+    test("a wake exists and nothing newer → sent, no read_point_unknown marker", async () => {
+      on();
+      recordSlack();
+      expect(await recordWake("emp_comm", `${nowS() - 5}.000001`)).toBe(true);
+      const res = await invoke(threadReply(A_TEXT));
+      expect(res.httpStatus).toBe(200);
+      const events = await listAuditEvents(DEMO_ORG.id, 80);
+      expect(events.some((e) => e.action === "thread_guard.read_point_unknown" && e.metadata?.jobId === res.body.jobId)).toBe(false);
+    });
+    test("no wake: sent as today, readPoint unknown audited, and the response tells the AI to pass readThroughTs next time", async () => {
+      on();
+      recordSlack();
+      const res = await invoke(threadReply(A_TEXT));
+      expect(res.httpStatus).toBe(200);
+      const hint = res.body.threadGuard as Record<string, unknown> | undefined;
+      expect(hint?.readPoint).toBe("unknown");
+      expect(String(hint?.nextStep)).toMatch(/readThroughTs/);
+      const events = await listAuditEvents(DEMO_ORG.id, 80);
+      expect(events.some((e) => e.action === "thread_guard.read_point_unknown" && e.metadata?.jobId === res.body.jobId)).toBe(true);
+    });
+    test("BOLA: another org's or another employee's wake is never used", async () => {
+      on();
+      recordSlack();
+      expect(await recordWake("emp_comm2", old())).toBe(true);
+      expect(await recordWake("emp_other", old(), OTHER_ORG)).toBe(true);
+      expect((await invoke(threadReply(A_TEXT), "emp_comm2")).httpStatus).toBe(200);
+      const res = await invoke(threadReply(B_TEXT));
+      expect(res.httpStatus).toBe(200); // no read point of its own: lease only
+      expect((res.body.threadGuard as Record<string, unknown> | undefined)?.readPoint).toBe("unknown");
+    });
+    test("an explicit / inbound read point still wins over the wake", async () => {
+      on();
+      recordSlack();
+      expect(await recordWake("emp_comm", old())).toBe(true);
+      expect((await invoke(threadReply(A_TEXT), "emp_comm2")).httpStatus).toBe(200);
+      expect((await invoke(threadReply(B_TEXT, { readThroughTs: fresh() }))).httpStatus).toBe(200);
+    });
+    test("flag OFF: no hint, nothing recorded", async () => {
+      off();
+      recordSlack();
+      expect(await recordWake("emp_comm", old())).toBe(false);
+      const res = await invoke(threadReply(A_TEXT));
+      expect(res.httpStatus).toBe(200);
+      expect(res.body.threadGuard).toBeUndefined();
+    });
+  });
+
   describe("3. LINE / Telegram / mail: the lease is held until the caller's delivery window ends", () => {
     // Telegram conversation replies are refused by egress at invoke today
     // (audience unknown → egress_denied), so the caller-delivered branch is
