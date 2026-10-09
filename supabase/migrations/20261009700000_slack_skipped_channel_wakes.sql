@@ -16,7 +16,8 @@
 -- 3. claim_slack_skipped_channel_wakes(org, channel, approval, ttl_seconds)
 --    → jsonb {state: ok, rows: [...]} | {state: denied}
 --    ONE UPDATE … WHERE claimed_at IS NULL … RETURNING, scoped to the org, and
---    only for an APPROVED approval_requests row of the same org. Concurrent
+--    only for an APPROVED approval_requests row of the same org that is THIS
+--    channel's classification ticket (tool + externalId). Concurrent
 --    claims: the row lock + re-check of claimed_at gives exactly one winner.
 -- security invoker, service_role only (anon / authenticated: no EXECUTE).
 begin;
@@ -96,8 +97,22 @@ begin
     or p_ttl_seconds is null or p_ttl_seconds < 60 or p_ttl_seconds > 604800 then
     return jsonb_build_object('state', 'denied');
   end if;
+  -- Only an APPROVED ticket of the same org that classifies THIS channel:
+  -- channels.classify with adminMutation.surface = slack and externalId = the
+  -- channel, or a config.change_request channel_classification for it
+  -- (21:53 review (2)). Any other approved ticket is refused.
   if not exists (select 1 from public.approval_requests ar
-                 where ar.id = p_approval and ar.org_id = p_org and ar.status = 'approved') then
+                 where ar.id = p_approval and ar.org_id = p_org and ar.status = 'approved'
+                   and (
+                     (ar.tool = 'channels.classify'
+                       and ar.metadata->'adminMutation'->>'surface' = 'slack'
+                       and ar.metadata->'adminMutation'->>'externalId' = p_channel)
+                     or
+                     (ar.tool = 'config.change_request'
+                       and ar.metadata->'configChange'->'proposal'->>'kind' = 'channel_classification'
+                       and ar.metadata->'configChange'->'proposal'->>'surface' = 'slack'
+                       and ar.metadata->'configChange'->'proposal'->>'externalId' = p_channel)
+                   )) then
     return jsonb_build_object('state', 'denied');
   end if;
   with c as (

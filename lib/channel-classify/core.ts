@@ -373,7 +373,7 @@ export function buildUnregisteredDenyNoticeJa(input: {
     `理由: ${input.reason} — このチャネルは分類が未登録のため社外扱いになり、機密区分の投稿は拒否されます。本文は含めていません。`,
   ];
   if (input.approvalId && (input.proposalState === undefined || input.proposalState === "created" || input.proposalState === "pending")) {
-    lines.push(`対処: 承認窓口に届いている分類チケット（channels.classify）をワンタップで承認すると登録されます（承認ID: ${input.approvalId}）。社外と共有されているなら却下してください。`);
+    lines.push(`対処: 承認窓口に届いている分類チケット（channels.classify）をワンタップで承認すると登録されます（承認ID: ${input.approvalId}）。社外の場合は社外として分類してください（管理エージェントで channels.classify に classification=shared_external を指定）。却下は、この AI 社員にこのチャネルを対応させたくない場合だけにしてください。`);
   } else if (input.approvalId && input.proposalState === "decided") {
     lines.push(`分類チケットは処理済みです（承認ID: ${input.approvalId}）。変える場合は管理エージェントで channels.classify を依頼してください。`);
   } else {

@@ -148,6 +148,28 @@ function rowFromDb(raw: Record<string, unknown>): SkippedChannelWake | null {
  * Demo: the approval is re-read from the store and must be approved and of the
  * same org (the RPC checks the same against approval_requests).
  */
+/**
+ * 21:53 review (2): the approval must classify THIS channel — channels.classify
+ * (adminMutation surface slack + externalId) or a config.change_request
+ * channel_classification for it. Same rule as the SQL claim.
+ */
+export function isClassificationTicketForChannel(
+  approval: { tool?: string | null; metadata?: unknown },
+  channelId: string
+): boolean {
+  const meta = (approval.metadata ?? {}) as Record<string, unknown>;
+  if (approval.tool === "channels.classify") {
+    const m = (meta.adminMutation ?? {}) as Record<string, unknown>;
+    return m.surface === "slack" && m.externalId === channelId;
+  }
+  if (approval.tool === "config.change_request") {
+    const cc = (meta.configChange ?? {}) as Record<string, unknown>;
+    const p = (cc.proposal ?? {}) as Record<string, unknown>;
+    return p.kind === "channel_classification" && p.surface === "slack" && p.externalId === channelId;
+  }
+  return false;
+}
+
 export async function claimSkippedChannelWakes(input: {
   orgId: string;
   channelId: string;
@@ -163,6 +185,7 @@ export async function claimSkippedChannelWakes(input: {
     const { getApprovalById } = await import("@/lib/data/approvals");
     const approval = await getApprovalById(input.approvalId, input.orgId).catch(() => null);
     if (!approval || approval.orgId !== input.orgId || approval.status !== "approved") return { state: "denied" };
+    if (!isClassificationTicketForChannel(approval, input.channelId)) return { state: "denied" };
     // Synchronous check-and-set after the await: no interleaving in one JS thread.
     const nowMs = input.nowMs ?? Date.now();
     const rows: SkippedChannelWake[] = [];
