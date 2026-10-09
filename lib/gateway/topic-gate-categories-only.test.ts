@@ -203,6 +203,29 @@ describe("HTTP route + MCP + status poll: categories only", () => {
   });
 });
 
+describe("MCP staffpass_get_approval_status", () => {
+  test("status via MCP has no keyword outside the echoed summary", async () => {
+    const r = await invoke(body(`${UNMAPPED} の件です`));
+    const b = r.body as Record<string, string>;
+    const res = await callStaffpassMcpTool(
+      "staffpass_get_approval_status",
+      { approvalId: b.approvalId, statusToken: b.statusToken },
+      {
+        employeeId: "emp_comm",
+        orgId: DEMO_ORG.id,
+        credentialId: "cred_comm",
+        generation: 1,
+        fingerprint: "fixture-hash",
+        secretPrefix: "gb_emp_fixture",
+        binding: { status: "linked", employeeId: "emp_comm", orgId: DEMO_ORG.id, credentialGeneration: 1 },
+      } as never
+    );
+    expect(res.isError ?? false).toBe(false);
+    expectNoKeyword(res.structuredContent, KEYWORDS);
+    expectNoKeyword(JSON.parse(res.content[0].text), KEYWORDS);
+  });
+});
+
 describe("approver card + audit keep the matched keywords", () => {
   test("stored approval metadata / card line show the keyword; audit row keeps matchedTopics", async () => {
     const r = await invoke(body(`${UNMAPPED} の件です`));

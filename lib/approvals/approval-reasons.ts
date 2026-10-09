@@ -16,6 +16,7 @@
  * the AI asked for can only raise severity (information-class.ts), and the
  * topic gate / always_human / limits are evaluated elsewhere, unchanged.
  */
+import { categorizeMatchedTopics } from "@/lib/approvals/sensitive-topic-categories";
 import type { ActionLimitResult } from "@/lib/action-gate";
 import { isApprovalReasonsEnabled } from "@/lib/feature-flags";
 import type { EgressVerdict, InformationClass } from "@/lib/types";
@@ -94,6 +95,34 @@ const ALWAYS_HUMAN_LABEL_JA: Record<AlwaysHumanSource, string> = {
   tool_setting: "ツール設定",
   tool_default: "ツールの既定",
 };
+
+/**
+ * What the AI may see (木村 2026-10-09 23:05-23:10): topic_gate carries category names only,
+ * never the matched keywords. The full ApprovalReason (with topics) stays in the approval
+ * metadata for the approver card.
+ */
+export type AiApprovalReason =
+  | Exclude<ApprovalReason, { code: "topic_gate" }>
+  | { code: "topic_gate"; categories: string[]; scope: "main_board" | "any_channel"; messageJa: string };
+
+export function topicGateMessageJaForAi(categories: string[]): string {
+  return categories.length > 0
+    ? `機密話題（分類: ${categories.join(", ")}）を含むため承認が必要です。`
+    : "機密話題を含むため承認が必要です。";
+}
+
+export function toAiFacingApprovalReasons(reasons: ApprovalReason[]): AiApprovalReason[] {
+  return reasons.map((reason): AiApprovalReason => {
+    if (reason.code !== "topic_gate") return reason;
+    const categories = categorizeMatchedTopics(reason.topics);
+    return {
+      code: "topic_gate",
+      categories,
+      scope: reason.scope,
+      messageJa: `${topicGateMessageJaForAi(categories)}言い換えずに承認を待ってください。`,
+    };
+  });
+}
 
 /** All reasons, fixed order: topic_gate, egress, always_human, action_limit, spend, mail_policy. */
 export function buildApprovalReasons(input: BuildApprovalReasonsInput): ApprovalReason[] {
