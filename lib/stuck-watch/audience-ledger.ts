@@ -114,9 +114,9 @@ export async function supplementInvokeBodyFromLedger(
   if (!conv.email && args.to) {
     conv.email = String(args.to);
   }
-  if (!conv.orgId) {
-    conv.orgId = orgId;
-  }
+  // Tenant isolation: ALWAYS the authenticated org, even when the body (or a
+  // pre-fix snapshot) already carries one.
+  conv.orgId = orgId;
   if (!conv.surface) {
     if (conv.slackChannelId || conv.slackUserId) conv.surface = "slack";
     else if (conv.email) conv.surface = "mail";
@@ -124,14 +124,8 @@ export async function supplementInvokeBodyFromLedger(
     else if (conv.lineId) conv.surface = "line";
   }
 
-  const rule = await getOrgInternalAudienceRule(orgId);
-  if (
-    !conv.slackTeamId &&
-    rule.autoSlackTeamInternal &&
-    rule.slackTeamIds.length === 1
-  ) {
-    conv.slackTeamId = rule.slackTeamIds[0];
-  }
+  // No slackTeamId inference: a speaker's team only counts when Slack itself
+  // reports it (resolveAudience → users.info with the org's own token).
 
   const channelId = conv.slackChannelId;
   if (channelId && conv.surface === "slack") {

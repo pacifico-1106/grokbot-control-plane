@@ -37,6 +37,7 @@ mock.module("@/lib/mode", () => ({
 
 mock.module("@/lib/feature-flags", () => ({
   isSlackApprovalStrict: () => false,
+  isApprovalReasonsEnabled: () => false,
 }));
 
 mock.module("@/lib/slack/channel-validation", () => ({

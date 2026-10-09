@@ -88,10 +88,24 @@ export type SlackStatusResult = {
   dashboardBotTokenPathJa: string;
 };
 
-export function slackAuthorizeUrlTemplate(employeeId?: string): string {
-  const origin = getAppOrigin();
-  const id = (employeeId || "").trim() || "{employeeId}";
-  return `${origin}/api/slack/oauth/start?employeeId=${encodeURIComponent(id)}`;
+/**
+ * Where a human connects an employee's Slack: the admin-issued single-use
+ * re-authorize link (SLACK_AUTHORIZE_LINK_PATH in lib/slack/authorize-link.ts).
+ * {token} arrives in the approval-app DM after setup.slackAuthorizeLink.issue
+ * (one human approval). Never the session start route /api/slack/oauth/start,
+ * which requires hire_issue_credentials (#284).
+ */
+export function slackAuthorizeUrlTemplate(): string {
+  return `${getAppOrigin()}/api/slack/oauth/link?t={token}`;
+}
+
+/** Next step for "this employee's Slack must be (re)connected". */
+export function slackAuthorizeLinkIssueStepJa(employeeId: string): string {
+  return (
+    `Admin MCP の setup.slackAuthorizeLink.issue（employeeId: ${employeeId}）で再認可リンクを発行してください` +
+    `（人の承認 1 回 → 承認アプリの DM でリンクが届く → 社員本人の Slack で開いて「許可する（Authorize）」）。` +
+    `SLACK_AUTHORIZE_LINK_ENABLED が OFF の間は、社員証画面で「雇う／社員証発行」の権限を持つ人が Slack 連携をタップします。`
+  );
 }
 
 export async function slackAuthTest(token: string): Promise<SlackAuthTestResult> {
@@ -167,8 +181,8 @@ export function computeSlackStatusNextStepJa(input: SlackStatusNextStepInput): s
     const first = needsAuthorize[0];
     return (
       `Path B（posting_as: user / 人↔人 DM）には社員の Slack 連携が必要です。` +
-      `社員「${first.displayName}」（employeeId: ${first.employeeId}）の社員証画面から Authorize をタップしてください（人間がブラウザで実行）。` +
-      `URL テンプレート: ${first.authorizeUrlTemplate || slackAuthorizeUrlTemplate(first.employeeId)}`
+      `社員「${first.displayName}」（employeeId: ${first.employeeId}）: ${slackAuthorizeLinkIssueStepJa(first.employeeId)}` +
+      `URL テンプレート: ${first.authorizeUrlTemplate || slackAuthorizeUrlTemplate()}`
     );
   }
 
@@ -177,8 +191,8 @@ export function computeSlackStatusNextStepJa(input: SlackStatusNextStepInput): s
     const first = needsReoauth[0];
     return (
       `Path B ファイル添付には User Token の files:write が必要です。` +
-      `Slack API → User Token Scopes に files:write を追加後、社員「${first.displayName}」（employeeId: ${first.employeeId}）が社員証から Slack 再連携（Authorize）してください。` +
-      `URL テンプレート: ${first.authorizeUrlTemplate || slackAuthorizeUrlTemplate(first.employeeId)}`
+      `Slack API → User Token Scopes に files:write を追加後、社員「${first.displayName}」（employeeId: ${first.employeeId}）を再連携します。${slackAuthorizeLinkIssueStepJa(first.employeeId)}` +
+      `URL テンプレート: ${first.authorizeUrlTemplate || slackAuthorizeUrlTemplate()}`
     );
   }
 
@@ -309,7 +323,7 @@ export async function diagnoseSlackStatus(orgId: string): Promise<SlackStatusRes
     let fileUploadReady: boolean | null = null;
     let needsReoauthForFilesWrite = false;
     const authorizeUrlTemplate =
-      needsPathB ? slackAuthorizeUrlTemplate(emp.id) : null;
+      needsPathB ? slackAuthorizeUrlTemplate() : null;
 
     if (needsPathB) {
       if (!hasLinkedIdentity) {
