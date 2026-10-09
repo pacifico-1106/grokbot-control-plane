@@ -37,15 +37,14 @@ describe("setup-links", () => {
       expect(result.url).toContain("/app/employees/emp_sales/connector");
     });
 
-    test("mints a valid setup link for slack_authorize", () => {
-      const result = mintSetupLink({
-        kind: "slack_authorize",
-        orgId: "org_sample_shoji",
-        employeeId: "emp_sales",
-      });
-
-      expect(result.ok).toBe(true);
-      expect(result.url).toContain("/api/slack/oauth/link");
+    test("refuses slack_authorize (#284 follow-up: issued only by setup.slackAuthorizeLink.issue)", () => {
+      expect(() =>
+        mintSetupLink({
+          kind: "slack_authorize",
+          orgId: "org_sample_shoji",
+          employeeId: "emp_sales",
+        })
+      ).toThrow("slack_authorize_requires_issue");
     });
 
     test("mints a valid setup link for workspace_bot_install", () => {
@@ -193,7 +192,7 @@ describe("setup-links", () => {
   describe("buildSetupLinkResponse", () => {
     test("builds response with URL and nextStepJa", () => {
       const link = mintSetupLink({
-        kind: "slack_authorize",
+        kind: "workspace_bot_install",
         orgId: "org_sample_shoji",
       });
 
@@ -201,7 +200,7 @@ describe("setup-links", () => {
       expect(response.setupUrl).toBe(link.url);
       expect(response.expiresAt).toBe(link.expiresAt);
       expect(response.nextStepJa).toContain("Slack");
-      expect(response.nextStepJa).toContain("連携");
+      expect(response.nextStepJa).toContain("インストール");
     });
   });
 
@@ -237,15 +236,26 @@ describe("setup-links", () => {
     });
 
     test("builds guidance with minted link", () => {
+      const guidance = buildSetupGuidance("employee_connector_oauth", {
+        mintLink: true,
+        orgId: "org_sample_shoji",
+        employeeId: "emp_sales",
+      });
+      expect(guidance.kind).toBe("employee_connector_oauth");
+      expect(guidance.setupUrl).toBeTruthy();
+      expect(guidance.setupUrl).toContain("/app/employees/emp_sales/connector");
+      expect(guidance.expiresAt).toBeTruthy();
+    });
+
+    test("slack_authorize guidance never carries a URL (single-use link is issued with setup.slackAuthorizeLink.issue)", () => {
       const guidance = buildSetupGuidance("slack_authorize", {
         mintLink: true,
         orgId: "org_sample_shoji",
         employeeId: "emp_sales",
       });
       expect(guidance.kind).toBe("slack_authorize");
-      expect(guidance.setupUrl).toBeTruthy();
-      expect(guidance.setupUrl).toContain("/api/slack/oauth/link");
-      expect(guidance.expiresAt).toBeTruthy();
+      expect(guidance.setupUrl).toBeUndefined();
+      expect(guidance.nextStepJa).toContain("setup.slackAuthorizeLink.issue");
     });
 
     test("does not mint without orgId", () => {

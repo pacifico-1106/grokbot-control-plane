@@ -19,13 +19,14 @@ const START = "/api/slack/oauth/start";
 const START_LITERAL = /["'`][^"'`\n]*\/api\/slack\/oauth\/start/;
 
 describe("setup link kind slack_authorize", () => {
-  test("points at the re-authorize link path, not the session start route", () => {
-    const link = mintSetupLink({ kind: "slack_authorize", orgId: "org_1", employeeId: "emp_1" });
-    expect(new URL(link.url).pathname).toBe(SLACK_AUTHORIZE_LINK_PATH);
-    expect(link.url).not.toContain(START);
+  test("is never minted as a URL (neither the start route nor a token-less link); guidance names the issue tool", () => {
+    // #284 follow-up: the link route only accepts tokens issued by
+    // setup.slackAuthorizeLink.issue, so the setup-link minter refuses this kind.
+    expect(() => mintSetupLink({ kind: "slack_authorize", orgId: "org_1", employeeId: "emp_1" })).toThrow();
     const guidance = buildSetupGuidance("slack_authorize", { mintLink: true, orgId: "org_1", employeeId: "emp_1" });
-    expect(guidance.setupUrl).toContain(SLACK_AUTHORIZE_LINK_PATH);
-    expect(guidance.setupUrl).not.toContain(START);
+    expect(guidance.setupUrl).toBeUndefined();
+    expect(guidance.nextStepJa).not.toContain(START);
+    expect(guidance.nextStepJa).toContain(SLACK_AUTHORIZE_LINK_PATH);
   });
 
   test("next step says how the single-use link is issued (admin MCP, human approval)", () => {
