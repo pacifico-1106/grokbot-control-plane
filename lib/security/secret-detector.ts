@@ -78,7 +78,10 @@ const SECRET_PATTERNS: SecretPattern[] = [
   { name: 'aws_secret_key', pattern: /[A-Za-z0-9\/+]{40}/, minLength: 40 },
   { name: 'google_api_key', pattern: /AIza[A-Za-z0-9_\-]{35}/i },
   { name: 'bearer_token', pattern: /Bearer\s+[A-Za-z0-9_\-.]{20,}/i },
-  { name: 'jwt_token', pattern: /eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/i },
+  // Content is scanned by detectJwt (linear, same matches as the old
+  // /eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/i, which was quadratic:
+  // 1M chars of "eyJ" took ~117 s). This bounded form is only used for key names.
+  { name: 'jwt_token', pattern: /(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/i },
   // At least one separator (':' '=' quote or space): 'refresh_token_rotation_…' / 'apiKeyRotation…' are identifiers.
   { name: 'refresh_token', pattern: /refresh[_-]?token['":\s=]+[A-Za-z0-9_\-\.]{20,}/i },
   { name: 'api_key_inline', pattern: /api[_-]?key['":\s=]+[A-Za-z0-9_\-]{20,}/i },
@@ -199,12 +202,18 @@ function isAllowlisted(value: string): boolean {
  * signed tokens in their query and are allowed in chat (locked rule 2026-09-22).
  * Named patterns (xox*, sk-, AKIA/ASIA, gb_emp_ …) and aws_secret_key DO scan them.
  */
+const BARE_URL = /^https?:\/\/\S+$/i;
 function isBareUrl(value: string): boolean {
-  return /^https?:\/\/\S+$/i.test(value.trim());
+  return BARE_URL.test(value.trim());
 }
 
-/** host + path of a URL (scheme optional); group 1 = the path. Query / fragment excluded. */
-const URL_PATH_SPAN = /(?:https?:\/\/)?(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,}(?::\d+)?(\/[^\s?#"'<>]*)/g;
+/**
+ * host + path of a URL (scheme optional); group 1 = the path. Query / fragment excluded.
+ * Labels are bounded (DNS: ≤63 chars, ≤10 labels, TLD ≤24): the unbounded
+ * `[A-Za-z0-9-]+\.` backtracked quadratically over long dot-less runs
+ * (200k chars took ~15 s; 2026-10-09 #281 follow-up).
+ */
+const URL_PATH_SPAN = /(?:https?:\/\/)?(?:[A-Za-z0-9-]{1,63}\.){1,10}[A-Za-z]{2,24}(?::\d{1,5})?(\/[^\s?#"'<>]*)/g;
 
 /**
  * For the generic length-only patterns: inside a URL path '/' is a separator,
@@ -238,6 +247,21 @@ export const AWS_KEYWORD_WINDOW_BEFORE = 100;
 export const AWS_KEYWORD_WINDOW_AFTER = 30;
 const AWS_SECRET_CANDIDATE = /(?<![A-Za-z0-9\/+_-])[A-Za-z0-9\/+]{40}(?![A-Za-z0-9\/+=_-])/g;
 const AWS_SECRET_KEYWORD = /aws[\s_.-]*secret|secret[\s_.-]*access[\s_.-]*key/i;
+/**
+ * #281 follow-up item 2 (木村 2026-10-05): weaker context words. `secret: <key>`
+ * and `AWSのシークレットキーは <key>` must block. They count for a candidate
+ * that is NOT part of a URL host/path (a 40-char run inside a link next to
+ * the word 秘密 is a document path, not a key).
+ */
+// 21:53 review (木村 2026-10-09): `secret` anywhere counts again — plural
+// (`secrets`, `SECRETS`), glued (`secretkey`, `topsecret`), acronym + Secret
+// (`APISecret`, `JWTSecret`), `client_secret`, `clientSecret`. Only plain
+// English words stay out: secretary / secretaries / secretariat (`secretar…`),
+// secrete(s|d) / secreting / secretion(s), secretly, secretive — matched
+// case-sensitively in lower / Capitalized / UPPER form, so a camelCase hump
+// (`secretArn`, `secretEnv`) still counts. Linear (fixed-length lookaheads).
+const AWS_SECRET_CONTEXT_WEAK =
+  /[Ss]ecret(?!ar|e[ds]?(?![a-z])|ing|ions?|ly|ive)|SECRET(?!AR|E[DS]?(?![A-Z])|ING|IONS?|LY|IVE)|シークレット|秘密|アクセスキー/;
 const AWS_ACCESS_KEY_ID = /(?<![A-Za-z0-9])(?:AKIA|ASIA)[0-9A-Z]{16}(?![A-Za-z0-9])/;
 
 function decodeKeyChars(value: string): string {
@@ -249,7 +273,20 @@ function isMixedCharset(value: string): boolean {
 }
 
 export function hasAwsAccessKeyId(value: string): boolean {
-  return AWS_ACCESS_KEY_ID.test(decodeKeyChars(value));
+  if (value.length > MAX_SCAN_LENGTH) return false;
+  if (AWS_ACCESS_KEY_ID.test(decodeKeyChars(value))) return true;
+  const normalized = normalizeForScan(value);
+  return normalized !== value && AWS_ACCESS_KEY_ID.test(normalized);
+}
+
+/** [start, end) spans of URL host + path in `text` (for the weak-keyword exclusion). */
+function urlHostPathSpans(text: string): Array<[number, number]> {
+  const spans: Array<[number, number]> = [];
+  for (const m of text.matchAll(URL_PATH_SPAN)) {
+    const start = m.index ?? 0;
+    spans.push([start, start + m[0].length]);
+  }
+  return spans;
 }
 
 function detectAwsSecretKey(
@@ -258,16 +295,23 @@ function detectAwsSecretKey(
 ): { kind: 'block' | 'suspect'; length: number } | null {
   const text = decodeKeyChars(value);
   let suspect: { kind: 'suspect'; length: number } | null = null;
-  const pathHasKeyword = AWS_SECRET_KEYWORD.test(ctx.fieldPath ?? '');
+  const fieldPathText = ctx.fieldPath ?? '';
+  const pathHasKeyword = AWS_SECRET_KEYWORD.test(fieldPathText) || AWS_SECRET_CONTEXT_WEAK.test(fieldPathText);
   const idInPayload = ctx.hasAwsAccessKeyId === true || AWS_ACCESS_KEY_ID.test(text);
+  let urlSpans: Array<[number, number]> | null = null;
   for (const m of text.matchAll(AWS_SECRET_CANDIDATE)) {
     const candidate = m[0];
     if (!isMixedCharset(candidate)) continue;
     const start = m.index ?? 0;
+    const end = start + candidate.length;
     const before = text.slice(Math.max(0, start - AWS_KEYWORD_WINDOW_BEFORE), start);
-    const after = text.slice(start + candidate.length, start + candidate.length + AWS_KEYWORD_WINDOW_AFTER);
+    const after = text.slice(end, end + AWS_KEYWORD_WINDOW_AFTER);
     if (idInPayload || pathHasKeyword || AWS_SECRET_KEYWORD.test(before) || AWS_SECRET_KEYWORD.test(after)) {
       return { kind: 'block', length: candidate.length };
+    }
+    if (AWS_SECRET_CONTEXT_WEAK.test(before) || AWS_SECRET_CONTEXT_WEAK.test(after)) {
+      urlSpans ??= urlHostPathSpans(text);
+      if (!urlSpans.some(([a, b]) => a <= start && end <= b)) return { kind: 'block', length: candidate.length };
     }
     suspect = { kind: 'suspect', length: candidate.length };
   }
@@ -275,6 +319,47 @@ function detectAwsSecretKey(
 }
 
 // ---------------------------------------------------------------------------
+
+// jwt_token (2026-10-09): exact meaning of the old regex, in one linear pass.
+// A match = runs R1 '.' R2 '.' R3 of [A-Za-z0-9_-] where R1 contains "eyJ"
+// with at least one char after it, R2 starts with "eyJ" and has at least one
+// more char, R3 is non-empty (case-insensitive). Each run is visited once.
+const JWT_RUN = /[A-Za-z0-9_-]+/g;
+
+function detectJwt(value: string): number | null {
+  if (!/eyj/i.test(value)) return null;
+  let r1: [number, number] | null = null;
+  let r2: [number, number] | null = null;
+  for (const m of value.matchAll(JWT_RUN)) {
+    const r3: [number, number] = [m.index ?? 0, (m.index ?? 0) + m[0].length];
+    if (r1 && r2 && r2[0] === r1[1] + 1 && r3[0] === r2[1] + 1 && value[r1[1]] === '.' && value[r2[1]] === '.') {
+      const idx = value.slice(r1[0], r1[1]).toLowerCase().indexOf('eyj');
+      const r2Ok = r2[1] - r2[0] >= 4 && value.slice(r2[0], r2[0] + 3).toLowerCase() === 'eyj';
+      if (idx >= 0 && r1[0] + idx + 3 < r1[1] && r2Ok) {
+        return (r1[1] - r1[0] - idx) + 1 + (r2[1] - r2[0]) + 1 + (r3[1] - r3[0]);
+      }
+    }
+    r1 = r2;
+    r2 = r3;
+  }
+  return null;
+}
+
+/**
+ * A run of [A-Za-z0-9_-] containing "eyJ" followed by at least `minTail`
+ * chars of the run, then '.', i.e. /eyJ[A-Za-z0-9_-]{minTail,}\./i — linear.
+ */
+export function hasJwtHeaderSegment(value: string, minTail = 10): boolean {
+  if (!/eyj/i.test(value)) return false;
+  for (const m of value.matchAll(JWT_RUN)) {
+    const start = m.index ?? 0;
+    const end = start + m[0].length;
+    if (value[end] !== '.') continue;
+    const idx = m[0].toLowerCase().indexOf('eyj');
+    if (idx >= 0 && m[0].length - idx - 3 >= minTail) return true;
+  }
+  return false;
+}
 
 type StringAtPath = { path: string; value: string };
 
@@ -286,7 +371,7 @@ function safeKeySegment(key: string): string {
   return key;
 }
 
-function extractAllStrings(obj: unknown, path: string = '', depth: number = 0, maxDepth: number = 10): StringAtPath[] {
+function extractAllStrings(obj: unknown, path: string = '', depth: number = 0, maxDepth: number = MAX_SCAN_DEPTH): StringAtPath[] {
   if (depth > maxDepth) return [];
   if (typeof obj === 'string') return [{ path, value: obj }];
   if (Array.isArray(obj)) {
@@ -325,9 +410,81 @@ function cardLikeMatch(value: string): { patternName: string; length: number } |
   return null;
 }
 
+// ---------------------------------------------------------------------------
+// #281 follow-up item 1 (木村 2026-10-05). `%20sk-…`, `token%3Dsk-…`, `\nsk-…`
+// (a literal backslash-n) and `id%3DAKIA…` slipped past the left boundary of
+// the named patterns. Every value is now scanned twice:
+// - raw: all patterns, exactly as before;
+// - normalized (only when it differs): literal `\n` `\t` `\r` → space and
+//   JSON `\/` → `/`; %XX percent-decoded over the whole value (UTF-8, at most
+//   2 passes so `%253D` is caught; malformed or truncated sequences become
+//   U+FFFD and never throw); escapes replaced again. Named patterns and the
+//   AWS rule run on this form. The generic length-only patterns
+//   (base64/hex/card) do not, so decoding a long signed setup-link token never
+//   creates a new false positive.
+// Linear time (one regex pass per step). Values longer than MAX_SCAN_LENGTH
+// are refused without scanning (fail-closed).
+// ---------------------------------------------------------------------------
+// 2026-10-09 (木村 #285 follow-up 1): 1M → 200k per string, plus whole-payload
+// caps, so the worst case stays far inside the function timeout (measured
+// numbers in the PR). Slack messages are ≤40k chars; nothing legitimate sends
+// a 200k-char string through these paths. Over a cap → refused without scanning.
+export const MAX_SCAN_LENGTH = 200_000;
+/** Sum of the lengths of every string value and object key in one payload. */
+export const MAX_PAYLOAD_SCAN_CHARS = 1_000_000;
+/** Number of string values + object keys in one payload (per-string overhead). */
+export const MAX_PAYLOAD_SCAN_STRINGS = 20_000;
+const PERCENT_RUN = /(?:%[0-9A-Fa-f]{2})+/g;
+const UTF8 = new TextDecoder('utf-8', { fatal: false, ignoreBOM: true });
+
+function replaceLiteralEscapes(value: string): string {
+  return value.replace(/\\[ntr]/g, ' ').replace(/\\\//g, '/');
+}
+
+function percentDecodeOnce(value: string): string {
+  return value.replace(PERCENT_RUN, (run: string) => {
+    const bytes = new Uint8Array(run.length / 3);
+    for (let i = 0; i < bytes.length; i++) bytes[i] = parseInt(run.slice(i * 3 + 1, i * 3 + 3), 16);
+    return UTF8.decode(bytes);
+  });
+}
+
+/** Normalized form for the second scan. Returns `value` itself when nothing changes. */
+export function normalizeForScan(value: string): string {
+  if (!value.includes('%') && !value.includes('\\')) return value;
+  let text = replaceLiteralEscapes(value);
+  for (let pass = 0; pass < 2 && text.includes('%'); pass++) {
+    const decoded = percentDecodeOnce(text);
+    if (decoded === text) break;
+    text = decoded;
+  }
+  text = replaceLiteralEscapes(text);
+  return text === value ? value : text;
+}
+
 export function detectSecretInString(value: string, ctx: SecretScanContext = {}): SecretDetectionResult {
-  if (isAllowlisted(value)) return { ok: true };
   const fieldPath = (ctx.fieldPath ?? '').slice(0, 200);
+  if (value.length > MAX_SCAN_LENGTH) {
+    return {
+      ...blockedResult('value_too_long_to_scan', fieldPath, value.length),
+      messageJa: `値が長すぎるため（上限 ${MAX_SCAN_LENGTH} 文字）秘密情報の検査ができません。分割するか短くして再送してください。`,
+    };
+  }
+  if (isAllowlisted(value)) return { ok: true };
+  const raw = scanString(value, ctx, fieldPath, true);
+  if (!raw.ok) return raw;
+  let suspected = raw.suspected ?? [];
+  const normalized = normalizeForScan(value);
+  if (normalized !== value) {
+    const decoded = scanString(normalized, ctx, fieldPath, false);
+    if (!decoded.ok) return decoded;
+    if (suspected.length === 0 && decoded.suspected) suspected = decoded.suspected;
+  }
+  return suspected.length > 0 ? { ok: true, suspected } : { ok: true };
+}
+
+/** One scan. `full` = raw value (all patterns); otherwise named patterns + AWS rule only. */
+function scanString(value: string, ctx: SecretScanContext, fieldPath: string, full: boolean): SecretDetectionResult {
   const bareUrl = isBareUrl(value);
   let genericText: string | null = null;
   const suspected: SecretFinding[] = [];
@@ -339,8 +496,13 @@ export function detectSecretInString(value: string, ctx: SecretScanContext = {})
       if (aws?.kind === 'suspect') suspected.push({ pattern: name, fieldPath, length: aws.length });
       continue;
     }
+    if (name === 'jwt_token') {
+      const jwtLength = detectJwt(value);
+      if (jwtLength !== null) return blockedResult(name, fieldPath, jwtLength);
+      continue;
+    }
     const isGeneric = name === 'base64_long_secret' || name === 'hex_long_secret';
-    if (isGeneric && bareUrl) continue;
+    if (isGeneric && (bareUrl || !full)) continue;
     if (isGeneric && genericText === null) genericText = splitUrlPaths(value);
     const match = (isGeneric ? (genericText as string) : value).match(pattern);
     if (match) {
@@ -354,7 +516,7 @@ export function detectSecretInString(value: string, ctx: SecretScanContext = {})
     }
   }
 
-  if (!bareUrl) {
+  if (full && !bareUrl) {
     const card = cardLikeMatch(value);
     if (card) {
       return {
@@ -373,7 +535,75 @@ export function detectSecretInString(value: string, ctx: SecretScanContext = {})
   return suspected.length > 0 ? { ok: true, suspected } : { ok: true };
 }
 
+type PayloadSize = { chars: number; strings: number; longest: number; tooDeep: boolean };
+
+/**
+ * 21:53 review (木村 2026-10-09): the scan reads MAX_SCAN_DEPTH levels (root = 0).
+ * Anything deeper used to be skipped silently (11 levels carried an xoxb token
+ * and a 5M-char value past every check into the approval snapshot). Any value
+ * below that depth now refuses the whole payload, unscanned, like the size caps.
+ * No current caller nests deeper than 4 (gateway / MCP / admin / config-change).
+ */
+export const MAX_SCAN_DEPTH = 10;
+
+/** Counts string values + keys (same depth as the scan); stops as soon as a cap is passed or a value is too deep. */
+function measurePayload(obj: unknown, size: PayloadSize, depth: number, maxDepth: number): boolean {
+  if (depth > maxDepth) {
+    if (obj === undefined) return true;
+    size.tooDeep = true;
+    return false;
+  }
+  if (typeof obj === 'string') {
+    size.chars += obj.length;
+    size.strings += 1;
+    if (obj.length > size.longest) size.longest = obj.length;
+  } else if (Array.isArray(obj)) {
+    for (const item of obj) if (!measurePayload(item, size, depth + 1, maxDepth)) return false;
+  } else if (obj && typeof obj === 'object') {
+    for (const key of Object.keys(obj)) {
+      size.chars += key.length;
+      size.strings += 1;
+      if (size.chars > MAX_PAYLOAD_SCAN_CHARS || size.strings > MAX_PAYLOAD_SCAN_STRINGS) return false;
+      if (!measurePayload((obj as Record<string, unknown>)[key], size, depth + 1, maxDepth)) return false;
+    }
+  }
+  return size.chars <= MAX_PAYLOAD_SCAN_CHARS && size.strings <= MAX_PAYLOAD_SCAN_STRINGS;
+}
+
+/**
+ * Whole-payload caps (fail-closed). Returns the refusal, or null when the
+ * payload is small enough to scan. No value characters; fieldPath is empty.
+ * `perString`: also refuse a single string over MAX_SCAN_LENGTH (for callers
+ * that check raw input before parsing it; detectSecretInPayload reports that
+ * case per field instead).
+ */
+export function checkPayloadScanLimits(
+  payload: unknown,
+  options: { perString?: boolean } = {}
+): (SecretDetectionResult & { ok: false }) | null {
+  const size: PayloadSize = { chars: 0, strings: 0, longest: 0, tooDeep: false };
+  if (measurePayload(payload, size, 0, MAX_SCAN_DEPTH)) {
+    if (!options.perString || size.longest <= MAX_SCAN_LENGTH) return null;
+    return {
+      ...blockedResult('value_too_long_to_scan', '', size.longest),
+      messageJa: `値が長すぎるため（上限 ${MAX_SCAN_LENGTH} 文字）秘密情報の検査ができません。分割するか短くして再送してください。`,
+    };
+  }
+  if (size.tooDeep) {
+    return {
+      ...blockedResult('payload_too_deep_to_scan', '', 0),
+      messageJa: `入れ子が深すぎるため（上限 ${MAX_SCAN_DEPTH} 階層）秘密情報の検査ができません。構造を浅くして再送してください。`,
+    };
+  }
+  return {
+    ...blockedResult('payload_too_large_to_scan', '', size.chars),
+    messageJa: `内容が大きすぎるため（上限 合計 ${MAX_PAYLOAD_SCAN_CHARS} 文字・${MAX_PAYLOAD_SCAN_STRINGS} 項目）秘密情報の検査ができません。分割するか短くして再送してください。`,
+  };
+}
+
 export function detectSecretInPayload(payload: unknown): SecretDetectionResult {
+  const tooLarge = checkPayloadScanLimits(payload);
+  if (tooLarge) return tooLarge;
   const strings = extractAllStrings(payload);
   const idInPayload = strings.some(({ value }) => hasAwsAccessKeyId(value));
   const suspected: SecretFinding[] = [];
@@ -482,3 +712,23 @@ export function buildCardDetectionErrorResponse(detection: SecretDetectionResult
     nextStepJa: CARD_SETUP_NEXTSTEP_JA,
   };
 }
+
+/**
+ * Tests only: every regex the detector runs, by name (adversarial timing tests
+ * fail when a pattern is added without adversarial seeds).
+ */
+export const SECRET_DETECTOR_REGEXES_FOR_TEST: ReadonlyArray<{ name: string; pattern: RegExp }> = [
+  ...SECRET_PATTERNS.map(({ name, pattern }) => ({ name, pattern })),
+  ...CARD_LIKE_PATTERNS.map(({ name, pattern }) => ({ name, pattern })),
+  { name: 'jwt_run', pattern: JWT_RUN },
+  { name: 'url_path_span', pattern: URL_PATH_SPAN },
+  { name: 'aws_secret_candidate', pattern: AWS_SECRET_CANDIDATE },
+  { name: 'aws_secret_keyword', pattern: AWS_SECRET_KEYWORD },
+  { name: 'aws_secret_context_weak', pattern: AWS_SECRET_CONTEXT_WEAK },
+  { name: 'aws_access_key_id', pattern: AWS_ACCESS_KEY_ID },
+  { name: 'percent_run', pattern: PERCENT_RUN },
+  { name: 'allowlist_email', pattern: ALLOWLIST_PATTERNS[0] },
+  { name: 'allowlist_iso_date', pattern: ALLOWLIST_PATTERNS[1] },
+  { name: 'allowlist_short_upper', pattern: ALLOWLIST_PATTERNS[2] },
+  { name: 'bare_url', pattern: BARE_URL },
+];

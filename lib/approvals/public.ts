@@ -1,4 +1,4 @@
-import { cardApprovalReasonsLine } from "@/lib/approvals/approval-reasons";
+import { cardApprovalReasonsLine, cardDetectedTopicsLine } from "@/lib/approvals/approval-reasons";
 import type { ApprovalRequest } from "@/lib/types";
 import {
   readCardAttachment,
@@ -17,6 +17,8 @@ export type PublicApproval = ApprovalRequest & {
   cardAttachment: CardAttachment | null;
   /** 木村 B: the same 「承認が必要な理由」 line as Slack / LINE / Telegram; null when APPROVAL_REASONS_ENABLED is OFF. */
   cardReasons: string | null;
+  /** 木村 R1: 「検出された話題: …」 from metadata.topicGate.matchedTopics, regardless of the flag; null when none. */
+  cardTopics: string | null;
 };
 
 /** Browser DTO only. Internal fulfillment retains its private execution inputs. */
@@ -29,5 +31,6 @@ export function publicApproval(approval: ApprovalRequest): PublicApproval {
     metadata: redactMetadata(approval.metadata) as Record<string, unknown>,
     cardAttachment: readCardAttachment(approval.metadata),
     cardReasons: cardApprovalReasonsLine(approval.metadata, approval.summary),
+    cardTopics: cardDetectedTopicsLine(approval.metadata),
   };
 }
