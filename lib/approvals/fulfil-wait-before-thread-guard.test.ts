@@ -7,12 +7,16 @@
 import { afterAll, beforeAll, expect, mock, test } from "bun:test";
 
 const actualGuard = await import("@/lib/thread-guard/guard");
+// Save the real function BEFORE mocking. After mock.module, the live binding
+// `actualGuard.beginThreadSend` resolves to this mock itself, so calling it
+// recursed forever (the test timed out instead of failing).
+const originalBeginThreadSend = actualGuard.beginThreadSend;
 let beginCalls = 0;
 mock.module("@/lib/thread-guard/guard", () => ({
   ...actualGuard,
-  beginThreadSend: (...args: Parameters<typeof actualGuard.beginThreadSend>) => {
+  beginThreadSend: (...args: Parameters<typeof originalBeginThreadSend>) => {
     beginCalls += 1;
-    return actualGuard.beginThreadSend(...args);
+    return originalBeginThreadSend(...args);
   },
 }));
 
