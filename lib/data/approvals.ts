@@ -796,7 +796,14 @@ export async function listPendingApprovalsForTools(input: {
  * Close an approval WITHOUT sending: pending|approved → superseded|expired.
  * Conditional on the current status (a concurrent approve / fulfill wins), so
  * it never reopens or overrides a decided ticket. Returns the closed row or
- * null when the status had already moved. Metadata gets `closedWithoutSend`.
+ * null when the status had already moved (or the id is not this org's).
+ * The status, resolved_at and `closedWithoutSend` metadata land in ONE write
+ * (木村 #286 pre-flag item 5: two writes left "superseded" with no reason when
+ * the second failed): close_approval_without_send (migration 20261009150000,
+ * jsonb merge in the same UPDATE). Until that migration is applied, one
+ * PostgREST UPDATE carries status + metadata (read-merge-write of the row's
+ * metadata, still conditional on the status). Throws when the write fails —
+ * nothing is changed then.
  */
 export async function closeApprovalWithoutSend(input: {
   approval: Pick<ApprovalRequest, "id" | "orgId">;
@@ -820,24 +827,44 @@ export async function closeApprovalWithoutSend(input: {
   }
   const admin = createSupabaseAdminClient();
   if (!admin) throw new Error("supabase_not_configured");
+  const rpc = await admin.rpc("close_approval_without_send", {
+    p_id: approval.id,
+    p_org: approval.orgId,
+    p_from: [...from],
+    p_to: to,
+    p_patch: input.meta,
+  });
+  if (!rpc.error) return rpc.data ? mapApprovalRow(rpc.data as Record<string, unknown>) : null;
+  if (!isMissingFunctionError(rpc.error)) throw new Error("approval_close_failed");
+  // Before migration 20261009150000: still ONE write (status + metadata together).
+  const read = await admin
+    .from("approval_requests")
+    .select("*")
+    .eq("id", approval.id)
+    .eq("org_id", approval.orgId)
+    .maybeSingle();
+  if (read.error) throw new Error("approval_close_failed");
+  if (!read.data) return null;
+  const currentRow = read.data as Record<string, unknown>;
+  if (!(from as readonly string[]).includes(String(currentRow.status ?? ""))) return null;
+  const currentMeta =
+    currentRow.metadata && typeof currentRow.metadata === "object" && !Array.isArray(currentRow.metadata)
+      ? (currentRow.metadata as Record<string, unknown>)
+      : {};
   const { data, error } = await admin
     .from("approval_requests")
-    .update({ status: to, resolved_at: at })
+    .update({ status: to, resolved_at: at, metadata: { ...currentMeta, closedWithoutSend } })
     .eq("id", approval.id)
     .eq("org_id", approval.orgId)
     .in("status", [...from])
     .select("*")
     .maybeSingle();
   if (error) throw new Error("approval_close_failed");
-  if (!data) return null;
-  const closed = mapApprovalRow(data as Record<string, unknown>);
-  try {
-    const merged = await admin.rpc("merge_approval_metadata", {
-      p_id: approval.id, p_org: approval.orgId, p_patch: { closedWithoutSend },
-    });
-    if (!merged.error && merged.data) return mapApprovalRow(merged.data as Record<string, unknown>);
-  } catch {
-    // Status is already closed; the audit event carries the reason.
-  }
-  return closed;
+  return data ? mapApprovalRow(data as Record<string, unknown>) : null;
+}
+
+function isMissingFunctionError(error: { code?: string; message?: string } | null | undefined): boolean {
+  if (!error) return false;
+  if (error.code === "PGRST202" || error.code === "42883") return true;
+  return /could not find the function|function .* does not exist/i.test(String(error.message ?? ""));
 }

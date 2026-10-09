@@ -2394,7 +2394,11 @@ export async function runGatewayInvoke(
       // Surfaces without a gateway post (LINE / Telegram / mail): the allowed
       // reply is delivered by the caller, so it is recorded here as sent.
       // Thread single-flight: same lease + moved-on check; the allowed reply is
-      // recorded as this employee's latest post (server time) and the lease released.
+      // recorded as this employee's latest post (server time). The caller's
+      // delivery cannot be observed (no receipt), so the lease is HELD until its
+      // TTL rather than released at allowance (木村 #286 pre-flag item 3):
+      // another job reading the thread before the delivery lands gets
+      // thread_busy, not a stale "nothing new".
       const threadSend = await beginThreadSend({
         orgId: orgId || employee.orgId,
         employeeId,
@@ -2429,7 +2433,7 @@ export async function runGatewayInvoke(
         }
         allowed = true;
       } finally {
-        if (threadSend.kind === "held") await threadSend.handle.finish({ sent: allowed });
+        if (threadSend.kind === "held") await threadSend.handle.finish({ sent: allowed }, { holdLease: allowed });
       }
     }
   }

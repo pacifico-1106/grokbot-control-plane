@@ -611,7 +611,8 @@ describe("pre-flag-ON fixes (木村 #286 follow-up)", () => {
       const res = await invoke(dmWithInbound(`${nowS() + 3}.000000`, old()));
       expect(res.httpStatus).toBe(402);
       const approvalId = String(res.body.approvalId);
-      await new Promise((r) => setTimeout(r, 5));
+      // the fake Slack ts has second resolution: post in the next second
+      await new Promise((r) => setTimeout(r, 1005 - (Date.now() % 1000)));
       expect((await invoke(dm("comm.reply", A_TEXT), "emp_comm2")).httpStatus).toBe(200);
       expect((await approveAs(approvalId))?.error).toBe("thread_moved_on");
       expect(posts.length).toBe(1);

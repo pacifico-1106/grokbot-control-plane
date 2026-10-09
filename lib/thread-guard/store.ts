@@ -10,7 +10,10 @@
  *   (µs timestamp + keyed job hash); record_thread_self_post only moves forward.
  *   Only posts made through Staffpass are recorded, so human posts never count.
  *   readLatestAiPostAfter reads every AI employee of the SAME org (木村 #286
- *   decision 4); another org's rows are never read.
+ *   decision 4); another org's rows are never read. job_first_micros
+ *   (migration 20261009150000) = the job's FIRST post in the thread: the
+ *   caller's same-job post is exempt only within SAME_JOB_EXCLUSION_WINDOW_SECONDS
+ *   of it (木村 #286 pre-flag item 2).
  * Every function is scoped by org (and employee for posts): another org's
  * rows are never read, taken over or released. service_role only.
  * Demo mode keeps the same semantics in memory.
@@ -18,7 +21,7 @@
 import { randomUUID } from "node:crypto";
 import { isDemoMode } from "@/lib/mode";
 import { createSupabaseAdminClient } from "@/lib/supabase";
-import { threadGuardNow } from "./config";
+import { SAME_JOB_EXCLUSION_WINDOW_SECONDS, threadGuardNow } from "./config";
 
 export type LeaseResult =
   | { state: "acquired"; leaseId: string; expiresAtMs: number }
@@ -33,7 +36,7 @@ const valid = (orgId: string, threadKey: string) => Boolean(orgId) && HEX64.test
 
 type DemoLease = { leaseId: string; employeeId: string; expiresAtMs: number };
 const demoLeases = new Map<string, DemoLease>();
-const demoPosts = new Map<string, AiPost>();
+const demoPosts = new Map<string, AiPost & { jobFirstMicros: bigint }>();
 type Failure = null | "acquire" | "read" | "release" | "record";
 let failure: Failure = null;
 
@@ -148,47 +151,57 @@ export async function readLastSelfPost(input: {
 
 /**
  * The newest AI post in this thread (any employee of THIS org) strictly after
- * `afterMicros`, skipping the row whose job key is `excludeJobKey` (the
- * caller's own same-job post: a multi-part reply). null = none.
+ * `afterMicros`, skipping the caller's own same-job post (a multi-part reply:
+ * job key `excludeJobKey`) ONLY while `nowMicros` is within
+ * SAME_JOB_EXCLUSION_WINDOW_SECONDS of that job's first post in the thread.
+ * A row without a first-post time (written before 20261009150000) is never
+ * exempt. null = none.
  */
 export async function readLatestAiPostAfter(input: {
   orgId: string;
   threadKey: string;
   afterMicros: bigint;
   excludeJobKey: string | null;
+  /** Defaults to the guard clock. */
+  nowMicros?: bigint;
 }): Promise<{ ok: true; post: AiPost | null } | { ok: false }> {
   if (failure === "read") return { ok: false };
   if (!valid(input.orgId, input.threadKey)) return { ok: false };
-  const keep = (p: AiPost) => p.micros > input.afterMicros && !(input.excludeJobKey && p.jobKey === input.excludeJobKey);
+  const nowMicros = input.nowMicros ?? BigInt(Math.floor(threadGuardNow())) * BigInt(1_000);
+  const windowMicros = BigInt(SAME_JOB_EXCLUSION_WINDOW_SECONDS) * BigInt(1_000_000);
+  const exempt = (p: AiPost, firstMicros: bigint | null) =>
+    Boolean(input.excludeJobKey) &&
+    p.jobKey === input.excludeJobKey &&
+    firstMicros != null &&
+    nowMicros - firstMicros <= windowMicros;
+  const keep = (p: AiPost, firstMicros: bigint | null) => p.micros > input.afterMicros && !exempt(p, firstMicros);
   if (isDemoMode()) {
     const prefix = `${input.orgId}\u0000`;
     const suffix = `\u0000${input.threadKey}`;
     let best: AiPost | null = null;
     for (const [k, p] of demoPosts) {
-      if (!k.startsWith(prefix) || !k.endsWith(suffix) || !keep(p)) continue;
-      if (!best || p.micros > best.micros) best = p;
+      if (!k.startsWith(prefix) || !k.endsWith(suffix) || !keep(p, p.jobFirstMicros)) continue;
+      if (!best || p.micros > best.micros) best = { micros: p.micros, jobKey: p.jobKey, employeeId: p.employeeId };
     }
-    return { ok: true, post: best ? { ...best } : null };
+    return { ok: true, post: best };
   }
   const admin = createSupabaseAdminClient();
   if (!admin) return { ok: false };
   try {
     const { data, error } = await admin
       .from("thread_self_posts")
-      .select("message_micros, job_key, employee_id")
+      .select("message_micros, job_key, employee_id, job_first_micros")
       .eq("org_id", input.orgId)
       .eq("thread_key", input.threadKey)
       .gt("message_micros", input.afterMicros.toString())
       .order("message_micros", { ascending: false })
       .limit(25);
     if (error || !Array.isArray(data)) return { ok: false };
-    for (const raw of data as Array<{ message_micros?: number | string; job_key?: string | null; employee_id?: string }>) {
-      const post: AiPost = {
-        micros: BigInt(String(raw.message_micros ?? "0").split(".")[0] || "0"),
-        jobKey: raw.job_key ?? null,
-        employeeId: String(raw.employee_id ?? ""),
-      };
-      if (keep(post)) return { ok: true, post };
+    const big = (v: unknown) => BigInt(String(v ?? "0").split(".")[0] || "0");
+    for (const raw of data as Array<{ message_micros?: number | string; job_key?: string | null; employee_id?: string; job_first_micros?: number | string | null }>) {
+      const post: AiPost = { micros: big(raw.message_micros), jobKey: raw.job_key ?? null, employeeId: String(raw.employee_id ?? "") };
+      const first = raw.job_first_micros == null ? null : big(raw.job_first_micros);
+      if (keep(post, first)) return { ok: true, post };
     }
     return { ok: true, post: null };
   } catch {
@@ -209,7 +222,12 @@ export async function recordSelfPost(input: {
   if (isDemoMode()) {
     const k = postKey(input.orgId, input.employeeId, input.threadKey);
     const prev = demoPosts.get(k);
-    if (!prev || input.micros > prev.micros) demoPosts.set(k, { micros: input.micros, jobKey: input.jobKey, employeeId: input.employeeId });
+    if (!prev || input.micros > prev.micros) {
+      // Same as record_thread_self_post: the same job keeps its first-post time.
+      const sameJob = Boolean(prev && input.jobKey && prev.jobKey === input.jobKey);
+      const jobFirstMicros = sameJob && prev ? prev.jobFirstMicros : input.micros;
+      demoPosts.set(k, { micros: input.micros, jobKey: input.jobKey, employeeId: input.employeeId, jobFirstMicros });
+    }
     return true;
   }
   const admin = createSupabaseAdminClient();

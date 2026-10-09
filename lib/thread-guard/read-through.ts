@@ -4,8 +4,12 @@
  * otherwise the inbound message the AI was woken by (conversation.ts /
  * messageTs / slackTs). Times are compared in microseconds as bigint so a
  * Slack ts ("1791105000.000001") keeps its exact order.
- * A value further than READ_THROUGH_FUTURE_SKEW_SECONDS in the future is
- * ignored: claiming to have read "the future" cannot switch the check off.
+ * Judged against the RECEIVE time (invoke: now; fulfil: when the approval was
+ * created — never the fulfil-time clock). A value further than
+ * READ_THROUGH_FUTURE_SKEW_SECONDS past it is ignored, and one inside the skew
+ * is capped at the receive time: nobody has read past the moment the request
+ * arrived, so claiming "the future" cannot switch the check off (木村 #286
+ * pre-flag item 1).
  */
 import { READ_THROUGH_FUTURE_SKEW_SECONDS } from "./config";
 
@@ -40,11 +44,13 @@ export function microsToTs(micros: bigint): string {
   return `${sec}.${frac.toString().padStart(6, "0")}`;
 }
 
-function pick(candidates: unknown[], source: ReadThrough["source"], nowMs: number): ReadThrough | null {
-  const limit = (BigInt(Math.floor(nowMs)) + BigInt(READ_THROUGH_FUTURE_SKEW_SECONDS * 1000)) * BigInt(1_000);
+function pick(candidates: unknown[], source: ReadThrough["source"], receivedAtMs: number): ReadThrough | null {
+  const receivedMicros = BigInt(Math.floor(receivedAtMs)) * BigInt(1_000);
+  const limit = receivedMicros + BigInt(READ_THROUGH_FUTURE_SKEW_SECONDS) * BigInt(1_000_000);
   for (const c of candidates) {
-    const micros = parseThreadTimestamp(c);
-    if (micros == null || micros > limit) continue;
+    const parsed = parseThreadTimestamp(c);
+    if (parsed == null || parsed > limit) continue;
+    const micros = parsed > receivedMicros ? receivedMicros : parsed;
     return { micros, ts: microsToTs(micros), source };
   }
   return null;
@@ -52,23 +58,32 @@ function pick(candidates: unknown[], source: ReadThrough["source"], nowMs: numbe
 
 export function readThroughFromBody(
   body: { readThroughTs?: unknown; conversation?: unknown; args?: unknown },
-  nowMs: number = Date.now()
+  receivedAtMs: number = Date.now()
 ): ReadThrough | null {
   const conv = rec(body.conversation);
   const args = rec(body.args);
   return (
-    pick([body.readThroughTs, conv.readThroughTs, args.readThroughTs], "explicit", nowMs) ??
-    pick([conv.ts, conv.messageTs, conv.slackTs, args.ts, args.messageTs], "inbound", nowMs)
+    pick([body.readThroughTs, conv.readThroughTs, args.readThroughTs], "explicit", receivedAtMs) ??
+    pick([conv.ts, conv.messageTs, conv.slackTs, args.ts, args.messageTs], "inbound", receivedAtMs)
   );
 }
 
-/** Fulfil: the read point recorded with the approval (never the re-run request's). */
+/**
+ * Fulfil: the read point recorded with the approval (never the re-run
+ * request's), judged against `receivedAtMs` = when the approval was created.
+ */
 export function readThroughFromSnapshot(
   snapshot: { readThroughTs?: unknown; conversation?: { ts?: unknown } | null },
-  nowMs: number = Date.now()
+  receivedAtMs: number = Date.now()
 ): ReadThrough | null {
   return (
-    pick([snapshot.readThroughTs], "explicit", nowMs) ??
-    pick([snapshot.conversation?.ts], "inbound", nowMs)
+    pick([snapshot.readThroughTs], "explicit", receivedAtMs) ??
+    pick([snapshot.conversation?.ts], "inbound", receivedAtMs)
   );
+}
+
+/** When the approval was received (createdAt); now if it is missing / unparsable. */
+export function approvalReceivedAtMs(createdAt: unknown): number {
+  const ms = typeof createdAt === "string" ? Date.parse(createdAt) : Number.NaN;
+  return Number.isFinite(ms) && ms > 0 ? Math.min(ms, Date.now()) : Date.now();
 }

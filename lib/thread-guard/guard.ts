@@ -18,6 +18,10 @@
  *  then the caller posts and calls handle.finish(): a confirmed post is
  *  recorded as the employee's latest post in the thread, then the lease is
  *  released. Every caller releases in `finally` (finish is idempotent).
+ *  Caller-delivered replies (LINE / mail: the AI delivers after Staffpass
+ *  allows) pass `holdLease`: Staffpass cannot observe that delivery, so the
+ *  lease is kept until its TTL instead of being released at allowance
+ *  (木村 #286 pre-flag item 3; the TTL is the delivery window).
  *
  * Lease-store / key errors FAIL CLOSED (503 thread_guard_unavailable, nothing
  * sent): a post cannot be taken back, the flag exists to stop the double reply,
@@ -80,8 +84,12 @@ export type ThreadGuardStop = {
 };
 
 export type ThreadSendHandle = {
-  /** Record a confirmed post (messageTs = provider ts; absent = server time) and release. Idempotent. */
-  finish(result: { sent: boolean; messageTs?: string | null }): Promise<void>;
+  /**
+   * Record a confirmed post (messageTs = provider ts; absent = server time) and
+   * release. Idempotent. `holdLease` (only with sent): record, but keep the
+   * lease until it expires — the delivery happens outside Staffpass.
+   */
+  finish(result: { sent: boolean; messageTs?: string | null }, options?: { holdLease?: boolean }): Promise<void>;
 };
 
 export type BeginThreadSend =
@@ -179,8 +187,9 @@ export async function beginThreadSend(input: {
     readPointUnknown: !input.readThrough,
     threadKeyRef: keyRef,
     handle: {
-      async finish(result) {
+      async finish(result, options) {
         if (done) return;
+        const hold = Boolean(options?.holdLease && result.sent);
         try {
           if (result.sent) {
             const ts = (result.messageTs ?? "").trim();
@@ -190,7 +199,8 @@ export async function beginThreadSend(input: {
             if (!recorded) console.warn("[thread-guard] self post not recorded (moved_on may miss this post)", { threadKeyRef: keyRef });
           }
         } finally {
-          await release();
+          if (hold) done = true; // expires at its TTL (the caller's delivery window)
+          else await release();
         }
       },
     },

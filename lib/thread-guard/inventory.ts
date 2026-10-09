@@ -15,8 +15,15 @@ export type ThreadGuardCoverage = "leased" | "same_reply" | "no_thread" | "no_li
 
 export const THREAD_GUARD_COVERAGE: Readonly<Record<string, { coverage: ThreadGuardCoverage; where: string }>> = {
   "invoke.slack_post": { coverage: "leased", where: "lib/gateway/invoke.ts (Slack direct post; lease before the dedup claim)" },
-  "invoke.caller_delivered": { coverage: "leased", where: "lib/gateway/invoke.ts (dest なし; allowed = recorded at server time)" },
+  "invoke.caller_delivered": {
+    coverage: "leased",
+    where: "lib/gateway/invoke.ts (dest なし; allowed = recorded at server time; lease held until its TTL — the caller's delivery is not observable)",
+  },
   "fulfill.slack_post": { coverage: "leased", where: "lib/approvals/fulfill.ts (fulfillApprovedInvokeCore; rechecked at fulfil)" },
+  "fulfill.caller_delivered": {
+    coverage: "leased",
+    where: "lib/approvals/fulfill.ts (approved LINE / Telegram / mail reply: guarded before the Slack-only delivery check; stale → superseded)",
+  },
   "invoke.file_upload": { coverage: "same_reply", where: "only reached after the same request's reply passed the guard" },
   "rerun.attachment_upload": { coverage: "same_reply", where: "approved re-run attachment; the approved text was guarded at fulfil" },
   "invoke.sns_publish": { coverage: "no_thread", where: "sns.publish (no thread)" },

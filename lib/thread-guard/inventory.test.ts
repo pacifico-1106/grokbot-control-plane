@@ -17,7 +17,7 @@ describe("thread single-flight coverage", () => {
   // path in BOTH inventories, and the fulfil-time thread guard covers them.
   test("pre-flag 4: approved caller-delivered replies are listed and leased at fulfil", () => {
     const path = POSTING_PATH_INVENTORY.find((p) => p.id === "fulfill.caller_delivered");
-    expect(path?.surfaces).toEqual(expect.arrayContaining(["line", "telegram"]));
+    expect(["line", "telegram"].every((surface) => path?.surfaces.includes(surface))).toBe(true);
     expect(THREAD_GUARD_COVERAGE["fulfill.caller_delivered"]?.coverage).toBe("leased");
     expect(THREAD_GUARD_COVERAGE["invoke.caller_delivered"]?.where).toMatch(/TTL/);
   });
