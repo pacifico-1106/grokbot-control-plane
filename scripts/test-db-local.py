@@ -263,10 +263,45 @@ try:
                  " and to_regclass('public.comm_reply_send_fingerprints') is not null;") == "t"
     sql(thread_sf)  # forward again after rollback
     sql(ROOT / "tests/security/db-thread-single-flight.sql")
+    preflag = ROOT / "supabase/migrations/20261009150000_thread_single_flight_preflag.sql"
+    sql(preflag)
+    sql(preflag)  # re-applicable
+    sql(ROOT / "tests/security/db-thread-single-flight-preflag.sql")
+    sql(ROOT / "tests/security/db-thread-single-flight.sql")  # #286's checks still pass on the new record function
+    tsfp_org = "c7500000-0000-4000-8000-0000000000f1"
+    query(f"insert into public.orgs(id, name) values ('{tsfp_org}', 'thread-sf-preflag-race');"
+          + "".join(f" insert into public.approval_requests(id, org_id, purpose, summary, risk, status, tool) values"
+                    f" ('c7700000-0000-4000-8000-0000000000f{i}', '{tsfp_org}', 'comm.internal', 'race', 'high', 'approved', 'comm.send');"
+                    for i in range(1)))
+    tsfp_commands = [(f"set role service_role; select public.close_approval_without_send('c7700000-0000-4000-8000-0000000000f0',"
+                      f" '{tsfp_org}', array['approved'], '{'superseded' if i % 2 else 'expired'}', '{{\"reason\":\"race{i}\"}}'::jsonb) is not null;")
+                     for i in range(12)]
+    with ThreadPoolExecutor(max_workers=12) as pool:
+        tsfp_closes = list(pool.map(query, tsfp_commands))
+    assert tsfp_closes.count("t") == 1 and tsfp_closes.count("f") == 11, tsfp_closes
+    assert query("select (status = metadata->'closedWithoutSend'->>'status') and resolved_at is not null"
+                 " from public.approval_requests where id = 'c7700000-0000-4000-8000-0000000000f0';") == "t"
+    query(f"delete from public.approval_requests where org_id = '{tsfp_org}'; delete from public.orgs where id = '{tsfp_org}';")
+    sql(ROOT / "supabase/verification/20261009150000_thread_single_flight_preflag_rollback.sql")
+    assert query("select to_regprocedure('public.close_approval_without_send(uuid,uuid,text[],text,jsonb)') is null"
+                 " and to_regclass('public.thread_wake_points') is null"
+                 " and to_regprocedure('public.record_thread_wake_point(uuid,uuid,text,bigint)') is null"
+                 " and to_regprocedure('public.acquire_thread_send_lease(uuid,text,uuid,uuid,integer,text)') is null"
+                 " and to_regprocedure('public.acquire_thread_send_lease(uuid,text,uuid,uuid,integer)') is not null"
+                 " and not exists (select 1 from information_schema.columns where table_schema = 'public'"
+                 " and table_name = 'thread_send_leases' and column_name = 'job_key')"
+                 " and to_regprocedure('public.record_thread_self_post(uuid,uuid,text,bigint,text)') is not null"
+                 " and to_regclass('public.thread_self_posts') is not null"
+                 " and not exists (select 1 from information_schema.columns where table_schema = 'public'"
+                 " and table_name = 'thread_self_posts' and column_name = 'job_first_micros');") == "t"
+    sql(ROOT / "tests/security/db-thread-single-flight.sql")  # #286 intact after rolling back only the follow-up
+    sql(preflag)  # forward again after rollback
+    sql(ROOT / "tests/security/db-thread-single-flight-preflag.sql")
     print("PASS: employee_webhook_settings (D9): RLS on, no policy, anon/authenticated denied, service_role reads/writes/upserts; cross-org row rejected; payload mode minimal|legacy_full (default minimal); ciphertext-only secret + fingerprint pair; employee delete cascades; rollback + re-apply.")
     print("PASS: channel_classify_proposals / channel_stuck_notice_windows (PR-B): RLS on, anon/authenticated denied (tables + 4 RPCs); org_channels accepts telegram; claim states claimed/in_flight/pending/decided, facts change reopens, other org isolated; attach same-org only; release unattached only; notice window once then suppressed; bad input denied; org delete cascades; 12 concurrent claims → exactly 1 claimed; rollback (2 tables + 4 RPCs + telegram surface) + re-apply.")
     print("PASS: channel_classify_budget_windows (PR-B follow-up H1): RLS on, no policy, anon/authenticated denied (table + RPC); allowed up to max → over_first once → over; per org / per key independent; expired window resets; bad input denied; org delete cascades; 20 concurrent takes (max 5) → exactly 5 allowed + 1 over_first; rollback (table + RPC, PR-B tables untouched) + re-apply.")
     print("PASS: thread_send_leases / thread_self_posts (thread single-flight): RLS on, no policy, anon/authenticated denied (2 tables + 3 RPCs); acquire → busy (retry_after) → expired lease taken over; release by holder only (old holder cannot release a re-taken lease); other org's lease on the same key independent, other org cannot release, other org's employee denied; self posts only move forward, no cross-org rows; bad input denied; org delete cascades; 12 concurrent acquires → exactly 1 acquired; rollback (2 tables + 3 RPCs, dedup ledger untouched) + re-apply.")
+    print("PASS: close_approval_without_send / job_first_micros (thread single-flight pre-flag fixes, 20261009150000): close writes status + resolved_at + closedWithoutSend in one statement (other metadata kept), only from the listed statuses, other org → null untouched, bad input refused, an injected failure leaves no partial state, 12 concurrent closes → exactly 1; same job re-enters its held lease within 10 min of its first post (after that / different job / other employee / no job key → busy); record keeps the job's first-post anchor, a different job / no job key re-anchors; wake read point recorded per org × employee × thread, forward-only, other org's employee / bad input refused; anon/authenticated denied (RPCs + thread_wake_points); rollback (RPCs + columns + wake table, #286 intact) + re-apply.")
     print("PASS: orgs / subscriptions / audit_events / approval_requests have no anon/authenticated write path (member/admin/owner JWT denied); service_role writes all four. Full-history check: scripts/test-db-all-migrations.py.")
     print("PASS: 14 tenant config / credential tables (credentials, employees, bindings, admin agents, directory, adapters, channels, projects, card setup/audit) + gateway_links, agentmail_inboxes, lp_handoffs, lp_wake_webhook_configs, lp_wake_webhook_events have no anon/authenticated write path; other reads unchanged; credentials (rows and secret_hash) unreadable from any session; service_role reads/writes all.")
     print("PASS: lp_inquiries / notification_outbox have no anon/authenticated write grant; lp_handoffs / lp_wake_* have no policy (RLS on) and no anon/authenticated SELECT; sessions read/write none of the 5 LP tables; service_role (BYPASSRLS) reads/writes all.")
