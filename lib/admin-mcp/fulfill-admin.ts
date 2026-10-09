@@ -732,13 +732,21 @@ async function fulfillPolicy(approval: ApprovalRequest, args: Record<string, unk
   }
   // 木村 2026-10-09 23:58: allowedPurposes left out keeps the current value
   // (it used to be written as [] — an omission silently emptied it).
-  let allowedPurposes: string[];
-  if (Array.isArray(args.allowedPurposes)) allowedPurposes = args.allowedPurposes.map(String).filter(Boolean);
-  else {
-    const current = await getEmployee(employeeId, approval.orgId);
+  // 木村 2026-10-10: actionLimits left out keeps the current value too. It is
+  // passed explicitly, so policy.patch does not depend on what
+  // updateEmployeePolicy does with an undefined actionLimits (root fix on
+  // main); the Problem A classification treats an omission as "no change".
+  const keepPurposes = !Array.isArray(args.allowedPurposes);
+  const keepLimits = args.actionLimits === undefined;
+  let current: Awaited<ReturnType<typeof getEmployee>> = null;
+  if (keepPurposes || keepLimits) {
+    current = await getEmployee(employeeId, approval.orgId);
     if (!current || current.orgId !== approval.orgId) throw new Error("employee_not_found");
-    allowedPurposes = [...(current.allowedPurposes ?? [])];
   }
+  const allowedPurposes: string[] = Array.isArray(args.allowedPurposes)
+    ? args.allowedPurposes.map(String).filter(Boolean)
+    : [...(current?.allowedPurposes ?? [])];
+  const actionLimits = normalizeActionLimits((keepLimits ? current?.actionLimits : args.actionLimits) as ActionLimits);
   let updated: Awaited<ReturnType<typeof updateEmployeePolicy>>;
   try {
     updated = await updateEmployeePolicy({
@@ -752,7 +760,7 @@ async function fulfillPolicy(approval: ApprovalRequest, args: Record<string, unk
           ? normalizeToolApprovalDefaults(args.toolApprovalDefaults)
           : undefined,
       sodOverrideAcknowledged: args.sodOverrideAcknowledged === true,
-      actionLimits: normalizeActionLimits(args.actionLimits as ActionLimits),
+      actionLimits,
     });
   } catch (error) {
     return employeePolicyWriteFailedFulfillment("policy.patch", employeeId, error);
