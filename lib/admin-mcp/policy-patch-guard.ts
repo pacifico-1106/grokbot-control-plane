@@ -286,7 +286,14 @@ export type PolicyPatchCardSnapshot = {
 };
 
 /** The employee values a policy.patch card diffs against (canonical order). */
-export type PolicyPatchBase = { scopes: string[]; allowedPurposes: string[]; actionLimits: unknown };
+export type PolicyPatchBase = {
+  scopes: string[];
+  allowedPurposes: string[];
+  actionLimits: unknown;
+  /** 木村 2026-10-09 #275 (b). */
+  approvalPolicy: string;
+  toolApprovalDefaults: unknown;
+};
 
 function canonical(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(canonical);
@@ -296,11 +303,14 @@ function canonical(value: unknown): unknown {
   return value;
 }
 
-export function policyPatchBase(employee: Pick<CardEmployee, "scopes" | "allowedPurposes" | "actionLimits">): PolicyPatchBase {
+type BaseEmployee = Pick<CardEmployee, "scopes" | "allowedPurposes" | "actionLimits" | "approvalPolicy" | "toolApprovalDefaults">;
+export function policyPatchBase(employee: BaseEmployee): PolicyPatchBase {
   return {
     scopes: [...(employee.scopes ?? [])].map(String).sort(),
     allowedPurposes: [...(employee.allowedPurposes ?? [])].map(String).sort(),
     actionLimits: canonical(normalizeActionLimits(employee.actionLimits)),
+    approvalPolicy: String(employee.approvalPolicy ?? ""),
+    toolApprovalDefaults: canonical(normalizeToolApprovalDefaults(employee.toolApprovalDefaults ?? {})),
   };
 }
 
@@ -308,6 +318,8 @@ const BASE_FIELD_JA: Record<keyof PolicyPatchBase, string> = {
   scopes: "できること（scopes）",
   allowedPurposes: "用途（allowedPurposes）",
   actionLimits: "実行上限（actionLimits）",
+  approvalPolicy: "承認方針（approvalPolicy）",
+  toolApprovalDefaults: "ツール別の承認（toolApprovalDefaults）",
 };
 
 /**
@@ -315,18 +327,28 @@ const BASE_FIELD_JA: Record<keyof PolicyPatchBase, string> = {
  * the filing-time scopes / allowedPurposes / actionLimits. If any of them
  * changed since, applying would silently drop or overwrite that change →
  * refused, nothing written. A card snapshot without the base is refused too
- * (fail-closed). Tickets with no card snapshot at all (older builds, never
- * filed while the flag was ON) keep the legacy path.
+ * (fail-closed). 木村 2026-10-09 #275: a ticket with no card snapshot at all
+ * (older build / hand-made row) is refused as well — nothing to compare
+ * against — and told to re-file (a); approvalPolicy and toolApprovalDefaults
+ * are part of the base (b).
  */
 export type PolicyPatchStaleGate =
   | { ok: true }
   | { ok: false; error: "policy_patch_stale"; changed: Array<keyof PolicyPatchBase>; nextStepJa: string };
 export function checkPolicyPatchNotStale(
   args: Record<string, unknown>,
-  current: Pick<CardEmployee, "scopes" | "allowedPurposes" | "actionLimits">
+  current: BaseEmployee
 ): PolicyPatchStaleGate {
   const card = readPolicyPatchCard(args);
-  if (card === undefined) return { ok: true };
+  if (card === undefined) {
+    return {
+      ok: false,
+      error: "policy_patch_stale",
+      changed: Object.keys(BASE_FIELD_JA) as Array<keyof PolicyPatchBase>,
+      nextStepJa:
+        "この依頼には承認カードの記録（依頼時の設定）がないため、今の設定と照合できません。変更は行われていません。いまの設定をもとに policy.patch をもう一度依頼してください。",
+    };
+  }
   const fields = Object.keys(BASE_FIELD_JA) as Array<keyof PolicyPatchBase>;
   const base = isPlainObject(card) && isPlainObject(card.base) ? (card.base as Record<string, unknown>) : null;
   const now = policyPatchBase(current);
