@@ -213,3 +213,31 @@ describe("every detector path", () => {
     });
   }
 });
+
+/**
+ * Timestamp collision (木村, 2026-10-10, after #305): the demo audit row id is
+ * `aud_${Date.now()}_…` and createdAt is an ISO timestamp, so a token whose
+ * varying part has digit runs (e.g. "…789012…") made expectNoSubstring flag
+ * the row whenever the clock happened to contain "890" etc. Pin it: force a
+ * clock whose epoch-ms digits contain the token's old digit run and check the
+ * audit row still shows no 3-character window of the secret.
+ */
+const COLLIDING_NOW = 1_789_012_345_678; // 2026-09-10T03:52:25.678Z; digits "789012345678"
+test("audit row timestamps can never collide with the Slack token (forced clock)", async () => {
+  const realNow = Date.now;
+  Date.now = () => COLLIDING_NOW;
+  try {
+    const [, text, secret] = DATE_LED_SECRETS[2];
+    const jobId = fixedJob("t", 0);
+    const { blocked } = await PATHS[0].run(text, jobId);
+    expect(blocked).toBe(true);
+    const rows = (await listAuditEvents(null, 100000)).filter(
+      (e) => e.action === SECRET_DETECTION_BLOCKED && (e.metadata as Record<string, unknown>)?.jobId === jobId
+    );
+    expect(rows.length).toBe(1);
+    expect(rows[0].id).toContain(String(COLLIDING_NOW));
+    expectNoSubstring(JSON.stringify(rows[0]), secret);
+  } finally {
+    Date.now = realNow;
+  }
+});
