@@ -230,7 +230,12 @@ describe("flag ON: approved classification → the latest skipped mention is re-
     expect(payload.channel).toBe(channel);
     expect(payload.ts).toBe(second.event.ts);
     expect(payload.employeeId).toBe(EMP);
-    expect(payload.text).toBe("");
+    // 21:50: the wake carries the fixed instruction (channel + ts), never the body.
+    expect(String(payload.text)).toContain("取りこぼしたメンション");
+    expect(String(payload.text)).toContain("スレッドを読んで対応");
+    expect(String(payload.text)).toContain(channel);
+    expect(String(payload.text)).toContain(String(second.event.ts));
+    expect((payload.rewake as Record<string, unknown>)?.instructionJa).toBe(payload.text);
     expect((payload.rewake as Record<string, unknown>)?.approvalId).toBe(approval.id);
     expect((payload.ingressHandoff as Record<string, unknown>)?.bodyMode).toBe("none");
     expect(JSON.stringify(payload)).not.toContain(SECRET_TEXT);
@@ -401,7 +406,7 @@ describe("config-change-request path (P1_CONFIG_CHANGE_REQUEST_ENABLED) also re-
       await fulfillIfApproved(approved!, "approved");
       expect(wakes.length).toBe(1);
       expect(wakes[0].channel).toBe(channel);
-      expect(wakes[0].text).toBe("");
+      expect(String(wakes[0].text)).toContain("取りこぼしたメンション");
       await fulfillIfApproved(approved!, "approved");
       expect(wakes.length).toBe(1);
     } finally {

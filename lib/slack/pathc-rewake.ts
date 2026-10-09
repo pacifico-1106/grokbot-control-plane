@@ -83,3 +83,8 @@ export async function rewakeSkippedChannelWakesAfterApproval(input: {
     return { state: "error", woke: 0 };
   }
 }
+
+// fail-first compile stub (replaced in the next commit)
+export function buildPathCRewakeInstructionJa(_input: { channelId: string; ts: string; threadTs?: string | null }): string {
+  return "";
+}
