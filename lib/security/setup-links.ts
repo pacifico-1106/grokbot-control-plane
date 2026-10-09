@@ -5,6 +5,8 @@
  * Locked rules (2026-09-22):
  * - Chat surfaces only the link + nextStepJa (no secrets)
  * - Prefer signed/expiring tokens; fail-closed on expiry; tenant-scoped
+ * - #294: the in-repo redeemer had no caller and was removed
+ *   with the hard-coded dev secret. Minting needs SETUP_LINK_SIGNING_SECRET.
  * - Real input/OAuth on Staffpass or IdP hosted pages
  * 
  * Sales line: 「窓口は Slack／LINE、鍵と記録は会社の社員証（Staffpass）」
@@ -38,22 +40,29 @@ export type MintedSetupLink = {
   nextStepJa: string;
 };
 
-export type RedeemResult = {
-  ok: true;
-  kind: SetupLinkKind;
-  orgId: string;
-  employeeId?: string;
-  metadata?: Record<string, unknown>;
-} | {
-  ok: false;
-  code: "expired" | "invalid" | "tampered";
-  messageJa: string;
-};
-
 const DEFAULT_EXPIRY_SECONDS = 3600;
 const MAX_EXPIRY_SECONDS = 86400;
 
-const SIGNING_SECRET = process.env.SETUP_LINK_SIGNING_SECRET || "staffpass-setup-link-dev-secret";
+/**
+ * #294 (木村 2026-10-09 22:13): no hard-coded fallback. The secret is read at
+ * mint time; missing / blank → minting is refused (a link signed with a
+ * public constant would be forgeable by anyone who reads this repo).
+ */
+export const SETUP_LINK_SIGNING_SECRET_ENV = "SETUP_LINK_SIGNING_SECRET";
+
+export class SetupLinkSigningSecretMissingError extends Error {
+  readonly code = "setup_link_signing_secret_missing";
+  constructor() {
+    super("setup_link_signing_secret_missing: SETUP_LINK_SIGNING_SECRET is not set; no setup link was minted");
+    this.name = "SetupLinkSigningSecretMissingError";
+  }
+}
+
+function signingSecret(): string {
+  const value = process.env[SETUP_LINK_SIGNING_SECRET_ENV];
+  if (typeof value !== "string" || !value.trim()) throw new SetupLinkSigningSecretMissingError();
+  return value;
+}
 
 const NEXTSTEP_JA: Record<SetupLinkKind, string> = {
   org_kickoff: "リンクを開いて Staffpass でテナントの初期設定を完了してください。",
@@ -69,9 +78,10 @@ const NEXTSTEP_JA: Record<SetupLinkKind, string> = {
 const KIND_PATHS: Record<SetupLinkKind, string> = {
   org_kickoff: "/app/getting-started",
   employee_connector_oauth: "/app/employees/[employeeId]/connector",
-  // Admin-issued single-use re-authorize link (lib/slack/authorize-link.ts
-  // SLACK_AUTHORIZE_LINK_PATH). Never the session start route, which requires
-  // hire_issue_credentials (#284): a recipient without it would be refused.
+  // Not minted here (see NOT_MINTABLE): the admin-issued single-use
+  // re-authorize link (lib/slack/authorize-link.ts slackAuthorizeLinkUrl) is
+  // the only URL for this kind. Never the session start route, which requires
+  // hire_issue_credentials (#284).
   slack_authorize: "/api/slack/oauth/link",
   workspace_bot_install: "/api/slack/bot-install/start",
   approval_inbox_setup: "/app/settings/notifications",
@@ -83,21 +93,40 @@ function getBaseUrl(): string {
   return process.env.STAFFPASS_PUBLIC_ORIGIN || process.env.NEXT_PUBLIC_BASE_URL || "https://staffpass.sealith.com";
 }
 
-function signPayload(payload: string): string {
-  return createHmac("sha256", SIGNING_SECRET).update(payload).digest("hex");
+function signPayload(payload: string, secret: string): string {
+  return createHmac("sha256", secret).update(payload).digest("hex");
 }
 
-function verifySignature(payload: string, signature: string): boolean {
-  const expected = signPayload(payload);
-  if (signature.length !== expected.length) return false;
-  let result = 0;
-  for (let i = 0; i < signature.length; i++) {
-    result |= signature.charCodeAt(i) ^ expected.charCodeAt(i);
+/**
+ * #284 follow-up (木村 2026-10-09): kinds whose landing route does NOT accept a
+ * setup-link token. `slack_authorize` lands on /api/slack/oauth/link, which
+ * reads `?t=` and accepts only a hashed, single-use token issued by
+ * setup.slackAuthorizeLink.issue after one human approval
+ * (lib/slack/authorize-link.ts). A stateless setup token there would always be
+ * an invalid page — and minting real link tokens here would bypass that
+ * approval — so this minter refuses the kind (guidance only).
+ */
+const NOT_MINTABLE: ReadonlySet<SetupLinkKind> = new Set<SetupLinkKind>(["slack_authorize"]);
+
+export class SetupLinkKindNotMintableError extends Error {
+  readonly code = "slack_authorize_requires_issue";
+  readonly kind: SetupLinkKind;
+  readonly nextStepJa: string;
+  constructor(kind: SetupLinkKind) {
+    super("slack_authorize_requires_issue: issue the single-use link with setup.slackAuthorizeLink.issue");
+    this.name = "SetupLinkKindNotMintableError";
+    this.kind = kind;
+    this.nextStepJa = NEXTSTEP_JA[kind];
   }
-  return result === 0;
+}
+
+export function isSetupLinkKindMintable(kind: SetupLinkKind): boolean {
+  return !NOT_MINTABLE.has(kind);
 }
 
 export function mintSetupLink(config: SetupLinkConfig): MintedSetupLink {
+  if (!isSetupLinkKindMintable(config.kind)) throw new SetupLinkKindNotMintableError(config.kind);
+  const secret = signingSecret();
   const expiresInSeconds = Math.min(
     config.expiresInSeconds ?? DEFAULT_EXPIRY_SECONDS,
     MAX_EXPIRY_SECONDS
@@ -115,7 +144,7 @@ export function mintSetupLink(config: SetupLinkConfig): MintedSetupLink {
   });
 
   const payloadBase64 = Buffer.from(payload).toString("base64url");
-  const signature = signPayload(payload);
+  const signature = signPayload(payload, secret);
   const token = `${payloadBase64}.${signature}`;
 
   let path = KIND_PATHS[config.kind];
@@ -132,70 +161,6 @@ export function mintSetupLink(config: SetupLinkConfig): MintedSetupLink {
     expiresAt,
     kind: config.kind,
     nextStepJa: NEXTSTEP_JA[config.kind],
-  };
-}
-
-export function redeemSetupLink(token: string): RedeemResult {
-  const parts = token.split(".");
-  if (parts.length !== 2) {
-    return {
-      ok: false,
-      code: "invalid",
-      messageJa: "無効なセットアップリンクです。新しいリンクを取得してください。",
-    };
-  }
-
-  const [payloadBase64, signature] = parts;
-  let payload: string;
-  try {
-    payload = Buffer.from(payloadBase64, "base64url").toString("utf-8");
-  } catch {
-    return {
-      ok: false,
-      code: "invalid",
-      messageJa: "無効なセットアップリンクです。新しいリンクを取得してください。",
-    };
-  }
-
-  if (!verifySignature(payload, signature)) {
-    return {
-      ok: false,
-      code: "tampered",
-      messageJa: "セットアップリンクが改ざんされています。新しいリンクを取得してください。",
-    };
-  }
-
-  let data: {
-    kind: SetupLinkKind;
-    orgId: string;
-    employeeId?: string;
-    expiresAt: string;
-    metadata?: Record<string, unknown>;
-  };
-  try {
-    data = JSON.parse(payload);
-  } catch {
-    return {
-      ok: false,
-      code: "invalid",
-      messageJa: "無効なセットアップリンクです。新しいリンクを取得してください。",
-    };
-  }
-
-  if (new Date(data.expiresAt).getTime() < Date.now()) {
-    return {
-      ok: false,
-      code: "expired",
-      messageJa: "セットアップリンクの有効期限が切れました。Admin MCP から新しいリンクを取得してください。",
-    };
-  }
-
-  return {
-    ok: true,
-    kind: data.kind,
-    orgId: data.orgId,
-    employeeId: data.employeeId,
-    metadata: data.metadata,
   };
 }
 
@@ -243,14 +208,19 @@ export function buildSetupGuidance(
     nextStepJa: NEXTSTEP_JA[kind],
   };
 
-  if (options?.mintLink && options.orgId) {
-    const link = mintSetupLink({
-      kind,
-      orgId: options.orgId,
-      employeeId: options.employeeId,
-    });
-    guidance.setupUrl = link.url;
-    guidance.expiresAt = link.expiresAt;
+  if (options?.mintLink && options.orgId && isSetupLinkKindMintable(kind)) {
+    try {
+      const link = mintSetupLink({
+        kind,
+        orgId: options.orgId,
+        employeeId: options.employeeId,
+      });
+      guidance.setupUrl = link.url;
+      guidance.expiresAt = link.expiresAt;
+    } catch (error) {
+      // No signing secret → guidance only (fail-closed: never an unsigned or fallback-signed link).
+      if (!(error instanceof SetupLinkSigningSecretMissingError)) throw error;
+    }
   }
 
   return guidance;

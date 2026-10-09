@@ -12,7 +12,7 @@ Public Distribution / Add-to-Slack uses the same `redirect_uri` as employee Iden
 Tenant admin (logged into Staffpass for their org) completes Slack Install for **their** workspace and gets conversation-adapter bot token registered (or one-time copy), without 307 Collaborators.
 
 ## Requirements
-1. **Separate routes** from employee Identity OAuth (`/api/slack/oauth/start` + existing callback that binds `employee_slack_identities`).
+1. **Separate routes** from employee Identity OAuth (`/api/slack/oauth/start` + existing callback that binds `employee_slack_identities`). Note (#284): that start route is the employee page button only and requires `hire_issue_credentials`; the URL handed to an employee is the single-use re-authorize link `/api/slack/oauth/link` (issued with `setup.slackAuthorizeLink.issue`).
    - e.g. `/api/slack/bot-install/start` and `/api/slack/bot-install/callback`
 2. **Start** (org session required, owner/admin):
    - Signed state: `{ orgId, nonce, purpose: "bot_install" }` + httpOnly cookie

@@ -95,7 +95,7 @@ LP「初期費用を払って申し込む」→ Stripe Checkout（初期費用�
 **正しい順序**:
 1. Slack ワークスペース管理者が **Bot Install**（`/api/slack/bot-install/start`）
 2. Bot Token (`xoxb-`) を Staffpass に登録
-3. 必要に応じて社員が **Authorize**（`/api/slack/oauth/start`）で User Token (`xoxp-`) 取得
+3. 必要に応じて社員が **Slack 再認可リンク（`/api/slack/oauth/link?t=…`、単回・期限付き）** で User Token (`xoxp-`) 取得。Admin MCP `setup.slackAuthorizeLink.issue`（`employeeId` 指定・人の承認 1 回）で発行 → 承認アプリの DM で届いたリンクを社員本人の Slack で開いて「許可する」。`SLACK_AUTHORIZE_LINK_ENABLED` が OFF の間は、`hire_issue_credentials` を持つ人が社員証画面（`/app/employees/{employeeId}`）から接続。`/api/slack/oauth/start` は社員証画面のボタン専用（`hire_issue_credentials` 必須、#284）で、社員や他の人に URL として渡さない
 
 **よくある間違い**:
 - Bot Install せずに Authorize だけ行う → Bot Token がないため `posting_as: bot` が機能しない

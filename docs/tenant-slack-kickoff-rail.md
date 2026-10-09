@@ -102,7 +102,8 @@ Staffpass Slack 連携には2つの OAuth フローがあり、役割が異な�
 - **誰が**: 各AI社員（または本人に代わって管理者）
 - **何を**: 社員の Slack アカウントを Staffpass に連携
 - **結果**: User Token (`xoxp-`) が社員証に登録される
-- **UI**: 社員証画面 →「Slack 連携」
+- **社員本人に渡すもの**: Slack 再認可リンク（`/api/slack/oauth/link?t=…`、単回・期限付き）。Admin MCP `setup.slackAuthorizeLink.issue`（`employeeId` 指定・人の承認 1 回）で発行し、承認アプリの DM で届く
+- **UI**: 社員証画面 →「Slack 連携」（`hire_issue_credentials` を持つ人のみ、#284）。`SLACK_AUTHORIZE_LINK_ENABLED` が OFF の間はこちら
 - **各自**: `posting_as: user` または Path B を使う社員ごとに必要
 
 詳細は [staffpass-slack-bot-install.md](./staffpass-slack-bot-install.md) を参照。
@@ -146,10 +147,10 @@ Staffpass Slack 連携には2つの OAuth フローがあり、役割が異な�
 | `adapterEnabled` | 「つながり → チャンネルに書き込む（会社のBot）」が有効か |
 | `employees[]` | 社員ごとの `postingAs`, `slackIdentityLinked`, `fileUploadReady`, `needsReoauthForFilesWrite` |
 | `pathBReadiness` | Path B（`posting_as: user`）のファイル添付準備の集計 |
-| `authorizeUrlTemplate` | 社員 Slack 再連携 URL テンプレート（`/api/slack/oauth/start?employeeId=...`） |
+| `authorizeUrlTemplate` | 社員 Slack 再認可リンクのテンプレート（`/api/slack/oauth/link?t={token}`）。`{token}` は Admin MCP `setup.slackAuthorizeLink.issue`（人の承認 1 回）で発行され、承認アプリの DM でのみ届く（ツール出力には出ない） |
 | `nextStepJa` | 次の人間アクション（canonical 順序） |
 
-**`nextStepJa` の canonical 順序**: Bot `files:write` 追加 → Reinstall → ダッシュボード「つながり → チャンネルに書き込む（会社のBot）」で xoxb 登録 → User Token `files:write` → 社員証 Slack Authorize（人間がブラウザでタップ）→ 任意で e2e
+**`nextStepJa` の canonical 順序**: Bot `files:write` 追加 → Reinstall → ダッシュボード「つながり → チャンネルに書き込む（会社のBot）」で xoxb 登録 → User Token `files:write` → 社員本人の Slack 再認可リンク（`setup.slackAuthorizeLink.issue` で発行、人間がブラウザでタップ）→ 任意で e2e
 
 ### `channels.classify` と `employeeId`
 

@@ -1,12 +1,28 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import {
   mintSetupLink,
-  redeemSetupLink,
   buildSetupLinkResponse,
   buildSetupGuidance,
   getSetupLinkNextStepJa,
   type SetupLinkKind,
 } from "./setup-links";
+
+// #294: minting needs a signing secret (no hard-coded fallback any more).
+const SECRET_ENV = "SETUP_LINK_SIGNING_SECRET";
+let savedSecret: string | undefined;
+beforeEach(() => {
+  savedSecret = process.env[SECRET_ENV];
+  process.env[SECRET_ENV] = "fixture-setup-links-test-secret";
+});
+afterEach(() => {
+  if (savedSecret === undefined) delete process.env[SECRET_ENV];
+  else process.env[SECRET_ENV] = savedSecret;
+});
+
+/** Decode a minted token's payload (the in-repo redeemer was removed in #294). */
+function payloadOf(token: string): Record<string, unknown> {
+  return JSON.parse(Buffer.from(token.split(".")[0], "base64url").toString("utf-8"));
+}
 
 describe("setup-links", () => {
   describe("mintSetupLink", () => {
@@ -37,15 +53,14 @@ describe("setup-links", () => {
       expect(result.url).toContain("/app/employees/emp_sales/connector");
     });
 
-    test("mints a valid setup link for slack_authorize", () => {
-      const result = mintSetupLink({
-        kind: "slack_authorize",
-        orgId: "org_sample_shoji",
-        employeeId: "emp_sales",
-      });
-
-      expect(result.ok).toBe(true);
-      expect(result.url).toContain("/api/slack/oauth/link");
+    test("refuses slack_authorize (#284 follow-up: issued only by setup.slackAuthorizeLink.issue)", () => {
+      expect(() =>
+        mintSetupLink({
+          kind: "slack_authorize",
+          orgId: "org_sample_shoji",
+          employeeId: "emp_sales",
+        })
+      ).toThrow("slack_authorize_requires_issue");
     });
 
     test("mints a valid setup link for workspace_bot_install", () => {
@@ -102,98 +117,25 @@ describe("setup-links", () => {
       });
 
       expect(result.ok).toBe(true);
-      const redeemed = redeemSetupLink(result.token);
-      expect(redeemed.ok).toBe(true);
-      if (redeemed.ok) {
-        expect(redeemed.metadata).toEqual({ channelType: "slack", priority: "high" });
-      }
+      expect(payloadOf(result.token).metadata).toEqual({ channelType: "slack", priority: "high" });
     });
   });
 
-  describe("redeemSetupLink", () => {
-    test("redeems a valid token", () => {
-      const minted = mintSetupLink({
-        kind: "org_kickoff",
-        orgId: "org_sample_shoji",
-      });
-
-      const result = redeemSetupLink(minted.token);
-      expect(result.ok).toBe(true);
-      if (result.ok) {
-        expect(result.kind).toBe("org_kickoff");
-        expect(result.orgId).toBe("org_sample_shoji");
-      }
-    });
-
-    test("redeems token with employeeId", () => {
-      const minted = mintSetupLink({
-        kind: "employee_connector_oauth",
-        orgId: "org_sample_shoji",
-        employeeId: "emp_sales",
-      });
-
-      const result = redeemSetupLink(minted.token);
-      expect(result.ok).toBe(true);
-      if (result.ok) {
-        expect(result.kind).toBe("employee_connector_oauth");
-        expect(result.orgId).toBe("org_sample_shoji");
-        expect(result.employeeId).toBe("emp_sales");
-      }
-    });
-
-    test("rejects invalid token format", () => {
-      const result = redeemSetupLink("invalid-token-no-dot");
-      expect(result.ok).toBe(false);
-      if (!result.ok) {
-        expect(result.code).toBe("invalid");
-        expect(result.messageJa).toContain("無効");
-      }
-    });
-
-    test("rejects tampered token", () => {
-      const minted = mintSetupLink({
-        kind: "org_kickoff",
-        orgId: "org_sample_shoji",
-      });
-
-      const tampered = minted.token.slice(0, -5) + "xxxxx";
-      const result = redeemSetupLink(tampered);
-      expect(result.ok).toBe(false);
-      if (!result.ok) {
-        expect(result.code).toBe("tampered");
-        expect(result.messageJa).toContain("改ざん");
-      }
-    });
-
-    test("rejects expired token", () => {
-      const minted = mintSetupLink({
-        kind: "org_kickoff",
-        orgId: "org_sample_shoji",
-        expiresInSeconds: -1,
-      });
-
-      const result = redeemSetupLink(minted.token);
-      expect(result.ok).toBe(false);
-      if (!result.ok) {
-        expect(result.code).toBe("expired");
-        expect(result.messageJa).toContain("有効期限");
-      }
-    });
-
-    test("rejects malformed base64", () => {
-      const result = redeemSetupLink("!!!invalid!!!.abcd1234");
-      expect(result.ok).toBe(false);
-      if (!result.ok) {
-        // Malformed base64 fails signature verification, so it's detected as tampered
-        expect(["invalid", "tampered"]).toContain(result.code);
-      }
+  describe("minted token payload", () => {
+    test("carries kind / orgId / employeeId / expiresAt", () => {
+      const minted = mintSetupLink({ kind: "employee_connector_oauth", orgId: "org_sample_shoji", employeeId: "emp_sales" });
+      const payload = payloadOf(minted.token);
+      expect(payload.kind).toBe("employee_connector_oauth");
+      expect(payload.orgId).toBe("org_sample_shoji");
+      expect(payload.employeeId).toBe("emp_sales");
+      expect(payload.expiresAt).toBe(minted.expiresAt);
     });
   });
 
   describe("buildSetupLinkResponse", () => {
     test("builds response with URL and nextStepJa", () => {
       const link = mintSetupLink({
-        kind: "slack_authorize",
+        kind: "workspace_bot_install",
         orgId: "org_sample_shoji",
       });
 
@@ -201,7 +143,7 @@ describe("setup-links", () => {
       expect(response.setupUrl).toBe(link.url);
       expect(response.expiresAt).toBe(link.expiresAt);
       expect(response.nextStepJa).toContain("Slack");
-      expect(response.nextStepJa).toContain("連携");
+      expect(response.nextStepJa).toContain("インストール");
     });
   });
 
@@ -237,15 +179,26 @@ describe("setup-links", () => {
     });
 
     test("builds guidance with minted link", () => {
+      const guidance = buildSetupGuidance("employee_connector_oauth", {
+        mintLink: true,
+        orgId: "org_sample_shoji",
+        employeeId: "emp_sales",
+      });
+      expect(guidance.kind).toBe("employee_connector_oauth");
+      expect(guidance.setupUrl).toBeTruthy();
+      expect(guidance.setupUrl).toContain("/app/employees/emp_sales/connector");
+      expect(guidance.expiresAt).toBeTruthy();
+    });
+
+    test("slack_authorize guidance never carries a URL (single-use link is issued with setup.slackAuthorizeLink.issue)", () => {
       const guidance = buildSetupGuidance("slack_authorize", {
         mintLink: true,
         orgId: "org_sample_shoji",
         employeeId: "emp_sales",
       });
       expect(guidance.kind).toBe("slack_authorize");
-      expect(guidance.setupUrl).toBeTruthy();
-      expect(guidance.setupUrl).toContain("/api/slack/oauth/link");
-      expect(guidance.expiresAt).toBeTruthy();
+      expect(guidance.setupUrl).toBeUndefined();
+      expect(guidance.nextStepJa).toContain("setup.slackAuthorizeLink.issue");
     });
 
     test("does not mint without orgId", () => {
@@ -265,15 +218,8 @@ describe("setup-links", () => {
       const link1 = mintSetupLink({ kind: "org_kickoff", orgId: "org_a" });
       const link2 = mintSetupLink({ kind: "org_kickoff", orgId: "org_b" });
 
-      const redeemed1 = redeemSetupLink(link1.token);
-      const redeemed2 = redeemSetupLink(link2.token);
-
-      expect(redeemed1.ok).toBe(true);
-      expect(redeemed2.ok).toBe(true);
-      if (redeemed1.ok && redeemed2.ok) {
-        expect(redeemed1.orgId).toBe("org_a");
-        expect(redeemed2.orgId).toBe("org_b");
-      }
+      expect(payloadOf(link1.token).orgId).toBe("org_a");
+      expect(payloadOf(link2.token).orgId).toBe("org_b");
     });
 
     test("nextStepJa never contains secrets or paste instructions", () => {
