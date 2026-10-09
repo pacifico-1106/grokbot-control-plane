@@ -1075,6 +1075,11 @@ async function fulfillOrgIssueAdminCredential(
   approval: ApprovalRequest,
   args: Record<string, unknown>
 ): Promise<AdminFulfillment> {
+  // Operator-only: re-check platform auth at fulfil (an approved ticket alone
+  // is not enough; the ticket's org must still pass the platform-ops gate).
+  const { assertPlatformOpsFromAdminCred } = await import("@/lib/admin/platform-ops-gate");
+  const operatorGate = await assertPlatformOpsFromAdminCred({ orgId: approval.orgId } as Parameters<typeof assertPlatformOpsFromAdminCred>[0]);
+  if (!operatorGate.allowed) throw new Error("platform_ops_forbidden");
   const actor = platformActorFromQueuedArgs(args);
   const issued = await fulfillOrgIssueAdminCredentialFromQueuedArgs(args, actor);
 
