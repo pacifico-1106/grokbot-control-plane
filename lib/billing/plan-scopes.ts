@@ -170,6 +170,8 @@ export const PLAN_ADMIN_SCOPES: Record<PlanKey, readonly AdminMcpToolName[]> = {
     "setup.slackDmApprovalStatus",
     "dmAutoroute.list",
     "dmAutoroute.run",
+    "channels.list",
+    "parties.list",
     "setup.approvalDelivery.autoResolve",
     "setup.slackApprover.set",
     "setup.slackAuthorizeLink.issue",
@@ -198,6 +200,8 @@ export const PLAN_ADMIN_SCOPES: Record<PlanKey, readonly AdminMcpToolName[]> = {
     "orgs.patch",
     "orgs.issueAdminCredential",
     "approvals.proxyResolve",
+    // Directory ledger removal (same plans as channels.classify; always_human)
+    "channels.remove",
   ],
   proper: [
     // All intern scopes
@@ -218,6 +222,8 @@ export const PLAN_ADMIN_SCOPES: Record<PlanKey, readonly AdminMcpToolName[]> = {
     "setup.slackDmApprovalStatus",
     "dmAutoroute.list",
     "dmAutoroute.run",
+    "channels.list",
+    "parties.list",
     "setup.approvalDelivery.autoResolve",
     "setup.slackApprover.set",
     "setup.slackAuthorizeLink.issue",
@@ -253,6 +259,9 @@ export const PLAN_ADMIN_SCOPES: Record<PlanKey, readonly AdminMcpToolName[]> = {
     "mailPolicy.patch",
     "internalAudienceRule.patch",
     "approvalRoutes.patch",
+    "channels.remove",
+    // Same plans as parties.upsert (always_human)
+    "parties.remove",
   ],
   executive: [
     // All proper scopes
@@ -273,6 +282,8 @@ export const PLAN_ADMIN_SCOPES: Record<PlanKey, readonly AdminMcpToolName[]> = {
     "setup.slackDmApprovalStatus",
     "dmAutoroute.list",
     "dmAutoroute.run",
+    "channels.list",
+    "parties.list",
     "setup.approvalDelivery.autoResolve",
     "setup.slackApprover.set",
     "setup.slackAuthorizeLink.issue",
@@ -315,6 +326,8 @@ export const PLAN_ADMIN_SCOPES: Record<PlanKey, readonly AdminMcpToolName[]> = {
     "stuckWatch.classify",
     "employeeIdentity.upsert",
     "employeeIdentity.bindMailbox",
+    "channels.remove",
+    "parties.remove",
   ],
 };
 
@@ -327,6 +340,8 @@ export const READ_ONLY_ADMIN_TOOLS: readonly AdminMcpToolName[] = [
   "employees.allowedAccounts.list",
   "setup.slackDmApprovalStatus",
   "dmAutoroute.list",
+  "channels.list",
+  "parties.list",
   "setup.lineApprovalStatus",
   "setup.approverBindingStatus",
   "setup.connectInternalBase",

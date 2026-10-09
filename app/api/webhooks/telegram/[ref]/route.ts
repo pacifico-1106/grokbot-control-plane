@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { isChannelClassifyProposalsEnabled } from "@/lib/channel-classify/flags";
 import { getNotificationChannelByWebhookRef } from "@/lib/data";
 import { handleTelegramChannelUpdate } from "@/lib/notify/telegram-channel-webhook";
 import {
@@ -87,6 +88,21 @@ export async function POST(req: Request, ctx: { params: Promise<{ ref: string }>
     return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
   }
   const update = (await req.json().catch(() => ({}))) as Parameters<typeof handleTelegramChannelUpdate>[1];
+
+  // PR-B: the inbox bot was added to a group / channel (secret verified above)
+  // → shared classification-proposal flow. The approval chat itself is skipped.
+  const memberUpdate = (update as { my_chat_member?: { chat?: { id?: number } } }).my_chat_member;
+  if (memberUpdate) {
+    if (isChannelClassifyProposalsEnabled()) {
+      const approvalChatId = String((channel.config as Record<string, unknown>)?.chatId || "");
+      if (String(memberUpdate.chat?.id ?? "") !== approvalChatId) {
+        // Follow-up H1: only when the person who added the bot is a known member.
+        const { handleTelegramMyChatMember } = await import("@/lib/channel-classify/join");
+        await handleTelegramMyChatMember(channel, update as Parameters<typeof handleTelegramMyChatMember>[1]);
+      }
+    }
+    return NextResponse.json({ ok: true });
+  }
 
   const query = update.callback_query;
   if (query?.data) {

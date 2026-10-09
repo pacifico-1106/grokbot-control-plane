@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 const { DEMO_ORG, getRuntimeAudit, getRuntimeEmployees } = await import("@/lib/demo-data");
 const { bindEmployeeSlackIdentity, revokeEmployeeSlackIdentity } = await import("@/lib/data/slack-identities");
 const { updateWakeWebhook } = await import("@/lib/data");
+const bindingsData = await import("@/lib/data/bindings");
 const { handleSlackEventsRequest } = await import("@/lib/slack/mention-ingress");
 const ob = await import("@/lib/webhooks/outbound");
 const { verifyStandardWebhook } = await import("@/lib/mcp-events/standard-webhooks");
@@ -61,6 +62,7 @@ beforeEach(async () => {
   };
 });
 afterEach(async () => {
+  bindingsData.__setWakeSecretReadFailureForTests(null);
   globalThis.fetch = originalFetch;
   ob.__setOutboundWebhookTransportForTests(null);
   await restoreEmp?.();
@@ -102,6 +104,16 @@ describe("flag OFF (default): exactly today's wake request", () => {
   });
 });
 
+describe("flag OFF: the strict secret read is not used (today's request)", () => {
+  test("wake-secret read seam set → OFF path still sends today's request with Bearer", async () => {
+    bindingsData.__setWakeSecretReadFailureForTests("read_error");
+    await mention();
+    expect(wakeFetches()).toHaveLength(1);
+    expect((wakeFetches()[0].init.headers as Record<string, string>).authorization).toBe(`Bearer ${WAKE_SECRET}`);
+    expect(sent).toHaveLength(0);
+  });
+});
+
 describe("flag ON: hardened wake", () => {
   beforeEach(() => { process.env.WEBHOOK_HARDENING_ENABLED = "true"; });
   test("pinned transport, Bearer kept, Standard Webhooks signature with the wake secret, same body as before", async () => {
@@ -139,6 +151,16 @@ describe("flag ON: hardened wake", () => {
     const id = await mention();
     expect(sent).toHaveLength(0);
     expect(failAudit(id)?.metadata).toMatchObject({ category: "invalid_url" });
+  });
+  test("Kimura MUST: wake-secret read error / undecryptable → not sent (no silent unsigned), audit wake_failed config_unavailable + reason", async () => {
+    for (const [failure, reason] of [["read_error", "wake_secret_read_error"], ["undecryptable", "wake_secret_undecryptable"]] as const) {
+      bindingsData.__setWakeSecretReadFailureForTests(failure);
+      const id = await mention();
+      expect(sent).toHaveLength(0);
+      expect(wakeFetches()).toHaveLength(0);
+      expect(failAudit(id)?.metadata).toMatchObject({ reason: "wake_failed", category: "config_unavailable", configReason: reason, hardened: true });
+      expect(JSON.stringify(failAudit(id))).not.toContain(WAKE_SECRET);
+    }
   });
   test("no wake secret → no Bearer, no signature (id + timestamp only)", async () => {
     await updateWakeWebhook("emp_comm", { orgId: DEMO_ORG.id, url: WAKE_URL, secret: "" });

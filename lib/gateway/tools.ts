@@ -402,6 +402,25 @@ export function audienceGatedToolIds(): GatewayToolId[] {
   return [...AUDIENCE_GATED_TOOL_IDS];
 }
 
+/**
+ * Tools whose posts go through the shared duplicate post ledger
+ * (lib/comm-reply-dedup; the full path inventory with the reason for every
+ * outbound-send tool is lib/comm-reply-dedup/inventory.ts). Conversation tools
+ * always (COMM_REPLY_DEDUP_ENABLED); sns.publish with DUPLICATE_GUARD_V2_ENABLED.
+ */
+export const DUPLICATE_GUARDED_TOOL_IDS = [
+  "comm.reply",
+  "comm.send",
+  "slack.post",
+  "slack.post_external",
+  "sns.publish",
+] as const satisfies readonly GatewayToolId[];
+
+export function isDuplicateGuardedTool(def: GatewayToolDef | string): boolean {
+  const id = typeof def === "string" ? def : def.id;
+  return (DUPLICATE_GUARDED_TOOL_IDS as readonly string[]).includes(id);
+}
+
 export function isAudienceGatedTool(def: GatewayToolDef | string): boolean {
   const id = typeof def === "string" ? def : def.id;
   return AUDIENCE_GATED_TOOL_IDS.has(id as GatewayToolId);

@@ -36,6 +36,8 @@ describe("flag and defaults", () => {
   test("defaults: 30 min window, similar ≥ 0.6, 20 chars min for similarity, 24 h approval expiry", () => {
     expect(COMM_REPLY_DEDUP_DEFAULTS).toEqual({
       windowMinutes: 30, mode: "similar", similarityThreshold: 0.6, minSimilarityChars: 20, approvalTtlMinutes: 1440,
+      // Duplicate post guard v2 fields: v1 values while DUPLICATE_GUARD_V2_ENABLED is OFF.
+      v2: false, shortWindowMinutes: 30, crossThread: false, crossEmployee: "warn", jobRetentionDays: 0,
     });
     for (const k of KEYS.slice(1, 5)) delete process.env[k];
     expect(commReplyDedupSettings()).toEqual(COMM_REPLY_DEDUP_DEFAULTS);

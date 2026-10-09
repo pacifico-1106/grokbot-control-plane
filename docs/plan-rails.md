@@ -129,7 +129,8 @@ READ_ONLY_ADMIN_TOOLS = [
   "approvalWorkflow.listVoterBindings", "ingressHandoff.get",
   "schedulingPolicy.get", "replyPolicy.get", "mailPolicy.get",
   "internalAudienceRule.get", "stuckWatch.get", "stuckWatch.list",
-  "stuckWatch.inspect", "approvalRoutes.get", "orgs.status", "employeeIdentity.status"
+  "stuckWatch.inspect", "approvalRoutes.get", "orgs.status", "employeeIdentity.status",
+  "channels.list", "parties.list"
 ]
 ```
 

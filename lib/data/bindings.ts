@@ -378,6 +378,56 @@ export async function getWakeWebhookSecret(employeeId: string): Promise<string> 
   }
 }
 
+export type WakeWebhookSecretRead =
+  | { state: "ok"; secret: string }
+  | { state: "absent" }
+  | { state: "error"; reason: "read_error" | "undecryptable" };
+
+let wakeSecretReadFailureForTests: "read_error" | "undecryptable" | null = null;
+/** Test seam: make readWakeWebhookSecretStrict report a failure (demo + production). */
+export function __setWakeSecretReadFailureForTests(v: "read_error" | "undecryptable" | null): void {
+  wakeSecretReadFailureForTests = v;
+}
+
+/**
+ * Strict wake-secret read for paths that must not mistake a failure for "no
+ * secret" (D9 hardened delivery): a read error / missing client and an
+ * undecryptable (or empty) ciphertext are reported as errors; only a missing
+ * row or an empty ciphertext column is "absent". Never throws, never logs the
+ * secret. getWakeWebhookSecret above keeps its lenient behaviour for the
+ * existing (flag-OFF) callers.
+ */
+export async function readWakeWebhookSecretStrict(employeeId: string): Promise<WakeWebhookSecretRead> {
+  if (wakeSecretReadFailureForTests) return { state: "error", reason: wakeSecretReadFailureForTests };
+  const id = employeeId.trim();
+  if (!id) return { state: "absent" };
+  if (isDemoMode()) {
+    const secret = demoGetWakeWebhookSecret(id);
+    return secret ? { state: "ok", secret } : { state: "absent" };
+  }
+  let ciphertext = "";
+  try {
+    const admin = createSupabaseAdminClient();
+    if (!admin) return { state: "error", reason: "read_error" };
+    const { data, error } = await admin
+      .from("employee_binding_secrets")
+      .select("credentials_ciphertext")
+      .eq("employee_id", id)
+      .maybeSingle();
+    if (error) return { state: "error", reason: "read_error" };
+    ciphertext = String(data?.credentials_ciphertext || "");
+  } catch {
+    return { state: "error", reason: "read_error" };
+  }
+  if (!ciphertext) return { state: "absent" };
+  try {
+    const secret = decryptWakeSecret(ciphertext);
+    return secret ? { state: "ok", secret } : { state: "error", reason: "undecryptable" };
+  } catch {
+    return { state: "error", reason: "undecryptable" };
+  }
+}
+
 export async function updateWakeWebhook(
   employeeId: string,
   opts: { orgId: string; url?: string | null; secret?: string | null }

@@ -21,16 +21,23 @@ import {
   detectSecretInPayload,
   buildSecretDetectionErrorResponse,
 } from "@/lib/security/secret-detector";
+import {
+  auditSecretDetectionBlocked,
+  auditSecretDetectionSuspected,
+  safeEcho,
+} from "@/lib/security/secret-detection-audit";
 import { checkAdminPolicyRequirement } from "@/lib/approval-workflow/admin-policy";
 import { getOrgApprovalWorkflowPolicy } from "@/lib/approval-workflow/data";
 import { isAdminApproverPolicyRequired } from "@/lib/feature-flags";
 
-const TOOL_TITLE_JA: Record<string, string> = {
+export const ADMIN_TOOL_TITLE_JA: Record<string, string> = {
   "employees.issue": "AI社員の発行",
   link: "AI社員の連携",
   "policy.patch": "権限の更新",
   "parties.upsert": "相手台帳の更新",
   "channels.classify": "チャネル分類",
+  "channels.list": "チャネル分類台帳の一覧（読み取り）",
+  "parties.list": "相手台帳の一覧（読み取り）",
   "roles.propose": "職務案の提案",
   "ingressHandoff.patch": "受信の渡し方",
   "setup.slackAdapter.setBotToken": "Slack会話投稿Botトークン",
@@ -41,6 +48,8 @@ const TOOL_TITLE_JA: Record<string, string> = {
   "approvalWorkflow.unbindVoter": "承認者バインディング取り消し",
   "orgs.create": "テナント作成（プラットフォーム運用）",
   "orgs.issueAdminCredential": "管理MCP認証発行（プラットフォーム運用）",
+  "channels.remove": "チャネル台帳から削除",
+  "parties.remove": "相手台帳から削除",
 };
 
 export type AdminQueueResult = {
@@ -65,9 +74,14 @@ export type AdminQueueSecretRejection = {
   code: "secret_detected_in_payload";
   error: "secret_detected_in_payload";
   pattern: string;
+  /** Constant; never characters of the value. */
   redactedPreview: string;
+  fieldPath: string;
+  matchLength: number;
   messageJa: string;
   nextStepJa: string;
+  nextStep: string;
+  retryable: false;
   tool: string;
 };
 
@@ -101,13 +115,27 @@ export async function queueAdminTool(input: {
   // IMPORTANT: Scan raw user input (rawArgsForSecretScan), NOT the post-encryption args.
   // Server-generated ciphertext (*Ciphertext fields from lib/notify/crypto) must not trigger.
   const argsToScan = input.rawArgsForSecretScan ?? input.args;
+  // 2026-10-05: one secret_detection.blocked row per rejection (credential org,
+  // no value); a failed write still rejects.
   const secretDetection = detectSecretInPayload(argsToScan);
-  if (!secretDetection.ok) {
-    const errorResponse = buildSecretDetectionErrorResponse(secretDetection);
-    return {
-      ...errorResponse,
+  if (!secretDetection.ok || secretDetection.suspected) {
+    const scope = {
+      orgId: input.cred.orgId || null,
+      employeeId: null,
+      credentialId: null,
+      surface: "admin_queue" as const,
       tool: input.tool,
+      jobId: input.jobId ?? null,
     };
+    if (!secretDetection.ok) {
+      await auditSecretDetectionBlocked(scope, secretDetection);
+      const errorResponse = buildSecretDetectionErrorResponse(secretDetection);
+      return {
+        ...errorResponse,
+        tool: safeEcho(input.tool) ?? input.tool,
+      };
+    }
+    await auditSecretDetectionSuspected(scope, secretDetection.suspected ?? []);
   }
 
   // P0 Item 1: Admin-class tickets require explicit account-approver policy
@@ -161,7 +189,7 @@ export async function queueAdminTool(input: {
   }
 
   const auditAction = auditActionForAdminTool(input.tool);
-  const title = input.title || TOOL_TITLE_JA[input.tool] || input.tool;
+  const title = input.title || ADMIN_TOOL_TITLE_JA[input.tool] || input.tool;
   const jobId =
     input.jobId ||
     (typeof input.args.jobId === "string" ? input.args.jobId : "") ||

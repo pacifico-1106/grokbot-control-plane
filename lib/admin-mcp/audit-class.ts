@@ -65,6 +65,8 @@ export const ADMIN_TOOL_AUDIT_ACTION: Record<string, AdminAuditAction> = {
   "setup.approvalDelivery.autoResolve": "admin.notificationChannel",
   "setup.slackApprover.set": "admin.notificationChannel",
   "setup.slackAuthorizeLink.issue": "admin.link",
+  "channels.remove": "admin.channel",
+  "parties.remove": "admin.parties",
 };
 
 /** Operational / employee-badge class — never lead the dashboard change log. */

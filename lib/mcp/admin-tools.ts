@@ -58,6 +58,12 @@ import { auditActionForAdminTool } from "@/lib/admin-mcp/audit-class";
 import { buildPollUrl } from "@/lib/approvals/tokens";
 import { handleAllowedAccountsTool, isAllowedAccountsTool } from "@/lib/admin-mcp/allowed-accounts-tools";
 import { POSTING_IDENTITY_SET_TOOL, handlePostingIdentityTool } from "@/lib/admin-mcp/posting-identity-tool";
+import {
+  CHANNELS_REMOVE_TOOL_DEF,
+  PARTIES_REMOVE_TOOL_DEF,
+  handleDirectoryRemoveTool,
+  isDirectoryRemoveTool,
+} from "@/lib/admin-mcp/directory-remove-tools";
 import { ADMIN_MCP_TOOL_NAMES } from "@/lib/mcp/admin-public";
 import { buildEmployeePolicyDrafts } from "@/lib/employees/policy-draft";
 import { parseApprovalChannelId } from "@/lib/employees/approval-inbox";
@@ -98,10 +104,18 @@ import {
   validateApprovalRoutesPatch,
   handleDeputyActivate,
 } from "@/lib/approval-kind-routes/mcp-handlers";
-import { isApprovalKindRoutesEnabled, isConfigChangeRequestEnabled } from "@/lib/feature-flags";
-import { buildDiff } from "@/lib/config-change-request/core";
-import { getOrgChannel } from "@/lib/data/directory";
-import type { ChannelClassification, ConversationSurface } from "@/lib/types";
+import { isApprovalKindRoutesEnabled } from "@/lib/feature-flags";
+import { handleChannelLedgerList } from "@/lib/admin-mcp/channel-ledger-list";
+import {
+  CHANNEL_CLASSIFICATIONS,
+  CHANNEL_LEDGER_SURFACES,
+  PARTY_AUDIENCES,
+  PARTY_KINDS,
+  rejectUnknownArgs,
+  validateChannelsClassifyArgs,
+  validatePartiesUpsertArgs,
+} from "@/lib/channel-classify/core";
+import { buildChannelClassifyCardSummaryJa, buildPartyUpsertCardSummaryJa } from "@/lib/channel-classify/approval-card";
 import {
   getIdentityBindingStatus,
   checkFeatureEnabled as checkEmployeeIdentityFeatureEnabled,
@@ -262,9 +276,9 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
     inputSchema: {
       type: "object",
       properties: {
-        kind: { type: "string" },
+        kind: { type: "string", enum: [...PARTY_KINDS] },
         identifier: { type: "string" },
-        audience: { type: "string", description: "internal | external" },
+        audience: { type: "string", enum: [...PARTY_AUDIENCES], description: "internal | external" },
         jobId: { type: "string" },
       },
       required: ["kind", "identifier"],
@@ -278,16 +292,46 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
     inputSchema: {
       type: "object",
       properties: {
-        surface: { type: "string" },
+        surface: { type: "string", enum: [...CHANNEL_LEDGER_SURFACES] },
         externalId: { type: "string" },
         identifier: { type: "string" },
-        classification: { type: "string" },
+        classification: { type: "string", enum: [...CHANNEL_CLASSIFICATIONS] },
         mixed: { type: "boolean", description: "true for shared_external / Connect / ゲスト招待。混在chは相手台帳必須" },
         employeeId: { type: "string", description: "Bound employee for an internal Slack 1:1 only" },
         slackTeamId: { type: "string", description: "Slack workspace id when known" },
         jobId: { type: "string" },
       },
       required: ["externalId"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "channels.list",
+    description:
+      "List this org's channel classification ledger (read-only, no approval). Org from the credential only (no orgId argument). Returns surface / externalId / classification / mixed / createdAt / updatedAt per channel — no message content, no secrets. Paginated: pass nextCursor back as cursor. Filters: surface (slack | line | mail | phone | web | telegram), classification (internal | shared_external | unknown). A channel that is not listed is treated as external; register it with channels.classify (human approval).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        surface: { type: "string", enum: ["slack", "line", "mail", "phone", "web", "telegram"] },
+        classification: { type: "string", enum: ["internal", "shared_external", "unknown"] },
+        limit: { type: "integer", minimum: 1, maximum: 200, description: "default 50" },
+        cursor: { type: "string", description: "nextCursor from the previous page (opaque)" },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "parties.list",
+    description:
+      "List this org's party (audience) ledger (read-only, no approval). Org from the credential only (no orgId argument). Returns kind / identifier / audience / createdAt / updatedAt — no message content, no secrets. Paginated: pass nextCursor back as cursor. Filters: kind (email_domain | slack_channel | slack_user | phone | line | mail_address), audience (internal | external). Change entries with parties.upsert (human approval).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        kind: { type: "string", enum: ["email_domain", "slack_channel", "slack_user", "phone", "line", "mail_address"] },
+        audience: { type: "string", enum: ["internal", "external"] },
+        limit: { type: "integer", minimum: 1, maximum: 200, description: "default 50" },
+        cursor: { type: "string", description: "nextCursor from the previous page (opaque)" },
+      },
       additionalProperties: false,
     },
   },
@@ -1384,6 +1428,10 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
       additionalProperties: false,
     },
   },
+  // ADMIN_MCP_DIRECTORY_REMOVE_TOOLS_ENABLED (default OFF): definitions live in
+  // lib/admin-mcp/directory-remove-tools.ts.
+  CHANNELS_REMOVE_TOOL_DEF,
+  PARTIES_REMOVE_TOOL_DEF,
 ];
 
 /**
@@ -1454,6 +1502,8 @@ const ADMIN_READ_ONLY_TOOLS_SET = new Set<string>([
   "setup.slackDmApprovalStatus",
   "dmAutoroute.list",
   "employees.allowedAccounts.list",
+  "channels.list",
+  "parties.list",
 ]);
 
 /**
@@ -1596,37 +1646,6 @@ async function handleAdminApprovalReinvoke(
     { ok: false, code: "approval_not_approved", message: "承認が完了していません" },
     true
   );
-}
-
-async function buildChannelClassifyDiffSummaryJa(
-  orgId: string,
-  args: Record<string, unknown>
-): Promise<string> {
-  const externalId = String(args.externalId || args.identifier || "").trim();
-  const surface = (String(args.surface || "slack").trim() || "slack") as ConversationSurface;
-  const rawClass = String(args.classification || "unknown").trim();
-  const classification: ChannelClassification =
-    rawClass === "internal" || rawClass === "shared_external" ? rawClass : "unknown";
-  const current = await getOrgChannel(orgId, surface, externalId);
-  const diff = buildDiff(
-    {
-      kind: "channel_classification",
-      surface,
-      externalId,
-      classification,
-      // Same normalisation as upsertOrgChannel (shared_external is always mixed).
-      mixed: args.mixed === true || classification === "shared_external",
-      slackTeamId: null,
-    },
-    {
-      kind: "channel",
-      exists: Boolean(current),
-      classification: current?.classification ?? null,
-      mixed: Boolean(current?.mixed),
-      channelId: current?.id ?? null,
-    }
-  );
-  return `管理エージェントから次の変更依頼が来ています: ${diff.summaryJa}。反映しますか？`;
 }
 
 export function adminToolsAlwaysHuman(): boolean {
@@ -2213,6 +2232,22 @@ export async function callAdminMcpTool(
     return handleAdminApprovalReinvoke(name, approvalId, cred);
   }
 
+  if (name === "channels.list" || name === "parties.list") {
+    // PR-B read-only ledger lists: org from the credential only, no ticket.
+    const listed = await handleChannelLedgerList(name, args, cred.orgId);
+    return toolResult(listed, listed.ok === false);
+  }
+
+  if (name === "channels.classify" || name === "parties.upsert") {
+    // Request-time validation (not flag-gated: only stricter). A typo is
+    // refused here with the allowed values and a nextStep — never queued and
+    // never coerced to "unknown" after approval.
+    const unknownArg = rejectUnknownArgs(name, args);
+    if (unknownArg) return toolResult(unknownArg, true);
+    const checked = name === "channels.classify" ? validateChannelsClassifyArgs(args) : validatePartiesUpsertArgs(args);
+    if (!checked.ok) return toolResult(checked, true);
+  }
+
   if (isAllowedAccountsTool(name)) {
     // ADMIN_MCP_ALLOWED_ACCOUNTS_TOOLS_ENABLED: org from the credential only.
     const outcome = await handleAllowedAccountsTool(name, args, cred);
@@ -2227,6 +2262,22 @@ export async function callAdminMcpTool(
     });
     const queuedOk = (queued as { code?: string }).code === "needs_approval";
     return toolResult(queuedOk && outcome.resultExtra ? { ...queued, ...outcome.resultExtra } : queued, false);
+  }
+
+  if (isDirectoryRemoveTool(name)) {
+    // ADMIN_MCP_DIRECTORY_REMOVE_TOOLS_ENABLED: org from the credential only;
+    // the row is looked up in that org before any ticket.
+    const outcome = await handleDirectoryRemoveTool(name, args, cred);
+    if (outcome.kind === "result") return toolResult(outcome.data, outcome.isError === true);
+    const queued = await queueAdminTool({
+      cred,
+      tool: name,
+      args: { ...outcome.queuedArgs, ...(typeof args.jobId === "string" ? { jobId: args.jobId } : {}) },
+      rawArgsForSecretScan: args,
+      title: outcome.title,
+      summary: outcome.summary,
+    });
+    return toolResult(queued, false);
   }
 
   if (name === POSTING_IDENTITY_SET_TOOL) {
@@ -3379,13 +3430,19 @@ export async function callAdminMcpTool(
       };
     }
   } else if (name === "parties.upsert") {
-    summary = `相手台帳の更新を人が確認します（${String(args.identifier)}）`;
+    const checked = validatePartiesUpsertArgs(args);
+    if (!checked.ok) return toolResult(checked, true);
+    queuedArgs = { ...checked.value, ...(typeof args.jobId === "string" ? { jobId: args.jobId } : {}) };
+    summary = `相手台帳の更新を人が確認します（${checked.value.identifier}）`;
+    // Always (no flag): before → after on the approval card.
+    summary = await buildPartyUpsertCardSummaryJa(cred.orgId, checked.value, { requester: "admin_agent" }).catch(() => summary);
   } else if (name === "channels.classify") {
-    summary = `チャネル分類を人が確認します（${String(args.externalId || args.identifier)}）`;
-    if (isConfigChangeRequestEnabled()) {
-      // Show the approver the actual before → after, not just the channel id.
-      summary = await buildChannelClassifyDiffSummaryJa(cred.orgId, args).catch(() => summary);
-    }
+    const checked = validateChannelsClassifyArgs(args);
+    if (!checked.ok) return toolResult(checked, true);
+    queuedArgs = { ...checked.value, ...(typeof args.jobId === "string" ? { jobId: args.jobId } : {}) };
+    summary = `チャネル分類を人が確認します（${checked.value.externalId}）`;
+    // Always (no flag): before → after and the sharing state on the approval card.
+    summary = await buildChannelClassifyCardSummaryJa(cred.orgId, checked.value, { requester: "admin_agent" }).catch(() => summary);
   } else if (name === "link") {
     summary = `連携を人が確認します（${String(args.employeeId)}）`;
   } else if (name === "ingressHandoff.patch") {
