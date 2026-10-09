@@ -1,4 +1,6 @@
 import { consumeAdminApprovalSecret } from "@/lib/admin-mcp/consume-secret";
+import { handleDesignatedAdminsTool, isDesignatedAdminsTool } from "@/lib/admin-mcp/designated-admins-tool";
+import { handlePromoteOwnerTool, PROMOTE_OWNER_TOOL } from "@/lib/admin-mcp/promote-owner-tool";
 import { canReadAdminApproval } from "@/lib/admin-mcp/result-authority";
 import { assertAdminToolAllowedForPlan } from "@/lib/billing/plan-gate";
 /**
@@ -192,7 +194,7 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
   {
     name: "policy.patch",
     description:
-      "Patch an employee policy (scopes / allowedPurposes / approvalPolicy / actionLimits / toolApprovalDefaults) after human approval (always_human). The employee must belong to this org (from the credential; no orgId argument). Only these fields: allowedAccounts / postingAs / approvalChannelId / grokBotAgentId are refused with use_dedicated_tool and the tool to use (employees.allowedAccounts.add|remove, employees.postingIdentity.set, setup.lineApproval.setEmployeeInbox, link); any other key → unsupported_key. scopes must all be known (unknown_scopes otherwise). Nothing is queued when refused. The approval card shows the before → after diff and the separation-of-duties (SoD) verdict; an SoD warning is acknowledged only by the human approving that card (sodOverrideAcknowledged from the agent is ignored). Admin cannot grant itself extra scopes. Dashboard humans cannot edit these fields.",
+      "Patch an employee policy (scopes / allowedPurposes / approvalPolicy / actionLimits / toolApprovalDefaults) after human approval (always_human). The employee must belong to this org (from the credential; no orgId argument). Only these fields: allowedAccounts / postingAs / approvalChannelId / grokBotAgentId are refused with use_dedicated_tool and the tool to use (employees.allowedAccounts.add|remove, employees.postingIdentity.set, setup.lineApproval.setEmployeeInbox, link); any other key → unsupported_key. scopes must all be known (unknown_scopes otherwise). Nothing is queued when refused. actionLimits left out keeps the employee's current actionLimits unchanged; when sent, it replaces the whole map (a tool you leave out of the map loses its caps); only an explicit {} removes every cap — null is refused (invalid_action_limits). allowedPurposes left out keeps the current value too; an explicit [] removes every purpose restriction. The approval card shows the before → after diff and the separation-of-duties (SoD) verdict; an SoD warning is acknowledged only by the human approving that card (sodOverrideAcknowledged from the agent is ignored). Removing or changing a money cap (e.g. commerce.order) needs an owner's approval when APPROVER_AUTHORITY_ENABLED is on. Admin cannot grant itself extra scopes. Dashboard humans cannot edit these fields.",
     inputSchema: policyPatchInputSchema(),
   },
   {
@@ -1432,6 +1434,50 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
   // lib/admin-mcp/directory-remove-tools.ts.
   CHANNELS_REMOVE_TOOL_DEF,
   PARTIES_REMOVE_TOOL_DEF,
+  {
+    name: "approvers.designatedAdmins.get",
+    description:
+      "This tool is read-only (no ticket; requires APPROVER_AUTHORITY_ENABLED): this org's 指定管理者 (designated admins) — the admin members who, besides the owner, may approve changes to approvers and permissions. Returns member IDs with display name / role / status. Org from the credential.",
+    inputSchema: {
+      type: "object",
+      properties: {},
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "approvers.designatedAdmins.set",
+    description:
+      "Replace this org's 指定管理者 (designated admins) list after OWNER approval (always_human; requires APPROVER_AUTHORITY_ENABLED). Only an owner can approve this ticket — a designated admin's approval leaves it オーナー承認待ち. memberIds: org_members IDs of ACTIVE members of this org with role admin (max 20; empty list clears it). Re-validated against the current members when applied; the change is audited (before/after, approving owner). Org from the credential. Admin cannot self-approve. Re-invoke with approvalId to read the result.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        memberIds: { type: "array", items: { type: "string" }, description: "org_members IDs (role admin, active, this org)" },
+        jobId: { type: "string" },
+        approvalId: { type: "string", description: "Re-invoke with approved ticket ID" },
+      },
+      required: ["memberIds"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "members.promoteOwner",
+    description:
+      "File a request to make an EXISTING ACTIVE member of this org an owner (オーナー追加; always_human; requires OWNER_PROMOTION_ENABLED and APPROVER_AUTHORITY_ENABLED). memberId only — no invite (cannot add a new person as owner), no role / capabilities / orgId arguments. Exactly one existing owner approves. The member being promoted can never approve. With 2+ owners the requester cannot approve, so requesterSlackUserId is REQUIRED then: it must match this org's verified approver registration (active Slack voter binding of an active member), otherwise filing is refused with code requester_not_identified and nextStepJa (pass the Slack ID of the person who asked and file again). A sole owner may approve their own request, and with a sole owner an unidentified requester is still filed (the card says the requester cannot be identified). A designated admin's approval leaves it オーナー承認待ち. When applied: role owner with the standard owner capabilities, re-checked against the current member row (unchanged since filing, still active, not already owner) through the team member-change guard; every owner and the member are notified; audited (before/after, approving owner, ticket). Removing an owner or transferring ownership is not available. Org from the credential. Re-invoke with approvalId to read the result.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        memberId: { type: "string", description: "org_members ID of an active non-owner member of this org" },
+        requesterSlackUserId: {
+          type: "string",
+          description: "Slack user ID (U…) of the person who asked you to file this. Pass it whenever you know it: it is matched to a member only through this org's verified approver registration, and that member then cannot approve when the org has 2+ owners. Required when the org has 2+ active owners (otherwise refused: requester_not_identified). With a sole owner it is optional; without it the card says the requester cannot be identified, and if a 2nd owner is added before approval or execution the ticket is refused (requester_not_identified) — so pass it whenever you can.",
+        },
+        jobId: { type: "string" },
+        approvalId: { type: "string", description: "Re-invoke with approved ticket ID" },
+      },
+      required: ["memberId"],
+      additionalProperties: false,
+    },
+  },
 ];
 
 /**
@@ -1504,6 +1550,7 @@ const ADMIN_READ_ONLY_TOOLS_SET = new Set<string>([
   "employees.allowedAccounts.list",
   "channels.list",
   "parties.list",
+  "approvers.designatedAdmins.get",
 ]);
 
 /**
@@ -2283,6 +2330,37 @@ export async function callAdminMcpTool(
   if (name === POSTING_IDENTITY_SET_TOOL) {
     // Org from the credential only; user-token check before the ticket.
     const outcome = await handlePostingIdentityTool(args, cred);
+    if (outcome.kind === "result") return toolResult(outcome.data, outcome.isError === true);
+    const queued = await queueAdminTool({
+      cred,
+      tool: name,
+      args: { ...outcome.queuedArgs, ...(typeof args.jobId === "string" ? { jobId: args.jobId } : {}) },
+      rawArgsForSecretScan: args,
+      title: outcome.title,
+      summary: outcome.summary,
+    });
+    return toolResult(queued, false);
+  }
+
+  if (name === PROMOTE_OWNER_TOOL) {
+    // オーナー追加 (OWNER_PROMOTION_ENABLED + APPROVER_AUTHORITY_ENABLED). Org from the credential only.
+    const outcome = await handlePromoteOwnerTool(args, cred);
+    if (outcome.kind === "result") return toolResult(outcome.data, outcome.isError === true);
+    const queued = await queueAdminTool({
+      cred,
+      tool: name,
+      args: { ...outcome.queuedArgs, ...(typeof args.jobId === "string" ? { jobId: args.jobId } : {}) },
+      rawArgsForSecretScan: args,
+      title: outcome.title,
+      summary: outcome.summary,
+      extraMetadata: outcome.extraMetadata,
+    });
+    return toolResult(queued, false);
+  }
+
+  if (isDesignatedAdminsTool(name)) {
+    // PR-D (APPROVER_AUTHORITY_ENABLED): owner-approved 指定管理者 list. Org from the credential only.
+    const outcome = await handleDesignatedAdminsTool(name, args, cred);
     if (outcome.kind === "result") return toolResult(outcome.data, outcome.isError === true);
     const queued = await queueAdminTool({
       cred,

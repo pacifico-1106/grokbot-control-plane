@@ -40,3 +40,20 @@ export function isSlackUserScopeImWriteEnabled(): boolean {
 export function isSlackDmAutorouteEnabled(): boolean {
   return parseFlag(process.env.SLACK_DM_AUTOROUTE_ENABLED);
 }
+
+/**
+ * SLACK_U_TO_DM_SEND_ENABLED (item C, default OFF): at send time, a Slack U…
+ * user id placed in the channel field is resolved to the employee's internal
+ * 1:1 DM route (internal ledger slack_user of the same org only, re-verified
+ * with conversations.open as a 1:1 IM with exactly that user). Effective ONLY
+ * when SLACK_DM_AUTOROUTE_ENABLED is also ON.
+ *
+ * Separate from SLACK_DM_AUTOROUTE_ENABLED on purpose: production already runs
+ * with SLACK_DM_AUTOROUTE_ENABLED=1 (since 2026-10-04) and
+ * SLACK_USER_SCOPE_IM_WRITE=1, so merging must not start the rewrite. With
+ * this flag OFF a U… in the channel field ends exactly as on main
+ * (403 egress_denied), and the #234 route sync is untouched.
+ */
+export function isSlackUToDmSendEnabled(): boolean {
+  return parseFlag(process.env.SLACK_U_TO_DM_SEND_ENABLED) && isSlackDmAutorouteEnabled();
+}

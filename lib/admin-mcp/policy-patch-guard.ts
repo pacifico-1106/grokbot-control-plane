@@ -115,7 +115,8 @@ export function policyPatchInputSchema(): {
       approvalPolicy: { type: "string", enum: [...APPROVAL_POLICIES] },
       actionLimits: {
         type: "object",
-        description: "Per-tool { perDay, perMonth }. Omit to keep the stored limits; {} removes every limit (the card warns).",
+        description:
+          "Per-tool caps { tool: { perDay?, perMonth? } }. Omit to keep the stored limits; when sent, it replaces the whole map. Only an explicit {} removes every limit (the card warns); null is refused (invalid_action_limits).",
         additionalProperties: true,
       },
       toolApprovalDefaults: {
@@ -231,7 +232,11 @@ export function parsePolicyPatchArgs(args: Record<string, unknown>, opts: { from
     allowedPurposes = [...new Set(trimmed)];
   }
   if (args.actionLimits !== undefined && !isPlainObject(args.actionLimits)) {
-    return { ok: false, code: "invalid_action_limits", message: "actionLimits はオブジェクトです" };
+    return {
+      ok: false,
+      code: "invalid_action_limits",
+      message: "actionLimits はオブジェクトです（null は使えません。すべての上限を外すときは {} を指定してください）。変更は行われていません。",
+    };
   }
   let toolApprovalDefaults: Record<string, ToolApprovalValue> | undefined;
   if (args.toolApprovalDefaults !== undefined) {

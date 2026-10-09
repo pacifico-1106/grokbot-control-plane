@@ -698,6 +698,24 @@ async function fulfillAllowedAccountsTicket(
   };
 }
 
+/** PR-D: owner-approved 指定管理者 list; re-validated and owner-checked right before the write. */
+async function fulfillDesignatedAdminsTicket(approval: ApprovalRequest, args: Record<string, unknown>): Promise<AdminFulfillment> {
+  const { fulfillDesignatedAdminsSet, DESIGNATED_ADMINS_SET_TOOL } = await import("@/lib/admin-mcp/designated-admins-tool");
+  const result = await fulfillDesignatedAdminsSet(approval, args);
+  const at = new Date().toISOString();
+  if (!result.ok) return { ok: false, tool: DESIGNATED_ADMINS_SET_TOOL, at, error: result.code, nextStepJa: result.messageJa };
+  return { ok: true, tool: DESIGNATED_ADMINS_SET_TOOL, at, summaryJa: result.summaryJa };
+}
+
+/** オーナー追加: owner-approved; approver ≠ requester / target and the member guard re-checked right before the write. */
+async function fulfillPromoteOwnerTicket(approval: ApprovalRequest, args: Record<string, unknown>): Promise<AdminFulfillment> {
+  const { fulfillPromoteOwner, PROMOTE_OWNER_TOOL } = await import("@/lib/admin-mcp/promote-owner-tool");
+  const result = await fulfillPromoteOwner(approval, args);
+  const at = new Date().toISOString();
+  if (!result.ok) return { ok: false, tool: PROMOTE_OWNER_TOOL, at, error: result.code, nextStepJa: result.messageJa };
+  return { ok: true, tool: PROMOTE_OWNER_TOOL, at, summaryJa: result.summaryJa };
+}
+
 /** Human-approved Slack posting identity switch (bot | user); re-checked right before the write. */
 async function fulfillPostingIdentityTicket(approval: ApprovalRequest, args: Record<string, unknown>): Promise<AdminFulfillment> {
   const { fulfillPostingIdentityChange, POSTING_IDENTITY_SET_TOOL } = await import("@/lib/admin-mcp/posting-identity-tool");
@@ -723,6 +741,30 @@ async function fulfillPostingIdentityTicket(approval: ApprovalRequest, args: Rec
   };
 }
 
+/**
+ * TOCTOU follow-up (APPROVER_AUTHORITY_ENABLED): the guard pins the judged
+ * state for a compare-and-swap write. Flag OFF / not pinned → null (today's
+ * write). Changed since filing / between check and write → the F2 reply.
+ */
+async function contextGuardFor(approval: ApprovalRequest) {
+  const { approverContextGuardForWrite } = await import("@/lib/approver-authority/filing");
+  return approverContextGuardForWrite(approval);
+}
+
+async function contextChangedFulfillment(error: unknown, tool: string, employeeId: string | null): Promise<AdminFulfillment | null> {
+  const { ApproverContextChangedError } = await import("@/lib/approver-authority/context-cas");
+  if (!(error instanceof ApproverContextChangedError)) return null;
+  const { approverAuthorityNextStepJa } = await import("@/lib/approver-authority/reply");
+  return {
+    ok: false,
+    tool,
+    at: new Date().toISOString(),
+    error: "approver_context_changed",
+    ...(employeeId ? { employeeId } : {}),
+    nextStepJa: approverAuthorityNextStepJa("approver_context_changed") ?? "",
+  };
+}
+
 async function fulfillPolicy(approval: ApprovalRequest, args: Record<string, unknown>): Promise<AdminFulfillment> {
   const at = new Date().toISOString();
   // PR-C: re-validate the stored ticket (no silent scope filtering), refuse a
@@ -736,7 +778,10 @@ async function fulfillPolicy(approval: ApprovalRequest, args: Record<string, unk
     }
     return { ok: false, tool: "policy.patch", at, error: parsed.code, nextStepJa: parsed.message };
   }
-  const { employeeId, scopes, allowedPurposes, approvalPolicy } = parsed.value;
+  const { employeeId, scopes, approvalPolicy } = parsed.value;
+  // Check order (木村 2026-10-10 #275 × main 734149a): ticket parse →
+  // requesting-admin binding → card shown → employee + org → stale (card base)
+  // → SoD (card ack) → CAS guard (approver authority, flag ON).
   const requester = parseAdminRequester(approval.metadata);
   const binding = await getBinding(employeeId);
   // Same rule as intake: grokBotAgentId or actorId of the requesting admin.
@@ -750,7 +795,7 @@ async function fulfillPolicy(approval: ApprovalRequest, args: Record<string, unk
   const cardGate = checkPolicyPatchCardShown(args, approval.summary);
   if (!cardGate.ok) return { ok: false, tool: "policy.patch", at, employeeId, error: cardGate.error, nextStepJa: cardGate.nextStepJa };
   const current = await getEmployee(employeeId, approval.orgId);
-  if (!current) throw new Error("employee_not_found");
+  if (!current || current.orgId !== approval.orgId) throw new Error("employee_not_found");
   const staleGate = checkPolicyPatchNotStale(args, current);
   if (!staleGate.ok) {
     return { ok: false, tool: "policy.patch", at, employeeId, error: staleGate.error, nextStepJa: staleGate.nextStepJa };
@@ -758,14 +803,37 @@ async function fulfillPolicy(approval: ApprovalRequest, args: Record<string, unk
   const sodGate = checkPolicyPatchSodAck(args, parsed.value, await getOrgSodWarnPolicy(approval.orgId));
   if (!sodGate.ok) return { ok: false, tool: "policy.patch", at, employeeId, error: sodGate.error, nextStepJa: sodGate.nextStepJa };
   const { verdict, needsAck } = sodGate;
+  let contextGuard: Awaited<ReturnType<typeof contextGuardFor>>;
+  try {
+    contextGuard = await contextGuardFor(approval);
+  } catch (error) {
+    const changed = await contextChangedFulfillment(error, "policy.patch", employeeId);
+    if (changed) return changed;
+    throw error;
+  }
+  // Omitted allowedPurposes / actionLimits keep the stored value and are
+  // passed explicitly (the CAS RPC refuses null; explicit [] / {} clears).
+  // Under the CAS guard the kept value is the one the guard pinned: the RPC
+  // compares it with the locked row and writes only if equal, so what is
+  // written is the locked row's value — never the earlier read, never a value
+  // changed in between (refused with approver_context_changed). Without the
+  // guard it is the value read above.
+  const pinnedPurposes = contextGuard?.expected.allowed_purposes;
+  const keptPurposes = contextGuard
+    ? (Array.isArray(pinnedPurposes) ? pinnedPurposes : []).map(String)
+    : [...(current.allowedPurposes ?? [])];
+  const allowedPurposes: string[] = parsed.value.allowedPurposes ?? keptPurposes;
+  const keptLimits = contextGuard ? contextGuard.expected.action_limits : current.actionLimits;
+  const actionLimits = normalizeActionLimits(
+    (parsed.value.actionLimits !== undefined ? parsed.value.actionLimits : keptLimits) as ActionLimits
+  );
   let updated: Awaited<ReturnType<typeof updateEmployeePolicy>>;
   try {
     updated = await updateEmployeePolicy({
       orgId: approval.orgId,
       employeeId,
       scopes,
-      // Omitted = keep the stored value; explicit [] / {} clears (card warned).
-      ...(allowedPurposes !== undefined ? { allowedPurposes } : {}),
+      allowedPurposes,
       approvalPolicy,
       toolApprovalDefaults:
         parsed.value.toolApprovalDefaults !== undefined
@@ -773,11 +841,16 @@ async function fulfillPolicy(approval: ApprovalRequest, args: Record<string, unk
           : undefined,
       // The human who approved the card that showed this verdict.
       sodOverrideAcknowledged: needsAck,
-      ...(parsed.value.actionLimits !== undefined
-        ? { actionLimits: normalizeActionLimits(parsed.value.actionLimits as ActionLimits) }
-        : {}),
+      actionLimits,
+      ...(contextGuard ? { contextGuard } : {}),
     });
   } catch (error) {
+    const changed = await contextChangedFulfillment(error, "policy.patch", employeeId);
+    if (changed) return changed;
+    const { ApproverContextWriteRefusedError } = await import("@/lib/approver-authority/context-cas");
+    if (error instanceof ApproverContextWriteRefusedError) {
+      return { ok: false, tool: "policy.patch", at: new Date().toISOString(), error: error.reason, employeeId };
+    }
     return employeePolicyWriteFailedFulfillment("policy.patch", employeeId, error);
   }
   if (!updated) throw new Error("employee_not_found");
@@ -1107,6 +1180,11 @@ async function fulfillOrgIssueAdminCredential(
   approval: ApprovalRequest,
   args: Record<string, unknown>
 ): Promise<AdminFulfillment> {
+  // Operator-only: re-check platform auth at fulfil (an approved ticket alone
+  // is not enough; the ticket's org must still pass the platform-ops gate).
+  const { assertPlatformOpsFromAdminCred } = await import("@/lib/admin/platform-ops-gate");
+  const operatorGate = await assertPlatformOpsFromAdminCred({ orgId: approval.orgId } as Parameters<typeof assertPlatformOpsFromAdminCred>[0]);
+  if (!operatorGate.allowed) throw new Error("platform_ops_forbidden");
   const actor = platformActorFromQueuedArgs(args);
   const issued = await fulfillOrgIssueAdminCredentialFromQueuedArgs(args, actor);
 
@@ -1271,9 +1349,25 @@ async function fulfillSchedulingPolicy(
     ? args.employeeId.trim()
     : null;
   const clearOverride = args.clearOverride === true;
+  try {
+    return await fulfillSchedulingPolicyWrite(approval, args, employeeId, clearOverride, await contextGuardFor(approval));
+  } catch (error) {
+    const changed = await contextChangedFulfillment(error, "schedulingPolicy.patch", employeeId);
+    if (changed) return changed;
+    throw error;
+  }
+}
 
+async function fulfillSchedulingPolicyWrite(
+  approval: ApprovalRequest,
+  args: Record<string, unknown>,
+  employeeId: string | null,
+  clearOverride: boolean,
+  contextGuard: Awaited<ReturnType<typeof contextGuardFor>>
+): Promise<AdminFulfillment> {
+  const writeOptions = contextGuard ? { contextGuard } : {};
   if (clearOverride && employeeId) {
-    await setEmployeeSchedulingPolicy(employeeId, approval.orgId, null);
+    await setEmployeeSchedulingPolicy(employeeId, approval.orgId, null, writeOptions);
     await appendAuditEvent({
       orgId: approval.orgId,
       employeeId,
@@ -1310,7 +1404,7 @@ async function fulfillSchedulingPolicy(
   const hasHighRiskConsent = Boolean(validation.policy.highRiskConsentAt);
 
   if (employeeId) {
-    const policy = await setEmployeeSchedulingPolicy(employeeId, approval.orgId, validation.policy);
+    const policy = await setEmployeeSchedulingPolicy(employeeId, approval.orgId, validation.policy, writeOptions);
     await appendAuditEvent({
       orgId: approval.orgId,
       employeeId,
@@ -1337,7 +1431,7 @@ async function fulfillSchedulingPolicy(
     };
   }
 
-  const policy = await setOrgSchedulingPolicy(approval.orgId, validation.policy);
+  const policy = await setOrgSchedulingPolicy(approval.orgId, validation.policy, writeOptions);
   const consentNote = hasHighRiskConsent ? "（高リスク承諾あり）" : "";
   await appendAuditEvent({
     orgId: approval.orgId,
@@ -2174,6 +2268,12 @@ async function fulfillApprovedAdminCore(
       case "channels.remove":
       case "parties.remove":
         fulfillment = await fulfillDirectoryRemoveTicket(approval, args, tool);
+        break;
+      case "approvers.designatedAdmins.set":
+        fulfillment = await fulfillDesignatedAdminsTicket(approval, args);
+        break;
+      case "members.promoteOwner":
+        fulfillment = await fulfillPromoteOwnerTicket(approval, args);
         break;
       default:
         fulfillment = { ok: false, tool, at, error: "unknown_admin_tool" };

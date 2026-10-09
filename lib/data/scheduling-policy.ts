@@ -10,6 +10,12 @@ import {
   normalizeSchedulingPolicy,
 } from "@/lib/scheduling-policy/validate";
 import type { OrgSchedulingPolicy } from "@/lib/types";
+import {
+  assertDemoContextUnchanged,
+  assertGuardFor,
+  casResult,
+  type ApproverContextGuard,
+} from "@/lib/approver-authority/context-cas";
 
 let demoSchedulingPolicy: OrgSchedulingPolicy | null = null;
 const demoEmployeeSchedulingPolicies = new Map<string, OrgSchedulingPolicy | null>();
@@ -56,17 +62,68 @@ export async function getOrgSchedulingPolicy(
   return raw ?? defaultSchedulingPolicy();
 }
 
+/**
+ * Optional TOCTOU guard (APPROVER_AUTHORITY_ENABLED, approval-executed
+ * schedulingPolicy.patch): the write only happens if the stored org (and
+ * employee) policy still equals the snapshot pinned by the guard — demo:
+ * compared right before the write; production: one RPC that locks, compares
+ * and writes. Mismatch → ApproverContextChangedError, nothing written.
+ * Without a guard: today's write.
+ */
+export type SchedulingPolicyWriteOptions = { contextGuard?: ApproverContextGuard };
+
+/** Demo store, raw (what getEffectiveSchedulingPolicy returns in demo), for the guard snapshot. */
+export function demoSchedulingPolicySnapshot(employeeId: string | null): { org: OrgSchedulingPolicy | null; employee: OrgSchedulingPolicy | null } {
+  return {
+    org: demoSchedulingPolicy,
+    employee: employeeId ? demoEmployeeSchedulingPolicies.get(employeeId) ?? null : null,
+  };
+}
+
+function demoGuardCurrent(employeeId: string | null): Record<string, unknown> {
+  const raw = demoSchedulingPolicySnapshot(employeeId);
+  return employeeId ? { org: raw.org, employee: raw.employee } : { org: raw.org };
+}
+
+async function casWriteSchedulingPolicy(
+  guard: ApproverContextGuard,
+  orgId: string,
+  employeeId: string | null,
+  next: OrgSchedulingPolicy | null
+): Promise<void> {
+  const admin = createSupabaseAdminClient();
+  if (!admin) throw new Error("supabase_not_configured");
+  const { data, error } = await admin.rpc("approver_cas_write_scheduling_policy", {
+    p_org: orgId,
+    p_employee: employeeId,
+    p_approval: guard.approvalId,
+    p_fingerprint: guard.fingerprint,
+    p_expected: guard.expected,
+    p_target: employeeId ? "employee" : "org",
+    p_policy: next,
+  });
+  casResult(data, error);
+}
+
 export async function setOrgSchedulingPolicy(
   orgId: string,
-  policy: OrgSchedulingPolicy
+  policy: OrgSchedulingPolicy,
+  options: SchedulingPolicyWriteOptions = {}
 ): Promise<OrgSchedulingPolicy> {
+  const guard = options.contextGuard;
+  if (guard) assertGuardFor(guard, "schedulingPolicy.patch", null);
   const next = normalizeSchedulingPolicy({
     ...policy,
     updatedAt: new Date().toISOString(),
     updatedBy: "admin_mcp",
   });
   if (isDemoMode()) {
+    if (guard) assertDemoContextUnchanged(guard, demoGuardCurrent(null));
     demoSchedulingPolicy = next;
+    return next;
+  }
+  if (guard) {
+    await casWriteSchedulingPolicy(guard, orgId, null, next);
     return next;
   }
   const admin = createSupabaseAdminClient();
@@ -124,8 +181,11 @@ export async function getEmployeeSchedulingPolicy(
 export async function setEmployeeSchedulingPolicy(
   employeeId: string,
   orgId: string,
-  policy: OrgSchedulingPolicy | null
+  policy: OrgSchedulingPolicy | null,
+  options: SchedulingPolicyWriteOptions = {}
 ): Promise<OrgSchedulingPolicy | null> {
+  const guard = options.contextGuard;
+  if (guard) assertGuardFor(guard, "schedulingPolicy.patch", employeeId);
   const next = policy
     ? normalizeSchedulingPolicy({
         ...policy,
@@ -135,11 +195,17 @@ export async function setEmployeeSchedulingPolicy(
     : null;
 
   if (isDemoMode()) {
+    if (guard) assertDemoContextUnchanged(guard, demoGuardCurrent(employeeId));
     if (next === null) {
       demoEmployeeSchedulingPolicies.delete(employeeId);
     } else {
       demoEmployeeSchedulingPolicies.set(employeeId, next);
     }
+    return next;
+  }
+
+  if (guard) {
+    await casWriteSchedulingPolicy(guard, orgId, employeeId, next);
     return next;
   }
 

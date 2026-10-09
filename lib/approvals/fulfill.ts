@@ -1,4 +1,11 @@
 import { isDemoMode } from "@/lib/mode";
+import { PROVIDER_RATE_LIMITED, rateLimitWaitRemainingSeconds } from "@/lib/gateway/adapters/rate-limit";
+import { isThreadSingleFlightEnabled } from "@/lib/feature-flags";
+import { THREAD_MOVED_ON, beginThreadSend, type ThreadSendHandle } from "@/lib/thread-guard/guard";
+import { approvalReceivedAtMs, readThroughFromBody, readThroughFromSnapshot } from "@/lib/thread-guard/read-through";
+import { conversationKeyInputFromSnapshot, type ConversationKeyInput } from "@/lib/comm-reply-dedup/conversation-key";
+import { auditThreadGuardHeld, auditThreadGuardStop } from "@/lib/thread-guard/respond";
+import { THREAD_MOVED_ON_CLOSE_REASON } from "@/lib/approvals/closed-without-send";
 import { isAdminClassApproval } from "@/lib/admin-mcp/audit-class";
 import { executeApproval } from "@/lib/approvals/execution";
 import {
@@ -24,7 +31,7 @@ import {
   recheckPolicyAtFulfill,
   type FulfillPolicyRecheck,
 } from "@/lib/approvals/fulfill-policy-recheck";
-import { getApprovalById, updateApprovalMetadata } from "@/lib/data/approvals";
+import { closeApprovalWithoutSend, getApprovalById, updateApprovalMetadata } from "@/lib/data/approvals";
 import { normalizePostingAs } from "@/lib/employees/posting-as";
 import {
   buildSnapshotAttachment,
@@ -144,6 +151,9 @@ export type InvokeSnapshot = {
     email?: string;
     phone?: string;
     lineId?: string;
+    /** Telegram conversation (thread single-flight key at fulfil). */
+    telegramChatId?: string;
+    telegramThreadId?: string;
   } | null;
   args: Record<string, unknown>;
   informationClass?: InformationClass;
@@ -154,6 +164,12 @@ export type InvokeSnapshot = {
    * See lib/approvals/snapshot-attachment.ts.
    */
   fileAttachment?: SnapshotAttachment | null;
+  /**
+   * Thread single-flight (THREAD_SINGLE_FLIGHT_ENABLED): the explicit read
+   * point sent with the request (normalized Slack-style ts). Fulfil checks
+   * against this (else conversation.ts), never against a re-run request's.
+   */
+  readThroughTs?: string;
 };
 
 export type ApprovalFulfillment = {
@@ -180,6 +196,18 @@ export type ApprovalFulfillment = {
    * kept as uncertain (verify the post, then resend with confirmedNotDelivered).
    */
   uncertainRef?: string;
+  /**
+   * error "provider_rate_limited" (Slack ratelimited / X 429, nothing posted):
+   * the provider's wait in seconds, counted from `at`. A re-run inside that
+   * wait stops before the provider call (rateLimitWaitStop).
+   */
+  retryAfterSeconds?: number;
+  /**
+   * Thread single-flight stop at fulfil (error thread_busy / thread_moved_on /
+   * thread_guard_unavailable): retryAfterSeconds, or readThroughTs + aiPostedTs +
+   * postedBy (+ approvalStatus "superseded" when moved_on closed the approval).
+   */
+  threadGuard?: Record<string, unknown>;
 };
 
 export type ConversationDelivery =
@@ -299,6 +327,18 @@ export function buildInvokeSnapshot(input: {
   const fidelity = input.fidelity || input.body?.disclosure || undefined;
   if (informationClass) snapshot.informationClass = informationClass;
   if (fidelity) snapshot.fidelity = fidelity;
+  if (isThreadSingleFlightEnabled() && isAudienceGatedTool(input.tool) && input.body) {
+    // Capped at the time the request was received (木村 #286 pre-flag item 1).
+    const readThrough = readThroughFromBody(input.body as unknown as Record<string, unknown>);
+    if (readThrough?.source === "explicit") snapshot.readThroughTs = readThrough.ts;
+    const rawConv = input.body.conversation as unknown as Record<string, unknown> | undefined;
+    const tgChat = typeof rawConv?.telegramChatId === "string" ? rawConv.telegramChatId.trim() : "";
+    if (snapshot.conversation && tgChat) {
+      snapshot.conversation.telegramChatId = tgChat;
+      const tgThread = typeof rawConv?.telegramThreadId === "string" ? rawConv.telegramThreadId.trim() : "";
+      if (tgThread) snapshot.conversation.telegramThreadId = tgThread;
+    }
+  }
   // Always recorded for conversation tools so "no attachment" is explicit (null).
   if (isAudienceGatedTool(input.tool)) {
     snapshot.fileAttachment = buildSnapshotAttachment(input.body?.fileAttachment);
@@ -343,11 +383,14 @@ export function parseInvokeSnapshot(
           email: str(convRaw.email),
           phone: str(convRaw.phone),
           lineId: str(convRaw.lineId),
+          ...(str(convRaw.telegramChatId) ? { telegramChatId: str(convRaw.telegramChatId) } : {}),
+          ...(str(convRaw.telegramThreadId) ? { telegramThreadId: str(convRaw.telegramThreadId) } : {}),
         }
       : null,
     args,
     informationClass: str(rec.informationClass) as InformationClass | undefined,
     fidelity: str(rec.fidelity) as DisclosureFidelity | undefined,
+    ...(str(rec.readThroughTs) ? { readThroughTs: str(rec.readThroughTs) } : {}),
   };
 }
 
@@ -375,6 +418,12 @@ export function parseFulfillment(
   if (typeof rec.id === "string") fulfillment.id = rec.id;
   if (typeof rec.surface === "string") fulfillment.surface = rec.surface;
   if (typeof rec.error === "string") fulfillment.error = rec.error;
+  if (typeof rec.retryAfterSeconds === "number" && Number.isFinite(rec.retryAfterSeconds)) {
+    fulfillment.retryAfterSeconds = rec.retryAfterSeconds;
+  }
+  if (rec.threadGuard && typeof rec.threadGuard === "object" && !Array.isArray(rec.threadGuard)) {
+    fulfillment.threadGuard = { ...(rec.threadGuard as Record<string, unknown>) };
+  }
   if (rec.threadTsSource === "client" || rec.threadTsSource === "wake_stash") {
     fulfillment.threadTsSource = rec.threadTsSource;
   }
@@ -583,10 +632,25 @@ async function auditFulfillmentFailure(
   });
 }
 
+/**
+ * The last run of this approval was rate-limited (nothing posted) and the
+ * provider's wait is not over → stop before any provider call or ledger claim.
+ * Not persisted: the recorded rate-limit (and its `at`) stays the reference.
+ * The execution claim ends "failed" (provider_rate_limited is retryable), so
+ * the approval runs again once the wait is over. No automatic retry.
+ */
+function rateLimitWaitStop(approval: ApprovalRequest): ApprovalFulfillment | null {
+  const remaining = rateLimitWaitRemainingSeconds(parseFulfillment(approval.metadata));
+  if (!remaining) return null;
+  return { ok: false, error: PROVIDER_RATE_LIMITED, retryAfterSeconds: remaining, at: new Date().toISOString() };
+}
+
 async function fulfillSnsPublish(
   approval: ApprovalRequest,
   snapshot: InvokeSnapshot
 ): Promise<ApprovalFulfillment> {
+  const waitStop = rateLimitWaitStop(approval);
+  if (waitStop) return waitStop;
   const args = snapshot.args;
   const text = outboundText(args, snapshot.purpose || approval.purpose);
   // Duplicate post guard v2 (DUPLICATE_GUARD_V2_ENABLED; OFF → no-op): the same
@@ -628,8 +692,9 @@ async function fulfillSnsPublish(
       }
     : {
         ok: false,
-        error: unknown ? POST_OUTCOME_UNKNOWN : posted.error,
+        error: unknown ? POST_OUTCOME_UNKNOWN : posted.retryAfterSeconds !== undefined ? PROVIDER_RATE_LIMITED : posted.error,
         ...(unknown && gate.claimId ? { uncertainRef: gate.claimId } : {}),
+        ...(!unknown && posted.retryAfterSeconds !== undefined ? { retryAfterSeconds: posted.retryAfterSeconds } : {}),
         ...(posted.surface ? { surface: posted.surface } : {}),
         at,
       };
@@ -795,6 +860,9 @@ async function fulfillApprovedInvokeCore(
 ): Promise<ApprovalFulfillment | null> {
   let dedupGate: FulfillDedupGate | null = null;
   let postAttempted = false;
+  // Thread single-flight lease (released in `finally` on every path).
+  let threadHandle: ThreadSendHandle | null = null;
+  let threadSent: { sent: boolean; messageTs?: string } = { sent: false };
   try {
     const existing = parseFulfillment(approval.metadata);
     if (existing?.ok) return existing;
@@ -827,6 +895,86 @@ async function fulfillApprovedInvokeCore(
 
     if (!isAudienceGatedTool(snapshot.tool || approval.tool || "")) {
       return null;
+    }
+
+    // THREAD_SINGLE_FLIGHT_ENABLED: one lease + "already moved on" check per
+    // conversation, against the APPROVED snapshot's read point (judged at the
+    // time the approval was received, never the fulfil-time clock). Returns a
+    // stop fulfillment, or null (held → `threadHandle`, released in finally).
+    const runFulfilThreadGuard = async (keyInput: ConversationKeyInput | null): Promise<ApprovalFulfillment | null> => {
+      const threadSend = await beginThreadSend({
+        orgId: approval.orgId,
+        employeeId: approval.employeeId,
+        jobId: snapshot.jobId || approval.jobId,
+        keyInput,
+        readThrough: readThroughFromSnapshot(snapshot, approvalReceivedAtMs(approval.createdAt)),
+        receivedAtMs: approvalReceivedAtMs(approval.createdAt),
+      });
+      const threadAuditCtx = {
+        orgId: approval.orgId,
+        employeeId: approval.employeeId,
+        credentialId: approval.credentialId,
+        purpose: approval.purpose,
+        tool: snapshot.tool,
+        jobId: snapshot.jobId,
+        approvalId: approval.id,
+        phase: "fulfil" as const,
+      };
+      if (threadSend.kind === "held") {
+        threadHandle = threadSend.handle;
+        await auditThreadGuardHeld(threadSend, threadAuditCtx);
+        return null;
+      }
+      if (threadSend.kind !== "stop") return null;
+      const guardExtra: Record<string, unknown> = Object.fromEntries(
+        ["retryAfterSeconds", "readThroughTs", "aiPostedTs", "postedBy"]
+          .filter((k) => threadSend.body[k] !== undefined)
+          .map((k) => [k, threadSend.body[k]])
+      );
+      await auditThreadGuardStop(threadSend, threadAuditCtx);
+      if (threadSend.code === THREAD_MOVED_ON) {
+        const meta = { reason: THREAD_MOVED_ON_CLOSE_REASON, phase: "approval.fulfill", ...guardExtra };
+        const closed = await closeApprovalWithoutSend({ approval, from: ["approved"], to: "superseded", meta }).catch(() => null);
+        if (closed) {
+          approval.status = "superseded";
+          approval.metadata = closed.metadata;
+          await appendAuditEvent({
+            orgId: approval.orgId,
+            employeeId: approval.employeeId,
+            credentialId: approval.credentialId,
+            action: "approval.superseded",
+            purpose: approval.purpose,
+            summary: "承認済みの会話投稿を、スレッドが先に進んだ（読んだ時点より後に AI 社員の投稿あり）ため古いものとして送信せずに終了",
+            metadata: { approvalId: approval.id, tool: snapshot.tool, jobId: snapshot.jobId, ...meta },
+          }).catch(() => undefined);
+          return {
+            ok: false,
+            error: threadSend.code,
+            threadGuard: { ...guardExtra, approvalStatus: "superseded" },
+            at: new Date().toISOString(),
+          };
+        }
+      }
+      const blocked: ApprovalFulfillment = {
+        ok: false,
+        error: threadSend.code,
+        threadGuard: guardExtra,
+        at: new Date().toISOString(),
+      };
+      await persistFulfillment(approval, blocked);
+      return blocked;
+    };
+
+    // Approved LINE / Telegram (/ mail) replies: the same fulfil-time guard
+    // (木村 #286 pre-flag item 4), BEFORE the gateway's Slack-only delivery
+    // check. The gateway has no LINE / Telegram delivery for an approved reply
+    // today (it stops at slack_channel_required, nothing sent); a stale one is
+    // now closed as superseded, and any future delivery here is already behind
+    // the lease. Held → released in finally (nothing sent).
+    const snapshotSurface = (snapshot.conversation?.surface || "").toLowerCase();
+    if (isThreadSingleFlightEnabled() && snapshotSurface && snapshotSurface !== "slack") {
+      const stopped = await runFulfilThreadGuard(conversationKeyInputFromSnapshot(snapshot, approval.orgId));
+      if (stopped) return stopped;
     }
 
     const snapshotArgs = snapshot.args ?? {};
@@ -871,6 +1019,28 @@ async function fulfillApprovedInvokeCore(
 
     const dest = destValidation.dest;
 
+    // Rate-limited last time and the provider's wait is not over: no post, no claim.
+    const waitStop = rateLimitWaitStop(approval);
+    if (waitStop) return waitStop;
+
+    // THREAD_SINGLE_FLIGHT_ENABLED: the same lease + "already moved on" check
+    // as a direct post, against the APPROVED snapshot's read point. Before the
+    // ledger claim, so a stop leaves nothing behind. busy / unavailable keep the
+    // approval approved (re-runnable). moved_on CLOSES it as superseded (stale,
+    // terminal, nothing sent; 木村 #286 decision 2); if the close loses a race
+    // the stop is recorded and the next run re-checks.
+    let earlyThread: Awaited<ReturnType<typeof threadOf>> | null = null;
+    if (isThreadSingleFlightEnabled() && !threadHandle) {
+      earlyThread = await threadOf(approval, snapshot, dest);
+      const stopped = await runFulfilThreadGuard({
+        orgId: approval.orgId,
+        surface: "slack",
+        slackChannelId: dest,
+        threadId: earlyThread.threadTs,
+      });
+      if (stopped) return stopped;
+    }
+
     // COMM_REPLY_DEDUP_ENABLED: expired, or the conversation already got a reply
     // with the same / a similar body after this approval was created → closed
     // without sending. Claims the send in the hash-only ledger otherwise. Fail
@@ -890,7 +1060,7 @@ async function fulfillApprovedInvokeCore(
       return blocked;
     }
 
-    const threadResult = await threadOf(approval, snapshot, dest);
+    const threadResult = earlyThread ?? (await threadOf(approval, snapshot, dest));
 
     postAttempted = true;
 
@@ -904,6 +1074,7 @@ async function fulfillApprovedInvokeCore(
       // Human already approved the full mention-reply body.
       summarize: false,
     });
+    if (posted.ok && posted.delivery === "slack") threadSent = { sent: true, messageTs: posted.ts };
     const gateAfterPost = dedupGate;
     dedupGate = null;
     // v1: failed releases the claim. v2: only a provider-confirmed "not sent"
@@ -934,7 +1105,9 @@ async function fulfillApprovedInvokeCore(
             ...(gateAfterPost.ok && gateAfterPost.claimId ? { uncertainRef: gateAfterPost.claimId } : {}),
             at,
           }
-        : { ok: false, error: posted.error || "slack_post_failed", at };
+        : posted.retryAfterSeconds !== undefined
+          ? { ok: false, error: PROVIDER_RATE_LIMITED, retryAfterSeconds: posted.retryAfterSeconds, at }
+          : { ok: false, error: posted.error || "slack_post_failed", at };
 
     await persistFulfillment(approval, {
       ...fulfillment,
@@ -1011,6 +1184,10 @@ async function fulfillApprovedInvokeCore(
       /* audit is best-effort */
     }
     return fulfillment;
+  } finally {
+    // Assigned inside runFulfilThreadGuard (a closure): widen past TS's narrowing.
+    const heldThread = threadHandle as ThreadSendHandle | null;
+    if (heldThread) await heldThread.finish(threadSent).catch(() => undefined);
   }
 }
 

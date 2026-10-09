@@ -1,3 +1,4 @@
+import { approverRequirementCardLinesJa } from "@/lib/approver-authority/card";
 import { cardApprovalReasonsLine, cardDetectedTopicsLine } from "@/lib/approvals/approval-reasons";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { formatMailCardParts, MAIL_BODY_PREVIEW_LABEL, readMailArtifact } from "@/lib/approvals/summary";
@@ -78,7 +79,7 @@ export function verifySlackSignature(input: {
 
 async function callSlack(
   token: string,
-  method: "chat.postMessage" | "chat.update",
+  method: "chat.postMessage" | "chat.update" | "conversations.open",
   payload: Record<string, unknown>
 ): Promise<{ ok: boolean; result?: SlackApiResponse; error?: string }> {
   if (!token) return { ok: false, error: "slack_bot_token_missing" };
@@ -181,6 +182,8 @@ function approvalBlocks(
     `社員: ${escapeSlackMrkdwn(employee?.displayName || approval.employeeId)}`,
     `ツール: \`${escapeSlackMrkdwn(approval.tool || "unknown")}\``,
     `目的: ${escapeSlackMrkdwn(approval.purpose)}`,
+    // PR-D: 「オーナー承認が必要」 and whose approval is pending (empty when flag OFF / not a target).
+    ...(options?.resolved ? [] : approverRequirementCardLinesJa(approval).map((line) => escapeSlackMrkdwn(line))),
     attachmentLine,
     // 木村 B: every reason, own line (outside the 400-char summary cut).
     (() => {
@@ -341,4 +344,38 @@ export async function editSlackWorkflowProgress(
     blocks: approvalBlocks(approval, employee, { workflow }),
   });
   return { ok: edited.ok, ...(edited.error ? { error: edited.error } : {}) };
+}
+
+/** PR-D: re-render the pending card (e.g. after a designated-admin endorsement). */
+export async function refreshSlackApprovalCard(
+  approval: ApprovalRequest, employee: Employee | null, channel: NotificationChannelRuntime
+): Promise<SlackNotifyResult> {
+  const cfg = target(channel);
+  const delivery = await getNotificationDelivery({ approvalId: approval.id, channelId: channel.id });
+  const ts = delivery?.externalMessageId || "";
+  const slackChannel = String(delivery?.context.channel || cfg.channelId || "");
+  if (!cfg.botToken || !ts || !slackChannel) return { ok: false, skipped: true };
+  const edited = await callSlack(cfg.botToken, "chat.update", {
+    channel: slackChannel, ts, text: approvalFallbackText(approval),
+    blocks: approvalBlocks(approval, employee),
+  });
+  return { ok: edited.ok, ...(edited.error ? { error: edited.error } : {}) };
+}
+
+/**
+ * PR-D: plain-text DM to one Slack user through an approval inbox's bot
+ * (after-the-fact owner notices). Short error codes only; the token stays in
+ * the Authorization header.
+ */
+export async function sendSlackDmToUser(
+  channel: NotificationChannelRuntime, slackUserId: string, text: string
+): Promise<SlackNotifyResult> {
+  const cfg = target(channel);
+  const user = String(slackUserId || "").trim();
+  if (!cfg.botToken || !/^[UW][A-Z0-9]{2,30}$/.test(user)) return { ok: false, skipped: true };
+  const opened = await callSlack(cfg.botToken, "conversations.open", { users: user });
+  const dm = (opened.result as { channel?: { id?: string } } | undefined)?.channel?.id;
+  if (!opened.ok || !dm) return { ok: false, error: opened.error || "dm_open_failed" };
+  const sent = await callSlack(cfg.botToken, "chat.postMessage", { channel: dm, text });
+  return { ok: sent.ok, ...(sent.error ? { error: sent.error } : {}) };
 }

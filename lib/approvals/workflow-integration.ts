@@ -15,7 +15,13 @@ import {
   initializeWorkflowForApproval,
 } from "@/lib/approval-workflow";
 import { resolveApprovalWithoutWorkflow as baseResolveApproval, getApprovalById } from "@/lib/data/approvals";
+// PR-D: namespace access so the flag-OFF path keeps importing exactly what it did.
+import * as approvalsData from "@/lib/data/approvals";
+import { isApproverAuthorityEnabled } from "@/lib/feature-flags";
+import { checkApproverAuthority, recordApproverAuthority, verifyApproverIdentity } from "@/lib/approver-authority/verify";
+import { promoteOwnerApproverConflict, promoteOwnerRequesterUnidentified, requesterMemberIdsFromMetadata } from "@/lib/approver-authority/decide";
 import { isDemoMode } from "@/lib/mode";
+import { PROMOTE_OWNER_TOOL } from "@/lib/approver-authority/targets";
 import { createSupabaseAdminClient } from "@/lib/supabase";
 import { withDemoWorkflowLock } from "@/lib/approval-workflow/lock";
 import { getBallotsByInstanceId, demoWorkflowVoterIsCurrent } from "@/lib/approval-workflow/data";
@@ -72,7 +78,47 @@ export async function resolveApprovalWithWorkflow(
       await refreshWorkflowNotification(result.approval, result.progress);
     } catch { /* The status API remains the source of truth. No completion notification is sent. */ }
   }
+  if (!result.ok && result.reason === "owner_approval_required") {
+    // PR-D: a designated admin approved an owner-required ticket. Same notice on
+    // every channel; never undoes the recorded endorsement.
+    try {
+      const fresh = await getApprovalById(id, orgId);
+      if (fresh && fresh.status === "pending") {
+        result.approval = fresh;
+        const { notifyOwnerApprovalPending } = await import("@/lib/notify/channels");
+        await notifyOwnerApprovalPending(fresh);
+      }
+    } catch { /* best effort; the ticket stays pending either way */ }
+  }
+  if (result.ok && result.workflowComplete && result.workflowApproved && isApproverAuthorityEnabled()) {
+    // PR-D 確定仕様: 事後通知 to every other owner (Slack DM + LINE / Telegram inbox).
+    try {
+      const fresh = await getApprovalById(id, orgId);
+      // members.promoteOwner: owners get ONE notice, on promotion (fulfil) only.
+      if (fresh && fresh.status === "approved" && fresh.requiredApproverKind && fresh.approverMemberId && fresh.tool !== "members.promoteOwner") {
+        const { notifyOwnersApproverAuthorityApproved } = await import("@/lib/notify/channels");
+        await notifyOwnersApproverAuthorityApproved(fresh);
+      }
+    } catch { /* best effort; never undoes the approval */ }
+  }
   return result;
+}
+
+function authorityStop(
+  approval: ApprovalRequest,
+  reason: string,
+  workflowApplied: boolean
+): WorkflowResolveResult {
+  return {
+    ok: false,
+    approval,
+    workflowApplied,
+    workflowComplete: false,
+    workflowApproved: false,
+    workflowRejected: false,
+    progress: null,
+    reason,
+  };
 }
 
 async function resolveWorkflow(
@@ -116,30 +162,53 @@ async function resolveWorkflow(
     });
   }
 
+  // PR-D: on approver-authority tickets the pressing Slack / LINE / Telegram
+  // user must be linked to the member who counts as the approver (fail closed).
+  if (status === "approved" && isApproverAuthorityEnabled() && approval.requiredApproverKind) {
+    const identity = await verifyApproverIdentity(orgId, opts);
+    if (!identity.ok) return authorityStop(approval, identity.reason, false);
+    opts = { ...opts, memberId: identity.memberId };
+    // members.promoteOwner: the member being promoted may never approve.
+    // (The requester follows the general single-owner rule.) Before any ballot / W1 write.
+    const conflict = promoteOwnerApproverConflict(approval, identity.memberId || opts.voterUserId);
+    if (conflict) return authorityStop(approval, conflict, false);
+    // G1 (木村 round 3): a 2nd owner since filing + unidentified requester → refuse.
+    if (approval.tool === PROMOTE_OWNER_TOOL) {
+      const { listMembers } = await import("@/lib/data/members");
+      const owners = (await listMembers(orgId)).filter((m) => m.orgId === orgId && m.role === "owner" && m.status === "active").length;
+      if (promoteOwnerRequesterUnidentified(approval, owners)) return authorityStop(approval, "requester_not_identified", false);
+    }
+  }
+
   // Idempotent snapshot initialization is also required for tickets created by
   // an older application. A DB failure must never mean "no workflow".
   const { instance } = await initializeWorkflowForApproval(approval, approval.employeeId || null);
 
   if (!instance) {
     // P0 Item 5: Record decisionId for W1 replay protection when strict mode is ON
-    const resolved = await baseResolveApproval(id, status, resolvedBy, orgId, {
+    // PR-D: flag ON → the W1 RPC also verifies the approver and reports why not.
+    // Flag OFF → exactly today's call.
+    const w1Opts = {
       memberId: opts.memberId,
       revisionNote: opts.revisionNote,
       grokBotAgentId: opts.grokBotAgentId,
       actorId: opts.actorId,
       decisionId: opts.decisionId,
       externalVoter: opts.externalVoter,
-    });
+    };
+    const { approval: resolved, reason } = isApproverAuthorityEnabled()
+      ? await approvalsData.resolveApprovalWithoutWorkflowDetailed(id, status, resolvedBy, orgId, w1Opts)
+      : { approval: await baseResolveApproval(id, status, resolvedBy, orgId, w1Opts), reason: "resolve_failed" };
 
     return {
       ok: Boolean(resolved),
-      approval: resolved,
+      approval: resolved ?? (isApproverAuthorityEnabled() ? approval : null),
       workflowApplied: false,
       workflowComplete: Boolean(resolved),
       workflowApproved: resolved?.status === "approved",
       workflowRejected: resolved?.status === "rejected",
       progress: null,
-      reason: resolved ? "resolved_no_workflow" : "resolve_failed",
+      reason: resolved ? "resolved_no_workflow" : isApproverAuthorityEnabled() ? reason : "resolve_failed",
     };
   }
 
@@ -160,6 +229,25 @@ async function resolveWorkflow(
   if (opts.externalVoter && !opts.decisionId) return { ok: false, approval, workflowApplied: true,
     workflowComplete: false, workflowApproved: false, workflowRejected: false, progress: null, reason: "workflow_event_id_required" };
   const vote = status === "approved" ? "approve" : "reject";
+
+  // PR-D: on approver-authority tickets only an owner / designated admin may cast
+  // an approve ballot; a designated admin on an owner ticket is recorded as an
+  // endorsement instead (no ballot, ticket stays pending).
+  const authorityMemberId = (opts.memberId || opts.voterUserId || "").trim();
+  const enforceAuthority = vote === "approve" && isApproverAuthorityEnabled() && Boolean(approval.requiredApproverKind);
+  if (enforceAuthority) {
+    const decision = await checkApproverAuthority({
+      orgId,
+      memberId: authorityMemberId,
+      requiredKind: approval.requiredApproverKind,
+      requesterMemberIds: requesterMemberIdsFromMetadata(approval.metadata),
+    });
+    if (decision.outcome === "deny") return authorityStop(approval, decision.reason, true);
+    if (decision.outcome === "endorse") {
+      const recorded = await recordApproverAuthority(approval, authorityMemberId, "endorse");
+      return authorityStop(approval, recorded.ok ? decision.reason : recorded.reason, true);
+    }
+  }
 
   // Production commits ballots, stage state, and base approval in one RPC.
   // Demo also supports retrying the old terminal-instance / pending-ticket gap.
@@ -191,7 +279,14 @@ async function resolveWorkflow(
     const resolved = voteResult.approval ?? (isDemoMode() ? await baseResolveApproval(id, finalStatus, resolvedBy, orgId, {
       grokBotAgentId: opts.grokBotAgentId,
       actorId: opts.actorId,
+      // PR-D: the demo finalization re-verifies the same (already checked) voter.
+      ...(enforceAuthority ? { memberId: authorityMemberId } : {}),
     }) : null);
+    if (enforceAuthority && resolved?.status === "approved" && !resolved.approverMemberId) {
+      // Store the verified final approver; on failure fulfil stops (no approver on the ticket).
+      const recorded = await recordApproverAuthority(resolved, authorityMemberId, "verified");
+      if (!recorded.ok) console.warn("approver_authority_record_failed", { id, orgId, reason: recorded.reason });
+    }
 
     return {
       ok: Boolean(resolved),
