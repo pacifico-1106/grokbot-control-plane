@@ -183,7 +183,7 @@ function approvalBlocks(
     attachmentLine,
     // 木村 B: every reason, own line (outside the 400-char summary cut).
     (() => {
-      const line = cardApprovalReasonsLine(approval.metadata);
+      const line = cardApprovalReasonsLine(approval.metadata, approval.summary);
       return line ? escapeSlackMrkdwn(line) : "";
     })(),
     ...detail,

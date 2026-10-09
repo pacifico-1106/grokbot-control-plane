@@ -255,10 +255,48 @@ export function approvalReasonsCardLine(reasons: ApprovalReason[]): string {
   return clipText(`承認が必要な理由: ${reasons.map(partJa).join("／")}`, APPROVAL_REASONS_CARD_MAX_CHARS);
 }
 
-/** Card line from ticket metadata; null when the flag is OFF or there is nothing to show. */
-export function cardApprovalReasonsLine(metadata: unknown): string | null {
+/**
+ * 木村 #297 answer 3: admin / system tickets (admin MCP queue, channel-
+ * classification system proposals, AI config-change requests) are always
+ * human by construction. Their line is derived at render time from the
+ * server-written ticket metadata (never stored, never from a request).
+ */
+export type AdminChangeSource = "admin_agent" | "system_proposal" | "config_change";
+const ADMIN_CHANGE_LABEL_JA: Record<AdminChangeSource, string> = {
+  admin_agent: "管理エージェントの設定変更",
+  system_proposal: "自動提案の設定変更・未反映",
+  config_change: "AI社員からの設定変更依頼",
+};
+
+/** #275: the card summary is cut at 400 chars; summary + reasons line must fit. */
+export const ADMIN_CARD_TOTAL_MAX_CHARS = 400;
+
+export function adminChangeSource(metadata: unknown): AdminChangeSource | null {
+  if (!metadata || typeof metadata !== "object") return null;
+  const m = metadata as Record<string, unknown>;
+  if (m.configChange && typeof m.configChange === "object" && m.always_human === true) return "config_change";
+  const adminTicket = m.isAdminMcpTool === true || m.approvalClass === "admin";
+  if (!adminTicket) return null;
+  const requester = m.proposalRequester as { kind?: unknown } | undefined;
+  return requester?.kind === "system" ? "system_proposal" : "admin_agent";
+}
+
+function adminChangeLine(source: AdminChangeSource): string {
+  return clipText(`承認が必要な理由: 常に人の承認（${ADMIN_CHANGE_LABEL_JA[source]}）`, APPROVAL_REASONS_CARD_MAX_CHARS);
+}
+
+/**
+ * Card line from ticket metadata; null when the flag is OFF or there is
+ * nothing to show. Admin / system tickets: derived line, dropped when
+ * summary + line would exceed ADMIN_CARD_TOTAL_MAX_CHARS.
+ */
+export function cardApprovalReasonsLine(metadata: unknown, summary?: string | null): string | null {
   if (!isApprovalReasonsEnabled()) return null;
   const reasons = readApprovalReasons(metadata);
-  if (!reasons || reasons.length === 0) return null;
-  return approvalReasonsCardLine(reasons);
+  if (reasons && reasons.length > 0) return approvalReasonsCardLine(reasons);
+  const source = adminChangeSource(metadata);
+  if (!source) return null;
+  const line = adminChangeLine(source);
+  const used = Array.from(summary ?? "").length;
+  return used + 1 + Array.from(line).length <= ADMIN_CARD_TOTAL_MAX_CHARS ? line : null;
 }

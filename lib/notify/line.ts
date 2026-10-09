@@ -86,7 +86,7 @@ export async function sendApprovalToLineChannel(
   if (!cfg.destinationId || !approval.telegramRef) return { ok: false, skipped: true };
   const altText = `承認依頼: ${approval.title}`;
   const attachment = readCardAttachment(approval.metadata);
-  const reasonsLine = cardApprovalReasonsLine(approval.metadata);
+  const reasonsLine = cardApprovalReasonsLine(approval.metadata, approval.summary);
   const result = await callLine(channel, "/v2/bot/message/push", {
     to: cfg.destinationId,
     messages: [{

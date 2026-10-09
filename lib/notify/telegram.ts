@@ -102,7 +102,7 @@ function composeApprovalTelegramMessage(
     lines.push(attachmentCardLine(attachment, (name) => `<code>${escapeTelegramHtml(name)}</code>`));
   }
   // 木村 B: every reason, outside the summary trim.
-  const reasonsLine = cardApprovalReasonsLine(approval.metadata);
+  const reasonsLine = cardApprovalReasonsLine(approval.metadata, approval.summary);
   if (reasonsLine) lines.push(escapeTelegramHtml(reasonsLine));
 
   // mail.send: put 宛先/件名/本文先頭 first for judgment material

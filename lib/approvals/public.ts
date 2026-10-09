@@ -28,6 +28,6 @@ export function publicApproval(approval: ApprovalRequest): PublicApproval {
     pollPath: "",
     metadata: redactMetadata(approval.metadata) as Record<string, unknown>,
     cardAttachment: readCardAttachment(approval.metadata),
-    cardReasons: cardApprovalReasonsLine(approval.metadata),
+    cardReasons: cardApprovalReasonsLine(approval.metadata, approval.summary),
   };
 }
