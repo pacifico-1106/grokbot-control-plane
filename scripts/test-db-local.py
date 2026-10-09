@@ -261,7 +261,45 @@ try:
                  " and column_name in ('required_approver_kind','approver_member_id','approver_role','approver_authority','designated_admin_member_ids'));") == "t"
     sql(approver_authority)  # forward again after rollback
     sql(ROOT / "tests/security/db-approver-authority.sql")
+    # TOCTOU follow-up (20261010100000): approval-executed policy writes are a
+    # compare-and-swap on the snapshot pinned by the filing fingerprint.
+    context_cas = ROOT / "supabase/migrations/20261010100000_approver_context_cas.sql"
+    sql(context_cas)
+    sql(context_cas)  # re-applicable
+    sql(ROOT / "tests/security/db-approver-context-cas.sql")
+    cas_org = "7c100000-0000-4000-8000-0000000000a1"
+    cas_emp = "7c100000-0000-4000-8000-000000000e01"
+    cas_ticket = "7c100000-0000-4000-8000-000000000101"
+    cas_sched = "7c100000-0000-4000-8000-000000000201"
+    query(f"insert into public.orgs(id, name, scheduling_policy) values ('{cas_org}', 'context-cas-race', '{{\"rules\":[{{\"id\":\"r1\",\"costCapJpy\":5000}}]}}');"
+          f"insert into public.employees(id, org_id, display_name, role_label, scopes, approval_policy) values ('{cas_emp}', '{cas_org}', 'E', 'r', '{{commerce:order}}', 'always_human');"
+          f"insert into public.approval_requests(id, org_id, purpose, summary, risk, status, tool, required_approver_kind, approver_authority, metadata) values"
+          f" ('{cas_ticket}', '{cas_org}', 'admin.policy', 'race', 'high', 'approved', 'policy.patch', 'owner', '{{\"contextFingerprint\":\"fp\"}}',"
+          f"  '{{\"adminTool\":\"policy.patch\",\"adminMutation\":{{\"employeeId\":\"{cas_emp}\"}}}}'),"
+          f" ('{cas_sched}', '{cas_org}', 'admin.policy', 'race', 'high', 'approved', 'schedulingPolicy.patch', 'owner', '{{\"contextFingerprint\":\"fp\"}}',"
+          f"  '{{\"adminTool\":\"schedulingPolicy.patch\",\"adminMutation\":{{}}}}');")
+    snap = query(f"select jsonb_build_object('scopes', to_jsonb(scopes), 'approval_policy', to_jsonb(approval_policy), 'action_limits', action_limits,"
+                 f" 'tool_approval_defaults', tool_approval_defaults)::text from public.employees where id='{cas_emp}';")
+    command = (f"set role service_role; select public.approver_cas_write_employee_policy('{cas_org}','{cas_emp}','{cas_ticket}','fp','{snap}'::jsonb,"
+               f"'{{mail:draft}}','{{}}','risk_based',null,'ok','{{}}')->>'reason';")
+    with ThreadPoolExecutor(max_workers=12) as pool:
+        reasons = list(pool.map(query, [command]*12))
+    assert reasons.count("") == 1 and reasons.count("approver_context_changed") == 11, reasons
+    org_snap = query(f"select jsonb_build_object('org', scheduling_policy)::text from public.orgs where id='{cas_org}';")
+    command = (f"set role service_role; select public.approver_cas_write_scheduling_policy('{cas_org}',null,'{cas_sched}','fp','{org_snap}'::jsonb,"
+               f"'org',jsonb_build_object('rules', jsonb_build_array(jsonb_build_object('id','r1','costCapJpy',9000))))->>'reason';")
+    with ThreadPoolExecutor(max_workers=12) as pool:
+        reasons = list(pool.map(query, [command]*12))
+    assert reasons.count("") == 1 and reasons.count("approver_context_changed") == 11, reasons
+    query(f"delete from public.approval_requests where org_id='{cas_org}'; delete from public.orgs where id='{cas_org}';")
+    sql(ROOT / "supabase/verification/20261010100000_approver_context_cas_rollback.sql")
+    assert query("select to_regprocedure('public.approver_cas_write_employee_policy(uuid,uuid,uuid,text,jsonb,text[],text[],text,jsonb,text,jsonb)') is null"
+                 " and to_regprocedure('public.approver_cas_write_scheduling_policy(uuid,uuid,uuid,text,jsonb,text,jsonb)') is null"
+                 " and to_regprocedure('public.approver_authority_check(uuid,uuid,text,text[])') is not null;") == "t"
+    sql(context_cas)  # forward again after rollback
+    sql(ROOT / "tests/security/db-approver-context-cas.sql")
     print("PASS: approver authority (PR-D): owner / designated admin decision table; flag-OFF 7-argument W1 call unchanged; standard ticket → designated admin stored, others refused; owner ticket → designated admin endorsed once and kept pending, owner approves and is stored; zero owners stop; multiple owners: any one owner other than the requester (requesting owner refused; a sole owner's own approval counts; several owners all requesters → no_owner_other_than_requester); reject / non-target not gated; record_approver_authority verified/endorse; one RPC overload; EXECUTE service_role only; rollback restores the 7-argument RPC + re-apply.")
+    print("PASS: approver context CAS (TOCTOU follow-up): policy.patch / schedulingPolicy.patch writes only when the locked row still equals the pinned snapshot; concurrent change between check and write → approver_context_changed with nothing written (employee row, active and revoked credentials, org / employee scheduling policy); ticket binding (fingerprint, missing fingerprint, status, tool, target, org) refused; invalid input refused; EXECUTE service_role only; 12 concurrent writers with one snapshot → exactly 1 write (both RPCs); rollback drops both RPCs (PR-D untouched) + re-apply.")
     print("PASS: employee_webhook_settings (D9): RLS on, no policy, anon/authenticated denied, service_role reads/writes/upserts; cross-org row rejected; payload mode minimal|legacy_full (default minimal); ciphertext-only secret + fingerprint pair; employee delete cascades; rollback + re-apply.")
     print("PASS: channel_classify_proposals / channel_stuck_notice_windows (PR-B): RLS on, anon/authenticated denied (tables + 4 RPCs); org_channels accepts telegram; claim states claimed/in_flight/pending/decided, facts change reopens, other org isolated; attach same-org only; release unattached only; notice window once then suppressed; bad input denied; org delete cascades; 12 concurrent claims → exactly 1 claimed; rollback (2 tables + 4 RPCs + telegram surface) + re-apply.")
     print("PASS: channel_classify_budget_windows (PR-B follow-up H1): RLS on, no policy, anon/authenticated denied (table + RPC); allowed up to max → over_first once → over; per org / per key independent; expired window resets; bad input denied; org delete cascades; 20 concurrent takes (max 5) → exactly 5 allowed + 1 over_first; rollback (table + RPC, PR-B tables untouched) + re-apply.")
