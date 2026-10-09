@@ -681,6 +681,28 @@ describe("pre-flag-ON fixes (木村 #286 follow-up)", () => {
         expect((await invoke(callerDelivered(surface, B_TEXT, fresh()), "emp_comm2")).httpStatus).toBe(200);
       });
     }
+    // 木村 #293 decision 1: the same job reuses its own held lease within 10 min of its first post.
+    test("same job: a second part within the TTL reuses its own lease (200); a different job of the same employee is thread_busy", async () => {
+      on();
+      recordSlack();
+      const jobId = jid("line-multi");
+      expect((await invoke(callerDelivered("line", A_TEXT, old(), jobId))).httpStatus).toBe(200);
+      expect((await invoke(callerDelivered("line", C_TEXT, old(), jobId))).httpStatus).toBe(200);
+      const other = await invoke(callerDelivered("line", B_TEXT, fresh()));
+      expect(other.body.code).toBe("thread_busy");
+    });
+    test("same job more than 10 min after its first post → thread_busy while its lease is held", async () => {
+      on();
+      recordSlack();
+      const jobId = jid("line-late");
+      expect((await invoke(callerDelivered("line", A_TEXT, old(), jobId))).httpStatus).toBe(200);
+      later(9.5 * 60_000);
+      expect((await invoke(callerDelivered("line", C_TEXT, old(), jobId))).httpStatus).toBe(200);
+      later(10 * 60_000 + 10_000);
+      const late = await invoke(callerDelivered("line", B_TEXT, fresh(), jobId));
+      expect(late.httpStatus).toBe(409);
+      expect(late.body.code).toBe("thread_busy");
+    });
     test("the allowed reply is still recorded at once: a stale reply after the TTL is thread_moved_on", async () => {
       on();
       recordSlack();
@@ -778,6 +800,23 @@ describe("pre-flag-ON fixes (木村 #286 follow-up)", () => {
       expect((await getApprovalById(approvalId, DEMO_ORG.id))?.status).toBe("approved");
       expect((await invoke(callerDelivered("line", A_TEXT, fresh()), "emp_comm2")).httpStatus).toBe(200);
     });
+    // 木村 #293 decision 2: approved LINE / Telegram replies stay fail-closed, and the AI is told why.
+    for (const flag of ["on", "off"] as const) {
+      test(`flag ${flag}: the approved re-run sends nothing and the nextStep says this surface does not support approved replies yet`, async () => {
+        if (flag === "on") on();
+        else off();
+        recordSlack();
+        const res = await invoke(callerDelivered("line", B_TEXT, old(), jid("line-rerun"), "comm.send"));
+        expect(res.httpStatus).toBe(402);
+        const approvalId = String(res.body.approvalId);
+        await approveAs(approvalId);
+        const rerun = await invoke({ ...callerDelivered("line", B_TEXT, old(), String(res.body.jobId), "comm.send"), approvalId } as GatewayInvokeRequest);
+        expect(rerun.httpStatus).toBe(409);
+        expect(rerun.body.retryable).toBe(false);
+        expect(String(rerun.body.nextStep)).toContain("この窓口では承認後の返信にまだ対応していません");
+        expect(posts.length).toBe(0);
+      });
+    }
     test("flag OFF: unchanged (slack_channel_required, approval stays approved)", async () => {
       off();
       recordSlack();

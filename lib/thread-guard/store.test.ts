@@ -85,6 +85,52 @@ describe("lease", () => {
   });
 });
 
+// 木村 #293 decision 1: a caller-delivered reply holds the lease for its TTL;
+// the SAME job (same employee + job key) may reuse its own held lease, but only
+// within SAME_JOB_EXCLUSION_WINDOW_SECONDS of that job's first post in the thread.
+describe("same-job lease reuse (#293 decision 1)", () => {
+  const J1 = "1".repeat(64);
+  const J2 = "2".repeat(64);
+  const nowMicros = () => BigInt(now) * BigInt(1000);
+  test("same job within the window reuses its held lease (new lease id, TTL from now)", async () => {
+    setThreadGuardClockForTests(() => now);
+    const first = await acquireThreadLease({ orgId: ORG_A, employeeId: "emp_1", threadKey: KEY, ttlSeconds: 60, jobKey: J1 } as never);
+    expect(first.state).toBe("acquired");
+    await recordSelfPost({ orgId: ORG_A, employeeId: "emp_1", threadKey: KEY, micros: nowMicros(), jobKey: J1 });
+    tick(5_000);
+    const again = await acquireThreadLease({ orgId: ORG_A, employeeId: "emp_1", threadKey: KEY, ttlSeconds: 60, jobKey: J1 } as never);
+    expect(again.state).toBe("acquired");
+    if (first.state === "acquired" && again.state === "acquired") {
+      expect(again.leaseId).not.toBe(first.leaseId);
+      expect(again.expiresAtMs).toBe(now + 60_000);
+    }
+  });
+  test("after the window from the job's FIRST post → busy", async () => {
+    setThreadGuardClockForTests(() => now);
+    await recordSelfPost({ orgId: ORG_A, employeeId: "emp_1", threadKey: KEY, micros: nowMicros(), jobKey: J1 });
+    tick(570_000); // 9.5 min: the old lease is long gone, a normal acquire
+    expect((await acquireThreadLease({ orgId: ORG_A, employeeId: "emp_1", threadKey: KEY, ttlSeconds: 60, jobKey: J1 } as never)).state).toBe("acquired");
+    await recordSelfPost({ orgId: ORG_A, employeeId: "emp_1", threadKey: KEY, micros: nowMicros(), jobKey: J1 });
+    tick(40_000); // 10 min 10 s after the first post, lease still held (TTL 60 s)
+    expect((await acquireThreadLease({ orgId: ORG_A, employeeId: "emp_1", threadKey: KEY, ttlSeconds: 60, jobKey: J1 } as never)).state).toBe("busy");
+  });
+  test("a different job, another employee with the same job key, or a job with no post yet → busy", async () => {
+    setThreadGuardClockForTests(() => now);
+    await acquireThreadLease({ orgId: ORG_A, employeeId: "emp_1", threadKey: KEY, ttlSeconds: 60, jobKey: J1 } as never);
+    expect((await acquireThreadLease({ orgId: ORG_A, employeeId: "emp_1", threadKey: KEY, ttlSeconds: 60, jobKey: J1 } as never)).state).toBe("busy"); // no post yet
+    await recordSelfPost({ orgId: ORG_A, employeeId: "emp_1", threadKey: KEY, micros: nowMicros(), jobKey: J1 });
+    expect((await acquireThreadLease({ orgId: ORG_A, employeeId: "emp_1", threadKey: KEY, ttlSeconds: 60, jobKey: J2 } as never)).state).toBe("busy");
+    expect((await acquireThreadLease({ orgId: ORG_A, employeeId: "emp_2", threadKey: KEY, ttlSeconds: 60, jobKey: J1 } as never)).state).toBe("busy");
+    expect((await acquireThreadLease({ orgId: ORG_A, employeeId: "emp_2", threadKey: KEY, ttlSeconds: 60, jobKey: null } as never)).state).toBe("busy");
+  });
+  test("BOLA: another org's post with the same job key never lets a job re-enter", async () => {
+    setThreadGuardClockForTests(() => now);
+    await acquireThreadLease({ orgId: ORG_A, employeeId: "emp_1", threadKey: KEY, ttlSeconds: 60, jobKey: J1 } as never);
+    await recordSelfPost({ orgId: ORG_B, employeeId: "emp_1", threadKey: KEY, micros: nowMicros(), jobKey: J1 });
+    expect((await acquireThreadLease({ orgId: ORG_A, employeeId: "emp_1", threadKey: KEY, ttlSeconds: 60, jobKey: J1 } as never)).state).toBe("busy");
+  });
+});
+
 describe("self posts", () => {
   test("per org × employee × thread, only moves forward", async () => {
     await recordSelfPost({ orgId: ORG_A, employeeId: "emp_1", threadKey: KEY, micros: BigInt(2_000), jobKey: "j1" });
