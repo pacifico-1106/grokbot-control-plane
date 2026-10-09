@@ -143,7 +143,8 @@ import {
 } from "@/lib/feature-flags";
 import { checkTopicGate, buildTopicGateApprovalMetadata } from "@/lib/decision-workflow/topic-gate";
 import { getOrgChannel } from "@/lib/data/directory";
-import { buildApprovalReasons, type ApprovalReason } from "@/lib/approvals/approval-reasons";
+import { buildApprovalReasons, toAiFacingApprovalReasons, topicGateMessageJaForAi, type AiApprovalReason, type ApprovalReason } from "@/lib/approvals/approval-reasons";
+import { categorizeMatchedTopics } from "@/lib/approvals/sensitive-topic-categories";
 import { isInformationClass } from "@/lib/gateway/information-class";
 import { getOrgApprovalKindRoutesPolicy } from "@/lib/approval-kind-routes/data";
 import { getToolApprovalKind } from "@/lib/approval-kind-routes/tool-kind-map";
@@ -1932,6 +1933,12 @@ async function runGatewayInvokeInner(
           }),
         }
       : {};
+  // AI-facing copy (402 body / MCP): topic_gate as category names only. Metadata keeps keywords (card).
+  const aiApprovalReasonsFields = (): { approvalReasons: AiApprovalReason[] } | Record<string, never> => {
+    const full = approvalReasonsFields();
+    return "approvalReasons" in full ? { approvalReasons: toAiFacingApprovalReasons(full.approvalReasons) } : {};
+  };
+  const topicGateCategories = topicGateResult ? categorizeMatchedTopics(topicGateResult.matchedTopics) : [];
 
   const forceApproval =
     mailPolicyForceApproval ||
@@ -1991,7 +1998,7 @@ async function runGatewayInvokeInner(
         metadata: { ...invokeMetadata, sodVerdict, actionLimit, egress, dualEgress, managerId, ...approvalReasonsFields() },
         body,
         egress,
-        extra: { spend, actionLimit, sodVerdict, egress, dualEgress, managerId, ...(voice ? { voice } : {}), toolKind: toolDef.kind, approvalPolicy: employee.approvalPolicy, ...approvalReasonsFields() },
+        extra: { spend, actionLimit, sodVerdict, egress, dualEgress, managerId, ...(voice ? { voice } : {}), toolKind: toolDef.kind, approvalPolicy: employee.approvalPolicy, ...aiApprovalReasonsFields() },
       });
     }
 
@@ -2007,7 +2014,7 @@ async function runGatewayInvokeInner(
       risk: topicGateForceApproval ? "high" : inferRiskForTool(tool),
       message:
         topicGateForceApproval && topicGateResult
-          ? `${tool} は機密話題（${topicGateResult.matchedTopics.join(", ")}）を含むため承認が必要です`
+          ? `${tool} は${topicGateMessageJaForAi(topicGateCategories).replace(/。$/, "")}`
           : actionLimit.decision === "needs_approval"
             ? actionLimit.message
             : tool === "browser.use"
@@ -2062,13 +2069,14 @@ async function runGatewayInvokeInner(
           : {}),
         ...(topicGateResult?.requiresApproval
           ? {
+              // AI-facing: category names only, never the matched keywords.
               topicGate: {
-                matchedTopics: topicGateResult.matchedTopics,
+                categories: topicGateCategories,
                 reason: topicGateResult.reason,
               },
             }
           : {}),
-        ...approvalReasonsFields(),
+        ...aiApprovalReasonsFields(),
       },
     });
   }
@@ -2098,7 +2106,7 @@ async function runGatewayInvokeInner(
         dualEgress,
         managerId,
         ...(voice ? { voice } : {}),
-        ...approvalReasonsFields(),
+        ...aiApprovalReasonsFields(),
       },
     });
   }
