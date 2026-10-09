@@ -79,10 +79,13 @@ against a stale read of the thread, are stopped **before** the provider call.
    on the Web result page, and the status API / employee MCP status return
    `closedWithoutSend {reason, messageJa, nextStep}` with `pollHint: abort_job`.
    Audited as `approval.superseded` (`reason: thread_moved_on`). If the close
-   loses a race, the stop is recorded and the next run re-checks. The close
-   writes status, `resolved_at` and `closedWithoutSend` in **one** statement
-   (`close_approval_without_send`, pre-flag item 5); before that migration the
-   app uses one PostgREST UPDATE carrying both, never two writes.
+   loses a race, the stop is recorded and the next run re-checks. With this
+   flag ON the close writes status, `resolved_at` and `closedWithoutSend` in
+   **one** statement (`close_approval_without_send`, pre-flag item 5). If that
+   RPC is missing (migration not applied, PGRST202 / 42883), and always with
+   this flag OFF, the close is main's procedure: a status-conditioned UPDATE of
+   status / `resolved_at`, then `merge_approval_metadata` merging only
+   `closedWithoutSend`. The whole metadata is never read and written back.
 
 Order: the thread guard runs **before** the #260 / #278 dedup claim at invoke
 and at fulfil, so a thread stop never leaves a dedup ledger row, and a dedup
