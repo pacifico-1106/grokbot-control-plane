@@ -360,10 +360,12 @@ export async function updateEmployeePolicy(input: {
   orgId: string;
   employeeId: string;
   scopes: Employee["scopes"];
-  allowedPurposes: string[];
+  /** undefined = keep the stored value ([] clears). */
+  allowedPurposes?: string[];
   approvalPolicy: Employee["approvalPolicy"];
   toolApprovalDefaults?: Employee["toolApprovalDefaults"];
   sodOverrideAcknowledged?: boolean;
+  /** undefined = keep the stored limits ({} clears). */
   actionLimits?: ActionLimits;
   allowedAccounts?: Employee["allowedAccounts"];
   spend?: Employee["spend"];
@@ -398,10 +400,15 @@ export async function updateEmployeePolicy(input: {
     requested: input.approvalPolicy,
     acknowledged: input.sodOverrideAcknowledged,
   });
-  // 木村 2026-10-10 (data loss since 30a631f): an OMITTED actionLimits keeps the
-  // stored value on employees AND the active credentials row; only an explicit
-  // value (incl. {} = clear) is written. Same rule as allowedAccounts / spend.
+  // Omitted allowedPurposes / actionLimits keep the stored value (木村
+  // 2026-10-05 / 2026-10-10, data loss since 30a631f): writing [] / {} would
+  // remove every purpose restriction and limit, on employees AND the active
+  // credentials row. Only an explicit value (incl. [] / {} = clear) is written.
+  // Same rule as allowedAccounts / spend. purposesPatch / limitsPatch are the
+  // non-guard path only; the guard path passes the RPC explicit values.
   const actionLimits = input.actionLimits === undefined ? undefined : normalizeActionLimits(input.actionLimits);
+  const purposesPatch = input.allowedPurposes !== undefined ? { allowed_purposes: input.allowedPurposes } : {};
+  const limitsPatch = actionLimits !== undefined ? { action_limits: actionLimits } : {};
   if (isDemoMode()) {
     const employee = getRuntimeEmployees().find((item) => item.id === input.employeeId && item.orgId === input.orgId);
     if (!employee) return null;
@@ -409,7 +416,7 @@ export async function updateEmployeePolicy(input: {
     if (guard) assertDemoContextUnchanged(guard, employeePolicyProjection(employee));
     Object.assign(employee, {
       scopes: input.scopes,
-      allowedPurposes: input.allowedPurposes,
+      ...(input.allowedPurposes !== undefined ? { allowedPurposes: input.allowedPurposes } : {}),
       approvalPolicy: effectivePolicy,
       ...(input.toolApprovalDefaults !== undefined
         ? { toolApprovalDefaults: normalizeToolApprovalDefaults(input.toolApprovalDefaults) }
@@ -467,13 +474,13 @@ export async function updateEmployeePolicy(input: {
   }
   const employeePatch: Record<string, unknown> = {
     scopes: input.scopes,
-    allowed_purposes: input.allowedPurposes,
+    ...purposesPatch,
     approval_policy: effectivePolicy,
     ...(input.toolApprovalDefaults !== undefined
       ? { tool_approval_defaults: normalizeToolApprovalDefaults(input.toolApprovalDefaults) }
       : {}),
     sod_level: verdict.level,
-    ...(actionLimits !== undefined ? { action_limits: actionLimits } : {}),
+    ...limitsPatch,
     ...(input.managerId !== undefined ? { manager_id: input.managerId } : {}),
     ...(input.voice !== undefined ? { voice: normalizeVoice(input.voice) } : {}),
     ...(input.projectAccess !== undefined
@@ -523,9 +530,9 @@ export async function updateEmployeePolicy(input: {
       .from("credentials")
       .update({
         scopes: input.scopes,
-        allowed_purposes: input.allowedPurposes,
+        ...purposesPatch,
         approval_policy: effectivePolicy,
-        ...(actionLimits !== undefined ? { action_limits: actionLimits } : {}),
+        ...limitsPatch,
         ...(input.allowedAccounts !== undefined ? { allowed_accounts: input.allowedAccounts } : {}),
         ...(input.spend !== undefined ? { spend: input.spend } : {}),
       })

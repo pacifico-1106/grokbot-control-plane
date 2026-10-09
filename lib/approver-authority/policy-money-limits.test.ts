@@ -3,7 +3,7 @@
  * admin remove money limits.
  * - actionLimits, when sent, replaces the whole map with
  *   normalizeActionLimits(args.actionLimits), so a map without commerce.order
- *   (or {} / null) empties that cap. 2026-10-10: LEFT OUT keeps the current
+ *   (or {}) empties that cap (null is refused by parsePolicyPatchArgs since #275). 2026-10-10: LEFT OUT keeps the current
  *   value (fulfillPolicy passes it explicitly), so omission is not a change
  *   (policy-patch-omitted-limits.test.ts).
  * - toolApprovalDefaults, when sent, replaces the whole map with
@@ -17,6 +17,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { classifyApproverRequirement } from "@/lib/approver-authority/targets";
 import { normalizeToolApprovalDefaults } from "@/lib/employees/approval-presets";
 import { scopedModuleMocks } from "../../tests/helpers/scoped-module-mock";
+import { policyPatchTicket } from "../../tests/helpers/policy-patch-ticket";
 import { DEMO_ORG, resetRuntimeMembers } from "@/lib/demo-data";
 import type { ApprovalRequest } from "@/lib/types";
 
@@ -118,9 +119,11 @@ afterEach(async () => {
   resetRuntimeMembers();
 });
 
-async function file(adminMutation: Record<string, unknown>, approve = true): Promise<ApprovalRequest> {
+async function file(mutation: Record<string, unknown>, approve = true): Promise<ApprovalRequest> {
+  // What intake stores since #275 (card record + card text).
+  const { adminMutation, summary } = await policyPatchTicket(ORG, mutation);
   const { approval } = await createApproval({
-    orgId: ORG, employeeId: "", credentialId: "", title: "policy.patch", purpose: "admin.policy", summary: "policy.patch", risk: "high", tool: "policy.patch",
+    orgId: ORG, employeeId: "", credentialId: "", title: "policy.patch", purpose: "admin.policy", summary, risk: "high", tool: "policy.patch",
     jobId: crypto.randomUUID(),
     metadata: {
       auditClass: "admin", approvalClass: "admin", always_human: true, adminTool: "policy.patch", isAdminMcpTool: true, adminMutation,

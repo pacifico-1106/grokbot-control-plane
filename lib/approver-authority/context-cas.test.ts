@@ -13,15 +13,20 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { scopedModuleMocks } from "../../tests/helpers/scoped-module-mock";
 import { DEMO_ORG, getRuntimeAudit, getRuntimeEmployees, resetRuntimeMembers } from "@/lib/demo-data";
 import type { ApprovalRequest, Employee } from "@/lib/types";
+import { policyPatchTicket } from "../../tests/helpers/policy-patch-ticket";
 
 // The one await inside the window between the CAS read and the write
 // (updateEmployeePolicy reads the org SoD policy before writing): a one-shot
-// hook there plays "an owner saved something at that very moment".
+// hook there plays "an owner saved something at that very moment". Since the
+// #275 merge fulfillPolicy's SoD gate reads it too, BEFORE the guard pins —
+// policy.patch only fires the hook from inside updateEmployeePolicy.
 let concurrentChange: (() => void) | null = null;
 const realOrgContext = { ...(await import("@/lib/data/org-context")) };
 const mocks = scopedModuleMocks();
 await mocks.mock("@/lib/data/org-context", {
   getOrgSodWarnPolicy: (orgId?: string | null) => {
+    const stack = new Error().stack ?? "";
+    if (stack.includes("fulfillPolicy") && !stack.includes("updateEmployeePolicy")) return realOrgContext.getOrgSodWarnPolicy(orgId);
     const hook = concurrentChange;
     concurrentChange = null;
     hook?.();
@@ -88,9 +93,11 @@ afterEach(() => {
   resetDemoSchedulingPolicy();
 });
 
-async function fileApproved(tool: string, adminMutation: Record<string, unknown>): Promise<ApprovalRequest> {
+async function fileApproved(tool: string, mutation: Record<string, unknown>): Promise<ApprovalRequest> {
+  // policy.patch: what intake stores since #275 (card record + card text).
+  const { adminMutation, summary } = tool === "policy.patch" ? await policyPatchTicket(ORG, mutation) : { adminMutation: mutation, summary: tool };
   const { approval } = await createApproval({
-    orgId: ORG, employeeId: "", credentialId: "", title: tool, purpose: "admin.policy", summary: tool, risk: "high", tool,
+    orgId: ORG, employeeId: "", credentialId: "", title: tool, purpose: "admin.policy", summary, risk: "high", tool,
     jobId: crypto.randomUUID(),
     metadata: {
       auditClass: "admin", approvalClass: "admin", always_human: true, adminTool: tool, isAdminMcpTool: true, adminMutation,

@@ -45,6 +45,9 @@ export const PROMOTE_OWNER_TOOL = "members.promoteOwner";
  *   standard. Any other key (commerce.order, billing / payment tools, unknown)
  *   → owner ("お金の人間承認を弱める変更").
  * - policyPatchKnownKeys: policy.patch args we understand; any other key → owner.
+ * - policyPatchServerKeys: keys the server itself adds to a queued
+ *   policy.patch ticket (#275 card record: base + SoD verdict). Not a change;
+ *   an agent cannot send them (intake refuses them as unsupported_key).
  * - strongCapabilities: any mention in the change → owner (MCP still rejects
  *   granting them; this is defence in depth).
  */
@@ -132,6 +135,8 @@ export const APPROVER_AUTHORITY_TARGETS = {
     "jobId",
     "approvalId",
   ],
+  /** = POLICY_PATCH_CARD_KEY (lib/admin-mcp/policy-patch-guard; pinned by policy-patch-cas-merge.test.ts). */
+  policyPatchServerKeys: ["policyPatchCard"],
   strongCapabilities: [...PRIVILEGED_CAPABILITIES],
 } as const;
 
@@ -326,6 +331,7 @@ function classifyPolicyPatch(
   reasons: Set<ApproverRequirementReason>
 ) {
   for (const key of Object.keys(args)) {
+    if ((APPROVER_AUTHORITY_TARGETS.policyPatchServerKeys as readonly string[]).includes(key)) continue;
     if (!(APPROVER_AUTHORITY_TARGETS.policyPatchKnownKeys as readonly string[]).includes(key)) {
       reasons.add("unknown_policy_key");
     }
@@ -365,9 +371,11 @@ function changedMoneyKeys(current: Record<string, unknown>, next: Record<string,
 /**
  * 木村 2026-10-09 23:58 (Problem A). Compare what is stored now with what the
  * save path (fulfillPolicy → updateEmployeePolicy) would write:
- * - actionLimits, when sent (incl. {} / null), REPLACES the map with
+ * - actionLimits, when sent, REPLACES the map with
  *   normalizeActionLimits(args.actionLimits) → a stored money cap it drops or
- *   changes counts as changed. Left out (undefined) = the current value is
+ *   changes counts as changed. Only an explicit {} clears; null is refused
+ *   by parsePolicyPatchArgs at intake and at fulfil (#275) — it is still
+ *   classified as a change here (fail-safe). Left out (undefined) = the current value is
  *   kept (2026-10-10: fulfillPolicy passes it explicitly, whatever
  *   updateEmployeePolicy does with undefined) → not a change.
  * - toolApprovalDefaults, when sent, REPLACES the map with

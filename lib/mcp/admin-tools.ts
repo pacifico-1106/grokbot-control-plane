@@ -72,6 +72,15 @@ import { parseApprovalChannelId } from "@/lib/employees/approval-inbox";
 import { parseRolesProposeInput } from "@/lib/mcp/roles-propose";
 import { ALL_SCOPES } from "@/lib/employees/policy-draft";
 import { ADMIN_AUDIT_CLASS } from "@/lib/admin-mcp/audit-class";
+import {
+  boundToRequestingAdmin,
+  buildPolicyPatchCard,
+  parsePolicyPatchArgs,
+  policyPatchCardTooLong,
+  policyPatchInputSchema,
+  POLICY_PATCH_CARD_KEY,
+} from "@/lib/admin-mcp/policy-patch-guard";
+import { getOrgSodWarnPolicy } from "@/lib/data/org-context";
 import { getEffectiveReplyPolicy, type ReplyPolicySource } from "@/lib/data/reply-policy";
 import { getEffectiveMailPolicy, type MailPolicySource } from "@/lib/data/mail-policy";
 import { getOrgInternalAudienceRule } from "@/lib/data/internal-audience-rule";
@@ -189,24 +198,8 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
   {
     name: "policy.patch",
     description:
-      "Patch an employee policy (scopes / purposes / actionLimits) after human approval (always_human). Admin cannot grant itself extra scopes. Dashboard humans cannot edit these fields. actionLimits left out keeps the employee's current actionLimits unchanged; when sent, it replaces the whole map (a tool you leave out of the map loses its caps; {} or null removes every cap). allowedPurposes left out keeps the current value too. Removing or changing a money cap (e.g. commerce.order) needs an owner's approval when APPROVER_AUTHORITY_ENABLED is on.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        employeeId: { type: "string" },
-        scopes: { type: "array", items: { type: "string" } },
-        allowedPurposes: { type: "array", items: { type: "string" } },
-        approvalPolicy: { type: "string" },
-        actionLimits: {
-          type: "object",
-          additionalProperties: true,
-          description: "Per-tool caps { tool: { perDay?, perMonth? } }. Left out = keep the current caps; sent = replaces the whole map.",
-        },
-        jobId: { type: "string" },
-      },
-      required: ["employeeId", "scopes", "approvalPolicy"],
-      additionalProperties: true,
-    },
+      "Patch an employee policy (scopes / allowedPurposes / approvalPolicy / actionLimits / toolApprovalDefaults) after human approval (always_human). The employee must belong to this org (from the credential; no orgId argument). Only these fields: allowedAccounts / postingAs / approvalChannelId / grokBotAgentId are refused with use_dedicated_tool and the tool to use (employees.allowedAccounts.add|remove, employees.postingIdentity.set, setup.lineApproval.setEmployeeInbox, link); any other key → unsupported_key. scopes must all be known (unknown_scopes otherwise). Nothing is queued when refused. actionLimits left out keeps the employee's current actionLimits unchanged; when sent, it replaces the whole map (a tool you leave out of the map loses its caps); only an explicit {} removes every cap — null is refused (invalid_action_limits). allowedPurposes left out keeps the current value too; an explicit [] removes every purpose restriction. The approval card shows the before → after diff and the separation-of-duties (SoD) verdict; an SoD warning is acknowledged only by the human approving that card (sodOverrideAcknowledged from the agent is ignored). Removing or changing a money cap (e.g. commerce.order) needs an owner's approval when APPROVER_AUTHORITY_ENABLED is on. Admin cannot grant itself extra scopes. Dashboard humans cannot edit these fields.",
+    inputSchema: policyPatchInputSchema(),
   },
   {
     name: "employees.allowedAccounts.add",
@@ -2384,6 +2377,13 @@ export async function callAdminMcpTool(
     return toolResult(queued, false);
   }
 
+  if (name === "policy.patch") {
+    // PR-C: only the fields policy.patch applies; dedicated-tool keys, unknown
+    // keys / scopes / values are refused before any ticket exists.
+    const parsed = parsePolicyPatchArgs(args);
+    if (!parsed.ok) return toolResult(parsed, true);
+  }
+
   if (name === "policy.patch" || name === "link") {
     const employeeId = String(args.employeeId || "").trim();
     if (employeeId) {
@@ -2395,7 +2395,13 @@ export async function callAdminMcpTool(
         );
       }
       const binding = await getBinding(employeeId);
-      if (adminCannotTargetSelf(cred, binding?.grokBotAgentId)) {
+      // policy.patch: the badge must not belong to this admin agent by
+      // grokBotAgentId or actorId (fulfil re-checks the same way).
+      if (
+        name === "policy.patch"
+          ? boundToRequestingAdmin(cred, binding?.grokBotAgentId)
+          : adminCannotTargetSelf(cred, binding?.grokBotAgentId)
+      ) {
         return toolResult(
           {
             ok: false,
@@ -3459,6 +3465,7 @@ export async function callAdminMcpTool(
 
   let queuedArgs = { ...args };
   let summary = `${name} の実行を人が確認します`;
+  let queuedResultExtra: Record<string, unknown> | null = null;
 
   if (name === "roles.propose") {
     const parsed = parseRolesProposeInput(args);
@@ -3491,7 +3498,27 @@ export async function callAdminMcpTool(
   } else if (name === "employees.issue") {
     summary = `${String(args.displayName)}（${String(args.roleLabel)}）の発行を人が確認します`;
   } else if (name === "policy.patch") {
-    summary = `権限の更新を人が確認します（${String(args.employeeId)}）`;
+    // Card = before → after diff + SoD verdict (no secrets). The agent's
+    // sodOverrideAcknowledged is never queued: approving this card is the ack.
+    const parsed = parsePolicyPatchArgs(args);
+    const employee = parsed.ok ? await getEmployee(parsed.value.employeeId, cred.orgId) : null;
+    if (!parsed.ok || !employee) {
+      return toolResult(
+        parsed.ok ? { ok: false, code: "employee_not_found", message: "AI社員が見つかりません" } : parsed,
+        true
+      );
+    }
+    const card = buildPolicyPatchCard(employee, parsed.value, await getOrgSodWarnPolicy(cred.orgId));
+    // B1: a card any surface would cut is never queued (SoD must be shown).
+    if (!card.fitsAllSurfaces) return toolResult(policyPatchCardTooLong(card.summaryChars), true);
+    queuedArgs = { ...parsed.value, [POLICY_PATCH_CARD_KEY]: card.snapshot };
+    summary = card.summaryJa;
+    if (parsed.ignoredKeys.length) {
+      queuedResultExtra = {
+        ignoredKeys: parsed.ignoredKeys,
+        noticeJa: "職務分離(SoD)の確認は、承認者がカードを見て承認することで行います（sodOverrideAcknowledged の指定は使いません）。",
+      };
+    }
   } else if (name === "parties.upsert") {
     const checked = validatePartiesUpsertArgs(args);
     if (!checked.ok) return toolResult(checked, true);
@@ -3744,7 +3771,8 @@ export async function callAdminMcpTool(
     rawArgsForSecretScan,
     summary,
   });
-  return toolResult(queued, false);
+  const queuedOk = (queued as { code?: string }).code === "needs_approval";
+  return toolResult(queuedOk && queuedResultExtra ? { ...queued, ...queuedResultExtra } : queued, false);
 }
 
 export async function readApprovedAdminResult(
