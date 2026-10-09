@@ -212,7 +212,8 @@ describe("5. SoD acknowledgement = the human approval of the card (agent flag ig
     const e = await hire();
     const id = await legacyTicket({ employeeId: e.id, scopes: SOD_SCOPES, approvalPolicy: "risk_based", sodOverrideAcknowledged: true });
     const f = await approveAndFulfil(id);
-    expect(f).toMatchObject({ ok: false, error: "sod_not_shown_on_card" });
+    // 木村 2026-10-09 (#275 a): no card snapshot at all → refused before the SoD gate.
+    expect(f).toMatchObject({ ok: false, error: "policy_patch_stale" });
     expect([...((await getEmployee(e.id, ORG))?.scopes ?? [])].sort()).toEqual([...BASE_SCOPES].sort());
   });
   test("the SoD verdict changed since the card (card said ok) → refused, nothing written", async () => {
@@ -226,11 +227,11 @@ describe("5. SoD acknowledgement = the human approval of the card (agent flag ig
     expect(f).toMatchObject({ ok: false, error: "sod_changed_since_card" });
     expect([...((await getEmployee(e.id, ORG))?.scopes ?? [])].sort()).toEqual([...BASE_SCOPES].sort());
   });
-  test("no acknowledgement needed (always_human / no warning) → legacy tickets still work", async () => {
+  test("no acknowledgement needed (always_human / no warning), but no card snapshot → refused too (木村 2026-10-09 #275 a)", async () => {
     const e = await hire();
     const id = await legacyTicket({ employeeId: e.id, scopes: SOD_SCOPES, approvalPolicy: "always_human" });
-    expect((await approveAndFulfil(id))?.ok).toBe(true);
-    expect((await getEmployee(e.id, ORG))?.approvalPolicy).toBe("always_human");
+    expect(await approveAndFulfil(id)).toMatchObject({ ok: false, error: "policy_patch_stale" });
+    expect((await getEmployee(e.id, ORG))?.approvalPolicy).toBe("risk_based");
   });
 });
 
@@ -387,11 +388,12 @@ describe("9. partial update: omitted allowedPurposes / actionLimits keep the cur
     expect(after?.allowedPurposes).toEqual(["ops.admin"]);
     expect(after?.actionLimits).toEqual(LIMITS);
   });
-  test("legacy ticket without the two fields keeps them too", async () => {
+  test("legacy ticket (no card snapshot) is refused and keeps them untouched (木村 2026-10-09 #275 a)", async () => {
     const e = await hireWithLimits();
     const id = await legacyTicket({ employeeId: e.id, scopes: BASE_SCOPES, approvalPolicy: "always_human" });
-    expect((await approveAndFulfil(id))?.ok).toBe(true);
+    expect(await approveAndFulfil(id)).toMatchObject({ ok: false, error: "policy_patch_stale" });
     const after = await getEmployee(e.id, ORG);
+    expect(after?.approvalPolicy).toBe("risk_based");
     expect(after?.allowedPurposes).toEqual(["ops.admin"]);
     expect(after?.actionLimits).toEqual(LIMITS);
   });
@@ -520,6 +522,30 @@ describe("11. stale ticket: scopes / allowedPurposes / actionLimits changed sinc
     runtime(e.id).actionLimits = structuredClone(LIMITS);
     expect((await approveAndFulfil(approvalId))?.ok).toBe(true);
     expect((await getEmployee(e.id, ORG))?.scopes).toContain("files:read");
+  });
+  // 木村 2026-10-09 #275 (a): no card snapshot at all → refused, told to re-file.
+  test("a ticket without any card snapshot → stale, nextStepJa says to file again, nothing written", async () => {
+    const e = await hire();
+    const id = await legacyTicket({ employeeId: e.id, scopes: [...BASE_SCOPES, "files:read"], approvalPolicy: "risk_based" });
+    const out = (await approveAndFulfil(id)) as Record<string, unknown> | null;
+    expect(out?.ok).toBe(false);
+    expect(out?.error).toBe("policy_patch_stale");
+    expect(String(out?.nextStepJa)).toContain("変更は行われていません");
+    expect(String(out?.nextStepJa)).toContain("もう一度依頼");
+    expect((await getEmployee(e.id, ORG))?.scopes).not.toContain("files:read");
+  });
+  // 木村 2026-10-09 #275 (b): approvalPolicy / toolApprovalDefaults are in the filing-time base too.
+  test("approvalPolicy changed after filing → stale, nothing written", async () => {
+    const { e, approvalId } = await filed();
+    runtime(e.id).approvalPolicy = "always_human";
+    await expectStale(e.id, approvalId, "承認方針");
+    expect((await getEmployee(e.id, ORG))?.approvalPolicy).toBe("always_human");
+  });
+  test("toolApprovalDefaults changed after filing → stale, nothing written", async () => {
+    const { e, approvalId } = await filed();
+    const before = structuredClone(runtime(e.id).toolApprovalDefaults ?? {});
+    runtime(e.id).toolApprovalDefaults = { ...before, "mail.send": before["mail.send"] === "deny" ? "always_human" : "deny" } as never;
+    await expectStale(e.id, approvalId, "ツール別の承認");
   });
   test("a v2 card snapshot without the filing-time base → stale (fail-closed)", async () => {
     const { e, approvalId } = await filed();
