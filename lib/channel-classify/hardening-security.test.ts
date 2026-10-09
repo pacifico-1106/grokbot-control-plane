@@ -118,7 +118,11 @@ describe("RLS: new budget table is server-only", () => {
 
 describe("self-approval: system tickets cannot be resolved by whoever triggered them", () => {
   test("the Telegram adder is not recorded as requester; a non-owner adder cannot resolve the admin ticket", async () => {
-    setJoinDepsForTests({ telegramVoterMember: async (orgId, key, userId) => (userId === "5151" ? "member_adder" : null) });
+    setJoinDepsForTests({
+      telegramVoterMember: async (orgId, key, userId) => (userId === "5151" ? "member_adder" : null),
+      // #280 pre-flag: the bound member must be active in this org (fixture member)
+      memberActiveInOrg: async (_orgId, memberId) => memberId === "member_adder",
+    });
     const outcome = await handleTelegramMyChatMember(tgInbox(ORG, []), tgUpdate(5151, -1007770003));
     expect(outcome.state).toBe("created");
     const approval = await getApprovalById(outcome.approvalId!, ORG);
