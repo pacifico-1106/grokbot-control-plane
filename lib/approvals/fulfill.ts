@@ -601,7 +601,7 @@ async function fulfillSnsPublish(
   let posted: SnsPublishResult;
   try {
     posted = await publishSnsPost({
-      orgId: snapshot.orgId || approval.orgId,
+      orgId: approval.orgId,
       employeeId: snapshot.employeeId || approval.employeeId,
       surface: args.surface ?? args.snsSurface ?? args.media,
       text,
@@ -893,7 +893,7 @@ async function fulfillApprovedInvokeCore(
     postAttempted = true;
 
     const posted = await postConversationMessage({
-      orgId: snapshot.orgId || approval.orgId,
+      orgId: approval.orgId,
       employeeId: snapshot.employeeId || approval.employeeId,
       postingAs: snapshot.postingAs,
       channel: dest,

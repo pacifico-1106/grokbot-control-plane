@@ -46,8 +46,8 @@ test("snapshot.orgId=B on an org-A approval: refused, B's token never used", asy
   const approved = await resolveApproval(approval.id, "approved", "ando@example.com", DEMO_ORG.id);
   const result = await fulfillApprovedInvoke(approved!);
   // execution-authority refuses the mismatched snapshot before any Slack call.
-  expect(result.ok).toBe(false);
-  expect(result.error).toBe("approval_target_mismatch");
+  expect(result?.ok).toBe(false);
+  expect(result?.error).toBe("approval_target_mismatch");
   expect(auths).toEqual([]);
 });
 
@@ -79,5 +79,5 @@ test("snapshot without orgId on an org-A approval: posts with A's token", async 
   const approved = await resolveApproval(approval.id, "approved", "ando@example.com", DEMO_ORG.id);
   const result = await fulfillApprovedInvoke(approved!);
   expect(auths).toEqual(["Bearer xoxb-row-a"]);
-  expect(result.ok).toBe(true);
+  expect(result?.ok).toBe(true);
 });

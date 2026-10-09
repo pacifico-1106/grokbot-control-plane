@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { resetSlackUserTeamCacheForTests } from "@/lib/slack/bot-token";
 import { DEMO_ORG } from "@/lib/demo-data";
 import {
   parseConversationContext,
@@ -494,6 +495,7 @@ describe("audience resolver", () => {
 describe("org internal audience rule (stablo-scale)", () => {
   afterEach(() => {
     clearDemoRule();
+    resetSlackUserTeamCacheForTests();
   });
 
   test("autoSlackTeamInternal=true + Slack-verified matching team (users.info) → internal", async () => {

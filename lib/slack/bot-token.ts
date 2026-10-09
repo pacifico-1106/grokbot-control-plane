@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { getEnabledConversationAdapter } from "@/lib/data/conversation-adapters";
 import {
   getEnabledNotificationChannels,
@@ -82,6 +83,38 @@ export async function inspectSlackChannelExtShared(
   }
 }
 
+/** How long a VERIFIED users.info team id may be reused across invokes. */
+export const SLACK_USER_TEAM_CACHE_TTL_MS = 60_000;
+const SLACK_USER_TEAM_CACHE_MAX = 5_000;
+
+/**
+ * Cross-invoke cache: ONLY verified (non-null) team ids are stored, keyed by
+ * (orgId, slackUserId) so one org's answer can never serve another org.
+ * Unverifiable results (no token, Slack error, timeout) are never cached here,
+ * so they cannot outlive the invoke that saw them, and they stay "external".
+ */
+const verifiedTeamCache = new Map<string, { teamId: string; expiresAt: number }>();
+
+/**
+ * Per-invoke memo: one users.info per (org, user) per invoke, including a null
+ * (unverifiable) result, which is reused only inside that same invoke.
+ */
+const invokeMemo = new AsyncLocalStorage<Map<string, Promise<string | null>>>();
+
+function slackUserTeamKey(orgId: string, slackUserId: string): string {
+  return JSON.stringify([orgId, slackUserId.toUpperCase()]);
+}
+
+/** Run fn with a fresh per-invoke users.info memo (nested scopes reuse the outer one). */
+export function withSlackUserTeamMemo<T>(fn: () => Promise<T>): Promise<T> {
+  if (invokeMemo.getStore()) return fn();
+  return invokeMemo.run(new Map(), fn);
+}
+
+export function resetSlackUserTeamCacheForTests(): void {
+  verifiedTeamCache.clear();
+}
+
 /**
  * The Slack team a user actually belongs to, as reported by Slack itself
  * (users.info with the org's OWN conversation bot token). Used instead of any
@@ -94,6 +127,31 @@ export async function fetchVerifiedSlackUserTeamId(
 ): Promise<string | null> {
   const user = slackUserId.trim();
   if (!orgId || !user) return null;
+  const key = slackUserTeamKey(orgId, user);
+  const now = Date.now();
+  const cached = verifiedTeamCache.get(key);
+  if (cached) {
+    if (cached.expiresAt > now) return cached.teamId;
+    verifiedTeamCache.delete(key);
+  }
+  const memo = invokeMemo.getStore();
+  const pending = memo?.get(key);
+  if (pending) return pending;
+  const lookup = fetchSlackUserTeamIdUncached(orgId, user).then((teamId) => {
+    if (teamId) {
+      if (verifiedTeamCache.size >= SLACK_USER_TEAM_CACHE_MAX) {
+        const oldest = verifiedTeamCache.keys().next().value;
+        if (oldest !== undefined) verifiedTeamCache.delete(oldest);
+      }
+      verifiedTeamCache.set(key, { teamId, expiresAt: Date.now() + SLACK_USER_TEAM_CACHE_TTL_MS });
+    }
+    return teamId;
+  });
+  memo?.set(key, lookup);
+  return lookup;
+}
+
+async function fetchSlackUserTeamIdUncached(orgId: string, user: string): Promise<string | null> {
   const token = await resolveOrgSlackBotToken(orgId);
   if (!token) return null;
   try {

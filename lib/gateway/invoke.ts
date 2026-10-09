@@ -1,3 +1,4 @@
+import { withSlackUserTeamMemo } from "@/lib/slack/bot-token";
 import {
   buildApprovalArtifact,
   buildApprovalTitle,
@@ -673,6 +674,13 @@ async function secretAuditOrgId(employeeId: string): Promise<string | null> {
  * Never pass an unauthenticated client-supplied id (e.g. x-employee-id).
  */
 export async function runGatewayInvoke(
+  input: RunGatewayInvokeInput
+): Promise<GatewayInvokeResult> {
+  // One users.info per (org, Slack user) per invoke; see fetchVerifiedSlackUserTeamId.
+  return withSlackUserTeamMemo(() => runGatewayInvokeInner(input));
+}
+
+async function runGatewayInvokeInner(
   input: RunGatewayInvokeInput
 ): Promise<GatewayInvokeResult> {
   const body = input.body;

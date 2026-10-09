@@ -10,6 +10,7 @@
  * ledger counts, anything unverifiable stays external.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { resetSlackUserTeamCacheForTests } from "@/lib/slack/bot-token";
 import { DEMO_ORG, pushRuntimeAuditEvent } from "@/lib/demo-data";
 import { createApproval, getApprovalById, resolveApproval } from "@/lib/data";
 import { upsertOrgChannel } from "@/lib/data/directory";
@@ -61,6 +62,7 @@ function mockSlack() {
 }
 
 beforeEach(async () => {
+  resetSlackUserTeamCacheForTests();
   await upsertOrgChannel({ orgId: ORG_B, surface: "slack", externalId: CH, classification: "internal", skipInspect: true });
   await upsertConversationAdapter({ orgId: ORG_A, surface: "slack", enabled: true, secrets: { botToken: A_TOKEN } });
   usersInfoTeam = null;
