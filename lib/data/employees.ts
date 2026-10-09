@@ -370,7 +370,7 @@ export async function updateEmployeePolicy(input: {
   approverUserIds?: string[];
   /**
    * TOCTOU guard (APPROVER_AUTHORITY_ENABLED, approval-executed policy.patch):
-   * write only if scopes / approval_policy / action_limits /
+   * write only if scopes / allowed_purposes / approval_policy / action_limits /
    * tool_approval_defaults still equal the pinned snapshot (production: one
    * RPC that locks, compares and writes employees + active credentials).
    * Mismatch → ApproverContextChangedError, nothing written. Only the
@@ -449,7 +449,9 @@ export async function updateEmployeePolicy(input: {
       p_tool_approval_defaults:
         input.toolApprovalDefaults !== undefined ? normalizeToolApprovalDefaults(input.toolApprovalDefaults) : null,
       p_sod_level: verdict.level,
-      p_action_limits: actionLimits,
+      // An omitted actionLimits under the guard keeps the pinned value (the RPC
+      // needs one; it equals the locked row whenever the write goes through).
+      p_action_limits: actionLimits ?? normalizeActionLimits(guard.expected.action_limits as never),
     });
     const result = casResult(data, error);
     const row = result.employee;

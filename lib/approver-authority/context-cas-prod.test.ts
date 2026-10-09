@@ -109,6 +109,16 @@ describe("policy.patch write (employees + active credentials)", () => {
     expect(tableWrites()).toEqual([]);
   });
 
+  test("guarded write with actionLimits left out → p_action_limits is the pinned value (the RPC never gets null)", async () => {
+    rpcResponder = () => ({ data: { ok: true, employee: employeeRow }, error: null });
+    const guard = { ...policyGuard, expected: { ...policyGuard.expected, action_limits: { "commerce.order": { perDay: 2 } } } };
+    const input: Record<string, unknown> = { ...policyInput(), contextGuard: guard };
+    delete input.actionLimits;
+    await updateEmployeePolicy(input as never);
+    expect(casCalls("approver_cas_write_employee_policy")[0].args!.p_action_limits).toEqual({ "commerce.order": { perDay: 2 } });
+    expect(tableWrites()).toEqual([]);
+  });
+
   test("RPC error or unknown answer → fail closed, no fallback write", async () => {
     for (const answer of [{ data: null, error: { message: "boom" } }, { data: { ok: "yes" }, error: null }, { data: null, error: null }]) {
       calls = [];

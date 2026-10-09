@@ -13,9 +13,12 @@
 -- return {ok:false, reason:'approver_context_changed'} and write nothing.
 --
 -- 1. approver_cas_write_employee_policy (policy.patch): locks employees
---    (id, org), compares {scopes, approval_policy, action_limits,
---    tool_approval_defaults} with p_expected (jsonb equality), writes the
---    employee and its active credentials (same columns as updateEmployeePolicy).
+--    (id, org), compares {scopes, allowed_purposes, approval_policy,
+--    action_limits, tool_approval_defaults} with p_expected (jsonb equality),
+--    writes the employee and its active credentials (same columns as
+--    updateEmployeePolicy). allowed_purposes is compared too (2026-10-10):
+--    it is written by this RPC, and a value kept by the application when the
+--    request left it out must be the one this lock still sees.
 -- 2. approver_cas_write_scheduling_policy (schedulingPolicy.patch): locks the
 --    org row (and the employee row for per-employee writes), compares
 --    scheduling_policy with p_expected {org[, employee]}, writes the target.
@@ -59,7 +62,8 @@ begin
   select * into e from public.employees where id = p_employee and org_id = p_org for update;
   if not found then return jsonb_build_object('ok', false, 'reason', 'employee_not_found'); end if;
   if jsonb_build_object(
-       'scopes', to_jsonb(e.scopes), 'approval_policy', to_jsonb(e.approval_policy),
+       'scopes', to_jsonb(e.scopes), 'allowed_purposes', to_jsonb(e.allowed_purposes),
+       'approval_policy', to_jsonb(e.approval_policy),
        'action_limits', e.action_limits, 'tool_approval_defaults', e.tool_approval_defaults)
      is distinct from p_expected then
     return jsonb_build_object('ok', false, 'reason', 'approver_context_changed');

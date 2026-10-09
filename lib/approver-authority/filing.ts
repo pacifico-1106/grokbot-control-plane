@@ -94,7 +94,7 @@ export async function readApproverContextSnapshot(
     if (!admin) return null;
     const { data, error } = await admin
       .from("employees")
-      .select("scopes,approval_policy,action_limits,tool_approval_defaults")
+      .select("scopes,allowed_purposes,approval_policy,action_limits,tool_approval_defaults")
       .eq("id", employeeId)
       .eq("org_id", orgId)
       .maybeSingle();
@@ -105,6 +105,7 @@ export async function readApproverContextSnapshot(
       context: policyContextFromEmployee(mapEmployeeRow({ ...row, id: employeeId, org_id: orgId })),
       expected: {
         scopes: row.scopes ?? null,
+        allowed_purposes: row.allowed_purposes ?? null,
         approval_policy: row.approval_policy ?? null,
         action_limits: row.action_limits ?? null,
         tool_approval_defaults: row.tool_approval_defaults ?? null,

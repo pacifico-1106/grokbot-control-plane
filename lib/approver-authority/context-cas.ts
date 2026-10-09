@@ -26,7 +26,7 @@ export interface ApproverContextGuard {
   employeeId: string | null;
   /**
    * Raw judged values the write is conditioned on.
-   * policy.patch: { scopes, approval_policy, action_limits, tool_approval_defaults }
+   * policy.patch: { scopes, allowed_purposes, approval_policy, action_limits, tool_approval_defaults }
    * schedulingPolicy.patch: { org } or { org, employee } (scheduling_policy, null = none)
    */
   expected: Record<string, unknown>;
@@ -88,15 +88,17 @@ export function casResult(data: unknown, error: unknown): Record<string, unknown
   throw new ApproverContextWriteRefusedError("approver_context_cas_failed");
 }
 
-/** The four policy.patch judged columns, in the raw shape the CAS RPC compares (snake_case, as stored). */
+/** The five policy.patch compared columns, in the raw shape the CAS RPC compares (snake_case, as stored). */
 export function employeePolicyProjection(employee: {
   scopes?: readonly string[] | null;
+  allowedPurposes?: readonly string[] | null;
   approvalPolicy?: string | null;
   actionLimits?: unknown;
   toolApprovalDefaults?: unknown;
 }): Record<string, unknown> {
   return JSON.parse(canonicalContextJson({
     scopes: [...(employee.scopes ?? [])],
+    allowed_purposes: [...(employee.allowedPurposes ?? [])],
     approval_policy: employee.approvalPolicy ?? null,
     action_limits: employee.actionLimits ?? {},
     tool_approval_defaults: employee.toolApprovalDefaults ?? {},

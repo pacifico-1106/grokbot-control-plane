@@ -775,12 +775,18 @@ async function fulfillPolicy(approval: ApprovalRequest, args: Record<string, unk
     if (changed) return changed;
     throw error;
   }
+  // Kept values under the CAS guard (actionLimits, and allowedPurposes since
+  // 2026-10-10 item 2(a)): use the value the guard pinned. The RPC compares
+  // it with the locked row and writes only if equal, so what is written is
+  // the locked row's value — never the earlier read, never a value changed
+  // in between (that is refused with approver_context_changed).
+  const pinnedPurposes = contextGuard?.expected.allowed_purposes;
+  const keptPurposes = contextGuard
+    ? (Array.isArray(pinnedPurposes) ? pinnedPurposes : []).map(String)
+    : [...(current?.allowedPurposes ?? [])];
   const allowedPurposes: string[] = Array.isArray(args.allowedPurposes)
     ? args.allowedPurposes.map(String).filter(Boolean)
-    : [...(current?.allowedPurposes ?? [])];
-  // Kept actionLimits under the CAS guard: use the value the guard pinned
-  // (the one the RPC compares under the row lock), not the earlier read, so
-  // "keep" can never write a value that was changed in between.
+    : keptPurposes;
   const keptLimits = contextGuard ? contextGuard.expected.action_limits : current?.actionLimits;
   const actionLimits = normalizeActionLimits((keepLimits ? keptLimits : args.actionLimits) as ActionLimits);
   let updated: Awaited<ReturnType<typeof updateEmployeePolicy>>;
