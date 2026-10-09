@@ -18,6 +18,14 @@ import { normalizePostingAs } from "@/lib/employees/posting-as";
 import { normalizeToolApprovalDefaults } from "@/lib/employees/approval-presets";
 import { normalizeApproverUserIds } from "@/lib/employees/approval-inbox";
 import type { ActionLimits, Employee, EmployeeProjectAccess, PostingAs } from "../types";
+import {
+  ApproverContextWriteRefusedError,
+  assertDemoContextUnchanged,
+  assertGuardFor,
+  casResult,
+  employeePolicyProjection,
+  type ApproverContextGuard,
+} from "@/lib/approver-authority/context-cas";
 
 export async function listEmployees(orgId?: string | null): Promise<Employee[]> {
   if (isDemoMode()) {
@@ -360,7 +368,23 @@ export async function updateEmployeePolicy(input: {
   roleLabel?: string;
   approvalChannelId?: string | null;
   approverUserIds?: string[];
+  /**
+   * TOCTOU guard (APPROVER_AUTHORITY_ENABLED, approval-executed policy.patch):
+   * write only if scopes / approval_policy / action_limits /
+   * tool_approval_defaults still equal the pinned snapshot (production: one
+   * RPC that locks, compares and writes employees + active credentials).
+   * Mismatch → ApproverContextChangedError, nothing written. Only the
+   * policy.patch fields may be written under a guard.
+   */
+  contextGuard?: ApproverContextGuard;
 }): Promise<Employee | null> {
+  const guard = input.contextGuard;
+  if (guard) {
+    assertGuardFor(guard, "policy.patch", input.employeeId);
+    const unsupported = (["allowedAccounts", "spend", "managerId", "voice", "projectAccess", "postingAs", "displayName", "roleLabel",
+      "approvalChannelId", "approverUserIds"] as const).filter((key) => input[key] !== undefined);
+    if (unsupported.length) throw new ApproverContextWriteRefusedError("context_guard_unsupported_fields");
+  }
   const verdict = evaluateSod(input.scopes, await getOrgSodWarnPolicy(input.orgId));
   const effectivePolicy = resolveApprovalPolicy({
     verdict,
@@ -371,6 +395,8 @@ export async function updateEmployeePolicy(input: {
   if (isDemoMode()) {
     const employee = getRuntimeEmployees().find((item) => item.id === input.employeeId && item.orgId === input.orgId);
     if (!employee) return null;
+    // Compared right before the write (no await in between).
+    if (guard) assertDemoContextUnchanged(guard, employeePolicyProjection(employee));
     Object.assign(employee, {
       scopes: input.scopes,
       allowedPurposes: input.allowedPurposes,
@@ -405,6 +431,28 @@ export async function updateEmployeePolicy(input: {
   }
   const admin = createSupabaseAdminClient();
   if (!admin) return null;
+  if (guard) {
+    // One transaction: lock the employee row, compare with the snapshot,
+    // write employees + the active credentials, or refuse with nothing written.
+    const { data, error } = await admin.rpc("approver_cas_write_employee_policy", {
+      p_org: input.orgId,
+      p_employee: input.employeeId,
+      p_approval: guard.approvalId,
+      p_fingerprint: guard.fingerprint,
+      p_expected: guard.expected,
+      p_scopes: input.scopes,
+      p_allowed_purposes: input.allowedPurposes,
+      p_approval_policy: effectivePolicy,
+      p_tool_approval_defaults:
+        input.toolApprovalDefaults !== undefined ? normalizeToolApprovalDefaults(input.toolApprovalDefaults) : null,
+      p_sod_level: verdict.level,
+      p_action_limits: actionLimits,
+    });
+    const result = casResult(data, error);
+    const row = result.employee;
+    if (!row || typeof row !== "object" || Array.isArray(row)) throw new ApproverContextWriteRefusedError("approver_context_cas_failed");
+    return mapEmployeeRow(row as Record<string, unknown>);
+  }
   const employeePatch: Record<string, unknown> = {
     scopes: input.scopes,
     allowed_purposes: input.allowedPurposes,

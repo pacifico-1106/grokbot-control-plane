@@ -30,6 +30,10 @@ const retryable = new Set(["slack_token_missing", "slack_conversation_bot_token_
 // employees.postingIdentity.set: POSTING_IDENTITY_RETRYABLE_REFUSAL_CODES
 // (lib/admin-mcp/posting-identity-tool.ts; equality pinned by its test).
 const retryableByTool: Record<string, ReadonlySet<string>> = {
+  // TOCTOU follow-up: the compare-and-swap refused the write (one transaction,
+  // nothing written) because the judged state changed; every run re-checks.
+  "policy.patch": new Set(["approver_context_changed"]),
+  "schedulingPolicy.patch": new Set(["approver_context_changed"]),
   "employees.postingIdentity.set": new Set([
     "user_token_missing", "user_token_invalid", "user_token_scope_check_failed",
     "missing_scope_chat_write", "slack_account_not_allowed",

@@ -15,6 +15,14 @@ import {
 import { requesterMemberIdsFromMetadata, type ApproverAuthorityDenyReason } from "./decide";
 import { checkApproverAuthority } from "./verify";
 import { approverAuthorityNextStepJa, approverAuthorityReplyJa } from "./card";
+import {
+  ApproverContextChangedError,
+  canonicalContextJson,
+  employeePolicyProjection,
+  type ApproverContextGuard,
+  type ContextPinnedTool,
+} from "./context-cas";
+import type { ApprovalRequest, Employee } from "@/lib/types";
 
 function employeeIdOf(metadata: Record<string, unknown> | null | undefined): string {
   const mutation = metadata?.adminMutation;
@@ -29,19 +37,78 @@ export async function loadApproverClassificationContext(
   tool: string,
   metadata: Record<string, unknown> | null | undefined
 ): Promise<ApproverClassificationContext | null> {
-  if (tool === "schedulingPolicy.patch") return loadSchedulingContext(orgId, metadata);
-  if (tool !== "policy.patch" && tool !== "employees.reinstate") return null;
+  if (tool === "schedulingPolicy.patch" || tool === "policy.patch") {
+    return (await readApproverContextSnapshot(orgId, tool, metadata))?.context ?? null;
+  }
+  if (tool !== "employees.reinstate") return null;
   const employeeId = employeeIdOf(metadata);
   if (!employeeId) return null;
   try {
     const employee = await getEmployee(employeeId, orgId);
     if (!employee || employee.orgId !== orgId) return null;
+    return policyContextFromEmployee(employee);
+  } catch {
+    return null;
+  }
+}
+
+function policyContextFromEmployee(employee: Employee): ApproverClassificationContext {
+  return {
+    currentEmployeeScopes: [...(employee.scopes ?? [])],
+    currentEmployeeApprovalPolicy: employee.approvalPolicy ?? null,
+    // Problem A: raw stored values (normalized by the classifier like the save path).
+    currentEmployeeActionLimits: { ...((employee.actionLimits ?? {}) as Record<string, unknown>) },
+    currentEmployeeToolApprovalDefaults: { ...((employee.toolApprovalDefaults ?? {}) as Record<string, unknown>) },
+  };
+}
+
+/**
+ * The judged state of a context-pinned tool, read ONCE: the classification
+ * context (→ fingerprint) and the raw stored values it was computed from
+ * (`expected`, what the TOCTOU compare-and-swap write is conditioned on).
+ * Read failure → null.
+ */
+export interface ApproverContextSnapshot {
+  context: ApproverClassificationContext;
+  expected: Record<string, unknown>;
+}
+
+export async function readApproverContextSnapshot(
+  orgId: string,
+  tool: string,
+  metadata: Record<string, unknown> | null | undefined
+): Promise<ApproverContextSnapshot | null> {
+  if (tool === "schedulingPolicy.patch") return readSchedulingSnapshot(orgId, metadata);
+  if (tool !== "policy.patch") return null;
+  const employeeId = employeeIdOf(metadata);
+  if (!employeeId) return null;
+  try {
+    const { isDemoMode } = await import("@/lib/mode");
+    if (isDemoMode()) {
+      const employee = await getEmployee(employeeId, orgId);
+      if (!employee || employee.orgId !== orgId) return null;
+      return { context: policyContextFromEmployee(employee), expected: employeePolicyProjection(employee) };
+    }
+    const { createSupabaseAdminClient } = await import("@/lib/supabase");
+    const admin = createSupabaseAdminClient();
+    if (!admin) return null;
+    const { data, error } = await admin
+      .from("employees")
+      .select("scopes,approval_policy,action_limits,tool_approval_defaults")
+      .eq("id", employeeId)
+      .eq("org_id", orgId)
+      .maybeSingle();
+    if (error || !data) return null;
+    const row = data as Record<string, unknown>;
+    const { mapEmployeeRow } = await import("@/lib/data/mappers");
     return {
-      currentEmployeeScopes: [...(employee.scopes ?? [])],
-      currentEmployeeApprovalPolicy: employee.approvalPolicy ?? null,
-      // Problem A: raw stored values (normalized by the classifier like the save path).
-      currentEmployeeActionLimits: { ...((employee.actionLimits ?? {}) as Record<string, unknown>) },
-      currentEmployeeToolApprovalDefaults: { ...((employee.toolApprovalDefaults ?? {}) as Record<string, unknown>) },
+      context: policyContextFromEmployee(mapEmployeeRow({ ...row, id: employeeId, org_id: orgId })),
+      expected: {
+        scopes: row.scopes ?? null,
+        approval_policy: row.approval_policy ?? null,
+        action_limits: row.action_limits ?? null,
+        tool_approval_defaults: row.tool_approval_defaults ?? null,
+      },
     };
   } catch {
     return null;
@@ -56,10 +123,10 @@ export async function loadApproverClassificationContext(
  * random one per call, which would look like a change at every read); a
  * stored policy with rules that no longer validate counts as unreadable.
  */
-async function loadSchedulingContext(
+async function readSchedulingSnapshot(
   orgId: string,
   metadata: Record<string, unknown> | null | undefined
-): Promise<ApproverClassificationContext | null> {
+): Promise<ApproverContextSnapshot | null> {
   try {
     const employeeId = employeeIdOf(metadata) || null;
     const { DEFAULT_SCHEDULING_RULE, normalizeSchedulingPolicy } = await import("@/lib/scheduling-policy/validate");
@@ -74,30 +141,41 @@ async function loadSchedulingContext(
     };
     let orgPolicy: { rules?: unknown } | null;
     let employeePolicy: { rules?: unknown } | null = null;
+    let rawOrg: unknown = null;
+    let rawEmployee: unknown = null;
     if (isDemoMode()) {
-      const { getEffectiveSchedulingPolicy } = await import("@/lib/data/scheduling-policy");
-      const effective = await getEffectiveSchedulingPolicy(orgId, employeeId);
-      orgPolicy = effective.orgPolicy;
-      employeePolicy = effective.employeeOverride;
+      // Same values getEffectiveSchedulingPolicy returns in demo, read once.
+      const { demoSchedulingPolicySnapshot } = await import("@/lib/data/scheduling-policy");
+      const raw = demoSchedulingPolicySnapshot(employeeId);
+      rawOrg = raw.org;
+      rawEmployee = raw.employee;
+      orgPolicy = raw.org as { rules?: unknown } | null;
+      employeePolicy = raw.employee as { rules?: unknown } | null;
     } else {
       const { createSupabaseAdminClient } = await import("@/lib/supabase");
       const admin = createSupabaseAdminClient();
       if (!admin) return null;
       const org = await admin.from("orgs").select("scheduling_policy").eq("id", orgId).maybeSingle();
       if (org.error || !org.data) return null;
-      orgPolicy = strict((org.data as { scheduling_policy?: unknown }).scheduling_policy);
+      rawOrg = (org.data as { scheduling_policy?: unknown }).scheduling_policy ?? null;
+      orgPolicy = strict(rawOrg);
       if (employeeId) {
         const emp = await admin.from("employees").select("scheduling_policy").eq("id", employeeId).eq("org_id", orgId).maybeSingle();
         if (emp.error || !emp.data) return null;
-        employeePolicy = strict((emp.data as { scheduling_policy?: unknown }).scheduling_policy);
+        rawEmployee = (emp.data as { scheduling_policy?: unknown }).scheduling_policy ?? null;
+        employeePolicy = strict(rawEmployee);
       }
     }
     const inherited = orgPolicy ?? { rules: [{ ...DEFAULT_SCHEDULING_RULE, id: "default" }] };
     return {
-      schedulingRules: {
-        current: schedulingRulesState(employeePolicy ?? inherited),
-        ifCleared: schedulingRulesState(inherited),
+      context: {
+        schedulingRules: {
+          current: schedulingRulesState(employeePolicy ?? inherited),
+          ifCleared: schedulingRulesState(inherited),
+        },
       },
+      // Raw stored values (the CAS compares exactly these).
+      expected: JSON.parse(canonicalContextJson(employeeId ? { org: rawOrg ?? null, employee: rawEmployee ?? null } : { org: rawOrg ?? null })),
     };
   } catch {
     return null;
@@ -212,5 +290,31 @@ export async function approverFilingStop(input: {
     requiredApproverKind: requirement.kind,
     messageJa: approverAuthorityReplyJa(reason) ?? reason,
     nextStepJa: approverAuthorityNextStepJa(reason) ?? "",
+  };
+}
+
+/**
+ * TOCTOU follow-up: right before an approval-executed write of a
+ * context-pinned tool, read the judged state once, check its fingerprint
+ * against the one recorded at filing, and pin the raw values the write is
+ * then conditioned on (compare-and-swap; see ./context-cas). Flag OFF / not a
+ * pinned tool → null (today's write path). No record, unreadable, or changed
+ * → ApproverContextChangedError (nothing is written).
+ */
+export async function approverContextGuardForWrite(approval: ApprovalRequest): Promise<ApproverContextGuard | null> {
+  if (!isApproverAuthorityEnabled()) return null;
+  const tool = String(approval.metadata?.adminTool || approval.tool || "").trim();
+  if (!CONTEXT_PINNED_TOOLS.has(tool)) return null;
+  const recorded = approval.approverAuthority?.contextFingerprint;
+  if (typeof recorded !== "string" || !recorded) throw new ApproverContextChangedError();
+  const snapshot = await readApproverContextSnapshot(approval.orgId, tool, approval.metadata);
+  const now = approverContextFingerprint(tool, snapshot?.context ?? null);
+  if (!snapshot || now === null || now !== recorded) throw new ApproverContextChangedError();
+  return {
+    approvalId: approval.id,
+    tool: tool as ContextPinnedTool,
+    fingerprint: recorded,
+    employeeId: employeeIdOf(approval.metadata) || null,
+    expected: snapshot.expected,
   };
 }

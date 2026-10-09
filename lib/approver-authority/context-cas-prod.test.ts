@@ -88,7 +88,7 @@ describe("policy.patch write (employees + active credentials)", () => {
   test("concurrent change → RPC refuses → approver_context_changed; no table write at all", async () => {
     rpcResponder = () => ({ data: { ok: false, reason: "approver_context_changed" }, error: null });
     const error = await updateEmployeePolicy({ ...policyInput(), contextGuard: policyGuard }).catch((e: unknown) => e);
-    expect(error).toBeInstanceOf(ApproverContextChangedError);
+    expect(error instanceof ApproverContextChangedError).toBe(true);
     expect((error as Error).message).toBe("approver_context_changed");
     const [cas] = casCalls("approver_cas_write_employee_policy");
     expect(cas.args).toMatchObject({
