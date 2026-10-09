@@ -21,6 +21,7 @@
  */
 import type { ResolvedAdminCredential } from "@/lib/auth/admin-credential";
 import { getAppOrigin } from "@/lib/approvals/tokens";
+import { hasJwtHeaderSegment } from "@/lib/security/secret-detector";
 import { appendAuditEvent, listAuditEvents } from "@/lib/data/audit";
 import { getBinding } from "@/lib/data/bindings";
 import { listOrgParties } from "@/lib/data/directory";
@@ -88,7 +89,9 @@ const MAX_INBOXES = 5;
 const SLACK_TIMEOUT_MS = 5_000;
 const SLACK_USER_ID_RE = /^[UW][A-Z0-9]{2,30}$/;
 const SAFE_ID_RE = /^[A-Za-z0-9_.:-]{1,80}$/;
-const SECRETISH_RE = /(xox[a-z]-|xapp-|gb_(adm|emp)_|sk_(live|test)_|-----BEGIN|eyJ[A-Za-z0-9_-]{10,}\.)/i;
+// The JWT-header alternative (eyJ[A-Za-z0-9_-]{10,}\.) is checked by
+// hasJwtHeaderSegment: as a regex it was quadratic on repeated "eyJ" (2026-10-09).
+const SECRETISH_RE = /(xox[a-z]-|xapp-|gb_(adm|emp)_|sk_(live|test)_|-----BEGIN)/i;
 const SECRETISH_KEY_RE = /(token|secret|password|credential|signing|apikey|api_key|authorization|cookie)/i;
 export const SLACK_APPS_CONSOLE_URL = "https://api.slack.com/apps";
 
@@ -109,7 +112,7 @@ export function rejectUnsafeArgs(args: Record<string, unknown>, allowed: readonl
     if (!allowed.includes(key)) {
       return fail("unexpected_argument", `未対応の引数です: ${key.slice(0, 40)}`);
     }
-    if (typeof value === "string" && SECRETISH_RE.test(value)) {
+    if (typeof value === "string" && (SECRETISH_RE.test(value) || hasJwtHeaderSegment(value))) {
       return fail("secret_not_accepted", "このツールは token / secret を受け取りません。チャットに貼らず、ダッシュボードで人が入力してください。");
     }
   }

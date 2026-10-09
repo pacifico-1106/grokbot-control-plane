@@ -51,3 +51,15 @@ export function categorizeSensitiveTopics(topics: unknown): SensitiveTopicCatego
   if (unmapped) found.add(OTHER);
   return { categories: SENSITIVE_TOPIC_CATEGORIES.filter((c) => found.has(c)), categoriesSource: "mapped" };
 }
+
+/**
+ * Categories for keywords that actually MATCHED (topic-gate hit), for anything returned to the AI.
+ * Same mapping as categorizeSensitiveTopics; a hit that maps to no category is その他の機密事項
+ * (not the generic set, which would name categories that did not match). Never returns keywords.
+ */
+export function categorizeMatchedTopics(matched: unknown): SensitiveTopicCategory[] {
+  const result = categorizeSensitiveTopics(matched);
+  if (result.categoriesSource === "none") return [];
+  if (result.categoriesSource === "generic") return [OTHER];
+  return result.categories;
+}
