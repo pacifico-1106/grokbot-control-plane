@@ -239,3 +239,43 @@ describe("Admin MCP employees.issue: checked at filing and at fulfil", () => {
     expect((await getEmployee(String(r?.employeeId), DEMO_ORG.id))?.projectAccess).toEqual(selected(own.id));
   });
 });
+
+// 木村 2026-10-09 (#296 follow-up): the nextStep lists the ids to remove, and
+// never a project name (another org's names must not leak).
+describe("nextStep lists the refused project IDs (IDs only, never names)", () => {
+  const PHRASE = "これらのプロジェクト ID を除いて保存し直してください";
+  test("web issue: refused ids in nextStep, the valid one and every name absent", async () => {
+    const own = await ownProject();
+    const res = await issueReq(selected(own.id, otherOrgProject.id, "prj_unknown_ns"));
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    const nextStep = String(body.nextStep);
+    expect(nextStep).toContain(PHRASE);
+    expect(nextStep).toContain(otherOrgProject.id);
+    expect(nextStep).toContain("prj_unknown_ns");
+    expect(nextStep).not.toContain(own.id);
+    const whole = JSON.stringify(body);
+    expect(whole).not.toContain(otherOrgProject.name);
+    expect(whole).not.toContain(own.name);
+  });
+  test("policy PATCH and Admin MCP filing / fulfil: same", async () => {
+    const emp = await newEmployee();
+    const patched = await (await patchReq(emp.id, selected(otherOrgProject.id))).json();
+    expect(String(patched.nextStep)).toContain(PHRASE);
+    expect(String(patched.nextStep)).toContain(otherOrgProject.id);
+    expect(JSON.stringify(patched)).not.toContain(otherOrgProject.name);
+    const filed = await callAdminMcpTool("employees.issue", {
+      displayName: "MCP名なし", roleLabel: "テスト", scopes: ["mail:draft"], projectAccess: selected(otherOrgProject.id),
+    }, demoCred());
+    const d = filed.structuredContent as Record<string, unknown>;
+    expect(String(d.nextStep)).toContain(PHRASE);
+    expect(String(d.nextStep)).toContain(otherOrgProject.id);
+    expect(JSON.stringify(filed)).not.toContain(otherOrgProject.name);
+    const gone = await ownProject();
+    await deleteOrgProject(DEMO_ORG.id, gone.id);
+    const f = await fulfillApprovedAdmin(adminApproval({ displayName: "名なし", roleLabel: "テスト", scopes: ["mail:draft"], projectAccess: selected(gone.id) }));
+    expect(String(f?.nextStepJa)).toContain(PHRASE);
+    expect(String(f?.nextStepJa)).toContain(gone.id);
+    expect(JSON.stringify(f)).not.toContain(gone.name);
+  });
+});
