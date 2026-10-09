@@ -354,20 +354,33 @@ describe("policy.patch never applies projectAccess (pinned)", () => {
       metadata: { approvalClass: "admin", adminTool: "policy.patch", adminMutation: mutation },
     } as unknown as ApprovalRequest;
   }
-  test("fulfil: projectAccess in the ticket (widening to all, or another org's id) is ignored; no project check runs", async () => {
+  // Since #275 a ticket carrying projectAccess is refused at fulfil with
+  // unsupported_key (it used to be silently ignored): nothing is written.
+  test("fulfil: projectAccess in the ticket (widening to all, or another org's id) → unsupported_key; nothing written, no project check runs", async () => {
     const emp = await newEmployee();
     const own = await ownProject();
     await updateEmployeePolicy({ orgId: DEMO_ORG.id, employeeId: emp.id, scopes: emp.scopes, allowedPurposes: [],
       approvalPolicy: emp.approvalPolicy, projectAccess: selected(own.id) as never });
+    const before = await getEmployee(emp.id, DEMO_ORG.id);
+    expect(before?.projectAccess).toEqual(selected(own.id));
+    expect(before?.scopes).not.toContain("tools:read");
+    const policyFields = (e: typeof before) => ({
+      scopes: e?.scopes, allowedPurposes: e?.allowedPurposes, approvalPolicy: e?.approvalPolicy,
+      actionLimits: e?.actionLimits, toolApprovalDefaults: e?.toolApprovalDefaults, projectAccess: e?.projectAccess,
+    });
     for (const projectAccess of [{ mode: "all", projectIds: [] }, selected(otherOrgProject.id)]) {
       snapshotRefusals();
-      const r = await fulfillApprovedAdmin(policyPatchApproval({
+      const r = (await fulfillApprovedAdmin(policyPatchApproval({
         employeeId: emp.id, scopes: ["mail:draft", "tools:read"], allowedPurposes: [], approvalPolicy: "risk_based", projectAccess,
-      }));
-      expect(r?.ok).toBe(true);
+      }))) as { ok?: boolean; error?: string; nextStepJa?: string } | null;
+      expect(r?.ok).toBe(false);
+      expect(r?.error).toBe("unsupported_key");
+      expect(typeof r?.nextStepJa).toBe("string");
       const after = await getEmployee(emp.id, DEMO_ORG.id);
-      expect(after?.scopes).toContain("tools:read");
+      // projectAccess is never written, and no other policy field changed either.
       expect(after?.projectAccess).toEqual(selected(own.id));
+      expect(after?.scopes).not.toContain("tools:read");
+      expect(policyFields(after)).toEqual(policyFields(before));
       expect(newRefusals()).toHaveLength(0);
     }
   });
