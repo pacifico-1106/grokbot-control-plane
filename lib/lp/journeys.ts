@@ -8,6 +8,7 @@
 import { createHash, randomBytes, createHmac, timingSafeEqual } from "node:crypto";
 import { createSupabaseAdminClient } from "@/lib/supabase";
 import { isLpChatEnabled } from "@/lib/feature-flags";
+import { requireGuestSigningKey } from "@/lib/lp/guest-signing-key";
 
 const DEFAULT_TENANT_ID = "00000000-0000-0000-0000-000000000001";
 const JOURNEY_EXPIRY_HOURS = 24;
@@ -37,13 +38,12 @@ export interface ConsentEvent {
   consentedAt: string;
 }
 
+/**
+ * Fail closed: throws GuestSigningKeyMissingError when GUEST_SIGNING_KEY is missing/blank/placeholder.
+ * There is deliberately no fallback key (a fixed fallback would let anyone forge guest cookies).
+ */
 function getSigningKey(): string {
-  const key = process.env.GUEST_SIGNING_KEY;
-  if (!key || key.startsWith("replace_me")) {
-    console.warn("[journeys] GUEST_SIGNING_KEY not configured, using fallback");
-    return "dev-fallback-key-not-for-production";
-  }
-  return key;
+  return requireGuestSigningKey();
 }
 
 export function generateGuestToken(): { token: string; tokenHash: string } {
@@ -61,6 +61,7 @@ export function signToken(token: string): string {
   return createHmac("sha256", key).update(token).digest("hex");
 }
 
+/** Throws GuestSigningKeyMissingError when the key is not configured (never returns true then). */
 export function verifySignature(token: string, signature: string): boolean {
   const expected = Buffer.from(signToken(token), "utf8");
   const actual = Buffer.from(signature, "utf8");
