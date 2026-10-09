@@ -270,7 +270,7 @@ describe("who may approve (木村 2026-10-09) — requester recorded through the
       ORG,
       { role: "admin", capabilities: [...(current.capabilities ?? [])], status: "active" } as never
     ).then(() => null, (error: unknown) => error);
-    expect(thrown).toBeInstanceOf(MemberConcurrentModificationError);
+    expect(thrown instanceof MemberConcurrentModificationError).toBe(true);
     expect(getRuntimeMemberById(TARGET)?.role).toBe("admin");
   });
 
