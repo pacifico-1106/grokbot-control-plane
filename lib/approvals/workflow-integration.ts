@@ -19,8 +19,9 @@ import { resolveApprovalWithoutWorkflow as baseResolveApproval, getApprovalById 
 import * as approvalsData from "@/lib/data/approvals";
 import { isApproverAuthorityEnabled } from "@/lib/feature-flags";
 import { checkApproverAuthority, recordApproverAuthority, verifyApproverIdentity } from "@/lib/approver-authority/verify";
-import { promoteOwnerApproverConflict, requesterMemberIdsFromMetadata } from "@/lib/approver-authority/decide";
+import { promoteOwnerApproverConflict, promoteOwnerRequesterUnidentified, requesterMemberIdsFromMetadata } from "@/lib/approver-authority/decide";
 import { isDemoMode } from "@/lib/mode";
+import { PROMOTE_OWNER_TOOL } from "@/lib/approver-authority/targets";
 import { createSupabaseAdminClient } from "@/lib/supabase";
 import { withDemoWorkflowLock } from "@/lib/approval-workflow/lock";
 import { getBallotsByInstanceId, demoWorkflowVoterIsCurrent } from "@/lib/approval-workflow/data";
@@ -171,6 +172,12 @@ async function resolveWorkflow(
     // (The requester follows the general single-owner rule.) Before any ballot / W1 write.
     const conflict = promoteOwnerApproverConflict(approval, identity.memberId || opts.voterUserId);
     if (conflict) return authorityStop(approval, conflict, false);
+    // G1 (木村 round 3): a 2nd owner since filing + unidentified requester → refuse.
+    if (approval.tool === PROMOTE_OWNER_TOOL) {
+      const { listMembers } = await import("@/lib/data/members");
+      const owners = (await listMembers(orgId)).filter((m) => m.orgId === orgId && m.role === "owner" && m.status === "active").length;
+      if (promoteOwnerRequesterUnidentified(approval, owners)) return authorityStop(approval, "requester_not_identified", false);
+    }
   }
 
   // Idempotent snapshot initialization is also required for tickets created by

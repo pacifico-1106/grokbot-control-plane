@@ -18,6 +18,8 @@
  * owners, an unidentified requester is refused at filing
  * (requester_not_identified). That closes "omits it" but not "declares
  * someone else's verified Slack ID" — the self-reported limit above remains.
+ * G1 (木村 round 3): the same rule is re-checked at approval time and at fulfil,
+ * so a ticket filed while there was one owner stops once a 2nd owner exists.
  */
 import { listVoterBindings } from "@/lib/approval-workflow/voter-binding";
 import { listMembers } from "@/lib/data/members";

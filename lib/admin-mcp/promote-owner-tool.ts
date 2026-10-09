@@ -25,7 +25,7 @@ import { appendAuditEvent } from "@/lib/data/audit";
 import { listMembers } from "@/lib/data/members";
 import { isOwnerPromotionEnabled } from "@/lib/feature-flags";
 import { getVerifiedApprover } from "@/lib/approver-authority";
-import { promoteOwnerApproverConflict, requesterMemberIdsFromMetadata } from "@/lib/approver-authority/decide";
+import { promoteOwnerApproverConflict, promoteOwnerRequesterUnidentified, requesterMemberIdsFromMetadata } from "@/lib/approver-authority/decide";
 import { PROMOTE_OWNER_TOOL } from "@/lib/approver-authority/targets";
 import type { ApprovalRequest } from "@/lib/types";
 import { requesterCardLineJa, requesterMetadata, resolveAdminRequester, SLACK_USER_ID_FORMAT } from "@/lib/admin-mcp/requester-identity";
@@ -148,6 +148,10 @@ export async function fulfillPromoteOwner(
   // Requester: a sole owner may approve their own request; with 2+ owners, not.
   const activeOwners = (await listMembers(orgId)).filter((m) => m.orgId === orgId && m.role === "owner" && m.status === "active");
   const singleOwnerApproval = activeOwners.length === 1;
+  // G1 (木村 round 3): filed with one owner, a 2nd owner since → the requester must be known.
+  if (promoteOwnerRequesterUnidentified({ tool: PROMOTE_OWNER_TOOL, metadata: approval.metadata }, activeOwners.length)) {
+    return stop(REQUESTER_NOT_IDENTIFIED, `オーナーが2人以上いるため、依頼者を確認できない申請は実行できません。${REQUESTER_NOT_IDENTIFIED_NEXT_STEP_JA}。`);
+  }
   if (!singleOwnerApproval && requesterMemberIdsFromMetadata(approval.metadata).includes(approver.memberId)) {
     return stop("approver_is_requester", "オーナーが2人以上いるときは、申請者以外のオーナーが承認してください。");
   }

@@ -1472,7 +1472,7 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
         memberId: { type: "string", description: "org_members ID of an active non-owner member of this org" },
         requesterSlackUserId: {
           type: "string",
-          description: "Slack user ID (U…) of the person who asked you to file this. Pass it whenever you know it: it is matched to a member only through this org's verified approver registration, and that member then cannot approve when the org has 2+ owners. Required when the org has 2+ active owners (otherwise refused: requester_not_identified). With a sole owner it is optional; without it the card says the requester cannot be identified.",
+          description: "Slack user ID (U…) of the person who asked you to file this. Pass it whenever you know it: it is matched to a member only through this org's verified approver registration, and that member then cannot approve when the org has 2+ owners. Required when the org has 2+ active owners (otherwise refused: requester_not_identified). With a sole owner it is optional; without it the card says the requester cannot be identified, and if a 2nd owner is added before approval or execution the ticket is refused (requester_not_identified) — so pass it whenever you can.",
         },
         jobId: { type: "string" },
         approvalId: { type: "string", description: "Re-invoke with approved ticket ID" },

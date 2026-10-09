@@ -310,3 +310,48 @@ describe("who may approve (木村 2026-10-09) — requester recorded through the
     expect(text).not.toContain("aaaa");
   });
 });
+
+// 木村 2026-10-09 round 3 G1: filed with ONE owner (requester unidentified is
+// allowed then), a 2nd owner is added before approval / execution → the
+// requesting owner could otherwise self-approve. Re-checked at both points.
+describe("G1: 2+ owners by approval / execution time and the requester is not identified → requester_not_identified", () => {
+  const OWNER2 = "mem_po_owner2_late";
+  const ticketOf = async (queued: Record<string, unknown>) => (await getApprovalById(String(queued.approvalId), ORG))!;
+
+  test("approval time: a 2nd owner added after filing → refused (whoever presses); nothing applied", async () => {
+    const ticket = await ticketOf(await promote({ memberId: TARGET }));
+    expect((ticket.metadata.requesterIdentity as { identified?: boolean }).identified).toBe(false);
+    upsertRuntimeMember(member(OWNER2, "owner"), { audit: false });
+    for (const who of [OWNER, OWNER2]) {
+      const r = await approve(ticket.id, who);
+      expect(r.ok).toBe(false);
+      expect(r.reason).toBe("requester_not_identified");
+    }
+    expect((await getApprovalById(ticket.id, ORG))?.status).toBe("pending");
+    expect(getRuntimeMemberById(TARGET)?.role).toBe("admin");
+    const { approverAuthorityReplyJa } = await import("@/lib/approver-authority/reply");
+    expect(approverAuthorityReplyJa("requester_not_identified")).toContain("requesterSlackUserId");
+  });
+
+  test("execution time: approved while sole owner, a 2nd owner added before fulfil → refused; nothing applied", async () => {
+    const ticket = await ticketOf(await promote({ memberId: TARGET }));
+    expect((await approve(ticket.id, OWNER)).ok).toBe(true);
+    upsertRuntimeMember(member(OWNER2, "owner"), { audit: false });
+    const approved = (await getApprovalById(ticket.id, ORG))!;
+    const direct = await fulfillPromoteOwner(approved, approved.metadata.adminMutation as Record<string, unknown>);
+    expect(codeOf(direct)).toBe("requester_not_identified");
+    const viaFulfil = await fulfillApprovedAdmin(approved);
+    expect(viaFulfil?.ok).toBe(false);
+    expect(getRuntimeMemberById(TARGET)?.role).toBe("admin");
+  });
+
+  test("identified requester: a 2nd owner added later → the other owner can still approve and it runs", async () => {
+    await bindSlack(OWNER, REQ_SLACK);
+    const ticket = await ticketOf(await promote({ memberId: TARGET, requesterSlackUserId: REQ_SLACK }));
+    upsertRuntimeMember(member(OWNER2, "owner"), { audit: false });
+    expect((await approve(ticket.id, OWNER2)).ok).toBe(true);
+    const result = await fulfillApprovedAdmin((await getApprovalById(ticket.id, ORG))!);
+    expect(result?.ok).toBe(true);
+    expect(getRuntimeMemberById(TARGET)?.role).toBe("owner");
+  });
+});

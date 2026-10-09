@@ -94,6 +94,8 @@ export const APPROVER_AUTHORITY_RESULT_REASONS = [
   // members.promoteOwner: the member being promoted may not approve their own promotion.
   "approver_is_target",
   "approver_class_missing",
+  // members.promoteOwner (木村 round 3 G1): 2+ active owners and the requester is not identified.
+  "requester_not_identified",
 ] as const;
 
 export type ApproverAuthorityResultReason = (typeof APPROVER_AUTHORITY_RESULT_REASONS)[number];
@@ -142,4 +144,23 @@ export function promoteOwnerApproverConflict(
     : "";
   if (target && approver === target) return "approver_is_target";
   return null;
+}
+
+/**
+ * 木村 2026-10-09 round 3 G1: with 2+ active owners, "an owner other than the
+ * requester" needs a known requester. A ticket filed while there was one owner
+ * (unidentified requester allowed then) must not be approved or run once a 2nd
+ * owner exists — checked at approval time and again at fulfil.
+ */
+export function promoteOwnerRequesterUnidentified(
+  approval: { tool?: string | null; metadata?: Record<string, unknown> | null },
+  activeOwnerCount: number
+): boolean {
+  if (approval.tool !== PROMOTE_OWNER_TOOL_NAME) return false;
+  if (activeOwnerCount < 2) return false;
+  const identity = approval.metadata?.requesterIdentity;
+  const identified = identity && typeof identity === "object" && !Array.isArray(identity)
+    ? (identity as Record<string, unknown>).identified === true
+    : false;
+  return !identified;
 }
