@@ -98,10 +98,24 @@ FIXES = [
 ALL_FIX_TABLES = tuple(t for f in FIXES for t in f["tables"])
 # Additive migrations (new server-only tables): (filename prefix, SQL test, tables).
 ADDITIVE = [
+    # Listed first: it alters #286's table, and #286's own rollback/re-apply
+    # below would drop its column. A str instead of a table tuple = the SQL
+    # condition that must hold after its rollback (it adds no table).
+    ("20261009150000_", "tests/security/db-thread-single-flight-preflag.sql",
+     "to_regprocedure('public.close_approval_without_send(uuid,uuid,text[],text,jsonb)') is null"
+     " and to_regclass('public.thread_wake_points') is null"
+     " and to_regprocedure('public.record_thread_wake_point(uuid,uuid,text,bigint)') is null"
+     " and to_regprocedure('public.acquire_thread_send_lease(uuid,text,uuid,uuid,integer,text)') is null"
+     " and not exists (select 1 from information_schema.columns where table_schema = 'public'"
+     " and table_name = 'thread_send_leases' and column_name = 'job_key')"
+     " and to_regclass('public.thread_self_posts') is not null"
+     " and not exists (select 1 from information_schema.columns where table_schema = 'public'"
+     " and table_name = 'thread_self_posts' and column_name = 'job_first_micros')"),
     ("20261005000000_", "tests/security/db-mcp-events.sql", ("mcp_event_subscriptions", "mcp_event_deliveries", "mcp_event_verification_windows")),
     ("20261005100000_", "tests/security/db-webhook-settings.sql", ("employee_webhook_settings",)),
     ("20261005200000_", "tests/security/db-channel-classify.sql", ("channel_classify_proposals", "channel_stuck_notice_windows")),
     ("20261005400000_", "tests/security/db-channel-classify-budget.sql", ("channel_classify_budget_windows",)),
+    ("20261009100000_", "tests/security/db-thread-single-flight.sql", ("thread_send_leases", "thread_self_posts")),
 ]
 
 # Un-timestamped legacy names do not sort in dependency order (see
@@ -308,13 +322,58 @@ try:
         sql_file(MIGRATIONS / name)
         sql_file(ROOT / test)
         sql_text(rollback_block((MIGRATIONS / name).read_text()), single=False)
-        gone = query("select " + " and ".join(f"to_regclass('public.{t}') is null" for t in tables) + ";")
-        assert gone == "t", f"{name}: rollback left tables behind"
+        if isinstance(tables, str):
+            gone = query(f"select {tables};")
+            assert gone == "t", f"{name}: rollback did not restore the previous state"
+        else:
+            gone = query("select " + " and ".join(f"to_regclass('public.{t}') is null" for t in tables) + ";")
+            assert gone == "t", f"{name}: rollback left tables behind"
         for fix in FIXES:
             sql_file(ROOT / fix["test"])  # rolling back an additive migration never reopens a fix
         sql_file(MIGRATIONS / name)
         sql_file(ROOT / test)
-        print(f"PASS {name}: {test} passes after the full history, re-applied, rollback drops {', '.join(tables)}, re-applied; fixes still closed.")
+        dropped = "its RPC + column (previous state restored)" if isinstance(tables, str) else ", ".join(tables)
+        print(f"PASS {name}: {test} passes after the full history, re-applied, rollback drops {dropped}, re-applied; fixes still closed.")
+    # PR-D approver authority (columns + functions, replaces resolve_approval_w1_checked):
+    # SQL test after the full history, re-apply, rollback restores the 7-argument
+    # RPC and drops the columns, fixes still closed, re-apply.
+    name = next((n for n in order if n.startswith("20261005500000_")), None)
+    assert name, "approver authority migration missing"
+    test = "tests/security/db-approver-authority.sql"
+    sql_file(ROOT / test)
+    sql_file(MIGRATIONS / name)
+    sql_file(ROOT / test)
+    sql_text(rollback_block((MIGRATIONS / name).read_text()), single=False)
+    restored = query("select to_regprocedure('public.resolve_approval_w1_checked(uuid,uuid,uuid,text,text,text,text)') is not null"
+                     " and to_regprocedure('public.resolve_approval_w1_checked(uuid,uuid,uuid,text,text,text,text,boolean)') is null"
+                     " and to_regprocedure('public.record_approver_authority(uuid,uuid,uuid,text)') is null"
+                     " and not exists (select 1 from information_schema.columns where table_schema='public'"
+                     " and column_name in ('required_approver_kind','approver_member_id','approver_role','approver_authority','designated_admin_member_ids'));")
+    assert restored == "t", f"{name}: rollback did not restore the previous RPC / drop the columns"
+    for fix in FIXES:
+        sql_file(ROOT / fix["test"])
+    sql_file(MIGRATIONS / name)
+    sql_file(ROOT / test)
+    print(f"PASS {name}: {test} passes after the full history, re-applied, rollback restores the 7-argument resolve_approval_w1_checked and drops the PR-D columns/functions, re-applied; fixes still closed.")
+    # TOCTOU follow-up (20261010100000, approval-executed policy writes as a
+    # compare-and-swap): SQL test after the full history, re-apply, rollback
+    # drops exactly the two RPCs (PR-D stays), fixes still closed, re-apply.
+    name = next((n for n in order if n.startswith("20261010100000_")), None)
+    assert name, "approver context CAS migration missing"
+    test = "tests/security/db-approver-context-cas.sql"
+    sql_file(ROOT / test)
+    sql_file(MIGRATIONS / name)
+    sql_file(ROOT / test)
+    sql_text(rollback_block((MIGRATIONS / name).read_text()), single=False)
+    gone = query("select to_regprocedure('public.approver_cas_write_employee_policy(uuid,uuid,uuid,text,jsonb,text[],text[],text,jsonb,text,jsonb)') is null"
+                 " and to_regprocedure('public.approver_cas_write_scheduling_policy(uuid,uuid,uuid,text,jsonb,text,jsonb)') is null"
+                 " and to_regprocedure('public.approver_authority_check(uuid,uuid,text,text[])') is not null;")
+    assert gone == "t", f"{name}: rollback did not drop exactly the CAS RPCs"
+    for fix in FIXES:
+        sql_file(ROOT / fix["test"])
+    sql_file(MIGRATIONS / name)
+    sql_file(ROOT / test)
+    print(f"PASS {name}: {test} passes after the full history, re-applied, rollback drops the two CAS RPCs (PR-D untouched), re-applied; fixes still closed.")
 finally:
     if started:
         run([BIN / "pg_ctl", "-D", cluster / "data", "-m", "fast", "-w", "stop"], stdout=subprocess.DEVNULL)

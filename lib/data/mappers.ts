@@ -147,6 +147,28 @@ export function mapApprovalRow(row: Record<string, unknown>): ApprovalRequest {
     createdAt: String(row.created_at ?? new Date().toISOString()),
     resolvedAt: row.resolved_at != null ? String(row.resolved_at) : null,
     resolvedBy: row.resolved_by != null ? String(row.resolved_by) : null,
+    ...approverAuthorityColumns(row),
+  };
+}
+
+/** PR-D: columns only (never metadata — metadata can carry caller content). Omitted before the migration. */
+function approverAuthorityColumns(row: Record<string, unknown>): Partial<ApprovalRequest> {
+  if (!("required_approver_kind" in row) && !("approver_member_id" in row)) return {};
+  const kind = row.required_approver_kind;
+  return {
+    requiredApproverKind:
+      kind === "owner" || kind === "owner_or_designated_admin"
+        ? kind
+        : kind != null
+          ? "owner" // unknown stored value → strictest
+          : null,
+    approverMemberId: row.approver_member_id != null ? String(row.approver_member_id) : null,
+    approverRole:
+      row.approver_role === "owner" || row.approver_role === "designated_admin" ? row.approver_role : null,
+    approverAuthority:
+      row.approver_authority && typeof row.approver_authority === "object" && !Array.isArray(row.approver_authority)
+        ? (row.approver_authority as Record<string, unknown>)
+        : null,
   };
 }
 

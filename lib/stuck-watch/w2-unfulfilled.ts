@@ -25,9 +25,22 @@ import type {
  *
  * - employees.postingIdentity.set: switching the Slack posting identity changes
  *   what the other side sees, so a person must know when it happens (木村).
+ * - money tools (木村 2026-10-09 round 3): a W2 re-run re-verifies the stored
+ *   approver and re-executes with the same jobId — it does NOT go through the
+ *   approval gates again — so spend limits, plan changes, card links and
+ *   orders are re-run only by an explicit re-invoke.
  */
+const W2_MONEY_TOOLS = [
+  "employees.spend.set",
+  "plan.upgrade",
+  "cardSetup.mintLink",
+  "cardSetup.mintPortalLink",
+  "commerce.order",
+] as const;
+
 export const W2_MANUAL_REINVOKE_ONLY_TOOLS: ReadonlySet<string> = new Set([
   "employees.postingIdentity.set",
+  ...W2_MONEY_TOOLS,
 ]);
 
 function approvalToolName(approval: ApprovalRequest): string {
@@ -41,7 +54,9 @@ export function w2ManualReinvokeOnlyTool(approval: ApprovalRequest): string | nu
 }
 
 export function w2ManualReinvokeNextStepJa(tool: string): string {
-  return `自動再実行の対象外です（相手に見える名義が変わるため）。原因を直してから、管理エージェントが ${tool} を approvalId 付きで呼び直してください（その時点ですべて確認し直します）。`;
+  const why = (W2_MONEY_TOOLS as readonly string[]).includes(tool) ? "お金に関わる操作のため" : "相手に見える名義が変わるため";
+  const who = tool === "commerce.order" ? "AI社員" : "管理エージェント"; // commerce.order is a gateway invoke, not an admin tool
+  return `自動再実行の対象外です（${why}）。原因を直してから、${who}が ${tool} を approvalId 付きで呼び直してください（その時点ですべて確認し直します）。`;
 }
 
 function parseStuckWatchMeta(

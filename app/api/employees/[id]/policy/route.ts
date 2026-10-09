@@ -1,4 +1,6 @@
 import { NextResponse } from "next/server";
+// PR-D: namespace access (mocks of the flag module elsewhere stay valid).
+import * as featureFlags from "@/lib/feature-flags";
 import { getCurrentOrgId } from "@/lib/auth/session";
 import { appendAuditEvent, getEmployee, listNotificationChannels, updateEmployeePolicy } from "@/lib/data";
 import { normalizeActionLimits } from "@/lib/action-gate";
@@ -123,6 +125,46 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
     );
     if (!parsedInbox.ok) return fail("approval_channel_not_found", 400);
     nextApprovalChannelId = parsedInbox.id;
+  }
+
+  if (featureFlags.isApproverAuthorityEnabled?.()) {
+    // PR-D: approver / permission fields saved directly from the dashboard
+    // need someone who could have approved them (owner / designated admin;
+    // money-related → owner). Only fields that actually change are judged.
+    const { assertWebActorApproverAuthority, webDirectDeniedBody, sameJson, sameSet } = await import("@/lib/approver-authority/web-direct");
+    const changes: Array<{ tool: string; adminMutation: Record<string, unknown> }> = [];
+    // This route always writes normalizeActionLimits(body.actionLimits), so
+    // every policy.patch change carries it (Problem A: the classifier treats a
+    // missing actionLimits as "emptied", like the admin MCP save path).
+    const nextActionLimits = normalizeActionLimits(body.actionLimits);
+    if (!sameSet(scopes, existing.scopes)) changes.push({ tool: "policy.patch", adminMutation: { scopes, actionLimits: nextActionLimits } });
+    if (approvalPolicy !== existing.approvalPolicy) changes.push({ tool: "policy.patch", adminMutation: { approvalPolicy, actionLimits: nextActionLimits } });
+    if (toolApprovalDefaults !== undefined && !sameJson(toolApprovalDefaults, normalizeToolApprovalDefaults(existing.toolApprovalDefaults ?? {}))) {
+      changes.push({ tool: "policy.patch", adminMutation: { toolApprovalDefaults, actionLimits: nextActionLimits } });
+    }
+    if (!sameJson(nextActionLimits, normalizeActionLimits(existing.actionLimits))) {
+      changes.push({ tool: "policy.patch", adminMutation: { actionLimits: nextActionLimits } });
+    }
+    if (spend !== undefined && !sameJson(spend, existing.spend ?? null)) changes.push({ tool: "employees.spend.set", adminMutation: {} });
+    if (
+      (nextApprovalChannelId !== undefined && nextApprovalChannelId !== (existing.approvalChannelId ?? null)) ||
+      (body.approverUserIds !== undefined && !sameSet(normalizeApproverUserIds(body.approverUserIds), existing.approverUserIds ?? []))
+    ) {
+      changes.push({ tool: "setup.lineApproval.setEmployeeInbox", adminMutation: {} });
+    }
+    const authority = await assertWebActorApproverAuthority({
+      orgId,
+      memberId: gate.actor.id,
+      changes,
+      context: {
+        currentEmployeeScopes: existing.scopes,
+        currentEmployeeApprovalPolicy: existing.approvalPolicy,
+        currentEmployeeActionLimits: { ...((existing.actionLimits ?? {}) as Record<string, unknown>) },
+        currentEmployeeToolApprovalDefaults: { ...((existing.toolApprovalDefaults ?? {}) as Record<string, unknown>) },
+      },
+      surface: "employees.policy",
+    });
+    if (!authority.ok) return NextResponse.json(webDirectDeniedBody(authority), { status: 403 });
   }
 
   let updated: Awaited<ReturnType<typeof updateEmployeePolicy>>;

@@ -536,7 +536,7 @@ describe("post-delete audience: a delete never relaxes external / mixed / guest 
   });
 
   // --- parties.remove ---
-  test("outside-domain: mail_address external in an internal domain (rule) → refused; oracle turns internal", async () => {
+  test("outside-domain: mail_address external in an internal domain (rule) → refused; oracle turns internal once Slack verifies the own team", async () => {
     const domain = `${uid("d").toLowerCase()}.example.jp`;
     const email = `contractor@${domain}`;
     await setOrgInternalAudienceRule(ORG_A, { emailDomains: [domain] }, "test");
@@ -571,7 +571,7 @@ describe("post-delete audience: a delete never relaxes external / mixed / guest 
     expect(await audienceOf({ surface: "mail", email: `someone@${domain}` })).toBe("internal");
   });
 
-  test("guest: slack_user external while own-workspace users are auto-internal → refused; oracle turns internal", async () => {
+  test("guest: slack_user external while own-workspace users are auto-internal → refused; oracle turns internal once Slack verifies the own team", async () => {
     await setOrgInternalAudienceRule(ORG_A, { slackTeamIds: [OWN_TEAM], autoSlackTeamInternal: true }, "test");
     const guest = uid("U");
     const party = await upsertOrgParty({ orgId: ORG_A, kind: "slack_user", identifier: guest, audience: "external" });
@@ -579,8 +579,47 @@ describe("post-delete audience: a delete never relaxes external / mixed / guest 
     const res = await callAdminMcpTool(PTY_REMOVE, { partyId: party.id }, cred());
     expectRelaxRefusal(data(res));
     expect(await getOrgParty(ORG_A, "slack_user", guest)).not.toBeNull();
+    // The guard above refused with no Slack bot token at all: it never depends
+    // on Slack being reachable (team rule ON → a slack_user delete may relax).
     await deleteOrgParty(ORG_A, party.id);
-    expect(await audienceOf({ slackUserId: guest, slackTeamId: OWN_TEAM })).toBe("internal");
+    // Oracle. Since #298 (7214eb7) resolveAudience trusts only the team Slack
+    // itself reports (users.info); the AI-supplied slackTeamId is ignored, so
+    // without a verifiable team the row-less guest stays external…
+    expect(await audienceOf({ slackUserId: guest, slackTeamId: OWN_TEAM })).toBe("external");
+    // …and in production Slack reports a guest of the own workspace with the
+    // own team id → the row-less guest is judged internal. That relaxation is
+    // exactly what the refusal above prevents.
+    const { upsertConversationAdapter } = await import("@/lib/data/conversation-adapters");
+    const { resetSlackUserTeamCacheForTests } = await import("@/lib/slack/bot-token");
+    await upsertConversationAdapter({ orgId: ORG_A, surface: "slack", enabled: true, secrets: { botToken: "xoxb-guest-oracle" } });
+    const realFetch = globalThis.fetch;
+    let slackTeam: string | null = OWN_TEAM;
+    globalThis.fetch = (async (input: unknown) => {
+      const url = String(input);
+      if (url.includes("users.info")) {
+        return slackTeam
+          ? Response.json({ ok: true, user: { id: guest, team_id: slackTeam } })
+          : Response.json({ ok: false, error: "user_not_found" });
+      }
+      return Response.json({ ok: false, error: "not_mocked" });
+    }) as typeof fetch;
+    try {
+      resetSlackUserTeamCacheForTests();
+      expect(await audienceOf({ slackUserId: guest })).toBe("internal");
+      // AI-supplied slackTeamId alone never makes it internal (fail-closed):
+      // users.info cannot find the user → external…
+      resetSlackUserTeamCacheForTests();
+      slackTeam = null;
+      expect(await audienceOf({ slackUserId: guest, slackTeamId: OWN_TEAM })).toBe("external");
+      // …and Slack reports another workspace → external, whatever the AI claims.
+      resetSlackUserTeamCacheForTests();
+      slackTeam = "T0OTHERTEAM";
+      expect(await audienceOf({ slackUserId: guest, slackTeamId: OWN_TEAM })).toBe("external");
+    } finally {
+      globalThis.fetch = realFetch;
+      resetSlackUserTeamCacheForTests();
+      await upsertConversationAdapter({ orgId: ORG_A, surface: "slack", enabled: false, secrets: {} });
+    }
   });
 
   test("allowed: external slack_user without an auto-internal team, external phone / line, external slack_channel party", async () => {

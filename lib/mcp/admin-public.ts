@@ -80,6 +80,9 @@ export const ADMIN_MCP_TOOL_NAMES = [
   "setup.slackAuthorizeLink.issue",
   "channels.remove",
   "parties.remove",
+  "approvers.designatedAdmins.get",
+  "approvers.designatedAdmins.set",
+  "members.promoteOwner",
 ] as const;
 
 export type AdminMcpToolName = (typeof ADMIN_MCP_TOOL_NAMES)[number];

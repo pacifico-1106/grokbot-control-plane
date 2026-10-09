@@ -21,7 +21,14 @@ const EMP = "emp_sales";
 const AWS_EX_ID = "AKIAIOSFODNN7EXAMPLE";
 const AWS_EX_SECRET = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY";
 const FAKE_SECRET = "q7Vx2Lm9Pw4Rt8Ky3Hn6Bd1Fg5Jc0Ws7Te5Qa8Mz";
-const SLACK_TOKEN = "xoxb-123456789012-1234567890123-abcdefghij";
+/**
+ * Built at runtime (GitHub push protection rejects literal xoxb tokens). The
+ * varying part is uppercase letters only, without T and Z: audit rows carry
+ * epoch-ms digits (row id), ISO timestamps (digits, "-", ":", ".", "T", "Z")
+ * and lowercase base36 / hex randomness, none of which can then form a
+ * 3-character window of the secret. See the forced-clock test at the bottom.
+ */
+const SLACK_TOKEN = ["xoxb", "QKWPRMVGNHJX", "YUQKWPRMVGNHJ", "LPKQXWVRMN"].join("-");
 const FLAG = "P1_CONFIG_CHANGE_REQUEST_ENABLED";
 const flagBackup = process.env[FLAG];
 
@@ -176,6 +183,12 @@ afterEach(() => {
   else process.env[FLAG] = flagBackup;
 });
 
+test("the fake Slack token's varying part is uppercase letters only, never T or Z (no clock / random-id collision)", () => {
+  const varying = SLACK_TOKEN.slice(5);
+  expect(/^[A-SU-Y-]+$/.test(varying)).toBe(true);
+  expect(detectSecretInString(SLACK_TOKEN).ok).toBe(false);
+});
+
 test("fixed jobIds share no 3-character substring with any secret", () => {
   const ids = PATHS.flatMap((_, pi) => [...DATE_LED_SECRETS.map((__, ci) => fixedJob("b", pi, ci)), fixedJob("r", pi), fixedJob("i", pi)]);
   expect(new Set(ids).size).toBe(ids.length);
@@ -211,5 +224,33 @@ describe("every detector path", () => {
       const { blocked } = await p.run("2026-10-05T10:27:00+09:00", jobId);
       expect(blocked).toBe(false);
     });
+  }
+});
+
+/**
+ * Timestamp collision (木村, 2026-10-10, after #305): the demo audit row id is
+ * `aud_${Date.now()}_…` and createdAt is an ISO timestamp, so a token whose
+ * varying part has digit runs (e.g. "…789012…") made expectNoSubstring flag
+ * the row whenever the clock happened to contain "890" etc. Pin it: force a
+ * clock whose epoch-ms digits contain the token's old digit run and check the
+ * audit row still shows no 3-character window of the secret.
+ */
+const COLLIDING_NOW = 1_789_012_345_678; // 2026-09-10T03:52:25.678Z; digits "789012345678"
+test("audit row timestamps can never collide with the Slack token (forced clock)", async () => {
+  const realNow = Date.now;
+  Date.now = () => COLLIDING_NOW;
+  try {
+    const [, text, secret] = DATE_LED_SECRETS[2];
+    const jobId = fixedJob("t", 0);
+    const { blocked } = await PATHS[0].run(text, jobId);
+    expect(blocked).toBe(true);
+    const rows = (await listAuditEvents(null, 100000)).filter(
+      (e) => e.action === SECRET_DETECTION_BLOCKED && (e.metadata as Record<string, unknown>)?.jobId === jobId
+    );
+    expect(rows.length).toBe(1);
+    expect(rows[0].id).toContain(String(COLLIDING_NOW));
+    expectNoSubstring(JSON.stringify(rows[0]), secret);
+  } finally {
+    Date.now = realNow;
   }
 });
