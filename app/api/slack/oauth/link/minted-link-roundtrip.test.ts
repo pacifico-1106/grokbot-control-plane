@@ -168,7 +168,7 @@ describe("setup-link minter never produces a re-authorize URL", () => {
     } catch (e) {
       error = e;
     }
-    expect(error).toBeInstanceOf(setupLinks.SetupLinkKindNotMintableError);
+    expect(error instanceof setupLinks.SetupLinkKindNotMintableError).toBe(true);
     expect((error as { code?: string }).code).toBe("slack_authorize_requires_issue");
     expect(String((error as Error).message)).not.toContain("setup_token");
   });
