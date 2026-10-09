@@ -137,6 +137,30 @@ describe("policy.patch: the approval-executed write is a compare-and-swap", () =
   });
 });
 
+describe("policy.patch with actionLimits left out (kept, 2026-10-10) under the guard", () => {
+  const omittedArgs = async () => {
+    const args: Record<string, unknown> = await policyPatchArgs({ approvalPolicy: "always_human" });
+    delete args.actionLimits;
+    return args;
+  };
+  test("nothing changed in between → current caps kept, written", async () => {
+    runtimeEmployee().actionLimits = { "commerce.order": { perDay: 3, perMonth: 20 } } as never;
+    const t = await fileApproved("policy.patch", await omittedArgs());
+    expect(await fulfillApprovedAdmin(t)).toMatchObject({ ok: true, tool: "policy.patch" });
+    expect(runtimeEmployee().actionLimits).toEqual({ "commerce.order": { perDay: 3, perMonth: 20 } } as never);
+  });
+  test("a concurrent cap change in the window → approver_context_changed; the kept value never overwrites it", async () => {
+    runtimeEmployee().actionLimits = { "commerce.order": { perDay: 3, perMonth: 20 } } as never;
+    const t = await fileApproved("policy.patch", await omittedArgs());
+    const lowered = { "commerce.order": { perDay: 1, perMonth: 5 } };
+    concurrentChange = () => { runtimeEmployee().actionLimits = structuredClone(lowered) as never; };
+    expect(await fulfillApprovedAdmin(t)).toMatchObject({ ok: false, error: "approver_context_changed", nextStepJa: NEXT_STEP });
+    expect(concurrentChange).toBeNull();
+    expect(runtimeEmployee().actionLimits).toEqual(lowered as never);
+    expect(policyAuditFor(t.id)).toEqual([]);
+  });
+});
+
 describe("schedulingPolicy.patch: guarded writes", () => {
   test("org policy: concurrent change after the check → approver_context_changed, nothing written", async () => {
     await setOrgSchedulingPolicy(ORG, capPolicy(5000) as never);

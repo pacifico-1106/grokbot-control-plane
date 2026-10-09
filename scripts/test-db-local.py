@@ -242,6 +242,28 @@ try:
                  " and to_regclass('public.channel_classify_proposals') is not null;") == "t"
     sql(budget)  # forward again after rollback
     sql(ROOT / "tests/security/db-channel-classify-budget.sql")
+    thread_sf = ROOT / "supabase/migrations/20261009100000_thread_single_flight.sql"
+    sql(thread_sf)
+    sql(thread_sf)  # re-applicable
+    sql(ROOT / "tests/security/db-thread-single-flight.sql")
+    tsf_org = "c7000000-0000-4000-8000-0000000000f1"
+    tsf_emp = "c7100000-0000-4000-8000-0000000000f1"
+    query(f"insert into public.orgs(id, name) values ('{tsf_org}', 'thread-sf-race');"
+          f" insert into public.employees(id, org_id, display_name, role_label) values ('{tsf_emp}', '{tsf_org}', 'TSF race', 'fixture');")
+    tsf_commands = [(f"set role service_role; select public.acquire_thread_send_lease("
+                     f"'{tsf_org}', repeat('a', 64), '{tsf_emp}', gen_random_uuid(), 60)->>'state';") for _ in range(12)]
+    with ThreadPoolExecutor(max_workers=12) as pool:
+        tsf_takes = list(pool.map(query, tsf_commands))
+    assert tsf_takes.count("acquired") == 1 and tsf_takes.count("busy") == 11, tsf_takes
+    query(f"delete from public.orgs where id='{tsf_org}';")
+    sql(ROOT / "supabase/verification/20261009100000_thread_single_flight_rollback.sql")
+    assert query("select to_regclass('public.thread_send_leases') is null and to_regclass('public.thread_self_posts') is null"
+                 " and to_regprocedure('public.acquire_thread_send_lease(uuid,text,uuid,uuid,integer)') is null"
+                 " and to_regprocedure('public.release_thread_send_lease(uuid,text,uuid)') is null"
+                 " and to_regprocedure('public.record_thread_self_post(uuid,uuid,text,bigint,text)') is null"
+                 " and to_regclass('public.comm_reply_send_fingerprints') is not null;") == "t"
+    sql(thread_sf)  # forward again after rollback
+    sql(ROOT / "tests/security/db-thread-single-flight.sql")
     # PR-D approver authority: needs the P0 admin-approver RPC it replaces.
     sql(ROOT / "supabase/migrations/20260927000300_admin_approver_enforcement.sql")
     approver_authority = ROOT / "supabase/migrations/20261005500000_approver_authority.sql"
@@ -303,6 +325,7 @@ try:
     print("PASS: employee_webhook_settings (D9): RLS on, no policy, anon/authenticated denied, service_role reads/writes/upserts; cross-org row rejected; payload mode minimal|legacy_full (default minimal); ciphertext-only secret + fingerprint pair; employee delete cascades; rollback + re-apply.")
     print("PASS: channel_classify_proposals / channel_stuck_notice_windows (PR-B): RLS on, anon/authenticated denied (tables + 4 RPCs); org_channels accepts telegram; claim states claimed/in_flight/pending/decided, facts change reopens, other org isolated; attach same-org only; release unattached only; notice window once then suppressed; bad input denied; org delete cascades; 12 concurrent claims → exactly 1 claimed; rollback (2 tables + 4 RPCs + telegram surface) + re-apply.")
     print("PASS: channel_classify_budget_windows (PR-B follow-up H1): RLS on, no policy, anon/authenticated denied (table + RPC); allowed up to max → over_first once → over; per org / per key independent; expired window resets; bad input denied; org delete cascades; 20 concurrent takes (max 5) → exactly 5 allowed + 1 over_first; rollback (table + RPC, PR-B tables untouched) + re-apply.")
+    print("PASS: thread_send_leases / thread_self_posts (thread single-flight): RLS on, no policy, anon/authenticated denied (2 tables + 3 RPCs); acquire → busy (retry_after) → expired lease taken over; release by holder only (old holder cannot release a re-taken lease); other org's lease on the same key independent, other org cannot release, other org's employee denied; self posts only move forward, no cross-org rows; bad input denied; org delete cascades; 12 concurrent acquires → exactly 1 acquired; rollback (2 tables + 3 RPCs, dedup ledger untouched) + re-apply.")
     print("PASS: orgs / subscriptions / audit_events / approval_requests have no anon/authenticated write path (member/admin/owner JWT denied); service_role writes all four. Full-history check: scripts/test-db-all-migrations.py.")
     print("PASS: 14 tenant config / credential tables (credentials, employees, bindings, admin agents, directory, adapters, channels, projects, card setup/audit) + gateway_links, agentmail_inboxes, lp_handoffs, lp_wake_webhook_configs, lp_wake_webhook_events have no anon/authenticated write path; other reads unchanged; credentials (rows and secret_hash) unreadable from any session; service_role reads/writes all.")
     print("PASS: lp_inquiries / notification_outbox have no anon/authenticated write grant; lp_handoffs / lp_wake_* have no policy (RLS on) and no anon/authenticated SELECT; sessions read/write none of the 5 LP tables; service_role (BYPASSRLS) reads/writes all.")
