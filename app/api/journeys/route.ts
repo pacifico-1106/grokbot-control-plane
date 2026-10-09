@@ -19,6 +19,7 @@ import {
 import { verifyTurnstileToken, getClientIp, getTurnstileConfig } from "@/lib/lp/turnstile";
 import { hashIp, checkRateLimits } from "@/lib/lp/rate-limit";
 import { getPublishedRelease } from "@/lib/lp/knowledge-base";
+import { GUEST_SESSIONS_UNAVAILABLE, isGuestSigningKeyMissingError } from "@/lib/lp/guest-signing-key";
 
 const GUEST_COOKIE_NAME = "lp_guest";
 const CSRF_COOKIE_NAME = "lp_csrf";
@@ -119,8 +120,22 @@ export async function POST(req: Request) {
     }
   }
 
-  const kbRelease = await getPublishedRelease();
   const { token, tokenHash } = generateGuestToken();
+  // Sign before anything is persisted: without GUEST_SIGNING_KEY we refuse (fail closed, no dev
+  // fallback) and must not leave an orphan journey row behind.
+  let guestCookieValue: string;
+  try {
+    // cookies().set() takes the bare value. Passing the full Set-Cookie string from
+    // formatGuestCookie() stored "lp_guest=<token>.<sig>; Path=/; ..." as the value,
+    // so every later signature check failed with invalid_session.
+    guestCookieValue = formatGuestCookieValue(token);
+  } catch (err) {
+    if (!isGuestSigningKeyMissingError(err)) throw err;
+    console.error("[journeys] GUEST_SIGNING_KEY not configured; refusing to start a guest journey");
+    return NextResponse.json({ ok: false, ...GUEST_SESSIONS_UNAVAILABLE }, { status: 503 });
+  }
+
+  const kbRelease = await getPublishedRelease();
   const csrfToken = generateCsrfToken();
   const ipHash = clientIp ? hashIp(clientIp) : undefined;
 
@@ -140,10 +155,6 @@ export async function POST(req: Request) {
   }
 
   const cookieStore = await cookies();
-  // cookies().set() takes the bare value. Passing the full Set-Cookie string from
-  // formatGuestCookie() stored "lp_guest=<token>.<sig>; Path=/; ..." as the value,
-  // so every later signature check failed with invalid_session.
-  const guestCookieValue = formatGuestCookieValue(token);
 
   cookieStore.set(GUEST_COOKIE_NAME, guestCookieValue, {
     httpOnly: true,
