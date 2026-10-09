@@ -185,7 +185,7 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
   {
     name: "policy.patch",
     description:
-      "Patch an employee policy (scopes / purposes / actionLimits) after human approval (always_human). Admin cannot grant itself extra scopes. Dashboard humans cannot edit these fields.",
+      "Patch an employee policy (scopes / purposes / actionLimits) after human approval (always_human). Admin cannot grant itself extra scopes. Dashboard humans cannot edit these fields. actionLimits left out keeps the employee's current actionLimits unchanged; when sent, it replaces the whole map (a tool you leave out of the map loses its caps; {} or null removes every cap). allowedPurposes left out keeps the current value too. Removing or changing a money cap (e.g. commerce.order) needs an owner's approval when APPROVER_AUTHORITY_ENABLED is on.",
     inputSchema: {
       type: "object",
       properties: {
@@ -193,7 +193,11 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
         scopes: { type: "array", items: { type: "string" } },
         allowedPurposes: { type: "array", items: { type: "string" } },
         approvalPolicy: { type: "string" },
-        actionLimits: { type: "object", additionalProperties: true },
+        actionLimits: {
+          type: "object",
+          additionalProperties: true,
+          description: "Per-tool caps { tool: { perDay?, perMonth? } }. Left out = keep the current caps; sent = replaces the whole map.",
+        },
         jobId: { type: "string" },
       },
       required: ["employeeId", "scopes", "approvalPolicy"],

@@ -1,15 +1,17 @@
 /**
  * 木村 2026-10-09 23:58 (Problem A): policy.patch must not let a designated
  * admin remove money limits.
- * - The save path writes normalizeActionLimits(args.actionLimits) every time,
- *   so leaving actionLimits out empties every cap (commerce.order perDay /
- *   perMonth included).
+ * - actionLimits, when sent, replaces the whole map with
+ *   normalizeActionLimits(args.actionLimits), so a map without commerce.order
+ *   (or {} / null) empties that cap. 2026-10-10: LEFT OUT keeps the current
+ *   value (fulfillPolicy passes it explicitly), so omission is not a change
+ *   (policy-patch-omitted-limits.test.ts).
  * - toolApprovalDefaults, when sent, replaces the whole map with
  *   normalizeToolApprovalDefaults(args.toolApprovalDefaults), so a partial map
  *   with only non-money keys resets commerce.order (e.g. deny → always_human).
  * The judgement compares the CURRENT values with what the save path would
  * write (same normalizers): any money key that changes → owner; a key emptied
- * by omission counts as changed. Both values are part of the F2 fingerprint.
+ * by an explicit map counts as changed. Both values are part of the F2 fingerprint.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { classifyApproverRequirement } from "@/lib/approver-authority/targets";
@@ -47,8 +49,9 @@ const classify = (args: Record<string, unknown>, context: Record<string, unknown
   classifyApproverRequirement({ tool: "policy.patch", metadata: { adminMutation: { ...base, ...args } }, context: context as never });
 
 describe("policy.patch money limits (pure)", () => {
-  test("actionLimits left out → every cap would be emptied → owner", () => {
-    const r = classify({});
+  test("actionLimits left out → current value kept → not a change; an explicit {} empties every cap → owner", () => {
+    expect(classify({})?.kind).toBe("owner_or_designated_admin");
+    const r = classify({ actionLimits: {} });
     expect(r?.kind).toBe("owner");
     expect(r?.reasons).toContain("money_tool_limits");
   });
@@ -133,10 +136,12 @@ async function file(adminMutation: Record<string, unknown>, approve = true): Pro
 const current = async () => (await getEmployee(EMP, ORG))!;
 
 describe("policy.patch money limits (filing reads the real employee)", () => {
-  test("omitted actionLimits → filed as owner-only", async () => {
+  test("omitted actionLimits → kept → filed as standard; explicit {} → owner-only", async () => {
     const e = await current();
     const t = await file({ employeeId: EMP, scopes: e.scopes, approvalPolicy: e.approvalPolicy }, false);
-    expect(t.requiredApproverKind).toBe("owner");
+    expect(t.requiredApproverKind).toBe("owner_or_designated_admin");
+    const u = await file({ employeeId: EMP, scopes: e.scopes, approvalPolicy: e.approvalPolicy, actionLimits: {} }, false);
+    expect(u.requiredApproverKind).toBe("owner");
   });
   test("partial toolApprovalDefaults (non-money keys only) → owner-only", async () => {
     const e = await current();

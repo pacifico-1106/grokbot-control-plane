@@ -365,8 +365,11 @@ function changedMoneyKeys(current: Record<string, unknown>, next: Record<string,
 /**
  * 木村 2026-10-09 23:58 (Problem A). Compare what is stored now with what the
  * save path (fulfillPolicy → updateEmployeePolicy) would write:
- * - actionLimits is ALWAYS written as normalizeActionLimits(args.actionLimits),
- *   so leaving it out empties every cap → a stored money cap counts as changed.
+ * - actionLimits, when sent (incl. {} / null), REPLACES the map with
+ *   normalizeActionLimits(args.actionLimits) → a stored money cap it drops or
+ *   changes counts as changed. Left out (undefined) = the current value is
+ *   kept (2026-10-10: fulfillPolicy passes it explicitly, whatever
+ *   updateEmployeePolicy does with undefined) → not a change.
  * - toolApprovalDefaults, when sent, REPLACES the map with
  *   normalizeToolApprovalDefaults(args.toolApprovalDefaults); left out = kept.
  *   The current map is normalized the same way, plus any stored key the
@@ -387,9 +390,11 @@ function classifyPolicyMoneyLimits(
     reasons.add("money_limits_unverified");
     return;
   }
-  const nextLimits = normalizeActionLimits(args.actionLimits) as Record<string, unknown>;
-  if (changedMoneyKeys(normalizeActionLimits(rawLimits) as Record<string, unknown>, nextLimits).length) {
-    reasons.add("money_tool_limits");
+  if (args.actionLimits !== undefined) {
+    const nextLimits = normalizeActionLimits(args.actionLimits) as Record<string, unknown>;
+    if (changedMoneyKeys(normalizeActionLimits(rawLimits) as Record<string, unknown>, nextLimits).length) {
+      reasons.add("money_tool_limits");
+    }
   }
   if (args.toolApprovalDefaults !== undefined) {
     const currentDefaults: Record<string, unknown> = { ...normalizeToolApprovalDefaults(rawDefaults) };

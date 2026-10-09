@@ -1,4 +1,9 @@
 import { isDemoMode } from "@/lib/mode";
+import { isThreadSingleFlightEnabled } from "@/lib/feature-flags";
+import { THREAD_MOVED_ON, beginThreadSend, type ThreadSendHandle } from "@/lib/thread-guard/guard";
+import { readThroughFromBody, readThroughFromSnapshot } from "@/lib/thread-guard/read-through";
+import { auditThreadGuardHeld, auditThreadGuardStop } from "@/lib/thread-guard/respond";
+import { THREAD_MOVED_ON_CLOSE_REASON } from "@/lib/approvals/closed-without-send";
 import { isAdminClassApproval } from "@/lib/admin-mcp/audit-class";
 import { executeApproval } from "@/lib/approvals/execution";
 import {
@@ -24,7 +29,7 @@ import {
   recheckPolicyAtFulfill,
   type FulfillPolicyRecheck,
 } from "@/lib/approvals/fulfill-policy-recheck";
-import { getApprovalById, updateApprovalMetadata } from "@/lib/data/approvals";
+import { closeApprovalWithoutSend, getApprovalById, updateApprovalMetadata } from "@/lib/data/approvals";
 import { normalizePostingAs } from "@/lib/employees/posting-as";
 import {
   buildSnapshotAttachment,
@@ -154,6 +159,12 @@ export type InvokeSnapshot = {
    * See lib/approvals/snapshot-attachment.ts.
    */
   fileAttachment?: SnapshotAttachment | null;
+  /**
+   * Thread single-flight (THREAD_SINGLE_FLIGHT_ENABLED): the explicit read
+   * point sent with the request (normalized Slack-style ts). Fulfil checks
+   * against this (else conversation.ts), never against a re-run request's.
+   */
+  readThroughTs?: string;
 };
 
 export type ApprovalFulfillment = {
@@ -180,6 +191,12 @@ export type ApprovalFulfillment = {
    * kept as uncertain (verify the post, then resend with confirmedNotDelivered).
    */
   uncertainRef?: string;
+  /**
+   * Thread single-flight stop at fulfil (error thread_busy / thread_moved_on /
+   * thread_guard_unavailable): retryAfterSeconds, or readThroughTs + aiPostedTs +
+   * postedBy (+ approvalStatus "superseded" when moved_on closed the approval).
+   */
+  threadGuard?: Record<string, unknown>;
 };
 
 export type ConversationDelivery =
@@ -299,6 +316,10 @@ export function buildInvokeSnapshot(input: {
   const fidelity = input.fidelity || input.body?.disclosure || undefined;
   if (informationClass) snapshot.informationClass = informationClass;
   if (fidelity) snapshot.fidelity = fidelity;
+  if (isThreadSingleFlightEnabled() && isAudienceGatedTool(input.tool) && input.body) {
+    const readThrough = readThroughFromBody(input.body as unknown as Record<string, unknown>);
+    if (readThrough?.source === "explicit") snapshot.readThroughTs = readThrough.ts;
+  }
   // Always recorded for conversation tools so "no attachment" is explicit (null).
   if (isAudienceGatedTool(input.tool)) {
     snapshot.fileAttachment = buildSnapshotAttachment(input.body?.fileAttachment);
@@ -348,6 +369,7 @@ export function parseInvokeSnapshot(
     args,
     informationClass: str(rec.informationClass) as InformationClass | undefined,
     fidelity: str(rec.fidelity) as DisclosureFidelity | undefined,
+    ...(str(rec.readThroughTs) ? { readThroughTs: str(rec.readThroughTs) } : {}),
   };
 }
 
@@ -375,6 +397,9 @@ export function parseFulfillment(
   if (typeof rec.id === "string") fulfillment.id = rec.id;
   if (typeof rec.surface === "string") fulfillment.surface = rec.surface;
   if (typeof rec.error === "string") fulfillment.error = rec.error;
+  if (rec.threadGuard && typeof rec.threadGuard === "object" && !Array.isArray(rec.threadGuard)) {
+    fulfillment.threadGuard = { ...(rec.threadGuard as Record<string, unknown>) };
+  }
   if (rec.threadTsSource === "client" || rec.threadTsSource === "wake_stash") {
     fulfillment.threadTsSource = rec.threadTsSource;
   }
@@ -795,6 +820,9 @@ async function fulfillApprovedInvokeCore(
 ): Promise<ApprovalFulfillment | null> {
   let dedupGate: FulfillDedupGate | null = null;
   let postAttempted = false;
+  // Thread single-flight lease (released in `finally` on every path).
+  let threadHandle: ThreadSendHandle | null = null;
+  let threadSent: { sent: boolean; messageTs?: string } = { sent: false };
   try {
     const existing = parseFulfillment(approval.metadata);
     if (existing?.ok) return existing;
@@ -871,6 +899,82 @@ async function fulfillApprovedInvokeCore(
 
     const dest = destValidation.dest;
 
+    // THREAD_SINGLE_FLIGHT_ENABLED: the same lease + "already moved on" check
+    // as a direct post, against the APPROVED snapshot's read point. Before the
+    // ledger claim, so a stop leaves nothing behind. busy / unavailable keep the
+    // approval approved (re-runnable). moved_on CLOSES it as superseded (stale,
+    // terminal, nothing sent; 木村 #286 decision 2); if the close loses a race
+    // the stop is recorded and the next run re-checks.
+    let earlyThread: Awaited<ReturnType<typeof threadOf>> | null = null;
+    if (isThreadSingleFlightEnabled()) {
+      earlyThread = await threadOf(approval, snapshot, dest);
+      const threadSend = await beginThreadSend({
+        orgId: approval.orgId,
+        employeeId: approval.employeeId,
+        jobId: snapshot.jobId || approval.jobId,
+        keyInput: {
+          orgId: approval.orgId,
+          surface: "slack",
+          slackChannelId: dest,
+          threadId: earlyThread.threadTs,
+        },
+        readThrough: readThroughFromSnapshot(snapshot),
+      });
+      const threadAuditCtx = {
+        orgId: approval.orgId,
+        employeeId: approval.employeeId,
+        credentialId: approval.credentialId,
+        purpose: approval.purpose,
+        tool: snapshot.tool,
+        jobId: snapshot.jobId,
+        approvalId: approval.id,
+        phase: "fulfil" as const,
+      };
+      if (threadSend.kind === "stop") {
+        const guardExtra: Record<string, unknown> = Object.fromEntries(
+          ["retryAfterSeconds", "readThroughTs", "aiPostedTs", "postedBy"]
+            .filter((k) => threadSend.body[k] !== undefined)
+            .map((k) => [k, threadSend.body[k]])
+        );
+        await auditThreadGuardStop(threadSend, threadAuditCtx);
+        if (threadSend.code === THREAD_MOVED_ON) {
+          const meta = { reason: THREAD_MOVED_ON_CLOSE_REASON, phase: "approval.fulfill", ...guardExtra };
+          const closed = await closeApprovalWithoutSend({ approval, from: ["approved"], to: "superseded", meta }).catch(() => null);
+          if (closed) {
+            approval.status = "superseded";
+            approval.metadata = closed.metadata;
+            await appendAuditEvent({
+              orgId: approval.orgId,
+              employeeId: approval.employeeId,
+              credentialId: approval.credentialId,
+              action: "approval.superseded",
+              purpose: approval.purpose,
+              summary: "承認済みの会話投稿を、スレッドが先に進んだ（読んだ時点より後に AI 社員の投稿あり）ため古いものとして送信せずに終了",
+              metadata: { approvalId: approval.id, tool: snapshot.tool, jobId: snapshot.jobId, ...meta },
+            }).catch(() => undefined);
+            return {
+              ok: false,
+              error: threadSend.code,
+              threadGuard: { ...guardExtra, approvalStatus: "superseded" },
+              at: new Date().toISOString(),
+            };
+          }
+        }
+        const blocked: ApprovalFulfillment = {
+          ok: false,
+          error: threadSend.code,
+          threadGuard: guardExtra,
+          at: new Date().toISOString(),
+        };
+        await persistFulfillment(approval, blocked);
+        return blocked;
+      }
+      if (threadSend.kind === "held") {
+        threadHandle = threadSend.handle;
+        await auditThreadGuardHeld(threadSend, threadAuditCtx);
+      }
+    }
+
     // COMM_REPLY_DEDUP_ENABLED: expired, or the conversation already got a reply
     // with the same / a similar body after this approval was created → closed
     // without sending. Claims the send in the hash-only ledger otherwise. Fail
@@ -890,7 +994,7 @@ async function fulfillApprovedInvokeCore(
       return blocked;
     }
 
-    const threadResult = await threadOf(approval, snapshot, dest);
+    const threadResult = earlyThread ?? (await threadOf(approval, snapshot, dest));
 
     postAttempted = true;
 
@@ -904,6 +1008,7 @@ async function fulfillApprovedInvokeCore(
       // Human already approved the full mention-reply body.
       summarize: false,
     });
+    if (posted.ok && posted.delivery === "slack") threadSent = { sent: true, messageTs: posted.ts };
     const gateAfterPost = dedupGate;
     dedupGate = null;
     // v1: failed releases the claim. v2: only a provider-confirmed "not sent"
@@ -1011,6 +1116,8 @@ async function fulfillApprovedInvokeCore(
       /* audit is best-effort */
     }
     return fulfillment;
+  } finally {
+    if (threadHandle) await threadHandle.finish(threadSent).catch(() => undefined);
   }
 }
 

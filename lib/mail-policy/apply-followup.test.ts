@@ -230,6 +230,14 @@ describe("item 2: denylist matches subdomains on an exact label boundary", () =>
   });
 });
 
+// The exhaustive grid takes ~4.4s alone and went past bun's default 5s under
+// the full suite's load. Only the timeout is raised: same grid, same seed,
+// same iteration counts, same assertions.
+const DIFFERENTIAL_TIMEOUT_MS = 60_000;
+// bun:test takes a per-test timeout as the 3rd argument; the local
+// bun-test.d.ts shim only declares (name, fn), so widen the type here.
+const slowTest = test as unknown as (name: string, fn: () => unknown, timeoutMs: number) => void;
+
 describe("differential: new pipeline is never looser than main (a72c9f8)", () => {
   const policies: OrgMailPolicy[] = [
     defaultMailPolicy(),
@@ -278,7 +286,7 @@ describe("differential: new pipeline is never looser than main (a72c9f8)", () =>
   const convValues: Array<string | undefined> = [undefined, "a@ourco.example", "z@mx.blocked.example"];
   const ccs: unknown[] = [undefined, ["c@eu.blocked.example"], ["a@ourco.example"]];
 
-  test("rank(new) >= rank(main) for every combination", () => {
+  slowTest("rank(new) >= rank(main) for every combination", () => {
     let checked = 0;
     const looser: string[] = [];
     for (const [pi, policy] of policies.entries()) {
@@ -309,9 +317,9 @@ describe("differential: new pipeline is never looser than main (a72c9f8)", () =>
     }
     expect(looser).toEqual([]);
     expect(checked).toBeGreaterThan(100000);
-  });
+  }, DIFFERENTIAL_TIMEOUT_MS);
 
-  test("seeded fuzz over arbitrary recipient strings / subdomains: never looser than main", () => {
+  slowTest("seeded fuzz over arbitrary recipient strings / subdomains: never looser than main", () => {
     let seed = 20261003;
     const next = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
     const tokens = ["a", "x", "@", "@", "ourco.example", "blocked.example", "mail.", "bad", "partner.example", "sub.", ".", ",", ";", " ", "-", "Blocked.", "EXAMPLE"];
@@ -333,5 +341,5 @@ describe("differential: new pipeline is never looser than main (a72c9f8)", () =>
     }
     expect(looser).toEqual([]);
     expect(checked).toBeGreaterThan(20000);
-  });
+  }, DIFFERENTIAL_TIMEOUT_MS);
 });
