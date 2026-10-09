@@ -497,6 +497,8 @@ export type AuditAction =
   | "notification.delivery_failed"
   | "channel_classify.proposed"
   | "channel_classify.proposal_failed"
+  /** #292 21:50: wake-skip notice + card suppressed for 30 days after a rejected card (counts only). */
+  | "channel_classify.wake_skip_suppressed"
   | "channel_classify.join_ignored"
   | "channel_stuck.notice"
   | "conversation.adapter_updated"
@@ -513,6 +515,9 @@ export type AuditAction =
   | "slack.im_wake_skipped"
   | "slack.user_token_channel_wake"
   | "slack.user_token_channel_wake_skipped"
+  /** Path C: one-time re-wake after the channel classification was approved (PATHC_REWAKE_ON_CLASSIFY_ENABLED). */
+  | "slack.user_token_channel_rewake"
+  | "slack.user_token_channel_rewake_skipped"
   | "employee.sod_forced"
   | "employee.sod_override"
   | "action_limit.reached"

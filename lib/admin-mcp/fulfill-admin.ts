@@ -780,6 +780,16 @@ async function fulfillParty(approval: ApprovalRequest, args: Record<string, unkn
   return { ok: true, tool: "parties.upsert", at: new Date().toISOString(), partyId: party.id };
 }
 
+async function rewakeAfterChannelClassified(approval: ApprovalRequest, surface: string, externalId: string): Promise<void> {
+  try {
+    const { isPathCRewakeOnClassifyEnabled, rewakeSkippedChannelWakesAfterApproval } = await import("@/lib/slack/pathc-rewake");
+    if (!isPathCRewakeOnClassifyEnabled()) return;
+    await rewakeSkippedChannelWakesAfterApproval({ approval, surface, externalId });
+  } catch {
+    // never fails the approved classification
+  }
+}
+
 async function fulfillChannel(approval: ApprovalRequest, args: Record<string, unknown>): Promise<AdminFulfillment> {
   // Defense in depth: an invalid surface / classification is refused here too
   // (never silently written as "unknown").
@@ -804,6 +814,10 @@ async function fulfillChannel(approval: ApprovalRequest, args: Record<string, un
     summary: `チャネル分類: ${channel.externalId}`,
     metadata: { auditClass: ADMIN_AUDIT_CLASS, approvalId: approval.id, channelId: channel.id },
   });
+  // Path C (PATHC_REWAKE_ON_CLASSIFY_ENABLED, OFF → no-op): re-wake the latest
+  // mention skipped as unclassified in this channel, once. Never throws and
+  // never changes this fulfillment.
+  await rewakeAfterChannelClassified(approval, surface, externalId);
   return {
     ok: true,
     tool: "channels.classify",

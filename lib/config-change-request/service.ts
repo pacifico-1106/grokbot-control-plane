@@ -515,6 +515,18 @@ async function applyConfigChange(approval: ApprovalRequest): Promise<ConfigChang
       ...(applied.error ? { note: applied.error } : {}),
     },
   });
+  if (proposal.kind === "channel_classification") {
+    // Path C (PATHC_REWAKE_ON_CLASSIFY_ENABLED, OFF → no-op): one-time re-wake
+    // of the latest mention skipped as unclassified. Never throws.
+    try {
+      const { isPathCRewakeOnClassifyEnabled, rewakeSkippedChannelWakesAfterApproval } = await import("@/lib/slack/pathc-rewake");
+      if (isPathCRewakeOnClassifyEnabled()) {
+        await rewakeSkippedChannelWakesAfterApproval({ approval, surface: proposal.surface, externalId: proposal.externalId });
+      }
+    } catch {
+      // the approved change is already applied; nothing to undo
+    }
+  }
   return fulfillment;
 }
 

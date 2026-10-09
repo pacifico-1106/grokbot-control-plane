@@ -7,6 +7,7 @@
  * Wording is product-neutral (Staffpass = the employee ID badge for AI
  * agents); it never names a specific agent service.
  */
+import { classifyRejectGuidanceNoticeJa } from "@/lib/channel-classify/reject-guidance";
 import { createHash } from "node:crypto";
 import type { ChannelClassification, ChannelLedgerSurface, OrgPartyKind } from "@/lib/types";
 
@@ -373,7 +374,7 @@ export function buildUnregisteredDenyNoticeJa(input: {
     `理由: ${input.reason} — このチャネルは分類が未登録のため社外扱いになり、機密区分の投稿は拒否されます。本文は含めていません。`,
   ];
   if (input.approvalId && (input.proposalState === undefined || input.proposalState === "created" || input.proposalState === "pending")) {
-    lines.push(`対処: 承認窓口に届いている分類チケット（channels.classify）をワンタップで承認すると登録されます（承認ID: ${input.approvalId}）。社外と共有されているなら却下してください。`);
+    lines.push(`対処: 承認窓口に届いている分類チケット（channels.classify）をワンタップで承認すると登録されます（承認ID: ${input.approvalId}）。${classifyRejectGuidanceNoticeJa()}`);
   } else if (input.approvalId && input.proposalState === "decided") {
     lines.push(`分類チケットは処理済みです（承認ID: ${input.approvalId}）。変える場合は管理エージェントで channels.classify を依頼してください。`);
   } else {

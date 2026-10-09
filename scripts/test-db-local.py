@@ -241,9 +241,35 @@ try:
                  " and to_regclass('public.channel_classify_proposals') is not null;") == "t"
     sql(budget)  # forward again after rollback
     sql(ROOT / "tests/security/db-channel-classify-budget.sql")
+    skipped_wakes = ROOT / "supabase/migrations/20261009700000_slack_skipped_channel_wakes.sql"
+    sql(skipped_wakes)
+    sql(skipped_wakes)  # re-applicable
+    sql(ROOT / "tests/security/db-slack-skipped-wakes.sql")
+    ssw_org = "c9000000-0000-4000-8000-0000000000c1"
+    ssw_emp = "c9200000-0000-4000-8000-0000000000c1"
+    ssw_approval = "c9100000-0000-4000-8000-0000000000c1"
+    query(f"insert into public.orgs(id, name) values ('{ssw_org}', 'skipped-wakes-race');"
+          f"insert into public.employees(id, org_id, display_name, role_label) values ('{ssw_emp}', '{ssw_org}', 'race', 'race');"
+          f"insert into public.approval_requests(id, org_id, purpose, summary, risk, status, tool, metadata) values ('{ssw_approval}', '{ssw_org}', 'admin.channel', 'race', 'high', 'approved', 'channels.classify',"
+          f" '{{\"adminMutation\":{{\"surface\":\"slack\",\"externalId\":\"C0SSWRACE1\"}}}}');")
+    query(f"set role service_role; select public.record_slack_skipped_channel_wake('{ssw_org}', '{ssw_emp}', 'C0SSWRACE1', '1788100001.000001', null, 'EvRace', 'U0SPEAK1', 'T0TEAM1', 'U0SUB1', 'T0TEAM1');")
+    command = (f"set role service_role; select jsonb_array_length(public.claim_slack_skipped_channel_wakes("
+               f"'{ssw_org}', 'C0SSWRACE1', '{ssw_approval}', 3600)->'rows');")
+    with ThreadPoolExecutor(max_workers=12) as pool:
+        claims = list(pool.map(query, [command]*12))
+    assert claims.count("1") == 1 and claims.count("0") == 11, claims
+    query(f"delete from public.orgs where id='{ssw_org}';")
+    sql(ROOT / "supabase/verification/20261009700000_slack_skipped_channel_wakes_rollback.sql")
+    assert query("select to_regclass('public.slack_skipped_channel_wakes') is null"
+                 " and to_regprocedure('public.claim_slack_skipped_channel_wakes(uuid,text,uuid,integer)') is null"
+                 " and to_regprocedure('public.record_slack_skipped_channel_wake(uuid,uuid,text,text,text,text,text,text,text,text)') is null"
+                 " and to_regclass('public.channel_classify_proposals') is not null;") == "t"
+    sql(skipped_wakes)  # forward again after rollback
+    sql(ROOT / "tests/security/db-slack-skipped-wakes.sql")
     print("PASS: employee_webhook_settings (D9): RLS on, no policy, anon/authenticated denied, service_role reads/writes/upserts; cross-org row rejected; payload mode minimal|legacy_full (default minimal); ciphertext-only secret + fingerprint pair; employee delete cascades; rollback + re-apply.")
     print("PASS: channel_classify_proposals / channel_stuck_notice_windows (PR-B): RLS on, anon/authenticated denied (tables + 4 RPCs); org_channels accepts telegram; claim states claimed/in_flight/pending/decided, facts change reopens, other org isolated; attach same-org only; release unattached only; notice window once then suppressed; bad input denied; org delete cascades; 12 concurrent claims → exactly 1 claimed; rollback (2 tables + 4 RPCs + telegram surface) + re-apply.")
     print("PASS: channel_classify_budget_windows (PR-B follow-up H1): RLS on, no policy, anon/authenticated denied (table + RPC); allowed up to max → over_first once → over; per org / per key independent; expired window resets; bad input denied; org delete cascades; 20 concurrent takes (max 5) → exactly 5 allowed + 1 over_first; rollback (table + RPC, PR-B tables untouched) + re-apply.")
+    print("PASS: slack_skipped_channel_wakes (Path C re-wake, 20261009700000): RLS on, no policy, anon/authenticated denied (table + 2 RPCs); record: same-org employee only, bad ids denied, older kept / newer replaces; claim: approved same-org approval that classifies THIS channel only (tool + externalId; other channel / other tool / other surface / non-classification config change / pending / other org / missing denied), once, other org isolated; newer skip reopens, older does not; TTL; org delete cascades; 12 concurrent claims → exactly 1 winner; rollback (table + 2 RPCs) + re-apply.")
     print("PASS: orgs / subscriptions / audit_events / approval_requests have no anon/authenticated write path (member/admin/owner JWT denied); service_role writes all four. Full-history check: scripts/test-db-all-migrations.py.")
     print("PASS: 14 tenant config / credential tables (credentials, employees, bindings, admin agents, directory, adapters, channels, projects, card setup/audit) + gateway_links, agentmail_inboxes, lp_handoffs, lp_wake_webhook_configs, lp_wake_webhook_events have no anon/authenticated write path; other reads unchanged; credentials (rows and secret_hash) unreadable from any session; service_role reads/writes all.")
     print("PASS: lp_inquiries / notification_outbox have no anon/authenticated write grant; lp_handoffs / lp_wake_* have no policy (RLS on) and no anon/authenticated SELECT; sessions read/write none of the 5 LP tables; service_role (BYPASSRLS) reads/writes all.")

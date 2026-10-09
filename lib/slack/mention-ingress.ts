@@ -145,6 +145,23 @@ export type SlackWakePayload = {
    * Added only by the shared lib/mcp/endpoint-handoff module; absent when the flag is OFF.
    */
   mcpHandoff?: McpHandoff;
+  /**
+   * Path C one-time re-wake (PATHC_REWAKE_ON_CLASSIFY_ENABLED): set only on a
+   * wake sent after a human approved the classification of a channel whose
+   * mention had been skipped as unclassified. `text` (= `rewake.instructionJa`)
+   * is then a fixed Staffpass instruction — 「このチャンネルで取りこぼしたメンション
+   * があるので、スレッドを読んで対応して」 + channel id / ts — never the original
+   * body, and `ingressHandoff.bodyMode` is "none" (the record never held the
+   * text); read the message (channel + ts) through the normal, gated Slack tools.
+   */
+  rewake?: {
+    reason: "channel_classified";
+    approvalId: string;
+    originalEventId: string;
+    skippedAt: string;
+    /** Fixed instruction text (channel id + ts only). Same as `text`. */
+    instructionJa: string;
+  };
 };
 
 type SlackEvent = {
@@ -990,6 +1007,23 @@ async function processUserTokenChannelEvent(input: {
       },
     }).catch(() => undefined);
 
+    // Path C follow-up (木村 2026-10-09): no longer silent. Only when the skip
+    // is the ONLY reason (bound employee, same team — a team mismatch is
+    // dropped below anyway). Ids only; bounded; never changes this outcome.
+    if (target.slackTeamId.toUpperCase() === subscriberTeamId.toUpperCase()) {
+      await notifyUnclassifiedUserChannelSkip({
+        target,
+        channel,
+        eventId,
+        eventTs: str(envelope.event?.ts),
+        threadTs: str(envelope.event?.thread_ts) || null,
+        speakerId,
+        speakerTeamId: teamId,
+        subscriberUserId,
+        subscriberTeamId,
+      }).catch(() => undefined);
+    }
+
     return {
       handled: true,
       woke: 0,
@@ -1159,6 +1193,152 @@ async function processUserTokenChannelEvent(input: {
     userToken: true,
     isUserTokenChannel: true,
   };
+}
+
+/**
+ * Path C unclassified skip → (a) PATHC_REWAKE_ON_CLASSIFY_ENABLED: remember the
+ * latest skipped mention (ids + ts only) for a one-time re-wake on approval;
+ * (b) CHANNEL_CLASSIFY_PROPOSALS_ENABLED / CHANNEL_STUCK_NOTIFY_ENABLED: #276's
+ * proposal card + stuck notice (lib/channel-classify/wake-skip-hook.ts).
+ * All flags OFF → no read, no write, no call. Never throws.
+ */
+async function notifyUnclassifiedUserChannelSkip(input: {
+  target: SlackMentionTarget;
+  channel: string;
+  eventId: string;
+  eventTs: string;
+  threadTs: string | null;
+  speakerId: string;
+  speakerTeamId: string;
+  subscriberUserId: string;
+  subscriberTeamId: string;
+}): Promise<void> {
+  const { isPathCRewakeOnClassifyEnabled } = await import("@/lib/slack/pathc-rewake");
+  if (isPathCRewakeOnClassifyEnabled()) {
+    const { recordSkippedChannelWake } = await import("@/lib/data/slack-skipped-wakes");
+    const recorded = await recordSkippedChannelWake({
+      orgId: input.target.orgId,
+      employeeId: input.target.employeeId,
+      channelId: input.channel,
+      eventTs: input.eventTs,
+      threadTs: input.threadTs,
+      eventId: input.eventId,
+      speakerSlackUserId: input.speakerId,
+      speakerTeamId: input.speakerTeamId || null,
+      subscriberSlackUserId: input.subscriberUserId,
+      subscriberTeamId: input.subscriberTeamId,
+    }).catch(() => ({ state: "unavailable" as const }));
+    console.info("slack_user_channel_skip_recorded", {
+      eventId: input.eventId,
+      channel: input.channel,
+      orgId: input.target.orgId,
+      state: recorded.state,
+    });
+  }
+  const { onUnclassifiedWakeSkipped } = await import("@/lib/channel-classify/wake-skip-hook");
+  await onUnclassifiedWakeSkipped({
+    orgId: input.target.orgId,
+    employeeId: input.target.employeeId,
+    channelId: input.channel,
+    homeTeamId: input.subscriberTeamId,
+  });
+}
+
+/**
+ * Path C one-time re-wake after an approved classification (called only from
+ * lib/slack/pathc-rewake.ts with a row it has just claimed atomically). The
+ * binding and team are re-checked now; the payload carries ids + ts only
+ * (text "", bodyMode "none"). Returns true when a wake was posted. Never throws.
+ */
+export async function rewakeUserTokenChannelMention(input: {
+  orgId: string;
+  row: import("@/lib/data/slack-skipped-wakes").SkippedChannelWake;
+  classification: ChannelClassification;
+  approvalId: string;
+}): Promise<boolean> {
+  const { orgId, row, classification, approvalId } = input;
+  const ids = {
+    channelId: row.channelId,
+    eventId: row.eventId,
+    ts: row.eventTs,
+    approvalId,
+    subscriberSlackUserId: row.subscriberSlackUserId,
+  };
+  const skipped = async (reason: string) => {
+    await appendAuditEvent({
+      orgId,
+      employeeId: row.employeeId || null,
+      credentialId: null,
+      action: "slack.user_token_channel_rewake_skipped",
+      purpose: "slack.user_token_channel",
+      summary: `分類承認後の再起動を見送り: ${reason}`,
+      metadata: { reason, ...ids },
+    }).catch(() => undefined);
+    return false;
+  };
+  try {
+    if (row.orgId !== orgId || classification === "unknown") return skipped("not_applicable");
+    if (row.speakerSlackUserId.toUpperCase() === row.subscriberSlackUserId.toUpperCase()) return skipped("self_loop");
+    const targets = await getEmployeesBySlackUserIds([row.subscriberSlackUserId], row.subscriberTeamId);
+    const target = targets.find((t) => t.orgId === orgId && t.employeeId === row.employeeId);
+    if (!target) return skipped("binding_changed");
+    if (target.slackTeamId.toUpperCase() !== row.subscriberTeamId.toUpperCase()) return skipped("team_mismatch");
+
+    const effectivePolicy = await getEffectiveIngressHandoffPolicy(orgId, target.employeeId);
+    const resolved = resolveIngressHandoffSync(effectivePolicy.policy, {
+      channelId: row.channelId,
+      classification,
+      isIm: false,
+    });
+    const ingressHandoffMeta: NonNullable<SlackWakePayload["ingressHandoff"]> = {
+      policyId: effectivePolicy.policy.policyId,
+      ruleId: resolved.rule.id,
+      bodyMode: "none",
+      attachmentMode: resolved.rule.attachment,
+      attachmentApproval: resolved.rule.attachmentApproval,
+      sealithHandoff: resolved.rule.sealith,
+      pendingManagerApproval: resolved.rule.attachmentApproval === "manager" ? true : undefined,
+      channelClassification: classification,
+    };
+    const { buildPathCRewakeInstructionJa } = await import("@/lib/slack/pathc-rewake");
+    const instructionJa = buildPathCRewakeInstructionJa({ channelId: row.channelId, ts: row.eventTs, threadTs: row.threadTs });
+    const payload: SlackWakePayload = {
+      channel: row.channelId,
+      ts: row.eventTs,
+      thread_ts: row.threadTs,
+      // 21:50: fixed instruction (channel + ts), never the original body.
+      text: instructionJa,
+      speakerId: row.speakerSlackUserId,
+      user: row.speakerSlackUserId,
+      slackUserId: target.slackUserId,
+      speakerTeamId: row.speakerTeamId || "",
+      teamId: row.subscriberTeamId,
+      employeeId: target.employeeId,
+      eventId: `rewake:${row.eventId}`.slice(0, 80),
+      ingressHandoff: ingressHandoffMeta,
+      rewake: {
+        reason: "channel_classified",
+        approvalId,
+        originalEventId: row.eventId,
+        skippedAt: row.skippedAt,
+        instructionJa,
+      },
+    };
+    await postWake(target, payload, "user_token_channel", ingressHandoffMeta);
+    await appendAuditEvent({
+      orgId,
+      employeeId: target.employeeId,
+      credentialId: null,
+      action: "slack.user_token_channel_rewake",
+      purpose: "slack.user_token_channel",
+      summary: "分類承認後に、未分類で見送ったメンションで社員を一度だけ起こした",
+      metadata: { ...ids, classification, skippedAt: row.skippedAt },
+    }).catch(() => undefined);
+    console.info("slack_event_user_channel_rewake", { ...ids, orgId, employeeId: target.employeeId });
+    return true;
+  } catch {
+    return skipped("rewake_failed");
+  }
 }
 
 export async function processSlackMentionEnvelope(

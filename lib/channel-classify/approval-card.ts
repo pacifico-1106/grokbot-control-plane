@@ -6,6 +6,7 @@
  * never a token, never a message body. Kept ≤ 400 chars (the Slack card cuts
  * the summary there).
  */
+import { CLASSIFY_REJECT_GUIDANCE_JA } from "@/lib/channel-classify/reject-guidance";
 import { getOrgChannel, getOrgParty } from "@/lib/data/directory";
 import {
   describeSharingJa,
@@ -85,7 +86,7 @@ export async function buildChannelClassifyCardSummaryJa(
     warnings.push("⚠️ 社外共有として登録済みのため internal にはできません（反映時に失敗）");
   }
   if (value.classification === "shared_external" && !current) {
-    warnings.push("shared_external にすると後で internal に戻せません。社内専用なら却下してください");
+    warnings.push("shared_external にすると後で internal に戻せません", CLASSIFY_REJECT_GUIDANCE_JA);
   }
   if (opts.suggestion?.basis === "unverified") warnings.push("メンバーを確認できないため安全側（社外）で提案しています");
   const where = `${surfaceLabel(value.surface)} ${value.externalId}`;
