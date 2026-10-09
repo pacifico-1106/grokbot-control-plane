@@ -175,12 +175,23 @@ const BEFORE_KIND_JA: Record<string, string> = {
 export const UNKNOWN_CHANNEL_NEXT_STEP_JA =
   "このチャネルは台帳で未分類（unknown）です。削除ではなく、先に channels.classify で分類してください（社内だけなら internal、社外の人がいるなら shared_external。人の承認つき）。分類すれば削除は不要です。";
 
+/** Employee config change request (kind=channel_remove): the classify step is kind=channel_classification. */
+export const CONFIG_CHANGE_CHANNEL_REMOVE = "config.change.channel_remove" as const;
+const CONFIG_CHANGE_UNKNOWN_NEXT_STEP_JA =
+  "このチャネルは台帳で未分類（unknown）です。削除ではなく、先に kind=channel_classification の変更依頼で分類してください（社内だけなら internal、社外の人がいるなら shared_external。承認者の確認つき）。分類すれば削除は不要です。";
+const CONFIG_CHANGE_NEXT_STEP_JA =
+  "社内扱いが正しければ、管理者に分類の見直し（channels.classify / 社内判定の登録）を依頼してください。このチャネルの登録は削除せずに残してください。";
+
 /** Refusal body (request and fulfillment share code / wording). */
-export function relaxRefusal(tool: "channels.remove" | "parties.remove", subject: string, check: AudienceAfterRemove, kind?: OrgPartyKind) {
+export function relaxRefusal(tool: "channels.remove" | "parties.remove" | typeof CONFIG_CHANGE_CHANNEL_REMOVE, subject: string, check: AudienceAfterRemove, kind?: OrgPartyKind) {
   const beforeJa = BEFORE_KIND_JA[check.beforeKind] ?? "社外";
   const messageJa = `${subject} を削除すると、いま ${beforeJa} の判定が社内に変わります（${check.afterReasonJa}）。削除しませんでした。`;
   const unknownChannel = tool === "channels.remove" && check.beforeKind === "unknown";
-  const nextStepJa = unknownChannel
+  const nextStepJa = tool === CONFIG_CHANGE_CHANNEL_REMOVE
+    ? check.beforeKind === "unknown"
+      ? CONFIG_CHANGE_UNKNOWN_NEXT_STEP_JA
+      : CONFIG_CHANGE_NEXT_STEP_JA
+    : unknownChannel
     ? UNKNOWN_CHANNEL_NEXT_STEP_JA
     : tool === "channels.remove"
       ? "社内扱いが正しければ channels.classify で分類を明示的に変えてください（人の承認つき）。社外のまま台帳から外したい場合は、先に parties.upsert で slack_channel の登録を社外にしてから依頼し直してください。"
