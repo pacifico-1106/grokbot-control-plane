@@ -19,7 +19,9 @@ export type ApproverAuthorityDenyReason =
   | "approver_is_requester"
   | "approver_unverified"
   /** Review 2026-10-09 item 4: target tool ticket filed before the flag was ON (no approver class). */
-  | "approver_class_missing";
+  | "approver_class_missing"
+  /** 木村 round 3 F2: the state the ticket was judged on changed (or cannot be read) since filing. */
+  | "approver_context_changed";
 
 export type ApproverAuthorityDecision =
   | { outcome: "allow"; approverRole: ApproverAuthorityRole }
@@ -92,6 +94,7 @@ export const APPROVER_AUTHORITY_RESULT_REASONS = [
   "approver_is_requester",
   "approver_identity_unverified",
   "approver_class_missing",
+  "approver_context_changed",
 ] as const;
 
 export type ApproverAuthorityResultReason = (typeof APPROVER_AUTHORITY_RESULT_REASONS)[number];

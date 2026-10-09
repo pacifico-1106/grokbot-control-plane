@@ -1,6 +1,7 @@
 /**
  * PR-D: classify a ticket at filing (createApproval). Flag OFF → null (no change).
  */
+import { createHash } from "node:crypto";
 import { isApproverAuthorityEnabled } from "@/lib/feature-flags";
 import { getEmployee } from "@/lib/data/employees";
 import {
@@ -8,7 +9,7 @@ import {
   isApproverAuthorityTargetTool,
   type ApproverClassificationContext,
   requiredApprovalCount,
-  schedulingCostCapsSignature,
+  schedulingRulesState,
   type ApproverRequirement,
 } from "./targets";
 import { requesterMemberIdsFromMetadata, type ApproverAuthorityDenyReason } from "./decide";
@@ -23,7 +24,7 @@ function employeeIdOf(metadata: Record<string, unknown> | null | undefined): str
 }
 
 /** Server-side state for content rules. Read failure → null (rules then go to owner). */
-async function loadContext(
+export async function loadApproverClassificationContext(
   orgId: string,
   tool: string,
   metadata: Record<string, unknown> | null | undefined
@@ -45,9 +46,12 @@ async function loadContext(
 }
 
 /**
- * schedulingPolicy.patch: cost caps in force now and after clearOverride.
+ * schedulingPolicy.patch: rules (and caps) in force now and after clearOverride.
  * Read with error checks (the storage helpers fall back to the default policy
  * on a failed read, which would hide a cap) — any read error → null (→ owner).
+ * The built-in default gets a fixed rule id (defaultSchedulingPolicy() makes a
+ * random one per call, which would look like a change at every read); a
+ * stored policy with rules that no longer validate counts as unreadable.
  */
 async function loadSchedulingContext(
   orgId: string,
@@ -55,8 +59,16 @@ async function loadSchedulingContext(
 ): Promise<ApproverClassificationContext | null> {
   try {
     const employeeId = employeeIdOf(metadata) || null;
-    const { defaultSchedulingPolicy, normalizeSchedulingPolicy } = await import("@/lib/scheduling-policy/validate");
+    const { DEFAULT_SCHEDULING_RULE, normalizeSchedulingPolicy } = await import("@/lib/scheduling-policy/validate");
     const { isDemoMode } = await import("@/lib/mode");
+    const strict = (raw: unknown): { rules?: unknown } | null => {
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+      const rawRules = (raw as { rules?: unknown }).rules;
+      if (!Array.isArray(rawRules) || rawRules.length === 0) return null;
+      const normalized = normalizeSchedulingPolicy(raw);
+      if (normalized.rules.length !== rawRules.length) throw new Error("scheduling_policy_unreadable");
+      return normalized;
+    };
     let orgPolicy: { rules?: unknown } | null;
     let employeePolicy: { rules?: unknown } | null = null;
     if (isDemoMode()) {
@@ -70,20 +82,18 @@ async function loadSchedulingContext(
       if (!admin) return null;
       const org = await admin.from("orgs").select("scheduling_policy").eq("id", orgId).maybeSingle();
       if (org.error || !org.data) return null;
-      const rawOrg = (org.data as { scheduling_policy?: unknown }).scheduling_policy;
-      orgPolicy = rawOrg ? normalizeSchedulingPolicy(rawOrg) : null;
+      orgPolicy = strict((org.data as { scheduling_policy?: unknown }).scheduling_policy);
       if (employeeId) {
         const emp = await admin.from("employees").select("scheduling_policy").eq("id", employeeId).eq("org_id", orgId).maybeSingle();
         if (emp.error || !emp.data) return null;
-        const rawEmp = (emp.data as { scheduling_policy?: unknown }).scheduling_policy;
-        employeePolicy = rawEmp ? normalizeSchedulingPolicy(rawEmp) : null;
+        employeePolicy = strict((emp.data as { scheduling_policy?: unknown }).scheduling_policy);
       }
     }
-    const inherited = orgPolicy ?? defaultSchedulingPolicy();
+    const inherited = orgPolicy ?? { rules: [{ ...DEFAULT_SCHEDULING_RULE, id: "default" }] };
     return {
-      schedulingCostCaps: {
-        current: schedulingCostCapsSignature(employeePolicy ?? inherited),
-        ifCleared: schedulingCostCapsSignature(inherited),
+      schedulingRules: {
+        current: schedulingRulesState(employeePolicy ?? inherited),
+        ifCleared: schedulingRulesState(inherited),
       },
     };
   } catch {
@@ -91,17 +101,51 @@ async function loadSchedulingContext(
   }
 }
 
+/**
+ * 木村 round 3 F2: tools whose classification depends on current state. The
+ * state the ticket was judged on is stored at filing and compared right
+ * before fulfil (verify.ts); a change in between → approver_context_changed.
+ */
+export const CONTEXT_PINNED_TOOLS: ReadonlySet<string> = new Set(["schedulingPolicy.patch", "policy.patch"]);
+
+/** sha256 of the judged state; null = unreadable (never matches → fail closed). */
+export function approverContextFingerprint(tool: string, context: ApproverClassificationContext | null): string | null {
+  if (!context) return null;
+  let material: string | null = null;
+  if (tool === "schedulingPolicy.patch" && context.schedulingRules) {
+    material = JSON.stringify(["scheduling", context.schedulingRules.current.rules, context.schedulingRules.ifCleared.rules]);
+  } else if (tool === "policy.patch" && context.currentEmployeeScopes) {
+    material = JSON.stringify(["policy", [...context.currentEmployeeScopes].sort(), context.currentEmployeeApprovalPolicy ?? null]);
+  }
+  return material === null ? null : createHash("sha256").update(material).digest("hex");
+}
+
 export async function approverRequirementForFiling(input: {
   orgId: string;
   tool: string | null | undefined;
   metadata?: Record<string, unknown> | null;
-}): Promise<(ApproverRequirement & { requiredApprovals: number }) | null> {
+}): Promise<(ApproverRequirement & { requiredApprovals: number; contextFingerprint?: string | null }) | null> {
   if (!isApproverAuthorityEnabled()) return null;
   const tool = (input.tool || "").trim();
   if (!isApproverAuthorityTargetTool(tool)) return null;
-  const context = await loadContext(input.orgId, tool, input.metadata);
+  const context = await loadApproverClassificationContext(input.orgId, tool, input.metadata);
   const requirement = classifyApproverRequirement({ tool, metadata: input.metadata ?? null, context });
-  return requirement ? { ...requirement, requiredApprovals: requiredApprovalCount({ kind: requirement.kind, tool }) } : null;
+  if (!requirement) return null;
+  const out: ApproverRequirement & { requiredApprovals: number; contextFingerprint?: string | null } = {
+    ...requirement,
+    requiredApprovals: requiredApprovalCount({ kind: requirement.kind, tool }),
+  };
+  if (CONTEXT_PINNED_TOOLS.has(tool)) out.contextFingerprint = approverContextFingerprint(tool, context);
+  return out;
+}
+
+/** Stored approver_authority jsonb for a new ticket. */
+export function approverAuthorityRecordForFiling(
+  requirement: ApproverRequirement & { requiredApprovals: number; contextFingerprint?: string | null }
+): Record<string, unknown> {
+  const record: Record<string, unknown> = { reasons: requirement.reasons, requiredApprovals: requirement.requiredApprovals };
+  if (requirement.contextFingerprint !== undefined) record.contextFingerprint = requirement.contextFingerprint;
+  return record;
 }
 
 /** Reasons that make a ticket impossible to satisfy, so filing stops up front. */

@@ -181,11 +181,11 @@ export interface ApproverClassificationContext {
   currentEmployeeScopes?: readonly string[] | null;
   currentEmployeeApprovalPolicy?: string | null;
   /**
-   * schedulingPolicy.patch: schedulingCostCapsSignature() of the policy in force
-   * now (`current`) and of what clearOverride would inherit (`ifCleared`).
+   * schedulingPolicy.patch: schedulingRulesState() of the policy in force now
+   * (`current`) and of what clearOverride would inherit (`ifCleared`).
    * Missing → the cost-cap change cannot be judged → owner.
    */
-  schedulingCostCaps?: { current: string; ifCleared: string } | null;
+  schedulingRules?: { current: SchedulingRulesState; ifCleared: SchedulingRulesState } | null;
 }
 
 export interface ApproverClassificationInput {
@@ -378,18 +378,33 @@ function classifyEmployeeIssue(args: Record<string, unknown>, reasons: Set<Appro
   }
 }
 
+/** Canonical rules of a scheduling policy + whether any rule carries a cost cap. */
+export interface SchedulingRulesState {
+  rules: string;
+  capped: boolean;
+}
+
 /**
- * Money inside the eight 2026-10-09 22:48 targets: only schedulingPolicy rules'
- * costCapJpy (the cost ceiling a meeting slot may reach). Signature = the
- * capped rules as sorted {id, costCapJpy}; rules without a cap are left out.
+ * Money inside the eight 2026-10-09 22:48 targets: schedulingPolicy rules'
+ * costCapJpy (the cost ceiling a meeting slot may reach).
+ * 木村 round 3 F1: apply.ts keeps a candidate if ANY rule passes, so under a
+ * cap every rule matters — the state is ALL rules, canonical (keys sorted).
+ * F3: costCapJpy is normalized like save-time validation (Number(v) whenever
+ * the key is present, so null → a cap of 0).
  */
-export function schedulingCostCapsSignature(policy: { rules?: unknown } | null | undefined): string {
+export function schedulingRulesState(policy: { rules?: unknown } | null | undefined): SchedulingRulesState {
   const rules = policy && Array.isArray(policy.rules) ? policy.rules : [];
-  const caps = rules
-    .filter((rule): rule is Record<string, unknown> => isRecord(rule) && rule.costCapJpy !== undefined && rule.costCapJpy !== null)
-    .map((rule) => ({ id: typeof rule.id === "string" ? rule.id : "", costCapJpy: Number(rule.costCapJpy) }))
-    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : a.costCapJpy - b.costCapJpy));
-  return canonical(caps);
+  let capped = false;
+  const normalized = rules.map((rule) => {
+    if (!isRecord(rule) || rule.costCapJpy === undefined) return rule;
+    capped = true;
+    return { ...rule, costCapJpy: Number(rule.costCapJpy) };
+  });
+  return { rules: canonical(normalized), capped };
+}
+
+function isSchedulingRulesState(value: unknown): value is SchedulingRulesState {
+  return isRecord(value) && typeof value.rules === "string" && typeof value.capped === "boolean";
 }
 
 function classifySchedulingPolicy(
@@ -397,13 +412,16 @@ function classifySchedulingPolicy(
   context: ApproverClassificationContext | null | undefined,
   reasons: Set<ApproverRequirementReason>
 ) {
-  const caps = context?.schedulingCostCaps;
-  if (!caps || typeof caps.current !== "string" || typeof caps.ifCleared !== "string") {
+  const state = context?.schedulingRules;
+  if (!state || !isSchedulingRulesState(state.current) || !isSchedulingRulesState(state.ifCleared)) {
     reasons.add("money_cost_cap_unverified");
     return;
   }
-  const next = args.clearOverride === true ? caps.ifCleared : schedulingCostCapsSignature(args);
-  if (next !== caps.current) reasons.add("money_cost_cap");
+  // F3: the handler inherits only for clearOverride WITH an employeeId; otherwise it saves args.rules.
+  const clearing = args.clearOverride === true && typeof args.employeeId === "string" && args.employeeId.trim() !== "";
+  const next = clearing ? state.ifCleared : schedulingRulesState(args);
+  // F1: a cap before OR after + any rules change → owner.
+  if ((state.current.capped || next.capped) && next.rules !== state.current.rules) reasons.add("money_cost_cap");
 }
 
 function classifyUnsafe(input: ApproverClassificationInput): ApproverRequirement | null {
