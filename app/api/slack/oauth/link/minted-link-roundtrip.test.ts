@@ -73,7 +73,7 @@ const { SLACK_OAUTH_COOKIE } = await import("@/lib/slack/oauth");
 
 const TEAM = "TRECIPIENT1";
 const NEW = "xoxp-recipient-new-SECRET";
-const FLAGS = ["SLACK_AUTHORIZE_LINK_ENABLED", "SLACK_DM_AUTOROUTE_ENABLED", "SLACK_CLIENT_ID", "SLACK_CLIENT_SECRET"] as const;
+const FLAGS = ["SLACK_AUTHORIZE_LINK_ENABLED", "SLACK_DM_AUTOROUTE_ENABLED", "SLACK_CLIENT_ID", "SLACK_CLIENT_SECRET", "SETUP_LINK_SIGNING_SECRET"] as const;
 let saved: Record<string, string | undefined> = {};
 let savedFetch: typeof globalThis.fetch;
 let emp: Employee;
@@ -121,6 +121,7 @@ beforeEach(() => {
   process.env.SLACK_AUTHORIZE_LINK_ENABLED = "true";
   process.env.SLACK_CLIENT_ID = "recipient-client-id";
   process.env.SLACK_CLIENT_SECRET = "recipient-client-secret-at-least-32-chars";
+  process.env.SETUP_LINK_SIGNING_SECRET = "fixture-setup-link-signing-secret"; // #294: no fallback
   delete process.env.SLACK_DM_AUTOROUTE_ENABLED;
   session = PLAIN_SESSION;
   jar.clear();
