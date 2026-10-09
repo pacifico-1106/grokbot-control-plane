@@ -10,6 +10,10 @@
  *   (kind "unclassified_channel_wake_skipped"): one notice per org × channel per
  *   6h window (DB), then the per-org hourly notice cap (one summary over it).
  *
+ * #292 21:50: a channel whose card a human REJECTED → no notice and no card for
+ * 30 days (lib/channel-classify/reject-suppression.ts; counts-only audit;
+ * lifted by a new admin channels.classify request for that channel).
+ *
  * Input is ids only (org, employee, channel, team); the message text never
  * reaches this module. Bounded (timeout), never throws, and never changes the
  * skip outcome. Both flags OFF → returns immediately (no read, no write).
@@ -19,6 +23,7 @@ import { unverifiedFacts, type ProposalState } from "@/lib/channel-classify/core
 import { factsForSignal } from "@/lib/channel-classify/join";
 import { proposeChannelClassification } from "@/lib/channel-classify/proposals";
 import { notifyChannelStuck } from "@/lib/channel-classify/stuck-notify";
+import { auditWakeSkipSuppressed, wakeSkipSuppressionForRejectedCard } from "@/lib/channel-classify/reject-suppression";
 
 export const WAKE_SKIP_HOOK_TIMEOUT_MS = 6_000;
 const CHANNEL_RE = /^[CG][A-Z0-9]{2,30}$/;
@@ -33,6 +38,18 @@ export type WakeSkipHookInput = {
 
 async function run(input: WakeSkipHookInput): Promise<void> {
   const ref = { surface: "slack" as const, externalId: input.channelId };
+  // 21:50: a human rejected this channel's card → no notice and no card for 30
+  // days (counts-only audit); lifted by a new admin channels.classify request.
+  const suppression = await wakeSkipSuppressionForRejectedCard({ orgId: input.orgId, channelId: input.channelId });
+  if (suppression.suppressed) {
+    await auditWakeSkipSuppressed({
+      orgId: input.orgId,
+      channelId: input.channelId,
+      rejectedApprovalId: suppression.rejectedApprovalId,
+      suppressedUntil: suppression.suppressedUntil,
+    });
+    return;
+  }
   let approvalId: string | undefined;
   let proposalState: ProposalState = "not_proposed";
   if (isChannelClassifyProposalsEnabled()) {

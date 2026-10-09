@@ -84,7 +84,29 @@ export async function rewakeSkippedChannelWakesAfterApproval(input: {
   }
 }
 
-// fail-first compile stub (replaced in the next commit)
-export function buildPathCRewakeInstructionJa(_input: { channelId: string; ts: string; threadTs?: string | null }): string {
-  return "";
+const REWAKE_CHANNEL_RE = /^[CG][A-Z0-9]{2,30}$/;
+const REWAKE_TS_RE = /^\d{6,12}\.\d{1,9}$/;
+
+/**
+ * #292 21:50: the one-time re-wake tells the employee that a mention in this
+ * channel was missed and to read the thread and respond. Fixed text plus the
+ * channel id and ts only (each validated; anything else is dropped) — never
+ * the message body, which the skip record never held.
+ */
+export function buildPathCRewakeInstructionJa(input: { channelId: string; ts: string; threadTs?: string | null }): string {
+  const channel = REWAKE_CHANNEL_RE.test(input.channelId || "") ? input.channelId : null;
+  const ts = REWAKE_TS_RE.test(input.ts || "") ? input.ts : null;
+  const threadTs = input.threadTs && REWAKE_TS_RE.test(input.threadTs) ? input.threadTs : null;
+  const where = [
+    channel ? `channel: ${channel}` : null,
+    ts ? `ts: ${ts}` : null,
+    threadTs && threadTs !== ts ? `thread_ts: ${threadTs}` : null,
+  ]
+    .filter(Boolean)
+    .join(", ");
+  return (
+    `[Staffpass] このチャンネルで取りこぼしたメンションがあるので、スレッドを読んで対応してください` +
+    (where ? `（${where}）` : "") +
+    "。チャンネル分類が承認されるまで起動できませんでした。元のメッセージ本文はこの通知に含まれていません。Slack の通常のツールで上の channel / ts を指定して読んでください。"
+  );
 }

@@ -148,15 +148,19 @@ export type SlackWakePayload = {
   /**
    * Path C one-time re-wake (PATHC_REWAKE_ON_CLASSIFY_ENABLED): set only on a
    * wake sent after a human approved the classification of a channel whose
-   * mention had been skipped as unclassified. `text` is then empty and
-   * `ingressHandoff.bodyMode` is "none" — the record never held the text; read
-   * the message (channel + ts) through the normal, gated Slack tools.
+   * mention had been skipped as unclassified. `text` (= `rewake.instructionJa`)
+   * is then a fixed Staffpass instruction — 「このチャンネルで取りこぼしたメンション
+   * があるので、スレッドを読んで対応して」 + channel id / ts — never the original
+   * body, and `ingressHandoff.bodyMode` is "none" (the record never held the
+   * text); read the message (channel + ts) through the normal, gated Slack tools.
    */
   rewake?: {
     reason: "channel_classified";
     approvalId: string;
     originalEventId: string;
     skippedAt: string;
+    /** Fixed instruction text (channel id + ts only). Same as `text`. */
+    instructionJa: string;
   };
 };
 
@@ -1296,11 +1300,14 @@ export async function rewakeUserTokenChannelMention(input: {
       pendingManagerApproval: resolved.rule.attachmentApproval === "manager" ? true : undefined,
       channelClassification: classification,
     };
+    const { buildPathCRewakeInstructionJa } = await import("@/lib/slack/pathc-rewake");
+    const instructionJa = buildPathCRewakeInstructionJa({ channelId: row.channelId, ts: row.eventTs, threadTs: row.threadTs });
     const payload: SlackWakePayload = {
       channel: row.channelId,
       ts: row.eventTs,
       thread_ts: row.threadTs,
-      text: "",
+      // 21:50: fixed instruction (channel + ts), never the original body.
+      text: instructionJa,
       speakerId: row.speakerSlackUserId,
       user: row.speakerSlackUserId,
       slackUserId: target.slackUserId,
@@ -1314,6 +1321,7 @@ export async function rewakeUserTokenChannelMention(input: {
         approvalId,
         originalEventId: row.eventId,
         skippedAt: row.skippedAt,
+        instructionJa,
       },
     };
     await postWake(target, payload, "user_token_channel", ingressHandoffMeta);

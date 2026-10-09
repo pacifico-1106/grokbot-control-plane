@@ -19,7 +19,7 @@ import { setProposalDepsForTests } from "@/lib/channel-classify/proposals";
 import { setStuckNotifyDepsForTests } from "@/lib/channel-classify/stuck-notify";
 import { processSlackMentionEnvelope } from "@/lib/slack/mention-ingress";
 import type { NotificationChannelRuntime } from "@/lib/data/notification-channels";
-import { setWakeSkipSuppressionClockForTests, WAKE_SKIP_REJECT_SUPPRESS_DAYS } from "@/lib/channel-classify/reject-suppression";
+import { decideWakeSkipSuppression, setWakeSkipSuppressionClockForTests, WAKE_SKIP_REJECT_SUPPRESS_DAYS } from "@/lib/channel-classify/reject-suppression";
 import { buildPathCRewakeInstructionJa } from "@/lib/slack/pathc-rewake";
 
 const ORG = DEMO_ORG.id;
@@ -248,11 +248,10 @@ describe("(1) rejected card → 30-day suppression of the wake-skip notice and c
     expect(wakeSkipNotices().length).toBe(1);
   });
 
-  test("NOT lifted by an admin request for another channel, another org's request, or a system card", async () => {
+  test("NOT lifted by an admin request for another channel or by a system card", async () => {
     bothOn();
     const { channel } = await rejectedChannel();
     await adminRequest(ORG, channelId());
-    await adminRequest("org_other_tenant_fixture", channel);
     await adminRequest(ORG, channel, { kind: "system", source: "backfill" });
     await skip(channel);
     expect(sent).toEqual([]);
@@ -271,24 +270,45 @@ describe("(1) rejected card → 30-day suppression of the wake-skip notice and c
     expect(suppressedRows(channel)).toEqual([]);
   });
 
-  test("another org's rejected card for the same channel id does not suppress this org", async () => {
-    bothOn();
-    const channel = channelId();
-    const other = await createApproval({
-      orgId: "org_other_tenant_fixture",
-      employeeId: "",
-      credentialId: "",
-      title: "x",
-      purpose: "admin.channel",
-      summary: "x",
-      risk: "high",
+  test("BOLA: another org's rejected card never suppresses this org; another org's admin request never lifts it", () => {
+    const now = Date.now();
+    const iso = (ms: number) => new Date(ms).toISOString();
+    const ch = "C0BOLATEST1";
+    const card = (orgId: string, status: string, resolvedMs: number | null) => ({
+      id: `apr_${orgId}_${status}`,
+      orgId,
       tool: "channels.classify",
-      metadata: { adminTool: "channels.classify", adminMutation: { surface: "slack", externalId: channel }, proposalRequester: { kind: "system", source: "wake_skipped" } },
+      status,
+      createdAt: iso(now - 2 * DAY),
+      resolvedAt: resolvedMs == null ? null : iso(resolvedMs),
+      metadata: { adminMutation: { surface: "slack", externalId: ch }, proposalRequester: { kind: "system", source: "wake_skipped" } },
     });
-    await resolveApprovalWithoutWorkflow(other.approval.id, "rejected", "x", "org_other_tenant_fixture");
-    await skip(channel);
-    expect(sent.length).toBe(1);
-    expect(tickets.length).toBe(1);
+    const adminReq = (orgId: string, createdMs: number, externalId = ch) => ({
+      id: `apr_admin_${orgId}_${externalId}`,
+      orgId,
+      tool: "channels.classify",
+      status: "pending",
+      createdAt: iso(createdMs),
+      resolvedAt: null,
+      metadata: { adminMutation: { surface: "slack", externalId }, adminRequester: { kind: "admin_agent", actorId: "a" } },
+    });
+    type Rows = Parameters<typeof decideWakeSkipSuppression>[0]["rows"];
+    const decide = (rows: unknown[]) => decideWakeSkipSuppression({ rows: rows as Rows, orgId: ORG, channelId: ch, nowMs: now }).suppressed;
+    const own = card(ORG, "rejected", now - DAY);
+    // another org's rejected card → this org is not suppressed
+    expect(decide([card("org_b", "rejected", now - DAY)])).toBe(false);
+    // own rejected card + another org's admin request → still suppressed
+    expect(decide([own, adminReq("org_b", now)])).toBe(true);
+    // own admin request for another channel → still suppressed
+    expect(decide([own, adminReq(ORG, now, "C0OTHERCH1")])).toBe(true);
+    // own admin request for this channel after the rejection → lifted
+    expect(decide([own, adminReq(ORG, now)])).toBe(false);
+    // own admin request filed BEFORE the rejection is not a new request
+    expect(decide([own, adminReq(ORG, now - 2 * DAY)])).toBe(true);
+    // a rejected request filed by an admin (not a system card) suppresses nothing
+    expect(decide([{ ...adminReq(ORG, now - 2 * DAY), status: "rejected", resolvedAt: iso(now - DAY) }])).toBe(false);
+    // rejected 31 days ago → expired
+    expect(decide([card(ORG, "rejected", now - 31 * DAY)])).toBe(false);
   });
 
   test("flags OFF: no suppression row is ever written", async () => {
