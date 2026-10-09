@@ -10,6 +10,7 @@
  */
 
 import { hashIp } from "@/lib/lp/rate-limit";
+import { IP_HASH_UNAVAILABLE, isIpHashKeyConfigured } from "@/lib/security/ip-hash-key";
 import { NextRequest, NextResponse } from "next/server";
 import { createHash } from "node:crypto";
 import { isLpWakeWebhookEnabled } from "@/lib/feature-flags";
@@ -71,6 +72,11 @@ export async function POST(
   const eventType = (body.event_type as string) || (body.eventType as string) || "unknown";
   const idempotencyKey = request.headers.get("x-idempotency-key") || undefined;
   
+  if (!isIpHashKeyConfigured()) {
+    console.error("[lp-wake] IP_HASH_KEY not configured; refusing");
+    return NextResponse.json({ ...IP_HASH_UNAVAILABLE }, { status: 503 });
+  }
+
   const ip = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "unknown";
   const userAgent = request.headers.get("user-agent") || "unknown";
 

@@ -269,9 +269,12 @@ export function buildInvokeSnapshot(input: {
     input.body?.args && typeof input.body.args === "object"
       ? (input.body.args as Record<string, unknown>)
       : {};
-  const parsed =
+  // Tenant isolation: the snapshot's conversation org is always the approval
+  // row's org (input.orgId), never a caller- or AI-supplied value.
+  const parsedRaw =
     input.conversation ??
     (input.body ? parseConversationContext(input.body, input.orgId) : null);
+  const parsed = parsedRaw ? { ...parsedRaw, orgId: input.orgId } : null;
   const resolvedThread = resolveConversationThreadId({
     conversation: parsed,
     args,
@@ -478,6 +481,7 @@ function destinationOf(snapshot: InvokeSnapshot): string {
  * For durable prefer_thread, agents should pass thread_ts=wake.ts on invoke.
  */
 async function threadOf(
+  approval: ApprovalRequest,
   snapshot: InvokeSnapshot,
   dest?: string
 ): Promise<{ threadTs: string | undefined; source: "client" | "wake_stash" | "none" }> {
@@ -507,9 +511,10 @@ async function threadOf(
     return { threadTs: undefined, source: "none" };
   }
 
+  // Org and employee come from the approval row only, never the snapshot.
   const replyPolicyResult = await getEffectiveReplyPolicy(
-    snapshot.orgId || conv.orgId,
-    snapshot.employeeId
+    approval.orgId,
+    approval.employeeId
   );
   const threadAffinity = replyPolicyResult.policy.rules?.[0]?.threadAffinity;
 
@@ -523,14 +528,14 @@ async function threadOf(
   }
 
   const wakeParent = lookupWakeParent({
-    orgId: snapshot.orgId || conv.orgId || "",
-    employeeId: snapshot.employeeId,
+    orgId: approval.orgId,
+    employeeId: approval.employeeId,
     channelId: conv.slackChannelId,
   });
   if (wakeParent && looksLikeSlackTs(wakeParent.parentTs)) {
     consumeWakeParent({
-      orgId: snapshot.orgId || conv.orgId || "",
-      employeeId: snapshot.employeeId,
+      orgId: approval.orgId,
+      employeeId: approval.employeeId,
       channelId: conv.slackChannelId,
     });
     return { threadTs: wakeParent.parentTs, source: "wake_stash" };
@@ -598,8 +603,8 @@ async function fulfillSnsPublish(
   let posted: SnsPublishResult;
   try {
     posted = await publishSnsPost({
-      orgId: snapshot.orgId || approval.orgId,
-      employeeId: snapshot.employeeId || approval.employeeId,
+      orgId: approval.orgId,
+      employeeId: approval.employeeId,
       surface: args.surface ?? args.snsSurface ?? args.media,
       text,
       scheduledAt: args.scheduledAt ?? args.scheduled_at ?? args.scheduledFor,
@@ -885,13 +890,13 @@ async function fulfillApprovedInvokeCore(
       return blocked;
     }
 
-    const threadResult = await threadOf(snapshot, dest);
+    const threadResult = await threadOf(approval, snapshot, dest);
 
     postAttempted = true;
 
     const posted = await postConversationMessage({
-      orgId: snapshot.orgId || approval.orgId,
-      employeeId: snapshot.employeeId || approval.employeeId,
+      orgId: approval.orgId,
+      employeeId: approval.employeeId,
       postingAs: snapshot.postingAs,
       channel: dest,
       text: outboundText(snapshot.args, snapshot.purpose || approval.purpose),

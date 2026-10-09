@@ -1,4 +1,5 @@
 import { approverRequirementCardLinesJa } from "@/lib/approver-authority/card";
+import { cardApprovalReasonsLine, cardDetectedTopicsLine } from "@/lib/approvals/approval-reasons";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { formatMailCardParts, MAIL_BODY_PREVIEW_LABEL, readMailArtifact } from "@/lib/approvals/summary";
 import { attachmentCardLine, readCardAttachment, withoutAttachmentSummaryLine } from "@/lib/approvals/attachment-card";
@@ -183,6 +184,16 @@ function approvalBlocks(
     // PR-D: 「オーナー承認が必要」 and whose approval is pending (empty when flag OFF / not a target).
     ...(options?.resolved ? [] : approverRequirementCardLinesJa(approval).map((line) => escapeSlackMrkdwn(line))),
     attachmentLine,
+    // 木村 B: every reason, own line (outside the 400-char summary cut).
+    (() => {
+      const line = cardApprovalReasonsLine(approval.metadata, approval.summary);
+      return line ? escapeSlackMrkdwn(line) : "";
+    })(),
+    // 木村 R1: matched topics, regardless of APPROVAL_REASONS_ENABLED.
+    (() => {
+      const line = cardDetectedTopicsLine(approval.metadata);
+      return line ? escapeSlackMrkdwn(line) : "";
+    })(),
     ...detail,
     workflowText,
   ].filter(Boolean).join("\n");
