@@ -10,6 +10,8 @@
  * - Email-only path when flag OFF
  */
 import { describe, expect, test, beforeEach, afterEach, mock } from "bun:test";
+// IP_HASH_KEY is required (no dev fallback); fixture key for this test process.
+process.env.IP_HASH_KEY = "test-ip-hash-key-fixture-0123456789";
 
 const envBackup = {
   lpInquiryDb: process.env.LP_INQUIRY_DB_ENABLED,
