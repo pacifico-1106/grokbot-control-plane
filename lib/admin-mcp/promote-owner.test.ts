@@ -37,6 +37,7 @@ const { writeDesignatedAdminMemberIds, resetDemoDesignatedAdminsForTests } = awa
 const { JOB_ROLE_CAPABILITY_PACKS } = await import("@/lib/team/rbac");
 const { fulfillPromoteOwner } = await import("@/lib/admin-mcp/promote-owner-tool");
 const { writeMemberRow, MemberConcurrentModificationError } = await import("@/lib/data/members");
+const { createPendingVoterBinding, verifyVoterBinding, revokeVoterBinding, resetDemoVoterBindings } = await import("@/lib/approval-workflow/voter-binding");
 
 const ORG = DEMO_ORG.id;
 const OWNER = "mem_1";
@@ -52,6 +53,18 @@ function cred() {
   const agent = resetDemoAdminAgent({ grokBotAgentId: "grok_po_admin", status: "linked" });
   return { orgId: ORG, adminAgentId: agent.id, grokBotAgentId: agent.grokBotAgentId, actorId: agent.id, generation: agent.credentialGeneration, via: "bearer" as const, agent };
 }
+const REQ_SLACK = "U0POREQ01";
+/** Real approver registration: pending → verified voter binding (approvalWorkflow.bindVoter path). */
+async function bindSlack(memberId: string, slackUserId: string, opts: { verify?: boolean; orgId?: string } = {}) {
+  const orgId = opts.orgId ?? ORG;
+  const input = { orgId, provider: "slack" as const, channelKey: "C0POAPPROVE", externalUserId: slackUserId, memberId };
+  const created = await createPendingVoterBinding(input);
+  if (!created.ok) throw new Error(created.reason);
+  if (opts.verify !== false) {
+    const verified = await verifyVoterBinding({ ...input, verificationCode: created.verificationCode });
+    if (!verified.ok) throw new Error(verified.reason);
+  }
+}
 const codeOf = (r: { ok: boolean; code?: string }) => (r.ok ? "ok" : r.code);
 const data = (r: { structuredContent?: unknown }) => r.structuredContent as Record<string, unknown>;
 const promote = (args: Record<string, unknown>) => callAdminMcpTool("members.promoteOwner", args, cred()).then(data);
@@ -65,6 +78,7 @@ beforeEach(() => {
   upsertRuntimeMember(member("mem_po_invited", "member", "invited"), { audit: false });
   upsertRuntimeMember(member("mem_po_other_org", "member", "active", "org_other"), { audit: false });
   resetDemoDesignatedAdminsForTests();
+  resetDemoVoterBindings();
   promotedNotices.length = 0;
   approvedNotices.length = 0;
 });
@@ -138,15 +152,17 @@ describe("approval and fulfil", () => {
   });
 
   test("fulfil refuses: approver not an owner, approver is the target or the requester, target changed or disabled", async () => {
-    const id = String((await promote({ memberId: TARGET })).approvalId);
-    await approve(id, OWNER);
+    // requester recorded through the real filing path (verified Slack binding of OWNER)
+    upsertRuntimeMember(member("mem_po_owner2", "owner"), { audit: false });
+    await bindSlack(OWNER, REQ_SLACK);
+    const id = String((await promote({ memberId: TARGET, requesterSlackUserId: REQ_SLACK })).approvalId);
+    await approve(id, "mem_po_owner2");
     const approved = (await getApprovalById(id, ORG))!;
     const args = approved.metadata.adminMutation as Record<string, unknown>;
     expect(codeOf(await fulfillPromoteOwner({ ...approved, approverRole: "designated_admin" }, args))).toBe("owner_approval_required");
     expect(codeOf(await fulfillPromoteOwner({ ...approved, approverMemberId: TARGET }, args))).toBe("approver_is_target");
-    // sole owner who is also the requester: allowed now (not refused here)
-    upsertRuntimeMember(member("mem_po_owner2", "owner"), { audit: false });
-    expect(codeOf(await fulfillPromoteOwner({ ...approved, metadata: { ...approved.metadata, requesterMemberId: OWNER } }, args))).toBe("approver_is_requester");
+    // 2 owners: the recorded requester as approver is refused at fulfil too
+    expect(codeOf(await fulfillPromoteOwner({ ...approved, approverMemberId: OWNER }, args))).toBe("approver_is_requester");
     setRuntimeMember({ ...member("mem_po_owner2", "owner"), status: "disabled" });
     upsertRuntimeMember({ ...member(TARGET, "member") }, { audit: false });
     expect(codeOf(await fulfillPromoteOwner(approved, args))).toBe("concurrent_modification");
@@ -159,46 +175,70 @@ describe("approval and fulfil", () => {
   });
 });
 
-describe("who may approve (木村 2026-10-09)", () => {
-  const markRequester = (id: string, memberId: string) => {
-    const row = getRuntimeApprovals().find((a) => a.id === id)!;
-    row.metadata = { ...row.metadata, requesterMemberId: memberId };
-  };
+describe("who may approve (木村 2026-10-09) — requester recorded through the real filing path", () => {
   const promotionAudit = (id: string) => getRuntimeAudit().find(
     (e) => e.action === "member.updated" && e.metadata?.source === "admin_mcp_promote_owner" && e.metadata?.approvalId === id
   );
+  const ticketOf = async (queued: Record<string, unknown>) => (await getApprovalById(String(queued.approvalId), ORG))!;
 
   test("single owner MAY approve even as the requester → promoted; audit carries singleOwnerApproval: true", async () => {
-    const id = String((await promote({ memberId: TARGET })).approvalId);
-    markRequester(id, OWNER);
-    const r = await approve(id, OWNER);
+    await bindSlack(OWNER, REQ_SLACK);
+    const queued = await promote({ memberId: TARGET, requesterSlackUserId: REQ_SLACK });
+    const ticket = await ticketOf(queued);
+    expect(ticket.metadata.requesterMemberId).toBe(OWNER);
+    const r = await approve(ticket.id, OWNER);
     expect(r.ok && r.workflowComplete).toBe(true);
-    expect((await fulfillApprovedAdmin((await getApprovalById(id, ORG))!))?.ok).toBe(true);
+    expect((await fulfillApprovedAdmin((await getApprovalById(ticket.id, ORG))!))?.ok).toBe(true);
     expect(getRuntimeMemberById(TARGET)?.role).toBe("owner");
-    expect(promotionAudit(id)?.metadata?.singleOwnerApproval).toBe(true);
-    expect(promotedNotices).toEqual([{ approvalId: id, target: TARGET }]);
+    expect(promotionAudit(ticket.id)?.metadata?.singleOwnerApproval).toBe(true);
+    expect(promotedNotices).toEqual([{ approvalId: ticket.id, target: TARGET }]);
     expect(approvedNotices).toEqual([]);
   });
 
-  test("2+ owners: the requesting owner is refused; another owner approves; singleOwnerApproval: false", async () => {
+  test("2+ owners: the requesting owner (identified from the verified Slack binding) is refused; another owner approves; singleOwnerApproval: false", async () => {
     upsertRuntimeMember(member("mem_po_owner2", "owner"), { audit: false });
-    const id = String((await promote({ memberId: TARGET })).approvalId);
-    markRequester(id, OWNER);
-    const refused = await approve(id, OWNER);
+    await bindSlack(OWNER, REQ_SLACK);
+    const ticket = await ticketOf(await promote({ memberId: TARGET, requesterSlackUserId: REQ_SLACK }));
+    expect(ticket.metadata.requesterMemberId).toBe(OWNER);
+    expect(ticket.metadata.requesterIdentity).toMatchObject({ source: "admin_agent_declared_slack_user", matchedBy: "verified_voter_binding", memberId: OWNER });
+    expect(ticket.summary).toContain("依頼者: mem_1");
+    const refused = await approve(ticket.id, OWNER);
     expect(refused.ok).toBe(false);
     expect(refused.reason).toBe("approver_is_requester");
-    expect((await getApprovalById(id, ORG))?.status).toBe("pending");
-    const ok = await approve(id, "mem_po_owner2");
+    expect((await getApprovalById(ticket.id, ORG))?.status).toBe("pending");
+    const ok = await approve(ticket.id, "mem_po_owner2");
     expect(ok.ok && ok.workflowComplete).toBe(true);
-    expect((await fulfillApprovedAdmin((await getApprovalById(id, ORG))!))?.ok).toBe(true);
-    expect(promotionAudit(id)?.metadata?.singleOwnerApproval).toBe(false);
+    expect((await fulfillApprovedAdmin((await getApprovalById(ticket.id, ORG))!))?.ok).toBe(true);
+    expect(promotionAudit(ticket.id)?.metadata?.singleOwnerApproval).toBe(false);
   });
 
-  test("the member being promoted can NEVER approve (even as a designated admin, even with one owner)", async () => {
+  test("requester cannot be identified → the card says so honestly; no requester recorded", async () => {
+    upsertRuntimeMember(member("mem_po_later_off", "member"), { audit: false });
+    await bindSlack("mem_po_later_off", "U0POOFF01");
+    setRuntimeMember({ ...member("mem_po_later_off", "member"), status: "disabled" }); // bound, then disabled
+    await bindSlack(OWNER, "U0POPEND1", { verify: false }); // pending binding
+    await bindSlack(OWNER, "U0POREVK1");
+    await revokeVoterBinding(ORG, "slack", "C0POAPPROVE", "U0POREVK1");
+    await bindSlack("mem_po_other_org", "U0POOTHR1", { orgId: "org_other" }); // another org's binding
+    for (const args of [{}, { requesterSlackUserId: "U0PONONE1" }, { requesterSlackUserId: "U0POPEND1" }, { requesterSlackUserId: "U0POREVK1" }, { requesterSlackUserId: "U0POOTHR1" }, { requesterSlackUserId: "U0POOFF01" }]) {
+      const ticket = await ticketOf(await promote({ memberId: TARGET, ...args }));
+      expect(ticket.summary).toContain("依頼者は特定できません");
+      expect(ticket.metadata.requesterMemberId ?? null).toBeNull();
+      expect((ticket.metadata.requesterIdentity as { identified?: boolean } | undefined)?.identified ?? false).toBe(false);
+    }
+  });
+
+  test("the agent cannot name the requester member directly; a malformed Slack id is refused", async () => {
+    expect((await promote({ memberId: TARGET, requesterMemberId: "mem_po_owner2" })).code).toBe("unexpected_argument");
+    expect((await promote({ memberId: TARGET, requesterSlackUserId: "not-a-slack-id" })).code).toBe("invalid_requester_slack_user_id");
+  });
+
+  test("the member being promoted can NEVER approve (even as a designated admin, even as the identified requester with one owner)", async () => {
     await writeDesignatedAdminMemberIds(ORG, [TARGET]);
-    const id = String((await promote({ memberId: TARGET })).approvalId);
-    markRequester(id, TARGET);
-    const r = await approve(id, TARGET);
+    await bindSlack(TARGET, REQ_SLACK);
+    const ticket = await ticketOf(await promote({ memberId: TARGET, requesterSlackUserId: REQ_SLACK }));
+    expect(ticket.metadata.requesterMemberId).toBe(TARGET);
+    const r = await approve(ticket.id, TARGET);
     expect(r.ok).toBe(false);
     expect(r.reason).toBe("approver_is_target");
     expect(getRuntimeMemberById(TARGET)?.role).toBe("admin");
