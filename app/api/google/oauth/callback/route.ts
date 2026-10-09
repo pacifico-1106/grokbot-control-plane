@@ -1,6 +1,7 @@
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { getAppOrigin } from "@/lib/approvals/tokens";
+import { verifyIdentityLinkCallbackActor } from "@/lib/auth/identity-link-gate";
 import { appendAuditEvent } from "@/lib/data/audit";
 import { bindEmployeeGoogleIdentity } from "@/lib/data/google-identities";
 import { isGoogleCalendarReadEnabled } from "@/lib/feature-flags";
@@ -47,6 +48,13 @@ export async function GET(req: Request) {
   const parsed = verifyGoogleOAuthState(state, nonce);
   if (!parsed) {
     return NextResponse.redirect(new URL("/app/employees?google=error", getAppOrigin()));
+  }
+
+  // Only the member who started the link (still holding
+  // hire_issue_credentials, same org, employee still in the org) can finish
+  // it. Checked before the code exchange, so no token is ever obtained.
+  if (!(await verifyIdentityLinkCallbackActor(parsed).catch(() => false))) {
+    return redirectEmployee(parsed.employeeId, "forbidden");
   }
 
   if (oauthError) {

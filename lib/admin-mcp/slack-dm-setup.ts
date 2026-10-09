@@ -51,7 +51,6 @@ import {
   resolveAuthorizeLinkFollowUpNextStep,
 } from "@/lib/slack/authorize-link-guidance";
 import { isSlackDmAutorouteEnabled, isSlackUserScopeImWriteEnabled } from "@/lib/slack/dm-autoroute-flags";
-import { slackAuthorizeUrlTemplate } from "@/lib/slack/slack-status-diagnose";
 import { isSharedApprovalAppEnabled } from "@/lib/slack/shared-approval-flags";
 import type { AuditEvent, NotificationChannel } from "@/lib/types";
 
@@ -316,7 +315,9 @@ export async function diagnoseSlackDmApprovalSetup(orgId: string): Promise<Recor
       missingUserScopes,
       imRoutes: routes.length,
       autoRoutes: flags.SLACK_DM_AUTOROUTE_ENABLED ? auto : null,
-      authorizeUrl: slackAuthorizeUrlTemplate(employee.id),
+      // Employee page where a hire_issue_credentials holder connects Slack. The
+      // single-use re-authorize link itself only travels by DM (never in output).
+      authorizeUrl: dashboardUrl(`/app/employees/${encodeURIComponent(employee.id)}`),
       allowedSlackAccounts: allowedSlackAccountIds(employee).length,
       allowedAccountsAdminTool: allowedAccountsStep.allowedAccountsAdminTool,
       authorizeLinkFollowUpErrors: authorizeLinkFollowUpErrors(linkEvents, employee.id),
@@ -373,14 +374,14 @@ export async function diagnoseSlackDmApprovalSetup(orgId: string): Promise<Recor
       nextStepsJa.push(
         linkStep
           ? `${row.displayName}: Slack 未連携です。${linkStep}`
-          : `${row.displayName}: 社員証の Slack 連携を人がタップ（${row.authorizeUrl}）。`
+          : `${row.displayName}: 社員証画面（${row.authorizeUrl}）で「雇う／社員証発行」の権限を持つ人が Slack 連携をタップしてください（社員本人など権限のない人に渡せる単回の再認可リンクは SLACK_AUTHORIZE_LINK_ENABLED が ON のときに使えます）。`
       );
     } else if ((row.missingUserScopes as string[]).length) {
       const missing = (row.missingUserScopes as string[]).join(", ");
       nextStepsJa.push(
         linkStep
           ? `${row.displayName}: user token に ${missing} がありません。${linkStep}`
-          : `${row.displayName}: user token に ${missing} がありません。もう一度 Slack 連携をタップ（${row.authorizeUrl}）。`
+          : `${row.displayName}: user token に ${missing} がありません。社員証画面（${row.authorizeUrl}）で「雇う／社員証発行」の権限を持つ人がもう一度 Slack 連携をタップしてください（権限のない人に渡せる単回の再認可リンクは SLACK_AUTHORIZE_LINK_ENABLED が ON のときに使えます）。`
       );
     }
   }
