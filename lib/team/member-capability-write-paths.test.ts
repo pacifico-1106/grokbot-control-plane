@@ -98,7 +98,23 @@ describe("org_members write inventory", () => {
     const tools = src("lib/mcp/admin-tools.ts");
     const names = [...tools.matchAll(/name:\s*"([a-zA-Z]+\.[a-zA-Z.]+)"/g)].map((m) => m[1]);
     expect(names.length).toBeGreaterThan(10);
-    expect(names.filter((n) => /^(members?|team|humans?|capabilit)/i.test(n))).toEqual([]);
+    // 八坂 2026-10-05 10:11: the ONE exception is members.promoteOwner (existing
+    // active member → owner, owner-approved), which goes through the guard below.
+    expect(names.filter((n) => /^(members?|team|humans?|capabilit)/i.test(n))).toEqual(["members.promoteOwner"]);
+  });
+
+  test("members.promoteOwner fulfil writes only via applyOwnerPromotion → evaluateMemberChange", () => {
+    const tool = src("lib/admin-mcp/promote-owner-tool.ts");
+    expect(tool).toContain("applyOwnerPromotion(");
+    expect(tool).not.toMatch(/\bwriteMemberRow\b|\bupsertRuntimeMember\b|\bsetRuntimeMember\b|from\(\s*["'`]org_members/);
+    const apply = src("lib/team/apply-member-change.ts");
+    const fn = apply.slice(apply.indexOf("export async function applyOwnerPromotion"));
+    const guardAt = fn.indexOf("evaluateMemberChange(");
+    expect(guardAt).toBeGreaterThan(-1);
+    expect(fn.indexOf("writeMemberRow(")).toBeGreaterThan(guardAt);
+    expect(fn).toContain("guardActorFromMember(approver)");
+    // no removal / transfer: the promotion only ever writes role "owner"
+    expect(fn).toMatch(/role: "owner"/);
   });
 
   test("migration removes the direct PostgREST write policy on org_members", () => {

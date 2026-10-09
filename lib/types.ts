@@ -482,6 +482,10 @@ export type AuditAction =
   // Duplicate post guard v2 (hashes only)
   | "comm_reply.cross_employee_duplicate"
   | "comm_reply.post_outcome_unknown"
+  | "thread_guard.busy"
+  | "thread_guard.moved_on"
+  | "thread_guard.unavailable"
+  | "thread_guard.read_point_unknown"
   | "comm_reply.uncertain_released"
   | "approval.telegram_error"
   | "approval.snapshot_missing_attachment"
@@ -762,6 +766,17 @@ export interface ApprovalRequest {
   createdAt: string;
   resolvedAt: string | null;
   resolvedBy: string | null;
+  /**
+   * PR-D (APPROVER_AUTHORITY_ENABLED): required approver kind recorded at
+   * filing. null / absent = not an approver-authority target (or filed while OFF).
+   */
+  requiredApproverKind?: "owner_or_designated_admin" | "owner" | null;
+  /** PR-D: verified approver (org_members.id) stored at approval time. */
+  approverMemberId?: string | null;
+  /** PR-D: what the approver counted as when verified. */
+  approverRole?: "owner" | "designated_admin" | null;
+  /** PR-D: classification reasons, designated-admin endorsements, verification record. */
+  approverAuthority?: Record<string, unknown> | null;
 }
 
 export interface AuditEvent {
