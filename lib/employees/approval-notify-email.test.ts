@@ -249,8 +249,9 @@ describe("send time", () => {
       approval: approval(), decision: "approved", actorEmail: "web:owner@example.com", employee: employeeWith("SALES@example.com"),
     });
     expect(res.employeeEmail.ok).toBe(true);
-    const mail = sent.find((m) => m.template === "approval_resolved");
-    expect(mail?.to).toBe("sales@example.com");
+    // (the approver notification to the org owner is a separate mail)
+    const mail = sent.find((m) => m.to === "sales@example.com");
+    expect(mail).toBeTruthy();
   });
 
   test("member removed after it was set → not sent; audit row has IDs only", async () => {
@@ -266,6 +267,34 @@ describe("send time", () => {
     expect(row).toBeTruthy();
     expect(row?.metadata?.employeeId).toBe("emp_sales");
     expect(JSON.stringify(row)).not.toContain("@");
+  });
+
+  test("saved while an active member, member deactivated before the decision → not sent (end to end)", async () => {
+    const issued = await issueEmployee({
+      orgId: DEMO_ORG.id, displayName: "通知E2E", roleLabel: "y", scopes: ["mail:draft"], allowedPurposes: [],
+      approvalPolicy: "risk_based", spend: null, allowedAccounts: [], approvalNotifyEmail: "Accounting@Example.com",
+      secretHash: "c".repeat(64), secretPrefix: "gb_emp_test", expiresAt: null, auditSummary: "t",
+    });
+    expect(issued.employee.approvalNotifyEmail).toBe("accounting@example.com");
+    const acct = getRuntimeMembers().find((m) => m.email === "accounting@example.com")!;
+    setRuntimeMember({ ...acct, status: "disabled" } as OrgMember);
+    const a = approval({ employeeId: issued.employee.id });
+    const res = await runApprovalResolveSideEffects({
+      approval: a, decision: "approved", actorEmail: "web:owner@example.com", employee: issued.employee,
+    });
+    expect(sent.filter((m) => m.to === "accounting@example.com")).toHaveLength(0);
+    expect(res.employeeEmail.skipped).toBe(true);
+    const row = getRuntimeAudit().find((e) => e.metadata?.approvalId === a.id && e.purpose === "approval_notify_email.recipient_not_member");
+    expect(row?.metadata).toEqual({ approvalId: a.id, employeeId: issued.employee.id, reason: "approval_notify_email_not_member" });
+    expect(JSON.stringify(row)).not.toContain("@");
+  });
+
+  test("BOLA at send time: an employee of org A configured with org B's active member → not sent", async () => {
+    const res = await runApprovalResolveSideEffects({
+      approval: approval(), decision: "approved", actorEmail: "web:owner@example.com", employee: employeeWith("OUTSIDER@other-org.example"),
+    });
+    expect(res.employeeEmail.ok).toBe(false);
+    expect(sent.filter((m) => m.to.toLowerCase() === OTHER_ORG_MEMBER.email)).toHaveLength(0);
   });
 
   test("an address that was never a member (e.g. written before this rule) → not sent", async () => {
@@ -331,7 +360,8 @@ describe("write-path inventory (every set/update path is known and checked)", ()
     for (const f of files) {
       const src = readFileSync(f, "utf8");
       const rel = relative(root, f);
-      if (src.includes("approval_notify_email")) snake.add(rel);
+      // the column name only (not the error codes / audit purpose that share the prefix)
+      if (/approval_notify_email\b(?!\.)/.test(src)) snake.add(rel);
       if (/approvalNotifyEmail\??\s*:/.test(src)) camel.add(rel);
     }
     expect([...snake].sort()).toEqual(["lib/data/employees.ts", "lib/data/mappers.ts"]);
