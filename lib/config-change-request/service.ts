@@ -28,8 +28,8 @@ import {
 import { getIdentityBinding } from "@/lib/employees/employee-identity";
 import { applyChannelClassification } from "@/lib/admin-mcp/channel-classify";
 import { executeApproval } from "@/lib/approvals/execution";
-import { detectSecretInPayload, buildSecretDetectionErrorResponse } from "@/lib/security/secret-detector";
-import { auditSecretDetectionBlocked, auditSecretDetectionSuspected } from "@/lib/security/secret-detection-audit";
+import { checkPayloadScanLimits, detectSecretInPayload, buildSecretDetectionErrorResponse } from "@/lib/security/secret-detector";
+import { auditSecretDetectionBlocked, auditSecretDetectionSuspected, safeEcho } from "@/lib/security/secret-detection-audit";
 import type { ApprovalRequest, Employee } from "@/lib/types";
 import {
   CONFIG_CHANGE_APPROVAL_CLASS,
@@ -237,6 +237,27 @@ export async function createConfigChangeRequest(
   }
   if (employee.status !== "active") {
     return { ok: false, code: "employee_not_active", applied: false, messageJa: "有効なAI社員ではありません（fail-closed）" };
+  }
+
+  // 2026-10-09 (#285 follow-up 3): the detector's size caps apply to the RAW
+  // input, before parsing truncates fields (reason ≤500) — an oversized
+  // request is refused and audited like every other detector path.
+  const oversized = checkPayloadScanLimits(input.args, { perString: true });
+  if (oversized) {
+    const rawJobId = typeof input.args.jobId === "string" ? safeEcho(input.args.jobId) : null;
+    await auditSecretDetectionBlocked(
+      {
+        orgId: employee.orgId,
+        employeeId: employee.id,
+        credentialId: input.credentialId,
+        surface: "config_change_request",
+        tool: CONFIG_CHANGE_TOOL,
+        jobId: rawJobId,
+      },
+      oversized
+    );
+    const rejection = buildSecretDetectionErrorResponse(oversized);
+    return { ...rejection, ok: false, applied: false, messageJa: rejection.messageJa };
   }
 
   const parsed = parseConfigChangeInput(input.args);
