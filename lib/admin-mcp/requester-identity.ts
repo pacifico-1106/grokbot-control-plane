@@ -13,6 +13,11 @@
  * the admin agent; the server cannot prove that this person, and not someone
  * else, asked. It identifies the requester honestly when the agent reports
  * it; it does not stop a requester who hides behind an agent that omits it.
+ *
+ * Option (c) (木村 2026-10-09 22:48): for members.promoteOwner with 2+ active
+ * owners, an unidentified requester is refused at filing
+ * (requester_not_identified). That closes "omits it" but not "declares
+ * someone else's verified Slack ID" — the self-reported limit above remains.
  */
 import { listVoterBindings } from "@/lib/approval-workflow/voter-binding";
 import { listMembers } from "@/lib/data/members";

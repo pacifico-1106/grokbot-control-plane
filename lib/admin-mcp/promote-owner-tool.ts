@@ -32,6 +32,10 @@ import { requesterCardLineJa, requesterMetadata, resolveAdminRequester, SLACK_US
 
 export { PROMOTE_OWNER_TOOL };
 
+export const REQUESTER_NOT_IDENTIFIED = "requester_not_identified";
+export const REQUESTER_NOT_IDENTIFIED_NEXT_STEP_JA =
+  "依頼した人の Slack ID を requesterSlackUserId に入れて申請し直してください";
+
 const FLAG_OFF_MESSAGE =
   "OWNER_PROMOTION_ENABLED と APPROVER_AUTHORITY_ENABLED の両方が ON のときだけ、オーナー追加の申請を使えます。";
 
@@ -69,6 +73,28 @@ export async function handlePromoteOwnerTool(
   if (target.role === "owner") return fail("already_owner", "このメンバーはすでにオーナーです。");
   const beforeCapabilities = [...(target.capabilities ?? [])];
   const requester = await resolveAdminRequester(cred.orgId, requesterSlackUserId);
+  // Option (c) (木村 2026-10-09 22:48): with 2+ active owners, "an owner other
+  // than the requester" can only be enforced when the requester is known, so an
+  // unidentified requester (not declared, or not matching an active verified
+  // Slack approver binding of this org) is refused at filing. A sole owner keeps
+  // the single-owner exception. Limit: requesterSlackUserId is declared by the
+  // admin agent; the server checks it maps to a verified approver, not that this
+  // person is the one who actually asked.
+  const activeOwnerCount = members.filter((m) => m.role === "owner" && m.status === "active").length;
+  if (activeOwnerCount >= 2 && !requester.identified) {
+    return {
+      kind: "result",
+      isError: true,
+      data: {
+        ok: false,
+        code: REQUESTER_NOT_IDENTIFIED,
+        message:
+          "オーナーが2人以上いるため、申請者以外のオーナーが承認する必要があります。依頼した人を承認者登録（Slack）で確認できないので、申請できません。",
+        nextStepJa: REQUESTER_NOT_IDENTIFIED_NEXT_STEP_JA,
+        requesterIdentity: { identified: false, reason: requester.reason },
+      },
+    };
+  }
   return {
     kind: "queue",
     extraMetadata: requesterMetadata(requester),

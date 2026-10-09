@@ -227,6 +227,33 @@ describe("who may approve (木村 2026-10-09) — requester recorded through the
     }
   });
 
+  test("option (c), 木村 2026-10-09 22:48: 2+ owners and the requester is not a verified approver identity → refused at filing; nothing queued", async () => {
+    upsertRuntimeMember(member("mem_po_owner2", "owner"), { audit: false });
+    await bindSlack(OWNER, "U0POPEND1", { verify: false }); // pending binding
+    await bindSlack(OWNER, "U0POREVK1");
+    await revokeVoterBinding(ORG, "slack", "C0POAPPROVE", "U0POREVK1");
+    await bindSlack("mem_po_other_org", "U0POOTHR1", { orgId: "org_other" });
+    const before = getRuntimeApprovals().length;
+    for (const args of [{}, { requesterSlackUserId: "U0PONONE1" }, { requesterSlackUserId: "U0POPEND1" }, { requesterSlackUserId: "U0POREVK1" }, { requesterSlackUserId: "U0POOTHR1" }]) {
+      const r = await promote({ memberId: TARGET, ...args });
+      expect(r.ok).toBe(false);
+      expect(r.code).toBe("requester_not_identified");
+      expect(r.nextStepJa).toBe("依頼した人の Slack ID を requesterSlackUserId に入れて申請し直してください");
+    }
+    expect(getRuntimeApprovals().length).toBe(before);
+    // identified requester with 2+ owners still files
+    await bindSlack(OWNER, REQ_SLACK);
+    const ok = await promote({ memberId: TARGET, requesterSlackUserId: REQ_SLACK });
+    expect(ok.needs_approval).toBe(true);
+    expect(getRuntimeApprovals().length).toBe(before + 1);
+  });
+
+  test("option (c): single owner keeps the exception — files without an identified requester", async () => {
+    const r = await promote({ memberId: TARGET });
+    expect(r.needs_approval).toBe(true);
+    expect(r.code).not.toBe("requester_not_identified");
+  });
+
   test("the agent cannot name the requester member directly; a malformed Slack id is refused", async () => {
     expect((await promote({ memberId: TARGET, requesterMemberId: "mem_po_owner2" })).code).toBe("unexpected_argument");
     expect((await promote({ memberId: TARGET, requesterSlackUserId: "not-a-slack-id" })).code).toBe("invalid_requester_slack_user_id");
