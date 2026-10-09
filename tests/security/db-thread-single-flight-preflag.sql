@@ -10,7 +10,10 @@
 --  (3b) same-job lease reuse: the same employee + job key re-enters its held
 --      lease within 10 min of its first post; after that, a different job,
 --      another employee, no job key or no post yet → busy; other org denied
---  (4) anon / authenticated: no EXECUTE on close_approval_without_send / 6-arg acquire
+--  (3c) record_thread_wake_point (#293 review item 2): per org × employee ×
+--      thread, forward-only; another org's employee / bad input → false
+--  (4) anon / authenticated: no EXECUTE on close_approval_without_send / 6-arg
+--      acquire / record_thread_wake_point; no access to thread_wake_points
 \set ON_ERROR_STOP 1
 reset role;
 create or replace function security_test.tsfp_check(ok boolean, label text) returns void language plpgsql as $$
@@ -171,14 +174,38 @@ select security_test.tsfp_check(public.acquire_thread_send_lease('c7500000-0000-
   'c7600000-0000-4000-8000-000000000001', 'c7800000-0000-4000-8000-00000000000a', 60, 'not-hex')->>'state' = 'denied', 'bad job key denied');
 reset role;
 
+-- (3c)
+set role service_role;
+select security_test.tsfp_check(public.record_thread_wake_point('c7500000-0000-4000-8000-0000000000a1',
+  'c7600000-0000-4000-8000-000000000001', repeat('e', 64), 2000000), 'wake recorded');
+select security_test.tsfp_check(public.record_thread_wake_point('c7500000-0000-4000-8000-0000000000a1',
+  'c7600000-0000-4000-8000-000000000001', repeat('e', 64), 1000000), 'older wake accepted (no-op)');
+select security_test.tsfp_check((select wake_micros from public.thread_wake_points where org_id = 'c7500000-0000-4000-8000-0000000000a1'
+  and employee_id = 'c7600000-0000-4000-8000-000000000001' and thread_key = repeat('e', 64)) = 2000000, 'forward only');
+select security_test.tsfp_check(public.record_thread_wake_point('c7500000-0000-4000-8000-0000000000a1',
+  'c7600000-0000-4000-8000-000000000001', repeat('e', 64), 3000000), 'newer wake');
+select security_test.tsfp_check((select wake_micros from public.thread_wake_points where org_id = 'c7500000-0000-4000-8000-0000000000a1'
+  and employee_id = 'c7600000-0000-4000-8000-000000000001' and thread_key = repeat('e', 64)) = 3000000, 'moved forward');
+select security_test.tsfp_check(not public.record_thread_wake_point('c7500000-0000-4000-8000-0000000000a1',
+  'c7600000-0000-4000-8000-000000000003', repeat('e', 64), 4000000), 'BOLA: employee of another org → false');
+select security_test.tsfp_check(not exists (select 1 from public.thread_wake_points where employee_id = 'c7600000-0000-4000-8000-000000000003'), 'BOLA: nothing written');
+select security_test.tsfp_check(not public.record_thread_wake_point('c7500000-0000-4000-8000-0000000000a1',
+  'c7600000-0000-4000-8000-000000000001', 'not-hex', 4000000), 'bad key → false');
+select security_test.tsfp_check(not public.record_thread_wake_point('c7500000-0000-4000-8000-0000000000a1',
+  'c7600000-0000-4000-8000-000000000001', repeat('e', 64), 0), 'bad ts → false');
+reset role;
+
 -- (4)
 set role anon;
+select security_test.tsfp_denied($c$select public.record_thread_wake_point('c7500000-0000-4000-8000-0000000000a1', 'c7600000-0000-4000-8000-000000000001', repeat('e', 64), 5000000)$c$);
 select security_test.tsfp_denied($c$select public.acquire_thread_send_lease('c7500000-0000-4000-8000-0000000000a1', repeat('b', 64), 'c7600000-0000-4000-8000-000000000001', 'c7800000-0000-4000-8000-00000000000c', 60, repeat('d', 64))$c$);
 select security_test.tsfp_denied($c$select public.close_approval_without_send('c7700000-0000-4000-8000-000000000003', 'c7500000-0000-4000-8000-0000000000a1', array['approved'], 'superseded', '{}'::jsonb)$c$);
 reset role;
 set role authenticated;
 select security_test.tsfp_denied($c$select public.close_approval_without_send('c7700000-0000-4000-8000-000000000003', 'c7500000-0000-4000-8000-0000000000a1', array['approved'], 'superseded', '{}'::jsonb)$c$);
 select security_test.tsfp_denied($c$update public.thread_self_posts set job_first_micros = 1$c$);
+select security_test.tsfp_denied($c$select * from public.thread_wake_points$c$);
+select security_test.tsfp_denied($c$select public.record_thread_wake_point('c7500000-0000-4000-8000-0000000000a1', 'c7600000-0000-4000-8000-000000000001', repeat('e', 64), 5000000)$c$);
 select security_test.tsfp_denied($c$select public.acquire_thread_send_lease('c7500000-0000-4000-8000-0000000000a1', repeat('b', 64), 'c7600000-0000-4000-8000-000000000001', 'c7800000-0000-4000-8000-00000000000b', 60, repeat('d', 64))$c$);
 reset role;
 

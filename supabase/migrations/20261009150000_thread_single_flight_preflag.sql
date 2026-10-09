@@ -152,6 +152,47 @@ grant execute on function public.record_thread_self_post(uuid, uuid, text, bigin
 revoke all on function public.close_approval_without_send(uuid, uuid, text[], text, jsonb) from public, anon, authenticated;
 grant execute on function public.close_approval_without_send(uuid, uuid, text[], text, jsonb) to service_role;
 
+-- #293 review item 2: the latest wake Staffpass DELIVERED to an employee in a
+-- thread is that employee's read point when a reply carries no readThroughTs
+-- and no inbound ts. Hash-only thread key (no channel id / text), per org ×
+-- employee × thread, forward-only, 30-day cleanup like thread_self_posts.
+create table if not exists public.thread_wake_points (
+  org_id uuid not null references public.orgs(id) on delete cascade,
+  employee_id uuid not null references public.employees(id) on delete cascade,
+  thread_key text not null check (thread_key ~ '^[0-9a-f]{64}$'),
+  wake_micros bigint not null check (wake_micros > 0),
+  updated_at timestamptz not null default now(),
+  primary key (org_id, employee_id, thread_key)
+);
+create index if not exists thread_wake_points_updated_idx on public.thread_wake_points (org_id, updated_at);
+alter table public.thread_wake_points enable row level security;
+revoke all on table public.thread_wake_points from public, anon, authenticated;
+grant select, insert, update, delete on table public.thread_wake_points to service_role;
+
+create or replace function public.record_thread_wake_point(
+  p_org uuid, p_employee uuid, p_thread_key text, p_wake_micros bigint)
+returns boolean language plpgsql security invoker set search_path = pg_catalog, public as $$
+begin
+  if p_org is null or p_employee is null
+    or p_thread_key is null or p_thread_key !~ '^[0-9a-f]{64}$'
+    or p_wake_micros is null or p_wake_micros <= 0 then
+    return false;
+  end if;
+  if not exists (select 1 from public.employees e where e.id = p_employee and e.org_id = p_org) then
+    return false;
+  end if;
+  delete from public.thread_wake_points
+    where org_id = p_org and updated_at < now() - interval '30 days';
+  insert into public.thread_wake_points as w (org_id, employee_id, thread_key, wake_micros, updated_at)
+    values (p_org, p_employee, p_thread_key, p_wake_micros, now())
+    on conflict (org_id, employee_id, thread_key) do update
+      set wake_micros = excluded.wake_micros, updated_at = now()
+      where w.wake_micros < excluded.wake_micros;
+  return true;
+end $$;
+revoke all on function public.record_thread_wake_point(uuid, uuid, text, bigint) from public, anon, authenticated;
+grant execute on function public.record_thread_wake_point(uuid, uuid, text, bigint) to service_role;
+
 commit;
 
 -- ROLLBACK (down) — turn THREAD_SINGLE_FLIGHT_ENABLED off first (with the flag
@@ -162,6 +203,8 @@ commit;
 -- record_thread_self_post. Same statements as
 -- supabase/verification/20261009150000_thread_single_flight_preflag_rollback.sql:
 --   begin;
+--   drop function if exists public.record_thread_wake_point(uuid, uuid, text, bigint);
+--   drop table if exists public.thread_wake_points;
 --   drop function if exists public.close_approval_without_send(uuid, uuid, text[], text, jsonb);
 --   drop function if exists public.acquire_thread_send_lease(uuid, text, uuid, uuid, integer, text);
 --   alter table public.thread_send_leases drop constraint if exists thread_send_leases_job_key_check;

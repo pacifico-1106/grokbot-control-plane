@@ -41,10 +41,23 @@ against a stale read of the thread, are stopped **before** the provider call.
    that job's first post** in the thread (`job_first_micros`), so reusing a
    jobId cannot switch the check off (pre-flag item 2). Rows written before
    20261009150000 have no first-post time and are never exempt.
-   `readThroughTs` stays optional (decision 1). With **no read point at all**
-   the send is serialized by the lease only and audited as
-   `thread_guard.read_point_unknown` (`readPoint: "unknown"`) so the weekly
-   report can count it; every stop's audit row carries `readPoint` too.
+   On the approval path the 10 minutes are measured at the approval's
+   **creation** time, not the execution clock, so a late approval of the same
+   job's continuation still goes out (#293 review item 1).
+   `readThroughTs` stays optional (decision 1). With neither `readThroughTs`
+   nor an inbound ts, the read point is the inbound ts of the **latest wake
+   Staffpass delivered to that employee in that thread** (`thread_wake_points`,
+   recorded after a successful Slack mention / DM wake; capped at the receive
+   time), so the moved_on check still applies (#293 review item 2). Wakes carry
+   no jobId (the AI picks it after waking), so the scope is org × employee ×
+   thread — another org's or another employee's wake is never used. With **no
+   read point at all** the send still goes ahead under the lease only, is
+   audited as `thread_guard.read_point_unknown` (`readPoint: "unknown"`) for the
+   weekly report, and the 200 response carries `threadGuard: {readPoint:
+   "unknown", nextStep}` telling the AI to pass `readThroughTs` next time; every
+   stop's audit row carries `readPoint` too. A wake-point read error fails
+   closed (503 `thread_guard_unavailable`, `reason: wake_read_failed`), like
+   the self-post read.
 3. **Fulfil-time recheck.** For sends that go through approval the explicit
    read point is stored in the approval snapshot, and the lease + moved_on
    check run again at fulfil (webhook auto-fulfil and the approved re-run) —
@@ -117,7 +130,7 @@ readThroughSource, …}` — hash prefixes only, no text / channel / thread id.
 
 ## Security
 
-- Tables `thread_send_leases`, `thread_self_posts`: RLS on, no policy, no
+- Tables `thread_send_leases`, `thread_self_posts`, `thread_wake_points`: RLS on, no policy, no
   grants to anon / authenticated; RPCs are security invoker with a fixed
   search_path and EXECUTE for service_role only.
 - Org isolation: every key includes org_id; the RPCs refuse an employee that is

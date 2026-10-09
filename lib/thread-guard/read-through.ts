@@ -13,7 +13,8 @@
  */
 import { READ_THROUGH_FUTURE_SKEW_SECONDS } from "./config";
 
-export type ReadThrough = { micros: bigint; ts: string; source: "explicit" | "inbound" };
+/** "wake": the latest wake Staffpass delivered to this employee in this thread (#293 review item 2). */
+export type ReadThrough = { micros: bigint; ts: string; source: "explicit" | "inbound" | "wake" };
 
 const rec = (v: unknown): Record<string, unknown> =>
   v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : {};

@@ -1,6 +1,8 @@
 -- Rollback for 20261009150000_thread_single_flight_preflag.sql (same statements as the
 -- migration's ROLLBACK block). Turn THREAD_SINGLE_FLIGHT_ENABLED off first.
 begin;
+drop function if exists public.record_thread_wake_point(uuid, uuid, text, bigint);
+drop table if exists public.thread_wake_points;
 drop function if exists public.close_approval_without_send(uuid, uuid, text[], text, jsonb);
 drop function if exists public.acquire_thread_send_lease(uuid, text, uuid, uuid, integer, text);
 alter table public.thread_send_leases drop constraint if exists thread_send_leases_job_key_check;

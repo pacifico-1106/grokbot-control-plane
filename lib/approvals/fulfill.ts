@@ -877,6 +877,7 @@ async function fulfillApprovedInvokeCore(
         jobId: snapshot.jobId || approval.jobId,
         keyInput,
         readThrough: readThroughFromSnapshot(snapshot, approvalReceivedAtMs(approval.createdAt)),
+        receivedAtMs: approvalReceivedAtMs(approval.createdAt),
       });
       const threadAuditCtx = {
         orgId: approval.orgId,

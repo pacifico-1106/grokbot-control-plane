@@ -6,7 +6,7 @@ import {
   inferRiskForTool,
 } from "@/lib/approvals/summary";
 import { readThroughFromBody } from "@/lib/thread-guard/read-through";
-import { THREAD_GUARD_UNAVAILABLE, THREAD_MOVED_ON, beginThreadSend, threadGuardStopBody, type ThreadGuardStop } from "@/lib/thread-guard/guard";
+import { NEXT_STEP_READ_POINT_UNKNOWN, THREAD_GUARD_UNAVAILABLE, THREAD_MOVED_ON, beginThreadSend, threadGuardStopBody, type ThreadGuardStop } from "@/lib/thread-guard/guard";
 import { closedByThreadMovedOn } from "@/lib/approvals/closed-without-send";
 import { auditThreadGuardHeld, auditThreadGuardStop, isThreadGuardCode, type ThreadGuardAuditCtx } from "@/lib/thread-guard/respond";
 import { conversationKeyInputFromBody } from "@/lib/comm-reply-dedup/conversation-key";
@@ -2091,6 +2091,8 @@ export async function runGatewayInvoke(
   // approval of a needs_approval egress. Deny stays fail-closed above.
   // Notify inbox is a different plane — never post approvals through this adapter.
   let conversationDelivery: ConversationDelivery | undefined;
+  /** #293 review item 2: no read point at all → sent, with a nextStep to pass readThroughTs. */
+  let threadGuardHint: { readPoint: "unknown"; nextStep: string } | undefined;
   let threadTsSource: "client" | "wake_stash" | "none" | undefined;
   if (isAudienceGatedTool(toolDef)) {
     const ctx = parseConversationContext(body, orgId || employee.orgId);
@@ -2282,6 +2284,9 @@ export async function runGatewayInvoke(
         orgId: orgId || employee.orgId, employeeId,
         credentialId: input.credentialId || employee.credentialId, purpose, tool, jobId, phase: "invoke",
       });
+      if (threadSend.kind === "held" && threadSend.readPointUnknown) {
+        threadGuardHint = { readPoint: "unknown", nextStep: NEXT_STEP_READ_POINT_UNKNOWN };
+      }
       let threadSent: { sent: boolean; messageTs?: string } = { sent: false };
       try {
       // COMM_REPLY_DEDUP_ENABLED: atomic claim right before the post (two
@@ -2435,6 +2440,9 @@ export async function runGatewayInvoke(
         orgId: orgId || employee.orgId, employeeId,
         credentialId: input.credentialId || employee.credentialId, purpose, tool, jobId, phase: "invoke",
       });
+      if (threadSend.kind === "held" && threadSend.readPointUnknown) {
+        threadGuardHint = { readPoint: "unknown", nextStep: NEXT_STEP_READ_POINT_UNKNOWN };
+      }
       let allowed = false;
       try {
         if (commReplyDedup.kind !== "off") {
@@ -3151,6 +3159,7 @@ export async function runGatewayInvoke(
       ? { projectAccess: projectScope.projectAccess }
       : {}),
     conversationDelivery,
+    ...(threadGuardHint ? { threadGuard: threadGuardHint } : {}),
     snsDelivery,
     ...(duplicateWarning ? { duplicateWarning } : {}),
     result:

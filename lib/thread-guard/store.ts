@@ -37,6 +37,8 @@ const valid = (orgId: string, threadKey: string) => Boolean(orgId) && HEX64.test
 type DemoLease = { leaseId: string; employeeId: string; expiresAtMs: number; jobKey: string | null };
 const demoLeases = new Map<string, DemoLease>();
 const demoPosts = new Map<string, AiPost & { jobFirstMicros: bigint }>();
+/** org × employee × thread → latest delivered wake ts (µs). */
+const demoWakes = new Map<string, bigint>();
 type Failure = null | "acquire" | "read" | "release" | "record";
 let failure: Failure = null;
 
@@ -44,6 +46,7 @@ let failure: Failure = null;
 export function __resetThreadGuardStoreForTests(): void {
   demoLeases.clear();
   demoPosts.clear();
+  demoWakes.clear();
 }
 /** Tests only: make one store operation fail (fail-closed paths). */
 export function __setThreadGuardStoreFailureForTests(kind: Failure): void {
@@ -262,5 +265,62 @@ export async function recordSelfPost(input: {
     return !error && data === true;
   } catch {
     return false;
+  }
+}
+
+/**
+ * The latest wake Staffpass delivered to this employee in this thread
+ * (migration 20261009150000 thread_wake_points; #293 review item 2): the read
+ * point when the AI passes neither readThroughTs nor an inbound ts. Per org ×
+ * employee × thread key: another org's or another employee's wake is never
+ * read. Only moves forward.
+ */
+export async function recordWakePoint(input: { orgId: string; employeeId: string; threadKey: string; micros: bigint }): Promise<boolean> {
+  if (failure === "record") return false;
+  if (!valid(input.orgId, input.threadKey) || !input.employeeId || input.micros <= BigInt(0)) return false;
+  if (isDemoMode()) {
+    const k = postKey(input.orgId, input.employeeId, input.threadKey);
+    const prev = demoWakes.get(k);
+    if (prev === undefined || input.micros > prev) demoWakes.set(k, input.micros);
+    return true;
+  }
+  const admin = createSupabaseAdminClient();
+  if (!admin) return false;
+  try {
+    const { data, error } = await admin.rpc("record_thread_wake_point", {
+      p_org: input.orgId,
+      p_employee: input.employeeId,
+      p_thread_key: input.threadKey,
+      p_wake_micros: input.micros.toString(),
+    });
+    return !error && data === true;
+  } catch {
+    return false;
+  }
+}
+
+export async function readWakePoint(input: {
+  orgId: string;
+  employeeId: string;
+  threadKey: string;
+}): Promise<{ ok: true; micros: bigint | null } | { ok: false }> {
+  if (failure === "read") return { ok: false };
+  if (!valid(input.orgId, input.threadKey) || !input.employeeId) return { ok: false };
+  if (isDemoMode()) return { ok: true, micros: demoWakes.get(postKey(input.orgId, input.employeeId, input.threadKey)) ?? null };
+  const admin = createSupabaseAdminClient();
+  if (!admin) return { ok: false };
+  try {
+    const { data, error } = await admin
+      .from("thread_wake_points")
+      .select("wake_micros")
+      .eq("org_id", input.orgId)
+      .eq("employee_id", input.employeeId)
+      .eq("thread_key", input.threadKey)
+      .maybeSingle();
+    if (error) return { ok: false };
+    const raw = (data as { wake_micros?: number | string } | null)?.wake_micros;
+    return { ok: true, micros: raw == null ? null : BigInt(String(raw).split(".")[0] || "0") };
+  } catch {
+    return { ok: false };
   }
 }
