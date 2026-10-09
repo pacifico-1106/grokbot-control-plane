@@ -736,7 +736,10 @@ async function fulfillPolicy(approval: ApprovalRequest, args: Record<string, unk
           ? normalizeToolApprovalDefaults(args.toolApprovalDefaults)
           : undefined,
       sodOverrideAcknowledged: args.sodOverrideAcknowledged === true,
-      actionLimits: normalizeActionLimits(args.actionLimits as ActionLimits),
+      // Omitted → keep the stored limits (it used to be written as {}); an
+      // explicit value, including {}, is applied.
+      actionLimits:
+        args.actionLimits === undefined ? undefined : normalizeActionLimits(args.actionLimits as ActionLimits),
     });
   } catch (error) {
     return employeePolicyWriteFailedFulfillment("policy.patch", employeeId, error);
