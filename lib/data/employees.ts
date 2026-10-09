@@ -367,7 +367,10 @@ export async function updateEmployeePolicy(input: {
     requested: input.approvalPolicy,
     acknowledged: input.sodOverrideAcknowledged,
   });
-  const actionLimits = normalizeActionLimits(input.actionLimits);
+  // 木村 2026-10-10 (data loss since 30a631f): an OMITTED actionLimits keeps the
+  // stored value on employees AND the active credentials row; only an explicit
+  // value (incl. {} = clear) is written. Same rule as allowedAccounts / spend.
+  const actionLimits = input.actionLimits === undefined ? undefined : normalizeActionLimits(input.actionLimits);
   if (isDemoMode()) {
     const employee = getRuntimeEmployees().find((item) => item.id === input.employeeId && item.orgId === input.orgId);
     if (!employee) return null;
@@ -379,7 +382,7 @@ export async function updateEmployeePolicy(input: {
         ? { toolApprovalDefaults: normalizeToolApprovalDefaults(input.toolApprovalDefaults) }
         : {}),
       sodLevel: verdict.level,
-      actionLimits,
+      ...(actionLimits !== undefined ? { actionLimits } : {}),
       managerId: input.managerId === undefined ? employee.managerId : input.managerId,
       voice:
         input.voice === undefined
@@ -413,7 +416,7 @@ export async function updateEmployeePolicy(input: {
       ? { tool_approval_defaults: normalizeToolApprovalDefaults(input.toolApprovalDefaults) }
       : {}),
     sod_level: verdict.level,
-    action_limits: actionLimits,
+    ...(actionLimits !== undefined ? { action_limits: actionLimits } : {}),
     ...(input.managerId !== undefined ? { manager_id: input.managerId } : {}),
     ...(input.voice !== undefined ? { voice: normalizeVoice(input.voice) } : {}),
     ...(input.projectAccess !== undefined
@@ -465,7 +468,7 @@ export async function updateEmployeePolicy(input: {
         scopes: input.scopes,
         allowed_purposes: input.allowedPurposes,
         approval_policy: effectivePolicy,
-        action_limits: actionLimits,
+        ...(actionLimits !== undefined ? { action_limits: actionLimits } : {}),
         ...(input.allowedAccounts !== undefined ? { allowed_accounts: input.allowedAccounts } : {}),
         ...(input.spend !== undefined ? { spend: input.spend } : {}),
       })
