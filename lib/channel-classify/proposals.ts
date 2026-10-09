@@ -27,6 +27,7 @@ import {
   attachChannelClassifyProposal,
   claimChannelClassifyProposal,
   releaseChannelClassifyProposal,
+  takeChannelStuckNoticeSlot,
 } from "@/lib/data/channel-classify";
 import { ADMIN_AUDIT_CLASS, auditActionForAdminTool } from "@/lib/admin-mcp/audit-class";
 import { buildChannelClassifyCardSummaryJa, buildPartyUpsertCardSummaryJa } from "@/lib/channel-classify/approval-card";
@@ -188,6 +189,29 @@ async function audit(orgId: string, action: "channel_classify.proposed" | "chann
   }).catch(() => undefined);
 }
 
+const NO_APPROVER_AUDIT_WINDOW_SECONDS = 3600;
+const noApproverAuditFallback = new Map<string, number>();
+
+/**
+ * One no_admin_approver tenant audit row per org per hour. Store OK → its
+ * verdict; store unavailable → a per-instance window with the same period
+ * (bounded, never unlimited).
+ */
+async function takeNoApproverAuditSlot(orgId: string): Promise<boolean> {
+  const slot = await takeChannelStuckNoticeSlot({
+    orgId,
+    key: "audit|proposal_failed|no_admin_approver",
+    windowSeconds: NO_APPROVER_AUDIT_WINDOW_SECONDS,
+  }).catch(() => null);
+  if (slot?.state === "ok") return slot.allowed;
+  const now = Date.now();
+  const last = noApproverAuditFallback.get(orgId);
+  if (last !== undefined && now - last < NO_APPROVER_AUDIT_WINDOW_SECONDS * 1000) return false;
+  if (noApproverAuditFallback.size > 10_000) noApproverAuditFallback.clear();
+  noApproverAuditFallback.set(orgId, now);
+  return true;
+}
+
 /** H1: take one unit of the org's hourly proposal budget; the first overflow sends the one summary. */
 async function withinProposalBudget(orgId: string, trigger: ProposalTrigger): Promise<boolean> {
   const limit = maxProposalsPerHour();
@@ -221,11 +245,17 @@ export async function proposeChannelClassification(input: {
     const proposal = buildChannelProposal(facts, { registeredPartyIds, maxParties: MAX_PARTY_PROPOSALS });
     if (proposal.skip) return { state: "skipped", reason: proposal.skip };
     if (!(await deps.hasApprover(orgId).catch(() => false))) {
-      await audit(orgId, "channel_classify.proposal_failed", `管理承認者が未設定のため分類提案を作りませんでした（${facts.externalId}）`, {
-        key: proposal.classify.key,
-        reason: "no_admin_approver",
-        trigger,
-      });
+      // #280 pre-flag (木村 #281 review): at most one tenant audit row per org
+      // per hour for this reason (existing take_channel_stuck_notice slot), so
+      // a join flood cannot flood the tenant's audit log.
+      if (await takeNoApproverAuditSlot(orgId)) {
+        await audit(orgId, "channel_classify.proposal_failed", `管理承認者が未設定のため分類提案を作りませんでした（${facts.externalId}）`, {
+          key: proposal.classify.key,
+          reason: "no_admin_approver",
+          trigger,
+          auditCap: "once_per_hour_per_org",
+        });
+      }
       await notifyOpsIdsOnly({ orgId, reason: "no_admin_approver", ref: { surface: facts.surface, externalId: facts.externalId }, trigger });
       return { state: "no_approver", reason: "no_admin_approver" };
     }
