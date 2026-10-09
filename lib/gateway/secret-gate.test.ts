@@ -134,9 +134,9 @@ describe("gateway secret-in-chat detector (P0-A)", () => {
     expect(result.body.ok).toBe(false);
     expect(result.body.code).toBe("secret_detected_in_payload");
     const preview = String(result.body.redactedPreview || "");
-    expect(preview.length).toBeLessThan(fullSecret.length);
-    expect(preview).toContain("***");
-    expect(preview).not.toBe(fullSecret);
+    // No characters of the value at all (2026-10-05), not even a prefix.
+    expect(preview).toBe("[redacted]");
+    expect(JSON.stringify(result.body)).not.toContain("gb_emp_1");
   });
 
   test("nextStepJa points to Staffpass hosted setup, not chat paste", async () => {

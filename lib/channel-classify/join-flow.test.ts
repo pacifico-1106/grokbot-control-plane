@@ -12,6 +12,7 @@ import { getOrgChannel, upsertOrgChannel } from "@/lib/data/directory";
 import { resetDemoChannelClassifyStore } from "@/lib/data/channel-classify";
 import {
   handleChannelJoin,
+  handleTelegramMyChatMember,
   lineJoinSignal,
   setJoinDepsForTests,
   slackJoinSignals,
@@ -83,6 +84,8 @@ beforeEach(() => {
     findEmployeeOrgsBySlackUser: async (userId, teamId) =>
       userId === "U0EMPLOYEE" && teamId === HOME_TEAM ? [{ orgId: ORG, employeeId: "emp_comm" }] : [],
     findOrgsBySlackTeam: async (teamId) => (teamId === HOME_TEAM ? [ORG] : []),
+    // follow-up N7: the event's app / bot must be the org's adapter bot
+    adapterBotIdentity: async (orgId) => (orgId === ORG ? { appId: "A0ORGBOTAPP", botUserId: "U0APPBOT", teamId: HOME_TEAM } : null),
   });
 });
 
@@ -97,6 +100,7 @@ function slackEnvelope(channel: string, user = "U0EMPLOYEE", extra: Record<strin
   return {
     type: "event_callback",
     team_id: HOME_TEAM,
+    api_app_id: "A0ORGBOTAPP",
     event_id: `Ev${channel}`,
     authorizations: [{ team_id: HOME_TEAM, user_id: "U0APPBOT", is_bot: true }],
     event: { type: "member_joined_channel", user, channel, channel_type: "C", team: HOME_TEAM, ...extra },
@@ -179,15 +183,18 @@ describe("LINE join → proposal", () => {
 
 describe("Telegram join → proposal", () => {
   test("bot added to a group (my_chat_member left → member) → channels.classify (telegram)", async () => {
-    const signal = telegramJoinSignal({ orgId: ORG }, {
+    const update = {
       my_chat_member: {
         chat: { id: -1001234567890, type: "supergroup" },
+        from: { id: 7001, is_bot: false }, // follow-up H1: a known member added the bot
         old_chat_member: { status: "left", user: { id: 42, is_bot: true } },
         new_chat_member: { status: "member", user: { id: 42, is_bot: true } },
       },
-    });
+    };
+    const signal = telegramJoinSignal({ orgId: ORG }, update);
     expect(signal).toMatchObject({ orgId: ORG, surface: "telegram", externalId: "-1001234567890", trigger: "telegram_my_chat_member" });
-    const outcome = await handleChannelJoin(signal!);
+    const inbox = { id: "nc_tg_fixture", orgId: ORG, config: { chatId: "-1000000000001", allowedUserIds: ["7001"] } };
+    const outcome = await handleTelegramMyChatMember(inbox, update);
     expect(outcome.state).toBe("created");
     const approval = await getApprovalById(outcome.approvalId!, ORG);
     expect(approval?.metadata?.adminMutation).toMatchObject({ surface: "telegram", externalId: "-1001234567890", classification: "shared_external" });
@@ -259,7 +266,7 @@ describe("dedupe, flag, isolation, fail-closed", () => {
       notifyApproval: async () => true,
       createApproval: async () => { throw new Error("store_down"); },
     });
-    const signal = { orgId: ORG, surface: "telegram" as const, externalId: "-1009999", trigger: "telegram_my_chat_member" as const };
+    const signal = { orgId: ORG, surface: "telegram" as const, externalId: "-1009999", trigger: "telegram_my_chat_member" as const, actorVerified: true };
     const failed = await handleChannelJoin(signal);
     expect(failed.state).toBe("error");
     setProposalDepsForTests({ notifyApproval: async () => true });

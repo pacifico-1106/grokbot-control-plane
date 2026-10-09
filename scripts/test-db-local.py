@@ -223,8 +223,27 @@ try:
                                    " where conname='org_channels_surface_check';")
     sql(channel_classify)  # forward again after rollback
     sql(ROOT / "tests/security/db-channel-classify.sql")
+    budget = ROOT / "supabase/migrations/20261005400000_channel_classify_budget.sql"
+    sql(budget)
+    sql(budget)  # re-applicable
+    sql(ROOT / "tests/security/db-channel-classify-budget.sql")
+    ccb_org = "c6000000-0000-4000-8000-0000000000c1"
+    query(f"insert into public.orgs(id, name) values ('{ccb_org}', 'channel-classify-budget-race');")
+    command = (f"set role service_role; select public.take_channel_classify_budget("
+               f"'{ccb_org}', 'proposals', 3600, 5)->>'state';")
+    with ThreadPoolExecutor(max_workers=12) as pool:
+        takes = list(pool.map(query, [command]*20))
+    assert takes.count("allowed") == 5 and takes.count("over_first") == 1 and takes.count("over") == 14, takes
+    query(f"delete from public.orgs where id='{ccb_org}';")
+    sql(ROOT / "supabase/verification/20261005400000_channel_classify_budget_rollback.sql")
+    assert query("select to_regclass('public.channel_classify_budget_windows') is null"
+                 " and to_regprocedure('public.take_channel_classify_budget(uuid,text,integer,integer)') is null"
+                 " and to_regclass('public.channel_classify_proposals') is not null;") == "t"
+    sql(budget)  # forward again after rollback
+    sql(ROOT / "tests/security/db-channel-classify-budget.sql")
     print("PASS: employee_webhook_settings (D9): RLS on, no policy, anon/authenticated denied, service_role reads/writes/upserts; cross-org row rejected; payload mode minimal|legacy_full (default minimal); ciphertext-only secret + fingerprint pair; employee delete cascades; rollback + re-apply.")
     print("PASS: channel_classify_proposals / channel_stuck_notice_windows (PR-B): RLS on, anon/authenticated denied (tables + 4 RPCs); org_channels accepts telegram; claim states claimed/in_flight/pending/decided, facts change reopens, other org isolated; attach same-org only; release unattached only; notice window once then suppressed; bad input denied; org delete cascades; 12 concurrent claims → exactly 1 claimed; rollback (2 tables + 4 RPCs + telegram surface) + re-apply.")
+    print("PASS: channel_classify_budget_windows (PR-B follow-up H1): RLS on, no policy, anon/authenticated denied (table + RPC); allowed up to max → over_first once → over; per org / per key independent; expired window resets; bad input denied; org delete cascades; 20 concurrent takes (max 5) → exactly 5 allowed + 1 over_first; rollback (table + RPC, PR-B tables untouched) + re-apply.")
     print("PASS: orgs / subscriptions / audit_events / approval_requests have no anon/authenticated write path (member/admin/owner JWT denied); service_role writes all four. Full-history check: scripts/test-db-all-migrations.py.")
     print("PASS: 14 tenant config / credential tables (credentials, employees, bindings, admin agents, directory, adapters, channels, projects, card setup/audit) + gateway_links, agentmail_inboxes, lp_handoffs, lp_wake_webhook_configs, lp_wake_webhook_events have no anon/authenticated write path; other reads unchanged; credentials (rows and secret_hash) unreadable from any session; service_role reads/writes all.")
     print("PASS: lp_inquiries / notification_outbox have no anon/authenticated write grant; lp_handoffs / lp_wake_* have no policy (RLS on) and no anon/authenticated SELECT; sessions read/write none of the 5 LP tables; service_role (BYPASSRLS) reads/writes all.")
