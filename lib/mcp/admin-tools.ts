@@ -2347,6 +2347,21 @@ export async function callAdminMcpTool(
         true
       );
     }
+    // project_access.projectIds: same org only, checked at filing (and again
+    // at fulfil by issueEmployee). #284 decision 4.
+    if (args.projectAccess != null) {
+      const pa = await import("@/lib/employees/project-access-org");
+      try {
+        await pa.assertProjectAccessSameOrg({
+          orgId: cred.orgId,
+          projectAccess: args.projectAccess,
+          audit: { path: "admin_mcp.employees.issue", phase: "file" },
+        });
+      } catch (error) {
+        if (error instanceof pa.ProjectAccessOrgError) return toolResult(pa.projectAccessRefusalBody(error), true);
+        throw error;
+      }
+    }
   }
 
   if (name === "orgs.create" || name === "orgs.status" || name === "orgs.patch" || name === "orgs.issueAdminCredential") {

@@ -1,3 +1,4 @@
+import { assertProjectAccessSameOrg, type ProjectAccessAuditContext } from "@/lib/employees/project-access-org";
 import {
   addRuntimeEmployee,
   DEMO_ORG,
@@ -119,6 +120,8 @@ export type IssueEmployeeInput = {
   managerId?: string | null;
   voice?: Employee["voice"] | null;
   projectAccess?: EmployeeProjectAccess | null;
+  /** Audit context for a refused projectAccess (same-org check, #284 decision 4). */
+  projectAccessAudit?: ProjectAccessAuditContext;
   postingAs?: PostingAs | null;
   approvalChannelId?: string | null;
   approverUserIds?: string[];
@@ -154,6 +157,12 @@ export type IssueEmployeeResult = {
 export async function issueEmployee(
   input: IssueEmployeeInput
 ): Promise<IssueEmployeeResult> {
+  // project_access.projectIds: same org only (#284 decision 4). Before any write.
+  await assertProjectAccessSameOrg({
+    orgId: input.orgId || (isDemoMode() ? DEMO_ORG.id : ""),
+    projectAccess: input.projectAccess,
+    audit: input.projectAccessAudit ?? { path: "data.issueEmployee", actorEmail: input.actorEmail ?? null },
+  });
   const sodVerdict = evaluateSod(input.scopes, await getOrgSodWarnPolicy(input.orgId));
   const effectivePolicy = resolveApprovalPolicy({
     verdict: sodVerdict,
@@ -355,12 +364,21 @@ export async function updateEmployeePolicy(input: {
   managerId?: string | null;
   voice?: Employee["voice"];
   projectAccess?: EmployeeProjectAccess;
+  projectAccessAudit?: ProjectAccessAuditContext;
   postingAs?: PostingAs;
   displayName?: string;
   roleLabel?: string;
   approvalChannelId?: string | null;
   approverUserIds?: string[];
 }): Promise<Employee | null> {
+  // project_access.projectIds: same org only (#284 decision 4). Before any write.
+  if (input.projectAccess !== undefined) {
+    await assertProjectAccessSameOrg({
+      orgId: input.orgId,
+      projectAccess: input.projectAccess,
+      audit: input.projectAccessAudit ?? { path: "data.updateEmployeePolicy", employeeId: input.employeeId },
+    });
+  }
   const verdict = evaluateSod(input.scopes, await getOrgSodWarnPolicy(input.orgId));
   const effectivePolicy = resolveApprovalPolicy({
     verdict,

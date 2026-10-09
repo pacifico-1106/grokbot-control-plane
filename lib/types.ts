@@ -515,6 +515,7 @@ export type AuditAction =
   | "slack.user_token_channel_wake_skipped"
   | "employee.sod_forced"
   | "employee.sod_override"
+  | "employee.project_access_refused"
   | "action_limit.reached"
   | "action_limit.denied"
   | "billing.updated"

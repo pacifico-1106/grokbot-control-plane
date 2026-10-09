@@ -1,3 +1,4 @@
+import { ProjectAccessOrgError, projectAccessRefusalBody, projectAccessRefusalStatus } from "@/lib/employees/project-access-org";
 import { NextResponse } from "next/server";
 import { getCurrentOrgId } from "@/lib/auth/session";
 import { appendAuditEvent, getEmployee, listNotificationChannels, updateEmployeePolicy } from "@/lib/data";
@@ -142,6 +143,7 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
       voice: body.voice === undefined ? undefined : normalizeVoice(body.voice),
       projectAccess:
         body.projectAccess === undefined ? undefined : normalizeProjectAccess(body.projectAccess),
+      projectAccessAudit: { path: "web.employees.policy", phase: "write", employeeId: id, actorEmail: gate.actor.email ?? null },
       ...(body.postingAs !== undefined ? { postingAs: normalizePostingAs(body.postingAs) } : {}),
       ...(displayName !== undefined ? { displayName } : {}),
       ...(roleLabel !== undefined ? { roleLabel } : {}),
@@ -153,6 +155,9 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
         : {}),
     });
   } catch (error) {
+    if (error instanceof ProjectAccessOrgError) {
+      return NextResponse.json(projectAccessRefusalBody(error), { status: projectAccessRefusalStatus(error) });
+    }
     // Fail-closed: a failed write is never reported as saved (no audit row).
     const failure = employeePolicyWriteFailure(error);
     console.error(failure.code, id, error instanceof Error ? error.message : error);

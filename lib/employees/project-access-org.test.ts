@@ -44,6 +44,10 @@ async function ownProject(): Promise<OrgProject> {
 }
 const selected = (...projectIds: string[]) => ({ mode: "selected", projectIds });
 const refusals = () => getRuntimeAudit().filter((e) => e.action === AUDIT_ACTION);
+/** Refusal rows written since `before` (a count taken earlier); order-independent. */
+let seen = new Set<unknown>();
+const snapshotRefusals = () => { seen = new Set(refusals()); return seen.size; };
+const newRefusals = () => refusals().filter((e) => !seen.has(e));
 
 function issueReq(projectAccess: unknown, name = `PA ${Math.random().toString(36).slice(2, 8)}`) {
   return issuePost(new Request("https://x.invalid/api/employees/issue", {
@@ -88,7 +92,8 @@ function expectRefusedBody(body: Record<string, unknown>) {
   expect(String(body.nextStep)).toMatch(/保存していません|発行していません/);
 }
 function expectOneAuditIdsOnly(before: number, refusedIds: string[], path: string) {
-  const rows = refusals().slice(before);
+  void before;
+  const rows = newRefusals();
   expect(rows).toHaveLength(1);
   const m = rows[0].metadata as Record<string, unknown>;
   expect(m.path).toBe(path);
@@ -100,7 +105,7 @@ function expectOneAuditIdsOnly(before: number, refusedIds: string[], path: strin
 describe("web POST /api/employees/issue", () => {
   test("BOLA: another org's project id → 400, nothing issued, one IDs-only audit row", async () => {
     const before = getRuntimeEmployees().length;
-    const audits = refusals().length;
+    const audits = snapshotRefusals();
     const res = await issueReq(selected(otherOrgProject.id));
     expect(res.status).toBe(400);
     expectRefusedBody(await res.json());
@@ -117,7 +122,7 @@ describe("web POST /api/employees/issue", () => {
   test("a mix of valid and invalid ids → refused as a whole, nothing issued; only the bad ids are named", async () => {
     const own = await ownProject();
     const before = getRuntimeEmployees().length;
-    const audits = refusals().length;
+    const audits = snapshotRefusals();
     const res = await issueReq(selected(own.id, otherOrgProject.id, "prj_unknown_x"));
     expect(res.status).toBe(400);
     expect(getRuntimeEmployees().length).toBe(before);
@@ -125,12 +130,12 @@ describe("web POST /api/employees/issue", () => {
   });
   test("valid same-org ids still work", async () => {
     const own = await ownProject();
-    const audits = refusals().length;
+    snapshotRefusals();
     const res = await issueReq(selected(DEMO_PROJECT_A_ID, own.id));
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.employee.projectAccess).toEqual(selected(DEMO_PROJECT_A_ID, own.id));
-    expect(refusals().length).toBe(audits);
+    expect(newRefusals()).toHaveLength(0);
   });
   test("mode company / all ignore projectIds (unchanged behaviour)", async () => {
     const res = await issueReq({ mode: "all", projectIds: [otherOrgProject.id] });
@@ -146,13 +151,13 @@ describe("web PATCH /api/employees/[id]/policy", () => {
     await updateEmployeePolicy({ orgId: DEMO_ORG.id, employeeId: emp.id, scopes: emp.scopes, allowedPurposes: [],
       approvalPolicy: emp.approvalPolicy, projectAccess: selected(own.id) as never });
     const snapshot = JSON.stringify(await getEmployee(emp.id, DEMO_ORG.id));
-    const audits = refusals().length;
+    const audits = snapshotRefusals();
     const res = await patchReq(emp.id, selected(own.id, otherOrgProject.id));
     expect(res.status).toBe(400);
     expectRefusedBody(await res.json());
     expect(JSON.stringify(await getEmployee(emp.id, DEMO_ORG.id))).toBe(snapshot);
     expectOneAuditIdsOnly(audits, [otherOrgProject.id], "web.employees.policy");
-    expect(refusals().slice(audits)[0].employeeId).toBe(emp.id);
+    expect(newRefusals()[0].employeeId).toBe(emp.id);
   });
   test("valid same-org ids still save", async () => {
     const emp = await newEmployee();
@@ -185,7 +190,7 @@ describe("data writers refuse on their own (defence in depth for any caller)", (
 describe("Admin MCP employees.issue: checked at filing and at fulfil", () => {
   test("filing: another org's id → refused, no approval queued, one audit row", async () => {
     const approvals = getRuntimeApprovals().length;
-    const audits = refusals().length;
+    const audits = snapshotRefusals();
     const r = await callAdminMcpTool("employees.issue", {
       displayName: "MCP他社", roleLabel: "テスト", scopes: ["mail:draft"], projectAccess: selected(otherOrgProject.id),
     }, demoCred());
@@ -193,7 +198,7 @@ describe("Admin MCP employees.issue: checked at filing and at fulfil", () => {
     expectRefusedBody(r.structuredContent as Record<string, unknown>);
     expect(getRuntimeApprovals().length).toBe(approvals);
     expectOneAuditIdsOnly(audits, [otherOrgProject.id], "admin_mcp.employees.issue");
-    expect((refusals().slice(audits)[0].metadata as Record<string, unknown>).phase).toBe("file");
+    expect((newRefusals()[0].metadata as Record<string, unknown>).phase).toBe("file");
   });
   test("filing: valid same-org ids → queued for approval as today", async () => {
     const own = await ownProject();
@@ -206,7 +211,7 @@ describe("Admin MCP employees.issue: checked at filing and at fulfil", () => {
     const own = await ownProject();
     expect(await deleteOrgProject(DEMO_ORG.id, own.id)).toBe(true);
     const before = getRuntimeEmployees().length;
-    const audits = refusals().length;
+    const audits = snapshotRefusals();
     const approval = adminApproval({ displayName: "削除後", roleLabel: "テスト", scopes: ["mail:draft"], projectAccess: selected(own.id) });
     const r = await fulfillApprovedAdmin(approval);
     expect(r?.ok).toBe(false);
@@ -214,7 +219,7 @@ describe("Admin MCP employees.issue: checked at filing and at fulfil", () => {
     expect(String(r?.nextStepJa)).toMatch(/この組織のプロジェクト/);
     expect(getRuntimeEmployees().length).toBe(before);
     expectOneAuditIdsOnly(audits, [own.id], "admin_mcp.employees.issue");
-    const m = refusals().slice(audits)[0].metadata as Record<string, unknown>;
+    const m = newRefusals()[0].metadata as Record<string, unknown>;
     expect(m.phase).toBe("fulfil");
     expect(m.approvalId).toBe(approval.id);
   });
