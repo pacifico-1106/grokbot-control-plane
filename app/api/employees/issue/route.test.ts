@@ -47,7 +47,13 @@ mock.module("@/lib/auth/session", () => ({
   getSessionContext: async () => session,
   getCurrentOrgId: async () => session.orgId,
 }));
-mock.module("@/lib/mode", () => ({ isDemoMode: () => false }));
+mock.module("@/lib/mode", () => ({
+  isDemoMode: () => false,
+  isSupabaseConfigured: () => true,
+  isStripeConfigured: () => false,
+  isResendConfigured: () => false,
+  runtimeModeLabel: () => "production",
+}));
 mock.module("@/lib/billing/entitlements", () => ({
   assertBillingAllows: async () => ({ ok: true, entitlements: {} }),
 }));

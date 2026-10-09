@@ -175,11 +175,12 @@ describe("set time — every write path", () => {
 
   test("data writer issueEmployee refuses a non-member (defence in depth for any caller)", async () => {
     const before = getRuntimeEmployees().length;
-    await expect(issueEmployee({
+    const thrown = await issueEmployee({
       orgId: DEMO_ORG.id, displayName: "x", roleLabel: "y", scopes: ["mail:draft"], allowedPurposes: [],
       approvalPolicy: "risk_based", spend: null, allowedAccounts: [], approvalNotifyEmail: OTHER_ORG_MEMBER.email,
       secretHash: "a".repeat(64), secretPrefix: "gb_emp_test", expiresAt: null, auditSummary: "t",
-    })).rejects.toBeInstanceOf(ApprovalNotifyEmailError);
+    }).then(() => null, (e: unknown) => e);
+    expect(thrown instanceof ApprovalNotifyEmailError).toBe(true);
     expect(getRuntimeEmployees().length).toBe(before);
   });
 
