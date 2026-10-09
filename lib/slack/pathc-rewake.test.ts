@@ -83,8 +83,6 @@ function envelope(channel: string, opts: { team?: string; subscriberTeam?: strin
 
 const skip = (channel: string, opts?: Parameters<typeof envelope>[1]) =>
   processSlackMentionEnvelope(envelope(channel, opts) as Parameters<typeof processSlackMentionEnvelope>[0]);
-const notices = () => audits.filter((a) => a.action === "channel_stuck.notice");
-const wakeSkipNotices = () => notices().filter((a) => a.metadata?.event === "channel_stuck.unclassified_channel_wake_skipped");
 
 beforeEach(async () => {
   for (const key of FLAGS) saved.set(key, process.env[key]);
@@ -373,5 +371,42 @@ describe("the approved class decides; stale / changed state is not re-woken", ()
     expect((await recordSkippedChannelWake({ ...base, channelId: "D0NOTACHAN", eventTs: "1788100011.000011", eventId: "Ev0PCD" })).state).toBe("denied");
     expect((await recordSkippedChannelWake({ ...base, eventTs: "not-a-ts", eventId: "Ev0PCX" })).state).toBe("denied");
     expect((await recordSkippedChannelWake({ ...base, speakerSlackUserId: "<script>", eventTs: "1788100012.000012", eventId: "Ev0PCY" })).state).toBe("denied");
+  });
+});
+
+describe("config-change-request path (P1_CONFIG_CHANGE_REQUEST_ENABLED) also re-wakes once", () => {
+  test("employee-requested channel_classification approved by an owner → one wake; a repeat fulfil wakes nobody", async () => {
+    process.env[REWAKE] = "1";
+    const savedCc = process.env.P1_CONFIG_CHANGE_REQUEST_ENABLED;
+    process.env.P1_CONFIG_CHANGE_REQUEST_ENABLED = "1";
+    try {
+      const channel = channelId();
+      await skip(channel);
+      const { createConfigChangeRequest, isPendingConfigChange } = await import("@/lib/config-change-request/service");
+      const created = await createConfigChangeRequest(
+        {
+          orgId: ORG,
+          employeeId: EMP,
+          credentialId: null,
+          args: { kind: "channel_classification", jobId: `job-pathc-${channel}`, requestedBy: { name: "稲盛" }, channel: { externalId: channel, classification: "internal" } },
+        },
+        { resolveApprover: async () => ({ ok: true, surface: "slack_dm", channelId: "nc_test" }), notify: async () => true }
+      );
+      expect(isPendingConfigChange(created)).toBe(true);
+      const approvalId = (created as { approvalId: string }).approvalId;
+      const { resolveApproval } = await import("@/lib/data/approvals");
+      const { fulfillIfApproved } = await import("@/lib/approvals/fulfill");
+      const approved = await resolveApproval(approvalId, "approved", "owner@example.com", ORG, { actorId: "user_owner" });
+      expect(approved?.status).toBe("approved");
+      await fulfillIfApproved(approved!, "approved");
+      expect(wakes.length).toBe(1);
+      expect(wakes[0].channel).toBe(channel);
+      expect(wakes[0].text).toBe("");
+      await fulfillIfApproved(approved!, "approved");
+      expect(wakes.length).toBe(1);
+    } finally {
+      if (savedCc === undefined) delete process.env.P1_CONFIG_CHANGE_REQUEST_ENABLED;
+      else process.env.P1_CONFIG_CHANGE_REQUEST_ENABLED = savedCc;
+    }
   });
 });

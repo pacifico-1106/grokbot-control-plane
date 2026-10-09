@@ -51,7 +51,9 @@ export type ProposalTrigger =
   | "line_join"
   | "telegram_my_chat_member"
   | "backfill"
-  | "egress_denied";
+  | "egress_denied"
+  /** Path C: a user-token channel mention was not woken because the channel is unclassified. */
+  | "wake_skipped";
 
 export type ProposalOutcome = {
   state:

@@ -10,6 +10,8 @@
  *   proposal_failed              classification ticket could not be opened
  *   stuck_watch_mouth_fallback   stuck-watch alert whose notifyMouth is unset / missing
  *   proposal_rate_limited        the org hit the hourly proposal cap (one per window)
+ *   unclassified_channel_wake_skipped  Path C: a mention in an unclassified channel
+ *                                did not wake the employee (same 6h window as the deny notice)
  *
  * Routing (same org only): the employee's approval channel → the org's
  * default (else first) enabled approval channel → ops (PLATFORM_OPS_ORG_ID
@@ -39,7 +41,8 @@ export type StuckNoticeKind =
   | "backfill_failed"
   | "proposal_failed"
   | "stuck_watch_mouth_fallback"
-  | "proposal_rate_limited";
+  | "proposal_rate_limited"
+  | "unclassified_channel_wake_skipped";
 
 const KINDS = new Set<StuckNoticeKind>([
   "unregistered_channel_denied",
@@ -49,6 +52,7 @@ const KINDS = new Set<StuckNoticeKind>([
   "proposal_failed",
   "stuck_watch_mouth_fallback",
   "proposal_rate_limited",
+  "unclassified_channel_wake_skipped",
 ]);
 
 export type StuckNoticeInput = {
@@ -173,6 +177,23 @@ export function buildStuckNoticeTextJa(input: StuckNoticeInput, ref: { surface: 
       ].join("\n");
     case "stuck_watch_mouth_fallback":
       return `${clip(input.text || "⚠️ Staffpass: 滞留アラート", 1200)}\n（通知先 notifyMouth が未設定または無効のため、承認窓口へ届けています）`;
+    case "unclassified_channel_wake_skipped": {
+      const approvalId = id(input.approvalId);
+      const lines = [
+        `⚠️ Staffpass: 分類が未登録のチャネルでのメンションに社員が反応できませんでした${where ? `（${where}）` : ""}`,
+        `理由: ${reason} — 未登録のチャネルでは安全のため社員を起こしません。本文は含めていません。`,
+      ];
+      if (approvalId && (input.proposalState === undefined || input.proposalState === "created" || input.proposalState === "pending")) {
+        lines.push(`対処: 承認窓口に届いている分類チケット（channels.classify）を承認すると、以降のメンションで起きるようになります（承認ID: ${approvalId}）。社外と共有されているなら却下してください。`);
+      } else if (approvalId && input.proposalState === "decided") {
+        lines.push(`分類チケットは処理済みです（承認ID: ${approvalId}）。変える場合は管理エージェントで channels.classify を依頼してください。`);
+      } else if (ref) {
+        lines.push(`対処: 管理エージェントで channels.classify（surface=${ref.surface}, externalId=${ref.externalId}）を依頼し、承認してください。`);
+      } else {
+        lines.push(`対処: 管理エージェントで channels.classify を依頼し、承認してください。`);
+      }
+      return lines.join("\n");
+    }
     case "proposal_rate_limited":
       return [
         `⚠️ Staffpass: チャネル分類の自動提案が 1 時間あたりの上限（${limitText(input.limit)}件）に達しました`,
@@ -204,7 +225,7 @@ export async function notifyChannelStuck(input: StuckNoticeInput): Promise<Stuck
       : null;
     const reason = code(input.reason, "unknown");
     const key = noticeKey(input, ref);
-    const windowSeconds = input.kind === "unregistered_channel_denied" ? DENY_NOTICE_WINDOW_SECONDS : OTHER_NOTICE_WINDOW_SECONDS;
+    const windowSeconds = input.kind === "unregistered_channel_denied" || input.kind === "unclassified_channel_wake_skipped" ? DENY_NOTICE_WINDOW_SECONDS : OTHER_NOTICE_WINDOW_SECONDS;
     if (!(await takeSlot(orgId, key, windowSeconds))) return { status: "suppressed" };
 
     // H1: per-org hourly cap. The proposal-cap summary is itself capped (once
