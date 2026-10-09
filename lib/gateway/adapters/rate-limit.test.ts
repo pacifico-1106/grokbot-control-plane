@@ -62,8 +62,9 @@ describe("rateLimitedBody (returned to the AI)", () => {
       retryAfterSeconds: 42,
       providerError: "ratelimited",
     });
-    expect(String(body.nextStep)).toContain("42 seconds");
-    expect(String(body.nextStep)).toMatch(/Nothing was posted/);
+    expect(String(body.nextStep)).toContain("42秒");
+    expect(String(body.nextStepEn)).toContain("42 seconds");
+    expect(String(body.nextStepEn)).toMatch(/Nothing was posted/);
     expect(String(body.message)).toContain("42");
   });
 });

@@ -56,12 +56,20 @@ export function retryAfterSecondsFromHeaders(headers: Headers, nowMs: number = D
   return RETRY_AFTER_DEFAULT_SECONDS;
 }
 
+/**
+ * Japanese next step (木村 #290, 2026-10-09: Grok reads the tool-result body):
+ * wait N seconds, then re-run with the same jobId without changing the content.
+ */
 export function rateLimitedNextStep(seconds: number): string {
+  return `投稿されていません（投稿先のレート制限）。${seconds}秒待ってから、同じ jobId で、内容を変えずにもう一度実行してください。それより早く再実行しないでください。`;
+}
+
+export function rateLimitedNextStepEn(seconds: number): string {
   return `Nothing was posted: the provider rate-limited this request. Wait at least ${seconds} seconds, then retry the same request once (it is safe to retry). Do not retry earlier.`;
 }
 
 export function rateLimitedMessageJa(seconds: number): string {
-  return `投稿先のレート制限のため投稿していません。${seconds}秒以上待ってから同じ内容で再送してください。`;
+  return `投稿先のレート制限のため投稿していません。${seconds}秒以上待ってから、同じ jobId・同じ内容で再実行してください。`;
 }
 
 /** Error body returned to the AI for a rate-limited (not sent) post. */
@@ -78,6 +86,7 @@ export function rateLimitedBody(input: { retryAfterSeconds: number; providerErro
     nextAction: "retry_later",
     retryAfterSeconds: seconds,
     nextStep: rateLimitedNextStep(seconds),
+    nextStepEn: rateLimitedNextStepEn(seconds),
   };
 }
 

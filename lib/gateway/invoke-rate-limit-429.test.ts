@@ -117,7 +117,9 @@ function expectRateLimitedBody(body: Record<string, unknown>, seconds: number) {
   expect(body.retryable).toBe(true);
   expect(body.nextAction).toBe("retry_later");
   expect(body.retryAfterSeconds).toBe(seconds);
-  expect(String(body.nextStep)).toContain(`${seconds} seconds`);
+  expect(String(body.nextStep)).toContain(`${seconds}秒`);
+  expect(String(body.nextStep)).toContain("同じ jobId");
+  expect(String(body.nextStepEn)).toContain(`${seconds} seconds`);
 }
 
 describe("direct conversation post", () => {

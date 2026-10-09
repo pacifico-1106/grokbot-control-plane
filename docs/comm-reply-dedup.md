@@ -200,9 +200,11 @@ Reverses the 10/4 call ("ratelimited stays unknown"):
 
 | Answer | sendState | AI gets |
 |---|---|---|
-| Slack `chat.postMessage` `ok:false` + `ratelimited` / `rate_limited`, HTTP < 500 | `not_sent` (row released) | `429 provider_rate_limited`, `retryable: true`, `nextAction: "retry_later"`, `retryAfterSeconds`, `nextStep` naming the wait |
+| Slack `chat.postMessage` `ok:false` + `ratelimited` / `rate_limited`, HTTP < 500 | `not_sent` (row released) | `429 provider_rate_limited`, `retryable: true`, `nextAction: "retry_later"`, `retryAfterSeconds`, Japanese `nextStep` (wait N seconds, re-run with the same jobId without changing the content; English copy in `nextStepEn`) |
 | X HTTP 429 with a JSON body | `not_sent` (row released) | same |
 | Any JSON body on a 5xx (incl. `ratelimited`), 408, timeout, network error after connect, non-JSON answer | `unknown` (row kept uncertain under v2) | `502 post_outcome_unknown` (v2) |
+
+**Through MCP (`staffpass_invoke`)** the rate limit is a normal tool result, never a JSON-RPC error and never only an HTTP status: HTTP 200, JSON-RPC `result` with `isError: true`, and the body above (`code: "provider_rate_limited"`, `retryAfterSeconds`, Japanese `nextStep`) in both `content[0].text` and `structuredContent`. Some MCP clients treat JSON-RPC errors / non-2xx as connection errors, and Grok reads the tool-result body. The gateway HTTP path (`POST /api/gateway/invoke`) keeps HTTP 429 with the same body. Pinned by `app/api/mcp/rate-limit-tool-result.test.ts`.
 
 - `retryAfterSeconds`: `Retry-After` (delta seconds or HTTP date), else
   `x-rate-limit-reset` (epoch seconds), else 60; clamped to 1–3600
