@@ -57,10 +57,27 @@ function approvalToolName(approval: ApprovalRequest): string {
   return String(approval.metadata?.adminTool || approval.tool || "").trim();
 }
 
+/**
+ * The stored result when the ticket already ran successfully (same rule as
+ * claim_approval_execution: metadata.fulfillment.ok / adminFulfillment.ok).
+ * 木村 2026-10-09 23:48: such a ticket — even an old one with no execution
+ * claim — only hands back that result; nothing runs, writes or sends again.
+ */
+function storedSuccess<T extends Result>(approval: ApprovalRequest | null | undefined): T | null {
+  const metadata = approval?.metadata ?? {};
+  for (const key of ["adminFulfillment", "fulfillment"] as const) {
+    const value = metadata[key];
+    if (value && typeof value === "object" && (value as { ok?: unknown }).ok === true) return value as T;
+  }
+  return null;
+}
+
 /** All immediate, MCP reinvoke, proxy and W2 fulfillment shares this DB claim. */
 export async function executeApproval<T extends Result>(
   approval: ApprovalRequest, execute: () => Promise<T | null>
 ): Promise<T | null> {
+  const already = storedSuccess<T>(approval);
+  if (already) return already;
   await assertApprovalExecutionAuthority(approval);
   const workflow = await canFulfillApproval(approval);
   if (!workflow.canFulfill) throw new Error(workflow.reason);
@@ -71,6 +88,10 @@ export async function executeApproval<T extends Result>(
     const prior = demoClaims.get(demoKey);
     if (prior?.state === "succeeded") return (prior.result ?? null) as T | null;
     if (prior && prior.state !== "failed") throw new Error(`approval_execution_${prior.state}`);
+    // Mirror the SQL claim: a fresh row that already shows success is "succeeded".
+    const fresh = await demoGetApproval(approval.id);
+    const freshDone = fresh && fresh.orgId === approval.orgId ? storedSuccess<T>(fresh) : null;
+    if (freshDone) return freshDone;
     demoClaims.set(demoKey, { state: "running" });
     const current = await demoGetApproval(approval.id);
     if (current && current.orgId === approval.orgId) Object.assign(approval, current);
