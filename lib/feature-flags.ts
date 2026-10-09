@@ -610,3 +610,23 @@ export function isMcpEventsEnabled(): boolean {
 export function isWebhookHardeningEnabled(): boolean {
   return parseFlag(process.env.WEBHOOK_HARDENING_ENABLED);
 }
+
+/**
+ * 木村 2026-10-09 B (triage #3): needs_approval answers carry approvalReasons[]
+ * (every reason, structured), tickets store the same list, every approval card
+ * shows one 「承認が必要な理由」 line, and the employee MCP lists the tenant's
+ * sensitive topics read-only (staffpass_sensitive_topics). Default OFF.
+ */
+export function isApprovalReasonsEnabled(): boolean {
+  return parseFlag(process.env.APPROVAL_REASONS_ENABLED);
+}
+
+/**
+ * 木村 2026-10-09 B (triage #1④): comm.send with no explicit class defaults to
+ * internal + summary only when the destination is internal in the credential
+ * org's channel ledger (internal channel / internal DM route) and the resolved
+ * audience is internal. Default OFF (changes a default → new flag).
+ */
+export function isCommSendInternalDefaultEnabled(): boolean {
+  return parseFlag(process.env.COMM_SEND_INTERNAL_DEFAULT_ENABLED);
+}

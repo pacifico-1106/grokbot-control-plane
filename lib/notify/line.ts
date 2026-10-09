@@ -1,3 +1,4 @@
+import { cardApprovalReasonsLine } from "@/lib/approvals/approval-reasons";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { attachmentCardLine, readCardAttachment, withoutAttachmentSummaryLine } from "@/lib/approvals/attachment-card";
 import { LINE_APPROVAL_SUMMARY_MAX_CHARS } from "@/lib/approvals/summary-limits";
@@ -86,6 +87,7 @@ export async function sendApprovalToLineChannel(
   if (!cfg.destinationId || !approval.telegramRef) return { ok: false, skipped: true };
   const altText = `承認依頼: ${approval.title}`;
   const attachment = readCardAttachment(approval.metadata);
+  const reasonsLine = cardApprovalReasonsLine(approval.metadata, approval.summary);
   const result = await callLine(channel, "/v2/bot/message/push", {
     to: cfg.destinationId,
     messages: [{
@@ -106,6 +108,8 @@ export async function sendApprovalToLineChannel(
             // Approved attachment (snapshot filename + size only), its own row
             // so the 500-char summary cut cannot hide it. Flex text is plain.
             ...(attachment ? [{ type: "text", text: attachmentCardLine(attachment), size: "sm", wrap: true }] : []),
+            // 木村 B: every reason, own row (plain Flex text).
+            ...(reasonsLine ? [{ type: "text", text: reasonsLine, size: "sm", wrap: true }] : []),
             { type: "text", text: truncate(withoutAttachmentSummaryLine(approval.summary, approval.metadata), LINE_APPROVAL_SUMMARY_MAX_CHARS), size: "sm", color: "#666666", wrap: true },
           ],
         },

@@ -188,6 +188,8 @@ describe("H1 Telegram: my_chat_member.from must be a known member", () => {
   test("adder with a verified voter binding on this inbox → proposal", async () => {
     setJoinDepsForTests({
       telegramVoterMember: async (orgId, channelKey, userId) => (orgId === ORG && channelKey === "nc_tg_inbox" && userId === "222" ? "member_222" : null),
+      // #280 pre-flag: the bound member must be active in this org (fixture member)
+      memberActiveInOrg: async (orgId, memberId) => orgId === ORG && memberId === "member_222",
     });
     const outcome = await handleTelegramMyChatMember(channel, update(222, -1001110000002));
     expect(outcome.state).toBe("created");
