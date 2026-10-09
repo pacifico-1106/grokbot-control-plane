@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { createHash } from "node:crypto";
 import { getEnabledConversationAdapter } from "@/lib/data/conversation-adapters";
 import {
   getEnabledNotificationChannels,
@@ -89,7 +90,8 @@ const SLACK_USER_TEAM_CACHE_MAX = 5_000;
 
 /**
  * Cross-invoke cache: ONLY verified (non-null) team ids are stored, keyed by
- * (orgId, slackUserId) so one org's answer can never serve another org.
+ * (orgId, bot-token fingerprint, slackUserId) so one org's answer can never
+ * serve another org and a token switch invalidates earlier answers at once.
  * Unverifiable results (no token, Slack error, timeout) are never cached here,
  * so they cannot outlive the invoke that saw them, and they stay "external".
  */
@@ -101,8 +103,17 @@ const verifiedTeamCache = new Map<string, { teamId: string; expiresAt: number }>
  */
 const invokeMemo = new AsyncLocalStorage<Map<string, Promise<string | null>>>();
 
-function slackUserTeamKey(orgId: string, slackUserId: string): string {
-  return JSON.stringify([orgId, slackUserId.toUpperCase()]);
+/**
+ * Short, non-reversible bot-token fingerprint (first 12 hex chars of sha256).
+ * A token switch (reinstall, other workspace) changes the key, so earlier answers
+ * stop being served immediately. The raw token never enters a key or a log line.
+ */
+function botTokenFingerprint(token: string): string {
+  return createHash("sha256").update(token).digest("hex").slice(0, 12);
+}
+
+function slackUserTeamKey(orgId: string, tokenFingerprint: string, slackUserId: string): string {
+  return JSON.stringify([orgId, tokenFingerprint, slackUserId.toUpperCase()]);
 }
 
 /** Run fn with a fresh per-invoke users.info memo (nested scopes reuse the outer one). */
@@ -113,6 +124,10 @@ export function withSlackUserTeamMemo<T>(fn: () => Promise<T>): Promise<T> {
 
 export function resetSlackUserTeamCacheForTests(): void {
   verifiedTeamCache.clear();
+}
+
+export function slackUserTeamCacheKeysForTests(): string[] {
+  return [...verifiedTeamCache.keys()];
 }
 
 /**
@@ -127,7 +142,9 @@ export async function fetchVerifiedSlackUserTeamId(
 ): Promise<string | null> {
   const user = slackUserId.trim();
   if (!orgId || !user) return null;
-  const key = slackUserTeamKey(orgId, user);
+  const token = await resolveOrgSlackBotToken(orgId);
+  if (!token) return null;
+  const key = slackUserTeamKey(orgId, botTokenFingerprint(token), user);
   const now = Date.now();
   const cached = verifiedTeamCache.get(key);
   if (cached) {
@@ -137,7 +154,7 @@ export async function fetchVerifiedSlackUserTeamId(
   const memo = invokeMemo.getStore();
   const pending = memo?.get(key);
   if (pending) return pending;
-  const lookup = fetchSlackUserTeamIdUncached(orgId, user).then((teamId) => {
+  const lookup = fetchSlackUserTeamIdUncached(token, user).then((teamId) => {
     if (teamId) {
       if (verifiedTeamCache.size >= SLACK_USER_TEAM_CACHE_MAX) {
         const oldest = verifiedTeamCache.keys().next().value;
@@ -151,9 +168,7 @@ export async function fetchVerifiedSlackUserTeamId(
   return lookup;
 }
 
-async function fetchSlackUserTeamIdUncached(orgId: string, user: string): Promise<string | null> {
-  const token = await resolveOrgSlackBotToken(orgId);
-  if (!token) return null;
+async function fetchSlackUserTeamIdUncached(token: string, user: string): Promise<string | null> {
   try {
     const url = `https://slack.com/api/users.info?user=${encodeURIComponent(user)}`;
     const response = await fetch(url, {
