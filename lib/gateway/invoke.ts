@@ -6,8 +6,9 @@ import {
   formatArtifactLines,
   inferRiskForTool,
 } from "@/lib/approvals/summary";
+import { PROVIDER_RATE_LIMITED, RETRY_AFTER_DEFAULT_SECONDS, rateLimitedBody } from "@/lib/gateway/adapters/rate-limit";
 import { readThroughFromBody } from "@/lib/thread-guard/read-through";
-import { THREAD_GUARD_UNAVAILABLE, THREAD_MOVED_ON, beginThreadSend, threadGuardStopBody, type ThreadGuardStop } from "@/lib/thread-guard/guard";
+import { NEXT_STEP_READ_POINT_UNKNOWN, THREAD_GUARD_UNAVAILABLE, THREAD_MOVED_ON, beginThreadSend, threadGuardStopBody, type ThreadGuardStop } from "@/lib/thread-guard/guard";
 import { closedByThreadMovedOn } from "@/lib/approvals/closed-without-send";
 import { auditThreadGuardHeld, auditThreadGuardStop, isThreadGuardCode, type ThreadGuardAuditCtx } from "@/lib/thread-guard/respond";
 import { conversationKeyInputFromBody } from "@/lib/comm-reply-dedup/conversation-key";
@@ -717,6 +718,12 @@ async function secretAuditOrgId(employeeId: string): Promise<string | null> {
     return null;
   }
 }
+
+/** 木村 #293 decision 2: approved replies on surfaces the gateway cannot deliver to. */
+const APPROVED_REPLY_SURFACE_NOT_SUPPORTED = "approved_reply_surface_not_supported";
+const APPROVED_REPLY_SURFACE_NOT_SUPPORTED_JA = "この窓口では承認後の返信にまだ対応していません。承認済みの返信は送信していません。";
+const APPROVED_REPLY_SURFACE_NOT_SUPPORTED_NEXT_STEP =
+  "この窓口では承認後の返信にまだ対応していません。この承認IDで再実行しても送信されません。必要なら承認不要の内容で返信するか、担当者に直接対応を依頼してください。";
 
 /**
  * Core Gateway enforcement. Callers must already resolve employeeId from an
@@ -2244,11 +2251,29 @@ async function runGatewayInvokeInner(
     const fulfilled = await fulfillApprovedInvoke(priorApproval, {
       attachmentHandledByCaller: isAudienceGatedTool(toolDef),
     });
+    // Rate-limited (nothing posted): say how long to wait; re-running earlier stops before the provider.
+    if (fulfilled && !fulfilled.ok && fulfilled.error === PROVIDER_RATE_LIMITED) {
+      return jsonResult({ ...rateLimitedBody({ retryAfterSeconds: fulfilled.retryAfterSeconds ?? RETRY_AFTER_DEFAULT_SECONDS }),
+        approvalId: priorApproval.id, needs_approval: false, employeeId, tool, purpose, jobId }, 429);
+    }
     if (fulfilled && !fulfilled.ok && isThreadGuardCode(fulfilled.error)) {
       // Thread single-flight stopped the approved post at fulfil (nothing sent).
       return jsonResult({ ...threadGuardStopBody(fulfilled.error, fulfilled.threadGuard ?? {}),
         approvalId: priorApproval.id, needs_approval: false, employeeId, tool, purpose, jobId },
         fulfilled.error === THREAD_GUARD_UNAVAILABLE ? 503 : 409);
+    }
+    if (!fulfilled?.ok && isAudienceGatedTool(toolDef)) {
+      // Approved LINE / Telegram / mail replies: the gateway has no delivery
+      // for them yet, so they stay fail-closed (nothing sent). Tell the AI so
+      // in plain words instead of a Slack-only code (木村 #293 decision 2).
+      const approvedSurface = (parseInvokeSnapshot(priorApproval.metadata)?.conversation?.surface || "").toLowerCase();
+      if (approvedSurface && approvedSurface !== "slack") {
+        return jsonResult({ ok: false, code: fulfilled?.error || "approval_execution_failed",
+          error: fulfilled?.error || "approval_execution_failed", reasonCode: APPROVED_REPLY_SURFACE_NOT_SUPPORTED,
+          message: APPROVED_REPLY_SURFACE_NOT_SUPPORTED_JA, retryable: false, nextAction: "stop",
+          nextStep: APPROVED_REPLY_SURFACE_NOT_SUPPORTED_NEXT_STEP, approvalId: priorApproval.id,
+          employeeId, tool, purpose, jobId }, 409);
+      }
     }
     if (!fulfilled?.ok) return jsonResult({ ok: false, code: fulfilled?.error || "approval_execution_failed",
       error: fulfilled?.error || "approval_execution_failed", employeeId, tool, purpose, jobId }, 409);
@@ -2271,6 +2296,8 @@ async function runGatewayInvokeInner(
   // approval of a needs_approval egress. Deny stays fail-closed above.
   // Notify inbox is a different plane — never post approvals through this adapter.
   let conversationDelivery: ConversationDelivery | undefined;
+  /** #293 review item 2: no read point at all → sent, with a nextStep to pass readThroughTs. */
+  let threadGuardHint: { readPoint: "unknown"; nextStep: string } | undefined;
   let threadTsSource: "client" | "wake_stash" | "none" | undefined;
   if (isAudienceGatedTool(toolDef)) {
     const ctx = parseConversationContext(body, principalOrgId);
@@ -2462,6 +2489,9 @@ async function runGatewayInvokeInner(
         orgId: orgId || employee.orgId, employeeId,
         credentialId: input.credentialId || employee.credentialId, purpose, tool, jobId, phase: "invoke",
       });
+      if (threadSend.kind === "held" && threadSend.readPointUnknown) {
+        threadGuardHint = { readPoint: "unknown", nextStep: NEXT_STEP_READ_POINT_UNKNOWN };
+      }
       let threadSent: { sent: boolean; messageTs?: string } = { sent: false };
       try {
       // COMM_REPLY_DEDUP_ENABLED: atomic claim right before the post (two
@@ -2526,6 +2556,32 @@ async function runGatewayInvokeInner(
             jobId,
           },
           502
+        );
+      }
+      if (!posted.ok && posted.retryAfterSeconds !== undefined) {
+        // Rate-limited (not_sent, claim released above): no automatic retry —
+        // the AI is told the provider's wait.
+        await appendAuditEvent({
+          orgId: orgId || employee.orgId,
+          employeeId,
+          credentialId: input.credentialId || employee.credentialId,
+          action: "slack.post_failed",
+          purpose,
+          summary: "Slack会話投稿がレート制限で未送信（待機後に再送可）",
+          metadata: { tool, jobId, error: posted.error, dest, code: PROVIDER_RATE_LIMITED, retryAfterSeconds: posted.retryAfterSeconds },
+        });
+        return jsonResult(
+          {
+            ...rateLimitedBody({ retryAfterSeconds: posted.retryAfterSeconds, providerError: posted.error }),
+            needs_approval: false,
+            egress,
+            ...(voice ? { voice } : {}),
+            employeeId,
+            tool,
+            purpose,
+            jobId,
+          },
+          429
         );
       }
       if (!posted.ok) {
@@ -2593,7 +2649,11 @@ async function runGatewayInvokeInner(
       // Surfaces without a gateway post (LINE / Telegram / mail): the allowed
       // reply is delivered by the caller, so it is recorded here as sent.
       // Thread single-flight: same lease + moved-on check; the allowed reply is
-      // recorded as this employee's latest post (server time) and the lease released.
+      // recorded as this employee's latest post (server time). The caller's
+      // delivery cannot be observed (no receipt), so the lease is HELD until its
+      // TTL rather than released at allowance (木村 #286 pre-flag item 3):
+      // another job reading the thread before the delivery lands gets
+      // thread_busy, not a stale "nothing new".
       const threadSend = await beginThreadSend({
         orgId: orgId || employee.orgId,
         employeeId,
@@ -2611,6 +2671,9 @@ async function runGatewayInvokeInner(
         orgId: orgId || employee.orgId, employeeId,
         credentialId: input.credentialId || employee.credentialId, purpose, tool, jobId, phase: "invoke",
       });
+      if (threadSend.kind === "held" && threadSend.readPointUnknown) {
+        threadGuardHint = { readPoint: "unknown", nextStep: NEXT_STEP_READ_POINT_UNKNOWN };
+      }
       let allowed = false;
       try {
         if (commReplyDedup.kind !== "off") {
@@ -2628,7 +2691,7 @@ async function runGatewayInvokeInner(
         }
         allowed = true;
       } finally {
-        if (threadSend.kind === "held") await threadSend.handle.finish({ sent: allowed });
+        if (threadSend.kind === "held") await threadSend.handle.finish({ sent: allowed }, { holdLease: allowed });
       }
     }
   }
@@ -2859,21 +2922,29 @@ async function runGatewayInvokeInner(
         );
       }
       if (!posted.ok) {
+        const snsWait = posted.retryAfterSeconds;
         await appendAuditEvent({
           orgId: orgId || employee.orgId,
           employeeId,
           credentialId: input.credentialId || employee.credentialId,
           action: "sns.publish_failed",
           purpose,
-          summary: "SNS投稿に失敗",
+          summary: snsWait !== undefined ? "SNS投稿がレート制限で未送信（待機後に再送可）" : "SNS投稿に失敗",
           metadata: {
             tool,
             jobId,
             error: posted.error,
             surface: posted.surface,
             phase: priorApprovalOk ? "reinvoke" : "auto",
+            ...(snsWait !== undefined ? { code: PROVIDER_RATE_LIMITED, retryAfterSeconds: snsWait } : {}),
           },
         });
+        if (snsWait !== undefined) {
+          return jsonResult(
+            { ...rateLimitedBody({ retryAfterSeconds: snsWait, providerError: posted.error }), needs_approval: false, employeeId, tool, purpose, jobId },
+            429
+          );
+        }
         return jsonResult(
           {
             ok: false,
@@ -3327,6 +3398,7 @@ async function runGatewayInvokeInner(
       ? { projectAccess: projectScope.projectAccess }
       : {}),
     conversationDelivery,
+    ...(threadGuardHint ? { threadGuard: threadGuardHint } : {}),
     snsDelivery,
     ...(duplicateWarning ? { duplicateWarning } : {}),
     result:

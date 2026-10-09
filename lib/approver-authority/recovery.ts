@@ -18,7 +18,7 @@ import { getApprovalById } from "@/lib/data/approvals";
 import { mapApprovalRow } from "@/lib/data/mappers";
 import { demoGetApproval, demoUpdateApproval } from "@/lib/data/demo-approvals-store";
 import { parseAdminFulfillment } from "@/lib/admin-mcp/fulfill-admin";
-import { checkApproverAuthority } from "./verify";
+import { checkApproverAuthorityDetailed } from "./verify";
 import { isRequiredApproverKind } from "./targets";
 
 export type RevokeUnrecordedActor =
@@ -27,7 +27,10 @@ export type RevokeUnrecordedActor =
 
 export type RevokeUnrecordedResult =
   | { ok: true; approval: ApprovalRequest }
-  | { ok: false; code: "approval_not_found" | "not_recoverable" | "actor_not_owner" | "revoke_failed" };
+  | {
+      ok: false;
+      code: "approval_not_found" | "not_recoverable" | "actor_not_owner" | "revoke_failed" | "approver_authority_unavailable";
+    };
 
 /** approved + required class + no recorded approver + never fulfilled. */
 export function isUnrecordedApprovedTicket(approval: ApprovalRequest): boolean {
@@ -52,10 +55,15 @@ export async function revokeUnrecordedApproval(input: {
 
   if (input.actor.kind === "owner") {
     const memberId = (input.actor.memberId || "").trim();
-    const decision = memberId
-      ? await checkApproverAuthority({ orgId, memberId, requiredKind: "owner", requesterMemberIds: [] })
+    const checked = memberId
+      ? await checkApproverAuthorityDetailed({ orgId, memberId, requiredKind: "owner", requesterMemberIds: [] })
       : null;
-    if (!decision || decision.outcome !== "allow") return { ok: false, code: "actor_not_owner" };
+    // 2026-10-10 item 2(b): before migration 20261005500000 the owner check
+    // RPC does not exist. Say so instead of "not an owner"; nothing is written.
+    // Not gated on the flag: after a flag rollback the RPC exists and the
+    // recovery must still work.
+    if (checked?.rpcMissing) return { ok: false, code: "approver_authority_unavailable" };
+    if (!checked || checked.decision.outcome !== "allow") return { ok: false, code: "actor_not_owner" };
   }
   if (!isUnrecordedApprovedTicket(approval)) return { ok: false, code: "not_recoverable" };
 
@@ -121,4 +129,28 @@ export const REVOKE_UNRECORDED_MESSAGES_JA: Record<Exclude<RevokeUnrecordedResul
   not_recoverable: "この申請は取り消しの対象ではありません（承認済みで承認者の記録がなく、未実行の申請だけが対象です）。",
   actor_not_owner: "この取り消しはその組織のオーナーだけが行えます。",
   revoke_failed: "取り消しに失敗しました。時間をおいて再度お試しください。",
+  approver_authority_unavailable:
+    "この環境には承認者の権限チェック（migration 20261005500000）がまだ入っていないため、この取り消しは使えません。",
 };
+
+/** What to do next, for codes where the caller can act (shown with the message). */
+export const REVOKE_UNRECORDED_NEXT_STEP_JA: Partial<Record<Exclude<RevokeUnrecordedResult, { ok: true }>["code"], string>> = {
+  approver_authority_unavailable:
+    "この取り消しが必要になる申請は、migration 20261005500000 を入れるまで作られないので、今は対応は要りません。入れたあとで必要なら、もう一度お試しください。",
+};
+
+/** HTTP status for the revoke routes. */
+export function revokeUnrecordedHttpStatus(code: Exclude<RevokeUnrecordedResult, { ok: true }>["code"]): number {
+  switch (code) {
+    case "actor_not_owner":
+      return 403;
+    case "approval_not_found":
+      return 404;
+    case "not_recoverable":
+      return 409;
+    case "approver_authority_unavailable":
+      return 503;
+    default:
+      return 500;
+  }
+}

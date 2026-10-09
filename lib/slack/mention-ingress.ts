@@ -20,6 +20,7 @@
  * - Records sealithHandoff intent in wake metadata (suggest | required | off)
  */
 
+import { recordThreadWake } from "@/lib/thread-guard/guard";
 import { mcpHandoffWakeAuditMeta, withMcpHandoff, type McpHandoff } from "@/lib/mcp/endpoint-handoff";
 import { appendAuditEvent } from "@/lib/data/audit";
 import { getEffectiveIngressHandoffPolicy } from "@/lib/data/ingress-handoff";
@@ -582,6 +583,20 @@ async function postWake(
         parentTs: payload.ts,
         eventId: payload.eventId,
       });
+    }
+
+    // Thread single-flight (#293 review item 2): the delivered wake's ts is this
+    // employee's read point for the thread when the reply carries none. Flag
+    // OFF → no-op. Reply thread = the wake's thread (or the mention itself),
+    // plus the channel root for a root mention.
+    if (payload.ts) {
+      const keyFor = (threadId: string | undefined) => ({
+        orgId: target.orgId, surface: "slack" as const, slackChannelId: payload.channel, threadId,
+      });
+      await recordThreadWake({ orgId: target.orgId, employeeId: target.employeeId, keyInput: keyFor(payload.thread_ts || payload.ts), ts: payload.ts });
+      if (!payload.thread_ts) {
+        await recordThreadWake({ orgId: target.orgId, employeeId: target.employeeId, keyInput: keyFor(undefined), ts: payload.ts });
+      }
     }
 
     // Add :eyes: reaction to indicate wake accepted (flag-gated, best-effort)

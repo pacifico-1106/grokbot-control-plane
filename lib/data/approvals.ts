@@ -17,6 +17,7 @@ import {
   isDurableDemoApprovalsStore,
 } from "./demo-approvals-store";
 import { isDemoMode } from "../mode";
+import { isThreadSingleFlightEnabled } from "@/lib/feature-flags";
 import { createSupabaseAdminClient } from "../supabase";
 import { mapApprovalRow } from "./mappers";
 import type { ApprovalRequest } from "../types";
@@ -870,7 +871,15 @@ export async function listPendingApprovalsForTools(input: {
  * Close an approval WITHOUT sending: pending|approved → superseded|expired.
  * Conditional on the current status (a concurrent approve / fulfill wins), so
  * it never reopens or overrides a decided ticket. Returns the closed row or
- * null when the status had already moved. Metadata gets `closedWithoutSend`.
+ * null when the status had already moved (or the id is not this org's).
+ * The status, resolved_at and `closedWithoutSend` metadata land in ONE write
+ * (木村 #286 pre-flag item 5: two writes left "superseded" with no reason when
+ * the second failed): close_approval_without_send (migration 20261009150000,
+ * jsonb merge in the same UPDATE), only with THREAD_SINGLE_FLIGHT_ENABLED ON.
+ * Flag OFF, or the RPC missing (PGRST202): main's procedure — status-conditioned
+ * UPDATE, then merge_approval_metadata (atomic jsonb merge; never a
+ * read-all-then-write-back). Throws when the status write fails — nothing is
+ * changed then.
  */
 export async function closeApprovalWithoutSend(input: {
   approval: Pick<ApprovalRequest, "id" | "orgId">;
@@ -894,6 +903,24 @@ export async function closeApprovalWithoutSend(input: {
   }
   const admin = createSupabaseAdminClient();
   if (!admin) throw new Error("supabase_not_configured");
+  // THREAD_SINGLE_FLIGHT_ENABLED ON: status + closedWithoutSend in ONE write via
+  // close_approval_without_send (migration 20261009150000). Flag OFF: the new
+  // RPC is never called (identical to main). RPC missing (PGRST202 — migration
+  // not applied yet): fall back to main's procedure below. Never a
+  // read-all-metadata-then-write-back (it overwrote concurrent metadata).
+  if (isThreadSingleFlightEnabled()) {
+    const rpc = await admin.rpc("close_approval_without_send", {
+      p_id: approval.id,
+      p_org: approval.orgId,
+      p_from: [...from],
+      p_to: to,
+      p_patch: input.meta,
+    });
+    if (!rpc.error) return rpc.data ? mapApprovalRow(rpc.data as Record<string, unknown>) : null;
+    if (!isMissingFunctionError(rpc.error)) throw new Error("approval_close_failed");
+  }
+  // main's procedure: status-conditioned UPDATE of the status only, then a
+  // jsonb merge of closedWithoutSend (merge_approval_metadata).
   const { data, error } = await admin
     .from("approval_requests")
     .update({ status: to, resolved_at: at })
@@ -914,4 +941,10 @@ export async function closeApprovalWithoutSend(input: {
     // Status is already closed; the audit event carries the reason.
   }
   return closed;
+}
+
+function isMissingFunctionError(error: { code?: string; message?: string } | null | undefined): boolean {
+  if (!error) return false;
+  if (error.code === "PGRST202" || error.code === "42883") return true;
+  return /could not find the function|function .* does not exist/i.test(String(error.message ?? ""));
 }

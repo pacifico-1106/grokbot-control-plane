@@ -1,6 +1,11 @@
 import { NextResponse } from "next/server";
 import { getSuperAdminAccess } from "@/lib/admin/access";
-import { REVOKE_UNRECORDED_MESSAGES_JA, revokeUnrecordedApproval } from "@/lib/approver-authority/recovery";
+import {
+  REVOKE_UNRECORDED_MESSAGES_JA,
+  REVOKE_UNRECORDED_NEXT_STEP_JA,
+  revokeUnrecordedApproval,
+  revokeUnrecordedHttpStatus,
+} from "@/lib/approver-authority/recovery";
 import { publicApproval } from "@/lib/approvals/public";
 
 export const runtime = "nodejs";
@@ -18,8 +23,11 @@ export async function POST(_req: Request, ctx: { params: Promise<{ orgId: string
   const { orgId, approvalId } = await ctx.params;
   const result = await revokeUnrecordedApproval({ orgId, approvalId, actor: { kind: "operator", email: access.actor.email } });
   if (!result.ok) {
-    const status = result.code === "approval_not_found" ? 404 : result.code === "not_recoverable" ? 409 : 500;
-    return NextResponse.json({ ok: false, error: result.code, message: REVOKE_UNRECORDED_MESSAGES_JA[result.code] }, { status });
+    const nextStep = REVOKE_UNRECORDED_NEXT_STEP_JA[result.code];
+    return NextResponse.json(
+      { ok: false, error: result.code, message: REVOKE_UNRECORDED_MESSAGES_JA[result.code], ...(nextStep ? { nextStep } : {}) },
+      { status: revokeUnrecordedHttpStatus(result.code) }
+    );
   }
   return NextResponse.json({ ok: true, approval: publicApproval(result.approval) });
 }

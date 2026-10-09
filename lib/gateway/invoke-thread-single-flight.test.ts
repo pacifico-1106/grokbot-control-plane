@@ -20,6 +20,7 @@ import { linkAgent } from "@/lib/data/bindings";
 import { runGatewayInvoke } from "@/lib/gateway/invoke";
 import { fulfillIfApproved } from "@/lib/approvals/fulfill";
 import { getApprovalById, listAuditEvents, resolveApproval } from "@/lib/data";
+import { updateApprovalMetadata } from "@/lib/data/approvals";
 import { upsertConversationAdapter } from "@/lib/data/conversation-adapters";
 import { upsertOrgChannel, upsertOrgParty } from "@/lib/data/directory";
 import { demoCommReplySendsForTests, resetDemoCommReplySends } from "@/lib/data/comm-reply-sends";
@@ -329,6 +330,9 @@ describe("thread_moved_on", () => {
         args: { text, readThroughTs },
       }) as unknown as GatewayInvokeRequest;
     expect((await invoke(line(A_TEXT, old()))).httpStatus).toBe(200);
+    // pre-flag item 3: the caller-delivered lease is held for its TTL (delivery is not observable)
+    expect((await invoke(line(B_TEXT, fresh()))).body.code).toBe("thread_busy");
+    setThreadGuardClockForTests(() => Date.now() + 61_000);
     const stale = await invoke(line(B_TEXT, old()));
     expect(stale.httpStatus).toBe(409);
     expect(stale.body.code).toBe("thread_moved_on");
@@ -555,5 +559,354 @@ describe("approval sends: the same check at fulfil", () => {
     expect((await invoke(dm("comm.reply", A_TEXT))).httpStatus).toBe(200);
     expect((await approve(approvalId))?.ok).toBe(true);
     expect(posts.length).toBe(2);
+  });
+});
+
+/**
+ * 木村 2026-10-09 21:30 (#286 review): five fixes required BEFORE
+ * THREAD_SINGLE_FLIGHT_ENABLED goes ON. Each test closes one bypass.
+ */
+describe("pre-flag-ON fixes (木村 #286 follow-up)", () => {
+  const TG_CHAT = "-1001234500999";
+  const callerDelivered = (surface: "line" | "telegram" | "mail", text: string, readThroughTs?: string, jobId = jid(surface), tool = "comm.reply") =>
+    ({
+      tool,
+      purpose: "comm.internal",
+      jobId,
+      conversation:
+        surface === "line"
+          ? { surface: "line", orgId: DEMO_ORG.id, lineId: LINE_USER }
+          : surface === "telegram"
+            ? { surface: "telegram", orgId: DEMO_ORG.id, telegramChatId: TG_CHAT }
+            : { surface: "mail", orgId: DEMO_ORG.id, email: "yamada@example.com" },
+      args: { text, ...(readThroughTs ? { readThroughTs } : {}) },
+    }) as unknown as GatewayInvokeRequest;
+  const approveAs = async (id: string, by = "slack:U_APPROVER") => {
+    const approved = await resolveApproval(id, "approved", by, DEMO_ORG.id);
+    return approved ? fulfillIfApproved(approved, "approved") : null;
+  };
+  const later = (ms: number) => setThreadGuardClockForTests(() => Date.now() + ms);
+
+  describe("1. readThroughTs future window + cap at the receive time", () => {
+    function dmWithInbound(readThroughTs: string, inboundTs: string): GatewayInvokeRequest {
+      const b = dm("comm.send", B_TEXT, readThroughTs);
+      (b.conversation as Record<string, unknown>).ts = inboundTs;
+      return b;
+    }
+    test("a read point ~1 minute ahead (accepted by the old 120 s window) no longer skips moved_on at fulfil", async () => {
+      on();
+      recordSlack();
+      const res = await invoke(dmWithInbound(`${nowS() + 60}.000000`, old()));
+      expect(res.httpStatus).toBe(402);
+      const approvalId = String(res.body.approvalId);
+      expect((await invoke(dm("comm.reply", A_TEXT), "emp_comm2")).httpStatus).toBe(200);
+      const result = await approveAs(approvalId);
+      expect(result?.error).toBe("thread_moved_on");
+      expect((await getApprovalById(approvalId, DEMO_ORG.id))?.status).toBe("superseded");
+      expect(posts.length).toBe(1);
+    });
+    test("a read point inside the skew is capped at the time the request was received (an AI post after that counts)", async () => {
+      on();
+      recordSlack();
+      const res = await invoke(dmWithInbound(`${nowS() + 3}.000000`, old()));
+      expect(res.httpStatus).toBe(402);
+      const approvalId = String(res.body.approvalId);
+      // the fake Slack ts has second resolution: post in the next second
+      await new Promise((r) => setTimeout(r, 1005 - (Date.now() % 1000)));
+      expect((await invoke(dm("comm.reply", A_TEXT), "emp_comm2")).httpStatus).toBe(200);
+      expect((await approveAs(approvalId))?.error).toBe("thread_moved_on");
+      expect(posts.length).toBe(1);
+    });
+    test("flag OFF: the same approval still posts (unchanged)", async () => {
+      off();
+      recordSlack();
+      const res = await invoke(dmWithInbound(`${nowS() + 60}.000000`, old()));
+      const approvalId = String(res.body.approvalId);
+      expect((await invoke(dm("comm.reply", A_TEXT), "emp_comm2")).httpStatus).toBe(200);
+      expect((await approveAs(approvalId))?.ok).toBe(true);
+      expect(posts.length).toBe(2);
+    });
+  });
+
+  describe("2. same-job exemption only within 10 minutes of the job's first send", () => {
+    test("reusing a jobId after the window: its own old post counts → thread_moved_on", async () => {
+      on();
+      recordSlack();
+      const jobId = jid("reuse");
+      expect((await invoke(threadReply(A_TEXT, { readThroughTs: old(), jobId }))).httpStatus).toBe(200);
+      later(11 * 60_000);
+      const reused = await invoke(threadReply(B_TEXT, { readThroughTs: old(), jobId }));
+      expect(reused.httpStatus).toBe(409);
+      expect(reused.body.code).toBe("thread_moved_on");
+      expect(reused.body.postedBy).toBe("self");
+      expect(posts.length).toBe(1);
+    });
+    test("within the window the same job's multi-part reply still goes out; the anchor is the FIRST send", async () => {
+      on();
+      recordSlack();
+      const jobId = jid("multi2");
+      expect((await invoke(threadReply(A_TEXT, { readThroughTs: old(), jobId }))).httpStatus).toBe(200);
+      later(6 * 60_000);
+      expect((await invoke(threadReply(C_TEXT, { readThroughTs: old(), jobId }))).httpStatus).toBe(200);
+      later(11 * 60_000); // 11 min after the first send, 5 after the second: no longer exempt
+      expect((await invoke(threadReply(B_TEXT, { readThroughTs: old(), jobId }))).body.code).toBe("thread_moved_on");
+      expect(posts.length).toBe(2);
+    });
+    test("BOLA: another org's post recorded with the same job key never counts and never exempts", async () => {
+      on();
+      recordSlack();
+      expect(
+        await recordSelfPost({ orgId: OTHER_ORG, employeeId: "emp_other", threadKey: threadKey(), micros: BigInt(nowS() + 1) * BigInt(1_000_000), jobKey: "f".repeat(64) })
+      ).toBe(true);
+      expect((await invoke(threadReply(A_TEXT, { readThroughTs: old() }))).httpStatus).toBe(200);
+    });
+  });
+
+  // 木村 #293 review item 1: the approval path measures the same-job window
+  // from the approval's creation, not the execution clock.
+  test("2b. a late approval (executed > 10 min after creation) of the same job's continuation still goes out", async () => {
+    on();
+    recordSlack();
+    const jobId = jid("late-apr");
+    expect((await invoke(dm("comm.reply", A_TEXT, old(), jobId))).httpStatus).toBe(200);
+    const queued = await invoke(dm("comm.send", B_TEXT, old(), jobId));
+    expect(queued.httpStatus).toBe(402);
+    later(15 * 60_000);
+    const result = await approveAs(String(queued.body.approvalId));
+    expect(result?.ok).toBe(true);
+    expect((await getApprovalById(String(queued.body.approvalId), DEMO_ORG.id))?.status).not.toBe("superseded");
+    expect(posts.length).toBe(2);
+  });
+
+  // 木村 #293 review item 2: no readThroughTs and no inbound ts → the latest
+  // wake Staffpass delivered to this employee in this thread is the read point.
+  describe("2c. read point from the latest wake", () => {
+    const recordWake = async (employeeId: string, ts: string, orgId = DEMO_ORG.id) => {
+      const guard = (await import("@/lib/thread-guard/guard")) as Record<string, unknown>;
+      const fn = guard.recordThreadWake as undefined | ((i: unknown) => Promise<boolean>);
+      if (typeof fn !== "function") throw new Error("recordThreadWake missing");
+      return fn({ orgId, employeeId, keyInput: { orgId, surface: "slack", slackChannelId: CHANNEL, threadId: THREAD }, ts });
+    };
+    test("a wake exists: an AI post after the wake ts → thread_moved_on (the check applies)", async () => {
+      on();
+      recordSlack();
+      expect(await recordWake("emp_comm", old())).toBe(true);
+      expect((await invoke(threadReply(A_TEXT), "emp_comm2")).httpStatus).toBe(200);
+      const res = await invoke(threadReply(B_TEXT));
+      expect(res.httpStatus).toBe(409);
+      expect(res.body.code).toBe("thread_moved_on");
+      expect(posts.length).toBe(1);
+    });
+    test("a wake exists and nothing newer → sent, no read_point_unknown marker", async () => {
+      on();
+      recordSlack();
+      expect(await recordWake("emp_comm", `${nowS() - 5}.000001`)).toBe(true);
+      const res = await invoke(threadReply(A_TEXT));
+      expect(res.httpStatus).toBe(200);
+      const events = await listAuditEvents(DEMO_ORG.id, 80);
+      expect(events.some((e) => e.action === "thread_guard.read_point_unknown" && e.metadata?.jobId === res.body.jobId)).toBe(false);
+    });
+    test("no wake: sent as today, readPoint unknown audited, and the response tells the AI to pass readThroughTs next time", async () => {
+      on();
+      recordSlack();
+      const res = await invoke(threadReply(A_TEXT));
+      expect(res.httpStatus).toBe(200);
+      const hint = res.body.threadGuard as Record<string, unknown> | undefined;
+      expect(hint?.readPoint).toBe("unknown");
+      expect(String(hint?.nextStep)).toMatch(/readThroughTs/);
+      const events = await listAuditEvents(DEMO_ORG.id, 80);
+      expect(events.some((e) => e.action === "thread_guard.read_point_unknown" && e.metadata?.jobId === res.body.jobId)).toBe(true);
+    });
+    test("BOLA: another org's or another employee's wake is never used", async () => {
+      on();
+      recordSlack();
+      expect(await recordWake("emp_comm2", old())).toBe(true);
+      expect(await recordWake("emp_other", old(), OTHER_ORG)).toBe(true);
+      expect((await invoke(threadReply(A_TEXT), "emp_comm2")).httpStatus).toBe(200);
+      const res = await invoke(threadReply(B_TEXT));
+      expect(res.httpStatus).toBe(200); // no read point of its own: lease only
+      expect((res.body.threadGuard as Record<string, unknown> | undefined)?.readPoint).toBe("unknown");
+    });
+    test("an explicit / inbound read point still wins over the wake", async () => {
+      on();
+      recordSlack();
+      expect(await recordWake("emp_comm", old())).toBe(true);
+      expect((await invoke(threadReply(A_TEXT), "emp_comm2")).httpStatus).toBe(200);
+      expect((await invoke(threadReply(B_TEXT, { readThroughTs: fresh() }))).httpStatus).toBe(200);
+    });
+    test("flag OFF: no hint, nothing recorded", async () => {
+      off();
+      recordSlack();
+      expect(await recordWake("emp_comm", old())).toBe(false);
+      const res = await invoke(threadReply(A_TEXT));
+      expect(res.httpStatus).toBe(200);
+      expect(res.body.threadGuard).toBeUndefined();
+    });
+  });
+
+  describe("3. LINE / Telegram / mail: the lease is held until the caller's delivery window ends", () => {
+    // Telegram conversation replies are refused by egress at invoke today
+    // (audience unknown → egress_denied), so the caller-delivered branch is
+    // reached by LINE and mail only; the branch is surface-agnostic.
+    for (const surface of ["line", "mail"] as const) {
+      test(`${surface}: after an allowed caller-delivered reply another job is thread_busy until the lease TTL passes`, async () => {
+        on();
+        recordSlack();
+        const first = await invoke(callerDelivered(surface, A_TEXT, old()));
+        expect(first.httpStatus).toBe(200);
+        // another employee, having read through everything: the first reply may not be delivered yet
+        const second = await invoke(callerDelivered(surface, B_TEXT, fresh()), "emp_comm2");
+        expect(second.httpStatus).toBe(409);
+        expect(second.body.code).toBe("thread_busy");
+        expect(Number(second.body.retryAfterSeconds)).toBeGreaterThan(1);
+        later(61_000);
+        expect((await invoke(callerDelivered(surface, B_TEXT, fresh()), "emp_comm2")).httpStatus).toBe(200);
+      });
+    }
+    // 木村 #293 decision 1: the same job reuses its own held lease within 10 min of its first post.
+    test("same job: a second part within the TTL reuses its own lease (200); a different job of the same employee is thread_busy", async () => {
+      on();
+      recordSlack();
+      const jobId = jid("line-multi");
+      expect((await invoke(callerDelivered("line", A_TEXT, old(), jobId))).httpStatus).toBe(200);
+      expect((await invoke(callerDelivered("line", C_TEXT, old(), jobId))).httpStatus).toBe(200);
+      const other = await invoke(callerDelivered("line", B_TEXT, fresh()));
+      expect(other.body.code).toBe("thread_busy");
+    });
+    test("same job more than 10 min after its first post → thread_busy while its lease is held", async () => {
+      on();
+      recordSlack();
+      const jobId = jid("line-late");
+      expect((await invoke(callerDelivered("line", A_TEXT, old(), jobId))).httpStatus).toBe(200);
+      later(9.5 * 60_000);
+      expect((await invoke(callerDelivered("line", C_TEXT, old(), jobId))).httpStatus).toBe(200);
+      later(10 * 60_000 + 10_000);
+      const late = await invoke(callerDelivered("line", B_TEXT, fresh(), jobId));
+      expect(late.httpStatus).toBe(409);
+      expect(late.body.code).toBe("thread_busy");
+    });
+    test("the allowed reply is still recorded at once: a stale reply after the TTL is thread_moved_on", async () => {
+      on();
+      recordSlack();
+      expect((await invoke(callerDelivered("line", A_TEXT, old()))).httpStatus).toBe(200);
+      later(61_000);
+      expect((await invoke(callerDelivered("line", B_TEXT, old()), "emp_comm2")).body.code).toBe("thread_moved_on");
+    });
+    test("Slack direct posts (delivery observed) still release the lease right after the post", async () => {
+      on();
+      recordSlack();
+      expect((await invoke(threadReply(A_TEXT))).httpStatus).toBe(200);
+      expect((await invoke(threadReply(B_TEXT, { readThroughTs: fresh() }), "emp_comm2")).httpStatus).toBe(200);
+    });
+    test("flag OFF: caller-delivered replies are not serialized (unchanged)", async () => {
+      off();
+      recordSlack();
+      expect((await invoke(callerDelivered("line", A_TEXT, old()))).httpStatus).toBe(200);
+      expect((await invoke(callerDelivered("line", B_TEXT, old()), "emp_comm2")).httpStatus).toBe(200);
+    });
+  });
+
+  describe("4. fulfil-time guard on approved LINE / Telegram replies", () => {
+    async function queueLine(readThroughTs = old()) {
+      const res = await invoke(callerDelivered("line", B_TEXT, readThroughTs, jid("line-apr"), "comm.send"));
+      expect(res.httpStatus).toBe(402);
+      return String(res.body.approvalId);
+    }
+    test("LINE: an AI post after the approved read point closes the approval as superseded (nothing delivered)", async () => {
+      on();
+      recordSlack();
+      const approvalId = await queueLine();
+      expect((await invoke(callerDelivered("line", A_TEXT, fresh()), "emp_comm2")).httpStatus).toBe(200);
+      later(61_000);
+      const result = await approveAs(approvalId);
+      expect(result?.ok).toBe(false);
+      expect(result?.error).toBe("thread_moved_on");
+      const closed = await getApprovalById(approvalId, DEMO_ORG.id);
+      expect(closed?.status).toBe("superseded");
+      expect((closed?.metadata?.closedWithoutSend as Record<string, unknown> | undefined)?.reason).toBe("thread_moved_on");
+      const events = await listAuditEvents(DEMO_ORG.id, 80);
+      expect(events.some((e) => e.action === "thread_guard.moved_on" && e.metadata?.approvalId === approvalId && e.metadata?.phase === "fulfil")).toBe(true);
+      expect(posts.length).toBe(0);
+    });
+    test("Telegram: the same (snapshot set directly: the gateway cannot create a Telegram approval today)", async () => {
+      on();
+      recordSlack();
+      const approvalId = await queueLine();
+      const current = await getApprovalById(approvalId, DEMO_ORG.id);
+      const snap = current!.metadata.invoke as Record<string, unknown>;
+      await updateApprovalMetadata(current!, {
+        invoke: { ...snap, conversation: { surface: "telegram", orgId: DEMO_ORG.id, telegramChatId: TG_CHAT } },
+      });
+      const tgKey = threadKeyFor({ orgId: DEMO_ORG.id, surface: "telegram", telegramChatId: TG_CHAT })!;
+      expect(await recordSelfPost({ orgId: DEMO_ORG.id, employeeId: "emp_comm2", threadKey: tgKey, micros: BigInt(Date.now()) * BigInt(1000) + BigInt(1), jobKey: null })).toBe(true);
+      expect((await approveAs(approvalId))?.error).toBe("thread_moved_on");
+      expect((await getApprovalById(approvalId, DEMO_ORG.id))?.status).toBe("superseded");
+    });
+    test("lease busy at fulfil → thread_busy, approval stays approved", async () => {
+      on();
+      recordSlack();
+      const approvalId = await queueLine();
+      expect((await invoke(callerDelivered("line", A_TEXT, fresh()), "emp_comm2")).httpStatus).toBe(200);
+      const result = await approveAs(approvalId);
+      expect(result?.error).toBe("thread_busy");
+      expect((await getApprovalById(approvalId, DEMO_ORG.id))?.status).toBe("approved");
+    });
+    test("self-approval: approving with the requesting agent's identity does not skip the recheck", async () => {
+      on();
+      recordSlack();
+      const approvalId = await queueLine();
+      expect((await invoke(callerDelivered("line", A_TEXT, fresh()))).httpStatus).toBe(200);
+      later(61_000);
+      expect((await approveAs(approvalId, "agent:agent_comm_self"))?.error).toBe("thread_moved_on");
+      expect((await getApprovalById(approvalId, DEMO_ORG.id))?.status).toBe("superseded");
+    });
+    test("BOLA: another org's post on the same LINE user never closes it", async () => {
+      on();
+      recordSlack();
+      const approvalId = await queueLine();
+      const lineKey = threadKeyFor({ orgId: OTHER_ORG, surface: "line", lineId: LINE_USER })!;
+      const ownKey = threadKeyFor({ orgId: DEMO_ORG.id, surface: "line", lineId: LINE_USER })!;
+      for (const key of [lineKey, ownKey]) {
+        await recordSelfPost({ orgId: OTHER_ORG, employeeId: "emp_other", threadKey: key, micros: BigInt(nowS() + 1) * BigInt(1_000_000), jobKey: null });
+      }
+      const result = await approveAs(approvalId);
+      expect(result?.error).not.toBe("thread_moved_on");
+      expect((await getApprovalById(approvalId, DEMO_ORG.id))?.status).toBe("approved");
+    });
+    test("nothing newer: unchanged outcome (no gateway delivery for LINE) and the lease is released", async () => {
+      on();
+      recordSlack();
+      const approvalId = await queueLine();
+      const result = await approveAs(approvalId);
+      expect(result?.error).toBe("slack_channel_required");
+      expect((await getApprovalById(approvalId, DEMO_ORG.id))?.status).toBe("approved");
+      expect((await invoke(callerDelivered("line", A_TEXT, fresh()), "emp_comm2")).httpStatus).toBe(200);
+    });
+    // 木村 #293 decision 2: approved LINE / Telegram replies stay fail-closed, and the AI is told why.
+    for (const flag of ["on", "off"] as const) {
+      test(`flag ${flag}: the approved re-run sends nothing and the nextStep says this surface does not support approved replies yet`, async () => {
+        if (flag === "on") on();
+        else off();
+        recordSlack();
+        const res = await invoke(callerDelivered("line", B_TEXT, old(), jid("line-rerun"), "comm.send"));
+        expect(res.httpStatus).toBe(402);
+        const approvalId = String(res.body.approvalId);
+        await approveAs(approvalId);
+        const rerun = await invoke({ ...callerDelivered("line", B_TEXT, old(), String(res.body.jobId), "comm.send"), approvalId } as GatewayInvokeRequest);
+        expect(rerun.httpStatus).toBe(409);
+        expect(rerun.body.retryable).toBe(false);
+        expect(String(rerun.body.nextStep)).toContain("この窓口では承認後の返信にまだ対応していません");
+        expect(posts.length).toBe(0);
+      });
+    }
+    test("flag OFF: unchanged (slack_channel_required, approval stays approved)", async () => {
+      off();
+      recordSlack();
+      const approvalId = await queueLine();
+      expect((await invoke(callerDelivered("line", A_TEXT, fresh()), "emp_comm2")).httpStatus).toBe(200);
+      const result = await approveAs(approvalId);
+      expect(result?.error).toBe("slack_channel_required");
+      expect((await getApprovalById(approvalId, DEMO_ORG.id))?.status).toBe("approved");
+    });
   });
 });

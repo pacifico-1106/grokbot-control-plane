@@ -76,13 +76,31 @@ async function demoDecision(input: ApproverAuthorityCheckInput): Promise<Approve
   });
 }
 
-/** Decide whether memberId may approve a ticket that needs requiredKind. Never throws. */
-export async function checkApproverAuthority(input: ApproverAuthorityCheckInput): Promise<ApproverAuthorityDecision> {
-  if (!isRequiredApproverKind(input.requiredKind)) return { outcome: "deny", reason: "invalid_required_kind" };
+/**
+ * PostgREST PGRST202 (function not in the schema cache) / Postgres 42883
+ * (undefined_function): the RPC is not there, i.e. migration 20261005500000
+ * has not been applied in this database yet.
+ */
+export function isMissingRpcError(error: unknown): boolean {
+  const code = error && typeof error === "object" ? String((error as { code?: unknown }).code ?? "") : "";
+  return code === "PGRST202" || code === "42883";
+}
+
+/**
+ * Same as checkApproverAuthority, but tells "the RPC does not exist here"
+ * (rpcMissing) apart from a deny. Callers that must not mistake a missing
+ * migration for "not an owner" (the revoke-unrecorded recovery) use this;
+ * the decision itself is still fail closed (deny approver_unverified).
+ */
+export async function checkApproverAuthorityDetailed(
+  input: ApproverAuthorityCheckInput
+): Promise<{ decision: ApproverAuthorityDecision; rpcMissing: boolean }> {
+  if (!isRequiredApproverKind(input.requiredKind)) return { decision: { outcome: "deny", reason: "invalid_required_kind" }, rpcMissing: false };
+  const unverified = { outcome: "deny", reason: "approver_unverified" } as const;
   try {
-    if (isDemoMode()) return await demoDecision(input);
+    if (isDemoMode()) return { decision: await demoDecision(input), rpcMissing: false };
     const admin = createSupabaseAdminClient();
-    if (!admin) return { outcome: "deny", reason: "approver_unverified" };
+    if (!admin) return { decision: unverified, rpcMissing: false };
     const memberId = (input.memberId || "").trim();
     const { data, error } = await admin.rpc("approver_authority_check", {
       p_org: input.orgId,
@@ -91,15 +109,20 @@ export async function checkApproverAuthority(input: ApproverAuthorityCheckInput)
       p_required_kind: input.requiredKind,
       p_requester_ids: [...(input.requesterMemberIds ?? [])],
     });
-    if (error) return { outcome: "deny", reason: "approver_unverified" };
+    if (error) return { decision: unverified, rpcMissing: isMissingRpcError(error) };
     const decision = parseDecision(data);
     if (memberId && !isUuid(memberId) && decision.outcome === "deny" && decision.reason === "approver_member_required") {
-      return { outcome: "deny", reason: "approver_not_found" };
+      return { decision: { outcome: "deny", reason: "approver_not_found" }, rpcMissing: false };
     }
-    return decision;
+    return { decision, rpcMissing: false };
   } catch {
-    return { outcome: "deny", reason: "approver_unverified" };
+    return { decision: unverified, rpcMissing: false };
   }
+}
+
+/** Decide whether memberId may approve a ticket that needs requiredKind. Never throws. */
+export async function checkApproverAuthority(input: ApproverAuthorityCheckInput): Promise<ApproverAuthorityDecision> {
+  return (await checkApproverAuthorityDetailed(input)).decision;
 }
 
 export type RecordApproverResult = { ok: true } | { ok: false; reason: string };
