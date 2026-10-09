@@ -254,6 +254,10 @@ export function ApprovalsClient({
                     </h3>
                     {/* Approved attachment: server-side snapshot field, never parsed from the summary. */}
                     <ApprovalAttachmentNotice attachment={a.cardAttachment} />
+                    {/* 木村 B: server-computed reasons line (same as Slack / LINE / Telegram). */}
+                    {a.cardReasons ? (
+                      <p className="mt-2 text-xs font-medium break-words">{a.cardReasons}</p>
+                    ) : null}
                     <pre className="mt-2 text-xs muted leading-relaxed whitespace-pre-wrap break-words font-sans">
                       {a.summary}
                     </pre>

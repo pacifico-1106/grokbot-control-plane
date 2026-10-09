@@ -13,6 +13,7 @@ import {
   verifySignature,
   type Journey,
 } from "@/lib/lp/journeys";
+import { GUEST_SESSIONS_UNAVAILABLE, isGuestSigningKeyMissingError } from "@/lib/lp/guest-signing-key";
 
 export const GUEST_COOKIE_NAME = "lp_guest";
 export const CSRF_COOKIE_NAME = "lp_csrf";
@@ -20,7 +21,8 @@ export const CSRF_HEADER_NAME = "x-csrf-token";
 
 export type GuestSessionResult =
   | { ok: true; journey: Journey }
-  | { ok: false; status: 401 | 403; error: "auth_required" | "invalid_session" | "csrf_invalid" | "session_expired" };
+  | { ok: false; status: 401 | 403; error: "auth_required" | "invalid_session" | "csrf_invalid" | "session_expired" }
+  | { ok: false; status: 503; error: typeof GUEST_SESSIONS_UNAVAILABLE.error; message: string };
 
 export async function resolveGuestJourney(
   req: Request,
@@ -31,9 +33,18 @@ export async function resolveGuestJourney(
   if (!guestCookie) return { ok: false, status: 401, error: "auth_required" };
 
   const parsed = parseGuestCookie(guestCookie);
-  if (!parsed || !verifySignature(parsed.token, parsed.signature)) {
-    return { ok: false, status: 401, error: "invalid_session" };
+  if (!parsed) return { ok: false, status: 401, error: "invalid_session" };
+  let signatureOk: boolean;
+  try {
+    signatureOk = verifySignature(parsed.token, parsed.signature);
+  } catch (err) {
+    if (isGuestSigningKeyMissingError(err)) {
+      console.error("[lp] GUEST_SIGNING_KEY not configured; guest sessions unavailable");
+      return { ok: false, status: 503, ...GUEST_SESSIONS_UNAVAILABLE };
+    }
+    throw err;
   }
+  if (!signatureOk) return { ok: false, status: 401, error: "invalid_session" };
 
   if (options.requireCsrf) {
     const csrfHeader = req.headers.get(CSRF_HEADER_NAME);

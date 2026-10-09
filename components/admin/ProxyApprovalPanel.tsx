@@ -86,6 +86,9 @@ function ApprovalItem({ approval, onResolve, isResolving }: ApprovalItemProps) {
               {approval.summary}
             </p>
             <ApprovalAttachmentNotice attachment={approval.cardAttachment} />
+            {approval.cardReasons ? (
+              <p className="mt-2 text-xs font-medium break-words">{approval.cardReasons}</p>
+            ) : null}
           </div>
 
           {confirmAction ? (
