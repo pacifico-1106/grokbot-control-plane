@@ -55,7 +55,7 @@ describe("GUEST_SIGNING_KEY required (no dev fallback)", () => {
       } catch (e) {
         err = e;
       }
-      expect(err).toBeInstanceOf(GuestSigningKeyMissingError);
+      expect(err instanceof GuestSigningKeyMissingError).toBe(true);
       expect(isGuestSigningKeyMissingError(err)).toBe(true);
       expect((err as { code: string }).code).toBe("guest_signing_key_missing");
       expect(() => signToken(token)).toThrow(GuestSigningKeyMissingError);
