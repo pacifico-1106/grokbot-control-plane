@@ -725,15 +725,22 @@ async function fulfillPolicy(approval: ApprovalRequest, args: Record<string, unk
   if (!employeeId || !scopes.length || !["auto", "risk_based", "always_human"].includes(approvalPolicy)) {
     throw new Error("invalid_policy_payload");
   }
+  // 木村 2026-10-09 23:58: allowedPurposes left out keeps the current value
+  // (it used to be written as [] — an omission silently emptied it).
+  let allowedPurposes: string[];
+  if (Array.isArray(args.allowedPurposes)) allowedPurposes = args.allowedPurposes.map(String).filter(Boolean);
+  else {
+    const current = await getEmployee(employeeId, approval.orgId);
+    if (!current || current.orgId !== approval.orgId) throw new Error("employee_not_found");
+    allowedPurposes = [...(current.allowedPurposes ?? [])];
+  }
   let updated: Awaited<ReturnType<typeof updateEmployeePolicy>>;
   try {
     updated = await updateEmployeePolicy({
       orgId: approval.orgId,
       employeeId,
       scopes,
-      allowedPurposes: Array.isArray(args.allowedPurposes)
-        ? args.allowedPurposes.map(String).filter(Boolean)
-        : [],
+      allowedPurposes,
       approvalPolicy,
       toolApprovalDefaults:
         args.toolApprovalDefaults !== undefined

@@ -60,8 +60,8 @@ describe("policy.patch money limits (pure)", () => {
   test("a real money-key change → owner", () => {
     expect(classify({ actionLimits: { ...CAPS, "commerce.order": { perDay: 30, perMonth: 20 } } })?.kind).toBe("owner");
     expect(classify({ actionLimits: CAPS, toolApprovalDefaults: { ...DENY_ORDER, "commerce.order": "auto" } })?.kind).toBe("owner");
-    // A money key dropped by the normalizer (not kept on save) also counts as changed.
-    expect(classify({ actionLimits: CAPS }, ctx({ currentEmployeeToolApprovalDefaults: { ...DENY_ORDER, "plan.upgrade": "deny" } }))?.kind).toBe("owner");
+    // A money key the normalizer would drop on save also counts as changed
+    // (only when toolApprovalDefaults is sent; left out = not written).
     expect(classify({ actionLimits: CAPS, toolApprovalDefaults: DENY_ORDER }, ctx({ currentEmployeeToolApprovalDefaults: { ...DENY_ORDER, "plan.upgrade": "deny" } }))?.kind).toBe("owner");
   });
   test("non-money-only changes stay standard (money keys sent unchanged are fine)", () => {

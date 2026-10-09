@@ -65,7 +65,9 @@ describe("standard tools", () => {
 });
 
 describe("policy.patch by content", () => {
-  const ctx = { currentEmployeeScopes: ["slack:post", "mail:draft"], currentEmployeeApprovalPolicy: "always_human" };
+  // Problem A: the context now also carries the stored limits / defaults (none stored here).
+  const limits = { currentEmployeeActionLimits: {}, currentEmployeeToolApprovalDefaults: {} };
+  const ctx = { currentEmployeeScopes: ["slack:post", "mail:draft"], currentEmployeeApprovalPolicy: "always_human", ...limits };
   test("scopes / purposes / approvalPolicy without money → standard", () => {
     expect(kind("policy.patch", { employeeId: "e", scopes: ["slack:post", "mail:send"], allowedPurposes: ["x"], approvalPolicy: "risk_based" }, {}, ctx)).toBe("owner_or_designated_admin");
     expect(kind("policy.patch", { employeeId: "e", scopes: ["slack:post"], approvalPolicy: "always_human", toolApprovalDefaults: { "mail.send": "auto" } }, {}, ctx)).toBe("owner_or_designated_admin");
@@ -75,7 +77,7 @@ describe("policy.patch by content", () => {
     expect(kind("policy.patch", { employeeId: "e", scopes: ["slack:post"], approvalPolicy: "always_human" }, {}, { currentEmployeeScopes: ["commerce:order"], currentEmployeeApprovalPolicy: "always_human" })).toBe("owner");
   });
   test("money scope kept, nothing about money changes → standard", () => {
-    const money = { currentEmployeeScopes: ["commerce:order", "slack:post"], currentEmployeeApprovalPolicy: "always_human" };
+    const money = { currentEmployeeScopes: ["commerce:order", "slack:post"], currentEmployeeApprovalPolicy: "always_human", ...limits };
     expect(kind("policy.patch", { employeeId: "e", scopes: ["commerce:order", "slack:post"], allowedPurposes: ["y"], approvalPolicy: "always_human" }, {}, money)).toBe("owner_or_designated_admin");
   });
   test("weakening human approval for money → owner", () => {
