@@ -3,7 +3,9 @@
  * closedWithoutSend metadata in two separate writes — if the second failed the
  * approval was left "superseded" with no reason. Status + metadata must land
  * in ONE write (migration 20261009150000 close_approval_without_send; before
- * that migration is applied, one PostgREST UPDATE carrying both). Fake
+ * that migration is applied (PGRST202) or with THREAD_SINGLE_FLIGHT_ENABLED OFF:
+ * exactly main's procedure — status-conditioned UPDATE, then
+ * merge_approval_metadata; never read-all-metadata-then-write-back. Fake
  * Supabase client with one in-memory row; no network.
  */
 import { beforeEach, describe, expect, mock, test } from "bun:test";
@@ -16,12 +18,15 @@ let row: Row;
 let mode: "ok" | "metadata_write_fails" | "rpc_missing" | "rpc_missing_update_fails" | "write_fails" = "ok";
 let writes: Array<{ kind: string; payload: unknown }> = [];
 let demo = false;
+let rpcNames: string[] = [];
+let concurrentWrite: (() => void) | null = null;
 
 const actualMode = await import("@/lib/mode");
 mock.module("@/lib/mode", () => ({ ...actualMode, isDemoMode: () => demo }));
 mock.module("@/lib/supabase", () => ({
   createSupabaseAdminClient: () => ({
     rpc(name: string, args: Record<string, unknown>) {
+      rpcNames.push(name);
       if (name === "merge_approval_metadata") {
         writes.push({ kind: "merge", payload: args });
         if (mode === "metadata_write_fails" || mode === "write_fails") return Promise.resolve({ data: null, error: { message: "boom" } });
@@ -75,9 +80,14 @@ mock.module("@/lib/supabase", () => ({
             if (mode === "write_fails" || mode === "rpc_missing_update_fails") return Promise.resolve({ data: null, error: { message: "boom" } });
             if (!matches()) return Promise.resolve({ data: null, error: null });
             Object.assign(row, update);
-            return Promise.resolve({ data: { ...row }, error: null });
+            const snapshot = { ...row };
+            concurrentWrite?.();
+            return Promise.resolve({ data: snapshot, error: null });
           }
-          return Promise.resolve({ data: matches() ? { ...row } : null, error: null });
+          writes.push({ kind: "read", payload: null });
+          const snapshot = matches() ? { ...row } : null;
+          concurrentWrite?.();
+          return Promise.resolve({ data: snapshot, error: null });
         },
       };
       return chain;
@@ -88,9 +98,12 @@ mock.module("@/lib/supabase", () => ({
 const { closeApprovalWithoutSend } = await import("@/lib/data/approvals");
 
 beforeEach(() => {
+  process.env.THREAD_SINGLE_FLIGHT_ENABLED = "true";
   row = { id: ID, org_id: ORG, status: "approved", metadata: { invokeSnapshot: { tool: "comm.send" }, statusToken: "st_x" }, resolved_at: null, purpose: "comm.internal" };
   mode = "ok";
   writes = [];
+  rpcNames = [];
+  concurrentWrite = null;
   demo = false;
 });
 const close = (orgId = ORG, from: Array<"pending" | "approved"> = ["approved"]) =>
@@ -123,20 +136,37 @@ describe("closeApprovalWithoutSend: status + reason in ONE write", () => {
     expect(untouched()).toBe(true);
   });
 
-  test("before migration 20261009150000 (RPC missing): ONE UPDATE carries status and metadata", async () => {
+  test("RPC missing (PGRST202, migration not applied): main's procedure — status-only conditional UPDATE, then merge_approval_metadata; the whole metadata is never written back", async () => {
     mode = "rpc_missing";
-    await close();
+    const closed = await close();
     const updates = writes.filter((w) => w.kind === "update");
     expect(updates.length).toBe(1);
-    expect(writes.filter((w) => w.kind === "merge").length).toBe(0);
     const payload = updates[0].payload as Record<string, unknown>;
     expect(payload.status).toBe("superseded");
-    expect(((payload.metadata as Record<string, unknown>)?.closedWithoutSend as Record<string, unknown>)?.reason).toBe("thread_moved_on");
+    expect("metadata" in payload).toBe(false);
+    expect(writes.filter((w) => w.kind === "read").length).toBe(0);
+    const merges = writes.filter((w) => w.kind === "merge");
+    expect(merges.length).toBe(1);
+    expect(Object.keys((merges[0].payload as Record<string, unknown>).p_patch as Record<string, unknown>)).toEqual(["closedWithoutSend"]);
     expect(fullyClosed()).toBe(true);
     expect(row.metadata.statusToken).toBe("st_x");
+    expect(closed?.status).toBe("superseded");
   });
 
-  test("fallback UPDATE failing also leaves no partial state (and is reported as a failure)", async () => {
+  test("RPC missing: a concurrent metadata write during the close survives (no read-all-then-write-back)", async () => {
+    mode = "rpc_missing";
+    // Another writer (e.g. a fulfilment result with oneTimeSecret stripped) lands
+    // right after any read / status flip this close performs.
+    concurrentWrite = () => {
+      concurrentWrite = null; // fires once, at the first read / status flip
+      row.metadata = { ...row.metadata, fulfillment: { ok: true, redacted: true } };
+    };
+    await close();
+    expect(row.metadata.fulfillment).toEqual({ ok: true, redacted: true });
+    expect(fullyClosed()).toBe(true);
+  });
+
+  test("RPC missing and the status UPDATE fails → throws, nothing changed, no merge", async () => {
     mode = "rpc_missing_update_fails";
     let threw = false;
     await close().catch(() => {
@@ -145,6 +175,20 @@ describe("closeApprovalWithoutSend: status + reason in ONE write", () => {
     expect(threw).toBe(true);
     expect(untouched()).toBe(true);
     expect(writes.filter((w) => w.kind === "merge").length).toBe(0);
+  });
+
+  test("flag OFF: the new RPC is never called; identical to main (status UPDATE + merge_approval_metadata)", async () => {
+    delete process.env.THREAD_SINGLE_FLIGHT_ENABLED;
+    const closed = await close();
+    expect(writes.filter((w) => w.kind === "close_rpc").length).toBe(0);
+    expect(rpcNames).not.toContain("close_approval_without_send");
+    const updates = writes.filter((w) => w.kind === "update");
+    expect(updates.length).toBe(1);
+    expect("metadata" in (updates[0].payload as Record<string, unknown>)).toBe(false);
+    expect(writes.filter((w) => w.kind === "merge").length).toBe(1);
+    expect(writes.filter((w) => w.kind === "read").length).toBe(0);
+    expect(fullyClosed()).toBe(true);
+    expect(closed?.status).toBe("superseded");
   });
 
   test("BOLA: another org's id → null, nothing written to the row", async () => {
