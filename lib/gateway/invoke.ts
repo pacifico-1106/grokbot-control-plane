@@ -6,6 +6,7 @@ import {
   formatArtifactLines,
   inferRiskForTool,
 } from "@/lib/approvals/summary";
+import { PROVIDER_RATE_LIMITED, RETRY_AFTER_DEFAULT_SECONDS, rateLimitedBody } from "@/lib/gateway/adapters/rate-limit";
 import { readThroughFromBody } from "@/lib/thread-guard/read-through";
 import { NEXT_STEP_READ_POINT_UNKNOWN, THREAD_GUARD_UNAVAILABLE, THREAD_MOVED_ON, beginThreadSend, threadGuardStopBody, type ThreadGuardStop } from "@/lib/thread-guard/guard";
 import { closedByThreadMovedOn } from "@/lib/approvals/closed-without-send";
@@ -2250,6 +2251,11 @@ async function runGatewayInvokeInner(
     const fulfilled = await fulfillApprovedInvoke(priorApproval, {
       attachmentHandledByCaller: isAudienceGatedTool(toolDef),
     });
+    // Rate-limited (nothing posted): say how long to wait; re-running earlier stops before the provider.
+    if (fulfilled && !fulfilled.ok && fulfilled.error === PROVIDER_RATE_LIMITED) {
+      return jsonResult({ ...rateLimitedBody({ retryAfterSeconds: fulfilled.retryAfterSeconds ?? RETRY_AFTER_DEFAULT_SECONDS }),
+        approvalId: priorApproval.id, needs_approval: false, employeeId, tool, purpose, jobId }, 429);
+    }
     if (fulfilled && !fulfilled.ok && isThreadGuardCode(fulfilled.error)) {
       // Thread single-flight stopped the approved post at fulfil (nothing sent).
       return jsonResult({ ...threadGuardStopBody(fulfilled.error, fulfilled.threadGuard ?? {}),
@@ -2550,6 +2556,32 @@ async function runGatewayInvokeInner(
             jobId,
           },
           502
+        );
+      }
+      if (!posted.ok && posted.retryAfterSeconds !== undefined) {
+        // Rate-limited (not_sent, claim released above): no automatic retry —
+        // the AI is told the provider's wait.
+        await appendAuditEvent({
+          orgId: orgId || employee.orgId,
+          employeeId,
+          credentialId: input.credentialId || employee.credentialId,
+          action: "slack.post_failed",
+          purpose,
+          summary: "Slack会話投稿がレート制限で未送信（待機後に再送可）",
+          metadata: { tool, jobId, error: posted.error, dest, code: PROVIDER_RATE_LIMITED, retryAfterSeconds: posted.retryAfterSeconds },
+        });
+        return jsonResult(
+          {
+            ...rateLimitedBody({ retryAfterSeconds: posted.retryAfterSeconds, providerError: posted.error }),
+            needs_approval: false,
+            egress,
+            ...(voice ? { voice } : {}),
+            employeeId,
+            tool,
+            purpose,
+            jobId,
+          },
+          429
         );
       }
       if (!posted.ok) {
@@ -2890,21 +2922,29 @@ async function runGatewayInvokeInner(
         );
       }
       if (!posted.ok) {
+        const snsWait = posted.retryAfterSeconds;
         await appendAuditEvent({
           orgId: orgId || employee.orgId,
           employeeId,
           credentialId: input.credentialId || employee.credentialId,
           action: "sns.publish_failed",
           purpose,
-          summary: "SNS投稿に失敗",
+          summary: snsWait !== undefined ? "SNS投稿がレート制限で未送信（待機後に再送可）" : "SNS投稿に失敗",
           metadata: {
             tool,
             jobId,
             error: posted.error,
             surface: posted.surface,
             phase: priorApprovalOk ? "reinvoke" : "auto",
+            ...(snsWait !== undefined ? { code: PROVIDER_RATE_LIMITED, retryAfterSeconds: snsWait } : {}),
           },
         });
+        if (snsWait !== undefined) {
+          return jsonResult(
+            { ...rateLimitedBody({ retryAfterSeconds: snsWait, providerError: posted.error }), needs_approval: false, employeeId, tool, purpose, jobId },
+            429
+          );
+        }
         return jsonResult(
           {
             ok: false,

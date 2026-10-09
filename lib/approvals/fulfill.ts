@@ -1,4 +1,5 @@
 import { isDemoMode } from "@/lib/mode";
+import { PROVIDER_RATE_LIMITED, rateLimitWaitRemainingSeconds } from "@/lib/gateway/adapters/rate-limit";
 import { isThreadSingleFlightEnabled } from "@/lib/feature-flags";
 import { THREAD_MOVED_ON, beginThreadSend, type ThreadSendHandle } from "@/lib/thread-guard/guard";
 import { approvalReceivedAtMs, readThroughFromBody, readThroughFromSnapshot } from "@/lib/thread-guard/read-through";
@@ -195,6 +196,12 @@ export type ApprovalFulfillment = {
    * kept as uncertain (verify the post, then resend with confirmedNotDelivered).
    */
   uncertainRef?: string;
+  /**
+   * error "provider_rate_limited" (Slack ratelimited / X 429, nothing posted):
+   * the provider's wait in seconds, counted from `at`. A re-run inside that
+   * wait stops before the provider call (rateLimitWaitStop).
+   */
+  retryAfterSeconds?: number;
   /**
    * Thread single-flight stop at fulfil (error thread_busy / thread_moved_on /
    * thread_guard_unavailable): retryAfterSeconds, or readThroughTs + aiPostedTs +
@@ -411,6 +418,9 @@ export function parseFulfillment(
   if (typeof rec.id === "string") fulfillment.id = rec.id;
   if (typeof rec.surface === "string") fulfillment.surface = rec.surface;
   if (typeof rec.error === "string") fulfillment.error = rec.error;
+  if (typeof rec.retryAfterSeconds === "number" && Number.isFinite(rec.retryAfterSeconds)) {
+    fulfillment.retryAfterSeconds = rec.retryAfterSeconds;
+  }
   if (rec.threadGuard && typeof rec.threadGuard === "object" && !Array.isArray(rec.threadGuard)) {
     fulfillment.threadGuard = { ...(rec.threadGuard as Record<string, unknown>) };
   }
@@ -622,10 +632,25 @@ async function auditFulfillmentFailure(
   });
 }
 
+/**
+ * The last run of this approval was rate-limited (nothing posted) and the
+ * provider's wait is not over → stop before any provider call or ledger claim.
+ * Not persisted: the recorded rate-limit (and its `at`) stays the reference.
+ * The execution claim ends "failed" (provider_rate_limited is retryable), so
+ * the approval runs again once the wait is over. No automatic retry.
+ */
+function rateLimitWaitStop(approval: ApprovalRequest): ApprovalFulfillment | null {
+  const remaining = rateLimitWaitRemainingSeconds(parseFulfillment(approval.metadata));
+  if (!remaining) return null;
+  return { ok: false, error: PROVIDER_RATE_LIMITED, retryAfterSeconds: remaining, at: new Date().toISOString() };
+}
+
 async function fulfillSnsPublish(
   approval: ApprovalRequest,
   snapshot: InvokeSnapshot
 ): Promise<ApprovalFulfillment> {
+  const waitStop = rateLimitWaitStop(approval);
+  if (waitStop) return waitStop;
   const args = snapshot.args;
   const text = outboundText(args, snapshot.purpose || approval.purpose);
   // Duplicate post guard v2 (DUPLICATE_GUARD_V2_ENABLED; OFF → no-op): the same
@@ -667,8 +692,9 @@ async function fulfillSnsPublish(
       }
     : {
         ok: false,
-        error: unknown ? POST_OUTCOME_UNKNOWN : posted.error,
+        error: unknown ? POST_OUTCOME_UNKNOWN : posted.retryAfterSeconds !== undefined ? PROVIDER_RATE_LIMITED : posted.error,
         ...(unknown && gate.claimId ? { uncertainRef: gate.claimId } : {}),
+        ...(!unknown && posted.retryAfterSeconds !== undefined ? { retryAfterSeconds: posted.retryAfterSeconds } : {}),
         ...(posted.surface ? { surface: posted.surface } : {}),
         at,
       };
@@ -993,6 +1019,10 @@ async function fulfillApprovedInvokeCore(
 
     const dest = destValidation.dest;
 
+    // Rate-limited last time and the provider's wait is not over: no post, no claim.
+    const waitStop = rateLimitWaitStop(approval);
+    if (waitStop) return waitStop;
+
     // THREAD_SINGLE_FLIGHT_ENABLED: the same lease + "already moved on" check
     // as a direct post, against the APPROVED snapshot's read point. Before the
     // ledger claim, so a stop leaves nothing behind. busy / unavailable keep the
@@ -1075,7 +1105,9 @@ async function fulfillApprovedInvokeCore(
             ...(gateAfterPost.ok && gateAfterPost.claimId ? { uncertainRef: gateAfterPost.claimId } : {}),
             at,
           }
-        : { ok: false, error: posted.error || "slack_post_failed", at };
+        : posted.retryAfterSeconds !== undefined
+          ? { ok: false, error: PROVIDER_RATE_LIMITED, retryAfterSeconds: posted.retryAfterSeconds, at }
+          : { ok: false, error: posted.error || "slack_post_failed", at };
 
     await persistFulfillment(approval, {
       ...fulfillment,
