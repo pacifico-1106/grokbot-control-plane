@@ -29,6 +29,8 @@ const PER_STRING_MS = 1500;
 const PER_PAYLOAD_MS = 4000;
 
 const AWS_EX_SECRET = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY";
+/** Fake Slack bot token, assembled at runtime (no token literal in the repo). */
+const FAKE_XOXB = ["xoxb", "123456789012", "1234567890123", "abcdefghij"].join("-");
 
 type Catalog = ReadonlyArray<{ name: string; pattern: RegExp }>;
 const catalog = (): Catalog => (det as unknown as { SECRET_DETECTOR_REGEXES_FOR_TEST: Catalog }).SECRET_DETECTOR_REGEXES_FOR_TEST;
@@ -225,15 +227,62 @@ describe("item 1: adversarial timing for every pattern the detector runs", () =>
 });
 
 // ---------------------------------------------------------------------------
+const nest = (levels: number, leaf: unknown): unknown => {
+  let v: unknown = leaf;
+  for (let i = 0; i < levels; i++) v = { n: v };
+  return v;
+};
+
+describe("21:53 review: payloads nested deeper than 10 levels are refused (no scan, no value)", () => {
+  test("a string at depth 10 is scanned as before; at depth 11 the payload is refused", () => {
+    const at10 = det.detectSecretInPayload(nest(10, "週報"));
+    expect(at10.ok).toBe(true);
+    const secretAt10 = det.detectSecretInPayload(nest(10, FAKE_XOXB));
+    expect(secretAt10.ok).toBe(false);
+    if (!secretAt10.ok) expect(secretAt10.pattern).not.toBe("payload_too_deep_to_scan");
+    const at11 = det.detectSecretInPayload(nest(11, "週報"));
+    expect(at11.ok).toBe(false);
+    if (!at11.ok) {
+      expect(at11.pattern).toBe("payload_too_deep_to_scan");
+      expect(at11.fieldPath).toBe("");
+    }
+  });
+
+  test("11 levels with an xoxb token and an oversize value → refused by depth, never scanned, no value characters", () => {
+    const leaf = { token: FAKE_XOXB, big: fill(MARK, det.MAX_SCAN_LENGTH * 25) };
+    const t0 = performance.now();
+    const r = det.detectSecretInPayload(nest(11, leaf));
+    expect(performance.now() - t0).toBeLessThan(PER_PAYLOAD_MS);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.pattern).toBe("payload_too_deep_to_scan");
+    expect(JSON.stringify(r)).not.toContain("xoxb");
+    expectNoMark(JSON.stringify(r));
+  });
+
+  test("checkPayloadScanLimits refuses the same depth (raw config-change input path)", () => {
+    const r = det.checkPayloadScanLimits(nest(11, "x"), { perString: true });
+    expect(r?.pattern).toBe("payload_too_deep_to_scan");
+    expect(det.checkPayloadScanLimits(nest(10, "x"), { perString: true })).toBeNull();
+  });
+
+  test("arrays count as levels too", () => {
+    let v: unknown = "x";
+    for (let i = 0; i < 11; i++) v = [v];
+    const r = det.detectSecretInPayload(v);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.pattern).toBe("payload_too_deep_to_scan");
+  });
+});
+
+// ---------------------------------------------------------------------------
 describe("item 2: word boundary for the weak keyword `secret`", () => {
-  test("secretary / secrets are not AWS context (only suspected)", () => {
+  test("plain words like secretary are not AWS context (only suspected)", () => {
     for (const v of [
       `secretary: ${AWS_EX_SECRET}`,
       `Secretary ${AWS_EX_SECRET}`,
-      `secrets: ${AWS_EX_SECRET}`,
-      `SECRETS ${AWS_EX_SECRET}`,
+      `SECRETARY ${AWS_EX_SECRET}`,
       `the secretariat noted ${AWS_EX_SECRET}`,
-      `topsecret ${AWS_EX_SECRET}`,
+      `secretaries ${AWS_EX_SECRET}`,
     ]) {
       const r = det.detectSecretInPayload({ args: { message: v } });
       expect(r.ok).toBe(true);
@@ -241,6 +290,29 @@ describe("item 2: word boundary for the weak keyword `secret`", () => {
     }
     const r = det.detectSecretInPayload({ cfg: { secretary: AWS_EX_SECRET } });
     expect(r.ok).toBe(true);
+  });
+
+  test("21:53 review: secrets / SECRETS / secretkey / topsecret / APISecret / JWTSecret block again", () => {
+    for (const v of [
+      `secrets: ${AWS_EX_SECRET}`,
+      `SECRETS ${AWS_EX_SECRET}`,
+      `Secrets ${AWS_EX_SECRET}`,
+      `secretkey=${AWS_EX_SECRET}`,
+      `SECRETKEY=${AWS_EX_SECRET}`,
+      `topsecret ${AWS_EX_SECRET}`,
+      `TOPSECRET ${AWS_EX_SECRET}`,
+      `APISecret: ${AWS_EX_SECRET}`,
+      `JWTSecret=${AWS_EX_SECRET}`,
+      `AWSSecret ${AWS_EX_SECRET}`,
+    ]) {
+      const r = det.detectSecretInPayload({ args: { message: v } });
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.pattern).toBe("aws_secret_key");
+    }
+    for (const key of ["APISecret", "JWTSecret", "secrets", "secretkey", "topsecret"]) {
+      const r = det.detectSecretInPayload({ cfg: { [key]: AWS_EX_SECRET } });
+      expect(r.ok).toBe(false);
+    }
   });
 
   test("secret / Secret / SECRET / client_secret / clientSecret / secretKey still block", () => {
@@ -420,6 +492,14 @@ describe("item 3: the caps through all 4 paths", () => {
       },
     },
     {
+      label: "11-level nesting with an xoxb token and an oversize value",
+      pattern: "payload_too_deep_to_scan",
+      make: () => ({
+        text: "週報",
+        extra: { deep: nest(11, { token: FAKE_XOXB, big: fill(MARK, det.MAX_SCAN_LENGTH * 25) }) },
+      }),
+    },
+    {
       label: "more strings than the payload string cap",
       pattern: "payload_too_large_to_scan",
       make: () => ({ text: "週報", extra: { notes: Array.from({ length: payloadCaps().MAX_PAYLOAD_SCAN_STRINGS + 1 }, () => MARK) } }),
@@ -446,6 +526,17 @@ describe("item 3: the caps through all 4 paths", () => {
         expectNoMark(logs.join("\n"));
       });
     }
+    test(`${p.name}: 11-level nesting → nothing stored in an approval snapshot`, async () => {
+      const jobId = uniqJob("deep");
+      const deep = nest(11, { token: FAKE_XOXB, big: fill(MARK, det.MAX_SCAN_LENGTH * 25) });
+      const { pattern } = await p.run("週報", { deep }, jobId);
+      expect(pattern).toBe("payload_too_deep_to_scan");
+      const { listApprovals } = await import("@/lib/data/approvals");
+      const snapshots = JSON.stringify((await listApprovals(ORG)).filter((a) => JSON.stringify(a).includes(jobId)));
+      expect(snapshots).toBe("[]");
+      const all = JSON.stringify(await listApprovals(ORG));
+      expect(all).not.toContain(FAKE_XOXB);
+    });
     test(`${p.name}: a normal-size message is not refused by the caps`, async () => {
       const { code } = await p.run("週報: 今週の進捗です。", {}, uniqJob("cap-ok"));
       expect(code).not.toBe("secret_detected_in_payload");
