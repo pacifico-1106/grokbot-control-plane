@@ -99,7 +99,7 @@ describe("filing", () => {
     expect(s.requiredApproverKind).toBe("owner");
     expect(s.approverAuthority?.reasons).toEqual(["sensitive_target_tool"]);
     expect((await getApprovalById(s.id, ORG))?.requiredApproverKind).toBe("owner");
-    expect((await file("parties.upsert", { identifier: "x" })).requiredApproverKind ?? null).toBeNull();
+    expect((await file("replyPolicy.patch", {})).requiredApproverKind ?? null).toBeNull();
   });
 
   test("flag OFF: nothing recorded", async () => {

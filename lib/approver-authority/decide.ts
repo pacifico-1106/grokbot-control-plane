@@ -17,7 +17,9 @@ export type ApproverAuthorityDenyReason =
   | "approver_inactive"
   | "approver_not_authorized"
   | "approver_is_requester"
-  | "approver_unverified";
+  | "approver_unverified"
+  /** Review 2026-10-09 item 4: target tool ticket filed before the flag was ON (no approver class). */
+  | "approver_class_missing";
 
 export type ApproverAuthorityDecision =
   | { outcome: "allow"; approverRole: ApproverAuthorityRole }
@@ -89,6 +91,7 @@ export const APPROVER_AUTHORITY_RESULT_REASONS = [
   "no_owner_other_than_requester",
   "approver_is_requester",
   "approver_identity_unverified",
+  "approver_class_missing",
 ] as const;
 
 export type ApproverAuthorityResultReason = (typeof APPROVER_AUTHORITY_RESULT_REASONS)[number];

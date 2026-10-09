@@ -33,7 +33,7 @@ describe("targets constant", () => {
   });
 
   test("non-targets are not classified", () => {
-    for (const tool of ["mail.send", "comm.reply", "channels.classify", "", "  "]) {
+    for (const tool of ["mail.send", "comm.reply", "channels.list", "", "  "]) {
       expect(isApproverAuthorityTargetTool(tool)).toBe(false);
       expect(classifyApproverRequirement({ tool, metadata: {} })).toBeNull();
     }

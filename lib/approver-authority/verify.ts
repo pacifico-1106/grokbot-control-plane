@@ -21,7 +21,7 @@ import {
   type ApproverAuthorityDenyReason,
   type ApproverAuthorityRole,
 } from "./decide";
-import { isRequiredApproverKind, MAX_IMPLEMENTED_REQUIRED_APPROVALS, type RequiredApproverKind } from "./targets";
+import { isApproverAuthorityTargetTool, isRequiredApproverKind, MAX_IMPLEMENTED_REQUIRED_APPROVALS, type RequiredApproverKind } from "./targets";
 
 export interface ApproverAuthorityCheckInput {
   orgId: string;
@@ -183,7 +183,12 @@ export class ApproverAuthorityExecutionError extends Error {
 export async function assertApproverAuthorityForExecution(approval: ApprovalRequest): Promise<void> {
   if (!isApproverAuthorityEnabled()) return;
   const kind = approval.requiredApproverKind;
-  if (kind === null || kind === undefined) return;
+  if (kind === null || kind === undefined) {
+    // Review 2026-10-09 item 4: a target-tool ticket with no class was filed
+    // before ON (or its class was lost). It must not run on the old rules.
+    if (isApproverAuthorityTargetTool(approval.tool)) throw new ApproverAuthorityExecutionError("approver_class_missing");
+    return;
+  }
   if (!isRequiredApproverKind(kind)) throw new ApproverAuthorityExecutionError("invalid_required_kind");
   const recordedCount = approval.approverAuthority?.requiredApprovals;
   if (recordedCount !== undefined && recordedCount !== null) {

@@ -18,7 +18,13 @@ import { checkApproverAuthority } from "./verify";
 import { classifyApproverRequirement, type ApproverRequirement, type ApproverRequirementReason } from "./targets";
 import { approverAuthorityNextStepJa, approverAuthorityReplyJa } from "./reply";
 
-export type WebDirectChange = { tool: string; adminMutation: Record<string, unknown> };
+/**
+ * `kind` (review 2026-10-09 items 1–2): dashboard-only surfaces with no MCP
+ * tool of their own (SoD warn policy, Slack conversation adapter, wake
+ * binding, credential rotate) state their class directly; `tool` is then only
+ * an audit label.
+ */
+export type WebDirectChange = { tool: string; adminMutation: Record<string, unknown>; kind?: ApproverRequirement["kind"] };
 
 export type WebDirectResult =
   | { ok: true; requirement: ApproverRequirement | null }
@@ -32,7 +38,9 @@ export function webDirectRequirement(
   let kind: ApproverRequirement["kind"] | null = null;
   const reasons = new Set<ApproverRequirementReason>();
   for (const change of changes) {
-    const r = classifyApproverRequirement({ tool: change.tool, metadata: { adminMutation: change.adminMutation }, context });
+    const r: ApproverRequirement | null = change.kind
+      ? { kind: change.kind, reasons: [change.kind === "owner" ? "sensitive_target_tool" : "standard_target_tool"] }
+      : classifyApproverRequirement({ tool: change.tool, metadata: { adminMutation: change.adminMutation }, context });
     if (!r) continue;
     if (r.kind === "owner") kind = "owner";
     else if (!kind) kind = r.kind;

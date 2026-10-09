@@ -64,6 +64,12 @@ export const APPROVER_AUTHORITY_TARGETS = {
     "setup.approvalDelivery.autoResolve",
     "setup.lineApproval.demoteTelegram",
     "employees.issue",
+    // 2026-10-09 review item 3: who sees / who we talk to / under which name.
+    "internalAudienceRule.patch",
+    "parties.upsert",
+    "channels.classify",
+    "employees.postingIdentity.set",
+    "mailPolicy.patch",
   ],
   sensitiveTools: [
     "employees.spend.set",
