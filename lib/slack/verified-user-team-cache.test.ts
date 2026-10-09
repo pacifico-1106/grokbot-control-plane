@@ -128,3 +128,43 @@ describe("TTL cache keyed by (orgId, slackUserId)", () => {
     expect((await resolveAudience(ctx(ORG_A))).audience).toBe("internal");
   });
 });
+
+describe("cache key carries a bot-token fingerprint (never the raw token)", () => {
+  test("same org and user, different bot token → users.info is asked again within the TTL", async () => {
+    answer = ok("T0CACHEINT");
+    expect((await resolveAudience(ctx(ORG_A))).audience).toBe("internal");
+    // Token switched (e.g. reinstalled into another workspace): the old answer must not be reused.
+    await upsertConversationAdapter({ orgId: ORG_A, surface: "slack", enabled: true, secrets: { botToken: "xoxb-cache-a2" } });
+    answer = (auth) => (auth.endsWith("xoxb-cache-a2") ? ok("T0OUTSIDER")() : ok("T0CACHEINT")());
+    expect((await resolveAudience(ctx(ORG_A))).audience).not.toBe("internal");
+    expect(calls.map((x) => x.auth)).toEqual(["Bearer xoxb-cache-a", "Bearer xoxb-cache-a2"]);
+    // Same new token again → cached (no third call).
+    await resolveAudience(ctx(ORG_A));
+    expect(calls.length).toBe(2);
+  });
+
+  test("cache keys and log lines never contain the raw token", async () => {
+    const keysFn = (botToken as unknown as { slackUserTeamCacheKeysForTests?: () => string[] }).slackUserTeamCacheKeysForTests;
+    expect(typeof keysFn).toBe("function");
+    const logged: string[] = [];
+    const orig = { log: console.log, info: console.info, warn: console.warn, error: console.error, debug: console.debug };
+    for (const k of Object.keys(orig) as Array<keyof typeof orig>) {
+      console[k] = (...a: unknown[]) => { logged.push(a.map((x) => (typeof x === "string" ? x : JSON.stringify(x))).join(" ")); };
+    }
+    try {
+      answer = ok("T0CACHEINT");
+      await resolveAudience(ctx(ORG_A));
+      answer = () => Response.json({ ok: false, error: "invalid_auth" });
+      await upsertConversationAdapter({ orgId: ORG_A, surface: "slack", enabled: true, secrets: { botToken: "xoxb-cache-a3" } });
+      await resolveAudience(ctx(ORG_A));
+      await invoke(`job_cache_log_${Math.random().toString(36).slice(2, 8)}`);
+    } finally {
+      Object.assign(console, orig);
+    }
+    const keys = keysFn ? keysFn() : [];
+    expect(keys.length).toBeGreaterThan(0);
+    for (const text of [...keys, ...logged]) {
+      expect(text.includes("xoxb-")).toBe(false);
+    }
+  });
+});
