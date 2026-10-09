@@ -14,6 +14,9 @@ import { bindEmployeeSlackIdentity, revokeEmployeeSlackIdentity } from "@/lib/da
 import { getSlackImEmployeeRoute } from "@/lib/data/slack-im-routes";
 import { DEMO_ORG, getRuntimeAudit, getRuntimeEmployees } from "@/lib/demo-data";
 import { runGatewayInvoke } from "@/lib/gateway/invoke";
+import { getApprovalById } from "@/lib/data";
+import { callStaffpassMcpTool } from "@/lib/mcp/tools";
+import type { ResolvedEmployeeCredential } from "@/lib/auth/employee-credential";
 import type { Employee, GatewayInvokeRequest } from "@/lib/types";
 import { slackApiArgs, slackRequestHeader } from "@/tests/helpers/slack-api-args";
 
@@ -338,6 +341,59 @@ describe("the AI cannot lower the class or make a recipient internal", () => {
     users.set(u, member(u));
     const r = await invoke(sendTo(u, { conversation: { slackTeamId: TEAM }, args: { slackTeamId: TEAM } }));
     expectStopped(r, "slack_recipient_not_internal_party");
+  });
+});
+
+describe("downstream layers see the resolved D… (approval snapshot, MCP)", () => {
+  test("confidential to the internal route still needs approval (the route never lowers the class); the snapshot carries the D…", async () => {
+    const u = await party("internal");
+    const r = await invoke(sendTo(u, { args: { informationClass: "confidential" } }));
+    expect(r.body.needs_approval).toBe(true);
+    expect(posts().length).toBe(0);
+    const approval = await getApprovalById(String(r.body.approvalId), ORG);
+    expect(approval).toBeTruthy();
+    const raw = JSON.stringify(approval);
+    expect(raw).toContain(dmFor(u));
+  });
+
+  test("a 'public' claim cannot lower the class below the tool default on the resolved route", async () => {
+    const u = await party("internal");
+    const r = await invoke(sendTo(u, { args: { informationClass: "public" } }));
+    expect(r.body.ok).toBe(true);
+    expect(r.body.egress && (r.body.egress as Record<string, unknown>).informationClass).not.toBe("public");
+  });
+
+  test("MCP staffpass_invoke goes through the same resolution", async () => {
+    const u = await party("internal");
+    const cred = {
+      employeeId: EMP,
+      orgId: ORG,
+      credentialId: "cred_comm",
+      generation: 1,
+      fingerprint: "fixture-hash",
+      secretPrefix: "gb_emp_fixture",
+      binding: {
+        status: "linked", employeeId: EMP, orgId: ORG, credentialGeneration: 1, grokBotAgentId: "agent_test",
+        grokBotWorkspaceId: null, credentialFingerprint: null, lastSuccessAt: null, lastError: null,
+        wakeWebhookUrl: null, hasWakeWebhook: false, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      },
+    } as unknown as ResolvedEmployeeCredential;
+    await callStaffpassMcpTool(
+      "staffpass_invoke",
+      { tool: "comm.reply", purpose: "comm.internal", jobId: jid("mcp"), payload: { slackChannelId: u, text: TEXT } },
+      cred
+    );
+    expect(posts().map((p) => p.args.channel)).toEqual([dmFor(u)]);
+
+    const ext = await party("external");
+    calls = [];
+    const refused = await callStaffpassMcpTool(
+      "staffpass_invoke",
+      { tool: "comm.reply", purpose: "comm.internal", jobId: jid("mcp"), payload: { slackChannelId: ext, text: TEXT } },
+      cred
+    );
+    expect((refused.structuredContent as Record<string, unknown>).code).toBe("slack_recipient_not_internal_party");
+    expect(posts().length).toBe(0);
   });
 });
 
