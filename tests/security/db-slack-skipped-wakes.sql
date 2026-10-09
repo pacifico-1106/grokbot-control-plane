@@ -35,6 +35,16 @@ insert into public.approval_requests(id, org_id, purpose, summary, risk, status,
  ('c9100000-0000-4000-8000-000000000002', 'c9000000-0000-4000-8000-0000000000a2', 'admin.channel', 'fixture', 'high', 'approved', 'channels.classify'),
  ('c9100000-0000-4000-8000-000000000003', 'c9000000-0000-4000-8000-0000000000a1', 'admin.channel', 'fixture', 'high', 'pending', 'channels.classify'),
  ('c9100000-0000-4000-8000-000000000004', 'c9000000-0000-4000-8000-0000000000a1', 'admin.channel', 'fixture', 'high', 'approved', 'channels.classify');
+-- 21:53 (2): the claim accepts only THIS channel's classification ticket.
+update public.approval_requests set metadata = '{"adminMutation":{"surface":"slack","externalId":"C0SSWTEST1","classification":"internal"}}'::jsonb
+  where id in ('c9100000-0000-4000-8000-000000000001', 'c9100000-0000-4000-8000-000000000002', 'c9100000-0000-4000-8000-000000000003', 'c9100000-0000-4000-8000-000000000004');
+insert into public.approval_requests(id, org_id, purpose, summary, risk, status, tool, metadata) values
+ ('c9100000-0000-4000-8000-000000000005', 'c9000000-0000-4000-8000-0000000000a1', 'admin.channel', 'fixture', 'high', 'approved', 'channels.classify', '{"adminMutation":{"surface":"slack","externalId":"C0SSWOTHER","classification":"internal"}}'),
+ ('c9100000-0000-4000-8000-000000000006', 'c9000000-0000-4000-8000-0000000000a1', 'admin.party', 'fixture', 'high', 'approved', 'parties.upsert', '{"adminMutation":{"surface":"slack","externalId":"C0SSWTEST1"}}'),
+ ('c9100000-0000-4000-8000-000000000007', 'c9000000-0000-4000-8000-0000000000a1', 'config.change', 'fixture', 'high', 'approved', 'config.change_request', '{"configChange":{"proposal":{"kind":"channel_classification","surface":"slack","externalId":"C0SSWTEST1","classification":"internal"}}}'),
+ ('c9100000-0000-4000-8000-000000000008', 'c9000000-0000-4000-8000-0000000000a1', 'config.change', 'fixture', 'high', 'approved', 'config.change_request', '{"configChange":{"proposal":{"kind":"instructions","mode":"append","text":"x"}}}'),
+ ('c9100000-0000-4000-8000-000000000009', 'c9000000-0000-4000-8000-0000000000a1', 'admin.channel', 'fixture', 'high', 'approved', 'channels.classify', '{}'),
+ ('c9100000-0000-4000-8000-00000000000a', 'c9000000-0000-4000-8000-0000000000a1', 'admin.channel', 'fixture', 'high', 'approved', 'channels.classify', '{"adminMutation":{"surface":"line","externalId":"C0SSWTEST1"}}');
 
 -- (1) sessions
 set role anon;
@@ -73,8 +83,15 @@ select security_test.ssw_check(public.claim_slack_skipped_channel_wakes('c900000
 select security_test.ssw_check(public.claim_slack_skipped_channel_wakes('c9000000-0000-4000-8000-0000000000a1', 'C0SSWTEST1', 'c9100000-0000-4000-8000-000000000002', 3600)->>'state' = 'denied', 'other org approval refused');
 select security_test.ssw_check(public.claim_slack_skipped_channel_wakes('c9000000-0000-4000-8000-0000000000a2', 'C0SSWTEST1', 'c9100000-0000-4000-8000-000000000002', 3600)->'rows' = '[]'::jsonb, 'other org sees nothing');
 select security_test.ssw_check(public.claim_slack_skipped_channel_wakes('c9000000-0000-4000-8000-0000000000a1', 'C0SSWTEST1', 'c9100000-0000-4000-8000-0000000000ff', 3600)->>'state' = 'denied', 'missing approval refused');
+select security_test.ssw_check(public.claim_slack_skipped_channel_wakes('c9000000-0000-4000-8000-0000000000a1', 'C0SSWTEST1', 'c9100000-0000-4000-8000-000000000005', 3600)->>'state' = 'denied', 'approved ticket for another channel refused');
+select security_test.ssw_check(public.claim_slack_skipped_channel_wakes('c9000000-0000-4000-8000-0000000000a1', 'C0SSWTEST1', 'c9100000-0000-4000-8000-000000000006', 3600)->>'state' = 'denied', 'approved ticket of another tool refused');
+select security_test.ssw_check(public.claim_slack_skipped_channel_wakes('c9000000-0000-4000-8000-0000000000a1', 'C0SSWTEST1', 'c9100000-0000-4000-8000-000000000008', 3600)->>'state' = 'denied', 'non-classification config change refused');
+select security_test.ssw_check(public.claim_slack_skipped_channel_wakes('c9000000-0000-4000-8000-0000000000a1', 'C0SSWTEST1', 'c9100000-0000-4000-8000-000000000009', 3600)->>'state' = 'denied', 'classify ticket without a target refused');
+select security_test.ssw_check(public.claim_slack_skipped_channel_wakes('c9000000-0000-4000-8000-0000000000a1', 'C0SSWTEST1', 'c9100000-0000-4000-8000-00000000000a', 3600)->>'state' = 'denied', 'classify ticket for another surface refused');
+select security_test.ssw_check((select claimed_at is null from public.slack_skipped_channel_wakes where org_id = 'c9000000-0000-4000-8000-0000000000a1'), 'refused claims left the row unclaimed');
 select security_test.ssw_check(jsonb_array_length(public.claim_slack_skipped_channel_wakes('c9000000-0000-4000-8000-0000000000a1', 'C0SSWTEST1', 'c9100000-0000-4000-8000-000000000001', 3600)->'rows') = 1, 'own approved claim → 1 row');
 select security_test.ssw_check(public.claim_slack_skipped_channel_wakes('c9000000-0000-4000-8000-0000000000a1', 'C0SSWTEST1', 'c9100000-0000-4000-8000-000000000004', 3600)->'rows' = '[]'::jsonb, 'second claim (other approval) → nothing');
+select security_test.ssw_check(public.claim_slack_skipped_channel_wakes('c9000000-0000-4000-8000-0000000000a1', 'C0SSWTEST1', 'c9100000-0000-4000-8000-000000000007', 3600)->>'state' = 'ok', 'config-change channel_classification for this channel accepted');
 select security_test.ssw_check((select claimed_approval_id = 'c9100000-0000-4000-8000-000000000001' from public.slack_skipped_channel_wakes where org_id = 'c9000000-0000-4000-8000-0000000000a1'), 'claimed by the first approval');
 
 -- (4) reopen rules + TTL

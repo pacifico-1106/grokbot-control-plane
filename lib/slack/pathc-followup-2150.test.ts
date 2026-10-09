@@ -335,3 +335,66 @@ describe("(2) re-wake instruction text (no body)", () => {
     expect(text).toContain("取りこぼしたメンション");
   });
 });
+
+describe("21:53 review (1): notice wording — classify as external instead of rejecting", () => {
+  test("the wake-skip notice tells the approver to classify an external channel as external; reject only to keep the AI employee out", async () => {
+    bothOn();
+    const channel = channelId();
+    await skip(channel);
+    expect(sent.length).toBe(1);
+    expect(sent[0]).toContain("社外の場合は社外として分類してください");
+    expect(sent[0]).toContain("対応させたくない場合だけ");
+    expect(sent[0]).not.toContain("社外と共有されているなら却下");
+  });
+
+  test("the #276 egress-deny notice uses the same wording", async () => {
+    const { buildStuckNoticeTextJa } = await import("@/lib/channel-classify/stuck-notify");
+    const text = buildStuckNoticeTextJa(
+      { orgId: ORG, kind: "unclassified_channel_wake_skipped", ref: { surface: "slack", externalId: "C0WORDING1" }, reason: "channel_not_classified", approvalId: "apr_wording_1", proposalState: "created" },
+      { surface: "slack", externalId: "C0WORDING1" },
+      "channel_not_classified"
+    );
+    expect(text).not.toContain("社外と共有されているなら却下");
+    const { buildUnregisteredDenyNoticeJa } = await import("@/lib/channel-classify/core");
+    const deny = buildUnregisteredDenyNoticeJa({ ref: { surface: "slack", externalId: "C0WORDING1" }, reason: "unclassified_channel", approvalId: "apr_wording_2", proposalState: "created" });
+    expect(deny).toContain("社外の場合は社外として分類してください");
+    expect(deny).not.toContain("社外と共有されているなら却下");
+  });
+});
+
+describe("21:53 review (2): the claim only accepts THIS channel's classification ticket", () => {
+  async function approved(tool: string, metadata: Record<string, unknown>) {
+    const created = await createApproval({ orgId: ORG, employeeId: "", credentialId: "", title: "x", purpose: "admin.channel", summary: "x", risk: "high", tool, metadata });
+    return (await resolveApprovalWithoutWorkflow(created.approval.id, "approved", "fixture-human", ORG))!;
+  }
+
+  test("an approved ticket for another channel, another tool, or a non-classification config change cannot claim; the channel's own ticket can", async () => {
+    process.env.PATHC_REWAKE_ON_CLASSIFY_ENABLED = "true";
+    const { claimSkippedChannelWakes } = await import("@/lib/data/slack-skipped-wakes");
+    const channel = channelId();
+    await skip(channel);
+    const claim = (approvalId: string) => claimSkippedChannelWakes({ orgId: ORG, channelId: channel, approvalId, ttlSeconds: 3600 });
+    const otherChannel = await approved("channels.classify", { adminMutation: { surface: "slack", externalId: "C0OTHERCH9", classification: "internal" } });
+    const otherTool = await approved("parties.upsert", { adminMutation: { surface: "slack", externalId: channel } });
+    const noTarget = await approved("channels.classify", { adminMutation: {} });
+    const lineSurface = await approved("channels.classify", { adminMutation: { surface: "line", externalId: channel } });
+    const instructions = await approved("config.change_request", { configChange: { proposal: { kind: "instructions", mode: "append", text: "x" } } });
+    for (const a of [otherChannel, otherTool, noTarget, lineSurface, instructions]) {
+      expect((await claim(a.id)).state).toBe("denied");
+    }
+    const own = await approved("channels.classify", { adminMutation: { surface: "slack", externalId: channel, classification: "internal" } });
+    const result = await claim(own.id);
+    expect(result.state).toBe("ok");
+    expect(result.state === "ok" ? result.rows.length : -1).toBe(1);
+  });
+
+  test("a config-change channel_classification for this channel is accepted", async () => {
+    process.env.PATHC_REWAKE_ON_CLASSIFY_ENABLED = "true";
+    const { claimSkippedChannelWakes } = await import("@/lib/data/slack-skipped-wakes");
+    const channel = channelId();
+    await skip(channel);
+    const cc = await approved("config.change_request", { configChange: { proposal: { kind: "channel_classification", surface: "slack", externalId: channel, classification: "internal" } } });
+    const result = await claimSkippedChannelWakes({ orgId: ORG, channelId: channel, approvalId: cc.id, ttlSeconds: 3600 });
+    expect(result.state === "ok" ? result.rows.length : -1).toBe(1);
+  });
+});

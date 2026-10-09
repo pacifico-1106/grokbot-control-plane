@@ -39,4 +39,13 @@ describe("slack skipped channel wakes migration", () => {
     const cols = table.slice(0, table.indexOf(");")).toLowerCase();
     for (const banned of [" text_", "body", "message", "token", "summary", "content"]) expect(cols).not.toContain(banned);
   });
+
+  test("21:53 (2): the claim checks the approval is THIS channel's classification ticket (tool + externalId)", () => {
+    const sql = readFileSync(migrationPath, "utf8");
+    const claim = sql.slice(sql.indexOf("create or replace function public.claim_slack_skipped_channel_wakes("));
+    expect(claim).toContain("ar.tool = 'channels.classify'");
+    expect(claim).toContain("ar.metadata->'adminMutation'->>'externalId' = p_channel");
+    expect(claim).toContain("ar.tool = 'config.change_request'");
+    expect(claim).toContain("'channel_classification'");
+  });
 });
