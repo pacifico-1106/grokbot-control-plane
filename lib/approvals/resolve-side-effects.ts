@@ -118,14 +118,18 @@ export async function runApprovalResolveSideEffects(opts: {
       const check = await validateApprovalNotifyEmail(employee?.orgId ?? approval.orgId, configured);
       if (!check.ok || !check.email) {
         const reason = check.ok ? "approval_notify_email_invalid" : check.code;
+        // A lookup failure is "could not verify", not "not a member".
+        const unverified = reason === "approval_notify_email_unverified";
         employeeEmail = { ok: false, skipped: true, error: reason };
         await appendAuditEvent({
           orgId: approval.orgId,
           employeeId: approval.employeeId,
           credentialId: null,
           action: "notification.delivery_failed",
-          purpose: "approval_notify_email.recipient_not_member",
-          summary: "承認結果メールを送らなかった（通知先がこの組織の有効なメンバーではない）",
+          purpose: unverified ? "approval_notify_email.recipient_unverified" : "approval_notify_email.recipient_not_member",
+          summary: unverified
+            ? "承認結果メールを送らなかった（通知先がこの組織の有効なメンバーか確認できなかった）"
+            : "承認結果メールを送らなかった（通知先がこの組織の有効なメンバーではない）",
           metadata: { approvalId: approval.id, employeeId: approval.employeeId, reason },
         }).catch(() => undefined);
       } else {

@@ -243,9 +243,11 @@ export async function POST(req: Request) {
     });
   } catch (e) {
     if (e instanceof ApprovalNotifyEmailError) {
+      // The writer re-checks; a lookup failure there is "could not verify"
+      // (503, retry later), never "not a member" (400).
       return NextResponse.json(
         { ok: false, error: e.code, code: e.code, message: APPROVAL_NOTIFY_EMAIL_MESSAGES_JA[e.code] },
-        { status: 400 }
+        { status: e.code === "approval_notify_email_unverified" ? 503 : 400 }
       );
     }
     const raw = e instanceof Error ? e.message : "issue_failed";
