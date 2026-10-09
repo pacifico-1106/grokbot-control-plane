@@ -85,7 +85,8 @@ function calendarLooksDetailed(args: Record<string, unknown>): boolean {
 export function toolDefaultClassification(
   tool: string,
   args: Record<string, unknown>,
-  audience?: Audience
+  audience?: Audience,
+  opts?: { verifiedInternalDestination?: boolean }
 ): {
   informationClass: InformationClass;
   fidelity: DisclosureFidelity;
@@ -99,6 +100,12 @@ export function toolDefaultClassification(
     return { informationClass: "confidential", fidelity: "source" };
   }
   if (INTERNAL_SUMMARY_DEFAULT_TOOLS.has(tool) && audience === "internal") {
+    return { informationClass: "internal", fidelity: "summary" };
+  }
+  // 木村 B (COMM_SEND_INTERNAL_DEFAULT_ENABLED, decided by the caller):
+  // comm.send relaxes ONLY for a destination Staffpass itself verified as
+  // internal (credential org's channel ledger) AND an internal audience.
+  if (tool === "comm.send" && audience === "internal" && opts?.verifiedInternalDestination === true) {
     return { informationClass: "internal", fidelity: "summary" };
   }
   if (
@@ -119,6 +126,7 @@ export async function resolveInformationDisclosure(input: {
   tool: string;
   body: GatewayInvokeRequest;
   audience?: Audience;
+  verifiedInternalDestination?: boolean;
 }): Promise<{ informationClass: InformationClass; fidelity: DisclosureFidelity; unclassified: boolean }> {
   const args = (input.body.args && typeof input.body.args === "object" ? input.body.args : {}) as Record<string, unknown>;
   const explicitClass =
@@ -145,7 +153,9 @@ export async function resolveInformationDisclosure(input: {
     }
   }
 
-  const defaults = toolDefaultClassification(input.tool, args, input.audience);
+  const defaults = toolDefaultClassification(input.tool, args, input.audience, {
+    verifiedInternalDestination: input.verifiedInternalDestination,
+  });
   const inherited = assetClasses.length ? maxInformationClass(assetClasses) : null;
   const base = inherited ?? defaults.informationClass;
   // Classes attach to tools/data. A request may only raise severity (public → confidential),
