@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { assertWebActorApproverAuthority, webDirectDeniedBody, webSessionActorMemberId } from "@/lib/approver-authority/web-direct";
+import { readPrevSlackAdapter, slackAdapterChangedFields } from "@/lib/approver-authority/web-prev-state";
 import { appendAuditEvent, listConversationAdapters, upsertConversationAdapter } from "@/lib/data";
 import { requireOrgAdminSession } from "@/lib/auth/require-org";
 import { DASHBOARD_SLACK_ADAPTER_SAVE, recordSetupToolSucceeded } from "@/lib/approvals/attachment-retry-cap";
@@ -26,19 +27,25 @@ export async function PUT(req: Request) {
   }
   const enabled = body.enabled === true;
   const botToken = String(body.botToken || "").trim();
+  const label = String(body.label || "").trim();
   // Review 2026-10-09 item 2: where notices / conversation posts go (notify destination).
-  const authority = await assertWebActorApproverAuthority({
-    orgId: gate.orgId,
-    memberId: await webSessionActorMemberId(req),
-    changes: [{ tool: "web.conversationAdapter", adminMutation: {}, kind: "owner_or_designated_admin" }],
-    surface: "settings.conversation_adapters",
-  });
-  if (!authority.ok) return NextResponse.json(webDirectDeniedBody(authority), { status: 403 });
+  // #279 decision 3 (木村 2026-10-09 22:48): gated only when a field actually
+  // changes; unreadable previous value → changed; a bot token → always changed.
+  const changedFields = slackAdapterChangedFields(await readPrevSlackAdapter(gate.orgId), { label, enabled, botToken });
+  if (changedFields.length > 0) {
+    const authority = await assertWebActorApproverAuthority({
+      orgId: gate.orgId,
+      memberId: await webSessionActorMemberId(req),
+      changes: [{ tool: "web.conversationAdapter", adminMutation: { changedFields }, kind: "owner_or_designated_admin" }],
+      surface: "settings.conversation_adapters",
+    });
+    if (!authority.ok) return NextResponse.json(webDirectDeniedBody(authority), { status: 403 });
+  }
   try {
     const saved = await upsertConversationAdapter({
       orgId: gate.orgId,
       surface,
-      label: String(body.label || "").trim(),
+      label,
       enabled,
       config: {},
       secrets: { botToken },

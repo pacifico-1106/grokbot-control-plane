@@ -42,6 +42,7 @@ beforeEach(async () => {
   await writeDesignatedAdminMemberIds(ORG, [DADMIN]);
 });
 afterEach(() => {
+  DEMO_ORG.sodWarnPolicy = { domains: ["comm_external", "money", "destructive", "commit"] };
   if (saved === undefined) delete process.env[FLAG];
   else process.env[FLAG] = saved;
   resetRuntimeMembers();
@@ -135,7 +136,7 @@ const params = (id: string) => ({ params: Promise.resolve({ id }) });
 
 const surfaces: Array<{ name: string; call: (actor: string) => Promise<Response> }> = [
   { name: "POST /api/employees/issue", call: (a) => issuePost(json("http://localhost/api/employees/issue", "POST", a, { displayName: "wd発行", roleLabel: "テスト", scopes: ["mail:draft"] })) },
-  { name: "PUT /api/settings/sod-warn-policy", call: (a) => putSodPolicy(json("http://localhost/api/settings/sod-warn-policy", "PUT", a, { level: "warn" })) },
+  { name: "PUT /api/settings/sod-warn-policy", call: (a) => putSodPolicy(json("http://localhost/api/settings/sod-warn-policy", "PUT", a, { domains: ["money"] })) },
   { name: "PUT /api/settings/conversation-adapters", call: (a) => putAdapters(json("http://localhost/api/settings/conversation-adapters", "PUT", a, { surface: "slack", enabled: false, label: "wd" })) },
   { name: "PATCH /api/employees/[id]/binding", call: (a) => patchBinding(json("http://localhost/api/employees/emp_sales/binding", "PATCH", a, { wakeWebhookUrl: "https://wake.example.com/hook" }), params("emp_sales")) },
   { name: "POST /api/employees/[id]/rotate", call: (a) => rotatePost(json("http://localhost/api/employees/emp_ops/rotate", "POST", a, {}), params("emp_ops")) },

@@ -70,6 +70,19 @@ export const APPROVER_AUTHORITY_TARGETS = {
     "channels.classify",
     "employees.postingIdentity.set",
     "mailPolicy.patch",
+    // 木村 2026-10-09 22:48 (#279 decision 2): reply / scheduling / ingress
+    // policy, conversation Bot token, AI-employee identity, org metadata, stuck
+    // watch. Standard; money content (schedulingPolicy costCapJpy) → owner.
+    // orgs.patch is platform-ops only and runs without a ticket today, so its
+    // row only takes effect if it is ever filed as a ticket.
+    "replyPolicy.patch",
+    "schedulingPolicy.patch",
+    "ingressHandoff.patch",
+    "setup.slackAdapter.setBotToken",
+    "employeeIdentity.upsert",
+    "employeeIdentity.bindMailbox",
+    "orgs.patch",
+    "stuckWatch.patch",
   ],
   sensitiveTools: [
     "employees.spend.set",
@@ -133,7 +146,9 @@ export type ApproverRequirementReason =
   | "unknown_policy_key"
   | "employee_has_money_scope"
   | "classification_failed"
-  | "money_spend_limit";
+  | "money_spend_limit"
+  | "money_cost_cap"
+  | "money_cost_cap_unverified";
 
 export interface ApproverRequirement {
   kind: RequiredApproverKind;
@@ -165,6 +180,12 @@ export interface ApproverClassificationContext {
   /** Current scopes of the target employee (policy.patch / employees.reinstate). */
   currentEmployeeScopes?: readonly string[] | null;
   currentEmployeeApprovalPolicy?: string | null;
+  /**
+   * schedulingPolicy.patch: schedulingCostCapsSignature() of the policy in force
+   * now (`current`) and of what clearOverride would inherit (`ifCleared`).
+   * Missing → the cost-cap change cannot be judged → owner.
+   */
+  schedulingCostCaps?: { current: string; ifCleared: string } | null;
 }
 
 export interface ApproverClassificationInput {
@@ -357,6 +378,34 @@ function classifyEmployeeIssue(args: Record<string, unknown>, reasons: Set<Appro
   }
 }
 
+/**
+ * Money inside the eight 2026-10-09 22:48 targets: only schedulingPolicy rules'
+ * costCapJpy (the cost ceiling a meeting slot may reach). Signature = the
+ * capped rules as sorted {id, costCapJpy}; rules without a cap are left out.
+ */
+export function schedulingCostCapsSignature(policy: { rules?: unknown } | null | undefined): string {
+  const rules = policy && Array.isArray(policy.rules) ? policy.rules : [];
+  const caps = rules
+    .filter((rule): rule is Record<string, unknown> => isRecord(rule) && rule.costCapJpy !== undefined && rule.costCapJpy !== null)
+    .map((rule) => ({ id: typeof rule.id === "string" ? rule.id : "", costCapJpy: Number(rule.costCapJpy) }))
+    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : a.costCapJpy - b.costCapJpy));
+  return canonical(caps);
+}
+
+function classifySchedulingPolicy(
+  args: Record<string, unknown>,
+  context: ApproverClassificationContext | null | undefined,
+  reasons: Set<ApproverRequirementReason>
+) {
+  const caps = context?.schedulingCostCaps;
+  if (!caps || typeof caps.current !== "string" || typeof caps.ifCleared !== "string") {
+    reasons.add("money_cost_cap_unverified");
+    return;
+  }
+  const next = args.clearOverride === true ? caps.ifCleared : schedulingCostCapsSignature(args);
+  if (next !== caps.current) reasons.add("money_cost_cap");
+}
+
 function classifyUnsafe(input: ApproverClassificationInput): ApproverRequirement | null {
   const tool = (input.tool || "").trim();
   if (!isApproverAuthorityTargetTool(tool)) return null;
@@ -368,6 +417,7 @@ function classifyUnsafe(input: ApproverClassificationInput): ApproverRequirement
   if (tool === "approvalRoutes.patch") classifyApprovalRoutes(metadata, reasons);
   if (tool === "policy.patch") classifyPolicyPatch(mutation, input.context, reasons);
   if (tool === "employees.issue") classifyEmployeeIssue(mutation, reasons);
+  if (tool === "schedulingPolicy.patch") classifySchedulingPolicy(mutation, input.context, reasons);
   if (tool === "employees.reinstate") {
     const scopes = input.context?.currentEmployeeScopes;
     if (!scopes) reasons.add("money_scope_unverified");

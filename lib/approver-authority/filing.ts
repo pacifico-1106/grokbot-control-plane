@@ -8,6 +8,7 @@ import {
   isApproverAuthorityTargetTool,
   type ApproverClassificationContext,
   requiredApprovalCount,
+  schedulingCostCapsSignature,
   type ApproverRequirement,
 } from "./targets";
 import { requesterMemberIdsFromMetadata, type ApproverAuthorityDenyReason } from "./decide";
@@ -27,6 +28,7 @@ async function loadContext(
   tool: string,
   metadata: Record<string, unknown> | null | undefined
 ): Promise<ApproverClassificationContext | null> {
+  if (tool === "schedulingPolicy.patch") return loadSchedulingContext(orgId, metadata);
   if (tool !== "policy.patch" && tool !== "employees.reinstate") return null;
   const employeeId = employeeIdOf(metadata);
   if (!employeeId) return null;
@@ -36,6 +38,53 @@ async function loadContext(
     return {
       currentEmployeeScopes: [...(employee.scopes ?? [])],
       currentEmployeeApprovalPolicy: employee.approvalPolicy ?? null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * schedulingPolicy.patch: cost caps in force now and after clearOverride.
+ * Read with error checks (the storage helpers fall back to the default policy
+ * on a failed read, which would hide a cap) — any read error → null (→ owner).
+ */
+async function loadSchedulingContext(
+  orgId: string,
+  metadata: Record<string, unknown> | null | undefined
+): Promise<ApproverClassificationContext | null> {
+  try {
+    const employeeId = employeeIdOf(metadata) || null;
+    const { defaultSchedulingPolicy, normalizeSchedulingPolicy } = await import("@/lib/scheduling-policy/validate");
+    const { isDemoMode } = await import("@/lib/mode");
+    let orgPolicy: { rules?: unknown } | null;
+    let employeePolicy: { rules?: unknown } | null = null;
+    if (isDemoMode()) {
+      const { getEffectiveSchedulingPolicy } = await import("@/lib/data/scheduling-policy");
+      const effective = await getEffectiveSchedulingPolicy(orgId, employeeId);
+      orgPolicy = effective.orgPolicy;
+      employeePolicy = effective.employeeOverride;
+    } else {
+      const { createSupabaseAdminClient } = await import("@/lib/supabase");
+      const admin = createSupabaseAdminClient();
+      if (!admin) return null;
+      const org = await admin.from("orgs").select("scheduling_policy").eq("id", orgId).maybeSingle();
+      if (org.error || !org.data) return null;
+      const rawOrg = (org.data as { scheduling_policy?: unknown }).scheduling_policy;
+      orgPolicy = rawOrg ? normalizeSchedulingPolicy(rawOrg) : null;
+      if (employeeId) {
+        const emp = await admin.from("employees").select("scheduling_policy").eq("id", employeeId).eq("org_id", orgId).maybeSingle();
+        if (emp.error || !emp.data) return null;
+        const rawEmp = (emp.data as { scheduling_policy?: unknown }).scheduling_policy;
+        employeePolicy = rawEmp ? normalizeSchedulingPolicy(rawEmp) : null;
+      }
+    }
+    const inherited = orgPolicy ?? defaultSchedulingPolicy();
+    return {
+      schedulingCostCaps: {
+        current: schedulingCostCapsSignature(employeePolicy ?? inherited),
+        ifCleared: schedulingCostCapsSignature(inherited),
+      },
     };
   } catch {
     return null;
