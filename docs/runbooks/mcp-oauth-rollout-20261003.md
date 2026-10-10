@@ -94,6 +94,7 @@
 - **rid のブラウザ結び付け**: `/oauth/authorize` が `__Host-sp_oauth_rb_<hash>` cookie（HttpOnly・Secure・SameSite=Lax・Path=/・10 分）を発行し、同意画面の表示と送信の両方で必須。他人から転送された同意 URL は 403。全クライアントで「自分で開始した場合だけ許可」の警告を表示。
 - **RS**: `MCP_OAUTH_DCR_ENABLED` を OFF にすると DCR クライアントの有効なアクセストークンも即拒否。社員は `status=active` のみ（consent と同じ）。
 - **CIMD 再取得**は既存の `status` を上書きしない（ブロックが再取得で戻らない）。
+- **CIMD 取得の SSRF 対策（reland-8）**: https:443・ホスト名のみ（IP 直書きは許可リストにあっても拒否）。DNS は 1 回だけ引き、**全**回答が公開アドレスでなければ拒否（プライベート・ループバック・リンクローカル／メタデータ 169.254.169.254・CGNAT・ULA（fd00:ec2::254 など）・IPv4 射影／NAT64／6to4／Teredo）。接続は確認した IP に固定（SNI・Host・証明書検証は元のホスト名）するので、DNS リバインディングの答えは使われない。リダイレクトは追わない。64 KB 上限、DNS から本文までまとめて 5 秒。
 - 許可リストは空なら fail-closed（上記）。
 
 ### ハードニング 2b（PR-11 追加コミット）
