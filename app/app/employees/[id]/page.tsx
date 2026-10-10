@@ -2,6 +2,8 @@ import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
 import { BindingPanel } from "@/components/employees/BindingPanel";
+import { OAuthGrantsPanel } from "@/components/employees/OAuthGrantsPanel";
+import { isMcpOAuthEnabled } from "@/lib/mcp-oauth/config";
 import { EmployeeActionLog } from "@/components/employees/EmployeeActionLog";
 import { EmployeeManagerForm } from "@/components/employees/EmployeeManagerForm";
 import { EmployeeApprovalInboxForm } from "@/components/employees/EmployeeApprovalInboxForm";
@@ -303,7 +305,9 @@ export default async function EmployeeDetailPage({
         initial={binding}
         {...bindingPermissions}
         demoMode={isDemoMode()}
+        oauthEnabled={isMcpOAuthEnabled()}
       />
+      {isMcpOAuthEnabled() ? <OAuthGrantsPanel employeeId={employee.id} /> : null}
 
       <EmployeeTerminateForm employee={employee} />
 
