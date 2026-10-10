@@ -1,14 +1,23 @@
 /**
  * Client ID Metadata Documents (draft-ietf-oauth-client-id-metadata-document).
- * SSRF controls (S8): https only, path required, host allowlist, every resolved
- * IP public, no redirects followed, 5 s timeout, 64 KB cap, JSON only,
- * client_id must equal the document URL exactly. Cached 5 min – 24 h.
- * Residual: DNS rebinding between lookup and fetch is bounded by the host
- * allowlist (only chatgpt.com / claude.ai / claude.com / anthropic.com by default).
+ * SSRF controls (S8, reland-8): https only on 443, path required, hostname
+ * (never an IP literal) on the host allowlist; DNS is resolved ONCE and EVERY
+ * answer must be public (net-guard isPrivateAddress); the TCP/TLS connection
+ * is pinned to that checked answer (node:https to the IP, SNI + Host =
+ * hostname, certificate verified against the hostname, socket `lookup`
+ * pinned too), so a rebinding answer after the check is never used; no
+ * redirects followed (node:https never follows; 3xx = redirect_refused);
+ * identity encoding only; 64 KB cap (declared and streamed); one 5 s OVERALL
+ * deadline covering DNS + connect + headers + body, after which the request
+ * and socket are destroyed; JSON only; client_id must equal the document URL
+ * exactly. Cached 5 min – 24 h.
  */
+import type { ClientRequest, IncomingMessage, IncomingHttpHeaders, RequestOptions } from "node:http";
+import { request as httpsRequest } from "node:https";
+import { isIP } from "node:net";
 import { getOAuthStore, type OAuthClientRecord } from "@/lib/data/oauth";
 import { cimdAllowedHosts } from "@/lib/mcp-oauth/config";
-import { defaultResolver, isPrivateAddress, type HostResolver } from "@/lib/mcp-oauth/net-guard";
+import { defaultResolver, isPrivateAddress, pinnedLookup, type HostResolver, type ResolvedAnswer } from "@/lib/mcp-oauth/net-guard";
 import { matchesRedirectAllowlist } from "@/lib/mcp-oauth/redirect-policy";
 
 export const CIMD_MAX_BYTES = 64 * 1024;
@@ -46,32 +55,109 @@ function ttlFromCacheControl(header: string | null): number {
   return Math.min(CIMD_MAX_TTL_SEC, Math.max(CIMD_MIN_TTL_SEC, v));
 }
 
-async function readCapped(res: Response): Promise<string | null> {
-  const len = Number(res.headers.get("content-length") || "0");
-  if (len > CIMD_MAX_BYTES) return null;
-  if (!res.body) return "";
-  const reader = res.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    total += value.byteLength;
-    if (total > CIMD_MAX_BYTES) {
-      await reader.cancel().catch(() => undefined);
-      return null;
-    }
-    chunks.push(value);
-  }
-  return Buffer.concat(chunks).toString("utf8");
+/** DNS + node:https-style request. Injected in tests; production uses the system resolver and node:https. */
+export type CimdTransport = {
+  lookup: HostResolver;
+  request: (options: RequestOptions, callback: (res: IncomingMessage) => void) => ClientRequest;
+};
+export const defaultCimdTransport = (): CimdTransport => ({ lookup: defaultResolver, request: httpsRequest });
+
+export function buildCimdRequestOptions(pinned: ResolvedAnswer, hostname: string, path: string): RequestOptions & { servername: string; rejectUnauthorized: true } {
+  return {
+    protocol: "https:",
+    hostname: pinned.address,
+    family: pinned.family,
+    port: 443,
+    path,
+    method: "GET",
+    servername: hostname,
+    rejectUnauthorized: true,
+    agent: false,
+    lookup: pinnedLookup(pinned),
+    headers: {
+      host: hostname,
+      accept: "application/json",
+      "accept-encoding": "identity",
+      "user-agent": "Staffpass-OAuth-CIMD/1.0",
+    },
+  };
 }
 
-export type CimdDeps = { fetchImpl?: typeof fetch; resolveHost?: HostResolver; now?: Date };
+type FetchOutcome =
+  | { ok: true; headers: IncomingHttpHeaders; body: string }
+  | { ok: false; error: Extract<CimdError, "fetch_failed" | "private_address" | "redirect_refused" | "too_large"> };
+
+const header = (h: IncomingHttpHeaders, name: string): string => {
+  const v = h[name];
+  return Array.isArray(v) ? v.join(", ") : v ?? "";
+};
+
+/** Resolve once, check every answer, connect pinned to the first, read ≤ CIMD_MAX_BYTES, all under one deadline. */
+function fetchCimdDocument(hostname: string, path: string, t: CimdTransport, timeoutMs: number): Promise<FetchOutcome> {
+  return new Promise<FetchOutcome>((resolve) => {
+    let done = false;
+    let req: ClientRequest | null = null;
+    let res: IncomingMessage | null = null;
+    const finish = (o: FetchOutcome) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      try { res?.destroy(); } catch { /* already gone */ }
+      try { req?.destroy(); } catch { /* already gone */ }
+      resolve(o);
+    };
+    const failed = () => finish({ ok: false, error: "fetch_failed" });
+    const timer = setTimeout(failed, timeoutMs);
+    let lookup: Promise<ResolvedAnswer[]>;
+    try {
+      lookup = Promise.resolve(t.lookup(hostname));
+    } catch {
+      return failed();
+    }
+    lookup.then((answers) => {
+      if (done) return;
+      if (!Array.isArray(answers) || answers.length === 0 || answers.some((a) => isPrivateAddress(String(a?.address ?? "")))) {
+        return finish({ ok: false, error: "private_address" });
+      }
+      try {
+        req = t.request(buildCimdRequestOptions(answers[0], hostname, path), (r) => {
+          res = r;
+          if (done) { r.destroy(); return; }
+          const status = r.statusCode || 0;
+          if (status >= 300 && status < 400) return finish({ ok: false, error: "redirect_refused" });
+          if (status !== 200) return failed();
+          const enc = header(r.headers, "content-encoding").trim().toLowerCase();
+          if (enc && enc !== "identity") return failed();
+          if (Number(header(r.headers, "content-length") || "0") > CIMD_MAX_BYTES) return finish({ ok: false, error: "too_large" });
+          const chunks: Buffer[] = [];
+          let size = 0;
+          r.on("data", (chunk: Buffer | string) => {
+            const b = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
+            size += b.length;
+            if (size > CIMD_MAX_BYTES) finish({ ok: false, error: "too_large" });
+            else chunks.push(b);
+          });
+          r.on("end", () => finish({ ok: true, headers: r.headers, body: Buffer.concat(chunks).toString("utf8") }));
+          r.on("aborted", failed);
+          r.on("error", failed);
+        });
+        req.on("error", failed);
+        req.end();
+      } catch {
+        failed();
+      }
+    }, failed);
+  });
+}
+
+export type CimdDeps = { transport?: CimdTransport; now?: Date; timeoutMs?: number };
 
 export async function resolveCimdClient(clientId: string, deps: CimdDeps = {}): Promise<CimdResult> {
   if (!isCimdClientId(clientId)) return { ok: false, error: "not_cimd_url" };
   const url = new URL(clientId);
   const host = url.hostname.toLowerCase();
+  // An IP literal is never a CIMD host, even if someone put one on the allowlist.
+  if (host.startsWith("[") || isIP(host)) return { ok: false, error: "host_not_allowed" };
   if (!cimdAllowedHosts().includes(host) || url.port) return { ok: false, error: "host_not_allowed" };
 
   const now = deps.now ?? new Date();
@@ -88,31 +174,10 @@ export async function resolveCimdClient(clientId: string, deps: CimdDeps = {}): 
   }
   if (cached?.status === "blocked") return { ok: false, error: "invalid_metadata" };
 
-  const resolveHost = deps.resolveHost ?? defaultResolver;
-  let addrs: string[];
-  try {
-    addrs = await resolveHost(host);
-  } catch {
-    return { ok: false, error: "fetch_failed" };
-  }
-  if (addrs.length === 0 || addrs.some(isPrivateAddress)) return { ok: false, error: "private_address" };
-
-  let res: Response;
-  try {
-    res = await (deps.fetchImpl ?? fetch)(clientId, {
-      method: "GET",
-      redirect: "manual",
-      headers: { accept: "application/json" },
-      signal: AbortSignal.timeout(CIMD_TIMEOUT_MS),
-    });
-  } catch {
-    return { ok: false, error: "fetch_failed" };
-  }
-  if (res.status >= 300 && res.status < 400) return { ok: false, error: "redirect_refused" };
-  if (res.status !== 200) return { ok: false, error: "fetch_failed" };
-  if (!(res.headers.get("content-type") || "").toLowerCase().includes("json")) return { ok: false, error: "not_json" };
-  const text = await readCapped(res);
-  if (text == null) return { ok: false, error: "too_large" };
+  const fetched = await fetchCimdDocument(host, `${url.pathname}${url.search}`, deps.transport ?? defaultCimdTransport(), deps.timeoutMs ?? CIMD_TIMEOUT_MS);
+  if (!fetched.ok) return { ok: false, error: fetched.error };
+  if (!header(fetched.headers, "content-type").toLowerCase().includes("json")) return { ok: false, error: "not_json" };
+  const text = fetched.body;
 
   let doc: Record<string, unknown>;
   try {
@@ -133,7 +198,7 @@ export async function resolveCimdClient(clientId: string, deps: CimdDeps = {}): 
   const allowed = redirectUris.filter((u) => matchesRedirectAllowlist(u));
   if (allowed.length === 0) return { ok: false, error: "no_allowed_redirect" };
 
-  const ttl = ttlFromCacheControl(res.headers.get("cache-control"));
+  const ttl = ttlFromCacheControl(header(fetched.headers, "cache-control") || null);
   const str = (v: unknown, max = 512) => (typeof v === "string" && v.length <= max ? v : null);
   const client = await store.upsertClient({
     clientId,
