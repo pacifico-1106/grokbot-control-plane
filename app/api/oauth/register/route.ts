@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getOAuthStore } from "@/lib/data/oauth";
 import { isMcpOAuthDcrEnabled } from "@/lib/mcp-oauth/config";
+import { notifyOpsDcrGlobalCapReached } from "@/lib/mcp-oauth/notify";
 import { OAUTH_RATE_LIMITS, ipHash, rateLimit } from "@/lib/mcp-oauth/rate-limit";
 import { matchesRedirectAllowlist } from "@/lib/mcp-oauth/redirect-policy";
 import { randomToken } from "@/lib/mcp-oauth/tokens";
@@ -16,6 +17,8 @@ const err = (status: number, error: string, description: string, extra: Record<s
  * RFC 7591 Dynamic Client Registration — MCP_OAUTH_DCR_ENABLED only (Q7).
  * Public clients only; every redirect_uri must pass the allowlist; registering
  * grants nothing until a tenant admin consents. client_name is untrusted.
+ * Per-IP bucket = ipHash (an IPv6 client counts as its /64). Unconsented
+ * registrations are deleted after a day by /api/cron/oauth-purge.
  */
 export async function POST(req: Request) {
   if (!isMcpOAuthDcrEnabled()) return new NextResponse("Not Found", { status: 404 });
@@ -26,7 +29,15 @@ export async function POST(req: Request) {
   if (!perIp.allowed) return err(429, "too_many_requests", "registration rate limit", { "Retry-After": String(perIp.retryAfterSec) });
   const store = getOAuthStore();
   const since = new Date(Date.now() - 86400_000).toISOString();
-  if ((await store.countDcrClientsSince(since)) >= OAUTH_RATE_LIMITS.dcrGlobalPerDay) {
+  const recent = await store.countDcrClientsSince(since);
+  if (recent >= OAUTH_RATE_LIMITS.dcrGlobalPerDay) {
+    // #318 follow-up: tell ops once per day (not once per refused request).
+    try {
+      const first = await rateLimit("dcr_global_cap_alert", 1, 86400);
+      if (first.count === 1) await notifyOpsDcrGlobalCapReached({ count: recent, cap: OAUTH_RATE_LIMITS.dcrGlobalPerDay });
+    } catch {
+      /* best-effort: the 429 stands either way */
+    }
     return err(429, "too_many_requests", "global registration limit");
   }
 

@@ -320,6 +320,10 @@ export async function processConsentDecision(
 
   const cap = now.getTime() + GRANT_MAX_TTL_SEC * 1000;
   const credCap = cred.expiresAt ? Date.parse(cred.expiresAt) : Infinity;
+  // #318 follow-up: a successful authorization keeps the client out of the
+  // stale-DCR cleanup. Touched BEFORE the grant exists, so the cron's delete
+  // (which re-checks last_used_at) cannot race a consent that is in flight.
+  await deps.store.touchClient(client.clientId, now.toISOString()).catch(() => undefined);
   const grant = await deps.store.createGrant({
     orgId: session.orgId,
     employeeId: employee.id,
