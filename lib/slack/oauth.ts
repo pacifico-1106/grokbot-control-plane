@@ -36,6 +36,12 @@ export const SLACK_USER_SCOPES =
  * - channels:history, groups:history, im:history: メッセージ履歴読み取り
  * - chat:write: メッセージ投稿
  * - files:write: ファイルアップロード（Path A チャネル / App DM 添付）
+ * - channels:read, groups:read, im:read, mpim:read: conversations.info
+ *   （audience 判定・Slack Connect の shared_external 記録・channel-classify 提案）
+ * - users:read: users.info（受信者の team id 確認 → autoSlackTeamInternal / #298）
+ *
+ * 順序: Slack app (A0BU8TABSV6) の管理画面にスコープを先に追加してから、このコードを
+ * deploy すること。逆順だと bot install が invalid_scope で失敗します。
  *
  * docs/tenant-slack-kickoff-rail.md の Bot Token Scopes と一致させること。
  * スコープ追加後は、テナントが bot-install フローを再実行して xoxb をリフレッシュする必要があります。
@@ -51,7 +57,23 @@ export function slackUserScopesForAuthorize(): string {
   return scopes.includes("im:write") ? SLACK_USER_SCOPES : [...scopes, "im:write"].join(",");
 }
 
-export const SLACK_BOT_SCOPES = "im:write,app_mentions:read,channels:history,groups:history,im:history,chat:write,files:write";
+export const SLACK_BOT_SCOPES = [
+  "im:write",
+  "app_mentions:read",
+  "channels:history",
+  "groups:history",
+  "im:history",
+  "chat:write",
+  "files:write",
+  // channel-classify / audience (木村 10/10)
+  "channels:read",
+  "groups:read",
+  "users:read",
+  "im:read",
+  "mpim:read",
+]
+  .filter((scope, i, all) => all.indexOf(scope) === i)
+  .join(",");
 
 export const SLACK_OAUTH_COOKIE = "staffpass_slack_oauth";
 export const SLACK_BOT_INSTALL_COOKIE = "staffpass_slack_bot_install";
