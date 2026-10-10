@@ -17,7 +17,7 @@ import { sendApprovalNotifications } from "@/lib/notify/channels";
 import { getCurrentOrgId } from "@/lib/auth/session";
 import {
   assertExecutable,
-  appendAuditEvent,
+  appendAuditEvent as appendAuditEventBase,
   createApproval,
   getActionCounts,
   getApprovalById,
@@ -701,6 +701,12 @@ export type RunGatewayInvokeInput = {
   body: GatewayInvokeRequest;
   /** Optional credential id from Bearer resolution */
   credentialId?: string | null;
+  /**
+   * MCP OAuth (PR-7): when the caller authenticated with an OAuth access token,
+   * every audit row of this invoke carries authMethod/oauthGrantId/oauthClientHost.
+   * gb_emp_ callers leave this unset → audit rows unchanged.
+   */
+  oauth?: { grantId: string; clientHost: string } | null;
 };
 
 /**
@@ -742,6 +748,11 @@ async function runGatewayInvokeInner(
 ): Promise<GatewayInvokeResult> {
   // `let`: a U… Slack recipient may be resolved to the internal DM route below
   // (SLACK_U_TO_DM_SEND_ENABLED + SLACK_DM_AUTOROUTE_ENABLED); every later layer then sees the same D….
+  const oauthMeta = input.oauth
+    ? { authMethod: "oauth", oauthGrantId: input.oauth.grantId, oauthClientHost: input.oauth.clientHost }
+    : null;
+  const appendAuditEvent: typeof appendAuditEventBase = (event) =>
+    appendAuditEventBase(oauthMeta ? { ...event, metadata: { ...(event.metadata ?? {}), ...oauthMeta } } : event);
   let body = input.body;
   const employeeId = (input.employeeId || "").trim();
 

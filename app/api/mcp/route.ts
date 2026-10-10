@@ -1,5 +1,14 @@
 import { NextResponse } from "next/server";
 import { resolveEmployeeCredential } from "@/lib/auth/employee-credential";
+import { isMcpOAuthLegacyUnauthInitialize } from "@/lib/feature-flags";
+import { isMcpOAuthEnabled } from "@/lib/mcp-oauth/config";
+import {
+  authChallengeMeta,
+  decorateToolsForOAuth,
+  oauthInstructions,
+  oauthServerCardAuth,
+} from "@/lib/mcp-oauth/client-compat";
+import { hasAnyMcpCredential, resolveMcpCredential, wwwAuthenticate } from "@/lib/mcp-oauth/resource-server";
 import { maybeLogUnauthInitialize } from "@/lib/mcp/unauth-init-log";
 import {
   callStaffpassMcpTool,
@@ -39,6 +48,8 @@ function corsHeaders(): HeadersInit {
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
     // MCP 2026-07-28 request headers. No Mcp-Session-Id: this server never mints sessions.
     "Access-Control-Allow-Headers": mcpCorsAllowHeaders("x-staffpass-credential"),
+    // OAuth ON only: browsers may read the challenge (flag OFF → header absent, as before).
+    ...(isMcpOAuthEnabled() ? { "Access-Control-Expose-Headers": "WWW-Authenticate" } : {}),
     "Cache-Control": "no-store",
   };
 }
@@ -55,7 +66,8 @@ function jsonRpcError(
   code: number,
   message: string,
   data?: unknown,
-  httpStatus = 200
+  httpStatus = 200,
+  extraHeaders?: Record<string, string>
 ) {
   return NextResponse.json(
     {
@@ -63,7 +75,7 @@ function jsonRpcError(
       id: id ?? null,
       error: { code, message, data },
     },
-    { status: httpStatus, headers: corsHeaders() }
+    { status: httpStatus, headers: { ...corsHeaders(), ...(extraHeaders ?? {}) } }
   );
 }
 
@@ -83,6 +95,7 @@ function serverInfo() {
       type: "bearer",
       scheme: "Authorization: Bearer gb_emp_…",
       alternateHeader: "x-staffpass-credential",
+      ...(isMcpOAuthEnabled() ? oauthServerCardAuth() : {}),
     },
   };
 }
@@ -106,12 +119,13 @@ function serverCapabilities(): Record<string, unknown> {
 }
 
 function serverInstructions(): string {
-  return (
+  const base = (
     "Staffpass is a fail-closed AI employee control plane. Authenticate with Authorization: Bearer gb_emp_…. Use staffpass_whoami then staffpass_invoke with purpose+jobId. On needs_approval, poll staffpass_get_approval_status with approvalId+statusToken (pollUrl in the result) until approved|rejected|revision_requested|expired — do not complete confirm/send/order while pending. On revision_requested, revise per revisionNote and re-invoke with the same jobId and parentApprovalId. Restrict clients with allowed_tools to the four staffpass_* tools." +
     (isConfigChangeRequestEnabled()
       ? " Never change your own Instructions/policy text or channel ledger/classification yourself: file staffpass_config_change_request and wait for the human approver; approvers/permissions/billing are not requestable."
       : "")
   );
+  return isMcpOAuthEnabled() ? oauthInstructions(base) : base;
 }
 
 export async function OPTIONS() {
@@ -155,6 +169,31 @@ export async function POST(req: Request) {
     // Non-string / missing method → Invalid Request; echo id only if it is a valid JSON-RPC id.
     const safeId = typeof body.id === "string" || typeof body.id === "number" ? body.id : null;
     return jsonRpcError(safeId, -32600, "Invalid Request: method required", undefined, 400);
+  }
+
+  // MCP OAuth (MCP_OAUTH_ENABLED, default OFF → this block is skipped and the
+  // route is byte-identical to before). With OAuth ON, a request with no
+  // credential header gets 401 + WWW-Authenticate (RFC 6750 / RFC 9728) so
+  // clients start the sign-in flow. Lifecycle methods (initialize / ping /
+  // server/discover / notifications/*) keep today's 200/202 unless
+  // MCP_OAUTH_LEGACY_UNAUTH_INITIALIZE is explicitly false (unset = today).
+  if (isMcpOAuthEnabled() && !hasAnyMcpCredential(req)) {
+    const lifecycle =
+      method === "initialize" ||
+      method === "ping" ||
+      method === "server/discover" ||
+      method.startsWith("notifications/");
+    if (!(lifecycle && isMcpOAuthLegacyUnauthInitialize())) {
+      if (method === "initialize") maybeLogUnauthInitialize(req, params);
+      return jsonRpcError(
+        id,
+        -32001,
+        "Authentication required (OAuth 2.1 or Authorization: Bearer gb_emp_…)",
+        { code: "missing_credential", _meta: authChallengeMeta() },
+        401,
+        { "WWW-Authenticate": wwwAuthenticate() }
+      );
+    }
   }
 
   // Notifications (no response body required by JSON-RPC; return 202 empty ack)
@@ -224,15 +263,16 @@ export async function POST(req: Request) {
 
   // tools/* require employee badge
   if (method === "tools/list" || method === "tools/call") {
-    const auth = await resolveEmployeeCredential(req);
+    // OAuth OFF → resolveMcpCredential is exactly resolveEmployeeCredential (gb_emp_ only).
+    const auth = await resolveMcpCredential(req);
     if (!auth.ok) {
-      return jsonRpcError(
-        id,
-        -32001,
-        auth.message,
-        { code: auth.code },
-        auth.httpStatus
-      );
+      const challengeOpts = hasAnyMcpCredential(req) ? { error: "invalid_token" as const, description: auth.code } : {};
+      const challenge =
+        isMcpOAuthEnabled() && auth.httpStatus === 401 ? { "WWW-Authenticate": wwwAuthenticate(challengeOpts) } : undefined;
+      const errorData: Record<string, unknown> = { code: auth.code };
+      // Body-level mirror of the HTTP challenge for clients that only surface JSON-RPC.
+      if (challenge) errorData._meta = authChallengeMeta(challengeOpts);
+      return jsonRpcError(id, -32001, auth.message, errorData, auth.httpStatus, challenge);
     }
 
     // MCP endpoint handoff: "the bot reached Staffpass MCP with its badge" signal
@@ -244,12 +284,13 @@ export async function POST(req: Request) {
     ).catch(() => undefined);
 
     if (method === "tools/list") {
+      const listed = listStaffpassMcpTools().map((t) => ({
+        name: t.name,
+        description: t.description,
+        inputSchema: t.inputSchema,
+      }));
       return reply({
-        tools: listStaffpassMcpTools().map((t) => ({
-          name: t.name,
-          description: t.description,
-          inputSchema: t.inputSchema,
-        })),
+        tools: isMcpOAuthEnabled() ? decorateToolsForOAuth(listed) : listed,
         ...(modern ? MCP_TOOLS_LIST_CACHE : {}),
       });
     }

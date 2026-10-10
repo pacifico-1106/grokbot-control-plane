@@ -701,12 +701,25 @@ export function isMcpOAuthFlagOn(): boolean {
   return parseFlag(process.env.MCP_OAUTH_ENABLED);
 }
 
-
 /** Dynamic Client Registration (RFC 7591; deprecated in MCP 2026-07-28). Default OFF. Needs MCP_OAUTH_ENABLED too. */
 export function isMcpOAuthDcrFlagOn(): boolean {
   return parseFlag(process.env.MCP_OAUTH_DCR_ENABLED);
 }
 
+/**
+ * MCP_OAUTH_LEGACY_UNAUTH_INITIALIZE (Q4 escape hatch, 木村 2026-10-10).
+ * Only matters when MCP_OAUTH_ENABLED is ON. Unset / empty / anything that is
+ * not an explicit false → TODAY's behaviour: unauthenticated initialize / ping /
+ * server/discover / notifications stay 200/202. Only an explicit
+ * "false" / "0" / "off" / "disabled" / "no" switches them to 401 +
+ * WWW-Authenticate (what Claude needs to start sign-in). Unlike the other
+ * flags this one is "on" when unset, so that turning OAuth on can never by
+ * itself change what unauthenticated initialize returns.
+ */
+export function isMcpOAuthLegacyUnauthInitialize(): boolean {
+  const v = (process.env.MCP_OAUTH_LEGACY_UNAUTH_INITIALIZE ?? "").trim().toLowerCase();
+  return !(v === "false" || v === "0" || v === "off" || v === "disabled" || v === "no");
+}
 
 /** Q2 hook: require MFA (aal2) for OAuth consent. Default OFF (no MFA yet). */
 export function isMcpOAuthConsentMfaRequired(): boolean {

@@ -36,6 +36,14 @@ import type { OrgApprovalKindRoutesPolicy } from "@/lib/approval-kind-routes/typ
 import { categorizeSensitiveTopics } from "@/lib/approvals/sensitive-topic-categories";
 import { resolveAppOrigin } from "@/lib/app-url";
 import { resolveMcpEndpointUrl } from "@/lib/mcp/endpoint-handoff-block";
+import { isMcpOAuthEnabled } from "@/lib/mcp-oauth/config";
+import {
+  STAFFPASS_PROFILE_TOOL_DEF,
+  STAFFPASS_PROFILE_TOOL_NAME,
+  buildProfile,
+  profileToolResult,
+} from "@/lib/mcp-oauth/client-compat";
+import { getOrgName } from "@/lib/mcp-oauth/org-info";
 import {
   CONFIG_CHANGE_KINDS,
   CONFIG_CHANGE_MCP_TOOL,
@@ -426,12 +434,16 @@ const SENSITIVE_TOPICS_NOTE_JA =
 
 /** Employee MCP tools/list. Flags OFF → exactly STAFFPASS_MCP_TOOLS. */
 export function listStaffpassMcpTools(): McpToolDef[] {
-  if (!isConfigChangeRequestEnabled() && !isApprovalReasonsEnabled()) return STAFFPASS_MCP_TOOLS;
-  return [
+  const oauth = isMcpOAuthEnabled();
+  // Flags unset → the very same array as before (callers / tests rely on identity).
+  if (!isConfigChangeRequestEnabled() && !isApprovalReasonsEnabled() && !oauth) return STAFFPASS_MCP_TOOLS;
+  const base = [
     ...STAFFPASS_MCP_TOOLS,
     ...(isConfigChangeRequestEnabled() ? [CONFIG_CHANGE_REQUEST_MCP_TOOL_DEF] : []),
     ...(isApprovalReasonsEnabled() ? [SENSITIVE_TOPICS_MCP_TOOL_DEF] : []),
   ];
+  // staffpass_profile only exists when MCP OAuth is ON (Q10).
+  return oauth ? [...base, STAFFPASS_PROFILE_TOOL_DEF as McpToolDef] : base;
 }
 
 function toolResult(data: unknown, isError = false) {
@@ -484,7 +496,29 @@ export async function callStaffpassMcpTool(
   name: string,
   args: Record<string, unknown>,
   cred: ResolvedEmployeeCredential
-): Promise<{ content: Array<{ type: "text"; text: string }>; structuredContent?: unknown; isError?: boolean }> {
+): Promise<{
+  content: Array<{ type: "text"; text: string }>;
+  structuredContent?: unknown;
+  isError?: boolean;
+  _meta?: Record<string, unknown>;
+}> {
+  if (name === STAFFPASS_PROFILE_TOOL_NAME && isMcpOAuthEnabled()) {
+    const employee = await getEmployeeById(cred.employeeId);
+    if (!employee || employee.orgId !== cred.orgId) {
+      return toolResult({ ok: false, code: "employee_not_found", message: "Employee not found" }, true);
+    }
+    const authMethod = (cred as { authMethod?: string }).authMethod === "oauth" ? "oauth" : "gb_emp";
+    return profileToolResult(
+      buildProfile({
+        orgId: cred.orgId,
+        employeeId: cred.employeeId,
+        displayName: employee.displayName || "",
+        roleLabel: employee.roleLabel || "",
+        orgName: await getOrgName(cred.orgId).catch(() => null),
+        authMethod,
+      })
+    );
+  }
   switch (name) {
     case "staffpass_whoami": {
       const employee = await getEmployeeById(cred.employeeId);
@@ -617,10 +651,15 @@ export async function callStaffpassMcpTool(
         fileAttachment: resolveFileAttachment(args, payload),
       };
 
+      const oauthCred = cred as { authMethod?: string; oauthGrantId?: string; oauthClientHost?: string };
       const result = await runGatewayInvoke({
         employeeId: cred.employeeId,
         body,
         credentialId: cred.credentialId,
+        oauth:
+          oauthCred.authMethod === "oauth" && oauthCred.oauthGrantId
+            ? { grantId: oauthCred.oauthGrantId, clientHost: oauthCred.oauthClientHost || "" }
+            : null,
       });
 
       // Ensure approval return pipe fields are always present on needs_approval.
