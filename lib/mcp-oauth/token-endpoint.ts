@@ -85,6 +85,20 @@ async function parseForm(req: Request): Promise<URLSearchParams | null> {
   return p;
 }
 
+const slowDown = (retryAfterSec: number): EndpointResult => ({
+  ...err(429, "slow_down", "too many requests"),
+  headers: { "Retry-After": String(retryAfterSec) },
+});
+
+/** Best-effort last_used_at for stale-DCR cleanup (#318 follow-up); never fails the response. */
+async function touch(deps: TokenDeps, clientId: string, now: Date) {
+  try {
+    await deps.store.touchClient(clientId, now.toISOString());
+  } catch {
+    /* best-effort */
+  }
+}
+
 async function activeClient(store: OAuthStore, clientId: string) {
   if (!clientId || clientId.length > 512) return null;
   const c = await store.getClient(clientId);
@@ -135,11 +149,15 @@ export async function handleTokenRequest(req: Request, deps: TokenDeps): Promise
   const clientId = form.get("client_id") || "";
   const ip = deps.ipHash(req);
   if (!ip) return err(503, "temporarily_unavailable", "rate limiter not configured");
-  const rl = await deps.rateLimit(`token:${sha256Hex(clientId).slice(0, 16)}:${ip}`, OAUTH_RATE_LIMITS.tokenPerClientIpPerMin, 60);
-  if (!rl.allowed) return { ...err(429, "slow_down", "too many requests"), headers: { "Retry-After": String(rl.retryAfterSec) } };
+  // IP-only first (#318 follow-up): a made-up client_id neither escapes the
+  // limit nor creates a fresh rate-limit row.
+  const ipRl = await deps.rateLimit(`token_ip:${ip}`, OAUTH_RATE_LIMITS.tokenPerIpPerMin, 60);
+  if (!ipRl.allowed) return slowDown(ipRl.retryAfterSec);
 
   const client = await activeClient(deps.store, clientId);
   if (!client) return err(401, "invalid_client", "unknown or inactive client");
+  const rl = await deps.rateLimit(`token:${sha256Hex(clientId).slice(0, 16)}:${ip}`, OAUTH_RATE_LIMITS.tokenPerClientIpPerMin, 60);
+  if (!rl.allowed) return slowDown(rl.retryAfterSec);
   if (form.has("client_secret")) return err(401, "invalid_client", "public clients only (token_endpoint_auth_method=none)");
 
   const now = deps.now();
@@ -207,6 +225,7 @@ export async function handleTokenRequest(req: Request, deps: TokenDeps): Promise
         refreshHashPrefix: hashPrefix(issued.rt.hash),
       },
     });
+    await touch(deps, client.clientId, now);
     return { status: 200, body: issued.body };
   }
 
@@ -263,6 +282,7 @@ export async function handleTokenRequest(req: Request, deps: TokenDeps): Promise
       return err(400, "invalid_scope", "scope exceeds the grant");
     }
     const issued = await issueTokens(deps, grant, hash, now);
+    await touch(deps, client.clientId, now);
     return { status: 200, body: issued.body };
   }
 
@@ -289,14 +309,16 @@ export async function handleRevokeRequest(req: Request, deps: TokenDeps): Promis
   const ip = deps.ipHash(req);
   if (!ip) return err(503, "temporarily_unavailable", "rate limiter not configured");
   const clientId = form.get("client_id") || "";
-  const rl = await deps.rateLimit(`revoke:${sha256Hex(clientId).slice(0, 16)}:${ip}`, OAUTH_RATE_LIMITS.tokenPerClientIpPerMin, 60);
-  if (!rl.allowed) return { ...err(429, "slow_down", "too many requests"), headers: { "Retry-After": String(rl.retryAfterSec) } };
+  const ipRl = await deps.rateLimit(`revoke_ip:${ip}`, OAUTH_RATE_LIMITS.revokePerIpPerMin, 60);
+  if (!ipRl.allowed) return slowDown(ipRl.retryAfterSec);
 
   const token = form.get("token") || "";
   const ok: EndpointResult = { status: 200, body: null };
   if (!token) return err(400, "invalid_request", "token is required");
   const client = await activeClient(deps.store, clientId);
   if (!client) return err(401, "invalid_client", "unknown or inactive client");
+  const rl = await deps.rateLimit(`revoke:${sha256Hex(clientId).slice(0, 16)}:${ip}`, OAUTH_RATE_LIMITS.tokenPerClientIpPerMin, 60);
+  if (!rl.allowed) return slowDown(rl.retryAfterSec);
 
   const nowIso = deps.now().toISOString();
   const hash = sha256Hex(token);

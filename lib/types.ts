@@ -474,6 +474,7 @@ export type AuditAction =
   | "oauth.code_reuse_detected"
   | "oauth.refresh_reuse_detected"
   | "oauth.refresh_replay_in_grace"
+  | "oauth.dcr_global_cap_reached"
   | "tool.invoke"
   | "comm.delete.succeeded"
   | "comm.delete.already_deleted"
