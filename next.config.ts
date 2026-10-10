@@ -18,6 +18,21 @@ const nextConfig: NextConfig = {
       },
     ];
   },
+  // OAuth browser pages: no framing, no caching, no referrer (rid / code never leak).
+  async headers() {
+    return [
+      {
+        source: "/oauth/:path*",
+        headers: [
+          { key: "X-Frame-Options", value: "DENY" },
+          { key: "Content-Security-Policy", value: "frame-ancestors 'none'" },
+          { key: "Cache-Control", value: "no-store" },
+          { key: "Referrer-Policy", value: "no-referrer" },
+          { key: "X-Content-Type-Options", value: "nosniff" },
+        ],
+      },
+    ];
+  },
   async redirects() {
     return [
       {
