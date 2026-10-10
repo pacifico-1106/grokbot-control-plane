@@ -96,3 +96,61 @@ test("loopback detection", () => {
   expect(isLoopbackRedirect("http://localhost:8080/callback")).toBe(true);
   expect(isLoopbackRedirect("https://claude.ai/api/mcp/auth_callback")).toBe(false);
 });
+
+// ---- Cursor web callback (木村 2026-10-10, #312 point 3): exact match only ----
+const CURSOR_WEB = "https://www.cursor.com/agents/mcp/oauth/callback";
+
+test("Cursor web callback is allowlisted by default, as one exact string (no pattern)", async () => {
+  expect(matchesRedirectAllowlist(CURSOR_WEB)).toBe(true);
+  const { DEFAULT_REDIRECT_ALLOWLIST } = await import("../config");
+  expect(DEFAULT_REDIRECT_ALLOWLIST.filter((p) => p.includes("cursor"))).toEqual([CURSOR_WEB]);
+  expect(isRedirectAllowedForClient(CURSOR_WEB, [CURSOR_WEB])).toBe(true);
+  expect(isLoopbackRedirect(CURSOR_WEB)).toBe(false);
+});
+
+const CURSOR_NEAR_MISSES = [
+  // the five near-misses 木村 named
+  "https://www.cursor.com/agents/mcp/oauth/callback/extra", // extra path
+  "https://www.cursor.com/agents/mcp/oauth/callback?x=1", // query
+  "http://www.cursor.com/agents/mcp/oauth/callback", // http scheme
+  "https://cursor.com/agents/mcp/oauth/callback", // without www
+  "https://www.cursor.com/agents/mcp/oauth/callback/", // trailing slash
+  // more prefix / lookalike / encoding variants
+  "https://www.cursor.com/agents/mcp/oauth/callbackx",
+  "https://www.cursor.com/agents/mcp/oauth/callback#f",
+  "https://www.cursor.com/agents/mcp/oauth/callback?",
+  "https://www.cursor.com/agents/mcp/oauth",
+  "https://www.cursor.com/agents/mcp/oauth/",
+  "https://www.cursor.com/agents/mcp/oauth/callback/../callback",
+  "https://www.cursor.com/agents/mcp/oauth/callback%2F",
+  "https://www.cursor.com/agents/mcp/oauth/Callback",
+  "https://WWW.cursor.com/agents/mcp/oauth/callback",
+  "https://www.cursor.com:443/agents/mcp/oauth/callback",
+  "https://www.cursor.com:8443/agents/mcp/oauth/callback",
+  "https://user@www.cursor.com/agents/mcp/oauth/callback",
+  "https://evil.www.cursor.com/agents/mcp/oauth/callback",
+  "https://www.cursor.com.evil.com/agents/mcp/oauth/callback",
+  "https://www.cursor.sh/agents/mcp/oauth/callback",
+  "https://www.cursor.com./agents/mcp/oauth/callback",
+  "https://www.cursor.com/agents/mcp/oauth/callback ",
+  "https://www.cursor.com/other/agents/mcp/oauth/callback",
+];
+
+test("Cursor web callback near-misses are refused (path, query, scheme, host, slash, encodings)", () => {
+  for (const u of CURSOR_NEAR_MISSES) expect([u, matchesRedirectAllowlist(u)]).toEqual([u, false]);
+  // and registering a near-miss does not make it acceptable
+  for (const u of CURSOR_NEAR_MISSES) expect([u, isRedirectAllowedForClient(u, [u])]).toEqual([u, false]);
+  // exact registered value does not stretch to a near-miss
+  for (const u of CURSOR_NEAR_MISSES) expect([u, isRedirectAllowedForClient(u, [CURSOR_WEB])]).toEqual([u, false]);
+});
+
+test("env override still replaces the defaults (Cursor web only if listed)", () => {
+  const saved = process.env.MCP_OAUTH_REDIRECT_ALLOWLIST;
+  process.env.MCP_OAUTH_REDIRECT_ALLOWLIST = "https://claude.ai/api/mcp/auth_callback";
+  try {
+    expect(matchesRedirectAllowlist(CURSOR_WEB)).toBe(false);
+  } finally {
+    if (saved === undefined) delete process.env.MCP_OAUTH_REDIRECT_ALLOWLIST;
+    else process.env.MCP_OAUTH_REDIRECT_ALLOWLIST = saved;
+  }
+});
