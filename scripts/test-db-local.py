@@ -192,6 +192,21 @@ try:
                  " and to_regprocedure('public.mcp_events_take_verification_budget(text,timestamptz,integer)') is null;") == "t"
     sql(mcp_events)  # forward again after rollback
     sql(ROOT / "tests/security/db-mcp-events.sql")
+    mcp_oauth = ROOT / "supabase/migrations/20261010200000_mcp_oauth.sql"
+    sql(mcp_oauth)
+    sql(mcp_oauth)  # re-applicable
+    sql(ROOT / "tests/security/db-mcp-oauth.sql")
+    sql(ROOT / "supabase/verification/20261010200000_mcp_oauth_rollback.sql")
+    assert query("select " + " and ".join(f"to_regclass('public.{t}') is null" for t in (
+        "oauth_clients", "oauth_authorization_requests", "oauth_grants", "oauth_authorization_codes",
+        "oauth_access_tokens", "oauth_refresh_tokens", "oauth_rate_limits"))
+        + " and to_regprocedure('public.oauth_rate_limit_hit(text,timestamptz)') is null"
+        " and to_regprocedure('public.oauth_grants_same_org()') is null;") == "t"
+    sql(mcp_oauth)  # forward again after rollback
+    sql(ROOT / "tests/security/db-mcp-oauth.sql")
+    print("PASS: mcp oauth (20261010200000): 7 tables RLS on / no policy, anon/authenticated hold no privilege and cannot execute "
+          "oauth_rate_limit_hit; cross-org grant (employee / credential / member) rejected; atomic rate-limit counter; "
+          "re-applicable; rollback drops all 7 tables + 2 functions; forward again.")
     webhook_settings = ROOT / "supabase/migrations/20261005100000_employee_webhook_settings.sql"
     sql(webhook_settings)
     sql(webhook_settings)  # re-applicable
