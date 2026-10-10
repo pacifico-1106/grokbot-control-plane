@@ -89,13 +89,17 @@ export const SLACK_USER_TEAM_CACHE_TTL_MS = 60_000;
 const SLACK_USER_TEAM_CACHE_MAX = 5_000;
 
 /**
- * Cross-invoke cache: ONLY verified (non-null) team ids are stored, keyed by
+ * Cross-invoke cache: ONLY answers Slack actually gave are stored, keyed by
  * (orgId, bot-token fingerprint, slackUserId) so one org's answer can never
  * serve another org and a token switch invalidates earlier answers at once.
+ * - a full member's team id (teamId: string);
+ * - a definite "not a full member" verdict (teamId: null: guest, bot,
+ *   Slack Connect stranger, deleted), so it is never re-derived as internal
+ *   within the TTL.
  * Unverifiable results (no token, Slack error, timeout) are never cached here,
  * so they cannot outlive the invoke that saw them, and they stay "external".
  */
-const verifiedTeamCache = new Map<string, { teamId: string; expiresAt: number }>();
+const verifiedTeamCache = new Map<string, { teamId: string | null; expiresAt: number }>();
 
 /**
  * Per-invoke memo: one users.info per (org, user) per invoke, including a null
@@ -134,7 +138,9 @@ export function slackUserTeamCacheKeysForTests(): string[] {
  * The Slack team a user actually belongs to, as reported by Slack itself
  * (users.info with the org's OWN conversation bot token). Used instead of any
  * AI-supplied slackTeamId / speakerTeamId. null = could not verify (no token,
- * missing users:read, Slack error, timeout); callers treat that as NOT internal.
+ * missing users:read, Slack error, timeout) OR not a full member (guest
+ * is_restricted / is_ultra_restricted, is_bot, is_stranger, deleted: these
+ * can carry the OWN team id); callers treat null as NOT internal.
  */
 export async function fetchVerifiedSlackUserTeamId(
   orgId: string,
@@ -148,27 +154,38 @@ export async function fetchVerifiedSlackUserTeamId(
   const now = Date.now();
   const cached = verifiedTeamCache.get(key);
   if (cached) {
-    if (cached.expiresAt > now) return cached.teamId;
+    if (cached.expiresAt > now) return cached.teamId; // null = cached non-member verdict
     verifiedTeamCache.delete(key);
   }
   const memo = invokeMemo.getStore();
   const pending = memo?.get(key);
   if (pending) return pending;
-  const lookup = fetchSlackUserTeamIdUncached(token, user).then((teamId) => {
-    if (teamId) {
+  const lookup = fetchSlackUserTeamIdUncached(token, user).then((verdict) => {
+    if (verdict.kind !== "unverifiable") {
       if (verifiedTeamCache.size >= SLACK_USER_TEAM_CACHE_MAX) {
         const oldest = verifiedTeamCache.keys().next().value;
         if (oldest !== undefined) verifiedTeamCache.delete(oldest);
       }
+      const teamId = verdict.kind === "member" ? verdict.teamId : null;
       verifiedTeamCache.set(key, { teamId, expiresAt: Date.now() + SLACK_USER_TEAM_CACHE_TTL_MS });
     }
-    return teamId;
+    return verdict.kind === "member" ? verdict.teamId : null;
   });
   memo?.set(key, lookup);
   return lookup;
 }
 
-async function fetchSlackUserTeamIdUncached(token: string, user: string): Promise<string | null> {
+type SlackUserTeamVerdict =
+  | { kind: "member"; teamId: string }
+  /** Slack answered: not a full member (guest / bot / stranger / deleted). Never internal. */
+  | { kind: "not_member" }
+  /** No usable answer (error, timeout, malformed). Never internal, never cached. */
+  | { kind: "unverifiable" };
+
+/** users.info flags that mean "not a full member", even with the own team id. */
+const NON_MEMBER_FLAGS = ["is_restricted", "is_ultra_restricted", "is_bot", "is_stranger"] as const;
+
+async function fetchSlackUserTeamIdUncached(token: string, user: string): Promise<SlackUserTeamVerdict> {
   try {
     const url = `https://slack.com/api/users.info?user=${encodeURIComponent(user)}`;
     const response = await fetch(url, {
@@ -178,13 +195,17 @@ async function fetchSlackUserTeamIdUncached(token: string, user: string): Promis
     });
     const body = (await response.json().catch(() => ({}))) as {
       ok?: boolean;
-      user?: { id?: string; team_id?: string; deleted?: boolean };
+      user?: { id?: string; team_id?: string; deleted?: boolean } & Partial<Record<(typeof NON_MEMBER_FLAGS)[number], unknown>>;
     };
-    if (!body.ok || !body.user || body.user.deleted) return null;
-    if (body.user.id && body.user.id.toUpperCase() !== user.toUpperCase()) return null;
+    if (!body.ok || !body.user) return { kind: "unverifiable" };
+    if (body.user.id && body.user.id.toUpperCase() !== user.toUpperCase()) return { kind: "unverifiable" };
+    // Guests, bots and Slack Connect strangers can report the OWN team id:
+    // never internal by team (fail closed). Deleted users likewise.
+    if (body.user.deleted === true) return { kind: "not_member" };
+    if (NON_MEMBER_FLAGS.some((flag) => body.user![flag] === true)) return { kind: "not_member" };
     const team = typeof body.user.team_id === "string" ? body.user.team_id.trim().toUpperCase() : "";
-    return team || null;
+    return team ? { kind: "member", teamId: team } : { kind: "unverifiable" };
   } catch {
-    return null;
+    return { kind: "unverifiable" };
   }
 }
