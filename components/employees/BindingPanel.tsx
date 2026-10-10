@@ -36,6 +36,7 @@ export function BindingPanel({
   canRotateCredential = false,
   canEditWakeWebhook = false,
   demoMode = false,
+  oauthEnabled = false,
 }: {
   employeeId: string;
   initial: EmployeeBinding;
@@ -47,8 +48,11 @@ export function BindingPanel({
   canEditWakeWebhook?: boolean;
   /** ?forceFail is honoured by the API only in demo mode. */
   demoMode?: boolean;
+  /** MCP OAuth flag (server-evaluated). Shows the Q3 "also revoke OAuth" checkbox. */
+  oauthEnabled?: boolean;
 }) {
   const [binding, setBinding] = useState<EmployeeBinding>(initial);
+  const [alsoRevokeOAuth, setAlsoRevokeOAuth] = useState(false);
   const [agentId, setAgentId] = useState(initial.grokBotAgentId ?? "");
   const [workspaceId, setWorkspaceId] = useState(
     initial.grokBotWorkspaceId ?? ""
@@ -120,6 +124,9 @@ export function BindingPanel({
     try {
       const res = await fetch(`/api/employees/${employeeId}/rotate`, {
         method: "POST",
+        ...(oauthEnabled && alsoRevokeOAuth
+          ? { headers: { "Content-Type": "application/json" }, body: JSON.stringify({ revokeOAuth: true }) }
+          : {}),
       });
       const body = await res.json();
       if (!res.ok) throw new Error(body.message || body.error || "rotate_failed");
@@ -127,9 +134,15 @@ export function BindingPanel({
       setOneTimeSecret(body.credential?.oneTimeSecret ?? null);
       setRevealSecret(false);
       setCopiedSecret(false);
+      const oauthNote =
+        typeof body.oauthGrantsRevoked === "number"
+          ? `（AI クライアント接続 ${body.oauthGrantsRevoked} 件も取り消しました）`
+          : body.oauthRevokeFailed
+            ? "（AI クライアント接続の取り消しに失敗しました。下の一覧から取り消してください）"
+            : "";
       setMessage(
-        body.credential?.notice ||
-          `社員証を出し直しました（世代 ${body.generation}。AI社員番号は変わりません）`
+        (body.credential?.notice ||
+          `社員証を出し直しました（世代 ${body.generation}。AI社員番号は変わりません）`) + oauthNote
       );
     } catch (e) {
       setMessage(e instanceof Error ? e.message : "failed");
@@ -334,6 +347,17 @@ export function BindingPanel({
           >
             社員証を再発行
           </button>
+        ) : null}
+        {canRotateCredential && oauthEnabled ? (
+          <label className="flex items-center gap-2 text-xs muted">
+            <input
+              type="checkbox"
+              checked={alsoRevokeOAuth}
+              onChange={(e) => setAlsoRevokeOAuth(e.target.checked)}
+              disabled={busy}
+            />
+            OAuth 接続（AI クライアント）もすべて取り消す
+          </label>
         ) : null}
         {canManageBinding && demoMode ? (
           <button
