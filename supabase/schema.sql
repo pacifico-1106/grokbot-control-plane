@@ -994,16 +994,17 @@ revoke all on table oauth_clients, oauth_authorization_requests, oauth_grants, o
   oauth_access_tokens, oauth_refresh_tokens, oauth_rate_limits from anon, authenticated;
 
 -- Atomic fixed-window counter (DB-backed; per-instance memory limits do not work on Vercel).
-create or replace function oauth_rate_limit_hit(p_key text, p_window_start timestamptz)
+-- search_path pinned to pg_catalog, public (#315 follow-up, migration 20261010300000).
+create or replace function public.oauth_rate_limit_hit(p_key text, p_window_start timestamptz)
 returns integer
 language sql
 security definer
-set search_path = public
+set search_path = pg_catalog, public
 as $$
-  insert into oauth_rate_limits (bucket_key, window_start, count)
+  insert into public.oauth_rate_limits (bucket_key, window_start, count)
   values (p_key, p_window_start, 1)
   on conflict (bucket_key, window_start)
-  do update set count = oauth_rate_limits.count + 1
+  do update set count = public.oauth_rate_limits.count + 1
   returning count;
 $$;
 revoke all on function oauth_rate_limit_hit(text, timestamptz) from public, anon, authenticated;
