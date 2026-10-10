@@ -188,8 +188,10 @@ Slack API サイトで Staffpass Slack アプリを設定します。
 4. **Subscribe to bot events** に追加（パス A）:
    - `message.im`（必須: App Home DM受信）
    - `app_mention`（必要に応じて: チャンネルでのメンション）
-5. **Subscribe to events on behalf of users** に追加（パス B のみ）:
-   - `message.im`（人↔人 DM で User Token イベント受信）
+   - `member_joined_channel`（channel-classify 提案: 自社 Bot / 社員のチャンネル参加）
+5. **Subscribe to events on behalf of users** に追加:
+   - `message.im`（パス B: 人↔人 DM で User Token イベント受信）
+   - `member_joined_channel`（channel-classify 提案: 社員本人のチャンネル参加。bot event と**両方**に登録）
 
 **パス B の注意**: 「Subscribe to events on behalf of users」は「Subscribe to bot events」とは別のセクションです。Bot events だけ設定しても User Token イベントは届きません。
 
@@ -208,8 +210,22 @@ Slack API サイトで Staffpass Slack アプリを設定します。
    - `groups:history` - プライベートチャンネル履歴読み取り
    - `app_mentions:read` - @mention イベント受信
    - `files:write` - ファイルアップロード（Path A チャネル / App DM 添付。Path B 本体は User Token 側）
+   - `channels:read`, `groups:read`, `im:read`, `mpim:read` - `conversations.info` / `conversations.members`（Slack Connect 判定・channel-classify 提案・backfill 一覧）
+   - `users:read` - `users.info`（受信者の Slack team 確認 → `autoSlackTeamInternal`、`bots.info`）
 
-**重要**: スコープ変更後は **Reinstall to Workspace** が必要です。bot-install OAuth（`/api/slack/bot-install/start`）も `files:write` を要求するように更新されました。テナントは「Slack ワークスペースにインストール」を再実行して新しい xoxb を取得してください。
+#### 1-3a. channel-classify 用の追加（Staffpass app `A0BU8TABSV6`、2026-10-10）
+
+| 種類 | 追加するもの | 用途 |
+|------|--------------|------|
+| Bot Token Scopes | `channels:read`, `groups:read`, `users:read`, `im:read`, `mpim:read` | `conversations.info` / `conversations.members` / `users.info`（Connect 判定、team 確認、提案、backfill） |
+| Bot events | `member_joined_channel` | 自社 Bot・社員のチャンネル参加 → 分類提案 |
+| User events（on behalf of users） | `member_joined_channel` | 社員本人のチャンネル参加 → 分類提案（bot event と両方に登録） |
+
+- **順序（必須）**: ① Slack app 管理画面（A0BU8TABSV6 → OAuth & Permissions / Event Subscriptions）にスコープとイベントを**先に**追加 → ② Staffpass のコードを deploy（bot-install OAuth が新スコープを要求するようになる）。**逆順だと** bot-install（`/app/slack-bot-install`）が `invalid_scope` で失敗します。
+- **全ワークスペースで再インストールが必要**: 各テナントが「Slack ワークスペースにインストール」（`/app/slack-bot-install`）を再実行して新しい xoxb を取得します。再インストール前のワークスペースでは `conversations.info` / `users.info` が `missing_scope` になり、今までどおり（Connect 判定は台帳どおり、team による自動内部判定はされず fail-closed）に動きます。
+- 参加イベントの購読は `member_joined_channel` のみです（bot event と user event の両方）。
+
+**重要**: スコープ変更後は **Reinstall to Workspace** が必要です。bot-install OAuth（`/api/slack/bot-install/start`）は `SLACK_BOT_SCOPES`（上記すべて、`files:write` と channel-classify 用の読み取りスコープを含む）を要求します。テナントは「Slack ワークスペースにインストール」を再実行して新しい xoxb を取得してください。
 
 **症状（スコープ不足）**:
 - `missing_scope` エラー
@@ -388,7 +404,7 @@ App DM（Staffpassアプリへの直接DM）への返信には `posting_as: bot`
 
 | 確認項目 | 期待値 | 症状 |
 |----------|--------|------|
-| Bot Token Scopes | `im:history`, `chat:write`, `im:write`, `files:write` | `missing_scope` |
+| Bot Token Scopes | `im:history`, `chat:write`, `im:write`, `files:write`, `channels:history`, `groups:history`, `app_mentions:read`, `channels:read`, `groups:read`, `users:read`, `im:read`, `mpim:read` | `missing_scope` |
 | User Token Scopes（パス B） | `im:history`, `files:write` | `missing_scope` |
 | アプリ再インストール | スコープ変更後に実施 | スコープが反映されない |
 | Bot Token 登録 | ダッシュボードまたは env | `invalid_auth` |
@@ -845,7 +861,7 @@ Staffpass Slack アプリは **Public Distribution Activated** ですが、App D
 ### パス A: Staffpass アプリ DM
 
 6. **Bot events: `message.im`** - App Home DM 受信に必須。`app_mention` は追加で必要に応じて
-7. **Bot scopes: `im:history`, `chat:write`, `im:write`, `files:write`** - スコープ変更後は再インストール必須。bot-install OAuth も `files:write` を要求するように更新済み
+7. **Bot scopes: `im:history`, `chat:write`, `im:write`, `files:write`（+ channel-classify 用 `channels:read`, `groups:read`, `users:read`, `im:read`, `mpim:read`）** - 管理画面に先に追加してから deploy（逆順は `invalid_scope`）。スコープ変更後は全ワークスペースで再インストール必須
 8. **Bot Token はアダプタに登録** - ダッシュボード「チャンネルに書き込む」(アダプタ) に組織の xoxb を登録する。環境変数 `SLACK_BOT_TOKEN` は会話投稿に使われない（2026-10-04 廃止。未登録だと本番は `slack_token_missing`）
 9. **App Home Messages Tab** - `messages_tab_read_only_enabled: false` でないとユーザーがDMを送れない
 10. **posting_as: bot** - Bot DM への返信には必須。User token では Bot DM を見られない
