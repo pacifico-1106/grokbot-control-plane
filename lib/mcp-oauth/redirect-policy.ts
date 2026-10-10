@@ -9,6 +9,16 @@ import { redirectAllowlist } from "@/lib/mcp-oauth/config";
 
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1"]);
 
+/**
+ * The ONLY non-http(s) redirect URIs that can ever pass (Cursor desktop,
+ * 2026-10-10). Fixed in code, compared as whole strings: an operator
+ * MCP_OAUTH_REDIRECT_ALLOWLIST entry cannot add another custom scheme, and no
+ * placeholder / case / path / query variant matches. A custom scheme can be
+ * claimed by any local app; PKCE S256 (required for every authorize) is what
+ * keeps an intercepted code useless.
+ */
+export const EXACT_CUSTOM_SCHEME_REDIRECTS: readonly string[] = ["cursor://anysphere.cursor-mcp/oauth/callback"];
+
 function canonical(uri: string): URL | null {
   if (typeof uri !== "string" || uri.length > 2048) return null;
   if (/[\s\\]/.test(uri) || uri.includes("%")) return null;
@@ -20,7 +30,9 @@ function canonical(uri: string): URL | null {
   }
   if (u.href !== uri) return null;
   if (u.username || u.password || u.hash || u.search) return null;
-  if (u.protocol !== "https:" && u.protocol !== "http:") return null;
+  if (u.protocol !== "https:" && u.protocol !== "http:") {
+    return EXACT_CUSTOM_SCHEME_REDIRECTS.includes(uri) ? u : null;
+  }
   if (u.protocol === "http:" && !LOOPBACK_HOSTS.has(u.hostname)) return null;
   return u;
 }
@@ -41,6 +53,7 @@ export function matchesRedirectAllowlist(uri: string, allowlist: string[] = redi
   const u = canonical(uri);
   if (!u) return false;
   if (u.port && Number(u.port) > 65535) return false;
+  if (u.protocol !== "https:" && u.protocol !== "http:") return allowlist.includes(uri); // exact string only
   return allowlist.some((p) => patternToRegex(p).test(uri));
 }
 

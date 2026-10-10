@@ -103,7 +103,7 @@ const CURSOR_WEB = "https://www.cursor.com/agents/mcp/oauth/callback";
 test("Cursor web callback is allowlisted by default, as one exact string (no pattern)", async () => {
   expect(matchesRedirectAllowlist(CURSOR_WEB)).toBe(true);
   const { DEFAULT_REDIRECT_ALLOWLIST } = await import("../config");
-  expect(DEFAULT_REDIRECT_ALLOWLIST.filter((p) => p.includes("cursor"))).toEqual([CURSOR_WEB]);
+  expect(DEFAULT_REDIRECT_ALLOWLIST.filter((p) => p.includes("cursor"))).toEqual([CURSOR_WEB, "cursor://anysphere.cursor-mcp/oauth/callback"]);
   expect(isRedirectAllowedForClient(CURSOR_WEB, [CURSOR_WEB])).toBe(true);
   expect(isLoopbackRedirect(CURSOR_WEB)).toBe(false);
 });
