@@ -25,7 +25,7 @@
 |---|---|---|
 | `MCP_OAUTH_ENABLED` | OFF | OAuth 全体（.well-known、authorize、consent、token、revoke、`sp_at_` 受け入れ、401 の WWW-Authenticate）。DEMO では常に無効 |
 | `MCP_OAUTH_DCR_ENABLED` | OFF | `/api/oauth/register`（DCR）。Q7: 通常は CIMD のみ |
-| `MCP_OAUTH_LEGACY_UNAUTH_INITIALIZE` | OFF | Q4 の逃げ道: OAuth ON でも `initialize`/`ping`/`notifications/*` だけ未認証で 200 |
+| `MCP_OAUTH_LEGACY_UNAUTH_INITIALIZE` | 未設定 = legacy 維持（initialize 200） | Q4 の逃げ道（木村さん指定 2026-10-10）: **未設定・空・`true` なら OAuth ON でも未認証の `initialize`/`ping`/`server/discover`/`notifications/*` は今までどおり 200/202**。`false` / `0` / `off` / `disabled` / `no` を**明示したときだけ** 401 + `WWW-Authenticate`。OAuth OFF なら無関係。切替手順は `mcp-legacy-unauth-initialize-off.md` |
 | `MCP_OAUTH_CONSENT_REQUIRE_MFA` | OFF | Q2 のフック: ON で同意に aal2（二要素）を要求 |
 | `MCP_OAUTH_STATE_SECRET` | — | 同意 CSRF と rid ブラウザ結び付け cookie の HMAC 鍵（32 バイト以上。未設定なら authorize / 同意は 503 で fail-closed） |
 | `IP_HASH_KEY` | — | レート制限キー（未設定なら authorize / register は 503）。PR-11 から IP は `ipAddress(req)`（@vercel/functions = `x-real-ip`）のみを使用し、`X-Forwarded-For` は読みません |
