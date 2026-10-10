@@ -82,6 +82,10 @@ const CREDENTIAL_READERS = [
   // MCP Events (2026-10-05): service-role read of revoked_at / expires_at only,
   // re-checking the subscribing badge on every delivery attempt (never secret_hash).
   "lib/mcp-events/principal.ts",
+  // MCP OAuth RS (2026-10-10 re-land, flag MCP_OAUTH_ENABLED): service-role read of
+  // id / expires_at / revoked_at of the newest live badge, re-checked on every
+  // sp_at_ request so OAuth access never outlives the 社員証 (never secret_hash).
+  "lib/mcp-oauth/employee-state.ts",
 ];
 /** lp_* only admit the service_role JWT (never a session) — kept as-is */
 const LP_SERVICE_POLICIES = ["lp_handoffs_service_all", "lp_wake_configs_service_all", "lp_wake_events_service_all"];

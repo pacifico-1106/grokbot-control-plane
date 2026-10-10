@@ -707,3 +707,8 @@ export function isMcpOAuthDcrFlagOn(): boolean {
   return parseFlag(process.env.MCP_OAUTH_DCR_ENABLED);
 }
 
+
+/** Q2 hook: require MFA (aal2) for OAuth consent. Default OFF (no MFA yet). */
+export function isMcpOAuthConsentMfaRequired(): boolean {
+  return parseFlag(process.env.MCP_OAUTH_CONSENT_REQUIRE_MFA);
+}
