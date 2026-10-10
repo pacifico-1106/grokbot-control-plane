@@ -3,7 +3,8 @@
  * own event into a ChannelJoinSignal; facts and tickets are shared.
  *
  *   Slack     member_joined_channel (employee identity or the org's own bot),
- *             channel_joined / group_joined (user-token apps)
+ *             subscribed as a bot event AND a user event (channel_joined /
+ *             group_joined are RTM-only and never arrive over the Events API)
  *   LINE      join (group / room) on the org's LINE inbox webhook
  *   Telegram  my_chat_member (bot left/kicked → member/administrator) on the
  *             org's per-inbox webhook
@@ -153,6 +154,11 @@ function rec(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 }
 
+/**
+ * Only member_joined_channel arrives over the Events API (bot + user event
+ * subscription). channel_joined / group_joined are RTM-only; they stay
+ * accepted (same N7 / team / binding checks) but are never subscribed.
+ */
 export const SLACK_JOIN_EVENT_TYPES = new Set(["member_joined_channel", "channel_joined", "group_joined"]);
 
 /** Slack Events envelope → signals (one per org that owns the joining identity). */
@@ -164,6 +170,10 @@ export async function slackJoinSignals(envelope: unknown): Promise<ChannelJoinSi
   const teamId = String(env.team_id || event.team || "").trim();
   if (!SLACK_TEAM_RE.test(teamId)) return [];
   const authorizations = Array.isArray(env.authorizations) ? env.authorizations.map(rec) : [];
+  // Fail closed: Slack lists the installation(s) the event was delivered for.
+  // None, or one for another team, → nothing (never "anyone").
+  if (!authorizations.length) return [];
+  if (authorizations.some((a) => String(a.team_id || "").trim() && String(a.team_id).trim() !== teamId)) return [];
   let channelId = "";
   let userId = "";
   let conversationType: ConversationType | undefined;
@@ -187,15 +197,26 @@ export async function slackJoinSignals(envelope: unknown): Promise<ChannelJoinSi
   if (sharedApprovalAppId && appId === sharedApprovalAppId) return [];
 
   let orgIds: string[] = [];
-  const isOwnBot = authorizations.some((a) => a.is_bot === true && String(a.user_id || "") === userId);
-  if (isOwnBot) {
+  const botAuthUsers = authorizations.filter((a) => a.is_bot === true).map((a) => String(a.user_id || ""));
+  let isOwnBot = authorizations.some((a) => a.is_bot === true && String(a.user_id || "") === userId);
+  const teamOrgs = async () => {
     const orgs = await deps.findOrgsBySlackTeam(teamId).catch(() => []);
-    orgIds = orgs.length === 1 ? orgs : []; // ambiguous workspace binding → nothing
+    return orgs.length === 1 ? orgs : []; // ambiguous workspace binding → nothing
+  };
+  if (isOwnBot) {
+    orgIds = await teamOrgs();
   } else {
     orgIds = [...new Set((await deps.findEmployeeOrgsBySlackUser(userId, teamId).catch(() => [])).map((row) => row.orgId))];
+    // member_joined_channel is also subscribed as a USER event. Slack lists one
+    // installation the event is visible to, so the org's own bot joining can
+    // arrive with only a user authorization. Then the joiner must be exactly
+    // the adapter bot user of the team's single org (checked below).
+    if (!orgIds.length && botAuthUsers.length === 0) {
+      orgIds = await teamOrgs();
+      isOwnBot = orgIds.length > 0;
+    }
   }
 
-  const botAuthUsers = authorizations.filter((a) => a.is_bot === true).map((a) => String(a.user_id || ""));
   const verified: string[] = [];
   for (const orgId of orgIds) {
     const identity = await deps.adapterBotIdentity(orgId).catch(() => null);
