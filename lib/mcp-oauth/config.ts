@@ -98,6 +98,9 @@ export const DEFAULT_REDIRECT_ALLOWLIST = [
   "https://chatgpt.com/connector/oauth/{callback_id}",
   "https://claude.ai/api/mcp/auth_callback",
   "https://claude.com/api/mcp/auth_callback",
+  // Cursor web agents (木村 2026-10-10): ONE exact string — no {callback_id}/{port}
+  // placeholder, so no prefix / wildcard / www-less / http variant can match.
+  "https://www.cursor.com/agents/mcp/oauth/callback",
   "http://localhost:{port}/callback",
   "http://127.0.0.1:{port}/callback",
 ];

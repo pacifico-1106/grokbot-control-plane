@@ -81,6 +81,7 @@ x-staffpass-credential: gb_emp_<…>
 When `MCP_OAUTH_ENABLED` is ON, remote MCP clients can connect via OAuth; `gb_emp_` Bearer keeps working unchanged.
 
 - 未認証の `tools/*` → `401` + `WWW-Authenticate: Bearer resource_metadata="…/.well-known/oauth-protected-resource/api/mcp", scope="staffpass.employee"`。未認証の `initialize` / `ping` / `server/discover` / `notifications/*` は `MCP_OAUTH_LEGACY_UNAUTH_INITIALIZE` が**明示的に false** のときだけ同じ 401 になり、未設定なら今までどおり 200/202（runbook `mcp-legacy-unauth-initialize-off.md`）。同じ値を JSON-RPC `error.data._meta["mcp/www_authenticate"]` にも載せます（HTTP ヘッダを見ないクライアント向け）。
+- `redirect_uri` は完全一致の許可リストのみ（Claude / ChatGPT / Cursor web `https://www.cursor.com/agents/mcp/oauth/callback` / loopback `http://localhost|127.0.0.1:{port}/callback`）。前方一致・ワイルドカード・User-Agent 判定はありません。
 - メタデータ: `/.well-known/oauth-protected-resource/api/mcp`（RFC 9728）、`/.well-known/oauth-authorization-server`（RFC 8414）。クライアント登録は CIMD（`client_id` = HTTPS URL）。DCR は別フラグ `MCP_OAUTH_DCR_ENABLED`。
 - トークン: `sp_at_`（アクセス、短命）/ `sp_rt_`（リフレッシュ、ローテーション + 再利用検知）。`/api/mcp` のみで有効（`resource` 固定）。管理 MCP（`/api/mcp/admin`）は OAuth トークンを拒否します。
 - `tools/list` の各ツールに `securitySchemes: [{ "type": "oauth2", "scopes": ["staffpass.employee"] }]`（`_meta.securitySchemes` にもミラー）。

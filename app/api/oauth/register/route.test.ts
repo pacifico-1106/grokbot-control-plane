@@ -68,3 +68,20 @@ test("per-IP limit 10/hour → 429 with Retry-After", async () => {
   expect(Number(res.headers.get("retry-after"))).toBeGreaterThan(0);
   expect((await reg(good, "198.51.100.7")).status).toBe(201);
 });
+
+test("DCR: Cursor web callback registers (exact); near-misses → 400; no User-Agent dependence", async () => {
+  on();
+  const cursor = "https://www.cursor.com/agents/mcp/oauth/callback";
+  const ok = await reg({ client_name: "Cursor", redirect_uris: [cursor], token_endpoint_auth_method: "none" });
+  expect(ok.status).toBe(201);
+  expect((await ok.json()).redirect_uris).toEqual([cursor]);
+  for (const bad of [
+    `${cursor}/extra`,
+    `${cursor}?x=1`,
+    "http://www.cursor.com/agents/mcp/oauth/callback",
+    "https://cursor.com/agents/mcp/oauth/callback",
+    `${cursor}/`,
+  ]) {
+    expect([bad, (await reg({ client_name: "Cursor", redirect_uris: [bad], token_endpoint_auth_method: "none" }, "203.0.113.77")).status]).toEqual([bad, 400]);
+  }
+});
