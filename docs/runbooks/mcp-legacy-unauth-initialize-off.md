@@ -1,6 +1,8 @@
 # `MCP_OAUTH_LEGACY_UNAUTH_INITIALIZE=false` 検証・切替 runbook / Turning the legacy unauthenticated-initialize escape hatch off
 
 作成 / Written: 2026-10-10 JST（森）。対象 / Scope: MCP OAuth スタック #205–#220（未マージ・draft）。
+**更新 / Updated: 2026-10-10 10:50 JST** — 木村さんの判断で OAuth は main 上に作り直した新スタック **#314–#320** に移行（§0.1）。
+#205 は close、旧 #206–#220 のブランチは変更なし。**フラグの既定が逆になった**ので §1・§3・§4 を読み替え済み。
 この文書は手順のみ。Vercel env（Preview / Production）の変更は 木村、本番の変更は別途 GO が必要。
 Procedure only. Preview env changes are 木村's; production needs a separate GO.
 
@@ -19,13 +21,35 @@ The flag is only read by the unmerged OAuth stack. On main (production) unauthen
 and the production env value changes nothing. A meaningful Preview test needs a Preview deployment of the
 (rebased) OAuth stack with `MCP_OAUTH_ENABLED=1`.
 
-## 1. フラグの意味（OAuth スタック #220 のコード）/ What the flag does
+### 0.1 新スタック（re-land、2026-10-10）/ The re-landed stack
+
+| 順 | PR | ブランチ（すべて `-20261010`） | 内容 |
+|---|---|---|---|
+| 1 | #314 | `feat/mcp-oauth-reland-1-discovery-20261010`（base `main`） | discovery（PRM + AS）、フラグ、全フラグ未設定のピンテスト |
+| 2 | #315 | `feat/mcp-oauth-reland-2-store-20261010` | migration `20261010200000_mcp_oauth.sql` + rollback、ストア |
+| 3 | #316 | `feat/mcp-oauth-reland-3-authorize-consent-20261010` | authorize + consent + PKCE S256 |
+| 4 | #317 | `feat/mcp-oauth-reland-4-token-revocation-20261010` | token + revoke + grant 管理 |
+| 5 | #318 | `feat/mcp-oauth-reland-5-dcr-20261010` | DCR + レート制限 |
+| 6 | #319 | `feat/mcp-oauth-reland-6-mcp-route-20261010` | `/api/mcp` の 401 + `WWW-Authenticate` + legacy フラグ（#210 / #268 と統合） |
+| 7 | #320 | `feat/mcp-oauth-reland-7-cursor-web-callback-20261010` | Cursor web コールバックを完全一致で許可 |
+
+- 新スタックは main（`7e30b56`）の上にあるので §0 の「rebase が必要」は解消。Preview はスタック先頭（#320 のブランチ）をデプロイする。
+- **`MCP_OAUTH_LEGACY_UNAUTH_INITIALIZE` の既定が変わった（木村さん指定）**: 未設定・空・不明な値 = **今日と同じ（未認証 initialize 200）**。
+  `false` / `0` / `off` / `disabled` / `no` を**明示したときだけ** 401 + challenge。旧スタック（#220）は「未設定 = false = 401」だった。
+- 新スタックのマイグレーションは `20261010200000_mcp_oauth.sql`（旧 `20261003100000` は使わない）。
+
+The OAuth stack was re-landed on main as #314–#320 (table above). The legacy flag's default flipped: unset now
+means today's behaviour (unauth initialize 200), and only an explicit `false` gives 401. Deploy the top branch (#320) to Preview.
+
+## 1. フラグの意味（新スタック #319 のコード）/ What the flag does
 
 | 条件 / Condition | 未認証の `initialize` / `ping` / `server/discover` / `notifications/*` | 未認証の `tools/list` / `tools/call` |
 |---|---|---|
 | `MCP_OAUTH_ENABLED` OFF（または DEMO） | 200 / 202（今と同じ） | 401、`WWW-Authenticate` なし |
-| OAuth ON + legacy **false**（既定） | **401 + `WWW-Authenticate`** + JSON-RPC `-32001` `missing_credential` + `_meta["mcp/www_authenticate"]` | 401 + `WWW-Authenticate` |
-| OAuth ON + legacy **true** | 200 / 202（エスケープハッチ） | 401 + `WWW-Authenticate` |
+| OAuth ON + legacy **未設定**（既定）または `true` | 200 / 202（今と同じ） | 401 + `WWW-Authenticate` |
+| OAuth ON + legacy **`false` を明示** | **401 + `WWW-Authenticate`** + JSON-RPC `-32001` `missing_credential` + `_meta["mcp/www_authenticate"]` | 401 + `WWW-Authenticate` |
+
+（旧 #220 では未設定 = false = 401 だった。§2.1–2.2 の結果は #220 で「未設定」として取ったもので、新スタックでは「明示 false」に相当する。新スタックでの再実行は §2.4。）
 
 - 対象ルート: `/api/mcp`（POST）のみ。`/api/mcp/admin` は OAuth 対象外（`sp_at_` は 401）。GET `/api/mcp`
   （サーバーカード、秘密なし）は認証不要のまま。
@@ -135,23 +159,31 @@ Cursor 本体はクローズドソースなので、実クライアントでの�
 
 細部（非ブロッキング）: (a) challenge は `scope="staffpass.employee"` だが、token 応答は要求外の `offline_access` を含む scope を返した
 （RFC 6749 §3.3 上、異なる scope を返すことは許される。refresh を出す設計どおり）。(b) Cursor のウェブ / Cloud Agents 用コールバック
-`https://www.cursor.com/agents/mcp/oauth/callback` は既定の redirect 許可リストに無い。デスクトップ（loopback）だけで良ければ現状のまま、
-Cursor Web も対象にするなら `MCP_OAUTH_REDIRECT_ALLOWLIST` に追加（既定リストを置き換えるので既定値も併記）。
+`https://www.cursor.com/agents/mcp/oauth/callback` は #220 の既定 redirect 許可リストに無かった。**新スタック #320 で既定リストに完全一致で追加済み**
+（ワイルドカード・前方一致なし。www なし / 末尾 `/` / `http://` / クエリ / パス追加は拒否）。`MCP_OAUTH_REDIRECT_ALLOWLIST` を設定する場合は既定リストを置き換えるので、Cursor web も併記すること。
+
+### 2.4 新スタックでの再実行（2026-10-10 10:40 JST ごろ、#320 head `e47f31a`）/ Re-run on the re-landed stack
+
+同じハーネスと SDK クライアント、127.0.0.1 のみ。
+- legacy **`false` 明示** + DCR ON（:8895）: `initialize` → 401、`Access-Control-Expose-Headers: WWW-Authenticate`、
+  `WWW-Authenticate: Bearer resource_metadata="http://127.0.0.1:8895/.well-known/oauth-protected-resource/api/mcp", scope="staffpass.employee"`
+  → PRM 200 → AS 200 → register 201 → authorize 303 → consent 303（`iss` 付き）→ token 200 → 再接続して tools 8、`staffpass_profile` OK。
+- legacy **未設定** + DCR ON（:8896）: `initialize` 200（`protocolVersion: "2025-11-25"`、#268）→ `tools/list` 401 + challenge → 同じ流れで回復。
+- register: `https://www.cursor.com/agents/mcp/oauth/callback` → 201。www なし / 末尾 `/` / `http://` / `?x=1` / `/extra` → 400。
 
 ## 3. Preview 手順（実施: 木村）/ Preview steps (木村)
 
 ### 3.0 前提 / Preconditions
 
-1. OAuth スタックを main に rebase した Preview ブランチ（#220 系の先頭）。rebase は §0 の理由で必須（担当: 実装側）。
-   main の Preview では検証にならない。
-2. Preview DB に `supabase/migrations/*mcp_oauth*` を適用（承認後、rollout runbook どおり）。
+1. 新スタック先頭 `feat/mcp-oauth-reland-7-cursor-web-callback-20261010`（#320）の Preview デプロイ。main の Preview では検証にならない。
+2. Preview DB に `supabase/migrations/20261010200000_mcp_oauth.sql` を適用（承認後、rollout runbook どおり。rollback は `supabase/verification/20261010200000_mcp_oauth_rollback.sql`）。
 3. Preview の env（**Preview スコープのみ**。Production には触らない）:
    - `MCP_OAUTH_ENABLED=1`
-   - `MCP_OAUTH_LEGACY_UNAUTH_INITIALIZE` → **未設定、または `false`**
+   - `MCP_OAUTH_LEGACY_UNAUTH_INITIALIZE=false` を**明示**（新スタックでは未設定 = 200 のままなので、未設定では検証にならない）
    - `MCP_OAUTH_DCR_ENABLED=1`（Cursor は CIMD 未対応のため必須。§2.2）
    - `MCP_OAUTH_ORG_ALLOWLIST=<TOKYO307 の org id>`、`MCP_OAUTH_STATE_SECRET`（32 文字以上・新規）、`IP_HASH_KEY`、
      `MCP_OAUTH_ISSUER=https://<preview のドメイン>`（Preview の URL が固定でない場合は branch alias を使う）
-   - 観測用: `MCP_UNAUTH_INIT_LOG_ENABLED=true`（rebase 後なら #210 の `mcp.unauth_initialize` ログが出る）
+   - 観測用: `MCP_UNAUTH_INIT_LOG_ENABLED=true`（#210 の `mcp.unauth_initialize` ログ。新スタックは 401 を返す initialize でも出す）
 4. 再デプロイ（env 変更は再デプロイしないと効かない）。
 
 ### 3.1 デプロイ直後のスモーク（curl）
@@ -167,7 +199,7 @@ curl -s $P/.well-known/oauth-authorization-server | jq '{issuer,registration_end
 # 期待: issuer が PRM の authorization_servers[0] と完全一致、registration_endpoint あり、["S256"]
 ```
 
-`initialize` が 200 なら legacy が true のまま（または OAuth OFF）なので、env と再デプロイを確認する。
+`initialize` が 200 なら legacy が未設定 / true のまま（または OAuth OFF）なので、`false` の明示と再デプロイを確認する。
 
 ### 3.2 接続するクライアント / Clients to connect
 
@@ -217,28 +249,29 @@ Inspector は CIMD を使う場合があり、ホスト許可リストに無い�
 
 ### 3.5 ロールバック（Preview）/ Rollback
 
-- 即時に legacy 挙動へ: Preview に `MCP_OAUTH_LEGACY_UNAUTH_INITIALIZE=true` → 再デプロイ（未認証 lifecycle が 200 に戻る）。
+- 即時に legacy 挙動へ: Preview の `MCP_OAUTH_LEGACY_UNAUTH_INITIALIZE` を削除（または `true`）→ 再デプロイ（未認証 lifecycle が 200 に戻る）。
 - OAuth ごと止める: `MCP_OAUTH_ENABLED` を外して再デプロイ（OAuth 経路は 404、`sp_at_` は 401、`gb_emp_` は無影響）。
 - DCR だけ止める: `MCP_OAUTH_DCR_ENABLED` を外す（登録済み `dcr_` クライアントも `dcr_disabled` で拒否される）。
 
 ## 4. 本番切替 / Production cutover（OAuth スタックのマージと別 GO の後）
 
-前提: OAuth スタックが rebase 済みで main にマージされ、§3 の Preview が成功していること。
+前提: 新スタック #314–#320 が main にマージされ、§3 の Preview が成功していること。
 
 1. 本番 DB にマイグレーション適用（承認後）。
 2. 本番 env: `MCP_OAUTH_ENABLED=1`、`MCP_OAUTH_DCR_ENABLED=1`（Cursor 用）、`MCP_OAUTH_ORG_ALLOWLIST`（パイロット org）、
    `MCP_OAUTH_STATE_SECRET`、`IP_HASH_KEY`、`MCP_UNAUTH_INIT_LOG_ENABLED=true`（観測継続）。
-   **最初は `MCP_OAUTH_LEGACY_UNAUTH_INITIALIZE=true` のまま**で OAuth を ON にし、24 時間 OAuth 経路が安定することを確認。
+   **最初は `MCP_OAUTH_LEGACY_UNAUTH_INITIALIZE` を未設定（= 今日と同じ 200）のまま**で OAuth を ON にし、24 時間 OAuth 経路が安定することを確認。
+   （本番 env に既にある `MCP_OAUTH_LEGACY_UNAUTH_INITIALIZE=true` は新スタックでも 200 なので、そのままでよい。）
 3. 事前告知: 未認証 initialize を出している Cursor 利用者（ログ上 417 件/週、IP 等は取っていないので個人は特定できない）向けに、
    「Cursor の MCP 設定で Connect を押して OAuth ログイン、または `Authorization: Bearer gb_emp_…` ヘッダを設定」を案内。
-4. 切替: `MCP_OAUTH_LEGACY_UNAUTH_INITIALIZE` を削除（= false）→ 再デプロイ。平日昼（ログのピーク）を避け、監視できる時間帯に行う。
-5. ロールバック: `MCP_OAUTH_LEGACY_UNAUTH_INITIALIZE=true` で再デプロイ（数分）。データ変更なし。
+4. 切替: `MCP_OAUTH_LEGACY_UNAUTH_INITIALIZE=false` を**明示設定**→ 再デプロイ（削除しても 401 にはならない）。平日昼（ログのピーク）を避け、監視できる時間帯に行う。
+5. ロールバック: `MCP_OAUTH_LEGACY_UNAUTH_INITIALIZE` を削除（または `true`）して再デプロイ（数分）。データ変更なし。
 
 ### 4.1 切替後の監視 / Monitoring（最初の 7 日）
 
 | 指標（Vercel Logs / 監査） | 期待 | アクション基準 |
 |---|---|---|
-| `mcp.unauth_initialize`（Cursor）件数 | 切替直後は残るが、各クライアントは 401 → OAuth で減っていく | 3 日たっても日次件数が減らない → Cursor が回復していない。legacy true に戻して調査 |
+| `mcp.unauth_initialize`（Cursor）件数 | 切替直後は残るが、各クライアントは 401 → OAuth で減っていく | 3 日たっても日次件数が減らない → Cursor が回復していない。legacy を削除（または true）に戻して調査 |
 | 未認証 401 の後に PRM / AS メタデータ取得が続くか | 続く | 401 の後に PRM が来ない＝クライアントが challenge を無視 |
 | `POST /api/oauth/register` の 201 / 4xx / 429 | 201 が Cursor 利用者数程度 | 4xx 急増 → redirect 許可リスト。429 → レート制限値の見直し |
 | `oauth.consent_granted` / `oauth.token_issued`（`clientHost: dcr`） | 増える | 0 のまま → 同意まで到達していない |
@@ -269,4 +302,4 @@ await new Client(...).connect(new StreamableHTTPClientTransport(url, { authProvi
 参照 / References: MCP Authorization 2025-11-25（modelcontextprotocol.io/specification/2025-11-25/basic/authorization）、
 Cursor Docs「Static OAuth for remote servers」（redirect `http://localhost:8787/callback` / `https://www.cursor.com/agents/mcp/oauth/callback`）、
 Cursor Forum「MCP OAuth: CIMD Support Plans and Timelines」（2026-09-22 時点で CIMD 未対応、DCR と静的資格情報のみ）。
-関連 runbook: `mcp-unauth-initialize-observation-20261003.md`（main）、`mcp-oauth-rollout-20261003.md` / `mcp-oauth-e2e-inspector-20261003.md`（OAuth スタック）。
+関連 runbook: `mcp-unauth-initialize-observation-20261003.md`（main）、`mcp-oauth-rollout-20261003.md` / `mcp-oauth-e2e-inspector-20261003.md`（新スタック #314–#320 に同梱）。
