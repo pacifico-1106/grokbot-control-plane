@@ -7,6 +7,7 @@ import { listConversationAdapters } from "@/lib/data/conversation-adapters";
 import { getEmployeeSlackIdentity, getLinkedSlackUserToken } from "@/lib/data/slack-identities";
 import { listSlackImRoutesByOrg } from "@/lib/data/slack-im-routes";
 import { getAppOrigin } from "@/lib/approvals/tokens";
+import { probeSlackTokenScopes } from "@/lib/admin-mcp/slack-dm-setup";
 import { resolveOrgSlackBotToken } from "@/lib/slack/bot-token";
 import { probeSlackFilesWrite } from "@/lib/slack/files-write-probe";
 import type { PostingAs } from "@/lib/types";
@@ -62,6 +63,39 @@ export type ConversationBotTokenStatus =
       nextTool: typeof SET_BOT_TOKEN_TOOL;
     };
 
+/**
+ * The Staffpass Slack app (the conversation bot every tenant installs). There is
+ * no env / config for this id elsewhere in the code, so it lives here.
+ */
+export const STAFFPASS_SLACK_APP_ID = "A0BU8TABSV6";
+
+/** Bot scopes channel-classify proposals need (lib/slack/oauth.ts SLACK_BOT_SCOPES, #311). */
+export const CHANNEL_CLASSIFY_BOT_SCOPES = ["channels:read", "groups:read", "users:read", "im:read", "mpim:read"] as const;
+
+/**
+ * Real scopes of the org's own conversation bot token, from auth.test
+ * x-oauth-scopes. `missingChannelClassifyScopes` is null when the scopes could
+ * not be read (never treated as "nothing missing").
+ */
+export type BotScopeCheck = {
+  status: "ok" | "token_missing" | "auth_test_failed" | "scopes_unavailable";
+  /** Slack error code (invalid_auth, ratelimited, …) or "" — never a token. */
+  code: string;
+  scopes: string[] | null;
+  missingChannelClassifyScopes: string[] | null;
+  channelClassifyScopesReady: boolean;
+};
+
+/** App id of the org's own conversation bot, from bots.info (bot_id from auth.test). */
+export type BotAppCheck = {
+  status: "ok" | "not_probed" | "bot_id_missing" | "bots_info_failed";
+  code: string;
+  appId: string | null;
+  expectedAppId: string;
+  /** null when the app id is unknown. */
+  matchesStaffpassApp: boolean | null;
+};
+
 export type SlackStatusResult = {
   ok: boolean;
   botTokenPresent: boolean;
@@ -69,6 +103,12 @@ export type SlackStatusResult = {
   /** Admin MCP tool for the next human-approved step (null when none is fixed). */
   nextTool: string | null;
   authTest: SlackAuthTestResult | null;
+  botScopeCheck: BotScopeCheck;
+  botApp: BotAppCheck;
+  /** Shortcut of botScopeCheck.missingChannelClassifyScopes. */
+  missingChannelClassifyScopes: string[] | null;
+  /** Shortcut of botApp.matchesStaffpassApp. */
+  botAppIdMatchesStaffpass: boolean | null;
   botHasFilesWrite: boolean;
   botFilesWriteCode: string;
   botFilesWriteNeeded: string | null;
@@ -95,6 +135,97 @@ export type SlackStatusResult = {
  * (one human approval). Never the session start route /api/slack/oauth/start,
  * which requires hire_issue_credentials (#284).
  */
+const SLACK_BOTS_INFO_TIMEOUT_MS = 5_000;
+const SLACK_CODE_RE = /^[a-z0-9_]{1,64}$/;
+const SLACK_BOT_ID_RE = /^B[A-Z0-9]{2,30}$/;
+const SLACK_APP_ID_RE = /^A[A-Z0-9]{2,30}$/;
+
+function slackCode(value: unknown, fallback: string): string {
+  return typeof value === "string" && SLACK_CODE_RE.test(value.trim()) ? value.trim() : fallback;
+}
+
+/** bots.info → app id. Read-only; token stays local; only an id / code comes back. */
+async function slackBotsInfoAppId(token: string, botId: string): Promise<{ appId: string; code: string }> {
+  try {
+    const response = await fetch(`https://slack.com/api/bots.info?bot=${encodeURIComponent(botId)}`, {
+      method: "GET",
+      headers: { authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(SLACK_BOTS_INFO_TIMEOUT_MS),
+    });
+    const data = ((await response.json().catch(() => ({}))) ?? {}) as Record<string, unknown>;
+    if (data.ok !== true) {
+      return { appId: "", code: slackCode(data.error, response.status === 429 ? "ratelimited" : "slack_error") };
+    }
+    const bot = (data.bot && typeof data.bot === "object" ? data.bot : {}) as Record<string, unknown>;
+    const appId = typeof bot.app_id === "string" && SLACK_APP_ID_RE.test(bot.app_id) ? bot.app_id : "";
+    return appId ? { appId, code: "" } : { appId: "", code: "app_id_missing" };
+  } catch {
+    return { appId: "", code: "network_error" };
+  }
+}
+
+/**
+ * Conversation bot scopes (auth.test x-oauth-scopes via probeScopes) and app id
+ * (bots.info). Slack errors become a status; nothing throws, nothing is written.
+ */
+export async function checkConversationBotScopesAndApp(
+  token: string
+): Promise<{ botScopeCheck: BotScopeCheck; botApp: BotAppCheck }> {
+  const appUnknown = (status: BotAppCheck["status"], code = ""): BotAppCheck => ({
+    status,
+    code,
+    appId: null,
+    expectedAppId: STAFFPASS_SLACK_APP_ID,
+    matchesStaffpassApp: null,
+  });
+  const scopesUnknown = (status: BotScopeCheck["status"], code = ""): BotScopeCheck => ({
+    status,
+    code,
+    scopes: null,
+    missingChannelClassifyScopes: null,
+    channelClassifyScopesReady: false,
+  });
+  if (!token) return { botScopeCheck: scopesUnknown("token_missing"), botApp: appUnknown("not_probed") };
+
+  let probe: Awaited<ReturnType<typeof probeSlackTokenScopes>>;
+  try {
+    probe = await probeSlackTokenScopes(token);
+  } catch {
+    probe = { ok: false, scopes: null, error: "network_error", appId: "", botId: "" };
+  }
+  if (!probe.ok) {
+    return { botScopeCheck: scopesUnknown("auth_test_failed", probe.error || "slack_error"), botApp: appUnknown("not_probed") };
+  }
+
+  let botScopeCheck: BotScopeCheck;
+  if (!probe.scopes) {
+    botScopeCheck = scopesUnknown("scopes_unavailable", "x_oauth_scopes_missing");
+  } else {
+    const granted = new Set(probe.scopes);
+    const missing = CHANNEL_CLASSIFY_BOT_SCOPES.filter((s) => !granted.has(s));
+    botScopeCheck = {
+      status: "ok",
+      code: "",
+      scopes: probe.scopes,
+      missingChannelClassifyScopes: missing,
+      channelClassifyScopesReady: missing.length === 0,
+    };
+  }
+
+  if (!SLACK_BOT_ID_RE.test(probe.botId)) return { botScopeCheck, botApp: appUnknown("bot_id_missing") };
+  const info = await slackBotsInfoAppId(token, probe.botId);
+  const botApp: BotAppCheck = info.appId
+    ? {
+        status: "ok",
+        code: "",
+        appId: info.appId,
+        expectedAppId: STAFFPASS_SLACK_APP_ID,
+        matchesStaffpassApp: info.appId === STAFFPASS_SLACK_APP_ID,
+      }
+    : appUnknown("bots_info_failed", info.code);
+  return { botScopeCheck, botApp };
+}
+
 export function slackAuthorizeUrlTemplate(): string {
   return `${getAppOrigin()}/api/slack/oauth/link?t={token}`;
 }
@@ -255,6 +386,10 @@ export async function diagnoseSlackStatus(orgId: string): Promise<SlackStatusRes
         nextTool: SET_BOT_TOKEN_TOOL,
       };
 
+  // Only this org's own adapter token (resolveOrgSlackBotToken(orgId) above);
+  // the org comes from the caller's credential, never from tool arguments.
+  const { botScopeCheck, botApp } = await checkConversationBotScopesAndApp(botTokenPresent ? botToken : "");
+
   let botFilesWriteCode = "not_probed";
   let botFilesWriteNeeded: string | null = null;
   let botHasFilesWrite = false;
@@ -410,6 +545,10 @@ export async function diagnoseSlackStatus(orgId: string): Promise<SlackStatusRes
     conversationBotToken,
     nextTool: botTokenPresent ? null : SET_BOT_TOKEN_TOOL,
     authTest,
+    botScopeCheck,
+    botApp,
+    missingChannelClassifyScopes: botScopeCheck.missingChannelClassifyScopes,
+    botAppIdMatchesStaffpass: botApp.matchesStaffpassApp,
     botHasFilesWrite,
     botFilesWriteCode,
     botFilesWriteNeeded,

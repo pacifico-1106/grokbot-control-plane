@@ -365,7 +365,7 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
   {
     name: "setup.slackStatus",
     description:
-      "Diagnose Slack integration status for this org (read-only, no approval required). Returns bot token presence, auth.test, bot files:write probe, conversation adapter status, IM routes, per-employee posting_as / Slack identity / Path B fileUploadReady, pathBReadiness aggregate, and nextStepJa (canonical order: Bot files:write→Reinstall→つながり xoxb→User files:write→社員証 Slack Authorize). Optional channelId includes Connect internal-base readiness for that channel (classify + mixed + parties/IAR coverage). No secrets returned. Use before guiding humans through Slack setup. Refer to docs/tenant-slack-kickoff-rail.md and docs/slack-file-upload-egress.md.",
+      "Diagnose Slack integration status for this org (read-only, no approval required). Returns bot token presence, auth.test, the conversation bot token's real scopes (botScopeCheck / missingChannelClassifyScopes: which of channels:read, groups:read, users:read, im:read, mpim:read are missing) and app id from bots.info (botApp / botAppIdMatchesStaffpass vs A0BU8TABSV6), bot files:write probe, conversation adapter status, IM routes, per-employee posting_as / Slack identity / Path B fileUploadReady, pathBReadiness aggregate, and nextStepJa (canonical order: Bot files:write→Reinstall→つながり xoxb→User files:write→社員証 Slack Authorize). Optional channelId includes Connect internal-base readiness for that channel (classify + mixed + parties/IAR coverage). No secrets returned. Use before guiding humans through Slack setup. Refer to docs/tenant-slack-kickoff-rail.md and docs/slack-file-upload-egress.md.",
     inputSchema: {
       type: "object",
       properties: {
