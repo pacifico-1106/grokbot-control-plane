@@ -12,12 +12,18 @@ const { notifyOpsDcrGlobalCapReached } = await import("@/lib/mcp-oauth/notify");
 const ENV = ["PLATFORM_OPS_ORG_ID", "APPROVAL_ALERT_OPS_EMAILS"];
 const saved: Record<string, string | undefined> = {};
 beforeEach(() => {
-  for (const k of ENV) (saved[k] = process.env[k]), delete process.env[k];
+  for (const k of ENV) {
+    saved[k] = process.env[k];
+    delete process.env[k];
+  }
   mails.length = 0;
   audits.length = 0;
 });
 afterEach(() => {
-  for (const k of ENV) saved[k] === undefined ? delete process.env[k] : (process.env[k] = saved[k]);
+  for (const k of ENV) {
+    if (saved[k] === undefined) delete process.env[k];
+    else process.env[k] = saved[k];
+  }
 });
 
 test("mirrors to the ops org audit log and mails the ops list, counts only", async () => {

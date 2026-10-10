@@ -26,7 +26,10 @@ const { POST } = await import("./route");
 const ENV = ["MCP_OAUTH_ENABLED", "MCP_OAUTH_DCR_ENABLED", "IP_HASH_KEY"];
 const saved: Record<string, string | undefined> = {};
 beforeEach(() => {
-  for (const k of ENV) (saved[k] = process.env[k]), delete process.env[k];
+  for (const k of ENV) {
+    saved[k] = process.env[k];
+    delete process.env[k];
+  }
   __setOAuthStoreForTests(createMemoryOAuthStore());
   alerts.length = 0;
   process.env.MCP_OAUTH_ENABLED = "1";
@@ -34,7 +37,10 @@ beforeEach(() => {
   process.env.IP_HASH_KEY = "test-ip-hash-key-0123456789";
 });
 afterEach(() => {
-  for (const k of ENV) saved[k] === undefined ? delete process.env[k] : (process.env[k] = saved[k]);
+  for (const k of ENV) {
+    if (saved[k] === undefined) delete process.env[k];
+    else process.env[k] = saved[k];
+  }
   __setOAuthStoreForTests(null);
 });
 const good = { client_name: "Claude", redirect_uris: ["https://claude.ai/api/mcp/auth_callback"], token_endpoint_auth_method: "none" };

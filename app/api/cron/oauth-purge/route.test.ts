@@ -15,12 +15,18 @@ const ENV = ["MCP_OAUTH_ENABLED", "CRON_SECRET"];
 const saved: Record<string, string | undefined> = {};
 let store = createMemoryOAuthStore();
 beforeEach(() => {
-  for (const k of ENV) (saved[k] = process.env[k]), delete process.env[k];
+  for (const k of ENV) {
+    saved[k] = process.env[k];
+    delete process.env[k];
+  }
   store = createMemoryOAuthStore();
   __setOAuthStoreForTests(store);
 });
 afterEach(() => {
-  for (const k of ENV) saved[k] === undefined ? delete process.env[k] : (process.env[k] = saved[k]);
+  for (const k of ENV) {
+    if (saved[k] === undefined) delete process.env[k];
+    else process.env[k] = saved[k];
+  }
   __setOAuthStoreForTests(null);
 });
 const call = () => GET(new Request("https://staffpass.test/api/cron/oauth-purge", { headers: { authorization: "Bearer cron-secret-0123456789" } }));
