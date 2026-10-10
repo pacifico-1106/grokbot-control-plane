@@ -101,6 +101,10 @@ export const DEFAULT_REDIRECT_ALLOWLIST = [
   // Cursor web agents (木村 2026-10-10): ONE exact string — no {callback_id}/{port}
   // placeholder, so no prefix / wildcard / www-less / http variant can match.
   "https://www.cursor.com/agents/mcp/oauth/callback",
+  // Cursor desktop (2026-10-10): its DCR sends this plus the two Cursor
+  // callbacks here. Exact string only; redirect-policy refuses every other
+  // custom scheme even if an operator list names one.
+  "cursor://anysphere.cursor-mcp/oauth/callback",
   "http://localhost:{port}/callback",
   "http://127.0.0.1:{port}/callback",
 ];
