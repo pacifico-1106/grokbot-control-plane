@@ -56,6 +56,12 @@ export function isNonTransientFulfilmentError(code: string | undefined | null): 
 }
 
 export const APPROVAL_APP_SCOPE_FIX_JA = "この権限を足して入れ直してください";
+// fail-first stub (names only)
+export const APPROVAL_APP_FIX_NOTICE_JA: Record<"bot_token_required" | "approval_user_guest" | "approval_user_external", { problem: string; fix: string }> = {
+  bot_token_required: { problem: "\u0001a", fix: "\u0001b" },
+  approval_user_guest: { problem: "\u0001c", fix: "\u0001d" },
+  approval_user_external: { problem: "\u0001e", fix: "\u0001f" },
+};
 
 const ID_RE = /^[A-Za-z0-9_.:-]{1,80}$/;
 const SCOPE_RE = /^[a-z:._]{1,40}$/;
