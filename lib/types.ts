@@ -724,6 +724,11 @@ export interface Employee {
    */
   postingAs?: PostingAs;
   credentialId: string | null;
+  /**
+   * expires_at of the current (newest non-revoked) credential; null = no expiry.
+   * Display only (AI社員 list / detail); auth checks expires_at itself.
+   */
+  credentialExpiresAt?: string | null;
   createdAt: string;
 }
 
