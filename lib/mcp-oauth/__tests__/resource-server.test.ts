@@ -195,3 +195,10 @@ test("hardening 8: empty / missing allowlist denies every org unless MCP_OAUTH_O
   process.env.MCP_OAUTH_ORG_ALLOWLIST = "org_pilot";
   expect((await resolveMcpCredential(req(accessToken))).ok).toBe(false);
 });
+
+// S2: these tests are about other gates; the hold check answers "no hold" here
+// (the hold gate itself is covered in lib/safety/hold*.test.ts).
+beforeEach(async () => {
+  const h = await import("@/lib/safety/hold");
+  h.__setHoldReaderForTests(h.NO_HOLD_READER_FOR_TESTS);
+});

@@ -1,4 +1,5 @@
 import { getLinkedSlackUserToken } from "@/lib/data/slack-identities";
+import { preSendHoldCode } from "@/lib/safety/hold";
 import {
   CONVERSATION_BOT_TOKEN_MISSING,
   resolveOrgSlackBotToken,
@@ -294,6 +295,9 @@ export async function postConversationMessage(input: {
 }): Promise<SlackConversationPostResult> {
   const dest = input.channel.trim();
   if (!dest) return { ok: false, error: "slack_channel_required", sendState: "not_sent" };
+  // S2: last check right before the provider call (work already in flight stops here).
+  const held = await preSendHoldCode(input.orgId, input.employeeId);
+  if (held) return { ok: false, error: held, sendState: "not_sent" };
   const resolved = await resolveConversationToken({
     orgId: input.orgId,
     employeeId: input.employeeId,

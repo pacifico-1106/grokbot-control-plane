@@ -13,6 +13,7 @@
  * revocation_check_unavailable): the caller defers the attempt and must not
  * revoke or drop anything. Only `kind: "revoked"` stops subscriptions.
  */
+import { checkOperable } from "@/lib/safety/hold";
 import type { ResolvedEmployeeCredential } from "@/lib/auth/employee-credential";
 import { getBinding, getEmployeeById } from "@/lib/data";
 import { isDemoMode } from "@/lib/mode";
@@ -28,6 +29,8 @@ export const REVOCATION_CHECK_UNAVAILABLE = "revocation_check_unavailable" as co
 export type PrincipalCheck =
   | { ok: true }
   | { ok: false; kind: "revoked"; reason: string }
+  /** S2: employee / org on hold — deliveries are dropped, the subscription is NOT revoked. */
+  | { ok: false; kind: "held"; reason: "employee_on_hold" | "org_on_hold" }
   | { ok: false; kind: "unavailable"; reason: typeof REVOCATION_CHECK_UNAVAILABLE; detail: string };
 
 export type Read<T> = { state: "found"; value: T } | { state: "missing" } | { state: "error"; detail: string };
@@ -148,6 +151,12 @@ export async function checkSubscriptionPrincipal(
       if (cred.state === "missing") return revoked("credential_missing");
       if (cred.value.revokedAt) return revoked("credential_revoked");
       if (cred.value.expiresAt && Date.parse(cred.value.expiresAt) < nowMs) return revoked("credential_expired");
+    }
+    // S2 G5 (no flag): a hold stops delivery only; unreadable hold state = unavailable (nothing sent).
+    const operable = await checkOperable({ orgId: sub.orgId, employeeId: sub.employeeId, phase: "mcp_events" });
+    if (!operable.ok) {
+      if (operable.code === "hold_state_unavailable") return unavailable("hold_state_unavailable");
+      return { ok: false, kind: "held", reason: operable.code };
     }
     return { ok: true };
   } catch {

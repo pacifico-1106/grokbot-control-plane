@@ -157,3 +157,9 @@ test("profile for an employee from another org is refused (cred/org mismatch)", 
   expect(r.structuredContent.id).toBeUndefined();
 });
 
+// S2: these tests are about other gates; the hold check answers "no hold" here
+// (the hold gate itself is covered in lib/safety/hold*.test.ts).
+beforeEach(async () => {
+  const h = await import("@/lib/safety/hold");
+  h.__setHoldReaderForTests(h.NO_HOLD_READER_FOR_TESTS);
+});

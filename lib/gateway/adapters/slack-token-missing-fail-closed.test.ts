@@ -213,3 +213,10 @@ describe("decision 2: env SLACK_BOT_TOKEN / SLACK_CONVERSATION_BOT_TOKEN is neve
     expect(calls).toEqual([]);
   });
 });
+
+// S2: these tests are about other gates; the hold check answers "no hold" here
+// (the hold gate itself is covered in lib/safety/hold*.test.ts).
+beforeEach(async () => {
+  const h = await import("@/lib/safety/hold");
+  h.__setHoldReaderForTests(h.NO_HOLD_READER_FOR_TESTS);
+});

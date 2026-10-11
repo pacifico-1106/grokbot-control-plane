@@ -171,3 +171,10 @@ test("next.config rewrites route .well-known/oauth-* to the handlers", async () 
   expect(map["/.well-known/oauth-protected-resource"]).toBe("/api/oauth/meta/protected-resource?kind=root");
   expect(map["/.well-known/oauth-authorization-server"]).toBe("/api/oauth/meta/authorization-server");
 });
+
+// S2: these tests are about other gates; the hold check answers "no hold" here
+// (the hold gate itself is covered in lib/safety/hold*.test.ts).
+beforeEach(async () => {
+  const h = await import("@/lib/safety/hold");
+  h.__setHoldReaderForTests(h.NO_HOLD_READER_FOR_TESTS);
+});

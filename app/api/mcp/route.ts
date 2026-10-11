@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { withHoldRequestScope } from "@/lib/safety/hold";
 import { resolveEmployeeCredential } from "@/lib/auth/employee-credential";
 import { isMcpOAuthLegacyUnauthInitialize } from "@/lib/feature-flags";
 import { isMcpOAuthEnabled } from "@/lib/mcp-oauth/config";
@@ -143,6 +144,11 @@ export async function GET() {
  * Auth required for tools/list and tools/call.
  */
 export async function POST(req: Request) {
+  // S2: one hold read per request for G1 → G3 (the just-before-send check re-reads).
+  return withHoldRequestScope(() => handlePost(req));
+}
+
+async function handlePost(req: Request) {
   const body = (await req.json().catch(() => null)) as
     | JsonRpcRequest
     | JsonRpcRequest[]

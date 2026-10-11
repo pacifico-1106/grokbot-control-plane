@@ -1,4 +1,5 @@
 import { withSlackUserTeamMemo } from "@/lib/slack/bot-token";
+import { heldTicketMarker, withHoldRequestScope } from "@/lib/safety/hold";
 import {
   buildApprovalArtifact,
   buildApprovalTitle,
@@ -740,7 +741,8 @@ export async function runGatewayInvoke(
   input: RunGatewayInvokeInput
 ): Promise<GatewayInvokeResult> {
   // One users.info per (org, Slack user) per invoke; see fetchVerifiedSlackUserTeamId.
-  return withSlackUserTeamMemo(() => runGatewayInvokeInner(input));
+  // Hold reads are reused within this invoke; the just-before-send check re-reads.
+  return withHoldRequestScope(() => withSlackUserTeamMemo(() => runGatewayInvokeInner(input)));
 }
 
 async function runGatewayInvokeInner(
@@ -1252,6 +1254,35 @@ async function runGatewayInvokeInner(
   if (priorApprovalId) {
     const prior = await getApprovalById(priorApprovalId, orgId || employee.orgId);
     priorApproval = prior;
+    // S2 (木村 10/12 HIGH): a ticket a hold touched never unlocks a re-invoke — not
+    // during the hold, not after release (closed_by_hold). Covers every priorApprovalOk
+    // consumer: mail.send, commerce.order, calendar, comm.send, attachment resends.
+    if (prior && heldTicketMarker(prior.metadata)) {
+      await appendAuditEvent({
+        orgId: orgId || employee.orgId,
+        employeeId,
+        credentialId: input.credentialId || employee.credentialId,
+        action: "tool.invoke",
+        purpose,
+        summary: `${tool} の再実行を停止で保留されたチケットのため拒否（未実行）`,
+        metadata: { tool, jobId, approvalId: priorApprovalId, code: "approval_held", phase: "reinvoke" },
+      });
+      return jsonResult(
+        {
+          ok: false,
+          code: "approval_held",
+          error: "approval_held",
+          message: "この承認は緊急停止で保留・破棄されたため、実行できません。必要なら新しく承認を依頼してください。",
+          needs_approval: false,
+          approvalId: priorApprovalId,
+          employeeId,
+          tool,
+          purpose,
+          jobId,
+        },
+        409
+      );
+    }
     priorApprovalOk = Boolean(
       prior &&
         prior.status === "approved" &&

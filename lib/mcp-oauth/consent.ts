@@ -8,6 +8,7 @@
  *
  * Secrets (code, CSRF token, rid) never go to logs / audit / error text.
  */
+import { checkOperable } from "@/lib/safety/hold";
 import { getOAuthStore, type OAuthStore } from "@/lib/data/oauth";
 import { isMcpOAuthConsentMfaRequired } from "@/lib/feature-flags";
 import {
@@ -182,6 +183,8 @@ async function eligibleEmployees(deps: ConsentDeps, orgId: string): Promise<Cons
     const cred = await deps.getCurrentCredential(e.id);
     if (!cred) continue;
     if (cred.expiresAt && Date.parse(cred.expiresAt) <= deps.now().getTime()) continue;
+    // S2 G2: a held employee (or unreadable hold state) is not a candidate.
+    if (!(await checkOperable({ orgId, employeeId: e.id, phase: "oauth_consent" })).ok) continue;
     out.push({
       id: e.id,
       displayName: e.displayName,
@@ -307,6 +310,9 @@ export async function processConsentDecision(
     return page(403, "access_denied", "選んだ AI 社員はこの組織に所属していません。");
   }
   if (employee.status !== "active") return page(400, "invalid_request", "この AI 社員は現在稼働していません。");
+  if (!(await checkOperable({ orgId: session.orgId, employeeId: employee.id, phase: "oauth_consent" })).ok) {
+    return page(403, "access_denied", "この AI 社員は停止中（緊急停止・休職）のため、接続を許可できません。");
+  }
   const binding = await deps.getBinding(employee.id);
   if (binding?.status === "revoked") return page(403, "access_denied", "この AI 社員の社員証は失効しています。");
   const cred = await deps.getCurrentCredential(employee.id);

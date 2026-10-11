@@ -317,3 +317,10 @@ test("E2E Origin null (consent page was no-referrer): same-origin browser POST â
   const tok = (await t.json()) as { access_token: string };
   expect((await mcpCall(tok.access_token, "tools/list")).status).toBe(200);
 });
+
+// S2: these tests are about other gates; the hold check answers "no hold" here
+// (the hold gate itself is covered in lib/safety/hold*.test.ts).
+beforeEach(async () => {
+  const h = await import("@/lib/safety/hold");
+  h.__setHoldReaderForTests(h.NO_HOLD_READER_FOR_TESTS);
+});

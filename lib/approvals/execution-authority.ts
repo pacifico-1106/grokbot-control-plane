@@ -9,9 +9,16 @@ import { employeeHasToolScope, resolveGatewayTool } from "@/lib/gateway/tools";
 import { assertBillingAllowsGateway } from "@/lib/billing/entitlements";
 import { isConfigChangeApproval } from "@/lib/config-change-request/core";
 import { assertApproverAuthorityForExecution } from "@/lib/approver-authority/verify";
+import { assertOperable, assertTicketNotHeld } from "@/lib/safety/hold";
 
 export async function assertApprovalExecutionAuthority(approval: ApprovalRequest): Promise<void> {
   if (approval.status !== "approved") throw new Error("approval_not_approved");
+  // S2 G4 (emergency stop, no flag): a ticket a hold touched never runs, and nothing
+  // runs for a held employee / org or when the hold state can't be read. Demo included.
+  assertTicketNotHeld(approval);
+  await assertOperable(isAdminClassApproval(approval)
+    ? { orgId: approval.orgId, phase: "approval_execution" }
+    : { orgId: approval.orgId, employeeId: approval.employeeId, phase: "approval_execution" });
   const raw = approval.metadata.invoke;
   const snapshot = raw && typeof raw === "object" ? raw as Record<string, unknown> : null;
   if (snapshot && ((snapshot.orgId && snapshot.orgId !== approval.orgId) ||

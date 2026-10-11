@@ -4,6 +4,7 @@
  * sp_at_ (OAuth ON only) → access token → grant → employee/binding/credential
  * re-checked on EVERY request. Anything else → existing failure path.
  */
+import { checkOperable, type HoldDenyCode } from "@/lib/safety/hold";
 import {
   resolveEmployeeCredential,
   type CredentialAuthResult,
@@ -63,6 +64,13 @@ function shouldTouch(grantId: string, nowMs: number): boolean {
   return true;
 }
 
+// Same codes as the 社員証 path (lib/auth/employee-credential.ts holdRefusal); kept local
+// so this module does not depend on that one's internals.
+const holdRefusal = (code: HoldDenyCode): McpAuthResult =>
+  code === "hold_state_unavailable"
+    ? { ok: false, code, message: "hold state unavailable; refused (fail-stop)", httpStatus: 503 }
+    : { ok: false, code, message: code === "org_on_hold" ? "organization is on emergency stop" : "employee is on hold (emergency stop / leave)", httpStatus: 403 };
+
 const invalid = (message: string): McpAuthResult => ({
   ok: false,
   code: "invalid_credential",
@@ -105,6 +113,10 @@ export async function resolveOAuthAccessToken(raw: string, now = new Date()): Pr
   if (binding?.status === "revoked") {
     return { ok: false, code: "revoked", message: "credential / binding revoked (fail-closed)", httpStatus: 403 };
   }
+  // S2 G2 (no flag): a held employee / org stops on the next request. 403 without
+  // invalid_token — the grant and tokens are kept, so a release restores access.
+  const operable = await checkOperable({ orgId: grant.orgId, employeeId: grant.employeeId, phase: "oauth" });
+  if (!operable.ok) return holdRefusal(operable.code);
   const current = await getCurrentEmployeeCredential(grant.employeeId);
   if (!current) return invalid("employee has no active credential (fail-closed)");
   if (current.expiresAt && Date.parse(current.expiresAt) <= now.getTime()) {

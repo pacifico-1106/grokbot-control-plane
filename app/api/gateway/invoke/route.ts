@@ -2,6 +2,7 @@ import {
   extractEmployeeSecret,
   resolveEmployeeCredential,
 } from "@/lib/auth/employee-credential";
+import { withHoldRequestScope } from "@/lib/safety/hold";
 import { runGatewayInvoke } from "@/lib/gateway/invoke";
 import type { GatewayInvokeRequest } from "@/lib/types";
 import { jsonUtf8 } from "@/lib/http/json-utf8";
@@ -18,6 +19,11 @@ export const runtime = "nodejs";
  * Enforcement lives in lib/gateway/invoke (shared with remote MCP).
  */
 export async function POST(req: Request) {
+  // S2: one hold read per request for G1 → G3 (the just-before-send check re-reads).
+  return withHoldRequestScope(() => handlePost(req));
+}
+
+async function handlePost(req: Request) {
   const body = (await req.json().catch(() => ({}))) as GatewayInvokeRequest;
   const headerId = (req.headers.get("x-employee-id") || "").trim() || undefined;
   const bodyId = (body.employeeId || "").trim() || undefined;

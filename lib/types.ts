@@ -479,6 +479,9 @@ export type AuditAction =
   | "oauth.dcr_global_cap_reached"
   | "lp.setup_fee.email_hash_key_missing"
   | "lp.setup_fee.notice_record_failed"
+  | "employee.hold.state_unavailable"
+  | "employee.hold.not_installed"
+  | "employee.hold.wake_suppressed"
   | "tool.invoke"
   | "comm.delete.succeeded"
   | "comm.delete.already_deleted"
@@ -924,7 +927,10 @@ export type ExecutableDenyCode =
   | "needs_reauth"
   | "degraded"
   | "health_failed"
-  | "not_found";
+  | "not_found"
+  | "employee_on_hold"
+  | "org_on_hold"
+  | "hold_state_unavailable";
 
 export interface ExecutableDeny {
   ok: false;

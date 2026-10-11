@@ -11,6 +11,7 @@
  * Org table: org_sns_adapters / org_sns_adapter_secrets.
  */
 
+import { preSendHoldCode } from "@/lib/safety/hold";
 import { retryAfterSecondsFromHeaders } from "./rate-limit";
 
 export const SNS_SURFACES = ["x", "note", "linkedin", "youtube"] as const;
@@ -227,6 +228,10 @@ export async function publishSnsPost(input: SnsPublishInput): Promise<SnsPublish
   if (!text) {
     return { ok: false, error: "投稿本文が空です。", surface, sendState: "not_sent" };
   }
+
+  // S2: last check right before the provider call.
+  const held = await preSendHoldCode(input.orgId, input.employeeId);
+  if (held) return { ok: false, error: held, surface, sendState: "not_sent" };
 
   const secrets = await loadAdapterSecrets(input.orgId, surface);
   if (stubEnabled(secrets)) {
