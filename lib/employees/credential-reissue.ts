@@ -28,7 +28,9 @@ import { ADMIN_AUDIT_CLASS } from "@/lib/admin-mcp/audit-class";
 import { requesterOf, selfBound } from "@/lib/admin-mcp/allowed-accounts-tools";
 import { rejectUnsafeArgs } from "@/lib/admin-mcp/slack-dm-setup";
 import { mintOneTimeSecret } from "@/lib/bindings";
-import { getApprovalById, listApprovals, updateApprovalMetadata } from "@/lib/data/approvals";
+import { getApprovalById, listApprovals } from "@/lib/data/approvals";
+import { claimCredentialReissueTicket, releaseCredentialReissueTicket } from "@/lib/data/credential-reissue-claims";
+import { randomBytes } from "node:crypto";
 import { appendAuditEvent } from "@/lib/data/audit";
 import { getBinding, rotateCredential } from "@/lib/data/bindings";
 import { getEmployee } from "@/lib/data/employees";
@@ -266,13 +268,23 @@ export async function redeemCredentialReissue(input: {
   if (!employee || employee.orgId !== orgId) return refuse("reissue_approval_not_found");
   if (employee.status === "suspended") return refuse("employee_terminated");
 
-  // Claim the ticket before minting (single use). merge_approval_metadata is a
-  // merge, not a compare-and-swap: two simultaneous redeems by two authorized
-  // humans could both rotate — the second rotation revokes the first key.
-  const claimed = await updateApprovalMetadata(approval, {
-    credentialReissue: { redeemedAt: now.toISOString(), redeemedByMemberId: input.actor.memberId || null },
-  }).catch(() => null);
-  if (!claimed) return refuse("reissue_claim_failed");
+  // Claim the ticket before minting (single use), atomically: one conditional
+  // UPDATE (public.claim_credential_reissue, migration 20261012200000) sets the
+  // mark only while unclaimed → of concurrent pickups exactly one proceeds.
+  const claimToken = randomBytes(18).toString("base64url");
+  let claimed: boolean;
+  try {
+    claimed = await claimCredentialReissueTicket({
+      approvalId: approval.id,
+      orgId,
+      token: claimToken,
+      memberId: input.actor.memberId || null,
+      at: now.toISOString(),
+    });
+  } catch {
+    return refuse("reissue_claim_failed");
+  }
+  if (!claimed) return refuse("reissue_approval_used");
 
   const secret = mintOneTimeSecret();
   let rotated: { binding: EmployeeBinding; generation: number };
@@ -289,8 +301,9 @@ export async function redeemCredentialReissue(input: {
       allowedAccounts: employee.allowedAccounts,
     });
   } catch (e) {
-    // Nothing was issued: reopen the ticket so it can be retried in the window.
-    await updateApprovalMetadata(approval, { credentialReissue: {} }).catch(() => null);
+    // Nothing was issued: reopen the ticket so it can be retried in the window —
+    // releasing only OUR mark (same claim token), never someone else's.
+    await releaseCredentialReissueTicket({ approvalId: approval.id, orgId, token: claimToken }).catch(() => false);
     return refuse((e as { code?: string }).code === "revoked" ? "revoked" : "rotate_failed");
   }
   await appendAuditEvent({
