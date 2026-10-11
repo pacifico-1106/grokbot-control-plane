@@ -1,5 +1,4 @@
 import { publicApproval } from "@/lib/approvals/public";
-import { NextResponse } from "next/server";
 import { runApprovalResolveSideEffects } from "@/lib/approvals/resolve-side-effects";
 import { getCurrentOrgId } from "@/lib/auth/session";
 import {
@@ -9,6 +8,7 @@ import {
 } from "@/lib/data";
 import { requireCapability } from "@/lib/team/demo-actor";
 import { SELF_APPROVAL_DENIED, SELF_APPROVAL_MESSAGE_JA } from "@/lib/admin-mcp/self-approval";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 export const runtime = "nodejs";
 
@@ -22,7 +22,7 @@ export async function POST(
   const body = (await req.json().catch(() => ({}))) as { note?: unknown };
   const note = typeof body.note === "string" ? body.note.trim() : "";
   if (!note || Array.from(note).length > 2_000) {
-    return NextResponse.json(
+    return jsonUtf8(
       { error: "revision_note_must_be_1_to_2000_chars" },
       { status: 400 }
     );
@@ -42,7 +42,7 @@ export async function POST(
   } catch (error) {
     const code = (error as { code?: string }).code || (error instanceof Error ? error.message : "");
     if (code === SELF_APPROVAL_DENIED) {
-      return NextResponse.json(
+      return jsonUtf8(
         { error: SELF_APPROVAL_DENIED, message: SELF_APPROVAL_MESSAGE_JA },
         { status: 403 }
       );
@@ -50,7 +50,7 @@ export async function POST(
     throw error;
   }
   if (!updated) {
-    return NextResponse.json(
+    return jsonUtf8(
       { error: "not_found_or_already_resolved" },
       { status: 404 }
     );
@@ -62,9 +62,10 @@ export async function POST(
     decision: "revision_requested",
     actorEmail: gate.actor.email,
     employee,
+    surface: "web",
   });
 
-  return NextResponse.json({
+  return jsonUtf8({
     ok: true,
     approval: publicApproval(updated),
     sideEffects,

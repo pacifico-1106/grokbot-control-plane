@@ -26,6 +26,7 @@ declare module "bun:test" {
 
   export const afterAll: (callback: TestCallback) => void;
   export const afterEach: (callback: TestCallback) => void;
+  export const beforeAll: (callback: TestCallback) => void;
   export const beforeEach: (callback: TestCallback) => void;
   export const describe: TestFunction;
   export const expect: (actual: unknown) => Matcher;

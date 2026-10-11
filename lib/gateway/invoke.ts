@@ -1,3 +1,5 @@
+import { withSlackUserTeamMemo } from "@/lib/slack/bot-token";
+import { heldTicketMarker, withHoldRequestScope } from "@/lib/safety/hold";
 import {
   buildApprovalArtifact,
   buildApprovalTitle,
@@ -5,30 +7,32 @@ import {
   formatArtifactLines,
   inferRiskForTool,
 } from "@/lib/approvals/summary";
+import { PROVIDER_RATE_LIMITED, RETRY_AFTER_DEFAULT_SECONDS, rateLimitedBody } from "@/lib/gateway/adapters/rate-limit";
+import { readThroughFromBody } from "@/lib/thread-guard/read-through";
+import { NEXT_STEP_READ_POINT_UNKNOWN, THREAD_GUARD_UNAVAILABLE, THREAD_MOVED_ON, beginThreadSend, threadGuardStopBody, type ThreadGuardStop } from "@/lib/thread-guard/guard";
+import { closedByThreadMovedOn } from "@/lib/approvals/closed-without-send";
+import { auditThreadGuardHeld, auditThreadGuardStop, isThreadGuardCode, type ThreadGuardAuditCtx } from "@/lib/thread-guard/respond";
+import { conversationKeyInputFromBody } from "@/lib/comm-reply-dedup/conversation-key";
 import { sendApprovalNeededEmail } from "@/lib/email";
 import { sendApprovalNotifications } from "@/lib/notify/channels";
 import { getCurrentOrgId } from "@/lib/auth/session";
 import {
   assertExecutable,
-  appendAuditEvent,
+  appendAuditEvent as appendAuditEventBase,
   createApproval,
   getActionCounts,
   getApprovalById,
   getBinding,
   getEmployee,
   getEmployeeById,
-  getEffectiveIngressHandoffPolicy,
-  getEffectiveMailPolicy,
   runtimeModeLabel,
   incrementActionCounter,
   getOrgSodWarnPolicy,
   updateApprovalMetadata,
 } from "@/lib/data";
-import { getOrgInternalAudienceRule } from "@/lib/data/internal-audience-rule";
-import {
-  evaluateMailPolicy,
-  extractMailRecipients,
-} from "@/lib/mail-policy/apply";
+import { evaluateMailPolicyForRequest } from "@/lib/mail-policy/evaluate-request";
+import { collectMailToRecipients, extractMailRecipients } from "@/lib/mail-policy/apply";
+import { buildMailSendPin, checkApprovedMailSendPin } from "@/lib/mail-policy/approved-send-pin";
 import type { MailPolicyDecision } from "@/lib/types";
 import {
   isBillableConfirmCompletion,
@@ -38,11 +42,17 @@ import { assertBillingAllowsGateway } from "@/lib/billing/entitlements";
 import { evaluateDualEgress } from "@/lib/gateway/egress";
 import {
   parseConversationContext,
+  conversationOrgMismatch,
   resolveAudience,
   resolveConversationThreadId,
   resolveParentMessageTs,
 } from "@/lib/gateway/audience";
 import { lookupWakeParent, consumeWakeParent } from "@/lib/data/wake-parent-stash";
+import {
+  isSlackDmReplyInlineEnabled,
+  isSlackDmReplyTarget,
+  resolveSlackDmInlineThreadTs,
+} from "@/lib/slack/dm-reply-inline";
 import { getEffectiveReplyPolicy } from "@/lib/data/reply-policy";
 import { resolveInformationDisclosure } from "@/lib/gateway/information-class";
 import { evaluateProjectScope } from "@/lib/gateway/project-scope";
@@ -51,6 +61,7 @@ import {
   employeeHasToolScope,
   isAudienceGatedTool,
   isConfirmClassTool,
+  isOutboundSendTool,
   isSnsPublishTool,
   toolRequiresHumanApproval,
   resolveGatewayTool,
@@ -58,6 +69,7 @@ import {
 import {
   looksLikeSlackTs,
   postConversationMessage,
+  SLACK_TOKEN_MISSING,
   validateSlackPostDestination,
 } from "@/lib/gateway/adapters/slack";
 import {
@@ -72,17 +84,27 @@ import {
   buildFileUploadEgressDenied,
   buildFileUploadFailed,
   buildFileUploadSkipped,
+  fileUploadFailureSendState,
   type FileUploadResponse,
 } from "@/lib/gateway/adapters/slack-file-upload";
-import { publishSnsPost, type SnsPublishResult } from "@/lib/gateway/adapters/sns";
+import { parseSnsSurface, publishSnsPost, type SnsPublishResult } from "@/lib/gateway/adapters/sns";
 import {
   buildInvokeSnapshot,
   fulfillApprovedInvoke,
   conversationDeliveryFromFulfillment,
   snsDeliveryFromFulfillment,
   parseFulfillment,
+  parseInvokeSnapshot,
   type ConversationDelivery,
 } from "@/lib/approvals/fulfill";
+import { approvedRerunConversationDelivery } from "@/lib/approvals/approved-rerun-delivery";
+import {
+  auditLegacySnapshotAttachmentBlock,
+  deliverApprovedRerunAttachment,
+  legacySnapshotAttachmentBlock,
+} from "@/lib/approvals/approved-rerun-attachment";
+import { isDemoMode } from "@/lib/mode";
+import { resolveSlackUserRecipient } from "@/lib/slack/u-recipient-dm-route";
 import { evaluateAllowedAccountsForBrowser } from "@/lib/employees/allowed-accounts";
 import { evaluateSpend } from "@/lib/spend-gate";
 import { evaluateActionLimit } from "@/lib/action-gate";
@@ -103,7 +125,14 @@ import { enrichInvokeFailureBody } from "@/lib/stuck-watch/enrich";
 import { getOrgStuckWatchPolicy } from "@/lib/data/stuck-watch-policy";
 import type { DualEgressVerdict, Employee, EgressVerdict, GatewayInvokeRequest } from "@/lib/types";
 import { createHash } from "node:crypto";
+import {
+  auditSecretDetectionBlocked,
+  auditSecretDetectionSuspected,
+  safeEcho,
+} from "@/lib/security/secret-detection-audit";
 import { createSupabaseAdminClient } from "@/lib/supabase";
+import { runCommDeleteInvoke } from "@/lib/comm-delete/invoke";
+import { buildSlackPostRecord } from "@/lib/comm-delete/post-record";
 import {
   CrossProductEventError,
   normalizeCommerceAuthorization,
@@ -112,8 +141,20 @@ import {
   detectSecretInPayload,
   buildSecretDetectionErrorResponse,
 } from "@/lib/security/secret-detector";
-import { isGoogleCalendarReadEnabled, isTopicGatedPostingEnabled } from "@/lib/feature-flags";
+import {
+  isCommReplyDedupEnabled,
+  isDuplicateGuardV2Enabled,
+  isGoogleCalendarReadEnabled,
+  isThreadSingleFlightEnabled,
+  isTopicGatedPostingEnabled,
+  isApprovalReasonsEnabled,
+  isCommSendInternalDefaultEnabled,
+} from "@/lib/feature-flags";
 import { checkTopicGate, buildTopicGateApprovalMetadata } from "@/lib/decision-workflow/topic-gate";
+import { getOrgChannel } from "@/lib/data/directory";
+import { buildApprovalReasons, toAiFacingApprovalReasons, topicGateMessageJaForAi, type AiApprovalReason, type ApprovalReason } from "@/lib/approvals/approval-reasons";
+import { categorizeMatchedTopics } from "@/lib/approvals/sensitive-topic-categories";
+import { isInformationClass } from "@/lib/gateway/information-class";
 import { getOrgApprovalKindRoutesPolicy } from "@/lib/approval-kind-routes/data";
 import { getToolApprovalKind } from "@/lib/approval-kind-routes/tool-kind-map";
 import {
@@ -123,6 +164,32 @@ import {
 import { assertGatewayToolAllowedForPlan } from "@/lib/billing/plan-gate";
 import { readCalendarFreebusy } from "@/lib/google/calendar-read";
 import {
+  auditCrossEmployee,
+  auditDedupUnavailable,
+  auditDuplicateSuppressed,
+  auditPostOutcomeUnknown,
+  claimDirectCommReplySend,
+  confirmedNotDeliveredRef,
+  dedupStopBody,
+  duplicateWarningBody,
+  finishDirectCommReplySend,
+  ledgerOutcomeAfterPost,
+  postOutcomeUnknownBody,
+  precheckCommReplyDuplicate,
+  prepareCommReplyDedupFromBody,
+  prepareFileUploadDedup,
+  prepareSnsPublishDedup,
+  releaseConfirmedUncertain,
+  releaseConfirmedUncertainForScope,
+  supersedeOlderOnNewApproval,
+  type DedupAuditCtx,
+  type DirectSendClaim,
+  type GuardCheck,
+  type GuardDuplicate,
+  type PreparedCommReplyDedup,
+} from "@/lib/comm-reply-dedup/guard";
+import { expireStaleConversationApprovals } from "@/lib/comm-reply-dedup/approvals";
+import {
   addCalendarReadGrant,
   revokeCalendarReadGrant,
 } from "@/lib/data/google-identities";
@@ -130,11 +197,31 @@ import {
   applySchedulingPolicyToPropose,
   type ProposeInput,
 } from "@/lib/scheduling-policy/propose";
+import { egressDenyNextStep, onEgressDenied } from "@/lib/channel-classify/deny-hook";
+
+/** PR-B: informational nextStep (channels.classify) on an external-treated deny. */
+async function denyNextStepFields(
+  body: GatewayInvokeRequest,
+  egress: { decision?: string; reason?: string; audience?: string },
+  orgId: string
+) {
+  const next = await egressDenyNextStep(body, egress, orgId).catch(() => null);
+  return next ? { nextStep: next, nextStepJa: next.messageJa } : {};
+}
 
 export type GatewayInvokeResult = {
   httpStatus: number;
   body: Record<string, unknown>;
 };
+
+/** Thread single-flight stop (nothing sent): audit + error body with nextStep / retryable. */
+async function threadGuardStopResponse(stop: ThreadGuardStop, ctx: ThreadGuardAuditCtx): Promise<GatewayInvokeResult> {
+  await auditThreadGuardStop(stop, ctx);
+  return jsonResult(
+    { ...stop.body, needs_approval: false, employeeId: ctx.employeeId, tool: ctx.tool, purpose: ctx.purpose, jobId: ctx.jobId },
+    stop.httpStatus
+  );
+}
 
 function jsonResult(
   body: Record<string, unknown>,
@@ -166,6 +253,20 @@ function validateMailSendArtifact(body: GatewayInvokeRequest): {
   const args = body.args && typeof body.args === "object"
     ? (body.args as Record<string, unknown>)
     : {};
+
+  // Fail-closed: a recipient field we cannot read (array / object / number)
+  // must not be skipped in favour of the next field.
+  const unreadableRecipientFields = (["to", "recipient", "email"] as const).filter(
+    (key) => args[key] !== undefined && args[key] !== null && typeof args[key] !== "string"
+  );
+  if (unreadableRecipientFields.length > 0) {
+    return {
+      ok: false,
+      missing: [],
+      code: "mail_recipient_invalid",
+      messageJa: `宛先は文字列で指定してください（複数宛先はカンマ区切り）。不正な項目: ${unreadableRecipientFields.join(", ")}`,
+    };
+  }
 
   const to = (
     typeof args.to === "string" ? args.to :
@@ -282,6 +383,28 @@ function extractChannelIdForTopicGate(body: GatewayInvokeRequest): string | null
  * Returns both the effective verdict (external-safe for behavior) and
  * the dual verdict (for audit when channelMixed).
  */
+/**
+ * 木村 B (COMM_SEND_INTERNAL_DEFAULT_ENABLED, default OFF): is the comm.send
+ * destination one Staffpass itself verified as internal? Only the channel
+ * ledger of the CREDENTIAL org (never conversation.orgId) counts: an internal,
+ * not-mixed Slack channel or internal DM route. Party ledger / team rule alone
+ * are not "verified". The audience must also have resolved to internal, so an
+ * external speaker in a ledger-internal channel stays confidential.
+ */
+async function isVerifiedInternalSlackDestination(input: {
+  orgId: string;
+  tool: string;
+  ctx: ReturnType<typeof parseConversationContext>;
+  audience: string;
+}): Promise<boolean> {
+  if (input.tool !== "comm.send" || !isCommSendInternalDefaultEnabled()) return false;
+  if (input.audience !== "internal") return false;
+  const ctx = input.ctx;
+  if (!ctx || ctx.surface !== "slack" || !ctx.slackChannelId || !input.orgId) return false;
+  const row = await getOrgChannel(input.orgId, "slack", ctx.slackChannelId).catch(() => null);
+  return Boolean(row && row.orgId === input.orgId && row.classification === "internal" && row.mixed === false);
+}
+
 async function evaluateInvokeEgress(input: {
   orgId: string;
   tool: string;
@@ -301,6 +424,12 @@ async function evaluateInvokeEgress(input: {
     tool: input.tool,
     body: input.body,
     audience: audience.audience,
+    verifiedInternalDestination: await isVerifiedInternalSlackDestination({
+      orgId: input.orgId,
+      tool: input.tool,
+      ctx,
+      audience: audience.audience,
+    }),
   });
 
   const dualEgress = evaluateDualEgress({
@@ -364,6 +493,21 @@ async function createNeedsApprovalResponse(opts: {
     const recipients = opts.body ? extractMailRecipients(opts.body) : { hasAttachments: false };
     if (recipients.hasAttachments) artifact.hasAttachments = true;
   }
+  const invokeSnapshot = buildInvokeSnapshot({
+    tool: opts.tool,
+    purpose: opts.purpose,
+    jobId: opts.jobId,
+    employeeId: opts.employeeId,
+    orgId: opts.orgId,
+    employee: opts.employee,
+    body: opts.body,
+    conversation,
+    informationClass: opts.egress?.informationClass,
+    fidelity: opts.egress?.fidelity,
+  });
+  // The approved attachment is NOT a summary line (#253 follow-up 5): every
+  // surface renders it on its own from the snapshot (lib/approvals/attachment-card.ts),
+  // so it cannot be confused with "添付ファイル:" text inside the message body.
   const extraLines = formatArtifactLines(artifact);
   const baseSummary = buildRichApprovalSummary({
     tool: opts.tool,
@@ -400,18 +544,13 @@ async function createNeedsApprovalResponse(opts: {
       metadata: {
         ...(opts.metadata ?? {}),
         artifact,
-        invoke: buildInvokeSnapshot({
-          tool: opts.tool,
-          purpose: opts.purpose,
-          jobId: opts.jobId,
-          employeeId: opts.employeeId,
-          orgId: opts.orgId,
-          employee: opts.employee,
-          body: opts.body,
-          conversation,
-          informationClass: opts.egress?.informationClass,
-          fidelity: opts.egress?.fidelity,
-        }),
+        invoke: invokeSnapshot,
+        // mail.send: pin the exact approved content (digests only) so an
+        // approved re-invoke cannot change recipients / subject / body.
+        // Set last so nothing earlier in metadata can supply it.
+        ...(opts.tool === "mail.send"
+          ? { mailSendPin: opts.body ? buildMailSendPin(opts.body) : undefined }
+          : {}),
       },
     });
     createdApproval = created.approval;
@@ -442,6 +581,18 @@ async function createNeedsApprovalResponse(opts: {
       },
       opts.httpStatus ?? 402
     );
+  }
+
+  // COMM_REPLY_DEDUP_ENABLED: the newer approval request replaces older pending
+  // ones for the same conversation (same employee). Best effort, audited.
+  if (createdApproval && opts.body && isAudienceGatedTool(opts.tool)) {
+    const preparedForSupersede = prepareCommReplyDedupFromBody({
+      orgId: opts.orgId,
+      employeeId: opts.employeeId,
+      body: opts.body,
+      text: conversationOutboundText(opts.body, opts.purpose),
+    });
+    await supersedeOlderOnNewApproval(preparedForSupersede, createdApproval.id);
   }
 
   // Best-effort human notify (Resend stub in DEMO).
@@ -509,12 +660,77 @@ async function createNeedsApprovalResponse(opts: {
   );
 }
 
+/** The text a conversation tool posts (same rule as the post and the approval fulfill). */
+function conversationOutboundText(body: GatewayInvokeRequest, purpose: string): string {
+  const args = body.args && typeof body.args === "object" ? (body.args as Record<string, unknown>) : {};
+  const raw = [args.text, args.body, args.message].find((value) => typeof value === "string" && value.trim());
+  return (typeof raw === "string" ? raw : "").trim() || purpose;
+}
+
+/**
+ * Duplicate / unavailable check → the response to return (nothing is posted);
+ * null = go ahead. Audited here (hashes only). Every stop carries code /
+ * reasonCode, nextAction and nextStep (lib/comm-reply-dedup/guard.ts).
+ */
+async function directSendDedupResponse(
+  claim: DirectSendClaim | GuardCheck,
+  prepared: PreparedCommReplyDedup,
+  ctx: { orgId: string; employeeId: string; credentialId: string | null; purpose: string; tool: string; jobId: string }
+) {
+  const auditCtx: DedupAuditCtx = { ...ctx, phase: "invoke" };
+  const stop = dedupStopBody(claim, prepared);
+  if (!stop) return null;
+  if (claim.state === "unavailable") await auditDedupUnavailable(auditCtx, claim.reason);
+  else if (claim.state === "duplicate" && prepared.kind === "ready") {
+    await auditDuplicateSuppressed(auditCtx, prepared, claim as GuardDuplicate);
+  }
+  return jsonResult(
+    {
+      ...stop.body,
+      needs_approval: false,
+      employeeId: ctx.employeeId,
+      tool: ctx.tool,
+      purpose: ctx.purpose,
+      jobId: ctx.jobId,
+    },
+    stop.status
+  );
+}
+
 export type RunGatewayInvokeInput = {
   employeeId: string;
   body: GatewayInvokeRequest;
   /** Optional credential id from Bearer resolution */
   credentialId?: string | null;
+  /**
+   * MCP OAuth (PR-7): when the caller authenticated with an OAuth access token,
+   * every audit row of this invoke carries authMethod/oauthGrantId/oauthClientHost.
+   * gb_emp_ callers leave this unset → audit rows unchanged.
+   */
+  oauth?: { grantId: string; clientHost: string } | null;
 };
+
+/**
+ * Org for secret-detection audit rows: the authenticated employee's own org
+ * (record, else credential binding). Never a client-supplied org. Errors → null
+ * (the rejection still stands; the row is skipped).
+ */
+async function secretAuditOrgId(employeeId: string): Promise<string | null> {
+  try {
+    const emp = await getEmployeeById(employeeId);
+    if (emp?.orgId) return emp.orgId;
+    const binding = await getBinding(employeeId);
+    return binding?.orgId ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** 木村 #293 decision 2: approved replies on surfaces the gateway cannot deliver to. */
+const APPROVED_REPLY_SURFACE_NOT_SUPPORTED = "approved_reply_surface_not_supported";
+const APPROVED_REPLY_SURFACE_NOT_SUPPORTED_JA = "この窓口では承認後の返信にまだ対応していません。承認済みの返信は送信していません。";
+const APPROVED_REPLY_SURFACE_NOT_SUPPORTED_NEXT_STEP =
+  "この窓口では承認後の返信にまだ対応していません。この承認IDで再実行しても送信されません。必要なら承認不要の内容で返信するか、担当者に直接対応を依頼してください。";
 
 /**
  * Core Gateway enforcement. Callers must already resolve employeeId from an
@@ -524,7 +740,22 @@ export type RunGatewayInvokeInput = {
 export async function runGatewayInvoke(
   input: RunGatewayInvokeInput
 ): Promise<GatewayInvokeResult> {
-  const body = input.body;
+  // One users.info per (org, Slack user) per invoke; see fetchVerifiedSlackUserTeamId.
+  // Hold reads are reused within this invoke; the just-before-send check re-reads.
+  return withHoldRequestScope(() => withSlackUserTeamMemo(() => runGatewayInvokeInner(input)));
+}
+
+async function runGatewayInvokeInner(
+  input: RunGatewayInvokeInput
+): Promise<GatewayInvokeResult> {
+  // `let`: a U… Slack recipient may be resolved to the internal DM route below
+  // (SLACK_U_TO_DM_SEND_ENABLED + SLACK_DM_AUTOROUTE_ENABLED); every later layer then sees the same D….
+  const oauthMeta = input.oauth
+    ? { authMethod: "oauth", oauthGrantId: input.oauth.grantId, oauthClientHost: input.oauth.clientHost }
+    : null;
+  const appendAuditEvent: typeof appendAuditEventBase = (event) =>
+    appendAuditEventBase(oauthMeta ? { ...event, metadata: { ...(event.metadata ?? {}), ...oauthMeta } } : event);
+  let body = input.body;
   const employeeId = (input.employeeId || "").trim();
 
   if (!employeeId) {
@@ -584,18 +815,34 @@ export async function runGatewayInvoke(
 
   // P0-A: Secret-in-chat detector (fail-closed, before any data logging)
   // Chat NEVER: passwords, refresh tokens, API keys, full employee/admin badge secrets
+  // 2026-10-05: every rejection writes one secret_detection.blocked audit row
+  // (org of the authenticated employee, never the body's), with no value; a
+  // failed write never turns the rejection into a pass. tool / purpose / jobId
+  // are echoed only when they are clean themselves.
   const secretDetection = detectSecretInPayload(body);
-  if (!secretDetection.ok) {
-    return jsonResult(
-      {
-        ...buildSecretDetectionErrorResponse(secretDetection),
-        employeeId,
-        tool: toolRaw,
-        purpose,
-        jobId,
-      },
-      400
-    );
+  if (!secretDetection.ok || secretDetection.suspected) {
+    const scope = {
+      orgId: await secretAuditOrgId(employeeId),
+      employeeId,
+      credentialId: input.credentialId ?? null,
+      surface: "gateway_invoke" as const,
+      tool: toolRaw,
+      jobId,
+    };
+    if (!secretDetection.ok) {
+      await auditSecretDetectionBlocked(scope, secretDetection);
+      return jsonResult(
+        {
+          ...buildSecretDetectionErrorResponse(secretDetection),
+          employeeId,
+          tool: safeEcho(toolRaw),
+          purpose: safeEcho(purpose),
+          jobId: safeEcho(jobId),
+        },
+        400
+      );
+    }
+    await auditSecretDetectionSuspected(scope, secretDetection.suspected ?? []);
   }
 
   const resolved = resolveGatewayTool(toolRaw);
@@ -638,12 +885,13 @@ export async function runGatewayInvoke(
     );
   }
 
-  // Bot invokes carry a 社員証 but no browser session.
-  // Prefer session org, else binding.orgId, else admin PK lookup.
+  // The 社員証 (badge) is the principal: its org drives billing, plan gate,
+  // audit and the approval row. A browser session cookie never overrides it;
+  // a cookie naming a different org is refused below (session_org_mismatch).
   const binding = await getBinding(employeeId);
-  const orgId =
-    (await getCurrentOrgId()) || binding?.orgId || decision.binding.orgId || null;
-  let employee = await getEmployee(employeeId, orgId);
+  const sessionOrgId = await getCurrentOrgId();
+  const badgeOrgId = binding?.orgId || decision.binding.orgId || null;
+  let employee = await getEmployee(employeeId, badgeOrgId || sessionOrgId);
   if (!employee) {
     employee = await getEmployeeById(employeeId);
   }
@@ -661,6 +909,76 @@ export async function runGatewayInvoke(
         tool,
       },
       401
+    );
+  }
+
+  const orgId: string = employee.orgId;
+  if (sessionOrgId && sessionOrgId.trim() && sessionOrgId.trim().toLowerCase() !== orgId.toLowerCase()) {
+    await appendAuditEvent({
+      orgId,
+      employeeId,
+      credentialId: input.credentialId || employee.credentialId,
+      action: "gateway.session_org_mismatch",
+      purpose,
+      summary: `${tool} をログイン中の組織と社員証の組織の不一致で拒否（fail-closed）`,
+      metadata: { tool, jobId, code: "session_org_mismatch" },
+    }).catch(() => undefined);
+    return jsonResult(
+      {
+        ok: false,
+        code: "session_org_mismatch",
+        error: "session_org_mismatch",
+        message:
+          "The signed-in organization does not match the organization of this credential; the request was refused (nothing was sent).",
+        nextStepJa:
+          "ログイン中の組織と社員証の組織が違います。社員証の組織でログインし直すか、ログアウトした状態（社員証のみ）で同じ jobId で再実行してください。",
+        employeeId,
+        tool,
+        purpose,
+        jobId,
+      },
+      403
+    );
+  }
+
+  // Tenant isolation (BOLA): the org that drives audience / ledger / Slack
+  // token / dedup / approval snapshot is the authenticated employee's org.
+  // An AI-supplied conversation.orgId naming another org is refused before
+  // anything is read or written for it. The answer never depends on whether
+  // that org exists (no lookup), and only a hash of it is audited, under the
+  // authenticated org.
+  const principalOrgId = employee.orgId;
+  const orgMismatch = conversationOrgMismatch(body.conversation, principalOrgId);
+  if (orgMismatch) {
+    await appendAuditEvent({
+      orgId: principalOrgId,
+      employeeId,
+      credentialId: input.credentialId || employee.credentialId,
+      action: "gateway.conversation_org_mismatch",
+      purpose,
+      summary: `${tool} を会話コンテキストの組織不一致で拒否（fail-closed）`,
+      metadata: {
+        tool,
+        jobId,
+        code: "conversation_org_mismatch",
+        suppliedOrgIdSha256: createHash("sha256").update(orgMismatch.suppliedOrgId).digest("hex"),
+      },
+    }).catch(() => undefined);
+    return jsonResult(
+      {
+        ok: false,
+        code: "conversation_org_mismatch",
+        error: "conversation_org_mismatch",
+        message:
+          "conversation.orgId does not match the organization of this credential; the request was refused (nothing was sent).",
+        nextStepJa:
+          "conversation.orgId は省略してください（社員証の組織が自動で使われます）。別の組織の会話には送信できません。orgId を外して同じ jobId で再実行してください。",
+        employeeId,
+        tool,
+        purpose,
+        jobId,
+      },
+      403
     );
   }
 
@@ -936,6 +1254,35 @@ export async function runGatewayInvoke(
   if (priorApprovalId) {
     const prior = await getApprovalById(priorApprovalId, orgId || employee.orgId);
     priorApproval = prior;
+    // S2 (木村 10/12 HIGH): a ticket a hold touched never unlocks a re-invoke — not
+    // during the hold, not after release (closed_by_hold). Covers every priorApprovalOk
+    // consumer: mail.send, commerce.order, calendar, comm.send, attachment resends.
+    if (prior && heldTicketMarker(prior.metadata)) {
+      await appendAuditEvent({
+        orgId: orgId || employee.orgId,
+        employeeId,
+        credentialId: input.credentialId || employee.credentialId,
+        action: "tool.invoke",
+        purpose,
+        summary: `${tool} の再実行を停止で保留されたチケットのため拒否（未実行）`,
+        metadata: { tool, jobId, approvalId: priorApprovalId, code: "approval_held", phase: "reinvoke" },
+      });
+      return jsonResult(
+        {
+          ok: false,
+          code: "approval_held",
+          error: "approval_held",
+          message: "この承認は緊急停止で保留・破棄されたため、実行できません。必要なら新しく承認を依頼してください。",
+          needs_approval: false,
+          approvalId: priorApprovalId,
+          employeeId,
+          tool,
+          purpose,
+          jobId,
+        },
+        409
+      );
+    }
     priorApprovalOk = Boolean(
       prior &&
         prior.status === "approved" &&
@@ -979,6 +1326,31 @@ export async function runGatewayInvoke(
     }
   }
 
+  // Thread single-flight (木村 #286 decision 2): an approval closed at fulfil
+  // because the thread moved on is terminal. A re-run with its approvalId
+  // sends nothing and opens no new approval; the AI re-reads the thread and
+  // files a new request (new jobId) if a reply is still needed. Own approvals
+  // only (getApprovalById is org-scoped; another employee's id falls through).
+  if (
+    priorApproval &&
+    priorApproval.status === "superseded" &&
+    priorApproval.employeeId === employeeId &&
+    closedByThreadMovedOn(priorApproval.metadata)
+  ) {
+    return jsonResult(
+      {
+        ...threadGuardStopBody(THREAD_MOVED_ON, { approvalStatus: "superseded" }),
+        approvalId: priorApproval.id,
+        needs_approval: false,
+        employeeId,
+        tool,
+        purpose,
+        jobId,
+      },
+      409
+    );
+  }
+
   const actionCounts = await getActionCounts({
     orgId: orgId || employee.orgId,
     employeeId,
@@ -1011,6 +1383,91 @@ export async function runGatewayInvoke(
       purpose,
       jobId,
     }, 403);
+  }
+
+  // comm.delete: delete the employee's OWN recorded post. Own module (flag,
+  // ownership by record, token of the record, idempotency, audit). Never
+  // reaches the egress / posting logic below.
+  if (tool === "comm.delete") {
+    return runCommDeleteInvoke({
+      employee,
+      orgId: orgId || employee.orgId,
+      credentialId: input.credentialId || employee.credentialId,
+      purpose,
+      jobId,
+      args: (body.args || {}) as Record<string, unknown>,
+      toolDef,
+      priorApprovalId,
+      priorApprovalOk,
+      priorApproval,
+      actionLimitNeedsApproval: actionLimit.decision === "needs_approval",
+      json: jsonResult,
+      requestApproval: (opts) =>
+        createNeedsApprovalResponse({
+          employeeId,
+          orgId: orgId || employee.orgId,
+          credentialId: input.credentialId || employee.credentialId,
+          employeeDisplayName: employee.displayName,
+          employee,
+          tool,
+          purpose,
+          jobId,
+          risk: opts.risk,
+          message: opts.message,
+          summaryPrefix: opts.summaryPrefix,
+          parentApprovalId: parentApprovalId || null,
+          metadata: { ...opts.metadata, actionLimit },
+          body,
+          extra: { ...opts.extra, actionLimit },
+        }),
+    });
+  }
+
+  // Item C (SLACK_U_TO_DM_SEND_ENABLED, default OFF, and only with
+  // SLACK_DM_AUTOROUTE_ENABLED ON; otherwise a no-op = main): a U… in the Slack channel
+  // field → the employee's internal 1:1 DM route, only for an internal
+  // slack_user of the org's party ledger (re-verified as a 1:1 IM with that
+  // user). Anyone else stops here with a nextStep. Before egress so egress,
+  // dedup and thread single-flight all see the resolved D….
+  if (isAudienceGatedTool(toolDef)) {
+    const uRecipient = await resolveSlackUserRecipient({ orgId: orgId || employee.orgId, employee, body });
+    if (uRecipient.kind === "stopped") {
+      await appendAuditEvent({
+        orgId: orgId || employee.orgId,
+        employeeId,
+        credentialId: input.credentialId || employee.credentialId,
+        action: "slack.post_failed",
+        purpose,
+        summary: `${tool} の U… 宛てを社内 DM に引き当てずに停止（${uRecipient.code}）`,
+        metadata: {
+          tool,
+          jobId,
+          code: uRecipient.code,
+          reason: uRecipient.reason,
+          counterpartSlackUserId: uRecipient.counterpartSlackUserId,
+          dmAutoroute: true,
+        },
+      });
+      return jsonResult(
+        {
+          ok: false,
+          code: uRecipient.code,
+          error: uRecipient.code,
+          message: uRecipient.messageJa,
+          reason: uRecipient.reason,
+          nextStep: uRecipient.nextStep,
+          nextStepJa: uRecipient.nextStepJa,
+          retryable: uRecipient.retryable,
+          needs_approval: false,
+          employeeId,
+          tool,
+          purpose,
+          jobId,
+        },
+        uRecipient.httpStatus
+      );
+    }
+    if (uRecipient.kind === "resolved") body = uRecipient.body;
   }
 
   // Project wall (WHICH) before Slack post. Deny wins over class/voice allow.
@@ -1052,7 +1509,7 @@ export async function runGatewayInvoke(
   // slack.* aliases share this resolver — tool name is not the boundary.
   // S2: evaluateInvokeEgress now returns both egress (effective) and dualEgress (audit).
   const { egress, dualEgress } = await evaluateInvokeEgress({
-    orgId: orgId || employee.orgId,
+    orgId: principalOrgId,
     tool,
     toolDef,
     body,
@@ -1071,7 +1528,7 @@ export async function runGatewayInvoke(
       metadata: { tool, jobId, egress, dualEgress, managerId },
     });
 
-    const effectiveOrgId = orgId || employee.orgId;
+    const effectiveOrgId = principalOrgId;
     const ledgerRetry = await attemptAudienceLedgerRetry(
       {
         orgId: effectiveOrgId,
@@ -1114,11 +1571,14 @@ export async function runGatewayInvoke(
           ledgerRetry.invokeResult.body,
           ledgerRetry.invokeResult.httpStatus
         );
-        return { httpStatus: failed.httpStatus, body: failed.body };
+        return { httpStatus: failed.httpStatus, body: { ...failed.body, ...(await denyNextStepFields(body, egress, effectiveOrgId)) } };
       }
       return ledgerRetry.invokeResult;
     }
 
+    // PR-B: unregistered channel → classification proposal + stuck notice
+    // (flags OFF → no-op). Bounded, never throws; the 403 below is unchanged.
+    await onEgressDenied({ orgId: effectiveOrgId, employee, body, egress });
     const stuckPolicy = await getOrgStuckWatchPolicy(effectiveOrgId);
     const hasInternalLedger =
       stuckPolicy.inferInternalAudienceFromLedger &&
@@ -1138,6 +1598,7 @@ export async function runGatewayInvoke(
         purpose,
         jobId,
         hasInternalLedger,
+        ...(await denyNextStepFields(body, egress, effectiveOrgId)),
       },
       403
     );
@@ -1194,6 +1655,94 @@ export async function runGatewayInvoke(
   // + toolApprovalDefaults + egress / spend limits only.
   const perToolHuman = toolRequiresHumanApproval(toolDef, employee.toolApprovalDefaults);
   const toolHint = employee.toolApprovalDefaults?.[toolDef.id];
+
+  // Per-tool "deny" on any outbound-send tool (mail / Slack / conversation /
+  // SNS / external share) is a hard stop: no approval card, no draft
+  // demotion, and a prior approval does not reopen it (fail-closed).
+  // mail.send keeps its original code for existing clients.
+  if (toolHint === "deny" && isOutboundSendTool(toolDef)) {
+    const deniedCode =
+      tool === "mail.send" ? "mail_send_denied_by_tool_setting" : "tool_denied_by_tool_setting";
+    await appendAuditEvent({
+      orgId: orgId || employee.orgId,
+      employeeId,
+      credentialId: input.credentialId || employee.credentialId,
+      action: "tool.invoke",
+      purpose,
+      summary: `${tool} をツール設定（deny）で拒否`,
+      metadata: {
+        tool,
+        jobId,
+        code: deniedCode,
+        toolHint,
+        ...(priorApprovalId ? { approvalId: priorApprovalId, phase: "reinvoke" } : {}),
+      },
+    });
+    return jsonResult(
+      {
+        ok: false,
+        code: deniedCode,
+        error: deniedCode,
+        message: `この社員はツール設定で ${tool} が禁止（deny）されています。`,
+        needs_approval: false,
+        employeeId,
+        tool,
+        purpose,
+        jobId,
+      },
+      403
+    );
+  }
+  // COMM_REPLY_DEDUP_ENABLED: the same (or a re-written) body was already sent
+  // to this conversation within the window → not sent, no approval card.
+  // Read-only here; the atomic claim happens right before the live post.
+  // DUPLICATE_GUARD_V2_ENABLED: same jobId, channel-level, other employees,
+  // short-body tier, unknown-outcome rows — and sns.publish (same ledger).
+  let commReplyDedup: PreparedCommReplyDedup = { kind: "off" };
+  let duplicateWarning: Record<string, unknown> | undefined;
+  const snsGuarded = isSnsPublishTool(toolDef) && isDuplicateGuardV2Enabled();
+  if ((isAudienceGatedTool(toolDef) || snsGuarded) && !priorApprovalOk && isCommReplyDedupEnabled()) {
+    const dedupOrgId = orgId || employee.orgId;
+    if (isAudienceGatedTool(toolDef)) {
+      await expireStaleConversationApprovals({ orgId: dedupOrgId, employeeId, phase: "invoke" }).catch(() => []);
+    }
+    const dedupArgs = body.args && typeof body.args === "object" ? (body.args as Record<string, unknown>) : {};
+    commReplyDedup = snsGuarded
+      ? prepareSnsPublishDedup({
+          orgId: dedupOrgId,
+          employeeId,
+          surface: parseSnsSurface(dedupArgs.surface ?? dedupArgs.snsSurface ?? dedupArgs.media),
+          text: conversationOutboundText(body, purpose),
+          jobId,
+        })
+      : prepareCommReplyDedupFromBody({
+          orgId: dedupOrgId,
+          employeeId,
+          body,
+          text: conversationOutboundText(body, purpose),
+        });
+    const dedupCtx = {
+      orgId: dedupOrgId,
+      employeeId,
+      credentialId: input.credentialId || employee.credentialId,
+      purpose,
+      tool,
+      jobId,
+    };
+    // (5) The AI verified that its earlier unknown-outcome post is absent: release
+    // that one row (own org + employee only); a wrong ref releases nothing.
+    const confirmedRef = confirmedNotDeliveredRef(body);
+    if (confirmedRef) await releaseConfirmedUncertain(commReplyDedup, confirmedRef, { ...dedupCtx, phase: "invoke" });
+    const pre = await precheckCommReplyDuplicate(commReplyDedup, tool);
+    const stopped = await directSendDedupResponse(pre, commReplyDedup, dedupCtx);
+    if (stopped) return stopped;
+    if (pre.state === "none" && pre.warning && commReplyDedup.kind === "ready") {
+      // (3) another employee already posted it: posted with a warning (v1, or v2 warn mode).
+      await auditCrossEmployee({ ...dedupCtx, phase: "invoke" }, commReplyDedup, "warn", pre.warning);
+      duplicateWarning = duplicateWarningBody(pre.warning);
+    }
+  }
+
   const amountJpy =
     tool === "commerce.order"
       ? body.amountJpy == null
@@ -1240,6 +1789,125 @@ export async function runGatewayInvoke(
 
   let mailPolicyDecision: MailPolicyDecision | null = null;
 
+  // Approved re-invoke (approvalId): re-check what was approved (the invoke
+  // snapshot) plus any recipients in this request against the CURRENT mail
+  // policy. If it now rejects or demotes, stop: 409, audited, not sent.
+  if (tool === "mail.send" && priorApprovalOk && priorApproval) {
+    // Pin first: the re-invoke must carry exactly the approved mail (every
+    // recipient field, cc / bcc, subject, body and other args), or no mail
+    // fields at all (= send the approved mail as-is). Approvals without a pin
+    // (created before pinning) fail closed. Field names only, never values.
+    const pinCheck = checkApprovedMailSendPin({ metadata: priorApproval.metadata, body });
+    if (!pinCheck.ok) {
+      const mismatch = pinCheck.code === "approved_send_content_mismatch" ? pinCheck : null;
+      await appendAuditEvent({
+        orgId: orgId || employee.orgId,
+        employeeId,
+        credentialId: input.credentialId || employee.credentialId,
+        action: "tool.invoke",
+        purpose,
+        summary: mismatch
+          ? "承認済みの mail.send を承認内容との不一致で停止（未送信）"
+          : "承認済みの mail.send を照合情報なしのため停止（未送信・再承認が必要）",
+        metadata: {
+          tool,
+          jobId,
+          approvalId: priorApprovalId,
+          code: pinCheck.code,
+          phase: "reinvoke",
+          ...(mismatch
+            ? { mismatchedFields: mismatch.mismatchedFields, mismatchCount: mismatch.mismatchCount }
+            : {}),
+        },
+      });
+      return jsonResult(
+        {
+          ok: false,
+          code: pinCheck.code,
+          error: pinCheck.code,
+          ...(mismatch
+            ? { mismatchedFields: mismatch.mismatchedFields, mismatchCount: mismatch.mismatchCount }
+            : {}),
+          message: mismatch
+            ? "承認された内容（宛先・CC・BCC・件名・本文など）と異なるため送信しませんでした。承認時とまったく同じ内容で再実行するか、新しい内容で承認を依頼し直してください。"
+            : "この承認には内容の照合情報がないため（照合の導入前に作成された承認）、送信しませんでした。もう一度承認を依頼してください。",
+          needs_approval: false,
+          approvalId: priorApprovalId,
+          employeeId,
+          tool,
+          purpose,
+          jobId,
+        },
+        409
+      );
+    }
+    const approvedSnapshot = parseInvokeSnapshot(priorApproval.metadata);
+    const toJudge: Array<{ source: "approved_snapshot" | "request"; body: Parameters<typeof evaluateMailPolicyForRequest>[0]["body"] }> = [];
+    if (approvedSnapshot) {
+      toJudge.push({ source: "approved_snapshot", body: { args: approvedSnapshot.args, conversation: approvedSnapshot.conversation } });
+    }
+    const requestPrimary = collectMailToRecipients(body);
+    const requestExtra = extractMailRecipients(body);
+    const requestHasRecipients =
+      requestPrimary.sources.length > 0 ||
+      requestPrimary.malformed ||
+      requestExtra.cc.length > 0 ||
+      requestExtra.bcc.length > 0 ||
+      requestExtra.malformed;
+    if (!approvedSnapshot || requestHasRecipients) {
+      toJudge.push({ source: "request", body });
+    }
+    for (const item of toJudge) {
+      const { decision: recheck } = await evaluateMailPolicyForRequest({
+        orgId: orgId || employee.orgId,
+        employeeId,
+        body: item.body,
+      });
+      if (!recheck.rejected && !recheck.demotedToDraft) continue;
+      const blockedReason = recheck.rejected
+        ? recheck.rejectCode || "mail_policy_rejected"
+        : "mail_send_demoted_to_draft";
+      await appendAuditEvent({
+        orgId: orgId || employee.orgId,
+        employeeId,
+        credentialId: input.credentialId || employee.credentialId,
+        action: "tool.invoke",
+        purpose,
+        summary: "承認済みの mail.send を現在のメールポリシーで停止（未送信）",
+        metadata: {
+          tool,
+          jobId,
+          approvalId: priorApprovalId,
+          code: "approved_send_blocked_by_policy",
+          blockedReason,
+          judged: item.source,
+          phase: "reinvoke",
+          sendMode: recheck.sendMode,
+          audience: recheck.audience,
+          auditLabels: recheck.auditLabels,
+          appliedRules: recheck.appliedRules,
+        },
+      });
+      return jsonResult(
+        {
+          ok: false,
+          code: "approved_send_blocked_by_policy",
+          error: "approved_send_blocked_by_policy",
+          blockedReason,
+          message:
+            "承認後にメールポリシーが変わり、この送信は現在の設定では許可されないため停止しました（送信していません）。",
+          needs_approval: false,
+          approvalId: priorApprovalId,
+          employeeId,
+          tool,
+          purpose,
+          jobId,
+        },
+        409
+      );
+    }
+  }
+
   // B1 mail.policy: evaluate before approval gate (demote / reject / sendMode)
   if (tool === "mail.send" && !priorApprovalOk) {
     const mailValidation = validateMailSendArtifact(body);
@@ -1275,27 +1943,14 @@ export async function runGatewayInvoke(
       );
     }
 
-    const effectiveMail = await getEffectiveMailPolicy(orgId || employee.orgId, employeeId);
-    const internalRule = await getOrgInternalAudienceRule(orgId || employee.orgId);
-    const d1Effective = await getEffectiveIngressHandoffPolicy(orgId || employee.orgId, employeeId);
-    const recipients = extractMailRecipients(body);
-    const mailArgs =
-      body.args && typeof body.args === "object"
-        ? (body.args as Record<string, unknown>)
-        : {};
-    const sealithTransferId =
-      typeof mailArgs.sealithTransferId === "string" ? mailArgs.sealithTransferId : null;
-
-    mailPolicyDecision = evaluateMailPolicy({
-      policy: effectiveMail.policy,
-      to: mailValidation.to,
-      cc: recipients.cc,
-      bcc: recipients.bcc,
-      hasAttachments: recipients.hasAttachments,
-      internalAudienceRule: internalRule,
-      ingressHandoffPolicy: d1Effective.policy,
-      sealithTransferId,
+    // Every primary recipient field (to / recipient / email / body.email /
+    // conversation.email) is judged, not only the first non-empty one.
+    const mailEval = await evaluateMailPolicyForRequest({
+      orgId: orgId || employee.orgId,
+      employeeId,
+      body,
     });
+    mailPolicyDecision = mailEval.decision;
 
     if (mailPolicyDecision.rejected) {
       await appendAuditEvent({
@@ -1376,25 +2031,61 @@ export async function runGatewayInvoke(
     }
   }
 
-  let mailPolicyForceApproval: boolean | undefined;
-  if (tool === "mail.send" && mailPolicyDecision) {
-    if (mailPolicyDecision.needsApproval) {
-      mailPolicyForceApproval = true;
-    } else if (mailPolicyDecision.autoSend) {
-      mailPolicyForceApproval = false;
-    }
-  }
+  // B1 mail.policy can only tighten the gate, never loosen independent guards.
+  // - needs_approval (incl. auto without consent) → force approval.
+  // - auto + consent → lifts ONLY the tool-level always-human default for
+  //   mail.send (no per-tool hint, or an explicit auto / risk_based hint).
+  //   employee always_human, explicit always_human / deny hints, action limits,
+  //   spend and topic gate still force approval (stricter side wins, fail-closed).
+  const mailPolicyForceApproval =
+    tool === "mail.send" && mailPolicyDecision?.needsApproval === true;
+  const mailPolicyLiftsToolDefault =
+    tool === "mail.send" &&
+    mailPolicyDecision?.autoSend === true &&
+    mailPolicyDecision.needsApproval !== true &&
+    (toolHint == null || toolHint === "auto" || toolHint === "risk_based");
 
   // P1: Topic gate can force approval for posts with sensitive topics
   const topicGateForceApproval = topicGateResult?.requiresApproval ?? false;
 
+  // 木村 B: APPROVAL_REASONS_ENABLED → every reason, computed here only (never
+  // from the request). Describes the decision; never changes it.
+  const requestedArgs = (body.args && typeof body.args === "object" ? body.args : {}) as Record<string, unknown>;
+  const requestedInformationClass =
+    (isInformationClass(body.informationClass) && body.informationClass) ||
+    (isInformationClass(requestedArgs.informationClass) && requestedArgs.informationClass) ||
+    (isInformationClass(requestedArgs.class) && requestedArgs.class) ||
+    null;
+  const toolLevelHuman = !mailPolicyLiftsToolDefault && perToolHuman;
+  const approvalReasonsFields = (): { approvalReasons: ApprovalReason[] } | Record<string, never> =>
+    isApprovalReasonsEnabled()
+      ? {
+          approvalReasons: buildApprovalReasons({
+            topicGate: topicGateResult,
+            egress,
+            employeeAlwaysHuman: employee.approvalPolicy === "always_human",
+            toolAlwaysHuman: toolLevelHuman ? (toolHint === "always_human" ? "tool_setting" : "tool_default") : null,
+            actionLimit,
+            spend,
+            mailPolicyForceApproval,
+            requestedInformationClass,
+          }),
+        }
+      : {};
+  // AI-facing copy (402 body / MCP): topic_gate as category names only. Metadata keeps keywords (card).
+  const aiApprovalReasonsFields = (): { approvalReasons: AiApprovalReason[] } | Record<string, never> => {
+    const full = approvalReasonsFields();
+    return "approvalReasons" in full ? { approvalReasons: toAiFacingApprovalReasons(full.approvalReasons) } : {};
+  };
+  const topicGateCategories = topicGateResult ? categorizeMatchedTopics(topicGateResult.matchedTopics) : [];
+
   const forceApproval =
-    mailPolicyForceApproval ??
-    (perToolHuman ||
-      employee.approvalPolicy === "always_human" ||
-      actionLimit.decision === "needs_approval" ||
-      spend?.decision === "needs_approval" ||
-      topicGateForceApproval);
+    mailPolicyForceApproval ||
+    (mailPolicyLiftsToolDefault ? false : perToolHuman) ||
+    employee.approvalPolicy === "always_human" ||
+    actionLimit.decision === "needs_approval" ||
+    spend?.decision === "needs_approval" ||
+    topicGateForceApproval;
 
   if (
     forceApproval &&
@@ -1443,10 +2134,10 @@ export async function runGatewayInvoke(
         amountJpy: Number.isFinite(amountJpy) ? amountJpy : null,
         message: actionLimit.decision === "needs_approval" ? actionLimit.message : (spend?.message ?? "発注には人の確認が必要です"),
         parentApprovalId: parentApprovalId || null,
-        metadata: { ...invokeMetadata, sodVerdict, actionLimit, egress, dualEgress, managerId },
+        metadata: { ...invokeMetadata, sodVerdict, actionLimit, egress, dualEgress, managerId, ...approvalReasonsFields() },
         body,
         egress,
-        extra: { spend, actionLimit, sodVerdict, egress, dualEgress, managerId, ...(voice ? { voice } : {}), toolKind: toolDef.kind, approvalPolicy: employee.approvalPolicy },
+        extra: { spend, actionLimit, sodVerdict, egress, dualEgress, managerId, ...(voice ? { voice } : {}), toolKind: toolDef.kind, approvalPolicy: employee.approvalPolicy, ...aiApprovalReasonsFields() },
       });
     }
 
@@ -1462,12 +2153,12 @@ export async function runGatewayInvoke(
       risk: topicGateForceApproval ? "high" : inferRiskForTool(tool),
       message:
         topicGateForceApproval && topicGateResult
-          ? `${tool} は機密話題（${topicGateResult.matchedTopics.join(", ")}）を含むため承認が必要です`
+          ? `${tool} は${topicGateMessageJaForAi(topicGateCategories).replace(/。$/, "")}`
           : actionLimit.decision === "needs_approval"
             ? actionLimit.message
             : tool === "browser.use"
           ? `${tool} requires human approval (always_human). allowedAccounts checked; live browser identity remains partial.`
-          : `${tool} requires human approval (always_human default for confirm/send/order)`,
+          : `${tool} requires human approval (always_human: confirm/send/order and conversation posts such as comm.reply / comm.send / slack.post)`,
       parentApprovalId: parentApprovalId || null,
       metadata: {
         ...invokeMetadata,
@@ -1484,6 +2175,7 @@ export async function runGatewayInvoke(
               },
             }
           : {}),
+        ...approvalReasonsFields(),
       },
       body,
       egress,
@@ -1516,12 +2208,14 @@ export async function runGatewayInvoke(
           : {}),
         ...(topicGateResult?.requiresApproval
           ? {
+              // AI-facing: category names only, never the matched keywords.
               topicGate: {
-                matchedTopics: topicGateResult.matchedTopics,
+                categories: topicGateCategories,
                 reason: topicGateResult.reason,
               },
             }
           : {}),
+        ...aiApprovalReasonsFields(),
       },
     });
   }
@@ -1539,7 +2233,7 @@ export async function runGatewayInvoke(
       risk: "high",
       message: egress.messageJa,
       parentApprovalId: parentApprovalId || null,
-      metadata: { ...invokeMetadata, sodVerdict, actionLimit, egress, dualEgress, managerId },
+      metadata: { ...invokeMetadata, sodVerdict, actionLimit, egress, dualEgress, managerId, ...approvalReasonsFields() },
       body,
       egress,
       extra: {
@@ -1551,6 +2245,7 @@ export async function runGatewayInvoke(
         dualEgress,
         managerId,
         ...(voice ? { voice } : {}),
+        ...aiApprovalReasonsFields(),
       },
     });
   }
@@ -1559,10 +2254,77 @@ export async function runGatewayInvoke(
   // browser.use is always force-approval; missing/mismatch already fail-closed above.
   // Reinvocation shares the same execution claim as approval callbacks and W2.
   // Use the approved snapshot, never a replacement message in this request.
+  // Conversation tools: the re-run reports what fulfilling the APPROVED snapshot
+  // did and never posts the request's text (2026-10-04 hole: a stub fulfillment
+  // used to fall through to a fresh post of the request text).
+  let approvedRerunDelivery: ConversationDelivery | undefined;
   if (priorApprovalOk && priorApproval && (isAudienceGatedTool(toolDef) || isSnsPublishTool(toolDef))) {
-    const fulfilled = await fulfillApprovedInvoke(priorApproval);
+    // Legacy approval (snapshot predates attachment recording) + a request
+    // attachment: the approved attachment is unknown → post NOTHING (no text,
+    // no file) and ask for re-approval. Checked before the text is fulfilled.
+    const legacyBlock = isAudienceGatedTool(toolDef)
+      ? legacySnapshotAttachmentBlock(priorApproval, body)
+      : null;
+    if (legacyBlock) {
+      await auditLegacySnapshotAttachmentBlock(priorApproval, body, {
+        orgId: orgId || employee.orgId, employeeId,
+        credentialId: input.credentialId || employee.credentialId, tool, purpose, jobId,
+      });
+      return jsonResult({ ok: false, code: legacyBlock.code, error: legacyBlock.code, message: legacyBlock.messageJa,
+        approvalId: priorApproval.id, employeeId, tool, purpose, jobId }, 409);
+    }
+    // Duplicate post guard v2: the AI verified an earlier unknown-outcome post
+    // is absent → release that row (own org + employee only) before the
+    // approved snapshot is fulfilled (its gate would stop on it otherwise).
+    const rerunConfirmedRef = confirmedNotDeliveredRef(body);
+    if (rerunConfirmedRef) {
+      await releaseConfirmedUncertainForScope(
+        { orgId: orgId || employee.orgId, employeeId },
+        rerunConfirmedRef,
+        {
+          orgId: orgId || employee.orgId, employeeId,
+          credentialId: input.credentialId || employee.credentialId, purpose, tool, jobId,
+          approvalId: priorApproval.id, phase: "invoke",
+        }
+      );
+    }
+    // Conversation tools: this re-run uploads the approved attachment itself
+    // (deliverApprovedRerunAttachment below), so no "not_sent" marker here.
+    const fulfilled = await fulfillApprovedInvoke(priorApproval, {
+      attachmentHandledByCaller: isAudienceGatedTool(toolDef),
+    });
+    // Rate-limited (nothing posted): say how long to wait; re-running earlier stops before the provider.
+    if (fulfilled && !fulfilled.ok && fulfilled.error === PROVIDER_RATE_LIMITED) {
+      return jsonResult({ ...rateLimitedBody({ retryAfterSeconds: fulfilled.retryAfterSeconds ?? RETRY_AFTER_DEFAULT_SECONDS }),
+        approvalId: priorApproval.id, needs_approval: false, employeeId, tool, purpose, jobId }, 429);
+    }
+    if (fulfilled && !fulfilled.ok && isThreadGuardCode(fulfilled.error)) {
+      // Thread single-flight stopped the approved post at fulfil (nothing sent).
+      return jsonResult({ ...threadGuardStopBody(fulfilled.error, fulfilled.threadGuard ?? {}),
+        approvalId: priorApproval.id, needs_approval: false, employeeId, tool, purpose, jobId },
+        fulfilled.error === THREAD_GUARD_UNAVAILABLE ? 503 : 409);
+    }
+    if (!fulfilled?.ok && isAudienceGatedTool(toolDef)) {
+      // Approved LINE / Telegram / mail replies: the gateway has no delivery
+      // for them yet, so they stay fail-closed (nothing sent). Tell the AI so
+      // in plain words instead of a Slack-only code (木村 #293 decision 2).
+      const approvedSurface = (parseInvokeSnapshot(priorApproval.metadata)?.conversation?.surface || "").toLowerCase();
+      if (approvedSurface && approvedSurface !== "slack") {
+        return jsonResult({ ok: false, code: fulfilled?.error || "approval_execution_failed",
+          error: fulfilled?.error || "approval_execution_failed", reasonCode: APPROVED_REPLY_SURFACE_NOT_SUPPORTED,
+          message: APPROVED_REPLY_SURFACE_NOT_SUPPORTED_JA, retryable: false, nextAction: "stop",
+          nextStep: APPROVED_REPLY_SURFACE_NOT_SUPPORTED_NEXT_STEP, approvalId: priorApproval.id,
+          employeeId, tool, purpose, jobId }, 409);
+      }
+    }
     if (!fulfilled?.ok) return jsonResult({ ok: false, code: fulfilled?.error || "approval_execution_failed",
       error: fulfilled?.error || "approval_execution_failed", employeeId, tool, purpose, jobId }, 409);
+    if (isAudienceGatedTool(toolDef)) {
+      const rerun = approvedRerunConversationDelivery(fulfilled, { demo: isDemoMode() });
+      if (!rerun.ok) return jsonResult({ ok: false, code: rerun.code, error: rerun.code, message: rerun.messageJa,
+        employeeId, tool, purpose, jobId }, 409);
+      approvedRerunDelivery = rerun.delivery;
+    }
   }
 
   // Confirm-class succeeds only with priorApprovalOk (or non-force paths).
@@ -1576,9 +2338,11 @@ export async function runGatewayInvoke(
   // approval of a needs_approval egress. Deny stays fail-closed above.
   // Notify inbox is a different plane — never post approvals through this adapter.
   let conversationDelivery: ConversationDelivery | undefined;
+  /** #293 review item 2: no read point at all → sent, with a nextStep to pass readThroughTs. */
+  let threadGuardHint: { readPoint: "unknown"; nextStep: string } | undefined;
   let threadTsSource: "client" | "wake_stash" | "none" | undefined;
   if (isAudienceGatedTool(toolDef)) {
-    const ctx = parseConversationContext(body, orgId || employee.orgId);
+    const ctx = parseConversationContext(body, principalOrgId);
     const args =
       body.args && typeof body.args === "object"
         ? (body.args as Record<string, unknown>)
@@ -1684,7 +2448,7 @@ export async function runGatewayInvoke(
       egress?.decision === "summarize" ||
       (priorApprovalOk && egress?.decision === "needs_approval");
     if (dest && egressAllowsPost) {
-      const already = conversationDeliveryFromFulfillment(priorApproval);
+      const already = approvedRerunDelivery ?? conversationDeliveryFromFulfillment(priorApproval);
       if (already) {
         conversationDelivery = already;
       } else {
@@ -1699,7 +2463,16 @@ export async function runGatewayInvoke(
 
       let replyThreadTs = explicitThreadTs;
       threadTsSource = "none";
-      if (!looksLikeSlackTs(replyThreadTs) && ctx?.surface === "slack") {
+      if (
+        isSlackDmReplyInlineEnabled() &&
+        isSlackDmReplyTarget({ channelId: dest, conversation: body.conversation, args })
+      ) {
+        // G4 (SLACK_DM_REPLY_INLINE_ENABLED): DM replies go to the DM's main flow;
+        // only a message already inside a thread (thread_ts ≠ ts) keeps its thread.
+        const inline = resolveSlackDmInlineThreadTs({ conversation: ctx, args, body });
+        replyThreadTs = inline.threadTs;
+        threadTsSource = inline.source;
+      } else if (!looksLikeSlackTs(replyThreadTs) && ctx?.surface === "slack") {
         const replyPolicyResult = await getEffectiveReplyPolicy(
           orgId || employee.orgId,
           employeeId
@@ -1733,16 +2506,126 @@ export async function runGatewayInvoke(
         threadTsSource = "client";
       }
 
-      const posted = await postConversationMessage({
+      // THREAD_SINGLE_FLIGHT_ENABLED: one send per thread (lease) and the
+      // "already moved on" check, before the dedup claim so a stop here leaves
+      // no ledger row. The lease is released in `finally` on every path below.
+      const threadSend = await beginThreadSend({
         orgId: orgId || employee.orgId,
         employeeId,
-        postingAs: employee.postingAs || "bot",
-        channel: dest,
-        text: (rawText || "").trim() || purpose,
-        threadTs: looksLikeSlackTs(replyThreadTs) ? replyThreadTs : undefined,
-        summarize: egress?.decision === "summarize",
-        slackUserId: ctx?.slackUserId,
+        jobId,
+        keyInput: {
+          orgId: orgId || employee.orgId,
+          surface: "slack",
+          slackChannelId: dest,
+          threadId: looksLikeSlackTs(replyThreadTs) ? replyThreadTs : undefined,
+        },
+        readThrough: readThroughFromBody(body as unknown as Record<string, unknown>),
       });
+      if (threadSend.kind === "stop") {
+        return threadGuardStopResponse(threadSend, {
+          orgId: orgId || employee.orgId, employeeId,
+          credentialId: input.credentialId || employee.credentialId, purpose, tool, jobId, phase: "invoke",
+        });
+      }
+      await auditThreadGuardHeld(threadSend, {
+        orgId: orgId || employee.orgId, employeeId,
+        credentialId: input.credentialId || employee.credentialId, purpose, tool, jobId, phase: "invoke",
+      });
+      if (threadSend.kind === "held" && threadSend.readPointUnknown) {
+        threadGuardHint = { readPoint: "unknown", nextStep: NEXT_STEP_READ_POINT_UNKNOWN };
+      }
+      let threadSent: { sent: boolean; messageTs?: string } = { sent: false };
+      try {
+      // COMM_REPLY_DEDUP_ENABLED: atomic claim right before the post (two
+      // concurrent identical sends → only one is posted). Fail closed.
+      const dedupClaim = await claimDirectCommReplySend(commReplyDedup, tool);
+      const dedupResponse = await directSendDedupResponse(dedupClaim, commReplyDedup, {
+        orgId: orgId || employee.orgId,
+        employeeId,
+        credentialId: input.credentialId || employee.credentialId,
+        purpose,
+        tool,
+        jobId,
+      });
+      if (dedupResponse) return dedupResponse;
+      const dedupClaimId = dedupClaim.state === "claimed" ? dedupClaim.id : null;
+      let posted: Awaited<ReturnType<typeof postConversationMessage>>;
+      try {
+        posted = await postConversationMessage({
+          orgId: orgId || employee.orgId,
+          employeeId,
+          postingAs: employee.postingAs || "bot",
+          channel: dest,
+          text: (rawText || "").trim() || purpose,
+          threadTs: looksLikeSlackTs(replyThreadTs) ? replyThreadTs : undefined,
+          summarize: egress?.decision === "summarize",
+          slackUserId: ctx?.slackUserId,
+        });
+      } catch (error) {
+        // Outcome unknown (the provider may have accepted it): keep the claim.
+        await finishDirectCommReplySend(commReplyDedup, dedupClaimId, "uncertain", { jobId });
+        throw error;
+      }
+      if (posted.ok && posted.delivery === "slack") threadSent = { sent: true, messageTs: posted.ts };
+      // v1: failed releases the claim. v2: only a provider-confirmed "not sent"
+      // releases it; an unknown outcome is kept (uncertain) and reported.
+      const ledgerOutcome = ledgerOutcomeAfterPost(commReplyDedup, posted);
+      await finishDirectCommReplySend(commReplyDedup, dedupClaimId, ledgerOutcome, { jobId });
+      if (!posted.ok && ledgerOutcome === "uncertain" && commReplyDedup.kind === "ready") {
+        const dedupAudit: DedupAuditCtx = {
+          orgId: orgId || employee.orgId, employeeId,
+          credentialId: input.credentialId || employee.credentialId, purpose, tool, jobId, phase: "invoke",
+        };
+        if (dedupClaimId) await auditPostOutcomeUnknown(dedupAudit, commReplyDedup, dedupClaimId);
+        await appendAuditEvent({
+          orgId: orgId || employee.orgId,
+          employeeId,
+          credentialId: input.credentialId || employee.credentialId,
+          action: "slack.post_failed",
+          purpose,
+          summary: "Slack会話投稿の結果が不明（再送は確認後のみ）",
+          metadata: { tool, jobId, error: posted.error || "slack_post_failed", dest, code: "post_outcome_unknown" },
+        });
+        return jsonResult(
+          {
+            ...postOutcomeUnknownBody(dedupClaimId, posted.error || "slack_post_failed"),
+            needs_approval: false,
+            egress,
+            ...(voice ? { voice } : {}),
+            employeeId,
+            tool,
+            purpose,
+            jobId,
+          },
+          502
+        );
+      }
+      if (!posted.ok && posted.retryAfterSeconds !== undefined) {
+        // Rate-limited (not_sent, claim released above): no automatic retry —
+        // the AI is told the provider's wait.
+        await appendAuditEvent({
+          orgId: orgId || employee.orgId,
+          employeeId,
+          credentialId: input.credentialId || employee.credentialId,
+          action: "slack.post_failed",
+          purpose,
+          summary: "Slack会話投稿がレート制限で未送信（待機後に再送可）",
+          metadata: { tool, jobId, error: posted.error, dest, code: PROVIDER_RATE_LIMITED, retryAfterSeconds: posted.retryAfterSeconds },
+        });
+        return jsonResult(
+          {
+            ...rateLimitedBody({ retryAfterSeconds: posted.retryAfterSeconds, providerError: posted.error }),
+            needs_approval: false,
+            egress,
+            ...(voice ? { voice } : {}),
+            employeeId,
+            tool,
+            purpose,
+            jobId,
+          },
+          429
+        );
+      }
       if (!posted.ok) {
         const postedError = posted.error || "slack_post_failed";
         const code =
@@ -1750,13 +2633,17 @@ export async function runGatewayInvoke(
             ? "slack_identity_unbound"
             : postedError === "slack_not_in_channel" || postedError === "not_in_channel"
               ? "slack_not_in_channel"
-              : "slack_post_failed";
+              : postedError === SLACK_TOKEN_MISSING
+                ? SLACK_TOKEN_MISSING
+                : "slack_post_failed";
         const message =
           code === "slack_identity_unbound"
             ? "この社員の Slack 本人連携がありません"
             : code === "slack_not_in_channel"
               ? "このチャネルに参加していません（Connect では人が招待済みでも Bot は未参加のことがあります）"
-              : "Slack投稿に失敗しました";
+              : code === SLACK_TOKEN_MISSING
+                ? "この組織の Slack Bot トークンが登録されていないため投稿していません（会話投稿アダプタに組織の xoxb を登録してください）"
+                : "Slack投稿に失敗しました";
         await appendAuditEvent({
           orgId: orgId || employee.orgId,
           employeeId,
@@ -1796,6 +2683,57 @@ export async function runGatewayInvoke(
           timestamp: originalTs,
         }).catch(() => undefined);
       }
+      } finally {
+        if (threadSend.kind === "held") await threadSend.handle.finish(threadSent);
+      }
+      }
+    } else if (!dest && egressAllowsPost && (commReplyDedup.kind !== "off" || isThreadSingleFlightEnabled())) {
+      // Surfaces without a gateway post (LINE / Telegram / mail): the allowed
+      // reply is delivered by the caller, so it is recorded here as sent.
+      // Thread single-flight: same lease + moved-on check; the allowed reply is
+      // recorded as this employee's latest post (server time). The caller's
+      // delivery cannot be observed (no receipt), so the lease is HELD until its
+      // TTL rather than released at allowance (木村 #286 pre-flag item 3):
+      // another job reading the thread before the delivery lands gets
+      // thread_busy, not a stale "nothing new".
+      const threadSend = await beginThreadSend({
+        orgId: orgId || employee.orgId,
+        employeeId,
+        jobId,
+        keyInput: conversationKeyInputFromBody(body, orgId || employee.orgId),
+        readThrough: readThroughFromBody(body as unknown as Record<string, unknown>),
+      });
+      if (threadSend.kind === "stop") {
+        return threadGuardStopResponse(threadSend, {
+          orgId: orgId || employee.orgId, employeeId,
+          credentialId: input.credentialId || employee.credentialId, purpose, tool, jobId, phase: "invoke",
+        });
+      }
+      await auditThreadGuardHeld(threadSend, {
+        orgId: orgId || employee.orgId, employeeId,
+        credentialId: input.credentialId || employee.credentialId, purpose, tool, jobId, phase: "invoke",
+      });
+      if (threadSend.kind === "held" && threadSend.readPointUnknown) {
+        threadGuardHint = { readPoint: "unknown", nextStep: NEXT_STEP_READ_POINT_UNKNOWN };
+      }
+      let allowed = false;
+      try {
+        if (commReplyDedup.kind !== "off") {
+          const dedupClaim = await claimDirectCommReplySend(commReplyDedup, tool);
+          const dedupResponse = await directSendDedupResponse(dedupClaim, commReplyDedup, {
+            orgId: orgId || employee.orgId,
+            employeeId,
+            credentialId: input.credentialId || employee.credentialId,
+            purpose,
+            tool,
+            jobId,
+          });
+          if (dedupResponse) return dedupResponse;
+          await finishDirectCommReplySend(commReplyDedup, dedupClaim.state === "claimed" ? dedupClaim.id : null, "sent", { jobId });
+        }
+        allowed = true;
+      } finally {
+        if (threadSend.kind === "held") await threadSend.handle.finish({ sent: allowed }, { holdLease: allowed });
       }
     }
   }
@@ -1803,13 +2741,27 @@ export async function runGatewayInvoke(
   // File attachment handling for comm.reply / comm.send (Slack only, P0: internal thread required)
   // P0 contract: when fileAttachment was present, ALWAYS include fileUpload in response
   let fileUploadResponse: FileUploadResponse | undefined;
-  const fileAttachmentReceived = Boolean(
+  // Approved re-run: only the APPROVED attachment (snapshot) is ever uploaded;
+  // the request's fileAttachment is never used (lib/approvals/approved-rerun-attachment.ts).
+  const approvedRerunAttachment = Boolean(priorApprovalOk && priorApproval && isAudienceGatedTool(toolDef));
+  let fileAttachmentReceived = Boolean(
     isAudienceGatedTool(toolDef) &&
     body.fileAttachment?.fileRef &&
     body.fileAttachment?.filename
   );
-  if (fileAttachmentReceived && body.fileAttachment) {
-    const ctx = parseConversationContext(body, orgId || employee.orgId);
+  if (approvedRerunAttachment && priorApproval) {
+    const rerunAttachment = await deliverApprovedRerunAttachment({
+      approval: priorApproval,
+      body,
+      ctx: {
+        orgId: orgId || employee.orgId, employeeId,
+        credentialId: input.credentialId || employee.credentialId, tool, purpose, jobId,
+      },
+    });
+    fileAttachmentReceived = rerunAttachment.received;
+    fileUploadResponse = rerunAttachment.fileUpload;
+  } else if (fileAttachmentReceived && body.fileAttachment) {
+    const ctx = parseConversationContext(body, principalOrgId);
     const dest = ctx?.slackChannelId || ctx?.slackUserId || "";
     const replyThreadTs = resolveConversationThreadId({
       conversation: ctx,
@@ -1847,7 +2799,31 @@ export async function runGatewayInvoke(
         },
       });
     } else if (dest && replyThreadTs && looksLikeSlackTs(replyThreadTs)) {
-      const uploaded = await uploadSlackFile({
+      // (6) v2: the same file + comment to the same place goes out once (same ledger;
+      // own "upload:" fingerprint domain, so it never matches a text post).
+      const uploadDedup = prepareFileUploadDedup(commReplyDedup, body.fileAttachment);
+      const uploadClaim = await claimDirectCommReplySend(uploadDedup, tool);
+      const uploadStop = dedupStopBody(uploadClaim, uploadDedup);
+      if (uploadStop) {
+        const uploadCtx: DedupAuditCtx = {
+          orgId: orgId || employee.orgId, employeeId,
+          credentialId: input.credentialId || employee.credentialId, purpose, tool, jobId, phase: "invoke",
+        };
+        if (uploadClaim.state === "unavailable") await auditDedupUnavailable(uploadCtx, uploadClaim.reason);
+        else if (uploadClaim.state === "duplicate" && uploadDedup.kind === "ready") {
+          await auditDuplicateSuppressed(uploadCtx, uploadDedup, uploadClaim as GuardDuplicate);
+        }
+        fileUploadResponse = {
+          ok: false,
+          code: String(uploadStop.body.code),
+          reason: String(uploadStop.body.reasonCode),
+          messageJa: `ファイルは共有していません: ${String(uploadStop.body.message)}`,
+        };
+      } else {
+      const uploadClaimId = uploadClaim.state === "claimed" ? uploadClaim.id : null;
+      let uploaded: Awaited<ReturnType<typeof uploadSlackFile>>;
+      try {
+      uploaded = await uploadSlackFile({
         orgId: orgId || employee.orgId,
         employeeId,
         postingAs: employee.postingAs || "bot",
@@ -1862,6 +2838,16 @@ export async function runGatewayInvoke(
         title: body.fileAttachment.title,
         initialComment: body.fileAttachment.initialComment,
       });
+      } catch (error) {
+        await finishDirectCommReplySend(uploadDedup, uploadClaimId, "uncertain", { jobId });
+        throw error;
+      }
+      await finishDirectCommReplySend(
+        uploadDedup,
+        uploadClaimId,
+        uploaded.ok ? "sent" : fileUploadFailureSendState(uploaded) === "not_sent" ? "failed" : "uncertain",
+        { jobId }
+      );
 
       if (uploaded.ok) {
         fileUploadResponse = buildFileUploadSuccess(uploaded);
@@ -1899,6 +2885,7 @@ export async function runGatewayInvoke(
             audience: egress?.audience,
           },
         });
+      }
       }
     } else {
       fileUploadResponse = buildFileUploadSkipped({
@@ -1943,31 +2930,63 @@ export async function runGatewayInvoke(
       const rawText = [args.text, args.body, args.message].find(
         (value) => typeof value === "string" && value.trim()
       );
-      const posted = await publishSnsPost({
-        orgId: orgId || employee.orgId,
-        employeeId,
-        surface: args.surface ?? args.snsSurface ?? args.media,
-        text: typeof rawText === "string" ? rawText : purpose,
-        scheduledAt: args.scheduledAt ?? args.scheduled_at ?? args.scheduledFor,
-        title: args.title,
-      });
+      // (6) v2: the same ledger as conversation posts (claim right before the post).
+      const snsCtx = {
+        orgId: orgId || employee.orgId, employeeId,
+        credentialId: input.credentialId || employee.credentialId, purpose, tool, jobId,
+      };
+      const snsClaim = await claimDirectCommReplySend(commReplyDedup, tool);
+      const snsStop = await directSendDedupResponse(snsClaim, commReplyDedup, snsCtx);
+      if (snsStop) return snsStop;
+      const snsClaimId = snsClaim.state === "claimed" ? snsClaim.id : null;
+      let posted: SnsPublishResult;
+      try {
+        posted = await publishSnsPost({
+          orgId: orgId || employee.orgId,
+          employeeId,
+          surface: args.surface ?? args.snsSurface ?? args.media,
+          text: typeof rawText === "string" ? rawText : purpose,
+          scheduledAt: args.scheduledAt ?? args.scheduled_at ?? args.scheduledFor,
+          title: args.title,
+        });
+      } catch (error) {
+        await finishDirectCommReplySend(commReplyDedup, snsClaimId, "uncertain", { jobId });
+        throw error;
+      }
+      const snsLedgerOutcome = ledgerOutcomeAfterPost(commReplyDedup, posted);
+      await finishDirectCommReplySend(commReplyDedup, snsClaimId, snsLedgerOutcome, { jobId });
       snsDelivery = posted;
+      if (!posted.ok && snsLedgerOutcome === "uncertain" && commReplyDedup.kind === "ready") {
+        if (snsClaimId) await auditPostOutcomeUnknown({ ...snsCtx, phase: "invoke" }, commReplyDedup, snsClaimId);
+        return jsonResult(
+          { ...postOutcomeUnknownBody(snsClaimId, posted.error), needs_approval: false, employeeId, tool, purpose, jobId },
+          502
+        );
+      }
       if (!posted.ok) {
+        const snsWait = posted.retryAfterSeconds;
         await appendAuditEvent({
           orgId: orgId || employee.orgId,
           employeeId,
           credentialId: input.credentialId || employee.credentialId,
           action: "sns.publish_failed",
           purpose,
-          summary: "SNS投稿に失敗",
+          summary: snsWait !== undefined ? "SNS投稿がレート制限で未送信（待機後に再送可）" : "SNS投稿に失敗",
           metadata: {
             tool,
             jobId,
             error: posted.error,
             surface: posted.surface,
             phase: priorApprovalOk ? "reinvoke" : "auto",
+            ...(snsWait !== undefined ? { code: PROVIDER_RATE_LIMITED, retryAfterSeconds: snsWait } : {}),
           },
         });
+        if (snsWait !== undefined) {
+          return jsonResult(
+            { ...rateLimitedBody({ retryAfterSeconds: snsWait, providerError: posted.error }), needs_approval: false, employeeId, tool, purpose, jobId },
+            429
+          );
+        }
         return jsonResult(
           {
             ok: false,
@@ -2016,7 +3035,7 @@ export async function runGatewayInvoke(
   }
 
   if (!priorApprovalOk) {
-    const destCtx = parseConversationContext(body, orgId || employee.orgId);
+    const destCtx = parseConversationContext(body, principalOrgId);
     const deliveryChannel =
       conversationDelivery && "channel" in conversationDelivery
         ? conversationDelivery.channel
@@ -2047,6 +3066,12 @@ export async function runGatewayInvoke(
         approvalPolicy: employee.approvalPolicy,
         egress,
         dualEgress,
+        // Ids + the token that posted (no body): lets comm.delete prove the
+        // post is this employee's own and delete it with the same token.
+        ...(() => {
+          const postRecord = buildSlackPostRecord(conversationDelivery);
+          return postRecord ? { postRecord } : {};
+        })(),
       },
     });
   }
@@ -2415,7 +3440,9 @@ export async function runGatewayInvoke(
       ? { projectAccess: projectScope.projectAccess }
       : {}),
     conversationDelivery,
+    ...(threadGuardHint ? { threadGuard: threadGuardHint } : {}),
     snsDelivery,
+    ...(duplicateWarning ? { duplicateWarning } : {}),
     result:
       tool === "tools.ping"
         ? { pong: true }
@@ -2467,6 +3494,8 @@ export async function runGatewayInvoke(
                           delivery: conversationDelivery?.delivery,
                           conversationDelivery,
                           threadTsSource: threadTsSource || undefined,
+                          fileAttachmentReceived: fileAttachmentReceived || undefined,
+                          fileUpload: fileUploadResponse,
                         },
     message:
       egress?.decision === "summarize"

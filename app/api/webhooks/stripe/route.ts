@@ -1,4 +1,3 @@
-import { NextResponse } from "next/server";
 import { sendBillingEmail, sendTrialEndingEmail } from "@/lib/email";
 import { upsertSubscription } from "@/lib/data/subscriptions";
 import { isDemoMode } from "@/lib/mode";
@@ -10,20 +9,51 @@ import {
 } from "@/lib/stripe";
 import { processCardSetupWebhook } from "@/lib/external-contract-card/webhook-handler";
 import { processSubscriptionForPlanChange } from "@/lib/billing/stripe-plan-webhook";
+import {
+  createSupabaseLinkedOrgLookup,
+  customerIdOf,
+  recordStripeTenantMismatch,
+  verifyStripeCustomerOrg,
+  type LinkedOrgLookup,
+  type TenantCheckRejected,
+} from "@/lib/billing/stripe-customer-org-guard";
+import {
+  claimStripeWebhookEvent,
+  completeStripeWebhookEvent,
+  createSupabaseStripeWebhookEventStore,
+  failStripeWebhookEvent,
+  rejectStripeWebhookEvent,
+  type StripeWebhookEventStore,
+} from "@/lib/billing/stripe-webhook-ledger";
 import type Stripe from "stripe";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
+import { lpAutoProvisionMode } from "@/lib/feature-flags";
+import {
+  createLpSetupFeeNotifier,
+  handleLpSetupFeeEvent,
+  isLpSetupFeeEventType,
+  looksLikeLpSetupFeeSession,
+} from "@/lib/lp/setup-fee-payment";
+import { createSupabaseLpProvisioningStore } from "@/lib/lp/provisioning-store";
 
 export const runtime = "nodejs";
 
-function orgIdFromMetadata(
+type Outcome =
+  | { kind: "processed"; orgId: string | null; body: Record<string, unknown> }
+  | { kind: "rejected"; check: TenantCheckRejected }
+  | { kind: "invalid_signature"; error: string };
+
+/** All org ids an object claims (client_reference_id / metadata.orgId / org_id). */
+function claimedOrgIds(
   meta: Stripe.Metadata | null | undefined,
   clientReferenceId?: string | null
-): string | null {
-  if (clientReferenceId && clientReferenceId.trim()) {
-    return clientReferenceId.trim();
+): string[] {
+  const out: string[] = [];
+  for (const v of [clientReferenceId, meta?.orgId, meta?.org_id]) {
+    const s = v == null ? "" : String(v).trim();
+    if (s && !out.includes(s)) out.push(s);
   }
-  if (!meta) return null;
-  const v = meta.orgId || meta.org_id;
-  return v && String(v).trim() ? String(v).trim() : null;
+  return out;
 }
 
 function priceIdFromSubscription(sub: Stripe.Subscription): string | null {
@@ -33,20 +63,12 @@ function priceIdFromSubscription(sub: Stripe.Subscription): string | null {
   return typeof price === "string" ? price : price.id;
 }
 
+/** Sync a subscription row for an org that already passed the tenant guard. */
 async function syncSubscriptionFromStripe(
   sub: Stripe.Subscription,
-  fallbackOrgId?: string | null
-): Promise<{ orgId: string | null; synced: boolean }> {
-  const orgId =
-    orgIdFromMetadata(sub.metadata) ||
-    fallbackOrgId ||
-    null;
-
-  if (!orgId) {
-    console.warn("[stripe:webhook] missing orgId on subscription", sub.id);
-    return { orgId: null, synced: false };
-  }
-
+  orgId: string,
+  customerId: string
+): Promise<{ orgId: string; synced: boolean }> {
   if (isDemoMode()) {
     // Keep webhook green without DB when still on DEMO Supabase keys.
     console.info("[stripe:webhook:demo-skip-upsert]", {
@@ -62,13 +84,12 @@ async function syncSubscriptionFromStripe(
     priceId,
     metadataPlanKey: sub.metadata?.planKey || sub.metadata?.plan_key,
   });
-  const customerId =
-    typeof sub.customer === "string" ? sub.customer : sub.customer?.id;
 
   const periodEnd =
     sub.items?.data?.[0]?.current_period_end ??
     (sub as { current_period_end?: number }).current_period_end;
 
+  // Throws on DB error → 5xx → Stripe retries.
   await upsertSubscription({
     orgId,
     planKey,
@@ -78,12 +99,22 @@ async function syncSubscriptionFromStripe(
     trialEndsAt: unixToIso(sub.trial_end),
     currentPeriodEnd: unixToIso(periodEnd),
     cancelAtPeriodEnd: Boolean(sub.cancel_at_period_end),
-    stripeCustomerId: customerId || null,
+    // Already verified equal to orgs.stripe_customer_id (never re-links).
+    stripeCustomerId: customerId,
   });
 
   return { orgId, synced: true };
 }
 
+function isStripeNotFound(e: unknown): boolean {
+  const err = e as { statusCode?: number; code?: string } | null;
+  return Boolean(err && (err.statusCode === 404 || err.code === "resource_missing"));
+}
+
+/**
+ * Retrieve the subscription. 404 (deleted) → null (permanent, nothing to
+ * sync). Any other Stripe error is thrown → 5xx → Stripe retries.
+ */
 async function retrieveSubscription(
   stripe: Stripe,
   subscriptionRef: string | Stripe.Subscription | null | undefined
@@ -93,64 +124,75 @@ async function retrieveSubscription(
   try {
     return await stripe.subscriptions.retrieve(subscriptionRef);
   } catch (e) {
-    console.warn("[stripe:webhook] subscription retrieve failed", e);
-    return null;
+    if (isStripeNotFound(e)) {
+      console.warn("[stripe:webhook] subscription not found", { subscriptionRef });
+      return null;
+    }
+    throw e;
   }
 }
 
-/**
- * Stripe webhook — subscription / invoice sync via service role when NOT demo.
- * Also handles card setup events for external contract card registration.
- */
-export async function POST(req: Request) {
-  const stripe = getStripe();
-  const signature = req.headers.get("stripe-signature");
-  const raw = await req.text();
-  const secret = process.env.STRIPE_WEBHOOK_SECRET;
-
-  if (!stripe || !secret || secret.startsWith("replace_me")) {
-    console.info("[stripe:webhook:stub]", {
-      signaturePresent: Boolean(signature),
-      bytes: raw.length,
-    });
-    return NextResponse.json({ received: true, stub: true });
-  }
-
-  // Process card setup events first (setup_intent.*, checkout.session.expired)
-  // The card setup handler has its own signature verification and event parsing.
-  const cardSetupResult = await processCardSetupWebhook(raw, signature);
+async function handleEvent(
+  stripe: Stripe,
+  event: Stripe.Event,
+  raw: string,
+  signature: string | null,
+  lookup: LinkedOrgLookup
+): Promise<Outcome> {
+  // Card setup events (setup_intent.*, checkout.session.expired mode=setup).
+  const cardSetupResult = await processCardSetupWebhook(raw, signature, {
+    verifyTenant: (orgId, customerId) =>
+      verifyStripeCustomerOrg(
+        { claimedOrgIds: [orgId], customerIds: [customerId] },
+        lookup
+      ),
+  });
   if (cardSetupResult.processed) {
     const { eventType, action, orgId } = cardSetupResult;
     if (action !== "ignored") {
-      console.info("[stripe:webhook:card-setup]", {
-        eventType,
-        action,
+      console.info("[stripe:webhook:card-setup]", { eventType, action, orgId });
+      return {
+        kind: "processed",
         orgId,
-      });
-      return NextResponse.json({
-        received: true,
-        type: eventType,
-        cardSetup: { action, orgId },
-      });
+        body: { received: true, type: eventType, cardSetup: { action, orgId } },
+      };
     }
-    // Card setup handler saw the event but it wasn't a card setup event (ignored).
-    // Continue with normal subscription handling.
-  } else if (!cardSetupResult.processed && cardSetupResult.reason === "invalid_signature") {
-    // Signature verification failed in card setup handler
-    return NextResponse.json(
-      { error: cardSetupResult.error || "invalid_signature" },
-      { status: 400 }
-    );
+  } else if (cardSetupResult.reason === "invalid_signature") {
+    return {
+      kind: "invalid_signature",
+      error: cardSetupResult.error || "invalid_signature",
+    };
+  } else if (cardSetupResult.reason === "tenant_mismatch" && cardSetupResult.tenantCheck) {
+    return { kind: "rejected", check: cardSetupResult.tenantCheck };
+  } else if (cardSetupResult.reason === "complete_failed") {
+    // Payment method could not be persisted (DB) → transient → retry.
+    throw new Error("card_setup_complete_failed");
   }
-  // If card setup handler returned processed=false for other reasons (missing_signature, etc.),
-  // we continue with normal handling which will do its own verification.
+  // Other card-setup reasons (missing metadata, …) are permanent no-ops and
+  // fall through to the normal handling, as before.
 
-  let event: Stripe.Event;
-  try {
-    event = stripe.webhooks.constructEvent(raw, signature || "", secret);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : "invalid payload";
-    return NextResponse.json({ error: message }, { status: 400 });
+  // LP setup-fee payment → record + notify (PR3 dry-run). Flag off → skipped
+  // entirely: no Stripe call, no DB, no notice, today's response.
+  if (
+    lpAutoProvisionMode() === "dry_run" &&
+    isLpSetupFeeEventType(event.type) &&
+    looksLikeLpSetupFeeSession(event.data.object as Stripe.Checkout.Session)
+  ) {
+    const store = createSupabaseLpProvisioningStore();
+    if (!store) throw new Error("lp_store_unavailable"); // fail closed → 5xx → retry
+    const lpSetupFee = await handleLpSetupFeeEvent(
+      event as Parameters<typeof handleLpSetupFeeEvent>[0],
+      {
+        retrieveSession: (id) => stripe.checkout.sessions.retrieve(id),
+        store,
+        notifier: createLpSetupFeeNotifier({ sendEmail: sendBillingEmail }),
+      }
+    );
+    return {
+      kind: "processed",
+      orgId: null,
+      body: { received: true, type: event.type, orgId: null, lpSetupFee },
+    };
   }
 
   const notify = process.env.BILLING_NOTIFY_EMAIL || "owner@example.com";
@@ -161,19 +203,32 @@ export async function POST(req: Request) {
     case "customer.subscription.updated":
     case "customer.subscription.deleted": {
       const sub = event.data.object as Stripe.Subscription;
-      const result = await syncSubscriptionFromStripe(sub);
-      syncedOrgId = result.orgId;
-      
-      // P1 Plan Rails: Process plan changes with event.id idempotency
-      const planResult = await processSubscriptionForPlanChange(event, result.orgId);
-      
+      const claims = claimedOrgIds(sub.metadata);
+      let synced = false;
+      let planAction: string | undefined;
+      if (claims.length === 0) {
+        console.warn("[stripe:webhook] missing orgId on subscription", sub.id);
+      } else {
+        const check = await verifyStripeCustomerOrg(
+          { claimedOrgIds: claims, customerIds: [customerIdOf(sub.customer)] },
+          lookup
+        );
+        if (!check.ok) return { kind: "rejected", check };
+        const result = await syncSubscriptionFromStripe(sub, check.orgId, check.customerId);
+        syncedOrgId = result.orgId;
+        synced = result.synced;
+        // P1 Plan Rails: throws on failure (not marked processed) → 5xx.
+        const planResult = await processSubscriptionForPlanChange(event, check.orgId);
+        planAction = planResult.action;
+      }
+
       await sendBillingEmail(
         notify,
         `[AI社員] Stripe: ${event.type}`,
         `<p>イベント <code>${event.type}</code> を受け取りました。</p>
-         <p>orgId=<code>${result.orgId ?? "unknown"}</code> synced=${result.synced}</p>
+         <p>orgId=<code>${syncedOrgId ?? "unknown"}</code> synced=${synced}</p>
          <p>status=<code>${sub.status}</code> sub=<code>${sub.id}</code></p>
-         ${planResult.action ? `<p>planAction=<code>${planResult.action}</code></p>` : ""}`
+         ${planAction ? `<p>planAction=<code>${planAction}</code></p>` : ""}`
       );
       break;
     }
@@ -187,13 +242,29 @@ export async function POST(req: Request) {
         null;
       const sub = await retrieveSubscription(stripe, parentSub);
       if (sub) {
-        const orgFromInvoice = orgIdFromMetadata(
-          invoice.metadata ??
-            invoice.parent?.subscription_details?.metadata ??
-            null
-        );
-        const result = await syncSubscriptionFromStripe(sub, orgFromInvoice);
-        syncedOrgId = result.orgId;
+        const claims = [
+          ...claimedOrgIds(sub.metadata),
+          ...claimedOrgIds(
+            invoice.metadata ?? invoice.parent?.subscription_details?.metadata ?? null
+          ),
+        ];
+        if (claims.length === 0) {
+          console.warn("[stripe:webhook] missing orgId on subscription", sub.id);
+        } else {
+          const check = await verifyStripeCustomerOrg(
+            {
+              claimedOrgIds: claims,
+              customerIds: [
+                customerIdOf(sub.customer),
+                customerIdOf(invoice.customer as string | { id?: string } | null),
+              ],
+            },
+            lookup
+          );
+          if (!check.ok) return { kind: "rejected", check };
+          const result = await syncSubscriptionFromStripe(sub, check.orgId, check.customerId);
+          syncedOrgId = result.orgId;
+        }
       }
       await sendBillingEmail(
         notify,
@@ -205,43 +276,69 @@ export async function POST(req: Request) {
     }
     case "checkout.session.completed": {
       const session = event.data.object as Stripe.Checkout.Session;
-      const orgId = orgIdFromMetadata(
-        session.metadata,
-        session.client_reference_id
+      const sessionClaims = claimedOrgIds(session.metadata, session.client_reference_id);
+      const sessionCustomer = customerIdOf(
+        session.customer as string | { id?: string } | null
       );
       const sub = await retrieveSubscription(stripe, session.subscription);
       if (sub) {
-        // Prefer checkout client_reference_id / metadata.orgId
-        if (orgId && !sub.metadata?.orgId && !sub.metadata?.org_id) {
-          sub.metadata = { ...(sub.metadata || {}), orgId, org_id: orgId };
+        const claims = [...sessionClaims, ...claimedOrgIds(sub.metadata)];
+        if (claims.length === 0) {
+          console.warn("[stripe:webhook] missing orgId on subscription", sub.id);
+          break;
         }
-        const result = await syncSubscriptionFromStripe(sub, orgId);
+        const check = await verifyStripeCustomerOrg(
+          {
+            claimedOrgIds: claims,
+            customerIds: [sessionCustomer, customerIdOf(sub.customer)],
+          },
+          lookup
+        );
+        if (!check.ok) return { kind: "rejected", check };
+        const result = await syncSubscriptionFromStripe(sub, check.orgId, check.customerId);
         syncedOrgId = result.orgId;
-      } else if (orgId && session.customer) {
-        // Customer created but subscription not yet expandable — store customer id
-        const customerId =
-          typeof session.customer === "string"
-            ? session.customer
-            : session.customer.id;
-        if (!isDemoMode() && customerId) {
+      } else if (
+        session.mode === "subscription" &&
+        sessionClaims.length > 0 &&
+        sessionCustomer
+      ) {
+        // Subscription not expandable yet. The customer must already be
+        // linked to this org; the webhook never links a customer itself.
+        const check = await verifyStripeCustomerOrg(
+          { claimedOrgIds: sessionClaims, customerIds: [sessionCustomer] },
+          lookup
+        );
+        if (!check.ok) return { kind: "rejected", check };
+        if (!isDemoMode()) {
           await upsertSubscription({
-            orgId,
+            orgId: check.orgId,
             status: "incomplete",
-            stripeCustomerId: customerId,
+            stripeCustomerId: check.customerId,
             planKey: resolvePlanKeyFromStripe({
               metadataPlanKey:
                 session.metadata?.planKey || session.metadata?.plan_key,
             }),
           });
         }
-        syncedOrgId = orgId;
+        syncedOrgId = check.orgId;
       }
+      // LP setup-fee sessions (mode=payment, no org) → no-op, as before.
       break;
     }
     case "customer.subscription.trial_will_end": {
       const sub = event.data.object as Stripe.Subscription;
-      const result = await syncSubscriptionFromStripe(sub);
-      syncedOrgId = result.orgId;
+      const claims = claimedOrgIds(sub.metadata);
+      if (claims.length === 0) {
+        console.warn("[stripe:webhook] missing orgId on subscription", sub.id);
+      } else {
+        const check = await verifyStripeCustomerOrg(
+          { claimedOrgIds: claims, customerIds: [customerIdOf(sub.customer)] },
+          lookup
+        );
+        if (!check.ok) return { kind: "rejected", check };
+        const result = await syncSubscriptionFromStripe(sub, check.orgId, check.customerId);
+        syncedOrgId = result.orgId;
+      }
       await sendTrialEndingEmail(notify, "ご契約組織", 3);
       break;
     }
@@ -249,9 +346,149 @@ export async function POST(req: Request) {
       break;
   }
 
-  return NextResponse.json({
-    received: true,
-    type: event.type,
+  return {
+    kind: "processed",
     orgId: syncedOrgId,
-  });
+    body: { received: true, type: event.type, orgId: syncedOrgId },
+  };
+}
+
+function errorMessage(e: unknown): string {
+  return e instanceof Error ? e.message : "unknown_error";
+}
+
+/**
+ * Stripe webhook — subscription / invoice sync via service role when NOT demo.
+ * Also handles card setup events for external contract card registration.
+ *
+ * Response contract (fail-closed):
+ * - invalid signature → 400 (permanent; unchanged)
+ * - tenant mismatch (metadata org ≠ org linked to the Customer) → no writes,
+ *   audit_events row, 200 { rejected } (permanent; retrying cannot fix it)
+ * - transient failure (DB / Stripe API / dedupe store) → 5xx → Stripe retries
+ * - duplicate event.id already processed → 200 { duplicate } (no re-run)
+ * - same event.id currently being processed → 409 → Stripe retries later
+ */
+export async function POST(req: Request) {
+  const stripe = getStripe();
+  const signature = req.headers.get("stripe-signature");
+  const raw = await req.text();
+  const secret = process.env.STRIPE_WEBHOOK_SECRET;
+
+  if (!stripe || !secret || secret.startsWith("replace_me")) {
+    console.info("[stripe:webhook:stub]", {
+      signaturePresent: Boolean(signature),
+      bytes: raw.length,
+    });
+    return jsonUtf8({ received: true, stub: true });
+  }
+
+  let event: Stripe.Event;
+  try {
+    event = stripe.webhooks.constructEvent(raw, signature || "", secret);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "invalid payload";
+    return jsonUtf8({ error: message }, { status: 400 });
+  }
+
+  // Dedupe by event.id (claim before processing; done only after success).
+  let store: StripeWebhookEventStore | null = null;
+  let attempt: number | null = null;
+  try {
+    store = createSupabaseStripeWebhookEventStore();
+    const claim = await claimStripeWebhookEvent(store, event);
+    if (claim.kind === "duplicate") {
+      return jsonUtf8({ received: true, type: event.type, duplicate: true });
+    }
+    if (claim.kind === "in_progress") {
+      return jsonUtf8(
+        { error: "event_in_progress" },
+        { status: 409 }
+      );
+    }
+    if (claim.kind === "ledger_unavailable") {
+      if (store) {
+        console.warn("[stripe:webhook] ledger unavailable, processing without dedupe", {
+          eventId: event.id,
+          reason: claim.reason,
+        });
+      }
+      store = null;
+    } else {
+      attempt = claim.attempt;
+    }
+  } catch (e) {
+    console.error("[stripe:webhook] ledger claim failed", {
+      eventId: event.id,
+      error: errorMessage(e),
+    });
+    return jsonUtf8({ error: "temporarily_unavailable" }, { status: 503 });
+  }
+
+  let outcome: Outcome;
+  try {
+    outcome = await handleEvent(stripe, event, raw, signature, createSupabaseLinkedOrgLookup());
+  } catch (e) {
+    console.error("[stripe:webhook] processing failed", {
+      eventId: event.id,
+      eventType: event.type,
+      error: errorMessage(e),
+    });
+    if (store && attempt != null) {
+      try {
+        await failStripeWebhookEvent(store, event.id, attempt, e);
+      } catch (markErr) {
+        // Row stays "processing"; the lease lets the retry re-claim it.
+        console.error("[stripe:webhook] ledger fail-mark failed", {
+          eventId: event.id,
+          error: errorMessage(markErr),
+        });
+      }
+    }
+    return jsonUtf8({ error: "processing_failed" }, { status: 500 });
+  }
+
+  if (outcome.kind === "invalid_signature") {
+    return jsonUtf8({ error: outcome.error }, { status: 400 });
+  }
+
+  if (outcome.kind === "rejected") {
+    await recordStripeTenantMismatch(event, outcome.check);
+    if (store && attempt != null) {
+      try {
+        await rejectStripeWebhookEvent(store, event.id, attempt, outcome.check.reason);
+      } catch (e) {
+        // Nothing was written for this event; let Stripe retry and re-evaluate.
+        console.error("[stripe:webhook] ledger reject-mark failed", {
+          eventId: event.id,
+          error: errorMessage(e),
+        });
+        return jsonUtf8({ error: "temporarily_unavailable" }, { status: 503 });
+      }
+    }
+    return jsonUtf8({
+      received: true,
+      type: event.type,
+      rejected: outcome.check.reason,
+    });
+  }
+
+  if (store && attempt != null) {
+    try {
+      const ok = await completeStripeWebhookEvent(store, event.id, attempt, {
+        orgId: outcome.orgId,
+      });
+      if (!ok) {
+        console.warn("[stripe:webhook] ledger complete lost the claim", { eventId: event.id });
+      }
+    } catch (e) {
+      // Processing succeeded; acknowledging avoids re-running side effects.
+      console.error("[stripe:webhook] ledger complete failed", {
+        eventId: event.id,
+        error: errorMessage(e),
+      });
+    }
+  }
+
+  return jsonUtf8(outcome.body);
 }

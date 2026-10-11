@@ -35,7 +35,11 @@ export function ToolApprovalHints({
         初期値は毎回人が見ます。警告を承諾すれば自動にもできます。責任は事業者にあります。
       </p>
       {visible.map((tool) => {
-        const current = value[tool] === "auto" || value[tool] === "risk_based" ? value[tool] : "always_human";
+        // "deny" can be stored via API / admin MCP; show it instead of masking it as always_human.
+        const current =
+          value[tool] === "auto" || value[tool] === "risk_based" || value[tool] === "deny"
+            ? value[tool]
+            : "always_human";
         return (
           <label key={tool} className="block text-sm">
             <span className="muted">{CHOOSABLE_TOOL_LABELS[tool]}</span>
@@ -45,6 +49,7 @@ export function ToolApprovalHints({
               disabled={disabled}
               onChange={(e) => setTool(tool, e.target.value as ApprovalPolicy)}
             >
+              {current === "deny" ? <option value="deny">禁止（即拒否）</option> : null}
               {CHOICES.map((choice) => (
                 <option key={choice} value={choice}>
                   {TOOL_APPROVAL_CHOICE_LABELS[choice]}

@@ -3,24 +3,17 @@ import { isDemoMode } from "@/lib/mode";
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 import { matchesSuperAdminAllowlist } from "@/lib/admin/allowlist";
+import { isMcpOAuthEnabled } from "@/lib/mcp-oauth/config";
+import { isSameOriginBrowserPost } from "@/lib/mcp-oauth/http";
 import {
   loginErrorMessage,
   loginFailureSearchParams,
   type LoginErrorCode,
 } from "@/lib/auth/login-errors";
+import { safeNextDestination as safeDestination } from "@/lib/auth/safe-next";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 export const runtime = "nodejs";
-
-function safeDestination(value: string, requestUrl: string): string {
-  try {
-    const base = new URL(requestUrl);
-    const candidate = new URL(value, base);
-    if (candidate.origin !== base.origin) return "/app";
-    return `${candidate.pathname}${candidate.search}${candidate.hash}`;
-  } catch {
-    return "/app";
-  }
-}
 
 function wantsJson(req: Request, contentType: string): boolean {
   const accept = req.headers.get("accept") || "";
@@ -42,7 +35,7 @@ function fail(
   next: string
 ) {
   if (json) {
-    return NextResponse.json(
+    return jsonUtf8(
       { error: code, message: loginErrorMessage(code, status) },
       { status }
     );
@@ -53,6 +46,11 @@ function fail(
 }
 
 export async function POST(req: Request) {
+  // Login CSRF guard (MCP OAuth consent relies on "who is signed in").
+  // Only while MCP_OAUTH_ENABLED is ON; requests without Origin (non-browser) pass.
+  if (isMcpOAuthEnabled() && !isSameOriginBrowserPost(req, { requireOrigin: false })) {
+    return jsonUtf8({ error: "origin_mismatch", message: "不正な送信元です。" }, { status: 403 });
+  }
   const contentType = req.headers.get("content-type") || "";
   const json = wantsJson(req, contentType);
   let email = "";
@@ -75,7 +73,7 @@ export async function POST(req: Request) {
     const url = new URL(next, req.url);
     url.searchParams.set("demo", "1");
     if (json) {
-      return NextResponse.json({
+      return jsonUtf8({
         ok: true,
         demo: true,
         next: `${url.pathname}${url.search}${url.hash}`,
@@ -126,7 +124,7 @@ export async function POST(req: Request) {
   const destination = next === "/app" && superAdmin ? "/admin" : next;
 
   if (json) {
-    return NextResponse.json({ ok: true, demo: false, next: destination });
+    return jsonUtf8({ ok: true, demo: false, next: destination });
   }
   return NextResponse.redirect(new URL(destination, req.url), 303);
 }

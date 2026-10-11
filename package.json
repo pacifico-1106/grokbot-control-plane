@@ -2,7 +2,7 @@
   "name": "grokbot-control-plane",
   "version": "0.1.0",
   "private": true,
-  "description": "AI employee control plane for Grok Bot",
+  "description": "Staffpass — ID badges for AI agents: permissions, approvals, and audit logs",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -21,7 +21,8 @@
     "react": "19.1.0",
     "react-dom": "19.1.0",
     "resend": "^4.8.0",
-    "stripe": "^18.5.0"
+    "stripe": "^18.5.0",
+    "undici": "^6.29.0"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3",

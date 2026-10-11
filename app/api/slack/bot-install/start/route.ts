@@ -8,6 +8,7 @@ import {
   slackBotInstallAuthorizeUrl,
   slackOAuthConfigured,
 } from "@/lib/slack/oauth";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 export const runtime = "nodejs";
 
@@ -22,7 +23,7 @@ export async function GET() {
   const gate = await requireOrgAdminSession();
   if (!gate.ok) return gate.response;
   if (!slackOAuthConfigured()) {
-    return NextResponse.json(
+    return jsonUtf8(
       { error: "slack_oauth_unconfigured", message: "Slack アプリの OAuth が未設定" },
       { status: 503 }
     );
@@ -40,7 +41,7 @@ export async function GET() {
     });
     return NextResponse.redirect(slackBotInstallAuthorizeUrl(state));
   } catch {
-    return NextResponse.json(
+    return jsonUtf8(
       { error: "slack_oauth_unconfigured", message: "Slack アプリの OAuth が未設定" },
       { status: 503 }
     );

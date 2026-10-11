@@ -1,6 +1,6 @@
-# AI社員 for Grok Bot — Control Plane
+# Staffpass（AIエージェントの社員証） — Control Plane
 
-中小企業向けに、Grok Bot を「説明できる AI 社員」として運用するための制御面です。
+中小企業向けに、Grok Bot などの AI エージェントを「説明できる AI 社員」として運用するための制御面です。
 
 **キャッチ:** 「AIを入れるな。AI社員を雇え。」
 
@@ -42,7 +42,7 @@
 | `/app/team` | owner/admin チーム |
 | `/api/employees/interpret` | NL → Draft |
 | `/api/employees/issue` | 社員証発行（dual-mode） |
-| `/api/billing/checkout` | Checkout Session（org metadata） |
+| `/api/billing/checkout` | 停止中（旧プラン BUSINESS/MANAGED/STARTER は 410、その他 404。購入は AI社員パック `/api/lp/ai-employee/checkout` のみ） |
 | `/api/billing/portal` | Customer Portal |
 | `/api/webhooks/stripe` | 購読同期 webhook |
 | `/api/gateway/*` | スリム gateway + fail-closed invoke |

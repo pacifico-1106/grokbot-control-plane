@@ -1,3 +1,8 @@
+import { ProjectAccessOrgError, projectAccessRefusalBody } from "@/lib/employees/project-access-org";
+import { credentialExpiresAtFromNow, issueExpiryDays } from "@/lib/employees/credential-ttl";
+import { recordSetupToolSucceeded } from "@/lib/approvals/attachment-retry-cap";
+import { buildMcpHandoff, parseMcpHandoff, type McpHandoff } from "@/lib/mcp/endpoint-handoff-block";
+import { isMcpEndpointHandoffEnabled } from "@/lib/feature-flags";
 import { isDemoMode } from "@/lib/mode";
 import { executeApproval } from "@/lib/approvals/execution";
 import { fulfillWorkflowMutation } from "@/lib/approval-workflow/admin";
@@ -44,13 +49,24 @@ import { validateSchedulingPolicy } from "@/lib/scheduling-policy/validate";
 import { validateReplyPolicy } from "@/lib/gateway/reply-policy-validate";
 import { validateMailPolicy } from "@/lib/mail-policy/validate";
 import { normalizeStuckWatchPolicy } from "@/lib/stuck-watch/validate";
-import { linkAgent } from "@/lib/data/bindings";
+import { getBinding, linkAgent } from "@/lib/data/bindings";
+import { parseAdminRequester } from "@/lib/admin-mcp/self-approval";
 import { upsertOrgParty } from "@/lib/data/directory";
+import { onSlackUserPartyUpserted } from "@/lib/slack/dm-autoroute";
 import { applyChannelClassification } from "@/lib/admin-mcp/channel-classify";
 import { normalizeAllowedAccounts } from "@/lib/employees/allowed-accounts";
 import { normalizeApproverUserIds, parseApprovalChannelId } from "@/lib/employees/approval-inbox";
 import { normalizeToolApprovalDefaults } from "@/lib/employees/approval-presets";
 import { ALL_SCOPES } from "@/lib/employees/policy-draft";
+import {
+  boundToRequestingAdmin,
+  checkPolicyPatchCardShown,
+  checkPolicyPatchNotStale,
+  checkPolicyPatchSodAck,
+  parsePolicyPatchArgs,
+} from "@/lib/admin-mcp/policy-patch-guard";
+import { getOrgSodWarnPolicy } from "@/lib/data/org-context";
+import { employeePolicyWriteFailure } from "@/lib/employees/policy-errors";
 import { defaultProjectAccess, normalizeProjectAccess } from "@/lib/employees/project-access";
 import { normalizePostingAs } from "@/lib/employees/posting-as";
 import { defaultVoice, normalizeVoice } from "@/lib/employees/voice";
@@ -97,12 +113,10 @@ import type {
   AllowedAccount,
   ApprovalPolicy,
   ApprovalRequest,
-  ChannelClassification,
-  ConversationSurface,
   EmployeeScope,
-  OrgPartyKind,
   SpendLimits,
 } from "@/lib/types";
+import { validateChannelsClassifyArgs, validatePartiesUpsertArgs } from "@/lib/channel-classify/core";
 
 export type AdminFulfillment = {
   ok: boolean;
@@ -117,6 +131,10 @@ export type AdminFulfillment = {
   channelId?: string;
   draft?: unknown;
   nextStepJa?: string;
+  /** Whether re-requesting can succeed without a change (e.g. directory_remove_relaxes_audience: false). */
+  retryable?: boolean;
+  /** Admin tool to run first (e.g. channels.classify for an unknown channel row). */
+  nextTool?: string;
   noticeJa?: string;
   adapterId?: string;
   surface?: string;
@@ -133,7 +151,20 @@ export type AdminFulfillment = {
   integrationMode?: string;
   summaryJa?: string;
   adminAgentId?: string;
+  /** setup.slackAuthorizeLink.issue: who actually received the link (no URL). */
+  deliveryTarget?: "employee" | "approver";
+  deliveryFallbackReason?: string | null;
+  /** MCP_ENDPOINT_HANDOFF_ENABLED: secret-free MCP endpoint + connection steps (issue / link). */
+  mcpHandoff?: McpHandoff;
 };
+
+/** issue / link: attach the shared MCP handoff block (flag OFF → nothing). */
+function mcpHandoffFields(employeeId: string, nextStepJa?: string): Pick<AdminFulfillment, "mcpHandoff" | "nextStepJa"> {
+  if (!isMcpEndpointHandoffEnabled()) return nextStepJa === undefined ? {} : { nextStepJa };
+  const mcpHandoff = buildMcpHandoff({ employeeId });
+  const line = `MCP 接続先: ${mcpHandoff.mcp.url}（Streamable HTTP、Authorization: Bearer に社員証）。接続確認は staffpass_whoami。詳細は mcpHandoff を参照。`;
+  return { mcpHandoff, nextStepJa: nextStepJa ? `${nextStepJa} ${line}` : line };
+}
 
 const TOOL_NEXTSTEP_JA: Record<string, string> = {
   "employees.issue":
@@ -335,6 +366,24 @@ async function fulfillLineApprovalUpsert(
   };
 }
 
+/**
+ * updateEmployeePolicy threw (fail-closed write): report ok:false with the
+ * code only (the storage detail stays in the server log, never in the
+ * persisted fulfillment / MCP result). No success audit is written.
+ */
+function employeePolicyWriteFailedFulfillment(tool: string, employeeId: string, error: unknown): AdminFulfillment {
+  const failure = employeePolicyWriteFailure(error);
+  console.error(failure.code, tool, employeeId, error instanceof Error ? error.message : error);
+  return {
+    ok: false,
+    tool,
+    at: new Date().toISOString(),
+    error: failure.code,
+    employeeId,
+    nextStepJa: failure.nextStepJa,
+  };
+}
+
 async function fulfillLineApprovalSetEmployeeInbox(
   approval: ApprovalRequest,
   args: Record<string, unknown>
@@ -351,14 +400,19 @@ async function fulfillLineApprovalSetEmployeeInbox(
   );
   if (!parsed.ok) throw new Error("line_approval_channel_not_found");
 
-  const updated = await updateEmployeePolicy({
-    orgId: approval.orgId,
-    employeeId,
-    scopes: employee.scopes,
-    allowedPurposes: employee.allowedPurposes,
-    approvalPolicy: employee.approvalPolicy,
-    approvalChannelId: parsed.id,
-  });
+  let updated: Awaited<ReturnType<typeof updateEmployeePolicy>>;
+  try {
+    updated = await updateEmployeePolicy({
+      orgId: approval.orgId,
+      employeeId,
+      scopes: employee.scopes,
+      allowedPurposes: employee.allowedPurposes,
+      approvalPolicy: employee.approvalPolicy,
+      approvalChannelId: parsed.id,
+    });
+  } catch (error) {
+    return employeePolicyWriteFailedFulfillment("setup.lineApproval.setEmployeeInbox", employeeId, error);
+  }
   if (!updated) throw new Error("employee_not_found");
 
   await appendAuditEvent({
@@ -487,6 +541,7 @@ export function parseAdminFulfillment(
     channelId: typeof rec.channelId === "string" ? rec.channelId : undefined,
     draft: rec.draft,
     nextStepJa: typeof rec.nextStepJa === "string" ? rec.nextStepJa : undefined,
+    ...(typeof rec.nextTool === "string" ? { nextTool: rec.nextTool } : {}),
     noticeJa: typeof rec.noticeJa === "string" ? rec.noticeJa : undefined,
     enabled: typeof rec.enabled === "boolean" ? rec.enabled : undefined,
     destinationPresent: typeof rec.destinationPresent === "boolean" ? rec.destinationPresent : undefined,
@@ -502,6 +557,12 @@ export function parseAdminFulfillment(
       typeof rec.integrationMode === "string" ? rec.integrationMode : undefined,
     summaryJa: typeof rec.summaryJa === "string" ? rec.summaryJa : undefined,
     adminAgentId: typeof rec.adminAgentId === "string" ? rec.adminAgentId : undefined,
+    deliveryTarget: rec.deliveryTarget === "employee" || rec.deliveryTarget === "approver" ? rec.deliveryTarget : undefined,
+    deliveryFallbackReason:
+      rec.deliveryFallbackReason === null || typeof rec.deliveryFallbackReason === "string"
+        ? (rec.deliveryFallbackReason as string | null)
+        : undefined,
+    ...(parseMcpHandoff(rec.mcpHandoff) ? { mcpHandoff: parseMcpHandoff(rec.mcpHandoff) } : {}),
   };
 }
 
@@ -513,14 +574,17 @@ async function fulfillIssue(approval: ApprovalRequest, args: Record<string, unkn
     throw new Error("invalid_issue_payload");
   }
   const secret = issueSecret();
-  const expiresInDays = Math.min(365, Math.max(1, Number(args.expiresInDays) || 30));
-  const expiresAt = new Date(Date.now() + expiresInDays * 86400000).toISOString();
+  // 八坂さん 2026-10-12: default 90 days (explicit 1–365 unchanged).
+  const expiresAt = credentialExpiresAtFromNow(new Date(), issueExpiryDays(args.expiresInDays));
   const hasOrder = scopes.includes("commerce:order");
   const spend = hasOrder
     ? normalizeSpendLimits((args.spend as Partial<SpendLimits> | null) ?? {})
     : null;
-  const result = await issueEmployee({
+  let result: Awaited<ReturnType<typeof issueEmployee>>;
+  try {
+  result = await issueEmployee({
     orgId: approval.orgId,
+    projectAccessAudit: { path: "admin_mcp.employees.issue", phase: "fulfil", approvalId: approval.id, actorEmail: approval.resolvedBy ?? null },
     displayName,
     roleLabel,
     jobDescription: String(args.jobDescription || ""),
@@ -536,7 +600,8 @@ async function fulfillIssue(approval: ApprovalRequest, args: Record<string, unkn
     allowedAccounts: normalizeAllowedAccounts(
       Array.isArray(args.allowedAccounts) ? (args.allowedAccounts as AllowedAccount[]) : []
     ),
-    approvalNotifyEmail: typeof args.approvalNotifyEmail === "string" ? args.approvalNotifyEmail : null,
+    // Passed as given: issueEmployee re-checks it (members only) and refuses non-strings.
+    approvalNotifyEmail: (args.approvalNotifyEmail ?? null) as string | null,
     callbackUrl: typeof args.callbackUrl === "string" ? args.callbackUrl : null,
     managerId: typeof args.managerId === "string" ? args.managerId : null,
     voice: args.voice == null ? defaultVoice() : normalizeVoice(args.voice),
@@ -553,6 +618,15 @@ async function fulfillIssue(approval: ApprovalRequest, args: Record<string, unkn
     auditSummary: `${displayName} の社員証を発行（管理MCP・人承認後）`,
     actorEmail: approval.resolvedBy ?? null,
   });
+  } catch (error) {
+    // Same-org projectIds re-checked at fulfil (#284 decision 4): a project
+    // deleted / moved since filing → not issued (audited inside, IDs only).
+    if (error instanceof ProjectAccessOrgError) {
+      const body = projectAccessRefusalBody(error);
+      return { ok: false, tool: "employees.issue", at: new Date().toISOString(), error: body.code, nextStepJa: `${body.message}${body.nextStep}` };
+    }
+    throw error;
+  }
   await appendAuditEvent({
     orgId: approval.orgId,
     employeeId: result.employee.id,
@@ -573,7 +647,7 @@ async function fulfillIssue(approval: ApprovalRequest, args: Record<string, unkn
     employeeId: result.employee.id,
     secretPrefix: secret.prefix,
     oneTimeSecret: secret.raw,
-    nextStepJa: TOOL_NEXTSTEP_JA["employees.issue"],
+    ...mcpHandoffFields(result.employee.id, TOOL_NEXTSTEP_JA["employees.issue"]),
   };
 }
 
@@ -605,32 +679,213 @@ async function fulfillLink(approval: ApprovalRequest, args: Record<string, unkno
     at: new Date().toISOString(),
     employeeId,
     noticeJa: TOOL_NOTICE_JA.link,
-    nextStepJa: TOOL_NEXTSTEP_JA.link,
+    ...mcpHandoffFields(employeeId, TOOL_NEXTSTEP_JA.link),
+  };
+}
+
+/** ADMIN_MCP_ALLOWED_ACCOUNTS_TOOLS_ENABLED: human-approved allowedAccounts add/remove. */
+async function fulfillAllowedAccountsTicket(
+  approval: ApprovalRequest,
+  args: Record<string, unknown>,
+  tool: "employees.allowedAccounts.add" | "employees.allowedAccounts.remove"
+): Promise<AdminFulfillment> {
+  const { fulfillAllowedAccountsChange } = await import("@/lib/admin-mcp/allowed-accounts-tools");
+  const result = await fulfillAllowedAccountsChange(approval, tool, args);
+  const at = new Date().toISOString();
+  if (!result.ok) {
+    return {
+      ok: false,
+      tool,
+      at,
+      error: result.code,
+      nextStepJa: result.nextStepJa ? `${result.messageJa}${result.nextStepJa}` : result.messageJa,
+      ...(result.noticeJa ? { noticeJa: result.noticeJa } : {}),
+    };
+  }
+  return {
+    ok: true,
+    tool,
+    at,
+    employeeId: result.employeeId,
+    summaryJa: result.summaryJa,
+    nextStepJa: result.nextStepJa ?? "employees.allowedAccounts.list で現在の許可アカウントを確認できます。",
+    ...(result.noticeJa ? { noticeJa: result.noticeJa } : {}),
+  };
+}
+
+/** PR-D: owner-approved 指定管理者 list; re-validated and owner-checked right before the write. */
+async function fulfillDesignatedAdminsTicket(approval: ApprovalRequest, args: Record<string, unknown>): Promise<AdminFulfillment> {
+  const { fulfillDesignatedAdminsSet, DESIGNATED_ADMINS_SET_TOOL } = await import("@/lib/admin-mcp/designated-admins-tool");
+  const result = await fulfillDesignatedAdminsSet(approval, args);
+  const at = new Date().toISOString();
+  if (!result.ok) return { ok: false, tool: DESIGNATED_ADMINS_SET_TOOL, at, error: result.code, nextStepJa: result.messageJa };
+  return { ok: true, tool: DESIGNATED_ADMINS_SET_TOOL, at, summaryJa: result.summaryJa };
+}
+
+/** オーナー追加: owner-approved; approver ≠ requester / target and the member guard re-checked right before the write. */
+async function fulfillPromoteOwnerTicket(approval: ApprovalRequest, args: Record<string, unknown>): Promise<AdminFulfillment> {
+  const { fulfillPromoteOwner, PROMOTE_OWNER_TOOL } = await import("@/lib/admin-mcp/promote-owner-tool");
+  const result = await fulfillPromoteOwner(approval, args);
+  const at = new Date().toISOString();
+  if (!result.ok) return { ok: false, tool: PROMOTE_OWNER_TOOL, at, error: result.code, nextStepJa: result.messageJa };
+  return { ok: true, tool: PROMOTE_OWNER_TOOL, at, summaryJa: result.summaryJa };
+}
+
+/** Human-approved 社員証 reissue: authorizes the dashboard hand-over only (no key minted / returned). */
+async function fulfillCredentialReissueTicket(approval: ApprovalRequest, args: Record<string, unknown>): Promise<AdminFulfillment> {
+  const { fulfillCredentialReissue, CREDENTIAL_REISSUE_TOOL } = await import("@/lib/employees/credential-reissue");
+  const result = await fulfillCredentialReissue(approval, args);
+  const at = new Date().toISOString();
+  if (!result.ok) {
+    return {
+      ok: false,
+      tool: CREDENTIAL_REISSUE_TOOL,
+      at,
+      error: result.code,
+      ...(result.employeeId ? { employeeId: result.employeeId } : {}),
+      nextStepJa: result.messageJa,
+    };
+  }
+  return { ok: true, tool: CREDENTIAL_REISSUE_TOOL, at, employeeId: result.employeeId, summaryJa: result.summaryJa, nextStepJa: result.nextStepJa };
+}
+
+/** Human-approved Slack posting identity switch (bot | user); re-checked right before the write. */
+async function fulfillPostingIdentityTicket(approval: ApprovalRequest, args: Record<string, unknown>): Promise<AdminFulfillment> {
+  const { fulfillPostingIdentityChange, POSTING_IDENTITY_SET_TOOL } = await import("@/lib/admin-mcp/posting-identity-tool");
+  const result = await fulfillPostingIdentityChange(approval, args);
+  const at = new Date().toISOString();
+  if (!result.ok) {
+    return {
+      ok: false,
+      tool: POSTING_IDENTITY_SET_TOOL,
+      at,
+      error: result.code,
+      ...(result.employeeId ? { employeeId: result.employeeId } : {}),
+      nextStepJa: result.nextStepJa ? `${result.messageJa}${result.nextStepJa}` : result.messageJa,
+    };
+  }
+  return {
+    ok: true,
+    tool: POSTING_IDENTITY_SET_TOOL,
+    at,
+    employeeId: result.employeeId,
+    summaryJa: result.summaryJa,
+    ...(result.nextStepJa ? { nextStepJa: result.nextStepJa } : {}),
+  };
+}
+
+/**
+ * TOCTOU follow-up (APPROVER_AUTHORITY_ENABLED): the guard pins the judged
+ * state for a compare-and-swap write. Flag OFF / not pinned → null (today's
+ * write). Changed since filing / between check and write → the F2 reply.
+ */
+async function contextGuardFor(approval: ApprovalRequest) {
+  const { approverContextGuardForWrite } = await import("@/lib/approver-authority/filing");
+  return approverContextGuardForWrite(approval);
+}
+
+async function contextChangedFulfillment(error: unknown, tool: string, employeeId: string | null): Promise<AdminFulfillment | null> {
+  const { ApproverContextChangedError } = await import("@/lib/approver-authority/context-cas");
+  if (!(error instanceof ApproverContextChangedError)) return null;
+  const { approverAuthorityNextStepJa } = await import("@/lib/approver-authority/reply");
+  return {
+    ok: false,
+    tool,
+    at: new Date().toISOString(),
+    error: "approver_context_changed",
+    ...(employeeId ? { employeeId } : {}),
+    nextStepJa: approverAuthorityNextStepJa("approver_context_changed") ?? "",
   };
 }
 
 async function fulfillPolicy(approval: ApprovalRequest, args: Record<string, unknown>): Promise<AdminFulfillment> {
-  const employeeId = String(args.employeeId || "").trim();
-  const scopes = asScopes(args.scopes);
-  const approvalPolicy = args.approvalPolicy as ApprovalPolicy;
-  if (!employeeId || !scopes.length || !["auto", "risk_based", "always_human"].includes(approvalPolicy)) {
-    throw new Error("invalid_policy_payload");
+  const at = new Date().toISOString();
+  // PR-C: re-validate the stored ticket (no silent scope filtering), refuse a
+  // badge bound to the requesting admin agent, and take the SoD
+  // acknowledgement only from the human approval of a card that showed the
+  // same verdict (the agent's sodOverrideAcknowledged is never used).
+  const parsed = parsePolicyPatchArgs(args, { fromTicket: true });
+  if (!parsed.ok) {
+    if (parsed.code === "employee_id_required" || parsed.code === "scopes_required" || parsed.code === "invalid_approval_policy") {
+      throw new Error("invalid_policy_payload");
+    }
+    return { ok: false, tool: "policy.patch", at, error: parsed.code, nextStepJa: parsed.message };
   }
-  const updated = await updateEmployeePolicy({
-    orgId: approval.orgId,
-    employeeId,
-    scopes,
-    allowedPurposes: Array.isArray(args.allowedPurposes)
-      ? args.allowedPurposes.map(String).filter(Boolean)
-      : [],
-    approvalPolicy,
-    toolApprovalDefaults:
-      args.toolApprovalDefaults !== undefined
-        ? normalizeToolApprovalDefaults(args.toolApprovalDefaults)
-        : undefined,
-    sodOverrideAcknowledged: args.sodOverrideAcknowledged === true,
-    actionLimits: normalizeActionLimits(args.actionLimits as ActionLimits),
-  });
+  const { employeeId, scopes, approvalPolicy } = parsed.value;
+  // Check order (木村 2026-10-10 #275 × main 734149a): ticket parse →
+  // requesting-admin binding → card shown → employee + org → stale (card base)
+  // → SoD (card ack) → CAS guard (approver authority, flag ON).
+  const requester = parseAdminRequester(approval.metadata);
+  const binding = await getBinding(employeeId);
+  // Same rule as intake: grokBotAgentId or actorId of the requesting admin.
+  if (boundToRequestingAdmin(requester, binding?.grokBotAgentId)) {
+    return {
+      ok: false, tool: "policy.patch", at, employeeId, error: "cannot_grant_self_scopes",
+      nextStepJa: "管理エージェントは自分に紐づいた社員証の権限を変更できません。変更は行われていません。",
+    };
+  }
+  // B1: nothing on a card that may have been cut counts as shown (SoD included).
+  const cardGate = checkPolicyPatchCardShown(args, approval.summary);
+  if (!cardGate.ok) return { ok: false, tool: "policy.patch", at, employeeId, error: cardGate.error, nextStepJa: cardGate.nextStepJa };
+  const current = await getEmployee(employeeId, approval.orgId);
+  if (!current || current.orgId !== approval.orgId) throw new Error("employee_not_found");
+  const staleGate = checkPolicyPatchNotStale(args, current);
+  if (!staleGate.ok) {
+    return { ok: false, tool: "policy.patch", at, employeeId, error: staleGate.error, nextStepJa: staleGate.nextStepJa };
+  }
+  const sodGate = checkPolicyPatchSodAck(args, parsed.value, await getOrgSodWarnPolicy(approval.orgId));
+  if (!sodGate.ok) return { ok: false, tool: "policy.patch", at, employeeId, error: sodGate.error, nextStepJa: sodGate.nextStepJa };
+  const { verdict, needsAck } = sodGate;
+  let contextGuard: Awaited<ReturnType<typeof contextGuardFor>>;
+  try {
+    contextGuard = await contextGuardFor(approval);
+  } catch (error) {
+    const changed = await contextChangedFulfillment(error, "policy.patch", employeeId);
+    if (changed) return changed;
+    throw error;
+  }
+  // Omitted allowedPurposes / actionLimits keep the stored value and are
+  // passed explicitly (the CAS RPC refuses null; explicit [] / {} clears).
+  // Under the CAS guard the kept value is the one the guard pinned: the RPC
+  // compares it with the locked row and writes only if equal, so what is
+  // written is the locked row's value — never the earlier read, never a value
+  // changed in between (refused with approver_context_changed). Without the
+  // guard it is the value read above.
+  const pinnedPurposes = contextGuard?.expected.allowed_purposes;
+  const keptPurposes = contextGuard
+    ? (Array.isArray(pinnedPurposes) ? pinnedPurposes : []).map(String)
+    : [...(current.allowedPurposes ?? [])];
+  const allowedPurposes: string[] = parsed.value.allowedPurposes ?? keptPurposes;
+  const keptLimits = contextGuard ? contextGuard.expected.action_limits : current.actionLimits;
+  const actionLimits = normalizeActionLimits(
+    (parsed.value.actionLimits !== undefined ? parsed.value.actionLimits : keptLimits) as ActionLimits
+  );
+  let updated: Awaited<ReturnType<typeof updateEmployeePolicy>>;
+  try {
+    updated = await updateEmployeePolicy({
+      orgId: approval.orgId,
+      employeeId,
+      scopes,
+      allowedPurposes,
+      approvalPolicy,
+      toolApprovalDefaults:
+        parsed.value.toolApprovalDefaults !== undefined
+          ? normalizeToolApprovalDefaults(parsed.value.toolApprovalDefaults)
+          : undefined,
+      // The human who approved the card that showed this verdict.
+      sodOverrideAcknowledged: needsAck,
+      actionLimits,
+      ...(contextGuard ? { contextGuard } : {}),
+    });
+  } catch (error) {
+    const changed = await contextChangedFulfillment(error, "policy.patch", employeeId);
+    if (changed) return changed;
+    const { ApproverContextWriteRefusedError } = await import("@/lib/approver-authority/context-cas");
+    if (error instanceof ApproverContextWriteRefusedError) {
+      return { ok: false, tool: "policy.patch", at: new Date().toISOString(), error: error.reason, employeeId };
+    }
+    return employeePolicyWriteFailedFulfillment("policy.patch", employeeId, error);
+  }
   if (!updated) throw new Error("employee_not_found");
   await appendAuditEvent({
     orgId: approval.orgId,
@@ -639,20 +894,27 @@ async function fulfillPolicy(approval: ApprovalRequest, args: Record<string, unk
     action: "admin.policy",
     purpose: "admin.policy",
     summary: `${updated.displayName} の権限を人確認のうえで更新`,
-    metadata: { auditClass: ADMIN_AUDIT_CLASS, approvalId: approval.id, scopes: updated.scopes },
+    metadata: {
+      auditClass: ADMIN_AUDIT_CLASS,
+      approvalId: approval.id,
+      scopes: updated.scopes,
+      sodLevel: verdict.level,
+      sodAckSource: needsAck ? "approver_card" : "not_required",
+    },
   });
   return { ok: true, tool: "policy.patch", at: new Date().toISOString(), employeeId };
 }
 
 async function fulfillParty(approval: ApprovalRequest, args: Record<string, unknown>): Promise<AdminFulfillment> {
-  const identifier = String(args.identifier || "").trim();
-  const kind = String(args.kind || "") as OrgPartyKind;
-  if (!identifier) throw new Error("identifier_required");
+  // Defense in depth (request-time validation is the first gate): refuse an
+  // invalid kind / audience instead of coercing it.
+  const checked = validatePartiesUpsertArgs(args);
+  if (!checked.ok) throw new Error(checked.code);
   const party = await upsertOrgParty({
     orgId: approval.orgId,
-    kind,
-    identifier,
-    audience: args.audience === "internal" ? "internal" : "external",
+    kind: checked.value.kind,
+    identifier: checked.value.identifier,
+    audience: checked.value.audience,
   });
   await appendAuditEvent({
     orgId: approval.orgId,
@@ -663,20 +925,39 @@ async function fulfillParty(approval: ApprovalRequest, args: Record<string, unkn
     summary: `相手台帳を更新: ${party.identifier}`,
     metadata: { auditClass: ADMIN_AUDIT_CLASS, approvalId: approval.id, partyId: party.id },
   });
+  // SLACK_DM_AUTOROUTE_ENABLED (default OFF; no-op otherwise). Derives DM routes
+  // only from this human-approved classification; never throws, audits itself.
+  await onSlackUserPartyUpserted({
+    orgId: approval.orgId,
+    kind: party.kind,
+    identifier: party.identifier,
+    audience: party.audience,
+  });
   return { ok: true, tool: "parties.upsert", at: new Date().toISOString(), partyId: party.id };
 }
 
+async function rewakeAfterChannelClassified(approval: ApprovalRequest, surface: string, externalId: string): Promise<void> {
+  try {
+    const { isPathCRewakeOnClassifyEnabled, rewakeSkippedChannelWakesAfterApproval } = await import("@/lib/slack/pathc-rewake");
+    if (!isPathCRewakeOnClassifyEnabled()) return;
+    await rewakeSkippedChannelWakesAfterApproval({ approval, surface, externalId });
+  } catch {
+    // never fails the approved classification
+  }
+}
+
 async function fulfillChannel(approval: ApprovalRequest, args: Record<string, unknown>): Promise<AdminFulfillment> {
-  const externalId = String(args.externalId || args.identifier || "").trim();
-  if (!externalId) throw new Error("external_id_required");
-  const surface = String(args.surface || "slack") as ConversationSurface;
-  const classification = String(args.classification || "unknown") as ChannelClassification;
+  // Defense in depth: an invalid surface / classification is refused here too
+  // (never silently written as "unknown").
+  const checked = validateChannelsClassifyArgs(args);
+  if (!checked.ok) throw new Error(checked.code);
+  const { surface, externalId, classification } = checked.value;
   const { channel, routeEmployeeId } = await applyChannelClassification({
     orgId: approval.orgId,
     surface,
     externalId,
     classification,
-    mixed: args.mixed === true,
+    mixed: checked.value.mixed,
     employeeId: String(args.employeeId || "").trim(),
     slackTeamId: String(args.slackTeamId || "").trim(),
   });
@@ -689,6 +970,10 @@ async function fulfillChannel(approval: ApprovalRequest, args: Record<string, un
     summary: `チャネル分類: ${channel.externalId}`,
     metadata: { auditClass: ADMIN_AUDIT_CLASS, approvalId: approval.id, channelId: channel.id },
   });
+  // Path C (PATHC_REWAKE_ON_CLASSIFY_ENABLED, OFF → no-op): re-wake the latest
+  // mention skipped as unclassified in this channel, once. Never throws and
+  // never changes this fulfillment.
+  await rewakeAfterChannelClassified(approval, surface, externalId);
   return {
     ok: true,
     tool: "channels.classify",
@@ -942,6 +1227,11 @@ async function fulfillOrgIssueAdminCredential(
   approval: ApprovalRequest,
   args: Record<string, unknown>
 ): Promise<AdminFulfillment> {
+  // Operator-only: re-check platform auth at fulfil (an approved ticket alone
+  // is not enough; the ticket's org must still pass the platform-ops gate).
+  const { assertPlatformOpsFromAdminCred } = await import("@/lib/admin/platform-ops-gate");
+  const operatorGate = await assertPlatformOpsFromAdminCred({ orgId: approval.orgId } as Parameters<typeof assertPlatformOpsFromAdminCred>[0]);
+  if (!operatorGate.allowed) throw new Error("platform_ops_forbidden");
   const actor = platformActorFromQueuedArgs(args);
   const issued = await fulfillOrgIssueAdminCredentialFromQueuedArgs(args, actor);
 
@@ -1106,9 +1396,25 @@ async function fulfillSchedulingPolicy(
     ? args.employeeId.trim()
     : null;
   const clearOverride = args.clearOverride === true;
+  try {
+    return await fulfillSchedulingPolicyWrite(approval, args, employeeId, clearOverride, await contextGuardFor(approval));
+  } catch (error) {
+    const changed = await contextChangedFulfillment(error, "schedulingPolicy.patch", employeeId);
+    if (changed) return changed;
+    throw error;
+  }
+}
 
+async function fulfillSchedulingPolicyWrite(
+  approval: ApprovalRequest,
+  args: Record<string, unknown>,
+  employeeId: string | null,
+  clearOverride: boolean,
+  contextGuard: Awaited<ReturnType<typeof contextGuardFor>>
+): Promise<AdminFulfillment> {
+  const writeOptions = contextGuard ? { contextGuard } : {};
   if (clearOverride && employeeId) {
-    await setEmployeeSchedulingPolicy(employeeId, approval.orgId, null);
+    await setEmployeeSchedulingPolicy(employeeId, approval.orgId, null, writeOptions);
     await appendAuditEvent({
       orgId: approval.orgId,
       employeeId,
@@ -1145,7 +1451,7 @@ async function fulfillSchedulingPolicy(
   const hasHighRiskConsent = Boolean(validation.policy.highRiskConsentAt);
 
   if (employeeId) {
-    const policy = await setEmployeeSchedulingPolicy(employeeId, approval.orgId, validation.policy);
+    const policy = await setEmployeeSchedulingPolicy(employeeId, approval.orgId, validation.policy, writeOptions);
     await appendAuditEvent({
       orgId: approval.orgId,
       employeeId,
@@ -1172,7 +1478,7 @@ async function fulfillSchedulingPolicy(
     };
   }
 
-  const policy = await setOrgSchedulingPolicy(approval.orgId, validation.policy);
+  const policy = await setOrgSchedulingPolicy(approval.orgId, validation.policy, writeOptions);
   const consentNote = hasHighRiskConsent ? "（高リスク承諾あり）" : "";
   await appendAuditEvent({
     orgId: approval.orgId,
@@ -1739,6 +2045,152 @@ async function fulfillEmployeeIdentityBindMailbox(
   };
 }
 
+/** PR-4: human-approved dmAutoroute.run. Org is the approval row's org. */
+async function fulfillDmAutorouteRun(
+  approval: ApprovalRequest,
+  args: Record<string, unknown>
+): Promise<AdminFulfillment> {
+  const { executeDmAutorouteRun } = await import("@/lib/admin-mcp/slack-dm-setup");
+  const employeeId = typeof args.employeeId === "string" ? args.employeeId.trim() : "";
+  const run = await executeDmAutorouteRun(approval.orgId, employeeId);
+  if (!run.ok) throw new Error(run.code);
+  const counts = run.counts;
+  await appendAuditEvent({
+    orgId: approval.orgId,
+    employeeId: employeeId || null,
+    credentialId: null,
+    action: "admin.channel",
+    purpose: "admin.channel",
+    summary: `管理MCPから DM 自動ルートを実行（人承認 / ${run.employees.length} 名）`,
+    metadata: {
+      auditClass: ADMIN_AUDIT_CLASS,
+      event: "admin_mcp.dm_autoroute.run",
+      approvalId: approval.id,
+      employeeIds: run.employees.map((e) => e.employeeId),
+      counts,
+    },
+  });
+  return {
+    ok: true,
+    tool: "dmAutoroute.run",
+    at: new Date().toISOString(),
+    ...(employeeId ? { employeeId } : {}),
+    summaryJa: `DM 自動ルート: 作成 ${counts.created ?? 0} / 既存 ${counts.already_routed ?? 0} / スキップ ${counts.skipped ?? 0} / 失敗 ${counts.failed ?? 0}`,
+    nextStepJa: "dmAutoroute.list で各相手の結果（skipped / failed の reason）を確認してください。",
+  };
+}
+
+/** SLACK_SHARED_APPROVAL_APP_ENABLED: human-approved setup.slackApprover.set. */
+async function fulfillSlackApproverSetTicket(
+  approval: ApprovalRequest,
+  args: Record<string, unknown>
+): Promise<AdminFulfillment> {
+  const { fulfillSlackApproverSet } = await import("@/lib/admin-mcp/slack-approver");
+  const result = await fulfillSlackApproverSet({ orgId: approval.orgId, approvalId: approval.id, args });
+  const at = new Date().toISOString();
+  if (!result.ok) {
+    return { ok: false, tool: "setup.slackApprover.set", at, error: result.code, nextStepJa: result.messageJa };
+  }
+  return {
+    ok: true,
+    tool: "setup.slackApprover.set",
+    at,
+    summaryJa: `Staffpass承認 の承認者を ${result.approverSlackUserId} に設定し、承認 DM に「設定しました」を送りました。`,
+    nextStepJa: "テスト承認は不要です。最初に届いた本物の承認依頼のボタンで、そのまま承認・却下してください。",
+  };
+}
+
+/**
+ * SLACK_AUTHORIZE_LINK_ENABLED: human-approved setup.slackAuthorizeLink.issue.
+ * The link URL is delivered only in the approval-app DM; never in this result.
+ */
+async function fulfillSlackAuthorizeLinkTicket(
+  approval: ApprovalRequest,
+  args: Record<string, unknown>
+): Promise<AdminFulfillment> {
+  const { fulfillSlackAuthorizeLinkIssue, issueNextStepJa } = await import("@/lib/admin-mcp/slack-authorize-link");
+  const result = await fulfillSlackAuthorizeLinkIssue({ orgId: approval.orgId, approvalId: approval.id, args });
+  const at = new Date().toISOString();
+  if (!result.ok) {
+    return {
+      ok: false,
+      tool: "setup.slackAuthorizeLink.issue",
+      at,
+      error: result.code,
+      nextStepJa: result.messageJa,
+    };
+  }
+  const to = result.deliveredTo;
+  return {
+    ok: true,
+    tool: "setup.slackAuthorizeLink.issue",
+    at,
+    employeeId: result.employeeId,
+    summaryJa:
+      `Slack 再認可リンクを承認アプリの DM で${to.target === "employee" ? "社員本人" : "承認者"} ${to.deliveryUserId} に送りました` +
+      `（${result.expiresAt} まで・1回限り${to.fallbackReason ? `・社員本人に送れないため承認者へ: ${to.fallbackReason}` : ""}）。URL は返しません。`,
+    nextStepJa: issueNextStepJa(result),
+    deliveryTarget: to.target,
+    deliveryFallbackReason: to.fallbackReason,
+  };
+}
+
+/** PR-4: human-approved setup.approvalDelivery.autoResolve (always_human). */
+async function fulfillApprovalDeliveryAutoResolveTicket(
+  approval: ApprovalRequest,
+  args: Record<string, unknown>
+): Promise<AdminFulfillment> {
+  const { fulfillApprovalDeliveryAutoResolve } = await import("@/lib/admin-mcp/slack-dm-setup");
+  const result = await fulfillApprovalDeliveryAutoResolve({ orgId: approval.orgId, approvalId: approval.id, args });
+  if (!result.ok) {
+    return {
+      ok: false,
+      tool: "setup.approvalDelivery.autoResolve",
+      at: new Date().toISOString(),
+      error: result.code,
+      nextStepJa: result.messageJa + (result.deepLink ? ` ${result.deepLink}` : ""),
+    };
+  }
+  return {
+    ok: true,
+    tool: "setup.approvalDelivery.autoResolve",
+    at: new Date().toISOString(),
+    channelId: result.inboxId,
+    destinationPresent: true,
+    summaryJa: "承認口の宛先を承認 DM に設定し、「設定しました」を送りました。テスト承認は不要です。",
+    nextStepJa: "最初の本物の承認依頼が実地確認です。届かない・押せないときは承認されず、管理者に通知されます。",
+  };
+}
+
+/** ADMIN_MCP_DIRECTORY_REMOVE_TOOLS_ENABLED: human-approved channel / party ledger removal. */
+async function fulfillDirectoryRemoveTicket(
+  approval: ApprovalRequest,
+  args: Record<string, unknown>,
+  tool: "channels.remove" | "parties.remove"
+): Promise<AdminFulfillment> {
+  const { fulfillChannelRemove, fulfillPartyRemove } = await import("@/lib/admin-mcp/directory-remove-tools");
+  const result = tool === "channels.remove" ? await fulfillChannelRemove(approval, args) : await fulfillPartyRemove(approval, args);
+  const at = new Date().toISOString();
+  if (!result.ok) {
+    return {
+      ok: false,
+      tool,
+      at,
+      error: result.code,
+      nextStepJa: result.nextStepJa ? `${result.messageJa}${result.nextStepJa}` : result.messageJa,
+      ...(result.retryable !== undefined ? { retryable: result.retryable } : {}),
+      ...(result.nextTool ? { nextTool: result.nextTool } : {}),
+    };
+  }
+  return {
+    ok: true,
+    tool,
+    at,
+    ...(tool === "channels.remove" ? { channelId: result.id } : { partyId: result.id }),
+    summaryJa: result.summaryJa,
+  };
+}
+
 async function fulfillApprovedAdminCore(
   approval: ApprovalRequest
 ): Promise<AdminFulfillment | null> {
@@ -1760,6 +2212,16 @@ async function fulfillApprovedAdminCore(
         break;
       case "policy.patch":
         fulfillment = await fulfillPolicy(approval, args);
+        break;
+      case "employees.allowedAccounts.add":
+      case "employees.allowedAccounts.remove":
+        fulfillment = await fulfillAllowedAccountsTicket(approval, args, tool);
+        break;
+      case "employees.postingIdentity.set":
+        fulfillment = await fulfillPostingIdentityTicket(approval, args);
+        break;
+      case "employees.credential.reissue":
+        fulfillment = await fulfillCredentialReissueTicket(approval, args);
         break;
       case "parties.upsert":
         fulfillment = await fulfillParty(approval, args);
@@ -1811,6 +2273,18 @@ async function fulfillApprovedAdminCore(
       case "setup.lineApproval.upsert":
         fulfillment = await fulfillLineApprovalUpsert(approval, args);
         break;
+      case "dmAutoroute.run":
+        fulfillment = await fulfillDmAutorouteRun(approval, args);
+        break;
+      case "setup.approvalDelivery.autoResolve":
+        fulfillment = await fulfillApprovalDeliveryAutoResolveTicket(approval, args);
+        break;
+      case "setup.slackApprover.set":
+        fulfillment = await fulfillSlackApproverSetTicket(approval, args);
+        break;
+      case "setup.slackAuthorizeLink.issue":
+        fulfillment = await fulfillSlackAuthorizeLinkTicket(approval, args);
+        break;
       case "setup.lineApproval.setEmployeeInbox":
         fulfillment = await fulfillLineApprovalSetEmployeeInbox(approval, args);
         break;
@@ -1841,10 +2315,27 @@ async function fulfillApprovedAdminCore(
       case "employeeIdentity.bindMailbox":
         fulfillment = await fulfillEmployeeIdentityBindMailbox(approval, args);
         break;
+      case "channels.remove":
+      case "parties.remove":
+        fulfillment = await fulfillDirectoryRemoveTicket(approval, args, tool);
+        break;
+      case "approvers.designatedAdmins.set":
+        fulfillment = await fulfillDesignatedAdminsTicket(approval, args);
+        break;
+      case "members.promoteOwner":
+        fulfillment = await fulfillPromoteOwnerTicket(approval, args);
+        break;
       default:
         fulfillment = { ok: false, tool, at, error: "unknown_admin_tool" };
     }
     await persist(approval, fulfillment);
+    // 木村 #255 second round: a settings-type tool succeeded → retry-cap reset
+    // marker (flag + the Slack-only allow-list are checked inside, 木村 fourth
+    // round 3; best effort, never changes the result).
+    if (fulfillment.ok) {
+      await recordSetupToolSucceeded({ orgId: approval.orgId, tool, source: "admin_fulfillment", approvalId: approval.id })
+        .catch(() => undefined);
+    }
     return fulfillment;
   } catch (error) {
     const message = error instanceof Error ? error.message : "fulfill_failed";

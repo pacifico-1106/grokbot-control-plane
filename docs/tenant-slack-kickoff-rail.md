@@ -120,6 +120,7 @@ Staffpass Slack 連携には2つの OAuth フローがあり、役割が異な�
 | `employees.issue` | AI社員証の発行 | always_human |
 | `link` | 社員証とGrok Bot連携 | always_human |
 | `policy.patch` | 権限更新 | always_human |
+| `employees.postingIdentity.set` | Slack 投稿名義（`bot` / `user`）の切り替え（`user` は本人トークン + chat:write を確認） | always_human |
 | `parties.upsert` | 相手台帳登録 | always_human |
 | `channels.classify` | チャネル分類 + 1:1 IM受口設定 | always_human |
 | `roles.propose` | 職務案の提案 | always_human |
@@ -142,6 +143,8 @@ Staffpass Slack 連携には2つの OAuth フローがあり、役割が異な�
 |-----------|------|
 | `botTokenPresent` / `authTest` | xoxb がダッシュボードに登録され有効か |
 | `botHasFilesWrite` / `botFilesWriteCode` | Bot Token の `files:write` プローブ結果 |
+| `botScopeCheck` / `missingChannelClassifyScopes` | 会話 Bot Token の実スコープ（auth.test `x-oauth-scopes`）と、channel-classify に必要な `channels:read` `groups:read` `users:read` `im:read` `mpim:read` のうち不足分。読めないときは `null`（「不足なし」とは扱わない） |
+| `botApp` / `botAppIdMatchesStaffpass` | bots.info の app id と Staffpass app（`A0BU8TABSV6`）との一致。取得失敗（`missing_scope` / `ratelimited` 等）は `status: bots_info_failed` + `code`、一致は `null` |
 | `adapterEnabled` | 「つながり → チャンネルに書き込む（会社のBot）」が有効か |
 | `employees[]` | 社員ごとの `postingAs`, `slackIdentityLinked`, `fileUploadReady`, `needsReoauthForFilesWrite` |
 | `pathBReadiness` | Path B（`posting_as: user`）のファイル添付準備の集計 |
@@ -187,8 +190,10 @@ Slack API サイトで Staffpass Slack アプリを設定します。
 4. **Subscribe to bot events** に追加（パス A）:
    - `message.im`（必須: App Home DM受信）
    - `app_mention`（必要に応じて: チャンネルでのメンション）
-5. **Subscribe to events on behalf of users** に追加（パス B のみ）:
-   - `message.im`（人↔人 DM で User Token イベント受信）
+   - `member_joined_channel`（channel-classify 提案: 自社 Bot / 社員のチャンネル参加）
+5. **Subscribe to events on behalf of users** に追加:
+   - `message.im`（パス B: 人↔人 DM で User Token イベント受信）
+   - `member_joined_channel`（channel-classify 提案: 社員本人のチャンネル参加。bot event と**両方**に登録）
 
 **パス B の注意**: 「Subscribe to events on behalf of users」は「Subscribe to bot events」とは別のセクションです。Bot events だけ設定しても User Token イベントは届きません。
 
@@ -207,8 +212,22 @@ Slack API サイトで Staffpass Slack アプリを設定します。
    - `groups:history` - プライベートチャンネル履歴読み取り
    - `app_mentions:read` - @mention イベント受信
    - `files:write` - ファイルアップロード（Path A チャネル / App DM 添付。Path B 本体は User Token 側）
+   - `channels:read`, `groups:read`, `im:read`, `mpim:read` - `conversations.info` / `conversations.members`（Slack Connect 判定・channel-classify 提案・backfill 一覧）
+   - `users:read` - `users.info`（受信者の Slack team 確認 → `autoSlackTeamInternal`、`bots.info`）
 
-**重要**: スコープ変更後は **Reinstall to Workspace** が必要です。bot-install OAuth（`/api/slack/bot-install/start`）も `files:write` を要求するように更新されました。テナントは「Slack ワークスペースにインストール」を再実行して新しい xoxb を取得してください。
+#### 1-3a. channel-classify 用の追加（Staffpass app `A0BU8TABSV6`、2026-10-10）
+
+| 種類 | 追加するもの | 用途 |
+|------|--------------|------|
+| Bot Token Scopes | `channels:read`, `groups:read`, `users:read`, `im:read`, `mpim:read` | `conversations.info` / `conversations.members` / `users.info`（Connect 判定、team 確認、提案、backfill） |
+| Bot events | `member_joined_channel` | 自社 Bot・社員のチャンネル参加 → 分類提案 |
+| User events（on behalf of users） | `member_joined_channel` | 社員本人のチャンネル参加 → 分類提案（bot event と両方に登録） |
+
+- **順序（必須）**: ① Slack app 管理画面（A0BU8TABSV6 → OAuth & Permissions / Event Subscriptions）にスコープとイベントを**先に**追加 → ② Staffpass のコードを deploy（bot-install OAuth が新スコープを要求するようになる）。**逆順だと** bot-install（`/app/slack-bot-install`）が `invalid_scope` で失敗します。
+- **全ワークスペースで再インストールが必要**: 各テナントが「Slack ワークスペースにインストール」（`/app/slack-bot-install`）を再実行して新しい xoxb を取得します。再インストール前のワークスペースでは `conversations.info` / `users.info` が `missing_scope` になり、今までどおり（Connect 判定は台帳どおり、team による自動内部判定はされず fail-closed）に動きます。
+- 参加イベントの購読は `member_joined_channel` のみです（bot event と user event の両方）。
+
+**重要**: スコープ変更後は **Reinstall to Workspace** が必要です。bot-install OAuth（`/api/slack/bot-install/start`）は `SLACK_BOT_SCOPES`（上記すべて、`files:write` と channel-classify 用の読み取りスコープを含む）を要求します。テナントは「Slack ワークスペースにインストール」を再実行して新しい xoxb を取得してください。
 
 **症状（スコープ不足）**:
 - `missing_scope` エラー
@@ -250,7 +269,7 @@ Slack API サイトで Staffpass Slack アプリを設定します。
 
 > **混同防止**: これは AI社員が相手と話す **会話投稿アダプタ**（上記ダッシュボードパス）用です。**承認を受け取る**（Telegram / LINE / Slack 承認インボックス）のトークンとは別物です。会話口と承認通知口は混ぜません。
 
-> アダプタトークンは環境変数 `SLACK_BOT_TOKEN` より優先されます。Bot Token Scopes 変更・再インストール後は、新しい xoxb をここで更新してください。反映後は `setup.slackStatus` で `botTokenPresent` / `authTest` / `adapterEnabled` を確認してください。
+> 会話投稿に使う Bot は組織自身のトークン（このアダプタ、または組織自身の Slack 承認インボックス）だけです。環境変数 `SLACK_BOT_TOKEN` / `SLACK_CONVERSATION_BOT_TOKEN` へのフォールバックは 2026-10-04 に廃止しました（マルチテナント本番では別ワークスペースの Bot になり得るため）。トークンが無い組織の投稿は本番では `slack_token_missing` で失敗します（デモモードのみ stub）。Bot Token Scopes 変更・再インストール後は、新しい xoxb をここで更新してください。反映後は `setup.slackStatus` で `botTokenPresent` / `authTest` / `adapterEnabled` を確認してください。
 
 **症状（Token未登録・期限切れ）**:
 - `auth.test` 失敗
@@ -327,7 +346,7 @@ App DM（Staffpassアプリへの直接DM）への返信には `posting_as: bot`
 
 社員のSlackポスティング設定:
 - ダッシュボード → 社員 → Slack Identity → **投稿者** を `Bot` に設定
-- または `policy.patch` で `postingAs: "bot"` を指定
+- または管理 MCP の `employees.postingIdentity.set` で `postingAs: "bot"` を指定（always_human。`policy.patch` は投稿名義を変更しません）
 
 **症状（posting_as: user のまま）**:
 - Bot DM への返信が見えない
@@ -341,7 +360,7 @@ App DM（Staffpassアプリへの直接DM）への返信には `posting_as: bot`
 1. **User Token Scopes** に `im:history` を追加（OAuth & Permissions）
 2. **Subscribe to events on behalf of users** に `message.im` を追加（Event Subscriptions）
 3. 社員が Staffpass ダッシュボードから **Slack 再認可**（新スコープ付与）
-4. 社員バッジの `posting_as` を `user` に設定
+4. 社員バッジの `posting_as` を `user` に設定（ダッシュボード、または管理 MCP の `employees.postingIdentity.set { employeeId, postingAs: "user" }`。管理 MCP は本人トークンと chat:write がないと `user_token_missing` / `missing_scope_chat_write` で止まります）
 5. `channels.classify` で人↔人DMを `internal` 分類、`employeeId` 指定
 
 #### チャネル / Slack Connect
@@ -387,7 +406,7 @@ App DM（Staffpassアプリへの直接DM）への返信には `posting_as: bot`
 
 | 確認項目 | 期待値 | 症状 |
 |----------|--------|------|
-| Bot Token Scopes | `im:history`, `chat:write`, `im:write`, `files:write` | `missing_scope` |
+| Bot Token Scopes | `im:history`, `chat:write`, `im:write`, `files:write`, `channels:history`, `groups:history`, `app_mentions:read`, `channels:read`, `groups:read`, `users:read`, `im:read`, `mpim:read` | `missing_scope` |
 | User Token Scopes（パス B） | `im:history`, `files:write` | `missing_scope` |
 | アプリ再インストール | スコープ変更後に実施 | スコープが反映されない |
 | Bot Token 登録 | ダッシュボードまたは env | `invalid_auth` |
@@ -844,8 +863,8 @@ Staffpass Slack アプリは **Public Distribution Activated** ですが、App D
 ### パス A: Staffpass アプリ DM
 
 6. **Bot events: `message.im`** - App Home DM 受信に必須。`app_mention` は追加で必要に応じて
-7. **Bot scopes: `im:history`, `chat:write`, `im:write`, `files:write`** - スコープ変更後は再インストール必須。bot-install OAuth も `files:write` を要求するように更新済み
-8. **Bot Token 二重登録** - ダッシュボード「チャンネルに書き込む」(アダプタ) AND 環境変数 `SLACK_BOT_TOKEN`。アダプタトークンが優先
+7. **Bot scopes: `im:history`, `chat:write`, `im:write`, `files:write`（+ channel-classify 用 `channels:read`, `groups:read`, `users:read`, `im:read`, `mpim:read`）** - 管理画面に先に追加してから deploy（逆順は `invalid_scope`）。スコープ変更後は全ワークスペースで再インストール必須
+8. **Bot Token はアダプタに登録** - ダッシュボード「チャンネルに書き込む」(アダプタ) に組織の xoxb を登録する。環境変数 `SLACK_BOT_TOKEN` は会話投稿に使われない（2026-10-04 廃止。未登録だと本番は `slack_token_missing`）
 9. **App Home Messages Tab** - `messages_tab_read_only_enabled: false` でないとユーザーがDMを送れない
 10. **posting_as: bot** - Bot DM への返信には必須。User token では Bot DM を見られない
 

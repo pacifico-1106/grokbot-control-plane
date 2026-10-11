@@ -1,7 +1,8 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import type { ApprovalRequest } from "@/lib/types";
+import { ApprovalAttachmentNotice } from "@/components/approvals/ApprovalAttachmentNotice";
+import type { PublicApproval } from "@/lib/approvals/public";
 
 type ProxyApprovalMandate = "setup" | "support";
 
@@ -28,7 +29,7 @@ function RiskBadge({ risk }: { risk: string }) {
 }
 
 type ApprovalItemProps = {
-  approval: ApprovalRequest;
+  approval: PublicApproval;
   onResolve: (id: string, decision: "approved" | "rejected", mandate: ProxyApprovalMandate, note: string) => Promise<void>;
   isResolving: boolean;
 };
@@ -84,6 +85,13 @@ function ApprovalItem({ approval, onResolve, isResolving }: ApprovalItemProps) {
             <p className="text-sm whitespace-pre-wrap bg-[var(--surface-alt)] p-2 rounded text-[var(--fg)]">
               {approval.summary}
             </p>
+            <ApprovalAttachmentNotice attachment={approval.cardAttachment} />
+            {approval.cardReasons ? (
+              <p className="mt-2 text-xs font-medium break-words">{approval.cardReasons}</p>
+            ) : null}
+            {approval.cardTopics ? (
+              <p className="mt-1 text-xs break-words">{approval.cardTopics}</p>
+            ) : null}
           </div>
 
           {confirmAction ? (
@@ -170,7 +178,7 @@ function ApprovalItem({ approval, onResolve, isResolving }: ApprovalItemProps) {
 }
 
 export function ProxyApprovalPanel({ orgId, orgName }: { orgId: string; orgName: string }) {
-  const [approvals, setApprovals] = useState<ApprovalRequest[]>([]);
+  const [approvals, setApprovals] = useState<PublicApproval[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [resolvingId, setResolvingId] = useState<string | null>(null);

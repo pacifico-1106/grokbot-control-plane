@@ -4,14 +4,23 @@ import {
   provisionOrgForUser,
 } from "@/lib/auth/session";
 import { evaluateSignupGuard, SIGNUP_HONEYPOT_FIELD } from "@/lib/auth/signup-guard";
+import {
+  anySignupLayer2Enabled,
+  createSupabaseSignupAttemptStore,
+  evaluateSignupLayer2,
+  fingerprintSignup,
+  recordSignupAttempt,
+} from "@/lib/signup/attempts";
 import { setOrgReferralCodeIfEmpty } from "@/lib/data/org-context";
 import { DEMO_ORG } from "@/lib/demo-data";
 import { sendTrialStartedEmail, sendWelcomeEmail } from "@/lib/email";
 import { getClientIp, getTurnstileConfig, verifyTurnstileToken } from "@/lib/lp/turnstile";
 import { isDemoMode } from "@/lib/mode";
+import { isIpHashKeyConfigured } from "@/lib/security/ip-hash-key";
 import { TRIAL_DAYS } from "@/lib/stripe";
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 export const runtime = "nodejs";
 
@@ -42,7 +51,7 @@ async function establishSession(email: string, password: string) {
 
 /**
  * Production signup: auth user + org + owner member, then session cookie.
- * DEMO: redirect to /app like /api/trial (no hard crash).
+ * DEMO: redirect to /app (no hard crash).
  *
  * Recovery:
  * - If Auth user was created but org insert failed previously (`email_exists`
@@ -94,7 +103,7 @@ export async function POST(req: Request) {
   }
 
   if (!legalAgreement) {
-    return NextResponse.json(
+    return jsonUtf8(
       {
         error: "legal_agreement_required",
         message: "利用規約とプライバシーポリシーへの同意が必要です",
@@ -104,11 +113,32 @@ export async function POST(req: Request) {
   }
 
   if (!email) {
-    return NextResponse.json({ error: "email_required" }, { status: 400 });
+    return jsonUtf8({ error: "email_required" }, { status: 400 });
   }
   if (email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-    return NextResponse.json({ error: "invalid_email" }, { status: 400 });
+    return jsonUtf8({ error: "invalid_email" }, { status: 400 });
   }
+
+  function rejectToForm(code: string, status: number, message: string) {
+    if (!contentType.includes("application/json")) {
+      // Plain HTML form: back to /signup with a fixed error code (no echo of input).
+      const back = new URL("/signup", req.url);
+      back.searchParams.set("error", code);
+      return NextResponse.redirect(back, 303);
+    }
+    return jsonUtf8({ error: code, message }, { status });
+  }
+
+  // IP_HASH_KEY required (no dev fallback): the signup fingerprint is keyed with it.
+  // Refuse before the guard, attempt log, Auth user, org or any email.
+  if (!isIpHashKeyConfigured()) {
+    console.error("[signup] IP_HASH_KEY not configured; refusing");
+    return rejectToForm("signup_unavailable", 503, "現在、新規登録を一時停止しています。時間をおいてお試しください。");
+  }
+
+  // Layer 2 (flags default OFF): attempt log / rate limit / domain checks.
+  const attemptStore = anySignupLayer2Enabled() ? createSupabaseSignupAttemptStore() : null;
+  const fingerprint = fingerprintSignup(req, email);
 
   // Bot protection runs before any Auth user / org / email side effect.
   // Not behind a flag (P0 hotfix spam-sample-20261003); Turnstile fail-closed outside DEMO.
@@ -127,19 +157,25 @@ export async function POST(req: Request) {
     }
   );
   if (!guard.ok) {
-    if (!contentType.includes("application/json")) {
-      // Plain HTML form: back to /signup with a fixed error code (no echo of input).
-      const back = new URL("/signup", req.url);
-      back.searchParams.set("error", guard.error);
-      return NextResponse.redirect(back, 303);
-    }
-    return NextResponse.json(
-      { error: guard.error, message: guard.message },
-      { status: guard.status }
-    );
+    await recordSignupAttempt(attemptStore, fingerprint, "rejected_guard", {
+      reason: guard.error,
+      honeypot: guard.error === "signup_rejected",
+      turnstileOk: guard.error === "turnstile_failed" ? false : null,
+    });
+    return rejectToForm(guard.error, guard.status, guard.message);
   }
   orgName = guard.orgName;
   referralCode = guard.referralCode ?? "";
+
+  const layer2 = await evaluateSignupLayer2(attemptStore, fingerprint);
+  if (!layer2.ok) {
+    await recordSignupAttempt(attemptStore, fingerprint, layer2.outcome, {
+      reason: layer2.reason,
+      turnstileOk: isDemoMode() ? null : true,
+    });
+    const code = layer2.outcome === "rejected_domain" ? layer2.reason : layer2.outcome;
+    return rejectToForm(code, layer2.status, layer2.message);
+  }
 
   if (isDemoMode()) {
     if (referralCode) {
@@ -155,7 +191,7 @@ export async function POST(req: Request) {
   }
 
   if (!password || password.length < 8) {
-    return NextResponse.json(
+    return jsonUtf8(
       { error: "password_min_8", message: "パスワードは8文字以上にしてください" },
       { status: 400 }
     );
@@ -169,7 +205,7 @@ export async function POST(req: Request) {
     await sendTrialStartedEmail(email, TRIAL_DAYS);
 
     if (contentType.includes("application/json")) {
-      return NextResponse.json({ ok: true, orgId, demo: false });
+      return jsonUtf8({ ok: true, orgId, demo: false });
     }
     const url = new URL("/app", req.url);
     url.searchParams.set("trial", "1");
@@ -194,7 +230,7 @@ export async function POST(req: Request) {
       await sendWelcomeEmail(email, orgName || "新しい組織");
       await sendTrialStartedEmail(email, TRIAL_DAYS);
       if (contentType.includes("application/json")) {
-        return NextResponse.json({
+        return jsonUtf8({
           ok: true,
           orgId: provisioned.orgId,
           demo: false,
@@ -216,7 +252,7 @@ export async function POST(req: Request) {
       );
       onboarding.searchParams.set("detail", pm.slice(0, 160));
       if (contentType.includes("application/json")) {
-        return NextResponse.json(
+        return jsonUtf8(
           { error: "org_provision_failed", message: pm, repair: "/onboarding" },
           { status: 503 }
         );
@@ -226,7 +262,7 @@ export async function POST(req: Request) {
   }
 
   try {
-    const { orgId } = await createOrgWithOwner({
+    const { orgId, userId } = await createOrgWithOwner({
       email,
       password,
       orgName: orgName || "新しい組織",
@@ -234,9 +270,18 @@ export async function POST(req: Request) {
       displayName: displayName || undefined,
       referralCode: referralCode || null,
     });
+    await recordSignupAttempt(attemptStore, fingerprint, "created", {
+      turnstileOk: isDemoMode() ? null : true,
+      orgId,
+      userId,
+    });
     return await finishOk(orgId);
   } catch (e) {
     const message = e instanceof Error ? e.message : "signup_failed";
+    await recordSignupAttempt(attemptStore, fingerprint, "error", {
+      reason: message.split(":")[0].slice(0, 40),
+      turnstileOk: isDemoMode() ? null : true,
+    });
 
     // Auth created, org failed mid-signup — session + provision or soft onboarding.
     if (message.startsWith("auth_ok_org_failed:")) {
@@ -244,7 +289,7 @@ export async function POST(req: Request) {
       if (recovered) return recovered;
       const detail = message.slice("auth_ok_org_failed:".length);
       if (contentType.includes("application/json")) {
-        return NextResponse.json(
+        return jsonUtf8(
           {
             error: "auth_ok_org_failed",
             message: detail,
@@ -275,7 +320,7 @@ export async function POST(req: Request) {
     ) {
       const recovered = await recoverOrphanedAuthUser();
       if (recovered) return recovered;
-      return NextResponse.json(
+      return jsonUtf8(
         {
           error: "email_exists",
           message:
@@ -285,6 +330,6 @@ export async function POST(req: Request) {
       );
     }
 
-    return NextResponse.json({ error: message }, { status: 500 });
+    return jsonUtf8({ error: message }, { status: 500 });
   }
 }

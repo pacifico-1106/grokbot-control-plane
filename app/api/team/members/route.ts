@@ -1,21 +1,14 @@
 import { revalidatePath } from "next/cache";
-import { NextResponse } from "next/server";
 import { requireOrgSession } from "@/lib/auth/require-org";
 import { assertBillingAllows } from "@/lib/billing/entitlements";
+import { listMembers, runtimeModeLabel } from "@/lib/data";
 import {
-  getMemberById,
-  isUuid,
-  listMembers,
-  runtimeModeLabel,
-  upsertMember,
-} from "@/lib/data";
-import { requireCapability } from "@/lib/team/demo-actor";
-import type {
-  HumanCapability,
-  HumanJobRole,
-  OrgMember,
-  OrgMemberRole,
-} from "@/lib/types";
+  applyMemberChange,
+  resolveMemberChangeActor,
+  teamEditability,
+} from "@/lib/team/apply-member-change";
+import type { HumanJobRole } from "@/lib/types";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 export const runtime = "nodejs";
 
@@ -34,20 +27,26 @@ function memberErrorMessage(raw: string): string {
   }
 }
 
-export async function GET() {
+export async function GET(req: Request) {
   const gate = await requireOrgSession();
   if (!gate.ok) return gate.response;
   try {
     const members = await listMembers(gate.orgId);
-    return NextResponse.json({
+    // Checkbox state only; POST re-evaluates every change server-side.
+    const viewer = await resolveMemberChangeActor(req).catch(() => null);
+    const actor = viewer?.ok ? viewer.actor : null;
+    const editability = teamEditability(actor, members, viewer?.ok ? viewer.authEmail : null);
+    return jsonUtf8({
       ok: true,
-      members,
+      members: members.map((m) => ({ ...m, editable: editability.byMemberId[m.id] })),
+      viewer: actor ? { id: actor.id, role: actor.role } : null,
+      inviteEditable: editability.invite,
       demo: runtimeModeLabel() === "demo",
       mode: runtimeModeLabel(),
     });
   } catch (e) {
     const raw = e instanceof Error ? e.message : "member_list_failed";
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: raw, message: memberErrorMessage(raw) },
       { status: 500 }
     );
@@ -62,67 +61,81 @@ export async function POST(req: Request) {
     id?: string | null;
     email?: string;
     displayName?: string;
-    role?: OrgMemberRole;
+    role?: unknown;
     jobRole?: HumanJobRole;
     jobLabel?: string | null;
-    capabilities?: HumanCapability[];
+    capabilities?: unknown;
     actorMemberId?: string | null;
   };
 
-  const cap = await requireCapability(req, "manage_team", body.actorMemberId);
-  if (!cap.ok) return cap.response;
+  // Production: session member only (body/header actor ids ignored). DEMO: demo actor.
+  const who = await resolveMemberChangeActor(req, body.actorMemberId);
+  if (!who.ok) {
+    return jsonUtf8(
+      { ok: false, error: who.error, code: who.code, message: who.messageJa },
+      { status: who.httpStatus }
+    );
+  }
 
   const billingGate = await assertBillingAllows(gate.orgId, "team");
   if (!billingGate.ok) return billingGate.response;
 
-  const email = (body.email || "").trim().toLowerCase();
-  const displayName = (body.displayName || "").trim();
+  const email = (typeof body.email === "string" ? body.email : "").trim().toLowerCase();
+  const displayName = (typeof body.displayName === "string" ? body.displayName : "").trim();
   if (!email || !displayName) {
-    return NextResponse.json(
+    return jsonUtf8(
       { error: "name_and_email_required", message: "名前とメールは必須です" },
       { status: 400 }
     );
   }
 
-  const capabilities = [...new Set(body.capabilities || [])];
+  const capabilities = Array.isArray(body.capabilities) ? [...new Set(body.capabilities)] : [];
   if (!capabilities.length) {
-    return NextResponse.json(
+    return jsonUtf8(
       { error: "capabilities_required", message: "権限を1つ以上選んでください" },
       { status: 400 }
     );
   }
 
   try {
-    const bodyId = typeof body.id === "string" ? body.id.trim() : "";
-    const existing = bodyId ? await getMemberById(bodyId, gate.orgId) : null;
-    const member: OrgMember = {
-      id:
-        existing?.id ||
-        (isUuid(bodyId) ? bodyId : crypto.randomUUID()),
+    const result = await applyMemberChange({
       orgId: gate.orgId,
+      actor: who.actor,
+      actorAuthEmail: who.authEmail,
+      targetId: typeof body.id === "string" ? body.id : null,
       email,
       displayName,
-      role: body.role || existing?.role || "member",
-      jobRole: body.jobRole || "custom",
+      role: body.role,
+      jobRole: body.jobRole,
       jobLabel: body.jobLabel ?? null,
       capabilities,
-      status: existing?.status || "invited",
-    };
-
-    const saved = await upsertMember(member, gate.orgId);
+      source: "team_api",
+    });
+    if (!result.ok) {
+      return jsonUtf8(
+        {
+          ok: false,
+          error: result.code,
+          code: result.code,
+          message: result.messageJa,
+          ...(result.capabilities ? { capabilities: result.capabilities } : {}),
+        },
+        { status: result.httpStatus }
+      );
+    }
     revalidatePath("/app/team");
-    return NextResponse.json({
+    return jsonUtf8({
       ok: true,
-      member: saved,
+      member: result.member,
       demo: runtimeModeLabel() === "demo",
       mode: runtimeModeLabel(),
-      actorId: cap.actor.id,
+      actorId: who.actor.id,
     });
   } catch (e) {
     const raw = e instanceof Error ? e.message : "member_upsert_failed";
     const status =
       raw === "org_id_required" || raw === "name_and_email_required" ? 400 : 500;
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: raw, message: memberErrorMessage(raw) },
       { status }
     );

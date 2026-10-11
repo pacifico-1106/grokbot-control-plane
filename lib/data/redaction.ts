@@ -3,6 +3,10 @@ const sensitiveKeys = new Set([
   "secrethash", "credentialfingerprint", "onetimesecret", "password",
   "bottoken", "webhooksecret", "channelaccesstoken", "channelsecret",
   "credentialsciphertext", "bottokenciphertext", "secretsciphertext",
+  "filerefciphertext",
+  // Approved attachment reference: host and hash are not for display either
+  // (the card shows filename + size only). Stored rows keep them for checks.
+  "refsha256", "refhost",
 ]);
 export function redactMetadata(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(redactMetadata);

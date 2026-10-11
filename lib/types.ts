@@ -9,7 +9,9 @@ export type ApprovalStatus =
   | "approved"
   | "rejected"
   | "expired"
-  | "revision_requested";
+  | "revision_requested"
+  /** Closed without sending: the conversation moved on (COMM_REPLY_DEDUP_ENABLED). */
+  | "superseded";
 
 export type ApprovalPolicy = "auto" | "always_human" | "risk_based";
 
@@ -194,6 +196,12 @@ export type EmailLayer = "human_gmail" | "agentmail" | "staffpass_resend";
 export type ConversationSurface = "slack" | "line" | "mail" | "phone" | "web";
 
 /**
+ * Surfaces the channel ledger (org_channels) can classify. Telegram groups can
+ * be classified (PR-B join proposals) but are not a conversation surface.
+ */
+export type ChannelLedgerSurface = ConversationSurface | "telegram";
+
+/**
  * Destination of an outbound conversation. Ingress audience is independent.
  * Unknown / missing destination → treat as external (fail-closed).
  */
@@ -291,7 +299,7 @@ export type ChannelClassification = "internal" | "shared_external" | "unknown";
 export interface OrgChannel {
   id: string;
   orgId: string;
-  surface: ConversationSurface;
+  surface: ChannelLedgerSurface;
   externalId: string;
   classification: ChannelClassification;
   mixed: boolean;
@@ -443,6 +451,13 @@ export interface GatewayInvokeRequest {
     /** Optional initial comment posted with the file */
     initialComment?: string;
   };
+  /**
+   * Duplicate post guard v2 (DUPLICATE_GUARD_V2_ENABLED): after a
+   * post_outcome_unknown / duplicate_post_uncertain answer, the AI checked the
+   * conversation and the earlier post is NOT there → resend once with the
+   * uncertainRef it was given. Releases only that employee's own uncertain row.
+   */
+  duplicateGuard?: { confirmedNotDelivered?: string };
   /** F7: set internally to prevent audience ledger 補完 loops (stripped before persistence). */
   _audienceLedgerSupplemented?: boolean;
 }
@@ -451,14 +466,62 @@ export type AuditAction =
   | "credential.issued"
   | "credential.revoked"
   | "credential.rotated"
+  /** CREDENTIAL_EXPIRY_NOTICE_ENABLED: pre-expiry notice sent / failed. Metadata: ids, thresholds, counts only. */
+  | "credential.expiry_notice"
+  /** MCP OAuth (flag MCP_OAUTH_ENABLED). Metadata: client host, grant id, hash prefixes only. */
+  | "oauth.consent_granted"
+  | "oauth.consent_denied"
+  | "oauth.grant_revoked"
+  | "oauth.token_issued"
+  | "oauth.code_reuse_detected"
+  | "oauth.refresh_reuse_detected"
+  | "oauth.refresh_replay_in_grace"
+  | "oauth.dcr_global_cap_reached"
+  | "lp.setup_fee.email_hash_key_missing"
+  | "lp.setup_fee.notice_record_failed"
+  | "employee.hold.state_unavailable"
+  | "employee.hold.not_installed"
+  | "employee.hold.wake_suppressed"
   | "tool.invoke"
+  | "comm.delete.succeeded"
+  | "comm.delete.already_deleted"
+  | "comm.delete.refused"
+  | "comm.delete.failed"
+  | "comm.delete.approval_requested"
   | "approval.requested"
   | "approval.resolved"
   | "approval.revision_requested"
+  | "approval.superseded"
+  | "approval.expired"
+  | "comm_reply.duplicate_suppressed"
+  | "comm_reply.dedup_unavailable"
+  // Duplicate post guard v2 (hashes only)
+  | "comm_reply.cross_employee_duplicate"
+  | "comm_reply.post_outcome_unknown"
+  | "thread_guard.busy"
+  | "thread_guard.moved_on"
+  | "thread_guard.unavailable"
+  | "thread_guard.read_point_unknown"
+  | "comm_reply.uncertain_released"
   | "approval.telegram_error"
+  | "approval.snapshot_missing_attachment"
+  | "approval.attachment_upload_in_progress"
+  | "approval.attachment_upload_uncertain"
+  | "approval.attachment_not_sent"
+  | "approval.attachment_reconciled"
+  | "approval.attachment_request_ignored"
+  | "approval.attachment_upload_capped"
+  | "setup.tool_succeeded"
   | "notification.channel_updated"
   | "notification.test_sent"
   | "notification.delivery_failed"
+  | "channel_classify.proposed"
+  | "channel_classify.proposal_failed"
+  /** #292 21:50: wake-skip notice + card suppressed for 30 days after a rejected card (counts only). */
+  | "channel_classify.wake_skip_suppressed"
+  | "channel_classify.join_ignored"
+  | "channel_stuck.notice"
+  | "channel_stuck.notice_suppressed"
   | "conversation.adapter_updated"
   | "conversation.adapter_installed"
   | "slack.posted"
@@ -473,10 +536,17 @@ export type AuditAction =
   | "slack.im_wake_skipped"
   | "slack.user_token_channel_wake"
   | "slack.user_token_channel_wake_skipped"
+  /** Path C: one-time re-wake after the channel classification was approved (PATHC_REWAKE_ON_CLASSIFY_ENABLED). */
+  | "slack.user_token_channel_rewake"
+  | "slack.user_token_channel_rewake_skipped"
   | "employee.sod_forced"
   | "employee.sod_override"
+  | "employee.project_access_refused"
+  | "information_asset.project_refused"
   | "action_limit.reached"
   | "action_limit.denied"
+  | "gateway.conversation_org_mismatch"
+  | "gateway.session_org_mismatch"
   | "billing.updated"
   | "email.sent"
   | "gateway.link_changed"
@@ -484,6 +554,8 @@ export type AuditAction =
   | "employee.updated"
   | "employee.terminated"
   | "member.invited"
+  | "member.updated"
+  | "member.change_denied"
   | "commerce.projection_received"
   | "authority.event_delivery"
   | "admin.hire"
@@ -504,8 +576,22 @@ export type AuditAction =
   | "admin.portal"
   | "stuck_watch.w2_retry"
   | "stuck_watch.w1_notify"
+  | "mcp.client_seen"
+  | "mcp_events.subscribed"
+  | "mcp_events.unsubscribed"
+  | "mcp_events.delivered"
+  | "mcp_events.delivery_abandoned"
+  | "mcp_events.delivery_deferred"
+  | "mcp_events.subscription_revoked"
+  | "mcp_events.triggered_action"
+  | "employee.webhook_secret_minted"
+  | "employee.webhook_payload_mode_set"
+  | "approval.callback_config_unavailable"
+  | "mcp_handoff.not_connected_notify"
+  | "agent.approval_wake"
   | "stuck_watch.audience_ledger_retry"
   | "stuck_watch.w4_notify"
+  | "stuck_watch.attachment_uncertain_notify"
   | "stuck_watch.retry"
   | "stuck_watch.resolve"
   | "calendar.freebusy_read"
@@ -538,7 +624,9 @@ export type AuditAction =
   | "config.change_refused"
   | "config.change_applied"
   | "config.change_apply_failed"
-  | "config.change_rejected";
+  | "config.change_rejected"
+  | "secret_detection.blocked"
+  | "secret_detection.suspected";
 
 export interface Org {
   id: string;
@@ -643,6 +731,11 @@ export interface Employee {
    */
   postingAs?: PostingAs;
   credentialId: string | null;
+  /**
+   * expires_at of the current (newest non-revoked) credential; null = no expiry.
+   * Display only (AI社員 list / detail); auth checks expires_at itself.
+   */
+  credentialExpiresAt?: string | null;
   createdAt: string;
 }
 
@@ -700,6 +793,17 @@ export interface ApprovalRequest {
   createdAt: string;
   resolvedAt: string | null;
   resolvedBy: string | null;
+  /**
+   * PR-D (APPROVER_AUTHORITY_ENABLED): required approver kind recorded at
+   * filing. null / absent = not an approver-authority target (or filed while OFF).
+   */
+  requiredApproverKind?: "owner_or_designated_admin" | "owner" | null;
+  /** PR-D: verified approver (org_members.id) stored at approval time. */
+  approverMemberId?: string | null;
+  /** PR-D: what the approver counted as when verified. */
+  approverRole?: "owner" | "designated_admin" | null;
+  /** PR-D: classification reasons, designated-admin endorsements, verification record. */
+  approverAuthority?: Record<string, unknown> | null;
 }
 
 export interface AuditEvent {
@@ -823,7 +927,10 @@ export type ExecutableDenyCode =
   | "needs_reauth"
   | "degraded"
   | "health_failed"
-  | "not_found";
+  | "not_found"
+  | "employee_on_hold"
+  | "org_on_hold"
+  | "hold_state_unavailable";
 
 export interface ExecutableDeny {
   ok: false;
@@ -1362,7 +1469,9 @@ export interface ApprovalStuckWatchMeta {
 export type StuckWatchKind =
   | "w1_mention_unanswered"
   | "w2_approved_unfulfilled"
-  | "d1_decision_stalled";
+  | "d1_decision_stalled"
+  /** Approved attachment upload outcome could not be checked automatically (admin agent only). */
+  | "a1_attachment_uncertain";
 
 /** Aggregated stuck watch item for Admin MCP list/inspect. */
 export interface StuckWatchItem {

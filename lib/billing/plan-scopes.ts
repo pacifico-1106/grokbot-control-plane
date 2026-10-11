@@ -86,6 +86,7 @@ export const PLAN_GATEWAY_SCOPES: Record<PlanKey, readonly GatewayToolId[]> = {
     "files.read",
     "slack.post",
     "comm.reply",
+    "comm.delete",
     "knowledge.search",
     "approvals.request",
   ],
@@ -99,6 +100,7 @@ export const PLAN_GATEWAY_SCOPES: Record<PlanKey, readonly GatewayToolId[]> = {
     "files.read",
     "slack.post",
     "comm.reply",
+    "comm.delete",
     "knowledge.search",
     "approvals.request",
     // Proper additions (always_human where marked in tools.ts)
@@ -117,6 +119,7 @@ export const PLAN_GATEWAY_SCOPES: Record<PlanKey, readonly GatewayToolId[]> = {
     "files.read",
     "slack.post",
     "comm.reply",
+    "comm.delete",
     "knowledge.search",
     "approvals.request",
     "calendar.confirm",
@@ -150,6 +153,11 @@ export const PLAN_ADMIN_SCOPES: Record<PlanKey, readonly AdminMcpToolName[]> = {
   intern: [
     // Basic setup
     "employees.issue",
+    "employees.allowedAccounts.add",
+    "employees.allowedAccounts.remove",
+    "employees.allowedAccounts.list",
+    "employees.postingIdentity.set",
+    "employees.credential.reissue",
     "link",
     "roles.propose",
     // Approval channels (Intern includes LINE from launch)
@@ -160,6 +168,14 @@ export const PLAN_ADMIN_SCOPES: Record<PlanKey, readonly AdminMcpToolName[]> = {
     "setup.lineApproval.setEmployeeInbox",
     "setup.lineApproval.demoteTelegram",
     "setup.approverBindingStatus",
+    "setup.slackDmApprovalStatus",
+    "dmAutoroute.list",
+    "dmAutoroute.run",
+    "channels.list",
+    "parties.list",
+    "setup.approvalDelivery.autoResolve",
+    "setup.slackApprover.set",
+    "setup.slackAuthorizeLink.issue",
     "approvalWorkflow.get",
     "approvalWorkflow.bindVoter",
     "approvalWorkflow.unbindVoter",
@@ -185,10 +201,21 @@ export const PLAN_ADMIN_SCOPES: Record<PlanKey, readonly AdminMcpToolName[]> = {
     "orgs.patch",
     "orgs.issueAdminCredential",
     "approvals.proxyResolve",
+    // Directory ledger removal (same plans as channels.classify; always_human)
+    "channels.remove",
+    // PR-D: 指定管理者 (owner approval; APPROVER_AUTHORITY_ENABLED)
+    "approvers.designatedAdmins.set",
+    // オーナー追加 (existing owner approval; OWNER_PROMOTION_ENABLED + APPROVER_AUTHORITY_ENABLED)
+    "members.promoteOwner",
   ],
   proper: [
     // All intern scopes
     "employees.issue",
+    "employees.allowedAccounts.add",
+    "employees.allowedAccounts.remove",
+    "employees.allowedAccounts.list",
+    "employees.postingIdentity.set",
+    "employees.credential.reissue",
     "link",
     "roles.propose",
     "setup.slackStatus",
@@ -198,6 +225,14 @@ export const PLAN_ADMIN_SCOPES: Record<PlanKey, readonly AdminMcpToolName[]> = {
     "setup.lineApproval.setEmployeeInbox",
     "setup.lineApproval.demoteTelegram",
     "setup.approverBindingStatus",
+    "setup.slackDmApprovalStatus",
+    "dmAutoroute.list",
+    "dmAutoroute.run",
+    "channels.list",
+    "parties.list",
+    "setup.approvalDelivery.autoResolve",
+    "setup.slackApprover.set",
+    "setup.slackAuthorizeLink.issue",
     "approvalWorkflow.get",
     "approvalWorkflow.bindVoter",
     "approvalWorkflow.unbindVoter",
@@ -230,10 +265,22 @@ export const PLAN_ADMIN_SCOPES: Record<PlanKey, readonly AdminMcpToolName[]> = {
     "mailPolicy.patch",
     "internalAudienceRule.patch",
     "approvalRoutes.patch",
+    "channels.remove",
+    // Same plans as parties.upsert (always_human)
+    "parties.remove",
+    // PR-D: 指定管理者 (owner approval; APPROVER_AUTHORITY_ENABLED)
+    "approvers.designatedAdmins.set",
+    // オーナー追加 (existing owner approval; OWNER_PROMOTION_ENABLED + APPROVER_AUTHORITY_ENABLED)
+    "members.promoteOwner",
   ],
   executive: [
     // All proper scopes
     "employees.issue",
+    "employees.allowedAccounts.add",
+    "employees.allowedAccounts.remove",
+    "employees.allowedAccounts.list",
+    "employees.postingIdentity.set",
+    "employees.credential.reissue",
     "link",
     "roles.propose",
     "setup.slackStatus",
@@ -243,6 +290,14 @@ export const PLAN_ADMIN_SCOPES: Record<PlanKey, readonly AdminMcpToolName[]> = {
     "setup.lineApproval.setEmployeeInbox",
     "setup.lineApproval.demoteTelegram",
     "setup.approverBindingStatus",
+    "setup.slackDmApprovalStatus",
+    "dmAutoroute.list",
+    "dmAutoroute.run",
+    "channels.list",
+    "parties.list",
+    "setup.approvalDelivery.autoResolve",
+    "setup.slackApprover.set",
+    "setup.slackAuthorizeLink.issue",
     "approvalWorkflow.get",
     "approvalWorkflow.bindVoter",
     "approvalWorkflow.unbindVoter",
@@ -282,6 +337,12 @@ export const PLAN_ADMIN_SCOPES: Record<PlanKey, readonly AdminMcpToolName[]> = {
     "stuckWatch.classify",
     "employeeIdentity.upsert",
     "employeeIdentity.bindMailbox",
+    "channels.remove",
+    "parties.remove",
+    // PR-D: 指定管理者 (owner approval; APPROVER_AUTHORITY_ENABLED)
+    "approvers.designatedAdmins.set",
+    // オーナー追加 (existing owner approval; OWNER_PROMOTION_ENABLED + APPROVER_AUTHORITY_ENABLED)
+    "members.promoteOwner",
   ],
 };
 
@@ -291,6 +352,11 @@ export const PLAN_ADMIN_SCOPES: Record<PlanKey, readonly AdminMcpToolName[]> = {
  */
 export const READ_ONLY_ADMIN_TOOLS: readonly AdminMcpToolName[] = [
   "setup.slackStatus",
+  "employees.allowedAccounts.list",
+  "setup.slackDmApprovalStatus",
+  "dmAutoroute.list",
+  "channels.list",
+  "parties.list",
   "setup.lineApprovalStatus",
   "setup.approverBindingStatus",
   "setup.connectInternalBase",
@@ -308,6 +374,7 @@ export const READ_ONLY_ADMIN_TOOLS: readonly AdminMcpToolName[] = [
   "approvalRoutes.get",
   "orgs.status",
   "employeeIdentity.status",
+  "approvers.designatedAdmins.get",
 ];
 
 /**

@@ -58,7 +58,8 @@ const SIGNING_SECRET = process.env.SETUP_LINK_SIGNING_SECRET || "staffpass-setup
 const NEXTSTEP_JA: Record<SetupLinkKind, string> = {
   org_kickoff: "リンクを開いて Staffpass でテナントの初期設定を完了してください。",
   employee_connector_oauth: "リンクを開いてコネクタ OAuth 認証を完了してください。ダッシュボードで接続状況を確認できます。",
-  slack_authorize: "リンクを開いて Slack アカウントを Staffpass に連携してください。本人投稿（postingAs=user）に必要です。",
+  slack_authorize:
+    "Slack 本人連携は単回の再認可リンク（/api/slack/oauth/link）で行います。Admin MCP の setup.slackAuthorizeLink.issue（employeeId 指定・人の承認 1 回）で発行すると、承認アプリの DM でリンクが届きます。社員本人の Slack で開いて「許可する」を押してください。本人投稿（postingAs=user）に必要です。",
   workspace_bot_install: "リンクを開いて Slack ワークスペースに Staffpass Bot をインストールしてください。",
   approval_inbox_setup: "リンクを開いて承認インボックスの設定を完了してください。",
   line_oauth_setup: "リンクを開いて LINE Messaging API チャネルを設定してください。Webhook URL の登録が必要です。",
@@ -68,7 +69,10 @@ const NEXTSTEP_JA: Record<SetupLinkKind, string> = {
 const KIND_PATHS: Record<SetupLinkKind, string> = {
   org_kickoff: "/app/getting-started",
   employee_connector_oauth: "/app/employees/[employeeId]/connector",
-  slack_authorize: "/api/slack/oauth/start",
+  // Admin-issued single-use re-authorize link (lib/slack/authorize-link.ts
+  // SLACK_AUTHORIZE_LINK_PATH). Never the session start route, which requires
+  // hire_issue_credentials (#284): a recipient without it would be refused.
+  slack_authorize: "/api/slack/oauth/link",
   workspace_bot_install: "/api/slack/bot-install/start",
   approval_inbox_setup: "/app/settings/notifications",
   line_oauth_setup: "/app/settings/notifications/line",

@@ -1,6 +1,7 @@
 import { AppShell } from "@/components/AppShell";
 import { ConversationAdaptersClient } from "@/components/ConversationAdaptersClient";
 import { NotificationChannelsClient } from "@/components/NotificationChannelsClient";
+import { isSlackApprovalDmAutoOpenEnabled } from "@/lib/slack/approval-dm-open";
 import { PartyDirectoryClient } from "@/components/PartyDirectoryClient";
 import { ApprovalKindRoutesClient } from "@/components/settings/ApprovalKindRoutesClient";
 import { IngressHandoffPolicyClient } from "@/components/settings/IngressHandoffPolicyClient";
@@ -75,7 +76,10 @@ export default async function SettingsPage() {
               「人が止める」と「社員が書き込む」は、同じ Bot の token を入れて構いません。保存する欄が違うだけです。
             </p>
           </section>
-          <NotificationChannelsClient initialChannels={channels} />
+          <NotificationChannelsClient
+            initialChannels={channels}
+            slackDmAutoOpen={isSlackApprovalDmAutoOpenEnabled()}
+          />
           <ConversationAdaptersClient initialAdapters={adapters} />
           <p className="mt-4 text-xs faint leading-relaxed">
             認証情報は暗号化して保存し、画面には再表示しません。変更とテスト送信は記録に残します。

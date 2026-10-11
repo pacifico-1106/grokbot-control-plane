@@ -1,9 +1,13 @@
-import { NextResponse } from "next/server";
+import { rejectUnauthorizedCron } from "@/lib/security/cron-secret";
+import { runApprovalAttachmentReconcile } from "@/lib/approvals/attachment-reconcile";
 import { listApprovalsForTelegramDigest } from "@/lib/data/approvals";
+import { isApprovalAttachmentReconcileEnabled, isCommReplyDedupEnabled } from "@/lib/feature-flags";
 import {
   isApprovedUnfulfilled,
   processW2RetriesForApprovals,
 } from "@/lib/stuck-watch/w2-unfulfilled";
+import { expireStaleConversationApprovals } from "@/lib/comm-reply-dedup/approvals";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -13,31 +17,34 @@ export const dynamic = "force-dynamic";
  * Integrates with existing fulfill paths (#53 family); does not duplicate them.
  */
 export async function GET(req: Request) {
-  const secret = process.env.CRON_SECRET?.trim() || "";
-  if (!secret) {
-    return NextResponse.json(
-      { ok: false, error: "cron_not_configured" },
-      { status: 503 }
-    );
-  }
-  if (req.headers.get("authorization") !== `Bearer ${secret}`) {
-    return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
-  }
+  const rejected = rejectUnauthorizedCron(req);
+  if (rejected) return rejected;
 
   try {
+    // COMM_REPLY_DEDUP_ENABLED: pending conversation approvals older than the
+    // TTL (default 24 h) are closed as expired, never sent late. Best effort.
+    const expiredConversationApprovals = isCommReplyDedupEnabled()
+      ? (await expireStaleConversationApprovals({ phase: "sweep" }).catch(() => [])).length
+      : undefined;
     const approvals = await listApprovalsForTelegramDigest();
     const candidates = approvals.filter(isApprovedUnfulfilled);
     const results = await processW2RetriesForApprovals(candidates);
+    // #253 follow-up: approved-attachment reconcile (OFF by default → not run, response unchanged).
+    const attachmentReconcile = isApprovalAttachmentReconcileEnabled()
+      ? await runApprovalAttachmentReconcile(approvals)
+      : null;
 
-    return NextResponse.json({
+    return jsonUtf8({
       ok: true,
       scanned: approvals.length,
       candidates: candidates.length,
       retried: results.length,
       results,
+      ...(attachmentReconcile ? { attachmentReconcile } : {}),
+      ...(expiredConversationApprovals !== undefined ? { expiredConversationApprovals } : {}),
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "unknown_error";
-    return NextResponse.json({ ok: false, error: message }, { status: 500 });
+    return jsonUtf8({ ok: false, error: message }, { status: 500 });
   }
 }

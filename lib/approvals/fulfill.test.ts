@@ -796,7 +796,9 @@ describe("mail.send artifact fail-closed + stub fulfillment", () => {
       DEMO_ORG.id
     );
     expect(approved?.status).toBe("approved");
-    const fulfillment = await fulfillApprovedInvoke(approved!);
+    // Fulfill re-checks the CURRENT mail policy (2026-10-03 follow-up), so the
+    // policy that allowed the approval must still be in effect at fulfill.
+    const fulfillment = await withNeedsApprovalMailPolicy(() => fulfillApprovedInvoke(approved!));
     expect(fulfillment?.ok).toBe(true);
     expect(fulfillment?.delivery).toBe("stub");
     const stored = await getApprovalById(approvalId, DEMO_ORG.id);

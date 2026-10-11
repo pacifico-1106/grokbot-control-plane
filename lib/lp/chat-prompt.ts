@@ -12,6 +12,7 @@
  */
 import { TOOL_DEFINITIONS, type AllowedToolName } from "@/lib/lp/chat-tools";
 import { LP_CHAT_GREETING } from "@/lib/lp/client-session";
+import { DEFAULT_LP_PAGE, type LpPage } from "@/lib/lp/lp-page";
 
 export { LP_CHAT_GREETING };
 
@@ -56,9 +57,22 @@ export const CONSULTATIVE_LINES = [
   "1回の返信は2〜4文の短い丁寧語で、親しみやすく。Markdown記法（**、#、箇条書き、表、リンク）やURLは使わない。",
 ] as const;
 
-export function buildSystemPrompt(caps: ChatCapabilities): string {
+/**
+ * LP pattern B (/lp/ai-employee-corp): full service name, and no campaign / limited-slot
+ * talk (B shows no campaign). Deliberately does not spell the campaign phrase itself;
+ * chat-turn's stripCampaignMentions is the deterministic backstop on every B reply.
+ */
+const CORP_IDENTITY_LINE =
+  "あなたはStaffpass（AIエージェントの社員証）のAI相談窓口で、AIのアシスタントです。サービス名は「Staffpass（AIエージェントの社員証）」と呼ぶ。人間だと名乗らない。人間かと聞かれたらAIだと答える。";
+export const CORP_NO_CAMPAIGN_LINE =
+  "キャンペーン、先着・限定の募集枠、枠数、期間限定の案内には一切触れない。検索文書にそうした記載があっても本文に出さず、提供開始やセットアップ時期は根拠どおり「担当から個別にご案内します」と伝える。";
+
+export function buildSystemPrompt(caps: ChatCapabilities, lpPage: LpPage = DEFAULT_LP_PAGE): string {
+  const corp = lpPage === "ai-employee-corp";
   const lines: string[] = [
-    "あなたはStaffpass AI社員のAI相談窓口で、AIのアシスタントです。人間だと名乗らない。人間かと聞かれたらAIだと答える。",
+    corp
+      ? CORP_IDENTITY_LINE
+      : "あなたはStaffpass AI社員のAI相談窓口で、AIのアシスタントです。人間だと名乗らない。人間かと聞かれたらAIだと答える。",
     `挨拶「${LP_CHAT_GREETING}」は画面に表示済み。挨拶を繰り返さず、顧客の直前の発言に直接答える。`,
     ...CONSULTATIVE_LINES,
     "プランは候補であり、業務適合や成果を保証しない。",
@@ -68,6 +82,7 @@ export function buildSystemPrompt(caps: ChatCapabilities): string {
     "不満、契約変更、返金の相談は正式窓口へ案内する。",
     UNKNOWN_INFO_LINE,
     UNLISTED_INTEGRATION_LINE,
+    ...(corp ? [CORP_NO_CAMPAIGN_LINE] : []),
   ];
   if (caps.toolsEnabled) {
     lines.push(
@@ -152,10 +167,11 @@ export function sanitizeHistory(raw: unknown): HistoryMessage[] {
 export function buildChatMessages(
   caps: ChatCapabilities,
   history: HistoryMessage[],
-  text: string
+  text: string,
+  lpPage: LpPage = DEFAULT_LP_PAGE
 ): Array<{ role: string; content: string }> {
   return [
-    { role: "system", content: buildSystemPrompt(caps) },
+    { role: "system", content: buildSystemPrompt(caps, lpPage) },
     ...history.map((m) => ({ role: m.role, content: m.content })),
     { role: "user", content: text },
   ];

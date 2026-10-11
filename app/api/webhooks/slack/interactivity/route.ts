@@ -10,7 +10,6 @@
  * - Ephemeral rejection message to presser
  */
 import { createHash } from "node:crypto";
-import { NextResponse } from "next/server";
 import { fulfillIfApproved } from "@/lib/approvals/fulfill";
 import { runApprovalResolveSideEffects } from "@/lib/approvals/resolve-side-effects";
 import {
@@ -26,15 +25,22 @@ import {
 import { extraApproversAllow } from "@/lib/employees/approval-inbox";
 import { verifySlackSignature } from "@/lib/notify/slack";
 import { isSelfApprovalDenied } from "@/lib/admin-mcp/self-approval";
+import {
+  alertApprovalDeliveryFailure,
+  isApprovalDeliveryFailureAlertEnabled,
+} from "@/lib/notify/delivery-failure-alert";
 import { getMemberIdFromVoterBinding } from "@/lib/approval-workflow";
+import { approverAuthorityReplyJa } from "@/lib/approver-authority/reply";
 import {
   findChannelCandidatesByAppAndTeam,
   type InteractivityChannelCandidate,
 } from "@/lib/slack/interactivity-channel-resolver";
+import { isSharedApprovalAppRequest, isSharedApprovalAppRequestWhileDisabled } from "@/lib/slack/shared-approval-flags";
 import {
   sendEphemeralRejection,
   type SlackRejectionReason,
 } from "@/lib/slack/ephemeral-rejection";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -63,7 +69,7 @@ type SignatureVerificationResult =
 const CARD_EXPIRY_MS = 7 * 24 * 60 * 60 * 1000;
 
 function ack(extra: Record<string, unknown> = {}) {
-  return NextResponse.json({ ok: true, ...extra });
+  return jsonUtf8({ ok: true, ...extra });
 }
 
 async function verifySignatureWithCandidates(
@@ -127,7 +133,7 @@ export async function POST(req: Request) {
   }
 
   if (payload.type === "url_verification") {
-    return NextResponse.json({ challenge: payload.challenge });
+    return jsonUtf8({ challenge: payload.challenge });
   }
 
   const apiAppId = payload.api_app_id || "";
@@ -137,28 +143,50 @@ export async function POST(req: Request) {
     return ack({ ignored: true, reason: "missing_app_or_team" });
   }
 
-  const candidates = await findChannelCandidatesByAppAndTeam(apiAppId, teamId);
-  
-  const verifyResult = await verifySignatureWithCandidates(
-    candidates,
-    timestamp,
-    rawBody,
-    signature
-  );
-
-  if (!verifyResult.ok) {
-    return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
+  if (isSharedApprovalAppRequestWhileDisabled(apiAppId)) {
+    // Review M1: a press on a card sent before the flag was turned OFF. Verified
+    // with the shared signing secret → #236 button alert for that org; always 401.
+    const { reportSharedApprovalPressWhileDisabled } = await import("@/lib/slack/shared-approval-interactivity");
+    await reportSharedApprovalPressWhileDisabled({ apiAppId, teamId, timestamp, rawBody, signature });
+    return jsonUtf8({ ok: false, error: "shared_approval_app_disabled" }, { status: 401 });
   }
 
-  const channel = verifyResult.channel;
+  let channel: InteractivityChannelCandidate;
+  if (isSharedApprovalAppRequest(apiAppId)) {
+    // SLACK_SHARED_APPROVAL_APP_ENABLED: shared signing secret FIRST, then team → org.
+    // Lazy: no new module edges on the per-tenant path / while the flag is OFF.
+    const { resolveSharedApprovalInteractivity } = await import("@/lib/slack/shared-approval-interactivity");
+    const shared = await resolveSharedApprovalInteractivity({ apiAppId, teamId, timestamp, rawBody, signature });
+    if (!shared.ok) {
+      return jsonUtf8({ ok: false, error: shared.error }, { status: shared.status });
+    }
+    channel = shared.channel;
+  } else {
+    const candidates = await findChannelCandidatesByAppAndTeam(apiAppId, teamId);
+
+    const verifyResult = await verifySignatureWithCandidates(
+      candidates,
+      timestamp,
+      rawBody,
+      signature
+    );
+
+    if (!verifyResult.ok) {
+      return jsonUtf8({ ok: false, error: "unauthorized" }, { status: 401 });
+    }
+
+    channel = verifyResult.channel;
+  }
 
   if (payload.api_app_id !== channel.apiAppId) {
-    return NextResponse.json({ ok: false, error: "app_mismatch" }, { status: 403 });
+    await alertButtonFailure(channel, "app_mismatch");
+    return jsonUtf8({ ok: false, error: "app_mismatch" }, { status: 403 });
   }
 
   const expectedTeamId = channel.expectedTeamId || channel.teamId;
   if (expectedTeamId && teamId !== expectedTeamId) {
-    return NextResponse.json({ ok: false, error: "team_mismatch" }, { status: 403 });
+    await alertButtonFailure(channel, "team_mismatch");
+    return jsonUtf8({ ok: false, error: "team_mismatch" }, { status: 403 });
   }
 
   if (payload.type !== "block_actions") return ack();
@@ -167,8 +195,30 @@ export async function POST(req: Request) {
     await handleBlockActions(channel, payload, rawBody, timestamp, signature);
   } catch (error) {
     console.error("slack_interactivity_handle_failed", error);
+    await alertButtonFailure(channel, "handler_error");
   }
   return ack();
+}
+
+/**
+ * PR-3 (APPROVAL_DELIVERY_FAILURE_ALERT): a signature-verified press that could
+ * not be processed. The approval is NOT granted (unchanged); this only makes
+ * the failure visible to tenant admins / operators. Never throws.
+ */
+async function alertButtonFailure(
+  channel: InteractivityChannelCandidate,
+  reason: string,
+  approvalId?: string | null
+): Promise<void> {
+  if (!isApprovalDeliveryFailureAlertEnabled()) return;
+  await alertApprovalDeliveryFailure({
+    orgId: channel.orgId,
+    kind: "button_failed",
+    approvalId: approvalId ?? null,
+    provider: "slack",
+    channelId: channel.id,
+    reason,
+  }).catch(() => undefined);
 }
 
 async function handleBlockActions(
@@ -192,6 +242,7 @@ async function handleBlockActions(
     if (responseUrl) {
       await sendEphemeralRejection(responseUrl, "not_in_allowed_list" as SlackRejectionReason);
     }
+    await alertButtonFailure(channel, "not_in_allowed_list");
     return;
   }
 
@@ -200,6 +251,7 @@ async function handleBlockActions(
     if (responseUrl) {
       await sendEphemeralRejection(responseUrl, "external_team_user" as SlackRejectionReason);
     }
+    await alertButtonFailure(channel, "external_team_user");
     return;
   }
 
@@ -272,6 +324,7 @@ async function handleBlockActions(
     if (responseUrl) {
       await sendEphemeralRejection(responseUrl, "delivery_mismatch" as SlackRejectionReason);
     }
+    await alertButtonFailure(channel, "delivery_mismatch", approval.id);
     return;
   }
 
@@ -280,6 +333,7 @@ async function handleBlockActions(
     if (responseUrl) {
       await sendEphemeralRejection(responseUrl, "card_expired" as SlackRejectionReason);
     }
+    await alertButtonFailure(channel, "card_expired", approval.id);
     return;
   }
 
@@ -288,6 +342,7 @@ async function handleBlockActions(
     if (responseUrl) {
       await sendEphemeralRejection(responseUrl, "not_in_allowed_list" as SlackRejectionReason);
     }
+    await alertButtonFailure(channel, "approver_not_allowed", approval.id);
     return;
   }
 
@@ -316,17 +371,25 @@ async function handleBlockActions(
           decision: "revision_requested",
           actorEmail: actor,
           employee,
+          surface: "slack",
         });
       }
       return;
     }
 
     const decision = action.action_id === "staffpass_approve" ? "approved" : "rejected";
+    let resolveReason = "";
     const updated = await resolveApproval(approval.id, decision, actor, channel.orgId, {
       decisionId,
       externalVoter: { provider: "slack", channelKey: channel.id, userId },
       memberId,
+      onResolveResult: (r) => { resolveReason = r.reason; },
     });
+    // PR-D: same approver-authority feedback as LINE / Telegram / web.
+    const authorityReply = updated ? null : approverAuthorityReplyJa(resolveReason);
+    if (authorityReply && responseUrl) {
+      await sendEphemeralRejection(responseUrl, "approver_authority" as SlackRejectionReason, authorityReply);
+    }
     if (updated) {
       await fulfillIfApproved(updated, decision);
       const employee = await getEmployee(updated.employeeId, channel.orgId);
@@ -335,6 +398,7 @@ async function handleBlockActions(
         decision,
         actorEmail: actor,
         employee,
+        surface: "slack",
       });
     }
   } catch (error) {

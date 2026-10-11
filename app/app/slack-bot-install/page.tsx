@@ -23,6 +23,11 @@ const STATUS_MESSAGES: Record<string, { title: string; message: string; ok: bool
     message: "セッションが無効またはタイムアウトしました。もう一度お試しください。",
     ok: false,
   },
+  error_forbidden: {
+    title: "権限エラー",
+    message: "インストールを開始した組織のオーナーまたは管理者としてログインした状態で、もう一度お試しください。",
+    ok: false,
+  },
   error_exchange: {
     title: "認可コード交換エラー",
     message: "Slack との認可コード交換に失敗しました。もう一度お試しください。",

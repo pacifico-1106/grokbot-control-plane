@@ -1,4 +1,3 @@
-import { NextResponse } from "next/server";
 import { requireOrgAdminSession } from "@/lib/auth/require-org";
 import {
   listInformationAssets,
@@ -8,9 +7,15 @@ import {
 } from "@/lib/data";
 import type { InformationClass } from "@/lib/types";
 import { DASHBOARD_DIRECTORY_LOCKED_JA } from "@/lib/dashboard/policy-lock";
+import {
+  ProjectAccessOrgError,
+  projectAccessRefusalBody,
+  projectAccessRefusalStatus,
+} from "@/lib/employees/project-access-org";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 function directoryLocked() {
-  return NextResponse.json(
+  return jsonUtf8(
     { error: "directory_admin_mcp_required", message: DASHBOARD_DIRECTORY_LOCKED_JA },
     { status: 403 }
   );
@@ -26,7 +31,7 @@ export async function GET() {
     listOrgChannels(gate.orgId),
     listInformationAssets(gate.orgId),
   ]);
-  return NextResponse.json({ ok: true, parties, channels, assets });
+  return jsonUtf8({ ok: true, parties, channels, assets });
 }
 
 export async function PUT(req: Request) {
@@ -41,7 +46,7 @@ export async function PUT(req: Request) {
     if (kind === "asset") {
       const ref = String(body.ref || "").trim();
       const infoClass = String(body.class || "confidential") as InformationClass;
-      if (!ref) return NextResponse.json({ error: "ref_required" }, { status: 400 });
+      if (!ref) return jsonUtf8({ error: "ref_required" }, { status: 400 });
       const projectId =
         body.projectId === undefined || body.projectId === null
           ? body.projectId === undefined
@@ -53,13 +58,17 @@ export async function PUT(req: Request) {
         ref,
         class: infoClass,
         projectId,
+        projectAudit: { path: "web.settings.directory", actorEmail: gate.email },
       });
-      return NextResponse.json({ ok: true, asset });
+      return jsonUtf8({ ok: true, asset });
     }
-    return NextResponse.json({ error: "invalid_record" }, { status: 400 });
+    return jsonUtf8({ error: "invalid_record" }, { status: 400 });
   } catch (error) {
+    if (error instanceof ProjectAccessOrgError) {
+      return jsonUtf8(projectAccessRefusalBody(error), { status: projectAccessRefusalStatus(error) });
+    }
     const message = error instanceof Error ? error.message : "upsert_failed";
-    return NextResponse.json({ error: message }, { status: 400 });
+    return jsonUtf8({ error: message }, { status: 400 });
   }
 }
 
@@ -69,9 +78,9 @@ export async function DELETE(req: Request) {
   const url = new URL(req.url);
   const record = url.searchParams.get("record") || "";
   const id = url.searchParams.get("id") || "";
-  if (!id) return NextResponse.json({ error: "id_required" }, { status: 400 });
+  if (!id) return jsonUtf8({ error: "id_required" }, { status: 400 });
   if (record === "channel" || record === "party" || record === "") {
     return directoryLocked();
   }
-  return NextResponse.json({ error: "invalid_record" }, { status: 400 });
+  return jsonUtf8({ error: "invalid_record" }, { status: 400 });
 }

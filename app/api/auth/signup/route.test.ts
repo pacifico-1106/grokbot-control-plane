@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
+// IP_HASH_KEY is required (no dev fallback); fixture key for this test process.
+process.env.IP_HASH_KEY = "test-ip-hash-key-fixture-0123456789";
 
 let created = 0;
 let mailed = 0;
@@ -123,5 +125,28 @@ describe("POST /api/auth/signup bot protection", () => {
     expect(res.status).toBe(303);
     expect(new URL(res.headers.get("location") || "").pathname).toBe("/app");
     expect(created).toBe(1);
+  });
+});
+
+describe("layer 2 flags default OFF", () => {
+  test("disposable domain still allowed when SIGNUP_DOMAIN_CHECK_ENABLED is OFF", async () => {
+    delete process.env.SIGNUP_DOMAIN_CHECK_ENABLED;
+    const res = await POST(jsonReq({ ...good, email: "x@mailinator.com" }));
+    expect(res.status).toBe(200);
+    expect(created).toBe(1);
+  });
+});
+
+describe("layer 2 domain check ON", () => {
+  test("disposable domain rejected before any account/mail side effect", async () => {
+    process.env.SIGNUP_DOMAIN_CHECK_ENABLED = "true";
+    try {
+      const res = await POST(jsonReq({ ...good, email: "x@mailinator.com" }));
+      expect(res.status).toBe(400);
+      expect((await res.json()).error).toBe("disposable_domain");
+      expect(created + mailed).toBe(0);
+    } finally {
+      delete process.env.SIGNUP_DOMAIN_CHECK_ENABLED;
+    }
   });
 });

@@ -13,7 +13,9 @@ import {
   rotateCredential as demoRotate,
   updateWakeWebhook as demoUpdateWakeWebhook,
   getWakeWebhookSecret as demoGetWakeWebhookSecret,
+  unlinkedBinding,
 } from "../bindings";
+import { checkOperable } from "@/lib/safety/hold";
 import { isDemoMode } from "../mode";
 import {
   decryptNotificationSecrets,
@@ -21,6 +23,8 @@ import {
 } from "../notify/crypto";
 import { createSupabaseAdminClient } from "../supabase";
 import { mapBindingRow } from "./mappers";
+import { getRuntimeEmployees } from "../demo-data";
+import { credentialExpiresAtFromNow } from "../employees/credential-ttl";
 import type {
   ActionLimits,
   ApprovalPolicy,
@@ -31,7 +35,7 @@ import type {
   SpendLimits,
 } from "../types";
 
-export { bindingPublicView };
+export { bindingPublicView, unlinkedBinding };
 
 export async function getBinding(
   employeeId: string
@@ -48,6 +52,17 @@ export async function getBinding(
   return mapBindingRow(data as Record<string, unknown>);
 }
 
+
+/**
+ * Read-only binding for display (pages / GET routes): the stored row, or an
+ * unlinked placeholder that is NOT persisted. Never writes.
+ */
+export async function getBindingForDisplay(
+  employeeId: string,
+  orgId: string
+): Promise<EmployeeBinding> {
+  return (await getBinding(employeeId)) ?? unlinkedBinding(employeeId, orgId);
+}
 
 export async function findBindingByCredentialFingerprint(
   fingerprint: string
@@ -168,7 +183,13 @@ export async function rotateCredential(
     allowedAccounts?: Array<{ service: string; accountId: string; label?: string; browserRequired?: boolean }>;
   }
 ): Promise<{ binding: EmployeeBinding; generation: number }> {
-  if (isDemoMode()) return demoRotate(employeeId, orgId, fingerprint);
+  if (isDemoMode()) {
+    const rotated = demoRotate(employeeId, orgId, fingerprint);
+    // Demo mirror of the credentials insert: the current 社員証 now expires in 90 days.
+    const emp = getRuntimeEmployees().find((e) => e.id === employeeId && e.orgId === orgId);
+    if (emp) emp.credentialExpiresAt = credentialExpiresAtFromNow();
+    return rotated;
+  }
   const row = await ensureBindingRow(employeeId, orgId);
   if (row.status === "revoked") {
     throw Object.assign(new Error("binding_revoked"), { code: "revoked" as const });
@@ -207,6 +228,9 @@ export async function rotateCredential(
         action_limits: credential.actionLimits,
         spend: credential.spend ?? null,
         allowed_accounts: credential.allowedAccounts ?? [],
+        // 八坂さん 2026-10-12: every rotated 社員証 (dashboard rotate and the
+        // admin MCP reissue pickup) expires 90 days from now.
+        expires_at: credentialExpiresAtFromNow(),
       })
       .select("id")
       .single();
@@ -293,6 +317,20 @@ export async function revokeBinding(
 export async function assertExecutable(
   employeeId: string
 ): Promise<ExecutableAllow | ExecutableDeny> {
+  const decision = await assertExecutableBinding(employeeId);
+  if (!decision.ok) return decision;
+  // S2 G3 (no flag): the gateway entry for every caller, authenticated or not
+  // (admin MCP stuckWatch.retry, egress retries, lib/mcp/tools.ts). Fail-stop.
+  const operable = await checkOperable({ orgId: decision.binding.orgId || null, employeeId, phase: "gateway" });
+  if (!operable.ok) {
+    return { ok: false, code: operable.code, message: operable.code === "hold_state_unavailable" ? "hold state unavailable; refuse invoke (fail-stop)" : "employee / organization on hold; refuse invoke" };
+  }
+  return decision;
+}
+
+async function assertExecutableBinding(
+  employeeId: string
+): Promise<ExecutableAllow | ExecutableDeny> {
   if (isDemoMode()) return demoAssertExecutable(employeeId);
   const binding = await getBinding(employeeId);
   if (!binding) {
@@ -363,6 +401,56 @@ export async function getWakeWebhookSecret(employeeId: string): Promise<string> 
   } catch (error) {
     console.error("wake_webhook_decrypt_failed", id, error);
     return "";
+  }
+}
+
+export type WakeWebhookSecretRead =
+  | { state: "ok"; secret: string }
+  | { state: "absent" }
+  | { state: "error"; reason: "read_error" | "undecryptable" };
+
+let wakeSecretReadFailureForTests: "read_error" | "undecryptable" | null = null;
+/** Test seam: make readWakeWebhookSecretStrict report a failure (demo + production). */
+export function __setWakeSecretReadFailureForTests(v: "read_error" | "undecryptable" | null): void {
+  wakeSecretReadFailureForTests = v;
+}
+
+/**
+ * Strict wake-secret read for paths that must not mistake a failure for "no
+ * secret" (D9 hardened delivery): a read error / missing client and an
+ * undecryptable (or empty) ciphertext are reported as errors; only a missing
+ * row or an empty ciphertext column is "absent". Never throws, never logs the
+ * secret. getWakeWebhookSecret above keeps its lenient behaviour for the
+ * existing (flag-OFF) callers.
+ */
+export async function readWakeWebhookSecretStrict(employeeId: string): Promise<WakeWebhookSecretRead> {
+  if (wakeSecretReadFailureForTests) return { state: "error", reason: wakeSecretReadFailureForTests };
+  const id = employeeId.trim();
+  if (!id) return { state: "absent" };
+  if (isDemoMode()) {
+    const secret = demoGetWakeWebhookSecret(id);
+    return secret ? { state: "ok", secret } : { state: "absent" };
+  }
+  let ciphertext = "";
+  try {
+    const admin = createSupabaseAdminClient();
+    if (!admin) return { state: "error", reason: "read_error" };
+    const { data, error } = await admin
+      .from("employee_binding_secrets")
+      .select("credentials_ciphertext")
+      .eq("employee_id", id)
+      .maybeSingle();
+    if (error) return { state: "error", reason: "read_error" };
+    ciphertext = String(data?.credentials_ciphertext || "");
+  } catch {
+    return { state: "error", reason: "read_error" };
+  }
+  if (!ciphertext) return { state: "absent" };
+  try {
+    const secret = decryptWakeSecret(ciphertext);
+    return secret ? { state: "ok", secret } : { state: "error", reason: "undecryptable" };
+  } catch {
+    return { state: "error", reason: "undecryptable" };
   }
 }
 

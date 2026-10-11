@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { preSendHoldCode } from "@/lib/safety/hold";
 import { downloadPublicFile, MAX_FILE_BYTES } from "@/lib/security/public-file-download";
 /**
  * Slack file upload adapter for comm.reply / comm.send egress.
@@ -16,6 +17,7 @@ import { downloadPublicFile, MAX_FILE_BYTES } from "@/lib/security/public-file-d
  */
 
 import { resolveConversationToken } from "@/lib/gateway/adapters/slack";
+import { isDefinitePreShareSlackError, sanitizeSlackScopes, type SlackReinvokeReason, type SlackTokenType } from "@/lib/slack/definite-errors";
 import type { Audience, PostingAs } from "@/lib/types";
 
 const SLACK_TIMEOUT_MS = 30_000;
@@ -38,6 +40,8 @@ export interface SlackFileUploadInput {
   mimeType?: string;
   title?: string;
   initialComment?: string;
+  /** Approved re-run: the size the approver saw. A different download is refused. */
+  expectedBytes?: number;
 }
 
 export interface SlackFileUploadResult {
@@ -54,6 +58,19 @@ export interface SlackFileUploadError {
   ok: false;
   error: string;
   code: string;
+  /**
+   * The Slack `error` code, set only when Slack itself answered `ok:false` with
+   * a JSON body (never for a timeout / network error / non-JSON answer).
+   */
+  slackError?: string;
+  /** missing_scope only: Slack's `needed` scopes, sanitized (lib/slack/definite-errors.ts). */
+  slackNeeded?: string[];
+  /**
+   * Set together with slackError: which token Slack answered for ("user" = the
+   * employee's linked user token, "bot" = the org Bot token), from the same
+   * resolution that picked the token (木村 #255 second round). Never the token.
+   */
+  slackTokenType?: SlackTokenType;
 }
 
 export type SlackFileUploadOutcome = SlackFileUploadResult | SlackFileUploadError;
@@ -62,6 +79,17 @@ export type SlackFileUploadOutcome = SlackFileUploadResult | SlackFileUploadErro
  * Unified file upload response for invoke result.
  * Always included in response when fileAttachment was present on invoke body.
  */
+/**
+ * Duplicate post guard (5): uploadSlackFile fails before
+ * files.completeUploadExternal for every code but "complete_upload_failed"
+ * (nothing was shared); at completion the outcome is unknown unless Slack
+ * answered an error known to precede sharing (lib/slack/definite-errors.ts).
+ * Same rule as lib/approvals/approved-rerun-attachment.ts.
+ */
+export function fileUploadFailureSendState(uploaded: { code: string; slackError?: string }): "not_sent" | "unknown" {
+  return uploaded.code === "complete_upload_failed" && !isDefinitePreShareSlackError(uploaded.slackError) ? "unknown" : "not_sent";
+}
+
 export type FileUploadResponse =
   | {
       ok: true;
@@ -74,6 +102,21 @@ export type FileUploadResponse =
       code: string;
       reason: string;
       messageJa: string;
+      /**
+       * Approved re-run attachment claim (lib/approvals/attachment-upload-claim.ts):
+       * failed = not shared, a later re-run may upload; in_progress = another
+       * re-run holds the upload; uncertain = outcome unknown, never retried
+       * automatically. Absent on other paths.
+       */
+      status?: "failed" | "in_progress" | "uncertain";
+      /**
+       * Approved re-run, APPROVAL_ATTACHMENT_RECONCILE_ENABLED ON: a definite
+       * Slack failure carries the same reinvokeReason as the status poll / MCP
+       * (one builder: reinvokeReasonForFileUpload in lib/approvals/poll-hint.ts).
+       */
+      reinvokeReason?: SlackReinvokeReason;
+      /** code approval_attachment_retry_capped: Slack was not called (same definite error `limit` times in a row). */
+      retryCap?: { consecutive: number; limit: number };
     };
 
 /**
@@ -190,13 +233,24 @@ export function evaluateFileAttachmentEgress(
 /**
  * Slack files.getUploadURLExternal API call.
  */
+/**
+ * Slack answered `ok:false` with a JSON body: keep its `error` code, and for
+ * missing_scope its `needed` scope names (sanitized; `provided` is never kept).
+ */
+function slackErrorFields(body: { error?: unknown; needed?: unknown }): { slackError?: string; slackNeeded?: string[] } {
+  const slackError = typeof body.error === "string" && body.error ? body.error : undefined;
+  if (!slackError) return {};
+  const slackNeeded = slackError === "missing_scope" ? sanitizeSlackScopes(body.needed) : undefined;
+  return { slackError, ...(slackNeeded ? { slackNeeded } : {}) };
+}
+
 async function getUploadUrl(
   token: string,
   filename: string,
   length: number
 ): Promise<
   | { ok: true; uploadUrl: string; fileId: string }
-  | { ok: false; error: string }
+  | { ok: false; error: string; slackError?: string; slackNeeded?: string[] }
 > {
   try {
     const response = await fetch(
@@ -217,11 +271,12 @@ async function getUploadUrl(
     const body = (await response.json().catch(() => ({}))) as {
       ok?: boolean;
       error?: string;
+      needed?: unknown;
       upload_url?: string;
       file_id?: string;
     };
     if (!body.ok || !body.upload_url || !body.file_id) {
-      return { ok: false, error: body.error || "get_upload_url_failed" };
+      return { ok: false, error: body.error || "get_upload_url_failed", ...slackErrorFields(body) };
     }
     return { ok: true, uploadUrl: body.upload_url, fileId: body.file_id };
   } catch (error) {
@@ -273,7 +328,7 @@ async function completeUpload(
   initialComment?: string
 ): Promise<
   | { ok: true; ts?: string }
-  | { ok: false; error: string }
+  | { ok: false; error: string; slackError?: string; slackNeeded?: string[] }
 > {
   try {
     const files = [{ id: fileId, title: title || undefined }];
@@ -297,10 +352,11 @@ async function completeUpload(
     const body = (await response.json().catch(() => ({}))) as {
       ok?: boolean;
       error?: string;
+      needed?: unknown;
       files?: Array<{ id?: string; timestamp?: string }>;
     };
     if (!body.ok) {
-      return { ok: false, error: body.error || "complete_upload_failed" };
+      return { ok: false, error: (typeof body.error === "string" && body.error) || "complete_upload_failed", ...slackErrorFields(body) };
     }
     return { ok: true, ts: body.files?.[0]?.timestamp };
   } catch (error) {
@@ -345,6 +401,9 @@ async function fetchFileFromUrl(
 export async function uploadSlackFile(
   input: SlackFileUploadInput
 ): Promise<SlackFileUploadOutcome> {
+  // S2: last check right before the provider call.
+  const held = await preSendHoldCode(input.orgId, input.employeeId);
+  if (held) return { ok: false, error: held, code: held };
   const resolved = await resolveConversationToken({
     orgId: input.orgId,
     employeeId: input.employeeId,
@@ -360,6 +419,7 @@ export async function uploadSlackFile(
   }
 
   const token = resolved.token;
+  const tokenType: SlackTokenType = resolved.effectivePostingAs === "user" ? "user" : "bot";
   if (!token) {
     return {
       ok: false,
@@ -414,6 +474,9 @@ export async function uploadSlackFile(
   }
 
   if (fileBuffer.length > MAX_FILE_BYTES) return { ok: false, code: "file_too_large", error: "file_too_large" };
+  if (typeof input.expectedBytes === "number" && fileBuffer.length !== input.expectedBytes) {
+    return { ok: false, code: "file_content_mismatch", error: "file_content_mismatch" };
+  }
   const mimeType = input.mimeType || "application/octet-stream";
 
   const uploadUrlResult = await getUploadUrl(
@@ -426,6 +489,8 @@ export async function uploadSlackFile(
       ok: false,
       error: uploadUrlResult.error,
       code: "get_upload_url_failed",
+      ...(uploadUrlResult.slackError ? { slackError: uploadUrlResult.slackError, slackTokenType: tokenType } : {}),
+      ...(uploadUrlResult.slackNeeded ? { slackNeeded: uploadUrlResult.slackNeeded } : {}),
     };
   }
 
@@ -455,6 +520,8 @@ export async function uploadSlackFile(
       ok: false,
       error: completeResult.error,
       code: "complete_upload_failed",
+      ...(completeResult.slackError ? { slackError: completeResult.slackError, slackTokenType: tokenType } : {}),
+      ...(completeResult.slackNeeded ? { slackNeeded: completeResult.slackNeeded } : {}),
     };
   }
 

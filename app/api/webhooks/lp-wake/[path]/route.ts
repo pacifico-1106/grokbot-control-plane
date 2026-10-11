@@ -10,6 +10,7 @@
  */
 
 import { hashIp } from "@/lib/lp/rate-limit";
+import { IP_HASH_UNAVAILABLE, isIpHashKeyConfigured } from "@/lib/security/ip-hash-key";
 import { NextRequest, NextResponse } from "next/server";
 import { createHash } from "node:crypto";
 import { isLpWakeWebhookEnabled } from "@/lib/feature-flags";
@@ -18,6 +19,7 @@ import {
   recordWebhookEvent,
   updateWebhookEventStatus,
 } from "@/lib/lp/wake-webhook";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 
 function hashUserAgent(ua: string): string {
@@ -29,7 +31,7 @@ export async function POST(
   context: { params: Promise<{ path: string }> }
 ) {
   if (!isLpWakeWebhookEnabled()) {
-    return NextResponse.json(
+    return jsonUtf8(
       { error: "feature_disabled" },
       { status: 404 }
     );
@@ -41,7 +43,7 @@ export async function POST(
 
   const secret = request.headers.get("x-webhook-secret");
   if (!secret) {
-    return NextResponse.json(
+    return jsonUtf8(
       { error: "missing_secret", message: "X-Webhook-Secret header is required" },
       { status: 401 }
     );
@@ -50,7 +52,7 @@ export async function POST(
   const validation = await validateWebhookRequest(endpointPath, secret);
   if (!validation.valid || !validation.config) {
     const status = validation.reason === "endpoint_not_found" ? 404 : 401;
-    return NextResponse.json(
+    return jsonUtf8(
       { error: validation.reason },
       { status }
     );
@@ -62,7 +64,7 @@ export async function POST(
   try {
     body = await request.json();
   } catch {
-    return NextResponse.json(
+    return jsonUtf8(
       { error: "invalid_json", message: "Request body must be valid JSON" },
       { status: 400 }
     );
@@ -71,6 +73,11 @@ export async function POST(
   const eventType = (body.event_type as string) || (body.eventType as string) || "unknown";
   const idempotencyKey = request.headers.get("x-idempotency-key") || undefined;
   
+  if (!isIpHashKeyConfigured()) {
+    console.error("[lp-wake] IP_HASH_KEY not configured; refusing");
+    return jsonUtf8({ ...IP_HASH_UNAVAILABLE }, { status: 503 });
+  }
+
   const ip = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "unknown";
   const userAgent = request.headers.get("user-agent") || "unknown";
 
@@ -84,14 +91,14 @@ export async function POST(
   });
 
   if (!event) {
-    return NextResponse.json(
+    return jsonUtf8(
       { error: "event_recording_failed" },
       { status: 500 }
     );
   }
 
   if (event.status === "duplicate") {
-    return NextResponse.json({
+    return jsonUtf8({
       status: "duplicate",
       message: "Event already processed",
       eventId: event.id,
@@ -102,7 +109,7 @@ export async function POST(
     switch (config.triggerType) {
       case "journey_resume":
         await updateWebhookEventStatus(event.id, "processed");
-        return NextResponse.json({
+        return jsonUtf8({
           status: "processed",
           eventId: event.id,
           message: "Journey resume trigger acknowledged",
@@ -110,7 +117,7 @@ export async function POST(
 
       case "notification":
         await updateWebhookEventStatus(event.id, "processed");
-        return NextResponse.json({
+        return jsonUtf8({
           status: "processed",
           eventId: event.id,
           message: "Notification trigger acknowledged",
@@ -118,7 +125,7 @@ export async function POST(
 
       case "custom":
         await updateWebhookEventStatus(event.id, "processed");
-        return NextResponse.json({
+        return jsonUtf8({
           status: "processed",
           eventId: event.id,
           message: "Custom trigger acknowledged",
@@ -126,7 +133,7 @@ export async function POST(
 
       default:
         await updateWebhookEventStatus(event.id, "failed", "unknown_trigger_type");
-        return NextResponse.json(
+        return jsonUtf8(
           { error: "unknown_trigger_type", eventId: event.id },
           { status: 400 }
         );
@@ -138,7 +145,7 @@ export async function POST(
       "failed",
       error instanceof Error ? error.message.slice(0, 50) : "unknown"
     );
-    return NextResponse.json(
+    return jsonUtf8(
       { error: "processing_failed", eventId: event.id },
       { status: 500 }
     );

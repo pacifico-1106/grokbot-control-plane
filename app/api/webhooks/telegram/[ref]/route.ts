@@ -1,10 +1,11 @@
-import { NextResponse } from "next/server";
+import { isChannelClassifyProposalsEnabled } from "@/lib/channel-classify/flags";
 import { getNotificationChannelByWebhookRef } from "@/lib/data";
 import { handleTelegramChannelUpdate } from "@/lib/notify/telegram-channel-webhook";
 import {
   handleTelegramVerificationConfirm,
   handleTelegramVerificationReject,
 } from "@/lib/approval-workflow/telegram-binding-verification";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -82,11 +83,26 @@ async function editMessageText(
 export async function POST(req: Request, ctx: { params: Promise<{ ref: string }> }) {
   const { ref } = await ctx.params;
   const channel = await getNotificationChannelByWebhookRef("telegram", ref);
-  if (!channel) return NextResponse.json({ ok: true, ignored: true });
+  if (!channel) return jsonUtf8({ ok: true, ignored: true });
   if (req.headers.get("x-telegram-bot-api-secret-token") !== channel.secrets.webhookSecret) {
-    return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
+    return jsonUtf8({ ok: false, error: "unauthorized" }, { status: 401 });
   }
   const update = (await req.json().catch(() => ({}))) as Parameters<typeof handleTelegramChannelUpdate>[1];
+
+  // PR-B: the inbox bot was added to a group / channel (secret verified above)
+  // → shared classification-proposal flow. The approval chat itself is skipped.
+  const memberUpdate = (update as { my_chat_member?: { chat?: { id?: number } } }).my_chat_member;
+  if (memberUpdate) {
+    if (isChannelClassifyProposalsEnabled()) {
+      const approvalChatId = String((channel.config as Record<string, unknown>)?.chatId || "");
+      if (String(memberUpdate.chat?.id ?? "") !== approvalChatId) {
+        // Follow-up H1: only when the person who added the bot is a known member.
+        const { handleTelegramMyChatMember } = await import("@/lib/channel-classify/join");
+        await handleTelegramMyChatMember(channel, update as Parameters<typeof handleTelegramMyChatMember>[1]);
+      }
+    }
+    return jsonUtf8({ ok: true });
+  }
 
   const query = update.callback_query;
   if (query?.data) {
@@ -133,10 +149,10 @@ export async function POST(req: Request, ctx: { params: Promise<{ ref: string }>
           await answerCallback(botToken, callbackId, result.messageJa, true);
         }
       }
-      return NextResponse.json({ ok: true });
+      return jsonUtf8({ ok: true });
     }
   }
 
   const result = await handleTelegramChannelUpdate(channel, update);
-  return NextResponse.json({ ok: true, ...(result.ignored ? { ignored: true } : {}) });
+  return jsonUtf8({ ok: true, ...(result.ignored ? { ignored: true } : {}) });
 }

@@ -1,10 +1,11 @@
-import { NextResponse } from "next/server";
 import {
   extractEmployeeSecret,
   resolveEmployeeCredential,
 } from "@/lib/auth/employee-credential";
+import { withHoldCallScope } from "@/lib/safety/hold";
 import { runGatewayInvoke } from "@/lib/gateway/invoke";
 import type { GatewayInvokeRequest } from "@/lib/types";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 export const runtime = "nodejs";
 
@@ -18,12 +19,18 @@ export const runtime = "nodejs";
  * Enforcement lives in lib/gateway/invoke (shared with remote MCP).
  */
 export async function POST(req: Request) {
+  // One hold scope per call (this route takes one JSON-RPC message / one invoke): G1 → G3
+  // reuse one read; G4, wake, MCP Events and just-before-send always re-read.
+  return withHoldCallScope(() => handlePost(req));
+}
+
+async function handlePost(req: Request) {
   const body = (await req.json().catch(() => ({}))) as GatewayInvokeRequest;
   const headerId = (req.headers.get("x-employee-id") || "").trim() || undefined;
   const bodyId = (body.employeeId || "").trim() || undefined;
 
   if (!extractEmployeeSecret(req)) {
-    return NextResponse.json(
+    return jsonUtf8(
       {
         ok: false,
         code: "credential_required",
@@ -40,7 +47,7 @@ export async function POST(req: Request) {
 
   const auth = await resolveEmployeeCredential(req);
   if (!auth.ok) {
-    return NextResponse.json(
+    return jsonUtf8(
       {
         ok: false,
         code: auth.code,
@@ -54,7 +61,7 @@ export async function POST(req: Request) {
   const credentialId = auth.credential.credentialId;
   // Reject explicit mismatch with badge identity (fail-closed).
   if (bodyId && bodyId !== employeeId) {
-    return NextResponse.json(
+    return jsonUtf8(
       {
         ok: false,
         code: "employee_mismatch",
@@ -66,7 +73,7 @@ export async function POST(req: Request) {
     );
   }
   if (headerId && headerId !== employeeId) {
-    return NextResponse.json(
+    return jsonUtf8(
       {
         ok: false,
         code: "employee_mismatch",
@@ -83,5 +90,5 @@ export async function POST(req: Request) {
     body,
     credentialId,
   });
-  return NextResponse.json(result.body, { status: result.httpStatus });
+  return jsonUtf8(result.body, { status: result.httpStatus });
 }

@@ -1,3 +1,4 @@
+import { approverAuthorityReplyJa } from "@/lib/approver-authority/reply";
 import { resolveApprovalWithWorkflow } from "@/lib/approvals/workflow-integration";
 import { initializeWorkflowForApproval } from "@/lib/approval-workflow/resolve";
 import { getMemberIdFromVoterBinding } from "@/lib/approval-workflow";
@@ -11,7 +12,6 @@ import { getVoterBindingByNonce, TELEGRAM_GLOBAL_CHANNEL_KEY } from "@/lib/appro
 function formatJstTimestamp(): string {
   return new Date().toLocaleString("ja-JP", { timeZone: "Asia/Tokyo" });
 }
-import { NextResponse } from "next/server";
 import { fulfillIfApproved } from "@/lib/approvals/fulfill";
 import { runApprovalResolveSideEffects } from "@/lib/approvals/resolve-side-effects";
 import {
@@ -31,6 +31,7 @@ import {
   promptTelegramRevision,
   sendTelegramText,
 } from "@/lib/notify/telegram";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -262,7 +263,7 @@ async function handleCallback(update: TelegramUpdate): Promise<void> {
     );
     const updated = result.ok && result.workflowComplete ? result.approval : null;
     if (!updated) {
-      await answer(result.ok ? "投票を記録しました（合議は継続中です）" : "投票を記録できませんでした");
+      await answer(approverAuthorityReplyJa(result.reason) ?? (result.ok ? "投票を記録しました（合議は継続中です）" : "投票を記録できませんでした"));
       return;
     }
     await fulfillIfApproved(updated, decision);
@@ -272,6 +273,7 @@ async function handleCallback(update: TelegramUpdate): Promise<void> {
       decision,
       actorEmail: actor,
       employee,
+      surface: "telegram",
     });
     await answer(decision === "approved" ? "承認しました" : "却下しました");
   } catch (error) {
@@ -338,6 +340,7 @@ async function handleReply(update: TelegramUpdate): Promise<void> {
       decision: "revision_requested",
       actorEmail: actor,
       employee,
+      surface: "telegram",
     });
   } catch (error) {
     await auditTelegramError(approval, error, actor);
@@ -351,13 +354,13 @@ export async function POST(req: Request) {
     console.error(
       "telegram_webhook_secret_missing: TELEGRAM_WEBHOOK_SECRET is empty; callback_query cannot be accepted (buttons stay dead)"
     );
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: "telegram_webhook_not_configured" },
       { status: 503 }
     );
   }
   if (req.headers.get("x-telegram-bot-api-secret-token") !== secret) {
-    return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
+    return jsonUtf8({ ok: false, error: "unauthorized" }, { status: 401 });
   }
 
   const update = (await req.json().catch(() => ({}))) as TelegramUpdate;
@@ -367,5 +370,5 @@ export async function POST(req: Request) {
   } catch (error) {
     console.error("telegram_webhook_unhandled", error);
   }
-  return NextResponse.json({ ok: true });
+  return jsonUtf8({ ok: true });
 }

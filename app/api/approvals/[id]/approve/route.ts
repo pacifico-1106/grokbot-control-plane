@@ -1,5 +1,4 @@
 import { publicApproval } from "@/lib/approvals/public";
-import { NextResponse } from "next/server";
 import { fulfillApprovedInvoke } from "@/lib/approvals/fulfill";
 import { fulfillApprovedAdmin } from "@/lib/admin-mcp/fulfill-admin";
 import { SELF_APPROVAL_DENIED, SELF_APPROVAL_MESSAGE_JA } from "@/lib/admin-mcp/self-approval";
@@ -12,6 +11,9 @@ import {
 } from "@/lib/data";
 import { requireCapability } from "@/lib/team/demo-actor";
 import { resolveApprovalWithWorkflow } from "@/lib/approvals/workflow-integration";
+import { isApproverAuthorityEnabled } from "@/lib/feature-flags";
+import { approverAuthorityNextStepJa, approverAuthorityReplyJa } from "@/lib/approver-authority/reply";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 export const runtime = "nodejs";
 
@@ -26,7 +28,7 @@ export async function POST(
   const orgId = await getCurrentOrgId();
 
   if (!orgId) {
-    return NextResponse.json({ error: "org_required" }, { status: 400 });
+    return jsonUtf8({ error: "org_required" }, { status: 400 });
   }
 
   let result;
@@ -34,11 +36,13 @@ export async function POST(
     result = await resolveApprovalWithWorkflow(id, "approved", gate.actor.email, orgId, {
       actorId: gate.actor.id,
       voterUserId: gate.actor.id || gate.actor.email,
+      // PR-D: the signed-in member is the approver to verify (flag ON only; OFF = today's call).
+      ...(isApproverAuthorityEnabled() ? { memberId: gate.actor.id } : {}),
     });
   } catch (error) {
     const code = (error as { code?: string }).code || (error instanceof Error ? error.message : "");
     if (code === SELF_APPROVAL_DENIED) {
-      return NextResponse.json(
+      return jsonUtf8(
         { error: SELF_APPROVAL_DENIED, message: SELF_APPROVAL_MESSAGE_JA },
         { status: 403 }
       );
@@ -47,12 +51,12 @@ export async function POST(
   }
 
   if (!result.ok && result.reason === "approval_not_found") {
-    return NextResponse.json({ error: "not_found" }, { status: 404 });
+    return jsonUtf8({ error: "not_found" }, { status: 404 });
   }
 
   const updated = result.approval || await getApprovalById(id, orgId);
   if (!updated) {
-    return NextResponse.json({ error: "not_found" }, { status: 404 });
+    return jsonUtf8({ error: "not_found" }, { status: 404 });
   }
 
   if (result.ok && result.workflowComplete && result.workflowApproved) {
@@ -67,6 +71,7 @@ export async function POST(
         decision: result.workflowApproved ? "approved" : "rejected",
         actorEmail: gate.actor.email,
         employee,
+        surface: "web",
       })
     : { notified: [] };
 
@@ -80,6 +85,15 @@ export async function POST(
     workflowApplied: result.workflowApplied,
     workflowComplete: result.workflowComplete,
   };
+
+  const authorityReply = result.ok && result.workflowComplete ? null : approverAuthorityReplyJa(result.reason);
+  if (authorityReply) {
+    // PR-D: same wording as Slack / LINE / Telegram.
+    response.reason = result.reason;
+    response.messageJa = authorityReply;
+    const nextStep = approverAuthorityNextStepJa(result.reason);
+    if (nextStep) response.nextStepJa = nextStep;
+  }
 
   if (result.progress) {
     response.workflow = {
@@ -99,5 +113,5 @@ export async function POST(
     };
   }
 
-  return NextResponse.json(response);
+  return jsonUtf8(response);
 }

@@ -7,7 +7,6 @@
  * Uses OpenAI chat completions with tool calling.
  */
 
-import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { isLpChatEnabled, isLpChatToolsEnabled, isLpHandoffEnabled } from "@/lib/feature-flags";
 import {
@@ -23,7 +22,10 @@ import { getPublishedRelease } from "@/lib/lp/knowledge-base";
 import { sanitizeHistory, type ChatCapabilities } from "@/lib/lp/chat-prompt";
 import { resolveChatModel } from "@/lib/lp/chat-model";
 import { ChatModelError, runChatTurn } from "@/lib/lp/chat-turn";
+import { GUEST_SESSIONS_UNAVAILABLE, isGuestSigningKeyMissingError } from "@/lib/lp/guest-signing-key";
 import { HANDOFF_OFF_REPLY, contactLinkCard, detectHandoffIntent } from "@/lib/lp/handoff-intent";
+import { normalizeLpPage } from "@/lib/lp/lp-page";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 const GUEST_COOKIE_NAME = "lp_guest";
 const CSRF_HEADER_NAME = "x-csrf-token";
@@ -34,7 +36,7 @@ const CSRF_COOKIE_NAME = "lp_csrf";
 
 export async function POST(req: Request) {
   if (!isLpChatEnabled()) {
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: "feature_disabled", message: "チャット機能は現在利用できません" },
       { status: 503 }
     );
@@ -42,7 +44,7 @@ export async function POST(req: Request) {
 
   const openaiKey = process.env.OPENAI_API_KEY;
   if (!openaiKey || openaiKey.startsWith("replace_me")) {
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: "chat_unavailable", message: "チャット機能は現在利用できません" },
       { status: 503 }
     );
@@ -52,15 +54,25 @@ export async function POST(req: Request) {
   const guestCookie = cookieStore.get(GUEST_COOKIE_NAME)?.value;
 
   if (!guestCookie) {
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: "auth_required", message: "セッションが必要です" },
       { status: 401 }
     );
   }
 
   const parsed = parseGuestCookie(guestCookie);
-  if (!parsed || !verifySignature(parsed.token, parsed.signature)) {
-    return NextResponse.json(
+  let signatureOk = false;
+  if (parsed) {
+    try {
+      signatureOk = verifySignature(parsed.token, parsed.signature);
+    } catch (err) {
+      if (!isGuestSigningKeyMissingError(err)) throw err;
+      console.error("[chat/turn] GUEST_SIGNING_KEY not configured; guest sessions unavailable");
+      return jsonUtf8({ ok: false, ...GUEST_SESSIONS_UNAVAILABLE }, { status: 503 });
+    }
+  }
+  if (!parsed || !signatureOk) {
+    return jsonUtf8(
       { ok: false, error: "invalid_session", message: "無効なセッションです" },
       { status: 401 }
     );
@@ -70,7 +82,7 @@ export async function POST(req: Request) {
   const csrfCookie = cookieStore.get(CSRF_COOKIE_NAME)?.value;
 
   if (!csrfHeader || !csrfCookie || csrfHeader !== csrfCookie) {
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: "csrf_invalid", message: "無効なリクエストです" },
       { status: 403 }
     );
@@ -80,34 +92,37 @@ export async function POST(req: Request) {
   const journey = await getJourneyByTokenHash(tokenHash);
 
   if (!journey) {
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: "session_expired", message: "セッションの有効期限が切れました" },
       { status: 401 }
     );
   }
 
-  let body: { text?: string; clientTurnId?: string; history?: unknown };
+  let body: { text?: string; clientTurnId?: string; history?: unknown; lpPage?: unknown };
   try {
     body = await req.json();
   } catch {
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: "invalid_json", message: "リクエストが不正です" },
       { status: 400 }
     );
   }
 
   const { text, clientTurnId } = body;
+  // The journey's stored page wins; the body is only a fallback (journey written before
+  // LP_LEAD_PAGE_DB_ENABLED) and is re-checked against the allowlist.
+  const lpPage = journey.lpPage ?? normalizeLpPage(body.lpPage);
   const history = sanitizeHistory(body.history);
 
   if (!text || typeof text !== "string") {
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: "text_required", message: "メッセージを入力してください" },
       { status: 400 }
     );
   }
 
   if (text.length > 2000) {
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: "text_too_long", message: "メッセージは2000文字以内で入力してください" },
       { status: 400 }
     );
@@ -115,7 +130,7 @@ export async function POST(req: Request) {
 
   const turnNumber = await incrementTurnCount(journey.id);
   if (turnNumber === null) {
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: "turn_limit_exceeded", message: "このセッションの上限に達しました。新しいセッションを開始してください。" },
       { status: 429 }
     );
@@ -140,7 +155,7 @@ export async function POST(req: Request) {
       model: "rule:handoff_disabled",
       toolCalls: ["contact_link"],
     });
-    return NextResponse.json({
+    return jsonUtf8({
       ok: true,
       reply: HANDOFF_OFF_REPLY,
       cards: [contactLinkCard()],
@@ -156,7 +171,8 @@ export async function POST(req: Request) {
       caps,
       history,
       text,
-      runTool: (name, args) => executeTool(name, args, { journeyId: journey.id }),
+      lpPage,
+      runTool: (name, args) => executeTool(name, args, { journeyId: journey.id, lpPage }),
     });
 
     await recordChatTurn({
@@ -170,7 +186,7 @@ export async function POST(req: Request) {
       toolCalls: result.toolCallsUsed.length > 0 ? result.toolCallsUsed : undefined,
     });
 
-    return NextResponse.json({
+    return jsonUtf8({
       ok: true,
       reply: result.reply,
       citations: result.citations.length > 0 ? result.citations : undefined,
@@ -181,13 +197,13 @@ export async function POST(req: Request) {
   } catch (error) {
     if (error instanceof ChatModelError) {
       console.error("[chat] OpenAI API error:", error.status ?? "no_choice");
-      return NextResponse.json(
+      return jsonUtf8(
         { ok: false, error: "ai_error", message: "AI応答の取得に失敗しました" },
         { status: 502 }
       );
     }
     console.error("[chat] Chat error:", error);
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: "chat_error", message: "エラーが発生しました" },
       { status: 500 }
     );

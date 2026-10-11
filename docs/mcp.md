@@ -10,7 +10,8 @@ Sealith の「社員証 = Bearer・MCP が第一級」という世界観を踏�
 |--|--|
 | **Endpoint** | `https://staffpass.sealith.com/api/mcp` |
 | **Server card** | `https://staffpass.sealith.com/.well-known/mcp/server-card.json` |
-| **Transport** | Streamable HTTP JSON-RPC（`initialize` / `tools/list` / `tools/call` / `ping`） |
+| **Transport** | Streamable HTTP JSON-RPC（`server/discover` / `initialize` / `tools/list` / `tools/call` / `ping`） |
+| **Protocol** | MCP `2026-07-28`（リクエストごとの `_meta`）と従来版 `2025-11-25` / `2025-06-18` / `2025-03-26` / `2024-11-05`（`initialize`）。詳細は下の「プロトコルバージョン」 |
 | **Auth** | `Authorization: Bearer gb_emp_…`（または `x-staffpass-credential`） |
 
 ローカル stdio は **Grok Bot 向けには使いません**（公開 HTTPS のみ）。
@@ -44,7 +45,11 @@ staffpass_invoke ──► lib/gateway/invoke (同一 Gateway 強制パス)
 - `pollHint`（`continue_polling` / 後続は status ツール）
 - `title` / `summary`（日本語サマリ）
 
-承認後は `staffpass_get_approval_status` で `approved` を確認し、同じ `jobId` で `staffpass_invoke` に `approvalId` を付けて再実行します。
+承認後は `staffpass_get_approval_status` をポーリングします。
+
+- `pollHint` が `fulfilled` なら、承認された操作は Staffpass が実行済みです（Slack 投稿は承認時に自動送信されます）。それで完了なので、再実行しないでください（二重送信になります）。
+- `pollHint` が `reinvoke_with_approvalId` のときだけ、同じ `jobId` で `staffpass_invoke` に `approvalId` を付けて再実行します。`reinvokeReason` が返っているときは、そこに書かれた修正（管理ツールなど）を先に行ってから再実行します。`reinvokeReason` が無いまま `reinvoke_with_approvalId` になることもあります。そのときは同じ approvalId と同じ内容で、一度だけ再実行します。理由は `reinvokeCode` で返ることがあります（`pending_attachment` = 承認済み添付の未送信分、`not_executed_yet` = 承認済みだが未実行、`admin_result_required` = 管理 MCP で再実行）。
+- `needs_approval` の応答に `approvalReasons[]` があれば、承認が必要な理由がすべて入っています（`topic_gate` / `egress` / `always_human` / `action_limit` など）。情報区分は AI の指定では下げられません（上げることはできます）。機密話題の設定有無と大まかな分類（金銭・人事・契約など）は `staffpass_sensitive_topics`（参照専用）で確認できます。語の一覧は返しません。該当しそうなら、言い換えずに承認に回してください。機密話題で承認になったときも、応答（`message` / `topicGate.categories` / `approvalReasons[].topic_gate.categories`）には分類名だけが入り、該当した語は返しません（語は承認者のカードと監査ログにだけ残ります）。
 
 ---
 
@@ -69,6 +74,20 @@ x-staffpass-credential: gb_emp_<…>
 | 欠落 | `missing_credential` |
 | 不明・失効・期限切れ | `invalid_credential` / `revoked` |
 | 社員なし | `employee_not_found` |
+
+### OAuth 2.1（`MCP_OAUTH_ENABLED`、既定 OFF / パイロット org のみ）
+
+フラグ ON 時は Claude / ChatGPT などのリモート MCP クライアントが OAuth で接続できます（`gb_emp_` Bearer はそのまま併用可）。
+When `MCP_OAUTH_ENABLED` is ON, remote MCP clients can connect via OAuth; `gb_emp_` Bearer keeps working unchanged.
+
+- 未認証の `tools/*` → `401` + `WWW-Authenticate: Bearer resource_metadata="…/.well-known/oauth-protected-resource/api/mcp", scope="staffpass.employee"`。未認証の `initialize` / `ping` / `server/discover` / `notifications/*` は `MCP_OAUTH_LEGACY_UNAUTH_INITIALIZE` が**明示的に false** のときだけ同じ 401 になり、未設定なら今までどおり 200/202（runbook `mcp-legacy-unauth-initialize-off.md`）。同じ値を JSON-RPC `error.data._meta["mcp/www_authenticate"]` にも載せます（HTTP ヘッダを見ないクライアント向け）。
+- `redirect_uri` は完全一致の許可リストのみ（Claude / ChatGPT / Cursor web `https://www.cursor.com/agents/mcp/oauth/callback` / loopback `http://localhost|127.0.0.1:{port}/callback`）。前方一致・ワイルドカード・User-Agent 判定はありません。
+- メタデータ: `/.well-known/oauth-protected-resource/api/mcp`（RFC 9728）、`/.well-known/oauth-authorization-server`（RFC 8414）。クライアント登録は CIMD（`client_id` = HTTPS URL）。DCR は別フラグ `MCP_OAUTH_DCR_ENABLED`。
+- トークン: `sp_at_`（アクセス、短命）/ `sp_rt_`（リフレッシュ、ローテーション + 再利用検知）。`/api/mcp` のみで有効（`resource` 固定）。管理 MCP（`/api/mcp/admin`）は OAuth トークンを拒否します。
+- `tools/list` の各ツールに `securitySchemes: [{ "type": "oauth2", "scopes": ["staffpass.employee"] }]`（`_meta.securitySchemes` にもミラー）。
+- `staffpass_profile`（読み取り専用、OAuth ON 時のみ）: 安定した不透明 id（`sp_prof_…`、org+社員から決定的に生成、DB id ではない）・表示名・役割・org 名を返します。`_meta["openai/profile"]` 付き。秘密値は含みません。
+- サーバーカード（`GET /api/mcp`）の `auth.oauth` に AS / PRM URL を掲載。
+- 接続の取消: 社員詳細の「OAuth 接続」パネル（owner/admin）、または `/api/oauth/revoke`。ローテーション時は「OAuth 接続も切断する」チェックで一括失効（既定は切らない）。
 
 ---
 
@@ -100,22 +119,52 @@ staffpass_health
 
 ---
 
+## プロトコルバージョン（MCP 2026-07-28 対応）
+
+社員証 MCP（`/api/mcp`）と管理 MCP（`/api/mcp/admin`）は、MCP `2026-07-28` と従来版の両方に対応しています（仕様でいう dual-era サーバー）。
+
+| クライアントの送り方 | サーバーの答え |
+|---|---|
+| `initialize` で `2024-11-05` / `2025-03-26` / `2025-06-18` / `2025-11-25` | 同じ版をそのまま返す |
+| `initialize` で `2026-07-28` や未知の版 | `2025-11-25`（`initialize` を使う版の最新。`2026-07-28` には `initialize` がないため） |
+| `initialize` で `protocolVersion` なし | `2024-11-05`（従来どおり） |
+| リクエストの `_meta["io.modelcontextprotocol/protocolVersion"]` が `2026-07-28` | そのまま処理（結果に `resultType: "complete"` とサーバー情報。`tools/list` はキャッシュ目安 `ttlMs` / `cacheScope: "private"` つき） |
+| `_meta` の版が未対応（例 `2027-01-01`） | HTTP 400 + `-32022`（Unsupported protocol version）。`data.supported` に対応版の一覧 |
+| `server/discover` | 対応版の一覧（`supportedVersions`）、`initialize` と同じ `capabilities` と `instructions`、サーバー情報。認証不要 |
+
+ヘッダの扱い（Streamable HTTP）:
+
+- `MCP-Protocol-Version` / `Mcp-Method` / `Mcp-Name` が本文と食い違うと HTTP 400 + `-32020`（Header mismatch）。`Mcp-Name` の `=?base64?…?=` 形式は復号してから比べます。
+- `MCP-Protocol-Version` がない従来クライアントは、これまでどおり処理します。
+- `2026-07-28` のリクエストでヘッダが欠けている場合も、既定では処理します。`MCP_STRICT_REQUEST_HEADERS=true` にすると仕様どおり 400 で拒否します（既定 OFF）。
+- `2026-07-28` のリクエストで未知のメソッドは HTTP 404 + `-32601`。従来版は HTTP 200 + `-32601` のまま。
+- `_meta` は 16 KiB / 64 キーまで。知らないキーは読まずに無視し、応答には返しません。
+- セッション（`Mcp-Session-Id`）は発行しません。
+
+---
+
 ## curl 例（プレースホルダ）
 
 秘密値は発行 UI の一度きりの表示を使い、ここに実値を貼らないでください。
 
-### 1) initialize
+### 1) initialize（従来版のクライアント）
+
+`2026-07-28` のクライアントは `initialize` を使いません（下の「2026-07-28 の例」を参照）。
+
+> 2026-10-05 時点: サーバーはどの `protocolVersion` を送っても `2024-11-05` で応答します（MCP `2026-07-28` の
+> `server/discover` は未対応）。対応方針は `docs/mcp-events-approval-wake-20261005.md` §13 を参照してください。
 
 ```bash
 curl -sS -X POST 'https://staffpass.sealith.com/api/mcp' \
   -H 'Content-Type: application/json' \
   -H 'Accept: application/json' \
+  -H 'Authorization: Bearer gb_emp_YOUR_SECRET_HERE' \
   -d '{
     "jsonrpc": "2.0",
     "id": 1,
     "method": "initialize",
     "params": {
-      "protocolVersion": "2024-11-05",
+      "protocolVersion": "2025-11-25",
       "capabilities": {},
       "clientInfo": { "name": "curl", "version": "0.0.1" }
     }
@@ -198,6 +247,60 @@ curl -sS -X POST 'https://staffpass.sealith.com/api/mcp' \
 
 （同等の HTTP）`GET https://staffpass.sealith.com/api/approvals/status?id=…&token=…`
 
+### 2026-07-28 の例（initialize なし。毎回ヘッダと `_meta` を付ける）
+
+`server/discover`（任意。対応版と capabilities を先に知りたいとき。認証不要）:
+
+```bash
+curl -sS -X POST 'https://staffpass.sealith.com/api/mcp' \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json, text/event-stream' \
+  -H 'MCP-Protocol-Version: 2026-07-28' \
+  -H 'Mcp-Method: server/discover' \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": "discover-1",
+    "method": "server/discover",
+    "params": {
+      "_meta": {
+        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+        "io.modelcontextprotocol/clientInfo": { "name": "curl", "version": "0.0.1" },
+        "io.modelcontextprotocol/clientCapabilities": {}
+      }
+    }
+  }'
+```
+
+`tools/call` — whoami（`Mcp-Name` はツール名と同じ値）:
+
+```http
+POST /api/mcp HTTP/1.1
+Host: staffpass.sealith.com
+Content-Type: application/json
+Accept: application/json, text/event-stream
+Authorization: Bearer gb_emp_YOUR_SECRET_HERE
+MCP-Protocol-Version: 2026-07-28
+Mcp-Method: tools/call
+Mcp-Name: staffpass_whoami
+
+{
+  "jsonrpc": "2.0",
+  "id": 6,
+  "method": "tools/call",
+  "params": {
+    "name": "staffpass_whoami",
+    "arguments": {},
+    "_meta": {
+      "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+      "io.modelcontextprotocol/clientInfo": { "name": "curl", "version": "0.0.1" },
+      "io.modelcontextprotocol/clientCapabilities": {}
+    }
+  }
+}
+```
+
+結果には `resultType: "complete"` と `_meta["io.modelcontextprotocol/serverInfo"]` が付きます。中身（`content` など）は従来版と同じです。
+
 ---
 
 ## Connect from Grok Bot（Plugins）
@@ -275,6 +378,7 @@ xAI API の remote MCP も同じ URL / Bearer を指定してください。
 | **Endpoint** | `https://staffpass.sealith.com/api/mcp/admin` |
 | **Auth** | `Authorization: Bearer gb_adm_…`（社員証 `gb_emp_` は fail-closed で拒否） |
 | **Server name** | `staffpass-admin` |
+| **Protocol** | 社員証 MCP と同じ（MCP `2026-07-28` + 従来版、`server/discover` 対応） |
 
 ツール:
 
@@ -283,6 +387,7 @@ xAI API の remote MCP も同じ URL / Bearer を指定してください。
 | `employees.issue` | always_human | AI社員証の発行 |
 | `link` | always_human | 社員証とGrok Bot連携 |
 | `policy.patch` | always_human | 権限更新 |
+| `employees.postingIdentity.set` | always_human | Slack 投稿名義（`bot` / `user`）の切り替え。`user` は本人の Slack ユーザートークン（chat:write）を提案時と反映直前に確認。詳細は `docs/admin-mcp-posting-identity.md` |
 | `parties.upsert` | always_human | 相手台帳登録 |
 | `channels.classify` | always_human | チャネル分類 + 1:1 IM受口設定 |
 | `roles.propose` | always_human | 職務案の提案 |

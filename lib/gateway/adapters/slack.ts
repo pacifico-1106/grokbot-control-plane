@@ -1,6 +1,14 @@
 import { getLinkedSlackUserToken } from "@/lib/data/slack-identities";
-import { resolveOrgSlackBotToken } from "@/lib/slack/bot-token";
+import { preSendHoldCode } from "@/lib/safety/hold";
+import {
+  CONVERSATION_BOT_TOKEN_MISSING,
+  resolveOrgSlackBotToken,
+  resolveOrgSlackBotTokenDetailed,
+} from "@/lib/slack/bot-token";
 import { normalizePostingAs } from "@/lib/employees/posting-as";
+import { isDefinitePreShareSlackError } from "@/lib/slack/definite-errors";
+import { SLACK_RATE_LIMIT_ERRORS, retryAfterSecondsFromHeaders } from "./rate-limit";
+import { isDemoMode } from "@/lib/mode";
 import type { MouthRoutingDecision, OrgReplyPolicy, PostingAs, ReplyPolicyDecision } from "@/lib/types";
 import {
   evaluateReplyPolicy,
@@ -13,10 +21,86 @@ import {
 
 const SLACK_TIMEOUT_MS = 5_000;
 
+/**
+ * No conversation token for the org (no adapter / own notify inbox token).
+ * Production fails closed with this code; the stub ok is demo-mode only.
+ * Also listed as retryable in lib/approvals/execution.ts (precedes any Slack call).
+ */
+export const SLACK_TOKEN_MISSING = "slack_token_missing";
+
+/**
+ * Duplicate post guard (5): a failed post says whether it is CONFIRMED not
+ * sent — nothing was submitted, the request never reached Slack (DNS /
+ * connection refused) or Slack answered `ok:false` with a definite error
+ * (lib/slack/definite-errors.ts + CHAT_POST_DEFINITE_ERRORS) — or may have
+ * gone out ("unknown": timeout, network error after connect, 5xx / non-JSON,
+ * ok without a ts or any unlisted error).
+ * Rate limits (木村 #278 answers 3, 2026-10-05, reverses the 10/4 call):
+ * `ratelimited` / `rate_limited` in a JSON answer below 500 are not_sent and
+ * carry the Retry-After wait (retryAfterSeconds, ./rate-limit.ts). The same
+ * body on a 5xx — or any definite error on a 5xx — stays unknown. File-upload
+ * reconciliation (lib/slack/definite-errors.ts) is unchanged: ratelimited is
+ * still not definite there.
+ */
+export type PostSendState = "not_sent" | "unknown";
+
+/** chat.postMessage refusals that Slack documents as "nothing was posted". */
+const CHAT_POST_DEFINITE_ERRORS: ReadonlySet<string> = new Set([
+  "msg_too_long",
+  "no_text",
+  "invalid_blocks",
+  "invalid_blocks_format",
+  "too_many_attachments",
+  "restricted_action",
+  "restricted_action_read_only_channel",
+  "restricted_action_thread_only_channel",
+  "restricted_action_non_threadable_channel",
+  "cannot_reply_to_message",
+  "invalid_arguments",
+  "invalid_thread_ts",
+  // Rate limited: Slack refuses the call before posting (木村 2026-10-05).
+  ...SLACK_RATE_LIMIT_ERRORS,
+]);
+
+function slackErrorSendState(rawError: string | undefined, httpStatus: number): PostSendState {
+  if (httpStatus >= 500) return "unknown";
+  return rawError && (isDefinitePreShareSlackError(rawError) || CHAT_POST_DEFINITE_ERRORS.has(rawError)) ? "not_sent" : "unknown";
+}
+
+/** fetch threw: only "never reached the host" is a confirmed not-sent. */
+export function fetchErrorSendState(error: unknown): PostSendState {
+  const cause = error && typeof error === "object" ? (error as { cause?: { code?: unknown } }).cause : undefined;
+  const code = cause && typeof cause === "object" ? String(cause.code ?? "") : "";
+  return ["ENOTFOUND", "EAI_AGAIN", "ECONNREFUSED"].includes(code) ? "not_sent" : "unknown";
+}
+
 export type SlackConversationPostResult =
   | { ok: true; delivery: "stub" }
-  | { ok: true; delivery: "slack"; channel: string; ts: string }
-  | { ok: false; error: string };
+  | {
+      ok: true;
+      delivery: "slack";
+      channel: string;
+      ts: string;
+      /** Which token made the post (comm.delete must delete with the same one). */
+      postedVia?: PostingAs;
+    }
+  | {
+      ok: false;
+      error: string;
+      sendState?: PostSendState;
+      /** Only on a rate-limited, not_sent answer: the provider's wait (clamped). */
+      retryAfterSeconds?: number;
+    };
+
+/** Failure result without the internal rawError, keeping the rate-limit wait. */
+function failureOf(posted: { error: string; sendState: PostSendState; retryAfterSeconds?: number }): SlackConversationPostResult {
+  return {
+    ok: false,
+    error: posted.error,
+    sendState: posted.sendState,
+    ...(posted.retryAfterSeconds !== undefined ? { retryAfterSeconds: posted.retryAfterSeconds } : {}),
+  };
+}
 
 export function looksLikeSlackTs(value: string | undefined | null): boolean {
   return Boolean(value && /^\d+\.\d+$/.test(value.trim()));
@@ -89,7 +173,10 @@ export async function resolveConversationToken(input: {
   orgId: string;
   employeeId?: string;
   postingAs?: PostingAs | string | null;
-}): Promise<{ token: string; effectivePostingAs: PostingAs } | { error: "slack_identity_unbound" }> {
+}): Promise<
+  | { token: string; effectivePostingAs: PostingAs }
+  | { error: "slack_identity_unbound" | typeof CONVERSATION_BOT_TOKEN_MISSING }
+> {
   const requestedPostingAs = normalizePostingAs(input.postingAs);
 
   if (requestedPostingAs === "user") {
@@ -99,8 +186,11 @@ export async function resolveConversationToken(input: {
     if (!userToken) return { error: "slack_identity_unbound" };
     return { token: userToken, effectivePostingAs: requestedPostingAs };
   }
-  const botToken = await resolveOrgSlackBotToken(input.orgId);
-  return { token: botToken, effectivePostingAs: requestedPostingAs };
+  const bot = await resolveOrgSlackBotTokenDetailed(input.orgId);
+  // Only the shared approval app is installed: fail closed with a reason instead
+  // of the silent stub, so nobody believes a conversation post went out.
+  if (!bot.token && bot.skippedSharedApprovalApp) return { error: CONVERSATION_BOT_TOKEN_MISSING };
+  return { token: bot.token, effectivePostingAs: requestedPostingAs };
 }
 
 function mapSlackApiError(error: string | undefined, httpStatus: number): string {
@@ -146,7 +236,7 @@ async function postSlackMessage(
   threadTs?: string
 ): Promise<
   | { ok: true; channel: string; ts: string }
-  | { ok: false; error: string; rawError?: string }
+  | { ok: false; error: string; rawError?: string; sendState: PostSendState; retryAfterSeconds?: number }
 > {
   try {
     const response = await fetch("https://slack.com/api/chat.postMessage", {
@@ -169,20 +259,26 @@ async function postSlackMessage(
       ts?: string;
     };
     if (!body.ok) {
+      const sendState = slackErrorSendState(body.error, response.status);
+      const rateLimited = sendState === "not_sent" && Boolean(body.error && SLACK_RATE_LIMIT_ERRORS.has(body.error));
       return {
         ok: false,
         error: mapSlackApiError(body.error, response.status),
         rawError: body.error,
+        sendState,
+        ...(rateLimited ? { retryAfterSeconds: retryAfterSecondsFromHeaders(response.headers) } : {}),
       };
     }
     if (!body.channel || !body.ts) {
-      return { ok: false, error: "slack_message_missing" };
+      // Slack said ok: the message may exist without an id we can use.
+      return { ok: false, error: "slack_message_missing", sendState: "unknown" };
     }
     return { ok: true, channel: body.channel, ts: body.ts };
   } catch (error) {
     return {
       ok: false,
       error: error instanceof Error ? error.message : "slack_fetch_failed",
+      sendState: fetchErrorSendState(error),
     };
   }
 }
@@ -198,15 +294,21 @@ export async function postConversationMessage(input: {
   slackUserId?: string;
 }): Promise<SlackConversationPostResult> {
   const dest = input.channel.trim();
-  if (!dest) return { ok: false, error: "slack_channel_required" };
+  if (!dest) return { ok: false, error: "slack_channel_required", sendState: "not_sent" };
+  // S2: last check right before the provider call (work already in flight stops here).
+  const held = await preSendHoldCode(input.orgId, input.employeeId);
+  if (held) return { ok: false, error: held, sendState: "not_sent" };
   const resolved = await resolveConversationToken({
     orgId: input.orgId,
     employeeId: input.employeeId,
     postingAs: input.postingAs,
   });
-  if ("error" in resolved) return { ok: false, error: resolved.error };
+  if ("error" in resolved) return { ok: false, error: resolved.error, sendState: "not_sent" };
   const token = resolved.token;
-  if (!token) return { ok: true, delivery: "stub" };
+  // Production: a clear failure, never a stub ok that looks like a sent post
+  // (comm.reply / comm.send / slack.post / approval fulfill all come through here).
+  // Demo mode (Supabase not configured: local / tests) keeps the stub.
+  if (!token) return isDemoMode() ? { ok: true, delivery: "stub" } : { ok: false, error: SLACK_TOKEN_MISSING, sendState: "not_sent" };
 
   const text = input.summarize
     ? `【要約のみ】\n${input.text || ""}`
@@ -215,7 +317,7 @@ export async function postConversationMessage(input: {
   const posted = await postSlackMessage(token, dest, text, input.threadTs);
 
   if (posted.ok) {
-    return { ok: true, delivery: "slack", channel: posted.channel, ts: posted.ts };
+    return { ok: true, delivery: "slack", channel: posted.channel, ts: posted.ts, postedVia: resolved.effectivePostingAs };
   }
 
   // Path A app DM retry: When user token gets channel_not_found on a DM channel,
@@ -240,35 +342,36 @@ export async function postConversationMessage(input: {
     if (canRetryBotWithOpen) {
       const openResult = await openSlackConversation(token, input.slackUserId!.trim());
       if (!openResult.ok) {
-        return { ok: false, error: posted.error };
+        return failureOf(posted);
       }
       const retried = await postSlackMessage(token, openResult.channelId, text, input.threadTs);
       if (retried.ok) {
-        return { ok: true, delivery: "slack", channel: retried.channel, ts: retried.ts };
+        return { ok: true, delivery: "slack", channel: retried.channel, ts: retried.ts, postedVia: "bot" };
       }
-      return { ok: false, error: retried.error };
+      return failureOf(retried);
     }
 
-    return { ok: false, error: posted.error };
+    return failureOf(posted);
   }
 
-  // Fall back to bot token for Path A app DM
+  // Fall back to bot token for Path A app DM (conversation bot only — never the
+  // shared approval app; with none, keep the user-token error = fail closed).
   const botToken = await resolveOrgSlackBotToken(input.orgId);
   if (!botToken) {
-    return { ok: false, error: posted.error };
+    return failureOf(posted);
   }
 
   const openResult = await openSlackConversation(botToken, input.slackUserId!.trim());
   if (!openResult.ok) {
-    return { ok: false, error: posted.error };
+    return failureOf(posted);
   }
 
   const retried = await postSlackMessage(botToken, openResult.channelId, text, input.threadTs);
   if (retried.ok) {
-    return { ok: true, delivery: "slack", channel: retried.channel, ts: retried.ts };
+    return { ok: true, delivery: "slack", channel: retried.channel, ts: retried.ts, postedVia: "bot" };
   }
 
-  return { ok: false, error: retried.error };
+  return failureOf(retried);
 }
 
 /**
@@ -386,7 +489,7 @@ export function requiresSplitDelivery(routing: MouthRoutingDecision): boolean {
  * B2: Reply policy-aware message posting result.
  */
 export type ReplyPolicyAwarePostResult =
-  | { ok: true; delivery: "slack"; channel: string; ts: string; replyDecision: ReplyPolicyDecision }
+  | { ok: true; delivery: "slack"; channel: string; ts: string; postedVia?: PostingAs; replyDecision: ReplyPolicyDecision }
   | { ok: true; delivery: "draft"; replyDecision: ReplyPolicyDecision; draftText: string }
   | { ok: true; delivery: "stub"; replyDecision: ReplyPolicyDecision }
   | { ok: false; error: string; replyDecision?: ReplyPolicyDecision }
@@ -480,6 +583,7 @@ export async function postConversationMessageWithReplyPolicy(input: {
     delivery: "slack",
     channel: postResult.channel,
     ts: postResult.ts,
+    ...(postResult.postedVia ? { postedVia: postResult.postedVia } : {}),
     replyDecision,
   };
 }

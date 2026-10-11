@@ -1,10 +1,13 @@
-import { NextResponse } from "next/server";
+import { THREAD_MOVED_ON_CLOSE_REASON, closedWithoutSendInfo } from "@/lib/approvals/closed-without-send";
 import { getApprovalStatusByToken, runtimeModeLabel } from "@/lib/data";
 import { getApprovalWorkflowProgress } from "@/lib/approval-workflow";
 import { parseFulfillment } from "@/lib/approvals/fulfill";
 import { parseAdminFulfillment } from "@/lib/admin-mcp/fulfill-admin";
 import { isAdminClassApproval } from "@/lib/admin-mcp/audit-class";
 import { redactMetadata } from "@/lib/data/redaction";
+import { attachmentStatusField } from "@/lib/approvals/attachment-card";
+import { approvalPollFields } from "@/lib/approvals/poll-hint";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 export const runtime = "nodejs";
 
@@ -20,7 +23,7 @@ export async function GET(req: Request) {
   const token = (url.searchParams.get("token") || "").trim();
 
   if (!id || !token) {
-    return NextResponse.json(
+    return jsonUtf8(
       {
         ok: false,
         error: "id_and_token_required",
@@ -32,7 +35,7 @@ export async function GET(req: Request) {
 
   const approval = await getApprovalStatusByToken(id, token);
   if (!approval) {
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: "not_found_or_invalid_token" },
       { status: 404 }
     );
@@ -44,6 +47,8 @@ export async function GET(req: Request) {
     approval.status === "pending" ||
     approval.status === "expired"
     || approval.status === "revision_requested"
+    // Closed without sending (COMM_REPLY_DEDUP_ENABLED): terminal → abort_job.
+    || approval.status === "superseded"
       ? approval.status
       : "pending";
 
@@ -91,6 +96,7 @@ export async function GET(req: Request) {
           ...(invokeFulfill.ts ? { ts: invokeFulfill.ts } : {}),
           ...(invokeFulfill.id ? { id: invokeFulfill.id } : {}),
           ...(invokeFulfill.surface ? { surface: invokeFulfill.surface } : {}),
+          ...(invokeFulfill.fileUpload ? { fileUpload: invokeFulfill.fileUpload } : {}),
         };
       } else if (invokeFulfill && !invokeFulfill.ok) {
         fulfillmentResult = {
@@ -120,17 +126,12 @@ export async function GET(req: Request) {
     revisionNote: approval.revisionNote,
     revisionCount: approval.revisionCount,
     parentApprovalId: approval.parentApprovalId,
+    // Approved attachment: snapshot filename + size only (null = none / not recorded).
+    attachment: attachmentStatusField(approval.metadata),
     ...(fulfillmentResult ? { fulfillment: redactMetadata(fulfillmentResult) } : {}),
-    pollHint:
-      status === "pending"
-        ? "continue_polling"
-        : status === "approved"
-          ? fulfillmentResult && !adminResultRequired
-            ? "fulfilled"
-            : "reinvoke_with_approvalId"
-          : status === "revision_requested"
-            ? `Revise the artifact per revisionNote and re-invoke with the same jobId and parentApprovalId=${approval.id}.`
-          : "abort_job",
+    ...(status === "superseded" || status === "expired" ? closedWithoutSendField(approval.metadata) : {}),
+    // pollHint (+ reinvokeReason for a definite Slack failure; 木村 5) — same shape as the MCP tool / status API
+    ...approvalPollFields({ status, approvalId: approval.id, fulfillmentResult, adminResultRequired }),
   };
 
   if (workflowProgress) {
@@ -159,5 +160,16 @@ export async function GET(req: Request) {
     };
   }
 
-  return NextResponse.json(response);
+  return jsonUtf8(response);
+}
+
+/** Why a conversation approval was closed without sending (reason only, no ids / hashes). */
+function closedWithoutSendField(metadata: Record<string, unknown> | null | undefined): Record<string, unknown> {
+  const closed = metadata?.closedWithoutSend;
+  if (!closed || typeof closed !== "object" || Array.isArray(closed)) return {};
+  const reason = (closed as Record<string, unknown>).reason;
+  if (typeof reason !== "string") return {};
+  // Thread single-flight (#286 decision 2): say it was not sent because the thread moved on.
+  const info = reason === THREAD_MOVED_ON_CLOSE_REASON ? closedWithoutSendInfo(metadata) : null;
+  return { closedWithoutSend: info ? { reason, messageJa: info.messageJa, nextStep: info.nextStep } : { reason } };
 }

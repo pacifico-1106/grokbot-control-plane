@@ -21,16 +21,24 @@ import {
   detectSecretInPayload,
   buildSecretDetectionErrorResponse,
 } from "@/lib/security/secret-detector";
+import {
+  auditSecretDetectionBlocked,
+  auditSecretDetectionSuspected,
+  safeEcho,
+} from "@/lib/security/secret-detection-audit";
 import { checkAdminPolicyRequirement } from "@/lib/approval-workflow/admin-policy";
 import { getOrgApprovalWorkflowPolicy } from "@/lib/approval-workflow/data";
 import { isAdminApproverPolicyRequired } from "@/lib/feature-flags";
+import { approverFilingStop } from "@/lib/approver-authority/filing";
 
-const TOOL_TITLE_JA: Record<string, string> = {
+export const ADMIN_TOOL_TITLE_JA: Record<string, string> = {
   "employees.issue": "AI社員の発行",
   link: "AI社員の連携",
   "policy.patch": "権限の更新",
   "parties.upsert": "相手台帳の更新",
   "channels.classify": "チャネル分類",
+  "channels.list": "チャネル分類台帳の一覧（読み取り）",
+  "parties.list": "相手台帳の一覧（読み取り）",
   "roles.propose": "職務案の提案",
   "ingressHandoff.patch": "受信の渡し方",
   "setup.slackAdapter.setBotToken": "Slack会話投稿Botトークン",
@@ -41,6 +49,8 @@ const TOOL_TITLE_JA: Record<string, string> = {
   "approvalWorkflow.unbindVoter": "承認者バインディング取り消し",
   "orgs.create": "テナント作成（プラットフォーム運用）",
   "orgs.issueAdminCredential": "管理MCP認証発行（プラットフォーム運用）",
+  "channels.remove": "チャネル台帳から削除",
+  "parties.remove": "相手台帳から削除",
 };
 
 export type AdminQueueResult = {
@@ -65,9 +75,14 @@ export type AdminQueueSecretRejection = {
   code: "secret_detected_in_payload";
   error: "secret_detected_in_payload";
   pattern: string;
+  /** Constant; never characters of the value. */
   redactedPreview: string;
+  fieldPath: string;
+  matchLength: number;
   messageJa: string;
   nextStepJa: string;
+  nextStep: string;
+  retryable: false;
   tool: string;
 };
 
@@ -86,6 +101,21 @@ export type AdminPolicyRequiredRejection = {
   auditClass: typeof ADMIN_AUDIT_CLASS;
 };
 
+/**
+ * PR-D (APPROVER_AUTHORITY_ENABLED): nobody other than the requester could
+ * approve the ticket (zero owners / every owner is the requester).
+ */
+export type ApproverAuthorityFilingRejection = {
+  ok: false;
+  code: "org_has_no_owner" | "no_owner_other_than_requester";
+  error: "org_has_no_owner" | "no_owner_other_than_requester";
+  reason: "org_has_no_owner" | "no_owner_other_than_requester";
+  messageJa: string;
+  nextStepJa: string;
+  tool: string;
+  auditClass: typeof ADMIN_AUDIT_CLASS;
+};
+
 export async function queueAdminTool(input: {
   cred: ResolvedAdminCredential;
   tool: string;
@@ -95,19 +125,38 @@ export async function queueAdminTool(input: {
   title?: string;
   summary: string;
   jobId?: string;
-}): Promise<AdminQueueResult | AdminQueueSecretRejection | AdminPolicyRequiredRejection> {
+  /**
+   * #289 review: requester identity resolved server-side by the tool handler
+   * (requesterMemberId / requesterIdentity only; any other key is dropped).
+   */
+  extraMetadata?: Record<string, unknown>;
+}): Promise<AdminQueueResult | AdminQueueSecretRejection | AdminPolicyRequiredRejection | ApproverAuthorityFilingRejection> {
   // P0-A: Secret-in-chat detector (fail-closed, before approval ticket creation)
   // Chat NEVER: passwords, refresh tokens, API keys, full employee/admin badge secrets
   // IMPORTANT: Scan raw user input (rawArgsForSecretScan), NOT the post-encryption args.
   // Server-generated ciphertext (*Ciphertext fields from lib/notify/crypto) must not trigger.
   const argsToScan = input.rawArgsForSecretScan ?? input.args;
+  // 2026-10-05: one secret_detection.blocked row per rejection (credential org,
+  // no value); a failed write still rejects.
   const secretDetection = detectSecretInPayload(argsToScan);
-  if (!secretDetection.ok) {
-    const errorResponse = buildSecretDetectionErrorResponse(secretDetection);
-    return {
-      ...errorResponse,
+  if (!secretDetection.ok || secretDetection.suspected) {
+    const scope = {
+      orgId: input.cred.orgId || null,
+      employeeId: null,
+      credentialId: null,
+      surface: "admin_queue" as const,
       tool: input.tool,
+      jobId: input.jobId ?? null,
     };
+    if (!secretDetection.ok) {
+      await auditSecretDetectionBlocked(scope, secretDetection);
+      const errorResponse = buildSecretDetectionErrorResponse(secretDetection);
+      return {
+        ...errorResponse,
+        tool: safeEcho(input.tool) ?? input.tool,
+      };
+    }
+    await auditSecretDetectionSuspected(scope, secretDetection.suspected ?? []);
   }
 
   // P0 Item 1: Admin-class tickets require explicit account-approver policy
@@ -161,7 +210,7 @@ export async function queueAdminTool(input: {
   }
 
   const auditAction = auditActionForAdminTool(input.tool);
-  const title = input.title || TOOL_TITLE_JA[input.tool] || input.tool;
+  const title = input.title || ADMIN_TOOL_TITLE_JA[input.tool] || input.tool;
   const jobId =
     input.jobId ||
     (typeof input.args.jobId === "string" ? input.args.jobId : "") ||
@@ -172,6 +221,42 @@ export async function queueAdminTool(input: {
     grokBotAgentId: input.cred.grokBotAgentId,
     actorId: input.cred.actorId,
   };
+  // PR-D: nobody other than the requester could approve → stop with a nextStep.
+  const requesterExtra: Record<string, unknown> = {};
+  for (const key of ["requesterMemberId", "requesterIdentity"] as const) {
+    if (input.extraMetadata && input.extraMetadata[key] !== undefined) requesterExtra[key] = input.extraMetadata[key];
+  }
+  const authorityStop = await approverFilingStop({
+    orgId: input.cred.orgId,
+    tool: input.tool,
+    metadata: { adminMutation: input.args, adminRequester: requester, ...requesterExtra },
+  });
+  if (authorityStop) {
+    await appendAuditEvent({
+      orgId: input.cred.orgId,
+      employeeId: null,
+      credentialId: null,
+      action: "admin.policy",
+      purpose: auditAction,
+      summary: `承認者権限により申請を停止: ${input.tool}`,
+      metadata: {
+        tool: input.tool,
+        code: authorityStop.reason,
+        requiredApproverKind: authorityStop.requiredApproverKind,
+        auditClass: ADMIN_AUDIT_CLASS,
+      },
+    });
+    return {
+      ok: false,
+      code: authorityStop.reason,
+      error: authorityStop.reason,
+      reason: authorityStop.reason,
+      messageJa: authorityStop.messageJa,
+      nextStepJa: authorityStop.nextStepJa,
+      tool: input.tool,
+      auditClass: ADMIN_AUDIT_CLASS,
+    };
+  }
   const created = await createApproval({
     orgId: input.cred.orgId,
     employeeId: "",
@@ -191,6 +276,7 @@ export async function queueAdminTool(input: {
       isAdminMcpTool: true,
       adminMutation: input.args,
       adminRequester: requester,
+      ...requesterExtra,
     },
   });
 

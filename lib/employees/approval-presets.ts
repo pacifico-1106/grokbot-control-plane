@@ -5,6 +5,7 @@
  */
 
 import type { ApprovalPolicy } from "@/lib/types";
+import { AUDIENCE_GATED_ALWAYS_HUMAN_HINT_TOOL_IDS, OUTBOUND_SEND_TOOL_IDS } from "@/lib/gateway/tools";
 
 export type ToolApprovalDefault =
   | "always_human"
@@ -72,6 +73,12 @@ export const JP_SME_STRICT_APPROVAL_PRESETS: ApprovalPresetRow[] = [
     tool: "comm.reply",
     labelJa: "会話返信（surface + 宛先必須）",
     defaultMode: "risk_based",
+  },
+  {
+    tool: "comm.delete",
+    labelJa: "自分の投稿の削除（Staffpass が記録した自分の投稿のみ）",
+    defaultMode: "risk_based",
+    note: "低リスク。他人・他組織の投稿は不可。COMM_DELETE_ENABLED で有効化（既定 OFF）",
   },
   {
     tool: "commerce.order",
@@ -242,7 +249,20 @@ export function choosableToolIsEnabled(
   }
 }
 
-/** New-hire / missing keys stay always_human for choosable tools. */
+/**
+ * New-hire / missing keys stay always_human for choosable tools.
+ *
+ * `deny` is preserved (2026-10-03 follow-up): it used to be dropped here, so a
+ * stored deny silently became always_human and the gateway's immediate reject
+ * never fired. Keeping it is stricter-only — every consumer treats deny at
+ * least as strictly as always_human (gateway: immediate 403 for outbound-send
+ * tools, otherwise forced approval; fulfill: stop). For outbound-send tools
+ * outside the choosable list (slack.* / comm.* / agentmail.send) only `deny`
+ * is accepted; other values keep being ignored for them — except
+ * `always_human` on comm.reply / comm.send / slack.post / slack.post_external
+ * (2026-10-04), which the gateway honours and is stricter-only
+ * (auto / risk_based there stay ignored).
+ */
 export function normalizeToolApprovalDefaults(
   value: unknown
 ): Record<string, ApprovalPolicy | "deny"> {
@@ -253,9 +273,21 @@ export function normalizeToolApprovalDefaults(
   const src = value as Record<string, unknown>;
   for (const tool of CHOOSABLE_TOOL_APPROVALS) {
     const raw = src[tool];
-    if (raw === "always_human" || raw === "risk_based" || raw === "auto") {
+    if (raw === "always_human" || raw === "risk_based" || raw === "auto" || raw === "deny") {
       out[tool] = raw;
     }
+  }
+  for (const tool of OUTBOUND_SEND_TOOL_IDS) {
+    if ((CHOOSABLE_TOOL_APPROVALS as readonly string[]).includes(tool)) continue;
+    if (src[tool] === "deny") out[tool] = "deny";
+  }
+  for (const tool of AUDIENCE_GATED_ALWAYS_HUMAN_HINT_TOOL_IDS) {
+    if (src[tool] === "always_human") out[tool] = "always_human";
+  }
+  // comm.delete (own recorded posts): risk_based by default; only the
+  // stricter hints are kept (deny = immediate 403, always_human = approval).
+  if (src["comm.delete"] === "deny" || src["comm.delete"] === "always_human") {
+    out["comm.delete"] = src["comm.delete"];
   }
   return out;
 }

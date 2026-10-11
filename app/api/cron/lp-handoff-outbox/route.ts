@@ -9,32 +9,25 @@
  * Feature flag: LP_HANDOFF_ENABLED (default OFF)
  */
 
-import { timingSafeEqual } from "node:crypto";
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest } from "next/server";
 import { isLpHandoffEnabled } from "@/lib/feature-flags";
 import { processHandoffOutbox, type OutboxEntry } from "@/lib/lp/outbox-processor";
+import { checkCronRequest, readCronSecret } from "@/lib/security/cron-secret";
+import { lpPageNoticeLine, lpRefNoticeLine } from "@/lib/lp/lp-page";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
+/**
+ * CRON_SECRET check through the shared constant-time helper. Accepts
+ * `Authorization: Bearer <CRON_SECRET>` (Vercel Cron) or
+ * `x-cron-secret: <CRON_SECRET>` (external POST scheduler). CRON_SECRET is not
+ * trimmed, as before. Unset and `replace_me…` placeholder secrets answer 401.
+ */
 function validateCronSecret(request: NextRequest): boolean {
-  const authHeader = request.headers.get("authorization");
-  const cronSecret = process.env.CRON_SECRET;
-  
-  if (!cronSecret) {
+  const decision = checkCronRequest(request, { rawSecretHeader: "x-cron-secret", trimSecret: false });
+  if (decision !== "ok" && readCronSecret({ trim: false }).state !== "set") {
     console.warn("[lp-handoff-outbox] CRON_SECRET not configured");
-    return false;
   }
-
-  if (safeEqual(authHeader, `Bearer ${cronSecret}`)) {
-    return true;
-  }
-
-  return safeEqual(request.headers.get("x-cron-secret"), cronSecret);
-}
-
-function safeEqual(given: string | null, expected: string): boolean {
-  if (!given) return false;
-  const a = Buffer.from(given);
-  const b = Buffer.from(expected);
-  return a.length === b.length && timingSafeEqual(a, b);
+  return decision === "ok";
 }
 
 async function sendHandoffNotification(entry: OutboxEntry): Promise<{ success: boolean; error?: string }> {
@@ -59,6 +52,9 @@ async function sendHandoffNotification(entry: OutboxEntry): Promise<{ success: b
     "",
     `引継ぎID: ${handoffId}`,
     `理由: ${reason}`,
+    // Lead page / ref, re-validated (null for old entries or tampered values → line omitted).
+    lpPageNoticeLine(payload.lpPage) ?? "",
+    lpRefNoticeLine(payload.lpRef) ?? "",
     "",
     "■ 会話サマリー:",
     summary,
@@ -106,14 +102,14 @@ async function sendHandoffNotification(entry: OutboxEntry): Promise<{ success: b
 
 export async function POST(request: NextRequest) {
   if (!validateCronSecret(request)) {
-    return NextResponse.json(
+    return jsonUtf8(
       { error: "unauthorized" },
       { status: 401 }
     );
   }
 
   if (!isLpHandoffEnabled()) {
-    return NextResponse.json({
+    return jsonUtf8({
       status: "skipped",
       reason: "feature_disabled",
     });
@@ -124,7 +120,7 @@ export async function POST(request: NextRequest) {
 
     console.log("[lp-handoff-outbox] Processing result:", result);
 
-    return NextResponse.json({
+    return jsonUtf8({
       status: "completed",
       processed: result.processed,
       delivered: result.delivered,
@@ -133,7 +129,7 @@ export async function POST(request: NextRequest) {
     });
   } catch (error) {
     console.error("[lp-handoff-outbox] Processing error:", error);
-    return NextResponse.json(
+    return jsonUtf8(
       { error: "processing_failed", message: error instanceof Error ? error.message : "unknown" },
       { status: 500 }
     );

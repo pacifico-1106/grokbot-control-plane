@@ -1,8 +1,10 @@
-import { NextResponse } from "next/server";
 import { getStripe, getAppUrl, getCheckoutPaymentMethodTypes } from "@/lib/stripe";
 import { getCatalogItem, getSetupPriceId, getPlanLabel, isValidCheckoutPlan, type CheckoutPlan } from "@/lib/lp/catalog";
 import { isLpOrderLedgerEnabled } from "@/lib/feature-flags";
 import { createOrder, createCheckoutAttempt, updateCheckoutAttemptStatus } from "@/lib/lp/order-ledger";
+import { LP_PAGE_PARAM, lpPageHomePath, normalizeLpPage, resolveLpRef, withLpPageParam } from "@/lib/lp/lp-page";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
+import { checkPurchasablePrice } from "@/lib/billing/purchasable-prices";
 
 const ALLOWED_ORIGINS = [
   process.env.NEXT_PUBLIC_APP_URL,
@@ -35,10 +37,11 @@ function verifyOrigin(req: Request): boolean {
 export async function GET(req: Request) {
   const url = new URL(req.url);
   const planParam = url.searchParams.get("plan") || "";
+  const lpPage = normalizeLpPage(url.searchParams.get(LP_PAGE_PARAM));
   const appUrl = getAppUrl();
 
   if (!isValidCheckoutPlan(planParam)) {
-    return NextResponse.json(
+    return jsonUtf8(
       { 
         ok: false, 
         error: "invalid_plan", 
@@ -53,7 +56,7 @@ export async function GET(req: Request) {
   const catalogItem = await getCatalogItem(plan);
 
   if (!catalogItem) {
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: "plan_not_found", message: "プランが見つかりません" },
       { status: 404 }
     );
@@ -61,9 +64,9 @@ export async function GET(req: Request) {
 
   const priceId = getSetupPriceId(catalogItem);
   const stripe = getStripe();
-  const checkoutAvailable = Boolean(stripe && priceId);
+  const checkoutAvailable = Boolean(stripe && priceId && checkPurchasablePrice(priceId).ok);
 
-  return NextResponse.json({
+  return jsonUtf8({
     ok: true,
     plan,
     planLabel: getPlanLabel(plan),
@@ -71,7 +74,7 @@ export async function GET(req: Request) {
     monthlyAmountExTax: catalogItem.monthlyAmountExTax,
     catalogVersion: catalogItem.catalogVersionKey,
     checkoutAvailable,
-    consultUrl: `${appUrl}/lp/ai-employee/consult?plan=${plan}`,
+    consultUrl: `${appUrl}${withLpPageParam(`/lp/ai-employee/consult?plan=${plan}`, lpPage)}`,
     message: checkoutAvailable 
       ? "決済準備完了" 
       : "決済準備中です。相談フォームからお問い合わせください。",
@@ -84,27 +87,31 @@ export async function GET(req: Request) {
  */
 export async function POST(req: Request) {
   if (!verifyOrigin(req)) {
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: "origin_denied", message: "不正なリクエストです" },
       { status: 403 }
     );
   }
 
-  let body: { plan?: string; email?: string; requestId?: string };
+  let body: { plan?: string; email?: string; requestId?: string; lpPage?: unknown };
   try {
     body = await req.json();
   } catch {
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: "invalid_json", message: "リクエストが不正です" },
       { status: 400 }
     );
   }
 
   const { plan: planParam, email, requestId } = body;
+  // Lead page: allowlist only (unknown → original page). Ref: only for B, only from the
+  // validated HttpOnly cookie set by middleware; body fields named ref / lpRef are ignored.
+  const lpPage = normalizeLpPage(body.lpPage);
+  const lpRef = resolveLpRef(lpPage, req.headers.get("cookie"));
   const appUrl = getAppUrl();
 
   if (!planParam || !isValidCheckoutPlan(planParam)) {
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: "invalid_plan", message: "無効なプランです" },
       { status: 400 }
     );
@@ -114,7 +121,7 @@ export async function POST(req: Request) {
   const catalogItem = await getCatalogItem(plan);
 
   if (!catalogItem) {
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: "plan_not_found", message: "プランが見つかりません" },
       { status: 404 }
     );
@@ -124,15 +131,27 @@ export async function POST(req: Request) {
   const priceId = getSetupPriceId(catalogItem);
 
   if (!stripe || !priceId) {
-    return NextResponse.json({
+    return jsonUtf8({
       ok: true,
       fallback: true,
       plan,
       planLabel: getPlanLabel(plan),
       setupAmountExTax: catalogItem.setupAmountExTax,
       message: "決済準備中です。相談フォームからお問い合わせください。",
-      consultUrl: `${appUrl}/lp/ai-employee/consult?plan=${plan}`,
+      consultUrl: `${appUrl}${withLpPageParam(`/lp/ai-employee/consult?plan=${plan}`, lpPage)}`,
     });
+  }
+
+  // Allowlist gate (before the order ledger and Stripe): the catalog (incl. a DB
+  // row when LP_CATALOG_DB_ENABLED) may only charge an AI社員パック setup Price.
+  // Retired BUSINESS / MANAGED / STARTER → 410, anything else → 404. Never from the body.
+  const purchasable = checkPurchasablePrice(priceId);
+  if (!purchasable.ok) {
+    console.warn("[checkout] refused non-purchasable price", { plan, error: purchasable.error });
+    return jsonUtf8(
+      { ok: false, error: purchasable.error, message: purchasable.message, purchaseUrl: purchasable.purchaseUrl },
+      { status: purchasable.status }
+    );
   }
 
   const setupAmountExTax = catalogItem.setupAmountExTax ?? 0;
@@ -144,6 +163,8 @@ export async function POST(req: Request) {
     source: "lp-ai-employee",
     planLabel: getPlanLabel(plan),
     catalogVersion: catalogItem.catalogVersionKey,
+    lpPage,
+    ...(lpRef ? { lpRef } : {}),
   };
 
   let orderId: string | undefined;
@@ -184,13 +205,14 @@ export async function POST(req: Request) {
   }
 
   try {
-    const successUrl = `${appUrl}/lp/ai-employee/thank-you?session_id={CHECKOUT_SESSION_ID}&plan=${plan}`;
-    const cancelUrl = `${appUrl}/lp/ai-employee?checkout=canceled`;
+    // Fixed paths + allowlisted page only; nothing from the request body (no open redirect).
+    const successUrl = `${appUrl}${withLpPageParam(`/lp/ai-employee/thank-you?session_id={CHECKOUT_SESSION_ID}&plan=${plan}`, lpPage)}`;
+    const cancelUrl = `${appUrl}${lpPageHomePath(lpPage)}?checkout=canceled`;
 
     const session = await stripe.checkout.sessions.create({
       mode: "payment",
       payment_method_types: paymentMethodTypes,
-      line_items: [{ price: priceId, quantity: 1 }],
+      line_items: [{ price: purchasable.priceId, quantity: 1 }],
       success_url: successUrl,
       cancel_url: cancelUrl,
       metadata,
@@ -203,7 +225,7 @@ export async function POST(req: Request) {
       await updateCheckoutAttemptStatus(attemptId, "pending", session.id);
     }
 
-    return NextResponse.json({
+    return jsonUtf8({
       ok: true,
       url: session.url,
       sessionId: session.id,
@@ -219,7 +241,7 @@ export async function POST(req: Request) {
       await updateCheckoutAttemptStatus(attemptId, "failed");
     }
 
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: "stripe_error", message: "決済セッションの作成に失敗しました" },
       { status: 500 }
     );

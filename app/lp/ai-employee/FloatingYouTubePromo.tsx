@@ -1,19 +1,25 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import Image from "next/image";
+import { getLpVariant, type LpPromoVideo } from "./variants";
+import { VideoModal } from "./VideoModal";
 
-const STORAGE_KEY = "ai-emp-yt-float-collapsed";
-const YOUTUBE_VIDEO_ID = "l4fVZ1-VRcU";
-const YOUTUBE_EMBED_URL = `https://www.youtube-nocookie.com/embed/${YOUTUBE_VIDEO_ID}?rel=0`;
-const YOUTUBE_WATCH_URL = `https://youtu.be/${YOUTUBE_VIDEO_ID}`;
-const THUMBNAIL_SRC = "/lp/ai-employee/youtube-ai-agents-100cho.jpg";
+const DEFAULT_VIDEO = getLpVariant("ai-employee").video;
 
 /**
- * @param liftForChatDock when the LP chat is ON, phones show a fixed bottom
- *   dock (ChatLauncher); lift the promo above it so the two never overlap.
+ * @param video which video (per LP variant). `expandToModal` makes a click open the
+ *   large VideoModal; otherwise desktop plays inline and mobile links to YouTube (pattern A).
+ * @param liftForChatDock when a fixed bottom bar is shown on phones (chat dock, sticky
+ *   CTA), lift the promo above it so the two never overlap.
  */
-export function FloatingYouTubePromo({ liftForChatDock = false }: { liftForChatDock?: boolean } = {}) {
+export function FloatingYouTubePromo({
+  video = DEFAULT_VIDEO,
+  liftForChatDock = false,
+}: { video?: LpPromoVideo; liftForChatDock?: boolean } = {}) {
+  const STORAGE_KEY = video.storageKey;
+  const [modalOpen, setModalOpen] = useState(false);
+  const triggerWrapRef = useRef<HTMLDivElement>(null);
   const [collapsed, setCollapsed] = useState(false);
   const [mounted, setMounted] = useState(false);
   const [isDesktop, setIsDesktop] = useState(false);
@@ -30,7 +36,7 @@ export function FloatingYouTubePromo({ liftForChatDock = false }: { liftForChatD
     mql.addEventListener("change", handleChange);
 
     return () => mql.removeEventListener("change", handleChange);
-  }, []);
+  }, [STORAGE_KEY]);
 
   const handleCollapse = () => {
     sessionStorage.setItem(STORAGE_KEY, "1");
@@ -58,18 +64,64 @@ export function FloatingYouTubePromo({ liftForChatDock = false }: { liftForChatD
     );
   }
 
-  return (
+  const onExpand = video.expandToModal ? () => setModalOpen(true) : undefined;
+  const player = (
     <div
+      ref={triggerWrapRef}
       className={`fixed right-4 z-40 sm:bottom-6 sm:right-6 animate-fade-in ${bottomClass}`}
       role="complementary"
       aria-label="YouTube動画プロモーション"
     >
       {isDesktop ? (
-        <DesktopPlayer onCollapse={handleCollapse} />
+        <PromoDesktopPlayer video={video} onCollapse={handleCollapse} onExpand={onExpand} />
       ) : (
-        <MobilePlayer onCollapse={handleCollapse} />
+        <PromoMobilePlayer video={video} onCollapse={handleCollapse} onExpand={onExpand} />
       )}
     </div>
+  );
+  if (!video.expandToModal) return player;
+  // The dialog is a sibling (not inside the animated container, whose transform
+  // would trap position:fixed). Closing unmounts the iframe = playback stops, and
+  // VideoModal returns focus to the trigger in the small player.
+  return (
+    <>
+      {player}
+      <VideoModal
+        open={modalOpen} videoId={video.id} title={video.title} onClose={() => setModalOpen(false)}
+        returnFocusTo={() => triggerWrapRef.current?.querySelector<HTMLElement>('[data-testid="lp-video-expand"]') ?? null}
+      />
+    </>
+  );
+}
+
+type PlayerProps = { video: LpPromoVideo; onCollapse: () => void; onExpand?: () => void };
+
+/** Thumbnail button that opens the dialog (pattern B). */
+function ExpandTrigger({ video, onExpand, compact }: { video: LpPromoVideo; onExpand: () => void; compact: boolean }) {
+  return (
+    <button
+      type="button"
+      onClick={onExpand}
+      data-testid="lp-video-expand"
+      aria-haspopup="dialog"
+      aria-label={`動画を大きく再生: ${video.title}`}
+      className="group block w-full text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-strong)]"
+    >
+      <div className="relative w-full aspect-video">
+        <Image src={video.thumbnail} alt="" fill sizes={compact ? "280px" : "360px"} className="object-cover" />
+        <div className="absolute inset-0 flex items-center justify-center bg-black/30 group-hover:bg-black/40 transition-colors">
+          <div className="w-14 h-14 rounded-full bg-red-600 flex items-center justify-center shadow-lg">
+            <svg className="w-6 h-6 text-white ml-1" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M8 5v14l11-7z" />
+            </svg>
+          </div>
+        </div>
+      </div>
+      <div className="px-4 py-3">
+        <p className={`${compact ? "text-sm" : "text-xs"} muted leading-snug line-clamp-2`}>{video.title}</p>
+        <p className="mt-1 text-xs text-[var(--accent-strong)] font-medium">{compact ? "タップで大きく再生" : "クリックで大きく再生"}</p>
+      </div>
+    </button>
   );
 }
 
@@ -98,14 +150,22 @@ function CollapsedChip({ onExpand }: { onExpand: () => void }) {
   );
 }
 
-function DesktopPlayer({ onCollapse }: { onCollapse: () => void }) {
+export function PromoDesktopPlayer({ video, onCollapse, onExpand }: PlayerProps) {
+  if (video.expandToModal && onExpand) {
+    return (
+      <div className="relative w-[360px] rounded-2xl overflow-hidden bg-[var(--bg-elevated)] border border-[var(--border)] shadow-[0_16px_60px_rgba(0,0,0,0.55)]">
+        <CollapseButton onCollapse={onCollapse} />
+        <ExpandTrigger video={video} onExpand={onExpand} compact={false} />
+      </div>
+    );
+  }
   return (
     <div className="relative w-[360px] rounded-2xl overflow-hidden bg-[var(--bg-elevated)] border border-[var(--border)] shadow-[0_16px_60px_rgba(0,0,0,0.55)]">
       <CollapseButton onCollapse={onCollapse} />
       <div className="aspect-video">
         <iframe
-          src={YOUTUBE_EMBED_URL}
-          title="AIエージェント100兆個の話を、現場の経営者向けに翻訳する"
+          src={`https://www.youtube-nocookie.com/embed/${video.id}?rel=0`}
+          title={video.title}
           allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
           allowFullScreen
           className="w-full h-full border-0"
@@ -113,27 +173,35 @@ function DesktopPlayer({ onCollapse }: { onCollapse: () => void }) {
       </div>
       <div className="px-4 py-3">
         <p className="text-xs muted leading-snug line-clamp-2">
-          AIエージェント100兆個の話を、現場の経営者向けに翻訳する
+          {video.title}
         </p>
       </div>
     </div>
   );
 }
 
-function MobilePlayer({ onCollapse }: { onCollapse: () => void }) {
+export function PromoMobilePlayer({ video, onCollapse, onExpand }: PlayerProps) {
+  if (video.expandToModal && onExpand) {
+    return (
+      <div className="relative bg-[var(--bg-elevated)] border border-[var(--border)] rounded-2xl overflow-hidden shadow-[0_12px_40px_rgba(0,0,0,0.5)] w-[280px]">
+        <CollapseButton onCollapse={onCollapse} />
+        <ExpandTrigger video={video} onExpand={onExpand} compact />
+      </div>
+    );
+  }
   return (
     <div className="relative bg-[var(--bg-elevated)] border border-[var(--border)] rounded-2xl overflow-hidden shadow-[0_12px_40px_rgba(0,0,0,0.5)] w-[280px]">
       <CollapseButton onCollapse={onCollapse} />
       <a
-        href={YOUTUBE_WATCH_URL}
+        href={`https://youtu.be/${video.id}`}
         target="_blank"
         rel="noopener noreferrer"
         className="group block"
-        aria-label="YouTubeで動画を見る: AIエージェント100兆個の話を、現場の経営者向けに翻訳する"
+        aria-label={`YouTubeで動画を見る: ${video.title}`}
       >
         <div className="relative w-full aspect-video">
           <Image
-            src={THUMBNAIL_SRC}
+            src={video.thumbnail}
             alt=""
             fill
             sizes="280px"
@@ -154,7 +222,7 @@ function MobilePlayer({ onCollapse }: { onCollapse: () => void }) {
         </div>
         <div className="px-4 py-3">
           <p className="text-sm muted leading-snug line-clamp-2">
-            AIエージェント100兆個の話を、現場の経営者向けに翻訳する
+            {video.title}
           </p>
           <p className="mt-1 text-xs text-[var(--accent-strong)] font-medium">
             YouTubeで見る →

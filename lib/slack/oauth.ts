@@ -1,5 +1,6 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { getAppOrigin } from "@/lib/approvals/tokens";
+import { isSlackUserScopeImWriteEnabled } from "@/lib/slack/dm-autoroute-flags";
 
 /**
  * User-token scopes for Staffpass Slack app (not Cursor Slack OAuth).
@@ -35,11 +36,44 @@ export const SLACK_USER_SCOPES =
  * - channels:history, groups:history, im:history: メッセージ履歴読み取り
  * - chat:write: メッセージ投稿
  * - files:write: ファイルアップロード（Path A チャネル / App DM 添付）
+ * - channels:read, groups:read, im:read, mpim:read: conversations.info
+ *   （audience 判定・Slack Connect の shared_external 記録・channel-classify 提案）
+ * - users:read: users.info（受信者の team id 確認 → autoSlackTeamInternal / #298）
+ *
+ * 順序: Slack app (A0BU8TABSV6) の管理画面にスコープを先に追加してから、このコードを
+ * deploy すること。逆順だと bot install が invalid_scope で失敗します。
  *
  * docs/tenant-slack-kickoff-rail.md の Bot Token Scopes と一致させること。
  * スコープ追加後は、テナントが bot-install フローを再実行して xoxb をリフレッシュする必要があります。
  */
-export const SLACK_BOT_SCOPES = "im:write,app_mentions:read,channels:history,groups:history,im:history,chat:write,files:write";
+/**
+ * User scopes actually requested at authorize time. Same as SLACK_USER_SCOPES
+ * unless SLACK_USER_SCOPE_IM_WRITE is ON, which appends `im:write` (needed for
+ * SLACK_DM_AUTOROUTE_ENABLED: conversations.open with the employee user token).
+ */
+export function slackUserScopesForAuthorize(): string {
+  if (!isSlackUserScopeImWriteEnabled()) return SLACK_USER_SCOPES;
+  const scopes = SLACK_USER_SCOPES.split(",");
+  return scopes.includes("im:write") ? SLACK_USER_SCOPES : [...scopes, "im:write"].join(",");
+}
+
+export const SLACK_BOT_SCOPES = [
+  "im:write",
+  "app_mentions:read",
+  "channels:history",
+  "groups:history",
+  "im:history",
+  "chat:write",
+  "files:write",
+  // channel-classify / audience (木村 10/10)
+  "channels:read",
+  "groups:read",
+  "users:read",
+  "im:read",
+  "mpim:read",
+]
+  .filter((scope, i, all) => all.indexOf(scope) === i)
+  .join(",");
 
 export const SLACK_OAUTH_COOKIE = "staffpass_slack_oauth";
 export const SLACK_BOT_INSTALL_COOKIE = "staffpass_slack_bot_install";
@@ -70,6 +104,18 @@ export type SlackOAuthState = {
   employeeId: string;
   nonce: string;
   exp: number;
+  /**
+   * SLACK_AUTHORIZE_LINK_ENABLED: set only when the flow was started from a
+   * re-authorize link (/api/slack/oauth/link). The callback then takes the
+   * link branch (single-use + pinned Slack user/team). Absent = session flow.
+   */
+  linkId?: string;
+  /**
+   * Session flow: the org member who started the link (hire_issue_credentials
+   * at start). The callback completes only for that same member's current
+   * session. Absent on re-authorize-link states (linkId set).
+   */
+  actorMemberId?: string;
 };
 
 export type SlackBotInstallState = {
@@ -83,12 +129,16 @@ export function signSlackOAuthState(input: {
   orgId: string;
   employeeId: string;
   nonce: string;
+  linkId?: string;
+  actorMemberId?: string;
 }): string {
   const payload: SlackOAuthState = {
     orgId: input.orgId,
     employeeId: input.employeeId,
     nonce: input.nonce,
     exp: Date.now() + STATE_TTL_MS,
+    ...(input.linkId ? { linkId: input.linkId } : {}),
+    ...(input.actorMemberId ? { actorMemberId: input.actorMemberId } : {}),
   };
   const encoded = Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
   const secret = signingSecret();
@@ -116,20 +166,30 @@ export function verifySlackOAuthState(
     if (!parsed?.orgId || !parsed?.employeeId || !parsed?.nonce) return null;
     if (parsed.nonce !== nonce) return null;
     if (!Number.isFinite(parsed.exp) || parsed.exp < Date.now()) return null;
+    if (parsed.linkId !== undefined && (typeof parsed.linkId !== "string" || !parsed.linkId)) return null;
+    if (
+      parsed.actorMemberId !== undefined &&
+      (typeof parsed.actorMemberId !== "string" || !parsed.actorMemberId)
+    ) {
+      return null;
+    }
     return parsed;
   } catch {
     return null;
   }
 }
 
-export function slackAuthorizeUrl(state: string): string {
+export function slackAuthorizeUrl(state: string, options: { teamId?: string } = {}): string {
   const clientId = process.env.SLACK_CLIENT_ID?.trim() || "";
   const params = new URLSearchParams({
     client_id: clientId,
-    user_scope: SLACK_USER_SCOPES,
+    user_scope: slackUserScopesForAuthorize(),
     redirect_uri: slackOAuthRedirectUrl(),
     state,
   });
+  // Pre-select the pinned workspace (UX only; the callback enforces the pin).
+  const team = (options.teamId || "").trim();
+  if (/^[TE][A-Z0-9]{2,30}$/.test(team)) params.set("team", team);
   return `https://slack.com/oauth/v2/authorize?${params.toString()}`;
 }
 

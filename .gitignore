@@ -25,3 +25,7 @@
 /playwright/.cache/
 .env*
 /supabase/.temp/
+
+# Python bytecode (DB harness scripts)
+__pycache__/
+*.pyc

@@ -8,6 +8,9 @@
 import { createHash, randomBytes, createHmac, timingSafeEqual } from "node:crypto";
 import { createSupabaseAdminClient } from "@/lib/supabase";
 import { isLpChatEnabled } from "@/lib/feature-flags";
+import { requireGuestSigningKey } from "@/lib/lp/guest-signing-key";
+import { leadPageColumns } from "@/lib/lp/lead-page-db";
+import { parseLpPage, parseLpRef, type LpPage } from "@/lib/lp/lp-page";
 
 const DEFAULT_TENANT_ID = "00000000-0000-0000-0000-000000000001";
 const JOURNEY_EXPIRY_HOURS = 24;
@@ -26,6 +29,10 @@ export interface Journey {
   turnCount: number;
   createdAt: string;
   updatedAt: string;
+  /** LP the chat was started on (null: older journey / column not written). Allowlisted on read. */
+  lpPage: LpPage | null;
+  /** ?ref= on pattern B (validated on read). */
+  lpRef: string | null;
 }
 
 export interface ConsentEvent {
@@ -37,13 +44,12 @@ export interface ConsentEvent {
   consentedAt: string;
 }
 
+/**
+ * Fail closed: throws GuestSigningKeyMissingError when GUEST_SIGNING_KEY is missing/blank/placeholder.
+ * There is deliberately no fallback key (a fixed fallback would let anyone forge guest cookies).
+ */
 function getSigningKey(): string {
-  const key = process.env.GUEST_SIGNING_KEY;
-  if (!key || key.startsWith("replace_me")) {
-    console.warn("[journeys] GUEST_SIGNING_KEY not configured, using fallback");
-    return "dev-fallback-key-not-for-production";
-  }
-  return key;
+  return requireGuestSigningKey();
 }
 
 export function generateGuestToken(): { token: string; tokenHash: string } {
@@ -61,6 +67,7 @@ export function signToken(token: string): string {
   return createHmac("sha256", key).update(token).digest("hex");
 }
 
+/** Throws GuestSigningKeyMissingError when the key is not configured (never returns true then). */
 export function verifySignature(token: string, signature: string): boolean {
   const expected = Buffer.from(signToken(token), "utf8");
   const actual = Buffer.from(signature, "utf8");
@@ -85,6 +92,8 @@ function mapJourneyRow(row: Record<string, unknown>): Journey {
     turnCount: Number(row.turn_count ?? 0),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
+    lpPage: parseLpPage(row.lp_page),
+    lpRef: parseLpRef(row.lp_ref),
   };
 }
 
@@ -94,6 +103,8 @@ export async function createJourney(input: {
   privacyVersion: string;
   kbReleaseId?: string;
   ipHash?: string;
+  lpPage?: LpPage;
+  lpRef?: string | null;
 }): Promise<Journey | null> {
   if (!isLpChatEnabled()) {
     return null;
@@ -122,6 +133,7 @@ export async function createJourney(input: {
       turn_count: 0,
       created_at: now.toISOString(),
       updated_at: now.toISOString(),
+      ...leadPageColumns(input.lpPage, input.lpRef),
     })
     .select("*")
     .single();

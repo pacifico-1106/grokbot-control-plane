@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { BrandMark } from "@/components/BrandMark";
 import { LegalLinks } from "@/components/LegalLinks";
+import { DEFAULT_LP_PAGE, LP_PAGE_PARAM, lpPageHomePath, normalizeLpPage } from "@/lib/lp/lp-page";
 
 const PLANS = [
   { value: "intern", label: "インターン（¥50,000/月）" },
@@ -17,6 +18,9 @@ const PLANS = [
 function ConsultForm() {
   const searchParams = useSearchParams();
   const prefillPlan = searchParams.get("plan") || "";
+  // Lead page from ?from= (allowlist; the server re-validates). Unknown → original page.
+  const lpPage = normalizeLpPage(searchParams.get(LP_PAGE_PARAM));
+  const home = lpPageHomePath(lpPage);
 
   const [formData, setFormData] = useState({
     plan: prefillPlan,
@@ -68,6 +72,7 @@ function ConsultForm() {
           headcount: formData.headcount || undefined,
           useCase: formData.useCase,
           billingPreference: formData.billingPreference,
+          ...(lpPage === DEFAULT_LP_PAGE ? {} : { lpPage }),
         }),
       });
 
@@ -94,7 +99,7 @@ function ConsultForm() {
     return (
       <div className="min-h-screen bg-[var(--bg)] text-[var(--text)] flex items-center justify-center px-4">
         <div className="w-full max-w-md surface p-6 md:p-8 text-center">
-          <BrandMark size="md" href="/lp/ai-employee" />
+          <BrandMark size="md" href={home} />
           <div className="mt-6">
             <div className="w-16 h-16 mx-auto rounded-full bg-[color-mix(in_oklab,var(--ok)_15%,var(--bg))] flex items-center justify-center">
               <svg
@@ -121,7 +126,7 @@ function ConsultForm() {
             </p>
           </div>
           <div className="mt-8 space-y-3">
-            <Link href="/lp/ai-employee" className="btn btn-ghost w-full justify-center">
+            <Link href={home} className="btn btn-ghost w-full justify-center">
               AI社員パックのページに戻る
             </Link>
           </div>
@@ -134,7 +139,7 @@ function ConsultForm() {
   return (
     <div className="min-h-screen bg-[var(--bg)] text-[var(--text)] flex items-center justify-center px-4 py-8">
       <div className="w-full max-w-lg surface p-6 md:p-8">
-        <BrandMark size="md" href="/lp/ai-employee" />
+        <BrandMark size="md" href={home} />
         <h1 className="mt-5 text-2xl font-bold tracking-tight">AI社員パック 相談フォーム</h1>
         <p className="mt-3 text-sm muted leading-relaxed">
           御社の業務に合った導入プランをご提案します。
@@ -313,7 +318,7 @@ function ConsultForm() {
         </form>
 
         <p className="mt-4 text-xs faint">
-          <Link href="/lp/ai-employee" className="underline">
+          <Link href={home} className="underline">
             AI社員パックのページに戻る
           </Link>
         </p>

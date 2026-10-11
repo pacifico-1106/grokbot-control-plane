@@ -32,11 +32,33 @@ function formatTs(iso: string | null): string {
 export function BindingPanel({
   employeeId,
   initial,
+  canManageBinding = false,
+  canRotateCredential = false,
+  canEditWakeWebhook = false,
+  demoMode = false,
+  oauthEnabled = false,
+  pendingReissue = null,
 }: {
   employeeId: string;
   initial: EmployeeBinding;
+  /** Server-decided (isOrgAdminSession): link / health are owner/admin only. */
+  canManageBinding?: boolean;
+  /** Server-decided, same as requireCredentialAdmin on POST rotate. */
+  canRotateCredential?: boolean;
+  /** Server-decided, same as requireCapability("hire_issue_credentials") on PATCH binding. */
+  canEditWakeWebhook?: boolean;
+  /** ?forceFail is honoured by the API only in demo mode. */
+  demoMode?: boolean;
+  /** MCP OAuth flag (server-evaluated). Shows the Q3 "also revoke OAuth" checkbox. */
+  oauthEnabled?: boolean;
+  /**
+   * ADMIN_MCP_CREDENTIAL_REISSUE_ENABLED: an approved admin MCP reissue ticket
+   * waiting for a human to pick the new 社員証 up (ids + deadline only).
+   */
+  pendingReissue?: { approvalId: string; pickupUntil: string } | null;
 }) {
   const [binding, setBinding] = useState<EmployeeBinding>(initial);
+  const [alsoRevokeOAuth, setAlsoRevokeOAuth] = useState(false);
   const [agentId, setAgentId] = useState(initial.grokBotAgentId ?? "");
   const [workspaceId, setWorkspaceId] = useState(
     initial.grokBotWorkspaceId ?? ""
@@ -101,23 +123,37 @@ export function BindingPanel({
     }
   }
 
-  async function rotate() {
+  const [reissuePending, setReissuePending] = useState(pendingReissue);
+
+  async function rotate(reissueApprovalId?: string) {
     setBusy(true);
     setMessage("");
     setOneTimeSecret(null);
     try {
       const res = await fetch(`/api/employees/${employeeId}/rotate`, {
         method: "POST",
+        ...(reissueApprovalId
+          ? { headers: { "Content-Type": "application/json" }, body: JSON.stringify({ reissueApprovalId }) }
+          : oauthEnabled && alsoRevokeOAuth
+            ? { headers: { "Content-Type": "application/json" }, body: JSON.stringify({ revokeOAuth: true }) }
+            : {}),
       });
       const body = await res.json();
       if (!res.ok) throw new Error(body.message || body.error || "rotate_failed");
       applyBinding(body.binding);
+      if (reissueApprovalId) setReissuePending(null);
       setOneTimeSecret(body.credential?.oneTimeSecret ?? null);
       setRevealSecret(false);
       setCopiedSecret(false);
+      const oauthNote =
+        typeof body.oauthGrantsRevoked === "number"
+          ? `（AI クライアント接続 ${body.oauthGrantsRevoked} 件も取り消しました）`
+          : body.oauthRevokeFailed
+            ? "（AI クライアント接続の取り消しに失敗しました。下の一覧から取り消してください）"
+            : "";
       setMessage(
-        body.credential?.notice ||
-          `社員証を出し直しました（世代 ${body.generation}。AI社員番号は変わりません）`
+        (body.credential?.notice ||
+          `社員証を出し直しました（世代 ${body.generation}。AI社員番号は変わりません）`) + oauthNote
       );
     } catch (e) {
       setMessage(e instanceof Error ? e.message : "failed");
@@ -247,74 +283,121 @@ export function BindingPanel({
             Grok Bot の webhook ルーチンからコピー。Cursor Slack 接続は不要。
           </p>
         </div>
-        <label className="block text-sm">
-          <span className="text-xs muted">URL</span>
-          <input
-            className="mt-1 w-full rounded-lg border border-[var(--border)] bg-transparent px-3 py-2 text-sm font-mono"
-            value={wakeUrl}
-            onChange={(e) => setWakeUrl(e.target.value)}
-            placeholder="https://"
-            autoComplete="off"
-            disabled={busy || binding.status === "revoked"}
-          />
-        </label>
-        <label className="block text-sm">
-          <span className="text-xs muted">送信キー（secret）</span>
-          <input
-            type="password"
-            className="mt-1 w-full rounded-lg border border-[var(--border)] bg-transparent px-3 py-2 text-sm font-mono"
-            value={wakeSecret}
-            onChange={(e) => setWakeSecret(e.target.value)}
-            placeholder={hasWakeWebhook ? "保存済み（変更するときだけ入力）" : "Grok Bot の送信キー"}
-            autoComplete="new-password"
-            disabled={busy || binding.status === "revoked"}
-          />
-        </label>
-        <button
-          type="button"
-          className="btn btn-ghost text-sm"
-          disabled={busy || binding.status === "revoked"}
-          onClick={() => void saveWake()}
-        >
-          起こす webhook を保存
-        </button>
+        {canEditWakeWebhook ? (
+          <>
+            <label className="block text-sm">
+              <span className="text-xs muted">URL</span>
+              <input
+                className="mt-1 w-full rounded-lg border border-[var(--border)] bg-transparent px-3 py-2 text-sm font-mono"
+                value={wakeUrl}
+                onChange={(e) => setWakeUrl(e.target.value)}
+                placeholder="https://"
+                autoComplete="off"
+                disabled={busy || binding.status === "revoked"}
+              />
+            </label>
+            <label className="block text-sm">
+              <span className="text-xs muted">送信キー（secret）</span>
+              <input
+                type="password"
+                className="mt-1 w-full rounded-lg border border-[var(--border)] bg-transparent px-3 py-2 text-sm font-mono"
+                value={wakeSecret}
+                onChange={(e) => setWakeSecret(e.target.value)}
+                placeholder={hasWakeWebhook ? "保存済み（変更するときだけ入力）" : "Grok Bot の送信キー"}
+                autoComplete="new-password"
+                disabled={busy || binding.status === "revoked"}
+              />
+            </label>
+            <button
+              type="button"
+              className="btn btn-ghost text-sm"
+              disabled={busy || binding.status === "revoked"}
+              onClick={() => void saveWake()}
+            >
+              起こす webhook を保存
+            </button>
+          </>
+        ) : (
+          <p className="text-xs muted break-all">
+            URL: <span className="font-mono">{binding.wakeWebhookUrl || "未設定"}</span>
+            {binding.hasWakeWebhook ? "（送信キー保存済み）" : ""}
+            <span className="block mt-1 faint">
+              変更は「雇う／社員証発行」の権限を持つ人が行います。
+            </span>
+          </p>
+        )}
       </div>
 
       <div className="flex flex-col sm:flex-row flex-wrap gap-2">
-        <button
-          type="button"
-          className="btn btn-primary text-sm w-full sm:w-auto"
-          disabled={busy || binding.status === "revoked" || !agentId.trim()}
-          onClick={() => void link()}
-        >
-          連携する
-        </button>
-        <button
-          type="button"
-          className="btn btn-ghost text-sm w-full sm:w-auto"
-          disabled={busy || binding.status === "revoked"}
-          onClick={() => void health(false)}
-        >
-          接続を確認
-        </button>
-        <button
-          type="button"
-          className="btn btn-ghost text-sm w-full sm:w-auto"
-          disabled={busy || binding.status === "revoked"}
-          onClick={() => void rotate()}
-        >
-          社員証を再発行
-        </button>
-        <button
-          type="button"
-          className="btn btn-ghost text-xs w-full sm:w-auto"
-          disabled={busy}
-          onClick={() => void health(true)}
-          title="デモ用: 接続切れを試す"
-        >
-          接続切れを試す（デモ）
-        </button>
+        {canManageBinding ? (
+          <>
+            <button
+              type="button"
+              className="btn btn-primary text-sm w-full sm:w-auto"
+              disabled={busy || binding.status === "revoked" || !agentId.trim()}
+              onClick={() => void link()}
+            >
+              連携する
+            </button>
+            <button
+              type="button"
+              className="btn btn-ghost text-sm w-full sm:w-auto"
+              disabled={busy || binding.status === "revoked"}
+              onClick={() => void health(false)}
+            >
+              接続を確認
+            </button>
+          </>
+        ) : null}
+        {canRotateCredential && reissuePending ? (
+          <button
+            type="button"
+            className="btn btn-primary text-sm w-full sm:w-auto"
+            disabled={busy || binding.status === "revoked"}
+            onClick={() => void rotate(reissuePending.approvalId)}
+            title={`承認済みの依頼（${reissuePending.approvalId}）。${formatTs(reissuePending.pickupUntil)} まで`}
+          >
+            承認済みの社員証再発行を受け取る
+          </button>
+        ) : null}
+        {canRotateCredential ? (
+          <button
+            type="button"
+            className="btn btn-ghost text-sm w-full sm:w-auto"
+            disabled={busy || binding.status === "revoked"}
+            onClick={() => void rotate()}
+          >
+            社員証を再発行
+          </button>
+        ) : null}
+        {canRotateCredential && oauthEnabled ? (
+          <label className="flex items-center gap-2 text-xs muted">
+            <input
+              type="checkbox"
+              checked={alsoRevokeOAuth}
+              onChange={(e) => setAlsoRevokeOAuth(e.target.checked)}
+              disabled={busy}
+            />
+            OAuth 接続（AI クライアント）もすべて取り消す
+          </label>
+        ) : null}
+        {canManageBinding && demoMode ? (
+          <button
+            type="button"
+            className="btn btn-ghost text-xs w-full sm:w-auto"
+            disabled={busy}
+            onClick={() => void health(true)}
+            title="デモ用: 接続切れを試す"
+          >
+            接続切れを試す（デモ）
+          </button>
+        ) : null}
       </div>
+      {canManageBinding ? null : (
+        <p className="text-[11px] muted">
+          連携と接続確認は、組織のオーナーまたは管理者が行います。
+        </p>
+      )}
 
       <p className="text-[11px] faint leading-relaxed">
         社員証を出し直しても、AI社員の番号は変わりません。未接続・取消・再接続待ちのときは、承認されるまで実行しません。

@@ -122,8 +122,9 @@ describe("admin queue secret-in-chat detector (P0-A)", () => {
     expect(result.ok).toBe(false);
     expect(result.code).toBe("secret_detected_in_payload");
     const rejection = result as AdminQueueSecretRejection;
-    expect(rejection.redactedPreview.length).toBeLessThan(fullSecret.length);
-    expect(rejection.redactedPreview).toContain("***");
+    // No characters of the value at all (2026-10-05), not even a prefix.
+    expect(rejection.redactedPreview).toBe("[redacted]");
+    expect(JSON.stringify(rejection)).not.toContain("gb_adm_1");
   });
 });
 

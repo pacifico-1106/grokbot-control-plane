@@ -1,4 +1,6 @@
 import { consumeAdminApprovalSecret } from "@/lib/admin-mcp/consume-secret";
+import { handleDesignatedAdminsTool, isDesignatedAdminsTool } from "@/lib/admin-mcp/designated-admins-tool";
+import { handlePromoteOwnerTool, PROMOTE_OWNER_TOOL } from "@/lib/admin-mcp/promote-owner-tool";
 import { canReadAdminApproval } from "@/lib/admin-mcp/result-authority";
 import { assertAdminToolAllowedForPlan } from "@/lib/billing/plan-gate";
 /**
@@ -50,15 +52,36 @@ import {
 import { diagnoseLineApprovalStatus } from "@/lib/line/line-approval-status-diagnose";
 import { encryptNotificationSecrets } from "@/lib/notify/crypto";
 import { queueAdminTool } from "@/lib/admin-mcp/queue";
+import { handleSlackDmSetupTool, isSlackDmSetupTool } from "@/lib/admin-mcp/slack-dm-setup";
+import { SLACK_APPROVER_SET_TOOL, handleSlackApproverSet } from "@/lib/admin-mcp/slack-approver";
+import { SLACK_AUTHORIZE_LINK_TOOL, handleSlackAuthorizeLinkIssue } from "@/lib/admin-mcp/slack-authorize-link";
 import { fulfillApprovedAdmin, parseAdminFulfillment } from "@/lib/admin-mcp/fulfill-admin";
 import { auditActionForAdminTool } from "@/lib/admin-mcp/audit-class";
 import { buildPollUrl } from "@/lib/approvals/tokens";
+import { handleAllowedAccountsTool, isAllowedAccountsTool } from "@/lib/admin-mcp/allowed-accounts-tools";
+import { POSTING_IDENTITY_SET_TOOL, handlePostingIdentityTool } from "@/lib/admin-mcp/posting-identity-tool";
+import { CREDENTIAL_REISSUE_REASONS, CREDENTIAL_REISSUE_TOOL, handleCredentialReissueTool } from "@/lib/employees/credential-reissue";
+import {
+  CHANNELS_REMOVE_TOOL_DEF,
+  PARTIES_REMOVE_TOOL_DEF,
+  handleDirectoryRemoveTool,
+  isDirectoryRemoveTool,
+} from "@/lib/admin-mcp/directory-remove-tools";
 import { ADMIN_MCP_TOOL_NAMES } from "@/lib/mcp/admin-public";
 import { buildEmployeePolicyDrafts } from "@/lib/employees/policy-draft";
 import { parseApprovalChannelId } from "@/lib/employees/approval-inbox";
 import { parseRolesProposeInput } from "@/lib/mcp/roles-propose";
 import { ALL_SCOPES } from "@/lib/employees/policy-draft";
 import { ADMIN_AUDIT_CLASS } from "@/lib/admin-mcp/audit-class";
+import {
+  boundToRequestingAdmin,
+  buildPolicyPatchCard,
+  parsePolicyPatchArgs,
+  policyPatchCardTooLong,
+  policyPatchInputSchema,
+  POLICY_PATCH_CARD_KEY,
+} from "@/lib/admin-mcp/policy-patch-guard";
+import { getOrgSodWarnPolicy } from "@/lib/data/org-context";
 import { getEffectiveReplyPolicy, type ReplyPolicySource } from "@/lib/data/reply-policy";
 import { getEffectiveMailPolicy, type MailPolicySource } from "@/lib/data/mail-policy";
 import { getOrgInternalAudienceRule } from "@/lib/data/internal-audience-rule";
@@ -84,10 +107,18 @@ import {
   validateApprovalRoutesPatch,
   handleDeputyActivate,
 } from "@/lib/approval-kind-routes/mcp-handlers";
-import { isApprovalKindRoutesEnabled, isConfigChangeRequestEnabled } from "@/lib/feature-flags";
-import { buildDiff } from "@/lib/config-change-request/core";
-import { getOrgChannel } from "@/lib/data/directory";
-import type { ChannelClassification, ConversationSurface } from "@/lib/types";
+import { isApprovalKindRoutesEnabled } from "@/lib/feature-flags";
+import { handleChannelLedgerList } from "@/lib/admin-mcp/channel-ledger-list";
+import {
+  CHANNEL_CLASSIFICATIONS,
+  CHANNEL_LEDGER_SURFACES,
+  PARTY_AUDIENCES,
+  PARTY_KINDS,
+  rejectUnknownArgs,
+  validateChannelsClassifyArgs,
+  validatePartiesUpsertArgs,
+} from "@/lib/channel-classify/core";
+import { buildChannelClassifyCardSummaryJa, buildPartyUpsertCardSummaryJa } from "@/lib/channel-classify/approval-card";
 import {
   getIdentityBindingStatus,
   checkFeatureEnabled as checkEmployeeIdentityFeatureEnabled,
@@ -139,6 +170,10 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
         actionLimits: { type: "object", additionalProperties: true },
         spend: { type: "object", additionalProperties: true },
         allowedAccounts: { type: "array" },
+        approvalNotifyEmail: {
+          type: "string",
+          description: "Optional. Approval-result email. Must be the address of an ACTIVE member of this org (case-insensitive); anything else is refused.",
+        },
         jobId: { type: "string" },
       },
       required: ["displayName", "roleLabel", "scopes"],
@@ -164,19 +199,97 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
   {
     name: "policy.patch",
     description:
-      "Patch an employee policy (scopes / purposes / actionLimits) after human approval (always_human). Admin cannot grant itself extra scopes. Dashboard humans cannot edit these fields.",
+      "Patch an employee policy (scopes / allowedPurposes / approvalPolicy / actionLimits / toolApprovalDefaults) after human approval (always_human). The employee must belong to this org (from the credential; no orgId argument). Only these fields: allowedAccounts / postingAs / approvalChannelId / grokBotAgentId are refused with use_dedicated_tool and the tool to use (employees.allowedAccounts.add|remove, employees.postingIdentity.set, setup.lineApproval.setEmployeeInbox, link); any other key → unsupported_key. scopes must all be known (unknown_scopes otherwise). Nothing is queued when refused. actionLimits left out keeps the employee's current actionLimits unchanged; when sent, it replaces the whole map (a tool you leave out of the map loses its caps); only an explicit {} removes every cap — null is refused (invalid_action_limits). allowedPurposes left out keeps the current value too; an explicit [] removes every purpose restriction. The approval card shows the before → after diff and the separation-of-duties (SoD) verdict; an SoD warning is acknowledged only by the human approving that card (sodOverrideAcknowledged from the agent is ignored). Removing or changing a money cap (e.g. commerce.order) needs an owner's approval when APPROVER_AUTHORITY_ENABLED is on. Admin cannot grant itself extra scopes. Dashboard humans cannot edit these fields.",
+    inputSchema: policyPatchInputSchema(),
+  },
+  {
+    name: "employees.allowedAccounts.add",
+    description:
+      "Add one account to an existing AI employee badge's allowedAccounts after human approval (always_human, approvalClass admin; requires ADMIN_MCP_ALLOWED_ACCOUNTS_TOOLS_ENABLED). Same storage and rules as the dashboard AI社員ページ「ブラウザ・外部アカウント」. provider is one of slack | google | microsoft365 | line | x | note | linkedin | youtube | instagram | facebook (free-text services stay dashboard-only). Strict format: slack = Slack user ID (U…/W…, uppercase), google/microsoft365 = email, others = handle without spaces/URLs. The employee must belong to this org (from the credential; no orgId argument). Already present → ok with alreadyPresent (no ticket, no duplicate). The change is applied only when a human approves; it is re-validated at that time and recorded in the admin change log (before/after, approver, ticket). Admin cannot edit the badge bound to itself. Re-invoke with approvalId to read the result.",
     inputSchema: {
       type: "object",
       properties: {
-        employeeId: { type: "string" },
-        scopes: { type: "array", items: { type: "string" } },
-        allowedPurposes: { type: "array", items: { type: "string" } },
-        approvalPolicy: { type: "string" },
-        actionLimits: { type: "object", additionalProperties: true },
+        employeeId: { type: "string", description: "AI社員 ID (this org only)" },
+        provider: {
+          type: "string",
+          enum: ["slack", "google", "microsoft365", "line", "x", "note", "linkedin", "youtube", "instagram", "facebook"],
+        },
+        accountId: { type: "string", description: "slack: U…/W… user ID; google/microsoft365: email; others: handle" },
+        label: { type: "string", description: "Optional display label (max 80 chars)" },
         jobId: { type: "string" },
+        approvalId: { type: "string", description: "Re-invoke with approved ticket ID" },
       },
-      required: ["employeeId", "scopes", "approvalPolicy"],
-      additionalProperties: true,
+      required: ["employeeId", "provider", "accountId"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "employees.allowedAccounts.remove",
+    description:
+      "Remove one account from an existing AI employee badge's allowedAccounts after human approval (always_human, approvalClass admin; requires ADMIN_MCP_ALLOWED_ACCOUNTS_TOOLS_ENABLED). Same storage and rules as the dashboard「ブラウザ・外部アカウント」; a browser:use badge cannot be left with zero accounts. Not present → allowed_account_not_found (no ticket). The employee must belong to this org (from the credential; no orgId argument). Applied only when a human approves, re-validated at that time, and recorded in the admin change log. Does not unlink an existing Slack identity. Admin cannot edit the badge bound to itself. Re-invoke with approvalId to read the result.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        employeeId: { type: "string", description: "AI社員 ID (this org only)" },
+        provider: {
+          type: "string",
+          enum: ["slack", "google", "microsoft365", "line", "x", "note", "linkedin", "youtube", "instagram", "facebook"],
+        },
+        accountId: { type: "string" },
+        jobId: { type: "string" },
+        approvalId: { type: "string", description: "Re-invoke with approved ticket ID" },
+      },
+      required: ["employeeId", "provider", "accountId"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "employees.allowedAccounts.list",
+    description:
+      "List an AI employee badge's allowedAccounts (read-only, no approval; requires ADMIN_MCP_ALLOWED_ACCOUNTS_TOOLS_ENABLED). This org only (from the credential). Returns service / accountId / label / browserRequired. No secrets.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        employeeId: { type: "string", description: "AI社員 ID (this org only)" },
+      },
+      required: ["employeeId"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "employees.postingIdentity.set",
+    description:
+      "Switch an AI employee's Slack posting identity (employees.posting_as) between bot (company Bot token) and user (the employee's own Slack user token) after human approval (always_human, approvalClass admin). Same storage as the dashboard AI社員ページ「Slack 投稿名義」 (policy.patch does not change it). The employee must belong to this org (from the credential; no orgId argument). postingAs \"user\" is refused without a change unless the employee has a linked Slack identity with a saved user token (OAuth / setup.slackAuthorizeLink.issue) whose granted scopes include chat:write: codes user_token_missing, user_token_invalid, user_token_scope_check_failed, missing_scope_chat_write (with nextStepJa). If the badge's allowedAccounts has any Slack row, the linked Slack user ID must be one of them (same match as Slack binding: service slack, exact U…/W…), else slack_account_not_allowed; no Slack row → no such check. This is checked when the ticket is proposed and again right before the change after approval. A run refused with one of these codes changes nothing and may be re-run by re-invoking the same approvalId after fixing the cause (every run re-checks everything); stuck-watch (W2 / stuckWatch.retry) never re-runs it, only an explicit re-invoke does; a successful run is returned as stored. postingAs \"bot\" needs no token check. Already set → ok already_set (no ticket). Recorded in the admin change log (from / to, approver, ticket). Admin cannot switch the badge bound to itself. No token is accepted or returned. Re-invoke with approvalId to read the result.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        employeeId: { type: "string", description: "AI社員 ID (this org only)" },
+        postingAs: {
+          type: "string",
+          enum: ["bot", "user"],
+          description: "bot = 会社のBot（xoxb）, user = 本人の Slack ユーザートークン（chat:write 必須）",
+        },
+        jobId: { type: "string" },
+        approvalId: { type: "string", description: "Re-invoke with approved ticket ID" },
+      },
+      required: ["employeeId", "postingAs"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "employees.credential.reissue",
+    description:
+      "Reissue an AI employee's 社員証 (employee credential) after human approval (always_human, approvalClass admin). ADMIN_MCP_CREDENTIAL_REISSUE_ENABLED must be on (else feature_disabled). The employee must belong to this org (from the credential; no orgId argument); another org's employee → employee_not_found; a suspended employee → employee_terminated; the badge bound to this admin's own Grok Bot → cannot_target_self. Approver: owner or designated admin; owner when the employee holds a money scope (APPROVER_AUTHORITY_ENABLED). The key is NEVER returned to you and is not minted at approval: the approved ticket lets a credential admin pick the new 社員証 up once on the dashboard AI社員 page (within 24h of approval); the old 社員証 keeps working until then and is revoked at that moment. Re-invoke with approvalId to read the result (dashboard pointer only). Do not ask anyone to paste the new key into chat.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        employeeId: { type: "string", description: "AI社員 ID (this org only)" },
+        reason: { type: "string", enum: [...CREDENTIAL_REISSUE_REASONS], description: "expired = 期限切れ, expiring = 期限間近, other = その他 (default)" },
+        jobId: { type: "string" },
+        approvalId: { type: "string", description: "Re-invoke with approved ticket ID" },
+      },
+      required: ["employeeId"],
+      additionalProperties: false,
     },
   },
   {
@@ -186,9 +299,9 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
     inputSchema: {
       type: "object",
       properties: {
-        kind: { type: "string" },
+        kind: { type: "string", enum: [...PARTY_KINDS] },
         identifier: { type: "string" },
-        audience: { type: "string", description: "internal | external" },
+        audience: { type: "string", enum: [...PARTY_AUDIENCES], description: "internal | external" },
         jobId: { type: "string" },
       },
       required: ["kind", "identifier"],
@@ -202,16 +315,46 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
     inputSchema: {
       type: "object",
       properties: {
-        surface: { type: "string" },
+        surface: { type: "string", enum: [...CHANNEL_LEDGER_SURFACES] },
         externalId: { type: "string" },
         identifier: { type: "string" },
-        classification: { type: "string" },
+        classification: { type: "string", enum: [...CHANNEL_CLASSIFICATIONS] },
         mixed: { type: "boolean", description: "true for shared_external / Connect / ゲスト招待。混在chは相手台帳必須" },
         employeeId: { type: "string", description: "Bound employee for an internal Slack 1:1 only" },
         slackTeamId: { type: "string", description: "Slack workspace id when known" },
         jobId: { type: "string" },
       },
       required: ["externalId"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "channels.list",
+    description:
+      "List this org's channel classification ledger (read-only, no approval). Org from the credential only (no orgId argument). Returns surface / externalId / classification / mixed / createdAt / updatedAt per channel — no message content, no secrets. Paginated: pass nextCursor back as cursor. Filters: surface (slack | line | mail | phone | web | telegram), classification (internal | shared_external | unknown). A channel that is not listed is treated as external; register it with channels.classify (human approval).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        surface: { type: "string", enum: ["slack", "line", "mail", "phone", "web", "telegram"] },
+        classification: { type: "string", enum: ["internal", "shared_external", "unknown"] },
+        limit: { type: "integer", minimum: 1, maximum: 200, description: "default 50" },
+        cursor: { type: "string", description: "nextCursor from the previous page (opaque)" },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "parties.list",
+    description:
+      "List this org's party (audience) ledger (read-only, no approval). Org from the credential only (no orgId argument). Returns kind / identifier / audience / createdAt / updatedAt — no message content, no secrets. Paginated: pass nextCursor back as cursor. Filters: kind (email_domain | slack_channel | slack_user | phone | line | mail_address), audience (internal | external). Change entries with parties.upsert (human approval).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        kind: { type: "string", enum: ["email_domain", "slack_channel", "slack_user", "phone", "line", "mail_address"] },
+        audience: { type: "string", enum: ["internal", "external"] },
+        limit: { type: "integer", minimum: 1, maximum: 200, description: "default 50" },
+        cursor: { type: "string", description: "nextCursor from the previous page (opaque)" },
+      },
       additionalProperties: false,
     },
   },
@@ -239,7 +382,7 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
   {
     name: "setup.slackStatus",
     description:
-      "Diagnose Slack integration status for this org (read-only, no approval required). Returns bot token presence, auth.test, bot files:write probe, conversation adapter status, IM routes, per-employee posting_as / Slack identity / Path B fileUploadReady, pathBReadiness aggregate, and nextStepJa (canonical order: Bot files:write→Reinstall→つながり xoxb→User files:write→社員証 Slack Authorize). Optional channelId includes Connect internal-base readiness for that channel (classify + mixed + parties/IAR coverage). No secrets returned. Use before guiding humans through Slack setup. Refer to docs/tenant-slack-kickoff-rail.md and docs/slack-file-upload-egress.md.",
+      "Diagnose Slack integration status for this org (read-only, no approval required). Returns bot token presence, auth.test, the conversation bot token's real scopes (botScopeCheck / missingChannelClassifyScopes: which of channels:read, groups:read, users:read, im:read, mpim:read are missing) and app id from bots.info (botApp / botAppIdMatchesStaffpass vs A0BU8TABSV6), bot files:write probe, conversation adapter status, IM routes, per-employee posting_as / Slack identity / Path B fileUploadReady, pathBReadiness aggregate, and nextStepJa (canonical order: Bot files:write→Reinstall→つながり xoxb→User files:write→社員証 Slack Authorize). Optional channelId includes Connect internal-base readiness for that channel (classify + mixed + parties/IAR coverage). No secrets returned. Use before guiding humans through Slack setup. Refer to docs/tenant-slack-kickoff-rail.md and docs/slack-file-upload-egress.md.",
     inputSchema: {
       type: "object",
       properties: {
@@ -772,13 +915,13 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
   {
     name: "stuckWatch.list",
     description:
-      "List open stuck watch items (read-only, no approval required). F7: W1 mention-unanswered + W2 approved-unfulfilled. Returns summaryJa/nextStepJa per item.",
+      "List open stuck watch items (read-only, no approval required). F7: W1 mention-unanswered + W2 approved-unfulfilled + A1 approved-attachment upload that the scheduled reconcile could not check (status=notified; settled automatically by a later reconcile — re-checked with backoff 10m→20m→40m… until 24h after the notification, see metadata.recheckAttempts / nextCheckAt / recheckStopped — never re-uploaded by stuckWatch.retry; ambiguous / unsupported or stopped items are closed with stuckWatch.resolve; this list is its only notification). Returns summaryJa/nextStepJa per item.",
     inputSchema: {
       type: "object",
       properties: {
         kind: {
           type: "string",
-          description: "Optional filter: w1 | w2 | w1_mention_unanswered | w2_approved_unfulfilled",
+          description: "Optional filter: w1 | w2 | a1 | w1_mention_unanswered | w2_approved_unfulfilled | a1_attachment_uncertain",
         },
         includeResolved: { type: "boolean", description: "Include manually resolved items" },
         limit: { type: "number", description: "Max items (default 50, max 100)" },
@@ -802,7 +945,7 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
   {
     name: "stuckWatch.retry",
     description:
-      "Retry a stuck watch item (read-only action, no approval ticket). F7: ops_fault only auto path; expected_gate refused; config_drift notify/fix. W2 uses existing fulfill reinvoke; send/confirm re-evaluates gates.",
+      "Retry a stuck watch item. Writes: re-runs the already-approved fulfillment of the related approval (W2, or W1 with an approved ticket; counts toward maxAutoRetries) or re-submits the stored invoke snapshot through the gateway (W1 ops_fault). A fulfill re-run also updates the approval's stuck-watch retry count and records stuck_watch.w2_retry; the admin call records a stuck_watch.retry audit event. NOT always_human: no approval ticket of its own, because it only re-runs work that was already approved or goes back through the normal gateway, where gates are re-evaluated (a send may come back needs_approval). F7: ops_fault only; expected_gate refused; config_drift returns a fix hint without retrying; resolved items refused.",
     inputSchema: {
       type: "object",
       properties: {
@@ -815,7 +958,7 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
   {
     name: "stuckWatch.resolve",
     description:
-      "Mark a stuck watch item resolved (read-only action, no approval ticket). F7: excludes item from active watch until re-detected.",
+      "Mark a stuck watch item resolved. Writes: records a stuck_watch.resolve audit event (resolvedBy, optional note); the item is excluded from the active watch until re-detected. Does not retry, send, or change the underlying approval or job. NOT always_human: no approval ticket.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1222,22 +1365,174 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
     },
   },
   {
-    name: "decision.deputyActivate",
+    name: "setup.slackDmApprovalStatus",
     description:
-      "Activate a deputy (代理人) for a pending decision request (always_human). Deputy can act on behalf of the requester. Security: self-approval forbidden (deputy cannot be requester), cross-org forbidden (deputy must be in same org). P1_DECISION_WORKFLOW_ENABLED must be ON.",
+      "Diagnose Slack DM auto-route + approval-delivery setup for this org (read-only, no approval required). Returns feature flags, the approval app's (Slack App B) bot-scope check (chat:write, im:write, im:read, users:read) with missingScopes + Slack app deep link, approval inbox destination / auto-open / 「設定しました」 state, internal slack_user party count, per-employee Slack link + user-token missing scopes (im:write) + re-authorize URL, and ordered nextStepsJa. testApprovalRequired is always false: the first real approval is the live check. No secrets accepted or returned. Admin MCP only.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+  },
+  {
+    name: "dmAutoroute.list",
+    description:
+      "List this org's Slack IM routes (source auto_party / manual when SLACK_DM_AUTOROUTE_ENABLED) and recent DM auto-route results (created / skipped / failed / removed with reason) from the admin audit log (read-only, no approval required). Optional employeeId narrows to one AI社員 of this org. No secrets returned.",
     inputSchema: {
       type: "object",
       properties: {
-        approvalId: { type: "string", description: "Original decision request approval ID" },
-        deputyUserId: { type: "string", description: "User ID of the deputy (must be in same org, cannot be requester)" },
-        reason: { type: "string", description: "Reason for deputy activation" },
-        jobId: { type: "string" },
+        employeeId: { type: "string", description: "Optional AI社員 ID (this org only)" },
+        limit: { type: "number", description: "Max rows (1-100, default 50)" },
       },
-      required: ["approvalId", "deputyUserId"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "dmAutoroute.run",
+    description:
+      "Run the internal Slack DM auto-route for linked AI社員 (always_human for dryRun=false). dryRun=true (default) is a read-only preview: which human-approved internal slack_user parties would get a DM route (would_open) or why not (skipped). dryRun=false creates routes after human approval (requires SLACK_DM_AUTOROUTE_ENABLED); counterparts come only from org_parties(kind=slack_user, audience=internal); Slack Connect / guests / other workspaces / externally-shared DMs are skipped. Optional ADMIN_MCP_DM_AUTOROUTE_AUDIT_ONLY (default OFF) runs dryRun=false without a ticket and records an admin audit row instead (never for an AI社員 bound to this admin agent). Admin cannot self-approve. Re-invoke with approvalId to read the result.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        employeeId: { type: "string", description: "Optional AI社員 ID (this org only). Omit for all linked AI社員 (max 20)." },
+        dryRun: { type: "boolean", description: "Default true (read-only preview)." },
+        jobId: { type: "string" },
+        approvalId: { type: "string", description: "Re-invoke with approved ticket ID" },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "setup.approvalDelivery.autoResolve",
+    description:
+      "Resolve the Slack approval inbox destination automatically (always_human, regardless of any flag): after human approval, the approval app opens its DM with the approver (one of the inbox's allowed user IDs), sends a single 「設定しました」 notice, and saves that DM as the destination. Requires SLACK_APPROVAL_DM_AUTO_OPEN. The approver is checked with users.info (Slack Connect / guest / bot / other workspace → refused). No test approval. Never accepts a token: the approval app bot token must already be saved by a human in the dashboard. Missing scopes are reported with a Slack app deep link. Admin cannot self-approve.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        inboxId: { type: "string", description: "Slack approval inbox ID (optional when the org has exactly one enabled Slack inbox)" },
+        deliveryUserId: { type: "string", description: "Approver Slack user ID (U…); must be one of the inbox's allowed user IDs. Optional when there is exactly one." },
+        jobId: { type: "string" },
+        approvalId: { type: "string", description: "Re-invoke with approved ticket ID" },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "setup.slackApprover.set",
+    description:
+      "Set the approver of this org's shared approval app 「Staffpass承認」 inbox (always_human; requires SLACK_SHARED_APPROVAL_APP_ENABLED and the app installed by an owner/admin via \"Add to Slack\"). After human approval: opens the approval-app ↔ approver DM (users.info: same workspace, not guest / bot / Slack Connect), posts exactly one 「設定しました」, then saves the approver (replaces the previous one) and the DM destination. Nothing is saved if any step fails. Bots / guests / other workspaces are refused. No test approval is needed: the first real approval is the live check. Never accepts or returns a token. Org from the credential. Admin cannot self-approve. Re-invoke with approvalId to read the result.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        slackUserId: { type: "string", description: "Approver's Slack user ID (U…), a human in the installed workspace" },
+        inboxId: { type: "string", description: "Shared-app inbox ID (optional; only needed if there are several)" },
+        jobId: { type: "string" },
+        approvalId: { type: "string", description: "Re-invoke with approved ticket ID" },
+      },
+      required: ["slackUserId"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "setup.slackAuthorizeLink.issue",
+    description:
+      "Issue an AI社員's Slack re-authorize link (always_human; requires SLACK_AUTHORIZE_LINK_ENABLED). After human approval the link is delivered ONLY as an approval-app DM: deliverTo \"employee\" (default) sends it to the AI社員's own Slack account (the pinned U…, only when exactly one is known; the approver gets a URL-free 「社員本人に送りました」 notice), otherwise — or with deliverTo \"approver\" — to an approver (one of the Slack approval inbox's allowed user IDs). Slack Connect / guest / bot recipients are refused; a fallback to the approver is recorded with its reason. If the link is opened by another account or the code exchange fails, the link is burned and the recipient is DM'd (the other account's ID is never shown). Per employee, single-use, expires in 24h, only a hash is stored; issuing again supersedes the previous link. Anti-takeover: the link is pinned to the approval app's Slack team and to the employee's known Slack user (existing identity or the single allowed Slack account); a different account/workspace is rejected and nothing is saved. The URL is never returned — the result says only where it was delivered (deliveryTarget employee/approver + deliveryFallbackReason). Completing it re-links the employee (gets im:write when SLACK_USER_SCOPE_IM_WRITE is ON) and the existing DM auto-route runs. Optional SLACK_AUTHORIZE_LINK_REISSUE_AUDIT_ONLY (default OFF) skips the ticket (admin audit row instead) only for an already-linked employee whose token lacks exactly im:write, never for an AI社員 bound to this admin agent. Never accepts a token. Admin cannot self-approve. Re-invoke with approvalId to read the result.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        employeeId: { type: "string", description: "AI社員 ID (this org only)" },
+        inboxId: { type: "string", description: "Slack approval inbox ID (optional when the org has exactly one enabled Slack inbox)" },
+        deliveryUserId: { type: "string", description: "Approver Slack user ID (U…) who receives the DM (or the 「社員本人に送りました」 notice for deliverTo=employee); must be one of the inbox's allowed user IDs. Optional when there is exactly one." },
+        deliverTo: {
+          type: "string",
+          enum: ["employee", "approver"],
+          description: "employee (default): DM the link to the AI社員's own Slack U… via the approval app (falls back to approver when the U… is not exactly one). approver: DM the link to the approver.",
+        },
+        jobId: { type: "string" },
+        approvalId: { type: "string", description: "Re-invoke with approved ticket ID" },
+      },
+      required: ["employeeId"],
+      additionalProperties: false,
+    },
+  },
+  // ADMIN_MCP_DIRECTORY_REMOVE_TOOLS_ENABLED (default OFF): definitions live in
+  // lib/admin-mcp/directory-remove-tools.ts.
+  CHANNELS_REMOVE_TOOL_DEF,
+  PARTIES_REMOVE_TOOL_DEF,
+  {
+    name: "approvers.designatedAdmins.get",
+    description:
+      "This tool is read-only (no ticket; requires APPROVER_AUTHORITY_ENABLED): this org's 指定管理者 (designated admins) — the admin members who, besides the owner, may approve changes to approvers and permissions. Returns member IDs with display name / role / status. Org from the credential.",
+    inputSchema: {
+      type: "object",
+      properties: {},
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "approvers.designatedAdmins.set",
+    description:
+      "Replace this org's 指定管理者 (designated admins) list after OWNER approval (always_human; requires APPROVER_AUTHORITY_ENABLED). Only an owner can approve this ticket — a designated admin's approval leaves it オーナー承認待ち. memberIds: org_members IDs of ACTIVE members of this org with role admin (max 20; empty list clears it). Re-validated against the current members when applied; the change is audited (before/after, approving owner). Org from the credential. Admin cannot self-approve. Re-invoke with approvalId to read the result.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        memberIds: { type: "array", items: { type: "string" }, description: "org_members IDs (role admin, active, this org)" },
+        jobId: { type: "string" },
+        approvalId: { type: "string", description: "Re-invoke with approved ticket ID" },
+      },
+      required: ["memberIds"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "members.promoteOwner",
+    description:
+      "File a request to make an EXISTING ACTIVE member of this org an owner (オーナー追加; always_human; requires OWNER_PROMOTION_ENABLED and APPROVER_AUTHORITY_ENABLED). memberId only — no invite (cannot add a new person as owner), no role / capabilities / orgId arguments. Exactly one existing owner approves. The member being promoted can never approve. With 2+ owners the requester cannot approve, so requesterSlackUserId is REQUIRED then: it must match this org's verified approver registration (active Slack voter binding of an active member), otherwise filing is refused with code requester_not_identified and nextStepJa (pass the Slack ID of the person who asked and file again). A sole owner may approve their own request, and with a sole owner an unidentified requester is still filed (the card says the requester cannot be identified). A designated admin's approval leaves it オーナー承認待ち. When applied: role owner with the standard owner capabilities, re-checked against the current member row (unchanged since filing, still active, not already owner) through the team member-change guard; every owner and the member are notified; audited (before/after, approving owner, ticket). Removing an owner or transferring ownership is not available. Org from the credential. Re-invoke with approvalId to read the result.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        memberId: { type: "string", description: "org_members ID of an active non-owner member of this org" },
+        requesterSlackUserId: {
+          type: "string",
+          description: "Slack user ID (U…) of the person who asked you to file this. Pass it whenever you know it: it is matched to a member only through this org's verified approver registration, and that member then cannot approve when the org has 2+ owners. Required when the org has 2+ active owners (otherwise refused: requester_not_identified). With a sole owner it is optional; without it the card says the requester cannot be identified, and if a 2nd owner is added before approval or execution the ticket is refused (requester_not_identified) — so pass it whenever you can.",
+        },
+        jobId: { type: "string" },
+        approvalId: { type: "string", description: "Re-invoke with approved ticket ID" },
+      },
+      required: ["memberId"],
       additionalProperties: false,
     },
   },
 ];
+
+/**
+ * decision.deputyActivate is NOT advertised on the Admin MCP (tools/list).
+ *
+ * It was listed in ADMIN_MCP_TOOLS but never added to ADMIN_MCP_TOOL_NAMES
+ * (admin-public.ts), so every call already failed closed with
+ * `unknown_mcp_tool`. Advertising an uncallable tool is misleading, and simply
+ * registering the name would not make it work either: its `approvalId`
+ * argument (the ORIGINAL decision request) is taken by the generic
+ * approvalId re-invoke path for mutation tools (handleAdminApprovalReinvoke),
+ * so handleDeputyActivate would never be reached (approval_tool_mismatch /
+ * the original ticket's status is returned instead).
+ * Wiring it needs its own reviewed change (argument rename or reinvoke
+ * exclusion + fulfillment test) and must add it to BOTH lists; the test
+ * `lib/mcp/admin-tools.test.ts` enforces advertised === callable.
+ * Behaviour is unchanged: still `unknown_mcp_tool`.
+ */
+export const DECISION_DEPUTY_ACTIVATE_TOOL_DEF_UNWIRED: McpToolDef = {
+  name: "decision.deputyActivate",
+  description:
+    "Activate a deputy (代理人) for a pending decision request (always_human). Deputy can act on behalf of the requester. Security: self-approval forbidden (deputy cannot be requester), cross-org forbidden (deputy must be in same org). P1_DECISION_WORKFLOW_ENABLED must be ON.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      approvalId: { type: "string", description: "Original decision request approval ID" },
+      deputyUserId: { type: "string", description: "User ID of the deputy (must be in same org, cannot be requester)" },
+      reason: { type: "string", description: "Reason for deputy activation" },
+      jobId: { type: "string" },
+    },
+    required: ["approvalId", "deputyUserId"],
+    additionalProperties: false,
+  },
+};
 
 /**
  * Admin MCP tools that do NOT create approval tickets.
@@ -1271,6 +1566,12 @@ const ADMIN_READ_ONLY_TOOLS_SET = new Set<string>([
   "orgs.patch",
   "approvals.proxyResolve",
   "employeeIdentity.status",
+  "setup.slackDmApprovalStatus",
+  "dmAutoroute.list",
+  "employees.allowedAccounts.list",
+  "channels.list",
+  "parties.list",
+  "approvers.designatedAdmins.get",
 ]);
 
 /**
@@ -1413,37 +1714,6 @@ async function handleAdminApprovalReinvoke(
     { ok: false, code: "approval_not_approved", message: "承認が完了していません" },
     true
   );
-}
-
-async function buildChannelClassifyDiffSummaryJa(
-  orgId: string,
-  args: Record<string, unknown>
-): Promise<string> {
-  const externalId = String(args.externalId || args.identifier || "").trim();
-  const surface = (String(args.surface || "slack").trim() || "slack") as ConversationSurface;
-  const rawClass = String(args.classification || "unknown").trim();
-  const classification: ChannelClassification =
-    rawClass === "internal" || rawClass === "shared_external" ? rawClass : "unknown";
-  const current = await getOrgChannel(orgId, surface, externalId);
-  const diff = buildDiff(
-    {
-      kind: "channel_classification",
-      surface,
-      externalId,
-      classification,
-      // Same normalisation as upsertOrgChannel (shared_external is always mixed).
-      mixed: args.mixed === true || classification === "shared_external",
-      slackTeamId: null,
-    },
-    {
-      kind: "channel",
-      exists: Boolean(current),
-      classification: current?.classification ?? null,
-      mixed: Boolean(current?.mixed),
-      channelId: current?.id ?? null,
-    }
-  );
-  return `管理エージェントから次の変更依頼が来ています: ${diff.summaryJa}。反映しますか？`;
 }
 
 export function adminToolsAlwaysHuman(): boolean {
@@ -2030,6 +2300,123 @@ export async function callAdminMcpTool(
     return handleAdminApprovalReinvoke(name, approvalId, cred);
   }
 
+  if (name === "channels.list" || name === "parties.list") {
+    // PR-B read-only ledger lists: org from the credential only, no ticket.
+    const listed = await handleChannelLedgerList(name, args, cred.orgId);
+    return toolResult(listed, listed.ok === false);
+  }
+
+  if (name === "channels.classify" || name === "parties.upsert") {
+    // Request-time validation (not flag-gated: only stricter). A typo is
+    // refused here with the allowed values and a nextStep — never queued and
+    // never coerced to "unknown" after approval.
+    const unknownArg = rejectUnknownArgs(name, args);
+    if (unknownArg) return toolResult(unknownArg, true);
+    const checked = name === "channels.classify" ? validateChannelsClassifyArgs(args) : validatePartiesUpsertArgs(args);
+    if (!checked.ok) return toolResult(checked, true);
+  }
+
+  if (isAllowedAccountsTool(name)) {
+    // ADMIN_MCP_ALLOWED_ACCOUNTS_TOOLS_ENABLED: org from the credential only.
+    const outcome = await handleAllowedAccountsTool(name, args, cred);
+    if (outcome.kind === "result") return toolResult(outcome.data, outcome.isError === true);
+    const queued = await queueAdminTool({
+      cred,
+      tool: name,
+      args: { ...outcome.queuedArgs, ...(typeof args.jobId === "string" ? { jobId: args.jobId } : {}) },
+      rawArgsForSecretScan: args,
+      title: outcome.title,
+      summary: outcome.summary,
+    });
+    const queuedOk = (queued as { code?: string }).code === "needs_approval";
+    return toolResult(queuedOk && outcome.resultExtra ? { ...queued, ...outcome.resultExtra } : queued, false);
+  }
+
+  if (isDirectoryRemoveTool(name)) {
+    // ADMIN_MCP_DIRECTORY_REMOVE_TOOLS_ENABLED: org from the credential only;
+    // the row is looked up in that org before any ticket.
+    const outcome = await handleDirectoryRemoveTool(name, args, cred);
+    if (outcome.kind === "result") return toolResult(outcome.data, outcome.isError === true);
+    const queued = await queueAdminTool({
+      cred,
+      tool: name,
+      args: { ...outcome.queuedArgs, ...(typeof args.jobId === "string" ? { jobId: args.jobId } : {}) },
+      rawArgsForSecretScan: args,
+      title: outcome.title,
+      summary: outcome.summary,
+    });
+    return toolResult(queued, false);
+  }
+
+  if (name === CREDENTIAL_REISSUE_TOOL) {
+    // 社員証の再発行 (ADMIN_MCP_CREDENTIAL_REISSUE_ENABLED). Org from the credential only;
+    // the ticket carries ids only and the key is minted at the dashboard hand-over.
+    const outcome = await handleCredentialReissueTool(args, cred);
+    if (outcome.kind === "result") return toolResult(outcome.data, outcome.isError === true);
+    const queued = await queueAdminTool({
+      cred,
+      tool: name,
+      args: { ...outcome.queuedArgs, ...(typeof args.jobId === "string" ? { jobId: args.jobId } : {}) },
+      rawArgsForSecretScan: args,
+      title: outcome.title,
+      summary: outcome.summary,
+    });
+    return toolResult(queued, false);
+  }
+
+  if (name === POSTING_IDENTITY_SET_TOOL) {
+    // Org from the credential only; user-token check before the ticket.
+    const outcome = await handlePostingIdentityTool(args, cred);
+    if (outcome.kind === "result") return toolResult(outcome.data, outcome.isError === true);
+    const queued = await queueAdminTool({
+      cred,
+      tool: name,
+      args: { ...outcome.queuedArgs, ...(typeof args.jobId === "string" ? { jobId: args.jobId } : {}) },
+      rawArgsForSecretScan: args,
+      title: outcome.title,
+      summary: outcome.summary,
+    });
+    return toolResult(queued, false);
+  }
+
+  if (name === PROMOTE_OWNER_TOOL) {
+    // オーナー追加 (OWNER_PROMOTION_ENABLED + APPROVER_AUTHORITY_ENABLED). Org from the credential only.
+    const outcome = await handlePromoteOwnerTool(args, cred);
+    if (outcome.kind === "result") return toolResult(outcome.data, outcome.isError === true);
+    const queued = await queueAdminTool({
+      cred,
+      tool: name,
+      args: { ...outcome.queuedArgs, ...(typeof args.jobId === "string" ? { jobId: args.jobId } : {}) },
+      rawArgsForSecretScan: args,
+      title: outcome.title,
+      summary: outcome.summary,
+      extraMetadata: outcome.extraMetadata,
+    });
+    return toolResult(queued, false);
+  }
+
+  if (isDesignatedAdminsTool(name)) {
+    // PR-D (APPROVER_AUTHORITY_ENABLED): owner-approved 指定管理者 list. Org from the credential only.
+    const outcome = await handleDesignatedAdminsTool(name, args, cred);
+    if (outcome.kind === "result") return toolResult(outcome.data, outcome.isError === true);
+    const queued = await queueAdminTool({
+      cred,
+      tool: name,
+      args: { ...outcome.queuedArgs, ...(typeof args.jobId === "string" ? { jobId: args.jobId } : {}) },
+      rawArgsForSecretScan: args,
+      title: outcome.title,
+      summary: outcome.summary,
+    });
+    return toolResult(queued, false);
+  }
+
+  if (name === "policy.patch") {
+    // PR-C: only the fields policy.patch applies; dedicated-tool keys, unknown
+    // keys / scopes / values are refused before any ticket exists.
+    const parsed = parsePolicyPatchArgs(args);
+    if (!parsed.ok) return toolResult(parsed, true);
+  }
+
   if (name === "policy.patch" || name === "link") {
     const employeeId = String(args.employeeId || "").trim();
     if (employeeId) {
@@ -2041,7 +2428,13 @@ export async function callAdminMcpTool(
         );
       }
       const binding = await getBinding(employeeId);
-      if (adminCannotTargetSelf(cred, binding?.grokBotAgentId)) {
+      // policy.patch: the badge must not belong to this admin agent by
+      // grokBotAgentId or actorId (fulfil re-checks the same way).
+      if (
+        name === "policy.patch"
+          ? boundToRequestingAdmin(cred, binding?.grokBotAgentId)
+          : adminCannotTargetSelf(cred, binding?.grokBotAgentId)
+      ) {
         return toolResult(
           {
             ok: false,
@@ -2078,6 +2471,29 @@ export async function callAdminMcpTool(
         { ok: false, code: "scopes_required", message: "できることを1つ以上選んでください" },
         true
       );
+    }
+    // project_access.projectIds: same org only, checked at filing (and again
+    // at fulfil by issueEmployee). #284 decision 4.
+    if (args.projectAccess != null) {
+      const pa = await import("@/lib/employees/project-access-org");
+      try {
+        await pa.assertProjectAccessSameOrg({
+          orgId: cred.orgId,
+          projectAccess: args.projectAccess,
+          audit: { path: "admin_mcp.employees.issue", phase: "file" },
+        });
+      } catch (error) {
+        if (error instanceof pa.ProjectAccessOrgError) return toolResult(pa.projectAccessRefusalBody(error), true);
+        throw error;
+      }
+    }
+    if (args.approvalNotifyEmail !== undefined && args.approvalNotifyEmail !== null) {
+      // Members-only recipient, checked at filing (again at fulfil by issueEmployee).
+      const { validateApprovalNotifyEmail } = await import("@/lib/employees/approval-notify-email");
+      const notify = await validateApprovalNotifyEmail(cred.orgId, args.approvalNotifyEmail);
+      if (!notify.ok) {
+        return toolResult({ ok: false, code: notify.code, message: notify.messageJa }, true);
+      }
     }
   }
 
@@ -2189,6 +2605,48 @@ export async function callAdminMcpTool(
       sideEffectsRan: Boolean(result.sideEffects),
       summaryJa: `${decision === "approved" ? "承認" : "却下"}しました（プラットフォーム代行・${mandate}）`,
     });
+  }
+
+  if (name === SLACK_APPROVER_SET_TOOL) {
+    // SLACK_SHARED_APPROVAL_APP_ENABLED: org from the credential; always_human.
+    const outcome = await handleSlackApproverSet(cred, args);
+    if (outcome.kind === "result") return toolResult(outcome.data, outcome.isError === true);
+    const queued = await queueAdminTool({
+      cred,
+      tool: name,
+      args: { ...outcome.queuedArgs, ...(typeof args.jobId === "string" ? { jobId: args.jobId } : {}) },
+      rawArgsForSecretScan: args,
+      summary: outcome.summary,
+    });
+    return toolResult(queued, false);
+  }
+
+  if (name === SLACK_AUTHORIZE_LINK_TOOL) {
+    // SLACK_AUTHORIZE_LINK_ENABLED: org from the credential; URL never returned.
+    const outcome = await handleSlackAuthorizeLinkIssue(cred, args);
+    if (outcome.kind === "result") return toolResult(outcome.data, outcome.isError === true);
+    const queued = await queueAdminTool({
+      cred,
+      tool: name,
+      args: { ...outcome.queuedArgs, ...(typeof args.jobId === "string" ? { jobId: args.jobId } : {}) },
+      rawArgsForSecretScan: args,
+      summary: outcome.summary,
+    });
+    return toolResult(queued, false);
+  }
+
+  if (isSlackDmSetupTool(name)) {
+    // PR-4: org always from the credential; no secrets accepted or returned.
+    const outcome = await handleSlackDmSetupTool(name, args, cred);
+    if (outcome.kind === "result") return toolResult(outcome.data, outcome.isError === true);
+    const queued = await queueAdminTool({
+      cred,
+      tool: name,
+      args: { ...outcome.queuedArgs, ...(typeof args.jobId === "string" ? { jobId: args.jobId } : {}) },
+      rawArgsForSecretScan: args,
+      summary: outcome.summary,
+    });
+    return toolResult(queued, false);
   }
 
   if (name === "setup.slackStatus") {
@@ -3055,6 +3513,7 @@ export async function callAdminMcpTool(
 
   let queuedArgs = { ...args };
   let summary = `${name} の実行を人が確認します`;
+  let queuedResultExtra: Record<string, unknown> | null = null;
 
   if (name === "roles.propose") {
     const parsed = parseRolesProposeInput(args);
@@ -3087,15 +3546,41 @@ export async function callAdminMcpTool(
   } else if (name === "employees.issue") {
     summary = `${String(args.displayName)}（${String(args.roleLabel)}）の発行を人が確認します`;
   } else if (name === "policy.patch") {
-    summary = `権限の更新を人が確認します（${String(args.employeeId)}）`;
-  } else if (name === "parties.upsert") {
-    summary = `相手台帳の更新を人が確認します（${String(args.identifier)}）`;
-  } else if (name === "channels.classify") {
-    summary = `チャネル分類を人が確認します（${String(args.externalId || args.identifier)}）`;
-    if (isConfigChangeRequestEnabled()) {
-      // Show the approver the actual before → after, not just the channel id.
-      summary = await buildChannelClassifyDiffSummaryJa(cred.orgId, args).catch(() => summary);
+    // Card = before → after diff + SoD verdict (no secrets). The agent's
+    // sodOverrideAcknowledged is never queued: approving this card is the ack.
+    const parsed = parsePolicyPatchArgs(args);
+    const employee = parsed.ok ? await getEmployee(parsed.value.employeeId, cred.orgId) : null;
+    if (!parsed.ok || !employee) {
+      return toolResult(
+        parsed.ok ? { ok: false, code: "employee_not_found", message: "AI社員が見つかりません" } : parsed,
+        true
+      );
     }
+    const card = buildPolicyPatchCard(employee, parsed.value, await getOrgSodWarnPolicy(cred.orgId));
+    // B1: a card any surface would cut is never queued (SoD must be shown).
+    if (!card.fitsAllSurfaces) return toolResult(policyPatchCardTooLong(card.summaryChars), true);
+    queuedArgs = { ...parsed.value, [POLICY_PATCH_CARD_KEY]: card.snapshot };
+    summary = card.summaryJa;
+    if (parsed.ignoredKeys.length) {
+      queuedResultExtra = {
+        ignoredKeys: parsed.ignoredKeys,
+        noticeJa: "職務分離(SoD)の確認は、承認者がカードを見て承認することで行います（sodOverrideAcknowledged の指定は使いません）。",
+      };
+    }
+  } else if (name === "parties.upsert") {
+    const checked = validatePartiesUpsertArgs(args);
+    if (!checked.ok) return toolResult(checked, true);
+    queuedArgs = { ...checked.value, ...(typeof args.jobId === "string" ? { jobId: args.jobId } : {}) };
+    summary = `相手台帳の更新を人が確認します（${checked.value.identifier}）`;
+    // Always (no flag): before → after on the approval card.
+    summary = await buildPartyUpsertCardSummaryJa(cred.orgId, checked.value, { requester: "admin_agent" }).catch(() => summary);
+  } else if (name === "channels.classify") {
+    const checked = validateChannelsClassifyArgs(args);
+    if (!checked.ok) return toolResult(checked, true);
+    queuedArgs = { ...checked.value, ...(typeof args.jobId === "string" ? { jobId: args.jobId } : {}) };
+    summary = `チャネル分類を人が確認します（${checked.value.externalId}）`;
+    // Always (no flag): before → after and the sharing state on the approval card.
+    summary = await buildChannelClassifyCardSummaryJa(cred.orgId, checked.value, { requester: "admin_agent" }).catch(() => summary);
   } else if (name === "link") {
     summary = `連携を人が確認します（${String(args.employeeId)}）`;
   } else if (name === "ingressHandoff.patch") {
@@ -3334,7 +3819,8 @@ export async function callAdminMcpTool(
     rawArgsForSecretScan,
     summary,
   });
-  return toolResult(queued, false);
+  const queuedOk = (queued as { code?: string }).code === "needs_approval";
+  return toolResult(queuedOk && queuedResultExtra ? { ...queued, ...queuedResultExtra } : queued, false);
 }
 
 export async function readApprovedAdminResult(

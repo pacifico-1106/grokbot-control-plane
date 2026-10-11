@@ -27,6 +27,7 @@ export type GatewayToolId =
   | "slack.post_external"
   | "comm.reply"
   | "comm.send"
+  | "comm.delete"
   | "sns.publish"
   | "drive.share_external"
   | "knowledge.search"
@@ -218,6 +219,14 @@ export const GATEWAY_TOOL_DEFS: Record<GatewayToolId, GatewayToolDef> = {
     forceNeedsApproval: false,
     mayAuto: true,
   },
+  "comm.delete": {
+    id: "comm.delete",
+    labelJa: "自分の投稿の削除（記録済みの自分の投稿のみ）",
+    kind: "mutate",
+    requiredScopes: ["tools:invoke", "slack:post"],
+    forceNeedsApproval: false,
+    mayAuto: true,
+  },
   "sns.publish": {
     id: "sns.publish",
     labelJa: "個人SNS投稿（X / note / LinkedIn / YouTube）",
@@ -284,6 +293,8 @@ const ALIASES: Record<string, GatewayToolId> = {
   "comm:send": "comm.send",
   "comm.reply": "comm.reply",
   "comm.send": "comm.send",
+  "comm:delete": "comm.delete",
+  "comm.delete": "comm.delete",
   "sns:publish": "sns.publish",
   "sns.publish": "sns.publish",
   "drive:share_external": "drive.share_external",
@@ -330,7 +341,86 @@ const AUDIENCE_GATED_TOOL_IDS = new Set<GatewayToolId>([
   "slack.post_external",
 ]);
 
+/**
+ * Outbound-send tools: the effect is a message, post or share that leaves
+ * Staffpass (mail, Slack / conversation surfaces, personal SNS, external
+ * share links). A per-tool `deny` setting on any of these is a hard stop at
+ * invoke time AND right before an approved item is executed (fulfill).
+ *
+ * Classification of every registry entry lives in OUTBOUND_SEND_CLASSIFICATION
+ * (tools.outbound.test.ts fails if a new tool is added without a decision).
+ */
+export const OUTBOUND_SEND_TOOL_IDS = [
+  "mail.send",
+  "agentmail.send",
+  "slack.post",
+  "slack.post_external",
+  "comm.reply",
+  "comm.send",
+  "sns.publish",
+  "drive.share_external",
+] as const satisfies readonly GatewayToolId[];
+
+export type OutboundSendToolId = (typeof OUTBOUND_SEND_TOOL_IDS)[number];
+
+const OUTBOUND_SEND_TOOL_ID_SET = new Set<GatewayToolId>(OUTBOUND_SEND_TOOL_IDS);
+
+/** True when a per-tool `deny` must reject this tool immediately (no approval card). */
+export function isOutboundSendTool(def: GatewayToolDef | string): boolean {
+  const id = typeof def === "string" ? def : def.id;
+  return OUTBOUND_SEND_TOOL_ID_SET.has(id as GatewayToolId);
+}
+
+/**
+ * Registry tools intentionally NOT treated as outbound-send, with the reason.
+ * For these a `deny` hint keeps the previous behaviour (no immediate reject).
+ */
+export const NON_OUTBOUND_TOOL_REASONS: Readonly<Record<Exclude<GatewayToolId, OutboundSendToolId>, string>> = {
+  "tools.ping": "ヘルス確認。外部へ何も送らない",
+  "tools.read": "読み取りのみ",
+  "calendar.read": "読み取りのみ",
+  "calendar.propose": "空き枠の提案（相手への送信なし）",
+  "calendar.confirm": "日程の確定。メッセージ送信ではなく予定操作（招待送付は未実装スタブ）。常に人の承認",
+  "calendar.allowlist.patch": "社内設定の変更。外部送信なし",
+  "mail.draft": "下書きのみ。送信しない",
+  "agentmail.draft": "下書きのみ（P0.5 予約、invoke で拒否済み）",
+  "files.read": "読み取りのみ",
+  "files.write": "ファイル書込。外部送信ではない。常に人の承認",
+  "browser.use": "ブラウザ操作。送信先を特定できない汎用操作。常に人の承認",
+  "commerce.quote": "見積作成（送信なし）",
+  "commerce.order": "発注。送信ではなく購買（支出ゲート・常に人の承認）",
+  "knowledge.search": "社内検索のみ",
+  "approvals.request": "社内の承認依頼（承認者向け通知面。外部送信ではない）",
+  "audit.append": "監査追記（社内記録）",
+  "comm.delete":
+    "自分の記録済み投稿の削除。新たな送信・開示はしない（記録で本人の投稿に限定。deny は即時拒否・承認後も再確認、lib/comm-delete）",
+};
+
 /** slack.* / comm.* share one audience resolver — tool name is not the boundary. */
+/** Conversation tools (one shared duplicate-reply ledger, lib/comm-reply-dedup). */
+export function audienceGatedToolIds(): GatewayToolId[] {
+  return [...AUDIENCE_GATED_TOOL_IDS];
+}
+
+/**
+ * Tools whose posts go through the shared duplicate post ledger
+ * (lib/comm-reply-dedup; the full path inventory with the reason for every
+ * outbound-send tool is lib/comm-reply-dedup/inventory.ts). Conversation tools
+ * always (COMM_REPLY_DEDUP_ENABLED); sns.publish with DUPLICATE_GUARD_V2_ENABLED.
+ */
+export const DUPLICATE_GUARDED_TOOL_IDS = [
+  "comm.reply",
+  "comm.send",
+  "slack.post",
+  "slack.post_external",
+  "sns.publish",
+] as const satisfies readonly GatewayToolId[];
+
+export function isDuplicateGuardedTool(def: GatewayToolDef | string): boolean {
+  const id = typeof def === "string" ? def : def.id;
+  return (DUPLICATE_GUARDED_TOOL_IDS as readonly string[]).includes(id);
+}
+
 export function isAudienceGatedTool(def: GatewayToolDef | string): boolean {
   const id = typeof def === "string" ? def : def.id;
   return AUDIENCE_GATED_TOOL_IDS.has(id as GatewayToolId);
@@ -348,16 +438,34 @@ export function isSnsPublishTool(def: GatewayToolDef | string): boolean {
 }
 
 /**
+ * Audience-gated tools whose explicit per-tool `always_human` setting is honoured.
+ * Stricter-only: it can add a human approval, never remove one; auto / risk_based /
+ * unset keep the audience × class decision. Covers every audience-gated tool
+ * (木村 2026-10-04, #249).
+ */
+export const AUDIENCE_GATED_ALWAYS_HUMAN_HINT_TOOL_IDS = [
+  "comm.reply",
+  "comm.send",
+  "slack.post",
+  "slack.post_external",
+] as const satisfies readonly GatewayToolId[];
+
+function honorsAlwaysHumanHint(id: GatewayToolId): boolean {
+  return (AUDIENCE_GATED_ALWAYS_HUMAN_HINT_TOOL_IDS as readonly GatewayToolId[]).includes(id);
+}
+
+/**
  * Per-tool hints can loosen choosable always-human tools (send / confirm / order / write / browser).
- * Audience-gated tools never force from the tool name; employee policy + egress decide.
+ * Audience-gated tools never force from the tool name; employee policy + egress decide
+ * (an explicit always_human on comm.* / slack.* is employee policy and forces approval).
  * Missing hints keep the strict always-human defaults.
  */
 export function toolRequiresHumanApproval(
   def: GatewayToolDef,
   toolApprovalDefaults?: Record<string, ApprovalPolicy | "deny"> | null
 ): boolean {
-  if (isAudienceGatedTool(def)) return false;
   const hint = toolApprovalDefaults?.[def.id];
+  if (isAudienceGatedTool(def)) return hint === "always_human" && honorsAlwaysHumanHint(def.id);
   if (hint === "auto" || hint === "risk_based") return false;
   if (hint === "always_human") return true;
   return isForceApprovalTool(def);

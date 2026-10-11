@@ -30,10 +30,11 @@
 
 | Method | Path | 内容 |
 |--------|------|------|
-| GET | `/api/employees/[id]/binding` | バインディング JSON |
-| POST | `/api/employees/[id]/link` | agent / workspace 紐付け |
+| GET | `/api/employees/[id]/binding` | バインディング JSON（読み取り専用。行が無ければ unlinked を返し、作成しない） |
+| POST | `/api/employees/[id]/link` | agent / workspace 紐付け（組織オーナー / 管理者のみ。メンバーは 403 admin_required） |
 | POST | `/api/employees/[id]/rotate` | 秘密再発行・generation++ |
-| POST | `/api/employees/[id]/health?forceFail=1` | ヘルス（デモ破綻可） |
+| GET | `/api/employees/[id]/health` | 現在のヘルス状態（読み取り専用。何も書き込まない・`?forceFail` は無視。組織メンバーが閲覧可） |
+| POST | `/api/employees/[id]/health` | ヘルス（バインディングを書き込むため組織オーナー / 管理者のみ）。`?forceFail=1` はデモモードでのみ有効（本番では無視） |
 | POST | `/api/gateway/invoke` | fail-closed 実行スタブ |
 
 ## データ

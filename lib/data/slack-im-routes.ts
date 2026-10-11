@@ -8,11 +8,21 @@ import { isDemoMode } from "@/lib/mode";
 import { createSupabaseAdminClient } from "@/lib/supabase";
 import type { ChannelClassification, ConversationSurface } from "@/lib/types";
 
+export type SlackImRouteSource = "manual" | "auto_party";
+
 export type SlackImEmployeeRoute = {
   orgId: string;
   slackChannelId: string;
   slackTeamId: string;
   employeeId: string;
+  /**
+   * How the route was installed. "manual" = channels.classify (human approval);
+   * "auto_party" = SLACK_DM_AUTOROUTE_ENABLED derived from an internal org_parties
+   * slack_user. Columns exist only after migration 20261004000000; rows read
+   * without them are "manual".
+   */
+  source?: SlackImRouteSource;
+  counterpartSlackUserId?: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -33,10 +43,19 @@ function mapRow(row: Record<string, unknown>): SlackImEmployeeRoute {
     slackChannelId: String(row.slack_channel_id ?? ""),
     slackTeamId: String(row.slack_team_id ?? ""),
     employeeId: String(row.employee_id ?? ""),
+    source: row.source === "auto_party" ? "auto_party" : "manual",
+    counterpartSlackUserId:
+      typeof row.counterpart_slack_user_id === "string" && row.counterpart_slack_user_id
+        ? row.counterpart_slack_user_id
+        : null,
     createdAt: String(row.created_at ?? nowIso()),
     updatedAt: String(row.updated_at ?? nowIso()),
   };
 }
+
+const ROUTE_COLUMNS = "org_id,slack_channel_id,slack_team_id,employee_id,created_at,updated_at";
+const ROUTE_COLUMNS_WITH_SOURCE =
+  "org_id,slack_channel_id,slack_team_id,employee_id,created_at,updated_at,source,counterpart_slack_user_id";
 
 export function isSlackImChannelId(value: string): boolean {
   return /^D[A-Z0-9]+$/i.test(value.trim());
@@ -68,6 +87,13 @@ export async function upsertSlackImEmployeeRoute(input: {
   slackChannelId: string;
   slackTeamId?: string | null;
   employeeId: string;
+  /**
+   * Only written when provided (callers pass it only while
+   * SLACK_DM_AUTOROUTE_ENABLED is ON, i.e. after the migration). Omitted →
+   * the source/counterpart columns are not touched (pre-migration safe).
+   */
+  source?: SlackImRouteSource;
+  counterpartSlackUserId?: string | null;
 }): Promise<SlackImEmployeeRoute> {
   const orgId = input.orgId.trim();
   const slackChannelId = input.slackChannelId.trim();
@@ -83,11 +109,19 @@ export async function upsertSlackImEmployeeRoute(input: {
   if (isDemoMode()) {
     const key = routeKey(orgId, slackChannelId);
     const existing = demoRoutes.get(key);
+    const source = input.source ?? existing?.source ?? "manual";
     const route: SlackImEmployeeRoute = {
       orgId,
       slackChannelId,
       slackTeamId,
       employeeId,
+      source,
+      counterpartSlackUserId:
+        input.source !== undefined
+          ? source === "auto_party"
+            ? (input.counterpartSlackUserId || "").trim() || null
+            : null
+          : existing?.counterpartSlackUserId ?? null,
       createdAt: existing?.createdAt ?? timestamp,
       updatedAt: timestamp,
     };
@@ -96,22 +130,26 @@ export async function upsertSlackImEmployeeRoute(input: {
   }
   const admin = createSupabaseAdminClient();
   if (!admin) throw new Error("supabase_not_configured");
+  const withSource = input.source !== undefined;
+  const row: Record<string, unknown> = {
+    org_id: orgId,
+    slack_channel_id: slackChannelId,
+    slack_team_id: slackTeamId,
+    employee_id: employeeId,
+    updated_at: timestamp,
+  };
+  if (withSource) {
+    row.source = input.source;
+    row.counterpart_slack_user_id =
+      input.source === "auto_party" ? (input.counterpartSlackUserId || "").trim() || null : null;
+  }
   const { data, error } = await admin
     .from("slack_im_employee_routes")
-    .upsert(
-      {
-        org_id: orgId,
-        slack_channel_id: slackChannelId,
-        slack_team_id: slackTeamId,
-        employee_id: employeeId,
-        updated_at: timestamp,
-      },
-      { onConflict: "org_id,slack_channel_id" }
-    )
-    .select("org_id,slack_channel_id,slack_team_id,employee_id,created_at,updated_at")
+    .upsert(row, { onConflict: "org_id,slack_channel_id" })
+    .select(withSource ? ROUTE_COLUMNS_WITH_SOURCE : ROUTE_COLUMNS)
     .single();
   if (error || !data) throw new Error(error?.message || "slack_im_route_upsert_failed");
-  return mapRow(data as Record<string, unknown>);
+  return mapRow(data as unknown as Record<string, unknown>);
 }
 
 /**
@@ -126,6 +164,8 @@ export async function syncSlackImEmployeeRoute(input: {
   classification: ChannelClassification;
   mixed: boolean;
   employeeId?: string | null;
+  source?: SlackImRouteSource;
+  counterpartSlackUserId?: string | null;
 }): Promise<SlackImEmployeeRoute | null> {
   const employeeId = (input.employeeId || "").trim();
   const enabled =
@@ -146,6 +186,9 @@ export async function syncSlackImEmployeeRoute(input: {
     slackChannelId: input.slackChannelId,
     slackTeamId: input.slackTeamId,
     employeeId,
+    ...(input.source !== undefined
+      ? { source: input.source, counterpartSlackUserId: input.counterpartSlackUserId ?? null }
+      : {}),
   });
 }
 
@@ -177,6 +220,73 @@ async function listCandidateRoutes(input: {
   return data
     .map((row) => mapRow(row as Record<string, unknown>))
     .filter(teamMatches);
+}
+
+/** Cross-org candidates for one DM (same rule the wake resolver uses). Metadata only. */
+export async function listSlackImRoutesForChannel(input: {
+  slackChannelId: string;
+  slackTeamId: string;
+}): Promise<SlackImEmployeeRoute[]> {
+  if (!isSlackImChannelId(input.slackChannelId)) return [];
+  return listCandidateRoutes(input);
+}
+
+/** One org-scoped route by DM id (base columns only; pre-migration safe). */
+export async function getSlackImEmployeeRoute(
+  orgId: string,
+  slackChannelId: string
+): Promise<SlackImEmployeeRoute | null> {
+  const org = orgId.trim();
+  const channel = slackChannelId.trim();
+  if (!org || !channel) return null;
+  if (isDemoMode()) return demoRoutes.get(routeKey(org, channel)) ?? null;
+  const admin = createSupabaseAdminClient();
+  if (!admin) return null;
+  const { data, error } = await admin
+    .from("slack_im_employee_routes")
+    .select(ROUTE_COLUMNS)
+    .eq("org_id", org)
+    .eq("slack_channel_id", channel)
+    .maybeSingle();
+  if (error || !data) return null;
+  return mapRow(data as Record<string, unknown>);
+}
+
+/**
+ * Auto-installed (source=auto_party) routes in one org, optionally narrowed to
+ * a counterpart or an employee. Reads the migration-added columns, so callers
+ * must only use it while SLACK_DM_AUTOROUTE_ENABLED is ON.
+ */
+export async function listAutoSlackImRoutes(input: {
+  orgId: string;
+  counterpartSlackUserId?: string;
+  employeeId?: string;
+}): Promise<SlackImEmployeeRoute[]> {
+  const orgId = input.orgId.trim();
+  if (!orgId) return [];
+  const counterpart = (input.counterpartSlackUserId || "").trim();
+  const employeeId = (input.employeeId || "").trim();
+  if (isDemoMode()) {
+    return [...demoRoutes.values()].filter(
+      (route) =>
+        route.orgId === orgId &&
+        route.source === "auto_party" &&
+        (!counterpart || route.counterpartSlackUserId === counterpart) &&
+        (!employeeId || route.employeeId === employeeId)
+    );
+  }
+  const admin = createSupabaseAdminClient();
+  if (!admin) throw new Error("supabase_not_configured");
+  let query = admin
+    .from("slack_im_employee_routes")
+    .select(ROUTE_COLUMNS_WITH_SOURCE)
+    .eq("org_id", orgId)
+    .eq("source", "auto_party");
+  if (counterpart) query = query.eq("counterpart_slack_user_id", counterpart);
+  if (employeeId) query = query.eq("employee_id", employeeId);
+  const { data, error } = await query;
+  if (error) throw new Error(error.message || "slack_im_route_list_failed");
+  return (data ?? []).map((row) => mapRow(row as Record<string, unknown>));
 }
 
 export async function countSlackImRoutesByOrg(orgId: string): Promise<number> {

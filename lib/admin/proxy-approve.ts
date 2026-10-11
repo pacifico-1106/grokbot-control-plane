@@ -191,6 +191,7 @@ export async function proxyResolveApproval(
     decision,
     actorEmail: actor.email,
     employee,
+    surface: "admin_proxy",
   });
   
   return {

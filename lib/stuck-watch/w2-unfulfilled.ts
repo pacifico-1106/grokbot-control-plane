@@ -1,3 +1,4 @@
+import { heldTicketMarker } from "@/lib/safety/hold";
 import { assertApprovalExecutionAuthority } from "@/lib/approvals/execution-authority";
 /**
  * W2: approved-but-unfulfilled watch — auto reinvoke fulfill (max 2).
@@ -6,14 +7,71 @@ import { assertApprovalExecutionAuthority } from "@/lib/approvals/execution-auth
 import { fulfillApprovedInvoke } from "@/lib/approvals/fulfill";
 import { parseFulfillment, parseInvokeSnapshot } from "@/lib/approvals/fulfill";
 import { fulfillApprovedAdmin } from "@/lib/admin-mcp/fulfill-admin";
+import type { FulfillmentFileUpload } from "@/lib/approvals/attachment-upload-claim";
 import { isAdminClassApproval } from "@/lib/admin-mcp/audit-class";
 import { appendAuditEvent, updateApprovalMetadata } from "@/lib/data";
 import { getOrgStuckWatchPolicy } from "@/lib/data/stuck-watch-policy";
+import { isNonTransientFulfilmentError } from "@/lib/slack/approval-app-scope-notice";
 import type {
   ApprovalRequest,
   ApprovalStuckWatchMeta,
   OrgStuckWatchPolicy,
 } from "@/lib/types";
+
+/**
+ * Tools W2 must never re-run on its own, even with retries left: a re-run
+ * ticket of these runs only when an admin agent explicitly re-invokes the tool
+ * with its approvalId. W2 still tracks them (stuck-watch item, stuckHint
+ * "fix", reason manual_reinvoke_required) but never fulfills them — neither
+ * the cron nor stuckWatch.retry.
+ *
+ * - employees.postingIdentity.set: switching the Slack posting identity changes
+ *   what the other side sees, so a person must know when it happens (木村).
+ * - money tools (木村 2026-10-09 round 3): a W2 re-run re-verifies the stored
+ *   approver and re-executes with the same jobId — it does NOT go through the
+ *   approval gates again — so spend limits, plan changes, card links and
+ *   orders are re-run only by an explicit re-invoke.
+ */
+const W2_MONEY_TOOLS = [
+  "employees.spend.set",
+  "plan.upgrade",
+  "cardSetup.mintLink",
+  "cardSetup.mintPortalLink",
+  "commerce.order",
+] as const;
+
+export const W2_MANUAL_REINVOKE_ONLY_TOOLS: ReadonlySet<string> = new Set([
+  "employees.postingIdentity.set",
+  ...W2_MONEY_TOOLS,
+]);
+
+function approvalToolName(approval: ApprovalRequest): string {
+  return String(approval.metadata?.adminTool || approval.tool || "").trim();
+}
+
+/** The tool name when W2 must leave this approval to an explicit re-invoke, else null. */
+export function w2ManualReinvokeOnlyTool(approval: ApprovalRequest): string | null {
+  const tool = approvalToolName(approval);
+  return W2_MANUAL_REINVOKE_ONLY_TOOLS.has(tool) ? tool : null;
+}
+
+/** The stored (admin) fulfilment error code, if any. */
+function lastFulfilmentError(approval: ApprovalRequest): string | null {
+  const raw = approval.metadata?.adminFulfillment ?? approval.metadata?.fulfillment;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const error = (raw as { error?: unknown }).error;
+  return typeof error === "string" ? error : null;
+}
+
+export function w2FixRequiredNextStepJa(tool: string): string {
+  return `自動再実行はしません（設定を直さないと成功しないエラー）。承認アプリの権限を足して入れ直した後、管理エージェントが ${tool || "同じツール"} を approvalId 付きで呼び直してください。`;
+}
+
+export function w2ManualReinvokeNextStepJa(tool: string): string {
+  const why = (W2_MONEY_TOOLS as readonly string[]).includes(tool) ? "お金に関わる操作のため" : "相手に見える名義が変わるため";
+  const who = tool === "commerce.order" ? "AI社員" : "管理エージェント"; // commerce.order is a gateway invoke, not an admin tool
+  return `自動再実行の対象外です（${why}）。原因を直してから、${who}が ${tool} を approvalId 付きで呼び直してください（その時点ですべて確認し直します）。`;
+}
 
 function parseStuckWatchMeta(
   metadata: Record<string, unknown> | null | undefined
@@ -77,7 +135,12 @@ export type W2EligibilityResult = {
     | "not_unfulfilled"
     | "too_soon"
     | "max_retries"
-    | "backoff";
+    | "backoff"
+    | "manual_reinvoke_required"
+    /** APPROVAL_APP_MISSING_SCOPE_NOTICE_ENABLED: non-transient error, fix then re-invoke (no retry spent). */
+    | "fix_required"
+    /** S2: a hold touched this ticket (heldByHoldId / closed_by_hold) — never retried. */
+    | "approval_held";
   retryCount: number;
   minutesSinceResolved: number;
 };
@@ -88,6 +151,10 @@ export function evaluateW2Eligibility(
   const { approval, policy, now } = input;
   const meta = parseStuckWatchMeta(approval.metadata);
   const retryCount = meta.w2?.retryCount ?? 0;
+
+  if (heldTicketMarker(approval.metadata)) {
+    return { eligible: false, reason: "approval_held", retryCount, minutesSinceResolved: 0 };
+  }
 
   if (!policy.enabled) {
     return { eligible: false, reason: "disabled", retryCount, minutesSinceResolved: 0 };
@@ -100,6 +167,19 @@ export function evaluateW2Eligibility(
       retryCount,
       minutesSinceResolved: 0,
     };
+  }
+
+  if (w2ManualReinvokeOnlyTool(approval)) {
+    return {
+      eligible: false,
+      reason: "manual_reinvoke_required",
+      retryCount,
+      minutesSinceResolved: 0,
+    };
+  }
+
+  if (isNonTransientFulfilmentError(lastFulfilmentError(approval))) {
+    return { eligible: false, reason: "fix_required", retryCount, minutesSinceResolved: 0 };
   }
 
   if (retryCount >= policy.maxAutoRetries) {
@@ -200,6 +280,8 @@ export type W2RetryResult = {
   reason?: string;
   retryCount: number;
   fulfillmentOk?: boolean;
+  /** Approved attachment: W2 posts the approved text only (not_sent / rerun_required). */
+  fileUpload?: FulfillmentFileUpload;
 };
 
 /**
@@ -238,12 +320,14 @@ export async function runW2FulfillRetry(
   });
 
   let fulfillmentOk = false;
+  let fileUpload: FulfillmentFileUpload | undefined;
   if (isAdminClassApproval(approval)) {
     const admin = await fulfillApprovedAdmin(approval);
     fulfillmentOk = admin?.ok === true;
   } else {
     const invoke = await fulfillApprovedInvoke(approval);
     fulfillmentOk = invoke?.ok === true;
+    fileUpload = invoke?.fileUpload;
   }
 
   await appendAuditEvent({
@@ -270,6 +354,7 @@ export async function runW2FulfillRetry(
     ok: fulfillmentOk,
     retryCount: nextRetryCount,
     fulfillmentOk,
+    ...(fileUpload ? { fileUpload } : {}),
   };
 }
 

@@ -1,13 +1,22 @@
 import { sendApprovalNotification } from "@/lib/email";
-import { escapeHtml } from "@/lib/html-escape";
-import { sendTransactionalEmail, renderStubHtml } from "@/lib/resend";
+import { sendTransactionalEmail } from "@/lib/resend";
+import { buildApprovalNotifyEmail, validateApprovalNotifyEmail } from "@/lib/employees/approval-notify-email";
 import { updateApprovalNotificationMessages } from "@/lib/notify/channels";
 import type { ApprovalRequest, Employee } from "@/lib/types";
 import { deliverAuthorityDecision } from "@/lib/commerce/authority-events";
 import { appendAuditEvent } from "@/lib/data/audit";
 import { isConfigChangeApproval } from "@/lib/config-change-request/core";
 import { recordConfigChangeResolution } from "@/lib/config-change-request/service";
-import { isDecisionWorkflowEnabled } from "@/lib/feature-flags";
+import { isDecisionWorkflowEnabled, isMcpEventsEnabled, isWebhookHardeningEnabled } from "@/lib/feature-flags";
+import { categorizeFetchError, categorizeHttpStatus, type WebhookFailureCategory } from "@/lib/webhooks/outbound";
+import { withLinkLocalGuard } from "@/lib/webhooks/link-local-guard";
+import { deliverHardenedApprovalCallback } from "@/lib/webhooks/approval-callback";
+import {
+  APPROVAL_WAKE_ACTION,
+  isMcpHandoffSurface,
+  withMcpHandoff,
+  type McpHandoffSurface,
+} from "@/lib/mcp/endpoint-handoff";
 import { isDecisionRequest } from "@/lib/decision-workflow/notify";
 import {
   recordDecisionResult,
@@ -28,7 +37,11 @@ function orgNotifyEmail(): string {
 export type ResolveSideEffectsResult = {
   orgEmail: { ok: boolean; stub?: boolean; error?: string };
   employeeEmail: { ok: boolean; stub?: boolean; skipped?: boolean; error?: string };
-  callback: { ok: boolean; skipped?: boolean; status?: number; error?: string };
+  /**
+   * Approver-facing: a failure CATEGORY only (lib/webhooks/outbound.ts) — never
+   * raw error text, the receiver's HTTP status or its body (D9, flag ON and OFF).
+   */
+  callback: { ok: boolean; skipped?: boolean; error?: WebhookFailureCategory };
   telegram: { ok: boolean; skipped?: boolean; error?: string };
   notifications: Array<{ ok: boolean; provider: string; error?: string }>;
   authorityEvent: {
@@ -51,11 +64,20 @@ export type ResolveSideEffectsResult = {
  * Best-effort notifications after approve/reject/revision request.
  * Never throws — resolve API must succeed even if notify/callback fails.
  */
+
+/** Fallback when a caller did not pass surface (actor prefix is set by each webhook). */
+function inferSurface(actorEmail: string): McpHandoffSurface {
+  const prefix = actorEmail.split(":")[0];
+  return isMcpHandoffSurface(prefix) ? prefix : "web";
+}
+
 export async function runApprovalResolveSideEffects(opts: {
   approval: ApprovalRequest;
   decision: "approved" | "rejected" | "revision_requested";
   actorEmail: string;
   employee?: Employee | null;
+  /** Channel the human decided on (Slack / LINE / Telegram / Web / proxy). Used for MCP handoff. */
+  surface?: McpHandoffSurface;
 }): Promise<ResolveSideEffectsResult> {
   const { approval, decision, actorEmail, employee } = opts;
   const title = approval.title || approval.summary.slice(0, 80);
@@ -87,38 +109,40 @@ export async function runApprovalResolveSideEffects(opts: {
     ok: true,
     skipped: true,
   };
-  const notifyTo = employee?.approvalNotifyEmail?.trim();
-  if (notifyTo) {
+  // Members-only recipient (2026-10-09): re-checked right before sending. A
+  // non-member (removed since, or written before the rule) is not sent to and
+  // the audit row carries IDs only — never the address.
+  const configured = employee?.approvalNotifyEmail?.trim();
+  if (configured) {
     try {
-      const machineBody = [
-        `status=${statusLabel}`,
-        `approvalId=${approval.id}`,
-        `employeeId=${approval.employeeId}`,
-        `tool=${approval.tool ?? ""}`,
-        `jobId=${approval.jobId ?? ""}`,
-        `purpose=${approval.purpose}`,
-        `risk=${approval.risk}`,
-        `resolvedBy=${actorEmail}`,
-        ...(approval.revisionNote
-          ? [`revisionNote=${approval.revisionNote.replace(/\n/g, " | ")}`]
-          : []),
-        `revisionCount=${approval.revisionCount}`,
-        `summary=${approval.summary.replace(/\n/g, " | ")}`,
-      ].join("\n");
-      employeeEmail = await sendTransactionalEmail({
-        to: notifyTo,
-        template: "approval_resolved",
-        subject: `[AI社員] approval ${statusLabel}: ${approval.id}`,
-        text: machineBody,
-        html: renderStubHtml(
-          `承認結果: ${statusLabel}`,
-          `<pre style="white-space:pre-wrap;font-size:12px">${escapeHtml(machineBody)}</pre>`
-        ),
-        tags: [
-          { name: "template", value: "approval_resolved_machine" },
-          { name: "approval_id", value: approval.id.slice(0, 48) },
-        ],
-      });
+      const check = await validateApprovalNotifyEmail(employee?.orgId ?? approval.orgId, configured);
+      if (!check.ok || !check.email) {
+        const reason = check.ok ? "approval_notify_email_invalid" : check.code;
+        // A lookup failure is "could not verify", not "not a member".
+        const unverified = reason === "approval_notify_email_unverified";
+        employeeEmail = { ok: false, skipped: true, error: reason };
+        await appendAuditEvent({
+          orgId: approval.orgId,
+          employeeId: approval.employeeId,
+          credentialId: null,
+          action: "notification.delivery_failed",
+          purpose: unverified ? "approval_notify_email.recipient_unverified" : "approval_notify_email.recipient_not_member",
+          summary: unverified
+            ? "承認結果メールを送らなかった（通知先がこの組織の有効なメンバーか確認できなかった）"
+            : "承認結果メールを送らなかった（通知先がこの組織の有効なメンバーではない）",
+          metadata: { approvalId: approval.id, employeeId: approval.employeeId, reason },
+        }).catch(() => undefined);
+      } else {
+        const mail = buildApprovalNotifyEmail();
+        employeeEmail = await sendTransactionalEmail({
+          to: check.email,
+          template: "approval_resolved",
+          subject: mail.subject,
+          text: mail.text,
+          html: mail.html,
+          tags: [{ name: "template", value: "approval_resolved_member" }],
+        });
+      }
     } catch (e) {
       employeeEmail = {
         ok: false,
@@ -127,14 +151,36 @@ export async function runApprovalResolveSideEffects(opts: {
     }
   }
 
+  // MCP Events (flag MCP_EVENTS_ENABLED): one channel-independent emit for every
+  // decision surface (Web / Slack / LINE / Telegram / proxy all land here).
+  // Enqueue is awaited; the signed delivery runs in the background. The same
+  // eventId is added to the legacy callback below so a receiver can dedupe.
+  let mcpEventId: string | null = null;
+  if (isMcpEventsEnabled()) {
+    try {
+      const { emitApprovalEvent } = await import("@/lib/mcp-events/service");
+      mcpEventId = (await emitApprovalEvent({ approval, name: "approval.decided" })).eventId;
+    } catch {
+      mcpEventId = null;
+    }
+  }
+
   let callback: ResolveSideEffectsResult["callback"] = {
     ok: true,
     skipped: true,
   };
   const callbackUrl = employee?.callbackUrl?.trim();
+  let handoffSurface: McpHandoffSurface = "web";
+  let handoffAttached = false;
   if (callbackUrl) {
+    // D9: WEBHOOK_HARDENING_ENABLED OFF → the request below is exactly today's
+    // (fetch, same headers / body). ON → lib/webhooks/approval-callback.ts
+    // (#267 postWebhook: https:443, public answers only, pinned, no redirects;
+    // Standard Webhooks signature; minimal body unless the config opts in).
+    const hardened = isWebhookHardeningEnabled();
+    let failure: WebhookFailureCategory | null = null;
     try {
-      const payload = {
+      const basePayload = {
         type: "approval.resolved",
         status: statusLabel,
         approvalId: approval.id,
@@ -153,23 +199,68 @@ export async function runApprovalResolveSideEffects(opts: {
         ...(configChange?.requesterNoticeJa
           ? { requesterNoticeJa: configChange.requesterNoticeJa }
           : {}),
+        ...(mcpEventId ? { eventId: mcpEventId } : {}),
       };
-      const res = await fetch(callbackUrl, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "user-agent": "Staffpass-ApprovalHook/1.0",
-        },
-        body: JSON.stringify(payload),
-        signal: AbortSignal.timeout(4000),
+      // Shared, channel-independent MCP endpoint handoff (flag OFF → same object).
+      handoffSurface = opts.surface ?? inferSurface(actorEmail);
+      const payload = await withMcpHandoff(basePayload, {
+        orgId: approval.orgId,
+        employeeId: approval.employeeId,
+        surface: handoffSurface,
+        kind: "approval_resolved",
+        trigger: statusLabel,
       });
-      callback = { ok: res.ok, status: res.status, skipped: false };
+      handoffAttached = Boolean(payload.mcpHandoff);
+      if (hardened) {
+        failure = await deliverHardenedApprovalCallback({
+          url: callbackUrl,
+          orgId: approval.orgId,
+          employeeId: approval.employeeId,
+          approvalId: approval.id,
+          status: statusLabel,
+          resolvedAt: approval.resolvedAt,
+          eventId: mcpEventId,
+          payload: payload as Record<string, unknown>,
+        });
+      } else {
+        // No flag: link-local / cloud-metadata destinations are refused at
+        // connect time on every hop (lib/webhooks/link-local-guard.ts).
+        const res = await fetch(callbackUrl, withLinkLocalGuard({
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "user-agent": "Staffpass-ApprovalHook/1.0",
+          },
+          body: JSON.stringify(payload),
+          signal: AbortSignal.timeout(4000),
+        }));
+        failure = categorizeHttpStatus(res.status);
+      }
     } catch (e) {
-      callback = {
-        ok: false,
-        skipped: false,
-        error: e instanceof Error ? e.message : "callback_failed",
-      };
+      failure = hardened ? "connection_failed" : categorizeFetchError(e);
+    }
+    callback = failure ? { ok: false, skipped: false, error: failure } : { ok: true, skipped: false };
+    if (handoffAttached) {
+      // Wake audit for the shared not-connected watcher (only when the block was sent).
+      await appendAuditEvent({
+        orgId: approval.orgId,
+        employeeId: approval.employeeId,
+        credentialId: null,
+        action: APPROVAL_WAKE_ACTION,
+        purpose: "approval.resolved",
+        summary: callback.ok
+          ? "承認結果で社員を起こした（MCP handoff 付き）"
+          : "承認結果の起こす callback に失敗",
+        metadata: {
+          reason: callback.ok ? "woke" : "wake_failed",
+          ...(failure ? { category: failure } : {}),
+          ...(hardened ? { hardened: true } : {}),
+          approvalId: approval.id,
+          decision: statusLabel,
+          surface: handoffSurface,
+          mcpHandoff: true,
+        },
+      }).catch(() => undefined);
     }
   }
 

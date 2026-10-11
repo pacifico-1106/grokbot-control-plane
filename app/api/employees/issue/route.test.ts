@@ -47,10 +47,18 @@ mock.module("@/lib/auth/session", () => ({
   getSessionContext: async () => session,
   getCurrentOrgId: async () => session.orgId,
 }));
-mock.module("@/lib/mode", () => ({ isDemoMode: () => false }));
-mock.module("@/lib/data/members", () => ({
-  // Fail closed: no implicit owner fallback in this test.
-  resolveActorMember: async () => member("member", ["view_dashboard"]),
+mock.module("@/lib/mode", () => ({
+  isDemoMode: () => false,
+  isSupabaseConfigured: () => true,
+  isStripeConfigured: () => false,
+  isResendConfigured: () => false,
+  runtimeModeLabel: () => "production",
+}));
+// Approver-authority guard (review 2026-10-09) is covered in lib/approver-authority/web-direct.test.ts; here: flag OFF.
+mock.module("@/lib/approver-authority/web-direct", () => ({
+  assertWebActorApproverAuthority: async () => ({ ok: true, requirement: null }),
+  webDirectDeniedBody: () => ({}),
+  webSessionActorMemberId: async () => null,
 }));
 mock.module("@/lib/billing/entitlements", () => ({
   assertBillingAllows: async () => ({ ok: true, entitlements: {} }),
@@ -169,4 +177,27 @@ test("owner with hire_issue_credentials can issue", async () => {
   const res = await call();
   expect(res.status).toBe(200);
   expect(issueCalls.length).toBe(1);
+});
+
+// 八坂さん 2026-10-12: default 90 days; explicit 1–365 unchanged.
+function callWith(extra: Record<string, unknown>) {
+  return POST(
+    new Request("https://staffpass.test/api/employees/issue", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ displayName: "営業AI", roleLabel: "営業", scopes: ["tools:read"], approvalPolicy: "always_human", ...extra }),
+    })
+  );
+}
+test("expiry: omitted → now + 90 days; explicit 30 / 365 kept; 999 clamped to 365", async () => {
+  session = { ...session, member: member("owner", ALL_CAPS) };
+  const DAY = 86_400_000;
+  for (const [extra, days] of [[{}, 90], [{ expiresInDays: 30 }, 30], [{ expiresInDays: 365 }, 365], [{ expiresInDays: 999 }, 365]] as const) {
+    issueCalls = [];
+    const before = Date.now();
+    expect((await callWith(extra)).status).toBe(200);
+    const at = Date.parse(String(issueCalls[0]!.expiresAt));
+    expect(at).toBeGreaterThanOrEqual(before + days * DAY);
+    expect(at).toBeLessThanOrEqual(Date.now() + days * DAY);
+  }
 });

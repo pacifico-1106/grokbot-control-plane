@@ -66,7 +66,7 @@ describe("secret-detector", () => {
       expect(result.ok).toBe(false);
       if (!result.ok) {
         expect(result.pattern).toBe("staffpass_employee");
-        expect(result.redactedPreview).toBe("gb_emp_1***");
+        expect(result.redactedPreview).toBe("[redacted]");
       }
     });
 
@@ -75,7 +75,7 @@ describe("secret-detector", () => {
       expect(result.ok).toBe(false);
       if (!result.ok) {
         expect(result.pattern).toBe("staffpass_admin");
-        expect(result.redactedPreview).toBe("gb_adm_1***");
+        expect(result.redactedPreview).toBe("[redacted]");
       }
     });
 
@@ -256,7 +256,9 @@ describe("secret-detector", () => {
         ok: false,
         code: "secret_detected_in_payload",
         pattern: "slack_token",
-        redactedPreview: "xoxb-123***",
+        redactedPreview: "[redacted]",
+        fieldPath: "botToken",
+        matchLength: 25,
         messageJa: "test",
         nextStepJa: "test",
       };
@@ -269,14 +271,13 @@ describe("secret-detector", () => {
     });
   });
 
-  describe("prefix-only display OK", () => {
-    test("redactedPreview shows only prefix", () => {
+  describe("no characters of the matched value (2026-10-05: prefixes leaked part of real keys)", () => {
+    test("redactedPreview is a constant", () => {
       const result = detectSecretInString("gb_emp_1234567890abcdef_abcdef1234567890abcdef1234567890ab");
       expect(result.ok).toBe(false);
       if (!result.ok) {
-        expect(result.redactedPreview.length).toBeLessThan(20);
-        expect(result.redactedPreview).toContain("***");
-        expect(result.redactedPreview).not.toContain("abcdef1234567890");
+        expect(result.redactedPreview).toBe("[redacted]");
+        expect(result.redactedPreview).not.toContain("gb_emp_1");
       }
     });
   });

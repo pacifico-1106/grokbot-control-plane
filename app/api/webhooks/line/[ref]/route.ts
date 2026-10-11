@@ -1,8 +1,9 @@
+import { approverAuthorityReplyJa } from "@/lib/approver-authority/reply";
 import { resolveApprovalWithWorkflow } from "@/lib/approvals/workflow-integration";
 import { initializeWorkflowForApproval } from "@/lib/approval-workflow/resolve";
 import { getMemberIdFromVoterBinding } from "@/lib/approval-workflow";
 import { upsertProofVerifiedVoterBinding } from "@/lib/approval-workflow/voter-binding";
-import { NextResponse } from "next/server";
+import { isChannelClassifyProposalsEnabled } from "@/lib/channel-classify/flags";
 import { fulfillIfApproved } from "@/lib/approvals/fulfill";
 import { runApprovalResolveSideEffects } from "@/lib/approvals/resolve-side-effects";
 import {
@@ -34,6 +35,7 @@ import {
   verifyLineSignature,
   withLineReplyCollector,
 } from "@/lib/notify/line";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -209,11 +211,11 @@ async function handlePostback(channel: NotificationChannelRuntime, event: LineEv
       if (updated) {
         await fulfillIfApproved(updated, decision);
         const employee = await getEmployee(updated.employeeId, channel.orgId);
-        await runApprovalResolveSideEffects({ approval: updated, decision, actorEmail: actor, employee });
+        await runApprovalResolveSideEffects({ approval: updated, decision, actorEmail: actor, employee, surface: "line" });
       }
       return updated
         ? decision === "approved" ? "承認しました。" : "却下しました。"
-        : result.ok ? "投票を記録しました（合議は継続中です）。" : "投票を記録できませんでした。";
+        : approverAuthorityReplyJa(result.reason) ?? (result.ok ? "投票を記録しました（合議は継続中です）。" : "投票を記録できませんでした。");
     } catch (error) {
       if (isSelfApprovalDenied(error)) return SELF_APPROVAL_MESSAGE_JA;
       throw error;
@@ -262,7 +264,7 @@ async function handleRevisionText(channel: NotificationChannelRuntime, event: Li
       });
       if (updated) {
         const employee = await getEmployee(updated.employeeId, channel.orgId);
-        await runApprovalResolveSideEffects({ approval: updated, decision: "revision_requested", actorEmail: actor, employee });
+        await runApprovalResolveSideEffects({ approval: updated, decision: "revision_requested", actorEmail: actor, employee, surface: "line" });
       }
       return updated ? "修正依頼を登録しました。" : "対象は処理済みです。";
     } catch (error) {
@@ -278,20 +280,32 @@ export async function POST(req: Request, ctx: { params: Promise<{ ref: string }>
   // G3: an unknown or disabled ref is a wrong Webhook URL. Answer non-2xx so the
   // LINE Developers「検証」button fails instead of reporting success. The body is
   // not read and no channel data is revealed.
-  if (!channel) return NextResponse.json({ ok: false, error: "not_found" }, { status: 404 });
+  if (!channel) return jsonUtf8({ ok: false, error: "not_found" }, { status: 404 });
   const rawBody = await req.text();
   if (!verifyLineSignature(channel, rawBody, req.headers.get("x-line-signature") || "")) {
-    return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
+    return jsonUtf8({ ok: false, error: "unauthorized" }, { status: 401 });
   }
   let body: { events?: LineEvent[] };
   try {
     body = JSON.parse(rawBody || "{}") as { events?: LineEvent[] };
   } catch {
-    return NextResponse.json({ ok: false, error: "invalid_json" }, { status: 400 });
+    return jsonUtf8({ ok: false, error: "invalid_json" }, { status: 400 });
   }
   for (const event of body.events || []) {
     if (isLineApproverLinkEnabled() && (await handleLinkCode(channel, event))) continue;
     const source = event.source || {};
+    // PR-B: the inbox bot joined a group / room (signature verified above) →
+    // shared classification-proposal flow. The approval group itself is skipped.
+    if (event.type === "join" && isChannelClassifyProposalsEnabled()) {
+      const destinationId = String((channel.config as Record<string, unknown>)?.destinationId || "");
+      const joinedId = source.groupId || source.roomId || "";
+      if (joinedId && joinedId !== destinationId) {
+        const { lineJoinSignal, handleChannelJoin } = await import("@/lib/channel-classify/join");
+        const signal = lineJoinSignal({ orgId: channel.orgId }, event);
+        if (signal) await handleChannelJoin(signal);
+      }
+      continue;
+    }
     if (!isAllowedLineSource(channel, source)) continue;
     const lineUserId = source.userId || "";
     if (event.type === "postback") {
@@ -302,5 +316,5 @@ export async function POST(req: Request, ctx: { params: Promise<{ ref: string }>
       await handleRevisionText(channel, event, lineUserId);
     }
   }
-  return NextResponse.json({ ok: true });
+  return jsonUtf8({ ok: true });
 }

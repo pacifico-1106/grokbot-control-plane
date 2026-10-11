@@ -27,6 +27,10 @@ import {
   isSetupIntentProcessed,
 } from "./data";
 import type { CardSetupSessionMetadata } from "./checkout-setup";
+import type {
+  TenantCheck,
+  TenantCheckRejected,
+} from "@/lib/billing/stripe-customer-org-guard";
 
 export type WebhookProcessResult =
   | {
@@ -39,7 +43,36 @@ export type WebhookProcessResult =
       processed: false;
       reason: string;
       error?: string;
+      /** Set when reason === "tenant_mismatch" (no state was written). */
+      tenantCheck?: TenantCheckRejected;
     };
+
+/**
+ * Optional tenant verifier supplied by the Stripe webhook route: the org in
+ * metadata must be the org whose stored stripe_customer_id is the event's
+ * customer. Throws on transient lookup errors.
+ */
+export type CardSetupWebhookOptions = {
+  verifyTenant?: (orgId: string, customerId: string | null) => Promise<TenantCheck>;
+};
+
+async function checkTenant(
+  opts: CardSetupWebhookOptions | undefined,
+  orgId: string,
+  customerId: string | null
+): Promise<WebhookProcessResult | null> {
+  if (!opts?.verifyTenant) return null;
+  const check = await opts.verifyTenant(orgId, customerId);
+  if (check.ok) return null;
+  return { processed: false, reason: "tenant_mismatch", tenantCheck: check };
+}
+
+function customerOf(
+  ref: string | { id?: string } | null | undefined
+): string | null {
+  if (!ref) return null;
+  return typeof ref === "string" ? ref : ref.id ?? null;
+}
 
 /**
  * Process a setup_intent.succeeded event.
@@ -48,7 +81,8 @@ export type WebhookProcessResult =
  * CRITICAL: Only logs safe metadata — never card details.
  */
 async function handleSetupIntentSucceeded(
-  event: Stripe.Event
+  event: Stripe.Event,
+  opts?: CardSetupWebhookOptions
 ): Promise<WebhookProcessResult> {
   const setupIntent = event.data.object as Stripe.SetupIntent;
   const setupIntentId = setupIntent.id;
@@ -86,6 +120,9 @@ async function handleSetupIntentSucceeded(
       reason: "missing_metadata",
     };
   }
+
+  const tenantRejection = await checkTenant(opts, orgId, customerId ?? null);
+  if (tenantRejection) return tenantRejection;
 
   const alreadyProcessed = await isSetupIntentProcessed(setupIntentId);
   if (alreadyProcessed) {
@@ -147,7 +184,8 @@ async function handleSetupIntentSucceeded(
  * Records audit event for failure.
  */
 async function handleSetupIntentCanceled(
-  event: Stripe.Event
+  event: Stripe.Event,
+  opts?: CardSetupWebhookOptions
 ): Promise<WebhookProcessResult> {
   const setupIntent = event.data.object as Stripe.SetupIntent;
   const setupIntentId = setupIntent.id;
@@ -170,6 +208,13 @@ async function handleSetupIntentCanceled(
       reason: "missing_org_id",
     };
   }
+
+  const tenantRejection = await checkTenant(
+    opts,
+    orgId,
+    customerOf(setupIntent.customer as string | { id?: string } | null)
+  );
+  if (tenantRejection) return tenantRejection;
 
   const alreadyProcessed = await isSetupIntentProcessed(setupIntentId);
   if (alreadyProcessed) {
@@ -212,7 +257,8 @@ async function handleSetupIntentCanceled(
  * Records audit event for expiry if it's a card setup session.
  */
 async function handleCheckoutSessionExpired(
-  event: Stripe.Event
+  event: Stripe.Event,
+  opts?: CardSetupWebhookOptions
 ): Promise<WebhookProcessResult> {
   const session = event.data.object as Stripe.Checkout.Session;
   const metadata = session.metadata as CardSetupSessionMetadata | null;
@@ -234,6 +280,13 @@ async function handleCheckoutSessionExpired(
       reason: "missing_org_id",
     };
   }
+
+  const tenantRejection = await checkTenant(
+    opts,
+    orgId,
+    customerOf(session.customer as string | { id?: string } | null)
+  );
+  if (tenantRejection) return tenantRejection;
 
   const setupIntentId = session.setup_intent as string | null;
 
@@ -267,11 +320,13 @@ async function handleCheckoutSessionExpired(
  *
  * @param rawBody - Raw request body (string)
  * @param signature - Stripe-Signature header
+ * @param opts - optional tenant verifier (customer ↔ org); mismatch → no writes
  * @returns Processing result
  */
 export async function processCardSetupWebhook(
   rawBody: string,
-  signature: string | null
+  signature: string | null,
+  opts?: CardSetupWebhookOptions
 ): Promise<WebhookProcessResult> {
   if (!isExternalContractCardSetupEnabled()) {
     return {
@@ -319,13 +374,13 @@ export async function processCardSetupWebhook(
 
   switch (event.type) {
     case "setup_intent.succeeded":
-      return handleSetupIntentSucceeded(event);
+      return handleSetupIntentSucceeded(event, opts);
 
     case "setup_intent.canceled":
-      return handleSetupIntentCanceled(event);
+      return handleSetupIntentCanceled(event, opts);
 
     case "checkout.session.expired":
-      return handleCheckoutSessionExpired(event);
+      return handleCheckoutSessionExpired(event, opts);
 
     default:
       return {

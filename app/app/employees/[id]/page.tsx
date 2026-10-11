@@ -2,6 +2,9 @@ import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
 import { BindingPanel } from "@/components/employees/BindingPanel";
+import { findPendingCredentialReissue } from "@/lib/employees/credential-reissue";
+import { OAuthGrantsPanel } from "@/components/employees/OAuthGrantsPanel";
+import { isMcpOAuthEnabled } from "@/lib/mcp-oauth/config";
 import { EmployeeActionLog } from "@/components/employees/EmployeeActionLog";
 import { EmployeeManagerForm } from "@/components/employees/EmployeeManagerForm";
 import { EmployeeApprovalInboxForm } from "@/components/employees/EmployeeApprovalInboxForm";
@@ -13,10 +16,10 @@ import { EmployeeTerminateForm } from "@/components/employees/EmployeeTerminateF
 import { EmployeeIngressHandoffStatus } from "@/components/employees/EmployeeIngressHandoffStatus";
 import { SlackIdentityForm } from "@/components/employees/SlackIdentityForm";
 import { GoogleCalendarIdentityForm } from "@/components/employees/GoogleCalendarIdentityForm";
-import { getCurrentOrgId } from "@/lib/auth/session";
+import { getSessionContext } from "@/lib/auth/session";
+import { isDemoMode } from "@/lib/mode";
 import {
-  ensureBindingRow,
-  getBinding,
+  getBindingForDisplay,
   getEmployee,
   getEmployeeSlackIdentity,
   getOrgSodWarnPolicy,
@@ -36,6 +39,9 @@ import { APPROVAL_POLICY_LABELS } from "@/lib/employees/policy-draft";
 import { buildConcentration } from "@/lib/employees/concentration";
 import { DOMAIN_LABELS } from "@/lib/gateway/domains";
 import { evaluateSod, isComboSodWarn } from "@/lib/employees/sod";
+import { identityLinkPermissions } from "@/lib/employees/identity-link-permissions";
+import { bindingPanelPermissions } from "@/lib/employees/binding-panel-permissions";
+import { credentialExpiry, employeeStatusView, formatCredentialExpiryJa } from "@/lib/employees/credential-expiry";
 
 export const dynamic = "force-dynamic";
 
@@ -49,7 +55,12 @@ export default async function EmployeeDetailPage({
     redirect("/app/getting-started");
   }
 
-  const orgId = await getCurrentOrgId();
+  const session = await getSessionContext();
+  const orgId = session.orgId;
+  // Same gates as the APIs (link / health, rotate, wake webhook); server-enforced too.
+  const bindingPermissions = bindingPanelPermissions(session);
+  // Slack / Google identity connect + disconnect: same gate as the APIs (hire_issue_credentials).
+  const { canManageIdentityLinks } = identityLinkPermissions(session);
   const members = await listMembers(orgId);
   const projects = await listOrgProjects(orgId);
   const sodWarnPolicy = await getOrgSodWarnPolicy(orgId);
@@ -60,9 +71,13 @@ export default async function EmployeeDetailPage({
   const concentration = buildConcentration(await listEmployees(orgId));
   const concentrationRow = concentration.employees.find((row) => row.employeeId === employee.id);
 
-  const binding =
-    (await getBinding(employee.id)) ??
-    (await ensureBindingRow(employee.id, employee.orgId || orgId || ""));
+  // Read-only: a missing row shows as 未接続; only admin actions create it.
+  const binding = await getBindingForDisplay(employee.id, employee.orgId || orgId || "");
+  // ADMIN_MCP_CREDENTIAL_REISSUE_ENABLED (default OFF → always null): an approved
+  // admin MCP reissue ticket for this employee in this org, waiting for pickup.
+  const pendingReissue = bindingPermissions.canRotateCredential
+    ? await findPendingCredentialReissue(employee.orgId || orgId || "", employee.id).catch(() => null)
+    : null;
   const slackIdentity = await getEmployeeSlackIdentity(employee.id);
   const slackOauthConfigured = slackOAuthConfigured();
   const googleIdentity = await getEmployeeGoogleIdentity(employee.id);
@@ -71,11 +86,14 @@ export default async function EmployeeDetailPage({
   const effectiveIngressHandoff = await getEffectiveIngressHandoffPolicy(orgId, employee.id);
 
   const actionEvents = getEmployeeActionLog(employee, binding);
+  // 状態 = employees.status + the current 社員証's expires_at (display only).
+  const statusView = employeeStatusView(employee);
+  const expiry = credentialExpiry(employee);
 
   return (
     <AppShell
       title={employee.displayName}
-      subtitle={`${employee.roleLabel} · ${employee.status === "active" ? "稼働中" : employee.status === "suspended" ? "契約終了" : employee.status === "draft" ? "下書き" : employee.status}`}
+      subtitle={`${employee.roleLabel} · ${statusView.label}`}
     >
       <div className="flex flex-col sm:flex-row flex-wrap gap-2 mb-4">
         <span className="chip text-[11px]">承認の届き先: {assignedInboxLabel(employee, notificationChannels)}</span>
@@ -107,6 +125,20 @@ export default async function EmployeeDetailPage({
                 {employee.credentialId ?? "未発行"}
               </dd>
             </div>
+            {employee.credentialId ? (
+              <div>
+                <dt className="text-xs muted">社員証の有効期限</dt>
+                <dd className={`mt-1 text-xs ${expiry.state === "expired" ? "text-[var(--danger)]" : expiry.state === "expiring" ? "text-[var(--warn)]" : ""}`}>
+                  {formatCredentialExpiryJa(expiry.expiresAt)}
+                  {expiry.state === "expiring" ? `（あと ${expiry.daysLeft} 日）` : null}
+                  {expiry.state === "expired" ? (
+                    <span className="block mt-1">
+                      期限切れのため、この社員証では接続できません（MCP / OAuth とも）。下の「Grok Bot の接続状態」から社員証を再発行してください。
+                    </span>
+                  ) : null}
+                </dd>
+              </div>
+            ) : null}
             <div>
               <dt className="text-xs muted">AI社員番号（変更なし）</dt>
               <dd className="mt-1 font-mono text-xs">{employee.id}</dd>
@@ -207,6 +239,7 @@ export default async function EmployeeDetailPage({
           initialIdentity={slackIdentity}
           oauthConfigured={slackOauthConfigured}
           disabled={employee.status === "suspended"}
+          canManage={canManageIdentityLinks}
         />
       </section>
 
@@ -218,6 +251,7 @@ export default async function EmployeeDetailPage({
           oauthConfigured={googleOauthConfigured}
           flagEnabled={googleCalendarEnabled}
           disabled={employee.status === "suspended"}
+          canManage={canManageIdentityLinks}
         />
       </section>
 
@@ -290,7 +324,15 @@ export default async function EmployeeDetailPage({
       </section>
 
 
-      <BindingPanel employeeId={employee.id} initial={binding} />
+      <BindingPanel
+        employeeId={employee.id}
+        initial={binding}
+        {...bindingPermissions}
+        demoMode={isDemoMode()}
+        oauthEnabled={isMcpOAuthEnabled()}
+        pendingReissue={pendingReissue}
+      />
+      {isMcpOAuthEnabled() ? <OAuthGrantsPanel employeeId={employee.id} /> : null}
 
       <EmployeeTerminateForm employee={employee} />
 

@@ -3,12 +3,32 @@ import Image from "next/image";
 import Link from "next/link";
 import { BrandMark } from "@/components/BrandMark";
 import { LegalLinks } from "@/components/LegalLinks";
+import {
+  DEFAULT_LP_PAGE,
+  LP_CORP_ROBOTS,
+  LP_PAGE_PARAM,
+  lpPageHomePath,
+  normalizeLpPage,
+  withLpPageParam,
+} from "@/lib/lp/lp-page";
 
-export const metadata: Metadata = {
+type MangaSearchParams = Promise<Record<string, string | string[] | undefined>>;
+
+const METADATA: Metadata = {
   title: "漫画でわかるAI社員 — インターン・プロパー・エグゼクティブ | Staffpass",
   description:
     "AI社員の3つのプラン（インターン・プロパー・エグゼクティブ）を漫画で紹介。中小企業がどのようにAI社員を活用し、業務を改善できるかをストーリーで解説します。",
 };
+
+/**
+ * Reached from LP pattern B with ?from=ai-employee-corp (exact-match allowlist; anything
+ * else is pattern A and renders exactly as before). In B context the page stays out of
+ * search like B itself. `from` only selects between fixed paths; it never becomes a URL.
+ */
+export async function generateMetadata({ searchParams }: { searchParams: MangaSearchParams }): Promise<Metadata> {
+  const page = normalizeLpPage((await searchParams)[LP_PAGE_PARAM]);
+  return page === DEFAULT_LP_PAGE ? METADATA : { ...METADATA, robots: LP_CORP_ROBOTS };
+}
 
 const STORIES = [
   {
@@ -40,14 +60,17 @@ const STORIES = [
   },
 ];
 
-export default function AIEmployeeMangaIndex() {
+export default async function AIEmployeeMangaIndex({ searchParams }: { searchParams: MangaSearchParams }) {
+  const page = normalizeLpPage((await searchParams)[LP_PAGE_PARAM]);
+  const lead = (path: string) => withLpPageParam(path, page);
+  const home = lpPageHomePath(page);
   return (
     <div className="min-h-screen bg-[var(--bg)] text-[var(--text)]">
       <header className="sticky top-0 z-30 border-b border-[var(--border-soft)] bg-[color-mix(in_oklab,var(--bg)_82%,transparent)] backdrop-blur-xl">
         <div className="mx-auto max-w-[640px] px-4 py-3 flex items-center justify-between gap-3">
           <BrandMark size="sm" className="min-w-0" />
           <Link
-            href="/lp/ai-employee/consult"
+            href={lead("/lp/ai-employee/consult")}
             className="btn btn-primary text-xs py-2 px-3 min-h-[36px]"
           >
             相談する
@@ -75,7 +98,7 @@ export default function AIEmployeeMangaIndex() {
           {STORIES.map((story) => (
             <Link
               key={story.slug}
-              href={`/lp/ai-employee/manga/${story.slug}`}
+              href={lead(`/lp/ai-employee/manga/${story.slug}`)}
               className="group surface p-0 overflow-hidden hover:border-[var(--accent-strong)] transition-colors"
             >
               <article className="flex flex-col sm:flex-row">
@@ -125,7 +148,7 @@ export default function AIEmployeeMangaIndex() {
             </p>
             <div className="mt-6">
               <Link
-                href="/lp/ai-employee"
+                href={home}
                 className="btn btn-primary w-full sm:w-auto justify-center"
               >
                 AI社員 導入パック を見る

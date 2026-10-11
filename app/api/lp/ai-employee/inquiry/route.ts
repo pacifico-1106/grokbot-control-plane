@@ -1,4 +1,3 @@
-import { NextResponse } from "next/server";
 import { sendTransactionalEmail, renderStubHtml } from "@/lib/resend";
 import { 
   isLpInquiryDbEnabled, 
@@ -8,6 +7,9 @@ import { createInquiry, type InquiryPlan, type BillingPreference } from "@/lib/l
 import { enqueueNotification, processOutboxEntry } from "@/lib/lp/notification-outbox";
 import { verifyTurnstileToken, getClientIp, getTurnstileConfig } from "@/lib/lp/turnstile";
 import { hashIp, checkRateLimits } from "@/lib/lp/rate-limit";
+import { IP_HASH_UNAVAILABLE, isIpHashKeyConfigured } from "@/lib/security/ip-hash-key";
+import { lpPageLabel, normalizeLpPage, resolveLpRef } from "@/lib/lp/lp-page";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 const NOTIFY_EMAIL = process.env.AI_EMP_INQUIRY_NOTIFY_EMAIL;
 
@@ -24,6 +26,8 @@ interface InquiryPayload {
   useCase?: string;
   billingPreference?: string;
   turnstileToken?: string;
+  /** Lead page; re-validated against the server allowlist (unknown → original page). */
+  lpPage?: unknown;
 }
 
 function isValidEmail(email: string): boolean {
@@ -72,12 +76,17 @@ export async function POST(req: Request) {
   const botProtectionEnabled = isLpInquiryBotProtectionEnabled();
   
   if (botProtectionEnabled && clientIp) {
+    // IP_HASH_KEY required for rate limiting (no dev fallback): refuse before any write.
+    if (!isIpHashKeyConfigured()) {
+      console.error("[ai-employee-inquiry] IP_HASH_KEY not configured; refusing");
+      return jsonUtf8({ ok: false, ...IP_HASH_UNAVAILABLE }, { status: 503 });
+    }
     const ipHash = hashIp(clientIp);
     const rateLimitResult = checkRateLimits(ipHash);
     
     if (!rateLimitResult.allowed) {
       console.warn("[ai-employee-inquiry] Rate limit exceeded:", { ipHash: ipHash.slice(0, 8) });
-      return NextResponse.json(
+      return jsonUtf8(
         { 
           ok: false, 
           error: "rate_limited", 
@@ -97,20 +106,23 @@ export async function POST(req: Request) {
   try {
     body = (await req.json()) as InquiryPayload;
   } catch {
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: "invalid_json", message: "リクエストが不正です" },
       { status: 400 }
     );
   }
 
   const { plan, company, name, email, phone, headcount, useCase, billingPreference, turnstileToken } = body;
+  const lpPage = normalizeLpPage(body.lpPage);
+  // ?ref= (B only) comes from the validated HttpOnly cookie, never from the body.
+  const lpRef = resolveLpRef(lpPage, req.headers.get("cookie"));
 
   if (botProtectionEnabled) {
     const turnstileConfig = getTurnstileConfig();
     
     if (turnstileConfig) {
       if (!turnstileToken) {
-        return NextResponse.json(
+        return jsonUtf8(
           { ok: false, error: "turnstile_required", message: "認証が必要です" },
           { status: 400 }
         );
@@ -120,7 +132,7 @@ export async function POST(req: Request) {
       
       if (!turnstileResult.success) {
         console.warn("[ai-employee-inquiry] Turnstile verification failed:", turnstileResult.errorCodes);
-        return NextResponse.json(
+        return jsonUtf8(
           { ok: false, error: "turnstile_failed", message: "認証に失敗しました。もう一度お試しください。" },
           { status: 400 }
         );
@@ -131,42 +143,42 @@ export async function POST(req: Request) {
   }
 
   if (!plan || !VALID_PLANS.includes(plan as (typeof VALID_PLANS)[number])) {
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: "invalid_plan", message: "プランを選択してください" },
       { status: 400 }
     );
   }
 
   if (!company || company.trim().length < 1) {
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: "invalid_company", message: "会社名を入力してください" },
       { status: 400 }
     );
   }
 
   if (!name || name.trim().length < 1) {
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: "invalid_name", message: "お名前を入力してください" },
       { status: 400 }
     );
   }
 
   if (!email || !isValidEmail(email)) {
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: "invalid_email", message: "有効なメールアドレスを入力してください" },
       { status: 400 }
     );
   }
 
   if (!useCase || useCase.trim().length < 5) {
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: "invalid_use_case", message: "業務内容を入力してください" },
       { status: 400 }
     );
   }
 
   if (useCase.length > 2000) {
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: "use_case_too_long", message: "業務内容は2000文字以内で入力してください" },
       { status: 400 }
     );
@@ -196,6 +208,8 @@ export async function POST(req: Request) {
         useCase: useCase.trim(),
         consentGiven: true,
         consentVersion: "lp-v1",
+        lpPage,
+        lpRef,
       });
 
       if (inquiry) {
@@ -211,7 +225,7 @@ export async function POST(req: Request) {
     console.error("[ai-employee-inquiry] AI_EMP_INQUIRY_NOTIFY_EMAIL not configured, notification not sent");
     
     if (dbEnabled && inquiryId) {
-      return NextResponse.json({
+      return jsonUtf8({
         ok: true,
         message: "お問い合わせを受け付けました",
         inquiryId,
@@ -219,7 +233,7 @@ export async function POST(req: Request) {
       });
     }
     
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: "config_error", message: "設定エラーが発生しました。管理者にお問い合わせください。" },
       { status: 500 }
     );
@@ -238,11 +252,13 @@ export async function POST(req: Request) {
       <tr><td style="padding:8px 4px;border-bottom:1px solid #eee;"><strong>電話</strong></td><td style="padding:8px 4px;border-bottom:1px solid #eee;">${sanitize(phone || "未入力")}</td></tr>
       <tr><td style="padding:8px 4px;border-bottom:1px solid #eee;"><strong>導入予定人数</strong></td><td style="padding:8px 4px;border-bottom:1px solid #eee;">${sanitize(headcount || "未入力")}</td></tr>
       <tr><td style="padding:8px 4px;border-bottom:1px solid #eee;"><strong>請求希望</strong></td><td style="padding:8px 4px;border-bottom:1px solid #eee;">${billing === "annual" ? "年払い（10%オフ）" : "月払い"}</td></tr>
+      <tr><td style="padding:8px 4px;border-bottom:1px solid #eee;"><strong>流入ページ</strong></td><td style="padding:8px 4px;border-bottom:1px solid #eee;">${sanitize(lpPageLabel(lpPage))}</td></tr>
+      ${lpRef ? `<tr><td style="padding:8px 4px;border-bottom:1px solid #eee;"><strong>紹介元(ref)</strong></td><td style="padding:8px 4px;border-bottom:1px solid #eee;">${sanitize(lpRef)}</td></tr>` : ""}
     </table>
     <h3 style="margin-top:16px;">AI社員に任せたい業務</h3>
     <p style="white-space:pre-wrap;background:#f9f9f9;padding:12px;border-radius:8px;">${sanitize(useCase)}</p>
     <hr />
-    <p style="font-size:12px;color:#666;">このメールは /lp/ai-employee/consult から自動送信されました。</p>
+    <p style="font-size:12px;color:#666;">このメールは LP の相談フォームから送信（流入ページは下記）されました。</p>
   `;
 
   const subject = `【AI社員パック問い合わせ】${company} - ${name}様`;
@@ -267,6 +283,8 @@ export async function POST(req: Request) {
           headcount: headcount || null,
           billingPreference: billing,
           useCase,
+          lpPage,
+          ...(lpRef ? { lpRef } : {}),
         },
       });
 
@@ -279,7 +297,7 @@ export async function POST(req: Request) {
           sent,
         });
 
-        return NextResponse.json({
+        return jsonUtf8({
           ok: true,
           message: "お問い合わせを受け付けました",
           inquiryId,
@@ -299,7 +317,7 @@ export async function POST(req: Request) {
 
   if (!result.ok) {
     console.error("[ai-employee-inquiry] Failed to send email:", result.error);
-    return NextResponse.json(
+    return jsonUtf8(
       {
         ok: false,
         error: "email_failed",
@@ -319,7 +337,7 @@ export async function POST(req: Request) {
     inquiryId,
   });
 
-  return NextResponse.json({
+  return jsonUtf8({
     ok: true,
     message: "お問い合わせを受け付けました",
     stub: result.stub,

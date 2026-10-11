@@ -608,3 +608,29 @@ describe("staffpass_get_approval_status auto-fulfill", () => {
     expect(pollData.fulfillment).toBeUndefined();
   });
 });
+
+describe("staffpass_stuck_retry description matches behavior", () => {
+  test("says it writes (re-runs approved fulfill / re-submits invoke + audit), never read-only", () => {
+    const tool = STAFFPASS_MCP_TOOLS.find((t) => t.name === "staffpass_stuck_retry");
+    expect(tool).toBeDefined();
+    expect(/read-only/i.test(tool?.description || "")).toBe(false);
+    expect(tool?.description).toContain("Writes:");
+    expect(tool?.description).toContain("already-approved fulfillment");
+    expect(tool?.description).toContain("gates are re-evaluated");
+  });
+});
+
+describe("staffpass_invoke description: Slack wake → reply mapping (G5)", () => {
+  test("tells the employee to reply with comm.reply and map wake fields into conversation", () => {
+    const tool = STAFFPASS_MCP_TOOLS.find((t) => t.name === "staffpass_invoke");
+    const description = tool?.description || "";
+    expect(description).toContain("comm.reply");
+    expect(description).toContain(
+      'conversation:{surface:"slack", slackChannelId, speakerId, speakerTeamId, ts, thread_ts}'
+    );
+    for (const field of ["channel", "ts", "thread_ts", "speakerId", "speakerTeamId"]) {
+      expect(description).toContain(field);
+    }
+    expect(description).toMatch(/slackUserId[^.]*(yourself|your own)/i);
+  });
+});

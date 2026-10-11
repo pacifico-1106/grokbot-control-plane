@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import { NextResponse } from "next/server";
 import { fulfillIfApproved } from "@/lib/approvals/fulfill";
 import { runApprovalResolveSideEffects } from "@/lib/approvals/resolve-side-effects";
 import {
@@ -13,8 +12,10 @@ import { extraApproversAllow } from "@/lib/employees/approval-inbox";
 import { verifySlackSignature } from "@/lib/notify/slack";
 import { isSelfApprovalDenied } from "@/lib/admin-mcp/self-approval";
 import { getMemberIdFromVoterBinding } from "@/lib/approval-workflow";
+import { approverAuthorityReplyJa } from "@/lib/approver-authority/reply";
 import { isSlackApprovalStrict } from "@/lib/feature-flags";
 import { isSlackUserFromExpectedTeam } from "@/lib/slack/channel-validation";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -36,7 +37,7 @@ type SlackPayload = {
 };
 
 function ack(extra: Record<string, unknown> = {}) {
-  return NextResponse.json({ ok: true, ...extra });
+  return jsonUtf8({ ok: true, ...extra });
 }
 
 /**
@@ -53,7 +54,7 @@ async function sendEphemeralRejection(responseUrl: string | undefined, reason: s
     not_in_allowed_list: "あなたはこのチャンネルの許可されたユーザーリストに含まれていません。",
     no_voter_binding_configured: "投票者バインディングが構成されていません。管理者にお問い合わせください。",
   };
-  const message = REJECTION_MESSAGES[reason] || `承認ボタンの操作が拒否されました: ${reason}`;
+  const message = REJECTION_MESSAGES[reason] || approverAuthorityReplyJa(reason) || `承認ボタンの操作が拒否されました: ${reason}`;
   try {
     await fetch(responseUrl, {
       method: "POST",
@@ -86,7 +87,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ ref: string }>
       signature,
     })
   ) {
-    return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
+    return jsonUtf8({ ok: false, error: "unauthorized" }, { status: 401 });
   }
 
   const contentType = req.headers.get("content-type") || "";
@@ -103,7 +104,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ ref: string }>
   }
 
   if (payload.type === "url_verification") {
-    return NextResponse.json({ challenge: payload.challenge });
+    return jsonUtf8({ challenge: payload.challenge });
   }
   if (payload.type !== "block_actions") return ack();
 
@@ -227,6 +228,7 @@ async function handleBlockActions(
           decision: "revision_requested",
           actorEmail: actor,
           employee,
+          surface: "slack",
         });
       }
       return;
@@ -251,11 +253,16 @@ async function handleBlockActions(
      * The decisionId is stored in approval.metadata for audit/debugging but does not
      * provide uniqueness enforcement at the database level.
      */
+    let resolveReason = "";
     const updated = await resolveApproval(approval.id, decision, actor, channel.orgId, {
       decisionId,
       externalVoter: { provider: "slack", channelKey: channel.id, userId },
       memberId,
+      onResolveResult: (r) => { resolveReason = r.reason; },
     });
+    // PR-D: same approver-authority feedback as LINE / Telegram / web.
+    const authorityReply = updated ? null : approverAuthorityReplyJa(resolveReason);
+    if (authorityReply) await sendEphemeralRejection(payload.response_url, resolveReason);
     if (updated) {
       await fulfillIfApproved(updated, decision);
       const employee = await getEmployee(updated.employeeId, channel.orgId);
@@ -264,6 +271,7 @@ async function handleBlockActions(
         decision,
         actorEmail: actor,
         employee,
+        surface: "slack",
       });
     }
   } catch (error) {

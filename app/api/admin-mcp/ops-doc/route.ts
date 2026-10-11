@@ -1,7 +1,7 @@
-import { NextResponse } from "next/server";
 import { requireOrgAdminSession } from "@/lib/auth/require-org";
 import { adminAgentPublicView, setOrgAdminOpsDocLocation } from "@/lib/data/admin-agents";
 import { parseRolesProposeInput } from "@/lib/mcp/roles-propose";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 export const runtime = "nodejs";
 
@@ -12,7 +12,7 @@ export async function POST(req: Request) {
   const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
   const parsed = parseRolesProposeInput(body);
   if (!parsed.ok) {
-    return NextResponse.json(
+    return jsonUtf8(
       {
         ok: false,
         code: parsed.code,
@@ -31,7 +31,7 @@ export async function POST(req: Request) {
     orgId: gate.orgId,
     opsDocLocation: stored,
   });
-  return NextResponse.json({
+  return jsonUtf8({
     ok: true,
     agent: adminAgentPublicView(agent),
     sourceType: parsed.value.sourceType,

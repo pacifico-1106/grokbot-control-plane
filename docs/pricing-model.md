@@ -1,5 +1,7 @@
 # Staffpass 価格モデル（Yasaka Two-Layer Pricing, 2026-09-13）
 
+> **2026-10-03 注記（旧料金体系）:** 本書の顧客向け価格（AI社員 Lite ¥98,000 / Standard ¥198,000 / Kickoff ¥300,000 / Care ¥80,000 等）は旧SaaS体系です。現行の顧客向け価格は **AI社員 導入パック**（インターン／プロパー／エグゼクティブ／カスタマイズ）で、LP（`app/lp/ai-employee/PricingSection.tsx`・`lib/lp/catalog.ts`）と特定商取引法に基づく表記（`app/legal/commercial-transactions/page.tsx`）の金額が正です。Stripe の Price/Product と `/app/billing` の扱いは要確認（ブランチ `fix/remove-old-saas-prices-20261003` の PR 本文の一覧を参照）。
+
 コピー核: Grok Bot＝手足／Staffpass＝**就業規則と日報**（社員証・承認ポリシー＝就業規則、構造化監査＝日報）。
 
 Grok Bot / Cursor の席代・トークンは再販しない。曖昧な「AI実行時間」も売らない。

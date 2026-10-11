@@ -1,7 +1,7 @@
-import { NextResponse } from "next/server";
 import { requireOrgAdminSession } from "@/lib/auth/require-org";
 import { appendAuditEvent } from "@/lib/data";
 import { adminAgentPublicView, linkOrgAdminAgent } from "@/lib/data/admin-agents";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 export const runtime = "nodejs";
 
@@ -29,11 +29,11 @@ export async function POST(req: Request) {
       summary: "管理エージェントを接続（人のタップ）",
       metadata: { grokBotAgentId: agent.grokBotAgentId },
     });
-    return NextResponse.json({ ok: true, agent: adminAgentPublicView(agent) });
+    return jsonUtf8({ ok: true, agent: adminAgentPublicView(agent) });
   } catch (e) {
     const code = (e as { code?: string }).code;
     const message = e instanceof Error ? e.message : "link_failed";
     const status = code === "revoked" ? 403 : 400;
-    return NextResponse.json({ ok: false, error: code || message, message }, { status });
+    return jsonUtf8({ ok: false, error: code || message, message }, { status });
   }
 }

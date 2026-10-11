@@ -1,6 +1,7 @@
-import { NextResponse } from "next/server";
+import { rejectUnauthorizedCron } from "@/lib/security/cron-secret";
 import { expireTrials } from "@/lib/data/subscriptions";
 import { appendAuditEvent } from "@/lib/data";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -12,16 +13,8 @@ export const dynamic = "force-dynamic";
  * Keeps: view + approval poll.
  */
 export async function GET(req: Request) {
-  const secret = process.env.CRON_SECRET?.trim() || "";
-  if (!secret) {
-    return NextResponse.json(
-      { ok: false, error: "cron_not_configured" },
-      { status: 503 }
-    );
-  }
-  if (req.headers.get("authorization") !== `Bearer ${secret}`) {
-    return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
-  }
+  const rejected = rejectUnauthorizedCron(req);
+  if (rejected) return rejected;
 
   try {
     const result = await expireTrials();
@@ -42,14 +35,14 @@ export async function GET(req: Request) {
       }).catch(() => null);
     }
 
-    return NextResponse.json({
+    return jsonUtf8({
       ok: true,
       expiredCount: result.expiredCount,
       expiredOrgIds: result.expiredOrgIds,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "unknown_error";
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: message },
       { status: 500 }
     );

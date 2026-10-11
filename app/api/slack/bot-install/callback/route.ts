@@ -2,6 +2,7 @@ import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { appendAuditEvent, upsertConversationAdapter } from "@/lib/data";
 import { getAppOrigin } from "@/lib/approvals/tokens";
+import { requireOrgAdminSession } from "@/lib/auth/require-org";
 import {
   SLACK_BOT_INSTALL_COOKIE,
   slackBotInstallRedirectUrl,
@@ -71,6 +72,9 @@ async function authTest(token: string): Promise<SlackAuthTest> {
  *
  * Security:
  * - orgId comes ONLY from verified signed state (tenant isolation)
+ * - the CURRENT session must be an owner/admin of that same org (the start
+ *   route's gate, re-checked here like the shared approval-app callback), so a
+ *   state cannot be finished by another / non-admin session
  * - Bot token encrypted at rest via upsertConversationAdapter
  * - Full token never logged or returned in HTML
  */
@@ -87,6 +91,11 @@ export async function GET(req: Request) {
   if (!parsed) {
     console.warn("slack_bot_install_callback: invalid state or nonce");
     return redirectToResult("error_state");
+  }
+  const session = await requireOrgAdminSession();
+  if (!session.ok || session.orgId !== parsed.orgId) {
+    console.warn(`slack_bot_install_callback: session is not an owner/admin of org=${parsed.orgId}`);
+    return redirectToResult("error_forbidden");
   }
   if (oauthError) {
     console.info(`slack_bot_install_callback: oauth_error=${oauthError} org=${parsed.orgId}`);
@@ -130,7 +139,7 @@ export async function GET(req: Request) {
       orgId: parsed.orgId,
       employeeId: null,
       credentialId: null,
-      actorEmail: "slack_bot_install_oauth",
+      actorEmail: session.email || "slack_bot_install_oauth",
       action: "conversation.adapter_installed",
       purpose: null,
       summary: `Slack ワークスペース「${teamName}」にインストール`,

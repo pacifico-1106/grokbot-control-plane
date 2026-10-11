@@ -11,6 +11,9 @@
  * Org table: org_sns_adapters / org_sns_adapter_secrets.
  */
 
+import { preSendHoldCode } from "@/lib/safety/hold";
+import { retryAfterSecondsFromHeaders } from "./rate-limit";
+
 export const SNS_SURFACES = ["x", "note", "linkedin", "youtube"] as const;
 export type SnsSurface = (typeof SNS_SURFACES)[number];
 
@@ -23,6 +26,13 @@ export const SNS_SURFACE_LABELS: Record<SnsSurface, string> = {
 
 const SNS_TIMEOUT_MS = 8_000;
 
+/** fetch threw: only "never reached the host" (DNS / refused) is not_sent. */
+function fetchErrorSendState(error: unknown): "not_sent" | "unknown" {
+  const cause = error && typeof error === "object" ? (error as { cause?: { code?: unknown } }).cause : undefined;
+  const code = cause && typeof cause === "object" ? String(cause.code ?? "") : "";
+  return ["ENOTFOUND", "EAI_AGAIN", "ECONNREFUSED"].includes(code) ? "not_sent" : "unknown";
+}
+
 export type SnsPublishInput = {
   orgId?: string;
   employeeId?: string;
@@ -34,7 +44,20 @@ export type SnsPublishInput = {
 
 export type SnsPublishResult =
   | { ok: true; delivery: "stub" | "sns"; surface: SnsSurface; id?: string }
-  | { ok: false; error: string; surface?: SnsSurface };
+  | {
+      ok: false;
+      error: string;
+      surface?: SnsSurface;
+      /**
+       * Duplicate post guard (5): "not_sent" only when nothing was submitted or
+       * the API refused it with a JSON 4xx other than 408 — 429 included
+       * (木村 #278 answers 3, 2026-10-05, reverses the 10/4 call); 408, 5xx,
+       * non-JSON answers, timeouts and network errors are "unknown".
+       */
+      sendState?: "not_sent" | "unknown";
+      /** Only on a 429 (not_sent): the provider's wait, clamped (./rate-limit.ts). */
+      retryAfterSeconds?: number;
+    };
 
 export function parseSnsSurface(raw: unknown): SnsSurface | null {
   const value = typeof raw === "string" ? raw.trim().toLowerCase() : "";
@@ -136,12 +159,23 @@ async function postToX(token: string, text: string): Promise<SnsPublishResult> {
       body: JSON.stringify({ text }),
       signal: AbortSignal.timeout(SNS_TIMEOUT_MS),
     });
-    const body = (await response.json().catch(() => ({}))) as {
+    type XBody = {
       data?: { id?: string };
       errors?: Array<{ message?: string; detail?: string }>;
       title?: string;
       detail?: string;
     };
+    let body: XBody = {};
+    let jsonAnswer = false;
+    try {
+      const parsed: unknown = JSON.parse(await response.text());
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        body = parsed as XBody;
+        jsonAnswer = true;
+      }
+    } catch {
+      // non-JSON (proxy / CDN page): we cannot tell what the API did
+    }
     if (!response.ok) {
       const apiError =
         body.errors?.[0]?.message ||
@@ -149,10 +183,13 @@ async function postToX(token: string, text: string): Promise<SnsPublishResult> {
         body.detail ||
         body.title ||
         `http_${response.status}`;
+      const definite = jsonAnswer && response.status >= 400 && response.status < 500 && response.status !== 408;
       return {
         ok: false,
         error: `X への投稿に失敗しました（${apiError}）`,
         surface: "x",
+        sendState: definite ? "not_sent" : "unknown",
+        ...(definite && response.status === 429 ? { retryAfterSeconds: retryAfterSecondsFromHeaders(response.headers) } : {}),
       };
     }
     return {
@@ -169,6 +206,7 @@ async function postToX(token: string, text: string): Promise<SnsPublishResult> {
           ? `X への投稿に失敗しました（${error.message}）`
           : "X への投稿に失敗しました",
       surface: "x",
+      sendState: fetchErrorSendState(error),
     };
   }
 }
@@ -183,12 +221,17 @@ export async function publishSnsPost(input: SnsPublishInput): Promise<SnsPublish
     return {
       ok: false,
       error: "媒体が指定されていません。x / note / linkedin / youtube のいずれかを指定してください。",
+      sendState: "not_sent",
     };
   }
   const text = (input.text || "").trim();
   if (!text) {
-    return { ok: false, error: "投稿本文が空です。", surface };
+    return { ok: false, error: "投稿本文が空です。", surface, sendState: "not_sent" };
   }
+
+  // S2: last check right before the provider call.
+  const held = await preSendHoldCode(input.orgId, input.employeeId);
+  if (held) return { ok: false, error: held, surface, sendState: "not_sent" };
 
   const secrets = await loadAdapterSecrets(input.orgId, surface);
   if (stubEnabled(secrets)) {
@@ -197,18 +240,18 @@ export async function publishSnsPost(input: SnsPublishInput): Promise<SnsPublish
 
   const token = tokenFromSecrets(secrets) || envTokenFor(surface);
   if (!token) {
-    return { ok: false, error: missingCredentialError(surface), surface };
+    return { ok: false, error: missingCredentialError(surface), surface, sendState: "not_sent" };
   }
 
   if (isFutureScheduled(input.scheduledAt)) {
-    return { ok: false, error: scheduledUnsupportedError(surface), surface };
+    return { ok: false, error: scheduledUnsupportedError(surface), surface, sendState: "not_sent" };
   }
 
   if (surface === "x") {
     return postToX(token, text);
   }
 
-  return { ok: false, error: unimplementedOfficialApiError(surface), surface };
+  return { ok: false, error: unimplementedOfficialApiError(surface), surface, sendState: "not_sent" };
 }
 
 export const postSnsMessage = publishSnsPost;

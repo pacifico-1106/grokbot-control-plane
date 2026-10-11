@@ -112,3 +112,10 @@ test("unknown provider outcomes stop automatic retries; definite pre-send failur
  expect(claimState).toBe("failed");
  await executeApproval(approval(),send);expect(effects).toBe(2);
 });
+
+// S2: these tests are about other gates; the hold check answers "no hold" here
+// (the hold gate itself is covered in lib/safety/hold*.test.ts).
+beforeEach(async () => {
+  const h = await import("@/lib/safety/hold");
+  h.__setHoldReaderForTests(h.NO_HOLD_READER_FOR_TESTS);
+});

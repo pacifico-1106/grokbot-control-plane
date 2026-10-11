@@ -1,4 +1,4 @@
-# 法務ドキュメント（雛形）— Staffpass / AI社員 for Grok Bot
+# 法務ドキュメント（雛形）— Staffpass（AIエージェントの社員証）
 
 > **【雛形・要弁護士レビュー】**  
 > ここに置く文書は **法的助言ではありません（Not legal advice）**。顧客提示・サイト掲載・契約添付の前に弁護士レビュー必須です。  
@@ -18,7 +18,7 @@
    - `{{PROVIDER_LEGAL_NAME}}` … 運営会社の正式名称
    - `{{PROVIDER_ADDRESS}}` … 本店所在地等
    - `{{PROVIDER_CONTACT_EMAIL}}` … 問合せメール
-   - `{{SERVICE_NAME}}` … 既定は「Staffpass」（別名: AI社員 for Grok Bot）
+   - `{{SERVICE_NAME}}` … 既定は「Staffpass」（表記: Staffpass（AIエージェントの社員証））
    - `{{SITE_URL}}` … 公開サイト URL
    - `{{GOVERNING_COURT}}` … 既定想定は「東京地方裁判所」
    - `{{EFFECTIVE_DATE}}` … 施行日

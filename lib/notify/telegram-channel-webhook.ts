@@ -1,4 +1,5 @@
 import { resolveApprovalWithWorkflow } from "@/lib/approvals/workflow-integration";
+import { approverAuthorityReplyJa } from "@/lib/approver-authority/reply";
 import { initializeWorkflowForApproval } from "@/lib/approval-workflow/resolve";
 import { getMemberIdFromVoterBinding } from "@/lib/approval-workflow";
 import { fulfillIfApproved } from "@/lib/approvals/fulfill";
@@ -126,12 +127,12 @@ export async function handleTelegramChannelUpdate(
       if (updated) {
         await fulfillIfApproved(updated, decision);
         const employee = await getEmployee(updated.employeeId, channel.orgId);
-        await runApprovalResolveSideEffects({ approval: updated, decision, actorEmail: actor, employee });
+        await runApprovalResolveSideEffects({ approval: updated, decision, actorEmail: actor, employee, surface: "telegram" });
       }
       await answerTelegramCallbackForChannel(
         channel,
         query.id || "",
-        updated ? (decision === "approved" ? "承認しました" : "却下しました") : result.ok ? "投票を記録しました（合議は継続中です）" : "投票を記録できませんでした"
+        updated ? (decision === "approved" ? "承認しました" : "却下しました") : approverAuthorityReplyJa(result.reason) ?? (result.ok ? "投票を記録しました（合議は継続中です）" : "投票を記録できませんでした")
       );
     } catch (error) {
       if (isSelfApprovalDenied(error)) {
@@ -190,6 +191,7 @@ export async function handleTelegramChannelUpdate(
         decision: "revision_requested",
         actorEmail: actor,
         employee,
+        surface: "telegram",
       });
     }
   } catch (error) {

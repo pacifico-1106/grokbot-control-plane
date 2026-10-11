@@ -1,4 +1,9 @@
+import { approverRequirementCardLinesJa } from "@/lib/approver-authority/card";
+import { cardApprovalReasonsLine, cardDetectedTopicsLine } from "@/lib/approvals/approval-reasons";
 import { createHmac, timingSafeEqual } from "node:crypto";
+import { formatMailCardParts, MAIL_BODY_PREVIEW_LABEL, readMailArtifact } from "@/lib/approvals/summary";
+import { attachmentCardLine, readCardAttachment, withoutAttachmentSummaryLine } from "@/lib/approvals/attachment-card";
+import { SLACK_APPROVAL_SUMMARY_MAX_CHARS } from "@/lib/approvals/summary-limits";
 import { getAppOrigin } from "@/lib/approvals/tokens";
 import {
   getNotificationDelivery,
@@ -9,6 +14,9 @@ import type { ApprovalRequest, Employee } from "@/lib/types";
 
 const SLACK_TIMEOUT_MS = 5_000;
 const SLACK_API = "https://slack.com/api";
+/** Mail card caps (Slack section text max is 3000 chars). */
+const SLACK_RECIPIENT_LINE_MAX = 500;
+const SLACK_SUBJECT_LINE_MAX = 200;
 
 export type SlackNotifyResult = {
   ok: boolean;
@@ -71,7 +79,7 @@ export function verifySlackSignature(input: {
 
 async function callSlack(
   token: string,
-  method: "chat.postMessage" | "chat.update",
+  method: "chat.postMessage" | "chat.update" | "conversations.open",
   payload: Record<string, unknown>
 ): Promise<{ ok: boolean; result?: SlackApiResponse; error?: string }> {
   if (!token) return { ok: false, error: "slack_bot_token_missing" };
@@ -135,12 +143,59 @@ function approvalBlocks(
   }
 ) {
   const workflowText = workflowProgressText(options?.workflow ?? null);
+  // mail.send / mail.draft: show 宛先 / CC / BCC / 件名 / 本文先頭 from the stored
+  // artifact (like Telegram) instead of the 400-char summary cut, so CC / BCC
+  // are always visible. Each recipient line is capped to stay under Slack's
+  // 3000-char section limit; the dashboard shows the full list.
+  // The body preview is a mrkdwn quote: each line is escaped first, then
+  // prefixed with ">" (escaping afterwards would turn it into "&gt;"), so a
+  // body line like "BCC: …" cannot pass for a header line.
+  const mailArtifact = readMailArtifact(approval.metadata);
+  const mailParts = mailArtifact
+    ? formatMailCardParts(mailArtifact, {
+        recipientChars: SLACK_RECIPIENT_LINE_MAX,
+        subjectChars: SLACK_SUBJECT_LINE_MAX,
+      })
+    : null;
+  const detail = mailParts
+    ? [
+        ...mailParts.header.map((line) => escapeSlackMrkdwn(line)),
+        ...(mailParts.bodyLines
+          ? [
+              MAIL_BODY_PREVIEW_LABEL,
+              ...mailParts.bodyLines.map((line) => (line ? `> ${escapeSlackMrkdwn(line)}` : ">")),
+            ]
+          : []),
+        ...mailParts.trailer.map((line) => escapeSlackMrkdwn(line)),
+        approval.jobId ? `ジョブID: ${escapeSlackMrkdwn(approval.jobId)}` : "",
+      ]
+    : [escapeSlackMrkdwn(truncate(withoutAttachmentSummaryLine(approval.summary, approval.metadata), SLACK_APPROVAL_SUMMARY_MAX_CHARS))];
+  // Approved attachment (filename + size from the snapshot only), rendered on
+  // its own so the 400-char summary cut can never hide it. Inline code keeps
+  // * _ ~ literal; backticks are replaced so the name cannot close the span.
+  const attachment = readCardAttachment(approval.metadata);
+  const attachmentLine = attachment
+    ? attachmentCardLine(attachment, (name) => `\`${escapeSlackMrkdwn(name.replace(/`/g, "'"))}\``)
+    : "";
   const summary = [
     `*承認依頼* \`#${escapeSlackMrkdwn(approval.id.slice(0, 8))}\`  risk: ${escapeSlackMrkdwn(approval.risk)}`,
     `社員: ${escapeSlackMrkdwn(employee?.displayName || approval.employeeId)}`,
     `ツール: \`${escapeSlackMrkdwn(approval.tool || "unknown")}\``,
     `目的: ${escapeSlackMrkdwn(approval.purpose)}`,
-    escapeSlackMrkdwn(truncate(approval.summary, 400)),
+    // PR-D: 「オーナー承認が必要」 and whose approval is pending (empty when flag OFF / not a target).
+    ...(options?.resolved ? [] : approverRequirementCardLinesJa(approval).map((line) => escapeSlackMrkdwn(line))),
+    attachmentLine,
+    // 木村 B: every reason, own line (outside the 400-char summary cut).
+    (() => {
+      const line = cardApprovalReasonsLine(approval.metadata, approval.summary);
+      return line ? escapeSlackMrkdwn(line) : "";
+    })(),
+    // 木村 R1: matched topics, regardless of APPROVAL_REASONS_ENABLED.
+    (() => {
+      const line = cardDetectedTopicsLine(approval.metadata);
+      return line ? escapeSlackMrkdwn(line) : "";
+    })(),
+    ...detail,
     workflowText,
   ].filter(Boolean).join("\n");
   const section = {
@@ -289,4 +344,38 @@ export async function editSlackWorkflowProgress(
     blocks: approvalBlocks(approval, employee, { workflow }),
   });
   return { ok: edited.ok, ...(edited.error ? { error: edited.error } : {}) };
+}
+
+/** PR-D: re-render the pending card (e.g. after a designated-admin endorsement). */
+export async function refreshSlackApprovalCard(
+  approval: ApprovalRequest, employee: Employee | null, channel: NotificationChannelRuntime
+): Promise<SlackNotifyResult> {
+  const cfg = target(channel);
+  const delivery = await getNotificationDelivery({ approvalId: approval.id, channelId: channel.id });
+  const ts = delivery?.externalMessageId || "";
+  const slackChannel = String(delivery?.context.channel || cfg.channelId || "");
+  if (!cfg.botToken || !ts || !slackChannel) return { ok: false, skipped: true };
+  const edited = await callSlack(cfg.botToken, "chat.update", {
+    channel: slackChannel, ts, text: approvalFallbackText(approval),
+    blocks: approvalBlocks(approval, employee),
+  });
+  return { ok: edited.ok, ...(edited.error ? { error: edited.error } : {}) };
+}
+
+/**
+ * PR-D: plain-text DM to one Slack user through an approval inbox's bot
+ * (after-the-fact owner notices). Short error codes only; the token stays in
+ * the Authorization header.
+ */
+export async function sendSlackDmToUser(
+  channel: NotificationChannelRuntime, slackUserId: string, text: string
+): Promise<SlackNotifyResult> {
+  const cfg = target(channel);
+  const user = String(slackUserId || "").trim();
+  if (!cfg.botToken || !/^[UW][A-Z0-9]{2,30}$/.test(user)) return { ok: false, skipped: true };
+  const opened = await callSlack(cfg.botToken, "conversations.open", { users: user });
+  const dm = (opened.result as { channel?: { id?: string } } | undefined)?.channel?.id;
+  if (!opened.ok || !dm) return { ok: false, error: opened.error || "dm_open_failed" };
+  const sent = await callSlack(cfg.botToken, "chat.postMessage", { channel: dm, text });
+  return { ok: sent.ok, ...(sent.error ? { error: sent.error } : {}) };
 }

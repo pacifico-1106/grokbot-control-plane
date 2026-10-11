@@ -5,6 +5,7 @@ import { appendAuditEvent, getEnabledNotificationChannels } from "@/lib/data";
 import { sendLineText } from "@/lib/notify/line";
 import { sendSlackTextToChannel } from "@/lib/notify/slack";
 import { sendTelegramTextToChannel } from "@/lib/notify/telegram";
+import { isChannelStuckNotifyEnabled } from "@/lib/channel-classify/flags";
 import type { OrgStuckWatchPolicy } from "@/lib/types";
 
 export type NotifyMouthResult = {
@@ -24,11 +25,15 @@ export async function notifyStuckWatchMouth(
 ): Promise<NotifyMouthResult> {
   const mouth = (policy.notifyMouth || "").trim();
   if (!mouth) {
+    if (isChannelStuckNotifyEnabled()) return fallbackToApprovalChannel(orgId, message, metadata);
     return { ok: true, skipped: true, reason: "notify_mouth_unset" };
   }
 
   const channels = await getEnabledNotificationChannels(orgId);
   const channel = channels.find((row) => row.id === mouth);
+  if (!channel && isChannelStuckNotifyEnabled()) {
+    return fallbackToApprovalChannel(orgId, message, metadata);
+  }
   if (!channel) {
     await appendAuditEvent({
       orgId,
@@ -82,4 +87,35 @@ export async function notifyStuckWatchMouth(
     provider: channel.provider,
     channelId: channel.id,
   };
+}
+
+/**
+ * PR-B (CHANNEL_STUCK_NOTIFY_ENABLED): notifyMouth unset / missing → the
+ * org's approval channel, then ops. Rate-limited per alert kind × code × item.
+ */
+async function fallbackToApprovalChannel(
+  orgId: string,
+  message: string,
+  metadata: Record<string, unknown>
+): Promise<NotifyMouthResult> {
+  const { notifyChannelStuck } = await import("@/lib/channel-classify/stuck-notify");
+  const part = (value: unknown) => (typeof value === "string" || typeof value === "number" ? String(value) : "-");
+  const dedupeKey = [metadata.kind, metadata.code, metadata.itemId, metadata.tool].map(part).join("|");
+  const result = await notifyChannelStuck({
+    orgId,
+    kind: "stuck_watch_mouth_fallback",
+    reason: part(metadata.code),
+    text: message,
+    dedupeKey,
+  });
+  if (result.status === "suppressed") {
+    return { ok: true, skipped: true, reason: "notify_mouth_fallback_suppressed" };
+  }
+  if (result.status === "sent_default" || result.status === "sent_approver") {
+    return { ok: true, reason: "notify_mouth_fallback", channelId: result.channelId, provider: result.provider };
+  }
+  if (result.status === "sent_ops") {
+    return { ok: true, reason: "notify_mouth_fallback", provider: "ops" };
+  }
+  return { ok: false, reason: "notify_mouth_fallback_undelivered", error: result.status };
 }

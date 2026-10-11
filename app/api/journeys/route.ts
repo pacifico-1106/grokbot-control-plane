@@ -7,7 +7,6 @@
  * Feature flag LP_CHAT_ENABLED must be ON.
  */
 
-import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { isLpChatEnabled } from "@/lib/feature-flags";
 import {
@@ -18,7 +17,11 @@ import {
 } from "@/lib/lp/journeys";
 import { verifyTurnstileToken, getClientIp, getTurnstileConfig } from "@/lib/lp/turnstile";
 import { hashIp, checkRateLimits } from "@/lib/lp/rate-limit";
+import { IP_HASH_UNAVAILABLE, isIpHashKeyConfigured } from "@/lib/security/ip-hash-key";
 import { getPublishedRelease } from "@/lib/lp/knowledge-base";
+import { GUEST_SESSIONS_UNAVAILABLE, isGuestSigningKeyMissingError } from "@/lib/lp/guest-signing-key";
+import { normalizeLpPage, resolveLpRef } from "@/lib/lp/lp-page";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 const GUEST_COOKIE_NAME = "lp_guest";
 const CSRF_COOKIE_NAME = "lp_csrf";
@@ -30,7 +33,7 @@ function isLpBotProtectionEnabled(): boolean {
 
 export async function POST(req: Request) {
   if (!isLpChatEnabled()) {
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: "feature_disabled", message: "チャット機能は現在利用できません" },
       { status: 503 }
     );
@@ -38,7 +41,7 @@ export async function POST(req: Request) {
 
   const openaiKey = process.env.OPENAI_API_KEY;
   if (!openaiKey || openaiKey.startsWith("replace_me")) {
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: "chat_unavailable", message: "チャット機能は現在利用できません" },
       { status: 503 }
     );
@@ -46,6 +49,12 @@ export async function POST(req: Request) {
 
   const clientIp = getClientIp(req);
   const botProtectionEnabled = isLpBotProtectionEnabled();
+
+  // IP_HASH_KEY required (no dev fallback): refuse before rate limiting or any write.
+  if (clientIp && !isIpHashKeyConfigured()) {
+    console.error("[journeys] IP_HASH_KEY not configured; refusing");
+    return jsonUtf8({ ok: false, ...IP_HASH_UNAVAILABLE }, { status: 503 });
+  }
 
   if (botProtectionEnabled && clientIp) {
     const ipHash = hashIp(clientIp);
@@ -55,7 +64,7 @@ export async function POST(req: Request) {
     });
 
     if (!rateLimitResult.allowed) {
-      return NextResponse.json(
+      return jsonUtf8(
         { ok: false, error: "rate_limited", message: "リクエストが多すぎます" },
         {
           status: 429,
@@ -69,28 +78,32 @@ export async function POST(req: Request) {
     aiDisclosureAccepted?: boolean;
     privacyVersion?: string;
     turnstileToken?: string;
+    lpPage?: unknown;
   };
 
   try {
     body = await req.json();
   } catch {
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: "invalid_json", message: "リクエストが不正です" },
       { status: 400 }
     );
   }
 
   const { aiDisclosureAccepted, privacyVersion, turnstileToken } = body;
+  // AI 相談 log source: allowlisted page; ref (B only) from the validated HttpOnly cookie.
+  const lpPage = normalizeLpPage(body.lpPage);
+  const lpRef = resolveLpRef(lpPage, req.headers.get("cookie"));
 
   if (!aiDisclosureAccepted) {
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: "consent_required", message: "AI相談窓口の利用にはAI表示への同意が必要です" },
       { status: 400 }
     );
   }
 
   if (!privacyVersion) {
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: "privacy_required", message: "プライバシーポリシーへの同意が必要です" },
       { status: 400 }
     );
@@ -101,7 +114,7 @@ export async function POST(req: Request) {
 
     if (turnstileConfig) {
       if (!turnstileToken) {
-        return NextResponse.json(
+        return jsonUtf8(
           { ok: false, error: "turnstile_required", message: "認証が必要です" },
           { status: 400 }
         );
@@ -111,7 +124,7 @@ export async function POST(req: Request) {
 
       if (!turnstileResult.success) {
         console.warn("[journeys] Turnstile verification failed:", turnstileResult.errorCodes);
-        return NextResponse.json(
+        return jsonUtf8(
           { ok: false, error: "turnstile_failed", message: "認証に失敗しました" },
           { status: 400 }
         );
@@ -119,8 +132,22 @@ export async function POST(req: Request) {
     }
   }
 
-  const kbRelease = await getPublishedRelease();
   const { token, tokenHash } = generateGuestToken();
+  // Sign before anything is persisted: without GUEST_SIGNING_KEY we refuse (fail closed, no dev
+  // fallback) and must not leave an orphan journey row behind.
+  let guestCookieValue: string;
+  try {
+    // cookies().set() takes the bare value. Passing the full Set-Cookie string from
+    // formatGuestCookie() stored "lp_guest=<token>.<sig>; Path=/; ..." as the value,
+    // so every later signature check failed with invalid_session.
+    guestCookieValue = formatGuestCookieValue(token);
+  } catch (err) {
+    if (!isGuestSigningKeyMissingError(err)) throw err;
+    console.error("[journeys] GUEST_SIGNING_KEY not configured; refusing to start a guest journey");
+    return jsonUtf8({ ok: false, ...GUEST_SESSIONS_UNAVAILABLE }, { status: 503 });
+  }
+
+  const kbRelease = await getPublishedRelease();
   const csrfToken = generateCsrfToken();
   const ipHash = clientIp ? hashIp(clientIp) : undefined;
 
@@ -130,20 +157,18 @@ export async function POST(req: Request) {
     privacyVersion,
     kbReleaseId: kbRelease?.releaseId,
     ipHash,
+    lpPage,
+    lpRef,
   });
 
   if (!journey) {
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: "journey_creation_failed", message: "セッションの作成に失敗しました" },
       { status: 500 }
     );
   }
 
   const cookieStore = await cookies();
-  // cookies().set() takes the bare value. Passing the full Set-Cookie string from
-  // formatGuestCookie() stored "lp_guest=<token>.<sig>; Path=/; ..." as the value,
-  // so every later signature check failed with invalid_session.
-  const guestCookieValue = formatGuestCookieValue(token);
 
   cookieStore.set(GUEST_COOKIE_NAME, guestCookieValue, {
     httpOnly: true,
@@ -161,7 +186,7 @@ export async function POST(req: Request) {
     maxAge: 24 * 60 * 60,
   });
 
-  return NextResponse.json(
+  return jsonUtf8(
     {
       ok: true,
       journeyId: journey.id,

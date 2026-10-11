@@ -404,10 +404,15 @@ export function resetRuntimeMembers() {
 
 export type RuntimeMember = OrgMember;
 
-export function upsertRuntimeMember(member: OrgMember) {
+export function upsertRuntimeMember(
+  member: OrgMember,
+  opts: { audit?: boolean } = {}
+) {
   const idx = runtimeMembers.findIndex((m) => m.id === member.id);
   if (idx >= 0) runtimeMembers[idx] = member;
   else runtimeMembers.unshift(member);
+  // The guarded writer (lib/data/members.ts writeMemberRow) audits before/after itself.
+  if (opts.audit === false) return member;
   runtimeAudit.unshift({
     id: `aud_${Date.now()}`,
     orgId: DEMO_ORG.id,

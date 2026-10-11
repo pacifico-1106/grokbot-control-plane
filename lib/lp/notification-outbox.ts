@@ -6,6 +6,7 @@
 import { createSupabaseAdminClient } from "@/lib/supabase";
 import { isLpInquiryDbEnabled } from "@/lib/feature-flags";
 import { sendTransactionalEmail, renderStubHtml } from "@/lib/resend";
+import { lpPageLabel, parseLpPage, parseLpRef } from "@/lib/lp/lp-page";
 
 export type NotificationType = 
   | "inquiry_received" 
@@ -198,7 +199,21 @@ export async function processOutboxEntry(entryId: string): Promise<boolean> {
   }
 }
 
-function renderNotificationHtml(entry: OutboxEntry): string {
+/**
+ * 流入ページ / 紹介元(ref) rows from the stored payload, re-checked against the allowlist and
+ * the ref pattern (never echoes a tampered value). Empty for entries written before lpPage
+ * existed, so their emails render exactly as before.
+ */
+function leadRows(payload: Record<string, unknown>): string {
+  const page = parseLpPage(payload.lpPage);
+  if (!page) return "";
+  const ref = parseLpRef(payload.lpRef);
+  const row = (label: string, value: string) =>
+    `<tr><td style="padding:8px 4px;border-bottom:1px solid #eee;"><strong>${label}</strong></td><td style="padding:8px 4px;border-bottom:1px solid #eee;">${sanitize(value)}</td></tr>`;
+  return row("流入ページ", lpPageLabel(page)) + (ref ? row("紹介元(ref)", ref) : "");
+}
+
+export function renderNotificationHtml(entry: OutboxEntry): string {
   const payload = entry.payload;
   
   switch (entry.notificationType) {
@@ -261,11 +276,16 @@ function renderInquiryHtml(payload: Record<string, unknown>): string {
       <tr><td style="padding:8px 4px;border-bottom:1px solid #eee;"><strong>電話</strong></td><td style="padding:8px 4px;border-bottom:1px solid #eee;">${sanitize(phone)}</td></tr>
       <tr><td style="padding:8px 4px;border-bottom:1px solid #eee;"><strong>導入予定人数</strong></td><td style="padding:8px 4px;border-bottom:1px solid #eee;">${sanitize(headcount)}</td></tr>
       <tr><td style="padding:8px 4px;border-bottom:1px solid #eee;"><strong>請求希望</strong></td><td style="padding:8px 4px;border-bottom:1px solid #eee;">${sanitize(billing)}</td></tr>
+      ${leadRows(payload)}
     </table>
     <h3 style="margin-top:16px;">AI社員に任せたい業務</h3>
     <p style="white-space:pre-wrap;background:#f9f9f9;padding:12px;border-radius:8px;">${sanitize(useCase)}</p>
     <hr />
-    <p style="font-size:12px;color:#666;">このメールは /lp/ai-employee/consult から自動送信されました。</p>
+    ${
+      leadRows(payload)
+        ? '<p style="font-size:12px;color:#666;">このメールは LP の相談フォームから送信（流入ページは下記）されました。</p>'
+        : '<p style="font-size:12px;color:#666;">このメールは /lp/ai-employee/consult から自動送信されました。</p>'
+    }
   `;
 }
 
@@ -278,6 +298,7 @@ function renderHandoffHtml(payload: Record<string, unknown>): string {
     <h2>AI社員パック 相談引継ぎ</h2>
     <p><strong>受付日時:</strong> ${sanitize(timestamp)}</p>
     ${journeyId ? `<p><strong>会話ID:</strong> ${sanitize(journeyId)}</p>` : ""}
+    ${leadRows(payload) ? `<table style="border-collapse:collapse;width:100%;">${leadRows(payload)}</table>` : ""}
     <hr />
     <h3>相談要約</h3>
     <p style="white-space:pre-wrap;background:#f9f9f9;padding:12px;border-radius:8px;">${sanitize(summary)}</p>

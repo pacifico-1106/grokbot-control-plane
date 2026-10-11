@@ -42,7 +42,7 @@ test("GET never consumes the token (scanner-safe interstitial)", async () => {
   const res = await GET(new Request(`${BASE}/auth/confirm?token_hash=${TH}&type=invite`));
   expect(res.status).toBe(200);
   expect(res.headers.get("cache-control")).toBe("no-store");
-  expect(res.headers.get("referrer-policy")).toBe("no-referrer");
+  expect(res.headers.get("referrer-policy")).toBe("same-origin");
   expect(await res.text()).toContain('action="/auth/confirm"');
   expect(verifyCalls).toEqual([]);
 });

@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { LP_CSRF_HEADER, isHandoffAwaitingConfirmation, readCsrfCookie } from "@/lib/lp/client-session";
+import { DEFAULT_LP_PAGE, lpPageHomePath, type LpPage } from "@/lib/lp/lp-page";
 
 type State =
   | { kind: "loading" }
@@ -11,7 +12,7 @@ type State =
   | { kind: "done"; message: string }
   | { kind: "cancelled" };
 
-export function HandoffConfirmClient({ handoffId }: { handoffId: string }) {
+export function HandoffConfirmClient({ handoffId, lpPage = DEFAULT_LP_PAGE }: { handoffId: string; lpPage?: LpPage }) {
   const [state, setState] = useState<State>({ kind: "loading" });
   const [summary, setSummary] = useState("");
   const [email, setEmail] = useState("");
@@ -57,6 +58,7 @@ export function HandoffConfirmClient({ handoffId }: { handoffId: string }) {
               credentials: "same-origin",
               body: JSON.stringify({
                 handoffId,
+                ...(lpPage === DEFAULT_LP_PAGE ? {} : { lpPage }),
                 summaryFinal: summary,
                 contactEmail: email || undefined,
                 contactPhone: phone || undefined,
@@ -92,7 +94,7 @@ export function HandoffConfirmClient({ handoffId }: { handoffId: string }) {
     return (
       <p className="mt-6 text-sm" data-testid="handoff-missing">
         この相談は見つかりませんでした。相談を始めたブラウザで開いてください。{" "}
-        <Link href="/lp/ai-employee" className="underline">AI社員のページへ戻る</Link>
+        <Link href={lpPageHomePath(lpPage)} className="underline">AI社員のページへ戻る</Link>
       </p>
     );
   if (state.kind === "done")

@@ -13,6 +13,7 @@ import {
   renderConfirmInterstitial,
   takeRateLimit,
 } from "@/lib/auth/auth-flow";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -53,7 +54,7 @@ export async function GET(req: Request) {
 
 export async function POST(req: Request) {
   if (!isSameOriginRequest(req.headers, req.url)) {
-    return NextResponse.json({ error: "forbidden" }, { status: 403 });
+    return jsonUtf8({ error: "forbidden" }, { status: 403 });
   }
   if (!takeRateLimit(`confirm:${rateKey(clientIp(req.headers))}`, 10, 10 * 60_000)) {
     return invalid(req, "rate_limited");

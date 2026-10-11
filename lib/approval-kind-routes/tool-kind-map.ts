@@ -51,6 +51,8 @@ const _toolKindMap: Record<string, ApprovalKind> = {
   "employeeIdentity.upsert": "account",
   "employeeIdentity.bindMailbox": "account",
   "approvalRoutes.patch": "account",
+  "channels.remove": "account",
+  "parties.remove": "account",
 
   // Decision kind: decision workflow
   "decision.request": "decision",

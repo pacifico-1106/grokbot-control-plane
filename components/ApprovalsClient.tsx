@@ -5,6 +5,9 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { channelErrorMessage } from "@/lib/notify/channel-errors";
 import { actorLabel } from "@/lib/employees/actor-label";
+import { ApprovalAttachmentNotice } from "@/components/approvals/ApprovalAttachmentNotice";
+import { closedWithoutSendInfo } from "@/lib/approvals/closed-without-send";
+import type { PublicApproval } from "@/lib/approvals/public";
 import type { ApprovalRequest, Employee } from "@/lib/types";
 
 function pollUrlFor(a: ApprovalRequest): string {
@@ -20,7 +23,7 @@ export function ApprovalsClient({
   demoDurable = true,
   demoStore = null,
 }: {
-  initial: ApprovalRequest[];
+  initial: PublicApproval[];
   employees: Employee[];
   /** DEMO: false when only in-memory (Vercel isolate split risk). */
   demoDurable?: boolean;
@@ -42,7 +45,7 @@ export function ApprovalsClient({
       const res = await fetch("/api/approvals", { cache: "no-store" });
       if (!res.ok) return;
       const body = (await res.json()) as {
-        approvals?: ApprovalRequest[];
+        approvals?: PublicApproval[];
         durable?: boolean;
         demoStore?: "upstash" | "github" | "http" | "memory" | null;
       };
@@ -249,6 +252,16 @@ export function ApprovalsClient({
                     <h3 className="mt-2 text-sm font-medium leading-snug break-words">
                       {a.title || "承認依頼"}
                     </h3>
+                    {/* Approved attachment: server-side snapshot field, never parsed from the summary. */}
+                    <ApprovalAttachmentNotice attachment={a.cardAttachment} />
+                    {/* 木村 B: server-computed reasons line (same as Slack / LINE / Telegram). */}
+                    {a.cardReasons ? (
+                      <p className="mt-2 text-xs font-medium break-words">{a.cardReasons}</p>
+                    ) : null}
+                    {/* 木村 R1: matched topics, regardless of APPROVAL_REASONS_ENABLED. */}
+                    {a.cardTopics ? (
+                      <p className="mt-1 text-xs break-words">{a.cardTopics}</p>
+                    ) : null}
                     <pre className="mt-2 text-xs muted leading-relaxed whitespace-pre-wrap break-words font-sans">
                       {a.summary}
                     </pre>
@@ -363,7 +376,7 @@ export function ApprovalsClient({
                   className={`chip shrink-0 ${
                     a.status === "approved"
                       ? "chip-ok"
-                      : a.status === "revision_requested"
+                      : a.status === "revision_requested" || a.status === "superseded" || a.status === "expired"
                         ? "chip-warn"
                         : "chip-danger"
                   }`}
@@ -374,6 +387,10 @@ export function ApprovalsClient({
                       ? "却下"
                       : a.status === "revision_requested"
                         ? "修正依頼"
+                      : a.status === "superseded"
+                        ? "置き換え済み"
+                      : a.status === "expired"
+                        ? "期限切れ"
                       : a.status}
                 </span>
                 <div className="min-w-0">
@@ -389,6 +406,16 @@ export function ApprovalsClient({
                   <p className="text-xs muted mt-0.5 break-words">
                     {[a.tool, a.purpose, a.jobId].filter(Boolean).join(" · ")}
                   </p>
+                  {a.status === "superseded" || a.status === "expired" ? (
+                    (() => {
+                      const closed = closedWithoutSendInfo(a.metadata);
+                      return closed ? (
+                        <p className="text-xs mt-0.5 break-words" data-closed-without-send={closed.reason}>
+                          {closed.messageJa}
+                        </p>
+                      ) : null;
+                    })()
+                  ) : null}
                   {a.revisionNote ? (
                     <p className="text-xs mt-1 break-words">
                       修正指示: {a.revisionNote}

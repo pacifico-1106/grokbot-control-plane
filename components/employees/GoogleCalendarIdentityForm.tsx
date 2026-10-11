@@ -13,6 +13,7 @@ const GOOGLE_QUERY_MESSAGES: Record<string, string> = {
     "管理者に Staffpass クライアントの許可を依頼してください（Admin console → Security → API controls → App access control）。",
   error: "Google Calendar 連携に失敗しました",
   scope_error: "許可されていないスコープが含まれています",
+  forbidden: "連携の開始・解除には「雇う／社員証発行」の権限が必要です。オーナーまたは管理者に依頼してください。",
 };
 
 export function GoogleCalendarIdentityForm({
@@ -21,12 +22,15 @@ export function GoogleCalendarIdentityForm({
   oauthConfigured,
   flagEnabled,
   disabled = false,
+  canManage = true,
 }: {
   employee: Employee;
   initialIdentity: EmployeeGoogleIdentity | null;
   oauthConfigured: boolean;
   flagEnabled: boolean;
   disabled?: boolean;
+  /** Server decision (identityLinkPermissions): connect / disconnect allowed for this session. */
+  canManage?: boolean;
 }) {
   const [identity, setIdentity] = useState(initialIdentity);
   const [busy, setBusy] = useState(false);
@@ -70,7 +74,7 @@ export function GoogleCalendarIdentityForm({
     );
   }
 
-  const locked = busy || disabled;
+  const locked = busy || disabled || !canManage;
 
   return (
     <div className="space-y-3">
@@ -101,7 +105,8 @@ export function GoogleCalendarIdentityForm({
         <div className="flex flex-wrap gap-2">
           <a
             className="btn btn-primary text-xs"
-            href={`/api/google/oauth/start?employeeId=${encodeURIComponent(employee.id)}`}
+            // No live href while locked: aria-disabled alone does not stop navigation.
+            href={locked ? undefined : `/api/google/oauth/start?employeeId=${encodeURIComponent(employee.id)}`}
             aria-disabled={locked}
           >
             Google Calendar 連携
@@ -121,6 +126,7 @@ export function GoogleCalendarIdentityForm({
         <p className="text-xs text-[var(--warn)]">Google OAuth が未設定</p>
       )}
 
+      {!canManage ? <p className="text-[11px] muted">連携の開始・解除は「雇う／社員証発行」の権限を持つメンバー（オーナー・管理者など）が行います。</p> : null}
       {message ? <p className="text-xs muted">{message}</p> : null}
     </div>
   );

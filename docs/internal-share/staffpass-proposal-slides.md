@@ -17,7 +17,7 @@ style: |
 ## AIを入れるな。AI社員を雇え。
 
 中小企業の社長向けご提案  
-説明できる AI 社員 — for Grok Bot
+説明できる AI 社員 — Staffpass（AIエージェントの社員証）
 
 ---
 

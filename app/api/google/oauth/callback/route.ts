@@ -1,6 +1,7 @@
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { getAppOrigin } from "@/lib/approvals/tokens";
+import { verifyIdentityLinkCallbackActor } from "@/lib/auth/identity-link-gate";
 import { appendAuditEvent } from "@/lib/data/audit";
 import { bindEmployeeGoogleIdentity } from "@/lib/data/google-identities";
 import { isGoogleCalendarReadEnabled } from "@/lib/feature-flags";
@@ -13,6 +14,7 @@ import {
   verifyGoogleOAuthState,
 } from "@/lib/google/oauth";
 import { validateGrantedScopes } from "@/lib/google/scopes";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 export const runtime = "nodejs";
 
@@ -27,7 +29,7 @@ function redirectEmployee(employeeId: string, google: string): NextResponse {
 
 export async function GET(req: Request) {
   if (!isGoogleCalendarReadEnabled()) {
-    return NextResponse.json(
+    return jsonUtf8(
       { error: "google_calendar_disabled", message: "Google Calendar integration is disabled" },
       { status: 404 }
     );
@@ -47,6 +49,13 @@ export async function GET(req: Request) {
   const parsed = verifyGoogleOAuthState(state, nonce);
   if (!parsed) {
     return NextResponse.redirect(new URL("/app/employees?google=error", getAppOrigin()));
+  }
+
+  // Only the member who started the link (still holding
+  // hire_issue_credentials, same org, employee still in the org) can finish
+  // it. Checked before the code exchange, so no token is ever obtained.
+  if (!(await verifyIdentityLinkCallbackActor(parsed).catch(() => false))) {
+    return redirectEmployee(parsed.employeeId, "forbidden");
   }
 
   if (oauthError) {

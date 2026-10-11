@@ -232,3 +232,51 @@ export async function upsertConversationAdapter(
     has_credentials: Object.keys(secrets).length > 0,
   });
 }
+
+/**
+ * Slack conversation adapters (App A bot installs) of ANY org whose
+ * config.teamId is `teamId`. Public fields only. Used by the shared approval
+ * app install to refuse a workspace already bound to another org. Fails closed
+ * (throws) when the lookup itself fails.
+ */
+export async function findSlackConversationAdaptersByTeam(teamId: string): Promise<ConversationAdapter[]> {
+  const team = (teamId || "").trim();
+  if (!/^T[A-Z0-9]{2,30}$/.test(team)) return [];
+  if (isDemoMode()) {
+    return demoAdapters
+      .filter((row) => row.surface === "slack" && String(row.config?.teamId || "") === team)
+      .map(demoPublic);
+  }
+  const admin = createSupabaseAdminClient();
+  if (!admin) throw new Error("supabase_not_configured");
+  const { data, error } = await admin
+    .from("org_conversation_adapters")
+    .select("*")
+    .eq("surface", "slack")
+    .eq("config->>teamId", team);
+  if (error || !data) throw new Error("team_binding_lookup_failed");
+  return data
+    .map((row) => mapPublic({ ...(row as Record<string, unknown>), has_credentials: false }))
+    .filter((row) => String(row.config?.teamId || "") === team);
+}
+
+/**
+ * Org ids that have an enabled Slack conversation adapter (PR-B backfill
+ * cron). Ids only. Throws when the lookup fails (the cron reports it).
+ */
+export async function listOrgIdsWithEnabledSlackAdapter(limit = 500): Promise<string[]> {
+  const max = Math.max(1, Math.min(2000, Math.floor(limit)));
+  if (isDemoMode()) {
+    return [...new Set(demoAdapters.filter((row) => row.surface === "slack" && row.enabled).map((row) => row.orgId))].slice(0, max);
+  }
+  const admin = createSupabaseAdminClient();
+  if (!admin) throw new Error("supabase_not_configured");
+  const { data, error } = await admin
+    .from("org_conversation_adapters")
+    .select("org_id")
+    .eq("surface", "slack")
+    .eq("enabled", true)
+    .limit(max);
+  if (error || !data) throw new Error("slack_adapter_org_list_failed");
+  return [...new Set(data.map((row) => String(row.org_id)))];
+}

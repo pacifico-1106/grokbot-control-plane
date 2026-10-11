@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test, beforeEach } from "bun:test";
 import { upsertConversationAdapter } from "@/lib/data/conversation-adapters";
 import { upsertNotificationChannel } from "@/lib/data/notification-channels";
 import {
@@ -199,7 +199,7 @@ describe("Slack conversation adapter", () => {
       channel: "C_MISSING",
       text: "hello",
     });
-    expect(result).toEqual({ ok: false, error: "channel_not_found" });
+    expect(result).toEqual({ ok: false, error: "channel_not_found", sendState: "not_sent" });
   });
 
   test("falls back to enabled notify Slack botToken when conversation adapter is missing", async () => {
@@ -228,6 +228,7 @@ describe("Slack conversation adapter", () => {
       delivery: "slack",
       channel: "C_INTERNAL",
       ts: "1503435956.000247",
+      postedVia: "bot",
     });
     expect(auth).toBe("Bearer xoxb-notify");
     expect(payload.blocks).toBe(undefined);
@@ -240,11 +241,12 @@ describe("Slack conversation adapter", () => {
     });
   });
 
-  test("falls back to SLACK_BOT_TOKEN env when no adapter or notify token", async () => {
+  test("never falls back to SLACK_BOT_TOKEN / SLACK_CONVERSATION_BOT_TOKEN env (2026-10-04: may be another workspace's bot)", async () => {
     process.env.SLACK_BOT_TOKEN = "xoxb-env";
-    let auth = "";
+    process.env.SLACK_CONVERSATION_BOT_TOKEN = "xoxb-env-conversation";
+    const auths: string[] = [];
     globalThis.fetch = (async (_input, init) => {
-      auth = String((init?.headers as Record<string, string> | undefined)?.authorization || "");
+      auths.push(String((init?.headers as Record<string, string> | undefined)?.authorization || ""));
       return Response.json({ ok: true, channel: "C_INTERNAL", ts: "1503435956.000247" });
     }) as typeof fetch;
     const result = await postConversationMessage({
@@ -252,9 +254,9 @@ describe("Slack conversation adapter", () => {
       channel: "C_INTERNAL",
       text: "hello",
     });
-    expect(result.ok).toBe(true);
-    if (result.ok) expect(result.delivery).toBe("slack");
-    expect(auth).toBe("Bearer xoxb-env");
+    // Demo mode keeps the no-token stub; production fails closed (slack-token-missing-fail-closed.test.ts).
+    expect(result).toEqual({ ok: true, delivery: "stub" });
+    expect(auths).toEqual([]);
   });
 
   test("maps Slack not_in_channel to slack_not_in_channel", async () => {
@@ -271,7 +273,7 @@ describe("Slack conversation adapter", () => {
       channel: "C_CONNECT",
       text: "hello",
     });
-    expect(result).toEqual({ ok: false, error: "slack_not_in_channel" });
+    expect(result).toEqual({ ok: false, error: "slack_not_in_channel", sendState: "not_sent" });
   });
 
   test("user path uses bound OAuth token as Authorization bearer", async () => {
@@ -326,7 +328,7 @@ describe("Slack conversation adapter", () => {
       channel: "C_INTERNAL",
       text: "hello",
     });
-    expect(result).toEqual({ ok: false, error: "slack_identity_unbound" });
+    expect(result).toEqual({ ok: false, error: "slack_identity_unbound", sendState: "not_sent" });
   });
 
   test("bot path still stubs when no xoxb is configured", async () => {
@@ -478,7 +480,7 @@ describe("Slack conversation adapter", () => {
         channel: "D_NO_USERID",
         text: "no slackUserId provided",
       });
-      expect(result).toEqual({ ok: false, error: "channel_not_found" });
+      expect(result).toEqual({ ok: false, error: "channel_not_found", sendState: "not_sent" });
       expect(callCount).toBe(1);
     } finally {
       emp.allowedAccounts = previousAccounts;
@@ -546,7 +548,7 @@ describe("Slack conversation adapter", () => {
       text: "no retry",
       slackUserId: "U_COUNTERPART",
     });
-    expect(result).toEqual({ ok: false, error: "channel_not_found" });
+    expect(result).toEqual({ ok: false, error: "channel_not_found", sendState: "not_sent" });
     expect(callCount).toBe(1);
   });
 
@@ -567,7 +569,14 @@ describe("Slack conversation adapter", () => {
       channel: "D_MISSING",
       text: "no user id",
     });
-    expect(result).toEqual({ ok: false, error: "channel_not_found" });
+    expect(result).toEqual({ ok: false, error: "channel_not_found", sendState: "not_sent" });
     expect(callCount).toBe(1);
   });
+});
+
+// S2: these tests are about other gates; the hold check answers "no hold" here
+// (the hold gate itself is covered in lib/safety/hold*.test.ts).
+beforeEach(async () => {
+  const h = await import("@/lib/safety/hold");
+  h.__setHoldReaderForTests(h.NO_HOLD_READER_FOR_TESTS);
 });

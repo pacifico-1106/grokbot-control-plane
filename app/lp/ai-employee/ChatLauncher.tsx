@@ -24,6 +24,7 @@ import {
   readCsrfCookie,
   type ChatCard,
 } from "@/lib/lp/client-session";
+import { DEFAULT_LP_PAGE, withLpPageParam, type LpPage } from "@/lib/lp/lp-page";
 import { createTurnstileController, type TurnstileApi, type TurnstileController } from "@/lib/lp/turnstile-client";
 
 interface Message {
@@ -41,17 +42,26 @@ declare global {
 
 const TURNSTILE_SRC = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
 
+/** Pattern A sends exactly the same bodies as before; B adds `lpPage`. */
+function lpPageBody(lpPage: LpPage): { lpPage?: LpPage } {
+  return lpPage === DEFAULT_LP_PAGE ? {} : { lpPage };
+}
+
 function yen(n: number | null): string {
-  return n === null ? "—" : `${n.toLocaleString("ja-JP")}円（税抜）`;
+  return n === null ? "—" : `${n.toLocaleString("ja-JP")}円（税別）`;
 }
 
 export function ChatLauncher({
   handoffEnabled,
   turnstileSiteKey,
+  lpPage = DEFAULT_LP_PAGE,
 }: {
   handoffEnabled: boolean;
   turnstileSiteKey?: string;
+  /** Which LP hosts the chat. The server re-validates it against its allowlist. */
+  lpPage?: LpPage;
 }) {
+  const consultPath = withLpPageParam(LP_CONSULT_PATH, lpPage);
   const [open, setOpen] = useState(false);
   const [consented, setConsented] = useState(false);
   const [csrfToken, setCsrfToken] = useState<string | null>(null);
@@ -125,6 +135,7 @@ export function ChatLauncher({
           aiDisclosureAccepted: true,
           privacyVersion: LP_PRIVACY_VERSION,
           turnstileToken: attemptToken ?? undefined,
+          ...lpPageBody(lpPage),
         }),
       });
       const data = await res.json().catch(() => null);
@@ -144,7 +155,7 @@ export function ChatLauncher({
       if (!started) ctl?.reset();
       setBusy(false);
     }
-  }, []);
+  }, [lpPage]);
 
   const send = useCallback(async () => {
     const text = input.trim();
@@ -167,7 +178,7 @@ export function ChatLauncher({
         method: "POST",
         headers: { "Content-Type": "application/json", [LP_CSRF_HEADER]: token },
         credentials: "same-origin",
-        body: JSON.stringify({ text, clientTurnId, history }),
+        body: JSON.stringify({ text, clientTurnId, history, ...lpPageBody(lpPage) }),
       });
       const data = await res.json().catch(() => null);
       if (!res.ok || !data?.ok) {
@@ -187,7 +198,7 @@ export function ChatLauncher({
     } finally {
       setBusy(false);
     }
-  }, [input, busy, csrfToken, messages]);
+  }, [input, busy, csrfToken, messages, lpPage]);
 
   const requestHandoff = useCallback(
     async (card: Extract<ChatCard, { type: "handoff_preview" }>) => {
@@ -200,7 +211,7 @@ export function ChatLauncher({
           method: "POST",
           headers: { "Content-Type": "application/json", [LP_CSRF_HEADER]: token },
           credentials: "same-origin",
-          body: JSON.stringify({ reason: card.reason, summaryDraft: card.summaryDraft }),
+          body: JSON.stringify({ reason: card.reason, summaryDraft: card.summaryDraft, ...lpPageBody(lpPage) }),
         });
         const data = await res.json().catch(() => null);
         if (!res.ok || !isSafeLpPath(data?.confirmUrl)) {
@@ -214,7 +225,7 @@ export function ChatLauncher({
         setBusy(false);
       }
     },
-    [csrfToken]
+    [csrfToken, lpPage]
   );
 
   return (
@@ -252,7 +263,7 @@ export function ChatLauncher({
           <span className="sm:hidden">AI相談</span>
           <span className="hidden sm:inline">AIに相談する</span>
         </button>
-        <Link href="/lp/ai-employee/consult" className="btn btn-primary flex-1 min-w-0 sm:hidden!">
+        <Link href={consultPath} className="btn btn-primary flex-1 min-w-0 sm:hidden!">
           相談する
         </Link>
       </div>
@@ -354,7 +365,7 @@ export function ChatLauncher({
                           <div className="text-xs faint">
                             {card.type === "contact_link" && card.note ? card.note : "相談フォームから担当者にご連絡いただけます。"}
                           </div>
-                          <Link href={LP_CONSULT_PATH} className="btn btn-primary text-xs mt-2 inline-block">
+                          <Link href={consultPath} className="btn btn-primary text-xs mt-2 inline-block">
                             相談フォームを開く
                           </Link>
                         </div>

@@ -189,17 +189,16 @@ export async function processSubscriptionForPlanChange(
 
     return result;
   } catch (e) {
+    // Do NOT mark the event processed on failure: the error propagates so the
+    // webhook answers 5xx and Stripe retries (fail-closed). Marking it here
+    // used to swallow the retry permanently.
     const msg = e instanceof Error ? e.message : "unknown_error";
-    console.error("[stripe-plan-webhook] Error processing event:", e);
-    
-    await markStripeEventProcessed(event.id, event.type, orgId, {
+    console.error("[stripe-plan-webhook] Error processing event", {
+      eventId: event.id,
+      eventType: event.type,
+      orgId,
       error: msg,
     });
-    
-    return {
-      processed: true,
-      error: msg,
-      orgId,
-    };
+    throw e;
   }
 }

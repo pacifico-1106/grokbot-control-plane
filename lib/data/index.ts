@@ -95,14 +95,14 @@ export {
 export {
   listMembers,
   getMemberById,
-  upsertMember,
-  resolveActorMember,
   isUuid,
   normalizeMemberEmail,
   resolveProductionMemberId,
 } from "./members";
 export {
   getBinding,
+  getBindingForDisplay,
+  unlinkedBinding,
   findBindingByCredentialFingerprint,
   listBindingsForOrg,
   countNeedsReauth,

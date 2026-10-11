@@ -1,4 +1,4 @@
--- AI社員 for Grok Bot — control plane schema (Supabase Postgres)
+-- Staffpass（AIエージェントの社員証） — control plane schema (Supabase Postgres)
 -- Apply via Supabase SQL editor or `supabase db push`.
 -- Fresh apply includes production-ready columns + RLS.
 -- Existing projects: also apply supabase/migrations/20260823_production_ready.sql
@@ -632,29 +632,31 @@ drop policy if exists orgs_select_member on orgs;
 drop policy if exists orgs_update_admin on orgs;
 create policy orgs_select_member on orgs
   for select using (public.is_org_member(id));
-create policy orgs_update_admin on orgs
-  for update using (public.is_org_admin(id));
+-- No authenticated write policy on orgs: name / plan / billing / org policies
+-- are written only by the service role from server routes (Stripe webhook,
+-- super-admin, approval-gated admin fulfilment) — migration 20261004500000.
 
 drop policy if exists org_members_select on org_members;
 drop policy if exists org_members_write_admin on org_members;
 create policy org_members_select on org_members
   for select using (public.is_org_member(org_id));
-create policy org_members_write_admin on org_members
-  for all using (public.is_org_admin(org_id));
+-- No authenticated write policy on org_members: role / capabilities are
+-- written only by the service role after lib/team/member-change-guard.ts
+-- (migration 20261004200000_org_members_capability_guard.sql).
 
 drop policy if exists employees_select on employees;
 drop policy if exists employees_write_admin on employees;
 create policy employees_select on employees
   for select using (public.is_org_member(org_id));
-create policy employees_write_admin on employees
-  for all using (public.is_org_admin(org_id));
+-- No authenticated write policy on employees: written only by the service role from
+-- server routes — migration 20261004600000.
 
 drop policy if exists credentials_select on credentials;
 drop policy if exists credentials_write_admin on credentials;
-create policy credentials_select on credentials
-  for select using (public.is_org_member(org_id));
-create policy credentials_write_admin on credentials
-  for all using (public.is_org_admin(org_id));
+-- No policy at all on credentials (and no anon / authenticated SELECT grant, see
+-- the revoke after agentmail_inboxes): read and written only by the service role
+-- from server code — migration 20261004600000. secret_hash is never readable
+-- from a user session.
 
 drop policy if exists action_counters_select on action_counters;
 create policy action_counters_select on action_counters
@@ -664,16 +666,16 @@ drop policy if exists approvals_select on approval_requests;
 drop policy if exists approvals_write_member on approval_requests;
 create policy approvals_select on approval_requests
   for select using (public.is_org_member(org_id));
-create policy approvals_write_member on approval_requests
-  for all using (public.is_org_member(org_id));
+-- No authenticated write policy on approval_requests: tickets are created /
+-- resolved only by the service role behind requireCapability("approve_actions")
+-- or verified channel webhooks — migration 20261004500000.
 
 drop policy if exists notification_channels_select on org_notification_channels;
 drop policy if exists notification_channels_write_admin on org_notification_channels;
 create policy notification_channels_select on org_notification_channels
   for select using (public.is_org_member(org_id));
-create policy notification_channels_write_admin on org_notification_channels
-  for all using (public.is_org_admin(org_id))
-  with check (public.is_org_admin(org_id));
+-- No authenticated write policy on org_notification_channels: written only by the service role from
+-- server routes — migration 20261004600000.
 
 drop policy if exists notification_deliveries_select on approval_notification_deliveries;
 create policy notification_deliveries_select on approval_notification_deliveries
@@ -683,93 +685,92 @@ drop policy if exists conversation_adapters_select on org_conversation_adapters;
 drop policy if exists conversation_adapters_write_admin on org_conversation_adapters;
 create policy conversation_adapters_select on org_conversation_adapters
   for select using (public.is_org_member(org_id));
-create policy conversation_adapters_write_admin on org_conversation_adapters
-  for all using (public.is_org_admin(org_id))
-  with check (public.is_org_admin(org_id));
+-- No authenticated write policy on org_conversation_adapters: written only by the service role from
+-- server routes — migration 20261004600000.
 
 drop policy if exists sns_adapters_select on org_sns_adapters;
 drop policy if exists sns_adapters_write_admin on org_sns_adapters;
 create policy sns_adapters_select on org_sns_adapters
   for select using (public.is_org_member(org_id));
-create policy sns_adapters_write_admin on org_sns_adapters
-  for all using (public.is_org_admin(org_id))
-  with check (public.is_org_admin(org_id));
+-- No authenticated write policy on org_sns_adapters: written only by the service role from
+-- server routes — migration 20261004600000.
 
 drop policy if exists employee_slack_identities_select on employee_slack_identities;
 drop policy if exists employee_slack_identities_write_admin on employee_slack_identities;
 create policy employee_slack_identities_select on employee_slack_identities
   for select using (public.is_org_member(org_id));
-create policy employee_slack_identities_write_admin on employee_slack_identities
-  for all using (public.is_org_admin(org_id))
-  with check (public.is_org_admin(org_id));
+-- No authenticated write policy on employee_slack_identities: written only by the service role from
+-- server routes — migration 20261004600000.
 
 drop policy if exists audit_select on audit_events;
 drop policy if exists audit_insert_member on audit_events;
 create policy audit_select on audit_events
   for select using (public.is_org_member(org_id));
-create policy audit_insert_member on audit_events
-  for insert with check (public.is_org_member(org_id));
+-- No authenticated insert policy on audit_events: rows are appended only by
+-- the service role (appendAuditEvent) — migration 20261004500000.
 
 drop policy if exists subscriptions_select on subscriptions;
 drop policy if exists subscriptions_write_admin on subscriptions;
 create policy subscriptions_select on subscriptions
   for select using (public.is_org_member(org_id));
-create policy subscriptions_write_admin on subscriptions
-  for all using (public.is_org_admin(org_id));
+-- No authenticated write policy on subscriptions: written only by the Stripe
+-- webhook / trial cron / super-admin via the service role — migration 20261004500000.
+
+-- Tenant session JWTs (anon key + PostgREST) never write these tables; the
+-- service role keeps its grants (migration 20261004500000).
+revoke insert, update, delete, truncate on public.orgs, public.subscriptions, public.audit_events, public.approval_requests from anon, authenticated;
 
 drop policy if exists gateway_select on gateway_links;
 drop policy if exists gateway_write_admin on gateway_links;
 create policy gateway_select on gateway_links
   for select using (public.is_org_member(org_id));
-create policy gateway_write_admin on gateway_links
-  for all using (public.is_org_admin(org_id));
+-- No authenticated write policy on gateway_links: written only by the service role
+-- (session bootstrap / POST /api/gateway/link, owner/admin) — migration 20261004600000.
 
 drop policy if exists bindings_select on employee_bindings;
 drop policy if exists bindings_write_admin on employee_bindings;
 create policy bindings_select on employee_bindings
   for select using (public.is_org_member(org_id));
-create policy bindings_write_admin on employee_bindings
-  for all using (public.is_org_admin(org_id));
+-- No authenticated write policy on employee_bindings: written only by the service role from
+-- server routes — migration 20261004600000.
 
 drop policy if exists org_admin_agents_select on org_admin_agents;
 drop policy if exists org_admin_agents_write_admin on org_admin_agents;
 create policy org_admin_agents_select on org_admin_agents
   for select using (public.is_org_member(org_id));
-create policy org_admin_agents_write_admin on org_admin_agents
-  for all using (public.is_org_admin(org_id))
-  with check (public.is_org_admin(org_id));
+-- No authenticated write policy on org_admin_agents: written only by the service role from
+-- server routes — migration 20261004600000.
 
 drop policy if exists org_parties_select on org_parties;
 drop policy if exists org_parties_write_admin on org_parties;
 create policy org_parties_select on org_parties
   for select using (public.is_org_member(org_id));
-create policy org_parties_write_admin on org_parties
-  for all using (public.is_org_admin(org_id))
-  with check (public.is_org_admin(org_id));
+-- No authenticated write policy on org_parties: written only by the service role from
+-- server routes — migration 20261004600000.
 
 drop policy if exists org_channels_select on org_channels;
 drop policy if exists org_channels_write_admin on org_channels;
 create policy org_channels_select on org_channels
   for select using (public.is_org_member(org_id));
-create policy org_channels_write_admin on org_channels
-  for all using (public.is_org_admin(org_id))
-  with check (public.is_org_admin(org_id));
+-- No authenticated write policy on org_channels: written only by the service role from
+-- server routes — migration 20261004600000.
 
 drop policy if exists information_assets_select on information_assets;
 drop policy if exists information_assets_write_admin on information_assets;
 create policy information_assets_select on information_assets
   for select using (public.is_org_member(org_id));
-create policy information_assets_write_admin on information_assets
-  for all using (public.is_org_admin(org_id))
-  with check (public.is_org_admin(org_id));
+-- No authenticated write policy on information_assets: written only by the service role from
+-- server routes — migration 20261004600000.
 
 drop policy if exists org_projects_select on org_projects;
 drop policy if exists org_projects_write_admin on org_projects;
 create policy org_projects_select on org_projects
   for select using (public.is_org_member(org_id));
-create policy org_projects_write_admin on org_projects
-  for all using (public.is_org_admin(org_id))
-  with check (public.is_org_admin(org_id));
+-- No authenticated write policy on org_projects: written only by the service role from
+-- server routes — migration 20261004600000.
+
+-- Tenant config / credential table write revokes: after agentmail_inboxes below
+-- (migration 20261004600000).
 
 create or replace function public.increment_action_counter(
   p_org_id uuid,
@@ -831,5 +832,204 @@ drop policy if exists agentmail_select on agentmail_inboxes;
 drop policy if exists agentmail_write_admin on agentmail_inboxes;
 create policy agentmail_select on agentmail_inboxes
   for select using (public.is_org_member(org_id));
-create policy agentmail_write_admin on agentmail_inboxes
-  for all using (public.is_org_admin(org_id));
+-- No authenticated write policy on agentmail_inboxes — migration 20261004600000.
+
+-- Tenant config / credential tables (+ gateway_links, agentmail_inboxes): tenant
+-- session JWTs (anon key + PostgREST) never write these; the service role keeps
+-- its grants (migration 20261004600000).
+-- org_external_contract_payment_methods / audit_external_contract_card_events
+-- (20260923) and lp_* (20261001400000) are created by migrations only and
+-- revoked there by 20261004600000.
+revoke insert, update, delete, truncate on public.credentials, public.org_admin_agents, public.employees, public.employee_bindings, public.org_parties, public.org_channels, public.information_assets, public.org_notification_channels, public.org_conversation_adapters, public.org_sns_adapters, public.employee_slack_identities, public.org_projects, public.gateway_links, public.agentmail_inboxes from anon, authenticated;
+-- credentials: not readable from any user session either (rows or secret_hash).
+revoke select on public.credentials from anon, authenticated;
+
+-- Last active owner cannot be removed (20261004200000_org_members_capability_guard.sql).
+create or replace function public.org_members_keep_last_owner()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  remaining integer;
+begin
+  if old.role is distinct from 'owner' or old.status is distinct from 'active' then
+    return coalesce(new, old);
+  end if;
+  if tg_op = 'UPDATE' and new.role = 'owner' and new.status = 'active' and new.org_id = old.org_id then
+    return new;
+  end if;
+  if not exists (select 1 from public.orgs o where o.id = old.org_id) then
+    return coalesce(new, old);
+  end if;
+  perform pg_advisory_xact_lock(hashtextextended('org_members_owner:' || old.org_id::text, 0));
+  select count(*) into remaining
+    from public.org_members m
+   where m.org_id = old.org_id
+     and m.id <> old.id
+     and m.role = 'owner'
+     and m.status = 'active';
+  if remaining = 0 then
+    raise exception 'last_owner_required' using errcode = 'check_violation';
+  end if;
+  return coalesce(new, old);
+end;
+$$;
+
+drop trigger if exists org_members_keep_last_owner on public.org_members;
+create trigger org_members_keep_last_owner
+  before update of role, status, org_id or delete on public.org_members
+  for each row execute function public.org_members_keep_last_owner();
+
+-- ---------------------------------------------------------------------------
+-- MCP OAuth 2.1 AS (migration 20261010200000_mcp_oauth.sql). Service role only.
+-- ---------------------------------------------------------------------------
+create table if not exists oauth_clients (
+  id uuid primary key default gen_random_uuid(),
+  client_id text not null unique,                 -- CIMD URL / DCR generated id / static
+  registration_type text not null check (registration_type in ('cimd','dcr','static')),
+  client_name text not null default '',
+  client_uri text,
+  logo_uri text,
+  redirect_uris text[] not null default '{}',
+  token_endpoint_auth_method text not null default 'none'
+    check (token_endpoint_auth_method in ('none')),
+  metadata jsonb not null default '{}'::jsonb,
+  metadata_fetched_at timestamptz,
+  metadata_expires_at timestamptz,
+  status text not null default 'active' check (status in ('active','blocked')),
+  created_ip_hash text,
+  last_used_at timestamptz,
+  created_at timestamptz not null default now()
+);
+create index if not exists oauth_clients_dcr_created_idx
+  on oauth_clients (registration_type, created_at desc);
+
+create table if not exists oauth_authorization_requests (
+  id text primary key,                            -- 32B random base64url (unguessable)
+  client_id text not null references oauth_clients(client_id) on delete cascade,
+  redirect_uri text not null,
+  state text,
+  code_challenge text not null,
+  resource text not null,
+  scope text[] not null,
+  expires_at timestamptz not null,
+  consumed_at timestamptz,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists oauth_grants (
+  id uuid primary key default gen_random_uuid(),
+  org_id uuid not null references orgs(id) on delete cascade,
+  employee_id uuid not null references employees(id) on delete cascade,
+  client_id text not null references oauth_clients(client_id) on delete cascade,
+  credential_id_at_grant uuid references credentials(id) on delete set null,
+  granted_by_member_id uuid references org_members(id) on delete set null,
+  granted_by_email text not null,
+  resource text not null,
+  scope text[] not null,
+  status text not null default 'active' check (status in ('active','revoked')),
+  expires_at timestamptz not null,                -- absolute cap (≤90d, ≤credential expiry)
+  revoked_at timestamptz,
+  revoked_by_email text,
+  revoke_reason text,
+  last_used_at timestamptz,
+  created_at timestamptz not null default now()
+);
+create index if not exists oauth_grants_employee_idx
+  on oauth_grants (employee_id) where status = 'active';
+create index if not exists oauth_grants_org_idx
+  on oauth_grants (org_id, created_at desc);
+
+create table if not exists oauth_authorization_codes (
+  code_hash text primary key,                     -- sha256 hex
+  grant_id uuid not null references oauth_grants(id) on delete cascade,
+  client_id text not null,
+  redirect_uri text not null,
+  code_challenge text not null,
+  resource text not null,
+  expires_at timestamptz not null,
+  consumed_at timestamptz,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists oauth_access_tokens (
+  token_hash text primary key,
+  grant_id uuid not null references oauth_grants(id) on delete cascade,
+  expires_at timestamptz not null,
+  revoked_at timestamptz,
+  created_at timestamptz not null default now()
+);
+create index if not exists oauth_access_tokens_grant_idx on oauth_access_tokens (grant_id);
+
+create table if not exists oauth_refresh_tokens (
+  token_hash text primary key,
+  grant_id uuid not null references oauth_grants(id) on delete cascade,
+  parent_hash text,
+  expires_at timestamptz not null,
+  rotated_at timestamptz,
+  revoked_at timestamptz,
+  created_at timestamptz not null default now()
+);
+create index if not exists oauth_refresh_tokens_grant_idx on oauth_refresh_tokens (grant_id);
+
+create table if not exists oauth_rate_limits (
+  bucket_key text not null,                       -- e.g. token:<ip_hash>; never raw IP
+  window_start timestamptz not null,
+  count integer not null default 0,
+  primary key (bucket_key, window_start)
+);
+
+alter table oauth_clients enable row level security;
+alter table oauth_authorization_requests enable row level security;
+alter table oauth_grants enable row level security;
+alter table oauth_authorization_codes enable row level security;
+alter table oauth_access_tokens enable row level security;
+alter table oauth_refresh_tokens enable row level security;
+alter table oauth_rate_limits enable row level security;
+-- No policies on purpose: anon / authenticated roles cannot read or write.
+-- Defence in depth (same as 20261004600000): no table privileges for tenant sessions at all.
+revoke all on table oauth_clients, oauth_authorization_requests, oauth_grants, oauth_authorization_codes,
+  oauth_access_tokens, oauth_refresh_tokens, oauth_rate_limits from anon, authenticated;
+
+-- Atomic fixed-window counter (DB-backed; per-instance memory limits do not work on Vercel).
+-- search_path pinned to pg_catalog, public (#315 follow-up, migration 20261010300000).
+create or replace function public.oauth_rate_limit_hit(p_key text, p_window_start timestamptz)
+returns integer
+language sql
+security definer
+set search_path = pg_catalog, public
+as $$
+  insert into public.oauth_rate_limits (bucket_key, window_start, count)
+  values (p_key, p_window_start, 1)
+  on conflict (bucket_key, window_start)
+  do update set count = public.oauth_rate_limits.count + 1
+  returning count;
+$$;
+revoke all on function oauth_rate_limit_hit(text, timestamptz) from public, anon, authenticated;
+grant execute on function oauth_rate_limit_hit(text, timestamptz) to service_role;
+
+-- Tenant isolation in the schema (same pattern as mcp_events_same_org): a grant's
+-- employee, credential-at-grant and granting member must all belong to its org,
+-- so a token (→ grant) can never carry an employee of another org.
+create or replace function public.oauth_grants_same_org()
+returns trigger language plpgsql security invoker set search_path = pg_catalog, public as $oauthg$
+begin
+  if not exists (select 1 from public.employees e where e.id = new.employee_id and e.org_id = new.org_id) then
+    raise exception 'oauth_grant_cross_org';
+  end if;
+  if new.credential_id_at_grant is not null and not exists (
+       select 1 from public.credentials c where c.id = new.credential_id_at_grant and c.employee_id = new.employee_id) then
+    raise exception 'oauth_grant_cross_org';
+  end if;
+  if new.granted_by_member_id is not null and not exists (
+       select 1 from public.org_members m where m.id = new.granted_by_member_id and m.org_id = new.org_id) then
+    raise exception 'oauth_grant_cross_org';
+  end if;
+  return new;
+end $oauthg$;
+revoke all on function public.oauth_grants_same_org() from public, anon, authenticated;
+drop trigger if exists oauth_grants_same_org on public.oauth_grants;
+create trigger oauth_grants_same_org before insert or update of org_id, employee_id, credential_id_at_grant, granted_by_member_id
+  on public.oauth_grants for each row execute function public.oauth_grants_same_org();
