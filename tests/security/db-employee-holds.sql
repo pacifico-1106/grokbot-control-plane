@@ -326,7 +326,7 @@ update public.employees set status = 'suspended' where id = 'e5100000-0000-4000-
 insert into public.approval_requests(id, org_id, employee_id, purpose, summary, tool, risk, status, metadata) values
   ('e5200000-0000-4000-8000-000000000011', 'e5000000-0000-4000-8000-000000000001', 'e5100000-0000-4000-8000-000000000011', 'p', 'pending up', 'slack.post', 'low', 'pending', '{}');
 do $$
-declare r jsonb; leave_id uuid; stop_id uuid; ops_id uuid;
+declare r jsonb; leave_id uuid; stop_id uuid; q_id uuid; ops_id uuid;
 begin
   r := public.start_employee_hold('e5000000-0000-4000-8000-000000000001','e5100000-0000-4000-8000-000000000011','leave','休職',
         'member:e5300000-0000-4000-8000-000000000001','web',null,now());
@@ -356,14 +356,18 @@ begin
     perform public.request_employee_hold_release('e5000000-0000-4000-8000-000000000001', leave_id, 'member:e5300000-0000-4000-8000-000000000002', 'r', 'e5200000-0000-4000-8000-000000000011', now());
     raise exception 'employee holds: superseded hold accepted a release request';
   exception when others then if position('hold_not_found' in sqlerrm) = 0 then raise; end if; end;
-  -- quarantined (auto cutoff) has the same rank as an incident stop → existing (no downgrade / sideways move)
+  -- 木村 10/12 (2nd): the detector (anomaly / quarantine, 3) outranks a human stop (2) → upgrade
   r := public.start_employee_hold('e5000000-0000-4000-8000-000000000001','e5100000-0000-4000-8000-000000000011','quarantined',null,
         'system:anomaly','anomaly','signal:outbound_burst>20',now());
-  if (r->>'holdId')::uuid <> stop_id or coalesce((r->>'upgraded')::boolean, false) then raise exception 'employee holds: same-rank re-stop moved %', r; end if;
-  -- weaker (leave) after a stop → existing
+  q_id := (r->>'holdId')::uuid;
+  if q_id = stop_id or not (r->>'upgraded')::boolean then raise exception 'employee holds: detector did not upgrade a member stop %', r; end if;
+  -- a member stop (2) / leave (1) after the detector → existing
+  r := public.start_employee_hold('e5000000-0000-4000-8000-000000000001','e5100000-0000-4000-8000-000000000011','stopped',null,
+        'member:e5300000-0000-4000-8000-000000000001','web',null,now());
+  if (r->>'holdId')::uuid <> q_id then raise exception 'employee holds: member stop replaced a detector hold %', r; end if;
   r := public.start_employee_hold('e5000000-0000-4000-8000-000000000001','e5100000-0000-4000-8000-000000000011','leave',null,
         'member:e5300000-0000-4000-8000-000000000001','web',null,now());
-  if (r->>'holdId')::uuid <> stop_id then raise exception 'employee holds: weaker re-stop moved the hold %', r; end if;
+  if (r->>'holdId')::uuid <> q_id then raise exception 'employee holds: weaker re-stop moved the hold %', r; end if;
   -- ops stop (strongest) → upgrade
   r := public.start_employee_hold('e5000000-0000-4000-8000-000000000001','e5100000-0000-4000-8000-000000000011','stopped','ops',
         'ops:ops-fixture','ops_console',null,now());
@@ -373,8 +377,8 @@ begin
   r := public.start_employee_hold('e5000000-0000-4000-8000-000000000001','e5100000-0000-4000-8000-000000000011','stopped',null,
         'member:e5300000-0000-4000-8000-000000000001','web',null,now());
   if (r->>'holdId')::uuid <> ops_id then raise exception 'employee holds: member re-stop replaced an ops hold'; end if;
-  if (select count(*) from public.employee_holds where employee_id = 'e5100000-0000-4000-8000-000000000011') <> 3 then
-    raise exception 'employee holds: expected 3 history rows (leave, stop, ops)'; end if;
+  if (select count(*) from public.employee_holds where employee_id = 'e5100000-0000-4000-8000-000000000011') <> 4 then
+    raise exception 'employee holds: expected 4 history rows (leave, stop, quarantine, ops)'; end if;
 end $$;
 
 -- (12) 木村 10/12: a terminated employee (status = suspended) can still be stopped (leaked key / decoy key)
@@ -514,6 +518,35 @@ begin
       raise exception 'employee holds: HOLE4 % hold self-released', kinds[i];
     exception when others then if position('release_approver_not_allowed' in sqlerrm) = 0 then raise; end if; end;
   end loop;
+end $$;
+
+-- (15) 木村 10/12 (2nd): single-owner org — owner stops by hand, the detector re-stops; the owner
+--      must NOT be able to self-release (the detector hold outranks the human one).
+insert into public.employees(id, org_id, display_name, role_label) values
+  ('e5100000-0000-4000-8000-000000000016', 'e5000000-0000-4000-8000-000000000003', 'eh emp solo manual+detector', 'r')
+on conflict (id) do nothing;
+do $$
+declare r jsonb; manual_id uuid; hid uuid; t uuid := gen_random_uuid();
+begin
+  r := public.start_employee_hold('e5000000-0000-4000-8000-000000000003','e5100000-0000-4000-8000-000000000016','stopped','manual',
+        'member:e5300000-0000-4000-8000-000000000005','web',null,now());
+  manual_id := (r->>'holdId')::uuid;
+  r := public.start_employee_hold('e5000000-0000-4000-8000-000000000003','e5100000-0000-4000-8000-000000000016','quarantined',null,
+        'system:anomaly','anomaly','signal:decoy_key',now());
+  hid := (select hold_id from public.employees where id = 'e5100000-0000-4000-8000-000000000016');
+  if hid = manual_id then raise exception 'employee holds: HOLE5 detector re-stop kept the manual hold %', r; end if;
+  -- the owner tries the self-release on whatever hold is current
+  insert into public.approval_requests(id, org_id, purpose, summary, tool, risk, status, metadata) values
+    (t, 'e5000000-0000-4000-8000-000000000003', 'admin.policy', 'solo', 'employee.hold.release', 'high', 'pending',
+     jsonb_build_object('holdId', hid, 'singleOwnerSelfRelease', true, 'requestedBy', 'member:e5300000-0000-4000-8000-000000000005'));
+  perform public.request_employee_hold_release('e5000000-0000-4000-8000-000000000003', hid, 'member:e5300000-0000-4000-8000-000000000005', 'mine', t, now());
+  update public.approval_requests set status = 'approved', resolved_by = 'e5300000-0000-4000-8000-000000000005', resolved_at = now() where id = t;
+  begin
+    perform public.release_employee_hold('e5000000-0000-4000-8000-000000000003', hid, 'solo', '{}'::jsonb, now());
+    raise exception 'employee holds: HOLE5 owner self-released after a detector re-stop';
+  exception when others then if position('release_approver_not_allowed' in sqlerrm) = 0 then raise; end if; end;
+  if (select hold_state from public.employees where id = 'e5100000-0000-4000-8000-000000000016') is null then
+    raise exception 'employee holds: HOLE5 employee no longer held'; end if;
 end $$;
 
 -- (10) org-wide hold
