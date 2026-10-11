@@ -297,3 +297,23 @@ test("E2E hardening 2: consent URL forwarded to another admin's browser (no bind
   expect(c.headers.get("location")).toBeNull();
   expect(audits.map((x) => x.action)).not.toContain("oauth.consent_granted");
 });
+
+test("E2E Origin null (consent page was no-referrer): same-origin browser POST → code → token → tools/list; cross-site null and other-org employee stay refused", async () => {
+  const a = await authorize();
+  const rid = new URL(a.headers.get("location")!).searchParams.get("rid")!;
+  // forged / sandboxed / old-browser `null` without Sec-Fetch-Site: same-origin → refused, rid stays usable
+  expect((await consent(rid, {}, { origin: "null", "sec-fetch-site": "cross-site" })).status).toBe(403);
+  // BOLA: another org's employee is refused even on the accepted null + same-origin path
+  expect((await consent(rid, { employee_id: "emp_x" }, { origin: "null" })).status).toBe(403);
+  const a2 = await authorize();
+  const rid2 = new URL(a2.headers.get("location")!).searchParams.get("rid")!;
+  const c = await consent(rid2, {}, { origin: "null", "sec-fetch-site": "same-origin" });
+  expect(c.status).toBe(303);
+  expect(c.headers.get("referrer-policy")).toBe("no-referrer");
+  const cb = new URL(c.headers.get("location")!);
+  expect(cb.origin + cb.pathname).toBe(CB);
+  const t = await tokenReq({ grant_type: "authorization_code", code: cb.searchParams.get("code")!, redirect_uri: CB, code_verifier: VERIFIER, client_id: CLAUDE_CLIENT, resource: RESOURCE });
+  expect(t.status).toBe(200);
+  const tok = (await t.json()) as { access_token: string };
+  expect((await mcpCall(tok.access_token, "tools/list")).status).toBe(200);
+});
