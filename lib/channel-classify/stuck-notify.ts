@@ -18,7 +18,12 @@
  * audit mirror, ids only, + APPROVAL_ALERT_OPS_EMAILS) → "undelivered".
  * A tenant audit row (channel_stuck.notice) is always written.
  * Rate-limited per org × kind × channel (DB window; per-instance fallback when
- * the store is unavailable), then capped per org per hour (H1,
+ * the store is unavailable). #292 (木村 2026-10-11): unregistered_channel_denied
+ * and unclassified_channel_wake_skipped share ONE key per org × channel
+ * (`unclassified_channel|<surface>:<id>`), so the channel gets one notice per 6h
+ * that names the event; a later event of either kind inside the window is
+ * suppressed and written to the tenant audit (channel_stuck.notice_suppressed,
+ * ids only). Then capped per org per hour (H1,
  * CHANNEL_STUCK_MAX_NOTICES_PER_HOUR): over the cap → ONE summary notice, then
  * "rate_limited" until the window rolls. Content: ids, reason codes, next
  * step — never a message body, token or secret. Never throws.
@@ -44,6 +49,10 @@ export type StuckNoticeKind =
   | "stuck_watch_mouth_fallback"
   | "proposal_rate_limited"
   | "unclassified_channel_wake_skipped";
+
+/** #292: these two kinds share one dedup key per org × channel (one notice per 6h). */
+const CHANNEL_SHARED_KINDS = new Set<StuckNoticeKind>(["unregistered_channel_denied", "unclassified_channel_wake_skipped"]);
+const CHANNEL_SHARED_KEY_PREFIX = "unclassified_channel";
 
 const KINDS = new Set<StuckNoticeKind>([
   "unregistered_channel_denied",
@@ -124,6 +133,10 @@ function code(value: unknown, fallback: string): string {
 }
 
 function noticeKey(input: StuckNoticeInput, ref: { surface: string; externalId: string } | null): string {
+  if (CHANNEL_SHARED_KINDS.has(input.kind) && (input.dedupeKey || ref)) {
+    const target = input.dedupeKey || `${ref!.surface}:${ref!.externalId}`;
+    return `${CHANNEL_SHARED_KEY_PREFIX}|${target}`.replace(/[^A-Za-z0-9_.:@+|-]+/g, "_").slice(0, 200);
+  }
   const raw = input.dedupeKey ? `${input.kind}|${input.dedupeKey}` : `${input.kind}|${ref ? `${ref.surface}:${ref.externalId}` : "-"}`;
   return raw.replace(/[^A-Za-z0-9_.:@+|-]+/g, "_").slice(0, 200) || input.kind;
 }
@@ -145,7 +158,25 @@ function clip(text: string, max: number): string {
   return text.replace(/[<>]/g, "").slice(0, max);
 }
 
+const SHARED_EVENT_LABEL_JA: Partial<Record<StuckNoticeKind, string>> = {
+  unregistered_channel_denied: "未登録チャネルへの投稿を拒否しました",
+  unclassified_channel_wake_skipped: "未登録チャネルでのメンションで社員を起こしませんでした",
+};
+
+/** #292: which event this shared org × channel notice is about, and the shared 6h window. */
+function sharedEventLinesJa(kind: StuckNoticeKind): string {
+  return [
+    `イベント: ${kind}（${SHARED_EVENT_LABEL_JA[kind] ?? kind}）`,
+    `同じチャネルの投稿拒否・メンション見送りの通知は 6 時間に 1 回です（その間の件数は監査ログに記録します）。`,
+  ].join("\n");
+}
+
 export function buildStuckNoticeTextJa(input: StuckNoticeInput, ref: { surface: string; externalId: string } | null, reason: string): string {
+  const base = buildStuckNoticeBodyJa(input, ref, reason);
+  return CHANNEL_SHARED_KINDS.has(input.kind) ? `${base}\n${sharedEventLinesJa(input.kind)}` : base;
+}
+
+function buildStuckNoticeBodyJa(input: StuckNoticeInput, ref: { surface: string; externalId: string } | null, reason: string): string {
   const where = ref ? `${surfaceLabel(ref.surface)} ${ref.externalId}` : "";
   switch (input.kind) {
     case "unregistered_channel_denied":
@@ -227,7 +258,31 @@ export async function notifyChannelStuck(input: StuckNoticeInput): Promise<Stuck
     const reason = code(input.reason, "unknown");
     const key = noticeKey(input, ref);
     const windowSeconds = input.kind === "unregistered_channel_denied" || input.kind === "unclassified_channel_wake_skipped" ? DENY_NOTICE_WINDOW_SECONDS : OTHER_NOTICE_WINDOW_SECONDS;
-    if (!(await takeSlot(orgId, key, windowSeconds))) return { status: "suppressed" };
+    if (!(await takeSlot(orgId, key, windowSeconds))) {
+      if (CHANNEL_SHARED_KINDS.has(input.kind) && ref) {
+        // #292: counted in the tenant audit (ids + reason code only).
+        await deps
+          .audit({
+            orgId,
+            employeeId: null,
+            credentialId: null,
+            action: "channel_stuck.notice_suppressed",
+            purpose: "admin.channel",
+            summary: `滞留通知を抑止（同じチャネルの通知が ${windowSeconds / 3600} 時間以内に送信済み / ${input.kind}）: ${surfaceLabel(ref.surface)} ${ref.externalId}`,
+            metadata: {
+              auditClass: "admin",
+              event: `channel_stuck.${input.kind}.suppressed`,
+              kind: input.kind,
+              surface: ref.surface,
+              externalId: ref.externalId,
+              reason,
+              windowHours: windowSeconds / 3600,
+            },
+          })
+          .catch(() => undefined);
+      }
+      return { status: "suppressed" };
+    }
 
     // H1: per-org hourly cap. The proposal-cap summary is itself capped (once
     // per proposal window) and must not be eaten by the notice cap.
