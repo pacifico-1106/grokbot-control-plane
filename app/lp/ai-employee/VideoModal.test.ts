@@ -76,11 +76,15 @@ describe("floating promo: modal trigger on B only", () => {
   test("variant config", () => {
     expect(corp.video.expandToModal).toBe(true);
     expect(orig.video.expandToModal).toBe(false);
-    expect(corp.video.title).toBe("StaffPass MV");
+    expect(corp.video.title).toBe("Staffpass 紹介動画");
+    expect(orig.video.title).toBe("AIエージェント100兆個の話を、現場の経営者向けに翻訳する");
+    expect(orig.video.title).not.toContain("StaffPass MV");
   });
   test("B desktop + mobile: a button that opens the dialog (no inline iframe, no off-site link)", () => {
     for (const P of [PromoDesktopPlayer, PromoMobilePlayer]) {
       const h = html(createElement(P, { video: corp.video, onCollapse: noop, onExpand: noop }));
+      expect(h).toContain(">Staffpass 紹介動画<");
+      expect(h).not.toContain("StaffPass MV");
       expect(h).toContain('data-testid="lp-video-expand"');
       expect(h).toContain('aria-haspopup="dialog"');
       expect(h).not.toContain("<iframe");

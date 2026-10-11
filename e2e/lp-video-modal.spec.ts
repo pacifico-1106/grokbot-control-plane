@@ -9,7 +9,7 @@ async function openFromPromo(page: Page) {
   const trigger = page.getByTestId("lp-video-expand");
   await expect(trigger).toBeVisible();
   await trigger.click();
-  const dialog = page.getByRole("dialog", { name: "StaffPass MV" });
+  const dialog = page.getByRole("dialog", { name: "Staffpass 紹介動画" });
   await expect(dialog).toBeVisible();
   return { trigger, dialog };
 }
@@ -55,7 +55,7 @@ for (const vp of [{ name: "pc", width: 1440, height: 900 }, { name: "mobile", wi
 
     test("a click inside the video area does not close it", async ({ page }) => {
       const { dialog } = await openFromPromo(page);
-      await dialog.getByText("StaffPass MV").click();
+      await dialog.getByRole("heading", { name: "Staffpass 紹介動画" }).click();
       await expect(dialog).toBeVisible();
     });
   });

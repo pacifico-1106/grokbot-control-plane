@@ -132,6 +132,16 @@ describe("pattern B /lp/ai-employee-corp", () => {
     expect(hrefs).toContain("/lp/ai-employee/consult?plan=custom&from=ai-employee-corp");
   });
 
+  test("B → manga links carry from=ai-employee-corp (A's manga links unchanged via golden HTML)", () => {
+    chat(false);
+    const hrefs = [...html(CorpPage()).matchAll(/href="([^"]+)"/g)].map((m) => m[1].replace(/&amp;/g, "&"));
+    const manga = hrefs.filter((x) => x.startsWith("/lp/ai-employee/manga"));
+    expect(manga.length).toBe(5);
+    for (const x of manga) expect(x).toContain("from=ai-employee-corp");
+    expect(manga).toContain("/lp/ai-employee/manga?from=ai-employee-corp");
+    expect(manga).toContain("/lp/ai-employee/manga/intern?from=ai-employee-corp");
+  });
+
   test("robots meta: noindex, follow + noai, noimageai; NO canonical (木村 10/12 02:23)", () => {
     expect(corpMetadata.robots).toBe("noindex, follow, noai, noimageai");
     expect(corpMetadata.alternates).toBeUndefined();

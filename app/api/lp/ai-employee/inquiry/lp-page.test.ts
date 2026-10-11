@@ -126,4 +126,10 @@ describe("POST /api/lp/ai-employee/inquiry — lead page", () => {
     expect(inquiries[0].lpRef).toBe("partner_01");
     expect(JSON.stringify(inquiries[0])).not.toContain("AIC-AB12");
   });
+
+  test("email footer: LP の相談フォームから送信（流入ページは下記）, no hard-coded /lp/ai-employee/consult", async () => {
+    await post({ lpPage: "ai-employee-corp" });
+    expect(mails[0].html).toContain("LP の相談フォームから送信（流入ページは下記）");
+    expect(mails[0].html).not.toContain("/lp/ai-employee/consult から");
+  });
 });

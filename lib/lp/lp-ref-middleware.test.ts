@@ -34,6 +34,7 @@ describe("lpCorpRefResponse", () => {
     expect(run("/lp/ai-employee-corp")).toBeNull();
     expect(run("/lp/ai-employee?ref=partner_01")).toBeNull();
     expect(run("/lp/ai-employee-corp/x?ref=partner_01")).toBeNull();
+    expect(run("/lp/ai-employee/manga?from=ai-employee-corp&ref=partner_01")).toBeNull();
   });
   test("middleware wires it in before auth (works in demo mode too)", async () => {
     const res = await middleware(new NextRequest(`${BASE}/lp/ai-employee-corp?ref=partner_01`));

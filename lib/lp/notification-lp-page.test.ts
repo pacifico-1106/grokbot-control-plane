@@ -26,6 +26,14 @@ describe("renderNotificationHtml lead page row", () => {
     expect(lpRefNoticeLine("partner_01")).toBe("紹介元(ref): partner_01");
     expect(lpRefNoticeLine("a b")).toBeNull();
   });
+  test("inquiry footer: new wording when the 流入ページ row is present; old entries keep the old footer", () => {
+    const b = renderNotificationHtml(entry("inquiry_received", { plan: "intern", lpPage: "ai-employee-corp" }));
+    expect(b).toContain("LP の相談フォームから送信（流入ページは下記）");
+    expect(b).not.toContain("/lp/ai-employee/consult から");
+    const old = renderNotificationHtml(entry("inquiry_received", { plan: "intern" }));
+    expect(old).toContain("このメールは /lp/ai-employee/consult から自動送信されました。");
+    expect(old).not.toContain("流入ページは下記");
+  });
   test("a tampered stored value is never echoed", () => {
     const h = renderNotificationHtml(entry("inquiry_received", { plan: "intern", lpPage: "<script>alert(1)</script>" }));
     expect(h).not.toContain("script");
