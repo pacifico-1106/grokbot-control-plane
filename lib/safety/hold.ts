@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 /**
  * Emergency stop (hold) checkpoint — design ai-safety-5rules-design-20261012.md §2.3 (S2).
  *
@@ -201,6 +202,50 @@ function supabaseReader(): HoldReader {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Per-request reuse (木村 10/12 LOW): one invoke used to read employees + orgs at G1,
+// G3 and again just before sending (up to 6 reads). Inside withHoldRequestScope the
+// rows that were READ SUCCESSFULLY are reused by later checkpoints of the same
+// request; errors / missing rows are never reused (re-read, still fail-stop), and the
+// just-before-send check (phase pre_send) always re-reads and refreshes the scope.
+// Nothing outlives the request.
+// ---------------------------------------------------------------------------
+type HoldScope = { employee: Map<string, HoldRead>; org: Map<string, HoldRead>; reads: number };
+const holdScope = new AsyncLocalStorage<HoldScope>();
+export function withHoldRequestScope<T>(fn: () => Promise<T>): Promise<T> {
+  if (holdScope.getStore()) return fn();
+  return holdScope.run({ employee: new Map(), org: new Map(), reads: 0 }, fn);
+}
+/** Tests only: reads made by the reader inside the current scope. */
+export function __holdScopeReadsForTests(): number | null {
+  return holdScope.getStore()?.reads ?? null;
+}
+function scoped(rd: HoldReader, phase: HoldPhase): HoldReader {
+  const store = holdScope.getStore();
+  if (!store) return rd;
+  const reuse = phase !== "pre_send";
+  return {
+    async employee(employeeId, orgHint) {
+      const hit = reuse ? store.employee.get(employeeId) : undefined;
+      if (hit) return hit;
+      store.reads++;
+      const r = await rd.employee(employeeId, orgHint);
+      if (r.state === "found") store.employee.set(employeeId, r);
+      else store.employee.delete(employeeId);
+      return r;
+    },
+    async org(orgId) {
+      const hit = reuse ? store.org.get(orgId) : undefined;
+      if (hit) return hit;
+      store.reads++;
+      const r = await rd.org(orgId);
+      if (r.state === "found") store.org.set(orgId, r);
+      else store.org.delete(orgId);
+      return r;
+    },
+  };
+}
+
 let readerOverride: HoldReader | null = null;
 /** Tests only: replace the reader (e.g. one that throws, to prove fail-stop). */
 export function __setHoldReaderForTests(r: HoldReader | null): void {
@@ -236,7 +281,7 @@ export async function checkOperable(input: {
     if (!employeeId && !orgId) {
       result = unavailable();
     } else {
-      const rd = reader();
+      const rd = scoped(reader(), input.phase);
       result = { ok: true };
       if (employeeId) {
         const e = await rd.employee(employeeId, orgId || null);
@@ -317,12 +362,52 @@ export function assertTicketNotHeld(approval: { metadata?: Record<string, unknow
 // ---------------------------------------------------------------------------
 const lastAudit = new Map<string, number>();
 const AUDIT_WINDOW_MS = 5 * 60 * 1000;
+/** Bounded throttle map (木村 10/12): never more than HOLD_THROTTLE_MAX_KEYS entries. */
+export const HOLD_THROTTLE_MAX_KEYS = 1000;
+export function takeHoldThrottleSlot(map: Map<string, number>, key: string, windowMs: number, now = Date.now()): boolean {
+  const last = map.get(key);
+  if (last !== undefined && last + windowMs > now) return false;
+  map.delete(key); // re-insert at the end (insertion order = age)
+  if (map.size >= HOLD_THROTTLE_MAX_KEYS) {
+    for (const [k, t] of map) {
+      if (t + windowMs <= now) map.delete(k);
+    }
+    while (map.size >= HOLD_THROTTLE_MAX_KEYS) {
+      const oldest = map.keys().next().value;
+      if (oldest === undefined) break;
+      map.delete(oldest);
+    }
+  }
+  map.set(key, now);
+  return true;
+}
+
+const wakeAuditThrottle = new Map<string, number>();
+export const WAKE_SUPPRESSED_AUDIT_WINDOW_MS = 10 * 60_000;
+/** One wake_suppressed row per org × employee × reason per window; the rest are counted. */
+export function takeWakeSuppressedAuditSlot(key: string): { write: boolean; suppressed: number } {
+  const countKey = `n:${key}`;
+  const write = takeHoldThrottleSlot(wakeAuditThrottle, key, WAKE_SUPPRESSED_AUDIT_WINDOW_MS);
+  const suppressed = wakeSuppressedCounts.get(countKey) ?? 0;
+  if (write) wakeSuppressedCounts.delete(countKey);
+  else {
+    if (wakeSuppressedCounts.size >= HOLD_THROTTLE_MAX_KEYS && !wakeSuppressedCounts.has(countKey)) {
+      const oldest = wakeSuppressedCounts.keys().next().value;
+      if (oldest !== undefined) wakeSuppressedCounts.delete(oldest);
+    }
+    wakeSuppressedCounts.set(countKey, suppressed + 1);
+  }
+  return { write, suppressed: write ? suppressed : suppressed + 1 };
+}
+const wakeSuppressedCounts = new Map<string, number>();
+export function __holdThrottleSizesForTests(): { unavailable: number; wake: number; wakeCounts: number } {
+  return { unavailable: lastAudit.size, wake: wakeAuditThrottle.size, wakeCounts: wakeSuppressedCounts.size };
+}
+
 async function auditUnavailable(orgId: string, employeeId: string, phase: HoldPhase): Promise<void> {
   if (!orgId) return; // nothing to attach the row to; the caller still stops
   const key = `${orgId}:${employeeId}:${phase}`;
-  const now = Date.now();
-  if ((lastAudit.get(key) ?? 0) + AUDIT_WINDOW_MS > now) return;
-  lastAudit.set(key, now);
+  if (!takeHoldThrottleSlot(lastAudit, key, AUDIT_WINDOW_MS)) return;
   await appendAuditEvent({
     orgId,
     employeeId: employeeId || null,
@@ -335,6 +420,8 @@ async function auditUnavailable(orgId: string, employeeId: string, phase: HoldPh
 }
 export function __resetHoldAuditThrottleForTests(): void {
   lastAudit.clear();
+  wakeAuditThrottle.clear();
+  wakeSuppressedCounts.clear();
 }
 
 /**

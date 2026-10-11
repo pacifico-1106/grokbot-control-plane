@@ -122,6 +122,19 @@ test("migration lands (same reader, error gone) → a held employee is blocked o
   if (!r.ok) expect(r.code).toBe("employee_on_hold");
 });
 
+test("column exists (a read just succeeded) and then a read fails → still 503, no 'not installed'", async () => {
+  employeesResult = row(null, null);
+  orgsResult = orgRow(null, null);
+  expect(await check()).toEqual({ ok: true });
+  employeesResult = { data: null, error: { code: "57014", message: "canceling statement due to statement timeout" } };
+  const r = await check();
+  expect(r.ok).toBe(false);
+  if (!r.ok) expect(r.code).toBe("hold_state_unavailable");
+  employeesResult = { data: null, error: { code: "PGRST000", message: "Could not connect with the database" } };
+  expect((await check()).ok).toBe(false);
+  expect(alerts).toEqual([]);
+});
+
 test("isHoldSchemaMissing: unit table", () => {
   expect(hold.isHoldSchemaMissing({ code: "42703", message: "column employees.hold_id does not exist" })).toBe(true);
   expect(hold.isHoldSchemaMissing({ code: "42P01", message: 'relation "public.employee_holds" does not exist' })).toBe(true);

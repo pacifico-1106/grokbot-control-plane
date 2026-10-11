@@ -15,6 +15,7 @@
  *
  * Every attempt is audited (comm.delete.*) with ids and a target hash only.
  */
+import { preSendHoldCode } from "@/lib/safety/hold";
 import { createHash } from "node:crypto";
 import { appendAuditEvent } from "@/lib/data/audit";
 import type { AuditAction } from "@/lib/types";
@@ -198,6 +199,15 @@ export async function executeCommDelete(ctx: CommDeleteContext, target: CommDele
     });
   }
 
+  // S2 (木村 10/12): last hold check right before the provider call, like every other send.
+  const held = await preSendHoldCode(ctx.orgId, ctx.employeeId);
+  if (held) {
+    await auditCommDelete(ctx, "comm.delete.refused", target, { code: held, ...recordDetail }, `停止中のため削除を実行しませんでした（${held}）`);
+    return outcome(target, {
+      ok: false, status: "refused", code: held, httpStatus: held === "hold_state_unavailable" ? 503 : 403,
+      messageJa: "この AI 社員は停止中のため、削除を実行しませんでした。",
+    });
+  }
   const deleted = await deleteSlackPost({
     orgId: ctx.orgId,
     employeeId: ctx.employeeId,

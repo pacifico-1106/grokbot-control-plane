@@ -15,21 +15,21 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 /** entry point → files allowed to call it (the definition file included). */
 export const PINNED: Record<string, string[]> = {
   // G3 inside (assertExecutable) — every caller, authenticated or not.
-  "runGatewayInvoke(": ["app/api/gateway/invoke/route.ts", "lib/gateway/invoke.ts", "lib/mcp/tools.ts", "lib/stuck-watch/admin-handlers.ts"],
+  "runGatewayInvoke(": ["app/api/gateway/invoke/route.ts", "lib/mcp/tools.ts", "lib/stuck-watch/admin-handlers.ts"],
   // G4 inside (assertApprovalExecutionAuthority before + after the claim, assertTicketNotHeld).
   "executeApproval(": ["lib/admin-mcp/fulfill-admin.ts", "lib/approvals/fulfill.ts", "lib/config-change-request/service.ts"],
   // G5 inside.
   "postWake(": ["lib/slack/mention-ingress.ts"],
   // G1 inside.
-  "resolveEmployeeCredential(": ["app/api/gateway/invoke/route.ts", "app/api/mcp/route.ts", "lib/auth/employee-credential.ts", "lib/mcp-oauth/resource-server.ts"],
+  "resolveEmployeeCredential(": ["app/api/gateway/invoke/route.ts", "app/api/mcp/route.ts", "lib/mcp-oauth/resource-server.ts"],
   // G2 inside (resolveOAuthAccessToken).
-  "resolveMcpCredential(": ["app/api/mcp/route.ts", "lib/mcp-oauth/resource-server.ts"],
+  "resolveMcpCredential(": ["app/api/mcp/route.ts"],
   "resolveOAuthAccessToken(": ["lib/mcp-oauth/resource-server.ts"],
-  "assertExecutable(": ["lib/bindings.ts", "lib/data/bindings.ts", "lib/gateway/invoke.ts"],
+  "assertExecutable(": ["lib/gateway/invoke.ts"],
   // stuckWatch.retry → runW2FulfillRetry → W2 eligibility (approval_held) + G4.
   "runW2FulfillRetry(": ["lib/stuck-watch/admin-handlers.ts", "lib/stuck-watch/w2-unfulfilled.ts"],
-  "checkSubscriptionPrincipal(": ["lib/mcp-events/principal.ts", "lib/mcp-events/service.ts"],
-  "handleTokenRequest(": ["app/api/oauth/token/route.ts", "lib/mcp-oauth/token-endpoint.ts"],
+  "checkSubscriptionPrincipal(": ["lib/mcp-events/service.ts"],
+  "handleTokenRequest(": ["app/api/oauth/token/route.ts"],
 };
 
 /** checkpoint file → the hold call it must contain (the gate itself). */
@@ -41,12 +41,14 @@ const GATES: Array<[string, string, RegExp]> = [
   ["G3 gateway entry", "lib/data/bindings.ts", /checkOperable\(\{[^}]*phase: "gateway"/],
   ["G4 execution authority", "lib/approvals/execution-authority.ts", /assertTicketNotHeld\(approval\)[\s\S]*phase: "approval_execution"/],
   ["G4 executeApproval", "lib/approvals/execution.ts", /assertTicketNotHeld\(approval\)/],
+  ["G4 approvalId re-invoke (priorApprovalOk)", "lib/gateway/invoke.ts", /if \(prior && heldTicketMarker\(prior\.metadata\)\)/],
   ["W2 / stuckWatch.retry", "lib/stuck-watch/w2-unfulfilled.ts", /heldTicketMarker\(approval\.metadata\)/],
   ["G5 wake", "lib/slack/mention-ingress.ts", /checkOperable\(\{[^}]*phase: "wake"/],
   ["G5 MCP Events", "lib/mcp-events/principal.ts", /checkOperable\(\{[^}]*phase: "mcp_events"/],
   ["pre-send Slack", "lib/gateway/adapters/slack.ts", /preSendHoldCode\(/],
   ["pre-send Slack file", "lib/gateway/adapters/slack-file-upload.ts", /preSendHoldCode\(/],
   ["pre-send SNS", "lib/gateway/adapters/sns.ts", /preSendHoldCode\(/],
+  ["pre-send comm.delete", "lib/comm-delete/run.ts", /preSendHoldCode\(ctx\.orgId, ctx\.employeeId\)[\s\S]*deleteSlackPost\(/],
 ];
 
 function sources(dir: string, out: string[] = []): string[] {
@@ -61,9 +63,84 @@ function sources(dir: string, out: string[] = []): string[] {
   return out;
 }
 
-export function callersIn(files: Array<{ path: string; text: string }>, entry: string): string[] {
-  const re = new RegExp(`(^|[^A-Za-z0-9_$.])${entry.replace(/[(]/g, "\\(")}`, "m");
-  return files.filter((f) => re.test(f.text)).map((f) => f.path).sort();
+/** entry → the module(s) that define or re-export it (paths without extension). */
+const DEFINED_IN: Record<string, string[]> = {
+  runGatewayInvoke: ["lib/gateway/invoke"],
+  executeApproval: ["lib/approvals/execution"],
+  postWake: ["lib/slack/mention-ingress"],
+  resolveEmployeeCredential: ["lib/auth/employee-credential"],
+  resolveMcpCredential: ["lib/mcp-oauth/resource-server"],
+  resolveOAuthAccessToken: ["lib/mcp-oauth/resource-server"],
+  assertExecutable: ["lib/data/bindings", "lib/data/index", "lib/bindings"],
+  runW2FulfillRetry: ["lib/stuck-watch/w2-unfulfilled"],
+  checkSubscriptionPrincipal: ["lib/mcp-events/principal"],
+  handleTokenRequest: ["lib/mcp-oauth/token-endpoint"],
+};
+
+const stripExt = (p: string) => p.replace(/\.(tsx?|mjs|js)$/, "").replace(/\/index$/, "/index");
+function resolveSpec(spec: string, fromPath: string): string | null {
+  let base: string;
+  if (spec.startsWith("@/")) base = spec.slice(2);
+  else if (spec.startsWith(".")) base = join(dirname(fromPath), spec).replace(/\\/g, "/");
+  else return null; // packages
+  base = stripExt(base);
+  return base;
+}
+function sameModule(resolved: string, mod: string): boolean {
+  return resolved === mod || resolved === `${mod}/index` || `${resolved}/index` === mod;
+}
+
+/**
+ * Import-based caller detection (木村 10/12: the old call regex missed `ns.fn(`,
+ * `import { fn as alias }` and `const { fn: x } = await import(...)`).
+ * A file is a caller of `entry` when it:
+ *  - imports `entry` by name from a defining module (any alias; `import type` excluded),
+ *  - namespace-imports a defining module (`import * as ns`) — counted conservatively,
+ *  - dynamically imports a defining module and mentions `entry`, or keeps the module object
+ *    (`const m = await import(...)`) — counted conservatively,
+ *  - re-exports `entry`, or
+ *  - is a defining module that calls `entry` itself.
+ */
+export function callersIn(files: Array<{ path: string; text: string }>, entryWithParen: string): string[] {
+  const entry = entryWithParen.replace(/\($/, "");
+  const mods = DEFINED_IN[entry] ?? [];
+  const out = new Set<string>();
+  const nameRe = new RegExp(`\\b${entry}\\b`);
+  for (const f of files) {
+    const self = stripExt(f.path);
+    if (mods.some((m) => self === m)) {
+      const calls = f.text.replace(new RegExp(`function\\s+${entry}\\b`, "g"), "").match(new RegExp(`(^|[^A-Za-z0-9_$])${entry}\\s*[(<]`, "m"));
+      if (calls) out.add(f.path);
+      continue;
+    }
+    const fromDefining = (spec: string) => {
+      const r = resolveSpec(spec, f.path);
+      return r !== null && mods.some((m) => sameModule(r, m));
+    };
+    // static imports / re-exports
+    for (const m of f.text.matchAll(/(import|export)\s+(type\s+)?([\s\S]*?)\s+from\s+["']([^"']+)["']/g)) {
+      if (m[2] || !fromDefining(m[4])) continue;
+      const clause = m[3];
+      if (/\*\s+as\s+\w+/.test(clause) || (m[1] === "export" && /^\*/.test(clause.trim()))) { out.add(f.path); continue; }
+      const named = /\{([\s\S]*)\}/.exec(clause)?.[1] ?? "";
+      const names = named.split(",").map((x) => x.trim().replace(/^type\s+/, "").split(/\s+as\s+/)[0]).filter(Boolean);
+      if (names.includes(entry)) out.add(f.path);
+    }
+    // dynamic imports
+    for (const m of f.text.matchAll(/(const|let|var)\s+([^=;]{1,300}?)=\s*(await\s+)?import\(\s*["']([^"']+)["']\s*\)/g)) {
+      if (!fromDefining(m[4])) continue;
+      const lhs = m[2].trim();
+      if (!lhs.startsWith("{") || nameRe.test(lhs)) out.add(f.path);
+    }
+    for (const m of f.text.matchAll(/import\(\s*["']([^"']+)["']\s*\)\s*\)?\s*\.\s*(\w+)/g)) {
+      if (fromDefining(m[1]) && m[2] === entry) out.add(f.path);
+    }
+    // import("x").then((m) => m.entry(...)) and similar: module mentioned + entry mentioned
+    for (const m of f.text.matchAll(/import\(\s*["']([^"']+)["']\s*\)\s*\.then/g)) {
+      if (fromDefining(m[1]) && nameRe.test(f.text)) out.add(f.path);
+    }
+  }
+  return [...out].sort();
 }
 
 const files = ["lib", "app"].flatMap((d) => sources(join(ROOT, d))).map((p) => ({ path: relative(ROOT, p), text: readFileSync(p, "utf8") }));
@@ -78,8 +155,21 @@ for (const [name, file, re] of GATES) {
     expect(re.test(readFileSync(join(ROOT, file), "utf8"))).toBe(true);
   });
 }
+test("self-check: every import form is detected (木村 10/12 fixtures)", () => {
+  const f = (text: string) => callersIn([{ path: "lib/new/x.ts", text }], "runGatewayInvoke(");
+  expect(f("import * as gw from '@/lib/gateway/invoke'; await gw.runGatewayInvoke({})")).toEqual(["lib/new/x.ts"]);
+  expect(f("import { runGatewayInvoke as rgi } from '@/lib/gateway/invoke'; await rgi({})")).toEqual(["lib/new/x.ts"]);
+  expect(f("const { runGatewayInvoke: r } = await import('@/lib/gateway/invoke'); await r({})")).toEqual(["lib/new/x.ts"]);
+  expect(f("const gw = await import(\"@/lib/gateway/invoke\"); await gw.runGatewayInvoke({})")).toEqual(["lib/new/x.ts"]);
+  expect(f("import {\n  foo,\n  runGatewayInvoke,\n} from \"../gateway/invoke\";")).toEqual(["lib/new/x.ts"]);
+  expect(f("export { runGatewayInvoke } from '@/lib/gateway/invoke';")).toEqual(["lib/new/x.ts"]);
+  expect(f("export * from '@/lib/gateway/invoke';")).toEqual(["lib/new/x.ts"]);
+  expect(f("await runGatewayInvoke({})")).toEqual([]); // no import → not callable from here
+  expect(f("import type { runGatewayInvoke } from '@/lib/gateway/invoke';")).toEqual([]);
+  expect(f("import { other } from '@/lib/gateway/invoke';")).toEqual([]);
+});
 test("self-check: a new file calling an entry point is detected", () => {
-  const fake = [...files, { path: "lib/new/skips-the-check.ts", text: "await runGatewayInvoke({ employeeId })" }];
+  const fake = [...files, { path: "lib/new/skips-the-check.ts", text: "import { runGatewayInvoke } from '@/lib/gateway/invoke';\nawait runGatewayInvoke({ employeeId })" }];
   expect(callersIn(fake, "runGatewayInvoke(")).toContain("lib/new/skips-the-check.ts");
   expect(callersIn(fake, "runGatewayInvoke(")).not.toEqual([...PINNED["runGatewayInvoke("]].sort());
 });

@@ -480,6 +480,7 @@ export type AuditAction =
   | "lp.setup_fee.email_hash_key_missing"
   | "lp.setup_fee.notice_record_failed"
   | "employee.hold.state_unavailable"
+  | "employee.hold.not_installed"
   | "employee.hold.wake_suppressed"
   | "tool.invoke"
   | "comm.delete.succeeded"
