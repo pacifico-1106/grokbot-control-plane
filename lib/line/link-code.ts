@@ -22,7 +22,6 @@ import { createSupabaseAdminClient } from "@/lib/supabase";
 export const LINE_LINK_CODE_TTL_MS = 15 * 60 * 1000;
 const ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"; // 32 symbols, no 0/O/1/I
 const CODE_LENGTH = 8; // 40 bits
-const TABLE = "line_approver_link_codes";
 
 export function resolveLinkCodeSecret(value: string | undefined, demo: boolean): string {
   if (demo) return value?.trim() || "dev-secret";
@@ -133,7 +132,7 @@ export async function issueLineLinkCode(input: {
   if (!admin) return { ok: false, reason: "storage_unavailable" };
   const nowIso = new Date(now).toISOString();
   const { error: invalidateError } = await admin
-    .from(TABLE)
+    .from("line_approver_link_codes")
     .update({ invalidated_at: nowIso })
     .eq("org_id", input.orgId)
     .eq("channel_id", input.channelId)
@@ -141,7 +140,7 @@ export async function issueLineLinkCode(input: {
     .is("consumed_at", null)
     .is("invalidated_at", null);
   if (invalidateError) return { ok: false, reason: "issue_failed" };
-  const { error } = await admin.from(TABLE).insert({
+  const { error } = await admin.from("line_approver_link_codes").insert({
     org_id: input.orgId,
     channel_id: input.channelId,
     member_id: input.memberId,
@@ -194,7 +193,7 @@ export async function consumeLineLinkCode(input: {
   if (!admin) return { ok: false, reason: "storage_unavailable" };
   const nowIso = new Date(now).toISOString();
   const { data, error } = await admin
-    .from(TABLE)
+    .from("line_approver_link_codes")
     .update({ consumed_at: nowIso, line_user_id: input.lineUserId })
     .eq("code_hash", codeHash)
     .eq("org_id", input.orgId)
@@ -234,7 +233,7 @@ export async function getPendingLineLinkCode(input: {
   const admin = createSupabaseAdminClient();
   if (!admin) return null;
   const { data, error } = await admin
-    .from(TABLE)
+    .from("line_approver_link_codes")
     .select("expires_at")
     .eq("org_id", input.orgId)
     .eq("channel_id", input.channelId)

@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 import { appendAuditEvent, listNotificationChannels } from "@/lib/data";
 import { getSessionContext } from "@/lib/auth/session";
 import { DEMO_MEMBERS } from "@/lib/demo-data";
@@ -19,9 +19,9 @@ export const dynamic = "force-dynamic";
  */
 
 const json = (body: Record<string, unknown>, status = 200) =>
-  NextResponse.json(body, { status, headers: { "cache-control": "no-store" } });
+  jsonUtf8(body, { status, headers: { "cache-control": "no-store" } });
 
-type Gate = { ok: true; orgId: string; member: OrgMember; userId: string | null } | { ok: false; response: NextResponse };
+type Gate = { ok: true; orgId: string; member: OrgMember; userId: string | null } | { ok: false; response: Response };
 
 async function requireApproverMember(): Promise<Gate> {
   const session = await getSessionContext();
