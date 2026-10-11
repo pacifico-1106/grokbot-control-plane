@@ -14,6 +14,11 @@ import rule from "../../eslint-rules/json-utf8.mjs";
 import { JSON_UTF8_LEGACY_ALLOWLIST } from "../../eslint-rules/json-utf8-allowlist.mjs";
 
 const ROOT = join(import.meta.dir, "..", "..");
+// Run RuleTester cases synchronously inside one bun test (it throws on the first failure).
+const RT = RuleTester as unknown as Record<string, unknown>;
+RT.describe = (_name: string, fn: () => void) => fn();
+RT.it = (_name: string, fn: () => void) => fn();
+RT.itOnly = (_name: string, fn: () => void) => fn();
 
 describe("rule staffpass/json-utf8 (RuleTester)", () => {
   test("valid / invalid cases", () => {
@@ -64,6 +69,13 @@ describe("wired into eslint.config.mjs", () => {
   test("a new non-test route with a bare NextResponse.json → error", async () => {
     const [res] = await eslint.lintText(BAD, { filePath: join(ROOT, "app/api/__lint_probe__/route.ts") });
     expect(res.messages.some((m) => m.ruleId === "staffpass/json-utf8" && m.severity === 2)).toBe(true);
+  }, 60_000);
+
+  test("an allowlisted legacy file (with [param] segments) is not reported yet", async () => {
+    const legacy = (JSON_UTF8_LEGACY_ALLOWLIST as string[]).find((f) => f.includes("["));
+    expect(legacy).toBeTruthy();
+    const [res] = await eslint.lintText(BAD, { filePath: join(ROOT, legacy!) });
+    expect(res.messages.some((m) => m.ruleId === "staffpass/json-utf8")).toBe(false);
   }, 60_000);
 
   test("test files are not checked", async () => {
