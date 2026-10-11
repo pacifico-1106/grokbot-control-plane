@@ -51,6 +51,10 @@ export interface LpProvisioningStore {
   recordPayment(row: LpPaymentRecord & { firstStripeEventId: string }): Promise<{ inserted: boolean }>;
   claimNotice(sessionId: string, token: string, staleSeconds: number): Promise<boolean>;
   finishNotice(sessionId: string, token: string, result: NoticeResult): Promise<boolean>;
+  /** Read-only: "done" = notified (sent / no_destination); "in_flight" = a claim is held (maybe leftover); "open" = neither; "missing" = no row. */
+  noticeState(sessionId: string): Promise<"done" | "in_flight" | "open" | "missing">;
+  /** Back-fill the email HMAC on a row recorded while the key was missing (only where it is still null). */
+  fillEmailHmac(sessionId: string, hmac: string): Promise<boolean>;
 }
 
 export function createMemoryLpProvisioningStore() {
@@ -87,6 +91,18 @@ export function createMemoryLpProvisioningStore() {
       } else {
         p.noticeResult = result;
       }
+      return true;
+    },
+    async noticeState(sessionId) {
+      const p = payments.get(sessionId);
+      if (!p) return "missing";
+      if (p.noticeResult) return "done";
+      return p.noticeClaimToken ? "in_flight" : "open";
+    },
+    async fillEmailHmac(sessionId, hmac) {
+      const p = payments.get(sessionId);
+      if (!p || p.customerEmailHmac) return false;
+      p.customerEmailHmac = hmac;
       return true;
     },
   };
@@ -159,6 +175,27 @@ export function createSupabaseLpProvisioningStore(): LpProvisioningStore | null 
       });
       if (error) throw new Error("lp_notice_finish_failed");
       return data === true;
+    },
+    async noticeState(sessionId) {
+      const { data, error } = await admin
+        .from("lp_provisionings")
+        .select("notified_at, notice_claim_token")
+        .eq("stripe_checkout_session_id", sessionId)
+        .maybeSingle();
+      if (error) throw new Error("lp_notice_state_failed");
+      if (!data) return "missing";
+      if (data.notified_at) return "done";
+      return data.notice_claim_token ? "in_flight" : "open";
+    },
+    async fillEmailHmac(sessionId, hmac) {
+      const { data, error } = await admin
+        .from("lp_provisionings")
+        .update({ customer_email_hmac: hmac, updated_at: new Date().toISOString() })
+        .eq("stripe_checkout_session_id", sessionId)
+        .is("customer_email_hmac", null)
+        .select("id");
+      if (error) throw new Error("lp_email_hmac_fill_failed");
+      return Array.isArray(data) && data.length > 0;
     },
   };
 }

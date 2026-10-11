@@ -15,16 +15,26 @@
  *   invalid values become "(invalid)", never raw.
  * - Customer email: never logged, never stored, never in the notice. Stored:
  *   HMAC-SHA256(LP_CUSTOMER_EMAIL_HASH_KEY, normalised address) + the domain.
- *   Notice: the domain only. Key missing → fail closed: the event is recorded
- *   as ignored (email_hash_key_missing), nothing else is stored, no notice, 200.
+ *   Notice: the domain only. Key missing (木村 10/12 follow-up): the payment is
+ *   still recorded WITHOUT the hash and the notice still goes out (saying the
+ *   hash was not saved); operators get an alert (ids + reason code only) and the
+ *   webhook answers 5xx so Stripe redelivers — the redelivery after the key is
+ *   set back-fills the hash and does not notify again.
+ * - Legacy Sessions with no lpPage (created before lpPage existed) are page A
+ *   (DEFAULT_LP_PAGE); a present but invalid lpPage is still "(invalid)".
+ * - Notice bookkeeping: the 'sent' / release write is retried in-process; a
+ *   claim held by someone else that is not finished → 5xx (Stripe redelivers;
+ *   after NOTICE_STALE_SECONDS the leftover claim is taken over and the notice
+ *   is sent once, labelled as a possible resend). "duplicate" (200) only when
+ *   the notice is recorded as done.
  * - No tenant, no org, no subscription row, no customer contact.
  */
 import { createHmac, randomBytes } from "node:crypto";
 import type Stripe from "stripe";
 import { REFERRAL_CODE_PATTERN } from "@/lib/auth/signup-guard";
 import { VALID_CHECKOUT_PLANS } from "@/lib/lp/catalog";
-import { lpPageLabel, parseLpPage, parseLpRef } from "@/lib/lp/lp-page";
-import type { LpEventType, LpPaymentRecord, LpProvisioningStore } from "@/lib/lp/provisioning-store";
+import { DEFAULT_LP_PAGE, lpPageLabel, parseLpPage, parseLpRef } from "@/lib/lp/lp-page";
+import type { LpEventType, LpPaymentRecord, LpProvisioningStore, NoticeResult } from "@/lib/lp/provisioning-store";
 import { isLpEmailHashKeyConfigured, LP_EMAIL_HASH_KEY_ENV, requireLpEmailHashKey } from "@/lib/security/lp-email-hash-key";
 
 export const LP_SOURCE = "lp-ai-employee";
@@ -63,7 +73,8 @@ export function sanitizeLpSetupFeeMetadata(meta: Meta): Pick<LpPaymentRecord, "p
   const m = meta ?? {};
   const present = (v: unknown) => v != null && v !== "";
   const plan = typeof m.plan === "string" && (VALID_CHECKOUT_PLANS as readonly string[]).includes(m.plan) ? m.plan : INVALID_MARKER;
-  const lpPage = parseLpPage(m.lpPage) ?? INVALID_MARKER;
+  // Legacy Session (no lpPage key / empty) → page A; present but not allowlisted → marker.
+  const lpPage = present(m.lpPage) ? parseLpPage(m.lpPage) ?? INVALID_MARKER : DEFAULT_LP_PAGE;
   const lpRef = present(m.lpRef) ? parseLpRef(m.lpRef) ?? INVALID_MARKER : null;
   let referralCode: string | null = null;
   if (present(m.referralCode)) {
@@ -76,12 +87,13 @@ export function sanitizeLpSetupFeeMetadata(meta: Meta): Pick<LpPaymentRecord, "p
 }
 
 /** Keyed: HMAC-SHA256(key, trimmed lower-cased address). The key comes from requireLpEmailHashKey(). */
-export function emailFingerprint(raw: unknown, key: string): { hmac: string | null; domain: string | null } {
+export function emailFingerprint(raw: unknown, key: string | null): { hmac: string | null; domain: string | null } {
   if (typeof raw !== "string") return { hmac: null, domain: null };
   const email = raw.trim().toLowerCase();
   const at = email.lastIndexOf("@");
   if (at <= 0 || at === email.length - 1) return { hmac: null, domain: null };
-  const hmac = createHmac("sha256", key).update(email, "utf8").digest("hex");
+  // No key → no hash at all (never an unkeyed digest); the domain is still kept.
+  const hmac = key ? createHmac("sha256", key).update(email, "utf8").digest("hex") : null;
   const d = email.slice(at + 1);
   return { hmac, domain: DOMAIN.test(d) ? d : INVALID_MARKER };
 }
@@ -95,10 +107,14 @@ export function formatLpAmount(amount: number, currency: string): string {
 
 const shown = (v: string | null) => (v == null ? "なし" : v === INVALID_MARKER ? "不正な値（破棄）" : v);
 
-export function lpSetupFeeNoticeText(rec: Omit<LpPaymentRecord, "customerEmailHmac">): string {
+export function lpSetupFeeNoticeText(
+  rec: Omit<LpPaymentRecord, "customerEmailHmac">,
+  opts: { emailHashSaved?: boolean; possibleResend?: boolean } = {}
+): string {
   const page = parseLpPage(rec.lpPage);
   return [
     "【Staffpass LP】初期費用のお支払いを確認しました（記録と通知のみ）",
+    ...(opts.possibleResend ? ["（再送: 前回の送信結果を記録できなかったため送り直しています。重複の可能性があります）"] : []),
     "",
     `金額: ${formatLpAmount(rec.amountTotal, rec.currency)}`,
     `プラン: ${shown(rec.plan)}`,
@@ -107,6 +123,7 @@ export function lpSetupFeeNoticeText(rec: Omit<LpPaymentRecord, "customerEmailHm
     `紹介コード: ${shown(rec.referralCode)}`,
     `注文ID: ${shown(rec.lpOrderId)}`,
     `メールのドメイン: ${shown(rec.customerEmailDomain)}`,
+    ...(opts.emailHashSaved === false ? [`メールの照合用ハッシュ: 未保存（${LP_EMAIL_HASH_KEY_ENV} が未設定。運営に別途アラート済み）`] : []),
     `Stripe Checkout Session: ${rec.stripeCheckoutSessionId}${rec.livemode ? "" : "（テストモード）"}`,
     "",
     "dry-run のため、テナントは作成していません。お客さまへの連絡・テナント開設は手動で行ってください（メールアドレスは Stripe ダッシュボードの Session で確認）。",
@@ -125,7 +142,7 @@ export function decideLpSetupFeeSession(
   event: { type: string; livemode: boolean },
   sessionId: string,
   s: Stripe.Checkout.Session,
-  emailHashKey: string
+  emailHashKey: string | null
 ): LpDecision {
   const ignored = (reason: string): LpDecision => ({ outcome: "ignored", reason });
   if (event.type === "checkout.session.async_payment_failed") return ignored("async_payment_failed");
@@ -158,10 +175,16 @@ export interface LpNotifier {
   send(text: string, subject: string): Promise<"sent" | "no_destination" | "failed">;
 }
 
+export type LpOpsAlertKind = "email_hash_key_missing" | "notice_record_failed";
+
 export interface LpSetupFeeDeps {
   retrieveSession(id: string): Promise<Stripe.Checkout.Session>;
   store: LpProvisioningStore;
   notifier: LpNotifier;
+  /** Operators only; ids + reason code, never the customer email. Never throws. Defaults to notifyOpsLpSetupFee. */
+  alertOps?: (a: { kind: LpOpsAlertKind; sessionId: string; eventId: string }) => Promise<void>;
+  /** Test seam for the in-process retry back-off. */
+  sleep?: (ms: number) => Promise<void>;
 }
 
 export type LpSetupFeeResult =
@@ -205,12 +228,11 @@ export async function handleLpSetupFeeEvent(
     return { action: "ignored", reason, mode };
   };
   if (!sessionId) return ignore("invalid_session_id", null, null);
-  // Fail closed before anything is fetched or stored (same rule as IP_HASH_KEY).
-  if (!isLpEmailHashKeyConfigured()) {
-    console.error(`[stripe:webhook:lp-setup-fee] ${LP_EMAIL_HASH_KEY_ENV} not configured; payment not recorded`, { eventId, sessionId });
-    return ignore("email_hash_key_missing", null, null);
-  }
-  const emailHashKey = requireLpEmailHashKey();
+  // Same key rules as IP_HASH_KEY; missing → no hash (never unkeyed), but the
+  // payment is still recorded and notified, then 5xx (see below).
+  const emailHashKey = isLpEmailHashKeyConfigured() ? requireLpEmailHashKey() : null;
+  const alertOps = deps.alertOps ?? notifyOpsLpSetupFee;
+  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
 
   let session: Stripe.Checkout.Session;
   try {
@@ -234,29 +256,151 @@ export async function handleLpSetupFeeEvent(
     paymentStatus: "paid",
     livemode: decision.record.livemode,
   });
-  await deps.store.recordPayment({ ...decision.record, firstStripeEventId: eventId });
+  const recorded = await deps.store.recordPayment({ ...decision.record, firstStripeEventId: eventId });
+  if (!recorded.inserted && decision.record.customerEmailHmac) {
+    // Recorded earlier while the key was missing → back-fill (only where still null).
+    await deps.store.fillEmailHmac(sessionId, decision.record.customerEmailHmac).catch(() => false);
+  }
+  const keyMissing = async () => {
+    console.error(`[stripe:webhook:lp-setup-fee] ${LP_EMAIL_HASH_KEY_ENV} not configured; recorded without the email hash, answering 5xx for redelivery`, { eventId, sessionId });
+    await alertOps({ kind: "email_hash_key_missing", sessionId, eventId }).catch(() => undefined);
+    throw new Error("lp_email_hash_key_missing");
+  };
 
   // Once per Session, whichever event / delivery gets here first.
+  const before = await deps.store.noticeState(sessionId);
   const token = randomBytes(18).toString("base64url");
   if (!(await deps.store.claimNotice(sessionId, token, NOTICE_STALE_SECONDS))) {
-    log("duplicate", { eventId, sessionId });
-    return { action: "duplicate", mode };
+    const state = await deps.store.noticeState(sessionId);
+    if (state === "done") {
+      log("duplicate", { eventId, sessionId });
+      if (!emailHashKey) await keyMissing();
+      return { action: "duplicate", mode };
+    }
+    // Someone else's claim, not finished (in flight, or left over by a failed
+    // release): never answer 200 here — Stripe redelivers, and once the claim is
+    // stale the next delivery takes it over and sends.
+    log("notice_in_flight", { eventId, sessionId, state });
+    throw new Error("lp_notice_in_flight");
   }
-  const text = lpSetupFeeNoticeText(decision.record);
+  const text = lpSetupFeeNoticeText(decision.record, {
+    emailHashSaved: emailHashKey ? undefined : false,
+    possibleResend: before === "in_flight",
+  });
   let result: "sent" | "no_destination" | "failed";
   try {
     result = await deps.notifier.send(text, "[Staffpass] LP 初期費用のお支払い（記録のみ）");
   } catch {
     result = "failed";
   }
+  const finish = async (r: NoticeResult): Promise<boolean> => {
+    for (let i = 0; i < FINISH_ATTEMPTS; i++) {
+      try {
+        await deps.store.finishNotice(sessionId, token, r);
+        return true;
+      } catch {
+        if (i < FINISH_ATTEMPTS - 1) await sleep(FINISH_BACKOFF_MS[i] ?? 400);
+      }
+    }
+    return false;
+  };
   if (result === "failed") {
-    await deps.store.finishNotice(sessionId, token, "failed").catch(() => false);
-    log("notice_failed", { eventId, sessionId });
+    // Release (retried). If the release write still fails the claim is left
+    // over; the next delivery answers 5xx until it is stale, then takes it over.
+    const released = await finish("failed");
+    log("notice_failed", { eventId, sessionId, released });
     throw new Error("lp_notice_failed");
   }
-  await deps.store.finishNotice(sessionId, token, result);
+  if (!(await finish(result))) {
+    // Delivered, but 'sent' could not be recorded. Answer 200 (a 5xx would make
+    // Stripe redeliver and, after the stale window, resend) and alert operators.
+    console.error("[stripe:webhook:lp-setup-fee] notice delivered but not recorded", { eventId, sessionId });
+    await alertOps({ kind: "notice_record_failed", sessionId, eventId }).catch(() => undefined);
+  }
   log(result === "sent" ? "notified" : "no_destination", { eventId, sessionId });
+  if (!emailHashKey) await keyMissing();
   return { action: result === "sent" ? "notified" : "no_destination", mode };
+}
+
+const FINISH_ATTEMPTS = 3;
+const FINISH_BACKOFF_MS = [100, 400];
+
+// ---------------------------------------------------------------------------
+// Operator alert (existing ops channels: PLATFORM_OPS_ORG_ID audit mirror +
+// APPROVAL_ALERT_OPS_EMAILS, same as notifyOpsDcrGlobalCapReached). Ids and a
+// reason code only — no customer email, domain, name or amount. Throttled per
+// kind × Session for 30 min per instance (Stripe redelivers for up to 3 days).
+// ---------------------------------------------------------------------------
+const OPS_EMAIL_RE = /^[^\s@,]+@[^\s@,]+\.[^\s@,]+$/;
+const OPS_ALERT_WINDOW_MS = 30 * 60_000;
+const opsAlertThrottle = new Map<string, number>();
+export function resetLpOpsAlertThrottleForTests(): void {
+  opsAlertThrottle.clear();
+}
+
+const OPS_ALERT_TEXT: Record<LpOpsAlertKind, { subject: string; line: string; todo: string }> = {
+  email_hash_key_missing: {
+    subject: "【運営】LP 初期費用: LP_CUSTOMER_EMAIL_HASH_KEY が未設定です",
+    line: "LP 初期費用の支払いを、メールの照合用ハッシュなしで記録しました（LP_CUSTOMER_EMAIL_HASH_KEY が未設定）。通知は送信済みです。Stripe には 5xx を返しているので、再送が続きます。",
+    todo: "対処: LP_CUSTOMER_EMAIL_HASH_KEY を設定してください（openssl rand -hex 32）。設定後の Stripe の再送でハッシュが補われ、通知は二重に送られません。",
+  },
+  notice_record_failed: {
+    subject: "【運営】LP 初期費用: 通知の送信記録に失敗しました",
+    line: "LP 初期費用の通知は送信しましたが、送信済みの記録（lp_provisionings.notified_at）を DB に書けませんでした。",
+    todo: "対処: DB の状態を確認してください。同じ Session に別のイベントが来ると、10 分後に「重複の可能性あり」と書いた通知がもう一度届くことがあります。",
+  },
+};
+
+export async function notifyOpsLpSetupFee(a: { kind: LpOpsAlertKind; sessionId: string; eventId: string }): Promise<void> {
+  try {
+    const sessionId = SESSION_ID.test(a.sessionId) ? a.sessionId : "(invalid)";
+    const eventId = EVENT_ID.test(a.eventId) ? a.eventId : "(invalid)";
+    const key = `${a.kind}:${sessionId}`;
+    const last = opsAlertThrottle.get(key);
+    if (last != null && Date.now() - last < OPS_ALERT_WINDOW_MS) return;
+    if (opsAlertThrottle.size > 2000) opsAlertThrottle.clear();
+    opsAlertThrottle.set(key, Date.now());
+    const t = OPS_ALERT_TEXT[a.kind];
+    const ids = `Stripe Checkout Session: ${sessionId} / event: ${eventId}`;
+    let reached = false;
+    const opsOrgId = (process.env.PLATFORM_OPS_ORG_ID || "").trim();
+    if (opsOrgId) {
+      const { appendAuditEvent } = await import("@/lib/data/audit");
+      reached = await appendAuditEvent({
+        orgId: opsOrgId,
+        employeeId: null,
+        credentialId: null,
+        action: `lp.setup_fee.${a.kind}` as const,
+        purpose: null,
+        summary: `${t.line} ${ids}`,
+        metadata: { auditClass: "admin", event: `lp.setup_fee.${a.kind}`, stripeCheckoutSessionId: sessionId, stripeEventId: eventId },
+      })
+        .then(() => true)
+        .catch(() => false);
+    }
+    const opsEmails = (process.env.APPROVAL_ALERT_OPS_EMAILS || "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter((s) => OPS_EMAIL_RE.test(s))
+      .slice(0, 10);
+    if (opsEmails.length) {
+      const { sendTransactionalEmail } = await import("@/lib/resend");
+      const mailed = await sendTransactionalEmail({
+        to: opsEmails,
+        template: "lp_ops_alert",
+        subject: t.subject,
+        html: `<p>${escapeHtml(t.line)}</p><p>${escapeHtml(ids)}</p><p>${escapeHtml(t.todo)}</p>`,
+        text: `${t.line}\n${ids}\n${t.todo}`,
+        tags: [{ name: "template", value: "lp_ops_alert" }],
+      })
+        .then((r) => Boolean((r as { ok?: boolean })?.ok))
+        .catch(() => false);
+      reached = reached || mailed;
+    }
+    if (!reached) console.warn("[stripe:webhook:lp-setup-fee] ops alert undelivered", { kind: a.kind, sessionId });
+  } catch {
+    console.warn("[stripe:webhook:lp-setup-fee] ops alert error", { kind: a.kind });
+  }
 }
 
 /** 安藤 / operators: the LP handoff Slack webhook + BILLING_NOTIFY_EMAIL (design §3-7). */
