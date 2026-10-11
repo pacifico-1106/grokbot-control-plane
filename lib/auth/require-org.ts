@@ -1,10 +1,11 @@
 import { NextResponse } from "next/server";
 import { getCurrentOrgId, getSessionContext, type SessionContext } from "./session";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 export function authRequiredResponse(
   message = "認証と組織が必要です"
 ): NextResponse {
-  return NextResponse.json(
+  return jsonUtf8(
     { ok: false, error: "auth_required", message },
     { status: 401 }
   );
@@ -45,17 +46,18 @@ export function isOrgAdminSession(session: SessionContext): boolean {
 /** Owner/admin-only browser session for tenant-level secrets and integrations. */
 export async function requireOrgAdminSession(): Promise<
   | { ok: true; orgId: string; email: string }
-  | { ok: false; response: NextResponse }
+  | { ok: false; reason: "auth_required" | "admin_required"; response: NextResponse }
 > {
   const session = await getSessionContext();
   const decision = orgAdminDecision(session);
   if (decision === "auth_required") {
-    return { ok: false, response: authRequiredResponse() };
+    return { ok: false, reason: "auth_required", response: authRequiredResponse() };
   }
   if (decision === "admin_required") {
     return {
       ok: false,
-      response: NextResponse.json(
+      reason: "admin_required",
+      response: jsonUtf8(
         { ok: false, error: "admin_required", message: "組織のオーナーまたは管理者権限が必要です" },
         { status: 403 }
       ),

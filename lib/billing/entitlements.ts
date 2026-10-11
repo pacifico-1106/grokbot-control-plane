@@ -2,6 +2,7 @@ import { getSubscription } from "../data/subscriptions";
 import { isDemoMode } from "../mode";
 import type { Subscription, SubscriptionStatus } from "../types";
 import { NextResponse } from "next/server";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 export type PlanKey = Subscription["planKey"];
 
@@ -153,7 +154,7 @@ export async function assertBillingAllows(
 
   return {
     ok: false,
-    response: NextResponse.json(
+    response: jsonUtf8(
       {
         ok: false,
         error: "billing_entitlement_blocked",
@@ -211,7 +212,7 @@ export function expiredTrialGatedResponse(
   tool: string,
   entitlements: Entitlements
 ): NextResponse {
-  return NextResponse.json(
+  return jsonUtf8(
     {
       ok: false,
       error: "expired_trial_gated",

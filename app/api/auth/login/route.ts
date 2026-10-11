@@ -10,19 +10,9 @@ import {
   loginFailureSearchParams,
   type LoginErrorCode,
 } from "@/lib/auth/login-errors";
+import { safeNextDestination as safeDestination } from "@/lib/auth/safe-next";
 
 export const runtime = "nodejs";
-
-function safeDestination(value: string, requestUrl: string): string {
-  try {
-    const base = new URL(requestUrl);
-    const candidate = new URL(value, base);
-    if (candidate.origin !== base.origin) return "/app";
-    return `${candidate.pathname}${candidate.search}${candidate.hash}`;
-  } catch {
-    return "/app";
-  }
-}
 
 function wantsJson(req: Request, contentType: string): boolean {
   const accept = req.headers.get("accept") || "";

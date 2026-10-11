@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { safeNextPath } from "@/lib/auth/safe-next";
 import { BrandMark } from "@/components/BrandMark";
 import { LoginForm } from "@/components/LoginForm";
 import { LegalLinks } from "@/components/LegalLinks";
@@ -17,7 +18,7 @@ export default async function LoginPage({
   }>;
 }) {
   const sp = await searchParams;
-  const next = sp.next || "/app";
+  const next = safeNextPath(sp.next);
   const demo = isDemoMode();
   const initialEmail = sp.email || (demo ? "owner@example.com" : "");
   const sessionNotice = isSessionNotice(sp.reason) || sp.expired === "1";

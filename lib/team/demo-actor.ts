@@ -9,6 +9,7 @@ import { isDemoMode } from "@/lib/mode";
 import type { HumanCapability, OrgMember } from "@/lib/types";
 import { hasCapability, missingCapabilityMessage } from "@/lib/team/rbac";
 import { NextResponse } from "next/server";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 function actorIdFromRequest(
   req: Request,
@@ -85,7 +86,7 @@ export async function requireCapability(
   if (!hasCapability(actor, cap)) {
     return {
       ok: false,
-      response: NextResponse.json(
+      response: jsonUtf8(
         {
           ok: false,
           error: "capability_denied",
