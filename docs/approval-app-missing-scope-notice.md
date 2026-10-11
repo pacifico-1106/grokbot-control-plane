@@ -23,3 +23,17 @@
 ## 本番手順
 1. マージ後、`APPROVAL_APP_MISSING_SCOPE_NOTICE_ENABLED=true`。
 2. 戻すときは OFF にするだけ（DB 変更なし）。
+
+## 追加: 直さないと成功しない 3 コード（APPROVAL_APP_FIX_REQUIRED_CODES_ENABLED、既定 OFF）
+
+`APPROVAL_APP_MISSING_SCOPE_NOTICE_ENABLED` とは別のフラグ（本番で先に ON にしていても、こちらは OFF のまま何も変わらない）。
+
+| コード | 何がおかしいか | 直し方 | 止まる位置 |
+|---|---|---|---|
+| `bot_token_required` | 承認口の Bot token（xoxb-…）がない／形式違い | owner/admin が /app/settings「承認を受け取る」で入れ直す → 同じチケットを呼び直し | Slack を一度も呼ぶ前 |
+| `approval_user_guest` | 承認 DM の相手がゲスト | フルメンバーにする（同じチケット可）／別の人にする（許可 user ID を直す。相手を指定したチケットは作り直し） | users.info の後、conversations.open の前 |
+| `approval_user_external` | 相手が社外（Slack Connect）・別ワークスペース | 同じワークスペースの社内メンバーを許可 user ID に（相手を指定したチケットは作り直し） | users.info の後（または conversations.open の応答が外部共有 DM のとき。どちらも投稿・保存の前） |
+
+ON のとき: W2 は `fix_required`（回数を使わない）、実行クレームは再実行可（2 ツールのみ）、コードごとの文面で承認者に通知（監査 `approval_app.fix_required_notice`、`code` 付き）。
+共通承認アプリでは `bot_token_required` は運営側の問題なのでテナントに通知しない（ゲスト／社外はテナントが直すので通知する）。
+`setup.approvalDelivery.autoResolve` はキュー時に相手（deliveryUserId）を固定するため、社外の相手は同じチケットでは成功しない（新しいチケットを作る）。
