@@ -11,7 +11,8 @@ export type EmailTemplate =
   | "approval_needed"
   | "approval_resolved"
   | "oauth_connected"
-  | "oauth_security";
+  | "oauth_security"
+  | "lp_ops_alert";
 
 export interface SendEmailInput {
   to: string | string[];
