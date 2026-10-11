@@ -5,6 +5,7 @@
 import { listEmployees, listNotificationChannels } from "@/lib/data";
 import { getAppOrigin } from "@/lib/approvals/tokens";
 import type { NotificationChannel, NotificationProvider } from "@/lib/types";
+import { expiredCredentialEmployeeRow, hasExpiredCredential, type ExpiredCredentialEmployeeRow } from "@/lib/employees/credential-expiry";
 
 export const LINE_OA_NAME_RULE_JA =
   "OA 表示名は {employeeDisplayName}（AIスタッフ）形式（docs/space-tree-line-oa-design.md §P1-e 参照）";
@@ -42,6 +43,9 @@ export type LineEmployeeInboxSummary = {
   telegramCount: number;
   unsetCount: number;
   employees: LineEmployeeInboxRow[];
+  /** Active employees whose 社員証 expired (木村 2026-10-12): 「期限切れ」, not counted above. */
+  expiredCount: number;
+  expiredEmployees: ExpiredCredentialEmployeeRow[];
 };
 
 export type LineApprovalStatusResult = {
@@ -110,7 +114,9 @@ export function buildEmployeeInboxSummary(
   channels: NotificationChannel[]
 ): LineEmployeeInboxSummary {
   const enabledChannels = channels.filter((channel) => channel.enabled);
-  const rows: LineEmployeeInboxRow[] = employees.map((employee) => ({
+  const now = new Date();
+  const expiredEmployees = employees.filter((e) => hasExpiredCredential(e, now)).map(expiredCredentialEmployeeRow);
+  const rows: LineEmployeeInboxRow[] = employees.filter((e) => !hasExpiredCredential(e, now)).map((employee) => ({
     employeeId: employee.id,
     displayName: employee.displayName,
     inbox: resolveEmployeeInboxProvider(employee, enabledChannels),
@@ -120,6 +126,8 @@ export function buildEmployeeInboxSummary(
     telegramCount: rows.filter((row) => row.inbox === "telegram").length,
     unsetCount: rows.filter((row) => row.inbox === "unset").length,
     employees: rows,
+    expiredCount: expiredEmployees.length,
+    expiredEmployees,
   };
 }
 
@@ -183,7 +191,7 @@ export async function diagnoseLineApprovalStatus(orgId: string): Promise<LineApp
   const telegramIsDefault = telegramChannels.some(
     (channel) => channel.enabled && channel.isDefault
   );
-  const employees = await listEmployees(orgId);
+  const employees = (await listEmployees(orgId)).filter((employee) => employee.orgId === orgId);
   const employeeInboxSummary = buildEmployeeInboxSummary(employees, channels);
 
   return {

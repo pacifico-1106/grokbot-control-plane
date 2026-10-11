@@ -17,6 +17,7 @@ import {
 import { isDemoMode } from "@/lib/mode";
 import { buildConcentration } from "@/lib/employees/concentration";
 import { orgNeedsSetup } from "@/lib/dashboard/setup-state";
+import { employeeStatusView } from "@/lib/employees/credential-expiry";
 
 export const dynamic = "force-dynamic";
 
@@ -25,7 +26,11 @@ export default async function DashboardPage() {
   const orgId = session.orgId;
   const canIssueAdminCredential = session.demo || canIssueEmployeeCredentials(session.member);
   const org = await getOrgMeta(orgId);
-  const employees = (await listEmployees(orgId)) ?? [];
+  const employees = ((await listEmployees(orgId)) ?? []).filter((e) => e.orgId === orgId);
+  // 木村 2026-10-12: 「稼働中」 = active with a current, unexpired 社員証 (expires_at only).
+  const statusViews = employees.map((e) => employeeStatusView(e));
+  const runningEmployeeCount = statusViews.filter((v) => v.label === "稼働中").length;
+  const expiredEmployeeCount = statusViews.filter((v) => v.label === "期限切れ").length;
   const concentration = buildConcentration(employees);
   const mostConcentrated = concentration.employees.find((row) => row.share === concentration.maxShare);
   const approvals = (await listApprovals(orgId)) ?? [];
@@ -89,7 +94,11 @@ export default async function DashboardPage() {
           <ChangeLog events={auditEvents} names={names} />
 
           <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-3 mt-6">
-            <StatCard label="AI社員" value={String(employees.length)} hint="稼働中" />
+            <StatCard
+              label="AI社員"
+              value={String(runningEmployeeCount)}
+              hint={expiredEmployeeCount > 0 ? `稼働中 · 期限切れ ${expiredEmployeeCount}` : "稼働中"}
+            />
             <StatCard label="承認待ち" value={String(pending)} hint="要対応" />
             <StatCard label="再接続が必要" value={String(reauthCount)} hint="つなぎ直し待ち" />
             <StatCard
