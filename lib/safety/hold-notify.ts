@@ -91,9 +91,58 @@ export function __setHoldNotifierForTests(n: HoldNotifier | null): void {
   override = n;
 }
 
+let slackFetchOverride: typeof fetch | null = null;
+export function __setHoldSlackFetchForTests(f: typeof fetch | null): void {
+  slackFetchOverride = f;
+}
+
+const SAFE_TOKEN = /^[A-Za-z0-9_\-:.]{1,80}$/;
+function safe(v: unknown): string | null {
+  if (v === null || v === undefined) return null;
+  const s = String(v);
+  return SAFE_TOKEN.test(s) ? s : "invalid";
+}
+
+/**
+ * 木村 10/12 (#349 decision 2): a STOP FAILURE (only that case) is also posted to the existing
+ * LP_HANDOFF_NOTIFY_SLACK_WEBHOOK (安藤). Skipped when unset. Built from an allow-list of IDs and
+ * reason codes only, never the notice object itself, so no free text / PII can leak. Never throws.
+ */
+export async function postStopFailedToHandoffSlack(n: HoldNotice): Promise<"posted" | "skipped" | "failed"> {
+  if (n.event !== "hold.start_failed") return "skipped";
+  const hook = (process.env.LP_HANDOFF_NOTIFY_SLACK_WEBHOOK || "").trim();
+  if (!hook) return "skipped";
+  const fields: Array<[string, string | null]> = [
+    ["reason_code", "hold_start_failed"],
+    ["org_id", safe(n.orgId)],
+    ["employee_id", n.employeeId ? safe(n.employeeId) : "org_wide"],
+    ["via", safe(n.via)],
+    ["sqlstate", safe(n.sqlState)],
+    ["attempts", typeof n.attempts === "number" && Number.isFinite(n.attempts) ? String(Math.trunc(n.attempts)) : null],
+  ];
+  const text = ["【Staffpass運営】緊急停止に失敗しました（要対応）",
+    ...fields.filter(([, v]) => v !== null).map(([k, v]) => `${k}: ${v}`)].join("\n");
+  try {
+    const res = await (slackFetchOverride ?? fetch)(hook, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text, unfurl_links: false, unfurl_media: false }),
+    });
+    if (!res.ok) {
+      console.error("employee_hold_stop_failed_slack_failed", { status: res.status });
+      return "failed";
+    }
+    return "posted";
+  } catch {
+    console.error("employee_hold_stop_failed_slack_error");
+    return "failed";
+  }
+}
+
 /** Never throws (a notice failure never undoes or blocks a stop). */
 export async function notifyHold(n: HoldNotice, to: { tenant?: boolean; ops?: boolean }): Promise<void> {
   const notifier = getHoldNotifier();
   if (to.tenant) await notifier.tenant(n).catch((e) => console.error("employee_hold_tenant_notice_failed", { event: n.event, error: String(e) }));
   if (to.ops) await notifier.ops(n).catch((e) => console.error("employee_hold_ops_notice_failed", { event: n.event, error: String(e) }));
+  if (to.ops && n.event === "hold.start_failed") await postStopFailedToHandoffSlack(n).catch(() => undefined);
 }
