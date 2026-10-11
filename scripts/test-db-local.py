@@ -482,6 +482,110 @@ try:
                  " and to_regprocedure('public.approver_authority_check(uuid,uuid,text,text[])') is not null;") == "t"
     sql(context_cas)  # forward again after rollback
     sql(ROOT / "tests/security/db-approver-context-cas.sql")
+    # 緊急停止 hold (20261012500000, S1; after PR-D: uses orgs.designated_admin_member_ids). Checks read hold_state regardless of flags (S2).
+    holds = ROOT / "supabase/migrations/20261012500000_employee_holds.sql"
+    sql(holds)
+    sql(holds)  # re-applicable
+    sql(ROOT / "tests/security/db-employee-holds.sql")
+    eh_org, eh_emp = "e5000000-0000-4000-8000-0000000000c1", "e5100000-0000-4000-8000-0000000000c1"
+    eh_req, eh_appr, eh_ticket = ("e5300000-0000-4000-8000-0000000000c1", "e5300000-0000-4000-8000-0000000000c2",
+                                  "e5200000-0000-4000-8000-0000000000c9")
+    query(f"insert into public.orgs(id, name) values ('{eh_org}', 'eh concurrent');"
+          f"insert into public.org_members(id, org_id, email, role, status) values ('{eh_req}', '{eh_org}', 'eh-c1@eh.invalid', 'owner', 'active'),"
+          f" ('{eh_appr}', '{eh_org}', 'eh-c2@eh.invalid', 'owner', 'active');"
+          f"insert into public.employees(id, org_id, display_name, role_label) values ('{eh_emp}', '{eh_org}', 'eh c', 'r');")
+    starts = [f"set role service_role; select public.start_employee_hold('{eh_org}','{eh_emp}','stopped',null,"
+              f"'member:{eh_req}','web',null,now())->>'created';" for _ in range(12)]
+    with ThreadPoolExecutor(max_workers=12) as pool:
+        created = list(pool.map(query, starts))
+    assert created.count("true") == 1 and created.count("false") == 11, created
+    assert query(f"select count(*) from public.employee_holds where employee_id = '{eh_emp}';") == "1"
+    hid = query(f"select hold_id from public.employees where id = '{eh_emp}';")
+    query(f"insert into public.approval_requests(id, org_id, purpose, summary, tool, risk, status, metadata) values "
+          f"('{eh_ticket}', '{eh_org}', 'admin.policy', 'eh', 'employee.hold.release', 'high', 'pending', '{{\"holdId\":\"{hid}\",\"requestedBy\":\"member:{eh_req}\"}}');"
+          f"set role service_role; select public.request_employee_hold_release('{eh_org}','{hid}','member:{eh_req}','r','{eh_ticket}',now());"
+          f"reset role; update public.approval_requests set status='approved', resolved_by='{eh_appr}', resolved_at=now() where id='{eh_ticket}';")
+    releases = [f"set role service_role; select public.release_employee_hold('{eh_org}','{hid}','eh','{{}}'::jsonb,now())->>'released';"
+                for _ in range(12)]
+    def _try(cmd):
+        try:
+            return query(cmd) or "refused"
+        except Exception:  # psql exits non-zero for the 11 losers (hold_not_found after the winner commits)
+            return "refused"
+    with ThreadPoolExecutor(max_workers=12) as pool:
+        released = list(pool.map(_try, releases))
+    assert released.count("true") == 1 and released.count("refused") == 11, released
+    assert query(f"select count(*) from public.audit_events where org_id = '{eh_org}' and action = 'employee.hold.released';") == "1"
+    # 木村 10/12 (2nd): release of an approved leave hold racing a detector upgrade — 15 rounds, no
+    # deadlock (lock order employee → hold in both), and the employee always ends up held.
+    def _psql(cmd):
+        p = subprocess.run([str(BIN / "psql"), "-X", "-qAt", "-v", "ON_ERROR_STOP=1", "-h", str(cluster), "-p", "55439",
+                            "-U", "test_admin", "-d", "postgres", "-c", cmd], env=env, capture_output=True, text=True)
+        return p.returncode, p.stdout.strip(), p.stderr
+    deadlocks = 0
+    # widen the window: the release's audit insert (between its first and second lock) sleeps 150 ms
+    query("create or replace function security_test.eh_slow_audit() returns trigger language plpgsql as $$ begin perform pg_sleep(0.15); return new; end $$;"
+          "create trigger eh_slow_audit before insert on public.audit_events for each row when (new.action = 'employee.hold.released') execute function security_test.eh_slow_audit();")
+    for i in range(15):
+        hid_l = query(f"set role service_role; select public.start_employee_hold('{eh_org}','{eh_emp}','leave',null,'member:{eh_req}','web',null,now())->>'holdId';").splitlines()[-1]
+        tk = f"e5200000-0000-4000-8000-0000000{i:05d}"
+        query(f"insert into public.approval_requests(id, org_id, purpose, summary, tool, risk, status, metadata) values "
+              f"('{tk}', '{eh_org}', 'admin.policy', 'eh', 'employee.hold.release', 'high', 'pending', '{{\"holdId\":\"{hid_l}\",\"requestedBy\":\"member:{eh_req}\"}}');"
+              f"set role service_role; select public.request_employee_hold_release('{eh_org}','{hid_l}','member:{eh_req}','r','{tk}',now());"
+              f"reset role; update public.approval_requests set status='approved', resolved_by='{eh_appr}', resolved_at=now() where id='{tk}';")
+        rel = f"set role service_role; select public.release_employee_hold('{eh_org}','{hid_l}','eh','{{}}'::jsonb,now())->>'released';"
+        up = (f"set role service_role; select pg_sleep(0.03 + 0.02 * {i % 3}); select public.start_employee_hold('{eh_org}','{eh_emp}','quarantined',null,"
+              f"'system:anomaly','anomaly','signal:race',now())->>'holdId';")
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            res = list(pool.map(_psql, [rel, up]))
+        deadlocks += sum(1 for rc, _, err in res if "deadlock detected" in err)
+        assert res[1][0] == 0, ("detector stop failed", i, res[1][2])
+        assert query(f"select hold_state from public.employees where id = '{eh_emp}';") == "quarantined", (i, res)
+        # reset for the next round: clear the employee (test-only, triggers off)
+        for _stmt in ("alter table public.employees disable trigger employees_hold_guard;",
+                      f"update public.employees set hold_state = null, hold_id = null where id = '{eh_emp}';",
+                      "alter table public.employees enable trigger employees_hold_guard;",
+                      "alter table public.employee_holds disable trigger employee_holds_guard;",
+                      f"delete from public.employee_holds where employee_id = '{eh_emp}';",
+                      "alter table public.employee_holds enable trigger employee_holds_guard;"):
+            query(_stmt)
+    query("drop trigger eh_slow_audit on public.audit_events; drop function security_test.eh_slow_audit();")
+    assert deadlocks == 0, f"{deadlocks} deadlocks in 15 release × detector rounds"
+    # 木村 10/12 (6): the rollback refuses while any employee is held — nothing changes
+    query(f"set role service_role; select public.start_employee_hold('{eh_org}','{eh_emp}','stopped',null,'member:{eh_req}','web',null,now());")
+    try:
+        sql(ROOT / "supabase/verification/20261012500000_employee_holds_rollback.sql")
+        raise AssertionError("employee holds rollback ran while an employee was held")
+    except subprocess.CalledProcessError:
+        pass
+    assert query("select to_regclass('public.employee_holds') is not null and exists (select 1 from information_schema.columns"
+                 " where table_schema = 'public' and table_name = 'employees' and column_name = 'hold_state');") == "t"
+    # one statement per call: the deferrable superseded_by FK queues trigger events that ALTER TABLE refuses in one transaction
+    for _stmt in ("alter table public.employee_holds disable trigger employee_holds_guard;"
+          "alter table public.employees disable trigger employees_hold_guard;"
+          f"update public.employees set hold_state = null, hold_id = null where id = '{eh_emp}';"
+          f"delete from public.audit_events where org_id = '{eh_org}'; delete from public.employee_holds where org_id = '{eh_org}';"
+          "alter table public.employee_holds enable trigger employee_holds_guard;"
+          "alter table public.employees enable trigger employees_hold_guard;"
+          f"delete from public.approval_requests where org_id = '{eh_org}'; delete from public.orgs where id = '{eh_org}';").split(";"):
+        if _stmt.strip():
+            query(_stmt + ";")
+    sql(ROOT / "supabase/verification/20261012500000_employee_holds_rollback.sql")
+    assert query("select to_regclass('public.employee_holds') is null"
+                 " and to_regprocedure('public.start_employee_hold(uuid,uuid,text,text,text,text,text,timestamptz)') is null"
+                 " and to_regprocedure('public.request_employee_hold_release(uuid,uuid,text,text,uuid,timestamptz)') is null"
+                 " and to_regprocedure('public.release_employee_hold(uuid,uuid,text,jsonb,timestamptz)') is null"
+                 " and not exists (select 1 from information_schema.columns where table_schema = 'public'"
+                 " and table_name in ('employees', 'orgs') and column_name in ('hold_state', 'hold_id'));") == "t"
+    sql(holds)  # forward again after rollback
+    sql(ROOT / "tests/security/db-employee-holds.sql")
+    print("PASS: employee holds (20261012500000): employee_holds RLS on / no policy, anon/authenticated no access and cannot execute; "
+          "hold columns + history writable only through the 3 functions; append-only history; start refuses another org's employee, "
+          "idempotent, holds pending / approved-unexecuted tickets only; release needs an approved employee.hold.release ticket "
+          "from an active owner / designated admin of the same org ≠ requester (single-owner exception only with 1 eligible approver), "
+          "audit row in the same transaction (audit failure → no release), held tickets closed_by_hold; ops holds not member-releasable; "
+          "org hold 'stopped' only; 12 concurrent starts → 1 hold, 12 concurrent releases → 1 release + 1 audit row; "
+          "re-applicable; rollback drops table, 3 functions, 4 columns; forward again.")
     print("PASS: approver authority (PR-D): owner / designated admin decision table; flag-OFF 7-argument W1 call unchanged; standard ticket → designated admin stored, others refused; owner ticket → designated admin endorsed once and kept pending, owner approves and is stored; zero owners stop; multiple owners: any one owner other than the requester (requesting owner refused; a sole owner's own approval counts; several owners all requesters → no_owner_other_than_requester); reject / non-target not gated; record_approver_authority verified/endorse; one RPC overload; EXECUTE service_role only; rollback restores the 7-argument RPC + re-apply.")
     print("PASS: approver context CAS (TOCTOU follow-up): policy.patch / schedulingPolicy.patch writes only when the locked row still equals the pinned snapshot; concurrent change between check and write → approver_context_changed with nothing written (employee row, active and revoked credentials, org / employee scheduling policy); ticket binding (fingerprint, missing fingerprint, status, tool, target, org) refused; invalid input refused; EXECUTE service_role only; 12 concurrent writers with one snapshot → exactly 1 write (both RPCs); rollback drops both RPCs (PR-D untouched) + re-apply.")
     print("PASS: employee_webhook_settings (D9): RLS on, no policy, anon/authenticated denied, service_role reads/writes/upserts; cross-org row rejected; payload mode minimal|legacy_full (default minimal); ciphertext-only secret + fingerprint pair; employee delete cascades; rollback + re-apply.")
