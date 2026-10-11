@@ -14,7 +14,7 @@ Stripe Tax を使う場合は適切な tax behavior 設定。トライアルは�
 ## フロー
 
 1. `/signup` → トライアル開始（`TRIAL_DAYS`、既定 14）+ `subscriptions` 行（trialing）
-2. `/app/billing` → `POST /api/billing/checkout`
+2. ~~`/app/billing` → `POST /api/billing/checkout`~~ **停止**（10/3 承認なし Checkout を停止、10/4 旧プラン BUSINESS / MANAGED の新規申込を終了。`/app/billing` に購入ボタンはなく、API は旧プランに 410・その他に 404。新規購入は AI社員パック `/api/lp/ai-employee/checkout` のみで、Price は `lib/billing/purchasable-prices.ts` の allowlist で検査。既存契約者の Portal・Webhook は従来どおり）。以下 3. は旧仕様の記録。
 3. Stripe Checkout `mode=subscription` + `trial_period_days`
    - `client_reference_id` = orgId
    - `metadata.orgId` / `metadata.org_id` / `planKey`

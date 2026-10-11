@@ -4,6 +4,7 @@ import { isLpOrderLedgerEnabled } from "@/lib/feature-flags";
 import { createOrder, createCheckoutAttempt, updateCheckoutAttemptStatus } from "@/lib/lp/order-ledger";
 import { LP_PAGE_PARAM, lpPageHomePath, normalizeLpPage, resolveLpRef, withLpPageParam } from "@/lib/lp/lp-page";
 import { jsonUtf8 } from "@/lib/http/json-utf8";
+import { checkPurchasablePrice } from "@/lib/billing/purchasable-prices";
 
 const ALLOWED_ORIGINS = [
   process.env.NEXT_PUBLIC_APP_URL,
@@ -63,7 +64,7 @@ export async function GET(req: Request) {
 
   const priceId = getSetupPriceId(catalogItem);
   const stripe = getStripe();
-  const checkoutAvailable = Boolean(stripe && priceId);
+  const checkoutAvailable = Boolean(stripe && priceId && checkPurchasablePrice(priceId).ok);
 
   return jsonUtf8({
     ok: true,
@@ -141,6 +142,18 @@ export async function POST(req: Request) {
     });
   }
 
+  // Allowlist gate (before the order ledger and Stripe): the catalog (incl. a DB
+  // row when LP_CATALOG_DB_ENABLED) may only charge an AI社員パック setup Price.
+  // Retired BUSINESS / MANAGED → 410, anything else → 404. Never from the body.
+  const purchasable = checkPurchasablePrice(priceId);
+  if (!purchasable.ok) {
+    console.warn("[checkout] refused non-purchasable price", { plan, error: purchasable.error });
+    return jsonUtf8(
+      { ok: false, error: purchasable.error, message: purchasable.message, purchaseUrl: purchasable.purchaseUrl },
+      { status: purchasable.status }
+    );
+  }
+
   const setupAmountExTax = catalogItem.setupAmountExTax ?? 0;
   const paymentMethodTypes = getCheckoutPaymentMethodTypes();
 
@@ -199,7 +212,7 @@ export async function POST(req: Request) {
     const session = await stripe.checkout.sessions.create({
       mode: "payment",
       payment_method_types: paymentMethodTypes,
-      line_items: [{ price: priceId, quantity: 1 }],
+      line_items: [{ price: purchasable.priceId, quantity: 1 }],
       success_url: successUrl,
       cancel_url: cancelUrl,
       metadata,

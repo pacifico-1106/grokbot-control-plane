@@ -70,7 +70,7 @@ P0 カタログ金額・Billing 表示額は変更しない。
 |------|------|
 | `supabase/schema.sql` · `migrations/20260823_referral_code.sql` | `orgs.referral_code` |
 | `POST /api/auth/signup` · `/signup` | 任意 `referral_code` → `createOrgWithOwner` |
-| `POST /api/billing/checkout` · `BillingClient` | 任意一行「紹介コード（任意）」→ 本番で org に persist |
+| ~~`POST /api/billing/checkout` · `BillingClient`~~ | 停止（旧プランの購入停止に伴い `/app/billing` の紹介コード欄も削除。紹介コードは signup で受け付ける） |
 | UI 文言 | `紹介コード（任意）` |
 
 Checkout metadata へのコピーは任意（将来の照合用）。報酬計算の正は当面 **`orgs.referral_code`**。
