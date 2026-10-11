@@ -111,11 +111,10 @@ describe("pattern B /lp/ai-employee-corp", () => {
     const promos = findElements(AIEmployeeLanding({ variant: "ai-employee-corp" }), FloatingYouTubePromo);
     expect(promos.length).toBe(1);
     expect((promos[0].props as { video: { id: string } }).video.id).toBe("UFKh_CK9uxw");
-    const desktop = html(createElement(PromoDesktopPlayer, { video: corp.video, onCollapse: () => undefined }));
-    expect(desktop).toContain("https://www.youtube-nocookie.com/embed/UFKh_CK9uxw?rel=0");
+    // B opens the large dialog instead of an inline iframe (VideoModal.test.ts / e2e cover it)
+    const desktop = html(createElement(PromoDesktopPlayer, { video: corp.video, onCollapse: () => undefined, onExpand: () => undefined }));
     expect(desktop).not.toContain("l4fVZ1-VRcU");
-    const mobile = html(createElement(PromoMobilePlayer, { video: corp.video, onCollapse: () => undefined }));
-    expect(mobile).toContain("https://youtu.be/UFKh_CK9uxw");
+    const mobile = html(createElement(PromoMobilePlayer, { video: corp.video, onCollapse: () => undefined, onExpand: () => undefined }));
     expect(mobile).not.toContain("l4fVZ1-VRcU");
     expect(mobile).not.toContain("youtube-ai-agents-100cho");
     const original = html(createElement(PromoDesktopPlayer, { video: getLpVariant("ai-employee").video, onCollapse: () => undefined }));
