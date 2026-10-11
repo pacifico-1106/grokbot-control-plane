@@ -53,6 +53,14 @@ describe("lp_inquiries.lp_page", () => {
     await createInquiry({ ...inquiry, lpPage: "evil" as never });
     expect(inserts[1].row.lp_page).toBe("ai-employee");
   });
+  test("lp_ref: written only when valid and only for B; invalid → null", async () => {
+    process.env.LP_INQUIRY_DB_ENABLED = "true";
+    process.env.LP_LEAD_PAGE_DB_ENABLED = "true";
+    await createInquiry({ ...inquiry, lpPage: "ai-employee-corp", lpRef: "partner_01" });
+    await createInquiry({ ...inquiry, lpPage: "ai-employee-corp", lpRef: "<script>" as never });
+    await createInquiry({ ...inquiry, lpPage: "ai-employee", lpRef: "partner_01" });
+    expect(inserts.map((i) => i.row.lp_ref)).toEqual(["partner_01", null, null]);
+  });
 });
 
 describe("lp_journeys.lp_page", () => {
@@ -74,5 +82,15 @@ describe("lp_journeys.lp_page", () => {
     returnRow = { lp_page: "tampered" };
     expect((await createJourney({ ...j, lpPage: "nope" as never }))?.lpPage).toBeNull();
     expect(inserts.find((i) => i.table === "lp_journeys")!.row.lp_page).toBe("ai-employee");
+  });
+  test("lp_ref on the journey: valid B ref written and read back; bad DB value → null", async () => {
+    process.env.LP_CHAT_ENABLED = "true";
+    process.env.LP_LEAD_PAGE_DB_ENABLED = "true";
+    returnRow = { lp_page: "ai-employee-corp", lp_ref: "partner_01" };
+    const created = await createJourney({ ...j, lpPage: "ai-employee-corp", lpRef: "partner_01" });
+    expect(inserts.find((i) => i.table === "lp_journeys")!.row.lp_ref).toBe("partner_01");
+    expect(created?.lpRef).toBe("partner_01");
+    returnRow = { lp_page: "ai-employee-corp", lp_ref: "<b>" };
+    expect((await createJourney({ ...j, lpPage: "ai-employee-corp" }))?.lpRef).toBeNull();
   });
 });

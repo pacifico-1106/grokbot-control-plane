@@ -38,8 +38,8 @@ beforeEach(() => {
 
 const route = await import("./route");
 
-const post = (body: Record<string, unknown>) =>
-  route.POST(new Request(`${APP}/api/lp/ai-employee/checkout`, { method: "POST", headers: { "content-type": "application/json", origin: APP }, body: JSON.stringify(body) }));
+const post = (body: Record<string, unknown>, cookie?: string) =>
+  route.POST(new Request(`${APP}/api/lp/ai-employee/checkout`, { method: "POST", headers: { "content-type": "application/json", origin: APP, ...(cookie ? { cookie } : {}) }, body: JSON.stringify(body) }));
 
 const ORIGINAL_SUCCESS = `${APP}/lp/ai-employee/thank-you?session_id={CHECKOUT_SESSION_ID}&plan=intern`;
 const ORIGINAL_CANCEL = `${APP}/lp/ai-employee?checkout=canceled`;
@@ -95,6 +95,39 @@ describe("POST /api/lp/ai-employee/checkout — lead page", () => {
     expect(dump).not.toContain("evil.example");
     expect(String(created[0].success_url).startsWith(`${APP}/lp/ai-employee/thank-you?`)).toBe(true);
     expect(String(created[0].cancel_url).startsWith(`${APP}/lp/ai-employee-corp?`)).toBe(true);
+  });
+
+  test("B + valid lp_ref cookie → metadata.lpRef (session + payment intent); URLs never carry it", async () => {
+    await post({ plan: "intern", lpPage: "ai-employee-corp" }, "lp_ref=partner_01");
+    const s = created[0];
+    expect((s.metadata as Record<string, string>).lpRef).toBe("partner_01");
+    expect((s.payment_intent_data as { metadata: Record<string, string> }).metadata.lpRef).toBe("partner_01");
+    expect(String(s.success_url)).not.toContain("partner_01");
+    expect(String(s.cancel_url)).not.toContain("partner_01");
+  });
+
+  test("ref: A ignores the cookie; invalid cookie dropped; body ref / lpRef never trusted", async () => {
+    for (const [body, cookie] of [
+      [{ plan: "intern" }, "lp_ref=partner_01"],
+      [{ plan: "intern", lpPage: "ai-employee-corp" }, `lp_ref=${"x".repeat(33)}`],
+      [{ plan: "intern", lpPage: "ai-employee-corp" }, "lp_ref=%3Cscript%3E"],
+      [{ plan: "intern", lpPage: "ai-employee-corp", ref: "partner_01", lpRef: "partner_01" }, undefined],
+    ] as const) {
+      created.length = 0;
+      await post(body as Record<string, unknown>, cookie);
+      expect("lpRef" in (created[0].metadata as Record<string, string>)).toBe(false);
+      expect(JSON.stringify(created[0])).not.toContain("script");
+    }
+  });
+
+  test("ref together with an AIC- code: separate fields, AIC code not turned into lpRef", async () => {
+    await post({ plan: "intern", lpPage: "ai-employee-corp", referral_code: "AIC-AB12" }, "lp_ref=partner_01");
+    const md = created[0].metadata as Record<string, string>;
+    expect(md.lpRef).toBe("partner_01");
+    expect(JSON.stringify(md)).not.toContain("AIC-AB12");
+    created.length = 0;
+    await post({ plan: "intern", lpPage: "ai-employee-corp", referral_code: "partner_01" }, "lp_ref=AIC-AB12");
+    expect((created[0].metadata as Record<string, string>).lpRef).toBe("AIC-AB12");
   });
 
   test("GET consultUrl follows the allowlisted from= (B) and ignores tampered values", async () => {

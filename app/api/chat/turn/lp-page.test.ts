@@ -65,8 +65,8 @@ const turn = await import("./route");
 const { buildSystemPrompt } = await import("@/lib/lp/chat-prompt");
 const CAPS = { toolsEnabled: false, handoffEnabled: false };
 
-const start = (body: Record<string, unknown>) =>
-  journeys.POST(new Request("https://staffpass.example/api/journeys", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ aiDisclosureAccepted: true, privacyVersion: "2026-10", ...body }) }));
+const start = (body: Record<string, unknown>, cookie?: string) =>
+  journeys.POST(new Request("https://staffpass.example/api/journeys", { method: "POST", headers: { "content-type": "application/json", ...(cookie ? { cookie } : {}) }, body: JSON.stringify({ aiDisclosureAccepted: true, privacyVersion: "2026-10", ...body }) }));
 const say = (body: Record<string, unknown>) =>
   turn.POST(new Request("https://staffpass.example/api/chat/turn", { method: "POST", headers: { "content-type": "application/json", "x-csrf-token": "c1" }, body: JSON.stringify({ text: "料金は？", clientTurnId: "t1", ...body }) }));
 
@@ -78,6 +78,16 @@ describe("POST /api/journeys lpPage", () => {
       expect(res.status).toBe(201);
       expect(created[0].lpPage).toBe(want);
     }
+  });
+});
+
+describe("POST /api/journeys lpRef (AI 相談 source = B + referrer)", () => {
+  test("B + valid lp_ref cookie → journey lpRef; invalid / A / body-only → none", async () => {
+    await start({ lpPage: "ai-employee-corp" }, "lp_ref=partner_01");
+    await start({ lpPage: "ai-employee-corp" }, "lp_ref=%3Cscript%3E");
+    await start({}, "lp_ref=partner_01");
+    await start({ lpPage: "ai-employee-corp", lpRef: "partner_01", ref: "partner_01" });
+    expect(created.map((c) => c.lpRef ?? null)).toEqual(["partner_01", null, null, null]);
   });
 });
 

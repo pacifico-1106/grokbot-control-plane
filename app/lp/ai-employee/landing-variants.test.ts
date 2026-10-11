@@ -7,6 +7,8 @@ import CorpPage, { metadata as corpMetadata } from "@/app/lp/ai-employee-corp/pa
 import { AIEmployeeLanding } from "@/app/lp/ai-employee/AIEmployeeLanding";
 import { getLpVariant } from "@/app/lp/ai-employee/variants";
 import { FloatingYouTubePromo, PromoDesktopPlayer, PromoMobilePlayer } from "@/app/lp/ai-employee/FloatingYouTubePromo";
+import { getPathMatch } from "next/dist/shared/lib/router/utils/path-match";
+import nextConfig from "@/next.config";
 
 /**
  * LP pattern B (/lp/ai-employee-corp) shares every component with /lp/ai-employee;
@@ -131,10 +133,52 @@ describe("pattern B /lp/ai-employee-corp", () => {
     expect(hrefs).toContain("/lp/ai-employee/consult?plan=custom&from=ai-employee-corp");
   });
 
-  test("robots: noindex,follow; no canonical (mixed signals avoided)", () => {
-    expect(corpMetadata.robots).toEqual({ index: false, follow: true });
-    expect(corpMetadata.alternates?.canonical).toBeUndefined();
+  test("robots meta: noindex, follow + noai, noimageai; NO canonical (木村 10/12 02:23)", () => {
+    expect(corpMetadata.robots).toBe("noindex, follow, noai, noimageai");
+    expect(corpMetadata.alternates).toBeUndefined();
     expect(originalMetadata.robots).toBeUndefined();
+  });
+
+  test("X-Robots-Tag header on /lp/ai-employee-corp only (A and its sub-pages untouched)", async () => {
+    const rules = (await nextConfig.headers?.()) ?? [];
+    const tag = (path: string) => {
+      let v: string | undefined;
+      for (const r of rules) if (getPathMatch(r.source)(path) !== false) for (const h of r.headers) if (h.key.toLowerCase() === "x-robots-tag") v = h.value;
+      return v;
+    };
+    expect(tag("/lp/ai-employee-corp")).toBe("noindex, follow, noai, noimageai");
+    expect(tag("/lp/ai-employee")).toBeUndefined();
+    expect(tag("/lp/ai-employee/consult")).toBeUndefined();
+  });
+
+  test("ref is never rendered: the page takes no searchParams and the markup has no ref value", () => {
+    chat(true);
+    expect(CorpPage.length).toBe(0);
+    const h = html(CorpPage());
+    expect(h).not.toContain("ref=");
+    expect(h).not.toContain("lp_ref");
+  });
+
+  test("shorter path to 相談: CTA right under the hero + sticky CTA (B only)", () => {
+    chat(false);
+    const h = html(CorpPage());
+    const heroEnd = h.indexOf("</section>");
+    const cta = h.indexOf('data-testid="lp-hero-consult-cta"');
+    expect(cta).toBeGreaterThan(heroEnd);
+    expect(cta).toBeLessThan(h.indexOf("MANGA"));
+    expect(h).toContain('data-testid="lp-sticky-consult-cta"');
+    const sticky = h.match(/data-testid="lp-sticky-consult-cta"[\s\S]*?<\/div>/)?.[0] ?? "";
+    expect(sticky).toContain('href="/lp/ai-employee/consult?from=ai-employee-corp"');
+    const orig = html(OriginalPage());
+    expect(orig).not.toContain("lp-hero-consult-cta");
+    expect(orig).not.toContain("lp-sticky-consult-cta");
+  });
+
+  test("with the chat dock ON the sticky CTA does not stack a second bottom bar on phones", () => {
+    chat(true);
+    const h = html(CorpPage());
+    expect(h).toContain('data-testid="lp-chat-dock"');
+    expect(h).not.toContain('data-testid="lp-sticky-consult-cta"');
   });
 
   test("B is not in any sitemap / robots allow-list", () => {

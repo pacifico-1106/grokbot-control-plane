@@ -2,7 +2,7 @@ import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 
 /** AI 相談 handoff: confirm link returns B visitors to B; the handoff email records the page. */
 let journeyLpPage: string | null = null;
-const notified: Array<{ lpPage: unknown }> = [];
+const notified: Array<{ lpPage: unknown; lpRef: unknown }> = [];
 const HANDOFF = { id: "h1", journeyId: "journey_1", status: "pending_confirmation", reason: "r", summaryDraft: "s" };
 
 mock.module("@/lib/lp/guest-session", () => ({
@@ -15,8 +15,8 @@ mock.module("@/lib/lp/handoffs", () => ({
   cancelHandoff: async () => true,
 }));
 mock.module("@/lib/lp/outbox-processor", () => ({
-  enqueueHandoffNotification: async (_h: unknown, lpPage?: unknown) => {
-    notified.push({ lpPage });
+  enqueueHandoffNotification: async (_h: unknown, lead?: { lpPage?: unknown; lpRef?: unknown }) => {
+    notified.push({ lpPage: lead?.lpPage, lpRef: lead?.lpRef ?? null });
     return "ob1";
   },
 }));
@@ -38,8 +38,8 @@ beforeEach(() => {
 
 const route = await import("./route");
 const { NextRequest } = await import("next/server");
-const req = (method: string, body: Record<string, unknown>) =>
-  new NextRequest("https://staffpass.example/api/lp/handoff", { method, headers: { "content-type": "application/json", "x-csrf-token": "c" }, body: JSON.stringify(body) });
+const req = (method: string, body: Record<string, unknown>, cookie?: string) =>
+  new NextRequest("https://staffpass.example/api/lp/handoff", { method, headers: { "content-type": "application/json", "x-csrf-token": "c", ...(cookie ? { cookie } : {}) }, body: JSON.stringify(body) });
 
 describe("handoff lpPage", () => {
   test("POST confirmUrl: B gets from=ai-employee-corp, original / tampered unchanged", async () => {
@@ -57,5 +57,11 @@ describe("handoff lpPage", () => {
     journeyLpPage = "ai-employee-corp";
     await put("ai-employee");
     expect(notified.map((n) => n.lpPage)).toEqual(["ai-employee-corp", "ai-employee", "ai-employee-corp"]);
+  });
+  test("PUT: B + valid lp_ref cookie → notification lpRef; invalid / A → none", async () => {
+    await route.PUT(req("PUT", { handoffId: "h1", summaryFinal: "s", lpPage: "ai-employee-corp" }, "lp_ref=partner_01"));
+    await route.PUT(req("PUT", { handoffId: "h1", summaryFinal: "s", lpPage: "ai-employee-corp" }, "lp_ref=a.b"));
+    await route.PUT(req("PUT", { handoffId: "h1", summaryFinal: "s" }, "lp_ref=partner_01"));
+    expect(notified.map((n) => n.lpRef)).toEqual(["partner_01", null, null]);
   });
 });

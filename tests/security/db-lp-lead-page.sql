@@ -71,3 +71,34 @@ reset role;
 
 delete from public.lp_inquiries where id::text like 'a9100000-%';
 delete from public.lp_journeys where id::text like 'a9100000-%';
+
+-- lp_ref (?ref= on pattern B): nullable text, ^[A-Za-z0-9_-]{1,32}$ only.
+do $$
+declare
+  t text;
+  bad text;
+begin
+  foreach t in array array['lp_inquiries', 'lp_journeys'] loop
+    if not exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = t and column_name = 'lp_ref' and data_type = 'text' and is_nullable = 'YES' and column_default is null) then
+      raise exception 'lead page: %.lp_ref missing or not nullable text without default', t;
+    end if;
+  end loop;
+  insert into public.lp_inquiries (id, source, plan, company, contact_name, email, use_case, lp_page, lp_ref)
+    values ('a9100000-0000-4000-8000-000000000021', 'form', 'intern', 'lead-ref-fixture', 'f', 'lead@fixture.invalid', 'fixture', 'ai-employee-corp', 'partner_01');
+  insert into public.lp_journeys (id, token_hash, expires_at, lp_page, lp_ref)
+    values ('a9100000-0000-4000-8000-000000000022', 'lead-ref-fixture', now() + interval '1 hour', 'ai-employee-corp', repeat('x', 32));
+  foreach bad in array array['', repeat('x', 33), 'a b', 'a.b', '<script>', 'a/b', '紹介', E'a\nb'] loop
+    begin
+      update public.lp_inquiries set lp_ref = bad where id = 'a9100000-0000-4000-8000-000000000021';
+      raise exception 'lead page: lp_inquiries.lp_ref accepted %', quote_literal(bad);
+    exception when check_violation then null;
+    end;
+    begin
+      update public.lp_journeys set lp_ref = bad where id = 'a9100000-0000-4000-8000-000000000022';
+      raise exception 'lead page: lp_journeys.lp_ref accepted %', quote_literal(bad);
+    exception when check_violation then null;
+    end;
+  end loop;
+  delete from public.lp_inquiries where id = 'a9100000-0000-4000-8000-000000000021';
+  delete from public.lp_journeys where id = 'a9100000-0000-4000-8000-000000000022';
+end $$;

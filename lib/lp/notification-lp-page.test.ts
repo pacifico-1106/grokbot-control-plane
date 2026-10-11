@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { renderNotificationHtml } from "@/lib/lp/notification-outbox";
-import { lpPageNoticeLine } from "@/lib/lp/lp-page";
+import { lpPageNoticeLine, lpRefNoticeLine } from "@/lib/lp/lp-page";
 
 /** Outbox emails show the lead page; old entries (no lpPage) render exactly as before; DB values are re-checked. */
 const entry = (notificationType: string, payload: Record<string, unknown>) => ({ notificationType, payload }) as never;
@@ -17,6 +17,14 @@ describe("renderNotificationHtml lead page row", () => {
     expect(lpPageNoticeLine("ai-employee")).toBe("流入ページ: /lp/ai-employee（AI社員 導入パック）");
     expect(lpPageNoticeLine(undefined)).toBeNull();
     expect(lpPageNoticeLine("<script>")).toBeNull();
+  });
+  test("ref row: shown when valid, dropped when not", () => {
+    expect(renderNotificationHtml(entry("inquiry_received", { plan: "intern", lpPage: "ai-employee-corp", lpRef: "partner_01" }))).toContain("partner_01");
+    const bad = renderNotificationHtml(entry("inquiry_received", { plan: "intern", lpPage: "ai-employee-corp", lpRef: "<img src=x>" }));
+    expect(bad).not.toContain("img");
+    expect(bad).not.toContain("紹介元");
+    expect(lpRefNoticeLine("partner_01")).toBe("紹介元(ref): partner_01");
+    expect(lpRefNoticeLine("a b")).toBeNull();
   });
   test("a tampered stored value is never echoed", () => {
     const h = renderNotificationHtml(entry("inquiry_received", { plan: "intern", lpPage: "<script>alert(1)</script>" }));
