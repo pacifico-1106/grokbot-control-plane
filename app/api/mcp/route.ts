@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { withHoldRequestScope } from "@/lib/safety/hold";
+import { withHoldCallScope } from "@/lib/safety/hold";
 import { resolveEmployeeCredential } from "@/lib/auth/employee-credential";
 import { isMcpOAuthLegacyUnauthInitialize } from "@/lib/feature-flags";
 import { isMcpOAuthEnabled } from "@/lib/mcp-oauth/config";
@@ -144,8 +144,9 @@ export async function GET() {
  * Auth required for tools/list and tools/call.
  */
 export async function POST(req: Request) {
-  // S2: one hold read per request for G1 → G3 (the just-before-send check re-reads).
-  return withHoldRequestScope(() => handlePost(req));
+  // One hold scope per call (this route takes one JSON-RPC message / one invoke): G1 → G3
+  // reuse one read; G4, wake, MCP Events and just-before-send always re-read.
+  return withHoldCallScope(() => handlePost(req));
 }
 
 async function handlePost(req: Request) {
