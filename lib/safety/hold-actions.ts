@@ -25,17 +25,16 @@ import { listMembers } from "@/lib/data/members";
 import { getDesignatedAdminMemberIds } from "@/lib/approver-authority/designated-admins";
 import { hasCapability } from "@/lib/team/rbac";
 import {
-  HOLD_RELEASE_FRESH_LOGIN_MAX_AGE_MS,
   HOLD_RELEASE_SURFACES,
   HOLD_RELEASE_TOOL,
   HOLD_START_BACKOFF_MS,
   HOLD_START_MAX_ATTEMPTS,
   HOLD_START_RETRYABLE_CODES,
   isEmployeeHoldEnabled,
-  isHoldReleaseSurface,
   isOrgHoldEnabled,
 } from "@/lib/safety/hold-config";
 import { getHoldStore, HoldStoreError, type HoldRecord } from "@/lib/safety/hold-store";
+import { verifyReleaseAuthentication } from "@/lib/safety/hold-release-auth";
 import { notifyHold } from "@/lib/safety/hold-notify";
 
 export type HoldMemberSurface = "web" | "slack" | "line" | "telegram";
@@ -84,24 +83,11 @@ function cleanReason(reason: unknown): string | null {
   return s || null;
 }
 
-function loginFresh(lastSignInAt: string | null | undefined, now: Date): boolean {
-  const t = lastSignInAt ? Date.parse(lastSignInAt) : NaN;
-  if (!Number.isFinite(t)) return false;
-  const age = now.getTime() - t;
-  return age >= -60_000 && age <= HOLD_RELEASE_FRESH_LOGIN_MAX_AGE_MS;
-}
-
-/**
- * Release surfaces: web only for now. A new surface must bring its own freshness proof here
- * before it is added to HOLD_RELEASE_SURFACES.
- */
+/** Release surfaces + freshness: delegated to the ONE swappable function (passkey later). */
 function assertReleaseSurface(actor: HoldActor, now: Date): HoldFailure | null {
   if (actor.type !== "member") return fail("ops_hold_release_is_s4", 403);
-  if (!isHoldReleaseSurface(actor.surface)) return fail("hold_release_web_only", 403, "解除はダッシュボードからのみ行えます。");
-  if (actor.surface === "web" && !loginFresh(actor.lastSignInAt, now)) {
-    return fail("fresh_login_required", 401, "解除にはログインし直してください（5分以内のログインが必要です）。");
-  }
-  return null;
+  const v = verifyReleaseAuthentication({ surface: actor.surface, lastSignInAt: actor.lastSignInAt ?? null }, now);
+  return v.ok ? null : fail(v.code, v.httpStatus, v.message);
 }
 
 function retryable(error: unknown): string | null {
