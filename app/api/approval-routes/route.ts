@@ -6,7 +6,6 @@
  *
  * Owner/admin only. Changes do NOT apply directly but file always_human approvalRoutes.patch.
  */
-import { NextResponse } from "next/server";
 import { getSessionContext } from "@/lib/auth/session";
 import { isApprovalKindRoutesEnabled } from "@/lib/feature-flags";
 import { assertApiPlanAllows } from "@/lib/billing/plan-api-gate";
@@ -18,11 +17,12 @@ import type { OrgApprovalKindRoutesPolicy, ApprovalKindRoute } from "@/lib/appro
 import { APPROVAL_KINDS } from "@/lib/approval-kind-routes/types";
 import { createApproval, appendAuditEvent } from "@/lib/data";
 import { sendApprovalNotifications } from "@/lib/notify/channels";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 export const runtime = "nodejs";
 
 function jsonError(error: string, status: number) {
-  return NextResponse.json({ ok: false, error }, { status });
+  return jsonUtf8({ ok: false, error }, { status });
 }
 
 /**
@@ -81,7 +81,7 @@ export async function GET() {
   }
 
   if (!isApprovalKindRoutesEnabled()) {
-    return NextResponse.json({
+    return jsonUtf8({
       ok: true,
       enabled: false,
       policy: null,
@@ -96,7 +96,7 @@ export async function GET() {
     effectiveRoutes[kind] = await getEffectiveApprovalKindRoute(orgId, kind, null);
   }
 
-  return NextResponse.json({
+  return jsonUtf8({
     ok: true,
     enabled: true,
     policy,
@@ -166,7 +166,7 @@ export async function POST(req: Request) {
 
   const validationErrors = validatePolicyBasic(proposedPolicy);
   if (validationErrors.length > 0) {
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: "validation_failed", errors: validationErrors },
       { status: 400 }
     );
@@ -211,7 +211,7 @@ export async function POST(req: Request) {
     },
   });
 
-  return NextResponse.json({
+  return jsonUtf8({
     ok: true,
     code: "needs_approval",
     approvalId: approval.approval.id,

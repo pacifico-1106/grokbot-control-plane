@@ -9,7 +9,7 @@
  * Feature flag: LP_HANDOFF_ENABLED (default OFF)
  */
 
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest } from "next/server";
 import { isLpHandoffEnabled } from "@/lib/feature-flags";
 import {
   createHandoff,
@@ -34,10 +34,11 @@ function leadRefOf(page: LpPage, journey: { lpRef?: string | null }, cookieHeade
 import { hashIp } from "@/lib/lp/rate-limit";
 import { IP_HASH_UNAVAILABLE, isIpHashKeyConfigured } from "@/lib/security/ip-hash-key";
 import { createHash } from "node:crypto";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 function sessionError(session: Extract<GuestSessionResult, { ok: false }>) {
   const body = "message" in session ? { error: session.error, message: session.message } : { error: session.error };
-  return NextResponse.json(body, { status: session.status });
+  return jsonUtf8(body, { status: session.status });
 }
 
 const NOT_FOUND = { error: "not_found", message: "Handoff not found" } as const;
@@ -60,7 +61,7 @@ function validatePhone(phone: string): boolean {
 
 export async function POST(request: NextRequest) {
   if (!isLpHandoffEnabled()) {
-    return NextResponse.json(
+    return jsonUtf8(
       { error: "feature_disabled", message: "Handoff feature is not enabled" },
       { status: 404 }
     );
@@ -76,14 +77,14 @@ export async function POST(request: NextRequest) {
     const lpPage = leadPageOf(session.journey, body.lpPage);
 
     if (!reason || typeof reason !== "string" || reason.length > 500) {
-      return NextResponse.json(
+      return jsonUtf8(
         { error: "invalid_input", message: "reason is required (max 500 chars)" },
         { status: 400 }
       );
     }
 
     if (!summaryDraft || typeof summaryDraft !== "string" || summaryDraft.length > 2000) {
-      return NextResponse.json(
+      return jsonUtf8(
         { error: "invalid_input", message: "summaryDraft is required (max 2000 chars)" },
         { status: 400 }
       );
@@ -91,7 +92,7 @@ export async function POST(request: NextRequest) {
 
     if (!isIpHashKeyConfigured()) {
       console.error("[lp/handoff] IP_HASH_KEY not configured; refusing");
-      return NextResponse.json({ ...IP_HASH_UNAVAILABLE }, { status: 503 });
+      return jsonUtf8({ ...IP_HASH_UNAVAILABLE }, { status: 503 });
     }
     const ip = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "unknown";
     const userAgent = request.headers.get("user-agent") || "unknown";
@@ -105,20 +106,20 @@ export async function POST(request: NextRequest) {
     });
 
     if (!handoff) {
-      return NextResponse.json(
+      return jsonUtf8(
         { error: "creation_failed", message: "Failed to create handoff request" },
         { status: 500 }
       );
     }
 
-    return NextResponse.json({
+    return jsonUtf8({
       id: handoff.id,
       status: handoff.status,
       confirmUrl: withLpPageParam(`/lp/ai-employee/handoff/confirm?id=${handoff.id}`, lpPage),
     });
   } catch (error) {
     console.error("[handoff] POST error:", error);
-    return NextResponse.json(
+    return jsonUtf8(
       { error: "internal_error", message: "An error occurred" },
       { status: 500 }
     );
@@ -127,7 +128,7 @@ export async function POST(request: NextRequest) {
 
 export async function GET(request: NextRequest) {
   if (!isLpHandoffEnabled()) {
-    return NextResponse.json(
+    return jsonUtf8(
       { error: "feature_disabled", message: "Handoff feature is not enabled" },
       { status: 404 }
     );
@@ -137,7 +138,7 @@ export async function GET(request: NextRequest) {
   const handoffId = searchParams.get("id");
 
   if (!handoffId) {
-    return NextResponse.json(
+    return jsonUtf8(
       { error: "invalid_input", message: "id is required" },
       { status: 400 }
     );
@@ -150,10 +151,10 @@ export async function GET(request: NextRequest) {
 
   // Another guest's handoff is reported as not found, so ids cannot be probed.
   if (!handoff || handoff.journeyId !== session.journey.id) {
-    return NextResponse.json(NOT_FOUND, { status: 404 });
+    return jsonUtf8(NOT_FOUND, { status: 404 });
   }
 
-  return NextResponse.json({
+  return jsonUtf8({
     id: handoff.id,
     status: handoff.status,
     reason: handoff.reason,
@@ -164,7 +165,7 @@ export async function GET(request: NextRequest) {
 
 export async function PUT(request: NextRequest) {
   if (!isLpHandoffEnabled()) {
-    return NextResponse.json(
+    return jsonUtf8(
       { error: "feature_disabled", message: "Handoff feature is not enabled" },
       { status: 404 }
     );
@@ -175,28 +176,28 @@ export async function PUT(request: NextRequest) {
     const { handoffId, summaryFinal, contactEmail, contactPhone, contactNotes } = body;
 
     if (!handoffId || typeof handoffId !== "string") {
-      return NextResponse.json(
+      return jsonUtf8(
         { error: "invalid_input", message: "handoffId is required" },
         { status: 400 }
       );
     }
 
     if (!summaryFinal || typeof summaryFinal !== "string" || summaryFinal.length > 2000) {
-      return NextResponse.json(
+      return jsonUtf8(
         { error: "invalid_input", message: "summaryFinal is required (max 2000 chars)" },
         { status: 400 }
       );
     }
 
     if (contactEmail && !validateEmail(contactEmail)) {
-      return NextResponse.json(
+      return jsonUtf8(
         { error: "invalid_input", message: "Invalid email format" },
         { status: 400 }
       );
     }
 
     if (contactPhone && !validatePhone(contactPhone)) {
-      return NextResponse.json(
+      return jsonUtf8(
         { error: "invalid_input", message: "Invalid phone format" },
         { status: 400 }
       );
@@ -206,7 +207,7 @@ export async function PUT(request: NextRequest) {
     if (!session.ok) return sessionError(session);
     const existing = await getHandoff(handoffId);
     if (!existing || existing.journeyId !== session.journey.id) {
-      return NextResponse.json(NOT_FOUND, { status: 404 });
+      return jsonUtf8(NOT_FOUND, { status: 404 });
     }
 
     const confirmedHandoff = await confirmHandoff({
@@ -218,7 +219,7 @@ export async function PUT(request: NextRequest) {
     });
 
     if (!confirmedHandoff) {
-      return NextResponse.json(
+      return jsonUtf8(
         { error: "confirmation_failed", message: "Failed to confirm handoff (may already be confirmed or cancelled)" },
         { status: 400 }
       );
@@ -228,7 +229,7 @@ export async function PUT(request: NextRequest) {
     const lpRef = leadRefOf(lpPage, session.journey, request.headers.get("cookie"));
     await enqueueHandoffNotification(confirmedHandoff, { lpPage, lpRef });
 
-    return NextResponse.json({
+    return jsonUtf8({
       id: confirmedHandoff.id,
       status: confirmedHandoff.status,
       confirmedAt: confirmedHandoff.confirmedAt,
@@ -236,7 +237,7 @@ export async function PUT(request: NextRequest) {
     });
   } catch (error) {
     console.error("[handoff] PUT error:", error);
-    return NextResponse.json(
+    return jsonUtf8(
       { error: "internal_error", message: "An error occurred" },
       { status: 500 }
     );
@@ -245,7 +246,7 @@ export async function PUT(request: NextRequest) {
 
 export async function DELETE(request: NextRequest) {
   if (!isLpHandoffEnabled()) {
-    return NextResponse.json(
+    return jsonUtf8(
       { error: "feature_disabled", message: "Handoff feature is not enabled" },
       { status: 404 }
     );
@@ -255,7 +256,7 @@ export async function DELETE(request: NextRequest) {
   const handoffId = searchParams.get("id");
 
   if (!handoffId) {
-    return NextResponse.json(
+    return jsonUtf8(
       { error: "invalid_input", message: "id is required" },
       { status: 400 }
     );
@@ -265,19 +266,19 @@ export async function DELETE(request: NextRequest) {
   if (!session.ok) return sessionError(session);
   const existing = await getHandoff(handoffId);
   if (!existing || existing.journeyId !== session.journey.id) {
-    return NextResponse.json(NOT_FOUND, { status: 404 });
+    return jsonUtf8(NOT_FOUND, { status: 404 });
   }
 
   const success = await cancelHandoff(handoffId);
 
   if (!success) {
-    return NextResponse.json(
+    return jsonUtf8(
       { error: "cancellation_failed", message: "Failed to cancel handoff" },
       { status: 400 }
     );
   }
 
-  return NextResponse.json({
+  return jsonUtf8({
     id: handoffId,
     status: "cancelled",
     message: "キャンセルしました。",

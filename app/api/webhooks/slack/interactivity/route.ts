@@ -10,7 +10,6 @@
  * - Ephemeral rejection message to presser
  */
 import { createHash } from "node:crypto";
-import { NextResponse } from "next/server";
 import { fulfillIfApproved } from "@/lib/approvals/fulfill";
 import { runApprovalResolveSideEffects } from "@/lib/approvals/resolve-side-effects";
 import {
@@ -41,6 +40,7 @@ import {
   sendEphemeralRejection,
   type SlackRejectionReason,
 } from "@/lib/slack/ephemeral-rejection";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -69,7 +69,7 @@ type SignatureVerificationResult =
 const CARD_EXPIRY_MS = 7 * 24 * 60 * 60 * 1000;
 
 function ack(extra: Record<string, unknown> = {}) {
-  return NextResponse.json({ ok: true, ...extra });
+  return jsonUtf8({ ok: true, ...extra });
 }
 
 async function verifySignatureWithCandidates(
@@ -133,7 +133,7 @@ export async function POST(req: Request) {
   }
 
   if (payload.type === "url_verification") {
-    return NextResponse.json({ challenge: payload.challenge });
+    return jsonUtf8({ challenge: payload.challenge });
   }
 
   const apiAppId = payload.api_app_id || "";
@@ -148,7 +148,7 @@ export async function POST(req: Request) {
     // with the shared signing secret → #236 button alert for that org; always 401.
     const { reportSharedApprovalPressWhileDisabled } = await import("@/lib/slack/shared-approval-interactivity");
     await reportSharedApprovalPressWhileDisabled({ apiAppId, teamId, timestamp, rawBody, signature });
-    return NextResponse.json({ ok: false, error: "shared_approval_app_disabled" }, { status: 401 });
+    return jsonUtf8({ ok: false, error: "shared_approval_app_disabled" }, { status: 401 });
   }
 
   let channel: InteractivityChannelCandidate;
@@ -158,7 +158,7 @@ export async function POST(req: Request) {
     const { resolveSharedApprovalInteractivity } = await import("@/lib/slack/shared-approval-interactivity");
     const shared = await resolveSharedApprovalInteractivity({ apiAppId, teamId, timestamp, rawBody, signature });
     if (!shared.ok) {
-      return NextResponse.json({ ok: false, error: shared.error }, { status: shared.status });
+      return jsonUtf8({ ok: false, error: shared.error }, { status: shared.status });
     }
     channel = shared.channel;
   } else {
@@ -172,7 +172,7 @@ export async function POST(req: Request) {
     );
 
     if (!verifyResult.ok) {
-      return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
+      return jsonUtf8({ ok: false, error: "unauthorized" }, { status: 401 });
     }
 
     channel = verifyResult.channel;
@@ -180,13 +180,13 @@ export async function POST(req: Request) {
 
   if (payload.api_app_id !== channel.apiAppId) {
     await alertButtonFailure(channel, "app_mismatch");
-    return NextResponse.json({ ok: false, error: "app_mismatch" }, { status: 403 });
+    return jsonUtf8({ ok: false, error: "app_mismatch" }, { status: 403 });
   }
 
   const expectedTeamId = channel.expectedTeamId || channel.teamId;
   if (expectedTeamId && teamId !== expectedTeamId) {
     await alertButtonFailure(channel, "team_mismatch");
-    return NextResponse.json({ ok: false, error: "team_mismatch" }, { status: 403 });
+    return jsonUtf8({ ok: false, error: "team_mismatch" }, { status: 403 });
   }
 
   if (payload.type !== "block_actions") return ack();

@@ -7,7 +7,6 @@
  * Feature flag LP_CHAT_ENABLED must be ON.
  */
 
-import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { isLpChatEnabled } from "@/lib/feature-flags";
 import {
@@ -22,6 +21,7 @@ import { IP_HASH_UNAVAILABLE, isIpHashKeyConfigured } from "@/lib/security/ip-ha
 import { getPublishedRelease } from "@/lib/lp/knowledge-base";
 import { GUEST_SESSIONS_UNAVAILABLE, isGuestSigningKeyMissingError } from "@/lib/lp/guest-signing-key";
 import { normalizeLpPage, resolveLpRef } from "@/lib/lp/lp-page";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 const GUEST_COOKIE_NAME = "lp_guest";
 const CSRF_COOKIE_NAME = "lp_csrf";
@@ -33,7 +33,7 @@ function isLpBotProtectionEnabled(): boolean {
 
 export async function POST(req: Request) {
   if (!isLpChatEnabled()) {
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: "feature_disabled", message: "チャット機能は現在利用できません" },
       { status: 503 }
     );
@@ -41,7 +41,7 @@ export async function POST(req: Request) {
 
   const openaiKey = process.env.OPENAI_API_KEY;
   if (!openaiKey || openaiKey.startsWith("replace_me")) {
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: "chat_unavailable", message: "チャット機能は現在利用できません" },
       { status: 503 }
     );
@@ -53,7 +53,7 @@ export async function POST(req: Request) {
   // IP_HASH_KEY required (no dev fallback): refuse before rate limiting or any write.
   if (clientIp && !isIpHashKeyConfigured()) {
     console.error("[journeys] IP_HASH_KEY not configured; refusing");
-    return NextResponse.json({ ok: false, ...IP_HASH_UNAVAILABLE }, { status: 503 });
+    return jsonUtf8({ ok: false, ...IP_HASH_UNAVAILABLE }, { status: 503 });
   }
 
   if (botProtectionEnabled && clientIp) {
@@ -64,7 +64,7 @@ export async function POST(req: Request) {
     });
 
     if (!rateLimitResult.allowed) {
-      return NextResponse.json(
+      return jsonUtf8(
         { ok: false, error: "rate_limited", message: "リクエストが多すぎます" },
         {
           status: 429,
@@ -84,7 +84,7 @@ export async function POST(req: Request) {
   try {
     body = await req.json();
   } catch {
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: "invalid_json", message: "リクエストが不正です" },
       { status: 400 }
     );
@@ -96,14 +96,14 @@ export async function POST(req: Request) {
   const lpRef = resolveLpRef(lpPage, req.headers.get("cookie"));
 
   if (!aiDisclosureAccepted) {
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: "consent_required", message: "AI相談窓口の利用にはAI表示への同意が必要です" },
       { status: 400 }
     );
   }
 
   if (!privacyVersion) {
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: "privacy_required", message: "プライバシーポリシーへの同意が必要です" },
       { status: 400 }
     );
@@ -114,7 +114,7 @@ export async function POST(req: Request) {
 
     if (turnstileConfig) {
       if (!turnstileToken) {
-        return NextResponse.json(
+        return jsonUtf8(
           { ok: false, error: "turnstile_required", message: "認証が必要です" },
           { status: 400 }
         );
@@ -124,7 +124,7 @@ export async function POST(req: Request) {
 
       if (!turnstileResult.success) {
         console.warn("[journeys] Turnstile verification failed:", turnstileResult.errorCodes);
-        return NextResponse.json(
+        return jsonUtf8(
           { ok: false, error: "turnstile_failed", message: "認証に失敗しました" },
           { status: 400 }
         );
@@ -144,7 +144,7 @@ export async function POST(req: Request) {
   } catch (err) {
     if (!isGuestSigningKeyMissingError(err)) throw err;
     console.error("[journeys] GUEST_SIGNING_KEY not configured; refusing to start a guest journey");
-    return NextResponse.json({ ok: false, ...GUEST_SESSIONS_UNAVAILABLE }, { status: 503 });
+    return jsonUtf8({ ok: false, ...GUEST_SESSIONS_UNAVAILABLE }, { status: 503 });
   }
 
   const kbRelease = await getPublishedRelease();
@@ -162,7 +162,7 @@ export async function POST(req: Request) {
   });
 
   if (!journey) {
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: "journey_creation_failed", message: "セッションの作成に失敗しました" },
       { status: 500 }
     );
@@ -186,7 +186,7 @@ export async function POST(req: Request) {
     maxAge: 24 * 60 * 60,
   });
 
-  return NextResponse.json(
+  return jsonUtf8(
     {
       ok: true,
       journeyId: journey.id,

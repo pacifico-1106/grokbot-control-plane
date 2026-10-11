@@ -6,10 +6,10 @@
  * Protected by CRON_SECRET header.
  */
 
-import { NextResponse } from "next/server";
 import { createSupabaseAdminClient } from "@/lib/supabase";
 import { isLpInquiryCleanupEnabled } from "@/lib/feature-flags";
 import { checkCronRequest, readCronSecret } from "@/lib/security/cron-secret";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -31,14 +31,14 @@ function verifyCronSecret(req: Request): boolean {
 
 export async function GET(req: Request) {
   if (!verifyCronSecret(req)) {
-    return NextResponse.json(
+    return jsonUtf8(
       { error: "unauthorized" },
       { status: 401 }
     );
   }
 
   if (!isLpInquiryCleanupEnabled()) {
-    return NextResponse.json({
+    return jsonUtf8({
       ok: true,
       skipped: true,
       reason: "feature_flag_off",
@@ -48,7 +48,7 @@ export async function GET(req: Request) {
 
   const admin = createSupabaseAdminClient();
   if (!admin) {
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: "db_not_configured" },
       { status: 500 }
     );
@@ -59,7 +59,7 @@ export async function GET(req: Request) {
 
     if (error) {
       console.error("[lp-inquiry-cleanup] Cleanup failed:", error);
-      return NextResponse.json(
+      return jsonUtf8(
         { ok: false, error: error.message },
         { status: 500 }
       );
@@ -68,13 +68,13 @@ export async function GET(req: Request) {
     const deletedCount = Number(data) || 0;
     console.info("[lp-inquiry-cleanup] Cleanup completed:", { deletedCount });
 
-    return NextResponse.json({
+    return jsonUtf8({
       ok: true,
       deletedCount,
     });
   } catch (error) {
     console.error("[lp-inquiry-cleanup] Cleanup error:", error);
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: "cleanup_failed" },
       { status: 500 }
     );

@@ -1,4 +1,3 @@
-import { NextResponse } from "next/server";
 import { assertWebActorApproverAuthority, webDirectDeniedBody } from "@/lib/approver-authority/web-direct";
 import { getCurrentOrgId } from "@/lib/auth/session";
 import { requireCredentialAdmin } from "@/lib/auth/require-credential-admin";
@@ -13,6 +12,7 @@ import {
 } from "@/lib/data";
 import { mintOneTimeSecret } from "@/lib/bindings";
 import { isAdminMcpCredentialReissueEnabled } from "@/lib/feature-flags";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 export const runtime = "nodejs";
 
@@ -52,12 +52,12 @@ export async function POST(
   if (!gate.ok) return gate.response;
   const orgId = await getCurrentOrgId();
   if (!orgId) {
-    return NextResponse.json({ error: "auth_required" }, { status: 401 });
+    return jsonUtf8({ error: "auth_required" }, { status: 401 });
   }
   const { id } = await ctx.params;
   const employee = await getEmployee(id, orgId);
   if (!employee) {
-    return NextResponse.json({ error: "employee_not_found" }, { status: 404 });
+    return jsonUtf8({ error: "employee_not_found" }, { status: 404 });
   }
   // Review 2026-10-09 item 2: a new credential carries the employee's permissions.
   const authority = await assertWebActorApproverAuthority({
@@ -66,14 +66,14 @@ export async function POST(
     changes: [{ tool: "web.employeeRotate", adminMutation: {}, kind: "owner_or_designated_admin" }],
     surface: "employees.rotate",
   });
-  if (!authority.ok) return NextResponse.json(webDirectDeniedBody(authority), { status: 403 });
+  if (!authority.ok) return jsonUtf8(webDirectDeniedBody(authority), { status: 403 });
 
   const targetOrgId = employee.orgId || orgId;
   const reissueApprovalId =
     typeof rawBody.reissueApprovalId === "string" ? rawBody.reissueApprovalId.trim() : "";
   if (reissueApprovalId) {
     if (!isAdminMcpCredentialReissueEnabled()) {
-      return NextResponse.json({ error: "feature_disabled" }, { status: 400 });
+      return jsonUtf8({ error: "feature_disabled" }, { status: 400 });
     }
     const { redeemCredentialReissue } = await import("@/lib/employees/credential-reissue");
     const r = await redeemCredentialReissue({
@@ -83,9 +83,9 @@ export async function POST(
       actor: { memberId: gate.actor.id, email: gate.actor.email ?? null },
     });
     if (!r.ok) {
-      return NextResponse.json({ error: r.code, message: r.messageJa }, { status: REISSUE_STATUS[r.code] ?? 500 });
+      return jsonUtf8({ error: r.code, message: r.messageJa }, { status: REISSUE_STATUS[r.code] ?? 500 });
     }
-    return NextResponse.json({
+    return jsonUtf8({
       ok: true,
       demo: runtimeModeLabel() === "demo",
       mode: runtimeModeLabel(),
@@ -149,7 +149,7 @@ export async function POST(
         oauthRevokeFailed = true; // rotation itself succeeded; surface so the admin can retry from the list
       }
     }
-    return NextResponse.json({
+    return jsonUtf8({
       ok: true,
       ...(oauthGrantsRevoked !== undefined ? { oauthGrantsRevoked } : {}),
       ...(oauthRevokeFailed ? { oauthRevokeFailed } : {}),
@@ -170,11 +170,11 @@ export async function POST(
   } catch (e) {
     const code = (e as { code?: string }).code;
     if (code === "revoked") {
-      return NextResponse.json(
+      return jsonUtf8(
         { error: "revoked", message: "取り消された連携の再発行は拒否" },
         { status: 403 }
       );
     }
-    return NextResponse.json({ error: "rotate_failed" }, { status: 500 });
+    return jsonUtf8({ error: "rotate_failed" }, { status: 500 });
   }
 }

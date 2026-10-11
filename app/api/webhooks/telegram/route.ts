@@ -12,7 +12,6 @@ import { getVoterBindingByNonce, TELEGRAM_GLOBAL_CHANNEL_KEY } from "@/lib/appro
 function formatJstTimestamp(): string {
   return new Date().toLocaleString("ja-JP", { timeZone: "Asia/Tokyo" });
 }
-import { NextResponse } from "next/server";
 import { fulfillIfApproved } from "@/lib/approvals/fulfill";
 import { runApprovalResolveSideEffects } from "@/lib/approvals/resolve-side-effects";
 import {
@@ -32,6 +31,7 @@ import {
   promptTelegramRevision,
   sendTelegramText,
 } from "@/lib/notify/telegram";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -354,13 +354,13 @@ export async function POST(req: Request) {
     console.error(
       "telegram_webhook_secret_missing: TELEGRAM_WEBHOOK_SECRET is empty; callback_query cannot be accepted (buttons stay dead)"
     );
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: "telegram_webhook_not_configured" },
       { status: 503 }
     );
   }
   if (req.headers.get("x-telegram-bot-api-secret-token") !== secret) {
-    return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
+    return jsonUtf8({ ok: false, error: "unauthorized" }, { status: 401 });
   }
 
   const update = (await req.json().catch(() => ({}))) as TelegramUpdate;
@@ -370,5 +370,5 @@ export async function POST(req: Request) {
   } catch (error) {
     console.error("telegram_webhook_unhandled", error);
   }
-  return NextResponse.json({ ok: true });
+  return jsonUtf8({ ok: true });
 }

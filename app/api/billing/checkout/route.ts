@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 export const runtime = "nodejs";
 
@@ -19,7 +19,7 @@ export const runtime = "nodejs";
  * (see docs/billing-automation-design-20261003.md §7, `billing.*` + always_human).
  */
 export async function POST() {
-  return NextResponse.json(
+  return jsonUtf8(
     {
       ok: false,
       error: "contract_requires_approval",

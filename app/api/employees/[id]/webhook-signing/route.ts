@@ -20,7 +20,6 @@
  * POST (every action, flag ON or OFF) is same-origin only (CSRF):
  * isSameOriginRequest, the same check as /api/auth/set-password → 403.
  */
-import { NextResponse } from "next/server";
 import { getCurrentOrgId } from "@/lib/auth/session";
 import { isSameOriginRequest } from "@/lib/auth/auth-flow";
 import { requireCredentialAdmin } from "@/lib/auth/require-credential-admin";
@@ -33,19 +32,20 @@ import {
   setCallbackPayloadMode,
   type CallbackPayloadMode,
 } from "@/lib/webhooks/settings";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const disabled = () => NextResponse.json({ ok: false, error: "feature_disabled" }, { status: 404 });
+const disabled = () => jsonUtf8({ ok: false, error: "feature_disabled" }, { status: 404 });
 
 async function resolveTarget(req: Request, id: string, actorMemberId: string | null) {
   const gate = await requireCredentialAdmin(req, actorMemberId);
   if (!gate.ok) return { ok: false as const, response: gate.response };
   const orgId = await getCurrentOrgId();
-  if (!orgId) return { ok: false as const, response: NextResponse.json({ ok: false, error: "auth_required" }, { status: 401 }) };
+  if (!orgId) return { ok: false as const, response: jsonUtf8({ ok: false, error: "auth_required" }, { status: 401 }) };
   const employee = await getEmployee(id, orgId);
-  if (!employee) return { ok: false as const, response: NextResponse.json({ ok: false, error: "employee_not_found" }, { status: 404 }) };
+  if (!employee) return { ok: false as const, response: jsonUtf8({ ok: false, error: "employee_not_found" }, { status: 404 }) };
   return { ok: true as const, actor: gate.actor, employee, orgId: employee.orgId || orgId };
 }
 
@@ -55,13 +55,13 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
   const t = await resolveTarget(req, id, null);
   if (!t.ok) return t.response;
   const settings = await getWebhookSettingsView(t.employee.id, t.orgId);
-  if (!settings) return NextResponse.json({ ok: false, error: "settings_unavailable" }, { status: 503 });
-  return NextResponse.json({ ok: true, settings }, { headers: { "cache-control": "no-store" } });
+  if (!settings) return jsonUtf8({ ok: false, error: "settings_unavailable" }, { status: 503 });
+  return jsonUtf8({ ok: true, settings }, { headers: { "cache-control": "no-store" } });
 }
 
 export async function POST(req: Request, ctx: { params: Promise<{ id: string }> }) {
   if (!isSameOriginRequest(req.headers, req.url)) {
-    return NextResponse.json({ ok: false, error: "forbidden" }, { status: 403 });
+    return jsonUtf8({ ok: false, error: "forbidden" }, { status: 403 });
   }
   const flagOn = isWebhookHardeningEnabled();
   const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
@@ -71,14 +71,14 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
   const t = await resolveTarget(req, id, typeof body.actorMemberId === "string" ? body.actorMemberId : null);
   if (!t.ok) return t.response;
   if (t.employee.status === "suspended") {
-    return NextResponse.json({ ok: false, error: "employee_terminated" }, { status: 403 });
+    return jsonUtf8({ ok: false, error: "employee_terminated" }, { status: 403 });
   }
   if (body.action === "mint_callback_secret") {
     let minted: { secret: string; fingerprint: string };
     try {
       minted = await mintCallbackSigningSecret(t.employee.id, t.orgId);
     } catch {
-      return NextResponse.json({ ok: false, error: "settings_unavailable" }, { status: 503 });
+      return jsonUtf8({ ok: false, error: "settings_unavailable" }, { status: 503 });
     }
     const fingerprintPrefix = minted.fingerprint.slice(0, 12);
     await appendAuditEvent({
@@ -90,7 +90,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
       summary: "承認結果の callback の署名用の秘密を発行",
       metadata: { target: "approval_callback", fingerprintPrefix, actorId: t.actor.id },
     }).catch(() => undefined);
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: true, secret: minted.secret, fingerprintPrefix, note: "Shown once. Configure the receiver with this whsec_ secret (Standard Webhooks)." },
       { headers: { "cache-control": "no-store" } }
     );
@@ -98,12 +98,12 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
   if (body.action === "set_callback_payload") {
     const mode = body.mode;
     if (typeof mode !== "string" || !(CALLBACK_PAYLOAD_MODES as readonly string[]).includes(mode)) {
-      return NextResponse.json({ ok: false, error: "invalid_callback_payload" }, { status: 400 });
+      return jsonUtf8({ ok: false, error: "invalid_callback_payload" }, { status: 400 });
     }
     try {
       await setCallbackPayloadMode(t.employee.id, t.orgId, mode as CallbackPayloadMode);
     } catch {
-      return NextResponse.json({ ok: false, error: "settings_unavailable" }, { status: 503 });
+      return jsonUtf8({ ok: false, error: "settings_unavailable" }, { status: 503 });
     }
     await appendAuditEvent({
       orgId: t.orgId,
@@ -114,7 +114,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
       summary: mode === "legacy_full" ? "承認結果の callback を互換の本文（件名・要約・承認者を含む）に設定" : "承認結果の callback を最小の本文に設定",
       metadata: { target: "approval_callback", mode, actorId: t.actor.id, flagOn },
     }).catch(() => undefined);
-    return NextResponse.json({ ok: true, callbackPayload: mode });
+    return jsonUtf8({ ok: true, callbackPayload: mode });
   }
-  return NextResponse.json({ ok: false, error: "invalid_action" }, { status: 400 });
+  return jsonUtf8({ ok: false, error: "invalid_action" }, { status: 400 });
 }

@@ -1,9 +1,9 @@
-import { NextResponse } from "next/server";
 import { getCurrentOrgId } from "@/lib/auth/session";
 import { requireCredentialAdmin } from "@/lib/auth/require-credential-admin";
 import { appendAuditEvent } from "@/lib/data";
 import { adminAgentPublicView, issueOrgAdminAgent, mintAdminSecret } from "@/lib/data/admin-agents";
 import { ADMIN_CREDENTIAL_PREFIX, STAFFPASS_ADMIN_MCP_URL } from "@/lib/mcp/admin-public";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 export const runtime = "nodejs";
 
@@ -20,7 +20,7 @@ export async function POST(req: Request) {
   if (!gate.ok) return gate.response;
   const orgId = (await getCurrentOrgId()) || null;
   if (!orgId) {
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: "auth_required", message: "ログインと組織が必要です" },
       { status: 401 }
     );
@@ -46,7 +46,7 @@ export async function POST(req: Request) {
       actorMemberId: gate.actor.id,
     },
   });
-  return NextResponse.json({
+  return jsonUtf8({
     ok: true,
     agent: adminAgentPublicView(agent),
     mcpUrl: STAFFPASS_ADMIN_MCP_URL,

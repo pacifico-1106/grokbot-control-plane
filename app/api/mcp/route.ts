@@ -29,6 +29,7 @@ import {
   negotiateInitializeVersion,
   shapeModernResult,
 } from "@/lib/mcp/protocol-negotiation";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -55,7 +56,7 @@ function corsHeaders(): HeadersInit {
 }
 
 function jsonRpcResult(id: JsonRpcId, result: unknown, status = 200) {
-  return NextResponse.json(
+  return jsonUtf8(
     { jsonrpc: "2.0", id: id ?? null, result },
     { status, headers: corsHeaders() }
   );
@@ -69,7 +70,7 @@ function jsonRpcError(
   httpStatus = 200,
   extraHeaders?: Record<string, string>
 ) {
-  return NextResponse.json(
+  return jsonUtf8(
     {
       jsonrpc: "2.0",
       id: id ?? null,
@@ -134,7 +135,7 @@ export async function OPTIONS() {
 
 /** GET — server card / discovery (no secret). */
 export async function GET() {
-  return NextResponse.json(serverInfo(), { headers: corsHeaders() });
+  return jsonUtf8(serverInfo(), { headers: corsHeaders() });
 }
 
 /**

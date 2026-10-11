@@ -1,4 +1,3 @@
-import { NextResponse } from "next/server";
 import { requireOrgAdminSession, requireOrgSession } from "@/lib/auth/require-org";
 import {
   getGatewayStatusForOrg,
@@ -6,11 +5,12 @@ import {
   setGatewayStatusForOrg,
 } from "@/lib/data";
 import type { GatewayLinkStatus, IntegrationMode } from "@/lib/types";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 export async function GET() {
   const gate = await requireOrgSession();
   if (!gate.ok) return gate.response;
-  return NextResponse.json({
+  return jsonUtf8({
     status: await getGatewayStatusForOrg(gate.orgId),
     machine: ["disconnected", "pending", "linked"],
     mode: runtimeModeLabel(),
@@ -35,7 +35,7 @@ export async function POST(req: Request) {
   else if (action === "connect") next = "pending";
   else if (action === "handshake") next = "linked";
   await setGatewayStatusForOrg(next, orgId);
-  return NextResponse.json({
+  return jsonUtf8({
     ok: true,
     status: next,
     mode: body.mode || "managed",

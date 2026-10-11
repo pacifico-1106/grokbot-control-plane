@@ -53,7 +53,7 @@ import {
 import { bindEmployeeSlackIdentity, getEmployeeSlackIdentity } from "@/lib/data/slack-identities";
 import { approvalInboxAllowedUsers, resolveSlackApprovalInbox } from "@/lib/admin-mcp/slack-dm-setup";
 import { openApprovalDeliveryDm } from "@/lib/slack/approval-dm-open";
-import { notifyApprovalAppMissingScope } from "@/lib/slack/approval-app-scope-notice";
+import { isApprovalAppFixNoticeCode, notifyApprovalAppFixRequired } from "@/lib/slack/approval-app-scope-notice";
 import {
   allowedSlackAccountIds,
   authorizeLinkApproverFailureNoticeJa,
@@ -319,15 +319,17 @@ export async function issueSlackAuthorizeLink(input: {
     deliveryUserId: input.deliveryUserId || null,
   });
   if (!opened.ok) {
-    if (opened.code === "approval_app_missing_scope" && opened.missingScope && input.via === "ticket") {
-      // APPROVAL_APP_MISSING_SCOPE_NOTICE_ENABLED: tell the approver at once (ids only; no-op when OFF).
-      await notifyApprovalAppMissingScope({
+    if (isApprovalAppFixNoticeCode(opened.code) && input.via === "ticket") {
+      // APPROVAL_APP_MISSING_SCOPE_NOTICE_ENABLED / APPROVAL_APP_FIX_REQUIRED_CODES_ENABLED:
+      // tell the approver at once (ids only; no-op when the code's flag is OFF).
+      await notifyApprovalAppFixRequired({
         orgId,
         approvalId: input.approvalId,
         tool: "setup.slackAuthorizeLink.issue",
         inboxId: inbox.id,
+        code: opened.code,
         apiAppId: typeof inbox.config?.apiAppId === "string" ? inbox.config.apiAppId : null,
-        scope: opened.missingScope,
+        ...(opened.missingScope ? { scope: opened.missingScope } : {}),
         sharedApprovalApp: inbox.config?.sharedApprovalApp === true,
       }).catch(() => undefined);
     }

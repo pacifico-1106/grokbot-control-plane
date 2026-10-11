@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import { NextResponse } from "next/server";
 import { fulfillIfApproved } from "@/lib/approvals/fulfill";
 import { runApprovalResolveSideEffects } from "@/lib/approvals/resolve-side-effects";
 import {
@@ -16,6 +15,7 @@ import { getMemberIdFromVoterBinding } from "@/lib/approval-workflow";
 import { approverAuthorityReplyJa } from "@/lib/approver-authority/reply";
 import { isSlackApprovalStrict } from "@/lib/feature-flags";
 import { isSlackUserFromExpectedTeam } from "@/lib/slack/channel-validation";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -37,7 +37,7 @@ type SlackPayload = {
 };
 
 function ack(extra: Record<string, unknown> = {}) {
-  return NextResponse.json({ ok: true, ...extra });
+  return jsonUtf8({ ok: true, ...extra });
 }
 
 /**
@@ -87,7 +87,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ ref: string }>
       signature,
     })
   ) {
-    return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
+    return jsonUtf8({ ok: false, error: "unauthorized" }, { status: 401 });
   }
 
   const contentType = req.headers.get("content-type") || "";
@@ -104,7 +104,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ ref: string }>
   }
 
   if (payload.type === "url_verification") {
-    return NextResponse.json({ challenge: payload.challenge });
+    return jsonUtf8({ challenge: payload.challenge });
   }
   if (payload.type !== "block_actions") return ack();
 

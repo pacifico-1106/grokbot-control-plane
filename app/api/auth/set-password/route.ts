@@ -8,6 +8,7 @@ import {
   takeRateLimit,
   validateNewPassword,
 } from "@/lib/auth/auth-flow";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 export const runtime = "nodejs";
 
@@ -26,7 +27,7 @@ function back(req: Request, code: string, flow: string | null) {
  */
 export async function POST(req: Request) {
   if (!isSameOriginRequest(req.headers, req.url)) {
-    return NextResponse.json({ error: "forbidden" }, { status: 403 });
+    return jsonUtf8({ error: "forbidden" }, { status: 403 });
   }
   const form = await req.formData().catch(() => null);
   const flowRaw = String(form?.get("flow") || "");

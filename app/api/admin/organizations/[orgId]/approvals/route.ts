@@ -1,7 +1,7 @@
 import { publicApproval } from "@/lib/approvals/public";
-import { NextResponse } from "next/server";
 import { getSuperAdminAccess } from "@/lib/admin/access";
 import { listPendingApprovalsForOrg } from "@/lib/admin/proxy-approve";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 export const runtime = "nodejs";
 
@@ -15,7 +15,7 @@ export async function GET(
 ) {
   const access = await getSuperAdminAccess();
   if (!access.allowed) {
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: "unauthorized" },
       { status: access.reason === "unauthenticated" ? 401 : 403 }
     );
@@ -23,7 +23,7 @@ export async function GET(
 
   const { orgId } = await ctx.params;
   if (!orgId) {
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: "org_id_required" },
       { status: 400 }
     );
@@ -31,14 +31,14 @@ export async function GET(
 
   try {
     const approvals = await listPendingApprovalsForOrg(orgId);
-    return NextResponse.json({
+    return jsonUtf8({
       ok: true,
       approvals: approvals.map(publicApproval),
       count: approvals.length,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "unknown_error";
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: message },
       { status: 500 }
     );

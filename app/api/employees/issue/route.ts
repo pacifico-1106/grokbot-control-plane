@@ -1,7 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import { credentialExpiresAtFromNow, issueExpiryDays } from "@/lib/employees/credential-ttl";
 import { assertWebActorApproverAuthority, webDirectDeniedBody } from "@/lib/approver-authority/web-direct";
-import { NextResponse } from "next/server";
 import { getCurrentOrgId } from "@/lib/auth/session";
 import { assertBillingAllows } from "@/lib/billing/entitlements";
 import { appendAuditEvent, issueEmployee, listNotificationChannels, runtimeModeLabel } from "@/lib/data";
@@ -28,6 +27,7 @@ import { isMcpEndpointHandoffEnabled } from "@/lib/feature-flags";
 import { buildMcpHandoff } from "@/lib/mcp/endpoint-handoff-block";
 import { ApprovalNotifyEmailError, APPROVAL_NOTIFY_EMAIL_MESSAGES_JA, validateApprovalNotifyEmail } from "@/lib/employees/approval-notify-email";
 import type { ActionLimits, AllowedAccount, ApprovalPolicy, EmployeeScope, SpendLimits } from "@/lib/types";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 export const runtime = "nodejs";
 
@@ -79,12 +79,12 @@ export async function POST(req: Request) {
   const displayName = (body.displayName || "").trim();
   const roleLabel = (body.roleLabel || "").trim();
   if (!displayName || !roleLabel) {
-    return NextResponse.json(policyErrorPayload("name_and_role_required"), { status: 400 });
+    return jsonUtf8(policyErrorPayload("name_and_role_required"), { status: 400 });
   }
 
   const scopes = (body.scopes || []) as EmployeeScope[];
   if (!scopes.length || scopes.some((scope) => !ALL_SCOPES.includes(scope))) {
-    return NextResponse.json(policyErrorPayload("scopes_required"), { status: 400 });
+    return jsonUtf8(policyErrorPayload("scopes_required"), { status: 400 });
   }
 
   const hasOrder = scopes.includes("commerce:order");
@@ -95,7 +95,7 @@ export async function POST(req: Request) {
   const toolApprovalDefaults = normalizeToolApprovalDefaults(body.toolApprovalDefaults);
   const orgId = await getCurrentOrgId();
   if (!orgId) {
-    return NextResponse.json(policyErrorPayload("auth_required"), { status: 401 });
+    return jsonUtf8(policyErrorPayload("auth_required"), { status: 401 });
   }
   // Review 2026-10-09 item 1: same guard / same content rule as MCP employees.issue.
   const issueAuthority = await assertWebActorApproverAuthority({
@@ -113,7 +113,7 @@ export async function POST(req: Request) {
     }],
     surface: "employees.issue",
   });
-  if (!issueAuthority.ok) return NextResponse.json(webDirectDeniedBody(issueAuthority), { status: 403 });
+  if (!issueAuthority.ok) return jsonUtf8(webDirectDeniedBody(issueAuthority), { status: 403 });
   const sodVerdict = evaluateSod(scopes, await getOrgSodWarnPolicy(orgId));
   if (
     sodAckRequired({
@@ -122,14 +122,14 @@ export async function POST(req: Request) {
       acknowledged: body.sodOverrideAcknowledged === true,
     })
   ) {
-    return NextResponse.json(policyErrorPayload("sod_ack_required"), { status: 400 });
+    return jsonUtf8(policyErrorPayload("sod_ack_required"), { status: 400 });
   }
 
   // Members-only recipient: an ACTIVE member of this org (case-insensitive).
   // The address is never echoed back in the error.
   const notifyEmail = await validateApprovalNotifyEmail(orgId, body.approvalNotifyEmail);
   if (!notifyEmail.ok) {
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: notifyEmail.code, code: notifyEmail.code, message: notifyEmail.messageJa },
       { status: notifyEmail.code === "approval_notify_email_unverified" ? 503 : 400 }
     );
@@ -153,7 +153,7 @@ export async function POST(req: Request) {
       (await listNotificationChannels(orgId)).map((channel) => channel.id)
     );
     if (!parsedInbox.ok) {
-      return NextResponse.json(policyErrorPayload("approval_channel_not_found"), { status: 400 });
+      return jsonUtf8(policyErrorPayload("approval_channel_not_found"), { status: 400 });
     }
 
     const result = await issueEmployee({
@@ -222,7 +222,7 @@ export async function POST(req: Request) {
       });
     }
 
-    return NextResponse.json({
+    return jsonUtf8({
       ok: true,
       demo: result.demo,
       mode: runtimeModeLabel(),
@@ -263,18 +263,18 @@ export async function POST(req: Request) {
     });
   } catch (e) {
     if (e instanceof ProjectAccessOrgError) {
-      return NextResponse.json(projectAccessRefusalBody(e), { status: projectAccessRefusalStatus(e) });
+      return jsonUtf8(projectAccessRefusalBody(e), { status: projectAccessRefusalStatus(e) });
     }
     if (e instanceof ApprovalNotifyEmailError) {
       // The writer re-checks; a lookup failure there is "could not verify"
       // (503, retry later), never "not a member" (400).
-      return NextResponse.json(
+      return jsonUtf8(
         { ok: false, error: e.code, code: e.code, message: APPROVAL_NOTIFY_EMAIL_MESSAGES_JA[e.code] },
         { status: e.code === "approval_notify_email_unverified" ? 503 : 400 }
       );
     }
     const raw = e instanceof Error ? e.message : "issue_failed";
     const code = raw in POLICY_ERROR_MESSAGES ? raw : "issue_failed";
-    return NextResponse.json(policyErrorPayload(code), { status: 500 });
+    return jsonUtf8(policyErrorPayload(code), { status: 500 });
   }
 }

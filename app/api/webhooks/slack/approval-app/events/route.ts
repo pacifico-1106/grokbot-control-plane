@@ -1,5 +1,5 @@
-import { NextResponse } from "next/server";
 import { handleSharedApprovalAppEvent } from "@/lib/slack/shared-approval-events";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -12,5 +12,5 @@ export async function POST(req: Request) {
     timestamp: req.headers.get("x-slack-request-timestamp") || "",
     signature: req.headers.get("x-slack-signature") || "",
   });
-  return NextResponse.json(result.body, { status: result.status });
+  return jsonUtf8(result.body, { status: result.status });
 }

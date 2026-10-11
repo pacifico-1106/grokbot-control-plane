@@ -14,5 +14,7 @@ export const dynamic = "force-dynamic";
 export async function GET(req: Request) {
   if (!isMcpOAuthEnabled()) return new NextResponse("Not Found", { status: 404 });
   const kind = new URL(req.url).searchParams.get("kind") === "mcp" ? "mcp" : "root";
+  // Kept as is (木村 2026-10-12): METADATA_HEADERS pins application/json for OAuth clients; ASCII-only body.
+  // eslint-disable-next-line staffpass/json-utf8
   return NextResponse.json(protectedResourceMetadata(kind), { headers: METADATA_HEADERS });
 }

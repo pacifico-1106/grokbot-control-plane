@@ -1,5 +1,4 @@
 import { revalidatePath } from "next/cache";
-import { NextResponse } from "next/server";
 import { requireOrgSession } from "@/lib/auth/require-org";
 import { assertBillingAllows } from "@/lib/billing/entitlements";
 import { listMembers, runtimeModeLabel } from "@/lib/data";
@@ -9,6 +8,7 @@ import {
   teamEditability,
 } from "@/lib/team/apply-member-change";
 import type { HumanJobRole } from "@/lib/types";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 export const runtime = "nodejs";
 
@@ -36,7 +36,7 @@ export async function GET(req: Request) {
     const viewer = await resolveMemberChangeActor(req).catch(() => null);
     const actor = viewer?.ok ? viewer.actor : null;
     const editability = teamEditability(actor, members, viewer?.ok ? viewer.authEmail : null);
-    return NextResponse.json({
+    return jsonUtf8({
       ok: true,
       members: members.map((m) => ({ ...m, editable: editability.byMemberId[m.id] })),
       viewer: actor ? { id: actor.id, role: actor.role } : null,
@@ -46,7 +46,7 @@ export async function GET(req: Request) {
     });
   } catch (e) {
     const raw = e instanceof Error ? e.message : "member_list_failed";
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: raw, message: memberErrorMessage(raw) },
       { status: 500 }
     );
@@ -71,7 +71,7 @@ export async function POST(req: Request) {
   // Production: session member only (body/header actor ids ignored). DEMO: demo actor.
   const who = await resolveMemberChangeActor(req, body.actorMemberId);
   if (!who.ok) {
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: who.error, code: who.code, message: who.messageJa },
       { status: who.httpStatus }
     );
@@ -83,7 +83,7 @@ export async function POST(req: Request) {
   const email = (typeof body.email === "string" ? body.email : "").trim().toLowerCase();
   const displayName = (typeof body.displayName === "string" ? body.displayName : "").trim();
   if (!email || !displayName) {
-    return NextResponse.json(
+    return jsonUtf8(
       { error: "name_and_email_required", message: "名前とメールは必須です" },
       { status: 400 }
     );
@@ -91,7 +91,7 @@ export async function POST(req: Request) {
 
   const capabilities = Array.isArray(body.capabilities) ? [...new Set(body.capabilities)] : [];
   if (!capabilities.length) {
-    return NextResponse.json(
+    return jsonUtf8(
       { error: "capabilities_required", message: "権限を1つ以上選んでください" },
       { status: 400 }
     );
@@ -112,7 +112,7 @@ export async function POST(req: Request) {
       source: "team_api",
     });
     if (!result.ok) {
-      return NextResponse.json(
+      return jsonUtf8(
         {
           ok: false,
           error: result.code,
@@ -124,7 +124,7 @@ export async function POST(req: Request) {
       );
     }
     revalidatePath("/app/team");
-    return NextResponse.json({
+    return jsonUtf8({
       ok: true,
       member: result.member,
       demo: runtimeModeLabel() === "demo",
@@ -135,7 +135,7 @@ export async function POST(req: Request) {
     const raw = e instanceof Error ? e.message : "member_upsert_failed";
     const status =
       raw === "org_id_required" || raw === "name_and_email_required" ? 400 : 500;
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: raw, message: memberErrorMessage(raw) },
       { status }
     );

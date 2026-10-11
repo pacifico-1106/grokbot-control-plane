@@ -5,13 +5,14 @@ import { notifyOpsDcrGlobalCapReached } from "@/lib/mcp-oauth/notify";
 import { OAUTH_RATE_LIMITS, ipHash, rateLimit } from "@/lib/mcp-oauth/rate-limit";
 import { matchesRedirectAllowlist } from "@/lib/mcp-oauth/redirect-policy";
 import { randomToken } from "@/lib/mcp-oauth/tokens";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const NO_STORE = { "Cache-Control": "no-store" };
 const err = (status: number, error: string, description: string, extra: Record<string, string> = {}) =>
-  NextResponse.json({ error, error_description: description }, { status, headers: { ...NO_STORE, ...extra } });
+  jsonUtf8({ error, error_description: description }, { status, headers: { ...NO_STORE, ...extra } });
 
 /**
  * RFC 7591 Dynamic Client Registration — MCP_OAUTH_DCR_ENABLED only (Q7).
@@ -74,7 +75,7 @@ export async function POST(req: Request) {
     createdIpHash: ip,
     createdAt: now,
   });
-  return NextResponse.json(
+  return jsonUtf8(
     {
       client_id: clientId,
       client_id_issued_at: Math.floor(Date.parse(now) / 1000),

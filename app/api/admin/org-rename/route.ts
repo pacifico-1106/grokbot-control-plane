@@ -1,10 +1,10 @@
-import { NextResponse } from "next/server";
 import { getSuperAdminAccess } from "@/lib/admin/access";
 import { getOrgMeta } from "@/lib/data/org-context";
 import { appendAuditEvent } from "@/lib/data";
 import { createSupabaseAdminClient } from "@/lib/supabase";
 import { isDemoMode } from "@/lib/mode";
 import { DEMO_ORG } from "@/lib/demo-data";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 export const runtime = "nodejs";
 
@@ -19,7 +19,7 @@ const ORG_NAME_MAX_LENGTH = 200;
 export async function POST(req: Request) {
   const access = await getSuperAdminAccess();
   if (!access.allowed) {
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: "unauthorized" },
       { status: access.reason === "unauthenticated" ? 401 : 403 }
     );
@@ -29,7 +29,7 @@ export async function POST(req: Request) {
   try {
     body = await req.json();
   } catch {
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: "invalid_json" },
       { status: 400 }
     );
@@ -40,21 +40,21 @@ export async function POST(req: Request) {
   const reason = (body.reason || "").trim();
 
   if (!orgId) {
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: "org_id_required" },
       { status: 400 }
     );
   }
 
   if (!newName) {
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: "name_required" },
       { status: 400 }
     );
   }
 
   if (newName.length > ORG_NAME_MAX_LENGTH) {
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: "name_too_long" },
       { status: 400 }
     );
@@ -69,7 +69,7 @@ export async function POST(req: Request) {
     } else {
       const admin = createSupabaseAdminClient();
       if (!admin) {
-        return NextResponse.json(
+        return jsonUtf8(
           { ok: false, error: "supabase_not_configured" },
           { status: 500 }
         );
@@ -79,7 +79,7 @@ export async function POST(req: Request) {
       previousName = orgMeta.name;
 
       if (previousName === newName) {
-        return NextResponse.json({
+        return jsonUtf8({
           ok: true,
           noChange: true,
           previousName,
@@ -96,7 +96,7 @@ export async function POST(req: Request) {
         .eq("id", orgId);
 
       if (error) {
-        return NextResponse.json(
+        return jsonUtf8(
           { ok: false, error: error.message },
           { status: 500 }
         );
@@ -119,14 +119,14 @@ export async function POST(req: Request) {
       },
     });
 
-    return NextResponse.json({
+    return jsonUtf8({
       ok: true,
       previousName,
       newName,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "unknown_error";
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: message },
       { status: 500 }
     );

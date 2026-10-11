@@ -1,9 +1,9 @@
-import { NextResponse } from "next/server";
 import { getStripe, getAppUrl, getCheckoutPaymentMethodTypes } from "@/lib/stripe";
 import { getCatalogItem, getSetupPriceId, getPlanLabel, isValidCheckoutPlan, type CheckoutPlan } from "@/lib/lp/catalog";
 import { isLpOrderLedgerEnabled } from "@/lib/feature-flags";
 import { createOrder, createCheckoutAttempt, updateCheckoutAttemptStatus } from "@/lib/lp/order-ledger";
 import { LP_PAGE_PARAM, lpPageHomePath, normalizeLpPage, resolveLpRef, withLpPageParam } from "@/lib/lp/lp-page";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 const ALLOWED_ORIGINS = [
   process.env.NEXT_PUBLIC_APP_URL,
@@ -40,7 +40,7 @@ export async function GET(req: Request) {
   const appUrl = getAppUrl();
 
   if (!isValidCheckoutPlan(planParam)) {
-    return NextResponse.json(
+    return jsonUtf8(
       { 
         ok: false, 
         error: "invalid_plan", 
@@ -55,7 +55,7 @@ export async function GET(req: Request) {
   const catalogItem = await getCatalogItem(plan);
 
   if (!catalogItem) {
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: "plan_not_found", message: "プランが見つかりません" },
       { status: 404 }
     );
@@ -65,7 +65,7 @@ export async function GET(req: Request) {
   const stripe = getStripe();
   const checkoutAvailable = Boolean(stripe && priceId);
 
-  return NextResponse.json({
+  return jsonUtf8({
     ok: true,
     plan,
     planLabel: getPlanLabel(plan),
@@ -86,7 +86,7 @@ export async function GET(req: Request) {
  */
 export async function POST(req: Request) {
   if (!verifyOrigin(req)) {
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: "origin_denied", message: "不正なリクエストです" },
       { status: 403 }
     );
@@ -96,7 +96,7 @@ export async function POST(req: Request) {
   try {
     body = await req.json();
   } catch {
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: "invalid_json", message: "リクエストが不正です" },
       { status: 400 }
     );
@@ -110,7 +110,7 @@ export async function POST(req: Request) {
   const appUrl = getAppUrl();
 
   if (!planParam || !isValidCheckoutPlan(planParam)) {
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: "invalid_plan", message: "無効なプランです" },
       { status: 400 }
     );
@@ -120,7 +120,7 @@ export async function POST(req: Request) {
   const catalogItem = await getCatalogItem(plan);
 
   if (!catalogItem) {
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: "plan_not_found", message: "プランが見つかりません" },
       { status: 404 }
     );
@@ -130,7 +130,7 @@ export async function POST(req: Request) {
   const priceId = getSetupPriceId(catalogItem);
 
   if (!stripe || !priceId) {
-    return NextResponse.json({
+    return jsonUtf8({
       ok: true,
       fallback: true,
       plan,
@@ -212,7 +212,7 @@ export async function POST(req: Request) {
       await updateCheckoutAttemptStatus(attemptId, "pending", session.id);
     }
 
-    return NextResponse.json({
+    return jsonUtf8({
       ok: true,
       url: session.url,
       sessionId: session.id,
@@ -228,7 +228,7 @@ export async function POST(req: Request) {
       await updateCheckoutAttemptStatus(attemptId, "failed");
     }
 
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: "stripe_error", message: "決済セッションの作成に失敗しました" },
       { status: 500 }
     );

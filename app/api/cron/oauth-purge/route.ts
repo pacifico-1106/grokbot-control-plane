@@ -1,7 +1,7 @@
-import { NextResponse } from "next/server";
 import { getOAuthStore } from "@/lib/data/oauth";
 import { isMcpOAuthEnabled } from "@/lib/mcp-oauth/config";
 import { DCR_STALE_CLIENT_AFTER_SEC } from "@/lib/mcp-oauth/rate-limit";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -16,18 +16,18 @@ export const dynamic = "force-dynamic";
  */
 export async function GET(req: Request) {
   const secret = process.env.CRON_SECRET?.trim() || "";
-  if (!secret) return NextResponse.json({ ok: false, error: "cron_not_configured" }, { status: 503 });
+  if (!secret) return jsonUtf8({ ok: false, error: "cron_not_configured" }, { status: 503 });
   if (req.headers.get("authorization") !== `Bearer ${secret}`) {
-    return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
+    return jsonUtf8({ ok: false, error: "unauthorized" }, { status: 401 });
   }
-  if (!isMcpOAuthEnabled()) return NextResponse.json({ ok: true, skipped: "oauth_disabled" });
+  if (!isMcpOAuthEnabled()) return jsonUtf8({ ok: true, skipped: "oauth_disabled" });
   try {
     const store = getOAuthStore();
     const now = Date.now();
     const purged = await store.purgeExpired(new Date(now).toISOString());
     const staleDcrClients = await store.deleteStaleDcrClients(new Date(now - DCR_STALE_CLIENT_AFTER_SEC * 1000).toISOString());
-    return NextResponse.json({ ok: true, purged, staleDcrClients });
+    return jsonUtf8({ ok: true, purged, staleDcrClients });
   } catch {
-    return NextResponse.json({ ok: false, error: "purge_failed" }, { status: 500 });
+    return jsonUtf8({ ok: false, error: "purge_failed" }, { status: 500 });
   }
 }

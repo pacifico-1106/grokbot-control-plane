@@ -11,5 +11,7 @@ export const JSON_UTF8_CONTENT_TYPE = "application/json; charset=utf-8";
 export function jsonUtf8<T>(body: T, init?: ResponseInit): NextResponse<T> {
   const headers = new Headers(init?.headers);
   headers.set("content-type", JSON_UTF8_CONTENT_TYPE);
+  // The one sanctioned call: headers above always carry the charset.
+  // eslint-disable-next-line staffpass/json-utf8
   return NextResponse.json(body, { ...init, headers });
 }
