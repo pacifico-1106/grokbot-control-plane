@@ -225,3 +225,49 @@ describe("MCP Events: delivery stops, the subscription is not revoked", () => {
     expect(u.ok === false && u.kind).toBe("unavailable");
   });
 });
+
+// Design §9: route × reason × state. Every cell is refused with the right code, nothing
+// reaches an adapter, and the badge is still valid afterwards (release restores access).
+describe("§9 matrix: route × kind × state", () => {
+  const SECRET = `gb_emp_holdmatrix_${"y".repeat(24)}`;
+  const req = () => new Request("https://staffpass.test/api/mcp", { headers: { authorization: `Bearer ${SECRET}` } });
+  const sub = { orgId: ORG, employeeId: EMP, credentialGeneration: 1, credentialFingerprint: "fp", credentialId: null };
+  beforeEach(async () => {
+    await rotateCredential(EMP, ORG, fingerprintSecret(SECRET));
+    __setPrincipalReaderForTests({
+      binding: async () => ({ state: "found" as const, value: { orgId: ORG, status: "linked", credentialGeneration: 1, credentialFingerprint: "fp" } }),
+      employee: async () => ({ state: "found" as const, value: { orgId: ORG, status: "active" } }),
+      credential: async () => ({ state: "missing" as const }),
+    } as never);
+  });
+  const routes: Array<[string, () => Promise<string | null>]> = [
+    ["G1 社員証", async () => { const r = await resolveEmployeeCredential(req()); return r.ok ? null : r.code; }],
+    ["G3 gateway", async () => { const r = await assertExecutable(EMP); return r.ok ? null : r.code; }],
+    ["G4 fulfil", async () => { let ran = 0; try { await executeApproval(approval(), async () => { ran++; return { ok: true }; }); } catch (e) { expect(ran).toBe(0); return (e as Error).message; } return null; }],
+    ["W2 retry", async () => { try { await assertApprovalExecutionAuthority(approval()); } catch (e) { return (e as Error).message; } return null; }],
+    ["pre-send Slack", async () => { const r = await postConversationMessage({ orgId: ORG, employeeId: EMP, channel: "C1", text: "x" }); return r.ok ? null : String(r.error); }],
+    ["MCP Events", async () => { const r = await checkSubscriptionPrincipal(sub, Date.now()); return r.ok ? null : r.kind === "held" ? r.reason : r.kind === "unavailable" ? "hold_state_unavailable" : r.kind; }],
+  ];
+  const states: Array<[string, (kind: "stopped" | "quarantined" | "leave") => void, string]> = [
+    ["employee hold", (kind) => hold.demoSetEmployeeHold(EMP, { kind, holdId: HOLD_ID }), "employee_held"],
+    ["org hold", () => hold.demoSetOrgHold(ORG, { kind: "stopped", holdId: HOLD_ID }), "org_held"],
+    ["unreadable", () => hold.__setHoldReaderForTests(throwingReader), "hold_state_unavailable"],
+  ];
+  for (const [route, call] of routes) {
+    for (const kind of ["stopped", "quarantined", "leave"] as const) {
+      for (const [state, set, code] of states) {
+        if (state !== "employee hold" && kind !== "stopped") continue; // org / unreadable have no kind
+        test(`${route} × ${kind} × ${state} → ${code}`, async () => {
+          set(kind);
+          const got = await call();
+          expect(got === code || (route.startsWith("G4") || route.startsWith("W2") ? got?.includes(code) : false)).toBe(true);
+          // release → back to normal, nothing revoked meanwhile
+          hold.demoSetEmployeeHold(EMP, null);
+          hold.demoSetOrgHold(ORG, null);
+          hold.__setHoldReaderForTests(null);
+          expect((await resolveEmployeeCredential(req())).ok).toBe(true);
+        });
+      }
+    }
+  }
+});
