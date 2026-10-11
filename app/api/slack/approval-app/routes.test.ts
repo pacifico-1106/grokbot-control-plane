@@ -84,7 +84,7 @@ afterEach(() => {
 });
 
 async function start(): Promise<{ state: string; url: URL }> {
-  const res = await startGET();
+  const res = await startGET(new Request("http://localhost/api/slack/approval-app/install/start"));
   expect(res.status).toBe(307);
   const url = new URL(res.headers.get("location")!);
   return { state: url.searchParams.get("state")!, url };
@@ -99,9 +99,9 @@ function callback(params: Record<string, string>) {
 describe("install start", () => {
   test("flag OFF → 404; ON → redirect to Slack with shared client id + bot scopes, nonce cookie set, no-store", async () => {
     process.env.SLACK_SHARED_APPROVAL_APP_ENABLED = "false";
-    expect((await startGET()).status).toBe(404);
+    expect((await startGET(new Request("http://localhost/api/slack/approval-app/install/start"))).status).toBe(404);
     process.env.SLACK_SHARED_APPROVAL_APP_ENABLED = "true";
-    const res = await startGET();
+    const res = await startGET(new Request("http://localhost/api/slack/approval-app/install/start"));
     const url = new URL(res.headers.get("location")!);
     expect(url.origin + url.pathname).toBe("https://slack.com/oauth/v2/authorize");
     expect(url.searchParams.get("client_id")).toBe("999.888");
@@ -112,7 +112,7 @@ describe("install start", () => {
 
   test("env incomplete → 503 page, no redirect", async () => {
     delete process.env.SLACK_SHARED_APPROVAL_CLIENT_SECRET;
-    const res = await startGET();
+    const res = await startGET(new Request("http://localhost/api/slack/approval-app/install/start"));
     expect(res.status).toBe(503);
     expect(await res.text()).toContain("運営");
   });
