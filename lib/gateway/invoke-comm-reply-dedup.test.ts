@@ -186,14 +186,21 @@ describe("flag ON: duplicate replies are suppressed", () => {
 });
 
 describe("channel-independent: LINE and Telegram", () => {
-  test("LINE: second identical reply to the same LINE user is suppressed", async () => {
+  // H1 (10/12): the gateway has no LINE delivery. An allowed LINE reply is
+  // channel_not_supported before the ledger claim (it used to be claimed as
+  // "sent" with nothing sent), so a repeat is not a duplicate either. The
+  // ledger key for LINE itself is still covered below.
+  test("LINE: not sent (channel_not_supported), nothing claimed, a repeat is the same answer", async () => {
     setFlag(true);
     recordSlack();
     const line = () => body({ surface: "line", lineId: LINE_USER });
-    expect((await invoke(line())).httpStatus).toBe(200);
+    const first = await invoke(line());
+    expect(first.httpStatus).toBe(409);
+    expect(first.body.code).toBe("channel_not_supported");
+    expect(demoCommReplySendsForTests()).toHaveLength(0);
     const again = await invoke(line());
-    expect(again.httpStatus).toBe(409);
-    expect(again.body.code).toBe("duplicate_reply_suppressed");
+    expect(again.body.code).toBe("channel_not_supported");
+    expect(posts.length).toBe(0);
   });
 
   test("Telegram: the same guard gives a key and the ledger suppresses the repeat (gateway has no Telegram post yet)", async () => {

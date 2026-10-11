@@ -20,7 +20,7 @@ import { isSlackTokenType, slackReinvokeReason, type SlackReinvokeReason } from 
 type PollInput = {
   status: string;
   approvalId: string;
-  fulfillmentResult: { fileUpload?: unknown } | null | undefined;
+  fulfillmentResult: { fileUpload?: unknown; sent?: unknown } | null | undefined;
   adminResultRequired: boolean;
 };
 
@@ -29,6 +29,9 @@ export function approvalPollHint(input: PollInput): string {
   if (status === "pending") return "continue_polling";
   if (status === "approved") {
     if (!fulfillmentResult || adminResultRequired) return "reinvoke_with_approvalId";
+    // H1: approved but stopped before sending (lib/approvals/not-sent.ts) — a
+    // re-invoke cannot send it either; stop, and do not report it as sent.
+    if (fulfillmentResult.sent === false) return "abort_job";
     const upload = fulfillmentResult.fileUpload;
     return attachmentNotSent(upload) || definiteFailure(upload) ? "reinvoke_with_approvalId" : "fulfilled";
   }

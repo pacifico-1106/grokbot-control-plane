@@ -1,3 +1,4 @@
+import { approverNotSentLineJa } from "@/lib/approvals/not-sent";
 import { approverRequirementCardLinesJa } from "@/lib/approver-authority/card";
 import { cardApprovalReasonsLine, cardDetectedTopicsLine } from "@/lib/approvals/approval-reasons";
 import { attachmentCardLine, readCardAttachment, withoutAttachmentSummaryLine } from "@/lib/approvals/attachment-card";
@@ -208,6 +209,12 @@ async function callTelegram<T = Record<string, unknown>>(
   }
 }
 
+/** H1: approved but stopped before sending → one extra line on the resolved card. */
+function notSentLine(approval: ApprovalRequest, status: string): string {
+  const line = status === "approved" ? approverNotSentLineJa(approval) : null;
+  return line ? `\n${escapeTelegramHtml(line)}` : "";
+}
+
 export function telegramTargetFromChannel(
   channel: NotificationChannelRuntime
 ): TelegramTarget | null {
@@ -297,7 +304,7 @@ export async function editTelegramApprovalForChannel(
   const edited = await callTelegram("editMessageText", {
     chat_id: target.chatId,
     message_id: messageId,
-    text: `${label}\n<b>${escapeTelegramHtml(approval.title)}</b>${note}\n処理者: ${escapeTelegramHtml(actor)}`,
+    text: `${label}\n<b>${escapeTelegramHtml(approval.title)}</b>${note}\n処理者: ${escapeTelegramHtml(actor)}${notSentLine(approval, status)}`,
     parse_mode: "HTML",
     reply_markup: { inline_keyboard: [] },
   }, target.token);
@@ -507,7 +514,7 @@ export async function editTelegramApprovalMessage(
   const edited = await callTelegram("editMessageText", {
     chat_id: chatId,
     message_id: approval.telegramMessageId,
-    text: `${label}\n<b>${escapeTelegramHtml(approval.title)}</b>${note}\n処理者: ${escapeTelegramHtml(actor)}\n時刻: ${escapeTelegramHtml(new Date().toLocaleString("ja-JP", { timeZone: "Asia/Tokyo" }))} JST`,
+    text: `${label}\n<b>${escapeTelegramHtml(approval.title)}</b>${note}\n処理者: ${escapeTelegramHtml(actor)}${notSentLine(approval, status)}\n時刻: ${escapeTelegramHtml(new Date().toLocaleString("ja-JP", { timeZone: "Asia/Tokyo" }))} JST`,
     parse_mode: "HTML",
     disable_web_page_preview: true,
     reply_markup: { inline_keyboard: [] },

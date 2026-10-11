@@ -47,10 +47,10 @@ export const POSTING_PATH_INVENTORY: readonly PostingPath[] = [
     id: "invoke.caller_delivered",
     tools: CONVERSATION_TOOLS,
     surfaces: ["line", "telegram", "mail", "phone"],
-    where: "lib/gateway/invoke.ts (dest なし: 呼び出し側が配送)",
-    coverage: "guarded",
+    where: "lib/gateway/invoke.ts (dest なし: channel_not_supported で未送信)",
+    coverage: "no_live_send",
     flag: "COMM_REPLY_DEDUP_ENABLED",
-    noteJa: "LINE / Telegram / メール面の会話返信は呼び出し側が配送する。許可した時点で台帳に sent として記録し、同じ判定で止める。",
+    noteJa: "LINE / Telegram / メール面の会話返信。ゲートウェイに配送経路がないため、許可されても channel_not_supported（未送信）を返す（H1, 10/12）。台帳にも記録しない。配送を実装するときは台帳（guard）を通すこと。",
   },
   {
     id: "invoke.file_upload",
