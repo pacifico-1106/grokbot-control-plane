@@ -257,10 +257,27 @@ export async function handleLpSetupFeeEvent(
     livemode: decision.record.livemode,
   });
   const recorded = await deps.store.recordPayment({ ...decision.record, firstStripeEventId: eventId });
+  // Recorded earlier while the key was missing → back-fill (only where still null).
+  // A failed write is NOT swallowed (木村 10/12, #344 follow-up): the notice flow
+  // below still runs (dedupe keeps it to one), then we answer 5xx so Stripe
+  // redelivers and the fill-in is tried again.
+  let fillFailed = false;
   if (!recorded.inserted && decision.record.customerEmailHmac) {
-    // Recorded earlier while the key was missing → back-fill (only where still null).
-    await deps.store.fillEmailHmac(sessionId, decision.record.customerEmailHmac).catch(() => false);
+    const hmac = decision.record.customerEmailHmac;
+    fillFailed = true;
+    for (let i = 0; i < FINISH_ATTEMPTS && fillFailed; i++) {
+      try {
+        await deps.store.fillEmailHmac(sessionId, hmac);
+        fillFailed = false;
+      } catch {
+        if (i < FINISH_ATTEMPTS - 1) await sleep(FINISH_BACKOFF_MS[i] ?? 400);
+      }
+    }
   }
+  const fillMissing = () => {
+    console.error("[stripe:webhook:lp-setup-fee] email hash fill-in write failed; answering 5xx for redelivery", { eventId, sessionId });
+    throw new Error("lp_email_hmac_fill_failed");
+  };
   const keyMissing = async () => {
     console.error(`[stripe:webhook:lp-setup-fee] ${LP_EMAIL_HASH_KEY_ENV} not configured; recorded without the email hash, answering 5xx for redelivery`, { eventId, sessionId });
     await alertOps({ kind: "email_hash_key_missing", sessionId, eventId }).catch(() => undefined);
@@ -275,6 +292,7 @@ export async function handleLpSetupFeeEvent(
     if (state === "done") {
       log("duplicate", { eventId, sessionId });
       if (!emailHashKey) await keyMissing();
+      if (fillFailed) fillMissing();
       return { action: "duplicate", mode };
     }
     // Someone else's claim, not finished (in flight, or left over by a failed
@@ -319,6 +337,7 @@ export async function handleLpSetupFeeEvent(
   }
   log(result === "sent" ? "notified" : "no_destination", { eventId, sessionId });
   if (!emailHashKey) await keyMissing();
+  if (fillFailed) fillMissing();
   return { action: result === "sent" ? "notified" : "no_destination", mode };
 }
 

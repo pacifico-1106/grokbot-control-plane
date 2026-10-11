@@ -516,6 +516,41 @@ try:
         released = list(pool.map(_try, releases))
     assert released.count("true") == 1 and released.count("refused") == 11, released
     assert query(f"select count(*) from public.audit_events where org_id = '{eh_org}' and action = 'employee.hold.released';") == "1"
+    # 木村 10/12 (2nd): release of an approved leave hold racing a detector upgrade — 15 rounds, no
+    # deadlock (lock order employee → hold in both), and the employee always ends up held.
+    def _psql(cmd):
+        p = subprocess.run([str(BIN / "psql"), "-X", "-qAt", "-v", "ON_ERROR_STOP=1", "-h", str(cluster), "-p", "55439",
+                            "-U", "test_admin", "-d", "postgres", "-c", cmd], env=env, capture_output=True, text=True)
+        return p.returncode, p.stdout.strip(), p.stderr
+    deadlocks = 0
+    # widen the window: the release's audit insert (between its first and second lock) sleeps 150 ms
+    query("create or replace function security_test.eh_slow_audit() returns trigger language plpgsql as $$ begin perform pg_sleep(0.15); return new; end $$;"
+          "create trigger eh_slow_audit before insert on public.audit_events for each row when (new.action = 'employee.hold.released') execute function security_test.eh_slow_audit();")
+    for i in range(15):
+        hid_l = query(f"set role service_role; select public.start_employee_hold('{eh_org}','{eh_emp}','leave',null,'member:{eh_req}','web',null,now())->>'holdId';").splitlines()[-1]
+        tk = f"e5200000-0000-4000-8000-0000000{i:05d}"
+        query(f"insert into public.approval_requests(id, org_id, purpose, summary, tool, risk, status, metadata) values "
+              f"('{tk}', '{eh_org}', 'admin.policy', 'eh', 'employee.hold.release', 'high', 'pending', '{{\"holdId\":\"{hid_l}\",\"requestedBy\":\"member:{eh_req}\"}}');"
+              f"set role service_role; select public.request_employee_hold_release('{eh_org}','{hid_l}','member:{eh_req}','r','{tk}',now());"
+              f"reset role; update public.approval_requests set status='approved', resolved_by='{eh_appr}', resolved_at=now() where id='{tk}';")
+        rel = f"set role service_role; select public.release_employee_hold('{eh_org}','{hid_l}','eh','{{}}'::jsonb,now())->>'released';"
+        up = (f"set role service_role; select pg_sleep(0.03 + 0.02 * {i % 3}); select public.start_employee_hold('{eh_org}','{eh_emp}','quarantined',null,"
+              f"'system:anomaly','anomaly','signal:race',now())->>'holdId';")
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            res = list(pool.map(_psql, [rel, up]))
+        deadlocks += sum(1 for rc, _, err in res if "deadlock detected" in err)
+        assert res[1][0] == 0, ("detector stop failed", i, res[1][2])
+        assert query(f"select hold_state from public.employees where id = '{eh_emp}';") == "quarantined", (i, res)
+        # reset for the next round: clear the employee (test-only, triggers off)
+        for _stmt in ("alter table public.employees disable trigger employees_hold_guard;",
+                      f"update public.employees set hold_state = null, hold_id = null where id = '{eh_emp}';",
+                      "alter table public.employees enable trigger employees_hold_guard;",
+                      "alter table public.employee_holds disable trigger employee_holds_guard;",
+                      f"delete from public.employee_holds where employee_id = '{eh_emp}';",
+                      "alter table public.employee_holds enable trigger employee_holds_guard;"):
+            query(_stmt)
+    query("drop trigger eh_slow_audit on public.audit_events; drop function security_test.eh_slow_audit();")
+    assert deadlocks == 0, f"{deadlocks} deadlocks in 15 release × detector rounds"
     # 木村 10/12 (6): the rollback refuses while any employee is held — nothing changes
     query(f"set role service_role; select public.start_employee_hold('{eh_org}','{eh_emp}','stopped',null,'member:{eh_req}','web',null,now());")
     try:

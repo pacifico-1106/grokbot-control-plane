@@ -75,6 +75,19 @@ const legacyBody = (a: Awaited<ReturnType<typeof decided>>, status = "approved")
   purpose: a.purpose, risk: a.risk, title: a.title || a.summary.slice(0, 80), summary: a.summary, resolvedBy: "approver@example.com",
   resolvedAt: a.resolvedAt, revisionNote: a.revisionNote, revisionCount: a.revisionCount, parentApprovalId: a.parentApprovalId,
 });
+// The org-email stub id is `stub_${Date.now()}` (lib/resend.ts), so a raw
+// JSON.stringify(r) leak scan for a status like "403"/"500" was flaky whenever the
+// clock's digits contained it. Pin the clock to a value that DOES contain both, so
+// leakScan is deterministic and a regression to scanning the raw id fails every run.
+const COLLIDING_NOW = 1791740350000; // contains "403" and "500"
+async function withCollidingClock<T>(fn: () => Promise<T>): Promise<T> {
+  const realNow = Date.now;
+  Date.now = () => COLLIDING_NOW;
+  try { return await fn(); } finally { Date.now = realNow; }
+}
+// Leak scan over the side-effect result with the volatile stub id replaced by a
+// fixed one, so only real content (error text, receiver status/body) can match.
+const leakScan = (r: unknown) => JSON.stringify(r).replace(/"stub_\d+"/g, '"stub_FIXED"');
 const cbFetches = () => fetchCalls.filter((c) => c.url === CB);
 const wakeAudit = (id: string) => getRuntimeAudit().find((e) => e.action === "agent.approval_wake" && e.metadata?.approvalId === id);
 
@@ -100,9 +113,9 @@ describe("flag OFF (default): the receiver sees exactly today's request", () => 
     r = await run(await decided());
     expect(r.callback).toEqual({ ok: false, skipped: false, error: "timeout" });
     fetchImpl = async () => new Response("internal admin panel", { status: 403 });
-    r = await run(await decided());
+    r = await withCollidingClock(async () => run(await decided()));
     expect(r.callback).toEqual({ ok: false, skipped: false, error: "http_4xx" });
-    expect(JSON.stringify(r)).not.toMatch(/ECONNREFUSED|10\.0\.0\.5|aborted|admin panel|403/);
+    expect(leakScan(r)).not.toMatch(/ECONNREFUSED|10\.0\.0\.5|aborted|admin panel|403/);
   });
   test("wake audit (handoff on) records the category, not the receiver status", async () => {
     process.env.MCP_ENDPOINT_HANDOFF_ENABLED = "true";
@@ -237,9 +250,9 @@ describe("flag ON: hardened delivery", () => {
     expect(r.callback).toEqual({ ok: false, skipped: false, error: "redirect_refused" });
     expect(sent).toHaveLength(1);
     receiverStatus = 500;
-    r = await run(await decided());
+    r = await withCollidingClock(async () => run(await decided()));
     expect(r.callback).toEqual({ ok: false, skipped: false, error: "http_5xx" });
-    expect(JSON.stringify(r)).not.toMatch(/receiver internal|10\.1\.2\.3|500/);
+    expect(leakScan(r)).not.toMatch(/receiver internal|10\.1\.2\.3|500/);
   });
   test("settings unreadable → not sent (fail closed), category config_unavailable", async () => {
     settings.__setWebhookSettingsFailureForTests(true);
