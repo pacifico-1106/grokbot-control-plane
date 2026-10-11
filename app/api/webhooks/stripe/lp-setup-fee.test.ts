@@ -56,7 +56,20 @@ mock.module("@/lib/billing/stripe-plan-webhook", () => ({ processSubscriptionFor
 mock.module("@/lib/external-contract-card/webhook-handler", () => ({
   processCardSetupWebhook: async () => ({ processed: true, eventType: "unknown", action: "ignored", orgId: null }),
 }));
-mock.module("@/lib/data/audit", () => ({ appendAuditEvent: async () => undefined }));
+const audits: Array<{ orgId: string; action: string; summary: string; metadata: Record<string, unknown> }> = [];
+mock.module("@/lib/data/audit", () => ({
+  appendAuditEvent: async (e: { orgId: string; action: string; summary: string; metadata: Record<string, unknown> }) => void audits.push(e),
+}));
+const opsMails: Array<{ to: string[]; subject: string; html: string; text?: string }> = [];
+mock.module("@/lib/resend", () => ({
+  sendTransactionalEmail: async (i: { to: string | string[]; subject: string; html: string; text?: string }) => {
+    opsMails.push({ ...i, to: Array.isArray(i.to) ? i.to : [i.to] });
+    return { ok: true };
+  },
+  getEmailFrom: () => "noreply@staffpass.example",
+  renderStubHtml: (t: string, b: string) => `${t}${b}`,
+}));
+const OPS_ORG = "0f000000-0000-4000-8000-0000000000aa";
 let ledger = realLedger.createMemoryStripeWebhookEventStore();
 let ledgerOverride: realLedgerModule.StripeWebhookEventStore | null | undefined;
 mock.module("@/lib/billing/stripe-webhook-ledger", () => ({
@@ -93,6 +106,7 @@ function restoreConsole() {
 }
 
 const { POST } = await import("./route");
+const realLpPayment = await import("@/lib/lp/setup-fee-payment");
 
 let seq = 0;
 function lpSession(over: Record<string, unknown> = {}) {
@@ -135,6 +149,11 @@ beforeEach(() => {
   process.env.BILLING_NOTIFY_EMAIL = "ops@staffpass.example";
   process.env.STRIPE_WEBHOOK_SECRET = SECRET;
   process.env.LP_CUSTOMER_EMAIL_HASH_KEY = EMAIL_KEY;
+  process.env.PLATFORM_OPS_ORG_ID = OPS_ORG;
+  process.env.APPROVAL_ALERT_OPS_EMAILS = "ops-alert@staffpass.example";
+  audits.length = 0;
+  opsMails.length = 0;
+  (realLpPayment as { resetLpOpsAlertThrottleForTests?: () => void }).resetLpOpsAlertThrottleForTests?.();
   ledger = realLedger.createMemoryStripeWebhookEventStore();
   ledgerOverride = undefined;
   lpStore = realStore.createMemoryLpProvisioningStore();
@@ -322,32 +341,137 @@ describe("dedupe: event id and Session id", () => {
   });
 });
 
-describe("LP_CUSTOMER_EMAIL_HASH_KEY missing → fail closed", () => {
+const opsAlertText = () => [...audits.map((a) => `${a.summary} ${JSON.stringify(a.metadata)}`), ...opsMails.map((m) => `${m.subject} ${m.html} ${m.text ?? ""}`)].join("\n").toLowerCase();
+
+describe("LP_CUSTOMER_EMAIL_HASH_KEY missing (木村 10/12 on #342 follow-up): notice still goes out, 5xx so Stripe redelivers, ops alerted", () => {
   for (const v of [undefined, "", "replace_me"]) {
-    test(`key ${v === undefined ? "unset" : JSON.stringify(v)}: 200, event recorded as ignored (email_hash_key_missing), nothing stored, no Stripe call, no notice`, async () => {
+    test(`key ${v === undefined ? "unset" : JSON.stringify(v)}: 500; payment recorded without the hash; notice sent once (says hash not saved); ops alerted without PII; ledger not processed`, async () => {
       if (v === undefined) delete process.env.LP_CUSTOMER_EMAIL_HASH_KEY;
       else process.env.LP_CUSTOMER_EMAIL_HASH_KEY = v;
       const evt = makeEvent("checkout.session.completed", lpSession());
       const res = await POST(signed(evt));
-      expect(res.status).toBe(200);
-      expect((await res.json()).lpSetupFee).toEqual({ action: "ignored", reason: "email_hash_key_missing", mode: "dry_run" });
-      expect(lpStore.events.get(evt.id)).toMatchObject({ outcome: "ignored", reason: "email_hash_key_missing", stripeCheckoutSessionId: "cs_test_lp1" });
-      expect(lpStore.payments.size).toBe(0);
-      expect(sessionRetrieves).toEqual([]);
-      expect(noticesSent()).toBe(0);
-      expect(logs.join("\n")).toContain("LP_CUSTOMER_EMAIL_HASH_KEY");
-      expect(ledger.rows.get(evt.id)?.status).toBe("processed");
+      expect(res.status).toBe(500);
+      const row = lpStore.payments.get("cs_test_lp1")!;
+      expect(row).toMatchObject({ customerEmailHmac: null, customerEmailDomain: "customer-corp.co.jp", noticeResult: "sent", amountTotal: 165000 });
+      expect(slackPosts).toHaveLength(1);
+      expect(emails).toHaveLength(1);
+      expect(JSON.parse(slackPosts[0].body).text).toContain("照合用ハッシュ: 未保存");
+      expect(audits.filter((a) => a.orgId === OPS_ORG && a.action === "lp.setup_fee.email_hash_key_missing")).toHaveLength(1);
+      expect(opsMails).toHaveLength(1);
+      expect(opsMails[0].to).toEqual(["ops-alert@staffpass.example"]);
+      expect(opsAlertText()).toContain("lp_customer_email_hash_key");
+      expect(opsAlertText()).toContain("cs_test_lp1");
+      expect(opsAlertText()).not.toContain("hanako");
+      expect(opsAlertText()).not.toContain("customer-corp");
+      expect(ledger.rows.get(evt.id)?.status).not.toBe("processed");
     });
   }
-  test("after the key is set, re-sending the same event from Stripe records and notifies once", async () => {
+  test("redelivery while the key is still missing → 500 again, no second notice, ops alert throttled", async () => {
     delete process.env.LP_CUSTOMER_EMAIL_HASH_KEY;
-    ledgerOverride = null; // Stripe dashboard "resend" re-delivers the same event id; the app ledger is bypassed here
     const evt = makeEvent("checkout.session.completed", lpSession());
-    await POST(signed(evt));
+    expect((await POST(signed(evt))).status).toBe(500);
+    expect((await POST(signed(evt))).status).toBe(500);
+    expect(noticesSent()).toBe(2);
+    expect(opsMails).toHaveLength(1);
+  });
+  test("after the key is set, Stripe's redelivery → 200, hash back-filled, still exactly one notice", async () => {
+    delete process.env.LP_CUSTOMER_EMAIL_HASH_KEY;
+    const evt = makeEvent("checkout.session.completed", lpSession());
+    expect((await POST(signed(evt))).status).toBe(500);
     process.env.LP_CUSTOMER_EMAIL_HASH_KEY = EMAIL_KEY;
-    const body = await (await POST(signed(evt))).json();
-    expect(body.lpSetupFee.action).toBe("notified");
-    expect(lpStore.payments.size).toBe(1);
+    const res = await POST(signed(evt));
+    expect(res.status).toBe(200);
+    expect((await res.json()).lpSetupFee.action).toBe("duplicate");
+    expect(lpStore.payments.get("cs_test_lp1")!.customerEmailHmac).toBe(
+      createHmac("sha256", EMAIL_KEY).update(EMAIL.toLowerCase(), "utf8").digest("hex")
+    );
+    expect(noticesSent()).toBe(2);
+  });
+  test("an unpaid Session with the key missing → ignored as before (200, no notice, no alert)", async () => {
+    delete process.env.LP_CUSTOMER_EMAIL_HASH_KEY;
+    sessionImpl = async () => lpSession({ payment_status: "unpaid" });
+    const res = await POST(signed(makeEvent("checkout.session.completed", lpSession())));
+    expect(res.status).toBe(200);
+    expect(noticesSent()).toBe(0);
+    expect(opsMails).toHaveLength(0);
+  });
+});
+
+describe("legacy Session without lpPage → page A", () => {
+  test("no lpPage in metadata → recorded as ai-employee and the notice shows page A, not 不正な値", async () => {
+    sessionImpl = async () => lpSession({ metadata: { source: "lp-ai-employee", plan: "proper" } });
+    await POST(signed(makeEvent("checkout.session.completed", lpSession())));
+    expect(lpStore.payments.get("cs_test_lp1")!.lpPage).toBe("ai-employee");
+    const text = JSON.parse(slackPosts[0].body).text as string;
+    expect(text).toContain("/lp/ai-employee");
+    expect(text).not.toContain("流入ページ: 不正な値");
+  });
+});
+
+describe("the 'sent' / release write fails (木村 10/12): never left undelivered, still one notice per Session", () => {
+  test("recording 'sent' fails once → retried in-process → 200 notified, recorded, one notice", async () => {
+    const real = lpStore.finishNotice.bind(lpStore);
+    let calls = 0;
+    lpStore.finishNotice = async (...a) => {
+      if (++calls === 1) throw new Error("lp_notice_finish_failed");
+      return real(...a);
+    };
+    const res = await POST(signed(makeEvent("checkout.session.completed", lpSession())));
+    expect(res.status).toBe(200);
+    expect((await res.json()).lpSetupFee.action).toBe("notified");
+    expect(lpStore.payments.get("cs_test_lp1")!.noticeResult).toBe("sent");
+    expect(noticesSent()).toBe(2);
+  });
+  test("recording 'sent' keeps failing → 200 (it WAS delivered, no resend), ops alerted (notice_record_failed)", async () => {
+    lpStore.finishNotice = async () => {
+      throw new Error("lp_notice_finish_failed");
+    };
+    const res = await POST(signed(makeEvent("checkout.session.completed", lpSession())));
+    expect(res.status).toBe(200);
+    expect(noticesSent()).toBe(2);
+    expect(audits.some((a) => a.orgId === OPS_ORG && a.action === "lp.setup_fee.notice_record_failed")).toBe(true);
+    expect(opsAlertText()).not.toContain("hanako");
+  });
+  test("send failed AND the claim release failed → 500; a redelivery while the leftover claim is fresh → 500 (not a 200 'duplicate'), nothing sent", async () => {
+    slackOk = false;
+    emailOk = false;
+    lpStore.finishNotice = async () => {
+      throw new Error("lp_notice_finish_failed");
+    };
+    const evt = makeEvent("checkout.session.completed", lpSession());
+    expect((await POST(signed(evt))).status).toBe(500);
+    expect(lpStore.payments.get("cs_test_lp1")!.noticeClaimToken).not.toBeNull();
+    slackOk = true;
+    emailOk = true;
+    slackPosts.length = 0;
+    emails.length = 0;
+    const second = await POST(signed(evt));
+    expect(second.status).toBe(500);
+    expect(noticesSent()).toBe(0);
+  });
+  test("…and once the leftover claim is stale, the next delivery picks it up and sends exactly once (labelled possible resend)", async () => {
+    const realFinish = lpStore.finishNotice.bind(lpStore);
+    slackOk = false;
+    emailOk = false;
+    lpStore.finishNotice = async () => {
+      throw new Error("lp_notice_finish_failed");
+    };
+    const evt = makeEvent("checkout.session.completed", lpSession());
+    expect((await POST(signed(evt))).status).toBe(500);
+    lpStore.finishNotice = realFinish;
+    slackOk = true;
+    emailOk = true;
+    slackPosts.length = 0;
+    emails.length = 0;
+    lpStore.payments.get("cs_test_lp1")!.noticeClaimedAt = Date.now() - 11 * 60_000;
+    const res = await POST(signed(evt));
+    expect(res.status).toBe(200);
+    expect((await res.json()).lpSetupFee.action).toBe("notified");
+    expect(noticesSent()).toBe(2);
+    expect(JSON.parse(slackPosts[0].body).text).toContain("重複の可能性");
+    expect(lpStore.payments.get("cs_test_lp1")!.noticeResult).toBe("sent");
+    const third = await POST(signed(makeEvent("checkout.session.async_payment_succeeded", lpSession())));
+    expect((await third.json()).lpSetupFee.action).toBe("duplicate");
     expect(noticesSent()).toBe(2);
   });
 });

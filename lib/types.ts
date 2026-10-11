@@ -477,6 +477,8 @@ export type AuditAction =
   | "oauth.refresh_reuse_detected"
   | "oauth.refresh_replay_in_grace"
   | "oauth.dcr_global_cap_reached"
+  | "lp.setup_fee.email_hash_key_missing"
+  | "lp.setup_fee.notice_record_failed"
   | "tool.invoke"
   | "comm.delete.succeeded"
   | "comm.delete.already_deleted"
