@@ -11,15 +11,16 @@ export const runtime = "nodejs";
  * subscription Checkout Session with a free trial, without human approval.
  * Since 10/04 (八坂さん: consolidate on the AI社員パック) the plans it sold are
  * retired, so the answer is explicit:
- * - planKey "business" (AI社員 Lite) / "managed" (AI社員 Standard) → 410 plan_retired
- * - anything else (starter, unknown keys, raw price ids, bad JSON) → 404
+ * - planKey "business" (AI社員 Lite) / "managed" (AI社員 Standard) / "starter"
+ *   (older plan, retired per 木村 on #343) → 410 plan_retired
+ * - anything else (unknown keys, raw price ids, bad JSON) → 404
  *   price_not_purchasable. This route's purchasable allowlist is EMPTY.
  *
  * The body is read only to choose between those two messages. No Price ID is
  * ever taken from it. The AI社員パック (/api/lp/ai-employee/checkout) is the
  * only purchase path; it checks lib/billing/purchasable-prices.
  */
-const RETIRED_PLAN_KEYS = new Set(["business", "managed"]);
+const RETIRED_PLAN_KEYS = new Set(["business", "managed", "starter"]);
 
 export async function POST(req: Request) {
   let planKey: unknown;

@@ -144,7 +144,7 @@ export async function POST(req: Request) {
 
   // Allowlist gate (before the order ledger and Stripe): the catalog (incl. a DB
   // row when LP_CATALOG_DB_ENABLED) may only charge an AI社員パック setup Price.
-  // Retired BUSINESS / MANAGED → 410, anything else → 404. Never from the body.
+  // Retired BUSINESS / MANAGED / STARTER → 410, anything else → 404. Never from the body.
   const purchasable = checkPurchasablePrice(priceId);
   if (!purchasable.ok) {
     console.warn("[checkout] refused non-purchasable price", { plan, error: purchasable.error });

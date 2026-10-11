@@ -5,10 +5,11 @@
  * configured value of one of PURCHASABLE_PRICE_ENV_KEYS (the AI社員パック setup
  * fees). Everything else — the retired plans, starter, add-ons, unknown ids —
  * is refused. 八坂さん decided on 2026-10-04 to consolidate on the AI社員パック,
- * so STRIPE_PRICE_ID_BUSINESS (AI社員 Lite) and STRIPE_PRICE_ID_MANAGED
- * (AI社員 Standard) are retired: refused with 410 and a clear message.
+ * so STRIPE_PRICE_ID_BUSINESS (AI社員 Lite), STRIPE_PRICE_ID_MANAGED
+ * (AI社員 Standard) and the older STRIPE_PRICE_ID_STARTER are retired: refused
+ * with 410 and a clear message (STARTER added per 木村 on #343).
  *
- * This only gates NEW purchases. Existing BUSINESS / MANAGED subscribers keep
+ * This only gates NEW purchases. Existing STARTER / BUSINESS / MANAGED subscribers keep
  * the Billing Portal (cancel, invoices, payment method), plan display and
  * webhook processing — none of those paths call this.
  *
@@ -23,13 +24,17 @@ export const PURCHASABLE_PRICE_ENV_KEYS = [
 ] as const;
 
 /** Retired 2026-10-04. Only used to pick the 410 message; the allowlist is what blocks. */
-export const RETIRED_PRICE_ENV_KEYS = ["STRIPE_PRICE_ID_BUSINESS", "STRIPE_PRICE_ID_MANAGED"] as const;
+export const RETIRED_PRICE_ENV_KEYS = [
+  "STRIPE_PRICE_ID_BUSINESS",
+  "STRIPE_PRICE_ID_MANAGED",
+  "STRIPE_PRICE_ID_STARTER",
+] as const;
 
 /** Where new customers should go instead (relative, same origin). */
 export const AI_EMPLOYEE_PACK_PURCHASE_PATH = "/lp/ai-employee#pricing";
 
 export const PLAN_RETIRED_MESSAGE_JA =
-  "このプラン（AI社員 Lite / AI社員 Standard）の新規のお申し込みは終了しました。新しくご契約いただく場合は AI社員パックをお選びください。すでにご契約中の方は、引き続き「契約内容を管理」から請求書の確認・お支払い方法の変更・解約ができます。";
+  "このプラン（AI社員 Lite / AI社員 Standard などの旧プラン）の新規のお申し込みは終了しました。新しくご契約いただく場合は AI社員パックをお選びください。すでにご契約中の方は、引き続き「契約内容を管理」から請求書の確認・お支払い方法の変更・解約ができます。";
 
 export const PRICE_NOT_PURCHASABLE_MESSAGE_JA =
   "このプランはオンラインでお申し込みいただけません。AI社員パックをお選びいただくか、お問い合わせください。";
