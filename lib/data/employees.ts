@@ -44,23 +44,28 @@ export async function listEmployees(orgId?: string | null): Promise<Employee[]> 
 
   if (error || !employees) return [];
 
+  // Newest non-revoked credential per employee (same rule as getEmployeeById /
+  // getCurrentEmployeeCredential). id + expires_at only — never key material.
   const { data: creds } = await admin
     .from("credentials")
-    .select("id, employee_id")
+    .select("id, employee_id, expires_at, created_at")
     .eq("org_id", orgId)
-    .is("revoked_at", null);
+    .is("revoked_at", null)
+    .order("created_at", { ascending: false });
 
-  const credByEmp = new Map<string, string>();
+  const credByEmp = new Map<string, { id: string; expiresAt: string | null }>();
   for (const c of creds || []) {
-    const row = c as { id: string; employee_id: string };
+    const row = c as { id: string; employee_id: string; expires_at?: string | null };
     if (!credByEmp.has(row.employee_id)) {
-      credByEmp.set(row.employee_id, row.id);
+      credByEmp.set(row.employee_id, { id: String(row.id), expiresAt: row.expires_at ?? null });
     }
   }
 
   return employees.map((row) => {
     const mapped = mapEmployeeRow(row as Record<string, unknown>);
-    mapped.credentialId = credByEmp.get(mapped.id) ?? null;
+    const cred = credByEmp.get(mapped.id);
+    mapped.credentialId = cred?.id ?? null;
+    mapped.credentialExpiresAt = cred?.expiresAt ?? null;
     return mapped;
   });
 }
@@ -97,7 +102,7 @@ export async function getEmployeeById(id: string): Promise<Employee | null> {
 
   const { data: cred } = await admin
     .from("credentials")
-    .select("id")
+    .select("id, expires_at")
     .eq("employee_id", id)
     .is("revoked_at", null)
     .order("created_at", { ascending: false })
@@ -105,7 +110,9 @@ export async function getEmployeeById(id: string): Promise<Employee | null> {
     .maybeSingle();
 
   if (cred) {
-    mapped.credentialId = String((cred as { id: string }).id);
+    const row = cred as { id: string; expires_at?: string | null };
+    mapped.credentialId = String(row.id);
+    mapped.credentialExpiresAt = row.expires_at ?? null;
   }
   return mapped;
 }
@@ -214,6 +221,7 @@ export async function issueEmployee(
       approvalChannelId: input.approvalChannelId?.trim() || null,
       approverUserIds: normalizeApproverUserIds(input.approverUserIds),
       credentialId,
+      credentialExpiresAt: input.expiresAt ?? null,
       createdAt: new Date().toISOString(),
     };
     addRuntimeEmployee(employee, input.auditSummary, {

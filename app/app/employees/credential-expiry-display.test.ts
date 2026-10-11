@@ -100,7 +100,7 @@ describe("AI社員 detail", () => {
     expect(subtitle).not.toContain("稼働中");
     expect(out).toContain("社員証の有効期限");
     expect(out).toContain("2026/09/30 23:59 JST");
-    expect(out).toContain("社員証を再発行");
+    expect(out).toContain("期限切れのため、この社員証では接続できません");
     for (const re of SECRET_MARKERS) expect(re.test(out)).toBe(false);
   });
   test("no expiry → 無期限; valid → 稼働中", async () => {
