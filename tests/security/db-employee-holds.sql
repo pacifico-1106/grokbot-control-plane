@@ -21,6 +21,8 @@
 --      approver, the ticket says singleOwnerSelfRelease, and a reason is given
 --  (9) an ops-console hold cannot be released by a tenant member
 -- (10) org-wide hold: kind 'stopped' only; sets orgs.hold_state
+-- (11) stronger re-stop upgrades (history), same / weaker keeps; (12) terminated employees stoppable;
+-- (13) ops-console holds: no release request / release from the tenant side or AI
 \set ON_ERROR_STOP 1
 reset role;
 
@@ -311,6 +313,123 @@ begin
     if position('ops_hold_ops_only' in sqlerrm) = 0 then raise; end if;
   end;
 end $$;
+
+-- (11) 木村 10/12: re-stop with a STRONGER kind upgrades (ops > auto cutoff / incident > leave) and is
+--      recorded in the history; same or weaker keeps the existing hold; held tickets follow the new hold.
+insert into public.employees(id, org_id, display_name, role_label) values
+  ('e5100000-0000-4000-8000-000000000011', 'e5000000-0000-4000-8000-000000000001', 'eh emp upgrade', 'r'),
+  ('e5100000-0000-4000-8000-000000000012', 'e5000000-0000-4000-8000-000000000001', 'eh emp terminated', 'r')
+on conflict (id) do nothing;
+update public.employees set status = 'suspended' where id = 'e5100000-0000-4000-8000-000000000012';
+insert into public.approval_requests(id, org_id, employee_id, purpose, summary, tool, risk, status, metadata) values
+  ('e5200000-0000-4000-8000-000000000011', 'e5000000-0000-4000-8000-000000000001', 'e5100000-0000-4000-8000-000000000011', 'p', 'pending up', 'slack.post', 'low', 'pending', '{}');
+do $$
+declare r jsonb; leave_id uuid; stop_id uuid; ops_id uuid;
+begin
+  r := public.start_employee_hold('e5000000-0000-4000-8000-000000000001','e5100000-0000-4000-8000-000000000011','leave','休職',
+        'member:e5300000-0000-4000-8000-000000000001','web',null,now());
+  leave_id := (r->>'holdId')::uuid;
+  -- weaker-or-equal re-stop (leave again) → existing
+  r := public.start_employee_hold('e5000000-0000-4000-8000-000000000001','e5100000-0000-4000-8000-000000000011','leave',null,
+        'member:e5300000-0000-4000-8000-000000000002','web',null,now());
+  if (r->>'holdId')::uuid <> leave_id or (r->>'created')::boolean or coalesce((r->>'upgraded')::boolean, false) then
+    raise exception 'employee holds: equal re-stop changed the hold %', r; end if;
+  -- leave → incident stop (stronger) → upgrade
+  r := public.start_employee_hold('e5000000-0000-4000-8000-000000000001','e5100000-0000-4000-8000-000000000011','stopped','漏えいの疑い',
+        'member:e5300000-0000-4000-8000-000000000002','slack',null,now());
+  stop_id := (r->>'holdId')::uuid;
+  if stop_id = leave_id or not (r->>'upgraded')::boolean or (r->>'previousHoldId')::uuid <> leave_id then
+    raise exception 'employee holds: leave → stopped did not upgrade %', r; end if;
+  if (select hold_state from public.employees where id = 'e5100000-0000-4000-8000-000000000011') <> 'stopped'
+     or (select hold_id from public.employees where id = 'e5100000-0000-4000-8000-000000000011') <> stop_id then
+    raise exception 'employee holds: employee not moved to the upgraded hold'; end if;
+  if (select superseded_by from public.employee_holds where id = leave_id) <> stop_id
+     or (select upgraded_from from public.employee_holds where id = stop_id) <> leave_id
+     or (select released_at from public.employee_holds where id = leave_id) is not null then
+    raise exception 'employee holds: upgrade not recorded in the history'; end if;
+  if (select metadata->>'heldByHoldId' from public.approval_requests where id = 'e5200000-0000-4000-8000-000000000011') <> stop_id::text then
+    raise exception 'employee holds: held ticket did not follow the upgraded hold'; end if;
+  -- the superseded hold can neither be requested for release nor released
+  begin
+    perform public.request_employee_hold_release('e5000000-0000-4000-8000-000000000001', leave_id, 'member:e5300000-0000-4000-8000-000000000002', 'r', 'e5200000-0000-4000-8000-000000000011', now());
+    raise exception 'employee holds: superseded hold accepted a release request';
+  exception when others then if position('hold_not_found' in sqlerrm) = 0 then raise; end if; end;
+  -- quarantined (auto cutoff) has the same rank as an incident stop → existing (no downgrade / sideways move)
+  r := public.start_employee_hold('e5000000-0000-4000-8000-000000000001','e5100000-0000-4000-8000-000000000011','quarantined',null,
+        'system:anomaly','anomaly','signal:outbound_burst>20',now());
+  if (r->>'holdId')::uuid <> stop_id or coalesce((r->>'upgraded')::boolean, false) then raise exception 'employee holds: same-rank re-stop moved %', r; end if;
+  -- weaker (leave) after a stop → existing
+  r := public.start_employee_hold('e5000000-0000-4000-8000-000000000001','e5100000-0000-4000-8000-000000000011','leave',null,
+        'member:e5300000-0000-4000-8000-000000000001','web',null,now());
+  if (r->>'holdId')::uuid <> stop_id then raise exception 'employee holds: weaker re-stop moved the hold %', r; end if;
+  -- ops stop (strongest) → upgrade
+  r := public.start_employee_hold('e5000000-0000-4000-8000-000000000001','e5100000-0000-4000-8000-000000000011','stopped','ops',
+        'ops:ops-fixture','ops_console',null,now());
+  ops_id := (r->>'holdId')::uuid;
+  if ops_id = stop_id or not (r->>'upgraded')::boolean then raise exception 'employee holds: ops stop did not upgrade %', r; end if;
+  -- and nothing a tenant member does can move it down again
+  r := public.start_employee_hold('e5000000-0000-4000-8000-000000000001','e5100000-0000-4000-8000-000000000011','stopped',null,
+        'member:e5300000-0000-4000-8000-000000000001','web',null,now());
+  if (r->>'holdId')::uuid <> ops_id then raise exception 'employee holds: member re-stop replaced an ops hold'; end if;
+  if (select count(*) from public.employee_holds where employee_id = 'e5100000-0000-4000-8000-000000000011') <> 3 then
+    raise exception 'employee holds: expected 3 history rows (leave, stop, ops)'; end if;
+end $$;
+
+-- (12) 木村 10/12: a terminated employee (status = suspended) can still be stopped (leaked key / decoy key)
+do $$
+declare r jsonb;
+begin
+  r := public.start_employee_hold('e5000000-0000-4000-8000-000000000001','e5100000-0000-4000-8000-000000000012','stopped','decoy key used',
+        'member:e5300000-0000-4000-8000-000000000001','web',null,now());
+  if not (r->>'created')::boolean
+     or (select hold_state from public.employees where id = 'e5100000-0000-4000-8000-000000000012') <> 'stopped'
+     or (select status from public.employees where id = 'e5100000-0000-4000-8000-000000000012') <> 'suspended' then
+    raise exception 'employee holds: terminated employee could not be stopped %', r; end if;
+end $$;
+
+-- (13) 木村 10/12: an ops-console hold is released only in S4 (two ops). Until then neither the tenant
+--      side nor AI can release it: no request, no release, whatever the requester / ticket.
+do $$
+declare hid uuid := (select hold_id from public.employees where id = 'e5100000-0000-4000-8000-000000000011');
+begin
+  insert into public.approval_requests(id, org_id, purpose, summary, tool, risk, status, metadata, resolved_by, resolved_at) values
+    ('e5200000-0000-4000-8000-0000000000e1', 'e5000000-0000-4000-8000-000000000001', 'admin.policy', 'ops release attempt', 'employee.hold.release', 'high', 'approved',
+     jsonb_build_object('holdId', hid), 'e5300000-0000-4000-8000-000000000006', now());
+  begin
+    perform public.request_employee_hold_release('e5000000-0000-4000-8000-000000000001', hid, 'member:e5300000-0000-4000-8000-000000000001', 'please', 'e5200000-0000-4000-8000-0000000000e1', now());
+    raise exception 'employee holds: tenant owner requested release of an ops hold';
+  exception when others then if position('ops_hold_ops_only' in sqlerrm) = 0 then raise; end if; end;
+  begin
+    perform public.request_employee_hold_release('e5000000-0000-4000-8000-000000000001', hid, 'ai:grok-agent', 'please', 'e5200000-0000-4000-8000-0000000000e1', now());
+    raise exception 'employee holds: AI requested release of an ops hold';
+  exception when others then if position('ops_hold_ops_only' in sqlerrm) = 0 then raise; end if; end;
+  begin
+    perform public.release_employee_hold('e5000000-0000-4000-8000-000000000001', hid, 'release', '{}'::jsonb, now());
+    raise exception 'employee holds: ops hold released from the tenant side';
+  exception when others then if position('ops_hold_ops_only' in sqlerrm) = 0 then raise; end if; end;
+  if (select hold_state from public.employees where id = 'e5100000-0000-4000-8000-000000000011') <> 'stopped' then
+    raise exception 'employee holds: ops hold no longer in place'; end if;
+end $$;
+-- AI-shaped requesters are refused on a tenant hold too
+do $$
+declare r jsonb; hid uuid;
+begin
+  r := public.start_employee_hold('e5000000-0000-4000-8000-000000000001','e5100000-0000-4000-8000-000000000002','stopped',null,
+        'member:e5300000-0000-4000-8000-000000000001','web',null,now());
+  hid := (r->>'holdId')::uuid;
+  insert into public.approval_requests(id, org_id, purpose, summary, tool, risk, status, metadata) values
+    ('e5200000-0000-4000-8000-0000000000e2', 'e5000000-0000-4000-8000-000000000001', 'admin.policy', 'ai release attempt', 'employee.hold.release', 'high', 'pending',
+     jsonb_build_object('holdId', hid));
+  begin
+    perform public.request_employee_hold_release('e5000000-0000-4000-8000-000000000001', hid, 'ai:grok-agent', 'please', 'e5200000-0000-4000-8000-0000000000e2', now());
+    raise exception 'employee holds: AI requester accepted';
+  exception when others then if position('release_requester_invalid' in sqlerrm) = 0 then raise; end if; end;
+  begin
+    perform public.start_employee_hold('e5000000-0000-4000-8000-000000000001','e5100000-0000-4000-8000-000000000002','stopped',null,
+          'ai:grok-agent','web',null,now());
+  exception when others then null; end;
+end $$;
+select security_test.eh_raises($q$select public.start_employee_hold('e5000000-0000-4000-8000-000000000001','e5100000-0000-4000-8000-000000000001','stopped',null,'ai:grok-agent','web',null,now())$q$, 'employee_holds_started_by_check');
 
 -- (10) org-wide hold
 select security_test.eh_raises($q$select public.start_employee_hold('e5000000-0000-4000-8000-000000000003', null, 'leave', null, 'member:e5300000-0000-4000-8000-000000000005', 'web', null, now())$q$, 'employee_holds_org_kind_check');
