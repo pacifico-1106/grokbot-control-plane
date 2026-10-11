@@ -122,6 +122,7 @@ ADDITIVE = [
     ("20261010300000_", "tests/security/db-mcp-oauth-search-path.sql",
      "(select proconfig::text from pg_proc where oid = 'public.oauth_rate_limit_hit(text,timestamptz)'::regprocedure)"
      " = '{search_path=public}'"),
+    ("20261012100000_", "tests/security/db-credential-expiry-notices.sql", ("credential_expiry_notices",)),
     ("20261010200000_", "tests/security/db-mcp-oauth.sql", ("oauth_clients", "oauth_authorization_requests", "oauth_grants",
      "oauth_authorization_codes", "oauth_access_tokens", "oauth_refresh_tokens", "oauth_rate_limits")),
 ]

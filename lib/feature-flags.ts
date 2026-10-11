@@ -725,3 +725,14 @@ export function isMcpOAuthLegacyUnauthInitialize(): boolean {
 export function isMcpOAuthConsentMfaRequired(): boolean {
   return parseFlag(process.env.MCP_OAUTH_CONSENT_REQUIRE_MFA);
 }
+
+/**
+ * CREDENTIAL_EXPIRY_NOTICE_ENABLED (木村 2026-10-12): 社員証 pre-expiry notice
+ * (7 days before + the day before) to the tenant's approval inbox, from the
+ * daily digest cron. IDs + dashboard link only; dedup per credential ×
+ * threshold (credential_expiry_notices, migration 20261012100000); per-org
+ * caps. Default OFF: nothing is read, written or sent.
+ */
+export function isCredentialExpiryNoticeEnabled(): boolean {
+  return parseFlag(process.env.CREDENTIAL_EXPIRY_NOTICE_ENABLED);
+}

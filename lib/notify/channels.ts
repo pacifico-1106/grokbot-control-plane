@@ -308,6 +308,26 @@ function digestText(
   ].join("\n");
 }
 
+/**
+ * Plain text to one approval inbox, whatever its provider (the same send the
+ * digest uses). Telegram text is HTML-escaped. Never throws.
+ */
+export async function sendApprovalInboxText(
+  channel: NotificationChannelRuntime,
+  text: string
+): Promise<NotificationDispatchResult> {
+  try {
+    const sent = channel.provider === "telegram"
+      ? await sendTelegramTextToChannel(channel, escapeTelegramHtml(text))
+      : channel.provider === "line"
+        ? await sendLineText(channel, text)
+        : await sendSlackTextToChannel(channel, text);
+    return { ...sent, provider: channel.provider, channelId: channel.id };
+  } catch {
+    return { ok: false, provider: channel.provider, channelId: channel.id, error: "send_threw" };
+  }
+}
+
 export async function sendTenantDigests(): Promise<NotificationDispatchResult[]> {
   // 既存の Telegram 運用パス。グローバル bot の webhook を安価に張り直す。
   await ensureGlobalTelegramWebhook();
