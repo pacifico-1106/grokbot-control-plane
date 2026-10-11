@@ -272,6 +272,20 @@ export function isLpCatalogDbEnabled(): boolean {
 }
 
 /**
+ * LP_AUTO_PROVISION_MODE (design 2026-10-12 §5-10, PR3). Default off.
+ *
+ * "dry_run" (the only value implemented by PR3): a paid LP setup-fee Checkout
+ * Session (re-fetched from Stripe by id after the verified webhook) is recorded
+ * in lp_provisionings (migration 20261012400000) and 安藤 / operators are
+ * notified once per Session. No tenant is created.
+ * Anything else — unset, "off", and the not-yet-implemented "confirm" / "auto" —
+ * is off: the webhook ignores LP setup-fee sessions exactly as before.
+ */
+export function lpAutoProvisionMode(): "off" | "dry_run" {
+  return process.env.LP_AUTO_PROVISION_MODE === "dry_run" ? "dry_run" : "off";
+}
+
+/**
  * LP_ORDER_LEDGER_ENABLED: Record LP orders and checkout attempts.
  *
  * When ON:

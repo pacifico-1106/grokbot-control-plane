@@ -130,6 +130,8 @@ ADDITIVE = [
     ("20261012200000_", "tests/security/db-credential-reissue-claim.sql",
      "to_regprocedure('public.claim_credential_reissue(uuid,uuid,text,text,timestamptz)') is null"
      " and to_regprocedure('public.release_credential_reissue(uuid,uuid,text)') is null"),
+    # LP setup-fee payment record (PR3 dry-run, LP_AUTO_PROVISION_MODE).
+    ("20261012400000_", "tests/security/db-lp-provisionings.sql", ("lp_provisionings", "lp_provisioning_events")),
     # 緊急停止 hold (S1): table + 4 columns + 3 functions; rollback drops them all.
     ("20261012500000_", "tests/security/db-employee-holds.sql",
      "to_regclass('public.employee_holds') is null"

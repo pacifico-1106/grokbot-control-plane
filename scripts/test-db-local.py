@@ -270,6 +270,31 @@ try:
     print("PASS: credential reissue claim (20261012200000): EXECUTE service_role only; 12 concurrent claims → exactly 1 winner "
           "(its token is the mark); release only with the claimer's own token and org; other org / other tool / pending refused; "
           "re-claim after own release; re-applicable; rollback drops both functions; forward again.")
+    # LP setup-fee payment record (20261012400000, LP_AUTO_PROVISION_MODE=dry_run).
+    lp_prov = ROOT / "supabase/migrations/20261012400000_lp_provisionings.sql"
+    sql(lp_prov)
+    sql(lp_prov)  # re-applicable
+    sql(ROOT / "tests/security/db-lp-provisionings.sql")
+    from concurrent.futures import ThreadPoolExecutor as _LpPool
+    lp_sess = "cs_test_lpconcurrent1"
+    query("set role service_role; insert into public.lp_provisionings (stripe_checkout_session_id, first_stripe_event_id, livemode,"
+          f" amount_total, currency, plan, lp_page) values ('{lp_sess}', 'evt_lpconcurrent1', false, 165000, 'jpy', 'proper', 'ai-employee');")
+    commands = [f"set role service_role; select public.claim_lp_provisioning_notice('{lp_sess}','tok_lpconc_{i:02d}_0123456789',600);"
+                for i in range(12)]
+    with _LpPool(max_workers=12) as pool:
+        lp_claims = list(pool.map(query, commands))
+    assert lp_claims.count("t") == 1 and lp_claims.count("f") == 11, lp_claims
+    query(f"delete from public.lp_provisionings where stripe_checkout_session_id = '{lp_sess}';")
+    sql(ROOT / "supabase/verification/20261012400000_lp_provisionings_rollback.sql")
+    assert query("select to_regclass('public.lp_provisionings') is null and to_regclass('public.lp_provisioning_events') is null"
+                 " and to_regprocedure('public.claim_lp_provisioning_notice(text,text,integer)') is null"
+                 " and to_regprocedure('public.finish_lp_provisioning_notice(text,text,text)') is null;") == "t"
+    sql(lp_prov)  # forward again after rollback
+    sql(ROOT / "tests/security/db-lp-provisionings.sql")
+    print("PASS: lp provisionings (20261012400000): RLS on / no policy, anon/authenticated no privilege, notice fns service_role only; "
+          "one event row per Stripe event id, one payment row per Checkout Session; value CHECKs (allowlist / regex / '(invalid)' marker, "
+          "keyed HMAC hex only); 12 concurrent notice claims → 1; finish/release with own token only; no re-notice after sent; stale takeover; "
+          "re-applicable; rollback drops 2 tables + 2 functions; forward again.")
     webhook_settings = ROOT / "supabase/migrations/20261005100000_employee_webhook_settings.sql"
     sql(webhook_settings)
     sql(webhook_settings)  # re-applicable

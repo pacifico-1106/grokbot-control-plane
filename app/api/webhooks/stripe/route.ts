@@ -27,6 +27,14 @@ import {
 } from "@/lib/billing/stripe-webhook-ledger";
 import type Stripe from "stripe";
 import { jsonUtf8 } from "@/lib/http/json-utf8";
+import { lpAutoProvisionMode } from "@/lib/feature-flags";
+import {
+  createLpSetupFeeNotifier,
+  handleLpSetupFeeEvent,
+  isLpSetupFeeEventType,
+  looksLikeLpSetupFeeSession,
+} from "@/lib/lp/setup-fee-payment";
+import { createSupabaseLpProvisioningStore } from "@/lib/lp/provisioning-store";
 
 export const runtime = "nodejs";
 
@@ -162,6 +170,30 @@ async function handleEvent(
   }
   // Other card-setup reasons (missing metadata, …) are permanent no-ops and
   // fall through to the normal handling, as before.
+
+  // LP setup-fee payment → record + notify (PR3 dry-run). Flag off → skipped
+  // entirely: no Stripe call, no DB, no notice, today's response.
+  if (
+    lpAutoProvisionMode() === "dry_run" &&
+    isLpSetupFeeEventType(event.type) &&
+    looksLikeLpSetupFeeSession(event.data.object as Stripe.Checkout.Session)
+  ) {
+    const store = createSupabaseLpProvisioningStore();
+    if (!store) throw new Error("lp_store_unavailable"); // fail closed → 5xx → retry
+    const lpSetupFee = await handleLpSetupFeeEvent(
+      event as Parameters<typeof handleLpSetupFeeEvent>[0],
+      {
+        retrieveSession: (id) => stripe.checkout.sessions.retrieve(id),
+        store,
+        notifier: createLpSetupFeeNotifier({ sendEmail: sendBillingEmail }),
+      }
+    );
+    return {
+      kind: "processed",
+      orgId: null,
+      body: { received: true, type: event.type, orgId: null, lpSetupFee },
+    };
+  }
 
   const notify = process.env.BILLING_NOTIFY_EMAIL || "owner@example.com";
   let syncedOrgId: string | null = null;

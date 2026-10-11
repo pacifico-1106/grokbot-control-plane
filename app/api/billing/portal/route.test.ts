@@ -140,3 +140,34 @@ describe("POST /api/billing/portal role gate", () => {
     expect((await res.json()).stub).toBe(true);
   });
 });
+
+describe("existing BUSINESS / MANAGED subscribers after the 10/4 plan retirement", () => {
+  // The retirement only gates NEW purchases (lib/billing/purchasable-prices).
+  // The Portal is where existing subscribers see invoices, change the card
+  // and cancel, so it must keep working for them, scoped to their own org.
+  test("owner of an org on a retired plan still gets a Portal session for its own customer", async () => {
+    session = member("owner");
+    const res = await POST(req());
+    expect(res.status).toBe(200);
+    expect((await res.json()).url).toBe("https://billing.stripe.test/p/1");
+    expect(portalCalls).toHaveLength(1);
+    expect(portalCalls[0]).toEqual({ customer: "cus_org", return_url: "https://staffpass.example/app/billing" });
+  });
+
+  test("BOLA: asking for another org's subscription / customer never opens it", async () => {
+    session = member("admin");
+    const res = await POST(
+      req({ orgId: OTHER_ORG, customer: "cus_other", subscription: "sub_other", flow_data: { type: "subscription_cancel", subscription_cancel: { subscription: "sub_other" } } })
+    );
+    expect(res.status).toBe(200);
+    expect(lookups).toEqual([ORG]);
+    expect(portalCalls[0]).toEqual({ customer: "cus_org", return_url: "https://staffpass.example/app/billing" });
+    expect(JSON.stringify(portalCalls)).not.toContain("other");
+  });
+
+  test("BOLA: owner role in another org does not open this org's Portal", async () => {
+    session = { ...member("owner"), member: { id: "m9", orgId: OTHER_ORG, role: "owner", status: "active" } };
+    expect((await POST(req())).status).toBe(403);
+    expect(portalCalls).toHaveLength(0);
+  });
+});
