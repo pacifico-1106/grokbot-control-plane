@@ -479,6 +479,8 @@ export type AuditAction =
   | "oauth.dcr_global_cap_reached"
   | "lp.setup_fee.email_hash_key_missing"
   | "lp.setup_fee.notice_record_failed"
+  | "employee.hold.state_unavailable"
+  | "employee.hold.wake_suppressed"
   | "tool.invoke"
   | "comm.delete.succeeded"
   | "comm.delete.already_deleted"
