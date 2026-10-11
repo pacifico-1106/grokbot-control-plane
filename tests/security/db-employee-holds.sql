@@ -23,6 +23,8 @@
 -- (10) org-wide hold: kind 'stopped' only; sets orgs.hold_state
 -- (11) stronger re-stop upgrades (history), same / weaker keeps; (12) terminated employees stoppable;
 -- (13) ops-console holds: no release request / release from the tenant side or AI
+-- (14) requester = active member of the org + matches the ticket; no replacing a pending request;
+--      ops: stopper ⇔ ops_console route; anomaly / quarantined never self-released
 \set ON_ERROR_STOP 1
 reset role;
 
@@ -155,7 +157,7 @@ declare hid uuid := (select hold_id from public.employees where id = 'e5100000-0
 begin
   insert into public.approval_requests(id, org_id, purpose, summary, tool, risk, status, metadata) values
     ('e5200000-0000-4000-8000-0000000000a1', 'e5000000-0000-4000-8000-000000000001', 'admin.policy', 'release', 'employee.hold.release', 'high', 'pending',
-     jsonb_build_object('holdId', hid, 'holdEmployeeId', 'e5100000-0000-4000-8000-000000000001')),
+     jsonb_build_object('holdId', hid, 'holdEmployeeId', 'e5100000-0000-4000-8000-000000000001', 'requestedBy', 'member:e5300000-0000-4000-8000-000000000002')),
     ('e5200000-0000-4000-8000-0000000000a2', 'e5000000-0000-4000-8000-000000000001', 'admin.policy', 'other tool', 'policy.patch', 'high', 'pending',
      jsonb_build_object('holdId', hid)),
     ('e5200000-0000-4000-8000-0000000000a3', 'e5000000-0000-4000-8000-000000000002', 'admin.policy', 'other org', 'employee.hold.release', 'high', 'pending',
@@ -246,7 +248,7 @@ begin
   hid := (r->>'holdId')::uuid;
   insert into public.approval_requests(id, org_id, purpose, summary, tool, risk, status, metadata, resolved_by, resolved_at) values
     ('e5200000-0000-4000-8000-0000000000b1', 'e5000000-0000-4000-8000-000000000003', 'admin.policy', 'solo release', 'employee.hold.release', 'high', 'pending',
-     jsonb_build_object('holdId', hid), null, null);
+     jsonb_build_object('holdId', hid, 'requestedBy', 'member:e5300000-0000-4000-8000-000000000005'), null, null);
   perform public.request_employee_hold_release('e5000000-0000-4000-8000-000000000003', hid, 'member:e5300000-0000-4000-8000-000000000005',
     'false positive', 'e5200000-0000-4000-8000-0000000000b1', now());
   update public.approval_requests set status = 'approved', resolved_by = 'e5300000-0000-4000-8000-000000000005', resolved_at = now()
@@ -270,7 +272,7 @@ begin
   hid := (r->>'holdId')::uuid;
   insert into public.approval_requests(id, org_id, purpose, summary, tool, risk, status, metadata) values
     ('e5200000-0000-4000-8000-0000000000c1', 'e5000000-0000-4000-8000-000000000001', 'admin.policy', 'self release', 'employee.hold.release', 'high', 'pending',
-     jsonb_build_object('holdId', hid, 'singleOwnerSelfRelease', true));
+     jsonb_build_object('holdId', hid, 'singleOwnerSelfRelease', true, 'requestedBy', 'member:e5300000-0000-4000-8000-000000000001'));
   perform public.request_employee_hold_release('e5000000-0000-4000-8000-000000000001', hid, 'member:e5300000-0000-4000-8000-000000000001',
     'mine', 'e5200000-0000-4000-8000-0000000000c1', now());
   update public.approval_requests set status = 'approved', resolved_by = 'e5300000-0000-4000-8000-000000000001', resolved_at = now()
@@ -430,6 +432,89 @@ begin
   exception when others then null; end;
 end $$;
 select security_test.eh_raises($q$select public.start_employee_hold('e5000000-0000-4000-8000-000000000001','e5100000-0000-4000-8000-000000000001','stopped',null,'ai:grok-agent','web',null,now())$q$, 'employee_holds_started_by_check');
+
+-- (14) 木村 10/12 holes (fail-first reproductions)
+insert into public.employees(id, org_id, display_name, role_label) values
+  ('e5100000-0000-4000-8000-000000000013', 'e5000000-0000-4000-8000-000000000001', 'eh emp holes', 'r'),
+  ('e5100000-0000-4000-8000-000000000014', 'e5000000-0000-4000-8000-000000000003', 'eh emp solo anomaly', 'r'),
+  ('e5100000-0000-4000-8000-000000000015', 'e5000000-0000-4000-8000-000000000003', 'eh emp solo quarantined', 'r')
+on conflict (id) do nothing;
+do $$
+declare r jsonb; hid uuid;
+begin
+  r := public.start_employee_hold('e5000000-0000-4000-8000-000000000001','e5100000-0000-4000-8000-000000000013','stopped',null,
+        'member:e5300000-0000-4000-8000-000000000001','web',null,now());
+  hid := (r->>'holdId')::uuid;
+  insert into public.approval_requests(id, org_id, purpose, summary, tool, risk, status, metadata) values
+    ('e5200000-0000-4000-8000-0000000000f1', 'e5000000-0000-4000-8000-000000000001', 'admin.policy', 'ghost', 'employee.hold.release', 'high', 'pending',
+     jsonb_build_object('holdId', hid, 'requestedBy', 'member:deadbeef-0000-4000-8000-000000000000')),
+    ('e5200000-0000-4000-8000-0000000000f2', 'e5000000-0000-4000-8000-000000000001', 'admin.policy', 'by 002', 'employee.hold.release', 'high', 'pending',
+     jsonb_build_object('holdId', hid, 'requestedBy', 'member:e5300000-0000-4000-8000-000000000002')),
+    ('e5200000-0000-4000-8000-0000000000f3', 'e5000000-0000-4000-8000-000000000001', 'admin.policy', 'by 001', 'employee.hold.release', 'high', 'pending',
+     jsonb_build_object('holdId', hid, 'requestedBy', 'member:e5300000-0000-4000-8000-000000000001'));
+  -- hole 1: a nonexistent member uuid as requester
+  begin
+    perform public.request_employee_hold_release('e5000000-0000-4000-8000-000000000001', hid, 'member:deadbeef-0000-4000-8000-000000000000', 'ghost', 'e5200000-0000-4000-8000-0000000000f1', now());
+    raise exception 'employee holds: HOLE1 nonexistent requester accepted';
+  exception when others then if position('release_requester_invalid' in sqlerrm) = 0 then raise; end if; end;
+  -- hole 1: another org's member as requester
+  begin
+    perform public.request_employee_hold_release('e5000000-0000-4000-8000-000000000001', hid, 'member:e5300000-0000-4000-8000-000000000004', 'x', 'e5200000-0000-4000-8000-0000000000f2', now());
+    raise exception 'employee holds: HOLE1 other-org requester accepted';
+  exception when others then if position('release_requester_invalid' in sqlerrm) = 0 then raise; end if; end;
+  -- hole 1: requester does not match the ticket's requester
+  begin
+    perform public.request_employee_hold_release('e5000000-0000-4000-8000-000000000001', hid, 'member:e5300000-0000-4000-8000-000000000001', 'x', 'e5200000-0000-4000-8000-0000000000f2', now());
+    raise exception 'employee holds: HOLE1 requester / ticket mismatch accepted';
+  exception when others then if position('release_ticket_invalid' in sqlerrm) = 0 then raise; end if; end;
+  -- hole 2: a pending request cannot be replaced
+  perform public.request_employee_hold_release('e5000000-0000-4000-8000-000000000001', hid, 'member:e5300000-0000-4000-8000-000000000002', 'logs ok', 'e5200000-0000-4000-8000-0000000000f2', now());
+  begin
+    perform public.request_employee_hold_release('e5000000-0000-4000-8000-000000000001', hid, 'member:e5300000-0000-4000-8000-000000000001', 'mine now', 'e5200000-0000-4000-8000-0000000000f3', now());
+    raise exception 'employee holds: HOLE2 pending request replaced';
+  exception when others then if position('release_already_requested' in sqlerrm) = 0 then raise; end if; end;
+  if (select release_requested_by from public.employee_holds where id = hid) <> 'member:e5300000-0000-4000-8000-000000000002' then
+    raise exception 'employee holds: HOLE2 requester changed'; end if;
+  -- an approved-but-not-yet-released request cannot be replaced either
+  update public.approval_requests set status = 'approved', resolved_by = 'e5300000-0000-4000-8000-000000000001', resolved_at = now() where id = 'e5200000-0000-4000-8000-0000000000f2';
+  begin
+    perform public.request_employee_hold_release('e5000000-0000-4000-8000-000000000001', hid, 'member:e5300000-0000-4000-8000-000000000001', 'mine now', 'e5200000-0000-4000-8000-0000000000f3', now());
+    raise exception 'employee holds: HOLE2 approved request replaced';
+  exception when others then if position('release_already_requested' in sqlerrm) = 0 then raise; end if; end;
+  -- after the first ticket is rejected, a new request is fine
+  update public.approval_requests set status = 'rejected' where id = 'e5200000-0000-4000-8000-0000000000f2';
+  perform public.request_employee_hold_release('e5000000-0000-4000-8000-000000000001', hid, 'member:e5300000-0000-4000-8000-000000000001', 'retry', 'e5200000-0000-4000-8000-0000000000f3', now());
+  -- the requester must still be an active member at release time
+  update public.approval_requests set status = 'approved', resolved_by = 'e5300000-0000-4000-8000-000000000006', resolved_at = now() where id = 'e5200000-0000-4000-8000-0000000000f3';
+  r := public.release_employee_hold('e5000000-0000-4000-8000-000000000001', hid, 'released', '{}'::jsonb, now());
+  if (r->>'released')::boolean is not true then raise exception 'employee holds: valid two-person release failed'; end if;
+end $$;
+-- hole 3: an ops: stopper must use the ops console route, and only ops uses it
+select security_test.eh_raises($q$select public.start_employee_hold('e5000000-0000-4000-8000-000000000001','e5100000-0000-4000-8000-000000000013','stopped',null,'ops:mallory','web',null,now())$q$, 'employee_holds_ops_route');
+select security_test.eh_raises($q$select public.start_employee_hold('e5000000-0000-4000-8000-000000000001','e5100000-0000-4000-8000-000000000013','stopped',null,'member:e5300000-0000-4000-8000-000000000001','ops_console',null,now())$q$, 'employee_holds_ops_route');
+-- hole 4: anomaly-triggered / quarantined holds are never self-released, even in a single-owner org
+do $$
+declare r jsonb; hid uuid; t uuid; emp uuid; kinds text[] := array['stopped', 'quarantined']; i int;
+begin
+  for i in 1..2 loop
+    emp := case i when 1 then 'e5100000-0000-4000-8000-000000000014'::uuid else 'e5100000-0000-4000-8000-000000000015'::uuid end;
+    r := public.start_employee_hold('e5000000-0000-4000-8000-000000000003', emp, kinds[i], null,
+          case i when 1 then 'system:anomaly' else 'member:e5300000-0000-4000-8000-000000000005' end,
+          case i when 1 then 'anomaly' else 'web' end,
+          case i when 1 then 'signal:decoy_key' else null end, now());
+    hid := (r->>'holdId')::uuid;
+    t := gen_random_uuid();
+    insert into public.approval_requests(id, org_id, purpose, summary, tool, risk, status, metadata) values
+      (t, 'e5000000-0000-4000-8000-000000000003', 'admin.policy', 'solo', 'employee.hold.release', 'high', 'pending',
+       jsonb_build_object('holdId', hid, 'singleOwnerSelfRelease', true, 'requestedBy', 'member:e5300000-0000-4000-8000-000000000005'));
+    perform public.request_employee_hold_release('e5000000-0000-4000-8000-000000000003', hid, 'member:e5300000-0000-4000-8000-000000000005', 'looks fine', t, now());
+    update public.approval_requests set status = 'approved', resolved_by = 'e5300000-0000-4000-8000-000000000005', resolved_at = now() where id = t;
+    begin
+      perform public.release_employee_hold('e5000000-0000-4000-8000-000000000003', hid, 'solo', '{}'::jsonb, now());
+      raise exception 'employee holds: HOLE4 % hold self-released', kinds[i];
+    exception when others then if position('release_approver_not_allowed' in sqlerrm) = 0 then raise; end if; end;
+  end loop;
+end $$;
 
 -- (10) org-wide hold
 select security_test.eh_raises($q$select public.start_employee_hold('e5000000-0000-4000-8000-000000000003', null, 'leave', null, 'member:e5300000-0000-4000-8000-000000000005', 'web', null, now())$q$, 'employee_holds_org_kind_check');
