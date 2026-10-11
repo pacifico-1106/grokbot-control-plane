@@ -387,6 +387,34 @@ describe("LP_CUSTOMER_EMAIL_HASH_KEY missing (木村 10/12 on #342 follow-up): n
     );
     expect(noticesSent()).toBe(2);
   });
+  test("#344 follow-up (木村 10/12): after the key is set, a failed hash fill-in write → 500 (not swallowed), no extra notice; the next redelivery fills it → 200", async () => {
+    delete process.env.LP_CUSTOMER_EMAIL_HASH_KEY;
+    const evt = makeEvent("checkout.session.completed", lpSession());
+    expect((await POST(signed(evt))).status).toBe(500);
+    process.env.LP_CUSTOMER_EMAIL_HASH_KEY = EMAIL_KEY;
+    const realFill = lpStore.fillEmailHmac;
+    let fillCalls = 0;
+    lpStore.fillEmailHmac = async () => {
+      fillCalls++;
+      throw new Error("db down");
+    };
+    try {
+      const res = await POST(signed(evt));
+      expect(res.status).toBe(500);
+      expect(fillCalls).toBeGreaterThan(0);
+      expect(lpStore.payments.get("cs_test_lp1")!.customerEmailHmac).toBeNull();
+      expect(noticesSent()).toBe(2);
+      expect(ledger.rows.get(evt.id)?.status).not.toBe("processed");
+    } finally {
+      lpStore.fillEmailHmac = realFill;
+    }
+    const res2 = await POST(signed(evt));
+    expect(res2.status).toBe(200);
+    expect(lpStore.payments.get("cs_test_lp1")!.customerEmailHmac).toBe(
+      createHmac("sha256", EMAIL_KEY).update(EMAIL.toLowerCase(), "utf8").digest("hex")
+    );
+    expect(noticesSent()).toBe(2);
+  });
   test("an unpaid Session with the key missing → ignored as before (200, no notice, no alert)", async () => {
     delete process.env.LP_CUSTOMER_EMAIL_HASH_KEY;
     sessionImpl = async () => lpSession({ payment_status: "unpaid" });
