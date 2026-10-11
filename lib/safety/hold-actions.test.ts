@@ -193,6 +193,39 @@ describe("release: web only, ONE authentication function, a different approver",
     expect(audit?.metadata?.releasedBy).toBe("member:mem_1");
     expect(audit?.metadata?.requestedBy).toBe("member:mem_2");
   });
+  test("double-click: the losing release (hold already released) does NOT reset the ticket to pending", async () => {
+    const holdId = await stopped();
+    const req = await actions.requestHoldRelease({ orgId: ORG, holdId, reason: "誤停止", actor: web(admin()) });
+    if (!req.ok) throw new Error(req.code);
+    const real = store.getHoldStore();
+    const snapshot = await real.getHold(ORG, holdId);
+    expect((await actions.approveHoldRelease({ orgId: ORG, holdId, actor: web(owner()) })).ok).toBe(true);
+    // second click: it read the hold before the first committed, then its release loses
+    let reads = 0;
+    store.__setHoldStoreForTests({ ...real, getHold: async (o, id) => (reads++ === 0 ? snapshot : real.getHold(o, id)) });
+    try {
+      const second = await actions.approveHoldRelease({ orgId: ORG, holdId, actor: web(owner()) });
+      expect(second.ok).toBe(false);
+    } finally {
+      store.__setHoldStoreForTests(null);
+    }
+    expect((await getApprovalById(req.approvalId, ORG))?.status).toBe("approved");
+    expect((await operable()).ok).toBe(true);
+  });
+  test("a failed release of a hold that is still open DOES put the ticket back to pending (retryable)", async () => {
+    const holdId = await stopped();
+    const req = await actions.requestHoldRelease({ orgId: ORG, holdId, reason: "誤停止", actor: web(admin()) });
+    if (!req.ok) throw new Error(req.code);
+    const real = store.getHoldStore();
+    store.__setHoldStoreForTests({ ...real, release: async () => { throw new store.HoldStoreError("hold_store_failed"); } });
+    try {
+      expect((await actions.approveHoldRelease({ orgId: ORG, holdId, actor: web(owner()) })).ok).toBe(false);
+    } finally {
+      store.__setHoldStoreForTests(null);
+    }
+    expect((await getApprovalById(req.approvalId, ORG))?.status).toBe("pending");
+    expect((await operable()).ok).toBe(false);
+  });
   test("a plain member who is neither owner nor designated admin cannot approve", async () => {
     const holdId = await stopped();
     await actions.requestHoldRelease({ orgId: ORG, holdId, reason: "誤停止", actor: web(admin()) });

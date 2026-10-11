@@ -313,8 +313,13 @@ export async function approveHoldRelease(input: {
     await notifyHold({ event: "hold.released", orgId: input.orgId, employeeId: hold.employeeId, holdId: hold.id, kind: hold.kind }, { tenant: true, ops: hold.employeeId === null });
     return { ok: true, holdId: hold.id, closedTickets: out.closedTickets };
   } catch (error) {
-    // Not lifted (S1: audit + release are one transaction). Put the ticket back so it can be retried.
-    await setTicketDecision(input.orgId, ticket.id, "approved", "pending", actor.member.id, { releaseApprovedVia: null }).catch(() => false);
+    // Not lifted by THIS call (S1: audit + release are one transaction). Put the ticket back so it can be
+    // retried — but only when the hold is confirmed still open. If a concurrent click already released it
+    // (or the re-read fails), the approved ticket stays as the record of that release.
+    const stillOpen = await store.getHold(input.orgId, hold.id).then((h) => h !== null && h.id === hold.id, () => false);
+    if (stillOpen) {
+      await setTicketDecision(input.orgId, ticket.id, "approved", "pending", actor.member.id, { releaseApprovedVia: null }).catch(() => false);
+    }
     const code = error instanceof HoldStoreError ? error.code : "hold_store_failed";
     await appendAuditEvent({
       orgId: input.orgId, employeeId: hold.employeeId, credentialId: null, action: "employee.hold.release_refused",
