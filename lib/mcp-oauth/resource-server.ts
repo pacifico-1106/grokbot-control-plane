@@ -69,7 +69,7 @@ function shouldTouch(grantId: string, nowMs: number): boolean {
 const holdRefusal = (code: HoldDenyCode): McpAuthResult =>
   code === "hold_state_unavailable"
     ? { ok: false, code, message: "hold state unavailable; refused (fail-stop)", httpStatus: 503 }
-    : { ok: false, code, message: code === "org_held" ? "organization is on emergency stop" : "employee is on hold (emergency stop / leave)", httpStatus: 403 };
+    : { ok: false, code, message: code === "org_on_hold" ? "organization is on emergency stop" : "employee is on hold (emergency stop / leave)", httpStatus: 403 };
 
 const invalid = (message: string): McpAuthResult => ({
   ok: false,

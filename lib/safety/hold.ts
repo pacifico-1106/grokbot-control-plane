@@ -31,7 +31,7 @@ export type HoldPhase =
   | "mcp_events" // G5
   | "pre_send"; // just before an outbound adapter call
 
-export type HoldDenyCode = "employee_held" | "org_held" | "hold_state_unavailable";
+export type HoldDenyCode = "employee_on_hold" | "org_on_hold" | "hold_state_unavailable";
 export type OperableResult =
   | { ok: true }
   | { ok: false; code: HoldDenyCode; holdId: string | null; kind: HoldKind | null };
@@ -39,7 +39,9 @@ export type OperableResult =
 export type HoldRead =
   | { state: "found"; orgId: string; holdState: string | null; holdId: string | null }
   | { state: "missing" }
-  | { state: "error"; detail: string };
+  | { state: "error"; detail: string }
+  /** The S1 migration is not applied yet (wrong-order deploy). See isHoldSchemaMissing. */
+  | { state: "not_installed"; detail: string };
 
 export type HoldReader = {
   employee(employeeId: string, orgHint?: string | null): Promise<HoldRead>;
@@ -92,13 +94,97 @@ function demoReader(): HoldReader {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Wrong-order deploy safety net (木村 10/12, option (a)).
+// If this code ships before migration 20261012500000, the hold columns don't exist
+// and every read would fail closed → every tenant's AI employees 503. ONLY a
+// "column / relation does not exist" error naming the hold schema counts as
+// "not installed"; everything else (permission, timeout, network, other columns,
+// missing row, other org, malformed value) still fails closed.
+// supabase-js (postgrest-js 2.x) hands back PostgREST's JSON error body as-is:
+// a Postgres error keeps its SQLSTATE in `code` (42703 undefined_column, 42P01
+// undefined_table); PostgREST's own schema-cache errors are PGRST204 (column) /
+// PGRST205 (table). The message must also name a hold column / table, so an
+// unrelated missing column is never mistaken for this.
+// The verdict is NOT cached: every request re-reads, so enforcement starts on
+// the first request after the migration, with no deploy or restart.
+// ---------------------------------------------------------------------------
+const MISSING_COLUMN_CODES: ReadonlySet<string> = new Set(["42703", "PGRST204"]);
+const MISSING_TABLE_CODES: ReadonlySet<string> = new Set(["42P01", "PGRST205"]);
+const HOLD_COLUMN_RE = /\bhold_(state|id)\b/;
+const HOLD_TABLE_RE = /\bemployee_holds\b/;
+const MISSING_MSG_RE = /(does not exist|could not find)/i;
+
+export function isHoldSchemaMissing(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const e = error as { code?: unknown; message?: unknown };
+  const code = typeof e.code === "string" ? e.code.trim() : "";
+  const message = typeof e.message === "string" ? e.message : "";
+  if (!MISSING_MSG_RE.test(message)) return false;
+  if (MISSING_COLUMN_CODES.has(code)) return HOLD_COLUMN_RE.test(message);
+  if (MISSING_TABLE_CODES.has(code)) return HOLD_TABLE_RE.test(message);
+  // No code at all (proxy rewrote the body): only the exact Postgres wording for our columns.
+  if (!code) return /column [\w."]*hold_(state|id)"? does not exist/i.test(message);
+  return false;
+}
+
+export const HOLD_NOT_INSTALLED_ALERT_WINDOW_MS = 10 * 60_000;
+type NotInstalledAlert = (info: { phase: HoldPhase; suppressed: number }) => Promise<void>;
+let notInstalledAlertOverride: NotInstalledAlert | null = null;
+let lastNotInstalledAlertAt = 0;
+let suppressedNotInstalled = 0;
+/** Tests only. */
+export function __setHoldNotInstalledAlertForTests(fn: NotInstalledAlert | null): void {
+  notInstalledAlertOverride = fn;
+  lastNotInstalledAlertAt = 0;
+  suppressedNotInstalled = 0;
+}
+
+async function defaultNotInstalledAlert(info: { phase: HoldPhase; suppressed: number }): Promise<void> {
+  const line = "緊急停止（hold）の DB 列がありません（migration 20261012500000 が未適用）。停止の確認を飛ばして動かしています。至急 migration を当ててください。";
+  console.error("employee_hold_not_installed", { phase: info.phase, suppressed: info.suppressed });
+  const { appendAuditEvent } = await import("@/lib/data/audit");
+  const opsOrgId = (process.env.PLATFORM_OPS_ORG_ID || "").trim();
+  if (opsOrgId) {
+    await appendAuditEvent({
+      orgId: opsOrgId, employeeId: null, credentialId: null,
+      action: "employee.hold.not_installed", purpose: null, summary: line,
+      metadata: { auditClass: "admin", event: "employee.hold.not_installed", phase: info.phase, suppressed: info.suppressed },
+    }).catch(() => undefined);
+  }
+  const to = (process.env.APPROVAL_ALERT_OPS_EMAILS || "").split(",").map((x) => x.trim()).filter((x) => /^[^\s@,]+@[^\s@,]+\.[^\s@,]+$/.test(x)).slice(0, 10);
+  if (to.length) {
+    const { sendTransactionalEmail } = await import("@/lib/resend");
+    await sendTransactionalEmail({
+      to, template: "oauth_security",
+      subject: "【運営・至急】緊急停止の migration が未適用です（停止の確認が効いていません）",
+      html: `<p>${line}</p><p>phase: ${info.phase}</p>`,
+      text: `${line}\nphase: ${info.phase}`,
+      tags: [{ name: "template", value: "oauth_security" }],
+    }).catch(() => undefined);
+  }
+}
+
+/** Loud, throttled (per process), ids / phase only — never PII. Never throws. */
+async function alertNotInstalled(phase: HoldPhase): Promise<void> {
+  const now = Date.now();
+  if (now - lastNotInstalledAlertAt < HOLD_NOT_INSTALLED_ALERT_WINDOW_MS) {
+    suppressedNotInstalled++;
+    return;
+  }
+  lastNotInstalledAlertAt = now;
+  const suppressed = suppressedNotInstalled;
+  suppressedNotInstalled = 0;
+  await (notInstalledAlertOverride ?? defaultNotInstalledAlert)({ phase, suppressed }).catch(() => undefined);
+}
+
 function supabaseReader(): HoldReader {
   return {
     async employee(employeeId) {
       const admin = createSupabaseAdminClient();
       if (!admin) return { state: "error", detail: "db_unavailable" };
       const { data, error } = await admin.from("employees").select("id, org_id, hold_state, hold_id").eq("id", employeeId).maybeSingle();
-      if (error) return { state: "error", detail: "employee_read_error" };
+      if (error) return isHoldSchemaMissing(error) ? { state: "not_installed", detail: "employees" } : { state: "error", detail: "employee_read_error" };
       if (!data) return { state: "missing" };
       const r = data as Record<string, unknown>;
       return { state: "found", orgId: String(r.org_id ?? ""), holdState: (r.hold_state as string | null) ?? null, holdId: (r.hold_id as string | null) ?? null };
@@ -107,7 +193,7 @@ function supabaseReader(): HoldReader {
       const admin = createSupabaseAdminClient();
       if (!admin) return { state: "error", detail: "db_unavailable" };
       const { data, error } = await admin.from("orgs").select("id, hold_state, hold_id").eq("id", orgId).maybeSingle();
-      if (error) return { state: "error", detail: "org_read_error" };
+      if (error) return isHoldSchemaMissing(error) ? { state: "not_installed", detail: "orgs" } : { state: "error", detail: "org_read_error" };
       if (!data) return { state: "missing" };
       const r = data as Record<string, unknown>;
       return { state: "found", orgId: String(r.id ?? ""), holdState: (r.hold_state as string | null) ?? null, holdId: (r.hold_id as string | null) ?? null };
@@ -145,6 +231,7 @@ export async function checkOperable(input: {
   const employeeId = (input.employeeId ?? "").trim();
   let orgId = (input.orgId ?? "").trim();
   let result: OperableResult;
+  let notInstalled = false;
   try {
     if (!employeeId && !orgId) {
       result = unavailable();
@@ -153,25 +240,27 @@ export async function checkOperable(input: {
       result = { ok: true };
       if (employeeId) {
         const e = await rd.employee(employeeId, orgId || null);
-        if (e.state !== "found") result = unavailable();
+        if (e.state === "not_installed") notInstalled = true; // nothing to enforce yet; org below
+        else if (e.state !== "found") result = unavailable();
         else if (orgId && e.orgId !== orgId) result = unavailable(); // never another org's row
         else {
           orgId = orgId || e.orgId;
           const s = shapeOf(e, KINDS);
           if (s === "bad") result = unavailable();
-          else if (s === "held") result = { ok: false, code: "employee_held", holdId: e.holdId, kind: e.holdState as HoldKind };
+          else if (s === "held") result = { ok: false, code: "employee_on_hold", holdId: e.holdId, kind: e.holdState as HoldKind };
         }
       }
-      if (result.ok || result.code === "employee_held") {
+      if (result.ok || result.code === "employee_on_hold") {
         // The org hold is checked too (an org stop outranks nothing but must never be skipped).
-        if (!orgId) result = unavailable();
+        if (!orgId) result = notInstalled ? result : unavailable();
         else {
           const o = await rd.org(orgId);
-          if (o.state !== "found" || o.orgId !== orgId) result = unavailable();
+          if (o.state === "not_installed") notInstalled = true;
+          else if (o.state !== "found" || o.orgId !== orgId) result = unavailable();
           else {
             const s = shapeOf(o, new Set(["stopped"]));
             if (s === "bad") result = unavailable();
-            else if (s === "held" && result.ok) result = { ok: false, code: "org_held", holdId: o.holdId, kind: "stopped" };
+            else if (s === "held" && result.ok) result = { ok: false, code: "org_on_hold", holdId: o.holdId, kind: "stopped" };
           }
         }
       }
@@ -180,6 +269,7 @@ export async function checkOperable(input: {
     result = unavailable();
   }
   if (!result.ok && result.code === "hold_state_unavailable") await auditUnavailable(orgId, employeeId, input.phase);
+  else if (notInstalled) await alertNotInstalled(input.phase);
   return result;
 }
 
@@ -197,7 +287,7 @@ export async function assertOperable(input: Parameters<typeof checkOperable>[0])
 }
 
 /** Hold-related refusal codes (all stop before any provider call). */
-export const HOLD_STOP_CODES: ReadonlySet<string> = new Set(["employee_held", "org_held", "hold_state_unavailable", "approval_held"]);
+export const HOLD_STOP_CODES: ReadonlySet<string> = new Set(["employee_on_hold", "org_on_hold", "hold_state_unavailable", "approval_held"]);
 
 // ---------------------------------------------------------------------------
 // Held tickets

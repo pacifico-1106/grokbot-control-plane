@@ -60,17 +60,17 @@ describe("checkOperable: fail-stop, both holds, no flag", () => {
   test("no hold → operable", async () => {
     expect(await hold.checkOperable({ orgId: ORG, employeeId: EMP, phase: "gateway" })).toEqual({ ok: true });
   });
-  test("employee hold → employee_held (kind + holdId)", async () => {
+  test("employee hold → employee_on_hold (kind + holdId)", async () => {
     hold.demoSetEmployeeHold(EMP, { kind: "leave", holdId: HOLD_ID });
-    expect(await hold.checkOperable({ orgId: ORG, employeeId: EMP, phase: "gateway" })).toEqual({ ok: false, code: "employee_held", holdId: HOLD_ID, kind: "leave" });
+    expect(await hold.checkOperable({ orgId: ORG, employeeId: EMP, phase: "gateway" })).toEqual({ ok: false, code: "employee_on_hold", holdId: HOLD_ID, kind: "leave" });
   });
-  test("org hold → org_held for an employee without its own hold, and for an org-only check", async () => {
+  test("org hold → org_on_hold for an employee without its own hold, and for an org-only check", async () => {
     hold.demoSetOrgHold(ORG, { kind: "stopped", holdId: HOLD_ID });
     expect((await hold.checkOperable({ orgId: ORG, employeeId: EMP, phase: "wake" })).ok).toBe(false);
     const r = await hold.checkOperable({ orgId: ORG, employeeId: EMP, phase: "wake" });
-    expect(r.ok === false && r.code).toBe("org_held");
+    expect(r.ok === false && r.code).toBe("org_on_hold");
     const o = await hold.checkOperable({ orgId: ORG, phase: "approval_execution" });
-    expect(o.ok === false && o.code).toBe("org_held");
+    expect(o.ok === false && o.code).toBe("org_on_hold");
   });
   test("reader throws → hold_state_unavailable (stopped) and one audit row", async () => {
     hold.__setHoldReaderForTests(throwingReader);
@@ -135,7 +135,7 @@ describe("must-have: a ticket a hold touched is never executed (木村 10/12)", 
   test("an unmarked ticket of a held employee is not executed either (G4)", async () => {
     stopEmp();
     let ran = 0;
-    await expect(executeApproval(approval(), async () => { ran++; return { ok: true }; })).rejects.toThrow("employee_held");
+    await expect(executeApproval(approval(), async () => { ran++; return { ok: true }; })).rejects.toThrow("employee_on_hold");
     expect(ran).toBe(0);
   });
   test("hold state unreadable at fulfil → not executed", async () => {
@@ -146,7 +146,7 @@ describe("must-have: a ticket a hold touched is never executed (木村 10/12)", 
   });
   test("org hold stops an admin-class ticket too (org-only check)", async () => {
     hold.demoSetOrgHold(ORG, { kind: "stopped", holdId: HOLD_ID });
-    await expect(assertApprovalExecutionAuthority(approval({ tool: "policy.patch", employeeId: "adm_1" }, { adminTool: "policy.patch", auditClass: "admin" }))).rejects.toThrow("org_held");
+    await expect(assertApprovalExecutionAuthority(approval({ tool: "policy.patch", employeeId: "adm_1" }, { adminTool: "policy.patch", auditClass: "admin" }))).rejects.toThrow("org_on_hold");
   });
   test("control: no hold, unmarked ticket → still runs", async () => {
     let ran = 0;
@@ -162,15 +162,15 @@ describe("G1 credential, G3 gateway entry", () => {
   beforeEach(async () => {
     await rotateCredential(EMP, ORG, fingerprintSecret(SECRET));
   });
-  test("G1: valid badge → ok; held → employee_held 403; org held → org_held; unreadable → hold_state_unavailable", async () => {
+  test("G1: valid badge → ok; held → employee_on_hold 403; org held → org_on_hold; unreadable → hold_state_unavailable", async () => {
     expect((await resolveEmployeeCredential(req())).ok).toBe(true);
     stopEmp();
     const r = await resolveEmployeeCredential(req());
-    expect(r.ok === false && [r.code, r.httpStatus]).toEqual(["employee_held", 403]);
+    expect(r.ok === false && [r.code, r.httpStatus]).toEqual(["employee_on_hold", 403]);
     hold.demoSetEmployeeHold(EMP, null);
     hold.demoSetOrgHold(ORG, { kind: "stopped", holdId: HOLD_ID });
     const o = await resolveEmployeeCredential(req());
-    expect(o.ok === false && o.code).toBe("org_held");
+    expect(o.ok === false && o.code).toBe("org_on_hold");
     hold.demoSetOrgHold(ORG, null);
     hold.__setHoldReaderForTests(throwingReader);
     const u = await resolveEmployeeCredential(req());
@@ -180,7 +180,7 @@ describe("G1 credential, G3 gateway entry", () => {
     expect((await assertExecutable(EMP)).ok).toBe(true);
     stopEmp();
     const r = await assertExecutable(EMP);
-    expect(r.ok === false && r.code).toBe("employee_held");
+    expect(r.ok === false && r.code).toBe("employee_on_hold");
     hold.demoSetEmployeeHold(EMP, null);
     hold.__setHoldReaderForTests(throwingReader);
     const u = await assertExecutable(EMP);
@@ -189,10 +189,10 @@ describe("G1 credential, G3 gateway entry", () => {
 });
 
 describe("right before an outbound send", () => {
-  test("Slack post: held → not_sent employee_held (nothing posted)", async () => {
+  test("Slack post: held → not_sent employee_on_hold (nothing posted)", async () => {
     stopEmp();
     const r = await postConversationMessage({ orgId: ORG, employeeId: EMP, channel: "C123", text: "hi" });
-    expect(r).toMatchObject({ ok: false, error: "employee_held", sendState: "not_sent" });
+    expect(r).toMatchObject({ ok: false, error: "employee_on_hold", sendState: "not_sent" });
   });
   test("Slack post: no hold → the demo stub still answers", async () => {
     const r = await postConversationMessage({ orgId: ORG, employeeId: EMP, channel: "C123", text: "hi" });
@@ -249,8 +249,8 @@ describe("§9 matrix: route × kind × state", () => {
     ["MCP Events", async () => { const r = await checkSubscriptionPrincipal(sub, Date.now()); return r.ok ? null : r.kind === "held" ? r.reason : r.kind === "unavailable" ? "hold_state_unavailable" : r.kind; }],
   ];
   const states: Array<[string, (kind: "stopped" | "quarantined" | "leave") => void, string]> = [
-    ["employee hold", (kind) => hold.demoSetEmployeeHold(EMP, { kind, holdId: HOLD_ID }), "employee_held"],
-    ["org hold", () => hold.demoSetOrgHold(ORG, { kind: "stopped", holdId: HOLD_ID }), "org_held"],
+    ["employee hold", (kind) => hold.demoSetEmployeeHold(EMP, { kind, holdId: HOLD_ID }), "employee_on_hold"],
+    ["org hold", () => hold.demoSetOrgHold(ORG, { kind: "stopped", holdId: HOLD_ID }), "org_on_hold"],
     ["unreadable", () => hold.__setHoldReaderForTests(throwingReader), "hold_state_unavailable"],
   ];
   for (const [route, call] of routes) {

@@ -160,7 +160,7 @@ export async function handleEventsSubscribe(cred: ResolvedEmployeeCredential, pa
     // A read error is not a revocation: answer a retryable internal error and
     // change nothing (the client retries the subscribe).
     if (live.kind === "unavailable") return err(-32603, "Internal error", { reason: live.reason });
-    if (live.kind === "held") return err(-32012, "Forbidden", { reason: "employee_on_hold" });
+    if (live.kind === "held") return err(-32012, "Forbidden", { reason: live.reason });
     return err(-32012, "Forbidden", { reason: "revoked" });
   }
 
@@ -416,7 +416,7 @@ async function attemptDelivery(id: string): Promise<AttemptOutcome> {
     const principal = await checkSubscriptionPrincipal(found, now);
     if (!principal.ok && principal.kind === "unavailable") throw new PreSendUnavailable(principal.reason, principal.detail);
     // Held: dropped (never delivered later, design §2.5); the subscription stays for after the release.
-    if (!principal.ok && principal.kind === "held") return drop("employee_held");
+    if (!principal.ok && principal.kind === "held") return drop(principal.reason);
     if (!principal.ok) {
       // Positively known revocation only: stop every subscription of this employee.
       await revokeEmployeeSubscriptions(found.orgId, found.employeeId, principal.reason, nowIso);

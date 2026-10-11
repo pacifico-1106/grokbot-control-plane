@@ -30,7 +30,7 @@ export type PrincipalCheck =
   | { ok: true }
   | { ok: false; kind: "revoked"; reason: string }
   /** S2: employee / org on hold — deliveries are dropped, the subscription is NOT revoked. */
-  | { ok: false; kind: "held"; reason: "employee_held" | "org_held" }
+  | { ok: false; kind: "held"; reason: "employee_on_hold" | "org_on_hold" }
   | { ok: false; kind: "unavailable"; reason: typeof REVOCATION_CHECK_UNAVAILABLE; detail: string };
 
 export type Read<T> = { state: "found"; value: T } | { state: "missing" } | { state: "error"; detail: string };

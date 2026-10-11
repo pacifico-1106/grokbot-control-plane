@@ -927,8 +927,8 @@ export type ExecutableDenyCode =
   | "degraded"
   | "health_failed"
   | "not_found"
-  | "employee_held"
-  | "org_held"
+  | "employee_on_hold"
+  | "org_on_hold"
   | "hold_state_unavailable";
 
 export interface ExecutableDeny {

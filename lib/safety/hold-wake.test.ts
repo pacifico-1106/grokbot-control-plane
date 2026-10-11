@@ -35,8 +35,8 @@ const suppressed = async (id: string) =>
   (await listAuditEvents(ORG)).filter((a) => a.action === "employee.hold.wake_suppressed" && (a.metadata as Record<string, unknown>).eventId === id);
 
 for (const [name, setup, code] of [
-  ["employee held", () => hold.demoSetEmployeeHold(EMP, { kind: "stopped", holdId: HID }), "employee_held"],
-  ["org held", () => hold.demoSetOrgHold(ORG, { kind: "stopped", holdId: HID }), "org_held"],
+  ["employee held", () => hold.demoSetEmployeeHold(EMP, { kind: "stopped", holdId: HID }), "employee_on_hold"],
+  ["org held", () => hold.demoSetOrgHold(ORG, { kind: "stopped", holdId: HID }), "org_on_hold"],
   ["hold state unreadable", () => hold.__setHoldReaderForTests({ employee: async () => { throw new Error("db"); }, org: async () => { throw new Error("db"); } }), "hold_state_unavailable"],
 ] as const) {
   test(`${name} → no wake is sent; wake_suppressed audited (${code})`, async () => {
