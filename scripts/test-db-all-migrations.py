@@ -130,6 +130,12 @@ ADDITIVE = [
     ("20261012200000_", "tests/security/db-credential-reissue-claim.sql",
      "to_regprocedure('public.claim_credential_reissue(uuid,uuid,text,text,timestamptz)') is null"
      " and to_regprocedure('public.release_credential_reissue(uuid,uuid,text)') is null"),
+    # 緊急停止 hold (S1): table + 4 columns + 3 functions; rollback drops them all.
+    ("20261012500000_", "tests/security/db-employee-holds.sql",
+     "to_regclass('public.employee_holds') is null"
+     " and to_regprocedure('public.release_employee_hold(uuid,uuid,text,jsonb,timestamptz)') is null"
+     " and not exists (select 1 from information_schema.columns where table_schema = 'public'"
+     " and table_name in ('employees', 'orgs') and column_name in ('hold_state', 'hold_id'))"),
     ("20261010200000_", "tests/security/db-mcp-oauth.sql", ("oauth_clients", "oauth_authorization_requests", "oauth_grants",
      "oauth_authorization_codes", "oauth_access_tokens", "oauth_refresh_tokens", "oauth_rate_limits")),
 ]

@@ -270,6 +270,61 @@ try:
     print("PASS: credential reissue claim (20261012200000): EXECUTE service_role only; 12 concurrent claims → exactly 1 winner "
           "(its token is the mark); release only with the claimer's own token and org; other org / other tool / pending refused; "
           "re-claim after own release; re-applicable; rollback drops both functions; forward again.")
+    # 緊急停止 hold (20261012500000, S1). Checks read hold_state regardless of flags (S2).
+    holds = ROOT / "supabase/migrations/20261012500000_employee_holds.sql"
+    sql(holds)
+    sql(holds)  # re-applicable
+    sql(ROOT / "tests/security/db-employee-holds.sql")
+    eh_org, eh_emp = "e5000000-0000-4000-8000-0000000000c1", "e5100000-0000-4000-8000-0000000000c1"
+    eh_req, eh_appr, eh_ticket = ("e5300000-0000-4000-8000-0000000000c1", "e5300000-0000-4000-8000-0000000000c2",
+                                  "e5200000-0000-4000-8000-0000000000c9")
+    query(f"insert into public.orgs(id, name) values ('{eh_org}', 'eh concurrent');"
+          f"insert into public.org_members(id, org_id, email, role, status) values ('{eh_req}', '{eh_org}', 'eh-c1@eh.invalid', 'owner', 'active'),"
+          f" ('{eh_appr}', '{eh_org}', 'eh-c2@eh.invalid', 'owner', 'active');"
+          f"insert into public.employees(id, org_id, display_name, role_label) values ('{eh_emp}', '{eh_org}', 'eh c', 'r');")
+    starts = [f"set role service_role; select public.start_employee_hold('{eh_org}','{eh_emp}','stopped',null,"
+              f"'member:{eh_req}','web',null,now())->>'created';" for _ in range(12)]
+    with ThreadPoolExecutor(max_workers=12) as pool:
+        created = list(pool.map(query, starts))
+    assert created.count("true") == 1 and created.count("false") == 11, created
+    assert query(f"select count(*) from public.employee_holds where employee_id = '{eh_emp}';") == "1"
+    hid = query(f"select hold_id from public.employees where id = '{eh_emp}';")
+    query(f"insert into public.approval_requests(id, org_id, purpose, summary, tool, risk, status, metadata) values "
+          f"('{eh_ticket}', '{eh_org}', 'admin.policy', 'eh', 'employee.hold.release', 'high', 'pending', '{{\"holdId\":\"{hid}\"}}');"
+          f"set role service_role; select public.request_employee_hold_release('{eh_org}','{hid}','member:{eh_req}','r','{eh_ticket}',now());"
+          f"reset role; update public.approval_requests set status='approved', resolved_by='{eh_appr}', resolved_at=now() where id='{eh_ticket}';")
+    releases = [f"set role service_role; select public.release_employee_hold('{eh_org}','{hid}','eh','{{}}'::jsonb,now())->>'released';"
+                for _ in range(12)]
+    def _try(cmd):
+        return query(cmd) or "refused"  # query() returns "" when psql errors (ON_ERROR_STOP)
+    with ThreadPoolExecutor(max_workers=12) as pool:
+        released = list(pool.map(_try, releases))
+    assert released.count("true") == 1 and released.count("refused") == 11, released
+    assert query(f"select count(*) from public.audit_events where org_id = '{eh_org}' and action = 'employee.hold.released';") == "1"
+    query("alter table public.employee_holds disable trigger employee_holds_guard;"
+          "alter table public.employees disable trigger employees_hold_guard;"
+          f"update public.employees set hold_state = null, hold_id = null where id = '{eh_emp}';"
+          f"delete from public.audit_events where org_id = '{eh_org}'; delete from public.employee_holds where org_id = '{eh_org}';"
+          "alter table public.employee_holds enable trigger employee_holds_guard;"
+          "alter table public.employees enable trigger employees_hold_guard;"
+          f"delete from public.approval_requests where org_id = '{eh_org}'; delete from public.employees where org_id = '{eh_org}';"
+          f"delete from public.org_members where org_id = '{eh_org}'; delete from public.orgs where id = '{eh_org}';")
+    sql(ROOT / "supabase/verification/20261012500000_employee_holds_rollback.sql")
+    assert query("select to_regclass('public.employee_holds') is null"
+                 " and to_regprocedure('public.start_employee_hold(uuid,uuid,text,text,text,text,text,timestamptz)') is null"
+                 " and to_regprocedure('public.request_employee_hold_release(uuid,uuid,text,text,uuid,timestamptz)') is null"
+                 " and to_regprocedure('public.release_employee_hold(uuid,uuid,text,jsonb,timestamptz)') is null"
+                 " and not exists (select 1 from information_schema.columns where table_schema = 'public'"
+                 " and table_name in ('employees', 'orgs') and column_name in ('hold_state', 'hold_id'));") == "t"
+    sql(holds)  # forward again after rollback
+    sql(ROOT / "tests/security/db-employee-holds.sql")
+    print("PASS: employee holds (20261012500000): employee_holds RLS on / no policy, anon/authenticated no access and cannot execute; "
+          "hold columns + history writable only through the 3 functions; append-only history; start refuses another org's employee, "
+          "idempotent, holds pending / approved-unexecuted tickets only; release needs an approved employee.hold.release ticket "
+          "from an active owner / designated admin of the same org ≠ requester (single-owner exception only with 1 eligible approver), "
+          "audit row in the same transaction (audit failure → no release), held tickets closed_by_hold; ops holds not member-releasable; "
+          "org hold 'stopped' only; 12 concurrent starts → 1 hold, 12 concurrent releases → 1 release + 1 audit row; "
+          "re-applicable; rollback drops table, 3 functions, 4 columns; forward again.")
     webhook_settings = ROOT / "supabase/migrations/20261005100000_employee_webhook_settings.sql"
     sql(webhook_settings)
     sql(webhook_settings)  # re-applicable
