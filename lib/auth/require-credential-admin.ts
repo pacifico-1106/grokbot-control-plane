@@ -7,6 +7,7 @@ import {
   CREDENTIAL_ADMIN_ROLES,
 } from "@/lib/team/rbac";
 import type { OrgMember } from "@/lib/types";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 export { CREDENTIAL_ADMIN_ROLES };
 
@@ -34,7 +35,7 @@ export async function requireCredentialAdmin(
     if (!session.userId || !session.orgId || !session.member) {
       return {
         ok: false,
-        response: NextResponse.json(
+        response: jsonUtf8(
           { ok: false, error: "auth_required", message: "ログインと組織が必要です" },
           { status: 401 }
         ),
@@ -47,7 +48,7 @@ export async function requireCredentialAdmin(
   if (!CREDENTIAL_ADMIN_ROLES.includes(gate.actor.role)) {
     return {
       ok: false,
-      response: NextResponse.json(
+      response: jsonUtf8(
         {
           ok: false,
           error: "role_denied",

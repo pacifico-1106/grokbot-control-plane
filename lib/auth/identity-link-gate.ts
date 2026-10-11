@@ -8,6 +8,7 @@ import { isDemoMode } from "@/lib/mode";
 import { requireCapability } from "@/lib/team/demo-actor";
 import { hasCapability } from "@/lib/team/rbac";
 import type { OrgMember } from "@/lib/types";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 /**
  * Who may connect / re-connect / disconnect an AI employee's external
@@ -34,7 +35,7 @@ export const IDENTITY_LINK_NEXT_STEP_JA =
   "オーナー・管理者、または「雇う／社員証発行」の権限を持つメンバーに連携・解除を依頼してください。同じアカウントで再試行しても成功しません。";
 
 export function identityLinkForbiddenResponse(): NextResponse {
-  return NextResponse.json(
+  return jsonUtf8(
     {
       ok: false,
       error: "capability_denied",
