@@ -69,3 +69,14 @@ test("next.config rewrites route .well-known/oauth-* to the handlers", async () 
   expect(map["/.well-known/oauth-protected-resource"]).toBe("/api/oauth/meta/protected-resource?kind=root");
   expect(map["/.well-known/oauth-authorization-server"]).toBe("/api/oauth/meta/authorization-server");
 });
+
+test("#327 remainder: metadata routes keep METADATA_HEADERS exactly (application/json without charset, cache-control)", async () => {
+  process.env.MCP_OAUTH_ENABLED = "1";
+  const { METADATA_HEADERS } = await import("@/lib/mcp-oauth/metadata");
+  for (const res of [await asm.GET(), await prmGet("mcp"), await prmGet("root")]) {
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("application/json");
+    expect(res.headers.get("content-type")).toBe(METADATA_HEADERS["Content-Type"]);
+    expect(res.headers.get("cache-control")).toBe(METADATA_HEADERS["Cache-Control"]);
+  }
+});
