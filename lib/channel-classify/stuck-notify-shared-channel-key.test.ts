@@ -10,7 +10,7 @@
  *
  * Demo mode, dummy ids, no network.
  */
-import { afterEach, beforeEach, describe, expect, setSystemTime, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { DEMO_ORG } from "@/lib/demo-data";
 import { resetDemoChannelClassifyStore } from "@/lib/data/channel-classify";
 import { resetChannelClassifyBudgetFallbackForTests } from "@/lib/channel-classify/budget";
@@ -27,6 +27,17 @@ let sent: Array<{ orgId: string; text: string }> = [];
 let audits: Array<{ orgId: string; action: string; summary?: string; metadata?: Record<string, unknown> }> = [];
 let seq = 0;
 let now = Date.UTC(2026, 9, 11, 3, 0, 0);
+const realNow = Date.now;
+let fakeNow = now;
+/** Fixed clock (the demo notice window and the org budget read Date.now()). */
+function setSystemTime(at?: Date) {
+  if (!at) {
+    Date.now = realNow;
+    return;
+  }
+  fakeNow = at.getTime();
+  Date.now = () => fakeNow;
+}
 
 function inbox(orgId: string): NotificationChannelRuntime {
   return { id: `nc_${orgId}`, orgId, provider: "slack", label: "x", enabled: true, isDefault: true, config: {}, secrets: {} } as unknown as NotificationChannelRuntime;

@@ -514,6 +514,7 @@ export type AuditAction =
   | "channel_classify.wake_skip_suppressed"
   | "channel_classify.join_ignored"
   | "channel_stuck.notice"
+  | "channel_stuck.notice_suppressed"
   | "conversation.adapter_updated"
   | "conversation.adapter_installed"
   | "slack.posted"
