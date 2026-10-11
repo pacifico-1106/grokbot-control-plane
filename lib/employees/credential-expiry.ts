@@ -88,3 +88,36 @@ export function credentialExpiryLineJa(employee: ExpiryInput, now: Date = new Da
   if (e.state === "expiring") return `社員証期限 ${date}（あと ${e.daysLeft} 日）`;
   return `社員証期限 ${date}`;
 }
+
+/**
+ * Setup diagnostics / home (木村 2026-10-12 follow-up): an ACTIVE employee whose
+ * current 社員証 has expired is listed as 「期限切れ」 instead of as an active /
+ * ready employee. expires_at only — never key material.
+ */
+export function hasExpiredCredential(employee: StatusInput, now: Date = new Date()): boolean {
+  return employee.status === "active" && credentialExpiry(employee, now).state === "expired";
+}
+
+export interface ExpiredCredentialEmployeeRow {
+  employeeId: string;
+  displayName: string;
+  statusLabelJa: "期限切れ";
+  credentialExpiresAt: string | null;
+  credentialExpiresAtJa: string;
+}
+
+export function expiredCredentialEmployeeRow(employee: StatusInput & { id: string; displayName: string }): ExpiredCredentialEmployeeRow {
+  const expiresAt = employee.credentialExpiresAt ?? null;
+  return {
+    employeeId: employee.id,
+    displayName: employee.displayName,
+    statusLabelJa: "期限切れ",
+    credentialExpiresAt: expiresAt,
+    credentialExpiresAtJa: formatCredentialExpiryJa(expiresAt),
+  };
+}
+
+/** One line for nextSteps / issues. dashboardUrl = the AI社員 page (reissue there). */
+export function expiredCredentialStepJa(row: ExpiredCredentialEmployeeRow, dashboardUrl: string): string {
+  return `${row.displayName}: 社員証が期限切れです（${row.credentialExpiresAtJa}）。MCP / OAuth で接続できません。AI社員ページ（${dashboardUrl}）で社員証を再発行してください。`;
+}
