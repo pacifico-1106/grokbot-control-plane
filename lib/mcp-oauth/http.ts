@@ -51,13 +51,18 @@ export function redirect303(location: string, extraHeaders: Record<string, strin
  * Same-origin check for state-changing browser POSTs (consent, login).
  * - `Sec-Fetch-Site`, when present, must be `same-origin`.
  * - `Origin` must be present and equal to the request origin or the issuer origin.
+ * - `Origin: null` (e.g. a form on a page served with Referrer-Policy: no-referrer)
+ *   is accepted ONLY with `Sec-Fetch-Site: same-origin`. Sec-Fetch-* is a forbidden
+ *   header name (pages cannot set it); cross-site, sandboxed-iframe and data: posts
+ *   carry `cross-site` / `none`. A `null` without Sec-Fetch-Site (old browsers,
+ *   non-browser clients) stays rejected (fail closed).
  */
 export function isSameOriginBrowserPost(req: Request, opts: { requireOrigin: boolean }): boolean {
   const site = req.headers.get("sec-fetch-site");
   if (site && site !== "same-origin") return false;
   const origin = req.headers.get("origin");
   if (!origin) return !opts.requireOrigin;
-  if (origin === "null") return false;
+  if (origin === "null") return site === "same-origin";
   const allowed = new Set<string>();
   try {
     allowed.add(new URL(req.url).origin);

@@ -141,7 +141,7 @@ function consentReq(body: Record<string, string>, headers: Record<string, string
 
 describe("POST /api/oauth/consent", () => {
   let jar = new Map<string, string>();
-  async function wire() {
+  async function wire(opts: { lastSignInMsAgo?: number } = {}) {
     const authRes = await authorize.GET(new Request(authorizeUrl, { headers: { "x-real-ip": "192.0.2.1" } }));
     const rid = new URL(authRes.headers.get("location")!).searchParams.get("rid")!;
     // the browser that started the flow keeps the rid-binding cookie
@@ -157,7 +157,7 @@ describe("POST /api/oauth/consent", () => {
         email: "owner@example.jp",
         orgId: "org_a",
         member: { id: "m1", orgId: "org_a", email: "owner@example.jp", displayName: "o", role: "owner", status: "active", capabilities: ["hire_issue_credentials"] } as never,
-        lastSignInAt: new Date(now.getTime() - 60_000).toISOString(),
+        lastSignInAt: new Date(now.getTime() - (opts.lastSignInMsAgo ?? 60_000)).toISOString(),
       }),
       getEmployeeById: async (id) => (id === "emp_1" ? ({ id, orgId: "org_a", displayName: "営業AI", roleLabel: "", status: "active", scopes: [], allowedPurposes: [] } as never) : null),
       listEmployees: async () => [],
@@ -185,9 +185,77 @@ describe("POST /api/oauth/consent", () => {
     const body = { rid, csrf, decision: "allow", employee_id: "emp_1", confirm: "yes" };
     expect((await consent.POST(consentReq(body, { origin: "https://evil.example" }))).status).toBe(403);
     expect((await consent.POST(consentReq(body, { "sec-fetch-site": "cross-site" }))).status).toBe(403);
-    expect((await consent.POST(consentReq(body, { origin: "null" }))).status).toBe(403);
+    // Origin null without the browser's Sec-Fetch-Site: same-origin stays rejected.
+    const nullNoSite = new Request(`${ISSUER}/api/oauth/consent`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", origin: "null" }, body: new URLSearchParams(body).toString() });
+    expect((await consent.POST(nullNoSite)).status).toBe(403);
     const noOrigin = new Request(`${ISSUER}/api/oauth/consent`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams(body).toString() });
     expect((await consent.POST(noOrigin)).status).toBe(403);
+    expect((await store.getAuthRequest(rid))?.consumedAt).toBeNull();
+  });
+
+  // --- Origin: null (consent page served with no-referrer → browsers sent Origin: null; 許可 was always 403) ---
+  function nullOriginReq(body: Record<string, string>, site: string | null) {
+    const headers: Record<string, string> = { "content-type": "application/x-www-form-urlencoded", origin: "null" };
+    if (site !== null) headers["sec-fetch-site"] = site;
+    return new Request(`${ISSUER}/api/oauth/consent`, { method: "POST", headers, body: new URLSearchParams(body).toString() });
+  }
+
+  test("Origin null + Sec-Fetch-Site same-origin, allow → 303 to client with code; redirect stays no-referrer", async () => {
+    const { rid, csrf } = await wire();
+    const res = await consent.POST(nullOriginReq({ rid, csrf, decision: "allow", employee_id: "emp_1", confirm: "yes" }, "same-origin"));
+    expect(res.status).toBe(303);
+    const loc = new URL(res.headers.get("location")!);
+    expect(loc.origin + loc.pathname).toBe(CB);
+    expect(loc.searchParams.get("code")).toBeTruthy();
+    expect(loc.searchParams.get("state")).toBe("s1");
+    expect(res.headers.get("referrer-policy")).toBe("no-referrer");
+    expect((res.headers.get("set-cookie") || "").toLowerCase()).toContain("max-age=0");
+    expect((await store.getAuthRequest(rid))?.consumedAt).not.toBeNull();
+  });
+
+  test("Origin null + Sec-Fetch-Site same-origin, deny → 303 to client with error=access_denied", async () => {
+    const { rid, csrf } = await wire();
+    const res = await consent.POST(nullOriginReq({ rid, csrf, decision: "deny" }, "same-origin"));
+    expect(res.status).toBe(303);
+    expect(new URL(res.headers.get("location")!).searchParams.get("error")).toBe("access_denied");
+  });
+
+  for (const site of [null, "cross-site", "same-site", "none"]) {
+    test(`Origin null + Sec-Fetch-Site ${site ?? "(missing)"} → 403, rid untouched, cookies untouched`, async () => {
+      const { rid, csrf } = await wire();
+      const res = await consent.POST(nullOriginReq({ rid, csrf, decision: "allow", employee_id: "emp_1", confirm: "yes" }, site));
+      expect(res.status).toBe(403);
+      expect(res.headers.get("location")).toBeNull();
+      expect(res.headers.get("set-cookie")).toBeNull();
+      expect((await store.getAuthRequest(rid))?.consumedAt).toBeNull();
+    });
+  }
+
+  test("Origin null + same-origin still needs a valid CSRF token (defense in depth)", async () => {
+    const { rid } = await wire();
+    for (const csrf of ["", "forged", mintConsentCsrf(SECRET, rid, "someone_else", new Date())]) {
+      const res = await consent.POST(nullOriginReq({ rid, csrf, decision: "allow", employee_id: "emp_1", confirm: "yes" }, "same-origin"));
+      expect(res.status).toBe(403);
+      expect(res.headers.get("location")).toBeNull();
+    }
+    expect((await store.getAuthRequest(rid))?.consumedAt).toBeNull();
+  });
+
+  test("Origin null + same-origin still needs the rid-binding cookie of the browser that started the flow", async () => {
+    const { rid, csrf } = await wire();
+    jar.clear();
+    const res = await consent.POST(nullOriginReq({ rid, csrf, decision: "allow", employee_id: "emp_1", confirm: "yes" }, "same-origin"));
+    expect(res.status).toBe(403);
+    expect(res.headers.get("location")).toBeNull();
+    expect((await store.getAuthRequest(rid))?.consumedAt).toBeNull();
+  });
+
+  test("Origin null + same-origin still enforces the 15-minute recent-login check", async () => {
+    const { rid, csrf } = await wire({ lastSignInMsAgo: 16 * 60_000 });
+    const res = await consent.POST(nullOriginReq({ rid, csrf, decision: "allow", employee_id: "emp_1", confirm: "yes" }, "same-origin"));
+    expect(res.status).toBe(401);
+    expect(await res.text()).toContain("login_required");
+    expect(res.headers.get("location")).toBeNull();
     expect((await store.getAuthRequest(rid))?.consumedAt).toBeNull();
   });
 
@@ -269,6 +337,15 @@ describe("login Origin guard (only while OAuth is ON)", () => {
       })
     );
     expect(res.status).toBe(403);
+  });
+
+  test("Origin null login POST without Sec-Fetch-Site same-origin → 403", async () => {
+    for (const site of [null, "cross-site", "same-site", "none"]) {
+      const headers: Record<string, string> = { "content-type": "application/x-www-form-urlencoded", origin: "null" };
+      if (site) headers["sec-fetch-site"] = site;
+      const res = await login.POST(new Request(`${ISSUER}/api/auth/login`, { method: "POST", headers, body: "email=a%40b.c&password=x" }));
+      expect(res.status).toBe(403);
+    }
   });
 });
 
