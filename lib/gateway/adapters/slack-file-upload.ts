@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { preSendHoldCode } from "@/lib/safety/hold";
 import { downloadPublicFile, MAX_FILE_BYTES } from "@/lib/security/public-file-download";
 /**
  * Slack file upload adapter for comm.reply / comm.send egress.
@@ -400,6 +401,9 @@ async function fetchFileFromUrl(
 export async function uploadSlackFile(
   input: SlackFileUploadInput
 ): Promise<SlackFileUploadOutcome> {
+  // S2: last check right before the provider call.
+  const held = await preSendHoldCode(input.orgId, input.employeeId);
+  if (held) return { ok: false, error: held, code: held };
   const resolved = await resolveConversationToken({
     orgId: input.orgId,
     employeeId: input.employeeId,

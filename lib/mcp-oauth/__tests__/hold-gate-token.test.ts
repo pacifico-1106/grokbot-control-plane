@@ -78,17 +78,21 @@ const reader = (emp: string | null): HoldReader => ({
 afterEach(() => __setHoldReaderForTests(null));
 
 describe("S2 G2 token endpoint: no new tokens for a held employee; the refresh token is kept", () => {
-  test("code exchange while held → 403 access_denied, no tokens", async () => {
+  test("code exchange while held → 403 access_denied, no tokens; the code is not burnt", async () => {
     const code = await seed();
     __setHoldReaderForTests(reader("stopped"));
     const r = await exchange(code);
     expect(r.status).toBe(403);
     expect((r.body as Record<string, string>).error).toBe("access_denied");
     expect(JSON.stringify(r.body)).not.toContain("sp_at_");
+    __setHoldReaderForTests(reader(null));
+    expect((await exchange(code)).status).toBe(200);
   });
   test("refresh while held → 403 access_denied; the refresh token still works after release", async () => {
     const code = await seed();
+    __setHoldReaderForTests(reader(null));
     const first = await exchange(code);
+    expect(first.status).toBe(200);
     const rt = String((first.body as Record<string, string>).refresh_token);
     __setHoldReaderForTests(reader("quarantined"));
     const held = await refresh(rt);

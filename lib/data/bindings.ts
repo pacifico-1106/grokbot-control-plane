@@ -15,6 +15,7 @@ import {
   getWakeWebhookSecret as demoGetWakeWebhookSecret,
   unlinkedBinding,
 } from "../bindings";
+import { checkOperable } from "@/lib/safety/hold";
 import { isDemoMode } from "../mode";
 import {
   decryptNotificationSecrets,
@@ -314,6 +315,20 @@ export async function revokeBinding(
 }
 
 export async function assertExecutable(
+  employeeId: string
+): Promise<ExecutableAllow | ExecutableDeny> {
+  const decision = await assertExecutableBinding(employeeId);
+  if (!decision.ok) return decision;
+  // S2 G3 (no flag): the gateway entry for every caller, authenticated or not
+  // (admin MCP stuckWatch.retry, egress retries, lib/mcp/tools.ts). Fail-stop.
+  const operable = await checkOperable({ orgId: decision.binding.orgId || null, employeeId, phase: "gateway" });
+  if (!operable.ok) {
+    return { ok: false, code: operable.code, message: operable.code === "hold_state_unavailable" ? "hold state unavailable; refuse invoke (fail-stop)" : "employee / organization on hold; refuse invoke" };
+  }
+  return decision;
+}
+
+async function assertExecutableBinding(
   employeeId: string
 ): Promise<ExecutableAllow | ExecutableDeny> {
   if (isDemoMode()) return demoAssertExecutable(employeeId);

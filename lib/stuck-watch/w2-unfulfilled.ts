@@ -1,3 +1,4 @@
+import { heldTicketMarker } from "@/lib/safety/hold";
 import { assertApprovalExecutionAuthority } from "@/lib/approvals/execution-authority";
 /**
  * W2: approved-but-unfulfilled watch — auto reinvoke fulfill (max 2).
@@ -137,7 +138,9 @@ export type W2EligibilityResult = {
     | "backoff"
     | "manual_reinvoke_required"
     /** APPROVAL_APP_MISSING_SCOPE_NOTICE_ENABLED: non-transient error, fix then re-invoke (no retry spent). */
-    | "fix_required";
+    | "fix_required"
+    /** S2: a hold touched this ticket (heldByHoldId / closed_by_hold) — never retried. */
+    | "approval_held";
   retryCount: number;
   minutesSinceResolved: number;
 };
@@ -148,6 +151,10 @@ export function evaluateW2Eligibility(
   const { approval, policy, now } = input;
   const meta = parseStuckWatchMeta(approval.metadata);
   const retryCount = meta.w2?.retryCount ?? 0;
+
+  if (heldTicketMarker(approval.metadata)) {
+    return { eligible: false, reason: "approval_held", retryCount, minutesSinceResolved: 0 };
+  }
 
   if (!policy.enabled) {
     return { eligible: false, reason: "disabled", retryCount, minutesSinceResolved: 0 };

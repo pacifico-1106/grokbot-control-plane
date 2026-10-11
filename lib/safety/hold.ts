@@ -245,3 +245,15 @@ async function auditUnavailable(orgId: string, employeeId: string, phase: HoldPh
 export function __resetHoldAuditThrottleForTests(): void {
   lastAudit.clear();
 }
+
+/**
+ * Right before an outbound adapter call (Slack post / file upload / SNS / mail) made
+ * FOR an employee. Returns the refusal code, or null when the send may go out.
+ * Sends without an employee (approval cards, operator notices) are not employee
+ * work and are not stopped here — release notices must still reach people.
+ */
+export async function preSendHoldCode(orgId: string | null | undefined, employeeId: string | null | undefined): Promise<HoldDenyCode | null> {
+  if (!(employeeId ?? "").trim()) return null;
+  const r = await checkOperable({ orgId: orgId ?? null, employeeId, phase: "pre_send" });
+  return r.ok ? null : r.code;
+}

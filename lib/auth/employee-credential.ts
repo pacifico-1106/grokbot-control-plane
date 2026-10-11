@@ -3,6 +3,7 @@
  * Fail-closed: unknown / revoked / expired / rotated-away secrets never soft-pass.
  */
 import { fingerprintSecret } from "@/lib/bindings";
+import { checkOperable, type HoldDenyCode } from "@/lib/safety/hold";
 import {
   findBindingByCredentialFingerprint,
   getBinding,
@@ -29,7 +30,10 @@ export type CredentialAuthFailure = {
     | "invalid_credential"
     | "revoked"
     | "expired"
-    | "employee_not_found";
+    | "employee_not_found"
+    | "employee_held"
+    | "org_held"
+    | "hold_state_unavailable";
   message: string;
   httpStatus: number;
 };
@@ -251,5 +255,16 @@ export async function resolveEmployeeCredential(
     };
   }
 
+  // S2 G1 (emergency stop, no flag): the badge stays valid, but a held employee / org
+  // (or an unreadable hold state) is refused on every request. Fail-stop.
+  const operable = await checkOperable({ orgId: resolved.orgId || employee.orgId, employeeId: resolved.employeeId, phase: "credential" });
+  if (!operable.ok) return holdRefusal(operable.code);
+
   return { ok: true, credential: resolved };
+}
+
+export function holdRefusal(code: HoldDenyCode): CredentialAuthFailure {
+  return code === "hold_state_unavailable"
+    ? { ok: false, code, message: "hold state unavailable; refused (fail-stop)", httpStatus: 503 }
+    : { ok: false, code, message: code === "org_held" ? "organization is on emergency stop" : "employee is on hold (emergency stop / leave)", httpStatus: 403 };
 }

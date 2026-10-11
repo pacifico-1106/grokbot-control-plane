@@ -926,7 +926,10 @@ export type ExecutableDenyCode =
   | "needs_reauth"
   | "degraded"
   | "health_failed"
-  | "not_found";
+  | "not_found"
+  | "employee_held"
+  | "org_held"
+  | "hold_state_unavailable";
 
 export interface ExecutableDeny {
   ok: false;

@@ -12,6 +12,7 @@
  * Responses carry Cache-Control: no-store. Raw tokens / codes / verifiers never
  * reach logs or audit (hash prefix only).
  */
+import { checkOperable } from "@/lib/safety/hold";
 import { createHash, timingSafeEqual } from "node:crypto";
 import { getOAuthStore, type OAuthGrantRecord, type OAuthStore } from "@/lib/data/oauth";
 import {
@@ -99,6 +100,13 @@ async function touch(deps: TokenDeps, clientId: string, now: Date) {
   }
 }
 
+async function operableGrant(g: OAuthGrantRecord): Promise<boolean> {
+  return (await checkOperable({ orgId: g.orgId, employeeId: g.employeeId, phase: "oauth_refresh" })).ok;
+}
+function holdErr(): EndpointResult {
+  return err(403, "access_denied", "the AI employee is on hold (emergency stop); no tokens are issued");
+}
+
 async function activeClient(store: OAuthStore, clientId: string) {
   if (!clientId || clientId.length > 512) return null;
   const c = await store.getClient(clientId);
@@ -182,6 +190,10 @@ export async function handleTokenRequest(req: Request, deps: TokenDeps): Promise
     if (peek.clientId !== client.clientId || peek.redirectUri !== redirectUri || !safeEq(s256(verifier), peek.codeChallenge)) {
       return err(400, "invalid_grant", "code does not match client, redirect_uri or PKCE verifier");
     }
+    // S2 G2: no tokens for a held employee / org (or unreadable hold state). The code is
+    // not consumed, so nothing is burnt; the client re-authorizes after the release.
+    const peekGrant = await deps.store.getGrant(peek.grantId);
+    if (peekGrant && !(await operableGrant(peekGrant))) return holdErr();
     const consumed = await deps.store.consumeCode(codeHash, nowIso);
     if (!consumed.ok) {
       if (consumed.reason === "already_consumed" && consumed.record) {
@@ -237,6 +249,8 @@ export async function handleTokenRequest(req: Request, deps: TokenDeps): Promise
     if (!existing) return err(400, "invalid_grant", "refresh token is invalid");
     const grant = await deps.store.getGrant(existing.grantId);
     if (!grant || grant.clientId !== client.clientId) return err(400, "invalid_grant", "refresh token is invalid");
+    // S2 G2: refused BEFORE rotation, so the refresh token keeps working after release.
+    if (!(await operableGrant(grant))) return holdErr();
 
     const rotated = await deps.store.rotateRefreshToken(hash, nowIso);
     if (!rotated.ok) {

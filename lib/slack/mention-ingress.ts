@@ -36,6 +36,7 @@ import {
   type SlackMentionTarget,
 } from "@/lib/data/slack-identities";
 import { getWakeWebhookSecret, readWakeWebhookSecretStrict } from "@/lib/data/bindings";
+import { checkOperable } from "@/lib/safety/hold";
 import {
   categorizeFetchError,
   categorizeHttpStatus,
@@ -492,6 +493,22 @@ async function postWake(
         },
       }
     : {};
+
+  // S2 G5 (no flag): no wake for a held employee / org, or when the hold state can't be
+  // read. Not queued: a wake suppressed during a hold is never delivered later (§2.5).
+  const operable = await checkOperable({ orgId: target.orgId, employeeId: target.employeeId, phase: "wake" });
+  if (!operable.ok) {
+    await appendAuditEvent({
+      orgId: target.orgId,
+      employeeId: target.employeeId,
+      credentialId: null,
+      action: "employee.hold.wake_suppressed",
+      purpose,
+      summary: "wake_suppressed_on_hold",
+      metadata: { reason: operable.code, holdId: operable.holdId, trigger, channel: payload.channel, ts: payload.ts, eventId: payload.eventId },
+    }).catch(() => undefined);
+    return;
+  }
 
   const url = target.wakeWebhookUrl?.trim() || "";
   if (!url) {
@@ -1705,3 +1722,6 @@ export async function handleSlackEventsRequest(input: {
   }
   return { status: result.status, body: result.body };
 }
+
+/** Tests only (S2 G5 wake gate). */
+export const __postWakeForTests = postWake;

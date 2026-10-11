@@ -7,6 +7,7 @@ import { demoGetApproval } from "@/lib/data/demo-approvals-store";
 import { assertApprovalExecutionAuthority } from "./execution-authority";
 import { canFulfillApproval } from "./workflow-integration";
 import { isApprovalAppScopeRetryable } from "@/lib/slack/approval-app-scope-notice";
+import { assertTicketNotHeld, HOLD_STOP_CODES } from "@/lib/safety/hold";
 
 type Result = { ok: boolean; error?: string };
 type State = "running" | "succeeded" | "failed" | "uncertain";
@@ -66,7 +67,8 @@ export function isRetryableApprovalFailure(tool: string, code: string): boolean 
   if (!code) return false;
   // APPROVAL_APP_MISSING_SCOPE_NOTICE_ENABLED: approval_app_missing_scope of the
   // approval-app setup tools (refused before any write / post) → re-run after reinstall.
-  return retryable.has(code) || Boolean(retryableByTool[tool]?.has(code)) || isApprovalAppScopeRetryable(tool, code);
+  // Hold stops happen before any provider call; the ticket stays approved (held), never "uncertain".
+  return retryable.has(code) || HOLD_STOP_CODES.has(code) || Boolean(retryableByTool[tool]?.has(code)) || isApprovalAppScopeRetryable(tool, code);
 }
 
 function approvalToolName(approval: ApprovalRequest): string {
@@ -94,6 +96,7 @@ export async function executeApproval<T extends Result>(
 ): Promise<T | null> {
   const already = storedSuccess<T>(approval);
   if (already) return already;
+  assertTicketNotHeld(approval); // S2 must-have: before any claim
   await assertApprovalExecutionAuthority(approval);
   const workflow = await canFulfillApproval(approval);
   if (!workflow.canFulfill) throw new Error(workflow.reason);
