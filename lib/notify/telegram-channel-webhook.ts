@@ -76,6 +76,15 @@ export async function handleTelegramChannelUpdate(
       await answerTelegramCallbackForChannel(channel, query.id || "", "この操作は許可されていません");
       return { processed: true, ignored: true };
     }
+    // S3: 「緊急停止」 button (stop only; release is web-only).
+    const stopMatch = /^s:([A-Za-z0-9_-]{8,32})$/.exec(query.data || "");
+    if (stopMatch) {
+      const { stopFromInbox } = await import("@/lib/safety/hold-inbox");
+      const r = await stopFromInbox({ orgId: channel.orgId, provider: "telegram", channelId: channel.id,
+        userId: String(query.from?.id ?? ""), ref: stopMatch[1], externalMessageId: String(query.message?.message_id ?? "") });
+      await answerTelegramCallbackForChannel(channel, query.id || "", r.text.slice(0, 190));
+      return { processed: true };
+    }
     const match = /^(a|r|e):([A-Za-z0-9_-]{8,32})$/.exec(query.data || "");
     const approval = match ? await getApprovalByTelegramRef(match[2], channel.orgId) : null;
     const delivery = approval

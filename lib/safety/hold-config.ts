@@ -55,3 +55,8 @@ export function isHoldReleaseTicket(approval: { tool?: string | null; metadata?:
   const md = approval.metadata ?? {};
   return String(md.adminTool ?? approval.tool ?? "") === HOLD_RELEASE_TOOL;
 }
+
+/** Inbox cards show 「緊急停止」 only with the flag ON, for an employee's ticket (never a release ticket). */
+export function showHoldStopButton(approval: { employeeId?: string | null; tool?: string | null; metadata?: Record<string, unknown> | null }): boolean {
+  return isEmployeeHoldEnabled() && Boolean(approval.employeeId) && !isHoldReleaseTicket(approval);
+}
