@@ -5,6 +5,7 @@
  * Session), event + Session dedupe, invalid metadata, flag OFF, no raw email in logs.
  */
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { createHmac } from "node:crypto";
 import type StripeType from "stripe";
 // @ts-expect-error -- direct file import of the node build (no type entry)
 import StripeNodeBuild from "../../../../node_modules/stripe/esm/stripe.esm.node.js";
@@ -22,6 +23,7 @@ const realStore = { ...realStoreModule };
 const SECRET = "whsec_test_secret_for_lp_tests";
 const EMAIL = "Hanako.Suzuki@Customer-Corp.co.jp";
 const SLACK = "https://hooks.slack.test/services/T/B/lp";
+const EMAIL_KEY = "lp-email-hash-key-route-fixture-0123456789";
 process.env.STRIPE_WEBHOOK_SECRET = SECRET;
 
 const stripe = new Stripe("sk_test_unit_dummy", { typescript: true });
@@ -132,6 +134,7 @@ beforeEach(() => {
   process.env.LP_HANDOFF_NOTIFY_SLACK_WEBHOOK = SLACK;
   process.env.BILLING_NOTIFY_EMAIL = "ops@staffpass.example";
   process.env.STRIPE_WEBHOOK_SECRET = SECRET;
+  process.env.LP_CUSTOMER_EMAIL_HASH_KEY = EMAIL_KEY;
   ledger = realLedger.createMemoryStripeWebhookEventStore();
   ledgerOverride = undefined;
   lpStore = realStore.createMemoryLpProvisioningStore();
@@ -190,7 +193,7 @@ describe("paid → record + notify once", () => {
     expect(lpStore.payments.size).toBe(1);
     const row = lpStore.payments.get("cs_test_lp1")!;
     expect(row).toMatchObject({ amountTotal: 165000, currency: "jpy", lpPage: "ai-employee-corp", lpRef: "partner_01", referralCode: "AIC-ABCD1234", customerEmailDomain: "customer-corp.co.jp", noticeResult: "sent" });
-    expect(row.customerEmailSha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(row.customerEmailHmac).toBe(createHmac("sha256", EMAIL_KEY).update(EMAIL.toLowerCase(), "utf8").digest("hex"));
     expect(JSON.stringify(row).toLowerCase()).not.toContain("hanako");
     expect(lpStore.events.get(evt.id)).toMatchObject({ outcome: "paid", stripeCheckoutSessionId: "cs_test_lp1" });
     expect(slackPosts).toHaveLength(1);
@@ -316,6 +319,52 @@ describe("dedupe: event id and Session id", () => {
     const body = await (await POST(signed(makeEvent("checkout.session.completed", lpSession())))).json();
     expect(body.lpSetupFee.action).toBe("no_destination");
     expect(lpStore.payments.get("cs_test_lp1")!.noticeResult).toBe("no_destination");
+  });
+});
+
+describe("LP_CUSTOMER_EMAIL_HASH_KEY missing → fail closed", () => {
+  for (const v of [undefined, "", "replace_me"]) {
+    test(`key ${v === undefined ? "unset" : JSON.stringify(v)}: 200, event recorded as ignored (email_hash_key_missing), nothing stored, no Stripe call, no notice`, async () => {
+      if (v === undefined) delete process.env.LP_CUSTOMER_EMAIL_HASH_KEY;
+      else process.env.LP_CUSTOMER_EMAIL_HASH_KEY = v;
+      const evt = makeEvent("checkout.session.completed", lpSession());
+      const res = await POST(signed(evt));
+      expect(res.status).toBe(200);
+      expect((await res.json()).lpSetupFee).toEqual({ action: "ignored", reason: "email_hash_key_missing", mode: "dry_run" });
+      expect(lpStore.events.get(evt.id)).toMatchObject({ outcome: "ignored", reason: "email_hash_key_missing", stripeCheckoutSessionId: "cs_test_lp1" });
+      expect(lpStore.payments.size).toBe(0);
+      expect(sessionRetrieves).toEqual([]);
+      expect(noticesSent()).toBe(0);
+      expect(logs.join("\n")).toContain("LP_CUSTOMER_EMAIL_HASH_KEY");
+      expect(ledger.rows.get(evt.id)?.status).toBe("processed");
+    });
+  }
+  test("after the key is set, re-sending the same event from Stripe records and notifies once", async () => {
+    delete process.env.LP_CUSTOMER_EMAIL_HASH_KEY;
+    ledgerOverride = null; // Stripe dashboard "resend" re-delivers the same event id; the app ledger is bypassed here
+    const evt = makeEvent("checkout.session.completed", lpSession());
+    await POST(signed(evt));
+    process.env.LP_CUSTOMER_EMAIL_HASH_KEY = EMAIL_KEY;
+    const body = await (await POST(signed(evt))).json();
+    expect(body.lpSetupFee.action).toBe("notified");
+    expect(lpStore.payments.size).toBe(1);
+    expect(noticesSent()).toBe(2);
+  });
+});
+
+describe("no raw email anywhere", () => {
+  test("payment row, event rows, notices, response body and logs never contain the address or its local part", async () => {
+    const res = await POST(signed(makeEvent("checkout.session.completed", lpSession())));
+    const all = [
+      JSON.stringify([...lpStore.payments.values()]),
+      JSON.stringify([...lpStore.events.values()]),
+      ...slackPosts.map((p) => p.body),
+      ...emails.map((e) => `${e.subject}${e.body}`),
+      JSON.stringify(await res.json()),
+      logs.join("\n"),
+    ].join("\n").toLowerCase();
+    expect(all).not.toContain(EMAIL.toLowerCase());
+    expect(all).not.toContain("hanako.suzuki");
   });
 });
 

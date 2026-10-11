@@ -5,6 +5,8 @@
  * fingerprint (never raw), amount formatting, notice content, paid decision.
  */
 import { afterEach, describe, expect, test } from "bun:test";
+import { createHash, createHmac } from "node:crypto";
+import { isLpEmailHashKeyConfigured, requireLpEmailHashKey } from "@/lib/security/lp-email-hash-key";
 import { lpAutoProvisionMode } from "@/lib/feature-flags";
 import {
   INVALID_MARKER,
@@ -56,18 +58,54 @@ describe("metadata re-validation", () => {
   });
 });
 
-describe("customer email: never raw", () => {
-  test("sha256 of the trimmed lower-cased address + domain only", () => {
-    const f = emailFingerprint(EMAIL);
-    expect(f.sha256).toMatch(/^[0-9a-f]{64}$/);
-    expect(f.sha256).toBe(emailFingerprint("  taro.yamada+lp@example.co.jp ").sha256);
+const KEY_A = "lp-email-hash-key-fixture-a-0123456789";
+const KEY_B = "lp-email-hash-key-fixture-b-0123456789";
+
+describe("customer email: keyed HMAC-SHA256, never raw (木村 2026-10-12 on #342)", () => {
+  test("HMAC-SHA256(key, trimmed lower-cased address) + domain only", () => {
+    const f = emailFingerprint(EMAIL, KEY_A);
+    expect(f.hmac).toMatch(/^[0-9a-f]{64}$/);
+    expect(f.hmac).toBe(createHmac("sha256", KEY_A).update("taro.yamada+lp@example.co.jp", "utf8").digest("hex"));
     expect(f.domain).toBe("example.co.jp");
     expect(JSON.stringify(f)).not.toContain("taro");
   });
+  test("same address + same key → same hash (normalised)", () => {
+    expect(emailFingerprint(EMAIL, KEY_A).hmac).toBe(emailFingerprint("  taro.yamada+lp@example.co.jp ", KEY_A).hmac);
+  });
+  test("another key → a different hash; the unkeyed sha256 is never produced", () => {
+    expect(emailFingerprint(EMAIL, KEY_B).hmac).not.toBe(emailFingerprint(EMAIL, KEY_A).hmac);
+    const plain = createHash("sha256").update("taro.yamada+lp@example.co.jp", "utf8").digest("hex");
+    expect(emailFingerprint(EMAIL, KEY_A).hmac).not.toBe(plain);
+  });
   test("missing / malformed address → nulls / marker", () => {
-    expect(emailFingerprint(null)).toEqual({ sha256: null, domain: null });
-    expect(emailFingerprint("no-at-sign")).toEqual({ sha256: null, domain: null });
-    expect(emailFingerprint("a@exa mple<.com").domain).toBe(INVALID_MARKER);
+    expect(emailFingerprint(null, KEY_A)).toEqual({ hmac: null, domain: null });
+    expect(emailFingerprint("no-at-sign", KEY_A)).toEqual({ hmac: null, domain: null });
+    expect(emailFingerprint("a@exa mple<.com", KEY_A).domain).toBe(INVALID_MARKER);
+  });
+});
+
+describe("LP_CUSTOMER_EMAIL_HASH_KEY: required, fail closed (same rules as IP_HASH_KEY)", () => {
+  afterEach(() => {
+    delete process.env.LP_CUSTOMER_EMAIL_HASH_KEY;
+  });
+  test("missing / blank / placeholder → not configured; requireLpEmailHashKey throws the coded error", () => {
+    for (const v of [undefined, "", "   ", "replace_me", "REPLACE_ME_later", "changeme"]) {
+      if (v === undefined) delete process.env.LP_CUSTOMER_EMAIL_HASH_KEY;
+      else process.env.LP_CUSTOMER_EMAIL_HASH_KEY = v;
+      expect(isLpEmailHashKeyConfigured()).toBe(false);
+      let code: unknown;
+      try {
+        requireLpEmailHashKey();
+      } catch (e) {
+        code = (e as { code?: string }).code;
+      }
+      expect(code).toBe("lp_email_hash_key_missing");
+    }
+  });
+  test("set → returned as is", () => {
+    process.env.LP_CUSTOMER_EMAIL_HASH_KEY = KEY_A;
+    expect(isLpEmailHashKeyConfigured()).toBe(true);
+    expect(requireLpEmailHashKey()).toBe(KEY_A);
   });
 });
 
@@ -115,7 +153,7 @@ describe("paid decision uses the re-fetched Session only", () => {
     customer_details: { email: EMAIL }, ...over,
   });
   test("paid + complete + lp source → paid record", () => {
-    const d = decideLpSetupFeeSession(event, "cs_test_abc123", session() as never);
+    const d = decideLpSetupFeeSession(event, "cs_test_abc123", session() as never, KEY_A);
     expect(d.outcome).toBe("paid");
   });
   for (const [name, over, reason] of [
@@ -131,15 +169,15 @@ describe("paid decision uses the re-fetched Session only", () => {
     ["bad currency", { currency: "JP Y" }, "invalid_currency"],
   ] as const) {
     test(`${name} → ignored (${reason})`, () => {
-      const d = decideLpSetupFeeSession(event, "cs_test_abc123", session(over as Record<string, unknown>) as never);
+      const d = decideLpSetupFeeSession(event, "cs_test_abc123", session(over as Record<string, unknown>) as never, KEY_A);
       expect(d).toEqual({ outcome: "ignored", reason });
     });
   }
   test("async_payment_failed → ignored even if the Session says paid", () => {
-    expect(decideLpSetupFeeSession({ ...event, type: "checkout.session.async_payment_failed" }, "cs_test_abc123", session() as never)).toEqual({ outcome: "ignored", reason: "async_payment_failed" });
+    expect(decideLpSetupFeeSession({ ...event, type: "checkout.session.async_payment_failed" }, "cs_test_abc123", session() as never, KEY_A)).toEqual({ outcome: "ignored", reason: "async_payment_failed" });
   });
   test("the record carries the sanitized metadata and the email fingerprint, never the address", () => {
-    const d = decideLpSetupFeeSession(event, "cs_test_abc123", session({ metadata: { source: "lp-ai-employee", plan: "proper", lpPage: "evil", lpRef: "ok_ref", referralCode: "AIC-ZZZZ9999" } }) as never);
+    const d = decideLpSetupFeeSession(event, "cs_test_abc123", session({ metadata: { source: "lp-ai-employee", plan: "proper", lpPage: "evil", lpRef: "ok_ref", referralCode: "AIC-ZZZZ9999" } }) as never, KEY_A);
     if (d.outcome !== "paid") throw new Error("expected paid");
     expect(d.record).toMatchObject({ lpPage: INVALID_MARKER, lpRef: "ok_ref", referralCode: "AIC-ZZZZ9999", customerEmailDomain: "example.co.jp", amountTotal: 165000, currency: "jpy" });
     expect(JSON.stringify(d.record)).not.toMatch(/taro/i);
