@@ -116,6 +116,7 @@ ADDITIVE = [
     ("20261005200000_", "tests/security/db-channel-classify.sql", ("channel_classify_proposals", "channel_stuck_notice_windows")),
     ("20261005400000_", "tests/security/db-channel-classify-budget.sql", ("channel_classify_budget_windows",)),
     ("20261009100000_", "tests/security/db-thread-single-flight.sql", ("thread_send_leases", "thread_self_posts")),
+    ("20261009700000_", "tests/security/db-slack-skipped-wakes.sql", ("slack_skipped_channel_wakes",)),
     ("20261010200000_", "tests/security/db-mcp-oauth.sql", ("oauth_clients", "oauth_authorization_requests", "oauth_grants",
      "oauth_authorization_codes", "oauth_access_tokens", "oauth_refresh_tokens", "oauth_rate_limits")),
 ]

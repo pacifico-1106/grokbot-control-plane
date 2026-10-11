@@ -10,13 +10,20 @@
  *   proposal_failed              classification ticket could not be opened
  *   stuck_watch_mouth_fallback   stuck-watch alert whose notifyMouth is unset / missing
  *   proposal_rate_limited        the org hit the hourly proposal cap (one per window)
+ *   unclassified_channel_wake_skipped  Path C: a mention in an unclassified channel
+ *                                did not wake the employee (same 6h window as the deny notice)
  *
  * Routing (same org only): the employee's approval channel → the org's
  * default (else first) enabled approval channel → ops (PLATFORM_OPS_ORG_ID
  * audit mirror, ids only, + APPROVAL_ALERT_OPS_EMAILS) → "undelivered".
  * A tenant audit row (channel_stuck.notice) is always written.
  * Rate-limited per org × kind × channel (DB window; per-instance fallback when
- * the store is unavailable), then capped per org per hour (H1,
+ * the store is unavailable). #292 (木村 2026-10-11): unregistered_channel_denied
+ * and unclassified_channel_wake_skipped share ONE key per org × channel
+ * (`unclassified_channel|<surface>:<id>`), so the channel gets one notice per 6h
+ * that names the event; a later event of either kind inside the window is
+ * suppressed and written to the tenant audit (channel_stuck.notice_suppressed,
+ * ids only). Then capped per org per hour (H1,
  * CHANNEL_STUCK_MAX_NOTICES_PER_HOUR): over the cap → ONE summary notice, then
  * "rate_limited" until the window rolls. Content: ids, reason codes, next
  * step — never a message body, token or secret. Never throws.
@@ -25,6 +32,7 @@
  * conditions the tenant cannot be told through its own approval channel
  * (no admin approver). Rate-limited per org × reason.
  */
+import { classifyRejectGuidanceNoticeJa } from "@/lib/channel-classify/reject-guidance";
 import { isChannelStuckNotifyEnabled } from "@/lib/channel-classify/flags";
 import { takeChannelStuckNoticeSlot } from "@/lib/data/channel-classify";
 import { buildUnregisteredDenyNoticeJa, surfaceLabel, type ProposalState } from "@/lib/channel-classify/core";
@@ -39,7 +47,12 @@ export type StuckNoticeKind =
   | "backfill_failed"
   | "proposal_failed"
   | "stuck_watch_mouth_fallback"
-  | "proposal_rate_limited";
+  | "proposal_rate_limited"
+  | "unclassified_channel_wake_skipped";
+
+/** #292: these two kinds share one dedup key per org × channel (one notice per 6h). */
+const CHANNEL_SHARED_KINDS = new Set<StuckNoticeKind>(["unregistered_channel_denied", "unclassified_channel_wake_skipped"]);
+const CHANNEL_SHARED_KEY_PREFIX = "unclassified_channel";
 
 const KINDS = new Set<StuckNoticeKind>([
   "unregistered_channel_denied",
@@ -49,6 +62,7 @@ const KINDS = new Set<StuckNoticeKind>([
   "proposal_failed",
   "stuck_watch_mouth_fallback",
   "proposal_rate_limited",
+  "unclassified_channel_wake_skipped",
 ]);
 
 export type StuckNoticeInput = {
@@ -119,6 +133,10 @@ function code(value: unknown, fallback: string): string {
 }
 
 function noticeKey(input: StuckNoticeInput, ref: { surface: string; externalId: string } | null): string {
+  if (CHANNEL_SHARED_KINDS.has(input.kind) && (input.dedupeKey || ref)) {
+    const target = input.dedupeKey || `${ref!.surface}:${ref!.externalId}`;
+    return `${CHANNEL_SHARED_KEY_PREFIX}|${target}`.replace(/[^A-Za-z0-9_.:@+|-]+/g, "_").slice(0, 200);
+  }
   const raw = input.dedupeKey ? `${input.kind}|${input.dedupeKey}` : `${input.kind}|${ref ? `${ref.surface}:${ref.externalId}` : "-"}`;
   return raw.replace(/[^A-Za-z0-9_.:@+|-]+/g, "_").slice(0, 200) || input.kind;
 }
@@ -140,7 +158,25 @@ function clip(text: string, max: number): string {
   return text.replace(/[<>]/g, "").slice(0, max);
 }
 
+const SHARED_EVENT_LABEL_JA: Partial<Record<StuckNoticeKind, string>> = {
+  unregistered_channel_denied: "未登録チャネルへの投稿を拒否しました",
+  unclassified_channel_wake_skipped: "未登録チャネルでのメンションで社員を起こしませんでした",
+};
+
+/** #292: which event this shared org × channel notice is about, and the shared 6h window. */
+function sharedEventLinesJa(kind: StuckNoticeKind): string {
+  return [
+    `イベント: ${kind}（${SHARED_EVENT_LABEL_JA[kind] ?? kind}）`,
+    `同じチャネルの投稿拒否・メンション見送りの通知は 6 時間に 1 回です（その間の件数は監査ログに記録します）。`,
+  ].join("\n");
+}
+
 export function buildStuckNoticeTextJa(input: StuckNoticeInput, ref: { surface: string; externalId: string } | null, reason: string): string {
+  const base = buildStuckNoticeBodyJa(input, ref, reason);
+  return CHANNEL_SHARED_KINDS.has(input.kind) ? `${base}\n${sharedEventLinesJa(input.kind)}` : base;
+}
+
+function buildStuckNoticeBodyJa(input: StuckNoticeInput, ref: { surface: string; externalId: string } | null, reason: string): string {
   const where = ref ? `${surfaceLabel(ref.surface)} ${ref.externalId}` : "";
   switch (input.kind) {
     case "unregistered_channel_denied":
@@ -173,6 +209,23 @@ export function buildStuckNoticeTextJa(input: StuckNoticeInput, ref: { surface: 
       ].join("\n");
     case "stuck_watch_mouth_fallback":
       return `${clip(input.text || "⚠️ Staffpass: 滞留アラート", 1200)}\n（通知先 notifyMouth が未設定または無効のため、承認窓口へ届けています）`;
+    case "unclassified_channel_wake_skipped": {
+      const approvalId = id(input.approvalId);
+      const lines = [
+        `⚠️ Staffpass: 分類が未登録のチャネルでのメンションに社員が反応できませんでした${where ? `（${where}）` : ""}`,
+        `理由: ${reason} — 未登録のチャネルでは安全のため社員を起こしません。本文は含めていません。`,
+      ];
+      if (approvalId && (input.proposalState === undefined || input.proposalState === "created" || input.proposalState === "pending")) {
+        lines.push(`対処: 承認窓口に届いている分類チケット（channels.classify）を承認すると、以降のメンションで起きるようになります（承認ID: ${approvalId}）。${classifyRejectGuidanceNoticeJa()}`);
+      } else if (approvalId && input.proposalState === "decided") {
+        lines.push(`分類チケットは処理済みです（承認ID: ${approvalId}）。変える場合は管理エージェントで channels.classify を依頼してください。`);
+      } else if (ref) {
+        lines.push(`対処: 管理エージェントで channels.classify（surface=${ref.surface}, externalId=${ref.externalId}）を依頼し、承認してください。`);
+      } else {
+        lines.push(`対処: 管理エージェントで channels.classify を依頼し、承認してください。`);
+      }
+      return lines.join("\n");
+    }
     case "proposal_rate_limited":
       return [
         `⚠️ Staffpass: チャネル分類の自動提案が 1 時間あたりの上限（${limitText(input.limit)}件）に達しました`,
@@ -204,8 +257,32 @@ export async function notifyChannelStuck(input: StuckNoticeInput): Promise<Stuck
       : null;
     const reason = code(input.reason, "unknown");
     const key = noticeKey(input, ref);
-    const windowSeconds = input.kind === "unregistered_channel_denied" ? DENY_NOTICE_WINDOW_SECONDS : OTHER_NOTICE_WINDOW_SECONDS;
-    if (!(await takeSlot(orgId, key, windowSeconds))) return { status: "suppressed" };
+    const windowSeconds = input.kind === "unregistered_channel_denied" || input.kind === "unclassified_channel_wake_skipped" ? DENY_NOTICE_WINDOW_SECONDS : OTHER_NOTICE_WINDOW_SECONDS;
+    if (!(await takeSlot(orgId, key, windowSeconds))) {
+      if (CHANNEL_SHARED_KINDS.has(input.kind) && ref) {
+        // #292: counted in the tenant audit (ids + reason code only).
+        await deps
+          .audit({
+            orgId,
+            employeeId: null,
+            credentialId: null,
+            action: "channel_stuck.notice_suppressed",
+            purpose: "admin.channel",
+            summary: `滞留通知を抑止（同じチャネルの通知が ${windowSeconds / 3600} 時間以内に送信済み / ${input.kind}）: ${surfaceLabel(ref.surface)} ${ref.externalId}`,
+            metadata: {
+              auditClass: "admin",
+              event: `channel_stuck.${input.kind}.suppressed`,
+              kind: input.kind,
+              surface: ref.surface,
+              externalId: ref.externalId,
+              reason,
+              windowHours: windowSeconds / 3600,
+            },
+          })
+          .catch(() => undefined);
+      }
+      return { status: "suppressed" };
+    }
 
     // H1: per-org hourly cap. The proposal-cap summary is itself capped (once
     // per proposal window) and must not be eaten by the notice cap.
