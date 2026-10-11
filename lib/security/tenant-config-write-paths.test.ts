@@ -78,6 +78,10 @@ const SELECT_POLICIES = [
 const CREDENTIAL_READERS = [
   "lib/auth/approval-authority.ts",
   "lib/auth/employee-credential.ts",
+  // 社員証 pre-expiry notice (2026-10-12, flag CREDENTIAL_EXPIRY_NOTICE_ENABLED):
+  // service-role read of id / org_id / employee_id / expires_at of non-revoked
+  // badges expiring within 7 days, from the daily cron (never secret_hash / prefix).
+  "lib/data/credential-expiry-notices.ts",
   "lib/data/employees.ts",
   // MCP Events (2026-10-05): service-role read of revoked_at / expires_at only,
   // re-checking the subscribing badge on every delivery attempt (never secret_hash).
