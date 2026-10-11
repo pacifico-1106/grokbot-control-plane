@@ -12,7 +12,10 @@
 --   start_employee_hold(org, employee|null, kind, reason, started_by, started_via, trigger, at)
 --     one transaction: history row → hold_state / hold_id → pending and
 --     approved-but-unexecuted tickets of that employee (all of the org for an
---     org hold) get metadata.heldByHoldId. Idempotent (an open hold is returned).
+--     org hold) get metadata.heldByHoldId. A same-or-weaker re-stop returns the
+--     open hold; a STRONGER one (ops 3 > auto cutoff / incident 2 > leave 1)
+--     upgrades: the old row is closed as superseded_by the new one (history),
+--     tickets follow. Terminated employees can still be stopped.
 --     Another org's employee → employee_not_found.
 --   request_employee_hold_release(org, hold, requested_by, reason, approval, at)
 --     member requester only (never system / ops / AI), a reason, and a pending
@@ -51,6 +54,12 @@ create table if not exists public.employee_holds (
   released_by text check (released_by is null or released_by ~ '^member:[0-9a-f-]{36}$'),
   released_at timestamptz,
   trigger text check (trigger is null or trigger ~ '^[A-Za-z0-9_.:=<>-]{1,200}$'),
+  -- Upgrade (木村 10/12): a stronger re-stop closes this row as superseded and opens a new one.
+  upgraded_from uuid references public.employee_holds(id),
+  superseded_by uuid references public.employee_holds(id) deferrable initially deferred,
+  superseded_at timestamptz,
+  constraint employee_holds_superseded_shape check (
+    ((superseded_by is null) = (superseded_at is null)) and not (superseded_at is not null and released_at is not null)),
   constraint employee_holds_org_kind_check check (employee_id is not null or kind = 'stopped'),
   constraint employee_holds_anomaly_shape check ((started_via = 'anomaly') = (started_by = 'system:anomaly')),
   constraint employee_holds_request_shape check ((release_requested_by is null) = (release_requested_at is null)),
@@ -60,9 +69,9 @@ create table if not exists public.employee_holds (
 );
 create index if not exists employee_holds_org_idx on public.employee_holds (org_id, started_at desc);
 create unique index if not exists employee_holds_one_open_per_employee
-  on public.employee_holds (employee_id) where released_at is null and employee_id is not null;
+  on public.employee_holds (employee_id) where released_at is null and superseded_at is null and employee_id is not null;
 create unique index if not exists employee_holds_one_open_per_org
-  on public.employee_holds (org_id) where released_at is null and employee_id is null;
+  on public.employee_holds (org_id) where released_at is null and superseded_at is null and employee_id is null;
 
 alter table public.employee_holds enable row level security;
 revoke all on table public.employee_holds from public, anon, authenticated;
@@ -106,7 +115,7 @@ begin
       select 1 from public.employees e where e.id = new.employee_id and e.org_id = new.org_id) then
       raise exception 'employee_holds_cross_org';
     end if;
-    if new.released_at is not null or new.release_requested_by is not null then
+    if new.released_at is not null or new.release_requested_by is not null or new.superseded_at is not null then
       raise exception 'employee_holds_immutable';
     end if;
     return new;
@@ -115,10 +124,10 @@ begin
      or new.employee_id is distinct from old.employee_id or new.kind is distinct from old.kind
      or new.reason is distinct from old.reason or new.started_by is distinct from old.started_by
      or new.started_via is distinct from old.started_via or new.started_at is distinct from old.started_at
-     or new.trigger is distinct from old.trigger then
+     or new.trigger is distinct from old.trigger or new.upgraded_from is distinct from old.upgraded_from then
     raise exception 'employee_holds_immutable';
   end if;
-  if old.released_at is not null then raise exception 'employee_holds_immutable'; end if;
+  if old.released_at is not null or old.superseded_at is not null then raise exception 'employee_holds_immutable'; end if;
   return new;
 end $ehg$;
 drop trigger if exists employee_holds_guard on public.employee_holds;
@@ -141,7 +150,7 @@ begin
   end if;
   if new.hold_id is not null then
     select * into h from public.employee_holds where id = new.hold_id;
-    if not found or h.released_at is not null or h.kind is distinct from new.hold_state then
+    if not found or h.released_at is not null or h.superseded_at is not null or h.kind is distinct from new.hold_state then
       raise exception 'hold_columns_mismatch';
     end if;
     -- (separate branches: orgs has no org_id column)
@@ -161,12 +170,17 @@ drop trigger if exists orgs_hold_guard on public.orgs;
 create trigger orgs_hold_guard before insert or update of hold_state, hold_id on public.orgs
   for each row execute function public.hold_columns_guard();
 
+create or replace function public.employee_hold_rank(p_kind text, p_via text) returns integer
+language sql immutable set search_path = pg_catalog, public as $ehr$
+  select case when p_via = 'ops_console' then 3 when p_kind in ('stopped', 'quarantined') then 2 when p_kind = 'leave' then 1 else 0 end
+$ehr$;
+
 create or replace function public.start_employee_hold(
   p_org uuid, p_employee uuid, p_kind text, p_reason text,
   p_started_by text, p_started_via text, p_trigger text, p_at timestamptz
 ) returns jsonb
 language plpgsql security invoker set search_path = pg_catalog, public as $seh$
-declare existing uuid; hid uuid; n integer;
+declare existing uuid; hid uuid; n integer; prev public.employee_holds%rowtype;
 begin
   if p_employee is null then
     select hold_id into existing from public.orgs where id = p_org for update;
@@ -176,13 +190,23 @@ begin
     if not found then raise exception 'employee_not_found'; end if;
   end if;
   if existing is not null then
-    return jsonb_build_object('holdId', existing, 'created', false, 'heldTickets', 0);
+    select * into prev from public.employee_holds where id = existing for update;
+    -- Strength (木村 10/12): ops stop 3 > automatic cutoff / incident stop 2 > leave 1.
+    -- Only a STRONGER re-stop moves the hold (upgrade); same / weaker returns it.
+    -- Moving down happens only through the release flow.
+    if public.employee_hold_rank(p_kind, p_started_via) <= public.employee_hold_rank(prev.kind, prev.started_via) then
+      return jsonb_build_object('holdId', existing, 'created', false, 'upgraded', false, 'heldTickets', 0);
+    end if;
   end if;
   perform set_config('staffpass.hold_write', 'on', true);
-  insert into public.employee_holds(org_id, employee_id, kind, reason, started_by, started_via, started_at, trigger)
-  values (p_org, p_employee, p_kind, nullif(btrim(coalesce(p_reason, '')), ''), p_started_by, p_started_via,
-          coalesce(p_at, now()), p_trigger)
-  returning id into hid;
+  hid := gen_random_uuid();
+  if existing is not null then
+    -- close the weaker hold first (the open-hold unique index allows one open row)
+    update public.employee_holds set superseded_by = hid, superseded_at = coalesce(p_at, now()) where id = existing;
+  end if;
+  insert into public.employee_holds(id, org_id, employee_id, kind, reason, started_by, started_via, started_at, trigger, upgraded_from)
+  values (hid, p_org, p_employee, p_kind, nullif(btrim(coalesce(p_reason, '')), ''), p_started_by, p_started_via,
+          coalesce(p_at, now()), p_trigger, existing);
   if p_employee is null then
     update public.orgs set hold_state = p_kind, hold_id = hid where id = p_org;
   else
@@ -199,7 +223,13 @@ begin
      and coalesce(metadata->'adminFulfillment'->>'ok', '') <> 'true'
      and coalesce(metadata->>'adminTool', tool, '') <> 'employee.hold.release';
   get diagnostics n = row_count;
-  return jsonb_build_object('holdId', hid, 'created', true, 'heldTickets', n);
+  if existing is not null then
+    -- tickets held by the weaker hold follow the new one (released / closed with it)
+    update public.approval_requests set metadata = metadata || jsonb_build_object('heldByHoldId', hid)
+     where org_id = p_org and metadata->>'heldByHoldId' = existing::text;
+  end if;
+  return jsonb_build_object('holdId', hid, 'created', existing is null, 'upgraded', existing is not null,
+                            'previousHoldId', existing, 'heldTickets', n);
 end $seh$;
 
 create or replace function public.request_employee_hold_release(
@@ -208,7 +238,7 @@ create or replace function public.request_employee_hold_release(
 language plpgsql security invoker set search_path = pg_catalog, public as $reh$
 declare h public.employee_holds%rowtype;
 begin
-  select * into h from public.employee_holds where id = p_hold and org_id = p_org and released_at is null for update;
+  select * into h from public.employee_holds where id = p_hold and org_id = p_org and released_at is null and superseded_at is null for update;
   if not found then raise exception 'hold_not_found'; end if;
   if h.started_via = 'ops_console' then raise exception 'ops_hold_ops_only'; end if;
   if p_requested_by is null or p_requested_by !~ '^member:[0-9a-f-]{36}$' then raise exception 'release_requester_invalid'; end if;
@@ -236,7 +266,7 @@ language plpgsql security invoker set search_path = pg_catalog, public as $rlh$
 declare h public.employee_holds%rowtype; a public.approval_requests%rowtype;
         approver text; eligible integer; is_eligible boolean; n integer;
 begin
-  select * into h from public.employee_holds where id = p_hold and org_id = p_org and released_at is null for update;
+  select * into h from public.employee_holds where id = p_hold and org_id = p_org and released_at is null and superseded_at is null for update;
   if not found then raise exception 'hold_not_found'; end if;
   if h.started_via = 'ops_console' then raise exception 'ops_hold_ops_only'; end if;
   if h.release_approval_id is null or h.release_requested_by is null then raise exception 'release_not_requested'; end if;
@@ -287,6 +317,8 @@ begin
 end $rlh$;
 
 revoke all on function public.employee_holds_guard() from public, anon, authenticated;
+revoke all on function public.employee_hold_rank(text, text) from public, anon, authenticated;
+grant execute on function public.employee_hold_rank(text, text) to service_role;
 revoke all on function public.hold_columns_guard() from public, anon, authenticated;
 revoke all on function public.start_employee_hold(uuid, uuid, text, text, text, text, text, timestamptz) from public, anon, authenticated;
 revoke all on function public.request_employee_hold_release(uuid, uuid, text, text, uuid, timestamptz) from public, anon, authenticated;
@@ -303,6 +335,7 @@ commit;
 --   drop function if exists public.release_employee_hold(uuid, uuid, text, jsonb, timestamptz);
 --   drop function if exists public.request_employee_hold_release(uuid, uuid, text, text, uuid, timestamptz);
 --   drop function if exists public.start_employee_hold(uuid, uuid, text, text, text, text, text, timestamptz);
+--   drop function if exists public.employee_hold_rank(text, text);
 --   drop trigger if exists employees_hold_guard on public.employees;
 --   drop trigger if exists orgs_hold_guard on public.orgs;
 --   alter table public.employees drop constraint if exists employees_hold_id_fkey;

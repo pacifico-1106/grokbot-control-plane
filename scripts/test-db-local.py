@@ -516,13 +516,16 @@ try:
         released = list(pool.map(_try, releases))
     assert released.count("true") == 1 and released.count("refused") == 11, released
     assert query(f"select count(*) from public.audit_events where org_id = '{eh_org}' and action = 'employee.hold.released';") == "1"
-    query("alter table public.employee_holds disable trigger employee_holds_guard;"
+    # one statement per call: the deferrable superseded_by FK queues trigger events that ALTER TABLE refuses in one transaction
+    for _stmt in ("alter table public.employee_holds disable trigger employee_holds_guard;"
           "alter table public.employees disable trigger employees_hold_guard;"
           f"update public.employees set hold_state = null, hold_id = null where id = '{eh_emp}';"
           f"delete from public.audit_events where org_id = '{eh_org}'; delete from public.employee_holds where org_id = '{eh_org}';"
           "alter table public.employee_holds enable trigger employee_holds_guard;"
           "alter table public.employees enable trigger employees_hold_guard;"
-          f"delete from public.approval_requests where org_id = '{eh_org}'; delete from public.orgs where id = '{eh_org}';")
+          f"delete from public.approval_requests where org_id = '{eh_org}'; delete from public.orgs where id = '{eh_org}';").split(";"):
+        if _stmt.strip():
+            query(_stmt + ";")
     sql(ROOT / "supabase/verification/20261012500000_employee_holds_rollback.sql")
     assert query("select to_regclass('public.employee_holds') is null"
                  " and to_regprocedure('public.start_employee_hold(uuid,uuid,text,text,text,text,text,timestamptz)') is null"
