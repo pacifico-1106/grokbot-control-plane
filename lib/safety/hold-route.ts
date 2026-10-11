@@ -38,15 +38,15 @@ export async function webMemberActor(req: Request, bodyActorId?: string | null):
 > {
   if (isDemoMode()) {
     const member = resolveDemoActor(req, bodyActorId);
-    const demoLogin = req.headers.get("x-demo-last-sign-in-at");
-    return { ok: true, orgId: member.orgId, actor: { type: "member", member, surface: "web", lastSignInAt: demoLogin || new Date().toISOString() } };
+    const demoAuthTime = req.headers.get("x-demo-auth-time");
+    return { ok: true, orgId: member.orgId, actor: { type: "member", member, surface: "web", authUserId: null, demoAuthTime: demoAuthTime || new Date().toISOString() } };
   }
   const session = await getSessionContext();
   const member = activeSessionMember(session);
   if (!member || !session.orgId || member.orgId !== session.orgId) {
     return { ok: false, response: jsonUtf8({ ok: false, error: "auth_required" }, { status: 401 }) };
   }
-  return { ok: true, orgId: session.orgId, actor: { type: "member", member, surface: "web", lastSignInAt: session.lastSignInAt ?? null } };
+  return { ok: true, orgId: session.orgId, actor: { type: "member", member, surface: "web", authUserId: session.userId ?? null } };
 }
 
 export function holdFailureResponse(f: HoldFailure): Response {

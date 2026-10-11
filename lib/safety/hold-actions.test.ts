@@ -25,7 +25,7 @@ const owner = () => getRuntimeMemberById("mem_1")!;
 const admin = () => getRuntimeMemberById("mem_2")!;
 const plain = () => getRuntimeMemberById("mem_3")!;
 const fresh = () => new Date().toISOString();
-const web = (m: ReturnType<typeof owner>, lastSignInAt: string | null = fresh()): HoldActor => ({ type: "member", member: m, surface: "web", lastSignInAt });
+const web = (m: ReturnType<typeof owner>, authTime: string | null = fresh()): HoldActor => ({ type: "member", member: m, surface: "web", authUserId: null, demoAuthTime: authTime ?? "invalid" });
 
 let sent: Array<{ to: "tenant" | "ops"; n: HoldNotice }> = [];
 let savedFlags: Record<string, string | undefined> = {};
@@ -148,13 +148,13 @@ describe("release: web only, ONE authentication function, a different approver",
     if (!r.ok) throw new Error(r.code);
     return r.holdId;
   }
-  test("verifyReleaseAuthentication: web + login ≤ 5 min only", () => {
+  test("verifyReleaseAuthentication: web + this session's auth ≤ 5 min only", async () => {
     const now = new Date("2026-10-12T00:10:00Z");
-    expect(verifyReleaseAuthentication({ surface: "web", lastSignInAt: "2026-10-12T00:06:00Z" }, now).ok).toBe(true);
-    expect(verifyReleaseAuthentication({ surface: "web", lastSignInAt: "2026-10-12T00:04:00Z" }, now)).toMatchObject({ ok: false, code: "fresh_login_required" });
-    expect(verifyReleaseAuthentication({ surface: "web", lastSignInAt: null }, now)).toMatchObject({ ok: false, code: "fresh_login_required" });
+    expect((await verifyReleaseAuthentication({ surface: "web", demoAuthTime: "2026-10-12T00:06:00Z" }, now)).ok).toBe(true);
+    expect(await verifyReleaseAuthentication({ surface: "web", demoAuthTime: "2026-10-12T00:04:00Z" }, now)).toMatchObject({ ok: false, code: "fresh_login_required" });
+    expect(await verifyReleaseAuthentication({ surface: "web", demoAuthTime: "invalid" }, now)).toMatchObject({ ok: false, code: "fresh_login_required" });
     for (const surface of ["slack", "line", "telegram", "ops_console", "mcp"]) {
-      expect(verifyReleaseAuthentication({ surface, lastSignInAt: "2026-10-12T00:09:00Z" }, now)).toMatchObject({ ok: false, code: "hold_release_web_only" });
+      expect(await verifyReleaseAuthentication({ surface, demoAuthTime: "2026-10-12T00:09:00Z" }, now)).toMatchObject({ ok: false, code: "hold_release_web_only" });
     }
   });
   test("request: stale login → 401; inbox surface → 403; fresh web → ticket with metadata.requestedBy", async () => {

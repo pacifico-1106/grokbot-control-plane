@@ -39,7 +39,7 @@ import { notifyHold } from "@/lib/safety/hold-notify";
 
 export type HoldMemberSurface = "web" | "slack" | "line" | "telegram";
 export type HoldActor =
-  | { type: "member"; member: OrgMember; surface: HoldMemberSurface; lastSignInAt?: string | null }
+  | { type: "member"; member: OrgMember; surface: HoldMemberSurface; authUserId?: string | null; demoAuthTime?: string | null }
   | { type: "ops"; opsId: string; surface: "ops_console" };
 
 export type HoldFailure = { ok: false; code: string; httpStatus: number; message?: string };
@@ -84,9 +84,9 @@ function cleanReason(reason: unknown): string | null {
 }
 
 /** Release surfaces + freshness: delegated to the ONE swappable function (passkey later). */
-function assertReleaseSurface(actor: HoldActor, now: Date): HoldFailure | null {
+async function assertReleaseSurface(actor: HoldActor, now: Date): Promise<HoldFailure | null> {
   if (actor.type !== "member") return fail("ops_hold_release_is_s4", 403);
-  const v = verifyReleaseAuthentication({ surface: actor.surface, lastSignInAt: actor.lastSignInAt ?? null }, now);
+  const v = await verifyReleaseAuthentication({ surface: actor.surface, userId: actor.authUserId ?? null, demoAuthTime: actor.demoAuthTime ?? null }, now);
   return v.ok ? null : fail(v.code, v.httpStatus, v.message);
 }
 
@@ -219,7 +219,7 @@ export async function requestHoldRelease(input: {
   if (!humanActor(input.actor)) return fail("ai_cannot_hold", 403);
   if (!isEmployeeHoldEnabled()) return fail("hold_disabled", 404);
   const now = input.now ?? new Date();
-  const surfaceFail = assertReleaseSurface(input.actor, now);
+  const surfaceFail = await assertReleaseSurface(input.actor, now);
   if (surfaceFail) return surfaceFail;
   const actor = input.actor as Extract<HoldActor, { type: "member" }>;
   if (actor.member.orgId !== input.orgId || !canStopEmployee(actor.member)) return fail("forbidden", 403);
@@ -282,7 +282,7 @@ export async function approveHoldRelease(input: {
   if (!humanActor(input.actor)) return fail("ai_cannot_hold", 403);
   if (!isEmployeeHoldEnabled()) return fail("hold_disabled", 404);
   const now = input.now ?? new Date();
-  const surfaceFail = assertReleaseSurface(input.actor, now);
+  const surfaceFail = await assertReleaseSurface(input.actor, now);
   if (surfaceFail) return surfaceFail;
   const actor = input.actor as Extract<HoldActor, { type: "member" }>;
   if (actor.member.orgId !== input.orgId) return fail("forbidden", 403);
