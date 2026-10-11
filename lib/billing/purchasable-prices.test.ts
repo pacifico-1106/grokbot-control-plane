@@ -42,7 +42,11 @@ describe("purchasable price allowlist", () => {
       "STRIPE_PRICE_ID_AI_EMP_SETUP_PROPER",
       "STRIPE_PRICE_ID_AI_EMP_SETUP_EXECUTIVE",
     ]);
-    expect([...RETIRED_PRICE_ENV_KEYS]).toEqual(["STRIPE_PRICE_ID_BUSINESS", "STRIPE_PRICE_ID_MANAGED"]);
+    expect([...RETIRED_PRICE_ENV_KEYS]).toEqual([
+      "STRIPE_PRICE_ID_BUSINESS",
+      "STRIPE_PRICE_ID_MANAGED",
+      "STRIPE_PRICE_ID_STARTER",
+    ]);
     expect([...purchasablePriceIds()].sort()).toEqual(["price_exec", "price_intern", "price_proper"]);
   });
 
@@ -52,7 +56,7 @@ describe("purchasable price allowlist", () => {
     });
   }
 
-  for (const id of ["price_business", "price_managed"]) {
+  for (const id of ["price_business", "price_managed", "price_starter"]) {
     test(`retired ${id} → 410 plan_retired with a Japanese message`, () => {
       const r = checkPurchasablePrice(id);
       expect(r.ok).toBe(false);
@@ -65,7 +69,7 @@ describe("purchasable price allowlist", () => {
     });
   }
 
-  for (const id of ["price_starter", "price_unknown", "", "replace_me", null, undefined]) {
+  for (const id of ["price_unknown", "", "replace_me", null, undefined]) {
     test(`unknown / not allowlisted ${JSON.stringify(id)} → 404 price_not_purchasable`, () => {
       const r = checkPurchasablePrice(id as string | null | undefined);
       expect(r.ok).toBe(false);
@@ -75,6 +79,14 @@ describe("purchasable price allowlist", () => {
       expect(r.message).toMatch(/[ぁ-んァ-ン]/);
     });
   }
+
+  test("misconfiguration: an AI社員パック env set to the retired STARTER price is refused (410)", () => {
+    process.env.STRIPE_PRICE_ID_AI_EMP_SETUP_PROPER = "price_starter";
+    const r = checkPurchasablePrice("price_starter");
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.status).toBe(410);
+    expect(purchasablePriceIds().has("price_starter")).toBe(false);
+  });
 
   test("misconfiguration: an AI社員パック env set to a retired price is still refused (410)", () => {
     process.env.STRIPE_PRICE_ID_AI_EMP_SETUP_INTERN = "price_business";

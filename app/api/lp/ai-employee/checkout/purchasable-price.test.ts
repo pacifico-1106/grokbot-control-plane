@@ -53,6 +53,7 @@ const ENV = [
   "STRIPE_PRICE_ID_AI_EMP_SETUP_EXECUTIVE",
   "STRIPE_PRICE_ID_BUSINESS",
   "STRIPE_PRICE_ID_MANAGED",
+  "STRIPE_PRICE_ID_STARTER",
   "STRIPE_PRICE_ID_KICKOFF_PACK",
   "LP_ORDER_LEDGER_ENABLED",
   "LP_CATALOG_DB_ENABLED",
@@ -73,6 +74,7 @@ beforeEach(() => {
   process.env.STRIPE_PRICE_ID_AI_EMP_SETUP_EXECUTIVE = "price_exec";
   process.env.STRIPE_PRICE_ID_BUSINESS = "price_business";
   process.env.STRIPE_PRICE_ID_MANAGED = "price_managed";
+  process.env.STRIPE_PRICE_ID_STARTER = "price_starter";
   process.env.STRIPE_PRICE_ID_KICKOFF_PACK = "price_kickoff";
   process.env.LP_ORDER_LEDGER_ENABLED = "1";
   delete process.env.LP_CATALOG_DB_ENABLED;
@@ -120,7 +122,7 @@ describe("AI社員パック checkout still works", () => {
 });
 
 describe("catalog row pointing at a non-allowlisted price is refused", () => {
-  for (const key of ["STRIPE_PRICE_ID_BUSINESS", "STRIPE_PRICE_ID_MANAGED"]) {
+  for (const key of ["STRIPE_PRICE_ID_BUSINESS", "STRIPE_PRICE_ID_MANAGED", "STRIPE_PRICE_ID_STARTER"]) {
     test(`${key} → 410 plan_retired, no order, no Stripe session`, async () => {
       envKeyOverride = key;
       const res = await post({ plan: "intern", email: "lead@customer.test" });

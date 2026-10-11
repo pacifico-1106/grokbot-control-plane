@@ -3,7 +3,7 @@
  * Customer / Checkout Session / Subscription (with trial) without human
  * approval. There is no approved-contract record type today, so the route is
  * closed in every mode (fail-closed). Since 10/4 the plans it sold (BUSINESS /
- * MANAGED) are retired: those answer 410 plan_retired, anything else 404.
+ * MANAGED / STARTER) are retired: those answer 410 plan_retired, anything else 404.
  */
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 
@@ -98,8 +98,9 @@ function expectNoWrites() {
 }
 
 describe("POST /api/billing/checkout (legacy SaaS) is closed", () => {
-  // Retired 10/4 (AI社員パック consolidation): BUSINESS (Lite) / MANAGED (Standard).
-  for (const planKey of ["business", "managed"]) {
+  // Retired 10/4 (AI社員パック consolidation): BUSINESS (Lite) / MANAGED (Standard),
+  // and STARTER (木村 on #343: retired too, 410 rather than 404).
+  for (const planKey of ["business", "managed", "starter"]) {
     test(`retired plan ${planKey} → 410 plan_retired (Japanese), no Stripe or DB writes`, async () => {
       const res = await POST(req({ planKey, referral_code: "AIC-TEST" }));
       expect(res.status).toBe(410);
@@ -116,7 +117,7 @@ describe("POST /api/billing/checkout (legacy SaaS) is closed", () => {
   // Allowlist, not denylist: this route has NO purchasable plan, so anything
   // else (starter, unknown keys, raw Stripe price ids, junk) is 404.
   for (const body of [
-    { planKey: "starter" },
+    { planKey: "STARTER" },
     { planKey: "enterprise" },
     { planKey: "intern" },
     { planKey: "price_business_live" },
