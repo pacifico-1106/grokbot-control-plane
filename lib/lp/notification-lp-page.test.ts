@@ -1,0 +1,26 @@
+import { describe, expect, test } from "bun:test";
+import { renderNotificationHtml } from "@/lib/lp/notification-outbox";
+import { lpPageNoticeLine } from "@/lib/lp/lp-page";
+
+/** Outbox emails show the lead page; old entries (no lpPage) render exactly as before; DB values are re-checked. */
+const entry = (notificationType: string, payload: Record<string, unknown>) => ({ notificationType, payload }) as never;
+
+describe("renderNotificationHtml lead page row", () => {
+  test("inquiry: B row; original row; missing → no row (old entries unchanged)", () => {
+    expect(renderNotificationHtml(entry("inquiry_received", { plan: "intern", lpPage: "ai-employee-corp" }))).toContain("/lp/ai-employee-corp");
+    expect(renderNotificationHtml(entry("inquiry_received", { plan: "intern", lpPage: "ai-employee" }))).toContain("流入ページ");
+    expect(renderNotificationHtml(entry("inquiry_received", { plan: "intern" }))).not.toContain("流入ページ");
+  });
+  test("handoff: B row (outbox html) and plain-text line (cron Slack / email text)", () => {
+    expect(renderNotificationHtml(entry("handoff_created", { summary: "s", lpPage: "ai-employee-corp" }))).toContain("/lp/ai-employee-corp");
+    expect(lpPageNoticeLine("ai-employee-corp")).toBe("流入ページ: /lp/ai-employee-corp（Staffpass（AIエージェントの社員証）パターンB）");
+    expect(lpPageNoticeLine("ai-employee")).toBe("流入ページ: /lp/ai-employee（AI社員 導入パック）");
+    expect(lpPageNoticeLine(undefined)).toBeNull();
+    expect(lpPageNoticeLine("<script>")).toBeNull();
+  });
+  test("a tampered stored value is never echoed", () => {
+    const h = renderNotificationHtml(entry("inquiry_received", { plan: "intern", lpPage: "<script>alert(1)</script>" }));
+    expect(h).not.toContain("script");
+    expect(h).not.toContain("流入ページ");
+  });
+});
