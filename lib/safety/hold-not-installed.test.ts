@@ -16,7 +16,16 @@ mock.module("@/lib/mode", () => ({ isDemoMode: () => false }));
 mock.module("@/lib/supabase", () => ({
   createSupabaseAdminClient: () => ({
     from: (table: string) => ({
-      select: () => ({
+      select: (cols: string) => ({
+        // schema probe (木村 10/12 07:15): mirrors the read results — a side whose read says
+        // "hold column missing" has its columns missing; the table exists unless both do.
+        limit: async () => {
+          const missing = (r: Result) => Boolean(r.error && /hold_(state|id)/.test(String((r.error as { message?: string }).message)));
+          const empGone = missing(employeesResult), orgGone = missing(orgsResult);
+          if (table === "employees") return { data: [], error: empGone ? { code: "42703", message: `column employees.${cols} does not exist` } : null };
+          if (table === "orgs") return { data: [], error: orgGone ? { code: "42703", message: `column orgs.${cols} does not exist` } : null };
+          return { data: [], error: empGone && orgGone ? { code: "42P01", message: 'relation "public.employee_holds" does not exist' } : null };
+        },
         eq: () => ({
           maybeSingle: async () => {
             reads++;
@@ -100,12 +109,13 @@ test("missing row / other-org row / malformed value still fail closed", async ()
   expect(alerts).toEqual([]);
 });
 
-test("org hold column present while employees' is missing → org hold still enforced", async () => {
+test("org hold column present while employees' is missing → partly present schema → 503 (still stopped; 木村 07:15)", async () => {
   employeesResult = MISSING_EMP;
   orgsResult = orgRow("stopped", HID);
   const r = await check();
   expect(r.ok).toBe(false);
-  if (!r.ok) expect(r.code).toBe("org_on_hold");
+  if (!r.ok) expect(r.code).toBe("hold_state_unavailable");
+  expect(alerts).toEqual([]); // the partial alert, not the not-installed one
 });
 
 test("migration lands (same reader, error gone) → a held employee is blocked on the very next request (no cache)", async () => {
