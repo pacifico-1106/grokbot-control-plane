@@ -466,6 +466,8 @@ export type AuditAction =
   | "credential.issued"
   | "credential.revoked"
   | "credential.rotated"
+  /** CREDENTIAL_EXPIRY_NOTICE_ENABLED: pre-expiry notice sent / failed. Metadata: ids, thresholds, counts only. */
+  | "credential.expiry_notice"
   /** MCP OAuth (flag MCP_OAUTH_ENABLED). Metadata: client host, grant id, hash prefixes only. */
   | "oauth.consent_granted"
   | "oauth.consent_denied"

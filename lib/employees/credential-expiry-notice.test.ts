@@ -46,6 +46,7 @@ function harness(rows: ExpiringCredentialRow[], opts: { channels?: Record<string
       claims.delete(key);
       released.push(key);
     },
+    isClaimed: async (row, threshold) => claims.has(`${row.credentialId}:${threshold}`),
     countRecent: async (orgId, since) => [...claims.values()].filter((c) => c.orgId === orgId && c.at >= since.getTime()).length,
     resolveInbox: async (orgId) => (opts.channels && orgId in opts.channels ? opts.channels[orgId] : { id: `ch_${orgId}`, orgId, provider: "slack" }),
     send: async (channel, text) => {
