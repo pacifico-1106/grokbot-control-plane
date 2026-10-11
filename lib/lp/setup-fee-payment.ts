@@ -370,7 +370,7 @@ export async function notifyOpsLpSetupFee(a: { kind: LpOpsAlertKind; sessionId: 
         orgId: opsOrgId,
         employeeId: null,
         credentialId: null,
-        action: `lp.setup_fee.${a.kind}`,
+        action: `lp.setup_fee.${a.kind}` as const,
         purpose: null,
         summary: `${t.line} ${ids}`,
         metadata: { auditClass: "admin", event: `lp.setup_fee.${a.kind}`, stripeCheckoutSessionId: sessionId, stripeEventId: eventId },
