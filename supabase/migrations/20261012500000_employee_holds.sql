@@ -14,7 +14,8 @@
 --     approved-but-unexecuted tickets of that employee (all of the org for an
 --     org hold) get metadata.heldByHoldId. A same-or-weaker re-stop returns the
 --     open hold; a STRONGER one (ops 3 > auto cutoff / incident 2 > leave 1)
---     upgrades: the old row is closed as superseded_by the new one (history),
+--     upgrades (ops 4 > detector / quarantine 3 > tenant stop 2 > leave 1): the
+--     old row is closed as superseded_by the new one (history),
 --     tickets follow. Terminated employees can still be stopped.
 --     Another org's employee → employee_not_found.
 --   request_employee_hold_release(org, hold, requested_by, reason, approval, at)
@@ -174,7 +175,12 @@ create trigger orgs_hold_guard before insert or update of hold_state, hold_id on
 
 create or replace function public.employee_hold_rank(p_kind text, p_via text) returns integer
 language sql immutable set search_path = pg_catalog, public as $ehr$
-  select case when p_via = 'ops_console' then 3 when p_kind in ('stopped', 'quarantined') then 2 when p_kind = 'leave' then 1 else 0 end
+  -- 木村 10/12 (2nd): ops 4 > detector (anomaly route or quarantine) 3 > tenant stop / incident 2 > leave 1.
+  -- A detector hold must outrank any human-placed one (else a single owner could self-release it).
+  select case when p_via = 'ops_console' then 4
+              when p_via = 'anomaly' or p_kind = 'quarantined' then 3
+              when p_kind = 'stopped' then 2
+              when p_kind = 'leave' then 1 else 0 end
 $ehr$;
 
 create or replace function public.start_employee_hold(
@@ -238,8 +244,13 @@ create or replace function public.request_employee_hold_release(
   p_org uuid, p_hold uuid, p_requested_by text, p_reason text, p_approval uuid, p_at timestamptz
 ) returns boolean
 language plpgsql security invoker set search_path = pg_catalog, public as $reh$
-declare h public.employee_holds%rowtype;
+declare h public.employee_holds%rowtype; subj uuid;
 begin
+  -- Same lock order as start / release: subject row, then the hold row.
+  select employee_id into subj from public.employee_holds where id = p_hold and org_id = p_org;
+  if not found then raise exception 'hold_not_found'; end if;
+  if subj is null then perform 1 from public.orgs where id = p_org for update;
+  else perform 1 from public.employees where id = subj and org_id = p_org for update; end if;
   select * into h from public.employee_holds where id = p_hold and org_id = p_org and released_at is null and superseded_at is null for update;
   if not found then raise exception 'hold_not_found'; end if;
   if h.started_via = 'ops_console' or h.started_by like 'ops:%' then raise exception 'ops_hold_ops_only'; end if;
@@ -280,8 +291,16 @@ create or replace function public.release_employee_hold(
 ) returns jsonb
 language plpgsql security invoker set search_path = pg_catalog, public as $rlh$
 declare h public.employee_holds%rowtype; a public.approval_requests%rowtype;
-        approver text; eligible integer; is_eligible boolean; n integer;
+        approver text; eligible integer; is_eligible boolean; n integer; subj uuid;
 begin
+  -- Lock order = start_employee_hold: the employee (or org) row FIRST, then the hold row.
+  -- (木村 10/12: hold-then-employee here vs employee-then-hold in start deadlocked a
+  -- concurrent detector upgrade.) After the subject lock, re-read the hold: an upgrade
+  -- that won the race has superseded it → hold_not_found, the employee stays held.
+  select employee_id into subj from public.employee_holds where id = p_hold and org_id = p_org;
+  if not found then raise exception 'hold_not_found'; end if;
+  if subj is null then perform 1 from public.orgs where id = p_org for update;
+  else perform 1 from public.employees where id = subj and org_id = p_org for update; end if;
   select * into h from public.employee_holds where id = p_hold and org_id = p_org and released_at is null and superseded_at is null for update;
   if not found then raise exception 'hold_not_found'; end if;
   if h.started_via = 'ops_console' or h.started_by like 'ops:%' then raise exception 'ops_hold_ops_only'; end if;
