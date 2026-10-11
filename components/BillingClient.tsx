@@ -2,14 +2,8 @@
 
 import { useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import type { CheckoutPlanKey } from "@/lib/stripe";
 import Link from "next/link";
-import {
-  CUSTOMER_PACKS,
-  TAX_EXCLUSIVE_NOTE_JA,
-  formatYenJa,
-  type PackId,
-} from "@/lib/billing/packs";
+import { TAX_EXCLUSIVE_NOTE_JA } from "@/lib/billing/packs";
 import { LegalLinks } from "@/components/LegalLinks";
 
 type Props = {
@@ -23,7 +17,6 @@ export function BillingClient({
 }: Props) {
   const [busy, setBusy] = useState<string | null>(null);
   const [message, setMessage] = useState("");
-  const [referralCode, setReferralCode] = useState("");
   const searchParams = useSearchParams();
 
   const checkoutBanner = useMemo(() => {
@@ -40,35 +33,6 @@ export function BillingClient({
     }
     return null;
   }, [searchParams]);
-
-  async function checkout(packId: PackId) {
-    const pack = CUSTOMER_PACKS.find((p) => p.id === packId);
-    if (!pack) return;
-    const planKey: CheckoutPlanKey = pack.backendSku;
-    setBusy(packId);
-    setMessage("");
-    try {
-      const res = await fetch("/api/billing/checkout", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          planKey,
-          referral_code: referralCode.trim() || undefined,
-        }),
-      });
-      const body = await res.json();
-      if (!res.ok) throw new Error(body.message || body.error || "checkout_failed");
-      if (body.url) {
-        window.location.href = body.url;
-        return;
-      }
-      setMessage(body.message || "オンライン決済は準備中です");
-    } catch (e) {
-      setMessage(e instanceof Error ? e.message : "checkout_failed");
-    } finally {
-      setBusy(null);
-    }
-  }
 
   async function openPortal() {
     setBusy("portal");
@@ -104,78 +68,21 @@ export function BillingClient({
         </div>
       ) : null}
 
-      <section className="surface overflow-hidden">
-        <header className="flex flex-col gap-2 border-b border-[var(--border)] px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-5">
-          <div>
-            <h2 className="text-base font-bold">パックを選ぶ</h2>
-            <p className="mt-1 text-xs muted">AI社員の人数と運用体制に合わせて選択</p>
-          </div>
-          <span className="chip w-fit text-[10px]">{TAX_EXCLUSIVE_NOTE_JA}</span>
-        </header>
-
-        <div className="p-3 sm:p-4">
-          <div className="grid grid-cols-1 items-stretch gap-3 lg:grid-cols-2">
-            {CUSTOMER_PACKS.map((pack) => (
-              <article
-                key={pack.id}
-                className={`flex h-full min-w-0 flex-col rounded-2xl border bg-[var(--bg)] p-5 ${pack.featured ? "border-[color-mix(in_oklab,var(--accent-strong)_58%,var(--border))] shadow-[0_0_24px_var(--accent-glow)]" : "border-[var(--border-soft)]"}`}
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <h3 className="text-lg font-bold">{pack.displayName}</h3>
-                    <span className="text-xs muted">{pack.scaleNote}</span>
-                  </div>
-                  {pack.featured ? <span className="chip chip-ok text-[10px]">おすすめ</span> : null}
-                </div>
-
-                <p className="mt-5 text-3xl font-bold tracking-tight">
-                  {formatYenJa(pack.monthlyYen)}
-                  <span className="ml-1 text-xs font-semibold muted">/ 月</span>
-                </p>
-
-                <ul className="mt-5 flex-1 space-y-2 text-sm muted border-y border-[var(--border-soft)] py-4">
-                  {pack.points.map((point) => (
-                    <li key={point} className="flex gap-2">
-                      <span className="text-[var(--ok)]">✓</span>
-                      <span>{point}</span>
-                    </li>
-                  ))}
-                  <li className="flex gap-2">
-                    <span className="text-[var(--ok)]">✓</span>
-                    <span>手足（Grok Bot）込み</span>
-                  </li>
-                </ul>
-
-                <div className="mt-auto pt-6">
-                  <button
-                    type="button"
-                    className={`btn min-h-12 w-full text-sm ${stripeConfigured ? "btn-primary" : "btn-ghost opacity-60 cursor-not-allowed"}`}
-                    disabled={!stripeConfigured || busy === pack.id}
-                    aria-disabled={!stripeConfigured}
-                    onClick={() => void checkout(pack.id)}
-                  >
-                    {busy === pack.id ? "準備中…" : stripeConfigured ? "お支払いに進む" : "オンライン決済 準備中"}
-                  </button>
-                </div>
-              </article>
-            ))}
-          </div>
-
-          <details className="mt-4 rounded-xl border border-[var(--border-soft)] bg-[var(--bg)] px-4 py-3">
-            <summary className="cursor-pointer text-xs font-semibold">紹介コードをお持ちの方</summary>
-            <label className="mt-3 block max-w-sm text-xs">
-              <span className="muted">紹介コード</span>
-              <input
-                type="text"
-                value={referralCode}
-                onChange={(e) => setReferralCode(e.target.value)}
-                placeholder="AIC-XXXX"
-                autoComplete="off"
-                className="mt-1 w-full border border-[var(--border)] bg-[var(--bg-soft)] px-3 py-2 text-sm outline-none focus:border-[var(--accent-strong)]"
-              />
-            </label>
-          </details>
-        </div>
+      {/*
+        旧プラン（AI社員 Lite = STRIPE_PRICE_ID_BUSINESS / Standard = STRIPE_PRICE_ID_MANAGED）は
+        2026-10-04 に新規申込を終了（AI社員パックへ集約）。購入ボタンは出さない。
+        既存契約者は下の「契約内容を管理」（Stripe Billing Portal）で請求書・支払い方法・解約を継続利用できる。
+      */}
+      <section className="surface p-4 sm:p-5" data-testid="billing-retired-plans-note">
+        <h2 className="text-base font-bold">新しくご契約いただく場合</h2>
+        <p className="mt-2 text-sm muted leading-relaxed">
+          AI社員 Lite / AI社員 Standard の新規のお申し込みは終了しました。新しくご契約いただく場合は
+          <Link href="/lp/ai-employee#pricing" className="underline">AI社員パック</Link>
+          をお選びください。
+        </p>
+        <p className="mt-2 text-xs faint leading-relaxed">
+          すでにご契約中の方は、これまでどおり「契約内容を管理」から請求書の確認・お支払い方法の変更・解約ができます。
+        </p>
       </section>
 
       {/*
