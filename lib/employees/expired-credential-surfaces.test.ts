@@ -114,7 +114,7 @@ describe("setup.lineApprovalStatus", () => {
     expect(ids(s.employees)).not.toContain(expired.id);
     expect(ids(s.employees)).toContain(valid.id);
     expect(ids(s.employees)).not.toContain(foreignExpired.id);
-    expect(ids(s.expiredEmployees)).toEqual(expect.arrayContaining([expired.id]));
+    expect(ids(s.expiredEmployees)).toContain(expired.id);
     expect(ids(s.expiredEmployees)).not.toContain(foreignExpired.id);
     expect(s.expiredCount).toBe((s.expiredEmployees as Row[]).length);
     expect((s.employees as Row[]).length).toBe(Number(s.lineCount) + Number(s.telegramCount) + Number(s.unsetCount));
