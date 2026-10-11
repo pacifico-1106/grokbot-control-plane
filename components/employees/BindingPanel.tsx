@@ -37,6 +37,7 @@ export function BindingPanel({
   canEditWakeWebhook = false,
   demoMode = false,
   oauthEnabled = false,
+  pendingReissue = null,
 }: {
   employeeId: string;
   initial: EmployeeBinding;
@@ -50,6 +51,11 @@ export function BindingPanel({
   demoMode?: boolean;
   /** MCP OAuth flag (server-evaluated). Shows the Q3 "also revoke OAuth" checkbox. */
   oauthEnabled?: boolean;
+  /**
+   * ADMIN_MCP_CREDENTIAL_REISSUE_ENABLED: an approved admin MCP reissue ticket
+   * waiting for a human to pick the new 社員証 up (ids + deadline only).
+   */
+  pendingReissue?: { approvalId: string; pickupUntil: string } | null;
 }) {
   const [binding, setBinding] = useState<EmployeeBinding>(initial);
   const [alsoRevokeOAuth, setAlsoRevokeOAuth] = useState(false);
@@ -117,20 +123,25 @@ export function BindingPanel({
     }
   }
 
-  async function rotate() {
+  const [reissuePending, setReissuePending] = useState(pendingReissue);
+
+  async function rotate(reissueApprovalId?: string) {
     setBusy(true);
     setMessage("");
     setOneTimeSecret(null);
     try {
       const res = await fetch(`/api/employees/${employeeId}/rotate`, {
         method: "POST",
-        ...(oauthEnabled && alsoRevokeOAuth
-          ? { headers: { "Content-Type": "application/json" }, body: JSON.stringify({ revokeOAuth: true }) }
-          : {}),
+        ...(reissueApprovalId
+          ? { headers: { "Content-Type": "application/json" }, body: JSON.stringify({ reissueApprovalId }) }
+          : oauthEnabled && alsoRevokeOAuth
+            ? { headers: { "Content-Type": "application/json" }, body: JSON.stringify({ revokeOAuth: true }) }
+            : {}),
       });
       const body = await res.json();
       if (!res.ok) throw new Error(body.message || body.error || "rotate_failed");
       applyBinding(body.binding);
+      if (reissueApprovalId) setReissuePending(null);
       setOneTimeSecret(body.credential?.oneTimeSecret ?? null);
       setRevealSecret(false);
       setCopiedSecret(false);
@@ -337,6 +348,17 @@ export function BindingPanel({
               接続を確認
             </button>
           </>
+        ) : null}
+        {canRotateCredential && reissuePending ? (
+          <button
+            type="button"
+            className="btn btn-primary text-sm w-full sm:w-auto"
+            disabled={busy || binding.status === "revoked"}
+            onClick={() => void rotate(reissuePending.approvalId)}
+            title={`承認済みの依頼（${reissuePending.approvalId}）。${formatTs(reissuePending.pickupUntil)} まで`}
+          >
+            承認済みの社員証再発行を受け取る
+          </button>
         ) : null}
         {canRotateCredential ? (
           <button

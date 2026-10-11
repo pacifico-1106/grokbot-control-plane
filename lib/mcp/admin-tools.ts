@@ -60,6 +60,7 @@ import { auditActionForAdminTool } from "@/lib/admin-mcp/audit-class";
 import { buildPollUrl } from "@/lib/approvals/tokens";
 import { handleAllowedAccountsTool, isAllowedAccountsTool } from "@/lib/admin-mcp/allowed-accounts-tools";
 import { POSTING_IDENTITY_SET_TOOL, handlePostingIdentityTool } from "@/lib/admin-mcp/posting-identity-tool";
+import { CREDENTIAL_REISSUE_REASONS, CREDENTIAL_REISSUE_TOOL, handleCredentialReissueTool } from "@/lib/employees/credential-reissue";
 import {
   CHANNELS_REMOVE_TOOL_DEF,
   PARTIES_REMOVE_TOOL_DEF,
@@ -272,6 +273,22 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
         approvalId: { type: "string", description: "Re-invoke with approved ticket ID" },
       },
       required: ["employeeId", "postingAs"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "employees.credential.reissue",
+    description:
+      "Reissue an AI employee's 社員証 (employee credential) after human approval (always_human, approvalClass admin). ADMIN_MCP_CREDENTIAL_REISSUE_ENABLED must be on (else feature_disabled). The employee must belong to this org (from the credential; no orgId argument); another org's employee → employee_not_found; a suspended employee → employee_terminated; the badge bound to this admin's own Grok Bot → cannot_target_self. Approver: owner or designated admin; owner when the employee holds a money scope (APPROVER_AUTHORITY_ENABLED). The key is NEVER returned to you and is not minted at approval: the approved ticket lets a credential admin pick the new 社員証 up once on the dashboard AI社員 page (within 24h of approval); the old 社員証 keeps working until then and is revoked at that moment. Re-invoke with approvalId to read the result (dashboard pointer only). Do not ask anyone to paste the new key into chat.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        employeeId: { type: "string", description: "AI社員 ID (this org only)" },
+        reason: { type: "string", enum: [...CREDENTIAL_REISSUE_REASONS], description: "expired = 期限切れ, expiring = 期限間近, other = その他 (default)" },
+        jobId: { type: "string" },
+        approvalId: { type: "string", description: "Re-invoke with approved ticket ID" },
+      },
+      required: ["employeeId"],
       additionalProperties: false,
     },
   },
@@ -2319,6 +2336,22 @@ export async function callAdminMcpTool(
     // ADMIN_MCP_DIRECTORY_REMOVE_TOOLS_ENABLED: org from the credential only;
     // the row is looked up in that org before any ticket.
     const outcome = await handleDirectoryRemoveTool(name, args, cred);
+    if (outcome.kind === "result") return toolResult(outcome.data, outcome.isError === true);
+    const queued = await queueAdminTool({
+      cred,
+      tool: name,
+      args: { ...outcome.queuedArgs, ...(typeof args.jobId === "string" ? { jobId: args.jobId } : {}) },
+      rawArgsForSecretScan: args,
+      title: outcome.title,
+      summary: outcome.summary,
+    });
+    return toolResult(queued, false);
+  }
+
+  if (name === CREDENTIAL_REISSUE_TOOL) {
+    // 社員証の再発行 (ADMIN_MCP_CREDENTIAL_REISSUE_ENABLED). Org from the credential only;
+    // the ticket carries ids only and the key is minted at the dashboard hand-over.
+    const outcome = await handleCredentialReissueTool(args, cred);
     if (outcome.kind === "result") return toolResult(outcome.data, outcome.isError === true);
     const queued = await queueAdminTool({
       cred,

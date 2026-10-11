@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
 import { BindingPanel } from "@/components/employees/BindingPanel";
+import { findPendingCredentialReissue } from "@/lib/employees/credential-reissue";
 import { OAuthGrantsPanel } from "@/components/employees/OAuthGrantsPanel";
 import { isMcpOAuthEnabled } from "@/lib/mcp-oauth/config";
 import { EmployeeActionLog } from "@/components/employees/EmployeeActionLog";
@@ -72,6 +73,11 @@ export default async function EmployeeDetailPage({
 
   // Read-only: a missing row shows as 未接続; only admin actions create it.
   const binding = await getBindingForDisplay(employee.id, employee.orgId || orgId || "");
+  // ADMIN_MCP_CREDENTIAL_REISSUE_ENABLED (default OFF → always null): an approved
+  // admin MCP reissue ticket for this employee in this org, waiting for pickup.
+  const pendingReissue = bindingPermissions.canRotateCredential
+    ? await findPendingCredentialReissue(employee.orgId || orgId || "", employee.id).catch(() => null)
+    : null;
   const slackIdentity = await getEmployeeSlackIdentity(employee.id);
   const slackOauthConfigured = slackOAuthConfigured();
   const googleIdentity = await getEmployeeGoogleIdentity(employee.id);
@@ -324,6 +330,7 @@ export default async function EmployeeDetailPage({
         {...bindingPermissions}
         demoMode={isDemoMode()}
         oauthEnabled={isMcpOAuthEnabled()}
+        pendingReissue={pendingReissue}
       />
       {isMcpOAuthEnabled() ? <OAuthGrantsPanel employeeId={employee.id} /> : null}
 
