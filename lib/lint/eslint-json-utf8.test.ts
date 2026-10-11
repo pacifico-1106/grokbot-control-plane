@@ -6,14 +6,13 @@
  */
 import { describe, expect, test } from "bun:test";
 import { readFileSync, readdirSync } from "node:fs";
-import { join, relative } from "node:path";
+import { dirname, join, relative } from "node:path";
+import { fileURLToPath } from "node:url";
 import { ESLint, RuleTester } from "eslint";
-// @ts-expect-error -- local .mjs rule module without types
 import rule from "../../eslint-rules/json-utf8.mjs";
-// @ts-expect-error -- local .mjs allowlist without types
 import { JSON_UTF8_LEGACY_ALLOWLIST } from "../../eslint-rules/json-utf8-allowlist.mjs";
 
-const ROOT = join(import.meta.dir, "..", "..");
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 // Run RuleTester cases synchronously inside one bun test (it throws on the first failure).
 const RT = RuleTester as unknown as Record<string, unknown>;
 RT.describe = (_name: string, fn: () => void) => fn();
@@ -24,7 +23,7 @@ describe("rule staffpass/json-utf8 (RuleTester)", () => {
   test("valid / invalid cases", () => {
     const tester = new RuleTester({ languageOptions: { ecmaVersion: 2022, sourceType: "module" } });
     const errors = [{ messageId: "useJsonUtf8" }];
-    tester.run("json-utf8", rule, {
+    tester.run("json-utf8", rule as unknown as Parameters<RuleTester["run"]>[1], {
       valid: [
         `jsonUtf8({ ok: true })`,
         `jsonUtf8({ ok: false }, { status: 401 })`,
@@ -69,19 +68,19 @@ describe("wired into eslint.config.mjs", () => {
   test("a new non-test route with a bare NextResponse.json → error", async () => {
     const [res] = await eslint.lintText(BAD, { filePath: join(ROOT, "app/api/__lint_probe__/route.ts") });
     expect(res.messages.some((m) => m.ruleId === "staffpass/json-utf8" && m.severity === 2)).toBe(true);
-  }, 60_000);
+  });
 
   test("an allowlisted legacy file (with [param] segments) is not reported yet", async () => {
     const legacy = (JSON_UTF8_LEGACY_ALLOWLIST as string[]).find((f) => f.includes("["));
     expect(legacy).toBeTruthy();
     const [res] = await eslint.lintText(BAD, { filePath: join(ROOT, legacy!) });
     expect(res.messages.some((m) => m.ruleId === "staffpass/json-utf8")).toBe(false);
-  }, 60_000);
+  });
 
   test("test files are not checked", async () => {
     const [res] = await eslint.lintText(BAD, { filePath: join(ROOT, "app/api/__lint_probe__/route.test.ts") });
     expect(res.messages.some((m) => m.ruleId === "staffpass/json-utf8")).toBe(false);
-  }, 60_000);
+  });
 
   test("legacy allowlist: every existing bare call site is listed, nothing else (it can only shrink)", () => {
     const offenders = [...new Set([...sourceFiles(join(ROOT, "app")), ...sourceFiles(join(ROOT, "lib")), ...sourceFiles(join(ROOT, "components"))]
