@@ -6,7 +6,7 @@
  */
 import { randomUUID } from "node:crypto";
 import { isDemoMode } from "@/lib/mode";
-import { createSupabaseAdminClient } from "@/lib/supabase/admin";
+import { createSupabaseAdminClient } from "@/lib/supabase";
 import { demoListApprovals, demoUpdateApproval, demoGetApproval } from "@/lib/data/demo-approvals-store";
 import { appendAuditEvent } from "@/lib/data/audit";
 import { getRuntimeMembers } from "@/lib/demo-data";

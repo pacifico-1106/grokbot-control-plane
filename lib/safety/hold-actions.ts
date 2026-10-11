@@ -16,7 +16,7 @@
  */
 import type { OrgMember } from "@/lib/types";
 import { isDemoMode } from "@/lib/mode";
-import { createSupabaseAdminClient } from "@/lib/supabase/admin";
+import { createSupabaseAdminClient } from "@/lib/supabase";
 import { appendAuditEvent } from "@/lib/data/audit";
 import { createApproval, getApprovalById } from "@/lib/data/approvals";
 import { demoGetApproval, demoUpdateApproval } from "@/lib/data/demo-approvals-store";
