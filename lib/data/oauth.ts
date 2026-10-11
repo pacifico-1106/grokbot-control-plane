@@ -104,6 +104,7 @@ export interface OAuthStore {
   getClient(clientId: string): Promise<OAuthClientRecord | null>;
   touchClient(clientId: string, at: string): Promise<void>;
   countDcrClientsSince(sinceIso: string, ipHash?: string | null): Promise<number>;
+  /** DCR clients unused since `unusedBeforeIso` that have NO grant (any status). */
   deleteStaleDcrClients(unusedBeforeIso: string): Promise<number>;
 
   createAuthRequest(rec: Omit<OAuthAuthRequestRecord, "consumedAt" | "createdAt">): Promise<OAuthAuthRequestRecord>;
@@ -182,8 +183,9 @@ export function createMemoryOAuthStore(): OAuthStore {
     },
     async deleteStaleDcrClients(before) {
       let n = 0;
+      const withGrant = new Set([...grants.values()].map((g) => g.clientId));
       for (const [k, c] of clients) {
-        if (c.registrationType === "dcr" && (c.lastUsedAt ?? c.createdAt) < before) {
+        if (c.registrationType === "dcr" && (c.lastUsedAt ?? c.createdAt) < before && !withGrant.has(k)) {
           clients.delete(k);
           n++;
         }
@@ -536,10 +538,28 @@ export function createSupabaseOAuthStore(): OAuthStore {
       return count ?? 0;
     },
     async deleteStaleDcrClients(before) {
+      // Candidates (bounded batch), minus every client that has ANY grant:
+      // oauth_grants.client_id cascades, so a consented client (active or
+      // revoked grant = audit trail) is never deleted here.
+      const { data: cands, error: e1 } = await db()
+        .from("oauth_clients")
+        .select("client_id")
+        .eq("registration_type", "dcr")
+        .or(`last_used_at.lt.${before},and(last_used_at.is.null,created_at.lt.${before})`)
+        .limit(1000);
+      if (e1) fail("stale_dcr_candidates", e1);
+      const ids = (cands ?? []).map((r) => String((r as Row).client_id));
+      if (ids.length === 0) return 0;
+      const { data: used, error: e2 } = await db().from("oauth_grants").select("client_id").in("client_id", ids);
+      if (e2) fail("stale_dcr_grants", e2);
+      const keep = new Set((used ?? []).map((r) => String((r as Row).client_id)));
+      const doomed = ids.filter((id) => !keep.has(id));
+      if (doomed.length === 0) return 0;
       const { data, error } = await db()
         .from("oauth_clients")
         .delete()
         .eq("registration_type", "dcr")
+        .in("client_id", doomed)
         .or(`last_used_at.lt.${before},and(last_used_at.is.null,created_at.lt.${before})`)
         .select("client_id");
       if (error) fail("delete_stale_dcr", error);

@@ -116,6 +116,7 @@ ADDITIVE = [
     ("20261005200000_", "tests/security/db-channel-classify.sql", ("channel_classify_proposals", "channel_stuck_notice_windows")),
     ("20261005400000_", "tests/security/db-channel-classify-budget.sql", ("channel_classify_budget_windows",)),
     ("20261009100000_", "tests/security/db-thread-single-flight.sql", ("thread_send_leases", "thread_self_posts")),
+    ("20261009700000_", "tests/security/db-slack-skipped-wakes.sql", ("slack_skipped_channel_wakes",)),
     # Listed before 20261010200000 (whose rollback/re-apply below recreates the
     # function with its original search_path). A str = the condition after its rollback.
     ("20261010300000_", "tests/security/db-mcp-oauth-search-path.sql",

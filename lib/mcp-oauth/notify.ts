@@ -2,6 +2,7 @@
  * After a consent is granted, tell the org's owners/admins (design §6.8).
  * Best-effort email via the existing Resend path; contains no secrets.
  */
+import { appendAuditEvent } from "@/lib/data/audit";
 import { listMembers } from "@/lib/data/members";
 import { oauthIssuer } from "@/lib/mcp-oauth/config";
 import { sendTransactionalEmail } from "@/lib/resend";
@@ -66,4 +67,55 @@ export async function notifyOAuthSecurityEvent(n: { orgId: string; employeeId: s
     text: `${line}\n必要なら AI クライアントから再接続してください。\n${url}`,
     tags: [{ name: "template", value: "oauth_security" }],
   });
+}
+
+const OPS_EMAIL_RE = /^[^\s@,]+@[^\s@,]+\.[^\s@,]+$/;
+
+/**
+ * #318 follow-up: the DCR global daily cap was hit (registration is refused
+ * for everyone until the window moves). Ops only, via the existing channels:
+ * PLATFORM_OPS_ORG_ID audit mirror + APPROVAL_ALERT_OPS_EMAILS. Counts only
+ * (no IPs, hashes or client names). The caller dedupes (once per day).
+ * Never throws.
+ */
+export async function notifyOpsDcrGlobalCapReached(n: { count: number; cap: number }): Promise<"sent_ops" | "undelivered"> {
+  let reached = false;
+  const count = Math.max(0, Math.floor(Number(n.count) || 0));
+  const cap = Math.max(0, Math.floor(Number(n.cap) || 0));
+  const line = `MCP OAuth の動的クライアント登録（DCR）が 24 時間の全体上限（${cap} 件）に達しました（直近 24 時間: ${count} 件）。上限が下がるまで新しい登録はすべて 429 になります。`;
+  const todo = "対処: 登録元の急増（悪用）か正規の利用増かを確認し、必要なら MCP_OAUTH_DCR_ENABLED を OFF にしてください。";
+  const opsOrgId = (process.env.PLATFORM_OPS_ORG_ID || "").trim();
+  if (opsOrgId) {
+    reached = await appendAuditEvent({
+      orgId: opsOrgId,
+      employeeId: null,
+      credentialId: null,
+      action: "oauth.dcr_global_cap_reached",
+      purpose: null,
+      summary: line,
+      metadata: { auditClass: "admin", event: "oauth.dcr_global_cap_reached", count, cap },
+    })
+      .then(() => true)
+      .catch(() => false);
+  }
+  const opsEmails = (process.env.APPROVAL_ALERT_OPS_EMAILS || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => OPS_EMAIL_RE.test(s))
+    .slice(0, 10);
+  if (opsEmails.length) {
+    const mailed = await sendTransactionalEmail({
+      to: opsEmails,
+      template: "oauth_security",
+      subject: "【運営】MCP OAuth: DCR の全体上限に達しました",
+      html: `<p>${esc(line)}</p><p>${esc(todo)}</p>`,
+      text: `${line}\n${todo}`,
+      tags: [{ name: "template", value: "oauth_security" }],
+    })
+      .then((r) => Boolean((r as { ok?: boolean })?.ok))
+      .catch(() => false);
+    reached = reached || mailed;
+  }
+  if (!reached) console.warn("oauth_dcr_global_cap_reached", { count, cap });
+  return reached ? "sent_ops" : "undelivered";
 }

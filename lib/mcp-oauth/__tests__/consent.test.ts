@@ -409,3 +409,17 @@ describe("hardening 2b: mitigations for the forwarded-authorize-URL variant", ()
     expect(audits.filter((a) => a.action === "oauth.consent_granted").length).toBe(2);
   });
 });
+
+describe("#318 follow-up: touchClient on a successful authorization (consent allow)", () => {
+  test("allow sets the client's last_used_at; deny and refused requests do not", async () => {
+    const rid = await seedRequest();
+    expect((await allow(rid, { decision: "deny", employeeId: "", confirmed: false })).type).toBe("redirect");
+    expect((await store.getClient(CLAUDE_CLIENT))?.lastUsedAt).toBeNull();
+    const rid2 = await seedRequest("rid_" + "b".repeat(40));
+    expect(await allow(rid2, { csrf: "bad" })).toMatchObject({ type: "page" });
+    expect((await store.getClient(CLAUDE_CLIENT))?.lastUsedAt).toBeNull();
+    const rid3 = await seedRequest("rid_" + "c".repeat(40));
+    expect((await allow(rid3)).type).toBe("redirect");
+    expect((await store.getClient(CLAUDE_CLIENT))?.lastUsedAt).toBe(now.toISOString());
+  });
+});

@@ -129,8 +129,10 @@ function code(value: unknown, fallback: string): string {
 }
 
 /** auth.test scope probe. Token stays local; only scope names / a code come back. */
-async function probeScopes(token: string): Promise<{ ok: boolean; scopes: string[] | null; error: string; appId: string }> {
-  if (!token) return { ok: false, scopes: null, error: "token_missing", appId: "" };
+async function probeScopes(
+  token: string
+): Promise<{ ok: boolean; scopes: string[] | null; error: string; appId: string; botId: string }> {
+  if (!token) return { ok: false, scopes: null, error: "token_missing", appId: "", botId: "" };
   try {
     const response = await fetch("https://slack.com/api/auth.test", {
       method: "POST",
@@ -142,10 +144,11 @@ async function probeScopes(token: string): Promise<{ ok: boolean; scopes: string
     const header = response.headers?.get?.("x-oauth-scopes");
     const scopes = typeof header === "string" ? header.split(",").map((s) => s.trim()).filter(Boolean) : null;
     const appId = /^A[A-Z0-9]{2,30}$/.test(str(data.app_id)) ? str(data.app_id) : "";
-    if (data.ok !== true) return { ok: false, scopes, error: code(data.error, "slack_error"), appId };
-    return { ok: true, scopes, error: "", appId };
+    const botId = /^B[A-Z0-9]{2,30}$/.test(str(data.bot_id)) ? str(data.bot_id) : "";
+    if (data.ok !== true) return { ok: false, scopes, error: code(data.error, "slack_error"), appId, botId };
+    return { ok: true, scopes, error: "", appId, botId };
   } catch {
-    return { ok: false, scopes: null, error: "network_error", appId: "" };
+    return { ok: false, scopes: null, error: "network_error", appId: "", botId: "" };
   }
 }
 

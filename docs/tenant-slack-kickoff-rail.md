@@ -143,6 +143,8 @@ Staffpass Slack 連携には2つの OAuth フローがあり、役割が異な�
 |-----------|------|
 | `botTokenPresent` / `authTest` | xoxb がダッシュボードに登録され有効か |
 | `botHasFilesWrite` / `botFilesWriteCode` | Bot Token の `files:write` プローブ結果 |
+| `botScopeCheck` / `missingChannelClassifyScopes` | 会話 Bot Token の実スコープ（auth.test `x-oauth-scopes`）と、channel-classify に必要な `channels:read` `groups:read` `users:read` `im:read` `mpim:read` のうち不足分。読めないときは `null`（「不足なし」とは扱わない） |
+| `botApp` / `botAppIdMatchesStaffpass` | bots.info の app id と Staffpass app（`A0BU8TABSV6`）との一致。取得失敗（`missing_scope` / `ratelimited` 等）は `status: bots_info_failed` + `code`、一致は `null` |
 | `adapterEnabled` | 「つながり → チャンネルに書き込む（会社のBot）」が有効か |
 | `employees[]` | 社員ごとの `postingAs`, `slackIdentityLinked`, `fileUploadReady`, `needsReoauthForFilesWrite` |
 | `pathBReadiness` | Path B（`posting_as: user`）のファイル添付準備の集計 |

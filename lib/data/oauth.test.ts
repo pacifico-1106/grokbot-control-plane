@@ -152,3 +152,28 @@ test("migration file: RLS on every table, no policies, rollback kept out of migr
   expect(readdirSync("supabase/migrations").some((f) => f.includes("rollback"))).toBe(false);
   expect(readFileSync("supabase/verification/20261010200000_mcp_oauth_rollback.sql", "utf8")).toContain("drop table if exists oauth_grants");
 });
+
+test("#318 follow-up: stale DCR cleanup never deletes a client that has a grant (any status)", async () => {
+  const store = createMemoryOAuthStore();
+  const base = { clientName: "x", clientUri: null, logoUri: null, redirectUris: [], tokenEndpointAuthMethod: "none" as const, metadata: {}, metadataFetchedAt: null, metadataExpiresAt: null, status: "active" as const, createdIpHash: "h" };
+  await store.upsertClient({ ...base, clientId: "dcr_nogrant", registrationType: "dcr", createdAt: NOW });
+  await store.upsertClient({ ...base, clientId: "dcr_active", registrationType: "dcr", createdAt: NOW });
+  await store.upsertClient({ ...base, clientId: "dcr_revoked", registrationType: "dcr", createdAt: NOW });
+  const g = { orgId: "org_a", employeeId: "emp_1", credentialIdAtGrant: null, grantedByMemberId: null, grantedByEmail: "o@example.com", resource: "r", scope: [], expiresAt: LATER };
+  await store.createGrant({ ...g, clientId: "dcr_active" });
+  const revoked = await store.createGrant({ ...g, clientId: "dcr_revoked" });
+  await store.revokeGrant(revoked.id, "o@example.com", "test", NOW);
+  expect(await store.deleteStaleDcrClients(LATER)).toBe(1);
+  expect(await store.getClient("dcr_nogrant")).toBeNull();
+  expect(await store.getClient("dcr_active")).not.toBeNull();
+  expect(await store.getClient("dcr_revoked")).not.toBeNull();
+});
+
+test("#318 follow-up: touchClient keeps a DCR client out of the stale window", async () => {
+  const store = createMemoryOAuthStore();
+  const base = { clientName: "x", clientUri: null, logoUri: null, redirectUris: [], tokenEndpointAuthMethod: "none" as const, metadata: {}, metadataFetchedAt: null, metadataExpiresAt: null, status: "active" as const, createdIpHash: "h" };
+  await store.upsertClient({ ...base, clientId: "dcr_touched", registrationType: "dcr", createdAt: NOW });
+  await store.touchClient("dcr_touched", LATER);
+  expect(await store.deleteStaleDcrClients(LATER)).toBe(0);
+  expect(await store.getClient("dcr_touched")).not.toBeNull();
+});
