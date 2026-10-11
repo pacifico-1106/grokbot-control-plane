@@ -95,8 +95,10 @@ describe("runCredentialExpiryNotices", () => {
     expect(text).toContain("cred_2");
     expect(text).toContain(`${ORIGIN}/app/employees/emp_1`);
     expect(text).toContain(`${ORIGIN}/app/employees/emp_2`);
-    expect(text).toContain("あと 6 日");
-    expect(text).toContain("明日まで");
+    // 木村 2026-10-12: absolute JST moment for both thresholds, no relative wording
+    expect(text.match(/（JST）に期限切れ/g)?.length).toBe(2);
+    expect(text).not.toContain("明日まで");
+    expect(text).not.toMatch(/あと \d+ 日/);
     expect(text).not.toMatch(/gb_emp_|secret|token/i);
     expect(h.claims.has("cred_1:7d")).toBe(true);
     expect(h.claims.has("cred_2:1d")).toBe(true);
@@ -222,8 +224,39 @@ describe("credentialExpiryNoticeText", () => {
       [{ credentialId: "cred_9", employeeId: "emp_9", expiresAt: "2026-10-19T03:00:00.000Z", threshold: "7d", daysLeft: 7 }],
       { origin: ORIGIN, deferred: 0 }
     );
-    expect(text).toContain("2026/10/19 12:00 JST");
+    expect(text).toContain("10/19 12:00（JST）に期限切れ");
     expect(text).toContain(`${ORIGIN}/app/employees/emp_9`);
     expect(text).toContain("emp_9");
+  });
+});
+
+describe("expiry moment wording (JST, both thresholds; boundaries around JST midnight)", () => {
+  const one = (expiresAt: string, threshold: "7d" | "1d") =>
+    credentialExpiryNoticeText([{ credentialId: "cred_m", employeeId: "emp_m", expiresAt, threshold, daysLeft: 1 }], { origin: ORIGIN, deferred: 0 });
+  test("expires later TODAY (JST) inside the 1d window → today's date, never 明日まで", () => {
+    // now 10/12 22:00 JST, expiry 10/12 23:30 JST
+    const text = one("2026-10-12T14:30:00.000Z", "1d");
+    expect(text).toContain("10/12 23:30（JST）に期限切れ");
+    expect(text).not.toContain("明日");
+  });
+  test("23:59 JST stays on that day", () => {
+    expect(one("2026-10-12T14:59:00.000Z", "1d")).toContain("10/12 23:59（JST）に期限切れ");
+  });
+  test("exactly JST midnight → next day 00:00 (never 24:00)", () => {
+    const text = one("2026-10-12T15:00:00.000Z", "1d");
+    expect(text).toContain("10/13 00:00（JST）に期限切れ");
+    expect(text).not.toContain("24:00");
+  });
+  test("00:01 JST and 09:00 JST next day", () => {
+    expect(one("2026-10-12T15:01:00.000Z", "1d")).toContain("10/13 00:01（JST）に期限切れ");
+    expect(one("2026-10-13T00:00:00.000Z", "1d")).toContain("10/13 09:00（JST）に期限切れ");
+  });
+  test("7d threshold uses the same absolute wording", () => {
+    const text = one("2026-10-19T03:00:00.000Z", "7d");
+    expect(text).toContain("10/19 12:00（JST）に期限切れ");
+    expect(text).not.toMatch(/あと \d+ 日|明日まで/);
+  });
+  test("UTC date differs from JST date (15:00Z–23:59Z) → JST date wins", () => {
+    expect(one("2026-12-31T16:30:00.000Z", "1d")).toContain("1/1 01:30（JST）に期限切れ");
   });
 });
