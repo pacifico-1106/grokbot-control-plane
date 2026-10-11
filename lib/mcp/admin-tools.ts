@@ -1,3 +1,4 @@
+import { LINE_APPROVAL_SCREEN, SLACK_BOT_TOKEN_SCREEN, refuseSecretArgs, useScreenNextStepJa } from "@/lib/admin-mcp/secret-args";
 import { consumeAdminApprovalSecret } from "@/lib/admin-mcp/consume-secret";
 import { handleDesignatedAdminsTool, isDesignatedAdminsTool } from "@/lib/admin-mcp/designated-admins-tool";
 import { handlePromoteOwnerTool, PROMOTE_OWNER_TOOL } from "@/lib/admin-mcp/promote-owner-tool";
@@ -50,7 +51,6 @@ import {
   diagnoseChannelInternalBaseReadiness,
 } from "@/lib/slack/connect-internal-base-diagnose";
 import { diagnoseLineApprovalStatus } from "@/lib/line/line-approval-status-diagnose";
-import { encryptNotificationSecrets } from "@/lib/notify/crypto";
 import { queueAdminTool } from "@/lib/admin-mcp/queue";
 import { handleSlackDmSetupTool, isSlackDmSetupTool } from "@/lib/admin-mcp/slack-dm-setup";
 import { SLACK_APPROVER_SET_TOOL, handleSlackApproverSet } from "@/lib/admin-mcp/slack-approver";
@@ -397,17 +397,13 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
   {
     name: "setup.slackAdapter.setBotToken",
     description:
-      `Register or update the org Slack conversation posting adapter Bot token (xoxb-...) after human approval (always_human). This is the token for AI社員↔相手の会話投稿 under dashboard「${DASHBOARD_BOT_TOKEN_PATH_JA}」— NOT the approval-inbox Slack under「承認を受け取る」. Reuses the same encrypted store as PUT /api/settings/conversation-adapters. Never returns the raw token. Admin cannot self-approve. After approval, run setup.slackStatus to confirm readiness.`,
+      `Disable the org Slack conversation posting adapter after human approval (always_human). The Bot token (xoxb-...) itself is NEVER an argument: the tenant enters it on the screen /app/settings「${DASHBOARD_BOT_TOKEN_PATH_JA}」(H5: secrets never pass through the AI). A botToken argument is refused with secret_argument_refused (name only, never the value) and nothing is queued. This is the AI社員↔相手の会話投稿 adapter — NOT the approval-inbox Slack under「承認を受け取る」. After the tenant saves the token, run setup.slackStatus to confirm readiness.`,
     inputSchema: {
       type: "object",
       properties: {
-        botToken: {
-          type: "string",
-          description: "Slack Bot User OAuth Token (xoxb-...). Required when enabled=true.",
-        },
         enabled: {
           type: "boolean",
-          description: "Enable the Slack conversation adapter (default true). Set false to disable without a new token.",
+          description: "false disables the Slack conversation adapter (the stored token is kept). Enabling needs the token, which the tenant enters on /app/settings.",
         },
         label: {
           type: "string",
@@ -451,18 +447,10 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
   {
     name: "setup.lineApproval.upsert",
     description:
-      "Register or update an org LINE approval-inbox channel (channelAccessToken, channelSecret, destinationId) after human approval (always_human). Same store as dashboard「承認を受け取る」→ 承認用LINE / PUT /api/settings/notification-channels. Secrets are encrypted at rest in approval metadata only. Never returns raw tokens. NOT the conversation LINE adapter (P1) or Slack posting adapter.",
+      "Update the non-secret settings of an org LINE approval-inbox channel (destinationId, allowedUserIds, label, enabled, isDefault) after human approval (always_human). The channel access token and channel secret are NEVER arguments: the tenant enters them on the screen /app/settings「承認を受け取る」→ 承認用LINE (H5: secrets never pass through the AI). channelAccessToken / channelSecret are refused with secret_argument_refused (names only, never the values) and nothing is queued; stored values stay as they are. A new enabled channel therefore starts on that screen. Same store as PUT /api/settings/notification-channels. NOT the conversation LINE adapter (P1) or Slack posting adapter.",
     inputSchema: {
       type: "object",
       properties: {
-        channelAccessToken: {
-          type: "string",
-          description: "LINE Messaging API channel access token. Required when enabled=true on create.",
-        },
-        channelSecret: {
-          type: "string",
-          description: "LINE Messaging API channel secret. Required when enabled=true on create.",
-        },
         destinationId: {
           type: "string",
           description: "LINE userId (U...) / groupId (C...) / roomId (R...) for approval delivery.",
@@ -2273,6 +2261,11 @@ export async function callAdminMcpTool(
     );
   }
 
+  // H5: a secret argument is refused before anything else runs (plan gate,
+  // re-invoke, validation, queue, audit) — names only, never the value.
+  const secretRefusal = refuseSecretArgs(name, args);
+  if (secretRefusal) return toolResult(secretRefusal, true);
+
   // P1 Plan Rails: check if tool is available for org's plan (flag-gated)
   const planGate = await assertAdminToolAllowedForPlan(cred.orgId, name);
   if (!planGate.ok) {
@@ -2663,25 +2656,16 @@ export async function callAdminMcpTool(
   }
 
   if (name === "setup.slackAdapter.setBotToken") {
-    const enabled = args.enabled !== false;
-    const botToken = String(args.botToken || "").trim();
-    if (enabled && !botToken) {
+    // H5: the token is entered on the screen; this tool can only disable.
+    if (args.enabled !== false) {
       return toolResult(
         {
           ok: false,
           code: "slack_adapter_token_required",
-          message: `有効化するには Bot User OAuth Token (xoxb-...) が必要です。ダッシュボード「${DASHBOARD_BOT_TOKEN_PATH_JA}」と同じ値です（「承認を受け取る」のSlackではありません）。`,
-        },
-        true
-      );
-    }
-    if (botToken && !botToken.startsWith("xoxb-")) {
-      return toolResult(
-        {
-          ok: false,
-          code: "invalid_bot_token_format",
-          message:
-            "Bot User OAuth Token は xoxb- で始まる必要があります。User Token (xoxp-) や承認インボックス用トークンはここでは使えません。",
+          message: `有効化には Bot User OAuth Token (xoxb-...) が必要ですが、トークンはこのツールでは受け取りません。ダッシュボード「${DASHBOARD_BOT_TOKEN_PATH_JA}」でテナントの担当者が入力します（「承認を受け取る」のSlackではありません）。`,
+          nextAction: "use_dashboard",
+          nextStep: useScreenNextStepJa(SLACK_BOT_TOKEN_SCREEN),
+          screen: SLACK_BOT_TOKEN_SCREEN,
         },
         true
       );
@@ -2691,8 +2675,6 @@ export async function callAdminMcpTool(
   if (name === "setup.lineApproval.upsert") {
     const enabled = args.enabled !== false;
     const destinationId = String(args.destinationId || "").trim();
-    const channelAccessToken = String(args.channelAccessToken || "").trim();
-    const channelSecret = String(args.channelSecret || "").trim();
     const channelId = String(args.channelId || "").trim();
     const channels = await listNotificationChannels(cred.orgId);
     const existing = channelId
@@ -2710,23 +2692,16 @@ export async function callAdminMcpTool(
         true
       );
     }
-    const hasExistingCredentials = Boolean(existing?.hasCredentials);
-    if (enabled && !channelAccessToken && !hasExistingCredentials) {
+    // H5: the token / secret are entered on the screen, never through this tool.
+    if (enabled && !existing?.hasCredentials) {
       return toolResult(
         {
           ok: false,
           code: "line_credentials_incomplete",
-          message: "有効化するには channelAccessToken / channelSecret が必要です（既存 secret がある場合は省略可）",
-        },
-        true
-      );
-    }
-    if (enabled && !channelSecret && !hasExistingCredentials) {
-      return toolResult(
-        {
-          ok: false,
-          code: "line_credentials_incomplete",
-          message: "有効化するには channelAccessToken / channelSecret が必要です（既存 secret がある場合は省略可）",
+          message: "有効化にはチャネルアクセストークンとチャネルシークレットが必要ですが、このツールでは受け取りません。テナントの担当者が画面で入力します。",
+          nextAction: "use_dashboard",
+          nextStep: useScreenNextStepJa(LINE_APPROVAL_SCREEN),
+          screen: LINE_APPROVAL_SCREEN,
         },
         true
       );
@@ -3666,16 +3641,13 @@ export async function callAdminMcpTool(
     }
     summary = `Stuck Watch ポリシーの更新を人が確認します（${parts.join("・") || "設定変更"}）`;
   } else if (name === "setup.slackAdapter.setBotToken") {
+    // H5: no token here (refused above); only enabled=false reaches the queue.
     const enabled = args.enabled !== false;
-    const botToken = String(args.botToken || "").trim();
     const label = String(args.label || "").trim();
     queuedArgs = {
       enabled,
       label: label || null,
-      botTokenPresent: Boolean(botToken),
-      ...(botToken
-        ? { botTokenCiphertext: encryptNotificationSecrets({ botToken }) }
-        : {}),
+      botTokenPresent: false,
       jobId: args.jobId,
     };
     summary = enabled
@@ -3683,16 +3655,12 @@ export async function callAdminMcpTool(
       : `Slack会話投稿アダプタを無効化します（「承認を受け取る」のSlackとは別）`;
   } else if (name === "setup.lineApproval.upsert") {
     const enabled = args.enabled !== false;
+    // H5: no token / secret here (refused above); stored values are kept at fulfil.
     const destinationId = String(args.destinationId || "").trim();
-    const channelAccessToken = String(args.channelAccessToken || "").trim();
-    const channelSecret = String(args.channelSecret || "").trim();
     const label = String(args.label || "").trim();
     const allowedUserIds = Array.isArray(args.allowedUserIds)
       ? args.allowedUserIds.map(String).map((value) => value.trim()).filter(Boolean).slice(0, 100)
       : [];
-    const secrets: Record<string, string> = {};
-    if (channelAccessToken) secrets.channelAccessToken = channelAccessToken;
-    if (channelSecret) secrets.channelSecret = channelSecret;
     queuedArgs = {
       enabled,
       destinationId,
@@ -3700,11 +3668,8 @@ export async function callAdminMcpTool(
       label: label || null,
       isDefault: args.isDefault === true,
       channelId: String(args.channelId || "").trim() || null,
-      channelAccessTokenPresent: Boolean(channelAccessToken),
-      channelSecretPresent: Boolean(channelSecret),
-      ...(Object.keys(secrets).length > 0
-        ? { secretsCiphertext: encryptNotificationSecrets(secrets) }
-        : {}),
+      channelAccessTokenPresent: false,
+      channelSecretPresent: false,
       jobId: args.jobId,
     };
     summary = enabled
@@ -3803,10 +3768,9 @@ export async function callAdminMcpTool(
   // Only specific tools are designed to receive specific secrets which are immediately encrypted.
   // All other args and all other tools must still be scanned for unexpected secrets.
   // NOTE: orgs.create ownerPassword is NOT allowlisted — P0-A lock says "Chat NEVER: Passwords".
-  const TOOL_SECRET_ALLOWLIST: Record<string, string[]> = {
-    "setup.slackAdapter.setBotToken": ["botToken"],
-    "setup.lineApproval.upsert": ["channelAccessToken", "channelSecret"],
-  };
+  // H5 (10/12): no tool takes a secret argument any more (lib/admin-mcp/secret-args.ts
+  // refuses them first), so nothing is excluded from the scan.
+  const TOOL_SECRET_ALLOWLIST: Record<string, string[]> = {};
   const allowedFields = TOOL_SECRET_ALLOWLIST[name] ?? [];
   const rawArgsForSecretScan = Object.fromEntries(
     Object.entries(args).filter(([key]) => !allowedFields.includes(key))

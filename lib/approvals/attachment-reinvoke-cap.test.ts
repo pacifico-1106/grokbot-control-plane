@@ -522,22 +522,18 @@ describe("4. retry cap: the same definite error 3× in a row", () => {
     expect(await streak(b.approvalId)).toMatchObject({ code: "token_revoked", count: 1 });
   });
 
-  test("reset: setup.slackAdapter.setBotToken succeeds (admin MCP → human approval) → the next re-run calls Slack once", async () => {
+  // H5 (10/12): the bot token is no longer an admin MCP argument; the tenant
+  // saves it on the screen (PUT /api/settings/conversation-adapters), which
+  // records the dashboard reset signal.
+  test("reset: the tenant saves the bot token on the dashboard → the next re-run calls Slack once", async () => {
     installSlack();
     await setToken(true);
     const a = await approved();
     complete = { json: { ok: false, error: "token_revoked" } };
     await failTimes(4, a);
     expect(completes).toBe(3);
-    const queued = await callAdminMcpTool("setup.slackAdapter.setBotToken", { botToken: "xoxb-capk2-new-token" }, adminCred());
-    const ticketId = String((queued.structuredContent as Record<string, unknown>).approvalId);
-    const ticket = await resolveApproval(ticketId, "approved", "owner@example.com", DEMO_ORG.id, { actorId: "mem_human_1" });
-    expect((await fulfillApprovedAdmin(ticket!))?.ok).toBe(true);
-    const reset = (await listAuditEvents(DEMO_ORG.id, 100_000)).filter((e) => e.action === SETUP_TOOL_SUCCEEDED_AUDIT
-      && (e.metadata as Record<string, unknown>)?.approvalId === ticketId);
-    expect(reset.length).toBe(1);
-    expect(reset[0].metadata).toMatchObject({ tool: "setup.slackAdapter.setBotToken", source: "admin_fulfillment" });
-    noSecrets(JSON.stringify(reset));
+    await new Promise((r) => setTimeout(r, 5)); // demo audit clock is ms; the reset must be AFTER the last failure
+    await recordSetupToolSucceeded({ orgId: DEMO_ORG.id, tool: DASHBOARD_SLACK_ADAPTER_SAVE, source: "dashboard_settings" });
     complete = OK_COMPLETE;
     const after = (await failTimes(1, a))[0];
     expect(after).toMatchObject({ ok: true, fileId: "F_CAP_UP" });
@@ -545,6 +541,14 @@ describe("4. retry cap: the same definite error 3× in a row", () => {
     expect(await streak(a.approvalId)).toBeUndefined();
     expect((await failTimes(1, a))[0]).toMatchObject({ ok: true, fileId: "F_CAP_UP" });
     expect(completes).toBe(4);
+  });
+
+  test("H5: a botToken argument to setup.slackAdapter.setBotToken is refused (no ticket, no reset)", async () => {
+    const queued = await callAdminMcpTool("setup.slackAdapter.setBotToken", { botToken: "xoxb-capk2-new-token" }, adminCred());
+    const data = queued.structuredContent as Record<string, unknown>;
+    expect(data.code).toBe("secret_argument_refused");
+    expect(data.approvalId).toBeUndefined();
+    noSecrets(JSON.stringify(data));
   });
 
   test("after a reset the same error counts from 1 again (3 more tries, then capped again)", async () => {

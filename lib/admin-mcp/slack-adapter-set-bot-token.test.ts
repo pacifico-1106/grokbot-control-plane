@@ -67,93 +67,51 @@ describe("setup.slackAdapter.setBotToken", () => {
     expect(ADMIN_MCP_TOOL_NAMES).toContain("setup.slackAdapter.setBotToken");
   });
 
-  test("queues always_human approval without mutating adapter", async () => {
+  // H5 (10/12): the token is entered on the screen (/app/settings「チャンネルに
+  // 書き込む（会社のBot）」); the tool refuses it and can only disable.
+  test("a botToken argument is refused: nothing queued, adapter untouched, token not echoed", async () => {
     const before = await getEnabledConversationAdapter(DEMO_ORG.id, "slack");
-    expect(before).toBeNull();
-
-    const result = await callAdminMcpTool(
-      "setup.slackAdapter.setBotToken",
-      { botToken: TEST_TOKEN },
-      demoCred()
-    );
+    const result = await callAdminMcpTool("setup.slackAdapter.setBotToken", { botToken: TEST_TOKEN }, demoCred());
     const data = result.structuredContent as Record<string, unknown>;
-    expect(data.needs_approval).toBe(true);
-    expect(data.always_human).toBe(true);
-    expect(data.auditClass).toBe("admin");
-    expect(data.auditAction).toBe("admin.conversationAdapter");
-    expect(data.approvalId).toBeTruthy();
-    expect(jsonHasNoToken(data, TEST_TOKEN)).toBe(true);
-
-    const approval = await getApprovalById(String(data.approvalId), DEMO_ORG.id);
-    expect(approval).toBeTruthy();
-    expect(jsonHasNoToken(approval?.metadata, TEST_TOKEN)).toBe(true);
-    expect(approval?.metadata?.adminMutation).toMatchObject({
-      enabled: true,
-      botTokenPresent: true,
-    });
-    expect(String((approval?.metadata?.adminMutation as Record<string, unknown>)?.botToken || "")).toBe("");
-
+    expect(result.isError).toBe(true);
+    expect(data.code).toBe("secret_argument_refused");
+    expect(data.approvalId).toBeUndefined();
+    expect(jsonHasNoToken(result, TEST_TOKEN)).toBe(true);
     expect(await getEnabledConversationAdapter(DEMO_ORG.id, "slack")).toBe(before);
   });
 
-  test("rejects empty token when enabled", async () => {
-    const result = await callAdminMcpTool(
-      "setup.slackAdapter.setBotToken",
-      { botToken: "   " },
-      demoCred()
-    );
+  test("an empty / malformed token value is refused the same way (the argument itself is retired)", async () => {
+    for (const botToken of ["   ", "xoxp-user-token-not-allowed"]) {
+      const result = await callAdminMcpTool("setup.slackAdapter.setBotToken", { botToken }, demoCred());
+      expect((result.structuredContent as Record<string, unknown>).code).toBe("secret_argument_refused");
+      expect(result.isError).toBe(true);
+    }
+  });
+
+  test("enabling without a token → slack_adapter_token_required with the screen as nextStep", async () => {
+    const result = await callAdminMcpTool("setup.slackAdapter.setBotToken", { label: "Slack 会話投稿" }, demoCred());
     const data = result.structuredContent as Record<string, unknown>;
     expect(data.code).toBe("slack_adapter_token_required");
-    expect(result.isError).toBe(true);
+    expect(data.nextAction).toBe("use_dashboard");
+    expect(String(data.nextStep)).toContain("/app/settings");
   });
 
-  test("rejects non-xoxb token format", async () => {
-    const result = await callAdminMcpTool(
-      "setup.slackAdapter.setBotToken",
-      { botToken: "xoxp-user-token-not-allowed" },
-      demoCred()
-    );
-    const data = result.structuredContent as Record<string, unknown>;
-    expect(data.code).toBe("invalid_bot_token_format");
-    expect(result.isError).toBe(true);
-  });
-
-  test("fulfill stores encrypted token without echoing secret", async () => {
-    const queued = await callAdminMcpTool(
-      "setup.slackAdapter.setBotToken",
-      { botToken: TEST_TOKEN, label: "Slack 会話投稿" },
-      demoCred()
-    );
-    const approvalId = String((queued.structuredContent as Record<string, unknown>).approvalId);
-
-    const approved = await resolveApproval(
-      approvalId,
-      "approved",
-      "owner@example.com",
-      DEMO_ORG.id,
-      { actorId: "mem_human_1" }
-    );
+  test("disable (enabled=false) is queued and, after approval, keeps the stored token but turns the adapter off", async () => {
+    await upsertConversationAdapter({ orgId: DEMO_ORG.id, surface: "slack", enabled: true, secrets: { botToken: TEST_TOKEN } });
+    const queued = await callAdminMcpTool("setup.slackAdapter.setBotToken", { enabled: false }, demoCred());
+    const data = queued.structuredContent as Record<string, unknown>;
+    expect(data.needs_approval).toBe(true);
+    expect(data.always_human).toBe(true);
+    const approved = await resolveApproval(String(data.approvalId), "approved", "owner@example.com", DEMO_ORG.id, { actorId: "mem_human_1" });
     expect(approved?.status).toBe("approved");
-
     const fulfillment = await fulfillApprovedAdmin(approved!);
     expect(fulfillment?.ok).toBe(true);
-    expect(fulfillment?.tool).toBe("setup.slackAdapter.setBotToken");
-    expect(fulfillment?.botTokenPresent).toBe(true);
-    expect(fulfillment?.hasCredentials).toBe(true);
     expect(jsonHasNoToken(fulfillment, TEST_TOKEN)).toBe(true);
-
-    const runtime = await getEnabledConversationAdapter(DEMO_ORG.id, "slack");
-    expect(runtime?.secrets.botToken).toBe(TEST_TOKEN);
-
+    expect(await getEnabledConversationAdapter(DEMO_ORG.id, "slack")).toBeNull();
     const audits = await listAuditEvents(DEMO_ORG.id, 20);
     const fulfillAudit = audits.find((event) => event.action === "admin.conversationAdapter");
-    expect(fulfillAudit).toBeTruthy();
     expect(jsonHasNoToken(fulfillAudit, TEST_TOKEN)).toBe(true);
-    expect(fulfillAudit?.metadata).toMatchObject({
-      auditClass: "admin",
-      surface: "slack",
-      enabled: true,
-      botTokenPresent: true,
-    });
+    expect(fulfillAudit?.metadata).toMatchObject({ auditClass: "admin", surface: "slack", enabled: false });
+    expect((await getApprovalById(String(data.approvalId), DEMO_ORG.id))?.metadata?.adminMutation).toMatchObject({ enabled: false, botTokenPresent: false });
   });
 });

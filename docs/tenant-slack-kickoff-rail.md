@@ -116,7 +116,7 @@ Staffpass Slack 連携には2つの OAuth フローがあり、役割が異な�
 | ツール | 用途 | 承認 |
 |--------|------|------|
 | `setup.slackStatus` | **Slack設定診断（read-only、最初のステップ）** | なし |
-| `setup.slackAdapter.setBotToken` | **会話投稿アダプタの Bot token 登録**（つながり → チャンネルに書き込む（会社のBot）の xoxb。承認インボックス「承認を受け取る」とは別） | always_human |
+| `setup.slackAdapter.setBotToken` | **会話投稿アダプタの無効化のみ**（`enabled: false`）。Bot token（xoxb）は**引数で受け取りません**（H5, 10/12: 秘密の値は AI を通さない）。`botToken` を渡すと `secret_argument_refused`（引数名だけ・値は返さない）で、何も登録しません。トークンはテナントが **つながり → チャンネルに書き込む（会社のBot）**（/app/settings）で入力 | always_human |
 | `employees.issue` | AI社員証の発行 | always_human |
 | `link` | 社員証とGrok Bot連携 | always_human |
 | `policy.patch` | 権限更新 | always_human |
@@ -258,14 +258,8 @@ Slack API サイトで Staffpass Slack アプリを設定します。
 ### ステップ2: Bot Token をStaffpassへ登録（人間がダッシュボードまたは管理MCPで実施）
 
 1. Slack アプリの **OAuth & Permissions** → **Bot User OAuth Token** (`xoxb-...`) をコピー
-2. 次のいずれかで登録（**同じ会話投稿アダプタ**の保存先です）:
-   - **ダッシュボード**: Staffpass → **つながり** → **チャンネルに書き込む（会社のBot）** → **Bot token** 欄に貼り付けて保存（有効チェック ON）
-   - **管理MCP**（人承認必須）:
-     ```
-     tools/call: setup.slackAdapter.setBotToken
-     arguments: { "botToken": "xoxb-...", "enabled": true }
-     ```
-     人が承認タップ後に反映されます。秘密値はレスポンス・承認カードに返りません。
+2. **ダッシュボードで登録**（テナントの担当者が入力します）: Staffpass → **つながり** → **チャンネルに書き込む（会社のBot）** → **Bot token** 欄に貼り付けて保存（有効チェック ON）
+   - 管理MCP `setup.slackAdapter.setBotToken` は **トークンを受け取りません**（H5, 10/12）。`botToken` を渡すと `secret_argument_refused` と、この画面を指す `nextStep` が返ります。AI にトークンを貼らないでください。
 
 > **混同防止**: これは AI社員が相手と話す **会話投稿アダプタ**（上記ダッシュボードパス）用です。**承認を受け取る**（Telegram / LINE / Slack 承認インボックス）のトークンとは別物です。会話口と承認通知口は混ぜません。
 
@@ -443,7 +437,7 @@ App DM（Staffpassアプリへの直接DM）への返信には `posting_as: bot`
      │    Bot Scopes 指示 ─────────────→ │ Slack UI で設定
      │                                   │ → Reinstall
      │                                   │
-     │    Bot Token 登録指示 ──────────→ │ ダッシュボードまたは setup.slackAdapter.setBotToken（人承認）
+     │    Bot Token 登録指示 ──────────→ │ ダッシュボード（テナントが入力。管理MCPはトークンを受け取らない）
      │                                   │
      │ 3. setup.slackStatus で確認       │
      │                                   │

@@ -281,7 +281,7 @@ export function computeSlackStatusNextStepJa(input: SlackStatusNextStepInput): s
   if (!input.botTokenPresent) {
     return (
       `conversation bot token not registered（この組織の会話投稿Botトークンが未登録です。環境変数のBotは使いません）。` +
-      `Admin MCP の ${SET_BOT_TOKEN_TOOL} で登録してください（人の承認が必要）。` +
+      `トークンは AI に渡しません（${SET_BOT_TOKEN_TOOL} は秘密の値を受け取りません）。テナントの担当者がダッシュボード /app/settings「${path}」で入力してください。` +
       `Slack API → OAuth & Permissions → Bot Token Scopes に files:write（および im:history, chat:write, im:write）を追加し、` +
       `Install to Workspace で再インストールしてください。その後 Bot User OAuth Token (xoxb-...) をダッシュボード「${path}」に登録してください。`
     );
@@ -378,7 +378,7 @@ export async function diagnoseSlackStatus(orgId: string): Promise<SlackStatusRes
     }
   } else {
     issues.push(
-      `conversation bot token not registered: この組織の会話投稿Botトークンが未登録です（${SET_BOT_TOKEN_TOOL} で登録）`
+      `conversation bot token not registered: この組織の会話投稿Botトークンが未登録です（テナントが /app/settings「${DASHBOARD_BOT_TOKEN_PATH_JA}」で入力。${SET_BOT_TOKEN_TOOL} はトークンを受け取りません）`
     );
   }
   const conversationBotToken: ConversationBotTokenStatus = botTokenPresent

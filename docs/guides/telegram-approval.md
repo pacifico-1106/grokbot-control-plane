@@ -28,7 +28,7 @@ Space Tree パイロット（上長承認 OA 化 + 将来 OA 会話窓口）の�
 | ツール | 用途 | 承認 |
 |--------|------|------|
 | `setup.lineApprovalStatus` | **LINE 承認インボックス診断（read-only・最初のステップ）** | なし |
-| `setup.lineApproval.upsert` | 承認用 LINE チャネル（token / secret / destinationId）登録 | always_human |
+| `setup.lineApproval.upsert` | 承認用 LINE チャネルの秘密以外（destinationId など）の更新。token / secret は受け取らない（`secret_argument_refused`）。テナントが /app/settings で入力 | always_human |
 | `setup.lineApproval.setEmployeeInbox` | AI 社員の承認インボックスを LINE へ割り当て（または組織既定へ戻す） | always_human |
 | `setup.lineApproval.demoteTelegram` | Telegram 承認チャネル無効化（二重送信防止） | always_human |
 
