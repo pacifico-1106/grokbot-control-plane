@@ -35,10 +35,10 @@ const PILLARS = [
   },
   {
     icon: "03",
-    title: "Grok Bot",
+    title: "AIエージェント",
     subtitle: "AI実行環境",
     description:
-      "Cursorベースの実行環境でAI社員が稼働。権限の範囲内で業務を遂行し、Staffpassが最後の砦として制御します。",
+      "専用の実行環境でAI社員が稼働。権限の範囲内で業務を遂行し、Staffpassが最後の砦として制御します。",
   },
 ];
 
