@@ -1,7 +1,7 @@
-import { NextResponse } from "next/server";
 import { getSuperAdminAccess } from "@/lib/admin/access";
 import { extendTrial, getSubscription } from "@/lib/data/subscriptions";
 import { appendAuditEvent } from "@/lib/data";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 export const runtime = "nodejs";
 
@@ -14,7 +14,7 @@ export const runtime = "nodejs";
 export async function POST(req: Request) {
   const access = await getSuperAdminAccess();
   if (!access.allowed) {
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: "unauthorized" },
       { status: access.reason === "unauthenticated" ? 401 : 403 }
     );
@@ -24,7 +24,7 @@ export async function POST(req: Request) {
   try {
     body = await req.json();
   } catch {
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: "invalid_json" },
       { status: 400 }
     );
@@ -35,14 +35,14 @@ export async function POST(req: Request) {
   const reason = (body.reason || "").trim();
 
   if (!orgId) {
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: "org_id_required" },
       { status: 400 }
     );
   }
 
   if (!newTrialEndsAt) {
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: "new_trial_ends_at_required" },
       { status: 400 }
     );
@@ -50,14 +50,14 @@ export async function POST(req: Request) {
 
   const parsedDate = new Date(newTrialEndsAt);
   if (isNaN(parsedDate.getTime())) {
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: "invalid_date_format" },
       { status: 400 }
     );
   }
 
   if (parsedDate.getTime() < Date.now()) {
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: "date_must_be_in_future" },
       { status: 400 }
     );
@@ -88,7 +88,7 @@ export async function POST(req: Request) {
       },
     });
 
-    return NextResponse.json({
+    return jsonUtf8({
       ok: true,
       subscription: updated
         ? {
@@ -101,7 +101,7 @@ export async function POST(req: Request) {
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "unknown_error";
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: message },
       { status: 500 }
     );

@@ -1,8 +1,8 @@
 /**
  * 2026-10-12 (木村, #327 remainder a): a lint rule that blocks new
  * NextResponse.json calls without a charset in non-test code and points to
- * jsonUtf8 (@/lib/http/json-utf8). Existing call sites are on an allowlist that
- * the mechanical replacement PR removes.
+ * jsonUtf8 (@/lib/http/json-utf8). #327 remainder b replaced every existing
+ * call site and removed the legacy allowlist.
  */
 import { describe, expect, test } from "bun:test";
 import { readFileSync, readdirSync } from "node:fs";
@@ -10,7 +10,6 @@ import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ESLint, RuleTester } from "eslint";
 import rule from "../../eslint-rules/json-utf8.mjs";
-import { JSON_UTF8_LEGACY_ALLOWLIST } from "../../eslint-rules/json-utf8-allowlist.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 // Run RuleTester cases synchronously inside one bun test (it throws on the first failure).
@@ -70,11 +69,9 @@ describe("wired into eslint.config.mjs", () => {
     expect(res.messages.some((m) => m.ruleId === "staffpass/json-utf8" && m.severity === 2)).toBe(true);
   });
 
-  test("an allowlisted legacy file (with [param] segments) is not reported yet", async () => {
-    const legacy = (JSON_UTF8_LEGACY_ALLOWLIST as string[]).find((f) => f.includes("["));
-    expect(legacy).toBeTruthy();
-    const [res] = await eslint.lintText(BAD, { filePath: join(ROOT, legacy!) });
-    expect(res.messages.some((m) => m.ruleId === "staffpass/json-utf8")).toBe(false);
+  test("an existing route file is now checked too (allowlist removed)", async () => {
+    const [res] = await eslint.lintText(BAD, { filePath: join(ROOT, "app/api/admin/organizations/[orgId]/approvals/[approvalId]/resolve/route.ts") });
+    expect(res.messages.some((m) => m.ruleId === "staffpass/json-utf8" && m.severity === 2)).toBe(true);
   });
 
   test("test files are not checked", async () => {
@@ -82,11 +79,11 @@ describe("wired into eslint.config.mjs", () => {
     expect(res.messages.some((m) => m.ruleId === "staffpass/json-utf8")).toBe(false);
   });
 
-  test("legacy allowlist: every existing bare call site is listed, nothing else (it can only shrink)", () => {
-    const offenders = [...new Set([...sourceFiles(join(ROOT, "app")), ...sourceFiles(join(ROOT, "lib")), ...sourceFiles(join(ROOT, "components"))]
-      .filter((f) => /NextResponse\.json\(/.test(readFileSync(f, "utf8")))
-      .filter((f) => !/eslint-disable-next-line staffpass\/json-utf8/.test(readFileSync(f, "utf8")) || /NextResponse\.json\(/.test(readFileSync(f, "utf8").replace(/\/\/ eslint-disable-next-line staffpass\/json-utf8[^\n]*\n[^\n]*/g, "")))
-      .map((f) => relative(ROOT, f)))].sort();
-    expect([...JSON_UTF8_LEGACY_ALLOWLIST].sort()).toEqual(offenders);
+  test("no bare NextResponse.json left in non-test code (only lines under an explicit eslint-disable)", () => {
+    const offenders = [...sourceFiles(join(ROOT, "app")), ...sourceFiles(join(ROOT, "lib")), ...sourceFiles(join(ROOT, "components"))]
+      .filter((f) => /NextResponse\.json\(/.test(readFileSync(f, "utf8").replace(/\/\/ eslint-disable-next-line staffpass\/json-utf8[^\n]*\n[^\n]*/g, "")))
+      .map((f) => relative(ROOT, f))
+      .sort();
+    expect(offenders).toEqual([]);
   });
 });

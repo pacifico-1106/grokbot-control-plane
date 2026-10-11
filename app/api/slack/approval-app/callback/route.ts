@@ -1,5 +1,4 @@
 import { cookies } from "next/headers";
-import { NextResponse } from "next/server";
 import { requireOrgAdminSession } from "@/lib/auth/require-org";
 import { appendAuditEvent } from "@/lib/data/audit";
 import { consumeSlackOAuthStateNonce } from "@/lib/data/slack-oauth-state-uses";
@@ -11,6 +10,7 @@ import {
   sharedApprovalResultHtml,
   verifySharedApprovalInstallState,
 } from "@/lib/slack/shared-approval-app";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -22,7 +22,7 @@ export const dynamic = "force-dynamic";
  */
 export async function GET(req: Request) {
   if (!isSharedApprovalAppEnabled()) {
-    return NextResponse.json({ error: "not_found" }, { status: 404 });
+    return jsonUtf8({ error: "not_found" }, { status: 404 });
   }
   const url = new URL(req.url);
   const code = url.searchParams.get("code")?.trim() || "";

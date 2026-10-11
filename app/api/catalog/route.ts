@@ -3,8 +3,8 @@
  * Returns public catalog items for LP display.
  */
 
-import { NextResponse } from "next/server";
 import { getCatalog } from "@/lib/lp/catalog";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -26,7 +26,7 @@ export async function GET() {
 
     const customItem = catalog.items.find((item) => item.requiresQuote);
 
-    return NextResponse.json({
+    return jsonUtf8({
       ok: true,
       version: catalog.versionKey,
       purchaseEnabled: catalog.purchaseEnabled,
@@ -42,7 +42,7 @@ export async function GET() {
     });
   } catch (error) {
     console.error("[catalog] Failed to load catalog:", error);
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: "catalog_load_failed" },
       { status: 500 }
     );

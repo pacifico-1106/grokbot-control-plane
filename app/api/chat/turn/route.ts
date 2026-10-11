@@ -7,7 +7,6 @@
  * Uses OpenAI chat completions with tool calling.
  */
 
-import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { isLpChatEnabled, isLpChatToolsEnabled, isLpHandoffEnabled } from "@/lib/feature-flags";
 import {
@@ -25,6 +24,7 @@ import { resolveChatModel } from "@/lib/lp/chat-model";
 import { ChatModelError, runChatTurn } from "@/lib/lp/chat-turn";
 import { GUEST_SESSIONS_UNAVAILABLE, isGuestSigningKeyMissingError } from "@/lib/lp/guest-signing-key";
 import { HANDOFF_OFF_REPLY, contactLinkCard, detectHandoffIntent } from "@/lib/lp/handoff-intent";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 const GUEST_COOKIE_NAME = "lp_guest";
 const CSRF_HEADER_NAME = "x-csrf-token";
@@ -35,7 +35,7 @@ const CSRF_COOKIE_NAME = "lp_csrf";
 
 export async function POST(req: Request) {
   if (!isLpChatEnabled()) {
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: "feature_disabled", message: "チャット機能は現在利用できません" },
       { status: 503 }
     );
@@ -43,7 +43,7 @@ export async function POST(req: Request) {
 
   const openaiKey = process.env.OPENAI_API_KEY;
   if (!openaiKey || openaiKey.startsWith("replace_me")) {
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: "chat_unavailable", message: "チャット機能は現在利用できません" },
       { status: 503 }
     );
@@ -53,7 +53,7 @@ export async function POST(req: Request) {
   const guestCookie = cookieStore.get(GUEST_COOKIE_NAME)?.value;
 
   if (!guestCookie) {
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: "auth_required", message: "セッションが必要です" },
       { status: 401 }
     );
@@ -67,11 +67,11 @@ export async function POST(req: Request) {
     } catch (err) {
       if (!isGuestSigningKeyMissingError(err)) throw err;
       console.error("[chat/turn] GUEST_SIGNING_KEY not configured; guest sessions unavailable");
-      return NextResponse.json({ ok: false, ...GUEST_SESSIONS_UNAVAILABLE }, { status: 503 });
+      return jsonUtf8({ ok: false, ...GUEST_SESSIONS_UNAVAILABLE }, { status: 503 });
     }
   }
   if (!parsed || !signatureOk) {
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: "invalid_session", message: "無効なセッションです" },
       { status: 401 }
     );
@@ -81,7 +81,7 @@ export async function POST(req: Request) {
   const csrfCookie = cookieStore.get(CSRF_COOKIE_NAME)?.value;
 
   if (!csrfHeader || !csrfCookie || csrfHeader !== csrfCookie) {
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: "csrf_invalid", message: "無効なリクエストです" },
       { status: 403 }
     );
@@ -91,7 +91,7 @@ export async function POST(req: Request) {
   const journey = await getJourneyByTokenHash(tokenHash);
 
   if (!journey) {
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: "session_expired", message: "セッションの有効期限が切れました" },
       { status: 401 }
     );
@@ -101,7 +101,7 @@ export async function POST(req: Request) {
   try {
     body = await req.json();
   } catch {
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: "invalid_json", message: "リクエストが不正です" },
       { status: 400 }
     );
@@ -111,14 +111,14 @@ export async function POST(req: Request) {
   const history = sanitizeHistory(body.history);
 
   if (!text || typeof text !== "string") {
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: "text_required", message: "メッセージを入力してください" },
       { status: 400 }
     );
   }
 
   if (text.length > 2000) {
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: "text_too_long", message: "メッセージは2000文字以内で入力してください" },
       { status: 400 }
     );
@@ -126,7 +126,7 @@ export async function POST(req: Request) {
 
   const turnNumber = await incrementTurnCount(journey.id);
   if (turnNumber === null) {
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: "turn_limit_exceeded", message: "このセッションの上限に達しました。新しいセッションを開始してください。" },
       { status: 429 }
     );
@@ -151,7 +151,7 @@ export async function POST(req: Request) {
       model: "rule:handoff_disabled",
       toolCalls: ["contact_link"],
     });
-    return NextResponse.json({
+    return jsonUtf8({
       ok: true,
       reply: HANDOFF_OFF_REPLY,
       cards: [contactLinkCard()],
@@ -181,7 +181,7 @@ export async function POST(req: Request) {
       toolCalls: result.toolCallsUsed.length > 0 ? result.toolCallsUsed : undefined,
     });
 
-    return NextResponse.json({
+    return jsonUtf8({
       ok: true,
       reply: result.reply,
       citations: result.citations.length > 0 ? result.citations : undefined,
@@ -192,13 +192,13 @@ export async function POST(req: Request) {
   } catch (error) {
     if (error instanceof ChatModelError) {
       console.error("[chat] OpenAI API error:", error.status ?? "no_choice");
-      return NextResponse.json(
+      return jsonUtf8(
         { ok: false, error: "ai_error", message: "AI応答の取得に失敗しました" },
         { status: 502 }
       );
     }
     console.error("[chat] Chat error:", error);
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: "chat_error", message: "エラーが発生しました" },
       { status: 500 }
     );

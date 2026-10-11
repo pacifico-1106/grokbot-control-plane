@@ -1,11 +1,11 @@
 import { publicApproval } from "@/lib/approvals/public";
-import { NextResponse } from "next/server";
 import { getSuperAdminAccess } from "@/lib/admin/access";
 import {
   proxyResolveApproval,
   PROXY_APPROVAL_MANDATES,
   type ProxyApprovalMandate,
 } from "@/lib/admin/proxy-approve";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 export const runtime = "nodejs";
 
@@ -24,7 +24,7 @@ export async function POST(
 ) {
   const access = await getSuperAdminAccess();
   if (!access.allowed) {
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: "unauthorized" },
       { status: access.reason === "unauthenticated" ? 401 : 403 }
     );
@@ -32,7 +32,7 @@ export async function POST(
 
   const { orgId, approvalId } = await ctx.params;
   if (!orgId || !approvalId) {
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: "org_id_and_approval_id_required" },
       { status: 400 }
     );
@@ -42,7 +42,7 @@ export async function POST(
   try {
     body = await req.json();
   } catch {
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: "invalid_json" },
       { status: 400 }
     );
@@ -53,14 +53,14 @@ export async function POST(
   const note = (body.note || "").trim();
 
   if (!decision || !["approved", "rejected"].includes(decision)) {
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: "invalid_decision", message: "decision は approved | rejected のいずれかを指定してください" },
       { status: 400 }
     );
   }
 
   if (!mandate || !PROXY_APPROVAL_MANDATES.includes(mandate as ProxyApprovalMandate)) {
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: "invalid_mandate", message: `名目(mandate)は ${PROXY_APPROVAL_MANDATES.join(" | ")} のいずれかを指定してください` },
       { status: 400 }
     );
@@ -81,13 +81,13 @@ export async function POST(
 
     if (!result.ok) {
       const statusCode = result.code === "approval_not_found" ? 404 : 400;
-      return NextResponse.json(
+      return jsonUtf8(
         { ok: false, error: result.code, message: result.error },
         { status: statusCode }
       );
     }
 
-    return NextResponse.json({
+    return jsonUtf8({
       ok: true,
       approval: result.approval ? publicApproval(result.approval) : undefined,
       sideEffects: result.sideEffects,
@@ -97,7 +97,7 @@ export async function POST(
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "unknown_error";
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: message },
       { status: 500 }
     );

@@ -1,8 +1,8 @@
-import { NextResponse } from "next/server";
 import { rejectUnauthorizedCron } from "@/lib/security/cron-secret";
 import { isChannelClassifyProposalsEnabled } from "@/lib/channel-classify/flags";
 import { listOrgIdsWithEnabledSlackAdapter } from "@/lib/data/conversation-adapters";
 import { BACKFILL_TIME_BUDGET_MS, backfillNow, backfillOrgChannelProposals } from "@/lib/channel-classify/backfill";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -20,7 +20,7 @@ export async function GET(req: Request) {
   const rejected = rejectUnauthorizedCron(req);
   if (rejected) return rejected;
   if (!isChannelClassifyProposalsEnabled()) {
-    return NextResponse.json({ ok: true, skipped: true, reason: "CHANNEL_CLASSIFY_PROPOSALS_ENABLED is OFF" });
+    return jsonUtf8({ ok: true, skipped: true, reason: "CHANNEL_CLASSIFY_PROPOSALS_ENABLED is OFF" });
   }
   try {
     const orgIds = shuffle(await listOrgIdsWithEnabledSlackAdapter());
@@ -40,10 +40,10 @@ export async function GET(req: Request) {
       if (result?.stoppedReason === "time_budget") deferredOrgs += 1;
       created += result?.created ?? 0;
     }
-    return NextResponse.json({ ok: true, orgs: orgIds.length, created, failedOrgs, rateLimitedOrgs, deferredOrgs });
+    return jsonUtf8({ ok: true, orgs: orgIds.length, created, failedOrgs, rateLimitedOrgs, deferredOrgs });
   } catch (error) {
     const message = error instanceof Error ? error.message.replace(/[^A-Za-z0-9_.:-]+/g, "_").slice(0, 80) : "unknown_error";
-    return NextResponse.json({ ok: false, error: message }, { status: 500 });
+    return jsonUtf8({ ok: false, error: message }, { status: 500 });
   }
 }
 

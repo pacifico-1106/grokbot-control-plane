@@ -1,6 +1,6 @@
-import { NextResponse } from "next/server";
 import { CrossProductEventError } from "@/lib/commerce/cross-product-events";
 import { receiveSealithCommerceProjection } from "@/lib/commerce/sealith-projections";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 export const runtime = "nodejs";
 
@@ -12,12 +12,12 @@ export async function POST(request: Request) {
       timestampHeader: request.headers.get("x-sealith-event-timestamp"),
       signatureHeader: request.headers.get("x-sealith-event-signature"),
     });
-    return NextResponse.json(result);
+    return jsonUtf8(result);
   } catch (error) {
     if (error instanceof CrossProductEventError) {
-      return NextResponse.json({ error: error.code }, { status: error.status });
+      return jsonUtf8({ error: error.code }, { status: error.status });
     }
     console.error("Sealith projection receive failed", error);
-    return NextResponse.json({ error: "projection_receive_failed" }, { status: 500 });
+    return jsonUtf8({ error: "projection_receive_failed" }, { status: 500 });
   }
 }

@@ -10,6 +10,7 @@ import {
   slackAuthorizeUrl,
   slackOAuthConfigured,
 } from "@/lib/slack/oauth";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 export const runtime = "nodejs";
 
@@ -36,17 +37,17 @@ export async function GET(req: Request) {
     return gate.response;
   }
   if (!slackOAuthConfigured()) {
-    return NextResponse.json(
+    return jsonUtf8(
       { error: "slack_oauth_unconfigured", message: "Slack アプリの OAuth が未設定" },
       { status: 503 }
     );
   }
   if (!employeeId) {
-    return NextResponse.json({ error: "employee_id_required" }, { status: 400 });
+    return jsonUtf8({ error: "employee_id_required" }, { status: 400 });
   }
   const employee = await getEmployee(employeeId, gate.orgId);
   if (!employee) {
-    return NextResponse.json({ error: "employee_not_found" }, { status: 404 });
+    return jsonUtf8({ error: "employee_not_found" }, { status: 404 });
   }
   const nonce = randomBytes(16).toString("base64url");
   try {
@@ -66,7 +67,7 @@ export async function GET(req: Request) {
     });
     return NextResponse.redirect(slackAuthorizeUrl(state));
   } catch {
-    return NextResponse.json(
+    return jsonUtf8(
       { error: "slack_oauth_unconfigured", message: "Slack アプリの OAuth が未設定" },
       { status: 503 }
     );

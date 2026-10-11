@@ -1,6 +1,6 @@
-import { NextResponse } from "next/server";
 import { resendPendingApprovalNotifications } from "@/lib/approvals/notify";
 import { requireOrgSession } from "@/lib/auth/require-org";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 export const runtime = "nodejs";
 
@@ -13,5 +13,5 @@ export async function POST(
 
   const { id } = await ctx.params;
   const result = await resendPendingApprovalNotifications(id, gate.orgId);
-  return NextResponse.json(result.body, { status: result.status });
+  return jsonUtf8(result.body, { status: result.status });
 }

@@ -1,4 +1,3 @@
-import { NextResponse } from "next/server";
 import { getCurrentOrgId } from "@/lib/auth/session";
 import { webSessionActorMemberId } from "@/lib/approver-authority/web-direct";
 import {
@@ -8,6 +7,7 @@ import {
   revokeUnrecordedHttpStatus,
 } from "@/lib/approver-authority/recovery";
 import { publicApproval } from "@/lib/approvals/public";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 export const runtime = "nodejs";
 
@@ -20,16 +20,16 @@ export const runtime = "nodejs";
 export async function POST(req: Request, ctx: { params: Promise<{ id: string }> }) {
   const { id } = await ctx.params;
   const orgId = await getCurrentOrgId();
-  if (!orgId) return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
+  if (!orgId) return jsonUtf8({ ok: false, error: "unauthorized" }, { status: 401 });
   const memberId = await webSessionActorMemberId(req);
-  if (!memberId) return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
+  if (!memberId) return jsonUtf8({ ok: false, error: "unauthorized" }, { status: 401 });
   const result = await revokeUnrecordedApproval({ orgId, approvalId: id, actor: { kind: "owner", memberId } });
   if (!result.ok) {
     const nextStep = REVOKE_UNRECORDED_NEXT_STEP_JA[result.code];
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: result.code, message: REVOKE_UNRECORDED_MESSAGES_JA[result.code], ...(nextStep ? { nextStep } : {}) },
       { status: revokeUnrecordedHttpStatus(result.code) }
     );
   }
-  return NextResponse.json({ ok: true, approval: publicApproval(result.approval) });
+  return jsonUtf8({ ok: true, approval: publicApproval(result.approval) });
 }

@@ -1,5 +1,4 @@
 import { ProjectAccessOrgError, projectAccessRefusalBody, projectAccessRefusalStatus } from "@/lib/employees/project-access-org";
-import { NextResponse } from "next/server";
 // PR-D: namespace access (mocks of the flag module elsewhere stay valid).
 import * as featureFlags from "@/lib/feature-flags";
 import { getCurrentOrgId } from "@/lib/auth/session";
@@ -28,11 +27,12 @@ import {
   DASHBOARD_POLICY_LOCKED,
   dashboardLockedPolicyChanged,
 } from "@/lib/dashboard/policy-lock";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 export const runtime = "nodejs";
 
 function fail(error: string, status: number) {
-  return NextResponse.json(policyErrorPayload(error), { status });
+  return jsonUtf8(policyErrorPayload(error), { status });
 }
 
 export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }> }) {
@@ -165,7 +165,7 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
       },
       surface: "employees.policy",
     });
-    if (!authority.ok) return NextResponse.json(webDirectDeniedBody(authority), { status: 403 });
+    if (!authority.ok) return jsonUtf8(webDirectDeniedBody(authority), { status: 403 });
   }
 
   let updated: Awaited<ReturnType<typeof updateEmployeePolicy>>;
@@ -198,12 +198,12 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
     });
   } catch (error) {
     if (error instanceof ProjectAccessOrgError) {
-      return NextResponse.json(projectAccessRefusalBody(error), { status: projectAccessRefusalStatus(error) });
+      return jsonUtf8(projectAccessRefusalBody(error), { status: projectAccessRefusalStatus(error) });
     }
     // Fail-closed: a failed write is never reported as saved (no audit row).
     const failure = employeePolicyWriteFailure(error);
     console.error(failure.code, id, error instanceof Error ? error.message : error);
-    return NextResponse.json(employeePolicyWriteFailurePayload(failure), { status: 500 });
+    return jsonUtf8(employeePolicyWriteFailurePayload(failure), { status: 500 });
   }
   if (!updated) return fail("employee_not_found", 404);
   const identityUpdated = displayName !== undefined || roleLabel !== undefined;
@@ -244,5 +244,5 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
       },
     });
   }
-  return NextResponse.json({ ok: true, employee: updated });
+  return jsonUtf8({ ok: true, employee: updated });
 }

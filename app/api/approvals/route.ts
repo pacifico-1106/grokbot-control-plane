@@ -1,5 +1,4 @@
 import { publicApproval } from "@/lib/approvals/public";
-import { NextResponse } from "next/server";
 import { requireOrgSession } from "@/lib/auth/require-org";
 import {
   getDemoApprovalsBackend,
@@ -8,6 +7,7 @@ import {
   runtimeModeLabel,
 } from "@/lib/data";
 import { isDemoMode } from "@/lib/mode";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -18,7 +18,7 @@ export async function GET() {
   if (!gate.ok) return gate.response;
 
   const approvals = await listApprovals(gate.orgId);
-  return NextResponse.json({
+  return jsonUtf8({
     ok: true,
     mode: runtimeModeLabel(),
     demo: isDemoMode(),

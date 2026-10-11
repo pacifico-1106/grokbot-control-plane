@@ -9,6 +9,7 @@ import {
   rateKey,
   takeRateLimit,
 } from "@/lib/auth/auth-flow";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 export const runtime = "nodejs";
 
@@ -26,7 +27,7 @@ function safeErrorId(value: unknown): string | null {
  */
 export async function POST(req: Request) {
   if (!isSameOriginRequest(req.headers, req.url)) {
-    return NextResponse.json({ error: "forbidden" }, { status: 403 });
+    return jsonUtf8({ error: "forbidden" }, { status: 403 });
   }
   const done = NextResponse.redirect(new URL("/auth/forgot?sent=1", req.url), 303);
 

@@ -1,8 +1,8 @@
-import { NextResponse } from "next/server";
 import { getSessionContext } from "@/lib/auth/session";
 import { getOrgStripeCustomerId } from "@/lib/data/subscriptions";
 import { isDemoMode } from "@/lib/mode";
 import { getAppUrl, getStripe } from "@/lib/stripe";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 export const runtime = "nodejs";
 
@@ -26,7 +26,7 @@ export async function POST() {
 
   if (!demo) {
     if (!sessionCtx.userId || !sessionCtx.orgId) {
-      return NextResponse.json(
+      return jsonUtf8(
         {
           ok: false,
           error: "auth_required",
@@ -41,7 +41,7 @@ export async function POST() {
       member.orgId !== sessionCtx.orgId ||
       !PORTAL_ROLES.has(String(member.role || ""))
     ) {
-      return NextResponse.json(
+      return jsonUtf8(
         {
           ok: false,
           error: "admin_required",
@@ -54,7 +54,7 @@ export async function POST() {
   }
 
   if (!stripe) {
-    return NextResponse.json({
+    return jsonUtf8({
       ok: true,
       stub: true,
       message:
@@ -67,7 +67,7 @@ export async function POST() {
 
   const orgId = sessionCtx.orgId;
   if (!orgId) {
-    return NextResponse.json(
+    return jsonUtf8(
       {
         ok: false,
         error: "org_required",
@@ -79,7 +79,7 @@ export async function POST() {
 
   const customerId = await getOrgStripeCustomerId(orgId);
   if (!customerId) {
-    return NextResponse.json(
+    return jsonUtf8(
       {
         ok: false,
         error: "no_stripe_customer",
@@ -95,5 +95,5 @@ export async function POST() {
     return_url: `${appUrl}/app/billing`,
   });
 
-  return NextResponse.json({ ok: true, url: portal.url });
+  return jsonUtf8({ ok: true, url: portal.url });
 }

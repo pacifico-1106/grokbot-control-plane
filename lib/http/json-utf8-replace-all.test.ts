@@ -7,7 +7,8 @@
 import { describe, expect, test } from "bun:test";
 import { NextResponse } from "next/server";
 import { jsonUtf8, JSON_UTF8_CONTENT_TYPE } from "@/lib/http/json-utf8";
-import { JSON_UTF8_LEGACY_ALLOWLIST } from "../../eslint-rules/json-utf8-allowlist.mjs";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 
 function headersExceptContentType(res: Response): Array<[string, string]> {
   return [...res.headers.entries()].filter(([k]) => k !== "content-type").sort();
@@ -37,8 +38,9 @@ describe("jsonUtf8 is NextResponse.json + charset (same body, status, headers)",
 });
 
 describe("call sites", () => {
-  test("legacy allowlist is empty (every call site replaced)", () => {
-    expect(JSON_UTF8_LEGACY_ALLOWLIST).toEqual([]);
+  test("legacy allowlist removed (every call site replaced)", () => {
+    expect(existsSync(join(process.cwd(), "eslint-rules/json-utf8-allowlist.mjs"))).toBe(false);
+    expect(readFileSync(join(process.cwd(), "eslint.config.mjs"), "utf8")).not.toContain("LEGACY_ALLOWLIST");
   });
 
   test("a public route (/api/health) answers with charset=utf-8, same body shape", async () => {

@@ -1,4 +1,3 @@
-import { NextResponse } from "next/server";
 import { sendTransactionalEmail, renderStubHtml } from "@/lib/resend";
 import { 
   isLpInquiryDbEnabled, 
@@ -9,6 +8,7 @@ import { enqueueNotification, processOutboxEntry } from "@/lib/lp/notification-o
 import { verifyTurnstileToken, getClientIp, getTurnstileConfig } from "@/lib/lp/turnstile";
 import { hashIp, checkRateLimits } from "@/lib/lp/rate-limit";
 import { IP_HASH_UNAVAILABLE, isIpHashKeyConfigured } from "@/lib/security/ip-hash-key";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 const NOTIFY_EMAIL = process.env.AI_EMP_INQUIRY_NOTIFY_EMAIL;
 
@@ -76,14 +76,14 @@ export async function POST(req: Request) {
     // IP_HASH_KEY required for rate limiting (no dev fallback): refuse before any write.
     if (!isIpHashKeyConfigured()) {
       console.error("[ai-employee-inquiry] IP_HASH_KEY not configured; refusing");
-      return NextResponse.json({ ok: false, ...IP_HASH_UNAVAILABLE }, { status: 503 });
+      return jsonUtf8({ ok: false, ...IP_HASH_UNAVAILABLE }, { status: 503 });
     }
     const ipHash = hashIp(clientIp);
     const rateLimitResult = checkRateLimits(ipHash);
     
     if (!rateLimitResult.allowed) {
       console.warn("[ai-employee-inquiry] Rate limit exceeded:", { ipHash: ipHash.slice(0, 8) });
-      return NextResponse.json(
+      return jsonUtf8(
         { 
           ok: false, 
           error: "rate_limited", 
@@ -103,7 +103,7 @@ export async function POST(req: Request) {
   try {
     body = (await req.json()) as InquiryPayload;
   } catch {
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: "invalid_json", message: "リクエストが不正です" },
       { status: 400 }
     );
@@ -116,7 +116,7 @@ export async function POST(req: Request) {
     
     if (turnstileConfig) {
       if (!turnstileToken) {
-        return NextResponse.json(
+        return jsonUtf8(
           { ok: false, error: "turnstile_required", message: "認証が必要です" },
           { status: 400 }
         );
@@ -126,7 +126,7 @@ export async function POST(req: Request) {
       
       if (!turnstileResult.success) {
         console.warn("[ai-employee-inquiry] Turnstile verification failed:", turnstileResult.errorCodes);
-        return NextResponse.json(
+        return jsonUtf8(
           { ok: false, error: "turnstile_failed", message: "認証に失敗しました。もう一度お試しください。" },
           { status: 400 }
         );
@@ -137,42 +137,42 @@ export async function POST(req: Request) {
   }
 
   if (!plan || !VALID_PLANS.includes(plan as (typeof VALID_PLANS)[number])) {
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: "invalid_plan", message: "プランを選択してください" },
       { status: 400 }
     );
   }
 
   if (!company || company.trim().length < 1) {
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: "invalid_company", message: "会社名を入力してください" },
       { status: 400 }
     );
   }
 
   if (!name || name.trim().length < 1) {
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: "invalid_name", message: "お名前を入力してください" },
       { status: 400 }
     );
   }
 
   if (!email || !isValidEmail(email)) {
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: "invalid_email", message: "有効なメールアドレスを入力してください" },
       { status: 400 }
     );
   }
 
   if (!useCase || useCase.trim().length < 5) {
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: "invalid_use_case", message: "業務内容を入力してください" },
       { status: 400 }
     );
   }
 
   if (useCase.length > 2000) {
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: "use_case_too_long", message: "業務内容は2000文字以内で入力してください" },
       { status: 400 }
     );
@@ -217,7 +217,7 @@ export async function POST(req: Request) {
     console.error("[ai-employee-inquiry] AI_EMP_INQUIRY_NOTIFY_EMAIL not configured, notification not sent");
     
     if (dbEnabled && inquiryId) {
-      return NextResponse.json({
+      return jsonUtf8({
         ok: true,
         message: "お問い合わせを受け付けました",
         inquiryId,
@@ -225,7 +225,7 @@ export async function POST(req: Request) {
       });
     }
     
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: "config_error", message: "設定エラーが発生しました。管理者にお問い合わせください。" },
       { status: 500 }
     );
@@ -285,7 +285,7 @@ export async function POST(req: Request) {
           sent,
         });
 
-        return NextResponse.json({
+        return jsonUtf8({
           ok: true,
           message: "お問い合わせを受け付けました",
           inquiryId,
@@ -305,7 +305,7 @@ export async function POST(req: Request) {
 
   if (!result.ok) {
     console.error("[ai-employee-inquiry] Failed to send email:", result.error);
-    return NextResponse.json(
+    return jsonUtf8(
       {
         ok: false,
         error: "email_failed",
@@ -325,7 +325,7 @@ export async function POST(req: Request) {
     inquiryId,
   });
 
-  return NextResponse.json({
+  return jsonUtf8({
     ok: true,
     message: "お問い合わせを受け付けました",
     stub: result.stub,

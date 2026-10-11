@@ -1,4 +1,3 @@
-import { NextResponse } from "next/server";
 import { rejectUnauthorizedCron } from "@/lib/security/cron-secret";
 import { runApprovalAttachmentReconcile } from "@/lib/approvals/attachment-reconcile";
 import { listApprovalsForTelegramDigest } from "@/lib/data/approvals";
@@ -8,6 +7,7 @@ import {
   processW2RetriesForApprovals,
 } from "@/lib/stuck-watch/w2-unfulfilled";
 import { expireStaleConversationApprovals } from "@/lib/comm-reply-dedup/approvals";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -34,7 +34,7 @@ export async function GET(req: Request) {
       ? await runApprovalAttachmentReconcile(approvals)
       : null;
 
-    return NextResponse.json({
+    return jsonUtf8({
       ok: true,
       scanned: approvals.length,
       candidates: candidates.length,
@@ -45,6 +45,6 @@ export async function GET(req: Request) {
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "unknown_error";
-    return NextResponse.json({ ok: false, error: message }, { status: 500 });
+    return jsonUtf8({ ok: false, error: message }, { status: 500 });
   }
 }

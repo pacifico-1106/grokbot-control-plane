@@ -1,4 +1,3 @@
-import { NextResponse } from "next/server";
 import { assertWebActorApproverAuthority, webDirectDeniedBody } from "@/lib/approver-authority/web-direct";
 import { getCurrentOrgId } from "@/lib/auth/session";
 import {
@@ -11,6 +10,7 @@ import {
 } from "@/lib/data";
 import { policyErrorPayload } from "@/lib/employees/policy-errors";
 import { requireCapability } from "@/lib/team/demo-actor";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 export const runtime = "nodejs";
 
@@ -22,11 +22,11 @@ export async function GET(
   const orgId = await getCurrentOrgId();
   const employee = await getEmployee(id, orgId);
   if (!employee) {
-    return NextResponse.json({ error: "employee_not_found" }, { status: 404 });
+    return jsonUtf8({ error: "employee_not_found" }, { status: 404 });
   }
   // Read-only: a missing row is reported as unlinked, not created.
   const binding = await getBindingForDisplay(id, employee.orgId || orgId || "");
-  return NextResponse.json({
+  return jsonUtf8({
     ok: true,
     demo: runtimeModeLabel() === "demo",
     mode: runtimeModeLabel(),
@@ -58,12 +58,12 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
   );
   if (!gate.ok) return gate.response;
   const orgId = await getCurrentOrgId();
-  if (!orgId) return NextResponse.json(policyErrorPayload("auth_required"), { status: 401 });
+  if (!orgId) return jsonUtf8(policyErrorPayload("auth_required"), { status: 401 });
   const { id } = await ctx.params;
   const employee = await getEmployee(id, orgId);
-  if (!employee) return NextResponse.json(policyErrorPayload("employee_not_found"), { status: 404 });
+  if (!employee) return jsonUtf8(policyErrorPayload("employee_not_found"), { status: 404 });
   if (employee.status === "suspended") {
-    return NextResponse.json(policyErrorPayload("employee_terminated"), { status: 403 });
+    return jsonUtf8(policyErrorPayload("employee_terminated"), { status: 403 });
   }
 
   const patch: { orgId: string; url?: string | null; secret?: string | null } = {
@@ -72,7 +72,7 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
   if ("wakeWebhookUrl" in body) {
     const parsedUrl = parseWakeUrl(body.wakeWebhookUrl);
     if (!parsedUrl.ok) {
-      return NextResponse.json(policyErrorPayload("invalid_wake_webhook_url"), { status: 400 });
+      return jsonUtf8(policyErrorPayload("invalid_wake_webhook_url"), { status: 400 });
     }
     patch.url = parsedUrl.url;
   }
@@ -80,7 +80,7 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
     patch.secret = body.wakeWebhookSecret;
   }
   if (patch.url === undefined && patch.secret === undefined) {
-    return NextResponse.json(policyErrorPayload("wake_webhook_url_required"), { status: 400 });
+    return jsonUtf8(policyErrorPayload("wake_webhook_url_required"), { status: 400 });
   }
   // Review 2026-10-09 item 2: the wake destination decides where the employee is woken / notified.
   const authority = await assertWebActorApproverAuthority({
@@ -89,7 +89,7 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
     changes: [{ tool: "web.employeeBinding", adminMutation: {}, kind: "owner_or_designated_admin" }],
     surface: "employees.binding",
   });
-  if (!authority.ok) return NextResponse.json(webDirectDeniedBody(authority), { status: 403 });
+  if (!authority.ok) return jsonUtf8(webDirectDeniedBody(authority), { status: 403 });
 
   try {
     const binding = await updateWakeWebhook(id, patch);
@@ -108,7 +108,7 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
     });
     const view = bindingPublicView(binding) as Record<string, unknown>;
     delete view.credentialFingerprint;
-    return NextResponse.json({
+    return jsonUtf8({
       ok: true,
       message: "起こす webhook を保存しました",
       binding: view,
@@ -116,8 +116,8 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
   } catch (error) {
     const code = (error as { code?: string }).code;
     if (code === "revoked") {
-      return NextResponse.json(policyErrorPayload("employee_terminated"), { status: 403 });
+      return jsonUtf8(policyErrorPayload("employee_terminated"), { status: 403 });
     }
-    return NextResponse.json(policyErrorPayload("invalid_wake_webhook_url"), { status: 400 });
+    return jsonUtf8(policyErrorPayload("invalid_wake_webhook_url"), { status: 400 });
   }
 }

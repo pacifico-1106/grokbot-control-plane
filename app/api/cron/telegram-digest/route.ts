@@ -1,7 +1,7 @@
-import { NextResponse } from "next/server";
 import { rejectUnauthorizedCron } from "@/lib/security/cron-secret";
 import { sendTenantDigests } from "@/lib/notify/channels";
 import { isCredentialExpiryNoticeEnabled } from "@/lib/feature-flags";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -26,5 +26,5 @@ export async function GET(req: Request) {
       body.credentialExpiryNotice = { error: "credential_expiry_notice_failed" };
     }
   }
-  return NextResponse.json(body);
+  return jsonUtf8(body);
 }

@@ -1,4 +1,3 @@
-import { NextResponse } from "next/server";
 import { requireOrgAdminSession, requireOrgSession } from "@/lib/auth/require-org";
 import { isMcpEndpointHandoffEnabled } from "@/lib/feature-flags";
 import { buildMcpHandoff } from "@/lib/mcp/endpoint-handoff-block";
@@ -9,6 +8,7 @@ import {
   linkAgent,
   runtimeModeLabel,
 } from "@/lib/data";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 export const runtime = "nodejs";
 
@@ -26,7 +26,7 @@ export async function POST(
   const { id } = await ctx.params;
   const employee = await getEmployee(id, gate.orgId);
   if (!employee) {
-    return NextResponse.json({ error: "employee_not_found" }, { status: 404 });
+    return jsonUtf8({ error: "employee_not_found" }, { status: 404 });
   }
 
   const body = (await req.json().catch(() => ({}))) as {
@@ -40,7 +40,7 @@ export async function POST(
       grokBotAgentId: body.grokBotAgentId || "",
       grokBotWorkspaceId: body.grokBotWorkspaceId,
     });
-    return NextResponse.json({
+    return jsonUtf8({
       ok: true,
       demo: runtimeModeLabel() === "demo",
       mode: runtimeModeLabel(),
@@ -51,7 +51,7 @@ export async function POST(
   } catch (e) {
     const code = (e as { code?: string }).code;
     if (code === "revoked") {
-      return NextResponse.json(
+      return jsonUtf8(
         {
           error: "revoked",
           message: "取り消された連携は再リンク不可（新規社員が必要）",
@@ -59,7 +59,7 @@ export async function POST(
         { status: 403 }
       );
     }
-    return NextResponse.json(
+    return jsonUtf8(
       { error: "agent_id_required", message: "grokBotAgentId が必要です" },
       { status: 400 }
     );
@@ -76,13 +76,13 @@ export async function GET(
   const { id } = await ctx.params;
   const employee = await getEmployee(id, gate.orgId);
   if (!employee) {
-    return NextResponse.json({ error: "employee_not_found" }, { status: 404 });
+    return jsonUtf8({ error: "employee_not_found" }, { status: 404 });
   }
   const binding = await getBinding(id);
   if (!binding || binding.orgId !== gate.orgId) {
-    return NextResponse.json({ error: "binding_not_found" }, { status: 404 });
+    return jsonUtf8({ error: "binding_not_found" }, { status: 404 });
   }
-  return NextResponse.json({
+  return jsonUtf8({
     ok: true,
     binding: bindingPublicView(binding),
     mode: runtimeModeLabel(),
