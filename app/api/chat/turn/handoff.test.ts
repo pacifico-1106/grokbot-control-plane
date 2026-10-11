@@ -263,7 +263,9 @@ describe("UI wiring", () => {
   test("launcher renders handoff and contact cards via chatCardView", () => {
     expect(launcher).toContain('chatCardView(card, handoffEnabled) === "handoff"');
     expect(launcher).toContain('data-testid="lp-chat-contact"');
-    expect(launcher).toContain("href={LP_CONSULT_PATH}");
+    // LP pattern B: the consult link is LP_CONSULT_PATH plus the allowlisted from= (A unchanged).
+    expect(launcher).toContain("const consultPath = withLpPageParam(LP_CONSULT_PATH, lpPage);");
+    expect(launcher).toContain("href={consultPath}");
     expect(launcher).toContain("onClick={() => requestHandoff(card)}");
   });
   test("confirm page uses the real pending status", () => {

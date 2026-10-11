@@ -9,6 +9,7 @@ import { enqueueNotification, processOutboxEntry } from "@/lib/lp/notification-o
 import { verifyTurnstileToken, getClientIp, getTurnstileConfig } from "@/lib/lp/turnstile";
 import { hashIp, checkRateLimits } from "@/lib/lp/rate-limit";
 import { IP_HASH_UNAVAILABLE, isIpHashKeyConfigured } from "@/lib/security/ip-hash-key";
+import { lpPageLabel, normalizeLpPage, resolveLpRef } from "@/lib/lp/lp-page";
 
 const NOTIFY_EMAIL = process.env.AI_EMP_INQUIRY_NOTIFY_EMAIL;
 
@@ -25,6 +26,8 @@ interface InquiryPayload {
   useCase?: string;
   billingPreference?: string;
   turnstileToken?: string;
+  /** Lead page; re-validated against the server allowlist (unknown → original page). */
+  lpPage?: unknown;
 }
 
 function isValidEmail(email: string): boolean {
@@ -110,6 +113,9 @@ export async function POST(req: Request) {
   }
 
   const { plan, company, name, email, phone, headcount, useCase, billingPreference, turnstileToken } = body;
+  const lpPage = normalizeLpPage(body.lpPage);
+  // ?ref= (B only) comes from the validated HttpOnly cookie, never from the body.
+  const lpRef = resolveLpRef(lpPage, req.headers.get("cookie"));
 
   if (botProtectionEnabled) {
     const turnstileConfig = getTurnstileConfig();
@@ -202,6 +208,8 @@ export async function POST(req: Request) {
         useCase: useCase.trim(),
         consentGiven: true,
         consentVersion: "lp-v1",
+        lpPage,
+        lpRef,
       });
 
       if (inquiry) {
@@ -244,6 +252,8 @@ export async function POST(req: Request) {
       <tr><td style="padding:8px 4px;border-bottom:1px solid #eee;"><strong>電話</strong></td><td style="padding:8px 4px;border-bottom:1px solid #eee;">${sanitize(phone || "未入力")}</td></tr>
       <tr><td style="padding:8px 4px;border-bottom:1px solid #eee;"><strong>導入予定人数</strong></td><td style="padding:8px 4px;border-bottom:1px solid #eee;">${sanitize(headcount || "未入力")}</td></tr>
       <tr><td style="padding:8px 4px;border-bottom:1px solid #eee;"><strong>請求希望</strong></td><td style="padding:8px 4px;border-bottom:1px solid #eee;">${billing === "annual" ? "年払い（10%オフ）" : "月払い"}</td></tr>
+      <tr><td style="padding:8px 4px;border-bottom:1px solid #eee;"><strong>流入ページ</strong></td><td style="padding:8px 4px;border-bottom:1px solid #eee;">${sanitize(lpPageLabel(lpPage))}</td></tr>
+      ${lpRef ? `<tr><td style="padding:8px 4px;border-bottom:1px solid #eee;"><strong>紹介元(ref)</strong></td><td style="padding:8px 4px;border-bottom:1px solid #eee;">${sanitize(lpRef)}</td></tr>` : ""}
     </table>
     <h3 style="margin-top:16px;">AI社員に任せたい業務</h3>
     <p style="white-space:pre-wrap;background:#f9f9f9;padding:12px;border-radius:8px;">${sanitize(useCase)}</p>
@@ -273,6 +283,8 @@ export async function POST(req: Request) {
           headcount: headcount || null,
           billingPreference: billing,
           useCase,
+          lpPage,
+          ...(lpRef ? { lpRef } : {}),
         },
       });
 

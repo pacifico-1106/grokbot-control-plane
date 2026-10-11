@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { isLpHandoffEnabled } from "@/lib/feature-flags";
 import { BrandMark } from "@/components/BrandMark";
 import { HandoffConfirmClient } from "./HandoffConfirmClient";
+import { normalizeLpPage } from "@/lib/lp/lp-page";
 
 export const metadata: Metadata = {
   title: "相談内容の確認 | Staffpass",
@@ -15,10 +16,11 @@ export const dynamic = "force-dynamic";
 export default async function HandoffConfirmPage({
   searchParams,
 }: {
-  searchParams: Promise<{ id?: string }>;
+  searchParams: Promise<{ id?: string; from?: string }>;
 }) {
   if (!isLpHandoffEnabled()) notFound();
-  const { id } = await searchParams;
+  const { id, from } = await searchParams;
+  const lpPage = normalizeLpPage(from);
   if (!id || !/^[0-9a-f-]{36}$/i.test(id)) notFound();
 
   return (
@@ -33,7 +35,7 @@ export default async function HandoffConfirmPage({
         <p className="text-sm faint mt-2">
           AI相談窓口がまとめた内容です。担当者に共有する前に、内容と連絡先を確認してください。確定するまで共有されません。
         </p>
-        <HandoffConfirmClient handoffId={id} />
+        <HandoffConfirmClient handoffId={id} lpPage={lpPage} />
       </main>
     </div>
   );

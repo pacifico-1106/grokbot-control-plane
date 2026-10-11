@@ -154,7 +154,7 @@ describe("pattern B /lp/ai-employee-corp", () => {
     chat(true);
     expect(CorpPage.length).toBe(0);
     const h = html(CorpPage());
-    expect(h).not.toContain("ref=");
+    expect(h).not.toMatch(/[?&;]ref=/);
     expect(h).not.toContain("lp_ref");
   });
 

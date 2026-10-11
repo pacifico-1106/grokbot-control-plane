@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { BrandMark } from "@/components/BrandMark";
 import { LegalLinks } from "@/components/LegalLinks";
+import { DEFAULT_LP_PAGE, LP_PAGE_PARAM, lpPageHomePath, normalizeLpPage, withLpPageParam } from "@/lib/lp/lp-page";
 
 const VALID_PLANS = ["intern", "proper", "executive"] as const;
 type PlanKey = (typeof VALID_PLANS)[number];
@@ -27,6 +28,9 @@ function CheckoutContent() {
   const searchParams = useSearchParams();
   const planParam = searchParams.get("plan") || "";
   const error = searchParams.get("error");
+  // Lead page from ?from= (allowlist; the server re-validates and builds the Stripe URLs).
+  const lpPage = normalizeLpPage(searchParams.get(LP_PAGE_PARAM));
+  const home = lpPageHomePath(lpPage);
 
   const [status, setStatus] = useState<
     "loading" | "confirm" | "submitting" | "redirecting" | "fallback" | "error"
@@ -51,7 +55,7 @@ function CheckoutContent() {
 
     async function loadCheckoutInfo() {
       try {
-        const res = await fetch(`/api/lp/ai-employee/checkout?plan=${plan}`);
+        const res = await fetch(withLpPageParam(`/api/lp/ai-employee/checkout?plan=${plan}`, lpPage));
         const data = await res.json();
 
         if (!res.ok || !data.ok) {
@@ -74,7 +78,7 @@ function CheckoutContent() {
     }
 
     loadCheckoutInfo();
-  }, [plan, error]);
+  }, [plan, error, lpPage]);
 
   const handleCheckout = useCallback(async () => {
     if (!plan || !checkoutInfo) return;
@@ -85,7 +89,7 @@ function CheckoutContent() {
       const res = await fetch("/api/lp/ai-employee/checkout", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ plan }),
+        body: JSON.stringify(lpPage === DEFAULT_LP_PAGE ? { plan } : { plan, lpPage }),
       });
 
       const data = await res.json();
@@ -112,18 +116,18 @@ function CheckoutContent() {
       setStatus("error");
       setErrorMessage("ネットワークエラーが発生しました");
     }
-  }, [plan, checkoutInfo]);
+  }, [plan, checkoutInfo, lpPage]);
 
   if (!plan) {
     return (
       <div className="min-h-screen bg-[var(--bg)] text-[var(--text)] flex items-center justify-center px-4">
         <div className="w-full max-w-md surface p-6 md:p-8 text-center">
-          <BrandMark size="md" href="/lp/ai-employee" />
+          <BrandMark size="md" href={home} />
           <h1 className="mt-6 text-2xl font-bold tracking-tight">無効なプラン</h1>
           <p className="mt-3 text-sm muted">
             プランが指定されていないか、無効です。
           </p>
-          <Link href="/lp/ai-employee" className="btn btn-primary mt-6">
+          <Link href={home} className="btn btn-primary mt-6">
             AI社員パックに戻る
           </Link>
         </div>
@@ -135,7 +139,7 @@ function CheckoutContent() {
     return (
       <div className="min-h-screen bg-[var(--bg)] text-[var(--text)] flex items-center justify-center px-4">
         <div className="w-full max-w-md surface p-6 md:p-8 text-center">
-          <BrandMark size="md" href="/lp/ai-employee" />
+          <BrandMark size="md" href={home} />
           <div className="mt-6">
             <div className="w-12 h-12 mx-auto border-4 border-[var(--border)] border-t-[var(--accent-strong)] rounded-full animate-spin" />
             <h1 className="mt-4 text-lg font-semibold">読み込み中…</h1>
@@ -149,7 +153,7 @@ function CheckoutContent() {
     return (
       <div className="min-h-screen bg-[var(--bg)] text-[var(--text)] flex items-center justify-center px-4">
         <div className="w-full max-w-md surface p-6 md:p-8 text-center">
-          <BrandMark size="md" href="/lp/ai-employee" />
+          <BrandMark size="md" href={home} />
           <div className="mt-6">
             <div className="w-16 h-16 mx-auto rounded-full bg-[color-mix(in_oklab,var(--danger)_15%,var(--bg))] flex items-center justify-center">
               <svg
@@ -175,12 +179,12 @@ function CheckoutContent() {
           </div>
           <div className="mt-6 space-y-3">
             <Link
-              href={`/lp/ai-employee/consult?plan=${plan}`}
+              href={withLpPageParam(`/lp/ai-employee/consult?plan=${plan}`, lpPage)}
               className="btn btn-primary w-full justify-center"
             >
               相談フォームへ
             </Link>
-            <Link href="/lp/ai-employee" className="btn btn-ghost w-full justify-center">
+            <Link href={home} className="btn btn-ghost w-full justify-center">
               AI社員パックに戻る
             </Link>
           </div>
@@ -193,7 +197,7 @@ function CheckoutContent() {
     return (
       <div className="min-h-screen bg-[var(--bg)] text-[var(--text)] flex items-center justify-center px-4">
         <div className="w-full max-w-md surface p-6 md:p-8 text-center">
-          <BrandMark size="md" href="/lp/ai-employee" />
+          <BrandMark size="md" href={home} />
           <div className="mt-6">
             <div className="w-12 h-12 mx-auto border-4 border-[var(--border)] border-t-[var(--accent-strong)] rounded-full animate-spin" />
             <h1 className="mt-4 text-lg font-semibold">
@@ -214,7 +218,7 @@ function CheckoutContent() {
     return (
       <div className="min-h-screen bg-[var(--bg)] text-[var(--text)] flex items-center justify-center px-4">
         <div className="w-full max-w-md surface p-6 md:p-8">
-          <BrandMark size="md" href="/lp/ai-employee" />
+          <BrandMark size="md" href={home} />
 
           <div className="mt-6">
             <span className="chip chip-warn text-xs">決済準備中</span>
@@ -249,7 +253,7 @@ function CheckoutContent() {
             >
               相談フォームから申し込む
             </Link>
-            <Link href="/lp/ai-employee" className="btn btn-ghost w-full justify-center">
+            <Link href={home} className="btn btn-ghost w-full justify-center">
               AI社員パックに戻る
             </Link>
           </div>
@@ -268,7 +272,7 @@ function CheckoutContent() {
     return (
       <div className="min-h-screen bg-[var(--bg)] text-[var(--text)] flex items-center justify-center px-4">
         <div className="w-full max-w-md surface p-6 md:p-8">
-          <BrandMark size="md" href="/lp/ai-employee" />
+          <BrandMark size="md" href={home} />
 
           <div className="mt-6">
             <h1 className="text-2xl font-bold tracking-tight">
@@ -301,7 +305,7 @@ function CheckoutContent() {
             >
               相談してから決める
             </Link>
-            <Link href="/lp/ai-employee" className="btn btn-ghost w-full justify-center text-sm">
+            <Link href={home} className="btn btn-ghost w-full justify-center text-sm">
               AI社員パックに戻る
             </Link>
           </div>

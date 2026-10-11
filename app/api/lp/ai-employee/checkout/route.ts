@@ -3,6 +3,7 @@ import { getStripe, getAppUrl, getCheckoutPaymentMethodTypes } from "@/lib/strip
 import { getCatalogItem, getSetupPriceId, getPlanLabel, isValidCheckoutPlan, type CheckoutPlan } from "@/lib/lp/catalog";
 import { isLpOrderLedgerEnabled } from "@/lib/feature-flags";
 import { createOrder, createCheckoutAttempt, updateCheckoutAttemptStatus } from "@/lib/lp/order-ledger";
+import { LP_PAGE_PARAM, lpPageHomePath, normalizeLpPage, resolveLpRef, withLpPageParam } from "@/lib/lp/lp-page";
 
 const ALLOWED_ORIGINS = [
   process.env.NEXT_PUBLIC_APP_URL,
@@ -35,6 +36,7 @@ function verifyOrigin(req: Request): boolean {
 export async function GET(req: Request) {
   const url = new URL(req.url);
   const planParam = url.searchParams.get("plan") || "";
+  const lpPage = normalizeLpPage(url.searchParams.get(LP_PAGE_PARAM));
   const appUrl = getAppUrl();
 
   if (!isValidCheckoutPlan(planParam)) {
@@ -71,7 +73,7 @@ export async function GET(req: Request) {
     monthlyAmountExTax: catalogItem.monthlyAmountExTax,
     catalogVersion: catalogItem.catalogVersionKey,
     checkoutAvailable,
-    consultUrl: `${appUrl}/lp/ai-employee/consult?plan=${plan}`,
+    consultUrl: `${appUrl}${withLpPageParam(`/lp/ai-employee/consult?plan=${plan}`, lpPage)}`,
     message: checkoutAvailable 
       ? "決済準備完了" 
       : "決済準備中です。相談フォームからお問い合わせください。",
@@ -90,7 +92,7 @@ export async function POST(req: Request) {
     );
   }
 
-  let body: { plan?: string; email?: string; requestId?: string };
+  let body: { plan?: string; email?: string; requestId?: string; lpPage?: unknown };
   try {
     body = await req.json();
   } catch {
@@ -101,6 +103,10 @@ export async function POST(req: Request) {
   }
 
   const { plan: planParam, email, requestId } = body;
+  // Lead page: allowlist only (unknown → original page). Ref: only for B, only from the
+  // validated HttpOnly cookie set by middleware; body fields named ref / lpRef are ignored.
+  const lpPage = normalizeLpPage(body.lpPage);
+  const lpRef = resolveLpRef(lpPage, req.headers.get("cookie"));
   const appUrl = getAppUrl();
 
   if (!planParam || !isValidCheckoutPlan(planParam)) {
@@ -131,7 +137,7 @@ export async function POST(req: Request) {
       planLabel: getPlanLabel(plan),
       setupAmountExTax: catalogItem.setupAmountExTax,
       message: "決済準備中です。相談フォームからお問い合わせください。",
-      consultUrl: `${appUrl}/lp/ai-employee/consult?plan=${plan}`,
+      consultUrl: `${appUrl}${withLpPageParam(`/lp/ai-employee/consult?plan=${plan}`, lpPage)}`,
     });
   }
 
@@ -144,6 +150,8 @@ export async function POST(req: Request) {
     source: "lp-ai-employee",
     planLabel: getPlanLabel(plan),
     catalogVersion: catalogItem.catalogVersionKey,
+    lpPage,
+    ...(lpRef ? { lpRef } : {}),
   };
 
   let orderId: string | undefined;
@@ -184,8 +192,9 @@ export async function POST(req: Request) {
   }
 
   try {
-    const successUrl = `${appUrl}/lp/ai-employee/thank-you?session_id={CHECKOUT_SESSION_ID}&plan=${plan}`;
-    const cancelUrl = `${appUrl}/lp/ai-employee?checkout=canceled`;
+    // Fixed paths + allowlisted page only; nothing from the request body (no open redirect).
+    const successUrl = `${appUrl}${withLpPageParam(`/lp/ai-employee/thank-you?session_id={CHECKOUT_SESSION_ID}&plan=${plan}`, lpPage)}`;
+    const cancelUrl = `${appUrl}${lpPageHomePath(lpPage)}?checkout=canceled`;
 
     const session = await stripe.checkout.sessions.create({
       mode: "payment",

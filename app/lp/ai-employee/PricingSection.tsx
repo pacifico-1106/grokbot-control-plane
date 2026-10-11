@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import { withLpPageParam, type LpPage } from "@/lib/lp/lp-page";
 
 interface PricingTier {
   id: string;
@@ -153,7 +154,7 @@ function calcAnnualTotal(monthly: number): number {
   return calcAnnualMonthly(monthly) * 12;
 }
 
-export function PricingSection() {
+export function PricingSection({ lpPage = "ai-employee" }: { lpPage?: LpPage } = {}) {
   const [isAnnual, setIsAnnual] = useState(false);
 
   return (
@@ -347,7 +348,7 @@ export function PricingSection() {
               <div className="mt-6 space-y-2">
                 {tier.isCustom ? (
                   <Link
-                    href={`/lp/ai-employee/consult?plan=${tier.id}`}
+                    href={withLpPageParam(`/lp/ai-employee/consult?plan=${tier.id}`, lpPage)}
                     className="btn btn-ghost w-full justify-center"
                   >
                     相談する
@@ -355,7 +356,7 @@ export function PricingSection() {
                 ) : (
                   <>
                     <Link
-                      href={`/lp/ai-employee/checkout?plan=${tier.id}`}
+                      href={withLpPageParam(`/lp/ai-employee/checkout?plan=${tier.id}`, lpPage)}
                       className={`btn w-full justify-center ${
                         tier.popular ? "btn-primary" : "btn-ghost"
                       }`}
@@ -363,7 +364,7 @@ export function PricingSection() {
                       初期費用を払って申し込む
                     </Link>
                     <Link
-                      href={`/lp/ai-employee/consult?plan=${tier.id}`}
+                      href={withLpPageParam(`/lp/ai-employee/consult?plan=${tier.id}`, lpPage)}
                       className="btn btn-ghost w-full justify-center text-xs"
                     >
                       相談する

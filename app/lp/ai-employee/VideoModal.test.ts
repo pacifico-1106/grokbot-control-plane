@@ -25,7 +25,7 @@ describe("VideoModal markup", () => {
   });
 
   test("16:9 iframe, youtube-nocookie, autoplay with sound, allow + allowfullscreen", () => {
-    expect(open).toContain(`src="${modalEmbedUrl("UFKh_CK9uxw")}"`);
+    expect(open.replace(/&amp;/g, "&")).toContain(`src="${modalEmbedUrl("UFKh_CK9uxw")}"`);
     expect(modalEmbedUrl("UFKh_CK9uxw")).toBe("https://www.youtube-nocookie.com/embed/UFKh_CK9uxw?autoplay=1&rel=0&playsinline=1");
     expect(modalEmbedUrl("UFKh_CK9uxw")).not.toContain("mute");
     expect(open).toContain('allow="autoplay; encrypted-media; picture-in-picture; fullscreen"');
@@ -85,7 +85,7 @@ describe("floating promo: modal trigger on B only", () => {
       expect(h).toContain('aria-haspopup="dialog"');
       expect(h).not.toContain("<iframe");
       expect(h).not.toContain("youtu.be");
-      expect(h).toContain("/lp/ai-employee-corp/staffpass-mv.jpg");
+      expect(h).toContain(encodeURIComponent("/lp/ai-employee-corp/staffpass-mv.jpg"));
     }
   });
   test("A desktop keeps the inline iframe, A mobile keeps the YouTube link (unchanged)", () => {

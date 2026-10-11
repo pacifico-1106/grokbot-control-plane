@@ -25,6 +25,7 @@ import { resolveChatModel } from "@/lib/lp/chat-model";
 import { ChatModelError, runChatTurn } from "@/lib/lp/chat-turn";
 import { GUEST_SESSIONS_UNAVAILABLE, isGuestSigningKeyMissingError } from "@/lib/lp/guest-signing-key";
 import { HANDOFF_OFF_REPLY, contactLinkCard, detectHandoffIntent } from "@/lib/lp/handoff-intent";
+import { normalizeLpPage } from "@/lib/lp/lp-page";
 
 const GUEST_COOKIE_NAME = "lp_guest";
 const CSRF_HEADER_NAME = "x-csrf-token";
@@ -97,7 +98,7 @@ export async function POST(req: Request) {
     );
   }
 
-  let body: { text?: string; clientTurnId?: string; history?: unknown };
+  let body: { text?: string; clientTurnId?: string; history?: unknown; lpPage?: unknown };
   try {
     body = await req.json();
   } catch {
@@ -108,6 +109,9 @@ export async function POST(req: Request) {
   }
 
   const { text, clientTurnId } = body;
+  // The journey's stored page wins; the body is only a fallback (journey written before
+  // LP_LEAD_PAGE_DB_ENABLED) and is re-checked against the allowlist.
+  const lpPage = journey.lpPage ?? normalizeLpPage(body.lpPage);
   const history = sanitizeHistory(body.history);
 
   if (!text || typeof text !== "string") {
@@ -167,7 +171,8 @@ export async function POST(req: Request) {
       caps,
       history,
       text,
-      runTool: (name, args) => executeTool(name, args, { journeyId: journey.id }),
+      lpPage,
+      runTool: (name, args) => executeTool(name, args, { journeyId: journey.id, lpPage }),
     });
 
     await recordChatTurn({

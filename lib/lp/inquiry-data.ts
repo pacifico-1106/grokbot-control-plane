@@ -5,6 +5,8 @@
 
 import { createSupabaseAdminClient } from "@/lib/supabase";
 import { isLpInquiryDbEnabled } from "@/lib/feature-flags";
+import { parseLpPage, parseLpRef, type LpPage } from "@/lib/lp/lp-page";
+import { leadPageColumns } from "@/lib/lp/lead-page-db";
 
 export type InquirySource = "form" | "chat_handoff";
 export type InquiryPlan = "intern" | "proper" | "executive" | "custom" | "undecided";
@@ -25,6 +27,10 @@ export interface InquiryInput {
   consentVersion?: string;
   handoffSummary?: string;
   journeyId?: string;
+  /** Lead page (allowlist; unknown → original page). Stored only with LP_LEAD_PAGE_DB_ENABLED. */
+  lpPage?: LpPage;
+  /** ?ref= on pattern B (validated; dropped otherwise). Stored only with LP_LEAD_PAGE_DB_ENABLED. */
+  lpRef?: string | null;
 }
 
 export interface Inquiry {
@@ -47,6 +53,8 @@ export interface Inquiry {
   retentionUntil: string;
   handoffSummary: string | null;
   journeyId: string | null;
+  lpPage: LpPage | null;
+  lpRef: string | null;
 }
 
 const DEFAULT_TENANT_ID = "00000000-0000-0000-0000-000000000001";
@@ -72,6 +80,8 @@ function mapRow(row: Record<string, unknown>): Inquiry {
     retentionUntil: String(row.retention_until),
     handoffSummary: row.handoff_summary ? String(row.handoff_summary) : null,
     journeyId: row.journey_id ? String(row.journey_id) : null,
+    lpPage: parseLpPage(row.lp_page),
+    lpRef: parseLpRef(row.lp_ref),
   };
 }
 
@@ -117,6 +127,7 @@ export async function createInquiry(input: InquiryInput): Promise<Inquiry | null
       retention_until: retentionUntil,
       handoff_summary: input.handoffSummary || null,
       journey_id: input.journeyId || null,
+      ...leadPageColumns(input.lpPage, input.lpRef),
     })
     .select("*")
     .single();

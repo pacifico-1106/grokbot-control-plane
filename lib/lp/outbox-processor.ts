@@ -9,6 +9,7 @@
 
 import { createSupabaseAdminClient } from "@/lib/supabase";
 import { updateHandoffStatus, type Handoff } from "./handoffs";
+import { parseLpPage, parseLpRef, type LpPage } from "@/lib/lp/lp-page";
 
 const DEFAULT_TENANT_ID = "00000000-0000-0000-0000-000000000001";
 const MAX_RETRIES = 3;
@@ -41,7 +42,10 @@ function mapOutboxRow(row: Record<string, unknown>): OutboxEntry {
   };
 }
 
-export async function enqueueHandoffNotification(handoff: Handoff): Promise<string | null> {
+export async function enqueueHandoffNotification(
+  handoff: Handoff,
+  lead: { lpPage?: LpPage; lpRef?: string | null } = {}
+): Promise<string | null> {
   const admin = createSupabaseAdminClient();
   if (!admin) {
     console.error("[outbox] Supabase admin client not configured");
@@ -60,6 +64,9 @@ export async function enqueueHandoffNotification(handoff: Handoff): Promise<stri
     contactPhone: handoff.contactPhone,
     contactNotes: handoff.contactNotes,
     confirmedAt: handoff.confirmedAt,
+    // Lead page / ref (re-validated here; rendered via lpPageNoticeLine / lpRefNoticeLine).
+    ...(parseLpPage(lead.lpPage) ? { lpPage: parseLpPage(lead.lpPage) } : {}),
+    ...(parseLpRef(lead.lpRef) ? { lpRef: parseLpRef(lead.lpRef) } : {}),
   };
 
   const { data, error } = await admin

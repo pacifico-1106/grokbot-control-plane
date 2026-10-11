@@ -30,7 +30,7 @@ describe("system prompt", () => {
     expect(msgs[0].content).toBe(buildSystemPrompt(CAPS[3], "ai-employee-corp"));
   });
   test("canned replies and greeting never mention 先行100枠", () => {
-    const canned = [LP_CHAT_GREETING, ...Object.values(handoffIntent).filter((v): v is string => typeof v === "string")];
+    const canned = [LP_CHAT_GREETING, ...(Object.values(handoffIntent).filter((v) => typeof v === "string") as string[])];
     for (const s of canned) expect(s).not.toMatch(/先行\s*100\s*枠/);
   });
 });

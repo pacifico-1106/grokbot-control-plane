@@ -1,0 +1,854 @@
+import Link from "next/link";
+import Image from "next/image";
+import { BrandMark } from "@/components/BrandMark";
+import { LegalLinks } from "@/components/LegalLinks";
+import { PricingSection } from "./PricingSection";
+// Temporary: early-bird 100 slots — remove when campaign ends
+import { CampaignBanner } from "./CampaignBanner";
+import { FloatingYouTubePromo } from "./FloatingYouTubePromo";
+import { ChatLauncher } from "./ChatLauncher";
+import { HeroConsultCta, StickyConsultCta } from "./QuickConsultCta";
+import { getLpVariant } from "./variants";
+import { isLpChatEnabled, isLpHandoffEnabled } from "@/lib/feature-flags";
+import { withLpPageParam, type LpPage } from "@/lib/lp/lp-page";
+
+/**
+ * Shared body of /lp/ai-employee (pattern A) and /lp/ai-employee-corp (pattern B).
+ * All differences come from getLpVariant(variant); pattern A renders exactly as before
+ * (golden fixtures in app/lp/__fixtures__).
+ */
+
+const PILLARS = [
+  {
+    icon: "01",
+    title: "Staffpass",
+    subtitle: "AI社員の社員証",
+    description:
+      "誰が、何の目的で、どこまで実行できるかを管理。承認フローと監査記録で、説明できる運用を実現します。",
+  },
+  {
+    icon: "02",
+    title: "会社メール",
+    subtitle: "Google Workspace連携",
+    description:
+      "AI社員専用のメールアドレスを発行。会社の名義で送受信し、人が承認してから送信する初期設定で安心。",
+  },
+  {
+    icon: "03",
+    title: "Grok Bot",
+    subtitle: "AI実行環境",
+    description:
+      "Cursorベースの実行環境でAI社員が稼働。権限の範囲内で業務を遂行し、Staffpassが最後の砦として制御します。",
+  },
+];
+
+const STEPS = [
+  {
+    step: "01",
+    title: "ヒアリング・設計",
+    description:
+      "どんな業務をAI社員に任せたいか、お話を伺います。職務範囲と承認ルールを一緒に設計します。",
+  },
+  {
+    step: "02",
+    title: "環境セットアップ",
+    description:
+      "Staffpassでの社員証発行、Google Workspaceの連携、Grok Bot環境の構築を私たちが行います。",
+  },
+  {
+    step: "03",
+    title: "承認チャネル設定",
+    description:
+      "メールまたはLINE、Slackで承認通知を受け取れるよう設定。スマホから承認・却下ができます。",
+  },
+  {
+    step: "04",
+    title: "運用開始・サポート",
+    description:
+      "AI社員が業務を開始。運用プレイブックに沿って、継続的にサポートします。",
+  },
+];
+
+const FAQ = [
+  {
+    q: "AI社員とは何ですか？",
+    a: "定型業務や顧客対応を自動で行うAIです。ただし「社員証」がないまま使うと、誰が何を許可したか、あとから追えなくなります。Staffpassは、AI社員に社員証を付けて、許可・止め方・記録を残せるようにする製品です。",
+  },
+  {
+    q: "社員単位の契約なの？業務単位なの？",
+    a: "契約はAI社員プラン（席）単位です。ただし、各プランは「業務キャパの箱」として設計しています。インターンは1業務、プロパーは3業務相当まで対応できます。どの業務を任せるかは、業務カタログを参考に選んでください。「1業務あたり月5万円から」の価値を、プランという箱でお届けしています。",
+  },
+  {
+    q: "本当に月50,000円から使えるの？",
+    a: "はい。Internプランは月50,000円（税別）です。1つの定型業務（日報下書き、予定調整など）を任せるのに最適な「1業務の箱」です。Google Workspaceのアカウント費用やGrok Botの従量課金分など、実費は別途かかります。セットアップから運用まで、私たちがハンズオンでサポートします。",
+  },
+  {
+    q: "初期費用と月額の違いは？",
+    a: "初期費用はセットアップ・研修費用で、導入時に一度だけお支払いいただきます。月額はAI社員の利用料金で、毎月または年払いでお支払いいただきます。年払いなら月額が10%オフになります。",
+  },
+  {
+    q: "承認はどうやって行うの？",
+    a: "メール、LINE、Slackで承認依頼が届きます。初期設定では、社外送信・日程確定・発注は人が見るまで進みません。スマホから承認・却下を行えます。",
+  },
+  {
+    q: "勝手にメールを送ったり、予定を入れたりしない？",
+    a: "初期設定では、社外送信・日程の確定・発注は人が見るまで進みません。承認フローを経てから実行されます。事業者の判断で自動化することも可能ですが、その場合は警告を確認のうえ、責任は事業者にあります。",
+  },
+  {
+    q: "Google Workspaceを使っていないのですが？",
+    a: "Google Workspaceの新規導入からサポートします。AI社員用のメールアドレスを発行し、会社としてのメール運用を始められます。既存のWorkspace環境への追加も対応しています。Workspace費用は会社負担となります。",
+  },
+  {
+    q: "AIに業務を任せるのが不安です。",
+    a: "そう感じるのは自然なことです。最初からすべてを任せる必要はありません。まずは、重要度は高くないけれど毎日必要な業務、たとえば社内向けの情報整理や問い合わせの一次仕分けなど、万一間違えても影響の小さい業務から任せてみることをおすすめします。こうした始め方は、いちばん手軽なInternプランから対応しています。送信や支払いなど影響の大きい操作は、初期設定で担当者の承認を経てから実行されるので、AI社員が勝手に進めることはありません。使いながら、任せる範囲を少しずつ広げていくのが無理のない始め方です。",
+  },
+  {
+    q: "セキュリティは大丈夫？",
+    a: "Staffpassは、AIの実行を会社の外側から制御する仕組みです。権限の範囲外は実行しません。承認履歴と実行ログが監査台帳に残り、あとから誰が何を許可したか追えます。",
+  },
+  {
+    q: "個人情報やパスワードなどの扱いは安全ですか？",
+    a: "APIキーや連携用のトークンなどの秘密情報は、チャットでやり取りせず、Staffpassの専用画面で登録して暗号化して保管します。万一AI社員への依頼に秘密情報が混ざった場合も、検知してその依頼を止める仕組みがあります。送信や支払いなど影響の大きい操作は、担当者の承認を経てから実行し、操作の記録も残します。",
+  },
+  {
+    q: "社内のデータは、どこにどう置けばよいですか？",
+    a: "手軽に始めるなら、Google Workspaceなどに会社の情報を集約し、AIがアクセスできる場所を限定する形がおすすめです。新しい仕組みを作らずに、AIが触れる範囲を絞れます。\nより厳格な管理が必要な場合は、日本リージョンのSupabaseなどで専用のデータベースを構築し、AI社員がその中だけで作業するセキュアな環境もご用意できます。こちらは要件に合わせて別途お見積りします。",
+  },
+  {
+    q: "自社のシステム開発やメンテナンスにも使える？",
+    a: "はい。エグゼクティブプランでは、開発・保守の調査や実装案を同じ「人＋AI」の承認ループで回せます。実際の実行は人が承認してから行われるため、安心してお任せいただけます。詳細はご相談ください。",
+  },
+  {
+    q: "解約はいつでもできる？",
+    a: "月払いの場合、月末までに解約のご連絡をいただければ翌月から停止できます。年払いの場合は契約期間満了後の解約となります。",
+  },
+];
+
+const YASAKA_LENSES = [
+  { label: "Problem", description: "課題の本質を捉える" },
+  { label: "Business", description: "事業として成立させる" },
+  { label: "Product", description: "使われるものを作る" },
+  { label: "Outcome", description: "成果につなげる" },
+];
+
+export function AIEmployeeLanding({ variant }: { variant: LpPage }) {
+  const v = getLpVariant(variant);
+  const lead = (path: string) => withLpPageParam(path, variant);
+  const chatOn = isLpChatEnabled();
+  // The phone chat dock already carries a 相談する button; don't stack a second bottom bar.
+  const sticky = v.quickConsultCta && !chatOn;
+  const consultHref = lead("/lp/ai-employee/consult");
+
+  const operatorInfo = (
+              <div className="flex flex-col sm:flex-row items-center sm:items-start gap-5 sm:gap-6">
+                <Image
+                  src="/lp/ai-employee/tokyo307-logo-stacked-reverse.svg"
+                  alt="TOKYO307"
+                  width={60}
+                  height={65}
+                  unoptimized
+                  className="shrink-0 opacity-90"
+                />
+                <div className="min-w-0 text-center sm:text-left">
+                  <span className="eyebrow">開発・運営</span>
+                  <h3 className="mt-2 text-sm font-semibold">
+                    トーキョーサンマルナナ株式会社
+                    <span className="ml-2 text-xs font-normal muted">TOKYO307</span>
+                  </h3>
+                  <div className="mt-3 space-y-1 text-xs muted leading-relaxed">
+                    <p>TOKYO307は、経営者の未整理な課題から入り、AI、ソフトウェア、ハードウェア連携、運用までを一気通貫で推進する0→1開発アトリエです。</p>
+                    <p>楽天やMicrosoftなど大手IT企業で豊富なキャリアを積んだ国内外ハイクラスエンジニアがあなたの企業活動におけるIT領域を必要に応じてサポートします。</p>
+                    <p>実装体制に加え、自ら売上やコスト、意思決定を引き受けてきた人材がプロジェクトを牽引するため安心してお任せいただけます。</p>
+                  </div>
+                </div>
+              </div>
+  );
+
+  return (
+    <div className="min-h-screen bg-[var(--bg)] text-[var(--text)] overflow-x-hidden">
+      <header className="sticky top-0 z-30 border-b border-[var(--border-soft)] bg-[color-mix(in_oklab,var(--bg)_82%,transparent)] backdrop-blur-xl">
+        <div className="mx-auto max-w-6xl px-4 sm:px-6 py-3 flex items-center justify-between gap-3">
+          <BrandMark size="md" className="min-w-0" />
+          <nav className="flex items-center gap-2">
+            <Link
+              href={consultHref}
+              className="btn btn-primary text-xs sm:text-sm"
+            >
+              相談する
+            </Link>
+          </nav>
+        </div>
+      </header>
+
+      {/* Temporary: early-bird 100 slots — remove when campaign ends */}
+      {v.showCampaignBanner && <CampaignBanner />}
+
+      <main>
+        {/* Hero with AI Character */}
+        <section className="mx-auto max-w-6xl px-4 sm:px-6 pt-14 sm:pt-20 pb-16 sm:pb-24 relative">
+          {/* Trust Ribbon */}
+          {v.showSupervision && (
+            <div className="trust-ribbon" aria-label="楽天出身のAI専門家による監修">
+              <span className="trust-ribbon-text">楽天出身のAI専門家による監修</span>
+            </div>
+          )}
+          <div className="grid lg:grid-cols-[1fr_auto] items-center gap-8 lg:gap-12">
+            <div className="max-w-3xl text-center lg:text-left order-2 lg:order-1">
+              <span className="eyebrow">AI EMPLOYEE MANAGED PACK</span>
+              <h1 className="mt-5 text-[clamp(2rem,5vw,3.5rem)] font-bold tracking-[-0.045em] leading-[1.1]">
+                中小企業336万社のミカタ
+                <br />
+                <span className="text-gradient">{v.heroName}</span>
+              </h1>
+              <p className="mt-6 text-base sm:text-lg muted leading-relaxed max-w-2xl mx-auto lg:mx-0">
+                導入から運用までおまかせ。採用・研修で立ち上げ、「社員証」で許可・止め方・記録を会社に残します。
+              </p>
+              <div className="mt-8 flex flex-col sm:flex-row gap-3 justify-center lg:justify-start">
+                <Link href={consultHref} className="btn btn-primary">
+                  相談する
+                </Link>
+                <Link href="#pricing" className="btn btn-ghost">
+                  料金を見る
+                </Link>
+              </div>
+              <div className="mt-4 flex justify-center lg:justify-start">
+                <Link
+                  href="/lp/ai-employee/manga"
+                  className="text-sm text-[var(--accent-strong)] hover:underline inline-flex items-center gap-1"
+                >
+                  <svg
+                    className="w-4 h-4"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                    aria-hidden="true"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"
+                    />
+                  </svg>
+                  漫画でイメージする →
+                </Link>
+              </div>
+            </div>
+
+            {/* AI Character - Hero Crew */}
+            <div className="hero-crew relative flex items-end justify-center lg:justify-end order-1 lg:order-2">
+              <div className="relative">
+                <div className="mb-3 rounded-xl border border-[var(--border)] bg-[color-mix(in_oklab,var(--bg-elevated)_92%,transparent)] px-3 py-2 shadow-xl backdrop-blur-md absolute -top-2 -left-4 z-10">
+                  <span className="block font-mono text-[8px] tracking-[0.14em] text-[var(--accent-strong)]">
+                    PEBBLE CREW
+                  </span>
+                  <span className="mt-0.5 block text-[10px] muted">
+                    READY TO WORK
+                  </span>
+                </div>
+                <div className="crew-character relative h-[160px] w-[160px] sm:h-[200px] sm:w-[200px] lg:h-[240px] lg:w-[240px]">
+                  <Image
+                    src="/brand/ai-employee-pebble-core.png"
+                    alt="StaffpassのオリジナルAIクルーキャラクター"
+                    width={240}
+                    height={240}
+                    priority
+                    className="h-full w-full object-contain drop-shadow-[0_18px_30px_rgba(0,0,0,.55)]"
+                  />
+                  <span className="crew-eye crew-eye-left" aria-hidden="true" />
+                  <span
+                    className="crew-eye crew-eye-right"
+                    aria-hidden="true"
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {/* Pattern B: 相談 CTA right under the hero (placement only, no content removed) */}
+        {v.quickConsultCta && <HeroConsultCta href={consultHref} />}
+
+        {/* Manga CTA */}
+        <section className="mx-auto max-w-6xl px-4 sm:px-6 pb-12 sm:pb-16">
+          <div className="surface p-5 sm:p-6">
+            <div className="flex flex-col sm:flex-row items-center gap-4 sm:gap-6">
+              <div className="flex-1 text-center sm:text-left">
+                <span className="eyebrow">MANGA</span>
+                <h2 className="mt-2 text-lg sm:text-xl font-bold tracking-[-0.03em]">
+                  漫画でイメージする
+                </h2>
+                <p className="mt-2 text-sm muted leading-relaxed">
+                  3つのプランでAI社員がどう働くか、ストーリーで紹介します。
+                </p>
+              </div>
+              <div className="flex flex-wrap justify-center gap-2">
+                <Link
+                  href="/lp/ai-employee/manga/intern"
+                  className="btn btn-ghost text-xs py-2 px-3"
+                >
+                  インターン編
+                </Link>
+                <Link
+                  href="/lp/ai-employee/manga/proper"
+                  className="btn btn-ghost text-xs py-2 px-3"
+                >
+                  プロパー編
+                </Link>
+                <Link
+                  href="/lp/ai-employee/manga/executive"
+                  className="btn btn-ghost text-xs py-2 px-3"
+                >
+                  エグゼクティブ編
+                </Link>
+              </div>
+              <Link
+                href="/lp/ai-employee/manga"
+                className="btn btn-primary text-sm shrink-0"
+              >
+                漫画を読む
+              </Link>
+            </div>
+          </div>
+        </section>
+
+        {/* Problem */}
+        <section className="border-y border-[var(--border-soft)] bg-[var(--bg-elevated)]">
+          <div className="mx-auto max-w-6xl px-4 sm:px-6 py-16 sm:py-20">
+            <div className="max-w-2xl">
+              <span className="eyebrow">なぜAI社員に社員証が必要か</span>
+              <h2 className="mt-4 text-2xl sm:text-4xl font-bold tracking-[-0.045em] leading-tight">
+                便利なだけでは、
+                <br />
+                会社として説明できない
+              </h2>
+              <p className="mt-6 text-base muted leading-relaxed">
+                ChatGPTやGrokは便利です。でも、社員が個人で使っていると、誰が何を許可したのか、どこまで任せたのか、あとから追えません。
+              </p>
+              <p className="mt-4 text-base muted leading-relaxed">
+                {`AI社員に「社員証」を付ければ、会社として説明できる運用になります。権限を分け、承認を残し、記録を追える。それが${v.serviceName}の役割です。`}
+              </p>
+            </div>
+          </div>
+        </section>
+
+        {/* What's Included - 3 Pillars */}
+        <section className="mx-auto max-w-6xl px-4 sm:px-6 py-20 sm:py-28">
+          <div className="max-w-2xl">
+            <span className="eyebrow">WHAT&apos;S INCLUDED</span>
+            <h2 className="mt-4 text-2xl sm:text-4xl font-bold tracking-[-0.045em] leading-tight">
+              セットアップから運用まで
+              <br />
+              3つの柱でサポート
+            </h2>
+          </div>
+          <div className="mt-10 grid md:grid-cols-3 gap-4">
+            {PILLARS.map((pillar) => (
+              <article
+                key={pillar.title}
+                className="surface feature-card p-5 sm:p-6"
+              >
+                <span className="font-mono text-xs text-[var(--accent-strong)]">
+                  {pillar.icon}
+                </span>
+                <h3 className="mt-8 text-lg font-semibold">{pillar.title === "Staffpass" ? v.serviceName : pillar.title}</h3>
+                <p className="mt-1 text-sm text-[var(--accent-strong)]">
+                  {pillar.subtitle}
+                </p>
+                <p className="mt-3 text-sm muted leading-relaxed">
+                  {pillar.description}
+                </p>
+              </article>
+            ))}
+          </div>
+          <div className="mt-8 surface p-5 sm:p-6">
+            <h3 className="text-base font-semibold">料金に含まれるもの</h3>
+            <ul className="mt-4 grid sm:grid-cols-2 gap-x-8 gap-y-2 text-sm muted">
+              <li className="flex items-start gap-2">
+                <span className="text-[var(--ok)] mt-0.5">✓</span>
+                Staffpass社員証の発行・設定
+              </li>
+              <li className="flex items-start gap-2">
+                <span className="text-[var(--ok)] mt-0.5">✓</span>
+                Google Workspace連携サポート
+              </li>
+              <li className="flex items-start gap-2">
+                <span className="text-[var(--ok)] mt-0.5">✓</span>
+                Grok Bot / Cursor環境の構築
+              </li>
+              <li className="flex items-start gap-2">
+                <span className="text-[var(--ok)] mt-0.5">✓</span>
+                承認チャネル設定（メール / LINE / Slack）
+              </li>
+              <li className="flex items-start gap-2">
+                <span className="text-[var(--ok)] mt-0.5">✓</span>
+                運用プレイブック
+              </li>
+              <li className="flex items-start gap-2">
+                <span className="text-[var(--ok)] mt-0.5">✓</span>
+                人による承認ゲート（初期設定）
+              </li>
+              <li className="flex items-start gap-2">
+                <span className="text-[var(--ok)] mt-0.5">✓</span>
+                ハンズオン導入支援
+              </li>
+            </ul>
+            <div className="mt-6 pt-4 border-t border-[var(--border-soft)]">
+              <h4 className="text-sm font-semibold text-[var(--text-muted)]">
+                実費は別途
+              </h4>
+              <p className="mt-2 text-sm faint leading-relaxed">
+                Google Workspace（会社負担）、Slackワークスペース（会社負担）、Cursor/Grok
+                Botの従量課金分、LINE公式アカウント費用（ご利用の場合）は、プラン料金とは別に実費としてかかります。
+              </p>
+              <p className="mt-2 text-xs faint">
+                ※ その他、業務において必要となるアカウントに応じ変動します。
+              </p>
+            </div>
+          </div>
+        </section>
+
+        {/* How it Works */}
+        <section className="border-y border-[var(--border-soft)] bg-[var(--bg-elevated)]">
+          <div className="mx-auto max-w-6xl px-4 sm:px-6 py-20 sm:py-28">
+            <div className="max-w-2xl">
+              <span className="eyebrow">HOW IT WORKS</span>
+              <h2 className="mt-4 text-2xl sm:text-4xl font-bold tracking-[-0.045em] leading-tight">
+                導入から運用まで
+                <br />
+                私たちがサポート
+              </h2>
+            </div>
+            <div className="mt-10 grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              {STEPS.map((item) => (
+                <article key={item.step} className="surface p-5 sm:p-6">
+                  <span className="font-mono text-xs text-[var(--accent-strong)]">
+                    STEP {item.step}
+                  </span>
+                  <h3 className="mt-4 text-base font-semibold">{item.title}</h3>
+                  <p className="mt-2 text-sm muted leading-relaxed">
+                    {item.description}
+                  </p>
+                </article>
+              ))}
+            </div>
+          </div>
+        </section>
+
+        {/* Approval Channels */}
+        <section className="mx-auto max-w-6xl px-4 sm:px-6 py-20 sm:py-28">
+          <div className="max-w-2xl mx-auto text-center">
+            <span className="eyebrow">APPROVAL CHANNELS</span>
+            <h2 className="mt-4 text-2xl sm:text-4xl font-bold tracking-[-0.045em] leading-tight">
+              メール・LINE・Slackで承認
+            </h2>
+            <p className="mt-6 text-base muted leading-relaxed">
+              AI社員が社外送信・日程確定・発注などを行う前に、あなたに承認依頼が届きます。
+              <br className="hidden sm:block" />
+              スマートフォンから、いつでも承認・却下できます。
+            </p>
+          </div>
+          <div className="mt-10 grid sm:grid-cols-3 gap-4 max-w-3xl mx-auto">
+            <div className="surface p-6 text-center">
+              <div className="w-12 h-12 mx-auto rounded-full bg-[var(--bg)] border border-[var(--border)] flex items-center justify-center">
+                <svg
+                  className="w-6 h-6 text-[var(--accent-strong)]"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"
+                  />
+                </svg>
+              </div>
+              <h3 className="mt-4 font-semibold">メール承認</h3>
+              <p className="mt-2 text-sm muted">
+                会社メールに承認依頼が届きます。
+                <br />
+                ワンクリックで承認・却下。
+              </p>
+            </div>
+            <div className="surface p-6 text-center">
+              <div className="w-12 h-12 mx-auto rounded-full bg-[var(--bg)] border border-[var(--border)] flex items-center justify-center">
+                <svg
+                  className="w-6 h-6 text-[var(--ok)]"
+                  fill="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path d="M19.365 9.863c.349 0 .63.285.63.631 0 3.517-2.87 6.387-6.387 6.387H8.717l-3.646 3.646c-.313.313-.818.313-1.13 0-.158-.157-.235-.364-.235-.571V6.63c0-.346.282-.63.63-.63h14.03c.346 0 .63.284.63.63v3.233h-.631zm-6.387 5.387c2.863 0 5.19-2.327 5.19-5.19V7.827H5.333v10.973l2.754-2.754h4.891zm-7.117-6.89h12.276v1.26H5.861v-1.26zm0 2.52h8.316v1.26H5.861v-1.26z" />
+                </svg>
+              </div>
+              <h3 className="mt-4 font-semibold">LINE承認</h3>
+              <p className="mt-2 text-sm muted">
+                LINEに通知が届きます。
+                <br />
+                外出先でもすぐ対応できます。
+              </p>
+            </div>
+            <div className="surface p-6 text-center">
+              <div className="w-12 h-12 mx-auto rounded-full bg-[var(--bg)] border border-[var(--border)] flex items-center justify-center">
+                <svg
+                  className="w-6 h-6 text-[#4A154B]"
+                  fill="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path d="M5.042 15.165a2.528 2.528 0 0 1-2.52 2.523A2.528 2.528 0 0 1 0 15.165a2.527 2.527 0 0 1 2.522-2.52h2.52v2.52zM6.313 15.165a2.527 2.527 0 0 1 2.521-2.52 2.527 2.527 0 0 1 2.521 2.52v6.313A2.528 2.528 0 0 1 8.834 24a2.528 2.528 0 0 1-2.521-2.522v-6.313zM8.834 5.042a2.528 2.528 0 0 1-2.521-2.52A2.528 2.528 0 0 1 8.834 0a2.528 2.528 0 0 1 2.521 2.522v2.52H8.834zM8.834 6.313a2.528 2.528 0 0 1 2.521 2.521 2.528 2.528 0 0 1-2.521 2.521H2.522A2.528 2.528 0 0 1 0 8.834a2.528 2.528 0 0 1 2.522-2.521h6.312zM18.956 8.834a2.528 2.528 0 0 1 2.522-2.521A2.528 2.528 0 0 1 24 8.834a2.528 2.528 0 0 1-2.522 2.521h-2.522V8.834zM17.688 8.834a2.528 2.528 0 0 1-2.523 2.521 2.527 2.527 0 0 1-2.52-2.521V2.522A2.527 2.527 0 0 1 15.165 0a2.528 2.528 0 0 1 2.523 2.522v6.312zM15.165 18.956a2.528 2.528 0 0 1 2.523 2.522A2.528 2.528 0 0 1 15.165 24a2.527 2.527 0 0 1-2.52-2.522v-2.522h2.52zM15.165 17.688a2.527 2.527 0 0 1-2.52-2.523 2.526 2.526 0 0 1 2.52-2.52h6.313A2.527 2.527 0 0 1 24 15.165a2.528 2.528 0 0 1-2.522 2.523h-6.313z" />
+                </svg>
+              </div>
+              <h3 className="mt-4 font-semibold">Slack承認</h3>
+              <p className="mt-2 text-sm muted">
+                Slackに通知が届きます。
+                <br />
+                チームで承認フローを回せます。
+              </p>
+            </div>
+          </div>
+        </section>
+
+        {/* Philosophy / 考え方 */}
+        <section className="border-y border-[var(--border-soft)] bg-[var(--bg-elevated)]">
+          <div className="mx-auto max-w-6xl px-4 sm:px-6 py-16 sm:py-20">
+            <div className="max-w-3xl mx-auto text-center">
+              <span className="eyebrow">PHILOSOPHY</span>
+              <h2 className="mt-4 text-xl sm:text-2xl font-bold tracking-[-0.03em] leading-snug">
+                安全とは、権限どおりに動かし、
+                <br className="hidden sm:block" />
+                あとから追えること。
+              </h2>
+              <p className="mt-5 text-base sm:text-lg muted leading-relaxed">
+                監視ではなく、就業規則。
+                <br className="sm:hidden" />
+                AI社員を、会社のルールの中で働かせる。
+              </p>
+            </div>
+            <div className="mt-10 grid sm:grid-cols-2 gap-4 max-w-2xl mx-auto">
+              <div className="surface p-5 sm:p-6">
+                <p className="text-sm font-semibold text-[var(--text-muted)]">
+                  従来の監視
+                </p>
+                <p className="mt-2 text-sm muted leading-relaxed">
+                  異常を見つけるのが監視。
+                </p>
+              </div>
+              <div className="surface p-5 sm:p-6 ring-1 ring-[var(--accent-strong)]">
+                <p className="text-sm font-semibold text-[var(--accent-strong)]">
+                  {v.serviceName}
+                </p>
+                <p className="mt-2 text-sm leading-relaxed">
+                  {`社員として働かせて記録するのが ${v.serviceName}。`}
+                </p>
+              </div>
+            </div>
+            <p className="mt-8 text-sm muted leading-relaxed text-center max-w-2xl mx-auto">
+              従来のソフトは壊れると止まります。AIエージェントは、止まりにくいまま間違えることがあります。Staffpassは監視カメラではなく社員証です。与えた権限の外は通さず、通したものはあとから追えます。
+            </p>
+          </div>
+        </section>
+
+        {/* Pricing Section */}
+        <PricingSection lpPage={variant} />
+
+        {v.showSupervision ? (
+        /* Expert Supervision - 八坂太洋 */
+        <section className="border-y border-[var(--border-soft)] bg-[var(--bg-elevated)]">
+          <div className="mx-auto max-w-6xl px-4 sm:px-6 py-20 sm:py-28">
+            <div className="max-w-2xl">
+              <span className="eyebrow">EXPERT SUPERVISION</span>
+              <h2 className="mt-4 text-2xl sm:text-4xl font-bold tracking-[-0.045em] leading-tight">
+                専門家監修
+              </h2>
+              <p className="mt-4 text-base muted leading-relaxed">
+                AIエージェントを前提とした業務設計の専門家が監修しています。
+              </p>
+            </div>
+
+            <div className="mt-10 grid lg:grid-cols-[280px_1fr] gap-8">
+              {/* Profile Card */}
+              <div className="surface p-6 text-center lg:text-left">
+                <div className="relative w-32 h-32 mx-auto lg:mx-0 rounded-full overflow-hidden border-2 border-[var(--accent-strong)]">
+                  <Image
+                    src="/lp/ai-employee/tyasaka.png"
+                    alt="八坂太洋"
+                    width={128}
+                    height={128}
+                    className="w-full h-full object-cover"
+                  />
+                </div>
+                <h3 className="mt-4 text-lg font-bold">八坂 太洋</h3>
+                <p className="mt-1 text-sm text-[var(--accent-strong)]">
+                  Taiyo Yasaka
+                </p>
+                <p className="mt-2 text-xs muted leading-relaxed">
+                  トーキョーサンマルナナ株式会社
+                  <br />
+                  代表取締役 / Founder &amp; Atelier Principal
+                </p>
+                <div className="mt-4">
+                  <Link
+                    href="https://tokyo307inc.com/about/taiyo-yasaka"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="btn btn-ghost text-xs w-full justify-center"
+                  >
+                    プロフィールを見る
+                  </Link>
+                </div>
+              </div>
+
+              {/* Content Area */}
+              <div className="space-y-6">
+                {/* Bio */}
+                <div className="surface p-6">
+                  <h4 className="text-base font-semibold mb-3">経歴・実績</h4>
+                  <ul className="space-y-2 text-sm muted leading-relaxed">
+                    <li className="flex items-start gap-2">
+                      <span className="text-[var(--accent-strong)] mt-0.5 shrink-0">
+                        •
+                      </span>
+                      楽天にて戦略営業を担当。年間取扱高600億円規模、2014年社長賞受賞
+                    </li>
+                    <li className="flex items-start gap-2">
+                      <span className="text-[var(--accent-strong)] mt-0.5 shrink-0">
+                        •
+                      </span>
+                      2015年独立以降、国内外で開発プロジェクトを統括・牽引、自社プロダクトの売却経験
+                    </li>
+                    <li className="flex items-start gap-2">
+                      <span className="text-[var(--accent-strong)] mt-0.5 shrink-0">
+                        •
+                      </span>
+                      0→1を専門領域としAI駆動開発によるMVP支援・新規事業支援を展開
+                    </li>
+                    <li className="flex items-start gap-2">
+                      <span className="text-[var(--accent-strong)] mt-0.5 shrink-0">
+                        •
+                      </span>
+                      個人事業主・経営者向け、商工会経営指導員向けに生成AIによるアプリ開発の研修・講演を実施
+                    </li>
+                  </ul>
+                  <p className="mt-3 text-xs text-[var(--text-muted)]">
+                    <Link
+                      href="https://www.miraishachu.city/lp/yamanashi/event20260710"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="hover:underline"
+                    >
+                      最近の登壇 →
+                    </Link>
+                  </p>
+                </div>
+
+                {/* Design Philosophy */}
+                <div>
+                  <h4 className="text-base font-semibold mb-3">
+                    設計の4つのレンズ
+                  </h4>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                    {YASAKA_LENSES.map((lens) => (
+                      <div
+                        key={lens.label}
+                        className="surface p-4 text-center"
+                      >
+                        <span className="text-xs font-mono text-[var(--accent-strong)]">
+                          {lens.label}
+                        </span>
+                        <p className="mt-2 text-xs muted">{lens.description}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Field Records Gallery */}
+                <div>
+                  <h4 className="text-base font-semibold mb-3">講演・研修の様子</h4>
+                  <p className="text-xs muted mb-4">Speaking / Training / Advisory · 2025—2026</p>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+                    <figure className="group">
+                      <div className="aspect-[4/3] overflow-hidden rounded surface relative">
+                        <Image
+                          src="/lp/ai-employee/ai-business-speaking-session.webp"
+                          alt="経営者向け講演"
+                          fill
+                          sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 20vw"
+                          className="object-cover group-hover:scale-105 transition-transform duration-300"
+                        />
+                      </div>
+                      <figcaption className="mt-2 text-xs muted text-center">経営者向け</figcaption>
+                    </figure>
+                    <figure className="group">
+                      <div className="aspect-[4/3] overflow-hidden rounded surface relative">
+                        <Image
+                          src="/lp/ai-employee/generative-ai-app-training.webp"
+                          alt="商工会向け研修"
+                          fill
+                          sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 20vw"
+                          className="object-cover group-hover:scale-105 transition-transform duration-300"
+                        />
+                      </div>
+                      <figcaption className="mt-2 text-xs muted text-center">商工会向け</figcaption>
+                    </figure>
+                    <figure className="group">
+                      <div className="aspect-[4/3] overflow-hidden rounded surface relative">
+                        <Image
+                          src="/lp/ai-employee/ai-agent-business-seminar.webp"
+                          alt="共催・地域DXセミナー"
+                          fill
+                          sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 20vw"
+                          className="object-cover group-hover:scale-105 transition-transform duration-300"
+                        />
+                      </div>
+                      <figcaption className="mt-2 text-xs muted text-center">共催・地域DX</figcaption>
+                    </figure>
+                    <figure className="group">
+                      <div className="aspect-[4/3] overflow-hidden rounded surface relative">
+                        <Image
+                          src="/lp/ai-employee/ai-advisory-session.webp"
+                          alt="民間研修"
+                          fill
+                          sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 20vw"
+                          className="object-cover group-hover:scale-105 transition-transform duration-300"
+                        />
+                      </div>
+                      <figcaption className="mt-2 text-xs muted text-center">民間研修</figcaption>
+                    </figure>
+                    <figure className="group">
+                      <a
+                        href="https://youtu.be/l4fVZ1-VRcU"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="block"
+                      >
+                        <div className="aspect-[4/3] overflow-hidden rounded surface relative">
+                          <Image
+                            src="/lp/ai-employee/youtube-ai-agents-100cho.jpg"
+                            alt="AIエージェント100兆個の話を、現場の経営者向けに翻訳する"
+                            fill
+                            sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 20vw"
+                            className="object-cover group-hover:scale-105 transition-transform duration-300"
+                          />
+                          <div className="absolute inset-0 flex items-center justify-center bg-black/30 group-hover:bg-black/40 transition-colors">
+                            <div className="w-10 h-10 rounded-full bg-red-600 flex items-center justify-center">
+                              <svg className="w-4 h-4 text-white ml-0.5" fill="currentColor" viewBox="0 0 24 24">
+                                <path d="M8 5v14l11-7z" />
+                              </svg>
+                            </div>
+                          </div>
+                        </div>
+                        <figcaption className="mt-2 text-xs muted text-center line-clamp-2">
+                          AIエージェント100兆個の話を、現場の経営者向けに翻訳する
+                        </figcaption>
+                      </a>
+                    </figure>
+                  </div>
+                </div>
+              </div>
+            </div>
+            {/* Company - TOKYO307 (developer / operator, supplementary) */}
+            <div className="mt-10 border-t border-[var(--border-soft)] pt-8">
+              {operatorInfo}
+            </div>
+          </div>
+        </section>
+        ) : (
+          /* Pattern B: developer / operator info only (TOKYO307 intro + logo) */
+          <section className="border-y border-[var(--border-soft)] bg-[var(--bg-elevated)]">
+            <div className="mx-auto max-w-6xl px-4 sm:px-6 py-14 sm:py-16">
+              {operatorInfo}
+            </div>
+          </section>
+        )}
+
+        {/* FAQ */}
+        <section id="faq" className="mx-auto max-w-6xl px-4 sm:px-6 py-20 sm:py-28">
+          <div className="max-w-2xl">
+            <span className="eyebrow">FAQ</span>
+            <h2 className="mt-4 text-2xl sm:text-4xl font-bold tracking-[-0.045em] leading-tight">
+              よくある質問
+            </h2>
+          </div>
+          <div className="mt-10 max-w-3xl space-y-3">
+            {FAQ.map((item) => (
+              <details key={item.q} className="group surface p-5 sm:p-6">
+                <summary className="flex cursor-pointer list-none items-start justify-between gap-4 [&::-webkit-details-marker]:hidden">
+                  <span className="text-base font-semibold leading-snug">
+                    {item.q}
+                  </span>
+                  <span
+                    className="mt-0.5 shrink-0 font-mono text-xs text-[var(--accent-strong)]"
+                    aria-hidden="true"
+                  >
+                    <span className="group-open:hidden">+</span>
+                    <span className="hidden group-open:inline">−</span>
+                  </span>
+                </summary>
+                <p className="mt-3 whitespace-pre-line text-sm muted leading-relaxed">{item.a}</p>
+              </details>
+            ))}
+          </div>
+        </section>
+
+        {/* CTA */}
+        <section className="mx-auto max-w-6xl px-4 sm:px-6 py-20 sm:py-28">
+          <div className="surface cta-panel px-5 py-10 sm:p-12 text-center">
+            <span className="eyebrow">GET STARTED</span>
+            <h2 className="mt-4 text-2xl sm:text-4xl font-bold tracking-tight">
+              まずは相談から
+            </h2>
+            <p className="mt-3 text-sm muted max-w-xl mx-auto">
+              AI社員の導入に興味があれば、お気軽にご相談ください。
+              <br className="hidden sm:block" />
+              御社の業務に合った提案をいたします。
+            </p>
+            <div className="mt-7 flex flex-col sm:flex-row gap-3 justify-center">
+              <Link href={consultHref} className="btn btn-primary">
+                相談する
+              </Link>
+              <Link href="#pricing" className="btn btn-ghost">
+                料金を見る
+              </Link>
+            </div>
+            <p className="mt-8 text-xs faint">
+              <Link
+                href="https://tokyo307inc.com/ai-development-company"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="hover:underline"
+              >
+                小さく事業開発などの相談もお気軽にお問い合わせください。
+              </Link>
+            </p>
+          </div>
+        </section>
+      </main>
+
+      <footer className="border-t border-[var(--border-soft)]">
+        <div className="mx-auto max-w-6xl px-4 sm:px-6 py-7 flex flex-col gap-4 text-xs faint">
+          <LegalLinks />
+          <div className="flex flex-col sm:flex-row justify-between gap-2">
+            <span>{v.footerName}</span>
+            <span>© TOKYO307</span>
+          </div>
+        </div>
+      </footer>
+
+      {/* Pattern B: following 相談 CTA (phones: bottom bar; PC: bottom-left pill) */}
+      {sticky && <StickyConsultCta href={consultHref} />}
+
+      {/* Floating YouTube promo player */}
+      <FloatingYouTubePromo video={v.video} liftForChatDock={chatOn || sticky} />
+
+      {/* AI consultation chat: rendered only when LP_CHAT_ENABLED is ON */}
+      {chatOn && (
+        <ChatLauncher
+          lpPage={variant}
+          handoffEnabled={isLpHandoffEnabled()}
+          turnstileSiteKey={process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY?.trim() || undefined}
+        />
+      )}
+    </div>
+  );
+}
