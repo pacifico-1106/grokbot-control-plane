@@ -62,6 +62,8 @@ create table if not exists public.employee_holds (
     ((superseded_by is null) = (superseded_at is null)) and not (superseded_at is not null and released_at is not null)),
   constraint employee_holds_org_kind_check check (employee_id is not null or kind = 'stopped'),
   constraint employee_holds_anomaly_shape check ((started_via = 'anomaly') = (started_by = 'system:anomaly')),
+  -- 木村 10/12 (3): an ops: stopper always uses the ops console, and only ops uses it.
+  constraint employee_holds_ops_route check ((started_via = 'ops_console') = (started_by like 'ops:%')),
   constraint employee_holds_request_shape check ((release_requested_by is null) = (release_requested_at is null)),
   constraint employee_holds_release_shape check (
     (released_at is null and released_by is null)
@@ -240,14 +242,28 @@ declare h public.employee_holds%rowtype;
 begin
   select * into h from public.employee_holds where id = p_hold and org_id = p_org and released_at is null and superseded_at is null for update;
   if not found then raise exception 'hold_not_found'; end if;
-  if h.started_via = 'ops_console' then raise exception 'ops_hold_ops_only'; end if;
-  if p_requested_by is null or p_requested_by !~ '^member:[0-9a-f-]{36}$' then raise exception 'release_requester_invalid'; end if;
+  if h.started_via = 'ops_console' or h.started_by like 'ops:%' then raise exception 'ops_hold_ops_only'; end if;
+  if p_requested_by is null or p_requested_by !~ '^member:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then
+    raise exception 'release_requester_invalid'; end if;
+  -- 木村 10/12 (1): the requester is an ACTIVE member of THIS org (not just a well-formed id).
+  if not exists (select 1 from public.org_members m
+                  where m.id = substr(p_requested_by, 8)::uuid and m.org_id = p_org and m.status = 'active') then
+    raise exception 'release_requester_invalid';
+  end if;
   if char_length(btrim(coalesce(p_reason, ''))) = 0 then raise exception 'release_reason_required'; end if;
+  -- 木村 10/12 (2): a pending (or approved, not yet released) request is never replaced. A new
+  -- request is accepted only once the previous ticket is rejected / expired / gone.
+  if h.release_approval_id is not null and exists (
+       select 1 from public.approval_requests a where a.id = h.release_approval_id and a.org_id = p_org
+          and a.status in ('pending', 'approved')) then
+    raise exception 'release_already_requested';
+  end if;
   if not exists (
     select 1 from public.approval_requests a
      where a.id = p_approval and a.org_id = p_org and a.status = 'pending'
        and coalesce(a.metadata->>'adminTool', a.tool, '') = 'employee.hold.release'
-       and a.metadata->>'holdId' = p_hold::text) then
+       and a.metadata->>'holdId' = p_hold::text
+       and a.metadata->>'requestedBy' = p_requested_by) then  -- the ticket's requester is the requester
     raise exception 'release_ticket_invalid';
   end if;
   perform set_config('staffpass.hold_write', 'on', true);
@@ -268,11 +284,12 @@ declare h public.employee_holds%rowtype; a public.approval_requests%rowtype;
 begin
   select * into h from public.employee_holds where id = p_hold and org_id = p_org and released_at is null and superseded_at is null for update;
   if not found then raise exception 'hold_not_found'; end if;
-  if h.started_via = 'ops_console' then raise exception 'ops_hold_ops_only'; end if;
+  if h.started_via = 'ops_console' or h.started_by like 'ops:%' then raise exception 'ops_hold_ops_only'; end if;
   if h.release_approval_id is null or h.release_requested_by is null then raise exception 'release_not_requested'; end if;
   select * into a from public.approval_requests where id = h.release_approval_id and org_id = p_org for update;
   if not found or coalesce(a.metadata->>'adminTool', a.tool, '') <> 'employee.hold.release'
-     or a.metadata->>'holdId' is distinct from p_hold::text then
+     or a.metadata->>'holdId' is distinct from p_hold::text
+     or a.metadata->>'requestedBy' is distinct from h.release_requested_by then
     raise exception 'release_ticket_invalid';
   end if;
   if a.status <> 'approved' or a.resolved_by is null then raise exception 'release_not_approved'; end if;
@@ -283,11 +300,20 @@ begin
      where m.id = a.resolved_by and m.org_id = p_org and m.status = 'active'
        and (m.role = 'owner' or m.id = any(o.designated_admin_member_ids))) into is_eligible;
   if not is_eligible then raise exception 'release_approver_not_allowed'; end if;
+  -- the requester must still be an active member of this org at release time
+  if not exists (select 1 from public.org_members m
+                  where m.id = substr(h.release_requested_by, 8)::uuid and m.org_id = p_org and m.status = 'active') then
+    raise exception 'release_requester_invalid';
+  end if;
   if approver = h.release_requested_by then
     -- Single-owner exception (decision 2): only with exactly one eligible approver.
     select count(*) into eligible from public.org_members m join public.orgs o on o.id = m.org_id
      where m.org_id = p_org and m.status = 'active'
        and (m.role = 'owner' or m.id = any(o.designated_admin_member_ids));
+    -- 木村 10/12 (4): never for anomaly-triggered or quarantined holds (decoy-key design).
+    if h.kind = 'quarantined' or h.started_via = 'anomaly' or h.trigger is not null then
+      raise exception 'release_approver_not_allowed';
+    end if;
     if eligible <> 1 or coalesce(a.metadata->>'singleOwnerSelfRelease', '') <> 'true'
        or char_length(btrim(coalesce(h.release_reason, ''))) = 0 then
       raise exception 'release_approver_not_allowed';
@@ -332,6 +358,15 @@ commit;
 -- ROLLBACK (down) — only while no hold is in use (S3 / EMPLOYEE_HOLD_ENABLED off). Same
 -- statements as supabase/verification/20261012500000_employee_holds_rollback.sql:
 --   begin;
+--   set local lock_timeout = '5s';
+--   do $$ begin
+--     if to_regclass('public.employee_holds') is not null and (
+--          exists (select 1 from public.employee_holds where released_at is null and superseded_at is null)
+--          or exists (select 1 from public.employees where hold_state is not null)
+--          or exists (select 1 from public.orgs where hold_state is not null)) then
+--       raise exception 'ROLLBACK_REFUSED: open holds exist — release them (or decide explicitly) first';
+--     end if;
+--   end $$;
 --   drop function if exists public.release_employee_hold(uuid, uuid, text, jsonb, timestamptz);
 --   drop function if exists public.request_employee_hold_release(uuid, uuid, text, text, uuid, timestamptz);
 --   drop function if exists public.start_employee_hold(uuid, uuid, text, text, text, text, text, timestamptz);
