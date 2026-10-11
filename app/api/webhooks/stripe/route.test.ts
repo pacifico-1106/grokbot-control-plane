@@ -490,3 +490,28 @@ describe("dedupe by event.id", () => {
     expect(res.status).toBe(500);
   });
 });
+
+describe("existing subscribers on retired plans (BUSINESS / MANAGED) still process", () => {
+  for (const [envKey, planKey] of [
+    ["STRIPE_PRICE_ID_BUSINESS", "business"],
+    ["STRIPE_PRICE_ID_MANAGED", "managed"],
+  ] as const) {
+    test(`${planKey}: subscription.updated (cancel at period end) and .deleted are synced with plan ${planKey}`, async () => {
+      const prev = process.env[envKey];
+      process.env[envKey] = `price_retired_${planKey}`;
+      try {
+        const base = { metadata: { orgId: ORG_A, org_id: ORG_A }, items: { data: [{ price: { id: `price_retired_${planKey}` }, current_period_end: 1795000000 }] } };
+        const upd = makeEvent("customer.subscription.updated", sub(ORG_A, "cus_a", { ...base, cancel_at_period_end: true }));
+        expect((await POST(signedRequest(upd))).status).toBe(200);
+        const del = makeEvent("customer.subscription.deleted", sub(ORG_A, "cus_a", { ...base, status: "canceled" }));
+        expect((await POST(signedRequest(del))).status).toBe(200);
+        expect(upserts).toHaveLength(2);
+        expect(upserts[0]).toMatchObject({ orgId: ORG_A, planKey, cancelAtPeriodEnd: true });
+        expect(upserts[1]).toMatchObject({ orgId: ORG_A, planKey, status: "canceled" });
+      } finally {
+        if (prev === undefined) delete process.env[envKey];
+        else process.env[envKey] = prev;
+      }
+    });
+  }
+});
