@@ -8,6 +8,7 @@ import { createInquiry, type InquiryPlan, type BillingPreference } from "@/lib/l
 import { enqueueNotification, processOutboxEntry } from "@/lib/lp/notification-outbox";
 import { verifyTurnstileToken, getClientIp, getTurnstileConfig } from "@/lib/lp/turnstile";
 import { hashIp, checkRateLimits } from "@/lib/lp/rate-limit";
+import { IP_HASH_UNAVAILABLE, isIpHashKeyConfigured } from "@/lib/security/ip-hash-key";
 
 const NOTIFY_EMAIL = process.env.AI_EMP_INQUIRY_NOTIFY_EMAIL;
 
@@ -72,6 +73,11 @@ export async function POST(req: Request) {
   const botProtectionEnabled = isLpInquiryBotProtectionEnabled();
   
   if (botProtectionEnabled && clientIp) {
+    // IP_HASH_KEY required for rate limiting (no dev fallback): refuse before any write.
+    if (!isIpHashKeyConfigured()) {
+      console.error("[ai-employee-inquiry] IP_HASH_KEY not configured; refusing");
+      return NextResponse.json({ ok: false, ...IP_HASH_UNAVAILABLE }, { status: 503 });
+    }
     const ipHash = hashIp(clientIp);
     const rateLimitResult = checkRateLimits(ipHash);
     

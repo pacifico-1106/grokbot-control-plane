@@ -1,4 +1,5 @@
 import { resolveApprovalWithWorkflow } from "@/lib/approvals/workflow-integration";
+import { approverAuthorityReplyJa } from "@/lib/approver-authority/reply";
 import { initializeWorkflowForApproval } from "@/lib/approval-workflow/resolve";
 import { getMemberIdFromVoterBinding } from "@/lib/approval-workflow";
 import { fulfillIfApproved } from "@/lib/approvals/fulfill";
@@ -131,7 +132,7 @@ export async function handleTelegramChannelUpdate(
       await answerTelegramCallbackForChannel(
         channel,
         query.id || "",
-        updated ? (decision === "approved" ? "承認しました" : "却下しました") : result.ok ? "投票を記録しました（合議は継続中です）" : "投票を記録できませんでした"
+        updated ? (decision === "approved" ? "承認しました" : "却下しました") : approverAuthorityReplyJa(result.reason) ?? (result.ok ? "投票を記録しました（合議は継続中です）" : "投票を記録できませんでした")
       );
     } catch (error) {
       if (isSelfApprovalDenied(error)) {

@@ -3,7 +3,8 @@
  * own event into a ChannelJoinSignal; facts and tickets are shared.
  *
  *   Slack     member_joined_channel (employee identity or the org's own bot),
- *             channel_joined / group_joined (user-token apps)
+ *             subscribed as a bot event AND a user event (channel_joined /
+ *             group_joined are RTM-only and never arrive over the Events API)
  *   LINE      join (group / room) on the org's LINE inbox webhook
  *   Telegram  my_chat_member (bot left/kicked → member/administrator) on the
  *             org's per-inbox webhook
@@ -31,9 +32,10 @@ import { getEmployeesBySlackUserIds } from "@/lib/data/slack-identities";
 import { findSlackConversationAdaptersByTeam } from "@/lib/data/conversation-adapters";
 import { unverifiedFacts, type ChannelFacts, type ConversationType, type JoinSurface } from "@/lib/channel-classify/core";
 import { callOrgSlack, collectSlackChannelFacts, resolveFactsToken } from "@/lib/channel-classify/facts";
-import { getMemberIdFromVoterBinding } from "@/lib/approval-workflow/data";
+import { lookupVoterBindingMember, type VoterBindingLookup } from "@/lib/approval-workflow/data";
+import { getMemberById } from "@/lib/data/members";
 import { appendAuditEvent } from "@/lib/data/audit";
-import { takeChannelStuckNoticeSlot } from "@/lib/data/channel-classify";
+import { takeChannelStuckNoticeSlot, type NoticeSlot } from "@/lib/data/channel-classify";
 import { proposeChannelClassification, type ProposalOutcome, type ProposalTrigger } from "@/lib/channel-classify/proposals";
 import { notifyChannelStuck } from "@/lib/channel-classify/stuck-notify";
 
@@ -55,7 +57,14 @@ type Deps = {
   findEmployeeOrgsBySlackUser: (userId: string, teamId: string) => Promise<Array<{ orgId: string; employeeId: string }>>;
   findOrgsBySlackTeam: (teamId: string) => Promise<string[]>;
   adapterBotIdentity: (orgId: string) => Promise<AdapterBotIdentity | null>;
-  telegramVoterMember: (orgId: string, channelKey: string, userId: string) => Promise<string | null>;
+  /** Legacy test override (string → found, null → none). Production uses telegramVoterBinding. */
+  telegramVoterMember?: (orgId: string, channelKey: string, userId: string) => Promise<string | null>;
+  /** #299 (木村 review): found / none / error. error is refused even for allowlisted adders. */
+  telegramVoterBinding: (orgId: string, channelKey: string, userId: string) => Promise<VoterBindingLookup>;
+  /** Shared once-per-hour slot for join_ignored audit rows. */
+  joinAuditSlot: (input: { orgId: string; key: string; windowSeconds: number }) => Promise<NoticeSlot>;
+  /** #280 pre-flag (木村 #281 review): the binding's member is still active in THIS org. */
+  memberActiveInOrg: (orgId: string, memberId: string) => Promise<boolean>;
 };
 
 const IDENTITY_TTL_MS = 10 * 60 * 1000;
@@ -107,13 +116,32 @@ const DEFAULT_DEPS: Deps = {
   findOrgsBySlackTeam: async (teamId) =>
     [...new Set((await findSlackConversationAdaptersByTeam(teamId)).filter((row) => row.enabled).map((row) => row.orgId))],
   adapterBotIdentity: resolveAdapterBotIdentity,
-  telegramVoterMember: (orgId, channelKey, userId) =>
-    getMemberIdFromVoterBinding(orgId, { provider: "telegram", channelKey, userId }),
+  telegramVoterBinding: (orgId, channelKey, userId) =>
+    lookupVoterBindingMember(orgId, { provider: "telegram", channelKey, userId }),
+  joinAuditSlot: takeChannelStuckNoticeSlot,
+  memberActiveInOrg: async (orgId, memberId) => {
+    const member = await getMemberById(memberId, orgId);
+    return Boolean(member && member.id === memberId && member.orgId === orgId && member.status === "active");
+  },
 };
 let deps: Deps = DEFAULT_DEPS;
 
 export function setJoinDepsForTests(override: Partial<Deps> | null): void {
-  deps = override ? { ...DEFAULT_DEPS, ...override } : DEFAULT_DEPS;
+  if (!override) {
+    deps = DEFAULT_DEPS;
+    return;
+  }
+  const legacy = override.telegramVoterMember;
+  const adapted: Partial<Deps> =
+    legacy && !override.telegramVoterBinding
+      ? {
+          telegramVoterBinding: async (orgId, channelKey, userId) => {
+            const memberId = await legacy(orgId, channelKey, userId);
+            return memberId ? { status: "found", memberId } : { status: "none" };
+          },
+        }
+      : {};
+  deps = { ...DEFAULT_DEPS, ...override, ...adapted };
 }
 
 const SLACK_CHANNEL_RE = /^[CGD][A-Z0-9]{2,30}$/;
@@ -126,6 +154,11 @@ function rec(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 }
 
+/**
+ * Only member_joined_channel arrives over the Events API (bot + user event
+ * subscription). channel_joined / group_joined are RTM-only; they stay
+ * accepted (same N7 / team / binding checks) but are never subscribed.
+ */
 export const SLACK_JOIN_EVENT_TYPES = new Set(["member_joined_channel", "channel_joined", "group_joined"]);
 
 /** Slack Events envelope → signals (one per org that owns the joining identity). */
@@ -137,6 +170,10 @@ export async function slackJoinSignals(envelope: unknown): Promise<ChannelJoinSi
   const teamId = String(env.team_id || event.team || "").trim();
   if (!SLACK_TEAM_RE.test(teamId)) return [];
   const authorizations = Array.isArray(env.authorizations) ? env.authorizations.map(rec) : [];
+  // Fail closed: Slack lists the installation(s) the event was delivered for.
+  // None, or one for another team, → nothing (never "anyone").
+  if (!authorizations.length) return [];
+  if (authorizations.some((a) => String(a.team_id || "").trim() && String(a.team_id).trim() !== teamId)) return [];
   let channelId = "";
   let userId = "";
   let conversationType: ConversationType | undefined;
@@ -160,15 +197,26 @@ export async function slackJoinSignals(envelope: unknown): Promise<ChannelJoinSi
   if (sharedApprovalAppId && appId === sharedApprovalAppId) return [];
 
   let orgIds: string[] = [];
-  const isOwnBot = authorizations.some((a) => a.is_bot === true && String(a.user_id || "") === userId);
-  if (isOwnBot) {
+  const botAuthUsers = authorizations.filter((a) => a.is_bot === true).map((a) => String(a.user_id || ""));
+  let isOwnBot = authorizations.some((a) => a.is_bot === true && String(a.user_id || "") === userId);
+  const teamOrgs = async () => {
     const orgs = await deps.findOrgsBySlackTeam(teamId).catch(() => []);
-    orgIds = orgs.length === 1 ? orgs : []; // ambiguous workspace binding → nothing
+    return orgs.length === 1 ? orgs : []; // ambiguous workspace binding → nothing
+  };
+  if (isOwnBot) {
+    orgIds = await teamOrgs();
   } else {
     orgIds = [...new Set((await deps.findEmployeeOrgsBySlackUser(userId, teamId).catch(() => [])).map((row) => row.orgId))];
+    // member_joined_channel is also subscribed as a USER event. Slack lists one
+    // installation the event is visible to, so the org's own bot joining can
+    // arrive with only a user authorization. Then the joiner must be exactly
+    // the adapter bot user of the team's single org (checked below).
+    if (!orgIds.length && botAuthUsers.length === 0) {
+      orgIds = await teamOrgs();
+      isOwnBot = orgIds.length > 0;
+    }
   }
 
-  const botAuthUsers = authorizations.filter((a) => a.is_bot === true).map((a) => String(a.user_id || ""));
   const verified: string[] = [];
   for (const orgId of orgIds) {
     const identity = await deps.adapterBotIdentity(orgId).catch(() => null);
@@ -234,10 +282,39 @@ export function telegramJoinSignal(channel: { orgId: string }, update: TelegramU
 
 type TelegramInbox = { id: string; orgId: string; config?: Record<string, unknown> | null };
 
-async function auditIgnoredJoin(orgId: string, surface: string, externalId: string, reason: string): Promise<void> {
+const JOIN_AUDIT_WINDOW_SECONDS = 3600;
+const joinAuditFallback = new Map<string, number>();
+
+export function resetJoinAuditFallbackForTests(): void {
+  joinAuditFallback.clear();
+}
+
+/**
+ * Shared slot first; when it is unavailable (store / RPC error, denied) fall back to a
+ * per-instance 1-hour window per org × key — same as no_admin_approver in proposals.ts —
+ * so the row is capped rather than dropped.
+ */
+async function takeJoinAuditSlot(orgId: string, key: string): Promise<boolean> {
+  const slot = await deps.joinAuditSlot({ orgId, key, windowSeconds: JOIN_AUDIT_WINDOW_SECONDS }).catch(() => null);
+  if (slot?.state === "ok") return slot.allowed;
+  const k = `${orgId}|${key}`;
+  const now = Date.now();
+  const last = joinAuditFallback.get(k);
+  if (last !== undefined && now - last < JOIN_AUDIT_WINDOW_SECONDS * 1000) return false;
+  if (joinAuditFallback.size > 10_000) joinAuditFallback.clear();
+  joinAuditFallback.set(k, now);
+  return true;
+}
+
+async function auditIgnoredJoin(
+  orgId: string,
+  surface: string,
+  externalId: string,
+  reason: string,
+  ids: { memberId?: string } = {}
+): Promise<void> {
   // Once per hour per org × reason: an outsider adding the bot to many groups cannot flood the audit log.
-  const slot = await takeChannelStuckNoticeSlot({ orgId, key: `join_ignored|${surface}|${reason}`, windowSeconds: 3600 }).catch(() => null);
-  if (!slot || slot.state !== "ok" || !slot.allowed) return;
+  if (!(await takeJoinAuditSlot(orgId, `join_ignored|${surface}|${reason}`))) return;
   await appendAuditEvent({
     orgId,
     employeeId: null,
@@ -245,7 +322,7 @@ async function auditIgnoredJoin(orgId: string, surface: string, externalId: stri
     action: "channel_classify.join_ignored",
     purpose: "admin.channel",
     summary: `参加イベントを無視しました（${reason}）: ${surface} ${externalId}`,
-    metadata: { auditClass: "admin", surface, externalId, reason },
+    metadata: { auditClass: "admin", surface, externalId, reason, ...(ids.memberId ? { memberId: ids.memberId } : {}) },
   }).catch(() => undefined);
 }
 
@@ -264,8 +341,27 @@ export async function handleTelegramMyChatMember(channel: TelegramInbox, update:
     if (Number.isSafeInteger(fromId) && from?.is_bot !== true) {
       const allowed = Array.isArray(channel.config?.allowedUserIds) ? (channel.config!.allowedUserIds as unknown[]).map(String) : [];
       known = allowed.includes(String(fromId));
-      if (!known && channel.id) {
-        known = Boolean(await deps.telegramVoterMember(channel.orgId, channel.id, String(fromId)).catch(() => null));
+      // #280 pre-flag (木村 #281 review): a binding counts only while its
+      // member is still active in THIS org. A binding to a removed / disabled /
+      // invited / other-org member refuses — even for an allowlisted adder
+      // (the binding is the fresher signal).
+      // #299 (木村 review): a binding lookup ERROR is its own state, not "no
+      // binding" — refused even for an allowlisted adder (adder_member_unverified).
+      const binding: VoterBindingLookup = channel.id
+        ? await deps.telegramVoterBinding(channel.orgId, channel.id, String(fromId)).catch(() => ({ status: "error" as const }))
+        : { status: "none" };
+      if (binding.status === "error") {
+        await auditIgnoredJoin(channel.orgId, "telegram", signal.externalId, "adder_member_unverified");
+        return { state: "skipped", reason: "adder_member_unverified" };
+      }
+      if (binding.status === "found") {
+        const memberId = binding.memberId;
+        const active = await deps.memberActiveInOrg(channel.orgId, memberId).catch(() => false);
+        if (!active) {
+          await auditIgnoredJoin(channel.orgId, "telegram", signal.externalId, "adder_member_inactive", { memberId });
+          return { state: "skipped", reason: "adder_member_inactive" };
+        }
+        known = true;
       }
     }
     if (!known) {

@@ -17,6 +17,7 @@ const SIGNUP_ERROR_MESSAGES: Record<string, string> = {
   invalid_org_name: "会社名を正しく入力してください（サンプルの会社名は使えません・100文字以内）。",
   invalid_referral_code: "紹介コードは AIC-XXXX の形式で入力してください（不明な場合は空欄）。",
   bot_protection_unavailable: "現在、新規登録を一時停止しています。お問い合わせフォームからご連絡ください。",
+  signup_unavailable: "現在、新規登録を一時停止しています。時間をおいてお試しください。",
   turnstile_required: "ロボットでないことの確認を完了してください。",
   turnstile_failed: "確認に失敗しました。ページを再読み込みしてもう一度お試しください。",
   rate_limited: "短時間に多くの登録がありました。時間をおいて再度お試しください。",

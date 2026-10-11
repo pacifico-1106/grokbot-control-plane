@@ -9,6 +9,7 @@ const SLACK_QUERY_MESSAGES: Record<string, string> = {
   mismatch: "この社員の Slack ID と一致しません",
   denied: "連携がキャンセルされました",
   error: "Slack 連携に失敗しました",
+  forbidden: "連携の開始・解除には「雇う／社員証発行」の権限が必要です。オーナーまたは管理者に依頼してください。",
 };
 
 export function SlackIdentityForm({
@@ -16,11 +17,14 @@ export function SlackIdentityForm({
   initialIdentity,
   oauthConfigured,
   disabled = false,
+  canManage = true,
 }: {
   employee: Employee;
   initialIdentity: EmployeeSlackIdentity | null;
   oauthConfigured: boolean;
   disabled?: boolean;
+  /** Server decision (identityLinkPermissions): connect / disconnect allowed for this session. */
+  canManage?: boolean;
 }) {
   const [postingAs, setPostingAs] = useState<PostingAs>(employee.postingAs || "bot");
   const [identity, setIdentity] = useState(initialIdentity);
@@ -82,7 +86,7 @@ export function SlackIdentityForm({
     }
   }
 
-  const locked = busy || disabled;
+  const locked = busy || disabled || !canManage;
 
   return (
     <div className="space-y-3">
@@ -165,7 +169,8 @@ export function SlackIdentityForm({
         <div className="flex flex-wrap gap-2">
           <a
             className="btn btn-primary text-xs"
-            href={`/api/slack/oauth/start?employeeId=${encodeURIComponent(employee.id)}`}
+            // No live href while locked: aria-disabled alone does not stop navigation.
+            href={locked ? undefined : `/api/slack/oauth/start?employeeId=${encodeURIComponent(employee.id)}`}
             aria-disabled={locked}
           >
             Slack 連携（Authorize）
@@ -185,6 +190,7 @@ export function SlackIdentityForm({
         <p className="text-xs text-[var(--warn)]">Slack アプリの OAuth が未設定</p>
       )}
 
+      {!canManage ? <p className="text-[11px] muted">連携の開始・解除は「雇う／社員証発行」の権限を持つメンバー（オーナー・管理者など）が行います。</p> : null}
       {message ? <p className="text-xs muted">{message}</p> : null}
     </div>
   );

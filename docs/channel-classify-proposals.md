@@ -34,7 +34,7 @@ Slack / LINE / Telegram event ──► ChannelJoinSignal ──► facts ──
 
 | Surface | Event | Org comes from |
 | --- | --- | --- |
-| Slack | `member_joined_channel` (an employee's bound Slack user, or the org's own bot), `channel_joined` / `group_joined` | the bound employee, or the workspace's single enabled conversation adapter (ambiguous → nothing) |
+| Slack | `member_joined_channel`, subscribed as a **bot event and a user event** (an employee's bound Slack user, or the org's own bot; a user-subscription delivery with only a user authorization is treated the same) | the bound employee, or the workspace's single enabled conversation adapter (ambiguous → nothing) |
 | LINE | `join` (group / room) on the org's LINE inbox webhook | the inbox whose signature verified |
 | Telegram | `my_chat_member` (bot left/kicked → member/administrator) on the per-inbox webhook | the inbox whose secret token verified |
 | Backfill | Slack `users.conversations` of the org's own bot (`/api/cron/channel-classify-backfill`, cron secret) | the adapter's org |
@@ -192,12 +192,25 @@ private / guests / members of other workspaces) — no message content, no token
 ## 6. Enabling
 
 1. Apply migrations `20261005200000` and `20261005400000`.
-2. Slack app: subscribe to `member_joined_channel` (and `channel_joined` /
-   `group_joined` for user-token apps); scopes `channels:read`, `groups:read`,
-   `users:read` (plus `mpim:read` / `im:read` for the backfill listing).
-   `users:read` also covers `bots.info` (bot identity check). An org whose
-   conversation bot is a different app than the one delivering events gets
-   no join proposals (by design).
+2. Slack app (Staffpass app `A0BU8TABSV6`):
+
+   | Kind | Add | Why |
+   | --- | --- | --- |
+   | Bot token scopes | `channels:read`, `groups:read`, `users:read`, `im:read`, `mpim:read` | `conversations.info` / `conversations.members` / `users.info` (facts, Connect detection, team check), backfill listing; `users:read` also covers `bots.info` (N7 bot identity) |
+   | Bot events | `member_joined_channel` | the org's bot or an employee joins |
+   | User events (on behalf of users) | `member_joined_channel` | the employee themself joins (subscribe it as **both** a bot and a user event) |
+
+   - **Order:** add the scopes / events in the Slack app admin console
+     **first**, then deploy the code (`SLACK_BOT_SCOPES` requests them at
+     bot install). The reverse order makes the bot install fail with
+     `invalid_scope`.
+   - **Every workspace must reinstall** (`/app/slack-bot-install`) to get a
+     bot token with the new scopes. Until then `conversations.info` /
+     `users.info` answer `missing_scope`: facts are unavailable (no
+     proposal facts; the ledger decides as before) and no team-based
+     auto-internal verdict is made (fail closed).
+   - An org whose conversation bot is a different app than the one
+     delivering events gets no join proposals (by design, N7).
 3. Telegram: re-register each inbox webhook after enabling (`setWebhook` then
    includes `my_chat_member` in `allowed_updates`).
 4. Turn on `CHANNEL_STUCK_NOTIFY_ENABLED`, then `CHANNEL_CLASSIFY_PROPOSALS_ENABLED`.

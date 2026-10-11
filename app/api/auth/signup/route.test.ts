@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
+// IP_HASH_KEY is required (no dev fallback); fixture key for this test process.
+process.env.IP_HASH_KEY = "test-ip-hash-key-fixture-0123456789";
 
 let created = 0;
 let mailed = 0;

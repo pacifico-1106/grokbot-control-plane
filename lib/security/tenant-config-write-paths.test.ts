@@ -82,6 +82,10 @@ const CREDENTIAL_READERS = [
   // MCP Events (2026-10-05): service-role read of revoked_at / expires_at only,
   // re-checking the subscribing badge on every delivery attempt (never secret_hash).
   "lib/mcp-events/principal.ts",
+  // MCP OAuth RS (2026-10-10 re-land, flag MCP_OAUTH_ENABLED): service-role read of
+  // id / expires_at / revoked_at of the newest live badge, re-checked on every
+  // sp_at_ request so OAuth access never outlives the 社員証 (never secret_hash).
+  "lib/mcp-oauth/employee-state.ts",
 ];
 /** lp_* only admit the service_role JWT (never a session) — kept as-is */
 const LP_SERVICE_POLICIES = ["lp_handoffs_service_all", "lp_wake_configs_service_all", "lp_wake_events_service_all"];
@@ -210,6 +214,14 @@ describe("app: tenant config / credential tables are written only server-side", 
     }
     has("app/api/slack/oauth/callback/route.ts", /verifySlackOAuthState\(state, nonce\)/);
     has("app/api/slack/bot-install/callback/route.ts", /verifySlackBotInstallState\(state, nonce\)/);
+    // PR-SEC2: employee identity connect / disconnect → hire_issue_credentials; callbacks re-check the initiator
+    for (const r of ["slack/oauth/start", "google/oauth/start", "google/oauth/disconnect"]) {
+      has(`app/api/${r}/route.ts`, /requireIdentityLinkManager\(req\)/);
+    }
+    for (const r of ["slack/oauth/callback", "google/oauth/callback"]) {
+      has(`app/api/${r}/route.ts`, /verifyIdentityLinkCallbackActor\(parsed\)/);
+    }
+    has("app/api/slack/bot-install/callback/route.ts", /requireOrgAdminSession\(\)[\s\S]*session\.orgId !== parsed\.orgId/);
     // (d) gateway status is tenant-level integration state → owner/admin only
     has("app/api/gateway/link/route.ts", /export async function POST[\s\S]*requireOrgAdminSession\(\)/);
     // employee binding link / health probe write employee_bindings → owner/admin only

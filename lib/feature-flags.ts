@@ -549,6 +549,22 @@ export function isDuplicateGuardV2Enabled(): boolean {
 }
 
 /**
+ * Thread single-flight (木村 2026-10-09 A, 八坂 GO; triage #2). Default OFF.
+ * For conversation posts (comm.reply / comm.send / slack.post /
+ * slack.post_external — direct, caller-delivered and approval fulfil):
+ * - one send per thread at a time: a short lease (TTL
+ *   THREAD_SINGLE_FLIGHT_LEASE_TTL_SECONDS, default 60) → 409 thread_busy
+ * - right before sending: the employee already posted in the thread after the
+ *   point the AI read through (readThroughTs, else the inbound ts) →
+ *   409 thread_moved_on; at fulfil the approved snapshot's read point is used
+ * - lease-store errors fail closed (503 thread_guard_unavailable)
+ * Requires migration 20261009100000. Details: docs/thread-single-flight.md
+ */
+export function isThreadSingleFlightEnabled(): boolean {
+  return parseFlag(process.env.THREAD_SINGLE_FLIGHT_ENABLED);
+}
+
+/**
  * MCP Events (2026-10-05, design: docs/mcp-events-approval-wake-20261005.md).
  * Wakes the AI through MCP Events webhooks (Triggers & Events extension, as
  * implemented by ChatGPT) when one of its approvals is decided or expires.
@@ -609,4 +625,103 @@ export function isMcpEventsEnabled(): boolean {
  */
 export function isWebhookHardeningEnabled(): boolean {
   return parseFlag(process.env.WEBHOOK_HARDENING_ENABLED);
+}
+
+/**
+ * APPROVER_AUTHORITY_ENABLED (PR-D): who may approve changes to approvers and
+ * permissions (lib/approver-authority).
+ *
+ * When ON:
+ * - Filing records approval_requests.required_approver_kind for the targets in
+ *   APPROVER_AUTHORITY_TARGETS: "owner_or_designated_admin" (standard) or
+ *   "owner" (sensitive, decided from the content of the change).
+ * - Approving such a ticket (W1 RPC resolve_approval_w1_checked with
+ *   p_enforce_approver_authority, or the F8 vote path) requires a verified
+ *   member who is an active owner, or an active admin listed in
+ *   orgs.designated_admin_member_ids. A designated admin on an owner ticket is
+ *   recorded as an endorsement and the ticket stays オーナー承認待ち. The
+ *   approver's member id + role are stored on the ticket.
+ * - Fulfil re-verifies the stored approver right before execution.
+ * - Zero active owners, an unverifiable approver or an unreadable setting → stop.
+ * - approvers.designatedAdmins.get / .set (admin MCP) are available.
+ * Requires migration 20261005500000_approver_authority.sql (without it, filing
+ * a target ticket fails instead of silently dropping the requirement).
+ *
+ * When OFF (default): behaviour is unchanged (nothing recorded, nothing checked).
+ */
+export function isApproverAuthorityEnabled(): boolean {
+  return parseFlag(process.env.APPROVER_AUTHORITY_ENABLED);
+}
+
+/**
+ * OWNER_PROMOTION_ENABLED: admin MCP members.promoteOwner (make an existing
+ * active member an owner after ONE existing owner approves; not the requester,
+ * not the target). Also requires APPROVER_AUTHORITY_ENABLED — without PR-D's
+ * approver check the ticket could be approved by a non-owner, so the tool
+ * refuses at filing AND at fulfil unless both are ON. Default OFF.
+ * No removal / transfer of ownership.
+ */
+export function isOwnerPromotionEnabled(): boolean {
+  return parseFlag(process.env.OWNER_PROMOTION_ENABLED) && isApproverAuthorityEnabled();
+}
+
+/**
+ * 木村 2026-10-09 B (triage #3): needs_approval answers carry approvalReasons[]
+ * (every reason, structured), tickets store the same list, every approval card
+ * shows one 「承認が必要な理由」 line, and the employee MCP lists the tenant's
+ * sensitive topics read-only (staffpass_sensitive_topics). Default OFF.
+ */
+export function isApprovalReasonsEnabled(): boolean {
+  return parseFlag(process.env.APPROVAL_REASONS_ENABLED);
+}
+
+/**
+ * 木村 2026-10-09 B (triage #1④): comm.send with no explicit class defaults to
+ * internal + summary only when the destination is internal in the credential
+ * org's channel ledger (internal channel / internal DM route) and the resolved
+ * audience is internal. Default OFF (changes a default → new flag).
+ */
+export function isCommSendInternalDefaultEnabled(): boolean {
+  return parseFlag(process.env.COMM_SEND_INTERNAL_DEFAULT_ENABLED);
+}
+
+/**
+ * MCP OAuth 2.1 Authorization Server + Resource Server (design 2026-10-03).
+ *
+ * When ON (and not DEMO mode):
+ * - /.well-known/oauth-protected-resource[/api/mcp] and
+ *   /.well-known/oauth-authorization-server answer JSON.
+ * - /oauth/authorize, /oauth/consent, /api/oauth/{consent,token,revoke} are live.
+ * - /api/mcp accepts sp_at_ access tokens (bound to one AI employee by a tenant admin)
+ *   next to the unchanged gb_emp_ Bearer path; 401s carry WWW-Authenticate.
+ *
+ * When OFF (default): all of the above 404 / rejected; /api/mcp exactly as today.
+ */
+export function isMcpOAuthFlagOn(): boolean {
+  return parseFlag(process.env.MCP_OAUTH_ENABLED);
+}
+
+/** Dynamic Client Registration (RFC 7591; deprecated in MCP 2026-07-28). Default OFF. Needs MCP_OAUTH_ENABLED too. */
+export function isMcpOAuthDcrFlagOn(): boolean {
+  return parseFlag(process.env.MCP_OAUTH_DCR_ENABLED);
+}
+
+/**
+ * MCP_OAUTH_LEGACY_UNAUTH_INITIALIZE (Q4 escape hatch, 木村 2026-10-10).
+ * Only matters when MCP_OAUTH_ENABLED is ON. Unset / empty / anything that is
+ * not an explicit false → TODAY's behaviour: unauthenticated initialize / ping /
+ * server/discover / notifications stay 200/202. Only an explicit
+ * "false" / "0" / "off" / "disabled" / "no" switches them to 401 +
+ * WWW-Authenticate (what Claude needs to start sign-in). Unlike the other
+ * flags this one is "on" when unset, so that turning OAuth on can never by
+ * itself change what unauthenticated initialize returns.
+ */
+export function isMcpOAuthLegacyUnauthInitialize(): boolean {
+  const v = (process.env.MCP_OAUTH_LEGACY_UNAUTH_INITIALIZE ?? "").trim().toLowerCase();
+  return !(v === "false" || v === "0" || v === "off" || v === "disabled" || v === "no");
+}
+
+/** Q2 hook: require MFA (aal2) for OAuth consent. Default OFF (no MFA yet). */
+export function isMcpOAuthConsentMfaRequired(): boolean {
+  return parseFlag(process.env.MCP_OAUTH_CONSENT_REQUIRE_MFA);
 }

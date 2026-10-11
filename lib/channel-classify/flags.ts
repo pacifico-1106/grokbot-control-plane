@@ -10,8 +10,8 @@ function parseFlag(value: string | undefined): boolean {
 
 /**
  * PR-B (八坂 2026-10-05): classification proposals for channels an employee
- * (or the org's own bot) joins — Slack member_joined_channel / channel_joined /
- * group_joined, LINE join (group / room), Telegram my_chat_member — plus the
+ * (or the org's own bot) joins — Slack member_joined_channel (bot + user event
+ * subscription), LINE join (group / room), Telegram my_chat_member — plus the
  * Slack backfill (/api/cron/channel-classify-backfill) and the proposal opened
  * when a post is denied in an unregistered channel.
  *

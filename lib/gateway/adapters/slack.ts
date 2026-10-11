@@ -6,6 +6,7 @@ import {
 } from "@/lib/slack/bot-token";
 import { normalizePostingAs } from "@/lib/employees/posting-as";
 import { isDefinitePreShareSlackError } from "@/lib/slack/definite-errors";
+import { SLACK_RATE_LIMIT_ERRORS, retryAfterSecondsFromHeaders } from "./rate-limit";
 import { isDemoMode } from "@/lib/mode";
 import type { MouthRoutingDecision, OrgReplyPolicy, PostingAs, ReplyPolicyDecision } from "@/lib/types";
 import {
@@ -32,7 +33,13 @@ export const SLACK_TOKEN_MISSING = "slack_token_missing";
  * connection refused) or Slack answered `ok:false` with a definite error
  * (lib/slack/definite-errors.ts + CHAT_POST_DEFINITE_ERRORS) — or may have
  * gone out ("unknown": timeout, network error after connect, 5xx / non-JSON,
- * ok without a ts, ratelimited (木村 1, 2026-10-04) or any unlisted error).
+ * ok without a ts or any unlisted error).
+ * Rate limits (木村 #278 answers 3, 2026-10-05, reverses the 10/4 call):
+ * `ratelimited` / `rate_limited` in a JSON answer below 500 are not_sent and
+ * carry the Retry-After wait (retryAfterSeconds, ./rate-limit.ts). The same
+ * body on a 5xx — or any definite error on a 5xx — stays unknown. File-upload
+ * reconciliation (lib/slack/definite-errors.ts) is unchanged: ratelimited is
+ * still not definite there.
  */
 export type PostSendState = "not_sent" | "unknown";
 
@@ -50,9 +57,12 @@ const CHAT_POST_DEFINITE_ERRORS: ReadonlySet<string> = new Set([
   "cannot_reply_to_message",
   "invalid_arguments",
   "invalid_thread_ts",
+  // Rate limited: Slack refuses the call before posting (木村 2026-10-05).
+  ...SLACK_RATE_LIMIT_ERRORS,
 ]);
 
-function slackErrorSendState(rawError: string | undefined): PostSendState {
+function slackErrorSendState(rawError: string | undefined, httpStatus: number): PostSendState {
+  if (httpStatus >= 500) return "unknown";
   return rawError && (isDefinitePreShareSlackError(rawError) || CHAT_POST_DEFINITE_ERRORS.has(rawError)) ? "not_sent" : "unknown";
 }
 
@@ -73,7 +83,23 @@ export type SlackConversationPostResult =
       /** Which token made the post (comm.delete must delete with the same one). */
       postedVia?: PostingAs;
     }
-  | { ok: false; error: string; sendState?: PostSendState };
+  | {
+      ok: false;
+      error: string;
+      sendState?: PostSendState;
+      /** Only on a rate-limited, not_sent answer: the provider's wait (clamped). */
+      retryAfterSeconds?: number;
+    };
+
+/** Failure result without the internal rawError, keeping the rate-limit wait. */
+function failureOf(posted: { error: string; sendState: PostSendState; retryAfterSeconds?: number }): SlackConversationPostResult {
+  return {
+    ok: false,
+    error: posted.error,
+    sendState: posted.sendState,
+    ...(posted.retryAfterSeconds !== undefined ? { retryAfterSeconds: posted.retryAfterSeconds } : {}),
+  };
+}
 
 export function looksLikeSlackTs(value: string | undefined | null): boolean {
   return Boolean(value && /^\d+\.\d+$/.test(value.trim()));
@@ -209,7 +235,7 @@ async function postSlackMessage(
   threadTs?: string
 ): Promise<
   | { ok: true; channel: string; ts: string }
-  | { ok: false; error: string; rawError?: string; sendState: PostSendState }
+  | { ok: false; error: string; rawError?: string; sendState: PostSendState; retryAfterSeconds?: number }
 > {
   try {
     const response = await fetch("https://slack.com/api/chat.postMessage", {
@@ -232,11 +258,14 @@ async function postSlackMessage(
       ts?: string;
     };
     if (!body.ok) {
+      const sendState = slackErrorSendState(body.error, response.status);
+      const rateLimited = sendState === "not_sent" && Boolean(body.error && SLACK_RATE_LIMIT_ERRORS.has(body.error));
       return {
         ok: false,
         error: mapSlackApiError(body.error, response.status),
         rawError: body.error,
-        sendState: slackErrorSendState(body.error),
+        sendState,
+        ...(rateLimited ? { retryAfterSeconds: retryAfterSecondsFromHeaders(response.headers) } : {}),
       };
     }
     if (!body.channel || !body.ts) {
@@ -309,28 +338,28 @@ export async function postConversationMessage(input: {
     if (canRetryBotWithOpen) {
       const openResult = await openSlackConversation(token, input.slackUserId!.trim());
       if (!openResult.ok) {
-        return { ok: false, error: posted.error, sendState: posted.sendState };
+        return failureOf(posted);
       }
       const retried = await postSlackMessage(token, openResult.channelId, text, input.threadTs);
       if (retried.ok) {
         return { ok: true, delivery: "slack", channel: retried.channel, ts: retried.ts, postedVia: "bot" };
       }
-      return { ok: false, error: retried.error, sendState: retried.sendState };
+      return failureOf(retried);
     }
 
-    return { ok: false, error: posted.error, sendState: posted.sendState };
+    return failureOf(posted);
   }
 
   // Fall back to bot token for Path A app DM (conversation bot only — never the
   // shared approval app; with none, keep the user-token error = fail closed).
   const botToken = await resolveOrgSlackBotToken(input.orgId);
   if (!botToken) {
-    return { ok: false, error: posted.error, sendState: posted.sendState };
+    return failureOf(posted);
   }
 
   const openResult = await openSlackConversation(botToken, input.slackUserId!.trim());
   if (!openResult.ok) {
-    return { ok: false, error: posted.error, sendState: posted.sendState };
+    return failureOf(posted);
   }
 
   const retried = await postSlackMessage(botToken, openResult.channelId, text, input.threadTs);
@@ -338,7 +367,7 @@ export async function postConversationMessage(input: {
     return { ok: true, delivery: "slack", channel: retried.channel, ts: retried.ts, postedVia: "bot" };
   }
 
-  return { ok: false, error: retried.error, sendState: retried.sendState };
+  return failureOf(retried);
 }
 
 /**

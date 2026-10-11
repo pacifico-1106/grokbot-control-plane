@@ -1,3 +1,4 @@
+import { withSlackUserTeamMemo } from "@/lib/slack/bot-token";
 import {
   buildApprovalArtifact,
   buildApprovalTitle,
@@ -5,12 +6,18 @@ import {
   formatArtifactLines,
   inferRiskForTool,
 } from "@/lib/approvals/summary";
+import { PROVIDER_RATE_LIMITED, RETRY_AFTER_DEFAULT_SECONDS, rateLimitedBody } from "@/lib/gateway/adapters/rate-limit";
+import { readThroughFromBody } from "@/lib/thread-guard/read-through";
+import { NEXT_STEP_READ_POINT_UNKNOWN, THREAD_GUARD_UNAVAILABLE, THREAD_MOVED_ON, beginThreadSend, threadGuardStopBody, type ThreadGuardStop } from "@/lib/thread-guard/guard";
+import { closedByThreadMovedOn } from "@/lib/approvals/closed-without-send";
+import { auditThreadGuardHeld, auditThreadGuardStop, isThreadGuardCode, type ThreadGuardAuditCtx } from "@/lib/thread-guard/respond";
+import { conversationKeyInputFromBody } from "@/lib/comm-reply-dedup/conversation-key";
 import { sendApprovalNeededEmail } from "@/lib/email";
 import { sendApprovalNotifications } from "@/lib/notify/channels";
 import { getCurrentOrgId } from "@/lib/auth/session";
 import {
   assertExecutable,
-  appendAuditEvent,
+  appendAuditEvent as appendAuditEventBase,
   createApproval,
   getActionCounts,
   getApprovalById,
@@ -34,6 +41,7 @@ import { assertBillingAllowsGateway } from "@/lib/billing/entitlements";
 import { evaluateDualEgress } from "@/lib/gateway/egress";
 import {
   parseConversationContext,
+  conversationOrgMismatch,
   resolveAudience,
   resolveConversationThreadId,
   resolveParentMessageTs,
@@ -95,6 +103,7 @@ import {
   legacySnapshotAttachmentBlock,
 } from "@/lib/approvals/approved-rerun-attachment";
 import { isDemoMode } from "@/lib/mode";
+import { resolveSlackUserRecipient } from "@/lib/slack/u-recipient-dm-route";
 import { evaluateAllowedAccountsForBrowser } from "@/lib/employees/allowed-accounts";
 import { evaluateSpend } from "@/lib/spend-gate";
 import { evaluateActionLimit } from "@/lib/action-gate";
@@ -135,9 +144,16 @@ import {
   isCommReplyDedupEnabled,
   isDuplicateGuardV2Enabled,
   isGoogleCalendarReadEnabled,
+  isThreadSingleFlightEnabled,
   isTopicGatedPostingEnabled,
+  isApprovalReasonsEnabled,
+  isCommSendInternalDefaultEnabled,
 } from "@/lib/feature-flags";
 import { checkTopicGate, buildTopicGateApprovalMetadata } from "@/lib/decision-workflow/topic-gate";
+import { getOrgChannel } from "@/lib/data/directory";
+import { buildApprovalReasons, toAiFacingApprovalReasons, topicGateMessageJaForAi, type AiApprovalReason, type ApprovalReason } from "@/lib/approvals/approval-reasons";
+import { categorizeMatchedTopics } from "@/lib/approvals/sensitive-topic-categories";
+import { isInformationClass } from "@/lib/gateway/information-class";
 import { getOrgApprovalKindRoutesPolicy } from "@/lib/approval-kind-routes/data";
 import { getToolApprovalKind } from "@/lib/approval-kind-routes/tool-kind-map";
 import {
@@ -196,6 +212,15 @@ export type GatewayInvokeResult = {
   httpStatus: number;
   body: Record<string, unknown>;
 };
+
+/** Thread single-flight stop (nothing sent): audit + error body with nextStep / retryable. */
+async function threadGuardStopResponse(stop: ThreadGuardStop, ctx: ThreadGuardAuditCtx): Promise<GatewayInvokeResult> {
+  await auditThreadGuardStop(stop, ctx);
+  return jsonResult(
+    { ...stop.body, needs_approval: false, employeeId: ctx.employeeId, tool: ctx.tool, purpose: ctx.purpose, jobId: ctx.jobId },
+    stop.httpStatus
+  );
+}
 
 function jsonResult(
   body: Record<string, unknown>,
@@ -357,6 +382,28 @@ function extractChannelIdForTopicGate(body: GatewayInvokeRequest): string | null
  * Returns both the effective verdict (external-safe for behavior) and
  * the dual verdict (for audit when channelMixed).
  */
+/**
+ * 木村 B (COMM_SEND_INTERNAL_DEFAULT_ENABLED, default OFF): is the comm.send
+ * destination one Staffpass itself verified as internal? Only the channel
+ * ledger of the CREDENTIAL org (never conversation.orgId) counts: an internal,
+ * not-mixed Slack channel or internal DM route. Party ledger / team rule alone
+ * are not "verified". The audience must also have resolved to internal, so an
+ * external speaker in a ledger-internal channel stays confidential.
+ */
+async function isVerifiedInternalSlackDestination(input: {
+  orgId: string;
+  tool: string;
+  ctx: ReturnType<typeof parseConversationContext>;
+  audience: string;
+}): Promise<boolean> {
+  if (input.tool !== "comm.send" || !isCommSendInternalDefaultEnabled()) return false;
+  if (input.audience !== "internal") return false;
+  const ctx = input.ctx;
+  if (!ctx || ctx.surface !== "slack" || !ctx.slackChannelId || !input.orgId) return false;
+  const row = await getOrgChannel(input.orgId, "slack", ctx.slackChannelId).catch(() => null);
+  return Boolean(row && row.orgId === input.orgId && row.classification === "internal" && row.mixed === false);
+}
+
 async function evaluateInvokeEgress(input: {
   orgId: string;
   tool: string;
@@ -376,6 +423,12 @@ async function evaluateInvokeEgress(input: {
     tool: input.tool,
     body: input.body,
     audience: audience.audience,
+    verifiedInternalDestination: await isVerifiedInternalSlackDestination({
+      orgId: input.orgId,
+      tool: input.tool,
+      ctx,
+      audience: audience.audience,
+    }),
   });
 
   const dualEgress = evaluateDualEgress({
@@ -648,6 +701,12 @@ export type RunGatewayInvokeInput = {
   body: GatewayInvokeRequest;
   /** Optional credential id from Bearer resolution */
   credentialId?: string | null;
+  /**
+   * MCP OAuth (PR-7): when the caller authenticated with an OAuth access token,
+   * every audit row of this invoke carries authMethod/oauthGrantId/oauthClientHost.
+   * gb_emp_ callers leave this unset → audit rows unchanged.
+   */
+  oauth?: { grantId: string; clientHost: string } | null;
 };
 
 /**
@@ -666,6 +725,12 @@ async function secretAuditOrgId(employeeId: string): Promise<string | null> {
   }
 }
 
+/** 木村 #293 decision 2: approved replies on surfaces the gateway cannot deliver to. */
+const APPROVED_REPLY_SURFACE_NOT_SUPPORTED = "approved_reply_surface_not_supported";
+const APPROVED_REPLY_SURFACE_NOT_SUPPORTED_JA = "この窓口では承認後の返信にまだ対応していません。承認済みの返信は送信していません。";
+const APPROVED_REPLY_SURFACE_NOT_SUPPORTED_NEXT_STEP =
+  "この窓口では承認後の返信にまだ対応していません。この承認IDで再実行しても送信されません。必要なら承認不要の内容で返信するか、担当者に直接対応を依頼してください。";
+
 /**
  * Core Gateway enforcement. Callers must already resolve employeeId from an
  * authenticated source (Bearer 社員証, or server-side admin/session context).
@@ -674,7 +739,21 @@ async function secretAuditOrgId(employeeId: string): Promise<string | null> {
 export async function runGatewayInvoke(
   input: RunGatewayInvokeInput
 ): Promise<GatewayInvokeResult> {
-  const body = input.body;
+  // One users.info per (org, Slack user) per invoke; see fetchVerifiedSlackUserTeamId.
+  return withSlackUserTeamMemo(() => runGatewayInvokeInner(input));
+}
+
+async function runGatewayInvokeInner(
+  input: RunGatewayInvokeInput
+): Promise<GatewayInvokeResult> {
+  // `let`: a U… Slack recipient may be resolved to the internal DM route below
+  // (SLACK_U_TO_DM_SEND_ENABLED + SLACK_DM_AUTOROUTE_ENABLED); every later layer then sees the same D….
+  const oauthMeta = input.oauth
+    ? { authMethod: "oauth", oauthGrantId: input.oauth.grantId, oauthClientHost: input.oauth.clientHost }
+    : null;
+  const appendAuditEvent: typeof appendAuditEventBase = (event) =>
+    appendAuditEventBase(oauthMeta ? { ...event, metadata: { ...(event.metadata ?? {}), ...oauthMeta } } : event);
+  let body = input.body;
   const employeeId = (input.employeeId || "").trim();
 
   if (!employeeId) {
@@ -804,12 +883,13 @@ export async function runGatewayInvoke(
     );
   }
 
-  // Bot invokes carry a 社員証 but no browser session.
-  // Prefer session org, else binding.orgId, else admin PK lookup.
+  // The 社員証 (badge) is the principal: its org drives billing, plan gate,
+  // audit and the approval row. A browser session cookie never overrides it;
+  // a cookie naming a different org is refused below (session_org_mismatch).
   const binding = await getBinding(employeeId);
-  const orgId =
-    (await getCurrentOrgId()) || binding?.orgId || decision.binding.orgId || null;
-  let employee = await getEmployee(employeeId, orgId);
+  const sessionOrgId = await getCurrentOrgId();
+  const badgeOrgId = binding?.orgId || decision.binding.orgId || null;
+  let employee = await getEmployee(employeeId, badgeOrgId || sessionOrgId);
   if (!employee) {
     employee = await getEmployeeById(employeeId);
   }
@@ -827,6 +907,76 @@ export async function runGatewayInvoke(
         tool,
       },
       401
+    );
+  }
+
+  const orgId: string = employee.orgId;
+  if (sessionOrgId && sessionOrgId.trim() && sessionOrgId.trim().toLowerCase() !== orgId.toLowerCase()) {
+    await appendAuditEvent({
+      orgId,
+      employeeId,
+      credentialId: input.credentialId || employee.credentialId,
+      action: "gateway.session_org_mismatch",
+      purpose,
+      summary: `${tool} をログイン中の組織と社員証の組織の不一致で拒否（fail-closed）`,
+      metadata: { tool, jobId, code: "session_org_mismatch" },
+    }).catch(() => undefined);
+    return jsonResult(
+      {
+        ok: false,
+        code: "session_org_mismatch",
+        error: "session_org_mismatch",
+        message:
+          "The signed-in organization does not match the organization of this credential; the request was refused (nothing was sent).",
+        nextStepJa:
+          "ログイン中の組織と社員証の組織が違います。社員証の組織でログインし直すか、ログアウトした状態（社員証のみ）で同じ jobId で再実行してください。",
+        employeeId,
+        tool,
+        purpose,
+        jobId,
+      },
+      403
+    );
+  }
+
+  // Tenant isolation (BOLA): the org that drives audience / ledger / Slack
+  // token / dedup / approval snapshot is the authenticated employee's org.
+  // An AI-supplied conversation.orgId naming another org is refused before
+  // anything is read or written for it. The answer never depends on whether
+  // that org exists (no lookup), and only a hash of it is audited, under the
+  // authenticated org.
+  const principalOrgId = employee.orgId;
+  const orgMismatch = conversationOrgMismatch(body.conversation, principalOrgId);
+  if (orgMismatch) {
+    await appendAuditEvent({
+      orgId: principalOrgId,
+      employeeId,
+      credentialId: input.credentialId || employee.credentialId,
+      action: "gateway.conversation_org_mismatch",
+      purpose,
+      summary: `${tool} を会話コンテキストの組織不一致で拒否（fail-closed）`,
+      metadata: {
+        tool,
+        jobId,
+        code: "conversation_org_mismatch",
+        suppliedOrgIdSha256: createHash("sha256").update(orgMismatch.suppliedOrgId).digest("hex"),
+      },
+    }).catch(() => undefined);
+    return jsonResult(
+      {
+        ok: false,
+        code: "conversation_org_mismatch",
+        error: "conversation_org_mismatch",
+        message:
+          "conversation.orgId does not match the organization of this credential; the request was refused (nothing was sent).",
+        nextStepJa:
+          "conversation.orgId は省略してください（社員証の組織が自動で使われます）。別の組織の会話には送信できません。orgId を外して同じ jobId で再実行してください。",
+        employeeId,
+        tool,
+        purpose,
+        jobId,
+      },
+      403
     );
   }
 
@@ -1145,6 +1295,31 @@ export async function runGatewayInvoke(
     }
   }
 
+  // Thread single-flight (木村 #286 decision 2): an approval closed at fulfil
+  // because the thread moved on is terminal. A re-run with its approvalId
+  // sends nothing and opens no new approval; the AI re-reads the thread and
+  // files a new request (new jobId) if a reply is still needed. Own approvals
+  // only (getApprovalById is org-scoped; another employee's id falls through).
+  if (
+    priorApproval &&
+    priorApproval.status === "superseded" &&
+    priorApproval.employeeId === employeeId &&
+    closedByThreadMovedOn(priorApproval.metadata)
+  ) {
+    return jsonResult(
+      {
+        ...threadGuardStopBody(THREAD_MOVED_ON, { approvalStatus: "superseded" }),
+        approvalId: priorApproval.id,
+        needs_approval: false,
+        employeeId,
+        tool,
+        purpose,
+        jobId,
+      },
+      409
+    );
+  }
+
   const actionCounts = await getActionCounts({
     orgId: orgId || employee.orgId,
     employeeId,
@@ -1217,6 +1392,53 @@ export async function runGatewayInvoke(
     });
   }
 
+  // Item C (SLACK_U_TO_DM_SEND_ENABLED, default OFF, and only with
+  // SLACK_DM_AUTOROUTE_ENABLED ON; otherwise a no-op = main): a U… in the Slack channel
+  // field → the employee's internal 1:1 DM route, only for an internal
+  // slack_user of the org's party ledger (re-verified as a 1:1 IM with that
+  // user). Anyone else stops here with a nextStep. Before egress so egress,
+  // dedup and thread single-flight all see the resolved D….
+  if (isAudienceGatedTool(toolDef)) {
+    const uRecipient = await resolveSlackUserRecipient({ orgId: orgId || employee.orgId, employee, body });
+    if (uRecipient.kind === "stopped") {
+      await appendAuditEvent({
+        orgId: orgId || employee.orgId,
+        employeeId,
+        credentialId: input.credentialId || employee.credentialId,
+        action: "slack.post_failed",
+        purpose,
+        summary: `${tool} の U… 宛てを社内 DM に引き当てずに停止（${uRecipient.code}）`,
+        metadata: {
+          tool,
+          jobId,
+          code: uRecipient.code,
+          reason: uRecipient.reason,
+          counterpartSlackUserId: uRecipient.counterpartSlackUserId,
+          dmAutoroute: true,
+        },
+      });
+      return jsonResult(
+        {
+          ok: false,
+          code: uRecipient.code,
+          error: uRecipient.code,
+          message: uRecipient.messageJa,
+          reason: uRecipient.reason,
+          nextStep: uRecipient.nextStep,
+          nextStepJa: uRecipient.nextStepJa,
+          retryable: uRecipient.retryable,
+          needs_approval: false,
+          employeeId,
+          tool,
+          purpose,
+          jobId,
+        },
+        uRecipient.httpStatus
+      );
+    }
+    if (uRecipient.kind === "resolved") body = uRecipient.body;
+  }
+
   // Project wall (WHICH) before Slack post. Deny wins over class/voice allow.
   // Internal dest does not bypass. Composed with audience × class, not a rewrite.
   const projectScope = await evaluateProjectScope({
@@ -1256,7 +1478,7 @@ export async function runGatewayInvoke(
   // slack.* aliases share this resolver — tool name is not the boundary.
   // S2: evaluateInvokeEgress now returns both egress (effective) and dualEgress (audit).
   const { egress, dualEgress } = await evaluateInvokeEgress({
-    orgId: orgId || employee.orgId,
+    orgId: principalOrgId,
     tool,
     toolDef,
     body,
@@ -1275,7 +1497,7 @@ export async function runGatewayInvoke(
       metadata: { tool, jobId, egress, dualEgress, managerId },
     });
 
-    const effectiveOrgId = orgId || employee.orgId;
+    const effectiveOrgId = principalOrgId;
     const ledgerRetry = await attemptAudienceLedgerRetry(
       {
         orgId: effectiveOrgId,
@@ -1795,6 +2017,37 @@ export async function runGatewayInvoke(
   // P1: Topic gate can force approval for posts with sensitive topics
   const topicGateForceApproval = topicGateResult?.requiresApproval ?? false;
 
+  // 木村 B: APPROVAL_REASONS_ENABLED → every reason, computed here only (never
+  // from the request). Describes the decision; never changes it.
+  const requestedArgs = (body.args && typeof body.args === "object" ? body.args : {}) as Record<string, unknown>;
+  const requestedInformationClass =
+    (isInformationClass(body.informationClass) && body.informationClass) ||
+    (isInformationClass(requestedArgs.informationClass) && requestedArgs.informationClass) ||
+    (isInformationClass(requestedArgs.class) && requestedArgs.class) ||
+    null;
+  const toolLevelHuman = !mailPolicyLiftsToolDefault && perToolHuman;
+  const approvalReasonsFields = (): { approvalReasons: ApprovalReason[] } | Record<string, never> =>
+    isApprovalReasonsEnabled()
+      ? {
+          approvalReasons: buildApprovalReasons({
+            topicGate: topicGateResult,
+            egress,
+            employeeAlwaysHuman: employee.approvalPolicy === "always_human",
+            toolAlwaysHuman: toolLevelHuman ? (toolHint === "always_human" ? "tool_setting" : "tool_default") : null,
+            actionLimit,
+            spend,
+            mailPolicyForceApproval,
+            requestedInformationClass,
+          }),
+        }
+      : {};
+  // AI-facing copy (402 body / MCP): topic_gate as category names only. Metadata keeps keywords (card).
+  const aiApprovalReasonsFields = (): { approvalReasons: AiApprovalReason[] } | Record<string, never> => {
+    const full = approvalReasonsFields();
+    return "approvalReasons" in full ? { approvalReasons: toAiFacingApprovalReasons(full.approvalReasons) } : {};
+  };
+  const topicGateCategories = topicGateResult ? categorizeMatchedTopics(topicGateResult.matchedTopics) : [];
+
   const forceApproval =
     mailPolicyForceApproval ||
     (mailPolicyLiftsToolDefault ? false : perToolHuman) ||
@@ -1850,10 +2103,10 @@ export async function runGatewayInvoke(
         amountJpy: Number.isFinite(amountJpy) ? amountJpy : null,
         message: actionLimit.decision === "needs_approval" ? actionLimit.message : (spend?.message ?? "発注には人の確認が必要です"),
         parentApprovalId: parentApprovalId || null,
-        metadata: { ...invokeMetadata, sodVerdict, actionLimit, egress, dualEgress, managerId },
+        metadata: { ...invokeMetadata, sodVerdict, actionLimit, egress, dualEgress, managerId, ...approvalReasonsFields() },
         body,
         egress,
-        extra: { spend, actionLimit, sodVerdict, egress, dualEgress, managerId, ...(voice ? { voice } : {}), toolKind: toolDef.kind, approvalPolicy: employee.approvalPolicy },
+        extra: { spend, actionLimit, sodVerdict, egress, dualEgress, managerId, ...(voice ? { voice } : {}), toolKind: toolDef.kind, approvalPolicy: employee.approvalPolicy, ...aiApprovalReasonsFields() },
       });
     }
 
@@ -1869,7 +2122,7 @@ export async function runGatewayInvoke(
       risk: topicGateForceApproval ? "high" : inferRiskForTool(tool),
       message:
         topicGateForceApproval && topicGateResult
-          ? `${tool} は機密話題（${topicGateResult.matchedTopics.join(", ")}）を含むため承認が必要です`
+          ? `${tool} は${topicGateMessageJaForAi(topicGateCategories).replace(/。$/, "")}`
           : actionLimit.decision === "needs_approval"
             ? actionLimit.message
             : tool === "browser.use"
@@ -1891,6 +2144,7 @@ export async function runGatewayInvoke(
               },
             }
           : {}),
+        ...approvalReasonsFields(),
       },
       body,
       egress,
@@ -1923,12 +2177,14 @@ export async function runGatewayInvoke(
           : {}),
         ...(topicGateResult?.requiresApproval
           ? {
+              // AI-facing: category names only, never the matched keywords.
               topicGate: {
-                matchedTopics: topicGateResult.matchedTopics,
+                categories: topicGateCategories,
                 reason: topicGateResult.reason,
               },
             }
           : {}),
+        ...aiApprovalReasonsFields(),
       },
     });
   }
@@ -1946,7 +2202,7 @@ export async function runGatewayInvoke(
       risk: "high",
       message: egress.messageJa,
       parentApprovalId: parentApprovalId || null,
-      metadata: { ...invokeMetadata, sodVerdict, actionLimit, egress, dualEgress, managerId },
+      metadata: { ...invokeMetadata, sodVerdict, actionLimit, egress, dualEgress, managerId, ...approvalReasonsFields() },
       body,
       egress,
       extra: {
@@ -1958,6 +2214,7 @@ export async function runGatewayInvoke(
         dualEgress,
         managerId,
         ...(voice ? { voice } : {}),
+        ...aiApprovalReasonsFields(),
       },
     });
   }
@@ -2005,6 +2262,30 @@ export async function runGatewayInvoke(
     const fulfilled = await fulfillApprovedInvoke(priorApproval, {
       attachmentHandledByCaller: isAudienceGatedTool(toolDef),
     });
+    // Rate-limited (nothing posted): say how long to wait; re-running earlier stops before the provider.
+    if (fulfilled && !fulfilled.ok && fulfilled.error === PROVIDER_RATE_LIMITED) {
+      return jsonResult({ ...rateLimitedBody({ retryAfterSeconds: fulfilled.retryAfterSeconds ?? RETRY_AFTER_DEFAULT_SECONDS }),
+        approvalId: priorApproval.id, needs_approval: false, employeeId, tool, purpose, jobId }, 429);
+    }
+    if (fulfilled && !fulfilled.ok && isThreadGuardCode(fulfilled.error)) {
+      // Thread single-flight stopped the approved post at fulfil (nothing sent).
+      return jsonResult({ ...threadGuardStopBody(fulfilled.error, fulfilled.threadGuard ?? {}),
+        approvalId: priorApproval.id, needs_approval: false, employeeId, tool, purpose, jobId },
+        fulfilled.error === THREAD_GUARD_UNAVAILABLE ? 503 : 409);
+    }
+    if (!fulfilled?.ok && isAudienceGatedTool(toolDef)) {
+      // Approved LINE / Telegram / mail replies: the gateway has no delivery
+      // for them yet, so they stay fail-closed (nothing sent). Tell the AI so
+      // in plain words instead of a Slack-only code (木村 #293 decision 2).
+      const approvedSurface = (parseInvokeSnapshot(priorApproval.metadata)?.conversation?.surface || "").toLowerCase();
+      if (approvedSurface && approvedSurface !== "slack") {
+        return jsonResult({ ok: false, code: fulfilled?.error || "approval_execution_failed",
+          error: fulfilled?.error || "approval_execution_failed", reasonCode: APPROVED_REPLY_SURFACE_NOT_SUPPORTED,
+          message: APPROVED_REPLY_SURFACE_NOT_SUPPORTED_JA, retryable: false, nextAction: "stop",
+          nextStep: APPROVED_REPLY_SURFACE_NOT_SUPPORTED_NEXT_STEP, approvalId: priorApproval.id,
+          employeeId, tool, purpose, jobId }, 409);
+      }
+    }
     if (!fulfilled?.ok) return jsonResult({ ok: false, code: fulfilled?.error || "approval_execution_failed",
       error: fulfilled?.error || "approval_execution_failed", employeeId, tool, purpose, jobId }, 409);
     if (isAudienceGatedTool(toolDef)) {
@@ -2026,9 +2307,11 @@ export async function runGatewayInvoke(
   // approval of a needs_approval egress. Deny stays fail-closed above.
   // Notify inbox is a different plane — never post approvals through this adapter.
   let conversationDelivery: ConversationDelivery | undefined;
+  /** #293 review item 2: no read point at all → sent, with a nextStep to pass readThroughTs. */
+  let threadGuardHint: { readPoint: "unknown"; nextStep: string } | undefined;
   let threadTsSource: "client" | "wake_stash" | "none" | undefined;
   if (isAudienceGatedTool(toolDef)) {
-    const ctx = parseConversationContext(body, orgId || employee.orgId);
+    const ctx = parseConversationContext(body, principalOrgId);
     const args =
       body.args && typeof body.args === "object"
         ? (body.args as Record<string, unknown>)
@@ -2192,6 +2475,36 @@ export async function runGatewayInvoke(
         threadTsSource = "client";
       }
 
+      // THREAD_SINGLE_FLIGHT_ENABLED: one send per thread (lease) and the
+      // "already moved on" check, before the dedup claim so a stop here leaves
+      // no ledger row. The lease is released in `finally` on every path below.
+      const threadSend = await beginThreadSend({
+        orgId: orgId || employee.orgId,
+        employeeId,
+        jobId,
+        keyInput: {
+          orgId: orgId || employee.orgId,
+          surface: "slack",
+          slackChannelId: dest,
+          threadId: looksLikeSlackTs(replyThreadTs) ? replyThreadTs : undefined,
+        },
+        readThrough: readThroughFromBody(body as unknown as Record<string, unknown>),
+      });
+      if (threadSend.kind === "stop") {
+        return threadGuardStopResponse(threadSend, {
+          orgId: orgId || employee.orgId, employeeId,
+          credentialId: input.credentialId || employee.credentialId, purpose, tool, jobId, phase: "invoke",
+        });
+      }
+      await auditThreadGuardHeld(threadSend, {
+        orgId: orgId || employee.orgId, employeeId,
+        credentialId: input.credentialId || employee.credentialId, purpose, tool, jobId, phase: "invoke",
+      });
+      if (threadSend.kind === "held" && threadSend.readPointUnknown) {
+        threadGuardHint = { readPoint: "unknown", nextStep: NEXT_STEP_READ_POINT_UNKNOWN };
+      }
+      let threadSent: { sent: boolean; messageTs?: string } = { sent: false };
+      try {
       // COMM_REPLY_DEDUP_ENABLED: atomic claim right before the post (two
       // concurrent identical sends → only one is posted). Fail closed.
       const dedupClaim = await claimDirectCommReplySend(commReplyDedup, tool);
@@ -2222,6 +2535,7 @@ export async function runGatewayInvoke(
         await finishDirectCommReplySend(commReplyDedup, dedupClaimId, "uncertain", { jobId });
         throw error;
       }
+      if (posted.ok && posted.delivery === "slack") threadSent = { sent: true, messageTs: posted.ts };
       // v1: failed releases the claim. v2: only a provider-confirmed "not sent"
       // releases it; an unknown outcome is kept (uncertain) and reported.
       const ledgerOutcome = ledgerOutcomeAfterPost(commReplyDedup, posted);
@@ -2253,6 +2567,32 @@ export async function runGatewayInvoke(
             jobId,
           },
           502
+        );
+      }
+      if (!posted.ok && posted.retryAfterSeconds !== undefined) {
+        // Rate-limited (not_sent, claim released above): no automatic retry —
+        // the AI is told the provider's wait.
+        await appendAuditEvent({
+          orgId: orgId || employee.orgId,
+          employeeId,
+          credentialId: input.credentialId || employee.credentialId,
+          action: "slack.post_failed",
+          purpose,
+          summary: "Slack会話投稿がレート制限で未送信（待機後に再送可）",
+          metadata: { tool, jobId, error: posted.error, dest, code: PROVIDER_RATE_LIMITED, retryAfterSeconds: posted.retryAfterSeconds },
+        });
+        return jsonResult(
+          {
+            ...rateLimitedBody({ retryAfterSeconds: posted.retryAfterSeconds, providerError: posted.error }),
+            needs_approval: false,
+            egress,
+            ...(voice ? { voice } : {}),
+            employeeId,
+            tool,
+            purpose,
+            jobId,
+          },
+          429
         );
       }
       if (!posted.ok) {
@@ -2312,21 +2652,58 @@ export async function runGatewayInvoke(
           timestamp: originalTs,
         }).catch(() => undefined);
       }
+      } finally {
+        if (threadSend.kind === "held") await threadSend.handle.finish(threadSent);
       }
-    } else if (!dest && egressAllowsPost && commReplyDedup.kind !== "off") {
+      }
+    } else if (!dest && egressAllowsPost && (commReplyDedup.kind !== "off" || isThreadSingleFlightEnabled())) {
       // Surfaces without a gateway post (LINE / Telegram / mail): the allowed
       // reply is delivered by the caller, so it is recorded here as sent.
-      const dedupClaim = await claimDirectCommReplySend(commReplyDedup, tool);
-      const dedupResponse = await directSendDedupResponse(dedupClaim, commReplyDedup, {
+      // Thread single-flight: same lease + moved-on check; the allowed reply is
+      // recorded as this employee's latest post (server time). The caller's
+      // delivery cannot be observed (no receipt), so the lease is HELD until its
+      // TTL rather than released at allowance (木村 #286 pre-flag item 3):
+      // another job reading the thread before the delivery lands gets
+      // thread_busy, not a stale "nothing new".
+      const threadSend = await beginThreadSend({
         orgId: orgId || employee.orgId,
         employeeId,
-        credentialId: input.credentialId || employee.credentialId,
-        purpose,
-        tool,
         jobId,
+        keyInput: conversationKeyInputFromBody(body, orgId || employee.orgId),
+        readThrough: readThroughFromBody(body as unknown as Record<string, unknown>),
       });
-      if (dedupResponse) return dedupResponse;
-      await finishDirectCommReplySend(commReplyDedup, dedupClaim.state === "claimed" ? dedupClaim.id : null, "sent", { jobId });
+      if (threadSend.kind === "stop") {
+        return threadGuardStopResponse(threadSend, {
+          orgId: orgId || employee.orgId, employeeId,
+          credentialId: input.credentialId || employee.credentialId, purpose, tool, jobId, phase: "invoke",
+        });
+      }
+      await auditThreadGuardHeld(threadSend, {
+        orgId: orgId || employee.orgId, employeeId,
+        credentialId: input.credentialId || employee.credentialId, purpose, tool, jobId, phase: "invoke",
+      });
+      if (threadSend.kind === "held" && threadSend.readPointUnknown) {
+        threadGuardHint = { readPoint: "unknown", nextStep: NEXT_STEP_READ_POINT_UNKNOWN };
+      }
+      let allowed = false;
+      try {
+        if (commReplyDedup.kind !== "off") {
+          const dedupClaim = await claimDirectCommReplySend(commReplyDedup, tool);
+          const dedupResponse = await directSendDedupResponse(dedupClaim, commReplyDedup, {
+            orgId: orgId || employee.orgId,
+            employeeId,
+            credentialId: input.credentialId || employee.credentialId,
+            purpose,
+            tool,
+            jobId,
+          });
+          if (dedupResponse) return dedupResponse;
+          await finishDirectCommReplySend(commReplyDedup, dedupClaim.state === "claimed" ? dedupClaim.id : null, "sent", { jobId });
+        }
+        allowed = true;
+      } finally {
+        if (threadSend.kind === "held") await threadSend.handle.finish({ sent: allowed }, { holdLease: allowed });
+      }
     }
   }
 
@@ -2353,7 +2730,7 @@ export async function runGatewayInvoke(
     fileAttachmentReceived = rerunAttachment.received;
     fileUploadResponse = rerunAttachment.fileUpload;
   } else if (fileAttachmentReceived && body.fileAttachment) {
-    const ctx = parseConversationContext(body, orgId || employee.orgId);
+    const ctx = parseConversationContext(body, principalOrgId);
     const dest = ctx?.slackChannelId || ctx?.slackUserId || "";
     const replyThreadTs = resolveConversationThreadId({
       conversation: ctx,
@@ -2556,21 +2933,29 @@ export async function runGatewayInvoke(
         );
       }
       if (!posted.ok) {
+        const snsWait = posted.retryAfterSeconds;
         await appendAuditEvent({
           orgId: orgId || employee.orgId,
           employeeId,
           credentialId: input.credentialId || employee.credentialId,
           action: "sns.publish_failed",
           purpose,
-          summary: "SNS投稿に失敗",
+          summary: snsWait !== undefined ? "SNS投稿がレート制限で未送信（待機後に再送可）" : "SNS投稿に失敗",
           metadata: {
             tool,
             jobId,
             error: posted.error,
             surface: posted.surface,
             phase: priorApprovalOk ? "reinvoke" : "auto",
+            ...(snsWait !== undefined ? { code: PROVIDER_RATE_LIMITED, retryAfterSeconds: snsWait } : {}),
           },
         });
+        if (snsWait !== undefined) {
+          return jsonResult(
+            { ...rateLimitedBody({ retryAfterSeconds: snsWait, providerError: posted.error }), needs_approval: false, employeeId, tool, purpose, jobId },
+            429
+          );
+        }
         return jsonResult(
           {
             ok: false,
@@ -2619,7 +3004,7 @@ export async function runGatewayInvoke(
   }
 
   if (!priorApprovalOk) {
-    const destCtx = parseConversationContext(body, orgId || employee.orgId);
+    const destCtx = parseConversationContext(body, principalOrgId);
     const deliveryChannel =
       conversationDelivery && "channel" in conversationDelivery
         ? conversationDelivery.channel
@@ -3024,6 +3409,7 @@ export async function runGatewayInvoke(
       ? { projectAccess: projectScope.projectAccess }
       : {}),
     conversationDelivery,
+    ...(threadGuardHint ? { threadGuard: threadGuardHint } : {}),
     snsDelivery,
     ...(duplicateWarning ? { duplicateWarning } : {}),
     result:

@@ -18,6 +18,8 @@ const ACTION_LABEL: Record<string, string> = {
   "admin.role": "職務案",
   "credential.issued": "雇用",
   "credential.rotated": "再発行",
+  "oauth.consent_granted": "AI接続",
+  "oauth.grant_revoked": "接続取消",
   "employee.created": "雇用",
   "employee.updated": "権限",
   "employee.terminated": "失効",

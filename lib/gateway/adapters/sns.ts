@@ -11,6 +11,8 @@
  * Org table: org_sns_adapters / org_sns_adapter_secrets.
  */
 
+import { retryAfterSecondsFromHeaders } from "./rate-limit";
+
 export const SNS_SURFACES = ["x", "note", "linkedin", "youtube"] as const;
 export type SnsSurface = (typeof SNS_SURFACES)[number];
 
@@ -47,10 +49,13 @@ export type SnsPublishResult =
       surface?: SnsSurface;
       /**
        * Duplicate post guard (5): "not_sent" only when nothing was submitted or
-       * the API refused it with a 4xx (except 408 / 429, kept ambiguous like
-       * Slack ratelimited); 5xx, timeouts and network errors are "unknown".
+       * the API refused it with a JSON 4xx other than 408 — 429 included
+       * (木村 #278 answers 3, 2026-10-05, reverses the 10/4 call); 408, 5xx,
+       * non-JSON answers, timeouts and network errors are "unknown".
        */
       sendState?: "not_sent" | "unknown";
+      /** Only on a 429 (not_sent): the provider's wait, clamped (./rate-limit.ts). */
+      retryAfterSeconds?: number;
     };
 
 export function parseSnsSurface(raw: unknown): SnsSurface | null {
@@ -153,12 +158,23 @@ async function postToX(token: string, text: string): Promise<SnsPublishResult> {
       body: JSON.stringify({ text }),
       signal: AbortSignal.timeout(SNS_TIMEOUT_MS),
     });
-    const body = (await response.json().catch(() => ({}))) as {
+    type XBody = {
       data?: { id?: string };
       errors?: Array<{ message?: string; detail?: string }>;
       title?: string;
       detail?: string;
     };
+    let body: XBody = {};
+    let jsonAnswer = false;
+    try {
+      const parsed: unknown = JSON.parse(await response.text());
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        body = parsed as XBody;
+        jsonAnswer = true;
+      }
+    } catch {
+      // non-JSON (proxy / CDN page): we cannot tell what the API did
+    }
     if (!response.ok) {
       const apiError =
         body.errors?.[0]?.message ||
@@ -166,12 +182,13 @@ async function postToX(token: string, text: string): Promise<SnsPublishResult> {
         body.detail ||
         body.title ||
         `http_${response.status}`;
-      const definite = response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429;
+      const definite = jsonAnswer && response.status >= 400 && response.status < 500 && response.status !== 408;
       return {
         ok: false,
         error: `X への投稿に失敗しました（${apiError}）`,
         surface: "x",
         sendState: definite ? "not_sent" : "unknown",
+        ...(definite && response.status === 429 ? { retryAfterSeconds: retryAfterSecondsFromHeaders(response.headers) } : {}),
       };
     }
     return {

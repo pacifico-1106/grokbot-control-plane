@@ -12,6 +12,8 @@ import {
 } from "@/lib/data";
 import { requireCapability } from "@/lib/team/demo-actor";
 import { resolveApprovalWithWorkflow } from "@/lib/approvals/workflow-integration";
+import { isApproverAuthorityEnabled } from "@/lib/feature-flags";
+import { approverAuthorityNextStepJa, approverAuthorityReplyJa } from "@/lib/approver-authority/reply";
 
 export const runtime = "nodejs";
 
@@ -34,6 +36,8 @@ export async function POST(
     result = await resolveApprovalWithWorkflow(id, "approved", gate.actor.email, orgId, {
       actorId: gate.actor.id,
       voterUserId: gate.actor.id || gate.actor.email,
+      // PR-D: the signed-in member is the approver to verify (flag ON only; OFF = today's call).
+      ...(isApproverAuthorityEnabled() ? { memberId: gate.actor.id } : {}),
     });
   } catch (error) {
     const code = (error as { code?: string }).code || (error instanceof Error ? error.message : "");
@@ -81,6 +85,15 @@ export async function POST(
     workflowApplied: result.workflowApplied,
     workflowComplete: result.workflowComplete,
   };
+
+  const authorityReply = result.ok && result.workflowComplete ? null : approverAuthorityReplyJa(result.reason);
+  if (authorityReply) {
+    // PR-D: same wording as Slack / LINE / Telegram.
+    response.reason = result.reason;
+    response.messageJa = authorityReply;
+    const nextStep = approverAuthorityNextStepJa(result.reason);
+    if (nextStep) response.nextStepJa = nextStep;
+  }
 
   if (result.progress) {
     response.workflow = {

@@ -466,6 +466,15 @@ export type AuditAction =
   | "credential.issued"
   | "credential.revoked"
   | "credential.rotated"
+  /** MCP OAuth (flag MCP_OAUTH_ENABLED). Metadata: client host, grant id, hash prefixes only. */
+  | "oauth.consent_granted"
+  | "oauth.consent_denied"
+  | "oauth.grant_revoked"
+  | "oauth.token_issued"
+  | "oauth.code_reuse_detected"
+  | "oauth.refresh_reuse_detected"
+  | "oauth.refresh_replay_in_grace"
+  | "oauth.dcr_global_cap_reached"
   | "tool.invoke"
   | "comm.delete.succeeded"
   | "comm.delete.already_deleted"
@@ -482,6 +491,10 @@ export type AuditAction =
   // Duplicate post guard v2 (hashes only)
   | "comm_reply.cross_employee_duplicate"
   | "comm_reply.post_outcome_unknown"
+  | "thread_guard.busy"
+  | "thread_guard.moved_on"
+  | "thread_guard.unavailable"
+  | "thread_guard.read_point_unknown"
   | "comm_reply.uncertain_released"
   | "approval.telegram_error"
   | "approval.snapshot_missing_attachment"
@@ -520,8 +533,12 @@ export type AuditAction =
   | "slack.user_token_channel_rewake_skipped"
   | "employee.sod_forced"
   | "employee.sod_override"
+  | "employee.project_access_refused"
+  | "information_asset.project_refused"
   | "action_limit.reached"
   | "action_limit.denied"
+  | "gateway.conversation_org_mismatch"
+  | "gateway.session_org_mismatch"
   | "billing.updated"
   | "email.sent"
   | "gateway.link_changed"
@@ -763,6 +780,17 @@ export interface ApprovalRequest {
   createdAt: string;
   resolvedAt: string | null;
   resolvedBy: string | null;
+  /**
+   * PR-D (APPROVER_AUTHORITY_ENABLED): required approver kind recorded at
+   * filing. null / absent = not an approver-authority target (or filed while OFF).
+   */
+  requiredApproverKind?: "owner_or_designated_admin" | "owner" | null;
+  /** PR-D: verified approver (org_members.id) stored at approval time. */
+  approverMemberId?: string | null;
+  /** PR-D: what the approver counted as when verified. */
+  approverRole?: "owner" | "designated_admin" | null;
+  /** PR-D: classification reasons, designated-admin endorsements, verification record. */
+  approverAuthority?: Record<string, unknown> | null;
 }
 
 export interface AuditEvent {

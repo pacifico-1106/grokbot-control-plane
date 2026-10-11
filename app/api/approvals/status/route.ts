@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { THREAD_MOVED_ON_CLOSE_REASON, closedWithoutSendInfo } from "@/lib/approvals/closed-without-send";
 import { getApprovalStatusByToken, runtimeModeLabel } from "@/lib/data";
 import { getApprovalWorkflowProgress } from "@/lib/approval-workflow";
 import { parseFulfillment } from "@/lib/approvals/fulfill";
@@ -167,5 +168,8 @@ function closedWithoutSendField(metadata: Record<string, unknown> | null | undef
   const closed = metadata?.closedWithoutSend;
   if (!closed || typeof closed !== "object" || Array.isArray(closed)) return {};
   const reason = (closed as Record<string, unknown>).reason;
-  return typeof reason === "string" ? { closedWithoutSend: { reason } } : {};
+  if (typeof reason !== "string") return {};
+  // Thread single-flight (#286 decision 2): say it was not sent because the thread moved on.
+  const info = reason === THREAD_MOVED_ON_CLOSE_REASON ? closedWithoutSendInfo(metadata) : null;
+  return { closedWithoutSend: info ? { reason, messageJa: info.messageJa, nextStep: info.nextStep } : { reason } };
 }

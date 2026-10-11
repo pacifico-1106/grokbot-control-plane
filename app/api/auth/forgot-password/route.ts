@@ -12,6 +12,12 @@ import {
 
 export const runtime = "nodejs";
 
+/** Supabase error code / class name (e.g. over_email_send_rate_limit, AuthApiError); anything else → "invalid". */
+function safeErrorId(value: unknown): string | null {
+  if (value === undefined || value === null || value === "") return null;
+  return typeof value === "string" && /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(value) ? value : "invalid";
+}
+
 /**
  * "Forgot password" → Supabase resetPasswordForEmail with an explicit
  * redirectTo of <canonical>/auth/confirm (prod: https://staffpass.sealith.com/auth/confirm).
@@ -48,7 +54,12 @@ export async function POST(req: Request) {
     redirectTo: authConfirmUrl(),
   });
   if (error) {
-    console.warn("[auth] resetPasswordForEmail failed", { status: error.status ?? null });
+    // Ids only: never the email, token, link or error.message (which can echo them).
+    console.warn("[auth] resetPasswordForEmail failed", {
+      status: typeof error.status === "number" ? error.status : null,
+      code: safeErrorId((error as { code?: unknown }).code),
+      name: safeErrorId(error.name),
+    });
   }
   return done;
 }

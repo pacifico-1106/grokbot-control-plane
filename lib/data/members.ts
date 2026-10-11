@@ -80,7 +80,7 @@ type MemberWriteFields = {
  */
 export type MemberWriteExpectation =
   | "new"
-  | { role: OrgMember["role"]; capabilities: readonly string[] };
+  | { role: OrgMember["role"]; capabilities: readonly string[]; status?: OrgMember["status"] };
 
 export class MemberConcurrentModificationError extends Error {
   constructor() {
@@ -120,6 +120,7 @@ export async function writeMemberRow(
       !current ||
       current.orgId !== orgId ||
       current.role !== expected.role ||
+      (expected.status !== undefined && current.status !== expected.status) ||
       !sameCapabilitySet(current.capabilities, expected.capabilities)
     ) {
       throw new MemberConcurrentModificationError();
@@ -151,12 +152,14 @@ export async function writeMemberRow(
   if (expected !== "new") {
     if (!isUuid(member.id)) throw new Error("member_upsert_failed");
     const expectedCaps = [...new Set(expected.capabilities)];
-    const { data, error } = await admin
+    let query = admin
       .from("org_members")
       .update(writeFields)
       .eq("id", member.id)
       .eq("org_id", orgId)
-      .eq("role", expected.role)
+      .eq("role", expected.role);
+    if (expected.status !== undefined) query = query.eq("status", expected.status);
+    const { data, error } = await query
       .contains("capabilities", expectedCaps)
       .containedBy("capabilities", expectedCaps)
       .select("*")

@@ -1,4 +1,6 @@
 import { consumeAdminApprovalSecret } from "@/lib/admin-mcp/consume-secret";
+import { handleDesignatedAdminsTool, isDesignatedAdminsTool } from "@/lib/admin-mcp/designated-admins-tool";
+import { handlePromoteOwnerTool, PROMOTE_OWNER_TOOL } from "@/lib/admin-mcp/promote-owner-tool";
 import { canReadAdminApproval } from "@/lib/admin-mcp/result-authority";
 import { assertAdminToolAllowedForPlan } from "@/lib/billing/plan-gate";
 /**
@@ -70,6 +72,15 @@ import { parseApprovalChannelId } from "@/lib/employees/approval-inbox";
 import { parseRolesProposeInput } from "@/lib/mcp/roles-propose";
 import { ALL_SCOPES } from "@/lib/employees/policy-draft";
 import { ADMIN_AUDIT_CLASS } from "@/lib/admin-mcp/audit-class";
+import {
+  boundToRequestingAdmin,
+  buildPolicyPatchCard,
+  parsePolicyPatchArgs,
+  policyPatchCardTooLong,
+  policyPatchInputSchema,
+  POLICY_PATCH_CARD_KEY,
+} from "@/lib/admin-mcp/policy-patch-guard";
+import { getOrgSodWarnPolicy } from "@/lib/data/org-context";
 import { getEffectiveReplyPolicy, type ReplyPolicySource } from "@/lib/data/reply-policy";
 import { getEffectiveMailPolicy, type MailPolicySource } from "@/lib/data/mail-policy";
 import { getOrgInternalAudienceRule } from "@/lib/data/internal-audience-rule";
@@ -158,6 +169,10 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
         actionLimits: { type: "object", additionalProperties: true },
         spend: { type: "object", additionalProperties: true },
         allowedAccounts: { type: "array" },
+        approvalNotifyEmail: {
+          type: "string",
+          description: "Optional. Approval-result email. Must be the address of an ACTIVE member of this org (case-insensitive); anything else is refused.",
+        },
         jobId: { type: "string" },
       },
       required: ["displayName", "roleLabel", "scopes"],
@@ -183,20 +198,8 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
   {
     name: "policy.patch",
     description:
-      "Patch an employee policy (scopes / purposes / actionLimits) after human approval (always_human). Admin cannot grant itself extra scopes. Dashboard humans cannot edit these fields.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        employeeId: { type: "string" },
-        scopes: { type: "array", items: { type: "string" } },
-        allowedPurposes: { type: "array", items: { type: "string" } },
-        approvalPolicy: { type: "string" },
-        actionLimits: { type: "object", additionalProperties: true },
-        jobId: { type: "string" },
-      },
-      required: ["employeeId", "scopes", "approvalPolicy"],
-      additionalProperties: true,
-    },
+      "Patch an employee policy (scopes / allowedPurposes / approvalPolicy / actionLimits / toolApprovalDefaults) after human approval (always_human). The employee must belong to this org (from the credential; no orgId argument). Only these fields: allowedAccounts / postingAs / approvalChannelId / grokBotAgentId are refused with use_dedicated_tool and the tool to use (employees.allowedAccounts.add|remove, employees.postingIdentity.set, setup.lineApproval.setEmployeeInbox, link); any other key → unsupported_key. scopes must all be known (unknown_scopes otherwise). Nothing is queued when refused. actionLimits left out keeps the employee's current actionLimits unchanged; when sent, it replaces the whole map (a tool you leave out of the map loses its caps); only an explicit {} removes every cap — null is refused (invalid_action_limits). allowedPurposes left out keeps the current value too; an explicit [] removes every purpose restriction. The approval card shows the before → after diff and the separation-of-duties (SoD) verdict; an SoD warning is acknowledged only by the human approving that card (sodOverrideAcknowledged from the agent is ignored). Removing or changing a money cap (e.g. commerce.order) needs an owner's approval when APPROVER_AUTHORITY_ENABLED is on. Admin cannot grant itself extra scopes. Dashboard humans cannot edit these fields.",
+    inputSchema: policyPatchInputSchema(),
   },
   {
     name: "employees.allowedAccounts.add",
@@ -362,7 +365,7 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
   {
     name: "setup.slackStatus",
     description:
-      "Diagnose Slack integration status for this org (read-only, no approval required). Returns bot token presence, auth.test, bot files:write probe, conversation adapter status, IM routes, per-employee posting_as / Slack identity / Path B fileUploadReady, pathBReadiness aggregate, and nextStepJa (canonical order: Bot files:write→Reinstall→つながり xoxb→User files:write→社員証 Slack Authorize). Optional channelId includes Connect internal-base readiness for that channel (classify + mixed + parties/IAR coverage). No secrets returned. Use before guiding humans through Slack setup. Refer to docs/tenant-slack-kickoff-rail.md and docs/slack-file-upload-egress.md.",
+      "Diagnose Slack integration status for this org (read-only, no approval required). Returns bot token presence, auth.test, the conversation bot token's real scopes (botScopeCheck / missingChannelClassifyScopes: which of channels:read, groups:read, users:read, im:read, mpim:read are missing) and app id from bots.info (botApp / botAppIdMatchesStaffpass vs A0BU8TABSV6), bot files:write probe, conversation adapter status, IM routes, per-employee posting_as / Slack identity / Path B fileUploadReady, pathBReadiness aggregate, and nextStepJa (canonical order: Bot files:write→Reinstall→つながり xoxb→User files:write→社員証 Slack Authorize). Optional channelId includes Connect internal-base readiness for that channel (classify + mixed + parties/IAR coverage). No secrets returned. Use before guiding humans through Slack setup. Refer to docs/tenant-slack-kickoff-rail.md and docs/slack-file-upload-egress.md.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1435,6 +1438,50 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
   // lib/admin-mcp/directory-remove-tools.ts.
   CHANNELS_REMOVE_TOOL_DEF,
   PARTIES_REMOVE_TOOL_DEF,
+  {
+    name: "approvers.designatedAdmins.get",
+    description:
+      "This tool is read-only (no ticket; requires APPROVER_AUTHORITY_ENABLED): this org's 指定管理者 (designated admins) — the admin members who, besides the owner, may approve changes to approvers and permissions. Returns member IDs with display name / role / status. Org from the credential.",
+    inputSchema: {
+      type: "object",
+      properties: {},
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "approvers.designatedAdmins.set",
+    description:
+      "Replace this org's 指定管理者 (designated admins) list after OWNER approval (always_human; requires APPROVER_AUTHORITY_ENABLED). Only an owner can approve this ticket — a designated admin's approval leaves it オーナー承認待ち. memberIds: org_members IDs of ACTIVE members of this org with role admin (max 20; empty list clears it). Re-validated against the current members when applied; the change is audited (before/after, approving owner). Org from the credential. Admin cannot self-approve. Re-invoke with approvalId to read the result.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        memberIds: { type: "array", items: { type: "string" }, description: "org_members IDs (role admin, active, this org)" },
+        jobId: { type: "string" },
+        approvalId: { type: "string", description: "Re-invoke with approved ticket ID" },
+      },
+      required: ["memberIds"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "members.promoteOwner",
+    description:
+      "File a request to make an EXISTING ACTIVE member of this org an owner (オーナー追加; always_human; requires OWNER_PROMOTION_ENABLED and APPROVER_AUTHORITY_ENABLED). memberId only — no invite (cannot add a new person as owner), no role / capabilities / orgId arguments. Exactly one existing owner approves. The member being promoted can never approve. With 2+ owners the requester cannot approve, so requesterSlackUserId is REQUIRED then: it must match this org's verified approver registration (active Slack voter binding of an active member), otherwise filing is refused with code requester_not_identified and nextStepJa (pass the Slack ID of the person who asked and file again). A sole owner may approve their own request, and with a sole owner an unidentified requester is still filed (the card says the requester cannot be identified). A designated admin's approval leaves it オーナー承認待ち. When applied: role owner with the standard owner capabilities, re-checked against the current member row (unchanged since filing, still active, not already owner) through the team member-change guard; every owner and the member are notified; audited (before/after, approving owner, ticket). Removing an owner or transferring ownership is not available. Org from the credential. Re-invoke with approvalId to read the result.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        memberId: { type: "string", description: "org_members ID of an active non-owner member of this org" },
+        requesterSlackUserId: {
+          type: "string",
+          description: "Slack user ID (U…) of the person who asked you to file this. Pass it whenever you know it: it is matched to a member only through this org's verified approver registration, and that member then cannot approve when the org has 2+ owners. Required when the org has 2+ active owners (otherwise refused: requester_not_identified). With a sole owner it is optional; without it the card says the requester cannot be identified, and if a 2nd owner is added before approval or execution the ticket is refused (requester_not_identified) — so pass it whenever you can.",
+        },
+        jobId: { type: "string" },
+        approvalId: { type: "string", description: "Re-invoke with approved ticket ID" },
+      },
+      required: ["memberId"],
+      additionalProperties: false,
+    },
+  },
 ];
 
 /**
@@ -1507,6 +1554,7 @@ const ADMIN_READ_ONLY_TOOLS_SET = new Set<string>([
   "employees.allowedAccounts.list",
   "channels.list",
   "parties.list",
+  "approvers.designatedAdmins.get",
 ]);
 
 /**
@@ -2298,6 +2346,44 @@ export async function callAdminMcpTool(
     return toolResult(queued, false);
   }
 
+  if (name === PROMOTE_OWNER_TOOL) {
+    // オーナー追加 (OWNER_PROMOTION_ENABLED + APPROVER_AUTHORITY_ENABLED). Org from the credential only.
+    const outcome = await handlePromoteOwnerTool(args, cred);
+    if (outcome.kind === "result") return toolResult(outcome.data, outcome.isError === true);
+    const queued = await queueAdminTool({
+      cred,
+      tool: name,
+      args: { ...outcome.queuedArgs, ...(typeof args.jobId === "string" ? { jobId: args.jobId } : {}) },
+      rawArgsForSecretScan: args,
+      title: outcome.title,
+      summary: outcome.summary,
+      extraMetadata: outcome.extraMetadata,
+    });
+    return toolResult(queued, false);
+  }
+
+  if (isDesignatedAdminsTool(name)) {
+    // PR-D (APPROVER_AUTHORITY_ENABLED): owner-approved 指定管理者 list. Org from the credential only.
+    const outcome = await handleDesignatedAdminsTool(name, args, cred);
+    if (outcome.kind === "result") return toolResult(outcome.data, outcome.isError === true);
+    const queued = await queueAdminTool({
+      cred,
+      tool: name,
+      args: { ...outcome.queuedArgs, ...(typeof args.jobId === "string" ? { jobId: args.jobId } : {}) },
+      rawArgsForSecretScan: args,
+      title: outcome.title,
+      summary: outcome.summary,
+    });
+    return toolResult(queued, false);
+  }
+
+  if (name === "policy.patch") {
+    // PR-C: only the fields policy.patch applies; dedicated-tool keys, unknown
+    // keys / scopes / values are refused before any ticket exists.
+    const parsed = parsePolicyPatchArgs(args);
+    if (!parsed.ok) return toolResult(parsed, true);
+  }
+
   if (name === "policy.patch" || name === "link") {
     const employeeId = String(args.employeeId || "").trim();
     if (employeeId) {
@@ -2309,7 +2395,13 @@ export async function callAdminMcpTool(
         );
       }
       const binding = await getBinding(employeeId);
-      if (adminCannotTargetSelf(cred, binding?.grokBotAgentId)) {
+      // policy.patch: the badge must not belong to this admin agent by
+      // grokBotAgentId or actorId (fulfil re-checks the same way).
+      if (
+        name === "policy.patch"
+          ? boundToRequestingAdmin(cred, binding?.grokBotAgentId)
+          : adminCannotTargetSelf(cred, binding?.grokBotAgentId)
+      ) {
         return toolResult(
           {
             ok: false,
@@ -2346,6 +2438,29 @@ export async function callAdminMcpTool(
         { ok: false, code: "scopes_required", message: "できることを1つ以上選んでください" },
         true
       );
+    }
+    // project_access.projectIds: same org only, checked at filing (and again
+    // at fulfil by issueEmployee). #284 decision 4.
+    if (args.projectAccess != null) {
+      const pa = await import("@/lib/employees/project-access-org");
+      try {
+        await pa.assertProjectAccessSameOrg({
+          orgId: cred.orgId,
+          projectAccess: args.projectAccess,
+          audit: { path: "admin_mcp.employees.issue", phase: "file" },
+        });
+      } catch (error) {
+        if (error instanceof pa.ProjectAccessOrgError) return toolResult(pa.projectAccessRefusalBody(error), true);
+        throw error;
+      }
+    }
+    if (args.approvalNotifyEmail !== undefined && args.approvalNotifyEmail !== null) {
+      // Members-only recipient, checked at filing (again at fulfil by issueEmployee).
+      const { validateApprovalNotifyEmail } = await import("@/lib/employees/approval-notify-email");
+      const notify = await validateApprovalNotifyEmail(cred.orgId, args.approvalNotifyEmail);
+      if (!notify.ok) {
+        return toolResult({ ok: false, code: notify.code, message: notify.messageJa }, true);
+      }
     }
   }
 
@@ -3365,6 +3480,7 @@ export async function callAdminMcpTool(
 
   let queuedArgs = { ...args };
   let summary = `${name} の実行を人が確認します`;
+  let queuedResultExtra: Record<string, unknown> | null = null;
 
   if (name === "roles.propose") {
     const parsed = parseRolesProposeInput(args);
@@ -3397,7 +3513,27 @@ export async function callAdminMcpTool(
   } else if (name === "employees.issue") {
     summary = `${String(args.displayName)}（${String(args.roleLabel)}）の発行を人が確認します`;
   } else if (name === "policy.patch") {
-    summary = `権限の更新を人が確認します（${String(args.employeeId)}）`;
+    // Card = before → after diff + SoD verdict (no secrets). The agent's
+    // sodOverrideAcknowledged is never queued: approving this card is the ack.
+    const parsed = parsePolicyPatchArgs(args);
+    const employee = parsed.ok ? await getEmployee(parsed.value.employeeId, cred.orgId) : null;
+    if (!parsed.ok || !employee) {
+      return toolResult(
+        parsed.ok ? { ok: false, code: "employee_not_found", message: "AI社員が見つかりません" } : parsed,
+        true
+      );
+    }
+    const card = buildPolicyPatchCard(employee, parsed.value, await getOrgSodWarnPolicy(cred.orgId));
+    // B1: a card any surface would cut is never queued (SoD must be shown).
+    if (!card.fitsAllSurfaces) return toolResult(policyPatchCardTooLong(card.summaryChars), true);
+    queuedArgs = { ...parsed.value, [POLICY_PATCH_CARD_KEY]: card.snapshot };
+    summary = card.summaryJa;
+    if (parsed.ignoredKeys.length) {
+      queuedResultExtra = {
+        ignoredKeys: parsed.ignoredKeys,
+        noticeJa: "職務分離(SoD)の確認は、承認者がカードを見て承認することで行います（sodOverrideAcknowledged の指定は使いません）。",
+      };
+    }
   } else if (name === "parties.upsert") {
     const checked = validatePartiesUpsertArgs(args);
     if (!checked.ok) return toolResult(checked, true);
@@ -3650,7 +3786,8 @@ export async function callAdminMcpTool(
     rawArgsForSecretScan,
     summary,
   });
-  return toolResult(queued, false);
+  const queuedOk = (queued as { code?: string }).code === "needs_approval";
+  return toolResult(queuedOk && queuedResultExtra ? { ...queued, ...queuedResultExtra } : queued, false);
 }
 
 export async function readApprovedAdminResult(

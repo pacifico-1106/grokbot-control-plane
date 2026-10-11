@@ -1,6 +1,9 @@
 import { NextResponse } from "next/server";
+import { assertWebActorApproverAuthority, webDirectDeniedBody } from "@/lib/approver-authority/web-direct";
 import { getCurrentOrgId } from "@/lib/auth/session";
 import { requireCredentialAdmin } from "@/lib/auth/require-credential-admin";
+import { isMcpOAuthEnabled } from "@/lib/mcp-oauth/config";
+import { revokeAllEmployeeGrants } from "@/lib/mcp-oauth/grant-admin";
 import {
   appendAuditEvent,
   bindingPublicView,
@@ -39,6 +42,14 @@ export async function POST(
   if (!employee) {
     return NextResponse.json({ error: "employee_not_found" }, { status: 404 });
   }
+  // Review 2026-10-09 item 2: a new credential carries the employee's permissions.
+  const authority = await assertWebActorApproverAuthority({
+    orgId,
+    memberId: gate.actor.id,
+    changes: [{ tool: "web.employeeRotate", adminMutation: {}, kind: "owner_or_designated_admin" }],
+    surface: "employees.rotate",
+  });
+  if (!authority.ok) return NextResponse.json(webDirectDeniedBody(authority), { status: 403 });
 
   try {
     const secret = mintOneTimeSecret();
@@ -71,8 +82,25 @@ export async function POST(
         actorMemberId: gate.actor.id,
       },
     });
+    // Q3: rotation does NOT cut OAuth connections unless explicitly requested.
+    let oauthGrantsRevoked: number | undefined;
+    let oauthRevokeFailed = false;
+    if (rawBody.revokeOAuth === true && isMcpOAuthEnabled()) {
+      try {
+        oauthGrantsRevoked = await revokeAllEmployeeGrants({
+          orgId: targetOrgId,
+          employeeId: id,
+          byEmail: gate.actor.email,
+          reason: "rotate",
+        });
+      } catch {
+        oauthRevokeFailed = true; // rotation itself succeeded; surface so the admin can retry from the list
+      }
+    }
     return NextResponse.json({
       ok: true,
+      ...(oauthGrantsRevoked !== undefined ? { oauthGrantsRevoked } : {}),
+      ...(oauthRevokeFailed ? { oauthRevokeFailed } : {}),
       demo: runtimeModeLabel() === "demo",
       mode: runtimeModeLabel(),
       employeeId: id,

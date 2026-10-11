@@ -22,7 +22,16 @@ const retryable = new Set(["slack_token_missing", "slack_conversation_bot_token_
   // and stopped before any provider call; the approval stays approved and may run
   // again once that post is verified absent (released) or ages out.
   // ("post_outcome_unknown" is NOT here: that post may have gone out.)
-  "duplicate_post_uncertain"]);
+  "duplicate_post_uncertain",
+  // Provider rate limit (Slack ratelimited / X 429 with a JSON answer, 木村
+  // 2026-10-05): refused before posting. The re-run waits out retryAfterSeconds
+  // (fulfil stops before the provider call until then; lib/gateway/adapters/rate-limit.ts).
+  "provider_rate_limited",
+  // Thread single-flight (THREAD_SINGLE_FLIGHT_ENABLED, lib/thread-guard): stopped
+  // before any provider call. busy / unavailable → may run again. moved_on
+  // closes the approval as superseded (terminal); only when that close lost a
+  // race does the approval stay approved, and the next run re-checks and closes.
+  "thread_busy", "thread_moved_on", "thread_guard_unavailable"]);
 // Per-tool additions: refusals that tool returns BEFORE any write and that it
 // re-checks from scratch on every run (so the same approvalId may run again,
 // e.g. after the employee re-authorizes Slack). Scoped by tool so the same
@@ -30,6 +39,10 @@ const retryable = new Set(["slack_token_missing", "slack_conversation_bot_token_
 // employees.postingIdentity.set: POSTING_IDENTITY_RETRYABLE_REFUSAL_CODES
 // (lib/admin-mcp/posting-identity-tool.ts; equality pinned by its test).
 const retryableByTool: Record<string, ReadonlySet<string>> = {
+  // TOCTOU follow-up: the compare-and-swap refused the write (one transaction,
+  // nothing written) because the judged state changed; every run re-checks.
+  "policy.patch": new Set(["approver_context_changed"]),
+  "schedulingPolicy.patch": new Set(["approver_context_changed"]),
   "employees.postingIdentity.set": new Set([
     "user_token_missing", "user_token_invalid", "user_token_scope_check_failed",
     "missing_scope_chat_write", "slack_account_not_allowed",
@@ -57,10 +70,27 @@ function approvalToolName(approval: ApprovalRequest): string {
   return String(approval.metadata?.adminTool || approval.tool || "").trim();
 }
 
+/**
+ * The stored result when the ticket already ran successfully (same rule as
+ * claim_approval_execution: metadata.fulfillment.ok / adminFulfillment.ok).
+ * 木村 2026-10-09 23:48: such a ticket — even an old one with no execution
+ * claim — only hands back that result; nothing runs, writes or sends again.
+ */
+function storedSuccess<T extends Result>(approval: ApprovalRequest | null | undefined): T | null {
+  const metadata = approval?.metadata ?? {};
+  for (const key of ["adminFulfillment", "fulfillment"] as const) {
+    const value = metadata[key];
+    if (value && typeof value === "object" && (value as { ok?: unknown }).ok === true) return value as T;
+  }
+  return null;
+}
+
 /** All immediate, MCP reinvoke, proxy and W2 fulfillment shares this DB claim. */
 export async function executeApproval<T extends Result>(
   approval: ApprovalRequest, execute: () => Promise<T | null>
 ): Promise<T | null> {
+  const already = storedSuccess<T>(approval);
+  if (already) return already;
   await assertApprovalExecutionAuthority(approval);
   const workflow = await canFulfillApproval(approval);
   if (!workflow.canFulfill) throw new Error(workflow.reason);
@@ -71,6 +101,10 @@ export async function executeApproval<T extends Result>(
     const prior = demoClaims.get(demoKey);
     if (prior?.state === "succeeded") return (prior.result ?? null) as T | null;
     if (prior && prior.state !== "failed") throw new Error(`approval_execution_${prior.state}`);
+    // Mirror the SQL claim: a fresh row that already shows success is "succeeded".
+    const fresh = await demoGetApproval(approval.id);
+    const freshDone = fresh && fresh.orgId === approval.orgId ? storedSuccess<T>(fresh) : null;
+    if (freshDone) return freshDone;
     demoClaims.set(demoKey, { state: "running" });
     const current = await demoGetApproval(approval.id);
     if (current && current.orgId === approval.orgId) Object.assign(approval, current);

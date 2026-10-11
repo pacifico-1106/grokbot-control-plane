@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getCurrentOrgId } from "@/lib/auth/session";
 import { appendAuditEvent, terminateEmployee } from "@/lib/data";
 import { requireCapability } from "@/lib/team/demo-actor";
+import { revokeAllEmployeeGrants } from "@/lib/mcp-oauth/grant-admin";
 
 export const runtime = "nodejs";
 
@@ -45,5 +46,14 @@ export async function POST(
     metadata: { status: employee.status },
   });
 
-  return NextResponse.json({ ok: true, employee });
+  // MCP OAuth (flag ON only): terminate also revokes every AI-client connection.
+  // The resource server already rejects suspended employees; this makes it explicit + audited.
+  let oauthGrantsRevoked = 0;
+  try {
+    oauthGrantsRevoked = await revokeAllEmployeeGrants({ orgId, employeeId: id, byEmail: gate.actor.email, reason: "terminate" });
+  } catch {
+    // fail-safe: RS still blocks the suspended employee on every request
+  }
+
+  return NextResponse.json({ ok: true, employee, ...(oauthGrantsRevoked ? { oauthGrantsRevoked } : {}) });
 }

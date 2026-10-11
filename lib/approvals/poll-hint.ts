@@ -14,6 +14,7 @@
  * next) so the agent decides its next step itself. Use approvalPollFields so
  * both surfaces return the same shape.
  */
+import { isApprovalReasonsEnabled } from "@/lib/feature-flags";
 import { isSlackTokenType, slackReinvokeReason, type SlackReinvokeReason } from "@/lib/slack/definite-errors";
 
 type PollInput = {
@@ -43,10 +44,45 @@ export function approvalReinvokeReason(input: PollInput): SlackReinvokeReason | 
   return definiteFailure(input.fulfillmentResult.fileUpload);
 }
 
+/**
+ * 木村 #297 answer 2 (APPROVAL_REASONS_ENABLED): reinvoke_with_approvalId
+ * WITHOUT a reinvokeReason still says why, as a code, and how — the same
+ * approvalId and the same content, exactly once.
+ */
+export type ReinvokeCode = "pending_attachment" | "not_executed_yet" | "admin_result_required";
+
+const REINVOKE_ONCE_JA = "同じ approvalId と同じ内容で、一度だけ再実行してください。";
+export const REINVOKE_GUIDANCE_JA: Record<ReinvokeCode, string> = {
+  pending_attachment: `承認済みの添付がまだ送られていません。${REINVOKE_ONCE_JA}（添付だけが送られます）`,
+  not_executed_yet: `承認済みですが、まだ実行されていません。${REINVOKE_ONCE_JA}`,
+  admin_result_required: `管理 MCP（/api/mcp/admin）で、${REINVOKE_ONCE_JA}`,
+};
+
+export function approvalReinvokeCode(input: PollInput): ReinvokeCode | null {
+  if (input.status !== "approved") return null;
+  if (input.adminResultRequired) return "admin_result_required";
+  if (!input.fulfillmentResult) return "not_executed_yet";
+  return attachmentNotSent(input.fulfillmentResult.fileUpload) ? "pending_attachment" : null;
+}
+
 /** { pollHint, reinvokeReason? } — spread into the status API and the MCP tool response. */
-export function approvalPollFields(input: PollInput): { pollHint: string; reinvokeReason?: SlackReinvokeReason } {
+export function approvalPollFields(input: PollInput): {
+  pollHint: string;
+  reinvokeReason?: SlackReinvokeReason;
+  reinvokeCode?: ReinvokeCode;
+  reinvokeGuidanceJa?: string;
+} {
   const reinvokeReason = approvalReinvokeReason(input);
-  return { pollHint: approvalPollHint(input), ...(reinvokeReason ? { reinvokeReason } : {}) };
+  const pollHint = approvalPollHint(input);
+  const code =
+    isApprovalReasonsEnabled() && pollHint === "reinvoke_with_approvalId" && !reinvokeReason
+      ? approvalReinvokeCode(input)
+      : null;
+  return {
+    pollHint,
+    ...(reinvokeReason ? { reinvokeReason } : {}),
+    ...(code ? { reinvokeCode: code, reinvokeGuidanceJa: REINVOKE_GUIDANCE_JA[code] } : {}),
+  };
 }
 
 /**

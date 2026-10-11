@@ -41,6 +41,11 @@ export type GoogleOAuthState = {
   employeeId: string;
   nonce: string;
   exp: number;
+  /**
+   * The org member who started the link (hire_issue_credentials at start).
+   * The callback completes only for that same member's current session.
+   */
+  actorMemberId?: string;
 };
 
 /**
@@ -70,12 +75,14 @@ export function signGoogleOAuthState(input: {
   orgId: string;
   employeeId: string;
   nonce: string;
+  actorMemberId?: string;
 }): string {
   const payload: GoogleOAuthState = {
     orgId: input.orgId,
     employeeId: input.employeeId,
     nonce: input.nonce,
     exp: Date.now() + STATE_TTL_MS,
+    ...(input.actorMemberId ? { actorMemberId: input.actorMemberId } : {}),
   };
   const encoded = Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
   const secret = signingSecret();
@@ -109,6 +116,12 @@ export function verifyGoogleOAuthState(
     if (!parsed?.orgId || !parsed?.employeeId || !parsed?.nonce) return null;
     if (parsed.nonce !== nonce) return null;
     if (!Number.isFinite(parsed.exp) || parsed.exp < Date.now()) return null;
+    if (
+      parsed.actorMemberId !== undefined &&
+      (typeof parsed.actorMemberId !== "string" || !parsed.actorMemberId)
+    ) {
+      return null;
+    }
     return parsed;
   } catch {
     return null;

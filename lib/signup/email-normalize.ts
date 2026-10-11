@@ -5,6 +5,7 @@
  * - +tag stripped for providers that support sub-addressing
  * Signals feed the spam score (lib/spam/score.ts) and the optional domain check.
  */
+import { requireIpHashKey } from "@/lib/security/ip-hash-key";
 import { createHash } from "node:crypto";
 import { isDisposableDomain } from "./disposable-domains";
 
@@ -61,8 +62,9 @@ export function normalizeEmail(input: string): NormalizedEmail | null {
   return { raw, local, domain, normalized: `${mailbox}@${domain}`, signals };
 }
 
+/** Throws IpHashKeyMissingError when IP_HASH_KEY is missing / blank / placeholder (no fallback). */
 function hashKey(): string {
-  return process.env.IP_HASH_KEY || "default_hash_key_for_dev";
+  return requireIpHashKey();
 }
 
 /** Keyed hash (same key as IP hashing) so the log never stores the address. */

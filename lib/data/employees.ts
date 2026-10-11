@@ -1,3 +1,4 @@
+import { assertProjectAccessSameOrg, type ProjectAccessAuditContext } from "@/lib/employees/project-access-org";
 import {
   addRuntimeEmployee,
   DEMO_ORG,
@@ -18,6 +19,15 @@ import { normalizePostingAs } from "@/lib/employees/posting-as";
 import { normalizeToolApprovalDefaults } from "@/lib/employees/approval-presets";
 import { normalizeApproverUserIds } from "@/lib/employees/approval-inbox";
 import type { ActionLimits, Employee, EmployeeProjectAccess, PostingAs } from "../types";
+import { requireApprovalNotifyEmail } from "@/lib/employees/approval-notify-email";
+import {
+  ApproverContextWriteRefusedError,
+  assertDemoContextUnchanged,
+  assertGuardFor,
+  casResult,
+  employeePolicyProjection,
+  type ApproverContextGuard,
+} from "@/lib/approver-authority/context-cas";
 
 export async function listEmployees(orgId?: string | null): Promise<Employee[]> {
   if (isDemoMode()) {
@@ -119,6 +129,8 @@ export type IssueEmployeeInput = {
   managerId?: string | null;
   voice?: Employee["voice"] | null;
   projectAccess?: EmployeeProjectAccess | null;
+  /** Audit context for a refused projectAccess (same-org check, #284 decision 4). */
+  projectAccessAudit?: ProjectAccessAuditContext;
   postingAs?: PostingAs | null;
   approvalChannelId?: string | null;
   approverUserIds?: string[];
@@ -154,6 +166,12 @@ export type IssueEmployeeResult = {
 export async function issueEmployee(
   input: IssueEmployeeInput
 ): Promise<IssueEmployeeResult> {
+  // project_access.projectIds: same org only (#284 decision 4). Before any write.
+  await assertProjectAccessSameOrg({
+    orgId: input.orgId || (isDemoMode() ? DEMO_ORG.id : ""),
+    projectAccess: input.projectAccess,
+    audit: input.projectAccessAudit ?? { path: "data.issueEmployee", actorEmail: input.actorEmail ?? null },
+  });
   const sodVerdict = evaluateSod(input.scopes, await getOrgSodWarnPolicy(input.orgId));
   const effectivePolicy = resolveApprovalPolicy({
     verdict: sodVerdict,
@@ -161,6 +179,12 @@ export async function issueEmployee(
     acknowledged: input.sodOverrideAcknowledged,
   });
   const actionLimits = normalizeActionLimits(input.actionLimits);
+  // Members-only recipient (2026-10-09): every caller of this writer is checked
+  // here, whatever route it came from. Throws ApprovalNotifyEmailError.
+  const approvalNotifyEmail = await requireApprovalNotifyEmail(
+    isDemoMode() ? (input.orgId ?? DEMO_ORG.id) : input.orgId,
+    input.approvalNotifyEmail
+  );
   if (isDemoMode()) {
     const { randomBytes } = await import("node:crypto");
     const employeeId = `emp_${randomBytes(4).toString("hex")}`;
@@ -180,7 +204,7 @@ export async function issueEmployee(
       actionLimits,
       spend: input.spend,
       allowedAccounts: input.allowedAccounts ?? [],
-      approvalNotifyEmail: input.approvalNotifyEmail ?? null,
+      approvalNotifyEmail,
       callbackUrl: input.callbackUrl ?? null,
       approvalRoutineText: input.approvalRoutineText ?? null,
       managerId: input.managerId ?? null,
@@ -226,7 +250,7 @@ export async function issueEmployee(
       action_limits: actionLimits,
       spend: input.spend ?? null,
       allowed_accounts: input.allowedAccounts ?? [],
-      approval_notify_email: input.approvalNotifyEmail ?? null,
+      approval_notify_email: approvalNotifyEmail,
       callback_url: input.callbackUrl ?? null,
       approval_routine_text: input.approvalRoutineText ?? null,
       manager_id: input.managerId ?? null,
@@ -345,41 +369,78 @@ export async function updateEmployeePolicy(input: {
   orgId: string;
   employeeId: string;
   scopes: Employee["scopes"];
-  allowedPurposes: string[];
+  /** undefined = keep the stored value ([] clears). */
+  allowedPurposes?: string[];
   approvalPolicy: Employee["approvalPolicy"];
   toolApprovalDefaults?: Employee["toolApprovalDefaults"];
   sodOverrideAcknowledged?: boolean;
+  /** undefined = keep the stored limits ({} clears). */
   actionLimits?: ActionLimits;
   allowedAccounts?: Employee["allowedAccounts"];
   spend?: Employee["spend"];
   managerId?: string | null;
   voice?: Employee["voice"];
   projectAccess?: EmployeeProjectAccess;
+  projectAccessAudit?: ProjectAccessAuditContext;
   postingAs?: PostingAs;
   displayName?: string;
   roleLabel?: string;
   approvalChannelId?: string | null;
   approverUserIds?: string[];
+  /**
+   * TOCTOU guard (APPROVER_AUTHORITY_ENABLED, approval-executed policy.patch):
+   * write only if scopes / allowed_purposes / approval_policy / action_limits /
+   * tool_approval_defaults still equal the pinned snapshot (production: one
+   * RPC that locks, compares and writes employees + active credentials).
+   * Mismatch → ApproverContextChangedError, nothing written. Only the
+   * policy.patch fields may be written under a guard.
+   */
+  contextGuard?: ApproverContextGuard;
 }): Promise<Employee | null> {
+  const guard = input.contextGuard;
+  if (guard) {
+    assertGuardFor(guard, "policy.patch", input.employeeId);
+    const unsupported = (["allowedAccounts", "spend", "managerId", "voice", "projectAccess", "postingAs", "displayName", "roleLabel",
+      "approvalChannelId", "approverUserIds"] as const).filter((key) => input[key] !== undefined);
+    if (unsupported.length) throw new ApproverContextWriteRefusedError("context_guard_unsupported_fields");
+  }
+  // project_access.projectIds: same org only (#284 decision 4). Before any write.
+  if (input.projectAccess !== undefined) {
+    await assertProjectAccessSameOrg({
+      orgId: input.orgId,
+      projectAccess: input.projectAccess,
+      audit: input.projectAccessAudit ?? { path: "data.updateEmployeePolicy", employeeId: input.employeeId },
+    });
+  }
   const verdict = evaluateSod(input.scopes, await getOrgSodWarnPolicy(input.orgId));
   const effectivePolicy = resolveApprovalPolicy({
     verdict,
     requested: input.approvalPolicy,
     acknowledged: input.sodOverrideAcknowledged,
   });
-  const actionLimits = normalizeActionLimits(input.actionLimits);
+  // Omitted allowedPurposes / actionLimits keep the stored value (木村
+  // 2026-10-05 / 2026-10-10, data loss since 30a631f): writing [] / {} would
+  // remove every purpose restriction and limit, on employees AND the active
+  // credentials row. Only an explicit value (incl. [] / {} = clear) is written.
+  // Same rule as allowedAccounts / spend. purposesPatch / limitsPatch are the
+  // non-guard path only; the guard path passes the RPC explicit values.
+  const actionLimits = input.actionLimits === undefined ? undefined : normalizeActionLimits(input.actionLimits);
+  const purposesPatch = input.allowedPurposes !== undefined ? { allowed_purposes: input.allowedPurposes } : {};
+  const limitsPatch = actionLimits !== undefined ? { action_limits: actionLimits } : {};
   if (isDemoMode()) {
     const employee = getRuntimeEmployees().find((item) => item.id === input.employeeId && item.orgId === input.orgId);
     if (!employee) return null;
+    // Compared right before the write (no await in between).
+    if (guard) assertDemoContextUnchanged(guard, employeePolicyProjection(employee));
     Object.assign(employee, {
       scopes: input.scopes,
-      allowedPurposes: input.allowedPurposes,
+      ...(input.allowedPurposes !== undefined ? { allowedPurposes: input.allowedPurposes } : {}),
       approvalPolicy: effectivePolicy,
       ...(input.toolApprovalDefaults !== undefined
         ? { toolApprovalDefaults: normalizeToolApprovalDefaults(input.toolApprovalDefaults) }
         : {}),
       sodLevel: verdict.level,
-      actionLimits,
+      ...(actionLimits !== undefined ? { actionLimits } : {}),
       managerId: input.managerId === undefined ? employee.managerId : input.managerId,
       voice:
         input.voice === undefined
@@ -405,15 +466,39 @@ export async function updateEmployeePolicy(input: {
   }
   const admin = createSupabaseAdminClient();
   if (!admin) return null;
+  if (guard) {
+    // One transaction: lock the employee row, compare with the snapshot,
+    // write employees + the active credentials, or refuse with nothing written.
+    const { data, error } = await admin.rpc("approver_cas_write_employee_policy", {
+      p_org: input.orgId,
+      p_employee: input.employeeId,
+      p_approval: guard.approvalId,
+      p_fingerprint: guard.fingerprint,
+      p_expected: guard.expected,
+      p_scopes: input.scopes,
+      p_allowed_purposes: input.allowedPurposes,
+      p_approval_policy: effectivePolicy,
+      p_tool_approval_defaults:
+        input.toolApprovalDefaults !== undefined ? normalizeToolApprovalDefaults(input.toolApprovalDefaults) : null,
+      p_sod_level: verdict.level,
+      // An omitted actionLimits under the guard keeps the pinned value (the RPC
+      // needs one; it equals the locked row whenever the write goes through).
+      p_action_limits: actionLimits ?? normalizeActionLimits(guard.expected.action_limits as never),
+    });
+    const result = casResult(data, error);
+    const row = result.employee;
+    if (!row || typeof row !== "object" || Array.isArray(row)) throw new ApproverContextWriteRefusedError("approver_context_cas_failed");
+    return mapEmployeeRow(row as Record<string, unknown>);
+  }
   const employeePatch: Record<string, unknown> = {
     scopes: input.scopes,
-    allowed_purposes: input.allowedPurposes,
+    ...purposesPatch,
     approval_policy: effectivePolicy,
     ...(input.toolApprovalDefaults !== undefined
       ? { tool_approval_defaults: normalizeToolApprovalDefaults(input.toolApprovalDefaults) }
       : {}),
     sod_level: verdict.level,
-    action_limits: actionLimits,
+    ...limitsPatch,
     ...(input.managerId !== undefined ? { manager_id: input.managerId } : {}),
     ...(input.voice !== undefined ? { voice: normalizeVoice(input.voice) } : {}),
     ...(input.projectAccess !== undefined
@@ -463,9 +548,9 @@ export async function updateEmployeePolicy(input: {
       .from("credentials")
       .update({
         scopes: input.scopes,
-        allowed_purposes: input.allowedPurposes,
+        ...purposesPatch,
         approval_policy: effectivePolicy,
-        action_limits: actionLimits,
+        ...limitsPatch,
         ...(input.allowedAccounts !== undefined ? { allowed_accounts: input.allowedAccounts } : {}),
         ...(input.spend !== undefined ? { spend: input.spend } : {}),
       })

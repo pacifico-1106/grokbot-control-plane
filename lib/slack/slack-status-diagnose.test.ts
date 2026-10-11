@@ -113,7 +113,7 @@ describe("computeSlackStatusNextStepJa", () => {
           needsPathB: true,
           fileUploadReady: false,
           needsReoauthForFilesWrite: false,
-          authorizeUrlTemplate: slackAuthorizeUrlTemplate(employeeId),
+          authorizeUrlTemplate: slackAuthorizeUrlTemplate(),
         },
       ],
       pathBReadiness: {
@@ -127,7 +127,8 @@ describe("computeSlackStatusNextStepJa", () => {
     });
     expect(msg).toContain("Authorize");
     expect(msg).toContain(employeeId);
-    expect(msg).toContain("/api/slack/oauth/start");
+    expect(msg).toContain("/api/slack/oauth/link");
+    expect(msg).toContain("setup.slackAuthorizeLink.issue");
   });
 
   test("path B needs re-OAuth for files:write", () => {
@@ -144,7 +145,7 @@ describe("computeSlackStatusNextStepJa", () => {
           needsPathB: true,
           fileUploadReady: false,
           needsReoauthForFilesWrite: true,
-          authorizeUrlTemplate: slackAuthorizeUrlTemplate(employeeId),
+          authorizeUrlTemplate: slackAuthorizeUrlTemplate(),
         },
       ],
       pathBReadiness: {

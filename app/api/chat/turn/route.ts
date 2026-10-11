@@ -23,6 +23,7 @@ import { getPublishedRelease } from "@/lib/lp/knowledge-base";
 import { sanitizeHistory, type ChatCapabilities } from "@/lib/lp/chat-prompt";
 import { resolveChatModel } from "@/lib/lp/chat-model";
 import { ChatModelError, runChatTurn } from "@/lib/lp/chat-turn";
+import { GUEST_SESSIONS_UNAVAILABLE, isGuestSigningKeyMissingError } from "@/lib/lp/guest-signing-key";
 import { HANDOFF_OFF_REPLY, contactLinkCard, detectHandoffIntent } from "@/lib/lp/handoff-intent";
 
 const GUEST_COOKIE_NAME = "lp_guest";
@@ -59,7 +60,17 @@ export async function POST(req: Request) {
   }
 
   const parsed = parseGuestCookie(guestCookie);
-  if (!parsed || !verifySignature(parsed.token, parsed.signature)) {
+  let signatureOk = false;
+  if (parsed) {
+    try {
+      signatureOk = verifySignature(parsed.token, parsed.signature);
+    } catch (err) {
+      if (!isGuestSigningKeyMissingError(err)) throw err;
+      console.error("[chat/turn] GUEST_SIGNING_KEY not configured; guest sessions unavailable");
+      return NextResponse.json({ ok: false, ...GUEST_SESSIONS_UNAVAILABLE }, { status: 503 });
+    }
+  }
+  if (!parsed || !signatureOk) {
     return NextResponse.json(
       { ok: false, error: "invalid_session", message: "無効なセッションです" },
       { status: 401 }

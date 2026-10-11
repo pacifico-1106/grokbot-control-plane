@@ -232,3 +232,23 @@ describe("updateEmployeePolicy (Supabase) is fail-closed", () => {
     expect(hasFilter(read, ["eq", "org_id", ORG])).toBe(true);
   });
 });
+
+describe("updateEmployeePolicy (Supabase): omitted allowedPurposes / actionLimits keep the stored value (木村 2026-10-05)", () => {
+  const PARTIAL = { orgId: ORG, employeeId: EMP, scopes: ["slack:post"] as never, approvalPolicy: "always_human" as const };
+  test("omitted → neither employees nor credentials gets allowed_purposes / action_limits", async () => {
+    reset();
+    state.employeeRow = { ...state.employeeRow, action_limits: { "slack.post": { perDay: 3 } } };
+    await updateEmployeePolicy(PARTIAL as never);
+    for (const op of [...employeeUpdates(), ...credentialUpdates()]) {
+      expect([op.table, "allowed_purposes" in (op.values ?? {}), "action_limits" in (op.values ?? {})]).toEqual([op.table, false, false]);
+    }
+    expect(state.employeeRow.allowed_purposes).toEqual(["sales.followup"]);
+    expect(state.employeeRow.action_limits).toEqual({ "slack.post": { perDay: 3 } });
+  });
+  test("explicit [] / {} → both written (clearing is explicit)", async () => {
+    reset();
+    await updateEmployeePolicy({ ...PARTIAL, allowedPurposes: [], actionLimits: {} } as never);
+    expect(employeeUpdates()[0].values).toMatchObject({ allowed_purposes: [], action_limits: {} });
+    expect(credentialUpdates()[0].values).toMatchObject({ allowed_purposes: [], action_limits: {} });
+  });
+});

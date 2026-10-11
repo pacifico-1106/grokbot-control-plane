@@ -67,6 +67,8 @@ export const ADMIN_TOOL_AUDIT_ACTION: Record<string, AdminAuditAction> = {
   "setup.slackAuthorizeLink.issue": "admin.link",
   "channels.remove": "admin.channel",
   "parties.remove": "admin.parties",
+  "approvers.designatedAdmins.set": "admin.policy",
+  "members.promoteOwner": "admin.policy",
 };
 
 /** Operational / employee-badge class — never lead the dashboard change log. */
@@ -86,6 +88,8 @@ export const ADMIN_CLASS_ALIASES = [
   "credential.issued",
   "credential.revoked",
   "credential.rotated",
+  "oauth.consent_granted",
+  "oauth.grant_revoked",
   "employee.created",
   "employee.updated",
   "employee.terminated",

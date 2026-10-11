@@ -1,3 +1,4 @@
+import { approverAuthorityReplyJa } from "@/lib/approver-authority/reply";
 import { resolveApprovalWithWorkflow } from "@/lib/approvals/workflow-integration";
 import { initializeWorkflowForApproval } from "@/lib/approval-workflow/resolve";
 import { getMemberIdFromVoterBinding } from "@/lib/approval-workflow";
@@ -262,7 +263,7 @@ async function handleCallback(update: TelegramUpdate): Promise<void> {
     );
     const updated = result.ok && result.workflowComplete ? result.approval : null;
     if (!updated) {
-      await answer(result.ok ? "投票を記録しました（合議は継続中です）" : "投票を記録できませんでした");
+      await answer(approverAuthorityReplyJa(result.reason) ?? (result.ok ? "投票を記録しました（合議は継続中です）" : "投票を記録できませんでした"));
       return;
     }
     await fulfillIfApproved(updated, decision);

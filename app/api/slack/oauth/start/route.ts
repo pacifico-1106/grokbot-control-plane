@@ -1,7 +1,8 @@
 import { randomBytes } from "node:crypto";
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
-import { requireOrgSession } from "@/lib/auth/require-org";
+import { getAppOrigin } from "@/lib/approvals/tokens";
+import { isBrowserNavigation, requireIdentityLinkManager } from "@/lib/auth/identity-link-gate";
 import { getEmployee } from "@/lib/data";
 import {
   SLACK_OAUTH_COOKIE,
@@ -12,17 +13,34 @@ import {
 
 export const runtime = "nodejs";
 
+/**
+ * Starts linking an AI employee's Slack user identity (session flow).
+ * 401 no session; 403 without hire_issue_credentials (a browser navigation is
+ * sent back to the employee page with ?slack=forbidden instead of raw JSON);
+ * 404 for an employee outside the caller's org. The signed state is bound to
+ * the initiating member, org and employee; the callback re-checks all three.
+ */
 export async function GET(req: Request) {
-  const gate = await requireOrgSession();
-  if (!gate.ok) return gate.response;
+  const url = new URL(req.url);
+  const employeeId = url.searchParams.get("employeeId")?.trim() || "";
+  const gate = await requireIdentityLinkManager(req);
+  if (!gate.ok) {
+    if (gate.status === 403 && isBrowserNavigation(req)) {
+      const dest = new URL(
+        employeeId ? `/app/employees/${encodeURIComponent(employeeId)}` : "/app/employees",
+        getAppOrigin()
+      );
+      dest.searchParams.set("slack", "forbidden");
+      return NextResponse.redirect(dest, 303);
+    }
+    return gate.response;
+  }
   if (!slackOAuthConfigured()) {
     return NextResponse.json(
       { error: "slack_oauth_unconfigured", message: "Slack アプリの OAuth が未設定" },
       { status: 503 }
     );
   }
-  const url = new URL(req.url);
-  const employeeId = url.searchParams.get("employeeId")?.trim() || "";
   if (!employeeId) {
     return NextResponse.json({ error: "employee_id_required" }, { status: 400 });
   }
@@ -32,7 +50,12 @@ export async function GET(req: Request) {
   }
   const nonce = randomBytes(16).toString("base64url");
   try {
-    const state = signSlackOAuthState({ orgId: gate.orgId, employeeId, nonce });
+    const state = signSlackOAuthState({
+      orgId: gate.orgId,
+      employeeId,
+      nonce,
+      actorMemberId: gate.actor.id,
+    });
     const jar = await cookies();
     jar.set(SLACK_OAUTH_COOKIE, nonce, {
       httpOnly: true,

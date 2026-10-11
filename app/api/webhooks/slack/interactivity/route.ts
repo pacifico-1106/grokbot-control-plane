@@ -31,6 +31,7 @@ import {
   isApprovalDeliveryFailureAlertEnabled,
 } from "@/lib/notify/delivery-failure-alert";
 import { getMemberIdFromVoterBinding } from "@/lib/approval-workflow";
+import { approverAuthorityReplyJa } from "@/lib/approver-authority/reply";
 import {
   findChannelCandidatesByAppAndTeam,
   type InteractivityChannelCandidate,
@@ -377,11 +378,18 @@ async function handleBlockActions(
     }
 
     const decision = action.action_id === "staffpass_approve" ? "approved" : "rejected";
+    let resolveReason = "";
     const updated = await resolveApproval(approval.id, decision, actor, channel.orgId, {
       decisionId,
       externalVoter: { provider: "slack", channelKey: channel.id, userId },
       memberId,
+      onResolveResult: (r) => { resolveReason = r.reason; },
     });
+    // PR-D: same approver-authority feedback as LINE / Telegram / web.
+    const authorityReply = updated ? null : approverAuthorityReplyJa(resolveReason);
+    if (authorityReply && responseUrl) {
+      await sendEphemeralRejection(responseUrl, "approver_authority" as SlackRejectionReason, authorityReply);
+    }
     if (updated) {
       await fulfillIfApproved(updated, decision);
       const employee = await getEmployee(updated.employeeId, channel.orgId);

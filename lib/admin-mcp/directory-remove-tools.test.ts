@@ -407,3 +407,321 @@ describe("parties.remove", () => {
     expect(String(again?.summaryJa)).toContain("すでに削除");
   });
 });
+
+/* ------------------------------------------------------------------------ *
+ * 木村 review 2026-10-05 10:39 (before the flag goes ON): a delete must never
+ * make resolveAudience judge the destination LESS restrictive (external /
+ * mixed / guest / outside-domain → internal). Checked at request AND at
+ * fulfillment (state may change in between). Each refusal is double-checked
+ * against the real resolveAudience: deleting the row directly WOULD turn the
+ * destination internal.
+ * ------------------------------------------------------------------------ */
+import { deleteOrgChannel, deleteOrgParty } from "@/lib/data/directory";
+import { clearDemoRule, setOrgInternalAudienceRule } from "@/lib/data/internal-audience-rule";
+import { resolveAudience } from "@/lib/gateway/audience";
+import type { ConversationContext } from "@/lib/types";
+
+const RELAX = "directory_remove_relaxes_audience";
+const OWN_TEAM = "T0OWNTEAM1";
+
+async function audienceOf(ctx: Partial<ConversationContext>) {
+  return (await resolveAudience({ surface: "slack", orgId: ORG_A, ...ctx } as ConversationContext)).audience;
+}
+function expectRelaxRefusal(out: Record<string, unknown>) {
+  expect(out.ok).toBe(false);
+  expect(out.code).toBe(RELAX);
+  expect(out.retryable).toBe(false);
+  expect(String(out.nextStepJa || "")).not.toBe("");
+  expect(out.audienceBefore).toBe("external");
+  expect(out.audienceAfter).toBe("internal");
+}
+
+describe("post-delete audience: a delete never relaxes external / mixed / guest / outside-domain to internal", () => {
+  afterEach(() => clearDemoRule());
+
+  // --- channels.remove ---
+  for (const kind of [
+    { label: "shared_external", classification: "shared_external" as const, mixed: false },
+    { label: "mixed (classified internal, mixed flag)", classification: "internal" as const, mixed: true },
+    { label: "unknown classification", classification: "unknown" as const, mixed: false },
+  ]) {
+    test(`channel ${kind.label} + slack_channel party internal → refused at request, no ticket, row kept (real resolver would turn internal)`, async () => {
+      const externalId = uid("C");
+      const speaker = uid("U");
+      // party first: once the channel row is shared / mixed, the party ledger refuses an internal slack_channel
+      await upsertOrgParty({ orgId: ORG_A, kind: "slack_channel", identifier: externalId, audience: "internal" });
+      const channel = await upsertOrgChannel({ orgId: ORG_A, surface: "slack", externalId, classification: kind.classification, mixed: kind.mixed, skipInspect: true });
+      await upsertOrgParty({ orgId: ORG_A, kind: "slack_user", identifier: speaker, audience: "internal" });
+      expect(await audienceOf({ slackChannelId: externalId, slackUserId: speaker })).toBe("external");
+      const before = await approvalCount();
+      const res = await callAdminMcpTool(CH_REMOVE, { channelId: channel.id }, cred());
+      expect(res.isError).toBe(true);
+      expectRelaxRefusal(data(res));
+      expect(await approvalCount()).toBe(before);
+      expect(await getOrgChannel(ORG_A, "slack", externalId)).not.toBeNull();
+      // oracle: deleting the row directly would make the destination internal
+      await deleteOrgChannel(ORG_A, channel.id);
+      expect(await audienceOf({ slackChannelId: externalId, slackUserId: speaker })).toBe("internal");
+    });
+  }
+
+  test("channel shared_external without an internal party → allowed (stays external after the delete)", async () => {
+    const channel = await upsertOrgChannel({ orgId: ORG_A, surface: "slack", externalId: uid("C"), classification: "shared_external", mixed: true, skipInspect: true });
+    const out = data(await callAdminMcpTool(CH_REMOVE, { channelId: channel.id }, cred()));
+    expect(out.code).toBe("needs_approval");
+    expect(String(out.summary)).toContain("削除後の判定: 社外");
+    expect((await approveAndFulfill(String(out.approvalId)))?.ok).toBe(true);
+  });
+
+  test("channel internal + party internal → allowed (internal → internal is not less restrictive)", async () => {
+    const externalId = uid("C");
+    const channel = await upsertOrgChannel({ orgId: ORG_A, surface: "slack", externalId, classification: "internal", skipInspect: true });
+    await upsertOrgParty({ orgId: ORG_A, kind: "slack_channel", identifier: externalId, audience: "internal" });
+    const out = data(await callAdminMcpTool(CH_REMOVE, { channelId: channel.id }, cred()));
+    expect(out.code).toBe("needs_approval");
+    expect((await approveAndFulfill(String(out.approvalId)))?.ok).toBe(true);
+  });
+
+  test("fulfil-time recheck: the channel became shared_external after the request (party internal) → refused at fulfillment, row kept", async () => {
+    const externalId = uid("C");
+    const speaker = uid("U");
+    await upsertOrgParty({ orgId: ORG_A, kind: "slack_channel", identifier: externalId, audience: "internal" });
+    await upsertOrgParty({ orgId: ORG_A, kind: "slack_user", identifier: speaker, audience: "internal" });
+    const channel = await upsertOrgChannel({ orgId: ORG_A, surface: "slack", externalId, classification: "internal", skipInspect: true });
+    const out = data(await callAdminMcpTool(CH_REMOVE, { channelId: channel.id }, cred()));
+    expect(out.code).toBe("needs_approval");
+    // Slack Connect detected / reclassified between request and approval
+    await upsertOrgChannel({ orgId: ORG_A, surface: "slack", externalId, classification: "shared_external", mixed: true, skipInspect: true });
+    expect(await audienceOf({ slackChannelId: externalId, slackUserId: speaker })).toBe("external");
+    const fulfillment = await approveAndFulfill(String(out.approvalId));
+    expect(fulfillment?.ok).toBe(false);
+    expect(fulfillment?.error).toBe(RELAX);
+    expect((fulfillment as Record<string, unknown>)?.retryable).toBe(false);
+    expect(String(fulfillment?.nextStepJa || "")).not.toBe("");
+    expect(await getOrgChannel(ORG_A, "slack", externalId)).not.toBeNull();
+    expect(await audienceOf({ slackChannelId: externalId, slackUserId: speaker })).toBe("external");
+  });
+
+  test("unknown row → refused at request AND at fulfil; nextStepJa says to classify it first with channels.classify (木村 #287 decision)", async () => {
+    const UNKNOWN_NEXT_STEP_PREFIX = "このチャネルは台帳で未分類（unknown）です。削除ではなく、先に channels.classify で分類してください";
+    const externalId = uid("C");
+    await upsertOrgParty({ orgId: ORG_A, kind: "slack_channel", identifier: externalId, audience: "internal" });
+    const channel = await upsertOrgChannel({ orgId: ORG_A, surface: "slack", externalId, classification: "unknown", skipInspect: true });
+    const res = data(await callAdminMcpTool(CH_REMOVE, { channelId: channel.id }, cred()));
+    expectRelaxRefusal(res);
+    expect(res.beforeKind).toBe("unknown");
+    expect(res.nextTool).toBe("channels.classify");
+    expect(String(res.nextStepJa).startsWith(UNKNOWN_NEXT_STEP_PREFIX)).toBe(true);
+    // fulfil: classified internal at request time, unknown by approval time
+    await upsertOrgChannel({ orgId: ORG_A, surface: "slack", externalId, classification: "internal", skipInspect: true });
+    const out = data(await callAdminMcpTool(CH_REMOVE, { channelId: channel.id }, cred()));
+    expect(out.code).toBe("needs_approval");
+    await upsertOrgChannel({ orgId: ORG_A, surface: "slack", externalId, classification: "unknown", skipInspect: true });
+    const fulfillment = (await approveAndFulfill(String(out.approvalId))) as Record<string, unknown> | null;
+    expect(fulfillment?.ok).toBe(false);
+    expect(fulfillment?.error).toBe(RELAX);
+    expect(fulfillment?.nextTool).toBe("channels.classify");
+    // fulfil prefixes the refusal message (existing shape: messageJa + nextStepJa)
+    expect(String(fulfillment?.nextStepJa)).toContain(UNKNOWN_NEXT_STEP_PREFIX);
+    expect(await getOrgChannel(ORG_A, "slack", externalId)).not.toBeNull();
+  });
+
+  test("shared_external / mixed refusals keep the generic wording (no unknown-specific step)", async () => {
+    const externalId = uid("C");
+    await upsertOrgParty({ orgId: ORG_A, kind: "slack_channel", identifier: externalId, audience: "internal" });
+    const channel = await upsertOrgChannel({ orgId: ORG_A, surface: "slack", externalId, classification: "shared_external", skipInspect: true });
+    const res = data(await callAdminMcpTool(CH_REMOVE, { channelId: channel.id }, cred()));
+    expectRelaxRefusal(res);
+    expect(String(res.nextStepJa)).not.toContain("未分類（unknown）");
+  });
+
+  // --- parties.remove ---
+  test("outside-domain: mail_address external in an internal domain (rule) → refused; oracle turns internal once Slack verifies the own team", async () => {
+    const domain = `${uid("d").toLowerCase()}.example.jp`;
+    const email = `contractor@${domain}`;
+    await setOrgInternalAudienceRule(ORG_A, { emailDomains: [domain] }, "test");
+    const party = await upsertOrgParty({ orgId: ORG_A, kind: "mail_address", identifier: email, audience: "external" });
+    expect(await audienceOf({ surface: "mail", email })).toBe("external");
+    const before = await approvalCount();
+    const res = await callAdminMcpTool(PTY_REMOVE, { partyId: party.id }, cred());
+    expectRelaxRefusal(data(res));
+    expect(await approvalCount()).toBe(before);
+    expect(await getOrgParty(ORG_A, "mail_address", email)).not.toBeNull();
+    await deleteOrgParty(ORG_A, party.id);
+    expect(await audienceOf({ surface: "mail", email })).toBe("internal");
+  });
+
+  test("mail_address external under an internal email_domain party → refused", async () => {
+    const domain = `${uid("d").toLowerCase()}.example.jp`;
+    const email = `guest@${domain}`;
+    await upsertOrgParty({ orgId: ORG_A, kind: "email_domain", identifier: domain, audience: "internal" });
+    const party = await upsertOrgParty({ orgId: ORG_A, kind: "mail_address", identifier: email, audience: "external" });
+    expectRelaxRefusal(data(await callAdminMcpTool(PTY_REMOVE, { kind: "mail_address", identifier: email }, cred())));
+    await deleteOrgParty(ORG_A, party.id);
+    expect(await audienceOf({ surface: "mail", email })).toBe("internal");
+  });
+
+  test("email_domain external whose domain is internal by the org rule → refused", async () => {
+    const domain = `${uid("d").toLowerCase()}.example.jp`;
+    await setOrgInternalAudienceRule(ORG_A, { emailDomains: [domain] }, "test");
+    const party = await upsertOrgParty({ orgId: ORG_A, kind: "email_domain", identifier: domain, audience: "external" });
+    expect(await audienceOf({ surface: "mail", email: `someone@${domain}` })).toBe("external");
+    expectRelaxRefusal(data(await callAdminMcpTool(PTY_REMOVE, { partyId: party.id }, cred())));
+    await deleteOrgParty(ORG_A, party.id);
+    expect(await audienceOf({ surface: "mail", email: `someone@${domain}` })).toBe("internal");
+  });
+
+  test("guest: slack_user external while own-workspace users are auto-internal → refused; oracle turns internal once Slack verifies the own team", async () => {
+    await setOrgInternalAudienceRule(ORG_A, { slackTeamIds: [OWN_TEAM], autoSlackTeamInternal: true }, "test");
+    const guest = uid("U");
+    const party = await upsertOrgParty({ orgId: ORG_A, kind: "slack_user", identifier: guest, audience: "external" });
+    expect(await audienceOf({ slackUserId: guest, slackTeamId: OWN_TEAM })).toBe("external");
+    const res = await callAdminMcpTool(PTY_REMOVE, { partyId: party.id }, cred());
+    expectRelaxRefusal(data(res));
+    expect(await getOrgParty(ORG_A, "slack_user", guest)).not.toBeNull();
+    // The guard above refused with no Slack bot token at all: it never depends
+    // on Slack being reachable (team rule ON → a slack_user delete may relax).
+    await deleteOrgParty(ORG_A, party.id);
+    // Oracle. Since #298 (7214eb7) resolveAudience trusts only the team Slack
+    // itself reports (users.info); the AI-supplied slackTeamId is ignored, so
+    // without a verifiable team the row-less guest stays external…
+    expect(await audienceOf({ slackUserId: guest, slackTeamId: OWN_TEAM })).toBe("external");
+    // …and in production Slack reports a guest of the own workspace with the
+    // own team id → the row-less guest is judged internal. That relaxation is
+    // exactly what the refusal above prevents.
+    const { upsertConversationAdapter } = await import("@/lib/data/conversation-adapters");
+    const { resetSlackUserTeamCacheForTests } = await import("@/lib/slack/bot-token");
+    await upsertConversationAdapter({ orgId: ORG_A, surface: "slack", enabled: true, secrets: { botToken: "xoxb-guest-oracle" } });
+    const realFetch = globalThis.fetch;
+    let slackTeam: string | null = OWN_TEAM;
+    globalThis.fetch = (async (input: unknown) => {
+      const url = String(input);
+      if (url.includes("users.info")) {
+        return slackTeam
+          ? Response.json({ ok: true, user: { id: guest, team_id: slackTeam } })
+          : Response.json({ ok: false, error: "user_not_found" });
+      }
+      return Response.json({ ok: false, error: "not_mocked" });
+    }) as typeof fetch;
+    try {
+      resetSlackUserTeamCacheForTests();
+      expect(await audienceOf({ slackUserId: guest })).toBe("internal");
+      // AI-supplied slackTeamId alone never makes it internal (fail-closed):
+      // users.info cannot find the user → external…
+      resetSlackUserTeamCacheForTests();
+      slackTeam = null;
+      expect(await audienceOf({ slackUserId: guest, slackTeamId: OWN_TEAM })).toBe("external");
+      // …and Slack reports another workspace → external, whatever the AI claims.
+      resetSlackUserTeamCacheForTests();
+      slackTeam = "T0OTHERTEAM";
+      expect(await audienceOf({ slackUserId: guest, slackTeamId: OWN_TEAM })).toBe("external");
+    } finally {
+      globalThis.fetch = realFetch;
+      resetSlackUserTeamCacheForTests();
+      await upsertConversationAdapter({ orgId: ORG_A, surface: "slack", enabled: false, secrets: {} });
+    }
+  });
+
+  test("allowed: external slack_user without an auto-internal team, external phone / line, external slack_channel party", async () => {
+    for (const p of [
+      { kind: "slack_user" as const, identifier: uid("U") },
+      { kind: "phone" as const, identifier: `+8190${String(Date.now()).slice(-8)}` },
+      { kind: "line" as const, identifier: uid("Uline") },
+      { kind: "slack_channel" as const, identifier: uid("C") },
+    ]) {
+      const party = await upsertOrgParty({ orgId: ORG_A, ...p, audience: "external" });
+      const out = data(await callAdminMcpTool(PTY_REMOVE, { partyId: party.id }, cred()));
+      expect([p.kind, out.code]).toEqual([p.kind, "needs_approval"]);
+      expect(String(out.summary)).toContain("削除後の判定: 社外");
+    }
+  });
+
+  test("fulfil-time recheck: the org rule made the domain internal after the request → refused at fulfillment, party kept", async () => {
+    const domain = `${uid("d").toLowerCase()}.example.jp`;
+    const email = `vendor@${domain}`;
+    const party = await upsertOrgParty({ orgId: ORG_A, kind: "mail_address", identifier: email, audience: "external" });
+    const out = data(await callAdminMcpTool(PTY_REMOVE, { partyId: party.id }, cred()));
+    expect(out.code).toBe("needs_approval");
+    await setOrgInternalAudienceRule(ORG_A, { emailDomains: [domain] }, "test");
+    const fulfillment = await approveAndFulfill(String(out.approvalId));
+    expect(fulfillment?.ok).toBe(false);
+    expect(fulfillment?.error).toBe(RELAX);
+    expect((fulfillment as Record<string, unknown>)?.retryable).toBe(false);
+    expect(await getOrgParty(ORG_A, "mail_address", email)).not.toBeNull();
+  });
+});
+
+/* ------------------------------------------------------------------------ *
+ * After #276: org_channels.surface includes telegram, and channels.list /
+ * parties.list do not return row ids — the remove tools select rows by what
+ * the lists return (externalId + surface / kind + identifier).
+ * ------------------------------------------------------------------------ */
+import { CHANNEL_LEDGER_SURFACES } from "@/lib/channel-classify/core";
+
+describe("aligned with #276 (telegram surface, list → remove by natural key)", () => {
+  test("channels.remove surface enum = the ledger surfaces (incl. telegram); descriptions point to channels.list / parties.list keys", () => {
+    const ch = ADMIN_MCP_TOOLS.find((t) => t.name === CH_REMOVE)!;
+    const pt = ADMIN_MCP_TOOLS.find((t) => t.name === PTY_REMOVE)!;
+    const props = ch.inputSchema.properties as Record<string, { enum?: string[]; description?: string }>;
+    expect(props.surface.enum).toEqual([...CHANNEL_LEDGER_SURFACES]);
+    expect(props.surface.enum).toContain("telegram");
+    expect(ch.description).toContain("channels.list");
+    expect(String(props.externalId.description)).toContain("channels.list");
+    expect(String(props.channelId.description)).toContain("not returned by channels.list");
+    const pprops = pt.inputSchema.properties as Record<string, { description?: string }>;
+    expect(pt.description).toContain("parties.list");
+    expect(String(pprops.partyId.description)).toContain("not returned by parties.list");
+  });
+
+  test("telegram: a row found with channels.list is removed by externalId + surface", async () => {
+    const externalId = `-100${String(Date.now()).slice(-9)}${++seq}`;
+    await upsertOrgChannel({ orgId: ORG_A, surface: "telegram", externalId, classification: "shared_external", skipInspect: true });
+    const listed = data(await callAdminMcpTool("channels.list", { surface: "telegram", limit: 200 }, cred()));
+    const item = (listed.items as Array<Record<string, unknown>>).find((i) => i.externalId === externalId)!;
+    expect(item).toBeDefined();
+    expect("id" in item).toBe(false);
+    const out = data(await callAdminMcpTool(CH_REMOVE, { externalId: String(item.externalId), surface: String(item.surface) }, cred()));
+    expect(out.code).toBe("needs_approval");
+    expect(String(out.summary)).toContain("telegram");
+    expect((await approveAndFulfill(String(out.approvalId)))?.ok).toBe(true);
+    expect(await getOrgChannel(ORG_A, "telegram", externalId)).toBeNull();
+  });
+
+  test("a party found with parties.list is removed by kind + identifier", async () => {
+    const identifier = `${uid("d").toLowerCase()}.example.jp`;
+    await upsertOrgParty({ orgId: ORG_A, kind: "email_domain", identifier, audience: "internal" });
+    const listed = data(await callAdminMcpTool("parties.list", { kind: "email_domain", limit: 200 }, cred()));
+    const item = (listed.items as Array<Record<string, unknown>>).find((i) => i.identifier === identifier)!;
+    expect(item).toBeDefined();
+    const out = data(await callAdminMcpTool(PTY_REMOVE, { kind: String(item.kind), identifier: String(item.identifier) }, cred()));
+    expect(out.code).toBe("needs_approval");
+    expect((await approveAndFulfill(String(out.approvalId)))?.ok).toBe(true);
+    expect(await getOrgParty(ORG_A, "email_domain", identifier)).toBeNull();
+  });
+});
+
+describe("self-approval", () => {
+  test("the requesting admin agent cannot approve its own channels.remove / parties.remove ticket; rows kept, ticket pending", async () => {
+    const c = cred();
+    const channel = await upsertOrgChannel({ orgId: ORG_A, surface: "slack", externalId: uid("C"), classification: "internal", skipInspect: true });
+    const identifier = `${uid("selfappr").toLowerCase()}.example.com`;
+    await upsertOrgParty({ orgId: ORG_A, kind: "email_domain", identifier, audience: "external" });
+    const tickets = [
+      data(await callAdminMcpTool(CH_REMOVE, { externalId: channel.externalId }, c)),
+      data(await callAdminMcpTool(PTY_REMOVE, { kind: "email_domain", identifier }, c)),
+    ];
+    for (const out of tickets) {
+      expect(out.code).toBe("needs_approval");
+      let thrown: unknown = null;
+      try {
+        await resolveApproval(String(out.approvalId), "approved", "agent", ORG_A, { actorId: c.actorId, grokBotAgentId: c.grokBotAgentId });
+      } catch (error) {
+        thrown = error;
+      }
+      expect((thrown as { code?: string } | null)?.code).toBe("self_approval_denied");
+      expect((await getApprovalById(String(out.approvalId), ORG_A))?.status).toBe("pending");
+    }
+    expect(await getOrgChannel(ORG_A, "slack", channel.externalId)).not.toBeNull();
+    expect(await getOrgParty(ORG_A, "email_domain", identifier)).not.toBeNull();
+  });
+});

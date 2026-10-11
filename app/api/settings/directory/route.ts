@@ -8,6 +8,11 @@ import {
 } from "@/lib/data";
 import type { InformationClass } from "@/lib/types";
 import { DASHBOARD_DIRECTORY_LOCKED_JA } from "@/lib/dashboard/policy-lock";
+import {
+  ProjectAccessOrgError,
+  projectAccessRefusalBody,
+  projectAccessRefusalStatus,
+} from "@/lib/employees/project-access-org";
 
 function directoryLocked() {
   return NextResponse.json(
@@ -53,11 +58,15 @@ export async function PUT(req: Request) {
         ref,
         class: infoClass,
         projectId,
+        projectAudit: { path: "web.settings.directory", actorEmail: gate.email },
       });
       return NextResponse.json({ ok: true, asset });
     }
     return NextResponse.json({ error: "invalid_record" }, { status: 400 });
   } catch (error) {
+    if (error instanceof ProjectAccessOrgError) {
+      return NextResponse.json(projectAccessRefusalBody(error), { status: projectAccessRefusalStatus(error) });
+    }
     const message = error instanceof Error ? error.message : "upsert_failed";
     return NextResponse.json({ error: message }, { status: 400 });
   }

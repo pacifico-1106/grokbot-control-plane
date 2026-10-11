@@ -7,7 +7,9 @@
  *
  * Applies to outbound-send tools (lib/gateway/tools.ts OUTBOUND_SEND_TOOL_IDS).
  */
+import { createHash } from "node:crypto";
 import { appendAuditEvent } from "@/lib/data/audit";
+import { conversationOrgMismatch } from "@/lib/gateway/audience";
 import { getEmployeeById } from "@/lib/data/employees";
 import { isOutboundSendTool } from "@/lib/gateway/tools";
 import { evaluateMailPolicyForRequest } from "@/lib/mail-policy/evaluate-request";
@@ -19,6 +21,7 @@ export const FULFILL_POLICY_BLOCK_CODES = [
   "fulfill_blocked_tool_denied",
   "fulfill_blocked_mail_policy",
   "fulfill_blocked_employee_unavailable",
+  "fulfill_blocked_conversation_org_mismatch",
 ] as const;
 export type FulfillPolicyBlockCode = (typeof FULFILL_POLICY_BLOCK_CODES)[number];
 
@@ -38,6 +41,23 @@ export async function recheckPolicyAtFulfill(
   snapshot: InvokeSnapshot
 ): Promise<FulfillPolicyRecheck> {
   const tool = snapshot.tool || approval.tool || "";
+  // Tenant isolation: execution is bound to the approval ROW's org. A snapshot
+  // whose conversation names another org (e.g. created before the fix with a
+  // forged conversation.orgId) is refused for every tool, before any provider
+  // call. Only a hash of the supplied org is audited (under the row's org).
+  const orgMismatch = conversationOrgMismatch(snapshot.conversation, approval.orgId);
+  if (orgMismatch) {
+    return {
+      ok: false,
+      code: "fulfill_blocked_conversation_org_mismatch",
+      reason: "conversation_org_mismatch",
+      messageJa:
+        "この承認の会話先が承認した組織と一致しないため、実行を停止しました（送信していません）。必要であれば同じ内容で承認を取り直してください。",
+      detail: {
+        suppliedOrgIdSha256: createHash("sha256").update(orgMismatch.suppliedOrgId).digest("hex"),
+      },
+    };
+  }
   if (!isOutboundSendTool(tool)) return { ok: true };
 
   const employeeId = approval.employeeId;

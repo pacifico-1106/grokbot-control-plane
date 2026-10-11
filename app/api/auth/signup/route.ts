@@ -16,6 +16,7 @@ import { DEMO_ORG } from "@/lib/demo-data";
 import { sendTrialStartedEmail, sendWelcomeEmail } from "@/lib/email";
 import { getClientIp, getTurnstileConfig, verifyTurnstileToken } from "@/lib/lp/turnstile";
 import { isDemoMode } from "@/lib/mode";
+import { isIpHashKeyConfigured } from "@/lib/security/ip-hash-key";
 import { TRIAL_DAYS } from "@/lib/stripe";
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
@@ -117,10 +118,6 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "invalid_email" }, { status: 400 });
   }
 
-  // Layer 2 (flags default OFF): attempt log / rate limit / domain checks.
-  const attemptStore = anySignupLayer2Enabled() ? createSupabaseSignupAttemptStore() : null;
-  const fingerprint = fingerprintSignup(req, email);
-
   function rejectToForm(code: string, status: number, message: string) {
     if (!contentType.includes("application/json")) {
       // Plain HTML form: back to /signup with a fixed error code (no echo of input).
@@ -130,6 +127,17 @@ export async function POST(req: Request) {
     }
     return NextResponse.json({ error: code, message }, { status });
   }
+
+  // IP_HASH_KEY required (no dev fallback): the signup fingerprint is keyed with it.
+  // Refuse before the guard, attempt log, Auth user, org or any email.
+  if (!isIpHashKeyConfigured()) {
+    console.error("[signup] IP_HASH_KEY not configured; refusing");
+    return rejectToForm("signup_unavailable", 503, "現在、新規登録を一時停止しています。時間をおいてお試しください。");
+  }
+
+  // Layer 2 (flags default OFF): attempt log / rate limit / domain checks.
+  const attemptStore = anySignupLayer2Enabled() ? createSupabaseSignupAttemptStore() : null;
+  const fingerprint = fingerprintSignup(req, email);
 
   // Bot protection runs before any Auth user / org / email side effect.
   // Not behind a flag (P0 hotfix spam-sample-20261003); Turnstile fail-closed outside DEMO.

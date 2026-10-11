@@ -21,7 +21,8 @@ export type SlackRejectionReason =
   | "voter_binding_failed"
   | "signature_invalid"
   | "app_mismatch"
-  | "team_mismatch";
+  | "team_mismatch"
+  | "approver_authority";
 
 const REJECTION_MESSAGES_JA: Record<SlackRejectionReason, string> = {
   expected_team_id_not_configured:
@@ -46,6 +47,8 @@ const REJECTION_MESSAGES_JA: Record<SlackRejectionReason, string> = {
     "アプリの設定が一致しません。",
   team_mismatch:
     "ワークスペースの設定が一致しません。",
+  approver_authority:
+    "この変更を承認できるのはオーナーまたは指定管理者だけです。",
 };
 
 export async function sendEphemeralRejection(

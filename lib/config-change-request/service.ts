@@ -20,6 +20,14 @@ import {
 } from "@/lib/data/approvals";
 import { getEmployee } from "@/lib/data/employees";
 import { deleteOrgChannel, getOrgChannel } from "@/lib/data/directory";
+import {
+  CONFIG_CHANGE_CHANNEL_REMOVE,
+  DIRECTORY_REMOVE_AUDIENCE_CHECK_FAILED,
+  DIRECTORY_REMOVE_RELAXES_AUDIENCE,
+  channelAudienceAfterRemove,
+  relaxRefusal,
+  removeRelaxesAudience,
+} from "@/lib/admin-mcp/directory-remove-audience";
 import { deleteSlackImEmployeeRoute, isSlackImChannelId } from "@/lib/data/slack-im-routes";
 import {
   isTokyo307PilotOrg,
@@ -28,8 +36,8 @@ import {
 import { getIdentityBinding } from "@/lib/employees/employee-identity";
 import { applyChannelClassification } from "@/lib/admin-mcp/channel-classify";
 import { executeApproval } from "@/lib/approvals/execution";
-import { detectSecretInPayload, buildSecretDetectionErrorResponse } from "@/lib/security/secret-detector";
-import { auditSecretDetectionBlocked, auditSecretDetectionSuspected } from "@/lib/security/secret-detection-audit";
+import { checkPayloadScanLimits, detectSecretInPayload, buildSecretDetectionErrorResponse } from "@/lib/security/secret-detector";
+import { auditSecretDetectionBlocked, auditSecretDetectionSuspected, safeEcho } from "@/lib/security/secret-detection-audit";
 import type { ApprovalRequest, Employee } from "@/lib/types";
 import {
   CONFIG_CHANGE_APPROVAL_CLASS,
@@ -239,6 +247,27 @@ export async function createConfigChangeRequest(
     return { ok: false, code: "employee_not_active", applied: false, messageJa: "有効なAI社員ではありません（fail-closed）" };
   }
 
+  // 2026-10-09 (#285 follow-up 3): the detector's size caps apply to the RAW
+  // input, before parsing truncates fields (reason ≤500) — an oversized
+  // request is refused and audited like every other detector path.
+  const oversized = checkPayloadScanLimits(input.args, { perString: true });
+  if (oversized) {
+    const rawJobId = typeof input.args.jobId === "string" ? safeEcho(input.args.jobId) : null;
+    await auditSecretDetectionBlocked(
+      {
+        orgId: employee.orgId,
+        employeeId: employee.id,
+        credentialId: input.credentialId,
+        surface: "config_change_request",
+        tool: CONFIG_CHANGE_TOOL,
+        jobId: rawJobId,
+      },
+      oversized
+    );
+    const rejection = buildSecretDetectionErrorResponse(oversized);
+    return { ...rejection, ok: false, applied: false, messageJa: rejection.messageJa };
+  }
+
   const parsed = parseConfigChangeInput(input.args);
   if (!parsed.ok) {
     if (parsed.code === "blocked_setting") {
@@ -275,6 +304,37 @@ export async function createConfigChangeRequest(
   if (proposal.kind !== "instructions" && before.kind === "channel") {
     if (proposal.kind === "channel_remove" && !before.exists) {
       return { ok: true, code: "no_change", applied: false, messageJa: "このチャネルはチャネル台帳に登録されていません（変更なし）" };
+    }
+    if (proposal.kind === "channel_remove") {
+      // Same post-delete audience guard as admin channels.remove (#287): never
+      // let a delete turn an external / mixed / unknown destination internal.
+      // Fail-closed when the ledger cannot be read.
+      let after: Awaited<ReturnType<typeof channelAudienceAfterRemove>>;
+      try {
+        const channel = await getOrgChannel(input.orgId, proposal.surface, proposal.externalId);
+        if (!channel || channel.orgId !== input.orgId) throw new Error("channel_lookup_failed");
+        after = await channelAudienceAfterRemove(input.orgId, channel);
+      } catch {
+        await auditRefusal(employee, input.credentialId, DIRECTORY_REMOVE_AUDIENCE_CHECK_FAILED, { externalId: proposal.externalId });
+        return {
+          ok: false,
+          code: DIRECTORY_REMOVE_AUDIENCE_CHECK_FAILED,
+          applied: false,
+          retryable: true,
+          messageJa: "削除後の判定を確認できなかったため、この変更依頼は受け付けませんでした。変更は反映していません。",
+          nextStepJa: "少し待ってから、もう一度依頼してください。",
+        };
+      }
+      if (removeRelaxesAudience(after)) {
+        const refusal = relaxRefusal(CONFIG_CHANGE_CHANNEL_REMOVE, `チャネル ${proposal.externalId}`, after);
+        await auditRefusal(employee, input.credentialId, refusal.code, {
+          externalId: proposal.externalId,
+          audienceBefore: refusal.audienceBefore,
+          audienceAfter: refusal.audienceAfter,
+          beforeKind: refusal.beforeKind,
+        });
+        return { ...refusal, ok: false, applied: false };
+      }
     }
     if (
       proposal.kind === "channel_classification" &&
@@ -478,6 +538,14 @@ async function applyConfigChange(approval: ApprovalRequest): Promise<ConfigChang
     } else {
       const channel = await getOrgChannel(approval.orgId, proposal.surface, proposal.externalId);
       if (channel) {
+        // Fulfil-time re-check (#287): the ledger / rule may have changed since filing.
+        let after: Awaited<ReturnType<typeof channelAudienceAfterRemove>>;
+        try {
+          after = await channelAudienceAfterRemove(approval.orgId, channel);
+        } catch {
+          return fail(DIRECTORY_REMOVE_AUDIENCE_CHECK_FAILED);
+        }
+        if (removeRelaxesAudience(after)) return fail(DIRECTORY_REMOVE_RELAXES_AUDIENCE);
         if (proposal.surface === "slack" && isSlackImChannelId(proposal.externalId)) {
           await deleteSlackImEmployeeRoute({ orgId: approval.orgId, slackChannelId: proposal.externalId });
         }

@@ -24,7 +24,8 @@ import { isReplyPolicyEnhancedEnabled } from "@/lib/feature-flags";
 import { BUSINESS_AUDIT_CLASS } from "@/lib/admin-mcp/audit-class";
 import { getOrgPartyByIdentifier } from "@/lib/data/directory";
 import { getOrgChannel } from "@/lib/data/directory";
-import { getOrgInternalAudienceRule } from "@/lib/data/internal-audience-rule";
+import { getOrgInternalAudienceRule, isSlackTeamInternal } from "@/lib/data/internal-audience-rule";
+import { fetchVerifiedSlackUserTeamId } from "@/lib/slack/bot-token";
 
 export type ReplyDestinationChoice = "channel" | "thread" | "dm";
 
@@ -81,8 +82,9 @@ export async function validateReplyRecipient(
       if (rule) {
         if (recipientKind === "email_domain" && rule.emailDomains.includes(recipientIdentifier)) {
           resolvedAudience = "internal";
-        } else if (recipientKind === "slack_user" && context.slackTeamId && rule.autoSlackTeamInternal) {
-          if (rule.slackTeamIds.includes(context.slackTeamId)) {
+        } else if (recipientKind === "slack_user" && rule.autoSlackTeamInternal && rule.slackTeamIds.length > 0) {
+          // Slack-verified team only (never the AI-supplied context.slackTeamId).
+          if (isSlackTeamInternal(rule, await fetchVerifiedSlackUserTeamId(orgId, recipientIdentifier))) {
             resolvedAudience = "internal";
           }
         }
@@ -143,8 +145,9 @@ async function resolvePartyAudience(
 
   const rule = await getOrgInternalAudienceRule(orgId);
   if (rule) {
-    if (recipientKind === "slack_user" && context.slackTeamId && rule.autoSlackTeamInternal) {
-      if (rule.slackTeamIds.includes(context.slackTeamId)) {
+    if (recipientKind === "slack_user" && rule.autoSlackTeamInternal && rule.slackTeamIds.length > 0) {
+      // Slack-verified team only (never the AI-supplied context.slackTeamId).
+      if (isSlackTeamInternal(rule, await fetchVerifiedSlackUserTeamId(orgId, recipientIdentifier))) {
         return "internal";
       }
     }

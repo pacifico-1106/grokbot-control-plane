@@ -16,6 +16,8 @@ export type SessionContext = {
   email: string | null;
   orgId: string | null;
   member: OrgMember | null;
+  /** Supabase auth.users.last_sign_in_at (set on real sign-in, not token refresh). */
+  lastSignInAt?: string | null;
   /**
    * Auth user was created via an invite (auth.users.invited_at set).
    * Invited users must never get an auto-provisioned org — access comes only
@@ -162,6 +164,7 @@ export async function getSessionContext(): Promise<SessionContext> {
       email: user.email ?? null,
       orgId,
       member,
+      lastSignInAt: user.last_sign_in_at ?? null,
       invited: Boolean((user as { invited_at?: string | null }).invited_at),
     };
   } catch {

@@ -342,16 +342,12 @@ describe("approval.resolved wake (Slack / LINE / Telegram) goes through the shar
     expect(wakeAudit?.metadata?.reason).toBe("wake_failed");
   });
 
-  test("machine-readable approval email carries the endpoint lines (flag ON) and not when OFF", async () => {
-    const { buildApprovalMachineBodyForTests } = await import("@/lib/approvals/resolve-side-effects");
-    const a = await pendingApproval();
-    delete process.env[FLAG];
-    expect(buildApprovalMachineBodyForTests(a, "rejected", "x@example.invalid")).not.toContain("mcpEndpoint=");
+  test("approval notify email no longer carries the endpoint lines (members-only mail, 2026-10-09): handoff goes via callback / MCP events", async () => {
+    const { buildApprovalNotifyEmail } = await import("@/lib/employees/approval-notify-email");
     process.env[FLAG] = "true";
-    const body = buildApprovalMachineBodyForTests(a, "rejected", "x@example.invalid");
-    expect(body).toContain(`mcpEndpoint=${MCP_URL}`);
-    expect(body).toContain("mcpConnectivityCheck=staffpass_whoami");
-    expect(body).toContain("mcpHandoffSchema=staffpass.mcp_handoff.v1");
+    const mail = buildApprovalNotifyEmail();
+    expect(`${mail.subject}${mail.text}${mail.html}`).not.toContain("mcpEndpoint=");
+    expect(`${mail.subject}${mail.text}${mail.html}`).not.toContain("mcpConnectivityCheck=");
   });
 });
 

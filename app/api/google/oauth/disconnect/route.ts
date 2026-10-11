@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { requireOrgSession } from "@/lib/auth/require-org";
+import { requireIdentityLinkManager } from "@/lib/auth/identity-link-gate";
 import { appendAuditEvent } from "@/lib/data/audit";
 import { getEmployee } from "@/lib/data";
 import {
@@ -12,6 +12,11 @@ import { revokeGoogleToken } from "@/lib/google/oauth";
 
 export const runtime = "nodejs";
 
+/**
+ * Disconnects an AI employee's Google Calendar identity.
+ * 401 no session; 403 without hire_issue_credentials (code / nextStep /
+ * retryable); 404 for an employee outside the caller's org.
+ */
 export async function POST(req: Request) {
   if (!isGoogleCalendarReadEnabled()) {
     return NextResponse.json(
@@ -20,7 +25,7 @@ export async function POST(req: Request) {
     );
   }
 
-  const gate = await requireOrgSession();
+  const gate = await requireIdentityLinkManager(req);
   if (!gate.ok) return gate.response;
 
   let body: { employeeId?: string };
@@ -59,6 +64,7 @@ export async function POST(req: Request) {
     orgId: gate.orgId,
     employeeId,
     credentialId: null,
+    actorEmail: gate.actor.email,
     action: "google.identity_revoked",
     purpose: "google.oauth.disconnect",
     summary: `Google Calendar disconnected: ${identity.googleEmail || identity.googleSub}`,

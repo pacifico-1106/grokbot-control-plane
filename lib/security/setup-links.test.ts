@@ -45,7 +45,7 @@ describe("setup-links", () => {
       });
 
       expect(result.ok).toBe(true);
-      expect(result.url).toContain("/api/slack/oauth/start");
+      expect(result.url).toContain("/api/slack/oauth/link");
     });
 
     test("mints a valid setup link for workspace_bot_install", () => {
@@ -244,7 +244,7 @@ describe("setup-links", () => {
       });
       expect(guidance.kind).toBe("slack_authorize");
       expect(guidance.setupUrl).toBeTruthy();
-      expect(guidance.setupUrl).toContain("/api/slack/oauth/start");
+      expect(guidance.setupUrl).toContain("/api/slack/oauth/link");
       expect(guidance.expiresAt).toBeTruthy();
     });
 

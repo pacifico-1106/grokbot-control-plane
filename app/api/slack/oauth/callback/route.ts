@@ -1,6 +1,7 @@
 import { cookies } from "next/headers";
 import { after, NextResponse } from "next/server";
 import { getAppOrigin } from "@/lib/approvals/tokens";
+import { verifyIdentityLinkCallbackActor } from "@/lib/auth/identity-link-gate";
 import { bindEmployeeSlackIdentity } from "@/lib/data/slack-identities";
 import { authorizeLinkHtmlResponse, authorizeLinkPageKind, completeAuthorizeLinkCallback } from "@/lib/slack/authorize-link";
 import { syncAutoDmRoutesForEmployee } from "@/lib/slack/dm-autoroute";
@@ -127,6 +128,12 @@ export async function GET(req: Request) {
       return authorizeLinkHtmlResponse(kind, kind === "denied" ? 200 : 400, result.code);
     }
     return authorizeLinkHtmlResponse("ok");
+  }
+  // Session flow: only the member who started the link (still holding
+  // hire_issue_credentials, same org, employee still in the org) can finish
+  // it. Checked before the code exchange, so no token is ever obtained.
+  if (!(await verifyIdentityLinkCallbackActor(parsed).catch(() => false))) {
+    return redirectEmployee(parsed.employeeId, "forbidden");
   }
   if (oauthError) {
     return redirectEmployee(parsed.employeeId, oauthError === "access_denied" ? "denied" : "error");

@@ -89,6 +89,14 @@ export const POSTING_PATH_INVENTORY: readonly PostingPath[] = [
     noteJa: "承認後の SNS 投稿。同じ本文の 2 件目の承認は送らずに置き換え済みで閉じる。",
   },
   {
+    id: "fulfill.caller_delivered",
+    tools: CONVERSATION_TOOLS,
+    surfaces: ["line", "telegram", "mail"],
+    where: "lib/approvals/fulfill.ts (fulfillApprovedInvokeCore: 承認済みの LINE / Telegram / メール面の返信)",
+    coverage: "no_live_send",
+    noteJa: "承認済みの LINE / Telegram / メール面の会話返信。ゲートウェイに配送経路がなく slack_channel_required で止まる（未送信）。スレッドの同時送信ガードはその手前で判定済み。配送を実装するときは台帳（guard）を通すこと。",
+  },
+  {
     id: "rerun.attachment_upload",
     tools: ["comm.reply", "comm.send"],
     surfaces: ["slack"],
