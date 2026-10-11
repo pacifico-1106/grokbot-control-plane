@@ -10,6 +10,7 @@ import type { FulfillmentFileUpload } from "@/lib/approvals/attachment-upload-cl
 import { isAdminClassApproval } from "@/lib/admin-mcp/audit-class";
 import { appendAuditEvent, updateApprovalMetadata } from "@/lib/data";
 import { getOrgStuckWatchPolicy } from "@/lib/data/stuck-watch-policy";
+import { isNonTransientFulfilmentError } from "@/lib/slack/approval-app-scope-notice";
 import type {
   ApprovalRequest,
   ApprovalStuckWatchMeta,
@@ -51,6 +52,18 @@ function approvalToolName(approval: ApprovalRequest): string {
 export function w2ManualReinvokeOnlyTool(approval: ApprovalRequest): string | null {
   const tool = approvalToolName(approval);
   return W2_MANUAL_REINVOKE_ONLY_TOOLS.has(tool) ? tool : null;
+}
+
+/** The stored (admin) fulfilment error code, if any. */
+function lastFulfilmentError(approval: ApprovalRequest): string | null {
+  const raw = approval.metadata?.adminFulfillment ?? approval.metadata?.fulfillment;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const error = (raw as { error?: unknown }).error;
+  return typeof error === "string" ? error : null;
+}
+
+export function w2FixRequiredNextStepJa(tool: string): string {
+  return `自動再実行はしません（設定を直さないと成功しないエラー）。承認アプリの権限を足して入れ直した後、管理エージェントが ${tool || "同じツール"} を approvalId 付きで呼び直してください。`;
 }
 
 export function w2ManualReinvokeNextStepJa(tool: string): string {
@@ -122,7 +135,9 @@ export type W2EligibilityResult = {
     | "too_soon"
     | "max_retries"
     | "backoff"
-    | "manual_reinvoke_required";
+    | "manual_reinvoke_required"
+    /** APPROVAL_APP_MISSING_SCOPE_NOTICE_ENABLED: non-transient error, fix then re-invoke (no retry spent). */
+    | "fix_required";
   retryCount: number;
   minutesSinceResolved: number;
 };
@@ -154,6 +169,10 @@ export function evaluateW2Eligibility(
       retryCount,
       minutesSinceResolved: 0,
     };
+  }
+
+  if (isNonTransientFulfilmentError(lastFulfilmentError(approval))) {
+    return { eligible: false, reason: "fix_required", retryCount, minutesSinceResolved: 0 };
   }
 
   if (retryCount >= policy.maxAutoRetries) {

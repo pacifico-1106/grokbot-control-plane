@@ -1,5 +1,6 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import { NextResponse } from "next/server";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 /**
  * Shared CRON_SECRET check for app/api/cron/* (木村 2026-10-04).
@@ -120,7 +121,7 @@ export function rejectUnauthorizedCron(req: Request): NextResponse | null {
   const decision = checkCronAuthorization(req.headers.get("authorization"));
   if (decision === "ok") return null;
   if (decision === "not_configured") {
-    return NextResponse.json({ ok: false, error: "cron_not_configured" }, { status: 503 });
+    return jsonUtf8({ ok: false, error: "cron_not_configured" }, { status: 503 });
   }
-  return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
+  return jsonUtf8({ ok: false, error: "unauthorized" }, { status: 401 });
 }

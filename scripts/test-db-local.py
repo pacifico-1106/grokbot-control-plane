@@ -229,6 +229,20 @@ try:
     print("PASS: mcp oauth (20261010200000): 7 tables RLS on / no policy, anon/authenticated hold no privilege and cannot execute "
           "oauth_rate_limit_hit; cross-org grant (employee / credential / member) rejected; atomic rate-limit counter; "
           "re-applicable; rollback drops all 7 tables + 2 functions; forward again.")
+    # 社員証 pre-expiry notice dedup (20261012100000, CREDENTIAL_EXPIRY_NOTICE_ENABLED).
+    expiry_notices = ROOT / "supabase/migrations/20261012100000_credential_expiry_notices.sql"
+    sql(expiry_notices)
+    sql(expiry_notices)  # re-applicable
+    sql(ROOT / "tests/security/db-credential-expiry-notices.sql")
+    sql(ROOT / "supabase/verification/20261012100000_credential_expiry_notices_rollback.sql")
+    assert query("select to_regclass('public.credential_expiry_notices') is null"
+                 " and to_regprocedure('public.credential_expiry_notices_same_org()') is null"
+                 " and to_regclass('public.credentials') is not null;") == "t"
+    sql(expiry_notices)  # forward again after rollback
+    sql(ROOT / "tests/security/db-credential-expiry-notices.sql")
+    print("PASS: credential expiry notices (20261012100000): RLS on / no policy, anon/authenticated hold no privilege; "
+          "one row per credential × threshold (unique); threshold 7d/1d only; org / employee must be the credential's own "
+          "(insert + update); credential delete cascades; re-applicable; rollback drops table + trigger fn; forward again.")
     webhook_settings = ROOT / "supabase/migrations/20261005100000_employee_webhook_settings.sql"
     sql(webhook_settings)
     sql(webhook_settings)  # re-applicable

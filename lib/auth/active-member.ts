@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import type { SessionContext } from "./session";
 import type { OrgMember } from "../types";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 /**
  * Production contract shared by requireCapability (lib/team/demo-actor.ts) and
@@ -26,7 +27,7 @@ export function activeSessionMember(
 }
 
 export function activeMemberRequiredResponse(): NextResponse {
-  return NextResponse.json(
+  return jsonUtf8(
     {
       ok: false,
       error: ACTIVE_MEMBER_REQUIRED_ERROR,

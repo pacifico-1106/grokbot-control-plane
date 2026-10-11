@@ -20,6 +20,7 @@ import type { GatewayToolId } from "@/lib/gateway/tools";
 import type { AdminMcpToolName } from "@/lib/mcp/admin-public";
 import type { UiFeature } from "./plan-ui";
 import { isUiFeatureAvailable, getMinPlanForUiFeature } from "./plan-ui";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 export type ApiPlanGateResult =
   | { ok: true; planKey: PlanKey | null; billingStatus: string | null }
@@ -67,7 +68,7 @@ export async function assertApiPlanAllows(
 
   return {
     ok: false,
-    response: NextResponse.json(
+    response: jsonUtf8(
       {
         ok: false,
         error: "plan_scope_denied",
@@ -128,7 +129,7 @@ export async function assertApiGatewayToolAllowed(
 
   return {
     ok: false,
-    response: NextResponse.json(
+    response: jsonUtf8(
       {
         ok: false,
         error: "plan_scope_denied",
@@ -189,7 +190,7 @@ export async function assertApiAdminToolAllowed(
 
   return {
     ok: false,
-    response: NextResponse.json(
+    response: jsonUtf8(
       {
         ok: false,
         error: "plan_scope_denied",

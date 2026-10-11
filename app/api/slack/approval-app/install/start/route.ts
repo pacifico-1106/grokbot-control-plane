@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { requireOrgAdminSession } from "@/lib/auth/require-org";
+import { loginRedirectUrl } from "@/lib/auth/safe-next";
 import {
   SHARED_APPROVAL_INSTALL_COOKIE,
   SHARED_APPROVAL_STATE_TTL_MS,
@@ -19,13 +20,23 @@ export const dynamic = "force-dynamic";
 /**
  * SLACK_SHARED_APPROVAL_APP_ENABLED: "Add to Slack" for the shared approval app
  * 「Staffpass承認」. Owner/admin session only; org comes from the session.
+ * Not logged in → /login?next=<this path> (fixed path, validated by the shared
+ * safe-next rule), so the link in setup notices works from a logged-out browser.
  */
-export async function GET() {
+const INSTALL_START_PATH = "/api/slack/approval-app/install/start";
+
+export async function GET(req: Request) {
   if (!isSharedApprovalAppEnabled()) {
     return NextResponse.json({ error: "not_found" }, { status: 404 });
   }
   const gate = await requireOrgAdminSession();
-  if (!gate.ok) return gate.response;
+  if (!gate.ok) {
+    if (gate.reason !== "auth_required") return gate.response;
+    const login = NextResponse.redirect(loginRedirectUrl(INSTALL_START_PATH, req.url), 303);
+    login.headers.set("cache-control", "no-store");
+    login.headers.set("referrer-policy", "no-referrer");
+    return login;
+  }
   if (!sharedApprovalAppConfig()) return sharedApprovalResultHtml({ ok: false, code: "unconfigured" }, 503);
   const nonce = randomBytes(24).toString("base64url");
   const state = signSharedApprovalInstallState({ orgId: gate.orgId, nonce });

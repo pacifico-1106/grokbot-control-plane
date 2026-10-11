@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { rejectUnauthorizedCron } from "@/lib/security/cron-secret";
 import { sendTenantDigests } from "@/lib/notify/channels";
+import { isCredentialExpiryNoticeEnabled } from "@/lib/feature-flags";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -10,9 +11,20 @@ export async function GET(req: Request) {
   if (rejected) return rejected;
 
   const results = await sendTenantDigests();
-  return NextResponse.json({
+  const body: Record<string, unknown> = {
     ok: results.every((result) => result.ok || result.skipped),
     deliveries: results.length,
     failed: results.filter((result) => !result.ok && !result.skipped).length,
-  });
+  };
+  // CREDENTIAL_EXPIRY_NOTICE_ENABLED (default OFF): 社員証 pre-expiry notice.
+  // Isolated: a notice failure never changes the digest result. Counts only.
+  if (isCredentialExpiryNoticeEnabled()) {
+    try {
+      const { runCredentialExpiryNotices } = await import("@/lib/employees/credential-expiry-notice");
+      body.credentialExpiryNotice = await runCredentialExpiryNotices();
+    } catch {
+      body.credentialExpiryNotice = { error: "credential_expiry_notice_failed" };
+    }
+  }
+  return NextResponse.json(body);
 }

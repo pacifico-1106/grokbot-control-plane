@@ -9,6 +9,7 @@ import { buildConcentration } from "@/lib/employees/concentration";
 import { DOMAIN_LABELS } from "@/lib/gateway/domains";
 import type { Employee, NotificationChannel } from "@/lib/types";
 import { EmployeeRevokeButton } from "@/components/employees/EmployeeRevokeButton";
+import { credentialExpiryLineJa, employeeStatusView, statusChipClass } from "@/lib/employees/credential-expiry";
 
 export const dynamic = "force-dynamic";
 
@@ -21,6 +22,20 @@ function InboxBadge({ employee, channels }: { employee: Employee; channels: Noti
 }
 
 
+/** 状態: employees.status + the current 社員証's expires_at (期限切れ / 社員証なし). */
+function StatusChip({ employee }: { employee: Employee }) {
+  const view = employeeStatusView(employee);
+  return <span className={`chip ${statusChipClass(view.tone)}`}>{view.label}</span>;
+}
+
+/** Expiry date only (id-free, never key material). Hidden for 契約終了. */
+function CredentialExpiryLine({ employee }: { employee: Employee }) {
+  if (employee.status === "suspended") return null;
+  const view = employeeStatusView(employee);
+  const tone = view.credential === "expired" ? "text-[var(--danger)]" : view.credential === "expiring" ? "text-[var(--warn)]" : "faint";
+  return <div className={`mt-1.5 text-[11px] ${tone}`}>{credentialExpiryLineJa(employee)}</div>;
+}
+
 function EmployeePassCard({ employee }: { employee: Employee }) {
   return (
     <div className="employee-pass relative overflow-hidden rounded-2xl border border-[color-mix(in_oklab,var(--accent-strong)_28%,var(--border))] bg-[linear-gradient(135deg,#0b1720,#081017)] p-3.5 shadow-[inset_0_1px_0_rgba(255,255,255,.04)]">
@@ -32,7 +47,7 @@ function EmployeePassCard({ employee }: { employee: Employee }) {
         </div>
         <div className="relative">
           <EmployeeAvatar seed={employee.id} size={58} />
-          <span className={`absolute -right-0.5 -top-0.5 h-2.5 w-2.5 shrink-0 rounded-full border-2 border-[#0b1720] ${employee.status === "active" ? "bg-[var(--ok)] shadow-[0_0_10px_var(--ok)]" : "bg-[var(--warn)]"}`} />
+          <span className={`absolute -right-0.5 -top-0.5 h-2.5 w-2.5 shrink-0 rounded-full border-2 border-[#0b1720] ${employeeStatusView(employee).tone === "ok" ? "bg-[var(--ok)] shadow-[0_0_10px_var(--ok)]" : "bg-[var(--warn)]"}`} />
         </div>
       </div>
       <div className="relative -mt-1 pr-16">
@@ -91,20 +106,9 @@ export default async function EmployeesPage() {
                       {APPROVAL_POLICY_LABELS[e.approvalPolicy]}
                     </span>
                     <InboxBadge employee={e} channels={notificationChannels} />
-                    <span
-                      className={`chip ${
-                        e.status === "active" ? "chip-ok" : e.status === "suspended" ? "chip-danger" : "chip-warn"
-                      }`}
-                    >
-                      {e.status === "active"
-                        ? "稼働中"
-                        : e.status === "suspended"
-                          ? "契約終了"
-                          : e.status === "draft"
-                            ? "下書き"
-                            : e.status}
-                    </span>
+                    <StatusChip employee={e} />
                   </div>
+                  <CredentialExpiryLine employee={e} />
                   {(() => {
                     const row = concentrationById.get(e.id);
                     if (!row?.highRiskDomains.length) return null;
@@ -184,19 +188,8 @@ export default async function EmployeesPage() {
                         })()}
                       </td>
                       <td className="px-4 py-3 relative z-[1] pointer-events-none">
-                        <span
-                          className={`chip ${
-                            e.status === "active" ? "chip-ok" : e.status === "suspended" ? "chip-danger" : "chip-warn"
-                          }`}
-                        >
-                          {e.status === "active"
-                            ? "稼働中"
-                            : e.status === "suspended"
-                              ? "契約終了"
-                              : e.status === "draft"
-                                ? "下書き"
-                                : e.status}
-                        </span>
+                        <StatusChip employee={e} />
+                        <CredentialExpiryLine employee={e} />
                       </td>
                       <td className="px-4 py-3 relative z-[1]">
                         <Link

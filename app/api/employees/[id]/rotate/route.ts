@@ -12,6 +12,7 @@ import {
   runtimeModeLabel,
 } from "@/lib/data";
 import { mintOneTimeSecret } from "@/lib/bindings";
+import { isAdminMcpCredentialReissueEnabled } from "@/lib/feature-flags";
 
 export const runtime = "nodejs";
 
@@ -22,7 +23,23 @@ export const runtime = "nodejs";
  * Authority = issuing: owner/admin + hire_issue_credentials (fail-closed).
  * Every successful rotation writes a `credential.rotated` audit row that
  * carries only a 12-char hash prefix — never the secret or the full hash.
+ *
+ * reissueApprovalId (ADMIN_MCP_CREDENTIAL_REISSUE_ENABLED, default OFF): the
+ * hand-over of an approved admin MCP employees.credential.reissue ticket. Same
+ * gate as above; the ticket must be this org's / this employee's, approved,
+ * unused and inside its 24h window (lib/employees/credential-reissue). The new
+ * secret is shown once to this human only, exactly like a plain rotate.
  */
+const REISSUE_STATUS: Record<string, number> = {
+  feature_disabled: 400,
+  reissue_approval_not_found: 404,
+  reissue_approval_mismatch: 409,
+  reissue_approval_not_approved: 409,
+  reissue_approval_used: 409,
+  reissue_approval_expired: 410,
+  employee_terminated: 409,
+  revoked: 403,
+};
 export async function POST(
   req: Request,
   ctx: { params: Promise<{ id: string }> }
@@ -51,9 +68,44 @@ export async function POST(
   });
   if (!authority.ok) return NextResponse.json(webDirectDeniedBody(authority), { status: 403 });
 
+  const targetOrgId = employee.orgId || orgId;
+  const reissueApprovalId =
+    typeof rawBody.reissueApprovalId === "string" ? rawBody.reissueApprovalId.trim() : "";
+  if (reissueApprovalId) {
+    if (!isAdminMcpCredentialReissueEnabled()) {
+      return NextResponse.json({ error: "feature_disabled" }, { status: 400 });
+    }
+    const { redeemCredentialReissue } = await import("@/lib/employees/credential-reissue");
+    const r = await redeemCredentialReissue({
+      orgId: targetOrgId,
+      employeeId: id,
+      approvalId: reissueApprovalId,
+      actor: { memberId: gate.actor.id, email: gate.actor.email ?? null },
+    });
+    if (!r.ok) {
+      return NextResponse.json({ error: r.code, message: r.messageJa }, { status: REISSUE_STATUS[r.code] ?? 500 });
+    }
+    return NextResponse.json({
+      ok: true,
+      demo: runtimeModeLabel() === "demo",
+      mode: runtimeModeLabel(),
+      employeeId: id,
+      reissueApprovalId,
+      generation: r.generation,
+      binding: bindingPublicView(r.binding),
+      credential: {
+        prefix: r.secret.prefix,
+        oneTimeSecret: r.secret.raw,
+        fingerprint: r.secret.fingerprint.slice(0, 12) + "…",
+        notice:
+          "承認済みの依頼で社員証を再発行しました。古い社員証は失効しました。秘密値は一度だけ表示されます（AI やチャットには貼らないでください）。",
+      },
+      message: `credentialGeneration=${r.generation}（ID不変）`,
+    });
+  }
+
   try {
     const secret = mintOneTimeSecret();
-    const targetOrgId = employee.orgId || orgId;
     const { binding, generation } = await rotateCredential(
       id,
       targetOrgId,

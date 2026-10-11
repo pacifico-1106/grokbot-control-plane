@@ -466,6 +466,8 @@ export type AuditAction =
   | "credential.issued"
   | "credential.revoked"
   | "credential.rotated"
+  /** CREDENTIAL_EXPIRY_NOTICE_ENABLED: pre-expiry notice sent / failed. Metadata: ids, thresholds, counts only. */
+  | "credential.expiry_notice"
   /** MCP OAuth (flag MCP_OAUTH_ENABLED). Metadata: client host, grant id, hash prefixes only. */
   | "oauth.consent_granted"
   | "oauth.consent_denied"
@@ -724,6 +726,11 @@ export interface Employee {
    */
   postingAs?: PostingAs;
   credentialId: string | null;
+  /**
+   * expires_at of the current (newest non-revoked) credential; null = no expiry.
+   * Display only (AI社員 list / detail); auth checks expires_at itself.
+   */
+  credentialExpiresAt?: string | null;
   createdAt: string;
 }
 
