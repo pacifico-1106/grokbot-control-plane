@@ -130,6 +130,8 @@ ADDITIVE = [
     ("20261012200000_", "tests/security/db-credential-reissue-claim.sql",
      "to_regprocedure('public.claim_credential_reissue(uuid,uuid,text,text,timestamptz)') is null"
      " and to_regprocedure('public.release_credential_reissue(uuid,uuid,text)') is null"),
+    # LP setup-fee payment record (PR3 dry-run, LP_AUTO_PROVISION_MODE).
+    ("20261012400000_", "tests/security/db-lp-provisionings.sql", ("lp_provisionings", "lp_provisioning_events")),
     ("20261010200000_", "tests/security/db-mcp-oauth.sql", ("oauth_clients", "oauth_authorization_requests", "oauth_grants",
      "oauth_authorization_codes", "oauth_access_tokens", "oauth_refresh_tokens", "oauth_rate_limits")),
 ]
