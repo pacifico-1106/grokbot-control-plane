@@ -9,6 +9,8 @@ import { createHash, randomBytes, createHmac, timingSafeEqual } from "node:crypt
 import { createSupabaseAdminClient } from "@/lib/supabase";
 import { isLpChatEnabled } from "@/lib/feature-flags";
 import { requireGuestSigningKey } from "@/lib/lp/guest-signing-key";
+import { leadPageColumns } from "@/lib/lp/lead-page-db";
+import { parseLpPage, parseLpRef, type LpPage } from "@/lib/lp/lp-page";
 
 const DEFAULT_TENANT_ID = "00000000-0000-0000-0000-000000000001";
 const JOURNEY_EXPIRY_HOURS = 24;
@@ -27,6 +29,10 @@ export interface Journey {
   turnCount: number;
   createdAt: string;
   updatedAt: string;
+  /** LP the chat was started on (null: older journey / column not written). Allowlisted on read. */
+  lpPage: LpPage | null;
+  /** ?ref= on pattern B (validated on read). */
+  lpRef: string | null;
 }
 
 export interface ConsentEvent {
@@ -86,6 +92,8 @@ function mapJourneyRow(row: Record<string, unknown>): Journey {
     turnCount: Number(row.turn_count ?? 0),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
+    lpPage: parseLpPage(row.lp_page),
+    lpRef: parseLpRef(row.lp_ref),
   };
 }
 
@@ -95,6 +103,8 @@ export async function createJourney(input: {
   privacyVersion: string;
   kbReleaseId?: string;
   ipHash?: string;
+  lpPage?: LpPage;
+  lpRef?: string | null;
 }): Promise<Journey | null> {
   if (!isLpChatEnabled()) {
     return null;
@@ -123,6 +133,7 @@ export async function createJourney(input: {
       turn_count: 0,
       created_at: now.toISOString(),
       updated_at: now.toISOString(),
+      ...leadPageColumns(input.lpPage, input.lpRef),
     })
     .select("*")
     .single();

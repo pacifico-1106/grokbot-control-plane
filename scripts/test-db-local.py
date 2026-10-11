@@ -174,6 +174,13 @@ try:
     sql(lp_server_only)
     sql(lp_server_only)  # re-applicable
     sql(ROOT / "tests/security/db-lp-tables-server-only.sql")
+    # LP lead page / ref (20261012300000): additive nullable columns + CHECK; no grant change.
+    sql(ROOT / "supabase/migrations/20261001300000_lp_journeys_chat.sql")  # lp_journeys not in schema.sql
+    lead_page = ROOT / "supabase/migrations/20261012300000_lp_lead_page.sql"
+    sql(lead_page)
+    sql(lead_page)  # re-applicable
+    sql(ROOT / "tests/security/db-lp-lead-page.sql")
+    sql(ROOT / "tests/security/db-lp-tables-server-only.sql")  # LP tables still server-only
     mcp_events = ROOT / "supabase/migrations/20261005000000_mcp_event_subscriptions.sql"
     sql(mcp_events)
     sql(mcp_events)  # re-applicable
@@ -461,6 +468,7 @@ try:
     print("PASS: orgs / subscriptions / audit_events / approval_requests have no anon/authenticated write path (member/admin/owner JWT denied); service_role writes all four. Full-history check: scripts/test-db-all-migrations.py.")
     print("PASS: 14 tenant config / credential tables (credentials, employees, bindings, admin agents, directory, adapters, channels, projects, card setup/audit) + gateway_links, agentmail_inboxes, lp_handoffs, lp_wake_webhook_configs, lp_wake_webhook_events have no anon/authenticated write path; other reads unchanged; credentials (rows and secret_hash) unreadable from any session; service_role reads/writes all.")
     print("PASS: lp_inquiries / notification_outbox have no anon/authenticated write grant; lp_handoffs / lp_wake_* have no policy (RLS on) and no anon/authenticated SELECT; sessions read/write none of the 5 LP tables; service_role (BYPASSRLS) reads/writes all.")
+    print("PASS: lp_inquiries / lp_journeys lp_page + lp_ref (20261012300000): nullable text, no default; CHECK allowlist ai-employee | ai-employee-corp and ^[A-Za-z0-9_-]{1,32}$ (empty, 33 chars, space, dot, slash, <script>, non-ASCII, newline rejected); RLS on, anon/authenticated still cannot write; re-applicable.")
     print("PASS: mcp_event_subscriptions / mcp_event_deliveries: RLS on, no policy, anon/authenticated denied (rows and secret_ciphertext), service_role reads/writes; cross-org subscription / delivery rejected; one delivery per (subscription, event); 256 KiB body cap; id / event / status / https / ciphertext / lastError-category checks; org delete cascades; D11 verification budget: 30/host/minute window, hosts and windows independent, bad input rejected, anon/authenticated denied (table + function), 40 concurrent takes → exactly 30 accepted; rollback (3 tables + 2 functions) + re-apply.")
     print("PASS: org_members has no authenticated write path; last active owner cannot be demoted/disabled/deleted; org cascade still works.")
     print(f"PASS: F8 parent state={args.f8_parent_state}; 3 explicit UNIQUE constraints; existing constraint/index OIDs preserved across apply/reapply.")

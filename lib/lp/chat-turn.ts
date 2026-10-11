@@ -15,6 +15,7 @@ import {
   type HistoryMessage,
 } from "@/lib/lp/chat-prompt";
 import { chatCompletionParams } from "@/lib/lp/chat-model";
+import { DEFAULT_LP_PAGE, type LpPage } from "@/lib/lp/lp-page";
 import {
   HANDOFF_CARD_REPLY,
   HANDOFF_OFF_REPLY,
@@ -35,6 +36,8 @@ export interface ChatTurnInput {
   /** Eval hooks (scripts/lp-chat-eval.ts A/B runs); production uses the defaults. */
   buildMessages?: typeof buildChatMessages;
   forceKnowledgeSearch?: boolean;
+  /** LP the visitor is on (already allowlisted by the caller). B gets its own prompt and reply filter. */
+  lpPage?: LpPage;
 }
 
 export interface ChatTurnResult {
@@ -75,6 +78,25 @@ export function plainChatText(reply: string): string {
     .trim();
 }
 
+const CAMPAIGN_PHRASE = /先行\s*[0-9０-９]+\s*枠/u;
+const CAMPAIGN_BRACKETED = /[【［\[（(「『][^】］\]）)」』\n]*先行\s*[0-9０-９]+\s*枠[^】］\]）)」』\n]*[】］\]）)」』]/gu;
+
+/**
+ * LP pattern B shows no campaign, so a B visitor must never read 先行100枠 in a reply,
+ * whatever the model or a KB passage says. Drops bracketed mentions, then every
+ * sentence that still contains the phrase (any spacing, half/full-width digits).
+ */
+export function stripCampaignMentions(text: string): string {
+  if (!CAMPAIGN_PHRASE.test(text)) return text;
+  const unbracketed = text.replace(CAMPAIGN_BRACKETED, "");
+  const sentences = unbracketed.match(/[^。！？!?\n]*(?:[。！？!?]+|\n|$)/gu) ?? [];
+  return sentences
+    .filter((sentence) => !CAMPAIGN_PHRASE.test(sentence))
+    .join("")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 export async function runChatTurn(input: ChatTurnInput): Promise<ChatTurnResult> {
   const { model, openaiKey, caps, history, text, runTool } = input;
   const fetchImpl = input.fetchImpl ?? fetch;
@@ -83,7 +105,8 @@ export async function runChatTurn(input: ChatTurnInput): Promise<ChatTurnResult>
 
   // Each request carries the transcript so far; without it every turn looked like the
   // first one and the model just repeated the greeting (prod smoke 2026-10-02).
-  const messages: Message[] = (input.buildMessages ?? buildChatMessages)(caps, history, text);
+  const lpPage = input.lpPage ?? DEFAULT_LP_PAGE;
+  const messages: Message[] = (input.buildMessages ?? buildChatMessages)(caps, history, text, lpPage);
 
   // A visitor asking for a person must always get a working path, never a fake
   // in-chat "approval" (prod smoke 2026-10-02 turn 3).
@@ -217,6 +240,13 @@ export async function runChatTurn(input: ChatTurnInput): Promise<ChatTurnResult>
   }
 
   reply = plainChatText(reply);
+  if (lpPage === "ai-employee-corp") {
+    reply = stripCampaignMentions(reply);
+    // Citation titles are shown under the reply; drop any that name the campaign.
+    for (let i = citations.length - 1; i >= 0; i--) {
+      if (CAMPAIGN_PHRASE.test(citations[i].title)) citations.splice(i, 1);
+    }
+  }
 
   const hasHandoffCard = cards.some(
     (c) => !!c && typeof c === "object" && (c as { type?: string }).type === "handoff_preview"

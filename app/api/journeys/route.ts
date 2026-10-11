@@ -20,6 +20,7 @@ import { hashIp, checkRateLimits } from "@/lib/lp/rate-limit";
 import { IP_HASH_UNAVAILABLE, isIpHashKeyConfigured } from "@/lib/security/ip-hash-key";
 import { getPublishedRelease } from "@/lib/lp/knowledge-base";
 import { GUEST_SESSIONS_UNAVAILABLE, isGuestSigningKeyMissingError } from "@/lib/lp/guest-signing-key";
+import { normalizeLpPage, resolveLpRef } from "@/lib/lp/lp-page";
 import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 const GUEST_COOKIE_NAME = "lp_guest";
@@ -77,6 +78,7 @@ export async function POST(req: Request) {
     aiDisclosureAccepted?: boolean;
     privacyVersion?: string;
     turnstileToken?: string;
+    lpPage?: unknown;
   };
 
   try {
@@ -89,6 +91,9 @@ export async function POST(req: Request) {
   }
 
   const { aiDisclosureAccepted, privacyVersion, turnstileToken } = body;
+  // AI 相談 log source: allowlisted page; ref (B only) from the validated HttpOnly cookie.
+  const lpPage = normalizeLpPage(body.lpPage);
+  const lpRef = resolveLpRef(lpPage, req.headers.get("cookie"));
 
   if (!aiDisclosureAccepted) {
     return jsonUtf8(
@@ -152,6 +157,8 @@ export async function POST(req: Request) {
     privacyVersion,
     kbReleaseId: kbRelease?.releaseId,
     ipHash,
+    lpPage,
+    lpRef,
   });
 
   if (!journey) {

@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 import { matchesSuperAdminAllowlist } from "@/lib/admin/allowlist";
+import { lpCorpRefResponse } from "@/lib/lp/lp-ref-middleware";
 
 function looksLikePlaceholder(value: string | undefined | null): boolean {
   if (value == null) return true;
@@ -28,6 +29,11 @@ function isDemoFromEnv(): boolean {
  * Authenticated /login|/signup → /app (layout auto-provisions missing org).
  */
 export async function middleware(request: NextRequest) {
+  // LP pattern B (public, no auth): capture a valid ?ref= into an HttpOnly cookie, clean the URL.
+  if (request.nextUrl.pathname === "/lp/ai-employee-corp") {
+    return lpCorpRefResponse(request) ?? NextResponse.next();
+  }
+
   if (isDemoFromEnv()) {
     return NextResponse.next();
   }
@@ -87,5 +93,5 @@ export async function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/app/:path*", "/admin/:path*", "/login", "/signup", "/onboarding"],
+  matcher: ["/app/:path*", "/admin/:path*", "/login", "/signup", "/onboarding", "/lp/ai-employee-corp"],
 };

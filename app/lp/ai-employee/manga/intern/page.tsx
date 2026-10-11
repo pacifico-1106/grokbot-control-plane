@@ -3,12 +3,32 @@ import Image from "next/image";
 import Link from "next/link";
 import { BrandMark } from "@/components/BrandMark";
 import { LegalLinks } from "@/components/LegalLinks";
+import {
+  DEFAULT_LP_PAGE,
+  LP_CORP_ROBOTS,
+  LP_PAGE_PARAM,
+  lpPageHomePath,
+  normalizeLpPage,
+  withLpPageParam,
+} from "@/lib/lp/lp-page";
 
-export const metadata: Metadata = {
+type MangaSearchParams = Promise<Record<string, string | string[] | undefined>>;
+
+const METADATA: Metadata = {
   title: "インターン編 — 定型が回る朝 | AI社員マンガ | Staffpass",
   description:
     "日報・議事録・社内案内・予定調整・FAQ対応。定型業務から始めるAI社員（インターン）活用のストーリーを漫画で紹介。",
 };
+
+/**
+ * Reached from LP pattern B with ?from=ai-employee-corp (exact-match allowlist; anything
+ * else is pattern A and renders exactly as before). In B context the page stays out of
+ * search like B itself. `from` only selects between fixed paths; it never becomes a URL.
+ */
+export async function generateMetadata({ searchParams }: { searchParams: MangaSearchParams }): Promise<Metadata> {
+  const page = normalizeLpPage((await searchParams)[LP_PAGE_PARAM]);
+  return page === DEFAULT_LP_PAGE ? METADATA : { ...METADATA, robots: LP_CORP_ROBOTS };
+}
 
 const PANELS = [
   {
@@ -37,14 +57,17 @@ const PANELS = [
   },
 ];
 
-export default function InternMangaPage() {
+export default async function InternMangaPage({ searchParams }: { searchParams: MangaSearchParams }) {
+  const page = normalizeLpPage((await searchParams)[LP_PAGE_PARAM]);
+  const lead = (path: string) => withLpPageParam(path, page);
+  const home = lpPageHomePath(page);
   return (
     <div className="min-h-screen bg-[var(--bg)] text-[var(--text)]">
       <header className="sticky top-0 z-30 border-b border-[var(--border-soft)] bg-[color-mix(in_oklab,var(--bg)_82%,transparent)] backdrop-blur-xl">
         <div className="mx-auto max-w-[640px] px-4 py-3 flex items-center justify-between gap-3">
           <BrandMark size="sm" className="min-w-0" />
           <Link
-            href="/lp/ai-employee/consult?plan=intern"
+            href={lead("/lp/ai-employee/consult?plan=intern")}
             className="btn btn-primary text-xs py-2 px-3 min-h-[36px]"
           >
             相談する
@@ -55,7 +78,7 @@ export default function InternMangaPage() {
       <main className="mx-auto max-w-[640px] px-0 sm:px-4">
         <section className="px-4 pt-6 pb-4 text-center">
           <Link
-            href="/lp/ai-employee/manga"
+            href={lead("/lp/ai-employee/manga")}
             className="inline-flex items-center gap-1 text-xs text-[var(--accent-strong)] hover:underline mb-3"
           >
             ← 漫画一覧
@@ -103,13 +126,13 @@ export default function InternMangaPage() {
 
             <div className="mt-6 flex flex-col gap-3">
               <Link
-                href="/lp/ai-employee/consult?plan=intern"
+                href={lead("/lp/ai-employee/consult?plan=intern")}
                 className="btn btn-primary w-full justify-center text-base"
               >
                 インターンプランで相談する
               </Link>
               <Link
-                href="/lp/ai-employee#pricing"
+                href={`${home}#pricing`}
                 className="btn btn-ghost w-full justify-center text-base"
               >
                 料金プランを見る
@@ -118,7 +141,7 @@ export default function InternMangaPage() {
 
             <div className="mt-6 pt-4 border-t border-[var(--border-soft)]">
               <Link
-                href="/lp/ai-employee/manga"
+                href={lead("/lp/ai-employee/manga")}
                 className="text-sm text-[var(--accent-strong)] hover:underline"
               >
                 ← 他のストーリーも読む

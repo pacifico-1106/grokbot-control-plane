@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { BrandMark } from "@/components/BrandMark";
 import { LegalLinks } from "@/components/LegalLinks";
+import { lpPageHomePath, normalizeLpPage } from "@/lib/lp/lp-page";
 
 export const metadata: Metadata = {
   title: "お申し込みありがとうございます | AI社員パック",
@@ -23,9 +24,11 @@ function formatPrice(yen: number): string {
 export default async function ThankYouPage({
   searchParams,
 }: {
-  searchParams: Promise<{ plan?: string; session_id?: string }>;
+  searchParams: Promise<{ plan?: string; session_id?: string; from?: string }>;
 }) {
   const params = await searchParams;
+  // Back link returns B buyers to B (allowlist only; unknown → original page).
+  const home = lpPageHomePath(normalizeLpPage(params.from));
   const planParam = params.plan || "";
   const sessionId = params.session_id || "";
 
@@ -35,7 +38,7 @@ export default async function ThankYouPage({
   return (
     <div className="min-h-screen bg-[var(--bg)] text-[var(--text)] flex items-center justify-center px-4">
       <div className="w-full max-w-md surface p-6 md:p-8 text-center">
-        <BrandMark size="md" href="/lp/ai-employee" />
+        <BrandMark size="md" href={home} />
 
         <div className="mt-6">
           <div className="w-16 h-16 mx-auto rounded-full bg-[color-mix(in_oklab,var(--ok)_15%,var(--bg))] flex items-center justify-center">
@@ -106,7 +109,7 @@ export default async function ThankYouPage({
           </p>
         )}
 
-        <Link href="/lp/ai-employee" className="btn btn-ghost mt-6">
+        <Link href={home} className="btn btn-ghost mt-6">
           AI社員パックのページに戻る
         </Link>
 

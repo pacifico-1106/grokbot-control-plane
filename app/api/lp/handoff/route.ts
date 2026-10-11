@@ -19,6 +19,18 @@ import {
 } from "@/lib/lp/handoffs";
 import { enqueueHandoffNotification } from "@/lib/lp/outbox-processor";
 import { resolveGuestJourney, type GuestSessionResult } from "@/lib/lp/guest-session";
+import { normalizeLpPage, parseLpRef, readLpRefCookie, withLpPageParam, type LpPage } from "@/lib/lp/lp-page";
+
+/** Journey's stored page first; else the allowlisted body value (unknown → original page). */
+function leadPageOf(journey: { lpPage?: LpPage | null }, bodyLpPage: unknown): LpPage {
+  return journey.lpPage ?? normalizeLpPage(bodyLpPage);
+}
+
+/** ?ref= for B only: journey's stored ref, else the validated HttpOnly cookie. */
+function leadRefOf(page: LpPage, journey: { lpRef?: string | null }, cookieHeader: string | null): string | null {
+  if (page !== "ai-employee-corp") return null;
+  return parseLpRef(journey.lpRef) ?? readLpRefCookie(cookieHeader);
+}
 import { hashIp } from "@/lib/lp/rate-limit";
 import { IP_HASH_UNAVAILABLE, isIpHashKeyConfigured } from "@/lib/security/ip-hash-key";
 import { createHash } from "node:crypto";
@@ -62,6 +74,7 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     const { reason, summaryDraft } = body;
+    const lpPage = leadPageOf(session.journey, body.lpPage);
 
     if (!reason || typeof reason !== "string" || reason.length > 500) {
       return jsonUtf8(
@@ -102,7 +115,7 @@ export async function POST(request: NextRequest) {
     return jsonUtf8({
       id: handoff.id,
       status: handoff.status,
-      confirmUrl: `/lp/ai-employee/handoff/confirm?id=${handoff.id}`,
+      confirmUrl: withLpPageParam(`/lp/ai-employee/handoff/confirm?id=${handoff.id}`, lpPage),
     });
   } catch (error) {
     console.error("[handoff] POST error:", error);
@@ -212,7 +225,9 @@ export async function PUT(request: NextRequest) {
       );
     }
 
-    await enqueueHandoffNotification(confirmedHandoff);
+    const lpPage = leadPageOf(session.journey, body.lpPage);
+    const lpRef = leadRefOf(lpPage, session.journey, request.headers.get("cookie"));
+    await enqueueHandoffNotification(confirmedHandoff, { lpPage, lpRef });
 
     return jsonUtf8({
       id: confirmedHandoff.id,

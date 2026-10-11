@@ -5,6 +5,7 @@
 
 import { searchKnowledgeBase, getPublishedRelease, type KbSearchResult } from "./knowledge-base";
 import { getCatalog, getCatalogItem, type Catalog, type CatalogItem } from "./catalog";
+import { DEFAULT_LP_PAGE, normalizeLpPage, withLpPageParam, type LpPage } from "@/lib/lp/lp-page";
 
 export const ALLOWED_TOOLS = [
   "knowledge_search",
@@ -379,7 +380,7 @@ export async function executeProposalPrepare(args: {
   sku?: string;
   billingPreference?: string;
   requirements?: string;
-}): Promise<ToolResult> {
+}, lpPage: LpPage = DEFAULT_LP_PAGE): Promise<ToolResult> {
   if (!args.sku || !["intern", "proper", "executive"].includes(args.sku)) {
     return { success: false, error: "invalid_sku" };
   }
@@ -399,7 +400,7 @@ export async function executeProposalPrepare(args: {
       setupAmountExTax: item.setupAmountExTax,
       monthlyAmountExTax: item.monthlyAmountExTax,
       requirements: args.requirements?.slice(0, 500) || "",
-      checkoutUrl: `/lp/ai-employee/checkout?plan=${args.sku}`,
+      checkoutUrl: withLpPageParam(`/lp/ai-employee/checkout?plan=${args.sku}`, lpPage),
       purchaseEnabled: false,
       note: "決済は画面で確認してから行います。この会話だけでは契約は成立しません。",
     },
@@ -446,7 +447,7 @@ export async function executeOrderStatusGet(args: {
 export async function executeTool(
   name: string,
   args: Record<string, unknown>,
-  context: { journeyId: string }
+  context: { journeyId: string; lpPage?: unknown }
 ): Promise<ToolResult> {
   if (!isAllowedTool(name)) {
     return { success: false, error: "tool_not_allowed" };
@@ -462,7 +463,10 @@ export async function executeTool(
         args as { taskAreas?: string[]; complexity?: string; executiveSignals?: string[]; tools?: string[]; timing?: string }
       );
     case "proposal_prepare":
-      return executeProposalPrepare(args as { sku?: string; billingPreference?: string; requirements?: string });
+      return executeProposalPrepare(
+        args as { sku?: string; billingPreference?: string; requirements?: string },
+        normalizeLpPage(context.lpPage)
+      );
     case "handoff_offer":
       return executeHandoffOffer(args as { reason?: string; summaryDraft?: string });
     case "order_status_get":

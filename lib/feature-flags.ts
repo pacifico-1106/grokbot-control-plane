@@ -304,6 +304,17 @@ export function isLpChatEnabled(): boolean {
 }
 
 /**
+ * LP_LEAD_PAGE_DB_ENABLED: write lp_page / lp_ref on lp_inquiries and lp_journeys.
+ *
+ * Turn ON only after migration 20261012300000_lp_lead_page.sql is applied.
+ * When OFF (default): those columns are neither written nor required; the lead page
+ * and ref still reach Stripe metadata and the notification emails.
+ */
+export function isLpLeadPageDbEnabled(): boolean {
+  return parseFlag(process.env.LP_LEAD_PAGE_DB_ENABLED);
+}
+
+/**
  * LP_INQUIRY_RATE_LIMIT_ENABLED: IP-hash rate limiting for LP forms.
  *
  * When ON:

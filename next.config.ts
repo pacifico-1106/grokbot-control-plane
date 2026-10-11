@@ -46,6 +46,12 @@ const nextConfig: NextConfig = {
         source: "/oauth/authorize",
         headers: [{ key: "Referrer-Policy", value: "no-referrer" }],
       },
+      {
+        // LP pattern B is for direct hand-out only: keep it out of search and AI crawlers.
+        // Same directives as the page's robots meta. Exact path; A and sub-pages untouched.
+        source: "/lp/ai-employee-corp",
+        headers: [{ key: "X-Robots-Tag", value: "noindex, follow, noai, noimageai" }],
+      },
     ];
   },
   async redirects() {

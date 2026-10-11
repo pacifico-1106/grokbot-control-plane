@@ -13,6 +13,7 @@ import { NextRequest } from "next/server";
 import { isLpHandoffEnabled } from "@/lib/feature-flags";
 import { processHandoffOutbox, type OutboxEntry } from "@/lib/lp/outbox-processor";
 import { checkCronRequest, readCronSecret } from "@/lib/security/cron-secret";
+import { lpPageNoticeLine, lpRefNoticeLine } from "@/lib/lp/lp-page";
 import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 /**
@@ -51,6 +52,9 @@ async function sendHandoffNotification(entry: OutboxEntry): Promise<{ success: b
     "",
     `引継ぎID: ${handoffId}`,
     `理由: ${reason}`,
+    // Lead page / ref, re-validated (null for old entries or tampered values → line omitted).
+    lpPageNoticeLine(payload.lpPage) ?? "",
+    lpRefNoticeLine(payload.lpRef) ?? "",
     "",
     "■ 会話サマリー:",
     summary,
