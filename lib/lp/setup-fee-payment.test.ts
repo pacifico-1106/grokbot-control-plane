@@ -41,8 +41,16 @@ describe("metadata re-validation", () => {
       plan: "proper", lpPage: "ai-employee-corp", lpRef: "partner_01", referralCode: "AIC-ABCD1234", lpOrderId: "3f2b8c1e-1d2a-4b3c-8d4e-5f6a7b8c9d0e",
     });
   });
-  test("absent optional values → null; absent lpPage → marker (the checkout always sets it)", () => {
-    expect(sanitizeLpSetupFeeMetadata({ plan: "intern" })).toEqual({ plan: "intern", lpPage: INVALID_MARKER, lpRef: null, referralCode: null, lpOrderId: null });
+  test("absent optional values → null; absent lpPage (legacy Session, before lpPage existed) → page A (ai-employee), not the marker", () => {
+    expect(sanitizeLpSetupFeeMetadata({ plan: "intern" })).toEqual({ plan: "intern", lpPage: "ai-employee", lpRef: null, referralCode: null, lpOrderId: null });
+    expect(sanitizeLpSetupFeeMetadata({ plan: "intern", lpPage: "" }).lpPage).toBe("ai-employee");
+    expect(sanitizeLpSetupFeeMetadata({ plan: "intern", lpPage: null }).lpPage).toBe("ai-employee");
+    expect(sanitizeLpSetupFeeMetadata(null).lpPage).toBe("ai-employee");
+  });
+  test("a PRESENT but invalid lpPage is still the marker (never defaulted to A)", () => {
+    for (const v of ["ai-employee-x", " ai-employee", 1, {}, "AI-EMPLOYEE"]) {
+      expect(sanitizeLpSetupFeeMetadata({ plan: "intern", lpPage: v }).lpPage).toBe(INVALID_MARKER);
+    }
   });
   test("tampered values become the marker, never raw", () => {
     const r = sanitizeLpSetupFeeMetadata({
@@ -113,6 +121,22 @@ describe("amount", () => {
   test("zero-decimal JPY and two-decimal USD, with the currency code", () => {
     expect(formatLpAmount(165000, "jpy")).toBe("¥165,000 (JPY)");
     expect(formatLpAmount(12345, "usd")).toBe("123.45 USD");
+  });
+});
+
+describe("notice text: hash / resend lines", () => {
+  const rec = {
+    stripeCheckoutSessionId: "cs_live_a1B2c3", amountTotal: 165000, currency: "jpy", plan: "proper", lpPage: "ai-employee",
+    lpRef: null, referralCode: null, lpOrderId: null, customerEmailDomain: "example.co.jp", livemode: true,
+  };
+  test("emailHashSaved=false → says the match hash was not saved (key missing), no key value", () => {
+    const t = lpSetupFeeNoticeText(rec, { emailHashSaved: false });
+    expect(t).toContain("照合用ハッシュ: 未保存");
+    expect(t).toContain("LP_CUSTOMER_EMAIL_HASH_KEY");
+  });
+  test("possibleResend=true → labelled as a possible duplicate", () => {
+    expect(lpSetupFeeNoticeText(rec, { possibleResend: true })).toContain("重複の可能性");
+    expect(lpSetupFeeNoticeText(rec)).not.toContain("重複の可能性");
   });
 });
 
