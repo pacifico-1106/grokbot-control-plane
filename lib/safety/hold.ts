@@ -179,13 +179,92 @@ async function alertNotInstalled(phase: HoldPhase): Promise<void> {
   await (notInstalledAlertOverride ?? defaultNotInstalledAlert)({ phase, suppressed }).catch(() => undefined);
 }
 
+// ---------------------------------------------------------------------------
+// 木村 10/12 07:15 (3): the safety net is ONLY for a schema that is ENTIRELY absent.
+// When a hold read says "hold column / table missing", probe all five pieces; only if
+// every one is missing is it "not installed". Partly present (or a probe that fails for
+// another reason) → fail closed (503) + a loud ops alert. Never cached.
+// ---------------------------------------------------------------------------
+type AdminClient = NonNullable<ReturnType<typeof createSupabaseAdminClient>>;
+// Literal table names (the tenant-config write-path scanner forbids non-literal .from()).
+// Read-only probes: select … limit 0.
+const HOLD_SCHEMA_PIECES: ReadonlyArray<[string, (a: AdminClient) => PromiseLike<{ error: unknown }>]> = [
+  ["employees.hold_state", (a) => a.from("employees").select("hold_state").limit(0)],
+  ["employees.hold_id", (a) => a.from("employees").select("hold_id").limit(0)],
+  ["orgs.hold_state", (a) => a.from("orgs").select("hold_state").limit(0)],
+  ["orgs.hold_id", (a) => a.from("orgs").select("hold_id").limit(0)],
+  ["employee_holds", (a) => a.from("employee_holds").select("id").limit(0)],
+];
+type SchemaPartialAlert = (info: { phase: HoldPhase | "read"; present: string[]; suppressed: number }) => Promise<void>;
+let schemaPartialAlertOverride: SchemaPartialAlert | null = null;
+let lastPartialAlertAt = 0;
+let suppressedPartial = 0;
+/** Tests only. */
+export function __setHoldSchemaPartialAlertForTests(fn: SchemaPartialAlert | null): void {
+  schemaPartialAlertOverride = fn;
+  lastPartialAlertAt = 0;
+  suppressedPartial = 0;
+}
+async function defaultSchemaPartialAlert(info: { phase: HoldPhase | "read"; present: string[]; suppressed: number }): Promise<void> {
+  const line = "緊急停止（hold）の DB スキーマが一部だけあります（migration 20261012500000 が中途半端）。停止の確認ができないため止めています（503）。至急確認してください。";
+  console.error("employee_hold_schema_partial", info);
+  const { appendAuditEvent } = await import("@/lib/data/audit");
+  const opsOrgId = (process.env.PLATFORM_OPS_ORG_ID || "").trim();
+  if (opsOrgId) {
+    await appendAuditEvent({
+      orgId: opsOrgId, employeeId: null, credentialId: null, action: "employee.hold.not_installed", purpose: null, summary: line,
+      metadata: { auditClass: "admin", event: "employee.hold.schema_partial", ...info },
+    }).catch(() => undefined);
+  }
+  const to = (process.env.APPROVAL_ALERT_OPS_EMAILS || "").split(",").map((x) => x.trim()).filter((x) => /^[^\s@,]+@[^\s@,]+\.[^\s@,]+$/.test(x)).slice(0, 10);
+  if (to.length) {
+    const { sendTransactionalEmail } = await import("@/lib/resend");
+    const present = info.present.join(", ") || "-";
+    await sendTransactionalEmail({
+      to, template: "oauth_security", subject: "【運営・至急】緊急停止の DB スキーマが一部だけです（AI社員を 503 で止めています）",
+      html: `<p>${line}</p><p>present: ${present}</p>`, text: `${line}\npresent: ${present}`,
+      tags: [{ name: "template", value: "oauth_security" }],
+    }).catch(() => undefined);
+  }
+}
+async function alertSchemaPartial(phase: HoldPhase | "read", present: string[]): Promise<void> {
+  const now = Date.now();
+  if (now - lastPartialAlertAt < HOLD_NOT_INSTALLED_ALERT_WINDOW_MS) { suppressedPartial++; return; }
+  lastPartialAlertAt = now;
+  const suppressed = suppressedPartial;
+  suppressedPartial = 0;
+  await (schemaPartialAlertOverride ?? defaultSchemaPartialAlert)({ phase, present, suppressed }).catch(() => undefined);
+}
+
+/** "absent" only when every hold column and the table are missing. */
+async function probeHoldSchema(admin: AdminClient): Promise<{ verdict: "absent" | "partial"; present: string[] }> {
+  const present: string[] = [];
+  let unknown = false;
+  await Promise.all(HOLD_SCHEMA_PIECES.map(async ([name, run]) => {
+    try {
+      const { error } = await run(admin);
+      if (!error) present.push(name);
+      else if (!isHoldSchemaMissing(error)) unknown = true;
+    } catch {
+      unknown = true;
+    }
+  }));
+  return { verdict: present.length === 0 && !unknown ? "absent" : "partial", present: present.sort() };
+}
+async function schemaMissingVerdict(admin: AdminClient, detail: string): Promise<HoldRead> {
+  const probe = await probeHoldSchema(admin);
+  if (probe.verdict === "absent") return { state: "not_installed", detail };
+  await alertSchemaPartial("read", probe.present);
+  return { state: "error", detail: "hold_schema_partial" };
+}
+
 function supabaseReader(): HoldReader {
   return {
     async employee(employeeId) {
       const admin = createSupabaseAdminClient();
       if (!admin) return { state: "error", detail: "db_unavailable" };
       const { data, error } = await admin.from("employees").select("id, org_id, hold_state, hold_id").eq("id", employeeId).maybeSingle();
-      if (error) return isHoldSchemaMissing(error) ? { state: "not_installed", detail: "employees" } : { state: "error", detail: "employee_read_error" };
+      if (error) return isHoldSchemaMissing(error) ? schemaMissingVerdict(admin, "employees") : { state: "error", detail: "employee_read_error" };
       if (!data) return { state: "missing" };
       const r = data as Record<string, unknown>;
       return { state: "found", orgId: String(r.org_id ?? ""), holdState: (r.hold_state as string | null) ?? null, holdId: (r.hold_id as string | null) ?? null };
@@ -194,7 +273,7 @@ function supabaseReader(): HoldReader {
       const admin = createSupabaseAdminClient();
       if (!admin) return { state: "error", detail: "db_unavailable" };
       const { data, error } = await admin.from("orgs").select("id, hold_state, hold_id").eq("id", orgId).maybeSingle();
-      if (error) return isHoldSchemaMissing(error) ? { state: "not_installed", detail: "orgs" } : { state: "error", detail: "org_read_error" };
+      if (error) return isHoldSchemaMissing(error) ? schemaMissingVerdict(admin, "orgs") : { state: "error", detail: "org_read_error" };
       if (!data) return { state: "missing" };
       const r = data as Record<string, unknown>;
       return { state: "found", orgId: String(r.id ?? ""), holdState: (r.hold_state as string | null) ?? null, holdId: (r.hold_id as string | null) ?? null };
@@ -210,10 +289,22 @@ function supabaseReader(): HoldReader {
 // just-before-send check (phase pre_send) always re-reads and refreshes the scope.
 // Nothing outlives the request.
 // ---------------------------------------------------------------------------
+// 木村 10/12 07:15 (1): reuse is ONLY for the early, back-to-back checks of one call
+// (credential / OAuth → gateway entry). The late checkpoints — G4 post-approval execution
+// (incl. after the claim), wake, MCP Events and just-before-send — ALWAYS re-read, and their
+// fresh read refreshes the scope, so a later early check in the same call sees it too.
+// The scope is one CALL (one JSON-RPC message): both MCP routes refuse batches today, and
+// withHoldCallScope always starts empty, so a future batch handler wraps each element.
+const REUSE_PHASES: ReadonlySet<HoldPhase> = new Set<HoldPhase>(["credential", "oauth", "oauth_refresh", "oauth_consent", "gateway"]);
 type HoldScope = { employee: Map<string, HoldRead>; org: Map<string, HoldRead>; reads: number };
 const holdScope = new AsyncLocalStorage<HoldScope>();
+/** Joins an enclosing scope if there is one (used inside runGatewayInvoke). */
 export function withHoldRequestScope<T>(fn: () => Promise<T>): Promise<T> {
   if (holdScope.getStore()) return fn();
+  return holdScope.run({ employee: new Map(), org: new Map(), reads: 0 }, fn);
+}
+/** Always a NEW, empty scope: one per individual call (route entry, each JSON-RPC message). */
+export function withHoldCallScope<T>(fn: () => Promise<T>): Promise<T> {
   return holdScope.run({ employee: new Map(), org: new Map(), reads: 0 }, fn);
 }
 /** Tests only: reads made by the reader inside the current scope. */
@@ -223,7 +314,7 @@ export function __holdScopeReadsForTests(): number | null {
 function scoped(rd: HoldReader, phase: HoldPhase): HoldReader {
   const store = holdScope.getStore();
   if (!store) return rd;
-  const reuse = phase !== "pre_send";
+  const reuse = REUSE_PHASES.has(phase);
   return {
     async employee(employeeId, orgHint) {
       const hit = reuse ? store.employee.get(employeeId) : undefined;
@@ -277,6 +368,7 @@ export async function checkOperable(input: {
   let orgId = (input.orgId ?? "").trim();
   let result: OperableResult;
   let notInstalled = false;
+  let sawInstalled = false; // a hold read that succeeded (the schema is there on that side)
   try {
     if (!employeeId && !orgId) {
       result = unavailable();
@@ -287,8 +379,9 @@ export async function checkOperable(input: {
         const e = await rd.employee(employeeId, orgId || null);
         if (e.state === "not_installed") notInstalled = true; // nothing to enforce yet; org below
         else if (e.state !== "found") result = unavailable();
-        else if (orgId && e.orgId !== orgId) result = unavailable(); // never another org's row
+        else if (orgId && e.orgId !== orgId) { sawInstalled = true; result = unavailable(); } // never another org's row
         else {
+          sawInstalled = true;
           orgId = orgId || e.orgId;
           const s = shapeOf(e, KINDS);
           if (s === "bad") result = unavailable();
@@ -303,12 +396,20 @@ export async function checkOperable(input: {
           if (o.state === "not_installed") notInstalled = true;
           else if (o.state !== "found" || o.orgId !== orgId) result = unavailable();
           else {
+            sawInstalled = true;
             const s = shapeOf(o, new Set(["stopped"]));
             if (s === "bad") result = unavailable();
             else if (s === "held" && result.ok) result = { ok: false, code: "org_on_hold", holdId: o.holdId, kind: "stopped" };
           }
         }
       }
+    }
+    // 木村 10/12 07:15 (3): one side "not installed" while the other side read fine means a
+    // partly present schema → fail closed + ops alert, never the safety net.
+    if (notInstalled && sawInstalled) {
+      notInstalled = false;
+      result = unavailable();
+      await alertSchemaPartial(input.phase, []);
     }
   } catch {
     result = unavailable();
@@ -419,6 +520,8 @@ async function auditUnavailable(orgId: string, employeeId: string, phase: HoldPh
   }).catch(() => undefined);
 }
 export function __resetHoldAuditThrottleForTests(): void {
+  lastPartialAlertAt = 0;
+  suppressedPartial = 0;
   lastAudit.clear();
   wakeAuditThrottle.clear();
   wakeSuppressedCounts.clear();

@@ -25,7 +25,9 @@ export const PINNED: Record<string, string[]> = {
   // G2 inside (resolveOAuthAccessToken).
   "resolveMcpCredential(": ["app/api/mcp/route.ts"],
   "resolveOAuthAccessToken(": ["lib/mcp-oauth/resource-server.ts"],
-  "assertExecutable(": ["lib/gateway/invoke.ts"],
+  // + two conservative hits of the widened import() scan (木村 10/12 07:15), reviewed: both load
+  // "@/lib/data" inside Promise.all([...]) and never call assertExecutable.
+  "assertExecutable(": ["lib/gateway/invoke.ts", "lib/mcp-oauth/consent.ts", "lib/slack/approval-app-scope-notice.ts"],
   // stuckWatch.retry → runW2FulfillRetry → W2 eligibility (approval_held) + G4.
   "runW2FulfillRetry(": ["lib/stuck-watch/admin-handlers.ts", "lib/stuck-watch/w2-unfulfilled.ts"],
   "checkSubscriptionPrincipal(": ["lib/mcp-events/service.ts"],
@@ -82,6 +84,7 @@ function resolveSpec(spec: string, fromPath: string): string | null {
   let base: string;
   if (spec.startsWith("@/")) base = spec.slice(2);
   else if (spec.startsWith(".")) base = join(dirname(fromPath), spec).replace(/\\/g, "/");
+  else if (/^(lib|app|components|hooks)\//.test(spec)) base = spec; // root-relative (baseUrl)
   else return null; // packages
   base = stripExt(base);
   return base;
@@ -135,6 +138,23 @@ export function callersIn(files: Array<{ path: string; text: string }>, entryWit
     for (const m of f.text.matchAll(/import\(\s*["']([^"']+)["']\s*\)\s*\)?\s*\.\s*(\w+)/g)) {
       if (fromDefining(m[1]) && m[2] === entry) out.add(f.path);
     }
+    // require("x") (lint bans it in app code; detected anyway)
+    for (const m of f.text.matchAll(/(?:^|[^.\w$])require\(\s*["'`]([^"'`$]+)["'`]\s*\)/g)) {
+      if (fromDefining(m[1])) out.add(f.path);
+    }
+    // import(`literal`) without ${} = a literal; any other import() argument (variable,
+    // template with ${}, expression) cannot be resolved → counted as a caller of every entry.
+    for (const m of f.text.matchAll(/(?:^|[^.\w$])import\(\s*([^)]*?)\s*\)/g)) {
+      const arg = m[1];
+      const lit = /^["']([^"']+)["']$/.exec(arg) ?? /^`([^`$]+)`$/.exec(arg);
+      if (!lit) { out.add(f.path); continue; }
+      if (!fromDefining(lit[1])) continue;
+      // a bare / returned / chained import() of a defining module counts (conservative),
+      // unless it is destructured into names that don't include the entry.
+      const before = f.text.slice(Math.max(0, (m.index ?? 0) - 320), m.index ?? 0);
+      const destructured = /(const|let|var)\s+(\{[^=;]*\})\s*=\s*(await)?\s*\(?\s*$/.exec(before);
+      if (!destructured || nameRe.test(destructured[2])) out.add(f.path);
+    }
     // import("x").then((m) => m.entry(...)) and similar: module mentioned + entry mentioned
     for (const m of f.text.matchAll(/import\(\s*["']([^"']+)["']\s*\)\s*\.then/g)) {
       if (fromDefining(m[1]) && nameRe.test(f.text)) out.add(f.path);
@@ -143,7 +163,10 @@ export function callersIn(files: Array<{ path: string; text: string }>, entryWit
   return [...out].sort();
 }
 
-const files = ["lib", "app"].flatMap((d) => sources(join(ROOT, d))).map((p) => ({ path: relative(ROOT, p), text: readFileSync(p, "utf8") }));
+// 木村 10/12 07:15 (2): lib/ and app/ plus components/, hooks/ and the root files (middleware.ts …).
+const ROOT_FILES = readdirSync(ROOT).filter((n) => /\.(ts|tsx)$/.test(n) && !/\.d\.ts$/.test(n) && !/\.test\.tsx?$/.test(n)).map((n) => join(ROOT, n));
+const files = [...["lib", "app", "components", "hooks"].flatMap((d) => sources(join(ROOT, d))), ...ROOT_FILES]
+  .map((p) => ({ path: relative(ROOT, p), text: readFileSync(p, "utf8") }));
 
 for (const [entry, pinned] of Object.entries(PINNED)) {
   test(`caller inventory: ${entry} — only the reviewed callers (a new one must be added here after checking its checkpoint)`, () => {
@@ -172,4 +195,33 @@ test("self-check: a new file calling an entry point is detected", () => {
   const fake = [...files, { path: "lib/new/skips-the-check.ts", text: "import { runGatewayInvoke } from '@/lib/gateway/invoke';\nawait runGatewayInvoke({ employeeId })" }];
   expect(callersIn(fake, "runGatewayInvoke(")).toContain("lib/new/skips-the-check.ts");
   expect(callersIn(fake, "runGatewayInvoke(")).not.toEqual([...PINNED["runGatewayInvoke("]].sort());
+});
+test("self-check v2: require, template / variable import(), () => import(), root-relative spec (木村 10/12 07:15)", () => {
+  const f = (text: string) => callersIn([{ path: "lib/new/x.ts", text }], "runGatewayInvoke(");
+  expect(f("const { runGatewayInvoke } = require('@/lib/gateway/invoke'); runGatewayInvoke({})")).toEqual(["lib/new/x.ts"]);
+  expect(f("const m = require(\"../gateway/invoke\"); m.runGatewayInvoke({})")).toEqual(["lib/new/x.ts"]);
+  expect(f("const m = await import(`@/lib/gateway/invoke`); await m.runGatewayInvoke({})")).toEqual(["lib/new/x.ts"]);
+  // a non-literal specifier can't be resolved → counted as a caller of every entry (and lint bans it)
+  expect(f("const p = '@/lib/gateway/invoke'; const m = await import(p); await m.runGatewayInvoke({})")).toEqual(["lib/new/x.ts"]);
+  expect(f("const m = await import(`@/lib/${'gateway'}/invoke`);")).toEqual(["lib/new/x.ts"]);
+  expect(f("export const load = () => import('@/lib/gateway/invoke');")).toEqual(["lib/new/x.ts"]);
+  expect(f("import { runGatewayInvoke } from 'lib/gateway/invoke'; runGatewayInvoke({})")).toEqual(["lib/new/x.ts"]);
+  // still not a caller
+  expect(f("const { other } = await import('@/lib/gateway/invoke');")).toEqual([]);
+});
+test("the inventory scans the root files too (middleware.ts, next.config.ts, …) plus components/ and hooks/", () => {
+  const scanned = new Set(files.map((x) => x.path));
+  for (const p of ["middleware.ts", "next.config.ts"]) expect(scanned.has(p)).toBe(true);
+  expect([...scanned].some((p) => p.startsWith("components/"))).toBe(true);
+});
+test("ESLint bans require() and import() with a non-literal argument in app code", async () => {
+  const { ESLint } = await import("eslint");
+  const eslint = new ESLint({ cwd: ROOT });
+  const lint = async (code: string, filePath = "lib/new/x.ts") =>
+    (await eslint.lintText(code, { filePath: join(ROOT, filePath) }))[0].messages.filter((m) => m.ruleId === "no-restricted-syntax").length;
+  expect(await lint("const m = require('@/lib/gateway/invoke');\nexport { m };\n")).toBe(1);
+  expect(await lint("const p = 'x';\nexport const a = () => import(p);\n")).toBe(1);
+  expect(await lint("export const a = () => import(`@/lib/gateway/invoke`);\n")).toBe(1);
+  expect(await lint("export const a = () => import('@/lib/gateway/invoke');\n")).toBe(0);
+  expect(await lint("const m = require('x');\nexport { m };\n", "middleware.ts")).toBe(1);
 });
