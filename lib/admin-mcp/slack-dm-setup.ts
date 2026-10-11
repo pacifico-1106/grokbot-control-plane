@@ -19,6 +19,7 @@
  *   (auth.test scope probe); Slack errors are reduced to short codes.
  * - Missing scopes are returned as names + a deep link for the human.
  */
+import { expiredCredentialEmployeeRow, expiredCredentialStepJa, hasExpiredCredential } from "@/lib/employees/credential-expiry";
 import type { ResolvedAdminCredential } from "@/lib/auth/admin-credential";
 import { getAppOrigin } from "@/lib/approvals/tokens";
 import { hasJwtHeaderSegment } from "@/lib/security/secret-detector";
@@ -283,8 +284,17 @@ export async function diagnoseSlackDmApprovalSetup(orgId: string): Promise<Recor
   const autoRoutes = flags.SLACK_DM_AUTOROUTE_ENABLED
     ? (await listAutoSlackImRoutes({ orgId }).catch(() => [])).filter((route) => route.orgId === orgId)
     : [];
-  const employees = (await listEmployees(orgId))
-    .filter((employee) => employee.orgId === orgId && employee.status === "active")
+  const activeEmployees = (await listEmployees(orgId)).filter(
+    (employee) => employee.orgId === orgId && employee.status === "active"
+  );
+  // 木村 2026-10-12: an expired 社員証 is 「期限切れ」, not an active employee to set up.
+  const nowForExpiry = new Date();
+  const expiredEmployees = activeEmployees
+    .filter((employee) => hasExpiredCredential(employee, nowForExpiry))
+    .slice(0, MAX_EMPLOYEES)
+    .map(expiredCredentialEmployeeRow);
+  const employees = activeEmployees
+    .filter((employee) => !hasExpiredCredential(employee, nowForExpiry))
     .slice(0, MAX_EMPLOYEES);
   const employeeRows: Array<Record<string, unknown>> = [];
   // Same resolver as setup.slackAuthorizeLink.issue (registry-aware).
@@ -332,6 +342,9 @@ export async function diagnoseSlackDmApprovalSetup(orgId: string): Promise<Recor
   }
 
   // nextStepsJa (ordered; humans tap, the agent never handles secrets).
+  for (const row of expiredEmployees) {
+    nextStepsJa.push(expiredCredentialStepJa(row, dashboardUrl(`/app/employees/${encodeURIComponent(row.employeeId)}`)));
+  }
   if (inboxes.length === 0 && !sharedOn) {
     nextStepsJa.push(
       `承認アプリ（Slack App B）を作り、Bot Token Scopes に ${APPROVAL_DM_REQUIRED_BOT_SCOPES.join(", ")} を入れて Install。` +
@@ -421,6 +434,7 @@ export async function diagnoseSlackDmApprovalSetup(orgId: string): Promise<Recor
     internalSlackParties: parties.length,
     imRoutesTotal: allRoutes.length,
     employees: employeeRows,
+    expiredEmployees,
     missingScopes,
     deepLinks: {
       approvalSettings: dashboardUrl("/app/settings"),

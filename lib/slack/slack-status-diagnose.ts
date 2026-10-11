@@ -3,6 +3,7 @@
  */
 
 import { listEmployees } from "@/lib/data";
+import { expiredCredentialEmployeeRow, expiredCredentialStepJa, hasExpiredCredential, type ExpiredCredentialEmployeeRow } from "@/lib/employees/credential-expiry";
 import { listConversationAdapters } from "@/lib/data/conversation-adapters";
 import { getEmployeeSlackIdentity, getLinkedSlackUserToken } from "@/lib/data/slack-identities";
 import { listSlackImRoutesByOrg } from "@/lib/data/slack-im-routes";
@@ -120,6 +121,8 @@ export type SlackStatusResult = {
   pathAEmployees: number;
   pathBEmployees: number;
   employees: EmployeeSlackPathStatus[];
+  /** Active employees whose 社員証 expired (木村 2026-10-12): 「期限切れ」, not counted above. */
+  expiredEmployees: ExpiredCredentialEmployeeRow[];
   pathBReadiness: PathBReadiness;
   postingMismatch: string[];
   issues: string[];
@@ -419,7 +422,9 @@ export async function diagnoseSlackStatus(orgId: string): Promise<SlackStatusRes
   const imRoutesCount = imRoutes.length;
   const employeesWithRoutes = new Set(imRoutes.map((r) => r.employeeId));
 
-  const employees = await listEmployees(orgId);
+  const employees = (await listEmployees(orgId)).filter((emp) => emp.orgId === orgId);
+  const nowForExpiry = new Date();
+  const expiredEmployees: ExpiredCredentialEmployeeRow[] = [];
   let postingAsBot = 0;
   let postingAsUser = 0;
   let pathAEmployees = 0;
@@ -429,6 +434,12 @@ export async function diagnoseSlackStatus(orgId: string): Promise<SlackStatusRes
 
   for (const emp of employees) {
     if (emp.status !== "active") continue;
+    if (hasExpiredCredential(emp, nowForExpiry)) {
+      const row = expiredCredentialEmployeeRow(emp);
+      expiredEmployees.push(row);
+      issues.push(expiredCredentialStepJa(row, `${getAppOrigin()}/app/employees/${encodeURIComponent(emp.id)}`));
+      continue;
+    }
     const posting = emp.postingAs || "bot";
     if (posting === "bot") postingAsBot++;
     else if (posting === "user") postingAsUser++;
@@ -560,6 +571,7 @@ export async function diagnoseSlackStatus(orgId: string): Promise<SlackStatusRes
     pathAEmployees,
     pathBEmployees,
     employees: employeeStatuses,
+    expiredEmployees,
     pathBReadiness,
     postingMismatch,
     issues,

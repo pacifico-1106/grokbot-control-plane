@@ -243,6 +243,33 @@ try:
     print("PASS: credential expiry notices (20261012100000): RLS on / no policy, anon/authenticated hold no privilege; "
           "one row per credential × threshold (unique); threshold 7d/1d only; org / employee must be the credential's own "
           "(insert + update); credential delete cascades; re-applicable; rollback drops table + trigger fn; forward again.")
+    # 社員証 reissue pickup claim (20261012200000, ADMIN_MCP_CREDENTIAL_REISSUE_ENABLED).
+    reissue_claim = ROOT / "supabase/migrations/20261012200000_credential_reissue_claim.sql"
+    sql(reissue_claim)
+    sql(reissue_claim)  # re-applicable
+    sql(ROOT / "tests/security/db-credential-reissue-claim.sql")
+    from concurrent.futures import ThreadPoolExecutor as _Pool
+    rc_org, rc_ticket = "c7000000-0000-4000-8000-0000000000c1", "c7100000-0000-4000-8000-0000000000c1"
+    query(f"insert into public.orgs(id, name) values ('{rc_org}', 'crc concurrent');"
+          f"insert into public.approval_requests(id, org_id, purpose, summary, tool, risk, status, metadata) values "
+          f"('{rc_ticket}', '{rc_org}', 'admin.policy', 'crc', 'employees.credential.reissue', 'high', 'approved',"
+          f" '{{\"adminTool\":\"employees.credential.reissue\"}}');")
+    commands = [f"set role service_role; select public.claim_credential_reissue('{rc_ticket}','{rc_org}','tok_concurrent_{i:02d}_0123456789','m{i}',now());"
+                for i in range(12)]
+    with _Pool(max_workers=12) as pool:
+        claims = list(pool.map(query, commands))
+    assert claims.count("t") == 1 and claims.count("f") == 11, claims
+    winner = query(f"select metadata->'credentialReissue'->>'claimToken' from public.approval_requests where id = '{rc_ticket}';")
+    assert winner == f"tok_concurrent_{claims.index('t'):02d}_0123456789", (winner, claims)
+    query(f"delete from public.approval_requests where id = '{rc_ticket}'; delete from public.orgs where id = '{rc_org}';")
+    sql(ROOT / "supabase/verification/20261012200000_credential_reissue_claim_rollback.sql")
+    assert query("select to_regprocedure('public.claim_credential_reissue(uuid,uuid,text,text,timestamptz)') is null"
+                 " and to_regprocedure('public.release_credential_reissue(uuid,uuid,text)') is null;") == "t"
+    sql(reissue_claim)  # forward again after rollback
+    sql(ROOT / "tests/security/db-credential-reissue-claim.sql")
+    print("PASS: credential reissue claim (20261012200000): EXECUTE service_role only; 12 concurrent claims → exactly 1 winner "
+          "(its token is the mark); release only with the claimer's own token and org; other org / other tool / pending refused; "
+          "re-claim after own release; re-applicable; rollback drops both functions; forward again.")
     webhook_settings = ROOT / "supabase/migrations/20261005100000_employee_webhook_settings.sql"
     sql(webhook_settings)
     sql(webhook_settings)  # re-applicable

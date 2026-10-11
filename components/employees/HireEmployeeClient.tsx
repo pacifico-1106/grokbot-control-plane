@@ -1,5 +1,6 @@
 "use client";
 
+import { EMPLOYEE_CREDENTIAL_TTL_DAYS } from "@/lib/employees/credential-ttl";
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import {
@@ -101,7 +102,7 @@ export function HireEmployeeClient({
   const [toolApprovalDefaults, setToolApprovalDefaults] = useState(() =>
     normalizeToolApprovalDefaults(undefined)
   );
-  const [expiresInDays, setExpiresInDays] = useState(30);
+  const [expiresInDays, setExpiresInDays] = useState(EMPLOYEE_CREDENTIAL_TTL_DAYS);
   const [spend, setSpend] = useState<SpendLimits>(emptySpend);
   const [futureSpendOpen, setFutureSpendOpen] = useState(false);
   const [browserAllowed, setBrowserAllowed] = useState(false);
@@ -723,7 +724,7 @@ export function HireEmployeeClient({
               min={1}
               max={365}
               value={expiresInDays}
-              onChange={(e) => setExpiresInDays(Number(e.target.value) || 30)}
+              onChange={(e) => setExpiresInDays(Number(e.target.value) || EMPLOYEE_CREDENTIAL_TTL_DAYS)}
               className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm"
             />
           </label>

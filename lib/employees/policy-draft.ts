@@ -1,4 +1,5 @@
 import type { ActionLimits, ApprovalPolicy, EmployeePolicyDraft, EmployeeScope, SpendLimits } from "@/lib/types";
+import { EMPLOYEE_CREDENTIAL_TTL_DAYS } from "@/lib/employees/credential-ttl";
 import { hintAllowedAccountsFromText } from "@/lib/employees/allowed-accounts";
 import {
   suggestEmployeeApprovalPolicy,
@@ -311,7 +312,7 @@ function buildEmployeePolicyDraftForProfile(
     assumptions.push("職務が特定できないため、汎用の業務支援ロールにしています。");
   }
   if (!extractExpiryDays(input)) {
-    assumptions.push("社員証の有効期限は30日後にしています。");
+    assumptions.push(`社員証の有効期限は${EMPLOYEE_CREDENTIAL_TTL_DAYS}日後にしています。`);
   }
   if (wantsSns || scopes.includes("sns:publish")) {
     assumptions.push(
@@ -371,7 +372,7 @@ function buildEmployeePolicyDraftForProfile(
       allowedPurposes: purposes,
       approvalPolicy: effectiveApprovalPolicy,
       actionLimits: profile?.actionLimits ?? {},
-      expiresInDays: extractExpiryDays(input) ?? 30,
+      expiresInDays: extractExpiryDays(input) ?? EMPLOYEE_CREDENTIAL_TTL_DAYS,
       spend,
       spendRecommendation,
       allowedAccounts,

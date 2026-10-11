@@ -126,6 +126,10 @@ ADDITIVE = [
      "not exists (select 1 from information_schema.columns where table_schema = 'public'"
      " and table_name in ('lp_inquiries', 'lp_journeys') and column_name in ('lp_page', 'lp_ref'))"),
     ("20261012100000_", "tests/security/db-credential-expiry-notices.sql", ("credential_expiry_notices",)),
+    # 社員証 reissue pickup claim (#332 follow-up): adds 2 functions, no table.
+    ("20261012200000_", "tests/security/db-credential-reissue-claim.sql",
+     "to_regprocedure('public.claim_credential_reissue(uuid,uuid,text,text,timestamptz)') is null"
+     " and to_regprocedure('public.release_credential_reissue(uuid,uuid,text)') is null"),
     ("20261010200000_", "tests/security/db-mcp-oauth.sql", ("oauth_clients", "oauth_authorization_requests", "oauth_grants",
      "oauth_authorization_codes", "oauth_access_tokens", "oauth_refresh_tokens", "oauth_rate_limits")),
 ]
