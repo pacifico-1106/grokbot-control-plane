@@ -1545,3 +1545,49 @@ describe("追記 5: at most one live (issued) link per employee — partial uniq
     expect(doc).toContain("`authorize_link_flag_off`");
   });
 });
+
+describe("#329 follow-up: fix-required codes stop setup.slackAuthorizeLink.issue before any link write or post", () => {
+  async function issueCountingWrites() {
+    let writes = 0;
+    setSlackAuthorizeLinkIssueStoreForTests({
+      supersedeLive: async () => {
+        writes += 1;
+      },
+      insertIssued: async () => {
+        writes += 1;
+        return { ok: false, conflict: false };
+      },
+    });
+    try {
+      const res = await issueSlackAuthorizeLink({ orgId: ORG_A, employeeId: empA.id, approvalId: null, via: "ticket" });
+      return { res, writes };
+    } finally {
+      setSlackAuthorizeLinkIssueStoreForTests(null);
+    }
+  }
+
+  const cases: Array<{ name: string; code: string; arrange: () => Promise<void> }> = [
+    {
+      name: "bot_token_required (approval inbox token is not xoxb-)",
+      code: "bot_token_required",
+      arrange: async () => {
+        resetDemoNotificationChannels();
+        await seedInbox(ORG_A, "xoxp-authlink-notbot-SECRET-999");
+      },
+    },
+    { name: "approval_user_guest (approver is a guest)", code: "approval_user_guest", arrange: async () => { usersInfoOverride[APPROVER] = { is_restricted: true }; } },
+    { name: "approval_user_external (approver is Slack Connect)", code: "approval_user_external", arrange: async () => { usersInfoOverride[APPROVER] = { is_stranger: true }; } },
+  ];
+  for (const c of cases) {
+    test(c.name, async () => {
+      await c.arrange();
+      calls = [];
+      const { res, writes } = await issueCountingWrites();
+      expect(res).toMatchObject({ ok: false, code: c.code });
+      expect(writes).toBe(0); // no supersede, no insert: nothing written
+      expect(calls.filter((x) => x.method === "chat.postMessage")).toHaveLength(0);
+      expect(calls.some((x) => x.method === "conversations.open")).toBe(false);
+      expect(getRuntimeAudit().some((e) => e.metadata?.event === "slack_authorize_link.issued" && e.employeeId === empA.id)).toBe(false);
+    });
+  }
+});

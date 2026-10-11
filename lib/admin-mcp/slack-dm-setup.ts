@@ -54,7 +54,7 @@ import {
 } from "@/lib/slack/authorize-link-guidance";
 import { isSlackDmAutorouteEnabled, isSlackUserScopeImWriteEnabled } from "@/lib/slack/dm-autoroute-flags";
 import { isSharedApprovalAppEnabled } from "@/lib/slack/shared-approval-flags";
-import { notifyApprovalAppMissingScope } from "@/lib/slack/approval-app-scope-notice";
+import { isApprovalAppFixNoticeCode, notifyApprovalAppFixRequired } from "@/lib/slack/approval-app-scope-notice";
 import type { AuditEvent, NotificationChannel } from "@/lib/types";
 
 export const SLACK_DM_SETUP_TOOLS = [
@@ -734,15 +734,17 @@ export async function fulfillApprovalDeliveryAutoResolve(input: {
   const secrets = await getNotificationChannelSecretsById(orgId, inbox.id);
   const botToken = str(secrets.botToken);
   const appUrl = slackAppUrl(str(inbox.config?.apiAppId));
-  // APPROVAL_APP_MISSING_SCOPE_NOTICE_ENABLED: tell the approver at once (ids only; no-op when OFF).
-  const scopeNotice = (scope: string) =>
-    notifyApprovalAppMissingScope({
+  // APPROVAL_APP_MISSING_SCOPE_NOTICE_ENABLED / APPROVAL_APP_FIX_REQUIRED_CODES_ENABLED:
+  // tell the approver at once (ids only; no-op when the code's flag is OFF).
+  const fixNotice = (code: string, scope?: string) =>
+    notifyApprovalAppFixRequired({
       orgId,
       approvalId: input.approvalId,
       tool: "setup.approvalDelivery.autoResolve",
       inboxId: inbox.id,
+      code,
       apiAppId: str(inbox.config?.apiAppId),
-      scope,
+      ...(scope ? { scope } : {}),
       sharedApprovalApp: inbox.config?.sharedApprovalApp === true,
     }).catch(() => undefined);
   const opened = await openApprovalDeliveryDm({
@@ -751,7 +753,7 @@ export async function fulfillApprovalDeliveryAutoResolve(input: {
     deliveryUserId: str(input.args.deliveryUserId),
   });
   if (!opened.ok) {
-    if (opened.code === "approval_app_missing_scope" && opened.missingScope) await scopeNotice(opened.missingScope);
+    if (isApprovalAppFixNoticeCode(opened.code)) await fixNotice(opened.code, opened.missingScope);
     return auditFail({
       ok: false,
       code: opened.code,
@@ -761,7 +763,7 @@ export async function fulfillApprovalDeliveryAutoResolve(input: {
   }
   const notice = await sendApprovalSetupNotice(botToken, opened.channelId);
   if (!notice.ok) {
-    if (notice.code === "approval_app_missing_scope" && notice.missingScope) await scopeNotice(notice.missingScope);
+    if (isApprovalAppFixNoticeCode(notice.code)) await fixNotice(notice.code, notice.missingScope);
     return auditFail({
       ok: false,
       code: notice.code,
