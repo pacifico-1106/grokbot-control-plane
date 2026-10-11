@@ -74,6 +74,31 @@ describe("stop failed → LP handoff Slack webhook", () => {
     expect(calls.length).toBe(0);
   });
 
+  test("the webhook fetch carries a 5 s timeout signal; a hanging webhook is aborted, not awaited forever", async () => {
+    process.env.LP_HANDOFF_NOTIFY_SLACK_WEBHOOK = "https://hooks.slack.test/T/B/x";
+    let signal: AbortSignal | undefined;
+    const realTimeout = AbortSignal.timeout;
+    let requestedMs = 0;
+    (AbortSignal as unknown as { timeout: (ms: number) => AbortSignal }).timeout = (ms: number) => { requestedMs = ms; return realTimeout.call(AbortSignal, 20); };
+    notify.__setHoldSlackFetchForTests((async (_u: string, init?: RequestInit) => {
+      signal = init?.signal ?? undefined;
+      return await new Promise<Response>((_, reject) => {
+        if (!signal) return; // never settles without a signal
+        signal.addEventListener("abort", () => reject(signal!.reason ?? new Error("aborted")));
+      });
+    }) as unknown as typeof fetch);
+    try {
+      const out = await Promise.race([
+        notify.postStopFailedToHandoffSlack(failed),
+        new Promise((r) => setTimeout(() => r("hung"), 500)),
+      ]);
+      expect(requestedMs).toBe(5000);
+      expect(signal).toBeDefined();
+      expect(out).toBe("failed");
+    } finally {
+      (AbortSignal as unknown as { timeout: typeof realTimeout }).timeout = realTimeout;
+    }
+  });
   test("webhook error never throws out of notifyHold", async () => {
     process.env.LP_HANDOFF_NOTIFY_SLACK_WEBHOOK = "https://hooks.slack.test/T/B/x";
     notify.__setHoldSlackFetchForTests((async () => { throw new Error("down"); }) as unknown as typeof fetch);

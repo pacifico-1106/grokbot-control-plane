@@ -127,6 +127,7 @@ export async function postStopFailedToHandoffSlack(n: HoldNotice): Promise<"post
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ text, unfurl_links: false, unfurl_media: false }),
+      signal: AbortSignal.timeout(5000),
     });
     if (!res.ok) {
       console.error("employee_hold_stop_failed_slack_failed", { status: res.status });
