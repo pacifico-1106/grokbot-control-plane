@@ -258,7 +258,7 @@ export async function POST(req: Request) {
     <h3 style="margin-top:16px;">AI社員に任せたい業務</h3>
     <p style="white-space:pre-wrap;background:#f9f9f9;padding:12px;border-radius:8px;">${sanitize(useCase)}</p>
     <hr />
-    <p style="font-size:12px;color:#666;">このメールは /lp/ai-employee/consult から自動送信されました。</p>
+    <p style="font-size:12px;color:#666;">このメールは LP の相談フォームから送信（流入ページは下記）されました。</p>
   `;
 
   const subject = `【AI社員パック問い合わせ】${company} - ${name}様`;

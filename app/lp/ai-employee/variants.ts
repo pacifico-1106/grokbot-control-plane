@@ -53,7 +53,7 @@ const VARIANTS: Record<LpPage, LpVariant> = {
     page: "ai-employee-corp",
     video: {
       id: "UFKh_CK9uxw",
-      title: "StaffPass MV",
+      title: "Staffpass 紹介動画",
       thumbnail: "/lp/ai-employee-corp/staffpass-mv.jpg",
       storageKey: "ai-emp-corp-yt-float-collapsed",
       expandToModal: true,

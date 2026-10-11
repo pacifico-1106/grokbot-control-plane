@@ -16,6 +16,9 @@
 export const LP_PAGES = ["ai-employee", "ai-employee-corp"] as const;
 export type LpPage = (typeof LP_PAGES)[number];
 
+/** robots meta / X-Robots-Tag for pattern B pages: out of search and AI crawlers, no canonical. */
+export const LP_CORP_ROBOTS = "noindex, follow, noai, noimageai";
+
 /** Safe default: the original page. */
 export const DEFAULT_LP_PAGE: LpPage = "ai-employee";
 

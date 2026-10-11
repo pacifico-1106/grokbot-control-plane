@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { AIEmployeeLanding } from "../ai-employee/AIEmployeeLanding";
 import { SERVICE_FULL_NAME } from "../ai-employee/variants";
+import { LP_CORP_ROBOTS } from "@/lib/lp/lp-page";
 
 /**
  * LP pattern B: handed out directly to acquaintances / referrals (A is the canonical
@@ -14,7 +15,6 @@ import { SERVICE_FULL_NAME } from "../ai-employee/variants";
  * ?ref= is handled in middleware (validated → HttpOnly cookie, URL cleaned). This page
  * takes no searchParams, so the ref can never be rendered.
  */
-const LP_CORP_ROBOTS = "noindex, follow, noai, noimageai";
 
 export const metadata: Metadata = {
   title: `${SERVICE_FULL_NAME} — AI社員の導入・運用パック`,

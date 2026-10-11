@@ -213,7 +213,7 @@ export function AIEmployeeLanding({ variant }: { variant: LpPage }) {
               </div>
               <div className="mt-4 flex justify-center lg:justify-start">
                 <Link
-                  href="/lp/ai-employee/manga"
+                  href={lead("/lp/ai-employee/manga")}
                   className="text-sm text-[var(--accent-strong)] hover:underline inline-flex items-center gap-1"
                 >
                   <svg
@@ -284,26 +284,26 @@ export function AIEmployeeLanding({ variant }: { variant: LpPage }) {
               </div>
               <div className="flex flex-wrap justify-center gap-2">
                 <Link
-                  href="/lp/ai-employee/manga/intern"
+                  href={lead("/lp/ai-employee/manga/intern")}
                   className="btn btn-ghost text-xs py-2 px-3"
                 >
                   インターン編
                 </Link>
                 <Link
-                  href="/lp/ai-employee/manga/proper"
+                  href={lead("/lp/ai-employee/manga/proper")}
                   className="btn btn-ghost text-xs py-2 px-3"
                 >
                   プロパー編
                 </Link>
                 <Link
-                  href="/lp/ai-employee/manga/executive"
+                  href={lead("/lp/ai-employee/manga/executive")}
                   className="btn btn-ghost text-xs py-2 px-3"
                 >
                   エグゼクティブ編
                 </Link>
               </div>
               <Link
-                href="/lp/ai-employee/manga"
+                href={lead("/lp/ai-employee/manga")}
                 className="btn btn-primary text-sm shrink-0"
               >
                 漫画を読む
