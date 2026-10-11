@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test, beforeEach } from "bun:test";
 import { upsertConversationAdapter } from "@/lib/data/conversation-adapters";
 import { upsertNotificationChannel } from "@/lib/data/notification-channels";
 import {
@@ -572,4 +572,11 @@ describe("Slack conversation adapter", () => {
     expect(result).toEqual({ ok: false, error: "channel_not_found", sendState: "not_sent" });
     expect(callCount).toBe(1);
   });
+});
+
+// S2: these tests are about other gates; the hold check answers "no hold" here
+// (the hold gate itself is covered in lib/safety/hold*.test.ts).
+beforeEach(async () => {
+  const h = await import("@/lib/safety/hold");
+  h.__setHoldReaderForTests(h.NO_HOLD_READER_FOR_TESTS);
 });

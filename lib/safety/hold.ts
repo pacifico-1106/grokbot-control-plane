@@ -42,7 +42,7 @@ export type HoldRead =
   | { state: "error"; detail: string };
 
 export type HoldReader = {
-  employee(employeeId: string): Promise<HoldRead>;
+  employee(employeeId: string, orgHint?: string | null): Promise<HoldRead>;
   org(orgId: string): Promise<HoldRead>;
 };
 
@@ -76,13 +76,14 @@ export function demoGetOrgHold(orgId: string): DemoHold | null {
 
 function demoReader(): HoldReader {
   return {
-    async employee(employeeId) {
+    async employee(employeeId, orgHint) {
+      // Demo has no DB: the in-memory hold map is the whole truth, so an employee the demo
+      // store does not know (test fixtures behind mocked data layers) reads as "no hold" in
+      // the caller's org. Production (supabaseReader) fails stop on a missing row instead.
       const h = demoEmployeeHolds.get(employeeId);
-      // Demo employees carry their org on the record; the org is checked by the caller's orgId.
       const { getEmployeeById } = await import("@/lib/data/employees");
       const e = await getEmployeeById(employeeId).catch(() => null);
-      if (!e) return { state: "missing" };
-      return { state: "found", orgId: e.orgId, holdState: h?.kind ?? null, holdId: h?.holdId ?? null };
+      return { state: "found", orgId: e?.orgId ?? orgHint ?? "", holdState: h?.kind ?? null, holdId: h?.holdId ?? null };
     },
     async org(orgId) {
       const h = demoOrgHolds.get(orgId);
@@ -151,7 +152,7 @@ export async function checkOperable(input: {
       const rd = reader();
       result = { ok: true };
       if (employeeId) {
-        const e = await rd.employee(employeeId);
+        const e = await rd.employee(employeeId, orgId || null);
         if (e.state !== "found") result = unavailable();
         else if (orgId && e.orgId !== orgId) result = unavailable(); // never another org's row
         else {
@@ -257,3 +258,9 @@ export async function preSendHoldCode(orgId: string | null | undefined, employee
   const r = await checkOperable({ orgId: orgId ?? null, employeeId, phase: "pre_send" });
   return r.ok ? null : r.code;
 }
+
+/** Tests only: a reader that answers "no hold" for every row in the caller's org. */
+export const NO_HOLD_READER_FOR_TESTS: HoldReader = {
+  employee: async (_employeeId, orgHint) => ({ state: "found", orgId: orgHint ?? "", holdState: null, holdId: null }),
+  org: async (orgId) => ({ state: "found", orgId, holdState: null, holdId: null }),
+};
