@@ -51,7 +51,7 @@ afterEach(() => {
 
 function req(method: "GET" | "POST", headers: Record<string, string>, body: Record<string, unknown>) {
   const url = method === "GET" ? `http://localhost/api/holds/status?employeeId=${EMP}` : "http://localhost/api/holds";
-  return new Request(url, { method, headers: { "content-type": "application/json", ...headers }, ...(method === "POST" ? { body: JSON.stringify(body) } : {}) });
+  return new Request(url, { method, headers: { "content-type": "application/json", origin: "http://localhost", ...headers }, ...(method === "POST" ? { body: JSON.stringify(body) } : {}) });
 }
 
 describe("every hold route refuses every AI credential form", () => {

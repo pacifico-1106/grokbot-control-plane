@@ -1,6 +1,6 @@
 import { jsonUtf8 } from "@/lib/http/json-utf8";
 import { requestHoldRelease } from "@/lib/safety/hold-actions";
-import { holdFailureResponse, readJson, refuseAiCredential, webMemberActor } from "@/lib/safety/hold-route";
+import { holdFailureResponse, readJson, refuseAiCredential, refuseUnsafeBrowserPost, webMemberActor } from "@/lib/safety/hold-route";
 
 export const dynamic = "force-dynamic";
 
@@ -8,6 +8,8 @@ export const dynamic = "force-dynamic";
 export async function POST(req: Request) {
   const refused = await refuseAiCredential(req, "holds.release.request");
   if (refused) return refused;
+  const unsafe = refuseUnsafeBrowserPost(req);
+  if (unsafe) return unsafe;
   const body = await readJson(req);
   const who = await webMemberActor(req, typeof body.actorMemberId === "string" ? body.actorMemberId : null);
   if (!who.ok) return who.response;

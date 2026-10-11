@@ -1,7 +1,7 @@
 import { jsonUtf8 } from "@/lib/http/json-utf8";
 import { getSuperAdminAccess } from "@/lib/admin/access";
 import { startHold } from "@/lib/safety/hold-actions";
-import { holdFailureResponse, readJson, refuseAiCredential } from "@/lib/safety/hold-route";
+import { holdFailureResponse, readJson, refuseAiCredential, refuseUnsafeBrowserPost } from "@/lib/safety/hold-route";
 
 export const dynamic = "force-dynamic";
 
@@ -12,6 +12,8 @@ export const dynamic = "force-dynamic";
 export async function POST(req: Request) {
   const refused = await refuseAiCredential(req, "admin.holds.stop");
   if (refused) return refused;
+  const unsafe = refuseUnsafeBrowserPost(req);
+  if (unsafe) return unsafe;
   const access = await getSuperAdminAccess();
   if (!access.allowed) return jsonUtf8({ ok: false, error: access.reason === "unauthenticated" ? "auth_required" : "forbidden" }, { status: access.reason === "unauthenticated" ? 401 : 403 });
   const body = await readJson(req);

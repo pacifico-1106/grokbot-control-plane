@@ -10,6 +10,7 @@ import { getSessionContext } from "@/lib/auth/session";
 import { activeSessionMember } from "@/lib/auth/active-member";
 import { resolveDemoActor } from "@/lib/team/demo-actor";
 import { appendAuditEvent } from "@/lib/data/audit";
+import { resolveAppOrigin } from "@/lib/app-url";
 import type { HoldActor, HoldFailure } from "@/lib/safety/hold-actions";
 
 const AI_HEADERS = ["authorization", "x-staffpass-credential", "x-staffpass-admin-credential", "x-api-key"] as const;
@@ -56,4 +57,26 @@ export function holdFailureResponse(f: HoldFailure): Response {
 export async function readJson(req: Request): Promise<Record<string, unknown>> {
   const body = await req.json().catch(() => null);
   return body && typeof body === "object" && !Array.isArray(body) ? (body as Record<string, unknown>) : {};
+}
+
+/**
+ * CSRF guard for the stop / release POSTs (木村 10/12 08:31). The Origin header must be present
+ * and equal to this request's origin or the app origin (a browser fetch POST always sends it;
+ * "null" and a missing Origin are refused), and the body must be declared application/json
+ * (text/plain / form posts are "simple" cross-site requests that skip CORS preflight).
+ */
+export function refuseUnsafeBrowserPost(req: Request): Response | null {
+  const origin = (req.headers.get("origin") || "").trim();
+  const allowed = new Set<string>();
+  try { allowed.add(new URL(req.url).origin); } catch { /* ignore */ }
+  try { allowed.add(new URL(resolveAppOrigin()).origin); } catch { /* ignore */ }
+  const site = req.headers.get("sec-fetch-site");
+  if (!origin || origin === "null" || !allowed.has(origin) || (site && site !== "same-origin")) {
+    return jsonUtf8({ ok: false, error: "cross_origin_refused" }, { status: 403 });
+  }
+  const ct = (req.headers.get("content-type") || "").split(";")[0].trim().toLowerCase();
+  if (ct !== "application/json") {
+    return jsonUtf8({ ok: false, error: "json_required" }, { status: 415 });
+  }
+  return null;
 }

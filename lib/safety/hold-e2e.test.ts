@@ -71,7 +71,7 @@ describe("§9 (2) screen → stop → 403 → release → 200", () => {
   const web = async (path: string, member: string, body: Record<string, unknown>) => {
     const mod = await import(path);
     const res: Response = await mod.POST(new Request("http://localhost/x", {
-      method: "POST", headers: { "content-type": "application/json", "x-member-id": member }, body: JSON.stringify(body),
+      method: "POST", headers: { "content-type": "application/json", origin: "http://localhost", "x-member-id": member }, body: JSON.stringify(body),
     }));
     return { status: res.status, body: await res.json() as Record<string, unknown> };
   };
