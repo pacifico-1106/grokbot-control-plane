@@ -7,9 +7,10 @@
  */
 import { expect, test } from "bun:test";
 import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join, relative } from "node:path";
+import { dirname, join, relative } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const ROOT = join(import.meta.dir, "..", "..");
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
 /** entry point → files allowed to call it (the definition file included). */
 export const PINNED: Record<string, string[]> = {
