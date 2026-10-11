@@ -102,8 +102,9 @@ function data(result: { structuredContent?: unknown }): Record<string, unknown> 
   return result.structuredContent as Record<string, unknown>;
 }
 
-async function queueAndApprove(orgId = ORG_A) {
-  const queued = data(await callAdminMcpTool("setup.approvalDelivery.autoResolve", { deliveryUserId: APPROVER }, cred(orgId)));
+async function queueAndApprove(orgId = ORG_A, inboxId?: string) {
+  const args: Record<string, unknown> = { deliveryUserId: APPROVER, ...(inboxId ? { inboxId } : {}) };
+  const queued = data(await callAdminMcpTool("setup.approvalDelivery.autoResolve", args, cred(orgId)));
   const approvalId = String(queued.approvalId);
   const approved = await resolveApproval(approvalId, "approved", "owner@example.com", orgId, { actorId: "mem_1" });
   return { approvalId, approved: approved! };
@@ -152,7 +153,7 @@ describe("flag ON: tell the approver right away (ids only)", () => {
     const failing = await seedInbox(ORG_A, BOT_TOKEN);
     await seedInbox(ORG_A, OTHER_BOT_TOKEN, { channelId: "CADMINS0001", label: "管理者チャンネル", isDefault: false });
     await seedInbox(ORG_B, BOT_TOKEN_B, { channelId: "DORGBDEST01" });
-    const { approvalId, approved } = await queueAndApprove();
+    const { approvalId, approved } = await queueAndApprove(ORG_A, failing.id);
     const fulfillment = await fulfillApprovedAdmin(approved);
     expect(fulfillment).toMatchObject({ ok: false, error: "approval_app_missing_scope" });
 
@@ -180,8 +181,12 @@ describe("flag ON: tell the approver right away (ids only)", () => {
     const { approved } = await queueAndApprove();
     await fulfillApprovedAdmin(approved);
     const text = mails[0].text;
-    expect(text).not.toContain(approved.summary || "\u0000");
-    expect(text).not.toContain(approved.title || "\u0000");
+    // Whatever the ticket's title / summary say, only ids + scope + tool name reach the notice.
+    const ids = new Set([approved.id, APP_ID, "users:read", "setup.approvalDelivery.autoResolve"]);
+    for (const field of [approved.title, approved.summary, approved.purpose]) {
+      if (field && !ids.has(field)) expect({ field, inText: text.includes(field) }).toEqual({ field, inText: false });
+    }
+    expect(text).not.toContain(APPROVER); // the approver's Slack id stays out too
     noSecrets(text);
   });
 

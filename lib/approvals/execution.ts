@@ -6,6 +6,7 @@ import { mapApprovalRow } from "@/lib/data/mappers";
 import { demoGetApproval } from "@/lib/data/demo-approvals-store";
 import { assertApprovalExecutionAuthority } from "./execution-authority";
 import { canFulfillApproval } from "./workflow-integration";
+import { isApprovalAppScopeRetryable } from "@/lib/slack/approval-app-scope-notice";
 
 type Result = { ok: boolean; error?: string };
 type State = "running" | "succeeded" | "failed" | "uncertain";
@@ -63,7 +64,9 @@ const retryableByTool: Record<string, ReadonlySet<string>> = {
 /** Failure → claim state "failed" (may run again) instead of "uncertain". */
 export function isRetryableApprovalFailure(tool: string, code: string): boolean {
   if (!code) return false;
-  return retryable.has(code) || Boolean(retryableByTool[tool]?.has(code));
+  // APPROVAL_APP_MISSING_SCOPE_NOTICE_ENABLED: approval_app_missing_scope of the
+  // approval-app setup tools (refused before any write / post) → re-run after reinstall.
+  return retryable.has(code) || Boolean(retryableByTool[tool]?.has(code)) || isApprovalAppScopeRetryable(tool, code);
 }
 
 function approvalToolName(approval: ApprovalRequest): string {

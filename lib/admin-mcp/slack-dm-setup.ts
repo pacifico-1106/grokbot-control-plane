@@ -53,6 +53,7 @@ import {
 } from "@/lib/slack/authorize-link-guidance";
 import { isSlackDmAutorouteEnabled, isSlackUserScopeImWriteEnabled } from "@/lib/slack/dm-autoroute-flags";
 import { isSharedApprovalAppEnabled } from "@/lib/slack/shared-approval-flags";
+import { notifyApprovalAppMissingScope } from "@/lib/slack/approval-app-scope-notice";
 import type { AuditEvent, NotificationChannel } from "@/lib/types";
 
 export const SLACK_DM_SETUP_TOOLS = [
@@ -719,12 +720,24 @@ export async function fulfillApprovalDeliveryAutoResolve(input: {
   const secrets = await getNotificationChannelSecretsById(orgId, inbox.id);
   const botToken = str(secrets.botToken);
   const appUrl = slackAppUrl(str(inbox.config?.apiAppId));
+  // APPROVAL_APP_MISSING_SCOPE_NOTICE_ENABLED: tell the approver at once (ids only; no-op when OFF).
+  const scopeNotice = (scope: string) =>
+    notifyApprovalAppMissingScope({
+      orgId,
+      approvalId: input.approvalId,
+      tool: "setup.approvalDelivery.autoResolve",
+      inboxId: inbox.id,
+      apiAppId: str(inbox.config?.apiAppId),
+      scope,
+      sharedApprovalApp: inbox.config?.sharedApprovalApp === true,
+    }).catch(() => undefined);
   const opened = await openApprovalDeliveryDm({
     botToken,
     allowedUserIds: allowedUsers(inbox),
     deliveryUserId: str(input.args.deliveryUserId),
   });
   if (!opened.ok) {
+    if (opened.code === "approval_app_missing_scope" && opened.missingScope) await scopeNotice(opened.missingScope);
     return auditFail({
       ok: false,
       code: opened.code,
@@ -734,6 +747,7 @@ export async function fulfillApprovalDeliveryAutoResolve(input: {
   }
   const notice = await sendApprovalSetupNotice(botToken, opened.channelId);
   if (!notice.ok) {
+    if (notice.code === "approval_app_missing_scope" && notice.missingScope) await scopeNotice(notice.missingScope);
     return auditFail({
       ok: false,
       code: notice.code,
