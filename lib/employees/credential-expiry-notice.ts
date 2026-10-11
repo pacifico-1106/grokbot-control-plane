@@ -19,7 +19,6 @@
  */
 import type { CredentialExpiryThreshold, ExpiringCredentialRow, ClaimResult } from "@/lib/data/credential-expiry-notices";
 import type { AuditEvent } from "@/lib/types";
-import { formatCredentialExpiryJa } from "@/lib/employees/credential-expiry";
 
 export type { ExpiringCredentialRow };
 
@@ -77,12 +76,33 @@ export interface NoticeRunResult {
   skippedMismatch: number;
 }
 
+const JST_MOMENT = new Intl.DateTimeFormat("en-US", {
+  timeZone: "Asia/Tokyo",
+  month: "numeric",
+  day: "numeric",
+  hour: "2-digit",
+  minute: "2-digit",
+  hourCycle: "h23",
+});
+
+/**
+ * 「10/13 09:00（JST）に期限切れ」 — the actual moment in JST, for both
+ * thresholds (木村 2026-10-12: a relative 「明日まで」 was wrong when the badge
+ * expires later today). Calendar date is the JST one; midnight is 00:00.
+ */
+export function expiryMomentJa(expiresAt: string): string {
+  const ms = Date.parse(expiresAt);
+  if (!Number.isFinite(ms)) return "期限不明";
+  const p = Object.fromEntries(JST_MOMENT.formatToParts(new Date(ms)).map((x) => [x.type, x.value]));
+  const hour = p.hour === "24" ? "00" : p.hour;
+  return `${p.month}/${p.day} ${hour}:${p.minute}（JST）に期限切れ`;
+}
+
 export function credentialExpiryNoticeText(items: NoticeItem[], opts: { origin: string; deferred: number }): string {
   const lines = items.map((item) => {
-    const when = item.threshold === "1d" ? "明日まで" : `あと ${item.daysLeft} 日`;
     return [
       `・AI社員 ${item.employeeId} / 社員証 ${item.credentialId}`,
-      `  期限 ${formatCredentialExpiryJa(item.expiresAt)}（${when}）`,
+      `  ${expiryMomentJa(item.expiresAt)}`,
       `  再発行: ${opts.origin}/app/employees/${encodeURIComponent(item.employeeId)}`,
     ].join("\n");
   });
