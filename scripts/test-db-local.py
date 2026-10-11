@@ -293,7 +293,7 @@ try:
     sql(ROOT / "tests/security/db-lp-provisionings.sql")
     print("PASS: lp provisionings (20261012400000): RLS on / no policy, anon/authenticated no privilege, notice fns service_role only; "
           "one event row per Stripe event id, one payment row per Checkout Session; value CHECKs (allowlist / regex / '(invalid)' marker, "
-          "sha256 only); 12 concurrent notice claims → 1; finish/release with own token only; no re-notice after sent; stale takeover; "
+          "keyed HMAC hex only); 12 concurrent notice claims → 1; finish/release with own token only; no re-notice after sent; stale takeover; "
           "re-applicable; rollback drops 2 tables + 2 functions; forward again.")
     webhook_settings = ROOT / "supabase/migrations/20261005100000_employee_webhook_settings.sql"
     sql(webhook_settings)

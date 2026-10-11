@@ -14,15 +14,18 @@
  * - Metadata is re-validated (lpPage allowlist, lpRef / AIC- / plan / uuid);
  *   invalid values become "(invalid)", never raw.
  * - Customer email: never logged, never stored, never in the notice. Stored:
- *   sha256 of the normalised address + the domain. Notice: the domain only.
+ *   HMAC-SHA256(LP_CUSTOMER_EMAIL_HASH_KEY, normalised address) + the domain.
+ *   Notice: the domain only. Key missing → fail closed: the event is recorded
+ *   as ignored (email_hash_key_missing), nothing else is stored, no notice, 200.
  * - No tenant, no org, no subscription row, no customer contact.
  */
-import { createHash, randomBytes } from "node:crypto";
+import { createHmac, randomBytes } from "node:crypto";
 import type Stripe from "stripe";
 import { REFERRAL_CODE_PATTERN } from "@/lib/auth/signup-guard";
 import { VALID_CHECKOUT_PLANS } from "@/lib/lp/catalog";
 import { lpPageLabel, parseLpPage, parseLpRef } from "@/lib/lp/lp-page";
 import type { LpEventType, LpPaymentRecord, LpProvisioningStore } from "@/lib/lp/provisioning-store";
+import { isLpEmailHashKeyConfigured, LP_EMAIL_HASH_KEY_ENV, requireLpEmailHashKey } from "@/lib/security/lp-email-hash-key";
 
 export const LP_SOURCE = "lp-ai-employee";
 export const INVALID_MARKER = "(invalid)";
@@ -72,14 +75,15 @@ export function sanitizeLpSetupFeeMetadata(meta: Meta): Pick<LpPaymentRecord, "p
   return { plan, lpPage, lpRef, referralCode, lpOrderId };
 }
 
-export function emailFingerprint(raw: unknown): { sha256: string | null; domain: string | null } {
-  if (typeof raw !== "string") return { sha256: null, domain: null };
+/** Keyed: HMAC-SHA256(key, trimmed lower-cased address). The key comes from requireLpEmailHashKey(). */
+export function emailFingerprint(raw: unknown, key: string): { hmac: string | null; domain: string | null } {
+  if (typeof raw !== "string") return { hmac: null, domain: null };
   const email = raw.trim().toLowerCase();
   const at = email.lastIndexOf("@");
-  if (at <= 0 || at === email.length - 1) return { sha256: null, domain: null };
-  const sha256 = createHash("sha256").update(email, "utf8").digest("hex");
+  if (at <= 0 || at === email.length - 1) return { hmac: null, domain: null };
+  const hmac = createHmac("sha256", key).update(email, "utf8").digest("hex");
   const d = email.slice(at + 1);
-  return { sha256, domain: DOMAIN.test(d) ? d : INVALID_MARKER };
+  return { hmac, domain: DOMAIN.test(d) ? d : INVALID_MARKER };
 }
 
 export function formatLpAmount(amount: number, currency: string): string {
@@ -91,7 +95,7 @@ export function formatLpAmount(amount: number, currency: string): string {
 
 const shown = (v: string | null) => (v == null ? "なし" : v === INVALID_MARKER ? "不正な値（破棄）" : v);
 
-export function lpSetupFeeNoticeText(rec: Omit<LpPaymentRecord, "customerEmailSha256">): string {
+export function lpSetupFeeNoticeText(rec: Omit<LpPaymentRecord, "customerEmailHmac">): string {
   const page = parseLpPage(rec.lpPage);
   return [
     "【Staffpass LP】初期費用のお支払いを確認しました（記録と通知のみ）",
@@ -120,7 +124,8 @@ export type LpDecision =
 export function decideLpSetupFeeSession(
   event: { type: string; livemode: boolean },
   sessionId: string,
-  s: Stripe.Checkout.Session
+  s: Stripe.Checkout.Session,
+  emailHashKey: string
 ): LpDecision {
   const ignored = (reason: string): LpDecision => ({ outcome: "ignored", reason });
   if (event.type === "checkout.session.async_payment_failed") return ignored("async_payment_failed");
@@ -133,7 +138,7 @@ export function decideLpSetupFeeSession(
   if (s.payment_status !== "paid") return ignored("session_unpaid");
   if (typeof s.amount_total !== "number" || !Number.isSafeInteger(s.amount_total) || s.amount_total < 0) return ignored("invalid_amount");
   if (typeof s.currency !== "string" || !CURRENCY.test(s.currency)) return ignored("invalid_currency");
-  const fp = emailFingerprint(s.customer_details?.email ?? s.customer_email ?? null);
+  const fp = emailFingerprint(s.customer_details?.email ?? s.customer_email ?? null, emailHashKey);
   return {
     outcome: "paid",
     record: {
@@ -142,7 +147,7 @@ export function decideLpSetupFeeSession(
       amountTotal: s.amount_total,
       currency: s.currency,
       ...sanitizeLpSetupFeeMetadata(s.metadata),
-      customerEmailSha256: fp.sha256,
+      customerEmailHmac: fp.hmac,
       customerEmailDomain: fp.domain,
     },
   };
@@ -200,6 +205,12 @@ export async function handleLpSetupFeeEvent(
     return { action: "ignored", reason, mode };
   };
   if (!sessionId) return ignore("invalid_session_id", null, null);
+  // Fail closed before anything is fetched or stored (same rule as IP_HASH_KEY).
+  if (!isLpEmailHashKeyConfigured()) {
+    console.error(`[stripe:webhook:lp-setup-fee] ${LP_EMAIL_HASH_KEY_ENV} not configured; payment not recorded`, { eventId, sessionId });
+    return ignore("email_hash_key_missing", null, null);
+  }
+  const emailHashKey = requireLpEmailHashKey();
 
   let session: Stripe.Checkout.Session;
   try {
@@ -209,7 +220,7 @@ export async function handleLpSetupFeeEvent(
     throw new Error("lp_session_retrieve_failed");
   }
 
-  const decision = decideLpSetupFeeSession(event, sessionId, session);
+  const decision = decideLpSetupFeeSession(event, sessionId, session, emailHashKey);
   if (decision.outcome === "ignored") {
     return ignore(decision.reason, typeof session?.payment_status === "string" ? session.payment_status : null, Boolean(session?.livemode));
   }

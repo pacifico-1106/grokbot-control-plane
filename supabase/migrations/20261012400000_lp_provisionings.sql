@@ -8,7 +8,8 @@
 -- lp_provisionings: one row per Checkout Session (UNIQUE) whose re-fetched
 --   Session was paid. Re-validated values only: lp_page allowlist, lp_ref /
 --   AIC- / uuid regex, or the marker '(invalid)'. The customer email is never
---   stored: sha256 of the normalised address + the domain only.
+--   stored: HMAC-SHA256(LP_CUSTOMER_EMAIL_HASH_KEY, normalised address) + the
+--   domain only (the key lives in the server env, never in the DB).
 -- Notice once per Session: claim_lp_provisioning_notice (conditional UPDATE,
 --   claim token, stale takeover) → send → finish_lp_provisioning_notice
 --   ('sent' / 'no_destination' records it; 'failed' releases the claim).
@@ -44,7 +45,7 @@ create table if not exists public.lp_provisionings (
   lp_ref text check (lp_ref ~ '^[A-Za-z0-9_-]{1,32}$' or lp_ref = '(invalid)'),
   referral_code text check (referral_code ~ '^AIC-[A-Z0-9]{4,16}$' or referral_code = '(invalid)'),
   lp_order_id text check (lp_order_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' or lp_order_id = '(invalid)'),
-  customer_email_sha256 text check (customer_email_sha256 ~ '^[0-9a-f]{64}$'),
+  customer_email_hmac text check (customer_email_hmac ~ '^[0-9a-f]{64}$'),
   customer_email_domain text check (customer_email_domain ~ '^[a-z0-9.-]{1,253}$' or customer_email_domain = '(invalid)'),
   notice_claim_token text,
   notice_claimed_at timestamptz,

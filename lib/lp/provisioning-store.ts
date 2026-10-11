@@ -31,7 +31,7 @@ export interface LpPaymentRecord {
   lpRef: string | null;
   referralCode: string | null;
   lpOrderId: string | null;
-  customerEmailSha256: string | null;
+  customerEmailHmac: string | null;
   customerEmailDomain: string | null;
 }
 
@@ -133,7 +133,7 @@ export function createSupabaseLpProvisioningStore(): LpProvisioningStore | null 
             lp_ref: row.lpRef,
             referral_code: row.referralCode,
             lp_order_id: row.lpOrderId,
-            customer_email_sha256: row.customerEmailSha256,
+            customer_email_hmac: row.customerEmailHmac,
             customer_email_domain: row.customerEmailDomain,
           },
           { onConflict: "stripe_checkout_session_id", ignoreDuplicates: true }

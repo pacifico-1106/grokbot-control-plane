@@ -6,7 +6,7 @@
 --      cannot execute the notice functions
 --  (2) one event row per Stripe event id; one payment row per Checkout Session (23505)
 --  (3) value CHECKs: ids, currency, amount, lp_page allowlist, lp_ref regex,
---      AIC- code, email sha256 — invalid values only as the '(invalid)' marker
+--      AIC- code, email HMAC (hex only) — invalid values only as the '(invalid)' marker
 --  (4) notice claim: once; a second claim false; finish only with the claim
 --      token; 'failed' releases (own token only); after 'sent' never again;
 --      a stale claim (> p_stale_seconds) can be taken over
@@ -76,7 +76,7 @@ select security_test.lpp_rejects($q$insert into public.lp_provisioning_events (s
 insert into public.lp_provisioning_events (stripe_event_id, stripe_checkout_session_id, event_type, outcome, reason, payment_status, livemode)
 values ('evt_lpfixture2', 'cs_test_lpfixture1', 'checkout.session.async_payment_succeeded', 'ignored', 'session_unpaid', 'unpaid', false);
 -- (2) session dedupe
-insert into public.lp_provisionings (stripe_checkout_session_id, first_stripe_event_id, livemode, amount_total, currency, plan, lp_page, lp_ref, referral_code, customer_email_sha256, customer_email_domain)
+insert into public.lp_provisionings (stripe_checkout_session_id, first_stripe_event_id, livemode, amount_total, currency, plan, lp_page, lp_ref, referral_code, customer_email_hmac, customer_email_domain)
 values ('cs_test_lpfixture1', 'evt_lpfixture1', false, 165000, 'jpy', 'proper', 'ai-employee-corp', 'partner_01', 'AIC-ABCD1234', repeat('a', 64), 'example.co.jp');
 select security_test.lpp_rejects($q$insert into public.lp_provisionings (stripe_checkout_session_id, first_stripe_event_id, livemode, amount_total, currency, plan, lp_page)
   values ('cs_test_lpfixture1', 'evt_lpfixture2', false, 165000, 'jpy', 'proper', 'ai-employee')$q$, '23505');
@@ -87,7 +87,7 @@ select security_test.lpp_rejects($q$insert into public.lp_provisionings (stripe_
   values ('cs_test_lpfixture2', 'evt_lpfixture3', false, 1, 'jpy', 'proper', 'ai-employee', '<script>')$q$, '23514');
 select security_test.lpp_rejects($q$insert into public.lp_provisionings (stripe_checkout_session_id, first_stripe_event_id, livemode, amount_total, currency, plan, lp_page, referral_code)
   values ('cs_test_lpfixture2', 'evt_lpfixture3', false, 1, 'jpy', 'proper', 'ai-employee', 'aic-lower')$q$, '23514');
-select security_test.lpp_rejects($q$insert into public.lp_provisionings (stripe_checkout_session_id, first_stripe_event_id, livemode, amount_total, currency, plan, lp_page, customer_email_sha256)
+select security_test.lpp_rejects($q$insert into public.lp_provisionings (stripe_checkout_session_id, first_stripe_event_id, livemode, amount_total, currency, plan, lp_page, customer_email_hmac)
   values ('cs_test_lpfixture2', 'evt_lpfixture3', false, 1, 'jpy', 'proper', 'ai-employee', 'someone@example.com')$q$, '23514');
 select security_test.lpp_rejects($q$insert into public.lp_provisionings (stripe_checkout_session_id, first_stripe_event_id, livemode, amount_total, currency, plan, lp_page)
   values ('cs_test_lpfixture2', 'evt_lpfixture3', false, -1, 'jpy', 'proper', 'ai-employee')$q$, '23514');
