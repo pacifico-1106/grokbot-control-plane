@@ -24,6 +24,7 @@ export const ADMIN_MCP_TOOL_NAMES = [
   "employees.allowedAccounts.remove",
   "employees.allowedAccounts.list",
   "employees.postingIdentity.set",
+  "employees.credential.reissue",
   "parties.upsert",
   "channels.classify",
   "channels.list",

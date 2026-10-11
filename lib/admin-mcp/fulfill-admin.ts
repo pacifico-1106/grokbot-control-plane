@@ -730,6 +730,24 @@ async function fulfillPromoteOwnerTicket(approval: ApprovalRequest, args: Record
   return { ok: true, tool: PROMOTE_OWNER_TOOL, at, summaryJa: result.summaryJa };
 }
 
+/** Human-approved 社員証 reissue: authorizes the dashboard hand-over only (no key minted / returned). */
+async function fulfillCredentialReissueTicket(approval: ApprovalRequest, args: Record<string, unknown>): Promise<AdminFulfillment> {
+  const { fulfillCredentialReissue, CREDENTIAL_REISSUE_TOOL } = await import("@/lib/employees/credential-reissue");
+  const result = await fulfillCredentialReissue(approval, args);
+  const at = new Date().toISOString();
+  if (!result.ok) {
+    return {
+      ok: false,
+      tool: CREDENTIAL_REISSUE_TOOL,
+      at,
+      error: result.code,
+      ...(result.employeeId ? { employeeId: result.employeeId } : {}),
+      nextStepJa: result.messageJa,
+    };
+  }
+  return { ok: true, tool: CREDENTIAL_REISSUE_TOOL, at, employeeId: result.employeeId, summaryJa: result.summaryJa, nextStepJa: result.nextStepJa };
+}
+
 /** Human-approved Slack posting identity switch (bot | user); re-checked right before the write. */
 async function fulfillPostingIdentityTicket(approval: ApprovalRequest, args: Record<string, unknown>): Promise<AdminFulfillment> {
   const { fulfillPostingIdentityChange, POSTING_IDENTITY_SET_TOOL } = await import("@/lib/admin-mcp/posting-identity-tool");
@@ -2200,6 +2218,9 @@ async function fulfillApprovedAdminCore(
         break;
       case "employees.postingIdentity.set":
         fulfillment = await fulfillPostingIdentityTicket(approval, args);
+        break;
+      case "employees.credential.reissue":
+        fulfillment = await fulfillCredentialReissueTicket(approval, args);
         break;
       case "parties.upsert":
         fulfillment = await fulfillParty(approval, args);

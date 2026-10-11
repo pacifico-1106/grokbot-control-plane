@@ -736,3 +736,15 @@ export function isMcpOAuthConsentMfaRequired(): boolean {
 export function isCredentialExpiryNoticeEnabled(): boolean {
   return parseFlag(process.env.CREDENTIAL_EXPIRY_NOTICE_ENABLED);
 }
+
+/**
+ * ADMIN_MCP_CREDENTIAL_REISSUE_ENABLED (木村 2026-10-12): admin MCP
+ * employees.credential.reissue. always_human ticket; after approval the new
+ * 社員証 is minted only at the dashboard hand-over (rotate with
+ * reissueApprovalId, one-time display to a credential admin) — never returned
+ * to the AI. Default OFF: the tool answers feature_disabled and the rotate
+ * route refuses reissueApprovalId.
+ */
+export function isAdminMcpCredentialReissueEnabled(): boolean {
+  return parseFlag(process.env.ADMIN_MCP_CREDENTIAL_REISSUE_ENABLED);
+}
