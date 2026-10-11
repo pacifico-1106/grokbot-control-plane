@@ -204,6 +204,21 @@ try:
         " and to_regprocedure('public.oauth_grants_same_org()') is null;") == "t"
     sql(mcp_oauth)  # forward again after rollback
     sql(ROOT / "tests/security/db-mcp-oauth.sql")
+    # #315 follow-up (20261010300000): oauth_rate_limit_hit search_path = pg_catalog, public.
+    oauth_sp = ROOT / "supabase/migrations/20261010300000_mcp_oauth_rate_limit_search_path.sql"
+    sp_cfg = "select proconfig::text from pg_proc where oid = 'public.oauth_rate_limit_hit(text,timestamptz)'::regprocedure;"
+    assert query(sp_cfg) == "{search_path=public}", query(sp_cfg)  # 20261010200000 alone
+    sql(oauth_sp)
+    sql(oauth_sp)  # re-applicable
+    sql(ROOT / "tests/security/db-mcp-oauth-search-path.sql")
+    sql(ROOT / "tests/security/db-mcp-oauth.sql")
+    sql(ROOT / "supabase/verification/20261010300000_mcp_oauth_rate_limit_search_path_rollback.sql")
+    assert query(sp_cfg) == "{search_path=public}", query(sp_cfg)
+    sql(ROOT / "tests/security/db-mcp-oauth.sql")
+    sql(oauth_sp)  # forward again after rollback
+    sql(ROOT / "tests/security/db-mcp-oauth-search-path.sql")
+    print("PASS: mcp oauth search_path (20261010300000): oauth_rate_limit_hit SECURITY DEFINER with search_path = pg_catalog, public; "
+          "EXECUTE service_role only; counter unchanged; re-applicable; rollback restores search_path = public; forward again.")
     print("PASS: mcp oauth (20261010200000): 7 tables RLS on / no policy, anon/authenticated hold no privilege and cannot execute "
           "oauth_rate_limit_hit; cross-org grant (employee / credential / member) rejected; atomic rate-limit counter; "
           "re-applicable; rollback drops all 7 tables + 2 functions; forward again.")
