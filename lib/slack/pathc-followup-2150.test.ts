@@ -16,7 +16,7 @@ import { createApproval, resolveApprovalWithoutWorkflow } from "@/lib/data/appro
 import { resetDemoChannelClassifyStore } from "@/lib/data/channel-classify";
 import { resetChannelClassifyBudgetFallbackForTests } from "@/lib/channel-classify/budget";
 import { setProposalDepsForTests } from "@/lib/channel-classify/proposals";
-import { setStuckNotifyDepsForTests } from "@/lib/channel-classify/stuck-notify";
+import { notifyChannelStuck, setStuckNotifyDepsForTests } from "@/lib/channel-classify/stuck-notify";
 import { processSlackMentionEnvelope } from "@/lib/slack/mention-ingress";
 import type { NotificationChannelRuntime } from "@/lib/data/notification-channels";
 import { decideWakeSkipSuppression, setWakeSkipSuppressionClockForTests, WAKE_SKIP_REJECT_SUPPRESS_DAYS } from "@/lib/channel-classify/reject-suppression";
@@ -316,6 +316,26 @@ describe("(1) rejected card → 30-day suppression of the wake-skip notice and c
     await skip(channel);
     expect(suppressedRows(channel)).toEqual([]);
     expect(sent).toEqual([]);
+  });
+});
+
+describe("(1b) #292 shared org × channel key keeps the 30-day rejected-card suppression", () => {
+  test("rejected channel: skips stay suppressed (no notice, no card) and do not take the shared 6h slot; a deny in that channel is still told once", async () => {
+    bothOn();
+    const { channel } = await rejectedChannel();
+    await skip(channel);
+    await skip(channel);
+    expect(sent).toEqual([]);
+    expect(tickets).toEqual([]);
+    expect(suppressedRows(channel).length).toBe(1);
+    const deny = () =>
+      notifyChannelStuck({ orgId: ORG, kind: "unregistered_channel_denied", ref: { surface: "slack", externalId: channel }, reason: "external_confidential_denied" });
+    expect((await deny()).status).not.toBe("suppressed");
+    expect(sent.length).toBe(1);
+    expect((await deny()).status).toBe("suppressed");
+    await skip(channel);
+    expect(sent.length).toBe(1);
+    expect(tickets).toEqual([]);
   });
 });
 
