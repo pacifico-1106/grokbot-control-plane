@@ -138,6 +138,9 @@ ADDITIVE = [
      " and to_regprocedure('public.release_employee_hold(uuid,uuid,text,jsonb,timestamptz)') is null"
      " and not exists (select 1 from information_schema.columns where table_schema = 'public'"
      " and table_name in ('employees', 'orgs') and column_name in ('hold_state', 'hold_id'))"),
+    # 運営からのお知らせ PR-A: 6 server-only tables + visibility / guard functions.
+    ("20261013100000_", "tests/security/db-operator-notices.sql", ("operator_notices", "operator_notice_versions",
+     "operator_notice_targets", "operator_notice_receipts", "ops_feedback_items", "ops_feedback_events")),
     ("20261010200000_", "tests/security/db-mcp-oauth.sql", ("oauth_clients", "oauth_authorization_requests", "oauth_grants",
      "oauth_authorization_codes", "oauth_access_tokens", "oauth_refresh_tokens", "oauth_rate_limits")),
 ]

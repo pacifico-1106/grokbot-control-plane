@@ -186,6 +186,8 @@ create or replace function public.operator_notice_targets_guard()
 returns trigger language plpgsql security invoker set search_path = pg_catalog, public as $ontg$
 declare v_scope text; v_status text; v_notice text;
 begin
+  -- a cascade from deleting the notice / org / employee itself is allowed
+  if tg_op = 'DELETE' and pg_trigger_depth() > 1 then return old; end if;
   v_notice := case when tg_op = 'DELETE' then old.notice_id else new.notice_id end;
   select n.audience_scope, n.status into v_scope, v_status from public.operator_notices n where n.id = v_notice;
   if v_status is distinct from 'draft' then
