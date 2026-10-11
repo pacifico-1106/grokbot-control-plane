@@ -1,8 +1,8 @@
-import { NextResponse } from "next/server";
 import { rejectUnauthorizedCron } from "@/lib/security/cron-secret";
 import { listPendingT2Decisions } from "@/lib/data/approvals";
 import { isDecisionWorkflowEnabled } from "@/lib/feature-flags";
 import { checkAndExpireT2Decision } from "@/lib/decision-workflow/expiry";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -22,7 +22,7 @@ export async function GET(req: Request) {
   if (rejected) return rejected;
 
   if (!isDecisionWorkflowEnabled()) {
-    return NextResponse.json({
+    return jsonUtf8({
       ok: true,
       skipped: true,
       reason: "P1_DECISION_WORKFLOW_ENABLED is OFF",
@@ -44,7 +44,7 @@ export async function GET(req: Request) {
       else if (result.action === "error") errors++;
     }
 
-    return NextResponse.json({
+    return jsonUtf8({
       ok: true,
       candidates: t2Decisions.length,
       rejected,
@@ -53,6 +53,6 @@ export async function GET(req: Request) {
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "unknown_error";
-    return NextResponse.json({ ok: false, error: message }, { status: 500 });
+    return jsonUtf8({ ok: false, error: message }, { status: 500 });
   }
 }

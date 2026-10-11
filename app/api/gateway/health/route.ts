@@ -1,8 +1,8 @@
-import { NextResponse } from "next/server";
 import { getCurrentOrgId } from "@/lib/auth/session";
 import { getGatewayStatusForOrg, getOrgMeta, runtimeModeLabel } from "@/lib/data";
 import { listGatewayToolIds } from "@/lib/gateway/tools";
 import { isDemoMode } from "@/lib/mode";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 /** Slim gateway health stub for Managed / BYO Grok Bot link. */
 export async function GET() {
@@ -11,7 +11,7 @@ export async function GET() {
 
   // Unauthenticated production probe: still expose runtimeMode (cutover check).
   if (!isDemoMode() && !orgId) {
-    return NextResponse.json({
+    return jsonUtf8({
       ok: true,
       runtimeMode,
       demo: false,
@@ -24,7 +24,7 @@ export async function GET() {
 
   try {
     const org = await getOrgMeta(orgId);
-    return NextResponse.json({
+    return jsonUtf8({
       ok: true,
       orgId: org.id,
       mode: org.integrationMode,
@@ -57,7 +57,7 @@ export async function GET() {
           : "Production org gateway health (partner handshake may still be stubbed).",
     });
   } catch (e) {
-    return NextResponse.json(
+    return jsonUtf8(
       {
         ok: false,
         runtimeMode,

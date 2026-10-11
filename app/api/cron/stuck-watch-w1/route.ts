@@ -1,10 +1,10 @@
-import { NextResponse } from "next/server";
 import { rejectUnauthorizedCron } from "@/lib/security/cron-secret";
 import { processW1MentionWatchAllOrgs } from "@/lib/stuck-watch/w1-mention-unanswered";
 import { listPendingT2Decisions } from "@/lib/data/approvals";
 import { checkAndExpireT2Decision } from "@/lib/decision-workflow/expiry";
 import { isDecisionWorkflowEnabled, isMcpEndpointHandoffEnabled } from "@/lib/feature-flags";
 import { processMcpNotConnectedWatchAllOrgs } from "@/lib/mcp/endpoint-handoff";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -43,7 +43,7 @@ export async function GET(req: Request) {
       ? await processMcpNotConnectedWatchAllOrgs().catch(() => [])
       : null;
 
-    return NextResponse.json({
+    return jsonUtf8({
       ok: true,
       scanned: results.length,
       notified: notified.length,
@@ -53,6 +53,6 @@ export async function GET(req: Request) {
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "unknown_error";
-    return NextResponse.json({ ok: false, error: message }, { status: 500 });
+    return jsonUtf8({ ok: false, error: message }, { status: 500 });
   }
 }

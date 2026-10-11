@@ -18,11 +18,11 @@
  */
 
 import { waitUntil } from "@vercel/functions";
-import { NextResponse } from "next/server";
 import {
   acknowledgeSlackEventsRequest,
   processSlackMentionEnvelope,
 } from "@/lib/slack/mention-ingress";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -72,5 +72,5 @@ export async function POST(req: Request) {
       })()
     );
   }
-  return NextResponse.json(result.body, { status: result.status });
+  return jsonUtf8(result.body, { status: result.status });
 }

@@ -11,6 +11,7 @@ import {
   type LoginErrorCode,
 } from "@/lib/auth/login-errors";
 import { safeNextDestination as safeDestination } from "@/lib/auth/safe-next";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 export const runtime = "nodejs";
 
@@ -34,7 +35,7 @@ function fail(
   next: string
 ) {
   if (json) {
-    return NextResponse.json(
+    return jsonUtf8(
       { error: code, message: loginErrorMessage(code, status) },
       { status }
     );
@@ -48,7 +49,7 @@ export async function POST(req: Request) {
   // Login CSRF guard (MCP OAuth consent relies on "who is signed in").
   // Only while MCP_OAUTH_ENABLED is ON; requests without Origin (non-browser) pass.
   if (isMcpOAuthEnabled() && !isSameOriginBrowserPost(req, { requireOrigin: false })) {
-    return NextResponse.json({ error: "origin_mismatch", message: "不正な送信元です。" }, { status: 403 });
+    return jsonUtf8({ error: "origin_mismatch", message: "不正な送信元です。" }, { status: 403 });
   }
   const contentType = req.headers.get("content-type") || "";
   const json = wantsJson(req, contentType);
@@ -72,7 +73,7 @@ export async function POST(req: Request) {
     const url = new URL(next, req.url);
     url.searchParams.set("demo", "1");
     if (json) {
-      return NextResponse.json({
+      return jsonUtf8({
         ok: true,
         demo: true,
         next: `${url.pathname}${url.search}${url.hash}`,
@@ -123,7 +124,7 @@ export async function POST(req: Request) {
   const destination = next === "/app" && superAdmin ? "/admin" : next;
 
   if (json) {
-    return NextResponse.json({ ok: true, demo: false, next: destination });
+    return jsonUtf8({ ok: true, demo: false, next: destination });
   }
   return NextResponse.redirect(new URL(destination, req.url), 303);
 }

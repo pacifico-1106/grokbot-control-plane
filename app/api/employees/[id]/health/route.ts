@@ -1,4 +1,3 @@
-import { NextResponse } from "next/server";
 import { requireOrgAdminSession, requireOrgSession } from "@/lib/auth/require-org";
 import {
   bindingPublicView,
@@ -11,6 +10,7 @@ import {
   unlinkedBinding,
 } from "@/lib/data";
 import { isDemoMode } from "@/lib/mode";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 export const runtime = "nodejs";
 
@@ -32,7 +32,7 @@ export async function POST(
   const { id } = await ctx.params;
   const employee = await getEmployee(id, orgId);
   if (!employee) {
-    return NextResponse.json({ error: "employee_not_found" }, { status: 404 });
+    return jsonUtf8({ error: "employee_not_found" }, { status: 404 });
   }
 
   await ensureBindingRow(id, employee.orgId || orgId);
@@ -44,7 +44,7 @@ export async function POST(
 
   const before = (await getBinding(id))!;
   if (before.status === "revoked") {
-    return NextResponse.json(
+    return jsonUtf8(
       {
         ok: false,
         code: "revoked",
@@ -57,7 +57,7 @@ export async function POST(
 
   if (forceFail) {
     const binding = (await recordHealthFailure(id, "forced_demo_failure"))!;
-    return NextResponse.json({
+    return jsonUtf8({
       ok: false,
       demo: runtimeModeLabel() === "demo",
       mode: runtimeModeLabel(),
@@ -68,7 +68,7 @@ export async function POST(
   }
 
   if (!before.grokBotAgentId || before.status === "unlinked") {
-    return NextResponse.json({
+    return jsonUtf8({
       ok: false,
       demo: runtimeModeLabel() === "demo",
       mode: runtimeModeLabel(),
@@ -79,7 +79,7 @@ export async function POST(
   }
 
   const binding = (await recordHealthSuccess(id))!;
-  return NextResponse.json({
+  return jsonUtf8({
     ok: true,
     demo: runtimeModeLabel() === "demo",
     mode: runtimeModeLabel(),
@@ -104,15 +104,15 @@ export async function GET(
   const { id } = await ctx.params;
   const employee = await getEmployee(id, gate.orgId);
   if (!employee) {
-    return NextResponse.json({ error: "employee_not_found" }, { status: 404 });
+    return jsonUtf8({ error: "employee_not_found" }, { status: 404 });
   }
   const orgId = employee.orgId || gate.orgId;
   const stored = await getBinding(id);
   if (stored && stored.orgId !== orgId) {
-    return NextResponse.json({ error: "binding_not_found" }, { status: 404 });
+    return jsonUtf8({ error: "binding_not_found" }, { status: 404 });
   }
   const binding = stored ?? unlinkedBinding(id, orgId);
-  return NextResponse.json({
+  return jsonUtf8({
     ok: true,
     readOnly: true,
     persisted: Boolean(stored),

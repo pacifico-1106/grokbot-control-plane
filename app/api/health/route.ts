@@ -1,5 +1,5 @@
-import { NextResponse } from "next/server";
 import { isDemoMode, isResendConfigured, isStripeConfigured, runtimeModeLabel } from "@/lib/mode";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -10,7 +10,7 @@ export const dynamic = "force-dynamic";
  */
 export async function GET() {
   const runtimeMode = runtimeModeLabel();
-  return NextResponse.json({
+  return jsonUtf8({
     ok: true,
     runtimeMode,
     demo: isDemoMode(),

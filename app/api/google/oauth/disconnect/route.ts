@@ -1,4 +1,3 @@
-import { NextResponse } from "next/server";
 import { requireIdentityLinkManager } from "@/lib/auth/identity-link-gate";
 import { appendAuditEvent } from "@/lib/data/audit";
 import { getEmployee } from "@/lib/data";
@@ -9,6 +8,7 @@ import {
 } from "@/lib/data/google-identities";
 import { isGoogleCalendarReadEnabled } from "@/lib/feature-flags";
 import { revokeGoogleToken } from "@/lib/google/oauth";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 export const runtime = "nodejs";
 
@@ -19,7 +19,7 @@ export const runtime = "nodejs";
  */
 export async function POST(req: Request) {
   if (!isGoogleCalendarReadEnabled()) {
-    return NextResponse.json(
+    return jsonUtf8(
       { error: "google_calendar_disabled", message: "Google Calendar integration is disabled" },
       { status: 404 }
     );
@@ -32,22 +32,22 @@ export async function POST(req: Request) {
   try {
     body = (await req.json()) as { employeeId?: string };
   } catch {
-    return NextResponse.json({ error: "invalid_json" }, { status: 400 });
+    return jsonUtf8({ error: "invalid_json" }, { status: 400 });
   }
 
   const employeeId = body.employeeId?.trim() || "";
   if (!employeeId) {
-    return NextResponse.json({ error: "employee_id_required" }, { status: 400 });
+    return jsonUtf8({ error: "employee_id_required" }, { status: 400 });
   }
 
   const employee = await getEmployee(employeeId, gate.orgId);
   if (!employee) {
-    return NextResponse.json({ error: "employee_not_found" }, { status: 404 });
+    return jsonUtf8({ error: "employee_not_found" }, { status: 404 });
   }
 
   const identity = await getEmployeeGoogleIdentity(employeeId);
   if (!identity) {
-    return NextResponse.json({ error: "no_google_identity" }, { status: 404 });
+    return jsonUtf8({ error: "no_google_identity" }, { status: 404 });
   }
 
   const refreshToken = await getLinkedGoogleRefreshToken(employeeId);
@@ -73,5 +73,5 @@ export async function POST(req: Request) {
     },
   });
 
-  return NextResponse.json({ ok: true });
+  return jsonUtf8({ ok: true });
 }

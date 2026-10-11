@@ -1,10 +1,10 @@
-import { NextResponse } from "next/server";
 import { assertWebActorApproverAuthority, webDirectDeniedBody, webSessionActorMemberId } from "@/lib/approver-authority/web-direct";
 import { readPrevSodWarnPolicy, sodWarnPolicyChanged } from "@/lib/approver-authority/web-prev-state";
 import { requireOrgAdminSession } from "@/lib/auth/require-org";
 import { getOrgSodWarnPolicy, setOrgSodWarnPolicy } from "@/lib/data";
 import { policyErrorPayload } from "@/lib/employees/policy-errors";
 import { normalizeSodWarnPolicy } from "@/lib/employees/sod-warn-policy";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 export const runtime = "nodejs";
 
@@ -12,7 +12,7 @@ export async function GET() {
   const gate = await requireOrgAdminSession();
   if (!gate.ok) return gate.response;
   const policy = await getOrgSodWarnPolicy(gate.orgId);
-  return NextResponse.json({ ok: true, policy });
+  return jsonUtf8({ ok: true, policy });
 }
 
 export async function PUT(req: Request) {
@@ -30,13 +30,13 @@ export async function PUT(req: Request) {
       changes: [{ tool: "web.sodWarnPolicy", adminMutation: {}, kind: "owner_or_designated_admin" }],
       surface: "settings.sod_warn_policy",
     });
-    if (!authority.ok) return NextResponse.json(webDirectDeniedBody(authority), { status: 403 });
+    if (!authority.ok) return jsonUtf8(webDirectDeniedBody(authority), { status: 403 });
   }
   try {
     const policy = await setOrgSodWarnPolicy(gate.orgId, next);
-    return NextResponse.json({ ok: true, policy });
+    return jsonUtf8({ ok: true, policy });
   } catch {
-    return NextResponse.json(policyErrorPayload("issue_failed", "組み合わせの保存に失敗しました"), {
+    return jsonUtf8(policyErrorPayload("issue_failed", "組み合わせの保存に失敗しました"), {
       status: 500,
     });
   }

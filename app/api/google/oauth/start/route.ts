@@ -14,6 +14,7 @@ import {
   googleOAuthConfigured,
   signGoogleOAuthState,
 } from "@/lib/google/oauth";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 export const runtime = "nodejs";
 
@@ -26,7 +27,7 @@ export const runtime = "nodejs";
  */
 export async function GET(req: Request) {
   if (!isGoogleCalendarReadEnabled()) {
-    return NextResponse.json(
+    return jsonUtf8(
       { error: "google_calendar_disabled", message: "Google Calendar integration is disabled" },
       { status: 404 }
     );
@@ -49,19 +50,19 @@ export async function GET(req: Request) {
   }
 
   if (!googleOAuthConfigured()) {
-    return NextResponse.json(
+    return jsonUtf8(
       { error: "google_oauth_unconfigured", message: "Google OAuth is not configured" },
       { status: 503 }
     );
   }
 
   if (!employeeId) {
-    return NextResponse.json({ error: "employee_id_required" }, { status: 400 });
+    return jsonUtf8({ error: "employee_id_required" }, { status: 400 });
   }
 
   const employee = await getEmployee(employeeId, gate.orgId);
   if (!employee) {
-    return NextResponse.json({ error: "employee_not_found" }, { status: 404 });
+    return jsonUtf8({ error: "employee_not_found" }, { status: 404 });
   }
 
   const nonce = randomBytes(16).toString("base64url");
@@ -90,7 +91,7 @@ export async function GET(req: Request) {
 
     return NextResponse.redirect(googleAuthorizeUrl(state, codeChallenge));
   } catch {
-    return NextResponse.json(
+    return jsonUtf8(
       { error: "google_oauth_unconfigured", message: "Google OAuth is not configured" },
       { status: 503 }
     );

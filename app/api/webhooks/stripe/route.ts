@@ -1,4 +1,3 @@
-import { NextResponse } from "next/server";
 import { sendBillingEmail, sendTrialEndingEmail } from "@/lib/email";
 import { upsertSubscription } from "@/lib/data/subscriptions";
 import { isDemoMode } from "@/lib/mode";
@@ -27,6 +26,7 @@ import {
   type StripeWebhookEventStore,
 } from "@/lib/billing/stripe-webhook-ledger";
 import type Stripe from "stripe";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 export const runtime = "nodejs";
 
@@ -348,7 +348,7 @@ export async function POST(req: Request) {
       signaturePresent: Boolean(signature),
       bytes: raw.length,
     });
-    return NextResponse.json({ received: true, stub: true });
+    return jsonUtf8({ received: true, stub: true });
   }
 
   let event: Stripe.Event;
@@ -356,7 +356,7 @@ export async function POST(req: Request) {
     event = stripe.webhooks.constructEvent(raw, signature || "", secret);
   } catch (err) {
     const message = err instanceof Error ? err.message : "invalid payload";
-    return NextResponse.json({ error: message }, { status: 400 });
+    return jsonUtf8({ error: message }, { status: 400 });
   }
 
   // Dedupe by event.id (claim before processing; done only after success).
@@ -366,10 +366,10 @@ export async function POST(req: Request) {
     store = createSupabaseStripeWebhookEventStore();
     const claim = await claimStripeWebhookEvent(store, event);
     if (claim.kind === "duplicate") {
-      return NextResponse.json({ received: true, type: event.type, duplicate: true });
+      return jsonUtf8({ received: true, type: event.type, duplicate: true });
     }
     if (claim.kind === "in_progress") {
-      return NextResponse.json(
+      return jsonUtf8(
         { error: "event_in_progress" },
         { status: 409 }
       );
@@ -390,7 +390,7 @@ export async function POST(req: Request) {
       eventId: event.id,
       error: errorMessage(e),
     });
-    return NextResponse.json({ error: "temporarily_unavailable" }, { status: 503 });
+    return jsonUtf8({ error: "temporarily_unavailable" }, { status: 503 });
   }
 
   let outcome: Outcome;
@@ -413,11 +413,11 @@ export async function POST(req: Request) {
         });
       }
     }
-    return NextResponse.json({ error: "processing_failed" }, { status: 500 });
+    return jsonUtf8({ error: "processing_failed" }, { status: 500 });
   }
 
   if (outcome.kind === "invalid_signature") {
-    return NextResponse.json({ error: outcome.error }, { status: 400 });
+    return jsonUtf8({ error: outcome.error }, { status: 400 });
   }
 
   if (outcome.kind === "rejected") {
@@ -431,10 +431,10 @@ export async function POST(req: Request) {
           eventId: event.id,
           error: errorMessage(e),
         });
-        return NextResponse.json({ error: "temporarily_unavailable" }, { status: 503 });
+        return jsonUtf8({ error: "temporarily_unavailable" }, { status: 503 });
       }
     }
-    return NextResponse.json({
+    return jsonUtf8({
       received: true,
       type: event.type,
       rejected: outcome.check.reason,
@@ -458,5 +458,5 @@ export async function POST(req: Request) {
     }
   }
 
-  return NextResponse.json(outcome.body);
+  return jsonUtf8(outcome.body);
 }

@@ -1,8 +1,8 @@
-import { NextResponse } from "next/server";
 import { getCurrentOrgId } from "@/lib/auth/session";
 import { appendAuditEvent, terminateEmployee } from "@/lib/data";
 import { requireCapability } from "@/lib/team/demo-actor";
 import { revokeAllEmployeeGrants } from "@/lib/mcp-oauth/grant-admin";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 export const runtime = "nodejs";
 
@@ -18,11 +18,11 @@ export async function POST(
   );
   if (!gate.ok) return gate.response;
   const orgId = await getCurrentOrgId();
-  if (!orgId) return NextResponse.json({ error: "auth_required" }, { status: 401 });
+  if (!orgId) return jsonUtf8({ error: "auth_required" }, { status: 401 });
   const { id } = await ctx.params;
   const employee = await terminateEmployee({ orgId, employeeId: id });
   if (!employee) {
-    return NextResponse.json({ error: "employee_not_found" }, { status: 404 });
+    return jsonUtf8({ error: "employee_not_found" }, { status: 404 });
   }
 
   await appendAuditEvent({
@@ -55,5 +55,5 @@ export async function POST(
     // fail-safe: RS still blocks the suspended employee on every request
   }
 
-  return NextResponse.json({ ok: true, employee, ...(oauthGrantsRevoked ? { oauthGrantsRevoked } : {}) });
+  return jsonUtf8({ ok: true, employee, ...(oauthGrantsRevoked ? { oauthGrantsRevoked } : {}) });
 }

@@ -2,7 +2,6 @@ import { approverAuthorityReplyJa } from "@/lib/approver-authority/reply";
 import { resolveApprovalWithWorkflow } from "@/lib/approvals/workflow-integration";
 import { initializeWorkflowForApproval } from "@/lib/approval-workflow/resolve";
 import { getMemberIdFromVoterBinding } from "@/lib/approval-workflow";
-import { NextResponse } from "next/server";
 import { isChannelClassifyProposalsEnabled } from "@/lib/channel-classify/flags";
 import { fulfillIfApproved } from "@/lib/approvals/fulfill";
 import { runApprovalResolveSideEffects } from "@/lib/approvals/resolve-side-effects";
@@ -23,6 +22,7 @@ import {
   sendLineText,
   verifyLineSignature,
 } from "@/lib/notify/line";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -40,16 +40,16 @@ type LineEvent = {
 export async function POST(req: Request, ctx: { params: Promise<{ ref: string }> }) {
   const { ref } = await ctx.params;
   const channel = await getNotificationChannelByWebhookRef("line", ref);
-  if (!channel) return NextResponse.json({ ok: true, ignored: true });
+  if (!channel) return jsonUtf8({ ok: true, ignored: true });
   const rawBody = await req.text();
   if (!verifyLineSignature(channel, rawBody, req.headers.get("x-line-signature") || "")) {
-    return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
+    return jsonUtf8({ ok: false, error: "unauthorized" }, { status: 401 });
   }
   let body: { events?: LineEvent[] };
   try {
     body = JSON.parse(rawBody || "{}") as { events?: LineEvent[] };
   } catch {
-    return NextResponse.json({ ok: false, error: "invalid_json" }, { status: 400 });
+    return jsonUtf8({ ok: false, error: "invalid_json" }, { status: 400 });
   }
   for (const event of body.events || []) {
     const source = event.source || {};
@@ -159,5 +159,5 @@ export async function POST(req: Request, ctx: { params: Promise<{ ref: string }>
       }
     }
   }
-  return NextResponse.json({ ok: true });
+  return jsonUtf8({ ok: true });
 }

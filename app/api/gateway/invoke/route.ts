@@ -1,10 +1,10 @@
-import { NextResponse } from "next/server";
 import {
   extractEmployeeSecret,
   resolveEmployeeCredential,
 } from "@/lib/auth/employee-credential";
 import { runGatewayInvoke } from "@/lib/gateway/invoke";
 import type { GatewayInvokeRequest } from "@/lib/types";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 export const runtime = "nodejs";
 
@@ -23,7 +23,7 @@ export async function POST(req: Request) {
   const bodyId = (body.employeeId || "").trim() || undefined;
 
   if (!extractEmployeeSecret(req)) {
-    return NextResponse.json(
+    return jsonUtf8(
       {
         ok: false,
         code: "credential_required",
@@ -40,7 +40,7 @@ export async function POST(req: Request) {
 
   const auth = await resolveEmployeeCredential(req);
   if (!auth.ok) {
-    return NextResponse.json(
+    return jsonUtf8(
       {
         ok: false,
         code: auth.code,
@@ -54,7 +54,7 @@ export async function POST(req: Request) {
   const credentialId = auth.credential.credentialId;
   // Reject explicit mismatch with badge identity (fail-closed).
   if (bodyId && bodyId !== employeeId) {
-    return NextResponse.json(
+    return jsonUtf8(
       {
         ok: false,
         code: "employee_mismatch",
@@ -66,7 +66,7 @@ export async function POST(req: Request) {
     );
   }
   if (headerId && headerId !== employeeId) {
-    return NextResponse.json(
+    return jsonUtf8(
       {
         ok: false,
         code: "employee_mismatch",
@@ -83,5 +83,5 @@ export async function POST(req: Request) {
     body,
     credentialId,
   });
-  return NextResponse.json(result.body, { status: result.httpStatus });
+  return jsonUtf8(result.body, { status: result.httpStatus });
 }

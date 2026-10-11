@@ -12,9 +12,9 @@
  * module is never loaded and no Supabase client is created).
  * Schedule: vercel.json, every minute (D6, 八坂 GO 2026-10-05).
  */
-import { NextResponse } from "next/server";
 import { isMcpEventsEnabled } from "@/lib/feature-flags";
 import { rejectUnauthorizedCron } from "@/lib/security/cron-secret";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -22,15 +22,15 @@ export const dynamic = "force-dynamic";
 export async function POST(req: Request) {
   const denied = rejectUnauthorizedCron(req);
   if (denied) return denied;
-  if (!isMcpEventsEnabled()) return NextResponse.json({ status: "skipped", reason: "feature_disabled" });
+  if (!isMcpEventsEnabled()) return jsonUtf8({ status: "skipped", reason: "feature_disabled" });
   try {
     const { deliverDueEvents, pruneFinishedDeliveries, pruneVerificationWindows } = await import("@/lib/mcp-events/service");
     const result = await deliverDueEvents({ limit: 100 });
     const pruned = await pruneFinishedDeliveries({ limit: 500 });
     const windows = await pruneVerificationWindows();
-    return NextResponse.json({ status: "completed", ...result, pruned: pruned.deleted, prunedVerificationWindows: windows.deleted });
+    return jsonUtf8({ status: "completed", ...result, pruned: pruned.deleted, prunedVerificationWindows: windows.deleted });
   } catch {
-    return NextResponse.json({ error: "processing_failed" }, { status: 500 });
+    return jsonUtf8({ error: "processing_failed" }, { status: 500 });
   }
 }
 

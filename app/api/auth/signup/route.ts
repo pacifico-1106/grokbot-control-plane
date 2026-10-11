@@ -20,6 +20,7 @@ import { isIpHashKeyConfigured } from "@/lib/security/ip-hash-key";
 import { TRIAL_DAYS } from "@/lib/stripe";
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 export const runtime = "nodejs";
 
@@ -102,7 +103,7 @@ export async function POST(req: Request) {
   }
 
   if (!legalAgreement) {
-    return NextResponse.json(
+    return jsonUtf8(
       {
         error: "legal_agreement_required",
         message: "利用規約とプライバシーポリシーへの同意が必要です",
@@ -112,10 +113,10 @@ export async function POST(req: Request) {
   }
 
   if (!email) {
-    return NextResponse.json({ error: "email_required" }, { status: 400 });
+    return jsonUtf8({ error: "email_required" }, { status: 400 });
   }
   if (email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-    return NextResponse.json({ error: "invalid_email" }, { status: 400 });
+    return jsonUtf8({ error: "invalid_email" }, { status: 400 });
   }
 
   function rejectToForm(code: string, status: number, message: string) {
@@ -125,7 +126,7 @@ export async function POST(req: Request) {
       back.searchParams.set("error", code);
       return NextResponse.redirect(back, 303);
     }
-    return NextResponse.json({ error: code, message }, { status });
+    return jsonUtf8({ error: code, message }, { status });
   }
 
   // IP_HASH_KEY required (no dev fallback): the signup fingerprint is keyed with it.
@@ -190,7 +191,7 @@ export async function POST(req: Request) {
   }
 
   if (!password || password.length < 8) {
-    return NextResponse.json(
+    return jsonUtf8(
       { error: "password_min_8", message: "パスワードは8文字以上にしてください" },
       { status: 400 }
     );
@@ -204,7 +205,7 @@ export async function POST(req: Request) {
     await sendTrialStartedEmail(email, TRIAL_DAYS);
 
     if (contentType.includes("application/json")) {
-      return NextResponse.json({ ok: true, orgId, demo: false });
+      return jsonUtf8({ ok: true, orgId, demo: false });
     }
     const url = new URL("/app", req.url);
     url.searchParams.set("trial", "1");
@@ -229,7 +230,7 @@ export async function POST(req: Request) {
       await sendWelcomeEmail(email, orgName || "新しい組織");
       await sendTrialStartedEmail(email, TRIAL_DAYS);
       if (contentType.includes("application/json")) {
-        return NextResponse.json({
+        return jsonUtf8({
           ok: true,
           orgId: provisioned.orgId,
           demo: false,
@@ -251,7 +252,7 @@ export async function POST(req: Request) {
       );
       onboarding.searchParams.set("detail", pm.slice(0, 160));
       if (contentType.includes("application/json")) {
-        return NextResponse.json(
+        return jsonUtf8(
           { error: "org_provision_failed", message: pm, repair: "/onboarding" },
           { status: 503 }
         );
@@ -288,7 +289,7 @@ export async function POST(req: Request) {
       if (recovered) return recovered;
       const detail = message.slice("auth_ok_org_failed:".length);
       if (contentType.includes("application/json")) {
-        return NextResponse.json(
+        return jsonUtf8(
           {
             error: "auth_ok_org_failed",
             message: detail,
@@ -319,7 +320,7 @@ export async function POST(req: Request) {
     ) {
       const recovered = await recoverOrphanedAuthUser();
       if (recovered) return recovered;
-      return NextResponse.json(
+      return jsonUtf8(
         {
           error: "email_exists",
           message:
@@ -329,6 +330,6 @@ export async function POST(req: Request) {
       );
     }
 
-    return NextResponse.json({ error: message }, { status: 500 });
+    return jsonUtf8({ error: message }, { status: 500 });
   }
 }

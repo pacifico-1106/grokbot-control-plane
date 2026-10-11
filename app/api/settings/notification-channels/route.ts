@@ -1,7 +1,6 @@
 import { randomBytes } from "node:crypto";
 // PR-D: namespace access (mocks of the flag module elsewhere stay valid).
 import * as featureFlags from "@/lib/feature-flags";
-import { NextResponse } from "next/server";
 import {
   appendAuditEvent,
   getNotificationChannelByWebhookRef,
@@ -21,6 +20,7 @@ import {
   sendApprovalSetupNotice,
 } from "@/lib/slack/approval-dm-open";
 import type { NotificationProvider } from "@/lib/types";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 export const runtime = "nodejs";
 
@@ -39,7 +39,7 @@ function carriedSlackSetup(
 export async function GET() {
   const gate = await requireOrgAdminSession();
   if (!gate.ok) return gate.response;
-  return NextResponse.json({ ok: true, channels: await listNotificationChannels(gate.orgId) });
+  return jsonUtf8({ ok: true, channels: await listNotificationChannels(gate.orgId) });
 }
 
 export async function PUT(req: Request) {
@@ -55,12 +55,12 @@ export async function PUT(req: Request) {
       changes: [{ tool: "setup.slackApprover.set", adminMutation: {} }],
       surface: "settings.notification_channels",
     });
-    if (!authority.ok) return NextResponse.json(webDirectDeniedBody(authority), { status: 403 });
+    if (!authority.ok) return jsonUtf8(webDirectDeniedBody(authority), { status: 403 });
   }
   const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
   const provider = body.provider as NotificationProvider;
   if (provider !== "telegram" && provider !== "line" && provider !== "slack") {
-    return NextResponse.json(channelErrorPayload("invalid_provider"), { status: 400 });
+    return jsonUtf8(channelErrorPayload("invalid_provider"), { status: 400 });
   }
   const enabled = body.enabled === true;
   const allowedUserIds = Array.isArray(body.allowedUserIds)
@@ -84,7 +84,7 @@ export async function PUT(req: Request) {
   // The shared approval app inbox (「Staffpass承認」) is managed only by its install
   // callback + setup.slackApprover.set; a dashboard save would drop its markers.
   if (existingChannel?.config?.sharedApprovalApp === true) {
-    return NextResponse.json(
+    return jsonUtf8(
       channelErrorPayload(
         "shared_app_inbox_managed",
         "この承認口は共通承認アプリ（Staffpass承認）用です。承認者の変更は管理AI社員の setup.slackApprover.set で行ってください。"
@@ -124,7 +124,7 @@ export async function PUT(req: Request) {
           missingScope: opened.missingScope ?? null,
         },
       });
-      return NextResponse.json(channelErrorPayload(opened.code, opened.messageJa), { status: 400 });
+      return jsonUtf8(channelErrorPayload(opened.code, opened.messageJa), { status: 400 });
     }
     destination = opened.channelId;
     (config as { channelId: string }).channelId = opened.channelId;
@@ -138,7 +138,7 @@ export async function PUT(req: Request) {
     (await isTokyo307PilotOrg(gate.orgId)) &&
     !channels.some((channel) => channel.provider === "telegram" && channel.id !== existingChannel?.id);
   if (enabled && !destination && !envReuseFirstInbox) {
-    return NextResponse.json(channelErrorPayload("destination_required"), { status: 400 });
+    return jsonUtf8(channelErrorPayload("destination_required"), { status: 400 });
   }
   const secrets: Record<string, string> = provider === "telegram"
     ? {
@@ -171,7 +171,7 @@ export async function PUT(req: Request) {
     }
     // Fail closed if no token available
     if (!slackBotToken) {
-      return NextResponse.json(
+      return jsonUtf8(
         channelErrorPayload("bot_token_required", "Slackボットトークンが必要です"),
         { status: 400 }
       );
@@ -194,7 +194,7 @@ export async function PUT(req: Request) {
           validationReason: validation.reason,
         },
       });
-      return NextResponse.json(
+      return jsonUtf8(
         channelErrorPayload(
           validation.code,
           `外部共有チャンネル（Slack Connect）は承認インボックスとして使用できません: ${validation.reason}`
@@ -240,7 +240,7 @@ export async function PUT(req: Request) {
         },
       });
       if (!notice.ok) {
-        return NextResponse.json(channelErrorPayload(notice.code, notice.messageJa), { status: 400 });
+        return jsonUtf8(channelErrorPayload(notice.code, notice.messageJa), { status: 400 });
       }
       setupNoticeAt = new Date().toISOString();
     }
@@ -286,7 +286,7 @@ export async function PUT(req: Request) {
       summary: `${provider} 通知チャネルを${enabled ? "更新" : "無効化"}`,
       metadata: { channelId: saved.id, provider, enabled, webhookOk: webhook?.ok ?? null },
     });
-    return NextResponse.json({
+    return jsonUtf8({
       ok: true,
       channel: saved,
       webhook,
@@ -295,6 +295,6 @@ export async function PUT(req: Request) {
     });
   } catch (error) {
     const code = error instanceof Error ? error.message : "notification_channel_save_failed";
-    return NextResponse.json(channelErrorPayload(code), { status: 400 });
+    return jsonUtf8(channelErrorPayload(code), { status: 400 });
   }
 }

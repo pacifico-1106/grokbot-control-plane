@@ -1,5 +1,4 @@
 import { publicApproval } from "@/lib/approvals/public";
-import { NextResponse } from "next/server";
 import { fulfillApprovedInvoke } from "@/lib/approvals/fulfill";
 import { fulfillApprovedAdmin } from "@/lib/admin-mcp/fulfill-admin";
 import { SELF_APPROVAL_DENIED, SELF_APPROVAL_MESSAGE_JA } from "@/lib/admin-mcp/self-approval";
@@ -14,6 +13,7 @@ import { requireCapability } from "@/lib/team/demo-actor";
 import { resolveApprovalWithWorkflow } from "@/lib/approvals/workflow-integration";
 import { isApproverAuthorityEnabled } from "@/lib/feature-flags";
 import { approverAuthorityNextStepJa, approverAuthorityReplyJa } from "@/lib/approver-authority/reply";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 export const runtime = "nodejs";
 
@@ -28,7 +28,7 @@ export async function POST(
   const orgId = await getCurrentOrgId();
 
   if (!orgId) {
-    return NextResponse.json({ error: "org_required" }, { status: 400 });
+    return jsonUtf8({ error: "org_required" }, { status: 400 });
   }
 
   let result;
@@ -42,7 +42,7 @@ export async function POST(
   } catch (error) {
     const code = (error as { code?: string }).code || (error instanceof Error ? error.message : "");
     if (code === SELF_APPROVAL_DENIED) {
-      return NextResponse.json(
+      return jsonUtf8(
         { error: SELF_APPROVAL_DENIED, message: SELF_APPROVAL_MESSAGE_JA },
         { status: 403 }
       );
@@ -51,12 +51,12 @@ export async function POST(
   }
 
   if (!result.ok && result.reason === "approval_not_found") {
-    return NextResponse.json({ error: "not_found" }, { status: 404 });
+    return jsonUtf8({ error: "not_found" }, { status: 404 });
   }
 
   const updated = result.approval || await getApprovalById(id, orgId);
   if (!updated) {
-    return NextResponse.json({ error: "not_found" }, { status: 404 });
+    return jsonUtf8({ error: "not_found" }, { status: 404 });
   }
 
   if (result.ok && result.workflowComplete && result.workflowApproved) {
@@ -113,5 +113,5 @@ export async function POST(
     };
   }
 
-  return NextResponse.json(response);
+  return jsonUtf8(response);
 }

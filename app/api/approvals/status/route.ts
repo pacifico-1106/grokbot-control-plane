@@ -1,4 +1,3 @@
-import { NextResponse } from "next/server";
 import { THREAD_MOVED_ON_CLOSE_REASON, closedWithoutSendInfo } from "@/lib/approvals/closed-without-send";
 import { getApprovalStatusByToken, runtimeModeLabel } from "@/lib/data";
 import { getApprovalWorkflowProgress } from "@/lib/approval-workflow";
@@ -8,6 +7,7 @@ import { isAdminClassApproval } from "@/lib/admin-mcp/audit-class";
 import { redactMetadata } from "@/lib/data/redaction";
 import { attachmentStatusField } from "@/lib/approvals/attachment-card";
 import { approvalPollFields } from "@/lib/approvals/poll-hint";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 export const runtime = "nodejs";
 
@@ -23,7 +23,7 @@ export async function GET(req: Request) {
   const token = (url.searchParams.get("token") || "").trim();
 
   if (!id || !token) {
-    return NextResponse.json(
+    return jsonUtf8(
       {
         ok: false,
         error: "id_and_token_required",
@@ -35,7 +35,7 @@ export async function GET(req: Request) {
 
   const approval = await getApprovalStatusByToken(id, token);
   if (!approval) {
-    return NextResponse.json(
+    return jsonUtf8(
       { ok: false, error: "not_found_or_invalid_token" },
       { status: 404 }
     );
@@ -160,7 +160,7 @@ export async function GET(req: Request) {
     };
   }
 
-  return NextResponse.json(response);
+  return jsonUtf8(response);
 }
 
 /** Why a conversation approval was closed without sending (reason only, no ids / hashes). */

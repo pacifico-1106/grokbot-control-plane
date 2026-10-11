@@ -14,6 +14,7 @@ import {
   verifyGoogleOAuthState,
 } from "@/lib/google/oauth";
 import { validateGrantedScopes } from "@/lib/google/scopes";
+import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 export const runtime = "nodejs";
 
@@ -28,7 +29,7 @@ function redirectEmployee(employeeId: string, google: string): NextResponse {
 
 export async function GET(req: Request) {
   if (!isGoogleCalendarReadEnabled()) {
-    return NextResponse.json(
+    return jsonUtf8(
       { error: "google_calendar_disabled", message: "Google Calendar integration is disabled" },
       { status: 404 }
     );
