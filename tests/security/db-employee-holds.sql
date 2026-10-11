@@ -336,7 +336,5 @@ alter table public.employee_holds enable trigger employee_holds_guard;
 alter table public.employees enable trigger employees_hold_guard;
 alter table public.orgs enable trigger orgs_hold_guard;
 delete from public.approval_requests where org_id::text like 'e50%';
-delete from public.employees where org_id::text like 'e50%';
-delete from public.org_members where org_id::text like 'e50%';
-delete from public.orgs where id::text like 'e50%';
+delete from public.orgs where id::text like 'e50%';  -- cascades employees / members (last-owner guard allows the org cascade)
 drop function security_test.eh_audit_fail();
