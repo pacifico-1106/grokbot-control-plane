@@ -1,4 +1,5 @@
 import { ProjectAccessOrgError, projectAccessRefusalBody } from "@/lib/employees/project-access-org";
+import { credentialExpiresAtFromNow, issueExpiryDays } from "@/lib/employees/credential-ttl";
 import { recordSetupToolSucceeded } from "@/lib/approvals/attachment-retry-cap";
 import { buildMcpHandoff, parseMcpHandoff, type McpHandoff } from "@/lib/mcp/endpoint-handoff-block";
 import { isMcpEndpointHandoffEnabled } from "@/lib/feature-flags";
@@ -573,8 +574,8 @@ async function fulfillIssue(approval: ApprovalRequest, args: Record<string, unkn
     throw new Error("invalid_issue_payload");
   }
   const secret = issueSecret();
-  const expiresInDays = Math.min(365, Math.max(1, Number(args.expiresInDays) || 30));
-  const expiresAt = new Date(Date.now() + expiresInDays * 86400000).toISOString();
+  // 八坂さん 2026-10-12: default 90 days (explicit 1–365 unchanged).
+  const expiresAt = credentialExpiresAtFromNow(new Date(), issueExpiryDays(args.expiresInDays));
   const hasOrder = scopes.includes("commerce:order");
   const spend = hasOrder
     ? normalizeSpendLimits((args.spend as Partial<SpendLimits> | null) ?? {})

@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
+import { credentialExpiresAtFromNow, issueExpiryDays } from "@/lib/employees/credential-ttl";
 import { assertWebActorApproverAuthority, webDirectDeniedBody } from "@/lib/approver-authority/web-direct";
 import { NextResponse } from "next/server";
 import { getCurrentOrgId } from "@/lib/auth/session";
@@ -135,10 +136,9 @@ export async function POST(req: Request) {
   }
 
   const secret = issueSecret();
-  const expiresInDays = Math.min(365, Math.max(1, body.expiresInDays || 30));
-  const expiresAt = new Date(
-    Date.now() + expiresInDays * 86400000
-  ).toISOString();
+  // 八坂さん 2026-10-12: default 90 days (explicit 1–365 unchanged).
+  const expiresInDays = issueExpiryDays(body.expiresInDays);
+  const expiresAt = credentialExpiresAtFromNow(new Date(), expiresInDays);
 
   const billingGate = await assertBillingAllows(orgId, "hire");
   if (!billingGate.ok) return billingGate.response;

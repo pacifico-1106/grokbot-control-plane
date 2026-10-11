@@ -22,6 +22,8 @@ import {
 } from "../notify/crypto";
 import { createSupabaseAdminClient } from "../supabase";
 import { mapBindingRow } from "./mappers";
+import { getRuntimeEmployees } from "../demo-data";
+import { credentialExpiresAtFromNow } from "../employees/credential-ttl";
 import type {
   ActionLimits,
   ApprovalPolicy,
@@ -180,7 +182,13 @@ export async function rotateCredential(
     allowedAccounts?: Array<{ service: string; accountId: string; label?: string; browserRequired?: boolean }>;
   }
 ): Promise<{ binding: EmployeeBinding; generation: number }> {
-  if (isDemoMode()) return demoRotate(employeeId, orgId, fingerprint);
+  if (isDemoMode()) {
+    const rotated = demoRotate(employeeId, orgId, fingerprint);
+    // Demo mirror of the credentials insert: the current 社員証 now expires in 90 days.
+    const emp = getRuntimeEmployees().find((e) => e.id === employeeId && e.orgId === orgId);
+    if (emp) emp.credentialExpiresAt = credentialExpiresAtFromNow();
+    return rotated;
+  }
   const row = await ensureBindingRow(employeeId, orgId);
   if (row.status === "revoked") {
     throw Object.assign(new Error("binding_revoked"), { code: "revoked" as const });
@@ -219,6 +227,9 @@ export async function rotateCredential(
         action_limits: credential.actionLimits,
         spend: credential.spend ?? null,
         allowed_accounts: credential.allowedAccounts ?? [],
+        // 八坂さん 2026-10-12: every rotated 社員証 (dashboard rotate and the
+        // admin MCP reissue pickup) expires 90 days from now.
+        expires_at: credentialExpiresAtFromNow(),
       })
       .select("id")
       .single();
