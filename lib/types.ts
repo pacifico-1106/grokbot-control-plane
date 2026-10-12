@@ -478,6 +478,7 @@ export type AuditAction =
   | "oauth.refresh_replay_in_grace"
   | "oauth.dcr_global_cap_reached"
   | "comm.link_code_account_locked"
+  | "comm.link_code_account_locked_repeat"
   | "comm.account.created"
   | "comm.account.secrets_set"
   | "comm.account.disabled"
