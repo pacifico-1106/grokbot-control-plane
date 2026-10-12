@@ -44,6 +44,7 @@ import { evaluateDualEgress } from "@/lib/gateway/egress";
 import {
   parseConversationContext,
   conversationOrgMismatch,
+  conversationChannelMismatch,
   resolveAudience,
   resolveConversationThreadId,
   resolveParentMessageTs,
@@ -105,7 +106,8 @@ import {
   legacySnapshotAttachmentBlock,
 } from "@/lib/approvals/approved-rerun-attachment";
 import { isDemoMode } from "@/lib/mode";
-import { resolveSlackUserRecipient } from "@/lib/slack/u-recipient-dm-route";
+import { resolveSlackUserRecipient, slackUserIdInChannelField } from "@/lib/slack/u-recipient-dm-route";
+import { isSlackUToDmSendEnabled } from "@/lib/slack/dm-autoroute-flags";
 import { evaluateAllowedAccountsForBrowser } from "@/lib/employees/allowed-accounts";
 import { evaluateSpend } from "@/lib/spend-gate";
 import { evaluateActionLimit } from "@/lib/action-gate";
@@ -983,6 +985,41 @@ async function runGatewayInvokeInner(
     );
   }
 
+  // #351 follow-up: two channel fields naming different Slack channels is
+  // ambiguous (which one would be posted to?) — refused before anything is read,
+  // queued or posted. Field names only are returned / audited, never the ids.
+  const channelMismatch = conversationChannelMismatch(body);
+  if (channelMismatch) {
+    await appendAuditEvent({
+      orgId: principalOrgId,
+      employeeId,
+      credentialId: input.credentialId || employee.credentialId,
+      action: "gateway.conversation_channel_mismatch",
+      purpose,
+      summary: `${tool} を送信先チャンネルの不一致で拒否（何も送信していません）`,
+      metadata: { tool, jobId, code: "conversation_channel_mismatch", fields: channelMismatch.fields, sent: false },
+    }).catch(() => undefined);
+    return jsonResult(
+      {
+        ok: false,
+        code: "conversation_channel_mismatch",
+        error: "conversation_channel_mismatch",
+        sent: false,
+        fields: channelMismatch.fields,
+        message: "送信先チャンネルが複数の欄で食い違っています。メッセージは送信していません。",
+        nextStep:
+          "送信先は conversation.slackChannelId（または args.channelId）のどれか 1 つにし、同じ jobId で再実行してください。",
+        retryable: false,
+        needs_approval: false,
+        employeeId,
+        tool,
+        purpose,
+        jobId,
+      },
+      400
+    );
+  }
+
   const billingGate = await assertBillingAllowsGateway(orgId || employee.orgId, tool);
   if (!billingGate.ok) {
     return jsonResult(
@@ -1350,6 +1387,88 @@ async function runGatewayInvokeInner(
       },
       409
     );
+  }
+
+  // #351 follow-up (H1 (2)): a conversation send the gateway can never make is
+  // refused HERE, before any path below can file an approval card (action limit,
+  // egress needs_approval, SoD, policy, spend). Approvers must never approve
+  // something that cannot be sent. Re-invokes of an existing ticket keep the
+  // post-approval path (legacy tickets get the same codes there).
+  if (isAudienceGatedTool(toolDef) && !priorApprovalOk) {
+    const preCtx = parseConversationContext(body, principalOrgId);
+    const preArgs = body.args && typeof body.args === "object" ? (body.args as Record<string, unknown>) : {};
+    const preSlack = preCtx?.surface === "slack" || Boolean(preCtx?.slackChannelId) || Boolean(preCtx?.slackUserId);
+    if (!preSlack) {
+      const info = channelNotSupportedInfo(preCtx?.surface ?? null);
+      await appendAuditEvent({
+        orgId: orgId || employee.orgId,
+        employeeId,
+        credentialId: input.credentialId || employee.credentialId,
+        action: "comm.not_sent",
+        purpose,
+        summary: `${tool} を送信していません（送信先の窓口に未対応・承認申請前に停止）`,
+        metadata: { tool, jobId, code: info.code, surface: info.surface, sent: false, phase: "before_approval" },
+      });
+      return jsonResult(
+        {
+          ok: false,
+          code: info.code,
+          error: info.code,
+          sent: false,
+          surface: info.surface,
+          message: info.messageJa,
+          nextStep: info.nextStep,
+          retryable: false,
+          nextAction: "stop",
+          needs_approval: false,
+          employeeId,
+          tool,
+          purpose,
+          jobId,
+        },
+        409
+      );
+    }
+    // Item C (flag ON) resolves a U… in the channel field to a DM below and stops
+    // on its own; leave that case to it.
+    const itemCHandles = isSlackUToDmSendEnabled() && Boolean(slackUserIdInChannelField(body));
+    if (!itemCHandles) {
+      const dmIntent = preArgs.dm === true || preArgs.postingTo === "im" || preArgs.dmIntent === true;
+      const preDest = validateSlackPostDestination({
+        slackChannelId: preCtx?.slackChannelId,
+        slackUserId: preCtx?.slackUserId,
+        dmIntent,
+      });
+      if (!preDest.ok) {
+        await appendAuditEvent({
+          orgId: orgId || employee.orgId,
+          employeeId,
+          credentialId: input.credentialId || employee.credentialId,
+          action: "slack.post_failed",
+          purpose,
+          summary: `${tool} を送信先不足で停止（承認申請前・何も送信していません）`,
+          metadata: { tool, jobId, code: preDest.code, sent: false, phase: "before_approval", dmIntent },
+        });
+        return jsonResult(
+          {
+            ok: false,
+            code: preDest.code,
+            error: preDest.code,
+            sent: false,
+            message: preDest.messageJa,
+            nextStep:
+              "メッセージは送信しておらず、承認申請も作っていません。送信先の Slack チャンネル（C… / D…）を conversation.slackChannelId に入れるか、本人宛ての DM なら conversation.slackUserId に U… を入れて args.dm=true を付け、同じ jobId で再実行してください。",
+            retryable: false,
+            needs_approval: false,
+            employeeId,
+            tool,
+            purpose,
+            jobId,
+          },
+          400
+        );
+      }
+    }
   }
 
   const actionCounts = await getActionCounts({
@@ -2389,6 +2508,7 @@ async function runGatewayInvokeInner(
             ok: false,
             code: destValidation.code,
             error: destValidation.code,
+            sent: false,
             message: destValidation.messageJa,
             needs_approval: false,
             egress,
@@ -3434,8 +3554,14 @@ async function runGatewayInvokeInner(
       nextAction: "stop", needs_approval: false, egress, employeeId, tool, purpose, jobId }, 409);
   }
 
+  // #351 follow-up: a conversation send that reached here posted (the backstop
+  // above guarantees a delivery record); say so plainly. "stub" = demo mode only.
+  const sentFields = isAudienceGatedTool(toolDef) && conversationDelivery
+    ? { sent: true as const, ...(conversationDelivery.delivery === "stub" ? { simulated: true as const } : {}) }
+    : {};
   return jsonResult({
     ok: true,
+    ...sentFields,
     demo: runtimeModeLabel() === "demo",
     mode: runtimeModeLabel(),
     employeeId,
@@ -3496,6 +3622,7 @@ async function runGatewayInvokeInner(
                       : tool === "comm.send" || tool === "comm.reply"
                       ? {
                           accepted: true,
+                          ...sentFields,
                           disclosed: egress?.decision === "summarize" ? "summary" : "source",
                           delivery: conversationDelivery?.delivery,
                           conversationDelivery,
@@ -3505,6 +3632,7 @@ async function runGatewayInvokeInner(
                         }
                       : {
                           accepted: true,
+                          ...sentFields,
                           disclosed: egress?.decision === "summarize" ? "summary" : undefined,
                           delivery: conversationDelivery?.delivery,
                           conversationDelivery,

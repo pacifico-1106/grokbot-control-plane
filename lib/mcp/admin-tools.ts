@@ -1,4 +1,5 @@
-import { LINE_APPROVAL_SCREEN, SLACK_BOT_TOKEN_SCREEN, refuseSecretArgs, screenNextStepJa } from "@/lib/admin-mcp/secret-args";
+import { LINE_APPROVAL_SCREEN, SLACK_BOT_TOKEN_SCREEN, refuseInvalidLabel, refuseSecretArgs, refuseUnknownArgs, screenNextStepJa } from "@/lib/admin-mcp/secret-args";
+import { detectSecretInPayload } from "@/lib/security/secret-detector";
 import { consumeAdminApprovalSecret } from "@/lib/admin-mcp/consume-secret";
 import { handleDesignatedAdminsTool, isDesignatedAdminsTool } from "@/lib/admin-mcp/designated-admins-tool";
 import { handlePromoteOwnerTool, PROMOTE_OWNER_TOOL } from "@/lib/admin-mcp/promote-owner-tool";
@@ -397,7 +398,7 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
   {
     name: "setup.slackAdapter.setBotToken",
     description:
-      `Disable the org Slack conversation posting adapter after human approval (always_human). The Bot token (xoxb-...) itself is NEVER an argument: the tenant enters it on the screen /app/settings「${DASHBOARD_BOT_TOKEN_PATH_JA}」(H5: secrets never pass through the AI). A botToken argument is refused with secret_argument_refused (name only, never the value) and nothing is queued. This is the AI社員↔相手の会話投稿 adapter — NOT the approval-inbox Slack under「承認を受け取る」. After the tenant saves the token, run setup.slackStatus to confirm readiness.`,
+      `Disable the org Slack conversation posting adapter after human approval (always_human). The Bot token (xoxb-...) itself is NEVER an argument: the tenant enters it on the screen /app/settings「${DASHBOARD_BOT_TOKEN_PATH_JA}」(H5: secrets never pass through the AI). A botToken argument — or any secret-shaped key name in any case / separator / nesting (BotToken, bot_token, config.auth.token …) — is refused with secret_argument_refused (names only, never the value) and nothing is queued. Keys outside this schema → unknown_argument_refused. label: at most 60 chars, no token-like runs (invalid_label). This is the AI社員↔相手の会話投稿 adapter — NOT the approval-inbox Slack under「承認を受け取る」. After the tenant saves the token, run setup.slackStatus to confirm readiness.`,
     inputSchema: {
       type: "object",
       properties: {
@@ -447,7 +448,7 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
   {
     name: "setup.lineApproval.upsert",
     description:
-      "Update the non-secret settings of an org LINE approval-inbox channel (destinationId, allowedUserIds, label, enabled, isDefault) after human approval (always_human). The channel access token and channel secret are NEVER arguments: the tenant enters them on the screen /app/settings「承認を受け取る」→ 承認用LINE (H5: secrets never pass through the AI). channelAccessToken / channelSecret are refused with secret_argument_refused (names only, never the values) and nothing is queued; stored values stay as they are. A new enabled channel therefore starts on that screen. Same store as PUT /api/settings/notification-channels. NOT the conversation LINE adapter (P1) or Slack posting adapter.",
+      "Update the non-secret settings of an org LINE approval-inbox channel (destinationId, allowedUserIds, label, enabled, isDefault) after human approval (always_human). The channel access token and channel secret are NEVER arguments: the tenant enters them on the screen /app/settings「承認を受け取る」→ 承認用LINE (H5: secrets never pass through the AI). channelAccessToken / channelSecret — and any secret-shaped key name in any case / separator / nesting (ChannelSecret, channel_access_token, secrets.channelSecret …) — are refused with secret_argument_refused (names only, never the values) and nothing is queued; stored values stay as they are. Keys outside this schema → unknown_argument_refused. label: at most 60 chars, no long hex / token-like runs, nothing the secret detector flags (invalid_label). A new enabled channel therefore starts on that screen. Same store as PUT /api/settings/notification-channels. NOT the conversation LINE adapter (P1) or Slack posting adapter.",
     inputSchema: {
       type: "object",
       properties: {
@@ -461,7 +462,7 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
           description: "Optional allowlist of LINE userIds who may approve via webhook.",
         },
         enabled: { type: "boolean", description: "Enable the channel (default true)." },
-        label: { type: "string", description: "Optional display label (default: LINE)." },
+        label: { type: "string", maxLength: 60, description: "Optional display label (default: LINE). At most 60 chars; no long hex / token-like runs." },
         isDefault: { type: "boolean", description: "Set as org default approval inbox." },
         channelId: { type: "string", description: "Existing org_notification_channels.id to update." },
         jobId: { type: "string" },
@@ -2265,6 +2266,15 @@ export async function callAdminMcpTool(
   // re-invoke, validation, queue, audit) — names only, never the value.
   const secretRefusal = refuseSecretArgs(name, args);
   if (secretRefusal) return toolResult(secretRefusal, true);
+  // #352 follow-up: on those tools, keys outside the schema are refused (allowlist),
+  // and the free-text label cannot carry a token-shaped value. Names only, never values.
+  const schemaProps = Object.keys(
+    ((ADMIN_MCP_TOOLS.find((t) => t.name === name)?.inputSchema as { properties?: Record<string, unknown> } | undefined)?.properties) ?? {}
+  );
+  const unknownRefusal = refuseUnknownArgs(name, args, schemaProps);
+  if (unknownRefusal) return toolResult(unknownRefusal, true);
+  const labelRefusal = refuseInvalidLabel(name, args, detectSecretInPayload);
+  if (labelRefusal) return toolResult(labelRefusal, true);
 
   // P1 Plan Rails: check if tool is available for org's plan (flag-gated)
   const planGate = await assertAdminToolAllowedForPlan(cred.orgId, name);

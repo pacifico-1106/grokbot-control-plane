@@ -86,6 +86,7 @@ function rewriteChannel(body: GatewayInvokeRequest, userId: string, channelId: s
   if (body.conversation && typeof body.conversation === "object") {
     const conv = { ...(body.conversation as unknown as Record<string, unknown>) };
     if ("slackChannelId" in conv) conv.slackChannelId = swap(conv.slackChannelId);
+    if ("channelId" in conv) conv.channelId = swap(conv.channelId);
     next.conversation = conv;
   }
   if ("slackChannelId" in next) next.slackChannelId = swap(next.slackChannelId);

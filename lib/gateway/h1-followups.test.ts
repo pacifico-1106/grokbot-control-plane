@@ -84,7 +84,7 @@ describe("1a) refused before an approval card is created", () => {
       expect(res.body.sent).toBe(false);
       expect(res.body.needs_approval).toBe(false);
       expect(res.body.approvalId).toBeUndefined();
-      expect(await approvalsFor(body.jobId)).toHaveLength(0);
+      expect(await approvalsFor(String(body.jobId))).toHaveLength(0);
       expect(String(res.body.nextStep)).toMatch(/[ぁ-ん]/);
       expect(JSON.stringify(res.body)).not.toContain(TEXT);
     });
@@ -96,7 +96,7 @@ describe("1a) refused before an approval card is created", () => {
     const res = await invoke(body);
     expect(res.body.code).toBe("slack_channel_required");
     expect(res.body.sent).toBe(false);
-    expect(await approvalsFor(body.jobId)).toHaveLength(0);
+    expect(await approvalsFor(String(body.jobId))).toHaveLength(0);
     expect(posts()).toHaveLength(0);
   });
 
@@ -105,7 +105,7 @@ describe("1a) refused before an approval card is created", () => {
     const body = req("comm.send", SLACK_DM);
     const res = await invoke(body);
     if (res.body.code === "needs_approval") {
-      expect(await approvalsFor(body.jobId)).toHaveLength(1);
+      expect(await approvalsFor(String(body.jobId))).toHaveLength(1);
     } else {
       expect(res.httpStatus).toBe(200);
       expect(posts()).toHaveLength(1);
@@ -131,8 +131,8 @@ async function legacyApproval(conversation: Record<string, unknown>): Promise<Ap
   const conv = parseConversationContext(body, DEMO_ORG.id);
   const created = await createApproval({
     orgId: DEMO_ORG.id, employeeId: "emp_comm", credentialId: "cred_comm",
-    title: "comm.send", purpose: body.purpose, summary: "送信の承認", risk: "high", tool: "comm.send", jobId: body.jobId,
-    metadata: { invoke: buildInvokeSnapshot({ tool: "comm.send", purpose: body.purpose, jobId: body.jobId, employeeId: "emp_comm", orgId: DEMO_ORG.id, body, conversation: conv }) },
+    title: "comm.send", purpose: body.purpose, summary: "送信の承認", risk: "high", tool: "comm.send", jobId: String(body.jobId),
+    metadata: { invoke: buildInvokeSnapshot({ tool: "comm.send", purpose: body.purpose, jobId: String(body.jobId), employeeId: "emp_comm", orgId: DEMO_ORG.id, body, conversation: conv }) },
   });
   return created.approval;
 }
@@ -222,7 +222,7 @@ describe("2) channel from args.channelId / conversation.channelId", () => {
       expect(res.body.code).toBe("conversation_channel_mismatch");
       expect(res.body.sent).toBe(false);
       expect(posts()).toHaveLength(0);
-      expect(await approvalsFor(body.jobId)).toHaveLength(0);
+      expect(await approvalsFor(String(body.jobId))).toHaveLength(0);
     });
   }
 });

@@ -1,3 +1,4 @@
+import { approvalSendOutcome } from "@/lib/approvals/not-sent";
 import { sendApprovalNotification } from "@/lib/email";
 import { sendTransactionalEmail } from "@/lib/resend";
 import { buildApprovalNotifyEmail, validateApprovalNotifyEmail } from "@/lib/employees/approval-notify-email";
@@ -196,6 +197,8 @@ export async function runApprovalResolveSideEffects(opts: {
         revisionNote: approval.revisionNote,
         revisionCount: approval.revisionCount,
         parentApprovalId: approval.parentApprovalId,
+        // #351 follow-up: whether the approved message was actually sent, and why not.
+        ...approvalSendOutcome(approval, decision),
         ...(configChange?.requesterNoticeJa
           ? { requesterNoticeJa: configChange.requesterNoticeJa }
           : {}),

@@ -18,9 +18,10 @@ import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test
 import { DEMO_ORG, getRuntimeEmployees } from "@/lib/demo-data";
 import { linkAgent } from "@/lib/data/bindings";
 import { runGatewayInvoke } from "@/lib/gateway/invoke";
-import { fulfillIfApproved } from "@/lib/approvals/fulfill";
+import { buildInvokeSnapshot, fulfillIfApproved } from "@/lib/approvals/fulfill";
+import { parseConversationContext } from "@/lib/gateway/audience";
 import { getApprovalById, listAuditEvents, resolveApproval } from "@/lib/data";
-import { updateApprovalMetadata } from "@/lib/data/approvals";
+import { createApproval, updateApprovalMetadata } from "@/lib/data/approvals";
 import { upsertConversationAdapter } from "@/lib/data/conversation-adapters";
 import { upsertOrgChannel, upsertOrgParty } from "@/lib/data/directory";
 import { demoCommReplySendsForTests, resetDemoCommReplySends } from "@/lib/data/comm-reply-sends";
@@ -778,10 +779,23 @@ describe("pre-flag-ON fixes (木村 #286 follow-up)", () => {
     // this LINE conversation" is set up in the thread-guard store directly.
     const recordLinePost = (employeeId: string) =>
       recordSelfPost({ orgId: DEMO_ORG.id, employeeId, threadKey: threadKeyFor({ orgId: DEMO_ORG.id, surface: "line", lineId: LINE_USER })!, micros: BigInt(Date.now()) * BigInt(1000) + BigInt(1), jobKey: null });
+    // #351 follow-up: the gateway now refuses a LINE send before any approval card,
+    // so the ticket is seeded the way invoke filed it before (legacy tickets still
+    // exist and keep this fulfil-time guard).
     async function queueLine(readThroughTs = old()) {
-      const res = await invoke(callerDelivered("line", B_TEXT, readThroughTs, jid("line-apr"), "comm.send"));
-      expect(res.httpStatus).toBe(402);
-      return String(res.body.approvalId);
+      const body = callerDelivered("line", B_TEXT, readThroughTs, jid("line-apr"), "comm.send");
+      expect((await invoke(body)).body.code).toBe("channel_not_supported");
+      const created = await createApproval({
+        orgId: DEMO_ORG.id, employeeId: "emp_comm", credentialId: "cred_comm",
+        title: "comm.send", purpose: body.purpose, summary: "送信の承認", risk: "high", tool: "comm.send", jobId: String(body.jobId),
+        metadata: {
+          invoke: buildInvokeSnapshot({
+            tool: "comm.send", purpose: body.purpose, jobId: String(body.jobId), employeeId: "emp_comm", orgId: DEMO_ORG.id,
+            body, conversation: parseConversationContext(body, DEMO_ORG.id),
+          }),
+        },
+      });
+      return created.approval.id;
     }
     test("LINE: an AI post after the approved read point closes the approval as superseded (nothing delivered)", async () => {
       on();
@@ -862,11 +876,10 @@ describe("pre-flag-ON fixes (木村 #286 follow-up)", () => {
         if (flag === "on") on();
         else off();
         recordSlack();
-        const res = await invoke(callerDelivered("line", B_TEXT, old(), jid("line-rerun"), "comm.send"));
-        expect(res.httpStatus).toBe(402);
-        const approvalId = String(res.body.approvalId);
+        const approvalId = await queueLine();
+        const jobId = String((await getApprovalById(approvalId, DEMO_ORG.id))?.jobId);
         await approveAs(approvalId);
-        const rerun = await invoke({ ...callerDelivered("line", B_TEXT, old(), String(res.body.jobId), "comm.send"), approvalId } as GatewayInvokeRequest);
+        const rerun = await invoke({ ...callerDelivered("line", B_TEXT, old(), jobId, "comm.send"), approvalId } as GatewayInvokeRequest);
         expect(rerun.httpStatus).toBe(409);
         expect(rerun.body.retryable).toBe(false);
         expect(String(rerun.body.nextStep)).toContain("この窓口では承認後の返信にまだ対応していません");

@@ -197,8 +197,11 @@ describe("Gateway audience egress", () => {
         conversation: { surface: "slack", orgId: DEMO_ORG.id },
       },
     });
-    expect(result.httpStatus).toBe(403);
-    expect(result.body.code).toBe("egress_denied");
+    // #351 follow-up: a Slack send with no channel can never be posted, so it is
+    // refused before egress / any approval card (was 403 egress_denied; still nothing sent).
+    expect(result.httpStatus).toBe(400);
+    expect(result.body.code).toBe("slack_channel_required");
+    expect(result.body.sent).toBe(false);
   });
 
   test("external × public via comm.send allows", async () => {
@@ -217,9 +220,10 @@ describe("Gateway audience egress", () => {
         args: { assetRef: "kb/public-faq" },
       },
     });
-    // Egress allows it, but the gateway has no mail delivery for comm.send:
-    // H1 (10/12) — not sent, said plainly (was ok:true with nothing sent).
-    expect((result.body.egress as { decision?: string } | undefined)?.decision).toBe("allow");
+    // The gateway has no mail delivery for comm.send: H1 (10/12) — not sent, said
+    // plainly (was ok:true with nothing sent). #351 follow-up: refused before egress
+    // and before any approval card, so no egress verdict is computed.
+    expect(result.httpStatus).toBe(409);
     expect(result.body.ok).toBe(false);
     expect(result.body.code).toBe("channel_not_supported");
     expect(result.body.sent).toBe(false);

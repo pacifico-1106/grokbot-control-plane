@@ -149,7 +149,18 @@ function inferSurface(body: GatewayInvokeRequest, args: Record<string, unknown>)
     args.surface ||
     args.channelSurface;
   if (isConversationSurface(raw)) return raw;
-  if (str(body.slackChannelId) || str(body.slackUserId) || str(args.slackChannelId) || str(args.channel)) {
+  const conv = asRecord(body.conversation);
+  if (
+    str(body.slackChannelId) ||
+    str(body.slackUserId) ||
+    str(args.slackChannelId) ||
+    str(args.channel) ||
+    // #351 follow-up: a bare channelId (args or conversation) is a Slack channel too;
+    // before, args.channelId alone came back 403 egress_denied and
+    // conversation.channelId alone 400.
+    str(args.channelId) ||
+    str(conv.channelId)
+  ) {
     return "slack";
   }
   if (str(body.email) || str(args.email) || str(args.to) || str(args.recipient)) return "mail";
@@ -192,6 +203,35 @@ export function conversationOrgMismatch(
   return { suppliedOrgId: supplied };
 }
 
+/**
+ * #351 follow-up: the Slack channel can be named in several fields. When two of
+ * them name DIFFERENT channels the request is ambiguous (which one would we post
+ * to?), so it is refused before anything is read, queued or posted. Returns the
+ * field names (never the ids) when they disagree, null otherwise.
+ */
+export const CHANNEL_ID_FIELDS = [
+  "conversation.slackChannelId",
+  "conversation.channelId",
+  "slackChannelId",
+  "args.slackChannelId",
+  "args.channelId",
+] as const;
+export function conversationChannelMismatch(body: GatewayInvokeRequest): { fields: string[] } | null {
+  const conv = asRecord(body.conversation);
+  const args = asRecord(body.args);
+  const values: Array<[string, string | undefined]> = [
+    ["conversation.slackChannelId", str(conv.slackChannelId)],
+    ["conversation.channelId", str(conv.channelId)],
+    ["slackChannelId", str((body as unknown as Record<string, unknown>).slackChannelId)],
+    ["args.slackChannelId", str(args.slackChannelId)],
+    ["args.channelId", str(args.channelId)],
+  ];
+  const named = values.filter((entry): entry is [string, string] => Boolean(entry[1]));
+  const distinct = new Set(named.map(([, value]) => value.trim()));
+  if (distinct.size <= 1) return null;
+  return { fields: named.map(([field]) => field) };
+}
+
 export function parseConversationContext(
   body: GatewayInvokeRequest,
   orgId: string
@@ -204,6 +244,7 @@ export function parseConversationContext(
   const email = str(conv.email) || str(body.email) || str(args.email) || str(args.to) || str(args.recipient);
   const slackChannelId =
     str(conv.slackChannelId) ||
+    str(conv.channelId) ||
     str(body.slackChannelId) ||
     str(args.slackChannelId) ||
     str(args.channelId) ||

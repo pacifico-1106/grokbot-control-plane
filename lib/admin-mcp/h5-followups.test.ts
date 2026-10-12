@@ -120,7 +120,7 @@ describe("3) secret key names: case / separator / nesting insensitive", () => {
 
   test("unknown key on setup.slackAdapter.setBotToken → unknown_argument_refused", async () => {
     const before = (await listApprovals(ORG)).length;
-    const result = await callAdminMcpTool("setup.slackAdapter.setBotToken", { enabled: false, xoxb: "value-not-echoed-8888" }, demoCred());
+    const result = await callAdminMcpTool("setup.slackAdapter.setBotToken", { enabled: false, workspace: "value-not-echoed-8888" }, demoCred());
     expect(data(result).code).toBe("unknown_argument_refused");
     expect((await listApprovals(ORG)).length).toBe(before);
     await expectValueNowhere("value-not-echoed-8888", result);
