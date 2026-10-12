@@ -8,6 +8,7 @@ import { redactMetadata } from "@/lib/data/redaction";
 import { attachmentStatusField } from "@/lib/approvals/attachment-card";
 import { approvalPollFields } from "@/lib/approvals/poll-hint";
 import { jsonUtf8 } from "@/lib/http/json-utf8";
+import { approvalNotSentInfo, notSentFulfillmentResult } from "@/lib/approvals/not-sent";
 
 export const runtime = "nodejs";
 
@@ -99,11 +100,16 @@ export async function GET(req: Request) {
           ...(invokeFulfill.fileUpload ? { fileUpload: invokeFulfill.fileUpload } : {}),
         };
       } else if (invokeFulfill && !invokeFulfill.ok) {
-        fulfillmentResult = {
-          fulfilled: true,
-          ok: false,
-          error: invokeFulfill.error,
-        };
+        // H1: stopped before any provider call (no Slack destination / channel
+        // not supported) → NOT SENT, never "fulfilled".
+        const notSent = approvalNotSentInfo(approval.metadata);
+        fulfillmentResult = notSent
+          ? notSentFulfillmentResult(notSent)
+          : {
+              fulfilled: true,
+              ok: false,
+              error: invokeFulfill.error,
+            };
       }
     }
   }

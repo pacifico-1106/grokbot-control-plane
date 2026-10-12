@@ -19,6 +19,7 @@ describe("thread single-flight coverage", () => {
     const path = POSTING_PATH_INVENTORY.find((p) => p.id === "fulfill.caller_delivered");
     expect(["line", "telegram"].every((surface) => path?.surfaces.includes(surface))).toBe(true);
     expect(THREAD_GUARD_COVERAGE["fulfill.caller_delivered"]?.coverage).toBe("leased");
-    expect(THREAD_GUARD_COVERAGE["invoke.caller_delivered"]?.where).toMatch(/TTL/);
+    // H1 (10/12): a direct LINE / mail reply is channel_not_supported (not sent) before any lease.
+    expect(THREAD_GUARD_COVERAGE["invoke.caller_delivered"]?.coverage).toBe("no_live_send");
   });
 });

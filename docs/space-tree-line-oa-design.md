@@ -429,7 +429,7 @@ Slack の `setup.slackStatus` / `setup.slackAdapter.setBotToken` と同型で、
 | ツール | 用途 | 承認 |
 |--------|------|------|
 | `setup.lineApprovalStatus` | LINE 承認チャネル診断（channels / Telegram 衝突 / employeeInboxSummary / nextStepJa） | なし |
-| `setup.lineApproval.upsert` | `org_notification_channels` provider=`line` の登録・更新 | always_human |
+| `setup.lineApproval.upsert` | `org_notification_channels` provider=`line` の**秘密以外**の更新（destinationId / allowedUserIds / label / enabled / isDefault）。`channelAccessToken` / `channelSecret` は受け取らず `secret_argument_refused`（H5, 10/12）。秘密の値はテナントが /app/settings「承認を受け取る」→ 承認用LINE で入力 | always_human |
 | `setup.lineApproval.setEmployeeInbox` | 社員別 `approvalChannelId` を LINE へ（または既定へクリア） | always_human |
 | `setup.lineApproval.demoteTelegram` | Telegram 承認経路の無効化（`disable` / `clearDefault`） | always_human |
 
@@ -440,7 +440,7 @@ Slack の `setup.slackStatus` / `setup.slackAdapter.setBotToken` と同型で、
 1. LINE OA / Messaging API 作成（人間）
 2. OA 表示名 `{employeeDisplayName}（AIスタッフ）`（人間・§P1-e）
 3. 上長が OA を友だち追加 → userId 取得（人間）
-4. `setup.lineApproval.upsert` + 人承認
+4. チャネルアクセストークン / シークレット / 送信先を、テナントが /app/settings「承認を受け取る」→ 承認用LINE で入力（秘密の値は AI に渡さない。送信先などの変更は `setup.lineApproval.upsert` + 人承認でも可）
 5. Webhook URL を LINE Developers に貼付 + 有効化（人間・自動登録不可）
 6. テスト送信 / Flex 承認
 7. `setup.lineApproval.setEmployeeInbox` + `setup.lineApproval.demoteTelegram`

@@ -57,7 +57,8 @@ describe("setup-type tool succeeded → retry-cap reset marker", () => {
   test("a queued setup ticket (not fulfilled yet) → nothing recorded", async () => {
     process.env.NOTIFICATION_CONFIG_ENCRYPTION_KEY ??= "test-key-that-is-at-least-32-characters-long-capreset";
     const before = rows("setup.slackAdapter.setBotToken").length;
-    const res = await callAdminMcpTool("setup.slackAdapter.setBotToken", { botToken: "xoxb-capreset-queued" }, adminCred());
+    // H5: the token is entered on the screen; the tool now only queues a disable.
+    const res = await callAdminMcpTool("setup.slackAdapter.setBotToken", { enabled: false }, adminCred());
     expect((res.structuredContent as Record<string, unknown>).needs_approval).toBe(true);
     expect(rows("setup.slackAdapter.setBotToken").length).toBe(before);
   });

@@ -154,13 +154,13 @@ export function computeLineApprovalNextStepJa(input: LineApprovalNextStepInput):
       "1. LINE Developers で Messaging API チャネル（公式アカウント）を作成してください（人間作業）。" +
       `2. OA 表示名を ${LINE_OA_NAME_RULE_JA.replace("{employeeDisplayName}", "対象AI社員名")} に設定（人間作業）。` +
       "3. 上長が OA を友だち追加し、userId を取得（人間作業）。" +
-      "4. setup.lineApproval.upsert で channelAccessToken / channelSecret / destinationId を登録し、人が承認してください。"
+      "4. チャネルアクセストークンとチャネルシークレットは AI に渡さず、テナントの担当者が管理画面 /app/settings の「承認を受け取る」→ 承認用LINE で入力してください（setup.lineApproval.upsert は秘密の値を受け取りません）。送信先（destinationId）も同じ画面で入れられます。"
     );
   }
 
   if (!anyLine?.hasCredentials || !anyLine.destinationPresent) {
     return (
-      "setup.lineApproval.upsert で channelAccessToken / channelSecret / destinationId を登録し、人が承認してください。" +
+      "チャネルアクセストークンとチャネルシークレットは、テナントの担当者が管理画面 /app/settings の「承認を受け取る」→ 承認用LINE で入力してください（AI には渡しません）。destinationId は同じ画面か setup.lineApproval.upsert（人の承認あり）で設定できます。" +
       " destinationId は上長の userId（U...）またはグループ/ルーム ID です。"
     );
   }

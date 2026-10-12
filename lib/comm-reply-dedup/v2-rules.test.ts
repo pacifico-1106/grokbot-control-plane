@@ -148,9 +148,11 @@ describe("(6) posting-path inventory", () => {
       expect(p.noteJa.length).toBeGreaterThan(5);
     }
     const ids = POSTING_PATH_INVENTORY.map((p) => p.id);
-    for (const id of ["invoke.slack_post", "invoke.caller_delivered", "invoke.file_upload", "invoke.sns_publish", "fulfill.slack_post", "fulfill.sns_publish"]) {
+    for (const id of ["invoke.slack_post", "invoke.file_upload", "invoke.sns_publish", "fulfill.slack_post", "fulfill.sns_publish"]) {
       expect(ids).toContain(id);
       expect(POSTING_PATH_INVENTORY.find((p) => p.id === id)?.coverage).toBe("guarded");
     }
+    // H1 (10/12): non-Slack direct replies are refused as channel_not_supported (nothing sent).
+    expect(POSTING_PATH_INVENTORY.find((p) => p.id === "invoke.caller_delivered")?.coverage).toBe("no_live_send");
   });
 });

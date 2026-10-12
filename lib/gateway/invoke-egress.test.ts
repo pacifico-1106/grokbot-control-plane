@@ -217,8 +217,12 @@ describe("Gateway audience egress", () => {
         args: { assetRef: "kb/public-faq" },
       },
     });
-    expect(result.body.ok).toBe(true);
+    // Egress allows it, but the gateway has no mail delivery for comm.send:
+    // H1 (10/12) — not sent, said plainly (was ok:true with nothing sent).
     expect((result.body.egress as { decision?: string } | undefined)?.decision).toBe("allow");
+    expect(result.body.ok).toBe(false);
+    expect(result.body.code).toBe("channel_not_supported");
+    expect(result.body.sent).toBe(false);
   });
 
   test("SoD force_human still queues even if matrix would allow", async () => {

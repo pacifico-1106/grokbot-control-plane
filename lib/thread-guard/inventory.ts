@@ -16,8 +16,8 @@ export type ThreadGuardCoverage = "leased" | "same_reply" | "no_thread" | "no_li
 export const THREAD_GUARD_COVERAGE: Readonly<Record<string, { coverage: ThreadGuardCoverage; where: string }>> = {
   "invoke.slack_post": { coverage: "leased", where: "lib/gateway/invoke.ts (Slack direct post; lease before the dedup claim)" },
   "invoke.caller_delivered": {
-    coverage: "leased",
-    where: "lib/gateway/invoke.ts (dest なし; allowed = recorded at server time; lease held until its TTL — the caller's delivery is not observable)",
+    coverage: "no_live_send",
+    where: "lib/gateway/invoke.ts (dest なし: channel_not_supported before the lease — nothing is sent, held or recorded; H1 10/12. Was: recorded at server time, lease held until its TTL)",
   },
   "fulfill.slack_post": { coverage: "leased", where: "lib/approvals/fulfill.ts (fulfillApprovedInvokeCore; rechecked at fulfil)" },
   "fulfill.caller_delivered": {
