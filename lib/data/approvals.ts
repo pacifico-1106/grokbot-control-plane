@@ -1,6 +1,7 @@
 import {
   type CreateRuntimeApprovalInput,
 } from "../demo-data";
+import { isHoldReleaseTicket } from "@/lib/safety/hold-config";
 import {
   buildPollPath,
   buildPollUrl,
@@ -409,6 +410,7 @@ export async function resolveApprovalWithoutWorkflowDetailed(
     const existing = await demoGetApproval(id);
     if (!existing || existing.orgId !== orgId) return { approval: null, reason: "resolve_failed" };
     if (existing.status !== "pending") return { approval: null, reason: "resolve_failed" };
+    if (status === "approved" && isHoldReleaseTicket(existing)) return { approval: null, reason: "hold_release_web_only" };
     if (isAdminClassApproval(existing)) {
       assertNotSelfApproval(existing.metadata, {
         actor: resolvedBy,
@@ -442,6 +444,8 @@ export async function resolveApprovalWithoutWorkflowDetailed(
 
   const existing = await getApprovalById(id, orgId);
   if (!existing || existing.status !== "pending") return { approval: null, reason: "resolve_failed" };
+  // S3: hold-release tickets are approved only by the web release flow (fresh login).
+  if (status === "approved" && isHoldReleaseTicket(existing)) return { approval: null, reason: "hold_release_web_only" };
   if (isAdminClassApproval(existing)) {
     assertNotSelfApproval(existing.metadata, {
       actor: resolvedBy,

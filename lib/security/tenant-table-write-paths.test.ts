@@ -191,6 +191,10 @@ describe("app: no user-session writes to tenant tables", () => {
       "lib/data/subscriptions.ts:orgs:update",
       "lib/data/subscriptions.ts:subscriptions:update",
       "lib/data/subscriptions.ts:subscriptions:upsert",
+      // S3 (employee hold release tickets): admin client, always .eq("org_id") +
+      // conditional .eq("status", from) transitions; reached only from the
+      // web routes behind webMemberActor + refuseAiCredential + fresh login.
+      "lib/safety/hold-actions.ts:approval_requests:update",
     ]);
   });
 

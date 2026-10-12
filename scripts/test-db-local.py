@@ -551,6 +551,61 @@ try:
             query(_stmt)
     query("drop trigger eh_slow_audit on public.audit_events; drop function security_test.eh_slow_audit();")
     assert deadlocks == 0, f"{deadlocks} deadlocks in 15 release × detector rounds"
+    # 木村 10/12 09:01: when can a stop fail with 40001? The functions run at the caller's isolation
+    # (PostgREST: READ COMMITTED). (a) READ COMMITTED: 40 concurrent mixed-kind starts on ONE employee
+    # → every call succeeds (row-lock waits re-check, no 40001 / 40P01), strongest kind wins.
+    # (b) If isolation were ever raised (REPEATABLE READ), the same burst raises 40001 — the app's
+    # 5 attempts with jittered backoff (holdStartBackoffMs) must still land every stop.
+    import random, time
+    eh_emp2 = "e5100000-0000-4000-8000-0000000000c2"
+    query(f"insert into public.employees(id, org_id, display_name, role_label) values ('{eh_emp2}', '{eh_org}', 'eh c2', 'r');")
+    def _start_cmd(i, iso=None):
+        kind, by, via, trig = [("leave", f"member:{eh_req}", "web", "null"), ("stopped", f"member:{eh_req}", "web", "null"),
+                               ("quarantined", "system:anomaly", "anomaly", "'signal:burst'"), ("stopped", f"member:{eh_appr}", "slack", "null")][i % 4]
+        call = (f"select public.start_employee_hold('{eh_org}','{eh_emp2}','{kind}',null,'{by}','{via}',{trig},now())->>'holdId';")
+        if iso:
+            return f"begin isolation level {iso}; set local role service_role; {call} commit;"
+        return f"set role service_role; {call}"
+    def _clear_emp2():
+        for _stmt in ("alter table public.employees disable trigger employees_hold_guard;",
+                      f"update public.employees set hold_state = null, hold_id = null where id = '{eh_emp2}';",
+                      "alter table public.employees enable trigger employees_hold_guard;",
+                      "alter table public.employee_holds disable trigger employee_holds_guard;",
+                      f"delete from public.employee_holds where employee_id = '{eh_emp2}';",
+                      "alter table public.employee_holds enable trigger employee_holds_guard;"):
+            query(_stmt)
+    with ThreadPoolExecutor(max_workers=20) as pool:
+        res = list(pool.map(_psql, [_start_cmd(i) for i in range(40)]))
+    rc_errors = [err.strip().splitlines()[-1] for rc, _, err in res if rc != 0]
+    assert rc_errors == [], rc_errors
+    assert query(f"select hold_state from public.employees where id = '{eh_emp2}';") == "quarantined"
+    assert query(f"select count(*) from public.employee_holds where employee_id = '{eh_emp2}' and released_at is null and superseded_at is null;") == "1"
+    _clear_emp2()
+    def _with_retry(cmd):
+        first_40001 = False
+        for attempt in range(1, 6):  # HOLD_START_MAX_ATTEMPTS = 5
+            rc, out, err = _psql(cmd)
+            if rc == 0:
+                return attempt, first_40001
+            code = "40001" if "could not serialize" in err else "40P01" if "deadlock detected" in err else None
+            if attempt == 1 and code == "40001":
+                first_40001 = True
+            if code is None:
+                return f"error: {err.strip()[-200:]}", first_40001
+            base = [50, 100, 200, 400][min(attempt, 4) - 1]
+            time.sleep((base / 2 + random.random() * base / 2) / 1000)
+        return "exhausted", first_40001
+    with ThreadPoolExecutor(max_workers=20) as pool:
+        rr = list(pool.map(_with_retry, [_start_cmd(i, "repeatable read") for i in range(40)]))
+    rr_first = sum(1 for _, f in rr if f)
+    rr_fail = [a for a, _ in rr if not isinstance(a, int)]
+    assert rr_fail == [], rr_fail
+    assert query(f"select hold_state from public.employees where id = '{eh_emp2}';") == "quarantined"
+    print(f"PASS: hold start concurrency (木村 10/12 09:01): READ COMMITTED 40 concurrent mixed starts → 0 errors; "
+          f"REPEATABLE READ 40 concurrent → {rr_first} first-attempt 40001, all landed within 5 attempts "
+          f"(max attempt used: {max(a for a, _ in rr)}).")
+    _clear_emp2()
+    query(f"delete from public.employees where id = '{eh_emp2}';")
     # 木村 10/12 (6): the rollback refuses while any employee is held — nothing changes
     query(f"set role service_role; select public.start_employee_hold('{eh_org}','{eh_emp}','stopped',null,'member:{eh_req}','web',null,now());")
     try:
