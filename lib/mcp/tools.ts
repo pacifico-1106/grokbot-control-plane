@@ -29,6 +29,7 @@ import {
 import { isAdminClassApproval } from "@/lib/admin-mcp/audit-class";
 import { parseAdminFulfillment } from "@/lib/admin-mcp/fulfill-admin";
 import { parseFulfillment } from "@/lib/approvals/fulfill";
+import { approvalNotSentInfo, notSentFulfillmentResult } from "@/lib/approvals/not-sent";
 import { handleDecisionRequest, type DecisionRequestInput } from "@/lib/decision-workflow";
 import { isApprovalReasonsEnabled, isConfigChangeRequestEnabled, isMcpEndpointHandoffEnabled, isTopicGatedPostingEnabled } from "@/lib/feature-flags";
 import { getOrgApprovalKindRoutesPolicy } from "@/lib/approval-kind-routes/data";
@@ -778,11 +779,15 @@ export async function callStaffpassMcpTool(
               ...(invokeFulfill.fileUpload ? { fileUpload: invokeFulfill.fileUpload } : {}),
             };
           } else if (invokeFulfill && !invokeFulfill.ok) {
-            fulfillmentResult = {
-              fulfilled: true,
-              ok: false,
-              error: invokeFulfill.error,
-            };
+            // H1: same not-sent answer as GET /api/approvals/status.
+            const notSent = approvalNotSentInfo(approval.metadata);
+            fulfillmentResult = notSent
+              ? notSentFulfillmentResult(notSent)
+              : {
+                  fulfilled: true,
+                  ok: false,
+                  error: invokeFulfill.error,
+                };
           }
         }
       }

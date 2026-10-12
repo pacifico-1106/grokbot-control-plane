@@ -318,7 +318,10 @@ describe("thread_moved_on", () => {
     expect((await invoke(threadReply(A_TEXT, { readThroughTs: old() }))).httpStatus).toBe(200);
   });
 
-  test("LINE (caller-delivered): the allowed reply is recorded; a stale second reply is thread_moved_on", async () => {
+  // H1 (10/12): the gateway has no LINE delivery, so an allowed LINE reply is
+  // channel_not_supported (not sent) BEFORE the lease: nothing is held or
+  // recorded, and a later reply is not thread_busy / thread_moved_on.
+  test("LINE: an allowed reply is not sent (channel_not_supported) and leaves no lease or post record", async () => {
     on();
     recordSlack();
     const line = (text: string, readThroughTs: string) =>
@@ -329,14 +332,13 @@ describe("thread_moved_on", () => {
         conversation: { surface: "line", orgId: DEMO_ORG.id, lineId: LINE_USER },
         args: { text, readThroughTs },
       }) as unknown as GatewayInvokeRequest;
-    expect((await invoke(line(A_TEXT, old()))).httpStatus).toBe(200);
-    // pre-flag item 3: the caller-delivered lease is held for its TTL (delivery is not observable)
-    expect((await invoke(line(B_TEXT, fresh()))).body.code).toBe("thread_busy");
+    const first = await invoke(line(A_TEXT, old()));
+    expect(first.httpStatus).toBe(409);
+    expect(first.body.code).toBe("channel_not_supported");
+    expect(first.body.sent).toBe(false);
+    expect((await invoke(line(B_TEXT, fresh()))).body.code).toBe("channel_not_supported");
     setThreadGuardClockForTests(() => Date.now() + 61_000);
-    const stale = await invoke(line(B_TEXT, old()));
-    expect(stale.httpStatus).toBe(409);
-    expect(stale.body.code).toBe("thread_moved_on");
-    expect((await invoke(line(B_TEXT, fresh()))).httpStatus).toBe(200);
+    expect((await invoke(line(B_TEXT, old()))).body.code).toBe("channel_not_supported");
   });
 });
 
@@ -744,69 +746,38 @@ describe("pre-flag-ON fixes (木村 #286 follow-up)", () => {
     });
   });
 
-  describe("3. LINE / Telegram / mail: the lease is held until the caller's delivery window ends", () => {
-    // Telegram conversation replies are refused by egress at invoke today
-    // (audience unknown → egress_denied), so the caller-delivered branch is
-    // reached by LINE and mail only; the branch is surface-agnostic.
+  describe("3. LINE / mail: no caller-delivered lease any more (H1: not sent → nothing to serialize)", () => {
+    // Before H1 an allowed LINE / mail reply came back 200 "accepted" with
+    // nothing sent and held the thread lease for its TTL. It is now
+    // channel_not_supported before the lease, with the flag ON or OFF.
     for (const surface of ["line", "mail"] as const) {
-      test(`${surface}: after an allowed caller-delivered reply another job is thread_busy until the lease TTL passes`, async () => {
-        on();
-        recordSlack();
-        const first = await invoke(callerDelivered(surface, A_TEXT, old()));
-        expect(first.httpStatus).toBe(200);
-        // another employee, having read through everything: the first reply may not be delivered yet
-        const second = await invoke(callerDelivered(surface, B_TEXT, fresh()), "emp_comm2");
-        expect(second.httpStatus).toBe(409);
-        expect(second.body.code).toBe("thread_busy");
-        expect(Number(second.body.retryAfterSeconds)).toBeGreaterThan(1);
-        later(61_000);
-        expect((await invoke(callerDelivered(surface, B_TEXT, fresh()), "emp_comm2")).httpStatus).toBe(200);
-      });
+      for (const flag of ["on", "off"] as const) {
+        test(`${surface}, flag ${flag}: channel_not_supported; another job is not thread_busy`, async () => {
+          if (flag === "on") on();
+          else off();
+          recordSlack();
+          const first = await invoke(callerDelivered(surface, A_TEXT, old()));
+          expect(first.httpStatus).toBe(409);
+          expect(first.body.code).toBe("channel_not_supported");
+          const second = await invoke(callerDelivered(surface, B_TEXT, fresh()), "emp_comm2");
+          expect(second.body.code).toBe("channel_not_supported");
+          expect(posts.length).toBe(0);
+        });
+      }
     }
-    // 木村 #293 decision 1: the same job reuses its own held lease within 10 min of its first post.
-    test("same job: a second part within the TTL reuses its own lease (200); a different job of the same employee is thread_busy", async () => {
-      on();
-      recordSlack();
-      const jobId = jid("line-multi");
-      expect((await invoke(callerDelivered("line", A_TEXT, old(), jobId))).httpStatus).toBe(200);
-      expect((await invoke(callerDelivered("line", C_TEXT, old(), jobId))).httpStatus).toBe(200);
-      const other = await invoke(callerDelivered("line", B_TEXT, fresh()));
-      expect(other.body.code).toBe("thread_busy");
-    });
-    test("same job more than 10 min after its first post → thread_busy while its lease is held", async () => {
-      on();
-      recordSlack();
-      const jobId = jid("line-late");
-      expect((await invoke(callerDelivered("line", A_TEXT, old(), jobId))).httpStatus).toBe(200);
-      later(9.5 * 60_000);
-      expect((await invoke(callerDelivered("line", C_TEXT, old(), jobId))).httpStatus).toBe(200);
-      later(10 * 60_000 + 10_000);
-      const late = await invoke(callerDelivered("line", B_TEXT, fresh(), jobId));
-      expect(late.httpStatus).toBe(409);
-      expect(late.body.code).toBe("thread_busy");
-    });
-    test("the allowed reply is still recorded at once: a stale reply after the TTL is thread_moved_on", async () => {
-      on();
-      recordSlack();
-      expect((await invoke(callerDelivered("line", A_TEXT, old()))).httpStatus).toBe(200);
-      later(61_000);
-      expect((await invoke(callerDelivered("line", B_TEXT, old()), "emp_comm2")).body.code).toBe("thread_moved_on");
-    });
     test("Slack direct posts (delivery observed) still release the lease right after the post", async () => {
       on();
       recordSlack();
       expect((await invoke(threadReply(A_TEXT))).httpStatus).toBe(200);
       expect((await invoke(threadReply(B_TEXT, { readThroughTs: fresh() }), "emp_comm2")).httpStatus).toBe(200);
     });
-    test("flag OFF: caller-delivered replies are not serialized (unchanged)", async () => {
-      off();
-      recordSlack();
-      expect((await invoke(callerDelivered("line", A_TEXT, old()))).httpStatus).toBe(200);
-      expect((await invoke(callerDelivered("line", B_TEXT, old()), "emp_comm2")).httpStatus).toBe(200);
-    });
   });
 
   describe("4. fulfil-time guard on approved LINE / Telegram replies", () => {
+    // H1: a direct LINE reply no longer records a post, so "another AI post on
+    // this LINE conversation" is set up in the thread-guard store directly.
+    const recordLinePost = (employeeId: string) =>
+      recordSelfPost({ orgId: DEMO_ORG.id, employeeId, threadKey: threadKeyFor({ orgId: DEMO_ORG.id, surface: "line", lineId: LINE_USER })!, micros: BigInt(Date.now()) * BigInt(1000) + BigInt(1), jobKey: null });
     async function queueLine(readThroughTs = old()) {
       const res = await invoke(callerDelivered("line", B_TEXT, readThroughTs, jid("line-apr"), "comm.send"));
       expect(res.httpStatus).toBe(402);
@@ -816,7 +787,7 @@ describe("pre-flag-ON fixes (木村 #286 follow-up)", () => {
       on();
       recordSlack();
       const approvalId = await queueLine();
-      expect((await invoke(callerDelivered("line", A_TEXT, fresh()), "emp_comm2")).httpStatus).toBe(200);
+      expect(await recordLinePost("emp_comm2")).toBe(true);
       later(61_000);
       const result = await approveAs(approvalId);
       expect(result?.ok).toBe(false);
@@ -846,7 +817,8 @@ describe("pre-flag-ON fixes (木村 #286 follow-up)", () => {
       on();
       recordSlack();
       const approvalId = await queueLine();
-      expect((await invoke(callerDelivered("line", A_TEXT, fresh()), "emp_comm2")).httpStatus).toBe(200);
+      const held = await acquireThreadLease({ orgId: DEMO_ORG.id, employeeId: "emp_comm2", threadKey: threadKeyFor({ orgId: DEMO_ORG.id, surface: "line", lineId: LINE_USER })!, ttlSeconds: 60 });
+      expect(held.state).toBe("acquired");
       const result = await approveAs(approvalId);
       expect(result?.error).toBe("thread_busy");
       expect((await getApprovalById(approvalId, DEMO_ORG.id))?.status).toBe("approved");
@@ -855,7 +827,7 @@ describe("pre-flag-ON fixes (木村 #286 follow-up)", () => {
       on();
       recordSlack();
       const approvalId = await queueLine();
-      expect((await invoke(callerDelivered("line", A_TEXT, fresh()))).httpStatus).toBe(200);
+      expect(await recordLinePost("emp_comm")).toBe(true);
       later(61_000);
       expect((await approveAs(approvalId, "agent:agent_comm_self"))?.error).toBe("thread_moved_on");
       expect((await getApprovalById(approvalId, DEMO_ORG.id))?.status).toBe("superseded");
@@ -880,7 +852,9 @@ describe("pre-flag-ON fixes (木村 #286 follow-up)", () => {
       const result = await approveAs(approvalId);
       expect(result?.error).toBe("slack_channel_required");
       expect((await getApprovalById(approvalId, DEMO_ORG.id))?.status).toBe("approved");
-      expect((await invoke(callerDelivered("line", A_TEXT, fresh()), "emp_comm2")).httpStatus).toBe(200);
+      // lease released: another employee can take it at once
+      const next = await acquireThreadLease({ orgId: DEMO_ORG.id, employeeId: "emp_comm2", threadKey: threadKeyFor({ orgId: DEMO_ORG.id, surface: "line", lineId: LINE_USER })!, ttlSeconds: 30 });
+      expect(next.state).toBe("acquired");
     });
     // 木村 #293 decision 2: approved LINE / Telegram replies stay fail-closed, and the AI is told why.
     for (const flag of ["on", "off"] as const) {
@@ -903,7 +877,7 @@ describe("pre-flag-ON fixes (木村 #286 follow-up)", () => {
       off();
       recordSlack();
       const approvalId = await queueLine();
-      expect((await invoke(callerDelivered("line", A_TEXT, fresh()), "emp_comm2")).httpStatus).toBe(200);
+      expect(await recordLinePost("emp_comm2")).toBe(true);
       const result = await approveAs(approvalId);
       expect(result?.error).toBe("slack_channel_required");
       expect((await getApprovalById(approvalId, DEMO_ORG.id))?.status).toBe("approved");

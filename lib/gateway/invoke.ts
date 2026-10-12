@@ -1,3 +1,4 @@
+import { CONVERSATION_NOT_SENT, NOT_SENT_DESTINATION_CODES, approvedNotSentInfo, channelNotSupportedInfo } from "@/lib/approvals/not-sent";
 import { withSlackUserTeamMemo } from "@/lib/slack/bot-token";
 import { heldTicketMarker, withHoldRequestScope } from "@/lib/safety/hold";
 import {
@@ -730,7 +731,7 @@ async function secretAuditOrgId(employeeId: string): Promise<string | null> {
 const APPROVED_REPLY_SURFACE_NOT_SUPPORTED = "approved_reply_surface_not_supported";
 const APPROVED_REPLY_SURFACE_NOT_SUPPORTED_JA = "この窓口では承認後の返信にまだ対応していません。承認済みの返信は送信していません。";
 const APPROVED_REPLY_SURFACE_NOT_SUPPORTED_NEXT_STEP =
-  "この窓口では承認後の返信にまだ対応していません。この承認IDで再実行しても送信されません。必要なら承認不要の内容で返信するか、担当者に直接対応を依頼してください。";
+  "この窓口では承認後の返信にまだ対応していません。相手には届いていないので、送ったと伝えないでください。この承認IDで再実行しても送信されません。担当者に直接対応を依頼してください。";
 
 /**
  * Core Gateway enforcement. Callers must already resolve employeeId from an
@@ -2310,12 +2311,19 @@ async function runGatewayInvokeInner(
       // in plain words instead of a Slack-only code (木村 #293 decision 2).
       const approvedSurface = (parseInvokeSnapshot(priorApproval.metadata)?.conversation?.surface || "").toLowerCase();
       if (approvedSurface && approvedSurface !== "slack") {
-        return jsonResult({ ok: false, code: fulfilled?.error || "approval_execution_failed",
+        return jsonResult({ ok: false, code: fulfilled?.error || "approval_execution_failed", sent: false,
           error: fulfilled?.error || "approval_execution_failed", reasonCode: APPROVED_REPLY_SURFACE_NOT_SUPPORTED,
           message: APPROVED_REPLY_SURFACE_NOT_SUPPORTED_JA, retryable: false, nextAction: "stop",
           nextStep: APPROVED_REPLY_SURFACE_NOT_SUPPORTED_NEXT_STEP, approvalId: priorApproval.id,
           employeeId, tool, purpose, jobId }, 409);
       }
+    }
+    if (!fulfilled?.ok && isAudienceGatedTool(toolDef) && fulfilled?.error && NOT_SENT_DESTINATION_CODES.has(fulfilled.error)) {
+      // H1: approved Slack reply that stopped at slack_channel_required (no destination) — not sent.
+      const info = approvedNotSentInfo(fulfilled.error, parseInvokeSnapshot(priorApproval.metadata)?.conversation?.surface ?? "slack");
+      return jsonResult({ ok: false, code: info.code, error: info.code, sent: false, message: info.messageJa,
+        nextStep: info.nextStep, retryable: false, nextAction: "stop", approvalId: priorApproval.id,
+        employeeId, tool, purpose, jobId }, 409);
     }
     if (!fulfilled?.ok) return jsonResult({ ok: false, code: fulfilled?.error || "approval_execution_failed",
       error: fulfilled?.error || "approval_execution_failed", employeeId, tool, purpose, jobId }, 409);
@@ -2687,54 +2695,42 @@ async function runGatewayInvokeInner(
         if (threadSend.kind === "held") await threadSend.handle.finish(threadSent);
       }
       }
-    } else if (!dest && egressAllowsPost && (commReplyDedup.kind !== "off" || isThreadSingleFlightEnabled())) {
-      // Surfaces without a gateway post (LINE / Telegram / mail): the allowed
-      // reply is delivered by the caller, so it is recorded here as sent.
-      // Thread single-flight: same lease + moved-on check; the allowed reply is
-      // recorded as this employee's latest post (server time). The caller's
-      // delivery cannot be observed (no receipt), so the lease is HELD until its
-      // TTL rather than released at allowance (木村 #286 pre-flag item 3):
-      // another job reading the thread before the delivery lands gets
-      // thread_busy, not a stale "nothing new".
-      const threadSend = await beginThreadSend({
+    } else if (!dest && egressAllowsPost) {
+      // H1 (LINE / LINE WORKS design 10/12 §6): the gateway posts conversation
+      // messages to Slack only. Any other destination (LINE / mail / phone …)
+      // used to come back ok:true, accepted:true with nothing sent, and was
+      // recorded as "sent" in the dedup ledger / thread lease. Now: not sent,
+      // said plainly, before any ledger claim, lease or provider call.
+      const info = channelNotSupportedInfo(ctx?.surface ?? null);
+      await appendAuditEvent({
         orgId: orgId || employee.orgId,
         employeeId,
-        jobId,
-        keyInput: conversationKeyInputFromBody(body, orgId || employee.orgId),
-        readThrough: readThroughFromBody(body as unknown as Record<string, unknown>),
+        credentialId: input.credentialId || employee.credentialId,
+        action: "comm.not_sent",
+        purpose,
+        summary: `${tool} を送信していません（送信先の窓口に未対応）`,
+        metadata: { tool, jobId, code: info.code, surface: info.surface, sent: false },
       });
-      if (threadSend.kind === "stop") {
-        return threadGuardStopResponse(threadSend, {
-          orgId: orgId || employee.orgId, employeeId,
-          credentialId: input.credentialId || employee.credentialId, purpose, tool, jobId, phase: "invoke",
-        });
-      }
-      await auditThreadGuardHeld(threadSend, {
-        orgId: orgId || employee.orgId, employeeId,
-        credentialId: input.credentialId || employee.credentialId, purpose, tool, jobId, phase: "invoke",
-      });
-      if (threadSend.kind === "held" && threadSend.readPointUnknown) {
-        threadGuardHint = { readPoint: "unknown", nextStep: NEXT_STEP_READ_POINT_UNKNOWN };
-      }
-      let allowed = false;
-      try {
-        if (commReplyDedup.kind !== "off") {
-          const dedupClaim = await claimDirectCommReplySend(commReplyDedup, tool);
-          const dedupResponse = await directSendDedupResponse(dedupClaim, commReplyDedup, {
-            orgId: orgId || employee.orgId,
-            employeeId,
-            credentialId: input.credentialId || employee.credentialId,
-            purpose,
-            tool,
-            jobId,
-          });
-          if (dedupResponse) return dedupResponse;
-          await finishDirectCommReplySend(commReplyDedup, dedupClaim.state === "claimed" ? dedupClaim.id : null, "sent", { jobId });
-        }
-        allowed = true;
-      } finally {
-        if (threadSend.kind === "held") await threadSend.handle.finish({ sent: allowed }, { holdLease: allowed });
-      }
+      return jsonResult(
+        {
+          ok: false,
+          code: info.code,
+          error: info.code,
+          sent: false,
+          surface: info.surface,
+          message: info.messageJa,
+          nextStep: info.nextStep,
+          retryable: false,
+          nextAction: "stop",
+          needs_approval: false,
+          egress,
+          employeeId,
+          tool,
+          purpose,
+          jobId,
+        },
+        409
+      );
     }
   }
 
@@ -3417,6 +3413,25 @@ async function runGatewayInvokeInner(
       purpose,
       jobId,
     }, 400);
+  }
+
+  // H1 backstop: a conversation tool never answers accepted:true without a
+  // delivery record (every post / refusal path above returns on its own; this
+  // only catches a path that fell through without posting).
+  if (isAudienceGatedTool(toolDef) && !conversationDelivery) {
+    const info = channelNotSupportedInfo(parseConversationContext(body, principalOrgId)?.surface ?? null);
+    await appendAuditEvent({
+      orgId: orgId || employee.orgId,
+      employeeId,
+      credentialId: input.credentialId || employee.credentialId,
+      action: "comm.not_sent",
+      purpose,
+      summary: `${tool} を送信していません（配送記録なし）`,
+      metadata: { tool, jobId, code: CONVERSATION_NOT_SENT, surface: info.surface, sent: false, egress: egress?.decision ?? null },
+    });
+    return jsonResult({ ok: false, code: CONVERSATION_NOT_SENT, error: CONVERSATION_NOT_SENT, sent: false,
+      surface: info.surface, message: "メッセージは送信していません。", nextStep: info.nextStep, retryable: false,
+      nextAction: "stop", needs_approval: false, egress, employeeId, tool, purpose, jobId }, 409);
   }
 
   return jsonResult({

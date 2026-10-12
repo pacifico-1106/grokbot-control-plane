@@ -22,7 +22,7 @@ against a stale read of the thread, are stopped **before** the provider call.
    path (posted, provider error, timeout, dedup stop, egress refusal, throw);
    only the holder (org + key + lease id) can release.
 2. **thread_moved_on.** After a successful post the AI employee's post time
-   (Slack ts in µs; server time for caller-delivered surfaces) is recorded per
+   (Slack ts in µs) is recorded per
    org × employee × thread (forward-only). Before the next post, if **any AI
    employee of the same org** (this one or another; 木村 decision 4) already
    posted in the thread **after the read point** → **409 `thread_moved_on`**
@@ -117,7 +117,7 @@ Every id in `lib/comm-reply-dedup/inventory.ts` has a decision in
 | path | coverage |
 |---|---|
 | invoke.slack_post (comm.reply / comm.send / slack.post / slack.post_external, bot and posting_as=user) | leased |
-| invoke.caller_delivered (LINE / Telegram / mail / phone) | leased (recorded at server time when allowed; the lease is **held until its TTL** because the caller's delivery is not observable — pre-flag item 3; the **same job** (same employee + jobId) may reuse its own held lease within 10 min of its first post in the thread, any other job gets `thread_busy` — #293 decision 1) |
+| invoke.caller_delivered (LINE / Telegram / mail / phone) | no_live_send — **H1 (10/12):** the gateway has no delivery for these surfaces, so an allowed reply returns 409 `channel_not_supported` (`sent: false`, Japanese `nextStep`) before any lease or ledger claim; nothing is held or recorded. (Was: recorded at server time and the lease held until its TTL, although nothing was sent.) |
 | fulfill.slack_post (approved sends) | leased + recheck at fulfil |
 | fulfill.caller_delivered (approved LINE / Telegram / mail replies) | leased + recheck at fulfil (no gateway delivery today: dedup inventory says no_live_send) |
 | invoke.file_upload, rerun.attachment_upload | same reply (only after that reply passed the guard; no separate lease, decision 3) |
