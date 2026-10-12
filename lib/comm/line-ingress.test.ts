@@ -10,8 +10,10 @@ import { createHmac } from "node:crypto";
 import { createCommAccount, resetDemoCommAccounts, setCommAccountSecrets, type CommAccount } from "@/lib/comm/accounts";
 import { handleLineAccountWebhook, type NormalizedLineEvent } from "@/lib/comm/line-ingress";
 import type { OperableResult } from "@/lib/safety/hold";
+import { __resetHoldAuditThrottleForTests, __setHoldReaderForTests } from "@/lib/safety/hold";
+import { verifyConversationToken } from "@/lib/comm/conversation-token";
 
-const ENV = ["COMM_ACCOUNTS_ENABLED", "LINE_CONVERSATION_ENABLED", "NOTIFICATION_CONFIG_ENCRYPTION_KEY", "NEXT_PUBLIC_SUPABASE_URL"] as const;
+const ENV = ["COMM_ACCOUNTS_ENABLED", "LINE_CONVERSATION_ENABLED", "NOTIFICATION_CONFIG_ENCRYPTION_KEY", "NEXT_PUBLIC_SUPABASE_URL", "COMM_CONVERSATION_TOKEN_SECRET", "COMM_CONVERSATION_TOKEN_SECRET_PREVIOUS"] as const;
 const saved = Object.fromEntries(ENV.map((k) => [k, process.env[k]]));
 const ORG = "ec000000-0000-4000-8000-000000000001";
 const EMP = "ec100000-0000-4000-8000-000000000001";
@@ -30,6 +32,8 @@ beforeEach(async () => {
   process.env.LINE_CONVERSATION_ENABLED = "true";
   process.env.NOTIFICATION_CONFIG_ENCRYPTION_KEY = "k".repeat(40);
   delete process.env.NEXT_PUBLIC_SUPABASE_URL;
+  process.env.COMM_CONVERSATION_TOKEN_SECRET = "t".repeat(48);
+  delete process.env.COMM_CONVERSATION_TOKEN_SECRET_PREVIOUS;
   resetDemoCommAccounts();
   const r = await createCommAccount({ orgId: ORG, employeeId: EMP, surface: "line", externalAccountId: BOT, createdByMemberId: "m1" });
   if (!r.ok) throw new Error(r.reason);
@@ -114,7 +118,9 @@ describe("events", () => {
       orgId: ORG, employeeId: EMP, accountId: account.id, surface: "line", conversationType: "dm",
       conversationId: USER, senderId: USER, text: "こんにちは", eventKey: "01HZZZZZZZZZZZZZZZZZZZZZZ1",
       replyToken: "rt-1", receivedAt: new Date(NOW).toISOString(),
+      conversationToken: dispatched[0]?.conversationToken, conversationTokenExpiresAt: new Date(NOW + 24 * 3600_000).toISOString(),
     }]);
+    expect(typeof dispatched[0]?.conversationToken).toBe("string");
     expect(holdCalls).toEqual([{ orgId: ORG, employeeId: EMP, phase: "wake" }]);
   });
 
@@ -187,3 +193,84 @@ describe("events", () => {
     expect(dispatched.length).toBe(100);
   });
 });
+
+describe("conversation token per counterparty message (木村 10/12)", () => {
+  test("each new message gets a NEW token pinned to this org × employee × account × sender, 24 h", async () => {
+    await call(body([ev()]));
+    await call(body([ev({ webhookEventId: "01HZZZZZZZZZZZZZZZZZZZZZZ2", timestamp: NOW - 500 })]));
+    expect(dispatched.length).toBe(2);
+    const [a, b] = dispatched;
+    expect(a.conversationToken).toBeTruthy();
+    expect(a.conversationToken).not.toBe(b.conversationToken);
+    for (const e of [a, b]) {
+      const v = verifyConversationToken(e.conversationToken, { orgId: ORG, employeeId: EMP }, NOW);
+      expect(v.ok).toBe(true);
+      if (v.ok) {
+        expect(v.target).toMatchObject({ orgId: ORG, employeeId: EMP, accountId: account.id, conversationId: USER, counterpartyId: USER });
+        expect(Date.parse(v.target.expiresAt) - NOW).toBe(24 * 3600_000);
+      }
+      expect(e.conversationTokenExpiresAt).toBe(new Date(NOW + 24 * 3600_000).toISOString());
+    }
+  });
+
+  test("no token key → not woken (a wake without a token could not be answered safely); logged without the body", async () => {
+    delete process.env.COMM_CONVERSATION_TOKEN_SECRET;
+    const logs: unknown[] = [];
+    const orig = console.error;
+    console.error = (...a: unknown[]) => { logs.push(a); };
+    try {
+      expect((await call(body([ev()]))).status).toBe(200);
+    } finally {
+      console.error = orig;
+    }
+    expect(dispatched).toEqual([]);
+    expect(JSON.stringify(logs)).toContain("line_wake_token_unavailable");
+    expect(JSON.stringify(logs)).not.toContain("こんにちは");
+  });
+});
+
+describe("emergency stop / leave at wake, with the real hold check", () => {
+  test("employee on leave or stopped, or the org stopped → not woken (no token issued)", async () => {
+    const real = { ...deps() } as Record<string, unknown>;
+    delete real.checkOperable;
+    for (const [emp, org] of [["leave", null], ["stopped", null], [null, "stopped"]] as const) {
+      __setHoldReaderForTests({
+        employee: async () => ({ state: "found", orgId: ORG, holdState: emp, holdId: emp ? "h1" : null }),
+        org: async () => ({ state: "found", orgId: ORG, holdState: org, holdId: org ? "h2" : null }),
+      });
+      const raw = body([ev({ webhookEventId: `01HZZZZZZZZZZZZZZZZZZZZZ${emp ?? org}`.slice(0, 26) })]);
+      await handleLineAccountWebhook({ ref: account.webhookRef, rawBody: raw, signature: sig(raw) }, real as never);
+    }
+    __setHoldReaderForTests(null);
+    expect(dispatched).toEqual([]);
+  });
+});
+
+describe("no message body is stored (§7 decision 6)", () => {
+  test("the inbound ledger keeps the event key only; audit rows and logs never carry the text", async () => {
+    const audits: unknown[] = [];
+    const logs: unknown[] = [];
+    const { __setAuditSinkForTests } = await import("@/lib/comm/line-ingress");
+    __resetHoldAuditThrottleForTests();
+    __setAuditSinkForTests(async (e) => { audits.push(e); });
+    const origE = console.error, origW = console.warn, origL = console.log;
+    console.error = (...a: unknown[]) => { logs.push(a); };
+    console.warn = console.error;
+    console.log = console.error;
+    try {
+      hold = { ok: false, code: "employee_on_hold", holdId: "h1", kind: "leave" } as never;
+      await call(body([ev({ message: { type: "text", id: "m9", text: "秘密の本文 0901234567" } })]));
+      hold = { ok: true };
+      await call(body([ev({ webhookEventId: "01HZZZZZZZZZZZZZZZZZZZZZZ8", message: { type: "text", id: "m8", text: "秘密の本文 0901234567" } })]));
+    } finally {
+      console.error = origE; console.warn = origW; console.log = origL;
+      __setAuditSinkForTests(null);
+    }
+    const { __demoInboundEventsForTests } = await import("@/lib/comm/accounts");
+    const stored = JSON.stringify({ audits, logs, events: __demoInboundEventsForTests() });
+    expect(stored).not.toContain("秘密の本文");
+    expect(stored).not.toContain("0901234567");
+    expect(audits.length).toBeGreaterThan(0); // the suppressed wake was audited, without the body
+  });
+});
+

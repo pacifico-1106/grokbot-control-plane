@@ -20,8 +20,12 @@
  *      - emergency stop: checkOperable({phase:"wake"}) — held, unknown or error →
  *        not dispatched, audited (throttled), and never woken later (the event key
  *        is already consumed). Same rule as the Slack wake (S2 G5).
- *   6. dispatch (L-5 wires the wake + conversation token). A dispatch error is
- *      logged and does not fail the webhook.
+ *   6. a NEW conversation token for this message (org × employee × account ×
+ *      sender, 24 h; 木村 10/12). No token key → not woken (fail closed).
+ *   7. dispatch (L-5 wires the wake delivery). A dispatch error is logged and does
+ *      not fail the webhook.
+ * Sends are re-checked right before the LINE API call (lib/comm/pre-send): a stop
+ * or leave placed after the token was issued still blocks the reply.
  * No message body is stored or logged (§7 decision 6).
  */
 import { createHmac, timingSafeEqual } from "node:crypto";
@@ -31,6 +35,7 @@ import {
   recordInboundEvent,
   type CommAccount,
 } from "@/lib/comm/accounts";
+import { issueConversationToken } from "@/lib/comm/conversation-token";
 import { isLineConversationEnabled } from "@/lib/comm/flags";
 import { checkOperable, takeWakeSuppressedAuditSlot, type OperableResult } from "@/lib/safety/hold";
 
@@ -52,6 +57,9 @@ export type NormalizedLineEvent = {
   eventKey: string;
   replyToken: string | null;
   receivedAt: string;
+  /** server-signed, NEW for every counterparty message (木村 10/12); comm.reply resolves its target only from it */
+  conversationToken: string;
+  conversationTokenExpiresAt: string;
 };
 
 export type LineIngressDeps = {
@@ -149,6 +157,15 @@ async function processEvent(account: CommAccount, ev: LineEvent, d: LineIngressD
     await auditSuppressed(account, operable);
     return "done";
   }
+  const token = issueConversationToken(
+    { orgId: account.orgId, employeeId: account.employeeId, accountId: account.id, surface: "line",
+      conversationType: "dm", conversationId: sender, counterpartyId: sender },
+    now
+  );
+  if (!token.ok) {
+    console.error("line_wake_token_unavailable", { accountId: account.id, eventKey: key, reason: token.reason });
+    return "done";
+  }
   try {
     await d.dispatch({
       orgId: account.orgId,
@@ -162,6 +179,8 @@ async function processEvent(account: CommAccount, ev: LineEvent, d: LineIngressD
       eventKey: key,
       replyToken: typeof ev.replyToken === "string" ? ev.replyToken : null,
       receivedAt: new Date(now).toISOString(),
+      conversationToken: token.token,
+      conversationTokenExpiresAt: token.expiresAt,
     });
   } catch {
     console.error("line_account_dispatch_failed", { accountId: account.id, eventKey: key });
@@ -169,11 +188,18 @@ async function processEvent(account: CommAccount, ev: LineEvent, d: LineIngressD
   return "done";
 }
 
+type AuditSink = (e: Parameters<typeof import("@/lib/data/audit").appendAuditEvent>[0]) => Promise<unknown>;
+let auditSink: AuditSink | null = null;
+/** Tests only. */
+export function __setAuditSinkForTests(fn: AuditSink | null): void {
+  auditSink = fn;
+}
+
 async function auditSuppressed(account: CommAccount, r: Extract<OperableResult, { ok: false }>): Promise<void> {
   const slot = takeWakeSuppressedAuditSlot(`${account.orgId}:${account.employeeId}:${r.code}`);
   if (!slot.write) return;
   try {
-    const { appendAuditEvent } = await import("@/lib/data/audit");
+    const appendAuditEvent = auditSink ?? (await import("@/lib/data/audit")).appendAuditEvent;
     await appendAuditEvent({
       orgId: account.orgId,
       employeeId: account.employeeId,
