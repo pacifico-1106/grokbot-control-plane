@@ -11,6 +11,10 @@ import * as http2 from "node:http2";
 import * as dgram from "node:dgram";
 import * as cp from "node:child_process";
 
+// The repo has no Bun type definitions (tsc / next build); the runtime global, loosely typed.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const Bun = (globalThis as unknown as { Bun: any }).Bun;
+
 const SECRET_PATH = "services/T000/B000/probe-secret-path";
 // Gate on the channel guard itself (the attempts reader ships with it), not only the
 // #353 marker: on a runtime without it, nothing below may run (it would really connect).
@@ -31,7 +35,8 @@ test("the guard is installed (else nothing below may touch the network)", () => 
   expect(typeof (globalThis as { __STAFFPASS_NETWORK_ATTEMPTS__?: unknown }).__STAFFPASS_NETWORK_ATTEMPTS__).toBe("function");
 });
 
-describe.if(guarded)("closed channels", () => {
+// Defined only when the guard is installed (nothing here may run without it).
+if (guarded) describe("closed channels", () => {
   test("Bun.fetch to hooks.slack.com rejects and is recorded by host (no path)", async () => {
     let threw = false;
     try { await Bun.fetch(`https://hooks.slack.com/${SECRET_PATH}`); } catch { threw = true; }

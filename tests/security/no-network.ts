@@ -275,19 +275,20 @@ const cpGuarded = {
 const cpModule = () => ({ ...childProcess, ...cpGuarded, default: { ...childProcess, ...cpGuarded } });
 mock.module("node:child_process", cpModule);
 mock.module("child_process", cpModule);
-const bunGlobal = Bun as unknown as Record<string, unknown>;
-bunGlobal.spawn = guardCli(Bun.spawn);
-bunGlobal.spawnSync = guardCli(Bun.spawnSync);
+// The repo has no Bun type definitions (tsc / next build); the runtime global, loosely typed.
+const bunGlobal = (globalThis as unknown as { Bun: Record<string, unknown> }).Bun;
+bunGlobal.spawn = guardCli(bunGlobal.spawn as (...a: never[]) => unknown);
+bunGlobal.spawnSync = guardCli(bunGlobal.spawnSync as (...a: never[]) => unknown);
 
 // 3e. Bun.connect (raw TCP / TLS): loopback only; unix sockets refuse (as for net).
-const realBunConnect = Bun.connect;
+const realBunConnect = bunGlobal.connect;
 bunGlobal.connect = (opts: { hostname?: string; unix?: string }) => {
   if (opts?.unix) refuse({ path: opts.unix });
   if (!loopbackHost(opts?.hostname)) refuse({ hostname: String(opts?.hostname ?? "?") });
   return (realBunConnect as unknown as (o: unknown) => unknown)(opts);
 };
 // Bun.udpSocket: the same rule for every datagram (send / sendMany) and connect.
-const realUdpSocket = Bun.udpSocket;
+const realUdpSocket = bunGlobal.udpSocket;
 bunGlobal.udpSocket = async (opts: { connect?: { hostname?: string } } = {}) => {
   if (opts?.connect && !loopbackHost(opts.connect.hostname)) refuse({ hostname: String(opts.connect.hostname) });
   const socket = (await (realUdpSocket as unknown as (o: unknown) => Promise<Record<string, unknown>>)(opts)) as Record<string, unknown>;
