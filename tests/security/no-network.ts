@@ -6,6 +6,9 @@ import * as https from "node:https";
 import * as net from "node:net";
 import * as tls from "node:tls";
 import * as undici from "undici";
+import * as http2 from "node:http2";
+import * as dgram from "node:dgram";
+import * as childProcess from "node:child_process";
 
 // Preloaded for EVERY `bun test` in this repo (bunfig.toml) and by scripts/test-local.mjs.
 // 木村 10/12: a direct `bun test <file>` inherited the box env (a real
@@ -79,6 +82,7 @@ globalThis.fetch = ((input: unknown) => refuse(input)) as unknown as typeof fetc
 (globalThis as { __STAFFPASS_NETWORK_ATTEMPTS_RESET__?: () => void }).__STAFFPASS_NETWORK_ATTEMPTS_RESET__ = () => {
   attempted = [];
 };
+(globalThis as { __STAFFPASS_NETWORK_ATTEMPTS__?: () => string[] }).__STAFFPASS_NETWORK_ATTEMPTS__ = () => [...attempted];
 
 const httpForbidden = (target: unknown) => refuse(target);
 // Raw sockets: only loopback is allowed (a test's own local server, e.g. the
@@ -152,6 +156,157 @@ if (typeof globalThis.WebSocket === "function") {
     constructor(url: unknown) { refuse(url); }
   } as unknown as typeof WebSocket;
 }
+
+// 3. The channels #353 left open (木村 10/12). Loopback stays allowed for all of them.
+const loopbackHost = (host: unknown) => {
+  const h = String(host ?? "").replace(/^\[|\]$/g, "").toLowerCase();
+  return h === "localhost" || h === "::1" || /^127\./.test(h);
+};
+const urlHostname = (target: unknown): string => {
+  try {
+    if (typeof target === "string" || target instanceof URL) return new URL(String(target)).hostname;
+    const o = target as { hostname?: unknown; host?: unknown } | null;
+    if (o && typeof o === "object") return String(o.hostname ?? o.host ?? "");
+  } catch {
+    // fall through
+  }
+  return "";
+};
+
+// 3a. Bun.fetch is a separate, non-writable native fetch (globalThis.fetch above does
+//     not cover it). Bun's fetch honours HTTP(S)_PROXY, so every non-loopback request
+//     is routed to a loopback trap that records the HOST only (CONNECT host:port or the
+//     absolute-URL request line, path dropped) and drops the connection, so the call
+//     rejects and afterAll fails the file. curl / wget children inherit the same proxy
+//     (belt and braces for 3d).
+const trap = net.createServer((socket) => {
+  socket.once("data", (chunk) => {
+    const line = String(chunk).split("\r\n")[0] ?? "";
+    const target = line.split(" ")[1] ?? "";
+    const host = /^[a-z][a-z0-9+.-]*:\/\//i.test(target) ? hostOf(target) : target.replace(/:\d+$/, "") || "?";
+    attempted.push(host);
+    console.error(`\n[no-network] REFUSED real network call to ${host} (Bun.fetch / proxied) — mock it in the test.\n`);
+    socket.destroy();
+  });
+  socket.on("error", () => undefined);
+});
+await new Promise<void>((resolve) => trap.listen(0, "127.0.0.1", () => resolve()));
+trap.unref();
+const trapUrl = `http://127.0.0.1:${(trap.address() as { port: number }).port}`;
+for (const key of ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "ALL_PROXY", "all_proxy"]) process.env[key] = trapUrl;
+process.env.NO_PROXY = process.env.no_proxy = "localhost,127.0.0.1,::1";
+
+// 3b. node:http2 — connect to a non-loopback authority refuses. (Real functions are
+//     captured up front: mock.module updates the live namespace, so reading
+//     http2.connect at call time would call this wrapper again.)
+const realHttp2Connect = http2.connect as (...x: unknown[]) => unknown;
+const http2Connect = (authority: unknown, ...rest: unknown[]) =>
+  loopbackHost(urlHostname(authority)) ? realHttp2Connect(authority, ...rest) : refuse(authority);
+const http2Module = () => ({ ...http2, connect: http2Connect, default: { ...http2, connect: http2Connect } });
+mock.module("node:http2", http2Module);
+mock.module("http2", http2Module);
+
+// 3c. node:dgram — send / connect to a non-loopback address refuses (no address =
+//     localhost, or the socket's own connected peer, which was checked at connect).
+function guardDgram(socket: dgram.Socket): dgram.Socket {
+  const send = socket.send.bind(socket) as (...x: unknown[]) => unknown;
+  const connect = socket.connect.bind(socket) as (...x: unknown[]) => unknown;
+  (socket as unknown as { send: unknown }).send = (...args: unknown[]) => {
+    const address = args.slice(1).find((a) => typeof a === "string");
+    if (address !== undefined && !loopbackHost(address)) refuse({ hostname: address });
+    return send(...args);
+  };
+  (socket as unknown as { connect: unknown }).connect = (...args: unknown[]) => {
+    const address = typeof args[1] === "string" ? args[1] : "localhost";
+    if (!loopbackHost(address)) refuse({ hostname: address });
+    return connect(...args);
+  };
+  return socket;
+}
+const realDgramCreateSocket = dgram.createSocket as (...x: unknown[]) => dgram.Socket;
+const dgramCreateSocket = (...args: unknown[]) => guardDgram(realDgramCreateSocket(...args));
+const dgramModule = () => ({ ...dgram, createSocket: dgramCreateSocket, default: { ...dgram, createSocket: dgramCreateSocket } });
+mock.module("node:dgram", dgramModule);
+mock.module("dgram", dgramModule);
+
+// 3d. curl / wget (and other network CLIs) through child_process or Bun.spawn: any
+//     argv / shell string naming such a tool refuses unless every host it names is
+//     loopback (no host found = refuse, fail-closed). Other commands run as before.
+const NET_TOOLS = new Set(["curl", "wget", "nc", "ncat", "netcat", "telnet", "socat", "ssh", "scp", "sftp", "rsync", "ftp", "aria2c", "http", "https", "xh"]);
+function networkCliHost(parts: unknown[]): string | null {
+  const strings: string[] = [];
+  const collect = (v: unknown) => {
+    if (typeof v === "string") strings.push(v);
+    else if (Array.isArray(v)) v.forEach(collect);
+    else if (v && typeof v === "object" && Array.isArray((v as { cmd?: unknown }).cmd)) collect((v as { cmd: unknown[] }).cmd);
+  };
+  parts.forEach(collect);
+  const tokens = strings.flatMap((s) => s.split(/[\s;&|()`'"<>]+/)).filter(Boolean);
+  const at = tokens.findIndex((t) => NET_TOOLS.has(t.split("/").pop() ?? ""));
+  if (at < 0) return null;
+  const hosts: string[] = [];
+  for (const t of tokens.slice(at + 1)) {
+    if (t.startsWith("-")) continue;
+    if (/^[a-z][a-z0-9+.-]*:\/\//i.test(t)) hosts.push(urlHostname(t) || "?");
+    else {
+      const m = /^(?:[^@/\s]+@)?(\[[0-9a-f:]+\]|localhost|\d{1,3}(?:\.\d{1,3}){3}|[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,})(?::\d+)?(?:[/:]|$)/i.exec(t);
+      if (m) hosts.push(m[1]);
+    }
+  }
+  const external = hosts.find((h) => !loopbackHost(h));
+  if (external) return external;
+  return hosts.length > 0 ? null : "?";
+}
+function guardCli<T extends (...a: never[]) => unknown>(real: T): T {
+  return ((...args: unknown[]) => {
+    const host = networkCliHost(args);
+    if (host !== null) refuse({ hostname: host });
+    return (real as unknown as (...x: unknown[]) => unknown)(...args);
+  }) as unknown as T;
+}
+const cpGuarded = {
+  spawn: guardCli(childProcess.spawn),
+  spawnSync: guardCli(childProcess.spawnSync),
+  exec: guardCli(childProcess.exec),
+  execSync: guardCli(childProcess.execSync),
+  execFile: guardCli(childProcess.execFile),
+  execFileSync: guardCli(childProcess.execFileSync),
+};
+const cpModule = () => ({ ...childProcess, ...cpGuarded, default: { ...childProcess, ...cpGuarded } });
+mock.module("node:child_process", cpModule);
+mock.module("child_process", cpModule);
+const bunGlobal = Bun as unknown as Record<string, unknown>;
+bunGlobal.spawn = guardCli(Bun.spawn);
+bunGlobal.spawnSync = guardCli(Bun.spawnSync);
+
+// 3e. Bun.connect (raw TCP / TLS): loopback only; unix sockets refuse (as for net).
+const realBunConnect = Bun.connect;
+bunGlobal.connect = (opts: { hostname?: string; unix?: string }) => {
+  if (opts?.unix) refuse({ path: opts.unix });
+  if (!loopbackHost(opts?.hostname)) refuse({ hostname: String(opts?.hostname ?? "?") });
+  return (realBunConnect as unknown as (o: unknown) => unknown)(opts);
+};
+// Bun.udpSocket: the same rule for every datagram (send / sendMany) and connect.
+const realUdpSocket = Bun.udpSocket;
+bunGlobal.udpSocket = async (opts: { connect?: { hostname?: string } } = {}) => {
+  if (opts?.connect && !loopbackHost(opts.connect.hostname)) refuse({ hostname: String(opts.connect.hostname) });
+  const socket = (await (realUdpSocket as unknown as (o: unknown) => Promise<Record<string, unknown>>)(opts)) as Record<string, unknown>;
+  const send = (socket.send as (...x: unknown[]) => unknown).bind(socket);
+  socket.send = (data: unknown, port?: unknown, address?: unknown) => {
+    if (address !== undefined && !loopbackHost(address)) refuse({ hostname: String(address) });
+    return port === undefined ? send(data) : send(data, port, address);
+  };
+  if (typeof socket.sendMany === "function") {
+    const sendMany = (socket.sendMany as (...x: unknown[]) => unknown).bind(socket);
+    socket.sendMany = (packets: unknown[]) => {
+      if (!opts?.connect) {
+        for (let i = 2; i < packets.length; i += 3) if (!loopbackHost(packets[i])) refuse({ hostname: String(packets[i]) });
+      }
+      return sendMany(packets);
+    };
+  }
+  return socket;
+};
 
 afterAll(() => {
   expect(attempted).toEqual([]);

@@ -24,7 +24,7 @@ const refusedSync = (fn: () => unknown, host: string) => {
   expect(String(err)).toContain(`network_forbidden_in_local_tests: ${host}`);
   expect(String(err)).not.toContain("probe-secret-path");
 };
-const curlOk = cp.spawnSync("sh", ["-c", "command -v curl"], { encoding: "utf8" }).status === 0;
+const curlOk = Boolean(Bun.which("curl"));
 
 test("the guard is installed (else nothing below may touch the network)", () => {
   expect(guarded).toBe(true);

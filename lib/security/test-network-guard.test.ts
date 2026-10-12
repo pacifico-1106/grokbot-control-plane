@@ -104,7 +104,7 @@ describe("test harness: no outbound notify / network from any bun test run", () 
       timeout: 60_000,
     });
     const out = `${r.stdout}\n${r.stderr}`;
-    expect(out).toMatch(/\b10 pass\b/);
+    expect(out).toMatch(/\b11 pass\b/);
     expect(out).toMatch(/\b0 fail\b/);
     expect(r.status).toBe(0);
     expect(out).not.toContain("probe-secret-path");
