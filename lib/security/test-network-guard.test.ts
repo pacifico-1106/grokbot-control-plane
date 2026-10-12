@@ -95,4 +95,18 @@ describe("test harness: no outbound notify / network from any bun test run", () 
     expect(r.status).not.toBe(0);
     expect(out).toContain("REFUSED real network call to hooks.slack.com");
   });
+
+  test("the 5 channels #353 left open (Bun.fetch, node:http2, node:dgram, curl / wget via child_process or Bun.spawn, Bun.connect / Bun.udpSocket) refuse a real host and allow loopback", () => {
+    const r = spawnSync(process.execPath, ["test", "./tests/fixtures/network-guard-channels.fixture.ts"], {
+      cwd: ROOT,
+      env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME || tmpdir(), BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0", ...FAKE_ENV } as unknown as NodeJS.ProcessEnv,
+      encoding: "utf8",
+      timeout: 60_000,
+    });
+    const out = `${r.stdout}\n${r.stderr}`;
+    expect(out).toMatch(/\b10 pass\b/);
+    expect(out).toMatch(/\b0 fail\b/);
+    expect(r.status).toBe(0);
+    expect(out).not.toContain("probe-secret-path");
+  });
 });
