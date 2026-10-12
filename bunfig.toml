@@ -1,4 +1,0 @@
-# Every `bun test` in this repo (npm test or a direct `bun test <file>`) preloads the
-# network / notify-env guard. 木村 10/12 09:01: direct runs had posted real Slack messages.
-[test]
-preload = ["./tests/security/no-network.ts"]

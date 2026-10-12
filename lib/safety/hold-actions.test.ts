@@ -29,7 +29,16 @@ const web = (m: ReturnType<typeof owner>, authTime: string | null = fresh()): Ho
 
 let sent: Array<{ to: "tenant" | "ops"; n: HoldNotice }> = [];
 let savedFlags: Record<string, string | undefined> = {};
+// This file triggers stop failures; the Slack post must hit this mock, never the network
+// (木村 10/12 09:01 — a direct `bun test` once posted for real).
+let slackCalls: string[] = [];
 beforeEach(async () => {
+  slackCalls = [];
+  notify.__setHoldSlackFetchForTests((async (url: string) => {
+    slackCalls.push(String(url));
+    return new Response("ok", { status: 200 });
+  }) as unknown as typeof fetch);
+  notify.__resetHoldSlackThrottleForTests();
   savedFlags = { E: process.env.EMPLOYEE_HOLD_ENABLED, O: process.env.ORG_HOLD_ENABLED };
   process.env.EMPLOYEE_HOLD_ENABLED = "true";
   delete process.env.ORG_HOLD_ENABLED;
@@ -45,6 +54,8 @@ beforeEach(async () => {
   await writeDesignatedAdminMemberIds(ORG, ["mem_2"]); // two eligible approvers: owner + designated admin
 });
 afterEach(async () => {
+  notify.__setHoldSlackFetchForTests(null);
+  notify.__resetHoldSlackThrottleForTests();
   for (const [k, env] of [["E", "EMPLOYEE_HOLD_ENABLED"], ["O", "ORG_HOLD_ENABLED"]] as const) {
     if (savedFlags[k] === undefined) delete process.env[env]; else process.env[env] = savedFlags[k];
   }
@@ -155,6 +166,20 @@ describe("stop never fails silently (40P01 / 40001 retry, then ops alert)", () =
     // jitter: not all the same per step
     expect(new Set(waits.filter((_, i) => i % 4 === 3)).size).toBeGreaterThan(1);
     actions.__setHoldSleepForTests(async () => undefined);
+  });
+  test("the stop-failure Slack post goes through this file's own fetch mock (never the network)", async () => {
+    const prev = process.env.LP_HANDOFF_NOTIFY_SLACK_WEBHOOK;
+    process.env.LP_HANDOFF_NOTIFY_SLACK_WEBHOOK = "https://hooks.slack.test/T/B/hold-actions";
+    notify.__setHoldSlackRuntimeForTests("production");
+    try {
+      store.__setHoldStoreForTests(flaky(["40001", "40001", "40001", "40001", "40001"]));
+      await actions.startHold({ orgId: ORG, employeeId: EMP, actor: web(owner()) });
+      expect(slackCalls).toEqual(["https://hooks.slack.test/T/B/hold-actions"]);
+    } finally {
+      notify.__setHoldSlackRuntimeForTests(null);
+      if (prev === undefined) delete process.env.LP_HANDOFF_NOTIFY_SLACK_WEBHOOK;
+      else process.env.LP_HANDOFF_NOTIFY_SLACK_WEBHOOK = prev;
+    }
   });
   test("an unexpected error is not retried but still alerts ops", async () => {
     const s = flaky(["boom"]);
