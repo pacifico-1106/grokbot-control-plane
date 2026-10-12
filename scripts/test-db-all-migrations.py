@@ -138,6 +138,9 @@ ADDITIVE = [
      " and to_regprocedure('public.release_employee_hold(uuid,uuid,text,jsonb,timestamptz)') is null"
      " and not exists (select 1 from information_schema.columns where table_schema = 'public'"
      " and table_name in ('employees', 'orgs') and column_name in ('hold_state', 'hold_id'))"),
+    # LINE PoC per-employee accounts (C5) + link-code limits (H8).
+    ("20261013200000_", "tests/security/db-employee-comm-accounts.sql",
+     ("employee_comm_accounts", "employee_comm_account_secrets", "comm_inbound_events", "comm_link_code_failures", "comm_link_code_locks")),
     ("20261010200000_", "tests/security/db-mcp-oauth.sql", ("oauth_clients", "oauth_authorization_requests", "oauth_grants",
      "oauth_authorization_codes", "oauth_access_tokens", "oauth_refresh_tokens", "oauth_rate_limits")),
 ]
