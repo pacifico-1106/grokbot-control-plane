@@ -2332,7 +2332,10 @@ async function fulfillApprovedAdminCore(
     // 木村 #255 second round: a settings-type tool succeeded → retry-cap reset
     // marker (flag + the Slack-only allow-list are checked inside, 木村 fourth
     // round 3; best effort, never changes the result).
-    if (fulfillment.ok) {
+    // H5: setBotToken can now only disable (the token is saved on the screen,
+    // which records its own reset) — a disable is no signal, as on the dashboard.
+    const disableOnly = tool === "setup.slackAdapter.setBotToken" && args.enabled === false;
+    if (fulfillment.ok && !disableOnly) {
       await recordSetupToolSucceeded({ orgId: approval.orgId, tool, source: "admin_fulfillment", approvalId: approval.id })
         .catch(() => undefined);
     }

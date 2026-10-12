@@ -547,9 +547,9 @@ HAVING COUNT(*) > 1;
 | 項目 | 内容 | 設定方法 |
 |------|------|---------|
 | 投票者バインディング | 野木の Slack ID → 野木の memberId | `approvalWorkflow.bindVoter` (always_human) |
-| 承認チャンネル | 内部チャンネル (Slack Connect 禁止) | `setup.lineApproval.upsert` or ダッシュボード |
+| 承認チャンネル | 内部チャンネル (Slack Connect 禁止) | ダッシュボード（秘密の値はテナントが入力。`setup.lineApproval.upsert` は秘密以外のみ） |
 | employee.approverUserIds | 野木の userId | `policy.patch` |
-| Slack Bot Token | Space Tree ワークスペース用 | `setup.slackAdapter.setBotToken` |
+| Slack Bot Token | Space Tree ワークスペース用 | ダッシュボード「チャンネルに書き込む（会社のBot）」（`setup.slackAdapter.setBotToken` はトークンを受け取らない） |
 
 **always_human ステップ**:
 - `approvalWorkflow.bindVoter` (組織オーナー承認必須)
@@ -572,7 +572,7 @@ HAVING COUNT(*) > 1;
 | 投票者バインディング (上原) | 上原の Slack ID → 上原の memberId | `approvalWorkflow.bindVoter` (always_human) |
 | 投票者バインディング (仲田) | 仲田の Slack ID → 仲田の memberId | `approvalWorkflow.bindVoter` (always_human) |
 | 承認チャンネル | **内部チャンネルのみ** | ダッシュボードで登録 (Slack Connect 自動拒否) |
-| Slack Bot Token | みらい社中ワークスペース用 | `setup.slackAdapter.setBotToken` |
+| Slack Bot Token | みらい社中ワークスペース用 | ダッシュボード「チャンネルに書き込む（会社のBot）」（`setup.slackAdapter.setBotToken` はトークンを受け取らない） |
 
 **Slack Connect 共有チャンネルのブロック**:
 - 登録時に `conversations.info` で `is_ext_shared` / `is_shared` / `is_pending_ext_shared` をチェック
