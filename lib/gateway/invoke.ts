@@ -106,7 +106,7 @@ import {
   legacySnapshotAttachmentBlock,
 } from "@/lib/approvals/approved-rerun-attachment";
 import { isDemoMode } from "@/lib/mode";
-import { resolveSlackUserRecipient, slackUserIdInChannelField } from "@/lib/slack/u-recipient-dm-route";
+import { resolveChannelMismatchToSameDm, resolveSlackUserRecipient, slackUserIdInChannelField } from "@/lib/slack/u-recipient-dm-route";
 import { isSlackUToDmSendEnabled } from "@/lib/slack/dm-autoroute-flags";
 import { evaluateAllowedAccountsForBrowser } from "@/lib/employees/allowed-accounts";
 import { evaluateSpend } from "@/lib/spend-gate";
@@ -988,7 +988,27 @@ async function runGatewayInvokeInner(
   // #351 follow-up: two channel fields naming different Slack channels is
   // ambiguous (which one would be posted to?) — refused before anything is read,
   // queued or posted. Field names only are returned / audited, never the ids.
-  const channelMismatch = conversationChannelMismatch(body);
+  // #357 fix (木村 10/12): compared AFTER U→D resolution — on a DM wake (D…) a U…
+  // of that same DM's counterparty, resolved and re-verified by Item C's own
+  // resolver, is the same destination (main delivered it to the D…). Anything that
+  // cannot be resolved that way (flag OFF, im:write missing, lookup failure, a
+  // different person / channel) stays refused.
+  let channelMismatch = conversationChannelMismatch(body);
+  let mismatchResolution: string | undefined;
+  if (channelMismatch && isAudienceGatedTool(toolDef)) {
+    const same = await resolveChannelMismatchToSameDm({
+      orgId: principalOrgId,
+      employee,
+      body,
+      values: channelMismatch.values,
+    });
+    if (same.kind === "same") {
+      body = same.body;
+      channelMismatch = null;
+    } else {
+      mismatchResolution = same.reason;
+    }
+  }
   if (channelMismatch) {
     await appendAuditEvent({
       orgId: principalOrgId,
@@ -997,7 +1017,7 @@ async function runGatewayInvokeInner(
       action: "gateway.conversation_channel_mismatch",
       purpose,
       summary: `${tool} を送信先チャンネルの不一致で拒否（何も送信していません）`,
-      metadata: { tool, jobId, code: "conversation_channel_mismatch", fields: channelMismatch.fields, sent: false },
+      metadata: { tool, jobId, code: "conversation_channel_mismatch", fields: channelMismatch.fields, resolution: mismatchResolution ?? null, sent: false },
     }).catch(() => undefined);
     return jsonResult(
       {
