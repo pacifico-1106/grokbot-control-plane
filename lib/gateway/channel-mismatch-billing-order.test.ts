@@ -216,24 +216,6 @@ function expectMismatch(r: Awaited<ReturnType<typeof invoke>>, ids: string[]) {
   expect(raw).not.toContain(USER_TOKEN);
 }
 
-async function dmWakeFor(u: string): Promise<string> {
-  const r = await invoke(sendTo(u));
-  expect(r.body.ok).toBe(true);
-  const d = dmFor(u);
-  expect((await getSlackImEmployeeRoute(ORG, d))?.counterpartSlackUserId).toBe(u);
-  calls = [];
-  return d;
-}
-function onDmWake(d: string, args: Record<string, unknown>): GatewayInvokeRequest {
-  return {
-    tool: "comm.reply",
-    purpose: "comm.internal",
-    jobId: jid("wake"),
-    conversation: { surface: "slack", slackChannelId: d },
-    args: { text: TEXT, ...args },
-  } as GatewayInvokeRequest;
-}
-
 describe("billing gate first: a refusal means no Slack call and nothing sent", () => {
   test("same-person U… on a D… wake while billing refuses → refused with NO Slack call (no auth.test / users.info / conversations.open), nothing sent", async () => {
     const u = await party("internal");
