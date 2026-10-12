@@ -42,8 +42,12 @@ export type ConversationTarget = {
   conversationId: string;
   counterpartyId: string;
   expiresAt: string;
+  /** L-5: the inbound event's replyToken, pinned by the server at wake (never from the AI); null if none */
+  replyToken: string | null;
+  issuedAt: string;
 };
-type Payload = { v: 1; org: string; emp: string; acct: string; sf: ConversationSurface; ct: "dm" | "group"; cid: string; cp: string; iat: number; exp: number; jti: string };
+type Payload = { v: 1; org: string; emp: string; acct: string; sf: ConversationSurface; ct: "dm" | "group"; cid: string; cp: string; iat: number; exp: number; jti: string; rt?: string };
+const REPLY_TOKEN_RE = /^[A-Za-z0-9_-]{1,256}$/;
 
 function keys(): { current: string; previous: string | null } | null {
   const current = process.env.COMM_CONVERSATION_TOKEN_SECRET?.trim() || "";
@@ -57,7 +61,7 @@ function sign(key: string, payloadB64: string): Buffer {
 }
 
 export function issueConversationToken(
-  input: Omit<ConversationTarget, "expiresAt"> & { ttlSeconds?: number },
+  input: Omit<ConversationTarget, "expiresAt" | "replyToken" | "issuedAt"> & { ttlSeconds?: number; replyToken?: string | null },
   nowMs: number = Date.now()
 ): { ok: true; token: string; expiresAt: string } | { ok: false; reason: string } {
   const k = keys();
@@ -71,6 +75,7 @@ export function issueConversationToken(
   }
   if (input.conversationType !== "dm") return { ok: false, reason: "invalid_conversation" };
   if (input.conversationId !== input.counterpartyId) return { ok: false, reason: "dm_counterparty_mismatch" };
+  if (input.replyToken !== undefined && input.replyToken !== null && !REPLY_TOKEN_RE.test(String(input.replyToken))) return { ok: false, reason: "invalid_reply_token" };
   const ttl = Math.min(
     Math.max(1, Math.floor(Number(input.ttlSeconds ?? CONVERSATION_TOKEN_DEFAULT_TTL_SECONDS) || CONVERSATION_TOKEN_DEFAULT_TTL_SECONDS)),
     CONVERSATION_TOKEN_MAX_TTL_SECONDS
@@ -80,6 +85,7 @@ export function issueConversationToken(
     v: 1, org: input.orgId, emp: input.employeeId, acct: input.accountId, sf: input.surface,
     ct: input.conversationType, cid: input.conversationId, cp: input.counterpartyId,
     iat, exp: iat + ttl, jti: randomBytes(9).toString("base64url"),
+    ...(input.replyToken ? { rt: input.replyToken } : {}),
   };
   const p = Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
   return { ok: true, token: `spc1.${p}.${sign(k.current, p).toString("base64url")}`, expiresAt: new Date(payload.exp * 1000).toISOString() };
@@ -109,7 +115,8 @@ export function verifyConversationToken(
   if (!p || typeof p !== "object" || Array.isArray(p) || p.v !== 1 || p.sf !== "line" || p.ct !== "dm"
       || typeof p.exp !== "number" || typeof p.iat !== "number" || !Number.isFinite(p.exp) || !Number.isFinite(p.iat)
       || typeof p.org !== "string" || typeof p.emp !== "string"
-      || !LINE_USER_RE.test(String(p.cp)) || p.cid !== p.cp || !UUID_RE.test(String(p.acct))) return invalid;
+      || !LINE_USER_RE.test(String(p.cp)) || p.cid !== p.cp || !UUID_RE.test(String(p.acct))
+      || (p.rt !== undefined && (typeof p.rt !== "string" || !REPLY_TOKEN_RE.test(p.rt)))) return invalid;
   // 木村 10/12 [LOW]: the lifetime is checked on verify too, not only capped at issue —
   // a validly signed token can never live longer than 7 days or be issued in the future.
   if (p.exp <= p.iat || p.exp - p.iat > CONVERSATION_TOKEN_MAX_TTL_SECONDS || p.iat * 1000 > nowMs + IAT_SKEW_MS) return invalid;
@@ -119,7 +126,8 @@ export function verifyConversationToken(
   return {
     ok: true,
     target: { orgId: p.org, employeeId: p.emp, accountId: p.acct, surface: p.sf, conversationType: p.ct,
-      conversationId: p.cid, counterpartyId: p.cp, expiresAt: new Date(p.exp * 1000).toISOString() },
+      conversationId: p.cid, counterpartyId: p.cp, expiresAt: new Date(p.exp * 1000).toISOString(),
+      replyToken: p.rt ?? null, issuedAt: new Date(p.iat * 1000).toISOString() },
   };
 }
 

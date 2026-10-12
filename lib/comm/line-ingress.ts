@@ -159,7 +159,9 @@ async function processEvent(account: CommAccount, ev: LineEvent, d: LineIngressD
   }
   const token = issueConversationToken(
     { orgId: account.orgId, employeeId: account.employeeId, accountId: account.id, surface: "line",
-      conversationType: "dm", conversationId: sender, counterpartyId: sender },
+      conversationType: "dm", conversationId: sender, counterpartyId: sender,
+      // L-5: pinned so the send path can use the free Reply without trusting the AI
+      replyToken: typeof ev.replyToken === "string" && /^[A-Za-z0-9_-]{1,256}$/.test(ev.replyToken) ? ev.replyToken : null },
     now
   );
   if (!token.ok) {
