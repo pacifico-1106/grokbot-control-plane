@@ -384,3 +384,8 @@ export async function getCommAccountForSend(orgId: string, accountId: string): P
   void _ref;
   return { ...rest, webhookRef: "" };
 }
+
+/** Tests only: the demo inbound-event ledger (keys only). */
+export function __demoInboundEventsForTests(): string[] {
+  return [...demo.events];
+}

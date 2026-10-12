@@ -9,7 +9,8 @@
 -- postback whose employee cannot be read.
 -- Columns: org, employee and ref only. NO secrets: the credentials table is only tested
 -- for existence (true / false); config (destinationId, allowedUserIds) is not selected.
--- Expected for スペースツリー: one row for 稲盛 with resolves_under_new_route = true.
+-- Production (木村 10/12): 0 rows. There are no LINE approval refs in production, and 稲盛
+-- (スペースツリー) is Slack-only. A row here would be a new LINE channel added since.
 begin transaction read only;
 set local statement_timeout = '15s';
 
