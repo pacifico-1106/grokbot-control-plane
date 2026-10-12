@@ -48,7 +48,7 @@ describe("conversation token (H2–H4)", () => {
     const t = issue();
     expect(t).toMatch(/^spc1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]{43}$/);
     const v = verifyConversationToken(t, who, NOW + 1000);
-    expect(v).toEqual({ ok: true, target: { ...base, expiresAt: new Date(NOW + 24 * 3600_000).toISOString() } });
+    expect(v).toEqual({ ok: true, target: { ...base, expiresAt: new Date(NOW + 24 * 3600_000).toISOString(), replyToken: null, issuedAt: new Date(Math.floor(NOW / 1000) * 1000).toISOString() } });
   });
 
   test("a token is only good for the org AND employee whose credential presents it", () => {
@@ -139,7 +139,7 @@ describe("resolveConversationTarget: AI arguments never pick the destination (H2
     const r = resolveConversationTarget({ token: issue(), args: { audience: "internal", internal: true }, ...who }, NOW);
     expect(r.ok).toBe(true);
     if (r.ok) expect(Object.keys(r.target).sort()).toEqual(
-      ["accountId", "conversationId", "conversationType", "counterpartyId", "employeeId", "expiresAt", "orgId", "surface"]
+      ["accountId", "conversationId", "conversationType", "counterpartyId", "employeeId", "expiresAt", "issuedAt", "orgId", "replyToken", "surface"]
     );
   });
 
@@ -184,5 +184,29 @@ describe("resolveConversationTarget: AI arguments never pick the destination (H2
     // echoing the pinned id under any of these names is harmless; unrelated names are ignored
     expect(resolveConversationTarget({ token: t, args: { lineUserId: USER, recipient: USER, to: USER }, ...who }, NOW).ok).toBe(true);
     expect(resolveConversationTarget({ token: t, args: { text: OTHER, subject: "x", totalCount: 3 }, ...who }, NOW).ok).toBe(true);
+  });
+});
+
+describe("L-5: the inbound replyToken is pinned in the token (never taken from the AI)", () => {
+  test("issue with replyToken → verify returns it with the issue time; bad replyToken refused at issue", () => {
+    process.env.COMM_CONVERSATION_TOKEN_SECRET = "s".repeat(40);
+    const base = { orgId: "ec000000-0000-4000-8000-000000000001", employeeId: "ec100000-0000-4000-8000-000000000001", accountId: "ec200000-0000-4000-8000-000000000001", surface: "line" as const, conversationType: "dm" as const, conversationId: "U" + "a".repeat(32), counterpartyId: "U" + "a".repeat(32) };
+    const t = issueConversationToken({ ...base, replyToken: "abcDEF0123456789" }, 1_800_000_000_000);
+    expect(t.ok).toBe(true);
+    if (!t.ok) return;
+    const v = verifyConversationToken(t.token, { orgId: base.orgId, employeeId: base.employeeId }, 1_800_000_001_000);
+    expect(v.ok).toBe(true);
+    if (v.ok) {
+      expect(v.target.replyToken).toBe("abcDEF0123456789");
+      expect(v.target.issuedAt).toBe(new Date(1_800_000_000_000).toISOString());
+    }
+    const none = issueConversationToken(base, 1_800_000_000_000);
+    if (none.ok) {
+      const v2 = verifyConversationToken(none.token, { orgId: base.orgId, employeeId: base.employeeId }, 1_800_000_001_000);
+      expect(v2.ok && v2.target.replyToken).toBe(null);
+    }
+    for (const bad of ["", "a b", "x".repeat(257), "<script>"]) {
+      expect(issueConversationToken({ ...base, replyToken: bad }, 1_800_000_000_000)).toEqual({ ok: false, reason: "invalid_reply_token" });
+    }
   });
 });
