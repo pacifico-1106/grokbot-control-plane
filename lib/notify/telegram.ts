@@ -1,5 +1,6 @@
 import { approverNotSentLineJa } from "@/lib/approvals/not-sent";
 import { approverRequirementCardLinesJa } from "@/lib/approver-authority/card";
+import { showHoldStopButton } from "@/lib/safety/hold-config";
 import { cardApprovalReasonsLine, cardDetectedTopicsLine } from "@/lib/approvals/approval-reasons";
 import { attachmentCardLine, readCardAttachment, withoutAttachmentSummaryLine } from "@/lib/approvals/attachment-card";
 import {
@@ -266,7 +267,7 @@ export async function sendApprovalToTelegramChannel(
           { text: "✅ 承認", callback_data: `a:${approval.telegramRef}` },
           { text: "❌ 却下", callback_data: `r:${approval.telegramRef}` },
           { text: "✏️ 修正", callback_data: `e:${approval.telegramRef}` },
-        ]],
+        ], ...holdStopTelegramRow(approval)],
       },
     },
     target.token
@@ -463,6 +464,7 @@ export async function sendApprovalToTelegram(
           { text: "❌ 却下", callback_data: `r:${approval.telegramRef}` },
           { text: "✏️ 修正", callback_data: `e:${approval.telegramRef}` },
         ],
+        ...holdStopTelegramRow(approval),
       ],
     },
   });
@@ -615,4 +617,9 @@ export async function sendTelegramText(
   return sent.ok
     ? { ok: true, ...(Number.isSafeInteger(messageId) ? { messageId } : {}) }
     : { ok: false, error: sent.error };
+}
+
+/** S3: 「緊急停止」 row (stop only — release is web-only). */
+function holdStopTelegramRow(approval: ApprovalRequest): Array<Array<{ text: string; callback_data: string }>> {
+  return showHoldStopButton(approval) ? [[{ text: "⛔ 緊急停止", callback_data: `s:${approval.telegramRef}` }]] : [];
 }

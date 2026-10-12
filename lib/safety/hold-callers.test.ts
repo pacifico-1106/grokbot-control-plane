@@ -32,6 +32,11 @@ export const PINNED: Record<string, string[]> = {
   "runW2FulfillRetry(": ["lib/stuck-watch/admin-handlers.ts", "lib/stuck-watch/w2-unfulfilled.ts"],
   "checkSubscriptionPrincipal(": ["lib/mcp-events/service.ts"],
   "handleTokenRequest(": ["app/api/oauth/token/route.ts"],
+  // S3: stop / release are reachable ONLY from human-session routes and the inbox stop button
+  // (all refuse AI credentials first). An MCP tool or an AI path importing these fails here.
+  "startHold(": ["app/api/admin/holds/stop/route.ts", "app/api/holds/stop/route.ts", "lib/safety/hold-inbox.ts"],
+  "requestHoldRelease(": ["app/api/holds/release/request/route.ts"],
+  "approveHoldRelease(": ["app/api/holds/release/approve/route.ts"],
 };
 
 /** checkpoint file → the hold call it must contain (the gate itself). */
@@ -77,6 +82,9 @@ const DEFINED_IN: Record<string, string[]> = {
   runW2FulfillRetry: ["lib/stuck-watch/w2-unfulfilled"],
   checkSubscriptionPrincipal: ["lib/mcp-events/principal"],
   handleTokenRequest: ["lib/mcp-oauth/token-endpoint"],
+  startHold: ["lib/safety/hold-actions"],
+  requestHoldRelease: ["lib/safety/hold-actions"],
+  approveHoldRelease: ["lib/safety/hold-actions"],
 };
 
 const stripExt = (p: string) => p.replace(/\.(tsx?|mjs|js)$/, "").replace(/\/index$/, "/index");

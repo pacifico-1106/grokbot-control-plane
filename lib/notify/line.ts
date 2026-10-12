@@ -1,5 +1,6 @@
 import { approverNotSentLineJa } from "@/lib/approvals/not-sent";
 import { approverRequirementCardLinesJa } from "@/lib/approver-authority/card";
+import { showHoldStopButton } from "@/lib/safety/hold-config";
 import { cardApprovalReasonsLine, cardDetectedTopicsLine } from "@/lib/approvals/approval-reasons";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { attachmentCardLine, readCardAttachment, withoutAttachmentSummaryLine } from "@/lib/approvals/attachment-card";
@@ -127,6 +128,9 @@ export async function sendApprovalToLineChannel(
             { type: "button", style: "primary", action: { type: "postback", label: "承認", data: `a:${approval.telegramRef}`, displayText: "承認" } },
             { type: "button", action: { type: "postback", label: "却下", data: `r:${approval.telegramRef}`, displayText: "却下" } },
             { type: "button", action: { type: "postback", label: "修正依頼", data: `e:${approval.telegramRef}`, displayText: "修正依頼" } },
+            ...(showHoldStopButton(approval)
+              ? [{ type: "button", style: "secondary", action: { type: "postback", label: "緊急停止", data: `s:${approval.telegramRef}`, displayText: "緊急停止" } }]
+              : []),
           ],
         },
       },
