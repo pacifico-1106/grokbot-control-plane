@@ -9,6 +9,7 @@
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const ROOT = process.cwd();
@@ -64,11 +65,12 @@ describe("test harness: no outbound notify / network from any bun test run", () 
   });
 
   test("a direct `bun test <file>` with notify / credential env set: env deleted, hooks.slack.com and every other path refused", () => {
-    const r = spawnSync(process.execPath, ["test", "./tests/fixtures/network-guard-probe.test.ts"], {
+    const r = spawnSync(process.execPath, ["test", "./tests/fixtures/network-guard-probe.fixture.ts"], {
       cwd: ROOT,
       env: {
         PATH: process.env.PATH ?? "",
-        HOME: process.env.HOME ?? "",
+        HOME: process.env.HOME || tmpdir(),
+        BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0",
         ...FAKE_ENV,
         PROBE_EXPECT_SCRUBBED: Object.keys(FAKE_ENV).join(","),
       } as unknown as NodeJS.ProcessEnv,
@@ -83,9 +85,9 @@ describe("test harness: no outbound notify / network from any bun test run", () 
   });
 
   test("an un-mocked network call fails the file loudly even if the code under test swallows the error", () => {
-    const r = spawnSync(process.execPath, ["test", "./tests/fixtures/network-guard-swallowed.test.ts"], {
+    const r = spawnSync(process.execPath, ["test", "./tests/fixtures/network-guard-swallowed.fixture.ts"], {
       cwd: ROOT,
-      env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "" } as unknown as NodeJS.ProcessEnv,
+      env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME || tmpdir(), BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0" } as unknown as NodeJS.ProcessEnv,
       encoding: "utf8",
       timeout: 60_000,
     });

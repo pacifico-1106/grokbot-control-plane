@@ -55,3 +55,33 @@ test("probe: notify / credential env stripped and every network path refused", a
   // the probe triggered these on purpose; don't fail the file in the guard's afterAll
   (globalThis as { __STAFFPASS_NETWORK_ATTEMPTS_RESET__?: () => void }).__STAFFPASS_NETWORK_ATTEMPTS_RESET__?.();
 });
+
+test("probe: a raw socket to the test's own loopback server is allowed; a lookup answering a public IP is refused", async () => {
+  const net = await import("node:net");
+  const server = net.createServer((s) => s.end("ok"));
+  await new Promise<void>((ok) => server.listen(0, "127.0.0.1", ok));
+  const { port } = server.address() as { port: number };
+  try {
+    const got = await new Promise<string>((ok, fail) => {
+      const sock = net.connect({ host: "127.0.0.1", port });
+      let buf = "";
+      sock.on("data", (d) => (buf += d));
+      sock.on("end", () => ok(buf));
+      sock.on("error", fail);
+    });
+    expect(got).toBe("ok");
+    const refused = await new Promise<string>((ok) => {
+      const sock = net.connect({
+        host: "hooks.slack.com",
+        port,
+        lookup: ((_h: string, _o: unknown, cb: (e: unknown, a: string, f: number) => void) => cb(null, "203.0.113.7", 4)) as never,
+      });
+      sock.on("error", (e) => ok(String((e as Error).message)));
+      sock.on("connect", () => ok("CONNECTED"));
+    });
+    expect(refused).toContain("network_forbidden_in_local_tests: hooks.slack.com");
+  } finally {
+    server.close();
+  }
+  (globalThis as { __STAFFPASS_NETWORK_ATTEMPTS_RESET__?: () => void }).__STAFFPASS_NETWORK_ATTEMPTS_RESET__?.();
+});
