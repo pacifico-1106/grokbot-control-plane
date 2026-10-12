@@ -7,9 +7,10 @@
  * LINE user counts as "internal".
  *
  * ON:
- * - The gate runs BEFORE the code is looked up: a locked sender (5 wrong in
- *   15 min → 1 h) or a locked channel (30 wrong in 1 h → 1 h, ops alerted once)
- *   is refused even with the right code, and that code stays unused.
+ * - ONE reservation BEFORE the code is looked up (#354, 木村 10/12): a locked sender
+ *   (5 attempts in 15 min → 1 h) or a locked channel (30 in 1 h → 1 h, ops alerted
+ *   once; the 3rd lock in 24 h also tells the tenant's approvers) is refused even
+ *   with the right code, and that code stays unused. A right code gives its slot back.
  * - Every refusal gets the same single reply (it never tells whether a code exists).
  * - Guard storage unavailable → refused (fail closed), not counted.
  * - The account key is the approval channel ("line_channel:<channelId>"); the
@@ -20,9 +21,8 @@ import { isLineConversationEnabled } from "@/lib/comm/flags";
 import {
   supabaseLinkCodeGuardBackend,
   withLinkCodeGuard,
-  type LinkCodeGate,
   type LinkCodeGuardBackend,
-  type LinkCodeRecord,
+  type LinkCodeReservation,
 } from "@/lib/comm/link-code-guard";
 import { consumeLineLinkCode } from "@/lib/line/link-code";
 import { isDemoMode } from "@/lib/mode";
@@ -40,38 +40,53 @@ export type RedeemLineLinkCodeResult =
   | { ok: true; memberId: string; issuedByUserId: string | null }
   | { ok: false; reason: string; replyJa: string | null };
 
-// ---- demo backend (same thresholds as the SQL functions) ----
+// ---- demo backend (same semantics as comm_link_code_reserve_attempt) ----
 const SENDER_WINDOW_MS = 15 * 60_000, SENDER_MAX = 5;
 const ACCOUNT_WINDOW_MS = 60 * 60_000, ACCOUNT_MAX = 30;
-const LOCK_MS = 60 * 60_000;
-const demoFailures = new Map<string, number[]>();
+const LOCK_MS = 60 * 60_000, REPEAT_WINDOW_MS = 24 * 3600_000, REPEAT_LOCKS = 3;
+type DemoSlot = { t: number; id: string };
+const demoAttempts = new Map<string, DemoSlot[]>();
 const demoLocks = new Map<string, number>();
+const demoLockEvents = new Map<string, number[]>();
+const demoEscalated = new Map<string, number>();
+let demoSeq = 0;
 function demoBackend(now: () => number = Date.now): LinkCodeGuardBackend {
   const k = (org: string, kind: string, key: string) => `${org}|${kind}|${key}`;
   const locked = (key: string) => (demoLocks.get(key) ?? 0) > now();
+  const recent = (key: string, win: number) => (demoAttempts.get(key) ?? []).filter((x) => x.t > now() - win);
   return {
-    async gate(org, acct, sender): Promise<LinkCodeGate> {
-      if (locked(k(org, "a", acct))) return "account_locked";
-      if (locked(k(org, "s", sender))) return "sender_locked";
-      return "ok";
-    },
-    async recordFailure(org, acct, sender): Promise<LinkCodeRecord> {
+    async reserve(org, acct, sender): Promise<LinkCodeReservation> {
       const t = now();
-      const push = (key: string, win: number) => {
-        const arr = (demoFailures.get(key) ?? []).filter((x) => x > t - win);
-        arr.push(t);
-        demoFailures.set(key, arr.slice(-100));
-        return arr.length;
-      };
       const ak = k(org, "a", acct), sk = k(org, "s", sender);
-      const a = push(ak, ACCOUNT_WINDOW_MS), s = push(sk, SENDER_WINDOW_MS);
-      if (a >= ACCOUNT_MAX && !locked(ak)) { demoLocks.set(ak, t + LOCK_MS); return "account_locked_new"; }
-      if (locked(ak)) return "account_locked";
-      if (s >= SENDER_MAX) { demoLocks.set(sk, t + LOCK_MS); return "sender_locked"; }
-      return "recorded";
+      if (locked(ak)) return { result: "account_locked", attemptId: null, notify: null };
+      if (locked(sk)) return { result: "sender_locked", attemptId: null, notify: null };
+      if (recent(sk, SENDER_WINDOW_MS).length >= SENDER_MAX) {
+        demoLocks.set(sk, t + LOCK_MS);
+        return { result: "sender_locked", attemptId: null, notify: null };
+      }
+      if (recent(ak, ACCOUNT_WINDOW_MS).length >= ACCOUNT_MAX) {
+        demoLocks.set(ak, t + LOCK_MS);
+        const events = [...(demoLockEvents.get(ak) ?? []).filter((x) => x > t - REPEAT_WINDOW_MS), t];
+        demoLockEvents.set(ak, events);
+        const esc = demoEscalated.get(ak);
+        if (events.length >= REPEAT_LOCKS && (esc === undefined || esc <= t - REPEAT_WINDOW_MS)) {
+          demoEscalated.set(ak, t);
+          return { result: "account_locked", attemptId: null, notify: "account_locked_repeat" };
+        }
+        return { result: "account_locked", attemptId: null, notify: "account_locked" };
+      }
+      const id = `demo-${++demoSeq}`;
+      for (const key of [ak, sk]) demoAttempts.set(key, [...recent(key, 24 * 3600_000), { t, id }].slice(-200));
+      return { result: "ok", attemptId: id, notify: null };
+    },
+    async release(org, attemptId) {
+      for (const [key, arr] of demoAttempts) if (key.startsWith(`${org}|`)) demoAttempts.set(key, arr.filter((x) => x.id !== attemptId));
     },
     async alertOps(p) {
       console.warn("comm_link_code_account_locked (demo)", { orgId: p.orgId, accountKey: p.accountKey });
+    },
+    async alertRepeat(p) {
+      console.warn("comm_link_code_account_locked_repeat (demo)", { orgId: p.orgId, accountKey: p.accountKey });
     },
   };
 }
@@ -79,7 +94,7 @@ function demoBackend(now: () => number = Date.now): LinkCodeGuardBackend {
 let backendOverride: LinkCodeGuardBackend | "none" | null = null;
 export function __setLineLinkCodeGuardBackendForTests(b: LinkCodeGuardBackend | "none" | null): void {
   backendOverride = b;
-  if (b === null) { demoFailures.clear(); demoLocks.clear(); }
+  if (b === null) { demoAttempts.clear(); demoLocks.clear(); demoLockEvents.clear(); demoEscalated.clear(); }
 }
 
 async function guardBackend(): Promise<LinkCodeGuardBackend | null> {
@@ -90,9 +105,10 @@ async function guardBackend(): Promise<LinkCodeGuardBackend | null> {
 }
 
 const UNAVAILABLE: LinkCodeGuardBackend = {
-  async gate() { throw new Error("link_code_guard_unavailable"); },
-  async recordFailure() { throw new Error("link_code_guard_unavailable"); },
+  async reserve() { throw new Error("link_code_guard_unavailable"); },
+  async release() { throw new Error("link_code_guard_unavailable"); },
   async alertOps() {},
+  async alertRepeat() {},
 };
 
 /** The webhook's only way to redeem a link code. */

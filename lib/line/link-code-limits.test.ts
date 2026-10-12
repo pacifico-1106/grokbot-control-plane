@@ -18,12 +18,18 @@ const CH = "chn-line-a";
 const USER = "U" + "a".repeat(32);
 
 type Call = [string, ...string[]];
-function fake(gate: "ok" | "sender_locked" | "account_locked" = "ok", record: string = "recorded", opts: { gateThrows?: boolean } = {}) {
+type Res = "ok" | "sender_locked" | "account_locked";
+function fake(result: Res = "ok", notify: null | "account_locked" | "account_locked_repeat" = null, opts: { reserveThrows?: boolean } = {}) {
   const calls: Call[] = [];
   const backend: LinkCodeGuardBackend = {
-    async gate(org, acct, sender) { calls.push(["gate", org, acct, sender]); if (opts.gateThrows) throw new Error("down"); return gate; },
-    async recordFailure(org, acct, sender) { calls.push(["record", org, acct, sender]); return record as never; },
+    async reserve(org, acct, sender) {
+      calls.push(["reserve", org, acct, sender]);
+      if (opts.reserveThrows) throw new Error("down");
+      return { result, attemptId: result === "ok" ? "att-1" : null, notify };
+    },
+    async release(org, id) { calls.push(["release", org, id]); },
     async alertOps(p) { calls.push(["alert", p.orgId, p.accountKey, p.reason]); },
+    async alertRepeat(p) { calls.push(["repeat", p.orgId, p.accountKey, p.reason]); },
   };
   return { backend, calls };
 }
@@ -60,7 +66,7 @@ describe("flag", () => {
 });
 
 describe("limits OFF: today's #228 behavior", () => {
-  test("no gate calls; wrong code → invalid_or_expired with no fixed reply", async () => {
+  test("no guard calls; wrong code → invalid_or_expired with no fixed reply", async () => {
     const f = fake();
     __setLineLinkCodeGuardBackendForTests(f.backend);
     const r = await redeemLineLinkCode({ orgId: ORG, channelId: CH, code: "ABCDEFGH", lineUserId: USER });
@@ -72,25 +78,25 @@ describe("limits OFF: today's #228 behavior", () => {
 describe("limits ON", () => {
   beforeEach(() => { process.env.LINE_LINK_CODE_LIMITS_ENABLED = "true"; });
 
-  test("right code: gate first, then redeem; per-channel account key; sender stored only as HMAC", async () => {
+  test("right code: one reservation first, then redeem, then the slot is given back; per-channel account key; sender only as HMAC", async () => {
     const code = await issue();
     const f = fake();
     __setLineLinkCodeGuardBackendForTests(f.backend);
     const r = await redeemLineLinkCode({ orgId: ORG, channelId: CH, code, lineUserId: USER });
     expect(r).toEqual({ ok: true, memberId: "mem_1", issuedByUserId: "user-1" });
-    expect(f.calls.length).toBe(1);
+    expect(f.calls.map((c) => c[0])).toEqual(["reserve", "release"]);
     const [op, org, acct, sender] = f.calls[0];
-    expect([op, org, acct]).toEqual(["gate", ORG, `line_channel:${CH}`]);
+    expect([op, org, acct]).toEqual(["reserve", ORG, `line_channel:${CH}`]);
     expect(sender).toMatch(/^[0-9a-f]{64}$/);
     expect(sender).not.toContain(USER);
   });
 
-  test("wrong code: counted, one fixed reply", async () => {
+  test("wrong code: the reserved slot stays counted, one fixed reply", async () => {
     const f = fake();
     __setLineLinkCodeGuardBackendForTests(f.backend);
     const r = await redeemLineLinkCode({ orgId: ORG, channelId: CH, code: "ABCDEFGH", lineUserId: USER });
     expect(r).toEqual({ ok: false, reason: "invalid_or_expired", replyJa: LINK_CODE_FAILURE_REPLY_JA });
-    expect(f.calls.map((c) => c[0])).toEqual(["gate", "record"]);
+    expect(f.calls.map((c) => c[0])).toEqual(["reserve"]);
   });
 
   test("locked sender is refused even with the right code, and the code is NOT consumed", async () => {
@@ -111,16 +117,23 @@ describe("limits ON", () => {
       .toEqual({ ok: false, reason: "account_locked", replyJa: LINK_CODE_FAILURE_REPLY_JA });
   });
 
-  test("the failure that locks the account alerts ops once (IDs only)", async () => {
-    const f = fake("ok", "account_locked_new");
+  test("the attempt that locks the account alerts ops once (IDs only); the 3rd lock in 24 h also the approvers", async () => {
+    const f = fake("account_locked", "account_locked");
     __setLineLinkCodeGuardBackendForTests(f.backend);
     await redeemLineLinkCode({ orgId: ORG, channelId: CH, code: "ABCDEFGH", lineUserId: USER });
-    expect(f.calls.find((c) => c[0] === "alert")).toEqual(["alert", ORG, `line_channel:${CH}`, "link_code_account_locked"]);
+    expect(f.calls.filter((c) => c[0] !== "reserve")).toEqual([["alert", ORG, `line_channel:${CH}`, "link_code_account_locked"]]);
+    const g = fake("account_locked", "account_locked_repeat");
+    __setLineLinkCodeGuardBackendForTests(g.backend);
+    await redeemLineLinkCode({ orgId: ORG, channelId: CH, code: "ABCDEFGH", lineUserId: USER });
+    expect(g.calls.filter((c) => c[0] !== "reserve")).toEqual([
+      ["alert", ORG, `line_channel:${CH}`, "link_code_account_locked"],
+      ["repeat", ORG, `line_channel:${CH}`, "link_code_account_locked_repeat"],
+    ]);
   });
 
   test("guard storage down → refused (fail closed), code not consumed, same reply", async () => {
     const code = await issue();
-    __setLineLinkCodeGuardBackendForTests(fake("ok", "recorded", { gateThrows: true }).backend);
+    __setLineLinkCodeGuardBackendForTests(fake("ok", null, { reserveThrows: true }).backend);
     expect(await redeemLineLinkCode({ orgId: ORG, channelId: CH, code, lineUserId: USER }))
       .toEqual({ ok: false, reason: "guard_unavailable", replyJa: LINK_CODE_FAILURE_REPLY_JA });
     __setLineLinkCodeGuardBackendForTests(fake().backend);
@@ -132,6 +145,21 @@ describe("limits ON", () => {
     const code = await issue();
     expect((await redeemLineLinkCode({ orgId: ORG, channelId: CH, code, lineUserId: USER })))
       .toEqual({ ok: false, reason: "guard_unavailable", replyJa: LINK_CODE_FAILURE_REPLY_JA });
+  });
+
+  test("demo backend: 20 concurrent wrong codes → only 5 compared, then the sender is locked; another sender is unaffected", async () => {
+    __setLineLinkCodeGuardBackendForTests(null);
+    const rs = await Promise.all(Array.from({ length: 20 }, () => redeemLineLinkCode({ orgId: ORG, channelId: CH, code: "ABCDEFGH", lineUserId: USER })));
+    expect(rs.filter((r) => !r.ok && r.reason === "invalid_or_expired").length).toBe(5);
+    expect(rs.filter((r) => !r.ok && r.reason === "sender_locked").length).toBe(15);
+  });
+
+  test("demo backend: right codes do not count toward the lock", async () => {
+    __setLineLinkCodeGuardBackendForTests(null);
+    for (let i = 0; i < 6; i++) {
+      const code = await issue();
+      expect((await redeemLineLinkCode({ orgId: ORG, channelId: CH, code, lineUserId: USER })).ok).toBe(true);
+    }
   });
 
   test("demo backend: 5 wrong codes lock the sender; another sender is unaffected", async () => {
