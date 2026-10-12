@@ -368,3 +368,19 @@ export async function recordInboundEvent(account: CommAccount, eventKey: string)
   if (!b) return "error";
   return b.recordEvent(account, eventKey).catch(() => "error" as const);
 }
+
+/**
+ * Pre-send re-check (lib/comm/pre-send): the account as stored now, by id within the org.
+ * No secrets. null = gone or comm accounts OFF; throws when it cannot be read (the caller
+ * refuses — fail closed).
+ */
+export async function getCommAccountForSend(orgId: string, accountId: string): Promise<CommAccount | null> {
+  if (!isCommAccountsEnabled()) return null;
+  const b = backend();
+  if (!b) throw new Error("comm_accounts_unavailable");
+  const a = await b.get(orgId, accountId);
+  if (!a) return null;
+  const { webhookRef: _ref, ...rest } = a;
+  void _ref;
+  return { ...rest, webhookRef: "" };
+}
