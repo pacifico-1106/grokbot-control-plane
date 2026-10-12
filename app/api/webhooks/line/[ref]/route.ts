@@ -26,7 +26,8 @@ import {
   isLineResolveFollowupReplyEnabled,
   isLineWorkflowRevisionReplyEnabled,
 } from "@/lib/line/flags";
-import { consumeLineLinkCode, parseLineLinkCodeText } from "@/lib/line/link-code";
+import { parseLineLinkCodeText } from "@/lib/line/link-code";
+import { redeemLineLinkCode } from "@/lib/line/link-code-limits";
 import {
   isAllowedLineSource,
   promptLineRevision,
@@ -106,15 +107,16 @@ async function handleLinkCode(channel: NotificationChannelRuntime, event: LineEv
     await reply(channel, event, MSG_LINK_GROUP);
     return true;
   }
-  const consumed = await consumeLineLinkCode({
+  // L-3: brute-force limits (gate before lookup, one fixed reply) when LINE_LINK_CODE_LIMITS_ENABLED.
+  const consumed = await redeemLineLinkCode({
     orgId: channel.orgId,
     channelId: channel.id,
     code,
     lineUserId,
   });
   if (!consumed.ok) {
-    await reply(channel, event, consumed.reason === "invalid_or_expired" ? MSG_LINK_INVALID : MSG_LINK_ERROR);
-    if (consumed.reason !== "invalid_or_expired") {
+    await reply(channel, event, consumed.replyJa ?? (consumed.reason === "invalid_or_expired" ? MSG_LINK_INVALID : MSG_LINK_ERROR));
+    if (consumed.reason !== "invalid_or_expired" && consumed.reason !== "sender_locked" && consumed.reason !== "account_locked") {
       console.error("line_link_code_consume_failed", { channelId: channel.id, reason: consumed.reason });
     }
     return true;
