@@ -57,7 +57,7 @@ function streamed(total: number, chunk = 64 * 1024) {
       controller.enqueue(new Uint8Array(n).fill(0x20));
     },
     cancel() { state.cancelled = true; },
-  });
+  }, { highWaterMark: 0 }); // pull only when the route actually reads (no queue pre-fill)
   return { stream, state };
 }
 
@@ -66,7 +66,7 @@ describe("1 MB body cap", () => {
     let pulled = 0;
     const stream = new ReadableStream<Uint8Array>({
       pull(c) { pulled += 1; c.enqueue(new Uint8Array(16)); c.close(); },
-    });
+    }, { highWaterMark: 0 }); // pull only when the route actually reads
     const req = new Request(url(), {
       method: "POST",
       headers: { "content-length": String(MB + 1), "x-line-signature": "x" },
