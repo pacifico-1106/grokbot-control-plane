@@ -120,3 +120,32 @@ export function notSentFulfillmentResult(info: NotSentInfo): Record<string, unkn
     notSent: { code: info.code, messageJa: info.messageJa, nextStep: info.nextStep },
   };
 }
+
+/**
+ * #351 follow-up: what the approval.resolved callback says about delivery.
+ *   sent: true  — the approved message was posted (fulfillment delivery slack / mail; stub in demo)
+ *   sent: false — nothing was sent (rejected / revision requested / expired, or the run
+ *                 stopped: reasonCode is its code, e.g. slack_channel_required)
+ *   sent: null  — not a send Staffpass performs, or not run yet (reasonCode null)
+ * Codes only; never a body, token or destination.
+ */
+export function approvalSendOutcome(
+  approval: { status?: string; metadata?: Record<string, unknown> | null },
+  decision?: string | null
+): { sent: boolean | null; reasonCode: string | null } {
+  const status = decision || approval.status || "";
+  if (status === "rejected" || status === "revision_requested" || status === "expired") {
+    return { sent: false, reasonCode: status };
+  }
+  const fulfillment = rec(approval.metadata?.fulfillment);
+  if (!fulfillment) return { sent: null, reasonCode: null };
+  if (fulfillment.ok === false) {
+    const raw = typeof fulfillment.error === "string" ? fulfillment.error : "";
+    const code = /^[a-z][a-z0-9_.-]{0,63}/.exec(raw)?.[0] ?? "fulfillment_failed";
+    return { sent: false, reasonCode: code };
+  }
+  const delivery = typeof fulfillment.delivery === "string" ? fulfillment.delivery : rec(fulfillment.conversationDelivery)?.delivery;
+  if (delivery === "slack" || delivery === "mail") return { sent: true, reasonCode: null };
+  if (delivery === "stub" && rec(approval.metadata?.invoke)?.conversation) return { sent: true, reasonCode: null };
+  return { sent: null, reasonCode: null };
+}

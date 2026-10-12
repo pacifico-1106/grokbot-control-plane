@@ -19,8 +19,9 @@ import { listAuditEvents } from "@/lib/data";
 import { upsertConversationAdapter } from "@/lib/data/conversation-adapters";
 import { upsertOrgChannel, upsertOrgParty } from "@/lib/data/directory";
 import { demoCommReplySendsForTests, resetDemoCommReplySends } from "@/lib/data/comm-reply-sends";
-import { getApprovalById, resolveApproval } from "@/lib/data/approvals";
-import { fulfillIfApproved } from "@/lib/approvals/fulfill";
+import { createApproval, getApprovalById, resolveApproval } from "@/lib/data/approvals";
+import { buildInvokeSnapshot, fulfillIfApproved } from "@/lib/approvals/fulfill";
+import { parseConversationContext } from "@/lib/gateway/audience";
 import { recordNotificationDelivery, type NotificationChannelRuntime } from "@/lib/data/notification-channels";
 import { editSlackApprovalForChannel } from "@/lib/notify/slack";
 import { resolveLineApprovalMessage } from "@/lib/notify/line";
@@ -156,13 +157,27 @@ function cred(): ResolvedEmployeeCredential {
   } as unknown as ResolvedEmployeeCredential;
 }
 
+/**
+ * A ticket filed BEFORE the #351 follow-up (the gateway now refuses these sends
+ * before any card, so it is seeded the way invoke used to file it). Such legacy
+ * tickets still exist and must keep answering "not sent" after approval.
+ */
 async function approvedNotSent(conversation: Record<string, unknown>) {
   recordProviders();
   const first = req("comm.send", conversation);
-  const pending = await invoke(first);
-  expect(pending.body.code).toBe("needs_approval");
-  const approvalId = String(pending.body.approvalId);
-  const statusToken = String(pending.body.statusToken);
+  expect((await invoke(req("comm.send", conversation))).body.code).toBe("channel_not_supported");
+  const created = await createApproval({
+    orgId: DEMO_ORG.id, employeeId: "emp_comm", credentialId: "cred_comm",
+    title: "comm.send", purpose: first.purpose, summary: "送信の承認", risk: "high", tool: "comm.send", jobId: String(first.jobId),
+    metadata: {
+      invoke: buildInvokeSnapshot({
+        tool: "comm.send", purpose: first.purpose, jobId: String(first.jobId), employeeId: "emp_comm", orgId: DEMO_ORG.id,
+        body: first, conversation: parseConversationContext(first, DEMO_ORG.id),
+      }),
+    },
+  });
+  const approvalId = created.approval.id;
+  const statusToken = String(created.statusToken);
   const approved = await resolveApproval(approvalId, "approved", "slack:U_APPROVER", DEMO_ORG.id);
   expect(approved).toBeTruthy();
   const fulfillment = await fulfillIfApproved(approved as ApprovalRequest, "approved");

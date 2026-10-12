@@ -29,7 +29,7 @@ export const CALLBACK_TIMEOUT_MS = 4000;
 export const CALLBACK_USER_AGENT = "Staffpass-ApprovalHook/1.0";
 
 /** Fields kept in the minimal body (always present, null when unknown). */
-const MINIMAL_FIELDS = ["type", "status", "approvalId", "employeeId", "tool", "jobId", "risk", "resolvedAt", "revisionCount", "parentApprovalId"] as const;
+const MINIMAL_FIELDS = ["type", "status", "approvalId", "employeeId", "tool", "jobId", "risk", "resolvedAt", "revisionCount", "parentApprovalId", "sent", "reasonCode"] as const;
 /** Kept only when present (dedupe id / secret-free MCP handoff block). */
 const OPTIONAL_FIELDS = ["eventId", "mcpHandoff"] as const;
 

@@ -86,6 +86,7 @@ function rewriteChannel(body: GatewayInvokeRequest, userId: string, channelId: s
   if (body.conversation && typeof body.conversation === "object") {
     const conv = { ...(body.conversation as unknown as Record<string, unknown>) };
     if ("slackChannelId" in conv) conv.slackChannelId = swap(conv.slackChannelId);
+    if ("channelId" in conv) conv.channelId = swap(conv.channelId);
     next.conversation = conv;
   }
   if ("slackChannelId" in next) next.slackChannelId = swap(next.slackChannelId);
@@ -221,10 +222,12 @@ export async function resolveSlackUserRecipient(input: {
   orgId: string;
   employee: Employee;
   body: GatewayInvokeRequest;
+  /** Resolve this U… (default: the effective channel field, when it is a U…). */
+  counterpart?: string;
 }): Promise<SlackUserRecipientResolution> {
   // SLACK_U_TO_DM_SEND_ENABLED AND SLACK_DM_AUTOROUTE_ENABLED; otherwise today's main.
   if (!isSlackUToDmSendEnabled()) return { kind: "unchanged" };
-  const counterpart = slackUserIdInChannelField(input.body);
+  const counterpart = input.counterpart ?? slackUserIdInChannelField(input.body);
   if (!counterpart) return { kind: "unchanged" };
   const ctx = parseConversationContext(input.body, input.orgId);
   if (!ctx || ctx.surface !== "slack") return { kind: "unchanged" };
@@ -276,4 +279,52 @@ export async function resolveSlackUserRecipient(input: {
     channelId,
     counterpartSlackUserId: counterpart,
   };
+}
+
+/**
+ * #357 follow-up (木村 10/12): channel fields that disagree only because one names
+ * the DM's counterparty (U…) and another the DM itself (D…) are the same
+ * destination — compared AFTER resolution, never by trusting the request:
+ *   1. exactly one distinct U… and exactly one distinct D… (anything else, e.g. a
+ *      C… / G…, a second U… or a second D…, stays a mismatch);
+ *   2. the D… is THIS employee's stored internal DM route (same org) whose
+ *      counterparty is that U… — otherwise refuse without any Slack call, so a
+ *      different person never gets a DM opened;
+ *   3. Item C's own resolver (flags, internal party ledger, postingAs=user,
+ *      im:write, conversations.open, route + channel re-check) resolves the U…
+ *      to that very D….
+ * Any failure (flag OFF, missing im:write, lookup error, a different D…) keeps the
+ * mismatch: fail closed. On success the U… fields are rewritten to the D….
+ * `reason` is a code only (never an id).
+ */
+export async function resolveChannelMismatchToSameDm(input: {
+  orgId: string;
+  employee: Employee;
+  body: GatewayInvokeRequest;
+  values: string[];
+}): Promise<{ kind: "same"; body: GatewayInvokeRequest } | { kind: "mismatch"; reason: string }> {
+  if (!isSlackUToDmSendEnabled()) return { kind: "mismatch", reason: "u_to_dm_flag_off" };
+  const users = input.values.filter((v) => SLACK_USER_ID.test(v));
+  const others = input.values.filter((v) => !SLACK_USER_ID.test(v));
+  if (users.length !== 1 || others.length !== 1 || !isSlackImChannelId(others[0])) {
+    return { kind: "mismatch", reason: "different_destinations" };
+  }
+  const [counterpart] = users;
+  const [dm] = others;
+  const orgId = (input.orgId || "").trim();
+  if (!orgId || input.employee.orgId !== orgId) return { kind: "mismatch", reason: "employee_org_mismatch" };
+  const stored = await getSlackImEmployeeRoute(orgId, dm);
+  if (
+    !stored ||
+    stored.orgId !== orgId ||
+    stored.employeeId !== input.employee.id ||
+    (stored.counterpartSlackUserId || "").toUpperCase() !== counterpart.toUpperCase()
+  ) {
+    return { kind: "mismatch", reason: "different_counterparty" };
+  }
+  const resolved = await resolveSlackUserRecipient({ ...input, orgId, counterpart });
+  if (resolved.kind === "stopped") return { kind: "mismatch", reason: resolved.code };
+  if (resolved.kind !== "resolved") return { kind: "mismatch", reason: "unresolved" };
+  if (resolved.channelId !== dm) return { kind: "mismatch", reason: "resolved_to_other_dm" };
+  return { kind: "same", body: resolved.body };
 }

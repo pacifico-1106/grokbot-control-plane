@@ -74,6 +74,8 @@ const legacyBody = (a: Awaited<ReturnType<typeof decided>>, status = "approved")
   type: "approval.resolved", status, approvalId: a.id, employeeId: a.employeeId, tool: a.tool ?? null, jobId: a.jobId ?? null,
   purpose: a.purpose, risk: a.risk, title: a.title || a.summary.slice(0, 80), summary: a.summary, resolvedBy: "approver@example.com",
   resolvedAt: a.resolvedAt, revisionNote: a.revisionNote, revisionCount: a.revisionCount, parentApprovalId: a.parentApprovalId,
+  // #351 follow-up: delivery outcome (mail.send is sent by the agent itself → null / null).
+  sent: null, reasonCode: null,
 });
 // The org-email stub id is `stub_${Date.now()}` (lib/resend.ts), so a raw
 // JSON.stringify(r) leak scan for a status like "403"/"500" was flaky whenever the
@@ -175,7 +177,7 @@ describe("flag ON: hardened delivery", () => {
     expect(sent).toHaveLength(1);
     expect(sent[0]).toMatchObject({ address: "93.184.216.34", hostname: "callback.example.com", path: "/staffpass/hook?k=1", timeoutMs: 4000, userAgent: "Staffpass-ApprovalHook/1.0" });
     const body = JSON.parse(sent[0].body.toString("utf8")) as Record<string, unknown>;
-    expect(Object.keys(body).sort()).toEqual(["approvalId", "employeeId", "jobId", "parentApprovalId", "resolvedAt", "revisionCount", "risk", "status", "tool", "type"]);
+    expect(Object.keys(body).sort()).toEqual(["approvalId", "employeeId", "jobId", "parentApprovalId", "reasonCode", "resolvedAt", "revisionCount", "risk", "sent", "status", "tool", "type"]);
     expect(body).toMatchObject({ type: "approval.resolved", status: "approved", approvalId: a.id, employeeId: "emp_sales" });
     expect(sent[0].body.toString()).not.toMatch(/SECRET SUBJECT|CONFIDENTIAL SUMMARY|approver@example\.com|SECRET NOTE/);
     expect(r.callback).toEqual({ ok: true, skipped: false });
