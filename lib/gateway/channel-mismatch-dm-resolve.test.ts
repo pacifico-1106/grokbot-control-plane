@@ -248,7 +248,7 @@ describe("a genuinely different destination is still refused", () => {
     const r = await invoke(onDmWake(d, { channelId: other }));
     expectMismatch(r, [u, other, d]);
     expect(calls.some((c) => c.method === "conversations.open" && c.args.users === other)).toBe(false);
-    expect(await getSlackImEmployeeRoute(ORG, dmFor(other))).toBeFalsy();
+    expect(Boolean(await getSlackImEmployeeRoute(ORG, dmFor(other)))).toBe(false);
   });
 
   test("an external / unknown U… on a D… wake → 400 mismatch, no Slack lookup", async () => {
