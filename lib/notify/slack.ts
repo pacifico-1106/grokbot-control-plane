@@ -1,3 +1,4 @@
+import { approverNotSentLineJa } from "@/lib/approvals/not-sent";
 import { approverRequirementCardLinesJa } from "@/lib/approver-authority/card";
 import { cardApprovalReasonsLine, cardDetectedTopicsLine } from "@/lib/approvals/approval-reasons";
 import { createHmac, timingSafeEqual } from "node:crypto";
@@ -138,7 +139,7 @@ function approvalBlocks(
   approval: ApprovalRequest,
   employee: Employee | null,
   options?: {
-    resolved?: { label: string; actor: string };
+    resolved?: { label: string; actor: string; notSentLineJa?: string | null };
     workflow?: WorkflowProgressDisplay | null;
   }
 ) {
@@ -209,7 +210,7 @@ function approvalBlocks(
         type: "section",
         text: {
           type: "mrkdwn",
-          text: `*${escapeSlackMrkdwn(options.resolved.label)}*\n処理者: ${escapeSlackMrkdwn(options.resolved.actor)}`,
+          text: `*${escapeSlackMrkdwn(options.resolved.label)}*\n処理者: ${escapeSlackMrkdwn(options.resolved.actor)}${options.resolved.notSentLineJa ? `\n${escapeSlackMrkdwn(options.resolved.notSentLineJa)}` : ""}`,
         },
       },
     ];
@@ -308,7 +309,7 @@ export async function editSlackApprovalForChannel(
     channel: slackChannel,
     ts,
     text: `${label}: ${approval.title}`,
-    blocks: approvalBlocks(approval, null, { resolved: { label, actor } }),
+    blocks: approvalBlocks(approval, null, { resolved: { label, actor, notSentLineJa: decision === "approved" ? approverNotSentLineJa(approval) : null } }),
   });
   return edited.ok
     ? { ok: true, ts, channel: slackChannel }

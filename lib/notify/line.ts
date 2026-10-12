@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { approverNotSentLineJa } from "@/lib/approvals/not-sent";
 import { approverRequirementCardLinesJa } from "@/lib/approver-authority/card";
 import { cardApprovalReasonsLine, cardDetectedTopicsLine } from "@/lib/approvals/approval-reasons";
 import { createHmac, timingSafeEqual } from "node:crypto";
@@ -212,7 +213,9 @@ export async function resolveLineApprovalMessage(
   const delivery = await getNotificationDelivery({ approvalId: approval.id, channelId: channel.id });
   if (!delivery) return { ok: false, skipped: true };
   const label = decision === "approved" ? "✅ 承認済み" : decision === "rejected" ? "❌ 却下済み" : "✏️ 修正依頼済み";
-  const text = `${label}\n${approval.title}${approval.revisionNote ? `\n指示: ${approval.revisionNote}` : ""}\n処理者: ${actor}`;
+  // H1: approved but stopped before sending → say so on the approver's card.
+  const notSent = decision === "approved" ? approverNotSentLineJa(approval) : null;
+  const text = `${label}\n${approval.title}${approval.revisionNote ? `\n指示: ${approval.revisionNote}` : ""}\n処理者: ${actor}${notSent ? `\n${notSent}` : ""}`;
   if (collectForReply(channel, text)) return { ok: true };
   return sendLineText(channel, text);
 }

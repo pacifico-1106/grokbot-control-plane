@@ -1,5 +1,6 @@
 "use client";
 
+import { approverNotSentLineJa } from "@/lib/approvals/not-sent";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
@@ -406,6 +407,12 @@ export function ApprovalsClient({
                   <p className="text-xs muted mt-0.5 break-words">
                     {[a.tool, a.purpose, a.jobId].filter(Boolean).join(" · ")}
                   </p>
+                  {a.status === "approved" && approverNotSentLineJa(a) ? (
+                    // H1: approved but stopped before sending (no Slack destination / channel not supported).
+                    <p className="text-xs mt-0.5 break-words text-[var(--warn)]" data-approved-not-sent="1">
+                      {approverNotSentLineJa(a)}
+                    </p>
+                  ) : null}
                   {a.status === "superseded" || a.status === "expired" ? (
                     (() => {
                       const closed = closedWithoutSendInfo(a.metadata);

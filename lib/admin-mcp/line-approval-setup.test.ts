@@ -147,40 +147,40 @@ describe("setup.lineApproval.upsert", () => {
     expect(auditActionForAdminTool("setup.lineApproval.upsert")).toBe("admin.notificationChannel");
   });
 
-  test("queues always_human without storing raw tokens in metadata", async () => {
+  // H5 (10/12): token / secret are entered on the screen (the tenant saves the
+  // channel there — seedLineDefault stands in for that save); the tool takes
+  // non-secret fields only and refuses the secret args (secret-args-refused.test.ts).
+  test("refuses token / secret args; a non-secret update queues always_human with no secret in metadata", async () => {
+    const refused = await callAdminMcpTool(
+      "setup.lineApproval.upsert",
+      { channelAccessToken: LINE_TOKEN, channelSecret: LINE_SECRET, destinationId: "Uboss1234567890abcdef", isDefault: true },
+      demoCred()
+    );
+    expect((refused.structuredContent as Record<string, unknown>).code).toBe("secret_argument_refused");
+    expect(jsonHasNoSecret(refused, LINE_TOKEN)).toBe(true);
+    expect(jsonHasNoSecret(refused, LINE_SECRET)).toBe(true);
+
+    const line = await seedLineDefault();
     const result = await callAdminMcpTool(
       "setup.lineApproval.upsert",
-      {
-        channelAccessToken: LINE_TOKEN,
-        channelSecret: LINE_SECRET,
-        destinationId: "Uboss1234567890abcdef",
-        isDefault: true,
-      },
+      { channelId: line.id, destinationId: "Uboss1234567890abcdef", isDefault: true },
       demoCred()
     );
     const data = result.structuredContent as Record<string, unknown>;
     expect(data.needs_approval).toBe(true);
     expect(data.always_human).toBe(true);
     expect(data.auditAction).toBe("admin.notificationChannel");
-    expect(jsonHasNoSecret(data, LINE_TOKEN)).toBe(true);
-    expect(jsonHasNoSecret(data, LINE_SECRET)).toBe(true);
-
     const approvalRow = await getApprovalById(String(data.approvalId), ORG);
     expect(jsonHasNoSecret(approvalRow?.metadata, LINE_TOKEN)).toBe(true);
     expect(jsonHasNoSecret(approvalRow?.metadata, LINE_SECRET)).toBe(true);
-    expect((approvalRow?.metadata?.adminMutation as Record<string, unknown>)?.secretsCiphertext).toBeTruthy();
+    expect((approvalRow?.metadata?.adminMutation as Record<string, unknown>)?.secretsCiphertext).toBeUndefined();
   });
 
-  test("fulfill stores encrypted credentials and audit has no token", async () => {
+  test("fulfil keeps the screen-entered credentials and the audit has no token", async () => {
+    const line = await seedLineDefault();
     const queued = await callAdminMcpTool(
       "setup.lineApproval.upsert",
-      {
-        channelAccessToken: LINE_TOKEN,
-        channelSecret: LINE_SECRET,
-        destinationId: "Uboss1234567890abcdef",
-        label: "Space Tree 承認",
-        isDefault: true,
-      },
+      { channelId: line.id, destinationId: "Uboss1234567890abcdef", label: "Space Tree 承認", isDefault: true },
       demoCred()
     );
     const approvalId = String((queued.structuredContent as Record<string, unknown>).approvalId);
@@ -192,6 +192,8 @@ describe("setup.lineApproval.upsert", () => {
     expect(fulfillment?.destinationPresent).toBe(true);
     expect(fulfillment?.webhookPath).toContain("/api/webhooks/line/");
     expect(jsonHasNoSecret(fulfillment, LINE_TOKEN)).toBe(true);
+    const after = (await listNotificationChannels(ORG)).find((channel) => channel.id === line.id);
+    expect(after?.hasCredentials).toBe(true);
 
     const audits = await listAuditEvents(ORG, 20);
     const fulfillAudit = audits.find((event) => event.action === "admin.notificationChannel");
