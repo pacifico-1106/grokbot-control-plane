@@ -70,6 +70,14 @@ export async function POST(req: Request, ctx: { params: Promise<{ ref: string }>
     const actor = `line:${userId}`;
 
     if (event.type === "postback") {
+      // S3: 「緊急停止」 button (stop only; release is web-only).
+      const stopMatch = /^s:([A-Za-z0-9_-]{8,32})$/.exec(event.postback?.data || "");
+      if (stopMatch) {
+        const { stopFromInbox } = await import("@/lib/safety/hold-inbox");
+        const r = await stopFromInbox({ orgId: channel.orgId, provider: "line", channelId: channel.id, userId, ref: stopMatch[1] });
+        if (event.replyToken) await sendLineText(channel, r.text, event.replyToken);
+        continue;
+      }
       const match = /^(a|r|e):([A-Za-z0-9_-]{8,32})$/.exec(event.postback?.data || "");
       const approval = match ? await getApprovalByTelegramRef(match[2], channel.orgId) : null;
       const delivery = approval

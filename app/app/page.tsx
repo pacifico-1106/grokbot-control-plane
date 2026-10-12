@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { HoldPanel } from "@/components/holds/HoldPanel";
 import { AppShell } from "@/components/AppShell";
 import { ChangeLog } from "@/components/ChangeLog";
 import { SetupKickoff } from "@/components/SetupKickoff";
@@ -60,6 +61,7 @@ export default async function DashboardPage() {
       title="変更ログ"
       subtitle={`${org.name} · トライアル中`}
     >
+      <HoldPanel scope="org" />
       {needsSetup ? (
         <SetupKickoff
           adminConnected={adminConnected}
