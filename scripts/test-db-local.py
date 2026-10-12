@@ -551,6 +551,61 @@ try:
             query(_stmt)
     query("drop trigger eh_slow_audit on public.audit_events; drop function security_test.eh_slow_audit();")
     assert deadlocks == 0, f"{deadlocks} deadlocks in 15 release × detector rounds"
+    # 木村 10/12 09:01: when can a stop fail with 40001? The functions run at the caller's isolation
+    # (PostgREST: READ COMMITTED). (a) READ COMMITTED: 40 concurrent mixed-kind starts on ONE employee
+    # → every call succeeds (row-lock waits re-check, no 40001 / 40P01), strongest kind wins.
+    # (b) If isolation were ever raised (REPEATABLE READ), the same burst raises 40001 — the app's
+    # 5 attempts with jittered backoff (holdStartBackoffMs) must still land every stop.
+    import random, time
+    eh_emp2 = "e5100000-0000-4000-8000-0000000000c2"
+    query(f"insert into public.employees(id, org_id, display_name, role_label) values ('{eh_emp2}', '{eh_org}', 'eh c2', 'r');")
+    def _start_cmd(i, iso=None):
+        kind, by, via, trig = [("leave", f"member:{eh_req}", "web", "null"), ("stopped", f"member:{eh_req}", "web", "null"),
+                               ("quarantined", "system:anomaly", "anomaly", "'signal:burst'"), ("stopped", f"member:{eh_appr}", "slack", "null")][i % 4]
+        call = (f"select public.start_employee_hold('{eh_org}','{eh_emp2}','{kind}',null,'{by}','{via}',{trig},now())->>'holdId';")
+        if iso:
+            return f"begin isolation level {iso}; set local role service_role; {call} commit;"
+        return f"set role service_role; {call}"
+    def _clear_emp2():
+        for _stmt in ("alter table public.employees disable trigger employees_hold_guard;",
+                      f"update public.employees set hold_state = null, hold_id = null where id = '{eh_emp2}';",
+                      "alter table public.employees enable trigger employees_hold_guard;",
+                      "alter table public.employee_holds disable trigger employee_holds_guard;",
+                      f"delete from public.employee_holds where employee_id = '{eh_emp2}';",
+                      "alter table public.employee_holds enable trigger employee_holds_guard;"):
+            query(_stmt)
+    with ThreadPoolExecutor(max_workers=20) as pool:
+        res = list(pool.map(_psql, [_start_cmd(i) for i in range(40)]))
+    rc_errors = [err.strip().splitlines()[-1] for rc, _, err in res if rc != 0]
+    assert rc_errors == [], rc_errors
+    assert query(f"select hold_state from public.employees where id = '{eh_emp2}';") == "quarantined"
+    assert query(f"select count(*) from public.employee_holds where employee_id = '{eh_emp2}' and released_at is null and superseded_at is null;") == "1"
+    _clear_emp2()
+    def _with_retry(cmd):
+        first_40001 = False
+        for attempt in range(1, 6):  # HOLD_START_MAX_ATTEMPTS = 5
+            rc, out, err = _psql(cmd)
+            if rc == 0:
+                return attempt, first_40001
+            code = "40001" if "could not serialize" in err else "40P01" if "deadlock detected" in err else None
+            if attempt == 1 and code == "40001":
+                first_40001 = True
+            if code is None:
+                return f"error: {err.strip()[-200:]}", first_40001
+            base = [50, 100, 200, 400][min(attempt, 4) - 1]
+            time.sleep((base / 2 + random.random() * base / 2) / 1000)
+        return "exhausted", first_40001
+    with ThreadPoolExecutor(max_workers=20) as pool:
+        rr = list(pool.map(_with_retry, [_start_cmd(i, "repeatable read") for i in range(40)]))
+    rr_first = sum(1 for _, f in rr if f)
+    rr_fail = [a for a, _ in rr if not isinstance(a, int)]
+    assert rr_fail == [], rr_fail
+    assert query(f"select hold_state from public.employees where id = '{eh_emp2}';") == "quarantined"
+    print(f"PASS: hold start concurrency (木村 10/12 09:01): READ COMMITTED 40 concurrent mixed starts → 0 errors; "
+          f"REPEATABLE READ 40 concurrent → {rr_first} first-attempt 40001, all landed within 5 attempts "
+          f"(max attempt used: {max(a for a, _ in rr)}).")
+    _clear_emp2()
+    query(f"delete from public.employees where id = '{eh_emp2}';")
     # 木村 10/12 (6): the rollback refuses while any employee is held — nothing changes
     query(f"set role service_role; select public.start_employee_hold('{eh_org}','{eh_emp}','stopped',null,'member:{eh_req}','web',null,now());")
     try:
@@ -599,6 +654,37 @@ try:
     print("PASS: lp_inquiries / notification_outbox have no anon/authenticated write grant; lp_handoffs / lp_wake_* have no policy (RLS on) and no anon/authenticated SELECT; sessions read/write none of the 5 LP tables; service_role (BYPASSRLS) reads/writes all.")
     print("PASS: lp_inquiries / lp_journeys lp_page + lp_ref (20261012300000): nullable text, no default; CHECK allowlist ai-employee | ai-employee-corp and ^[A-Za-z0-9_-]{1,32}$ (empty, 33 chars, space, dot, slash, <script>, non-ASCII, newline rejected); RLS on, anon/authenticated still cannot write; re-applicable.")
     print("PASS: mcp_event_subscriptions / mcp_event_deliveries: RLS on, no policy, anon/authenticated denied (rows and secret_ciphertext), service_role reads/writes; cross-org subscription / delivery rejected; one delivery per (subscription, event); 256 KiB body cap; id / event / status / https / ciphertext / lastError-category checks; org delete cascades; D11 verification budget: 30/host/minute window, hosts and windows independent, bad input rejected, anon/authenticated denied (table + function), 40 concurrent takes → exactly 30 accepted; rollback (3 tables + 2 functions) + re-apply.")
+    # 木村 10/12: read-only LINE approval ref listing (supabase/verification/line-approval-refs-in-use-20261012.sql).
+    lr_org, lr_e1, lr_e2, lr_e3 = ("e1a00000-0000-4000-8000-000000000001", "e1a00000-0000-4000-8000-0000000000e1",
+                                   "e1a00000-0000-4000-8000-0000000000e2", "e1a00000-0000-4000-8000-0000000000e3")
+    lr_ok, lr_off, lr_nosec = ("e1a00000-0000-4000-8000-0000000000c1", "e1a00000-0000-4000-8000-0000000000c2",
+                               "e1a00000-0000-4000-8000-0000000000c3")
+    for _stmt in (f"insert into public.orgs(id, name) values ('{lr_org}', 'スペースツリー（fixture）');"
+                  f"insert into public.org_notification_channels(id, org_id, provider, label, enabled, is_default, webhook_ref) values"
+                  f" ('{lr_ok}', '{lr_org}', 'line', 'ok', true, true, 'aaaaaaaaaaaa'),"
+                  f" ('{lr_off}', '{lr_org}', 'line', 'off', false, false, 'bbbbbbbbbbbb'),"
+                  f" ('{lr_nosec}', '{lr_org}', 'line', 'nosec', true, false, 'cccccccccccc');"
+                  f"insert into public.org_notification_channel_secrets(channel_id, credentials_ciphertext) values ('{lr_ok}', 'v1.secret-not-selected');"
+                  f"insert into public.employees(id, org_id, display_name, role_label) values ('{lr_e1}', '{lr_org}', '稲盛', 'fixture');"
+                  f"insert into public.employees(id, org_id, display_name, role_label, approval_channel_id) values"
+                  f" ('{lr_e2}', '{lr_org}', 'off-user', 'fixture', '{lr_off}'), ('{lr_e3}', '{lr_org}', 'nosec-user', 'fixture', '{lr_nosec}');").split(";"):
+        if _stmt.strip():
+            query(_stmt + ";")
+    _out = run([BIN / "psql", "-X", "-qAt", "-F", "|", "-v", "ON_ERROR_STOP=1", "-h", cluster, "-p", "55439", "-U", "test_admin",
+                "-d", "postgres", "-f", ROOT / "supabase/verification/line-approval-refs-in-use-20261012.sql"],
+               capture_output=True, text=True).stdout
+    _rows = [r.split("|") for r in _out.splitlines() if r.startswith("スペースツリー（fixture）")]
+    _by = {r[2]: r for r in _rows}
+    assert set(_by) == {"稲盛", "off-user", "nosec-user"}, _rows
+    assert _by["稲盛"][5] == "org_default" and _by["稲盛"][8] == "aaaaaaaaaaaa" and _by["稲盛"][-1] == "t" and _by["稲盛"][-2] == "t", _by["稲盛"]
+    assert _by["off-user"][-1] == "f" and _by["nosec-user"][-1] == "f" and _by["nosec-user"][11] == "f", _rows
+    assert "secret-not-selected" not in _out
+    assert query(f"select count(*) from public.org_notification_channels where org_id = '{lr_org}'") == "3"  # read-only: nothing changed
+    for _stmt in (f"delete from public.employees where org_id = '{lr_org}'; delete from public.orgs where id = '{lr_org}';").split(";"):
+        if _stmt.strip():
+            query(_stmt + ";")
+    print("PASS: line-approval-refs-in-use-20261012.sql (read-only): lists org / employee / ref per LINE channel (employee inbox + org default); "
+          "resolves_under_new_route true only for enabled + credentials; no secret value in the output.")
     print("PASS: org_members has no authenticated write path; last active owner cannot be demoted/disabled/deleted; org cascade still works.")
     print(f"PASS: F8 parent state={args.f8_parent_state}; 3 explicit UNIQUE constraints; existing constraint/index OIDs preserved across apply/reapply.")
     print("PASS: #80 ACL/authority/metadata regressions; 12 claims and 12 secret readers each have 1 winner. F8 W1, multi-stage/finalGo, rejection, current voter/binding, self-approval, same-org FKs, direct access denial, atomic rollback and recovery pass. 12 duplicate votes count once; 2 concurrent voters advance once. All migrations reapplied.")

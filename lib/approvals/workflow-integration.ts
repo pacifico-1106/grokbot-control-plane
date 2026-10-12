@@ -21,6 +21,7 @@ import { isApproverAuthorityEnabled } from "@/lib/feature-flags";
 import { checkApproverAuthority, recordApproverAuthority, verifyApproverIdentity } from "@/lib/approver-authority/verify";
 import { promoteOwnerApproverConflict, promoteOwnerRequesterUnidentified, requesterMemberIdsFromMetadata } from "@/lib/approver-authority/decide";
 import { isDemoMode } from "@/lib/mode";
+import { isHoldReleaseTicket } from "@/lib/safety/hold-config";
 import { PROMOTE_OWNER_TOOL } from "@/lib/approver-authority/targets";
 import { createSupabaseAdminClient } from "@/lib/supabase";
 import { withDemoWorkflowLock } from "@/lib/approval-workflow/lock";
@@ -68,6 +69,16 @@ export async function resolveApprovalWithWorkflow(
   orgId: string,
   opts: WorkflowResolverOptions = {}
 ): Promise<WorkflowResolveResult> {
+  // S3 (design §2.6): a hold-release ticket is approved ONLY through the web release flow
+  // (fresh login, `hold-actions.ts › approveHoldRelease`). Inbox buttons / the generic approval
+  // screen may reject it, never approve it. HOLD_RELEASE_SURFACES is the one switch.
+  if (status === "approved") {
+    const ticket = await getApprovalById(id, orgId).catch(() => null);
+    if (ticket && isHoldReleaseTicket(ticket)) {
+      return { ok: false, approval: null, workflowApplied: false, workflowComplete: false, workflowApproved: false,
+        workflowRejected: false, progress: null, reason: "hold_release_web_only" };
+    }
+  }
   const result = await (isDemoMode()
     ? withDemoWorkflowLock(`resolve:${id}`, () => resolveWorkflow(id, status, resolvedBy, orgId, opts))
     : resolveWorkflow(id, status, resolvedBy, orgId, opts));

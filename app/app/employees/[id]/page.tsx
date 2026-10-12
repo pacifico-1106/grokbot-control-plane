@@ -13,6 +13,7 @@ import { EmployeePolicyForm } from "@/components/employees/EmployeePolicyForm";
 import { EmployeeVoiceForm } from "@/components/employees/EmployeeVoiceForm";
 import { EmployeeProjectAccessForm } from "@/components/employees/EmployeeProjectAccessForm";
 import { EmployeeTerminateForm } from "@/components/employees/EmployeeTerminateForm";
+import { HoldPanel } from "@/components/holds/HoldPanel";
 import { EmployeeIngressHandoffStatus } from "@/components/employees/EmployeeIngressHandoffStatus";
 import { SlackIdentityForm } from "@/components/employees/SlackIdentityForm";
 import { GoogleCalendarIdentityForm } from "@/components/employees/GoogleCalendarIdentityForm";
@@ -334,6 +335,7 @@ export default async function EmployeeDetailPage({
       />
       {isMcpOAuthEnabled() ? <OAuthGrantsPanel employeeId={employee.id} /> : null}
 
+      <HoldPanel employeeId={employee.id} />
       <EmployeeTerminateForm employee={employee} />
 
       <EmployeeActionLog events={actionEvents} compact />

@@ -1,5 +1,6 @@
 import { approverNotSentLineJa } from "@/lib/approvals/not-sent";
 import { approverRequirementCardLinesJa } from "@/lib/approver-authority/card";
+import { showHoldStopButton } from "@/lib/safety/hold-config";
 import { cardApprovalReasonsLine, cardDetectedTopicsLine } from "@/lib/approvals/approval-reasons";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { formatMailCardParts, MAIL_BODY_PREVIEW_LABEL, readMailArtifact } from "@/lib/approvals/summary";
@@ -250,9 +251,18 @@ function approvalBlocks(
           url: dashboardUrl(),
           action_id: "staffpass_dashboard",
         },
+        ...holdStopSlackButtons(approval, value),
       ],
     },
   ];
+}
+
+/** S3: 「緊急停止」 (stop only — release is web-only). EMPLOYEE_HOLD_ENABLED, employee cards only. */
+function holdStopSlackButtons(approval: ApprovalRequest, value: string): Array<Record<string, unknown>> {
+  if (!showHoldStopButton(approval)) return [];
+  return [{ type: "button", text: { type: "plain_text", text: "緊急停止" }, style: "danger", action_id: "staffpass_emergency_stop", value,
+    confirm: { title: { type: "plain_text", text: "緊急停止" }, text: { type: "mrkdwn", text: "このAI社員を今すぐ止めます。解除はダッシュボードからのみです。" },
+      confirm: { type: "plain_text", text: "止める" }, deny: { type: "plain_text", text: "やめる" } } }];
 }
 
 export async function sendApprovalToSlackChannel(

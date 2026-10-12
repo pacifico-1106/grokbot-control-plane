@@ -2,7 +2,7 @@
  * /api/settings/line-approver-link — issue a one-time LINE link code for the
  * signed-in member (G1/G4). Flag LINE_APPROVER_LINK_ENABLED, default OFF.
  */
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 
 const ORG = "org_demo";
 type Session = {
@@ -17,8 +17,26 @@ const activeMember = (over: Record<string, unknown> = {}) => ({
   capabilities: ["approve_actions"], status: "active", ...over,
 });
 
+// Demo store on purpose. Other files (voter-binding-verification.test.ts) re-mock
+// @/lib/mode to production inside their tests and bun's mock.module is process-wide,
+// so a single-process run leaked that into this file (木村 10/12: 2 LINE tests failed
+// only when run together). Pin demo mode before every test.
+const DEMO_MODE = () => ({
+  isDemoMode: () => true,
+  isSupabaseConfigured: () => false,
+  isStripeConfigured: () => false,
+  isResendConfigured: () => false,
+  runtimeModeLabel: () => "demo",
+});
+mock.module("@/lib/mode", DEMO_MODE);
 mock.module("@/lib/auth/session", () => ({ getSessionContext: async () => session }));
+// Partial mock of @/lib/data on top of the real module (and put back afterAll): a mock with
+// only these two exports leaked into later files in a single-process run
+// ("Export named 'findAwaitingRevisionApproval' not found" in the LINE webhook test).
+const DATA_BEFORE = { ...(await import("@/lib/data")) };
+afterAll(() => { mock.module("@/lib/data", () => DATA_BEFORE); });
 mock.module("@/lib/data", () => ({
+  ...DATA_BEFORE,
   listNotificationChannels: async (orgId: string) =>
     orgId === ORG
       ? [
@@ -32,13 +50,42 @@ mock.module("@/lib/data", () => ({
 const { GET, POST } = await import("./route");
 const { consumeLineLinkCode, parseLineLinkCodeText, resetDemoLineLinkCodes } = await import("@/lib/line/link-code");
 const raw = (display: string) => parseLineLinkCodeText(display) as string;
-const { resetDemoVoterBindings, upsertProofVerifiedVoterBinding } = await import("@/lib/approval-workflow/voter-binding");
+// The voter-binding store is owned by this file while its tests run:
+// lib/notify/delivery-adapter.test.ts mocks it to `listVoterBindings: async () => []`
+// (process-wide), which made "pending then linked" fail only in a single-process run.
+// Re-mocked before every test; whatever was there before is put back afterAll.
+const VB = "@/lib/approval-workflow/voter-binding";
+const VB_BEFORE = { ...(await import(VB)) };
+type LocalBinding = { orgId: string; provider: string; channelKey: string; externalUserId: string; memberId: string; status: string };
+const localBindings: LocalBinding[] = [];
+const VB_MOCK = () => ({
+  ...VB_BEFORE,
+  listVoterBindings: async (i: { orgId: string; provider?: string; channelKey?: string; memberId?: string }) =>
+    localBindings.filter((b) => b.orgId === i.orgId && (!i.provider || b.provider === i.provider) && (!i.channelKey || b.channelKey === i.channelKey) && (!i.memberId || b.memberId === i.memberId)),
+  upsertProofVerifiedVoterBinding: async (i: Omit<LocalBinding, "status">) => {
+    localBindings.push({ ...i, status: "active" });
+    return { ok: true as const };
+  },
+  resetDemoVoterBindings: () => { localBindings.length = 0; },
+});
+mock.module(VB, VB_MOCK);
+afterAll(() => { mock.module(VB, () => VB_BEFORE); });
+const resetDemoVoterBindings = () => { localBindings.length = 0; };
+const upsertProofVerifiedVoterBinding = async (i: Omit<LocalBinding, "status">) => (await import(VB)).upsertProofVerifiedVoterBinding(i as never);
 
 const post = (body: unknown) =>
   POST(new Request("http://x/api/settings/line-approver-link", { method: "POST", body: JSON.stringify(body) }));
 const get = (channelId: string) => GET(new Request(`http://x/api/settings/line-approver-link?channelId=${channelId}`));
 
-beforeEach(() => {
+beforeEach(async () => {
+  mock.module("@/lib/mode", DEMO_MODE);
+  mock.module(VB, VB_MOCK);
+  // voter-binding.test.ts replaces @/lib/demo-data with an empty member map (process-wide);
+  // the binding then fails with member_not_found. Make sure our member exists either way.
+  const dd = await import("@/lib/demo-data");
+  if (!dd.getRuntimeMemberById("mem_3")) {
+    dd.setRuntimeMember({ id: "mem_3", orgId: ORG, userId: "auth-mem_3", email: "mem_3@example.com", role: "admin", capabilities: ["approve_actions"], status: "active" } as never);
+  }
   process.env.LINE_APPROVER_LINK_ENABLED = "true";
   session = { demo: false, userId: "auth-3", email: "a@example.com", orgId: ORG, member: activeMember() };
   audits = [];

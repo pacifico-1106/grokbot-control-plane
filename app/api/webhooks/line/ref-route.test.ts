@@ -29,6 +29,18 @@ let resolveCalls: Array<{ id: string; decision: string; actor: string }>;
 let audits: Array<Record<string, unknown>>;
 let sideEffectHook: ((approval: Record<string, unknown>) => Promise<void>) | null;
 
+// Demo store on purpose. Other files (voter-binding-verification.test.ts) re-mock
+// @/lib/mode to production inside their tests and bun's mock.module is process-wide,
+// so a single-process run leaked that into this file (木村 10/12: 2 LINE tests failed
+// only when run together). Pin demo mode before every test.
+const DEMO_MODE = () => ({
+  isDemoMode: () => true,
+  isSupabaseConfigured: () => false,
+  isStripeConfigured: () => false,
+  isResendConfigured: () => false,
+  runtimeModeLabel: () => "demo",
+});
+mock.module("@/lib/mode", DEMO_MODE);
 mock.module("@/lib/data", () => ({
   getNotificationChannelByWebhookRef: async (_p: string, ref: string) => (ref === REF ? channel : null),
   getApprovalByTelegramRef: async () => approval,
@@ -73,7 +85,14 @@ let lineCalls: LineCall[];
 let originalFetch: typeof fetch;
 const FLAGS = ["LINE_APPROVER_LINK_ENABLED", "LINE_APPROVER_BINDING_MATCH", "LINE_WORKFLOW_REVISION_REPLY", "LINE_RESOLVE_FOLLOWUP_REPLY"];
 
-beforeEach(() => {
+beforeEach(async () => {
+  mock.module("@/lib/mode", DEMO_MODE);
+  // voter-binding.test.ts replaces @/lib/demo-data with an empty member map (process-wide);
+  // the binding then fails with member_not_found. Make sure our member exists either way.
+  const dd = await import("@/lib/demo-data");
+  if (!dd.getRuntimeMemberById("mem_1")) {
+    dd.setRuntimeMember({ id: "mem_1", orgId: ORG, userId: "auth-mem_1", email: "mem_1@example.com", role: "admin", capabilities: ["approve_actions"], status: "active" } as never);
+  }
   channel = {
     id: "chn-line-1", orgId: ORG, provider: "line", label: "LINE", enabled: true, isDefault: true,
     config: { destinationId: DEST, allowedUserIds: [] }, webhookRef: REF, hasCredentials: true,
