@@ -5,6 +5,7 @@
  * resolves its destination ONLY from that token.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { createHmac } from "node:crypto";
 import {
   CONVERSATION_TOKEN_MAX_TTL_SECONDS,
   issueConversationToken,
@@ -34,6 +35,7 @@ const OTHER = "U" + "b".repeat(32);
 const NOW = 1_800_000_000_000;
 const base = { orgId: ORG, employeeId: EMP, accountId: ACCT, surface: "line" as const, conversationType: "dm" as const, conversationId: USER, counterpartyId: USER };
 const who = { orgId: ORG, employeeId: EMP };
+const DOMAIN_FOR_TEST = "staffpass-conversation-token-v1";
 
 function issue(over: Partial<typeof base> & { ttlSeconds?: number } = {}) {
   const r = issueConversationToken({ ...base, ...over }, NOW);
@@ -139,5 +141,48 @@ describe("resolveConversationTarget: AI arguments never pick the destination (H2
     if (r.ok) expect(Object.keys(r.target).sort()).toEqual(
       ["accountId", "conversationId", "conversationType", "counterpartyId", "employeeId", "expiresAt", "orgId", "surface"]
     );
+  });
+
+  // 木村 10/12 [LOW]
+  function signRaw(payload: Record<string, unknown>, key = "c".repeat(48)) {
+    const p = Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
+    const sig = createHmac("sha256", key).update(`${DOMAIN_FOR_TEST}.${p}`, "utf8").digest("base64url");
+    return `spc1.${p}.${sig}`;
+  }
+  const rawBase = { v: 1, org: ORG, emp: EMP, acct: ACCT, sf: "line", ct: "dm", cid: USER, cp: USER, jti: "j" };
+  const iat = Math.floor(NOW / 1000);
+
+  test("[LOW] a correctly signed token whose exp - iat exceeds 7 days is refused (even if a key leaked into a minter)", () => {
+    const ok = signRaw({ ...rawBase, iat, exp: iat + CONVERSATION_TOKEN_MAX_TTL_SECONDS });
+    expect(verifyConversationToken(ok, who, NOW).ok).toBe(true);
+    for (const bad of [
+      { ...rawBase, iat, exp: iat + CONVERSATION_TOKEN_MAX_TTL_SECONDS + 1 },
+      { ...rawBase, iat: iat - 30 * 86400, exp: iat + 3600 },          // lifetime 30 days
+      { ...rawBase, exp: iat + 3600 },                                  // no iat
+      { ...rawBase, iat: String(iat), exp: iat + 3600 },                // iat not a number
+      { ...rawBase, iat, exp: iat },                                    // exp <= iat
+      { ...rawBase, iat: iat + 3600, exp: iat + 7200 },                 // issued in the future
+    ]) {
+      expect(verifyConversationToken(signRaw(bad), who, NOW)).toEqual({ ok: false, reason: "conversation_token_invalid" });
+    }
+  });
+
+  test("[LOW] destination-override names are matched normalized: lineUserId, recipient, target, to, userId and friends", () => {
+    const t = issue();
+    const names = [
+      "lineUserId", "line_user_id", "LINE-USER-ID", "recipient", "recipientId", "recipients", "target", "targetId", "targetUserId",
+      "to", "TO", "toUserId", "userId", "user_id", "UserID", "uid", "destination", "destinationId", "dest", "sendTo", "replyTo",
+      "chatId", "peerId", "groupID", "room_id", "conversation_id", "lineId", "channel",
+    ];
+    for (const name of names) {
+      expect({ name, r: resolveConversationTarget({ token: t, args: { [name]: OTHER }, ...who }, NOW) })
+        .toEqual({ name, r: { ok: false, reason: "conversation_target_mismatch" } });
+    }
+    // a list / object pointing elsewhere is refused too
+    expect(resolveConversationTarget({ token: t, args: { recipients: [OTHER] }, ...who }, NOW).ok).toBe(false);
+    expect(resolveConversationTarget({ token: t, args: { target: { userId: OTHER } }, ...who }, NOW).ok).toBe(false);
+    // echoing the pinned id under any of these names is harmless; unrelated names are ignored
+    expect(resolveConversationTarget({ token: t, args: { lineUserId: USER, recipient: USER, to: USER }, ...who }, NOW).ok).toBe(true);
+    expect(resolveConversationTarget({ token: t, args: { text: OTHER, subject: "x", totalCount: 3 }, ...who }, NOW).ok).toBe(true);
   });
 });
