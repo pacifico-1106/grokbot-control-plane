@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { approverNotSentLineJa } from "@/lib/approvals/not-sent";
 import { approverRequirementCardLinesJa } from "@/lib/approver-authority/card";
 import { showHoldStopButton } from "@/lib/safety/hold-config";
@@ -161,6 +162,52 @@ export async function sendLineText(
   });
 }
 
+/**
+ * G7: per-request collector so the resolve follow-up ("✅ 承認済み …") can ride
+ * in the webhook's Reply (free) instead of a separate Push (billable).
+ * Only the webhook opens a collector, only for its own channel, and only when
+ * LINE_RESOLVE_FOLLOWUP_REPLY is ON. Anything sent after the collector closes,
+ * or for another channel, keeps using Push.
+ */
+type LineReplyCollector = { channelId: string; texts: string[]; closed: boolean };
+const replyCollector = new AsyncLocalStorage<LineReplyCollector>();
+const LINE_REPLY_MAX_MESSAGES = 5;
+
+export async function withLineReplyCollector<T>(
+  channelId: string,
+  fn: () => Promise<T>
+): Promise<{ result: T; collected: string[] }> {
+  const store: LineReplyCollector = { channelId, texts: [], closed: false };
+  try {
+    const result = await replyCollector.run(store, fn);
+    return { result, collected: [...store.texts] };
+  } finally {
+    store.closed = true;
+  }
+}
+
+function collectForReply(channel: NotificationChannelRuntime, text: string): boolean {
+  const store = replyCollector.getStore();
+  if (!store || store.closed || store.channelId !== channel.id) return false;
+  // Leave room for the acknowledgement message in the same Reply.
+  if (store.texts.length >= LINE_REPLY_MAX_MESSAGES - 1) return false;
+  store.texts.push(text);
+  return true;
+}
+
+export async function sendLineReplyMessages(
+  channel: NotificationChannelRuntime,
+  replyToken: string,
+  texts: string[]
+): Promise<LineResult> {
+  const messages = texts
+    .filter((text) => text && text.trim())
+    .slice(0, LINE_REPLY_MAX_MESSAGES)
+    .map((text) => ({ type: "text", text: truncate(text, 5_000) }));
+  if (!replyToken || messages.length === 0) return { ok: false, skipped: true };
+  return callLine(channel, "/v2/bot/message/reply", { replyToken, messages });
+}
+
 export async function resolveLineApprovalMessage(
   approval: ApprovalRequest,
   decision: "approved" | "rejected" | "revision_requested",
@@ -172,7 +219,9 @@ export async function resolveLineApprovalMessage(
   const label = decision === "approved" ? "✅ 承認済み" : decision === "rejected" ? "❌ 却下済み" : "✏️ 修正依頼済み";
   // H1: approved but stopped before sending → say so on the approver's card.
   const notSent = decision === "approved" ? approverNotSentLineJa(approval) : null;
-  return sendLineText(channel, `${label}\n${approval.title}${approval.revisionNote ? `\n指示: ${approval.revisionNote}` : ""}\n処理者: ${actor}${notSent ? `\n${notSent}` : ""}`);
+  const text = `${label}\n${approval.title}${approval.revisionNote ? `\n指示: ${approval.revisionNote}` : ""}\n処理者: ${actor}${notSent ? `\n${notSent}` : ""}`;
+  if (collectForReply(channel, text)) return { ok: true };
+  return sendLineText(channel, text);
 }
 
 export async function promptLineRevision(
