@@ -120,7 +120,9 @@ as $$
     else 'ok' end;
 $$;
 
--- Record one wrong code. Atomic per (org, key) via advisory locks.
+-- Record one wrong code. Atomic per (org, key) via advisory locks. The windows have no upper
+-- bound: under concurrency a later-started transaction can commit first with a later now(),
+-- and an upper bound would hide its row (found by the 12-way concurrent test).
 --   sender : 5 failures in 15 min → locked 1 hour
 --   account: 30 failures in 1 hour → locked 1 hour; returns 'account_locked_new' the
 --            first time so the caller alerts ops exactly once per lock.
@@ -144,10 +146,10 @@ begin
     values (p_org_id, 'account', p_account_key, p_now), (p_org_id, 'sender', p_sender_key, p_now);
   select count(*) into v_sender from public.comm_link_code_failures
     where org_id = p_org_id and scope = 'sender' and scope_key = p_sender_key
-      and failed_at > p_now - interval '15 minutes' and failed_at <= p_now;
+      and failed_at > p_now - interval '15 minutes';
   select count(*) into v_account from public.comm_link_code_failures
     where org_id = p_org_id and scope = 'account' and scope_key = p_account_key
-      and failed_at > p_now - interval '1 hour' and failed_at <= p_now;
+      and failed_at > p_now - interval '1 hour';
   if v_sender >= 5 then
     insert into public.comm_link_code_locks(org_id, scope, scope_key, locked_until, locked_at)
       values (p_org_id, 'sender', p_sender_key, p_now + interval '1 hour', p_now)
