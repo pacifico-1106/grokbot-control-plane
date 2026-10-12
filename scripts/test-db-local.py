@@ -719,7 +719,7 @@ try:
                   f" ('{lr_off}', '{lr_org}', 'line', 'off', false, false, 'bbbbbbbbbbbb'),"
                   f" ('{lr_nosec}', '{lr_org}', 'line', 'nosec', true, false, 'cccccccccccc');"
                   f"insert into public.org_notification_channel_secrets(channel_id, credentials_ciphertext) values ('{lr_ok}', 'v1.secret-not-selected');"
-                  f"insert into public.employees(id, org_id, display_name, role_label) values ('{lr_e1}', '{lr_org}', '稲盛', 'fixture');"
+                  f"insert into public.employees(id, org_id, display_name, role_label) values ('{lr_e1}', '{lr_org}', 'line-user', 'fixture');"
                   f"insert into public.employees(id, org_id, display_name, role_label, approval_channel_id) values"
                   f" ('{lr_e2}', '{lr_org}', 'off-user', 'fixture', '{lr_off}'), ('{lr_e3}', '{lr_org}', 'nosec-user', 'fixture', '{lr_nosec}');").split(";"):
         if _stmt.strip():
@@ -729,8 +729,8 @@ try:
                capture_output=True, text=True).stdout
     _rows = [r.split("|") for r in _out.splitlines() if r.startswith("スペースツリー（fixture）")]
     _by = {r[2]: r for r in _rows}
-    assert set(_by) == {"稲盛", "off-user", "nosec-user"}, _rows
-    assert _by["稲盛"][5] == "org_default" and _by["稲盛"][8] == "aaaaaaaaaaaa" and _by["稲盛"][-1] == "t" and _by["稲盛"][-2] == "t", _by["稲盛"]
+    assert set(_by) == {"line-user", "off-user", "nosec-user"}, _rows
+    assert _by["line-user"][5] == "org_default" and _by["line-user"][8] == "aaaaaaaaaaaa" and _by["line-user"][-1] == "t" and _by["line-user"][-2] == "t", _by["line-user"]
     assert _by["off-user"][-1] == "f" and _by["nosec-user"][-1] == "f" and _by["nosec-user"][11] == "f", _rows
     assert "secret-not-selected" not in _out
     assert query(f"select count(*) from public.org_notification_channels where org_id = '{lr_org}'") == "3"  # read-only: nothing changed

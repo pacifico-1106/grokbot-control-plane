@@ -1,7 +1,7 @@
 /**
  * 木村 10/12: after #228 an unknown ref answers 404 instead of 200. Every ref
  * shape the code can produce must still resolve, so no existing LINE approval
- * channel (e.g. 稲盛 at スペースツリー) breaks:
+ * channel breaks (production has no LINE approval refs today, 木村 10/12):
  *   - DB default: encode(gen_random_bytes(6), 'hex')  (20260827_tenant_notification_channels.sql)
  *   - app / demo create: randomBytes(6).toString("hex") (lib/data/notification-channels.ts)
  * Both are 12 lowercase hex. A ref is looked up by exact equality; the route adds
