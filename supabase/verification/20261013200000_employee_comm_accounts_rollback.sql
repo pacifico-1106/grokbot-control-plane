@@ -11,10 +11,11 @@ begin
     raise exception 'ROLLBACK_REFUSED: active employee_comm_accounts exist; disable them first';
   end if;
 end $$;
-drop function if exists public.comm_link_code_record_failure(uuid, text, text, timestamptz);
-drop function if exists public.comm_link_code_gate(uuid, text, text, timestamptz);
+drop function if exists public.comm_link_code_release_attempt(uuid, uuid);
+drop function if exists public.comm_link_code_reserve_attempt(uuid, text, text, timestamptz);
+drop table if exists public.comm_link_code_lock_events;
 drop table if exists public.comm_link_code_locks;
-drop table if exists public.comm_link_code_failures;
+drop table if exists public.comm_link_code_attempts;
 drop table if exists public.comm_inbound_events;
 drop table if exists public.employee_comm_account_secrets;
 drop table if exists public.employee_comm_accounts;

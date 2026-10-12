@@ -6,6 +6,7 @@ import { getAdminOrganizationDetail } from "@/lib/admin/data";
 import { TrialExtensionForm } from "@/components/admin/TrialExtensionForm";
 import { ProxyApprovalPanel } from "@/components/admin/ProxyApprovalPanel";
 import { OrgRenameForm } from "@/components/admin/OrgRenameForm";
+import { OpsHoldStopForm } from "@/components/admin/OpsHoldStopForm";
 
 function formatDate(value: string | null, includeTime = false): string {
   if (!value) return "—";
@@ -127,6 +128,8 @@ export default async function AdminOrganizationPage({
           </section>
         </div>
 
+        <div className="space-y-4">
+        <OpsHoldStopForm orgId={org.id} />
         <section className="surface h-fit overflow-hidden">
           <header className="border-b border-[var(--border)] px-4 py-3"><h2 className="text-sm font-bold">直近の監査ログ</h2><p className="mt-1 text-xs faint">サポート時の状況確認用・最新100件</p></header>
           <ol className="divide-y divide-[var(--border-soft)]">
@@ -140,6 +143,7 @@ export default async function AdminOrganizationPage({
             {!detail.recentEvents.length ? <li className="p-8 text-center text-sm muted">監査ログはまだありません。</li> : null}
           </ol>
         </section>
+        </div>
       </div>
     </>
   );

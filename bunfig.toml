@@ -1,0 +1,5 @@
+# Every `bun test` in this repo (npm test, or a direct `bun test <file>`) preloads the
+# network / notify-env guard. 木村 10/12: direct runs posted real Slack messages from
+# the box env. scripts/test-local.mjs also passes --preload explicitly (same file).
+[test]
+preload = ["./tests/security/no-network.ts"]

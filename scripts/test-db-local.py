@@ -551,6 +551,61 @@ try:
             query(_stmt)
     query("drop trigger eh_slow_audit on public.audit_events; drop function security_test.eh_slow_audit();")
     assert deadlocks == 0, f"{deadlocks} deadlocks in 15 release × detector rounds"
+    # 木村 10/12 09:01: when can a stop fail with 40001? The functions run at the caller's isolation
+    # (PostgREST: READ COMMITTED). (a) READ COMMITTED: 40 concurrent mixed-kind starts on ONE employee
+    # → every call succeeds (row-lock waits re-check, no 40001 / 40P01), strongest kind wins.
+    # (b) If isolation were ever raised (REPEATABLE READ), the same burst raises 40001 — the app's
+    # 5 attempts with jittered backoff (holdStartBackoffMs) must still land every stop.
+    import random, time
+    eh_emp2 = "e5100000-0000-4000-8000-0000000000c2"
+    query(f"insert into public.employees(id, org_id, display_name, role_label) values ('{eh_emp2}', '{eh_org}', 'eh c2', 'r');")
+    def _start_cmd(i, iso=None):
+        kind, by, via, trig = [("leave", f"member:{eh_req}", "web", "null"), ("stopped", f"member:{eh_req}", "web", "null"),
+                               ("quarantined", "system:anomaly", "anomaly", "'signal:burst'"), ("stopped", f"member:{eh_appr}", "slack", "null")][i % 4]
+        call = (f"select public.start_employee_hold('{eh_org}','{eh_emp2}','{kind}',null,'{by}','{via}',{trig},now())->>'holdId';")
+        if iso:
+            return f"begin isolation level {iso}; set local role service_role; {call} commit;"
+        return f"set role service_role; {call}"
+    def _clear_emp2():
+        for _stmt in ("alter table public.employees disable trigger employees_hold_guard;",
+                      f"update public.employees set hold_state = null, hold_id = null where id = '{eh_emp2}';",
+                      "alter table public.employees enable trigger employees_hold_guard;",
+                      "alter table public.employee_holds disable trigger employee_holds_guard;",
+                      f"delete from public.employee_holds where employee_id = '{eh_emp2}';",
+                      "alter table public.employee_holds enable trigger employee_holds_guard;"):
+            query(_stmt)
+    with ThreadPoolExecutor(max_workers=20) as pool:
+        res = list(pool.map(_psql, [_start_cmd(i) for i in range(40)]))
+    rc_errors = [err.strip().splitlines()[-1] for rc, _, err in res if rc != 0]
+    assert rc_errors == [], rc_errors
+    assert query(f"select hold_state from public.employees where id = '{eh_emp2}';") == "quarantined"
+    assert query(f"select count(*) from public.employee_holds where employee_id = '{eh_emp2}' and released_at is null and superseded_at is null;") == "1"
+    _clear_emp2()
+    def _with_retry(cmd):
+        first_40001 = False
+        for attempt in range(1, 6):  # HOLD_START_MAX_ATTEMPTS = 5
+            rc, out, err = _psql(cmd)
+            if rc == 0:
+                return attempt, first_40001
+            code = "40001" if "could not serialize" in err else "40P01" if "deadlock detected" in err else None
+            if attempt == 1 and code == "40001":
+                first_40001 = True
+            if code is None:
+                return f"error: {err.strip()[-200:]}", first_40001
+            base = [50, 100, 200, 400][min(attempt, 4) - 1]
+            time.sleep((base / 2 + random.random() * base / 2) / 1000)
+        return "exhausted", first_40001
+    with ThreadPoolExecutor(max_workers=20) as pool:
+        rr = list(pool.map(_with_retry, [_start_cmd(i, "repeatable read") for i in range(40)]))
+    rr_first = sum(1 for _, f in rr if f)
+    rr_fail = [a for a, _ in rr if not isinstance(a, int)]
+    assert rr_fail == [], rr_fail
+    assert query(f"select hold_state from public.employees where id = '{eh_emp2}';") == "quarantined"
+    print(f"PASS: hold start concurrency (木村 10/12 09:01): READ COMMITTED 40 concurrent mixed starts → 0 errors; "
+          f"REPEATABLE READ 40 concurrent → {rr_first} first-attempt 40001, all landed within 5 attempts "
+          f"(max attempt used: {max(a for a, _ in rr)}).")
+    _clear_emp2()
+    query(f"delete from public.employees where id = '{eh_emp2}';")
     # 木村 10/12 (6): the rollback refuses while any employee is held — nothing changes
     query(f"set role service_role; select public.start_employee_hold('{eh_org}','{eh_emp}','stopped',null,'member:{eh_req}','web',null,now());")
     try:
@@ -592,23 +647,26 @@ try:
     sql(eca)
     sql(eca)  # re-applicable
     sql(ROOT / "tests/security/db-employee-comm-accounts.sql")
-    # concurrent wrong codes: 12 at once from one sender → exactly 4 'recorded' (5th+ lock);
-    # 40 at once from 40 senders on one account → exactly one 'account_locked_new' (one ops alert)
+    # 木村 10/12 [MED]: N concurrent wrong guesses from one sender → at most 5 get a slot (reach the
+    # comparison); the reservation is one call, so there is no check-then-count gap.
+    # 40 at once from 40 senders on one account → exactly 30 slots and one 'account_locked' notify.
     eca_org = "ec000000-0000-4000-8000-0000000000e1"
     query(f"insert into public.orgs(id, name) values ('{eca_org}', 'eca concurrent');")
-    one = (f"set role service_role; select public.comm_link_code_record_failure('{eca_org}',"
-           f" 'ec200000-0000-4000-8000-0000000000e1', repeat('7', 64), now());")
-    with ThreadPoolExecutor(max_workers=12) as pool:
-        res = list(pool.map(_psql, [one] * 12))
+    one = (f"set role service_role; select public.comm_link_code_reserve_attempt('{eca_org}',"
+           f" 'comm_account:ec200000-0000-4000-8000-0000000000e1', repeat('7', 64), now())->>'result';")
+    with ThreadPoolExecutor(max_workers=20) as pool:
+        res = list(pool.map(_psql, [one] * 20))
     outs = [o.splitlines()[-1] for _, o, _ in res]
     assert all(rc == 0 for rc, _, _ in res), [e for _, _, e in res]
-    assert outs.count("recorded") == 4 and outs.count("sender_locked") == 8, outs
-    many = [f"set role service_role; select public.comm_link_code_record_failure('{eca_org}',"
-            f" 'ec200000-0000-4000-8000-0000000000e2', lpad(to_hex({i}), 64, 'e'), now());" for i in range(40)]
-    with ThreadPoolExecutor(max_workers=12) as pool:
+    assert outs.count("ok") == 5 and outs.count("sender_locked") == 15, outs
+    many = [f"set role service_role; select (r->>'result') || ':' || coalesce(r->>'notify', '-') from"
+            f" public.comm_link_code_reserve_attempt('{eca_org}', 'line_channel:ec200000-0000-4000-8000-0000000000e2',"
+            f" lpad(to_hex({i}), 64, 'e'), now()) r;" for i in range(40)]
+    with ThreadPoolExecutor(max_workers=20) as pool:
         res = list(pool.map(_psql, many))
     outs = [o.splitlines()[-1] for _, o, _ in res]
-    assert all(rc == 0 for rc, _, _ in res) and outs.count("account_locked_new") == 1, outs
+    assert all(rc == 0 for rc, _, _ in res), [e for _, _, e in res]
+    assert outs.count("ok:-") == 30 and outs.count("account_locked:account_locked") == 1 and outs.count("account_locked:-") == 9, outs
     query(f"delete from public.orgs where id = '{eca_org}';")
     # the rollback refuses while an account is active
     query("insert into public.orgs(id, name) values ('ec000000-0000-4000-8000-0000000000f1', 'eca rb');"
@@ -625,16 +683,17 @@ try:
     query("delete from public.orgs where id = 'ec000000-0000-4000-8000-0000000000f1';")
     sql(eca_rb)
     assert query("select to_regclass('public.employee_comm_accounts') is null and to_regclass('public.employee_comm_account_secrets') is null"
-                 " and to_regclass('public.comm_inbound_events') is null and to_regclass('public.comm_link_code_failures') is null"
-                 " and to_regclass('public.comm_link_code_locks') is null"
-                 " and to_regprocedure('public.comm_link_code_gate(uuid,text,text,timestamptz)') is null"
-                 " and to_regprocedure('public.comm_link_code_record_failure(uuid,text,text,timestamptz)') is null;") == "t"
+                 " and to_regclass('public.comm_inbound_events') is null and to_regclass('public.comm_link_code_attempts') is null"
+                 " and to_regclass('public.comm_link_code_locks') is null and to_regclass('public.comm_link_code_lock_events') is null"
+                 " and to_regprocedure('public.comm_link_code_reserve_attempt(uuid,text,text,timestamptz)') is null"
+                 " and to_regprocedure('public.comm_link_code_release_attempt(uuid,uuid)') is null;") == "t"
     sql(eca)  # forward again after rollback
     sql(ROOT / "tests/security/db-employee-comm-accounts.sql")
-    print("PASS: comm accounts (20261013200000): 5 tables RLS on / restrictive deny-all only, anon/authenticated no access and cannot execute; "
+    print("PASS: comm accounts (20261013200000): 6 tables RLS on / restrictive deny-all only, anon/authenticated no access and cannot execute; "
           "one account per employee per surface, external account id unique across orgs, same-org employee only, value CHECKs; "
-          "secrets v2 ciphertext only, org bound to account; inbound event key once; link codes: sender 5/15 min → 1 h lock, "
-          "account 30/1 h → lock + one ops signal (12 concurrent from one sender → 4 recorded; 40 concurrent senders → 1 signal), other org unaffected, lock expires; re-applicable; rollback refused while an "
+          "secrets v2 ciphertext only, org bound to account; inbound event key once; link codes: ONE reserve call before the comparison — sender 5/15 min then 1 h lock, "
+          "released (right) attempts not counted, release org-scoped; account 30/1 h then lock + one ops signal, 3rd lock in 24 h → one repeat signal "
+          "(20 concurrent wrong guesses from one sender → exactly 5 slots; 40 concurrent senders → 30 slots + 1 signal), other org unaffected, lock expires; re-applicable; rollback refused while an "
           "account is active, then drops all; forward again.")
     print("PASS: approver authority (PR-D): owner / designated admin decision table; flag-OFF 7-argument W1 call unchanged; standard ticket → designated admin stored, others refused; owner ticket → designated admin endorsed once and kept pending, owner approves and is stored; zero owners stop; multiple owners: any one owner other than the requester (requesting owner refused; a sole owner's own approval counts; several owners all requesters → no_owner_other_than_requester); reject / non-target not gated; record_approver_authority verified/endorse; one RPC overload; EXECUTE service_role only; rollback restores the 7-argument RPC + re-apply.")
     print("PASS: approver context CAS (TOCTOU follow-up): policy.patch / schedulingPolicy.patch writes only when the locked row still equals the pinned snapshot; concurrent change between check and write → approver_context_changed with nothing written (employee row, active and revoked credentials, org / employee scheduling policy); ticket binding (fingerprint, missing fingerprint, status, tool, target, org) refused; invalid input refused; EXECUTE service_role only; 12 concurrent writers with one snapshot → exactly 1 write (both RPCs); rollback drops both RPCs (PR-D untouched) + re-apply.")

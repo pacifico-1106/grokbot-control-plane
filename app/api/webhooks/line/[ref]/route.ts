@@ -311,6 +311,19 @@ export async function POST(req: Request, ctx: { params: Promise<{ ref: string }>
     if (!isAllowedLineSource(channel, source)) continue;
     const lineUserId = source.userId || "";
     if (event.type === "postback") {
+      // S3 (#349): 「緊急停止」 button (stop only; release is web-only). Same rule as
+      // every postback here: no userId → refused.
+      const stopMatch = /^s:([A-Za-z0-9_-]{8,32})$/.exec(event.postback?.data || "");
+      if (stopMatch) {
+        if (!lineUserId) {
+          await reply(channel, event, MSG_NO_USER);
+          continue;
+        }
+        const { stopFromInbox } = await import("@/lib/safety/hold-inbox");
+        const r = await stopFromInbox({ orgId: channel.orgId, provider: "line", channelId: channel.id, userId: lineUserId, ref: stopMatch[1] });
+        await reply(channel, event, r.text);
+        continue;
+      }
       await handlePostback(channel, event, lineUserId);
       continue;
     }
