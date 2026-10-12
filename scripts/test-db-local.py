@@ -641,6 +641,60 @@ try:
           "audit row in the same transaction (audit failure → no release), held tickets closed_by_hold; ops holds not member-releasable; "
           "org hold 'stopped' only; 12 concurrent starts → 1 hold, 12 concurrent releases → 1 release + 1 audit row; "
           "re-applicable; rollback drops table, 3 functions, 4 columns; forward again.")
+    # LINE PoC per-employee accounts / secrets / inbound dedup / link-code limits (20261013200000).
+    eca = ROOT / "supabase/migrations/20261013200000_employee_comm_accounts.sql"
+    eca_rb = ROOT / "supabase/verification/20261013200000_employee_comm_accounts_rollback.sql"
+    sql(eca)
+    sql(eca)  # re-applicable
+    sql(ROOT / "tests/security/db-employee-comm-accounts.sql")
+    # 木村 10/12 [MED]: N concurrent wrong guesses from one sender → at most 5 get a slot (reach the
+    # comparison); the reservation is one call, so there is no check-then-count gap.
+    # 40 at once from 40 senders on one account → exactly 30 slots and one 'account_locked' notify.
+    eca_org = "ec000000-0000-4000-8000-0000000000e1"
+    query(f"insert into public.orgs(id, name) values ('{eca_org}', 'eca concurrent');")
+    one = (f"set role service_role; select public.comm_link_code_reserve_attempt('{eca_org}',"
+           f" 'comm_account:ec200000-0000-4000-8000-0000000000e1', repeat('7', 64), now())->>'result';")
+    with ThreadPoolExecutor(max_workers=20) as pool:
+        res = list(pool.map(_psql, [one] * 20))
+    outs = [o.splitlines()[-1] for _, o, _ in res]
+    assert all(rc == 0 for rc, _, _ in res), [e for _, _, e in res]
+    assert outs.count("ok") == 5 and outs.count("sender_locked") == 15, outs
+    many = [f"set role service_role; select (r->>'result') || ':' || coalesce(r->>'notify', '-') from"
+            f" public.comm_link_code_reserve_attempt('{eca_org}', 'line_channel:ec200000-0000-4000-8000-0000000000e2',"
+            f" lpad(to_hex({i}), 64, 'e'), now()) r;" for i in range(40)]
+    with ThreadPoolExecutor(max_workers=20) as pool:
+        res = list(pool.map(_psql, many))
+    outs = [o.splitlines()[-1] for _, o, _ in res]
+    assert all(rc == 0 for rc, _, _ in res), [e for _, _, e in res]
+    assert outs.count("ok:-") == 30 and outs.count("account_locked:account_locked") == 1 and outs.count("account_locked:-") == 9, outs
+    query(f"delete from public.orgs where id = '{eca_org}';")
+    # the rollback refuses while an account is active
+    query("insert into public.orgs(id, name) values ('ec000000-0000-4000-8000-0000000000f1', 'eca rb');"
+          "insert into public.employees(id, org_id, display_name, role_label) values"
+          " ('ec100000-0000-4000-8000-0000000000f1', 'ec000000-0000-4000-8000-0000000000f1', 'eca rb', 'staff');"
+          "insert into public.employee_comm_accounts(org_id, employee_id, surface, external_account_id, webhook_ref, status)"
+          " values ('ec000000-0000-4000-8000-0000000000f1', 'ec100000-0000-4000-8000-0000000000f1', 'line', 'U' || repeat('f', 32), repeat('F', 43), 'active');")
+    try:
+        sql(eca_rb)
+        raise AssertionError("comm accounts rollback ran while an account was active")
+    except subprocess.CalledProcessError:
+        pass
+    assert query("select to_regclass('public.employee_comm_accounts') is not null;") == "t"
+    query("delete from public.orgs where id = 'ec000000-0000-4000-8000-0000000000f1';")
+    sql(eca_rb)
+    assert query("select to_regclass('public.employee_comm_accounts') is null and to_regclass('public.employee_comm_account_secrets') is null"
+                 " and to_regclass('public.comm_inbound_events') is null and to_regclass('public.comm_link_code_attempts') is null"
+                 " and to_regclass('public.comm_link_code_locks') is null and to_regclass('public.comm_link_code_lock_events') is null"
+                 " and to_regprocedure('public.comm_link_code_reserve_attempt(uuid,text,text,timestamptz)') is null"
+                 " and to_regprocedure('public.comm_link_code_release_attempt(uuid,uuid)') is null;") == "t"
+    sql(eca)  # forward again after rollback
+    sql(ROOT / "tests/security/db-employee-comm-accounts.sql")
+    print("PASS: comm accounts (20261013200000): 6 tables RLS on / restrictive deny-all only, anon/authenticated no access and cannot execute; "
+          "one account per employee per surface, external account id unique across orgs, same-org employee only, value CHECKs; "
+          "secrets v2 ciphertext only, org bound to account; inbound event key once; link codes: ONE reserve call before the comparison — sender 5/15 min then 1 h lock, "
+          "released (right) attempts not counted, release org-scoped; account 30/1 h then lock + one ops signal, 3rd lock in 24 h → one repeat signal "
+          "(20 concurrent wrong guesses from one sender → exactly 5 slots; 40 concurrent senders → 30 slots + 1 signal), other org unaffected, lock expires; re-applicable; rollback refused while an "
+          "account is active, then drops all; forward again.")
     print("PASS: approver authority (PR-D): owner / designated admin decision table; flag-OFF 7-argument W1 call unchanged; standard ticket → designated admin stored, others refused; owner ticket → designated admin endorsed once and kept pending, owner approves and is stored; zero owners stop; multiple owners: any one owner other than the requester (requesting owner refused; a sole owner's own approval counts; several owners all requesters → no_owner_other_than_requester); reject / non-target not gated; record_approver_authority verified/endorse; one RPC overload; EXECUTE service_role only; rollback restores the 7-argument RPC + re-apply.")
     print("PASS: approver context CAS (TOCTOU follow-up): policy.patch / schedulingPolicy.patch writes only when the locked row still equals the pinned snapshot; concurrent change between check and write → approver_context_changed with nothing written (employee row, active and revoked credentials, org / employee scheduling policy); ticket binding (fingerprint, missing fingerprint, status, tool, target, org) refused; invalid input refused; EXECUTE service_role only; 12 concurrent writers with one snapshot → exactly 1 write (both RPCs); rollback drops both RPCs (PR-D untouched) + re-apply.")
     print("PASS: employee_webhook_settings (D9): RLS on, no policy, anon/authenticated denied, service_role reads/writes/upserts; cross-org row rejected; payload mode minimal|legacy_full (default minimal); ciphertext-only secret + fingerprint pair; employee delete cascades; rollback + re-apply.")
