@@ -1,4 +1,4 @@
-import { LINE_APPROVAL_SCREEN, SLACK_BOT_TOKEN_SCREEN, refuseSecretArgs, useScreenNextStepJa } from "@/lib/admin-mcp/secret-args";
+import { LINE_APPROVAL_SCREEN, SLACK_BOT_TOKEN_SCREEN, refuseSecretArgs, screenNextStepJa } from "@/lib/admin-mcp/secret-args";
 import { consumeAdminApprovalSecret } from "@/lib/admin-mcp/consume-secret";
 import { handleDesignatedAdminsTool, isDesignatedAdminsTool } from "@/lib/admin-mcp/designated-admins-tool";
 import { handlePromoteOwnerTool, PROMOTE_OWNER_TOOL } from "@/lib/admin-mcp/promote-owner-tool";
@@ -2664,7 +2664,7 @@ export async function callAdminMcpTool(
           code: "slack_adapter_token_required",
           message: `有効化には Bot User OAuth Token (xoxb-...) が必要ですが、トークンはこのツールでは受け取りません。ダッシュボード「${DASHBOARD_BOT_TOKEN_PATH_JA}」でテナントの担当者が入力します（「承認を受け取る」のSlackではありません）。`,
           nextAction: "use_dashboard",
-          nextStep: useScreenNextStepJa(SLACK_BOT_TOKEN_SCREEN),
+          nextStep: screenNextStepJa(SLACK_BOT_TOKEN_SCREEN),
           screen: SLACK_BOT_TOKEN_SCREEN,
         },
         true
@@ -2700,7 +2700,7 @@ export async function callAdminMcpTool(
           code: "line_credentials_incomplete",
           message: "有効化にはチャネルアクセストークンとチャネルシークレットが必要ですが、このツールでは受け取りません。テナントの担当者が画面で入力します。",
           nextAction: "use_dashboard",
-          nextStep: useScreenNextStepJa(LINE_APPROVAL_SCREEN),
+          nextStep: screenNextStepJa(LINE_APPROVAL_SCREEN),
           screen: LINE_APPROVAL_SCREEN,
         },
         true

@@ -30,7 +30,7 @@ export const ADMIN_MCP_SECRET_ARGS: Readonly<Record<string, { args: readonly str
   "setup.slackAdapter.setBotToken": { args: ["botToken"], screen: SLACK_BOT_TOKEN_SCREEN },
 };
 
-export function useScreenNextStepJa(screen: SecretArgScreen): string {
+export function screenNextStepJa(screen: SecretArgScreen): string {
   return `秘密の値（トークン・シークレット）は、AI に渡さず、テナントの担当者が画面で入力します。管理画面 ${screen.path} の「${screen.labelJa}」で入力してもらってください。値をチャットに貼らないでください。入力が済んだら、秘密の値を付けずにもう一度このツールを呼べます（秘密以外の項目だけ変更できます）。`;
 }
 
@@ -65,7 +65,7 @@ export function refuseSecretArgs(tool: string, args: Record<string, unknown>): S
     refusedArgs,
     message: `${refusedArgs.join(" / ")} は受け付けません（秘密の値は AI を通さず、画面で入力します）。何も保存・登録していません。保存済みの値はそのままです。`,
     nextAction: "use_dashboard",
-    nextStep: useScreenNextStepJa(entry.screen),
+    nextStep: screenNextStepJa(entry.screen),
     screen: entry.screen,
   };
 }

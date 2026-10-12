@@ -12,7 +12,7 @@
  *
  * Demo mode, dummy values, no network.
  */
-import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { ADMIN_MCP_TOOLS, callAdminMcpTool } from "@/lib/mcp/admin-tools";
 import { STAFFPASS_MCP_TOOLS } from "@/lib/mcp/tools";
 import { fulfillApprovedAdmin } from "@/lib/admin-mcp/fulfill-admin";
@@ -61,9 +61,11 @@ beforeEach(() => {
     throw new Error("unexpected_fixture_endpoint");
   }) as typeof fetch;
   logged = [];
-  spies = (["log", "info", "warn", "error", "debug"] as const).map((m) =>
-    spyOn(console, m).mockImplementation((...a: unknown[]) => { logged.push(a.map((x) => (typeof x === "string" ? x : JSON.stringify(x))).join(" ")); })
-  );
+  spies = (["log", "info", "warn", "error", "debug"] as const).map((m) => {
+    const original = console[m];
+    console[m] = (...a: unknown[]) => { logged.push(a.map((x) => (typeof x === "string" ? x : JSON.stringify(x))).join(" ")); };
+    return { mockRestore: () => { console[m] = original; } };
+  });
 });
 afterEach(async () => {
   for (const s of spies) s.mockRestore();
