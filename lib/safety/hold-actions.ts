@@ -27,7 +27,7 @@ import { hasCapability } from "@/lib/team/rbac";
 import {
   HOLD_RELEASE_SURFACES,
   HOLD_RELEASE_TOOL,
-  HOLD_START_BACKOFF_MS,
+  holdStartBackoffMs,
   HOLD_START_MAX_ATTEMPTS,
   HOLD_START_RETRYABLE_CODES,
   isEmployeeHoldEnabled,
@@ -150,7 +150,7 @@ export async function startHold(input: {
         return fail(error.code, error.code.endsWith("_not_found") ? 404 : 409);
       }
       if (!retryable(error) || attempts >= HOLD_START_MAX_ATTEMPTS) break;
-      await sleepImpl(HOLD_START_BACKOFF_MS[Math.min(attempts - 1, HOLD_START_BACKOFF_MS.length - 1)]);
+      await sleepImpl(holdStartBackoffMs(attempts));
     }
   }
   // Never silent: alert ops (ids / sqlstate only) and tell the caller it did NOT stop.

@@ -4,6 +4,7 @@
  * Delivery failure never undoes a stop; the audit row / ops alert is the record.
  */
 import { resolveAppOrigin as getAppUrl } from "@/lib/app-url";
+import { isDemoMode } from "@/lib/mode";
 
 export type HoldNoticeEvent =
   | "hold.started"
@@ -108,10 +109,57 @@ function safe(v: unknown): string | null {
  * LP_HANDOFF_NOTIFY_SLACK_WEBHOOK (安藤). Skipped when unset. Built from an allow-list of IDs and
  * reason codes only, never the notice object itself, so no free text / PII can leak. Never throws.
  */
-export async function postStopFailedToHandoffSlack(n: HoldNotice): Promise<"posted" | "skipped" | "failed"> {
+// 木村 10/12 09:01: (2) at most 1 post per org × employee × reason every 10 minutes; the
+// suppressed count rides on the next post. The map is capped (oldest bucket evicted).
+// Per server instance (serverless): a burst across instances can post once per instance.
+export const HOLD_SLACK_THROTTLE_MS = 10 * 60_000;
+export const HOLD_SLACK_THROTTLE_MAX_KEYS = 500;
+const slackThrottle = new Map<string, { lastPostAt: number; suppressed: number }>();
+let slackClock: () => number = () => Date.now();
+export function __setHoldSlackClockForTests(fn: (() => number) | null): void {
+  slackClock = fn ?? (() => Date.now());
+}
+export function __resetHoldSlackThrottleForTests(): void {
+  slackThrottle.clear();
+}
+export function __holdSlackThrottleSizeForTests(): number {
+  return slackThrottle.size;
+}
+
+// (3) Production only: no ops Slack post from demo mode, previews, development or tests.
+// Previews share the production webhook (安藤's channel) and are where tests and trials
+// run, so they stay silent; the ops email + audit row still record a preview failure.
+let slackRuntimeOverride: "production" | null = null;
+export function __setHoldSlackRuntimeForTests(v: "production" | null): void {
+  slackRuntimeOverride = v;
+}
+export function isOpsSlackRuntime(): boolean {
+  if (slackRuntimeOverride === "production") return true;
+  if (process.env.NODE_ENV === "test") return false;
+  if ((process.env.VERCEL_ENV || "").trim() !== "production") return false;
+  return !isDemoMode();
+}
+
+export async function postStopFailedToHandoffSlack(n: HoldNotice): Promise<"posted" | "skipped" | "suppressed" | "failed"> {
   if (n.event !== "hold.start_failed") return "skipped";
+  if (!isOpsSlackRuntime()) return "skipped";
   const hook = (process.env.LP_HANDOFF_NOTIFY_SLACK_WEBHOOK || "").trim();
   if (!hook) return "skipped";
+  const now = slackClock();
+  const bucketKey = `${safe(n.orgId) ?? "-"}|${n.employeeId ? safe(n.employeeId) ?? "-" : "org_wide"}|hold_start_failed`;
+  const bucket = slackThrottle.get(bucketKey);
+  if (bucket && now - bucket.lastPostAt < HOLD_SLACK_THROTTLE_MS) {
+    bucket.suppressed += 1;
+    return "suppressed";
+  }
+  const suppressedSinceLast = bucket?.suppressed ?? 0;
+  slackThrottle.delete(bucketKey);
+  slackThrottle.set(bucketKey, { lastPostAt: now, suppressed: 0 });
+  while (slackThrottle.size > HOLD_SLACK_THROTTLE_MAX_KEYS) {
+    const oldest = slackThrottle.keys().next().value;
+    if (oldest === undefined) break;
+    slackThrottle.delete(oldest);
+  }
   const fields: Array<[string, string | null]> = [
     ["reason_code", "hold_start_failed"],
     ["org_id", safe(n.orgId)],
@@ -119,6 +167,7 @@ export async function postStopFailedToHandoffSlack(n: HoldNotice): Promise<"post
     ["via", safe(n.via)],
     ["sqlstate", safe(n.sqlState)],
     ["attempts", typeof n.attempts === "number" && Number.isFinite(n.attempts) ? String(Math.trunc(n.attempts)) : null],
+    ["suppressed_since_last", suppressedSinceLast > 0 ? String(suppressedSinceLast) : null],
   ];
   const text = ["【Staffpass運営】緊急停止に失敗しました（要対応）",
     ...fields.filter(([, v]) => v !== null).map(([k, v]) => `${k}: ${v}`)].join("\n");

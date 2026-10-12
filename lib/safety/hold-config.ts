@@ -45,9 +45,18 @@ export const HOLD_RELEASE_FRESH_LOGIN_MAX_AGE_MS = 5 * 60_000;
 export const HOLD_RELEASE_TOOL = "employee.hold.release";
 
 /** S3 start-retry policy (木村 10/12 05:35): 40P01 deadlock / 40001 serialization failure. */
-export const HOLD_START_RETRYABLE_CODES: ReadonlySet<string> = new Set(["40P01", "40001"]);
-export const HOLD_START_MAX_ATTEMPTS = 3;
-export const HOLD_START_BACKOFF_MS = [50, 200] as const;
+// 木村 10/12 09:01: 40P01 deadlock, 40001 serialization failure, 55P03 lock not available.
+// The S1 functions run at READ COMMITTED (the PostgREST default; they set no isolation), where
+// row-lock waits re-check instead of raising 40001 — see the PR body. 5 attempts with
+// exponential backoff + jitter (each wait uniform in [base/2, base], bases 50/100/200/400 ms,
+// ≤ 750 ms in total) so concurrent stops that collide do not retry in lockstep.
+export const HOLD_START_RETRYABLE_CODES: ReadonlySet<string> = new Set(["40P01", "40001", "55P03"]);
+export const HOLD_START_MAX_ATTEMPTS = 5;
+export const HOLD_START_BACKOFF_MS = [50, 100, 200, 400] as const;
+export function holdStartBackoffMs(attempt: number, random: () => number = Math.random): number {
+  const base = HOLD_START_BACKOFF_MS[Math.min(Math.max(attempt, 1) - 1, HOLD_START_BACKOFF_MS.length - 1)];
+  return Math.round(base / 2 + random() * (base / 2));
+}
 
 /** True for the S3 release ticket (same test as the S1 SQL: metadata.adminTool, else tool). */
 export function isHoldReleaseTicket(approval: { tool?: string | null; metadata?: Record<string, unknown> | null } | null | undefined): boolean {

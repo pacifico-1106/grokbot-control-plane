@@ -124,13 +124,37 @@ describe("stop never fails silently (40P01 / 40001 retry, then ops alert)", () =
     expect(sent.some((x) => x.n.event === "hold.start_failed")).toBe(false);
   });
   test("still 40001 after the retries → 503 hold_start_failed + ops alert (sqlstate, attempts) + audit", async () => {
-    store.__setHoldStoreForTests(flaky(["40001", "40001", "40001", "40001"]));
+    store.__setHoldStoreForTests(flaky(["40001", "40001", "40001", "40001", "40001", "40001"]));
     const r = await actions.startHold({ orgId: ORG, employeeId: EMP, actor: web(owner()) });
     expect(r.ok ? "ok" : `${r.code}:${r.httpStatus}`).toBe("hold_start_failed:503");
     const alert = sent.find((x) => x.to === "ops" && x.n.event === "hold.start_failed");
     expect(alert?.n.sqlState).toBe("40001");
-    expect(alert?.n.attempts).toBe(3);
+    expect(alert?.n.attempts).toBe(5);
     expect((await listAuditEvents(ORG)).some((e) => e.action === "employee.hold.start_failed")).toBe(true);
+  });
+  test("木村 10/12 09:01: 4 serialization / lock failures in a row still stop on the 5th attempt", async () => {
+    store.__setHoldStoreForTests(flaky(["40001", "40P01", "55P03", "40001", null]));
+    const r = await actions.startHold({ orgId: ORG, employeeId: EMP, actor: web(owner()) });
+    expect(r.ok && r.attempts === 5).toBe(true);
+    expect(sent.some((x) => x.n.event === "hold.start_failed")).toBe(false);
+  });
+  test("backoff: exponential with jitter, within [base/2, base] of 50 / 100 / 200 / 400 ms", async () => {
+    const waits: number[] = [];
+    actions.__setHoldSleepForTests(async (ms) => { waits.push(ms); });
+    for (let run = 0; run < 20; run++) {
+      store.__setHoldStoreForTests(flaky(["40001", "40001", "40001", "40001", "40001"]));
+      await actions.startHold({ orgId: ORG, employeeId: EMP, actor: web(owner()) });
+    }
+    expect(waits.length).toBe(20 * 4);
+    const bases = [50, 100, 200, 400];
+    waits.forEach((ms, i) => {
+      const base = bases[i % 4];
+      expect(ms).toBeGreaterThanOrEqual(base / 2);
+      expect(ms).toBeLessThanOrEqual(base);
+    });
+    // jitter: not all the same per step
+    expect(new Set(waits.filter((_, i) => i % 4 === 3)).size).toBeGreaterThan(1);
+    actions.__setHoldSleepForTests(async () => undefined);
   });
   test("an unexpected error is not retried but still alerts ops", async () => {
     const s = flaky(["boom"]);
