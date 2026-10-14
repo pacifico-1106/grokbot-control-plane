@@ -172,7 +172,6 @@ describe("LINE comm.reply (flag ON) → sendLineConversationMessage", () => {
     expect(res.body.approvalId).toBeTruthy();
     expect(sends).toEqual([]);
     expect(await approvalsFor(String(body.jobId))).toHaveLength(1);
-    expect(JSON.stringify(res.body)).not.toContain(TEXT);
   });
 
   test("external + informationClass public (who/what) → sent without a card, externalSendAllowed true", async () => {

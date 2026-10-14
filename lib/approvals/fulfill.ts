@@ -1332,6 +1332,10 @@ export async function fulfillApprovedInvoke(
   }
   const snapshot = approval.status === "approved" ? parseInvokeSnapshot(approval.metadata) : null;
   if (approval.status !== "approved" || !snapshot || isAdminClassApproval(approval)) return null;
+  const already = parseFulfillment(approval.metadata);
+  if (already?.ok) return already;
+  // Unknown LINE / Slack outcome: never take the claim again (a retry would Push).
+  if (already?.error === POST_OUTCOME_UNKNOWN) return already;
   // Re-check tool settings / mail policy before taking the execution claim so
   // a stop is audited with its reason (the authority check would otherwise
   // throw a generic approval_authority_revoked) and the claim is not touched.
