@@ -2,6 +2,8 @@
  * Read a request body as RAW BYTES with a hard cap, without buffering more than
  * `maxBytes` (+ one chunk) in memory:
  *  - a declared Content-Length over the cap is refused before anything is read;
+ *  - Content-Length must be digits only (`/^\d+$/`); Number() forms (1e6, 0x10,
+ *    +10, 12.5) and a comma-joined multi-header are refused;
  *  - the stream is read chunk by chunk and cancelled as soon as the total passes
  *    the cap (a missing or lying Content-Length cannot get around it).
  * Signatures (e.g. LINE x-line-signature) must be verified over these bytes, not
@@ -11,9 +13,9 @@ export type CappedBody = { ok: true; bytes: Uint8Array } | { ok: false; reason: 
 
 export async function readBodyCapped(req: Request, maxBytes: number): Promise<CappedBody> {
   const declared = req.headers.get("content-length");
-  if (declared !== null && declared.trim() !== "") {
+  if (declared !== null) {
+    if (!/^\d+$/.test(declared)) return { ok: false, reason: "read_error" };
     const n = Number(declared);
-    if (!Number.isFinite(n) || n < 0) return { ok: false, reason: "read_error" };
     if (n > maxBytes) return { ok: false, reason: "too_large" };
   }
   if (!req.body) return { ok: true, bytes: new Uint8Array(0) };

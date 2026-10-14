@@ -102,6 +102,23 @@ describe("1 MB body cap", () => {
     expect(r.status).toBe(401);
   });
 
+  test("non-digit Content-Length (1e6 / 0x10 / +10) → 400, body never read", async () => {
+    for (const value of ["1e6", "0x10", "+10", "12.5"]) {
+      const { stream, state } = streamed(2 * MB);
+      const req = new Request(url(), {
+        method: "POST",
+        headers: { "content-length": value, "x-line-signature": "x" },
+        body: stream,
+        // @ts-expect-error -- undici/Bun streaming request bodies
+        duplex: "half",
+      });
+      const r = await POST(req, ctx());
+      expect(r.status).toBe(400);
+      expect(await r.json()).toMatchObject({ ok: false, error: "invalid_body" });
+      expect(state.pulled).toBe(0);
+    }
+  });
+
   test("a lying small Content-Length with a larger streamed body is still capped", async () => {
     const { stream } = streamed(3 * MB);
     const req = new Request(url(), {
