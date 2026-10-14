@@ -113,6 +113,23 @@ describe("/api/employees/[id]/comm-link-code", () => {
     expect(res.headers.get("cache-control")).toBe("no-store");
   });
 
+  test("admin without approve_actions → 403", async () => {
+    const { POST } = await import("@/app/api/employees/[id]/comm-link-code/route");
+    const admin = getRuntimeMembers().find((m) => m.id === "mem_3")!;
+    const prevCap = admin.capabilities;
+    const prevRole = admin.role;
+    admin.capabilities = ["view_dashboard", "view_employees", "manage_team"];
+    admin.role = "admin";
+    try {
+      const res = await POST(post("emp_comm", "mem_3"), ctx());
+      expect(res.status).toBe(403);
+      expect((await res.json()).error).toBe("approver_required");
+    } finally {
+      admin.capabilities = prevCap;
+      admin.role = prevRole;
+    }
+  });
+
   test("approver (approve_actions) can issue", async () => {
     const { POST } = await import("@/app/api/employees/[id]/comm-link-code/route");
     const res = await POST(post("emp_comm", "mem_2"), ctx());

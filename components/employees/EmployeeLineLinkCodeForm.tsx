@@ -47,7 +47,7 @@ export function EmployeeLineLinkCodeForm({
   return (
     <div className="space-y-2">
       <p className="text-xs muted leading-relaxed">
-        この社員の LINE 公式アカウントに送る 1 回限りの連携コードです。コードを送った人が社内メンバーとして紐付きます。本文はログに残りません。
+        発行した本人が、この社員の LINE に自分で送ると、あなたの社内メンバーと LINE が紐付きます。第三者に渡さないでください。本文はログに残りません。
       </p>
       <button
         type="button"

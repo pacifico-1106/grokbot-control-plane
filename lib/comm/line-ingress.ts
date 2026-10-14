@@ -16,10 +16,11 @@
  *        duplicate → skipped; storage error → skipped and the webhook answers 503
  *        so LINE redelivers (if redelivery is ON)
  *      - PoC: 1:1 text in active mode only (groups / rooms / media / follow → not dispatched)
- *      - a link code (SP-XXXX-XXXX) is redeemed on this account (L-7) and never handed to the AI
- *      - emergency stop: checkOperable({phase:"wake"}) — held, unknown or error →
- *        not dispatched, audited (throttled), and never woken later (the event key
- *        is already consumed). Same rule as the Slack wake (S2 G5).
+ *      - emergency stop: checkOperable({phase:"wake"}) FIRST — held, unknown or
+ *        error → not redeemed, not dispatched, audited (throttled). The event
+ *        key is already consumed. Same rule as the Slack wake (S2 G5).
+ *      - a link code (SP-XXXX-XXXX) is redeemed on this account (L-7) only after
+ *        the hold check (nothing is bound while stopped / on leave) and never handed to the AI
  *   6. a NEW conversation token for this message (org × employee × account ×
  *      sender, 24 h; 木村 10/12). No token key → not woken (fail closed).
  *   7. dispatch (L-7): wake the AI employee with the conversation token. A
@@ -157,17 +158,6 @@ async function processEvent(account: CommAccount, ev: LineEvent, d: LineIngressD
   const sender = String(src.userId || "");
   const text = ev.type === "message" && ev.message?.type === "text" ? String(ev.message.text ?? "") : "";
   if (ev.mode === "standby" || src.type !== "user" || src.groupId || src.roomId || !LINE_USER_RE.test(sender) || !text) return "done";
-  if (LINK_CODE_RE.test(text)) {
-    // L-7: redeem on the employee's own LINE (never handed to the AI)
-    await redeemConversationLinkCode({
-      orgId: account.orgId,
-      accountId: account.id,
-      text,
-      lineUserId: sender,
-      replyToken: typeof ev.replyToken === "string" ? ev.replyToken : null,
-    }).catch(() => undefined);
-    return "done";
-  }
 
   let operable: OperableResult;
   try {
@@ -177,6 +167,20 @@ async function processEvent(account: CommAccount, ev: LineEvent, d: LineIngressD
   }
   if (!operable.ok) {
     await auditSuppressed(account, operable);
+    return "done";
+  }
+
+  if (LINK_CODE_RE.test(text)) {
+    // L-7: redeem on the employee's own LINE (never handed to the AI).
+    // Hold already checked above — nothing is bound while stopped / on leave.
+    await redeemConversationLinkCode({
+      orgId: account.orgId,
+      accountId: account.id,
+      employeeId: account.employeeId,
+      text,
+      lineUserId: sender,
+      replyToken: typeof ev.replyToken === "string" ? ev.replyToken : null,
+    }).catch(() => undefined);
     return "done";
   }
   const token = issueConversationToken(

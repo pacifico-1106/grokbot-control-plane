@@ -4,7 +4,7 @@ import type { OrgMember } from "@/lib/types";
 
 export function memberCanIssueConversationLinkCode(member: OrgMember | null | undefined): boolean {
   if (!member || member.status !== "active") return false;
-  if (member.role === "owner" || member.role === "admin") return true;
+  if (member.role === "owner") return true;
   return hasCapability(member, "approve_actions");
 }
 

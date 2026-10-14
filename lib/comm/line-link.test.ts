@@ -5,8 +5,8 @@
  * id; voter binding key is comm_account:<accountId>. Plaintext never stored.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { createCommAccount, resetDemoCommAccounts, type CommAccount } from "@/lib/comm/accounts";
-import { redeemConversationLinkCode } from "@/lib/comm/line-link";
+import { createCommAccount, resetDemoCommAccounts, setCommAccountSecrets, type CommAccount } from "@/lib/comm/accounts";
+import { redeemConversationLinkCode, sendConversationLinkReply } from "@/lib/comm/line-link";
 import { getVoterBinding, resetDemoVoterBindings } from "@/lib/approval-workflow/voter-binding";
 import { DEMO_MEMBERS, DEMO_ORG } from "@/lib/demo-data";
 import { issueLineLinkCode, resetDemoLineLinkCodes } from "@/lib/line/link-code";
@@ -82,6 +82,30 @@ describe("redeemConversationLinkCode", () => {
     expect(bound?.status).toBe("active");
     expect(bound?.memberId).toBe(MEMBER);
     expect(await getVoterBinding(ORG, "line", account.id, USER)).toBeNull();
+  });
+
+  test("confirm Reply is skipped when checkLineSendAllowed refuses (stop / leave)", async () => {
+    const secrets = await setCommAccountSecrets({
+      orgId: ORG, accountId: account.id,
+      secrets: { channelAccessToken: "A".repeat(120), channelSecret: "0123456789abcdef0123456789abcdef" },
+      memberId: "m1",
+    });
+    if (!secrets.ok) throw new Error(secrets.reason);
+    const calls: string[] = [];
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = (async () => {
+      calls.push("fetch");
+      return new Response("{}", { status: 200 });
+    }) as typeof fetch;
+    try {
+      await sendConversationLinkReply(
+        { orgId: ORG, accountId: account.id, employeeId: EMP, lineUserId: USER, replyToken: "rt-hold-1" },
+        { checkLineSendAllowed: async () => ({ ok: false, reason: "employee_on_hold" }) }
+      );
+      expect(calls).toEqual([]);
+    } finally {
+      globalThis.fetch = origFetch;
+    }
   });
 
   test("redeem success Replies a short fixed message only; never the received body", async () => {

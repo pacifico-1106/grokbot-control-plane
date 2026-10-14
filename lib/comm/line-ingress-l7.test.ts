@@ -15,7 +15,7 @@ mock.module("@/lib/comm/line-wake", () => ({
   dispatchLineConversationWake: async (e: unknown) => { wakes.push(e); },
 }));
 mock.module("@/lib/comm/line-link", () => ({
-  redeemConversationLinkCode: async (i: { orgId: string; accountId: string; text: string; lineUserId: string; replyToken?: string | null }) => {
+  redeemConversationLinkCode: async (i: { orgId: string; accountId: string; employeeId?: string; text: string; lineUserId: string; replyToken?: string | null }) => {
     links.push(i);
     return { handled: true, bound: true };
   },
@@ -95,12 +95,26 @@ describe("default dispatch (L-7)", () => {
     expect(links).toEqual([]);
   });
 
+  test("hold / leave → link code is not redeemed (checkOperable before redeem)", async () => {
+    const raw = body([ev({ message: { type: "text", id: "m3", text: "SP-ABCD-EFGH" } })]);
+    const res = await handleLineAccountWebhook(
+      { ref: account.webhookRef, rawBody: raw, signature: sig(raw) },
+      {
+        now: () => NOW,
+        checkOperable: async () => ({ ok: false, code: "hold_state_unavailable", holdId: null, kind: null }),
+      }
+    );
+    expect(res.status).toBe(200);
+    expect(wakes).toEqual([]);
+    expect(links).toEqual([]);
+  });
+
   test("a link code on the employee's own LINE is redeemed, never woken", async () => {
     const raw = body([ev({ message: { type: "text", id: "m3", text: "SP-ABCD-EFGH" } })]);
     expect((await call(raw)).status).toBe(200);
     expect(wakes).toEqual([]);
     expect(links).toEqual([
-      { orgId: ORG, accountId: account.id, text: "SP-ABCD-EFGH", lineUserId: USER, replyToken: "rt-1" },
+      { orgId: ORG, accountId: account.id, employeeId: EMP, text: "SP-ABCD-EFGH", lineUserId: USER, replyToken: "rt-1" },
     ]);
   });
 

@@ -1,6 +1,6 @@
 /**
  * L-7 conversation link-code issue (Kimura 10/14).
- * Admin employee detail only. Owner / admin / approve_actions.
+ * Admin employee detail only. Owner or approve_actions (approvers). Not admin.
  * Same-org BOLA via getEmployee(id, actor.orgId). Issues for the actor, never
  * a memberId from the body. No admin MCP. Flags default OFF → 404.
  */
