@@ -217,20 +217,24 @@ function expectMismatch(r: Awaited<ReturnType<typeof invoke>>, ids: string[]) {
 }
 
 describe("billing gate first: a refusal means no Slack call and nothing sent", () => {
-  test("same-person U… on a D… wake while billing refuses → refused with NO Slack call (no auth.test / users.info / conversations.open), nothing sent", async () => {
+  test("same-person U… on a D… wake while billing refuses → 402 expired_trial_gated (same as the gateway gate), no Slack call, nothing sent", async () => {
     const u = await party("internal");
     const d = await dmWakeFor(u);
     billingRefuses = true;
     const body = onDmWake(d, { channelId: u });
     const r = await invoke(body);
+    expect(r.httpStatus).toBe(402);
     expect(r.body.ok).toBe(false);
-    expect(r.body.sent).toBe(false);
+    expect(r.body.code).toBe("expired_trial_gated");
+    expect(r.body.error).toBe("expired_trial_gated");
+    expect(r.body.sent).toBeUndefined();
     expect(calls).toEqual([]);
     expect(posts().length).toBe(0);
-    const row = getRuntimeAudit().find(
+    const mismatch = getRuntimeAudit().find(
       (e) => (e.metadata as Record<string, unknown>)?.jobId === body.jobId && e.action === "gateway.conversation_channel_mismatch"
     );
-    expect((row?.metadata as Record<string, unknown>)?.resolution).toBe("billing_gate");
+    expect(mismatch).toBeUndefined();
+    expect(JSON.stringify(r.body)).not.toContain("billing_gate");
     expect(JSON.stringify(r.body)).not.toContain(u);
     expect(JSON.stringify(r.body)).not.toContain(d);
   });

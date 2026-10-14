@@ -1005,6 +1005,28 @@ async function runGatewayInvokeInner(
     if (same.kind === "same") {
       body = same.body;
       channelMismatch = null;
+    } else if (same.kind === "billing") {
+      const g = same.billing;
+      return jsonResult(
+        {
+          ok: false,
+          code: g.code,
+          error: g.code,
+          tool,
+          message: `トライアル期間が終了したため、${tool} はご利用いただけません。プランを選択してお手続きください。`,
+          billingPath: "/app/billing",
+          entitlements: {
+            plan: g.entitlements.plan,
+            status: g.entitlements.status,
+            canHire: g.entitlements.canHire,
+            expiredTrial: g.entitlements.expiredTrial,
+          },
+          employeeId,
+          purpose,
+          jobId,
+        },
+        402
+      );
     } else {
       mismatchResolution = same.reason;
     }
