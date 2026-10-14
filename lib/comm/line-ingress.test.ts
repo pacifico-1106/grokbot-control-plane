@@ -72,8 +72,19 @@ function ev(over: Record<string, unknown> = {}) {
 function body(events: unknown[], destination = BOT) { return JSON.stringify({ destination, events }); }
 const sig = (raw: string, secret = SECRET) => createHmac("sha256", secret).update(raw).digest("base64");
 async function call(raw: string, signature = sig(raw), ref = account.webhookRef) {
-  return handleLineAccountWebhook({ ref, rawBody: raw, signature }, deps());
+  return handleLineAccountWebhook({ ref, rawBody: new TextEncoder().encode(raw), signature }, deps());
 }
+
+describe("rawBody is Uint8Array only", () => {
+  test("handleLineAccountWebhook type and source reject a string body path", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const src = readFileSync(join(process.cwd(), "lib/comm/line-ingress.ts"), "utf8");
+    expect(src).toMatch(/rawBody:\s*Uint8Array/);
+    expect(src).not.toMatch(/rawBody:\s*Uint8Array\s*\|\s*string/);
+    expect(src).not.toMatch(/typeof input\.rawBody === ["']string["']/);
+  });
+});
 
 describe("before any event is read", () => {
   test("LINE conversation flag OFF → 404, nothing dispatched", async () => {
@@ -184,7 +195,7 @@ describe("events", () => {
     const d = deps();
     d.dispatch = async () => { throw new Error("wake failed"); };
     const raw = body([ev()]);
-    expect((await handleLineAccountWebhook({ ref: account.webhookRef, rawBody: raw, signature: sig(raw) }, d)).status).toBe(200);
+    expect((await handleLineAccountWebhook({ ref: account.webhookRef, rawBody: new TextEncoder().encode(raw), signature: sig(raw) }, d)).status).toBe(200);
   });
 
   test("too many events in one body → only the first 100 are looked at", async () => {
@@ -239,7 +250,7 @@ describe("emergency stop / leave at wake, with the real hold check", () => {
         org: async () => ({ state: "found", orgId: ORG, holdState: org, holdId: org ? "h2" : null }),
       });
       const raw = body([ev({ webhookEventId: `01HZZZZZZZZZZZZZZZZZZZZZ${emp ?? org}`.slice(0, 26) })]);
-      await handleLineAccountWebhook({ ref: account.webhookRef, rawBody: raw, signature: sig(raw) }, real as never);
+      await handleLineAccountWebhook({ ref: account.webhookRef, rawBody: new TextEncoder().encode(raw), signature: sig(raw) }, real as never);
     }
     __setHoldReaderForTests(null);
     expect(dispatched).toEqual([]);

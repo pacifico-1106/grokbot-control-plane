@@ -33,6 +33,8 @@ import { getOrgChannel, getOrgParty } from "@/lib/data/directory";
 import { getSlackImEmployeeRoute, isSlackImChannelId } from "@/lib/data/slack-im-routes";
 import { parseConversationContext } from "@/lib/gateway/audience";
 import { isSlackUToDmSendEnabled } from "@/lib/slack/dm-autoroute-flags";
+import { assertBillingAllowsGateway, type GatewayGateResult } from "@/lib/billing/entitlements";
+import { resolveGatewayTool } from "@/lib/gateway/tools";
 import { syncAutoDmRoutesForEmployee } from "@/lib/slack/dm-autoroute";
 import type { Employee, GatewayInvokeRequest } from "@/lib/types";
 
@@ -287,6 +289,7 @@ export async function resolveSlackUserRecipient(input: {
  * destination — compared AFTER resolution, never by trusting the request:
  *   1. exactly one distinct U… and exactly one distinct D… (anything else, e.g. a
  *      C… / G…, a second U… or a second D…, stays a mismatch);
+ *   1b. the billing gate passes (before any read below or any Slack call);
  *   2. the D… is THIS employee's stored internal DM route (same org) whose
  *      counterparty is that U… — otherwise refuse without any Slack call, so a
  *      different person never gets a DM opened;
@@ -302,7 +305,11 @@ export async function resolveChannelMismatchToSameDm(input: {
   employee: Employee;
   body: GatewayInvokeRequest;
   values: string[];
-}): Promise<{ kind: "same"; body: GatewayInvokeRequest } | { kind: "mismatch"; reason: string }> {
+}): Promise<
+  | { kind: "same"; body: GatewayInvokeRequest }
+  | { kind: "mismatch"; reason: string }
+  | { kind: "billing"; billing: Extract<GatewayGateResult, { ok: false }> }
+> {
   if (!isSlackUToDmSendEnabled()) return { kind: "mismatch", reason: "u_to_dm_flag_off" };
   const users = input.values.filter((v) => SLACK_USER_ID.test(v));
   const others = input.values.filter((v) => !SLACK_USER_ID.test(v));
@@ -313,6 +320,15 @@ export async function resolveChannelMismatchToSameDm(input: {
   const [dm] = others;
   const orgId = (input.orgId || "").trim();
   if (!orgId || input.employee.orgId !== orgId) return { kind: "mismatch", reason: "employee_org_mismatch" };
+  // 木村 10/12: nothing below (stored-route read, auth.test / users.info /
+  // conversations.open) runs unless the billing gate passes — the same gate, on the
+  // same canonical tool id, that the gateway applies right after this check.
+  // 木村 10/14: 402 only for a real expired_trial_gated result. Do not catch
+  // and synthesize entitlements — a throw stays fail-closed (invoke → 503).
+  const toolResolved = resolveGatewayTool((input.body.tool || "").trim());
+  if (!toolResolved.ok) return { kind: "mismatch", reason: "unknown_tool" };
+  const billing = await assertBillingAllowsGateway(orgId, toolResolved.def.id);
+  if (!billing.ok) return { kind: "billing", billing };
   const stored = await getSlackImEmployeeRoute(orgId, dm);
   if (
     !stored ||

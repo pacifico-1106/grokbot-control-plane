@@ -996,15 +996,57 @@ async function runGatewayInvokeInner(
   let channelMismatch = conversationChannelMismatch(body);
   let mismatchResolution: string | undefined;
   if (channelMismatch && isAudienceGatedTool(toolDef)) {
-    const same = await resolveChannelMismatchToSameDm({
-      orgId: principalOrgId,
-      employee,
-      body,
-      values: channelMismatch.values,
-    });
+    let same: Awaited<ReturnType<typeof resolveChannelMismatchToSameDm>>;
+    try {
+      same = await resolveChannelMismatchToSameDm({
+        orgId: principalOrgId,
+        employee,
+        body,
+        values: channelMismatch.values,
+      });
+    } catch {
+      return jsonResult(
+        {
+          ok: false,
+          code: "unavailable",
+          error: "unavailable",
+          sent: false,
+          message: "送信先の確認ができませんでした。メッセージは送信していません。",
+          retryable: true,
+          needs_approval: false,
+          employeeId,
+          tool,
+          purpose,
+          jobId,
+        },
+        503
+      );
+    }
     if (same.kind === "same") {
       body = same.body;
       channelMismatch = null;
+    } else if (same.kind === "billing") {
+      const g = same.billing;
+      return jsonResult(
+        {
+          ok: false,
+          code: g.code,
+          error: g.code,
+          tool,
+          message: `トライアル期間が終了したため、${tool} はご利用いただけません。プランを選択してお手続きください。`,
+          billingPath: "/app/billing",
+          entitlements: {
+            plan: g.entitlements.plan,
+            status: g.entitlements.status,
+            canHire: g.entitlements.canHire,
+            expiredTrial: g.entitlements.expiredTrial,
+          },
+          employeeId,
+          purpose,
+          jobId,
+        },
+        402
+      );
     } else {
       mismatchResolution = same.reason;
     }

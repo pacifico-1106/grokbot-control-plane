@@ -7,7 +7,8 @@
  *   1. ref → ACTIVE account (unknown / pending / disabled → 404). The org and the
  *      employee come from this row only; nothing in the body selects them.
  *   2. that account's channel secret (unreadable → 503, fail closed)
- *   3. x-line-signature = base64(HMAC-SHA256(secret, raw body)), constant time → 401
+ *   3. x-line-signature = base64(HMAC-SHA256(secret, raw body BYTES)), constant time → 401
+ *      (the route reads the bytes capped at 1 MB; a decoded string is never signed)
  *   4. JSON (→ 400); `destination` must be this account's bot userId (→ 401)
  *   5. per event (first 100 only):
  *      - no webhookEventId → ignored (H7: no key, no dedup)
@@ -87,7 +88,8 @@ type LineEvent = {
 
 export type LineIngressResult = { status: number; body: Record<string, unknown> };
 
-function verify(secret: string, raw: string, signature: string): boolean {
+/** HMAC over the RAW BYTES LINE signed (a string is taken as its UTF-8 bytes). */
+function verify(secret: string, raw: Uint8Array, signature: string): boolean {
   if (!secret || !signature) return false;
   const a = createHmac("sha256", secret).update(raw).digest();
   let b: Buffer;
@@ -96,7 +98,7 @@ function verify(secret: string, raw: string, signature: string): boolean {
 }
 
 export async function handleLineAccountWebhook(
-  input: { ref: string; rawBody: string; signature: string },
+  input: { ref: string; rawBody: Uint8Array; signature: string },
   deps: Partial<LineIngressDeps> = {}
 ): Promise<LineIngressResult> {
   const d = { ...defaultDeps, ...deps };
@@ -108,12 +110,15 @@ export async function handleLineAccountWebhook(
     console.error("line_account_webhook_secret_unavailable", { accountId: account.id, reason: secrets.reason });
     return { status: 503, body: { ok: false, error: "unavailable" } };
   }
-  if (!verify(secrets.secrets.channelSecret, input.rawBody, input.signature)) {
+  const rawBytes = input.rawBody;
+  if (!verify(secrets.secrets.channelSecret, rawBytes, input.signature)) {
     return { status: 401, body: { ok: false, error: "unauthorized" } };
   }
   let parsed: { destination?: unknown; events?: unknown };
   try {
-    parsed = JSON.parse(input.rawBody || "{}");
+    // Decoded only after the signature passed; non-UTF-8 → 400 (fatal decode).
+    const text = new TextDecoder("utf-8", { fatal: true }).decode(rawBytes);
+    parsed = JSON.parse(text || "{}");
   } catch {
     return { status: 400, body: { ok: false, error: "invalid_json" } };
   }
