@@ -98,7 +98,7 @@ function verify(secret: string, raw: Uint8Array, signature: string): boolean {
 }
 
 export async function handleLineAccountWebhook(
-  input: { ref: string; rawBody: Uint8Array | string; signature: string },
+  input: { ref: string; rawBody: Uint8Array; signature: string },
   deps: Partial<LineIngressDeps> = {}
 ): Promise<LineIngressResult> {
   const d = { ...defaultDeps, ...deps };
@@ -110,7 +110,7 @@ export async function handleLineAccountWebhook(
     console.error("line_account_webhook_secret_unavailable", { accountId: account.id, reason: secrets.reason });
     return { status: 503, body: { ok: false, error: "unavailable" } };
   }
-  const rawBytes = typeof input.rawBody === "string" ? new TextEncoder().encode(input.rawBody) : input.rawBody;
+  const rawBytes = input.rawBody;
   if (!verify(secrets.secrets.channelSecret, rawBytes, input.signature)) {
     return { status: 401, body: { ok: false, error: "unauthorized" } };
   }

@@ -12,9 +12,11 @@ import * as realEntitlements from "@/lib/billing/entitlements";
 // Captured before mock.module (it live-updates the namespace). Default: the real gate.
 const realGate = realEntitlements.assertBillingAllowsGateway;
 let billingRefuses = false;
+let billingThrows = false;
 mock.module("@/lib/billing/entitlements", () => ({
   ...realEntitlements,
   assertBillingAllowsGateway: async (orgId: string | null | undefined, tool: string) => {
+    if (billingThrows) throw new Error("entitlements_unavailable");
     if (!billingRefuses) return realGate(orgId, tool);
     const real = await realGate(orgId, tool);
     return { ok: false, code: "expired_trial_gated", tool, entitlements: real.entitlements };
@@ -154,6 +156,7 @@ function expectIdsOnlyAudit(jobId: string, code: string) {
 
 beforeEach(async () => {
   billingRefuses = false;
+  billingThrows = false;
   process.env[FLAG] = "1";
   process.env[SEND_FLAG] = "1";
   process.env[IM_WRITE_FLAG] = "1";
@@ -247,6 +250,23 @@ describe("billing gate first: a refusal means no Slack call and nothing sent", (
     expect(r.httpStatus).toBe(402);
     expect(r.body.code).toBe("expired_trial_gated");
     expect(calls).toEqual([]);
+  });
+
+  test("billing gate throws → 503 unavailable (not a synthesized 402 / not fabricated entitlements)", async () => {
+    const u = await party("internal");
+    const d = await dmWakeFor(u);
+    billingThrows = true;
+    const body = onDmWake(d, { channelId: u });
+    const r = await invoke(body);
+    expect(r.httpStatus).toBe(503);
+    expect(r.body.code).toBe("unavailable");
+    expect(r.body.code).not.toBe("expired_trial_gated");
+    expect(JSON.stringify(r.body)).not.toContain("billing_gate");
+    expect(JSON.stringify(r.body)).not.toContain("\"plan\":\"trial\"");
+    expect(calls).toEqual([]);
+    expect(posts().length).toBe(0);
+    expect(JSON.stringify(r.body)).not.toContain(u);
+    expect(JSON.stringify(r.body)).not.toContain(d);
   });
 
   test("billing passes → the same request is resolved and delivered once to the D… (unchanged)", async () => {

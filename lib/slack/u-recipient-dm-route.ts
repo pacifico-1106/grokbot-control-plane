@@ -323,19 +323,12 @@ export async function resolveChannelMismatchToSameDm(input: {
   // 木村 10/12: nothing below (stored-route read, auth.test / users.info /
   // conversations.open) runs unless the billing gate passes — the same gate, on the
   // same canonical tool id, that the gateway applies right after this check.
-  // 木村 10/14: a refusal is 402 expired_trial_gated (not 400 billing_gate).
+  // 木村 10/14: 402 only for a real expired_trial_gated result. Do not catch
+  // and synthesize entitlements — a throw stays fail-closed (invoke → 503).
   const toolResolved = resolveGatewayTool((input.body.tool || "").trim());
   if (!toolResolved.ok) return { kind: "mismatch", reason: "unknown_tool" };
-  const billing = await assertBillingAllowsGateway(orgId, toolResolved.def.id).catch(() => null);
-  if (!billing || !billing.ok) {
-    return {
-      kind: "billing",
-      billing:
-        billing && !billing.ok
-          ? billing
-          : { ok: false, code: "expired_trial_gated", tool: toolResolved.def.id, entitlements: { plan: "trial", status: "expired", canHire: false, expiredTrial: true } as Extract<GatewayGateResult, { ok: false }>["entitlements"] },
-    };
-  }
+  const billing = await assertBillingAllowsGateway(orgId, toolResolved.def.id);
+  if (!billing.ok) return { kind: "billing", billing };
   const stored = await getSlackImEmployeeRoute(orgId, dm);
   if (
     !stored ||

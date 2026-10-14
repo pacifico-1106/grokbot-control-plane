@@ -156,6 +156,22 @@ describe("signature over the raw bytes", () => {
   });
 });
 
+describe("unknown ref is refused before the body is read", () => {
+  test("unknown / invalid ref → 404 and the stream is never pulled", async () => {
+    const { stream, state } = streamed(2 * MB);
+    const req = new Request("http://localhost/api/webhooks/line/c/not-a-real-ref-xxxxxxxxxxxxxxxxxxxxx", {
+      method: "POST",
+      headers: { "x-line-signature": "x" },
+      body: stream,
+      // @ts-expect-error -- undici/Bun streaming request bodies
+      duplex: "half",
+    });
+    const r = await POST(req, { params: Promise.resolve({ ref: "not-a-real-ref-xxxxxxxxxxxxxxxxxxxxx" }) });
+    expect(r.status).toBe(404);
+    expect(state.pulled).toBe(0);
+  });
+});
+
 describe("flag OFF", () => {
   test("LINE_CONVERSATION_ENABLED off → 404 without reading the body", async () => {
     process.env.LINE_CONVERSATION_ENABLED = "";

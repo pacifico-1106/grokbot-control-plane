@@ -8,6 +8,7 @@
  * is verified over exactly those bytes.
  */
 import { handleLineAccountWebhook } from "@/lib/comm/line-ingress";
+import { getActiveCommAccountByWebhookRef } from "@/lib/comm/accounts";
 import { isLineConversationEnabled } from "@/lib/comm/flags";
 import { readBodyCapped } from "@/lib/http/read-body-capped";
 import { jsonUtf8 } from "@/lib/http/json-utf8";
@@ -20,6 +21,8 @@ const MAX_BODY_BYTES = 1_000_000;
 export async function POST(req: Request, ctx: { params: Promise<{ ref: string }> }) {
   if (!isLineConversationEnabled()) return jsonUtf8({ ok: false, error: "not_found" }, { status: 404 });
   const { ref } = await ctx.params;
+  const account = await getActiveCommAccountByWebhookRef(ref).catch(() => null);
+  if (!account) return jsonUtf8({ ok: false, error: "not_found" }, { status: 404 });
   const body = await readBodyCapped(req, MAX_BODY_BYTES);
   if (!body.ok) {
     return body.reason === "too_large"
