@@ -60,9 +60,11 @@ import { resolveInformationDisclosure } from "@/lib/gateway/information-class";
 import {
   deliverLineConversation,
   isLineConversationRequest,
+  lineExternalNoApproval,
   lineExternalSendAllowed,
   lineForceExternalApproval,
   lineSendAsPosted,
+  lineWaiveExternalDeny,
 } from "@/lib/comm/line-invoke";
 import { evaluateProjectScope } from "@/lib/gateway/project-scope";
 import { accessibleProjects } from "@/lib/employees/project-access";
@@ -1673,6 +1675,8 @@ async function runGatewayInvokeInner(
 
   // LINE: unclassified external confidential-deny becomes needs_approval
   // (default = human yes). Explicit confidential / verbatim stay deny.
+  // Tenant reply_policy cannot waive; only employee/role "no approval" or tool auto.
+  let lineExternalNoApprovalFlag = false;
   if (egress && isLineConversationRequest(parseConversationContext(body, principalOrgId), body)) {
     const disclosure = await resolveInformationDisclosure({
       orgId: principalOrgId,
@@ -1685,14 +1689,34 @@ async function runGatewayInvokeInner(
       (isInformationClass(body.informationClass) && body.informationClass) ||
       (isInformationClass(lineArgs.informationClass) && lineArgs.informationClass) ||
       null;
-    if (
+    const replyPol = await getEffectiveReplyPolicy(principalOrgId, employeeId);
+    const lineRule = replyPol.policy.rules.find((r) => !r.surface || r.surface === "line") ?? replyPol.policy.rules[0];
+    const roleKey = (employee.roleLabel || "").trim();
+    lineExternalNoApprovalFlag = lineExternalNoApproval({
+      policySource: replyPol.source,
+      ruleExternalApproval: lineRule?.externalApproval ?? null,
+      roleExternalApproval: roleKey ? replyPol.policy.byRole?.[roleKey] ?? null : null,
+      toolHint: employee.toolApprovalDefaults?.[tool] ?? null,
+    });
+    const lineRewriteBase = {
+      surface: "line" as const,
+      audience: egress.audience,
+      egressDecision: egress.decision,
+      explicitClass,
+      unclassified: disclosure.unclassified,
+      employeeNoApproval: lineExternalNoApprovalFlag,
+    };
+    if (lineWaiveExternalDeny(lineRewriteBase)) {
+      egress = {
+        ...egress,
+        decision: "allow",
+        reason: "line_external_no_approval",
+        messageJa: "この社員（または役割）は社外 LINE を承認なしで送れます。",
+      };
+    } else if (
       lineForceExternalApproval({
-        surface: "line",
-        audience: egress.audience,
-        egressDecision: egress.decision,
+        ...lineRewriteBase,
         informationClass: egress.informationClass,
-        explicitClass,
-        unclassified: disclosure.unclassified,
       })
     ) {
       egress = {
@@ -2663,6 +2687,7 @@ async function runGatewayInvokeInner(
               audience: egress?.audience ?? "unknown",
               informationClass: egress?.informationClass,
               egressDecision: egress?.decision,
+              employeeNoApproval: lineExternalNoApprovalFlag,
             }),
             retryId: priorApprovalOk && priorApproval ? priorApproval.id : jobId,
           });

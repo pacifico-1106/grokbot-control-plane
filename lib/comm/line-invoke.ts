@@ -25,14 +25,32 @@ export function lineRetryKey(id: string): string {
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-4${h.slice(13, 16)}-8${h.slice(17, 20)}-${h.slice(20, 32)}`;
 }
 
+/**
+ * Tenant (org/default) reply_policy cannot waive external approval.
+ * Only an explicit per-employee or per-role "no approval", or tool hint `auto`.
+ */
+export function lineExternalNoApproval(input: {
+  policySource: "employee" | "org" | "default" | string;
+  ruleExternalApproval?: string | null;
+  roleExternalApproval?: string | null;
+  toolHint?: string | null;
+}): boolean {
+  if (input.toolHint === "auto") return true;
+  if (input.roleExternalApproval === "no_approval") return true;
+  if (input.policySource === "employee" && input.ruleExternalApproval === "no_approval") return true;
+  return false;
+}
+
 export function lineExternalSendAllowed(input: {
   priorApprovalOk: boolean;
   audience: "internal" | "external" | "unknown" | string;
   informationClass?: string | null;
   egressDecision?: string | null;
+  employeeNoApproval?: boolean;
 }): boolean {
   if (input.priorApprovalOk) return true;
   if (input.audience === "internal") return false;
+  if (input.employeeNoApproval) return true;
   return input.informationClass === "public" && (input.egressDecision === "allow" || input.egressDecision === "summarize");
 }
 
@@ -44,11 +62,31 @@ export function lineForceExternalApproval(input: {
   informationClass?: string | null;
   explicitClass?: string | null;
   unclassified?: boolean;
+  employeeNoApproval?: boolean;
 }): boolean {
   if (!isLineConversationEnabled()) return false;
   if ((input.surface || "").toLowerCase() !== "line") return false;
   if (input.audience !== "external" && input.audience !== "unknown") return false;
+  if (input.employeeNoApproval) return false;
   if (input.egressDecision !== "deny") return false;
+  if (input.explicitClass === "confidential" || input.explicitClass === "verbatim") return false;
+  return input.unclassified !== false;
+}
+
+/** When the employee/role setting is "no approval", unclassified external deny becomes allow. */
+export function lineWaiveExternalDeny(input: {
+  surface?: string | null;
+  audience: string;
+  egressDecision: string;
+  explicitClass?: string | null;
+  unclassified?: boolean;
+  employeeNoApproval?: boolean;
+}): boolean {
+  if (!isLineConversationEnabled()) return false;
+  if ((input.surface || "").toLowerCase() !== "line") return false;
+  if (!input.employeeNoApproval) return false;
+  if (input.audience !== "external" && input.audience !== "unknown") return false;
+  if (input.egressDecision !== "deny" && input.egressDecision !== "needs_approval") return false;
   if (input.explicitClass === "confidential" || input.explicitClass === "verbatim") return false;
   return input.unclassified !== false;
 }

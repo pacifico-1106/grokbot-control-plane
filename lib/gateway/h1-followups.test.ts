@@ -75,12 +75,12 @@ const approvalsFor = async (jobId: string) => (await listApprovals(DEMO_ORG.id))
 
 describe("1a) refused before an approval card is created", () => {
   for (const [name, conv] of [["LINE", LINE], ["mail", MAIL]] as const) {
-    test(`comm.send to ${name} → 409 channel_not_supported, sent:false, NO approval ticket`, async () => {
+    test(`comm.send to ${name} → 409 delivery_unsupported_surface, sent:false, NO approval ticket`, async () => {
       recordProviders();
       const body = req("comm.send", conv);
       const res = await invoke(body);
       expect(res.httpStatus).toBe(409);
-      expect(res.body.code).toBe("channel_not_supported");
+      expect(res.body.code).toBe("delivery_unsupported_surface");
       expect(res.body.sent).toBe(false);
       expect(res.body.needs_approval).toBe(false);
       expect(res.body.approvalId).toBeUndefined();

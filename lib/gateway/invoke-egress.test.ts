@@ -225,7 +225,7 @@ describe("Gateway audience egress", () => {
     // and before any approval card, so no egress verdict is computed.
     expect(result.httpStatus).toBe(409);
     expect(result.body.ok).toBe(false);
-    expect(result.body.code).toBe("channel_not_supported");
+    expect(result.body.code).toBe("delivery_unsupported_surface");
     expect(result.body.sent).toBe(false);
   });
 

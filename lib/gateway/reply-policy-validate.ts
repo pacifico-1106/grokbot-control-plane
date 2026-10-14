@@ -19,6 +19,7 @@ const AFTER_HOURS_MODES: AfterHoursMode[] = ["draft_only", "allow_send", "hold_a
 const SHORT_REPLY_MODES: ShortReplyMode[] = ["allow", "deny", "warn"];
 const EMOJI_MODES: EmojiMode[] = ["allow", "deny", "limited"];
 const THREAD_AFFINITY_MODES: ThreadAffinityMode[] = ["prefer_thread", "new_thread_per_topic", "channel_root"];
+const EXTERNAL_APPROVAL_MODES = ["needs_approval", "no_approval"] as const;
 
 export type ValidationError = {
   ruleIndex?: number;
@@ -230,6 +231,20 @@ export function validateReplyPolicyRule(
     }
   }
 
+  if (rec.externalApproval !== undefined) {
+    if (typeof rec.externalApproval !== "string" || !EXTERNAL_APPROVAL_MODES.includes(rec.externalApproval as (typeof EXTERNAL_APPROVAL_MODES)[number])) {
+      errors.push({
+        ruleIndex: index,
+        field: "externalApproval",
+        code: "invalid_external_approval",
+        message: `externalApproval must be one of: ${EXTERNAL_APPROVAL_MODES.join(", ")}`,
+        messageJa: `社外送信の承認は ${EXTERNAL_APPROVAL_MODES.join(" / ")} のいずれかです`,
+      });
+    } else {
+      rule.externalApproval = rec.externalApproval as "needs_approval" | "no_approval";
+    }
+  }
+
   if (errors.length > 0) {
     return { ok: false, errors };
   }
@@ -332,6 +347,7 @@ export function validateReplyPolicy(
     policyId,
     policyName,
     rules: validatedRules,
+    byRole: parseByRole(rec.byRole),
     updatedAt: new Date().toISOString(),
     updatedBy: "admin_mcp",
   };
@@ -357,6 +373,17 @@ export const DEFAULT_REPLY_POLICY_RULE: ReplyPolicyRule = {
   emojiMode: "limited",
   threadAffinity: "prefer_thread",
 };
+
+function parseByRole(raw: unknown): OrgReplyPolicy["byRole"] | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const out: NonNullable<OrgReplyPolicy["byRole"]> = {};
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    const role = k.trim().slice(0, 80);
+    if (!role) continue;
+    if (v === "needs_approval" || v === "no_approval") out[role] = v;
+  }
+  return Object.keys(out).length ? out : undefined;
+}
 
 export function defaultReplyPolicy(): OrgReplyPolicy {
   return {
@@ -401,6 +428,7 @@ export function normalizeReplyPolicy(value: unknown): OrgReplyPolicy {
         ? rec.policyName.trim()
         : "返信ポリシー",
     rules: validatedRules,
+    byRole: parseByRole(rec.byRole),
     highRiskConsentAt:
       typeof rec.highRiskConsentAt === "string" ? rec.highRiskConsentAt : undefined,
     highRiskConsentBy:

@@ -117,7 +117,7 @@ describe("flag OFF keeps H1 (nothing sent, no approval card)", () => {
     const body = req("comm.reply", { surface: "line", lineId: LINE_USER, token: TOKEN });
     const res = await invoke(body);
     expect(res.httpStatus).toBe(409);
-    expect(res.body.code).toBe("channel_not_supported");
+    expect(res.body.code).toBe("delivery_unsupported_surface");
     expect(res.body.sent).toBe(false);
     expect(sends).toEqual([]);
     expect(await approvalsFor(String(body.jobId))).toHaveLength(0);
@@ -129,7 +129,7 @@ describe("other non-Slack surfaces stay unsupported", () => {
     const body = req("comm.send", { surface: "mail", email: "yamada@example.com" });
     const res = await invoke(body);
     expect(res.httpStatus).toBe(409);
-    expect(["channel_not_supported", "delivery_unsupported_surface"]).toContain(res.body.code);
+    expect(res.body.code).toBe("delivery_unsupported_surface");
     expect(res.body.sent).toBe(false);
     expect(res.body.needs_approval).toBe(false);
     expect(sends).toEqual([]);
@@ -141,7 +141,7 @@ describe("other non-Slack surfaces stay unsupported", () => {
     const body = req("comm.reply", { surface: "telegram", telegramChatId: "12345" });
     const res = await invoke(body);
     expect(res.httpStatus).toBe(409);
-    expect(["channel_not_supported", "delivery_unsupported_surface"]).toContain(res.body.code);
+    expect(res.body.code).toBe("delivery_unsupported_surface");
     expect(await approvalsFor(String(body.jobId))).toHaveLength(0);
     expect(sends).toEqual([]);
   });
@@ -172,6 +172,75 @@ describe("LINE comm.reply (flag ON) → sendLineConversationMessage", () => {
     expect(res.body.approvalId).toBeTruthy();
     expect(sends).toEqual([]);
     expect(await approvalsFor(String(body.jobId))).toHaveLength(1);
+  });
+
+  test("tenant reply_policy no_approval alone does NOT waive — still needs_approval", async () => {
+    const { setOrgReplyPolicy, resetDemoReplyPolicy } = await import("@/lib/data/reply-policy");
+    const { defaultReplyPolicy } = await import("@/lib/gateway/reply-policy-validate");
+    const org = defaultReplyPolicy();
+    org.rules[0] = { ...org.rules[0], surface: "line", externalApproval: "no_approval" };
+    await setOrgReplyPolicy(DEMO_ORG.id, org);
+    try {
+      const body = req("comm.reply", { surface: "line", lineId: EXT_USER, token: TOKEN });
+      const res = await invoke(body);
+      expect(res.body.needs_approval).toBe(true);
+      expect(sends).toEqual([]);
+    } finally {
+      resetDemoReplyPolicy();
+    }
+  });
+
+  test("employee reply_policy no_approval waives the card", async () => {
+    const { setEmployeeReplyPolicy, resetDemoReplyPolicy } = await import("@/lib/data/reply-policy");
+    const { defaultReplyPolicy } = await import("@/lib/gateway/reply-policy-validate");
+    const emp = defaultReplyPolicy();
+    emp.rules[0] = { ...emp.rules[0], surface: "line", externalApproval: "no_approval" };
+    await setEmployeeReplyPolicy("emp_comm", DEMO_ORG.id, emp);
+    try {
+      const body = req("comm.reply", { surface: "line", lineId: EXT_USER, token: TOKEN });
+      const res = await invoke(body);
+      expect(res.httpStatus).toBe(200);
+      expect(res.body.sent).toBe(true);
+      expect(sends).toHaveLength(1);
+      expect(sends[0].externalSendAllowed).toBe(true);
+      expect(await approvalsFor(String(body.jobId))).toHaveLength(0);
+    } finally {
+      resetDemoReplyPolicy();
+    }
+  });
+
+  test("per-role no_approval (byRole) waives; org rule still ignored", async () => {
+    const { setOrgReplyPolicy, resetDemoReplyPolicy } = await import("@/lib/data/reply-policy");
+    const { defaultReplyPolicy } = await import("@/lib/gateway/reply-policy-validate");
+    const org = defaultReplyPolicy();
+    org.rules[0] = { ...org.rules[0], surface: "line", externalApproval: "needs_approval" };
+    org.byRole = { コミュニケーション: "no_approval" };
+    await setOrgReplyPolicy(DEMO_ORG.id, org);
+    try {
+      const body = req("comm.reply", { surface: "line", lineId: EXT_USER, token: TOKEN });
+      const res = await invoke(body);
+      expect(res.httpStatus).toBe(200);
+      expect(res.body.sent).toBe(true);
+      expect(sends[0].externalSendAllowed).toBe(true);
+    } finally {
+      resetDemoReplyPolicy();
+    }
+  });
+
+  test("toolApprovalDefaults comm.reply=auto is explicit no-approval and waives", async () => {
+    const { getRuntimeEmployees } = await import("@/lib/demo-data");
+    const emp = getRuntimeEmployees().find((e) => e.id === "emp_comm")!;
+    const prev = emp.toolApprovalDefaults;
+    emp.toolApprovalDefaults = { ...(prev ?? {}), "comm.reply": "auto" };
+    try {
+      const body = req("comm.reply", { surface: "line", lineId: EXT_USER, token: TOKEN });
+      const res = await invoke(body);
+      expect(res.httpStatus).toBe(200);
+      expect(res.body.sent).toBe(true);
+      expect(sends[0].externalSendAllowed).toBe(true);
+    } finally {
+      emp.toolApprovalDefaults = prev;
+    }
   });
 
   test("external + informationClass public (who/what) → sent without a card, externalSendAllowed true", async () => {
