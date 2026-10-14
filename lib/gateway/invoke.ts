@@ -1661,12 +1661,14 @@ async function runGatewayInvokeInner(
   // Audience × information-class egress (after scope / SoD / action-limit / project wall).
   // slack.* aliases share this resolver — tool name is not the boundary.
   // S2: evaluateInvokeEgress now returns both egress (effective) and dualEgress (audit).
-  let { egress, dualEgress } = await evaluateInvokeEgress({
+  const evaluatedEgress = await evaluateInvokeEgress({
     orgId: principalOrgId,
     tool,
     toolDef,
     body,
   });
+  let { egress } = evaluatedEgress;
+  const { dualEgress } = evaluatedEgress;
   const managerId = employee.managerId ?? null;
 
   // LINE: unclassified external confidential-deny becomes needs_approval
