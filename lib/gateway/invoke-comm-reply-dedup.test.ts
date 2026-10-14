@@ -187,19 +187,19 @@ describe("flag ON: duplicate replies are suppressed", () => {
 
 describe("channel-independent: LINE and Telegram", () => {
   // H1 (10/12): the gateway has no LINE delivery. An allowed LINE reply is
-  // channel_not_supported before the ledger claim (it used to be claimed as
+  // delivery_unsupported_surface before the ledger claim (it used to be claimed as
   // "sent" with nothing sent), so a repeat is not a duplicate either. The
   // ledger key for LINE itself is still covered below.
-  test("LINE: not sent (channel_not_supported), nothing claimed, a repeat is the same answer", async () => {
+  test("LINE: not sent (delivery_unsupported_surface), nothing claimed, a repeat is the same answer", async () => {
     setFlag(true);
     recordSlack();
     const line = () => body({ surface: "line", lineId: LINE_USER });
     const first = await invoke(line());
     expect(first.httpStatus).toBe(409);
-    expect(first.body.code).toBe("channel_not_supported");
+    expect(first.body.code).toBe("delivery_unsupported_surface");
     expect(demoCommReplySendsForTests()).toHaveLength(0);
     const again = await invoke(line());
-    expect(again.body.code).toBe("channel_not_supported");
+    expect(again.body.code).toBe("delivery_unsupported_surface");
     expect(posts.length).toBe(0);
   });
 

@@ -237,6 +237,8 @@ export interface ConversationContext {
   slackTeamId?: string;
   phone?: string;
   lineId?: string;
+  /** Server-signed conversation token (LINE). Destination comes only from this. */
+  token?: string;
 }
 
 export type Audience = "internal" | "external" | "unknown";
@@ -537,6 +539,9 @@ export type AuditAction =
   | "conversation.adapter_installed"
   | "slack.posted"
   | "slack.post_failed"
+  | "line.posted"
+  | "line.post_failed"
+  | "line.conversation_target_mismatch"
   | "comm.not_sent"
   | "slack.file_uploaded"
   | "slack.file_upload_failed"
@@ -1292,6 +1297,11 @@ export interface ReplyPolicyRule {
   allowedEmojis?: string[];
   threadAffinity: ThreadAffinityMode;
   topicChangeThreshold?: number;
+  /**
+   * External LINE send. Tenant (org/default) `no_approval` is ignored —
+   * only an employee-source policy or `byRole` / tool hint `auto` waives.
+   */
+  externalApproval?: "needs_approval" | "no_approval";
 }
 
 /**
@@ -1303,6 +1313,8 @@ export interface OrgReplyPolicy {
   policyId: string;
   policyName: string;
   rules: ReplyPolicyRule[];
+  /** Per-role (AI employee roleLabel) external send. `no_approval` waives the LINE default. */
+  byRole?: Record<string, "needs_approval" | "no_approval">;
   highRiskConsentAt?: string;
   highRiskConsentBy?: string;
   updatedAt: string;

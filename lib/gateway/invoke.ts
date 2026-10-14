@@ -1,6 +1,6 @@
 import { CONVERSATION_NOT_SENT, NOT_SENT_DESTINATION_CODES, approvedNotSentInfo, channelNotSupportedInfo } from "@/lib/approvals/not-sent";
 import { withSlackUserTeamMemo } from "@/lib/slack/bot-token";
-import { heldTicketMarker, withHoldRequestScope } from "@/lib/safety/hold";
+import { heldTicketMarker, withHoldRequestScope, assertTicketNotHeld, HoldStopError } from "@/lib/safety/hold";
 import {
   buildApprovalArtifact,
   buildApprovalTitle,
@@ -57,6 +57,17 @@ import {
 } from "@/lib/slack/dm-reply-inline";
 import { getEffectiveReplyPolicy } from "@/lib/data/reply-policy";
 import { resolveInformationDisclosure } from "@/lib/gateway/information-class";
+import {
+  deliverLineConversation,
+  isLineConversationRequest,
+  lineExternalNoApproval,
+  lineExternalSendAllowed,
+  lineForceExternalApproval,
+  lineSendAsPosted,
+  lineWaiveExternalDeny,
+} from "@/lib/comm/line-invoke";
+import { isLineConversationEnabled } from "@/lib/comm/flags";
+import { conversationTokenCounterparty, conversationTokenFromRequest } from "@/lib/comm/conversation-token";
 import { evaluateProjectScope } from "@/lib/gateway/project-scope";
 import { accessibleProjects } from "@/lib/employees/project-access";
 import {
@@ -177,6 +188,7 @@ import {
   duplicateWarningBody,
   finishDirectCommReplySend,
   ledgerOutcomeAfterPost,
+  POST_OUTCOME_UNKNOWN,
   postOutcomeUnknownBody,
   precheckCommReplyDuplicate,
   prepareCommReplyDedupFromBody,
@@ -418,7 +430,9 @@ async function evaluateInvokeEgress(input: {
   dualEgress: DualEgressVerdict | null;
 }> {
   const gated = isAudienceGatedTool(input.toolDef);
-  const ctx = parseConversationContext(input.body, input.orgId);
+  const parsed = parseConversationContext(input.body, input.orgId);
+  const pinnedLine = conversationTokenCounterparty(conversationTokenFromRequest(input.body));
+  const ctx = parsed && pinnedLine ? { ...parsed, lineId: pinnedLine } : parsed;
   if (!gated && !ctx) return { egress: null, dualEgress: null };
 
   const audience = await resolveAudience(ctx, { requireDestination: gated });
@@ -1358,6 +1372,11 @@ async function runGatewayInvokeInner(
     // during the hold, not after release (closed_by_hold). Covers every priorApprovalOk
     // consumer: mail.send, commerce.order, calendar, comm.send, attachment resends.
     if (prior && heldTicketMarker(prior.metadata)) {
+      try {
+        assertTicketNotHeld(prior);
+      } catch (err) {
+        if (!(err instanceof HoldStopError)) throw err;
+      }
       await appendAuditEvent({
         orgId: orgId || employee.orgId,
         employeeId,
@@ -1460,7 +1479,8 @@ async function runGatewayInvokeInner(
     const preCtx = parseConversationContext(body, principalOrgId);
     const preArgs = body.args && typeof body.args === "object" ? (body.args as Record<string, unknown>) : {};
     const preSlack = preCtx?.surface === "slack" || Boolean(preCtx?.slackChannelId) || Boolean(preCtx?.slackUserId);
-    if (!preSlack) {
+    const preLine = isLineConversationRequest(preCtx, body);
+    if (!preSlack && !preLine) {
       const info = channelNotSupportedInfo(preCtx?.surface ?? null);
       await appendAuditEvent({
         orgId: orgId || employee.orgId,
@@ -1494,7 +1514,7 @@ async function runGatewayInvokeInner(
     // Item C (flag ON) resolves a U… in the channel field to a DM below and stops
     // on its own; leave that case to it.
     const itemCHandles = isSlackUToDmSendEnabled() && Boolean(slackUserIdInChannelField(body));
-    if (!itemCHandles) {
+    if (!preLine && !itemCHandles) {
       const dmIntent = preArgs.dm === true || preArgs.postingTo === "im" || preArgs.dmIntent === true;
       const preDest = validateSlackPostDestination({
         slackChannelId: preCtx?.slackChannelId,
@@ -1687,16 +1707,103 @@ async function runGatewayInvokeInner(
     );
   }
 
+  // LINE: an AI-supplied lineId that names someone other than the token's
+  // counterparty must not steer egress WHO (or the send). Refuse before classify.
+  if (isLineConversationEnabled()) {
+    const lineTok = conversationTokenFromRequest(body);
+    const pinned = conversationTokenCounterparty(lineTok);
+    const ctxLine = parseConversationContext(body, principalOrgId);
+    if (pinned && ctxLine?.lineId && ctxLine.lineId !== pinned) {
+      await appendAuditEvent({
+        orgId: orgId || employee.orgId,
+        employeeId,
+        credentialId: input.credentialId || employee.credentialId,
+        action: "line.conversation_target_mismatch",
+        purpose,
+        summary: "LINE 会話の相手先がトークンと一致しません",
+        metadata: { tool, jobId, code: "conversation_target_mismatch", sent: false },
+      });
+      return jsonResult({
+        ok: false,
+        code: "conversation_target_mismatch",
+        error: "conversation_target_mismatch",
+        sent: false,
+        needs_approval: false,
+        employeeId,
+        tool,
+        purpose,
+        jobId,
+      }, 403);
+    }
+  }
+
   // Audience × information-class egress (after scope / SoD / action-limit / project wall).
   // slack.* aliases share this resolver — tool name is not the boundary.
   // S2: evaluateInvokeEgress now returns both egress (effective) and dualEgress (audit).
-  const { egress, dualEgress } = await evaluateInvokeEgress({
+  const evaluatedEgress = await evaluateInvokeEgress({
     orgId: principalOrgId,
     tool,
     toolDef,
     body,
   });
+  let { egress } = evaluatedEgress;
+  const { dualEgress } = evaluatedEgress;
   const managerId = employee.managerId ?? null;
+
+  // LINE: unclassified external confidential-deny becomes needs_approval
+  // (default = human yes). Explicit confidential / verbatim stay deny.
+  // Tenant reply_policy cannot waive; only employee/role "no approval" or tool auto.
+  let lineExternalNoApprovalFlag = false;
+  if (egress && isLineConversationRequest(parseConversationContext(body, principalOrgId), body)) {
+    const disclosure = await resolveInformationDisclosure({
+      orgId: principalOrgId,
+      tool,
+      body,
+      audience: egress.audience,
+    });
+    const lineArgs = body.args && typeof body.args === "object" ? (body.args as Record<string, unknown>) : {};
+    const explicitClass =
+      (isInformationClass(body.informationClass) && body.informationClass) ||
+      (isInformationClass(lineArgs.informationClass) && lineArgs.informationClass) ||
+      null;
+    const replyPol = await getEffectiveReplyPolicy(principalOrgId, employeeId);
+    const lineRule = replyPol.policy.rules.find((r) => !r.surface || r.surface === "line") ?? replyPol.policy.rules[0];
+    const roleKey = (employee.roleLabel || "").trim();
+    lineExternalNoApprovalFlag = lineExternalNoApproval({
+      policySource: replyPol.source,
+      ruleExternalApproval: lineRule?.externalApproval ?? null,
+      roleExternalApproval: roleKey ? replyPol.policy.byRole?.[roleKey] ?? null : null,
+      toolHint: employee.toolApprovalDefaults?.[tool] ?? null,
+    });
+    const lineRewriteBase = {
+      surface: "line" as const,
+      audience: egress.audience,
+      egressDecision: egress.decision,
+      explicitClass,
+      unclassified: disclosure.unclassified,
+      employeeNoApproval: lineExternalNoApprovalFlag,
+    };
+    if (lineWaiveExternalDeny(lineRewriteBase)) {
+      egress = {
+        ...egress,
+        decision: "allow",
+        reason: "line_external_no_approval",
+        messageJa: "この社員（または役割）は社外 LINE を承認なしで送れます。",
+      };
+    } else if (
+      lineForceExternalApproval({
+        ...lineRewriteBase,
+        informationClass: egress.informationClass,
+      })
+    ) {
+      egress = {
+        ...egress,
+        decision: "needs_approval",
+        reason: "line_external_default_approval",
+        messageJa: "社外の LINE への送信は、既定では人の承認が必要です。",
+      };
+    }
+  }
 
   // Deny wins over SoD queue: confidential-to-external must not become a pending ticket.
   if (egress?.decision === "deny") {
@@ -2474,6 +2581,7 @@ async function runGatewayInvokeInner(
     // (deliverApprovedRerunAttachment below), so no "not_sent" marker here.
     const fulfilled = await fulfillApprovedInvoke(priorApproval, {
       attachmentHandledByCaller: isAudienceGatedTool(toolDef),
+      conversationToken: conversationTokenFromRequest(body),
     });
     // Rate-limited (nothing posted): say how long to wait; re-running earlier stops before the provider.
     if (fulfilled && !fulfilled.ok && fulfilled.error === PROVIDER_RATE_LIMITED) {
@@ -2492,6 +2600,23 @@ async function runGatewayInvokeInner(
       // in plain words instead of a Slack-only code (木村 #293 decision 2).
       const approvedSurface = (parseInvokeSnapshot(priorApproval.metadata)?.conversation?.surface || "").toLowerCase();
       if (approvedSurface && approvedSurface !== "slack") {
+        const lineLive = approvedSurface === "line" && isLineConversationEnabled();
+        if (lineLive) {
+          if (fulfilled?.error === POST_OUTCOME_UNKNOWN) {
+            return jsonResult({
+              ...postOutcomeUnknownBody(null, fulfilled.error),
+              sent: false,
+              needs_approval: false,
+              approvalId: priorApproval.id,
+              employeeId, tool, purpose, jobId,
+            }, 502);
+          }
+          return jsonResult({
+            ok: false, code: fulfilled?.error || "approval_execution_failed", sent: false,
+            error: fulfilled?.error || "approval_execution_failed",
+            approvalId: priorApproval.id, employeeId, tool, purpose, jobId,
+          }, 409);
+        }
         return jsonResult({ ok: false, code: fulfilled?.error || "approval_execution_failed", sent: false,
           error: fulfilled?.error || "approval_execution_failed", reasonCode: APPROVED_REPLY_SURFACE_NOT_SUPPORTED,
           message: APPROVED_REPLY_SURFACE_NOT_SUPPORTED_JA, retryable: false, nextAction: "stop",
@@ -2633,6 +2758,89 @@ async function runGatewayInvokeInner(
       }
     }
 
+    if (isLineConversationRequest(ctx, body)) {
+      const egressAllowsLine =
+        egress?.decision === "allow" ||
+        egress?.decision === "summarize" ||
+        (priorApprovalOk && egress?.decision === "needs_approval");
+      if (egressAllowsLine) {
+        const already = approvedRerunDelivery ?? conversationDeliveryFromFulfillment(priorApproval);
+        if (already) {
+          conversationDelivery = already;
+        } else {
+          const rawText = [args.text, args.body, args.message].find(
+            (value) => typeof value === "string" && value.trim()
+          ) as string | undefined;
+          const result = await deliverLineConversation({
+            token: ctx?.token,
+            args,
+            text: (rawText || "").trim() || purpose,
+            orgId: orgId || employee.orgId,
+            employeeId,
+            externalSendAllowed: lineExternalSendAllowed({
+              priorApprovalOk,
+              audience: egress?.audience ?? "unknown",
+              informationClass: egress?.informationClass,
+              egressDecision: egress?.decision,
+              employeeNoApproval: lineExternalNoApprovalFlag,
+            }),
+            retryId: priorApprovalOk && priorApproval ? priorApproval.id : jobId,
+          });
+          const posted = lineSendAsPosted(result);
+          if (result.status === "unknown") {
+            await appendAuditEvent({
+              orgId: orgId || employee.orgId,
+              employeeId,
+              credentialId: input.credentialId || employee.credentialId,
+              action: "line.post_failed",
+              purpose,
+              summary: "LINE会話投稿の結果が不明（再送は確認後のみ）",
+              metadata: { tool, jobId, error: result.reason, code: "post_outcome_unknown" },
+            });
+            return jsonResult(
+              {
+                ...postOutcomeUnknownBody(null, result.reason),
+                sent: false,
+                needs_approval: false,
+                egress,
+                employeeId,
+                tool,
+                purpose,
+                jobId,
+              },
+              502
+            );
+          }
+          if (!posted.ok) {
+            await appendAuditEvent({
+              orgId: orgId || employee.orgId,
+              employeeId,
+              credentialId: input.credentialId || employee.credentialId,
+              action: "line.post_failed",
+              purpose,
+              summary: "LINE会話投稿を送信していません",
+              metadata: { tool, jobId, error: posted.error, sent: false },
+            });
+            return jsonResult(
+              {
+                ok: false,
+                code: posted.error || "line_not_sent",
+                error: posted.error || "line_not_sent",
+                sent: false,
+                needs_approval: false,
+                egress,
+                employeeId,
+                tool,
+                purpose,
+                jobId,
+              },
+              409
+            );
+          }
+          conversationDelivery = { ok: true, delivery: "line" };
+        }
+      }
+    } else {
     const egressAllowsPost =
       egress?.decision === "allow" ||
       egress?.decision === "summarize" ||
@@ -2913,6 +3121,7 @@ async function runGatewayInvokeInner(
         },
         409
       );
+    }
     }
   }
 

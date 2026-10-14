@@ -11,13 +11,24 @@
  */
 import type { ApprovalRequest } from "@/lib/types";
 
+/** Current H1 code (Kimura 10/14). */
+export const DELIVERY_UNSUPPORTED_SURFACE = "delivery_unsupported_surface";
+/** Legacy alias — existing callers / stored tickets still match. */
 export const CHANNEL_NOT_SUPPORTED = "channel_not_supported";
 export const SLACK_CHANNEL_REQUIRED = "slack_channel_required";
 /** Backstop: a conversation tool reached the end of invoke without a delivery record. */
 export const CONVERSATION_NOT_SENT = "conversation_not_sent";
 
+export function isUnsupportedSurfaceCode(code: string | null | undefined): boolean {
+  return code === DELIVERY_UNSUPPORTED_SURFACE || code === CHANNEL_NOT_SUPPORTED;
+}
+
 /** Fulfillment / invoke codes that mean "stopped before any provider call: not sent". */
-export const NOT_SENT_DESTINATION_CODES: ReadonlySet<string> = new Set([CHANNEL_NOT_SUPPORTED, SLACK_CHANNEL_REQUIRED]);
+export const NOT_SENT_DESTINATION_CODES: ReadonlySet<string> = new Set([
+  DELIVERY_UNSUPPORTED_SURFACE,
+  CHANNEL_NOT_SUPPORTED,
+  SLACK_CHANNEL_REQUIRED,
+]);
 
 const SURFACE_LABEL_JA: Record<string, string> = {
   line: "LINE",
@@ -56,7 +67,7 @@ const DO_NOT_CLAIM = "相手には届いていません。送ったと伝えな�
 export function channelNotSupportedInfo(surface: string | null | undefined): NotSentInfo {
   const label = surfaceLabelJa(surface);
   return {
-    code: CHANNEL_NOT_SUPPORTED,
+    code: DELIVERY_UNSUPPORTED_SURFACE,
     sent: false,
     surface: surface ? String(surface).toLowerCase() : null,
     messageJa: surface
@@ -69,7 +80,7 @@ export function channelNotSupportedInfo(surface: string | null | undefined): Not
 
 /** Approved, then stopped at fulfil because the destination can't be posted to. */
 export function approvedNotSentInfo(code: string, surface: string | null | undefined): NotSentInfo {
-  if (isNonSlack(surface) || code === CHANNEL_NOT_SUPPORTED) {
+  if (isNonSlack(surface) || isUnsupportedSurfaceCode(code)) {
     const label = surfaceLabelJa(surface);
     return {
       code,
@@ -145,7 +156,7 @@ export function approvalSendOutcome(
     return { sent: false, reasonCode: code };
   }
   const delivery = typeof fulfillment.delivery === "string" ? fulfillment.delivery : rec(fulfillment.conversationDelivery)?.delivery;
-  if (delivery === "slack" || delivery === "mail") return { sent: true, reasonCode: null };
+  if (delivery === "slack" || delivery === "mail" || delivery === "line") return { sent: true, reasonCode: null };
   if (delivery === "stub" && rec(approval.metadata?.invoke)?.conversation) return { sent: true, reasonCode: null };
   return { sent: null, reasonCode: null };
 }

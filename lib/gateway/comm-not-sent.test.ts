@@ -2,7 +2,7 @@
  * H1 (LINE / LINE WORKS design 10/12 §6): comm.reply / comm.send / slack.post
  * to a destination the gateway cannot post to (LINE, mail, …) used to answer
  * ok:true, accepted:true although nothing was sent, so the AI believed it had
- * sent. Now: ok:false, code channel_not_supported, sent:false, Japanese
+ * sent. Now: ok:false, code delivery_unsupported_surface, sent:false, Japanese
  * nextStep, before any ledger / lease / provider call.
  *
  * Post-approval: an approved reply that stops at slack_channel_required is
@@ -90,18 +90,18 @@ function expectNotSent(body: Record<string, unknown>) {
   expect(JSON.stringify(body)).not.toContain(TEXT);
 }
 
-describe("direct invoke: non-Slack destination → channel_not_supported (nothing sent)", () => {
+describe("direct invoke: non-Slack destination → delivery_unsupported_surface (nothing sent)", () => {
   for (const tool of ["comm.reply", "slack.post"]) {
-    test(`${tool} to LINE (egress allow) → 409 channel_not_supported, sent:false, no provider call, audit without body`, async () => {
+    test(`${tool} to LINE (egress allow) → 409 delivery_unsupported_surface, sent:false, no provider call, audit without body`, async () => {
       recordProviders();
       const res = await invoke(req(tool, LINE));
       expect(res.httpStatus).toBe(409);
-      expect(res.body.code).toBe("channel_not_supported");
+      expect(res.body.code).toBe("delivery_unsupported_surface");
       expect(res.body.surface).toBe("line");
       expectNotSent(res.body as Record<string, unknown>);
       expect(providerSends()).toHaveLength(0);
       const audit = (await listAuditEvents(DEMO_ORG.id, 50)).find((e) => e.metadata?.jobId === res.body.jobId && e.action === "comm.not_sent");
-      expect(audit?.metadata).toMatchObject({ tool, code: "channel_not_supported", surface: "line" });
+      expect(audit?.metadata).toMatchObject({ tool, code: "delivery_unsupported_surface", surface: "line" });
       expect(JSON.stringify(audit)).not.toContain(TEXT);
     });
   }
@@ -112,11 +112,11 @@ describe("direct invoke: non-Slack destination → channel_not_supported (nothin
     recordProviders();
     const res = await invoke(req("comm.reply", LINE));
     expect(res.httpStatus).toBe(409);
-    expect(res.body.code).toBe("channel_not_supported");
+    expect(res.body.code).toBe("delivery_unsupported_surface");
     expectNotSent(res.body as Record<string, unknown>);
     expect(demoCommReplySendsForTests().filter((r) => r.state === "sent")).toHaveLength(0);
     // A second identical try is the same answer (not duplicate_reply_suppressed: nothing was sent the first time).
-    expect((await invoke(req("comm.reply", LINE))).body.code).toBe("channel_not_supported");
+    expect((await invoke(req("comm.reply", LINE))).body.code).toBe("delivery_unsupported_surface");
   });
 
   test("MCP staffpass_invoke (the AI's path) gets the same error", async () => {
@@ -127,7 +127,7 @@ describe("direct invoke: non-Slack destination → channel_not_supported (nothin
       cred()
     );
     const data = out.structuredContent as Record<string, unknown>;
-    expect(data.code).toBe("channel_not_supported");
+    expect(data.code).toBe("delivery_unsupported_surface");
     expectNotSent(data);
     expect(providerSends()).toHaveLength(0);
   });
@@ -165,7 +165,7 @@ function cred(): ResolvedEmployeeCredential {
 async function approvedNotSent(conversation: Record<string, unknown>) {
   recordProviders();
   const first = req("comm.send", conversation);
-  expect((await invoke(req("comm.send", conversation))).body.code).toBe("channel_not_supported");
+  expect((await invoke(req("comm.send", conversation))).body.code).toBe("delivery_unsupported_surface");
   const created = await createApproval({
     orgId: DEMO_ORG.id, employeeId: "emp_comm", credentialId: "cred_comm",
     title: "comm.send", purpose: first.purpose, summary: "送信の承認", risk: "high", tool: "comm.send", jobId: String(first.jobId),

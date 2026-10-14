@@ -695,6 +695,39 @@ try:
           "released (right) attempts not counted, release org-scoped; account 30/1 h then lock + one ops signal, 3rd lock in 24 h → one repeat signal "
           "(20 concurrent wrong guesses from one sender → exactly 5 slots; 40 concurrent senders → 30 slots + 1 signal), other org unaffected, lock expires; re-applicable; rollback refused while an "
           "account is active, then drops all; forward again.")
+    # L-6 LINE replyToken / unknown-outcome ledger (20261014100000).
+    l6rt = ROOT / "supabase/migrations/20261014100000_comm_line_reply_tokens.sql"
+    l6rt_rb = ROOT / "supabase/verification/20261014100000_comm_line_reply_tokens_rollback.sql"
+    sql(l6rt)
+    sql(l6rt)  # re-applicable
+    sql(ROOT / "tests/security/db-comm-line-reply-tokens.sql")
+    query("insert into public.orgs(id, name) values ('ec000000-0000-4000-8000-0000000000a6', 'l6 rb');"
+          "insert into public.comm_line_send_unknown(org_id, retry_key)"
+          " values ('ec000000-0000-4000-8000-0000000000a6', 'refuse-while-unknown');")
+    try:
+        sql(l6rt_rb)
+        raise AssertionError("line reply-token rollback ran while unknown rows existed")
+    except subprocess.CalledProcessError:
+        pass
+    assert query("select to_regclass('public.comm_line_reply_tokens') is not null;") == "t"
+    query("delete from public.orgs where id = 'ec000000-0000-4000-8000-0000000000a6';")
+    sql(l6rt_rb)
+    assert query("select to_regclass('public.comm_line_reply_tokens') is null"
+                 " and to_regclass('public.comm_line_send_unknown') is null;") == "t"
+    sql(l6rt)  # forward again after rollback
+    sql(ROOT / "tests/security/db-comm-line-reply-tokens.sql")
+    # Parent rollback must refuse while L-6 tables still exist (no CASCADE).
+    try:
+        sql(eca_rb)
+        raise AssertionError("comm accounts rollback ran while L-6 tables existed")
+    except subprocess.CalledProcessError:
+        pass
+    assert query("select to_regclass('public.employee_comm_accounts') is not null"
+                 " and to_regclass('public.comm_line_reply_tokens') is not null"
+                 " and to_regclass('public.comm_line_send_unknown') is not null;") == "t"
+    print("PASS: comm line reply tokens (20261014100000): 2 tables RLS on / restrictive deny-all only, anon/authenticated no access; "
+          "hash format, unique reply token, unknown retry_key unique per org, org delete cascades; re-applicable; "
+          "rollback refused while unknown-outcome rows exist, then drops both; forward again.")
     print("PASS: approver authority (PR-D): owner / designated admin decision table; flag-OFF 7-argument W1 call unchanged; standard ticket → designated admin stored, others refused; owner ticket → designated admin endorsed once and kept pending, owner approves and is stored; zero owners stop; multiple owners: any one owner other than the requester (requesting owner refused; a sole owner's own approval counts; several owners all requesters → no_owner_other_than_requester); reject / non-target not gated; record_approver_authority verified/endorse; one RPC overload; EXECUTE service_role only; rollback restores the 7-argument RPC + re-apply.")
     print("PASS: approver context CAS (TOCTOU follow-up): policy.patch / schedulingPolicy.patch writes only when the locked row still equals the pinned snapshot; concurrent change between check and write → approver_context_changed with nothing written (employee row, active and revoked credentials, org / employee scheduling policy); ticket binding (fingerprint, missing fingerprint, status, tool, target, org) refused; invalid input refused; EXECUTE service_role only; 12 concurrent writers with one snapshot → exactly 1 write (both RPCs); rollback drops both RPCs (PR-D untouched) + re-apply.")
     print("PASS: employee_webhook_settings (D9): RLS on, no policy, anon/authenticated denied, service_role reads/writes/upserts; cross-org row rejected; payload mode minimal|legacy_full (default minimal); ciphertext-only secret + fingerprint pair; employee delete cascades; rollback + re-apply.")

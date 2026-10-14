@@ -85,6 +85,9 @@ import type {
   InformationClass,
   PostingAs,
 } from "@/lib/types";
+import { isLineConversationEnabled } from "@/lib/comm/flags";
+import { hashConversationToken } from "@/lib/comm/conversation-token";
+import { deliverLineConversation } from "@/lib/comm/line-invoke";
 
 const SNAPSHOT_ARG_KEYS = [
   "text",
@@ -151,6 +154,8 @@ export type InvokeSnapshot = {
     email?: string;
     phone?: string;
     lineId?: string;
+    /** SHA-256 of the conversation token (never the token itself). */
+    tokenHash?: string;
     /** Telegram conversation (thread single-flight key at fulfil). */
     telegramChatId?: string;
     telegramThreadId?: string;
@@ -174,7 +179,7 @@ export type InvokeSnapshot = {
 
 export type ApprovalFulfillment = {
   ok: boolean;
-  delivery?: "stub" | "slack" | "mail" | "sns";
+  delivery?: "stub" | "slack" | "mail" | "sns" | "line";
   channel?: string;
   ts?: string;
   id?: string;
@@ -213,7 +218,8 @@ export type ApprovalFulfillment = {
 export type ConversationDelivery =
   | { ok: true; delivery: "stub" }
   | { ok: true; delivery: "slack"; channel?: string; ts?: string; postedVia?: PostingAs }
-  | { ok: true; delivery: "mail"; channel?: string; ts?: string };
+  | { ok: true; delivery: "mail"; channel?: string; ts?: string }
+  | { ok: true; delivery: "line" };
 
 function jsonClone<T>(value: T): T | undefined {
   try {
@@ -277,6 +283,7 @@ function snapshotConversation(
     email: conversation.email,
     phone: conversation.phone,
     lineId: conversation.lineId,
+    ...(conversation.token ? { tokenHash: hashConversationToken(conversation.token) } : {}),
   });
   return cloned ?? null;
 }
@@ -332,6 +339,8 @@ export function buildInvokeSnapshot(input: {
     const readThrough = readThroughFromBody(input.body as unknown as Record<string, unknown>);
     if (readThrough?.source === "explicit") snapshot.readThroughTs = readThrough.ts;
     const rawConv = input.body.conversation as unknown as Record<string, unknown> | undefined;
+    const rawTok = typeof rawConv?.token === "string" ? rawConv.token.trim() : "";
+    if (snapshot.conversation && rawTok) snapshot.conversation.tokenHash = hashConversationToken(rawTok);
     const tgChat = typeof rawConv?.telegramChatId === "string" ? rawConv.telegramChatId.trim() : "";
     if (snapshot.conversation && tgChat) {
       snapshot.conversation.telegramChatId = tgChat;
@@ -383,6 +392,7 @@ export function parseInvokeSnapshot(
           email: str(convRaw.email),
           phone: str(convRaw.phone),
           lineId: str(convRaw.lineId),
+          ...(str(convRaw.tokenHash) ? { tokenHash: str(convRaw.tokenHash) } : {}),
           ...(str(convRaw.telegramChatId) ? { telegramChatId: str(convRaw.telegramChatId) } : {}),
           ...(str(convRaw.telegramThreadId) ? { telegramThreadId: str(convRaw.telegramThreadId) } : {}),
         }
@@ -405,7 +415,8 @@ export function parseFulfillment(
     rec.delivery === "slack" ||
     rec.delivery === "stub" ||
     rec.delivery === "mail" ||
-    rec.delivery === "sns"
+    rec.delivery === "sns" ||
+    rec.delivery === "line"
       ? rec.delivery
       : undefined;
   const fulfillment: ApprovalFulfillment = {
@@ -465,6 +476,9 @@ export function conversationDeliveryFromFulfillment(
       ...(fulfillment.ts ? { ts: fulfillment.ts } : {}),
     };
   }
+  if (fulfillment.delivery === "line") {
+    return { ok: true, delivery: "line" };
+  }
   return null;
 }
 
@@ -506,6 +520,69 @@ function outboundText(args: Record<string, unknown>, fallback: string): string {
     (value) => typeof value === "string" && value.trim()
   );
   return (typeof raw === "string" ? raw : "").trim() || fallback;
+}
+
+/** L-6: post-approval LINE send. Human yes → externalSendAllowed. */
+async function fulfillLineConversation(
+  approval: ApprovalRequest,
+  snapshot: InvokeSnapshot,
+  requestToken?: string | null
+): Promise<ApprovalFulfillment> {
+  const existing = parseFulfillment(approval.metadata);
+  if (existing?.ok) return existing;
+  if (existing?.error === POST_OUTCOME_UNKNOWN) return existing;
+
+  const expectedHash =
+    snapshot.conversation?.tokenHash ||
+    (typeof snapshot.args.tokenHash === "string" ? snapshot.args.tokenHash : "");
+  const token = typeof requestToken === "string" ? requestToken.trim() : "";
+  if (!token) {
+    const at = new Date().toISOString();
+    const fulfillment: ApprovalFulfillment = { ok: false, error: "conversation_token_required", at };
+    await persistFulfillment(approval, fulfillment);
+    return fulfillment;
+  }
+  if (!expectedHash || hashConversationToken(token) !== expectedHash) {
+    const at = new Date().toISOString();
+    const fulfillment: ApprovalFulfillment = { ok: false, error: "conversation_token_mismatch", at };
+    await persistFulfillment(approval, fulfillment);
+    return fulfillment;
+  }
+  const result = await deliverLineConversation({
+    token,
+    args: snapshot.args ?? {},
+    text: outboundText(snapshot.args, snapshot.purpose || approval.purpose),
+    orgId: approval.orgId,
+    employeeId: approval.employeeId,
+    externalSendAllowed: true,
+    retryId: approval.id,
+  });
+  const at = new Date().toISOString();
+  const fulfillment: ApprovalFulfillment =
+    result.status === "sent"
+      ? { ok: true, delivery: "line", at }
+      : result.status === "unknown"
+        ? { ok: false, error: POST_OUTCOME_UNKNOWN, at }
+        : { ok: false, error: result.reason || "line_not_sent", at };
+  await persistFulfillment(approval, fulfillment);
+  if (result.status === "sent") {
+    await appendAuditEvent({
+      orgId: approval.orgId,
+      employeeId: approval.employeeId,
+      credentialId: approval.credentialId,
+      action: "line.posted",
+      purpose: approval.purpose,
+      summary: "承認済み LINE 会話投稿を実行",
+      metadata: {
+        tool: snapshot.tool,
+        jobId: snapshot.jobId,
+        approvalId: approval.id,
+        delivery: "line",
+        phase: "approval.fulfill",
+      },
+    }).catch(() => undefined);
+  }
+  return fulfillment;
 }
 
 function destinationOf(snapshot: InvokeSnapshot): string {
@@ -848,6 +925,8 @@ async function auditAttachmentNotSent(
 type FulfillInvokeOptions = {
   /** The caller uploads the approved attachment itself (agent re-run). */
   attachmentHandledByCaller?: boolean;
+  /** Re-resolved conversation token from the current request (never from the snapshot). */
+  conversationToken?: string | null;
 };
 
 /**
@@ -895,6 +974,12 @@ async function fulfillApprovedInvokeCore(
 
     if (!isAudienceGatedTool(snapshot.tool || approval.tool || "")) {
       return null;
+    }
+
+    // L-6: approved LINE reply → sendLineConversationMessage. An "unknown"
+    // outcome is recorded and never retried automatically (Push would double-deliver).
+    if (isLineConversationEnabled() && (snapshot.conversation?.surface || "").toLowerCase() === "line") {
+      return fulfillLineConversation(approval, snapshot, options.conversationToken);
     }
 
     // THREAD_SINGLE_FLIGHT_ENABLED: one lease + "already moved on" check per
@@ -1263,6 +1348,10 @@ export async function fulfillApprovedInvoke(
   }
   const snapshot = approval.status === "approved" ? parseInvokeSnapshot(approval.metadata) : null;
   if (approval.status !== "approved" || !snapshot || isAdminClassApproval(approval)) return null;
+  const already = parseFulfillment(approval.metadata);
+  if (already?.ok) return already;
+  // Unknown LINE / Slack outcome: never take the claim again (a retry would Push).
+  if (already?.error === POST_OUTCOME_UNKNOWN) return already;
   // Re-check tool settings / mail policy before taking the execution claim so
   // a stop is audited with its reason (the authority check would otherwise
   // throw a generic approval_authority_revoked) and the claim is not touched.

@@ -20,7 +20,7 @@
  * COMM_CONVERSATION_TOKEN_SECRET_PREVIOUS is accepted for verify only (rotation).
  * Not encrypted: the payload holds IDs the AI already sees in the wake.
  */
-import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 
 export const CONVERSATION_TOKEN_DEFAULT_TTL_SECONDS = 24 * 3600;
 export const CONVERSATION_TOKEN_MAX_TTL_SECONDS = 7 * 24 * 3600;
@@ -164,4 +164,45 @@ export function resolveConversationTarget(
     if (s !== v.target.conversationId && s !== v.target.counterpartyId) return { ok: false, reason: "conversation_target_mismatch" };
   }
   return v;
+}
+
+/** SHA-256 of the raw token. Stored on the approval snapshot instead of the token. */
+export function hashConversationToken(token: string): string {
+  return createHash("sha256").update(`conversation-token:v1:${token}`).digest("hex");
+}
+
+/**
+ * Counterparty pinned in the token payload (no HMAC check). Used to refuse an
+ * AI-supplied lineId that names someone else before egress classifies WHO.
+ */
+export function conversationTokenCounterparty(token: string | null | undefined): string | null {
+  if (typeof token !== "string" || !token) return null;
+  const parts = token.split(".");
+  if (parts.length !== 3 || parts[0] !== "spc1") return null;
+  try {
+    const p = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8")) as { cp?: unknown };
+    return typeof p.cp === "string" && LINE_USER_RE.test(p.cp) ? p.cp : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Conversation token from the request only (never invented). */
+export function conversationTokenFromRequest(body: {
+  conversation?: unknown;
+  args?: unknown;
+  token?: unknown;
+}): string | null {
+  const conv =
+    body.conversation && typeof body.conversation === "object" && !Array.isArray(body.conversation)
+      ? (body.conversation as Record<string, unknown>)
+      : {};
+  const args =
+    body.args && typeof body.args === "object" && !Array.isArray(body.args)
+      ? (body.args as Record<string, unknown>)
+      : {};
+  for (const raw of [conv.token, args.token, body.token]) {
+    if (typeof raw === "string" && raw.trim()) return raw.trim();
+  }
+  return null;
 }

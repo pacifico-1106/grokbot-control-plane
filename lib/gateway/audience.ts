@@ -275,11 +275,14 @@ export function parseConversationContext(
     str(conv.slackTeamId) || str(args.slackTeamId) || str(args.teamId);
   const phone = str(conv.phone) || str(body.phone) || str(args.phone);
   const lineId = str(conv.lineId) || str(body.lineId) || str(args.lineId);
+  const token = str(conv.token) || str((body as unknown as Record<string, unknown>).token) || str(args.token);
   const threadId = resolveConversationThreadId({ conversation: conv, args, body });
   const bodyRecord = body as unknown as Record<string, unknown>;
   const ts = str(conv.ts) || str(bodyRecord.ts) || str(args.ts);
   const messageTs = str(conv.messageTs) || str(bodyRecord.messageTs) || str(args.messageTs);
   const slackTs = str(conv.slackTs) || str(bodyRecord.slackTs) || str(args.slackTs);
+  // H2: a LINE conversation never takes a Slack dest from args.channel / slack* fields.
+  const isLine = surface === "line";
 
   return {
     surface,
@@ -289,11 +292,12 @@ export function parseConversationContext(
     orgId,
     threadId,
     email,
-    slackChannelId,
-    slackUserId,
-    slackTeamId,
+    slackChannelId: isLine ? undefined : slackChannelId,
+    slackUserId: isLine ? undefined : slackUserId,
+    slackTeamId: isLine ? undefined : slackTeamId,
     phone,
     lineId,
+    ...(token ? { token } : {}),
     ...(ts ? { ts } : {}),
     ...(messageTs ? { messageTs } : {}),
     ...(slackTs ? { slackTs } : {}),

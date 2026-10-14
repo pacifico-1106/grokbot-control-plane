@@ -49,6 +49,8 @@ const GATES: Array<[string, string, RegExp]> = [
   ["G4 execution authority", "lib/approvals/execution-authority.ts", /assertTicketNotHeld\(approval\)[\s\S]*phase: "approval_execution"/],
   ["G4 executeApproval", "lib/approvals/execution.ts", /assertTicketNotHeld\(approval\)/],
   ["G4 approvalId re-invoke (priorApprovalOk)", "lib/gateway/invoke.ts", /if \(prior && heldTicketMarker\(prior\.metadata\)\)/],
+  ["G4 approvalId re-invoke assertTicketNotHeld", "lib/gateway/invoke.ts", /assertTicketNotHeld\(prior\)/],
+  ["pre-send LINE (LINE PoC L-5/L-6)", "lib/comm/pre-send.ts", /preSendHoldCode\(/],
   ["W2 / stuckWatch.retry", "lib/stuck-watch/w2-unfulfilled.ts", /heldTicketMarker\(approval\.metadata\)/],
   ["G5 wake", "lib/slack/mention-ingress.ts", /checkOperable\(\{[^}]*phase: "wake"/],
   ["G5 LINE account wake (LINE PoC L-4)", "lib/comm/line-ingress.ts", /checkOperable\(\{[^}]*phase: "wake"/],

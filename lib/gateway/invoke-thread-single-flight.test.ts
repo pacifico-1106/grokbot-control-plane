@@ -320,9 +320,9 @@ describe("thread_moved_on", () => {
   });
 
   // H1 (10/12): the gateway has no LINE delivery, so an allowed LINE reply is
-  // channel_not_supported (not sent) BEFORE the lease: nothing is held or
+  // delivery_unsupported_surface (not sent) BEFORE the lease: nothing is held or
   // recorded, and a later reply is not thread_busy / thread_moved_on.
-  test("LINE: an allowed reply is not sent (channel_not_supported) and leaves no lease or post record", async () => {
+  test("LINE: an allowed reply is not sent (delivery_unsupported_surface) and leaves no lease or post record", async () => {
     on();
     recordSlack();
     const line = (text: string, readThroughTs: string) =>
@@ -335,11 +335,11 @@ describe("thread_moved_on", () => {
       }) as unknown as GatewayInvokeRequest;
     const first = await invoke(line(A_TEXT, old()));
     expect(first.httpStatus).toBe(409);
-    expect(first.body.code).toBe("channel_not_supported");
+    expect(first.body.code).toBe("delivery_unsupported_surface");
     expect(first.body.sent).toBe(false);
-    expect((await invoke(line(B_TEXT, fresh()))).body.code).toBe("channel_not_supported");
+    expect((await invoke(line(B_TEXT, fresh()))).body.code).toBe("delivery_unsupported_surface");
     setThreadGuardClockForTests(() => Date.now() + 61_000);
-    expect((await invoke(line(B_TEXT, old()))).body.code).toBe("channel_not_supported");
+    expect((await invoke(line(B_TEXT, old()))).body.code).toBe("delivery_unsupported_surface");
   });
 });
 
@@ -750,18 +750,18 @@ describe("pre-flag-ON fixes (木村 #286 follow-up)", () => {
   describe("3. LINE / mail: no caller-delivered lease any more (H1: not sent → nothing to serialize)", () => {
     // Before H1 an allowed LINE / mail reply came back 200 "accepted" with
     // nothing sent and held the thread lease for its TTL. It is now
-    // channel_not_supported before the lease, with the flag ON or OFF.
+    // delivery_unsupported_surface before the lease, with the flag ON or OFF.
     for (const surface of ["line", "mail"] as const) {
       for (const flag of ["on", "off"] as const) {
-        test(`${surface}, flag ${flag}: channel_not_supported; another job is not thread_busy`, async () => {
+        test(`${surface}, flag ${flag}: delivery_unsupported_surface; another job is not thread_busy`, async () => {
           if (flag === "on") on();
           else off();
           recordSlack();
           const first = await invoke(callerDelivered(surface, A_TEXT, old()));
           expect(first.httpStatus).toBe(409);
-          expect(first.body.code).toBe("channel_not_supported");
+          expect(first.body.code).toBe("delivery_unsupported_surface");
           const second = await invoke(callerDelivered(surface, B_TEXT, fresh()), "emp_comm2");
-          expect(second.body.code).toBe("channel_not_supported");
+          expect(second.body.code).toBe("delivery_unsupported_surface");
           expect(posts.length).toBe(0);
         });
       }
@@ -784,7 +784,7 @@ describe("pre-flag-ON fixes (木村 #286 follow-up)", () => {
     // exist and keep this fulfil-time guard).
     async function queueLine(readThroughTs = old()) {
       const body = callerDelivered("line", B_TEXT, readThroughTs, jid("line-apr"), "comm.send");
-      expect((await invoke(body)).body.code).toBe("channel_not_supported");
+      expect((await invoke(body)).body.code).toBe("delivery_unsupported_surface");
       const created = await createApproval({
         orgId: DEMO_ORG.id, employeeId: "emp_comm", credentialId: "cred_comm",
         title: "comm.send", purpose: body.purpose, summary: "送信の承認", risk: "high", tool: "comm.send", jobId: String(body.jobId),
