@@ -201,12 +201,20 @@ def sql_file(path, single=False, expect_error=None):
     return result
 
 
-def sql_text(text, single=True):
+def sql_text(text, single=True, expect_error=None):
     result = subprocess.run([str(x) for x in psql_args((["--single-transaction"] if single else []) + ["-f", "-"])],
                             env=env, input=text, capture_output=True, text=True)
-    if result.returncode != 0:
+    if expect_error is None:
+        if result.returncode != 0:
+            sys.stderr.write(result.stderr)
+            raise SystemExit("FAIL applying inline SQL")
+        return result
+    if result.returncode == 0:
+        raise SystemExit(f"FAIL inline SQL applied but was expected to fail ({expect_error})")
+    if expect_error not in result.stderr:
         sys.stderr.write(result.stderr)
-        raise SystemExit("FAIL applying inline SQL")
+        raise SystemExit("FAIL inline SQL failed differently than expected")
+    return result
 
 
 def query(command):
@@ -357,11 +365,8 @@ try:
             # while they exist; then drop the child first (no CASCADE).
             child = next((n for n in order if n.startswith("20261014100000_")), None)
             assert child, "L-6 child migration missing"
-            try:
-                sql_text(rollback_block((MIGRATIONS / name).read_text()), single=False)
-                raise AssertionError(f"{name}: parent rollback ran while L-6 tables existed")
-            except subprocess.CalledProcessError:
-                pass
+            sql_text(rollback_block((MIGRATIONS / name).read_text()), single=False,
+                     expect_error="ROLLBACK_REFUSED: L-6 reply-token tables exist")
             still = query("select to_regclass('public.employee_comm_accounts') is not null"
                           " and to_regclass('public.comm_line_reply_tokens') is not null;")
             assert still == "t", f"{name}: refuse must leave parent and L-6 tables"
