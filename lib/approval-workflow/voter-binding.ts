@@ -163,6 +163,19 @@ export async function checkChannelBelongsToOrg(
     return { ok: true };
   }
 
+  // L-7: a conversation link binds comm_account:<accountId>, not a notification channel.
+  const comm = /^comm_account:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i.exec(channelKey);
+  if (provider === "line" && comm) {
+    try {
+      const { getCommAccountForSend } = await import("@/lib/comm/accounts");
+      const account = await getCommAccountForSend(orgId, comm[1]);
+      if (account && account.surface === "line" && account.status === "active") return { ok: true };
+    } catch {
+      return { ok: false, reason: "supabase_unavailable" };
+    }
+    return { ok: false, reason: "channel_not_found" };
+  }
+
   const admin = createSupabaseAdminClient();
   if (!admin) return { ok: false, reason: "supabase_unavailable" };
 
