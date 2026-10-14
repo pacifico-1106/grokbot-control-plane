@@ -66,7 +66,7 @@ export async function redeemConversationLinkCode(
   input: {
     orgId: string;
     accountId: string;
-    employeeId?: string;
+    employeeId: string;
     text: string;
     lineUserId: string;
     replyToken?: string | null;
@@ -126,7 +126,7 @@ export async function redeemConversationLinkCode(
           {
             orgId: input.orgId,
             accountId: input.accountId,
-            employeeId: input.employeeId || "",
+            employeeId: input.employeeId,
             lineUserId: input.lineUserId,
             replyToken: token,
           },

@@ -4,6 +4,8 @@
  * (limits forced ON when LINE conversation is ON). channelId = comm account
  * id; voter binding key is comm_account:<accountId>. Plaintext never stored.
  */
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { createCommAccount, resetDemoCommAccounts, setCommAccountSecrets, type CommAccount } from "@/lib/comm/accounts";
 import { redeemConversationLinkCode, sendConversationLinkReply } from "@/lib/comm/line-link";
@@ -64,8 +66,15 @@ async function issueFor(channelId: string) {
 }
 
 describe("redeemConversationLinkCode", () => {
+  test("employeeId is required (type + call sites) so ingress-only callers cannot omit it", () => {
+    const src = readFileSync(fileURLToPath(new URL("./line-link.ts", import.meta.url)), "utf8");
+    expect(src).toMatch(/redeemConversationLinkCode\([\s\S]*?employeeId:\s*string;/);
+    expect(src).not.toMatch(/employeeId\?:\s*string;/);
+    expect(src).not.toMatch(/employeeId:\s*input\.employeeId\s*\|\|\s*""/);
+  });
+
   test("ordinary text is not a link code (the AI may still be woken)", async () => {
-    const r = await redeemConversationLinkCode({ orgId: ORG, accountId: account.id, text: "こんにちは", lineUserId: USER });
+    const r = await redeemConversationLinkCode({ orgId: ORG, accountId: account.id, employeeId: EMP, text: "こんにちは", lineUserId: USER });
     expect(r).toEqual({ handled: false });
   });
 
@@ -74,6 +83,7 @@ describe("redeemConversationLinkCode", () => {
     const r = await redeemConversationLinkCode({
       orgId: ORG,
       accountId: account.id,
+      employeeId: EMP,
       text: issued.display,
       lineUserId: USER,
     });
@@ -116,6 +126,7 @@ describe("redeemConversationLinkCode", () => {
       {
         orgId: ORG,
         accountId: account.id,
+        employeeId: EMP,
         text: issued.display,
         lineUserId: USER,
         replyToken: "rt-success-1",
@@ -145,6 +156,7 @@ describe("redeemConversationLinkCode", () => {
       {
         orgId: ORG,
         accountId: account.id,
+        employeeId: EMP,
         text: "SP-XXXX-YYYY",
         lineUserId: USER,
         replyToken: "rt-fail-1",
@@ -160,6 +172,7 @@ describe("redeemConversationLinkCode", () => {
     const r = await redeemConversationLinkCode({
       orgId: ORG,
       accountId: account.id,
+      employeeId: EMP,
       text: issued.display,
       lineUserId: USER,
     });
@@ -173,6 +186,7 @@ describe("redeemConversationLinkCode", () => {
     await redeemConversationLinkCode({
       orgId: ORG,
       accountId: account.id,
+      employeeId: EMP,
       text: issued.display,
       lineUserId: USER,
     });
@@ -192,6 +206,7 @@ describe("redeemConversationLinkCode", () => {
     const r = await redeemConversationLinkCode({
       orgId: ORG,
       accountId: account.id,
+      employeeId: EMP,
       text: issued.display,
       lineUserId: USER,
     });
