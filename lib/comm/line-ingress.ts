@@ -17,14 +17,15 @@
  *        duplicate → skipped; storage error → skipped and the webhook answers 503
  *        so LINE redelivers (if redelivery is ON)
  *      - PoC: 1:1 text in active mode only (groups / rooms / media / follow → not dispatched)
- *      - a link code (SP-XXXX-XXXX) is never handed to the AI
- *      - emergency stop: checkOperable({phase:"wake"}) — held, unknown or error →
- *        not dispatched, audited (throttled), and never woken later (the event key
- *        is already consumed). Same rule as the Slack wake (S2 G5).
+ *      - emergency stop: checkOperable({phase:"wake"}) FIRST — held, unknown or
+ *        error → not redeemed, not dispatched, audited (throttled). The event
+ *        key is already consumed. Same rule as the Slack wake (S2 G5).
+ *      - a link code (SP-XXXX-XXXX) is redeemed on this account (L-7) only after
+ *        the hold check (nothing is bound while stopped / on leave) and never handed to the AI
  *   6. a NEW conversation token for this message (org × employee × account ×
  *      sender, 24 h; 木村 10/12). No token key → not woken (fail closed).
- *   7. dispatch (L-5 wires the wake delivery). A dispatch error is logged and does
- *      not fail the webhook.
+ *   7. dispatch (L-7): wake the AI employee with the conversation token. A
+ *      dispatch error is logged and does not fail the webhook.
  * Sends are re-checked right before the LINE API call (lib/comm/pre-send): a stop
  * or leave placed after the token was issued still blocks the reply.
  * No message body is stored or logged (§7 decision 6).
@@ -38,6 +39,8 @@ import {
 } from "@/lib/comm/accounts";
 import { issueConversationToken } from "@/lib/comm/conversation-token";
 import { isLineConversationEnabled } from "@/lib/comm/flags";
+import { redeemConversationLinkCode } from "@/lib/comm/line-link";
+import { dispatchLineConversationWake } from "@/lib/comm/line-wake";
 import { checkOperable, takeWakeSuppressedAuditSlot, type OperableResult } from "@/lib/safety/hold";
 
 export const LINE_MAX_EVENTS_PER_BODY = 100;
@@ -72,7 +75,17 @@ export type LineIngressDeps = {
 const defaultDeps: LineIngressDeps = {
   now: () => Date.now(),
   checkOperable: (i) => checkOperable(i),
-  dispatch: async () => undefined, // L-5: wake with a conversation token
+  dispatch: (e) => dispatchLineConversationWake({
+    orgId: e.orgId,
+    employeeId: e.employeeId,
+    accountId: e.accountId,
+    conversationId: e.conversationId,
+    senderId: e.senderId,
+    text: e.text,
+    eventKey: e.eventKey,
+    conversationToken: e.conversationToken,
+    conversationTokenExpiresAt: e.conversationTokenExpiresAt,
+  }),
 };
 
 type LineEvent = {
@@ -150,7 +163,6 @@ async function processEvent(account: CommAccount, ev: LineEvent, d: LineIngressD
   const sender = String(src.userId || "");
   const text = ev.type === "message" && ev.message?.type === "text" ? String(ev.message.text ?? "") : "";
   if (ev.mode === "standby" || src.type !== "user" || src.groupId || src.roomId || !LINE_USER_RE.test(sender) || !text) return "done";
-  if (LINK_CODE_RE.test(text)) return "done"; // link codes are handled by the link flow (L-6), never by the AI
 
   let operable: OperableResult;
   try {
@@ -160,6 +172,20 @@ async function processEvent(account: CommAccount, ev: LineEvent, d: LineIngressD
   }
   if (!operable.ok) {
     await auditSuppressed(account, operable);
+    return "done";
+  }
+
+  if (LINK_CODE_RE.test(text)) {
+    // L-7: redeem on the employee's own LINE (never handed to the AI).
+    // Hold already checked above — nothing is bound while stopped / on leave.
+    await redeemConversationLinkCode({
+      orgId: account.orgId,
+      accountId: account.id,
+      employeeId: account.employeeId,
+      text,
+      lineUserId: sender,
+      replyToken: typeof ev.replyToken === "string" ? ev.replyToken : null,
+    }).catch(() => undefined);
     return "done";
   }
   const token = issueConversationToken(

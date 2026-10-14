@@ -20,6 +20,8 @@ export const PINNED: Record<string, string[]> = {
   "executeApproval(": ["lib/admin-mcp/fulfill-admin.ts", "lib/approvals/fulfill.ts", "lib/config-change-request/service.ts"],
   // G5 inside.
   "postWake(": ["lib/slack/mention-ingress.ts"],
+  // G5 inside (checkOperable phase:"wake"). Ingress already checked; wake re-checks.
+  "dispatchLineConversationWake(": ["lib/comm/line-ingress.ts"],
   // G1 inside.
   "resolveEmployeeCredential(": ["app/api/gateway/invoke/route.ts", "app/api/mcp/route.ts", "lib/mcp-oauth/resource-server.ts"],
   // G2 inside (resolveOAuthAccessToken).
@@ -54,6 +56,7 @@ const GATES: Array<[string, string, RegExp]> = [
   ["W2 / stuckWatch.retry", "lib/stuck-watch/w2-unfulfilled.ts", /heldTicketMarker\(approval\.metadata\)/],
   ["G5 wake", "lib/slack/mention-ingress.ts", /checkOperable\(\{[^}]*phase: "wake"/],
   ["G5 LINE account wake (LINE PoC L-4)", "lib/comm/line-ingress.ts", /checkOperable\(\{[^}]*phase: "wake"/],
+  ["G5 LINE conversation wake (LINE PoC L-7)", "lib/comm/line-wake.ts", /checkOperable\(\{[^}]*phase: "wake"/],
   ["G5 MCP Events", "lib/mcp-events/principal.ts", /checkOperable\(\{[^}]*phase: "mcp_events"/],
   ["pre-send Slack", "lib/gateway/adapters/slack.ts", /preSendHoldCode\(/],
   ["pre-send Slack file", "lib/gateway/adapters/slack-file-upload.ts", /preSendHoldCode\(/],
@@ -78,6 +81,7 @@ const DEFINED_IN: Record<string, string[]> = {
   runGatewayInvoke: ["lib/gateway/invoke"],
   executeApproval: ["lib/approvals/execution"],
   postWake: ["lib/slack/mention-ingress"],
+  dispatchLineConversationWake: ["lib/comm/line-wake"],
   resolveEmployeeCredential: ["lib/auth/employee-credential"],
   resolveMcpCredential: ["lib/mcp-oauth/resource-server"],
   resolveOAuthAccessToken: ["lib/mcp-oauth/resource-server"],

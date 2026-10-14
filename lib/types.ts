@@ -548,6 +548,8 @@ export type AuditAction =
   | "slack.file_egress_denied"
   | "sns.publish_failed"
   | "slack.mention_wake"
+  /** L-7: per-employee LINE 1:1 conversation wake. Metadata: ids / eventKey only — never the body. */
+  | "line.conversation_wake"
   | "slack.internal_im_wake"
   | "slack.user_token_im_wake"
   | "slack.im_wake_skipped"

@@ -58,6 +58,51 @@ describe("w1ItemId", () => {
   });
 });
 
+describe("LINE conversation wake is the same W1 as Slack", () => {
+  test("line.conversation_wake (woke) is a mention-wake for stuck-watch", async () => {
+    const { isMentionWakeAudit } = await import("@/lib/data/audit");
+    const wake = makeWake({
+      action: "line.conversation_wake",
+      purpose: "comm.line",
+      summary: "LINE 1対1 から AI 社員を起こした",
+      metadata: {
+        reason: "woke",
+        channel: "Uaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        ts: "01HLINEWAKE000000000000001",
+        accountId: "acct-1",
+        eventKey: "01HLINEWAKE000000000000001",
+      },
+    });
+    expect(isMentionWakeAudit(wake)).toBe(true);
+    const policy = { ...defaultStuckWatchPolicy(), mentionUnansweredMinutes: 10 };
+    const result = evaluateW1Eligibility({
+      wake,
+      policy,
+      audits: [wake],
+      approvals: [],
+      now: new Date(),
+      resolvedItemIds: new Set(),
+      notifiedItemIds: new Set(),
+    });
+    expect(result.eligible).toBe(true);
+    expect(result.itemId).toBe(w1ItemId("Uaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "01HLINEWAKE000000000000001"));
+  });
+
+  test("a later comm.reply to the same LINE conversation clears W1", () => {
+    const wake = makeWake({
+      action: "line.conversation_wake",
+      metadata: {
+        reason: "woke",
+        channel: "Uaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        ts: "01HLINEWAKE000000000000002",
+      },
+    });
+    const reply = makeReplyAudit(wake);
+    reply.metadata.destination = "Uaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    expect(hasSuccessfulReplyAfterWake(wake, [wake, reply], [])).toBe(true);
+  });
+});
+
 describe("hasSuccessfulReplyAfterWake", () => {
   test("false when no reply audit exists", () => {
     const wake = makeWake();

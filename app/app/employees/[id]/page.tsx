@@ -16,6 +16,9 @@ import { EmployeeTerminateForm } from "@/components/employees/EmployeeTerminateF
 import { HoldPanel } from "@/components/holds/HoldPanel";
 import { EmployeeIngressHandoffStatus } from "@/components/employees/EmployeeIngressHandoffStatus";
 import { SlackIdentityForm } from "@/components/employees/SlackIdentityForm";
+import { EmployeeLineLinkCodeForm } from "@/components/employees/EmployeeLineLinkCodeForm";
+import { commLinkCodePermissions } from "@/lib/employees/comm-link-code-permissions";
+import { isCommAccountsEnabled, isLineConversationEnabled } from "@/lib/comm/flags";
 import { GoogleCalendarIdentityForm } from "@/components/employees/GoogleCalendarIdentityForm";
 import { getSessionContext } from "@/lib/auth/session";
 import { isDemoMode } from "@/lib/mode";
@@ -62,6 +65,8 @@ export default async function EmployeeDetailPage({
   const bindingPermissions = bindingPanelPermissions(session);
   // Slack / Google identity connect + disconnect: same gate as the APIs (hire_issue_credentials).
   const { canManageIdentityLinks } = identityLinkPermissions(session);
+  const { canIssue: canIssueConversationLink } = commLinkCodePermissions(session);
+  const showConversationLink = isLineConversationEnabled() && isCommAccountsEnabled() && canIssueConversationLink;
   const members = await listMembers(orgId);
   const projects = await listOrgProjects(orgId);
   const sodWarnPolicy = await getOrgSodWarnPolicy(orgId);
@@ -229,6 +234,17 @@ export default async function EmployeeDetailPage({
         </p>
         <EmployeeProjectAccessForm employee={employee} projects={projects} disabled={employee.status === "suspended"} />
       </section>
+
+      {showConversationLink ? (
+        <section className="surface p-5 space-y-3 mt-4">
+          <h2 className="text-sm font-medium">LINE 会話の連携コード</h2>
+          <EmployeeLineLinkCodeForm
+            employeeId={employee.id}
+            canIssue={canIssueConversationLink}
+            disabled={employee.status === "suspended"}
+          />
+        </section>
+      ) : null}
 
       <section className="surface p-5 space-y-3 mt-4">
         <h2 className="text-sm font-medium">Slack 投稿名義</h2>

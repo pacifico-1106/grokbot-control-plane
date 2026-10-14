@@ -79,6 +79,7 @@ export const MCP_HANDOFF_WAKE_ACTIONS = [
   "slack.internal_im_wake",
   "slack.user_token_im_wake",
   "slack.user_token_channel_wake",
+  "line.conversation_wake",
   APPROVAL_WAKE_ACTION,
 ] as const;
 
