@@ -17,10 +17,14 @@
  *      removed (when internal), employee / org not on stop / leave / quarantine
  *   7. Reply when the pinned replyToken is fresh (< 50 s) and unused in the
  *      reply-token ledger (DB / demo; not process memory). A 400 on Reply
- *      (token expired / used) falls back to Push. Push carries X-Line-Retry-Key
- *      so a retry can't double-send (409 = already accepted).
- *   8. result: sent / not_sent / unknown (5xx, timeout, network: may or may not have
- *      been delivered → never retried blindly, never followed by a Push).
+ *      (token expired / used) in the SAME request falls back to Push. If our
+ *      ledger already claimed the token (`claimed: false`) — concurrency,
+ *      re-execution, another instance — never Push; return unknown.
+ *      Push carries X-Line-Retry-Key so a retry can't double-send (409 = already
+ *      accepted).
+ *   8. result: sent / not_sent / unknown (5xx, timeout, network, already-claimed:
+ *      may or may not have been delivered → never retried blindly, never followed
+ *      by a Push).
  * The message text and the access token are never logged.
  */
 import { readCommAccountSecretsForServer } from "@/lib/comm/accounts";
@@ -136,20 +140,22 @@ export async function sendLineConversationMessage(
       console.error("line_reply_token_claim_failed", { accountId: t.accountId, reason: claim.reason });
       return { status: "not_sent", reason: claim.reason, audience };
     }
-    if (claim.claimed) {
-      const r = await post("/v2/bot/message/reply", accessToken, { replyToken: rt, messages });
-      if (r.kind === "ok") return { status: "sent", audience, mode: "reply" };
-      if (r.kind === "network") {
-        console.error("line_send_unknown", { accountId: t.accountId, mode: "reply", reason: "line_network_error" });
-        return { status: "unknown", reason: "line_network_error", audience, mode: "reply" };
-      }
-      if (r.status >= 500) {
-        console.error("line_send_unknown", { accountId: t.accountId, mode: "reply", status: r.status });
-        return { status: "unknown", reason: "line_http_5xx", audience, mode: "reply", httpStatus: r.status };
-      }
-      if (r.status !== 400) return { status: "not_sent", reason: r.status === 429 ? "line_rate_limited" : "line_http_4xx", audience, mode: "reply", httpStatus: r.status };
-      // 400: replyToken expired / already used → nothing was delivered → Push
+    if (!claim.claimed) {
+      console.error("line_send_unknown", { accountId: t.accountId, mode: "reply", reason: "reply_token_already_claimed" });
+      return { status: "unknown", reason: "reply_token_already_claimed", audience, mode: "reply" };
     }
+    const r = await post("/v2/bot/message/reply", accessToken, { replyToken: rt, messages });
+    if (r.kind === "ok") return { status: "sent", audience, mode: "reply" };
+    if (r.kind === "network") {
+      console.error("line_send_unknown", { accountId: t.accountId, mode: "reply", reason: "line_network_error" });
+      return { status: "unknown", reason: "line_network_error", audience, mode: "reply" };
+    }
+    if (r.status >= 500) {
+      console.error("line_send_unknown", { accountId: t.accountId, mode: "reply", status: r.status });
+      return { status: "unknown", reason: "line_http_5xx", audience, mode: "reply", httpStatus: r.status };
+    }
+    if (r.status !== 400) return { status: "not_sent", reason: r.status === 429 ? "line_rate_limited" : "line_http_4xx", audience, mode: "reply", httpStatus: r.status };
+    // 400: replyToken expired / already used by LINE → nothing was delivered → Push
   }
   const r = await post("/v2/bot/message/push", accessToken, { to: t.counterpartyId, messages }, { "x-line-retry-key": input.retryKey });
   if (r.kind === "ok") return { status: "sent", audience, mode: "push" };

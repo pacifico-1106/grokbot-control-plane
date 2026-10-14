@@ -158,14 +158,48 @@ describe("right-before-send check (checkLineSendAllowed)", () => {
 });
 
 describe("Reply first, then Push; sent / not_sent / unknown", () => {
-  test("fresh pinned replyToken (< 50 s) → Reply (free); used once only", async () => {
+  test("fresh pinned replyToken (< 50 s) → Reply (free); used once only — second send never Push", async () => {
     link = { status: "active" };
     const token = tok("rtok0123456789abcdef");
     now = NOW + 10_000;
     expect(await send({ token })).toMatchObject({ status: "sent", mode: "reply" });
     expect(calls[0].url).toBe("https://api.line.me/v2/bot/message/reply");
     expect(calls[0].body).toEqual({ replyToken: "rtok0123456789abcdef", messages: [{ type: "text", text: "お世話になっております" }] });
-    expect(await send({ token, retryKey: "0b0a0000-0000-4000-8000-000000000002" })).toMatchObject({ status: "sent", mode: "push" });
+    expect(await send({ token, retryKey: "0b0a0000-0000-4000-8000-000000000002" })).toMatchObject({
+      status: "unknown",
+      reason: "reply_token_already_claimed",
+      mode: "reply",
+    });
+    expect(calls.length).toBe(1);
+    expect(calls.some((c) => c.url.includes("/push"))).toBe(false);
+  });
+
+  test("claim claimed:false (already in our ledger) → unknown, never Push", async () => {
+    link = { status: "active" };
+    const r = await sendLineConversationMessage(
+      { token: tok("rtok0123456789abcdef"), args: {}, text: "お世話になっております", orgId: ORG, employeeId: EMP, externalSendAllowed: false, retryKey: "0b0a0000-0000-4000-8000-000000000001" },
+      { ...deps(), claimReplyToken: async () => ({ ok: true, claimed: false }) }
+    );
+    expect(r).toMatchObject({ status: "unknown", reason: "reply_token_already_claimed", mode: "reply" });
+    expect(calls).toEqual([]);
+  });
+
+  test("parallel direct sends of the same token → exactly one LINE API call", async () => {
+    link = { status: "active" };
+    const token = tok("rtok-parallel-aaaaaaaa");
+    const [a, b] = await Promise.all([
+      send({ token, retryKey: "0b0a0000-0000-4000-8000-0000000000a1" }),
+      send({ token, retryKey: "0b0a0000-0000-4000-8000-0000000000a2" }),
+    ]);
+    expect(calls.length).toBe(1);
+    expect(calls[0].url).toBe("https://api.line.me/v2/bot/message/reply");
+    expect(calls.some((c) => c.url.includes("/push"))).toBe(false);
+    const statuses = [a.status, b.status].sort();
+    expect(statuses).toEqual(["sent", "unknown"]);
+    expect([a, b].filter((r) => r.status === "unknown")[0]).toMatchObject({
+      reason: "reply_token_already_claimed",
+      mode: "reply",
+    });
   });
 
   test("old replyToken (≥ 50 s) → Push", async () => {

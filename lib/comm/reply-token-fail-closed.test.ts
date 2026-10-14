@@ -55,7 +55,7 @@ describe("recordLineReplyUnknown fail-closed", () => {
 });
 
 describe("deliverLineConversation", () => {
-  test("when recording unknown fails, result stays unknown (never becomes a retryable not_sent)", async () => {
+  test("persist failure after unknown Reply → unknown (unknown_record_failed), never a retryable not_sent", async () => {
     const result = await deliverLineConversation(
       {
         token: "spc1.x.y",

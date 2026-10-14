@@ -281,6 +281,22 @@ describe("LINE comm.reply (flag ON) → sendLineConversationMessage", () => {
     expect(res.body.code).not.toBe("delivery_unsupported_surface");
   });
 
+  test("already-claimed replyToken (unknown Reply) → post_outcome_unknown; re-execution does not send again", async () => {
+    await linkInternal();
+    nextSend = { status: "unknown", reason: "reply_token_already_claimed", audience: "internal", mode: "reply" };
+    const body = req("comm.reply", { surface: "line", lineId: LINE_USER, token: TOKEN });
+    const first = await invoke(body);
+    expect(first.httpStatus).toBe(502);
+    expect(first.body.ok).toBe(false);
+    expect(first.body.sent).toBe(false);
+    expect(first.body.code).toBe("post_outcome_unknown");
+    expect(first.body.reasonCode).toBe("post_outcome_unknown");
+    expect(sends).toHaveLength(1);
+    const again = await invoke(body);
+    expect(again.body.code).toBe("post_outcome_unknown");
+    expect(sends).toHaveLength(1);
+  });
+
   test("unknown (Reply/Push unclear) → 502, recorded, a repeat does NOT call send again", async () => {
     await linkInternal();
     nextSend = { status: "unknown", reason: "line_http_5xx", audience: "internal", mode: "reply" };
