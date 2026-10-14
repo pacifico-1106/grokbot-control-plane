@@ -3,7 +3,8 @@
  * A genuinely unknown ref is 404. Neither reads the body.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { POST, __setLineWebhookRefLookupForTests } from "@/app/api/webhooks/line/c/[ref]/route";
+import { POST } from "@/app/api/webhooks/line/c/[ref]/route";
+import { __setLineWebhookRefLookupForTests } from "@/lib/comm/line-webhook-ref";
 
 const REF = "A".repeat(43);
 const FLAGS = ["COMM_ACCOUNTS_ENABLED", "LINE_CONVERSATION_ENABLED"] as const;

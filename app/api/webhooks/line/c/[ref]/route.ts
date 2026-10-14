@@ -8,7 +8,7 @@
  * is verified over exactly those bytes.
  */
 import { handleLineAccountWebhook } from "@/lib/comm/line-ingress";
-import { getActiveCommAccountByWebhookRef } from "@/lib/comm/accounts";
+import { resolveActiveCommAccountByWebhookRef } from "@/lib/comm/line-webhook-ref";
 import { isLineConversationEnabled } from "@/lib/comm/flags";
 import { readBodyCapped } from "@/lib/http/read-body-capped";
 import { jsonUtf8 } from "@/lib/http/json-utf8";
@@ -18,19 +18,12 @@ export const dynamic = "force-dynamic";
 
 const MAX_BODY_BYTES = 1_000_000;
 
-type RefLookup = typeof getActiveCommAccountByWebhookRef;
-let lookupRef: RefLookup = getActiveCommAccountByWebhookRef;
-/** Tests only. */
-export function __setLineWebhookRefLookupForTests(fn: RefLookup | null): void {
-  lookupRef = fn ?? getActiveCommAccountByWebhookRef;
-}
-
 export async function POST(req: Request, ctx: { params: Promise<{ ref: string }> }) {
   if (!isLineConversationEnabled()) return jsonUtf8({ ok: false, error: "not_found" }, { status: 404 });
   const { ref } = await ctx.params;
   let account;
   try {
-    account = await lookupRef(ref);
+    account = await resolveActiveCommAccountByWebhookRef(ref);
   } catch {
     return jsonUtf8({ ok: false, error: "unavailable" }, { status: 503 });
   }
