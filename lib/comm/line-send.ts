@@ -45,6 +45,7 @@ export type LineSendDeps = {
   getLink: (orgId: string, channelKey: string, lineUserId: string) => Promise<{ status: string } | null>;
   readSecrets: typeof readCommAccountSecretsForServer;
   checkLineSendAllowed: (t: PreSendTarget) => Promise<PreSendResult>;
+  claimReplyToken: typeof claimLineReplyToken;
 };
 
 const defaultDeps: LineSendDeps = {
@@ -55,6 +56,7 @@ const defaultDeps: LineSendDeps = {
   },
   readSecrets: (o, a) => readCommAccountSecretsForServer(o, a),
   checkLineSendAllowed: (t) => checkLineSendAllowed(t),
+  claimReplyToken: (input) => claimLineReplyToken(input),
 };
 
 /** Tests only. */
@@ -129,8 +131,12 @@ export async function sendLineConversationMessage(
   const messages = [{ type: "text", text: input.text }];
   const rt = t.replyToken;
   if (rt && now - Date.parse(t.issuedAt) < LINE_REPLY_FRESH_MS) {
-    const claim = await claimLineReplyToken({ orgId: t.orgId, accountId: t.accountId, replyToken: rt });
-    if (claim.ok && claim.claimed) {
+    const claim = await d.claimReplyToken({ orgId: t.orgId, accountId: t.accountId, replyToken: rt });
+    if (!claim.ok) {
+      console.error("line_reply_token_claim_failed", { accountId: t.accountId, reason: claim.reason });
+      return { status: "not_sent", reason: claim.reason, audience };
+    }
+    if (claim.claimed) {
       const r = await post("/v2/bot/message/reply", accessToken, { replyToken: rt, messages });
       if (r.kind === "ok") return { status: "sent", audience, mode: "reply" };
       if (r.kind === "network") {

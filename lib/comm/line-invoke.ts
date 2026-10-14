@@ -103,11 +103,12 @@ export async function deliverLineConversation(input: {
   employeeId: string;
   externalSendAllowed: boolean;
   retryId: string;
-}): Promise<LineSendResult> {
+}, deps?: { send?: typeof sendLineConversationMessage }): Promise<LineSendResult> {
   if (await alreadyLineUnknown(input.orgId, input.retryId)) {
     return { status: "unknown", reason: "line_unknown_already_recorded", audience: "external", mode: "push" };
   }
-  const result = await sendLineConversationMessage({
+  const send = deps?.send ?? sendLineConversationMessage;
+  const result = await send({
     token: input.token,
     args: input.args,
     text: input.text,
@@ -117,7 +118,10 @@ export async function deliverLineConversation(input: {
     retryKey: lineRetryKey(input.retryId),
   });
   if (result.status === "unknown") {
-    await recordLineReplyUnknown({ orgId: input.orgId, retryKey: input.retryId });
+    const recorded = await recordLineReplyUnknown({ orgId: input.orgId, retryKey: input.retryId });
+    if (!recorded.ok) {
+      return { status: "unknown", reason: "unknown_record_failed", audience: result.audience, mode: result.mode };
+    }
   }
   return result;
 }

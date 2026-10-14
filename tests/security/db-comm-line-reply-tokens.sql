@@ -46,32 +46,32 @@ begin
 end $$;
 
 -- fixtures
-insert into public.orgs(id, name) values ('ec000000-0000-4000-8000-0000000000l6', 'l6 rt')
+insert into public.orgs(id, name) values ('ec000000-0000-4000-8000-000000000016', 'l6 rt')
   on conflict (id) do nothing;
 insert into public.employees(id, org_id, display_name, role_label) values
-  ('ec100000-0000-4000-8000-0000000000l6', 'ec000000-0000-4000-8000-0000000000l6', 'l6', 'staff')
+  ('ec100000-0000-4000-8000-000000000016', 'ec000000-0000-4000-8000-000000000016', 'l6', 'staff')
   on conflict (id) do nothing;
 insert into public.employee_comm_accounts(id, org_id, employee_id, surface, external_account_id, webhook_ref, status)
-  values ('ec200000-0000-4000-8000-0000000000l6', 'ec000000-0000-4000-8000-0000000000l6',
-          'ec100000-0000-4000-8000-0000000000l6', 'line', 'U' || repeat('6', 32), repeat('G', 43), 'active')
+  values ('ec200000-0000-4000-8000-000000000016', 'ec000000-0000-4000-8000-000000000016',
+          'ec100000-0000-4000-8000-000000000016', 'line', 'U' || repeat('6', 32), repeat('G', 43), 'active')
   on conflict (id) do nothing;
 
 set role service_role;
 insert into public.comm_line_reply_tokens(token_hash, org_id, account_id)
-  values (repeat('a', 64), 'ec000000-0000-4000-8000-0000000000l6', 'ec200000-0000-4000-8000-0000000000l6');
+  values (repeat('a', 64), 'ec000000-0000-4000-8000-000000000016', 'ec200000-0000-4000-8000-000000000016');
 select security_test.l6rt_rejects(
   $q$insert into public.comm_line_reply_tokens(token_hash, org_id, account_id)
-     values (repeat('a', 64), 'ec000000-0000-4000-8000-0000000000l6', 'ec200000-0000-4000-8000-0000000000l6')$q$,
+     values (repeat('a', 64), 'ec000000-0000-4000-8000-000000000016', 'ec200000-0000-4000-8000-000000000016')$q$,
   '23505');
 select security_test.l6rt_rejects(
   $q$insert into public.comm_line_reply_tokens(token_hash, org_id, account_id)
-     values ('not-a-hash', 'ec000000-0000-4000-8000-0000000000l6', 'ec200000-0000-4000-8000-0000000000l6')$q$,
+     values ('not-a-hash', 'ec000000-0000-4000-8000-000000000016', 'ec200000-0000-4000-8000-000000000016')$q$,
   '23514');
 insert into public.comm_line_send_unknown(org_id, retry_key)
-  values ('ec000000-0000-4000-8000-0000000000l6', 'job-unknown-1');
+  values ('ec000000-0000-4000-8000-000000000016', 'job-unknown-1');
 select security_test.l6rt_rejects(
   $q$insert into public.comm_line_send_unknown(org_id, retry_key)
-     values ('ec000000-0000-4000-8000-0000000000l6', 'job-unknown-1')$q$,
+     values ('ec000000-0000-4000-8000-000000000016', 'job-unknown-1')$q$,
   '23505');
 reset role;
 
@@ -84,11 +84,11 @@ select security_test.l6rt_denied('select * from public.comm_line_reply_tokens');
 select security_test.l6rt_denied('select * from public.comm_line_send_unknown');
 reset role;
 
-delete from public.orgs where id = 'ec000000-0000-4000-8000-0000000000l6';
+delete from public.orgs where id = 'ec000000-0000-4000-8000-000000000016';
 do $$
 begin
-  if exists (select 1 from public.comm_line_reply_tokens where org_id = 'ec000000-0000-4000-8000-0000000000l6')
-     or exists (select 1 from public.comm_line_send_unknown where org_id = 'ec000000-0000-4000-8000-0000000000l6') then
+  if exists (select 1 from public.comm_line_reply_tokens where org_id = 'ec000000-0000-4000-8000-000000000016')
+     or exists (select 1 from public.comm_line_send_unknown where org_id = 'ec000000-0000-4000-8000-000000000016') then
     raise exception 'l6 reply tokens: org delete did not cascade';
   end if;
 end $$;

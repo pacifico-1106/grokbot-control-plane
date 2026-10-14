@@ -24,7 +24,7 @@ mock.module("@/lib/comm/line-send", () => ({
 import { afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { DEMO_ORG } from "@/lib/demo-data";
 import { createApproval, getApprovalById, resolveApproval } from "@/lib/data/approvals";
-import { buildInvokeSnapshot, fulfillIfApproved, parseFulfillment } from "@/lib/approvals/fulfill";
+import { buildInvokeSnapshot, fulfillIfApproved, fulfillApprovedInvoke, parseFulfillment, parseInvokeSnapshot } from "@/lib/approvals/fulfill";
 import { parseConversationContext } from "@/lib/gateway/audience";
 import { upsertConversationAdapter } from "@/lib/data/conversation-adapters";
 import { upsertOrgChannel } from "@/lib/data/directory";
@@ -32,7 +32,7 @@ import { approvalSendOutcome } from "@/lib/approvals/not-sent";
 import type { ApprovalRequest, GatewayInvokeRequest } from "@/lib/types";
 
 const DM = "D0L6FULFILL1";
-const LINE_USER = "Uaaaabbbbccccddddeeeeffff0000l6f1";
+const LINE_USER = "Uaaaabbbbccccddddeeeeffff000016f1";
 const TEXT = "承認後に送る本文です。記録しないでください";
 const TOKEN = `spc1.${"C".repeat(40)}.${"D".repeat(43)}`;
 const originalFetch = globalThis.fetch;
@@ -89,9 +89,26 @@ async function seedLineApproval(): Promise<ApprovalRequest> {
 }
 
 describe("post-approval LINE send", () => {
-  test("approved LINE ticket → sendLineConversationMessage, delivery line, sent:true", async () => {
+  test("snapshot stores token hash only — never the plaintext token", async () => {
+    const approved = await seedLineApproval();
+    const snap = parseInvokeSnapshot(approved.metadata);
+    expect(snap?.conversation?.token).toBeUndefined();
+    expect(typeof snap?.conversation?.tokenHash).toBe("string");
+    expect(snap?.conversation?.tokenHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(JSON.stringify(approved.metadata)).not.toContain(TOKEN);
+  });
+
+  test("fulfill without the request token does not send (re-resolve required)", async () => {
     const approved = await seedLineApproval();
     const f = await fulfillIfApproved(approved, "approved");
+    expect(f?.ok).toBe(false);
+    expect(f?.error).toBe("conversation_token_required");
+    expect(sends).toEqual([]);
+  });
+
+  test("approved LINE ticket + request token → sendLineConversationMessage, delivery line, sent:true", async () => {
+    const approved = await seedLineApproval();
+    const f = await fulfillApprovedInvoke(approved, { conversationToken: TOKEN });
     expect(f?.ok).toBe(true);
     expect(f?.delivery).toBe("line");
     expect(sends).toHaveLength(1);
@@ -104,10 +121,18 @@ describe("post-approval LINE send", () => {
     expect(JSON.stringify(f)).not.toContain(TEXT);
   });
 
+  test("request token whose hash does not match the snapshot is refused", async () => {
+    const approved = await seedLineApproval();
+    const f = await fulfillApprovedInvoke(approved, { conversationToken: `spc1.${"X".repeat(40)}.${"Y".repeat(43)}` });
+    expect(f?.ok).toBe(false);
+    expect(f?.error).toBe("conversation_token_mismatch");
+    expect(sends).toEqual([]);
+  });
+
   test("unknown → recorded, second fulfill does not send again", async () => {
     nextSend = { status: "unknown", reason: "line_network_error", audience: "external", mode: "reply" };
     const approved = await seedLineApproval();
-    const first = await fulfillIfApproved(approved, "approved");
+    const first = await fulfillApprovedInvoke(approved, { conversationToken: TOKEN });
     expect(first?.ok).toBe(false);
     expect(first?.error).toBe("post_outcome_unknown");
     expect(sends).toHaveLength(1);

@@ -55,23 +55,30 @@ export async function recordLineReplyUnknown(input: {
   orgId: string;
   accountId?: string;
   retryKey: string;
-}): Promise<void> {
+}): Promise<{ ok: true } | { ok: false; reason: string }> {
   const retry = String(input.retryKey || "").trim();
-  if (!retry || !input.orgId) return;
+  if (!retry || !input.orgId) return { ok: false, reason: "invalid" };
   const key = `${input.orgId}:${retry}`;
   if (isDemoMode() || !isLineConversationEnabled()) {
     demoUnknown.set(key, Date.now());
-    return;
+    return { ok: true };
   }
   const admin = createSupabaseAdminClient();
-  if (!admin) {
-    demoUnknown.set(key, Date.now());
-    return;
+  if (!admin) return { ok: false, reason: "storage_unavailable" };
+  try {
+    const { error } = await admin.from("comm_line_send_unknown").upsert(
+      { org_id: input.orgId, retry_key: retry, account_id: input.accountId || null },
+      { onConflict: "org_id,retry_key" }
+    );
+    if (error) {
+      console.error("line_unknown_record_failed", { orgId: input.orgId, reason: "storage_error" });
+      return { ok: false, reason: "storage_error" };
+    }
+    return { ok: true };
+  } catch {
+    console.error("line_unknown_record_failed", { orgId: input.orgId, reason: "storage_error" });
+    return { ok: false, reason: "storage_error" };
   }
-  await admin.from("comm_line_send_unknown").upsert(
-    { org_id: input.orgId, retry_key: retry, account_id: input.accountId || null },
-    { onConflict: "org_id,retry_key" }
-  ).then(() => undefined, () => undefined);
 }
 
 export async function wasLineReplyUnknown(input: { orgId: string; retryKey: string }): Promise<boolean> {

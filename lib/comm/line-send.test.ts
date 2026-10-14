@@ -175,6 +175,16 @@ describe("Reply first, then Push; sent / not_sent / unknown", () => {
     expect(await send({ token })).toMatchObject({ status: "sent", mode: "push" });
   });
 
+  test("claim ok:false (ledger unavailable) → not_sent, never Push", async () => {
+    link = { status: "active" };
+    const r = await sendLineConversationMessage(
+      { token: tok("rtok0123456789abcdef"), args: {}, text: "お世話になっております", orgId: ORG, employeeId: EMP, externalSendAllowed: false, retryKey: "0b0a0000-0000-4000-8000-000000000001" },
+      { ...deps(), claimReplyToken: async () => ({ ok: false, reason: "storage_error" }) }
+    );
+    expect(r).toMatchObject({ status: "not_sent", reason: "storage_error" });
+    expect(calls).toEqual([]);
+  });
+
   test("Reply refused with 400 (token expired) → falls back to Push", async () => {
     link = { status: "active" };
     responses = [400, 200];

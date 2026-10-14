@@ -47,8 +47,8 @@ import type { ApprovalRequest, GatewayInvokeRequest } from "@/lib/types";
 import { upsertProofVerifiedVoterBinding, resetDemoVoterBindings } from "@/lib/approval-workflow/voter-binding";
 
 const DM = "D0LINEL6DM01";
-const LINE_USER = "Uaaaabbbbccccddddeeeeffff0000l601";
-const EXT_USER = "Ubbbbccccddddeeeeffff00001111l602";
+const LINE_USER = "Uaaaabbbbccccddddeeeeffff00001601";
+const EXT_USER = "Ubbbbccccddddeeeeffff00001111a602";
 const TEXT = "来週の打ち合わせは10時からでお願いします";
 const TOKEN = `spc1.${"A".repeat(40)}.${"B".repeat(43)}`;
 const FLAGS = ["COMM_ACCOUNTS_ENABLED", "LINE_CONVERSATION_ENABLED", "THREAD_SINGLE_FLIGHT_ENABLED", "COMM_REPLY_DEDUP_ENABLED"] as const;
@@ -266,6 +266,21 @@ describe("LINE comm.reply (flag ON) → sendLineConversationMessage", () => {
     expect(sends.at(-1)?.externalSendAllowed).toBe(true);
   });
 
+  test("approved re-invoke unknown → post_outcome_unknown, not delivery_unsupported_surface", async () => {
+    const first = req("comm.reply", { surface: "line", lineId: EXT_USER, token: TOKEN });
+    const queued = await invoke(first);
+    expect(queued.body.needs_approval).toBe(true);
+    await resolveApproval(String(queued.body.approvalId), "approved", "slack:U_APPROVER", DEMO_ORG.id);
+    nextSend = { status: "unknown", reason: "line_http_5xx", audience: "external", mode: "push" };
+    const res = await invoke({ ...first, approvalId: queued.body.approvalId } as GatewayInvokeRequest);
+    expect(res.body.ok).toBe(false);
+    expect(res.body.sent).toBe(false);
+    expect(res.body.code).toBe("post_outcome_unknown");
+    expect(res.body.reasonCode).toBe("post_outcome_unknown");
+    expect(String(res.body.reasonCode)).not.toBe("approved_reply_surface_not_supported");
+    expect(res.body.code).not.toBe("delivery_unsupported_surface");
+  });
+
   test("unknown (Reply/Push unclear) → 502, recorded, a repeat does NOT call send again", async () => {
     await linkInternal();
     nextSend = { status: "unknown", reason: "line_http_5xx", audience: "internal", mode: "reply" };
@@ -328,6 +343,20 @@ describe("lock-in, unchanged", () => {
     // the lock-in is that the helper still exists and a LINE flag does not change Slack.
     expect(posts().length).toBeGreaterThanOrEqual(1);
     expect(sends).toEqual([]);
+  });
+});
+
+describe("egress lineId must match the conversation token counterparty", () => {
+  test("AI lineId that differs from the token → 403, nothing sent, audited", async () => {
+    const payload = Buffer.from(JSON.stringify({ cp: LINE_USER }), "utf8").toString("base64url");
+    const token = `spc1.${payload}.${"B".repeat(43)}`;
+    const other = "U" + "b".repeat(32);
+    const body = req("comm.reply", { surface: "line", lineId: other, token });
+    const res = await invoke(body);
+    expect(res.httpStatus).toBe(403);
+    expect(res.body.code).toBe("conversation_target_mismatch");
+    expect(sends).toEqual([]);
+    expect(await approvalsFor(String(body.jobId))).toHaveLength(0);
   });
 });
 

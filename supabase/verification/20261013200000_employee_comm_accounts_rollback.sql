@@ -6,6 +6,10 @@ begin;
 set local lock_timeout = '5s';
 do $$
 begin
+  if to_regclass('public.comm_line_reply_tokens') is not null
+     or to_regclass('public.comm_line_send_unknown') is not null then
+    raise exception 'ROLLBACK_REFUSED: L-6 reply-token tables exist; roll back 20261014100000 first';
+  end if;
   if to_regclass('public.employee_comm_accounts') is not null
      and exists (select 1 from public.employee_comm_accounts where status = 'active') then
     raise exception 'ROLLBACK_REFUSED: active employee_comm_accounts exist; disable them first';

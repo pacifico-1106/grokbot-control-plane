@@ -66,6 +66,8 @@ import {
   lineSendAsPosted,
   lineWaiveExternalDeny,
 } from "@/lib/comm/line-invoke";
+import { isLineConversationEnabled } from "@/lib/comm/flags";
+import { conversationTokenCounterparty, conversationTokenFromRequest } from "@/lib/comm/conversation-token";
 import { evaluateProjectScope } from "@/lib/gateway/project-scope";
 import { accessibleProjects } from "@/lib/employees/project-access";
 import {
@@ -186,6 +188,7 @@ import {
   duplicateWarningBody,
   finishDirectCommReplySend,
   ledgerOutcomeAfterPost,
+  POST_OUTCOME_UNKNOWN,
   postOutcomeUnknownBody,
   precheckCommReplyDuplicate,
   prepareCommReplyDedupFromBody,
@@ -427,7 +430,9 @@ async function evaluateInvokeEgress(input: {
   dualEgress: DualEgressVerdict | null;
 }> {
   const gated = isAudienceGatedTool(input.toolDef);
-  const ctx = parseConversationContext(input.body, input.orgId);
+  const parsed = parseConversationContext(input.body, input.orgId);
+  const pinnedLine = conversationTokenCounterparty(conversationTokenFromRequest(input.body));
+  const ctx = parsed && pinnedLine ? { ...parsed, lineId: pinnedLine } : parsed;
   if (!gated && !ctx) return { egress: null, dualEgress: null };
 
   const audience = await resolveAudience(ctx, { requireDestination: gated });
@@ -1660,6 +1665,36 @@ async function runGatewayInvokeInner(
     );
   }
 
+  // LINE: an AI-supplied lineId that names someone other than the token's
+  // counterparty must not steer egress WHO (or the send). Refuse before classify.
+  if (isLineConversationEnabled()) {
+    const lineTok = conversationTokenFromRequest(body);
+    const pinned = conversationTokenCounterparty(lineTok);
+    const ctxLine = parseConversationContext(body, principalOrgId);
+    if (pinned && ctxLine?.lineId && ctxLine.lineId !== pinned) {
+      await appendAuditEvent({
+        orgId: orgId || employee.orgId,
+        employeeId,
+        credentialId: input.credentialId || employee.credentialId,
+        action: "line.conversation_target_mismatch",
+        purpose,
+        summary: "LINE 会話の相手先がトークンと一致しません",
+        metadata: { tool, jobId, code: "conversation_target_mismatch", sent: false },
+      });
+      return jsonResult({
+        ok: false,
+        code: "conversation_target_mismatch",
+        error: "conversation_target_mismatch",
+        sent: false,
+        needs_approval: false,
+        employeeId,
+        tool,
+        purpose,
+        jobId,
+      }, 403);
+    }
+  }
+
   // Audience × information-class egress (after scope / SoD / action-limit / project wall).
   // slack.* aliases share this resolver — tool name is not the boundary.
   // S2: evaluateInvokeEgress now returns both egress (effective) and dualEgress (audit).
@@ -2504,6 +2539,7 @@ async function runGatewayInvokeInner(
     // (deliverApprovedRerunAttachment below), so no "not_sent" marker here.
     const fulfilled = await fulfillApprovedInvoke(priorApproval, {
       attachmentHandledByCaller: isAudienceGatedTool(toolDef),
+      conversationToken: conversationTokenFromRequest(body),
     });
     // Rate-limited (nothing posted): say how long to wait; re-running earlier stops before the provider.
     if (fulfilled && !fulfilled.ok && fulfilled.error === PROVIDER_RATE_LIMITED) {
@@ -2522,6 +2558,23 @@ async function runGatewayInvokeInner(
       // in plain words instead of a Slack-only code (木村 #293 decision 2).
       const approvedSurface = (parseInvokeSnapshot(priorApproval.metadata)?.conversation?.surface || "").toLowerCase();
       if (approvedSurface && approvedSurface !== "slack") {
+        const lineLive = approvedSurface === "line" && isLineConversationEnabled();
+        if (lineLive) {
+          if (fulfilled?.error === POST_OUTCOME_UNKNOWN) {
+            return jsonResult({
+              ...postOutcomeUnknownBody(null, fulfilled.error),
+              sent: false,
+              needs_approval: false,
+              approvalId: priorApproval.id,
+              employeeId, tool, purpose, jobId,
+            }, 502);
+          }
+          return jsonResult({
+            ok: false, code: fulfilled?.error || "approval_execution_failed", sent: false,
+            error: fulfilled?.error || "approval_execution_failed",
+            approvalId: priorApproval.id, employeeId, tool, purpose, jobId,
+          }, 409);
+        }
         return jsonResult({ ok: false, code: fulfilled?.error || "approval_execution_failed", sent: false,
           error: fulfilled?.error || "approval_execution_failed", reasonCode: APPROVED_REPLY_SURFACE_NOT_SUPPORTED,
           message: APPROVED_REPLY_SURFACE_NOT_SUPPORTED_JA, retryable: false, nextAction: "stop",

@@ -138,11 +138,13 @@ ADDITIVE = [
      " and to_regprocedure('public.release_employee_hold(uuid,uuid,text,jsonb,timestamptz)') is null"
      " and not exists (select 1 from information_schema.columns where table_schema = 'public'"
      " and table_name in ('employees', 'orgs') and column_name in ('hold_state', 'hold_id'))"),
+    # L-6 child first: roll back 20261014100000 before the parent
+    # 20261013200000. Parent rollback refuses while these tables exist.
+    ("20261014100000_", "tests/security/db-comm-line-reply-tokens.sql",
+     ("comm_line_reply_tokens", "comm_line_send_unknown")),
     # LINE PoC per-employee accounts (C5) + link-code limits (H8).
     ("20261013200000_", "tests/security/db-employee-comm-accounts.sql",
      ("employee_comm_accounts", "employee_comm_account_secrets", "comm_inbound_events", "comm_link_code_failures", "comm_link_code_locks")),
-    ("20261014100000_", "tests/security/db-comm-line-reply-tokens.sql",
-     ("comm_line_reply_tokens", "comm_line_send_unknown")),
     ("20261010200000_", "tests/security/db-mcp-oauth.sql", ("oauth_clients", "oauth_authorization_requests", "oauth_grants",
      "oauth_authorization_codes", "oauth_access_tokens", "oauth_refresh_tokens", "oauth_rate_limits")),
 ]
@@ -350,6 +352,20 @@ try:
         sql_file(ROOT / test)
         sql_file(MIGRATIONS / name)
         sql_file(ROOT / test)
+        if prefix.startswith("20261013200000_"):
+            # Child tables were re-applied above. Parent rollback must refuse
+            # while they exist; then drop the child first (no CASCADE).
+            child = next((n for n in order if n.startswith("20261014100000_")), None)
+            assert child, "L-6 child migration missing"
+            try:
+                sql_text(rollback_block((MIGRATIONS / name).read_text()), single=False)
+                raise AssertionError(f"{name}: parent rollback ran while L-6 tables existed")
+            except subprocess.CalledProcessError:
+                pass
+            still = query("select to_regclass('public.employee_comm_accounts') is not null"
+                          " and to_regclass('public.comm_line_reply_tokens') is not null;")
+            assert still == "t", f"{name}: refuse must leave parent and L-6 tables"
+            sql_text(rollback_block((MIGRATIONS / child).read_text()), single=False)
         sql_text(rollback_block((MIGRATIONS / name).read_text()), single=False)
         if isinstance(tables, str):
             gone = query(f"select {tables};")
@@ -360,6 +376,9 @@ try:
         for fix in FIXES:
             sql_file(ROOT / fix["test"])  # rolling back an additive migration never reopens a fix
         sql_file(MIGRATIONS / name)
+        if prefix.startswith("20261013200000_"):
+            child = next((n for n in order if n.startswith("20261014100000_")), None)
+            sql_file(MIGRATIONS / child)
         sql_file(ROOT / test)
         dropped = "its RPC + column (previous state restored)" if isinstance(tables, str) else ", ".join(tables)
         print(f"PASS {name}: {test} passes after the full history, re-applied, rollback drops {dropped}, re-applied; fixes still closed.")

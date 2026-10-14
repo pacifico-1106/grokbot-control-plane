@@ -86,6 +86,7 @@ import type {
   PostingAs,
 } from "@/lib/types";
 import { isLineConversationEnabled } from "@/lib/comm/flags";
+import { hashConversationToken } from "@/lib/comm/conversation-token";
 import { deliverLineConversation } from "@/lib/comm/line-invoke";
 
 const SNAPSHOT_ARG_KEYS = [
@@ -113,7 +114,6 @@ const SNAPSHOT_ARG_KEYS = [
   "userId",
   "phone",
   "lineId",
-  "token",
   "scheduledAt",
   "scheduled_at",
   "scheduledFor",
@@ -154,8 +154,8 @@ export type InvokeSnapshot = {
     email?: string;
     phone?: string;
     lineId?: string;
-    /** Server-signed LINE conversation token (destination is pinned in it). */
-    token?: string;
+    /** SHA-256 of the conversation token (never the token itself). */
+    tokenHash?: string;
     /** Telegram conversation (thread single-flight key at fulfil). */
     telegramChatId?: string;
     telegramThreadId?: string;
@@ -283,7 +283,7 @@ function snapshotConversation(
     email: conversation.email,
     phone: conversation.phone,
     lineId: conversation.lineId,
-    token: conversation.token,
+    ...(conversation.token ? { tokenHash: hashConversationToken(conversation.token) } : {}),
   });
   return cloned ?? null;
 }
@@ -340,7 +340,7 @@ export function buildInvokeSnapshot(input: {
     if (readThrough?.source === "explicit") snapshot.readThroughTs = readThrough.ts;
     const rawConv = input.body.conversation as unknown as Record<string, unknown> | undefined;
     const rawTok = typeof rawConv?.token === "string" ? rawConv.token.trim() : "";
-    if (snapshot.conversation && rawTok) snapshot.conversation.token = rawTok;
+    if (snapshot.conversation && rawTok) snapshot.conversation.tokenHash = hashConversationToken(rawTok);
     const tgChat = typeof rawConv?.telegramChatId === "string" ? rawConv.telegramChatId.trim() : "";
     if (snapshot.conversation && tgChat) {
       snapshot.conversation.telegramChatId = tgChat;
@@ -392,7 +392,7 @@ export function parseInvokeSnapshot(
           email: str(convRaw.email),
           phone: str(convRaw.phone),
           lineId: str(convRaw.lineId),
-          ...(str(convRaw.token) ? { token: str(convRaw.token) } : {}),
+          ...(str(convRaw.tokenHash) ? { tokenHash: str(convRaw.tokenHash) } : {}),
           ...(str(convRaw.telegramChatId) ? { telegramChatId: str(convRaw.telegramChatId) } : {}),
           ...(str(convRaw.telegramThreadId) ? { telegramThreadId: str(convRaw.telegramThreadId) } : {}),
         }
@@ -525,15 +525,29 @@ function outboundText(args: Record<string, unknown>, fallback: string): string {
 /** L-6: post-approval LINE send. Human yes → externalSendAllowed. */
 async function fulfillLineConversation(
   approval: ApprovalRequest,
-  snapshot: InvokeSnapshot
+  snapshot: InvokeSnapshot,
+  requestToken?: string | null
 ): Promise<ApprovalFulfillment> {
   const existing = parseFulfillment(approval.metadata);
   if (existing?.ok) return existing;
   if (existing?.error === POST_OUTCOME_UNKNOWN) return existing;
 
-  const token =
-    snapshot.conversation?.token ||
-    (typeof snapshot.args.token === "string" ? snapshot.args.token : null);
+  const expectedHash =
+    snapshot.conversation?.tokenHash ||
+    (typeof snapshot.args.tokenHash === "string" ? snapshot.args.tokenHash : "");
+  const token = typeof requestToken === "string" ? requestToken.trim() : "";
+  if (!token) {
+    const at = new Date().toISOString();
+    const fulfillment: ApprovalFulfillment = { ok: false, error: "conversation_token_required", at };
+    await persistFulfillment(approval, fulfillment);
+    return fulfillment;
+  }
+  if (!expectedHash || hashConversationToken(token) !== expectedHash) {
+    const at = new Date().toISOString();
+    const fulfillment: ApprovalFulfillment = { ok: false, error: "conversation_token_mismatch", at };
+    await persistFulfillment(approval, fulfillment);
+    return fulfillment;
+  }
   const result = await deliverLineConversation({
     token,
     args: snapshot.args ?? {},
@@ -911,6 +925,8 @@ async function auditAttachmentNotSent(
 type FulfillInvokeOptions = {
   /** The caller uploads the approved attachment itself (agent re-run). */
   attachmentHandledByCaller?: boolean;
+  /** Re-resolved conversation token from the current request (never from the snapshot). */
+  conversationToken?: string | null;
 };
 
 /**
@@ -963,7 +979,7 @@ async function fulfillApprovedInvokeCore(
     // L-6: approved LINE reply → sendLineConversationMessage. An "unknown"
     // outcome is recorded and never retried automatically (Push would double-deliver).
     if (isLineConversationEnabled() && (snapshot.conversation?.surface || "").toLowerCase() === "line") {
-      return fulfillLineConversation(approval, snapshot);
+      return fulfillLineConversation(approval, snapshot, options.conversationToken);
     }
 
     // THREAD_SINGLE_FLIGHT_ENABLED: one lease + "already moved on" check per

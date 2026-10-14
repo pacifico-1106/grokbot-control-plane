@@ -6,8 +6,8 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { claimLineReplyToken, recordLineReplyUnknown, wasLineReplyUnknown, __resetLineReplyTokenLedgerForTests } from "@/lib/comm/reply-token-ledger";
 
-const ORG = "ec000000-0000-4000-8000-0000000000l6";
-const ACCT = "ec200000-0000-4000-8000-0000000000l6";
+const ORG = "ec000000-0000-4000-8000-000000000016";
+const ACCT = "ec200000-0000-4000-8000-000000000016";
 const RT = "rtok0123456789abcdef";
 
 beforeEach(() => {
@@ -43,7 +43,7 @@ describe("claimLineReplyToken", () => {
 describe("unknown outcome ledger", () => {
   test("record unknown → wasLineReplyUnknown; a human must decide to resend", async () => {
     expect(await wasLineReplyUnknown({ orgId: ORG, retryKey: "0b0a0000-0000-4000-8000-0000000000aa" })).toBe(false);
-    await recordLineReplyUnknown({ orgId: ORG, accountId: ACCT, retryKey: "0b0a0000-0000-4000-8000-0000000000aa" });
+    expect(await recordLineReplyUnknown({ orgId: ORG, accountId: ACCT, retryKey: "0b0a0000-0000-4000-8000-0000000000aa" })).toEqual({ ok: true });
     expect(await wasLineReplyUnknown({ orgId: ORG, retryKey: "0b0a0000-0000-4000-8000-0000000000aa" })).toBe(true);
   });
 });

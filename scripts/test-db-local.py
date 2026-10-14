@@ -701,21 +701,30 @@ try:
     sql(l6rt)
     sql(l6rt)  # re-applicable
     sql(ROOT / "tests/security/db-comm-line-reply-tokens.sql")
-    query("insert into public.orgs(id, name) values ('ec000000-0000-4000-8000-0000000000l7', 'l6 rb');"
+    query("insert into public.orgs(id, name) values ('ec000000-0000-4000-8000-0000000000a6', 'l6 rb');"
           "insert into public.comm_line_send_unknown(org_id, retry_key)"
-          " values ('ec000000-0000-4000-8000-0000000000l7', 'refuse-while-unknown');")
+          " values ('ec000000-0000-4000-8000-0000000000a6', 'refuse-while-unknown');")
     try:
         sql(l6rt_rb)
         raise AssertionError("line reply-token rollback ran while unknown rows existed")
     except subprocess.CalledProcessError:
         pass
     assert query("select to_regclass('public.comm_line_reply_tokens') is not null;") == "t"
-    query("delete from public.orgs where id = 'ec000000-0000-4000-8000-0000000000l7';")
+    query("delete from public.orgs where id = 'ec000000-0000-4000-8000-0000000000a6';")
     sql(l6rt_rb)
     assert query("select to_regclass('public.comm_line_reply_tokens') is null"
                  " and to_regclass('public.comm_line_send_unknown') is null;") == "t"
     sql(l6rt)  # forward again after rollback
     sql(ROOT / "tests/security/db-comm-line-reply-tokens.sql")
+    # Parent rollback must refuse while L-6 tables still exist (no CASCADE).
+    try:
+        sql(eca_rb)
+        raise AssertionError("comm accounts rollback ran while L-6 tables existed")
+    except subprocess.CalledProcessError:
+        pass
+    assert query("select to_regclass('public.employee_comm_accounts') is not null"
+                 " and to_regclass('public.comm_line_reply_tokens') is not null"
+                 " and to_regclass('public.comm_line_send_unknown') is not null;") == "t"
     print("PASS: comm line reply tokens (20261014100000): 2 tables RLS on / restrictive deny-all only, anon/authenticated no access; "
           "hash format, unique reply token, unknown retry_key unique per org, org delete cascades; re-applicable; "
           "rollback refused while unknown-outcome rows exist, then drops both; forward again.")
