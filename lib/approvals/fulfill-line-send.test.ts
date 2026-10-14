@@ -92,7 +92,7 @@ describe("post-approval LINE send", () => {
   test("snapshot stores token hash only — never the plaintext token", async () => {
     const approved = await seedLineApproval();
     const snap = parseInvokeSnapshot(approved.metadata);
-    expect(snap?.conversation?.token).toBeUndefined();
+    expect((snap?.conversation as { token?: string } | undefined)?.token).toBeUndefined();
     expect(typeof snap?.conversation?.tokenHash).toBe("string");
     expect(snap?.conversation?.tokenHash).toMatch(/^[0-9a-f]{64}$/);
     expect(JSON.stringify(approved.metadata)).not.toContain(TOKEN);

@@ -76,6 +76,7 @@ describe("deliverLineConversation", () => {
       }
     );
     expect(result.status).toBe("unknown");
+    if (result.status !== "unknown") throw new Error("expected unknown");
     expect(result.reason).toBe("unknown_record_failed");
   });
 });
