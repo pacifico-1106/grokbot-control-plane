@@ -56,7 +56,7 @@ import {
   resolveSlackDmInlineThreadTs,
 } from "@/lib/slack/dm-reply-inline";
 import { getEffectiveReplyPolicy } from "@/lib/data/reply-policy";
-import { isInformationClass, resolveInformationDisclosure } from "@/lib/gateway/information-class";
+import { resolveInformationDisclosure } from "@/lib/gateway/information-class";
 import {
   deliverLineConversation,
   isLineConversationRequest,

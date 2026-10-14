@@ -539,6 +539,8 @@ export type AuditAction =
   | "conversation.adapter_installed"
   | "slack.posted"
   | "slack.post_failed"
+  | "line.posted"
+  | "line.post_failed"
   | "comm.not_sent"
   | "slack.file_uploaded"
   | "slack.file_upload_failed"
