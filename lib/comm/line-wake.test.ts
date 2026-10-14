@@ -88,6 +88,16 @@ describe("deliver the wake", () => {
     });
     expect(holdCalls).toEqual([{ orgId: ORG, employeeId: EMP, phase: "wake" }]);
     expect(JSON.stringify(audits)).toContain("woke");
+    const woke = audits.find((a) => a.action === "line.conversation_wake") as {
+      metadata: Record<string, unknown>;
+    };
+    expect(woke.metadata).toMatchObject({
+      reason: "woke",
+      channel: USER,
+      ts: "01HZZZZZZZZZZZZZZZZZZZZZZ1",
+      accountId: ACCT,
+      eventKey: "01HZZZZZZZZZZZZZZZZZZZZZZ1",
+    });
   });
 
   test("missing wake URL → nothing posted; audited without the body", async () => {

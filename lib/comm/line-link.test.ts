@@ -84,6 +84,53 @@ describe("redeemConversationLinkCode", () => {
     expect(await getVoterBinding(ORG, "line", account.id, USER)).toBeNull();
   });
 
+  test("redeem success Replies a short fixed message only; never the received body", async () => {
+    const { LINE_CONVERSATION_LINKED_REPLY } = await import("@/lib/comm/line-link");
+    const issued = await issueFor(account.id);
+    const replies: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const r = await redeemConversationLinkCode(
+      {
+        orgId: ORG,
+        accountId: account.id,
+        text: issued.display,
+        lineUserId: USER,
+        replyToken: "rt-success-1",
+      },
+      {
+        sendReply: async ({ replyToken, text }) => {
+          replies.push({
+            url: "https://api.line.me/v2/bot/message/reply",
+            body: { replyToken, messages: [{ type: "text", text }] },
+          });
+        },
+      }
+    );
+    expect(r).toEqual({ handled: true, bound: true });
+    expect(replies).toHaveLength(1);
+    expect(replies[0].body.replyToken).toBe("rt-success-1");
+    const sent = (replies[0].body.messages as Array<{ text: string }>)[0].text;
+    expect(sent).toBe(LINE_CONVERSATION_LINKED_REPLY);
+    expect(sent).not.toContain(issued.display);
+    expect(sent).not.toContain(issued.code);
+    expect(JSON.stringify(replies)).not.toContain(issued.display);
+  });
+
+  test("redeem failure does not Reply", async () => {
+    const replies: unknown[] = [];
+    const r = await redeemConversationLinkCode(
+      {
+        orgId: ORG,
+        accountId: account.id,
+        text: "SP-XXXX-YYYY",
+        lineUserId: USER,
+        replyToken: "rt-fail-1",
+      },
+      { sendReply: async () => { replies.push("sent"); } }
+    );
+    expect(r).toMatchObject({ handled: true, bound: false });
+    expect(replies).toEqual([]);
+  });
+
   test("a code issued for another channel / account is refused (no silent cross-bind)", async () => {
     const issued = await issueFor("chn-approval-oa");
     const r = await redeemConversationLinkCode({

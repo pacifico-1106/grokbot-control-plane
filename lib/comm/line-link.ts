@@ -9,13 +9,48 @@ import { upsertProofVerifiedVoterBinding } from "@/lib/approval-workflow/voter-b
 import { redeemLineLinkCode } from "@/lib/line/link-code-limits";
 import { parseLineLinkCodeText } from "@/lib/line/link-code";
 import { appendAuditEvent } from "@/lib/data/audit";
+import { readCommAccountSecretsForServer } from "@/lib/comm/accounts";
 
-export async function redeemConversationLinkCode(input: {
+/** Short fixed Reply after a successful redeem. Never include the inbound body. */
+export const LINE_CONVERSATION_LINKED_REPLY = "✅ Staffpass の社内メンバーとして確認しました。";
+
+export type LineLinkRedeemDeps = {
+  sendReply?: (input: { orgId: string; accountId: string; replyToken: string; text: string }) => Promise<void>;
+};
+
+export async function sendConversationLinkReply(input: {
   orgId: string;
   accountId: string;
-  text: string;
-  lineUserId: string;
-}): Promise<{ handled: false } | { handled: true; bound: boolean; reason?: string }> {
+  replyToken: string | null | undefined;
+}): Promise<void> {
+  const replyToken = String(input.replyToken || "").trim();
+  if (!replyToken || !/^[A-Za-z0-9_-]{1,256}$/.test(replyToken)) return;
+  const secrets = await readCommAccountSecretsForServer(input.orgId, input.accountId).catch(() => null);
+  if (!secrets || !secrets.ok) return;
+  await fetch("https://api.line.me/v2/bot/message/reply", {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${secrets.secrets.channelAccessToken}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      replyToken,
+      messages: [{ type: "text", text: LINE_CONVERSATION_LINKED_REPLY }],
+    }),
+    signal: AbortSignal.timeout(8_000),
+  }).catch(() => undefined);
+}
+
+export async function redeemConversationLinkCode(
+  input: {
+    orgId: string;
+    accountId: string;
+    text: string;
+    lineUserId: string;
+    replyToken?: string | null;
+  },
+  deps: LineLinkRedeemDeps = {}
+): Promise<{ handled: false } | { handled: true; bound: boolean; reason?: string }> {
   const code = parseLineLinkCodeText(input.text);
   if (!code) return { handled: false };
   const consumed = await redeemLineLinkCode({
@@ -61,5 +96,19 @@ export async function redeemConversationLinkCode(input: {
       ...(bound.ok ? {} : { reason: bound.reason }),
     },
   }).catch(() => undefined);
+  if (bound.ok) {
+    const replyToken = String(input.replyToken || "").trim();
+    if (replyToken) {
+      const send = deps.sendReply ?? (async ({ replyToken: token }) => {
+        await sendConversationLinkReply({ orgId: input.orgId, accountId: input.accountId, replyToken: token });
+      });
+      await send({
+        orgId: input.orgId,
+        accountId: input.accountId,
+        replyToken,
+        text: LINE_CONVERSATION_LINKED_REPLY,
+      }).catch(() => undefined);
+    }
+  }
   return { handled: true, bound: bound.ok, reason: bound.ok ? undefined : bound.reason };
 }

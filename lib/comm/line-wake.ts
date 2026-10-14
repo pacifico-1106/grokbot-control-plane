@@ -169,6 +169,8 @@ export async function dispatchLineConversationWake(
       reason: "woke",
       accountId: event.accountId,
       eventKey: event.eventKey,
+      channel: event.conversationId,
+      ts: event.eventKey,
       ...mcpHandoffWakeAuditMeta(wakeBody, "line"),
     },
   }).catch(() => undefined);

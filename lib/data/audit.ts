@@ -8,6 +8,7 @@ const STUCK_WATCH_WAKE_ACTIONS = [
   "slack.mention_wake",
   "slack.internal_im_wake",
   "slack.user_token_im_wake",
+  "line.conversation_wake",
 ] as const;
 
 export async function listAuditEvents(

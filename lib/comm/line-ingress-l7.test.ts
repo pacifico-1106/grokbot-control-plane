@@ -10,12 +10,12 @@ import { createHmac } from "node:crypto";
 import { createCommAccount, resetDemoCommAccounts, setCommAccountSecrets, type CommAccount } from "@/lib/comm/accounts";
 
 const wakes: unknown[] = [];
-const links: Array<{ orgId: string; accountId: string; text: string; lineUserId: string }> = [];
+const links: Array<{ orgId: string; accountId: string; text: string; lineUserId: string; replyToken?: string | null }> = [];
 mock.module("@/lib/comm/line-wake", () => ({
   dispatchLineConversationWake: async (e: unknown) => { wakes.push(e); },
 }));
 mock.module("@/lib/comm/line-link", () => ({
-  redeemConversationLinkCode: async (i: { orgId: string; accountId: string; text: string; lineUserId: string }) => {
+  redeemConversationLinkCode: async (i: { orgId: string; accountId: string; text: string; lineUserId: string; replyToken?: string | null }) => {
     links.push(i);
     return { handled: true, bound: true };
   },
@@ -99,7 +99,9 @@ describe("default dispatch (L-7)", () => {
     const raw = body([ev({ message: { type: "text", id: "m3", text: "SP-ABCD-EFGH" } })]);
     expect((await call(raw)).status).toBe(200);
     expect(wakes).toEqual([]);
-    expect(links).toEqual([{ orgId: ORG, accountId: account.id, text: "SP-ABCD-EFGH", lineUserId: USER }]);
+    expect(links).toEqual([
+      { orgId: ORG, accountId: account.id, text: "SP-ABCD-EFGH", lineUserId: USER, replyToken: "rt-1" },
+    ]);
   });
 
   test("flag OFF → 404; nothing woken and no code redeemed", async () => {

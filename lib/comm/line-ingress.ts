@@ -164,6 +164,7 @@ async function processEvent(account: CommAccount, ev: LineEvent, d: LineIngressD
       accountId: account.id,
       text,
       lineUserId: sender,
+      replyToken: typeof ev.replyToken === "string" ? ev.replyToken : null,
     }).catch(() => undefined);
     return "done";
   }
