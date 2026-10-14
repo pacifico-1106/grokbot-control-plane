@@ -23,7 +23,7 @@ export function approvedRerunConversationDelivery(
     const code = fulfillment.error || "approval_execution_failed";
     return { ok: false, code, messageJa: "承認済みの投稿に失敗しました" };
   }
-  if (fulfillment.delivery === "slack" || fulfillment.delivery === "mail") {
+  if (fulfillment.delivery === "slack" || fulfillment.delivery === "mail" || fulfillment.delivery === "line") {
     return {
       ok: true,
       delivery: {

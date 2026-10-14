@@ -145,7 +145,7 @@ export function approvalSendOutcome(
     return { sent: false, reasonCode: code };
   }
   const delivery = typeof fulfillment.delivery === "string" ? fulfillment.delivery : rec(fulfillment.conversationDelivery)?.delivery;
-  if (delivery === "slack" || delivery === "mail") return { sent: true, reasonCode: null };
+  if (delivery === "slack" || delivery === "mail" || delivery === "line") return { sent: true, reasonCode: null };
   if (delivery === "stub" && rec(approval.metadata?.invoke)?.conversation) return { sent: true, reasonCode: null };
   return { sent: null, reasonCode: null };
 }

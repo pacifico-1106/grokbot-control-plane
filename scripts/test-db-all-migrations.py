@@ -141,6 +141,8 @@ ADDITIVE = [
     # LINE PoC per-employee accounts (C5) + link-code limits (H8).
     ("20261013200000_", "tests/security/db-employee-comm-accounts.sql",
      ("employee_comm_accounts", "employee_comm_account_secrets", "comm_inbound_events", "comm_link_code_failures", "comm_link_code_locks")),
+    ("20261014100000_", "tests/security/db-comm-line-reply-tokens.sql",
+     ("comm_line_reply_tokens", "comm_line_send_unknown")),
     ("20261010200000_", "tests/security/db-mcp-oauth.sql", ("oauth_clients", "oauth_authorization_requests", "oauth_grants",
      "oauth_authorization_codes", "oauth_access_tokens", "oauth_refresh_tokens", "oauth_rate_limits")),
 ]

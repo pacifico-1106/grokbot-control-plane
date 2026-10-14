@@ -1,6 +1,6 @@
 import { CONVERSATION_NOT_SENT, NOT_SENT_DESTINATION_CODES, approvedNotSentInfo, channelNotSupportedInfo } from "@/lib/approvals/not-sent";
 import { withSlackUserTeamMemo } from "@/lib/slack/bot-token";
-import { heldTicketMarker, withHoldRequestScope } from "@/lib/safety/hold";
+import { heldTicketMarker, withHoldRequestScope, assertTicketNotHeld, HoldStopError } from "@/lib/safety/hold";
 import {
   buildApprovalArtifact,
   buildApprovalTitle,
@@ -56,7 +56,14 @@ import {
   resolveSlackDmInlineThreadTs,
 } from "@/lib/slack/dm-reply-inline";
 import { getEffectiveReplyPolicy } from "@/lib/data/reply-policy";
-import { resolveInformationDisclosure } from "@/lib/gateway/information-class";
+import { isInformationClass, resolveInformationDisclosure } from "@/lib/gateway/information-class";
+import {
+  deliverLineConversation,
+  isLineConversationRequest,
+  lineExternalSendAllowed,
+  lineForceExternalApproval,
+  lineSendAsPosted,
+} from "@/lib/comm/line-invoke";
 import { evaluateProjectScope } from "@/lib/gateway/project-scope";
 import { accessibleProjects } from "@/lib/employees/project-access";
 import {
@@ -1316,6 +1323,11 @@ async function runGatewayInvokeInner(
     // during the hold, not after release (closed_by_hold). Covers every priorApprovalOk
     // consumer: mail.send, commerce.order, calendar, comm.send, attachment resends.
     if (prior && heldTicketMarker(prior.metadata)) {
+      try {
+        assertTicketNotHeld(prior);
+      } catch (err) {
+        if (!(err instanceof HoldStopError)) throw err;
+      }
       await appendAuditEvent({
         orgId: orgId || employee.orgId,
         employeeId,
@@ -1418,7 +1430,8 @@ async function runGatewayInvokeInner(
     const preCtx = parseConversationContext(body, principalOrgId);
     const preArgs = body.args && typeof body.args === "object" ? (body.args as Record<string, unknown>) : {};
     const preSlack = preCtx?.surface === "slack" || Boolean(preCtx?.slackChannelId) || Boolean(preCtx?.slackUserId);
-    if (!preSlack) {
+    const preLine = isLineConversationRequest(preCtx, body);
+    if (!preSlack && !preLine) {
       const info = channelNotSupportedInfo(preCtx?.surface ?? null);
       await appendAuditEvent({
         orgId: orgId || employee.orgId,
@@ -1452,7 +1465,7 @@ async function runGatewayInvokeInner(
     // Item C (flag ON) resolves a U… in the channel field to a DM below and stops
     // on its own; leave that case to it.
     const itemCHandles = isSlackUToDmSendEnabled() && Boolean(slackUserIdInChannelField(body));
-    if (!itemCHandles) {
+    if (!preLine && !itemCHandles) {
       const dmIntent = preArgs.dm === true || preArgs.postingTo === "im" || preArgs.dmIntent === true;
       const preDest = validateSlackPostDestination({
         slackChannelId: preCtx?.slackChannelId,
@@ -1648,13 +1661,46 @@ async function runGatewayInvokeInner(
   // Audience × information-class egress (after scope / SoD / action-limit / project wall).
   // slack.* aliases share this resolver — tool name is not the boundary.
   // S2: evaluateInvokeEgress now returns both egress (effective) and dualEgress (audit).
-  const { egress, dualEgress } = await evaluateInvokeEgress({
+  let { egress, dualEgress } = await evaluateInvokeEgress({
     orgId: principalOrgId,
     tool,
     toolDef,
     body,
   });
   const managerId = employee.managerId ?? null;
+
+  // LINE: unclassified external confidential-deny becomes needs_approval
+  // (default = human yes). Explicit confidential / verbatim stay deny.
+  if (egress && isLineConversationRequest(parseConversationContext(body, principalOrgId), body)) {
+    const disclosure = await resolveInformationDisclosure({
+      orgId: principalOrgId,
+      tool,
+      body,
+      audience: egress.audience,
+    });
+    const lineArgs = body.args && typeof body.args === "object" ? (body.args as Record<string, unknown>) : {};
+    const explicitClass =
+      (isInformationClass(body.informationClass) && body.informationClass) ||
+      (isInformationClass(lineArgs.informationClass) && lineArgs.informationClass) ||
+      null;
+    if (
+      lineForceExternalApproval({
+        surface: "line",
+        audience: egress.audience,
+        egressDecision: egress.decision,
+        informationClass: egress.informationClass,
+        explicitClass,
+        unclassified: disclosure.unclassified,
+      })
+    ) {
+      egress = {
+        ...egress,
+        decision: "needs_approval",
+        reason: "line_external_default_approval",
+        messageJa: "社外の LINE への送信は、既定では人の承認が必要です。",
+      };
+    }
+  }
 
   // Deny wins over SoD queue: confidential-to-external must not become a pending ticket.
   if (egress?.decision === "deny") {
@@ -2591,6 +2637,88 @@ async function runGatewayInvokeInner(
       }
     }
 
+    if (isLineConversationRequest(ctx, body)) {
+      const egressAllowsLine =
+        egress?.decision === "allow" ||
+        egress?.decision === "summarize" ||
+        (priorApprovalOk && egress?.decision === "needs_approval");
+      if (egressAllowsLine) {
+        const already = approvedRerunDelivery ?? conversationDeliveryFromFulfillment(priorApproval);
+        if (already) {
+          conversationDelivery = already;
+        } else {
+          const rawText = [args.text, args.body, args.message].find(
+            (value) => typeof value === "string" && value.trim()
+          ) as string | undefined;
+          const result = await deliverLineConversation({
+            token: ctx?.token,
+            args,
+            text: (rawText || "").trim() || purpose,
+            orgId: orgId || employee.orgId,
+            employeeId,
+            externalSendAllowed: lineExternalSendAllowed({
+              priorApprovalOk,
+              audience: egress?.audience ?? "unknown",
+              informationClass: egress?.informationClass,
+              egressDecision: egress?.decision,
+            }),
+            retryId: priorApprovalOk && priorApproval ? priorApproval.id : jobId,
+          });
+          const posted = lineSendAsPosted(result);
+          if (result.status === "unknown") {
+            await appendAuditEvent({
+              orgId: orgId || employee.orgId,
+              employeeId,
+              credentialId: input.credentialId || employee.credentialId,
+              action: "line.post_failed",
+              purpose,
+              summary: "LINE会話投稿の結果が不明（再送は確認後のみ）",
+              metadata: { tool, jobId, error: result.reason, code: "post_outcome_unknown" },
+            });
+            return jsonResult(
+              {
+                ...postOutcomeUnknownBody(null, result.reason),
+                sent: false,
+                needs_approval: false,
+                egress,
+                employeeId,
+                tool,
+                purpose,
+                jobId,
+              },
+              502
+            );
+          }
+          if (!posted.ok) {
+            await appendAuditEvent({
+              orgId: orgId || employee.orgId,
+              employeeId,
+              credentialId: input.credentialId || employee.credentialId,
+              action: "line.post_failed",
+              purpose,
+              summary: "LINE会話投稿を送信していません",
+              metadata: { tool, jobId, error: posted.error, sent: false },
+            });
+            return jsonResult(
+              {
+                ok: false,
+                code: posted.error || "line_not_sent",
+                error: posted.error || "line_not_sent",
+                sent: false,
+                needs_approval: false,
+                egress,
+                employeeId,
+                tool,
+                purpose,
+                jobId,
+              },
+              409
+            );
+          }
+          conversationDelivery = { ok: true, delivery: "line" };
+        }
+      }
+    } else {
     const egressAllowsPost =
       egress?.decision === "allow" ||
       egress?.decision === "summarize" ||
@@ -2871,6 +2999,7 @@ async function runGatewayInvokeInner(
         },
         409
       );
+    }
     }
   }
 

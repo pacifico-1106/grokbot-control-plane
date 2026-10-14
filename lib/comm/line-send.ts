@@ -15,9 +15,10 @@
  *   5. the account's access token (server-only read)
  *   6. checkLineSendAllowed — LAST, right before the API: account active, link not
  *      removed (when internal), employee / org not on stop / leave / quarantine
- *   7. Reply when the pinned replyToken is fresh (< 50 s) and unused here (free);
- *      a 400 on Reply (token expired / used) falls back to Push. Push carries
- *      X-Line-Retry-Key so a retry can't double-send (409 = already accepted).
+ *   7. Reply when the pinned replyToken is fresh (< 50 s) and unused in the
+ *      reply-token ledger (DB / demo; not process memory). A 400 on Reply
+ *      (token expired / used) falls back to Push. Push carries X-Line-Retry-Key
+ *      so a retry can't double-send (409 = already accepted).
  *   8. result: sent / not_sent / unknown (5xx, timeout, network: may or may not have
  *      been delivered → never retried blindly, never followed by a Push).
  * The message text and the access token are never logged.
@@ -26,6 +27,7 @@ import { readCommAccountSecretsForServer } from "@/lib/comm/accounts";
 import { resolveConversationTarget } from "@/lib/comm/conversation-token";
 import { isLineConversationEnabled } from "@/lib/comm/flags";
 import { checkLineSendAllowed, type PreSendResult, type PreSendTarget } from "@/lib/comm/pre-send";
+import { claimLineReplyToken, __resetLineReplyTokenLedgerForTests } from "@/lib/comm/reply-token-ledger";
 
 export const LINE_TEXT_MAX = 5000;
 export const LINE_REPLY_FRESH_MS = 50_000;
@@ -55,16 +57,9 @@ const defaultDeps: LineSendDeps = {
   checkLineSendAllowed: (t) => checkLineSendAllowed(t),
 };
 
-/** replyTokens used by this instance (another instance's reuse gets a 400 → Push). */
-const usedReplyTokens = new Set<string>();
-const USED_MAX = 2000;
-function markUsed(rt: string) {
-  usedReplyTokens.add(rt);
-  if (usedReplyTokens.size > USED_MAX) usedReplyTokens.delete(usedReplyTokens.values().next().value as string);
-}
 /** Tests only. */
 export function __resetLineSendForTests(): void {
-  usedReplyTokens.clear();
+  __resetLineReplyTokenLedgerForTests();
 }
 
 type Http = { kind: "ok" } | { kind: "status"; status: number } | { kind: "network" };
@@ -133,20 +128,22 @@ export async function sendLineConversationMessage(
   const accessToken = secrets.secrets.channelAccessToken;
   const messages = [{ type: "text", text: input.text }];
   const rt = t.replyToken;
-  if (rt && !usedReplyTokens.has(rt) && now - Date.parse(t.issuedAt) < LINE_REPLY_FRESH_MS) {
-    markUsed(rt);
-    const r = await post("/v2/bot/message/reply", accessToken, { replyToken: rt, messages });
-    if (r.kind === "ok") return { status: "sent", audience, mode: "reply" };
-    if (r.kind === "network") {
-      console.error("line_send_unknown", { accountId: t.accountId, mode: "reply", reason: "line_network_error" });
-      return { status: "unknown", reason: "line_network_error", audience, mode: "reply" };
+  if (rt && now - Date.parse(t.issuedAt) < LINE_REPLY_FRESH_MS) {
+    const claim = await claimLineReplyToken({ orgId: t.orgId, accountId: t.accountId, replyToken: rt });
+    if (claim.ok && claim.claimed) {
+      const r = await post("/v2/bot/message/reply", accessToken, { replyToken: rt, messages });
+      if (r.kind === "ok") return { status: "sent", audience, mode: "reply" };
+      if (r.kind === "network") {
+        console.error("line_send_unknown", { accountId: t.accountId, mode: "reply", reason: "line_network_error" });
+        return { status: "unknown", reason: "line_network_error", audience, mode: "reply" };
+      }
+      if (r.status >= 500) {
+        console.error("line_send_unknown", { accountId: t.accountId, mode: "reply", status: r.status });
+        return { status: "unknown", reason: "line_http_5xx", audience, mode: "reply", httpStatus: r.status };
+      }
+      if (r.status !== 400) return { status: "not_sent", reason: r.status === 429 ? "line_rate_limited" : "line_http_4xx", audience, mode: "reply", httpStatus: r.status };
+      // 400: replyToken expired / already used → nothing was delivered → Push
     }
-    if (r.status >= 500) {
-      console.error("line_send_unknown", { accountId: t.accountId, mode: "reply", status: r.status });
-      return { status: "unknown", reason: "line_http_5xx", audience, mode: "reply", httpStatus: r.status };
-    }
-    if (r.status !== 400) return { status: "not_sent", reason: r.status === 429 ? "line_rate_limited" : "line_http_4xx", audience, mode: "reply", httpStatus: r.status };
-    // 400: replyToken expired / already used → nothing was delivered → Push
   }
   const r = await post("/v2/bot/message/push", accessToken, { to: t.counterpartyId, messages }, { "x-line-retry-key": input.retryKey });
   if (r.kind === "ok") return { status: "sent", audience, mode: "push" };

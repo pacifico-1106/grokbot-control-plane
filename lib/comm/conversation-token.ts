@@ -165,3 +165,23 @@ export function resolveConversationTarget(
   }
   return v;
 }
+
+/** Conversation token from the request only (never invented). */
+export function conversationTokenFromRequest(body: {
+  conversation?: unknown;
+  args?: unknown;
+  token?: unknown;
+}): string | null {
+  const conv =
+    body.conversation && typeof body.conversation === "object" && !Array.isArray(body.conversation)
+      ? (body.conversation as Record<string, unknown>)
+      : {};
+  const args =
+    body.args && typeof body.args === "object" && !Array.isArray(body.args)
+      ? (body.args as Record<string, unknown>)
+      : {};
+  for (const raw of [conv.token, args.token, body.token]) {
+    if (typeof raw === "string" && raw.trim()) return raw.trim();
+  }
+  return null;
+}

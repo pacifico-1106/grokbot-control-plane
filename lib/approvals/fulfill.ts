@@ -85,6 +85,8 @@ import type {
   InformationClass,
   PostingAs,
 } from "@/lib/types";
+import { isLineConversationEnabled } from "@/lib/comm/flags";
+import { deliverLineConversation } from "@/lib/comm/line-invoke";
 
 const SNAPSHOT_ARG_KEYS = [
   "text",
@@ -111,6 +113,7 @@ const SNAPSHOT_ARG_KEYS = [
   "userId",
   "phone",
   "lineId",
+  "token",
   "scheduledAt",
   "scheduled_at",
   "scheduledFor",
@@ -151,6 +154,8 @@ export type InvokeSnapshot = {
     email?: string;
     phone?: string;
     lineId?: string;
+    /** Server-signed LINE conversation token (destination is pinned in it). */
+    token?: string;
     /** Telegram conversation (thread single-flight key at fulfil). */
     telegramChatId?: string;
     telegramThreadId?: string;
@@ -174,7 +179,7 @@ export type InvokeSnapshot = {
 
 export type ApprovalFulfillment = {
   ok: boolean;
-  delivery?: "stub" | "slack" | "mail" | "sns";
+  delivery?: "stub" | "slack" | "mail" | "sns" | "line";
   channel?: string;
   ts?: string;
   id?: string;
@@ -213,7 +218,8 @@ export type ApprovalFulfillment = {
 export type ConversationDelivery =
   | { ok: true; delivery: "stub" }
   | { ok: true; delivery: "slack"; channel?: string; ts?: string; postedVia?: PostingAs }
-  | { ok: true; delivery: "mail"; channel?: string; ts?: string };
+  | { ok: true; delivery: "mail"; channel?: string; ts?: string }
+  | { ok: true; delivery: "line" };
 
 function jsonClone<T>(value: T): T | undefined {
   try {
@@ -277,6 +283,7 @@ function snapshotConversation(
     email: conversation.email,
     phone: conversation.phone,
     lineId: conversation.lineId,
+    token: conversation.token,
   });
   return cloned ?? null;
 }
@@ -332,6 +339,8 @@ export function buildInvokeSnapshot(input: {
     const readThrough = readThroughFromBody(input.body as unknown as Record<string, unknown>);
     if (readThrough?.source === "explicit") snapshot.readThroughTs = readThrough.ts;
     const rawConv = input.body.conversation as unknown as Record<string, unknown> | undefined;
+    const rawTok = typeof rawConv?.token === "string" ? rawConv.token.trim() : "";
+    if (snapshot.conversation && rawTok) snapshot.conversation.token = rawTok;
     const tgChat = typeof rawConv?.telegramChatId === "string" ? rawConv.telegramChatId.trim() : "";
     if (snapshot.conversation && tgChat) {
       snapshot.conversation.telegramChatId = tgChat;
@@ -383,6 +392,7 @@ export function parseInvokeSnapshot(
           email: str(convRaw.email),
           phone: str(convRaw.phone),
           lineId: str(convRaw.lineId),
+          ...(str(convRaw.token) ? { token: str(convRaw.token) } : {}),
           ...(str(convRaw.telegramChatId) ? { telegramChatId: str(convRaw.telegramChatId) } : {}),
           ...(str(convRaw.telegramThreadId) ? { telegramThreadId: str(convRaw.telegramThreadId) } : {}),
         }
@@ -405,7 +415,8 @@ export function parseFulfillment(
     rec.delivery === "slack" ||
     rec.delivery === "stub" ||
     rec.delivery === "mail" ||
-    rec.delivery === "sns"
+    rec.delivery === "sns" ||
+    rec.delivery === "line"
       ? rec.delivery
       : undefined;
   const fulfillment: ApprovalFulfillment = {
@@ -465,6 +476,9 @@ export function conversationDeliveryFromFulfillment(
       ...(fulfillment.ts ? { ts: fulfillment.ts } : {}),
     };
   }
+  if (fulfillment.delivery === "line") {
+    return { ok: true, delivery: "line" };
+  }
   return null;
 }
 
@@ -506,6 +520,55 @@ function outboundText(args: Record<string, unknown>, fallback: string): string {
     (value) => typeof value === "string" && value.trim()
   );
   return (typeof raw === "string" ? raw : "").trim() || fallback;
+}
+
+/** L-6: post-approval LINE send. Human yes → externalSendAllowed. */
+async function fulfillLineConversation(
+  approval: ApprovalRequest,
+  snapshot: InvokeSnapshot
+): Promise<ApprovalFulfillment> {
+  const existing = parseFulfillment(approval.metadata);
+  if (existing?.ok) return existing;
+  if (existing?.error === POST_OUTCOME_UNKNOWN) return existing;
+
+  const token =
+    snapshot.conversation?.token ||
+    (typeof snapshot.args.token === "string" ? snapshot.args.token : null);
+  const result = await deliverLineConversation({
+    token,
+    args: snapshot.args ?? {},
+    text: outboundText(snapshot.args, snapshot.purpose || approval.purpose),
+    orgId: approval.orgId,
+    employeeId: approval.employeeId,
+    externalSendAllowed: true,
+    retryId: approval.id,
+  });
+  const at = new Date().toISOString();
+  const fulfillment: ApprovalFulfillment =
+    result.status === "sent"
+      ? { ok: true, delivery: "line", at }
+      : result.status === "unknown"
+        ? { ok: false, error: POST_OUTCOME_UNKNOWN, at }
+        : { ok: false, error: result.reason || "line_not_sent", at };
+  await persistFulfillment(approval, fulfillment);
+  if (result.status === "sent") {
+    await appendAuditEvent({
+      orgId: approval.orgId,
+      employeeId: approval.employeeId,
+      credentialId: approval.credentialId,
+      action: "line.posted",
+      purpose: approval.purpose,
+      summary: "承認済み LINE 会話投稿を実行",
+      metadata: {
+        tool: snapshot.tool,
+        jobId: snapshot.jobId,
+        approvalId: approval.id,
+        delivery: "line",
+        phase: "approval.fulfill",
+      },
+    }).catch(() => undefined);
+  }
+  return fulfillment;
 }
 
 function destinationOf(snapshot: InvokeSnapshot): string {
@@ -895,6 +958,12 @@ async function fulfillApprovedInvokeCore(
 
     if (!isAudienceGatedTool(snapshot.tool || approval.tool || "")) {
       return null;
+    }
+
+    // L-6: approved LINE reply → sendLineConversationMessage. An "unknown"
+    // outcome is recorded and never retried automatically (Push would double-deliver).
+    if (isLineConversationEnabled() && (snapshot.conversation?.surface || "").toLowerCase() === "line") {
+      return fulfillLineConversation(approval, snapshot);
     }
 
     // THREAD_SINGLE_FLIGHT_ENABLED: one lease + "already moved on" check per

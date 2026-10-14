@@ -237,6 +237,8 @@ export interface ConversationContext {
   slackTeamId?: string;
   phone?: string;
   lineId?: string;
+  /** Server-signed conversation token (LINE). Destination comes only from this. */
+  token?: string;
 }
 
 export type Audience = "internal" | "external" | "unknown";
