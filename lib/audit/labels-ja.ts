@@ -2,7 +2,7 @@ import { ADMIN_MCP_TOOL_NAMES, type AdminMcpToolName } from "@/lib/mcp/admin-pub
 import type { AuditAction } from "@/lib/types";
 import type { GatewayToolId } from "@/lib/gateway/tools";
 import { GATEWAY_TOOL_DEFS } from "@/lib/gateway/tools";
-import { ADMIN_TOOL_TITLE_JA } from "@/lib/admin-mcp/queue";
+import { ADMIN_TOOL_TITLE_JA } from "@/lib/admin-mcp/tool-titles-ja";
 import { opaqueAuditId } from "./mask";
 
 /** Short audit labels (owner-facing). Gateway card labelJa is fallback only. */
