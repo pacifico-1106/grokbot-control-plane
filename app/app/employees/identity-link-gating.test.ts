@@ -56,6 +56,7 @@ afterAll(() => {
 const { identityLinkPermissions } = await import("@/lib/employees/identity-link-permissions");
 const { SlackIdentityForm } = await import("@/components/employees/SlackIdentityForm");
 const { GoogleCalendarIdentityForm } = await import("@/components/employees/GoogleCalendarIdentityForm");
+const { GoogleGmailSendForm } = await import("@/components/employees/GoogleGmailSendForm");
 const { default: EmployeeDetailPage } = await import("./[id]/page");
 
 const HIRE: HumanCapability[] = ["view_dashboard", "hire_issue_credentials"];
@@ -90,6 +91,13 @@ describe("forms never render a live start link when locked", () => {
     const props = { employee, initialIdentity: null, oauthConfigured: true, flagEnabled: true };
     expect(renderToStaticMarkup(createElement(GoogleCalendarIdentityForm, { ...props, disabled: true }))).not.toContain(GOOGLE_START);
     expect(renderToStaticMarkup(createElement(GoogleCalendarIdentityForm, props))).toContain(GOOGLE_START);
+    expect(renderToStaticMarkup(createElement(GoogleCalendarIdentityForm, props))).not.toContain("intent=gmail.send");
+  });
+  test("Gmail send: disabled → no href; live flag shows incremental start URL", () => {
+    const props = { employee, initialIdentity: null, oauthConfigured: true, flagEnabled: true };
+    expect(renderToStaticMarkup(createElement(GoogleGmailSendForm, { ...props, disabled: true }))).not.toContain("intent=gmail.send");
+    expect(renderToStaticMarkup(createElement(GoogleGmailSendForm, props))).toContain("intent=gmail.send");
+    expect(renderToStaticMarkup(createElement(GoogleGmailSendForm, { ...props, flagEnabled: false }))).not.toContain(GOOGLE_START);
   });
 });
 

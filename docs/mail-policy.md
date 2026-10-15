@@ -37,9 +37,39 @@ employee override → org policy → default（外部 draft_only）
 
 `attachmentPolicyRef`: `inherit_d1` | `forbid`。D1 と競合時は **厳しい側が勝つ**（forbid / Sealith required）。
 
+## 添付（mail.send、2026-10-15）
+
+`args.attachments[]`（MCP では `payload.attachments`）。**`content`（Base64）のみ**。`fileRef`（HTTPS 取得）は SSRF のためこの PR では拒否（Slack の `fileAttachment.fileRef` はメールにコピーしない）。
+
+- 許可: pdf / png / jpg / txt / csv / docx / xlsx / pptx（拡張子・MIME・マジックバイトが一致すること）。
+- 上限: 3 件、1 ファイル 10MB、合計 15MB。ファイル名にパス・制御文字は不可。
+- 秘密検出: デコード後のテキストを検査（txt/csv は全文。Office は ZIP 内 XML。PDF はパッケージにパーサが無いため printable 文字列のフォールバック — 圧縮ストリームは未抽出）。画像は OCR なし（ファイル名のみ）。
+- 承認時にバイトを AES-256-GCM で封印し `contentSha256` を `approval_requests.metadata.invoke.mailAttachments` に保存（**migration 不要**）。送信直前に復号してハッシュ不一致なら拒否（`mail_attachment_hash_mismatch`）。本文はログに出さない。snapshot の `args` に元の Base64 は入らない。
+- サイズ: 690KB PDF → 入力 Base64 約 920KB、封印 ciphertext も約 920KB。jsonb TOAST で足りる。15MB 合計なら約 20MB が 1 行に載る（Postgres 上限より小さいが API ペイロードは重い）。任意 migration `20261015100000_approval_mail_attachments.sql` は後で分離するため。**適用しない**。
+
+## 返信スレッド（mail.send）
+
+任意: `inReplyTo` / `references`（RFC 5322 Message-ID）および/または `gmailThreadId` / `threadId` / `conversation.threadId`（Gmail 16 進）。CR/LF は `mail_header_invalid`。プロバイダが Gmail のとき In-Reply-To / References と `threadId` を **metadata に記録**する。非 ASCII ファイル名は RFC 2231/5987。
+
+## 本番の配信
+
+`MAIL_SEND_GMAIL_LIVE` **既定 OFF** → `fulfillMailSend` は `delivery: "stub"`（従来どおりシステムから出ない）。
+
+ON のときだけ、承認後かつ添付ハッシュ照合のあと Gmail `users.messages.send`（`raw` MIME + `threadId`）。From は連携メールボックスと一致必須。不明結果は `post_outcome_unknown` として記録し **再送しない**。カレンダー OAuth は従来の `calendar.freebusy` のまま。`gmail.send` は社員ページの別ボタン（増分同意）。
+
+| 層 | 本番の用途 | mail.send との関係 |
+|----|------------|-------------------|
+| Human Gmail | free/busy に加え、フラグ ON なら `gmail.send` 増分同意 | `users.messages.send` |
+| AgentMail | P0.5 予約。`agentmail.send` は 501 `tool_reserved` | 使わない |
+| Staffpass Resend | 歓迎・承認依頼・請求などの **制御面通知** | AI社員の営業メールには使わない |
+
+`NOTIFICATION_CONFIG_ENCRYPTION_KEY`（32 文字以上）は本番で通知・Google refresh token・添付封印に **既に使っている**。
+
+**draft_only / 外部宛のデフォルトは緩めない。** 再認可 URL: `/api/google/oauth/start?employeeId=<社員ID>&intent=gmail.send`（アプリオリジン付き）。Google Cloud の同意画面に `gmail.send` を追加すること。マイグレーションなし（既存 `employee_google_identities` の `granted_scopes` を union）。
+
 ## 承認カード
 
-宛先（to 系の全項目） / CC / BCC / 件名 / 本文先頭 / 添付あり / sendMode を表示。
+宛先（to 系の全項目） / CC / BCC / 件名 / 本文先頭 / 添付（ファイル名・種類・サイズ） / 返信先 / threadId / sendMode を表示。
 
 - CC・BCC は、値があるときだけ宛先の直後に1行ずつ表示する（2026-10-04〜）。
 - 表示面: Web の承認一覧・代理承認パネル・MCP / poll の `summary`（全件）、Slack・Telegram のカード（1行 500 文字で打ち切り、打ち切ったときは `CC（N件）:` と件数を表示）、LINE のカード（`summary` を表示するため、先頭 500 文字に含まれる範囲）。

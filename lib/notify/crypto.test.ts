@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
+  decryptBytes,
   decryptNotificationSecrets,
+  encryptBytes,
   encryptNotificationSecrets,
 } from "./crypto";
 
@@ -30,5 +32,14 @@ describe("tenant notification credential encryption", () => {
     expect(() => encryptNotificationSecrets({ token: "secret" })).toThrow(
       "notification_encryption_key_missing"
     );
+  });
+
+  test("encryptBytes round-trips and is not JSON v1", () => {
+    process.env.NOTIFICATION_CONFIG_ENCRYPTION_KEY = "test-key-that-is-at-least-32-characters-long";
+    const raw = Buffer.from("%PDF-1.4 secret-bytes");
+    const enc = encryptBytes(raw);
+    expect(enc.startsWith("b1.")).toBe(true);
+    expect(enc).not.toContain("secret-bytes");
+    expect(decryptBytes(enc).equals(raw)).toBe(true);
   });
 });

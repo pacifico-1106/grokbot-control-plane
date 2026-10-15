@@ -20,6 +20,7 @@ import { EmployeeLineLinkCodeForm } from "@/components/employees/EmployeeLineLin
 import { commLinkCodePermissions } from "@/lib/employees/comm-link-code-permissions";
 import { isCommAccountsEnabled, isLineConversationEnabled } from "@/lib/comm/flags";
 import { GoogleCalendarIdentityForm } from "@/components/employees/GoogleCalendarIdentityForm";
+import { GoogleGmailSendForm } from "@/components/employees/GoogleGmailSendForm";
 import { getSessionContext } from "@/lib/auth/session";
 import { isDemoMode } from "@/lib/mode";
 import {
@@ -36,7 +37,7 @@ import {
 import { getEmployeeGoogleIdentity } from "@/lib/data/google-identities";
 import { slackOAuthConfigured } from "@/lib/slack/oauth";
 import { googleOAuthConfigured } from "@/lib/google/oauth";
-import { isGoogleCalendarReadEnabled } from "@/lib/feature-flags";
+import { isGoogleCalendarReadEnabled, isMailSendGmailLiveEnabled } from "@/lib/feature-flags";
 import { getEmployeeActionLog } from "@/lib/employee-actions-demo";
 import { assignedInboxLabel } from "@/lib/employees/approval-inbox";
 import { APPROVAL_POLICY_LABELS } from "@/lib/employees/policy-draft";
@@ -89,6 +90,7 @@ export default async function EmployeeDetailPage({
   const googleIdentity = await getEmployeeGoogleIdentity(employee.id);
   const googleOauthConfigured = googleOAuthConfigured();
   const googleCalendarEnabled = isGoogleCalendarReadEnabled();
+  const mailSendGmailLive = isMailSendGmailLiveEnabled();
   const effectiveIngressHandoff = await getEffectiveIngressHandoffPolicy(orgId, employee.id);
 
   const actionEvents = getEmployeeActionLog(employee, binding);
@@ -267,6 +269,18 @@ export default async function EmployeeDetailPage({
           initialIdentity={googleIdentity}
           oauthConfigured={googleOauthConfigured}
           flagEnabled={googleCalendarEnabled}
+          disabled={employee.status === "suspended"}
+          canManage={canManageIdentityLinks}
+        />
+      </section>
+
+      <section className="surface p-5 space-y-3 mt-4">
+        <h2 className="text-sm font-medium">Gmail 送信（mail.send）</h2>
+        <GoogleGmailSendForm
+          employee={employee}
+          initialIdentity={googleIdentity}
+          oauthConfigured={googleOauthConfigured}
+          flagEnabled={mailSendGmailLive}
           disabled={employee.status === "suspended"}
           canManage={canManageIdentityLinks}
         />

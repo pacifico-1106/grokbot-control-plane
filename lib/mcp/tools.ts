@@ -195,9 +195,31 @@ export const STAFFPASS_MCP_TOOLS: McpToolDef[] = [
               type: "string",
               description: "Optional initial comment posted with the file.",
             },
+            content: {
+              type: "string",
+              description:
+                "Optional Base64 file body. Ignored for Slack comm.reply (fileRef required). For mail.send prefer payload.attachments[].content.",
+            },
           },
           required: ["fileRef", "filename"],
           additionalProperties: false,
+        },
+        attachments: {
+          type: "array",
+          description:
+            "Optional mail.send attachments (max 3). filename + content (Base64) only — fileRef / HTTPS fetch is rejected (SSRF). Allowlisted pdf/png/jpg/txt/csv/docx/xlsx/pptx, 10MB/file, 15MB total. Prefer payload.attachments; this top-level field is copied into payload when payload.attachments is absent. Threading (inReplyTo / references / threadId or gmailThreadId) lives in payload.",
+          items: {
+            type: "object",
+            properties: {
+              filename: { type: "string", description: "Filename with extension (e.g. Staffpass_サービス概要.pdf)." },
+              mimeType: { type: "string", description: "IANA MIME type (e.g. application/pdf)." },
+              bytes: { type: "number", description: "Size in bytes; must match decoded content when set." },
+              content: { type: "string", description: "Base64 file body (required for mail.send)." },
+              contentBase64: { type: "string", description: "Alias of content." },
+            },
+            required: ["filename", "content"],
+            additionalProperties: false,
+          },
         },
       },
       required: ["tool", "purpose", "jobId"],
@@ -490,6 +512,7 @@ function resolveFileAttachment(
     bytes: typeof attachment.bytes === "number" && Number.isFinite(attachment.bytes) ? attachment.bytes : undefined,
     title: typeof attachment.title === "string" ? attachment.title.trim() : undefined,
     initialComment: typeof attachment.initialComment === "string" ? attachment.initialComment.trim() : undefined,
+    content: typeof attachment.content === "string" ? attachment.content : undefined,
   };
 }
 
@@ -572,8 +595,33 @@ export async function callStaffpassMcpTool(
         args.amountJpy == null ? undefined : Number(args.amountJpy);
       const payload =
         args.payload && typeof args.payload === "object" && !Array.isArray(args.payload)
-          ? (args.payload as Record<string, unknown>)
+          ? { ...(args.payload as Record<string, unknown>) }
           : {};
+      if (
+        (tool === "mail.send" || tool === "mail.draft") &&
+        payload.attachments === undefined
+      ) {
+        if (Array.isArray(args.attachments)) {
+          payload.attachments = args.attachments;
+        } else {
+          const single = resolveFileAttachment(args, payload);
+          const content =
+            single && "content" in single && typeof single.content === "string"
+              ? single.content
+              : "";
+          // mail.send: Base64 only. Do not copy Slack fileRef (SSRF).
+          if (single && content.trim()) {
+            payload.attachments = [
+              {
+                filename: single.filename,
+                mimeType: single.mimeType,
+                bytes: single.bytes,
+                content,
+              },
+            ];
+          }
+        }
+      }
 
       const body: GatewayInvokeRequest = {
         employeeId: cred.employeeId,

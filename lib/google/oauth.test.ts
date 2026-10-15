@@ -181,7 +181,35 @@ describe("googleAuthorizeUrl", () => {
     expect(url).toContain("response_type=code");
     expect(url).toContain("access_type=offline");
     expect(url).toContain("prompt=consent");
+    expect(url).toContain("include_granted_scopes=true");
     expect(url).toContain("calendar.freebusy");
+  });
+
+  test("login_hint is set only for a clean mailbox string", () => {
+    process.env.GOOGLE_OAUTH_CLIENT_ID = "test-client-id";
+    const withHint = googleAuthorizeUrl("test-state", "challenge", {
+      intent: "gmail.send",
+      loginHint: "tando@tokyo307inc.com",
+    });
+    expect(withHint).toContain("login_hint=tando%40tokyo307inc.com");
+    const injected = googleAuthorizeUrl("test-state", "challenge", {
+      loginHint: "tando@tokyo307inc.com\r\nBcc: evil@x.example",
+    });
+    expect(injected).not.toContain("login_hint");
+    const calendar = googleAuthorizeUrl("test-state");
+    expect(calendar).not.toContain("login_hint");
+  });
+
+  test("gmail.send intent requests gmail.send incrementally, not calendar.freebusy", () => {
+    process.env.GOOGLE_OAUTH_CLIENT_ID = "test-client-id";
+    const url = googleAuthorizeUrl("test-state", "challenge", { intent: "gmail.send" });
+    expect(url).toContain("gmail.send");
+    expect(url).toContain("include_granted_scopes=true");
+    expect(url).not.toContain("calendar.freebusy");
+    const calendar = googleAuthorizeUrl("test-state");
+    expect(calendar).toContain("calendar.freebusy");
+    expect(calendar).not.toContain("gmail.send");
+    expect(calendar).toContain("include_granted_scopes=true");
   });
 
   test("includes PKCE challenge when provided", () => {

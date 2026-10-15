@@ -1,16 +1,21 @@
 /**
- * Google OAuth scopes for AI employee calendar free/busy read.
+ * Google OAuth scopes for AI employee calendar free/busy read and (optional)
+ * incremental mail.send via gmail.send.
  *
- * Minimal scopes — read-only, never request write capabilities.
- * calendar.freebusy is a sensitive scope; unverified apps are limited to test users.
+ * Calendar start still requests only freebusy (read-only). gmail.send is
+ * requested only from the separate Gmail-send consent (MAIL_SEND_GMAIL_LIVE).
+ * calendar.freebusy and gmail.send are sensitive/restricted; unverified apps
+ * are limited to test users.
  *
  * Forbidden scopes (never request):
  * - https://www.googleapis.com/auth/calendar — full calendar access
  * - https://www.googleapis.com/auth/calendar.events — event read/write
  * - https://www.googleapis.com/auth/calendar.settings.readonly — settings
- * - Any scope broader than calendar.freebusy
+ * - https://mail.google.com/ and gmail.modify / compose / readonly / metadata / insert
+ * - Any scope broader than the allowlist
  *
  * @see docs/google-calendar-freebusy-integration.md
+ * @see docs/mail-policy.md
  */
 
 /**
@@ -29,13 +34,26 @@ export const GOOGLE_SCOPE_CALENDAR_FREEBUSY =
   "https://www.googleapis.com/auth/calendar.freebusy";
 
 /**
+ * Incremental mail.send live path (MAIL_SEND_GMAIL_LIVE). Requested only from
+ * the separate Gmail-send consent — never from the calendar start URL.
+ */
+export const GOOGLE_SCOPE_GMAIL_SEND =
+  "https://www.googleapis.com/auth/gmail.send";
+
+export const GOOGLE_GMAIL_SEND_SCOPES = `openid email ${GOOGLE_SCOPE_GMAIL_SEND}`;
+
+export type GoogleOAuthIntent = "calendar" | "gmail.send";
+
+/**
  * Set of allowed scopes for callback validation.
  * Reject if granted scopes include anything not in this set.
+ * gmail.send is allowed so incremental consent can union with calendar.freebusy.
  */
 export const GOOGLE_ALLOWED_SCOPES = new Set([
   GOOGLE_SCOPE_OPENID,
   GOOGLE_SCOPE_EMAIL,
   GOOGLE_SCOPE_CALENDAR_FREEBUSY,
+  GOOGLE_SCOPE_GMAIL_SEND,
 ]);
 
 /**
@@ -50,16 +68,45 @@ export const GOOGLE_FORBIDDEN_SCOPES = new Set([
   "https://www.googleapis.com/auth/calendar.settings.readonly",
   "https://www.googleapis.com/auth/admin.directory.resource.calendar",
   "https://www.googleapis.com/auth/admin.directory.resource.calendar.readonly",
+  "https://mail.google.com/",
+  "https://www.googleapis.com/auth/gmail.modify",
+  "https://www.googleapis.com/auth/gmail.compose",
+  "https://www.googleapis.com/auth/gmail.readonly",
+  "https://www.googleapis.com/auth/gmail.metadata",
+  "https://www.googleapis.com/auth/gmail.insert",
 ]);
+
+export function parseGoogleOAuthIntent(value: unknown): GoogleOAuthIntent {
+  return value === "gmail.send" ? "gmail.send" : "calendar";
+}
+
+export function splitGoogleScopes(value: string): string[] {
+  return value.trim().split(/\s+/).filter(Boolean);
+}
+
+export function mergeGoogleScopes(...lists: string[]): string {
+  const set = new Set<string>();
+  for (const list of lists) {
+    for (const scope of splitGoogleScopes(list)) set.add(scope);
+  }
+  return [...set].join(" ");
+}
+
+export function grantedScopesInclude(granted: string, needed: string): boolean {
+  return splitGoogleScopes(granted).includes(needed);
+}
 
 /**
  * Validate that granted scopes are exactly what we requested (or a subset).
  * Fail-closed: reject if any forbidden or unknown scope is present.
  *
  * @param grantedScopes - Space-separated scope string from Google callback
- * @returns Validation result with reason if invalid
+ * @param intent - calendar start requires freebusy; gmail.send start requires gmail.send
  */
-export function validateGrantedScopes(grantedScopes: string): {
+export function validateGrantedScopes(
+  grantedScopes: string,
+  intent: GoogleOAuthIntent = "calendar"
+): {
   valid: boolean;
   reason?: string;
   forbidden?: string[];
@@ -69,7 +116,7 @@ export function validateGrantedScopes(grantedScopes: string): {
     return { valid: false, reason: "no_scopes_granted" };
   }
 
-  const granted = new Set(grantedScopes.trim().split(/\s+/).filter(Boolean));
+  const granted = new Set(splitGoogleScopes(grantedScopes));
   const forbidden: string[] = [];
   const unknown: string[] = [];
 
@@ -95,6 +142,16 @@ export function validateGrantedScopes(grantedScopes: string): {
       reason: "unknown_scopes_granted",
       unknown,
     };
+  }
+
+  if (intent === "gmail.send") {
+    if (!granted.has(GOOGLE_SCOPE_GMAIL_SEND)) {
+      return {
+        valid: false,
+        reason: "gmail_send_scope_missing",
+      };
+    }
+    return { valid: true };
   }
 
   if (!granted.has(GOOGLE_SCOPE_CALENDAR_FREEBUSY)) {
