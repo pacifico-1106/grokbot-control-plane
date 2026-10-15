@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import {
+  clientIp,
   destinationAfterVerify,
   AUTH_PAGE_HEADERS,
   isSameOriginRequest,
@@ -90,5 +91,17 @@ describe("rate limit", () => {
     expect(takeRateLimit("k", 2, 1000, 1)).toBe(true);
     expect(takeRateLimit("k", 2, 1000, 2)).toBe(false);
     expect(takeRateLimit("k", 2, 1000, 1001)).toBe(true);
+  });
+});
+
+describe("clientIp", () => {
+  test("ignores cf-connecting-ip; prefers Vercel headers", () => {
+    expect(
+      clientIp(h({ "cf-connecting-ip": "1.1.1.1", "x-vercel-forwarded-for": "203.0.113.7" }))
+    ).toBe("203.0.113.7");
+    expect(clientIp(h({ "cf-connecting-ip": "1.1.1.1" }))).toBe("unknown");
+    expect(clientIp(h({ "x-real-ip": "198.51.100.9", "x-forwarded-for": "9.9.9.9" }))).toBe(
+      "198.51.100.9"
+    );
   });
 });

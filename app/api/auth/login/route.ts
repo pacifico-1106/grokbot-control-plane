@@ -6,12 +6,25 @@ import { matchesSuperAdminAllowlist } from "@/lib/admin/allowlist";
 import { isMcpOAuthEnabled } from "@/lib/mcp-oauth/config";
 import { isSameOriginBrowserPost } from "@/lib/mcp-oauth/http";
 import {
+  clientIp,
+  rateKey,
+  takeRateLimit,
+} from "@/lib/auth/auth-flow";
+import {
   loginErrorMessage,
   loginFailureSearchParams,
   type LoginErrorCode,
 } from "@/lib/auth/login-errors";
 import { safeNextDestination as safeDestination } from "@/lib/auth/safe-next";
 import { jsonUtf8 } from "@/lib/http/json-utf8";
+
+/** Per-instance (best-effort on serverless). Stops the Scutum-style login spray. */
+export const LOGIN_RATE_LIMITS = {
+  perIp: 20,
+  perIpWindowMs: 15 * 60_000,
+  perEmail: 10,
+  perEmailWindowMs: 15 * 60_000,
+} as const;
 
 export const runtime = "nodejs";
 
@@ -84,6 +97,20 @@ export async function POST(req: Request) {
 
   if (!email || !password) {
     return fail(req, json, "credentials_required", 400, email, next);
+  }
+
+  const ipOk = takeRateLimit(
+    `login:ip:${rateKey(clientIp(req.headers))}`,
+    LOGIN_RATE_LIMITS.perIp,
+    LOGIN_RATE_LIMITS.perIpWindowMs
+  );
+  const emailOk = takeRateLimit(
+    `login:email:${rateKey(email.toLowerCase())}`,
+    LOGIN_RATE_LIMITS.perEmail,
+    LOGIN_RATE_LIMITS.perEmailWindowMs
+  );
+  if (!ipOk || !emailOk) {
+    return fail(req, json, "rate_limited", 429, email, next);
   }
 
   const cookieStore = await cookies();

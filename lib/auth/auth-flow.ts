@@ -6,6 +6,7 @@
  */
 import { createHash } from "node:crypto";
 import { resolveAppOrigin } from "../app-url";
+import { trustedClientIpFromHeaders } from "@/lib/security/client-ip";
 
 /** Email link types this app accepts. Signup confirmation / email_change are not used. */
 export const EMAIL_LINK_TYPES = ["invite", "recovery", "magiclink"] as const;
@@ -115,11 +116,7 @@ export function isSameOriginRequest(
 }
 
 export function clientIp(headers: Pick<Headers, "get">): string {
-  return (
-    headers.get("x-real-ip")?.trim() ||
-    headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
-    "unknown"
-  );
+  return trustedClientIpFromHeaders(headers) || "unknown";
 }
 
 export function rateKey(...parts: string[]): string {
