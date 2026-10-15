@@ -315,3 +315,95 @@ describe("release: web only, ONE authentication function, a different approver",
     expect((await getApprovalById(req.approvalId, ORG))?.status).toBe("pending");
   });
 });
+
+describe("org hold display uses the live pointer (same as MCP), fail-closed", () => {
+  test("org stop → readHoldForDisplay(org, null) is held (not none / stop-button state)", async () => {
+    process.env.ORG_HOLD_ENABLED = "true";
+    const r = await actions.startHold({ orgId: ORG, employeeId: null, actor: web(owner()) });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const d = await actions.readHoldForDisplay(ORG, null);
+    expect(d.state).toBe("held");
+    if (d.state !== "held") return;
+    expect(d.hold.id).toBe(r.holdId);
+    expect(d.hold.employeeId).toBe(null);
+    expect((await hold.checkOperable({ orgId: ORG, phase: "gateway" })).ok ? "ok" : "held").toBe("held");
+  });
+  test("employee stop does not make the org panel look held; both can be held at once (二重停止)", async () => {
+    process.env.ORG_HOLD_ENABLED = "true";
+    const emp = await actions.startHold({ orgId: ORG, employeeId: EMP, actor: web(owner()) });
+    expect(emp.ok).toBe(true);
+    expect((await actions.readHoldForDisplay(ORG, null)).state).toBe("none");
+    expect((await actions.readHoldForDisplay(ORG, EMP)).state).toBe("held");
+    const org = await actions.startHold({ orgId: ORG, employeeId: null, actor: web(owner()) });
+    expect(org.ok).toBe(true);
+    if (!org.ok || !emp.ok) return;
+    const orgD = await actions.readHoldForDisplay(ORG, null);
+    const empD = await actions.readHoldForDisplay(ORG, EMP);
+    expect(orgD.state === "held" && orgD.hold.id === org.holdId && orgD.hold.employeeId === null).toBe(true);
+    expect(empD.state === "held" && empD.hold.id === emp.holdId && empD.hold.employeeId === EMP).toBe(true);
+  });
+  test("history getOpenHold miss while orgs.hold_state is stopped → still held (the production fail-open)", async () => {
+    process.env.ORG_HOLD_ENABLED = "true";
+    const r = await actions.startHold({ orgId: ORG, employeeId: null, actor: web(owner()) });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const real = store.getHoldStore();
+    store.__setHoldStoreForTests({
+      ...real,
+      getOpenHold: async () => null,
+      getHold: async (o, id) => real.getHold(o, id),
+    });
+    try {
+      const d = await actions.readHoldForDisplay(ORG, null);
+      expect(d.state).toBe("held");
+      if (d.state !== "held") return;
+      expect(d.hold.id).toBe(r.holdId);
+    } finally {
+      store.__setHoldStoreForTests(null);
+    }
+  });
+  test("pointer held but history row unreadable → still held with that holdId (解除を申請 can fire)", async () => {
+    process.env.ORG_HOLD_ENABLED = "true";
+    const r = await actions.startHold({ orgId: ORG, employeeId: null, actor: web(owner()) });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const real = store.getHoldStore();
+    store.__setHoldStoreForTests({ ...real, getHold: async () => null, getOpenHold: async () => null });
+    try {
+      const d = await actions.readHoldForDisplay(ORG, null);
+      expect(d.state).toBe("held");
+      if (d.state !== "held") return;
+      expect(d.hold.id).toBe(r.holdId);
+    } finally {
+      store.__setHoldStoreForTests(null);
+    }
+  });
+  test("unreadable pointer → unknown, not none", async () => {
+    hold.__setHoldReaderForTests({
+      employee: async () => ({ state: "error", detail: "x" }),
+      org: async () => ({ state: "error", detail: "x" }),
+    });
+    try {
+      expect((await actions.readHoldForDisplay(ORG, null)).state).toBe("unknown");
+      expect((await actions.readHoldForDisplay(ORG, EMP)).state).toBe("unknown");
+    } finally {
+      hold.__setHoldReaderForTests(null);
+    }
+  });
+  test("org release still needs fresh login and a second person (rules not loosened)", async () => {
+    process.env.ORG_HOLD_ENABLED = "true";
+    const r = await actions.startHold({ orgId: ORG, employeeId: null, actor: web(owner()) });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const stale = new Date(Date.now() - 6 * 60_000).toISOString();
+    expect(await actions.requestHoldRelease({ orgId: ORG, holdId: r.holdId, reason: "誤停止", actor: web(owner(), stale) })).toMatchObject({ ok: false, code: "fresh_login_required" });
+    const req = await actions.requestHoldRelease({ orgId: ORG, holdId: r.holdId, reason: "誤停止", actor: web(owner()) });
+    expect(req.ok).toBe(true);
+    expect(await actions.approveHoldRelease({ orgId: ORG, holdId: r.holdId, actor: web(owner()) })).toMatchObject({ ok: false, code: "self_approval_denied" });
+    expect((await hold.checkOperable({ orgId: ORG, phase: "gateway" })).ok).toBe(false);
+    expect((await actions.approveHoldRelease({ orgId: ORG, holdId: r.holdId, actor: web(admin()) })).ok).toBe(true);
+    expect((await hold.checkOperable({ orgId: ORG, phase: "gateway" })).ok).toBe(true);
+  });
+});
+
