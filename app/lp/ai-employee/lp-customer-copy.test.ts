@@ -64,6 +64,13 @@ describe("LP customer copy: no Grok Bot; 推奨：Cursor", () => {
       expect(h).not.toMatch(/Grok\s*Bot/i);
       expect(h).toContain("推奨：Cursor");
       expect(h).not.toContain("ワンクリックで承認");
+      expect(h).toContain("Slackのボタンで承認・却下できます。");
+      expect(h).toContain("LINE／LINE WORKSは対応予定");
+      expect(h).not.toContain("LINEのボタンで承認");
+      expect(h).not.toContain("LINE・Slackではボタン");
+      expect(h).not.toContain("LINE・Slackのボタン");
+      expect(h).not.toContain("メール・LINE・Slackで承認");
+      expect(h).not.toContain("メール / LINE / Slack");
     }
     const metas = [originalMetadata, corpMetadata];
     for (const m of metas) {

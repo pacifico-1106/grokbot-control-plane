@@ -65,7 +65,7 @@ const PRICING_TIERS: PricingTier[] = [
       "AI社員証（Staffpass）",
       "会社メール連携",
       "AI実行環境（推奨：Cursor）",
-      "メール / LINE / Slack 承認",
+      "Slack／メール承認（LINE／LINE WORKSは対応予定）",
       "基本運用サポート",
       "ハンズオン導入支援",
     ],

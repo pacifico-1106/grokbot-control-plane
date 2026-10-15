@@ -59,7 +59,7 @@ const STEPS = [
     step: "03",
     title: "承認チャネル設定",
     description:
-      "LINE・Slackのボタン、またはメール通知から管理画面で承認できるよう設定します。",
+      "Slackのボタン、またはメール通知から管理画面で承認できるよう設定します。LINE／LINE WORKSは対応予定です。",
   },
   {
     step: "04",
@@ -88,7 +88,7 @@ const FAQ = [
   },
   {
     q: "承認はどうやって行うの？",
-    a: "LINE・Slackではボタンで承認・却下できます。メールは通知で、承認・却下は管理画面から行います。初期設定では、社外送信・日程確定・発注は人が見るまで進みません。",
+    a: "Slackはボタンで承認・却下できます。メールは通知で、承認・却下は管理画面から行います。LINE／LINE WORKSは対応予定です。初期設定では、社外送信・日程確定・発注は人が見るまで進みません。",
   },
   {
     q: "勝手にメールを送ったり、予定を入れたりしない？",
@@ -378,7 +378,7 @@ export function AIEmployeeLanding({ variant }: { variant: LpPage }) {
               </li>
               <li className="flex items-start gap-2">
                 <span className="text-[var(--ok)] mt-0.5">✓</span>
-                承認チャネル設定（メール / LINE / Slack）
+                承認チャネル設定（Slack／メール。LINE／LINE WORKSは対応予定）
               </li>
               <li className="flex items-start gap-2">
                 <span className="text-[var(--ok)] mt-0.5">✓</span>
@@ -439,7 +439,7 @@ export function AIEmployeeLanding({ variant }: { variant: LpPage }) {
           <div className="max-w-2xl mx-auto text-center">
             <span className="eyebrow">APPROVAL CHANNELS</span>
             <h2 className="mt-4 text-2xl sm:text-4xl font-bold tracking-[-0.045em] leading-tight">
-              メール・LINE・Slackで承認
+              Slack・メールで承認（LINE／LINE WORKSは対応予定）
             </h2>
             <p className="mt-6 text-base muted leading-relaxed">
               AI社員が社外送信・日程確定・発注などを行う前に、あなたに承認依頼が届きます。
@@ -483,9 +483,7 @@ export function AIEmployeeLanding({ variant }: { variant: LpPage }) {
               </div>
               <h3 className="mt-4 font-semibold">LINE承認</h3>
               <p className="mt-2 text-sm muted">
-                LINEのボタンで承認・却下できます。
-                <br />
-                外出先でもすぐ対応できます。
+                LINE／LINE WORKSは対応予定です。
               </p>
             </div>
             <div className="surface p-6 text-center">
