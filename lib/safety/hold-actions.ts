@@ -34,6 +34,7 @@ import {
   isOrgHoldEnabled,
 } from "@/lib/safety/hold-config";
 import { getHoldStore, HoldStoreError, type HoldRecord } from "@/lib/safety/hold-store";
+import { readLiveHold, type HoldKind } from "@/lib/safety/hold";
 import { verifyReleaseAuthentication } from "@/lib/safety/hold-release-auth";
 import { notifyHold } from "@/lib/safety/hold-notify";
 
@@ -330,14 +331,44 @@ export async function approveHoldRelease(input: {
   }
 }
 
-/** UI read: the open hold (if any) for an employee or the org. Fails closed to "unknown". */
+function stubHoldFromPointer(
+  orgId: string,
+  employeeId: string | null,
+  live: { holdId: string; kind: HoldKind },
+): HoldRecord {
+  return {
+    id: live.holdId,
+    orgId,
+    employeeId,
+    kind: live.kind,
+    reason: null,
+    startedBy: "member:00000000-0000-4000-8000-000000000000",
+    startedVia: "web",
+    startedAt: "",
+    trigger: null,
+    releaseRequestedBy: null,
+    releaseRequestedAt: null,
+    releaseReason: null,
+    releaseApprovalId: null,
+  };
+}
+
+/**
+ * UI read: same live pointer as MCP (orgs / employees hold_state + hold_id).
+ * employee_holds is only the detail row (releaseRequested). A miss there is
+ * still "held" so the panel can offer 解除を申請 — never "none" (fail-open).
+ * Unreadable pointer → "unknown".
+ */
 export async function readHoldForDisplay(orgId: string, employeeId: string | null): Promise<
   { state: "none" } | { state: "held"; hold: HoldRecord } | { state: "unknown" }
 > {
+  const live = await readLiveHold({ orgId, employeeId });
+  if (live.state !== "held") return live;
   try {
-    const hold = await getHoldStore().getOpenHold(orgId, employeeId);
-    return hold ? { state: "held", hold } : { state: "none" };
+    const hold = await getHoldStore().getHold(orgId, live.holdId);
+    if (hold) return { state: "held", hold };
   } catch {
-    return { state: "unknown" };
+    /* pointer is the source of truth; history is details only */
   }
+  return { state: "held", hold: stubHoldFromPointer(orgId, employeeId, live) };
 }
