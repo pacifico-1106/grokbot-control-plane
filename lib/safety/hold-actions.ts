@@ -79,6 +79,31 @@ function startedByOf(actor: HoldActor): string {
   return actor.type === "ops" ? `ops:${actor.opsId}` : `member:${actor.member.id}`;
 }
 
+/**
+ * /admin stop is ops_console only when the super-admin is NOT an active owner of
+ * the target org. An owner who reaches /admin via 「運営管理」(same Auth userId)
+ * must stamp a tenant web hold — otherwise /app hides 解除を申請 (opsHold) and
+ * requestHoldRelease raises ops_hold_ops_only, with no S4 UI to recover.
+ * Match Auth userId only (org_members.email is editable profile data).
+ * Lookup failure stays ops_console (fail-closed: do not silently tenant-stamp a
+ * true platform-ops stop).
+ */
+export async function actorForAdminStop(input: {
+  orgId: string;
+  opsEmail: string;
+  opsUserId: string;
+}): Promise<HoldActor> {
+  const ops: HoldActor = { type: "ops", opsId: input.opsEmail, surface: "ops_console" };
+  const userId = input.opsUserId.trim();
+  if (!userId) return ops;
+  const members = await listMembers(input.orgId).catch(() => []);
+  const owner = members.find((m) =>
+    m.orgId === input.orgId && m.role === "owner" && m.status === "active" && Boolean(m.userId) && m.userId === userId);
+  return owner
+    ? { type: "member", member: owner, surface: "web", authUserId: userId }
+    : ops;
+}
+
 function cleanReason(reason: unknown): string | null {
   const s = typeof reason === "string" ? Array.from(reason.trim()).slice(0, REASON_MAX).join("") : "";
   return s || null;
