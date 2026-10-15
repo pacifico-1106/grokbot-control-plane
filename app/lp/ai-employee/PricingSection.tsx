@@ -154,6 +154,16 @@ function calcAnnualTotal(monthly: number): number {
   return calcAnnualMonthly(monthly) * 12;
 }
 
+/** Upcoming voice option (2026-10-16). Not purchasable yet; LP copy only. */
+export const VOICE_OPTION_RATES = [
+  { id: "number", label: "電話番号（050）", amount: 1500, unit: "/月" },
+  { id: "inbound", label: "着信", amount: 25, unit: "/分" },
+  { id: "outbound-mobile", label: "発信（携帯電話）", amount: 70, unit: "/分" },
+  { id: "outbound-landline", label: "発信（固定電話）", amount: 40, unit: "/分" },
+] as const;
+
+export const VOICE_OPTION_STATUS = "提供予定（オプション、従量課金）";
+
 export function PricingSection({ lpPage = "ai-employee" }: { lpPage?: LpPage } = {}) {
   const [isAnnual, setIsAnnual] = useState(false);
 
@@ -376,6 +386,55 @@ export function PricingSection({ lpPage = "ai-employee" }: { lpPage?: LpPage } =
           ))}
         </div>
 
+        {/* Upcoming voice option — not a plan card; usage-based add-on */}
+        <div
+          id="voice-option"
+          data-testid="lp-voice-option"
+          className="mt-10 surface p-6 sm:p-8"
+        >
+          <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <h3 className="text-lg font-semibold">電話応対オプション</h3>
+                <span className="chip chip-warn text-[10px] px-3">
+                  {VOICE_OPTION_STATUS}
+                </span>
+              </div>
+              <p className="mt-3 text-sm muted leading-relaxed">
+                電話の受け答えは、担当者が出る、メールやチャットに回す、今お使いの電話サービスを続けるなど、いくつものやり方があります。そのひとつとして、AI社員が050の番号で応対するオプションを準備しています。プラン料金とは別の、使った分だけの従量課金です。
+              </p>
+            </div>
+          </div>
+          <div className="mt-6 grid sm:grid-cols-2 lg:grid-cols-4 gap-3">
+            {VOICE_OPTION_RATES.map((row) => (
+              <div
+                key={row.id}
+                className="rounded-xl border border-[var(--border-soft)] bg-[var(--bg)] px-4 py-3"
+              >
+                <p className="text-xs text-[var(--text-muted)]">{row.label}</p>
+                <p className="mt-1 flex items-baseline gap-1">
+                  <span className="text-xl font-bold">
+                    ¥{formatPrice(row.amount)}
+                  </span>
+                  <span className="text-xs muted">{row.unit}</span>
+                </p>
+                <p className="mt-1 text-[10px] faint">税別</p>
+              </div>
+            ))}
+          </div>
+          <div className="mt-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <p className="text-xs text-[var(--text-muted)] leading-relaxed">
+              まだ提供していません。お申し込みや課金は開始していません。電話の受け方ごとご相談ください。
+            </p>
+            <Link
+              href={withLpPageParam("/lp/ai-employee/consult", lpPage)}
+              className="btn btn-ghost justify-center text-xs shrink-0"
+            >
+              電話の受け方を相談する
+            </Link>
+          </div>
+        </div>
+
         {/* 業務カタログ Section */}
         <div className="mt-12 surface p-6 sm:p-8">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-6">
@@ -419,6 +478,9 @@ export function PricingSection({ lpPage = "ai-employee" }: { lpPage?: LpPage } =
           </p>
           <p className="text-sm faint">
             ※ 推奨：Cursor、LINE公式アカウント等の従量課金分は実費として別途かかります。
+          </p>
+          <p className="text-sm faint">
+            ※ 電話応対オプション（提供予定）はプラン料金とは別に、番号月額と通話分の従量課金です。担当者が出る・メールやチャットに回すなど、他の受け方と組み合わせできます。
           </p>
         </div>
       </div>
