@@ -1,4 +1,5 @@
 import type { AuditEvent } from "@/lib/types";
+import { opaqueAuditId } from "./mask";
 import type { AuditResultKind, AuditResultView } from "./types";
 
 export const AUDIT_RESULT_LABEL_JA: Record<AuditResultKind, string> = {
@@ -93,11 +94,13 @@ function reasonView(code: string | null, fallbackKind: AuditResultKind): AuditRe
   if (!code) return { kind: fallbackKind, reasonCode: null, reasonJa: null };
   const mapped = AUDIT_REASON_JA[code];
   if (mapped) return { kind: mapped.kind, reasonCode: code, reasonJa: mapped.ja };
-  if (code.startsWith("project_access")) {
+  const opaque = opaqueAuditId(code);
+  if (opaque && opaque.startsWith("project_access")) {
     const p = AUDIT_REASON_JA.project_access;
-    return { kind: p.kind, reasonCode: code, reasonJa: p.ja };
+    return { kind: p.kind, reasonCode: opaque, reasonJa: p.ja };
   }
-  return { kind: fallbackKind, reasonCode: code, reasonJa: `理由コード: ${code}` };
+  if (opaque) return { kind: fallbackKind, reasonCode: opaque, reasonJa: `理由コード: ${opaque}` };
+  return { kind: fallbackKind, reasonCode: null, reasonJa: "理由コード: 不明" };
 }
 
 function actionKind(action: string): AuditResultKind | null {

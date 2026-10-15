@@ -57,7 +57,7 @@ mock.module("@/lib/data", () => ({
     listCalls.push(orgId);
     return dirtyEvents;
   },
-  listEmployees: async () => [{ id: "emp_sales", displayName: "営業AI社員" }],
+  listEmployees: async () => [{ id: "emp_sales", displayName: "営業AI社員", orgId: ORG }],
 }));
 mock.module("@/components/AppShell", () => ({
   AppShell: ({ children }: { children: ReactNode }) => createElement("main", null, children),

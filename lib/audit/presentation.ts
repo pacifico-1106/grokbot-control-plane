@@ -1,7 +1,7 @@
 import { actorLabel } from "@/lib/employees/actor-label";
 import type { AuditEvent } from "@/lib/types";
 import { auditOperationLabelJa } from "./labels-ja";
-import { clipAuditText, maskEmail, sanitizeAuditDisplayText } from "./mask";
+import { clipAuditText, maskEmail, opaqueAuditId, sanitizeAuditDisplayText } from "./mask";
 import { classifyAuditResult } from "./result";
 import type {
   AuditActorView,
@@ -58,14 +58,20 @@ function prefixId(id: string | null): string | null {
   return id.length <= 8 ? id : id.slice(0, 8);
 }
 
+function safeMetaText(value: string | null): string | null {
+  if (!value) return null;
+  const cleaned = clipAuditText(sanitizeAuditDisplayText(value), 80);
+  return cleaned || null;
+}
+
 function presentSafeMeta(event: AuditEvent, meta: Record<string, unknown>): AuditSafeMeta {
-  const approvalId = asString(meta.approvalId) ?? asString(meta.approval_id);
+  const approvalId = opaqueAuditId(asString(meta.approvalId) ?? asString(meta.approval_id));
   return {
-    purpose: event.purpose ? sanitizeAuditDisplayText(event.purpose) : asString(meta.purpose),
-    jobId: asString(meta.jobId) ?? asString(meta.job_id),
-    risk: asString(meta.risk),
-    informationClass: asString(meta.informationClass) ?? asString(meta.information_class),
-    audience: asString(meta.audience),
+    purpose: safeMetaText(event.purpose) ?? safeMetaText(asString(meta.purpose)),
+    jobId: opaqueAuditId(asString(meta.jobId) ?? asString(meta.job_id)),
+    risk: opaqueAuditId(asString(meta.risk)),
+    informationClass: opaqueAuditId(asString(meta.informationClass) ?? asString(meta.information_class)),
+    audience: safeMetaText(asString(meta.audience)),
     approvalIdPrefix: prefixId(approvalId),
   };
 }
@@ -77,9 +83,9 @@ function presentActor(event: AuditEvent, lookups: AuditPresentationLookups): Aud
     const labeled = actorLabel(emp, employeeId);
     return {
       kind: "ai",
-      name: labeled.name,
+      name: sanitizeAuditDisplayText(labeled.name) || "不明",
       emailMasked: null,
-      employeeId,
+      employeeId: opaqueAuditId(employeeId),
     };
   }
   const stored = event.actorEmail ?? asString(metaRecord(event).actorEmail);
@@ -92,10 +98,9 @@ function presentActor(event: AuditEvent, lookups: AuditPresentationLookups): Aud
 }
 
 function presentApprovalPlaceholder(meta: Record<string, unknown>): AuditApprovalView {
-  const approvalId = asString(meta.approvalId) ?? asString(meta.approval_id);
   return {
     needed: null,
-    approvalId,
+    approvalId: opaqueAuditId(asString(meta.approvalId) ?? asString(meta.approval_id)),
     status: "unknown",
     approverName: null,
     approverEmailMasked: null,
@@ -139,5 +144,8 @@ export function presentAuditRows(
   events: AuditEvent[],
   lookups: AuditPresentationLookups = {}
 ): AuditRowView[] {
-  return events.map((event) => presentAuditRow(event, lookups));
+  const orgId = lookups.orgId;
+  return events
+    .filter((event) => !orgId || event.orgId === orgId)
+    .map((event) => presentAuditRow(event, lookups));
 }

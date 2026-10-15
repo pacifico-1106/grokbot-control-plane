@@ -15,6 +15,20 @@ describe("classifyAuditResult", () => {
     expect(r.reasonJa).not.toContain("payload");
   });
 
+  test("free-text metadata.reason is not dumped into the view", () => {
+    const r = classifyAuditResult({
+      action: "tool.invoke",
+      metadata: {
+        reason: "sent to alice@example.com pollPath=/api/approvals/status?id=x&token=SECRETTOKEN",
+      },
+    });
+    expect(r.reasonJa).toBe("理由コード: 不明");
+    expect(r.reasonCode).toBeNull();
+    expect(JSON.stringify(r)).not.toContain("alice@example.com");
+    expect(JSON.stringify(r)).not.toContain("SECRETTOKEN");
+    expect(JSON.stringify(r)).not.toContain("pollPath");
+  });
+
   test("auto invoke without code is success; old rows stay unknown", () => {
     expect(classifyAuditResult({ action: "tool.invoke", metadata: { auto: true } }).kind).toBe("success");
     expect(classifyAuditResult({ action: "employee.created", metadata: {} }).kind).toBe("unknown");

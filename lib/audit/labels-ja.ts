@@ -3,6 +3,7 @@ import type { AuditAction } from "@/lib/types";
 import type { GatewayToolId } from "@/lib/gateway/tools";
 import { GATEWAY_TOOL_DEFS } from "@/lib/gateway/tools";
 import { ADMIN_TOOL_TITLE_JA } from "@/lib/admin-mcp/queue";
+import { opaqueAuditId } from "./mask";
 
 /** Short audit labels (owner-facing). Gateway card labelJa is fallback only. */
 export const GATEWAY_AUDIT_LABELS_JA: Record<GatewayToolId, string> = {
@@ -315,7 +316,8 @@ function isLineSurface(surface: string | null | undefined): boolean {
 }
 
 export function unknownOperationLabelJa(id: string): string {
-  return `その他の操作（${id}）`;
+  const opaque = opaqueAuditId(id);
+  return opaque ? `その他の操作（${opaque}）` : "その他の操作";
 }
 
 export function lookupAuditLabelJa(id: string): string | null {
@@ -335,23 +337,24 @@ export function auditOperationLabelJa(input: {
 }): { id: string; labelJa: string } {
   const tool = String(input.tool ?? "").trim();
   const action = String(input.action ?? "").trim();
-  const id = tool || action || "unknown";
+  const rawId = tool || action || "unknown";
+  const id = opaqueAuditId(rawId) ?? "unknown";
 
-  if (isLineSurface(input.surface) && SLACK_MESSAGE_IDS.has(id)) {
-    return { id, labelJa: "LINEにメッセージを送信" };
+  if (isLineSurface(input.surface) && SLACK_MESSAGE_IDS.has(rawId)) {
+    return { id: opaqueAuditId(rawId) ?? id, labelJa: "LINEにメッセージを送信" };
   }
 
-  const fromId = lookupAuditLabelJa(id);
-  if (fromId) return { id, labelJa: fromId };
+  const fromId = lookupAuditLabelJa(rawId);
+  if (fromId) return { id: opaqueAuditId(rawId) ?? id, labelJa: fromId };
 
   if (!tool && action === "tool.invoke") {
-    return { id: action, labelJa: AUDIT_ACTION_LABELS_JA["tool.invoke"] };
+    return { id: "tool.invoke", labelJa: AUDIT_ACTION_LABELS_JA["tool.invoke"] };
   }
 
-  const fromAction = action && action !== id ? lookupAuditLabelJa(action) : null;
-  if (fromAction) return { id, labelJa: fromAction };
+  const fromAction = action && action !== rawId ? lookupAuditLabelJa(action) : null;
+  if (fromAction && opaqueAuditId(rawId)) return { id: opaqueAuditId(rawId) ?? id, labelJa: fromAction };
 
-  return { id, labelJa: unknownOperationLabelJa(id) };
+  return { id, labelJa: unknownOperationLabelJa(rawId) };
 }
 
 /** Exported for coverage tests. */

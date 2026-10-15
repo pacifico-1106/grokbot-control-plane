@@ -67,4 +67,15 @@ describe("audit Japanese labels", () => {
     expect(id).toBe("mail.send");
     expect(labelJa).not.toBe("tool.invoke");
   });
+
+  test("does not interpolate emails or tokens into unknown-operation labels", () => {
+    const view = auditOperationLabelJa({
+      action: "tool.invoke",
+      tool: "alice@example.com /api/approvals/status?token=SECRETTOKEN",
+    });
+    expect(view.id).toBe("unknown");
+    expect(view.labelJa).toBe("その他の操作");
+    expect(JSON.stringify(view)).not.toContain("alice@example.com");
+    expect(JSON.stringify(view)).not.toContain("SECRETTOKEN");
+  });
 });

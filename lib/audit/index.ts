@@ -19,6 +19,7 @@ export {
   extractEmail,
   maskEmail,
   maskEmailsInText,
+  opaqueAuditId,
   sanitizeAuditDisplayText,
 } from "./mask";
 export {

@@ -42,8 +42,15 @@ export default async function AuditPage() {
     listAuditEvents(orgId),
     listEmployees(orgId),
   ]);
-  const employeesById = new Map(employees.map((e) => [e.id, { displayName: e.displayName }]));
-  const rows = presentAuditRows(events, { orgId, employeesById });
+  const employeesById = new Map(
+    employees
+      .filter((e) => !e.orgId || e.orgId === orgId)
+      .map((e) => [e.id, { displayName: e.displayName }])
+  );
+  const rows = presentAuditRows(
+    events.filter((event) => event.orgId === orgId),
+    { orgId, employeesById }
+  );
 
   return (
     <AppShell

@@ -4,6 +4,15 @@ const EMAIL_RE = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g;
 const POLL_PATH_RE = /\/api\/approvals\/status\?[^\s"'<>]*/gi;
 const TOKENISH_RE = /\b(?:statusToken|pollPath|pollUrl|poll_path|status_token)[=:]\s*[^\s"'<>]+/gi;
 
+/** Fail-closed: only echo identifiers that cannot carry email / token / path payloads. */
+export const OPAQUE_AUDIT_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/;
+
+export function opaqueAuditId(raw: string | null | undefined): string | null {
+  const t = String(raw ?? "").trim();
+  if (!OPAQUE_AUDIT_ID_RE.test(t)) return null;
+  return t;
+}
+
 export function isEmailLike(value: string): boolean {
   const t = value.trim();
   return /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/.test(t);

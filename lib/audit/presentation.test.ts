@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { mapAuditRow } from "@/lib/data/mappers";
 import type { AuditEvent } from "@/lib/types";
-import { presentAuditRow } from "./presentation";
+import { presentAuditRow, presentAuditRows } from "./presentation";
 
 const ORG = "org_a";
 
@@ -120,6 +120,39 @@ describe("presentAuditRow", () => {
     expect(view.actor.kind).toBe("system");
     expect(view.actor.name).toBe("不明");
     expect(view.actor.emailMasked).toBe("o***@example.com");
+  });
+
+  test("drops other-org events and does not copy unsafe safeMeta", () => {
+    const foreign = presentAuditRows(
+      [
+        event({
+          id: "aud_foreign",
+          orgId: "org_b",
+          action: "tool.invoke",
+          summary: "leaked",
+        }),
+        event({
+          id: "aud_own",
+          purpose: "alice@example.com",
+          action: "tool.invoke",
+          summary: "ok",
+          metadata: {
+            jobId: "/api/approvals/status?token=SECRETTOKEN",
+            audience: "bob@example.com",
+            approvalId: "not a token but spaces fail",
+          },
+        }),
+      ],
+      { orgId: ORG }
+    );
+    expect(foreign.map((row) => row.id)).toEqual(["aud_own"]);
+    expect(foreign[0].safeMeta.purpose).toBe("a***@example.com");
+    expect(foreign[0].safeMeta.jobId).toBeNull();
+    expect(foreign[0].safeMeta.audience).toBe("b***@example.com");
+    expect(foreign[0].safeMeta.approvalIdPrefix).toBeNull();
+    expect(JSON.stringify(foreign)).not.toContain("SECRETTOKEN");
+    expect(JSON.stringify(foreign)).not.toContain("alice@example.com");
+    expect(JSON.stringify(foreign)).not.toContain("bob@example.com");
   });
 
   test("mapAuditRow keeps actor_email for later masking", () => {

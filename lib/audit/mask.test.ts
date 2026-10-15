@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { clipAuditText, extractEmail, maskEmail, sanitizeAuditDisplayText } from "./mask";
+import { clipAuditText, extractEmail, maskEmail, opaqueAuditId, sanitizeAuditDisplayText } from "./mask";
 
 describe("audit email mask", () => {
   test("masks local part and keeps domain", () => {
@@ -28,5 +28,13 @@ describe("audit email mask", () => {
   test("clips with ellipsis", () => {
     expect(clipAuditText("short", 80)).toBe("short");
     expect(clipAuditText("abcdefghij", 8)).toBe("abcdefg…");
+  });
+
+  test("opaqueAuditId rejects emails, paths, and free text", () => {
+    expect(opaqueAuditId("brand_new_code")).toBe("brand_new_code");
+    expect(opaqueAuditId("apr_deadbeef")).toBe("apr_deadbeef");
+    expect(opaqueAuditId("alice@example.com")).toBeNull();
+    expect(opaqueAuditId("/api/approvals/status?id=x&token=SECRET")).toBeNull();
+    expect(opaqueAuditId("sent to alice with token SECRET")).toBeNull();
   });
 });
