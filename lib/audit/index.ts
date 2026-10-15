@@ -29,3 +29,6 @@ export {
   presentAuditRow,
   presentAuditRows,
 } from "./presentation";
+export { resolveAuditActor } from "./actor";
+export { indexApprovalsForOrg, resolveAuditApproval } from "./approval";
+export { loadAuditPresentationLookups } from "./lookups";

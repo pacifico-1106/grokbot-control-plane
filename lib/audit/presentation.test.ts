@@ -47,7 +47,7 @@ describe("presentAuditRow", () => {
     expect(view.actor.kind).toBe("ai");
     expect(view.actor.name).toBe("営業AI社員");
     expect(view.result.kind).toBe("success");
-    expect(view.approval.status).toBe("unknown");
+    expect(view.approval).toMatchObject({ needed: false, status: "none" });
     expect(view.target.labelJa).toBe("—");
     const blob = leaked(view);
     expect(blob).not.toContain("pollPath");
@@ -108,18 +108,34 @@ describe("presentAuditRow", () => {
     expect(leaked(view)).not.toContain("/api/approvals/status");
   });
 
-  test("system row without employee stays 不明 (actor join is PR-2)", () => {
-    const view = presentAuditRow(
+  test("human actor uses member name + masked email; system when both missing", () => {
+    const human = presentAuditRow(
       event({
         employeeId: null,
         actorEmail: "owner@example.com",
         action: "member.updated",
         summary: "メンバーを更新",
+      }),
+      {
+        membersByEmail: new Map([
+          ["owner@example.com", { displayName: "山田 太郎", email: "owner@example.com" }],
+        ]),
+      }
+    );
+    expect(human.actor).toMatchObject({
+      kind: "human",
+      name: "山田 太郎",
+      emailMasked: "o***@example.com",
+    });
+    const system = presentAuditRow(
+      event({
+        employeeId: null,
+        actorEmail: null,
+        action: "gateway.link_changed",
+        summary: "連携を変更",
       })
     );
-    expect(view.actor.kind).toBe("system");
-    expect(view.actor.name).toBe("不明");
-    expect(view.actor.emailMasked).toBe("o***@example.com");
+    expect(system.actor).toMatchObject({ kind: "system", name: "システム", emailMasked: null });
   });
 
   test("drops other-org events and does not copy unsafe safeMeta", () => {
