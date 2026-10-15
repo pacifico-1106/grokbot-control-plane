@@ -54,6 +54,7 @@
 | 営業・セキュリティ FAQ | [internal-share/04-sales-security-faq.md](./internal-share/04-sales-security-faq.md) |
 | Staffpass でセキュリティ説明がどう変わるか | [internal-share/05-staffpass-changes-security-story.md](./internal-share/05-staffpass-changes-security-story.md) |
 | 提案資料パック（PDF / HTML / MD） | [sales-pack/](./sales-pack/) |
+| リード獲得2週間計画（2026-10-16〜10-30） | [sales/staffpass-leadgen-plan-20261015.md](./sales/staffpass-leadgen-plan-20261015.md) |
 | LP・UI コピー一覧 | [copy.md](./copy.md) |
 
 ---
