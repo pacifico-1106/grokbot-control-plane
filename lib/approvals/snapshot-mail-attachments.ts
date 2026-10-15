@@ -7,6 +7,16 @@
  * key (redacted from every public view). Send-time decrypt + hash must match
  * or the send is denied (mail_attachment_hash_mismatch).
  *
+ * Production stores these on approval_requests.metadata.invoke.mailAttachments
+ * (migration 20261015100000 is optional). Snapshot args never include the
+ * original Base64 — only the sealed field. A 690 KiB PDF is ~920 KiB as
+ * Base64 on the wire and ~920 KiB as `b1.` ciphertext in metadata (AES-GCM
+ * ciphertext is the same length as plaintext, then base64url). Postgres
+ * jsonb TOAST handles that. The 15 MiB total cap would be ~20 MiB of
+ * ciphertext in one row — still under the 1 GiB jsonb limit, but large for
+ * PostgREST/API payloads; the unused table is for that later. The 690 KiB
+ * immediate-use PDF is not too large for metadata.
+ *
  * Never stored in plaintext: file body, Base64, fileRef URL / query.
  * Logging must not include contents or ciphertext.
  */

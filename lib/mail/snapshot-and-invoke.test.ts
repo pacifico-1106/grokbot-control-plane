@@ -102,6 +102,31 @@ describe("mail.send invoke attachments + threading", () => {
     expect(result.body.code).toBe("mail_send_demoted_to_draft");
   });
 
+  test("fileRef is 400 mail_attachment_source_denied (no fetch)", async () => {
+    const result = await withNeedsApproval(() =>
+      runGatewayInvoke({
+        employeeId: "emp_sales",
+        credentialId: "cred_sales",
+        body: {
+          tool: "mail.send",
+          purpose: "sales.outreach",
+          jobId: `job_ssrf_${Date.now()}`,
+          args: pdfArgs({
+            attachments: [
+              {
+                filename: "Staffpass_サービス概要.pdf",
+                mimeType: "application/pdf",
+                fileRef: "https://127.0.0.1/Staffpass.pdf",
+              },
+            ],
+          }),
+        },
+      })
+    );
+    expect(result.httpStatus).toBe(400);
+    expect(result.body.code).toBe("mail_attachment_source_denied");
+  });
+
   test("CRLF in inReplyTo is 400 mail_header_invalid", async () => {
     const result = await withNeedsApproval(() =>
       runGatewayInvoke({
@@ -154,8 +179,18 @@ describe("mail.send invoke attachments + threading", () => {
     expect(fulfillment?.delivery).toBe("stub");
     expect(parseFulfillment(approved && (await getApprovalById(approvalId, DEMO_ORG.id))?.metadata)?.ok).toBe(true);
 
-    const snap = parseInvokeSnapshot((await getApprovalById(approvalId, DEMO_ORG.id))!.metadata);
+    const storedAfter = await getApprovalById(approvalId, DEMO_ORG.id);
+    const snap = parseInvokeSnapshot(storedAfter!.metadata);
     expect(snap?.mailAttachments?.[0]?.contentSha256).toHaveLength(64);
+    expect(snap?.mailAttachments?.[0]?.contentCiphertext?.startsWith("b1.")).toBe(true);
+    // Production stores sealed bytes in metadata (migration not required).
+    // Snapshot args must not also keep the original Base64.
+    expect(snap?.args).not.toHaveProperty("content");
+    expect(JSON.stringify(snap?.args ?? {})).not.toContain("contentCiphertext");
+    expect(JSON.stringify(snap?.args ?? {})).not.toMatch(/JVBERi/); // PDF Base64 prefix
+    const metaJson = JSON.stringify(storedAfter!.metadata);
+    expect(metaJson).toContain("contentCiphertext");
+    expect(metaJson).not.toMatch(/"content":"[A-Za-z0-9+/]{80,}/);
   });
 
   test("secret in a txt attachment is blocked before approval", async () => {
@@ -180,14 +215,25 @@ describe("mail.send invoke attachments + threading", () => {
 });
 
 describe("staffpass_invoke schema", () => {
-  test("documents attachments[] reusing the fileAttachment shape plus content", () => {
+  test("mail attachments are Base64 content only (no fileRef)", () => {
     const invoke = STAFFPASS_MCP_TOOLS.find((t) => t.name === "staffpass_invoke");
     const props = invoke!.inputSchema.properties as Record<string, { type?: string; items?: { properties?: Record<string, unknown>; required?: string[] } }>;
     expect(props.attachments?.type).toBe("array");
-    expect(props.attachments?.items?.required).toEqual(["filename"]);
+    expect(props.attachments?.items?.required).toEqual(["filename", "content"]);
     expect(props.attachments?.items?.properties?.content).toBeDefined();
-    expect(props.attachments?.items?.properties?.fileRef).toBeDefined();
+    expect(props.attachments?.items?.properties?.fileRef).toBeUndefined();
     expect((props.fileAttachment as { required: string[] }).required).toEqual(["fileRef", "filename"]);
+  });
+});
+
+describe("metadata sealed size", () => {
+  test("a 690KB body seals to about 920KB of b1. ciphertext (fits jsonb)", () => {
+    const raw = Buffer.alloc(690_000, 0x61);
+    const sealed = encryptBytes(raw);
+    expect(sealed.startsWith("b1.")).toBe(true);
+    // AES-GCM ciphertext length == plaintext; base64url is 4/3.
+    expect(sealed.length).toBeGreaterThan(900_000);
+    expect(sealed.length).toBeLessThan(1_000_000);
   });
 });
 

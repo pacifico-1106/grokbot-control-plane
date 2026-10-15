@@ -79,16 +79,24 @@ describe("resolveMailAttachments", () => {
     if (!r.ok) expect(r.code).toBe("mail_attachment_magic_mismatch");
   });
 
-  test("rejects both content and fileRef", async () => {
+  test("rejects fileRef even with content (no HTTPS fetch / SSRF)", async () => {
     const r = await resolveMailAttachments([
       {
         filename: "x.pdf",
         content: minimalPdf().toString("base64"),
-        fileRef: "https://example.com/x.pdf",
+        fileRef: "https://127.0.0.1/x.pdf",
       },
     ]);
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.code).toBe("mail_attachment_source_ambiguous");
+    if (!r.ok) expect(r.code).toBe("mail_attachment_source_denied");
+  });
+
+  test("rejects fileRef-only including loopback HTTPS (no fetch)", async () => {
+    const r = await resolveMailAttachments([
+      { filename: "x.pdf", fileRef: "https://127.0.0.1/etc/passwd" },
+    ]);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.code).toBe("mail_attachment_source_denied");
   });
 
   test("rejects a local file path as fileRef", async () => {

@@ -1,15 +1,14 @@
 /**
  * mail.send attachment validation (fail-closed).
  *
- * Input shape reuses Gateway `fileAttachment` plus optional base64 `content`
- * (either `fileRef` HTTPS URL XOR `content` / `contentBase64`). Slack's
- * top-level `fileAttachment` is unchanged.
+ * Input: filename + Base64 `content` / `contentBase64` only. `fileRef`
+ * (HTTPS fetch) is rejected in this PR because of SSRF; Slack's top-level
+ * `fileAttachment.fileRef` is unchanged and is not used for mail.send.
  *
  * Limits: 3 files, 10 MiB each, 15 MiB total. Allowlisted MIME + extension
  * with a magic-byte check. Filenames are sanitized (no path / controls).
  */
 import { createHash } from "node:crypto";
-import { downloadPublicFile } from "@/lib/security/public-file-download";
 import { zipHasEntry } from "@/lib/mail/zip-peek";
 
 export const MAIL_ATTACHMENT_MAX_FILES = 3;
@@ -48,13 +47,17 @@ export type MailAttachmentKind =
   | "pptx";
 
 export type MailAttachmentInput = {
-  fileRef?: string;
   filename: string;
   mimeType?: string;
   bytes?: number;
-  /** Base64 file body (preferred for mail.send; never logged). */
+  /** Base64 file body (required for mail.send; never logged). */
   content?: string;
   contentBase64?: string;
+  /**
+   * Rejected for mail.send in this PR (SSRF). Accepted later only with
+   * dedicated SSRF guards. Slack comm.reply still uses top-level fileRef.
+   */
+  fileRef?: string;
 };
 
 export type ResolvedMailAttachment = {
@@ -64,7 +67,7 @@ export type ResolvedMailAttachment = {
   bytes: number;
   contentSha256: string;
   buffer: Buffer;
-  source: "content" | "fileRef";
+  source: "content";
 };
 
 export type MailAttachmentError = {
@@ -211,7 +214,7 @@ function decodeBase64(raw: string): { ok: true; buffer: Buffer } | MailAttachmen
 }
 
 async function loadBytes(input: MailAttachmentInput): Promise<
-  { ok: true; buffer: Buffer; source: "content" | "fileRef" } | MailAttachmentError
+  { ok: true; buffer: Buffer; source: "content" } | MailAttachmentError
 > {
   const content =
     typeof input.content === "string" ? input.content :
@@ -219,33 +222,19 @@ async function loadBytes(input: MailAttachmentInput): Promise<
     undefined;
   const fileRef = typeof input.fileRef === "string" ? input.fileRef.trim() : "";
   const hasContent = typeof content === "string" && content.trim().length > 0;
-  if (hasContent && fileRef) {
-    return fail("mail_attachment_source_ambiguous", "添付は content（Base64）か fileRef のどちらか一方だけを指定してください。");
+  // SSRF: never fetch. fileRef is refused even when content is also present.
+  if (fileRef) {
+    return fail(
+      "mail_attachment_source_denied",
+      "mail.send の添付は Base64 の content のみです。fileRef（URL 取得）は受け付けません。"
+    );
   }
-  if (hasContent) {
-    const decoded = decodeBase64(content!);
-    if (!decoded.ok) return decoded;
-    return { ok: true, buffer: decoded.buffer, source: "content" };
+  if (!hasContent) {
+    return fail("mail_attachment_source_required", "添付には Base64 の content が必要です。");
   }
-  if (!fileRef) {
-    return fail("mail_attachment_source_required", "添付には Base64 の content か HTTPS の fileRef が必要です。");
-  }
-  if (!/^https:\/\//i.test(fileRef) || /[\u0000-\u001f\u007f]/.test(fileRef)) {
-    return fail("mail_attachment_source_denied", "fileRef は HTTPS URL のみ受け付けます。");
-  }
-  try {
-    const buffer = await downloadPublicFile(fileRef);
-    return { ok: true, buffer, source: "fileRef" };
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : "";
-    if (msg === "file_destination_denied" || msg === "file_redirect_denied") {
-      return fail("mail_attachment_source_denied", "fileRef の取得先は許可されていません。");
-    }
-    if (msg === "file_too_large") {
-      return fail("mail_attachment_too_large", `添付は 1 ファイルあたり最大 ${MAIL_ATTACHMENT_MAX_BYTES} バイトです。`);
-    }
-    return fail("mail_attachment_fetch_failed", "添付ファイルを取得できませんでした。");
-  }
+  const decoded = decodeBase64(content!);
+  if (!decoded.ok) return decoded;
+  return { ok: true, buffer: decoded.buffer, source: "content" };
 }
 
 function parseOneInput(raw: unknown, index: number): { ok: true; input: MailAttachmentInput } | MailAttachmentError {
@@ -290,8 +279,9 @@ export async function resolveMailAttachments(
     return Boolean(content || fileRef);
   };
   // Legacy mail policy flag: `attachments: [{ name, size }]` means "has
-  // attachments" without bytes. Only objects that carry content/fileRef are
-  // loaded and sealed. Mixing flag-only rows with real files is refused.
+  // attachments" without bytes. Only objects that carry content (or a
+  // rejected fileRef, which must fail closed rather than look like a flag)
+  // are loaded. Mixing flag-only rows with real files is refused.
   if (!parsedItems.some(hasSource)) {
     return { ok: true, attachments: [] };
   }

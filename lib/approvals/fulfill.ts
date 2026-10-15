@@ -819,11 +819,15 @@ async function fulfillSnsPublish(
 
 /**
  * mail.send fulfill-on-approve.
- * Attachment bytes are decrypted and hashed against the approval snapshot;
- * a mismatch is denied (nothing is sent). Live provider send is still a stub
- * (draft_only / external defaults unchanged). When threading is present the
- * Gmail envelope (In-Reply-To / References / threadId) is recorded without
- * contents.
+ *
+ * Production delivery today: **nothing leaves the system**. There is no Gmail
+ * API client, no AgentMail SDK, and Resend is reserved for Staffpass
+ * transactional notify (welcome / approval / billing) — not AI employee mail.
+ * Google OAuth scopes are calendar.freebusy only (no gmail.send).
+ * agentmail.send is 501 tool_reserved (P0.5). This function decrypts and
+ * hash-checks the approved attachment bytes, records the Gmail envelope
+ * (In-Reply-To / References / threadId + RFC 2231 filename*) on metadata,
+ * and returns delivery: "stub". draft_only / external defaults unchanged.
  */
 async function fulfillMailSend(
   approval: ApprovalRequest,
@@ -1062,7 +1066,7 @@ async function fulfillApprovedInvokeCore(
       return fulfillment;
     }
 
-    // mail.send: honest stub fulfillment (live send not yet implemented)
+    // mail.send: no live provider in production (see fulfillMailSend).
     if (isMailSendTool(snapshot.tool || approval.tool || "")) {
       return fulfillMailSend(approval, snapshot);
     }

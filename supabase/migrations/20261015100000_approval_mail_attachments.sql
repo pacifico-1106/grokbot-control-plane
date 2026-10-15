@@ -1,11 +1,12 @@
 -- mail.send approved attachment bytes (2026-10-15).
--- Additive. Do NOT apply from this PR automatically; keep idempotent.
+-- OPTIONAL. Additive and idempotent. Do NOT apply from this PR.
+-- Production works without this table: sealed ciphertext lives on
+-- approval_requests.metadata.invoke.mailAttachments (a 690 KiB PDF is
+-- ~920 KiB as b1. ciphertext; jsonb TOAST is enough for that case).
+-- Apply later only if metadata size becomes a problem (15 MiB total ≈ 20 MiB
+-- ciphertext) or to isolate bytes from the approval row.
 -- Stores sealed ciphertext + content SHA-256 only (no plaintext, no Base64
--- of the original). Used so fulfill sends exactly the approved bytes.
---
--- approval_requests.metadata.invoke.mailAttachments still holds display
--- fields + ciphertext for demo / when this table is absent. Production
--- should prefer this table (tenant-isolated, RLS deny-all, service_role).
+-- of the original). RLS deny-all, service_role only.
 --
 -- Retention: rows cascade with the approval. No SELECT for anon/authenticated.
 begin;

@@ -19,6 +19,9 @@ describe("approval_mail_attachments SQL contract (not applied)", () => {
     expect(SQL).toContain("content_ciphertext");
     expect(SQL).toContain("org_id uuid not null");
     expect(SQL).toContain("on delete cascade");
+    expect(SQL).toContain("OPTIONAL");
+    expect(SQL).toContain("Do NOT apply from this PR");
+    expect(SQL).toContain("Production works without this table");
     expect(SQL).not.toMatch(/grant\s+.*\s+to\s+anon/i);
     expect(SQL).not.toMatch(/grant\s+.*\s+to\s+authenticated/i);
   });

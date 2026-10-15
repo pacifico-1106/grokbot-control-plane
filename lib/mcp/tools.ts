@@ -207,18 +207,17 @@ export const STAFFPASS_MCP_TOOLS: McpToolDef[] = [
         attachments: {
           type: "array",
           description:
-            "Optional mail.send attachments (max 3). Reuses the fileAttachment shape: filename plus either content (Base64) or fileRef (HTTPS URL), not both. Allowlisted pdf/png/jpg/txt/csv/docx/xlsx/pptx, 10MB/file, 15MB total. Prefer payload.attachments; this top-level field is copied into payload when payload.attachments is absent. Threading (inReplyTo / references / threadId or gmailThreadId) lives in payload.",
+            "Optional mail.send attachments (max 3). filename + content (Base64) only — fileRef / HTTPS fetch is rejected (SSRF). Allowlisted pdf/png/jpg/txt/csv/docx/xlsx/pptx, 10MB/file, 15MB total. Prefer payload.attachments; this top-level field is copied into payload when payload.attachments is absent. Threading (inReplyTo / references / threadId or gmailThreadId) lives in payload.",
           items: {
             type: "object",
             properties: {
-              fileRef: { type: "string", description: "HTTPS URL of the file (alternative to content)." },
               filename: { type: "string", description: "Filename with extension (e.g. Staffpass_サービス概要.pdf)." },
               mimeType: { type: "string", description: "IANA MIME type (e.g. application/pdf)." },
               bytes: { type: "number", description: "Size in bytes; must match decoded content when set." },
-              content: { type: "string", description: "Base64 file body (preferred for mail.send)." },
+              content: { type: "string", description: "Base64 file body (required for mail.send)." },
               contentBase64: { type: "string", description: "Alias of content." },
             },
-            required: ["filename"],
+            required: ["filename", "content"],
             additionalProperties: false,
           },
         },
@@ -606,14 +605,18 @@ export async function callStaffpassMcpTool(
           payload.attachments = args.attachments;
         } else {
           const single = resolveFileAttachment(args, payload);
-          if (single) {
+          const content =
+            single && "content" in single && typeof single.content === "string"
+              ? single.content
+              : "";
+          // mail.send: Base64 only. Do not copy Slack fileRef (SSRF).
+          if (single && content.trim()) {
             payload.attachments = [
               {
-                fileRef: single.fileRef,
                 filename: single.filename,
                 mimeType: single.mimeType,
                 bytes: single.bytes,
-                ...("content" in single && single.content ? { content: single.content } : {}),
+                content,
               },
             ];
           }
