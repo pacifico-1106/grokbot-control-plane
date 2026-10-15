@@ -1,6 +1,11 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { getAppOrigin } from "@/lib/approvals/tokens";
-import { GOOGLE_CALENDAR_SCOPES } from "./scopes";
+import {
+  GOOGLE_CALENDAR_SCOPES,
+  GOOGLE_GMAIL_SEND_SCOPES,
+  parseGoogleOAuthIntent,
+  type GoogleOAuthIntent,
+} from "./scopes";
 
 export const GOOGLE_OAUTH_COOKIE = "staffpass_google_oauth";
 export const GOOGLE_PKCE_COOKIE = "staffpass_google_pkce";
@@ -46,6 +51,11 @@ export type GoogleOAuthState = {
    * The callback completes only for that same member's current session.
    */
   actorMemberId?: string;
+  /**
+   * Which consent this start asked for. Missing (legacy calendar cookies)
+   * is treated as calendar so the existing flow stays valid.
+   */
+  intent?: GoogleOAuthIntent;
 };
 
 /**
@@ -76,13 +86,16 @@ export function signGoogleOAuthState(input: {
   employeeId: string;
   nonce: string;
   actorMemberId?: string;
+  intent?: GoogleOAuthIntent;
 }): string {
+  const intent = parseGoogleOAuthIntent(input.intent);
   const payload: GoogleOAuthState = {
     orgId: input.orgId,
     employeeId: input.employeeId,
     nonce: input.nonce,
     exp: Date.now() + STATE_TTL_MS,
     ...(input.actorMemberId ? { actorMemberId: input.actorMemberId } : {}),
+    ...(intent === "gmail.send" ? { intent } : {}),
   };
   const encoded = Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
   const secret = signingSecret();
@@ -122,6 +135,10 @@ export function verifyGoogleOAuthState(
     ) {
       return null;
     }
+    if (parsed.intent !== undefined && parsed.intent !== "calendar" && parsed.intent !== "gmail.send") {
+      return null;
+    }
+    parsed.intent = parseGoogleOAuthIntent(parsed.intent);
     return parsed;
   } catch {
     return null;
@@ -134,17 +151,23 @@ export function verifyGoogleOAuthState(
  */
 export function googleAuthorizeUrl(
   state: string,
-  codeChallenge?: string
+  codeChallenge?: string,
+  options?: { intent?: GoogleOAuthIntent }
 ): string {
   const clientId = process.env.GOOGLE_OAUTH_CLIENT_ID?.trim() || "";
+  const intent = parseGoogleOAuthIntent(options?.intent);
   const params = new URLSearchParams({
     client_id: clientId,
     redirect_uri: googleOAuthRedirectUrl(),
     response_type: "code",
-    scope: GOOGLE_CALENDAR_SCOPES,
+    scope: intent === "gmail.send" ? GOOGLE_GMAIL_SEND_SCOPES : GOOGLE_CALENDAR_SCOPES,
     access_type: "offline",
     prompt: "consent",
     state,
+    // Incremental: calendar re-consent must not drop a previously granted
+    // gmail.send from the refresh token (and vice versa). The scope *list*
+    // still differs by intent — calendar never *requests* gmail.send.
+    include_granted_scopes: "true",
   });
   if (codeChallenge) {
     params.set("code_challenge", codeChallenge);

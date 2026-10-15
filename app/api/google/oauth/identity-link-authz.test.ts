@@ -101,7 +101,13 @@ const { GET: callbackGET } = await import("./callback/route");
 const { POST: disconnectPOST } = await import("./disconnect/route");
 const { GOOGLE_OAUTH_COOKIE, GOOGLE_PKCE_COOKIE, signGoogleOAuthState, verifyGoogleOAuthState } = realGoogle;
 
-const ENV = ["GOOGLE_CALENDAR_READ_ENABLED", "GOOGLE_OAUTH_CLIENT_ID", "GOOGLE_OAUTH_CLIENT_SECRET", "GOOGLE_OAUTH_STATE_SECRET"] as const;
+const ENV = [
+  "GOOGLE_CALENDAR_READ_ENABLED",
+  "MAIL_SEND_GMAIL_LIVE",
+  "GOOGLE_OAUTH_CLIENT_ID",
+  "GOOGLE_OAUTH_CLIENT_SECRET",
+  "GOOGLE_OAUTH_STATE_SECRET",
+] as const;
 let savedEnv: Record<string, string | undefined> = {};
 
 beforeEach(() => {
@@ -110,6 +116,7 @@ beforeEach(() => {
   process.env.GOOGLE_OAUTH_CLIENT_ID = "google-client-id";
   process.env.GOOGLE_OAUTH_CLIENT_SECRET = "google-client-secret-at-least-32-chars";
   delete process.env.GOOGLE_OAUTH_STATE_SECRET;
+  delete process.env.MAIL_SEND_GMAIL_LIVE;
   session = UNAUTHENTICATED;
   jar.clear();
   binds.length = 0;
@@ -208,6 +215,49 @@ describe("GET /api/google/oauth/start", () => {
     expect(parsed?.orgId).toBe(ORG_A);
     expect(parsed?.employeeId).toBe(EMP_A);
     expect(parsed?.actorMemberId).toBe(HIRER_A.id);
+  });
+
+  test("calendar start never requests gmail.send", async () => {
+    session = sessionAs(HIRER_A);
+    const res = await startGET(startReq(EMP_A));
+    expect(res.status).toBe(307);
+    const location = new URL(res.headers.get("location") || "");
+    const scope = location.searchParams.get("scope") || "";
+    expect(scope).toContain("calendar.freebusy");
+    expect(scope).not.toContain("gmail.send");
+    expect(location.searchParams.get("include_granted_scopes")).toBe("true");
+  });
+
+  test("gmail.send start is 404 when MAIL_SEND_GMAIL_LIVE is off", async () => {
+    delete process.env.MAIL_SEND_GMAIL_LIVE;
+    session = sessionAs(HIRER_A);
+    const url = new URL("https://staffpass.test/api/google/oauth/start");
+    url.searchParams.set("employeeId", EMP_A);
+    url.searchParams.set("intent", "gmail.send");
+    const res = await startGET(new Request(url));
+    expect(res.status).toBe(404);
+    const body = await res.json();
+    expect(body.error).toBe("mail_send_gmail_disabled");
+  });
+
+  test("gmail.send start requests gmail.send incrementally, not calendar.freebusy", async () => {
+    process.env.MAIL_SEND_GMAIL_LIVE = "true";
+    session = sessionAs(HIRER_A);
+    const url = new URL("https://staffpass.test/api/google/oauth/start");
+    url.searchParams.set("employeeId", EMP_A);
+    url.searchParams.set("intent", "gmail.send");
+    const res = await startGET(new Request(url));
+    expect(res.status).toBe(307);
+    const location = new URL(res.headers.get("location") || "");
+    const scope = location.searchParams.get("scope") || "";
+    expect(scope).toContain("gmail.send");
+    expect(scope).not.toContain("calendar.freebusy");
+    expect(location.searchParams.get("include_granted_scopes")).toBe("true");
+    const parsed = verifyGoogleOAuthState(
+      location.searchParams.get("state") || "",
+      jar.get(GOOGLE_OAUTH_COOKIE) || ""
+    );
+    expect(parsed?.intent).toBe("gmail.send");
   });
 
   test("BOLA: another org's employee → 404, no cookies", async () => {

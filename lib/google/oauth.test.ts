@@ -181,7 +181,20 @@ describe("googleAuthorizeUrl", () => {
     expect(url).toContain("response_type=code");
     expect(url).toContain("access_type=offline");
     expect(url).toContain("prompt=consent");
+    expect(url).toContain("include_granted_scopes=true");
     expect(url).toContain("calendar.freebusy");
+  });
+
+  test("gmail.send intent requests gmail.send incrementally, not calendar.freebusy", () => {
+    process.env.GOOGLE_OAUTH_CLIENT_ID = "test-client-id";
+    const url = googleAuthorizeUrl("test-state", "challenge", { intent: "gmail.send" });
+    expect(url).toContain("gmail.send");
+    expect(url).toContain("include_granted_scopes=true");
+    expect(url).not.toContain("calendar.freebusy");
+    const calendar = googleAuthorizeUrl("test-state");
+    expect(calendar).toContain("calendar.freebusy");
+    expect(calendar).not.toContain("gmail.send");
+    expect(calendar).toContain("include_granted_scopes=true");
   });
 
   test("includes PKCE challenge when provided", () => {

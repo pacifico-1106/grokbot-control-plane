@@ -1,6 +1,6 @@
 import { isDemoMode } from "@/lib/mode";
 import { PROVIDER_RATE_LIMITED, rateLimitWaitRemainingSeconds } from "@/lib/gateway/adapters/rate-limit";
-import { isThreadSingleFlightEnabled } from "@/lib/feature-flags";
+import { isThreadSingleFlightEnabled, isMailSendGmailLiveEnabled } from "@/lib/feature-flags";
 import { THREAD_MOVED_ON, beginThreadSend, type ThreadSendHandle } from "@/lib/thread-guard/guard";
 import { approvalReceivedAtMs, readThroughFromBody, readThroughFromSnapshot } from "@/lib/thread-guard/read-through";
 import { conversationKeyInputFromSnapshot, type ConversationKeyInput } from "@/lib/comm-reply-dedup/conversation-key";
@@ -47,6 +47,7 @@ import {
 import type { ResolvedMailAttachment } from "@/lib/mail/attachments";
 import { gmailReplyHeaders, mailAttachmentMimeParts } from "@/lib/mail/mime";
 import { mailProviderIsGmail, parseMailThreading } from "@/lib/mail/headers";
+import { sendMailViaGmail } from "@/lib/google/gmail-send";
 import {
   looksLikeSlackTs,
   postConversationMessage,
@@ -138,6 +139,8 @@ const SNAPSHOT_ARG_KEYS = [
   "references",
   "gmailThreadId",
   "provider",
+  "from",
+  "sender",
   // comm.delete target (ids only).
   "messageId",
   "message_id",
@@ -820,19 +823,20 @@ async function fulfillSnsPublish(
 /**
  * mail.send fulfill-on-approve.
  *
- * Production delivery today: **nothing leaves the system**. There is no Gmail
- * API client, no AgentMail SDK, and Resend is reserved for Staffpass
- * transactional notify (welcome / approval / billing) — not AI employee mail.
- * Google OAuth scopes are calendar.freebusy only (no gmail.send).
- * agentmail.send is 501 tool_reserved (P0.5). This function decrypts and
- * hash-checks the approved attachment bytes, records the Gmail envelope
- * (In-Reply-To / References / threadId + RFC 2231 filename*) on metadata,
- * and returns delivery: "stub". draft_only / external defaults unchanged.
+ * MAIL_SEND_GMAIL_LIVE default OFF → delivery:"stub" (nothing leaves).
+ * When ON: after attachment hash check, Gmail users.messages.send with raw
+ * MIME + threadId. From must equal the authenticated mailbox. Unknown
+ * outcomes are recorded and never retried. draft_only is still blocked by
+ * recheckPolicyAtFulfill. Resend is not used. Logs never include bodies.
  */
 async function fulfillMailSend(
   approval: ApprovalRequest,
   snapshot: InvokeSnapshot
 ): Promise<ApprovalFulfillment> {
+  const existing = parseFulfillment(approval.metadata);
+  if (existing?.ok) return existing;
+  if (existing?.error === POST_OUTCOME_UNKNOWN) return existing;
+
   const at = new Date().toISOString();
   const args = snapshot.args;
 
@@ -849,9 +853,22 @@ async function fulfillMailSend(
     ""
   );
 
+  const bodyText = (
+    typeof args.body === "string" ? args.body :
+    typeof args.text === "string" ? args.text :
+    typeof args.message === "string" ? args.message :
+    ""
+  );
+
   const mailState = snapshotMailAttachmentState(approval.metadata?.invoke);
   const approved = mailState.kind === "present" ? mailState.attachments : [];
-  const opened: Array<{ filename: string; mimeType: string; bytes: number; contentSha256: string }> = [];
+  const opened: Array<{
+    filename: string;
+    mimeType: string;
+    bytes: number;
+    contentSha256: string;
+    buffer: Buffer;
+  }> = [];
   for (const att of approved) {
     const bytes = openSnapshotMailAttachmentBytes(att);
     if (!bytes.ok) {
@@ -880,6 +897,7 @@ async function fulfillMailSend(
       mimeType: att.mimeType,
       bytes: att.bytes,
       contentSha256: att.contentSha256,
+      buffer: bytes.buffer,
     });
   }
 
@@ -890,20 +908,55 @@ async function fulfillMailSend(
   const headers = threading.ok && gmail ? gmailReplyHeaders(threading.threading) : {};
   const parts = mailAttachmentMimeParts(opened);
 
-  const fulfillment: ApprovalFulfillment = {
-    ok: true,
-    delivery: "stub",
-    at,
+  const stringList = (value: unknown): string[] | undefined => {
+    if (Array.isArray(value) && value.every((v) => typeof v === "string")) {
+      return value as string[];
+    }
+    if (typeof value === "string" && value.trim()) {
+      return value.split(/[,;]/).map((v) => v.trim()).filter(Boolean);
+    }
+    return undefined;
   };
 
-  await persistFulfillment(approval, {
-    ...fulfillment,
-    // ids / hashes / filenames only — never bodies
-  });
+  const live = isMailSendGmailLiveEnabled();
+  let fulfillment: ApprovalFulfillment;
+  let mailSendExtra: Record<string, unknown> = {};
+
+  if (!live) {
+    fulfillment = { ok: true, delivery: "stub", at };
+  } else {
+    const sent = await sendMailViaGmail({
+      employeeId: approval.employeeId,
+      from: typeof args.from === "string" ? args.from : typeof args.sender === "string" ? args.sender : undefined,
+      to,
+      cc: stringList(args.cc),
+      bcc: stringList(args.bcc),
+      subject,
+      body: bodyText,
+      inReplyTo: headers.inReplyTo,
+      references: headers.references,
+      threadId: headers.threadId,
+      attachments: opened.map((att) => ({
+        filename: att.filename,
+        mimeType: att.mimeType,
+        buffer: att.buffer,
+      })),
+    });
+    if (sent.ok) {
+      fulfillment = { ok: true, delivery: "mail", at, id: sent.messageId };
+      mailSendExtra = { messageId: sent.messageId, mailbox: sent.mailbox, live: true };
+    } else if (sent.unknown || sent.code === POST_OUTCOME_UNKNOWN) {
+      fulfillment = { ok: false, error: POST_OUTCOME_UNKNOWN, at };
+    } else {
+      fulfillment = { ok: false, error: sent.code, at };
+    }
+  }
+
+  await persistFulfillment(approval, fulfillment);
   try {
     await updateApprovalMetadata(approval, {
       mailSend: {
-        provider: gmail ? "gmail" : "stub",
+        provider: live ? "gmail" : gmail ? "gmail" : "stub",
         threadId: headers.threadId,
         inReplyTo: headers.inReplyTo,
         references: headers.references,
@@ -913,21 +966,12 @@ async function fulfillMailSend(
           bytes: p.bytes,
           contentSha256: p.contentSha256,
         })),
+        ...mailSendExtra,
       },
     });
   } catch {
-    // Non-fatal: stub fulfillment already persisted.
+    // Non-fatal: fulfillment already persisted.
   }
-
-  const artifact = approval.metadata?.artifact as Record<string, unknown> | undefined;
-  const sendMode =
-    typeof artifact?.sendMode === "string"
-      ? artifact.sendMode
-      : typeof approval.metadata?.mailPolicy === "object" &&
-          approval.metadata?.mailPolicy &&
-          typeof (approval.metadata.mailPolicy as Record<string, unknown>).sendMode === "string"
-        ? String((approval.metadata.mailPolicy as Record<string, unknown>).sendMode)
-        : undefined;
 
   await appendAuditEvent({
     orgId: approval.orgId,
@@ -935,19 +979,22 @@ async function fulfillMailSend(
     credentialId: approval.credentialId,
     action: "tool.invoke",
     purpose: approval.purpose,
-    summary: "承認済みメール送信（スタブ実行・ライブ送信は未実装）",
+    summary: live
+      ? fulfillment.ok
+        ? "承認済みメール送信を Gmail で実行"
+        : `承認済みメール送信を停止（${fulfillment.error}）`
+      : "承認済みメール送信（スタブ実行・MAIL_SEND_GMAIL_LIVE=OFF）",
     metadata: {
       approvalId: approval.id,
       tool: snapshot.tool,
       jobId: snapshot.jobId,
-      delivery: "stub",
-      to,
-      subject,
-      sendMode,
+      delivery: fulfillment.ok ? fulfillment.delivery : undefined,
+      code: fulfillment.error,
       phase: "approval.fulfill",
-      noteJa: "mail.send のライブ送信は未実装。承認後の記録のみ。添付は承認時ハッシュと一致。",
       attachmentCount: opened.length,
       gmailThreadId: headers.threadId,
+      live,
+      messageId: fulfillment.id,
     },
   }).catch(() => undefined);
 
@@ -1066,7 +1113,7 @@ async function fulfillApprovedInvokeCore(
       return fulfillment;
     }
 
-    // mail.send: no live provider in production (see fulfillMailSend).
+    // mail.send: stub unless MAIL_SEND_GMAIL_LIVE (see fulfillMailSend).
     if (isMailSendTool(snapshot.tool || approval.tool || "")) {
       return fulfillMailSend(approval, snapshot);
     }

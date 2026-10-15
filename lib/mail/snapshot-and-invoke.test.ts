@@ -13,18 +13,28 @@ import { encryptBytes } from "@/lib/notify/crypto";
 import { minimalPdf } from "./test-pdf";
 import { contentDispositionAttachment } from "./mime";
 import { STAFFPASS_MCP_TOOLS } from "@/lib/mcp/tools";
+import { bindEmployeeGoogleIdentity, revokeEmployeeGoogleIdentity } from "@/lib/data/google-identities";
+import { GOOGLE_SCOPE_GMAIL_SEND } from "@/lib/google/scopes";
 
 const KEY = "test-mail-attachment-encryption-key-32b";
 let savedKey: string | undefined;
+let savedLive: string | undefined;
+let savedFetch: typeof fetch | undefined;
 
 beforeEach(() => {
   savedKey = process.env.NOTIFICATION_CONFIG_ENCRYPTION_KEY;
+  savedLive = process.env.MAIL_SEND_GMAIL_LIVE;
   process.env.NOTIFICATION_CONFIG_ENCRYPTION_KEY = KEY;
 });
-afterEach(() => {
+afterEach(async () => {
+  if (savedFetch) globalThis.fetch = savedFetch;
+  savedFetch = undefined;
   if (savedKey === undefined) delete process.env.NOTIFICATION_CONFIG_ENCRYPTION_KEY;
   else process.env.NOTIFICATION_CONFIG_ENCRYPTION_KEY = savedKey;
+  if (savedLive === undefined) delete process.env.MAIL_SEND_GMAIL_LIVE;
+  else process.env.MAIL_SEND_GMAIL_LIVE = savedLive;
   resetDemoMailPolicy();
+  await revokeEmployeeGoogleIdentity({ employeeId: "emp_sales", orgId: DEMO_ORG.id });
 });
 
 async function withNeedsApproval<T>(fn: () => Promise<T>): Promise<T> {
@@ -211,6 +221,101 @@ describe("mail.send invoke attachments + threading", () => {
     );
     expect(result.httpStatus).toBe(400);
     expect(result.body.code).toBe("secret_detected_in_payload");
+  });
+
+  test("MAIL_SEND_GMAIL_LIVE sends via Gmail and is idempotent per approval", async () => {
+    process.env.MAIL_SEND_GMAIL_LIVE = "true";
+    process.env.GOOGLE_OAUTH_CLIENT_ID = "client";
+    process.env.GOOGLE_OAUTH_CLIENT_SECRET = "secret-that-is-long-enough-32ch";
+    await bindEmployeeGoogleIdentity({
+      employeeId: "emp_sales",
+      orgId: DEMO_ORG.id,
+      googleSub: "sub-tando",
+      googleEmail: "tando@tokyo307inc.com",
+      grantedScopes: `openid email ${GOOGLE_SCOPE_GMAIL_SEND}`,
+      refreshToken: "refresh-tando",
+    });
+    let gmailPosts = 0;
+    savedFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("oauth2.googleapis.com/token")) {
+        return new Response(JSON.stringify({ access_token: "ya29.test" }), { status: 200 });
+      }
+      if (url.includes("gmail.googleapis.com")) {
+        gmailPosts += 1;
+        const payload = JSON.parse(String(init?.body || "{}")) as { threadId?: string; raw?: string };
+        expect(payload.threadId).toBe("1a13940ce0564833");
+        expect(payload.raw).toBeTruthy();
+        return new Response(JSON.stringify({ id: "msg_live_1", threadId: "1a13940ce0564833" }), { status: 200 });
+      }
+      throw new Error(`unexpected ${url}`);
+    }) as typeof fetch;
+
+    const jobId = `job_live_${Date.now()}`;
+    const queued = await withNeedsApproval(() =>
+      runGatewayInvoke({
+        employeeId: "emp_sales",
+        credentialId: "cred_sales",
+        body: { tool: "mail.send", purpose: "sales.outreach", jobId, args: pdfArgs() },
+      })
+    );
+    const approvalId = String(queued.body.approvalId || "");
+    const approved = await resolveApproval(approvalId, "approved", "ando@example.com", DEMO_ORG.id);
+    const first = await withNeedsApproval(() => fulfillApprovedInvoke(approved!));
+    expect(first?.ok).toBe(true);
+    expect(first?.delivery).toBe("mail");
+    expect(first?.id).toBe("msg_live_1");
+    expect(gmailPosts).toBe(1);
+    const second = await withNeedsApproval(() => fulfillApprovedInvoke(approved!));
+    expect(second?.ok).toBe(true);
+    expect(second?.id).toBe("msg_live_1");
+    expect(gmailPosts).toBe(1);
+  });
+
+  test("unknown Gmail outcome is recorded and not retried", async () => {
+    process.env.MAIL_SEND_GMAIL_LIVE = "true";
+    process.env.GOOGLE_OAUTH_CLIENT_ID = "client";
+    process.env.GOOGLE_OAUTH_CLIENT_SECRET = "secret-that-is-long-enough-32ch";
+    await bindEmployeeGoogleIdentity({
+      employeeId: "emp_sales",
+      orgId: DEMO_ORG.id,
+      googleSub: "sub-tando",
+      googleEmail: "tando@tokyo307inc.com",
+      grantedScopes: `openid email ${GOOGLE_SCOPE_GMAIL_SEND}`,
+      refreshToken: "refresh-tando",
+    });
+    let gmailPosts = 0;
+    savedFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("oauth2.googleapis.com/token")) {
+        return new Response(JSON.stringify({ access_token: "ya29.test" }), { status: 200 });
+      }
+      if (url.includes("gmail.googleapis.com")) {
+        gmailPosts += 1;
+        throw new Error("timeout");
+      }
+      throw new Error(`unexpected ${url}`);
+    }) as typeof fetch;
+
+    const jobId = `job_unk_${Date.now()}`;
+    const queued = await withNeedsApproval(() =>
+      runGatewayInvoke({
+        employeeId: "emp_sales",
+        credentialId: "cred_sales",
+        body: { tool: "mail.send", purpose: "sales.outreach", jobId, args: pdfArgs() },
+      })
+    );
+    const approvalId = String(queued.body.approvalId || "");
+    const approved = await resolveApproval(approvalId, "approved", "ando@example.com", DEMO_ORG.id);
+    const first = await withNeedsApproval(() => fulfillApprovedInvoke(approved!));
+    expect(first?.ok).toBe(false);
+    expect(first?.error).toBe("post_outcome_unknown");
+    expect(gmailPosts).toBe(1);
+    const second = await withNeedsApproval(() => fulfillApprovedInvoke(approved!));
+    expect(second?.error).toBe("post_outcome_unknown");
+    expect(gmailPosts).toBe(1);
   });
 });
 

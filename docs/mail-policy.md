@@ -51,19 +51,21 @@ employee override → org policy → default（外部 draft_only）
 
 任意: `inReplyTo` / `references`（RFC 5322 Message-ID）および/または `gmailThreadId` / `threadId` / `conversation.threadId`（Gmail 16 進）。CR/LF は `mail_header_invalid`。プロバイダが Gmail のとき In-Reply-To / References と `threadId` を **metadata に記録**する。非 ASCII ファイル名は RFC 2231/5987。
 
-## 本番の配信（現状）
+## 本番の配信
 
-**承認済みの mail.send はシステムから出ない。** `fulfillMailSend` は `delivery: "stub"`。
+`MAIL_SEND_GMAIL_LIVE` **既定 OFF** → `fulfillMailSend` は `delivery: "stub"`（従来どおりシステムから出ない）。
+
+ON のときだけ、承認後かつ添付ハッシュ照合のあと Gmail `users.messages.send`（`raw` MIME + `threadId`）。From は連携メールボックスと一致必須。不明結果は `post_outcome_unknown` として記録し **再送しない**。カレンダー OAuth は従来の `calendar.freebusy` のまま。`gmail.send` は社員ページの別ボタン（増分同意）。
 
 | 層 | 本番の用途 | mail.send との関係 |
 |----|------------|-------------------|
-| Human Gmail | カレンダー free/busy のみ（OAuth に `gmail.send` なし） | 未接続。スレッド ID は記録するだけ |
-| AgentMail | P0.5 予約。`agentmail.send` は 501 `tool_reserved` | ライブ SDK なし |
+| Human Gmail | free/busy に加え、フラグ ON なら `gmail.send` 増分同意 | `users.messages.send` |
+| AgentMail | P0.5 予約。`agentmail.send` は 501 `tool_reserved` | 使わない |
 | Staffpass Resend | 歓迎・承認依頼・請求などの **制御面通知** | AI社員の営業メールには使わない |
 
-フラグなし。`NOTIFICATION_CONFIG_ENCRYPTION_KEY`（32 文字以上）は本番で通知・LINE・封印に **既に使っている**。実添付をキューするには必須（無いと `mail_attachment_storage_unavailable`）。
+`NOTIFICATION_CONFIG_ENCRYPTION_KEY`（32 文字以上）は本番で通知・Google refresh token・添付封印に **既に使っている**。
 
-**draft_only / 外部宛のデフォルトは緩めない。** 実送信を足すなら最小は、社員に紐づく Google OAuth に `gmail.send` を追加し `users.messages.send`（`raw` MIME + `threadId`）へ載せる案。Resend 流用と AgentMail 未実装のままの人間 Gmail 直操作はしない。この PR では実装しない。
+**draft_only / 外部宛のデフォルトは緩めない。** 再認可 URL: `/api/google/oauth/start?employeeId=<社員ID>&intent=gmail.send`（アプリオリジン付き）。Google Cloud の同意画面に `gmail.send` を追加すること。マイグレーションなし（既存 `employee_google_identities` の `granted_scopes` を union）。
 
 ## 承認カード
 

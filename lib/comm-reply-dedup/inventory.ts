@@ -108,9 +108,9 @@ export const POSTING_PATH_INVENTORY: readonly PostingPath[] = [
     id: "fulfill.mail_send",
     tools: ["mail.send", "agentmail.send"],
     surfaces: ["mail"],
-    where: "lib/approvals/fulfill.ts (fulfillMailSend: 承認時ハッシュ照合のうえスタブ記録)",
-    coverage: "no_live_send",
-    noteJa: "mail.send のライブ送信は未実装。Gmail API / AgentMail / Resend（通知専用）のいずれにも載らない。承認済み添付は metadata の封印を contentSha256 照合したあと delivery:stub のみ。agentmail.send は予約で invoke が拒否。送信を実装するときは guard を通すこと。",
+    where: "lib/approvals/fulfill.ts (fulfillMailSend) + lib/google/gmail-send.ts + lib/approvals/execution.ts",
+    coverage: "own_idempotency",
+    noteJa: "MAIL_SEND_GMAIL_LIVE 既定 OFF は stub。ON なら承認後・添付ハッシュ照合後に Gmail users.messages.send（raw MIME + threadId）。From は連携メールと一致必須。jobId は承認チケットに載り、fulfillment.ok / post_outcome_unknown / execution claim で再送しない。agentmail.send は予約。Resend は使わない。",
   },
   {
     id: "drive.share_external",
@@ -142,7 +142,7 @@ export const POSTING_PATH_INVENTORY: readonly PostingPath[] = [
     surfaces: ["mail"],
     where: "lib/email.ts, lib/resend.ts, lib/email-templates/*",
     coverage: "not_ai_posting",
-    noteJa: "管理者向けのシステムメール（招待・承認通知など）。AI 社員のメール送信（mail.send）はスタブのみ。",
+    noteJa: "管理者向けのシステムメール（招待・承認通知など）。AI 社員の mail.send は fulfill.mail_send（既定 stub、MAIL_SEND_GMAIL_LIVE で Gmail）。Resend は混ぜない。",
   },
   {
     id: "webhook.callback_answers",

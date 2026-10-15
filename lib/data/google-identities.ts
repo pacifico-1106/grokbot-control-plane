@@ -120,6 +120,7 @@ export async function bindEmployeeGoogleIdentity(input: {
   googleSub: string;
   googleEmail: string;
   grantedScopes: string;
+  /** Empty on incremental consent: keep the stored refresh token. */
   refreshToken: string;
 }): Promise<EmployeeGoogleIdentity> {
   const employeeId = input.employeeId.trim();
@@ -127,14 +128,33 @@ export async function bindEmployeeGoogleIdentity(input: {
   const googleSub = input.googleSub.trim();
   const googleEmail = input.googleEmail.trim();
   const grantedScopes = input.grantedScopes.trim();
-  const refreshToken = input.refreshToken.trim();
+  let refreshToken = input.refreshToken.trim();
 
-  if (!employeeId || !orgId || !googleSub || !refreshToken) {
+  if (!employeeId || !orgId || !googleSub) {
     throw new Error("google_identity_incomplete");
   }
 
   const employee = await getEmployee(employeeId, orgId);
   if (!employee) throw new Error("employee_not_found");
+
+  const existing = isDemoMode()
+    ? demoIdentities.get(employeeId)?.public ?? null
+    : await getEmployeeGoogleIdentity(employeeId);
+  if (
+    existing &&
+    existing.status === "linked" &&
+    existing.googleSub &&
+    existing.googleSub !== googleSub
+  ) {
+    throw new Error("google_identity_account_mismatch");
+  }
+
+  if (!refreshToken) {
+    refreshToken = await getLinkedGoogleRefreshToken(employeeId);
+  }
+  if (!refreshToken) {
+    throw new Error("google_identity_incomplete");
+  }
 
   const publicRow: EmployeeGoogleIdentity = {
     employeeId,
@@ -143,16 +163,20 @@ export async function bindEmployeeGoogleIdentity(input: {
     googleEmail,
     grantedScopes,
     status: "linked",
-    connectedAt: nowIso(),
+    connectedAt: existing?.connectedAt || nowIso(),
     revokedAt: null,
     updatedAt: nowIso(),
   };
 
   if (isDemoMode()) {
+    const prev = demoIdentities.get(employeeId);
     demoIdentities.set(employeeId, {
       public: publicRow,
-      secrets: { refreshToken },
+      secrets: { refreshToken: refreshToken || prev?.secrets.refreshToken || "" },
     });
+    if (!demoIdentities.get(employeeId)?.secrets.refreshToken) {
+      throw new Error("google_identity_incomplete");
+    }
     return publicRow;
   }
 
