@@ -12,8 +12,7 @@ import nextConfig from "@/next.config";
 
 /**
  * LP pattern B (/lp/ai-employee-corp) shares every component with /lp/ai-employee;
- * only the variant config differs. The original page must render byte-identically
- * to main (fixtures captured from main a2f0b42 before the refactor).
+ * only the variant config differs. Golden HTML/metadata fixtures pin pattern A.
  */
 const FIX = "app/lp/__fixtures__";
 const ENV = ["LP_CHAT_ENABLED", "LP_HANDOFF_ENABLED"] as const;
@@ -47,15 +46,15 @@ function findElements(node: ReactNode, type: unknown, out: ReactElement[] = []):
 }
 
 describe("original /lp/ai-employee is unchanged", () => {
-  test("chat OFF: HTML identical to main", () => {
+  test("chat OFF: HTML identical to golden fixture", () => {
     chat(false);
     expect(html(OriginalPage())).toBe(readFileSync(`${FIX}/ai-employee.chat-off.html`, "utf8"));
   });
-  test("chat ON: HTML identical to main", () => {
+  test("chat ON: HTML identical to golden fixture", () => {
     chat(true);
     expect(html(OriginalPage())).toBe(readFileSync(`${FIX}/ai-employee.chat-on.html`, "utf8"));
   });
-  test("metadata identical to main (no robots / canonical added)", () => {
+  test("metadata identical to golden fixture (no robots / canonical added)", () => {
     expect(JSON.parse(JSON.stringify(originalMetadata))).toEqual(JSON.parse(readFileSync(`${FIX}/ai-employee.metadata.json`, "utf8")));
   });
   test("original keeps its video, banner and supervision", () => {
