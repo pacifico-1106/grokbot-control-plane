@@ -35,15 +35,19 @@ export function readZipEntries(buf: Buffer): ZipEntry[] {
     const name = buf.slice(nameAt, nameAt + nameLen).toString("utf8");
     const compressed = buf.slice(dataAt, dataAt + compSize);
     offset = dataAt + compSize;
+    // Trust the payload cap, not the local-header uncompSize (zip-bomb lie).
+    if (method === 0 && compressed.length > MAX_UNCOMPRESSED) continue;
     if (uncompSize > MAX_UNCOMPRESSED) continue;
     let data: Buffer;
     try {
       if (method === 0) data = compressed;
-      else if (method === 8) data = inflateRawSync(compressed);
-      else continue;
+      else if (method === 8) {
+        data = inflateRawSync(compressed, { maxOutputLength: MAX_UNCOMPRESSED });
+      } else continue;
     } catch {
       continue;
     }
+    if (data.length > MAX_UNCOMPRESSED) continue;
     out.push({ name, data });
   }
   return out;

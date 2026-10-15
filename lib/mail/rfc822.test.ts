@@ -35,4 +35,15 @@ describe("buildRfc822Message", () => {
       })
     ).toThrow("mail_header_invalid:from");
   });
+
+  test("rejects CR/LF in subject instead of rewriting", () => {
+    expect(() =>
+      buildRfc822Message({
+        from: "tando@tokyo307inc.com",
+        to: "info@s-value.co.jp",
+        subject: "s\r\nBcc: evil@x.example",
+        body: "b",
+      })
+    ).toThrow("mail_header_invalid:subject");
+  });
 });

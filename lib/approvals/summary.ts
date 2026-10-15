@@ -30,6 +30,8 @@ export type ApprovalArtifact = {
   informationClass?: string;
   audience?: string;
   to?: string;
+  /** mail.send From (must match the linked mailbox at live send). */
+  from?: string;
   /** mail: CC / BCC recipients as given (trimmed, empty entries dropped). */
   cc?: string[];
   bcc?: string[];
@@ -162,7 +164,9 @@ export function buildApprovalArtifact(
       if (found && !toSources.includes(found)) toSources.push(found);
     }
     const to = toSources.length ? toSources.join(", ") : undefined;
+    const from = firstString(args.from, args.sender);
     const subject = firstString(args.subject, args.title);
+    if (from) artifact.from = from;
     if (to) artifact.to = to;
     const cc = recipientList(args.cc);
     const bcc = recipientList(args.bcc);
@@ -340,6 +344,8 @@ export function formatMailCardParts(
   const recipientCap = caps.recipientChars ?? Number.POSITIVE_INFINITY;
   const subjectCap = caps.subjectChars ?? Number.POSITIVE_INFINITY;
   const header: string[] = [];
+  const from = artifact.from ? oneLineCardValue(artifact.from) : "";
+  if (from) header.push(`差出人: ${capChars(from, recipientCap).text}`);
   const to = artifact.to ? oneLineCardValue(artifact.to) : "";
   if (to) header.push(`宛先: ${capChars(to, recipientCap).text}`);
   header.push(...formatMailCcBccLines(artifact, recipientCap));
@@ -409,6 +415,7 @@ export function readMailArtifact(
     Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : undefined;
   return {
     tool: rec.tool,
+    from: text(rec.from),
     to: text(rec.to),
     cc: list(rec.cc),
     bcc: list(rec.bcc),

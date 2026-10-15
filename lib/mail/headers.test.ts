@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mailProviderIsGmail, parseMailThreading } from "./headers";
+import { mailProviderIsGmail, parseMailEnvelope, parseMailThreading } from "./headers";
 
 describe("parseMailThreading", () => {
   test("accepts a Gmail threadId and Message-ID", () => {
@@ -51,6 +51,24 @@ describe("parseMailThreading", () => {
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.threading.threadId).toBe("1a13940ce0564833");
+  });
+});
+
+describe("parseMailEnvelope", () => {
+  test("rejects CRLF in subject / to / from", () => {
+    expect(parseMailEnvelope({ subject: "hi\r\nBcc: evil@x.example" }).ok).toBe(false);
+    expect(parseMailEnvelope({ to: "ok@x.example\r\nBcc: evil@x.example" }).ok).toBe(false);
+    expect(parseMailEnvelope({ from: "ok@x.example\nBcc: evil@x.example" }).ok).toBe(false);
+    expect(parseMailEnvelope({ cc: ["ok@x.example\r\nBcc: evil@x.example"] }).ok).toBe(false);
+  });
+
+  test("accepts a normal envelope", () => {
+    const r = parseMailEnvelope({
+      from: "tando@tokyo307inc.com",
+      to: "info@s-value.co.jp",
+      subject: "Staffpass サービス概要",
+    });
+    expect(r.ok).toBe(true);
   });
 });
 

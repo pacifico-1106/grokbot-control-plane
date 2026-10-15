@@ -46,7 +46,7 @@ import {
 } from "@/lib/approvals/snapshot-mail-attachments";
 import type { ResolvedMailAttachment } from "@/lib/mail/attachments";
 import { gmailReplyHeaders, mailAttachmentMimeParts } from "@/lib/mail/mime";
-import { mailProviderIsGmail, parseMailThreading } from "@/lib/mail/headers";
+import { mailProviderIsGmail, parseMailEnvelope, parseMailThreading } from "@/lib/mail/headers";
 import { sendMailViaGmail } from "@/lib/google/gmail-send";
 import {
   looksLikeSlackTs,
@@ -901,11 +901,21 @@ async function fulfillMailSend(
     });
   }
 
+  const envelope = parseMailEnvelope(args);
+  if (!envelope.ok) {
+    const fulfillment: ApprovalFulfillment = { ok: false, error: envelope.code, at };
+    await persistFulfillment(approval, fulfillment);
+    return fulfillment;
+  }
   const threading = parseMailThreading(args, snapshot.conversation);
+  if (!threading.ok) {
+    const fulfillment: ApprovalFulfillment = { ok: false, error: threading.code, at };
+    await persistFulfillment(approval, fulfillment);
+    return fulfillment;
+  }
   const gmail =
-    threading.ok &&
-    (mailProviderIsGmail(args, snapshot.conversation) || Boolean(threading.threading.threadId));
-  const headers = threading.ok && gmail ? gmailReplyHeaders(threading.threading) : {};
+    mailProviderIsGmail(args, snapshot.conversation) || Boolean(threading.threading.threadId);
+  const headers = gmail ? gmailReplyHeaders(threading.threading) : {};
   const parts = mailAttachmentMimeParts(opened);
 
   const stringList = (value: unknown): string[] | undefined => {
@@ -927,6 +937,7 @@ async function fulfillMailSend(
   } else {
     const sent = await sendMailViaGmail({
       employeeId: approval.employeeId,
+      orgId: approval.orgId,
       from: typeof args.from === "string" ? args.from : typeof args.sender === "string" ? args.sender : undefined,
       to,
       cc: stringList(args.cc),

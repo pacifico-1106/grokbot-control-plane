@@ -4,6 +4,7 @@ import { NextResponse } from "next/server";
 import { getAppOrigin } from "@/lib/approvals/tokens";
 import { isBrowserNavigation, requireIdentityLinkManager } from "@/lib/auth/identity-link-gate";
 import { getEmployee } from "@/lib/data";
+import { getEmployeeGoogleIdentity } from "@/lib/data/google-identities";
 import { isGoogleCalendarReadEnabled, isMailSendGmailLiveEnabled } from "@/lib/feature-flags";
 import {
   GOOGLE_OAUTH_COOKIE,
@@ -99,7 +100,16 @@ export async function GET(req: Request) {
     jar.set(GOOGLE_OAUTH_COOKIE, nonce, cookieOptions);
     jar.set(GOOGLE_PKCE_COOKIE, codeVerifier, cookieOptions);
 
-    return NextResponse.redirect(googleAuthorizeUrl(state, codeChallenge, { intent }));
+    const existing = await getEmployeeGoogleIdentity(employeeId);
+    const loginHint =
+      existing &&
+      existing.orgId === gate.orgId &&
+      existing.status !== "revoked" &&
+      existing.googleEmail
+        ? existing.googleEmail
+        : undefined;
+
+    return NextResponse.redirect(googleAuthorizeUrl(state, codeChallenge, { intent, loginHint }));
   } catch {
     return jsonUtf8(
       { error: "google_oauth_unconfigured", message: "Google OAuth is not configured" },

@@ -152,7 +152,7 @@ export function verifyGoogleOAuthState(
 export function googleAuthorizeUrl(
   state: string,
   codeChallenge?: string,
-  options?: { intent?: GoogleOAuthIntent }
+  options?: { intent?: GoogleOAuthIntent; loginHint?: string }
 ): string {
   const clientId = process.env.GOOGLE_OAUTH_CLIENT_ID?.trim() || "";
   const intent = parseGoogleOAuthIntent(options?.intent);
@@ -172,6 +172,12 @@ export function googleAuthorizeUrl(
   if (codeChallenge) {
     params.set("code_challenge", codeChallenge);
     params.set("code_challenge_method", "S256");
+  }
+  const loginHint = options?.loginHint?.trim() || "";
+  // Hint the already-linked mailbox so incremental consent is not started
+  // against a different Google account (callback still enforces googleSub).
+  if (loginHint && !/[\r\n\0]/.test(loginHint) && loginHint.length <= 320) {
+    params.set("login_hint", loginHint);
   }
   return `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
 }

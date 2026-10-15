@@ -137,6 +137,28 @@ describe("mail.send invoke attachments + threading", () => {
     expect(result.body.code).toBe("mail_attachment_source_denied");
   });
 
+  test("CRLF in subject / to is 400 mail_header_invalid", async () => {
+    for (const args of [
+      pdfArgs({ subject: "概要\r\nX-Injected: 1" }),
+      pdfArgs({ to: "info@s-value.co.jp\r\nX-Injected: 1" }),
+    ]) {
+      const result = await withNeedsApproval(() =>
+        runGatewayInvoke({
+          employeeId: "emp_sales",
+          credentialId: "cred_sales",
+          body: {
+            tool: "mail.send",
+            purpose: "sales.outreach",
+            jobId: `job_env_${Date.now()}_${Math.random()}`,
+            args,
+          },
+        })
+      );
+      expect(result.httpStatus).toBe(400);
+      expect(result.body.code).toBe("mail_header_invalid");
+    }
+  });
+
   test("CRLF in inReplyTo is 400 mail_header_invalid", async () => {
     const result = await withNeedsApproval(() =>
       runGatewayInvoke({
@@ -173,6 +195,7 @@ describe("mail.send invoke attachments + threading", () => {
     expect(artifact?.attachments?.[0]?.mimeType).toBe("application/pdf");
     expect(artifact?.gmailThreadId).toBe("1a13940ce0564833");
     const lines = formatMailCardLines(artifact!);
+    expect(lines.some((l) => l.startsWith("差出人: tando@tokyo307inc.com"))).toBe(true);
     expect(lines.some((l) => l.includes("Staffpass_サービス概要.pdf") && l.includes("application/pdf"))).toBe(true);
     expect(lines.some((l) => l.startsWith("threadId: 1a13940ce0564833"))).toBe(true);
     const pub = publicApproval(stored!);

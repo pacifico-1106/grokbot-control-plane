@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { bindEmployeeGoogleIdentity, revokeEmployeeGoogleIdentity } from "@/lib/data/google-identities";
+import {
+  bindEmployeeGoogleIdentity,
+  markGoogleIdentityNeedsReauth,
+  revokeEmployeeGoogleIdentity,
+} from "@/lib/data/google-identities";
 import { DEMO_ORG } from "@/lib/demo-data";
 import { GOOGLE_SCOPE_GMAIL_SEND } from "./scopes";
 import { sendMailViaGmail } from "./gmail-send";
@@ -64,6 +68,21 @@ async function bindTando() {
 }
 
 describe("sendMailViaGmail", () => {
+  test("needs_reauth cannot be rebound to a different Google account", async () => {
+    await bindTando();
+    await markGoogleIdentityNeedsReauth(EMP);
+    await expect(
+      bindEmployeeGoogleIdentity({
+        employeeId: EMP,
+        orgId: DEMO_ORG.id,
+        googleSub: "sub-other-account",
+        googleEmail: "other@tokyo307inc.com",
+        grantedScopes: `openid email ${GOOGLE_SCOPE_GMAIL_SEND}`,
+        refreshToken: "refresh-other",
+      })
+    ).rejects.toThrow("google_identity_account_mismatch");
+  });
+
   test("flag OFF does not call Gmail", async () => {
     delete process.env.MAIL_SEND_GMAIL_LIVE;
     await bindTando();
@@ -78,6 +97,24 @@ describe("sendMailViaGmail", () => {
     });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.code).toBe("mail_gmail_live_disabled");
+    expect(calls).toHaveLength(0);
+  });
+
+  test("refuses an identity bound to another org", async () => {
+    process.env.MAIL_SEND_GMAIL_LIVE = "true";
+    await bindTando();
+    const calls = mockGoogle({});
+    const r = await sendMailViaGmail({
+      employeeId: EMP,
+      orgId: "org_other",
+      from: "tando@tokyo307inc.com",
+      to: "info@s-value.co.jp",
+      subject: "s",
+      body: "b",
+      attachments: [],
+    });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.code).toBe("mail_gmail_not_connected");
     expect(calls).toHaveLength(0);
   });
 

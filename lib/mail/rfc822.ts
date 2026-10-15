@@ -24,18 +24,13 @@ export type Rfc822Mail = {
 };
 
 function hasCtl(value: string): boolean {
-  return /[\u0000-\u001f\u007f]/.test(value);
-}
-
-function oneHeader(value: string): string {
-  return value.replace(/[\r\n]+/g, " ").trim();
+  return /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/.test(value);
 }
 
 function rfc2047Encode(value: string): string {
-  const folded = oneHeader(value);
-  if (!folded) return "";
-  if (/^[\x20-\x7e]*$/.test(folded)) return folded;
-  return `=?UTF-8?B?${Buffer.from(folded, "utf8").toString("base64")}?=`;
+  if (!value) return "";
+  if (/^[\x20-\x7e]*$/.test(value)) return value;
+  return `=?UTF-8?B?${Buffer.from(value, "utf8").toString("base64")}?=`;
 }
 
 function assertHeader(field: string, value: string): string {
@@ -43,7 +38,7 @@ function assertHeader(field: string, value: string): string {
   if (!trimmed || hasCtl(trimmed) || /[\r\n]/.test(value)) {
     throw new Error(`mail_header_invalid:${field}`);
   }
-  return oneHeader(trimmed);
+  return trimmed;
 }
 
 function addresses(values: string[] | undefined): string | undefined {
@@ -55,7 +50,7 @@ function addresses(values: string[] | undefined): string | undefined {
 export function buildRfc822Message(mail: Rfc822Mail): string {
   const from = assertHeader("from", mail.from);
   const to = assertHeader("to", mail.to);
-  const subject = rfc2047Encode(mail.subject || "");
+  const subject = rfc2047Encode(mail.subject ? assertHeader("subject", mail.subject) : "");
   const cc = addresses(mail.cc);
   const bcc = addresses(mail.bcc);
   const inReplyTo = mail.inReplyTo ? assertHeader("inReplyTo", mail.inReplyTo) : "";

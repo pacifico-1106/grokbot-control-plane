@@ -140,9 +140,11 @@ export async function bindEmployeeGoogleIdentity(input: {
   const existing = isDemoMode()
     ? demoIdentities.get(employeeId)?.public ?? null
     : await getEmployeeGoogleIdentity(employeeId);
+  // Same Google account for incremental re-auth (including needs_reauth).
+  // After an explicit revoke, a different account may be bound.
   if (
     existing &&
-    existing.status === "linked" &&
+    existing.status !== "revoked" &&
     existing.googleSub &&
     existing.googleSub !== googleSub
   ) {

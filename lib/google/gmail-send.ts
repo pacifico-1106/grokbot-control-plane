@@ -18,6 +18,8 @@ const SEND_TIMEOUT_MS = 15_000;
 
 export type GmailSendRequest = {
   employeeId: string;
+  /** Approval / employee org — refuse a row bound to another tenant. */
+  orgId?: string;
   from?: string;
   to: string;
   cc?: string[];
@@ -49,6 +51,10 @@ export async function sendMailViaGmail(input: GmailSendRequest): Promise<GmailSe
 
   const identity = await getEmployeeGoogleIdentity(input.employeeId);
   if (!identity || identity.status !== "linked" || !identity.googleEmail) {
+    return { ok: false, code: "mail_gmail_not_connected" };
+  }
+  const expectedOrg = input.orgId?.trim() || "";
+  if (expectedOrg && identity.orgId !== expectedOrg) {
     return { ok: false, code: "mail_gmail_not_connected" };
   }
   if (!grantedScopesInclude(identity.grantedScopes, GOOGLE_SCOPE_GMAIL_SEND)) {

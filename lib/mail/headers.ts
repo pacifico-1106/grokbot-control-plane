@@ -188,3 +188,63 @@ export function mailProviderIsGmail(args: Record<string, unknown>, conversation?
   const surface = (conversation?.surface || "").toLowerCase();
   return surface === "gmail" || surface === "mail";
 }
+
+/**
+ * Fail-closed envelope headers (From / To / Subject / Cc / Bcc).
+ * CR/LF and other controls are refused, not rewritten — same rule as
+ * In-Reply-To / References. Used at invoke and at the RFC822 builder.
+ */
+export function assertMailEnvelopeValue(
+  field: string,
+  value: unknown
+): { ok: true; value: string } | MailHeaderError {
+  if (value === undefined || value === null || value === "") {
+    return { ok: true, value: "" };
+  }
+  if (typeof value !== "string") {
+    return {
+      ok: false,
+      code: MAIL_HEADER_INVALID,
+      field,
+      messageJa: `${field} は文字列で指定してください。`,
+    };
+  }
+  if (hasForbiddenChars(value) || /[\r\n]/.test(value)) {
+    return {
+      ok: false,
+      code: MAIL_HEADER_INVALID,
+      field,
+      messageJa: `${field} に改行や制御文字は使えません。`,
+    };
+  }
+  return { ok: true, value: value.trim() };
+}
+
+function assertEnvelopeList(field: string, value: unknown): { ok: true } | MailHeaderError {
+  if (value === undefined || value === null || value === "") return { ok: true };
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const checked = assertMailEnvelopeValue(field, item);
+      if (!checked.ok) return checked;
+    }
+    return { ok: true };
+  }
+  return assertMailEnvelopeValue(field, value);
+}
+
+/** Validate From / To / Subject / Cc / Bcc before approval or send. */
+export function parseMailEnvelope(args: Record<string, unknown>): { ok: true } | MailHeaderError {
+  for (const [field, raw] of [
+    ["from", args.from ?? args.sender],
+    ["to", args.to ?? args.recipient ?? args.email],
+    ["subject", args.subject ?? args.title],
+  ] as const) {
+    const checked = assertMailEnvelopeValue(field, raw);
+    if (!checked.ok) return checked;
+  }
+  const cc = assertEnvelopeList("cc", args.cc);
+  if (!cc.ok) return cc;
+  const bcc = assertEnvelopeList("bcc", args.bcc);
+  if (!bcc.ok) return bcc;
+  return { ok: true };
+}

@@ -64,6 +64,7 @@ mock.module("@/lib/data/google-identities", () => ({
   },
   getEmployeeGoogleIdentity: async (employeeId: string) => ({
     employeeId,
+    orgId: employees.find((e) => e.id === employeeId)?.orgId || ORG_A,
     googleSub: `sub-${employeeId}`,
     googleEmail: `${employeeId}@example.com`,
     grantedScopes: "openid",
@@ -226,6 +227,7 @@ describe("GET /api/google/oauth/start", () => {
     expect(scope).toContain("calendar.freebusy");
     expect(scope).not.toContain("gmail.send");
     expect(location.searchParams.get("include_granted_scopes")).toBe("true");
+    expect(location.searchParams.get("login_hint")).toBe(`${EMP_A}@example.com`);
   });
 
   test("gmail.send start is 404 when MAIL_SEND_GMAIL_LIVE is off", async () => {

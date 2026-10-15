@@ -5,6 +5,7 @@
 import type { GatewayInvokeRequest } from "@/lib/types";
 import {
   parseMailThreading,
+  parseMailEnvelope,
   mailProviderIsGmail,
   type MailThreading,
 } from "@/lib/mail/headers";
@@ -37,6 +38,9 @@ export async function prepareMailSend(
     body.args && typeof body.args === "object" && !Array.isArray(body.args)
       ? (body.args as Record<string, unknown>)
       : {};
+  const envelope = parseMailEnvelope(args);
+  if (!envelope.ok) return envelope;
+
   const threading = parseMailThreading(args, body.conversation ?? null);
   if (!threading.ok) return threading;
 
