@@ -55,6 +55,17 @@ describe("GET /api/holds/status?scope=org", () => {
     expect(r.body.orgEnabled).toBe(true);
     expect(String(r.cache || "")).toMatch(/no-store/);
   });
+  test("ops_console org stop → opsHold true (HoldPanel hides 解除を申請)", async () => {
+    const stop = await startHold({
+      orgId: ORG, employeeId: null,
+      actor: { type: "ops", opsId: "ops@staffpass.example", surface: "ops_console" },
+    });
+    expect(stop.ok).toBe(true);
+    const r = await status("scope=org");
+    expect(r.body.state).toBe("held");
+    expect((r.body.hold as { opsHold?: boolean; startedVia?: string } | null)?.startedVia).toBe("ops_console");
+    expect((r.body.hold as { opsHold?: boolean } | null)?.opsHold).toBe(true);
+  });
   test("after org stop, scope=org is held with that holdId (not none)", async () => {
     const stop = await startHold({
       orgId: ORG, employeeId: null,

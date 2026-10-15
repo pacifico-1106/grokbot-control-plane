@@ -80,7 +80,7 @@ export function HoldPanel({ employeeId, scope = "employee" }: { employeeId?: str
       {mode === "held" && h ? (
         <div className="space-y-2">
           <p className="text-sm font-medium">{KIND_JA[h.kind] ?? h.kind}{h.startedAt ? `（${new Date(h.startedAt).toLocaleString("ja-JP", { timeZone: "Asia/Tokyo" })} JST）` : ""}</p>
-          {h.opsHold ? <p className="text-xs muted">運営が止めた停止です。解除は運営のみが行えます。</p> : !h.releaseRequested ? (
+          {h.opsHold ? <p className="text-xs muted">運営が止めた停止です。解除を申請は出せません（運営のみ）。誤って「運営管理」から止めた場合は運営に連絡してください。</p> : !h.releaseRequested ? (
             <>
               <input className="input w-full" placeholder="解除の理由（必須）" value={reason} maxLength={500} onChange={(e) => setReason(e.target.value)} />
               <button type="button" className="btn" disabled={busy || !reason.trim()} onClick={() => post("/api/holds/release/request", { holdId: h.id, reason }, "解除を申請しました。別の人の承認を待っています。")}>解除を申請</button>
