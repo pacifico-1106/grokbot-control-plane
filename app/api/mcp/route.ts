@@ -292,7 +292,7 @@ async function handlePost(req: Request) {
     ).catch(() => undefined);
 
     if (method === "tools/list") {
-      const listed = listStaffpassMcpTools().map((t) => ({
+      const listed = listStaffpassMcpTools({ orgId: auth.credential.orgId }).map((t) => ({
         name: t.name,
         description: t.description,
         inputSchema: t.inputSchema,

@@ -27,7 +27,13 @@ import {
 export const SECRET_DETECTION_BLOCKED = "secret_detection.blocked" as const;
 export const SECRET_DETECTION_SUSPECTED = "secret_detection.suspected" as const;
 
-export type SecretDetectionSurface = "gateway_invoke" | "admin_queue" | "config_change_request";
+export type SecretDetectionSurface =
+  | "gateway_invoke"
+  | "admin_queue"
+  | "config_change_request"
+  | "operator_notice"
+  | "operator_notice_ack"
+  | "ops_report";
 
 type AuditWriter = typeof appendAuditEvent;
 let writer: AuditWriter = appendAuditEvent;
