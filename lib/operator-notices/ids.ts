@@ -1,6 +1,7 @@
 /**
  * Notice / feedback ids: prefix + 26-char Crockford ULID (uppercase).
  * Matches migration 20261015100000 check constraints.
+ * No BigInt (tsconfig target is ES2017).
  */
 const CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 
@@ -13,11 +14,17 @@ export function ulid(now = Date.now()): string {
   }
   const bytes = new Uint8Array(10);
   crypto.getRandomValues(bytes);
-  let entropy = 0n;
-  for (const b of bytes) entropy = (entropy << 8n) | BigInt(b);
-  for (let i = 25; i >= 10; i--) {
-    chars[i] = CROCKFORD[Number(entropy & 31n)];
-    entropy >>= 5n;
+  // 10 bytes = 80 bits → 16 Crockford chars. Bitstream, number-sized buffer.
+  let bitBuf = 0;
+  let bitCount = 0;
+  let idx = 10;
+  for (const b of bytes) {
+    bitBuf = (bitBuf << 8) | b;
+    bitCount += 8;
+    while (bitCount >= 5 && idx < 26) {
+      bitCount -= 5;
+      chars[idx++] = CROCKFORD[(bitBuf >>> bitCount) & 31];
+    }
   }
   return chars.join("");
 }
