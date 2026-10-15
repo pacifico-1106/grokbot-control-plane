@@ -1,8 +1,9 @@
 import { AppShell } from "@/components/AppShell";
 import { AuditTimeline } from "@/components/audit/AuditTimeline";
+import { loadAuditPresentationLookups } from "@/lib/audit/lookups";
 import { presentAuditRows } from "@/lib/audit/presentation";
 import { getSessionContext } from "@/lib/auth/session";
-import { listAuditEvents, listEmployees } from "@/lib/data";
+import { listAuditEvents } from "@/lib/data";
 import { hasCapability } from "@/lib/team/rbac";
 
 export const dynamic = "force-dynamic";
@@ -38,19 +39,9 @@ export default async function AuditPage() {
     );
   }
 
-  const [events, employees] = await Promise.all([
-    listAuditEvents(orgId),
-    listEmployees(orgId),
-  ]);
-  const employeesById = new Map(
-    employees
-      .filter((e) => !e.orgId || e.orgId === orgId)
-      .map((e) => [e.id, { displayName: e.displayName }])
-  );
-  const rows = presentAuditRows(
-    events.filter((event) => event.orgId === orgId),
-    { orgId, employeesById }
-  );
+  const events = (await listAuditEvents(orgId)).filter((event) => event.orgId === orgId);
+  const lookups = await loadAuditPresentationLookups(orgId, events);
+  const rows = presentAuditRows(events, lookups);
 
   return (
     <AppShell

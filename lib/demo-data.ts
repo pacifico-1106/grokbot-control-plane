@@ -219,7 +219,7 @@ export const DEMO_AUDIT: AuditEvent[] = [
     action: "approval.requested",
     purpose: "commerce.quote",
     summary: "外部送信が承認待ちになりました",
-    metadata: { sharedHost: true, risk: "medium" },
+    metadata: { sharedHost: true, risk: "medium", approvalId: "apr_1", tool: "mail.send" },
     createdAt: new Date(Date.now() - 3600000).toISOString(),
   },
   {
@@ -270,6 +270,18 @@ export const DEMO_AUDIT: AuditEvent[] = [
       sent: true,
     },
     createdAt: new Date(Date.now() - 1800000).toISOString(),
+  },
+  {
+    id: "aud_6",
+    orgId: DEMO_ORG.id,
+    employeeId: null,
+    credentialId: null,
+    actorEmail: "owner@example.com",
+    action: "member.updated",
+    purpose: null,
+    summary: "メンバーを更新",
+    metadata: {},
+    createdAt: new Date(Date.now() - 900000).toISOString(),
   },
 ];
 

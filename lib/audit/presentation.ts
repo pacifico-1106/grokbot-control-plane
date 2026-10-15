@@ -1,11 +1,10 @@
-import { actorLabel } from "@/lib/employees/actor-label";
 import type { AuditEvent } from "@/lib/types";
+import { resolveAuditActor } from "./actor";
+import { refineResultWithApproval, resolveAuditApproval } from "./approval";
 import { auditOperationLabelJa } from "./labels-ja";
-import { clipAuditText, maskEmail, opaqueAuditId, sanitizeAuditDisplayText } from "./mask";
+import { clipAuditText, opaqueAuditId, sanitizeAuditDisplayText } from "./mask";
 import { classifyAuditResult } from "./result";
 import type {
-  AuditActorView,
-  AuditApprovalView,
   AuditPresentationLookups,
   AuditRowView,
   AuditSafeMeta,
@@ -76,37 +75,6 @@ function presentSafeMeta(event: AuditEvent, meta: Record<string, unknown>): Audi
   };
 }
 
-function presentActor(event: AuditEvent, lookups: AuditPresentationLookups): AuditActorView {
-  const employeeId = event.employeeId ? String(event.employeeId).trim() : "";
-  if (employeeId) {
-    const emp = lookups.employeesById?.get(employeeId);
-    const labeled = actorLabel(emp, employeeId);
-    return {
-      kind: "ai",
-      name: sanitizeAuditDisplayText(labeled.name) || "不明",
-      emailMasked: null,
-      employeeId: opaqueAuditId(employeeId),
-    };
-  }
-  const stored = event.actorEmail ?? asString(metaRecord(event).actorEmail);
-  return {
-    kind: "system",
-    name: "不明",
-    emailMasked: stored ? maskEmail(stored) : null,
-    employeeId: null,
-  };
-}
-
-function presentApprovalPlaceholder(meta: Record<string, unknown>): AuditApprovalView {
-  return {
-    needed: null,
-    approvalId: opaqueAuditId(asString(meta.approvalId) ?? asString(meta.approval_id)),
-    status: "unknown",
-    approverName: null,
-    approverEmailMasked: null,
-  };
-}
-
 function presentTargetPlaceholder(): AuditTargetView {
   return { kind: "none", labelJa: "—", rawId: null };
 }
@@ -123,18 +91,19 @@ export function presentAuditRow(
     surface: conversationSurface(meta),
   });
   const cleaned = sanitizeAuditDisplayText(event.summary ?? "");
+  const approval = resolveAuditApproval(event, lookups);
   const view: AuditRowView = {
     id: event.id,
     createdAt: event.createdAt,
     createdAtJst: formatAuditJst(event.createdAt, false),
     createdAtJstPrecise: formatAuditJst(event.createdAt, true),
-    actor: presentActor(event, lookups),
+    actor: resolveAuditActor(event, lookups),
     action,
     target: presentTargetPlaceholder(),
     summary: clipAuditText(cleaned, AUDIT_SUMMARY_LIST_MAX),
     summaryDetail: clipAuditText(cleaned, AUDIT_SUMMARY_DETAIL_MAX),
-    approval: presentApprovalPlaceholder(meta),
-    result: classifyAuditResult(event),
+    approval,
+    result: refineResultWithApproval(classifyAuditResult(event), approval),
     safeMeta: presentSafeMeta(event, meta),
   };
   return view;
