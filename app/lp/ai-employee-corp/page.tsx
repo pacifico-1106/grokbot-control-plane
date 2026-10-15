@@ -18,7 +18,7 @@ import { LP_CORP_ROBOTS } from "@/lib/lp/lp-page";
 
 export const metadata: Metadata = {
   title: `${SERVICE_FULL_NAME} — AI社員の導入・運用パック`,
-  description: `${SERVICE_FULL_NAME}で、AI社員の導入から運用までをまとめて支援。社員証・許可・記録、会社メール、Grok Bot をまとめて導入。月50,000円から。`,
+  description: `${SERVICE_FULL_NAME}で、AI社員の導入から運用までをまとめて支援。社員証・許可・記録、会社メール、AI実行環境（推奨：Cursor）をまとめて導入。月50,000円から。`,
   robots: LP_CORP_ROBOTS,
 };
 

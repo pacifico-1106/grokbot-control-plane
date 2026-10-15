@@ -53,13 +53,13 @@ const STEPS = [
     step: "02",
     title: "環境セットアップ",
     description:
-      "Staffpassでの社員証発行、Google Workspaceの連携、Grok Bot環境の構築を私たちが行います。",
+      "Staffpassでの社員証発行、Google Workspaceの連携、AI実行環境（推奨：Cursor）の構築を私たちが行います。",
   },
   {
     step: "03",
     title: "承認チャネル設定",
     description:
-      "メールまたはLINE、Slackで承認通知を受け取れるよう設定。スマホから承認・却下ができます。",
+      "LINE・Slackのボタン、またはメール通知から管理画面で承認できるよう設定します。",
   },
   {
     step: "04",
@@ -80,7 +80,7 @@ const FAQ = [
   },
   {
     q: "本当に月50,000円から使えるの？",
-    a: "はい。Internプランは月50,000円（税別）です。1つの定型業務（日報下書き、予定調整など）を任せるのに最適な「1業務の箱」です。Google Workspaceのアカウント費用やGrok Botの従量課金分など、実費は別途かかります。セットアップから運用まで、私たちがハンズオンでサポートします。",
+    a: "はい。Internプランは月50,000円（税別）です。1つの定型業務（日報下書き、予定調整など）を任せるのに最適な「1業務の箱」です。Google Workspaceのアカウント費用や推奨：Cursorの従量課金分など、実費は別途かかります。セットアップから運用まで、私たちがハンズオンでサポートします。",
   },
   {
     q: "初期費用と月額の違いは？",
@@ -88,7 +88,7 @@ const FAQ = [
   },
   {
     q: "承認はどうやって行うの？",
-    a: "メール、LINE、Slackで承認依頼が届きます。初期設定では、社外送信・日程確定・発注は人が見るまで進みません。スマホから承認・却下を行えます。",
+    a: "LINE・Slackではボタンで承認・却下できます。メールは通知で、承認・却下は管理画面から行います。初期設定では、社外送信・日程確定・発注は人が見るまで進みません。",
   },
   {
     q: "勝手にメールを送ったり、予定を入れたりしない？",
@@ -374,7 +374,7 @@ export function AIEmployeeLanding({ variant }: { variant: LpPage }) {
               </li>
               <li className="flex items-start gap-2">
                 <span className="text-[var(--ok)] mt-0.5">✓</span>
-                Grok Bot / Cursor環境の構築
+                AI実行環境の構築（推奨：Cursor）
               </li>
               <li className="flex items-start gap-2">
                 <span className="text-[var(--ok)] mt-0.5">✓</span>
@@ -398,8 +398,7 @@ export function AIEmployeeLanding({ variant }: { variant: LpPage }) {
                 実費は別途
               </h4>
               <p className="mt-2 text-sm faint leading-relaxed">
-                Google Workspace（会社負担）、Slackワークスペース（会社負担）、Cursor/Grok
-                Botの従量課金分、LINE公式アカウント費用（ご利用の場合）は、プラン料金とは別に実費としてかかります。
+                Google Workspace（会社負担）、Slackワークスペース（会社負担）、推奨：Cursorの従量課金分、LINE公式アカウント費用（ご利用の場合）は、プラン料金とは別に実費としてかかります。Staffpassは特定の実行環境に依存しません。推奨はCursorで、Cursor上で各種エージェントを利用できます。
               </p>
               <p className="mt-2 text-xs faint">
                 ※ その他、業務において必要となるアカウントに応じ変動します。
@@ -467,9 +466,9 @@ export function AIEmployeeLanding({ variant }: { variant: LpPage }) {
               </div>
               <h3 className="mt-4 font-semibold">メール承認</h3>
               <p className="mt-2 text-sm muted">
-                会社メールに承認依頼が届きます。
+                会社メールに承認依頼の通知が届きます。
                 <br />
-                ワンクリックで承認・却下。
+                承認・却下は管理画面から。
               </p>
             </div>
             <div className="surface p-6 text-center">
@@ -484,7 +483,7 @@ export function AIEmployeeLanding({ variant }: { variant: LpPage }) {
               </div>
               <h3 className="mt-4 font-semibold">LINE承認</h3>
               <p className="mt-2 text-sm muted">
-                LINEに通知が届きます。
+                LINEのボタンで承認・却下できます。
                 <br />
                 外出先でもすぐ対応できます。
               </p>
@@ -501,7 +500,7 @@ export function AIEmployeeLanding({ variant }: { variant: LpPage }) {
               </div>
               <h3 className="mt-4 font-semibold">Slack承認</h3>
               <p className="mt-2 text-sm muted">
-                Slackに通知が届きます。
+                Slackのボタンで承認・却下できます。
                 <br />
                 チームで承認フローを回せます。
               </p>

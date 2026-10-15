@@ -64,7 +64,7 @@ const PRICING_TIERS: PricingTier[] = [
     features: [
       "AI社員証（Staffpass）",
       "会社メール連携",
-      "Grok Bot 実行環境",
+      "AI実行環境（推奨：Cursor）",
       "メール / LINE / Slack 承認",
       "基本運用サポート",
       "ハンズオン導入支援",
@@ -418,7 +418,7 @@ export function PricingSection({ lpPage = "ai-employee" }: { lpPage?: LpPage } =
             ※ 価格は税別です。Google Workspace・Slackは会社負担でのご契約となります。
           </p>
           <p className="text-sm faint">
-            ※ Cursor/Grok Bot、LINE公式アカウント等の従量課金分は実費として別途かかります。
+            ※ 推奨：Cursor、LINE公式アカウント等の従量課金分は実費として別途かかります。
           </p>
         </div>
       </div>
