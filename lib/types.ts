@@ -831,6 +831,8 @@ export interface AuditEvent {
   orgId: string;
   employeeId: string | null;
   credentialId: string | null;
+  /** Human operator email when stored. /app/audit must mask; never dump raw. */
+  actorEmail?: string | null;
   action: AuditAction;
   purpose: string | null;
   summary: string;

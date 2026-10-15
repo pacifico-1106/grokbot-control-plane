@@ -1,0 +1,143 @@
+import { actorLabel } from "@/lib/employees/actor-label";
+import type { AuditEvent } from "@/lib/types";
+import { auditOperationLabelJa } from "./labels-ja";
+import { clipAuditText, maskEmail, sanitizeAuditDisplayText } from "./mask";
+import { classifyAuditResult } from "./result";
+import type {
+  AuditActorView,
+  AuditApprovalView,
+  AuditPresentationLookups,
+  AuditRowView,
+  AuditSafeMeta,
+  AuditTargetView,
+} from "./types";
+
+export const AUDIT_SUMMARY_LIST_MAX = 80;
+export const AUDIT_SUMMARY_DETAIL_MAX = 200;
+
+function asString(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const t = value.trim();
+  return t || null;
+}
+
+function metaRecord(event: AuditEvent): Record<string, unknown> {
+  return event.metadata && typeof event.metadata === "object" && !Array.isArray(event.metadata)
+    ? event.metadata
+    : {};
+}
+
+function conversationSurface(meta: Record<string, unknown>): string | null {
+  const direct = asString(meta.surface);
+  if (direct) return direct;
+  const conversation = meta.conversation;
+  if (conversation && typeof conversation === "object" && !Array.isArray(conversation)) {
+    return asString((conversation as Record<string, unknown>).surface);
+  }
+  return asString(meta.destinationSurface);
+}
+
+export function formatAuditJst(iso: string, withSeconds = false): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  const fmt = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Tokyo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    ...(withSeconds ? { second: "2-digit" as const } : {}),
+    hour12: false,
+  });
+  return `${fmt.format(d).replace(", ", " ")} JST`;
+}
+
+function prefixId(id: string | null): string | null {
+  if (!id) return null;
+  return id.length <= 8 ? id : id.slice(0, 8);
+}
+
+function presentSafeMeta(event: AuditEvent, meta: Record<string, unknown>): AuditSafeMeta {
+  const approvalId = asString(meta.approvalId) ?? asString(meta.approval_id);
+  return {
+    purpose: event.purpose ? sanitizeAuditDisplayText(event.purpose) : asString(meta.purpose),
+    jobId: asString(meta.jobId) ?? asString(meta.job_id),
+    risk: asString(meta.risk),
+    informationClass: asString(meta.informationClass) ?? asString(meta.information_class),
+    audience: asString(meta.audience),
+    approvalIdPrefix: prefixId(approvalId),
+  };
+}
+
+function presentActor(event: AuditEvent, lookups: AuditPresentationLookups): AuditActorView {
+  const employeeId = event.employeeId ? String(event.employeeId).trim() : "";
+  if (employeeId) {
+    const emp = lookups.employeesById?.get(employeeId);
+    const labeled = actorLabel(emp, employeeId);
+    return {
+      kind: "ai",
+      name: labeled.name,
+      emailMasked: null,
+      employeeId,
+    };
+  }
+  const stored = event.actorEmail ?? asString(metaRecord(event).actorEmail);
+  return {
+    kind: "system",
+    name: "不明",
+    emailMasked: stored ? maskEmail(stored) : null,
+    employeeId: null,
+  };
+}
+
+function presentApprovalPlaceholder(meta: Record<string, unknown>): AuditApprovalView {
+  const approvalId = asString(meta.approvalId) ?? asString(meta.approval_id);
+  return {
+    needed: null,
+    approvalId,
+    status: "unknown",
+    approverName: null,
+    approverEmailMasked: null,
+  };
+}
+
+function presentTargetPlaceholder(): AuditTargetView {
+  return { kind: "none", labelJa: "—", rawId: null };
+}
+
+export function presentAuditRow(
+  event: AuditEvent,
+  lookups: AuditPresentationLookups = {}
+): AuditRowView {
+  const meta = metaRecord(event);
+  const tool = asString(meta.tool) ?? asString(meta.adminTool);
+  const action = auditOperationLabelJa({
+    action: event.action,
+    tool,
+    surface: conversationSurface(meta),
+  });
+  const cleaned = sanitizeAuditDisplayText(event.summary ?? "");
+  const view: AuditRowView = {
+    id: event.id,
+    createdAt: event.createdAt,
+    createdAtJst: formatAuditJst(event.createdAt, false),
+    createdAtJstPrecise: formatAuditJst(event.createdAt, true),
+    actor: presentActor(event, lookups),
+    action,
+    target: presentTargetPlaceholder(),
+    summary: clipAuditText(cleaned, AUDIT_SUMMARY_LIST_MAX),
+    summaryDetail: clipAuditText(cleaned, AUDIT_SUMMARY_DETAIL_MAX),
+    approval: presentApprovalPlaceholder(meta),
+    result: classifyAuditResult(event),
+    safeMeta: presentSafeMeta(event, meta),
+  };
+  return view;
+}
+
+export function presentAuditRows(
+  events: AuditEvent[],
+  lookups: AuditPresentationLookups = {}
+): AuditRowView[] {
+  return events.map((event) => presentAuditRow(event, lookups));
+}

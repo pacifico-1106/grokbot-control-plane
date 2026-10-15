@@ -1,0 +1,358 @@
+import { ADMIN_MCP_TOOL_NAMES, type AdminMcpToolName } from "@/lib/mcp/admin-public";
+import type { AuditAction } from "@/lib/types";
+import type { GatewayToolId } from "@/lib/gateway/tools";
+import { GATEWAY_TOOL_DEFS } from "@/lib/gateway/tools";
+import { ADMIN_TOOL_TITLE_JA } from "@/lib/admin-mcp/queue";
+
+/** Short audit labels (owner-facing). Gateway card labelJa is fallback only. */
+export const GATEWAY_AUDIT_LABELS_JA: Record<GatewayToolId, string> = {
+  "tools.ping": "ヘルス確認",
+  "tools.read": "ツールの参照",
+  "calendar.read": "カレンダーを参照",
+  "calendar.propose": "空き枠を提案",
+  "calendar.confirm": "日程を確定",
+  "calendar.allowlist.patch": "カレンダー許可リストを変更",
+  "mail.draft": "メールの下書き",
+  "mail.send": "メールを送信",
+  "agentmail.draft": "AgentMail の下書き",
+  "agentmail.send": "AgentMail を送信",
+  "files.read": "ファイルを参照",
+  "files.write": "ファイルを更新",
+  "browser.use": "ブラウザを操作",
+  "commerce.quote": "見積を作成",
+  "commerce.order": "発注する",
+  "slack.post": "Slackにメッセージを送信",
+  "slack.post_external": "Slackにメッセージを送信",
+  "comm.reply": "Slackにメッセージを送信",
+  "comm.send": "Slackにメッセージを送信",
+  "comm.delete": "自分の投稿を削除",
+  "sns.publish": "SNSに投稿",
+  "drive.share_external": "Driveの社外共有リンクを発行",
+  "knowledge.search": "社内ナレッジを検索",
+  "approvals.request": "承認を依頼",
+  "audit.append": "監査に追記",
+};
+
+export const EMPLOYEE_MCP_AUDIT_LABELS_JA: Record<string, string> = {
+  staffpass_whoami: "社員証を確認",
+  staffpass_invoke: "操作を実行",
+  staffpass_get_approval_status: "承認状態を確認",
+  staffpass_health: "接続状態を確認",
+  staffpass_stuck_list: "停滞中の仕事を一覧",
+  staffpass_stuck_retry: "停滞中の仕事を再試行",
+  staffpass_decision_request: "判断を依頼",
+  staffpass_config_change_request: "設定変更を依頼",
+  staffpass_sensitive_topics: "機微トピックを確認",
+  staffpass_profile: "プロフィールを確認",
+};
+
+export const ADMIN_MCP_AUDIT_LABELS_JA: Record<AdminMcpToolName, string> = {
+  "employees.issue": "AI社員を発行",
+  link: "AI社員を連携",
+  "policy.patch": "権限を更新",
+  "employees.allowedAccounts.add": "許可アカウントを追加",
+  "employees.allowedAccounts.remove": "許可アカウントを削除",
+  "employees.allowedAccounts.list": "許可アカウントを一覧",
+  "employees.postingIdentity.set": "投稿名義を設定",
+  "employees.credential.reissue": "社員証を再発行",
+  "parties.upsert": "相手台帳を更新",
+  "parties.list": "相手台帳を一覧",
+  "parties.remove": "相手台帳から削除",
+  "channels.classify": "チャネルを分類",
+  "channels.list": "チャネル台帳を一覧",
+  "channels.remove": "チャネル台帳から削除",
+  "roles.propose": "職務案を提案",
+  "setup.slackStatus": "Slack連携状態を確認",
+  "setup.slackAdapter.setBotToken": "Slack投稿Botを設定",
+  "setup.connectInternalBase": "社内Slack基盤を設定",
+  "setup.lineApprovalStatus": "LINE承認の状態を確認",
+  "setup.lineApproval.upsert": "承認用LINEを設定",
+  "setup.lineApproval.setEmployeeInbox": "AI社員のLINE承認先を設定",
+  "setup.lineApproval.demoteTelegram": "Telegram承認を無効化",
+  "ingressHandoff.get": "受信の渡し方を確認",
+  "ingressHandoff.patch": "受信の渡し方を更新",
+  "schedulingPolicy.get": "予定ポリシーを確認",
+  "schedulingPolicy.patch": "予定ポリシーを更新",
+  "replyPolicy.get": "返信ポリシーを確認",
+  "replyPolicy.patch": "返信ポリシーを更新",
+  "mailPolicy.get": "メールポリシーを確認",
+  "mailPolicy.patch": "メールポリシーを更新",
+  "internalAudienceRule.get": "社内相手ルールを確認",
+  "internalAudienceRule.patch": "社内相手ルールを更新",
+  "stuckWatch.get": "停滞監視の設定を確認",
+  "stuckWatch.patch": "停滞監視の設定を更新",
+  "stuckWatch.list": "停滞中の仕事を一覧",
+  "stuckWatch.inspect": "停滞中の仕事を確認",
+  "stuckWatch.retry": "停滞中の仕事を再試行",
+  "stuckWatch.resolve": "停滞中の仕事を解決",
+  "stuckWatch.classify": "停滞の分類を更新",
+  "approvalWorkflow.get": "承認ワークフローを確認",
+  "approvalWorkflow.patch": "承認ワークフローを更新",
+  "approvalWorkflow.inspect": "承認ワークフローを点検",
+  "approvalWorkflow.remind": "承認者に再通知",
+  "approvalWorkflow.bindVoter": "承認者を登録",
+  "approvalWorkflow.unbindVoter": "承認者登録を解除",
+  "approvalWorkflow.resendVoterVerification": "承認者確認を再送",
+  "approvalWorkflow.listVoterBindings": "承認者登録を一覧",
+  "setup.approverBindingStatus": "承認者登録の状態を確認",
+  "approvalRoutes.get": "承認ルートを確認",
+  "approvalRoutes.patch": "承認ルートを更新",
+  "orgs.create": "テナントを作成",
+  "orgs.status": "テナント状態を確認",
+  "orgs.patch": "テナント名を変更",
+  "orgs.issueAdminCredential": "管理認証を発行",
+  "approvals.proxyResolve": "承認を代理で確定",
+  "employeeIdentity.status": "AI社員の身元を確認",
+  "employeeIdentity.upsert": "AI社員の身元を設定",
+  "employeeIdentity.bindMailbox": "AI社員のメールボックスを設定",
+  "setup.slackDmApprovalStatus": "Slack DM承認の状態を確認",
+  "dmAutoroute.list": "DM自動経路を一覧",
+  "dmAutoroute.run": "DM自動経路を実行",
+  "setup.approvalDelivery.autoResolve": "承認配送を自動解決",
+  "setup.slackApprover.set": "Slack承認者を設定",
+  "setup.slackAuthorizeLink.issue": "Slack認可リンクを発行",
+  "approvers.designatedAdmins.get": "指定管理者を確認",
+  "approvers.designatedAdmins.set": "指定管理者を更新",
+  "members.promoteOwner": "オーナーに昇格",
+};
+
+export const AUDIT_ACTION_LABELS_JA: Record<AuditAction, string> = {
+  "tool.invoke": "操作を実行",
+  "credential.issued": "社員証を発行",
+  "credential.revoked": "社員証を失効",
+  "credential.rotated": "社員証を再発行",
+  "credential.expiry_notice": "社員証の期限を通知",
+  "oauth.consent_granted": "AI接続を許可",
+  "oauth.consent_denied": "AI接続を拒否",
+  "oauth.grant_revoked": "AI接続を取り消し",
+  "oauth.token_issued": "接続トークンを発行",
+  "oauth.code_reuse_detected": "認可コードの再利用を検出",
+  "oauth.refresh_reuse_detected": "更新トークンの再利用を検出",
+  "oauth.refresh_replay_in_grace": "更新トークンの再送（猶予）",
+  "oauth.dcr_global_cap_reached": "クライアント登録が上限",
+  "comm.link_code_account_locked": "連携コードをロック",
+  "comm.link_code_account_locked_repeat": "連携コードのロックが継続",
+  "comm.account.created": "通信アカウントを作成",
+  "comm.account.secrets_set": "通信シークレットを設定",
+  "comm.account.disabled": "通信アカウントを停止",
+  "lp.setup_fee.email_hash_key_missing": "初期費用通知の鍵なし",
+  "lp.setup_fee.notice_record_failed": "初期費用通知の記録に失敗",
+  "employee.hold.state_unavailable": "緊急停止の状態を確認できず",
+  "employee.hold.not_installed": "緊急停止が未導入",
+  "employee.hold.wake_suppressed": "停止中のため起動せず",
+  "employee.hold.started": "緊急停止を開始",
+  "employee.hold.start_failed": "緊急停止を開始できず",
+  "employee.hold.release_requested": "緊急停止の解除を申請",
+  "employee.hold.released": "緊急停止を解除",
+  "employee.hold.release_refused": "緊急停止の解除を拒否",
+  "employee.hold.ai_refused": "停止中の操作を拒否",
+  "comm.delete.succeeded": "自分の投稿を削除",
+  "comm.delete.already_deleted": "投稿は既に削除済み",
+  "comm.delete.refused": "投稿の削除を拒否",
+  "comm.delete.failed": "投稿の削除に失敗",
+  "comm.delete.approval_requested": "投稿削除の承認を依頼",
+  "approval.requested": "承認を依頼",
+  "approval.resolved": "承認が確定",
+  "approval.revision_requested": "修正を依頼",
+  "approval.superseded": "承認を置き換え",
+  "approval.expired": "承認が期限切れ",
+  "approval.telegram_error": "Telegram承認の通知に失敗",
+  "approval.snapshot_missing_attachment": "承認時の添付が無い",
+  "approval.attachment_upload_in_progress": "添付の送信中",
+  "approval.attachment_upload_uncertain": "添付の送信結果が不明",
+  "approval.attachment_not_sent": "添付を送っていない",
+  "approval.attachment_reconciled": "添付の状態を照合",
+  "approval.attachment_request_ignored": "添付依頼を無視",
+  "approval.attachment_upload_capped": "添付の再送が上限",
+  "approval.callback_config_unavailable": "承認コールバック設定なし",
+  "approval.cancelled_by_plan_change": "プラン変更で承認を取消",
+  "comm_reply.duplicate_suppressed": "重複送信を抑制",
+  "comm_reply.dedup_unavailable": "重複チェックが使えない",
+  "comm_reply.cross_employee_duplicate": "他のAI社員と重複",
+  "comm_reply.post_outcome_unknown": "投稿結果が不明",
+  "comm_reply.uncertain_released": "不明だった投稿を解除",
+  "thread_guard.busy": "スレッドが処理中",
+  "thread_guard.moved_on": "スレッドが先に進んだ",
+  "thread_guard.unavailable": "スレッドガードが使えない",
+  "thread_guard.read_point_unknown": "既読位置が不明",
+  "setup.tool_succeeded": "セットアップ操作が成功",
+  "notification.channel_updated": "通知チャネルを更新",
+  "notification.test_sent": "通知テストを送信",
+  "notification.delivery_failed": "通知の配送に失敗",
+  "channel_classify.proposed": "チャネル分類を提案",
+  "channel_classify.proposal_failed": "チャネル分類の提案に失敗",
+  "channel_classify.wake_skip_suppressed": "分類スキップ通知を抑制",
+  "channel_classify.join_ignored": "参加イベントを無視",
+  "channel_stuck.notice": "チャネル停滞を通知",
+  "channel_stuck.notice_suppressed": "チャネル停滞通知を抑制",
+  "conversation.adapter_updated": "会話アダプタを更新",
+  "conversation.adapter_installed": "会話アダプタを導入",
+  "slack.posted": "Slackにメッセージを送信",
+  "slack.post_failed": "Slackへの送信に失敗",
+  "line.posted": "LINEにメッセージを送信",
+  "line.post_failed": "LINEへの送信に失敗",
+  "line.conversation_target_mismatch": "LINEの相手が一致せず",
+  "line.conversation_wake": "LINEの会話で起動",
+  "comm.not_sent": "メッセージを送っていない",
+  "slack.file_uploaded": "Slackにファイルを添付",
+  "slack.file_upload_failed": "Slackファイル添付に失敗",
+  "slack.file_egress_denied": "Slackファイル添付を拒否",
+  "sns.publish_failed": "SNS投稿に失敗",
+  "slack.mention_wake": "Slackのメンションで起動",
+  "slack.internal_im_wake": "Slackの社内DMで起動",
+  "slack.user_token_im_wake": "SlackのユーザDMで起動",
+  "slack.im_wake_skipped": "Slack DM起動をスキップ",
+  "slack.user_token_channel_wake": "Slackチャネルで起動",
+  "slack.user_token_channel_wake_skipped": "Slackチャネル起動をスキップ",
+  "slack.user_token_channel_rewake": "分類後にチャネルで再起動",
+  "slack.user_token_channel_rewake_skipped": "分類後の再起動をスキップ",
+  "employee.sod_forced": "職務分離で人承認に変更",
+  "employee.sod_override": "職務分離の上書き",
+  "employee.project_access_refused": "プロジェクト範囲外を拒否",
+  "information_asset.project_refused": "情報資産のプロジェクトを拒否",
+  "action_limit.reached": "操作回数の上限に到達",
+  "action_limit.denied": "操作回数の上限で拒否",
+  "gateway.conversation_org_mismatch": "会話の組織が一致せず",
+  "gateway.conversation_channel_mismatch": "会話のチャネルが一致せず",
+  "gateway.session_org_mismatch": "セッションの組織が一致せず",
+  "billing.updated": "請求情報を更新",
+  "email.sent": "メールを送信",
+  "gateway.link_changed": "Gateway連携を変更",
+  "employee.created": "AI社員を作成",
+  "employee.updated": "AI社員を更新",
+  "employee.terminated": "AI社員を失効",
+  "member.invited": "メンバーを招待",
+  "member.updated": "メンバーを更新",
+  "member.change_denied": "メンバー変更を拒否",
+  "commerce.projection_received": "取引イベントを受信",
+  "authority.event_delivery": "権限イベントを配送",
+  "admin.hire": "AI社員を発行",
+  "admin.link": "AI社員を連携",
+  "admin.policy": "権限・ポリシーを更新",
+  "admin.parties": "相手台帳を更新",
+  "admin.channel": "チャネルを分類",
+  "admin.role": "職務案を提案",
+  "admin.ingressHandoff": "受信の渡し方を更新",
+  "admin.conversationAdapter": "会話アダプタを更新",
+  "admin.notificationChannel": "通知チャネルを更新",
+  "admin.create_org": "テナントを作成",
+  "admin.issue_admin_credential": "管理認証を発行",
+  "admin.proxy_approve": "承認を代理で確定",
+  "admin.org_patch": "テナント名を変更",
+  "admin.billing": "請求設定を更新",
+  "admin.external_contract_card": "外部契約カードを操作",
+  "admin.portal": "管理ポータルを操作",
+  "stuck_watch.w2_retry": "未完了の仕事を再試行",
+  "stuck_watch.w1_notify": "未返信を通知",
+  "stuck_watch.audience_ledger_retry": "相手台帳の再試行",
+  "stuck_watch.w4_notify": "停滞を通知",
+  "stuck_watch.attachment_uncertain_notify": "添付不明を通知",
+  "stuck_watch.retry": "停滞中の仕事を再試行",
+  "stuck_watch.resolve": "停滞中の仕事を解決",
+  "mcp.client_seen": "MCPクライアントを確認",
+  "mcp_events.subscribed": "イベント購読を開始",
+  "mcp_events.unsubscribed": "イベント購読を解除",
+  "mcp_events.delivered": "イベントを配送",
+  "mcp_events.delivery_abandoned": "イベント配送を断念",
+  "mcp_events.delivery_deferred": "イベント配送を延期",
+  "mcp_events.subscription_revoked": "イベント購読を取り消し",
+  "mcp_events.triggered_action": "イベント後の最初の操作",
+  "employee.webhook_secret_minted": "Webhook秘密を発行",
+  "employee.webhook_payload_mode_set": "Webhookの内容モードを設定",
+  "mcp_handoff.not_connected_notify": "MCP未接続を通知",
+  "agent.approval_wake": "承認結果で起動",
+  "calendar.freebusy_read": "空き状況を参照",
+  "calendar.allowlist_patch": "カレンダー許可リストを変更",
+  "google.identity_connected": "Googleアカウントを接続",
+  "google.identity_revoked": "Googleアカウントを切断",
+  "voter_binding.resend_rate_limited": "承認者確認の再送が上限",
+  "voter_binding.resend_failed": "承認者確認の再送に失敗",
+  "voter_binding.resend_success": "承認者確認を再送",
+  "voter_binding.unlock_via_resend": "再送で承認者ロックを解除",
+  "approval_routes.patch": "承認ルートを更新",
+  "approval_routes.patch_conflict": "承認ルートの更新が衝突",
+  "topic_gate.triggered": "機微トピックで承認が必要",
+  "decision.requested": "判断を依頼",
+  "decision.vote_recorded": "判断の票を記録",
+  "decision.resolved": "判断が確定",
+  "decision.expired": "判断が期限切れ",
+  "decision.deputy_activated": "代理判断者が有効",
+  "plan.downgrade_scheduled": "ダウングレードを予約",
+  "plan.downgrade_applied": "ダウングレードを適用",
+  "plan.downgrade_cancelled": "ダウングレードを取消",
+  "plan.billing_status_narrowed": "請求状態が制限",
+  "plan.changed": "プランを変更",
+  "plan.upgrade_requested": "アップグレードを依頼",
+  "plan.upgrade_applied": "アップグレードを適用",
+  "plan.upgrade_rejected": "アップグレードを拒否",
+  "plan.fulfill_blocked": "承認後の実行をプランで停止",
+  "config.change_requested": "設定変更を依頼",
+  "config.change_refused": "設定変更の依頼を拒否",
+  "config.change_applied": "設定変更を反映",
+  "config.change_apply_failed": "設定変更の反映に失敗",
+  "config.change_rejected": "設定変更を却下",
+  "secret_detection.blocked": "秘密情報の送信を拒否",
+  "secret_detection.suspected": "鍵に似た文字列を検出",
+};
+
+const SLACK_MESSAGE_IDS = new Set([
+  "comm.reply",
+  "comm.send",
+  "slack.post",
+  "slack.post_external",
+  "slack.posted",
+]);
+
+const LABEL_LOOKUP: Record<string, string> = {
+  ...GATEWAY_AUDIT_LABELS_JA,
+  ...EMPLOYEE_MCP_AUDIT_LABELS_JA,
+  ...ADMIN_MCP_AUDIT_LABELS_JA,
+  ...AUDIT_ACTION_LABELS_JA,
+};
+
+function isLineSurface(surface: string | null | undefined): boolean {
+  return String(surface ?? "").trim().toLowerCase() === "line";
+}
+
+export function unknownOperationLabelJa(id: string): string {
+  return `その他の操作（${id}）`;
+}
+
+export function lookupAuditLabelJa(id: string): string | null {
+  const key = String(id ?? "").trim();
+  if (!key) return null;
+  if (LABEL_LOOKUP[key]) return LABEL_LOOKUP[key];
+  const gateway = GATEWAY_TOOL_DEFS[key as GatewayToolId];
+  if (gateway?.labelJa) return gateway.labelJa;
+  if (ADMIN_TOOL_TITLE_JA[key]) return ADMIN_TOOL_TITLE_JA[key];
+  return null;
+}
+
+export function auditOperationLabelJa(input: {
+  action: string;
+  tool?: string | null;
+  surface?: string | null;
+}): { id: string; labelJa: string } {
+  const tool = String(input.tool ?? "").trim();
+  const action = String(input.action ?? "").trim();
+  const id = tool || action || "unknown";
+
+  if (isLineSurface(input.surface) && SLACK_MESSAGE_IDS.has(id)) {
+    return { id, labelJa: "LINEにメッセージを送信" };
+  }
+
+  const fromId = lookupAuditLabelJa(id);
+  if (fromId) return { id, labelJa: fromId };
+
+  if (!tool && action === "tool.invoke") {
+    return { id: action, labelJa: AUDIT_ACTION_LABELS_JA["tool.invoke"] };
+  }
+
+  const fromAction = action && action !== id ? lookupAuditLabelJa(action) : null;
+  if (fromAction) return { id, labelJa: fromAction };
+
+  return { id, labelJa: unknownOperationLabelJa(id) };
+}
+
+/** Exported for coverage tests. */
+export const ADMIN_MCP_TOOL_IDS = ADMIN_MCP_TOOL_NAMES;

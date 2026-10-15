@@ -255,6 +255,22 @@ export const DEMO_AUDIT: AuditEvent[] = [
     metadata: { from: "pending", to: "linked", mode: "managed" },
     createdAt: new Date(Date.now() - 86400000 * 2).toISOString(),
   },
+  {
+    id: "aud_5",
+    orgId: DEMO_ORG.id,
+    employeeId: "emp_sales",
+    credentialId: "cred_sales",
+    action: "tool.invoke",
+    purpose: "sales.outreach",
+    summary: "顧客チャネルへ返信しました",
+    metadata: {
+      tool: "comm.reply",
+      auto: true,
+      jobId: "job_demo_comm_reply_1",
+      sent: true,
+    },
+    createdAt: new Date(Date.now() - 1800000).toISOString(),
+  },
 ];
 
 export const DEMO_MEMBERS: OrgMember[] = [
