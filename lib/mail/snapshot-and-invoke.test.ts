@@ -138,9 +138,15 @@ describe("mail.send invoke attachments + threading", () => {
   });
 
   test("CRLF in subject / to is 400 mail_header_invalid", async () => {
+    const base = {
+      assetRef: "kb/public-faq",
+      from: "tando@tokyo307inc.com",
+      body: "確認です。",
+      provider: "gmail",
+    };
     for (const args of [
-      pdfArgs({ subject: "概要\r\nX-Injected: 1" }),
-      pdfArgs({ to: "info@s-value.co.jp\r\nX-Injected: 1" }),
+      { ...base, to: "info@s-value.co.jp", subject: "概要\r\nX-Injected: 1" },
+      { ...base, to: "info@s-value.co.jp\r\nX-Injected: 1", subject: "概要" },
     ]) {
       const result = await withNeedsApproval(() =>
         runGatewayInvoke({
@@ -149,7 +155,7 @@ describe("mail.send invoke attachments + threading", () => {
           body: {
             tool: "mail.send",
             purpose: "sales.outreach",
-            jobId: `job_env_${Date.now()}_${Math.random()}`,
+            jobId: `job_env_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
             args,
           },
         })

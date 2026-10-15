@@ -224,11 +224,14 @@ function assertEnvelopeList(field: string, value: unknown): { ok: true } | MailH
   if (value === undefined || value === null || value === "") return { ok: true };
   if (Array.isArray(value)) {
     for (const item of value) {
+      // Type errors stay with the existing mail_recipient_invalid path.
+      if (typeof item !== "string") continue;
       const checked = assertMailEnvelopeValue(field, item);
       if (!checked.ok) return checked;
     }
     return { ok: true };
   }
+  if (typeof value !== "string") return { ok: true };
   return assertMailEnvelopeValue(field, value);
 }
 
@@ -239,6 +242,8 @@ export function parseMailEnvelope(args: Record<string, unknown>): { ok: true } |
     ["to", args.to ?? args.recipient ?? args.email],
     ["subject", args.subject ?? args.title],
   ] as const) {
+    // Non-strings keep the existing mail_recipient_invalid / missing-field codes.
+    if (typeof raw !== "string") continue;
     const checked = assertMailEnvelopeValue(field, raw);
     if (!checked.ok) return checked;
   }
