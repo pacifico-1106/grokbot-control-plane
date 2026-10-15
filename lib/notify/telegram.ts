@@ -130,6 +130,9 @@ function composeApprovalTelegramMessage(
       lines.push(MAIL_BODY_PREVIEW_LABEL);
       lines.push(`<blockquote>${escapeTelegramHtml(parts.bodyLines.join("\n"))}</blockquote>`);
     }
+    for (const line of parts.trailer) {
+      lines.push(escapeTelegramHtml(line));
+    }
     lines.push("─");
   } else {
     lines.push("─");

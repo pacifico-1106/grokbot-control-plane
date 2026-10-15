@@ -452,6 +452,11 @@ export interface GatewayInvokeRequest {
     title?: string;
     /** Optional initial comment posted with the file */
     initialComment?: string;
+    /**
+     * Optional Base64 body. Slack comm.reply still requires fileRef.
+     * mail.send args.attachments[] accept content XOR HTTPS fileRef.
+     */
+    content?: string;
   };
   /**
    * Duplicate post guard v2 (DUPLICATE_GUARD_V2_ENABLED): after a

@@ -155,6 +155,10 @@ import {
   detectSecretInPayload,
   buildSecretDetectionErrorResponse,
 } from "@/lib/security/secret-detector";
+import { omitMailAttachmentBinary } from "@/lib/mail/omit-binary";
+import { prepareMailSend } from "@/lib/mail/prepare";
+import { buildSnapshotMailAttachments } from "@/lib/approvals/snapshot-mail-attachments";
+import type { ResolvedMailAttachment } from "@/lib/mail/attachments";
 import {
   isCommReplyDedupEnabled,
   isDuplicateGuardV2Enabled,
@@ -493,6 +497,7 @@ async function createNeedsApprovalResponse(opts: {
   body?: GatewayInvokeRequest;
   egress?: EgressVerdict | null;
   mailPolicy?: MailPolicyDecision | null;
+  resolvedMailAttachments?: ResolvedMailAttachment[] | null;
 }) {
   const risk = opts.risk || inferRiskForTool(opts.tool);
   const title = buildApprovalTitle(opts.tool, opts.purpose);
@@ -509,6 +514,14 @@ async function createNeedsApprovalResponse(opts: {
     artifact.sendMode = opts.mailPolicy.sendMode;
     const recipients = opts.body ? extractMailRecipients(opts.body) : { hasAttachments: false };
     if (recipients.hasAttachments) artifact.hasAttachments = true;
+    if (opts.resolvedMailAttachments && opts.resolvedMailAttachments.length > 0) {
+      artifact.hasAttachments = true;
+      artifact.attachments = opts.resolvedMailAttachments.map((att) => ({
+        filename: att.filename,
+        mimeType: att.mimeType,
+        bytes: att.bytes,
+      }));
+    }
   }
   const invokeSnapshot = buildInvokeSnapshot({
     tool: opts.tool,
@@ -521,6 +534,7 @@ async function createNeedsApprovalResponse(opts: {
     conversation,
     informationClass: opts.egress?.informationClass,
     fidelity: opts.egress?.fidelity,
+    resolvedMailAttachments: opts.resolvedMailAttachments,
   });
   // The approved attachment is NOT a summary line (#253 follow-up 5): every
   // surface renders it on its own from the snapshot (lib/approvals/attachment-card.ts),
@@ -836,7 +850,7 @@ async function runGatewayInvokeInner(
   // (org of the authenticated employee, never the body's), with no value; a
   // failed write never turns the rejection into a pass. tool / purpose / jobId
   // are echoed only when they are clean themselves.
-  const secretDetection = detectSecretInPayload(body);
+  const secretDetection = detectSecretInPayload(omitMailAttachmentBinary(body));
   if (!secretDetection.ok || secretDetection.suspected) {
     const scope = {
       orgId: await secretAuditOrgId(employeeId),
@@ -2077,6 +2091,7 @@ async function runGatewayInvokeInner(
   }
 
   let mailPolicyDecision: MailPolicyDecision | null = null;
+  let resolvedMailAttachments: ResolvedMailAttachment[] | null = null;
 
   // Approved re-invoke (approvalId): re-check what was approved (the invoke
   // snapshot) plus any recipients in this request against the CURRENT mail
@@ -2230,6 +2245,91 @@ async function runGatewayInvokeInner(
         },
         400
       );
+    }
+
+    const preparedMail = await prepareMailSend(body);
+    if (!preparedMail.ok) {
+      if (preparedMail.code === "secret_detected_in_payload" && "detection" in preparedMail) {
+        const scope = {
+          orgId: orgId || employee.orgId,
+          employeeId,
+          credentialId: input.credentialId ?? null,
+          surface: "gateway_invoke" as const,
+          tool,
+          jobId,
+        };
+        await auditSecretDetectionBlocked(scope, preparedMail.detection);
+        return jsonResult(
+          {
+            ...buildSecretDetectionErrorResponse(preparedMail.detection),
+            employeeId,
+            tool: safeEcho(tool),
+            purpose: safeEcho(purpose),
+            jobId: safeEcho(jobId),
+          },
+          400
+        );
+      }
+      await appendAuditEvent({
+        orgId: orgId || employee.orgId,
+        employeeId,
+        credentialId: input.credentialId || employee.credentialId,
+        action: "tool.invoke",
+        purpose,
+        summary: `${tool} を添付または返信ヘッダの検証で拒否（fail-closed）`,
+        metadata: {
+          tool,
+          jobId,
+          code: preparedMail.code,
+          field: "field" in preparedMail ? preparedMail.field : undefined,
+        },
+      });
+      const messageJa =
+        "messageJa" in preparedMail && typeof preparedMail.messageJa === "string"
+          ? preparedMail.messageJa
+          : "メールの添付または返信ヘッダを検証できませんでした。";
+      return jsonResult(
+        {
+          ok: false,
+          code: preparedMail.code,
+          error: preparedMail.code,
+          message: messageJa,
+          needs_approval: false,
+          employeeId,
+          tool,
+          purpose,
+          jobId,
+        },
+        400
+      );
+    }
+    if (preparedMail.attachments.length > 0) {
+      if (!buildSnapshotMailAttachments(preparedMail.attachments)) {
+        await appendAuditEvent({
+          orgId: orgId || employee.orgId,
+          employeeId,
+          credentialId: input.credentialId || employee.credentialId,
+          action: "tool.invoke",
+          purpose,
+          summary: `${tool} を添付の保管不可で拒否（fail-closed）`,
+          metadata: { tool, jobId, code: "mail_attachment_storage_unavailable" },
+        });
+        return jsonResult(
+          {
+            ok: false,
+            code: "mail_attachment_storage_unavailable",
+            error: "mail_attachment_storage_unavailable",
+            message: "添付を承認時の内容として保管できませんでした（暗号化キー未設定）。送信していません。",
+            needs_approval: false,
+            employeeId,
+            tool,
+            purpose,
+            jobId,
+          },
+          400
+        );
+      }
+      resolvedMailAttachments = preparedMail.attachments;
     }
 
     // Every primary recipient field (to / recipient / email / body.email /
@@ -2469,6 +2569,7 @@ async function runGatewayInvokeInner(
       body,
       egress,
       mailPolicy: tool === "mail.send" ? mailPolicyDecision : null,
+      resolvedMailAttachments: tool === "mail.send" ? resolvedMailAttachments : undefined,
       extra: {
         toolKind: toolDef.kind,
         approvalPolicy: employee.approvalPolicy,
@@ -2525,6 +2626,7 @@ async function runGatewayInvokeInner(
       metadata: { ...invokeMetadata, sodVerdict, actionLimit, egress, dualEgress, managerId, ...approvalReasonsFields() },
       body,
       egress,
+      resolvedMailAttachments: tool === "mail.send" ? resolvedMailAttachments : undefined,
       extra: {
         toolKind: toolDef.kind,
         approvalPolicy: employee.approvalPolicy,

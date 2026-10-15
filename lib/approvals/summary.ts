@@ -1,4 +1,5 @@
 import { oneLineCardValue } from "@/lib/approvals/card-text";
+import { formatAttachmentBytes } from "@/lib/approvals/attachment-card";
 import { outboundConversationText } from "@/lib/employees/voice";
 import { parseSnsSurface, snsSurfaceLabelJa } from "@/lib/gateway/adapters/sns";
 import { resolveConversationThreadId } from "@/lib/gateway/audience";
@@ -44,6 +45,10 @@ export type ApprovalArtifact = {
   scheduledAt?: string;
   sendMode?: string;
   hasAttachments?: boolean;
+  /** mail.send: per-file display (filename / type / size). Never the body. */
+  attachments?: Array<{ filename: string; mimeType?: string; bytes?: number }>;
+  inReplyTo?: string;
+  gmailThreadId?: string;
 };
 
 const CLASS_LABEL: Record<string, string> = {
@@ -171,6 +176,25 @@ export function buildApprovalArtifact(
       Array.isArray(args.attachments) && args.attachments.length > 0 ||
       args.hasAttachments === true;
     if (hasAttachments) artifact.hasAttachments = true;
+    if (Array.isArray(args.attachments)) {
+      const listed: Array<{ filename: string; mimeType?: string; bytes?: number }> = [];
+      for (const item of args.attachments) {
+        if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+        const rec = item as Record<string, unknown>;
+        const filename = typeof rec.filename === "string" ? rec.filename : typeof rec.name === "string" ? rec.name : "";
+        if (!filename) continue;
+        listed.push({
+          filename,
+          mimeType: typeof rec.mimeType === "string" ? rec.mimeType : undefined,
+          bytes: typeof rec.bytes === "number" && Number.isFinite(rec.bytes) ? rec.bytes : undefined,
+        });
+      }
+      if (listed.length) artifact.attachments = listed;
+    }
+    const inReplyTo = firstString(args.inReplyTo, args.in_reply_to);
+    if (inReplyTo) artifact.inReplyTo = inReplyTo;
+    const gmailThreadId = firstString(args.gmailThreadId, args.threadId);
+    if (gmailThreadId) artifact.gmailThreadId = gmailThreadId;
   }
 
   if (tool === "calendar.confirm" || tool === "calendar.propose") {
@@ -323,7 +347,23 @@ export function formatMailCardParts(
   if (subject) header.push(`件名: ${capChars(subject, subjectCap).text}`);
   const bodyLines = artifact.body ? mailBodyPreviewLines(artifact.body) : null;
   const trailer: string[] = [];
-  if (artifact.hasAttachments) trailer.push("添付: あり");
+  if (artifact.attachments && artifact.attachments.length > 0) {
+    for (const file of artifact.attachments) {
+      const name = oneLineCardValue(file.filename);
+      if (!name) continue;
+      const size =
+        typeof file.bytes === "number" && Number.isFinite(file.bytes) && file.bytes >= 0
+          ? formatAttachmentBytes(file.bytes)
+          : "";
+      const type = file.mimeType ? oneLineCardValue(file.mimeType) : "";
+      const meta = [type, size].filter(Boolean).join(", ");
+      trailer.push(meta ? `添付: ${name}（${meta}）` : `添付: ${name}`);
+    }
+  } else if (artifact.hasAttachments) {
+    trailer.push("添付: あり");
+  }
+  if (artifact.inReplyTo) trailer.push(`返信先: ${oneLineCardValue(artifact.inReplyTo)}`);
+  if (artifact.gmailThreadId) trailer.push(`threadId: ${oneLineCardValue(artifact.gmailThreadId)}`);
   if (artifact.sendMode) {
     const sendModeJa =
       artifact.sendMode === "draft_only"
@@ -376,6 +416,21 @@ export function readMailArtifact(
     body: text(rec.body),
     hasAttachments: rec.hasAttachments === true ? true : undefined,
     sendMode: text(rec.sendMode),
+    inReplyTo: text(rec.inReplyTo),
+    gmailThreadId: text(rec.gmailThreadId),
+    attachments: Array.isArray(rec.attachments)
+      ? rec.attachments.flatMap((item) => {
+          if (!item || typeof item !== "object" || Array.isArray(item)) return [];
+          const row = item as Record<string, unknown>;
+          const filename = text(row.filename);
+          if (!filename) return [];
+          return [{
+            filename,
+            mimeType: text(row.mimeType),
+            bytes: typeof row.bytes === "number" && Number.isFinite(row.bytes) ? row.bytes : undefined,
+          }];
+        })
+      : undefined,
   };
 }
 

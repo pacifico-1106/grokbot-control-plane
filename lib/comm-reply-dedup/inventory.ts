@@ -108,9 +108,9 @@ export const POSTING_PATH_INVENTORY: readonly PostingPath[] = [
     id: "fulfill.mail_send",
     tools: ["mail.send", "agentmail.send"],
     surfaces: ["mail"],
-    where: "lib/approvals/fulfill.ts (fulfillMailSend: スタブ記録のみ)",
+    where: "lib/approvals/fulfill.ts (fulfillMailSend: 承認時ハッシュ照合のうえスタブ記録)",
     coverage: "no_live_send",
-    noteJa: "mail.send のライブ送信は未実装（記録のみ）。agentmail.send は予約で invoke が拒否。送信を実装するときは guard を通すこと。",
+    noteJa: "mail.send のライブ送信は未実装（記録のみ）。承認済み添付は contentSha256 照合後にのみスタブ記録。agentmail.send は予約で invoke が拒否。送信を実装するときは guard を通すこと。",
   },
   {
     id: "drive.share_external",

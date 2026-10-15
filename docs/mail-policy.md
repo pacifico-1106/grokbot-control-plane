@@ -37,9 +37,26 @@ employee override → org policy → default（外部 draft_only）
 
 `attachmentPolicyRef`: `inherit_d1` | `forbid`。D1 と競合時は **厳しい側が勝つ**（forbid / Sealith required）。
 
+## 添付（mail.send、2026-10-15）
+
+`args.attachments[]`（MCP では `payload.attachments`。shape は Slack の `fileAttachment` + 任意の Base64 `content`）。
+
+- 入力: **`content`（Base64）XOR `fileRef`（HTTPS URL のみ）**。ローカルパス・data URL は拒否。
+- 許可: pdf / png / jpg / txt / csv / docx / xlsx / pptx（拡張子・MIME・マジックバイトが一致すること）。
+- 上限: 3 件、1 ファイル 10MB、合計 15MB。ファイル名にパス・制御文字は不可。
+- 秘密検出: デコード後のテキストを検査（txt/csv は全文。Office は ZIP 内 XML。PDF はパッケージにパーサが無いため printable 文字列のフォールバック — 圧縮ストリームは未抽出）。画像は OCR なし（ファイル名のみ）。
+- 承認時にバイトを AES-256-GCM で封印し `contentSha256` を保存。送信直前に復号してハッシュ不一致なら拒否（`mail_attachment_hash_mismatch`）。本文はログに出さない。
+- 未適用の migration: `supabase/migrations/20261015100000_approval_mail_attachments.sql`（RLS deny-all、service_role のみ）。デモは metadata の封印で完結。
+
+## 返信スレッド（mail.send）
+
+任意: `inReplyTo` / `references`（RFC 5322 Message-ID）および/または `gmailThreadId` / `threadId` / `conversation.threadId`（Gmail 16 進）。CR/LF は `mail_header_invalid`。プロバイダが Gmail のとき In-Reply-To / References と `threadId` を付与する。非 ASCII ファイル名は RFC 2231/5987。
+
+**draft_only / 外部宛のデフォルトは緩めない。** ライブ送信は従来どおりスタブ（`delivery: stub`）。フラグなし。
+
 ## 承認カード
 
-宛先（to 系の全項目） / CC / BCC / 件名 / 本文先頭 / 添付あり / sendMode を表示。
+宛先（to 系の全項目） / CC / BCC / 件名 / 本文先頭 / 添付（ファイル名・種類・サイズ） / 返信先 / threadId / sendMode を表示。
 
 - CC・BCC は、値があるときだけ宛先の直後に1行ずつ表示する（2026-10-04〜）。
 - 表示面: Web の承認一覧・代理承認パネル・MCP / poll の `summary`（全件）、Slack・Telegram のカード（1行 500 文字で打ち切り、打ち切ったときは `CC（N件）:` と件数を表示）、LINE のカード（`summary` を表示するため、先頭 500 文字に含まれる範囲）。

@@ -19,12 +19,20 @@
  */
 import { oneLineCardValue } from "@/lib/approvals/card-text";
 import { snapshotAttachmentState } from "@/lib/approvals/snapshot-attachment";
+import { snapshotMailAttachmentState } from "@/lib/approvals/snapshot-mail-attachments";
 
 export const CARD_ATTACHMENT_LABEL = "添付ファイル";
 export const CARD_FILENAME_MAX_CHARS = 100;
 
+export type CardAttachmentFile = {
+  filename: string;
+  bytes?: number;
+  sizeLabel?: string;
+  mimeType?: string;
+};
+
 export type CardAttachment =
-  | { kind: "present"; filename: string; bytes?: number; sizeLabel?: string }
+  | { kind: "present"; filename: string; bytes?: number; sizeLabel?: string; mimeType?: string; files?: CardAttachmentFile[] }
   | { kind: "none" };
 
 // Bidi embeddings / overrides / isolates, zero-width and direction marks, BOM.
@@ -48,9 +56,36 @@ export function formatAttachmentBytes(bytes: number): string {
   return `${Number.isInteger(rounded) ? rounded.toFixed(0) : rounded.toFixed(1)} ${units[unit]}`;
 }
 
+function presentFromFiles(files: CardAttachmentFile[]): CardAttachment {
+  const first = files[0];
+  if (!first) return { kind: "none" };
+  return {
+    kind: "present",
+    filename: first.filename,
+    ...(first.bytes !== undefined ? { bytes: first.bytes } : {}),
+    ...(first.sizeLabel ? { sizeLabel: first.sizeLabel } : {}),
+    ...(first.mimeType ? { mimeType: first.mimeType } : {}),
+    ...(files.length > 1 ? { files } : {}),
+  };
+}
+
 /** null = nothing recorded (legacy record or a tool without conversation attachments). */
 export function readCardAttachment(metadata: Record<string, unknown> | null | undefined): CardAttachment | null {
   const invoke = metadata?.invoke;
+  const mail = snapshotMailAttachmentState(invoke);
+  if (mail.kind === "present") {
+    const files = mail.attachments.map((att) => {
+      const filename = sanitizeCardFilename(att.filename) || "attachment";
+      const sizeLabel = formatAttachmentBytes(att.bytes) || undefined;
+      return {
+        filename,
+        bytes: att.bytes,
+        sizeLabel,
+        mimeType: att.mimeType,
+      };
+    });
+    return presentFromFiles(files);
+  }
   const state = snapshotAttachmentState(invoke);
   if (state.kind === "legacy") return null;
   if (state.kind === "none") {
@@ -69,9 +104,23 @@ export function readCardAttachment(metadata: Record<string, unknown> | null | un
  * The card line with the filename rendered by `renderName` (surface escaping).
  * Plain text by default (Web summary, LINE).
  */
+function formatPresentFile(
+  file: CardAttachmentFile,
+  renderName: (name: string) => string
+): string {
+  const typeAndSize = [file.mimeType, file.sizeLabel].filter(Boolean).join(", ");
+  return `${renderName(file.filename)}${typeAndSize ? `（${typeAndSize}）` : ""}`;
+}
+
 export function attachmentCardLine(card: CardAttachment, renderName: (name: string) => string = (n) => n): string {
   if (card.kind === "none") return `${CARD_ATTACHMENT_LABEL}: なし`;
-  return `${CARD_ATTACHMENT_LABEL}: ${renderName(card.filename)}${card.sizeLabel ? `（${card.sizeLabel}）` : ""}`;
+  const files = card.files && card.files.length > 0
+    ? card.files
+    : [{ filename: card.filename, bytes: card.bytes, sizeLabel: card.sizeLabel, mimeType: card.mimeType }];
+  if (files.length === 1) {
+    return `${CARD_ATTACHMENT_LABEL}: ${formatPresentFile(files[0]!, renderName)}`;
+  }
+  return [`${CARD_ATTACHMENT_LABEL}:`, ...files.map((f) => `- ${formatPresentFile(f, renderName)}`)].join("\n");
 }
 
 /** The plain card line, or null when nothing was recorded. */
@@ -113,5 +162,7 @@ export function attachmentStatusField(
     filename: card.filename,
     ...(card.bytes !== undefined ? { bytes: card.bytes } : {}),
     ...(card.sizeLabel ? { sizeLabel: card.sizeLabel } : {}),
+    ...(card.mimeType ? { mimeType: card.mimeType } : {}),
+    ...(card.files && card.files.length > 1 ? { files: card.files } : {}),
   };
 }

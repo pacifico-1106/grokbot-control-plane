@@ -39,6 +39,15 @@ import {
   type SnapshotAttachment,
 } from "@/lib/approvals/snapshot-attachment";
 import {
+  buildSnapshotMailAttachments,
+  openSnapshotMailAttachmentBytes,
+  snapshotMailAttachmentState,
+  type SnapshotMailAttachment,
+} from "@/lib/approvals/snapshot-mail-attachments";
+import type { ResolvedMailAttachment } from "@/lib/mail/attachments";
+import { gmailReplyHeaders, mailAttachmentMimeParts } from "@/lib/mail/mime";
+import { mailProviderIsGmail, parseMailThreading } from "@/lib/mail/headers";
+import {
   looksLikeSlackTs,
   postConversationMessage,
   validateSlackPostDestination,
@@ -124,6 +133,11 @@ const SNAPSHOT_ARG_KEYS = [
   "bcc",
   "hasAttachments",
   "sealithTransferId",
+  "inReplyTo",
+  "in_reply_to",
+  "references",
+  "gmailThreadId",
+  "provider",
   // comm.delete target (ids only).
   "messageId",
   "message_id",
@@ -131,7 +145,7 @@ const SNAPSHOT_ARG_KEYS = [
 ] as const;
 
 /** Keys whose string[] value is kept in the snapshot (recipient lists). */
-const LIST_ARG_KEYS = new Set<string>(["cc", "bcc"]);
+const LIST_ARG_KEYS = new Set<string>(["cc", "bcc", "references"]);
 
 const BODY_KEYS = new Set(["text", "body", "message"]);
 const MAX_BODY_CHARS = 100_000;
@@ -169,6 +183,11 @@ export type InvokeSnapshot = {
    * See lib/approvals/snapshot-attachment.ts.
    */
   fileAttachment?: SnapshotAttachment | null;
+  /**
+   * mail.send: approved attachments (display + contentSha256 + sealed bytes).
+   * Absent = no mail attachments recorded. Send hashes these bytes.
+   */
+  mailAttachments?: SnapshotMailAttachment[] | null;
   /**
    * Thread single-flight (THREAD_SINGLE_FLIGHT_ENABLED): the explicit read
    * point sent with the request (normalized Slack-style ts). Fulfil checks
@@ -299,6 +318,7 @@ export function buildInvokeSnapshot(input: {
   conversation?: ConversationContext | null;
   informationClass?: InformationClass | null;
   fidelity?: DisclosureFidelity | null;
+  resolvedMailAttachments?: ResolvedMailAttachment[] | null;
 }): InvokeSnapshot {
   const args =
     input.body?.args && typeof input.body.args === "object"
@@ -352,6 +372,9 @@ export function buildInvokeSnapshot(input: {
   if (isAudienceGatedTool(input.tool)) {
     snapshot.fileAttachment = buildSnapshotAttachment(input.body?.fileAttachment);
   }
+  if (input.tool === "mail.send" && input.resolvedMailAttachments && input.resolvedMailAttachments.length > 0) {
+    snapshot.mailAttachments = buildSnapshotMailAttachments(input.resolvedMailAttachments);
+  }
   return jsonClone(snapshot) ?? snapshot;
 }
 
@@ -374,6 +397,7 @@ export function parseInvokeSnapshot(
       : null;
   const str = (value: unknown): string | undefined =>
     typeof value === "string" && value.trim() ? value.trim() : undefined;
+  const mailState = snapshotMailAttachmentState(rec);
   return {
     tool: rec.tool,
     purpose: typeof rec.purpose === "string" ? rec.purpose : "",
@@ -401,6 +425,11 @@ export function parseInvokeSnapshot(
     informationClass: str(rec.informationClass) as InformationClass | undefined,
     fidelity: str(rec.fidelity) as DisclosureFidelity | undefined,
     ...(str(rec.readThroughTs) ? { readThroughTs: str(rec.readThroughTs) } : {}),
+    ...(mailState.kind === "present"
+      ? { mailAttachments: mailState.attachments }
+      : mailState.kind === "none"
+        ? { mailAttachments: null }
+        : {}),
   };
 }
 
@@ -789,8 +818,12 @@ async function fulfillSnsPublish(
 }
 
 /**
- * mail.send fulfill-on-approve: honest stub fulfillment with audit.
- * Live mail send is not yet implemented — record stub, never pretend real send.
+ * mail.send fulfill-on-approve.
+ * Attachment bytes are decrypted and hashed against the approval snapshot;
+ * a mismatch is denied (nothing is sent). Live provider send is still a stub
+ * (draft_only / external defaults unchanged). When threading is present the
+ * Gmail envelope (In-Reply-To / References / threadId) is recorded without
+ * contents.
  */
 async function fulfillMailSend(
   approval: ApprovalRequest,
@@ -812,14 +845,75 @@ async function fulfillMailSend(
     ""
   );
 
-  // Record honest stub fulfillment — live mail send is not implemented
+  const mailState = snapshotMailAttachmentState(approval.metadata?.invoke);
+  const approved = mailState.kind === "present" ? mailState.attachments : [];
+  const opened: Array<{ filename: string; mimeType: string; bytes: number; contentSha256: string }> = [];
+  for (const att of approved) {
+    const bytes = openSnapshotMailAttachmentBytes(att);
+    if (!bytes.ok) {
+      const fulfillment: ApprovalFulfillment = { ok: false, error: bytes.code, at };
+      await persistFulfillment(approval, fulfillment);
+      await appendAuditEvent({
+        orgId: approval.orgId,
+        employeeId: approval.employeeId,
+        credentialId: approval.credentialId,
+        action: "tool.invoke",
+        purpose: approval.purpose,
+        summary: "承認済みメール送信を添付の不一致で停止（未送信）",
+        metadata: {
+          approvalId: approval.id,
+          tool: snapshot.tool,
+          jobId: snapshot.jobId,
+          code: bytes.code,
+          phase: "approval.fulfill",
+          attachmentCount: approved.length,
+        },
+      }).catch(() => undefined);
+      return fulfillment;
+    }
+    opened.push({
+      filename: att.filename,
+      mimeType: att.mimeType,
+      bytes: att.bytes,
+      contentSha256: att.contentSha256,
+    });
+  }
+
+  const threading = parseMailThreading(args, snapshot.conversation);
+  const gmail =
+    threading.ok &&
+    (mailProviderIsGmail(args, snapshot.conversation) || Boolean(threading.threading.threadId));
+  const headers = threading.ok && gmail ? gmailReplyHeaders(threading.threading) : {};
+  const parts = mailAttachmentMimeParts(opened);
+
   const fulfillment: ApprovalFulfillment = {
     ok: true,
     delivery: "stub",
     at,
   };
 
-  await persistFulfillment(approval, fulfillment);
+  await persistFulfillment(approval, {
+    ...fulfillment,
+    // ids / hashes / filenames only — never bodies
+  });
+  try {
+    await updateApprovalMetadata(approval, {
+      mailSend: {
+        provider: gmail ? "gmail" : "stub",
+        threadId: headers.threadId,
+        inReplyTo: headers.inReplyTo,
+        references: headers.references,
+        attachments: parts.map((p) => ({
+          filename: p.filename,
+          mimeType: p.mimeType,
+          bytes: p.bytes,
+          contentSha256: p.contentSha256,
+        })),
+      },
+    });
+  } catch {
+    // Non-fatal: stub fulfillment already persisted.
+  }
 
   const artifact = approval.metadata?.artifact as Record<string, unknown> | undefined;
   const sendMode =
@@ -831,7 +925,6 @@ async function fulfillMailSend(
         ? String((approval.metadata.mailPolicy as Record<string, unknown>).sendMode)
         : undefined;
 
-  // Audit: record the approved mail.send with stub fulfillment
   await appendAuditEvent({
     orgId: approval.orgId,
     employeeId: approval.employeeId,
@@ -848,7 +941,9 @@ async function fulfillMailSend(
       subject,
       sendMode,
       phase: "approval.fulfill",
-      noteJa: "mail.send のライブ送信は未実装。承認後の記録のみ。",
+      noteJa: "mail.send のライブ送信は未実装。承認後の記録のみ。添付は承認時ハッシュと一致。",
+      attachmentCount: opened.length,
+      gmailThreadId: headers.threadId,
     },
   }).catch(() => undefined);
 

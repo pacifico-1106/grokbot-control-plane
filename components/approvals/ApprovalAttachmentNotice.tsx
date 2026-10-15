@@ -20,10 +20,17 @@ export function ApprovalAttachmentNotice({ attachment }: { attachment: CardAttac
         <span className="ml-2 chip text-[10px]">システム記録</span>
       </p>
       {attachment.kind === "present" ? (
-        <p className="mt-1 break-all">
-          <span className="font-mono">{attachment.filename}</span>
-          {attachment.sizeLabel ? <span className="ml-2 faint">（{attachment.sizeLabel}）</span> : null}
-        </p>
+        (attachment.files && attachment.files.length > 0 ? attachment.files : [
+          { filename: attachment.filename, bytes: attachment.bytes, sizeLabel: attachment.sizeLabel, mimeType: attachment.mimeType },
+        ]).map((file, index) => {
+          const meta = [file.mimeType, file.sizeLabel].filter(Boolean).join(", ");
+          return (
+            <p key={`${index}:${file.filename}`} className="mt-1 break-all">
+              <span className="font-mono">{file.filename}</span>
+              {meta ? <span className="ml-2 faint">（{meta}）</span> : null}
+            </p>
+          );
+        })
       ) : (
         <p className="mt-1 muted">なし（この承認に添付ファイルは含まれません）</p>
       )}
