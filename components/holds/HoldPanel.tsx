@@ -1,11 +1,13 @@
 "use client";
 
 /**
- * S3 緊急停止 panel (employee or org). Stop is one press. Release is two steps on THIS
- * screen only (request → another owner / designated admin approves), each behind a fresh
- * login (5 minutes). Inbox buttons can only stop and link here.
+ * S3 緊急停止 panel (employee or org). Stop is one press. Release is two steps
+ * (request → another owner / designated admin approves), each behind a fresh
+ * login (5 minutes). /app/approvals の『解除を承認』も同じ
+ * /api/holds/release/approve を呼ぶ。Inbox buttons can only stop and link here.
  */
 import { useCallback, useEffect, useState } from "react";
+import { approvalDecideErrorJa } from "@/lib/approvals/hold-release-web";
 
 type Status = {
   ok: boolean;
@@ -37,10 +39,8 @@ export function HoldPanel({ employeeId, scope = "employee" }: { employeeId?: str
     try {
       const res = await fetch(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
       const json = (await res.json().catch(() => ({}))) as { message?: string; error?: string };
-      if (!res.ok) {
-        if (json.error === "fresh_login_required") setMessage("解除にはログインし直してください（5分以内のログインが必要です）。");
-        else setMessage(json.message || json.error || "失敗しました");
-      } else setMessage(done);
+      if (!res.ok) setMessage(approvalDecideErrorJa(json));
+      else setMessage(done);
       await load();
     } finally {
       setBusy(false);
