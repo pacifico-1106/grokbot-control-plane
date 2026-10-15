@@ -14,6 +14,7 @@ import { resolveApprovalWithWorkflow } from "@/lib/approvals/workflow-integratio
 import { isApproverAuthorityEnabled } from "@/lib/feature-flags";
 import { approverAuthorityNextStepJa, approverAuthorityReplyJa } from "@/lib/approver-authority/reply";
 import { jsonUtf8 } from "@/lib/http/json-utf8";
+import { HOLD_RELEASE_WEB_ONLY_MESSAGE_JA } from "@/lib/approvals/hold-release-web";
 
 export const runtime = "nodejs";
 
@@ -52,6 +53,20 @@ export async function POST(
 
   if (!result.ok && result.reason === "approval_not_found") {
     return jsonUtf8({ error: "not_found" }, { status: 404 });
+  }
+
+  // S3: hold.release は汎用承認では承認しない。200 + ok:false だと画面が成功扱いにして握りつぶす。
+  if (!result.ok && result.reason === "hold_release_web_only") {
+    return jsonUtf8(
+      {
+        ok: false,
+        error: "hold_release_web_only",
+        reason: "hold_release_web_only",
+        message: HOLD_RELEASE_WEB_ONLY_MESSAGE_JA,
+        messageJa: HOLD_RELEASE_WEB_ONLY_MESSAGE_JA,
+      },
+      { status: 403 }
+    );
   }
 
   const updated = result.approval || await getApprovalById(id, orgId);

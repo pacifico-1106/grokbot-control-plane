@@ -10,6 +10,16 @@ import { ApprovalAttachmentNotice } from "@/components/approvals/ApprovalAttachm
 import { closedWithoutSendInfo } from "@/lib/approvals/closed-without-send";
 import type { PublicApproval } from "@/lib/approvals/public";
 import type { ApprovalRequest, Employee } from "@/lib/types";
+import {
+  HOLD_RELEASE_APPROVE_PATH,
+  approvalDecideErrorJa,
+  approvalDecideFailed,
+  holdReleaseApproveTarget,
+} from "@/lib/approvals/hold-release-web";
+
+function isHoldReleaseRow(a: PublicApproval): boolean {
+  return holdReleaseApproveTarget(a, "approve").kind !== "generic";
+}
 
 function pollUrlFor(a: ApprovalRequest): string {
   if (typeof window !== "undefined" && a.pollPath) {
@@ -70,17 +80,39 @@ export function ApprovalsClient({
     return () => clearInterval(t);
   }, [refreshList]);
 
-  async function decide(id: string, action: "approve" | "reject") {
-    setPendingId(id);
+  async function decide(approval: PublicApproval, action: "approve" | "reject") {
+    setPendingId(approval.id);
     setError("");
     setNotice("");
     try {
-      const res = await fetch(`/api/approvals/${id}/${action}`, { method: "POST" });
-      const body = await res.json();
-      if (!res.ok) throw new Error(body.error || "failed");
+      const target = holdReleaseApproveTarget(approval, action);
+      let res: Response;
+      if (target.kind === "hold_release_missing_hold") {
+        setError(approvalDecideErrorJa({ error: "hold_id_missing" }));
+        return;
+      }
+      if (target.kind === "hold_release") {
+        res = await fetch(HOLD_RELEASE_APPROVE_PATH, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ holdId: target.holdId }),
+        });
+      } else {
+        res = await fetch(`/api/approvals/${approval.id}/${action}`, { method: "POST" });
+      }
+      const body = (await res.json().catch(() => ({}))) as {
+        ok?: unknown;
+        error?: string;
+        reason?: string;
+        message?: string;
+        messageJa?: string;
+      };
+      if (approvalDecideFailed(res.ok, body)) {
+        throw new Error(approvalDecideErrorJa(body));
+      }
       setRows((cur) =>
         cur.map((r) =>
-          r.id === id
+          r.id === approval.id
             ? {
                 ...r,
                 status: action === "approve" ? "approved" : "rejected",
@@ -92,7 +124,7 @@ export function ApprovalsClient({
       await refreshList();
       router.refresh();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "failed");
+      setError(e instanceof Error ? e.message : approvalDecideErrorJa({}));
     } finally {
       setPendingId(null);
     }
@@ -196,7 +228,7 @@ export function ApprovalsClient({
       ) : null}
 
       {error ? (
-        <p className="text-sm text-[var(--danger)]">{error}</p>
+        <p className="text-sm text-[var(--danger)]" role="alert">{error}</p>
       ) : null}
       {notice ? (
         <p className="text-sm text-[var(--ok)]">{notice}</p>
@@ -266,6 +298,11 @@ export function ApprovalsClient({
                     <pre className="mt-2 text-xs muted leading-relaxed whitespace-pre-wrap break-words font-sans">
                       {a.summary}
                     </pre>
+                    {isHoldReleaseRow(a) ? (
+                      <p className="mt-2 text-xs leading-relaxed text-[var(--warn)]">
+                        緊急停止の解除です。申請した本人は承認できません。ログインし直して5分以内に『解除を承認』を押してください。
+                      </p>
+                    ) : null}
                     <p className="mt-2 text-xs faint flex flex-wrap gap-x-3 gap-y-1">
                       <span>
                         {new Date(a.createdAt).toLocaleString("ja-JP", {
@@ -319,7 +356,7 @@ export function ApprovalsClient({
                       type="button"
                       className="btn btn-ghost text-sm w-full sm:w-auto min-h-[44px]"
                       disabled={pendingId === a.id}
-                      onClick={() => void decide(a.id, "reject")}
+                      onClick={() => void decide(a, "reject")}
                     >
                       却下
                     </button>
@@ -327,9 +364,9 @@ export function ApprovalsClient({
                       type="button"
                       className="btn btn-primary text-sm w-full sm:w-auto min-h-[44px]"
                       disabled={pendingId === a.id}
-                      onClick={() => void decide(a.id, "approve")}
+                      onClick={() => void decide(a, "approve")}
                     >
-                      承認
+                      {isHoldReleaseRow(a) ? "解除を承認" : "承認"}
                     </button>
                   </div>
                   {revisionId === a.id ? (
