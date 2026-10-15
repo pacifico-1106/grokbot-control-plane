@@ -728,6 +728,27 @@ try:
     print("PASS: comm line reply tokens (20261014100000): 2 tables RLS on / restrictive deny-all only, anon/authenticated no access; "
           "hash format, unique reply token, unknown retry_key unique per org, org delete cascades; re-applicable; "
           "rollback refused while unknown-outcome rows exist, then drops both; forward again.")
+    # Operator notices (20261015100000). NOT applied in production by the PR.
+    opntc = ROOT / "supabase/migrations/20261015100000_operator_notices.sql"
+    opntc_rb = ROOT / "supabase/verification/20261015100000_operator_notices_rollback.sql"
+    sql(opntc)
+    sql(opntc)  # re-applicable
+    sql(ROOT / "tests/security/db-operator-notices.sql")
+    sql(opntc_rb)
+    assert query("select to_regclass('public.operator_notices') is null"
+                 " and to_regclass('public.operator_notice_versions') is null"
+                 " and to_regclass('public.operator_notice_targets') is null"
+                 " and to_regclass('public.operator_notice_receipts') is null"
+                 " and to_regclass('public.ops_feedback_items') is null"
+                 " and to_regclass('public.ops_feedback_events') is null"
+                 " and to_regprocedure('public.operator_notices_for_employee(uuid,uuid)') is null"
+                 " and to_regprocedure('public.operator_notice_counts_for_employee(uuid,uuid)') is null;") == "t"
+    sql(opntc)  # forward again after rollback
+    sql(ROOT / "tests/security/db-operator-notices.sql")
+    print("PASS: operator notices (20261015100000): 6 tables RLS on / no policy, anon/authenticated denied "
+          "(tables + visibility functions); service_role reads/writes; org-A notice invisible to org B, "
+          "cross-org receipt/target rejected, all-scope has no targets, published audience locked, "
+          "new tenant does not see non-sticky all-audience; re-applicable; rollback + re-apply.")
     print("PASS: approver authority (PR-D): owner / designated admin decision table; flag-OFF 7-argument W1 call unchanged; standard ticket → designated admin stored, others refused; owner ticket → designated admin endorsed once and kept pending, owner approves and is stored; zero owners stop; multiple owners: any one owner other than the requester (requesting owner refused; a sole owner's own approval counts; several owners all requesters → no_owner_other_than_requester); reject / non-target not gated; record_approver_authority verified/endorse; one RPC overload; EXECUTE service_role only; rollback restores the 7-argument RPC + re-apply.")
     print("PASS: approver context CAS (TOCTOU follow-up): policy.patch / schedulingPolicy.patch writes only when the locked row still equals the pinned snapshot; concurrent change between check and write → approver_context_changed with nothing written (employee row, active and revoked credentials, org / employee scheduling policy); ticket binding (fingerprint, missing fingerprint, status, tool, target, org) refused; invalid input refused; EXECUTE service_role only; 12 concurrent writers with one snapshot → exactly 1 write (both RPCs); rollback drops both RPCs (PR-D untouched) + re-apply.")
     print("PASS: employee_webhook_settings (D9): RLS on, no policy, anon/authenticated denied, service_role reads/writes/upserts; cross-org row rejected; payload mode minimal|legacy_full (default minimal); ciphertext-only secret + fingerprint pair; employee delete cascades; rollback + re-apply.")
