@@ -22,22 +22,42 @@ function headerPresent(req: Request, name: string): boolean {
   return req.headers.get(name) !== null;
 }
 
-function bearerRaw(req: Request): string | null {
-  const m = /^Bearer\s+(.+)$/i.exec((req.headers.get("authorization") || "").trim());
-  return m?.[1]?.trim() || null;
+/** Fetch joins duplicate Authorization values with ", ". Split back into challenges. */
+const AUTH_CHALLENGE_SPLIT = /,(?=\s*(?:Bearer|Basic|Digest|Negotiate|HOBA|Mutual|OAuth)\b)/i;
+
+function authorizationChallenges(req: Request): string[] {
+  const raw = req.headers.get("authorization");
+  if (raw === null) return [];
+  return raw
+    .split(AUTH_CHALLENGE_SPLIT)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+}
+
+function bearerToken(challenge: string): string | null {
+  const m = /^Bearer(?:\s+(.*))?$/i.exec(challenge.trim());
+  if (!m) return null;
+  return (m[1] ?? "").trim();
+}
+
+function isOauthAccessBearer(challenge: string): boolean {
+  const tok = bearerToken(challenge);
+  return Boolean(tok && tok.startsWith(ACCESS_TOKEN_PREFIX));
 }
 
 /**
  * True when the caller is presenting (or attempting to present) a static badge,
  * including empty / unexpanded Authorization values. OAuth access tokens
- * (`sp_at_`) are not badge attempts.
+ * (`sp_at_`) are not badge attempts. A mixed set of Authorization challenges
+ * (sp_at_ plus empty Bearer / Basic / gb_emp_) is still a badge attempt —
+ * only an all-sp_at_ Authorization set is treated as OAuth.
  */
 export function looksLikeBadgeAuthAttempt(req: Request): boolean {
   if (headerPresent(req, "x-staffpass-credential")) return true;
   if (!headerPresent(req, "authorization")) return false;
-  const raw = bearerRaw(req);
-  if (raw && raw.startsWith(ACCESS_TOKEN_PREFIX)) return false;
-  return true;
+  const challenges = authorizationChallenges(req);
+  if (challenges.length === 0) return true;
+  return !challenges.every(isOauthAccessBearer);
 }
 
 /** RFC 9728 / MCP challenge. False → do not send resource_metadata. */

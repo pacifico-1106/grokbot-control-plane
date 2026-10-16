@@ -9,6 +9,7 @@ import {
   shouldAdvertiseOAuthChallenge,
 } from "@/lib/mcp/badge-auth-attempt";
 import {
+  STAFFPASS_PROFILE_TOOL_NAME,
   authChallengeMeta,
   decorateToolsForOAuth,
   oauthInstructions,
@@ -86,6 +87,11 @@ function jsonRpcError(
   );
 }
 
+function toolsForSurface(surface: EmployeeMcpSurface) {
+  const tools = listStaffpassMcpTools();
+  return surface === "badge_only" ? tools.filter((t) => t.name !== STAFFPASS_PROFILE_TOOL_NAME) : tools;
+}
+
 function serverInfo(surface: EmployeeMcpSurface = "shared") {
   const advertiseOAuth = isMcpOAuthEnabled() && surface === "shared";
   return {
@@ -97,7 +103,7 @@ function serverInfo(surface: EmployeeMcpSurface = "shared") {
     websiteUrl: "https://staffpass.sealith.com",
     mcpEndpoint: surface === "badge_only" ? STAFFPASS_MCP_EMPLOYEE_URL : STAFFPASS_MCP_URL,
     protocolVersion: MCP_PROTOCOL_VERSION,
-    tools: listStaffpassMcpTools().map((t) => t.name),
+    tools: toolsForSurface(surface).map((t) => t.name),
     supportedProtocolVersions: MCP_SUPPORTED_PROTOCOL_VERSIONS,
     auth: {
       type: "bearer",
@@ -348,7 +354,7 @@ async function handlePost(req: Request, surface: EmployeeMcpSurface) {
     ).catch(() => undefined);
 
     if (method === "tools/list") {
-      const listed = listStaffpassMcpTools().map((t) => ({
+      const listed = toolsForSurface(surface).map((t) => ({
         name: t.name,
         description: t.description,
         inputSchema: t.inputSchema,
@@ -371,6 +377,18 @@ async function handlePost(req: Request, surface: EmployeeMcpSurface) {
       return jsonRpcError(id, -32602, "tools/call requires params.name", undefined, 200, undefined, surface);
     }
 
+    if (surface === "badge_only" && toolName === STAFFPASS_PROFILE_TOOL_NAME) {
+      return jsonRpcError(
+        id,
+        -32601,
+        `Unknown MCP tool: ${toolName}`,
+        { code: "unknown_mcp_tool" },
+        200,
+        undefined,
+        surface
+      );
+    }
+
     // MCP Events: link the first tool call after a delivery to that event
     // ("what woke the AI"). Flag OFF → no-op. Best-effort.
     if (isMcpEventsEnabled()) {
@@ -383,7 +401,8 @@ async function handlePost(req: Request, surface: EmployeeMcpSurface) {
       const result = await callStaffpassMcpTool(
         toolName,
         toolArgs,
-        auth.credential
+        auth.credential,
+        { surface }
       );
       return reply(result as Record<string, unknown>);
     } catch (e) {

@@ -20,10 +20,15 @@ mock.module("@/lib/mcp-oauth/employee-state", () => ({
   getCurrentEmployeeCredential: async (id: string) => directory.credentials.get(id) ?? null,
 }));
 const GB = "gb_emp_employee_mouth_fixture";
+function extractEmployeeSecretForTests(r: Request): string | null {
+  const alt = (r.headers.get("x-staffpass-credential") || "").trim();
+  if (alt) return alt;
+  return /^Bearer\s+(.+)$/i.exec((r.headers.get("authorization") || "").trim())?.[1]?.trim() || null;
+}
 mock.module("@/lib/auth/employee-credential", () => ({
-  extractEmployeeSecret: (r: Request) => /^Bearer\s+(.+)$/i.exec(r.headers.get("authorization") || "")?.[1] ?? null,
+  extractEmployeeSecret: extractEmployeeSecretForTests,
   resolveEmployeeCredential: async (r: Request) => {
-    const raw = /^Bearer\s+(.+)$/i.exec(r.headers.get("authorization") || "")?.[1];
+    const raw = extractEmployeeSecretForTests(r);
     if (raw === GB)
       return { ok: true, credential: { employeeId: "emp_1", orgId: "org_a", generation: 3, credentialId: "cred_1", fingerprint: "f", binding: null, secretPrefix: "gb_emp_" } };
     return { ok: false, code: raw ? "invalid_credential" : "missing_credential", message: "nope", httpStatus: 401 };
