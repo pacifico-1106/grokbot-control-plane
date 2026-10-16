@@ -277,4 +277,68 @@ describe("handleInboundNotice", () => {
     expect(src).not.toContain("@/lib/gateway");
     expect(src).not.toContain("staffpass_invoke");
   });
+
+  test("Slack Connect author team mismatch does not wake (envelope team_id may match)", async () => {
+    const r = await handleInboundNotice(
+      event({ authorTeamId: "T_CONNECT_OTHER" }),
+      deps()
+    );
+    expect(r.woke).toBe(0);
+    expect(r.skipReason).toBe("team_mismatch");
+    expect(fetches).toHaveLength(0);
+  });
+
+  test("ext-shared channel without author team fails closed", async () => {
+    const r = await handleInboundNotice(
+      event({ authorTeamId: "", extSharedChannel: true }),
+      deps()
+    );
+    expect(r.woke).toBe(0);
+    expect(r.skipReason).toBe("team_mismatch");
+    expect(fetches).toHaveLength(0);
+  });
+
+  test("full phone in 要約 / 相手先会社 never appears in wake payload or audit", async () => {
+    const text = [
+      "受電のお知らせ",
+      "電話番号 000-0000-1111",
+      "相手先会社 DUMMY-CO 000-0000-1111",
+      "営業電話 いいえ",
+      "要約 Call back 000-0000-1111 or 00000001111",
+    ].join("\n");
+    const r = await handleInboundNotice(event({ text }), deps());
+    expect(r.woke).toBe(1);
+    const bodyJson = JSON.stringify(fetches[0].init.body);
+    const auditJson = JSON.stringify(audits);
+    expect(bodyJson).not.toContain("000-0000-1111");
+    expect(bodyJson).not.toContain("00000001111");
+    expect(auditJson).not.toContain("000-0000-1111");
+    expect(auditJson).not.toContain("00000001111");
+    const body = JSON.parse(String(fetches[0].init.body)) as {
+      inboundNotice: { untrustedOutsideText: { fields: { phone: { value: string }; summary: { value: string } } } };
+    };
+    expect(body.inboundNotice.untrustedOutsideText.fields.phone.value).toBe("1111");
+    expect(body.inboundNotice.untrustedOutsideText.fields.summary.value).toContain("1111");
+    expect(body.inboundNotice.untrustedOutsideText.fields.summary.value).not.toContain("000-0000-1111");
+  });
+
+  test("parallel same channel+ts claims once (race)", async () => {
+    let claimed = 0;
+    const d = deps({
+      claimDedup: async () => {
+        const n = claimed;
+        await Promise.resolve();
+        if (claimed !== n) return false;
+        claimed += 1;
+        return claimed === 1;
+      },
+    });
+    const [a, b] = await Promise.all([
+      handleInboundNotice(event({ eventId: "Ev_race_a" }), d),
+      handleInboundNotice(event({ eventId: "Ev_race_b" }), d),
+    ]);
+    expect(a.woke + b.woke).toBe(1);
+    expect(fetches).toHaveLength(1);
+    expect([a.skipReason, b.skipReason].filter((s) => s === "duplicate").length).toBe(1);
+  });
 });

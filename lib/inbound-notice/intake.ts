@@ -15,7 +15,7 @@ import { parseWithAdapters } from "@/lib/inbound-notice/adapters";
 import { verifyInboundNoticeSource } from "@/lib/inbound-notice/accept";
 import { inboundNoticeDedupKey, inboundNoticeJobId } from "@/lib/inbound-notice/dedup";
 import { isYes } from "@/lib/inbound-notice/parse";
-import { last4Digits, maskPhoneForAudit } from "@/lib/inbound-notice/phone";
+import { last4Digits, maskPhoneForAudit, redactPhoneInText } from "@/lib/inbound-notice/phone";
 import {
   isPhoneHashKeyConfigured,
   isPhoneHashKeyMissingError,
@@ -43,6 +43,8 @@ export type InboundNoticeSlackEvent = {
   botId: string;
   appId: string;
   subtype?: string;
+  authorTeamId?: string;
+  extSharedChannel?: boolean;
 };
 
 export type InboundNoticeAudit = Parameters<typeof appendAuditEvent>[0];
@@ -133,6 +135,8 @@ export async function handleInboundNotice(
     employeeOrgId: employee?.orgId ?? "",
     employeeSlackTeamId: employeeTeam,
     teamId: event.teamId,
+    authorTeamId: event.authorTeamId ?? "",
+    extSharedChannel: Boolean(event.extSharedChannel),
     channelId: event.channelId,
     channelRegistered: Boolean(channel),
     channelOrgId: channel?.orgId ?? "",
@@ -273,9 +277,17 @@ export async function handleInboundNotice(
     return { handled: true, woke: 0, skipReason: "wake_webhook_missing" };
   }
 
+  const rawPhone = parsed.fields.phone;
   const wakeFields = {
-    ...parsed.fields,
-    phone: last4Digits(parsed.fields.phone),
+    receivedAt: redactPhoneInText(parsed.fields.receivedAt, rawPhone),
+    phone: last4Digits(rawPhone),
+    company: redactPhoneInText(parsed.fields.company, rawPhone),
+    personName: redactPhoneInText(parsed.fields.personName, rawPhone),
+    category: redactPhoneInText(parsed.fields.category, rawPhone),
+    callbackNeeded: redactPhoneInText(parsed.fields.callbackNeeded, rawPhone),
+    emergency: redactPhoneInText(parsed.fields.emergency, rawPhone),
+    salesCall: redactPhoneInText(parsed.fields.salesCall, rawPhone),
+    summary: redactPhoneInText(parsed.fields.summary, rawPhone),
   };
   const payload = {
     surface: "slack" as const,

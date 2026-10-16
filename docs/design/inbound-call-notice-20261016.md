@@ -127,10 +127,10 @@ inboundNotice.untrustedOutsideText = {
 |---|---|
 | フィールドはすべて信頼できない外のテキスト | フェンス + テスト（指示注入を 要約 / 会社名に入れても `text` にならない） |
 | 送信・変更は承認ゲート | intake は gateway を import しない。テストで固定 |
-| 電話番号（wake） | 下 4 桁だけ。フル番号は `sourceNotice` で元 Slack 投稿を指す |
+| 電話番号（wake） | 下 4 桁だけ。フル番号は `sourceNotice` で元 Slack 投稿を指す。要約・会社名など他フィールドからもフル番号を消す |
 | 電話番号（監査・ログ） | last4 または HMAC-SHA256（`INBOUND_CALL_NOTICE_PHONE_HASH_KEY`）。4 桁未満は last4 を出さない |
 | pepper 未設定 | フラグ ON なら fail closed（起こさない、claim しない）。フォールバック無し（`IP_HASH_KEY` と同じ） |
-| 入口 | 登録済み `org_channels` **かつ** env のチャネル許可。期待 bot ID または app ID。同一 org / Slack team。許可リスト空は拒否 |
+| 入口 | 登録済み `org_channels` **かつ** env のチャネル許可。期待 bot ID または app ID（名前は見ない）。同一 org / Slack team。投稿者 team（`event.team` / `source_team` / `user_team` / `bot_profile.team_id`）が違う、または ext-shared で投稿者 team が無い → 拒否。`message_changed` / `message_deleted` は候補にしない。許可リスト空は拒否 |
 | 停止 | `checkOperable` G5。読めないときも起こさない |
 | W1 | `inbound_notice.wake` かつ `reason=woke` をメンション起こしと同じウォッチ対象にする |
 | フラグ OFF | 既存の `ignored_subtype:bot_message` のまま（FLAGS-OFF 回帰テスト） |
@@ -198,6 +198,19 @@ Fail-first（初回実装前、`bun test lib/inbound-notice tests/security/inbou
 木村決定の fail-first（pepper / jobId / last4 wake / channel+ts）: 48 tests / 41 pass / 7 fail / 3 errors（モジュール未作成）。
 
 木村決定の実装後（`bun test lib/inbound-notice tests/security/inbound-call-notice-flags-off.test.ts`）: **61 pass / 0 fail**（14 files）。
+
+独立セキュリティレビュー（PR #380、2026-10-16）fail-first
+（`bun test lib/inbound-notice tests/security/inbound-call-notice-flags-off.test.ts lib/safety/hold-callers.test.ts`）:
+
+| 指標 | 値 |
+|---|---|
+| 走ったテスト | 112 |
+| pass | 100 |
+| fail | 12 |
+| errors | 1（`redactPhoneInText` 未 consigned） |
+| files | 15 |
+
+実装後（同じコマンド）: **117 pass / 0 fail**（15 files）。
 
 検証（同じ `env -u …`）:
 

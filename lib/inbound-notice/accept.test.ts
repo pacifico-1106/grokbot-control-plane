@@ -90,4 +90,36 @@ describe("verifyInboundNoticeSource (fail closed)", () => {
       reason: "employee_mismatch",
     });
   });
+
+  test("rejects Slack Connect author team even when envelope team_id matches", () => {
+    const r = verifyInboundNoticeSource({
+      ...BASE,
+      authorTeamId: "T_CONNECT_OTHER",
+    });
+    expect(r).toEqual({ ok: false, reason: "team_mismatch" });
+  });
+
+  test("rejects ext-shared channel when author team is missing (fail closed)", () => {
+    const r = verifyInboundNoticeSource({
+      ...BASE,
+      authorTeamId: "",
+      extSharedChannel: true,
+    });
+    expect(r).toEqual({ ok: false, reason: "team_mismatch" });
+  });
+
+  test("rejects missing bot_id and app_id even when lists are populated", () => {
+    const r = verifyInboundNoticeSource({ ...BASE, botId: "", appId: "" });
+    expect(r).toEqual({ ok: false, reason: "bot_mismatch" });
+  });
+
+  test("same-workspace author team that matches expected is accepted", () => {
+    expect(
+      verifyInboundNoticeSource({
+        ...BASE,
+        authorTeamId: "T_DUMMY",
+        extSharedChannel: false,
+      })
+    ).toEqual({ ok: true });
+  });
 });

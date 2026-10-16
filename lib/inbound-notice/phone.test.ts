@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { hashPhone, last4Digits, maskPhoneForAudit } from "@/lib/inbound-notice/phone";
+import { hashPhone, last4Digits, maskPhoneForAudit, redactPhoneInText } from "@/lib/inbound-notice/phone";
 import { PhoneHashKeyMissingError } from "@/lib/inbound-notice/phone-hash-key";
 
 const KEY = "INBOUND_CALL_NOTICE_PHONE_HASH_KEY";
@@ -48,5 +48,13 @@ describe("phone masking", () => {
     expect(m.phoneHash).toMatch(/^hmac-sha256:/);
     expect(JSON.stringify(m)).not.toContain("000-0000-1111");
     expect(maskPhoneForAudit(null)).toEqual({ phoneLast4: null, phoneHash: null });
+  });
+
+  test("redactPhoneInText strips formatted and digit-only full numbers, keeps last4", () => {
+    expect(redactPhoneInText("Call 000-0000-1111 or 00000001111", "000-0000-1111")).toBe(
+      "Call 1111 or 1111"
+    );
+    expect(redactPhoneInText("no number here", "000-0000-1111")).toBe("no number here");
+    expect(redactPhoneInText(null, "000-0000-1111")).toBeNull();
   });
 });

@@ -43,6 +43,14 @@ export function verifyInboundNoticeSource(
     return { ok: false, reason: "team_mismatch" };
   }
 
+  const authorTeam = norm(input.authorTeamId);
+  if (input.extSharedChannel && !authorTeam) {
+    return { ok: false, reason: "team_mismatch" };
+  }
+  if (authorTeam && authorTeam !== team) {
+    return { ok: false, reason: "team_mismatch" };
+  }
+
   const botOk = allow(input.allowedBotIds, input.botId);
   const appOk = allow(input.allowedAppIds, input.appId);
   if (!botOk && !appOk) return { ok: false, reason: "bot_mismatch" };

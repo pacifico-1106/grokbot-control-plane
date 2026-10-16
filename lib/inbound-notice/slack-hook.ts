@@ -1,10 +1,13 @@
 /**
  * Slack mention-ingress hook. Flag OFF → caller never imports this path.
- * Candidate detection requires a bot identity AND an adapter match so a
+ * Candidate detection requires a bot_id or app_id AND an adapter match so a
  * human paste of 受電のお知らせ does not change existing mention behavior.
+ * message_changed / message_deleted never enter this path.
  */
 import { handleInboundNotice, type InboundNoticeOutcome } from "@/lib/inbound-notice/intake";
 import { matchInboundNoticeAdapter } from "@/lib/inbound-notice/adapters";
+
+const IGNORE_SUBTYPES = new Set(["message_changed", "message_deleted"]);
 
 type Slackish = {
   team_id?: unknown;
@@ -20,6 +23,10 @@ type Slackish = {
     app_id?: unknown;
     bot_profile?: unknown;
     blocks?: unknown;
+    team?: unknown;
+    source_team?: unknown;
+    user_team?: unknown;
+    is_ext_shared_channel?: unknown;
   };
 };
 
@@ -64,13 +71,26 @@ function botIds(event: Slackish["event"]): { botId: string; appId: string } {
 
 function hasBotIdentity(event: Slackish["event"]): boolean {
   const { botId, appId } = botIds(event);
-  return Boolean(botId || appId || str(event?.subtype) === "bot_message");
+  return Boolean(botId || appId);
+}
+
+function authorTeamId(event: Slackish["event"]): string {
+  const profile =
+    event?.bot_profile && typeof event.bot_profile === "object"
+      ? (event.bot_profile as Record<string, unknown>)
+      : null;
+  return str(event?.team) || str(event?.source_team) || str(event?.user_team) || str(profile?.team_id);
+}
+
+function extSharedChannel(event: Slackish["event"]): boolean {
+  return event?.is_ext_shared_channel === true;
 }
 
 export function isInboundNoticeCandidate(envelope: unknown): boolean {
   const env = envelope as Slackish;
   const event = env.event;
   if (!event) return false;
+  if (IGNORE_SUBTYPES.has(str(event.subtype))) return false;
   if (!hasBotIdentity(event)) return false;
   return matchInboundNoticeAdapter(extractInboundNoticeText(event)) !== null;
 }
@@ -89,5 +109,7 @@ export async function handleInboundNoticeEnvelope(envelope: unknown): Promise<In
     botId,
     appId,
     subtype: str(event?.subtype),
+    authorTeamId: authorTeamId(event),
+    extSharedChannel: extSharedChannel(event),
   });
 }

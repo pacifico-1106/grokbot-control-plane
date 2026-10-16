@@ -70,6 +70,10 @@ export type InboundNoticeSourceInput = {
   employeeOrgId: string;
   employeeSlackTeamId: string;
   teamId: string;
+  /** Author workspace when Slack provides it (event.team / source_team / user_team / bot_profile.team_id). */
+  authorTeamId?: string;
+  /** Slack Connect / externally shared channel. Missing author team then fails closed. */
+  extSharedChannel?: boolean;
   channelId: string;
   channelRegistered: boolean;
   channelOrgId: string;

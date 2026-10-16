@@ -29,3 +29,22 @@ export function maskPhoneForAudit(value: string | null | undefined): {
 } {
   return { phoneLast4: last4Digits(value), phoneHash: hashPhone(value) };
 }
+
+/**
+ * Replace the full phone (formatted and digit-only) with last-4.
+ * Used so 要約 / 相手先会社 cannot carry the number into the wake payload.
+ */
+export function redactPhoneInText(
+  text: string | null | undefined,
+  phone: string | null | undefined
+): string | null {
+  if (text === null || text === undefined) return null;
+  const last4 = last4Digits(phone);
+  if (!phone || !last4) return text;
+  const formatted = phone.trim();
+  const digitStr = digits(phone);
+  let out = text;
+  if (formatted.length >= 4) out = out.split(formatted).join(last4);
+  if (digitStr.length >= 4 && digitStr !== last4) out = out.split(digitStr).join(last4);
+  return out;
+}
