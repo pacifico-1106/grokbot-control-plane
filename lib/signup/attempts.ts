@@ -16,8 +16,11 @@ import {
   isSignupDomainCheckEnabled,
   isSignupRateLimitEnabled,
 } from "@/lib/feature-flags";
+import { trustedClientIp } from "@/lib/security/client-ip";
 import { createSupabaseAdminClient } from "@/lib/supabase";
 import { keyedHash, normalizeEmail, type EmailSignal } from "./email-normalize";
+
+export { trustedClientIp };
 
 export type SignupOutcome =
   | "created"
@@ -58,21 +61,6 @@ export const SIGNUP_RATE_LIMITS = {
   globalCreated1h: 30,
   duplicateWindowDays: 30,
 } as const;
-
-/**
- * Client IP for rate limiting. Prefers headers set by the Vercel edge
- * (x-vercel-forwarded-for / x-real-ip) over client-controllable ones.
- * cf-connecting-ip is deliberately ignored: this app is not behind Cloudflare,
- * so that header is attacker-controlled.
- */
-export function trustedClientIp(req: Request): string | null {
-  const vercel = req.headers.get("x-vercel-forwarded-for")?.split(",")[0]?.trim();
-  if (vercel) return vercel;
-  const real = req.headers.get("x-real-ip")?.trim();
-  if (real) return real;
-  const xff = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
-  return xff || null;
-}
 
 export type SignupFingerprint = {
   ipHash: string | null;

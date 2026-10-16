@@ -464,6 +464,18 @@ export function isSignupRateLimitEnabled(): boolean {
 }
 
 /**
+ * LOGIN_RATE_LIMIT_ENABLED: app-side login attempt limits (IP+account, plus a
+ * per-IP spray cap). In-memory / per-instance; Supabase Auth still has its own
+ * limits. Missing IP_HASH_KEY or a full bucket store fails closed (503 / deny).
+ *
+ * When OFF (default): POST /api/auth/login is unchanged (no extra limiter,
+ * no IP_HASH_KEY requirement).
+ */
+export function isLoginRateLimitEnabled(): boolean {
+  return parseFlag(process.env.LOGIN_RATE_LIMIT_ENABLED);
+}
+
+/**
  * SIGNUP_DOMAIN_CHECK_ENABLED: reject disposable domains and invalid dotted
  * local parts; reject a normalized-mailbox duplicate (Gmail dot/+tag variants)
  * of an account created in the last 30 days.
