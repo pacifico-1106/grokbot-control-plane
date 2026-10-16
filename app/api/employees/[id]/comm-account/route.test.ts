@@ -176,7 +176,7 @@ describe("/api/employees/[id]/comm-account", () => {
     const { POST } = await import("@/app/api/employees/[id]/comm-account/route");
     for (const flagOn of [true, false]) {
       process.env.LINE_WEBHOOK_AUTO_SETUP_ENABLED = flagOn ? "true" : "";
-      for (const extra of [{}, { origin: "https://evil.example" }, { origin: "null" }, { "sec-fetch-site": "cross-site" }]) {
+      for (const extra of [{}, { origin: "https://evil.example" }, { origin: "null" }, { "sec-fetch-site": "cross-site" }] as Array<Record<string, string>>) {
         const res = await POST(
           new Request("https://staffpass.test/api/employees/emp_comm/comm-account", {
             method: "POST",
