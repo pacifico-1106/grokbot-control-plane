@@ -568,6 +568,14 @@ export type AuditAction =
   /** Path C: one-time re-wake after the channel classification was approved (PATHC_REWAKE_ON_CLASSIFY_ENABLED). */
   | "slack.user_token_channel_rewake"
   | "slack.user_token_channel_rewake_skipped"
+  /** AI→AI mention wake guard (flags default OFF). Channel / ts / employee ids only — never the body. */
+  | "slack.peer_wake.denied"
+  | "slack.peer_wake.cap_notified"
+  | "slack.peer_wake.stop_denied"
+  | "slack.peer_wake.stopped"
+  | "slack.peer_wake.resumed"
+  | "slack.peer_wake.allowlist_upserted"
+  | "slack.peer_wake.allowlist_deleted"
   | "employee.sod_forced"
   | "employee.sod_override"
   | "employee.project_access_refused"
