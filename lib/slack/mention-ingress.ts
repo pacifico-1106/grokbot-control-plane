@@ -71,6 +71,7 @@ import { addLookingReaction } from "@/lib/slack/reaction-stamps";
 import { isSlackImNoRouteAuditEnabled, isWebhookHardeningEnabled } from "@/lib/feature-flags";
 import { withLinkLocalGuard } from "@/lib/webhooks/link-local-guard";
 import { recordImNoRouteAudit } from "@/lib/slack/im-no-route-audit";
+import { applyPeerWakeGuard } from "@/lib/slack/peer-wake-guard";
 
 const WAKE_TIMEOUT_MS = 10_000;
 const WAKE_USER_AGENT = "Staffpass-Wake/1.0";
@@ -1127,6 +1128,64 @@ async function processUserTokenChannelEvent(input: {
   const ts = str(envelope.event?.ts);
   const threadTs = str(envelope.event?.thread_ts) || null;
 
+  const peer = await applyPeerWakeGuard({
+    speakerId,
+    teamId,
+    channelId: channel,
+    threadTs,
+    eventTs: ts,
+    eventId,
+    targets: [target],
+  });
+  if (!peer.allowed.length) {
+    const reason = peer.skipReason || "peer_wake_denied";
+    console.info("slack_event_skip", {
+      eventId,
+      eventType,
+      channel,
+      channelType,
+      reason: `user_channel_${reason}`,
+      userToken: true,
+      isUserTokenChannel: true,
+    });
+    const auditPayload = buildUserChannelWakeAudit({
+      tokenSubject: { slackUserId: subscriberUserId, slackTeamId: subscriberTeamId },
+      channelId: channel,
+      channelClassification: classification,
+      isShared: isConnect,
+      employeeId: target.employeeId,
+      orgId: target.orgId,
+      eventId,
+      eventType,
+      speakerId,
+      speakerTeamId: teamId,
+      mentionedIds,
+      timestamp: ts,
+      woke: false,
+      skipReason: "peer_wake_denied",
+    });
+    appendAuditEvent({
+      orgId: target.orgId,
+      employeeId: target.employeeId,
+      credentialId: null,
+      action: "slack.user_token_channel_wake_skipped",
+      purpose: "slack.user_token_channel",
+      summary: `User-token channel wake スキップ: ${reason}`,
+      metadata: {
+        reason: "peer_wake_denied" as UserChannelSkipReason,
+        peerReason: reason,
+        ...auditPayload,
+      },
+    }).catch(() => undefined);
+    return {
+      handled: true,
+      woke: 0,
+      skipReason: `user_channel_${reason}`,
+      userToken: true,
+      isUserTokenChannel: true,
+    };
+  }
+
   // Apply ingress handoff policy
   const [effectivePolicy] = await Promise.all([
     getEffectiveIngressHandoffPolicy(target.orgId, target.employeeId),
@@ -1318,6 +1377,17 @@ export async function rewakeUserTokenChannelMention(input: {
     const target = targets.find((t) => t.orgId === orgId && t.employeeId === row.employeeId);
     if (!target) return skipped("binding_changed");
     if (target.slackTeamId.toUpperCase() !== row.subscriberTeamId.toUpperCase()) return skipped("team_mismatch");
+
+    const peer = await applyPeerWakeGuard({
+      speakerId: row.speakerSlackUserId,
+      teamId: row.subscriberTeamId,
+      channelId: row.channelId,
+      threadTs: row.threadTs,
+      eventTs: row.eventTs,
+      eventId: `rewake:${row.eventId}`.slice(0, 80),
+      targets: [target],
+    });
+    if (!peer.allowed.length) return skipped(peer.skipReason || "peer_wake_denied");
 
     const effectivePolicy = await getEffectiveIngressHandoffPolicy(orgId, target.employeeId);
     const resolved = resolveIngressHandoffSync(effectivePolicy.policy, {
@@ -1579,6 +1649,36 @@ export async function processSlackMentionEnvelope(
 
   const ts = str(event.ts);
   const threadTs = str(event.thread_ts) || null;
+  const peer = await applyPeerWakeGuard({
+    speakerId,
+    teamId,
+    channelId: channel,
+    threadTs,
+    eventTs: ts,
+    eventId,
+    targets,
+  });
+  const guardedTargets = peer.allowed;
+  if (!guardedTargets.length) {
+    const reason = peer.skipReason || "peer_wake_denied";
+    console.info("slack_event_skip", {
+      eventId,
+      eventType,
+      channel,
+      channelType,
+      isDirectMessage,
+      reason,
+      userToken: Boolean(userTokenAuth),
+    });
+    return {
+      handled: true,
+      woke: 0,
+      skipReason: reason,
+      userToken: Boolean(userTokenAuth),
+      isDirectMessage,
+    };
+  }
+
   let woke = 0;
   const trigger: "mention" | "internal_im" | "user_token_im" = isDirectMessage
     ? userTokenAuth
@@ -1586,7 +1686,7 @@ export async function processSlackMentionEnvelope(
       : "internal_im"
     : "mention";
 
-  const firstTarget = targets[0];
+  const firstTarget = guardedTargets[0];
   const orgId = firstTarget?.orgId || "";
 
   let ingressHandoffMeta:
@@ -1631,7 +1731,7 @@ export async function processSlackMentionEnvelope(
     };
   }
 
-  for (const target of targets) {
+  for (const target of guardedTargets) {
     const payload: SlackWakePayload = {
       channel,
       ts,
@@ -1658,9 +1758,9 @@ export async function processSlackMentionEnvelope(
     isDirectMessage,
     channelLooksLikeIm,
     trigger,
-    targetCount: targets.length,
+    targetCount: guardedTargets.length,
     woke,
-    skippedNoWebhook: targets.length - woke,
+    skippedNoWebhook: guardedTargets.length - woke,
     userToken: Boolean(userTokenAuth),
     authsSummary: summarizeAuthorizations(envelope.authorizations),
     ingressHandoff: ingressHandoffMeta

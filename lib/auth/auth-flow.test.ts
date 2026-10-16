@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import {
+  clientIp,
   destinationAfterVerify,
   AUTH_PAGE_HEADERS,
   isSameOriginRequest,
@@ -7,6 +8,7 @@ import {
   parseTokenHash,
   renderConfirmInterstitial,
   resetRateLimitsForTest,
+  setMaxBucketsForTest,
   takeRateLimit,
   validateNewPassword,
 } from "./auth-flow";
@@ -90,5 +92,31 @@ describe("rate limit", () => {
     expect(takeRateLimit("k", 2, 1000, 1)).toBe(true);
     expect(takeRateLimit("k", 2, 1000, 2)).toBe(false);
     expect(takeRateLimit("k", 2, 1000, 1001)).toBe(true);
+  });
+
+  test("store overflow fails closed (does not clear existing buckets)", () => {
+    setMaxBucketsForTest(2);
+    try {
+      expect(takeRateLimit("a", 5, 10_000, 0)).toBe(true);
+      expect(takeRateLimit("b", 5, 10_000, 0)).toBe(true);
+      expect(takeRateLimit("c", 5, 10_000, 0)).toBe(false);
+      expect(takeRateLimit("a", 5, 10_000, 0)).toBe(true);
+      expect(takeRateLimit("a", 5, 10_000, 0)).toBe(true);
+    } finally {
+      setMaxBucketsForTest(null);
+    }
+  });
+});
+
+describe("clientIp", () => {
+  test("ignores cf-connecting-ip; prefers Vercel headers", () => {
+    expect(
+      clientIp(h({ "cf-connecting-ip": "1.1.1.1", "x-vercel-forwarded-for": "203.0.113.7" }))
+    ).toBe("203.0.113.7");
+    expect(clientIp(h({ "cf-connecting-ip": "1.1.1.1" }))).toBe("unknown");
+    expect(clientIp(h({ "x-real-ip": "198.51.100.9", "x-forwarded-for": "9.9.9.9" }))).toBe(
+      "198.51.100.9"
+    );
+    expect(clientIp(h({ "x-forwarded-for": "9.9.9.9, 10.0.0.1" }))).toBe("10.0.0.1");
   });
 });

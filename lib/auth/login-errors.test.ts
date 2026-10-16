@@ -39,6 +39,12 @@ describe("loginErrorMessage", () => {
     expect(loginErrorMessage("login_failed", 429)).toBe(RATE_LIMITED_MESSAGE);
   });
 
+  test("login_unavailable / 503 is a generic pause, not a credential oracle", () => {
+    expect(loginErrorMessage("login_unavailable")).toMatch(/時間をおいて/);
+    expect(loginErrorMessage("login_unavailable")).not.toContain("login_unavailable");
+    expect(loginErrorMessage("login_failed", 503)).toMatch(/時間をおいて/);
+  });
+
   test("session expired banner copy", () => {
     expect(loginErrorMessage("session_expired")).toBe(SESSION_REQUIRED_MESSAGE);
     expect(loginErrorMessage("session")).toBe(SESSION_REQUIRED_MESSAGE);

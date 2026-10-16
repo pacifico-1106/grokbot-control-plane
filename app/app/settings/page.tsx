@@ -20,8 +20,11 @@ import {
   listOrgParties,
   listOrgProjects,
 } from "@/lib/data";
-import { isApprovalKindRoutesEnabled } from "@/lib/feature-flags";
+import { isApprovalKindRoutesEnabled, isAiPeerWakeAllowlistEnabled, isAiPeerWakeThreadGuardEnabled, aiPeerWakeCap } from "@/lib/feature-flags";
 import { isDefaultIngressHandoffPolicy } from "@/lib/ingress-handoff/validate";
+import { listAllowlist, listThreads } from "@/lib/data/ai-peer-wake";
+import { listEmployees } from "@/lib/data/employees";
+import { AiPeerWakeClient } from "@/components/settings/AiPeerWakeClient";
 
 export const dynamic = "force-dynamic";
 
@@ -45,6 +48,18 @@ export default async function SettingsPage() {
     : null;
   const members = canManage && approvalKindRoutesEnabled
     ? await listMembers(session.orgId)
+    : [];
+  const peerWakeFlagsOn = isAiPeerWakeAllowlistEnabled() || isAiPeerWakeThreadGuardEnabled();
+  const peerWakeAllowlist = canManage && peerWakeFlagsOn && session.orgId
+    ? await listAllowlist(session.orgId)
+    : [];
+  const peerWakeThreads = canManage && peerWakeFlagsOn && session.orgId
+    ? await listThreads(session.orgId)
+    : [];
+  const peerWakeEmployees = canManage && peerWakeFlagsOn && session.orgId
+    ? (await listEmployees(session.orgId))
+        .filter((e) => e.status === "active")
+        .map((e) => ({ id: e.id, displayName: e.displayName }))
     : [];
   return (
     <AppShell
@@ -92,6 +107,18 @@ export default async function SettingsPage() {
             />
           ) : null}
           {sodWarnPolicy ? <SodWarnPolicyClient initialPolicy={sodWarnPolicy} /> : null}
+          {peerWakeFlagsOn ? (
+            <AiPeerWakeClient
+              flags={{
+                allowlist: isAiPeerWakeAllowlistEnabled(),
+                threadGuard: isAiPeerWakeThreadGuardEnabled(),
+                cap: aiPeerWakeCap(),
+              }}
+              employees={peerWakeEmployees}
+              initialAllowlist={peerWakeAllowlist}
+              initialThreads={peerWakeThreads}
+            />
+          ) : null}
           <ProjectsClient initialProjects={projects} initialAssets={assets} />
           <ApprovalKindRoutesClient
             policy={approvalKindRoutesPolicy}
