@@ -138,6 +138,10 @@ function asEmail(value: unknown): string | null {
   return t || null;
 }
 
+const MAX_SECRET_SCAN_DEPTH = 8;
+const MAX_SECRET_SCAN_NODES = 256;
+const MAX_SECRET_SCAN_STRING = 4096;
+
 function isAllowedPrefixField(key: string, value: unknown): boolean {
   if (key === "secretHashPrefix") {
     return typeof value === "string" && value.length <= 12;
@@ -145,7 +149,16 @@ function isAllowedPrefixField(key: string, value: unknown): boolean {
   return key === "prefix" && (value === "gb_adm_" || value === "gb_emp_" || value === "sp_at_");
 }
 
-function rejectSecretsInValue(value: unknown, key = ""): void {
+function rejectSecretsInValue(
+  value: unknown,
+  key = "",
+  depth = 0,
+  counter = { n: 0 }
+): void {
+  counter.n += 1;
+  if (depth > MAX_SECRET_SCAN_DEPTH || counter.n > MAX_SECRET_SCAN_NODES) {
+    throw new Error("admin_audit_metadata_too_large");
+  }
   if (isAllowedPrefixField(key, value)) return;
   if (SECRET_KEY.test(key)) {
     if (HASH_KEY.test(key)) throw new Error("admin_audit_full_hash_forbidden");
@@ -153,14 +166,17 @@ function rejectSecretsInValue(value: unknown, key = ""): void {
     throw new Error("admin_audit_secret_forbidden");
   }
   if (Array.isArray(value)) {
-    for (const item of value) rejectSecretsInValue(item, key);
+    for (const item of value) rejectSecretsInValue(item, key, depth + 1, counter);
     return;
   }
   if (value && typeof value === "object") {
-    rejectSecrets(value as Record<string, unknown>);
+    rejectSecrets(value as Record<string, unknown>, depth + 1, counter);
     return;
   }
   if (typeof value !== "string") return;
+  if (value.length > MAX_SECRET_SCAN_STRING) {
+    throw new Error("admin_audit_metadata_too_large");
+  }
   if (/prefix/i.test(key) && /^(gb_adm_|gb_emp_|sp_at_)/.test(value) && value.length > 7) {
     throw new Error("admin_audit_full_prefix_forbidden");
   }
@@ -175,12 +191,16 @@ function rejectSecretsInValue(value: unknown, key = ""): void {
   }
 }
 
-function rejectSecrets(metadata: Record<string, unknown>): void {
+function rejectSecrets(
+  metadata: Record<string, unknown>,
+  depth = 0,
+  counter = { n: 0 }
+): void {
   for (const [key, value] of Object.entries(metadata)) {
     if (key === "secretHashPrefix" && typeof value === "string" && value.length > 12) {
       throw new Error("admin_audit_hash_too_long");
     }
-    rejectSecretsInValue(value, key);
+    rejectSecretsInValue(value, key, depth, counter);
   }
 }
 
@@ -238,11 +258,14 @@ export async function ensureAdminRevokeAudit(input: {
   actor: HumanAdminAuditActor;
   reason?: string;
 }): Promise<void> {
-  const { listAuditEvents } = await import("@/lib/data/audit");
-  const events = await listAuditEvents(input.orgId, 200).catch(() => []);
-  const exists = events.some(
-    (event) => event.action === "admin.revoke" && Number(event.metadata?.generation) === input.generation
-  );
+  const { listAuditEventsByActionSince } = await import("@/lib/data/audit");
+  const events = await listAuditEventsByActionSince(
+    input.orgId,
+    "admin.revoke",
+    "1970-01-01T00:00:00.000Z",
+    500
+  ).catch(() => []);
+  const exists = events.some((event) => Number(event.metadata?.generation) === input.generation);
   if (exists) return;
   await appendAdminAuditEvent({
     orgId: input.orgId,

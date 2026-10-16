@@ -4,7 +4,8 @@
 -- 根拠（コード）:
 --   テーブル: public.approval_requests（lib/data/approvals.ts, supabase/schema.sql）
 --   組織: public.orgs.name（lib/types.ts Org.name / lib/data/mappers.ts mapOrgRow）。
---         orgs に slug 列は無い（schema / Org 型）。環境に slug があれば name と同様にマッチする。
+--         orgs.name に unique は無い。ilike 'TOKYO307'（ワイルドカードなし＝大小無視の完全一致）
+--         で候補を取り、0件または2件以上なら RAISE して止まる。部分一致や slug 推測はしない。
 --   status: lib/types.ts ApprovalStatus と
 --           supabase/migrations/20261004700000_comm_reply_dedup.sql の check
 --           pending | approved | rejected | expired | revision_requested | superseded
@@ -16,12 +17,22 @@
 begin transaction read only;
 set local statement_timeout = '15s';
 
+do $gate$
+declare n int;
+begin
+  select count(*) into n
+  from public.orgs o
+  where o.name ilike 'TOKYO307';
+  if n <> 1 then
+    raise exception 'tokyo307 org must match exactly one public.orgs.name (got %)', n;
+  end if;
+end
+$gate$;
+
 with tokyo307 as (
   select o.id, o.name
   from public.orgs o
   where o.name ilike 'TOKYO307'
-     or o.name ilike '%TOKYO307%'
-     or coalesce(to_jsonb(o)->>'slug', '') ilike '%tokyo307%'
 ),
 admin_tickets as (
   select
