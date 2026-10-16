@@ -14,6 +14,9 @@ import { EmployeeVoiceForm } from "@/components/employees/EmployeeVoiceForm";
 import { EmployeeProjectAccessForm } from "@/components/employees/EmployeeProjectAccessForm";
 import { EmployeeTerminateForm } from "@/components/employees/EmployeeTerminateForm";
 import { HoldPanel } from "@/components/holds/HoldPanel";
+import { readHoldForDisplay } from "@/lib/safety/hold-actions";
+import { isEmployeeHoldEnabled, isOrgHoldEnabled } from "@/lib/safety/hold-config";
+import { buildHoldPanelStatus } from "@/lib/safety/hold-display";
 import { EmployeeIngressHandoffStatus } from "@/components/employees/EmployeeIngressHandoffStatus";
 import { SlackIdentityForm } from "@/components/employees/SlackIdentityForm";
 import { EmployeeLineLinkCodeForm } from "@/components/employees/EmployeeLineLinkCodeForm";
@@ -79,6 +82,7 @@ export default async function EmployeeDetailPage({
 
   const employee = await getEmployee(id, orgId);
   if (!employee) notFound();
+  const employeeHold = await readHoldForDisplay(orgId ?? "", employee.id);
   const concentration = buildConcentration(await listEmployees(orgId));
   const concentrationRow = concentration.employees.find((row) => row.employeeId === employee.id);
 
@@ -394,7 +398,15 @@ export default async function EmployeeDetailPage({
       />
       {isMcpOAuthEnabled() ? <OAuthGrantsPanel employeeId={employee.id} /> : null}
 
-      <HoldPanel employeeId={employee.id} />
+      <HoldPanel
+        employeeId={employee.id}
+        initial={buildHoldPanelStatus({
+          enabled: isEmployeeHoldEnabled(),
+          orgEnabled: isOrgHoldEnabled(),
+          memberId: session.member?.id ?? "",
+          read: employeeHold,
+        })}
+      />
       <EmployeeTerminateForm employee={employee} />
 
       <EmployeeActionLog events={actionEvents} compact />
