@@ -104,7 +104,7 @@ describe("GET/POST /api/settings/ai-peer-wake", () => {
   });
 
   test("AI credential headers cannot stop or resume a peer-wake thread", async () => {
-    const headers = [
+    const headers: Array<Record<string, string>> = [
       { authorization: "Bearer gb_emp_0123456789abcdef" },
       { authorization: "Bearer gb_adm_0123456789abcdef" },
       { "x-staffpass-credential": "gb_emp_0123456789abcdef" },
