@@ -1,6 +1,6 @@
 /**
- * Shared inbound-notice intake shape. ai-concier is the first adapter;
- * voicemail / forwarded email / other phone AIs plug in later.
+ * Shared inbound-notice intake shape. ai-concier is the first (and only
+ * wired) adapter. Voicemail and forwarded-email adapters are deferred.
  */
 
 export const INBOUND_NOTICE_SCHEMA = "staffpass.inbound_notice.v1" as const;

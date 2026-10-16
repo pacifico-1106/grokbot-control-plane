@@ -15,6 +15,7 @@ const BOT = "B_AIC_DUMMY";
 const APP = "A_AIC_DUMMY";
 const BOUND_USER = "U_INBOUND_DUMMY";
 const WAKE_URL = "https://example.test/wake/inbound-dummy";
+const NOTICE_TS = `1787911800.${String(Date.now()).slice(-6)}`;
 const NOTICE = [
   "受電のお知らせ",
   "受電日時 2026/01/02 03:04",
@@ -36,6 +37,7 @@ const KEYS = [
   "INBOUND_CALL_NOTICE_SLACK_CHANNEL_IDS",
   "INBOUND_CALL_NOTICE_SLACK_BOT_IDS",
   "INBOUND_CALL_NOTICE_SLACK_APP_IDS",
+  "INBOUND_CALL_NOTICE_PHONE_HASH_KEY",
   "SLACK_SIGNING_SECRET",
 ] as const;
 const saved: Record<string, string | undefined> = {};
@@ -65,7 +67,7 @@ function envelope(over: Record<string, unknown> = {}) {
       bot_id: BOT,
       bot_profile: { id: BOT, app_id: APP, name: "ai-concier-dummy" },
       text: NOTICE,
-      ts: "1787911800.000099",
+      ts: NOTICE_TS,
       channel: CHANNEL,
       channel_type: "channel",
     },
@@ -111,6 +113,7 @@ describe("mention-ingress hook", () => {
     process.env.INBOUND_CALL_NOTICE_SLACK_CHANNEL_IDS = CHANNEL;
     process.env.INBOUND_CALL_NOTICE_SLACK_BOT_IDS = BOT;
     process.env.INBOUND_CALL_NOTICE_SLACK_APP_IDS = APP;
+    process.env.INBOUND_CALL_NOTICE_PHONE_HASH_KEY = "test-inbound-phone-hash-key-0123456789";
 
     const emp = getRuntimeEmployees().find((e) => e.id === "emp_comm")!;
     const previous = emp.allowedAccounts;
@@ -150,6 +153,17 @@ describe("mention-ingress hook", () => {
       expect(calls[0].body.kind).toBe("inbound_notice");
       expect(calls[0].body.priority).toBe("normal");
       expect(calls[0].body.text).toBeUndefined();
+      expect(calls[0].body.jobId).toBe(`inb_${CHANNEL}_${NOTICE_TS}`);
+      const phone = (calls[0].body.inboundNotice as { untrustedOutsideText: { fields: { phone: { value: string } } } })
+        .untrustedOutsideText.fields.phone.value;
+      expect(phone).toBe("1111");
+      expect(JSON.stringify(calls[0].body)).not.toContain("000-0000-1111");
+      const second = await processSlackMentionEnvelope(
+        envelope({ event_id: `Ev_inb_dup_${Date.now()}` })
+      );
+      expect(second.woke).toBe(0);
+      expect(second.skipReason).toBe("duplicate");
+      expect(calls).toHaveLength(1);
     } finally {
       await revokeEmployeeSlackIdentity({ employeeId: emp.id, orgId: DEMO_ORG.id });
       await updateWakeWebhook(emp.id, { orgId: DEMO_ORG.id, url: null, secret: "" });

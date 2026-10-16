@@ -13,8 +13,13 @@ import { isInboundCallNoticeEnabled } from "@/lib/inbound-notice/flags";
 import { readInboundNoticeConfig } from "@/lib/inbound-notice/config";
 import { parseWithAdapters } from "@/lib/inbound-notice/adapters";
 import { verifyInboundNoticeSource } from "@/lib/inbound-notice/accept";
+import { inboundNoticeDedupKey, inboundNoticeJobId } from "@/lib/inbound-notice/dedup";
 import { isYes } from "@/lib/inbound-notice/parse";
-import { maskPhoneForAudit } from "@/lib/inbound-notice/phone";
+import { last4Digits, maskPhoneForAudit } from "@/lib/inbound-notice/phone";
+import {
+  isPhoneHashKeyConfigured,
+  isPhoneHashKeyMissingError,
+} from "@/lib/inbound-notice/phone-hash-key";
 import { fenceUntrustedFields } from "@/lib/inbound-notice/untrusted";
 import { INBOUND_NOTICE_SCHEMA } from "@/lib/inbound-notice/types";
 import { mcpHandoffWakeAuditMeta, withMcpHandoff } from "@/lib/mcp/endpoint-handoff";
@@ -24,6 +29,9 @@ import { withLinkLocalGuard } from "@/lib/webhooks/link-local-guard";
 
 const WAKE_TIMEOUT_MS = 8_000;
 const PURPOSE = "inbound_notice";
+
+export const SOURCE_NOTICE_NOTE_JA =
+  "電話番号の全文はこの Slack 投稿を、既存の承認付きツールで読んでください。wake には下 4 桁だけあります。";
 
 export type InboundNoticeSlackEvent = {
   teamId: string;
@@ -50,7 +58,13 @@ export type InboundNoticeDeps = {
   checkOperable: (i: { orgId?: string | null; employeeId?: string | null; phase: "wake" }) => Promise<OperableResult>;
   appendAudit: (e: InboundNoticeAudit) => Promise<unknown>;
   recordThreadWake: typeof recordThreadWake;
+  claimDedup: (key: string) => Promise<boolean>;
 };
+
+async function defaultClaimDedup(key: string): Promise<boolean> {
+  const { claimSlackMentionEvent } = await import("@/lib/slack/mention-ingress");
+  return claimSlackMentionEvent(key);
+}
 
 const defaultDeps: InboundNoticeDeps = {
   now: () => new Date(),
@@ -66,6 +80,7 @@ const defaultDeps: InboundNoticeDeps = {
   checkOperable: (i) => checkOperable(i),
   appendAudit: (e) => appendAuditEvent(e),
   recordThreadWake,
+  claimDedup: defaultClaimDedup,
 };
 
 export type InboundNoticeOutcome = {
@@ -86,6 +101,19 @@ export async function handleInboundNotice(
     return { handled: false, woke: 0, skipReason: "feature_flag_off" };
   }
   const d = { ...defaultDeps, ...deps };
+  if (!isPhoneHashKeyConfigured()) {
+    const config = readInboundNoticeConfig();
+    await d.appendAudit({
+      orgId: config?.orgId ?? "",
+      employeeId: config?.employeeId ?? null,
+      credentialId: null,
+      action: "inbound_notice.rejected",
+      purpose: PURPOSE,
+      summary: "inbound_notice_rejected",
+      metadata: { reason: "phone_hash_key_missing", eventId: event.eventId, channel: event.channelId },
+    }).catch(() => undefined);
+    return { handled: true, woke: 0, skipReason: "phone_hash_key_missing" };
+  }
   const config = readInboundNoticeConfig();
   if (!config) {
     return { handled: true, woke: 0, skipReason: "config_missing" };
@@ -117,7 +145,24 @@ export async function handleInboundNotice(
     expectedTeamId: config.slackTeamId,
     expectedEmployeeId: config.employeeId,
   });
-  const phone = phoneMeta(parsed.fields.phone);
+  let phone: { phoneLast4: string | null; phoneHash: string | null };
+  try {
+    phone = phoneMeta(parsed.fields.phone);
+  } catch (err) {
+    if (isPhoneHashKeyMissingError(err)) {
+      await d.appendAudit({
+        orgId: config.orgId,
+        employeeId: employee?.id ?? null,
+        credentialId: null,
+        action: "inbound_notice.rejected",
+        purpose: PURPOSE,
+        summary: "inbound_notice_rejected",
+        metadata: { reason: "phone_hash_key_missing", eventId: event.eventId, channel: event.channelId },
+      }).catch(() => undefined);
+      return { handled: true, woke: 0, skipReason: "phone_hash_key_missing" };
+    }
+    throw err;
+  }
   if (!source.ok) {
     await d.appendAudit({
       orgId: config.orgId,
@@ -136,11 +181,21 @@ export async function handleInboundNotice(
     return { handled: true, woke: 0, skipReason: source.reason };
   }
 
+  const dedupKey = inboundNoticeDedupKey(event.channelId, event.ts);
+  if (!dedupKey) {
+    return { handled: true, woke: 0, skipReason: "dedup_key_missing" };
+  }
+  const claimed = await d.claimDedup(dedupKey);
+  if (!claimed) {
+    return { handled: true, woke: 0, skipReason: "duplicate" };
+  }
+
   const isSalesCall = isYes(parsed.fields.salesCall);
   const isEmergency = isYes(parsed.fields.emergency);
   const priority = isEmergency ? "high" : "normal";
   const orgId = config.orgId;
   const employeeId = config.employeeId;
+  const jobId = inboundNoticeJobId(event.channelId, event.ts);
 
   if (isSalesCall) {
     await d.appendAudit({
@@ -155,6 +210,7 @@ export async function handleInboundNotice(
         eventId: event.eventId,
         channel: event.channelId,
         ts: event.ts,
+        jobId,
         source: parsed.source,
         adapterId: parsed.adapterId,
         ...phone,
@@ -186,6 +242,7 @@ export async function handleInboundNotice(
           channel: event.channelId,
           ts: event.ts,
           eventId: event.eventId,
+          jobId,
           suppressedSinceLastRow: slot.suppressed,
           ...phone,
         },
@@ -209,12 +266,17 @@ export async function handleInboundNotice(
         eventId: event.eventId,
         channel: event.channelId,
         ts: event.ts,
+        jobId,
         ...phone,
       },
     }).catch(() => undefined);
     return { handled: true, woke: 0, skipReason: "wake_webhook_missing" };
   }
 
+  const wakeFields = {
+    ...parsed.fields,
+    phone: last4Digits(parsed.fields.phone),
+  };
   const payload = {
     surface: "slack" as const,
     kind: "inbound_notice" as const,
@@ -222,16 +284,24 @@ export async function handleInboundNotice(
     priority,
     orgId,
     employeeId,
+    jobId,
     eventId: event.eventId,
     channel: event.channelId,
     ts: event.ts,
     thread_ts: event.threadTs,
     acceptedAt: d.now().toISOString(),
+    sourceNotice: {
+      surface: "slack" as const,
+      channel: event.channelId,
+      ts: event.ts,
+      fullPhone: "read_original_slack_notice" as const,
+      noteJa: SOURCE_NOTICE_NOTE_JA,
+    },
     inboundNotice: {
       schema: INBOUND_NOTICE_SCHEMA,
       source: parsed.source,
       adapterId: parsed.adapterId,
-      untrustedOutsideText: fenceUntrustedFields(parsed.fields),
+      untrustedOutsideText: fenceUntrustedFields(wakeFields),
     },
   };
 
@@ -270,6 +340,7 @@ export async function handleInboundNotice(
           eventId: event.eventId,
           channel: event.channelId,
           ts: event.ts,
+          jobId,
           ...phone,
           ...mcpHandoffWakeAuditMeta(wakeBody, "slack"),
         },
@@ -285,7 +356,7 @@ export async function handleInboundNotice(
       action: "inbound_notice.wake",
       purpose: PURPOSE,
       summary: "起こす webhook の送信に失敗",
-      metadata: { reason: "wake_failed", eventId: event.eventId, channel: event.channelId, ...phone },
+      metadata: { reason: "wake_failed", eventId: event.eventId, channel: event.channelId, jobId, ...phone },
     }).catch(() => undefined);
     return { handled: true, woke: 0, skipReason: "wake_failed" };
   }
@@ -316,6 +387,7 @@ export async function handleInboundNotice(
       eventId: event.eventId,
       channel: event.channelId,
       ts: event.ts,
+      jobId,
       source: parsed.source,
       adapterId: parsed.adapterId,
       priority,

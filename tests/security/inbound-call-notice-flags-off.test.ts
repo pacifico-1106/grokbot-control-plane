@@ -14,6 +14,7 @@ const KEYS = [
   "INBOUND_CALL_NOTICE_SLACK_CHANNEL_IDS",
   "INBOUND_CALL_NOTICE_SLACK_BOT_IDS",
   "INBOUND_CALL_NOTICE_SLACK_APP_IDS",
+  "INBOUND_CALL_NOTICE_PHONE_HASH_KEY",
 ] as const;
 const saved: Record<string, string | undefined> = {};
 

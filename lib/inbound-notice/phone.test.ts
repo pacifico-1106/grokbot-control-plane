@@ -1,5 +1,18 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { hashPhone, last4Digits, maskPhoneForAudit } from "@/lib/inbound-notice/phone";
+import { PhoneHashKeyMissingError } from "@/lib/inbound-notice/phone-hash-key";
+
+const KEY = "INBOUND_CALL_NOTICE_PHONE_HASH_KEY";
+const FIXTURE = "test-inbound-phone-hash-key-0123456789";
+const saved = process.env[KEY];
+
+beforeEach(() => {
+  process.env[KEY] = FIXTURE;
+});
+afterEach(() => {
+  if (saved === undefined) delete process.env[KEY];
+  else process.env[KEY] = saved;
+});
 
 describe("phone masking", () => {
   test("last4 is digits-only and never the full number", () => {
@@ -10,18 +23,29 @@ describe("phone masking", () => {
     expect(last4Digits("")).toBeNull();
   });
 
-  test("hash is stable, hex, and does not contain the input digits as a substring of the raw number", () => {
+  test("hash is HMAC of digits with the pepper; same digits, different punctuation match", () => {
     const a = hashPhone("000-0000-1111");
     const b = hashPhone("00000001111");
     expect(a).toBe(b);
-    expect(a).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(a).toMatch(/^hmac-sha256:[0-9a-f]{64}$/);
     expect(a).not.toContain("00000001111");
   });
 
-  test("audit mask keeps last4 + hash only", () => {
+  test("different peppers produce different hashes", () => {
+    const a = hashPhone("000-0000-1111");
+    process.env[KEY] = "another-inbound-phone-hash-key-abcdef";
+    expect(hashPhone("000-0000-1111")).not.toBe(a);
+  });
+
+  test("missing pepper throws (no unsalted fallback)", () => {
+    delete process.env[KEY];
+    expect(() => hashPhone("000-0000-1111")).toThrow(PhoneHashKeyMissingError);
+  });
+
+  test("audit mask keeps last4 + hmac only", () => {
     const m = maskPhoneForAudit("000-0000-1111");
     expect(m.phoneLast4).toBe("1111");
-    expect(m.phoneHash).toMatch(/^sha256:/);
+    expect(m.phoneHash).toMatch(/^hmac-sha256:/);
     expect(JSON.stringify(m)).not.toContain("000-0000-1111");
     expect(maskPhoneForAudit(null)).toEqual({ phoneLast4: null, phoneHash: null });
   });

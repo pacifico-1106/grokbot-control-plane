@@ -1418,23 +1418,14 @@ export async function processSlackMentionEnvelope(
   }
 
   // Inbound call notice (INBOUND_CALL_NOTICE_ENABLED, default OFF). Bot
-  // messages that look like 受電のお知らせ are claimed here; everything else
-  // falls through to the existing skip (bot_message) / mention path.
+  // messages that look like 受電のお知らせ go to intake (dedup = channel +
+  // Slack ts). Everything else falls through to skip (bot_message) / mention.
   if (isInboundCallNoticeEnabled()) {
     const { isInboundNoticeCandidate, handleInboundNoticeEnvelope } = await import(
       "@/lib/inbound-notice/slack-hook"
     );
     if (isInboundNoticeCandidate(envelope)) {
-      const claimed = await claimSlackMentionEvent(eventId);
-      if (!claimed) {
-        console.info("slack_event_skip", {
-          eventId,
-          eventType,
-          channel,
-          reason: "duplicate_event",
-        });
-        return { handled: true, woke: 0, duplicate: true, skipReason: "duplicate_event" };
-      }
+      // Dedup is channel + Slack ts (intake), not Slack event_id.
       const outcome = await handleInboundNoticeEnvelope(envelope);
       console.info("slack_event_inbound_notice", {
         eventId,
@@ -1445,6 +1436,7 @@ export async function processSlackMentionEnvelope(
         handled: outcome.handled,
         woke: outcome.woke,
         skipReason: outcome.skipReason,
+        duplicate: outcome.skipReason === "duplicate",
       };
     }
   }

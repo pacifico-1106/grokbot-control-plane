@@ -37,7 +37,9 @@ const FLAG_KEYS = [
   "INBOUND_CALL_NOTICE_SLACK_CHANNEL_IDS",
   "INBOUND_CALL_NOTICE_SLACK_BOT_IDS",
   "INBOUND_CALL_NOTICE_SLACK_APP_IDS",
+  "INBOUND_CALL_NOTICE_PHONE_HASH_KEY",
 ] as const;
+const PHONE_HASH_FIXTURE = "test-inbound-phone-hash-key-0123456789";
 const saved: Record<string, string | undefined> = {};
 
 let fetches: Array<{ url: string; init: RequestInit }>;
@@ -53,6 +55,7 @@ beforeEach(() => {
   process.env.INBOUND_CALL_NOTICE_SLACK_CHANNEL_IDS = CHANNEL;
   process.env.INBOUND_CALL_NOTICE_SLACK_BOT_IDS = BOT;
   process.env.INBOUND_CALL_NOTICE_SLACK_APP_IDS = APP;
+  process.env.INBOUND_CALL_NOTICE_PHONE_HASH_KEY = PHONE_HASH_FIXTURE;
   fetches = [];
   hold = { ok: true };
   audits = [];
@@ -100,6 +103,7 @@ function deps(over: Partial<InboundNoticeDeps> = {}): InboundNoticeDeps {
       audits.push(e as Record<string, unknown>);
     },
     recordThreadWake: async () => true,
+    claimDedup: async () => true,
     ...over,
   };
 }
@@ -131,16 +135,70 @@ describe("handleInboundNotice", () => {
     const fields = untrusted.fields as Record<string, { value: string; untrusted: true }>;
     expect(fields.summary.value).toBe("DUMMY-SUMMARY");
     expect(fields.summary.untrusted).toBe(true);
-    expect(fields.phone.value).toBe("000-0000-1111");
+    expect(fields.phone.value).toBe("1111");
+    expect(fields.phone.value).not.toBe("000-0000-1111");
+    expect(body.jobId).toBe("inb_C_DUMMY_1000000000.000001");
+    const sourceNotice = body.sourceNotice as Record<string, unknown>;
+    expect(sourceNotice).toMatchObject({
+      surface: "slack",
+      channel: CHANNEL,
+      ts: "1000000000.000001",
+    });
+    expect(String(sourceNotice.noteJa)).toContain("Slack");
+    expect(JSON.stringify(body)).not.toContain("000-0000-1111");
     const woke = audits.find((a) => a.action === "inbound_notice.wake") as {
       metadata: Record<string, unknown>;
     };
     expect(woke.metadata.reason).toBe("woke");
     expect(woke.metadata.phoneLast4).toBe("1111");
-    expect(String(woke.metadata.phoneHash)).toMatch(/^sha256:/);
+    expect(woke.metadata.jobId).toBe("inb_C_DUMMY_1000000000.000001");
+    expect(String(woke.metadata.phoneHash)).toMatch(/^hmac-sha256:/);
     expect(JSON.stringify(audits)).not.toContain("000-0000-1111");
     expect(JSON.stringify(audits)).not.toContain("DUMMY-SUMMARY");
     expect(JSON.stringify(audits)).not.toContain("DUMMY-NAME");
+  });
+
+  test("flag ON + pepper unset → fail closed, no wake", async () => {
+    delete process.env.INBOUND_CALL_NOTICE_PHONE_HASH_KEY;
+    const r = await handleInboundNotice(event(), deps());
+    expect(r).toMatchObject({ handled: true, woke: 0, skipReason: "phone_hash_key_missing" });
+    expect(fetches).toHaveLength(0);
+    expect(audits.some((a) => a.action === "inbound_notice.rejected")).toBe(true);
+  });
+
+  test("営業電話 unknown / missing → wake at normal priority", async () => {
+    const missing = NOTICE.replace("営業電話 いいえ\n", "");
+    const r = await handleInboundNotice(event({ text: missing }), deps());
+    expect(r.woke).toBe(1);
+    const body = JSON.parse(String(fetches[0].init.body)) as { priority: string };
+    expect(body.priority).toBe("normal");
+
+    fetches = [];
+    const unknown = NOTICE.replace("営業電話 いいえ", "営業電話 不明");
+    const r2 = await handleInboundNotice(
+      event({ text: unknown, ts: "1000000000.000002" }),
+      deps()
+    );
+    expect(r2.woke).toBe(1);
+    const body2 = JSON.parse(String(fetches[0].init.body)) as { priority: string };
+    expect(body2.priority).toBe("normal");
+  });
+
+  test("duplicate channel + ts is skipped (event_id may differ)", async () => {
+    const seen = new Set<string>();
+    const d = deps({
+      claimDedup: async (key: string) => {
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      },
+    });
+    const first = await handleInboundNotice(event({ eventId: "Ev_a" }), d);
+    const second = await handleInboundNotice(event({ eventId: "Ev_b" }), d);
+    expect(first.woke).toBe(1);
+    expect(second).toMatchObject({ handled: true, woke: 0, skipReason: "duplicate" });
+    expect(fetches).toHaveLength(1);
+    expect([...seen][0]).toBe("inb:C_DUMMY:1000000000.000001");
   });
 
   test("営業電話 はい → audit only, no wake", async () => {
