@@ -1,7 +1,8 @@
 import { sendTransactionalEmail, renderStubHtml } from "@/lib/resend";
 import { 
   isLpInquiryDbEnabled, 
-  isLpInquiryBotProtectionEnabled 
+  isLpInquiryBotProtectionEnabled,
+  isLpInquiryRateLimitEnabled,
 } from "@/lib/feature-flags";
 import { createInquiry, type InquiryPlan, type BillingPreference } from "@/lib/lp/inquiry-data";
 import { enqueueNotification, processOutboxEntry } from "@/lib/lp/notification-outbox";
@@ -74,14 +75,15 @@ function getPlanLabel(plan: string): string {
 export async function POST(req: Request) {
   const clientIp = getClientIp(req);
   const botProtectionEnabled = isLpInquiryBotProtectionEnabled();
-  
-  if (botProtectionEnabled && clientIp) {
+  const rateLimitEnabled = isLpInquiryRateLimitEnabled();
+
+  if (rateLimitEnabled || (botProtectionEnabled && clientIp)) {
     // IP_HASH_KEY required for rate limiting (no dev fallback): refuse before any write.
     if (!isIpHashKeyConfigured()) {
       console.error("[ai-employee-inquiry] IP_HASH_KEY not configured; refusing");
       return jsonUtf8({ ok: false, ...IP_HASH_UNAVAILABLE }, { status: 503 });
     }
-    const ipHash = hashIp(clientIp);
+    const ipHash = hashIp(clientIp || "unknown");
     const rateLimitResult = checkRateLimits(ipHash);
     
     if (!rateLimitResult.allowed) {
