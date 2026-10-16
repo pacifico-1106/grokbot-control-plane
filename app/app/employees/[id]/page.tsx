@@ -17,8 +17,11 @@ import { HoldPanel } from "@/components/holds/HoldPanel";
 import { EmployeeIngressHandoffStatus } from "@/components/employees/EmployeeIngressHandoffStatus";
 import { SlackIdentityForm } from "@/components/employees/SlackIdentityForm";
 import { EmployeeLineLinkCodeForm } from "@/components/employees/EmployeeLineLinkCodeForm";
+import { EmployeeLineCommAccountForm } from "@/components/employees/EmployeeLineCommAccountForm";
 import { commLinkCodePermissions } from "@/lib/employees/comm-link-code-permissions";
-import { isCommAccountsEnabled, isLineConversationEnabled } from "@/lib/comm/flags";
+import { isCommAccountsEnabled, isLineConversationEnabled, isLineWebhookAutoSetupEnabled } from "@/lib/comm/flags";
+import { conversationWebhookUrl, findEmployeeLineAccount } from "@/lib/comm/line-webhook-setup";
+import { isOrgAdminSession } from "@/lib/auth/require-org";
 import { GoogleCalendarIdentityForm } from "@/components/employees/GoogleCalendarIdentityForm";
 import { GoogleGmailSendForm } from "@/components/employees/GoogleGmailSendForm";
 import { getSessionContext } from "@/lib/auth/session";
@@ -68,6 +71,7 @@ export default async function EmployeeDetailPage({
   const { canManageIdentityLinks } = identityLinkPermissions(session);
   const { canIssue: canIssueConversationLink } = commLinkCodePermissions(session);
   const showConversationLink = isLineConversationEnabled() && isCommAccountsEnabled() && canIssueConversationLink;
+  const canConnectLineAccount = isLineWebhookAutoSetupEnabled() && (session.demo || isOrgAdminSession(session));
   const members = await listMembers(orgId);
   const projects = await listOrgProjects(orgId);
   const sodWarnPolicy = await getOrgSodWarnPolicy(orgId);
@@ -92,6 +96,19 @@ export default async function EmployeeDetailPage({
   const googleCalendarEnabled = isGoogleCalendarReadEnabled();
   const mailSendGmailLive = isMailSendGmailLiveEnabled();
   const effectiveIngressHandoff = await getEffectiveIngressHandoffPolicy(orgId, employee.id);
+  const lineCommAccount = canConnectLineAccount && orgId
+    ? await findEmployeeLineAccount(orgId, employee.id)
+    : null;
+  const lineCommAccountView = lineCommAccount
+    ? {
+        id: lineCommAccount.id,
+        status: lineCommAccount.status,
+        botUserId: lineCommAccount.externalAccountId,
+        displayName: lineCommAccount.displayName,
+        webhookPath: lineCommAccount.webhookPath,
+        webhookUrl: conversationWebhookUrl(lineCommAccount.webhookPath.split("/").pop() || ""),
+      }
+    : null;
 
   const actionEvents = getEmployeeActionLog(employee, binding);
   // 状態 = employees.status + the current 社員証's expires_at (display only).
@@ -236,6 +253,18 @@ export default async function EmployeeDetailPage({
         </p>
         <EmployeeProjectAccessForm employee={employee} projects={projects} disabled={employee.status === "suspended"} />
       </section>
+
+      {canConnectLineAccount ? (
+        <section className="surface p-5 space-y-3 mt-4">
+          <h2 className="text-sm font-medium">LINE 公式アカウント（会話）</h2>
+          <EmployeeLineCommAccountForm
+            employeeId={employee.id}
+            canConnect={canConnectLineAccount}
+            initialAccount={lineCommAccountView}
+            disabled={employee.status === "suspended"}
+          />
+        </section>
+      ) : null}
 
       {showConversationLink ? (
         <section className="surface p-5 space-y-3 mt-4">
