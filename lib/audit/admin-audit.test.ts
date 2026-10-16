@@ -118,6 +118,62 @@ describe("admin audit identity helper", () => {
     ).not.toThrow();
   });
 
+  test("refuses nested secrets, long hex, and sp_at_ except allowed prefix fields", () => {
+    expect(() =>
+      assertAdminAuditIdentity({
+        action: "admin.link",
+        actorEmail: "owner@example.com",
+        metadata: {
+          actorKind: "human",
+          nested: { inner: { note: "gb_emp_deadbeefdeadbeef" } },
+        },
+      })
+    ).toThrow(/secret/i);
+
+    expect(() =>
+      assertAdminAuditIdentity({
+        action: "admin.revoke",
+        actorEmail: "owner@example.com",
+        metadata: {
+          actorKind: "human",
+          items: [{ token: "sp_at_" + "a".repeat(24) }],
+        },
+      })
+    ).toThrow(/secret/i);
+
+    expect(() =>
+      assertAdminAuditIdentity({
+        action: "admin.link",
+        actorEmail: "owner@example.com",
+        metadata: {
+          actorKind: "human",
+          note: "a".repeat(64),
+        },
+      })
+    ).toThrow(/hash|hex|secret/i);
+
+    expect(() =>
+      assertAdminAuditIdentity({
+        action: "admin.link",
+        actorEmail: "owner@example.com",
+        summary: `rotated ${"c".repeat(64)}`,
+        metadata: { actorKind: "human" },
+      })
+    ).toThrow(/hash|hex|secret/i);
+
+    expect(() =>
+      assertAdminAuditIdentity({
+        action: "admin.link",
+        actorEmail: "owner@example.com",
+        metadata: {
+          actorKind: "human",
+          secretHashPrefix: "c".repeat(12),
+          prefix: "gb_adm_",
+        },
+      })
+    ).not.toThrow();
+  });
+
   test("appendAdminAuditEvent persists actorKind and identity", async () => {
     const before = getRuntimeAudit().length;
     await appendAdminAuditEvent({
@@ -145,5 +201,49 @@ describe("admin audit identity helper", () => {
       fallbackHuman: { email: "system@example.com" },
     });
     expect(actor).toEqual({ actorKind: "human", actorEmail: "system@example.com" });
+  });
+
+  test("resolveAdminAuditActor refuses unidentified actors instead of writing system", async () => {
+    const { resolveAdminAuditActor } = await import("@/lib/audit/admin-audit");
+    await expect(resolveAdminAuditActor({ orgId: "org_does_not_exist" })).rejects.toThrow(
+      /admin_audit_actor_missing/
+    );
+  });
+
+  test("sanitizeAdminRevokeReason refuses secrets and long hex", async () => {
+    const { sanitizeAdminRevokeReason } = await import("@/lib/audit/admin-audit");
+    expect(sanitizeAdminRevokeReason("key leaked")).toEqual({ ok: true, reason: "key leaked" });
+    expect(sanitizeAdminRevokeReason("gb_adm_deadbeefdeadbeef").ok).toBe(false);
+    expect(sanitizeAdminRevokeReason("sp_at_" + "b".repeat(20)).ok).toBe(false);
+    expect(sanitizeAdminRevokeReason("c".repeat(64)).ok).toBe(false);
+  });
+
+  test("ensureAdminRevokeAudit writes admin.revoke when that generation has none", async () => {
+    const { ensureAdminRevokeAudit, humanAdminActor } = await import("@/lib/audit/admin-audit");
+    const before = getRuntimeAudit().filter(
+      (e) => e.action === "admin.revoke" && e.metadata?.generation === 9
+    ).length;
+    await ensureAdminRevokeAudit({
+      orgId: DEMO_ORG.id,
+      credentialId: "adm_1",
+      generation: 9,
+      actor: humanAdminActor("owner@example.com", "mem_owner"),
+      reason: "backfill",
+    });
+    const rows = getRuntimeAudit().filter(
+      (e) => e.action === "admin.revoke" && e.metadata?.generation === 9
+    );
+    expect(rows.length).toBe(before + 1);
+    await ensureAdminRevokeAudit({
+      orgId: DEMO_ORG.id,
+      credentialId: "adm_1",
+      generation: 9,
+      actor: humanAdminActor("owner@example.com", "mem_owner"),
+      reason: "backfill-again",
+    });
+    const after = getRuntimeAudit().filter(
+      (e) => e.action === "admin.revoke" && e.metadata?.generation === 9
+    );
+    expect(after.length).toBe(before + 1);
   });
 });

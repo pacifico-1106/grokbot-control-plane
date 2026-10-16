@@ -85,3 +85,21 @@ test("revoke makes isApprovalAuthorityCurrent false for the old admin ticket", a
   expect(agent?.credential_fingerprint === null || agent?.credentialFingerprint === null).toBe(true);
   expect(await isApprovalAuthorityCurrent(approval)).toBe(false);
 });
+
+test("legacy admin ticket without credentialGeneration is refused after generation bump", async () => {
+  agent = {
+    id: "agent",
+    status: "linked",
+    credential_fingerprint: "fixture-hash",
+    credential_generation: 3,
+    grok_bot_agent_id: "bot",
+  };
+  const legacy = {
+    ...approval,
+    metadata: {
+      auditClass: "admin",
+      adminRequester: { kind: "admin_agent", actorId: "agent", grokBotAgentId: "bot" },
+    },
+  };
+  expect(await isApprovalAuthorityCurrent(legacy)).toBe(false);
+});

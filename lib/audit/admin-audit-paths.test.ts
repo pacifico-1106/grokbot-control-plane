@@ -53,4 +53,30 @@ describe("admin.* audit writes go through the shared helper", () => {
       expect(src!.text).toContain("appendAdminAuditEvent");
     }
   });
+
+  test("automatic Slack audit paths pass an explicit actor", () => {
+    const slack = sources.filter(
+      (s) =>
+        s.path.startsWith("lib/slack/") ||
+        s.path === "lib/admin-mcp/slack-approver.ts" ||
+        s.path === "lib/admin-mcp/slack-dm-setup.ts" ||
+        s.path === "lib/notify/delivery-failure-alert.ts"
+    );
+    const bare = slack.flatMap((s) => {
+      const hits: string[] = [];
+      const re = /resolveAdminAuditActor\(\{([^}]*)\}\)/g;
+      let m: RegExpExecArray | null;
+      while ((m = re.exec(s.text))) {
+        const args = m[1];
+        const hasExplicit =
+          /\bcred\b/.test(args) ||
+          /\bhuman\b/.test(args) ||
+          /\bapproval\b/.test(args) ||
+          /\bfallbackHuman\b/.test(args);
+        if (!hasExplicit) hits.push(`${s.path}: ${args.trim()}`);
+      }
+      return hits;
+    });
+    expect(bare).toEqual([]);
+  });
 });

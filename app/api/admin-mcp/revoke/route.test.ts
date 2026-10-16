@@ -66,6 +66,28 @@ mock.module("@/lib/audit/admin-audit", () => ({
     actorEmail: email,
     actorMemberId: memberId,
   }),
+  sanitizeAdminRevokeReason: (value: unknown) => {
+    if (value == null || value === "") return { ok: true as const, reason: "" };
+    if (typeof value !== "string") return { ok: false as const, error: "invalid_reason" };
+    const reason = value.trim().slice(0, 300);
+    if (!reason) return { ok: true as const, reason: "" };
+    if (/\b(gb_adm_|gb_emp_|sp_at_)[a-zA-Z0-9]{8,}/.test(reason) || /[0-9a-fA-F]{32,}/.test(reason)) {
+      return { ok: false as const, error: "invalid_reason" };
+    }
+    return { ok: true as const, reason };
+  },
+  ensureAdminRevokeAudit: async (row: Record<string, unknown>) => {
+    const generation = row.generation;
+    const exists = auditRows.some(
+      (r) => r.action === "admin.revoke" && (r.metadata as { generation?: number } | undefined)?.generation === generation
+    );
+    if (exists) return;
+    auditRows.push({
+      action: "admin.revoke",
+      actor: row.actor,
+      metadata: { generation, ...(row.reason ? { reason: row.reason } : {}) },
+    });
+  },
 }));
 mock.module("@/lib/data/admin-agents", () => ({
   getOrgAdminAgent: async (orgId: string) => (agent.orgId === orgId ? agent : null),
@@ -82,16 +104,27 @@ mock.module("@/lib/data/admin-agents", () => ({
 
 const { POST } = await import("./route");
 
-function call(opts: { headers?: Record<string, string>; body?: unknown } = {}) {
+function call(
+  opts: {
+    headers?: Record<string, string>;
+    body?: unknown;
+    omitOrigin?: boolean;
+    contentType?: string;
+    rawBody?: string;
+  } = {}
+) {
+  const headers: Record<string, string> = {
+    "content-type": opts.contentType ?? "application/json",
+    ...(opts.headers || {}),
+  };
+  if (!opts.omitOrigin && !Object.prototype.hasOwnProperty.call(opts.headers || {}, "origin")) {
+    headers.origin = "https://staffpass.test";
+  }
   return POST(
     new Request("https://staffpass.test/api/admin-mcp/revoke", {
       method: "POST",
-      headers: {
-        origin: "https://staffpass.test",
-        "content-type": "application/json",
-        ...(opts.headers || {}),
-      },
-      body: JSON.stringify(opts.body ?? {}),
+      headers,
+      body: opts.rawBody ?? JSON.stringify(opts.body ?? {}),
     })
   );
 }
@@ -138,6 +171,16 @@ test("already revoked returns ok without a second mutation", async () => {
   expect(revoked.length).toBe(1);
 });
 
+test("already revoked writes admin.revoke when that generation has no audit", async () => {
+  agent = { ...agent, status: "revoked", credentialFingerprint: null };
+  const res = await call({ body: { reason: "confirm revoke" } });
+  expect(res.status).toBe(200);
+  expect(auditRows.some((r) => r.action === "admin.revoke")).toBe(true);
+  const second = await call({ body: { reason: "confirm revoke" } });
+  expect(second.status).toBe(200);
+  expect(auditRows.filter((r) => r.action === "admin.revoke").length).toBe(1);
+});
+
 test("admin role is not enough", async () => {
   session = { ...session, member: member("admin") };
   const res = await call();
@@ -161,6 +204,42 @@ test("gb_adm_ bearer cannot revoke", async () => {
 test("gb_emp_ bearer cannot revoke", async () => {
   const res = await call({ headers: { authorization: "Bearer gb_emp_not_allowed" } });
   expect(res.status).toBe(403);
+  expect(revoked.length).toBe(0);
+});
+
+test("sp_at_ bearer cannot revoke", async () => {
+  const res = await call({ headers: { authorization: "Bearer sp_at_not_allowed_token" } });
+  expect(res.status).toBe(403);
+  expect(revoked.length).toBe(0);
+});
+
+test("missing Origin is CSRF-refused", async () => {
+  const res = await call({ omitOrigin: true });
+  expect(res.status).toBe(403);
+  expect((await res.json() as { error?: string }).error).toBe("cross_origin_refused");
+  expect(revoked.length).toBe(0);
+});
+
+test("form POST is refused", async () => {
+  const res = await call({
+    contentType: "application/x-www-form-urlencoded",
+    rawBody: "reason=form",
+  });
+  expect(res.status).toBe(415);
+  expect((await res.json() as { error?: string }).error).toBe("json_required");
+  expect(revoked.length).toBe(0);
+});
+
+test("sec-fetch-site=cross-site is CSRF-refused", async () => {
+  const res = await call({ headers: { "sec-fetch-site": "cross-site" } });
+  expect(res.status).toBe(403);
+  expect((await res.json() as { error?: string }).error).toBe("cross_origin_refused");
+  expect(revoked.length).toBe(0);
+});
+
+test("reason with a secret is refused", async () => {
+  const res = await call({ body: { reason: "gb_adm_deadbeefdeadbeef" } });
+  expect(res.status).toBe(400);
   expect(revoked.length).toBe(0);
 });
 
