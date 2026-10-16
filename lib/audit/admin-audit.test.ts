@@ -246,4 +246,84 @@ describe("admin audit identity helper", () => {
     );
     expect(after.length).toBe(before + 1);
   });
+
+  test("ensureAdminRevokeAudit stays idempotent after 250 newer unrelated audits", async () => {
+    const { appendAuditEvent } = await import("@/lib/data/audit");
+    const { ensureAdminRevokeAudit, humanAdminActor } = await import("@/lib/audit/admin-audit");
+    await ensureAdminRevokeAudit({
+      orgId: DEMO_ORG.id,
+      credentialId: "adm_1",
+      generation: 11,
+      actor: humanAdminActor("owner@example.com", "mem_owner"),
+      reason: "first",
+    });
+    for (let i = 0; i < 250; i++) {
+      await appendAuditEvent({
+        orgId: DEMO_ORG.id,
+        employeeId: null,
+        credentialId: null,
+        action: "tool.invoke",
+        purpose: "tool.invoke",
+        summary: `unrelated ${i}`,
+        metadata: { i },
+      });
+    }
+    await ensureAdminRevokeAudit({
+      orgId: DEMO_ORG.id,
+      credentialId: "adm_1",
+      generation: 11,
+      actor: humanAdminActor("owner@example.com", "mem_owner"),
+      reason: "again",
+    });
+    const rows = getRuntimeAudit().filter(
+      (e) => e.action === "admin.revoke" && e.metadata?.generation === 11
+    );
+    expect(rows.length).toBe(1);
+  });
+
+  test("rejectSecrets refuses oversized nested metadata instead of walking unboundedly", () => {
+    let deep: Record<string, unknown> = { note: "ok" };
+    for (let i = 0; i < 24; i++) deep = { nested: deep };
+    expect(() =>
+      assertAdminAuditIdentity({
+        action: "admin.link",
+        actorEmail: "owner@example.com",
+        metadata: { actorKind: "human", deep },
+      })
+    ).toThrow(/too_large|too large|depth|size/i);
+
+    const wide = {
+      actorKind: "human" as const,
+      items: Array.from({ length: 400 }, (_, i) => ({ i, note: "ok" })),
+    };
+    expect(() =>
+      assertAdminAuditIdentity({
+        action: "admin.link",
+        actorEmail: "owner@example.com",
+        metadata: wide,
+      })
+    ).toThrow(/too_large|too large|depth|size/i);
+
+    const huge = "n".repeat(20_000);
+    const started = Date.now();
+    expect(() =>
+      assertAdminAuditIdentity({
+        action: "admin.link",
+        actorEmail: "owner@example.com",
+        metadata: { actorKind: "human", note: huge },
+      })
+    ).toThrow(/too_large|too large|depth|size/i);
+    expect(Date.now() - started).toBeLessThan(50);
+
+    expect(() =>
+      assertAdminAuditIdentity({
+        action: "admin.link",
+        actorEmail: "owner@example.com",
+        metadata: {
+          actorKind: "human",
+          nested: { inner: { note: "ok", id: "550e8400-e29b-41d4-a716-446655440000" } },
+        },
+      })
+    ).not.toThrow();
+  });
 });
