@@ -4,7 +4,7 @@
  */
 import { NextResponse } from "next/server";
 import { isEmployeeBadgeMcpEnabled } from "@/lib/feature-flags";
-import { employeeMcpGet, employeeMcpOptions, handleBadgeOnlyMcpPost } from "../route";
+import { employeeMcpGet, employeeMcpOptions, handleBadgeOnlyMcpPost } from "@/lib/mcp/employee-http";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
