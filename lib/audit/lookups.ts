@@ -70,16 +70,20 @@ export async function loadAuditPresentationLookups(
       .map((e) => [e.id, { displayName: e.displayName }])
   );
   const membersByEmail = new Map<string, AuditMemberLookup>();
+  const membersById = new Map<string, AuditMemberLookup>();
   for (const member of members) {
     if (member.orgId !== orgId) continue;
+    const lookup: AuditMemberLookup = { displayName: member.displayName, email: member.email };
+    membersById.set(member.id, lookup);
     const email = String(member.email || "").trim().toLowerCase();
     if (!email) continue;
-    membersByEmail.set(email, { displayName: member.displayName, email: member.email });
+    membersByEmail.set(email, lookup);
   }
   return {
     orgId,
     employeesById,
     membersByEmail,
+    membersById,
     ...approvals,
   };
 }
