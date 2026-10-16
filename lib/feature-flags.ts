@@ -793,7 +793,7 @@ export function isMailSendGmailLiveEnabled(): boolean {
 /**
  * MCP_AUTH_FAILURE_AUDIT_ENABLED (default OFF): write /api/mcp 401/403
  * auth-failure kinds (missing_credential / invalid / expired) to
- * mcp_auth_failures (migration 20261016100000). Ids when resolvable; never
+ * mcp_auth_failures (migration 20261016200000). Ids when resolvable; never
  * the token or its hash. Throttled in SQL. Flag OFF: no read, no write.
  */
 export function isMcpAuthFailureAuditEnabled(): boolean {

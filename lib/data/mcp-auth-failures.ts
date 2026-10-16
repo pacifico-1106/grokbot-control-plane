@@ -1,6 +1,6 @@
 /**
  * MCP_AUTH_FAILURE_AUDIT_ENABLED (default OFF): record /api/mcp auth failures.
- * Production: public.record_mcp_auth_failure (migration 20261016100000) —
+ * Production: public.record_mcp_auth_failure (migration 20261016200000) —
  * throttled insert, ids + kind + method only. Never the token or its hash.
  * Flag OFF / demo / missing RPC → no write. Never throws.
  */

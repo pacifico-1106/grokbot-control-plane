@@ -105,7 +105,7 @@ grant execute on function public.touch_credential_last_used(uuid) to service_rol
 commit;
 
 -- ROLLBACK (down) — turn MCP_AUTH_FAILURE_AUDIT_ENABLED off first.
--- Same statements as supabase/verification/20261016100000_mcp_auth_failures_rollback.sql:
+-- Same statements as supabase/verification/20261016200000_mcp_auth_failures_rollback.sql:
 --   begin;
 --   drop function if exists public.record_mcp_auth_failure(text, uuid, uuid, uuid, text);
 --   drop function if exists public.touch_credential_last_used(uuid);
