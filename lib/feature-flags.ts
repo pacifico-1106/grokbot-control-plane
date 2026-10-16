@@ -329,14 +329,17 @@ export function isLpLeadPageDbEnabled(): boolean {
 }
 
 /**
- * LP_INQUIRY_RATE_LIMIT_ENABLED: IP-hash rate limiting for LP forms.
+ * LP_INQUIRY_RATE_LIMIT_ENABLED: IP-hash rate limiting for LP forms
+ * (consult / inquiry POST and journeys chat start).
  *
  * When ON:
- * - Rate limit by hashed IP address.
- * - Returns 429 when exceeded.
+ * - Rate limit by HMAC(IP_HASH_KEY, IP) plus a process-global cap.
+ * - Returns 429 + Retry-After (Japanese message) when exceeded.
+ * - Missing IP_HASH_KEY → 503 fail-closed. Honeypot / Turnstile still run.
  *
  * When OFF (default):
- * - No rate limiting.
+ * - This flag adds no limiter. Existing bot-protection rate limits (if that
+ *   flag is ON) are unchanged.
  */
 export function isLpInquiryRateLimitEnabled(): boolean {
   return parseFlag(process.env.LP_INQUIRY_RATE_LIMIT_ENABLED);

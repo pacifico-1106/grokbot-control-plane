@@ -8,7 +8,7 @@
  */
 
 import { cookies } from "next/headers";
-import { isLpChatEnabled } from "@/lib/feature-flags";
+import { isLpChatEnabled, isLpInquiryRateLimitEnabled } from "@/lib/feature-flags";
 import {
   createJourney,
   generateGuestToken,
@@ -49,14 +49,28 @@ export async function POST(req: Request) {
 
   const clientIp = getClientIp(req);
   const botProtectionEnabled = isLpBotProtectionEnabled();
+  const rateLimitEnabled = isLpInquiryRateLimitEnabled();
 
   // IP_HASH_KEY required (no dev fallback): refuse before rate limiting or any write.
-  if (clientIp && !isIpHashKeyConfigured()) {
+  if ((clientIp || rateLimitEnabled) && !isIpHashKeyConfigured()) {
     console.error("[journeys] IP_HASH_KEY not configured; refusing");
     return jsonUtf8({ ok: false, ...IP_HASH_UNAVAILABLE }, { status: 503 });
   }
 
-  if (botProtectionEnabled && clientIp) {
+  if (rateLimitEnabled) {
+    const ipHash = hashIp(clientIp || "unknown");
+    const rateLimitResult = checkRateLimits(ipHash);
+    if (!rateLimitResult.allowed) {
+      console.warn("[journeys] Rate limit exceeded:", { ipHash: ipHash.slice(0, 8) });
+      return jsonUtf8(
+        { ok: false, error: "rate_limited", message: "リクエストが多すぎます。しばらくしてからお試しください。" },
+        {
+          status: 429,
+          headers: { "Retry-After": String(rateLimitResult.retryAfterSeconds || 60) },
+        }
+      );
+    }
+  } else if (botProtectionEnabled && clientIp) {
     const ipHash = hashIp(clientIp);
     const rateLimitResult = checkRateLimits(ipHash, {
       windowMs: 60000,

@@ -1,13 +1,14 @@
 /**
  * Rate limiting for LP forms.
- * Feature flag LP_INQUIRY_BOT_PROTECTION_ENABLED must be ON.
- * 
+ *
+ * Wired by LP_INQUIRY_RATE_LIMIT_ENABLED (default OFF). Bot protection may also
+ * call the same counters when that flag is ON (existing path).
+ *
  * Uses in-memory store for now. Production should use Redis or similar.
- * IP addresses are hashed with IP_HASH_KEY to avoid storing raw IPs.
+ * IP addresses are HMAC'd with IP_HASH_KEY; never store or log the raw IP.
  */
 
-import { requireIpHashKey } from "@/lib/security/ip-hash-key";
-import { createHash } from "node:crypto";
+import { hmacWithIpHashKey } from "@/lib/security/ip-hash-key";
 
 export interface RateLimitConfig {
   windowMs: number;
@@ -52,10 +53,9 @@ function startCleanup() {
   }, 60 * 1000);
 }
 
-/** Throws IpHashKeyMissingError when IP_HASH_KEY is missing / blank / placeholder (no fallback). */
+/** HMAC-SHA256(IP_HASH_KEY, ip). Throws IpHashKeyMissingError when the key is missing. */
 export function hashIp(ip: string): string {
-  const key = requireIpHashKey();
-  return createHash("sha256").update(`${key}:${ip}`).digest("hex").slice(0, 16);
+  return hmacWithIpHashKey(`ip:${ip}`, 16);
 }
 
 export function checkIpRateLimit(

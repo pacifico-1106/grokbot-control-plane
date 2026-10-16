@@ -66,8 +66,9 @@ function ev(over: Record<string, unknown> = {}) {
 }
 function body(events: unknown[], destination = BOT) { return JSON.stringify({ destination, events }); }
 const sig = (raw: string) => createHmac("sha256", SECRET).update(raw).digest("base64");
+const bytes = (raw: string) => new TextEncoder().encode(raw);
 async function call(raw: string) {
-  return handleLineAccountWebhook({ ref: account.webhookRef, rawBody: new TextEncoder().encode(raw), signature: sig(raw) }, { now: () => NOW });
+  return handleLineAccountWebhook({ ref: account.webhookRef, rawBody: bytes(raw), signature: sig(raw) }, { now: () => NOW });
 }
 
 describe("default dispatch (L-7)", () => {
@@ -98,7 +99,7 @@ describe("default dispatch (L-7)", () => {
   test("hold / leave → link code is not redeemed (checkOperable before redeem)", async () => {
     const raw = body([ev({ message: { type: "text", id: "m3", text: "SP-ABCD-EFGH" } })]);
     const res = await handleLineAccountWebhook(
-      { ref: account.webhookRef, rawBody: new TextEncoder().encode(raw), signature: sig(raw) },
+      { ref: account.webhookRef, rawBody: bytes(raw), signature: sig(raw) },
       {
         now: () => NOW,
         checkOperable: async () => ({ ok: false, code: "hold_state_unavailable", holdId: null, kind: null }),

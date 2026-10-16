@@ -265,6 +265,11 @@ export async function createCommAccount(input: {
   return { ok: true, account };
 }
 
+export function parseLineSecrets(secrets: unknown): LineSecrets | null {
+  if (!secrets || typeof secrets !== "object" || Array.isArray(secrets)) return null;
+  return validateSecrets("line", secrets as Record<string, unknown>);
+}
+
 function validateSecrets(surface: CommSurface, secrets: Record<string, unknown>): LineSecrets | null {
   const spec = SECRET_SPEC[surface];
   if (!secrets || typeof secrets !== "object" || Array.isArray(secrets)) return null;
@@ -374,6 +379,14 @@ export async function recordInboundEvent(account: CommAccount, eventKey: string)
  * No secrets. null = gone or comm accounts OFF; throws when it cannot be read (the caller
  * refuses — fail closed).
  */
+/** Owner/admin connect: the account as stored, including webhookRef. Same-org only. */
+export async function getCommAccountInOrg(orgId: string, accountId: string): Promise<CommAccount | null> {
+  if (!isCommAccountsEnabled()) return null;
+  const b = backend();
+  if (!b) return null;
+  return b.get(orgId, accountId).catch(() => null);
+}
+
 export async function getCommAccountForSend(orgId: string, accountId: string): Promise<CommAccount | null> {
   if (!isCommAccountsEnabled()) return null;
   const b = backend();
