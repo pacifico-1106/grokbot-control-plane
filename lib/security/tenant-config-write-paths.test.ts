@@ -180,6 +180,8 @@ describe("app: tenant config / credential tables are written only server-side", 
       "lib/data/slack-identities.ts:employee_slack_identities:upsert",
       // no caller today
       "lib/data/sns-adapters.ts:org_sns_adapters:upsert",
+      // retire: clear callback_url (dashboard terminate after requireCapability; retireEmployee org-scoped)
+      "lib/employees/retire.ts:employees:update",
       // external contract card: checkout setup / Stripe webhook / portal link (approval-gated)
       "lib/external-contract-card/data.ts:audit_external_contract_card_events:insert",
       "lib/external-contract-card/data.ts:org_external_contract_payment_methods:insert",
