@@ -161,25 +161,10 @@ function mapThreadRow(row: Record<string, unknown>): AiPeerWakeThreadRow {
   };
 }
 
-function identityPublic(row: Record<string, unknown>): EmployeeSlackIdentity {
-  const statusRaw = String(row.status || "linked");
-  const status =
-    statusRaw === "linked" || statusRaw === "needs_reauth" || statusRaw === "revoked"
-      ? statusRaw
-      : "linked";
-  return {
-    employeeId: String(row.employee_id ?? row.employeeId ?? ""),
-    orgId: String(row.org_id ?? row.orgId ?? ""),
-    slackUserId: String(row.slack_user_id ?? row.slackUserId ?? ""),
-    slackTeamId: String(row.slack_team_id ?? row.slackTeamId ?? ""),
-    displayName: String(row.display_name ?? row.displayName ?? ""),
-    status,
-    updatedAt: String(row.updated_at ?? row.updatedAt ?? nowIso()),
-  };
-}
-
 /**
- * Team-scoped linked-identity lookup that distinguishes empty from unreadable.
+ * Team-scoped identity lookup that distinguishes empty from unreadable.
+ * Any status counts as an AI speaker (linked / needs_reauth / revoked): a
+ * linked-only filter would treat token-expiry as a human and fail open.
  * getEmployeesBySlackUserIds returns [] on error — that would fail *open* here.
  */
 export async function lookupSpeakerBindings(input: {
@@ -189,84 +174,28 @@ export async function lookupSpeakerBindings(input: {
   const slackUserId = input.slackUserId.trim();
   const teamId = input.teamId.trim();
   if (!slackUserId || !teamId) return { state: "ok", rows: [] };
-  if (isDemoMode()) {
-    const { getEmployeesBySlackUserIds } = await import("@/lib/data/slack-identities");
-    const rows = await getEmployeesBySlackUserIds([slackUserId], teamId);
-    return {
-      state: "ok",
-      rows: rows.map((r) => ({
-        employeeId: r.employeeId,
-        orgId: r.orgId,
-        slackUserId: r.slackUserId,
-        slackTeamId: r.slackTeamId,
-      })),
-    };
-  }
-  const admin = createSupabaseAdminClient();
-  if (!admin) return { state: "unavailable" };
-  const userVariants = [...new Set([slackUserId, slackUserId.toUpperCase(), slackUserId.toLowerCase()])];
-  const teamVariants = [...new Set([teamId, teamId.toUpperCase(), teamId.toLowerCase()])];
-  const { data, error } = await admin
-    .from("employee_slack_identities")
-    .select("employee_id,org_id,slack_user_id,slack_team_id,status")
-    .in("slack_user_id", userVariants)
-    .in("slack_team_id", teamVariants)
-    .eq("status", "linked");
-  if (error) return { state: "unavailable" };
-  const wantedUser = slackUserId.toUpperCase();
-  const wantedTeam = teamId.toUpperCase();
-  const rows = (data ?? [])
-    .map((row) => identityPublic(row as Record<string, unknown>))
-    .filter(
-      (row) =>
-        row.status === "linked" &&
-        row.slackUserId.toUpperCase() === wantedUser &&
-        row.slackTeamId.toUpperCase() === wantedTeam
-    )
-    .map((row) => ({
-      employeeId: row.employeeId,
-      orgId: row.orgId,
-      slackUserId: row.slackUserId,
-      slackTeamId: row.slackTeamId,
-    }));
-  return { state: "ok", rows };
+  const { lookupSlackIdentitiesAnyStatus } = await import("@/lib/data/slack-identities");
+  const found = await lookupSlackIdentitiesAnyStatus({ slackUserId, teamId });
+  if (found.state === "unavailable") return { state: "unavailable" };
+  return {
+    state: "ok",
+    rows: found.rows.map((r) => ({
+      employeeId: r.employeeId,
+      orgId: r.orgId,
+      slackUserId: r.slackUserId,
+      slackTeamId: r.slackTeamId,
+    })),
+  };
 }
 
-/** Any-org linked identity for a Slack user (AI-cannot-stop check). */
+/** Any-org identity for a Slack user (AI-cannot-stop check; any status). */
 export async function findLinkedIdentitiesBySlackUserId(
   slackUserId: string
 ): Promise<{ state: "ok"; rows: EmployeeSlackIdentity[] } | { state: "unavailable" }> {
   const id = slackUserId.trim();
   if (!id) return { state: "ok", rows: [] };
-  if (isDemoMode()) {
-    const { listLinkedSlackIdentitiesForOrg } = await import("@/lib/data/slack-identities");
-    const { getRuntimeEmployees } = await import("@/lib/demo-data");
-    const orgs = [...new Set(getRuntimeEmployees().map((e) => e.orgId))];
-    const rows: EmployeeSlackIdentity[] = [];
-    for (const orgId of orgs) {
-      const found = await listLinkedSlackIdentitiesForOrg(orgId);
-      for (const row of found) {
-        if (row.slackUserId.toUpperCase() === id.toUpperCase()) rows.push(row);
-      }
-    }
-    return { state: "ok", rows };
-  }
-  const admin = createSupabaseAdminClient();
-  if (!admin) return { state: "unavailable" };
-  const variants = [...new Set([id, id.toUpperCase(), id.toLowerCase()])];
-  const { data, error } = await admin
-    .from("employee_slack_identities")
-    .select("employee_id,org_id,slack_user_id,slack_team_id,display_name,status,updated_at")
-    .in("slack_user_id", variants)
-    .eq("status", "linked");
-  if (error) return { state: "unavailable" };
-  const wanted = id.toUpperCase();
-  return {
-    state: "ok",
-    rows: (data ?? [])
-      .map((row) => identityPublic(row as Record<string, unknown>))
-      .filter((row) => row.status === "linked" && row.slackUserId.toUpperCase() === wanted),
-  };
+  const { lookupSlackIdentitiesAnyStatus } = await import("@/lib/data/slack-identities");
+  return lookupSlackIdentitiesAnyStatus({ slackUserId: id });
 }
 
 export async function isPairAllowed(input: {

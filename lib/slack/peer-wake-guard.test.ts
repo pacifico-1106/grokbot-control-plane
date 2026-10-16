@@ -2,13 +2,15 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
   bindEmployeeSlackIdentity,
   revokeEmployeeSlackIdentity,
+  setDemoSlackIdentityStatusForTests,
 } from "@/lib/data/slack-identities";
-import { resetDemoAiPeerWake, upsertAllowlist } from "@/lib/data/ai-peer-wake";
+import { listThreads, resetDemoAiPeerWake, upsertAllowlist } from "@/lib/data/ai-peer-wake";
 import { updateWakeWebhook } from "@/lib/data";
 import { DEMO_ORG, getRuntimeAudit, getRuntimeEmployees } from "@/lib/demo-data";
 import { applyPeerWakeGuard } from "@/lib/slack/peer-wake-guard";
 import type { SlackMentionTarget } from "@/lib/data/slack-identities";
 import { aiPeerWakeCap, isAiPeerWakeAllowlistEnabled, isAiPeerWakeThreadGuardEnabled } from "@/lib/feature-flags";
+import { demoSetEmployeeHold } from "@/lib/safety/hold";
 
 const TEAM = "T_DEMO";
 const CHANNEL = "C_CLOUD";
@@ -86,6 +88,7 @@ describe("applyPeerWakeGuard", () => {
     const restore = await bind("emp_comm", ANDO);
     try {
       const targets = [target("emp_sns", YASAKA)];
+      const auditBefore = getRuntimeAudit().length;
       const result = await applyPeerWakeGuard({
         speakerId: ANDO,
         teamId: TEAM,
@@ -97,7 +100,30 @@ describe("applyPeerWakeGuard", () => {
       });
       expect(result.allowed).toEqual(targets);
       expect(result.skipped).toEqual([]);
+      expect(await listThreads(DEMO_ORG.id)).toEqual([]);
+      expect(getRuntimeAudit().slice(auditBefore).some((e) => String(e.action).startsWith("slack.peer_wake."))).toBe(false);
     } finally {
+      await restore();
+    }
+  });
+
+  test("flags OFF: held AI speaker still wakes the other AI (byte-identical to main)", async () => {
+    const restore = await bind("emp_comm", ANDO);
+    demoSetEmployeeHold("emp_comm", { kind: "stopped", holdId: "hold_peer_off" });
+    try {
+      const targets = [target("emp_sns", YASAKA)];
+      const result = await applyPeerWakeGuard({
+        speakerId: ANDO,
+        teamId: TEAM,
+        channelId: CHANNEL,
+        threadTs: "1787911797.502889",
+        eventTs: "1787911800.000021",
+        eventId: "Ev_off_held",
+        targets,
+      });
+      expect(result.allowed).toEqual(targets);
+    } finally {
+      demoSetEmployeeHold("emp_comm", null);
       await restore();
     }
   });
@@ -222,7 +248,61 @@ describe("applyPeerWakeGuard", () => {
       expect(fifth.allowed).toEqual([]);
       expect(fifth.skipReason).toBe("thread_capped");
       expect(getRuntimeAudit().some((e) => e.action === "slack.peer_wake.denied" && e.metadata?.reason === "thread_capped")).toBe(true);
+      expect(JSON.stringify(getRuntimeAudit().filter((e) => e.action === "slack.peer_wake.denied").map((e) => e.metadata))).not.toMatch(/hello <@|secret|xoxp|token/i);
     } finally {
+      await restoreB();
+      await restoreA();
+    }
+  });
+
+  test("allowlist ON: needs_reauth AI speaker is still an AI (fail-closed, not treated as human)", async () => {
+    process.env.AI_PEER_WAKE_ALLOWLIST_ENABLED = "1";
+    const restoreA = await bind("emp_comm", ANDO);
+    const restoreB = await bind("emp_sns", YASAKA);
+    setDemoSlackIdentityStatusForTests("emp_comm", "needs_reauth");
+    try {
+      const result = await applyPeerWakeGuard({
+        speakerId: ANDO,
+        teamId: TEAM,
+        channelId: CHANNEL,
+        threadTs: "1787911797.502889",
+        eventTs: "1787911800.000030",
+        eventId: "Ev_reauth",
+        targets: [target("emp_sns", YASAKA)],
+      });
+      expect(result.allowed).toEqual([]);
+      expect(result.skipReason).toBe("allowlist_denied");
+    } finally {
+      await restoreB();
+      await restoreA();
+    }
+  });
+
+  test("allowlist ON: held AI speaker cannot wake another AI", async () => {
+    process.env.AI_PEER_WAKE_ALLOWLIST_ENABLED = "1";
+    const restoreA = await bind("emp_comm", ANDO);
+    const restoreB = await bind("emp_sns", YASAKA);
+    await upsertAllowlist({
+      orgId: DEMO_ORG.id,
+      fromEmployeeId: "emp_comm",
+      toEmployeeId: "emp_sns",
+      createdBy: "member:mem_1",
+    });
+    demoSetEmployeeHold("emp_comm", { kind: "stopped", holdId: "hold_peer_on" });
+    try {
+      const result = await applyPeerWakeGuard({
+        speakerId: ANDO,
+        teamId: TEAM,
+        channelId: CHANNEL,
+        threadTs: "1787911797.502889",
+        eventTs: "1787911800.000031",
+        eventId: "Ev_held",
+        targets: [target("emp_sns", YASAKA)],
+      });
+      expect(result.allowed).toEqual([]);
+      expect(result.skipReason).toBe("speaker_held");
+    } finally {
+      demoSetEmployeeHold("emp_comm", null);
       await restoreB();
       await restoreA();
     }

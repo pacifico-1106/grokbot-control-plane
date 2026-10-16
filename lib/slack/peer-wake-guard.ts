@@ -20,10 +20,12 @@ import {
   type ClaimPeerWakeResult,
 } from "@/lib/data/ai-peer-wake";
 import type { SlackMentionTarget } from "@/lib/data/slack-identities";
+import { checkOperable } from "@/lib/safety/hold";
 
 export type PeerWakeDenyReason =
   | "speaker_unavailable"
   | "speaker_ambiguous"
+  | "speaker_held"
   | "allowlist_denied"
   | "allowlist_unavailable"
   | "cross_org"
@@ -127,6 +129,30 @@ export async function applyPeerWakeGuard(input: {
   }
 
   const from = speaker.rows[0];
+  const speakerHold = await checkOperable({
+    orgId: from.orgId,
+    employeeId: from.employeeId,
+    phase: "wake",
+  });
+  if (!speakerHold.ok) {
+    const skipped = input.targets
+      .filter((target) => target.employeeId !== from.employeeId)
+      .map((target) => ({ target, reason: "speaker_held" as const }));
+    for (const item of skipped) {
+      await auditSkip({
+        orgId: from.orgId,
+        employeeId: item.target.employeeId,
+        reason: "speaker_held",
+        channelId: input.channelId,
+        threadTs: input.threadTs,
+        eventId: input.eventId,
+        speakerEmployeeId: from.employeeId,
+        extra: { holdCode: speakerHold.code },
+      });
+    }
+    return { allowed: [], skipped, skipReason: "speaker_held" };
+  }
+
   const allowed: SlackMentionTarget[] = [];
   const skipped: PeerWakeSkip[] = [];
   let lastDeny: PeerWakeDenyReason | undefined;

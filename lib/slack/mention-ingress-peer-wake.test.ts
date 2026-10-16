@@ -121,9 +121,11 @@ describe("mention ingress: AI→AI peer-wake guard", () => {
     const restoreB = await bind("emp_sns", YASAKA);
     const wake = mockWake();
     try {
+      const auditBefore = getRuntimeAudit().length;
       const result = await handleSlackEventsRequest(mention(ANDO, YASAKA, `Ev_reg_${Date.now()}`));
       expect(result.status).toBe(200);
       expect(wake.calls().some((c) => c.payload.employeeId === "emp_sns")).toBe(true);
+      expect(getRuntimeAudit().slice(auditBefore).some((e) => String(e.action).startsWith("slack.peer_wake."))).toBe(false);
     } finally {
       await restoreB();
       await restoreA();

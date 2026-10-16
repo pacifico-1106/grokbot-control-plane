@@ -746,7 +746,8 @@ try:
                  " and to_regclass('public.ai_peer_wake_threads') is null"
                  " and to_regprocedure('public.claim_ai_peer_wake(uuid,text,text,text,text,integer,integer)') is null"
                  " and to_regprocedure('public.stop_ai_peer_wake_thread(uuid,uuid,text)') is null"
-                 " and to_regprocedure('public.resume_ai_peer_wake_thread(uuid,uuid,text)') is null;") == "t"
+                 " and to_regprocedure('public.resume_ai_peer_wake_thread(uuid,uuid,text)') is null"
+                 " and to_regprocedure('public.ai_peer_wake_allowlist_guard()') is null;") == "t"
     sql(apw)  # forward again after rollback
     sql(ROOT / "tests/security/db-ai-peer-wake-guard.sql")
     print("PASS: comm line reply tokens (20261014100000): 2 tables RLS on / restrictive deny-all only, anon/authenticated no access; "

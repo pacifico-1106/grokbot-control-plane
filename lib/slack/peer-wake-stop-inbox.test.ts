@@ -73,4 +73,25 @@ describe("stopPeerWakeFromInbox", () => {
     expect(r.ok).toBe(true);
     expect(r.code).toBe("stopped");
   });
+
+  test("needs_reauth AI Slack identity still cannot stop", async () => {
+    process.env.AI_PEER_WAKE_THREAD_GUARD_ENABLED = "1";
+    const { setDemoSlackIdentityStatusForTests } = await import("@/lib/data/slack-identities");
+    const emp = getRuntimeEmployees().find((e) => e.id === "emp_comm");
+    if (!emp) throw new Error("emp");
+    emp.allowedAccounts = [{ service: "slack", accountId: "U_ANDO" }];
+    await bindEmployeeSlackIdentity({
+      employeeId: "emp_comm",
+      orgId: DEMO_ORG.id,
+      slackUserId: "U_ANDO",
+      slackTeamId: "T_DEMO",
+      displayName: "安藤",
+      userToken: "xoxp",
+    });
+    setDemoSlackIdentityStatusForTests("emp_comm", "needs_reauth");
+    const claimed = await claim();
+    const r = await stopPeerWakeFromInbox({ orgId: DEMO_ORG.id, channelId: "ch", userId: "U_ANDO", stopRef: claimed.stopRef });
+    expect(r.ok).toBe(false);
+    expect(r.code).toBe("actor_is_employee");
+  });
 });

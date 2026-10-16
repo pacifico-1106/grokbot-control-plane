@@ -66,6 +66,9 @@ do $$ begin
     raise exception 'ai peer wake: allowlist RLS off'; end if;
   if not (select relrowsecurity from pg_class where oid = 'public.ai_peer_wake_threads'::regclass) then
     raise exception 'ai peer wake: threads RLS off'; end if;
+  if has_function_privilege('anon', 'public.ai_peer_wake_allowlist_guard()', 'execute')
+    or has_function_privilege('authenticated', 'public.ai_peer_wake_allowlist_guard()', 'execute') then
+    raise exception 'ai peer wake: trigger fn executable by session'; end if;
 end $$;
 
 set role service_role;

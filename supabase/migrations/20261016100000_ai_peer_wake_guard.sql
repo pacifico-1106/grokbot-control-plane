@@ -56,6 +56,8 @@ drop trigger if exists ai_peer_wake_allowlist_guard on public.ai_peer_wake_allow
 create trigger ai_peer_wake_allowlist_guard
   before insert or update or delete on public.ai_peer_wake_allowlist
   for each row execute function public.ai_peer_wake_allowlist_guard();
+revoke all on function public.ai_peer_wake_allowlist_guard() from public, anon, authenticated;
+grant execute on function public.ai_peer_wake_allowlist_guard() to service_role;
 
 create table if not exists public.ai_peer_wake_threads (
   id uuid primary key default gen_random_uuid(),
@@ -245,5 +247,6 @@ commit;
 --   drop function if exists public.claim_ai_peer_wake(uuid, text, text, text, text, integer, integer);
 --   drop table if exists public.ai_peer_wake_threads;
 --   drop table if exists public.ai_peer_wake_allowlist;
+--   drop function if exists public.ai_peer_wake_allowlist_guard();
 --   commit;
 -- END ROLLBACK

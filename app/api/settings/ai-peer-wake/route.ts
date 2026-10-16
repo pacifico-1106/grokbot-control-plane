@@ -16,6 +16,7 @@ import {
   aiPeerWakeCap,
 } from "@/lib/feature-flags";
 import { jsonUtf8 } from "@/lib/http/json-utf8";
+import { refuseAiCredential, refuseUnsafeBrowserPost } from "@/lib/safety/hold-route";
 
 export const runtime = "nodejs";
 
@@ -24,7 +25,15 @@ async function actorRef(req: Request): Promise<string | null> {
   return id ? `member:${id}` : null;
 }
 
-export async function GET() {
+async function refuseAiOrCsrf(req: Request): Promise<Response | null> {
+  const refused = await refuseAiCredential(req, "settings.ai-peer-wake");
+  if (refused) return refused;
+  return refuseUnsafeBrowserPost(req);
+}
+
+export async function GET(req: Request = new Request("https://staffpass.test/api/settings/ai-peer-wake")) {
+  const refused = await refuseAiCredential(req, "settings.ai-peer-wake");
+  if (refused) return refused;
   const gate = await requireOrgAdminSession();
   if (!gate.ok) return gate.response;
   const [allowlist, threads, employees] = await Promise.all([
@@ -48,6 +57,8 @@ export async function GET() {
 }
 
 export async function POST(req: Request) {
+  const blocked = await refuseAiOrCsrf(req);
+  if (blocked) return blocked;
   const gate = await requireOrgAdminSession();
   if (!gate.ok) return gate.response;
   const actor = await actorRef(req);
@@ -146,6 +157,8 @@ export async function POST(req: Request) {
 }
 
 export async function DELETE(req: Request) {
+  const blocked = await refuseAiOrCsrf(req);
+  if (blocked) return blocked;
   const gate = await requireOrgAdminSession();
   if (!gate.ok) return gate.response;
   const actor = await actorRef(req);
