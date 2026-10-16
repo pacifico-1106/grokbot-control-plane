@@ -203,11 +203,15 @@ do $$ begin
   end if;
 end $$;
 
--- cleanup fixtures (keep tables)
+-- cleanup fixtures (keep tables). Published notices lock targets, so
+-- return them to draft before deleting audience rows.
 reset role;
 delete from public.ops_feedback_events where item_id like 'fb_000000000000000000000000%';
 delete from public.ops_feedback_items where id like 'fb_000000000000000000000000%';
 delete from public.operator_notice_receipts where notice_id like 'ntc_000000000000000000000000%';
+update public.operator_notices
+  set status = 'draft'
+  where id like 'ntc_000000000000000000000000%';
 delete from public.operator_notice_targets where notice_id like 'ntc_000000000000000000000000%';
 delete from public.operator_notice_versions where notice_id like 'ntc_000000000000000000000000%';
 delete from public.operator_notices where id like 'ntc_000000000000000000000000%';
