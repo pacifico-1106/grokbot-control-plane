@@ -71,6 +71,7 @@
 | エージェント資格情報ガイド | [agent-credential-guide.md](./agent-credential-guide.md) |
 | Commerce プロバイダメモ | [commerce-provider-notes.md](./commerce-provider-notes.md) |
 | Sealith からの選定メモ | [selection-from-sealith.md](./selection-from-sealith.md) |
+| 受電通知 intake プロトタイプ（フラグ既定 OFF） | [design/inbound-call-notice-20261016.md](./design/inbound-call-notice-20261016.md) |
 
 ---
 
