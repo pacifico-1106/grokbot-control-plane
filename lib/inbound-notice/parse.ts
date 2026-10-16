@@ -110,14 +110,8 @@ export function parseInboundNoticeFields(raw: unknown): InboundNoticeFields {
 }
 
 const YES = new Set(["はい", "yes", "true"]);
-const NO = new Set(["いいえ", "no", "false", "不要"]);
 
 export function isYes(value: string | null): boolean {
   if (!value) return false;
   return YES.has(value.trim().toLowerCase());
-}
-
-export function isNo(value: string | null): boolean {
-  if (!value) return false;
-  return NO.has(value.trim().toLowerCase());
 }

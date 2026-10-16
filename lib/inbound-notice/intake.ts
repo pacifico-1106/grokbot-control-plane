@@ -17,7 +17,6 @@ import { isYes } from "@/lib/inbound-notice/parse";
 import { maskPhoneForAudit } from "@/lib/inbound-notice/phone";
 import { fenceUntrustedFields } from "@/lib/inbound-notice/untrusted";
 import { INBOUND_NOTICE_SCHEMA } from "@/lib/inbound-notice/types";
-import type { InboundNoticeRejectReason } from "@/lib/inbound-notice/types";
 import { mcpHandoffWakeAuditMeta, withMcpHandoff } from "@/lib/mcp/endpoint-handoff";
 import { checkOperable, takeWakeSuppressedAuditSlot, type OperableResult } from "@/lib/safety/hold";
 import { recordThreadWake } from "@/lib/thread-guard/guard";
@@ -328,5 +327,3 @@ export async function handleInboundNotice(
 
   return { handled: true, woke: 1 };
 }
-
-export type { InboundNoticeRejectReason };

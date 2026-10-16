@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { __resetHoldAuditThrottleForTests } from "@/lib/safety/hold";
 import type { OperableResult } from "@/lib/safety/hold";
@@ -85,7 +86,7 @@ function deps(over: Partial<InboundNoticeDeps> = {}): InboundNoticeDeps {
     getOrgChannel: async () => ({ orgId: ORG, externalId: CHANNEL, surface: "slack" as const }),
     getEmployee: async () => ({ id: EMP, orgId: ORG }),
     getEmployeeSlackTeamId: async () => TEAM,
-    getBinding: async () => ({ wakeWebhookUrl: WAKE }),
+    getBinding: async () => ({ wakeWebhookUrl: WAKE } as never),
     getWakeWebhookSecret: async () => "dummy-wake-secret",
     fetch: (async (url: unknown, init?: RequestInit) => {
       fetches.push({ url: String(url), init: init || {} });
@@ -213,7 +214,7 @@ describe("handleInboundNotice", () => {
   });
 
   test("intake never talks to the approval gateway itself", async () => {
-    const src = await Bun.file(new URL("./intake.ts", import.meta.url)).text();
+    const src = readFileSync(new URL("./intake.ts", import.meta.url), "utf8");
     expect(src).not.toContain("runGatewayInvoke");
     expect(src).not.toContain("@/lib/gateway");
     expect(src).not.toContain("staffpass_invoke");

@@ -176,7 +176,17 @@ Fail-first（実装前、`bun test lib/inbound-notice tests/security/inbound-cal
 | fail | 11 |
 | errors | 9（モジュール未作成） |
 
-実装後の対象テストはパーサ・フェンス・注入・営業スキップ・緊急 priority・hold・ソース検証・フラグ OFF 回帰・mention-ingress フック・W1。
+実装後（対象 10 ファイル）: **44 pass / 0 fail**。
+
+検証（同じ `env -u …`）:
+
+| コマンド | 結果 |
+|---|---|
+| `bun test lib/inbound-notice` + FLAGS-OFF | 44 pass / 0 fail |
+| `node scripts/test-local.mjs` | 554 files pass、**1 file fail**（`lib/comm/line-ingress-l7.test.ts`。string の `rawBody` を渡しており既存。本 PR は未変更） |
+| `npx tsc --noEmit` | **15** errors。本 PR のファイルは 0。依頼時の baseline は 13（既存テストの型ずれ。inbound-notice は含まない） |
+| `npx eslint .` | 0 errors / 179 warnings（既存。inbound-notice 0） |
+| `npx next build` | 成功 |
 
 コマンドはすべて  
 `env -u LP_HANDOFF_NOTIFY_SLACK_WEBHOOK -u APPROVAL_ALERT_OPS_EMAILS -u BILLING_NOTIFY_EMAIL -u RESEND_API_KEY`  
