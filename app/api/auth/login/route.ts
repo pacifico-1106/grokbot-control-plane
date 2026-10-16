@@ -15,21 +15,10 @@ import {
   type LoginErrorCode,
 } from "@/lib/auth/login-errors";
 import { isLoginRateLimitEnabled } from "@/lib/feature-flags";
+import { LOGIN_RATE_LIMITS } from "@/lib/auth/login-limits";
 import { safeNextDestination as safeDestination } from "@/lib/auth/safe-next";
 import { jsonUtf8 } from "@/lib/http/json-utf8";
 import { hmacWithIpHashKey, isIpHashKeyMissingError } from "@/lib/security/ip-hash-key";
-
-/**
- * Per-instance (best-effort on serverless). Behind LOGIN_RATE_LIMIT_ENABLED
- * (default OFF). Keyed by HMAC(IP)+HMAC(account) so a remote attacker cannot
- * lock a victim out of other IPs. A separate per-IP cap stops credential spray.
- */
-export const LOGIN_RATE_LIMITS = {
-  perIp: 20,
-  perIpWindowMs: 15 * 60_000,
-  perIpAccount: 10,
-  perIpAccountWindowMs: 15 * 60_000,
-} as const;
 
 export const runtime = "nodejs";
 

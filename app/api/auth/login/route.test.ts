@@ -19,7 +19,8 @@ mock.module("@supabase/ssr", () => ({
   }),
 }));
 
-const { POST, LOGIN_RATE_LIMITS } = await import("./route");
+const { POST } = await import("./route");
+const { LOGIN_RATE_LIMITS } = await import("@/lib/auth/login-limits");
 const { resetRateLimitsForTest } = await import("@/lib/auth/auth-flow");
 const { isLoginRateLimitEnabled } = await import("@/lib/feature-flags");
 
