@@ -256,7 +256,7 @@ async function handleBlockActions(
   }
 
   const action = (payload.actions || []).find((item) =>
-    ["staffpass_approve", "staffpass_reject", "staffpass_revise", "staffpass_verify_voter_binding", "staffpass_reject_voter_binding", "staffpass_emergency_stop"].includes(item.action_id || "")
+    ["staffpass_approve", "staffpass_reject", "staffpass_revise", "staffpass_verify_voter_binding", "staffpass_reject_voter_binding", "staffpass_emergency_stop", "staffpass_peer_wake_stop"].includes(item.action_id || "")
   );
   if (!action?.action_id || !ts || !slackChannel) return;
 
@@ -286,6 +286,25 @@ async function handleBlockActions(
 
   // S3: 「緊急停止」 button — stop only (release is web-only). Any ticket status: stopping is
   // always allowed while the card's delivery matches.
+  if (action.action_id === "staffpass_peer_wake_stop") {
+    const { stopPeerWakeFromInbox } = await import("@/lib/slack/peer-wake-stop-inbox");
+    const r = await stopPeerWakeFromInbox({
+      orgId: channel.orgId,
+      channelId: channel.id,
+      userId,
+      stopRef: action.value || "",
+    });
+    if (responseUrl) {
+      await fetch(responseUrl, {
+        method: "POST",
+        headers: { "content-type": "application/json; charset=utf-8" },
+        body: JSON.stringify({ response_type: "ephemeral", replace_original: false, text: `${r.ok ? "⛔" : "❌"} ${r.text}` }),
+        signal: AbortSignal.timeout(5_000),
+      }).catch(() => undefined);
+    }
+    return;
+  }
+
   if (action.action_id === "staffpass_emergency_stop") {
     const { stopFromInbox } = await import("@/lib/safety/hold-inbox");
     const r = await stopFromInbox({ orgId: channel.orgId, provider: "slack", channelId: channel.id, userId, ref: action.value, externalMessageId: ts });

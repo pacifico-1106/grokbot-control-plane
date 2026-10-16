@@ -122,7 +122,8 @@ export type UserChannelSkipReason =
   | "no_mention"
   | "self_loop"
   | "auth_mismatch"
-  | "invalid_event";
+  | "invalid_event"
+  | "peer_wake_denied";
 
 /**
  * Check if a channel ID looks like a Slack DM (D-prefixed).

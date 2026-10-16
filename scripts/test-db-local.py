@@ -725,6 +725,30 @@ try:
     assert query("select to_regclass('public.employee_comm_accounts') is not null"
                  " and to_regclass('public.comm_line_reply_tokens') is not null"
                  " and to_regclass('public.comm_line_send_unknown') is not null;") == "t"
+    apw = ROOT / "supabase/migrations/20261016100000_ai_peer_wake_guard.sql"
+    sql(apw)
+    sql(apw)  # re-applicable
+    sql(ROOT / "tests/security/db-ai-peer-wake-guard.sql")
+    apw_org, apw_emp1, apw_emp2 = ("a1600000-0000-4000-8000-0000000000c1",
+                                   "a1610000-0000-4000-8000-0000000000c1",
+                                   "a1610000-0000-4000-8000-0000000000c2")
+    query(f"insert into public.orgs(id, name) values ('{apw_org}', 'apw race');"
+          f"insert into public.employees(id, org_id, display_name, role_label) values "
+          f"('{apw_emp1}', '{apw_org}', 'apw c1', 'r'), ('{apw_emp2}', '{apw_org}', 'apw c2', 'r');")
+    command = (f"set role service_role; select public.claim_ai_peer_wake("
+               f"'{apw_org}','T0TEAM1','C0RACE1','1787911797.502889','1787911800.000001',4,1800)->>'state';")
+    with ThreadPoolExecutor(max_workers=12) as pool:
+        claims = list(pool.map(query, [command]*12))
+    assert claims.count("allowed") == 4 and claims.count("capped") == 8, claims
+    query(f"delete from public.orgs where id='{apw_org}';")
+    sql(ROOT / "supabase/verification/20261016100000_ai_peer_wake_guard_rollback.sql")
+    assert query("select to_regclass('public.ai_peer_wake_allowlist') is null"
+                 " and to_regclass('public.ai_peer_wake_threads') is null"
+                 " and to_regprocedure('public.claim_ai_peer_wake(uuid,text,text,text,text,integer,integer)') is null"
+                 " and to_regprocedure('public.stop_ai_peer_wake_thread(uuid,uuid,text)') is null"
+                 " and to_regprocedure('public.resume_ai_peer_wake_thread(uuid,uuid,text)') is null;") == "t"
+    sql(apw)  # forward again after rollback
+    sql(ROOT / "tests/security/db-ai-peer-wake-guard.sql")
     print("PASS: comm line reply tokens (20261014100000): 2 tables RLS on / restrictive deny-all only, anon/authenticated no access; "
           "hash format, unique reply token, unknown retry_key unique per org, org delete cascades; re-applicable; "
           "rollback refused while unknown-outcome rows exist, then drops both; forward again.")
@@ -736,6 +760,7 @@ try:
     print("PASS: thread_send_leases / thread_self_posts (thread single-flight): RLS on, no policy, anon/authenticated denied (2 tables + 3 RPCs); acquire → busy (retry_after) → expired lease taken over; release by holder only (old holder cannot release a re-taken lease); other org's lease on the same key independent, other org cannot release, other org's employee denied; self posts only move forward, no cross-org rows; bad input denied; org delete cascades; 12 concurrent acquires → exactly 1 acquired; rollback (2 tables + 3 RPCs, dedup ledger untouched) + re-apply.")
     print("PASS: close_approval_without_send / job_first_micros (thread single-flight pre-flag fixes, 20261009150000): close writes status + resolved_at + closedWithoutSend in one statement (other metadata kept), only from the listed statuses, other org → null untouched, bad input refused, an injected failure leaves no partial state, 12 concurrent closes → exactly 1; same job re-enters its held lease within 10 min of its first post (after that / different job / other employee / no job key → busy); record keeps the job's first-post anchor, a different job / no job key re-anchors; wake read point recorded per org × employee × thread, forward-only, other org's employee / bad input refused; anon/authenticated denied (RPCs + thread_wake_points); rollback (RPCs + columns + wake table, #286 intact) + re-apply.")
     print("PASS: slack_skipped_channel_wakes (Path C re-wake, 20261009700000): RLS on, no policy, anon/authenticated denied (table + 2 RPCs); record: same-org employee only, bad ids denied, older kept / newer replaces; claim: approved same-org approval that classifies THIS channel only (tool + externalId; other channel / other tool / other surface / non-classification config change / pending / other org / missing denied), once, other org isolated; newer skip reopens, older does not; TTL; org delete cascades; 12 concurrent claims → exactly 1 winner; rollback (table + 2 RPCs) + re-apply.")
+    print("PASS: ai_peer_wake_allowlist / ai_peer_wake_threads (20261016100000): RLS on, no policy, anon/authenticated denied (2 tables + 3 RPCs); allowlist same-org employees only, self pair / ai: created_by refused; claim first 4 allowed then capped (notify once), other org isolated, bad ids denied; stop/resume member-only and org-scoped; org delete cascades; 12 concurrent claims → exactly 4 allowed + 8 capped; rollback (2 tables + 3 RPCs) + re-apply.")
     print("PASS: orgs / subscriptions / audit_events / approval_requests have no anon/authenticated write path (member/admin/owner JWT denied); service_role writes all four. Full-history check: scripts/test-db-all-migrations.py.")
     print("PASS: 14 tenant config / credential tables (credentials, employees, bindings, admin agents, directory, adapters, channels, projects, card setup/audit) + gateway_links, agentmail_inboxes, lp_handoffs, lp_wake_webhook_configs, lp_wake_webhook_events have no anon/authenticated write path; other reads unchanged; credentials (rows and secret_hash) unreadable from any session; service_role reads/writes all.")
     print("PASS: lp_inquiries / notification_outbox have no anon/authenticated write grant; lp_handoffs / lp_wake_* have no policy (RLS on) and no anon/authenticated SELECT; sessions read/write none of the 5 LP tables; service_role (BYPASSRLS) reads/writes all.")

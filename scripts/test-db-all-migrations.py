@@ -142,6 +142,8 @@ ADDITIVE = [
     # 20261013200000. Parent rollback refuses while these tables exist.
     ("20261014100000_", "tests/security/db-comm-line-reply-tokens.sql",
      ("comm_line_reply_tokens", "comm_line_send_unknown")),
+    ("20261016100000_", "tests/security/db-ai-peer-wake-guard.sql",
+     ("ai_peer_wake_allowlist", "ai_peer_wake_threads")),
     # LINE PoC per-employee accounts (C5) + link-code limits (H8).
     ("20261013200000_", "tests/security/db-employee-comm-accounts.sql",
      ("employee_comm_accounts", "employee_comm_account_secrets", "comm_inbound_events", "comm_link_code_failures", "comm_link_code_locks")),
