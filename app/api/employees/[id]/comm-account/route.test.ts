@@ -89,7 +89,7 @@ describe("/api/employees/[id]/comm-account", () => {
     const { POST } = await import("@/app/api/employees/[id]/comm-account/route");
     const member = getRuntimeMembers().find((m) => m.id === "mem_3")!;
     const prevCap = member.capabilities;
-    member.capabilities = [...prevCap, "view_employees"];
+    member.capabilities = [...(prevCap ?? []), "view_employees"];
     try {
       const res = await POST(req("POST", "emp_comm", "mem_3"), ctx());
       expect(res.status).toBe(403);
