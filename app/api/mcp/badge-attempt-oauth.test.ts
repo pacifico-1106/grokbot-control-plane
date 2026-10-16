@@ -171,3 +171,44 @@ test("flag ON: valid sp_at_ still works", async () => {
   const { accessToken } = await seedClientAndGrant(store);
   expect((await rpc(list, { authorization: `Bearer ${accessToken}` })).status).toBe(200);
 });
+
+test("flag ON: case / whitespace / Basic / both headers do not advertise OAuth", async () => {
+  oauthOn();
+  process.env.MCP_EMPLOYEE_BADGE_MCP_ENABLED = "1";
+  const cases: Array<HeadersInit> = [
+    { Authorization: "bearer" },
+    { AUTHORIZATION: "  Bearer  " },
+    { authorization: "\tBearer\t${env:STAFFPASS_MCP_TOKEN}\t" },
+    { authorization: "Basic dXNlcjpwYXNz" },
+    { "x-staffpass-credential": "", authorization: "Bearer" },
+    { "X-Staffpass-Credential": "sp_at_spoof", authorization: `Bearer ${GB}` },
+  ];
+  for (const headers of cases) {
+    const res = await rpc(list, headers as Record<string, string>);
+    expect(res.status).toBe(401);
+    expect(res.headers.get("www-authenticate")).toBeNull();
+    const body = await res.json();
+    expect(body.error.data.nextStepJa).toBe(BADGE_AUTH_NEXT_STEP_JA);
+    expect(JSON.stringify(body)).not.toContain("resource_metadata");
+  }
+});
+
+test("flag ON: multiple Authorization (sp_at_ first + empty Bearer) does not advertise OAuth", async () => {
+  oauthOn();
+  process.env.MCP_EMPLOYEE_BADGE_MCP_ENABLED = "1";
+  const headers = new Headers({ "content-type": "application/json" });
+  headers.append("authorization", "Bearer sp_at_placeholder");
+  headers.append("authorization", "Bearer");
+  const res = await POST(
+    new Request("https://staffpass.test/api/mcp", {
+      method: "POST",
+      headers,
+      body: JSON.stringify(list),
+    })
+  );
+  expect(res.status).toBe(401);
+  expect(res.headers.get("www-authenticate")).toBeNull();
+  const body = await res.json();
+  expect(body.error.data._meta?.["mcp/www_authenticate"]).toBeUndefined();
+  expect(JSON.stringify(body)).not.toContain("resource_metadata");
+});

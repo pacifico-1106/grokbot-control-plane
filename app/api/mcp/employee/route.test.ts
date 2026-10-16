@@ -122,6 +122,80 @@ test("flag ON: valid gb_emp_ lists tools; sp_at_ is refused without an OAuth cha
   expect(JSON.stringify(body)).not.toContain(accessToken);
 });
 
+test("flag ON: GET card and tools/list never include OAuth-only or admin tools", async () => {
+  process.env.MCP_OAUTH_ENABLED = "1";
+  process.env.MCP_EMPLOYEE_BADGE_MCP_ENABLED = "1";
+  const card = await (await employee.GET()).json();
+  expect(card.tools).not.toContain("staffpass_profile");
+  expect(card.tools.some((t: string) => t.startsWith("employees.") || t.startsWith("stuckWatch."))).toBe(false);
+  expect(JSON.stringify(card)).not.toContain("/api/mcp/admin");
+  expect(JSON.stringify(card)).not.toContain("gb_adm_");
+  expect(JSON.stringify(card)).not.toContain("/oauth/consent");
+  expect(JSON.stringify(card)).not.toContain("/api/oauth/register");
+  const listed = await (await rpc({ jsonrpc: "2.0", id: 8, method: "tools/list" }, { authorization: `Bearer ${GB}` })).json();
+  const names = (listed.result.tools as Array<{ name: string }>).map((t) => t.name);
+  expect(names).not.toContain("staffpass_profile");
+  expect(JSON.stringify(listed)).not.toContain("securitySchemes");
+  expect(JSON.stringify(listed)).not.toContain("oauth2");
+});
+
+test("flag ON: tools/call staffpass_profile is refused (OAuth companion stays off this mouth)", async () => {
+  process.env.MCP_OAUTH_ENABLED = "1";
+  process.env.MCP_EMPLOYEE_BADGE_MCP_ENABLED = "1";
+  const res = await rpc(
+    { jsonrpc: "2.0", id: 9, method: "tools/call", params: { name: "staffpass_profile", arguments: {} } },
+    { authorization: `Bearer ${GB}` }
+  );
+  expect(res.status).toBe(200);
+  const body = await res.json();
+  expect(body.result?.isError || body.error).toBeTruthy();
+  const dumped = JSON.stringify(body);
+  expect(dumped).toMatch(/unknown_mcp_tool|not found|badge/i);
+  expect(dumped).not.toContain("sp_prof_");
+  expect(dumped).not.toContain("authMethod");
+  expect(res.headers.get("www-authenticate")).toBeNull();
+});
+
+test("flag ON: gb_adm_ / Basic / dual headers never enter OAuth or admin", async () => {
+  process.env.MCP_OAUTH_ENABLED = "1";
+  process.env.MCP_EMPLOYEE_BADGE_MCP_ENABLED = "1";
+  const { accessToken } = await seedClientAndGrant(store);
+  const cases: Record<string, string>[] = [
+    { authorization: "Bearer gb_adm_0123456789abcdef" },
+    { "x-staffpass-admin-credential": "gb_adm_0123456789abcdef" },
+    { authorization: "Basic dXNlcjpwYXNz" },
+    { "x-staffpass-credential": "", authorization: `Bearer ${accessToken}` },
+    { "x-staffpass-credential": accessToken, authorization: `Bearer ${GB}` },
+    { authorization: `Bearer ${accessToken}`, "x-staffpass-credential": "gb_emp_not_this_one" },
+  ];
+  for (const headers of cases) {
+    const res = await rpc({ jsonrpc: "2.0", id: 10, method: "tools/list" }, headers);
+    expect(res.status).toBe(401);
+    expect(res.headers.get("www-authenticate")).toBeNull();
+    const dumped = JSON.stringify(await res.json());
+    expect(dumped).not.toContain("resource_metadata");
+    expect(dumped).not.toContain("/oauth/consent");
+    expect(dumped).not.toContain(accessToken);
+    expect(dumped).not.toContain("gb_adm_0123456789abcdef");
+  }
+});
+
+test("flag ON: staffpass_health stays on the badge mouth (does not point at /api/mcp OAuth)", async () => {
+  process.env.MCP_OAUTH_ENABLED = "1";
+  process.env.MCP_EMPLOYEE_BADGE_MCP_ENABLED = "1";
+  const res = await rpc(
+    { jsonrpc: "2.0", id: 11, method: "tools/call", params: { name: "staffpass_health", arguments: {} } },
+    { authorization: `Bearer ${GB}` }
+  );
+  expect(res.status).toBe(200);
+  const body = await res.json();
+  const dumped = JSON.stringify(body);
+  expect(dumped).toContain("/api/mcp/employee");
+  expect(dumped).not.toMatch(/"mcpEndpoint":"\/api\/mcp"/);
+  expect(dumped).not.toContain("oauth-protected-resource");
+  expect(dumped).not.toContain("/api/mcp/admin");
+});
+
 test("next.config does not rewrite well-known PRM for /api/mcp/employee", async () => {
   const cfg = (await import("@/next.config")).default as { rewrites: () => Promise<Array<{ source: string; destination: string }>> };
   const rules = await cfg.rewrites();
