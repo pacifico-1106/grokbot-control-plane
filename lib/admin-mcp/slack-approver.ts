@@ -193,7 +193,7 @@ export async function fulfillSlackApproverSet(input: {
   const { orgId } = input;
   const auditFail = async (result: Extract<SlackApproverSetFulfillment, { ok: false }>) => {
     await appendAdminAuditEvent({
-      actor: await resolveAdminAuditActor({ orgId }),
+      actor: await resolveAdminAuditActor({ orgId, fallbackHuman: { email: "slack_approver_set" } }),
       orgId,
       employeeId: null,
       credentialId: null,
@@ -250,7 +250,7 @@ export async function fulfillSlackApproverSet(input: {
     // best effort: the approver is saved; only the "notice sent" marker is missing.
   }
   await appendAdminAuditEvent({
-    actor: await resolveAdminAuditActor({ orgId }),
+    actor: await resolveAdminAuditActor({ orgId, fallbackHuman: { email: "slack_approver_set" } }),
     orgId,
     employeeId: null,
     credentialId: null,

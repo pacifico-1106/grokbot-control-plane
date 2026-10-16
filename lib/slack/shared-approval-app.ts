@@ -313,7 +313,11 @@ export type SharedApprovalInstallResult =
 
 async function auditInstall(orgId: string, actorEmail: string | null, ok: boolean, metadata: Record<string, unknown>, summary: string) {
   await appendAdminAuditEvent({
-    actor: await resolveAdminAuditActor({ orgId, human: actorEmail ? { email: actorEmail } : undefined }),
+    actor: await resolveAdminAuditActor({
+      orgId,
+      human: actorEmail ? { email: actorEmail } : undefined,
+      fallbackHuman: { email: "slack_shared_approval_install" },
+    }),
     orgId,
     employeeId: null,
     credentialId: null,

@@ -1,5 +1,5 @@
 import { requireOrgOwnerSession } from "@/lib/auth/require-org";
-import { appendAdminAuditEvent, humanAdminActor } from "@/lib/audit/admin-audit";
+import { ensureAdminRevokeAudit, humanAdminActor, sanitizeAdminRevokeReason } from "@/lib/audit/admin-audit";
 import { getOrgAdminAgent, revokeOrgAdminAgent } from "@/lib/data/admin-agents";
 import { jsonUtf8 } from "@/lib/http/json-utf8";
 import { aiCredentialPresented, refuseUnsafeBrowserPost } from "@/lib/safety/hold-route";
@@ -28,7 +28,14 @@ export async function POST(req: Request) {
   if (!gate.ok) return gate.response;
 
   const body = (await req.json().catch(() => ({}))) as { reason?: unknown };
-  const reason = typeof body.reason === "string" ? body.reason.trim().slice(0, 300) : "";
+  const parsedReason = sanitizeAdminRevokeReason(body.reason);
+  if (!parsedReason.ok) {
+    return jsonUtf8(
+      { ok: false, error: parsedReason.error, message: "理由に使えない文字列です" },
+      { status: 400 }
+    );
+  }
+  const reason = parsedReason.reason;
 
   const existing = await getOrgAdminAgent(gate.orgId);
   if (!existing) {
@@ -38,24 +45,24 @@ export async function POST(req: Request) {
     );
   }
   const generation = existing.credentialGeneration;
+  const actor = humanAdminActor(gate.email, gate.memberId);
+  const writeAudit = () =>
+    ensureAdminRevokeAudit({
+      orgId: gate.orgId,
+      credentialId: existing.id,
+      generation,
+      actor,
+      reason,
+    });
   const revoked = await revokeOrgAdminAgent({ orgId: gate.orgId });
+  try {
+    await writeAudit();
+  } catch {
+    await writeAudit().catch(() => undefined);
+  }
   if (revoked.alreadyRevoked) {
     return jsonUtf8({ ok: true, alreadyRevoked: true });
   }
-
-  await appendAdminAuditEvent({
-    orgId: gate.orgId,
-    employeeId: null,
-    credentialId: existing.id,
-    action: "admin.revoke",
-    purpose: "admin.revoke",
-    summary: "管理用の認証を失効（人のタップ）",
-    actor: humanAdminActor(gate.email, gate.memberId),
-    metadata: {
-      generation,
-      ...(reason ? { reason } : {}),
-    },
-  });
 
   return jsonUtf8({ ok: true, generation });
 }
