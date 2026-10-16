@@ -4,6 +4,8 @@
  */
 
 export const STAFFPASS_MCP_URL = "https://staffpass.sealith.com/api/mcp";
+/** Badge-only mouth (flag MCP_EMPLOYEE_BADGE_MCP_ENABLED). Never advertises OAuth. */
+export const STAFFPASS_MCP_EMPLOYEE_URL = "https://staffpass.sealith.com/api/mcp/employee";
 export const STAFFPASS_MCP_SERVER_CARD =
   "https://staffpass.sealith.com/.well-known/mcp/server-card.json";
 export const STAFFPASS_MCP_DOCS_PATH = "/docs/mcp";
