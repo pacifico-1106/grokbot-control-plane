@@ -1,4 +1,4 @@
--- Rollback for 20261016100000_operator_notices.sql (same statements as the
+-- Rollback for 20261016200000_operator_notices.sql (same statements as the
 -- migration's ROLLBACK block). Turn OPERATOR_NOTICES_ENABLED /
 -- OPS_FEEDBACK_ENABLED / OPS_WEEKLY_DIGEST_ENABLED off first.
 begin;

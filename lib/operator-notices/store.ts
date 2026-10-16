@@ -1,6 +1,6 @@
 /**
  * Operator-notice persistence. Demo: in-memory. Production: service-role
- * only (migration 20261016100000; RLS on, no policy).
+ * only (migration 20261016200000; RLS on, no policy).
  *
  * Org / employee are taken from the caller (the employee badge). The SQL
  * path never filters in JS: `operator_notices_for_employee` is the single
