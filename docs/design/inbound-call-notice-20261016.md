@@ -212,6 +212,10 @@ Fail-first（初回実装前、`bun test lib/inbound-notice tests/security/inbou
 
 実装後（同じコマンド）: **117 pass / 0 fail**（15 files）。
 
+別表記マスク（+81 / 全角 / 空白・点・括弧）fail-first
+（`bun test lib/inbound-notice/phone.test.ts lib/inbound-notice/intake.test.ts`）: **22 pass / 2 fail**（24 tests）。
+実装後（`bun test lib/inbound-notice`）: **79 pass / 0 fail**。
+
 検証（同じ `env -u …`）:
 
 コマンドはすべて  
