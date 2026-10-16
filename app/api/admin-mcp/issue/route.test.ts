@@ -47,6 +47,11 @@ mock.module("@/lib/data", () => ({
     auditRows.push(row);
   },
 }));
+mock.module("@/lib/data/audit", () => ({
+  appendAuditEvent: async (row: Record<string, unknown>) => {
+    auditRows.push(row);
+  },
+}));
 mock.module("@/lib/data/admin-agents", () => ({
   mintAdminSecret: () => ({ raw: "gb_adm_rawsecretvalue", hash: "c".repeat(64), prefix: "gb_adm_rawsecr" }),
   issueOrgAdminAgent: async (input: { orgId: string; secretHash: string }) => {

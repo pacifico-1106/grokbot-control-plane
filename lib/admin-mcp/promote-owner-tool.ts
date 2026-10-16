@@ -29,6 +29,7 @@ import { promoteOwnerApproverConflict, promoteOwnerRequesterUnidentified, reques
 import { PROMOTE_OWNER_TOOL } from "@/lib/approver-authority/targets";
 import type { ApprovalRequest } from "@/lib/types";
 import { requesterCardLineJa, requesterMetadata, resolveAdminRequester, SLACK_USER_ID_FORMAT } from "@/lib/admin-mcp/requester-identity";
+import { appendAdminAuditEvent, resolveAdminAuditActor } from "@/lib/audit/admin-audit";
 
 export { PROMOTE_OWNER_TOOL };
 
@@ -123,7 +124,8 @@ export async function fulfillPromoteOwner(
   const orgId = approval.orgId;
   const memberId = typeof args.memberId === "string" ? args.memberId.trim() : "";
   const stop = async (code: string, messageJa: string): Promise<PromoteOwnerFulfillResult> => {
-    await appendAuditEvent({
+    await appendAdminAuditEvent({
+      actor: await resolveAdminAuditActor({ approval, orgId: approval.orgId }),
       orgId,
       employeeId: null,
       credentialId: null,

@@ -19,12 +19,12 @@ mock.module("@/lib/supabase", () => ({
           return query;
         },
         update: (patch: Record<string, unknown>) => {
-          if (agent && filters.org_id === "org") {
-            agent = { ...agent, ...patch };
-          }
           return {
             eq: (k: string, v: unknown) => {
               filters[k] = v;
+              if (agent && filters.org_id === "org") {
+                agent = { ...agent, ...patch };
+              }
               return {
                 select: () => ({
                   maybeSingle: async () => ({
@@ -45,7 +45,10 @@ mock.module("@/lib/supabase", () => ({
           };
         },
         maybeSingle: async () => ({
-          data: filters.org_id === "org" && filters.id === "agent" ? agent : null,
+          data:
+            filters.org_id === "org" && (filters.id === undefined || filters.id === "agent")
+              ? agent
+              : null,
           error: null,
         }),
       };
@@ -79,6 +82,6 @@ test("revoke makes isApprovalAuthorityCurrent false for the old admin ticket", a
   expect(await isApprovalAuthorityCurrent(approval)).toBe(true);
   await revokeOrgAdminAgent({ orgId: "org" });
   expect(agent?.status).toBe("revoked");
-  expect(agent?.credential_fingerprint ?? agent?.credentialFingerprint).toBeNull();
+  expect(agent?.credential_fingerprint === null || agent?.credentialFingerprint === null).toBe(true);
   expect(await isApprovalAuthorityCurrent(approval)).toBe(false);
 });

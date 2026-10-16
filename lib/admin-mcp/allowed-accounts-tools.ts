@@ -30,6 +30,7 @@ import { getEmployee, updateEmployeeAllowedAccounts } from "@/lib/data/employees
 import { getEmployeeSlackIdentity } from "@/lib/data/slack-identities";
 import { normalizeAllowedAccounts, serviceLabel } from "@/lib/employees/allowed-accounts";
 import type { AllowedAccount, ApprovalRequest, Employee } from "@/lib/types";
+import { appendAdminAuditEvent, resolveAdminAuditActor } from "@/lib/audit/admin-audit";
 
 export const ALLOWED_ACCOUNTS_ADD_TOOL = "employees.allowedAccounts.add";
 export const ALLOWED_ACCOUNTS_REMOVE_TOOL = "employees.allowedAccounts.remove";
@@ -366,7 +367,8 @@ export async function fulfillAllowedAccountsChange(
   const actor = requesterOf(approval);
   const approver = approval.resolvedBy ?? null;
   const failWith = async (code: string, messageJa: string, employeeId: string | null): Promise<AllowedAccountsFulfillment> => {
-    await appendAuditEvent({
+    await appendAdminAuditEvent({
+      actor: await resolveAdminAuditActor({ approval, orgId: approval.orgId }),
       orgId,
       employeeId,
       credentialId: null,
@@ -412,7 +414,8 @@ export async function fulfillAllowedAccountsChange(
 
   if (tool === ALLOWED_ACCOUNTS_ADD_TOOL && present) {
     // Added meanwhile (e.g. on the dashboard): idempotent, never a duplicate.
-    await appendAuditEvent({
+    await appendAdminAuditEvent({
+      actor: await resolveAdminAuditActor({ approval, orgId: approval.orgId }),
       orgId,
       employeeId: employee.id,
       credentialId: null,
@@ -472,7 +475,8 @@ export async function fulfillAllowedAccountsChange(
   }
   if (!updated) return failWith(NOT_FOUND.code, NOT_FOUND.message, null);
 
-  await appendAuditEvent({
+  await appendAdminAuditEvent({
+    actor: await resolveAdminAuditActor({ approval, orgId: approval.orgId }),
     orgId,
     employeeId: employee.id,
     credentialId: updated.credentialId ?? null,

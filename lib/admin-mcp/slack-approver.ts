@@ -35,6 +35,7 @@ import {
 } from "@/lib/slack/shared-approval-app";
 import { SHARED_APPROVAL_CONNECTION_LOST_NEXT_STEP_JA } from "@/lib/slack/shared-approval-revoke";
 import type { NotificationChannel } from "@/lib/types";
+import { appendAdminAuditEvent, resolveAdminAuditActor } from "@/lib/audit/admin-audit";
 
 export const SLACK_APPROVER_SET_TOOL = "setup.slackApprover.set" as const;
 export const SLACK_APPROVER_SET_ALLOWED_ARGS = ["slackUserId", "inboxId", "jobId", "approvalId"] as const;
@@ -191,7 +192,8 @@ export async function fulfillSlackApproverSet(input: {
 }): Promise<SlackApproverSetFulfillment> {
   const { orgId } = input;
   const auditFail = async (result: Extract<SlackApproverSetFulfillment, { ok: false }>) => {
-    await appendAuditEvent({
+    await appendAdminAuditEvent({
+      actor: await resolveAdminAuditActor({ orgId }),
       orgId,
       employeeId: null,
       credentialId: null,
@@ -247,7 +249,8 @@ export async function fulfillSlackApproverSet(input: {
   } catch {
     // best effort: the approver is saved; only the "notice sent" marker is missing.
   }
-  await appendAuditEvent({
+  await appendAdminAuditEvent({
+    actor: await resolveAdminAuditActor({ orgId }),
     orgId,
     employeeId: null,
     credentialId: null,

@@ -43,6 +43,41 @@ export function isOrgAdminSession(session: SessionContext): boolean {
   return orgAdminDecision(session) === "ok";
 }
 
+/** Owner-only browser session (stricter than requireOrgAdminSession). */
+export async function requireOrgOwnerSession(): Promise<
+  | { ok: true; orgId: string; email: string; memberId: string }
+  | { ok: false; reason: "auth_required" | "owner_required"; response: NextResponse }
+> {
+  const session = await getSessionContext();
+  if (session.demo && session.orgId) {
+    return {
+      ok: true,
+      orgId: session.orgId,
+      email: session.email || "owner@example.com",
+      memberId: session.member?.id || "mem_1",
+    };
+  }
+  if (!session.userId || !session.orgId || !session.member) {
+    return { ok: false, reason: "auth_required", response: authRequiredResponse() };
+  }
+  if (session.member.role !== "owner") {
+    return {
+      ok: false,
+      reason: "owner_required",
+      response: jsonUtf8(
+        { ok: false, error: "owner_required", message: "組織のオーナーだけが実行できます" },
+        { status: 403 }
+      ),
+    };
+  }
+  return {
+    ok: true,
+    orgId: session.orgId,
+    email: session.email || session.member.email,
+    memberId: session.member.id,
+  };
+}
+
 /** Owner/admin-only browser session for tenant-level secrets and integrations. */
 export async function requireOrgAdminSession(): Promise<
   | { ok: true; orgId: string; email: string }

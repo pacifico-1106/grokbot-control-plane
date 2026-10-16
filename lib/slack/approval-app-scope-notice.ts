@@ -24,6 +24,7 @@
  * imports the flag + sets from here).
  */
 import type { NotificationChannelRuntime } from "@/lib/data/notification-channels";
+import { appendAdminAuditEvent, resolveAdminAuditActor } from "@/lib/audit/admin-audit";
 
 function parseFlag(value: string | undefined): boolean {
   const v = (value ?? "").trim().toLowerCase();
@@ -283,7 +284,8 @@ export async function notifyApprovalAppFixRequired(input: {
       if (sent.ok) result.channels += 1;
     }
 
-    await appendAuditEvent({
+    await appendAdminAuditEvent({
+      actor: await resolveAdminAuditActor({ orgId }),
       orgId,
       employeeId: null,
       credentialId: null,

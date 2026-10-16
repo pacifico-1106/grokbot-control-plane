@@ -1,4 +1,5 @@
 import { cookies } from "next/headers";
+import { appendAdminAuditEvent, humanAdminActor } from "@/lib/audit/admin-audit";
 import { requireOrgAdminSession } from "@/lib/auth/require-org";
 import { appendAuditEvent } from "@/lib/data/audit";
 import { consumeSlackOAuthStateNonce } from "@/lib/data/slack-oauth-state-uses";
@@ -48,7 +49,8 @@ export async function GET(req: Request) {
   if (!fresh) return sharedApprovalResultHtml({ ok: false, code: "state_reused" }, 400);
 
   if (oauthError || !code) {
-    await appendAuditEvent({
+    await appendAdminAuditEvent({
+      actor: humanAdminActor(gate.email),
       orgId: parsed.orgId,
       employeeId: null,
       credentialId: null,

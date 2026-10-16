@@ -11,6 +11,7 @@
  * revocable here: the update is conditional on that exact state.
  */
 import type { ApprovalRequest } from "@/lib/types";
+import { appendAdminAuditEvent, humanAdminActor, resolveAdminAuditActor } from "@/lib/audit/admin-audit";
 import { isDemoMode } from "@/lib/mode";
 import { createSupabaseAdminClient } from "@/lib/supabase";
 import { appendAuditEvent } from "@/lib/data/audit";
@@ -105,7 +106,8 @@ export async function revokeUnrecordedApproval(input: {
   }
   if (!updated) return { ok: false, code: "revoke_failed" };
 
-  await appendAuditEvent({
+  await appendAdminAuditEvent({
+    actor: input.actor.kind === "operator" ? humanAdminActor(input.actor.email) : await resolveAdminAuditActor({ orgId }),
     orgId,
     employeeId: approval.employeeId ?? null,
     credentialId: null,

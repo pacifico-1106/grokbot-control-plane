@@ -33,7 +33,7 @@ let agent = {
   id: "adm_1",
   orgId: "org_a",
   status: "linked" as string,
-  credentialFingerprint: "fp-live",
+  credentialFingerprint: "fp-live" as string | null,
   credentialGeneration: 4,
 };
 
@@ -41,8 +41,17 @@ mock.module("@/lib/auth/session", () => ({
   getSessionContext: async () => session,
   getCurrentOrgId: async () => session.orgId,
 }));
-mock.module("@/lib/mode", () => ({ isDemoMode: () => false }));
-mock.module("@/lib/app-url", () => ({ resolveAppOrigin: () => "https://staffpass.test" }));
+mock.module("@/lib/mode", () => ({
+  isDemoMode: () => false,
+  isSupabaseConfigured: () => false,
+  isStripeConfigured: () => false,
+  isResendConfigured: () => false,
+  runtimeModeLabel: () => "production" as const,
+}));
+mock.module("@/lib/app-url", () => ({
+  resolveAppOrigin: () => "https://staffpass.test",
+  STAFFPASS_PUBLIC_ORIGIN: "https://staffpass.sealith.com",
+}));
 mock.module("@/lib/data", () => ({
   appendAuditEvent: async (row: Record<string, unknown>) => {
     auditRows.push(row);

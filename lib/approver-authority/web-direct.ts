@@ -13,6 +13,7 @@
  * change; an empty list is not gated.
  */
 import { isApproverAuthorityEnabled } from "@/lib/feature-flags";
+import { appendAdminAuditEvent, resolveAdminAuditActor } from "@/lib/audit/admin-audit";
 import { appendAuditEvent } from "@/lib/data/audit";
 import { checkApproverAuthority } from "./verify";
 import { classifyApproverRequirement, type ApproverRequirement, type ApproverRequirementReason } from "./targets";
@@ -67,7 +68,8 @@ export async function assertWebActorApproverAuthority(input: {
   if (decision.outcome === "allow") return { ok: true, requirement };
   // A designated admin on an owner-required change cannot save it directly.
   const reason = decision.outcome === "endorse" ? "owner_approval_required" : decision.reason;
-  await appendAuditEvent({
+  await appendAdminAuditEvent({
+    actor: await resolveAdminAuditActor({ orgId: input.orgId }),
     orgId: input.orgId,
     employeeId: null,
     credentialId: null,

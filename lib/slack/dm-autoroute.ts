@@ -31,7 +31,7 @@
  * - Never throws to the caller (OAuth callback / approval fulfillment).
  */
 import { applyChannelClassification } from "@/lib/admin-mcp/channel-classify";
-import { appendAuditEvent } from "@/lib/data/audit";
+import { adminActorMetadata, appendAdminAuditEvent, resolveAdminAuditActor } from "@/lib/audit/admin-audit";
 import { getOrgChannel, listOrgParties, upsertOrgChannel } from "@/lib/data/directory";
 import { getEmployee } from "@/lib/data/employees";
 import {
@@ -177,7 +177,6 @@ async function audit(input: {
   trigger: DmAutorouteTrigger;
   item: DmAutorouteItem;
 }): Promise<void> {
-  const write = writerOverride ?? appendAuditEvent;
   const { item } = input;
   const label =
     item.outcome === "created"
@@ -188,23 +187,35 @@ async function audit(input: {
           ? "DM ルートの自動作成に失敗"
           : "DM ルートの自動作成をスキップ";
   try {
-    await write({
+    const actor = await resolveAdminAuditActor({
+      orgId: input.orgId,
+      fallbackHuman: { email: "slack_dm_autoroute" },
+    });
+    const metadata = {
+      auditClass: ADMIN_AUDIT_CLASS,
+      event: `slack_dm_autoroute.${item.outcome}`,
+      trigger: input.trigger,
+      reason: item.reason,
+      counterpartSlackUserId: item.counterpartSlackUserId || null,
+      channelId: item.channelId ?? null,
+      employeeId: input.employeeId,
+      ...adminActorMetadata(actor),
+    };
+    const row = {
       orgId: input.orgId,
       employeeId: input.employeeId,
       credentialId: null,
-      action: "admin.channel",
+      action: "admin.channel" as const,
       purpose: "admin.channel",
       summary: `${label}（相手 ${item.counterpartSlackUserId || "-"}${item.channelId ? ` / ${item.channelId}` : ""}: ${item.reason}）`,
-      metadata: {
-        auditClass: ADMIN_AUDIT_CLASS,
-        event: `slack_dm_autoroute.${item.outcome}`,
-        trigger: input.trigger,
-        reason: item.reason,
-        counterpartSlackUserId: item.counterpartSlackUserId || null,
-        channelId: item.channelId ?? null,
-        employeeId: input.employeeId,
-      },
-    });
+      actorEmail: actor.actorKind === "human" ? actor.actorEmail : undefined,
+      metadata,
+    };
+    if (writerOverride) {
+      await writerOverride(row);
+    } else {
+      await appendAdminAuditEvent({ ...row, actor });
+    }
   } catch (error) {
     console.error("slack_dm_autoroute_audit_failed", error instanceof Error ? error.message.slice(0, 120) : "unknown");
   }

@@ -9,12 +9,14 @@ export function SetupKickoff({
   opsDocLocation,
   confirmedEmployeeCount,
   canIssueAdminCredential = true,
+  canRevokeAdminCredential = false,
 }: {
   adminConnected: boolean;
   grokBotAgentId: string | null;
   opsDocLocation: string | null;
   confirmedEmployeeCount: number;
   canIssueAdminCredential?: boolean;
+  canRevokeAdminCredential?: boolean;
 }) {
   return (
     <div className="space-y-4">
@@ -38,7 +40,7 @@ export function SetupKickoff({
           <h3 className="text-sm font-medium">{step.title}</h3>
           <p className="text-sm muted leading-relaxed">{step.body}</p>
           {step.id === "admin-mcp" ? (
-            <AdminMcpConnect connected={adminConnected} grokBotAgentId={grokBotAgentId} embedded canIssue={canIssueAdminCredential} />
+            <AdminMcpConnect connected={adminConnected} grokBotAgentId={grokBotAgentId} embedded canIssue={canIssueAdminCredential} canRevoke={canRevokeAdminCredential} />
           ) : null}
           {step.id === "process-source" ? <OpsDocLocationForm initial={opsDocLocation} /> : null}
           {step.id === "confirm-employees" ? (

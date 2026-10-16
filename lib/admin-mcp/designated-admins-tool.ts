@@ -25,6 +25,7 @@ import {
 import { getVerifiedApprover } from "@/lib/approver-authority";
 import { DESIGNATED_ADMINS_GET_TOOL, DESIGNATED_ADMINS_SET_TOOL } from "@/lib/approver-authority/targets";
 import type { ApprovalRequest } from "@/lib/types";
+import { appendAdminAuditEvent, resolveAdminAuditActor } from "@/lib/audit/admin-audit";
 
 export { DESIGNATED_ADMINS_GET_TOOL, DESIGNATED_ADMINS_SET_TOOL };
 export const DESIGNATED_ADMINS_TOOLS = [DESIGNATED_ADMINS_GET_TOOL, DESIGNATED_ADMINS_SET_TOOL] as const;
@@ -113,7 +114,8 @@ export async function fulfillDesignatedAdminsSet(
 ): Promise<DesignatedAdminsFulfillResult> {
   const orgId = approval.orgId;
   const stop = async (code: string, messageJa: string): Promise<DesignatedAdminsFulfillResult> => {
-    await appendAuditEvent({
+    await appendAdminAuditEvent({
+      actor: await resolveAdminAuditActor({ approval, orgId: approval.orgId }),
       orgId,
       employeeId: null,
       credentialId: null,
@@ -138,7 +140,8 @@ export async function fulfillDesignatedAdminsSet(
     return stop("designated_admins_unavailable", "指定管理者の設定を読めませんでした。");
   }
   await writeDesignatedAdminMemberIds(orgId, validation.memberIds);
-  await appendAuditEvent({
+  await appendAdminAuditEvent({
+    actor: await resolveAdminAuditActor({ approval, orgId: approval.orgId }),
     orgId,
     employeeId: null,
     credentialId: null,

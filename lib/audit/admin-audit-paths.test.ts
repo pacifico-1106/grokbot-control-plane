@@ -31,18 +31,12 @@ function literalAdminWrites(text: string): number {
 }
 
 function usesRawAppendForAdmin(text: string): boolean {
-  if (!text.includes("appendAuditEvent")) return false;
-  if (literalAdminWrites(text) === 0 && !text.includes("auditActionForAdminTool")) {
-    return false;
-  }
-  const usesHelper = text.includes("appendAdminAuditEvent");
-  if (usesHelper && !/\bappendAuditEvent\s*\(/.test(text)) return false;
-  if (usesHelper) {
-    // Helper is present; still fail if a raw appendAuditEvent writes admin.*.
-    const chunks = text.split("appendAuditEvent(").slice(1);
-    return chunks.some((chunk) => /action:\s*["'`]admin\./.test(chunk.slice(0, 400)));
-  }
-  return literalAdminWrites(text) > 0 || text.includes("auditActionForAdminTool");
+  if (!/\bappendAuditEvent\s*\(/.test(text)) return false;
+  const chunks = text.split("appendAuditEvent(").slice(1);
+  return chunks.some((chunk) => {
+    const head = chunk.slice(0, 800);
+    return /action:\s*["'`]admin\./.test(head) || /action:\s*auditAction\b/.test(head);
+  });
 }
 
 describe("admin.* audit writes go through the shared helper", () => {
@@ -61,8 +55,8 @@ describe("admin.* audit writes go through the shared helper", () => {
     ];
     for (const rel of required) {
       const src = sources.find((s) => s.path === rel);
-      expect(src, rel).toBeTruthy();
-      expect(src!.text, rel).toContain("appendAdminAuditEvent");
+      expect(src).toBeTruthy();
+      expect(src!.text).toContain("appendAdminAuditEvent");
     }
   });
 });

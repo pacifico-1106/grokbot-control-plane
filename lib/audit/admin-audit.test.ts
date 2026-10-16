@@ -137,4 +137,13 @@ describe("admin audit identity helper", () => {
     expect(row.actorEmail ?? row.metadata?.actorEmail).toBe("owner@example.com");
     expect(JSON.stringify(row.metadata)).not.toContain("c".repeat(64));
   });
+
+  test("resolveAdminAuditActor falls back to human when no admin agent exists", async () => {
+    const { resolveAdminAuditActor } = await import("@/lib/audit/admin-audit");
+    const actor = await resolveAdminAuditActor({
+      orgId: "org_does_not_exist",
+      fallbackHuman: { email: "system@example.com" },
+    });
+    expect(actor).toEqual({ actorKind: "human", actorEmail: "system@example.com" });
+  });
 });

@@ -5,6 +5,7 @@ import { createSupabaseAdminClient } from "@/lib/supabase";
 import { isDemoMode } from "@/lib/mode";
 import { DEMO_ORG } from "@/lib/demo-data";
 import { jsonUtf8 } from "@/lib/http/json-utf8";
+import { appendAdminAuditEvent, humanAdminActor } from "@/lib/audit/admin-audit";
 
 export const runtime = "nodejs";
 
@@ -103,7 +104,8 @@ export async function POST(req: Request) {
       }
     }
 
-    await appendAuditEvent({
+    await appendAdminAuditEvent({
+      actor: humanAdminActor(access.actor.email),
       orgId,
       employeeId: null,
       credentialId: null,
