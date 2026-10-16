@@ -298,6 +298,49 @@ describe("handleInboundNotice", () => {
     expect(fetches).toHaveLength(0);
   });
 
+  test("other phone formats in every field are last4, dates/amounts/times stay", async () => {
+    const text = [
+      "受電のお知らせ",
+      "受電日時 2026/01/02 03:04",
+      "電話番号 000-0000-1111",
+      "相手先会社 DUMMY-CO +81 90-1234-5678",
+      "相手先氏名 ０９０－１２３４－５６７８",
+      "カテゴリ (03) 1234-5678",
+      "折り返し要否 090.1234.5678",
+      "緊急 いいえ",
+      "営業電話 いいえ",
+      "要約 +819012345678 / (+81) 3 1234 5678 / 1,000,000,000",
+    ].join("\n");
+    const r = await handleInboundNotice(event({ text, ts: "1000000000.000080" }), deps());
+    expect(r.woke).toBe(1);
+    const body = JSON.parse(String(fetches[0].init.body)) as {
+      inboundNotice: { untrustedOutsideText: { fields: Record<string, { value: string | null }> } };
+    };
+    const fields = body.inboundNotice.untrustedOutsideText.fields;
+    expect(fields.receivedAt.value).toBe("2026/01/02 03:04");
+    expect(fields.phone.value).toBe("1111");
+    expect(fields.company.value).toBe("DUMMY-CO 5678");
+    expect(fields.personName.value).toBe("5678");
+    expect(fields.category.value).toBe("5678");
+    expect(fields.callbackNeeded.value).toBe("5678");
+    expect(fields.summary.value).toContain("5678");
+    expect(fields.summary.value).toContain("1,000,000,000");
+    const bodyJson = JSON.stringify(fetches[0].init.body);
+    for (const leak of [
+      "+81 90-1234-5678",
+      "+819012345678",
+      "(+81) 3 1234 5678",
+      "０９０－１２３４－５６７８",
+      "(03) 1234-5678",
+      "090.1234.5678",
+      "000-0000-1111",
+    ]) {
+      expect(bodyJson).not.toContain(leak);
+    }
+    expect(JSON.stringify(audits)).not.toContain("000-0000-1111");
+    expect(JSON.stringify(audits)).not.toContain("090-1234-5678");
+  });
+
   test("full phone in 要約 / 相手先会社 never appears in wake payload or audit", async () => {
     const text = [
       "受電のお知らせ",

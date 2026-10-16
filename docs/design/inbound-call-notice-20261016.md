@@ -127,7 +127,7 @@ inboundNotice.untrustedOutsideText = {
 |---|---|
 | フィールドはすべて信頼できない外のテキスト | フェンス + テスト（指示注入を 要約 / 会社名に入れても `text` にならない） |
 | 送信・変更は承認ゲート | intake は gateway を import しない。テストで固定 |
-| 電話番号（wake） | 下 4 桁だけ。フル番号は `sourceNotice` で元 Slack 投稿を指す。要約・会社名など他フィールドからもフル番号を消す |
+| 電話番号（wake） | 下 4 桁だけ。フル番号は `sourceNotice` で元 Slack 投稿を指す。全フィールドから電話らしい列（+81 / 全角 / 空白・点・括弧、パースした番号と違うものも含む）を下 4 桁にする。日付・金額・時刻は残す（国内 10–11 桁、または 81+9–10 桁） |
 | 電話番号（監査・ログ） | last4 または HMAC-SHA256（`INBOUND_CALL_NOTICE_PHONE_HASH_KEY`）。4 桁未満は last4 を出さない |
 | pepper 未設定 | フラグ ON なら fail closed（起こさない、claim しない）。フォールバック無し（`IP_HASH_KEY` と同じ） |
 | 入口 | 登録済み `org_channels` **かつ** env のチャネル許可。期待 bot ID または app ID（名前は見ない）。同一 org / Slack team。投稿者 team（`event.team` / `source_team` / `user_team` / `bot_profile.team_id`）が違う、または ext-shared で投稿者 team が無い → 拒否。`message_changed` / `message_deleted` は候補にしない。許可リスト空は拒否 |

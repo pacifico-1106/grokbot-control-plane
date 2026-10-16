@@ -57,4 +57,25 @@ describe("phone masking", () => {
     expect(redactPhoneInText("no number here", "000-0000-1111")).toBe("no number here");
     expect(redactPhoneInText(null, "000-0000-1111")).toBeNull();
   });
+
+  test("redactPhoneInText masks +81 / fullwidth / spaced forms to last4, even when they differ from 電話番号", () => {
+    expect(redactPhoneInText("cb +81 90-1234-5678", "000-0000-1111")).toBe("cb 5678");
+    expect(redactPhoneInText("cb +819012345678", "000-0000-1111")).toBe("cb 5678");
+    expect(redactPhoneInText("cb (+81) 3 1234 5678", "000-0000-1111")).toBe("cb 5678");
+    expect(redactPhoneInText("cb ０９０－１２３４－５６７８", "000-0000-1111")).toBe("cb 5678");
+    expect(redactPhoneInText("cb (03) 1234-5678", "000-0000-1111")).toBe("cb 5678");
+    expect(redactPhoneInText("cb 090.1234.5678", "000-0000-1111")).toBe("cb 5678");
+    expect(redactPhoneInText("別番号 090-1234-5678", "000-0000-1111")).toBe("別番号 5678");
+    expect(redactPhoneInText("+81 90-1234-5678", null)).toBe("5678");
+  });
+
+  test("redactPhoneInText does not over-mask dates, amounts, or times", () => {
+    expect(redactPhoneInText("受電日時 2026/01/02 03:04", "000-0000-1111")).toBe(
+      "受電日時 2026/01/02 03:04"
+    );
+    expect(redactPhoneInText("日付 2026-01-02 金額 1,000,000,000 時刻 03:04", null)).toBe(
+      "日付 2026-01-02 金額 1,000,000,000 時刻 03:04"
+    );
+    expect(redactPhoneInText("短い 1234 と 090-123", "000-0000-1111")).toBe("短い 1234 と 090-123");
+  });
 });
