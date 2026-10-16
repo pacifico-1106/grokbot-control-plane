@@ -69,6 +69,7 @@ import { verifySlackSignature } from "@/lib/notify/slack";
 import { createSupabaseAdminClient } from "@/lib/supabase";
 import { addLookingReaction } from "@/lib/slack/reaction-stamps";
 import { isSlackImNoRouteAuditEnabled, isWebhookHardeningEnabled } from "@/lib/feature-flags";
+import { isInboundCallNoticeEnabled } from "@/lib/inbound-notice/flags";
 import { withLinkLocalGuard } from "@/lib/webhooks/link-local-guard";
 import { recordImNoRouteAudit } from "@/lib/slack/im-no-route-audit";
 import { applyPeerWakeGuard } from "@/lib/slack/peer-wake-guard";
@@ -1484,6 +1485,30 @@ export async function processSlackMentionEnvelope(
       reason: "unsupported_event_type",
     });
     return { handled: false, woke: 0, skipReason: "unsupported_event_type" };
+  }
+
+  // Inbound call notice (INBOUND_CALL_NOTICE_ENABLED, default OFF). Bot
+  // messages that look like 受電のお知らせ go to intake (dedup = channel +
+  // Slack ts). Everything else falls through to skip (bot_message) / mention.
+  if (isInboundCallNoticeEnabled()) {
+    const { isInboundNoticeCandidate, handleInboundNoticeEnvelope } = await import(
+      "@/lib/inbound-notice/slack-hook"
+    );
+    if (isInboundNoticeCandidate(envelope)) {
+      // Dedup is channel + Slack ts (intake), not Slack event_id.
+      const outcome = await handleInboundNoticeEnvelope(envelope);
+      console.info("slack_event_inbound_notice", {
+        eventId,
+        woke: outcome.woke,
+        skipReason: outcome.skipReason,
+      });
+      return {
+        handled: outcome.handled,
+        woke: outcome.woke,
+        skipReason: outcome.skipReason,
+        duplicate: outcome.skipReason === "duplicate",
+      };
+    }
   }
 
   if (shouldIgnoreEvent(event)) {
