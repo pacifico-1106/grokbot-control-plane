@@ -99,6 +99,7 @@ test("owner with hire_issue_credentials mints; audit has hash prefix only", asyn
   expect(row).toBeDefined();
   expect(row!.actorEmail).toBe("owner@example.com");
   const meta = row!.metadata as Record<string, unknown>;
+  expect(meta.actorKind ?? (row!.actor as { actorKind?: string } | undefined)?.actorKind).toBe("human");
   expect(meta.secretHashPrefix).toBe("c".repeat(12));
   expect(meta.actorMemberId).toBe("mem_owner");
   const serialized = JSON.stringify(auditRows);
