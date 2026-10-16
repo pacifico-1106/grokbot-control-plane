@@ -341,6 +341,24 @@ export async function sendSlackTextToChannel(
     : { ok: false, error: sent.error };
 }
 
+/** Block Kit to the org approval inbox (AI→AI cap notice + stop button). */
+export async function sendSlackBlocksToChannel(
+  channel: NotificationChannelRuntime,
+  text: string,
+  blocks: Array<Record<string, unknown>>
+): Promise<SlackNotifyResult> {
+  const cfg = target(channel);
+  if (!cfg.botToken || !cfg.channelId) return { ok: false, skipped: true };
+  const sent = await callSlack(cfg.botToken, "chat.postMessage", {
+    channel: cfg.channelId,
+    text,
+    blocks,
+  });
+  return sent.ok
+    ? { ok: true, ts: sent.result?.ts, channel: sent.result?.channel }
+    : { ok: false, error: sent.error };
+}
+
 export async function editSlackWorkflowProgress(
   approval: ApprovalRequest, employee: Employee | null, channel: NotificationChannelRuntime,
   workflow: WorkflowProgressDisplay
