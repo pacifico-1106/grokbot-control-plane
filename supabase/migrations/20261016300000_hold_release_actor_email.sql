@@ -91,7 +91,7 @@ commit;
 
 -- ROLLBACK (down) — restores the 20261012500000 definition (no actor_email on
 -- the release audit insert). Same statements as
--- supabase/verification/20261016100000_hold_release_actor_email_rollback.sql.
+-- supabase/verification/20261016300000_hold_release_actor_email_rollback.sql.
 -- Run as one transaction:
 --   begin;
 --   create or replace function public.release_employee_hold(

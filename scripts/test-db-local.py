@@ -641,8 +641,8 @@ try:
           "audit row in the same transaction (audit failure → no release), held tickets closed_by_hold; ops holds not member-releasable; "
           "org hold 'stopped' only; 12 concurrent starts → 1 hold, 12 concurrent releases → 1 release + 1 audit row; "
           "re-applicable; rollback drops table, 3 functions, 4 columns; forward again.")
-    # Hold-release actor_email (20261016100000): fill actor_email from org_members of resolved_by.
-    hold_ae = ROOT / "supabase/migrations/20261016100000_hold_release_actor_email.sql"
+    # Hold-release actor_email (20261016300000): fill actor_email from org_members of resolved_by.
+    hold_ae = ROOT / "supabase/migrations/20261016300000_hold_release_actor_email.sql"
     ae_marker = ("select position('actor_email_from_member' in pg_get_functiondef("
                  "'public.release_employee_hold(uuid,uuid,text,jsonb,timestamptz)'::regprocedure));")
     assert query(ae_marker) == "0", query(ae_marker)  # 20261012500000 alone
@@ -650,12 +650,12 @@ try:
     sql(hold_ae)  # re-applicable
     sql(ROOT / "tests/security/db-hold-release-actor-email.sql")
     sql(ROOT / "tests/security/db-employee-holds.sql")
-    sql(ROOT / "supabase/verification/20261016100000_hold_release_actor_email_rollback.sql")
+    sql(ROOT / "supabase/verification/20261016300000_hold_release_actor_email_rollback.sql")
     assert query(ae_marker) == "0", query(ae_marker)
     sql(ROOT / "tests/security/db-employee-holds.sql")
     sql(hold_ae)  # forward again after rollback
     sql(ROOT / "tests/security/db-hold-release-actor-email.sql")
-    print("PASS: hold release actor_email (20261016100000): release audit row.actor_email is org_members.email of "
+    print("PASS: hold release actor_email (20261016300000): release audit row.actor_email is org_members.email of "
           "resolved_by; p_audit_metadata cannot forge it; EXECUTE service_role only; re-applicable; rollback restores "
           "the 20261012500000 body; forward again.")
     # LINE PoC per-employee accounts / secrets / inbound dedup / link-code limits (20261013200000).

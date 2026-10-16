@@ -134,7 +134,7 @@ ADDITIVE = [
     ("20261012400000_", "tests/security/db-lp-provisionings.sql", ("lp_provisionings", "lp_provisioning_events")),
     # Hold-release actor_email follow-up: listed before 20261012500000 (whose
     # rollback/re-apply recreates the function without actor_email).
-    ("20261016100000_", "tests/security/db-hold-release-actor-email.sql",
+    ("20261016300000_", "tests/security/db-hold-release-actor-email.sql",
      "position('actor_email_from_member' in pg_get_functiondef("
      "'public.release_employee_hold(uuid,uuid,text,jsonb,timestamptz)'::regprocedure)) = 0"),
     # 緊急停止 hold (S1): table + 4 columns + 3 functions; rollback drops them all.

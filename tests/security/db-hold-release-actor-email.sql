@@ -1,4 +1,4 @@
--- Hold-release audit actor_email (migration 20261016100000). Synthetic fixtures
+-- Hold-release audit actor_email (migration 20261016300000). Synthetic fixtures
 -- only (ids e6…); cleans up after itself. Runs in scripts/test-db-local.py and
 -- scripts/test-db-all-migrations.py after 20261012500000.
 --  (1) release audit row.actor_email is org_members.email of resolved_by
@@ -18,7 +18,7 @@ begin
     raise exception 'hold release actor_email: service_role lost EXECUTE';
   end if;
   if position('actor_email_from_member' in pg_get_functiondef('public.release_employee_hold(uuid,uuid,text,jsonb,timestamptz)'::regprocedure)) = 0 then
-    raise exception 'hold release actor_email: function is not the 20261016100000 body';
+    raise exception 'hold release actor_email: function is not the 20261016300000 body';
   end if;
 end $$;
 
