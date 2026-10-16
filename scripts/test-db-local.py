@@ -753,8 +753,8 @@ try:
     print("PASS: comm line reply tokens (20261014100000): 2 tables RLS on / restrictive deny-all only, anon/authenticated no access; "
           "hash format, unique reply token, unknown retry_key unique per org, org delete cascades; re-applicable; "
           "rollback refused while unknown-outcome rows exist, then drops both; forward again.")
-    # /api/mcp auth-failure audit + last_used_at touch (20261016200000).
-    maf = ROOT / "supabase/migrations/20261016200000_mcp_auth_failures.sql"
+    # /api/mcp auth-failure audit + last_used_at touch (20261016400000).
+    maf = ROOT / "supabase/migrations/20261016400000_mcp_auth_failures.sql"
     sql(maf)
     sql(maf)  # re-applicable
     sql(ROOT / "tests/security/db-mcp-auth-failures.sql")
@@ -767,14 +767,14 @@ try:
         maf_hits = list(pool.map(query, maf_commands))
     assert maf_hits.count("t") == 1 and maf_hits.count("f") == 11, maf_hits
     query("delete from public.mcp_auth_failures where failure_kind = 'missing_credential' and org_id is null;")
-    sql(ROOT / "supabase/verification/20261016200000_mcp_auth_failures_rollback.sql")
+    sql(ROOT / "supabase/verification/20261016400000_mcp_auth_failures_rollback.sql")
     assert query("select to_regclass('public.mcp_auth_failures') is null"
                  " and to_regprocedure('public.record_mcp_auth_failure(text,uuid,uuid,uuid,text)') is null"
                  " and to_regprocedure('public.touch_credential_last_used(uuid)') is null"
                  " and to_regclass('public.credentials') is not null;") == "t"
     sql(maf)  # forward again after rollback
     sql(ROOT / "tests/security/db-mcp-auth-failures.sql")
-    print("PASS: mcp auth failures (20261016200000): RLS on / no policy, anon/authenticated hold no privilege and cannot execute; "
+    print("PASS: mcp auth failures (20261016400000): RLS on / no policy, anon/authenticated hold no privilege and cannot execute; "
           "kinds missing_credential/invalid/expired only; 5-minute throttle per kind×identity; no token/hash/prefix columns; "
           "touch_credential_last_used conditional UPDATE (5 min); 12 concurrent missing_credential → 1 insert; "
           "re-applicable; rollback drops table + 2 functions; forward again.")

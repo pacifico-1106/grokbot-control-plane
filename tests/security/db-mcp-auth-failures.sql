@@ -1,4 +1,4 @@
--- /api/mcp auth-failure audit + last_used_at touch (migration 20261016200000).
+-- /api/mcp auth-failure audit + last_used_at touch (migration 20261016400000).
 -- Synthetic fixtures only (ids af000000-…); cleans up after itself.
 --  (1) RLS on, no policy; anon / authenticated hold no privilege and cannot EXECUTE
 --  (2) service_role inserts via record_mcp_auth_failure; kind limited
