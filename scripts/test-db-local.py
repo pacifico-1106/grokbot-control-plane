@@ -728,6 +728,31 @@ try:
     print("PASS: comm line reply tokens (20261014100000): 2 tables RLS on / restrictive deny-all only, anon/authenticated no access; "
           "hash format, unique reply token, unknown retry_key unique per org, org delete cascades; re-applicable; "
           "rollback refused while unknown-outcome rows exist, then drops both; forward again.")
+    # /api/mcp auth-failure audit + last_used_at touch (20261016100000).
+    maf = ROOT / "supabase/migrations/20261016100000_mcp_auth_failures.sql"
+    sql(maf)
+    sql(maf)  # re-applicable
+    sql(ROOT / "tests/security/db-mcp-auth-failures.sql")
+    from concurrent.futures import ThreadPoolExecutor as _MafPool
+    maf_commands = [
+        "set role service_role; select public.record_mcp_auth_failure('missing_credential', null, null, null, 'tools/list');"
+        for _ in range(12)
+    ]
+    with _MafPool(max_workers=12) as pool:
+        maf_hits = list(pool.map(query, maf_commands))
+    assert maf_hits.count("t") == 1 and maf_hits.count("f") == 11, maf_hits
+    query("delete from public.mcp_auth_failures where failure_kind = 'missing_credential' and org_id is null;")
+    sql(ROOT / "supabase/verification/20261016100000_mcp_auth_failures_rollback.sql")
+    assert query("select to_regclass('public.mcp_auth_failures') is null"
+                 " and to_regprocedure('public.record_mcp_auth_failure(text,uuid,uuid,uuid,text)') is null"
+                 " and to_regprocedure('public.touch_credential_last_used(uuid)') is null"
+                 " and to_regclass('public.credentials') is not null;") == "t"
+    sql(maf)  # forward again after rollback
+    sql(ROOT / "tests/security/db-mcp-auth-failures.sql")
+    print("PASS: mcp auth failures (20261016100000): RLS on / no policy, anon/authenticated hold no privilege and cannot execute; "
+          "kinds missing_credential/invalid/expired only; 5-minute throttle per kind×identity; no token/hash/prefix columns; "
+          "touch_credential_last_used conditional UPDATE (5 min); 12 concurrent missing_credential → 1 insert; "
+          "re-applicable; rollback drops table + 2 functions; forward again.")
     print("PASS: approver authority (PR-D): owner / designated admin decision table; flag-OFF 7-argument W1 call unchanged; standard ticket → designated admin stored, others refused; owner ticket → designated admin endorsed once and kept pending, owner approves and is stored; zero owners stop; multiple owners: any one owner other than the requester (requesting owner refused; a sole owner's own approval counts; several owners all requesters → no_owner_other_than_requester); reject / non-target not gated; record_approver_authority verified/endorse; one RPC overload; EXECUTE service_role only; rollback restores the 7-argument RPC + re-apply.")
     print("PASS: approver context CAS (TOCTOU follow-up): policy.patch / schedulingPolicy.patch writes only when the locked row still equals the pinned snapshot; concurrent change between check and write → approver_context_changed with nothing written (employee row, active and revoked credentials, org / employee scheduling policy); ticket binding (fingerprint, missing fingerprint, status, tool, target, org) refused; invalid input refused; EXECUTE service_role only; 12 concurrent writers with one snapshot → exactly 1 write (both RPCs); rollback drops both RPCs (PR-D untouched) + re-apply.")
     print("PASS: employee_webhook_settings (D9): RLS on, no policy, anon/authenticated denied, service_role reads/writes/upserts; cross-org row rejected; payload mode minimal|legacy_full (default minimal); ciphertext-only secret + fingerprint pair; employee delete cascades; rollback + re-apply.")
