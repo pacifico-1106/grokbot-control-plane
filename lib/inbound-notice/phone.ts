@@ -79,10 +79,17 @@ export function maskPhoneForAudit(value: string | null | undefined): {
  */
 export function redactPhoneInText(
   text: string | null | undefined,
-  _phone?: string | null
+  phone?: string | null
 ): string | null {
   if (text === null || text === undefined) return null;
-  return maskPhoneLikeSpans(text);
+  let out = maskPhoneLikeSpans(text);
+  const parsed = digits(phone);
+  if (phone && isMaskablePhoneDigits(parsed)) {
+    const last4 = parsed.slice(-4);
+    const formatted = phone.trim();
+    if (formatted && formatted !== last4) out = out.split(formatted).join(last4);
+  }
+  return out;
 }
 
 function findPhoneStart(text: string, from: number): number {
