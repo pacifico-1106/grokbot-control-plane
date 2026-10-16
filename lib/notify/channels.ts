@@ -20,6 +20,7 @@ import { getApprovalWorkflowProgress, getCurrentStageVoterUserIds } from "@/lib/
 import { isInboxRoutingEnabled } from "@/lib/feature-flags";
 import { routeInboxToResponsibleHuman } from "@/lib/notify/inbox-routing";
 import { isSharedApprovalAppEnabled } from "@/lib/slack/shared-approval-flags";
+import { appendAdminAuditEvent, resolveAdminAuditActor } from "@/lib/audit/admin-audit";
 /**
  * Org notification channels (Telegram / LINE / Slack).
  * Slack here is the approval *inbox* only. Conversation posting uses
@@ -409,8 +410,9 @@ export async function notifyOwnersApproverAuthorityApproved(
       : await sendLineText(inbox, text).catch(() => ({ ok: false }));
     result.channelPost = { provider: inbox.provider, ok: Boolean(sent.ok) };
   }
-  await appendAuditEvent({
+  await appendAdminAuditEvent({
     orgId: approval.orgId,
+    actor: await resolveAdminAuditActor({ approval, orgId: approval.orgId }),
     employeeId: approval.employeeId || null,
     credentialId: null,
     action: "admin.policy",
@@ -497,8 +499,9 @@ export async function notifyOwnerPromoted(
       : await sendLineText(inbox, text).catch(() => ({ ok: false }));
     result.channelPost = { provider: inbox.provider, ok: Boolean(sent.ok) };
   }
-  await appendAuditEvent({
+  await appendAdminAuditEvent({
     orgId: approval.orgId,
+    actor: await resolveAdminAuditActor({ approval, orgId: approval.orgId }),
     employeeId: null,
     credentialId: null,
     action: "admin.policy",

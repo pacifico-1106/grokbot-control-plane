@@ -84,6 +84,7 @@ mock.module("@/lib/employees/approval-inbox", () => ({
 
 mock.module("@/lib/admin-mcp/self-approval", () => ({
   isSelfApprovalDenied: () => false,
+  parseAdminRequester: () => null,
 }));
 
 mock.module("@/lib/approval-workflow", () => ({

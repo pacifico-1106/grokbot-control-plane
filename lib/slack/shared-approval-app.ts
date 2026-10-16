@@ -23,8 +23,8 @@
  * Tokens / secrets are never logged, audited or returned.
  */
 import { createHmac, timingSafeEqual } from "node:crypto";
+import { appendAdminAuditEvent, resolveAdminAuditActor } from "@/lib/audit/admin-audit";
 import { getAppOrigin } from "@/lib/approvals/tokens";
-import { appendAuditEvent } from "@/lib/data/audit";
 import { findSlackConversationAdaptersByTeam, listConversationAdapters } from "@/lib/data/conversation-adapters";
 import {
   findSlackNotificationChannelsByTeam,
@@ -312,7 +312,8 @@ export type SharedApprovalInstallResult =
   | { ok: false; code: string; messageJa: string };
 
 async function auditInstall(orgId: string, actorEmail: string | null, ok: boolean, metadata: Record<string, unknown>, summary: string) {
-  await appendAuditEvent({
+  await appendAdminAuditEvent({
+    actor: await resolveAdminAuditActor({ orgId, human: actorEmail ? { email: actorEmail } : undefined }),
     orgId,
     employeeId: null,
     credentialId: null,

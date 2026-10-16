@@ -23,7 +23,7 @@ import { expiredCredentialEmployeeRow, expiredCredentialStepJa, hasExpiredCreden
 import type { ResolvedAdminCredential } from "@/lib/auth/admin-credential";
 import { getAppOrigin } from "@/lib/approvals/tokens";
 import { hasJwtHeaderSegment } from "@/lib/security/secret-detector";
-import { appendAuditEvent, listAuditEvents } from "@/lib/data/audit";
+import { listAuditEvents } from "@/lib/data/audit";
 import { getBinding } from "@/lib/data/bindings";
 import { listOrgParties } from "@/lib/data/directory";
 import { getEmployee, listEmployees } from "@/lib/data/employees";
@@ -56,6 +56,7 @@ import { isSlackDmAutorouteEnabled, isSlackUserScopeImWriteEnabled } from "@/lib
 import { isSharedApprovalAppEnabled } from "@/lib/slack/shared-approval-flags";
 import { isApprovalAppFixNoticeCode, notifyApprovalAppFixRequired } from "@/lib/slack/approval-app-scope-notice";
 import type { AuditEvent, NotificationChannel } from "@/lib/types";
+import { appendAdminAuditEvent, resolveAdminAuditActor } from "@/lib/audit/admin-audit";
 
 export const SLACK_DM_SETUP_TOOLS = [
   "setup.slackDmApprovalStatus",
@@ -611,7 +612,8 @@ export async function handleDmAutorouteRun(
       }
     }
     const run = await executeDmAutorouteRun(orgId, employeeId);
-    await appendAuditEvent({
+    await appendAdminAuditEvent({
+      actor: await resolveAdminAuditActor({ orgId }),
       orgId,
       employeeId: employeeId || null,
       credentialId: null,
@@ -702,7 +704,8 @@ export async function fulfillApprovalDeliveryAutoResolve(input: {
 }): Promise<AutoResolveFulfillment> {
   const { orgId } = input;
   const auditFail = async (result: Extract<AutoResolveFulfillment, { ok: false }>) => {
-    await appendAuditEvent({
+    await appendAdminAuditEvent({
+      actor: await resolveAdminAuditActor({ orgId }),
       orgId,
       employeeId: null,
       credentialId: null,
@@ -788,7 +791,8 @@ export async function fulfillApprovalDeliveryAutoResolve(input: {
     },
     secrets: {},
   });
-  await appendAuditEvent({
+  await appendAdminAuditEvent({
+    actor: await resolveAdminAuditActor({ orgId }),
     orgId,
     employeeId: null,
     credentialId: null,

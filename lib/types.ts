@@ -603,6 +603,7 @@ export type AuditAction =
   | "admin.notificationChannel"
   | "admin.create_org"
   | "admin.issue_admin_credential"
+  | "admin.revoke"
   | "admin.proxy_approve"
   | "admin.org_patch"
   | "admin.billing"

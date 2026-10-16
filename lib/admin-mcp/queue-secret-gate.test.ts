@@ -12,13 +12,12 @@ function demoCred(): ResolvedAdminCredential {
   const agent = resetDemoAdminAgent();
   return {
     orgId: DEMO_ORG.id,
-    generation: agent.credentialGeneration,
-    actorId: agent.id,
-    fingerprint: agent.credentialFingerprint || "",
+    adminAgentId: agent.id,
     grokBotAgentId: agent.grokBotAgentId || null,
-    grokBotWorkspaceId: agent.grokBotWorkspaceId || null,
-    secretPrefix: agent.secretPrefix,
-    binding: agent,
+    actorId: agent.id,
+    generation: agent.credentialGeneration,
+    via: "bearer",
+    agent,
   };
 }
 
