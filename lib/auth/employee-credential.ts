@@ -9,6 +9,7 @@ import {
   getBinding,
   getEmployeeById,
 } from "@/lib/data";
+import { touchCredentialLastUsed } from "@/lib/data/credential-last-used";
 import { isDemoMode } from "@/lib/mode";
 import { createSupabaseAdminClient } from "@/lib/supabase";
 import type { EmployeeBinding } from "@/lib/types";
@@ -36,7 +37,13 @@ export type CredentialAuthFailure = {
     | "hold_state_unavailable";
   message: string;
   httpStatus: number;
+  /** When resolvable without storing the token or its hash. */
+  orgId?: string;
+  employeeId?: string;
+  credentialId?: string;
 };
+
+type AuthFailureIdentity = Pick<CredentialAuthFailure, "orgId" | "employeeId" | "credentialId">;
 
 export type CredentialAuthSuccess = {
   ok: true;
@@ -61,11 +68,23 @@ function isGbEmpSecret(raw: string): boolean {
   return raw.startsWith("gb_emp_");
 }
 
+function identityFrom(
+  orgId?: string | null,
+  employeeId?: string | null,
+  credentialId?: string | null
+): AuthFailureIdentity {
+  return {
+    ...(orgId ? { orgId } : {}),
+    ...(employeeId ? { employeeId } : {}),
+    ...(credentialId ? { credentialId } : {}),
+  };
+}
+
 async function lookupProdByHash(
   hash: string
 ): Promise<
   | { ok: true; value: ResolvedEmployeeCredential }
-  | { ok: false; code: "invalid_credential" | "revoked" | "expired" }
+  | { ok: false; code: "invalid_credential" | "revoked" | "expired" } & AuthFailureIdentity
 > {
   const admin = createSupabaseAdminClient();
   if (!admin) return { ok: false, code: "invalid_credential" };
@@ -74,7 +93,7 @@ async function lookupProdByHash(
   const byFingerprint = await findBindingByCredentialFingerprint(hash);
   if (byFingerprint) {
     if (byFingerprint.status === "revoked") {
-      return { ok: false, code: "revoked" };
+      return { ok: false, code: "revoked", ...identityFrom(byFingerprint.orgId, byFingerprint.employeeId) };
     }
     const { data: cred } = await admin
       .from("credentials")
@@ -96,7 +115,11 @@ async function lookupProdByHash(
       | null;
 
     if (credRow?.expires_at && Date.parse(credRow.expires_at) < Date.now()) {
-      return { ok: false, code: "expired" };
+      return {
+        ok: false,
+        code: "expired",
+        ...identityFrom(byFingerprint.orgId, byFingerprint.employeeId, credRow.id),
+      };
     }
 
     return {
@@ -135,19 +158,19 @@ async function lookupProdByHash(
   };
 
   if (row.expires_at && Date.parse(row.expires_at) < Date.now()) {
-    return { ok: false, code: "expired" };
+    return { ok: false, code: "expired", ...identityFrom(row.org_id, row.employee_id, row.id) };
   }
 
   const binding = await getBinding(row.employee_id);
   if (binding?.status === "revoked") {
-    return { ok: false, code: "revoked" };
+    return { ok: false, code: "revoked", ...identityFrom(row.org_id, row.employee_id, row.id) };
   }
   if (
     binding?.credentialFingerprint &&
     binding.credentialFingerprint !== hash
   ) {
-    // Rotated away — old secret must not work.
-    return { ok: false, code: "invalid_credential" };
+    // Rotated away — old secret must not work. Ids from the old row (id lookup).
+    return { ok: false, code: "invalid_credential", ...identityFrom(row.org_id, row.employee_id, row.id) };
   }
 
   return {
@@ -232,6 +255,11 @@ export async function resolveEmployeeCredential(
       code: looked.code,
       message: messages[looked.code] || messages.invalid_credential,
       httpStatus,
+      ...identityFrom(
+        "orgId" in looked ? looked.orgId : undefined,
+        "employeeId" in looked ? looked.employeeId : undefined,
+        "credentialId" in looked ? looked.credentialId : undefined
+      ),
     };
   }
 
@@ -242,6 +270,7 @@ export async function resolveEmployeeCredential(
       code: "revoked",
       message: "credential / binding revoked (fail-closed)",
       httpStatus: 403,
+      ...identityFrom(resolved.orgId, resolved.employeeId, resolved.credentialId),
     };
   }
 
@@ -252,6 +281,7 @@ export async function resolveEmployeeCredential(
       code: "employee_not_found",
       message: "employee not found or suspended (fail-closed)",
       httpStatus: 401,
+      ...identityFrom(resolved.orgId, resolved.employeeId, resolved.credentialId),
     };
   }
 
@@ -260,6 +290,7 @@ export async function resolveEmployeeCredential(
   const operable = await checkOperable({ orgId: resolved.orgId || employee.orgId, employeeId: resolved.employeeId, phase: "credential" });
   if (!operable.ok) return holdRefusal(operable.code);
 
+  void touchCredentialLastUsed(resolved.credentialId);
   return { ok: true, credential: resolved };
 }
 

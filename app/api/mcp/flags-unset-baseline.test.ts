@@ -36,13 +36,21 @@ const FLAGS = [
   "MCP_OAUTH_CONSENT_REQUIRE_MFA",
   "MCP_OAUTH_REDIRECT_ALLOWLIST",
   "MCP_OAUTH_CIMD_ALLOWED_HOSTS",
+  "MCP_AUTH_FAILURE_AUDIT_ENABLED",
+  "MCP_AUTH_401_NEXT_STEP_JA_ENABLED",
 ];
 const saved: Record<string, string | undefined> = {};
 beforeEach(() => {
-  for (const k of FLAGS) (saved[k] = process.env[k]), delete process.env[k];
+  for (const k of FLAGS) {
+    saved[k] = process.env[k];
+    delete process.env[k];
+  }
 });
 afterEach(() => {
-  for (const k of FLAGS) saved[k] === undefined ? delete process.env[k] : (process.env[k] = saved[k]);
+  for (const k of FLAGS) {
+    if (saved[k] === undefined) delete process.env[k];
+    else process.env[k] = saved[k];
+  }
 });
 
 const rpc = (body: unknown, headers: Record<string, string> = {}) =>

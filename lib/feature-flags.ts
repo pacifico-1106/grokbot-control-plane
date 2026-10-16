@@ -806,6 +806,25 @@ export function isMailSendGmailLiveEnabled(): boolean {
 }
 
 /**
+ * MCP_AUTH_FAILURE_AUDIT_ENABLED (default OFF): write /api/mcp 401/403
+ * auth-failure kinds (missing_credential / invalid / expired) to
+ * mcp_auth_failures (migration 20261016400000). Ids when resolvable; never
+ * the token or its hash. Throttled in SQL. Flag OFF: no read, no write.
+ */
+export function isMcpAuthFailureAuditEnabled(): boolean {
+  return parseFlag(process.env.MCP_AUTH_FAILURE_AUDIT_ENABLED);
+}
+
+/**
+ * MCP_AUTH_401_NEXT_STEP_JA_ENABLED (default OFF): add Japanese nextStepJa
+ * on /api/mcp 401 bodies for missing/empty vs expired vs invalid. Machine-
+ * readable data.code is unchanged. Flag OFF: 401 body identical to today.
+ */
+export function isMcpAuth401NextStepJaEnabled(): boolean {
+  return parseFlag(process.env.MCP_AUTH_401_NEXT_STEP_JA_ENABLED);
+}
+
+/**
  * AI_PEER_WAKE_ALLOWLIST_ENABLED (八坂 GO 2026-10-16): when the speaker is a
  * bound AI employee, other AI employees are woken only if the org allowlisted
  * that pair (A→B, optional channel). Fail-closed: missing/unreadable pair or

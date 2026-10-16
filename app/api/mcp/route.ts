@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { withHoldCallScope } from "@/lib/safety/hold";
 import { resolveEmployeeCredential } from "@/lib/auth/employee-credential";
+import { mcpAuthFailureErrorData, mcpAuthFailureKind } from "@/lib/auth/mcp-auth-failure";
+import { recordMcpAuthFailure } from "@/lib/data/mcp-auth-failures";
 import { isMcpOAuthLegacyUnauthInitialize } from "@/lib/feature-flags";
 import { isMcpOAuthEnabled } from "@/lib/mcp-oauth/config";
 import {
@@ -61,6 +63,21 @@ function jsonRpcResult(id: JsonRpcId, result: unknown, status = 200) {
     { jsonrpc: "2.0", id: id ?? null, result },
     { status, headers: corsHeaders() }
   );
+}
+
+async function auditMcpAuthFailure(
+  auth: { code: string; orgId?: string; employeeId?: string; credentialId?: string },
+  method: string
+): Promise<void> {
+  const kind = mcpAuthFailureKind(auth.code);
+  if (!kind) return;
+  await recordMcpAuthFailure({
+    kind,
+    orgId: auth.orgId,
+    employeeId: auth.employeeId,
+    credentialId: auth.credentialId,
+    method,
+  });
 }
 
 function jsonRpcError(
@@ -193,11 +210,12 @@ async function handlePost(req: Request) {
       method.startsWith("notifications/");
     if (!(lifecycle && isMcpOAuthLegacyUnauthInitialize())) {
       if (method === "initialize") maybeLogUnauthInitialize(req, params);
+      void auditMcpAuthFailure({ code: "missing_credential" }, method);
       return jsonRpcError(
         id,
         -32001,
         "Authentication required (OAuth 2.1 or Authorization: Bearer gb_emp_…)",
-        { code: "missing_credential", _meta: authChallengeMeta() },
+        mcpAuthFailureErrorData({ code: "missing_credential" }, { _meta: authChallengeMeta() }),
         401,
         { "WWW-Authenticate": wwwAuthenticate() }
       );
@@ -253,7 +271,8 @@ async function handlePost(req: Request) {
   if (isMcpEventsEnabled() && (method === "events/list" || method === "events/subscribe" || method === "events/unsubscribe")) {
     const auth = await resolveEmployeeCredential(req);
     if (!auth.ok) {
-      return jsonRpcError(id, -32012, "Forbidden", { code: auth.code }, auth.httpStatus);
+      void auditMcpAuthFailure(auth, method);
+      return jsonRpcError(id, -32012, "Forbidden", mcpAuthFailureErrorData(auth), auth.httpStatus);
     }
     const events = await import("@/lib/mcp-events/service");
     try {
@@ -274,13 +293,13 @@ async function handlePost(req: Request) {
     // OAuth OFF → resolveMcpCredential is exactly resolveEmployeeCredential (gb_emp_ only).
     const auth = await resolveMcpCredential(req);
     if (!auth.ok) {
+      void auditMcpAuthFailure(auth, method);
       const challengeOpts = hasAnyMcpCredential(req) ? { error: "invalid_token" as const, description: auth.code } : {};
       const challenge =
         isMcpOAuthEnabled() && auth.httpStatus === 401 ? { "WWW-Authenticate": wwwAuthenticate(challengeOpts) } : undefined;
-      const errorData: Record<string, unknown> = { code: auth.code };
       // Body-level mirror of the HTTP challenge for clients that only surface JSON-RPC.
-      if (challenge) errorData._meta = authChallengeMeta(challengeOpts);
-      return jsonRpcError(id, -32001, auth.message, errorData, auth.httpStatus, challenge);
+      const extra = challenge ? { _meta: authChallengeMeta(challengeOpts) } : undefined;
+      return jsonRpcError(id, -32001, auth.message, mcpAuthFailureErrorData(auth, extra), auth.httpStatus, challenge);
     }
 
     // MCP endpoint handoff: "the bot reached Staffpass MCP with its badge" signal
