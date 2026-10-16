@@ -207,7 +207,7 @@ Fail-first（初回実装前、`bun test lib/inbound-notice tests/security/inbou
 | 走ったテスト | 112 |
 | pass | 100 |
 | fail | 12 |
-| errors | 1（`redactPhoneInText` 未 consigned） |
+| errors | 1（`redactPhoneInText` 未 export） |
 | files | 15 |
 
 実装後（同じコマンド）: **117 pass / 0 fail**（15 files）。
