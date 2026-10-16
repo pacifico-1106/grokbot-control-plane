@@ -31,7 +31,7 @@ async function refuseAiOrCsrf(req: Request): Promise<Response | null> {
   return refuseUnsafeBrowserPost(req);
 }
 
-export async function GET(req: Request = new Request("https://staffpass.test/api/settings/ai-peer-wake")) {
+export async function GET(req: Request) {
   const refused = await refuseAiCredential(req, "settings.ai-peer-wake");
   if (refused) return refused;
   const gate = await requireOrgAdminSession();

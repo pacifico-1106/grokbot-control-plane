@@ -5,6 +5,10 @@ import { GET, POST, DELETE } from "./route";
 const savedAllow = process.env.AI_PEER_WAKE_ALLOWLIST_ENABLED;
 const savedGuard = process.env.AI_PEER_WAKE_THREAD_GUARD_ENABLED;
 
+function getReq(url = "https://staffpass.test/api/settings/ai-peer-wake") {
+  return new Request(url, { method: "GET", headers: { "x-member-id": "mem_1" } });
+}
+
 function req(method: string, body?: Record<string, unknown>, url = "https://staffpass.test/api/settings/ai-peer-wake") {
   return new Request(url, {
     method,
@@ -34,7 +38,7 @@ afterEach(() => {
 
 describe("GET/POST /api/settings/ai-peer-wake", () => {
   test("GET returns flags, empty allowlist, and employees of this org", async () => {
-    const res = await GET();
+    const res = await GET(getReq());
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.ok).toBe(true);
@@ -55,7 +59,7 @@ describe("GET/POST /api/settings/ai-peer-wake", () => {
     const createdBody = await created.json();
     expect(createdBody.allowlist.fromEmployeeId).toBe("emp_comm");
     const id = createdBody.allowlist.id as string;
-    const listed = await (await GET()).json();
+    const listed = await (await GET(getReq())).json();
     expect(listed.allowlist.some((row: { id: string }) => row.id === id)).toBe(true);
     const deleted = await DELETE(req("DELETE", undefined, `https://staffpass.test/api/settings/ai-peer-wake?id=${id}`));
     expect(deleted.status).toBe(200);
@@ -85,7 +89,7 @@ describe("GET/POST /api/settings/ai-peer-wake", () => {
     }));
     expect(res.status).toBe(403);
     expect((await res.json()).error).toBe("cross_origin_refused");
-    const listed = await (await GET()).json();
+    const listed = await (await GET(getReq())).json();
     expect(listed.allowlist).toEqual([]);
   });
 
