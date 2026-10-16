@@ -139,14 +139,21 @@ ADDITIVE = [
      " and not exists (select 1 from information_schema.columns where table_schema = 'public'"
      " and table_name in ('employees', 'orgs') and column_name in ('hold_state', 'hold_id'))"),
     # Operator notices (PR-A). Additive server-only tables; not applied by the PR.
-    # After main's 20261015100000_approval_mail_attachments (optional mail.send table).
-    ("20261016100000_", "tests/security/db-operator-notices.sql",
+    # After main's 20261016100000_ai_peer_wake_guard (unique prefix required).
+    ("20261016200000_", "tests/security/db-operator-notices.sql",
      ("operator_notices", "operator_notice_versions", "operator_notice_targets",
       "operator_notice_receipts", "ops_feedback_items", "ops_feedback_events")),
     # L-6 child first: roll back 20261014100000 before the parent
     # 20261013200000. Parent rollback refuses while these tables exist.
     ("20261014100000_", "tests/security/db-comm-line-reply-tokens.sql",
      ("comm_line_reply_tokens", "comm_line_send_unknown")),
+    ("20261016100000_", "tests/security/db-ai-peer-wake-guard.sql",
+     "to_regclass('public.ai_peer_wake_allowlist') is null"
+     " and to_regclass('public.ai_peer_wake_threads') is null"
+     " and to_regprocedure('public.claim_ai_peer_wake(uuid,text,text,text,text,integer,integer)') is null"
+     " and to_regprocedure('public.stop_ai_peer_wake_thread(uuid,uuid,text)') is null"
+     " and to_regprocedure('public.resume_ai_peer_wake_thread(uuid,uuid,text)') is null"
+     " and to_regprocedure('public.ai_peer_wake_allowlist_guard()') is null"),
     # LINE PoC per-employee accounts (C5) + link-code limits (H8).
     ("20261013200000_", "tests/security/db-employee-comm-accounts.sql",
      ("employee_comm_accounts", "employee_comm_account_secrets", "comm_inbound_events", "comm_link_code_failures", "comm_link_code_locks")),

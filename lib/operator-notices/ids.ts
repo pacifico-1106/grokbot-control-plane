@@ -1,6 +1,6 @@
 /**
  * Notice / feedback ids: prefix + 26-char Crockford ULID (uppercase).
- * Matches migration 20261016100000 check constraints.
+ * Matches migration 20261016200000 check constraints.
  * No BigInt (tsconfig target is ES2017).
  */
 const CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";

@@ -1,4 +1,4 @@
--- Operator notices (migration 20261016100000). Synthetic fixtures only
+-- Operator notices (migration 20261016200000). Synthetic fixtures only
 -- (ids b1000000-… / ntc_ + 26 Crockford chars). Cleans up after itself.
 --  (1) anon / authenticated: no SELECT / INSERT / UPDATE / DELETE on any of
 --      the 6 tables, and cannot execute the visibility functions

@@ -1,6 +1,6 @@
 -- Operator notices (運営からのお知らせ) + bidirectional ops feedback.
 -- Design: /cursor/stores/bot/docs/operator-notices-design-20261012.md PR-A.
--- After 20261015100000_approval_mail_attachments (main). Additive only: six new server-only tables,
+-- After 20261016100000_ai_peer_wake_guard (main). Additive only: six new server-only tables,
 -- two isolation triggers, visibility + count SQL. No existing table, row,
 -- policy or grant is touched.
 --
