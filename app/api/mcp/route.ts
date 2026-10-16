@@ -1,8 +1,13 @@
 import { NextResponse } from "next/server";
 import { withHoldCallScope } from "@/lib/safety/hold";
 import { resolveEmployeeCredential } from "@/lib/auth/employee-credential";
-import { isMcpOAuthLegacyUnauthInitialize } from "@/lib/feature-flags";
+import { isConfigChangeRequestEnabled, isEmployeeBadgeMcpEnabled, isMcpEventsEnabled, isMcpOAuthLegacyUnauthInitialize } from "@/lib/feature-flags";
 import { isMcpOAuthEnabled } from "@/lib/mcp-oauth/config";
+import {
+  BADGE_AUTH_NEXT_STEP_JA,
+  looksLikeBadgeAuthAttempt,
+  shouldAdvertiseOAuthChallenge,
+} from "@/lib/mcp/badge-auth-attempt";
 import {
   authChallengeMeta,
   decorateToolsForOAuth,
@@ -18,8 +23,7 @@ import {
   MCP_SERVER_VERSION,
   listStaffpassMcpTools,
 } from "@/lib/mcp/tools";
-import { STAFFPASS_MCP_URL } from "@/lib/mcp/public";
-import { isConfigChangeRequestEnabled, isMcpEventsEnabled } from "@/lib/feature-flags";
+import { STAFFPASS_MCP_EMPLOYEE_URL, STAFFPASS_MCP_URL } from "@/lib/mcp/public";
 import { recordMcpClientSeen } from "@/lib/mcp/endpoint-handoff";
 import {
   MCP_SUPPORTED_PROTOCOL_VERSIONS,
@@ -44,22 +48,25 @@ type JsonRpcRequest = {
   params?: Record<string, unknown>;
 };
 
-function corsHeaders(): HeadersInit {
+type EmployeeMcpSurface = "shared" | "badge_only";
+
+function corsHeaders(surface: EmployeeMcpSurface = "shared"): HeadersInit {
   return {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
     // MCP 2026-07-28 request headers. No Mcp-Session-Id: this server never mints sessions.
     "Access-Control-Allow-Headers": mcpCorsAllowHeaders("x-staffpass-credential"),
     // OAuth ON only: browsers may read the challenge (flag OFF → header absent, as before).
-    ...(isMcpOAuthEnabled() ? { "Access-Control-Expose-Headers": "WWW-Authenticate" } : {}),
+    // Badge-only mouth never exposes WWW-Authenticate.
+    ...(isMcpOAuthEnabled() && surface === "shared" ? { "Access-Control-Expose-Headers": "WWW-Authenticate" } : {}),
     "Cache-Control": "no-store",
   };
 }
 
-function jsonRpcResult(id: JsonRpcId, result: unknown, status = 200) {
+function jsonRpcResult(id: JsonRpcId, result: unknown, status = 200, surface: EmployeeMcpSurface = "shared") {
   return jsonUtf8(
     { jsonrpc: "2.0", id: id ?? null, result },
-    { status, headers: corsHeaders() }
+    { status, headers: corsHeaders(surface) }
   );
 }
 
@@ -69,7 +76,8 @@ function jsonRpcError(
   message: string,
   data?: unknown,
   httpStatus = 200,
-  extraHeaders?: Record<string, string>
+  extraHeaders?: Record<string, string>,
+  surface: EmployeeMcpSurface = "shared"
 ) {
   return jsonUtf8(
     {
@@ -77,11 +85,12 @@ function jsonRpcError(
       id: id ?? null,
       error: { code, message, data },
     },
-    { status: httpStatus, headers: { ...corsHeaders(), ...(extraHeaders ?? {}) } }
+    { status: httpStatus, headers: { ...corsHeaders(surface), ...(extraHeaders ?? {}) } }
   );
 }
 
-function serverInfo() {
+function serverInfo(surface: EmployeeMcpSurface = "shared") {
+  const advertiseOAuth = isMcpOAuthEnabled() && surface === "shared";
   return {
     name: MCP_SERVER_NAME,
     version: MCP_SERVER_VERSION,
@@ -89,7 +98,7 @@ function serverInfo() {
     description:
       "Staffpass remote MCP — AI employee control plane (whoami, invoke, approval poll, health). Fail-closed Gateway enforcement; confirm/send/order require human approval.",
     websiteUrl: "https://staffpass.sealith.com",
-    mcpEndpoint: STAFFPASS_MCP_URL,
+    mcpEndpoint: surface === "badge_only" ? STAFFPASS_MCP_EMPLOYEE_URL : STAFFPASS_MCP_URL,
     protocolVersion: MCP_PROTOCOL_VERSION,
     tools: listStaffpassMcpTools().map((t) => t.name),
     supportedProtocolVersions: MCP_SUPPORTED_PROTOCOL_VERSIONS,
@@ -97,7 +106,7 @@ function serverInfo() {
       type: "bearer",
       scheme: "Authorization: Bearer gb_emp_…",
       alternateHeader: "x-staffpass-credential",
-      ...(isMcpOAuthEnabled() ? oauthServerCardAuth() : {}),
+      ...(advertiseOAuth ? oauthServerCardAuth() : {}),
     },
   };
 }
@@ -120,14 +129,30 @@ function serverCapabilities(): Record<string, unknown> {
   };
 }
 
-function serverInstructions(): string {
+function serverInstructions(surface: EmployeeMcpSurface = "shared"): string {
   const base = (
     "Staffpass is a fail-closed AI employee control plane. Authenticate with Authorization: Bearer gb_emp_…. Use staffpass_whoami then staffpass_invoke with purpose+jobId. On needs_approval, poll staffpass_get_approval_status with approvalId+statusToken (pollUrl in the result) until approved|rejected|revision_requested|expired — do not complete confirm/send/order while pending. On revision_requested, revise per revisionNote and re-invoke with the same jobId and parentApprovalId. Restrict clients with allowed_tools to the four staffpass_* tools." +
     (isConfigChangeRequestEnabled()
       ? " Never change your own Instructions/policy text or channel ledger/classification yourself: file staffpass_config_change_request and wait for the human approver; approvers/permissions/billing are not requestable."
       : "")
   );
-  return isMcpOAuthEnabled() ? oauthInstructions(base) : base;
+  return isMcpOAuthEnabled() && surface === "shared" ? oauthInstructions(base) : base;
+}
+
+function attachBadgeNextStep(
+  req: Request,
+  surface: EmployeeMcpSurface,
+  httpStatus: number,
+  errorData: Record<string, unknown>
+) {
+  if (
+    httpStatus === 401 &&
+    isEmployeeBadgeMcpEnabled() &&
+    (surface === "badge_only" || looksLikeBadgeAuthAttempt(req))
+  ) {
+    errorData.nextStepJa = BADGE_AUTH_NEXT_STEP_JA;
+  }
+  return errorData;
 }
 
 export async function OPTIONS() {
@@ -139,6 +164,19 @@ export async function GET() {
   return jsonUtf8(serverInfo(), { headers: corsHeaders() });
 }
 
+/** Badge-only mouth (/api/mcp/employee). Callers must 404 when the flag is OFF. */
+export function employeeMcpOptions() {
+  return new NextResponse(null, { status: 204, headers: corsHeaders("badge_only") });
+}
+
+export function employeeMcpGet() {
+  return jsonUtf8(serverInfo("badge_only"), { headers: corsHeaders("badge_only") });
+}
+
+export async function handleBadgeOnlyMcpPost(req: Request) {
+  return withHoldCallScope(() => handlePost(req, "badge_only"));
+}
+
 /**
  * Streamable HTTP JSON-RPC MCP (POST).
  * Auth required for tools/list and tools/call.
@@ -146,17 +184,17 @@ export async function GET() {
 export async function POST(req: Request) {
   // One hold scope per call (this route takes one JSON-RPC message / one invoke): G1 → G3
   // reuse one read; G4, wake, MCP Events and just-before-send always re-read.
-  return withHoldCallScope(() => handlePost(req));
+  return withHoldCallScope(() => handlePost(req, "shared"));
 }
 
-async function handlePost(req: Request) {
+async function handlePost(req: Request, surface: EmployeeMcpSurface) {
   const body = (await req.json().catch(() => null)) as
     | JsonRpcRequest
     | JsonRpcRequest[]
     | null;
 
   if (!body) {
-    return jsonRpcError(null, -32700, "Parse error", undefined, 400);
+    return jsonRpcError(null, -32700, "Parse error", undefined, 400, undefined, surface);
   }
 
   if (Array.isArray(body)) {
@@ -165,7 +203,9 @@ async function handlePost(req: Request) {
       -32600,
       "Batch requests are not supported",
       undefined,
-      400
+      400,
+      undefined,
+      surface
     );
   }
 
@@ -176,7 +216,7 @@ async function handlePost(req: Request) {
   if (!method) {
     // Non-string / missing method → Invalid Request; echo id only if it is a valid JSON-RPC id.
     const safeId = typeof body.id === "string" || typeof body.id === "number" ? body.id : null;
-    return jsonRpcError(safeId, -32600, "Invalid Request: method required", undefined, 400);
+    return jsonRpcError(safeId, -32600, "Invalid Request: method required", undefined, 400, undefined, surface);
   }
 
   // MCP OAuth (MCP_OAUTH_ENABLED, default OFF → this block is skipped and the
@@ -185,7 +225,13 @@ async function handlePost(req: Request) {
   // clients start the sign-in flow. Lifecycle methods (initialize / ping /
   // server/discover / notifications/*) keep today's 200/202 unless
   // MCP_OAUTH_LEGACY_UNAUTH_INITIALIZE is explicitly false (unset = today).
-  if (isMcpOAuthEnabled() && !hasAnyMcpCredential(req)) {
+  // Badge-only mouth and (flag ON) badge-shaped requests never advertise OAuth.
+  if (
+    surface === "shared" &&
+    isMcpOAuthEnabled() &&
+    !hasAnyMcpCredential(req) &&
+    shouldAdvertiseOAuthChallenge(req)
+  ) {
     const lifecycle =
       method === "initialize" ||
       method === "ping" ||
@@ -199,25 +245,26 @@ async function handlePost(req: Request) {
         "Authentication required (OAuth 2.1 or Authorization: Bearer gb_emp_…)",
         { code: "missing_credential", _meta: authChallengeMeta() },
         401,
-        { "WWW-Authenticate": wwwAuthenticate() }
+        { "WWW-Authenticate": wwwAuthenticate() },
+        surface
       );
     }
   }
 
   // Notifications (no response body required by JSON-RPC; return 202 empty ack)
   if (method.startsWith("notifications/")) {
-    return new NextResponse(null, { status: 202, headers: corsHeaders() });
+    return new NextResponse(null, { status: 202, headers: corsHeaders(surface) });
   }
 
   // MCP 2026-07-28: header ↔ body validation + era (lib/mcp/protocol-negotiation.ts).
   // Runs before auth and before any work; never reflects header / _meta values.
   const protocol = checkMcpProtocolRequest(req, method, params);
   if (!protocol.ok) {
-    return jsonRpcError(id, protocol.code, protocol.message, protocol.data, protocol.httpStatus);
+    return jsonRpcError(id, protocol.code, protocol.message, protocol.data, protocol.httpStatus, undefined, surface);
   }
   const modern = protocol.era === "modern";
   const reply = (result: Record<string, unknown>) =>
-    jsonRpcResult(id, modern ? shapeModernResult(result, serverIdentity()) : result);
+    jsonRpcResult(id, modern ? shapeModernResult(result, serverIdentity()) : result, 200, surface);
 
   if (method === "initialize") {
     maybeLogUnauthInitialize(req, params);
@@ -225,8 +272,8 @@ async function handlePost(req: Request) {
       protocolVersion: negotiateInitializeVersion(params.protocolVersion),
       capabilities: serverCapabilities(),
       serverInfo: serverIdentity(),
-      instructions: serverInstructions(),
-    });
+      instructions: serverInstructions(surface),
+    }, 200, surface);
   }
 
   // Public metadata, same as initialize (no credential), any era.
@@ -236,8 +283,10 @@ async function handlePost(req: Request) {
       buildDiscoverResult({
         capabilities: serverCapabilities(),
         serverInfo: serverIdentity(),
-        instructions: serverInstructions(),
-      })
+        instructions: serverInstructions(surface),
+      }),
+      200,
+      surface
     );
   }
 
@@ -253,7 +302,15 @@ async function handlePost(req: Request) {
   if (isMcpEventsEnabled() && (method === "events/list" || method === "events/subscribe" || method === "events/unsubscribe")) {
     const auth = await resolveEmployeeCredential(req);
     if (!auth.ok) {
-      return jsonRpcError(id, -32012, "Forbidden", { code: auth.code }, auth.httpStatus);
+      return jsonRpcError(
+        id,
+        -32012,
+        "Forbidden",
+        attachBadgeNextStep(req, surface, auth.httpStatus, { code: auth.code }),
+        auth.httpStatus,
+        undefined,
+        surface
+      );
     }
     const events = await import("@/lib/mcp-events/service");
     try {
@@ -263,24 +320,26 @@ async function handlePost(req: Request) {
           : method === "events/subscribe"
             ? await events.handleEventsSubscribe(auth.credential, params)
             : await events.handleEventsUnsubscribe(auth.credential, params);
-      return out.ok ? reply(out.result as Record<string, unknown>) : jsonRpcError(id, out.code, out.message, out.data);
+      return out.ok ? reply(out.result as Record<string, unknown>) : jsonRpcError(id, out.code, out.message, out.data, 200, undefined, surface);
     } catch {
-      return jsonRpcError(id, -32603, "Internal error", undefined, 500);
+      return jsonRpcError(id, -32603, "Internal error", undefined, 500, undefined, surface);
     }
   }
 
-  // tools/* require employee badge
+  // tools/* require employee badge (badge-only mouth never accepts sp_at_).
   if (method === "tools/list" || method === "tools/call") {
-    // OAuth OFF → resolveMcpCredential is exactly resolveEmployeeCredential (gb_emp_ only).
-    const auth = await resolveMcpCredential(req);
+    const auth =
+      surface === "badge_only" ? await resolveEmployeeCredential(req) : await resolveMcpCredential(req);
     if (!auth.ok) {
+      const advertise = surface === "shared" && shouldAdvertiseOAuthChallenge(req);
       const challengeOpts = hasAnyMcpCredential(req) ? { error: "invalid_token" as const, description: auth.code } : {};
       const challenge =
-        isMcpOAuthEnabled() && auth.httpStatus === 401 ? { "WWW-Authenticate": wwwAuthenticate(challengeOpts) } : undefined;
+        advertise && auth.httpStatus === 401 ? { "WWW-Authenticate": wwwAuthenticate(challengeOpts) } : undefined;
       const errorData: Record<string, unknown> = { code: auth.code };
       // Body-level mirror of the HTTP challenge for clients that only surface JSON-RPC.
       if (challenge) errorData._meta = authChallengeMeta(challengeOpts);
-      return jsonRpcError(id, -32001, auth.message, errorData, auth.httpStatus, challenge);
+      attachBadgeNextStep(req, surface, auth.httpStatus, errorData);
+      return jsonRpcError(id, -32001, auth.message, errorData, auth.httpStatus, challenge, surface);
     }
 
     // MCP endpoint handoff: "the bot reached Staffpass MCP with its badge" signal
@@ -298,7 +357,7 @@ async function handlePost(req: Request) {
         inputSchema: t.inputSchema,
       }));
       return reply({
-        tools: isMcpOAuthEnabled() ? decorateToolsForOAuth(listed) : listed,
+        tools: isMcpOAuthEnabled() && surface === "shared" ? decorateToolsForOAuth(listed) : listed,
         ...(modern ? MCP_TOOLS_LIST_CACHE : {}),
       });
     }
@@ -312,7 +371,7 @@ async function handlePost(req: Request) {
         : {};
 
     if (!toolName) {
-      return jsonRpcError(id, -32602, "tools/call requires params.name");
+      return jsonRpcError(id, -32602, "tools/call requires params.name", undefined, 200, undefined, surface);
     }
 
     // MCP Events: link the first tool call after a delivery to that event
@@ -332,10 +391,10 @@ async function handlePost(req: Request) {
       return reply(result as Record<string, unknown>);
     } catch (e) {
       const message = e instanceof Error ? e.message : "tool_call_failed";
-      return jsonRpcError(id, -32000, message, undefined, 500);
+      return jsonRpcError(id, -32000, message, undefined, 500, undefined, surface);
     }
   }
 
   // Modern requests: unknown method → HTTP 404 (spec). Legacy: HTTP 200 as before.
-  return jsonRpcError(id, -32601, `Method not found: ${method}`, undefined, modern ? 404 : 200);
+  return jsonRpcError(id, -32601, `Method not found: ${method}`, undefined, modern ? 404 : 200, undefined, surface);
 }
