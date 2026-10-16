@@ -95,7 +95,7 @@ function retryable(message: string) {
   };
 }
 
-function wireNotice(
+export function wireNotice(
   notice: OperatorNotice,
   receipt: OperatorNoticeReceipt | undefined,
   latest: OperatorNoticeVersion | undefined
@@ -126,11 +126,13 @@ function wireNotice(
 export async function runNoticesList(
   orgId: string,
   employeeId: string,
-  args: Record<string, unknown>
+  args: Record<string, unknown>,
+  opts: { recordDelivery?: boolean } = {}
 ): Promise<{ data: Record<string, unknown>; isError: boolean }> {
   if (!isOperatorNoticesEnabledForOrg(orgId)) {
     return { data: { ok: false, code: "feature_disabled", message: "OPERATOR_NOTICES_ENABLED is OFF" }, isError: true };
   }
+  const recordDelivery = opts.recordDelivery !== false;
   const unreadOnly = args.unreadOnly !== false;
   const noticeId = typeof args.noticeId === "string" ? args.noticeId.trim() : "";
   if (noticeId && !isNoticeId(noticeId)) {
@@ -167,15 +169,19 @@ export async function runNoticesList(
       hasMore = true;
       continue;
     }
-    const delivered = await ensureDeliveredReceipt(orgId, employeeId, notice.id);
-    if (!delivered.ok) {
-      if (delivered.code === "unavailable") {
-        return { data: retryable("operator notices could not be recorded; retry later"), isError: true };
+    let receipt = receipts.get(notice.id);
+    if (recordDelivery) {
+      const delivered = await ensureDeliveredReceipt(orgId, employeeId, notice.id);
+      if (!delivered.ok) {
+        if (delivered.code === "unavailable") {
+          return { data: retryable("operator notices could not be recorded; retry later"), isError: true };
+        }
+        continue;
       }
-      continue;
+      receipts.set(notice.id, delivered.receipt);
+      receipt = delivered.receipt;
     }
-    receipts.set(notice.id, delivered.receipt);
-    const wired = wireNotice(notice, delivered.receipt, latest);
+    const wired = wireNotice(notice, receipt, latest);
     const piece = JSON.stringify(wired);
     if (out.length > 0 && chars + piece.length > LIST_MAX_CHARS) {
       hasMore = true;

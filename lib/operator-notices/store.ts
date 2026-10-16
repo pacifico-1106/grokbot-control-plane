@@ -107,6 +107,8 @@ export type SeedNoticeInput = {
   versionKind?: NoticeVersionKind;
   changeNote?: string | null;
   createdAt?: string;
+  createdByUserId?: string | null;
+  createdByEmail?: string | null;
 };
 
 /** Test / later-admin helper. Does not publish via MCP. Enforces isolation the same way as SQL. */
@@ -134,8 +136,8 @@ export function __seedDemoNotice(input: SeedNoticeInput): OperatorNotice {
     showToTenantAdmin: input.showToTenantAdmin ?? true,
     relatesToItemIds: input.relatesToItemIds ?? [],
     bodyHash: noticeBodyHash(input),
-    createdByUserId: null,
-    createdByEmail: "operator@staffpass.test",
+    createdByUserId: input.createdByUserId ?? null,
+    createdByEmail: input.createdByEmail ?? "operator@staffpass.test",
     publishedByUserId: input.status === "published" ? "op" : null,
     publishedByEmail: input.status === "published" ? "operator@staffpass.test" : null,
     createdAt,
@@ -568,4 +570,60 @@ export function __forceInsertDemoReceipt(input: {
 
 export function __getDemoNotice(id: string): OperatorNotice | undefined {
   return demo.notices.get(id);
+}
+
+export function __listDemoNotices(): OperatorNotice[] {
+  return [...demo.notices.values()].sort((a, b) => b.seq - a.seq);
+}
+
+export function __listDemoTargets(noticeId: string): OperatorNoticeTarget[] {
+  return demo.targets.filter((t) => t.noticeId === noticeId);
+}
+
+export function __listDemoVersions(noticeId: string): OperatorNoticeVersion[] {
+  return demo.versions.filter((v) => v.noticeId === noticeId);
+}
+
+export function __listDemoReceipts(noticeId: string): OperatorNoticeReceipt[] {
+  return [...demo.receipts.values()].filter((r) => r.noticeId === noticeId);
+}
+
+export function __replaceDemoNotice(notice: OperatorNotice): void {
+  demo.notices.set(notice.id, notice);
+}
+
+export function __replaceDemoTargets(noticeId: string, targets: OperatorNoticeTarget[]): void {
+  demo.targets = demo.targets.filter((t) => t.noticeId !== noticeId);
+  demo.targets.push(...targets);
+}
+
+export function __pushDemoVersion(row: OperatorNoticeVersion): void {
+  demo.versions = demo.versions.filter((v) => !(v.noticeId === row.noticeId && v.version === row.version));
+  demo.versions.push(row);
+}
+
+function jstDayStartUtc(now: Date): Date {
+  const shifted = new Date(now.getTime() + 9 * 3600_000);
+  const start = Date.UTC(shifted.getUTCFullYear(), shifted.getUTCMonth(), shifted.getUTCDate(), 0, 0, 0, 0);
+  return new Date(start - 9 * 3600_000);
+}
+
+export function countUrgentPublishedSince(opts: { now?: Date; orgId?: string | null }): {
+  global: number;
+  forOrg: number;
+} {
+  const start = jstDayStartUtc(opts.now ?? new Date()).toISOString();
+  let global = 0;
+  let forOrg = 0;
+  for (const n of demo.notices.values()) {
+    if (n.severity !== "urgent" || n.status === "draft") continue;
+    if (!n.publishedAt || n.publishedAt < start) continue;
+    global += 1;
+    if (opts.orgId) {
+      if (n.audienceScope === "all") continue;
+      const hit = demo.targets.some((t) => t.noticeId === n.id && t.orgId === opts.orgId);
+      if (hit) forOrg += 1;
+    }
+  }
+  return { global, forOrg };
 }

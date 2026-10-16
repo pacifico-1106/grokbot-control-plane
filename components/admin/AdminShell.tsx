@@ -22,6 +22,9 @@ export function AdminShell({
             <span className="hidden max-w-56 truncate text-xs muted sm:block" title={email}>
               {email}
             </span>
+            <Link href="/admin/notices" className="btn btn-ghost px-3 text-xs">
+              お知らせ
+            </Link>
             <Link href="/app" className="btn btn-ghost px-3 text-xs">
               事業者画面
             </Link>
