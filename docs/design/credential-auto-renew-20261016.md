@@ -3,9 +3,10 @@
 - **状態: 設計（レビュー待ち）。** 実装・マージ・デプロイ・env 変更・番号契約はしていない
 - 作成: 2026-10-16（設計のみ）
 - 対象コード: `pacifico-1106/grokbot-control-plane` main `dc18e8eb`（#384 L-8 マージ時点。`git fetch origin main` で確認）
-- 方針の出典: 八坂さん要望（期限 7 日前の Slack 1 タップ、承認後に本人の旧キーで一度だけ受け取り、公開鍵方式を優先、旧キーは初回成功または最長 24 時間で失効、監査、always_human、停止中は不可、フラグ既定 OFF）
+- 方針の出典: 八坂さん要望（期限 7 日前の Slack 1 タップ、承認後に本人の旧キーで一度だけ受け取り、公開鍵方式を優先、旧キーは初回成功または最長 24 時間で失効、監査、always_human、停止中は不可、フラグ既定 OFF）。**2026-10-16 追記:** 最初に試すのは稲盛（スペースツリー）。フラグはグローバルに加えて org ごと。管理者が「今すぐ更新」できる（7 日前を待たない）。無期限の社員証も対象
 - 実装担当の想定: 未定。日数は 1 人の作業日数。レビューと手戻りの余裕は入れていない（音声設計メモ・LINE 設計メモと同じ数え方）
-- 実装の開始条件: このメモの未決（§13）のうち、受け取り口（#1）とホスト実行環境（#2）が決まるまで、実装 PR は始めない。V0 の起動スクリプト草案だけは先に書いてよい
+- 実装の開始条件: このメモの未決（§13）のうち、受け取り口（#1）とホスト実行環境（#2）が決まるまで、**全体の V1 実装 PR は始めない。** 稲盛の実地まで（§12-5）は #1 を「実地は gen1 HTTP」で切れば始められる。V0 の起動スクリプト草案は先に書いてよい
+- 最初の実地: スペースツリー org `6d134a38-a0ab-4a8e-aba7-3202650ff523`、稲盛の今の無期限社員証 `9a795dfd-…`（プレフィックス。本番のフル UUID はメモに書かない）
 - もとにしたコード（動かしてはいない。読んだ）:
   - 期限前通知: `lib/employees/credential-expiry-notice.ts`、migration `20261012100000`
   - 承認付き reissue: `lib/employees/credential-reissue.ts`、migration `20261012200000`
@@ -26,16 +27,19 @@
 ## 0. 結論
 
 1. **期限の 7 日前に、承認者の Slack へ「社員証を更新しますか」の 1 タップカードを送る。** 既存の期限前通知（`CREDENTIAL_EXPIRY_NOTICE_ENABLED`）の 7d 閾値と、既存の承認付き reissue（`employees.credential.reissue` / `ADMIN_MCP_CREDENTIAL_REISSUE_ENABLED`）を **つなぐ**。新しい承認パイプラインは作らない。カードは今の `sendApprovalNotifications` → `staffpass_approve` を使う。
-2. **承認されたら受け取り口が 24 時間開く。** 開ける条件は、本人の今の有効な社員証（旧キー）だけ。OAuth の `sp_at_` では開けない（#388 の社員証口と OAuth 口の分離を守る）。停止中（`checkOperable` が拒否）は開けない。AI は自分で承認できない（`always_human` + 起票者は system + 既存の自己承認拒否）。
+2. **承認されたら受け取り口が 24 時間開く。** 開ける条件は、本人の今の有効な社員証（旧キー）だけ。OAuth の `sp_at_` では開けない（#388 の社員証口と OAuth 口の分離を守る）。停止中（`checkOperable` が拒否）は開けない。AI は自分で承認できない（`always_human` + cron 起票者は system + admin MCP は既存の自己承認拒否 + resolver が AI なら拒否）。
 3. **受け取りは公開鍵方式（gen2）を優先する。** AI 側（起動スクリプト）が Ed25519 鍵ペアを作り、公開鍵だけを MCP ツール `staffpass_credential_renew_register` に渡す。秘密は通信に乗らない。ツール結果にも、チャットにも、シェル出力にも、ログにも秘密を出さない。
 4. **共有秘密をツール結果で返す経路は作らない。** モデルが `tools/call` の結果を見るため、`gb_emp_` を MCP ツールの JSON に載せるとチャット漏洩が起きうる。gen1 の互換が要る場合だけ、MCP ツールではない HTTP（起動スクリプト専用）を別フラグで開ける。既定 OFF。
 5. **新しいキーで最初に認証が成功したとき、または受け取りから最長 24 時間で、古いキーを失効する。** 今の `rotateCredential`（受け取り瞬間に旧行を全部 `revoked_at`）は自動更新では使わない。重ね置き（overlap）を新設する。
-6. **フラグは既定 OFF。** 新しい表に触れない。本番の whoami / 認証 / 通知は変わらない。
-7. **ホスト実行環境がキーファイルを書けないコネクタ（Grok.com / Claude / ChatGPT のリモート MCP）では、1 タップ承認までは同じだが、受け取りはできない。** そちらは既存のダッシュボード受け取り、または将来の OAuth に倒す（§8、未決 #2）。
-8. **見積もり（1 人の作業日数）**
-   - **V1（7 日前 1 タップ + gen2 受け取り + 重ね置き 24 時間 + 起動スクリプト + 監査。フラグ OFF）: 約 13 日（±2）**
-   - **gen1 HTTP 互換（任意）: +1.5 日**
-   - **OAuth 化の実装（将来。このメモでは道筋だけ）: 約 3 日。V1 合計には入れない**
+6. **フラグは既定 OFF。グローバルが ON でも、org 許可リストに無いテナントは OFF。** 判定できない・読めないときは OFF（fail-closed）。最初に ON にするのはスペースツリー（`6d134a38-…`）だけ。方式は **env の許可リスト**（§11-1。OAuth パイロットと同じ）。
+7. **管理者は「今すぐ更新」で 7 日前を待たずに起票できる。** 場所は管理画面（AI社員ページ）と admin MCP（起票だけ。鍵は返さない）。承認は同じ Slack 1 タップ（always_human）。
+8. **無期限の社員証も「今すぐ更新」の対象。** 新しい社員証は 90 日。旧キーは **切り替えた時点**（新キーで最初に認証できたとき）に失効する。24 時間キャップも残す（新キー未使用の安全網）。7d cron は今までどおり期限なしを対象にしない。
+9. **ホスト実行環境がキーファイルを書けないコネクタ（Grok.com / Claude / ChatGPT のリモート MCP）では、1 タップ承認までは同じだが、受け取りはできない。** そちらは既存のダッシュボード受け取り、または将来の OAuth に倒す（§8、未決 #2）。**稲盛はキーファイル方式へ移す必要がある**（§10-4、§18）。
+10. **見積もり（1 人の作業日数）**
+    - **V1（7 日前 + 今すぐ更新 + org 許可リスト + gen2 + 重ね置き + 起動スクリプト + 監査。フラグ OFF）: 約 15 日（±2）**
+    - **稲盛の実地テストまで（最短。7d cron と gen2 は後回し）: 約 8.5 日（±1.5）**（§12-5）
+    - **gen1 HTTP は最短実地に含める。V1 の本線はあとから gen2**
+    - **OAuth 化の実装（将来。このメモでは道筋だけ）: 約 3 日。V1 合計には入れない**
 
 ---
 
@@ -48,7 +52,7 @@
 | 部品 | 場所 | 自動更新で使うか |
 |---|---|---|
 | 既定 TTL 90 日 | `EMPLOYEE_CREDENTIAL_TTL_DAYS`（`lib/employees/credential-ttl.ts`）。発行の欠落/0 も 90。rotate も `now+90`。上限 365 | 新しいキーも 90 日。変えない |
-| 期限なしの既存行 | バックフィルしない（コメントどおり。次の rotate で付く） | 期限なしは cron の対象外。自動更新しない |
+| 期限なしの既存行 | バックフィルしない（コメントどおり。次の rotate で付く） | **7d cron は対象外のまま。** 「今すぐ更新」の対象。新キーは 90 日。稲盛 `9a795dfd-…` がこれ |
 | 表示「期限間近」 | `CREDENTIAL_EXPIRING_SOON_DAYS = 7`（`credential-expiry.ts`）。**表示専用。認証は見ない** | 7 日の数字は揃える。認証判断には使わない |
 | 認証時の期限 | `resolveEmployeeCredential` が `expires_at < now` なら `expired`（401） | そのまま。切れた旧キーでは受け取り口に入れない |
 
@@ -102,8 +106,8 @@ CAS の関数 `claim_credential_reissue` は `adminTool = employees.credential.r
 
 | 部品 | 今 | 自動更新 |
 |---|---|---|
-| 管理起票 | `queueAdminTool` が `metadata.always_human: true`、`risk: "high"`、`approvalClass: admin` | cron 起票も同じ印。管理 MCP は通さない |
-| 承認者クラス | `employees.credential.reissue` は standard（オーナーまたは指定管理者）。金銭スコープ / スコープ読取不能はオーナー（`approver-authority/targets.ts`） | 新ツール名でも同じ行に足す |
+| 管理起票 | `queueAdminTool` が `metadata.always_human: true`、`risk: "high"`、`approvalClass: admin` | cron 起票も同じ印。**「今すぐ更新」だけ** 管理画面と admin MCP から起票する（鍵は返さない） |
+| 承認者クラス | `employees.credential.reissue` は standard（オーナーまたは指定管理者）。金銭スコープ / スコープ読取不能はオーナー（`approver-authority/targets.ts`） | `employees.credential.auto_renew` も同じ行に足す |
 | 自己承認 | `isSelfApproval` は管理エージェントの requester vs resolver | 起票者を `system` にするのでこの比較には当たらない。**追加: resolver が AI なら常に拒否**（`approvals.proxyResolve` も含む） |
 | Slack カード | `staffpass_approve` / `reject` / `revise` / ダッシュボード。カード寿命 7 日 | 文言を「更新しますか」にする。**修正依頼ボタンは出さない**（直す成果物が無い） |
 | 期限前通知 | ボタン無しテキスト | 7d はカード。1d はテキスト |
@@ -132,6 +136,8 @@ CAS の関数 `claim_credential_reissue` は `adminTool = employees.credential.r
 ### 1-10. 起動スクリプト / mcp-remote
 
 リポジトリに社員証キーファイルの起動スクリプトは無い。`docs/mcp.md` は Cursor / mcp-remote / grok の **再接続** だけ。秘密の形は `mintOneTimeSecret`: `gb_emp_<8hex>_<16hex>`。DB はハッシュのみ。
+
+稲盛の今の起動は env（`${env:STAFFPASS_MCP_TOKEN}` 等）。#385 の「起動直後 key not set」は、この展開が空のまま `Authorization: Bearer` が飛んだことがきっかけ。**キーファイルはまだ使っていない。** 自動で受け取って書き換えるなら、実地の前にキーファイルへ移す（§10-4）。
 
 ---
 
@@ -163,19 +169,23 @@ migration 番号の空き（衝突しないこと）:
 
 ### 3-1. 対象（V1）
 
-- 期限が付いている **稼働中** の社員証。閾値 7d
+- 期限が付いている **稼働中** の社員証。閾値 7d（cron）
+- **無期限の稼働中の社員証**（「今すぐ更新」だけ。7d cron は見ない）
 - Slack を既定承認 inbox にしているテナント（今の通知と同じ解決）
 - 起動スクリプトを置ける実行環境（Cursor ローカル、mcp-remote、自前ホスト）
-- gen2（Ed25519）。旧 `gb_emp_` は受け取りまでの通行証
+- 最初の実地: スペースツリー + 稲盛
+- gen2（Ed25519）は V1 本線。稲盛の最短実地は gen1 HTTP（§12-5）
+- 旧 `gb_emp_` は受け取りまでの通行証
 
 ### 3-2. 対象外
 
-- 期限なしの社員証（バックフィルしない）
 - すでに期限切れ（旧キーで入れない。既存の管理 reissue + ダッシュボード）
 - 管理証 `gb_adm_`
 - ホスト側でキーファイルを書けないコネクタへの秘密配送（モデル経由は禁止）
-- 本番フラグ ON、デプロイ、env 変更（このメモと実装 PR ではやらない）
+- スペースツリー以外の org を最初の実地で ON にすること
+- 本番のグローバル ON（許可リスト無し）、デプロイ、env 変更（このメモと実装 PR ではやらない）
 - OAuth の実装そのもの（§8 は道筋）
+- 期限なし行への `expires_at` バックフィル（更新した行だけ 90 日が付く）
 
 ---
 
@@ -185,31 +195,37 @@ migration 番号の空き（衝突しないこと）:
 
 ```mermaid
 stateDiagram-v2
-  [*] --> live: 発行 / 前回更新完了\n(90日)
+  [*] --> live: 発行 / 前回更新完了\n(90日または無期限)
 
-  live --> notice7d: cron 残り≤7日\ncheckOperable OK
+  live --> notice7d: cron 残り≤7日\n期限あり + org ON\ncheckOperable OK
+  live --> manual_now: 管理画面 / admin MCP\n「今すぐ更新」\n(無期限も可)
   live --> expired: 期限切れ\n(自動更新対象外)
 
   notice7d --> pending_approval: 起票 always_human\nSlack 1タップ
   notice7d --> skipped_hold: hold / スキーマ読取不能
+  notice7d --> skipped_org: グローバル OFF\nまたは org 不許可 / 判定不能
+  manual_now --> pending_approval: 同じチケット形\nthreshold=now
+  manual_now --> skipped_hold: hold
+  manual_now --> skipped_org: org 不許可 / 判定不能
 
   pending_approval --> claimable: 人が承認\nfulfill は発行しない
   pending_approval --> rejected: 却下
   pending_approval --> expired_ticket: カード寿命 or 期限切れ
   pending_approval --> skipped_hold: 起票後に停止\n(fulfill / claim しない)
 
-  claimable --> claimed_overlap: gen2 公開鍵登録\n(旧キー認証・CAS・24h)
+  claimable --> claimed_overlap: register / claim\n(旧キー認証・CAS)
   claimable --> claim_window_expired: 承認から24h
   claimable --> skipped_hold: 受け取り時 checkOperable NG
 
-  claimed_overlap --> live: 新キー初回認証成功\nまたは overlap 24h\n→ 旧キー失効
+  claimed_overlap --> live: 新キー初回認証成功\n(= 切り替え。旧キー失効)\nまたは overlap 24h
   claimed_overlap --> skipped_hold: 停止中は新キーも G1 拒否\n(旧の自動失効 cron は動く)
 
   rejected --> [*]: 既存の管理 reissue / ダッシュボード
   expired --> [*]: 同上
-  expired_ticket --> [*]: 1d テキストまたは次回 7d なし\n(同じ credential では再起票しない)
+  expired_ticket --> [*]: 1d テキストまたは再「今すぐ」
   claim_window_expired --> [*]: 同上
-  skipped_hold --> [*]: 解除後、窓が残っていれば claimable\n切れていれば再起票しない
+  skipped_hold --> [*]: 解除後、窓が残っていれば claimable
+  skipped_org --> [*]: フラグ / 許可リストを直すまで何もしない
 ```
 
 ```mermaid
@@ -247,7 +263,7 @@ sequenceDiagram
 
 ## 5. API
 
-フラグ `CREDENTIAL_AUTO_RENEW_ENABLED` が OFF なら、以下は未登録・404 / `feature_disabled`。新しい表に触れない。
+グローバル `CREDENTIAL_AUTO_RENEW_ENABLED` が OFF、または呼び出し元 org が許可リストに無い / 判定不能なら、以下は未登録・404 / `feature_disabled`。新しい表に触れない。判定は §11-1。
 
 ### 5-1. 社員 MCP ツール（モデルから呼んでよい）
 
@@ -332,8 +348,8 @@ gen2 の受け取り口。always_human の承認 **済み** が前提。この�
 ### 5-2. 社員 MCP に **置かない** もの
 
 - 新しい `gb_emp_` を返すツール
-- `staffpass_invoke` の gateway ツールとしての更新（Gateway を通すとモデルが fulfillment を見る）
-- 管理 MCP の新しいツール（cron が起票する。管理 AI に「更新して」と頼ませない）
+- `staffpass_invoke` 経由の更新（モデルが fulfillment を見る）
+- 管理 MCP から **鍵を返す** こと（起票だけなら可。§5-4）
 
 ### 5-3. HTTP（モデルから見えない。起動スクリプト専用）
 
@@ -342,27 +358,72 @@ gen2 の受け取り口。always_human の承認 **済み** が前提。この�
 | （推奨） | なし | gen2 は上の MCP ツールだけ。スクリプトが鍵ペアを作り、ツールを呼び、秘密鍵をファイルへ書く |
 | （任意・別フラグ） | `POST /api/mcp/employee/credential/claim` | gen1。旧 `gb_emp_` のみ。本文 JSON に `credential` を一度だけ。`Cache-Control: no-store`。MCP `tools/list` に出さない。フラグ `CREDENTIAL_AUTO_RENEW_GEN1_HTTP_ENABLED` 既定 OFF |
 
-gen1 を開けるなら、スクリプトは応答を **ファイルへ直接** 書き、標準出力に出さない（§10）。V1 の推奨は **開けない**。
+gen1 を開けるなら、スクリプトは応答を **ファイルへ直接** 書き、標準出力に出さない（§10）。V1 本線の推奨は **開けない**（gen2）。**稲盛の最短実地だけ** このフラグをスペースツリーに限り一時 ON にする（§12-5、§18）。
 
-### 5-4. 管理 MCP / ダッシュボード（既存のまま）
+### 5-4. 「今すぐ更新」— 管理画面と admin MCP（起票だけ）
+
+7 日前を待たない入口。**発行しない。鍵を返さない。** 承認は Slack 1 タップ。無期限も可。
+
+#### 管理画面
+
+場所: `/app/employees/[id]` の接続パネル（今の「社員証を再発行」の隣）。`BindingPanel`。権限は rotate と同じ（`requireCredentialAdmin` + `web.employeeRotate` / 承認者クラス）。
+
+- ボタン文言: **今すぐ更新**
+- 押すと `POST /api/employees/[id]/renew`（新設。rotate とは別）。本文は `{ reason: "now" }` だけ
+- 成功: `{ ok: true, approvalId, nextStepJa: "承認者の Slack に「更新しますか」を送りました。鍵はこの画面には出ません。" }`
+- 失敗: `feature_disabled`（グローバル OFF / org 不許可 / 判定不能）、`held`、`employee_terminated`、`already_pending`
+- **秘密は返さない。** 今の rotate（ブラウザに一度だけ表示）と混ぜない
+
+無期限の表示: 期限欄が「無期限」のとき、ボタンの下に「更新すると新しい社員証は 90 日になります」と書く。
+
+#### admin MCP `employees.credential.auto_renew`
+
+フラグ + org 許可が両方通ったときだけ list に出す。`employees.credential.reissue`（ダッシュボード受け取り）とは別ツール。
+
+入力:
+
+```json
+{
+  "employeeId": "<this org only>",
+  "reason": "now",
+  "jobId": "<optional>",
+  "approvalId": "<re-read only>"
+}
+```
+
+| フィールド | 必須 | 制約 |
+|---|---|---|
+| `employeeId` | はい | 管理証の org だけ。他 org は `employee_not_found` |
+| `reason` | いいえ | V1 は `"now"` のみ（省略時 `now`） |
+| `jobId` / `approvalId` | いいえ | 今の管理ツールと同じ再読取 |
+
+出力（起票）: 今の `queueAdminTool` と同じ `needs_approval`（`always_human: true`、`approvalId`、`statusToken`、`pollHint`）。`summary` は「AI社員 … の社員証を今すぐ更新します（無期限→90日 / 期限あり→今+90日）。承認しても鍵は AI に返しません。」
+
+再読取（`approvalId`）: ダッシュボードポインタと `claimable` / `claimed` の状態だけ。秘密なし。
+
+拒否: `cannot_target_self`（管理エージェントが自分の紐付け）、`held`、`feature_disabled`、`employee_terminated`、`revoked`。
+
+#### 既存のまま
 
 | 入口 | 役割 |
 |---|---|
 | `employees.credential.reissue` | 期限切れ・ブレイクガラス。人がダッシュボードで受け取る。旧キー即時失効 |
-| `POST /api/employees/[id]/rotate` | 人が明示 rotate。自動更新の claimable チケットはここでは受け取れない（取り違え防止） |
+| `POST /api/employees/[id]/rotate` | 人が明示 rotate。自動更新の claimable チケットはここでは受け取れない |
 
 ### 5-5. cron
 
-今の `telegram-digest` に足す（フラグ ON のときだけ import）。
+今の `telegram-digest` に足す（グローバル ON かつ **その org が許可リストにあるときだけ** import / 処理）。
 
-1. `listExpiring`（今の 7d 地平）
-2. 社員が active、org 一致、`checkOperable({phase:"wake"})`
-3. `credential_renewals` に `(old_credential_id, threshold='7d')` を一意 insert（既にあれば skip）
+1. `listExpiring`（今の 7d 地平）。**無期限は載せない**
+2. 社員が active、org 一致、`isCredentialAutoRenewOnForOrg(orgId)`、`checkOperable({phase:"wake"})`
+3. `credential_renewals` に `(old_credential_id, threshold='7d')` を一意 insert（既にあれば skip）。`threshold='now'` の進行中があれば 7d は起票しない（1 窓）
 4. `createApproval`（`always_human`、tool = `employees.credential.auto_renew`、requester = system）
 5. `sendApprovalNotifications`（Slack 1 タップ）
 6. 失敗したら renew 行を消すか `held_blocked` にして次回再送（通知の release と同じ）
 7. 1d かつ ticket が未承認: 今のテキスト通知（`CREDENTIAL_EXPIRY_NOTICE_ENABLED` が ON のときだけ）
 8. 別ループ: `overlap_until < now` かつ旧行が生きている → 旧を失効
+
+「今すぐ更新」は cron を通らない。同じ `createApproval` + 同じカード。
 
 ---
 
@@ -382,7 +443,7 @@ gen1 を開けるなら、スクリプトは応答を **ファイルへ直接** 
 | `old_credential_id` | uuid NOT NULL → credentials | 起票時点の今の行 |
 | `new_credential_id` | uuid NULL → credentials | 受け取り後 |
 | `approval_id` | uuid NOT NULL → approval_requests | |
-| `threshold` | text CHECK (`7d`) | V1 は 7d のみ |
+| `threshold` | text CHECK (`7d` / `now`) | cron は `7d`。管理画面 / admin MCP は `now` |
 | `state` | text | `pending_approval` / `claimable` / `claimed` / `old_revoked` / `rejected` / `expired` / `held_blocked` |
 | `mode` | text | `gen2` / `gen1_http` |
 | `claimable_until` | timestamptz NULL | 承認時刻 + 24h |
@@ -393,7 +454,7 @@ gen1 を開けるなら、スクリプトは応答を **ファイルへ直接** 
 
 制約:
 
-- `UNIQUE (old_credential_id, threshold)` — 同じ社員証の 7d は一度だけ
+- `UNIQUE (old_credential_id, threshold)` — 同じ社員証の 7d と now はそれぞれ一度だけ。進行中はアプリで社員あたり 1 窓（§13 #6）
 - trigger `credential_renewals_same_org`: credentials / employees / approval の org が一致しない insert/update を例外（`credential_expiry_notices_same_org` と同じ形）
 - 本文・秘密・公開鍵は置かない
 
@@ -451,7 +512,7 @@ CHECK: `kind='gb_ek2'` なら `public_key` と `public_key_alg` が NOT NULL。`
 
 | action（案） | actor | いつ | metadata に入れてよいもの |
 |---|---|---|---|
-| `credential.renew_proposed` | system | 7d 起票 | approvalId、employeeId、oldCredentialId、threshold |
+| `credential.renew_proposed` | system または human | 7d cron / 今すぐ更新 | approvalId、employeeId、oldCredentialId、threshold（`7d` / `now`）、source=`cron` / `web` / `admin_mcp` |
 | `credential.renew_approved` | human | Slack 承認 | approvalId、approver は今の approval 結合（#374 / #386） |
 | `credential.renew_rejected` | human | 却下 | 同上 |
 | `credential.renew_claimed` | ai | register / claim 成功 | generation、newCredentialId、mode、hash 12 文字、overlapUntil。秘密なし |
@@ -544,7 +605,7 @@ Fail-closed が既定。可用性のために緩める箇所は明示する。
 
 | 状況 | 動き |
 |---|---|
-| フラグ OFF | ツール非表示、HTTP 404、cron は今の通知以外何もしない、新表に触れない |
+| フラグ OFF / org 不許可 / 許可リスト読取不能 | ツール非表示、HTTP 404、cron はその org を触らない、新表に触れない |
 | 新表が未適用 | フラグ ON でも起票・受け取りを拒否。旧認証は今どおり |
 | hold 読取不能 | 503。起票しない、受け取らない |
 | inbox 無し | 起票しない（黙って更新しない） |
@@ -604,6 +665,21 @@ gen2 の JWT（60 秒）は、このスクリプトの前段で毎回署名す�
 
 #385 / #388 の現場: env 未展開で `Authorization: Bearer` が空き、OAuth DCR に落ちた。サーバー側の防御（#388）に加え、クライアントは空でプロセスを上げない。
 
+### 10-4. 稲盛の起動をキーファイルへ移すか
+
+**移す必要がある。** 今は env（`${env:STAFFPASS_MCP_TOKEN}`）。起動スクリプトが新しいキーを原子置換できる場所が無い。コネクタ UI の env は AI が書き換えられない。
+
+実地の前に人が一度だけやる（新しい秘密は作らない）:
+
+1. 今の有効な `gb_emp_` をホストのキーファイルへ書く（`chmod 600`）。値はチャットに出さない
+2. mcp 設定を `STAFFPASS_CREDENTIAL_FILE` + `staffpass-mcp-boot.sh` に切り替える
+3. env のトークン参照を外す（空 Bearer の再発を止める）
+4. 旧キーのまま `staffpass_whoami` が通ることを確認してから「今すぐ更新」する
+
+移さない場合: 承認まではできるが、受け取りは人がダッシュボードで貼る（自動更新の実地にならない）。Grok.com コネクタのままなら §3-2 の対象外。
+
+稲盛が Cursor / mcp-remote / 自前ホストならキーファイルへ移せる。#385 の「key not set」は env 展開の失敗なので、ファイル方式に移すこと自体が再発防止になる。
+
 ---
 
 ## 11. フラグ
@@ -612,13 +688,50 @@ gen2 の JWT（60 秒）は、このスクリプトの前段で毎回署名す�
 
 | 環境変数 | 既定 | 役割 |
 |---|---|---|
-| `CREDENTIAL_AUTO_RENEW_ENABLED` | OFF | 起票、Slack 1 タップ、status / register、重ね置き失効。OFF なら新表に触れない |
-| `CREDENTIAL_AUTO_RENEW_GEN1_HTTP_ENABLED` | OFF | gen1 HTTP。V1 では立てない |
+| `CREDENTIAL_AUTO_RENEW_ENABLED` | OFF | グローバル。OFF なら全 org で新表に触れない |
+| `CREDENTIAL_AUTO_RENEW_ORG_ALLOWLIST` | 空 | カンマ区切り org UUID。グローバル ON のとき、ここに無い org は OFF |
+| `CREDENTIAL_AUTO_RENEW_ORG_ALLOWLIST_REQUIRED` | **true**（未設定も true） | リストが空 / 欠け / パース不能なら **全 org OFF**。明示的な `0` / `false` だけが「リスト空 = 全 org ON」 |
+| `CREDENTIAL_AUTO_RENEW_GEN1_HTTP_ENABLED` | OFF | gen1 HTTP。稲盛の最短実地だけ一時 ON |
 | 既存 `CREDENTIAL_EXPIRY_NOTICE_ENABLED` | OFF | 1d テキストと、自動更新 OFF のときの 7d テキスト。自動更新 ON の 7d はカードなので **二重にテキストを送らない** |
 | 既存 `ADMIN_MCP_CREDENTIAL_REISSUE_ENABLED` | OFF | ダッシュボード受け取り。自動更新では立てなくてよい |
 | 既存 / PR の MCP フラグ | それぞれの既定 | 自動更新で勝手に立てない |
 
-本番作業（§15）以外で env を変えない。
+判定関数（案）`isCredentialAutoRenewOnForOrg(orgId)`:
+
+1. `orgId` が空 / 非 UUID → **OFF**
+2. グローバルが OFF → **OFF**（新表に触れない）
+3. 許可リストを読む。env が読めない・壊れている → **OFF**
+4. `REQUIRED` が true（既定）かつリストが空 → **OFF**
+5. リストが空でなく、`orgId` が無い → **OFF**
+6. それ以外 → ON
+
+他テナントの id をログに並べない。拒否は `feature_disabled` だけ（許可リストの中身を返さない）。
+
+最初に入れる値（本番作業。この PR ではやらない）:
+
+```text
+CREDENTIAL_AUTO_RENEW_ENABLED=true
+CREDENTIAL_AUTO_RENEW_ORG_ALLOWLIST=6d134a38-a0ab-4a8e-aba7-3202650ff523
+```
+
+`REQUIRED` は立てない（既定 true）。TOKYO307 や他 org は入れない。
+
+### 11-1. 方式の候補と推奨
+
+| 方式 | 利点 | 欠点 |
+|---|---|---|
+| **A. env 許可リスト**（`MCP_OAUTH_ORG_ALLOWLIST` と同じ。`lib/mcp-oauth/config.ts` の `isOrgAllowedForOAuth`） | 実装が小さい。DB 障害で「誤って ON」にならない。最初の 1 org は UUID を 1 行足すだけ。空リスト fail-closed の前例がある | テナントが増えるたびに env を変える。変更はデプロイ / 再起動 |
+| B. DB の org 設定（`orgs` の列または `org_settings`） | 画面から ON/OFF できる。再起動が要らない | 列の migration、管理 UI、**読取不能を OFF にする**経路が要る。読取失敗を「無い」と取り違えると他 org が開く |
+| C. 両方（env AND DB） | 二重の栓 | 最短実地には重い |
+
+**推奨: A（env 許可リスト）。** 理由:
+
+- 最初に ON にするのはスペースツリー 1 件だけ（八坂さん）。env 1 行で足りる
+- 読めない / 空 / 壊れている → OFF。OAuth パイロットと同じ fail-closed
+- 「グローバル ON + リスト空 = 全社 ON」を既定で禁止する（`REQUIRED` 既定 true）
+- DB 方式は、テナントが自分で開けてよい段階（V1 のあと）に足す。足すときは **env が空なら DB を見ない**（env 空 = 全 OFF のまま）
+
+コードにスペースツリー UUID をハードコードしない（`no-hardcoded-tenant-values`）。入れる場所は env だけ。
 
 ---
 
@@ -632,28 +745,56 @@ gen2 の JWT（60 秒）は、このスクリプトの前段で毎回署名す�
 |---|---|---|
 | R0 | 本メモ（実装なし） | 0.5（本作業） |
 
-### 12-2. V1（約 13 日）
+### 12-2. V1（約 15 日）
 
 | PR | 内容 | 日数 | 前提 |
 |---|---|---|---|
-| R1 | migration `20261017100000`、フラグ、型、RLS / 関数の DB テスト。挙動は変えない | 1.0 | 未決 #1 が「新ツール名」で確定 |
-| R2 | 7d cron 起票、`always_human`、Slack 1 タップ文言、hold skip、自己承認拒否（AI resolver）、1d テキストは二重にしない。単体 + interactivity テスト | 2.0 | R1、今の通知 / Slack カード |
-| R3 | `issueCredentialOverlap`、認証が旧+新を通す、初回成功と 24h cron で旧失効、今の rotate は不変。#385 の `last_used_at` 成功経路にフック（未マージなら merge commit） | 2.5 | R1、できれば #385 |
-| R4 | gen2 列（`20261017200000`）、`staffpass_credential_renew_status` / `_register`、JWT または同等の署名検証、`sp_at_` 拒否、#388 社員証口 | 3.5 | R2、R3、できれば #388 |
-| R5 | `scripts/staffpass-mcp-boot.sh`、空キーで停止、atomic 0600、register 呼び出し、mcp-remote。秘密を出さないテスト（fixture） | 1.5 | R4 |
-| R6 | 監査アクションと日本語投影、#389 の `nextStepJa` 差し替え（フラグ OFF はバイト同一）、claim 事後 Slack | 1.5 | R2、R4、できれば #389 |
-| R7 | runbook、本番作業チェックリスト、フラグ OFF 回帰 | 0.5 | R5、R6 |
-| | **V1 小計** | **12.5 + R0 0.5** | |
+| R1 | migration `20261017100000`（threshold に `now`）、フラグ、**org 許可リスト（env、fail-closed）**、型、RLS / 関数の DB テスト。挙動は変えない | 1.0 | 未決 #3 が新ツール名で確定 |
+| R-now | 「今すぐ更新」: `POST /api/employees/[id]/renew`、`BindingPanel` ボタン、admin MCP `employees.credential.auto_renew`（起票だけ）、Slack 1 タップ、無期限可、hold / org 不許可。単体 + interactivity | 1.5 | R1 |
+| R2 | 7d cron 起票、1d テキストは二重にしない、進行中の `now` があれば 7d しない | 2.0 | R1、R-now のチケット形 |
+| R3 | `issueCredentialOverlap`、認証が旧+新を通す、**初回成功 = 切り替えで旧失効**、24h cron、今の rotate は不変。#385 の `last_used_at` にフック | 2.5 | R1、できれば #385 |
+| R4 | gen2 列（`20261017200000`）、`staffpass_credential_renew_status` / `_register`、JWT、`sp_at_` 拒否、#388 社員証口 | 3.5 | R-now、R3、できれば #388 |
+| R5 | `scripts/staffpass-mcp-boot.sh`、空キーで停止、atomic 0600、register / claim、mcp-remote。秘密を出さないテスト | 1.5 | R4 または R8 |
+| R6 | 監査と日本語投影、#389 の `nextStepJa` 差し替え（フラグ OFF はバイト同一）、claim 事後 Slack | 1.5 | R-now、R4、できれば #389 |
+| R7 | runbook、本番作業、フラグ OFF / 他 org OFF 回帰 | 0.5 | R5、R6 |
+| | **V1 小計** | **14.0 + R0 0.5** | |
 
-**V1 約 13 日（±2）。** 未決の待ちは含まない。
+**V1 約 15 日（±2）。** 未決の待ちは含まない。R8（gen1 HTTP）を V1 本線に入れない。稲盛の最短実地（§12-5）では R8 を先に使う。
 
-### 12-3. 続き（V1 合計に入れない）
+### 12-3. 続き（V1 合計に入れない。最短実地では R8 だけ先に使う）
 
 | PR | 内容 | 日数 | 前提 |
 |---|---|---|---|
-| R8 | gen1 HTTP claim（別フラグ OFF） | 1.5 | 未決 #1 で「要る」となったときだけ |
+| R8 | gen1 HTTP claim（別フラグ OFF） | 1.5 | 稲盛の最短実地。V1 本線のあとは OFF のまま残してよい |
 | R9 | OAuth 再同意 / private_key_jwt（§8） | 3.0 | V1 パイロットのあと |
 | R10 | クライアント指紋の縛り（未決 #5） | 1.0 | 乗っ取り懸念が残ったとき |
+| R11 | org フラグを DB 設定にする（§11-1 の B）。env 空なら見ない | 1.5 | テナントが自分で開ける段階 |
+
+### 12-5. 稲盛の実地テストまで（最短）
+
+7d cron（R2）と gen2（R4）を後回しにする。無期限 → 90 日の「今すぐ更新」だけをスペースツリーで 1 本通す。
+
+| 順 | PR | 日数 | なぜ要るか |
+|---|---|---|---|
+| 1 | R1（スキーマ + org 許可リスト） | 1.0 | 他 org を開けない栓 |
+| 2 | R-now（今すぐ更新 + Slack 1 タップ） | 1.5 | 7 日を待たない入口 |
+| 3 | R3（重ね置き + 初回成功で旧失効） | 2.5 | 稲盛を止めずに切り替える |
+| 4 | R8（gen1 HTTP claim） | 1.5 | 今の `gb_emp_` のまま受け取れる。JWT サイドカーが要らない |
+| 5 | R5（起動スクリプト + キーファイル） | 1.5 | 受け取ったキーを書く場所 |
+| 6 | 監査の最小（R6 から proposed / approved / claimed / old_revoked だけ） | 0.5 | 実地の成功条件 |
+| | **最短小計** | **8.5** | |
+
+**約 8.5 日（±1.5）。** レビュー待ちと、稲盛ホストへのキーファイル移設（人の作業。§18）は含まない。
+
+後回し（実地のあと、V1 残り）:
+
+- R2 7d cron（+2.0）
+- R4 gen2（+3.5）— 実地が通ってから本線を公開鍵に戻す
+- R6 の残り / R7（+1.5）
+
+実地で gen2 までやるなら最短は **約 10.5 日（±2）**（R8 の代わりに R4）。推奨しない。稲盛は今 static Bearer なので、キーファイル + 同じ `gb_emp_` 形の方が段差が小さい。
+
+順番: R1 → R-now → R3 → R8 → R5。並行できるのは R-now と R3 のテスト準備だけ。マージは merge commit。
 
 ### 12-4. 既存 PR との順番
 
@@ -669,8 +810,8 @@ gen2 の JWT（60 秒）は、このスクリプトの前段で毎回署名す�
 
 | # | 項目 | 推奨 | V1 を止めないか |
 |---|---|---|---|
-| 1 | 受け取りを gen2 だけにするか、gen1 HTTP も最初から開けるか | **gen2 だけ。** 秘密をツールにも HTTP にも載せない。ホストできないコネクタはダッシュボード（既存 reissue） | 推奨で進めてよい。gen1 が要るなら R8 |
-| 2 | Grok.com / Claude / ChatGPT はキーファイルを書けない | **1 タップまでは共通。受け取りは対象外。** 人が貼るか、OAuth（R9）。モデルに秘密を渡して「設定して」とは言わない | 対象外を明示すれば V1 可。パイロット対象は起動スクリプトを置けるホスト |
+| 1 | 受け取りを gen2 だけにするか、gen1 HTTP も最初から開けるか | **V1 本線は gen2。稲盛の最短実地だけ gen1 HTTP（R8、スペースツリー限定）。** 秘密はツール結果に載せない | 実地を先にするなら #1 をこの推奨で切ってよい。全体 V1 はまだ #2 待ち |
+| 2 | Grok.com / Claude / ChatGPT はキーファイルを書けない | **1 タップまでは共通。受け取りは対象外。** 人が貼るか、OAuth（R9）。**稲盛はキーファイルへ移す**（§10-4） | 稲盛のホストがファイルを書けるなら実地は進めてよい |
 | 3 | 起票ツール名を既存 `employees.credential.reissue` にするか | **新名 `employees.credential.auto_renew`。** チケットと CAS をダッシュボード受け取りと分け、fulfill 文言を取り違えない。つなぎは「7d 通知がこのチケットを起票し、カードは今の Slack 1 タップ」 | R1 の前提。ここで違う指定があれば R1 をずらす |
 | 4 | status / register に `approvalId` をクライアント指定させるか | **させない。** Bearer の社員に開いている窓だけ。指定 id はテナント越えの当てずっぽうになる | 推奨で進めてよい |
 | 5 | 受け取りを「いつもの MCP クライアント」に縛るか | **V1 は縛らない。** 旧キー = 本人。事後通知と短い窓で見る。必要なら R10 | V1 可 |
@@ -680,11 +821,13 @@ gen2 の JWT（60 秒）は、このスクリプトの前段で毎回署名す�
 | 9 | カードに「修正依頼」を出すか | **出さない。** 承認か却下 | 推奨 |
 | 10 | gen2 の線上フォーマット | **Ed25519 raw 32 バイト + 60 秒 JWT Bearer `gb_ek2_…`。** チャレンジ往復は mcp-remote と相性が悪い | 静的 Bearer しか無いホストは未決 #2 |
 | 11 | 自動更新で OAuth グラントを切るか | **切らない。** RS が今の社員証を毎回見る | 推奨 |
-| 12 | 期限なし社員証 | **対象外。** 次の手動 rotate で 90 日が付く | 推奨 |
+| 12 | 期限なし社員証 | **「今すぐ更新」の対象。** 新キーは 90 日。7d cron は見ない。バックフィルはしない | 八坂さん指示どおり確定 |
+| 15 | org フラグの持ち方 | **env 許可リスト（A）。** 空 / 読取不能は全 OFF。最初はスペースツリー UUID だけ。DB 設定は V1 のあと（R11） | 確定にしてよい |
+| 16 | 「切り替えた時点」の定義 | **新キーで最初に認証できたとき。** 受け取り瞬間の即時失効にはしない（稲盛が止まる）。24h キャップは残す | 確定にしてよい |
 | 13 | cron を telegram-digest に足すか | **足す。** 新 cron を増やさない。処理はフラグ OFF なら import しない | 推奨 |
 | 14 | 承認者クラス | **reissue と同じ**（オーナーまたは指定管理者。金銭 / 読取不能はオーナー） | 推奨 |
 
-15 点のうち、実装開始を止めるのは **#1 と #2**（受け取り口とパイロット対象）。残りは推奨どおりで設計確定にしてよい。
+実装開始を止めるのは、全体 V1 については **#1 と #2**。稲盛の最短実地（§12-5）は #1 を「実地は gen1 HTTP」で切り、#2 を「稲盛ホストはキーファイルへ移す」で切れば始められる。#12 / #15 / #16 は八坂さん指示で確定。
 
 ---
 
@@ -693,7 +836,13 @@ gen2 の JWT（60 秒）は、このスクリプトの前段で毎回署名す�
 経路 × 停止 × テナント。モックで承認したことにしない。秘密が fixture / ログ / 監査に無いこと。
 
 - フラグ OFF: 新ツールが list に無い、HTTP 404、cron は新表に触れない、whoami バイト同一（#389 OFF 時）
-- 7d + 稼働 + inbox あり → チケット 1 本 + Slack に `staffpass_approve`
+- グローバル ON + 許可リスト空（REQUIRED 既定）→ 全 org OFF
+- グローバル ON + 許可リスト読取不能 / 壊れている → 全 org OFF
+- グローバル ON + スペースツリーだけ → 他 org の起票・register・「今すぐ更新」は `feature_disabled`
+- コードに `6d134a38-…` がハードコードされていない
+- 「今すぐ更新」: 無期限でも起票。admin MCP は鍵を返さない。Slack に `staffpass_approve`
+- 7d + 稼働 + inbox あり + org ON → チケット 1 本 + Slack に `staffpass_approve`
+- 7d + 無期限 → cron は起票しない
 - 7d + hold → 起票しない、`credential.renew_skipped_hold`
 - 7d + hold 読取不能 → 起票しない
 - AI / 管理エージェントが承認 → 拒否（`self_approval_denied` または同等）
@@ -708,6 +857,8 @@ gen2 の JWT（60 秒）は、このスクリプトの前段で毎回署名す�
 - 今のダッシュボード rotate は即時失効のまま
 - 起動スクリプト: 空ファイルで exit 2、成功時 0600、標準出力に `gb_emp_` / `gb_ek2_` が無い
 - #388 口と共有口で register の結果が同じ。社員証口は OAuth を広告しない
+- 無期限 + 「今すぐ更新」→ 新行 `expires_at = now+90`。旧は初回 whoami で失効
+- admin MCP `auto_renew` の応答に秘密・prefix が無い。`approvalId` 再読取も同じ
 
 ---
 
@@ -718,15 +869,15 @@ gen2 の JWT（60 秒）は、このスクリプトの前段で毎回署名す�
 1. 実装 PR を **merge commit だけ** で入れる（rebase / force-push なし）
 2. migration を番号順に適用する（`20261017100000` → `20261017200000`）。フラグはまだ OFF
 3. ROLLBACK SQL の存在を確認する
-4. Preview で `CREDENTIAL_AUTO_RENEW_ENABLED=true`（1 テナント）。本番は触らない
-5. そのテナントの承認 inbox が Slack で生きていること
+4. Preview でグローバル ON + 許可リスト = スペースツリー UUID だけ。他 org が入っていないこと。本番は触らない
+5. スペースツリーの承認 inbox が Slack で生きていること
 6. hold スキーマ（`20261012500000`）が既に当たっていること
-7. パイロット社員 1 人。期限を 7 日以内にするか、テスト専用行だけ使う
-8. 起動スクリプトを置けるホストだけを対象にする（Grok.com コネクタに秘密を流さない）
+7. **最初の実地は稲盛の無期限社員証 `9a795dfd-…` だけ**（§18）。7 日待ち用の期限改変をしない
+8. 稲盛の起動をキーファイルへ移してから「今すぐ更新」する（§10-4）
 9. #385 / #388 / #389 を使うなら、それぞれが入ってからフラグを個別に判断する。自動更新フラグでそれらを立てない
-10. 1 タップ → register → 旧失効までを 1 本通す。監査に秘密が無いこと
-11. 戻す: フラグを消す。進行中の claimable は窓切れで終わる。生きている社員証は残る
-12. 本番 ON は八坂さんの GO。このメモは GO しない
+10. 1 タップ → claim / register → 新キー whoami → 旧失効までを 1 本通す。監査に秘密が無いこと
+11. 戻す: グローバルフラグを消す（許可リストより先）。進行中の claimable は窓切れで終わる。生きている社員証は残る
+12. 他 org を許可リストに足すことと、本番のグローバル ON は八坂さんの GO。このメモは GO しない
 
 ---
 
@@ -739,9 +890,99 @@ gen2 の JWT（60 秒）は、このスクリプトの前段で毎回署名す�
 | `docs/binding-lifeline.md` | 秘密は UI 一度きり、永続は fingerprint。gen2 は「秘密はホストのみ」に更新する |
 | 緊急停止 5 箇条（hold） | 関所を増やすが、止める入口は増やさない |
 | `docs/design/voice-realtime-20261015.md` | 体裁（結論 → 棚卸し → PR 日数 → 未決）の参考。中身は別物 |
+| `docs/admin-orgs-create-20260915.md` / `docs/slack-shared-approval-app.md` | スペースツリー org `6d134a38-a0ab-4a8e-aba7-3202650ff523`。UUID は env にだけ書く |
+| `lib/mcp-oauth/config.ts` | org 許可リストの前例（空 = fail-closed） |
 
 ---
 
 ## 17. 読んだファイル（実装していない）
 
-`lib/employees/credential-reissue.ts`、`credential-expiry-notice.ts`、`credential-expiry.ts`、`credential-ttl.ts`、`lib/auth/employee-credential.ts`、`lib/data/bindings.ts`、`lib/safety/hold.ts`、`lib/admin-mcp/queue.ts`、`lib/admin-mcp/self-approval.ts`、`lib/notify/slack.ts`、`lib/mcp/tools.ts`、`lib/mcp-oauth/resource-server.ts`、`lib/feature-flags.ts`、`lib/types.ts`、`lib/audit/types.ts`、`lib/approver-authority/targets.ts`、`app/api/cron/telegram-digest/route.ts`、`app/api/employees/[id]/rotate/route.ts`、`supabase/migrations/20261012100000_credential_expiry_notices.sql`、`20261012200000_credential_reissue_claim.sql`、`docs/mcp.md`、`docs/design/voice-realtime-20261015.md`。PR #385〜#389 は `gh pr view` の title / body / files / migration 番号。
+`lib/employees/credential-reissue.ts`、`credential-expiry-notice.ts`、`credential-expiry.ts`、`credential-ttl.ts`、`lib/auth/employee-credential.ts`、`lib/data/bindings.ts`、`lib/safety/hold.ts`、`lib/admin-mcp/queue.ts`、`lib/admin-mcp/self-approval.ts`、`lib/notify/slack.ts`、`lib/mcp/tools.ts`、`lib/mcp-oauth/resource-server.ts`、`lib/mcp-oauth/config.ts`（org 許可リスト）、`lib/feature-flags.ts`、`lib/types.ts`、`lib/audit/types.ts`、`lib/approver-authority/targets.ts`、`app/api/cron/telegram-digest/route.ts`、`app/api/employees/[id]/rotate/route.ts`、`app/app/employees/[id]/page.tsx`、`components/employees/BindingPanel.tsx`、`supabase/migrations/20261012100000_credential_expiry_notices.sql`、`20261012200000_credential_reissue_claim.sql`、`docs/mcp.md`、`docs/design/voice-realtime-20261015.md`。PR #385〜#389 は `gh pr view` の title / body / files / migration 番号。スペースツリー UUID は既存ドキュメントとテスト定数（`6d134a38-a0ab-4a8e-aba7-3202650ff523`）。稲盛の社員証 `9a795dfd` は指示どおりプレフィックスのみ。
+
+---
+
+## 18. 稲盛（スペースツリー）実地テスト
+
+八坂さん指示: **最初に試すのは稲盛。** 今の無期限社員証 `9a795dfd-…` を、90 日の新しい社員証へ移す。「今すぐ更新」を使う。7 日前は待たない。このメモと実装 PR では実行しない。
+
+対象の固定値（コードにハードコードしない）:
+
+| 項目 | 値 |
+|---|---|
+| org | スペースツリー `6d134a38-a0ab-4a8e-aba7-3202650ff523` |
+| 社員 | 稲盛（表示名。社員 ID はダッシュボードで確認） |
+| 今の社員証 | `9a795dfd-…`（無期限。`expires_at` が NULL） |
+| Slack | スペースツリーの承認 inbox（既存。LINE 承認口は使っていない） |
+
+### 18-1. 起動スクリプトをキーファイルへ移すか
+
+**移す。必須。** 今は env（`STAFFPASS_MCP_TOKEN` / `${env:…}`）。#385 の空 Bearer と同じ形。自動受け取りはファイルへ原子置換する前提なので、env のままでは実地にならない。手順は §10-4。移せないホスト（Grok.com コネクタだけ）なら、この実地は対象外でダッシュボード受け取りに倒す。
+
+### 18-2. 手順（実装が main に入り、§12-5 の PR が揃ってから）
+
+準備（フラグはまだ OFF）:
+
+1. merge commit で R1 / R-now / R3 / R8 / R5 が入っていること。migration `20261017100000` 適用済み。gen2 の `20261017200000` は実地に不要
+2. 稲盛が **停止中でない**こと（`checkOperable`）。スペースツリーに org hold が無いこと
+3. 承認 inbox が Slack で届くこと（テスト承認を別社員で 1 本、ではなく、既存の届き方を読むだけでよい）
+4. 今の `9a795dfd-…` が生きていて無期限であること（ダッシュボード「無期限」。生秘密は開かない）
+5. §10-4 どおりキーファイルへ移す。**旧キーのまま** `staffpass_whoami` が通る
+6. 起動スクリプトの標準出力に `gb_emp_` が無いこと
+
+フラグ（本番作業。GO 後）:
+
+7. `CREDENTIAL_AUTO_RENEW_ENABLED=true`
+8. `CREDENTIAL_AUTO_RENEW_ORG_ALLOWLIST=6d134a38-a0ab-4a8e-aba7-3202650ff523` だけ
+9. 最短実地だけ `CREDENTIAL_AUTO_RENEW_GEN1_HTTP_ENABLED=true`
+10. 他 org の UUID を足さない。グローバルだけ ON にしてリストを空にしない
+
+実施:
+
+11. 管理者（人）が `/app/employees/<稲盛>` で **今すぐ更新** を押す。または管理 MCP `employees.credential.auto_renew` `{ employeeId, reason: "now" }`（鍵は返ってこないこと）
+12. 承認者の Slack に「社員証を更新しますか」が届く
+13. 承認者が 1 タップ（AI では押さない）
+14. 稲盛のホストで起動スクリプトを再実行する。`state=claimable` なら gen1 HTTP で一度だけ受け取り、キーファイルを 0600 で置換する
+15. 新しいキーで `staffpass_whoami` が通る（これが切り替え）
+16. 旧 `9a795dfd-…` が `revoked_at` 付き。旧キーの whoami は 401
+17. 新しい社員証の期限が **今+90 日**（無期限に戻っていない）
+18. 監査に `renew_proposed`（source=web または admin_mcp、threshold=now）/ `renew_approved` / `renew_claimed` / `renew_old_revoked`（reason=`first_auth`）。秘密・フルハッシュが無い
+19. TOKYO307 など他 org の whoami / 起票が変わっていない
+
+### 18-3. 成功の条件
+
+全部満たしたら成功。1 つでも欠けたら失敗（切り戻し §18-4）。
+
+- 稲盛が新しいキーで MCP に繋がっている（whoami が本人の employeeId）
+- 新しい社員証は 90 日（`expires_at` が今から 90 日前後。無期限ではない）
+- 旧 `9a795dfd-…` は失効し、旧キーでは入れない
+- 切り替えのあいだ稲盛が長時間止まっていない（重ね置き。受け取りから初回 whoami まで旧が通る）
+- Slack は 1 タップ 1 回。AI は承認していない
+- スペースツリー以外の org に自動更新の行が無い
+- チャット / シェル / ログ / 監査 / Slack 本文に新しい秘密が無い
+- キーファイルが 0600。空ファイルで再起動していない
+
+### 18-4. 切り戻し
+
+**フラグを消すだけでは旧キーは戻らない**（失効済み）。戻し方は段階で分ける。
+
+| 時点 | やること |
+|---|---|
+| 起票前（フラグだけ立てた） | グローバルフラグを消す。許可リストは残してよい。新表に行が無ければ終わり |
+| 承認前 | カードを却下するか、フラグを消して窓を使わせない。旧 `9a795dfd-…` はそのまま |
+| 承認後・受け取り前 | フラグを消す。claim は `feature_disabled`。24h で窓切れ。旧キーは生きている |
+| 受け取り後・初回 whoami 前（重ね置き中） | 起動スクリプトを旧キーファイルのバックアップに戻す。旧で whoami。新行は使わなければ 24h で旧が残るよう cron を止めるか、運営が新行を revoke（旧を残す）。**新を残して旧を消すのが正なので、ここでの切り戻しは「新が書けなかった」ときだけ** |
+| 切り替え後（旧失効済み） | 旧 `9a795dfd-…` は復活させない（無期限の再掲はしない）。新キーが壊れているときだけ、人がダッシュボード **社員証を再発行**（既存 rotate。90 日、即時失効）。自動更新フラグは消す |
+| 他 org が巻き込まれた | 直ちにグローバル OFF。許可リストをスペースツリーだけに戻す。他 org の renewal 行を監査する |
+
+切り戻しでやってはいけないこと:
+
+- 無期限の旧行の `revoked_at` を手で NULL に戻す（監査が壊れる。やるなら新発行）
+- 新しい秘密をチャットに貼って「とりあえず」繋ぐ
+- 許可リストを空にしてグローバル ON のままにする（全 org が開く）
+
+### 18-5. 実地のあと
+
+- gen1 HTTP フラグを消す（V1 本線は gen2）
+- 許可リストはスペースツリーのまま。他 org は足さない
+- 7d cron（R2）と gen2（R4）は実地成功のあと
+- 稲盛の次の更新は 90 日後の 7d カード、またはまた「今すぐ更新」
