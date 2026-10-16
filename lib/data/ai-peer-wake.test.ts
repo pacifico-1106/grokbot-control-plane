@@ -27,8 +27,8 @@ describe("ai-peer-wake data (demo)", () => {
   test("thread key uses thread_ts, or a root window", () => {
     expect(threadKeyFor({ threadTs: "1787911797.502889", eventTs: "1787911800.000001", windowSeconds: 1800 })).toBe("1787911797.502889");
     const a = threadKeyFor({ threadTs: null, eventTs: "1787911800.000001", windowSeconds: 1800 });
-    const b = threadKeyFor({ threadTs: null, eventTs: "1787913599.000001", windowSeconds: 1800 });
-    const c = threadKeyFor({ threadTs: null, eventTs: "1787913600.000001", windowSeconds: 1800 });
+    const b = threadKeyFor({ threadTs: null, eventTs: "1787912999.000001", windowSeconds: 1800 });
+    const c = threadKeyFor({ threadTs: null, eventTs: "1787913000.000001", windowSeconds: 1800 });
     expect(a).toBe(b);
     expect(a).not.toBe(c);
   });
