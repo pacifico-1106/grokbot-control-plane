@@ -61,10 +61,102 @@ export function presentNamedPerson(
   return { name: "不明", emailMasked: null };
 }
 
+const HOLD_TRAIL_ACTIONS = new Set([
+  "employee.hold.started",
+  "employee.hold.start_failed",
+  "employee.hold.release_requested",
+  "employee.hold.released",
+  "employee.hold.release_refused",
+]);
+
+function holdMeta(event: AuditEvent): Record<string, unknown> {
+  return event.metadata && typeof event.metadata === "object" && !Array.isArray(event.metadata)
+    ? event.metadata
+    : {};
+}
+
+function holdTrailActorKey(action: string, meta: Record<string, unknown>): string | null {
+  const started = asString(meta.startedBy) ?? asString(meta.started_by);
+  const released = asString(meta.releasedBy) ?? asString(meta.released_by);
+  const requested = asString(meta.requestedBy) ?? asString(meta.requested_by);
+  if (action === "employee.hold.released" || action === "employee.hold.release_refused") {
+    return released ?? started;
+  }
+  if (action === "employee.hold.release_requested") return requested ?? started;
+  return started;
+}
+
+function classifyHoldActorKey(key: string): "human" | "system" | "unknown" {
+  if (key === "system:anomaly") return "system";
+  if (/^member:.+$/.test(key)) return "human";
+  if (/^ops:[A-Za-z0-9._@+-]{1,128}$/.test(key)) return "human";
+  return "unknown";
+}
+
+function unknownHoldActor(): AuditActorView {
+  return { kind: "unknown", name: "不明", emailMasked: null, employeeId: null };
+}
+
+function humanHoldActor(
+  event: AuditEvent,
+  key: string,
+  lookups: AuditPresentationLookups
+): AuditActorView {
+  // Column only — metadata.actorEmail is caller-supplied and must not win.
+  const stored = asString(event.actorEmail);
+  if (key.startsWith("ops:")) {
+    const rest = key.slice(4);
+    return {
+      kind: "human",
+      name: "運営",
+      emailMasked: maskEmail(stored) ?? maskEmail(rest),
+      employeeId: null,
+    };
+  }
+  if (stored) {
+    const person = presentNamedPerson(stored, lookups);
+    return {
+      kind: "human",
+      name: person.name ? sanitizeAuditDisplayText(person.name) || "不明" : "不明",
+      emailMasked: person.emailMasked,
+      employeeId: null,
+    };
+  }
+  if (key.startsWith("member:")) {
+    const member = lookups.membersById?.get(key.slice("member:".length));
+    if (member) {
+      const person = presentNamedPerson(member.email, lookups);
+      return {
+        kind: "human",
+        name: person.name ? sanitizeAuditDisplayText(person.name) || "不明" : "不明",
+        emailMasked: person.emailMasked,
+        employeeId: null,
+      };
+    }
+  }
+  return { kind: "human", name: "不明", emailMasked: null, employeeId: null };
+}
+
+function resolveHoldTrailActor(
+  event: AuditEvent,
+  lookups: AuditPresentationLookups
+): AuditActorView {
+  const key = holdTrailActorKey(event.action, holdMeta(event));
+  if (!key) return unknownHoldActor();
+  const kind = classifyHoldActorKey(key);
+  if (kind === "unknown") return unknownHoldActor();
+  if (kind === "system") return { kind: "system", name: "システム", emailMasked: null, employeeId: null };
+  return humanHoldActor(event, key, lookups);
+}
+
 export function resolveAuditActor(
   event: AuditEvent,
   lookups: AuditPresentationLookups = {}
 ): AuditActorView {
+  if (HOLD_TRAIL_ACTIONS.has(event.action)) {
+    return resolveHoldTrailActor(event, lookups);
+  }
+
   const employeeId = event.employeeId ? String(event.employeeId).trim() : "";
   if (employeeId) {
     const emp = lookups.employeesById?.get(employeeId);
