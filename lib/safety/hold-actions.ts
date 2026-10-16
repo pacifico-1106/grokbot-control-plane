@@ -34,6 +34,7 @@ import {
   isOrgHoldEnabled,
 } from "@/lib/safety/hold-config";
 import { getHoldStore, HoldStoreError, type HoldRecord } from "@/lib/safety/hold-store";
+import { readLiveHold, type HoldKind } from "@/lib/safety/hold";
 import { verifyReleaseAuthentication } from "@/lib/safety/hold-release-auth";
 import { notifyHold } from "@/lib/safety/hold-notify";
 
@@ -76,6 +77,31 @@ export function canStopOrg(member: OrgMember): boolean {
 
 function startedByOf(actor: HoldActor): string {
   return actor.type === "ops" ? `ops:${actor.opsId}` : `member:${actor.member.id}`;
+}
+
+/**
+ * /admin stop is ops_console only when the super-admin is NOT an active owner of
+ * the target org. An owner who reaches /admin via 「運営管理」(same Auth userId)
+ * must stamp a tenant web hold — otherwise /app hides 解除を申請 (opsHold) and
+ * requestHoldRelease raises ops_hold_ops_only, with no S4 UI to recover.
+ * Match Auth userId only (org_members.email is editable profile data).
+ * Lookup failure stays ops_console (fail-closed: do not silently tenant-stamp a
+ * true platform-ops stop).
+ */
+export async function actorForAdminStop(input: {
+  orgId: string;
+  opsEmail: string;
+  opsUserId: string;
+}): Promise<HoldActor> {
+  const ops: HoldActor = { type: "ops", opsId: input.opsEmail, surface: "ops_console" };
+  const userId = input.opsUserId.trim();
+  if (!userId) return ops;
+  const members = await listMembers(input.orgId).catch(() => []);
+  const owner = members.find((m) =>
+    m.orgId === input.orgId && m.role === "owner" && m.status === "active" && Boolean(m.userId) && m.userId === userId);
+  return owner
+    ? { type: "member", member: owner, surface: "web", authUserId: userId }
+    : ops;
 }
 
 function cleanReason(reason: unknown): string | null {
@@ -330,14 +356,44 @@ export async function approveHoldRelease(input: {
   }
 }
 
-/** UI read: the open hold (if any) for an employee or the org. Fails closed to "unknown". */
+function stubHoldFromPointer(
+  orgId: string,
+  employeeId: string | null,
+  live: { holdId: string; kind: HoldKind },
+): HoldRecord {
+  return {
+    id: live.holdId,
+    orgId,
+    employeeId,
+    kind: live.kind,
+    reason: null,
+    startedBy: "member:00000000-0000-4000-8000-000000000000",
+    startedVia: "web",
+    startedAt: "",
+    trigger: null,
+    releaseRequestedBy: null,
+    releaseRequestedAt: null,
+    releaseReason: null,
+    releaseApprovalId: null,
+  };
+}
+
+/**
+ * UI read: same live pointer as MCP (orgs / employees hold_state + hold_id).
+ * employee_holds is only the detail row (releaseRequested). A miss there is
+ * still "held" so the panel can offer 解除を申請 — never "none" (fail-open).
+ * Unreadable pointer → "unknown".
+ */
 export async function readHoldForDisplay(orgId: string, employeeId: string | null): Promise<
   { state: "none" } | { state: "held"; hold: HoldRecord } | { state: "unknown" }
 > {
+  const live = await readLiveHold({ orgId, employeeId });
+  if (live.state !== "held") return live;
   try {
-    const hold = await getHoldStore().getOpenHold(orgId, employeeId);
-    return hold ? { state: "held", hold } : { state: "none" };
+    const hold = await getHoldStore().getHold(orgId, live.holdId);
+    if (hold) return { state: "held", hold };
   } catch {
-    return { state: "unknown" };
+    /* pointer is the source of truth; history is details only */
   }
+  return { state: "held", hold: stubHoldFromPointer(orgId, employeeId, live) };
 }

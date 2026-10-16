@@ -13,6 +13,7 @@ const GOOGLE_QUERY_MESSAGES: Record<string, string> = {
     "管理者に Staffpass クライアントの許可を依頼してください（Admin console → Security → API controls → App access control）。",
   error: "Google Calendar 連携に失敗しました",
   scope_error: "許可されていないスコープが含まれています",
+  account_mismatch: "既に別の Google アカウントが連携されています。解除してからやり直してください。",
   forbidden: "連携の開始・解除には「雇う／社員証発行」の権限が必要です。オーナーまたは管理者に依頼してください。",
 };
 

@@ -60,6 +60,22 @@ const retryableByTool: Record<string, ReadonlySet<string>> = {
     "comm_delete_unavailable", "cant_delete_message", "slack_token_identity_mismatch",
     "slack_delete_timeout", "slack_delete_fetch_failed",
   ]),
+  // mail.send live Gmail: these stop before users.messages.send (or after a
+  // definite 401/403). post_outcome_unknown is NOT here — that send may have
+  // gone out; do not retry.
+  "mail.send": new Set([
+    "mail_gmail_not_connected",
+    "mail_gmail_scope_missing",
+    "mail_gmail_needs_reauth",
+    "mail_from_mailbox_mismatch",
+    "mail_gmail_live_disabled",
+    "mail_header_invalid",
+    "mail_gmail_build_failed",
+    "mail_gmail_rejected",
+    "provider_rate_limited",
+    "mail_attachment_unavailable",
+    "mail_attachment_hash_mismatch",
+  ]),
 };
 
 /** Failure → claim state "failed" (may run again) instead of "uncertain". */

@@ -20,6 +20,8 @@ export {
 } from "./employees";
 export {
   listApprovals,
+  listApprovalsByIds,
+  listApprovalsByJobIds,
   getApprovalById,
   getApprovalStatusByToken,
   createApproval,

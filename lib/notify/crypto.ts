@@ -38,3 +38,29 @@ export function decryptNotificationSecrets(value: string): Record<string, string
   }
   return parsed as Record<string, string>;
 }
+
+/** AES-256-GCM for approved mail attachment bytes. Never log ciphertext or plaintext. */
+export function encryptBytes(bytes: Buffer): string {
+  const iv = randomBytes(12);
+  const cipher = createCipheriv("aes-256-gcm", encryptionKey(), iv);
+  const ciphertext = Buffer.concat([cipher.update(bytes), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return `b1.${iv.toString("base64url")}.${tag.toString("base64url")}.${ciphertext.toString("base64url")}`;
+}
+
+export function decryptBytes(value: string): Buffer {
+  const [version, ivRaw, tagRaw, ciphertextRaw] = value.split(".");
+  if (version !== "b1" || !ivRaw || !tagRaw || !ciphertextRaw) {
+    throw new Error("notification_ciphertext_invalid");
+  }
+  const decipher = createDecipheriv(
+    "aes-256-gcm",
+    encryptionKey(),
+    Buffer.from(ivRaw, "base64url")
+  );
+  decipher.setAuthTag(Buffer.from(tagRaw, "base64url"));
+  return Buffer.concat([
+    decipher.update(Buffer.from(ciphertextRaw, "base64url")),
+    decipher.final(),
+  ]);
+}

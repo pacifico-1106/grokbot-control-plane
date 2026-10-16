@@ -79,6 +79,19 @@ test("failed resolution, intermediate votes and not-found results produce no exe
   }
 });
 
+test("hold_release_web_only is 403 with a Japanese message and never fulfills", async () => {
+  result = { ...result, ok: false, approval: { ...approval, status: "pending" },
+    workflowComplete: false, workflowApproved: false, reason: "hold_release_web_only" };
+  const response = await approve(request(), context());
+  expect(response.status).toBe(403);
+  const body = await response.json();
+  expect(body.ok).toBe(false);
+  expect(body.error).toBe("hold_release_web_only");
+  expect(String(body.messageJa)).toContain("解除");
+  expect(String(body.messageJa)).toContain("5分以内");
+  expect(adminCalls).toBe(0); expect(invokeCalls).toBe(0); expect(notifications).toBe(0);
+});
+
 test("denied capability never resolves; self-approval denial never fulfills or notifies", async () => {
   allowed = false;
   for (const route of [approve, reject]) expect((await route(request(), context())).status).toBe(403);

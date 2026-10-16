@@ -30,6 +30,8 @@ mock.module("@/lib/data/approvals", () => ({
   // Re-exported by @/lib/data (index.ts); missing names make the import a SyntaxError.
   listPendingDecisionsWithDeadlines: async () => [],
   listPendingT2Decisions: async () => [],
+  listApprovalsByIds: async () => [],
+  listApprovalsByJobIds: async () => [],
 }));
 mock.module("@/lib/supabase", () => ({ createSupabaseAdminClient: () => ({
   rpc: async (name: string) => {

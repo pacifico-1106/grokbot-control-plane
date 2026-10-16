@@ -359,6 +359,46 @@ function shapeOf(r: Extract<HoldRead, { state: "found" }>, allowed: ReadonlySet<
   return "bad";
 }
 
+const ORG_KINDS: ReadonlySet<string> = new Set(["stopped"]);
+
+export type LiveHold =
+  | { state: "none" }
+  | { state: "held"; holdId: string; kind: HoldKind }
+  | { state: "unknown" };
+
+/**
+ * Dashboard pointer: the same orgs.hold_state / employees.hold_state columns
+ * checkOperable (MCP) reads. Does not query employee_holds. Unreadable → unknown
+ * (fail closed for the panel — never "none").
+ */
+export async function readLiveHold(input: {
+  orgId: string;
+  employeeId: string | null;
+}): Promise<LiveHold> {
+  const orgId = (input.orgId ?? "").trim();
+  const employeeId = (input.employeeId ?? "").trim() || null;
+  if (!orgId) return { state: "unknown" };
+  try {
+    const rd = reader();
+    if (employeeId) {
+      const e = await rd.employee(employeeId, orgId);
+      if (e.state !== "found" || e.orgId !== orgId) return { state: "unknown" };
+      const s = shapeOf(e, KINDS);
+      if (s === "bad") return { state: "unknown" };
+      if (s === "held") return { state: "held", holdId: e.holdId as string, kind: e.holdState as HoldKind };
+      return { state: "none" };
+    }
+    const o = await rd.org(orgId);
+    if (o.state !== "found" || o.orgId !== orgId) return { state: "unknown" };
+    const s = shapeOf(o, ORG_KINDS);
+    if (s === "bad") return { state: "unknown" };
+    if (s === "held") return { state: "held", holdId: o.holdId as string, kind: "stopped" };
+    return { state: "none" };
+  } catch {
+    return { state: "unknown" };
+  }
+}
+
 export async function checkOperable(input: {
   orgId?: string | null;
   employeeId?: string | null;

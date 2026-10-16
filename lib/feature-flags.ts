@@ -775,8 +775,24 @@ export function isAdminMcpCredentialReissueEnabled(): boolean {
 }
 
 /**
- * OPERATOR_NOTICES_ENABLED (運営からのお知らせ, 2026-10-15). Default OFF.
- * When ON (and after migration 20261015100000):
+ * MAIL_SEND_GMAIL_LIVE (default OFF): approved mail.send may call Gmail
+ * users.messages.send after the attachment hash check.
+ *
+ * When OFF (default): fulfillMailSend stays delivery:"stub" (nothing leaves).
+ * Calendar OAuth / freebusy is unchanged.
+ *
+ * When ON: employee must have completed the separate gmail.send consent
+ * (incremental, not mixed into the calendar start URL). From must equal the
+ * authenticated mailbox. Unknown provider outcomes are recorded and not retried.
+ * draft_only / external-send defaults are not loosened.
+ */
+export function isMailSendGmailLiveEnabled(): boolean {
+  return parseFlag(process.env.MAIL_SEND_GMAIL_LIVE);
+}
+
+/**
+ * OPERATOR_NOTICES_ENABLED (運営からのお知らせ, 2026-10-16). Default OFF.
+ * When ON (and after migration 20261016100000):
  * - tables may be read/written (service_role only)
  * - employee MCP lists staffpass_notices_list / staffpass_notices_ack
  * - staffpass_whoami may include operatorNotices counts

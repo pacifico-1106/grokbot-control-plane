@@ -126,7 +126,7 @@ export function isMentionWakeAudit(event: AuditEvent): boolean {
 }
 
 export async function appendAuditEvent(
-  event: Omit<AuditEvent, "id" | "createdAt"> & { actorEmail?: string }
+  event: Omit<AuditEvent, "id" | "createdAt">
 ): Promise<void> {
   if (isDemoMode()) {
     pushRuntimeAuditEvent({

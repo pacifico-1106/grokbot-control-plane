@@ -102,6 +102,78 @@ export async function getApprovalById(
   return mapApprovalRow(data as Record<string, unknown>);
 }
 
+/** Columns needed to join audit rows. Never select status_token / metadata / body. */
+const AUDIT_APPROVAL_LOOKUP_SELECT = "id, org_id, status, resolved_by, employee_id, job_id";
+
+/** Strip secrets even if a mapper reconstructed pollPath from a token. */
+function withoutApprovalSecrets(row: ApprovalRequest): ApprovalRequest {
+  return {
+    ...row,
+    statusToken: "",
+    pollPath: "",
+    metadata: {},
+    summary: "",
+    title: "",
+    revisionNote: null,
+  };
+}
+
+/** Org-scoped batch read for /app/audit. Never returns another tenant's ticket. */
+export async function listApprovalsByIds(
+  orgId: string,
+  ids: string[]
+): Promise<ApprovalRequest[]> {
+  if (!orgId) return [];
+  const unique = [...new Set(ids.map((id) => String(id || "").trim()).filter(Boolean))];
+  if (unique.length === 0) return [];
+  if (isDemoMode()) {
+    const rows = await demoListApprovals();
+    return rows
+      .filter((row) => row.orgId === orgId && unique.includes(row.id))
+      .map(withoutApprovalSecrets);
+  }
+  const admin = createSupabaseAdminClient();
+  if (!admin) return [];
+  const { data, error } = await admin
+    .from("approval_requests")
+    .select(AUDIT_APPROVAL_LOOKUP_SELECT)
+    .eq("org_id", orgId)
+    .in("id", unique);
+  if (error || !data) return [];
+  return data
+    .map((r) => mapApprovalRow(r as Record<string, unknown>))
+    .filter((row) => row.orgId === orgId)
+    .map(withoutApprovalSecrets);
+}
+
+/** Org-scoped job_id lookup. Ambiguity is resolved by the read-model, not here. */
+export async function listApprovalsByJobIds(
+  orgId: string,
+  jobIds: string[]
+): Promise<ApprovalRequest[]> {
+  if (!orgId) return [];
+  const unique = [...new Set(jobIds.map((id) => String(id || "").trim()).filter(Boolean))];
+  if (unique.length === 0) return [];
+  if (isDemoMode()) {
+    const rows = await demoListApprovals();
+    return rows
+      .filter((row) => row.orgId === orgId && row.jobId && unique.includes(row.jobId))
+      .map(withoutApprovalSecrets);
+  }
+  const admin = createSupabaseAdminClient();
+  if (!admin) return [];
+  const { data, error } = await admin
+    .from("approval_requests")
+    .select(AUDIT_APPROVAL_LOOKUP_SELECT)
+    .eq("org_id", orgId)
+    .in("job_id", unique);
+  if (error || !data) return [];
+  return data
+    .map((r) => mapApprovalRow(r as Record<string, unknown>))
+    .filter((row) => row.orgId === orgId)
+    .map(withoutApprovalSecrets);
+}
+
 /**
  * Public-ish status lookup: id + statusToken required.
  * Demo: plaintext token on row. Prod: status_token column or metadata.

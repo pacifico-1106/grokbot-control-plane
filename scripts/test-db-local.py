@@ -728,9 +728,10 @@ try:
     print("PASS: comm line reply tokens (20261014100000): 2 tables RLS on / restrictive deny-all only, anon/authenticated no access; "
           "hash format, unique reply token, unknown retry_key unique per org, org delete cascades; re-applicable; "
           "rollback refused while unknown-outcome rows exist, then drops both; forward again.")
-    # Operator notices (20261015100000). NOT applied in production by the PR.
-    opntc = ROOT / "supabase/migrations/20261015100000_operator_notices.sql"
-    opntc_rb = ROOT / "supabase/verification/20261015100000_operator_notices_rollback.sql"
+    # Operator notices (20261016100000). NOT applied in production by the PR.
+    # Timestamp is after main's 20261015100000_approval_mail_attachments.sql.
+    opntc = ROOT / "supabase/migrations/20261016100000_operator_notices.sql"
+    opntc_rb = ROOT / "supabase/verification/20261016100000_operator_notices_rollback.sql"
     sql(opntc)
     sql(opntc)  # re-applicable
     sql(ROOT / "tests/security/db-operator-notices.sql")
@@ -745,7 +746,7 @@ try:
                  " and to_regprocedure('public.operator_notice_counts_for_employee(uuid,uuid)') is null;") == "t"
     sql(opntc)  # forward again after rollback
     sql(ROOT / "tests/security/db-operator-notices.sql")
-    print("PASS: operator notices (20261015100000): 6 tables RLS on / no policy, anon/authenticated denied "
+    print("PASS: operator notices (20261016100000): 6 tables RLS on / no policy, anon/authenticated denied "
           "(tables + visibility functions); service_role reads/writes; org-A notice invisible to org B, "
           "cross-org receipt/target rejected, all-scope has no targets, published audience locked, "
           "new tenant does not see non-sticky all-audience; re-applicable; rollback + re-apply.")

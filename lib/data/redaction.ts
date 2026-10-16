@@ -7,6 +7,8 @@ const sensitiveKeys = new Set([
   // Approved attachment reference: host and hash are not for display either
   // (the card shows filename + size only). Stored rows keep them for checks.
   "refsha256", "refhost",
+  // mail.send approved bytes: ciphertext and content hash stay off public DTOs.
+  "contentciphertext", "contentsha256",
 ]);
 export function redactMetadata(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(redactMetadata);
