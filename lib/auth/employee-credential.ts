@@ -33,7 +33,8 @@ export type CredentialAuthFailure = {
     | "employee_not_found"
     | "employee_on_hold"
     | "org_on_hold"
-    | "hold_state_unavailable";
+    | "hold_state_unavailable"
+    | "employee_terminated";
   message: string;
   httpStatus: number;
 };
