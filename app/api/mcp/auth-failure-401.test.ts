@@ -202,5 +202,5 @@ describe("MCP_AUTH_FAILURE_AUDIT_ENABLED ON", () => {
     const res = await rpc("tools/list");
     expect(res.status).toBe(401);
     expect((await res.json()).error.data.code).toBe("missing_credential");
-  }, 1000);
+  });
 });

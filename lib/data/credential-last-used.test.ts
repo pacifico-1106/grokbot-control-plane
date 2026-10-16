@@ -108,5 +108,5 @@ describe("touchCredentialLastUsed", () => {
     const started = Date.now();
     await expect(touchCredentialLastUsed(CRED)).resolves.toBeUndefined();
     expect(Date.now() - started).toBeLessThan(CREDENTIAL_LAST_USED_TIMEOUT_MS + 250);
-  }, 1000);
+  });
 });

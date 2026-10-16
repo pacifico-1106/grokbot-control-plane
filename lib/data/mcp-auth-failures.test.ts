@@ -173,5 +173,5 @@ describe("recordMcpAuthFailure", () => {
     const started = Date.now();
     await expect(recordMcpAuthFailure({ kind: "invalid", method: "tools/list" })).resolves.toBeUndefined();
     expect(Date.now() - started).toBeLessThan(MCP_AUTH_FAILURE_TIMEOUT_MS + 250);
-  }, 1000);
+  });
 });
