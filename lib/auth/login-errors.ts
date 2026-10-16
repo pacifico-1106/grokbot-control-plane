@@ -8,12 +8,15 @@ export type LoginErrorCode =
   | "login_failed"
   | "credentials_required"
   | "rate_limited"
+  | "login_unavailable"
   | "session_expired"
   | "session";
 
 export const LOGIN_FAILED_MESSAGE = "メールアドレスまたはパスワードが違います";
 export const CREDENTIALS_REQUIRED_MESSAGE = "メールとパスワードを入力してください";
 export const RATE_LIMITED_MESSAGE = "しばらく待ってから再度お試しください";
+export const LOGIN_UNAVAILABLE_MESSAGE =
+  "現在ログインできません。時間をおいてお試しください。";
 export const SESSION_REQUIRED_MESSAGE =
   "ログインが必要です。再度サインインしてください。";
 
@@ -22,6 +25,7 @@ export function loginErrorMessage(
   status?: number
 ): string {
   if (status === 429 || code === "rate_limited") return RATE_LIMITED_MESSAGE;
+  if (status === 503 || code === "login_unavailable") return LOGIN_UNAVAILABLE_MESSAGE;
   if (code === "credentials_required") return CREDENTIALS_REQUIRED_MESSAGE;
   if (code === "session_expired" || code === "session") {
     return SESSION_REQUIRED_MESSAGE;

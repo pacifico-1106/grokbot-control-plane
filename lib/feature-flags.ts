@@ -464,6 +464,18 @@ export function isSignupRateLimitEnabled(): boolean {
 }
 
 /**
+ * LOGIN_RATE_LIMIT_ENABLED: app-side login attempt limits (IP+account, plus a
+ * per-IP spray cap). In-memory / per-instance; Supabase Auth still has its own
+ * limits. Missing IP_HASH_KEY or a full bucket store fails closed (503 / deny).
+ *
+ * When OFF (default): POST /api/auth/login is unchanged (no extra limiter,
+ * no IP_HASH_KEY requirement).
+ */
+export function isLoginRateLimitEnabled(): boolean {
+  return parseFlag(process.env.LOGIN_RATE_LIMIT_ENABLED);
+}
+
+/**
  * SIGNUP_DOMAIN_CHECK_ENABLED: reject disposable domains and invalid dotted
  * local parts; reject a normalized-mailbox duplicate (Gmail dot/+tag variants)
  * of an account created in the last 30 days.
@@ -807,4 +819,54 @@ export function isMcpAuthFailureAuditEnabled(): boolean {
  */
 export function isMcpAuth401NextStepJaEnabled(): boolean {
   return parseFlag(process.env.MCP_AUTH_401_NEXT_STEP_JA_ENABLED);
+}
+
+/**
+ * AI_PEER_WAKE_ALLOWLIST_ENABLED (八坂 GO 2026-10-16): when the speaker is a
+ * bound AI employee, other AI employees are woken only if the org allowlisted
+ * that pair (A→B, optional channel). Fail-closed: missing/unreadable pair or
+ * a lookup error does not wake. Human mentions are unchanged.
+ *
+ * When OFF (default): existing mention/DM/Path C wake behavior is preserved.
+ */
+export function isAiPeerWakeAllowlistEnabled(): boolean {
+  return parseFlag(process.env.AI_PEER_WAKE_ALLOWLIST_ENABLED);
+}
+
+/**
+ * AI_PEER_WAKE_THREAD_GUARD_ENABLED (八坂 GO 2026-10-16): AI→AI wakes in the
+ * same Slack thread (thread_ts, or channel + time window for a root message)
+ * are capped (default 4) and a human can stop the thread. Cap cutoff is
+ * audited and the org's approvers are notified. Stop is human-only (Slack
+ * button + dashboard); AI cannot stop or resume. Human mentions still wake.
+ *
+ * When OFF (default): no cap, no stop, no notice. Independent of the allowlist
+ * flag so rollout can enable cap-first or allowlist-first.
+ */
+export function isAiPeerWakeThreadGuardEnabled(): boolean {
+  return parseFlag(process.env.AI_PEER_WAKE_THREAD_GUARD_ENABLED);
+}
+
+const DEFAULT_AI_PEER_WAKE_CAP = 4;
+const DEFAULT_AI_PEER_WAKE_ROOT_WINDOW_SECONDS = 30 * 60;
+
+function parseBoundedInt(raw: string | undefined, fallback: number, min: number, max: number): number {
+  const n = Number.parseInt((raw ?? "").trim(), 10);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(min, n));
+}
+
+/** Default 4; clamp 1..20. Used only when AI_PEER_WAKE_THREAD_GUARD_ENABLED is ON. */
+export function aiPeerWakeCap(): number {
+  return parseBoundedInt(process.env.AI_PEER_WAKE_CAP, DEFAULT_AI_PEER_WAKE_CAP, 1, 20);
+}
+
+/** Root-message window when thread_ts is absent. Default 1800s; clamp 60..86400. */
+export function aiPeerWakeRootWindowSeconds(): number {
+  return parseBoundedInt(
+    process.env.AI_PEER_WAKE_ROOT_WINDOW_SECONDS,
+    DEFAULT_AI_PEER_WAKE_ROOT_WINDOW_SECONDS,
+    60,
+    86_400
+  );
 }

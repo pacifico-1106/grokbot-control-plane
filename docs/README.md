@@ -54,6 +54,7 @@
 | 営業・セキュリティ FAQ | [internal-share/04-sales-security-faq.md](./internal-share/04-sales-security-faq.md) |
 | Staffpass でセキュリティ説明がどう変わるか | [internal-share/05-staffpass-changes-security-story.md](./internal-share/05-staffpass-changes-security-story.md) |
 | 提案資料パック（PDF / HTML / MD） | [sales-pack/](./sales-pack/) |
+| リード獲得2週間計画（2026-10-16〜10-30） | [sales/staffpass-leadgen-plan-20261015.md](./sales/staffpass-leadgen-plan-20261015.md) |
 | LP・UI コピー一覧 | [copy.md](./copy.md) |
 
 ---
@@ -71,6 +72,7 @@
 | エージェント資格情報ガイド | [agent-credential-guide.md](./agent-credential-guide.md) |
 | Commerce プロバイダメモ | [commerce-provider-notes.md](./commerce-provider-notes.md) |
 | Sealith からの選定メモ | [selection-from-sealith.md](./selection-from-sealith.md) |
+| **リアルタイム音声会話（設計・見積もり、確定 2026-10-16）** | [design/voice-realtime-20261015.md](./design/voice-realtime-20261015.md) | Grok Voice 3.0。電話と Web 通話ボタン。設計確定。実装は LINE PoC フラグ ON 後 |
 
 ---
 
