@@ -43,15 +43,17 @@ insert into public.employees(id, org_id, display_name, role_label) values
 
 set role service_role;
 
--- (2) service_role writes a published all-audience notice + an org-A notice
+-- (2) service_role writes a published all-audience notice + an org-A notice.
+-- Targets must be attached while the notice is still a draft (published
+-- audience is locked).
 insert into public.operator_notices
   (id, version, status, severity, title, change_summary, ai_usage_change, effective_at,
    audience_scope, sticky, apply_mode, body_hash, published_at)
 values
   ('ntc_00000000000000000000000001', 1, 'published', 'normal', 'all tenants', 'summary', 'usage', now(),
    'all', false, 'self_rules', repeat('a', 64), '2026-06-01T00:00:00Z'),
-  ('ntc_00000000000000000000000002', 1, 'published', 'urgent', 'org A only', 'secret-a', 'do-not-leak', now(),
-   'orgs', false, 'self_rules', repeat('b', 64), now());
+  ('ntc_00000000000000000000000002', 1, 'draft', 'urgent', 'org A only', 'secret-a', 'do-not-leak', now(),
+   'orgs', false, 'self_rules', repeat('b', 64), null);
 insert into public.operator_notice_versions
   (notice_id, version, kind, title, change_summary, ai_usage_change, body_hash)
 values
@@ -59,6 +61,9 @@ values
   ('ntc_00000000000000000000000002', 1, 'initial', 'org A only', 'secret-a', 'do-not-leak', repeat('b', 64));
 insert into public.operator_notice_targets (notice_id, org_id, employee_id)
 values ('ntc_00000000000000000000000002', 'b1000000-0000-4000-8000-0000000000a1', null);
+update public.operator_notices
+  set status = 'published', published_at = now()
+  where id = 'ntc_00000000000000000000000002';
 
 -- (3) org B cannot see org-A-only notice; org A can
 do $$
