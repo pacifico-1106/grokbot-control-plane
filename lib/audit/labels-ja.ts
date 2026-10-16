@@ -301,6 +301,9 @@ export const AUDIT_ACTION_LABELS_JA: Record<AuditAction, string> = {
   "config.change_rejected": "設定変更を却下",
   "secret_detection.blocked": "秘密情報の送信を拒否",
   "secret_detection.suspected": "鍵に似た文字列を検出",
+  "operator_notice.published": "運営お知らせを公開",
+  "operator_notice.corrected": "運営お知らせを訂正",
+  "operator_notice.withdrawn": "運営お知らせを取り下げ",
 };
 
 const SLACK_MESSAGE_IDS = new Set([

@@ -660,7 +660,10 @@ export type AuditAction =
   | "config.change_apply_failed"
   | "config.change_rejected"
   | "secret_detection.blocked"
-  | "secret_detection.suspected";
+  | "secret_detection.suspected"
+  | "operator_notice.published"
+  | "operator_notice.corrected"
+  | "operator_notice.withdrawn";
 
 export interface Org {
   id: string;

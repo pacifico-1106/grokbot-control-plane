@@ -68,6 +68,8 @@ function parseDraft(body: Record<string, unknown>): DraftInput {
   const flagsRaw = Array.isArray(body.relatedFlags) ? body.relatedFlags : [];
   const itemsRaw = Array.isArray(body.relatesToItemIds) ? body.relatesToItemIds : [];
   const audience = str(body.audienceScope);
+  const severityRaw = str(body.severity);
+  const applyRaw = str(body.applyMode);
   return {
     id: str(body.id) || undefined,
     title: str(body.title),
@@ -75,8 +77,8 @@ function parseDraft(body: Record<string, unknown>): DraftInput {
     aiUsageChange: str(body.aiUsageChange),
     audienceScope: isNoticeAudienceScope(audience) ? audience : (audience as DraftInput["audienceScope"]),
     sticky: bool(body.sticky, false),
-    severity: isNoticeSeverity(str(body.severity)) ? str(body.severity) : undefined,
-    applyMode: isNoticeApplyMode(str(body.applyMode)) ? str(body.applyMode) : undefined,
+    severity: isNoticeSeverity(severityRaw) ? severityRaw : undefined,
+    applyMode: isNoticeApplyMode(applyRaw) ? applyRaw : undefined,
     showToTenantAdmin: body.showToTenantAdmin === undefined ? true : bool(body.showToTenantAdmin, true),
     relatedFlags: flagsRaw.filter((f): f is string => typeof f === "string"),
     targets: targetsRaw.flatMap((t) => {
@@ -223,6 +225,8 @@ export async function handleNoticeItem(
   if (intent === "correct") {
     const kindRaw = str(body.kind);
     const kind: NoticeVersionKind = kindRaw === "minor" ? "minor" : "correction";
+    const applyRaw = str(body.applyMode);
+    const audienceRaw = str(body.audienceScope);
     const corrected = await correctOperatorNotice(gated.actor, {
       noticeId: id,
       kind,
@@ -230,8 +234,8 @@ export async function handleNoticeItem(
       title: str(body.title),
       changeSummary: str(body.changeSummary),
       aiUsageChange: str(body.aiUsageChange),
-      applyMode: isNoticeApplyMode(str(body.applyMode)) ? str(body.applyMode) : undefined,
-      audienceScope: isNoticeAudienceScope(str(body.audienceScope)) ? str(body.audienceScope) : undefined,
+      applyMode: isNoticeApplyMode(applyRaw) ? applyRaw : undefined,
+      audienceScope: isNoticeAudienceScope(audienceRaw) ? audienceRaw : undefined,
       confirmed: bool(body.confirmed, false),
       acknowledgeWarnings: bool(body.acknowledgeWarnings, false),
     });

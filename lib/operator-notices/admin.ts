@@ -7,6 +7,7 @@
  */
 import { appendAuditEvent } from "@/lib/data/audit";
 import { DEMO_EMPLOYEES, DEMO_ORG } from "@/lib/demo-data";
+import type { AuditAction } from "@/lib/types";
 import { isOperatorNoticesEnabled } from "@/lib/feature-flags";
 import { isDemoMode } from "@/lib/mode";
 import { CONSENT_MAX_LOGIN_AGE_SEC } from "@/lib/mcp-oauth/config";
@@ -447,7 +448,7 @@ async function urgentCounts(orgIds: string[]): Promise<{ global: number; perOrg:
 }
 
 async function writeNoticeAudit(
-  action: string,
+  action: Extract<AuditAction, "operator_notice.published" | "operator_notice.corrected" | "operator_notice.withdrawn">,
   summary: string,
   notice: OperatorNotice,
   actor: OperatorActor
@@ -523,8 +524,9 @@ export function summarizeReceipts(rows: OperatorNoticeReceipt[]): ReceiptSummary
 }
 
 export async function listOperatorNoticesForAdmin(
-  _actor: OperatorActor
+  actor: OperatorActor
 ): Promise<{ ok: true; notices: OperatorNotice[] } | AdminFail> {
+  void actor;
   const gated = requireFlag();
   if (gated) return gated;
   if (isDemoMode()) return { ok: true, notices: __listDemoNotices() };
@@ -906,7 +908,7 @@ export async function withdrawOperatorNotice(
 }
 
 export async function previewOperatorNotice(
-  _actor: OperatorActor,
+  actor: OperatorActor,
   input: { noticeId: string; orgId: string; employeeId: string }
 ): Promise<
   | { ok: true; visible: false }
@@ -925,6 +927,7 @@ export async function previewOperatorNotice(
     }
   | AdminFail
 > {
+  void actor;
   const gated = requireFlag();
   if (gated) return gated;
   if (!isNoticeId(input.noticeId) || !input.orgId || !input.employeeId) return fail("invalid_args");
@@ -1006,9 +1009,10 @@ function csvEscape(value: string): string {
 }
 
 export async function listOperatorNoticeReceipts(
-  _actor: OperatorActor,
+  actor: OperatorActor,
   noticeId: string
 ): Promise<{ ok: true; receipts: OperatorNoticeReceipt[] } | AdminFail> {
+  void actor;
   const gated = requireFlag();
   if (gated) return gated;
   if (!isNoticeId(noticeId)) return fail("not_found");
@@ -1060,9 +1064,10 @@ export async function listOperatorNoticeReceiptsCsv(
 }
 
 export async function getOperatorNoticeBundle(
-  _actor: OperatorActor,
+  actor: OperatorActor,
   noticeId: string
 ): Promise<{ ok: true; notice: OperatorNotice; targets: OperatorNoticeTarget[] } | AdminFail> {
+  void actor;
   const gated = requireFlag();
   if (gated) return gated;
   if (!isNoticeId(noticeId)) return fail("not_found");
