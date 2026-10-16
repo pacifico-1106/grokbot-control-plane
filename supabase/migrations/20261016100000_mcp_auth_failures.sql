@@ -4,9 +4,11 @@
 -- (the column already existed; no app path ever updated it). Additive.
 --
 -- mcp_auth_failures: kind + optional ids + method. NEVER token, hash, or
--- prefix. Throttle: unique (kind × org × employee × 5-minute epoch) plus a
--- 200-rows/hour cap inside record_mcp_auth_failure. RLS on, no policy,
--- service_role only. No FKs (rows survive employee/credential delete).
+-- prefix. Throttle: unique (kind × org × employee × throttle_bucket) plus a
+-- 200-rows/hour cap inside record_mcp_auth_failure. throttle_bucket is the
+-- 5-minute epoch stored as a column (expression indexes on timestamptz
+-- extract() are not IMMUTABLE). RLS on, no policy, service_role only.
+-- No FKs (rows survive employee/credential delete).
 --
 -- touch_credential_last_used: conditional UPDATE last_used_at when null or
 -- older than 5 minutes. service_role only.
@@ -19,7 +21,8 @@ create table if not exists public.mcp_auth_failures (
   org_id uuid,
   employee_id uuid,
   credential_id uuid,
-  mcp_method text check (mcp_method is null or mcp_method ~ '^[A-Za-z0-9_./-]{1,64}$')
+  mcp_method text check (mcp_method is null or mcp_method ~ '^[A-Za-z0-9_./-]{1,64}$'),
+  throttle_bucket bigint not null
 );
 create index if not exists mcp_auth_failures_created_idx
   on public.mcp_auth_failures (created_at desc);
@@ -28,7 +31,7 @@ create unique index if not exists mcp_auth_failures_throttle_uidx
     failure_kind,
     (coalesce(org_id, '00000000-0000-0000-0000-000000000000'::uuid)),
     (coalesce(employee_id, '00000000-0000-0000-0000-000000000000'::uuid)),
-    (floor(extract(epoch from created_at) / 300.0)::bigint)
+    throttle_bucket
   );
 comment on table public.mcp_auth_failures is
   '/api/mcp auth-failure audit (MCP_AUTH_FAILURE_AUDIT_ENABLED). Kind + optional ids + method only. Never token/hash/prefix. Service role only.';
@@ -55,13 +58,16 @@ begin
   if (select count(*)::int from public.mcp_auth_failures where created_at > now() - interval '1 hour') >= 200 then
     return false;
   end if;
-  insert into public.mcp_auth_failures (failure_kind, org_id, employee_id, credential_id, mcp_method)
+  insert into public.mcp_auth_failures (
+    failure_kind, org_id, employee_id, credential_id, mcp_method, throttle_bucket
+  )
   values (
     p_kind,
     p_org_id,
     p_employee_id,
     p_credential_id,
-    case when p_method ~ '^[A-Za-z0-9_./-]{1,64}$' then p_method else null end
+    case when p_method ~ '^[A-Za-z0-9_./-]{1,64}$' then p_method else null end,
+    floor(extract(epoch from now()) / 300.0)::bigint
   );
   return true;
 exception

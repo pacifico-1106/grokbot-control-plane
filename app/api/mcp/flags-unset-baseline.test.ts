@@ -41,10 +41,16 @@ const FLAGS = [
 ];
 const saved: Record<string, string | undefined> = {};
 beforeEach(() => {
-  for (const k of FLAGS) (saved[k] = process.env[k]), delete process.env[k];
+  for (const k of FLAGS) {
+    saved[k] = process.env[k];
+    delete process.env[k];
+  }
 });
 afterEach(() => {
-  for (const k of FLAGS) saved[k] === undefined ? delete process.env[k] : (process.env[k] = saved[k]);
+  for (const k of FLAGS) {
+    if (saved[k] === undefined) delete process.env[k];
+    else process.env[k] = saved[k];
+  }
 });
 
 const rpc = (body: unknown, headers: Record<string, string> = {}) =>

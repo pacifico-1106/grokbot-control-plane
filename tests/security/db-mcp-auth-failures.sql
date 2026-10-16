@@ -50,15 +50,22 @@ begin
   end loop;
 end $$;
 
--- (4) no secret columns
+-- (4) no secret columns; throttle_bucket is a 5-minute epoch (not a secret)
 do $$
 begin
   if exists (
     select 1 from information_schema.columns
     where table_schema = 'public' and table_name = 'mcp_auth_failures'
-      and column_name in ('token', 'secret', 'secret_hash', 'secret_prefix', 'fingerprint', 'presented')
+      and column_name in ('token', 'secret', 'secret_hash', 'secret_prefix', 'fingerprint', 'presented', 'hash')
   ) then
     raise exception 'mcp auth failures: secret-shaped column present';
+  end if;
+  if not exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'mcp_auth_failures'
+      and column_name = 'throttle_bucket' and is_nullable = 'NO' and data_type = 'bigint'
+  ) then
+    raise exception 'mcp auth failures: throttle_bucket bigint NOT NULL missing';
   end if;
 end $$;
 
@@ -106,10 +113,13 @@ begin
 end $$;
 
 -- (5) last_used_at conditional UPDATE
+-- now() is transaction-stable, so a second touch in this DO block returns the
+-- same timestamptz as the first; compare against the backdated value instead.
 do $$
 declare
   first timestamptz;
   second timestamptz;
+  backdated timestamptz;
   third timestamptz;
 begin
   first := public.touch_credential_last_used('af200000-0000-4000-8000-000000000001');
@@ -123,10 +133,15 @@ begin
   if (select last_used_at from public.credentials where id = 'af200000-0000-4000-8000-000000000001') <> first then
     raise exception 'mcp auth failures: last_used_at changed inside the throttle window';
   end if;
-  update public.credentials set last_used_at = now() - interval '6 minutes'
-    where id = 'af200000-0000-4000-8000-000000000001';
+  update public.credentials
+    set last_used_at = now() - interval '6 minutes'
+    where id = 'af200000-0000-4000-8000-000000000001'
+    returning last_used_at into backdated;
+  if backdated is null or backdated >= first then
+    raise exception 'mcp auth failures: could not backdate last_used_at for throttle test';
+  end if;
   third := public.touch_credential_last_used('af200000-0000-4000-8000-000000000001');
-  if third is null or third <= first then
+  if third is null or third <= backdated then
     raise exception 'mcp auth failures: touch after 5 minutes did not update';
   end if;
   if public.touch_credential_last_used(null) is not null then

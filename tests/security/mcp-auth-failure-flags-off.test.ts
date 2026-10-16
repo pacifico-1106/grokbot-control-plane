@@ -15,7 +15,10 @@ afterEach(() => {
 
 describe("FLAGS-OFF REGRESSION: MCP auth-failure flags default OFF", () => {
   test("both flags OFF when unset", () => {
-    for (const k of FLAGS) (saved[k] = process.env[k]), delete process.env[k];
+    for (const k of FLAGS) {
+      saved[k] = process.env[k];
+      delete process.env[k];
+    }
     expect(isMcpAuthFailureAuditEnabled()).toBe(false);
     expect(isMcpAuth401NextStepJaEnabled()).toBe(false);
   });

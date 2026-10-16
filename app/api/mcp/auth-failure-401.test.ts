@@ -69,10 +69,16 @@ const FLAGS = ["MCP_AUTH_FAILURE_AUDIT_ENABLED", "MCP_AUTH_401_NEXT_STEP_JA_ENAB
 const saved: Record<string, string | undefined> = {};
 beforeEach(() => {
   audits.length = 0;
-  for (const k of FLAGS) (saved[k] = process.env[k]), delete process.env[k];
+  for (const k of FLAGS) {
+    saved[k] = process.env[k];
+    delete process.env[k];
+  }
 });
 afterEach(() => {
-  for (const k of FLAGS) saved[k] === undefined ? delete process.env[k] : (process.env[k] = saved[k]!);
+  for (const k of FLAGS) {
+    if (saved[k] === undefined) delete process.env[k];
+    else process.env[k] = saved[k];
+  }
 });
 
 const rpc = (method: string, headers: Record<string, string> = {}, id: number | string = 3) =>
