@@ -230,6 +230,7 @@ describe("app: tenant config / credential tables are written only server-side", 
     has("app/api/gateway/link/route.ts", /export async function POST[\s\S]*requireOrgAdminSession\(\)/);
     // employee binding link / health probe write employee_bindings → owner/admin only
     has("app/api/employees/[id]/link/route.ts", /export async function POST[\s\S]*requireOrgAdminSession\(\)/);
+    has("app/api/employees/[id]/comm-account/route.ts", /role === "owner"[\s\S]*role === "admin"[\s\S]*requireCapability\(req, "view_employees"\)[\s\S]*export async function POST/);
     has("app/api/employees/[id]/health/route.ts", /export async function POST[\s\S]*requireOrgAdminSession\(\)/);
     // ?forceFail is a demo-only switch (lib/mode isDemoMode)
     has("app/api/employees/[id]/health/route.ts", /const forceFail =\s*isDemoMode\(\) &&/);

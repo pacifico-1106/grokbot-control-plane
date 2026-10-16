@@ -26,3 +26,12 @@ export function isCommAccountsEnabled(): boolean {
 export function isLineConversationEnabled(): boolean {
   return isCommAccountsEnabled() && parseFlag(process.env.LINE_CONVERSATION_ENABLED);
 }
+
+/**
+ * L-8: owner/admin connect may GET /v2/bot/info, PUT the conversation webhook
+ * URL, and POST /v2/bot/channel/webhook/test. Needs the conversation flags.
+ * Default OFF. AI / Admin MCP never call this path.
+ */
+export function isLineWebhookAutoSetupEnabled(): boolean {
+  return isLineConversationEnabled() && parseFlag(process.env.LINE_WEBHOOK_AUTO_SETUP_ENABLED);
+}
