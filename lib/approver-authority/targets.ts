@@ -67,6 +67,7 @@ export const APPROVER_AUTHORITY_TARGETS = {
     "members.update",
     "employees.leave",
     "employees.reinstate",
+    "employees.retire",
     // 2026-10-09 gap closure: these change approvers / permissions too.
     "setup.approvalDelivery.autoResolve",
     "setup.lineApproval.demoteTelegram",
@@ -499,7 +500,7 @@ function classifyUnsafe(input: ApproverClassificationInput): ApproverRequirement
   if (tool === "policy.patch") classifyPolicyPatch(mutation, input.context, reasons);
   if (tool === "employees.issue") classifyEmployeeIssue(mutation, reasons);
   if (tool === "schedulingPolicy.patch") classifySchedulingPolicy(mutation, input.context, reasons);
-  if (tool === "employees.reinstate" || tool === "employees.credential.reissue") {
+  if (tool === "employees.reinstate" || tool === "employees.credential.reissue" || tool === "employees.retire") {
     const scopes = input.context?.currentEmployeeScopes;
     if (!scopes) reasons.add("money_scope_unverified");
     else if (hasMoneyScope(scopes)) reasons.add("employee_has_money_scope");
