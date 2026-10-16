@@ -1,7 +1,8 @@
 -- TOKYO307: REST で先に失効した社員証の監査を、あとから正規化する。
 --
 -- 使い方（本番に流す前は必ず ROLLBACK のまま）:
---   1. 下の変数を埋める（完全な UUID が無いときは prefix のまま）。
+--   1. 下の変数を埋める。org_id は必須（TOKYO307）。未設定のままでは 0 件（他 org に広がらない）。
+--      完全な UUID が無いときは 8 桁 hex prefix のまま。
 --   2. このファイル全体を SQL エディタで実行する（BEGIN … ROLLBACK）。
 --   3. 「確認」セクションの結果を見る。
 --   4. 書き込み結果（insert 件数）を確認したら ROLLBACK されていることを確認する。
@@ -16,8 +17,12 @@
 --   actor_email に実施者（八坂 GO）
 --
 -- 二重挿入しない:
---   同じ credential_id + action + metadata.backfill=true が既にあれば入れない。
+--   同じ org の credential_id + action = credential.revoked が既にあれば入れない（backfill 以外も含む）。
 --   employee.terminated は employee_id 単位で同様。
+--
+-- テナント:
+--   prefix / id の一致は p.org_id が NOT NULL のときだけ。他 org には広がらない。
+--   prefix は ^[0-9a-f]{8}$ のみ。1 prefix が 0 件または 2 件以上なら書き込みしない。
 
 begin;
 
@@ -40,14 +45,14 @@ insert into retire_backfill_params (
 ) values (
   array['9e9bfc80', '53d551f3', '43b63187', '0fd2f410'],
   '{}',
-  null,  -- 分かっているなら TOKYO307 の org_id を入れる
+  null,  -- 必須。TOKYO307 の org_id を入れてから COMMIT。null のままでは一致 0 件・書き込み 0 件
   'yasaka@tokyo307.example',  -- 八坂さんの実メールに置き換え
   'yasaka',
   'TOKYO307 AI社員4名の退職（八坂GO）。社員証はRESTで先に revoked_at を入れた。監査を後から正規化する。',
   'yasaka'
 );
 
--- 対象社員証
+-- 対象社員証（この org だけ。org_id が null なら 0 件）
 create temporary table if not exists retire_backfill_credentials (
   credential_id uuid primary key,
   org_id uuid not null,
@@ -73,18 +78,53 @@ join public.employees e
   on e.id = c.employee_id
  and e.org_id = c.org_id
 cross join retire_backfill_params p
-where (
-  (cardinality(p.credential_ids) > 0 and c.id = any (p.credential_ids))
-  or (
-    cardinality(p.credential_ids) = 0
-    and exists (
+where p.org_id is not null
+  and c.org_id = p.org_id
+  and (
+    (cardinality(p.credential_ids) > 0 and c.id = any (p.credential_ids))
+    or (
+      cardinality(p.credential_ids) = 0
+      and exists (
+        select 1
+        from unnest(p.credential_id_prefixes) as pref
+        where pref ~ '^[0-9a-f]{8}$'
+          and c.id::text like pref || '%'
+      )
+    )
+  );
+
+-- 書き込みしてよいか（他 org / prefix 過不足 / org_id 未設定なら false → INSERT 0 件）
+create temporary table if not exists retire_backfill_write_ok (
+  ok boolean not null
+) on commit drop;
+
+delete from retire_backfill_write_ok;
+insert into retire_backfill_write_ok (ok)
+select
+  p.org_id is not null
+  and (select count(*) from retire_backfill_credentials) > 0
+  and (select count(distinct org_id) from retire_backfill_credentials) = 1
+  and not exists (
+    select 1
+    from retire_backfill_credentials t
+    where t.org_id is distinct from p.org_id
+  )
+  and (
+    cardinality(p.credential_ids) > 0
+    or not exists (
       select 1
       from unnest(p.credential_id_prefixes) as pref
-      where c.id::text like pref || '%'
+      where (
+        select count(*)
+        from public.credentials c
+        where p.org_id is not null
+          and c.org_id = p.org_id
+          and pref ~ '^[0-9a-f]{8}$'
+          and c.id::text like pref || '%'
+      ) <> 1
     )
   )
-)
-and (p.org_id is null or c.org_id = p.org_id);
+from retire_backfill_params p;
 
 -- ===========================================================================
 -- 確認（read-only。ROLLBACK しても結果は見える）
@@ -191,19 +231,43 @@ where s.employee_id in (select employee_id from retire_backfill_credentials)
   and s.status = 'active'
 order by s.employee_id, s.id;
 
--- (7) 対象 prefix で社員証が見つからないもの（打ち間違い防止）
+-- (7) 対象 prefix で社員証が見つからないもの（打ち間違い防止。この org のみ）
 select
   'unmatched_prefixes' as check_name,
   pref as credential_id_prefix
 from retire_backfill_params p
 cross join unnest(p.credential_id_prefixes) as pref
 where cardinality(p.credential_ids) = 0
+  and p.org_id is not null
   and not exists (
     select 1
     from public.credentials c
-    where c.id::text like pref || '%'
-      and (p.org_id is null or c.org_id = p.org_id)
+    where c.org_id = p.org_id
+      and pref ~ '^[0-9a-f]{8}$'
+      and c.id::text like pref || '%'
   );
+
+-- (8) 1 prefix が 1 件以外（0 件・2 件以上）。COMMIT 前に空であること
+select
+  'overmatched_or_unmatched_prefixes' as check_name,
+  pref as credential_id_prefix,
+  count(*) as matches
+from retire_backfill_params p
+cross join unnest(p.credential_id_prefixes) as pref
+join public.credentials c
+  on p.org_id is not null
+ and c.org_id = p.org_id
+ and pref ~ '^[0-9a-f]{8}$'
+ and c.id::text like pref || '%'
+where cardinality(p.credential_ids) = 0
+group by pref
+having count(*) <> 1;
+
+-- (9) 一致した org の数（1 以外なら書き込まない）
+select
+  'matched_org_count' as check_name,
+  (select count(distinct org_id) from retire_backfill_credentials) as distinct_orgs,
+  (select ok from retire_backfill_write_ok) as write_ok;
 
 -- ===========================================================================
 -- 書き込み（このファイルは ROLLBACK。本番適用は人間が COMMIT に変える）
@@ -232,14 +296,17 @@ select
   )
 from retire_backfill_credentials t
 cross join retire_backfill_params p
-where t.revoked_at is not null
+cross join retire_backfill_write_ok w
+where w.ok
+  and p.org_id is not null
+  and t.org_id = p.org_id
+  and t.revoked_at is not null
   and not exists (
     select 1
     from public.audit_events a
     where a.org_id = t.org_id
       and a.credential_id = t.credential_id
       and a.action = 'credential.revoked'
-      and coalesce((a.metadata ->> 'backfill')::boolean, false) = true
   );
 
 -- 従業員ごとの employee.terminated（backfill、1人1行）
@@ -271,14 +338,19 @@ from (
   order by employee_id, revoked_at desc nulls last
 ) t
 cross join retire_backfill_params p
-where not exists (
-  select 1
-  from public.audit_events a
-  where a.org_id = t.org_id
-    and a.employee_id = t.employee_id
-    and a.action = 'employee.terminated'
-    and coalesce((a.metadata ->> 'backfill')::boolean, false) = true
-);
+cross join retire_backfill_write_ok w
+where w.ok
+  and p.org_id is not null
+  and t.org_id = p.org_id
+  and t.revoked_at is not null
+  and t.employee_status = 'suspended'
+  and not exists (
+    select 1
+    from public.audit_events a
+    where a.org_id = t.org_id
+      and a.employee_id = t.employee_id
+      and a.action = 'employee.terminated'
+  );
 
 -- 書き込み結果（ROLLBACK 前に件数を見る）
 select
@@ -317,14 +389,17 @@ select
   )
 from retire_backfill_credentials t
 cross join retire_backfill_params p
-where t.revoked_at is not null
+cross join retire_backfill_write_ok w
+where w.ok
+  and p.org_id is not null
+  and t.org_id = p.org_id
+  and t.revoked_at is not null
   and not exists (
     select 1
     from public.audit_events a
     where a.org_id = t.org_id
       and a.credential_id = t.credential_id
       and a.action = 'credential.revoked'
-      and coalesce((a.metadata ->> 'backfill')::boolean, false) = true
   );
 
 select
