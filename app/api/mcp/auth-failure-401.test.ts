@@ -5,12 +5,14 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 
 const audits: Array<Record<string, unknown>> = [];
+let auditHang = false;
 function auditFlagOn() {
   const v = (process.env.MCP_AUTH_FAILURE_AUDIT_ENABLED ?? "").trim().toLowerCase();
   return v === "true" || v === "1" || v === "on" || v === "enabled";
 }
 mock.module("@/lib/data/mcp-auth-failures", () => ({
   recordMcpAuthFailure: async (input: Record<string, unknown>) => {
+    if (auditHang) return new Promise(() => {});
     if (!auditFlagOn()) return;
     audits.push(input);
   },
@@ -54,6 +56,17 @@ mock.module("@/lib/auth/employee-credential", () => ({
         credentialId: "aa200000-0000-4000-8000-000000000001",
       };
     }
+    if (raw === "gb_emp_revoked_fixture") {
+      return {
+        ok: false,
+        code: "revoked",
+        message: "credential / binding revoked (fail-closed)",
+        httpStatus: 403,
+        orgId: "aa000000-0000-4000-8000-0000000000a1",
+        employeeId: "emp_revoked_1",
+        credentialId: "aa200000-0000-4000-8000-000000000099",
+      };
+    }
     return {
       ok: false,
       code: "invalid_credential",
@@ -69,6 +82,7 @@ const FLAGS = ["MCP_AUTH_FAILURE_AUDIT_ENABLED", "MCP_AUTH_401_NEXT_STEP_JA_ENAB
 const saved: Record<string, string | undefined> = {};
 beforeEach(() => {
   audits.length = 0;
+  auditHang = false;
   for (const k of FLAGS) {
     saved[k] = process.env[k];
     delete process.env[k];
@@ -130,7 +144,10 @@ describe("MCP_AUTH_401_NEXT_STEP_JA_ENABLED ON", () => {
     expect(missing.error.data.nextStepJa).toContain("環境変数");
     expect(expired.error.data.nextStepJa).toContain("期限");
     expect(expired.error.data.nextStepJa).toContain("再発行");
-    expect(expired.error.data.nextStepJa).toContain("/app/employees/emp_expired_1");
+    expect(expired.error.data.nextStepJa).toContain("/app/employees");
+    expect(expired.error.data.nextStepJa).not.toContain("emp_expired_1");
+    expect(expired.error.data.nextStepJa).not.toContain("/app/employees/");
+    expect(JSON.stringify(expired)).not.toContain("aa000000-0000-4000-8000-0000000000a1");
     expect(missing.error.data.nextStepJa).not.toBe(expired.error.data.nextStepJa);
   });
 
@@ -142,6 +159,17 @@ describe("MCP_AUTH_401_NEXT_STEP_JA_ENABLED ON", () => {
     expect(body.error.data.nextStepJa).not.toContain("期限");
     expect(body.error.data.nextStepJa).not.toContain("届いていません");
     expect(JSON.stringify(body)).not.toContain(SECRET);
+  });
+
+  test("unknown token and revoked token share the same Japanese nextStepJa (no existence oracle)", async () => {
+    process.env.MCP_AUTH_401_NEXT_STEP_JA_ENABLED = "1";
+    const unknown = await (await rpc("tools/list", { authorization: `Bearer ${SECRET}` })).json();
+    const revoked = await (await rpc("tools/list", { authorization: "Bearer gb_emp_revoked_fixture" }, 5)).json();
+    expect(unknown.error.data.code).toBe("invalid_credential");
+    expect(revoked.error.data.code).toBe("revoked");
+    expect(unknown.error.data.nextStepJa).toBe(revoked.error.data.nextStepJa);
+    expect(JSON.stringify(revoked)).not.toContain("emp_revoked_1");
+    expect(JSON.stringify(revoked.error.data)).not.toContain("aa000000-0000-4000-8000-0000000000a1");
   });
 });
 
@@ -167,4 +195,12 @@ describe("MCP_AUTH_FAILURE_AUDIT_ENABLED ON", () => {
     await rpc("tools/list");
     expect(audits).toEqual([]);
   });
+
+  test("401 returns even if the audit write hangs", async () => {
+    process.env.MCP_AUTH_FAILURE_AUDIT_ENABLED = "1";
+    auditHang = true;
+    const res = await rpc("tools/list");
+    expect(res.status).toBe(401);
+    expect((await res.json()).error.data.code).toBe("missing_credential");
+  }, 1000);
 });

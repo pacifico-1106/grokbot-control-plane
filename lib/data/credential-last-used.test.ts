@@ -4,7 +4,7 @@
  */
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 
-type RpcRes = { data: unknown; error: unknown } | "throw";
+type RpcRes = { data: unknown; error: unknown } | "throw" | "hang";
 let rpcRes: RpcRes = { data: "2026-10-16T00:00:00.000Z", error: null };
 let clientAvailable = true;
 const rpcCalls: Array<{ fn: string; args: Record<string, unknown> }> = [];
@@ -13,6 +13,7 @@ function fakeClient() {
     rpc: async (fn: string, args: Record<string, unknown>) => {
       rpcCalls.push({ fn, args });
       if (rpcRes === "throw") throw new Error("fetch failed");
+      if (rpcRes === "hang") return new Promise(() => {});
       return rpcRes;
     },
   };
@@ -47,7 +48,9 @@ afterAll(() => {
   }
 });
 
-const { touchCredentialLastUsed, CREDENTIAL_LAST_USED_MIN_INTERVAL } = await import("./credential-last-used");
+const { touchCredentialLastUsed, CREDENTIAL_LAST_USED_MIN_INTERVAL, CREDENTIAL_LAST_USED_TIMEOUT_MS } = await import(
+  "./credential-last-used"
+);
 
 const CRED = "bb200000-0000-4000-8000-000000000001";
 
@@ -93,4 +96,17 @@ describe("touchCredentialLastUsed", () => {
     await expect(touchCredentialLastUsed(CRED)).resolves.toBeUndefined();
     expect(rpcCalls).toEqual([]);
   });
+
+  test("timeout is bounded so a hung UPDATE cannot stall auth", () => {
+    expect(CREDENTIAL_LAST_USED_TIMEOUT_MS).toBeGreaterThan(0);
+    expect(CREDENTIAL_LAST_USED_TIMEOUT_MS).toBeLessThanOrEqual(500);
+  });
+
+  test("hanging RPC times out and never throws", async () => {
+    prodMode();
+    rpcRes = "hang";
+    const started = Date.now();
+    await expect(touchCredentialLastUsed(CRED)).resolves.toBeUndefined();
+    expect(Date.now() - started).toBeLessThan(CREDENTIAL_LAST_USED_TIMEOUT_MS + 250);
+  }, 1000);
 });

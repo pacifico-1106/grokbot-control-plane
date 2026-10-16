@@ -56,14 +56,18 @@ describe("mcpAuth401NextStepJa", () => {
     expect(expired).not.toBe(missing);
   });
 
-  test("expired: 再発行の手順（ダッシュボード）。社員IDが安全ならパスを含む", () => {
+  test("expired: 再発行の手順。社員 / org / credential id は出さない", () => {
     const expired = mcpAuth401NextStepJa("expired");
     expect(expired).toContain("再発行");
     expect(expired).toContain("/app/employees");
     expect(expired).toContain("チャットに貼らない");
     const withId = mcpAuth401NextStepJa("expired", { employeeId: "emp_tomori_01" });
-    expect(withId).toContain("/app/employees/emp_tomori_01");
-    expect(mcpAuth401NextStepJa("expired", { employeeId: "not a path" })).not.toContain("not a path");
+    expect(withId).toBe(expired);
+    expect(withId).not.toContain("emp_tomori_01");
+    expect(withId).not.toContain("/app/employees/");
+    expect(mcpAuth401NextStepJa("expired", { employeeId: "aa100000-0000-4000-8000-000000000001" })).not.toContain(
+      "aa100000-0000-4000-8000-000000000001"
+    );
   });
 
   test("invalid: 存在有無を漏らさない。トークン・ハッシュ・プレフィックスなし", () => {
@@ -76,8 +80,16 @@ describe("mcpAuth401NextStepJa", () => {
     expect(JSON.stringify(invalid)).not.toContain("secret");
   });
 
-  test("other codes → null (body unchanged)", () => {
-    expect(mcpAuth401NextStepJa("revoked")).toBeNull();
+  test("unknown (invalid) and revoked Japanese text are identical — no existence oracle", () => {
+    const invalid = mcpAuth401NextStepJa("invalid_credential");
+    const revoked = mcpAuth401NextStepJa("revoked");
+    expect(revoked).toBe(invalid);
+    expect(revoked).toContain("確認できませんでした");
+    expect(revoked).not.toContain("失効");
+    expect(revoked).not.toContain("revok");
+  });
+
+  test("other non-401 codes → null (body unchanged)", () => {
     expect(mcpAuth401NextStepJa("employee_on_hold")).toBeNull();
   });
 });

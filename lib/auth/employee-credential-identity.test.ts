@@ -1,6 +1,7 @@
 /**
- * Auth-failure identity: expired rows resolve org/employee/credential id.
- * Invalid uses at most a non-secret prefix lookup (or the rotated-away row).
+ * Auth-failure identity: expired / hash-matched rotated rows resolve
+ * org/employee/credential id. Prefix-only guesses must NOT attach identity
+ * and must NOT query secret_prefix (timing / existence oracle).
  * Never returns the token or hash on the failure object.
  */
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
@@ -28,6 +29,7 @@ const PREFIX_ONLY = "gb_emp_aabbcc1_ffffffffffffffffffffffffffffffff";
 
 const rows: CredRow[] = [];
 const touches: string[] = [];
+const prefixEqs: string[] = [];
 type Binding = { employeeId: string; orgId: string; status: string; credentialGeneration: number; credentialFingerprint: string };
 let bindingByHash: Record<string, Binding | null> = {};
 let currentBinding: Binding | null = null;
@@ -54,6 +56,7 @@ function fakeClient() {
       const run = () => rows.filter((r) => table === "credentials" && matches(r, filters));
       q.select = () => q;
       q.eq = (k: string, v: unknown) => {
+        if (k === "secret_prefix") prefixEqs.push(String(v));
         filters[k] = v;
         return q;
       };
@@ -116,6 +119,7 @@ const { resolveEmployeeCredential } = await import("./employee-credential");
 beforeEach(() => {
   rows.length = 0;
   touches.length = 0;
+  prefixEqs.length = 0;
   bindingByHash = {};
   currentBinding = null;
   rows.push({
@@ -173,17 +177,26 @@ describe("prod resolve: identity on 401 + last_used_at on success", () => {
     expect(JSON.stringify(r)).not.toContain(hash);
   });
 
-  test("invalid prefix lookup attaches ids when exactly one live row matches", async () => {
+  test("prefix-only token does not attach identity and does not query secret_prefix", async () => {
     const r = await resolveEmployeeCredential(req(PREFIX_ONLY));
     expect(r.ok).toBe(false);
     if (r.ok) throw new Error("expected failure");
     expect(r.code).toBe("invalid_credential");
-    expect(r.orgId).toBe(ORG);
-    expect(r.employeeId).toBe(EMP);
-    expect(r.credentialId).toBe(CRED);
+    expect(r.orgId).toBeUndefined();
+    expect(r.employeeId).toBeUndefined();
+    expect(r.credentialId).toBeUndefined();
+    expect(prefixEqs).toEqual([]);
     expect(touches).toEqual([]);
     expect(JSON.stringify(r)).not.toContain(PREFIX_ONLY);
     expect(JSON.stringify(r)).not.toContain(LIVE);
+  });
+
+  test("unknown token does not query secret_prefix (flags-OFF timing unchanged)", async () => {
+    const r = await resolveEmployeeCredential(req(UNKNOWN));
+    expect(r.ok).toBe(false);
+    if (r.ok) throw new Error("expected failure");
+    expect(r.code).toBe("invalid_credential");
+    expect(prefixEqs).toEqual([]);
   });
 
   test("invalid unknown token does not claim an identity", async () => {

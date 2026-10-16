@@ -210,7 +210,7 @@ async function handlePost(req: Request) {
       method.startsWith("notifications/");
     if (!(lifecycle && isMcpOAuthLegacyUnauthInitialize())) {
       if (method === "initialize") maybeLogUnauthInitialize(req, params);
-      await auditMcpAuthFailure({ code: "missing_credential" }, method);
+      void auditMcpAuthFailure({ code: "missing_credential" }, method);
       return jsonRpcError(
         id,
         -32001,
@@ -271,7 +271,7 @@ async function handlePost(req: Request) {
   if (isMcpEventsEnabled() && (method === "events/list" || method === "events/subscribe" || method === "events/unsubscribe")) {
     const auth = await resolveEmployeeCredential(req);
     if (!auth.ok) {
-      await auditMcpAuthFailure(auth, method);
+      void auditMcpAuthFailure(auth, method);
       return jsonRpcError(id, -32012, "Forbidden", mcpAuthFailureErrorData(auth), auth.httpStatus);
     }
     const events = await import("@/lib/mcp-events/service");
@@ -293,7 +293,7 @@ async function handlePost(req: Request) {
     // OAuth OFF → resolveMcpCredential is exactly resolveEmployeeCredential (gb_emp_ only).
     const auth = await resolveMcpCredential(req);
     if (!auth.ok) {
-      await auditMcpAuthFailure(auth, method);
+      void auditMcpAuthFailure(auth, method);
       const challengeOpts = hasAnyMcpCredential(req) ? { error: "invalid_token" as const, description: auth.code } : {};
       const challenge =
         isMcpOAuthEnabled() && auth.httpStatus === 401 ? { "WWW-Authenticate": wwwAuthenticate(challengeOpts) } : undefined;

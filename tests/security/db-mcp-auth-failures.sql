@@ -50,6 +50,19 @@ begin
   end loop;
 end $$;
 
+-- (4b) touch_credential_last_used must fail-fast (no deadlock hang) and store no secret
+do $$
+declare def text;
+begin
+  def := pg_get_functiondef('public.touch_credential_last_used(uuid)'::regprocedure);
+  if position('lock_timeout' in def) = 0 or position('statement_timeout' in def) = 0 then
+    raise exception 'mcp auth failures: touch_credential_last_used missing lock/statement timeout';
+  end if;
+  if position('secret_hash' in def) > 0 or position('secret_prefix' in def) > 0 or position('token' in def) > 0 then
+    raise exception 'mcp auth failures: touch_credential_last_used mentions a secret';
+  end if;
+end $$;
+
 -- (4) no secret columns; throttle_bucket is a 5-minute epoch (not a secret)
 do $$
 begin

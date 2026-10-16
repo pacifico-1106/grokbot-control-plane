@@ -4,7 +4,7 @@
  */
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 
-type RpcRes = { data: unknown; error: unknown } | "throw";
+type RpcRes = { data: unknown; error: unknown } | "throw" | "hang";
 let rpcRes: RpcRes = { data: true, error: null };
 let clientAvailable = true;
 const rpcCalls: Array<{ fn: string; args: Record<string, unknown> }> = [];
@@ -13,6 +13,7 @@ function fakeClient() {
     rpc: async (fn: string, args: Record<string, unknown>) => {
       rpcCalls.push({ fn, args });
       if (rpcRes === "throw") throw new Error("fetch failed");
+      if (rpcRes === "hang") return new Promise(() => {});
       return rpcRes;
     },
   };
@@ -47,7 +48,7 @@ afterAll(() => {
 });
 
 const { isMcpAuthFailureAuditEnabled } = await import("@/lib/feature-flags");
-const { recordMcpAuthFailure } = await import("./mcp-auth-failures");
+const { recordMcpAuthFailure, MCP_AUTH_FAILURE_TIMEOUT_MS } = await import("./mcp-auth-failures");
 
 const ORG = "aa000000-0000-4000-8000-0000000000a1";
 const EMP = "aa100000-0000-4000-8000-000000000001";
@@ -159,4 +160,18 @@ describe("recordMcpAuthFailure", () => {
     await recordMcpAuthFailure({ kind: "revoked" as "invalid", method: "tools/list" });
     expect(rpcCalls).toEqual([]);
   });
+
+  test("timeout is bounded so a hung insert cannot stall the 401", () => {
+    expect(MCP_AUTH_FAILURE_TIMEOUT_MS).toBeGreaterThan(0);
+    expect(MCP_AUTH_FAILURE_TIMEOUT_MS).toBeLessThanOrEqual(500);
+  });
+
+  test("hanging RPC times out and never throws", async () => {
+    prodMode();
+    process.env[FLAG] = "1";
+    rpcRes = "hang";
+    const started = Date.now();
+    await expect(recordMcpAuthFailure({ kind: "invalid", method: "tools/list" })).resolves.toBeUndefined();
+    expect(Date.now() - started).toBeLessThan(MCP_AUTH_FAILURE_TIMEOUT_MS + 250);
+  }, 1000);
 });

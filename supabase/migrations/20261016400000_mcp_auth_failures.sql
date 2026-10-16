@@ -11,7 +11,8 @@
 -- No FKs (rows survive employee/credential delete).
 --
 -- touch_credential_last_used: conditional UPDATE last_used_at when null or
--- older than 5 minutes. service_role only.
+-- older than 5 minutes. Single-row PK update + lock/statement timeouts so a
+-- contended credentials row cannot deadlock or hang auth. service_role only.
 begin;
 
 create table if not exists public.mcp_auth_failures (
@@ -90,6 +91,8 @@ begin
   if p_id is null then
     return null;
   end if;
+  perform set_config('lock_timeout', '200ms', true);
+  perform set_config('statement_timeout', '250ms', true);
   update public.credentials
   set last_used_at = now()
   where id = p_id
@@ -97,6 +100,11 @@ begin
     and (last_used_at is null or last_used_at < now() - interval '5 minutes')
   returning last_used_at into v_at;
   return v_at;
+exception
+  when lock_not_available then
+    return null;
+  when query_canceled then
+    return null;
 end
 $fn$;
 revoke all on function public.touch_credential_last_used(uuid) from public, anon, authenticated;

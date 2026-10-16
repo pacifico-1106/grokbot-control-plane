@@ -14,9 +14,6 @@ import { isDemoMode } from "@/lib/mode";
 import { createSupabaseAdminClient } from "@/lib/supabase";
 import type { EmployeeBinding } from "@/lib/types";
 
-/** mintOneTimeSecret stores raw.slice(0, 14). Default column 'gb_emp_' is not identifying. */
-export const EMPLOYEE_SECRET_NONSECRET_PREFIX_LEN = 14;
-
 export type ResolvedEmployeeCredential = {
   employeeId: string;
   orgId: string;
@@ -83,31 +80,8 @@ function identityFrom(
   };
 }
 
-/** Non-secret key prefix lookup (minted slice(0, 14)). At most one live row. */
-async function lookupByNonSecretPrefix(raw: string): Promise<AuthFailureIdentity | undefined> {
-  if (raw.length < EMPLOYEE_SECRET_NONSECRET_PREFIX_LEN) return undefined;
-  const prefix = raw.slice(0, EMPLOYEE_SECRET_NONSECRET_PREFIX_LEN);
-  if (prefix === "gb_emp_") return undefined;
-  const admin = createSupabaseAdminClient();
-  if (!admin) return undefined;
-  const { data } = await admin
-    .from("credentials")
-    .select("id, org_id, employee_id")
-    .eq("secret_prefix", prefix)
-    .is("revoked_at", null)
-    .limit(2);
-  const list = (Array.isArray(data) ? data : data ? [data] : []) as Array<{
-    id: string;
-    org_id: string;
-    employee_id: string;
-  }>;
-  if (list.length !== 1) return undefined;
-  return identityFrom(list[0].org_id, list[0].employee_id, list[0].id);
-}
-
 async function lookupProdByHash(
-  hash: string,
-  raw: string
+  hash: string
 ): Promise<
   | { ok: true; value: ResolvedEmployeeCredential }
   | { ok: false; code: "invalid_credential" | "revoked" | "expired" } & AuthFailureIdentity
@@ -172,10 +146,7 @@ async function lookupProdByHash(
     .limit(1)
     .maybeSingle();
 
-  if (!cred) {
-    const byPrefix = await lookupByNonSecretPrefix(raw);
-    return { ok: false, code: "invalid_credential", ...byPrefix };
-  }
+  if (!cred) return { ok: false, code: "invalid_credential" };
 
   const row = cred as {
     id: string;
@@ -270,7 +241,7 @@ export async function resolveEmployeeCredential(
   const fingerprint = fingerprintSecret(raw);
   const looked = isDemoMode()
     ? await lookupDemoByHash(fingerprint)
-    : await lookupProdByHash(fingerprint, raw);
+    : await lookupProdByHash(fingerprint);
 
   if (!looked.ok) {
     const messages: Record<string, string> = {
