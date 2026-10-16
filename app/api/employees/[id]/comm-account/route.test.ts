@@ -64,7 +64,12 @@ const ctx = (id = "emp_comm") => ({ params: Promise.resolve({ id }) });
 const req = (method: "GET" | "POST", id = "emp_comm", member = "mem_1", body?: Record<string, unknown>) =>
   new Request(`https://staffpass.test/api/employees/${id}/comm-account`, {
     method,
-    headers: { "content-type": "application/json", "x-member-id": member },
+    headers: {
+      "content-type": "application/json",
+      "x-member-id": member,
+      origin: "https://staffpass.test",
+      "sec-fetch-site": "same-origin",
+    },
     body: method === "POST" ? JSON.stringify(body ?? SECRETS) : undefined,
   });
 
@@ -165,5 +170,64 @@ describe("/api/employees/[id]/comm-account", () => {
     const emp = readFileSync(join(process.cwd(), "lib/mcp/tools.ts"), "utf8");
     expect(admin).not.toMatch(/comm-account|setupLineConversationWebhook|line-webhook-setup/);
     expect(emp).not.toMatch(/comm-account|setupLineConversationWebhook|line-webhook-setup/);
+  });
+
+  test("POST missing Origin / cross-origin / Origin null is CSRF-refused (flag ON and OFF); no LINE call", async () => {
+    const { POST } = await import("@/app/api/employees/[id]/comm-account/route");
+    for (const flagOn of [true, false]) {
+      process.env.LINE_WEBHOOK_AUTO_SETUP_ENABLED = flagOn ? "true" : "";
+      for (const extra of [{}, { origin: "https://evil.example" }, { origin: "null" }, { "sec-fetch-site": "cross-site" }]) {
+        const res = await POST(
+          new Request("https://staffpass.test/api/employees/emp_comm/comm-account", {
+            method: "POST",
+            headers: { "content-type": "application/json", "x-member-id": "mem_1", ...extra },
+            body: JSON.stringify(SECRETS),
+          }),
+          ctx()
+        );
+        expect(res.status).toBe(403);
+        expect((await res.json()).error).toBe("cross_origin_refused");
+        expect(calls).toEqual([]);
+      }
+    }
+  });
+
+  test("AI / Admin MCP credentials cannot connect (even with a session + same-origin)", async () => {
+    const { POST, GET } = await import("@/app/api/employees/[id]/comm-account/route");
+    const extras: Array<Record<string, string>> = [
+      { authorization: "Bearer gb_emp_0123456789abcdef" },
+      { authorization: "Bearer gb_adm_0123456789abcdef" },
+      { "x-staffpass-credential": "gb_emp_0123456789abcdef" },
+      { "x-staffpass-admin-credential": "gb_adm_0123456789abcdef" },
+      { "x-api-key": "gb_adm_0123456789abcdef" },
+    ];
+    for (const extra of extras) {
+      const post = await POST(
+        new Request("https://staffpass.test/api/employees/emp_comm/comm-account", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-member-id": "mem_1",
+            origin: "https://staffpass.test",
+            "sec-fetch-site": "same-origin",
+            ...extra,
+          },
+          body: JSON.stringify(SECRETS),
+        }),
+        ctx()
+      );
+      expect(post.status).toBe(403);
+      expect((await post.json()).error).toBe("ai_cannot_connect");
+      const get = await GET(
+        new Request("https://staffpass.test/api/employees/emp_comm/comm-account", {
+          method: "GET",
+          headers: { "x-member-id": "mem_1", ...extra },
+        }),
+        ctx()
+      );
+      expect(get.status).toBe(403);
+      expect((await get.json()).error).toBe("ai_cannot_connect");
+      expect(calls).toEqual([]);
+    }
   });
 });

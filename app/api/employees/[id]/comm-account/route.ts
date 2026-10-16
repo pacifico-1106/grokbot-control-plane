@@ -1,14 +1,17 @@
 /**
  * L-8: owner/admin LINE conversation connect. Fetches the bot userId, stores
  * it on the comm account, PUTs the conversation webhook URL, and tests it.
- * Secrets are accepted from this browser form only — never from AI / Admin MCP.
- * Flags default OFF → 404. Same-org BOLA via getEmployee(id, actor.orgId).
+ * Secrets are accepted from this browser form only — never from AI / Admin MCP
+ * (any Authorization / x-staffpass-*-credential / x-api-key is 403).
+ * POST is same-origin JSON only (CSRF). Flags default OFF → 404.
+ * Same-org BOLA via getEmployee(id, actor.orgId).
  */
 import { resolveAppOrigin } from "@/lib/app-url";
 import { isLineWebhookAutoSetupEnabled } from "@/lib/comm/flags";
 import { conversationWebhookUrl, findEmployeeLineAccount, setupLineConversationWebhook } from "@/lib/comm/line-webhook-setup";
 import { appendAuditEvent, getEmployee } from "@/lib/data";
 import { jsonUtf8 } from "@/lib/http/json-utf8";
+import { aiCredentialPresented, refuseUnsafeBrowserPost } from "@/lib/safety/hold-route";
 import { requireCapability } from "@/lib/team/demo-actor";
 
 export const runtime = "nodejs";
@@ -21,7 +24,21 @@ function isOwnerOrAdmin(role: string): boolean {
   return role === "owner" || role === "admin";
 }
 
+function refuseAiConnect(req: Request): Response | null {
+  if (!aiCredentialPresented(req)) return null;
+  return json(
+    {
+      ok: false,
+      error: "ai_cannot_connect",
+      message: "AI の資格情報では接続できません。人がダッシュボードから操作してください。",
+    },
+    403
+  );
+}
+
 async function gate(req: Request) {
+  const ai = refuseAiConnect(req);
+  if (ai) return { ok: false as const, response: ai };
   if (!isLineWebhookAutoSetupEnabled()) {
     return { ok: false as const, response: json({ ok: false, error: "feature_disabled", message: "この機能は現在オフです" }, 404) };
   }
@@ -67,6 +84,10 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
 }
 
 export async function POST(req: Request, ctx: { params: Promise<{ id: string }> }) {
+  const ai = refuseAiConnect(req);
+  if (ai) return ai;
+  const csrf = refuseUnsafeBrowserPost(req);
+  if (csrf) return csrf;
   const g = await gate(req);
   if (!g.ok) return g.response;
   const { id } = await ctx.params;
