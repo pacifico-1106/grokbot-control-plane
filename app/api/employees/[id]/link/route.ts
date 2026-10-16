@@ -45,7 +45,7 @@ export async function POST(
       demo: runtimeModeLabel() === "demo",
       mode: runtimeModeLabel(),
       binding: bindingPublicView(binding),
-      message: "Grok Bot エージェントを連携しました（employeeId は不変）",
+      message: "AI エージェントを連携しました（employeeId は不変）",
       ...(isMcpEndpointHandoffEnabled() ? { mcpHandoff: buildMcpHandoff({ employeeId: id }) } : {}),
     });
   } catch (e) {

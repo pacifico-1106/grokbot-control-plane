@@ -43,9 +43,9 @@ export async function POST(req: Request) {
     runtimeMode: runtimeModeLabel(),
     message:
       next === "linked"
-        ? "Grok Bot へ連携完了（デモ）"
+        ? "AI エージェントへ連携完了（デモ）"
         : next === "pending"
-          ? "Grok Botへ連携→戻る を待機中"
+          ? "AI エージェントへ連携→戻る を待機中"
           : "連携解除済み",
   });
 }

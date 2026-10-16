@@ -53,7 +53,7 @@ export async function GET() {
       },
       note:
         runtimeMode === "demo"
-          ? "DEMO mode — Partner API / Cursor Grok Bot handshake is stubbed. Keys optional."
+          ? "DEMO mode — Partner API / AI agent handshake is stubbed. Keys optional."
           : "Production org gateway health (partner handshake may still be stubbed).",
     });
   } catch (e) {
