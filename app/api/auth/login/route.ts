@@ -6,12 +6,19 @@ import { matchesSuperAdminAllowlist } from "@/lib/admin/allowlist";
 import { isMcpOAuthEnabled } from "@/lib/mcp-oauth/config";
 import { isSameOriginBrowserPost } from "@/lib/mcp-oauth/http";
 import {
+  clientIp,
+  takeRateLimit,
+} from "@/lib/auth/auth-flow";
+import {
   loginErrorMessage,
   loginFailureSearchParams,
   type LoginErrorCode,
 } from "@/lib/auth/login-errors";
+import { isLoginRateLimitEnabled } from "@/lib/feature-flags";
+import { LOGIN_RATE_LIMITS } from "@/lib/auth/login-limits";
 import { safeNextDestination as safeDestination } from "@/lib/auth/safe-next";
 import { jsonUtf8 } from "@/lib/http/json-utf8";
+import { hmacWithIpHashKey, isIpHashKeyMissingError } from "@/lib/security/ip-hash-key";
 
 export const runtime = "nodejs";
 
@@ -32,17 +39,19 @@ function fail(
   code: LoginErrorCode,
   status: number,
   email: string,
-  next: string
+  next: string,
+  extraHeaders?: Record<string, string>
 ) {
   if (json) {
     return jsonUtf8(
       { error: code, message: loginErrorMessage(code, status) },
-      { status }
+      { status, headers: extraHeaders }
     );
   }
   const url = new URL("/login", req.url);
   url.search = loginFailureSearchParams({ code, email, next });
-  return NextResponse.redirect(url, 303);
+  const headers = extraHeaders ? new Headers(extraHeaders) : undefined;
+  return NextResponse.redirect(url, { status: 303, headers });
 }
 
 export async function POST(req: Request) {
@@ -84,6 +93,40 @@ export async function POST(req: Request) {
 
   if (!email || !password) {
     return fail(req, json, "credentials_required", 400, email, next);
+  }
+
+  if (isLoginRateLimitEnabled()) {
+    let ipHmac: string;
+    let accountHmac: string;
+    try {
+      ipHmac = hmacWithIpHashKey(`ip:${clientIp(req.headers)}`);
+      accountHmac = hmacWithIpHashKey(`em:${email.toLowerCase()}`);
+    } catch (err) {
+      if (isIpHashKeyMissingError(err)) {
+        console.error("[auth/login] IP_HASH_KEY not configured; refusing");
+        return fail(req, json, "login_unavailable", 503, email, next);
+      }
+      throw err;
+    }
+    const pairOk = takeRateLimit(
+      `login:${ipHmac}:${accountHmac}`,
+      LOGIN_RATE_LIMITS.perIpAccount,
+      LOGIN_RATE_LIMITS.perIpAccountWindowMs
+    );
+    const ipOk = takeRateLimit(
+      `login:ip:${ipHmac}`,
+      LOGIN_RATE_LIMITS.perIp,
+      LOGIN_RATE_LIMITS.perIpWindowMs
+    );
+    if (!pairOk || !ipOk) {
+      console.warn("[auth/login] rate_limited", { ipHash: ipHmac.slice(0, 8) });
+      const retryAfterSec = Math.ceil(
+        (pairOk ? LOGIN_RATE_LIMITS.perIpWindowMs : LOGIN_RATE_LIMITS.perIpAccountWindowMs) / 1000
+      );
+      return fail(req, json, "rate_limited", 429, email, next, {
+        "Retry-After": String(retryAfterSec),
+      });
+    }
   }
 
   const cookieStore = await cookies();
