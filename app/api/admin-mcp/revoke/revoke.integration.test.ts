@@ -57,16 +57,21 @@ test("owner revoke writes admin.revoke through real helpers", async () => {
 });
 
 test("alreadyRevoked backfills admin.revoke when that generation has none", async () => {
+  resetDemoAdminAgent({
+    status: "linked",
+    credentialFingerprint: fingerprintSecret(DEMO_ADMIN_SECRET),
+    credentialGeneration: 7,
+  });
   await revokeOrgAdminAgent({ orgId: DEMO_ORG.id });
   const before = getRuntimeAudit().filter(
-    (e) => e.action === "admin.revoke" && e.metadata?.generation === 4
+    (e) => e.action === "admin.revoke" && e.metadata?.generation === 7
   ).length;
   expect(before).toBe(0);
   const res = await call();
   expect(res.status).toBe(200);
   expect(((await res.json()) as { alreadyRevoked?: boolean }).alreadyRevoked).toBe(true);
   const rows = getRuntimeAudit().filter(
-    (e) => e.action === "admin.revoke" && e.metadata?.generation === 4
+    (e) => e.action === "admin.revoke" && e.metadata?.generation === 7
   );
   expect(rows.length).toBeGreaterThan(0);
 });

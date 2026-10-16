@@ -26,8 +26,10 @@ export type AdminAuditActor = HumanAdminAuditActor | AdminAgentAuditActor;
 
 const SECRET_KEY =
   /^(oneTimeSecret|rawSecret|secret|token|password|bearer|authorization|credential|secretHash|credentialFingerprint)$/i;
-const SECRET_VALUE = /\b(gb_adm_|gb_emp_)[a-zA-Z0-9]{8,}/;
+const SECRET_VALUE = /\b(gb_adm_|gb_emp_|sp_at_)[a-zA-Z0-9]{8,}/;
+const LONG_HEX = /[0-9a-fA-F]{32,}/;
 const HASH_KEY = /(hash|fingerprint)/i;
+const CONTROL_CHARS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F]/;
 
 export function humanAdminActor(email: string, memberId?: string | null): HumanAdminAuditActor {
   const actorEmail = email.trim();
@@ -127,9 +129,6 @@ export async function resolveAdminAuditActor(input: {
   if (input.fallbackHuman?.email) {
     return humanAdminActor(input.fallbackHuman.email, input.fallbackHuman.memberId);
   }
-  if (input.orgId) {
-    return humanAdminActor("system");
-  }
   throw new Error("admin_audit_actor_missing");
 }
 
@@ -139,35 +138,56 @@ function asEmail(value: unknown): string | null {
   return t || null;
 }
 
+function isAllowedPrefixField(key: string, value: unknown): boolean {
+  if (key === "secretHashPrefix") {
+    return typeof value === "string" && value.length <= 12;
+  }
+  return key === "prefix" && (value === "gb_adm_" || value === "gb_emp_" || value === "sp_at_");
+}
+
+function rejectSecretsInValue(value: unknown, key = ""): void {
+  if (isAllowedPrefixField(key, value)) return;
+  if (SECRET_KEY.test(key)) {
+    if (HASH_KEY.test(key)) throw new Error("admin_audit_full_hash_forbidden");
+    if (/prefix/i.test(key)) throw new Error("admin_audit_full_prefix_forbidden");
+    throw new Error("admin_audit_secret_forbidden");
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) rejectSecretsInValue(item, key);
+    return;
+  }
+  if (value && typeof value === "object") {
+    rejectSecrets(value as Record<string, unknown>);
+    return;
+  }
+  if (typeof value !== "string") return;
+  if (/prefix/i.test(key) && /^(gb_adm_|gb_emp_|sp_at_)/.test(value) && value.length > 7) {
+    throw new Error("admin_audit_full_prefix_forbidden");
+  }
+  if (HASH_KEY.test(key) && value.length > 12) {
+    throw new Error("admin_audit_full_hash_forbidden");
+  }
+  if (SECRET_VALUE.test(value)) {
+    throw new Error("admin_audit_secret_forbidden");
+  }
+  if (LONG_HEX.test(value)) {
+    throw new Error("admin_audit_full_hash_forbidden");
+  }
+}
+
 function rejectSecrets(metadata: Record<string, unknown>): void {
   for (const [key, value] of Object.entries(metadata)) {
-    if (key === "secretHashPrefix") {
-      if (typeof value === "string" && value.length > 12) {
-        throw new Error("admin_audit_hash_too_long");
-      }
-      continue;
+    if (key === "secretHashPrefix" && typeof value === "string" && value.length > 12) {
+      throw new Error("admin_audit_hash_too_long");
     }
-    if (key === "prefix" && value === "gb_adm_") continue;
-    if (SECRET_KEY.test(key)) {
-      if (HASH_KEY.test(key)) throw new Error("admin_audit_full_hash_forbidden");
-      if (/prefix/i.test(key)) throw new Error("admin_audit_full_prefix_forbidden");
-      throw new Error("admin_audit_secret_forbidden");
-    }
-    if (/prefix/i.test(key) && typeof value === "string" && value.startsWith("gb_adm_") && value.length > 7) {
-      throw new Error("admin_audit_full_prefix_forbidden");
-    }
-    if (HASH_KEY.test(key) && typeof value === "string" && value.length > 12) {
-      throw new Error("admin_audit_full_hash_forbidden");
-    }
-    if (typeof value === "string" && SECRET_VALUE.test(value)) {
-      throw new Error("admin_audit_secret_forbidden");
-    }
+    rejectSecretsInValue(value, key);
   }
 }
 
 export function assertAdminAuditIdentity(event: {
   action: string;
   actorEmail?: string | null;
+  summary?: string | null;
   metadata?: Record<string, unknown> | null;
 }): void {
   const action = (event.action || "").trim();
@@ -190,6 +210,53 @@ export function assertAdminAuditIdentity(event: {
     }
   }
   rejectSecrets(metadata);
+  if (typeof event.summary === "string") {
+    rejectSecretsInValue(event.summary, "summary");
+  }
+}
+
+export function sanitizeAdminRevokeReason(
+  value: unknown
+): { ok: true; reason: string } | { ok: false; error: "invalid_reason" } {
+  if (value == null || value === "") return { ok: true, reason: "" };
+  if (typeof value !== "string") return { ok: false, error: "invalid_reason" };
+  const reason = value.trim().slice(0, 300);
+  if (!reason) return { ok: true, reason: "" };
+  if (CONTROL_CHARS.test(reason)) return { ok: false, error: "invalid_reason" };
+  try {
+    rejectSecretsInValue(reason, "reason");
+  } catch {
+    return { ok: false, error: "invalid_reason" };
+  }
+  return { ok: true, reason };
+}
+
+export async function ensureAdminRevokeAudit(input: {
+  orgId: string;
+  credentialId: string | null;
+  generation: number;
+  actor: HumanAdminAuditActor;
+  reason?: string;
+}): Promise<void> {
+  const { listAuditEvents } = await import("@/lib/data/audit");
+  const events = await listAuditEvents(input.orgId, 200).catch(() => []);
+  const exists = events.some(
+    (event) => event.action === "admin.revoke" && Number(event.metadata?.generation) === input.generation
+  );
+  if (exists) return;
+  await appendAdminAuditEvent({
+    orgId: input.orgId,
+    employeeId: null,
+    credentialId: input.credentialId,
+    action: "admin.revoke",
+    purpose: "admin.revoke",
+    summary: "管理用の認証を失効（人のタップ）",
+    actor: input.actor,
+    metadata: {
+      generation: input.generation,
+      ...(input.reason ? { reason: input.reason } : {}),
+    },
+  });
 }
 
 export async function appendAdminAuditEvent(
@@ -204,7 +271,7 @@ export async function appendAdminAuditEvent(
   const metadata = { ...(event.metadata ?? {}), ...actorMeta };
   const actorEmail =
     event.actor.actorKind === "human" ? event.actor.actorEmail : (event.actorEmail ?? null);
-  assertAdminAuditIdentity({ action: event.action, actorEmail, metadata });
+  assertAdminAuditIdentity({ action: event.action, actorEmail, summary: event.summary, metadata });
   await appendAuditEvent({
     orgId: event.orgId,
     employeeId: event.employeeId,
