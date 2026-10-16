@@ -7,7 +7,6 @@ import { isMcpOAuthEnabled } from "@/lib/mcp-oauth/config";
 import { isSameOriginBrowserPost } from "@/lib/mcp-oauth/http";
 import {
   clientIp,
-  rateKey,
   takeRateLimit,
 } from "@/lib/auth/auth-flow";
 import {
@@ -15,15 +14,21 @@ import {
   loginFailureSearchParams,
   type LoginErrorCode,
 } from "@/lib/auth/login-errors";
+import { isLoginRateLimitEnabled } from "@/lib/feature-flags";
 import { safeNextDestination as safeDestination } from "@/lib/auth/safe-next";
 import { jsonUtf8 } from "@/lib/http/json-utf8";
+import { hmacWithIpHashKey, isIpHashKeyMissingError } from "@/lib/security/ip-hash-key";
 
-/** Per-instance (best-effort on serverless). Stops the Scutum-style login spray. */
+/**
+ * Per-instance (best-effort on serverless). Behind LOGIN_RATE_LIMIT_ENABLED
+ * (default OFF). Keyed by HMAC(IP)+HMAC(account) so a remote attacker cannot
+ * lock a victim out of other IPs. A separate per-IP cap stops credential spray.
+ */
 export const LOGIN_RATE_LIMITS = {
   perIp: 20,
   perIpWindowMs: 15 * 60_000,
-  perEmail: 10,
-  perEmailWindowMs: 15 * 60_000,
+  perIpAccount: 10,
+  perIpAccountWindowMs: 15 * 60_000,
 } as const;
 
 export const runtime = "nodejs";
@@ -45,17 +50,19 @@ function fail(
   code: LoginErrorCode,
   status: number,
   email: string,
-  next: string
+  next: string,
+  extraHeaders?: Record<string, string>
 ) {
   if (json) {
     return jsonUtf8(
       { error: code, message: loginErrorMessage(code, status) },
-      { status }
+      { status, headers: extraHeaders }
     );
   }
   const url = new URL("/login", req.url);
   url.search = loginFailureSearchParams({ code, email, next });
-  return NextResponse.redirect(url, 303);
+  const headers = extraHeaders ? new Headers(extraHeaders) : undefined;
+  return NextResponse.redirect(url, { status: 303, headers });
 }
 
 export async function POST(req: Request) {
@@ -99,18 +106,38 @@ export async function POST(req: Request) {
     return fail(req, json, "credentials_required", 400, email, next);
   }
 
-  const ipOk = takeRateLimit(
-    `login:ip:${rateKey(clientIp(req.headers))}`,
-    LOGIN_RATE_LIMITS.perIp,
-    LOGIN_RATE_LIMITS.perIpWindowMs
-  );
-  const emailOk = takeRateLimit(
-    `login:email:${rateKey(email.toLowerCase())}`,
-    LOGIN_RATE_LIMITS.perEmail,
-    LOGIN_RATE_LIMITS.perEmailWindowMs
-  );
-  if (!ipOk || !emailOk) {
-    return fail(req, json, "rate_limited", 429, email, next);
+  if (isLoginRateLimitEnabled()) {
+    let ipHmac: string;
+    let accountHmac: string;
+    try {
+      ipHmac = hmacWithIpHashKey(`ip:${clientIp(req.headers)}`);
+      accountHmac = hmacWithIpHashKey(`em:${email.toLowerCase()}`);
+    } catch (err) {
+      if (isIpHashKeyMissingError(err)) {
+        console.error("[auth/login] IP_HASH_KEY not configured; refusing");
+        return fail(req, json, "login_unavailable", 503, email, next);
+      }
+      throw err;
+    }
+    const pairOk = takeRateLimit(
+      `login:${ipHmac}:${accountHmac}`,
+      LOGIN_RATE_LIMITS.perIpAccount,
+      LOGIN_RATE_LIMITS.perIpAccountWindowMs
+    );
+    const ipOk = takeRateLimit(
+      `login:ip:${ipHmac}`,
+      LOGIN_RATE_LIMITS.perIp,
+      LOGIN_RATE_LIMITS.perIpWindowMs
+    );
+    if (!pairOk || !ipOk) {
+      console.warn("[auth/login] rate_limited", { ipHash: ipHmac.slice(0, 8) });
+      const retryAfterSec = Math.ceil(
+        (pairOk ? LOGIN_RATE_LIMITS.perIpWindowMs : LOGIN_RATE_LIMITS.perIpAccountWindowMs) / 1000
+      );
+      return fail(req, json, "rate_limited", 429, email, next, {
+        "Retry-After": String(retryAfterSec),
+      });
+    }
   }
 
   const cookieStore = await cookies();
