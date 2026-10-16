@@ -369,3 +369,50 @@ export function setDemoSlackIdentityStatusForTests(
   if (!row) return;
   row.public = { ...row.public, status };
 }
+
+/**
+ * Peer-wake / AI-cannot-stop lookup: any identity row for this Slack user
+ * (linked, needs_reauth, revoked). Error → unavailable (fail-closed).
+ * Linked-only lookups (getEmployeesBySlackUserIds) would treat needs_reauth as a human.
+ */
+export async function lookupSlackIdentitiesAnyStatus(input: {
+  slackUserId: string;
+  teamId?: string | null;
+}): Promise<{ state: "ok"; rows: EmployeeSlackIdentity[] } | { state: "unavailable" }> {
+  const slackUserId = input.slackUserId.trim();
+  if (!slackUserId) return { state: "ok", rows: [] };
+  const wanted = slackUserId.toUpperCase();
+  const team = (input.teamId || "").trim();
+  const wantedTeam = team.toUpperCase();
+  if (isDemoMode()) {
+    const rows = [...demoIdentities.values()]
+      .map((row) => row.public)
+      .filter(
+        (row) =>
+          row.slackUserId.toUpperCase() === wanted &&
+          (!team || row.slackTeamId.toUpperCase() === wantedTeam)
+      );
+    return { state: "ok", rows };
+  }
+  const admin = createSupabaseAdminClient();
+  if (!admin) return { state: "unavailable" };
+  const userVariants = [...new Set([slackUserId, slackUserId.toUpperCase(), slackUserId.toLowerCase()])];
+  let query = admin
+    .from("employee_slack_identities")
+    .select("employee_id,org_id,slack_user_id,slack_team_id,display_name,status,updated_at")
+    .in("slack_user_id", userVariants);
+  if (team) {
+    const teamVariants = [...new Set([team, team.toUpperCase(), team.toLowerCase()])];
+    query = query.in("slack_team_id", teamVariants);
+  }
+  const { data, error } = await query;
+  if (error) return { state: "unavailable" };
+  const rows = (data ?? [])
+    .map((row) => mapPublic(row as Record<string, unknown>))
+    .filter(
+      (row) =>
+        row.slackUserId.toUpperCase() === wanted &&
+        (!team || row.slackTeamId.toUpperCase() === wantedTeam)
+    );
+  return { state: "ok", rows };
+}
