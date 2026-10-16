@@ -146,11 +146,16 @@ const supabaseStore: HoldStore = {
   async getOpenHold(orgId, employeeId) {
     const admin = createSupabaseAdminClient();
     if (!admin) throw new HoldStoreError("supabase_not_configured");
-    let query = admin.from("employee_holds").select("*").eq("org_id", orgId).is("released_at", null).is("superseded_at", null);
-    query = employeeId ? query.eq("employee_id", employeeId) : query.is("employee_id", null);
-    const { data, error } = await query.maybeSingle();
-    if (error) throw holdStoreErrorFrom(error);
-    return data ? mapHoldRow(data as Record<string, unknown>) : null;
+    // Same live pointer as checkOperable (orgs.hold_id / employees.hold_id). Do not
+    // filter employee_holds by employee_id IS NULL — that miss looks like "not held".
+    const pointer = employeeId
+      ? await admin.from("employees").select("hold_id").eq("id", employeeId).eq("org_id", orgId).maybeSingle()
+      : await admin.from("orgs").select("hold_id").eq("id", orgId).maybeSingle();
+    if (pointer.error) throw holdStoreErrorFrom(pointer.error);
+    if (!pointer.data) throw new HoldStoreError("hold_store_failed");
+    const holdId = (pointer.data as { hold_id?: string | null }).hold_id;
+    if (!holdId) return null;
+    return supabaseStore.getHold(orgId, String(holdId));
   },
   async getHold(orgId, holdId) {
     const admin = createSupabaseAdminClient();

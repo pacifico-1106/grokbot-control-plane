@@ -3,8 +3,8 @@ import { NextResponse } from "next/server";
 import { getAppOrigin } from "@/lib/approvals/tokens";
 import { verifyIdentityLinkCallbackActor } from "@/lib/auth/identity-link-gate";
 import { appendAuditEvent } from "@/lib/data/audit";
-import { bindEmployeeGoogleIdentity } from "@/lib/data/google-identities";
-import { isGoogleCalendarReadEnabled } from "@/lib/feature-flags";
+import { bindEmployeeGoogleIdentity, getEmployeeGoogleIdentity } from "@/lib/data/google-identities";
+import { isGoogleCalendarReadEnabled, isMailSendGmailLiveEnabled } from "@/lib/feature-flags";
 import {
   GOOGLE_OAUTH_COOKIE,
   GOOGLE_PKCE_COOKIE,
@@ -13,7 +13,13 @@ import {
   validateIdToken,
   verifyGoogleOAuthState,
 } from "@/lib/google/oauth";
-import { validateGrantedScopes } from "@/lib/google/scopes";
+import {
+  GOOGLE_SCOPE_GMAIL_SEND,
+  grantedScopesInclude,
+  mergeGoogleScopes,
+  parseGoogleOAuthIntent,
+  validateGrantedScopes,
+} from "@/lib/google/scopes";
 import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 export const runtime = "nodejs";
@@ -28,9 +34,11 @@ function redirectEmployee(employeeId: string, google: string): NextResponse {
 }
 
 export async function GET(req: Request) {
-  if (!isGoogleCalendarReadEnabled()) {
+  const flagsOff =
+    !isGoogleCalendarReadEnabled() && !isMailSendGmailLiveEnabled();
+  if (flagsOff) {
     return jsonUtf8(
-      { error: "google_calendar_disabled", message: "Google Calendar integration is disabled" },
+      { error: "google_oauth_disabled", message: "Google identity linking is disabled" },
       { status: 404 }
     );
   }
@@ -49,6 +57,14 @@ export async function GET(req: Request) {
   const parsed = verifyGoogleOAuthState(state, nonce);
   if (!parsed) {
     return NextResponse.redirect(new URL("/app/employees?google=error", getAppOrigin()));
+  }
+
+  const intent = parseGoogleOAuthIntent(parsed.intent);
+  if (intent === "gmail.send" && !isMailSendGmailLiveEnabled()) {
+    return redirectEmployee(parsed.employeeId, "error");
+  }
+  if (intent === "calendar" && !isGoogleCalendarReadEnabled()) {
+    return redirectEmployee(parsed.employeeId, "error");
   }
 
   // Only the member who started the link (still holding
@@ -79,11 +95,29 @@ export async function GET(req: Request) {
       return redirectEmployee(parsed.employeeId, "error");
     }
 
-    if (!exchanged.access_token || !exchanged.refresh_token) {
+    if (!exchanged.access_token) {
       return redirectEmployee(parsed.employeeId, "error");
     }
 
-    const scopeValidation = validateGrantedScopes(exchanged.scope || "");
+    const existing = await getEmployeeGoogleIdentity(parsed.employeeId);
+    let refreshToken = exchanged.refresh_token?.trim() || "";
+    // Incremental consent often omits refresh_token; keep the stored one.
+    if (!refreshToken && existing?.status !== "linked") {
+      return redirectEmployee(parsed.employeeId, "error");
+    }
+    // If a new refresh token arrives without a previously granted extra
+    // scope (e.g. calendar re-consent dropping gmail.send), keep the stored
+    // token. include_granted_scopes should prevent this; this is the belt.
+    if (
+      refreshToken &&
+      existing?.status === "linked" &&
+      grantedScopesInclude(existing.grantedScopes, GOOGLE_SCOPE_GMAIL_SEND) &&
+      !grantedScopesInclude(exchanged.scope || "", GOOGLE_SCOPE_GMAIL_SEND)
+    ) {
+      refreshToken = "";
+    }
+
+    const scopeValidation = validateGrantedScopes(exchanged.scope || "", intent);
     if (!scopeValidation.valid) {
       await appendAuditEvent({
         orgId: parsed.orgId,
@@ -96,6 +130,7 @@ export async function GET(req: Request) {
           reason: scopeValidation.reason,
           forbidden: scopeValidation.forbidden,
           unknown: scopeValidation.unknown,
+          intent,
         },
       });
       return redirectEmployee(parsed.employeeId, "scope_error");
@@ -129,8 +164,8 @@ export async function GET(req: Request) {
       orgId: parsed.orgId,
       googleSub: idTokenPayload.sub!,
       googleEmail: idTokenPayload.email || "",
-      grantedScopes: exchanged.scope || "",
-      refreshToken: exchanged.refresh_token,
+      grantedScopes: mergeGoogleScopes(existing?.grantedScopes || "", exchanged.scope || ""),
+      refreshToken,
     });
 
     await appendAuditEvent({
@@ -139,15 +174,23 @@ export async function GET(req: Request) {
       credentialId: null,
       action: "google.identity_connected",
       purpose: "google.oauth.callback",
-      summary: `Google Calendar connected: ${idTokenPayload.email || idTokenPayload.sub}`,
+      summary:
+        intent === "gmail.send"
+          ? `Google Gmail send connected: ${idTokenPayload.email || idTokenPayload.sub}`
+          : `Google Calendar connected: ${idTokenPayload.email || idTokenPayload.sub}`,
       metadata: {
         googleEmail: idTokenPayload.email,
-        grantedScopes: exchanged.scope,
+        grantedScopes: mergeGoogleScopes(existing?.grantedScopes || "", exchanged.scope || ""),
+        intent,
       },
     });
 
-    return redirectEmployee(parsed.employeeId, "ok");
-  } catch {
+    return redirectEmployee(parsed.employeeId, intent === "gmail.send" ? "gmail_ok" : "ok");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "";
+    if (message === "google_identity_account_mismatch") {
+      return redirectEmployee(parsed.employeeId, "account_mismatch");
+    }
     return redirectEmployee(parsed.employeeId, "error");
   }
 }

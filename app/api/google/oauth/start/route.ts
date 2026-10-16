@@ -4,7 +4,8 @@ import { NextResponse } from "next/server";
 import { getAppOrigin } from "@/lib/approvals/tokens";
 import { isBrowserNavigation, requireIdentityLinkManager } from "@/lib/auth/identity-link-gate";
 import { getEmployee } from "@/lib/data";
-import { isGoogleCalendarReadEnabled } from "@/lib/feature-flags";
+import { getEmployeeGoogleIdentity } from "@/lib/data/google-identities";
+import { isGoogleCalendarReadEnabled, isMailSendGmailLiveEnabled } from "@/lib/feature-flags";
 import {
   GOOGLE_OAUTH_COOKIE,
   GOOGLE_PKCE_COOKIE,
@@ -14,6 +15,7 @@ import {
   googleOAuthConfigured,
   signGoogleOAuthState,
 } from "@/lib/google/oauth";
+import { parseGoogleOAuthIntent } from "@/lib/google/scopes";
 import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 export const runtime = "nodejs";
@@ -26,14 +28,22 @@ export const runtime = "nodejs";
  * member, org and employee; the callback re-checks all three.
  */
 export async function GET(req: Request) {
-  if (!isGoogleCalendarReadEnabled()) {
+  const url = new URL(req.url);
+  const intent = parseGoogleOAuthIntent(url.searchParams.get("intent"));
+  if (intent === "gmail.send") {
+    if (!isMailSendGmailLiveEnabled()) {
+      return jsonUtf8(
+        { error: "mail_send_gmail_disabled", message: "Gmail live send is disabled" },
+        { status: 404 }
+      );
+    }
+  } else if (!isGoogleCalendarReadEnabled()) {
     return jsonUtf8(
       { error: "google_calendar_disabled", message: "Google Calendar integration is disabled" },
       { status: 404 }
     );
   }
 
-  const url = new URL(req.url);
   const employeeId = url.searchParams.get("employeeId")?.trim() || "";
 
   const gate = await requireIdentityLinkManager(req);
@@ -75,6 +85,7 @@ export async function GET(req: Request) {
       employeeId,
       nonce,
       actorMemberId: gate.actor.id,
+      intent,
     });
 
     const jar = await cookies();
@@ -89,7 +100,16 @@ export async function GET(req: Request) {
     jar.set(GOOGLE_OAUTH_COOKIE, nonce, cookieOptions);
     jar.set(GOOGLE_PKCE_COOKIE, codeVerifier, cookieOptions);
 
-    return NextResponse.redirect(googleAuthorizeUrl(state, codeChallenge));
+    const existing = await getEmployeeGoogleIdentity(employeeId);
+    const loginHint =
+      existing &&
+      existing.orgId === gate.orgId &&
+      existing.status !== "revoked" &&
+      existing.googleEmail
+        ? existing.googleEmail
+        : undefined;
+
+    return NextResponse.redirect(googleAuthorizeUrl(state, codeChallenge, { intent, loginHint }));
   } catch {
     return jsonUtf8(
       { error: "google_oauth_unconfigured", message: "Google OAuth is not configured" },

@@ -178,6 +178,7 @@ export function mapAuditRow(row: Record<string, unknown>): AuditEvent {
     orgId: String(row.org_id),
     employeeId: row.employee_id != null ? String(row.employee_id) : null,
     credentialId: row.credential_id != null ? String(row.credential_id) : null,
+    actorEmail: row.actor_email != null ? String(row.actor_email) : null,
     action: (row.action as AuditAction) || "tool.invoke",
     purpose: row.purpose != null ? String(row.purpose) : null,
     summary: String(row.summary ?? ""),

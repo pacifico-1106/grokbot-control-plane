@@ -6,6 +6,7 @@ import {
   GOOGLE_SCOPE_CALENDAR_FREEBUSY,
   GOOGLE_SCOPE_EMAIL,
   GOOGLE_SCOPE_OPENID,
+  GOOGLE_SCOPE_GMAIL_SEND,
   validateGrantedScopes,
 } from "./scopes";
 
@@ -84,6 +85,33 @@ describe("validateGrantedScopes", () => {
     expect(result.valid).toBe(false);
     expect(result.reason).toBe("forbidden_scopes_granted");
     expect(result.forbidden).toContain("https://www.googleapis.com/auth/calendar.events");
+  });
+
+  test("calendar intent accepts extra gmail.send (incremental union)", () => {
+    const result = validateGrantedScopes(
+      `${GOOGLE_CALENDAR_SCOPES} ${GOOGLE_SCOPE_GMAIL_SEND}`
+    );
+    expect(result.valid).toBe(true);
+  });
+
+  test("gmail.send intent requires gmail.send and not freebusy", () => {
+    const ok = validateGrantedScopes(
+      `${GOOGLE_SCOPE_OPENID} ${GOOGLE_SCOPE_EMAIL} ${GOOGLE_SCOPE_GMAIL_SEND}`,
+      "gmail.send"
+    );
+    expect(ok.valid).toBe(true);
+    const missing = validateGrantedScopes(GOOGLE_CALENDAR_SCOPES, "gmail.send");
+    expect(missing.valid).toBe(false);
+    expect(missing.reason).toBe("gmail_send_scope_missing");
+  });
+
+  test("rejects full Gmail access even on gmail.send intent", () => {
+    const result = validateGrantedScopes(
+      `${GOOGLE_SCOPE_OPENID} ${GOOGLE_SCOPE_EMAIL} ${GOOGLE_SCOPE_GMAIL_SEND} https://mail.google.com/`,
+      "gmail.send"
+    );
+    expect(result.valid).toBe(false);
+    expect(result.reason).toBe("forbidden_scopes_granted");
   });
 
   test("rejects unknown scopes (fail-closed)", () => {

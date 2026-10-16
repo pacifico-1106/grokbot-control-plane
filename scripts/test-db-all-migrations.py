@@ -139,7 +139,8 @@ ADDITIVE = [
      " and not exists (select 1 from information_schema.columns where table_schema = 'public'"
      " and table_name in ('employees', 'orgs') and column_name in ('hold_state', 'hold_id'))"),
     # Operator notices (PR-A). Additive server-only tables; not applied by the PR.
-    ("20261015100000_", "tests/security/db-operator-notices.sql",
+    # After main's 20261015100000_approval_mail_attachments (optional mail.send table).
+    ("20261016100000_", "tests/security/db-operator-notices.sql",
      ("operator_notices", "operator_notice_versions", "operator_notice_targets",
       "operator_notice_receipts", "ops_feedback_items", "ops_feedback_events")),
     # L-6 child first: roll back 20261014100000 before the parent
