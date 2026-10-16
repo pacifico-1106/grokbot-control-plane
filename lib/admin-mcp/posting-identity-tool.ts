@@ -35,7 +35,6 @@ import {
 } from "@/lib/admin-mcp/allowed-accounts-tools";
 import { ADMIN_AUDIT_CLASS } from "@/lib/admin-mcp/audit-class";
 import { probeSlackTokenScopes, rejectUnsafeArgs } from "@/lib/admin-mcp/slack-dm-setup";
-import { appendAuditEvent } from "@/lib/data/audit";
 import { getBinding } from "@/lib/data/bindings";
 import { getEmployee } from "@/lib/data/employees";
 import { getEmployeeSlackIdentity, getLinkedSlackUserToken } from "@/lib/data/slack-identities";

@@ -14,7 +14,6 @@ import type { ApprovalRequest } from "@/lib/types";
 import { appendAdminAuditEvent, humanAdminActor, resolveAdminAuditActor } from "@/lib/audit/admin-audit";
 import { isDemoMode } from "@/lib/mode";
 import { createSupabaseAdminClient } from "@/lib/supabase";
-import { appendAuditEvent } from "@/lib/data/audit";
 import { getApprovalById } from "@/lib/data/approvals";
 import { mapApprovalRow } from "@/lib/data/mappers";
 import { demoGetApproval, demoUpdateApproval } from "@/lib/data/demo-approvals-store";

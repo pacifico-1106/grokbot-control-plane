@@ -14,7 +14,6 @@
  */
 import { isApproverAuthorityEnabled } from "@/lib/feature-flags";
 import { appendAdminAuditEvent, resolveAdminAuditActor } from "@/lib/audit/admin-audit";
-import { appendAuditEvent } from "@/lib/data/audit";
 import { checkApproverAuthority } from "./verify";
 import { classifyApproverRequirement, type ApproverRequirement, type ApproverRequirementReason } from "./targets";
 import { approverAuthorityNextStepJa, approverAuthorityReplyJa } from "./reply";

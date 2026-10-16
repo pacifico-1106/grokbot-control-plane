@@ -24,12 +24,6 @@ const sources = ["lib", "app"]
   .map((p) => ({ path: relative(ROOT, p), text: readFileSync(p, "utf8") }))
   .filter((s) => s.path !== HELPER);
 
-function literalAdminWrites(text: string): number {
-  return (
-    (text.match(/action:\s*["'`]admin\.[A-Za-z0-9_]+["'`]/g) || []).length
-  );
-}
-
 function usesRawAppendForAdmin(text: string): boolean {
   if (!/\bappendAuditEvent\s*\(/.test(text)) return false;
   const chunks = text.split("appendAuditEvent(").slice(1);

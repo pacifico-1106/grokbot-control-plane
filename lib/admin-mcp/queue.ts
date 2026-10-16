@@ -166,7 +166,7 @@ export async function queueAdminTool(input: {
         action: "admin.policy",
         purpose: auditActionForAdminTool(input.tool),
         summary: `管理クラス承認拒否（承認者未設定）: ${input.tool}`,
-        actor: adminAgentAuditActor(input.cred.adminAgentId, input.cred.generation),
+        actor: adminAgentAuditActor(input.cred.adminAgentId || input.cred.actorId, input.cred.generation),
         metadata: {
           tool: input.tool,
           code: policyCheck.code,
@@ -222,7 +222,7 @@ export async function queueAdminTool(input: {
       action: "admin.policy",
       purpose: auditAction,
       summary: `承認者権限により申請を停止: ${input.tool}`,
-      actor: adminAgentAuditActor(input.cred.adminAgentId, input.cred.generation),
+      actor: adminAgentAuditActor(input.cred.adminAgentId || input.cred.actorId, input.cred.generation),
       metadata: {
         tool: input.tool,
         code: authorityStop.reason,
@@ -271,7 +271,7 @@ export async function queueAdminTool(input: {
     action: auditAction,
     purpose: auditAction,
     summary: `承認待ち: ${title}`,
-    actor: adminAgentAuditActor(input.cred.adminAgentId, input.cred.generation),
+    actor: adminAgentAuditActor(input.cred.adminAgentId || input.cred.actorId, input.cred.generation),
     metadata: {
       approvalId: created.approval.id,
       tool: input.tool,

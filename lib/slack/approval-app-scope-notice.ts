@@ -232,7 +232,7 @@ export async function notifyApprovalAppFixRequired(input: {
     const text = isScope
       ? buildApprovalAppScopeNoticeJa({ scope, apiAppId, approvalId, tool })
       : buildApprovalAppFixNoticeJa({ code: fixCode, inboxId, approvalId, tool });
-    const [{ getApprovalById, appendAuditEvent }, { listMembers }, { getEnabledNotificationChannels }] = await Promise.all([
+    const [{ getApprovalById }, { listMembers }, { getEnabledNotificationChannels }] = await Promise.all([
       import("@/lib/data"),
       import("@/lib/data/members"),
       import("@/lib/data/notification-channels"),

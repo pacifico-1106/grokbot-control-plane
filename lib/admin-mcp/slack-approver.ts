@@ -17,7 +17,7 @@
  */
 import type { ResolvedAdminCredential } from "@/lib/auth/admin-credential";
 import { rejectUnsafeArgs, type ToolOutcome } from "@/lib/admin-mcp/slack-dm-setup";
-import { appendAuditEvent, listAuditEvents } from "@/lib/data/audit";
+import { listAuditEvents } from "@/lib/data/audit";
 import {
   getNotificationChannelSecretsById,
   isSharedApprovalAppChannelConfig,

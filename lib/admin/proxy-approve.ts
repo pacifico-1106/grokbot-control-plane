@@ -11,7 +11,6 @@ import { appendAdminAuditEvent, humanAdminActor } from "@/lib/audit/admin-audit"
 import { fulfillApprovedAdmin } from "@/lib/admin-mcp/fulfill-admin";
 import { fulfillApprovedInvoke } from "@/lib/approvals/fulfill";
 import { runApprovalResolveSideEffects } from "@/lib/approvals/resolve-side-effects";
-import { appendAuditEvent } from "@/lib/data/audit";
 import { createSupabaseAdminClient } from "@/lib/supabase";
 import { isDemoMode } from "@/lib/mode";
 import { mapApprovalRow } from "@/lib/data/mappers";

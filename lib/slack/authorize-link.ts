@@ -40,7 +40,6 @@ import { recordSetupToolSucceeded } from "@/lib/approvals/attachment-retry-cap";
 import { appendAdminAuditEvent, resolveAdminAuditActor } from "@/lib/audit/admin-audit";
 import { createHash, randomBytes } from "node:crypto";
 import { getAppOrigin } from "@/lib/approvals/tokens";
-import { appendAuditEvent } from "@/lib/data/audit";
 import { getEmployee } from "@/lib/data/employees";
 import { getNotificationChannelSecretsById, listNotificationChannels } from "@/lib/data/notification-channels";
 import {

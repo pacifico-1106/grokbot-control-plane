@@ -2,7 +2,6 @@
  * Ingress handoff application.
  * Applies body and attachment modes to shape wake payload content.
  */
-import { appendAuditEvent } from "@/lib/data/audit";
 import { appendAdminAuditEvent, resolveAdminAuditActor } from "@/lib/audit/admin-audit";
 import { extractSealithIntent } from "./resolve";
 import type {

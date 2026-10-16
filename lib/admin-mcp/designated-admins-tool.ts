@@ -14,7 +14,6 @@
 import type { ResolvedAdminCredential } from "@/lib/auth/admin-credential";
 import { ADMIN_AUDIT_CLASS } from "@/lib/admin-mcp/audit-class";
 import { rejectUnsafeArgs, type ToolOutcome } from "@/lib/admin-mcp/slack-dm-setup";
-import { appendAuditEvent } from "@/lib/data/audit";
 import { listMembers } from "@/lib/data/members";
 import { isApproverAuthorityEnabled } from "@/lib/feature-flags";
 import {

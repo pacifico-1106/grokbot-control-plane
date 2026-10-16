@@ -1,6 +1,5 @@
 import { getSuperAdminAccess } from "@/lib/admin/access";
 import { getOrgMeta } from "@/lib/data/org-context";
-import { appendAuditEvent } from "@/lib/data";
 import { createSupabaseAdminClient } from "@/lib/supabase";
 import { isDemoMode } from "@/lib/mode";
 import { DEMO_ORG } from "@/lib/demo-data";

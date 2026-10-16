@@ -1,4 +1,4 @@
-import { expect, mock, test } from "bun:test";
+import { expect, test } from "bun:test";
 import { fingerprintSecret } from "@/lib/bindings";
 import { DEMO_ORG } from "@/lib/demo-data";
 import { DEMO_ADMIN_SECRET, resetDemoAdminAgent } from "@/lib/data/admin-agents";

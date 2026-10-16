@@ -24,7 +24,6 @@
 import type { ResolvedAdminCredential } from "@/lib/auth/admin-credential";
 import { ADMIN_AUDIT_CLASS } from "@/lib/admin-mcp/audit-class";
 import { rejectUnsafeArgs } from "@/lib/admin-mcp/slack-dm-setup";
-import { appendAuditEvent } from "@/lib/data/audit";
 import { getBinding } from "@/lib/data/bindings";
 import { getEmployee, updateEmployeeAllowedAccounts } from "@/lib/data/employees";
 import { getEmployeeSlackIdentity } from "@/lib/data/slack-identities";

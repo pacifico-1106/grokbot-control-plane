@@ -1,7 +1,6 @@
 import { cookies } from "next/headers";
 import { appendAdminAuditEvent, humanAdminActor } from "@/lib/audit/admin-audit";
 import { requireOrgAdminSession } from "@/lib/auth/require-org";
-import { appendAuditEvent } from "@/lib/data/audit";
 import { consumeSlackOAuthStateNonce } from "@/lib/data/slack-oauth-state-uses";
 import {
   SHARED_APPROVAL_INSTALL_COOKIE,

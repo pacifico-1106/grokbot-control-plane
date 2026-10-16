@@ -38,7 +38,7 @@ export function humanAdminActor(email: string, memberId?: string | null): HumanA
 }
 
 export function adminAgentAuditActor(adminAgentId: string, generation: number): AdminAgentAuditActor {
-  const id = adminAgentId.trim();
+  const id = String(adminAgentId ?? "").trim();
   if (!id) throw new Error("admin_audit_adminAgentId_required");
   if (!Number.isFinite(generation)) throw new Error("admin_audit_generation_required");
   return { actorKind: "admin_agent", adminAgentId: id, generation };

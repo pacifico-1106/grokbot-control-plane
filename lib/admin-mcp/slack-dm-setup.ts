@@ -23,7 +23,7 @@ import { expiredCredentialEmployeeRow, expiredCredentialStepJa, hasExpiredCreden
 import type { ResolvedAdminCredential } from "@/lib/auth/admin-credential";
 import { getAppOrigin } from "@/lib/approvals/tokens";
 import { hasJwtHeaderSegment } from "@/lib/security/secret-detector";
-import { appendAuditEvent, listAuditEvents } from "@/lib/data/audit";
+import { listAuditEvents } from "@/lib/data/audit";
 import { getBinding } from "@/lib/data/bindings";
 import { listOrgParties } from "@/lib/data/directory";
 import { getEmployee, listEmployees } from "@/lib/data/employees";

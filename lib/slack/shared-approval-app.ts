@@ -23,9 +23,8 @@
  * Tokens / secrets are never logged, audited or returned.
  */
 import { createHmac, timingSafeEqual } from "node:crypto";
-import { appendAdminAuditEvent, humanAdminActor, resolveAdminAuditActor } from "@/lib/audit/admin-audit";
+import { appendAdminAuditEvent, resolveAdminAuditActor } from "@/lib/audit/admin-audit";
 import { getAppOrigin } from "@/lib/approvals/tokens";
-import { appendAuditEvent } from "@/lib/data/audit";
 import { findSlackConversationAdaptersByTeam, listConversationAdapters } from "@/lib/data/conversation-adapters";
 import {
   findSlackNotificationChannelsByTeam,
