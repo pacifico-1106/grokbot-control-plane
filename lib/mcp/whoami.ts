@@ -27,6 +27,16 @@ export function buildStaffpassWhoamiPayload(input: {
     ruleJa: string;
     approvedInstructions: { text: string; approvalId: string; appliedAt: string } | null;
   } | null;
+  /**
+   * operator notices (OPERATOR_NOTICES_ENABLED, this org in the pilot if set).
+   * Counts only — never the notice body. Omitted when the flag is OFF.
+   */
+  operatorNotices?: {
+    unread: number | "unknown";
+    urgentUnread: number | "unknown";
+    pendingApply: number | "unknown";
+    ruleJa: string;
+  } | null;
 }): Record<string, unknown> {
   const { employee, orgId, binding } = input;
   const status = binding?.status ?? "unlinked";
@@ -67,6 +77,7 @@ export function buildStaffpassWhoamiPayload(input: {
           configChangeRuleJa: input.configChange.ruleJa,
         }
       : {}),
+    ...(input.operatorNotices ? { operatorNotices: input.operatorNotices } : {}),
     messageJa:
       status === "needs_reauth"
         ? "要再連携 — invoke は拒否されます"

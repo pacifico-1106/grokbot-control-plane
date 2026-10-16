@@ -851,3 +851,68 @@ export function aiPeerWakeRootWindowSeconds(): number {
     86_400
   );
 }
+
+/**
+ * OPERATOR_NOTICES_ENABLED (運営からのお知らせ, 2026-10-16). Default OFF.
+ * When ON (and after migration 20261016200000):
+ * - tables may be read/written (service_role only)
+ * - employee MCP lists staffpass_notices_list / staffpass_notices_ack
+ * - staffpass_whoami may include operatorNotices counts
+ * - /admin/notices (later PR) is reachable for super admin
+ * When OFF: tools/list is the same array as before; no table access; whoami
+ * omits operatorNotices.
+ */
+export function isOperatorNoticesEnabled(): boolean {
+  return parseFlag(process.env.OPERATOR_NOTICES_ENABLED);
+}
+
+/**
+ * OPERATOR_NOTICES_PILOT_ORG_IDS: comma-separated org ids. Empty / unset →
+ * every org (once OPERATOR_NOTICES_ENABLED is ON). Non-empty → only those
+ * orgs see the tools and the notices. Fail-closed: a missing org id is out.
+ */
+export function operatorNoticesPilotOrgIds(): string[] {
+  return (process.env.OPERATOR_NOTICES_PILOT_ORG_IDS || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+export function isOperatorNoticesEnabledForOrg(orgId: string | null | undefined): boolean {
+  if (!isOperatorNoticesEnabled()) return false;
+  if (!orgId) return false;
+  const list = operatorNoticesPilotOrgIds();
+  return list.length === 0 || list.includes(orgId);
+}
+
+/**
+ * OPERATOR_NOTICES_WAKE_ENABLED: urgent notice Webhook outbox + cron. Default OFF.
+ * Not wired in PR-A/B (PR-E).
+ */
+export function isOperatorNoticesWakeEnabled(): boolean {
+  return parseFlag(process.env.OPERATOR_NOTICES_WAKE_ENABLED);
+}
+
+/**
+ * OPERATOR_NOTICES_TENANT_VIEW_ENABLED: /app/notices for tenant admins. Default OFF.
+ * Not wired in PR-A/B (PR-G).
+ */
+export function isOperatorNoticesTenantViewEnabled(): boolean {
+  return parseFlag(process.env.OPERATOR_NOTICES_TENANT_VIEW_ENABLED);
+}
+
+/**
+ * OPS_FEEDBACK_ENABLED: staffpass_ops_report / ops_requests_list + /admin/feedback.
+ * Default OFF. Not wired in PR-A/B (PR-F).
+ */
+export function isOpsFeedbackEnabled(): boolean {
+  return parseFlag(process.env.OPS_FEEDBACK_ENABLED);
+}
+
+/**
+ * OPS_WEEKLY_DIGEST_ENABLED: weekly count digest cron. Default OFF.
+ * Not wired in PR-A/B (PR-F).
+ */
+export function isOpsWeeklyDigestEnabled(): boolean {
+  return parseFlag(process.env.OPS_WEEKLY_DIGEST_ENABLED);
+}
