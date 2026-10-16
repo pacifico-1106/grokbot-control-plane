@@ -23,7 +23,7 @@ describe("targets constant", () => {
       "setup.slackApprover.set", "setup.lineApproval.upsert", "setup.lineApproval.setEmployeeInbox",
       "approvalWorkflow.patch", "approvalWorkflow.bindVoter", "approvalRoutes.patch", "policy.patch",
       "employees.allowedAccounts.add", "employees.allowedAccounts.remove",
-      "members.update", "employees.leave", "employees.reinstate",
+      "members.update", "employees.leave", "employees.reinstate", "employees.retire",
     ]) expect((APPROVER_AUTHORITY_TARGETS.standardTools as readonly string[]).includes(tool)).toBe(true);
     for (const tool of ["employees.spend.set", "plan.upgrade", "members.invite", "approvers.designatedAdmins.set", "cardSetup.mintLink", "members.promoteOwner"]) {
       expect((APPROVER_AUTHORITY_TARGETS.sensitiveTools as readonly string[]).includes(tool)).toBe(true);
@@ -133,6 +133,11 @@ describe("future tools (PR-K hook)", () => {
     expect(kind("employees.reinstate", { employeeId: "e" }, {}, { currentEmployeeScopes: ["slack:post"] })).toBe("owner_or_designated_admin");
     expect(kind("employees.reinstate", { employeeId: "e" }, {}, { currentEmployeeScopes: ["commerce:order"] })).toBe("owner");
     expect(kind("employees.reinstate", { employeeId: "e" })).toBe("owner");
+  });
+  test("employees.retire: money scope or unknown → owner", () => {
+    expect(kind("employees.retire", { employeeId: "e" }, {}, { currentEmployeeScopes: ["slack:post"] })).toBe("owner_or_designated_admin");
+    expect(kind("employees.retire", { employeeId: "e" }, {}, { currentEmployeeScopes: ["commerce:order"] })).toBe("owner");
+    expect(kind("employees.retire", { employeeId: "e" })).toBe("owner");
   });
 });
 
