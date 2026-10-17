@@ -768,6 +768,26 @@ export function isEmployeeBadgeMcpEnabled(): boolean {
 }
 
 /**
+ * WHOAMI_CREDENTIAL_INFO_ENABLED (default OFF).
+ *
+ * When ON, staffpass_whoami adds:
+ * - credential.kind (gb_emp | oauth) and credential.expiresAt (ISO, or null
+ *   when the 社員証 has no expiry). OAuth uses the 社員証 expiry, never the
+ *   access-token TTL.
+ * - org.name for the caller's tenant only.
+ * - expiringSoon + nextStepJa when that expiry is within 7 days (or already
+ *   expired, if a race lets the call through; auth itself is 401).
+ *
+ * Never includes credential id, secret, prefix, hash, or another employee/org.
+ * /api/mcp and /api/mcp/employee share the same payload builder.
+ *
+ * When OFF (default): whoami JSON is byte-identical to today.
+ */
+export function isWhoamiCredentialInfoEnabled(): boolean {
+  return parseFlag(process.env.WHOAMI_CREDENTIAL_INFO_ENABLED);
+}
+
+/**
  * MCP_OAUTH_LEGACY_UNAUTH_INITIALIZE (Q4 escape hatch, 木村 2026-10-10).
  * Only matters when MCP_OAUTH_ENABLED is ON. Unset / empty / anything that is
  * not an explicit false → TODAY's behaviour: unauthenticated initialize / ping /
