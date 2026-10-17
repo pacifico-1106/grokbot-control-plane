@@ -872,6 +872,15 @@ export function isAiPeerWakeThreadGuardEnabled(): boolean {
   return parseFlag(process.env.AI_PEER_WAKE_THREAD_GUARD_ENABLED);
 }
 
+/**
+ * EMPLOYEE_RETIRE_ENABLED (default OFF): admin MCP employees.retire may file
+ * an always_human ticket. Execution stays on the dashboard (人間のみ).
+ * checkOperable の status=suspended 拒否はフラグに依存しない（hold と同じ）。
+ */
+export function isEmployeeRetireEnabled(): boolean {
+  return parseFlag(process.env.EMPLOYEE_RETIRE_ENABLED);
+}
+
 const DEFAULT_AI_PEER_WAKE_CAP = 4;
 const DEFAULT_AI_PEER_WAKE_ROOT_WINDOW_SECONDS = 30 * 60;
 

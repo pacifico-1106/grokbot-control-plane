@@ -55,6 +55,7 @@ const GATES: Array<[string, string, RegExp]> = [
   ["pre-send LINE (LINE PoC L-5/L-6)", "lib/comm/pre-send.ts", /preSendHoldCode\(/],
   ["W2 / stuckWatch.retry", "lib/stuck-watch/w2-unfulfilled.ts", /heldTicketMarker\(approval\.metadata\)/],
   ["G5 wake", "lib/slack/mention-ingress.ts", /checkOperable\(\{[^}]*phase: "wake"/],
+  ["G5 inbound notice wake", "lib/inbound-notice/intake.ts", /checkOperable\(\{[^}]*phase: "wake"/],
   ["G5 LINE account wake (LINE PoC L-4)", "lib/comm/line-ingress.ts", /checkOperable\(\{[^}]*phase: "wake"/],
   ["G5 LINE conversation wake (LINE PoC L-7)", "lib/comm/line-wake.ts", /checkOperable\(\{[^}]*phase: "wake"/],
   ["G5 MCP Events", "lib/mcp-events/principal.ts", /checkOperable\(\{[^}]*phase: "mcp_events"/],

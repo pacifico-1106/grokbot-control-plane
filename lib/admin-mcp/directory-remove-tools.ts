@@ -44,9 +44,9 @@ import {
   removeRelaxesAudience,
   type AudienceAfterRemove,
 } from "@/lib/admin-mcp/directory-remove-audience";
+import { appendAdminAuditEvent, resolveAdminAuditActor } from "@/lib/audit/admin-audit";
 import { CHANNEL_LEDGER_SURFACES } from "@/lib/channel-classify/core";
 import { rejectUnsafeArgs } from "@/lib/admin-mcp/slack-dm-setup";
-import { appendAuditEvent } from "@/lib/data/audit";
 import {
   deleteOrgChannel,
   deleteOrgParty,
@@ -485,7 +485,8 @@ export async function fulfillChannelRemove(
   if (!removed || (await findChannelById(orgId, current.id))) {
     return { ok: false, code: "channel_delete_failed", messageJa: "チャネル台帳から削除できませんでした。" };
   }
-  await appendAuditEvent({
+  await appendAdminAuditEvent({
+    actor: await resolveAdminAuditActor({ approval, orgId: approval.orgId }),
     orgId,
     employeeId: null,
     credentialId: null,
@@ -550,7 +551,8 @@ export async function fulfillPartyRemove(
   if (!removed || (await findPartyById(orgId, current.id))) {
     return { ok: false, code: "party_delete_failed", messageJa: "相手台帳から削除できませんでした。" };
   }
-  await appendAuditEvent({
+  await appendAdminAuditEvent({
+    actor: await resolveAdminAuditActor({ approval, orgId: approval.orgId }),
     orgId,
     employeeId: null,
     credentialId: null,

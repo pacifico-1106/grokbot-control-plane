@@ -69,6 +69,7 @@ export default async function DashboardPage() {
           opsDocLocation={adminAgent?.opsDocLocation ?? null}
           confirmedEmployeeCount={confirmedEmployeeCount}
           canIssueAdminCredential={canIssueAdminCredential}
+          canRevokeAdminCredential={session.demo || session.member?.role === "owner"}
         />
       ) : (
         <>

@@ -15,7 +15,7 @@
  * audit. Only the given (orgId, inbox) with the shared-app marker is touched.
  * A re-install by the same org stores a new token and re-enables the inbox.
  */
-import { appendAuditEvent } from "@/lib/data/audit";
+import { appendAdminAuditEvent, resolveAdminAuditActor } from "@/lib/audit/admin-audit";
 import {
   isSharedApprovalAppChannelConfig,
   purgeSharedApprovalChannelSecrets,
@@ -85,11 +85,14 @@ export async function retireSharedApprovalInbox(input: {
   }
 
   if (out.disabled) {
-    await appendAuditEvent({
+    await appendAdminAuditEvent({
+      actor: await resolveAdminAuditActor({
+        orgId: inbox.orgId,
+        fallbackHuman: { email: "slack_shared_approval_events" },
+      }),
       orgId: inbox.orgId,
       employeeId: null,
       credentialId: null,
-      actorEmail: "slack_shared_approval_events",
       action: "admin.notificationChannel",
       purpose: "admin.notificationChannel",
       summary: `共通承認アプリが使えなくなったため承認口を無効にしました（${reason}）。承認依頼は届きません`,
@@ -98,11 +101,14 @@ export async function retireSharedApprovalInbox(input: {
   }
   if (deleted) {
     const deletedAt = new Date().toISOString();
-    await appendAuditEvent({
+    await appendAdminAuditEvent({
+      actor: await resolveAdminAuditActor({
+        orgId: inbox.orgId,
+        fallbackHuman: { email: "slack_shared_approval_events" },
+      }),
       orgId: inbox.orgId,
       employeeId: null,
       credentialId: null,
-      actorEmail: "slack_shared_approval_events",
       action: "admin.notificationChannel",
       purpose: "admin.notificationChannel",
       summary: `共通承認アプリの保存済み token を削除しました（${reason}）。再インストールで戻せます`,
