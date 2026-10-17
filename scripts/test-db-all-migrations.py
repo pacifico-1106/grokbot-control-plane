@@ -159,6 +159,11 @@ ADDITIVE = [
      ("employee_comm_accounts", "employee_comm_account_secrets", "comm_inbound_events", "comm_link_code_failures", "comm_link_code_locks")),
     ("20261010200000_", "tests/security/db-mcp-oauth.sql", ("oauth_clients", "oauth_authorization_requests", "oauth_grants",
      "oauth_authorization_codes", "oauth_access_tokens", "oauth_refresh_tokens", "oauth_rate_limits")),
+    # /api/mcp auth-failure audit + last_used_at touch (table + 2 RPCs).
+    ("20261016400000_", "tests/security/db-mcp-auth-failures.sql",
+     "to_regclass('public.mcp_auth_failures') is null"
+     " and to_regprocedure('public.record_mcp_auth_failure(text,uuid,uuid,uuid,text)') is null"
+     " and to_regprocedure('public.touch_credential_last_used(uuid)') is null"),
 ]
 
 # Un-timestamped legacy names do not sort in dependency order (see

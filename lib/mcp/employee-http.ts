@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { withHoldCallScope } from "@/lib/safety/hold";
 import { resolveEmployeeCredential } from "@/lib/auth/employee-credential";
+import { mcpAuthFailureErrorData, mcpAuthFailureKind } from "@/lib/auth/mcp-auth-failure";
+import { recordMcpAuthFailure } from "@/lib/data/mcp-auth-failures";
 import { isConfigChangeRequestEnabled, isEmployeeBadgeMcpEnabled, isMcpEventsEnabled, isMcpOAuthLegacyUnauthInitialize } from "@/lib/feature-flags";
 import { isMcpOAuthEnabled } from "@/lib/mcp-oauth/config";
 import {
@@ -66,6 +68,21 @@ function jsonRpcResult(id: JsonRpcId, result: unknown, status = 200, surface: Em
     { jsonrpc: "2.0", id: id ?? null, result },
     { status, headers: corsHeaders(surface) }
   );
+}
+
+async function auditMcpAuthFailure(
+  auth: { code: string; orgId?: string; employeeId?: string; credentialId?: string },
+  method: string
+): Promise<void> {
+  const kind = mcpAuthFailureKind(auth.code);
+  if (!kind) return;
+  await recordMcpAuthFailure({
+    kind,
+    orgId: auth.orgId,
+    employeeId: auth.employeeId,
+    credentialId: auth.credentialId,
+    method,
+  });
 }
 
 function jsonRpcError(
@@ -242,11 +259,12 @@ async function handlePost(req: Request, surface: EmployeeMcpSurface) {
       method.startsWith("notifications/");
     if (!(lifecycle && isMcpOAuthLegacyUnauthInitialize())) {
       if (method === "initialize") maybeLogUnauthInitialize(req, params);
+      void auditMcpAuthFailure({ code: "missing_credential" }, method);
       return jsonRpcError(
         id,
         -32001,
         "Authentication required (OAuth 2.1 or Authorization: Bearer gb_emp_…)",
-        { code: "missing_credential", _meta: authChallengeMeta() },
+        mcpAuthFailureErrorData({ code: "missing_credential" }, { _meta: authChallengeMeta() }),
         401,
         { "WWW-Authenticate": wwwAuthenticate() },
         surface
@@ -305,11 +323,12 @@ async function handlePost(req: Request, surface: EmployeeMcpSurface) {
   if (isMcpEventsEnabled() && (method === "events/list" || method === "events/subscribe" || method === "events/unsubscribe")) {
     const auth = await resolveEmployeeCredential(req);
     if (!auth.ok) {
+      void auditMcpAuthFailure(auth, method);
       return jsonRpcError(
         id,
         -32012,
         "Forbidden",
-        attachBadgeNextStep(req, surface, auth.httpStatus, { code: auth.code }),
+        attachBadgeNextStep(req, surface, auth.httpStatus, mcpAuthFailureErrorData(auth)),
         auth.httpStatus,
         undefined,
         surface
@@ -334,13 +353,14 @@ async function handlePost(req: Request, surface: EmployeeMcpSurface) {
     const auth =
       surface === "badge_only" ? await resolveEmployeeCredential(req) : await resolveMcpCredential(req);
     if (!auth.ok) {
+      void auditMcpAuthFailure(auth, method);
       const advertise = surface === "shared" && shouldAdvertiseOAuthChallenge(req);
       const challengeOpts = hasAnyMcpCredential(req) ? { error: "invalid_token" as const, description: auth.code } : {};
       const challenge =
         advertise && auth.httpStatus === 401 ? { "WWW-Authenticate": wwwAuthenticate(challengeOpts) } : undefined;
-      const errorData: Record<string, unknown> = { code: auth.code };
       // Body-level mirror of the HTTP challenge for clients that only surface JSON-RPC.
-      if (challenge) errorData._meta = authChallengeMeta(challengeOpts);
+      const extra = challenge ? { _meta: authChallengeMeta(challengeOpts) } : undefined;
+      const errorData = mcpAuthFailureErrorData(auth, extra);
       attachBadgeNextStep(req, surface, auth.httpStatus, errorData);
       return jsonRpcError(id, -32001, auth.message, errorData, auth.httpStatus, challenge, surface);
     }
