@@ -56,6 +56,7 @@ export const ADMIN_MCP_AUDIT_LABELS_JA: Record<AdminMcpToolName, string> = {
   "employees.allowedAccounts.list": "許可アカウントを一覧",
   "employees.postingIdentity.set": "投稿名義を設定",
   "employees.credential.reissue": "社員証を再発行",
+  "employees.retire": "AI社員を退職",
   "parties.upsert": "相手台帳を更新",
   "parties.list": "相手台帳を一覧",
   "parties.remove": "相手台帳から削除",
