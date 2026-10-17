@@ -285,7 +285,10 @@ export async function notifyApprovalAppFixRequired(input: {
     }
 
     await appendAdminAuditEvent({
-      actor: await resolveAdminAuditActor({ orgId }),
+      actor: await resolveAdminAuditActor({
+        orgId,
+        fallbackHuman: { email: "slack_approval_app_notice" },
+      }),
       orgId,
       employeeId: null,
       credentialId: null,

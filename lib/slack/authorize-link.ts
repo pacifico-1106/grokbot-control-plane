@@ -283,7 +283,7 @@ export async function issueSlackAuthorizeLink(input: {
   const { orgId } = input;
   const failed = async (result: Extract<IssueAuthorizeLinkResult, { ok: false }>) => {
     await appendAdminAuditEvent({
-      actor: await resolveAdminAuditActor({ orgId }),
+      actor: await resolveAdminAuditActor({ orgId, fallbackHuman: { email: "slack_authorize_link" } }),
       orgId,
       employeeId: input.employeeId || null,
       credentialId: null,
@@ -430,7 +430,7 @@ export async function issueSlackAuthorizeLink(input: {
     approverNoticeSent = notice.ok;
   }
   await appendAdminAuditEvent({
-    actor: await resolveAdminAuditActor({ orgId }),
+    actor: await resolveAdminAuditActor({ orgId, fallbackHuman: { email: "slack_authorize_link" } }),
     orgId,
     employeeId: employee.id,
     credentialId: null,
@@ -565,7 +565,7 @@ export async function completeAuthorizeLinkCallback(input: {
       ...(notices.approverSkipped ? { approverFailureNoticeSkipped: notices.approverSkipped } : {}),
     };
     await appendAdminAuditEvent({
-      actor: await resolveAdminAuditActor({ orgId }),
+      actor: await resolveAdminAuditActor({ orgId, fallbackHuman: { email: "slack_authorize_link" } }),
       orgId,
       employeeId,
       credentialId: null,
@@ -638,7 +638,7 @@ export async function completeAuthorizeLinkCallback(input: {
   const wasPinned = Boolean(link.expectedSlackUserId);
   await step("completed_audit", async () => {
     await appendAdminAuditEvent({
-      actor: await resolveAdminAuditActor({ orgId }),
+      actor: await resolveAdminAuditActor({ orgId, fallbackHuman: { email: "slack_authorize_link" } }),
       orgId,
       employeeId,
       credentialId: null,
@@ -694,7 +694,7 @@ export async function completeAuthorizeLinkCallback(input: {
       const steps = failed.map((f) => f.step);
       const next = await resolveAuthorizeLinkFollowUpNextStep(employeeId, steps);
       await appendAdminAuditEvent({
-        actor: await resolveAdminAuditActor({ orgId }),
+        actor: await resolveAdminAuditActor({ orgId, fallbackHuman: { email: "slack_authorize_link" } }),
         orgId,
         employeeId,
         credentialId: null,

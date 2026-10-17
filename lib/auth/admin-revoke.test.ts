@@ -77,3 +77,21 @@ test("admin MCP does not advertise a revoke tool", async () => {
   const { ADMIN_MCP_TOOLS } = await import("@/lib/mcp/admin-tools");
   expect(ADMIN_MCP_TOOLS.some((t) => /revoke/i.test(t.name))).toBe(false);
 });
+
+test("findAdminAgentByFingerprint returns null for a revoked agent", async () => {
+  const fingerprint = fingerprintSecret(DEMO_ADMIN_SECRET);
+  resetDemoAdminAgent({
+    status: "revoked",
+    credentialFingerprint: fingerprint,
+    credentialGeneration: 2,
+  });
+  const { findAdminAgentByFingerprint } = await import("@/lib/data/admin-agents");
+  expect(await findAdminAgentByFingerprint(fingerprint)).toBeNull();
+});
+
+test("resolveAdminCredential has no unreachable revoked 403 branch", async () => {
+  const { readFileSync } = await import("node:fs");
+  const src = readFileSync(new URL("./admin-credential.ts", import.meta.url), "utf8");
+  expect(src).not.toMatch(/httpStatus:\s*403/);
+  expect(src).not.toMatch(/code:\s*"revoked"/);
+});

@@ -613,7 +613,11 @@ export async function handleDmAutorouteRun(
     }
     const run = await executeDmAutorouteRun(orgId, employeeId);
     await appendAdminAuditEvent({
-      actor: await resolveAdminAuditActor({ orgId }),
+      actor: await resolveAdminAuditActor({
+        cred: { adminAgentId: cred.adminAgentId, generation: cred.generation },
+        orgId,
+        fallbackHuman: { email: "slack_dm_autoroute" },
+      }),
       orgId,
       employeeId: employeeId || null,
       credentialId: null,
@@ -705,7 +709,7 @@ export async function fulfillApprovalDeliveryAutoResolve(input: {
   const { orgId } = input;
   const auditFail = async (result: Extract<AutoResolveFulfillment, { ok: false }>) => {
     await appendAdminAuditEvent({
-      actor: await resolveAdminAuditActor({ orgId }),
+      actor: await resolveAdminAuditActor({ orgId, fallbackHuman: { email: "slack_dm_setup" } }),
       orgId,
       employeeId: null,
       credentialId: null,
@@ -792,7 +796,7 @@ export async function fulfillApprovalDeliveryAutoResolve(input: {
     secrets: {},
   });
   await appendAdminAuditEvent({
-    actor: await resolveAdminAuditActor({ orgId }),
+    actor: await resolveAdminAuditActor({ orgId, fallbackHuman: { email: "slack_dm_setup" } }),
     orgId,
     employeeId: null,
     credentialId: null,
