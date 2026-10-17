@@ -134,6 +134,7 @@ export async function appendAuditEvent(
       orgId: event.orgId,
       employeeId: event.employeeId,
       credentialId: event.credentialId,
+      actorEmail: event.actorEmail ?? null,
       action: event.action,
       purpose: event.purpose,
       summary: event.summary,
