@@ -33,7 +33,8 @@ export type CredentialAuthFailure = {
     | "employee_not_found"
     | "employee_on_hold"
     | "org_on_hold"
-    | "hold_state_unavailable";
+    | "hold_state_unavailable"
+    | "employee_terminated";
   message: string;
   httpStatus: number;
 };
@@ -264,7 +265,11 @@ export async function resolveEmployeeCredential(
 }
 
 export function holdRefusal(code: HoldDenyCode): CredentialAuthFailure {
-  return code === "hold_state_unavailable"
-    ? { ok: false, code, message: "hold state unavailable; refused (fail-stop)", httpStatus: 503 }
-    : { ok: false, code, message: code === "org_on_hold" ? "organization is on emergency stop" : "employee is on hold (emergency stop / leave)", httpStatus: 403 };
+  if (code === "hold_state_unavailable") {
+    return { ok: false, code, message: "hold state unavailable; refused (fail-stop)", httpStatus: 503 };
+  }
+  if (code === "employee_terminated") {
+    return { ok: false, code, message: "employee is retired (contract ended)", httpStatus: 403 };
+  }
+  return { ok: false, code, message: code === "org_on_hold" ? "organization is on emergency stop" : "employee is on hold (emergency stop / leave)", httpStatus: 403 };
 }

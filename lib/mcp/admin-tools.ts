@@ -62,6 +62,7 @@ import { buildPollUrl } from "@/lib/approvals/tokens";
 import { handleAllowedAccountsTool, isAllowedAccountsTool } from "@/lib/admin-mcp/allowed-accounts-tools";
 import { POSTING_IDENTITY_SET_TOOL, handlePostingIdentityTool } from "@/lib/admin-mcp/posting-identity-tool";
 import { CREDENTIAL_REISSUE_REASONS, CREDENTIAL_REISSUE_TOOL, handleCredentialReissueTool } from "@/lib/employees/credential-reissue";
+import { EMPLOYEE_RETIRE_TOOL, handleEmployeeRetireTool } from "@/lib/employees/retire";
 import {
   CHANNELS_REMOVE_TOOL_DEF,
   PARTIES_REMOVE_TOOL_DEF,
@@ -286,6 +287,21 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
       properties: {
         employeeId: { type: "string", description: "AI社員 ID (this org only)" },
         reason: { type: "string", enum: [...CREDENTIAL_REISSUE_REASONS], description: "expired = 期限切れ, expiring = 期限間近, other = その他 (default)" },
+        jobId: { type: "string" },
+        approvalId: { type: "string", description: "Re-invoke with approved ticket ID" },
+      },
+      required: ["employeeId"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "employees.retire",
+    description:
+      "File a request to retire an AI employee (status=suspended, revoke 社員証 / OAuth / wake listeners) after human approval (always_human, approvalClass admin). EMPLOYEE_RETIRE_ENABLED must be on (else feature_disabled). This tool only files the ticket — it never executes. A credential admin of this org must open the dashboard AI社員 page and confirm 「契約終了」. The employee must belong to this org (from the credential; no orgId argument); another org's employee → employee_not_found. Approver: owner or designated admin; owner when the employee holds a money scope (APPROVER_AUTHORITY_ENABLED). AI cannot execute retirement. Re-invoke with approvalId to read the dashboard pointer.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        employeeId: { type: "string", description: "AI社員 ID (this org only)" },
         jobId: { type: "string" },
         approvalId: { type: "string", description: "Re-invoke with approved ticket ID" },
       },
@@ -2355,6 +2371,20 @@ export async function callAdminMcpTool(
     // 社員証の再発行 (ADMIN_MCP_CREDENTIAL_REISSUE_ENABLED). Org from the credential only;
     // the ticket carries ids only and the key is minted at the dashboard hand-over.
     const outcome = await handleCredentialReissueTool(args, cred);
+    if (outcome.kind === "result") return toolResult(outcome.data, outcome.isError === true);
+    const queued = await queueAdminTool({
+      cred,
+      tool: name,
+      args: { ...outcome.queuedArgs, ...(typeof args.jobId === "string" ? { jobId: args.jobId } : {}) },
+      rawArgsForSecretScan: args,
+      title: outcome.title,
+      summary: outcome.summary,
+    });
+    return toolResult(queued, false);
+  }
+
+  if (name === EMPLOYEE_RETIRE_TOOL) {
+    const outcome = await handleEmployeeRetireTool(args, cred);
     if (outcome.kind === "result") return toolResult(outcome.data, outcome.isError === true);
     const queued = await queueAdminTool({
       cred,

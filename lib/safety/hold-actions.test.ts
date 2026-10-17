@@ -241,6 +241,34 @@ describe("release: web only, ONE authentication function, a different approver",
     const audit = (await listAuditEvents(ORG)).find((e) => e.action === "employee.hold.released");
     expect(audit?.metadata?.releasedBy).toBe("member:mem_1");
     expect(audit?.metadata?.requestedBy).toBe("member:mem_2");
+    expect(audit?.actorEmail).toBe(owner().email);
+  });
+  test("release audit actor_email is the approver, not a value the caller stuffed into metadata", async () => {
+    const holdId = await stopped();
+    const req = await actions.requestHoldRelease({ orgId: ORG, holdId, reason: "誤停止", actor: web(admin()) });
+    expect(req.ok).toBe(true);
+    const real = store.getHoldStore();
+    store.__setHoldStoreForTests({
+      ...real,
+      release: async (input) =>
+        real.release({
+          ...input,
+          auditMetadata: {
+            ...input.auditMetadata,
+            actorEmail: "forged@evil.invalid",
+            actor_email: "forged@evil.invalid",
+            approverEmail: "forged@evil.invalid",
+          },
+        }),
+    });
+    try {
+      expect((await actions.approveHoldRelease({ orgId: ORG, holdId, actor: web(owner()) })).ok).toBe(true);
+    } finally {
+      store.__setHoldStoreForTests(null);
+    }
+    const audit = (await listAuditEvents(ORG)).find((e) => e.action === "employee.hold.released");
+    expect(audit?.actorEmail).toBe(owner().email);
+    expect(JSON.stringify(audit?.metadata ?? {})).not.toContain("forged@evil.invalid");
   });
   test("double-click: the losing release (hold already released) does NOT reset the ticket to pending", async () => {
     const holdId = await stopped();

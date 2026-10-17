@@ -1,6 +1,6 @@
 /** Read-model for /app/audit. Never include raw metadata / secrets / full emails. */
 
-export type ActorKind = "ai" | "human" | "system";
+export type ActorKind = "ai" | "human" | "system" | "unknown";
 
 export type AuditResultKind = "success" | "failure" | "denied" | "pending" | "unknown";
 
@@ -104,6 +104,7 @@ export type AuditPresentationLookups = {
   orgId?: string | null;
   employeesById?: ReadonlyMap<string, AuditEmployeeLookup>;
   membersByEmail?: ReadonlyMap<string, AuditMemberLookup>;
+  membersById?: ReadonlyMap<string, AuditMemberLookup>;
   mailboxEmailByEmployeeId?: ReadonlyMap<string, string>;
   slackDisplayNameByUserId?: ReadonlyMap<string, string>;
   approvalsById?: ReadonlyMap<string, AuditApprovalLookup>;
