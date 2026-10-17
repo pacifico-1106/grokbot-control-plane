@@ -249,6 +249,7 @@ export const AUDIT_ACTION_LABELS_JA: Record<AuditAction, string> = {
   "admin.notificationChannel": "通知チャネルを更新",
   "admin.create_org": "テナントを作成",
   "admin.issue_admin_credential": "管理認証を発行",
+  "admin.revoke": "管理認証を失効",
   "admin.proxy_approve": "承認を代理で確定",
   "admin.org_patch": "テナント名を変更",
   "admin.billing": "請求設定を更新",

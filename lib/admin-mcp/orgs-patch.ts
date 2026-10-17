@@ -11,7 +11,7 @@ import { getOrgMeta } from "@/lib/data/org-context";
 import { isDemoMode } from "@/lib/mode";
 import { DEMO_ORG } from "@/lib/demo-data";
 import { createSupabaseAdminClient } from "@/lib/supabase";
-import { appendAuditEvent } from "@/lib/data";
+import { appendAdminAuditEvent, humanAdminActor } from "@/lib/audit/admin-audit";
 
 export const ORG_NAME_MAX_LENGTH = 200;
 
@@ -101,7 +101,8 @@ export async function platformPatchOrg(
     throw new Error(error.message);
   }
 
-  await appendAuditEvent({
+  await appendAdminAuditEvent({
+    actor: humanAdminActor(actor.email),
     orgId,
     employeeId: null,
     credentialId: null,

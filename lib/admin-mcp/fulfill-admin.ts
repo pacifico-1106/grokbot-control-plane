@@ -18,8 +18,8 @@ import { setOrgInternalAudienceRule, validateInternalAudienceRulePatch } from "@
  */
 import { createHash, randomBytes } from "node:crypto";
 import { normalizeActionLimits } from "@/lib/action-gate";
+import { appendAdminAuditEvent, resolveAdminAuditActor } from "@/lib/audit/admin-audit";
 import {
-  appendAuditEvent,
   getEmployee,
   issueEmployee,
   updateEmployeePolicy,
@@ -74,7 +74,7 @@ import { normalizeSpendLimits } from "@/lib/spend-gate";
 import { isAdminClassApproval } from "@/lib/admin-mcp/audit-class";
 import { ADMIN_AUDIT_CLASS, auditActionForAdminTool } from "@/lib/admin-mcp/audit-class";
 import { fulfillOrgCreateFromQueuedArgs } from "@/lib/admin-mcp/orgs-create";
-import { fulfillOrgIssueAdminCredentialFromQueuedArgs } from "@/lib/admin-mcp/orgs-issue-admin-credential";
+import { auditOrgIssueAdminCredential, fulfillOrgIssueAdminCredentialFromQueuedArgs } from "@/lib/admin-mcp/orgs-issue-admin-credential";
 import {
   createPendingVoterBinding,
   revokeVoterBinding,
@@ -259,8 +259,9 @@ async function fulfillSlackAdapterSetBotToken(
 
   const authTest = botToken ? await slackAuthTest(botToken) : null;
 
-  await appendAuditEvent({
+  await appendAdminAuditEvent({
     orgId: approval.orgId,
+    actor: await resolveAdminAuditActor({ approval, orgId: approval.orgId }),
     employeeId: null,
     credentialId: null,
     action: "admin.conversationAdapter",
@@ -335,8 +336,9 @@ async function fulfillLineApprovalUpsert(
   });
   const publicChannel = mapLineApprovalChannelStatus(saved);
 
-  await appendAuditEvent({
+  await appendAdminAuditEvent({
     orgId: approval.orgId,
+    actor: await resolveAdminAuditActor({ approval, orgId: approval.orgId }),
     employeeId: null,
     credentialId: null,
     action: "admin.notificationChannel",
@@ -415,8 +417,9 @@ async function fulfillLineApprovalSetEmployeeInbox(
   }
   if (!updated) throw new Error("employee_not_found");
 
-  await appendAuditEvent({
+  await appendAdminAuditEvent({
     orgId: approval.orgId,
+    actor: await resolveAdminAuditActor({ approval, orgId: approval.orgId }),
     employeeId,
     credentialId: updated.credentialId,
     action: "admin.notificationChannel",
@@ -484,8 +487,9 @@ async function fulfillLineApprovalDemoteTelegram(
     });
   }
 
-  await appendAuditEvent({
+  await appendAdminAuditEvent({
     orgId: approval.orgId,
+    actor: await resolveAdminAuditActor({ approval, orgId: approval.orgId }),
     employeeId: null,
     credentialId: null,
     action: "admin.notificationChannel",
@@ -627,8 +631,9 @@ async function fulfillIssue(approval: ApprovalRequest, args: Record<string, unkn
     }
     throw error;
   }
-  await appendAuditEvent({
+  await appendAdminAuditEvent({
     orgId: approval.orgId,
+    actor: await resolveAdminAuditActor({ approval, orgId: approval.orgId }),
     employeeId: result.employee.id,
     credentialId: result.credentialId,
     action: "admin.hire",
@@ -660,8 +665,9 @@ async function fulfillLink(approval: ApprovalRequest, args: Record<string, unkno
     grokBotAgentId,
     grokBotWorkspaceId: typeof args.grokBotWorkspaceId === "string" ? args.grokBotWorkspaceId : null,
   });
-  await appendAuditEvent({
+  await appendAdminAuditEvent({
     orgId: approval.orgId,
+    actor: await resolveAdminAuditActor({ approval, orgId: approval.orgId }),
     employeeId,
     credentialId: null,
     action: "admin.link",
@@ -905,8 +911,9 @@ async function fulfillPolicy(approval: ApprovalRequest, args: Record<string, unk
     return employeePolicyWriteFailedFulfillment("policy.patch", employeeId, error);
   }
   if (!updated) throw new Error("employee_not_found");
-  await appendAuditEvent({
+  await appendAdminAuditEvent({
     orgId: approval.orgId,
+    actor: await resolveAdminAuditActor({ approval, orgId: approval.orgId }),
     employeeId,
     credentialId: updated.credentialId,
     action: "admin.policy",
@@ -934,8 +941,9 @@ async function fulfillParty(approval: ApprovalRequest, args: Record<string, unkn
     identifier: checked.value.identifier,
     audience: checked.value.audience,
   });
-  await appendAuditEvent({
+  await appendAdminAuditEvent({
     orgId: approval.orgId,
+    actor: await resolveAdminAuditActor({ approval, orgId: approval.orgId }),
     employeeId: null,
     credentialId: null,
     action: "admin.parties",
@@ -979,8 +987,9 @@ async function fulfillChannel(approval: ApprovalRequest, args: Record<string, un
     employeeId: String(args.employeeId || "").trim(),
     slackTeamId: String(args.slackTeamId || "").trim(),
   });
-  await appendAuditEvent({
+  await appendAdminAuditEvent({
     orgId: approval.orgId,
+    actor: await resolveAdminAuditActor({ approval, orgId: approval.orgId }),
     employeeId: null,
     credentialId: null,
     action: "admin.channel",
@@ -1118,8 +1127,9 @@ async function fulfillVoterBind(
     }
   }
 
-  await appendAuditEvent({
+  await appendAdminAuditEvent({
     orgId: approval.orgId,
+    actor: await resolveAdminAuditActor({ approval, orgId: approval.orgId }),
     employeeId: null,
     credentialId: null,
     action: "admin.policy",
@@ -1173,8 +1183,9 @@ async function fulfillVoterUnbind(
     };
   }
 
-  await appendAuditEvent({
+  await appendAdminAuditEvent({
     orgId: approval.orgId,
+    actor: await resolveAdminAuditActor({ approval, orgId: approval.orgId }),
     employeeId: null,
     credentialId: null,
     action: "admin.policy",
@@ -1205,8 +1216,9 @@ async function fulfillOrgCreate(
   const actor = platformActorFromQueuedArgs(args);
   const created = await fulfillOrgCreateFromQueuedArgs(args, actor);
 
-  await appendAuditEvent({
+  await appendAdminAuditEvent({
     orgId: approval.orgId,
+    actor: await resolveAdminAuditActor({ approval, orgId: approval.orgId }),
     employeeId: null,
     credentialId: null,
     action: "admin.create_org",
@@ -1252,24 +1264,7 @@ async function fulfillOrgIssueAdminCredential(
   if (!operatorGate.allowed) throw new Error("platform_ops_forbidden");
   const actor = platformActorFromQueuedArgs(args);
   const issued = await fulfillOrgIssueAdminCredentialFromQueuedArgs(args, actor);
-
-  await appendAuditEvent({
-    orgId: approval.orgId,
-    employeeId: null,
-    credentialId: issued.adminAgentId,
-    action: "admin.issue_admin_credential",
-    purpose: "admin.issue_admin_credential",
-    summary: issued.summaryJa,
-    metadata: {
-      auditClass: ADMIN_AUDIT_CLASS,
-      approvalId: approval.id,
-      targetOrgId: issued.targetOrgId,
-      secretPrefix: issued.secretPrefix,
-      generation: issued.credentialGeneration,
-      actorEmail: actor.email,
-      actorUserId: actor.userId,
-    },
-  });
+  await auditOrgIssueAdminCredential({ approval, issued, actor });
 
   return {
     ok: true,
@@ -1290,8 +1285,9 @@ async function fulfillRolePropose(
   args: Record<string, unknown>
 ): Promise<AdminFulfillment> {
   const draft = args.draft ?? args.proposedPolicy ?? null;
-  await appendAuditEvent({
+  await appendAdminAuditEvent({
     orgId: approval.orgId,
+    actor: await resolveAdminAuditActor({ approval, orgId: approval.orgId }),
     employeeId: null,
     credentialId: null,
     action: "admin.role",
@@ -1318,8 +1314,9 @@ async function fulfillIngressHandoff(
 
   if (clearOverride && employeeId) {
     await setEmployeeIngressHandoffPolicy(employeeId, approval.orgId, null);
-    await appendAuditEvent({
+    await appendAdminAuditEvent({
       orgId: approval.orgId,
+      actor: await resolveAdminAuditActor({ approval, orgId: approval.orgId }),
       employeeId,
       credentialId: null,
       action: "admin.ingressHandoff",
@@ -1354,8 +1351,9 @@ async function fulfillIngressHandoff(
 
   if (employeeId) {
     const policy = await setEmployeeIngressHandoffPolicy(employeeId, approval.orgId, validation.policy);
-    await appendAuditEvent({
+    await appendAdminAuditEvent({
       orgId: approval.orgId,
+      actor: await resolveAdminAuditActor({ approval, orgId: approval.orgId }),
       employeeId,
       credentialId: null,
       action: "admin.ingressHandoff",
@@ -1382,8 +1380,9 @@ async function fulfillIngressHandoff(
 
   const policy = await setOrgIngressHandoffPolicy(approval.orgId, validation.policy);
   const consentNote = hasHighRiskConsent ? "（高リスク承諾あり）" : "";
-  await appendAuditEvent({
+  await appendAdminAuditEvent({
     orgId: approval.orgId,
+    actor: await resolveAdminAuditActor({ approval, orgId: approval.orgId }),
     employeeId: null,
     credentialId: null,
     action: "admin.ingressHandoff",
@@ -1433,8 +1432,9 @@ async function fulfillSchedulingPolicyWrite(
   const writeOptions = contextGuard ? { contextGuard } : {};
   if (clearOverride && employeeId) {
     await setEmployeeSchedulingPolicy(employeeId, approval.orgId, null, writeOptions);
-    await appendAuditEvent({
+    await appendAdminAuditEvent({
       orgId: approval.orgId,
+      actor: await resolveAdminAuditActor({ approval, orgId: approval.orgId }),
       employeeId,
       credentialId: null,
       action: "admin.policy",
@@ -1470,8 +1470,9 @@ async function fulfillSchedulingPolicyWrite(
 
   if (employeeId) {
     const policy = await setEmployeeSchedulingPolicy(employeeId, approval.orgId, validation.policy, writeOptions);
-    await appendAuditEvent({
+    await appendAdminAuditEvent({
       orgId: approval.orgId,
+      actor: await resolveAdminAuditActor({ approval, orgId: approval.orgId }),
       employeeId,
       credentialId: null,
       action: "admin.policy",
@@ -1498,8 +1499,9 @@ async function fulfillSchedulingPolicyWrite(
 
   const policy = await setOrgSchedulingPolicy(approval.orgId, validation.policy, writeOptions);
   const consentNote = hasHighRiskConsent ? "（高リスク承諾あり）" : "";
-  await appendAuditEvent({
+  await appendAdminAuditEvent({
     orgId: approval.orgId,
+    actor: await resolveAdminAuditActor({ approval, orgId: approval.orgId }),
     employeeId: null,
     credentialId: null,
     action: "admin.policy",
@@ -1533,8 +1535,9 @@ async function fulfillReplyPolicy(
 
   if (clearOverride && employeeId) {
     await setEmployeeReplyPolicy(employeeId, approval.orgId, null);
-    await appendAuditEvent({
+    await appendAdminAuditEvent({
       orgId: approval.orgId,
+      actor: await resolveAdminAuditActor({ approval, orgId: approval.orgId }),
       employeeId,
       credentialId: null,
       action: "admin.policy",
@@ -1569,8 +1572,9 @@ async function fulfillReplyPolicy(
 
   if (employeeId) {
     const policy = await setEmployeeReplyPolicy(employeeId, approval.orgId, validation.policy);
-    await appendAuditEvent({
+    await appendAdminAuditEvent({
       orgId: approval.orgId,
+      actor: await resolveAdminAuditActor({ approval, orgId: approval.orgId }),
       employeeId,
       credentialId: null,
       action: "admin.policy",
@@ -1597,8 +1601,9 @@ async function fulfillReplyPolicy(
 
   const policy = await setOrgReplyPolicy(approval.orgId, validation.policy);
   const consentNote = hasHighRiskConsent ? "（高リスク承諾あり）" : "";
-  await appendAuditEvent({
+  await appendAdminAuditEvent({
     orgId: approval.orgId,
+    actor: await resolveAdminAuditActor({ approval, orgId: approval.orgId }),
     employeeId: null,
     credentialId: null,
     action: "admin.policy",
@@ -1632,8 +1637,9 @@ async function fulfillMailPolicy(
 
   if (clearOverride && employeeId) {
     await setEmployeeMailPolicy(employeeId, approval.orgId, null);
-    await appendAuditEvent({
+    await appendAdminAuditEvent({
       orgId: approval.orgId,
+      actor: await resolveAdminAuditActor({ approval, orgId: approval.orgId }),
       employeeId,
       credentialId: null,
       action: "admin.policy",
@@ -1668,8 +1674,9 @@ async function fulfillMailPolicy(
 
   if (employeeId) {
     const policy = await setEmployeeMailPolicy(employeeId, approval.orgId, validation.policy);
-    await appendAuditEvent({
+    await appendAdminAuditEvent({
       orgId: approval.orgId,
+      actor: await resolveAdminAuditActor({ approval, orgId: approval.orgId }),
       employeeId,
       credentialId: null,
       action: "admin.policy",
@@ -1696,8 +1703,9 @@ async function fulfillMailPolicy(
 
   const policy = await setOrgMailPolicy(approval.orgId, validation.policy);
   const consentNote = hasHighRiskConsent ? "（高リスク承諾あり）" : "";
-  await appendAuditEvent({
+  await appendAdminAuditEvent({
     orgId: approval.orgId,
+    actor: await resolveAdminAuditActor({ approval, orgId: approval.orgId }),
     employeeId: null,
     credentialId: null,
     action: "admin.policy",
@@ -1752,8 +1760,9 @@ async function fulfillStuckWatch(
     "admin_mcp"
   );
 
-  await appendAuditEvent({
+  await appendAdminAuditEvent({
     orgId: approval.orgId,
+    actor: await resolveAdminAuditActor({ approval, orgId: approval.orgId }),
     employeeId: null,
     credentialId: null,
     action: "admin.policy",
@@ -1863,8 +1872,9 @@ async function fulfillCardSetupLinkMint(
 
   const mouthResponse = buildCardSetupMouthResponse(result);
 
-  await appendAuditEvent({
+  await appendAdminAuditEvent({
     orgId: approval.orgId,
+    actor: await resolveAdminAuditActor({ approval, orgId: approval.orgId }),
     employeeId: null,
     credentialId: null,
     action: "admin.external_contract_card",
@@ -1920,8 +1930,9 @@ async function fulfillPortalLinkMint(
   const mouthResponse = buildPortalLinkMouthResponse(result);
   const portalPurpose = String(args.portalPurpose || "change");
 
-  await appendAuditEvent({
+  await appendAdminAuditEvent({
     orgId: approval.orgId,
+    actor: await resolveAdminAuditActor({ approval, orgId: approval.orgId }),
     employeeId: null,
     credentialId: null,
     action: "admin.portal",
@@ -1976,8 +1987,9 @@ async function fulfillEmployeeIdentityUpsert(
     };
   }
 
-  await appendAuditEvent({
+  await appendAdminAuditEvent({
     orgId: approval.orgId,
+    actor: await resolveAdminAuditActor({ approval, orgId: approval.orgId }),
     employeeId,
     credentialId: null,
     action: "admin.policy",
@@ -2038,8 +2050,9 @@ async function fulfillEmployeeIdentityBindMailbox(
     };
   }
 
-  await appendAuditEvent({
+  await appendAdminAuditEvent({
     orgId: approval.orgId,
+    actor: await resolveAdminAuditActor({ approval, orgId: approval.orgId }),
     employeeId,
     credentialId: null,
     action: "admin.policy",
@@ -2073,8 +2086,9 @@ async function fulfillDmAutorouteRun(
   const run = await executeDmAutorouteRun(approval.orgId, employeeId);
   if (!run.ok) throw new Error(run.code);
   const counts = run.counts;
-  await appendAuditEvent({
+  await appendAdminAuditEvent({
     orgId: approval.orgId,
+    actor: await resolveAdminAuditActor({ approval, orgId: approval.orgId }),
     employeeId: employeeId || null,
     credentialId: null,
     action: "admin.channel",
@@ -2268,8 +2282,9 @@ async function fulfillApprovedAdminCore(
       case "internalAudienceRule.patch": {
         const rule = validateInternalAudienceRulePatch(args);
         await setOrgInternalAudienceRule(approval.orgId, rule, approval.resolvedBy || "admin_mcp");
-        await appendAuditEvent({ orgId: approval.orgId, employeeId: null, credentialId: null,
+        await appendAdminAuditEvent({ orgId: approval.orgId, employeeId: null, credentialId: null,
           action: "admin.policy", purpose: "admin.policy", summary: "社内判定ルールを更新（管理MCP・人承認）",
+          actor: await resolveAdminAuditActor({ approval, orgId: approval.orgId }),
           metadata: { approvalId: approval.id, auditClass: ADMIN_AUDIT_CLASS, rule },
         });
         fulfillment = { ok: true, tool, at };

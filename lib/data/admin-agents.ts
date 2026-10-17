@@ -265,6 +265,52 @@ export async function setOrgAdminOpsDocLocation(input: {
   return mapRow(data as Record<string, unknown>);
 }
 
+export async function revokeOrgAdminAgent(input: {
+  orgId: string;
+}): Promise<OrgAdminAgent & { alreadyRevoked?: boolean }> {
+  const orgId = input.orgId.trim();
+  if (!orgId) throw new Error("org_id_required");
+  const now = nowIso();
+  if (isDemoMode()) {
+    const prev = runtimeAgents.get(orgId);
+    if (!prev) {
+      throw Object.assign(new Error("admin_agent_not_found"), { code: "admin_agent_not_found" as const });
+    }
+    if (prev.status === "revoked" && !prev.credentialFingerprint) {
+      return { ...prev, alreadyRevoked: true };
+    }
+    const next: OrgAdminAgent = {
+      ...prev,
+      status: "revoked",
+      credentialFingerprint: null,
+      updatedAt: now,
+    };
+    runtimeAgents.set(orgId, next);
+    return next;
+  }
+  const existing = await getOrgAdminAgent(orgId);
+  if (!existing) {
+    throw Object.assign(new Error("admin_agent_not_found"), { code: "admin_agent_not_found" as const });
+  }
+  if (existing.status === "revoked" && !existing.credentialFingerprint) {
+    return { ...existing, alreadyRevoked: true };
+  }
+  const admin = createSupabaseAdminClient();
+  if (!admin) throw new Error("supabase_not_configured");
+  const { data, error } = await admin
+    .from("org_admin_agents")
+    .update({
+      status: "revoked",
+      credential_fingerprint: null,
+      updated_at: now,
+    })
+    .eq("org_id", orgId)
+    .select("*")
+    .maybeSingle();
+  if (error || !data) throw new Error(error?.message || "admin_revoke_failed");
+  return mapRow(data as Record<string, unknown>);
+}
+
 export function adminAgentPublicView(agent: OrgAdminAgent): Omit<
   OrgAdminAgent,
   "credentialFingerprint"
