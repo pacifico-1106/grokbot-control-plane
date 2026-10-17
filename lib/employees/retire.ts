@@ -10,6 +10,7 @@ import type { ResolvedAdminCredential } from "@/lib/auth/admin-credential";
 import { ADMIN_AUDIT_CLASS } from "@/lib/admin-mcp/audit-class";
 import { requesterOf } from "@/lib/admin-mcp/allowed-accounts-tools";
 import { rejectUnsafeArgs } from "@/lib/admin-mcp/slack-dm-setup";
+import { adminActorFromApproval, appendAdminAuditEvent } from "@/lib/audit/admin-audit";
 import { appendAuditEvent } from "@/lib/data/audit";
 import { getEmployee, terminateEmployee } from "@/lib/data/employees";
 import { isEmployeeRetireEnabled } from "@/lib/feature-flags";
@@ -184,28 +185,34 @@ export async function fulfillEmployeeRetire(
 ): Promise<EmployeeRetireFulfillment> {
   const orgId = approval.orgId;
   const employeeId = typeof args.employeeId === "string" ? args.employeeId.trim() : "";
-  const audit = async (event: string, extra: Record<string, unknown>) =>
-    appendAuditEvent({
-      orgId,
-      employeeId: employeeId || null,
-      credentialId: null,
-      action: "admin.policy",
-      purpose: "admin.policy",
-      summary:
-        event === "employee.retire_approved"
-          ? "AI社員の退職を承認（実行はダッシュボード）"
-          : `AI社員の退職を中止（${String(extra.code)}）`,
-      metadata: {
-        auditClass: ADMIN_AUDIT_CLASS,
-        event,
-        tool: EMPLOYEE_RETIRE_TOOL,
-        approvalId: approval.id,
+  const audit = async (event: string, extra: Record<string, unknown>) => {
+    try {
+      await appendAdminAuditEvent({
+        actor: adminActorFromApproval(approval),
+        orgId,
         employeeId: employeeId || null,
-        actor: requesterOf(approval),
-        approver: approval.resolvedBy ?? null,
-        ...extra,
-      },
-    }).catch(() => undefined);
+        credentialId: null,
+        action: "admin.policy",
+        purpose: "admin.policy",
+        summary:
+          event === "employee.retire_approved"
+            ? "AI社員の退職を承認（実行はダッシュボード）"
+            : `AI社員の退職を中止（${String(extra.code)}）`,
+        metadata: {
+          auditClass: ADMIN_AUDIT_CLASS,
+          event,
+          tool: EMPLOYEE_RETIRE_TOOL,
+          approvalId: approval.id,
+          employeeId: employeeId || null,
+          actor: requesterOf(approval),
+          approver: approval.resolvedBy ?? null,
+          ...extra,
+        },
+      });
+    } catch {
+      // fulfill outcome does not depend on the audit write
+    }
+  };
   const stop = async (code: string, messageJa: string): Promise<EmployeeRetireFulfillment> => {
     await audit("employee.retire_rejected", { code });
     return { ok: false, code, messageJa, ...(employeeId ? { employeeId } : {}) };
