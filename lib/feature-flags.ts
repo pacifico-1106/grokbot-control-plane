@@ -747,6 +747,27 @@ export function isMcpOAuthDcrFlagOn(): boolean {
 }
 
 /**
+ * MCP_EMPLOYEE_BADGE_MCP_ENABLED (default OFF).
+ *
+ * When ON:
+ * - /api/mcp/employee is a badge-only mouth (404 while OFF). It never
+ *   advertises OAuth (no WWW-Authenticate resource_metadata, no server-card
+ *   auth.oauth, no OAuth initialize sentence). sp_at_ is refused.
+ * - On /api/mcp, a request that looks like a static-badge attempt (Authorization
+ *   present — including empty / unexpanded `${env:…}` — or
+ *   x-staffpass-credential) does not get an OAuth challenge. Unauthenticated
+ *   requests (no header) still get resource_metadata so Claude / ChatGPT
+ *   discovery is unchanged. 401 JSON-RPC errors on a badge attempt include
+ *   one Japanese nextStepJa that does not say whether a secret exists.
+ *
+ * When OFF (default): /api/mcp/employee is 404; /api/mcp is byte-identical
+ * to today (empty Bearer still gets the OAuth challenge when OAuth is ON).
+ */
+export function isEmployeeBadgeMcpEnabled(): boolean {
+  return parseFlag(process.env.MCP_EMPLOYEE_BADGE_MCP_ENABLED);
+}
+
+/**
  * MCP_OAUTH_LEGACY_UNAUTH_INITIALIZE (Q4 escape hatch, 木村 2026-10-10).
  * Only matters when MCP_OAUTH_ENABLED is ON. Unset / empty / anything that is
  * not an explicit false → TODAY's behaviour: unauthenticated initialize / ping /

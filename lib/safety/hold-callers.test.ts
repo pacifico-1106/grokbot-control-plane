@@ -23,9 +23,9 @@ export const PINNED: Record<string, string[]> = {
   // G5 inside (checkOperable phase:"wake"). Ingress already checked; wake re-checks.
   "dispatchLineConversationWake(": ["lib/comm/line-ingress.ts"],
   // G1 inside.
-  "resolveEmployeeCredential(": ["app/api/gateway/invoke/route.ts", "app/api/mcp/route.ts", "lib/mcp-oauth/resource-server.ts"],
+  "resolveEmployeeCredential(": ["app/api/gateway/invoke/route.ts", "lib/mcp/employee-http.ts", "lib/mcp-oauth/resource-server.ts"],
   // G2 inside (resolveOAuthAccessToken).
-  "resolveMcpCredential(": ["app/api/mcp/route.ts"],
+  "resolveMcpCredential(": ["lib/mcp/employee-http.ts"],
   "resolveOAuthAccessToken(": ["lib/mcp-oauth/resource-server.ts"],
   // + two conservative hits of the widened import() scan (木村 10/12 07:15), reviewed: both load
   // "@/lib/data" inside Promise.all([...]) and never call assertExecutable.

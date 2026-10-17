@@ -36,6 +36,7 @@ const FLAGS = [
   "MCP_OAUTH_CONSENT_REQUIRE_MFA",
   "MCP_OAUTH_REDIRECT_ALLOWLIST",
   "MCP_OAUTH_CIMD_ALLOWED_HOSTS",
+  "MCP_EMPLOYEE_BADGE_MCP_ENABLED",
 ];
 const saved: Record<string, string | undefined> = {};
 beforeEach(() => {
