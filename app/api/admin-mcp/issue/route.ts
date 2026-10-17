@@ -1,6 +1,6 @@
 import { getCurrentOrgId } from "@/lib/auth/session";
 import { requireCredentialAdmin } from "@/lib/auth/require-credential-admin";
-import { appendAuditEvent } from "@/lib/data";
+import { appendAdminAuditEvent, humanAdminActor } from "@/lib/audit/admin-audit";
 import { adminAgentPublicView, issueOrgAdminAgent, mintAdminSecret } from "@/lib/data/admin-agents";
 import { ADMIN_CREDENTIAL_PREFIX, STAFFPASS_ADMIN_MCP_URL } from "@/lib/mcp/admin-public";
 import { jsonUtf8 } from "@/lib/http/json-utf8";
@@ -31,19 +31,18 @@ export async function POST(req: Request) {
     secretHash: secret.hash,
     secretPrefix: secret.prefix,
   });
-  await appendAuditEvent({
+  await appendAdminAuditEvent({
     orgId,
     employeeId: null,
     credentialId: agent.id,
-    actorEmail: gate.actor.email,
     action: "admin.link",
     purpose: "admin.link",
     summary: "管理MCPの認証を発行（人のタップ）",
+    actor: humanAdminActor(gate.actor.email, gate.actor.id),
     metadata: {
       generation: agent.credentialGeneration,
       prefix: ADMIN_CREDENTIAL_PREFIX,
       secretHashPrefix: secret.hash.slice(0, 12),
-      actorMemberId: gate.actor.id,
     },
   });
   return jsonUtf8({

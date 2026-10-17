@@ -747,6 +747,27 @@ export function isMcpOAuthDcrFlagOn(): boolean {
 }
 
 /**
+ * MCP_EMPLOYEE_BADGE_MCP_ENABLED (default OFF).
+ *
+ * When ON:
+ * - /api/mcp/employee is a badge-only mouth (404 while OFF). It never
+ *   advertises OAuth (no WWW-Authenticate resource_metadata, no server-card
+ *   auth.oauth, no OAuth initialize sentence). sp_at_ is refused.
+ * - On /api/mcp, a request that looks like a static-badge attempt (Authorization
+ *   present — including empty / unexpanded `${env:…}` — or
+ *   x-staffpass-credential) does not get an OAuth challenge. Unauthenticated
+ *   requests (no header) still get resource_metadata so Claude / ChatGPT
+ *   discovery is unchanged. 401 JSON-RPC errors on a badge attempt include
+ *   one Japanese nextStepJa that does not say whether a secret exists.
+ *
+ * When OFF (default): /api/mcp/employee is 404; /api/mcp is byte-identical
+ * to today (empty Bearer still gets the OAuth challenge when OAuth is ON).
+ */
+export function isEmployeeBadgeMcpEnabled(): boolean {
+  return parseFlag(process.env.MCP_EMPLOYEE_BADGE_MCP_ENABLED);
+}
+
+/**
  * MCP_OAUTH_LEGACY_UNAUTH_INITIALIZE (Q4 escape hatch, 木村 2026-10-10).
  * Only matters when MCP_OAUTH_ENABLED is ON. Unset / empty / anything that is
  * not an explicit false → TODAY's behaviour: unauthenticated initialize / ping /
@@ -848,6 +869,15 @@ export function isAiPeerWakeAllowlistEnabled(): boolean {
  */
 export function isAiPeerWakeThreadGuardEnabled(): boolean {
   return parseFlag(process.env.AI_PEER_WAKE_THREAD_GUARD_ENABLED);
+}
+
+/**
+ * EMPLOYEE_RETIRE_ENABLED (default OFF): admin MCP employees.retire may file
+ * an always_human ticket. Execution stays on the dashboard (人間のみ).
+ * checkOperable の status=suspended 拒否はフラグに依存しない（hold と同じ）。
+ */
+export function isEmployeeRetireEnabled(): boolean {
+  return parseFlag(process.env.EMPLOYEE_RETIRE_ENABLED);
 }
 
 const DEFAULT_AI_PEER_WAKE_CAP = 4;

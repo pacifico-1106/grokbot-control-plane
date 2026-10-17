@@ -37,6 +37,7 @@ import { getEmployee } from "@/lib/data/employees";
 import { credentialExpiry, formatCredentialExpiryJa } from "@/lib/employees/credential-expiry";
 import { isAdminMcpCredentialReissueEnabled } from "@/lib/feature-flags";
 import type { ApprovalRequest, EmployeeBinding } from "@/lib/types";
+import { appendAdminAuditEvent, resolveAdminAuditActor } from "@/lib/audit/admin-audit";
 
 export const CREDENTIAL_REISSUE_TOOL = "employees.credential.reissue" as const;
 export const CREDENTIAL_REISSUE_ALLOWED_ARGS = ["employeeId", "reason", "jobId", "approvalId"] as const;
@@ -127,7 +128,8 @@ export async function fulfillCredentialReissue(
   const orgId = approval.orgId;
   const employeeId = typeof args.employeeId === "string" ? args.employeeId.trim() : "";
   const audit = async (event: string, extra: Record<string, unknown>) =>
-    appendAuditEvent({
+    appendAdminAuditEvent({
+      actor: await resolveAdminAuditActor({ approval, orgId: approval.orgId }),
       orgId,
       employeeId: employeeId || null,
       credentialId: null,

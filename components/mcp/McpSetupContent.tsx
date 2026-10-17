@@ -45,7 +45,9 @@ export function McpSetupContent({
         <p className="text-xs muted leading-relaxed">
           認証は{" "}
           <code className="text-[11px]">Authorization: Bearer gb_emp_…</code>
-          。代替ヘッダ{" "}
+          をコネクタのシークレット欄に静的な値として入れます。
+          <code className="text-[11px]">{"${env:…}"}</code> の展開は使いません。
+          代替ヘッダ{" "}
           <code className="text-[11px]">x-staffpass-credential</code>
           。社員証は雇ったときに一度だけ表示されます。この画面には出しません。
           {!isPublic ? (

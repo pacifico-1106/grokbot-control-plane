@@ -323,7 +323,16 @@ export async function assertExecutable(
   // (admin MCP stuckWatch.retry, egress retries, lib/mcp/tools.ts). Fail-stop.
   const operable = await checkOperable({ orgId: decision.binding.orgId || null, employeeId, phase: "gateway" });
   if (!operable.ok) {
-    return { ok: false, code: operable.code, message: operable.code === "hold_state_unavailable" ? "hold state unavailable; refuse invoke (fail-stop)" : "employee / organization on hold; refuse invoke" };
+    return {
+      ok: false,
+      code: operable.code,
+      message:
+        operable.code === "hold_state_unavailable"
+          ? "hold state unavailable; refuse invoke (fail-stop)"
+          : operable.code === "employee_terminated"
+            ? "employee is retired (contract ended); refuse invoke"
+            : "employee / organization on hold; refuse invoke",
+    };
   }
   return decision;
 }

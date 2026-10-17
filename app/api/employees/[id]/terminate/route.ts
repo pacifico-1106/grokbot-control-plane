@@ -2,6 +2,7 @@ import { getCurrentOrgId } from "@/lib/auth/session";
 import { appendAuditEvent, terminateEmployee } from "@/lib/data";
 import { requireCapability } from "@/lib/team/demo-actor";
 import { revokeAllEmployeeGrants } from "@/lib/mcp-oauth/grant-admin";
+import { stopEmployeeWakeAndNotices } from "@/lib/employees/retire";
 import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 export const runtime = "nodejs";
@@ -54,6 +55,7 @@ export async function POST(
   } catch {
     // fail-safe: RS still blocks the suspended employee on every request
   }
+  await stopEmployeeWakeAndNotices({ orgId, employeeId: id }).catch(() => undefined);
 
   return jsonUtf8({ ok: true, employee, ...(oauthGrantsRevoked ? { oauthGrantsRevoked } : {}) });
 }

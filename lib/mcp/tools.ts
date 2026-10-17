@@ -519,7 +519,8 @@ function resolveFileAttachment(
 export async function callStaffpassMcpTool(
   name: string,
   args: Record<string, unknown>,
-  cred: ResolvedEmployeeCredential
+  cred: ResolvedEmployeeCredential,
+  opts?: { surface?: "shared" | "badge_only" }
 ): Promise<{
   content: Array<{ type: "text"; text: string }>;
   structuredContent?: unknown;
@@ -916,11 +917,17 @@ export async function callStaffpassMcpTool(
               credentialGeneration: binding.credentialGeneration,
             }
           : null,
-        mcpEndpoint: "/api/mcp",
+        mcpEndpoint: opts?.surface === "badge_only" ? "/api/mcp/employee" : "/api/mcp",
         gatewayEndpoint: "/api/gateway/invoke",
         // MCP endpoint handoff ON: origin from app config (no hardcode) + absolute URL.
         ...(isMcpEndpointHandoffEnabled()
-          ? { publicOrigin: resolveAppOrigin(), mcpEndpointUrl: resolveMcpEndpointUrl() }
+          ? {
+              publicOrigin: resolveAppOrigin(),
+              mcpEndpointUrl:
+                opts?.surface === "badge_only"
+                  ? `${resolveAppOrigin()}/api/mcp/employee`
+                  : resolveMcpEndpointUrl(),
+            }
           : { publicOrigin: "https://staffpass.sealith.com" }),
       });
     }

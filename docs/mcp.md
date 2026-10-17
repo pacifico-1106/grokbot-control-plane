@@ -306,10 +306,12 @@ Mcp-Name: staffpass_whoami
 ## Connect from Grok Bot（Plugins）
 
 1. Grok Bot → **Settings → Plugins**
-2. **Custom MCP URL** に `https://staffpass.sealith.com/api/mcp`
-3. **Authorization** ヘッダに `Bearer gb_emp_…`（社員証の一度きり秘密）
-4. `allowed_tools` があれば 4 つの `staffpass_*` に限定
-5. ローカル stdio や `localhost` は不可（**公開 HTTPS のみ**）
+2. **Custom MCP URL** に `https://staffpass.sealith.com/api/mcp`（社員証専用口は `…/api/mcp/employee`。フラグ `MCP_EMPLOYEE_BADGE_MCP_ENABLED` が ON のときだけ。OAuth を広告しない）
+3. **Authorization** ヘッダに `Bearer gb_emp_…` を**静的な値**として入れる（コネクタのシークレット欄に貼る）。`${env:STAFFPASS_MCP_TOKEN}` のような展開は使わない（空 Bearer になり、OAuth 発見 → DCR → `invalid_redirect_uri` になる）
+4. 代替: ヘッダ名 `x-staffpass-credential`、値は `gb_emp_…`（`Bearer` は付けない）
+5. トークンを URL に載せない（ログ・Referer に残る）
+6. `allowed_tools` があれば 4 つの `staffpass_*` に限定
+7. ローカル stdio や `localhost` は不可（**公開 HTTPS のみ**）
 
 発行画面の Instructions / Routine に「`needs_approval` 時は poll 必須」を残しつつ、**実際の承認 ID・URL はツール結果の構造化フィールドを正**とします。
 
@@ -318,8 +320,8 @@ Mcp-Name: staffpass_whoami
 ## grok.com / connectors（Custom MCP）
 
 1. [grok.com](https://grok.com) の **Connectors / Custom MCP**
-2. URL: `https://staffpass.sealith.com/api/mcp`
-3. Auth: Bearer `gb_emp_…`
+2. URL: `https://staffpass.sealith.com/api/mcp`（OAuth を使わないなら、フラグ ON 後は `…/api/mcp/employee`）
+3. Auth: シークレット欄に `Bearer gb_emp_…` を**静的に**貼る。`${env:…}` は使わない
 4. Server card: `https://staffpass.sealith.com/.well-known/mcp/server-card.json` を参照可能
 
 ---
