@@ -795,6 +795,63 @@ try:
           "kinds missing_credential/invalid/expired only; 5-minute throttle per kind×identity; no token/hash/prefix columns; "
           "touch_credential_last_used conditional UPDATE (5 min); 12 concurrent missing_credential → 1 insert; "
           "re-applicable; rollback drops table + 2 functions; forward again.")
+    # 社員証 auto-renew (20261019100000, CREDENTIAL_AUTO_RENEW_ENABLED).
+    car = ROOT / "supabase/migrations/20261019100000_credential_auto_renew.sql"
+    sql(car)
+    sql(car)  # re-applicable
+    sql(ROOT / "tests/security/db-credential-auto-renew.sql")
+    from concurrent.futures import ThreadPoolExecutor as _CarPool
+    car_org, car_emp, car_old, car_appr, car_row = (
+        "ca000000-0000-4000-8000-0000000000c1",
+        "ca100000-0000-4000-8000-0000000000c1",
+        "ca200000-0000-4000-8000-0000000000c1",
+        "ca300000-0000-4000-8000-0000000000c1",
+        "ca400000-0000-4000-8000-0000000000c1",
+    )
+    query(
+        f"insert into public.orgs(id, name) values ('{car_org}', 'car concurrent');"
+        f"insert into public.employees(id, org_id, display_name, role_label) values "
+        f"('{car_emp}', '{car_org}', 'Car C', 'fixture');"
+        f"insert into public.credentials(id, org_id, employee_id, secret_hash) values "
+        f"('{car_old}', '{car_org}', '{car_emp}', repeat('c', 64));"
+        f"insert into public.approval_requests(id, org_id, purpose, summary, tool, risk, status, metadata) values "
+        f"('{car_appr}', '{car_org}', 'admin.policy', 'car', 'employees.credential.auto_renew', 'high', 'approved',"
+        f" '{{\"adminTool\":\"employees.credential.auto_renew\"}}');"
+        f"insert into public.credential_renewals(id, org_id, employee_id, old_credential_id, approval_id, threshold, state, claimable_until) values "
+        f"('{car_row}', '{car_org}', '{car_emp}', '{car_old}', '{car_appr}', 'now', 'claimable', now() + interval '24 hours');"
+    )
+    car_commands = [
+        f"set role service_role; select public.claim_credential_renewal('{car_row}','{car_org}','{car_emp}','tok_concurrent_{i:02d}_0123456789',now());"
+        for i in range(12)
+    ]
+    with _CarPool(max_workers=12) as pool:
+        car_claims = list(pool.map(query, car_commands))
+    assert car_claims.count("t") == 1 and car_claims.count("f") == 11, car_claims
+    car_winner = query(f"select claim_token from public.credential_renewals where id = '{car_row}';")
+    assert car_winner == f"tok_concurrent_{car_claims.index('t'):02d}_0123456789", (car_winner, car_claims)
+    query(
+        f"delete from public.credential_renewals where id = '{car_row}';"
+        f"delete from public.approval_requests where id = '{car_appr}';"
+        f"delete from public.credentials where id = '{car_old}';"
+        f"delete from public.employees where id = '{car_emp}';"
+        f"delete from public.orgs where id = '{car_org}';"
+    )
+    sql(ROOT / "supabase/verification/20261019100000_credential_auto_renew_rollback.sql")
+    assert query(
+        "select to_regclass('public.credential_renewals') is null"
+        " and to_regprocedure('public.claim_credential_renewal(uuid,uuid,uuid,text,timestamptz)') is null"
+        " and to_regprocedure('public.release_credential_renewal(uuid,uuid,text)') is null"
+        " and to_regprocedure('public.revoke_overlapped_old_credential(uuid,uuid,uuid,uuid)') is null"
+        " and to_regprocedure('public.credential_renewals_same_org()') is null"
+        " and to_regclass('public.credentials') is not null;"
+    ) == "t"
+    sql(car)  # forward again after rollback
+    sql(ROOT / "tests/security/db-credential-auto-renew.sql")
+    print("PASS: credential auto-renew (20261019100000): RLS on / no policy, anon/authenticated hold no privilege "
+          "and cannot execute; unique old_credential × threshold (7d/now); same-org trigger; "
+          "claim once (12 concurrent → 1 winner); release only with own token before mint; "
+          "revoke overlapped old (already-revoked true); no secret/prefix/public-key columns; "
+          "re-applicable; rollback drops table + 4 functions; forward again.")
     print("PASS: approver authority (PR-D): owner / designated admin decision table; flag-OFF 7-argument W1 call unchanged; standard ticket → designated admin stored, others refused; owner ticket → designated admin endorsed once and kept pending, owner approves and is stored; zero owners stop; multiple owners: any one owner other than the requester (requesting owner refused; a sole owner's own approval counts; several owners all requesters → no_owner_other_than_requester); reject / non-target not gated; record_approver_authority verified/endorse; one RPC overload; EXECUTE service_role only; rollback restores the 7-argument RPC + re-apply.")
     print("PASS: approver context CAS (TOCTOU follow-up): policy.patch / schedulingPolicy.patch writes only when the locked row still equals the pinned snapshot; concurrent change between check and write → approver_context_changed with nothing written (employee row, active and revoked credentials, org / employee scheduling policy); ticket binding (fingerprint, missing fingerprint, status, tool, target, org) refused; invalid input refused; EXECUTE service_role only; 12 concurrent writers with one snapshot → exactly 1 write (both RPCs); rollback drops both RPCs (PR-D untouched) + re-apply.")
     print("PASS: employee_webhook_settings (D9): RLS on, no policy, anon/authenticated denied, service_role reads/writes/upserts; cross-org row rejected; payload mode minimal|legacy_full (default minimal); ciphertext-only secret + fingerprint pair; employee delete cascades; rollback + re-apply.")
