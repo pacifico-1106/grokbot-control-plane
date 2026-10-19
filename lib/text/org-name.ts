@@ -102,8 +102,9 @@ export function sanitizeTextForMail(value: unknown, max: number): string {
     String(value ?? "")
       // Do NOT use NFKC normalization here — it changes display characters
       // NFKC is only used in validation (validateOrgNameStrict)
-      // Replace NBSP (U+00A0) and ideographic space (U+3000) with regular space
-      .replace(/[\u00a0\u3000]/g, " ")
+      // Replace NBSP (U+00A0) with regular space
+      // Note: U+3000 (ideographic space) is preserved — commonly used in Japanese company names
+      .replace(/\u00a0/g, " ")
       // Strip control chars
       .replace(CONTROL_CHARS_GLOBAL, "")
       // Strip bidi chars
@@ -176,6 +177,11 @@ function containsUrlLike(s: string): boolean {
 
   // Check scheme with space/NBSP before colon (e.g., "http ://")
   if (URL_SCHEME_SPACED_PATTERN.test(normalized)) return true;
+
+  // Check scheme with spaces inside (e.g., "ht tp://", "h t t p s://")
+  // Strip all whitespace and check for schemes only (not domains to avoid false positives)
+  const noWhitespace = normalized.replace(/\s+/g, "");
+  if (URL_SCHEME_PATTERN.test(noWhitespace)) return true;
 
   // Check www. prefix
   if (WWW_PREFIX_PATTERN.test(normalized)) return true;

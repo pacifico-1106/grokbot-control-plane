@@ -74,9 +74,9 @@ describe("sanitizeTextForMail", () => {
     expect(sanitizeTextForMail("一般社団法人みらい社中", 200)).toBe("一般社団法人みらい社中");
   });
 
-  test("preserves full-width space as regular space", () => {
-    // 全角スペースは NFKC 正規化で通常のスペースになる想定だが、明示的にテスト
-    expect(sanitizeTextForMail("株式会社　テスト", 200)).toBe("株式会社 テスト");
+  test("preserves full-width space (U+3000) as-is", () => {
+    // 全角スペースは日本語の社名で普通に使われるのでそのまま残す
+    expect(sanitizeTextForMail("株式会社\u3000テスト", 200)).toBe("株式会社\u3000テスト");
   });
 });
 
@@ -306,6 +306,14 @@ describe("validateOrgNameStrict (flag ON)", () => {
 
     test("rejects scheme with space before colon (http ://)", () => {
       expect(validateOrgNameStrict("http ://example.com").ok).toBe(false);
+    });
+
+    test("rejects scheme with space inside (ht tp://)", () => {
+      expect(validateOrgNameStrict("ht tp://example.com").ok).toBe(false);
+    });
+
+    test("rejects scheme with multiple spaces inside (h t t p ://)", () => {
+      expect(validateOrgNameStrict("h t t p s://example.com").ok).toBe(false);
     });
 
     test("rejects scheme with NBSP before colon", () => {

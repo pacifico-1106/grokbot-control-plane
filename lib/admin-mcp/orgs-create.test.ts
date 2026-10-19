@@ -110,6 +110,24 @@ describe("orgs.create validation", () => {
         });
         expect(result.ok).toBe(true);
       });
+
+      test("allows org name with 150 characters (no length limit when flag OFF)", () => {
+        const result = validateOrgCreateInput({
+          orgName: "a".repeat(150),
+          ownerEmail: "test@example.com",
+          invite: true,
+        });
+        expect(result.ok).toBe(true);
+      });
+
+      test("allows org name with 250 characters (no length limit when flag OFF)", () => {
+        const result = validateOrgCreateInput({
+          orgName: "a".repeat(250),
+          ownerEmail: "test@example.com",
+          invite: true,
+        });
+        expect(result.ok).toBe(true);
+      });
     });
 
     describe("flag ON", () => {

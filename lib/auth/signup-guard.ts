@@ -60,17 +60,19 @@ export function validateSignupOrgName(raw: string): { ok: true; value: string } 
   const v = (raw || "").normalize("NFKC").trim();
   if (!v) return { ok: false, message: "会社名を入力してください" };
   if (v === DEMO_ORG.name) return { ok: false, message: "会社名を入力してください（サンプルの会社名は使えません）" };
-  if (v.length > SIGNUP_ORG_NAME_MAX) return { ok: false, message: `会社名は${SIGNUP_ORG_NAME_MAX}文字以内で入力してください` };
 
-  // Base validation: control characters (always applies)
-  if (CONTROL_CHARS.test(v)) return { ok: false, message: "会社名に使用できない文字が含まれています" };
-
-  // Strict validation when flag is ON
+  // Strict validation when flag is ON (uses code points for length limit)
   if (isOrgNameInputStrictEnabled()) {
     const strictResult = validateOrgNameStrict(v);
     if (!strictResult.ok) return strictResult;
     return { ok: true, value: strictResult.value };
   }
+
+  // Flag OFF: use string.length for length limit (same as main)
+  if (v.length > SIGNUP_ORG_NAME_MAX) return { ok: false, message: `会社名は${SIGNUP_ORG_NAME_MAX}文字以内で入力してください` };
+
+  // Base validation: control characters (always applies)
+  if (CONTROL_CHARS.test(v)) return { ok: false, message: "会社名に使用できない文字が含まれています" };
 
   return { ok: true, value: v };
 }

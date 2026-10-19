@@ -91,21 +91,7 @@ export function validateOrgCreateInput(
     return { ok: false, code: "org_name_required", message: "orgName が必要です" };
   }
 
-  // Length check: flag ON uses admin limit (200) with code points; flag OFF uses standard limit (100) with string length
-  const maxLen = isOrgNameInputStrictEnabled() ? ORG_NAME_MAX_ADMIN : ORG_NAME_MAX;
-  const len = isOrgNameInputStrictEnabled()
-    ? [...rawOrgName].length  // code point count
-    : rawOrgName.length;      // string length
-  if (len > maxLen) {
-    return {
-      ok: false,
-      code: "invalid_org_name",
-      message: `orgName は${maxLen}文字以内で入力してください`,
-      nextStep: "orgName を短くしてください",
-    };
-  }
-
-  // Strict validation when flag is ON
+  // Strict validation when flag is ON (includes length check: 200 code points)
   let orgName = rawOrgName;
   if (isOrgNameInputStrictEnabled()) {
     const strictResult = validateOrgNameStrict(rawOrgName, ORG_NAME_MAX_ADMIN);

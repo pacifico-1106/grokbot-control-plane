@@ -135,6 +135,16 @@ describe("signup guard: ORG_NAME_INPUT_STRICT_ENABLED", () => {
       expect(result.ok).toBe(true);
     });
 
+    test("uses string.length for length limit (100 surrogate pairs = 200 UTF-16 units = fail)", () => {
+      // 100 surrogate pair characters = 200 UTF-16 units
+      // Should FAIL because we count string.length when flag is OFF
+      const input = "𠮷".repeat(100);
+      expect(input.length).toBe(200);  // UTF-16 units
+      const result = validateSignupOrgName(input);
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.message).toContain("100");
+    });
+
     test("existing behavior unchanged", async () => {
       const d = deps();
       const r = await evaluateSignupGuard({ ...base, orgName: "株式会社テスト" }, d);
@@ -188,6 +198,23 @@ describe("signup guard: ORG_NAME_INPUT_STRICT_ENABLED", () => {
       const result = validateSignupOrgName("株式会社　テスト");
       expect(result.ok).toBe(true);
       if (result.ok) expect(result.value).toBe("株式会社 テスト");
+    });
+
+    test("uses code points for length limit (100 surrogate pairs = 100 code points = pass)", () => {
+      // 100 surrogate pair characters = 100 code points (200 UTF-16 units)
+      // Should PASS because we count code points when flag is ON
+      const input = "𠮷".repeat(100);
+      expect(input.length).toBe(200);  // UTF-16 units
+      expect([...input].length).toBe(100);  // code points
+      const result = validateSignupOrgName(input);
+      expect(result.ok).toBe(true);
+    });
+
+    test("rejects 101 surrogate pairs (101 code points > 100 limit)", () => {
+      const input = "𠮷".repeat(101);
+      const result = validateSignupOrgName(input);
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.message).toContain("100");
     });
 
     test("full guard flow rejects bidi on flag ON", async () => {
