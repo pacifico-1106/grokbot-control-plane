@@ -399,11 +399,105 @@ describe("validateOrgNameStrict (flag ON)", () => {
       expect(validateOrgNameStrict("example。com").ok).toBe(true);
     });
 
-    test("allows colon without scheme pattern", () => {
+    test("allows colon with spaces (no scheme pattern)", () => {
       expect(validateOrgNameStrict("Data : Science").ok).toBe(true);
-      expect(validateOrgNameStrict("Mail To: John").ok).toBe(true);
-      expect(validateOrgNameStrict("Java Script: Guide").ok).toBe(true);
       expect(validateOrgNameStrict("HTTP : Status").ok).toBe(true);
+      expect(validateOrgNameStrict("File : Notes").ok).toBe(true);
+    });
+
+    // === HIGH-1: Whitespace-separated schemes must be rejected ===
+    test("rejects javascript: with spaces (java script:)", () => {
+      expect(validateOrgNameStrict("java script:alert(1)").ok).toBe(false);
+    });
+
+    test("rejects mailto: with spaces (mail to:)", () => {
+      expect(validateOrgNameStrict("mail to:admin").ok).toBe(false);
+    });
+
+    test("rejects vbscript: with spaces (vb script:)", () => {
+      expect(validateOrgNameStrict("vb script:msgbox").ok).toBe(false);
+    });
+
+    test("rejects fullwidth javascript: with spaces (ｊａｖａ ｓｃｒｉｐｔ：)", () => {
+      expect(validateOrgNameStrict("ｊａｖａ ｓｃｒｉｐｔ：x").ok).toBe(false);
+    });
+
+    test("rejects www. with spaces inside (w w w.)", () => {
+      expect(validateOrgNameStrict("w w w.evil.com").ok).toBe(false);
+    });
+
+    test("rejects Mail To: John (matches mailto:)", () => {
+      expect(validateOrgNameStrict("Mail To: John").ok).toBe(false);
+    });
+
+    test("rejects Java Script: Guide (matches javascript:)", () => {
+      expect(validateOrgNameStrict("Java Script: Guide").ok).toBe(false);
+    });
+
+    test("rejects File: Notes (file: without space)", () => {
+      expect(validateOrgNameStrict("File: Notes").ok).toBe(false);
+    });
+
+    test("allows Data : Science (data: with space before colon)", () => {
+      expect(validateOrgNameStrict("Data : Science").ok).toBe(true);
+    });
+
+    // === HIGH-2: Host with port pattern improvements ===
+    test("rejects IPv6 with port ([::1]:80)", () => {
+      expect(validateOrgNameStrict("[::1]:80").ok).toBe(false);
+    });
+
+    test("rejects bare IPv6 with port (::1:80)", () => {
+      expect(validateOrgNameStrict("::1:80").ok).toBe(false);
+    });
+
+    test("rejects domain:port with query (a.com:80?x)", () => {
+      expect(validateOrgNameStrict("a.com:80?x").ok).toBe(false);
+    });
+
+    test("rejects domain:port with fragment (a.com:80#x)", () => {
+      expect(validateOrgNameStrict("a.com:80#x").ok).toBe(false);
+    });
+
+    test("rejects domain:port with space after colon (a.com: 80)", () => {
+      expect(validateOrgNameStrict("a.com: 80").ok).toBe(false);
+    });
+
+    test("rejects domain:port with fullwidth colon (a.com：80)", () => {
+      expect(validateOrgNameStrict("a.com：80").ok).toBe(false);
+    });
+
+    test("rejects Japanese adjacent domain:port (株式会社a.com:443)", () => {
+      expect(validateOrgNameStrict("株式会社a.com:443").ok).toBe(false);
+    });
+
+    test("allows time-like patterns (株式会社 3:2)", () => {
+      expect(validateOrgNameStrict("株式会社 3:2").ok).toBe(true);
+    });
+
+    test("allows time-like patterns (10:30 Labs)", () => {
+      expect(validateOrgNameStrict("10:30 Labs").ok).toBe(true);
+    });
+
+    test("allows ratio patterns (Ratio 16:9 Inc)", () => {
+      expect(validateOrgNameStrict("Ratio 16:9 Inc").ok).toBe(true);
+    });
+
+    // === MEDIUM-2: Slash-like characters ===
+    test("rejects division slash U+2215 (a∕b)", () => {
+      expect(validateOrgNameStrict("a\u2215b").ok).toBe(false);
+    });
+
+    test("rejects fraction slash U+2044 (a⁄b)", () => {
+      expect(validateOrgNameStrict("a\u2044b").ok).toBe(false);
+    });
+
+    test("rejects big solidus U+29F8 (a⧸b)", () => {
+      expect(validateOrgNameStrict("a\u29F8b").ok).toBe(false);
+    });
+
+    test("rejects box drawings light diagonal U+2571 (a╱b)", () => {
+      expect(validateOrgNameStrict("a\u2571b").ok).toBe(false);
     });
   });
 

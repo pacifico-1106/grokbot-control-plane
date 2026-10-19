@@ -45,27 +45,43 @@ const INVISIBLE_CHARS_GLOBAL = /[\u200b-\u200d\u2060-\u2065\ufeff\u00ad\u180e]+/
 //
 // Reject:
 // - Schemes (http, https, hxxp, hxxps, ftp, javascript, data, vbscript, file, mailto)
-// - www.
+//   - javascript:, vbscript:, mailto: are checked on whitespace-stripped string
+//   - data:, file: only rejected when not separated by space (common words)
+// - www. (checked on whitespace-stripped string)
 // - xn-- (punycode)
 // - @ (email-like)
-// - / or // (path-like)
-// - Host with port (e.g., a.com:8080, 1.2.3.4:80)
+// - / or // (path-like) - includes slash-like Unicode characters
+// - Host with port (domain.tld:port, IPv4:port, IPv6:port)
 //
 // Allow:
 // - Names with only dots (Sealith.AI, example.com, 1.2.3.4 without port)
+// - Time/ratio patterns like "10:30", "16:9"
+
+// Slash-like characters to normalize to /
+// U+2215 DIVISION SLASH (∕)
+// U+2044 FRACTION SLASH (⁄)
+// U+29F8 BIG SOLIDUS (⧸)
+// U+2571 BOX DRAWINGS LIGHT DIAGONAL UPPER RIGHT TO LOWER LEFT (╱)
+// U+FF0F FULLWIDTH SOLIDUS (／)
+// Note: U+FE68 SMALL REVERSE SOLIDUS is a backslash, not a slash - excluded
+const SLASH_LIKE_CHARS = /[\u2215\u2044\u29f8\u2571\uff0f]/g;
 
 // URL scheme patterns (case insensitive)
-// Includes obfuscated variants (hxxp, hxxps) and ftp
+// For non-whitespace-stripped check (data: and file: only without space)
 const URL_SCHEME_PATTERN = /(?:https?|hxxps?|ftp|javascript|data|vbscript|file|mailto):/i;
 
 // Schemes that require :// (for whitespace-stripped detection)
 const URL_SCHEME_WITH_SLASHES = /(?:https?|hxxps?|ftp):\/\//i;
 
+// Dangerous schemes that should be rejected even with whitespace
+// These are checked on whitespace-stripped, lowercased string
+const DANGEROUS_SCHEME_NO_SPACE = /(?:javascript|vbscript|mailto):/i;
+
 // Scheme with space/NBSP before colon (e.g., "http ://")
 const URL_SCHEME_SPACED_PATTERN = /(?:https?|hxxps?|ftp)[\s\u00a0]*:[\s\u00a0]*\/\//i;
 
-// www. prefix (reject)
-const WWW_PREFIX_PATTERN = /(?:^|[\s])www\./i;
+// www. prefix - checked on whitespace-stripped string
+const WWW_PATTERN = /www\./i;
 
 // Punycode label pattern (xn--) - reject
 const PUNYCODE_PATTERN = /(?:^|[\s.])xn--[a-z0-9-]*/i;
@@ -73,13 +89,19 @@ const PUNYCODE_PATTERN = /(?:^|[\s.])xn--[a-z0-9-]*/i;
 // @ sign (email-like) - reject
 const AT_SIGN_PATTERN = /@/;
 
-// Slash patterns (path-like) - reject
+// Slash pattern (path-like) - reject (after normalizing slash-like chars)
 const SLASH_PATTERN = /\//;
 
 // Host with port pattern - reject
-// Matches: word.word:digits or digit.digit.digit.digit:digits at word boundaries
-// Using \b for word boundary; after NFKC normalization so . and : are ASCII
-const HOST_PORT_PATTERN = /(?:^|[\s])(?:[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?|\d{1,3}(?:\.\d{1,3}){3}):\d+(?:$|[\s])/i;
+// Host is one of:
+// - Domain/IPv4: labels with at least one dot (e.g., a.com, 1.2.3.4)
+// - IPv6 in brackets: [::1], [2001:db8::1]
+// - Bare IPv6 with :: (e.g., ::1, 2001:db8::1)
+// Port: colon + optional space + 1-5 digits + (end, space, /, ?, #)
+// Host can be preceded by: start, space, or non-ASCII (Japanese)
+const HOST_PORT_DOMAIN_IPV4 = /(?:^|[\s\u3000-\u9fff\uac00-\ud7af])(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]*[a-z0-9])?:\s?\d{1,5}(?:$|[\s\/?#])/i;
+const HOST_PORT_IPV6_BRACKET = /\[[0-9a-f:]+\]:\s?\d{1,5}(?:$|[\s\/?#])/i;
+const HOST_PORT_IPV6_BARE = /(?:^|[\s])(?:[0-9a-f]*:){2,}[0-9a-f]*:\s?\d{1,5}(?:$|[\s\/?#])/i;
 
 // Combining character pattern for stripping before URL check
 const COMBINING_CHARS = /\p{M}/gu;
@@ -139,16 +161,17 @@ function containsControlChars(s: string): boolean {
 
 /**
  * Normalize string for URL detection:
+ * - Replace slash-like characters with ASCII /
  * - Replace fullwidth characters with ASCII equivalents
  * - Replace ideographic full stop (。U+3002) with dot
- * - Strip combining characters
+ * - Strip combining characters (they don't affect URL detection, e.g., café is allowed)
  */
 function normalizeForUrlCheck(s: string): string {
   return s
+    // Slash-like characters → /
+    .replace(SLASH_LIKE_CHARS, "/")
     // Fullwidth colon (：) → :
     .replace(/\uff1a/g, ":")
-    // Fullwidth solidus (／) → /
-    .replace(/\uff0f/g, "/")
     // Fullwidth full stop (．) → .
     .replace(/\uff0e/g, ".")
     // Ideographic full stop (。) → .
@@ -158,45 +181,59 @@ function normalizeForUrlCheck(s: string): string {
     .replace(/[\uff41-\uff5a]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0))
     // Fullwidth digits 0-9 → ASCII
     .replace(/[\uff10-\uff19]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0))
-    // Strip combining characters
+    // Strip combining characters (café with combining acute is allowed)
     .replace(COMBINING_CHARS, "");
 }
 
 /**
  * Check if a string looks like it contains a URL-like pattern.
  *
- * Simplified rules (after NFKC normalization):
- * - Reject: schemes, www., xn--, @, /, //, host:port
- * - Allow: names with only dots (Sealith.AI, example.com, 1.2.3.4 without port)
+ * All checks are performed on NFKC-normalized, then URL-normalized string.
+ * Some checks use whitespace-stripped, lowercased version.
+ *
+ * Reject: schemes, www., xn--, @, /, //, host:port
+ * Allow: names with only dots (Sealith.AI, example.com, 1.2.3.4 without port)
+ *        time/ratio patterns (10:30, 16:9)
  */
 function containsUrlLike(s: string): boolean {
-  // Normalize for URL detection (fullwidth → ASCII, 。→ ., strip combining)
+  // Normalize for URL detection (slash-like → /, fullwidth → ASCII, strip combining)
   const normalized = normalizeForUrlCheck(s);
+  
+  // Whitespace-stripped and lowercased for scheme/www checks
+  const noWhitespace = normalized.replace(/\s+/g, "").toLowerCase();
 
-  // 1. Check explicit schemes (http, https, hxxp, hxxps, ftp, javascript, data, etc.)
-  if (URL_SCHEME_PATTERN.test(normalized)) return true;
+  // 1. Check dangerous schemes on whitespace-stripped string
+  //    javascript:, vbscript:, mailto: are dangerous even with spaces
+  if (DANGEROUS_SCHEME_NO_SPACE.test(noWhitespace)) return true;
 
-  // 2. Check scheme with space/NBSP before colon (e.g., "http ://")
-  if (URL_SCHEME_SPACED_PATTERN.test(normalized)) return true;
-
-  // 3. Check scheme with spaces inside (e.g., "ht tp://", "h t t p s://")
-  const noWhitespace = normalized.replace(/\s+/g, "");
+  // 2. Check scheme with :// on whitespace-stripped string (ht tp://, h t t p s://)
   if (URL_SCHEME_WITH_SLASHES.test(noWhitespace)) return true;
 
-  // 4. Check www. prefix
-  if (WWW_PREFIX_PATTERN.test(normalized)) return true;
+  // 3. Check www. on whitespace-stripped string (w w w.evil)
+  if (WWW_PATTERN.test(noWhitespace)) return true;
 
-  // 5. Check punycode labels (xn--)
+  // 4. Check explicit schemes without space separation
+  //    data: and file: are common words, only reject when directly followed by content
+  //    "File: Notes" is rejected, "File : Notes" is allowed
+  if (URL_SCHEME_PATTERN.test(normalized)) return true;
+
+  // 5. Check scheme with space/NBSP before colon (e.g., "http ://")
+  if (URL_SCHEME_SPACED_PATTERN.test(normalized)) return true;
+
+  // 6. Check punycode labels (xn--)
   if (PUNYCODE_PATTERN.test(normalized)) return true;
 
-  // 6. Check @ sign (email-like)
+  // 7. Check @ sign (email-like)
   if (AT_SIGN_PATTERN.test(normalized)) return true;
 
-  // 7. Check slash (path-like)
+  // 8. Check slash (path-like) - after slash-like normalization
   if (SLASH_PATTERN.test(normalized)) return true;
 
-  // 8. Check host with port (e.g., a.com:8080, 1.2.3.4:80)
-  if (HOST_PORT_PATTERN.test(normalized)) return true;
+  // 9. Check host with port patterns
+  //    Only reject when host is domain/IPv4/IPv6, not digit:digit patterns
+  if (HOST_PORT_DOMAIN_IPV4.test(normalized)) return true;
+  if (HOST_PORT_IPV6_BRACKET.test(normalized)) return true;
+  if (HOST_PORT_IPV6_BARE.test(normalized)) return true;
 
   // All other patterns (including domain-like names with dots) are allowed
   return false;

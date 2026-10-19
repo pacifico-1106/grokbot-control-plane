@@ -8,45 +8,51 @@
  * This script tests that the SQL patterns (converted to JS regex) catch all
  * org names that the app would reject.
  *
- * New criteria (simplified):
- * - Reject: schemes, www., xn--, @, /, //, host:port, control, bidi, invisible, combining, too_long
- * - Allow: names with only dots (Sealith.AI, example.com, 1.2.3.4 without port)
+ * Rejection criteria:
+ * - Schemes (including whitespace-separated javascript:, vbscript:, mailto:)
+ * - www. (including whitespace-separated)
+ * - xn-- (punycode)
+ * - @ (including fullwidth and small commercial at)
+ * - / (including slash-like characters)
+ * - host:port (domain, IPv4, IPv6)
+ * - control, bidi, invisible characters
+ * - too_long (> 100 code points)
+ *
+ * Allow:
+ * - Names with only dots (Sealith.AI, example.com, 1.2.3.4 without port)
+ * - Time/ratio patterns (10:30, 16:9)
+ * - Combining characters (café - stripped before URL check)
  */
 
 // SQL patterns converted to JS regex
-// Note: These must match the patterns in org-name-strict-audit.sql
-
 const PATTERNS = {
-  // スラッシュ系: / ／
-  slash: /[/\uff0f]/,
-  // @ 系: @ ＠
-  at: /[@\uff20]/,
+  // スラッシュ系: / ／ ∕ ⁄ ⧸ ╱
+  slash: /[/\uff0f\u2215\u2044\u29f8\u2571]/,
+  // @ 系: @ ＠ ﹫
+  at: /[@\uff20\ufe6b]/,
   // コロン系: : ：
   colon: /[:\uff1a]/,
-  // www. パターン (半角/全角)
-  www: /(^|[\s])www\./i,
-  // Punycode ラベル: xn-- (ドットなしも検出)
+  // www パターン (空白を挟んでも拾う)
+  www: /w[\s]*w[\s]*w[\s]*\./i,
+  // Punycode ラベル: xn--
   punycode: /(^|[\s.])xn--[a-z0-9-]*/i,
+  // IPv6 関連: [ または ::
+  ipv6: /\[|::/,
+  // URL クエリ/フラグメント: ? または #
+  url_suffix: /[?#]/,
   // 制御文字: U+0000–001F, U+007F–009F, U+2028, U+2029
   control: /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/,
   // bidi 文字: U+202A–202E, U+2066–2069, U+200E/F, U+061C
   bidi: /[\u202a-\u202e\u2066-\u2069\u200e\u200f\u061c]/,
   // ゼロ幅・不可視文字: U+200B–200D, U+2060–2065, U+FEFF, U+00AD, U+180E
   invisible: /[\u200b-\u200d\u2060-\u2065\ufeff\u00ad\u180e]/,
-  // 結合文字: U+0300–036F, U+1AB0–1AFF, U+1DC0–1DFF, U+20D0–20FF, U+FE20–FE2F
-  combining: /[\u0300-\u036f\u1ab0-\u1aff\u1dc0-\u1dff\u20d0-\u20ff\ufe20-\ufe2f]/,
 };
-
-// Fullwidth www. pattern check
-const FULLWIDTH_WWW = /\uff57\uff57\uff57\uff0e/i;
 
 function matchesAnyPattern(name: string): string[] {
   const matched: string[] = [];
   for (const [key, pattern] of Object.entries(PATTERNS)) {
     if (pattern.test(name)) matched.push(key);
   }
-  // Special check for fullwidth www.
-  if (FULLWIDTH_WWW.test(name)) matched.push("www_fullwidth");
   // Length > 100 code points
   if ([...name].length > 100) matched.push("too_long");
   return matched;
@@ -83,38 +89,55 @@ const REJECTION_SAMPLES: Array<{ name: string; description: string }> = [
   { name: "hxxp://example.com", description: "hxxp obfuscated" },
   { name: "ftp://ftp.example.com", description: "ftp scheme" },
 
+  // Whitespace-separated dangerous schemes (HIGH-1)
+  { name: "java script:alert(1)", description: "whitespace javascript:" },
+  { name: "mail to:admin", description: "whitespace mailto:" },
+  { name: "vb script:msgbox", description: "whitespace vbscript:" },
+  { name: "\uff4a\uff41\uff56\uff41 \uff53\uff43\uff52\uff49\uff50\uff54\uff1ax", description: "fullwidth javascript:" },
+  { name: "Mail To: John", description: "Mail To: John" },
+  { name: "Java Script: Guide", description: "Java Script: Guide" },
+  { name: "File: Notes", description: "File: Notes (no space)" },
+
   // www. prefix
   { name: "www.example.com", description: "www prefix" },
   { name: "\uff57\uff57\uff57\uff0eevil.com", description: "fullwidth www." },
+  { name: "w w w.evil.com", description: "whitespace www." },
 
   // @ sign
   { name: "a@b", description: "@ sign" },
   { name: "admin@example.com", description: "email-like" },
   { name: "a\uff20b", description: "fullwidth @" },
+  { name: "a\ufe6bb", description: "small commercial at" },
 
-  // / and //
+  // / and // (including slash-like characters)
   { name: "a/b", description: "slash" },
   { name: "//evil", description: "double slash" },
   { name: "\uff0f\uff0fevil", description: "fullwidth //" },
+  { name: "a\u2215b", description: "division slash U+2215" },
+  { name: "a\u2044b", description: "fraction slash U+2044" },
+  { name: "a\u29f8b", description: "big solidus U+29F8" },
+  { name: "a\u2571b", description: "box drawings U+2571" },
 
-  // Host with port (has :)
+  // Host with port (HIGH-2)
   { name: "evil.com:8080", description: "domain with port" },
   { name: "1.2.3.4:80", description: "IPv4 with port" },
+  { name: "[::1]:80", description: "IPv6 with port" },
+  { name: "::1:80", description: "bare IPv6 with port" },
+  { name: "a.com:80?x", description: "domain:port with query" },
+  { name: "a.com:80#x", description: "domain:port with fragment" },
+  { name: "a.com: 80", description: "domain:port with space" },
+  { name: "a.com\uff1a80", description: "domain:port fullwidth colon" },
+  { name: "株式会社a.com:443", description: "Japanese adjacent domain:port" },
 
   // Punycode
   { name: "xn--n3h", description: "punycode without dot" },
   { name: "xn--nxasmq5b", description: "punycode label" },
 
-  // Combining characters
-  { name: "h\u0301ttp://example.com", description: "combining acute accent" },
-
   // Length > 100
   { name: "あ".repeat(101), description: "101 code points" },
 ];
 
-// Test samples that should be ALLOWED by the app (dots only, no dangerous patterns)
-// Note: SQL is "広めに拾う" (catches broadly), so some of these may be flagged by SQL
-// but still allowed by the app. We test that dot-only names are not flagged.
+// Test samples that should be ALLOWED by the app (not caught by SQL for dot-only names)
 const ALLOWED_SAMPLES: Array<{ name: string; description: string }> = [
   { name: "Sealith.AI", description: "dot-containing company name" },
   { name: "Next.js 勉強会", description: "JS library name" },
@@ -130,12 +153,17 @@ const ALLOWED_SAMPLES: Array<{ name: string; description: string }> = [
   { name: "TOKYO307 Inc.", description: "company name" },
   { name: "株式会社スペースツリー", description: "Japanese company no dots" },
   { name: "Dr. Smith Associates", description: "title with dot" },
+  { name: "cafe\u0301", description: "café with combining (allowed)" },
 ];
 
 // Samples that app ALLOWS but SQL flags (due to "広めに拾う" approach)
 // These contain characters that SQL catches (like :) but app's smarter logic allows
 const SQL_BROAD_CATCH_SAMPLES: Array<{ name: string; description: string; expectedPatterns: string[] }> = [
   { name: "File : Notes", description: "colon with spaces (no scheme)", expectedPatterns: ["colon"] },
+  { name: "Data : Science", description: "data: with space", expectedPatterns: ["colon"] },
+  { name: "株式会社 3:2", description: "time-like with space", expectedPatterns: ["colon"] },
+  { name: "10:30 Labs", description: "time-like", expectedPatterns: ["colon"] },
+  { name: "Ratio 16:9 Inc", description: "ratio pattern", expectedPatterns: ["colon"] },
 ];
 
 console.log("Verifying SQL audit patterns against app samples...\n");
