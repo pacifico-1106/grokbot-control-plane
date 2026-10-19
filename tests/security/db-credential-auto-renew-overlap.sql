@@ -131,6 +131,13 @@ select public.start_employee_hold(
   'cb000000-0000-4000-8000-0000000000a1',
   'cb100000-0000-4000-8000-000000000001',
   'stopped', 'car ov hold', 'ops:ops-ov', 'ops_console', null, now());
+do $$
+begin
+  if (select hold_state from public.employees
+       where id = 'cb100000-0000-4000-8000-000000000001') is distinct from 'stopped' then
+    raise exception 'credential auto-renew overlap: start_employee_hold did not hold the fixture';
+  end if;
+end $$;
 
 do $$
 begin
@@ -273,7 +280,11 @@ begin
 end $$;
 
 reset role;
-select set_config('staffpass.hold_write', 'on', true);
+-- Same cleanup as R1 (db-credential-auto-renew.sql): set_config(..., true) is
+-- transaction-local and does not survive autocommit statement boundaries.
+alter table public.employee_holds disable trigger employee_holds_guard;
+alter table public.employees disable trigger employees_hold_guard;
+alter table public.orgs disable trigger orgs_hold_guard;
 update public.employees set hold_state = null, hold_id = null where id::text like 'cb100000-%';
 update public.orgs set hold_state = null, hold_id = null where id::text like 'cb000000-%';
 delete from public.employee_holds where org_id::text like 'cb000000-%';
