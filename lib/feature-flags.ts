@@ -918,6 +918,28 @@ export function isMailUnverifiedFromEnabled(): boolean {
 }
 
 /**
+ * WELCOME_MAIL_FIXED_SUBJECT_ENABLED (default OFF): signup welcome /
+ * trial_started / trial_ending mail subjects are fixed Staffpass copy.
+ * orgName (signup-chosen) and other user-controlled strings stay in the
+ * escaped body only.
+ *
+ * When ON:
+ * - Welcome: `ようこそ — Staffpass（AIエージェントの社員証）`
+ * - Trial started: `トライアル開始 — Staffpass（AIエージェントの社員証）`
+ * - Trial ending: `トライアル終了のお知らせ — Staffpass（AIエージェントの社員証）`
+ * - Body orgName is HTML-escaped, control/bidi/zero-width stripped
+ *   (same range as LP inquiry #403), length-capped, and not linkified.
+ *
+ * When OFF (default):
+ * - Today's subjects (`ようこそ — ${orgName} の AI社員 制御面`,
+ *   `トライアル開始（${trialDays}日間）`,
+ *   `トライアル終了まであと ${daysLeft} 日 — ${orgName}`).
+ */
+export function isWelcomeMailFixedSubjectEnabled(): boolean {
+  return parseFlag(process.env.WELCOME_MAIL_FIXED_SUBJECT_ENABLED);
+}
+
+/**
  * MCP_AUTH_FAILURE_AUDIT_ENABLED (default OFF): write /api/mcp 401/403
  * auth-failure kinds (missing_credential / invalid / expired) to
  * mcp_auth_failures (migration 20261016400000). Ids when resolvable; never
