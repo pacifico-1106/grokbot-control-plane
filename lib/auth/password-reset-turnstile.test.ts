@@ -9,6 +9,7 @@ const FLAG = "PASSWORD_RESET_TURNSTILE_ENABLED";
 
 afterEach(() => {
   delete process.env[FLAG];
+  delete process.env.PASSWORD_RESET_TURNSTILE_HOSTNAMES;
 });
 
 describe("PASSWORD_RESET_TURNSTILE_ENABLED", () => {
@@ -41,7 +42,7 @@ function deps(over: Partial<PasswordResetTurnstileDeps> & { calls?: string[] } =
       over.verifyTurnstile ??
       (async (token: string) => {
         calls.push(token);
-        return { success: true, action: "password_reset" };
+        return { success: true, action: "password_reset", hostname: "staffpass.sealith.com" };
       }),
   };
 }
@@ -89,8 +90,73 @@ describe("evaluatePasswordResetTurnstile (flag already ON)", () => {
     expect(
       await evaluatePasswordResetTurnstile(
         { turnstileToken: "tok" },
-        deps({ verifyTurnstile: async () => ({ success: true, action: "signup" }) })
+        deps({ verifyTurnstile: async () => ({ success: true, action: "signup", hostname: "staffpass.sealith.com" }) })
       )
     ).toEqual({ ok: false, error: "turnstile_failed" });
+  });
+
+  test("missing action → turnstile_failed", async () => {
+    const r = await evaluatePasswordResetTurnstile(
+      { turnstileToken: "tok" },
+      deps({ verifyTurnstile: async () => ({ success: true, hostname: "staffpass.sealith.com" }) })
+    );
+    expect(r).toEqual({ ok: false, error: "turnstile_failed" });
+  });
+
+  test("empty action → turnstile_failed", async () => {
+    const r = await evaluatePasswordResetTurnstile(
+      { turnstileToken: "tok" },
+      deps({ verifyTurnstile: async () => ({ success: true, action: "", hostname: "staffpass.sealith.com" }) })
+    );
+    expect(r).toEqual({ ok: false, error: "turnstile_failed" });
+  });
+
+  test("missing hostname → turnstile_failed", async () => {
+    const r = await evaluatePasswordResetTurnstile(
+      { turnstileToken: "tok" },
+      deps({ verifyTurnstile: async () => ({ success: true, action: "password_reset" }) })
+    );
+    expect(r).toEqual({ ok: false, error: "turnstile_failed" });
+  });
+
+  test("hostname not on the allowlist → turnstile_failed", async () => {
+    const r = await evaluatePasswordResetTurnstile(
+      { turnstileToken: "tok" },
+      deps({
+        verifyTurnstile: async () => ({
+          success: true,
+          action: "password_reset",
+          hostname: "evil.example",
+        }),
+      })
+    );
+    expect(r).toEqual({ ok: false, error: "turnstile_failed" });
+  });
+
+  test("PASSWORD_RESET_TURNSTILE_HOSTNAMES overrides the default allowlist", async () => {
+    process.env.PASSWORD_RESET_TURNSTILE_HOSTNAMES = "localhost, preview.example";
+    const allowed = await evaluatePasswordResetTurnstile(
+      { turnstileToken: "tok" },
+      deps({
+        verifyTurnstile: async () => ({
+          success: true,
+          action: "password_reset",
+          hostname: "localhost",
+        }),
+      })
+    );
+    const production = await evaluatePasswordResetTurnstile(
+      { turnstileToken: "tok" },
+      deps({
+        verifyTurnstile: async () => ({
+          success: true,
+          action: "password_reset",
+          hostname: "staffpass.sealith.com",
+        }),
+      })
+    );
+    expect(allowed).toEqual({ ok: true });
+    expect(production).toEqual({ ok: false, error: "turnstile_failed" });
+    delete process.env.PASSWORD_RESET_TURNSTILE_HOSTNAMES;
   });
 });
