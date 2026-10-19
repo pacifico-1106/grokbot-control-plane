@@ -1,21 +1,27 @@
-# AI 社員ごとに費用と仕事を並べ、ROI を判断できるようにする — 設計ドラフト（2026-10-19）
+# AI 社員ごとに費用と仕事を並べ、ROI を判断できるようにする — 設計（2026-10-19）
 
-- **状態: ドラフト。** §8 は八坂さんの決定待ち。この PR は文書だけ
-- 作成: 2026-10-19（実装・migration・設定・本番変更・マージはしていない）
+- **状態: 確定。** 2026-10-19 12:41 JST、八坂 GO。§8 の 12 点はすべて推奨どおり採用。この PR は文書だけ
+- 作成: 2026-10-19（実装・migration・設定・本番変更はしていない）
 - 対象コード: `pacifico-1106/grokbot-control-plane` `origin/main` `5ba18841`（`git fetch origin main` で確認）
 - 読んだ参考: [Vercel AI Gateway logs now show session affinity](https://vercel.com/changelog/ai-gateway-logs-now-show-session-affinity)（2026-10-18）と [Session affinity 公式](https://vercel.com/docs/ai-gateway/models-and-providers/session-affinity)
 - 既存の「費用」画面（`lib/dashboard-metrics.ts` / `lib/cost-demo.ts`）は **確定アクション（`gated_confirm_action`）の件数とプラン枠** であり、トークン代ではない。本書はそれと並べる **勤務記録** と **トークン代** の設計
 
-> お客さんが知りたいのは「この AI 社員はいくらかかり、何をしたか」。Staffpass はいま仕事（起こし・操作・承認・送信・停止）をかなり持っている。トークン代は持っていない。先に仕事を会話単位で見せ、トークン代は取り方を決めてから足す。
+> お客さんが知りたいのは「この AI 社員はいくらかかり、何をしたか」。Staffpass はいま仕事（起こし・操作・承認・送信・停止）をかなり持っている。トークン代は持っていない。先に仕事を会話単位で見せ、トークン代は Vercel AI Gateway の社員ごと中継キーで足す（契約の自動化のあと。Grok Bot は当面「未計測」）。
+
+**入れる順番（決定）**
+
+緊急停止 → H1/H5 → #228 → LINE PoC → 運営からのお知らせ → **① 勤務記録** → パスキー → 契約の自動化 → **② トークン代（Vercel AI Gateway の社員ごと中継キー）** → 5 箇条の残り → LINE WORKS
+
+Grok Bot の推論費用は、当面 ROI 画面に **「未計測」** と出す。② に着手する前に、Vercel の契約（利用条件と料金）とデータの置き場所（リージョン、ログに本文が残るか）を確認する（§3-5）。
 
 ---
 
-## 0. 結論（推奨）
+## 0. 結論
 
 1. **いまのテーブルだけで、社員ごと・会話ごとに「何をしたか」は出せる。** ただし会話 ID はまだ無く、Slack の `thread_ts` / LINE の `conversationId` / `jobId` を後から束ねる。本文・宛先の生値は出さない（既存の監査マスキングと同じ）。
-2. **トークン代は (a) 社員ごとの中継キー（Vercel AI Gateway 等）を本線にし、(b) MCP 自己申告は補助、(c) プロバイダ利用量 API は突合用。** Grok Bot のように顧客がモデル鍵を持たない経路は (a) か運営側の実測が要る。(b) だけでは改ざんできる。
-3. **実装の優先は、緊急停止〜運営からのお知らせのあとに ① 勤務記録を差し込む。** ② トークン代は契約の自動化のあと。この設計 PR 自体は文書だけなので、実装キューを止めない。
-4. **画面はテナントの owner / admin ＋ `view_audit`。** AI 社員自身の MCP からは集計を読ませない（改ざんと情報漏洩の両方）。フラグはすべて既定 OFF。
+2. **トークン代の本線は (a) Vercel AI Gateway の社員ごと中継キー。(b) MCP 自己申告は補助、(c) プロバイダ利用量 API は突合。** (b) だけでは改ざんできる。Grok Bot の推論費用は当面「未計測」。
+3. **① 勤務記録は「運営からのお知らせ」の直後。② トークン代は「契約の自動化」のあと。** この設計 PR は文書だけなので、実装キューを止めない。
+4. **画面は `view_audit`。** owner 役割だけでは足りない。AI 社員自身の MCP からは集計を読ませない。フラグはすべて既定 OFF。
 5. **集計クエリは必ず `org_id` を先に絞る。** 別 org の employee id を指定したら `not_found`（存在も漏らさない）。CSV も同じゲート。
 
 ---
@@ -28,8 +34,8 @@
 |---|---|
 | セッション行（coding agent / アプリ名、費用、モデル、プロバイダ、入力のキャッシュ率） | 社員名・役割、トークン代（未所持）、使ったツール、承認結果。キャッシュ率は中継を入れないと出ない |
 | セッションを開くとヒット率・時間・path（ターンごとのモデルとタイミング、担当プロバイダ） | 会話タイムライン（wake → invoke → 承認 → 送信 / 停止） |
-| フィルタ（ターン数、client、model、provider、認証、費用）。1 ターンは最小ターン数を外すまで隠す | 期間・社員・結果（成功 / 承認待ち / 拒否 / 停止）。1 件だけの会話は既定で畳む案 |
-| 明示 `sessionId`（`providerOptions.gateway.sessionId` または `x-session-id`）。無いと会話の冒頭の fingerprint | いまは明示 ID が無い。§3 で後付け束ね → 将来は wake 時点で振る |
+| フィルタ（ターン数、client、model、provider、認証、費用）。1 ターンは最小ターン数を外すまで隠す | 期間・社員・結果（成功 / 承認待ち / 拒否 / 停止）。1 件だけの会話は既定で畳む |
+| 明示 `sessionId`（`providerOptions.gateway.sessionId` または `x-session-id`）。無いと会話の冒頭の fingerprint | いまは明示 ID が無い。§2-2 で後付け束ね → 将来は wake 時点で振る |
 
 Vercel 側の識別順（公式）: `sessionId` プロバイダオプション → `x-session-id` → `x-session-affinity` → `prompt_cache_key`（共有プレフィックス扱い） → `x-claude-code-session-id` → 冒頭メッセージ＋ツール定義の SHA-256 fingerprint（チーム ID 込み、本文は先頭 4096 文字まで）。**個人データを session ID に入れない。無関係な仕事で同じ ID を使い回さない。**
 
@@ -46,7 +52,7 @@ Staffpass が借りるのは「会話でまとめ、費用とキャッシュと�
 - **社員キー:** ほとんどの行に `employee_id`（uuid、`employees.id`）。無い行はテナント全体（org hold、一部の admin / billing）。
 - **org キー:** 例外なく `org_id`（`orgs.id`）。無い業務テーブルは対象外（`slack_mention_events` は event_id の冪等だけ）。
 - **会話キー:** 列としては無い。metadata の `thread_ts` / `channel` / `jobId` / LINE `conversationId` を後から束ねる。
-- **保持日数:** `audit_events` に purge も `retention_until` も無い → **明示 retention なし（無期限）。** 画面の既定期間は 30 日、CSV も同じ。それより長い保持は八坂さん決定。
+- **保持日数:** `audit_events` に purge も `retention_until` も無い → **明示 retention なし（無期限）。** 画面の既定は 7 日、最大 30 日（CSV も同じ）。この案件で purge は始めない。
 
 ### 2-1. 項目ごとの出典
 
@@ -130,7 +136,7 @@ W1（未返信）が見る起こし: `lib/data/audit.ts` の `STUCK_WATCH_WAKE_A
 | 秘密検出 | `secret_detection.blocked` / `suspected` | 種類のみ | `lib/security/secret-detection-audit.ts` | あり | あり | jobId | 無期限 | 値は出さない |
 | Webhook 秘密の発行 | `employee.webhook_secret_minted` / `payload_mode_set` | mode のみ | `app/api/employees/[id]/webhook-signing/route.ts` | あり | あり | なし | 無期限 | |
 
-### 2-2. 会話のまとめ方（案）
+### 2-2. 会話のまとめ方
 
 いま会話の第一級 ID は無い。Vercel が sessionId → fingerprint の順で束ねるように、Staffpass も **明示キーを優先し、無ければ後付け** にする。
 
@@ -143,7 +149,7 @@ W1（未返信）が見る起こし: `lib/data/audit.ts` の `STUCK_WATCH_WAKE_A
 5. **隙間:** 1〜4 がどれも無い連続した audit は、同一社員・同一 channel（無ければ tool）で **30 分空きで区切る**（peer wake の 1800s に合わせる）。1 件だけの塊は既定で一覧から畳む（Vercel の min turns）。
 6. **停止:** hold は会話に属させず、タイムラインに帯で重ねる。
 
-**将来の第一級 ID（② の前に入れるのがよい）**
+**将来の第一級 ID（① の次＝ROI-4 で入れる。決定 9）**
 
 - 形式: `conv_` ＋ Crockford ULID（運営お知らせの `ntc_` と同じ考え方。ES2017）。**個人データ・channel 名・メールを入れない**（Vercel の session ID 注意と同じ）。
 - **振る場所:** wake 配送の直前（`postWake` / `dispatchLineConversationWake` / `agent.approval_wake`）。起こしていない手動 invoke は、Gateway が jobId と conversation コンテキストから **初回だけ** 振る。
@@ -155,7 +161,7 @@ W1（未返信）が見る起こし: `lib/data/audit.ts` の `STUCK_WATCH_WAKE_A
   - 中継を使うなら同じ値を `x-session-id` に載せる（§4）
 - フラグ: `ROI_CONVERSATION_ID_ENABLED`（既定 OFF）。OFF なら後付け束ねだけ。
 
-### 2-3. テナント管理者向け画面案
+### 2-3. テナント管理者向け画面
 
 既存ナビは `/app` 変更ログ、`/app/approvals` 承認、`/app/audit` 閲覧（`lib/dashboard/nav.ts`）。**新しい第一ナビは足さない。** `/app/employees` の一覧と、社員詳細にタブを足す。既存 `/app/audit`（#373/#374）は生タイムラインのまま残す。
 
@@ -183,7 +189,7 @@ W1（未返信）が見る起こし: `lib/data/audit.ts` の `STUCK_WATCH_WAKE_A
 | 社外送信 | §2-1 D のツール allowlist かつ sent | 宛先、本文 |
 | 停止 | 期間中に open だった hold 時間 | 停止理由本文 |
 | 確定課金 | `gated_confirm_action` 件数（既存メーター） | 円にしてトークン代と足さない |
-| トークン代 | ② が来るまで「未計測」。来たら §4-4 のラベル | プロンプト |
+| トークン代 | Grok Bot は当面「未計測」。② のあとは §3-3 の出典ラベル | プロンプト |
 
 #### 社員詳細（会話タイムライン）
 
@@ -236,6 +242,8 @@ ASCII ではなく表でも同じ情報。ターン = wake または invoke。Ve
 
 ## 3. ② トークン代 — 取り方 3 つ
 
+本線は **(a) Vercel AI Gateway の社員ごと中継キー**（決定 2・3）。(b) は補助、(c) は突合。Grok Bot の推論費用は当面「未計測」（決定 4）。
+
 比較の前提: Staffpass はいまトークンを数えていない（`lib/billing/meter.ts`「No Grok token resale」）。LP 相談チャットだけがターンの usage を持つ（テナントの AI 社員とは別）。
 
 ### 3-1. 比較
@@ -281,19 +289,28 @@ ASCII ではなく表でも同じ情報。ターン = wake または invoke。Ve
 
 ルール:
 
-- 実測がある日は申告を **参考列** に置き、差が閾値（推奨: 申告が実測の 2 倍超、または 50% 未満）なら「ずれ」バッジ。
-- 申告だけの期間は合計行に「自己申告を含む」と出す。オーナー向けの請求には使わない。
-- 上限: 1 申告あたりトークン上限（推奨: input+output 2,000万、1 会話 1 日）。超えたら拒否して `usage.report_rejected`。負数・未来時刻・他社員 ID は拒否。
+- 実測がある日は申告を **参考列** に置き、差が閾値（申告が実測の 2 倍超、または 50% 未満）なら「ずれ」バッジ。
+- 申告だけの期間は合計行に「自己申告を含む」と出す。**顧客向け合計には入れない**（決定 10）。オーナー向けの請求にも使わない。
+- 上限: 1 申告あたり input+output 2,000万トークン、1 会話 1 日。超えたら拒否して `usage.report_rejected`。負数・未来時刻・他社員 ID は拒否。
 - 本文・completion テキストを付けてきたら **フィールドごと捨てる**（秘密検出と同じ）。
 
-### 3-4. 推奨（段階）
+### 3-4. 段階（決定）
 
-1. **① 勤務記録だけ先に出す**（トークン列は「未計測」）。お客は仕事量で ROI の議論を始められる。
-2. **(b) を狭い MCP で足す。** 検証と上限つき。Grok Bot / Cursor が実装してくれたら埋まる。信頼度は低のまま。
-3. **(a) を本線にする。** 社員ごと Gateway キー（または同等の中継）。`conversationId` を `x-session-id` に載せる。Sessions 相当（費用・キャッシュ率・モデル）が会話行に乗る。Grok Bot は向き先を運営が指定できる場合のみ。できない場合は運営が (c) 相当の xAI Management をテナント割当する（鍵の対応表が要る。未確認な点は実装前に再調査）。
+1. **① 勤務記録だけ先に出す。** トークン列は「未計測」（Grok Bot の推論費用も当面これ）。お客は仕事量で ROI の議論を始められる。
+2. **(b) を狭い MCP で足す（補助）。** 検証と上限つき。信頼度は低のまま。顧客向け合計には入れない。
+3. **(a) を本線にする。** Vercel AI Gateway の社員ごと中継キー。`conversationId` を `x-session-id` に載せる。Sessions 相当（費用・キャッシュ率・モデル）が会話行に乗る。着手は契約の自動化のあと、かつ §3-5 を満たしてから。
 4. **(c) は突合。** お客が Admin キーを預ける経路は任意。BYO の Claude / OpenAI 顧客向け。Grok Bot 専用テナントには使わない。
 
-中継先を Vercel に固定するかは八坂さん決定。OpenRouter 等は本 PR では調べていない（未確認）。
+中継先の本線は **Vercel AI Gateway**（決定 3）。OpenRouter 等は本 PR では調べていない（未確認）。
+
+### 3-5. ② に着手する前の前提
+
+②（トークン代。Vercel AI Gateway の社員ごと中継キー）の実装 PR（ROI-6 以降）は、次の 2 点を確認してから始める。確認できないうちはキー発行も本番接続もしない。
+
+1. **Vercel の契約を確認する。** AI Gateway の利用条件と料金（トークン単価、Credits、支払い処理手数料、BYOK、ZDR / Custom Reporting / Trace Drain の加算）。公開ページは [Pricing](https://vercel.com/docs/ai-gateway/pricing) と [FAQ](https://vercel.com/docs/ai-gateway/faq)。契約書・請求名義・日本の顧客への転嫁は、公開ページだけでは足りない。
+2. **データがどこに置かれるかを確認する。** 推論とログのリージョン。ログにプロンプト／応答の本文が残るかどうか。公開 FAQ では Gateway 自身は本文をリクエスト完了後に保持せず、ルーティング詳細は 30 日だが、上流プロバイダの保持は別問題。リージョンは [Regional Inference](https://vercel.com/docs/ai-gateway/security-and-compliance/regional-inference)（`geoRegion` に `jp` あり。Gateway 自身の TLS 終端リージョンは別に固定されない、と書いてある）を実装前に読み、契約と突き合わせる。
+
+方針は決まっている。残るのはこの **着手前の確認作業**である。
 
 ---
 
@@ -305,21 +322,23 @@ ASCII ではなく表でも同じ情報。ターン = wake または invoke。Ve
 
 （#228 はマージ済み・フラグ既定 OFF。H1/H5 のコード修正 #351/#352/#357 もマージ済み。緊急停止 S1–S3 はマージ済み・`EMPLOYEE_HOLD_ENABLED` 既定 OFF。残っているのはフラグ ON・本番適用・二人解除試験・S4 運営二人解除など。）
 
-### 4-1. どこに入れるか（推奨）
+### 4-1. 入れる順番（決定）
+
+**緊急停止 → H1/H5 → #228 → LINE PoC → 運営からのお知らせ → ① 勤務記録 → パスキー → 契約の自動化 → ② トークン代（Vercel AI Gateway の社員ごと中継キー） → 5 箇条の残り → LINE WORKS**
 
 | 塊 | 入れる位置 | 理由 |
 |---|---|---|
-| この設計 PR | **今すぐ並列。** キューをずらさない | 文書だけ |
+| この設計 PR | 今すぐ並列。キューをずらさない | 文書だけ |
 | ① 勤務記録（読み取り＋画面） | **運営からのお知らせの直後** | 週次ダイジェスト（`OPS_WEEKLY_DIGEST_ENABLED`、PR-A で定義のみ）と同じ「期間集計を admin が読む」面。社員台帳（5 箇条の残り）より先に、いまの `employees` で足りる |
 | 会話 ID を振る | ① の次、パスキーより前 | ② の sessionId に使う。パスキーは認証の話で独立 |
-| ② トークン代 (b) 自己申告 | ① の直後でも可 | 鍵を増やさない。ただし信頼度低 |
-| ② トークン代 (a) 中継キー | **契約の自動化のあと** | 請求・Credits・誰が払うかが固まってから。緊急停止のキー無効化（本番 ON）が前提 |
+| ② トークン代 (b) 自己申告 | ① のあと、補助として可 | 鍵を増やさない。顧客向け合計には入れない |
+| ② トークン代 (a) 中継キー | **契約の自動化のあと**（§3-5 を満たしてから） | 請求・Credits が固まってから。緊急停止のキー無効化が前提 |
 | ② (c) 突合 | 5 箇条の残りと並行可 | BYO 顧客向け。Grok Bot 必須ではない |
 | 社員台帳との重なり | 5 箇条の残りで台帳が厚くなったら、ROI 詳細の「相手」列だけ合流 | 新しい台帳を ROI のために作らない（音声設計と同じ） |
 
 LINE WORKS より前。音声リアルタイム（LINE PoC フラグ ON 後）とも独立。ただし会話 ID の形は合わせておく。
 
-### 4-2. 実装 PR 案（すべてフラグ既定 OFF）
+### 4-2. 実装 PR の分け方（すべてフラグ既定 OFF）
 
 日数は森の作業日数目安。レビューと手戻りは入れてない（LINE / 5 箇条メモと同じ）。
 
@@ -331,7 +350,7 @@ LINE WORKS より前。音声リアルタイム（LINE PoC フラグ ON 後）�
 | ROI-3 | CSV（上限・同じマスク）。監査 `roi.csv_exported`（誰が・期間・行数。中身は残さない） | 1.5 日 | `ROI_CSV_EXPORT_ENABLED` | なし |
 | ROI-4 | `conv_` を wake / invoke / approval に載せる。OFF なら振らない | 2.5 日 | `ROI_CONVERSATION_ID_ENABLED` | なし（列を metadata に足すだけなら migration 不要。専用列にするなら未適用 migration） |
 | ROI-5 | MCP 自己申告 `staffpass_usage_report`。上限・検証・信頼度ラベル | 2.5 日 | `ROI_USAGE_REPORT_ENABLED` | なし。エージェント側の実装は別リポジトリ |
-| ROI-6 | 中継キー（社員ごと mint、暗号化保管、回転、hold で disable）。画面に秘密を出さない | 5 日 | `ROI_GATEWAY_KEYS_ENABLED` | 中継アカウント、Credits、KMS/暗号化キー。**本番キー発行は八坂さん GO 後** |
+| ROI-6 | 中継キー（社員ごと mint、暗号化保管、回転、hold で disable）。画面に秘密を出さない | 5 日 | `ROI_GATEWAY_KEYS_ENABLED` | 中継アカウント、Credits、KMS/暗号化キー。**本番キー発行は §3-5 の確認のあと** |
 | ROI-7 | Gateway ログ取り込み（会話費用・キャッシュ率）。`x-session-id` = conv_id | 3 日 | `ROI_GATEWAY_INGEST_ENABLED` | 取り込み用トークン。ログ保持は中継側 30 日に依存 |
 | ROI-8 | プロバイダ利用量の突合（OpenAI Admin / Anthropic Admin / xAI Management）。日次 | 4 日 | `ROI_PROVIDER_USAGE_ENABLED` | 顧客または運営の管理キー預かり。Gemini は本段階ではやらない（Billing API なし） |
 
@@ -377,7 +396,7 @@ ROI-1〜3 は 運営からのお知らせ の週次と **同じ集計ヘルパ�
 | 主体 | 勤務記録 | トークン代 |
 |---|---|---|
 | owner / admin で `view_audit` | 可 | 可 |
-| `view_audit` だけの経理・法務 | 可（推奨: 同じ） | 可。CSV も可 |
+| `view_audit` だけの経理・法務 | 可 | 可。CSV も可 |
 | 一般メンバー | 不可 | 不可 |
 | AI 社員（MCP） | **不可**（誰ami に件数を足さない。お知らせの未読件数とは別） | 不可。自分の申告ツールは **書くだけ** |
 | 運営 `/admin` | テナント指定の既存 super-admin 経路のみ。全テナント横断の「全社 ROI」はこの設計の外 | 同じ |
@@ -405,29 +424,28 @@ AI 社員が自分の ROI を読むと、プロンプトに他会話のメタが
 ## 7. この PR でやらないこと
 
 - コード、migration、設定、フラグ追加、本番適用
-- マージと force-push
-- 中継アカウントの契約、Credits 購入、管理キーの預かり
+- 中継アカウントの契約、Credits 購入、管理キーの預かり（② の着手前確認。§3-5）
 - エージェント（Grok Bot / Cursor 等）側の実装
 - 全テナント横断の運営ダッシュボード
 - トークン単価の表を Staffpass にハードコードすること（未確認の数字を作らない）
 
 ---
 
-## 8. 八坂さんに決めてもらうこと（推奨つき）
+## 8. 決定事項（2026-10-19 12:41 八坂 GO、すべて推奨どおり）
 
-| # | 決めること | 推奨 |
+| # | 項目 | 決定 |
 |---|---|---|
-| 1 | ① 勤務記録を、運営からのお知らせの直後に実装してよいか | **よい。** 週次集計と同じ読み取り面。緊急停止や H1/H5 の「コード」は入っている。フラグ ON は別カード |
-| 2 | トークン代の本線は (a) 中継か | **(a)。** (b) は補助、(c) は BYO 突合。Grok Bot でお客が鍵を持たない経路は (a) か運営実測しか無い |
-| 3 | 中継先を Vercel AI Gateway にしてよいか | **第一候補にしてよい**（無マークアップ、本文非保持、Sessions、キー予算が公式）。契約と日本のデータ所在は別途。他社は未調査 |
-| 4 | Grok Bot の推論費用は誰が払うか（運営の Credits をテナント請求に乗せる / お客 BYOK / 当面出さない） | **当面 ROI 画面は「未計測」でも出す。** 請求に乗せるなら契約の自動化のあと |
-| 5 | 集計を読める人 | **`view_audit` のみ。** AI 社員の MCP からは読ませない。経理パックは既に view_audit あり |
-| 6 | 画面の既定期間と audit の retention | **画面 7 日既定、最大 30 日。** `audit_events` の purge はこの案件で始めない（無期限のまま）。変えるなら法務と別カード |
-| 7 | CSV を出すか | **出す（フラグ OFF）。** マスクは画面と同じ。10,000 行上限 |
-| 8 | 承認 summary / 宛先を ROI に出すか | **出さない。** ツールと結果と opaque ID だけ |
+| 1 | ① 勤務記録をいつ実装するか | **運営からのお知らせの直後。** 週次集計と同じ読み取り面。緊急停止や H1/H5 のコードは入っている。フラグ ON は別カード |
+| 2 | トークン代の本線 | **(a) 中継。** (b) は補助、(c) は BYO 突合 |
+| 3 | 中継先 | **Vercel AI Gateway の社員ごと中継キー。** 契約とデータの置き場所は ② 着手前に確認する（§3-5） |
+| 4 | Grok Bot の推論費用 | **当面 ROI 画面は「未計測」。** 請求に乗せるなら契約の自動化のあと |
+| 5 | 集計を読める人 | **`view_audit` のみ。** AI 社員の MCP からは読ませない。経理・法務パックは既に view_audit あり |
+| 6 | 画面の既定期間と audit の retention | **画面 7 日既定、最大 30 日。** `audit_events` の purge はこの案件で始めない（無期限のまま） |
+| 7 | CSV | **出す（フラグ OFF）。** マスクは画面と同じ。10,000 行上限 |
+| 8 | 承認 summary / 宛先 | **ROI に出さない。** ツールと結果と opaque ID だけ |
 | 9 | 会話 ID をいつ振るか | **① の次（ROI-4）。** 中継の sessionId に使う |
 | 10 | 自己申告を顧客向け合計に含めるか | **含めない。** 参考列。実測が無い社員は「未計測」 |
-| 11 | 別 org の employee id | **not_found（存在も隠す）** |
-| 12 | 漏えい時は緊急停止とキー無効を同時にするか | **同時。** 停止成功を優先し、キー無効化失敗は知らせる |
+| 11 | 別 org の employee id | **`not_found`（存在も隠す）** |
+| 12 | 漏えい時 | **緊急停止とその社員の中継キー無効を同時に。** 停止成功を優先し、キー無効化失敗は知らせる |
 
 以上。
