@@ -581,10 +581,11 @@ async function demoCompleteSwitchover(input: {
   if (neu?.revokedAt) return false;
   const snapshot = { ...row };
   const oldSnap = [...demoOverlapCredentials.values()].find((c) => c.id === input.oldCredentialId);
+  const { getBinding } = await import("@/lib/data/bindings");
   const oldHash =
     oldSnap?.secretHash ||
     neu?.oldSecretHash ||
-    (await import("@/lib/data/bindings").then((m) => m.getBinding(input.employeeId)))?.credentialFingerprint ||
+    (await getBinding(input.employeeId))?.credentialFingerprint ||
     "";
   const newHash = neu?.secretHash || "";
   if (demoOverlapFingerprintMoveFail) return false;
