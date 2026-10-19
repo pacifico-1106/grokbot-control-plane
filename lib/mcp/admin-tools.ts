@@ -3744,7 +3744,12 @@ export async function callAdminMcpTool(
     const parsed = validateOrgCreateInput(args);
     if (!parsed.ok) {
       return toolResult(
-        { ok: false, code: parsed.code, message: parsed.message },
+        {
+          ok: false,
+          code: parsed.code,
+          message: parsed.message,
+          ...(parsed.nextStep ? { nextStep: parsed.nextStep } : {}),
+        },
         true
       );
     }

@@ -209,6 +209,126 @@ describe("orgs.create validation", () => {
   });
 });
 
+describe("orgs.create admin MCP: ORG_NAME_INPUT_STRICT_ENABLED", () => {
+  afterEach(() => {
+    if (savedStrict === undefined) delete process.env[STRICT_FLAG];
+    else process.env[STRICT_FLAG] = savedStrict;
+  });
+
+  describe("flag ON: invalid org name via MCP", () => {
+    beforeEach(() => {
+      process.env[STRICT_FLAG] = "true";
+      allowPlatformOpsInDemo();
+    });
+
+    test("returns isError + code: invalid_org_name for bidi characters", async () => {
+      const beforeApprovals = (await listApprovals(DEMO_ORG.id)).length;
+      const result = await callAdminMcpTool(
+        "orgs.create",
+        {
+          orgName: "株式会社\u202Eテスト",
+          ownerEmail: "test@example.com",
+          invite: true,
+        },
+        demoCred()
+      );
+      expect(result.isError).toBe(true);
+      const data = result.structuredContent as Record<string, unknown>;
+      expect(data.code).toBe("invalid_org_name");
+      expect(data.nextStep).toBeTruthy();
+      // No approval created (no side effects)
+      expect((await listApprovals(DEMO_ORG.id)).length).toBe(beforeApprovals);
+    });
+
+    test("returns isError + code: invalid_org_name for URL-like string", async () => {
+      const beforeApprovals = (await listApprovals(DEMO_ORG.id)).length;
+      const result = await callAdminMcpTool(
+        "orgs.create",
+        {
+          orgName: "https://malware.example.com",
+          ownerEmail: "test@example.com",
+          invite: true,
+        },
+        demoCred()
+      );
+      expect(result.isError).toBe(true);
+      const data = result.structuredContent as Record<string, unknown>;
+      expect(data.code).toBe("invalid_org_name");
+      // No approval created
+      expect((await listApprovals(DEMO_ORG.id)).length).toBe(beforeApprovals);
+    });
+
+    test("rejects org name with CRLF (control characters)", async () => {
+      const result = await callAdminMcpTool(
+        "orgs.create",
+        {
+          orgName: "株式会社\r\nテスト",
+          ownerEmail: "test@example.com",
+          invite: true,
+        },
+        demoCred()
+      );
+      expect(result.isError).toBe(true);
+      const data = result.structuredContent as Record<string, unknown>;
+      expect(data.code).toBe("invalid_org_name");
+    });
+
+    test("rejects org name exceeding 100 characters", async () => {
+      const result = await callAdminMcpTool(
+        "orgs.create",
+        {
+          orgName: "a".repeat(101),
+          ownerEmail: "test@example.com",
+          invite: true,
+        },
+        demoCred()
+      );
+      expect(result.isError).toBe(true);
+      const data = result.structuredContent as Record<string, unknown>;
+      expect(data.code).toBe("invalid_org_name");
+    });
+  });
+
+  describe("flag OFF: existing behavior preserved", () => {
+    beforeEach(() => {
+      delete process.env[STRICT_FLAG];
+      allowPlatformOpsInDemo();
+    });
+
+    test("allows org name with bidi characters (queues approval)", async () => {
+      const beforeApprovals = (await listApprovals(DEMO_ORG.id)).length;
+      const result = await callAdminMcpTool(
+        "orgs.create",
+        {
+          orgName: "Test\u202EOrg",
+          ownerEmail: "bidi-off@example.com",
+          invite: true,
+        },
+        demoCred()
+      );
+      expect(Boolean(result.isError)).toBe(false);
+      const data = result.structuredContent as Record<string, unknown>;
+      expect(data.needs_approval).toBe(true);
+      expect((await listApprovals(DEMO_ORG.id)).length).toBe(beforeApprovals + 1);
+    });
+
+    test("allows org name with URL-like string (queues approval)", async () => {
+      const result = await callAdminMcpTool(
+        "orgs.create",
+        {
+          orgName: "example.com Corp",
+          ownerEmail: "url-off@example.com",
+          invite: true,
+        },
+        demoCred()
+      );
+      expect(Boolean(result.isError)).toBe(false);
+      const data = result.structuredContent as Record<string, unknown>;
+      expect(data.needs_approval).toBe(true);
+    });
+  });
+});
+
 describe("orgs.create admin MCP", () => {
   test("rejects normal tenant without platform allowlist", async () => {
     process.env.SUPER_ADMIN_EMAILS = "ops@other-company.example";
