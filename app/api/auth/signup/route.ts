@@ -167,6 +167,7 @@ export async function POST(req: Request) {
         : "確認に失敗しました。ページを再読み込みしてもう一度お試しください。"
     );
   }
+  const unusedSupabaseCaptchaToken = supabaseCaptcha.captchaToken;
 
   // Bot protection runs before any Auth user / org / email side effect.
   // Not behind a flag (P0 hotfix spam-sample-20261003); Turnstile fail-closed outside DEMO.
@@ -233,7 +234,7 @@ export async function POST(req: Request) {
   const integrationMode = mode === "byo" ? "byo" : "managed";
 
   async function finishOk(orgId: string, allowMail = true) {
-    await establishSession(email, password, supabaseCaptcha.captchaToken);
+    await establishSession(email, password, unusedSupabaseCaptchaToken);
     if (allowMail) {
       await sendWelcomeEmail(email, orgName || "新しい組織");
       await sendTrialStartedEmail(email, TRIAL_DAYS);
@@ -252,7 +253,7 @@ export async function POST(req: Request) {
     const { error: signErr, data } = await establishSession(
       email,
       password,
-      supabaseCaptcha.captchaToken
+      unusedSupabaseCaptchaToken
     );
     if (signErr || !data.user) {
       return null;
@@ -345,7 +346,7 @@ export async function POST(req: Request) {
         );
       }
       // Establish session if possible so /onboarding repair works.
-      await establishSession(email, password, supabaseCaptcha.captchaToken).catch(() => null);
+      await establishSession(email, password, unusedSupabaseCaptchaToken).catch(() => null);
       const url = new URL("/onboarding", req.url);
       url.searchParams.set(
         "reason",

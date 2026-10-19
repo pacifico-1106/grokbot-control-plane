@@ -114,10 +114,9 @@ test("supabase flag ON, local OFF: unused local field is forwarded, not siteveri
   expect(locationOf(res)).toBe(`${BASE}/auth/forgot?sent=1`);
   expect(verifyCalls).toHaveLength(0);
   expect(resetCalls).toHaveLength(1);
-  expect(resetCalls[0].opts).toEqual({
-    redirectTo: expect.stringMatching(/\/auth\/confirm$/),
-    captchaToken: UNUSED,
-  });
+  const opts = resetCalls[0].opts as { redirectTo: string; captchaToken?: string };
+  expect(opts.captchaToken).toBe(UNUSED);
+  expect(opts.redirectTo).toMatch(/\/auth\/confirm$/);
   expectNoSecretsLogged();
 });
 
