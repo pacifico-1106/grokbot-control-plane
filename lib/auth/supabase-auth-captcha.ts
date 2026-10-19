@@ -11,6 +11,8 @@
 export const SUPABASE_AUTH_CAPTCHA_FIELD = "cf-turnstile-supabase";
 export const SUPABASE_AUTH_CAPTCHA_JSON_FIELD = "supabaseCaptchaToken";
 export const SUPABASE_AUTH_CAPTCHA_ACTION = "supabase_auth";
+/** Same cap as lib/lp/turnstile.ts siteverify. Oversize is rejected, never truncated. */
+export const SUPABASE_AUTH_CAPTCHA_MAX_LENGTH = 2048;
 
 function readField(source: FormData | Record<string, unknown>, keys: string[]): string {
   for (const key of keys) {
@@ -66,6 +68,9 @@ export function evaluateSupabaseAuthCaptcha(input: {
   }
   const captchaToken = unusedCaptchaTokenForSupabase(input);
   if (!captchaToken) return { ok: false, error: "turnstile_required" };
+  if (captchaToken.length > SUPABASE_AUTH_CAPTCHA_MAX_LENGTH) {
+    return { ok: false, error: "turnstile_failed" };
+  }
   return { ok: true, captchaToken };
 }
 

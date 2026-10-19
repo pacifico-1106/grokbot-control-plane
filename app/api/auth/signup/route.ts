@@ -19,6 +19,10 @@ import { isDemoMode } from "@/lib/mode";
 import { isIpHashKeyConfigured } from "@/lib/security/ip-hash-key";
 import { isSupabaseAuthCaptchaEnabled } from "@/lib/feature-flags";
 import {
+  ACCOUNT_CREATED_LOGIN_REQUIRED_MESSAGE,
+  loginFailureSearchParams,
+} from "@/lib/auth/login-errors";
+import {
   evaluateSupabaseAuthCaptcha,
   passwordSignInCredentials,
   readAuthCaptchaFields,
@@ -234,7 +238,32 @@ export async function POST(req: Request) {
   const integrationMode = mode === "byo" ? "byo" : "managed";
 
   async function finishOk(orgId: string, allowMail = true) {
-    await establishSession(email, password, unusedSupabaseCaptchaToken);
+    const { error: signErr } = await establishSession(
+      email,
+      password,
+      unusedSupabaseCaptchaToken
+    );
+    // Flag ON: a failed post-create sign-in (captcha_failed, etc.) must not
+    // look like success or send welcome/trial mail. Flag OFF: ignore the
+    // result, same as main.
+    if (isSupabaseAuthCaptchaEnabled() && signErr) {
+      console.warn("[signup] post-create sign-in failed; account exists");
+      if (contentType.includes("application/json")) {
+        return jsonUtf8(
+          {
+            error: "account_created_login_required",
+            message: ACCOUNT_CREATED_LOGIN_REQUIRED_MESSAGE,
+          },
+          { status: 401 }
+        );
+      }
+      const login = new URL("/login", req.url);
+      login.search = loginFailureSearchParams({
+        code: "account_created_login_required",
+        email,
+      });
+      return NextResponse.redirect(login, 303);
+    }
     if (allowMail) {
       await sendWelcomeEmail(email, orgName || "新しい組織");
       await sendTrialStartedEmail(email, TRIAL_DAYS);

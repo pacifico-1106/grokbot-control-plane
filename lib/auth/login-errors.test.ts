@@ -53,6 +53,12 @@ describe("loginErrorMessage", () => {
     expect(isSessionNotice("login_failed")).toBe(false);
   });
 
+  test("account_created_login_required is the fixed post-signup copy", () => {
+    expect(loginErrorMessage("account_created_login_required")).toBe(
+      "アカウントは作成済みです。ログインしてください"
+    );
+  });
+
   test("turnstile_required / turnstile_failed are captcha copy, not a credential oracle", () => {
     expect(loginErrorMessage("turnstile_required")).toMatch(/ロボットでない/);
     expect(loginErrorMessage("turnstile_failed")).toMatch(/確認に失敗/);

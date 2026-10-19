@@ -94,6 +94,19 @@ describe("SUPABASE_AUTH_CAPTCHA_ENABLED default OFF", () => {
     expect("options" in signInArgs[0]).toBe(false);
   });
 
+  test("an oversized client token is ignored while OFF (main)", async () => {
+    const res = await POST(
+      jsonLogin({
+        email: "owner@example.com",
+        password: "correct-horse",
+        turnstileToken: "z".repeat(3000),
+      })
+    );
+    expect(res.status).toBe(200);
+    expect(signInArgs).toHaveLength(1);
+    expect(signInArgs[0]?.options).toBeUndefined();
+  });
+
   test("a client-supplied token is ignored (not forwarded, not verified)", async () => {
     const res = await POST(
       jsonLogin({ email: "owner@example.com", password: "correct-horse", turnstileToken: TOKEN })
@@ -147,6 +160,17 @@ describe("SUPABASE_AUTH_CAPTCHA_ENABLED ON", () => {
     expect(res.status).toBe(400);
     expect((await res.json()).error).toBe("turnstile_required");
     expect(signInArgs).toHaveLength(0);
+  });
+
+  test("token over 2048 chars → turnstile_failed, Auth is not called, not truncated", async () => {
+    const tooLong = "f".repeat(2049);
+    const res = await POST(
+      jsonLogin({ email: "owner@example.com", password: "correct-horse", turnstileToken: tooLong })
+    );
+    expect(res.status).toBe(403);
+    expect((await res.json()).error).toBe("turnstile_failed");
+    expect(signInArgs).toHaveLength(0);
+    expect(logged.join("\n")).not.toContain("fff");
   });
 
   test("GoTrue captcha_failed → turnstile_failed, not a credential oracle", async () => {

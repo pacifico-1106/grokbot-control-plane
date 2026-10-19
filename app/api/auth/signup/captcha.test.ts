@@ -13,6 +13,7 @@ let created = 0;
 let mailed = 0;
 let verifyCalls: string[] = [];
 let signInArgs: Array<{ email?: string; password?: string; options?: { captchaToken?: string } }> = [];
+let signInError: { status?: number; code?: string; message?: string } | null = null;
 let turnstileConfigured = true;
 
 mock.module("@/lib/mode", () => ({
@@ -58,6 +59,7 @@ mock.module("@supabase/ssr", () => ({
     auth: {
       signInWithPassword: async (creds: (typeof signInArgs)[number]) => {
         signInArgs.push(creds);
+        if (signInError) return { data: { user: null }, error: signInError };
         return { data: { user: { id: "u" } }, error: null };
       },
     },
@@ -92,6 +94,7 @@ beforeEach(() => {
   mailed = 0;
   verifyCalls = [];
   signInArgs = [];
+  signInError = null;
   turnstileConfigured = true;
   delete process.env[FLAG];
   logged.length = 0;
@@ -127,6 +130,15 @@ describe("signup captcha flag OFF (main)", () => {
     await POST(jsonReq({ turnstileToken: LOCAL, supabaseCaptchaToken: UNUSED }));
     expect(signInArgs[0]?.options).toBeUndefined();
     expect(created).toBe(1);
+  });
+
+  test("sign-in error still sends mail and returns ok (main)", async () => {
+    signInError = { status: 400, code: "captcha_failed", message: "captcha verification process failed" };
+    const res = await POST(jsonReq({ turnstileToken: LOCAL }));
+    expect(res.status).toBe(200);
+    expect((await res.json()).ok).toBe(true);
+    expect(created).toBe(1);
+    expect(mailed).toBe(2);
   });
 });
 
@@ -166,6 +178,56 @@ describe("signup captcha flag ON", () => {
     expect(verifyCalls).toHaveLength(0);
     expect(signInArgs).toHaveLength(0);
     expectNoSecretsLogged();
+  });
+
+  test("post-create captcha_failed → no mail, account exists, login copy", async () => {
+    signInError = {
+      status: 400,
+      code: "captcha_failed",
+      message: `captcha failed token=${UNUSED}`,
+    };
+    const res = await POST(jsonReq({ turnstileToken: LOCAL, supabaseCaptchaToken: UNUSED }));
+    expect(created).toBe(1);
+    expect(mailed).toBe(0);
+    expect(res.status).toBe(401);
+    const body = (await res.json()) as { ok?: boolean; error: string; message: string };
+    expect(body.ok).toBeUndefined();
+    expect(body.error).toBe("account_created_login_required");
+    expect(body.message).toBe("アカウントは作成済みです。ログインしてください");
+    expect(JSON.stringify(body)).not.toContain(UNUSED);
+    expect(JSON.stringify(body)).not.toContain("captcha_failed");
+    expectNoSecretsLogged();
+  });
+
+  test("post-create captcha_failed HTML → /login, no mail", async () => {
+    signInError = { status: 400, code: "captcha_failed", message: "captcha verification process failed" };
+    const form = new FormData();
+    form.set("orgName", "株式会社テスト");
+    form.set("email", "owner@test.example");
+    form.set("password", "correct-horse");
+    form.set("legal_agreement", "accepted");
+    form.set("cf-turnstile-response", LOCAL);
+    form.set("cf-turnstile-supabase", UNUSED);
+    const res = await POST(new Request("https://staffpass.test/api/auth/signup", { method: "POST", body: form }));
+    expect(created).toBe(1);
+    expect(mailed).toBe(0);
+    expect(res.status).toBe(303);
+    const loc = new URL(res.headers.get("location") || "");
+    expect(loc.pathname).toBe("/login");
+    expect(loc.searchParams.get("error")).toBe("account_created_login_required");
+    expect(loc.search).not.toContain(UNUSED);
+    expect(loc.search).not.toContain("captcha");
+  });
+
+  test("unused token over 2048 chars → nothing created, not truncated into Auth", async () => {
+    const tooLong = "e".repeat(2049);
+    const res = await POST(jsonReq({ turnstileToken: LOCAL, supabaseCaptchaToken: tooLong }));
+    expect(res.status).toBe(403);
+    expect((await res.json()).error).toBe("turnstile_failed");
+    expect(created + mailed).toBe(0);
+    expect(signInArgs).toHaveLength(0);
+    expect(verifyCalls).toHaveLength(0);
+    expect(logged.join("\n")).not.toContain("eee");
   });
 
   test("HTML form reads cf-turnstile-supabase for the unused token", async () => {

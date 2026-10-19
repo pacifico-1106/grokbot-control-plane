@@ -120,6 +120,16 @@ test("supabase flag ON, local OFF: unused local field is forwarded, not siteveri
   expectNoSecretsLogged();
 });
 
+test("supabase flag ON: token over 2048 chars → no Supabase, not truncated", async () => {
+  process.env[SB_FLAG] = "true";
+  const tooLong = "g".repeat(2049);
+  const res = await POST(post(EMAIL, { "cf-turnstile-response": tooLong }));
+  expect(resetCalls).toHaveLength(0);
+  expect(verifyCalls).toHaveLength(0);
+  expect(locationOf(res)).toBe(`${BASE}/auth/forgot?error=turnstile_failed`);
+  expect(logged.join("\n")).not.toContain("ggg");
+});
+
 test("supabase flag ON, local OFF: missing token → no Supabase, captcha error", async () => {
   process.env[SB_FLAG] = "true";
   const res = await POST(post(EMAIL));

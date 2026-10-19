@@ -12,7 +12,8 @@ export type LoginErrorCode =
   | "session_expired"
   | "session"
   | "turnstile_required"
-  | "turnstile_failed";
+  | "turnstile_failed"
+  | "account_created_login_required";
 
 export const LOGIN_FAILED_MESSAGE = "メールアドレスまたはパスワードが違います";
 export const CREDENTIALS_REQUIRED_MESSAGE = "メールとパスワードを入力してください";
@@ -25,6 +26,8 @@ export const TURNSTILE_REQUIRED_MESSAGE =
   "ロボットでないことの確認を完了してください";
 export const TURNSTILE_FAILED_MESSAGE =
   "確認に失敗しました。ページを再読み込みしてもう一度お試しください。";
+export const ACCOUNT_CREATED_LOGIN_REQUIRED_MESSAGE =
+  "アカウントは作成済みです。ログインしてください";
 
 export function loginErrorMessage(
   code?: string | null,
@@ -35,6 +38,7 @@ export function loginErrorMessage(
   if (code === "credentials_required") return CREDENTIALS_REQUIRED_MESSAGE;
   if (code === "turnstile_required") return TURNSTILE_REQUIRED_MESSAGE;
   if (code === "turnstile_failed") return TURNSTILE_FAILED_MESSAGE;
+  if (code === "account_created_login_required") return ACCOUNT_CREATED_LOGIN_REQUIRED_MESSAGE;
   if (code === "session_expired" || code === "session") {
     return SESSION_REQUIRED_MESSAGE;
   }

@@ -6,6 +6,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { isSupabaseAuthCaptchaEnabled } from "@/lib/feature-flags";
 import {
+  evaluateSupabaseAuthCaptcha,
   passwordResetEmailOptions,
   passwordSignInCredentials,
   readAuthCaptchaFields,
@@ -164,5 +165,51 @@ describe("unusedCaptchaTokenForSupabase", () => {
         localTokenSiteverified: true,
       })
     ).toBe("");
+  });
+});
+
+describe("captchaToken max length 2048 (no truncation)", () => {
+  test("exactly 2048 characters is accepted", () => {
+    const token = "a".repeat(2048);
+    const r = evaluateSupabaseAuthCaptcha({
+      enabled: true,
+      localToken: token,
+      supabaseToken: "",
+      localTokenSiteverified: false,
+    });
+    expect(r).toEqual({ ok: true, captchaToken: token });
+  });
+
+  test("2049 characters → turnstile_failed, token is not truncated", () => {
+    const token = "b".repeat(2049);
+    const r = evaluateSupabaseAuthCaptcha({
+      enabled: true,
+      localToken: token,
+      supabaseToken: "",
+      localTokenSiteverified: false,
+    });
+    expect(r).toEqual({ ok: false, error: "turnstile_failed" });
+    expect(JSON.stringify(r)).not.toContain("bb");
+  });
+
+  test("dedicated unused token over the cap is rejected even if local is short", () => {
+    const r = evaluateSupabaseAuthCaptcha({
+      enabled: true,
+      localToken: "short-local",
+      supabaseToken: "c".repeat(2049),
+      localTokenSiteverified: true,
+    });
+    expect(r).toEqual({ ok: false, error: "turnstile_failed" });
+  });
+
+  test("flag OFF still accepts an oversized client token (not forwarded later)", () => {
+    const r = evaluateSupabaseAuthCaptcha({
+      enabled: false,
+      localToken: "d".repeat(3000),
+      supabaseToken: "",
+      localTokenSiteverified: false,
+    });
+    expect(r).toEqual({ ok: true });
+    expect("captchaToken" in r).toBe(false);
   });
 });
