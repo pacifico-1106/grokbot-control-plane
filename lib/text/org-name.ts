@@ -96,12 +96,17 @@ const SLASH_PATTERN = /\//;
 // Host is one of:
 // - Domain/IPv4: labels with at least one dot (e.g., a.com, 1.2.3.4)
 // - IPv6 in brackets: [::1], [2001:db8::1]
-// - Bare IPv6 with :: (e.g., ::1, 2001:db8::1)
-// Port: colon + optional space + 1-5 digits + (end, space, /, ?, #)
+// - Bare IPv6 with :: (e.g., ::1, fe80::1:443) - MUST contain ::
+// Port: colon + optional space + 1-5 digits + (end or any non-digit)
 // Host can be preceded by: start, space, or non-ASCII (Japanese)
-const HOST_PORT_DOMAIN_IPV4 = /(?:^|[\s\u3000-\u9fff\uac00-\ud7af])(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]*[a-z0-9])?:\s?\d{1,5}(?:$|[\s\/?#])/i;
-const HOST_PORT_IPV6_BRACKET = /\[[0-9a-f:]+\]:\s?\d{1,5}(?:$|[\s\/?#])/i;
-const HOST_PORT_IPV6_BARE = /(?:^|[\s])(?:[0-9a-f]*:){2,}[0-9a-f]*:\s?\d{1,5}(?:$|[\s\/?#])/i;
+// 
+// LOW-2: Port followed by non-digit (letter, dot, etc.) is rejected for domain/IPv6
+// Examples: a.com:8080foo, evil.com:8080. → rejected
+// Time/ratio patterns without dots (10:30, 16:9) → allowed (not matched by these patterns)
+const HOST_PORT_DOMAIN_IPV4 = /(?:^|[\s\u3000-\u9fff\uac00-\ud7af])(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]*[a-z0-9])?:\s?\d{1,5}(?:$|[^0-9])/i;
+const HOST_PORT_IPV6_BRACKET = /\[[0-9a-f:]+\]:\s?\d{1,5}(?:$|[^0-9])/i;
+// LOW-1: Only match IPv6 addresses containing :: (not aa:bb:cc:80 which has no ::)
+const HOST_PORT_IPV6_BARE = /(?:^|[\s])(?:[0-9a-f]*::)[0-9a-f:]*:\s?\d{1,5}(?:$|[^0-9])/i;
 
 // Combining character pattern for stripping before URL check
 const COMBINING_CHARS = /\p{M}/gu;

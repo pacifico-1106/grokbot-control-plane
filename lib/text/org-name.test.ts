@@ -499,6 +499,40 @@ describe("validateOrgNameStrict (flag ON)", () => {
     test("rejects box drawings light diagonal U+2571 (a╱b)", () => {
       expect(validateOrgNameStrict("a\u2571b").ok).toBe(false);
     });
+
+    // === LOW-1: HOST_PORT_IPV6_BARE should only match :: containing strings ===
+    test("allows aa:bb:cc:80 (hex but no ::)", () => {
+      expect(validateOrgNameStrict("aa:bb:cc:80").ok).toBe(true);
+    });
+
+    test("rejects ::1:80 (has ::)", () => {
+      expect(validateOrgNameStrict("::1:80").ok).toBe(false);
+    });
+
+    test("rejects fe80::1:443 (has ::)", () => {
+      expect(validateOrgNameStrict("fe80::1:443").ok).toBe(false);
+    });
+
+    // === LOW-2: Port followed by non-digit must be rejected for domain/IPv6 ===
+    test("rejects a.com:8080foo (port followed by letter)", () => {
+      expect(validateOrgNameStrict("a.com:8080foo").ok).toBe(false);
+    });
+
+    test("rejects evil.com:8080. (port followed by dot)", () => {
+      expect(validateOrgNameStrict("evil.com:8080.").ok).toBe(false);
+    });
+
+    test("allows 株式会社 3:2 (digit:digit without domain)", () => {
+      expect(validateOrgNameStrict("株式会社 3:2").ok).toBe(true);
+    });
+
+    test("allows 10:30 Labs (digit:digit without domain)", () => {
+      expect(validateOrgNameStrict("10:30 Labs").ok).toBe(true);
+    });
+
+    test("allows Ratio 16:9 Inc (digit:digit without domain)", () => {
+      expect(validateOrgNameStrict("Ratio 16:9 Inc").ok).toBe(true);
+    });
   });
 
   describe("false positive avoidance: allowed company name patterns", () => {
