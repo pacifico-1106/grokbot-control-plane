@@ -467,6 +467,25 @@ export function isSignupRateLimitEnabled(): boolean {
 }
 
 /**
+ * SIGNUP_RATE_LIMIT_REQUIRED_ENABLED: make Layer 2 per-IP / per-mailbox
+ * signup rate limits mandatory before welcome / trial mail.
+ *
+ * When ON:
+ * - evaluateSignupLayer2 always applies those limits (even if
+ *   SIGNUP_RATE_LIMIT_ENABLED is OFF).
+ * - Missing attempt store, unreadable store, or missing IP hash → 503
+ *   fail-closed. Signup does not create an account and does not send mail.
+ * - Attempt rows are written even if SIGNUP_ATTEMPT_LOG_ENABLED is OFF, so
+ *   the counters have somewhere to live. Insert failure → do not send mail.
+ *
+ * When OFF (default):
+ * - Today's fail-open Layer 2 is unchanged. Mail still goes out.
+ */
+export function isSignupRateLimitRequiredEnabled(): boolean {
+  return parseFlag(process.env.SIGNUP_RATE_LIMIT_REQUIRED_ENABLED);
+}
+
+/**
  * LOGIN_RATE_LIMIT_ENABLED: app-side login attempt limits (IP+account, plus a
  * per-IP spray cap). In-memory / per-instance; Supabase Auth still has its own
  * limits. Missing IP_HASH_KEY or a full bucket store fails closed (503 / deny).
