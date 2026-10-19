@@ -380,23 +380,20 @@ begin
 end $$;
 
 reset role;
--- L3: disable → clear → enable in one transaction so a mid-file abort
--- cannot leave hold guards off.
-begin;
-alter table public.employee_holds disable trigger employee_holds_guard;
-alter table public.employees disable trigger employees_hold_guard;
-alter table public.orgs disable trigger orgs_hold_guard;
-update public.employees set hold_state = null, hold_id = null where id::text like 'cb100000-%';
-update public.orgs set hold_state = null, hold_id = null where id::text like 'cb000000-%';
-delete from public.employee_holds where org_id::text like 'cb000000-%';
-alter table public.employee_holds enable trigger employee_holds_guard;
-alter table public.employees enable trigger employees_hold_guard;
-alter table public.orgs enable trigger orgs_hold_guard;
-commit;
+-- L3: one DO transaction. DISABLE TRIGGER + write + ENABLE in the same
+-- transaction fails on PostgreSQL (pending trigger events). The official
+-- staffpass.hold_write GUC is local to this block.
+do $$
+begin
+  perform set_config('staffpass.hold_write', 'on', true);
+  update public.employees set hold_state = null, hold_id = null where id::text like 'cb100000-%';
+  update public.orgs set hold_state = null, hold_id = null where id::text like 'cb000000-%';
+end $$;
 delete from public.credential_renewals where id::text like 'cb400000-%';
 delete from public.approval_requests where id::text like 'cb300000-%';
 delete from public.employee_bindings where employee_id::text like 'cb100000-%';
 delete from public.credentials where id::text like 'cb200000-%';
+-- hold history is append-only; employee delete cascades (trigger depth > 1).
 delete from public.employees where id::text like 'cb100000-%';
 delete from public.orgs where id::text like 'cb000000-%';
 drop function if exists security_test.car_ov_denied(text);

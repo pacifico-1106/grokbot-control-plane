@@ -547,14 +547,10 @@ describe("rotate stays immediate; R8/R5 stay out", () => {
     expect(sql).toMatch(/to_regnamespace\('security_test'\)/);
     expect(sql).toMatch(/current_user\s+is distinct from\s+'test_admin'|current_user\s*<>\s*'test_admin'/);
     expect(sql).toMatch(/refuse outside disposable test cluster/i);
-    const disableAt = sql.indexOf("disable trigger employee_holds_guard");
-    const enableAt = sql.indexOf("enable trigger employee_holds_guard");
-    const beginAt = sql.lastIndexOf("begin;", disableAt);
-    const commitAt = sql.indexOf("commit;", enableAt);
-    expect(disableAt).toBeGreaterThan(-1);
-    expect(enableAt).toBeGreaterThan(disableAt);
-    expect(beginAt).toBeGreaterThan(-1);
-    expect(commitAt).toBeGreaterThan(enableAt);
+    // One-transaction cleanup via GUC. DISABLE+write+ENABLE in one txn is
+    // refused by PostgreSQL (pending trigger events).
+    expect(sql).toMatch(/set_config\('staffpass\.hold_write',\s*'on',\s*true\)/);
+    expect(sql).not.toMatch(/disable trigger employee_holds_guard/);
   });
 
   test("R8 HTTP claim route and R5 boot script are not in this PR", () => {
