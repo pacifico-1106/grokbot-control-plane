@@ -173,7 +173,12 @@ export async function POST(req: Request) {
       reason: layer2.reason,
       turnstileOk: isDemoMode() ? null : true,
     });
-    const code = layer2.outcome === "rejected_domain" ? layer2.reason : layer2.outcome;
+    const code =
+      layer2.reason === "store_unavailable" || layer2.reason === "ip_unavailable"
+        ? "signup_unavailable"
+        : layer2.outcome === "rejected_domain"
+          ? layer2.reason
+          : layer2.outcome;
     return rejectToForm(code, layer2.status, layer2.message);
   }
 
@@ -199,10 +204,12 @@ export async function POST(req: Request) {
 
   const integrationMode = mode === "byo" ? "byo" : "managed";
 
-  async function finishOk(orgId: string) {
+  async function finishOk(orgId: string, allowMail = true) {
     await establishSession(email, password);
-    await sendWelcomeEmail(email, orgName || "新しい組織");
-    await sendTrialStartedEmail(email, TRIAL_DAYS);
+    if (allowMail) {
+      await sendWelcomeEmail(email, orgName || "新しい組織");
+      await sendTrialStartedEmail(email, TRIAL_DAYS);
+    }
 
     if (contentType.includes("application/json")) {
       return jsonUtf8({ ok: true, orgId, demo: false });
@@ -227,8 +234,15 @@ export async function POST(req: Request) {
         displayName: displayName || undefined,
         referralCode: referralCode || null,
       });
-      await sendWelcomeEmail(email, orgName || "新しい組織");
-      await sendTrialStartedEmail(email, TRIAL_DAYS);
+      const recoveredRecord = await recordSignupAttempt(attemptStore, fingerprint, "created", {
+        turnstileOk: isDemoMode() ? null : true,
+        orgId: provisioned.orgId,
+        userId: data.user.id,
+      });
+      if (recoveredRecord.ok) {
+        await sendWelcomeEmail(email, orgName || "新しい組織");
+        await sendTrialStartedEmail(email, TRIAL_DAYS);
+      }
       if (contentType.includes("application/json")) {
         return jsonUtf8({
           ok: true,
@@ -270,12 +284,12 @@ export async function POST(req: Request) {
       displayName: displayName || undefined,
       referralCode: referralCode || null,
     });
-    await recordSignupAttempt(attemptStore, fingerprint, "created", {
+    const recorded = await recordSignupAttempt(attemptStore, fingerprint, "created", {
       turnstileOk: isDemoMode() ? null : true,
       orgId,
       userId,
     });
-    return await finishOk(orgId);
+    return await finishOk(orgId, recorded.ok);
   } catch (e) {
     const message = e instanceof Error ? e.message : "signup_failed";
     await recordSignupAttempt(attemptStore, fingerprint, "error", {
