@@ -1,6 +1,34 @@
 import { escapeHtml } from "@/lib/html-escape";
 import { resolveAppOrigin } from "@/lib/app-url";
 import { renderStubHtml } from "@/lib/resend";
+import { isApprovalMailSubjectNoSummaryEnabled } from "@/lib/feature-flags";
+
+export type ApprovalMailMeta = {
+  kind?: string;
+  id?: string;
+};
+
+export function approvalMailKind(raw?: string): string {
+  const s = String(raw ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 32);
+  return s || "ticket";
+}
+
+export function approvalMailShortId(raw?: string): string {
+  const s = String(raw ?? "").replace(/[^A-Za-z0-9_-]/g, "").slice(0, 8);
+  return s || "unknown";
+}
+
+function approvalFixedSubject(variant: "needed" | "resolved", meta?: ApprovalMailMeta): string {
+  const kind = approvalMailKind(meta?.kind);
+  const id = approvalMailShortId(meta?.id);
+  const label = variant === "needed" ? "承認リクエスト" : "承認結果";
+  return `[Staffpass] ${label} ${kind} ${id}`;
+}
 
 function appBaseUrl(): string {
   return resolveAppOrigin();
@@ -39,11 +67,17 @@ export function welcomeTemplate(orgName: string) {
   };
 }
 
-export function approvalNeededTemplate(summary: string, risk: string) {
+export function approvalNeededTemplate(
+  summary: string,
+  risk: string,
+  meta?: ApprovalMailMeta
+) {
   const s = escapeHtml(summary);
   const r = escapeHtml(risk);
   return {
-    subject: `[要対応] AI社員の承認リクエスト（${risk}）`,
+    subject: isApprovalMailSubjectNoSummaryEnabled()
+      ? approvalFixedSubject("needed", meta)
+      : `[要対応] AI社員の承認リクエスト（${risk}）`,
     html: renderStubHtml(
       "承認が必要です",
       `<p>危険操作またはポリシー該当の操作が承認待ちです。</p>
@@ -55,12 +89,18 @@ export function approvalNeededTemplate(summary: string, risk: string) {
   };
 }
 
-export function approvalResolvedTemplate(summary: string, statusLabel: string) {
+export function approvalResolvedTemplate(
+  summary: string,
+  statusLabel: string,
+  meta?: ApprovalMailMeta
+) {
   const statusJa = statusLabelJa(statusLabel);
   const statusHtml = escapeHtml(statusJa);
   const s = escapeHtml(summary);
   return {
-    subject: `[AI社員] 承認が解決されました（${statusJa}）`,
+    subject: isApprovalMailSubjectNoSummaryEnabled()
+      ? approvalFixedSubject("resolved", meta)
+      : `[AI社員] 承認が解決されました（${statusJa}）`,
     html: renderStubHtml(
       "承認が解決されました",
       `<p>承認リクエストが処理されました。</p>

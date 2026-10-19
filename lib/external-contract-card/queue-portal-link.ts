@@ -127,7 +127,10 @@ export async function queuePortalLinkMint(input: {
     process.env.BILLING_NOTIFY_EMAIL ||
     process.env.APPROVAL_NOTIFY_EMAIL ||
     "owner@example.com";
-  void sendApprovalNeededEmail(notifyTo, summary, "high").catch(() => null);
+  void sendApprovalNeededEmail(notifyTo, summary, "high", {
+    kind: tool,
+    id: created.approval.id,
+  }).catch(() => null);
   void sendApprovalNotifications(created.approval, null).catch(() => null);
 
   return {

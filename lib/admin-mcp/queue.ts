@@ -284,7 +284,10 @@ export async function queueAdminTool(input: {
     process.env.BILLING_NOTIFY_EMAIL ||
     process.env.APPROVAL_NOTIFY_EMAIL ||
     "owner@example.com";
-  void sendApprovalNeededEmail(notifyTo, created.approval.summary, "high").catch(
+  void sendApprovalNeededEmail(notifyTo, created.approval.summary, "high", {
+    kind: input.tool,
+    id: created.approval.id,
+  }).catch(
     () => null
   );
   void sendApprovalNotifications(created.approval, null).catch(() => null);

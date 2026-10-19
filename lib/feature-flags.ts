@@ -754,6 +754,24 @@ export function isApprovalReasonsEnabled(): boolean {
 }
 
 /**
+ * APPROVAL_MAIL_SUBJECT_NO_SUMMARY_ENABLED: approval notify mail subject
+ * is fixed text + kind + short id. AI / requester summary stays in the
+ * escaped body only.
+ *
+ * When ON:
+ * - Needed: `[Staffpass] 承認リクエスト {kind} {id}`
+ * - Resolved: `[Staffpass] 承認結果 {kind} {id}`
+ * - kind / id are sanitized (no control chars). Missing meta → ticket / unknown.
+ *
+ * When OFF (default):
+ * - Needed subject remains `[要対応] AI社員の承認リクエスト（{risk}）`.
+ * - Resolved subject remains `[AI社員] 承認が解決されました（{結果}）`.
+ */
+export function isApprovalMailSubjectNoSummaryEnabled(): boolean {
+  return parseFlag(process.env.APPROVAL_MAIL_SUBJECT_NO_SUMMARY_ENABLED);
+}
+
+/**
  * 木村 2026-10-09 B (triage #1④): comm.send with no explicit class defaults to
  * internal + summary only when the destination is internal in the credential
  * org's channel ledger (internal channel / internal DM route) and the resolved
