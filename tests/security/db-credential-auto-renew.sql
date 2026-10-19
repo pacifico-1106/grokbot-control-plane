@@ -363,6 +363,147 @@ select security_test.car_denied($q$select public.claim_credential_renewal(
   'ca100000-0000-4000-8000-000000000001','tok_anon_0123456789abcdef', now())$q$);
 reset role;
 
+-- M1: claim / release refuse inactive employee, revoked old badge, unapproved ticket
+insert into public.employees(id, org_id, display_name, role_label, status) values
+ ('ca100000-0000-4000-8000-0000000000s1', 'ca000000-0000-4000-8000-0000000000a1', 'Car suspended', 'fixture', 'suspended');
+insert into public.credentials(id, org_id, employee_id, secret_hash, expires_at) values
+ ('ca200000-0000-4000-8000-0000000000s1', 'ca000000-0000-4000-8000-0000000000a1', 'ca100000-0000-4000-8000-0000000000s1', repeat('s', 64), now() + interval '90 days'),
+ ('ca200000-0000-4000-8000-0000000000r1', 'ca000000-0000-4000-8000-0000000000a1', 'ca100000-0000-4000-8000-000000000001', repeat('r', 64), now() + interval '90 days');
+update public.credentials set revoked_at = now()
+ where id = 'ca200000-0000-4000-8000-0000000000r1';
+insert into public.approval_requests(id, org_id, purpose, summary, tool, risk, status, metadata) values
+ ('ca300000-0000-4000-8000-0000000000s1', 'ca000000-0000-4000-8000-0000000000a1', 'admin.policy', 'car sus', 'employees.credential.auto_renew', 'high', 'approved',
+  '{"adminTool":"employees.credential.auto_renew"}');
+insert into public.credential_renewals (
+  id, org_id, employee_id, old_credential_id, approval_id, threshold, state, claimable_until
+) values
+ ('ca400000-0000-4000-8000-0000000000s1',
+  'ca000000-0000-4000-8000-0000000000a1',
+  'ca100000-0000-4000-8000-0000000000s1',
+  'ca200000-0000-4000-8000-0000000000s1',
+  'ca300000-0000-4000-8000-0000000000s1',
+  'now', 'claimable', now() + interval '24 hours'),
+ ('ca400000-0000-4000-8000-0000000000r1',
+  'ca000000-0000-4000-8000-0000000000a1',
+  'ca100000-0000-4000-8000-000000000001',
+  'ca200000-0000-4000-8000-0000000000r1',
+  'ca300000-0000-4000-8000-000000000001',
+  'now', 'claimable', now() + interval '24 hours');
+-- claimable row whose ticket is still pending (reuse 003 approval + leftover 011-style cred)
+insert into public.credentials(id, org_id, employee_id, secret_hash, expires_at) values
+ ('ca200000-0000-4000-8000-0000000000p1', 'ca000000-0000-4000-8000-0000000000a1', 'ca100000-0000-4000-8000-000000000001', repeat('p', 64), now() + interval '90 days');
+insert into public.credential_renewals (
+  id, org_id, employee_id, old_credential_id, approval_id, threshold, state, claimable_until
+) values (
+  'ca400000-0000-4000-8000-0000000000p1',
+  'ca000000-0000-4000-8000-0000000000a1',
+  'ca100000-0000-4000-8000-000000000001',
+  'ca200000-0000-4000-8000-0000000000p1',
+  'ca300000-0000-4000-8000-000000000003',
+  'now', 'claimable', now() + interval '24 hours'
+);
+
+set role service_role;
+do $$
+begin
+  if public.claim_credential_renewal(
+       'ca400000-0000-4000-8000-0000000000s1',
+       'ca000000-0000-4000-8000-0000000000a1',
+       'ca100000-0000-4000-8000-0000000000s1',
+       'tok_suspended_0123456789', now()) then
+    raise exception 'credential auto-renew M1: suspended employee claimed'; end if;
+  if public.claim_credential_renewal(
+       'ca400000-0000-4000-8000-0000000000r1',
+       'ca000000-0000-4000-8000-0000000000a1',
+       'ca100000-0000-4000-8000-000000000001',
+       'tok_revoked_old_01234567', now()) then
+    raise exception 'credential auto-renew M1: revoked old credential claimed'; end if;
+  if public.claim_credential_renewal(
+       'ca400000-0000-4000-8000-0000000000p1',
+       'ca000000-0000-4000-8000-0000000000a1',
+       'ca100000-0000-4000-8000-000000000001',
+       'tok_unapproved_012345678', now()) then
+    raise exception 'credential auto-renew M1: unapproved ticket claimed'; end if;
+end $$;
+reset role;
+
+-- L2/L4: expired claimable is marked expired
+set role service_role;
+do $$
+declare n integer;
+begin
+  n := public.expire_stale_credential_renewals('ca000000-0000-4000-8000-0000000000a2', now());
+  if n < 1 then
+    raise exception 'credential auto-renew L2/L4: expired claimable not swept'; end if;
+  if (select state from public.credential_renewals
+       where id = 'ca400000-0000-4000-8000-00000000000e') <> 'expired' then
+    raise exception 'credential auto-renew L2/L4: row not expired'; end if;
+end $$;
+reset role;
+
+-- M3: deleting the NEW credential is RESTRICTED; release still refused
+set role service_role;
+select security_test.car_rejects(
+  $q$delete from public.credentials where id = 'ca200000-0000-4000-8000-000000000011'$q$,
+  '23503');
+do $$
+begin
+  if public.release_credential_renewal(
+       'ca400000-0000-4000-8000-000000000001',
+       'ca000000-0000-4000-8000-0000000000a1',
+       'tok_third_0123456789abcd') then
+    raise exception 'credential auto-renew M3: release after new credential still succeeded'; end if;
+end $$;
+reset role;
+
+-- M2: if the renewal row vanishes after the first UPDATE, RAISE and roll back
+set role service_role;
+create or replace function security_test.car_drop_renewal() returns trigger language plpgsql as $$
+begin
+  delete from public.credential_renewals where id = 'ca400000-0000-4000-8000-0000000000m2';
+  return new;
+end $$;
+insert into public.credentials(id, org_id, employee_id, secret_hash, expires_at) values
+ ('ca200000-0000-4000-8000-0000000000m2', 'ca000000-0000-4000-8000-0000000000a1', 'ca100000-0000-4000-8000-000000000001', repeat('m', 64), now() + interval '90 days'),
+ ('ca200000-0000-4000-8000-0000000000n2', 'ca000000-0000-4000-8000-0000000000a1', 'ca100000-0000-4000-8000-000000000001', repeat('k', 64), now() + interval '90 days');
+insert into public.credential_renewals (
+  id, org_id, employee_id, old_credential_id, new_credential_id, approval_id, threshold, state, claimed_at
+) values (
+  'ca400000-0000-4000-8000-0000000000m2',
+  'ca000000-0000-4000-8000-0000000000a1',
+  'ca100000-0000-4000-8000-000000000001',
+  'ca200000-0000-4000-8000-0000000000m2',
+  'ca200000-0000-4000-8000-0000000000n2',
+  'ca300000-0000-4000-8000-000000000001',
+  '7d', 'claimed', now()
+);
+drop trigger if exists car_drop_renewal on public.credentials;
+create trigger car_drop_renewal
+  after update of revoked_at on public.credentials
+  for each row
+  when (new.id = 'ca200000-0000-4000-8000-0000000000m2')
+  execute function security_test.car_drop_renewal();
+do $$
+begin
+  begin
+    perform public.revoke_overlapped_old_credential(
+      'ca400000-0000-4000-8000-0000000000m2',
+      'ca000000-0000-4000-8000-0000000000a1',
+      'ca200000-0000-4000-8000-0000000000m2',
+      'ca200000-0000-4000-8000-0000000000n2');
+    raise exception 'credential auto-renew M2: incomplete revoke did not RAISE';
+  exception when others then
+    if sqlerrm not like '%credential_renewal_revoke_incomplete%' then raise; end if;
+  end;
+  if (select revoked_at from public.credentials
+       where id = 'ca200000-0000-4000-8000-0000000000m2') is not null then
+    raise exception 'credential auto-renew M2: first UPDATE was not rolled back';
+  end if;
+end $$;
+drop trigger if exists car_drop_renewal on public.credentials;
+drop function if exists security_test.car_drop_renewal();
+reset role;
+
 -- (7) cascade on old-credential delete
 delete from public.credentials where id = 'ca200000-0000-4000-8000-000000000001';
 do $$
