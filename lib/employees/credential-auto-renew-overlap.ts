@@ -6,23 +6,17 @@
 import { randomBytes } from "node:crypto";
 import { mintOneTimeSecret } from "@/lib/bindings";
 import { appendAuditEvent } from "@/lib/data/audit";
+import { getBinding } from "@/lib/data/bindings";
 import {
-  bumpCredentialGenerationKeepFingerprint,
-  getBinding,
-  moveBindingFingerprintIfCurrent,
-} from "@/lib/data/bindings";
-import {
-  attachOverlappedNewCredential,
   claimCredentialRenewal,
+  completeOverlappedCredentialSwitchover,
   demoGetOverlapCredential,
   findClaimedOverlapByNewCredential,
   findOpenCredentialRenewalRow,
-  insertOverlapCredentialRow,
+  issueOverlappedNewCredential,
   listExpiredOverlapRenewals,
   releaseCredentialRenewal,
   revokeExpiredOverlappedOldCredential,
-  revokeInsertedOverlapCredential,
-  revokeOverlappedOldCredential,
   getCredentialSecretHash,
 } from "@/lib/data/credential-renewals";
 import { credentialExpiresAtFromNow } from "@/lib/employees/credential-ttl";
@@ -143,14 +137,16 @@ export async function issueCredentialOverlap(input: {
   const secret = mintOneTimeSecret();
   const expiresAt = credentialExpiresAtFromNow();
   const overlapUntil = new Date(Date.now() + CREDENTIAL_AUTO_RENEW_OVERLAP_WINDOW_MS).toISOString();
-  let newCredentialId: string | null = null;
   try {
-    newCredentialId = await insertOverlapCredentialRow({
+    const minted = await issueOverlappedNewCredential({
+      id: open.id,
       orgId: input.orgId,
       employeeId: gated.employee.id,
+      token,
       secretHash: secret.fingerprint,
       secretPrefix: secret.prefix,
       expiresAt,
+      overlapUntil,
       oldSecretHash,
       scopes: gated.employee.scopes,
       allowedPurposes: gated.employee.allowedPurposes,
@@ -159,26 +155,17 @@ export async function issueCredentialOverlap(input: {
       spend: gated.employee.spend,
       allowedAccounts: gated.employee.allowedAccounts,
     });
-    if (!newCredentialId) throw new Error("overlap_insert_failed");
-    const bumped = await bumpCredentialGenerationKeepFingerprint(gated.employee.id, input.orgId);
-    const attached = await attachOverlappedNewCredential({
-      id: open.id,
-      orgId: input.orgId,
-      token,
-      newCredentialId,
-      overlapUntil,
-    });
-    if (!attached) throw new Error("overlap_attach_failed");
+    if (!minted) throw new Error("overlap_attach_failed");
     await appendAuditEvent({
       orgId: input.orgId,
       employeeId: gated.employee.id,
-      credentialId: newCredentialId,
+      credentialId: minted.newCredentialId,
       action: "credential.renew_claimed",
       purpose: "admin.policy",
       summary: "社員証の更新を受け取り（重ね置き）",
       metadata: {
-        generation: bumped.generation,
-        newCredentialId,
+        generation: minted.generation,
+        newCredentialId: minted.newCredentialId,
         oldCredentialId: input.oldCredentialId,
         mode: open.mode,
         secretHashPrefix: secret.fingerprint.slice(0, 12),
@@ -187,20 +174,26 @@ export async function issueCredentialOverlap(input: {
     }).catch(() => undefined);
     return {
       ok: true,
-      newCredentialId,
-      generation: bumped.generation,
+      newCredentialId: minted.newCredentialId,
+      generation: minted.generation,
       expiresAt,
       overlapUntil,
       secret,
     };
   } catch {
-    if (newCredentialId) {
-      await revokeInsertedOverlapCredential({ orgId: input.orgId, credentialId: newCredentialId }).catch(() => undefined);
+    let cleanupFailed = false;
+    try {
+      const released = await releaseCredentialRenewal({ id: open.id, orgId: input.orgId, token });
+      if (!released) cleanupFailed = true;
+    } catch {
+      cleanupFailed = true;
     }
-    const released = await releaseCredentialRenewal({ id: open.id, orgId: input.orgId, token }).catch(() => false);
-    void released;
-    await auditDenied({ orgId: input.orgId, employeeId: gated.employee.id, code: "already_claimed" });
-    return fail("already_claimed", "この更新は既に受け取られています。");
+    const code = cleanupFailed ? "cleanup_failed" : "already_claimed";
+    await auditDenied({ orgId: input.orgId, employeeId: gated.employee.id, code });
+    return fail(
+      code,
+      cleanupFailed ? "受け取りの後片付けに失敗しました。" : "この更新は既に受け取られています。"
+    );
   }
 }
 
@@ -213,6 +206,8 @@ export async function overlapNewCredentialAllowed(input: {
   if (!input.bindingFingerprint || !isCredentialAutoRenewOnForOrg(input.orgId)) return false;
   const overlap = await findClaimedOverlapByNewCredential(input.orgId, input.newCredentialId);
   if (!overlap || !overlap.newCredentialId || overlap.oldRevokedAt) return false;
+  const until = overlap.overlapUntil ? Date.parse(overlap.overlapUntil) : NaN;
+  if (!Number.isFinite(until) || until < Date.now()) return false;
   const oldHash =
     (await getCredentialSecretHash(overlap.oldCredentialId)) ||
     demoGetOverlapCredential(overlap.newCredentialId)?.oldSecretHash ||
@@ -230,26 +225,19 @@ export async function completeCredentialOverlapOnFirstAuth(input: {
   const overlap = await findClaimedOverlapByNewCredential(input.orgId, input.credentialId);
   if (!overlap || !overlap.newCredentialId || overlap.oldRevokedAt) return false;
   if (input.credentialId !== overlap.newCredentialId) return false;
-  let revoked = false;
+  let switched = false;
   try {
-    revoked = await revokeOverlappedOldCredential({
+    switched = await completeOverlappedCredentialSwitchover({
       renewalId: overlap.id,
       orgId: input.orgId,
+      employeeId: input.employeeId,
       oldCredentialId: overlap.oldCredentialId,
       newCredentialId: overlap.newCredentialId,
     });
   } catch {
     return false;
   }
-  if (!revoked) return false;
-  const oldHash =
-    (await getCredentialSecretHash(overlap.oldCredentialId)) ||
-    demoGetOverlapCredential(overlap.newCredentialId)?.oldSecretHash ||
-    "";
-  const newHash = (await getCredentialSecretHash(overlap.newCredentialId)) || input.fingerprint;
-  if (oldHash && newHash) {
-    await moveBindingFingerprintIfCurrent(input.employeeId, input.orgId, oldHash, newHash).catch(() => false);
-  }
+  if (!switched) return false;
   await appendAuditEvent({
     orgId: input.orgId,
     employeeId: input.employeeId,
@@ -281,9 +269,9 @@ export async function expireOverlappedOldCredentials(now?: Date): Promise<{
     if (!row.newCredentialId) continue;
     if (!isCredentialAutoRenewOnForOrg(row.orgId)) continue;
     seen.add(row.orgId);
-    let ok = false;
+    let outcome: "switched" | "expired" | null = null;
     try {
-      ok = await revokeExpiredOverlappedOldCredential({
+      outcome = await revokeExpiredOverlappedOldCredential({
         renewalId: row.id,
         orgId: row.orgId,
         oldCredentialId: row.oldCredentialId,
@@ -291,9 +279,10 @@ export async function expireOverlappedOldCredentials(now?: Date): Promise<{
         at: now,
       });
     } catch {
-      ok = false;
+      outcome = null;
     }
-    if (!ok) {
+    if (outcome === "expired") continue;
+    if (outcome !== "switched") {
       failed += 1;
       await appendAuditEvent({
         orgId: row.orgId,
@@ -311,14 +300,6 @@ export async function expireOverlappedOldCredentials(now?: Date): Promise<{
         },
       }).catch(() => undefined);
       continue;
-    }
-    const oldHash =
-      (await getCredentialSecretHash(row.oldCredentialId)) ||
-      demoGetOverlapCredential(row.newCredentialId)?.oldSecretHash ||
-      "";
-    const newHash = (await getCredentialSecretHash(row.newCredentialId)) || "";
-    if (oldHash && newHash) {
-      await moveBindingFingerprintIfCurrent(row.employeeId, row.orgId, oldHash, newHash).catch(() => false);
     }
     await appendAuditEvent({
       orgId: row.orgId,

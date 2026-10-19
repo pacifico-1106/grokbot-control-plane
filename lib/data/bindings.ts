@@ -286,6 +286,8 @@ export async function moveBindingFingerprintIfCurrent(
 ): Promise<boolean> {
   if (!employeeId || !orgId || !expectedCurrent || !next) return false;
   if (isDemoMode()) {
+    const { demoOverlapFingerprintMoveShouldFail } = await import("./credential-renewals");
+    if (demoOverlapFingerprintMoveShouldFail()) return false;
     const { moveBindingFingerprintIfCurrent: demoMove } = await import("../bindings");
     return demoMove(employeeId, orgId, expectedCurrent, next);
   }

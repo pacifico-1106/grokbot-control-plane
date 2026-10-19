@@ -865,6 +865,8 @@ try:
     assert query(
         "select to_regprocedure('public.attach_overlapped_new_credential(uuid,uuid,text,uuid,timestamptz)') is null"
         " and to_regprocedure('public.revoke_expired_overlapped_old_credential(uuid,uuid,uuid,uuid,timestamptz)') is null"
+        " and to_regprocedure('public.complete_overlapped_credential_switchover(uuid,uuid,uuid,uuid,uuid,boolean)') is null"
+        " and to_regprocedure('public.issue_overlapped_new_credential(uuid,uuid,uuid,text,text,text,timestamptz,timestamptz,text[],text[],text,jsonb,jsonb,jsonb)') is null"
         " and to_regclass('public.credential_renewals') is not null"
         " and to_regprocedure('public.claim_credential_renewal(uuid,uuid,uuid,text,timestamptz)') is not null;"
     ) == "t"

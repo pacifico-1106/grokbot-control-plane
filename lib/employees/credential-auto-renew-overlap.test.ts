@@ -10,9 +10,13 @@ import { fulfillApprovedAdmin } from "@/lib/admin-mcp/fulfill-admin";
 import { fingerprintSecret, getBinding, rotateCredential as demoRotate } from "@/lib/bindings";
 import { resolveApproval, rotateCredential } from "@/lib/data";
 import {
+  demoGetOverlapCredential,
   demoListCredentialRenewals,
   demoPatchCredentialRenewal,
   demoResetCredentialRenewals,
+  demoSetOverlapAttachFail,
+  demoSetOverlapCleanupFail,
+  demoSetOverlapFingerprintMoveFail,
   demoSetOverlapRevokeFail,
 } from "@/lib/data/credential-renewals";
 import { resetDemoAdminAgent } from "@/lib/data/admin-agents";
@@ -245,6 +249,28 @@ describe("issueCredentialOverlap (R3)", () => {
     expect(demoListCredentialRenewals().filter((r) => r.employeeId === emp.id && r.state === "claimed")).toHaveLength(1);
   });
 
+  test("M2: mint attach fail + cleanup fail is recorded, not swallowed", async () => {
+    const emp = newEmployee(ORG_A);
+    bindOld(emp, oldSecret());
+    await openClaimable(emp);
+    demoSetOverlapAttachFail(true);
+    demoSetOverlapCleanupFail(true);
+    const issued = await issueCredentialOverlap({
+      orgId: ORG_A,
+      employeeId: emp.id,
+      oldCredentialId: emp.credentialId!,
+    });
+    expect(issued.ok).toBe(false);
+    if (!issued.ok) expect(issued.code).toBe("cleanup_failed");
+    const denied = getRuntimeAudit().find(
+      (e) => e.action === "credential.renew_claim_denied" && e.employeeId === emp.id && e.metadata?.code === "cleanup_failed"
+    );
+    expect(denied).toBeDefined();
+    expect(JSON.stringify(denied)).not.toMatch(SECRETISH);
+    demoSetOverlapAttachFail(false);
+    demoSetOverlapCleanupFail(false);
+  });
+
   test("unapproved window → not_claimable", async () => {
     const emp = newEmployee(ORG_A);
     bindOld(emp, oldSecret());
@@ -364,6 +390,54 @@ describe("auth overlap + first_auth switchover", () => {
       )
     ).toBe(false);
   });
+
+  test("M1: fingerprint move fail after revoke is not complete — old stays live, no revoked audit", async () => {
+    const { resolveEmployeeCredential } = await import("@/lib/auth/employee-credential");
+    const emp = newEmployee(ORG_A);
+    const secret = oldSecret();
+    bindOld(emp, secret);
+    const fpBefore = getBinding(emp.id)?.credentialFingerprint;
+    await openClaimable(emp);
+    const issued = await issueCredentialOverlap({
+      orgId: ORG_A,
+      employeeId: emp.id,
+      oldCredentialId: emp.credentialId!,
+    });
+    if (!issued.ok) throw new Error("expected issue");
+    demoSetOverlapFingerprintMoveFail(true);
+    const first = await resolveEmployeeCredential(req(issued.secret.raw));
+    expect(first.ok).toBe(true);
+    expect(getBinding(emp.id)?.credentialFingerprint).toBe(fpBefore);
+    expect(demoListCredentialRenewals().find((r) => r.employeeId === emp.id)?.state).toBe("claimed");
+    expect(demoGetOverlapCredential(emp.credentialId!)?.revokedAt ?? null).toBeNull();
+    expect((await resolveEmployeeCredential(req(secret))).ok).toBe(true);
+    expect(
+      getRuntimeAudit().some(
+        (e) => e.action === "credential.renew_old_revoked" && e.employeeId === emp.id && e.metadata?.reason === "first_auth"
+      )
+    ).toBe(false);
+    demoSetOverlapFingerprintMoveFail(false);
+  });
+
+  test("L1: after overlap_until, new badge is not accepted; old still works until switchover", async () => {
+    const { resolveEmployeeCredential } = await import("@/lib/auth/employee-credential");
+    const emp = newEmployee(ORG_A);
+    const secret = oldSecret();
+    bindOld(emp, secret);
+    await openClaimable(emp);
+    const issued = await issueCredentialOverlap({
+      orgId: ORG_A,
+      employeeId: emp.id,
+      oldCredentialId: emp.credentialId!,
+    });
+    if (!issued.ok) throw new Error("expected issue");
+    const row = demoListCredentialRenewals().find((r) => r.employeeId === emp.id)!;
+    demoPatchCredentialRenewal(row.id, {
+      overlapUntil: new Date(Date.now() - 1000).toISOString(),
+    });
+    expect((await resolveEmployeeCredential(req(issued.secret.raw))).ok).toBe(false);
+    expect((await resolveEmployeeCredential(req(secret))).ok).toBe(true);
+  });
 });
 
 describe("24h overlap cron", () => {
@@ -413,6 +487,39 @@ describe("24h overlap cron", () => {
     expect((await resolveEmployeeCredential(req(secret))).ok).toBe(false);
     expect((await resolveEmployeeCredential(req(issued.secret.raw))).ok).toBe(true);
   });
+
+  test("L2: if the new badge is already revoked, cron expires the renewal and leaves the old badge live", async () => {
+    const { resolveEmployeeCredential } = await import("@/lib/auth/employee-credential");
+    const emp = newEmployee(ORG_A);
+    const secret = oldSecret();
+    bindOld(emp, secret);
+    await openClaimable(emp);
+    const issued = await issueCredentialOverlap({
+      orgId: ORG_A,
+      employeeId: emp.id,
+      oldCredentialId: emp.credentialId!,
+    });
+    if (!issued.ok) throw new Error("expected issue");
+    const row = demoListCredentialRenewals().find((r) => r.employeeId === emp.id)!;
+    const neu = demoGetOverlapCredential(issued.newCredentialId);
+    expect(neu).toBeTruthy();
+    demoPatchCredentialRenewal(row.id, {
+      overlapUntil: new Date(Date.now() - 1000).toISOString(),
+    });
+    if (neu) {
+      const { demoPutOverlapCredential } = await import("@/lib/data/credential-renewals");
+      demoPutOverlapCredential({ ...neu, revokedAt: new Date().toISOString() });
+    }
+    const ran = await expireOverlappedOldCredentials();
+    expect(ran.revoked).toBe(0);
+    expect(demoListCredentialRenewals().find((r) => r.id === row.id)?.state).toBe("expired");
+    expect((await resolveEmployeeCredential(req(secret))).ok).toBe(true);
+    expect(
+      getRuntimeAudit().some(
+        (e) => e.action === "credential.renew_old_revoked" && e.employeeId === emp.id && e.metadata?.reason === "overlap_timeout"
+      )
+    ).toBe(false);
+  });
 });
 
 describe("rotate stays immediate; R8/R5 stay out", () => {
@@ -433,6 +540,21 @@ describe("rotate stays immediate; R8/R5 stay out", () => {
     expect((await resolveEmployeeCredential(req(secret))).ok).toBe(false);
     expect((await resolveEmployeeCredential(req(issued.secret.raw))).ok).toBe(false);
     expect((await resolveEmployeeCredential(req(rotatedSecret))).ok).toBe(true);
+  });
+
+  test("L3: overlap DB fixture aborts outside the disposable test cluster", () => {
+    const sql = readFileSync(resolve("tests/security/db-credential-auto-renew-overlap.sql"), "utf8");
+    expect(sql).toMatch(/to_regnamespace\('security_test'\)/);
+    expect(sql).toMatch(/current_user\s+is distinct from\s+'test_admin'|current_user\s*<>\s*'test_admin'/);
+    expect(sql).toMatch(/refuse outside disposable test cluster/i);
+    const disableAt = sql.indexOf("disable trigger employee_holds_guard");
+    const enableAt = sql.indexOf("enable trigger employee_holds_guard");
+    const beginAt = sql.lastIndexOf("begin;", disableAt);
+    const commitAt = sql.indexOf("commit;", enableAt);
+    expect(disableAt).toBeGreaterThan(-1);
+    expect(enableAt).toBeGreaterThan(disableAt);
+    expect(beginAt).toBeGreaterThan(-1);
+    expect(commitAt).toBeGreaterThan(enableAt);
   });
 
   test("R8 HTTP claim route and R5 boot script are not in this PR", () => {
