@@ -13,14 +13,20 @@
  * - Org name must be real text (not the demo placeholder), ≤ 100 chars, no
  *   control characters.
  *
+ * ORG_NAME_INPUT_STRICT_ENABLED (default OFF):
+ * - When ON: additionally rejects bidi / zero-width / invisible / URL-like strings.
+ * - When OFF: existing behavior preserved.
+ *
  * Runs BEFORE any Auth user / org is created and before any email is sent.
  */
 import { DEMO_ORG } from "@/lib/demo-data";
 import type { TurnstileVerifyResult } from "@/lib/lp/turnstile";
+import { validateOrgNameStrict, ORG_NAME_MAX_LENGTH } from "@/lib/text/org-name";
+import { isOrgNameInputStrictEnabled } from "@/lib/feature-flags";
 
 export const SIGNUP_TURNSTILE_ACTION = "signup";
 export const SIGNUP_HONEYPOT_FIELD = "company_website";
-export const SIGNUP_ORG_NAME_MAX = 100;
+export const SIGNUP_ORG_NAME_MAX = ORG_NAME_MAX_LENGTH;
 export const REFERRAL_CODE_PATTERN = /^AIC-[A-Z0-9]{4,16}$/;
 
 export type SignupGuardInput = {
@@ -54,8 +60,20 @@ export function validateSignupOrgName(raw: string): { ok: true; value: string } 
   const v = (raw || "").normalize("NFKC").trim();
   if (!v) return { ok: false, message: "会社名を入力してください" };
   if (v === DEMO_ORG.name) return { ok: false, message: "会社名を入力してください（サンプルの会社名は使えません）" };
+
+  // Strict validation when flag is ON (uses code points for length limit)
+  if (isOrgNameInputStrictEnabled()) {
+    const strictResult = validateOrgNameStrict(v);
+    if (!strictResult.ok) return strictResult;
+    return { ok: true, value: strictResult.value };
+  }
+
+  // Flag OFF: use string.length for length limit (same as main)
   if (v.length > SIGNUP_ORG_NAME_MAX) return { ok: false, message: `会社名は${SIGNUP_ORG_NAME_MAX}文字以内で入力してください` };
+
+  // Base validation: control characters (always applies)
   if (CONTROL_CHARS.test(v)) return { ok: false, message: "会社名に使用できない文字が含まれています" };
+
   return { ok: true, value: v };
 }
 

@@ -1036,3 +1036,31 @@ export function aiPeerWakeRootWindowSeconds(): number {
     86_400
   );
 }
+
+/**
+ * ORG_NAME_INPUT_STRICT_ENABLED (default OFF): strict org name validation at
+ * signup and orgs.create input time.
+ *
+ * When ON:
+ * - Reject bidi control characters (U+202A–202E, U+2066–2069, U+200E/F, U+061C)
+ * - Reject zero-width and invisible characters (U+200B–200D, U+2060, U+FEFF,
+ *   U+00AD, U+180E)
+ * - Reject control characters and CR/LF
+ * - Reject URL-like strings (http/https/javascript/data/vbscript/file/mailto
+ *   schemes, www. prefix, domain-like tokens like example.com or evil.co.jp/x)
+ * - Error messages do not echo the input value.
+ *
+ * False positive avoidance:
+ * - Japanese company names (株式会社スペースツリー, 一般社団法人みらい社中)
+ * - English company names with periods (TOKYO307 Inc., A&B Co., Ltd.)
+ * - Full-width space (正規化後に通常スペースになる)
+ * - Regular periods in names (T.K. Holdings)
+ * - Domain detection is limited to alphanumeric labels + TLD (2+ letters)
+ *
+ * When OFF (default):
+ * - Existing validation behavior preserved.
+ * - Base validation (empty, length, demo placeholder) still applies.
+ */
+export function isOrgNameInputStrictEnabled(): boolean {
+  return parseFlag(process.env.ORG_NAME_INPUT_STRICT_ENABLED);
+}

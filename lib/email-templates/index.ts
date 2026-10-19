@@ -6,15 +6,12 @@ import {
   isApprovalMailSubjectNoSummaryEnabled,
   isWelcomeMailFixedSubjectEnabled,
 } from "@/lib/feature-flags";
-import {
-  LP_INQUIRY_FIELD_MAX,
-  sanitizeInquiryPlainText,
-} from "@/lib/lp/inquiry-mail";
+import { sanitizeTextForMail } from "@/lib/text/org-name";
 
 export const WELCOME_MAIL_FIXED_SUBJECT = `ようこそ — ${SERVICE_LABEL}`;
 export const TRIAL_STARTED_FIXED_SUBJECT = `トライアル開始 — ${SERVICE_LABEL}`;
 export const TRIAL_ENDING_FIXED_SUBJECT = `トライアル終了のお知らせ — ${SERVICE_LABEL}`;
-export const WELCOME_MAIL_ORG_NAME_MAX = LP_INQUIRY_FIELD_MAX;
+export const WELCOME_MAIL_ORG_NAME_MAX = 200;
 
 export type ApprovalMailMeta = {
   kind?: string;
@@ -65,7 +62,7 @@ function statusLabelJa(statusLabel: string): string {
 
 function orgNameForMailBody(orgName: string): string {
   if (!isWelcomeMailFixedSubjectEnabled()) return escapeHtml(orgName);
-  return escapeHtml(sanitizeInquiryPlainText(orgName, WELCOME_MAIL_ORG_NAME_MAX));
+  return escapeHtml(sanitizeTextForMail(orgName, WELCOME_MAIL_ORG_NAME_MAX));
 }
 
 export function welcomeTemplate(orgName: string) {
