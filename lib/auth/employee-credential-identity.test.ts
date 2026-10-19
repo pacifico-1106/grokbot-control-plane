@@ -87,6 +87,14 @@ mock.module("@/lib/mode", () => ({
 }));
 mock.module("@/lib/safety/hold", () => ({
   checkOperable: async () => ({ ok: true }),
+  preSendHoldCode: async () => null,
+}));
+mock.module("@/lib/employees/credential-auto-renew-overlap", () => ({
+  overlapNewCredentialAllowed: async () => false,
+  completeCredentialOverlapOnFirstAuth: async () => false,
+}));
+mock.module("@/lib/data/credential-renewals", () => ({
+  demoGetOverlapCredentialByHash: () => null,
 }));
 mock.module("@/lib/data", () => ({
   findBindingByCredentialFingerprint: async (hash: string) => bindingByHash[hash] ?? null,

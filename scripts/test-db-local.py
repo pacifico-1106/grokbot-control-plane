@@ -856,6 +856,26 @@ try:
           "claim/release require active+unheld+approved+live old; new_credential ON DELETE RESTRICT; "
           "expire_stale_credential_renewals; no secret/prefix/public-key columns; "
           "re-applicable; rollback drops table + 6 functions; forward again.")
+    # 社員証 auto-renew R3 overlap attach / timeout revoke (20261020100000).
+    caro = ROOT / "supabase/migrations/20261020100000_credential_auto_renew_overlap.sql"
+    sql(caro)
+    sql(caro)  # re-applicable
+    sql(ROOT / "tests/security/db-credential-auto-renew-overlap.sql")
+    sql(ROOT / "supabase/verification/20261020100000_credential_auto_renew_overlap_rollback.sql")
+    assert query(
+        "select to_regprocedure('public.attach_overlapped_new_credential(uuid,uuid,text,uuid,timestamptz)') is null"
+        " and to_regprocedure('public.revoke_expired_overlapped_old_credential(uuid,uuid,uuid,uuid,timestamptz)') is null"
+        " and to_regprocedure('public.complete_overlapped_credential_switchover(uuid,uuid,uuid,uuid,uuid,boolean)') is null"
+        " and to_regprocedure('public.issue_overlapped_new_credential(uuid,uuid,uuid,text,text,text,timestamptz,timestamptz,text[],text[],text,jsonb,jsonb,jsonb)') is null"
+        " and to_regclass('public.credential_renewals') is not null"
+        " and to_regprocedure('public.claim_credential_renewal(uuid,uuid,uuid,text,timestamptz)') is not null;"
+    ) == "t"
+    sql(caro)  # forward again after rollback
+    sql(ROOT / "tests/security/db-credential-auto-renew-overlap.sql")
+    print("PASS: credential auto-renew overlap (20261020100000): attach once with own token; "
+          "timeout revoke works while held; other org / old=new / before window false; "
+          "false revoke does not mark old dead; anon/authenticated cannot execute; "
+          "re-applicable; rollback drops 2 functions and keeps 20261019100000; forward again.")
     print("PASS: approver authority (PR-D): owner / designated admin decision table; flag-OFF 7-argument W1 call unchanged; standard ticket → designated admin stored, others refused; owner ticket → designated admin endorsed once and kept pending, owner approves and is stored; zero owners stop; multiple owners: any one owner other than the requester (requesting owner refused; a sole owner's own approval counts; several owners all requesters → no_owner_other_than_requester); reject / non-target not gated; record_approver_authority verified/endorse; one RPC overload; EXECUTE service_role only; rollback restores the 7-argument RPC + re-apply.")
     print("PASS: approver context CAS (TOCTOU follow-up): policy.patch / schedulingPolicy.patch writes only when the locked row still equals the pinned snapshot; concurrent change between check and write → approver_context_changed with nothing written (employee row, active and revoked credentials, org / employee scheduling policy); ticket binding (fingerprint, missing fingerprint, status, tool, target, org) refused; invalid input refused; EXECUTE service_role only; 12 concurrent writers with one snapshot → exactly 1 write (both RPCs); rollback drops both RPCs (PR-D untouched) + re-apply.")
     print("PASS: employee_webhook_settings (D9): RLS on, no policy, anon/authenticated denied, service_role reads/writes/upserts; cross-org row rejected; payload mode minimal|legacy_full (default minimal); ciphertext-only secret + fingerprint pair; employee delete cascades; rollback + re-apply.")

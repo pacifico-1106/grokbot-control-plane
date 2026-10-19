@@ -42,10 +42,56 @@ export type CredentialRenewalRow = {
 };
 
 const demoRows = new Map<string, CredentialRenewalRow>();
+/** Demo CAS nonce — never copied onto CredentialRenewalRow / logs. */
+const demoClaimTokens = new Map<string, string>();
+
+export type DemoOverlapCredential = {
+  id: string;
+  orgId: string;
+  employeeId: string;
+  secretHash: string;
+  oldSecretHash: string;
+  expiresAt: string | null;
+  revokedAt: string | null;
+};
+
+const demoOverlapCredentials = new Map<string, DemoOverlapCredential>();
+/** Tests only: next demo revoke returns false (do not treat old as dead). */
+let demoOverlapRevokeFail = false;
+/** Tests only: attach / fingerprint-move / mint cleanup fail closed. */
+let demoOverlapAttachFail = false;
+let demoOverlapFingerprintMoveFail = false;
+let demoOverlapCleanupFail = false;
+
+export function demoSetOverlapRevokeFail(fail: boolean): void {
+  demoOverlapRevokeFail = fail;
+}
+
+export function demoSetOverlapAttachFail(fail: boolean): void {
+  demoOverlapAttachFail = fail;
+}
+
+export function demoSetOverlapFingerprintMoveFail(fail: boolean): void {
+  demoOverlapFingerprintMoveFail = fail;
+}
+
+export function demoOverlapFingerprintMoveShouldFail(): boolean {
+  return demoOverlapFingerprintMoveFail;
+}
+
+export function demoSetOverlapCleanupFail(fail: boolean): void {
+  demoOverlapCleanupFail = fail;
+}
 
 /** Tests / demo only. */
 export function demoResetCredentialRenewals(): void {
   demoRows.clear();
+  demoClaimTokens.clear();
+  demoOverlapCredentials.clear();
+  demoOverlapRevokeFail = false;
+  demoOverlapAttachFail = false;
+  demoOverlapFingerprintMoveFail = false;
+  demoOverlapCleanupFail = false;
 }
 
 /** Tests / demo only — inspect rows in any state (including rejected / expired). */
@@ -337,4 +383,447 @@ export async function markCredentialRenewalClaimable(input: {
     .maybeSingle();
   if (error || !data) return null;
   return withoutSecrets(mapRow(data as Record<string, unknown>));
+}
+
+function rpcFailed(error: { message?: string } | null): false {
+  if (!error) return false;
+  const msg = String(error.message || "");
+  if (msg.includes("invalid_claim_token")) throw new Error("invalid_claim_token");
+  if (msg.includes("credential_renewal_revoke_incomplete")) throw new Error("credential_renewal_revoke_incomplete");
+  if (msg.includes("credential_renewal_switchover_incomplete")) throw new Error("credential_renewal_switchover_incomplete");
+  return false;
+}
+
+export async function claimCredentialRenewal(input: {
+  id: string;
+  orgId: string;
+  employeeId: string;
+  token: string;
+  at: string;
+}): Promise<boolean> {
+  if (!input.token || input.token.length < 16) throw new Error("invalid_claim_token");
+  if (isDemoMode()) {
+    const row = demoRows.get(input.id);
+    if (!row || row.orgId !== input.orgId || row.employeeId !== input.employeeId) return false;
+    if (row.state !== "claimable" || row.claimedAt || demoClaimTokens.has(row.id)) return false;
+    const until = row.claimableUntil ? Date.parse(row.claimableUntil) : NaN;
+    if (!Number.isFinite(until) || until < Date.now()) return false;
+    demoClaimTokens.set(row.id, input.token);
+    demoRows.set(row.id, { ...row, state: "claimed", claimedAt: input.at });
+    return true;
+  }
+  const admin = createSupabaseAdminClient();
+  if (!admin) return false;
+  const { data, error } = await admin.rpc("claim_credential_renewal", {
+    p_id: input.id,
+    p_org: input.orgId,
+    p_employee: input.employeeId,
+    p_token: input.token,
+    p_at: input.at,
+  });
+  if (error) return rpcFailed(error);
+  return data === true;
+}
+
+export async function releaseCredentialRenewal(input: {
+  id: string;
+  orgId: string;
+  token: string;
+}): Promise<boolean> {
+  if (!input.token) return false;
+  if (isDemoMode()) {
+    if (demoOverlapCleanupFail) return false;
+    const row = demoRows.get(input.id);
+    if (!row || row.orgId !== input.orgId || row.state !== "claimed" || row.newCredentialId) return false;
+    if (demoClaimTokens.get(row.id) !== input.token) return false;
+    demoClaimTokens.delete(row.id);
+    demoRows.set(row.id, { ...row, state: "claimable", claimedAt: null });
+    return true;
+  }
+  const admin = createSupabaseAdminClient();
+  if (!admin) return false;
+  const { data, error } = await admin.rpc("release_credential_renewal", {
+    p_id: input.id,
+    p_org: input.orgId,
+    p_token: input.token,
+  });
+  if (error) return false;
+  return data === true;
+}
+
+export async function issueOverlappedNewCredential(input: {
+  id: string;
+  orgId: string;
+  employeeId: string;
+  token: string;
+  secretHash: string;
+  secretPrefix: string;
+  expiresAt: string;
+  overlapUntil: string;
+  oldSecretHash: string;
+  scopes: unknown;
+  allowedPurposes: unknown;
+  approvalPolicy: unknown;
+  actionLimits: unknown;
+  spend: unknown;
+  allowedAccounts: unknown;
+}): Promise<{ newCredentialId: string; generation: number } | null> {
+  if (!input.token || !input.secretHash) return null;
+  if (isDemoMode()) {
+    if (demoOverlapAttachFail) return null;
+    const inserted = await insertOverlapCredentialRow({
+      orgId: input.orgId,
+      employeeId: input.employeeId,
+      secretHash: input.secretHash,
+      secretPrefix: input.secretPrefix,
+      expiresAt: input.expiresAt,
+      oldSecretHash: input.oldSecretHash,
+      scopes: input.scopes,
+      allowedPurposes: input.allowedPurposes,
+      approvalPolicy: input.approvalPolicy,
+      actionLimits: input.actionLimits,
+      spend: input.spend,
+      allowedAccounts: input.allowedAccounts,
+    });
+    if (!inserted) return null;
+    try {
+      const { bumpCredentialGenerationKeepFingerprint } = await import("@/lib/data/bindings");
+      const bumped = await bumpCredentialGenerationKeepFingerprint(input.employeeId, input.orgId);
+      const attached = await attachOverlappedNewCredential({
+        id: input.id,
+        orgId: input.orgId,
+        token: input.token,
+        newCredentialId: inserted,
+        overlapUntil: input.overlapUntil,
+      });
+      if (!attached) throw new Error("overlap_attach_failed");
+      return { newCredentialId: inserted, generation: bumped.generation };
+    } catch {
+      await revokeInsertedOverlapCredential({ orgId: input.orgId, credentialId: inserted });
+      return null;
+    }
+  }
+  const admin = createSupabaseAdminClient();
+  if (!admin) return null;
+  const { data, error } = await admin.rpc("issue_overlapped_new_credential", {
+    p_id: input.id,
+    p_org: input.orgId,
+    p_employee: input.employeeId,
+    p_token: input.token,
+    p_secret_hash: input.secretHash,
+    p_secret_prefix: input.secretPrefix,
+    p_expires_at: input.expiresAt,
+    p_overlap_until: input.overlapUntil,
+    p_scopes: input.scopes,
+    p_allowed_purposes: input.allowedPurposes,
+    p_approval_policy: input.approvalPolicy,
+    p_action_limits: input.actionLimits,
+    p_spend: input.spend,
+    p_allowed_accounts: input.allowedAccounts,
+  });
+  if (error) {
+    rpcFailed(error);
+    return null;
+  }
+  const row = Array.isArray(data) ? data[0] : data;
+  const id = row && typeof row === "object" ? String((row as { new_credential_id?: string }).new_credential_id || "") : "";
+  const generation = row && typeof row === "object" ? Number((row as { generation?: number }).generation) : NaN;
+  if (!id || !Number.isFinite(generation)) return null;
+  return { newCredentialId: id, generation };
+}
+
+export async function attachOverlappedNewCredential(input: {
+  id: string;
+  orgId: string;
+  token: string;
+  newCredentialId: string;
+  overlapUntil: string;
+}): Promise<boolean> {
+  if (!input.token || !input.newCredentialId) return false;
+  if (isDemoMode()) {
+    if (demoOverlapAttachFail) return false;
+    const row = demoRows.get(input.id);
+    if (!row || row.orgId !== input.orgId || row.state !== "claimed" || row.newCredentialId) return false;
+    if (demoClaimTokens.get(row.id) !== input.token) return false;
+    demoRows.set(row.id, {
+      ...row,
+      newCredentialId: input.newCredentialId,
+      overlapUntil: input.overlapUntil,
+    });
+    return true;
+  }
+  const admin = createSupabaseAdminClient();
+  if (!admin) return false;
+  const { data, error } = await admin.rpc("attach_overlapped_new_credential", {
+    p_id: input.id,
+    p_org: input.orgId,
+    p_token: input.token,
+    p_new: input.newCredentialId,
+    p_overlap_until: input.overlapUntil,
+  });
+  if (error) return rpcFailed(error);
+  return data === true;
+}
+
+async function demoCompleteSwitchover(input: {
+  renewalId: string;
+  orgId: string;
+  employeeId: string;
+  oldCredentialId: string;
+  newCredentialId: string;
+}): Promise<boolean> {
+  if (demoOverlapRevokeFail) return false;
+  const row = demoRows.get(input.renewalId);
+  if (!row || row.orgId !== input.orgId || row.employeeId !== input.employeeId) return false;
+  if (row.oldCredentialId !== input.oldCredentialId || row.newCredentialId !== input.newCredentialId) return false;
+  if (row.state !== "claimed" && row.state !== "old_revoked") return false;
+  const neu = demoOverlapCredentials.get(input.newCredentialId);
+  if (neu?.revokedAt) return false;
+  const snapshot = { ...row };
+  const oldSnap = [...demoOverlapCredentials.values()].find((c) => c.id === input.oldCredentialId);
+  const { getBinding } = await import("@/lib/data/bindings");
+  const oldHash =
+    oldSnap?.secretHash ||
+    neu?.oldSecretHash ||
+    (await getBinding(input.employeeId))?.credentialFingerprint ||
+    "";
+  const newHash = neu?.secretHash || "";
+  if (demoOverlapFingerprintMoveFail) return false;
+  try {
+    if (oldSnap) {
+      demoOverlapCredentials.set(oldSnap.id, { ...oldSnap, revokedAt: oldSnap.revokedAt ?? new Date().toISOString() });
+    }
+    const now = new Date().toISOString();
+    demoRows.set(row.id, { ...row, state: "old_revoked", oldRevokedAt: row.oldRevokedAt ?? now });
+    if (oldHash && newHash) {
+      const { moveBindingFingerprintIfCurrent } = await import("@/lib/data/bindings");
+      const moved = await moveBindingFingerprintIfCurrent(input.employeeId, input.orgId, oldHash, newHash);
+      if (!moved) throw new Error("fingerprint_move_failed");
+    } else {
+      throw new Error("fingerprint_move_failed");
+    }
+    return true;
+  } catch {
+    demoRows.set(row.id, snapshot);
+    if (oldSnap) demoOverlapCredentials.set(oldSnap.id, oldSnap);
+    return false;
+  }
+}
+
+export async function completeOverlappedCredentialSwitchover(input: {
+  renewalId: string;
+  orgId: string;
+  employeeId: string;
+  oldCredentialId: string;
+  newCredentialId: string;
+}): Promise<boolean> {
+  if (isDemoMode()) return demoCompleteSwitchover(input);
+  const admin = createSupabaseAdminClient();
+  if (!admin) return false;
+  const { data, error } = await admin.rpc("complete_overlapped_credential_switchover", {
+    p_renewal: input.renewalId,
+    p_org: input.orgId,
+    p_employee: input.employeeId,
+    p_old: input.oldCredentialId,
+    p_new: input.newCredentialId,
+    p_require_operable: true,
+  });
+  if (error) return rpcFailed(error);
+  return data === true;
+}
+
+export async function revokeExpiredOverlappedOldCredential(input: {
+  renewalId: string;
+  orgId: string;
+  oldCredentialId: string;
+  newCredentialId: string;
+  at?: Date;
+}): Promise<"switched" | "expired" | null> {
+  const at = input.at ?? new Date();
+  if (isDemoMode()) {
+    const row = demoRows.get(input.renewalId);
+    if (!row || row.orgId !== input.orgId) return null;
+    if (row.oldCredentialId !== input.oldCredentialId || row.newCredentialId !== input.newCredentialId) return null;
+    const until = row.overlapUntil ? Date.parse(row.overlapUntil) : NaN;
+    if (!Number.isFinite(until) || until >= at.getTime()) return null;
+    const neu = row.newCredentialId ? demoOverlapCredentials.get(row.newCredentialId) : null;
+    if (neu?.revokedAt) {
+      if (row.state === "claimed") demoRows.set(row.id, { ...row, state: "expired" });
+      return "expired";
+    }
+    const ok = await demoCompleteSwitchover({
+      renewalId: input.renewalId,
+      orgId: input.orgId,
+      employeeId: row.employeeId,
+      oldCredentialId: input.oldCredentialId,
+      newCredentialId: input.newCredentialId,
+    });
+    return ok ? "switched" : null;
+  }
+  const admin = createSupabaseAdminClient();
+  if (!admin) return null;
+  const { data, error } = await admin.rpc("revoke_expired_overlapped_old_credential", {
+    p_renewal: input.renewalId,
+    p_org: input.orgId,
+    p_old: input.oldCredentialId,
+    p_new: input.newCredentialId,
+    p_at: at.toISOString(),
+  });
+  if (error) {
+    rpcFailed(error);
+    return null;
+  }
+  if (data === "switched" || data === "expired") return data;
+  return null;
+}
+
+export async function findClaimedOverlapByNewCredential(
+  orgId: string,
+  newCredentialId: string
+): Promise<CredentialRenewalRow | null> {
+  if (!orgId || !newCredentialId) return null;
+  if (isDemoMode()) {
+    const rows = [...demoRows.values()].filter(
+      (r) => r.orgId === orgId && r.newCredentialId === newCredentialId && r.state === "claimed"
+    );
+    return rows[0] ? withoutSecrets(rows[0]) : null;
+  }
+  const admin = createSupabaseAdminClient();
+  if (!admin) return null;
+  const { data, error } = await admin
+    .from("credential_renewals")
+    .select("id, org_id, employee_id, old_credential_id, new_credential_id, approval_id, threshold, state, mode, claimable_until, overlap_until, claimed_at, old_revoked_at, created_at")
+    .eq("org_id", orgId)
+    .eq("new_credential_id", newCredentialId)
+    .eq("state", "claimed")
+    .maybeSingle();
+  if (error || !data) return null;
+  return withoutSecrets(mapRow(data as Record<string, unknown>));
+}
+
+export async function listExpiredOverlapRenewals(now?: Date): Promise<CredentialRenewalRow[]> {
+  const at = now ?? new Date();
+  if (isDemoMode()) {
+    return [...demoRows.values()]
+      .filter((r) => {
+        if (r.state !== "claimed" || !r.newCredentialId || r.oldRevokedAt) return false;
+        const until = r.overlapUntil ? Date.parse(r.overlapUntil) : NaN;
+        return Number.isFinite(until) && until < at.getTime();
+      })
+      .map(withoutSecrets);
+  }
+  const admin = createSupabaseAdminClient();
+  if (!admin) return [];
+  const { data, error } = await admin
+    .from("credential_renewals")
+    .select("id, org_id, employee_id, old_credential_id, new_credential_id, approval_id, threshold, state, mode, claimable_until, overlap_until, claimed_at, old_revoked_at, created_at")
+    .eq("state", "claimed")
+    .not("new_credential_id", "is", null)
+    .is("old_revoked_at", null)
+    .lt("overlap_until", at.toISOString());
+  if (error || !data) return [];
+  return data.map((row) => withoutSecrets(mapRow(row as Record<string, unknown>)));
+}
+
+export async function getCredentialSecretHash(credentialId: string): Promise<string | null> {
+  if (!credentialId) return null;
+  if (isDemoMode()) {
+    const cred = demoOverlapCredentials.get(credentialId);
+    return cred?.secretHash ?? null;
+  }
+  const admin = createSupabaseAdminClient();
+  if (!admin) return null;
+  const { data, error } = await admin.from("credentials").select("secret_hash").eq("id", credentialId).maybeSingle();
+  if (error || !data) return null;
+  const hash = (data as { secret_hash?: string }).secret_hash;
+  return typeof hash === "string" && hash ? hash : null;
+}
+
+export function demoPutOverlapCredential(row: DemoOverlapCredential): DemoOverlapCredential {
+  demoOverlapCredentials.set(row.id, { ...row });
+  return { ...row };
+}
+
+export function demoGetOverlapCredentialByHash(hash: string): DemoOverlapCredential | null {
+  if (!hash) return null;
+  for (const row of demoOverlapCredentials.values()) {
+    if (row.secretHash === hash) return { ...row };
+  }
+  return null;
+}
+
+export function demoGetOverlapCredential(id: string): DemoOverlapCredential | null {
+  const row = demoOverlapCredentials.get(id);
+  return row ? { ...row } : null;
+}
+
+export async function insertOverlapCredentialRow(input: {
+  orgId: string;
+  employeeId: string;
+  secretHash: string;
+  secretPrefix: string;
+  expiresAt: string;
+  oldSecretHash: string;
+  scopes: unknown;
+  allowedPurposes: unknown;
+  approvalPolicy: unknown;
+  actionLimits: unknown;
+  spend: unknown;
+  allowedAccounts: unknown;
+}): Promise<string | null> {
+  if (isDemoMode()) {
+    const id = `cred_ov_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+    demoPutOverlapCredential({
+      id,
+      orgId: input.orgId,
+      employeeId: input.employeeId,
+      secretHash: input.secretHash,
+      oldSecretHash: input.oldSecretHash,
+      expiresAt: input.expiresAt,
+      revokedAt: null,
+    });
+    return id;
+  }
+  const admin = createSupabaseAdminClient();
+  if (!admin) return null;
+  const { data, error } = await admin
+    .from("credentials")
+    .insert({
+      org_id: input.orgId,
+      employee_id: input.employeeId,
+      secret_hash: input.secretHash,
+      secret_prefix: input.secretPrefix,
+      scopes: input.scopes,
+      allowed_purposes: input.allowedPurposes,
+      approval_policy: input.approvalPolicy,
+      action_limits: input.actionLimits,
+      spend: input.spend ?? null,
+      allowed_accounts: input.allowedAccounts ?? [],
+      expires_at: input.expiresAt,
+    })
+    .select("id")
+    .maybeSingle();
+  if (error || !data) return null;
+  return String((data as { id: string }).id);
+}
+
+export async function revokeInsertedOverlapCredential(input: {
+  orgId: string;
+  credentialId: string;
+}): Promise<void> {
+  if (!input.credentialId) return;
+  if (isDemoMode()) {
+    if (demoOverlapCleanupFail) throw new Error("overlap_cleanup_failed");
+    const row = demoOverlapCredentials.get(input.credentialId);
+    if (row) demoOverlapCredentials.set(row.id, { ...row, revokedAt: row.revokedAt ?? new Date().toISOString() });
+    return;
+  }
+  const admin = createSupabaseAdminClient();
+  if (!admin) return;
+  await admin
+    .from("credentials")
+    .update({ revoked_at: new Date().toISOString() })
+    .eq("id", input.credentialId)
+    .eq("org_id", input.orgId)
+    .is("revoked_at", null);
 }

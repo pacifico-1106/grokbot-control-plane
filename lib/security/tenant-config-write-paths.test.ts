@@ -82,6 +82,10 @@ const CREDENTIAL_READERS = [
   // service-role read of id / org_id / employee_id / expires_at of non-revoked
   // badges expiring within 7 days, from the daily cron (never secret_hash / prefix).
   "lib/data/credential-expiry-notices.ts",
+  // 社員証 auto-renew R3 overlap (flag CREDENTIAL_AUTO_RENEW_ENABLED):
+  // service-role read of secret_hash only to compare the old fingerprint during
+  // overlap / switchover (never the raw secret or claim_token).
+  "lib/data/credential-renewals.ts",
   "lib/data/employees.ts",
   // MCP Events (2026-10-05): service-role read of revoked_at / expires_at only,
   // re-checking the subscribing badge on every delivery attempt (never secret_hash).
@@ -149,6 +153,10 @@ describe("app: tenant config / credential tables are written only server-side", 
       "lib/data/bindings.ts:employee_bindings:upsert",
       // settings (requireOrgAdminSession), Slack bot install callback (signed state), admin fulfilment
       "lib/data/conversation-adapters.ts:org_conversation_adapters:upsert",
+      // 社員証 auto-renew R3 overlap (flag CREDENTIAL_AUTO_RENEW_ENABLED + org allowlist):
+      // insert the new live row; update revoked_at only if attach fails after insert.
+      "lib/data/credential-renewals.ts:credentials:insert",
+      "lib/data/credential-renewals.ts:credentials:update",
       // directory: settings (requireOrgAdminSession), audience ledger / classifiers, config-change service
       "lib/data/directory.ts:information_assets:upsert",
       "lib/data/directory.ts:org_channels:delete",

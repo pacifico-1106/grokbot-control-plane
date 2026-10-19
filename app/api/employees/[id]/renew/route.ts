@@ -3,6 +3,7 @@ import { getCurrentOrgId } from "@/lib/auth/session";
 import { requireCredentialAdmin } from "@/lib/auth/require-credential-admin";
 import { jsonUtf8 } from "@/lib/http/json-utf8";
 import {
+  isCredentialAutoRenewEnabled,
   isCredentialAutoRenewOnForOrg,
   proposeCredentialAutoRenewNow,
 } from "@/lib/employees/credential-auto-renew";
@@ -31,6 +32,9 @@ export async function POST(
   req: Request,
   ctx: { params: Promise<{ id: string }> }
 ) {
+  if (!isCredentialAutoRenewEnabled()) {
+    return jsonUtf8({ error: "feature_disabled" }, { status: 404 });
+  }
   const rawBody = (await req.json().catch(() => ({}))) as Record<string, unknown>;
   const gate = await requireCredentialAdmin(
     req,

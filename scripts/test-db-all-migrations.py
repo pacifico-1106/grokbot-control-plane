@@ -164,6 +164,13 @@ ADDITIVE = [
      "to_regclass('public.mcp_auth_failures') is null"
      " and to_regprocedure('public.record_mcp_auth_failure(text,uuid,uuid,uuid,text)') is null"
      " and to_regprocedure('public.touch_credential_last_used(uuid)') is null"),
+    # R3 child first: roll back overlap RPCs before R1 drops credential_renewals.
+    ("20261020100000_", "tests/security/db-credential-auto-renew-overlap.sql",
+     "to_regprocedure('public.attach_overlapped_new_credential(uuid,uuid,text,uuid,timestamptz)') is null"
+     " and to_regprocedure('public.revoke_expired_overlapped_old_credential(uuid,uuid,uuid,uuid,timestamptz)') is null"
+     " and to_regprocedure('public.complete_overlapped_credential_switchover(uuid,uuid,uuid,uuid,uuid,boolean)') is null"
+     " and to_regprocedure('public.issue_overlapped_new_credential(uuid,uuid,uuid,text,text,text,timestamptz,timestamptz,text[],text[],text,jsonb,jsonb,jsonb)') is null"
+     " and to_regclass('public.credential_renewals') is not null"),
     # 社員証 auto-renew (R1): table + 3 RPCs + same-org trigger fn.
     ("20261019100000_", "tests/security/db-credential-auto-renew.sql",
      "to_regclass('public.credential_renewals') is null"

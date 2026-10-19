@@ -1,6 +1,6 @@
 import { rejectUnauthorizedCron } from "@/lib/security/cron-secret";
 import { sendTenantDigests } from "@/lib/notify/channels";
-import { isCredentialExpiryNoticeEnabled } from "@/lib/feature-flags";
+import { isCredentialAutoRenewEnabled, isCredentialExpiryNoticeEnabled } from "@/lib/feature-flags";
 import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 export const runtime = "nodejs";
@@ -24,6 +24,14 @@ export async function GET(req: Request) {
       body.credentialExpiryNotice = await runCredentialExpiryNotices();
     } catch {
       body.credentialExpiryNotice = { error: "credential_expiry_notice_failed" };
+    }
+  }
+  if (isCredentialAutoRenewEnabled()) {
+    try {
+      const { expireOverlappedOldCredentials } = await import("@/lib/employees/credential-auto-renew-overlap");
+      body.credentialAutoRenewOverlap = await expireOverlappedOldCredentials();
+    } catch {
+      body.credentialAutoRenewOverlap = { error: "credential_auto_renew_overlap_failed" };
     }
   }
   return jsonUtf8(body);
