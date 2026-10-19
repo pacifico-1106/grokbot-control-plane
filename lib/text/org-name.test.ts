@@ -21,6 +21,8 @@ import {
   sanitizeTextForMail,
   validateOrgNameStrict,
   ORG_NAME_MAX_LENGTH,
+  ORG_NAME_MAX_LENGTH_ADMIN,
+  countCodePoints,
 } from "./org-name";
 
 describe("sanitizeTextForMail", () => {
@@ -97,6 +99,36 @@ describe("validateOrgNameStrict (flag OFF by default)", () => {
 describe("validateOrgNameStrict (flag ON)", () => {
   beforeEach(() => {
     process.env[FLAG] = "true";
+  });
+
+  describe("repeated calls with same input (regex /g flag regression)", () => {
+    test("control chars rejected on all 3 consecutive calls", () => {
+      const input = "株式会社\r\nテスト";
+      expect(validateOrgNameStrict(input).ok).toBe(false);
+      expect(validateOrgNameStrict(input).ok).toBe(false);
+      expect(validateOrgNameStrict(input).ok).toBe(false);
+    });
+
+    test("bidi chars rejected on all 3 consecutive calls", () => {
+      const input = "Test\u202EOrg";
+      expect(validateOrgNameStrict(input).ok).toBe(false);
+      expect(validateOrgNameStrict(input).ok).toBe(false);
+      expect(validateOrgNameStrict(input).ok).toBe(false);
+    });
+
+    test("invisible chars rejected on all 3 consecutive calls", () => {
+      const input = "Test\u200BOrg";
+      expect(validateOrgNameStrict(input).ok).toBe(false);
+      expect(validateOrgNameStrict(input).ok).toBe(false);
+      expect(validateOrgNameStrict(input).ok).toBe(false);
+    });
+
+    test("URL-like rejected on all 3 consecutive calls", () => {
+      const input = "https://example.com";
+      expect(validateOrgNameStrict(input).ok).toBe(false);
+      expect(validateOrgNameStrict(input).ok).toBe(false);
+      expect(validateOrgNameStrict(input).ok).toBe(false);
+    });
   });
 
   describe("basic validation", () => {
@@ -258,6 +290,60 @@ describe("validateOrgNameStrict (flag ON)", () => {
       expect(result.ok).toBe(false);
       if (!result.ok) expect(result.message).toContain("URL");
     });
+
+    // Extended URL detection (issue #406 review)
+    test("rejects hxxp:// obfuscated scheme", () => {
+      expect(validateOrgNameStrict("hxxp://example.com").ok).toBe(false);
+    });
+
+    test("rejects hxxps:// obfuscated scheme", () => {
+      expect(validateOrgNameStrict("hxxps://example.com").ok).toBe(false);
+    });
+
+    test("rejects ftp:// scheme", () => {
+      expect(validateOrgNameStrict("ftp://ftp.example.com").ok).toBe(false);
+    });
+
+    test("rejects scheme with space before colon (http ://)", () => {
+      expect(validateOrgNameStrict("http ://example.com").ok).toBe(false);
+    });
+
+    test("rejects scheme with NBSP before colon", () => {
+      expect(validateOrgNameStrict("http\u00A0://example.com").ok).toBe(false);
+    });
+
+    test("rejects scheme with combining characters", () => {
+      // h + combining acute accent + ttp://
+      expect(validateOrgNameStrict("h\u0301ttp://example.com").ok).toBe(false);
+    });
+
+    test("rejects IPv4 address", () => {
+      expect(validateOrgNameStrict("192.168.1.1").ok).toBe(false);
+    });
+
+    test("rejects IPv4 address with path", () => {
+      expect(validateOrgNameStrict("192.168.1.1/admin").ok).toBe(false);
+    });
+
+    test("rejects domain with fullwidth dot (。U+3002)", () => {
+      expect(validateOrgNameStrict("example。com").ok).toBe(false);
+    });
+
+    test("rejects punycode domain (xn--)", () => {
+      expect(validateOrgNameStrict("xn--n3h.com").ok).toBe(false);
+    });
+
+    test("rejects Japanese text adjacent to domain (株式会社malware.com)", () => {
+      expect(validateOrgNameStrict("株式会社malware.com").ok).toBe(false);
+    });
+
+    test("rejects domain adjacent to Japanese text (note.com株式会社)", () => {
+      expect(validateOrgNameStrict("note.com株式会社").ok).toBe(false);
+    });
+
+    test("rejects Japanese domain (日本語.com)", () => {
+      expect(validateOrgNameStrict("日本語.com").ok).toBe(false);
+    });
   });
 
   describe("false positive avoidance: allowed company name patterns", () => {
@@ -326,6 +412,77 @@ describe("validateOrgNameStrict (flag ON)", () => {
         expect(result.message).not.toContain("malware");
         expect(result.message).not.toContain("http");
       }
+    });
+  });
+
+  describe("length limits and code point counting", () => {
+    test("countCodePoints counts surrogate pairs as 1", () => {
+      // 𠮷 (U+20BB7) is a CJK Extension B character, 2 UTF-16 code units
+      expect(countCodePoints("𠮷")).toBe(1);
+      expect("𠮷".length).toBe(2);  // JavaScript string length
+      expect(countCodePoints("a𠮷b")).toBe(3);
+      expect("a𠮷b".length).toBe(4);  // JavaScript string length
+    });
+
+    test("countCodePoints counts emoji correctly", () => {
+      // 👍 (U+1F44D) is 2 UTF-16 code units
+      expect(countCodePoints("👍")).toBe(1);
+      expect("👍".length).toBe(2);
+    });
+
+    test("default max length is 100", () => {
+      expect(ORG_NAME_MAX_LENGTH).toBe(100);
+    });
+
+    test("admin max length is 200", () => {
+      expect(ORG_NAME_MAX_LENGTH_ADMIN).toBe(200);
+    });
+
+    test("rejects string with 101+ code points at default limit", () => {
+      const input = "株".repeat(101);  // 101 code points (each 株 is 1 code point)
+      const result = validateOrgNameStrict(input);
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.message).toContain("100文字");
+      }
+    });
+
+    test("accepts string with exactly 100 code points at default limit", () => {
+      const input = "株".repeat(100);
+      const result = validateOrgNameStrict(input);
+      expect(result.ok).toBe(true);
+    });
+
+    test("accepts string with 150 code points at admin limit (200)", () => {
+      const input = "株".repeat(150);
+      const result = validateOrgNameStrict(input, ORG_NAME_MAX_LENGTH_ADMIN);
+      expect(result.ok).toBe(true);
+    });
+
+    test("rejects string with 201+ code points at admin limit (200)", () => {
+      const input = "株".repeat(201);
+      const result = validateOrgNameStrict(input, ORG_NAME_MAX_LENGTH_ADMIN);
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.message).toContain("200文字");
+      }
+    });
+
+    test("counts surrogate pairs correctly for length limit", () => {
+      // 100 surrogate pair characters = 100 code points, 200 UTF-16 units
+      const input = "𠮷".repeat(100);
+      expect(input.length).toBe(200);  // UTF-16 units
+      expect(countCodePoints(input)).toBe(100);  // code points
+      const result = validateOrgNameStrict(input);
+      expect(result.ok).toBe(true);  // passes because 100 code points <= 100
+    });
+
+    test("rejects 101 surrogate pair characters at default limit", () => {
+      const input = "𠮷".repeat(101);
+      expect(input.length).toBe(202);  // UTF-16 units
+      expect(countCodePoints(input)).toBe(101);  // code points
+      const result = validateOrgNameStrict(input);
+      expect(result.ok).toBe(false);  // fails because 101 code points > 100
     });
   });
 });

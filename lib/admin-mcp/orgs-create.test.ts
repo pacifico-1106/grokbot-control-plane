@@ -193,17 +193,27 @@ describe("orgs.create validation", () => {
         expect(result2.ok).toBe(true);
       });
 
-      test("rejects org name exceeding max length", () => {
+      test("rejects org name exceeding max length (200 for admin)", () => {
+        // Admin path allows up to 200 characters when flag is ON
         const result = validateOrgCreateInput({
-          orgName: "a".repeat(101),
+          orgName: "a".repeat(201),
           ownerEmail: "test@example.com",
           invite: true,
         });
         expect(result.ok).toBe(false);
         if (!result.ok) {
           expect(result.code).toBe("invalid_org_name");
-          expect(result.message).toContain("100");
+          expect(result.message).toContain("200");
         }
+      });
+
+      test("accepts org name at 150 characters (between signup 100 and admin 200)", () => {
+        const result = validateOrgCreateInput({
+          orgName: "a".repeat(150),
+          ownerEmail: "test@example.com",
+          invite: true,
+        });
+        expect(result.ok).toBe(true);
       });
     });
   });
@@ -273,11 +283,11 @@ describe("orgs.create admin MCP: ORG_NAME_INPUT_STRICT_ENABLED", () => {
       expect(data.code).toBe("invalid_org_name");
     });
 
-    test("rejects org name exceeding 100 characters", async () => {
+    test("rejects org name exceeding 200 characters (admin limit)", async () => {
       const result = await callAdminMcpTool(
         "orgs.create",
         {
-          orgName: "a".repeat(101),
+          orgName: "a".repeat(201),
           ownerEmail: "test@example.com",
           invite: true,
         },

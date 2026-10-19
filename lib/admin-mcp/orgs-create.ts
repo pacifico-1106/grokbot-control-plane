@@ -18,12 +18,17 @@ import { isDemoMode } from "@/lib/mode";
 import { createSupabaseAdminClient } from "@/lib/supabase";
 import { normalizeMemberEmail } from "@/lib/data/members";
 import { DEMO_ORG } from "@/lib/demo-data";
-import { validateOrgNameStrict, ORG_NAME_MAX_LENGTH } from "@/lib/text/org-name";
+import {
+  validateOrgNameStrict,
+  ORG_NAME_MAX_LENGTH,
+  ORG_NAME_MAX_LENGTH_ADMIN,
+} from "@/lib/text/org-name";
 import { isOrgNameInputStrictEnabled } from "@/lib/feature-flags";
 
 export const DEFAULT_TRIAL_DAYS = 14;
 export const MAX_TRIAL_DAYS = 365;
 export const ORG_NAME_MAX = ORG_NAME_MAX_LENGTH;
+export const ORG_NAME_MAX_ADMIN = ORG_NAME_MAX_LENGTH_ADMIN;
 
 export type OrgCreateInput = {
   orgName: string;
@@ -86,12 +91,16 @@ export function validateOrgCreateInput(
     return { ok: false, code: "org_name_required", message: "orgName が必要です" };
   }
 
-  // Length check (same as signup)
-  if (rawOrgName.length > ORG_NAME_MAX) {
+  // Length check: flag ON uses admin limit (200) with code points; flag OFF uses standard limit (100) with string length
+  const maxLen = isOrgNameInputStrictEnabled() ? ORG_NAME_MAX_ADMIN : ORG_NAME_MAX;
+  const len = isOrgNameInputStrictEnabled()
+    ? [...rawOrgName].length  // code point count
+    : rawOrgName.length;      // string length
+  if (len > maxLen) {
     return {
       ok: false,
       code: "invalid_org_name",
-      message: `orgName は${ORG_NAME_MAX}文字以内で入力してください`,
+      message: `orgName は${maxLen}文字以内で入力してください`,
       nextStep: "orgName を短くしてください",
     };
   }
@@ -99,7 +108,7 @@ export function validateOrgCreateInput(
   // Strict validation when flag is ON
   let orgName = rawOrgName;
   if (isOrgNameInputStrictEnabled()) {
-    const strictResult = validateOrgNameStrict(rawOrgName);
+    const strictResult = validateOrgNameStrict(rawOrgName, ORG_NAME_MAX_ADMIN);
     if (!strictResult.ok) {
       return {
         ok: false,
