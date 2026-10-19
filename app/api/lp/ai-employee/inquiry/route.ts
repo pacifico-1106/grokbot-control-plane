@@ -3,7 +3,9 @@ import {
   isLpInquiryDbEnabled, 
   isLpInquiryBotProtectionEnabled,
   isLpInquiryRateLimitEnabled,
+  isLpInquiryFixedSubjectEnabled,
 } from "@/lib/feature-flags";
+import { buildInquiryNotify } from "@/lib/lp/inquiry-mail";
 import { createInquiry, type InquiryPlan, type BillingPreference } from "@/lib/lp/inquiry-data";
 import { enqueueNotification, processOutboxEntry } from "@/lib/lp/notification-outbox";
 import { verifyTurnstileToken, getClientIp, getTurnstileConfig } from "@/lib/lp/turnstile";
@@ -241,7 +243,27 @@ export async function POST(req: Request) {
     );
   }
 
-  const htmlBody = `
+  const billingLabel = billing === "annual" ? "年払い（10%オフ）" : "月払い";
+  const fixed = isLpInquiryFixedSubjectEnabled()
+    ? buildInquiryNotify({
+        timestamp,
+        inquiryId,
+        planLabel: getPlanLabel(plan),
+        company,
+        name,
+        email,
+        phone: phone || "未入力",
+        headcount: headcount || "未入力",
+        billingLabel,
+        lpPageLabel: lpPageLabel(lpPage),
+        lpRef,
+        useCase,
+      })
+    : null;
+
+  const htmlBody =
+    fixed?.html ||
+    `
     <h2>AI社員パック お問い合わせ</h2>
     <p><strong>受付日時:</strong> ${timestamp}</p>
     ${inquiryId ? `<p><strong>問い合わせID:</strong> ${inquiryId}</p>` : ""}
@@ -253,7 +275,7 @@ export async function POST(req: Request) {
       <tr><td style="padding:8px 4px;border-bottom:1px solid #eee;"><strong>メール</strong></td><td style="padding:8px 4px;border-bottom:1px solid #eee;"><a href="mailto:${sanitize(email)}">${sanitize(email)}</a></td></tr>
       <tr><td style="padding:8px 4px;border-bottom:1px solid #eee;"><strong>電話</strong></td><td style="padding:8px 4px;border-bottom:1px solid #eee;">${sanitize(phone || "未入力")}</td></tr>
       <tr><td style="padding:8px 4px;border-bottom:1px solid #eee;"><strong>導入予定人数</strong></td><td style="padding:8px 4px;border-bottom:1px solid #eee;">${sanitize(headcount || "未入力")}</td></tr>
-      <tr><td style="padding:8px 4px;border-bottom:1px solid #eee;"><strong>請求希望</strong></td><td style="padding:8px 4px;border-bottom:1px solid #eee;">${billing === "annual" ? "年払い（10%オフ）" : "月払い"}</td></tr>
+      <tr><td style="padding:8px 4px;border-bottom:1px solid #eee;"><strong>請求希望</strong></td><td style="padding:8px 4px;border-bottom:1px solid #eee;">${billingLabel}</td></tr>
       <tr><td style="padding:8px 4px;border-bottom:1px solid #eee;"><strong>流入ページ</strong></td><td style="padding:8px 4px;border-bottom:1px solid #eee;">${sanitize(lpPageLabel(lpPage))}</td></tr>
       ${lpRef ? `<tr><td style="padding:8px 4px;border-bottom:1px solid #eee;"><strong>紹介元(ref)</strong></td><td style="padding:8px 4px;border-bottom:1px solid #eee;">${sanitize(lpRef)}</td></tr>` : ""}
     </table>
@@ -263,7 +285,8 @@ export async function POST(req: Request) {
     <p style="font-size:12px;color:#666;">このメールは LP の相談フォームから送信（流入ページは下記）されました。</p>
   `;
 
-  const subject = `【AI社員パック問い合わせ】${company} - ${name}様`;
+  const subject =
+    fixed?.subject ?? `【AI社員パック問い合わせ】${company} - ${name}様`;
 
   if (dbEnabled && inquiryId) {
     try {
