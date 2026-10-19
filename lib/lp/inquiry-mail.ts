@@ -12,10 +12,13 @@ export const LP_INQUIRY_FIELD_MAX = 200;
 export const LP_INQUIRY_USE_CASE_MAX = 2000;
 
 const CONTROL = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g;
+// Same range as lib/approvals/attachment-card.ts (bidi / zero-width / BOM).
+const INVISIBLE = /[\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff]/g;
 
 export function sanitizeInquiryPlainText(value: unknown, max: number): string {
   return String(value ?? "")
     .replace(CONTROL, "")
+    .replace(INVISIBLE, "")
     .replace(/[ \t]+/g, " ")
     .trim()
     .slice(0, max);

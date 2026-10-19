@@ -5,7 +5,7 @@ import {
   isLpInquiryRateLimitEnabled,
   isLpInquiryFixedSubjectEnabled,
 } from "@/lib/feature-flags";
-import { buildInquiryNotify } from "@/lib/lp/inquiry-mail";
+import { allocateInquiryReceiptId, buildInquiryNotify } from "@/lib/lp/inquiry-mail";
 import { createInquiry, type InquiryPlan, type BillingPreference } from "@/lib/lp/inquiry-data";
 import { enqueueNotification, processOutboxEntry } from "@/lib/lp/notification-outbox";
 import { verifyTurnstileToken, getClientIp, getTurnstileConfig } from "@/lib/lp/turnstile";
@@ -352,15 +352,22 @@ export async function POST(req: Request) {
     );
   }
 
-  console.info("[ai-employee-inquiry] Inquiry received:", {
-    plan,
-    company,
-    name,
-    email: email.substring(0, 3) + "***",
-    billing,
-    stub: result.stub,
-    inquiryId,
-  });
+  if (isLpInquiryFixedSubjectEnabled()) {
+    console.info("[ai-employee-inquiry] Inquiry received:", {
+      receiptId: allocateInquiryReceiptId(inquiryId),
+      stub: result.stub,
+    });
+  } else {
+    console.info("[ai-employee-inquiry] Inquiry received:", {
+      plan,
+      company,
+      name,
+      email: email.substring(0, 3) + "***",
+      billing,
+      stub: result.stub,
+      inquiryId,
+    });
+  }
 
   return jsonUtf8({
     ok: true,

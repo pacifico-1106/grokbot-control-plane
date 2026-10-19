@@ -13,6 +13,7 @@ import {
   buildInquiryNotify,
   sanitizeInquiryPlainText,
 } from "./inquiry-mail";
+import { renderNotificationHtml } from "./notification-outbox";
 
 const FLAG = "LP_INQUIRY_FIXED_SUBJECT_ENABLED";
 const saved = process.env[FLAG];
@@ -109,5 +110,42 @@ describe("flag ON: fixed subject + escaped fields only", () => {
     expect(allocateInquiryReceiptId("inq_ok")).toBe("inq_ok");
     expect(allocateInquiryReceiptId("<script>")).toMatch(/^R[A-Z0-9]+$/);
     expect(allocateInquiryReceiptId(null)).toMatch(/^R[A-Z0-9]+$/);
+  });
+
+  test("strips U+202E (RTL override) and other bidi / zero-width marks", () => {
+    expect(sanitizeInquiryPlainText("ab\u202Ecd", 200)).toBe("abcd");
+    expect(sanitizeInquiryPlainText("ab\u202Ecd", 200)).not.toContain("\u202E");
+    const mixed = "x\u200By\u200Fz\u202Aw\u2066v\uFEFFu";
+    expect(sanitizeInquiryPlainText(mixed, 200)).toBe("xyzwvu");
+  });
+
+  test("renderNotificationHtml has no mailto when flag ON", () => {
+    const html = renderNotificationHtml({
+      id: "ob_1",
+      tenantId: "00000000-0000-0000-0000-000000000001",
+      businessKey: "inquiry:inq_abc123",
+      notificationType: "inquiry_received",
+      recipient: "sales@fixture.invalid",
+      subject: `${LP_INQUIRY_SUBJECT_PREFIX}inq_abc123`,
+      template: "approval_needed",
+      payload: {
+        timestamp: input.timestamp,
+        inquiryId: "inq_abc123",
+        plan: "intern",
+        company: input.company,
+        contactName: input.name,
+        email: input.email,
+        useCase: input.useCase,
+      },
+      status: "pending",
+      providerId: null,
+      attemptCount: 0,
+      lastAttemptAt: null,
+      lastError: null,
+      createdAt: "2026-10-19T00:00:00.000Z",
+      processedAt: null,
+    });
+    expect(html).not.toContain("mailto:");
+    expect(html).not.toContain("<a href=");
   });
 });
