@@ -1,7 +1,20 @@
 import { escapeHtml } from "@/lib/html-escape";
 import { resolveAppOrigin } from "@/lib/app-url";
 import { renderStubHtml } from "@/lib/resend";
-import { isApprovalMailSubjectNoSummaryEnabled } from "@/lib/feature-flags";
+import { SERVICE_LABEL } from "@/lib/brand";
+import {
+  isApprovalMailSubjectNoSummaryEnabled,
+  isWelcomeMailFixedSubjectEnabled,
+} from "@/lib/feature-flags";
+import {
+  LP_INQUIRY_FIELD_MAX,
+  sanitizeInquiryPlainText,
+} from "@/lib/lp/inquiry-mail";
+
+export const WELCOME_MAIL_FIXED_SUBJECT = `ようこそ — ${SERVICE_LABEL}`;
+export const TRIAL_STARTED_FIXED_SUBJECT = `トライアル開始 — ${SERVICE_LABEL}`;
+export const TRIAL_ENDING_FIXED_SUBJECT = `トライアル終了のお知らせ — ${SERVICE_LABEL}`;
+export const WELCOME_MAIL_ORG_NAME_MAX = LP_INQUIRY_FIELD_MAX;
 
 export type ApprovalMailMeta = {
   kind?: string;
@@ -50,10 +63,17 @@ function statusLabelJa(statusLabel: string): string {
   return statusLabel;
 }
 
+function orgNameForMailBody(orgName: string): string {
+  if (!isWelcomeMailFixedSubjectEnabled()) return escapeHtml(orgName);
+  return escapeHtml(sanitizeInquiryPlainText(orgName, WELCOME_MAIL_ORG_NAME_MAX));
+}
+
 export function welcomeTemplate(orgName: string) {
-  const org = escapeHtml(orgName);
+  const org = orgNameForMailBody(orgName);
   return {
-    subject: `ようこそ — ${orgName} の AI社員 制御面`,
+    subject: isWelcomeMailFixedSubjectEnabled()
+      ? WELCOME_MAIL_FIXED_SUBJECT
+      : `ようこそ — ${orgName} の AI社員 制御面`,
     html: renderStubHtml(
       "ようこそ",
       `<p>${org} 様の制御面を準備しました。</p>
@@ -112,10 +132,12 @@ export function approvalResolvedTemplate(
 }
 
 export function trialEndingTemplate(orgName: string, daysLeft: number) {
-  const org = escapeHtml(orgName);
+  const org = orgNameForMailBody(orgName);
   const days = escapeHtml(Number(daysLeft));
   return {
-    subject: `トライアル終了まであと ${daysLeft} 日 — ${orgName}`,
+    subject: isWelcomeMailFixedSubjectEnabled()
+      ? TRIAL_ENDING_FIXED_SUBJECT
+      : `トライアル終了まであと ${daysLeft} 日 — ${orgName}`,
     html: renderStubHtml(
       "トライアル終了のお知らせ",
       `<p>${org} 様のトライアルはあと <strong>${days} 日</strong> で終了します。</p>
@@ -127,7 +149,9 @@ export function trialEndingTemplate(orgName: string, daysLeft: number) {
 export function trialStartedTemplate(trialDays: number) {
   const days = escapeHtml(Number(trialDays));
   return {
-    subject: `トライアル開始（${trialDays}日間）`,
+    subject: isWelcomeMailFixedSubjectEnabled()
+      ? TRIAL_STARTED_FIXED_SUBJECT
+      : `トライアル開始（${trialDays}日間）`,
     html: renderStubHtml(
       "トライアル開始",
       `<p>${days}日間、Business 相当の機能をお試しいただけます。</p>
