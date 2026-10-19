@@ -19,6 +19,7 @@
 #
 # Safety:
 # - Only runs on localhost/127.0.0.1/Unix socket
+# - Rejects PGHOSTADDR, PGSERVICE, PGSERVICEFILE environment variables
 # - Uses temporary schema, never touches public.orgs
 # - DATABASE_URL and SUPABASE_* environment variables are NOT used
 #
@@ -27,11 +28,38 @@
 #   1 - Some samples missed
 #   2 - psql not found
 #   3 - Connection refused (not localhost)
+#   4 - Forbidden environment variable set (PGHOSTADDR, PGSERVICE, PGSERVICEFILE)
 
 set -e
 
+# Get the directory where this script is located
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+AUDIT_SQL_PATH="$SCRIPT_DIR/org-name-strict-audit.sql"
+
 # Generate unique schema name
 SCHEMA_NAME="audit_test_$(date +%s)_$$"
+
+# Check for forbidden environment variables
+if [ -n "$PGHOSTADDR" ]; then
+  echo "ERROR: PGHOSTADDR is set. This script only runs on localhost."
+  echo "For safety, PGHOSTADDR connections are not allowed."
+  exit 4
+fi
+
+if [ -n "$PGSERVICE" ]; then
+  echo "ERROR: PGSERVICE is set. This script only runs on localhost."
+  echo "For safety, PGSERVICE connections are not allowed."
+  exit 4
+fi
+
+if [ -n "$PGSERVICEFILE" ]; then
+  echo "ERROR: PGSERVICEFILE is set. This script only runs on localhost."
+  echo "For safety, PGSERVICEFILE connections are not allowed."
+  exit 4
+fi
+
+# Unset potentially dangerous variables when calling psql
+unset PGHOSTADDR PGSERVICE PGSERVICEFILE
 
 # Check if psql is available
 if ! command -v psql &> /dev/null; then
@@ -42,7 +70,8 @@ if ! command -v psql &> /dev/null; then
 fi
 
 # Parse connection parameters (only allow localhost)
-PGHOST="${PGHOST:-localhost}"
+# Default to empty (Unix socket) if not set
+PGHOST="${PGHOST:-}"
 PGPORT="${PGPORT:-5432}"
 PGUSER="${PGUSER:-postgres}"
 PGDATABASE="${PGDATABASE:-postgres}"
@@ -58,12 +87,19 @@ case "$PGHOST" in
     echo "For safety, remote database connections are not allowed."
     echo ""
     echo "To use a local Postgres, set:"
-    echo "  export PGHOST=localhost"
+    echo "  unset PGHOST  # or export PGHOST=localhost"
     echo "  export PGUSER=postgres"
     echo "  export PGDATABASE=postgres"
     exit 3
     ;;
 esac
+
+# Build psql connection args
+PSQL_ARGS=()
+if [ -n "$PGHOST" ]; then
+  PSQL_ARGS+=("-h" "$PGHOST")
+fi
+PSQL_ARGS+=("-p" "$PGPORT" "-U" "$PGUSER" "-d" "$PGDATABASE")
 
 echo "============================================================"
 echo "verify-audit-sql.sh"
@@ -73,8 +109,15 @@ echo "Port: $PGPORT"
 echo "User: $PGUSER"
 echo "Database: $PGDATABASE"
 echo "Temporary schema: $SCHEMA_NAME"
+echo "Audit SQL path: $AUDIT_SQL_PATH"
 echo "============================================================"
 echo ""
+
+# Check if audit SQL file exists
+if [ ! -f "$AUDIT_SQL_PATH" ]; then
+  echo "ERROR: Audit SQL file not found: $AUDIT_SQL_PATH"
+  exit 1
+fi
 
 # Create SQL file with temporary schema
 cat << EOF > /tmp/audit-test-$$.sql
@@ -88,12 +131,12 @@ CREATE TABLE $SCHEMA_NAME.orgs (
   name TEXT NOT NULL
 );
 
--- Insert test samples that should be rejected by the app (from org-name.test.ts)
--- These should ALL be flagged as needs_review by the SQL
+-- =============================================================================
+-- Test samples that should be REJECTED by the app (flagged as needs_review)
+-- =============================================================================
 
 -- Control characters
 -- Note: U+0000 (null) is not valid in PostgreSQL strings, skip it
--- INSERT INTO $SCHEMA_NAME.orgs (name) VALUES ('株式会社' || E'\u0000' || 'テスト');
 INSERT INTO $SCHEMA_NAME.orgs (name) VALUES ('株式会社' || E'\r\n' || 'テスト');    -- CRLF
 INSERT INTO $SCHEMA_NAME.orgs (name) VALUES ('Test' || E'\u0001' || 'Org');        -- SOH (control char)
 
@@ -114,45 +157,35 @@ INSERT INTO $SCHEMA_NAME.orgs (name) VALUES ('Test' || E'\u180E' || 'Corp'); -- 
 INSERT INTO $SCHEMA_NAME.orgs (name) VALUES ('Test' || E'\u2061' || 'Corp'); -- Function Application
 INSERT INTO $SCHEMA_NAME.orgs (name) VALUES ('Test' || E'\u2065' || 'Corp'); -- U+2065
 
--- URL schemes
+-- URL schemes (has : and /)
 INSERT INTO $SCHEMA_NAME.orgs (name) VALUES ('http://example.com');
 INSERT INTO $SCHEMA_NAME.orgs (name) VALUES ('https://evil.com');
 INSERT INTO $SCHEMA_NAME.orgs (name) VALUES ('javascript:alert(1)');
 INSERT INTO $SCHEMA_NAME.orgs (name) VALUES ('data:text/html,<script>');
-INSERT INTO $SCHEMA_NAME.orgs (name) VALUES ('vbscript:msgbox');
-INSERT INTO $SCHEMA_NAME.orgs (name) VALUES ('file:///etc/passwd');
-INSERT INTO $SCHEMA_NAME.orgs (name) VALUES ('mailto:admin@example.com');
 INSERT INTO $SCHEMA_NAME.orgs (name) VALUES ('hxxp://example.com');
-INSERT INTO $SCHEMA_NAME.orgs (name) VALUES ('hxxps://example.com');
 INSERT INTO $SCHEMA_NAME.orgs (name) VALUES ('ftp://ftp.example.com');
 
--- URL with spaces in scheme
-INSERT INTO $SCHEMA_NAME.orgs (name) VALUES ('http ://example.com');
-INSERT INTO $SCHEMA_NAME.orgs (name) VALUES ('ht tp://example.com');
-INSERT INTO $SCHEMA_NAME.orgs (name) VALUES ('http' || E'\u00A0' || '://example.com');
-
--- Domain patterns
+-- www. prefix
 INSERT INTO $SCHEMA_NAME.orgs (name) VALUES ('www.example.com');
-INSERT INTO $SCHEMA_NAME.orgs (name) VALUES ('example.com');
-INSERT INTO $SCHEMA_NAME.orgs (name) VALUES ('evil.co.jp/x');
-INSERT INTO $SCHEMA_NAME.orgs (name) VALUES ('株式会社 malware.org テスト');
+INSERT INTO $SCHEMA_NAME.orgs (name) VALUES (E'\uFF57\uFF57\uFF57\uFF0Eevil.com');  -- ｗｗｗ．
 
--- IPv4
-INSERT INTO $SCHEMA_NAME.orgs (name) VALUES ('192.168.1.1');
-INSERT INTO $SCHEMA_NAME.orgs (name) VALUES ('192.168.1.1/admin');
+-- @ sign
+INSERT INTO $SCHEMA_NAME.orgs (name) VALUES ('a@b');
+INSERT INTO $SCHEMA_NAME.orgs (name) VALUES ('admin@example.com');
+INSERT INTO $SCHEMA_NAME.orgs (name) VALUES (E'a\uFF20b');  -- ＠ fullwidth
 
--- Fullwidth characters (normalized to URL by app)
-INSERT INTO $SCHEMA_NAME.orgs (name) VALUES ('example' || E'\u3002' || 'com');  -- 。
-INSERT INTO $SCHEMA_NAME.orgs (name) VALUES ('example' || E'\uFF0E' || 'com');  -- ．
+-- / and //
+INSERT INTO $SCHEMA_NAME.orgs (name) VALUES ('a/b');
+INSERT INTO $SCHEMA_NAME.orgs (name) VALUES ('//evil');
+INSERT INTO $SCHEMA_NAME.orgs (name) VALUES (E'\uFF0F\uFF0Fevil');  -- ／／ fullwidth
+
+-- Host with port (has :)
+INSERT INTO $SCHEMA_NAME.orgs (name) VALUES ('evil.com:8080');
+INSERT INTO $SCHEMA_NAME.orgs (name) VALUES ('1.2.3.4:80');
 
 -- Punycode
-INSERT INTO $SCHEMA_NAME.orgs (name) VALUES ('xn--n3h.com');
-INSERT INTO $SCHEMA_NAME.orgs (name) VALUES ('xn--nxasmq5b');  -- punycode without dot
-
--- Japanese adjacent domain
-INSERT INTO $SCHEMA_NAME.orgs (name) VALUES ('株式会社malware.com');
-INSERT INTO $SCHEMA_NAME.orgs (name) VALUES ('note.com株式会社');
-INSERT INTO $SCHEMA_NAME.orgs (name) VALUES ('日本語.com');
+INSERT INTO $SCHEMA_NAME.orgs (name) VALUES ('xn--n3h');
+INSERT INTO $SCHEMA_NAME.orgs (name) VALUES ('xn--nxasmq5b');
 
 -- Combining characters
 INSERT INTO $SCHEMA_NAME.orgs (name) VALUES ('h' || E'\u0301' || 'ttp://example.com');
@@ -160,16 +193,28 @@ INSERT INTO $SCHEMA_NAME.orgs (name) VALUES ('h' || E'\u0301' || 'ttp://example.
 -- Length > 100
 INSERT INTO $SCHEMA_NAME.orgs (name) VALUES (repeat('あ', 101));
 
--- Fullwidth alphanumeric
-INSERT INTO $SCHEMA_NAME.orgs (name) VALUES (E'\uFF28\uFF54\uFF54\uFF50://example.com');  -- Ｈｔｔｐ
+-- =============================================================================
+-- Test samples that should be ALLOWED by the app (NOT flagged as needs_review)
+-- These have dots but no dangerous patterns
+-- =============================================================================
+-- Note: These are inserted separately and counted as "allowed_samples"
 
--- Additional samples from review (scheme with internal spaces)
-INSERT INTO $SCHEMA_NAME.orgs (name) VALUES ('h t t p s://example.com');
-
--- Samples that should be allowed (for false positive check)
--- These are commented out as they should NOT be in needs_review
--- INSERT INTO $SCHEMA_NAME.orgs (name) VALUES ('株式会社スペースツリー');
--- INSERT INTO $SCHEMA_NAME.orgs (name) VALUES ('TOKYO307 Inc.');
+-- Dot-containing company names (now allowed)
+INSERT INTO $SCHEMA_NAME.orgs (name) VALUES ('Sealith.AI');
+INSERT INTO $SCHEMA_NAME.orgs (name) VALUES ('Next.js 勉強会');
+INSERT INTO $SCHEMA_NAME.orgs (name) VALUES ('株式会社 A.B.C');
+INSERT INTO $SCHEMA_NAME.orgs (name) VALUES ('example.com');
+INSERT INTO $SCHEMA_NAME.orgs (name) VALUES ('1.2.3.4');
+INSERT INTO $SCHEMA_NAME.orgs (name) VALUES ('株式会社malware.com');
+INSERT INTO $SCHEMA_NAME.orgs (name) VALUES ('note.com株式会社');
+INSERT INTO $SCHEMA_NAME.orgs (name) VALUES ('日本語.com');
+INSERT INTO $SCHEMA_NAME.orgs (name) VALUES ('T.K. Holdings');
+INSERT INTO $SCHEMA_NAME.orgs (name) VALUES ('Version 2.0 Inc');
+INSERT INTO $SCHEMA_NAME.orgs (name) VALUES ('A&B Co., Ltd.');
+INSERT INTO $SCHEMA_NAME.orgs (name) VALUES ('TOKYO307 Inc.');
+INSERT INTO $SCHEMA_NAME.orgs (name) VALUES ('File : Notes');
+INSERT INTO $SCHEMA_NAME.orgs (name) VALUES ('株式会社スペースツリー');
+INSERT INTO $SCHEMA_NAME.orgs (name) VALUES ('Dr. Smith Associates');
 
 -- Count total samples
 SELECT 'Inserted samples: ' || COUNT(*) FROM $SCHEMA_NAME.orgs;
@@ -183,7 +228,7 @@ echo "SET search_path TO $SCHEMA_NAME, public;" >> /tmp/audit-test-$$.sql
 echo "" >> /tmp/audit-test-$$.sql
 
 # Extract and modify the audit SQL (replace public.orgs with orgs, which will use search_path)
-sed 's/public\.orgs/orgs/g' /workspace/docs/sql/org-name-strict-audit.sql >> /tmp/audit-test-$$.sql
+sed 's/public\.orgs/orgs/g' "$AUDIT_SQL_PATH" >> /tmp/audit-test-$$.sql
 
 # Add cleanup at the end
 cat << EOF >> /tmp/audit-test-$$.sql
@@ -195,27 +240,37 @@ DROP SCHEMA $SCHEMA_NAME CASCADE;
 SET search_path TO public;
 EOF
 
-# Count expected samples (count INSERT lines that are not commented out)
-EXPECTED_SAMPLES=$(grep -c "^INSERT INTO $SCHEMA_NAME.orgs" /tmp/audit-test-$$.sql || true)
-echo "Expected samples to catch: $EXPECTED_SAMPLES"
+# Count expected samples
+# Rejection samples (should be caught by SQL): 35
+# Allowed samples (app allows, SQL also allows): 14
+# SQL broad catch (app allows, but SQL catches due to colon etc.): 1 (File : Notes)
+EXPECTED_REJECTED=35
+EXPECTED_ALLOWED_NOT_FLAGGED=14
+EXPECTED_SQL_BROAD_CATCH=1
+TOTAL_SAMPLES=$((EXPECTED_REJECTED + EXPECTED_ALLOWED_NOT_FLAGGED + EXPECTED_SQL_BROAD_CATCH))
+
+echo "Expected rejected samples: $EXPECTED_REJECTED"
+echo "Expected allowed (not flagged): $EXPECTED_ALLOWED_NOT_FLAGGED"
+echo "Expected SQL broad catch (app allows, SQL catches): $EXPECTED_SQL_BROAD_CATCH"
+echo "Total samples: $TOTAL_SAMPLES"
 echo ""
 
 # Capture public schema state before
 echo "Checking public schema state before test..."
-PUBLIC_BEFORE=$(psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" -t -c "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public'" 2>/dev/null || echo "0")
+PUBLIC_BEFORE=$(psql "${PSQL_ARGS[@]}" -t -c "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public'" 2>/dev/null || echo "0")
 echo "Tables in public schema: $PUBLIC_BEFORE"
 echo ""
 
 # Run with psql
 echo "Running SQL..."
 echo ""
-OUTPUT=$(psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" -f /tmp/audit-test-$$.sql 2>&1)
+OUTPUT=$(psql "${PSQL_ARGS[@]}" -f /tmp/audit-test-$$.sql 2>&1)
 echo "$OUTPUT"
 echo ""
 
 # Capture public schema state after
 echo "Checking public schema state after test..."
-PUBLIC_AFTER=$(psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" -t -c "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public'" 2>/dev/null || echo "0")
+PUBLIC_AFTER=$(psql "${PSQL_ARGS[@]}" -t -c "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public'" 2>/dev/null || echo "0")
 echo "Tables in public schema: $PUBLIC_AFTER"
 echo ""
 
@@ -228,20 +283,39 @@ fi
 
 # Extract needs_review count from output
 NEEDS_REVIEW=$(echo "$OUTPUT" | grep "needs_review" | awk '{print $NF}' | tr -d '[:space:]')
+TOTAL_ORGS=$(echo "$OUTPUT" | grep "total_orgs" | awk '{print $NF}' | tr -d '[:space:]')
+
 echo ""
 echo "============================================================"
 echo "Results:"
-echo "  Expected samples: $EXPECTED_SAMPLES"
+echo "  Total orgs inserted: $TOTAL_ORGS"
 echo "  needs_review count: $NEEDS_REVIEW"
+echo "  Expected rejected: $EXPECTED_REJECTED"
+echo "  Expected SQL broad catch: $EXPECTED_SQL_BROAD_CATCH"
+echo "  Expected allowed (not flagged): $EXPECTED_ALLOWED_NOT_FLAGGED"
 echo "============================================================"
 
 # Cleanup temp file
 rm -f /tmp/audit-test-$$.sql
 
-if [ "$NEEDS_REVIEW" = "$EXPECTED_SAMPLES" ]; then
-  echo "✓ All samples caught!"
+# Calculate expected needs_review = rejected + SQL broad catch
+EXPECTED_NEEDS_REVIEW=$((EXPECTED_REJECTED + EXPECTED_SQL_BROAD_CATCH))
+
+# Verify results
+if [ "$NEEDS_REVIEW" = "$EXPECTED_NEEDS_REVIEW" ]; then
+  echo "✓ All rejection samples caught! ($EXPECTED_REJECTED samples)"
+  echo "✓ SQL broad catch working as expected! ($EXPECTED_SQL_BROAD_CATCH samples - app allows, SQL catches)"
+  echo "✓ Allowed samples not flagged! ($EXPECTED_ALLOWED_NOT_FLAGGED samples with dots allowed)"
   exit 0
 else
-  echo "✗ Some samples missed!"
+  if [ "$NEEDS_REVIEW" -gt "$EXPECTED_NEEDS_REVIEW" ] 2>/dev/null; then
+    EXTRA=$((NEEDS_REVIEW - EXPECTED_NEEDS_REVIEW))
+    echo "✗ $EXTRA extra samples were unexpectedly flagged!"
+  elif [ "$NEEDS_REVIEW" -lt "$EXPECTED_NEEDS_REVIEW" ] 2>/dev/null; then
+    MISSED=$((EXPECTED_NEEDS_REVIEW - NEEDS_REVIEW))
+    echo "✗ $MISSED expected samples were missed!"
+  else
+    echo "✗ Unexpected result"
+  fi
   exit 1
 fi

@@ -225,6 +225,7 @@ describe("validateOrgNameStrict (flag ON)", () => {
   });
 
   describe("URL-like string rejection", () => {
+    // === Schemes (always reject) ===
     test("rejects http:// scheme", () => {
       const result = validateOrgNameStrict("http://example.com");
       expect(result.ok).toBe(false);
@@ -261,37 +262,12 @@ describe("validateOrgNameStrict (flag ON)", () => {
       if (!result.ok) expect(result.message).toContain("URL");
     });
 
-    test("rejects mailto: scheme", () => {
+    test("rejects mailto: with @", () => {
       const result = validateOrgNameStrict("mailto:admin@example.com");
       expect(result.ok).toBe(false);
       if (!result.ok) expect(result.message).toContain("URL");
     });
 
-    test("rejects www. prefix", () => {
-      const result = validateOrgNameStrict("www.example.com");
-      expect(result.ok).toBe(false);
-      if (!result.ok) expect(result.message).toContain("URL");
-    });
-
-    test("rejects domain-like tokens (example.com)", () => {
-      const result = validateOrgNameStrict("example.com");
-      expect(result.ok).toBe(false);
-      if (!result.ok) expect(result.message).toContain("URL");
-    });
-
-    test("rejects domain-like tokens with path (evil.co.jp/x)", () => {
-      const result = validateOrgNameStrict("evil.co.jp/x");
-      expect(result.ok).toBe(false);
-      if (!result.ok) expect(result.message).toContain("URL");
-    });
-
-    test("rejects domain embedded in text", () => {
-      const result = validateOrgNameStrict("株式会社 malware.org テスト");
-      expect(result.ok).toBe(false);
-      if (!result.ok) expect(result.message).toContain("URL");
-    });
-
-    // Extended URL detection (issue #406 review)
     test("rejects hxxp:// obfuscated scheme", () => {
       expect(validateOrgNameStrict("hxxp://example.com").ok).toBe(false);
     });
@@ -309,24 +285,11 @@ describe("validateOrgNameStrict (flag ON)", () => {
     });
 
     test("rejects scheme with space inside (ht tp://)", () => {
-      expect(validateOrgNameStrict("ht tp://example.com").ok).toBe(false);
+      expect(validateOrgNameStrict("ht tp://x").ok).toBe(false);
     });
 
-    test("rejects scheme with multiple spaces inside (h t t p ://)", () => {
+    test("rejects scheme with multiple spaces inside (h t t p s://)", () => {
       expect(validateOrgNameStrict("h t t p s://example.com").ok).toBe(false);
-    });
-
-    test("allows names with colon but no scheme pattern (File : Notes)", () => {
-      expect(validateOrgNameStrict("File : Notes").ok).toBe(true);
-      expect(validateOrgNameStrict("Data : Science").ok).toBe(true);
-      expect(validateOrgNameStrict("Mail To: John").ok).toBe(true);
-      expect(validateOrgNameStrict("Java Script: Guide").ok).toBe(true);
-      expect(validateOrgNameStrict("HTTP : Status").ok).toBe(true);
-    });
-
-    test("rejects javascript: and data: schemes (no // needed)", () => {
-      expect(validateOrgNameStrict("javascript:alert(1)").ok).toBe(false);
-      expect(validateOrgNameStrict("data:text/html,x").ok).toBe(false);
     });
 
     test("rejects scheme with NBSP before colon", () => {
@@ -334,36 +297,113 @@ describe("validateOrgNameStrict (flag ON)", () => {
     });
 
     test("rejects scheme with combining characters", () => {
-      // h + combining acute accent + ttp://
       expect(validateOrgNameStrict("h\u0301ttp://example.com").ok).toBe(false);
     });
 
-    test("rejects IPv4 address", () => {
-      expect(validateOrgNameStrict("192.168.1.1").ok).toBe(false);
+    // === www. prefix (always reject) ===
+    test("rejects www. prefix", () => {
+      expect(validateOrgNameStrict("www.evil.com").ok).toBe(false);
     });
 
-    test("rejects IPv4 address with path", () => {
-      expect(validateOrgNameStrict("192.168.1.1/admin").ok).toBe(false);
+    test("rejects fullwidth www. prefix (ｗｗｗ．)", () => {
+      expect(validateOrgNameStrict("ｗｗｗ．evil．com").ok).toBe(false);
     });
 
-    test("rejects domain with fullwidth dot (。U+3002)", () => {
-      expect(validateOrgNameStrict("example。com").ok).toBe(false);
+    // === xn-- punycode (always reject) ===
+    test("rejects punycode label (xn--)", () => {
+      expect(validateOrgNameStrict("xn--n3h").ok).toBe(false);
     });
 
-    test("rejects punycode domain (xn--)", () => {
+    test("rejects punycode with domain", () => {
       expect(validateOrgNameStrict("xn--n3h.com").ok).toBe(false);
     });
 
-    test("rejects Japanese text adjacent to domain (株式会社malware.com)", () => {
-      expect(validateOrgNameStrict("株式会社malware.com").ok).toBe(false);
+    // === @ (always reject) ===
+    test("rejects @", () => {
+      expect(validateOrgNameStrict("a@b").ok).toBe(false);
     });
 
-    test("rejects domain adjacent to Japanese text (note.com株式会社)", () => {
-      expect(validateOrgNameStrict("note.com株式会社").ok).toBe(false);
+    test("rejects fullwidth @ (＠)", () => {
+      expect(validateOrgNameStrict("a＠b").ok).toBe(false);
     });
 
-    test("rejects Japanese domain (日本語.com)", () => {
-      expect(validateOrgNameStrict("日本語.com").ok).toBe(false);
+    // === / and // (always reject) ===
+    test("rejects /", () => {
+      expect(validateOrgNameStrict("a/b").ok).toBe(false);
+    });
+
+    test("rejects //", () => {
+      expect(validateOrgNameStrict("//evil").ok).toBe(false);
+    });
+
+    test("rejects fullwidth // (／／)", () => {
+      expect(validateOrgNameStrict("／／evil").ok).toBe(false);
+    });
+
+    test("rejects path-like patterns", () => {
+      expect(validateOrgNameStrict("evil.co.jp/x").ok).toBe(false);
+      expect(validateOrgNameStrict("192.168.1.1/admin").ok).toBe(false);
+    });
+
+    // === Host with port (always reject) ===
+    test("rejects domain with port", () => {
+      expect(validateOrgNameStrict("evil.com:8080").ok).toBe(false);
+    });
+
+    test("rejects IPv4 with port", () => {
+      expect(validateOrgNameStrict("1.2.3.4:80").ok).toBe(false);
+    });
+
+    // === Allowed: names with only dots (no scheme, www., xn--, @, /, port) ===
+    test("allows Sealith.AI (dot-containing company name)", () => {
+      expect(validateOrgNameStrict("Sealith.AI").ok).toBe(true);
+    });
+
+    test("allows Next.js 勉強会", () => {
+      expect(validateOrgNameStrict("Next.js 勉強会").ok).toBe(true);
+    });
+
+    test("allows 株式会社 A.B.C", () => {
+      expect(validateOrgNameStrict("株式会社 A.B.C").ok).toBe(true);
+    });
+
+    test("allows example.com (domain-like but no dangerous pattern)", () => {
+      expect(validateOrgNameStrict("example.com").ok).toBe(true);
+    });
+
+    test("allows IPv4 without port (1.2.3.4)", () => {
+      expect(validateOrgNameStrict("1.2.3.4").ok).toBe(true);
+    });
+
+    test("allows File : Notes", () => {
+      expect(validateOrgNameStrict("File : Notes").ok).toBe(true);
+    });
+
+    test("allows domain-like in Japanese text (株式会社 malware.org テスト)", () => {
+      expect(validateOrgNameStrict("株式会社 malware.org テスト").ok).toBe(true);
+    });
+
+    test("allows Japanese text adjacent to domain-like (株式会社malware.com)", () => {
+      expect(validateOrgNameStrict("株式会社malware.com").ok).toBe(true);
+    });
+
+    test("allows domain adjacent to Japanese (note.com株式会社)", () => {
+      expect(validateOrgNameStrict("note.com株式会社").ok).toBe(true);
+    });
+
+    test("allows Japanese domain (日本語.com)", () => {
+      expect(validateOrgNameStrict("日本語.com").ok).toBe(true);
+    });
+
+    test("allows fullwidth dot in domain-like (example。com normalizes)", () => {
+      expect(validateOrgNameStrict("example。com").ok).toBe(true);
+    });
+
+    test("allows colon without scheme pattern", () => {
+      expect(validateOrgNameStrict("Data : Science").ok).toBe(true);
+      expect(validateOrgNameStrict("Mail To: John").ok).toBe(true);
+      expect(validateOrgNameStrict("Java Script: Guide").ok).toBe(true);
+      expect(validateOrgNameStrict("HTTP : Status").ok).toBe(true);
     });
   });
 

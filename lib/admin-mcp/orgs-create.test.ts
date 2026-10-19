@@ -163,9 +163,22 @@ describe("orgs.create validation", () => {
         }
       });
 
-      test("rejects org name with URL-like string (domain)", () => {
-        const result = validateOrgCreateInput({
+      test("allows domain-like names (dots only, no dangerous patterns)", () => {
+        expect(validateOrgCreateInput({
           orgName: "example.com Corp",
+          ownerEmail: "test@example.com",
+          invite: true,
+        }).ok).toBe(true);
+        expect(validateOrgCreateInput({
+          orgName: "Sealith.AI",
+          ownerEmail: "test@example.com",
+          invite: true,
+        }).ok).toBe(true);
+      });
+
+      test("rejects www. prefix", () => {
+        const result = validateOrgCreateInput({
+          orgName: "www.example.com",
           ownerEmail: "test@example.com",
           invite: true,
         });
@@ -176,7 +189,20 @@ describe("orgs.create validation", () => {
         }
       });
 
-      test("rejects org name with https:// scheme", () => {
+      test("rejects @ sign", () => {
+        const result = validateOrgCreateInput({
+          orgName: "admin@example.com",
+          ownerEmail: "test@example.com",
+          invite: true,
+        });
+        expect(result.ok).toBe(false);
+        if (!result.ok) {
+          expect(result.code).toBe("invalid_org_name");
+          expect(result.message).toContain("URL");
+        }
+      });
+
+      test("rejects https:// scheme", () => {
         const result = validateOrgCreateInput({
           orgName: "会社 https://evil.com",
           ownerEmail: "test@example.com",
