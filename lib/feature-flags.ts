@@ -900,6 +900,23 @@ export function isEmployeeRetireEnabled(): boolean {
   return parseFlag(process.env.EMPLOYEE_RETIRE_ENABLED);
 }
 
+/**
+ * PASSWORD_RESET_TURNSTILE_ENABLED (default OFF): require Cloudflare Turnstile
+ * on POST /api/auth/forgot-password before resetPasswordForEmail.
+ *
+ * When ON:
+ * - Missing token, failed siteverify, or missing Turnstile keys → do not call
+ *   Supabase. Response is a CAPTCHA error only (no account oracle).
+ * - The /auth/forgot widget is shown only when this flag is ON and a site key
+ *   is present.
+ *
+ * When OFF (default): today's recover path is unchanged (same-origin +
+ * in-process rate limits only; no CAPTCHA).
+ */
+export function isPasswordResetTurnstileEnabled(): boolean {
+  return parseFlag(process.env.PASSWORD_RESET_TURNSTILE_ENABLED);
+}
+
 const DEFAULT_AI_PEER_WAKE_CAP = 4;
 const DEFAULT_AI_PEER_WAKE_ROOT_WINDOW_SECONDS = 30 * 60;
 

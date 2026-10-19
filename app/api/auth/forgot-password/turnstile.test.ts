@@ -120,6 +120,7 @@ test("flag ON + missing token → no Supabase, captcha error only", async () => 
   expect(res.status).toBe(303);
   expect(locationOf(res)).toBe(`${BASE}/auth/forgot?error=turnstile_required`);
   expectNoAccountOracle(res);
+  expect(logged.join("\n")).not.toContain(EMAIL);
 });
 
 test("flag ON + blank token → no Supabase", async () => {

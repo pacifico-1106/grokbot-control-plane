@@ -1,14 +1,28 @@
 import Link from "next/link";
+import Script from "next/script";
 import { BrandMark } from "@/components/BrandMark";
+import { PASSWORD_RESET_TURNSTILE_ACTION } from "@/lib/auth/password-reset-turnstile";
+import { isPasswordResetTurnstileEnabled } from "@/lib/feature-flags";
 
 export const dynamic = "force-dynamic";
+
+const TURNSTILE_SCRIPT_SRC = "https://challenges.cloudflare.com/turnstile/v0/api.js";
 
 const ERRORS: Record<string, string> = {
   email_invalid: "メールアドレスの形式を確認してください",
   rate_limited: "しばらく待ってから再度お試しください",
   link_invalid:
     "リンクが無効か有効期限切れです。下のフォームから再設定メールを再送するか、招待者に再招待を依頼してください",
+  turnstile_required: "ロボットでないことの確認を完了してください",
+  turnstile_failed: "確認に失敗しました。ページを再読み込みしてもう一度お試しください。",
 };
+
+function passwordResetTurnstileSiteKey(): string | null {
+  if (!isPasswordResetTurnstileEnabled()) return null;
+  const key = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY?.trim();
+  if (!key || key.startsWith("replace_me")) return null;
+  return key;
+}
 
 export default async function ForgotPasswordPage({
   searchParams,
@@ -17,6 +31,7 @@ export default async function ForgotPasswordPage({
 }) {
   const sp = await searchParams;
   const error = sp.error ? ERRORS[sp.error] || ERRORS.link_invalid : null;
+  const siteKey = passwordResetTurnstileSiteKey();
 
   return (
     <div className="min-h-screen bg-[var(--bg)] text-[var(--text)] flex items-center justify-center px-4">
@@ -40,6 +55,7 @@ export default async function ForgotPasswordPage({
             {error}
           </p>
         ) : null}
+        {siteKey ? <Script src={TURNSTILE_SCRIPT_SRC} strategy="afterInteractive" /> : null}
         <form method="post" action="/api/auth/forgot-password" className="mt-6 space-y-4">
           <label className="block text-sm">
             <span className="muted">メール</span>
@@ -52,6 +68,14 @@ export default async function ForgotPasswordPage({
               className="mt-1 w-full min-h-[44px] rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2.5 text-sm outline-none focus:border-[var(--text-faint)]"
             />
           </label>
+          {siteKey ? (
+            <div
+              className="cf-turnstile"
+              data-sitekey={siteKey}
+              data-action={PASSWORD_RESET_TURNSTILE_ACTION}
+              data-language="ja"
+            />
+          ) : null}
           <button type="submit" className="btn btn-primary w-full">
             再設定メールを送信
           </button>

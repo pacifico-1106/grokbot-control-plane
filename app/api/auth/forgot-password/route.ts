@@ -9,7 +9,10 @@ import {
   rateKey,
   takeRateLimit,
 } from "@/lib/auth/auth-flow";
+import { evaluatePasswordResetTurnstile } from "@/lib/auth/password-reset-turnstile";
+import { isPasswordResetTurnstileEnabled } from "@/lib/feature-flags";
 import { jsonUtf8 } from "@/lib/http/json-utf8";
+import { getClientIp, getTurnstileConfig, verifyTurnstileToken } from "@/lib/lp/turnstile";
 
 export const runtime = "nodejs";
 
@@ -23,7 +26,9 @@ function safeErrorId(value: unknown): string | null {
  * "Forgot password" → Supabase resetPasswordForEmail with an explicit
  * redirectTo of <canonical>/auth/confirm (prod: https://staffpass.sealith.com/auth/confirm).
  * Always answers the same way (no account enumeration). Same-origin only,
- * rate limited per IP and per email.
+ * rate limited per IP and per email. Optional Turnstile
+ * (PASSWORD_RESET_TURNSTILE_ENABLED, default OFF) is fail-closed: missing
+ * token / failed verify / missing keys never call Supabase.
  */
 export async function POST(req: Request) {
   if (!isSameOriginRequest(req.headers, req.url)) {
@@ -33,6 +38,7 @@ export async function POST(req: Request) {
 
   const form = await req.formData().catch(() => null);
   const email = String(form?.get("email") || "").trim().toLowerCase();
+  const turnstileToken = String(form?.get("cf-turnstile-response") || form?.get("turnstileToken") || "");
   if (!isPlausibleEmail(email)) {
     return NextResponse.redirect(new URL("/auth/forgot?error=email_invalid", req.url), 303);
   }
@@ -44,6 +50,20 @@ export async function POST(req: Request) {
   }
   // Per-email limit is silent (same response) so it can't be used as an oracle.
   if (!emailOk || isDemoMode()) return done;
+
+  if (isPasswordResetTurnstileEnabled()) {
+    const guard = await evaluatePasswordResetTurnstile(
+      { turnstileToken, clientIp: getClientIp(req) },
+      {
+        turnstileConfigured: () => getTurnstileConfig() !== null,
+        verifyTurnstile: verifyTurnstileToken,
+      }
+    );
+    if (!guard.ok) {
+      console.warn("[auth] password reset turnstile rejected", { error: guard.error });
+      return NextResponse.redirect(new URL(`/auth/forgot?error=${guard.error}`, req.url), 303);
+    }
+  }
 
   const supabase = await createRouteSupabase();
   if (!supabase) return done;
