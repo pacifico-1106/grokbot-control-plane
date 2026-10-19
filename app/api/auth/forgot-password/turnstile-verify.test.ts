@@ -19,6 +19,7 @@ mock.module("@/lib/auth/route-supabase", () => ({
 
 const { POST } = await import("./route");
 const { resetRateLimitsForTest } = await import("@/lib/auth/auth-flow");
+const { resetPasswordResetTurnstileReplayForTest } = await import("@/lib/auth/password-reset-turnstile");
 
 const BASE = "https://staffpass.sealith.com";
 const EMAIL = "victim.person@example.co.jp";
@@ -43,6 +44,7 @@ function stubFetch(handler: (input: unknown, init?: RequestInit) => Promise<Resp
 beforeEach(() => {
   resetCalls = [];
   resetRateLimitsForTest();
+  resetPasswordResetTurnstileReplayForTest();
   process.env[FLAG] = "true";
   process.env.TURNSTILE_SECRET_KEY = "test-turnstile-secret";
   process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY = "test-turnstile-site";

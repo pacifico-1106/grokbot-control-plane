@@ -905,8 +905,11 @@ export function isEmployeeRetireEnabled(): boolean {
  * on POST /api/auth/forgot-password before resetPasswordForEmail.
  *
  * When ON:
- * - Missing token, failed siteverify, or missing Turnstile keys → do not call
- *   Supabase. Response is a CAPTCHA error only (no account oracle).
+ * - CAPTCHA runs after the email-format check and before send quotas.
+ * - Missing token, failed siteverify, missing keys, missing/wrong action, or
+ *   a hostname outside PASSWORD_RESET_TURNSTILE_HOSTNAMES (default
+ *   staffpass.sealith.com) → do not call Supabase. CAPTCHA error only.
+ * - CAPTCHA failures use a separate IP brake and never return sent=1.
  * - The /auth/forgot widget is shown only when this flag is ON and a site key
  *   is present.
  *

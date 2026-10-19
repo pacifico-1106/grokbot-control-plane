@@ -41,6 +41,7 @@ mock.module("@/lib/lp/turnstile", () => ({
 
 const { POST } = await import("./route");
 const { resetRateLimitsForTest } = await import("@/lib/auth/auth-flow");
+const { resetPasswordResetTurnstileReplayForTest } = await import("@/lib/auth/password-reset-turnstile");
 
 const BASE = "https://staffpass.sealith.com";
 const EMAIL = "victim.person@example.co.jp";
@@ -93,6 +94,7 @@ beforeEach(() => {
   verifyResult = { success: true, action: "password_reset", hostname: "staffpass.sealith.com" };
   delete process.env[FLAG];
   resetRateLimitsForTest();
+  resetPasswordResetTurnstileReplayForTest();
   logged.length = 0;
   for (const level of ["log", "info", "warn", "error", "debug"] as const) {
     console[level] = (...args: unknown[]) => {
@@ -189,9 +191,9 @@ test("flag ON: known vs unknown mailbox give the same captcha-fail response", as
 
 test("flag ON: known vs unknown mailbox give the same success response", async () => {
   process.env[FLAG] = "true";
-  const ok = await POST(post(EMAIL, "tok"));
+  const ok = await POST(post(EMAIL, "tok-known"));
   resetError = { status: 400, code: "user_not_found", name: "AuthApiError", message: "x" };
-  const unknown = await POST(post(OTHER, "tok"));
+  const unknown = await POST(post(OTHER, "tok-unknown"));
   expectSameResponse(ok, unknown);
   expect(await ok.text()).toBe(await unknown.text());
   expect(locationOf(ok)).toBe(`${BASE}/auth/forgot?sent=1`);
