@@ -19,6 +19,7 @@ export async function sendWelcomeEmail(to: string, orgName: string) {
     subject: t.subject,
     html: t.html,
     tags: [{ name: "template", value: "welcome" }],
+    audience: "unverified",
   });
 }
 
@@ -30,6 +31,7 @@ export async function sendTrialStartedEmail(to: string, trialDays: number) {
     subject: t.subject,
     html: t.html,
     tags: [{ name: "template", value: "trial_started" }],
+    audience: "unverified",
   });
 }
 

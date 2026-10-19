@@ -903,6 +903,21 @@ export function isMailSendGmailLiveEnabled(): boolean {
 }
 
 /**
+ * MAIL_UNVERIFIED_FROM_ENABLED (default OFF): unverified-recipient
+ * transactional mail (signup welcome / trial_started) may use
+ * EMAIL_FROM_UNVERIFIED so a third-party replay does not inherit the
+ * production From / DKIM identity.
+ *
+ * When OFF (default): every Resend path keeps EMAIL_FROM (today).
+ * When ON: unverified audience requires EMAIL_FROM_UNVERIFIED; if it is
+ * missing or blank, send is refused (fail-closed, no fallback to EMAIL_FROM).
+ * Verified notices (approval / billing / ops) always stay on EMAIL_FROM.
+ */
+export function isMailUnverifiedFromEnabled(): boolean {
+  return parseFlag(process.env.MAIL_UNVERIFIED_FROM_ENABLED);
+}
+
+/**
  * MCP_AUTH_FAILURE_AUDIT_ENABLED (default OFF): write /api/mcp 401/403
  * auth-failure kinds (missing_credential / invalid / expired) to
  * mcp_auth_failures (migration 20261016400000). Ids when resolvable; never
