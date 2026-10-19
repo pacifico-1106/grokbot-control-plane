@@ -2428,14 +2428,12 @@ export async function callAdminMcpTool(
       summary: outcome.summary,
     });
     if (queued.code === "needs_approval" && queued.approvalId) {
-      const oldCredentialId =
-        typeof outcome.queuedArgs.oldCredentialId === "string" ? outcome.queuedArgs.oldCredentialId : "";
       const employeeId = typeof outcome.queuedArgs.employeeId === "string" ? outcome.queuedArgs.employeeId : "";
-      if (oldCredentialId && employeeId) {
+      if (employeeId && outcome.oldCredentialId) {
         await recordCredentialAutoRenewFiling({
           orgId: cred.orgId,
           employeeId,
-          oldCredentialId,
+          oldCredentialId: outcome.oldCredentialId,
           approvalId: queued.approvalId,
           source: "admin_mcp",
         });

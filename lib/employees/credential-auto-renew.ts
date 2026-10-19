@@ -94,7 +94,13 @@ const NOT_FOUND = { code: "employee_not_found", message: "AI社員が見つか�
 
 export type CredentialAutoRenewToolOutcome =
   | { kind: "result"; data: Record<string, unknown>; isError?: boolean }
-  | { kind: "queue"; title: string; queuedArgs: Record<string, unknown>; summary: string };
+  | {
+      kind: "queue";
+      title: string;
+      queuedArgs: Record<string, unknown>;
+      summary: string;
+      oldCredentialId: string;
+    };
 
 const fail = (code: string, message: string, extra: Record<string, unknown> = {}): CredentialAutoRenewToolOutcome => ({
   kind: "result",
@@ -193,8 +199,9 @@ export async function handleCredentialAutoRenewTool(
   return {
     kind: "queue",
     title: "社員証を更新しますか",
-    queuedArgs: { employeeId: gated.employee.id, reason, oldCredentialId: gated.oldCredentialId },
+    queuedArgs: { employeeId: gated.employee.id, reason },
     summary: summaryJa(gated.employee.id, unlimited),
+    oldCredentialId: gated.oldCredentialId,
   };
 }
 
