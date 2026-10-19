@@ -1,6 +1,11 @@
 /**
  * Platform super-admin org provisioning via Admin MCP (orgs.create / orgs.status).
  * Reuses signup pipeline — no second org-creation path.
+ *
+ * ORG_NAME_INPUT_STRICT_ENABLED (default OFF):
+ * - When ON: validates orgName with the same strict rules as signup (bidi /
+ *   zero-width / invisible / URL-like rejection).
+ * - When OFF: existing behavior preserved.
  */
 import { randomBytes } from "node:crypto";
 import { provisionOrgForUser } from "@/lib/auth/session";
@@ -13,9 +18,12 @@ import { isDemoMode } from "@/lib/mode";
 import { createSupabaseAdminClient } from "@/lib/supabase";
 import { normalizeMemberEmail } from "@/lib/data/members";
 import { DEMO_ORG } from "@/lib/demo-data";
+import { validateOrgNameStrict, ORG_NAME_MAX_LENGTH } from "@/lib/text/org-name";
+import { isOrgNameInputStrictEnabled } from "@/lib/feature-flags";
 
 export const DEFAULT_TRIAL_DAYS = 14;
 export const MAX_TRIAL_DAYS = 365;
+export const ORG_NAME_MAX = ORG_NAME_MAX_LENGTH;
 
 export type OrgCreateInput = {
   orgName: string;
@@ -62,8 +70,8 @@ export function validateOrgCreateInput(
   args: Record<string, unknown>
 ):
   | { ok: true; value: OrgCreateInput }
-  | { ok: false; code: string; message: string } {
-  const orgName = String(args.orgName || "").trim();
+  | { ok: false; code: string; message: string; nextStep?: string } {
+  const rawOrgName = String(args.orgName || "").trim();
   const ownerEmail = normalizeMemberEmail(String(args.ownerEmail || ""));
   const integrationMode =
     String(args.integrationMode || "managed").trim() === "byo" ? "byo" : "managed";
@@ -74,9 +82,35 @@ export function validateOrgCreateInput(
       ? args.ownerPassword
       : undefined;
 
-  if (!orgName) {
+  if (!rawOrgName) {
     return { ok: false, code: "org_name_required", message: "orgName が必要です" };
   }
+
+  // Length check (same as signup)
+  if (rawOrgName.length > ORG_NAME_MAX) {
+    return {
+      ok: false,
+      code: "invalid_org_name",
+      message: `orgName は${ORG_NAME_MAX}文字以内で入力してください`,
+      nextStep: "orgName を短くしてください",
+    };
+  }
+
+  // Strict validation when flag is ON
+  let orgName = rawOrgName;
+  if (isOrgNameInputStrictEnabled()) {
+    const strictResult = validateOrgNameStrict(rawOrgName);
+    if (!strictResult.ok) {
+      return {
+        ok: false,
+        code: "invalid_org_name",
+        message: strictResult.message,
+        nextStep: "orgName に含まれる禁止文字を取り除いてください",
+      };
+    }
+    orgName = strictResult.value;
+  }
+
   if (!ownerEmail || !ownerEmail.includes("@")) {
     return { ok: false, code: "owner_email_required", message: "ownerEmail が必要です" };
   }

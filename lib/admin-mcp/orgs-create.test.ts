@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
   clampTrialDays,
   validateOrgCreateInput,
@@ -45,7 +45,15 @@ function allowPlatformOpsInDemo() {
     "test-notification-encryption-key-32b";
 }
 
+const STRICT_FLAG = "ORG_NAME_INPUT_STRICT_ENABLED";
+const savedStrict = process.env[STRICT_FLAG];
+
 describe("orgs.create validation", () => {
+  afterEach(() => {
+    if (savedStrict === undefined) delete process.env[STRICT_FLAG];
+    else process.env[STRICT_FLAG] = savedStrict;
+  });
+
   test("trialDays defaults to 14 and rejects out of range", () => {
     expect(clampTrialDays(undefined)).toBe(14);
     expect(clampTrialDays(30)).toBe(30);
@@ -77,6 +85,127 @@ describe("orgs.create validation", () => {
       ownerPassword: "secure-pass-123",
     });
     expect(password.ok).toBe(true);
+  });
+
+  describe("ORG_NAME_INPUT_STRICT_ENABLED flag", () => {
+    describe("flag OFF (default)", () => {
+      beforeEach(() => {
+        delete process.env[STRICT_FLAG];
+      });
+
+      test("allows org name with bidi characters", () => {
+        const result = validateOrgCreateInput({
+          orgName: "Test\u202EOrg",
+          ownerEmail: "test@example.com",
+          invite: true,
+        });
+        expect(result.ok).toBe(true);
+      });
+
+      test("allows org name with URL-like string", () => {
+        const result = validateOrgCreateInput({
+          orgName: "example.com Corp",
+          ownerEmail: "test@example.com",
+          invite: true,
+        });
+        expect(result.ok).toBe(true);
+      });
+    });
+
+    describe("flag ON", () => {
+      beforeEach(() => {
+        process.env[STRICT_FLAG] = "true";
+      });
+
+      test("rejects org name with bidi characters", () => {
+        const result = validateOrgCreateInput({
+          orgName: "Test\u202EOrg",
+          ownerEmail: "test@example.com",
+          invite: true,
+        });
+        expect(result.ok).toBe(false);
+        if (!result.ok) {
+          expect(result.code).toBe("invalid_org_name");
+          expect(result.message).toContain("双方向");
+          expect(result.message).not.toContain("Test");
+          expect(result.nextStep).toBeTruthy();
+        }
+      });
+
+      test("rejects org name with zero-width characters", () => {
+        const result = validateOrgCreateInput({
+          orgName: "Test\u200BOrg",
+          ownerEmail: "test@example.com",
+          invite: true,
+        });
+        expect(result.ok).toBe(false);
+        if (!result.ok) {
+          expect(result.code).toBe("invalid_org_name");
+          expect(result.message).toContain("不可視");
+        }
+      });
+
+      test("rejects org name with URL-like string (domain)", () => {
+        const result = validateOrgCreateInput({
+          orgName: "example.com Corp",
+          ownerEmail: "test@example.com",
+          invite: true,
+        });
+        expect(result.ok).toBe(false);
+        if (!result.ok) {
+          expect(result.code).toBe("invalid_org_name");
+          expect(result.message).toContain("URL");
+        }
+      });
+
+      test("rejects org name with https:// scheme", () => {
+        const result = validateOrgCreateInput({
+          orgName: "会社 https://evil.com",
+          ownerEmail: "test@example.com",
+          invite: true,
+        });
+        expect(result.ok).toBe(false);
+        if (!result.ok) expect(result.message).toContain("URL");
+      });
+
+      test("allows legitimate Japanese company names", () => {
+        const result = validateOrgCreateInput({
+          orgName: "株式会社スペースツリー",
+          ownerEmail: "test@example.com",
+          invite: true,
+        });
+        expect(result.ok).toBe(true);
+      });
+
+      test("allows legitimate English company names", () => {
+        const result1 = validateOrgCreateInput({
+          orgName: "TOKYO307 Inc.",
+          ownerEmail: "test@example.com",
+          invite: true,
+        });
+        expect(result1.ok).toBe(true);
+
+        const result2 = validateOrgCreateInput({
+          orgName: "A&B Co., Ltd.",
+          ownerEmail: "test@example.com",
+          invite: true,
+        });
+        expect(result2.ok).toBe(true);
+      });
+
+      test("rejects org name exceeding max length", () => {
+        const result = validateOrgCreateInput({
+          orgName: "a".repeat(101),
+          ownerEmail: "test@example.com",
+          invite: true,
+        });
+        expect(result.ok).toBe(false);
+        if (!result.ok) {
+          expect(result.code).toBe("invalid_org_name");
+          expect(result.message).toContain("100");
+        }
+      });
+    });
   });
 });
 
