@@ -74,6 +74,7 @@
 | Sealith からの選定メモ | [selection-from-sealith.md](./selection-from-sealith.md) |
 | 受電通知 intake プロトタイプ（フラグ既定 OFF） | [design/inbound-call-notice-20261016.md](./design/inbound-call-notice-20261016.md) |
 | **リアルタイム音声会話（設計・見積もり、確定 2026-10-16）** | [design/voice-realtime-20261015.md](./design/voice-realtime-20261015.md) | Grok Voice 3.0。電話と Web 通話ボタン。設計確定。実装は LINE PoC フラグ ON 後 |
+| **AI 社員 ROI（費用と仕事、ドラフト 2026-10-19）** | [design/ai-employee-roi-20261019.md](./design/ai-employee-roi-20261019.md) | 勤務記録の既存データ棚卸し・トークン代 3 案・優先順。実装なし |
 
 ---
 
