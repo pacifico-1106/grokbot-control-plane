@@ -457,12 +457,14 @@ end $$;
 reset role;
 
 -- M2: if the renewal row vanishes after the first UPDATE, RAISE and roll back
-set role service_role;
+reset role;
 create or replace function security_test.car_drop_renewal() returns trigger language plpgsql as $$
 begin
   delete from public.credential_renewals where id = 'ca400000-0000-4000-8000-0000000000a2';
   return new;
 end $$;
+grant execute on function security_test.car_drop_renewal() to service_role;
+set role service_role;
 insert into public.credentials(id, org_id, employee_id, secret_hash, expires_at) values
  ('ca200000-0000-4000-8000-0000000000a2', 'ca000000-0000-4000-8000-0000000000a1', 'ca100000-0000-4000-8000-000000000001', repeat('m', 64), now() + interval '90 days'),
  ('ca200000-0000-4000-8000-0000000000b2', 'ca000000-0000-4000-8000-0000000000a1', 'ca100000-0000-4000-8000-000000000001', repeat('k', 64), now() + interval '90 days');
@@ -500,9 +502,9 @@ begin
     raise exception 'credential auto-renew M2: first UPDATE was not rolled back';
   end if;
 end $$;
+reset role;
 drop trigger if exists car_drop_renewal on public.credentials;
 drop function if exists security_test.car_drop_renewal();
-reset role;
 
 -- (7) cascade on old-credential delete
 delete from public.credentials where id = 'ca200000-0000-4000-8000-000000000001';
