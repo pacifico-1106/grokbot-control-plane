@@ -44,8 +44,14 @@ const INVISIBLE_CHARS_GLOBAL = /[\u200b-\u200d\u2060-\u2065\ufeff\u00ad\u180e]+/
 // Includes obfuscated variants (hxxp, hxxps) and ftp
 const URL_SCHEME_PATTERN = /(?:https?|hxxps?|ftp|javascript|data|vbscript|file|mailto):/i;
 
+// Schemes that require :// (for whitespace-stripped detection)
+// Only these are checked after removing whitespace to avoid false positives
+// like "File : Notes" → "File:Notes" matching "file:"
+const URL_SCHEME_WITH_SLASHES = /(?:https?|hxxps?|ftp):\/\//i;
+
 // Scheme with space/NBSP before colon (e.g., "http ://")
-const URL_SCHEME_SPACED_PATTERN = /(?:https?|hxxps?|ftp)[\s\u00a0]+:/i;
+// Requires :// to avoid matching "HTTP : Status" etc.
+const URL_SCHEME_SPACED_PATTERN = /(?:https?|hxxps?|ftp)[\s\u00a0]*:[\s\u00a0]*\/\//i;
 
 // www. prefix
 const WWW_PREFIX_PATTERN = /(?:^|\s)www\./i;
@@ -179,9 +185,10 @@ function containsUrlLike(s: string): boolean {
   if (URL_SCHEME_SPACED_PATTERN.test(normalized)) return true;
 
   // Check scheme with spaces inside (e.g., "ht tp://", "h t t p s://")
-  // Strip all whitespace and check for schemes only (not domains to avoid false positives)
+  // Only check schemes that require :// to avoid false positives like "File : Notes"
+  // (which becomes "File:Notes" and could match "file:" if we used URL_SCHEME_PATTERN)
   const noWhitespace = normalized.replace(/\s+/g, "");
-  if (URL_SCHEME_PATTERN.test(noWhitespace)) return true;
+  if (URL_SCHEME_WITH_SLASHES.test(noWhitespace)) return true;
 
   // Check www. prefix
   if (WWW_PREFIX_PATTERN.test(normalized)) return true;

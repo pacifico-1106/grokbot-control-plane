@@ -62,6 +62,8 @@ WITH org_analysis AS (
     CASE WHEN o.name ~ '[\u0300-\u036F\u1AB0-\u1AFF\u1DC0-\u1DFF\u20D0-\u20FF\uFE20-\uFE2F]' THEN true ELSE false END AS has_combining,
     -- 全角英数字: U+FF01–FF5E
     CASE WHEN o.name ~ '[\uFF01-\uFF5E]' THEN true ELSE false END AS has_fullwidth,
+    -- Punycode ラベル: xn-- (ドットなしも検出)
+    CASE WHEN o.name ~* '(^|[\s.])xn--[a-z0-9-]+' THEN true ELSE false END AS has_punycode,
     -- 長さ > 100 コードポイント
     -- Postgres の char_length は code points を数える
     CASE WHEN char_length(o.name) > 100 THEN true ELSE false END AS too_long
@@ -113,6 +115,11 @@ SELECT
 FROM org_analysis
 UNION ALL
 SELECT
+  'punycode' AS reason,
+  COUNT(*) FILTER (WHERE has_punycode) AS count
+FROM org_analysis
+UNION ALL
+SELECT
   'too_long' AS reason,
   COUNT(*) FILTER (WHERE too_long) AS count
 FROM org_analysis
@@ -121,7 +128,7 @@ SELECT
   'needs_review' AS reason,
   COUNT(*) FILTER (WHERE has_dot OR has_colon OR has_slash OR has_at OR
                          has_control OR has_bidi OR has_invisible OR
-                         has_combining OR has_fullwidth OR too_long) AS count
+                         has_combining OR has_fullwidth OR has_punycode OR too_long) AS count
 FROM org_analysis
 UNION ALL
 SELECT
@@ -145,6 +152,7 @@ WITH org_analysis AS (
     CASE WHEN o.name ~ '[\u200B-\u200D\u2060-\u2065\uFEFF\u00AD\u180E]' THEN true ELSE false END AS has_invisible,
     CASE WHEN o.name ~ '[\u0300-\u036F\u1AB0-\u1AFF\u1DC0-\u1DFF\u20D0-\u20FF\uFE20-\uFE2F]' THEN true ELSE false END AS has_combining,
     CASE WHEN o.name ~ '[\uFF01-\uFF5E]' THEN true ELSE false END AS has_fullwidth,
+    CASE WHEN o.name ~* '(^|[\s.])xn--[a-z0-9-]+' THEN true ELSE false END AS has_punycode,
     CASE WHEN char_length(o.name) > 100 THEN true ELSE false END AS too_long
   FROM public.orgs o
 )
@@ -160,12 +168,13 @@ SELECT
     CASE WHEN has_invisible THEN 'invisible' END,
     CASE WHEN has_combining THEN 'combining' END,
     CASE WHEN has_fullwidth THEN 'fullwidth' END,
+    CASE WHEN has_punycode THEN 'punycode' END,
     CASE WHEN too_long THEN 'too_long' END
   ], NULL) AS reasons
 FROM org_analysis
 WHERE has_dot OR has_colon OR has_slash OR has_at OR
       has_control OR has_bidi OR has_invisible OR
-      has_combining OR has_fullwidth OR too_long
+      has_combining OR has_fullwidth OR has_punycode OR too_long
 ORDER BY id;
 
 -- =============================================================================

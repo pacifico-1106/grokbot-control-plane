@@ -31,6 +31,8 @@ const PATTERNS = {
   combining: /[\u0300-\u036f\u1ab0-\u1aff\u1dc0-\u1dff\u20d0-\u20ff\ufe20-\ufe2f]/,
   // 全角英数字: U+FF01–FF5E
   fullwidth: /[\uff01-\uff5e]/,
+  // Punycode ラベル: xn-- (ドットなしも検出)
+  punycode: /(^|[\s.])xn--[a-z0-9-]+/i,
 };
 
 function matchesAnyPattern(name: string): string[] {
@@ -98,7 +100,8 @@ const REJECTION_SAMPLES: Array<{ name: string; description: string }> = [
   { name: "example\uff0ecom", description: "fullwidth dot ．" },
 
   // Punycode
-  { name: "xn--n3h.com", description: "punycode" },
+  { name: "xn--n3h.com", description: "punycode with dot" },
+  { name: "xn--nxasmq5b", description: "punycode without dot" },
 
   // Japanese adjacent domain
   { name: "株式会社malware.com", description: "Japanese prefix + domain" },

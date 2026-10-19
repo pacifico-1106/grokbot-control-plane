@@ -316,6 +316,19 @@ describe("validateOrgNameStrict (flag ON)", () => {
       expect(validateOrgNameStrict("h t t p s://example.com").ok).toBe(false);
     });
 
+    test("allows names with colon but no scheme pattern (File : Notes)", () => {
+      expect(validateOrgNameStrict("File : Notes").ok).toBe(true);
+      expect(validateOrgNameStrict("Data : Science").ok).toBe(true);
+      expect(validateOrgNameStrict("Mail To: John").ok).toBe(true);
+      expect(validateOrgNameStrict("Java Script: Guide").ok).toBe(true);
+      expect(validateOrgNameStrict("HTTP : Status").ok).toBe(true);
+    });
+
+    test("rejects javascript: and data: schemes (no // needed)", () => {
+      expect(validateOrgNameStrict("javascript:alert(1)").ok).toBe(false);
+      expect(validateOrgNameStrict("data:text/html,x").ok).toBe(false);
+    });
+
     test("rejects scheme with NBSP before colon", () => {
       expect(validateOrgNameStrict("http\u00A0://example.com").ok).toBe(false);
     });
