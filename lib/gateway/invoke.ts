@@ -632,7 +632,7 @@ async function createNeedsApprovalResponse(opts: {
     process.env.APPROVAL_NOTIFY_EMAIL ||
     "owner@example.com";
   void sendApprovalNeededEmail(notifyTo, summary, risk, {
-    kind: opts.tool || opts.purpose,
+    kind: opts.tool || "ticket",
     id: createdApproval?.id ?? undefined,
   }).catch(() => null);
   const channelNotifications = createdApproval
