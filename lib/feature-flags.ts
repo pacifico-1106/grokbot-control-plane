@@ -346,6 +346,25 @@ export function isLpInquiryRateLimitEnabled(): boolean {
 }
 
 /**
+ * LP_INQUIRY_FIXED_SUBJECT_ENABLED: LP consult-form notify mail uses a
+ * fixed subject (prefix + receipt id only). User-controlled strings go
+ * only into escaped body fields.
+ *
+ * When ON:
+ * - Subject is `【AI社員パック問い合わせ】{受付番号}`.
+ * - Company / name / email / use-case etc. appear only in HTML-escaped
+ *   table cells. Newlines and control characters are stripped; length is
+ *   capped. Email and URLs are plain text (no mailto / href).
+ *
+ * When OFF (default):
+ * - Today's subject `【AI社員パック問い合わせ】{会社} - {名前}様` and
+ *   mailto link in the body are unchanged.
+ */
+export function isLpInquiryFixedSubjectEnabled(): boolean {
+  return parseFlag(process.env.LP_INQUIRY_FIXED_SUBJECT_ENABLED);
+}
+
+/**
  * LP_JOURNEYS_ENABLED: Enable guest journey tracking.
  *
  * When ON:
