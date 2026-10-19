@@ -631,7 +631,10 @@ async function createNeedsApprovalResponse(opts: {
     process.env.BILLING_NOTIFY_EMAIL ||
     process.env.APPROVAL_NOTIFY_EMAIL ||
     "owner@example.com";
-  void sendApprovalNeededEmail(notifyTo, summary, risk).catch(() => null);
+  void sendApprovalNeededEmail(notifyTo, summary, risk, {
+    kind: opts.tool || opts.purpose,
+    id: createdApproval?.id ?? undefined,
+  }).catch(() => null);
   const channelNotifications = createdApproval
     ? await sendApprovalNotifications(createdApproval, opts.employee ?? null).catch(
         (error) => [{
