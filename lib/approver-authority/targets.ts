@@ -82,6 +82,7 @@ export const APPROVER_AUTHORITY_TARGETS = {
     // Standard; the employee holds a money scope / scopes unreadable → owner
     // (same content rule as employees.reinstate: it restores a badge's power).
     "employees.credential.reissue",
+    "employees.credential.auto_renew",
     // 木村 2026-10-09 22:48 (#279 decision 2): reply / scheduling / ingress
     // policy, conversation Bot token, AI-employee identity, org metadata, stuck
     // watch. Standard; money content (schedulingPolicy costCapJpy) → owner.
@@ -500,7 +501,7 @@ function classifyUnsafe(input: ApproverClassificationInput): ApproverRequirement
   if (tool === "policy.patch") classifyPolicyPatch(mutation, input.context, reasons);
   if (tool === "employees.issue") classifyEmployeeIssue(mutation, reasons);
   if (tool === "schedulingPolicy.patch") classifySchedulingPolicy(mutation, input.context, reasons);
-  if (tool === "employees.reinstate" || tool === "employees.credential.reissue" || tool === "employees.retire") {
+  if (tool === "employees.reinstate" || tool === "employees.credential.reissue" || tool === "employees.credential.auto_renew" || tool === "employees.retire") {
     const scopes = input.context?.currentEmployeeScopes;
     if (!scopes) reasons.add("money_scope_unverified");
     else if (hasMoneyScope(scopes)) reasons.add("employee_has_money_scope");

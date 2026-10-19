@@ -40,7 +40,7 @@ export async function loadApproverClassificationContext(
   if (tool === "schedulingPolicy.patch" || tool === "policy.patch") {
     return (await readApproverContextSnapshot(orgId, tool, metadata))?.context ?? null;
   }
-  if (tool !== "employees.reinstate" && tool !== "employees.credential.reissue" && tool !== "employees.retire") return null;
+  if (tool !== "employees.reinstate" && tool !== "employees.credential.reissue" && tool !== "employees.credential.auto_renew" && tool !== "employees.retire") return null;
   const employeeId = employeeIdOf(metadata);
   if (!employeeId) return null;
   try {

@@ -2,6 +2,7 @@
 
 export const ADMIN_TOOL_TITLE_JA: Record<string, string> = {
   "employees.issue": "AI社員の発行",
+  "employees.credential.auto_renew": "社員証を更新しますか",
   link: "AI社員の連携",
   "policy.patch": "権限の更新",
   "parties.upsert": "相手台帳の更新",

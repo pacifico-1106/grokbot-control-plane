@@ -232,6 +232,7 @@ export async function createApproval(
 
   if (isDemoMode()) {
     const demoInput: CreateRuntimeApprovalInput = {
+      orgId: input.orgId,
       employeeId: input.employeeId,
       credentialId: input.credentialId || "cred_unknown",
       title: input.title,

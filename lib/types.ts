@@ -474,6 +474,11 @@ export type AuditAction =
   | "credential.issued"
   | "credential.revoked"
   | "credential.rotated"
+  /** CREDENTIAL_AUTO_RENEW_ENABLED: 今すぐ更新 ticket. Ids + timestamps only — never secret / claim_token. */
+  | "credential.renew_proposed"
+  | "credential.renew_approved"
+  | "credential.renew_rejected"
+  | "credential.renew_skipped_hold"
   /** CREDENTIAL_EXPIRY_NOTICE_ENABLED: pre-expiry notice sent / failed. Metadata: ids, thresholds, counts only. */
   | "credential.expiry_notice"
   /** MCP OAuth (flag MCP_OAUTH_ENABLED). Metadata: client host, grant id, hash prefixes only. */

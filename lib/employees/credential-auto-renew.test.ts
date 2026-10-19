@@ -45,7 +45,8 @@ afterEach(() => restoreEnv());
 
 function restoreEnv() {
   for (const k of ENV_KEYS) {
-    saved[k] === undefined ? delete process.env[k] : (process.env[k] = saved[k]);
+    if (saved[k] === undefined) delete process.env[k];
+    else process.env[k] = saved[k];
   }
 }
 
@@ -220,9 +221,41 @@ describe("R1 types / constants (no secrets, no tenant hardcode)", () => {
     expect(example).not.toContain(SPACE_TREE);
   });
 
-  test("R1 does not list auto_renew on admin MCP or employee MCP yet", () => {
-    expect(ADMIN_MCP_TOOL_NAMES).not.toContain("employees.credential.auto_renew");
+  test("L5: restoreEnv does not use a ternary as a statement (no-unused-expressions)", () => {
+    const text = src("lib/employees/credential-auto-renew.test.ts");
+    expect(text).not.toMatch(/saved\[k\] === undefined \? delete process\.env\[k\]/);
+  });
+
+  test("employee MCP still has no staffpass_credential_renew (R4/R8)", () => {
     expect(src("lib/mcp/tools.ts")).not.toContain("staffpass_credential_renew");
-    expect(src("lib/mcp/admin-tools.ts")).not.toContain("employees.credential.auto_renew");
+  });
+});
+
+describe("#409 review M1/M2/M3/L2/L4 (SQL, fail-first)", () => {
+  const sql = src("supabase/migrations/20261019100000_credential_auto_renew.sql");
+
+  test("M1: claim / release / revoke require active employee, live old badge, approved ticket, and no hold", () => {
+    expect(sql).toMatch(/e\.status\s*=\s*'active'/);
+    expect(sql).toMatch(/c\.revoked_at\s+is\s+null/i);
+    expect(sql).toMatch(/a\.status\s*=\s*'approved'/);
+    expect(sql).toMatch(/e\.hold_state\s+is\s+null/i);
+    expect(sql).toMatch(/o\.hold_state\s+is\s+null/i);
+    for (const fn of ["claim_credential_renewal", "release_credential_renewal", "revoke_overlapped_old_credential"]) {
+      expect(sql).toContain(fn);
+    }
+  });
+
+  test("M2: second UPDATE of revoke_overlapped_old_credential RAISEs when 0 rows", () => {
+    expect(sql).toMatch(/raise exception\s+'credential_renewal_revoke_incomplete'/i);
+  });
+
+  test("M3: new_credential_id is ON DELETE RESTRICT so release cannot reopen after the new badge is gone", () => {
+    expect(sql).toMatch(/new_credential_id uuid references public\.credentials\(id\) on delete restrict/i);
+  });
+
+  test("L2/L4: expire_stale_credential_renewals marks expired claimable and stuck claimed rows", () => {
+    expect(sql).toContain("expire_stale_credential_renewals");
+    expect(sql).toMatch(/state\s*=\s*'claimable'/);
+    expect(sql).toMatch(/claimable_until\s*<\s*p_at/);
   });
 });

@@ -3,6 +3,11 @@ import { notFound, redirect } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
 import { BindingPanel } from "@/components/employees/BindingPanel";
 import { findPendingCredentialReissue } from "@/lib/employees/credential-reissue";
+import {
+  expireStaleCredentialRenewals,
+  findOpenCredentialRenewal,
+  isCredentialAutoRenewOnForOrg,
+} from "@/lib/employees/credential-auto-renew";
 import { OAuthGrantsPanel } from "@/components/employees/OAuthGrantsPanel";
 import { isMcpOAuthEnabled } from "@/lib/mcp-oauth/config";
 import { EmployeeActionLog } from "@/components/employees/EmployeeActionLog";
@@ -88,6 +93,14 @@ export default async function EmployeeDetailPage({
   // admin MCP reissue ticket for this employee in this org, waiting for pickup.
   const pendingReissue = bindingPermissions.canRotateCredential
     ? await findPendingCredentialReissue(employee.orgId || orgId || "", employee.id).catch(() => null)
+    : null;
+  const autoRenewOrgId = employee.orgId || orgId || "";
+  const autoRenewEnabled = isCredentialAutoRenewOnForOrg(autoRenewOrgId);
+  if (autoRenewEnabled) {
+    await expireStaleCredentialRenewals({ orgId: autoRenewOrgId }).catch(() => 0);
+  }
+  const openRenewal = autoRenewEnabled
+    ? await findOpenCredentialRenewal(autoRenewOrgId, employee.id).catch(() => null)
     : null;
   const slackIdentity = await getEmployeeSlackIdentity(employee.id);
   const slackOauthConfigured = slackOAuthConfigured();
@@ -391,6 +404,12 @@ export default async function EmployeeDetailPage({
         demoMode={isDemoMode()}
         oauthEnabled={isMcpOAuthEnabled()}
         pendingReissue={pendingReissue}
+        autoRenewEnabled={autoRenewEnabled}
+        openRenewal={
+          openRenewal
+            ? { state: openRenewal.state, claimableUntil: openRenewal.claimableUntil }
+            : null
+        }
       />
       {isMcpOAuthEnabled() ? <OAuthGrantsPanel employeeId={employee.id} /> : null}
 

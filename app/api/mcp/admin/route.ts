@@ -7,7 +7,7 @@ import {
   ADMIN_MCP_SERVER_VERSION,
   STAFFPASS_ADMIN_MCP_URL,
 } from "@/lib/mcp/admin-public";
-import { ADMIN_MCP_TOOLS, callAdminMcpTool } from "@/lib/mcp/admin-tools";
+import { callAdminMcpTool, listAdminMcpToolsForOrg } from "@/lib/mcp/admin-tools";
 import {
   MCP_SUPPORTED_PROTOCOL_VERSIONS,
   MCP_TOOLS_LIST_CACHE,
@@ -70,7 +70,7 @@ function serverInfo() {
     websiteUrl: "https://staffpass.sealith.com",
     mcpEndpoint: STAFFPASS_ADMIN_MCP_URL,
     protocolVersion: MCP_PROTOCOL_VERSION,
-    tools: ADMIN_MCP_TOOLS.map((t) => t.name),
+    tools: listAdminMcpToolsForOrg(null).map((t) => t.name),
     supportedProtocolVersions: MCP_SUPPORTED_PROTOCOL_VERSIONS,
     auth: {
       type: "bearer",
@@ -186,7 +186,7 @@ export async function POST(req: Request) {
 
     if (method === "tools/list") {
       return reply({
-        tools: ADMIN_MCP_TOOLS.map((t) => ({
+        tools: listAdminMcpToolsForOrg(auth.credential.orgId).map((t) => ({
           name: t.name,
           description: t.description,
           inputSchema: t.inputSchema,

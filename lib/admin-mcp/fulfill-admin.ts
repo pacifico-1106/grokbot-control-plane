@@ -773,6 +773,31 @@ async function fulfillCredentialReissueTicket(approval: ApprovalRequest, args: R
   return { ok: true, tool: CREDENTIAL_REISSUE_TOOL, at, employeeId: result.employeeId, summaryJa: result.summaryJa, nextStepJa: result.nextStepJa };
 }
 
+/** Human-approved 社員証 now-renew: opens the 24h claimable window only (no key minted / returned). */
+async function fulfillCredentialAutoRenewTicket(approval: ApprovalRequest, args: Record<string, unknown>): Promise<AdminFulfillment> {
+  const { fulfillCredentialAutoRenew, CREDENTIAL_AUTO_RENEW_ADMIN_TOOL } = await import("@/lib/employees/credential-auto-renew");
+  const result = await fulfillCredentialAutoRenew(approval, args);
+  const at = new Date().toISOString();
+  if (!result.ok) {
+    return {
+      ok: false,
+      tool: CREDENTIAL_AUTO_RENEW_ADMIN_TOOL,
+      at,
+      error: result.code,
+      ...(result.employeeId ? { employeeId: result.employeeId } : {}),
+      nextStepJa: result.messageJa,
+    };
+  }
+  return {
+    ok: true,
+    tool: CREDENTIAL_AUTO_RENEW_ADMIN_TOOL,
+    at,
+    employeeId: result.employeeId,
+    summaryJa: result.summaryJa,
+    nextStepJa: result.nextStepJa,
+  };
+}
+
 /** Human-approved Slack posting identity switch (bot | user); re-checked right before the write. */
 async function fulfillPostingIdentityTicket(approval: ApprovalRequest, args: Record<string, unknown>): Promise<AdminFulfillment> {
   const { fulfillPostingIdentityChange, POSTING_IDENTITY_SET_TOOL } = await import("@/lib/admin-mcp/posting-identity-tool");
@@ -2254,6 +2279,9 @@ async function fulfillApprovedAdminCore(
         break;
       case "employees.credential.reissue":
         fulfillment = await fulfillCredentialReissueTicket(approval, args);
+        break;
+      case "employees.credential.auto_renew":
+        fulfillment = await fulfillCredentialAutoRenewTicket(approval, args);
         break;
       case "employees.retire":
         fulfillment = await fulfillEmployeeRetireTicket(approval, args);

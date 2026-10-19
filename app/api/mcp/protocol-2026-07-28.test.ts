@@ -17,14 +17,14 @@ const { rotateCredential } = await import("@/lib/data");
 const { fingerprintSecret } = await import("@/lib/bindings");
 const { DEMO_ADMIN_SECRET, resetDemoAdminAgent } = await import("@/lib/data/admin-agents");
 const { listStaffpassMcpTools } = await import("@/lib/mcp/tools");
-const { ADMIN_MCP_TOOLS } = await import("@/lib/mcp/admin-tools");
+const { listAdminMcpToolsForOrg } = await import("@/lib/mcp/admin-tools");
 const employeeRoute = await import("@/app/api/mcp/route");
 const adminRoute = await import("@/app/api/mcp/admin/route");
 
 const SUPPORTED = ["2026-07-28", "2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
 const EMP_TOKEN = "gb_emp_d1_protocol_2026_07_28_test_0123456789";
 const EMP_TOOL_NAMES = listStaffpassMcpTools().map((t) => t.name);
-const ADMIN_TOOL_NAMES = ADMIN_MCP_TOOLS.map((t) => t.name);
+const ADMIN_TOOL_NAMES = listAdminMcpToolsForOrg(DEMO_ORG.id).map((t) => t.name);
 const ORIGINAL_ENV = {
   strict: process.env.MCP_STRICT_REQUEST_HEADERS,
   log: process.env.MCP_UNAUTH_INIT_LOG_ENABLED,

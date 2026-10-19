@@ -25,6 +25,7 @@ const _toolKindMap: Record<string, ApprovalKind> = {
 
   // Account kind: admin operations (from audit-class.ts ADMIN_TOOL_AUDIT_ACTION)
   "employees.issue": "account",
+  "employees.credential.auto_renew": "account",
   "link": "account",
   "policy.patch": "account",
   "parties.upsert": "account",
