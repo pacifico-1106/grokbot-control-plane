@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { SERVICE_LABEL } from "./brand";
 import { isMailUnverifiedFromEnabled } from "./feature-flags";
 import {
+  effectiveMailAudience,
   getEmailFrom,
   resolveTransactionalFrom,
   sendTransactionalEmail,
@@ -172,6 +173,32 @@ describe("sendTransactionalEmail audience", () => {
     expect(billing.stub).toBe(true);
   });
 
+  test("welcome / trial_started は audience 省略でも verified でも未確認扱い（フラグ ON）", async () => {
+    process.env.EMAIL_FROM = "Prod <noreply@prod.example>";
+    process.env.MAIL_UNVERIFIED_FROM_ENABLED = "true";
+    delete process.env.EMAIL_FROM_UNVERIFIED;
+    delete process.env.RESEND_API_KEY;
+    const omitted = await sendTransactionalEmail({
+      to: "third@example.invalid",
+      template: "welcome",
+      subject: "x",
+      html: "<p>x</p>",
+    });
+    const forcedVerified = await sendTransactionalEmail({
+      to: "third@example.invalid",
+      template: "trial_started",
+      subject: "x",
+      html: "<p>x</p>",
+      audience: "verified",
+    });
+    expect(omitted).toEqual({ ok: false, error: "unverified_from_unconfigured" });
+    expect(forcedVerified).toEqual({ ok: false, error: "unverified_from_unconfigured" });
+    expect(effectiveMailAudience("welcome")).toBe("unverified");
+    expect(effectiveMailAudience("trial_started", "verified")).toBe("unverified");
+    expect(effectiveMailAudience("approval_needed", "verified")).toBe("verified");
+    expect(effectiveMailAudience("approval_needed")).toBe("verified");
+  });
+
   test("verified の直接呼び出しは未確認 From を使わない", async () => {
     process.env.EMAIL_FROM = "Prod <noreply@prod.example>";
     process.env.MAIL_UNVERIFIED_FROM_ENABLED = "true";
@@ -211,5 +238,96 @@ describe("配線", () => {
     expect(env).toContain("MAIL_UNVERIFIED_FROM_ENABLED");
     expect(env).toContain("EMAIL_FROM_UNVERIFIED");
     expect(env).not.toMatch(/^MAIL_UNVERIFIED_FROM_ENABLED=true/m);
+  });
+});
+
+describe("EMAIL_FROM_UNVERIFIED の値チェック", () => {
+  test("改行や制御文字が入っていたら fail-closed", () => {
+    process.env.EMAIL_FROM = "Prod <noreply@prod.example>";
+    process.env.MAIL_UNVERIFIED_FROM_ENABLED = "true";
+    process.env.EMAIL_FROM_UNVERIFIED = "Unverified <noreply@unverified.example>\nBcc: evil@example.invalid";
+    expect(resolveTransactionalFrom("unverified")).toEqual({
+      ok: false,
+      error: "unverified_from_invalid",
+    });
+    process.env.EMAIL_FROM_UNVERIFIED = "Unverified <noreply@unverified.example>\u0000";
+    expect(resolveTransactionalFrom("unverified")).toEqual({
+      ok: false,
+      error: "unverified_from_invalid",
+    });
+  });
+
+  test("制御文字のとき送信せず、ログに値と宛先を出さない", async () => {
+    process.env.EMAIL_FROM = "Prod <noreply@prod.example>";
+    process.env.MAIL_UNVERIFIED_FROM_ENABLED = "true";
+    process.env.EMAIL_FROM_UNVERIFIED = "Unverified <noreply@unverified.example>\r\nSubject: injected";
+    delete process.env.RESEND_API_KEY;
+    const warnings: string[] = [];
+    const warn = console.warn;
+    console.warn = (...args: unknown[]) => {
+      warnings.push(args.map(String).join(" "));
+    };
+    try {
+      const sent = await sendWelcomeEmail("third@example.invalid", "例");
+      expect(sent).toEqual({ ok: false, error: "unverified_from_invalid" });
+      expect(sent.stub).toBeUndefined();
+      const joined = warnings.join("\n");
+      expect(joined).toContain("unverified_from_invalid");
+      expect(joined).not.toContain("third@example.invalid");
+      expect(joined).not.toContain("noreply@unverified.example");
+      expect(joined).not.toContain("injected");
+    } finally {
+      console.warn = warn;
+    }
+  });
+
+  test("EMAIL_FROM と同じ値なら警告するが送る。ログに値と宛先は出さない", async () => {
+    process.env.EMAIL_FROM = "Same <noreply@prod.example>";
+    process.env.MAIL_UNVERIFIED_FROM_ENABLED = "true";
+    process.env.EMAIL_FROM_UNVERIFIED = "Same <noreply@prod.example>";
+    delete process.env.RESEND_API_KEY;
+    const warnings: string[] = [];
+    const warn = console.warn;
+    console.warn = (...args: unknown[]) => {
+      warnings.push(args.map(String).join(" "));
+    };
+    try {
+      const sent = await sendWelcomeEmail("third@example.invalid", "例");
+      expect(sent.ok).toBe(true);
+      expect(sent.stub).toBe(true);
+      expect(resolveTransactionalFrom("unverified")).toEqual({
+        ok: true,
+        from: "Same <noreply@prod.example>",
+      });
+      const joined = warnings.join("\n");
+      expect(joined).toContain("unverified_from_matches_production_from");
+      expect(joined).not.toContain("third@example.invalid");
+      expect(joined).not.toContain("noreply@prod.example");
+      expect(joined).not.toContain("Same <");
+    } finally {
+      console.warn = warn;
+    }
+  });
+});
+
+describe("[resend:stub] ログ", () => {
+  test("stub ログに宛先を出さない", async () => {
+    process.env.EMAIL_FROM = "Prod <noreply@prod.example>";
+    delete process.env.MAIL_UNVERIFIED_FROM_ENABLED;
+    delete process.env.RESEND_API_KEY;
+    const infos: string[] = [];
+    const info = console.info;
+    console.info = (...args: unknown[]) => {
+      infos.push(args.map(String).join(" "));
+    };
+    try {
+      await sendApprovalNeededEmail("ops@example.invalid", "要約", "high");
+      const joined = infos.join("\n");
+      expect(joined).toContain("[resend:stub]");
+      expect(joined).toContain("approval_needed");
+      expect(joined).not.toContain("ops@example.invalid");
+    } finally {
+      console.info = info;
+    }
   });
 });
