@@ -40,54 +40,73 @@ const BIDI_CHARS_GLOBAL = /[\u202a-\u202e\u2066-\u2069\u200e\u200f\u061c]+/g;
 const INVISIBLE_CHARS = /[\u200b-\u200d\u2060-\u2065\ufeff\u00ad\u180e]/;
 const INVISIBLE_CHARS_GLOBAL = /[\u200b-\u200d\u2060-\u2065\ufeff\u00ad\u180e]+/g;
 
+// === URL detection patterns ===
+// Simplified rules: reject only specific dangerous patterns, allow dot-only names.
+//
+// Reject:
+// - Schemes (http, https, hxxp, hxxps, ftp, javascript, data, vbscript, file, mailto)
+//   - javascript:, vbscript:, mailto: are checked on whitespace-stripped string
+//   - data:, file: only rejected when not separated by space (common words)
+// - www. (checked on whitespace-stripped string)
+// - xn-- (punycode)
+// - @ (email-like)
+// - / or // (path-like) - includes slash-like Unicode characters
+// - Host with port (domain.tld:port, IPv4:port, IPv6:port)
+//
+// Allow:
+// - Names with only dots (Sealith.AI, example.com, 1.2.3.4 without port)
+// - Time/ratio patterns like "10:30", "16:9"
+
+// Slash-like characters to normalize to /
+// U+2215 DIVISION SLASH (∕)
+// U+2044 FRACTION SLASH (⁄)
+// U+29F8 BIG SOLIDUS (⧸)
+// U+2571 BOX DRAWINGS LIGHT DIAGONAL UPPER RIGHT TO LOWER LEFT (╱)
+// U+FF0F FULLWIDTH SOLIDUS (／)
+// Note: U+FE68 SMALL REVERSE SOLIDUS is a backslash, not a slash - excluded
+const SLASH_LIKE_CHARS = /[\u2215\u2044\u29f8\u2571\uff0f]/g;
+
 // URL scheme patterns (case insensitive)
-// Includes obfuscated variants (hxxp, hxxps) and ftp
+// For non-whitespace-stripped check (data: and file: only without space)
 const URL_SCHEME_PATTERN = /(?:https?|hxxps?|ftp|javascript|data|vbscript|file|mailto):/i;
 
 // Schemes that require :// (for whitespace-stripped detection)
-// Only these are checked after removing whitespace to avoid false positives
-// like "File : Notes" → "File:Notes" matching "file:"
 const URL_SCHEME_WITH_SLASHES = /(?:https?|hxxps?|ftp):\/\//i;
 
+// Dangerous schemes that should be rejected even with whitespace
+// These are checked on whitespace-stripped, lowercased string
+const DANGEROUS_SCHEME_NO_SPACE = /(?:javascript|vbscript|mailto):/i;
+
 // Scheme with space/NBSP before colon (e.g., "http ://")
-// Requires :// to avoid matching "HTTP : Status" etc.
 const URL_SCHEME_SPACED_PATTERN = /(?:https?|hxxps?|ftp)[\s\u00a0]*:[\s\u00a0]*\/\//i;
 
-// www. prefix
-const WWW_PREFIX_PATTERN = /(?:^|\s)www\./i;
+// www. prefix - checked on whitespace-stripped string
+const WWW_PATTERN = /www\./i;
 
-// IPv4 pattern (with optional path)
-const IPV4_PATTERN = /(?:^|[\s(])(?:25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)(?:\.(?:25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)){3}(?:[\/\?#]|$|\s)/;
+// Punycode label pattern (xn--) - reject
+const PUNYCODE_PATTERN = /(?:^|[\s.])xn--[a-z0-9-]*/i;
 
-// Punycode label pattern (xn--)
-const PUNYCODE_PATTERN = /(?:^|[\s.])(xn--[a-z0-9-]+)/i;
+// @ sign (email-like) - reject
+const AT_SIGN_PATTERN = /@/;
 
-// Common TLDs for domain detection (limited allowlist to avoid false positives)
-const COMMON_TLDS = new Set([
-  "com", "net", "org", "edu", "gov", "mil", "int",
-  "jp", "io", "co", "app", "dev", "ai", "me", "tv", "cc", "biz", "info",
-  "uk", "de", "fr", "cn", "kr", "ru", "br", "au", "in", "ca",
-]);
+// Slash pattern (path-like) - reject (after normalizing slash-like chars)
+const SLASH_PATTERN = /\//;
 
-// Domain-like pattern: alphanumeric label followed by . and a TLD (2+ letters)
-// Must avoid false positives for "Co., Ltd.", "Inc." etc.
-// Matches: example.com, evil.co.jp, test.org/path
-// Does NOT match: Co., Ltd. (comma after), Inc. (space/end after), 2.0 (number TLD)
-// Supports multi-level domains like evil.co.jp
-const DOMAIN_PATTERN = /(?:^|[\s(])[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*\.[a-z]{2,}(?:[\/\?#]|$|\s)/i;
-
-// Pattern for domain adjacent to non-ASCII (Japanese text etc.)
-// Detects: 株式会社malware.com, note.com株式会社
-// Uses word boundary before/after the domain where ASCII meets non-ASCII
-const DOMAIN_ADJACENT_PATTERN = /[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*\.([a-z]{2,})(?:[\/\?#]|$)?/gi;
-
-// Pattern for non-ASCII domain labels (e.g., 日本語.com)
-// Detects domains where the label starts with non-ASCII characters
-const NON_ASCII_DOMAIN = /[^\x00-\x7f][^\s.]*\.([a-z]{2,})(?:[\/\?#]|$|\s)?/gi;
-
-// Patterns that indicate NOT a domain (safe company suffixes)
-// "Co., Ltd." "Inc." etc. — followed by comma, end, or space with no path-like continuation
-const SAFE_SUFFIX_PATTERN = /(?:^|[\s(])(?:co|inc|ltd|llc|llp|corp|gmbh|sa|ag|plc|kg)\.(?:,|\s|$)/i;
+// Host with port pattern - reject
+// Host is one of:
+// - Domain/IPv4: labels with at least one dot (e.g., a.com, 1.2.3.4)
+// - IPv6 in brackets: [::1], [2001:db8::1]
+// - Bare IPv6 with :: (e.g., ::1, fe80::1:443) - MUST contain ::
+// Port: colon + optional space + 1-5 digits + (end or any non-digit)
+// Host can be preceded by: start, space, or non-ASCII (Japanese)
+// 
+// LOW-2: Port followed by non-digit (letter, dot, etc.) is rejected for domain/IPv6
+// Examples: a.com:8080foo, evil.com:8080. → rejected
+// Time/ratio patterns without dots (10:30, 16:9) → allowed (not matched by these patterns)
+const HOST_PORT_DOMAIN_IPV4 = /(?:^|[\s\u3000-\u9fff\uac00-\ud7af])(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]*[a-z0-9])?:\s?\d{1,5}(?:$|[^0-9])/i;
+const HOST_PORT_IPV6_BRACKET = /\[[0-9a-f:]+\]:\s?\d{1,5}(?:$|[^0-9])/i;
+// LOW-1: Only match IPv6 addresses containing :: (not aa:bb:cc:80 which has no ::)
+const HOST_PORT_IPV6_BARE = /(?:^|[\s])(?:[0-9a-f]*::)[0-9a-f:]*:\s?\d{1,5}(?:$|[^0-9])/i;
 
 // Combining character pattern for stripping before URL check
 const COMBINING_CHARS = /\p{M}/gu;
@@ -147,16 +166,17 @@ function containsControlChars(s: string): boolean {
 
 /**
  * Normalize string for URL detection:
+ * - Replace slash-like characters with ASCII /
  * - Replace fullwidth characters with ASCII equivalents
  * - Replace ideographic full stop (。U+3002) with dot
- * - Strip combining characters
+ * - Strip combining characters (they don't affect URL detection, e.g., café is allowed)
  */
 function normalizeForUrlCheck(s: string): string {
   return s
+    // Slash-like characters → /
+    .replace(SLASH_LIKE_CHARS, "/")
     // Fullwidth colon (：) → :
     .replace(/\uff1a/g, ":")
-    // Fullwidth solidus (／) → /
-    .replace(/\uff0f/g, "/")
     // Fullwidth full stop (．) → .
     .replace(/\uff0e/g, ".")
     // Ideographic full stop (。) → .
@@ -166,94 +186,61 @@ function normalizeForUrlCheck(s: string): string {
     .replace(/[\uff41-\uff5a]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0))
     // Fullwidth digits 0-9 → ASCII
     .replace(/[\uff10-\uff19]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0))
-    // Strip combining characters
+    // Strip combining characters (café with combining acute is allowed)
     .replace(COMBINING_CHARS, "");
 }
 
 /**
- * Check if a string looks like it contains a URL.
- * Avoids false positives for "Co., Ltd.", "Inc." etc.
+ * Check if a string looks like it contains a URL-like pattern.
+ *
+ * All checks are performed on NFKC-normalized, then URL-normalized string.
+ * Some checks use whitespace-stripped, lowercased version.
+ *
+ * Reject: schemes, www., xn--, @, /, //, host:port
+ * Allow: names with only dots (Sealith.AI, example.com, 1.2.3.4 without port)
+ *        time/ratio patterns (10:30, 16:9)
  */
 function containsUrlLike(s: string): boolean {
-  // Normalize for URL detection (fullwidth → ASCII, 。→ ., strip combining)
+  // Normalize for URL detection (slash-like → /, fullwidth → ASCII, strip combining)
   const normalized = normalizeForUrlCheck(s);
   
-  // Check explicit schemes (including obfuscated hxxp/hxxps and ftp)
-  if (URL_SCHEME_PATTERN.test(normalized)) return true;
+  // Whitespace-stripped and lowercased for scheme/www checks
+  const noWhitespace = normalized.replace(/\s+/g, "").toLowerCase();
 
-  // Check scheme with space/NBSP before colon (e.g., "http ://")
-  if (URL_SCHEME_SPACED_PATTERN.test(normalized)) return true;
+  // 1. Check dangerous schemes on whitespace-stripped string
+  //    javascript:, vbscript:, mailto: are dangerous even with spaces
+  if (DANGEROUS_SCHEME_NO_SPACE.test(noWhitespace)) return true;
 
-  // Check scheme with spaces inside (e.g., "ht tp://", "h t t p s://")
-  // Only check schemes that require :// to avoid false positives like "File : Notes"
-  // (which becomes "File:Notes" and could match "file:" if we used URL_SCHEME_PATTERN)
-  const noWhitespace = normalized.replace(/\s+/g, "");
+  // 2. Check scheme with :// on whitespace-stripped string (ht tp://, h t t p s://)
   if (URL_SCHEME_WITH_SLASHES.test(noWhitespace)) return true;
 
-  // Check www. prefix
-  if (WWW_PREFIX_PATTERN.test(normalized)) return true;
+  // 3. Check www. on whitespace-stripped string (w w w.evil)
+  if (WWW_PATTERN.test(noWhitespace)) return true;
 
-  // Check IPv4 addresses
-  if (IPV4_PATTERN.test(normalized)) return true;
+  // 4. Check explicit schemes without space separation
+  //    data: and file: are common words, only reject when directly followed by content
+  //    "File: Notes" is rejected, "File : Notes" is allowed
+  if (URL_SCHEME_PATTERN.test(normalized)) return true;
 
-  // Check punycode labels (xn--)
+  // 5. Check scheme with space/NBSP before colon (e.g., "http ://")
+  if (URL_SCHEME_SPACED_PATTERN.test(normalized)) return true;
+
+  // 6. Check punycode labels (xn--)
   if (PUNYCODE_PATTERN.test(normalized)) return true;
 
-  // Check domain-like patterns, but exclude safe company suffixes
-  if (DOMAIN_PATTERN.test(normalized)) {
-    const safeSuffixes = normalized.match(SAFE_SUFFIX_PATTERN);
-    if (safeSuffixes) {
-      const withoutSafe = normalized.replace(SAFE_SUFFIX_PATTERN, " ");
-      if (!DOMAIN_PATTERN.test(withoutSafe)) {
-        return false;
-      }
-    }
-    return true;
-  }
+  // 7. Check @ sign (email-like)
+  if (AT_SIGN_PATTERN.test(normalized)) return true;
 
-  // Check domain adjacent to non-ASCII characters (Japanese text etc.)
-  // Reset lastIndex before using the global regex
-  DOMAIN_ADJACENT_PATTERN.lastIndex = 0;
-  let match;
-  while ((match = DOMAIN_ADJACENT_PATTERN.exec(s)) !== null) {
-    const tld = match[1].toLowerCase();
-    if (COMMON_TLDS.has(tld)) {
-      const fullMatch = match[0];
-      const startIdx = match.index;
-      const endIdx = startIdx + fullMatch.length;
-      
-      // Check if there's non-ASCII adjacent (before or after)
-      const charBefore = startIdx > 0 ? s.charCodeAt(startIdx - 1) : 32;
-      const charAfter = endIdx < s.length ? s.charCodeAt(endIdx) : 32;
-      
-      // If adjacent char is non-ASCII (> 127) and not whitespace, it's suspicious
-      const nonAsciiAdjacent = 
-        (charBefore > 127 && !/\s/.test(String.fromCharCode(charBefore))) ||
-        (charAfter > 127 && !/\s/.test(String.fromCharCode(charAfter)));
-      
-      if (nonAsciiAdjacent) {
-        return true;
-      }
-      
-      // Also check if it looks like a standalone domain (Japanese.com etc.)
-      // If the label contains non-ASCII, it's suspicious
-      const labelPart = fullMatch.split(".")[0];
-      if (/[^\x00-\x7f]/.test(labelPart)) {
-        return true;
-      }
-    }
-  }
+  // 8. Check slash (path-like) - after slash-like normalization
+  if (SLASH_PATTERN.test(normalized)) return true;
 
-  // Check non-ASCII domain labels (e.g., 日本語.com)
-  // Reset lastIndex before using the global regex
-  NON_ASCII_DOMAIN.lastIndex = 0;
-  while ((match = NON_ASCII_DOMAIN.exec(s)) !== null) {
-    const tld = match[1].toLowerCase();
-    if (COMMON_TLDS.has(tld)) {
-      return true;
-    }
-  }
+  // 9. Check host with port patterns
+  //    Only reject when host is domain/IPv4/IPv6, not digit:digit patterns
+  if (HOST_PORT_DOMAIN_IPV4.test(normalized)) return true;
+  if (HOST_PORT_IPV6_BRACKET.test(normalized)) return true;
+  if (HOST_PORT_IPV6_BARE.test(normalized)) return true;
 
+  // All other patterns (including domain-like names with dots) are allowed
   return false;
 }
 

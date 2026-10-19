@@ -172,13 +172,31 @@ describe("signup guard: ORG_NAME_INPUT_STRICT_ENABLED", () => {
       if (!result.ok) expect(result.message).toContain("不可視");
     });
 
-    test("rejects org name with URL-like string (domain)", () => {
-      const result = validateSignupOrgName("example.com Corp");
+    test("allows domain-like names (dots only, no dangerous patterns)", () => {
+      expect(validateSignupOrgName("example.com Corp").ok).toBe(true);
+      expect(validateSignupOrgName("Sealith.AI").ok).toBe(true);
+      expect(validateSignupOrgName("1.2.3.4 Inc").ok).toBe(true);
+    });
+
+    test("rejects www. prefix", () => {
+      const result = validateSignupOrgName("www.example.com");
       expect(result.ok).toBe(false);
       if (!result.ok) expect(result.message).toContain("URL");
     });
 
-    test("rejects org name with https:// scheme", () => {
+    test("rejects @ sign", () => {
+      const result = validateSignupOrgName("admin@example.com");
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.message).toContain("URL");
+    });
+
+    test("rejects slash", () => {
+      const result = validateSignupOrgName("example.com/path");
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.message).toContain("URL");
+    });
+
+    test("rejects https:// scheme", () => {
       const result = validateSignupOrgName("会社 https://evil.com");
       expect(result.ok).toBe(false);
       if (!result.ok) expect(result.message).toContain("URL");
