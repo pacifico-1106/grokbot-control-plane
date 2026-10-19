@@ -12,6 +12,12 @@ export const OPEN_CREDENTIAL_RENEWAL_STATES: readonly CredentialAutoRenewState[]
   "claimed",
 ];
 
+/**
+ * Reuse rejected/expired/held_blocked rows instead of a partial unique.
+ * unique (old_credential_id, threshold) is the design invariant; REUSABLE
+ * states already exist; a new row per attempt would need a schema change
+ * and would leave stale approval_id values on leftover open-looking rows.
+ */
 export const REUSABLE_CREDENTIAL_RENEWAL_STATES: readonly CredentialAutoRenewState[] = [
   "rejected",
   "expired",
@@ -40,6 +46,23 @@ const demoRows = new Map<string, CredentialRenewalRow>();
 /** Tests / demo only. */
 export function demoResetCredentialRenewals(): void {
   demoRows.clear();
+}
+
+/** Tests / demo only — inspect rows in any state (including rejected / expired). */
+export function demoListCredentialRenewals(): CredentialRenewalRow[] {
+  return [...demoRows.values()].map(withoutSecrets);
+}
+
+/** Tests / demo only. */
+export function demoPatchCredentialRenewal(
+  id: string,
+  patch: Partial<CredentialRenewalRow>
+): CredentialRenewalRow | null {
+  const row = demoRows.get(id);
+  if (!row) return null;
+  const next = { ...row, ...patch };
+  demoRows.set(id, next);
+  return withoutSecrets(next);
 }
 
 function mapRow(row: Record<string, unknown>): CredentialRenewalRow {
@@ -155,6 +178,8 @@ export async function insertOrReuseCredentialRenewal(input: {
         demoRows.set(row.id, next);
         return withoutSecrets(next);
       }
+      // Same unique (old_credential_id, threshold) as production: old_revoked etc. cannot insert.
+      return null;
     }
     const created: CredentialRenewalRow = {
       id: `crn_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
@@ -226,6 +251,58 @@ export async function insertOrReuseCredentialRenewal(input: {
     .maybeSingle();
   if (error || !data) return null;
   return withoutSecrets(mapRow(data as Record<string, unknown>));
+}
+
+/**
+ * Close a pending_approval row when its ticket is rejected or expired.
+ * CAS: only the matching approval_id still in pending_approval moves.
+ */
+export async function markCredentialRenewalClosed(input: {
+  orgId: string;
+  approvalId: string;
+  state: "rejected" | "expired";
+}): Promise<CredentialRenewalRow | null> {
+  if (!input.orgId || !input.approvalId) return null;
+  if (input.state !== "rejected" && input.state !== "expired") return null;
+  if (isDemoMode()) {
+    const row = [...demoRows.values()].find(
+      (r) => r.orgId === input.orgId && r.approvalId === input.approvalId && r.state === "pending_approval"
+    );
+    if (!row) return null;
+    const next = { ...row, state: input.state };
+    demoRows.set(row.id, next);
+    return withoutSecrets(next);
+  }
+  const admin = createSupabaseAdminClient();
+  if (!admin) return null;
+  const { data, error } = await admin
+    .from("credential_renewals")
+    .update({ state: input.state })
+    .eq("org_id", input.orgId)
+    .eq("approval_id", input.approvalId)
+    .eq("state", "pending_approval")
+    .select("id, org_id, employee_id, old_credential_id, new_credential_id, approval_id, threshold, state, mode, claimable_until, overlap_until, claimed_at, old_revoked_at, created_at")
+    .maybeSingle();
+  if (error || !data) return null;
+  return withoutSecrets(mapRow(data as Record<string, unknown>));
+}
+
+export async function listPendingApprovalCredentialRenewals(orgId: string): Promise<CredentialRenewalRow[]> {
+  if (!orgId) return [];
+  if (isDemoMode()) {
+    return [...demoRows.values()]
+      .filter((r) => r.orgId === orgId && r.state === "pending_approval")
+      .map(withoutSecrets);
+  }
+  const admin = createSupabaseAdminClient();
+  if (!admin) return [];
+  const { data, error } = await admin
+    .from("credential_renewals")
+    .select("id, org_id, employee_id, old_credential_id, new_credential_id, approval_id, threshold, state, mode, claimable_until, overlap_until, claimed_at, old_revoked_at, created_at")
+    .eq("org_id", orgId)
+    .eq("state", "pending_approval");
+  if (error || !data) return [];
+  return data.map((row) => withoutSecrets(mapRow(row as Record<string, unknown>)));
 }
 
 export async function markCredentialRenewalClaimable(input: {

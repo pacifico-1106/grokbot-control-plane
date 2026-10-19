@@ -10,14 +10,16 @@ import { ADMIN_AUDIT_CLASS } from "@/lib/admin-mcp/audit-class";
 import { requesterOf, selfBound } from "@/lib/admin-mcp/allowed-accounts-tools";
 import { rejectUnsafeArgs } from "@/lib/admin-mcp/slack-dm-setup";
 import { approverFilingStop } from "@/lib/approver-authority/filing";
-import { createApproval } from "@/lib/data";
+import { createApproval, getApprovalById } from "@/lib/data";
 import { appendAuditEvent } from "@/lib/data/audit";
 import { getBinding } from "@/lib/data/bindings";
 import {
   expireStaleCredentialRenewalRows,
   findOpenCredentialRenewalRow,
   insertOrReuseCredentialRenewal,
+  listPendingApprovalCredentialRenewals,
   markCredentialRenewalClaimable,
+  markCredentialRenewalClosed,
   type CredentialRenewalRow,
 } from "@/lib/data/credential-renewals";
 import { getEmployee } from "@/lib/data/employees";
@@ -119,8 +121,23 @@ function holdCode(code: string): string {
   return "held";
 }
 
+async function closePendingRenewalsForClosedTickets(orgId: string): Promise<number> {
+  const rows = await listPendingApprovalCredentialRenewals(orgId);
+  let n = 0;
+  for (const row of rows) {
+    const approval = await getApprovalById(row.approvalId, orgId);
+    if (!approval) continue;
+    const next =
+      approval.status === "rejected" ? "rejected" : approval.status === "expired" || approval.status === "superseded" ? "expired" : null;
+    if (!next) continue;
+    const closed = await markCredentialRenewalClosed({ orgId, approvalId: row.approvalId, state: next });
+    if (closed) n += 1;
+  }
+  return n;
+}
+
 async function expireThenFindOpen(orgId: string, employeeId: string, now?: Date) {
-  await expireStaleCredentialRenewalRows({ orgId, now }).catch(() => 0);
+  await expireStaleCredentialRenewals({ orgId, now }).catch(() => 0);
   return findOpenCredentialRenewalRow(orgId, employeeId);
 }
 
@@ -130,7 +147,9 @@ export async function findOpenCredentialRenewal(orgId: string, employeeId: strin
 
 export async function expireStaleCredentialRenewals(input: { orgId: string; now?: Date }): Promise<number> {
   if (!isCredentialAutoRenewOnForOrg(input.orgId)) return 0;
-  return expireStaleCredentialRenewalRows(input);
+  const expired = await expireStaleCredentialRenewalRows(input);
+  const closed = await closePendingRenewalsForClosedTickets(input.orgId).catch(() => 0);
+  return expired + closed;
 }
 
 type GateOk = {

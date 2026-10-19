@@ -53,6 +53,7 @@ import {
 } from "@/lib/slack/connect-internal-base-diagnose";
 import { diagnoseLineApprovalStatus } from "@/lib/line/line-approval-status-diagnose";
 import { queueAdminTool } from "@/lib/admin-mcp/queue";
+import { closeApprovalWithoutSend } from "@/lib/data/approvals";
 import { handleSlackDmSetupTool, isSlackDmSetupTool } from "@/lib/admin-mcp/slack-dm-setup";
 import { SLACK_APPROVER_SET_TOOL, handleSlackApproverSet } from "@/lib/admin-mcp/slack-approver";
 import { SLACK_AUTHORIZE_LINK_TOOL, handleSlackAuthorizeLinkIssue } from "@/lib/admin-mcp/slack-authorize-link";
@@ -2429,14 +2430,27 @@ export async function callAdminMcpTool(
     });
     if (queued.code === "needs_approval" && queued.approvalId) {
       const employeeId = typeof outcome.queuedArgs.employeeId === "string" ? outcome.queuedArgs.employeeId : "";
-      if (employeeId && outcome.oldCredentialId) {
-        await recordCredentialAutoRenewFiling({
-          orgId: cred.orgId,
-          employeeId,
-          oldCredentialId: outcome.oldCredentialId,
-          approvalId: queued.approvalId,
-          source: "admin_mcp",
-        });
+      const recorded =
+        employeeId && outcome.oldCredentialId
+          ? await recordCredentialAutoRenewFiling({
+              orgId: cred.orgId,
+              employeeId,
+              oldCredentialId: outcome.oldCredentialId,
+              approvalId: queued.approvalId,
+              source: "admin_mcp",
+            })
+          : { ok: false as const, code: "already_pending", message: "進行中の社員証更新があります。" };
+      if (!recorded.ok) {
+        await closeApprovalWithoutSend({
+          approval: { id: queued.approvalId, orgId: cred.orgId },
+          from: ["pending"],
+          to: "superseded",
+          meta: { reason: "credential_renewal_filing_failed" },
+        }).catch(() => null);
+        return toolResult(
+          { ok: false, code: "already_pending", error: "already_pending", message: recorded.message },
+          true
+        );
       }
     }
     return toolResult(queued, false);

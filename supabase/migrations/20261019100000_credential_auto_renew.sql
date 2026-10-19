@@ -207,11 +207,13 @@ begin
 end $roc$;
 
 -- L2/L4: expire claimable past the window, and claimed rows stuck with no new badge.
+-- M-A: pending_approval whose ticket is rejected → rejected; expired/superseded → expired.
 create or replace function public.expire_stale_credential_renewals(
   p_org uuid, p_at timestamptz
 ) returns integer
 language plpgsql security invoker set search_path = pg_catalog, public as $esr$
 declare n integer;
+declare closed integer;
 begin
   if p_org is null or p_at is null then return 0; end if;
   update public.credential_renewals
@@ -227,7 +229,16 @@ begin
        )
      );
   get diagnostics n = row_count;
-  return n;
+  update public.credential_renewals r
+     set state = case a.status when 'rejected' then 'rejected' else 'expired' end
+    from public.approval_requests a
+   where r.org_id = p_org
+     and r.state = 'pending_approval'
+     and a.id = r.approval_id
+     and a.org_id = r.org_id
+     and a.status in ('rejected', 'expired', 'superseded');
+  get diagnostics closed = row_count;
+  return n + closed;
 end $esr$;
 
 revoke all on function public.credential_renewal_operable(uuid, uuid, boolean) from public, anon, authenticated;

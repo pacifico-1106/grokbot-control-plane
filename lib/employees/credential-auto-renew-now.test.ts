@@ -14,8 +14,14 @@ import { loadApproverClassificationContext } from "@/lib/approver-authority/fili
 import { PLAN_ADMIN_SCOPES, READ_ONLY_ADMIN_TOOLS } from "@/lib/billing/plan-scopes";
 import { getBinding, rotateCredential as demoRotate } from "@/lib/bindings";
 import { getApprovalById, listApprovals, resolveApproval } from "@/lib/data";
+import { closeApprovalWithoutSend } from "@/lib/data/approvals";
 import { resetDemoAdminAgent } from "@/lib/data/admin-agents";
-import { demoResetCredentialRenewals } from "@/lib/data/credential-renewals";
+import {
+  demoListCredentialRenewals,
+  demoPatchCredentialRenewal,
+  demoResetCredentialRenewals,
+  markCredentialRenewalClaimable,
+} from "@/lib/data/credential-renewals";
 import { getRuntimeAudit, getRuntimeEmployees } from "@/lib/demo-data";
 import { ADMIN_MCP_TOOL_NAMES } from "@/lib/mcp/admin-public";
 import { ADMIN_MCP_TOOLS, callAdminMcpTool, listAdminMcpToolsForOrg, readApprovedAdminResult } from "@/lib/mcp/admin-tools";
@@ -318,6 +324,102 @@ describe("fulfil: authorize claimable window, mint nothing", () => {
     const approved = getRuntimeAudit().find((e) => e.action === "credential.renew_approved" && e.metadata?.approvalId === q.approvalId);
     expect(approved).toBeDefined();
     expect(JSON.stringify(approved)).not.toMatch(SECRETISH);
+  });
+});
+
+describe("M-A: reject / expire then re-file the same badge × now", () => {
+  test("Slack reject marks rejected; same old credential × now can re-file; old approval_id cannot open the window", async () => {
+    const emp = newEmployee(ORG_A);
+    const first = await proposeMcp(emp.id);
+    expect(first.code).toBe("needs_approval");
+    const oldApprovalId = String(first.approvalId);
+    const original = await findOpenCredentialRenewal(ORG_A, emp.id);
+    expect(original).toMatchObject({ state: "pending_approval", approvalId: oldApprovalId });
+    const rejected = await resolveApproval(oldApprovalId, "rejected", HUMAN.email, ORG_A, { actorId: HUMAN.memberId });
+    expect(rejected?.status).toBe("rejected");
+    await expireStaleCredentialRenewals({ orgId: ORG_A });
+    expect(await findOpenCredentialRenewal(ORG_A, emp.id)).toBeNull();
+    expect(demoListCredentialRenewals().find((r) => r.id === original?.id)?.state).toBe("rejected");
+
+    const second = await proposeMcp(emp.id);
+    expect(second.code).toBe("needs_approval");
+    expect(String(second.approvalId)).not.toBe(oldApprovalId);
+    const reused = await findOpenCredentialRenewal(ORG_A, emp.id);
+    expect(reused).toMatchObject({
+      id: original?.id,
+      state: "pending_approval",
+      approvalId: String(second.approvalId),
+      oldCredentialId: emp.credentialId,
+      threshold: "now",
+    });
+    const openedWithOld = await markCredentialRenewalClaimable({
+      orgId: ORG_A,
+      employeeId: emp.id,
+      approvalId: oldApprovalId,
+      claimableUntil: new Date(Date.now() + 60_000).toISOString(),
+    });
+    expect(openedWithOld).toBeNull();
+    expect(await findOpenCredentialRenewal(ORG_A, emp.id)).toMatchObject({
+      state: "pending_approval",
+      approvalId: String(second.approvalId),
+    });
+  });
+
+  test("expired approval ticket marks expired; same old credential × now can re-file", async () => {
+    const emp = newEmployee(ORG_A);
+    const first = await proposeMcp(emp.id);
+    expect(first.code).toBe("needs_approval");
+    const oldApprovalId = String(first.approvalId);
+    const original = await findOpenCredentialRenewal(ORG_A, emp.id);
+    const closed = await closeApprovalWithoutSend({
+      approval: { id: oldApprovalId, orgId: ORG_A },
+      from: ["pending"],
+      to: "expired",
+      meta: { reason: "approval_ttl_elapsed" },
+    });
+    expect(closed?.status).toBe("expired");
+    await expireStaleCredentialRenewals({ orgId: ORG_A });
+    expect(await findOpenCredentialRenewal(ORG_A, emp.id)).toBeNull();
+    expect(demoListCredentialRenewals().find((r) => r.id === original?.id)?.state).toBe("expired");
+
+    const second = await proposeMcp(emp.id);
+    expect(second.code).toBe("needs_approval");
+    expect(String(second.approvalId)).not.toBe(oldApprovalId);
+    expect(await findOpenCredentialRenewal(ORG_A, emp.id)).toMatchObject({
+      id: original?.id,
+      state: "pending_approval",
+      approvalId: String(second.approvalId),
+    });
+    const openedWithOld = await markCredentialRenewalClaimable({
+      orgId: ORG_A,
+      employeeId: emp.id,
+      approvalId: oldApprovalId,
+      claimableUntil: new Date(Date.now() + 60_000).toISOString(),
+    });
+    expect(openedWithOld).toBeNull();
+  });
+});
+
+describe("L-C: MCP filing failure after the ticket is queued", () => {
+  test("renewal INSERT/reuse failure returns already_pending and invalidates the new ticket", async () => {
+    const emp = newEmployee(ORG_A);
+    const first = await proposeMcp(emp.id);
+    expect(first.code).toBe("needs_approval");
+    const open = await findOpenCredentialRenewal(ORG_A, emp.id);
+    expect(open).toBeTruthy();
+    demoPatchCredentialRenewal(open!.id, { state: "old_revoked" });
+    expect(await findOpenCredentialRenewal(ORG_A, emp.id)).toBeNull();
+    const pendingBefore = (await listApprovals(ORG_A)).filter(
+      (a) => a.employeeId === emp.id && a.tool === TOOL && a.status === "pending"
+    );
+    const second = await proposeMcp(emp.id);
+    expect(second.code).toBe("already_pending");
+    expect(second.needs_approval).not.toBe(true);
+    expect(second.approvalId).toBeUndefined();
+    const pendingAfter = (await listApprovals(ORG_A)).filter(
+      (a) => a.employeeId === emp.id && a.tool === TOOL && a.status === "pending"
+    );
+    expect(pendingAfter.map((a) => a.id).sort()).toEqual(pendingBefore.map((a) => a.id).sort());
   });
 });
 
