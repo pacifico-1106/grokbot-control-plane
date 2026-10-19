@@ -164,6 +164,13 @@ ADDITIVE = [
      "to_regclass('public.mcp_auth_failures') is null"
      " and to_regprocedure('public.record_mcp_auth_failure(text,uuid,uuid,uuid,text)') is null"
      " and to_regprocedure('public.touch_credential_last_used(uuid)') is null"),
+    # 社員証 auto-renew (R1): table + 3 RPCs + same-org trigger fn.
+    ("20261019100000_", "tests/security/db-credential-auto-renew.sql",
+     "to_regclass('public.credential_renewals') is null"
+     " and to_regprocedure('public.claim_credential_renewal(uuid,uuid,uuid,text,timestamptz)') is null"
+     " and to_regprocedure('public.release_credential_renewal(uuid,uuid,text)') is null"
+     " and to_regprocedure('public.revoke_overlapped_old_credential(uuid,uuid,uuid,uuid)') is null"
+     " and to_regprocedure('public.credential_renewals_same_org()') is null"),
 ]
 
 # Un-timestamped legacy names do not sort in dependency order (see

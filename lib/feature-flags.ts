@@ -1064,3 +1064,34 @@ export function aiPeerWakeRootWindowSeconds(): number {
 export function isOrgNameInputStrictEnabled(): boolean {
   return parseFlag(process.env.ORG_NAME_INPUT_STRICT_ENABLED);
 }
+
+/**
+ * CREDENTIAL_AUTO_RENEW_ENABLED (default OFF). 社員証 auto-renew (design
+ * 2026-10-16 R1). When OFF, later PRs must not touch credential_renewals,
+ * must not file tickets, and must not open a claim window.
+ *
+ * Global ON is still fail-closed per org: CREDENTIAL_AUTO_RENEW_ORG_ALLOWLIST
+ * (comma-separated org UUIDs). Empty / missing / unreadable / non-UUID
+ * entries deny every org while CREDENTIAL_AUTO_RENEW_ORG_ALLOWLIST_REQUIRED
+ * is true (the default; unset counts as true). Only an explicit 0 / false /
+ * off / disabled opens the empty-list hatch. Org UUIDs stay in env, never
+ * in source.
+ *
+ * R1 is schema + this gate only. Cron, Slack, HTTP claim, and MCP tools
+ * come in later PRs behind the same flags.
+ */
+export function isCredentialAutoRenewEnabled(): boolean {
+  return parseFlag(process.env.CREDENTIAL_AUTO_RENEW_ENABLED);
+}
+
+/**
+ * CREDENTIAL_AUTO_RENEW_ORG_ALLOWLIST_REQUIRED (default true): an empty /
+ * missing allowlist denies EVERY org (fail-closed if the env var is dropped
+ * during the pilot). Only an explicit "0" / "false" / "off" / "disabled"
+ * opens auto-renew to all orgs when the list is empty. A non-empty list
+ * always applies.
+ */
+export function isCredentialAutoRenewOrgAllowlistRequired(): boolean {
+  const v = (process.env.CREDENTIAL_AUTO_RENEW_ORG_ALLOWLIST_REQUIRED || "").trim().toLowerCase();
+  return !(v === "0" || v === "false" || v === "off" || v === "disabled");
+}
