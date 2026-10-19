@@ -291,16 +291,13 @@ export async function resolveEmployeeCredential(
       expired: "credential expired (fail-closed)",
     };
     const httpStatus = looked.code === "revoked" ? 403 : 401;
+    const failId = looked as AuthFailureIdentity;
     return {
       ok: false,
       code: looked.code,
       message: messages[looked.code] || messages.invalid_credential,
       httpStatus,
-      ...identityFrom(
-        "orgId" in looked ? looked.orgId : undefined,
-        "employeeId" in looked ? looked.employeeId : undefined,
-        "credentialId" in looked ? looked.credentialId : undefined
-      ),
+      ...identityFrom(failId.orgId, failId.employeeId, failId.credentialId),
     };
   }
 
