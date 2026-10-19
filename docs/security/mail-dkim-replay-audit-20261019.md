@@ -5,7 +5,7 @@
 **対象:** `staffpass.sealith.com` と、そこから送信に使っているドメイン。  
 **背景:** 楽天カードを名乗るフィッシングが SPF / DKIM / DMARC すべて pass で届いた。署名対象は `h=From:From` だけ（DKIM リプレイ）。
 
-この文書はリポジトリと公開 DNS（`dig`）から分かることに限定する。本番の `EMAIL_FROM`・Resend ダッシュボード・Supabase Auth の SMTP 実値はコードに無い。実際の受信ヘッダは依頼者側で確認する前提。秘密値・検証トークン・公開鍵本体は書かない。
+この文書はリポジトリと公開 DNS（`dig`）から分かることに加え、§2 だけ特殊班が `tando@` の受信箱から取った生ヘッダ（2026-09-03 / 2026-09-28 の Resend 便）で更新した。秘密値・検証トークン・公開鍵本体は書かない。八坂さんへのヘッダ確認は **保留**（特殊班の結果で足りるため）。`staffpass` ドメインから送られた実メールはまだ確かめていない。
 
 ---
 
@@ -14,12 +14,12 @@
 | # | 項目 | 現状 | 危険度 |
 |---|------|------|--------|
 | 1 | 外部へ署名付きメールを出せる経路 | Resend の制御面通知と、Supabase Auth の再設定メールが主。`mail.send` は Resend を使わない。`/api/email` と `/api/trial` はコード上も削除済み | **高**（未確認宛先へ出せる経路がある） |
-| 2 | DKIM 署名対象ヘッダ | アプリは `h=` を指定できない。Resend / Supabase SMTP 側の設定。公開 DNS では apex `sealith.com` に Resend セレクタがある | **高**（実ヘッダ未確認。鍵は 1024 bit 相当） |
+| 2 | DKIM 署名対象ヘッダ | 同じ Resend から届いた実便は `d=tokyo307inc.com` / `s=resend`。`h=` は From・To・Subject・本文関連を含む（From だけではない）。鍵は 1024 bit で 9/3 から未変更 | **中**（楽天型ではない。オーバーサインと `x=` と入力本文が残る） |
 | 3 | 未確認宛先のサブドメイン分離 | 未実装。送信 From は `EMAIL_FROM` 一本 | **中**（分離すればリプレイの被害範囲を狭められる） |
 | 4 | DKIM 輪番と DMARC `rua` 監視 | リポジトリに手順書・cron・実装なし。DNS 上の `rua` は存在する | **中** |
 | 5 | SPF | apex はロリポップのみ。Resend 用は `send.sealith.com`。どちらも `~all`。`staffpass.sealith.com` に送信用 TXT は無い | **中** |
 
-いちばん危ないのは「認証なしで、第三者が指定した宛先に、Staffpass 名義の署名付きメールが届く」経路である。signup の歓迎／トライアル開始と、パスワード再設定がそれに当たる。攻撃者が自分の受信箱で正規署名を入手し、`h=` が薄いと件名・本文・宛先を差し替えてリプレイできる。
+いちばん危ないのは「認証なしで、第三者が指定した宛先に、Staffpass 名義の署名付きメールが届く」経路である。signup の歓迎／トライアル開始と、パスワード再設定がそれに当たる。実ヘッダでは件名や本文を差し替えると署名が壊れる（楽天型の From だけ署名ではない）。残る弱点は、オーバーサインが無いこと、`x=` も鍵のローテーションも無いこと、利用者が入れた文字列が本文に載ること。本線は第三者宛の署名付きメールを減らすこと（§2 の a〜e）。
 
 ---
 
@@ -95,57 +95,87 @@
 
 ---
 
-## 2. DKIM の署名対象ヘッダ（コードと設定から分かること）
+## 2. DKIM の署名対象ヘッダ（実メールで分かったこと）
 
-### Resend
+### 根拠
 
-アプリは `from` / `to` / `subject` / `html` / `text` / `tags` だけ渡す（`lib/resend.ts`）。`headers`、`DKIM-Signature`、`h=`、セレクタは渡していない。署名対象は Resend（背後は Amazon SES）が決める。
+特殊班が `tando@` の受信箱から取った生ヘッダ。対象は 2026-09-03 と 2026-09-28 に届いた Resend のメール。署名は `d=tokyo307inc.com`、`s=resend`。このメールは Staffpass と同じ Resend から送られている。
 
-公開資料上のよくある形は `s=resend`、`h=from:to:subject:date:message-id`。**これは実メールのヘッダで確認すること。** 楽天カード事例のように `h=From:From` だけ、という保証はコードからはできない。
+**八坂さんにヘッダを確かめてもらう作業は保留にした。** 特殊班の生ヘッダと dkimpy の結果で足りる。`staffpass` のドメインから送られた実際のメールは、まだ確かめていない。
 
-件名は `sanitizeEmailSubject` で制御文字を落とし 200 文字まで。HTML は呼び出し側が escape する前提。DKIM の `h=` は変えない。
+### 実ヘッダ（2026-09-03 / 2026-09-28）
 
-### コードから分かる送信元ドメイン
+| 項目 | 事実 |
+|------|------|
+| Resend 署名 | `d=tokyo307inc.com`、`s=resend` |
+| `h=` | `From:To:Subject:Message-ID:(Content-Transfer-Encoding:)Date:MIME-Version:Content-Type`。From だけを署名しているのではない |
+| `c=` | `relaxed/simple` |
+| `l=` | 付いていない |
+| オーバーサイン | していない（同じヘッダを 2 回 `h=` に入れていない） |
+| `x=` | 付いていない（有効期限なし） |
+| 二重署名 | 同じメールに `amazonses.com` の署名もある。そちらの `h=` は上と同じものに `Feedback-ID` を足したもの |
+| 検証 | 2026-10-19 の公開 DNS の鍵で dkimpy。Resend / SES のどちらも pass |
+| 鍵 | 1024 bit。少なくとも 2026-09-03 から変わっていない |
+
+アプリはこれまでどおり `from` / `to` / `subject` / `html` / `text` / `tags` だけ渡す（`lib/resend.ts`）。`h=` は Resend（背後は SES）が付ける。
+
+### コードから分かる送信元ドメイン（DNS 側。実 From は上記）
 
 | 情報源 | 分かること |
 |--------|------------|
-| `EMAIL_FROM` | 唯一の From。本番値はリポジトリに無い。例は `noreply@your-verified-domain.com` |
+| 実ヘッダ | 確認できた便の DKIM `d=` は `tokyo307inc.com`。`staffpass` ドメイン便は未確認 |
+| `EMAIL_FROM` | アプリの唯一の From。本番値はリポジトリに無い |
 | 既定フォールバック | `noreply@example.com`（未設定時。本番では使わない想定） |
-| アプリホスト | `https://staffpass.sealith.com`（MCP / OAuth issuer / 確認 URL） |
-| 公開 DNS | apex `sealith.com` に `resend._domainkey` がある → Resend 認証ドメインは **apex** が有力 |
-| 公開 DNS | `send.sealith.com` に SES の MX と `include:amazonses.com` → Return-Path / MAIL FROM 用サブドメインが有力 |
-| `staffpass.sealith.com` | Vercel CNAME のみ。SPF / DKIM / DMARC レコードなし。**送信ドメインではない** |
-
-From が `@sealith.com` なら、DKIM `d=sealith.com` と relaxed DMARC で揃いやすい。From が `@staffpass.sealith.com` や `@send.sealith.com` なら、今の公開レコードでは DKIM が無い。**本番 From は受信ヘッダで確定してほしい。**
+| アプリホスト | `https://staffpass.sealith.com`（送信ドメインではない） |
+| 公開 DNS | `resend._domainkey.sealith.com` と `resend._domainkey`（`tokyo307inc.com` 側は特殊班が検証に使用） |
+| 公開 DNS | `send.sealith.com` に SES の MX と `include:amazonses.com` → Return-Path / MAIL FROM 用 |
 
 ### Supabase Auth SMTP
 
 パスワード再設定だけがアプリから Auth メールを起こす。`createUser` は `email_confirm: true` なので確認メールは出さない。Invite API は呼ばない。
 
-From・SMTP ホスト・DKIM は Supabase ダッシュボード（カスタム SMTP なら Resend SMTP の可能性）。リポジトリに `config.toml` も SMTP 環境変数も無い。カスタム SMTP 未設定なら Supabase 共有送信になり、Staffpass ドメインの DKIM は付かない。
+**2026-10-11 に Supabase の SMTP は Resend の SMTP へ切り替え済み。** そのため Staffpass のメールは、アプリの Resend API と Auth の 2 系統とも同じ署名だと見ている。Auth 側の実便ヘッダは、この点検では見ていない。
 
 ### Gmail `mail.send`
 
-連携メールボックスの Google 署名。Staffpass / sealith の DKIM リプレイ対象ではない。
+連携メールボックスの Google 署名。Staffpass / tokyo307inc / sealith の DKIM リプレイ対象ではない。
+
+### 評価
+
+楽天型の「From だけ署名」には当てはまらない。件名や本文を差し替えると、署名が壊れる。
+
+弱点は残る。
+
+1. **オーバーサインが無い。** 2 つ目の Subject や From を足しても pass する。その場合にどちらが表示されるかは、メールソフト次第。
+2. **`x=` が無く、鍵のローテーションもしていない。** 手に入れた署名付きメールは何週間たっても再送できる。正規のメールをそのまま別の宛先へ再送するのも防げない。
+3. **利用者が入力した名前が本文にそのまま載ると、正規の署名が付いた中身を攻撃者が自由に作れる。** リプレイの材料になる。
 
 ### 現状 / 危険度 / 直し方
 
-**現状:** 署名ヘッダはプロバイダ任せ。公開 DNS は apex の Resend 1024 bit 相当鍵と、`send.sealith.com` の SES MAIL FROM。BIMI レコードは無い。
+**現状:** 実便の `h=` は From / To / Subject / 本文関連を含む。1024 bit 鍵は 9/3 から未変更。オーバーサインと `x=` は無い。
 
-**危険度: 高**（実 `h=` 未確認 + 短い鍵 + 未確認宛先への送信）。
+**危険度: 中**（楽天型ではない。残るのはヘッダ追加・無期限・入力本文）。
 
-**直し方（コード・PR 案）:**
+**直し方（コード・PR 案）— 本線は a〜e:**
 
-- 送信ラッパに「この通は未確認宛先」を渡せるようにする（項目 3）。DKIM `h=` 自体はアプリから変えられない。
-- 運用チェックリストに「受信ヘッダで `h=` に From / To / Subject / Date / Message-ID / Content-Type があること」を書く。
+第三者を宛先にした署名付きメールを減らす。
+
+- **a.** signup の Layer2 回数制限を本番 ON（`SIGNUP_RATE_LIMIT_ENABLED` / `SIGNUP_ATTEMPT_LOG_ENABLED`）。フラグは既存。
+- **b.** パスワード再設定に Turnstile を足す。
+- **c.** 件名・本文から利用者が入れた文字列を外す（相談フォームの件名固定、承認必要メールの summary を件名に出さない）。
+- **d.** 未確認宛先への歓迎・トライアル開始を、確認後に送るか通数を落とす。
+- **e.** 未確認宛先だけ `EMAIL_FROM_UNVERIFIED` から送る（`MAIL_UNVERIFIED_FROM_ENABLED`、既定 OFF。フラグ ON で env 未設定なら送信しない）。
 
 **直し方（DNS / 設定・八坂さんの GO が必要）:**
 
-- 実メールで `DKIM-Signature` の `d=` / `s=` / `h=` / `bh=` を確認する。
-- `h=` が From だけ、または Subject / To / 本文を外しているなら、Resend サポートまたは送信ドメインの作り直しを依頼する（アプリでは直せない）。
-- 1024 bit 鍵を 2048 bit に輪番（項目 4）。
-- 本番 `EMAIL_FROM` を、公開されている DKIM ドメインと一致させる。
-- Supabase SMTP を使うなら、その From も同じ方針で分ける。
+Resend 側の対応は **最優先から外す。** 次の 2 つは GO 待ち。
+
+- オーバーサインと `x=` に対応しているかを、Resend に確かめる。
+- 2048 bit の鍵に替え、3 か月ごとにローテーションする。
+
+本番作業として残るもの（最優先ではない）: 未確認用サブドメインの DNS / Resend 認証（BIMI なし）、Supabase Auth の From をダッシュボードで分ける、`rua` の所有者確認。
+
+八坂さんにヘッダを確かめてもらうことは **保留**。
 
 ---
 
@@ -165,17 +195,17 @@ From・SMTP ホスト・DKIM は Supabase ダッシュボード（カスタム S
 ### フラグ（既定 OFF）
 
 ```
-UNVERIFIED_MAIL_FROM_ENABLED=false
+MAIL_UNVERIFIED_FROM_ENABLED=false
 EMAIL_FROM_UNVERIFIED=Staffpass <noreply@mail-unverified.sealith.com>
 ```
 
-OFF のときは今日と同じ（全部 `EMAIL_FROM`）。ON かつ `EMAIL_FROM_UNVERIFIED` が空なら **送らない**（fail-closed）。
+OFF のときは今日と同じ（全部 `EMAIL_FROM`）。ON かつ `EMAIL_FROM_UNVERIFIED` が空なら **送らない**（fail-closed）。実装は e の PR（§2）。
 
-### コード側 PR 案（この点検では実装しない）
+### コード側 PR 案（e。フラグ名は `MAIL_UNVERIFIED_FROM_ENABLED`）
 
 1. **`lib/resend.ts`**
    - `SendEmailInput` に `audience: "verified" | "unverified"`（既定 `verified`）。
-   - `getEmailFrom(audience)`。`unverified` はフラグ ON のときだけ `EMAIL_FROM_UNVERIFIED`。
+   - `unverified` は `MAIL_UNVERIFIED_FROM_ENABLED` が ON のときだけ `EMAIL_FROM_UNVERIFIED`。
    - stub ログに audience を出す（アドレスは出さない）。
 2. **未確認に分類する呼び出し**
    - `lib/email.ts` の `sendWelcomeEmail` / `sendTrialStartedEmail`。
@@ -306,19 +336,20 @@ DMARC は `adkim=r` / `aspf=r`。Header From が `@sealith.com`、Return-Path �
 
 ## 推奨する順番
 
-1. **今すぐ（設定・GO）:** 実メールの `h=` / `d=` / `s=` を見る。signup と再設定を自分の箱で 1 通ずつ（このエージェントは送らない）。
-2. **今すぐ（設定・GO）:** `SIGNUP_RATE_LIMIT_ENABLED` と LP ボット対策の本番値を確認。再設定に CAPTCHA。
-3. **短い PR:** 未確認 From フラグ（既定 OFF）。承認メールの件名から summary を外す。相談フォーム件名の固定。
-4. **GO 後の DNS:** `mail-unverified` の認証、2048 bit 輪番、`rua` の所有者確認、`send.` の `-all`。
+1. **本線（a〜e）:** 第三者を宛先にした署名付きメールを減らす。e は `MAIL_UNVERIFIED_FROM_ENABLED`（既定 OFF）。
+2. **今すぐ（設定）:** `SIGNUP_RATE_LIMIT_ENABLED` と LP ボット対策の本番値を確認（a）。
+3. **GO 待ち（最優先ではない）:** Resend にオーバーサインと `x=` を確かめる。2048 bit へ替え、3 か月ごとにローテーションする。
+4. **GO 後の DNS:** 未確認用サブドメインの認証（BIMI なし）、`rua` の所有者確認、`send.` の `-all`。
 
-`h=` が From だけのときは、項目 3 の分離より先に Resend 側の署名範囲を直す。同じ鍵・同じドメインのままアプリだけ分けても、入手済みの正規署名は再利用できる。
+八坂さんにヘッダを確かめてもらうことは保留。`staffpass` ドメインからの実便は未確認のまま。
 
 ---
 
 ## この点検でやらなかったこと
 
-- コード変更、本番 env / DNS / Resend / Supabase の変更
-- 実メール送信
+- 本番 env / DNS / Resend / Supabase の変更
+- このエージェントからの実メール送信
 - 本番 `EMAIL_FROM` や SMTP 認証情報の読み出し
-- 受信トレイの実ヘッダ確認（依頼者側）
+- **八坂さんへのヘッダ確認（保留）**
+- `staffpass` ドメインから送られた実メールのヘッダ確認
 - `dmarc@sealith.com` の中身の閲覧
