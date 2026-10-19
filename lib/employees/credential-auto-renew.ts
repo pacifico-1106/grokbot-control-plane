@@ -1,6 +1,6 @@
 /**
- * 社員証 auto-renew (R1 flags + R-now 今すぐ更新).
- * Default OFF, fail-closed. No gen1 HTTP, no overlap claim, no boot script.
+ * 社員証 auto-renew (R1 flags + R-now 今すぐ更新 + R3 overlap helpers).
+ * Default OFF, fail-closed. No gen1 HTTP, no boot script.
  *
  * Org UUIDs belong in CREDENTIAL_AUTO_RENEW_ORG_ALLOWLIST only — never in code.
  * Never log or return 社員証 secret, prefix, hash, public key, or claim_token.
@@ -29,6 +29,8 @@ import {
   isCredentialAutoRenewEnabled,
   isCredentialAutoRenewOrgAllowlistRequired,
 } from "@/lib/feature-flags";
+
+export { isCredentialAutoRenewEnabled };
 import { sendApprovalNotifications } from "@/lib/notify/channels";
 import { checkOperable } from "@/lib/safety/hold";
 import type { ApprovalRequest } from "@/lib/types";
@@ -159,10 +161,10 @@ type GateOk = {
 };
 type GateErr = { ok: false; code: string; message: string };
 
-async function gateEmployeeForRenew(input: {
+export async function gateEmployeeForRenew(input: {
   orgId: string;
   employeeId: string;
-  phase: "wake" | "approval_execution";
+  phase: "wake" | "approval_execution" | "credential";
 }): Promise<GateOk | GateErr> {
   if (!isCredentialAutoRenewOnForOrg(input.orgId)) return { ok: false, code: FLAG_OFF.code, message: FLAG_OFF.message };
   const employee = await getEmployee(input.employeeId, input.orgId);

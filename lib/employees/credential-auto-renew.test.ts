@@ -195,11 +195,15 @@ describe("R1 types / constants (no secrets, no tenant hardcode)", () => {
   test("production sources do not hardcode スペースツリー / 稲盛 ids or 社員証 secrets", () => {
     const files = [
       "lib/employees/credential-auto-renew.ts",
+      "lib/employees/credential-auto-renew-overlap.ts",
       "lib/feature-flags.ts",
       "lib/employees/credential-auto-renew.test.ts",
       "supabase/migrations/20261019100000_credential_auto_renew.sql",
+      "supabase/migrations/20261020100000_credential_auto_renew_overlap.sql",
       "supabase/verification/20261019100000_credential_auto_renew_rollback.sql",
+      "supabase/verification/20261020100000_credential_auto_renew_overlap_rollback.sql",
       "tests/security/db-credential-auto-renew.sql",
+      "tests/security/db-credential-auto-renew-overlap.sql",
     ];
     const prod = files.filter((f) => !f.endsWith(".test.ts") && !f.includes("tests/security/"));
     for (const f of prod) {

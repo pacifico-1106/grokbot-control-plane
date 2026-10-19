@@ -174,6 +174,35 @@ export function rotateCredential(
   return { binding, generation };
 }
 
+/** Auto-renew overlap: generation++ only. Fingerprint stays on the old badge. */
+export function bumpCredentialGenerationKeepFingerprint(
+  employeeId: string,
+  orgId: string
+): { binding: EmployeeBinding; generation: number } {
+  const row = ensureBindingRow(employeeId, orgId);
+  if (row.status === "revoked") {
+    throw Object.assign(new Error("binding_revoked"), { code: "revoked" as const });
+  }
+  const generation = row.credentialGeneration + 1;
+  const binding = touch(row, { credentialGeneration: generation, lastError: null });
+  return { binding, generation };
+}
+
+/** Move fingerprint only when it still matches `expectedCurrent` (CAS). */
+export function moveBindingFingerprintIfCurrent(
+  employeeId: string,
+  orgId: string,
+  expectedCurrent: string,
+  next: string
+): boolean {
+  if (!employeeId || !orgId || !expectedCurrent || !next) return false;
+  const row = ensureBindingRow(employeeId, orgId);
+  if (row.status === "revoked") return false;
+  if (row.credentialFingerprint !== expectedCurrent) return false;
+  touch(row, { credentialFingerprint: next, lastError: null });
+  return true;
+}
+
 export function recordHealthSuccess(employeeId: string): EmployeeBinding | undefined {
   const row = runtimeBindings.get(employeeId);
   if (!row) return undefined;

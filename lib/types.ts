@@ -479,6 +479,9 @@ export type AuditAction =
   | "credential.renew_approved"
   | "credential.renew_rejected"
   | "credential.renew_skipped_hold"
+  | "credential.renew_claimed"
+  | "credential.renew_claim_denied"
+  | "credential.renew_old_revoked"
   /** CREDENTIAL_EXPIRY_NOTICE_ENABLED: pre-expiry notice sent / failed. Metadata: ids, thresholds, counts only. */
   | "credential.expiry_notice"
   /** MCP OAuth (flag MCP_OAUTH_ENABLED). Metadata: client host, grant id, hash prefixes only. */

@@ -16,6 +16,8 @@ const actor = {
 
 const ORG = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1";
 let proposeCalls: Array<Record<string, unknown>> = [];
+let authCalls = 0;
+let adminOk = true;
 let proposeResult: Record<string, unknown> = {
   ok: true,
   approvalId: "apr_renew_1",
@@ -27,7 +29,19 @@ mock.module("@/lib/auth/session", () => ({
   getCurrentOrgId: async () => ORG,
 }));
 mock.module("@/lib/auth/require-credential-admin", () => ({
-  requireCredentialAdmin: async () => ({ ok: true, actor }),
+  requireCredentialAdmin: async () => {
+    authCalls += 1;
+    if (!adminOk) {
+      return {
+        ok: false,
+        response: new Response(JSON.stringify({ error: "auth_required" }), {
+          status: 401,
+          headers: { "content-type": "application/json" },
+        }),
+      };
+    }
+    return { ok: true, actor };
+  },
 }));
 mock.module("@/lib/approver-authority/web-direct", () => ({
   assertWebActorApproverAuthority: async () => ({ ok: true, requirement: null }),
@@ -40,6 +54,7 @@ mock.module("@/lib/data", () => ({
       : null,
 }));
 mock.module("@/lib/employees/credential-auto-renew", () => ({
+  isCredentialAutoRenewEnabled: () => process.env.CREDENTIAL_AUTO_RENEW_ENABLED === "1",
   isCredentialAutoRenewOnForOrg: (orgId: string) => orgId === ORG && process.env.CREDENTIAL_AUTO_RENEW_ENABLED === "1",
   proposeCredentialAutoRenewNow: async (input: Record<string, unknown>) => {
     proposeCalls.push(input);
@@ -60,6 +75,8 @@ const call = (id = "emp_1", body: Record<string, unknown> = { reason: "now" }) =
 
 beforeEach(() => {
   proposeCalls = [];
+  authCalls = 0;
+  adminOk = true;
   proposeResult = {
     ok: true,
     approvalId: "apr_renew_1",
@@ -75,6 +92,25 @@ test("flag OFF: 404, no ticket, no secret", async () => {
   expect(body.error).toBe("feature_disabled");
   expect(proposeCalls).toHaveLength(0);
   expect(JSON.stringify(body)).not.toMatch(/gb_emp_|claim_token|oneTimeSecret/);
+});
+
+test("L-A: flag OFF + unauthenticated → 404 (not 401); auth is not consulted", async () => {
+  adminOk = false;
+  const res = await call();
+  expect(res.status).toBe(404);
+  const body = await res.json();
+  expect(body.error).toBe("feature_disabled");
+  expect(authCalls).toBe(0);
+  expect(proposeCalls).toHaveLength(0);
+});
+
+test("flag ON + unauthenticated → 401 after the global flag check", async () => {
+  process.env.CREDENTIAL_AUTO_RENEW_ENABLED = "1";
+  adminOk = false;
+  const res = await call();
+  expect(res.status).toBe(401);
+  expect(authCalls).toBe(1);
+  expect(proposeCalls).toHaveLength(0);
 });
 
 test("flag ON: files now-ticket with session org + path employee; no secret", async () => {
