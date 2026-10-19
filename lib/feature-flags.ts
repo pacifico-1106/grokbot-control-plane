@@ -1013,6 +1013,30 @@ export function isPasswordResetTurnstileEnabled(): boolean {
   return parseFlag(process.env.PASSWORD_RESET_TURNSTILE_ENABLED);
 }
 
+/**
+ * SUPABASE_AUTH_CAPTCHA_ENABLED (default OFF): pass an unused Turnstile token
+ * to GoTrue as captchaToken on password sign-in and resetPasswordForEmail.
+ *
+ * When ON:
+ * - POST /api/auth/login requires a token and forwards options.captchaToken.
+ *   We do not siteverify it (single-use; Supabase redeems it).
+ * - POST /api/auth/signup still siteverifies the existing signup widget, and
+ *   requires a second unused token for the post-create signInWithPassword.
+ * - POST /api/auth/forgot-password forwards captchaToken. If
+ *   PASSWORD_RESET_TURNSTILE_ENABLED is also ON, that local siteverify keeps
+ *   using a different token; the same token is never reused.
+ *
+ * When OFF (default): Auth payloads match main (no captchaToken key). Local
+ * Turnstile behavior is unchanged.
+ *
+ * Rollout: enable this flag first so login keeps working, then turn on
+ * CAPTCHA in the Supabase Dashboard. Reversing that order rejects sign-in
+ * until captchaToken is sent.
+ */
+export function isSupabaseAuthCaptchaEnabled(): boolean {
+  return parseFlag(process.env.SUPABASE_AUTH_CAPTCHA_ENABLED);
+}
+
 const DEFAULT_AI_PEER_WAKE_CAP = 4;
 const DEFAULT_AI_PEER_WAKE_ROOT_WINDOW_SECONDS = 30 * 60;
 

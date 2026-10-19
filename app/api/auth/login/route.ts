@@ -14,9 +14,15 @@ import {
   loginFailureSearchParams,
   type LoginErrorCode,
 } from "@/lib/auth/login-errors";
-import { isLoginRateLimitEnabled } from "@/lib/feature-flags";
+import { isLoginRateLimitEnabled, isSupabaseAuthCaptchaEnabled } from "@/lib/feature-flags";
 import { LOGIN_RATE_LIMITS } from "@/lib/auth/login-limits";
 import { safeNextDestination as safeDestination } from "@/lib/auth/safe-next";
+import {
+  evaluateSupabaseAuthCaptcha,
+  isGoTrueCaptchaFailed,
+  passwordSignInCredentials,
+  readAuthCaptchaFields,
+} from "@/lib/auth/supabase-auth-captcha";
 import { jsonUtf8 } from "@/lib/http/json-utf8";
 import { hmacWithIpHashKey, isIpHashKeyMissingError } from "@/lib/security/ip-hash-key";
 
@@ -65,17 +71,20 @@ export async function POST(req: Request) {
   let email = "";
   let password = "";
   let next = "/app";
+  let captchaFields = { localToken: "", supabaseToken: "" };
 
   if (contentType.includes("application/json")) {
     const body = (await req.json().catch(() => ({}))) as Record<string, string>;
     email = String(body.email || "").trim();
     password = String(body.password || "");
     next = safeDestination(String(body.next || "/app"), req.url);
+    captchaFields = readAuthCaptchaFields(body);
   } else {
     const form = await req.formData();
     email = String(form.get("email") || "").trim();
     password = String(form.get("password") || "");
     next = safeDestination(String(form.get("next") || "/app"), req.url);
+    captchaFields = readAuthCaptchaFields(form);
   }
 
   if (isDemoMode()) {
@@ -129,6 +138,23 @@ export async function POST(req: Request) {
     }
   }
 
+  const captcha = evaluateSupabaseAuthCaptcha({
+    enabled: isSupabaseAuthCaptchaEnabled(),
+    localToken: captchaFields.localToken,
+    supabaseToken: captchaFields.supabaseToken,
+    localTokenSiteverified: false,
+  });
+  if (!captcha.ok) {
+    return fail(
+      req,
+      json,
+      captcha.error,
+      captcha.error === "turnstile_required" ? 400 : 403,
+      email,
+      next
+    );
+  }
+
   const cookieStore = await cookies();
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -145,8 +171,13 @@ export async function POST(req: Request) {
     }
   );
 
-  const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+  const { data, error } = await supabase.auth.signInWithPassword(
+    passwordSignInCredentials(email, password, captcha.captchaToken)
+  );
   if (error) {
+    if (isGoTrueCaptchaFailed(error)) {
+      return fail(req, json, "turnstile_failed", 403, email, next);
+    }
     const rateLimited = isRateLimited(error);
     return fail(
       req,

@@ -18,6 +18,7 @@ mock.module("next/link", () => ({
 const { default: ForgotPasswordPage } = await import("./page");
 
 const FLAG = "PASSWORD_RESET_TURNSTILE_ENABLED";
+const SB_FLAG = "SUPABASE_AUTH_CAPTCHA_ENABLED";
 const SITE = "NEXT_PUBLIC_TURNSTILE_SITE_KEY";
 
 async function render(sp: { sent?: string; error?: string } = {}) {
@@ -26,10 +27,12 @@ async function render(sp: { sent?: string; error?: string } = {}) {
 
 beforeEach(() => {
   delete process.env[FLAG];
+  delete process.env[SB_FLAG];
   delete process.env[SITE];
 });
 afterEach(() => {
   delete process.env[FLAG];
+  delete process.env[SB_FLAG];
   delete process.env[SITE];
 });
 
@@ -57,6 +60,26 @@ describe("forgot-password Turnstile widget gating", () => {
     const html = await render();
     expect(html).not.toContain("cf-turnstile");
     expect(html).not.toContain("challenges.cloudflare.com");
+  });
+
+  test("supabase flag ON, local OFF: one widget (token is forwarded unused)", async () => {
+    process.env[SB_FLAG] = "true";
+    process.env[SITE] = "1x00000000000000000000AA";
+    const html = await render();
+    expect(html).toContain("cf-turnstile");
+    expect(html).toContain("1x00000000000000000000AA");
+    expect(html).not.toContain("cf-turnstile-supabase");
+  });
+
+  test("both flags ON: local widget plus dedicated supabase field", async () => {
+    process.env[FLAG] = "true";
+    process.env[SB_FLAG] = "true";
+    process.env[SITE] = "1x00000000000000000000AA";
+    const html = await render();
+    expect(html).toContain("cf-turnstile");
+    expect(html).toContain("password_reset");
+    expect(html).toContain("cf-turnstile-supabase");
+    expect(html).toContain("supabase_auth");
   });
 
   test("turnstile_required / turnstile_failed show captcha copy, not an account oracle", async () => {

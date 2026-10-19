@@ -8,6 +8,11 @@ import {
   SIGNUP_ORG_NAME_MAX,
   SIGNUP_TURNSTILE_ACTION,
 } from "@/lib/auth/signup-guard";
+import {
+  SUPABASE_AUTH_CAPTCHA_ACTION,
+  SUPABASE_AUTH_CAPTCHA_FIELD,
+} from "@/lib/auth/supabase-auth-captcha";
+import { isSupabaseAuthCaptchaEnabled } from "@/lib/feature-flags";
 
 const TURNSTILE_SCRIPT_SRC = "https://challenges.cloudflare.com/turnstile/v0/api.js";
 
@@ -42,6 +47,7 @@ export default async function SignupPage({
   const errorMessage = sp.error ? SIGNUP_ERROR_MESSAGES[sp.error] ?? null : null;
   const siteKey = demo ? null : turnstileSiteKey();
   const signupClosed = !demo && !siteKey;
+  const supabaseCaptcha = Boolean(siteKey && isSupabaseAuthCaptchaEnabled());
 
   return (
     <div className="min-h-screen bg-[var(--bg)] text-[var(--text)] flex items-center justify-center px-4">
@@ -145,6 +151,16 @@ export default async function SignupPage({
               className="cf-turnstile"
               data-sitekey={siteKey}
               data-action={SIGNUP_TURNSTILE_ACTION}
+              data-language="ja"
+            />
+          ) : null}
+          {siteKey && supabaseCaptcha ? (
+            <div
+              className="cf-turnstile"
+              data-sitekey={siteKey}
+              data-action={SUPABASE_AUTH_CAPTCHA_ACTION}
+              data-response-field-name={SUPABASE_AUTH_CAPTCHA_FIELD}
+              data-appearance="interaction-only"
               data-language="ja"
             />
           ) : null}
