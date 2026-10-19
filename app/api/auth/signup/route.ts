@@ -17,6 +17,12 @@ import { sendTrialStartedEmail, sendWelcomeEmail } from "@/lib/email";
 import { getClientIp, getTurnstileConfig, verifyTurnstileToken } from "@/lib/lp/turnstile";
 import { isDemoMode } from "@/lib/mode";
 import { isIpHashKeyConfigured } from "@/lib/security/ip-hash-key";
+import { isSupabaseAuthCaptchaEnabled } from "@/lib/feature-flags";
+import {
+  evaluateSupabaseAuthCaptcha,
+  passwordSignInCredentials,
+  readAuthCaptchaFields,
+} from "@/lib/auth/supabase-auth-captcha";
 import { TRIAL_DAYS } from "@/lib/stripe";
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
@@ -24,7 +30,7 @@ import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 export const runtime = "nodejs";
 
-async function establishSession(email: string, password: string) {
+async function establishSession(email: string, password: string, captchaToken?: string) {
   const cookieStore = await cookies();
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -46,7 +52,7 @@ async function establishSession(email: string, password: string) {
       },
     }
   );
-  return supabase.auth.signInWithPassword({ email, password });
+  return supabase.auth.signInWithPassword(passwordSignInCredentials(email, password, captchaToken));
 }
 
 /**
@@ -69,6 +75,7 @@ export async function POST(req: Request) {
   let legalAgreement = false;
   let honeypot = "";
   let turnstileToken = "";
+  let supabaseCaptchaToken = "";
 
   if (contentType.includes("application/json")) {
     const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
@@ -84,9 +91,9 @@ export async function POST(req: Request) {
       body.legalAgreement === "accepted" ||
       body.legalAgreement === true;
     honeypot = String(body[SIGNUP_HONEYPOT_FIELD] || "");
-    turnstileToken = String(
-      body.turnstileToken || body["cf-turnstile-response"] || ""
-    );
+    const captchaFields = readAuthCaptchaFields(body);
+    turnstileToken = captchaFields.localToken;
+    supabaseCaptchaToken = captchaFields.supabaseToken;
   } else {
     const form = await req.formData();
     orgName = String(form.get("orgName") || "").trim();
@@ -99,7 +106,9 @@ export async function POST(req: Request) {
     ).trim();
     legalAgreement = form.get("legal_agreement") === "accepted";
     honeypot = String(form.get(SIGNUP_HONEYPOT_FIELD) || "");
-    turnstileToken = String(form.get("cf-turnstile-response") || "");
+    const captchaFields = readAuthCaptchaFields(form);
+    turnstileToken = captchaFields.localToken;
+    supabaseCaptchaToken = captchaFields.supabaseToken;
   }
 
   if (!legalAgreement) {
@@ -139,6 +148,25 @@ export async function POST(req: Request) {
   // Layer 2 (flags default OFF): attempt log / rate limit / domain checks.
   const attemptStore = anySignupLayer2Enabled() ? createSupabaseSignupAttemptStore() : null;
   const fingerprint = fingerprintSignup(req, email);
+
+  const supabaseCaptcha = evaluateSupabaseAuthCaptcha({
+    enabled: isSupabaseAuthCaptchaEnabled() && !isDemoMode(),
+    localToken: turnstileToken,
+    supabaseToken: supabaseCaptchaToken,
+    localTokenSiteverified: true,
+  });
+  if (!supabaseCaptcha.ok) {
+    await recordSignupAttempt(attemptStore, fingerprint, "rejected_guard", {
+      reason: supabaseCaptcha.error,
+    });
+    return rejectToForm(
+      supabaseCaptcha.error,
+      supabaseCaptcha.error === "turnstile_required" ? 400 : 403,
+      supabaseCaptcha.error === "turnstile_required"
+        ? "ロボットでないことの確認を完了してください"
+        : "確認に失敗しました。ページを再読み込みしてもう一度お試しください。"
+    );
+  }
 
   // Bot protection runs before any Auth user / org / email side effect.
   // Not behind a flag (P0 hotfix spam-sample-20261003); Turnstile fail-closed outside DEMO.
@@ -205,7 +233,7 @@ export async function POST(req: Request) {
   const integrationMode = mode === "byo" ? "byo" : "managed";
 
   async function finishOk(orgId: string, allowMail = true) {
-    await establishSession(email, password);
+    await establishSession(email, password, supabaseCaptcha.captchaToken);
     if (allowMail) {
       await sendWelcomeEmail(email, orgName || "新しい組織");
       await sendTrialStartedEmail(email, TRIAL_DAYS);
@@ -221,7 +249,11 @@ export async function POST(req: Request) {
 
   /** Auth-only user: sign in + create org (idempotent). */
   async function recoverOrphanedAuthUser(): Promise<NextResponse | null> {
-    const { error: signErr, data } = await establishSession(email, password);
+    const { error: signErr, data } = await establishSession(
+      email,
+      password,
+      supabaseCaptcha.captchaToken
+    );
     if (signErr || !data.user) {
       return null;
     }
@@ -313,7 +345,7 @@ export async function POST(req: Request) {
         );
       }
       // Establish session if possible so /onboarding repair works.
-      await establishSession(email, password).catch(() => null);
+      await establishSession(email, password, supabaseCaptcha.captchaToken).catch(() => null);
       const url = new URL("/onboarding", req.url);
       url.searchParams.set(
         "reason",

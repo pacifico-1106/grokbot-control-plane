@@ -4,7 +4,15 @@ import { BrandMark } from "@/components/BrandMark";
 import { LoginForm } from "@/components/LoginForm";
 import { LegalLinks } from "@/components/LegalLinks";
 import { isSessionNotice } from "@/lib/auth/login-errors";
+import { isSupabaseAuthCaptchaEnabled } from "@/lib/feature-flags";
 import { isDemoMode } from "@/lib/mode";
+
+function loginTurnstileSiteKey(): string | null {
+  if (!isSupabaseAuthCaptchaEnabled()) return null;
+  const key = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY?.trim();
+  if (!key || key.startsWith("replace_me")) return null;
+  return key;
+}
 
 export default async function LoginPage({
   searchParams,
@@ -46,6 +54,7 @@ export default async function LoginPage({
           initialEmail={initialEmail}
           initialError={sp.error}
           sessionNotice={sessionNotice}
+          turnstileSiteKey={demo ? null : loginTurnstileSiteKey()}
         />
         {!demo ? (
           <p className="mt-4 text-xs faint">

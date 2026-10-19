@@ -52,6 +52,14 @@ describe("loginErrorMessage", () => {
     expect(isSessionNotice("expired")).toBe(true);
     expect(isSessionNotice("login_failed")).toBe(false);
   });
+
+  test("turnstile_required / turnstile_failed are captcha copy, not a credential oracle", () => {
+    expect(loginErrorMessage("turnstile_required")).toMatch(/ロボットでない/);
+    expect(loginErrorMessage("turnstile_failed")).toMatch(/確認に失敗/);
+    expect(loginErrorMessage("turnstile_required")).not.toContain("turnstile");
+    expect(loginErrorMessage("turnstile_failed")).not.toContain("captcha");
+    expect(loginErrorMessage("turnstile_failed")).not.toBe(LOGIN_FAILED_MESSAGE);
+  });
 });
 
 describe("loginFailureSearchParams", () => {
