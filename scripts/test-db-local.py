@@ -770,6 +770,30 @@ try:
     print("PASS: comm line reply tokens (20261014100000): 2 tables RLS on / restrictive deny-all only, anon/authenticated no access; "
           "hash format, unique reply token, unknown retry_key unique per org, org delete cascades; re-applicable; "
           "rollback refused while unknown-outcome rows exist, then drops both; forward again.")
+    # Operator notices (20261016200000). NOT applied in production by the PR.
+    # Timestamp is after main's 20261016100000_ai_peer_wake_guard.sql and
+    # before main's 20261016300000 / 20261016400000 / 20261019100000 / 20261020100000.
+    # Independent of those later migrations (no shared tables / functions).
+    opntc = ROOT / "supabase/migrations/20261016200000_operator_notices.sql"
+    opntc_rb = ROOT / "supabase/verification/20261016200000_operator_notices_rollback.sql"
+    sql(opntc)
+    sql(opntc)  # re-applicable
+    sql(ROOT / "tests/security/db-operator-notices.sql")
+    sql(opntc_rb)
+    assert query("select to_regclass('public.operator_notices') is null"
+                 " and to_regclass('public.operator_notice_versions') is null"
+                 " and to_regclass('public.operator_notice_targets') is null"
+                 " and to_regclass('public.operator_notice_receipts') is null"
+                 " and to_regclass('public.ops_feedback_items') is null"
+                 " and to_regclass('public.ops_feedback_events') is null"
+                 " and to_regprocedure('public.operator_notices_for_employee(uuid,uuid)') is null"
+                 " and to_regprocedure('public.operator_notice_counts_for_employee(uuid,uuid)') is null;") == "t"
+    sql(opntc)  # forward again after rollback
+    sql(ROOT / "tests/security/db-operator-notices.sql")
+    print("PASS: operator notices (20261016200000): 6 tables RLS on / no policy, anon/authenticated denied "
+          "(tables + visibility functions); service_role reads/writes; org-A notice invisible to org B, "
+          "cross-org receipt/target rejected, all-scope has no targets, published audience locked, "
+          "new tenant does not see non-sticky all-audience; re-applicable; rollback + re-apply.")
     # /api/mcp auth-failure audit + last_used_at touch (20261016400000).
     maf = ROOT / "supabase/migrations/20261016400000_mcp_auth_failures.sql"
     sql(maf)
