@@ -114,6 +114,11 @@ export type OperatorNoticeReceipt = {
   updatedAt: string;
 };
 
+export type NoticeTargetPicker = {
+  orgs: { id: string; name: string }[];
+  employees: { id: string; orgId: string; name: string }[];
+};
+
 export type VisibilityContext = {
   orgId: string;
   employeeId: string;
