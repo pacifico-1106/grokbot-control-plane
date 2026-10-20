@@ -64,6 +64,16 @@ export function buildStaffpassWhoamiPayload(input: {
     approvedInstructions: { text: string; approvalId: string; appliedAt: string } | null;
   } | null;
   /**
+   * operator notices (OPERATOR_NOTICES_ENABLED, this org in the pilot if set).
+   * Counts only — never the notice body. Omitted when the flag is OFF.
+   */
+  operatorNotices?: {
+    unread: number | "unknown";
+    urgentUnread: number | "unknown";
+    pendingApply: number | "unknown";
+    ruleJa: string;
+  } | null;
+  /**
    * WHOAMI_CREDENTIAL_INFO_ENABLED (flag ON only). Omitted entirely when OFF
    * so the JSON stays byte-identical to today.
    */
@@ -108,6 +118,7 @@ export function buildStaffpassWhoamiPayload(input: {
           configChangeRuleJa: input.configChange.ruleJa,
         }
       : {}),
+    ...(input.operatorNotices ? { operatorNotices: input.operatorNotices } : {}),
     messageJa:
       status === "needs_reauth"
         ? "要再連携 — invoke は拒否されます"

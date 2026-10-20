@@ -31,7 +31,7 @@ import { parseAdminFulfillment } from "@/lib/admin-mcp/fulfill-admin";
 import { parseFulfillment } from "@/lib/approvals/fulfill";
 import { approvalNotSentInfo, notSentFulfillmentResult } from "@/lib/approvals/not-sent";
 import { handleDecisionRequest, type DecisionRequestInput } from "@/lib/decision-workflow";
-import { isApprovalReasonsEnabled, isConfigChangeRequestEnabled, isMcpEndpointHandoffEnabled, isTopicGatedPostingEnabled, isWhoamiCredentialInfoEnabled } from "@/lib/feature-flags";
+import { isApprovalReasonsEnabled, isConfigChangeRequestEnabled, isMcpEndpointHandoffEnabled, isOperatorNoticesEnabled, isOperatorNoticesEnabledForOrg, isTopicGatedPostingEnabled, isWhoamiCredentialInfoEnabled, operatorNoticesPilotOrgIds } from "@/lib/feature-flags";
 import { getOrgApprovalKindRoutesPolicy } from "@/lib/approval-kind-routes/data";
 import type { OrgApprovalKindRoutesPolicy } from "@/lib/approval-kind-routes/types";
 import { categorizeSensitiveTopics } from "@/lib/approvals/sensitive-topic-categories";
@@ -64,6 +64,19 @@ import {
   requesterNoticeForApproval,
 } from "@/lib/config-change-request/service";
 import { MCP_LATEST_PROTOCOL_VERSION } from "@/lib/mcp/protocol-negotiation";
+import {
+  OPERATOR_NOTICES_ACK_DESCRIPTION,
+  OPERATOR_NOTICES_LIST_DESCRIPTION,
+  OPERATOR_NOTICES_WHOAMI_RULE_JA,
+} from "@/lib/operator-notices/copy";
+import {
+  NOTICES_ACK_TOOL,
+  NOTICES_LIST_TOOL,
+  operatorNoticesWhoamiBlock,
+  runNoticesAck,
+  runNoticesList,
+} from "@/lib/operator-notices/service";
+import { LIST_DEFAULT_LIMIT, LIST_MAX_LIMIT, RECEIPT_NOTE_MAX } from "@/lib/operator-notices/types";
 
 /**
  * Latest MCP protocol revision this server speaks (GET server cards). Per-request
@@ -458,15 +471,69 @@ export const SENSITIVE_TOPICS_GUIDANCE_JA =
 const SENSITIVE_TOPICS_NOTE_JA =
   "この一覧は参照専用です。AI 社員からは変更できません（変更は組織の管理者のみ）。一覧の語を含む投稿は承認に回ります。";
 
+export const NOTICES_LIST_MCP_TOOL_DEF: McpToolDef = {
+  name: NOTICES_LIST_TOOL,
+  description: OPERATOR_NOTICES_LIST_DESCRIPTION,
+  inputSchema: {
+    type: "object",
+    properties: {
+      unreadOnly: {
+        type: "boolean",
+        description: "Default true. When false, include already-acked notices still in window.",
+      },
+      noticeId: { type: "string", description: "Fetch one notice by id (still scoped to this badge)." },
+      limit: {
+        type: "integer",
+        minimum: 1,
+        maximum: LIST_MAX_LIMIT,
+        description: `1–${LIST_MAX_LIMIT}, default ${LIST_DEFAULT_LIMIT}.`,
+      },
+    },
+    additionalProperties: false,
+  },
+  approvalClass: "business",
+};
+
+export const NOTICES_ACK_MCP_TOOL_DEF: McpToolDef = {
+  name: NOTICES_ACK_TOOL,
+  description: OPERATOR_NOTICES_ACK_DESCRIPTION,
+  inputSchema: {
+    type: "object",
+    properties: {
+      noticeId: { type: "string" },
+      version: { type: "integer", minimum: 1 },
+      state: {
+        type: "string",
+        enum: ["read", "applied", "not_applicable", "needs_tenant_approval", "declined"],
+      },
+      note: { type: "string", description: `Required for declined / not_applicable. ≤${RECEIPT_NOTE_MAX}.` },
+      configChangeApprovalId: {
+        type: "string",
+        description: "Required when apply_mode=instructions_via_approval and state=applied.",
+      },
+    },
+    required: ["noticeId", "version", "state"],
+    additionalProperties: false,
+  },
+  approvalClass: "business",
+};
+
+function noticesToolsListed(orgId?: string | null): boolean {
+  if (orgId) return isOperatorNoticesEnabledForOrg(orgId);
+  return isOperatorNoticesEnabled() && operatorNoticesPilotOrgIds().length === 0;
+}
+
 /** Employee MCP tools/list. Flags OFF → exactly STAFFPASS_MCP_TOOLS. */
-export function listStaffpassMcpTools(): McpToolDef[] {
+export function listStaffpassMcpTools(opts?: { orgId?: string | null }): McpToolDef[] {
   const oauth = isMcpOAuthEnabled();
+  const notices = noticesToolsListed(opts?.orgId);
   // Flags unset → the very same array as before (callers / tests rely on identity).
-  if (!isConfigChangeRequestEnabled() && !isApprovalReasonsEnabled() && !oauth) return STAFFPASS_MCP_TOOLS;
+  if (!isConfigChangeRequestEnabled() && !isApprovalReasonsEnabled() && !oauth && !notices) return STAFFPASS_MCP_TOOLS;
   const base = [
     ...STAFFPASS_MCP_TOOLS,
     ...(isConfigChangeRequestEnabled() ? [CONFIG_CHANGE_REQUEST_MCP_TOOL_DEF] : []),
     ...(isApprovalReasonsEnabled() ? [SENSITIVE_TOPICS_MCP_TOOL_DEF] : []),
+    ...(notices ? [NOTICES_LIST_MCP_TOOL_DEF, NOTICES_ACK_MCP_TOOL_DEF] : []),
   ];
   // staffpass_profile only exists when MCP OAuth is ON (Q10).
   return oauth ? [...base, STAFFPASS_PROFILE_TOOL_DEF as McpToolDef] : base;
@@ -604,6 +671,12 @@ export async function callStaffpassMcpTool(
             : null,
         };
       }
+      const operatorNotices = await operatorNoticesWhoamiBlock(orgId, employee.id).catch(() => ({
+        unread: "unknown" as const,
+        urgentUnread: "unknown" as const,
+        pendingApply: "unknown" as const,
+        ruleJa: OPERATOR_NOTICES_WHOAMI_RULE_JA,
+      }));
       let credentialInfo: WhoamiCredentialInfo | null = null;
       if (isWhoamiCredentialInfoEnabled()) {
         credentialInfo = {
@@ -621,6 +694,7 @@ export async function callStaffpassMcpTool(
           projects,
           defaultProjectId: projects.find((item) => item.isDefault)?.id,
           configChange,
+          operatorNotices,
           credentialInfo,
         })
       );
@@ -1062,6 +1136,22 @@ export async function callStaffpassMcpTool(
         guidanceJa: SENSITIVE_TOPICS_GUIDANCE_JA,
         noteJa: SENSITIVE_TOPICS_NOTE_JA,
       });
+    }
+    case NOTICES_LIST_TOOL: {
+      const orgId = cred.orgId;
+      if (!orgId) {
+        return toolResult({ ok: false, code: "org_required", message: "orgId missing on credential (fail-closed)" }, true);
+      }
+      const result = await runNoticesList(orgId, cred.employeeId, args);
+      return toolResult(result.data, result.isError);
+    }
+    case NOTICES_ACK_TOOL: {
+      const orgId = cred.orgId;
+      if (!orgId) {
+        return toolResult({ ok: false, code: "org_required", message: "orgId missing on credential (fail-closed)" }, true);
+      }
+      const result = await runNoticesAck(orgId, cred.employeeId, args, cred.credentialId);
+      return toolResult(result.data, result.isError);
     }
     case CONFIG_CHANGE_MCP_TOOL: {
       if (!isConfigChangeRequestEnabled()) {
