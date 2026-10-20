@@ -1,5 +1,6 @@
 -- Rollback for 20261020300000_credential_auto_renew_review_followup.sql.
 -- Restores claim / release / gen1 claim / timeout-revoke from 191/201/202.
+-- Must run before 20261012500000 rollback (hold_state trigger dependency).
 begin;
 
 drop trigger if exists employees_block_claimable_renewals_on_hold on public.employees;

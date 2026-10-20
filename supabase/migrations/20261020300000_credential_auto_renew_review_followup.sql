@@ -316,8 +316,10 @@ grant execute on function public.abort_minted_credential_renewal(uuid, uuid, tex
 
 commit;
 
--- ROLLBACK (down) — turn CREDENTIAL_AUTO_RENEW_ENABLED off first. Same
--- statements as supabase/verification/20261020300000_credential_auto_renew_review_followup_rollback.sql:
+-- ROLLBACK (down) — turn CREDENTIAL_AUTO_RENEW_ENABLED off first. Apply
+-- this before rolling back 20261012500000 (the hold_state triggers depend
+-- on that column). Same statements as
+-- supabase/verification/20261020300000_credential_auto_renew_review_followup_rollback.sql:
 --   begin;
 --
 --   drop trigger if exists employees_block_claimable_renewals_on_hold on public.employees;

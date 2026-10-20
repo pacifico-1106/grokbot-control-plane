@@ -138,6 +138,8 @@ ADDITIVE = [
      "position('actor_email_from_member' in pg_get_functiondef("
      "'public.release_employee_hold(uuid,uuid,text,jsonb,timestamptz)'::regprocedure)) = 0"),
     # 緊急停止 hold (S1): table + 4 columns + 3 functions; rollback drops them all.
+    # 20261020300000 adds hold_state triggers; the loop rolls that child back
+    # first (same pattern as 20261014100000 before 20261013200000).
     ("20261012500000_", "tests/security/db-employee-holds.sql",
      "to_regclass('public.employee_holds') is null"
      " and to_regprocedure('public.release_employee_hold(uuid,uuid,text,jsonb,timestamptz)') is null"
@@ -414,6 +416,12 @@ try:
                           " and to_regclass('public.comm_line_reply_tokens') is not null;")
             assert still == "t", f"{name}: refuse must leave parent and L-6 tables"
             sql_text(rollback_block((MIGRATIONS / child).read_text()), single=False)
+        if prefix.startswith("20261012500000_"):
+            # 20261020300000 adds AFTER UPDATE OF hold_state triggers. Drop
+            # those first; otherwise DROP COLUMN hold_state fails.
+            child = next((n for n in order if n.startswith("20261020300000_")), None)
+            assert child, "auto-renew review-followup child migration missing"
+            sql_text(rollback_block((MIGRATIONS / child).read_text()), single=False)
         sql_text(rollback_block((MIGRATIONS / name).read_text()), single=False)
         if isinstance(tables, str):
             gone = query(f"select {tables};")
@@ -426,6 +434,9 @@ try:
         sql_file(MIGRATIONS / name)
         if prefix.startswith("20261013200000_"):
             child = next((n for n in order if n.startswith("20261014100000_")), None)
+            sql_file(MIGRATIONS / child)
+        if prefix.startswith("20261012500000_"):
+            child = next((n for n in order if n.startswith("20261020300000_")), None)
             sql_file(MIGRATIONS / child)
         sql_file(ROOT / test)
         dropped = "its RPC + column (previous state restored)" if isinstance(tables, str) else ", ".join(tables)
