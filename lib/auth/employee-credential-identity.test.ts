@@ -95,6 +95,8 @@ mock.module("@/lib/employees/credential-auto-renew-overlap", () => ({
 }));
 mock.module("@/lib/data/credential-renewals", () => ({
   demoGetOverlapCredentialByHash: () => null,
+  demoGetOverlapCredential: () => null,
+  demoPutOverlapCredential: () => null,
 }));
 mock.module("@/lib/data", () => ({
   findBindingByCredentialFingerprint: async (hash: string) => bindingByHash[hash] ?? null,
