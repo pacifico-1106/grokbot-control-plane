@@ -1496,7 +1496,7 @@ async function runGatewayInvokeInner(
     const preCtx = parseConversationContext(body, principalOrgId);
     const preArgs = body.args && typeof body.args === "object" ? (body.args as Record<string, unknown>) : {};
     const preSlack = preCtx?.surface === "slack" || Boolean(preCtx?.slackChannelId) || Boolean(preCtx?.slackUserId);
-    const preLine = isLineConversationRequest(preCtx, body);
+    const preLine = isLineConversationRequest(preCtx, body, orgId || employee.orgId);
     if (!preSlack && !preLine) {
       const info = channelNotSupportedInfo(preCtx?.surface ?? null);
       await appendAuditEvent({
@@ -1726,7 +1726,7 @@ async function runGatewayInvokeInner(
 
   // LINE: an AI-supplied lineId that names someone other than the token's
   // counterparty must not steer egress WHO (or the send). Refuse before classify.
-  if (isLineConversationEnabled()) {
+  if (isLineConversationEnabled(orgId || employee.orgId)) {
     const lineTok = conversationTokenFromRequest(body);
     const pinned = conversationTokenCounterparty(lineTok);
     const ctxLine = parseConversationContext(body, principalOrgId);
@@ -1771,7 +1771,7 @@ async function runGatewayInvokeInner(
   // (default = human yes). Explicit confidential / verbatim stay deny.
   // Tenant reply_policy cannot waive; only employee/role "no approval" or tool auto.
   let lineExternalNoApprovalFlag = false;
-  if (egress && isLineConversationRequest(parseConversationContext(body, principalOrgId), body)) {
+  if (egress && isLineConversationRequest(parseConversationContext(body, principalOrgId), body, orgId || employee.orgId)) {
     const disclosure = await resolveInformationDisclosure({
       orgId: principalOrgId,
       tool,
@@ -2705,7 +2705,7 @@ async function runGatewayInvokeInner(
       // in plain words instead of a Slack-only code (木村 #293 decision 2).
       const approvedSurface = (parseInvokeSnapshot(priorApproval.metadata)?.conversation?.surface || "").toLowerCase();
       if (approvedSurface && approvedSurface !== "slack") {
-        const lineLive = approvedSurface === "line" && isLineConversationEnabled();
+        const lineLive = approvedSurface === "line" && isLineConversationEnabled(orgId || employee.orgId);
         if (lineLive) {
           if (fulfilled?.error === POST_OUTCOME_UNKNOWN) {
             return jsonResult({
@@ -2715,6 +2715,17 @@ async function runGatewayInvokeInner(
               approvalId: priorApproval.id,
               employeeId, tool, purpose, jobId,
             }, 502);
+          }
+          if (fulfilled?.error === "line_accepted_not_delivered") {
+            return jsonResult({
+              ok: true,
+              sent: false,
+              lineAccepted: true,
+              message: "LINEが受け付けた（届いたとは限らない）",
+              needs_approval: false,
+              approvalId: priorApproval.id,
+              employeeId, tool, purpose, jobId,
+            }, 200);
           }
           return jsonResult({
             ok: false, code: fulfilled?.error || "approval_execution_failed", sent: false,
@@ -2863,7 +2874,7 @@ async function runGatewayInvokeInner(
       }
     }
 
-    if (isLineConversationRequest(ctx, body)) {
+    if (isLineConversationRequest(ctx, body, orgId || employee.orgId)) {
       const egressAllowsLine =
         egress?.decision === "allow" ||
         egress?.decision === "summarize" ||
@@ -2942,7 +2953,20 @@ async function runGatewayInvokeInner(
               409
             );
           }
-          conversationDelivery = { ok: true, delivery: "line" };
+          if (posted.lineAccepted || result.status === "accepted") {
+            await appendAuditEvent({
+              orgId: orgId || employee.orgId,
+              employeeId,
+              credentialId: input.credentialId || employee.credentialId,
+              action: "line.post_accepted",
+              purpose,
+              summary: "LINEが受け付けた（届いたとは限らない）",
+              metadata: { tool, jobId, lineAccepted: true, sent: false, mode: result.mode },
+            });
+            conversationDelivery = { ok: true, delivery: "line", lineAccepted: true };
+          } else {
+            conversationDelivery = { ok: true, delivery: "line" };
+          }
         }
       }
     } else {
@@ -3932,8 +3956,15 @@ async function runGatewayInvokeInner(
 
   // #351 follow-up: a conversation send that reached here posted (the backstop
   // above guarantees a delivery record); say so plainly. "stub" = demo mode only.
+  const lineAccepted =
+    conversationDelivery &&
+    conversationDelivery.delivery === "line" &&
+    "lineAccepted" in conversationDelivery &&
+    Boolean(conversationDelivery.lineAccepted);
   const sentFields = isAudienceGatedTool(toolDef) && conversationDelivery
-    ? { sent: true as const, ...(conversationDelivery.delivery === "stub" ? { simulated: true as const } : {}) }
+    ? lineAccepted
+      ? { sent: false as const, lineAccepted: true as const, message: "LINEが受け付けた（届いたとは限らない）" }
+      : { sent: true as const, ...(conversationDelivery.delivery === "stub" ? { simulated: true as const } : {}) }
     : {};
   return jsonResult({
     ok: true,

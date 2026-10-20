@@ -16,12 +16,16 @@
  *      - webhookEventId recorded once per account (comm_inbound_events, no body);
  *        duplicate → skipped; storage error → skipped and the webhook answers 503
  *        so LINE redelivers (if redelivery is ON)
- *      - PoC: 1:1 text in active mode only (groups / rooms / media / follow → not dispatched)
- *      - emergency stop: checkOperable({phase:"wake"}) FIRST — held, unknown or
- *        error → not redeemed, not dispatched, audited (throttled). The event
+ *      - U-06 same OA: postback (承認 / 却下 / 修正 / 緊急停止) is dispatched to
+ *        the org's LINE approval channel WITHOUT a hold gate (U-19 / H11: the
+ *        card can still be acted on). 1:1 revision text is tried the same way.
+ *      - PoC: other 1:1 text in active mode only (groups / rooms / media / follow → not dispatched)
+ *      - emergency stop: checkOperable({phase:"wake"}) — held, unknown or
+ *        error → not redeemed, not woken, audited (throttled). The event
  *        key is already consumed. Same rule as the Slack wake (S2 G5).
  *      - a link code (SP-XXXX-XXXX) is redeemed on this account (L-7) only after
- *        the hold check (nothing is bound while stopped / on leave) and never handed to the AI
+ *        the hold check (nothing is bound while stopped / on leave) and never handed to the AI.
+ *        If conversation redeem does not bind, the same OA tries the approver link.
  *   6. a NEW conversation token for this message (org × employee × account ×
  *      sender, 24 h; 木村 10/12). No token key → not woken (fail closed).
  *   7. dispatch (L-7): wake the AI employee with the conversation token. A
@@ -70,6 +74,8 @@ export type LineIngressDeps = {
   now: () => number;
   checkOperable: (i: { orgId?: string | null; employeeId?: string | null; phase: "wake" }) => Promise<OperableResult>;
   dispatch: (e: NormalizedLineEvent) => Promise<void>;
+  /** U-06: same-OA approval postback / leftover approver link / revision. */
+  dispatchApproval?: (account: CommAccount, ev: LineEvent, kind: "postback" | "link" | "revision") => Promise<boolean>;
 };
 
 const defaultDeps: LineIngressDeps = {
@@ -97,6 +103,7 @@ type LineEvent = {
   replyToken?: string;
   source?: { type?: string; userId?: string; groupId?: string; roomId?: string };
   message?: { type?: string; text?: string };
+  postback?: { data?: string };
 };
 
 export type LineIngressResult = { status: number; body: Record<string, unknown> };
@@ -118,6 +125,7 @@ export async function handleLineAccountWebhook(
   if (!isLineConversationEnabled()) return { status: 404, body: { ok: false, error: "not_found" } };
   const account = await getActiveCommAccountByWebhookRef(input.ref).catch(() => null);
   if (!account) return { status: 404, body: { ok: false, error: "not_found" } };
+  if (!isLineConversationEnabled(account.orgId)) return { status: 404, body: { ok: false, error: "not_found" } };
   const secrets = await readCommAccountSecretsForServer(account.orgId, account.id).catch(() => ({ ok: false as const, reason: "error" }));
   if (!secrets.ok) {
     console.error("line_account_webhook_secret_unavailable", { accountId: account.id, reason: secrets.reason });
@@ -147,6 +155,38 @@ export async function handleLineAccountWebhook(
   return retry ? { status: 503, body: { ok: false, error: "retry" } } : { status: 200, body: { ok: true } };
 }
 
+async function defaultDispatchApproval(
+  account: CommAccount,
+  ev: LineEvent,
+  kind: "postback" | "link" | "revision"
+): Promise<boolean> {
+  try {
+    const { getEnabledNotificationChannels } = await import("@/lib/data/notification-channels");
+    const {
+      handleLineApprovalEvents,
+      handleLineApproverLinkCode,
+      tryHandleLineRevisionText,
+    } = await import("@/lib/line/approval-events");
+    const channels = await getEnabledNotificationChannels(account.orgId);
+    const channel = channels.find((c) => c.provider === "line");
+    if (!channel) return false;
+    if (kind === "postback") {
+      await handleLineApprovalEvents(channel, [ev]);
+      return true;
+    }
+    if (kind === "link") {
+      const { isLineApproverLinkEnabled } = await import("@/lib/line/flags");
+      if (!isLineApproverLinkEnabled()) return false;
+      return handleLineApproverLinkCode(channel, ev);
+    }
+    const sender = String(ev.source?.userId || "");
+    return tryHandleLineRevisionText(channel, ev, sender);
+  } catch {
+    console.error("line_same_oa_approval_dispatch_failed", { accountId: account.id, kind });
+    return false;
+  }
+}
+
 async function processEvent(account: CommAccount, ev: LineEvent, d: LineIngressDeps): Promise<"done" | "retry"> {
   if (!ev || typeof ev !== "object") return "done";
   const key = typeof ev.webhookEventId === "string" ? ev.webhookEventId : "";
@@ -161,8 +201,21 @@ async function processEvent(account: CommAccount, ev: LineEvent, d: LineIngressD
 
   const src = ev.source || {};
   const sender = String(src.userId || "");
+
+  // U-06 / U-19: approval postbacks stay live on the same OA even while the
+  // employee is held. Wake / conversation send stay gated below.
+  if (ev.type === "postback") {
+    await (d.dispatchApproval ?? defaultDispatchApproval)(account, ev, "postback");
+    return "done";
+  }
+
   const text = ev.type === "message" && ev.message?.type === "text" ? String(ev.message.text ?? "") : "";
   if (ev.mode === "standby" || src.type !== "user" || src.groupId || src.roomId || !LINE_USER_RE.test(sender) || !text) return "done";
+
+  if (!LINK_CODE_RE.test(text)) {
+    const revised = await (d.dispatchApproval ?? defaultDispatchApproval)(account, ev, "revision");
+    if (revised) return "done";
+  }
 
   let operable: OperableResult;
   try {
@@ -178,14 +231,17 @@ async function processEvent(account: CommAccount, ev: LineEvent, d: LineIngressD
   if (LINK_CODE_RE.test(text)) {
     // L-7: redeem on the employee's own LINE (never handed to the AI).
     // Hold already checked above — nothing is bound while stopped / on leave.
-    await redeemConversationLinkCode({
+    const link = await redeemConversationLinkCode({
       orgId: account.orgId,
       accountId: account.id,
       employeeId: account.employeeId,
       text,
       lineUserId: sender,
       replyToken: typeof ev.replyToken === "string" ? ev.replyToken : null,
-    }).catch(() => undefined);
+    }).catch(() => ({ handled: true as const, bound: false }));
+    if (!link.bound) {
+      await (d.dispatchApproval ?? defaultDispatchApproval)(account, ev, "link");
+    }
     return "done";
   }
   const token = issueConversationToken(

@@ -1,8 +1,11 @@
 import { createHmac } from "node:crypto";
 import { afterEach, describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import {
   isAllowedLineSource,
   resolveLineApprovalMessage,
+  sendApprovalToLineChannel,
   sendLineReplyMessages,
   verifyLineSignature,
   withLineReplyCollector,
@@ -101,5 +104,31 @@ describe("LINE resolve follow-up via Reply (G7)", () => {
     expect(cap.calls[0].url).toBe("https://api.line.me/v2/bot/message/reply");
     expect(cap.calls[0].body.replyToken).toBe("reply-token");
     expect((cap.calls[0].body.messages as unknown[]).length).toBe(5);
+  });
+});
+
+describe("U-19: hold still sends approval cards", () => {
+  test("sendApprovalToLineChannel does not call hold gates (cards still go out)", async () => {
+    const src = readFileSync(join(process.cwd(), "lib/notify/line.ts"), "utf8");
+    expect(src).not.toMatch(/checkOperable|preSendHoldCode|employee_on_hold|org_on_hold/);
+    const card = {
+      ...approval,
+      telegramRef: "trefU19",
+      employeeId: "emp-held",
+      purpose: "comm.internal",
+      tool: "comm.reply",
+      summary: "承認カード",
+      metadata: {},
+    } as unknown as ApprovalRequest;
+    const cap = captureFetch();
+    try {
+      const r = await sendApprovalToLineChannel(card, { displayName: "停止中の社員" } as never, channel);
+      expect(r.ok).toBe(true);
+      expect(cap.calls).toHaveLength(1);
+      expect(cap.calls[0].url).toBe("https://api.line.me/v2/bot/message/push");
+      expect(JSON.stringify(cap.calls[0].body)).toContain("🟡 承認依頼");
+    } finally {
+      cap.restore();
+    }
   });
 });

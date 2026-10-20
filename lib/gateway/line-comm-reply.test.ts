@@ -17,12 +17,13 @@ type LineSendCall = {
   retryKey: string;
 };
 type LineSendResult =
-  | { status: "sent"; audience: "internal" | "external"; mode: "reply" | "push" }
+  | { status: "sent"; audience: "internal" | "external"; mode: "reply" }
+  | { status: "accepted"; audience: "internal" | "external"; mode: "push"; lineAccepted: true }
   | { status: "not_sent"; reason: string; audience?: "internal" | "external" }
   | { status: "unknown"; reason: string; audience: "internal" | "external"; mode: "reply" | "push" };
 
 const sends: LineSendCall[] = [];
-let nextSend: LineSendResult = { status: "sent", audience: "internal", mode: "push" };
+let nextSend: LineSendResult = { status: "sent", audience: "internal", mode: "reply" };
 mock.module("@/lib/comm/line-send", () => ({
   sendLineConversationMessage: async (input: LineSendCall) => {
     sends.push(input);
@@ -78,7 +79,7 @@ beforeAll(async () => {
 });
 beforeEach(() => {
   sends.length = 0;
-  nextSend = { status: "sent", audience: "internal", mode: "push" };
+  nextSend = { status: "sent", audience: "internal", mode: "reply" };
   process.env.COMM_ACCOUNTS_ENABLED = "true";
   process.env.LINE_CONVERSATION_ENABLED = "true";
   resetDemoVoterBindings();
@@ -163,6 +164,19 @@ describe("LINE comm.reply (flag ON) → sendLineConversationMessage", () => {
     expect(posts()).toHaveLength(0);
     expect(await approvalsFor(String(body.jobId))).toHaveLength(0);
     expect(JSON.stringify(res.body)).not.toContain(TEXT);
+  });
+
+  test("U-03: Push accepted is LINE受付 — sent:false, never 届いた", async () => {
+    await linkInternal();
+    nextSend = { status: "accepted", audience: "internal", mode: "push", lineAccepted: true };
+    const body = req("comm.reply", { surface: "line", lineId: LINE_USER, token: TOKEN });
+    const res = await invoke(body);
+    expect(res.httpStatus).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.sent).toBe(false);
+    expect(res.body.lineAccepted).toBe(true);
+    expect(res.body.message).toBe("LINEが受け付けた（届いたとは限らない）");
+    expect(sends).toHaveLength(1);
   });
 
   test("external (not linked) → needs_approval by default, send NOT called, card created", async () => {
@@ -259,7 +273,7 @@ describe("LINE comm.reply (flag ON) → sendLineConversationMessage", () => {
     expect(queued.body.needs_approval).toBe(true);
     const approvalId = String(queued.body.approvalId);
     await resolveApproval(approvalId, "approved", "slack:U_APPROVER", DEMO_ORG.id);
-    nextSend = { status: "sent", audience: "external", mode: "push" };
+    nextSend = { status: "sent", audience: "external", mode: "reply" };
     const res = await invoke({ ...first, approvalId } as GatewayInvokeRequest);
     expect(res.body.sent).toBe(true);
     expect(sends.length).toBeGreaterThanOrEqual(1);

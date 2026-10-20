@@ -13,7 +13,7 @@ import type { OperableResult } from "@/lib/safety/hold";
 import { __resetHoldAuditThrottleForTests, __setHoldReaderForTests } from "@/lib/safety/hold";
 import { verifyConversationToken } from "@/lib/comm/conversation-token";
 
-const ENV = ["COMM_ACCOUNTS_ENABLED", "LINE_CONVERSATION_ENABLED", "NOTIFICATION_CONFIG_ENCRYPTION_KEY", "NEXT_PUBLIC_SUPABASE_URL", "COMM_CONVERSATION_TOKEN_SECRET", "COMM_CONVERSATION_TOKEN_SECRET_PREVIOUS"] as const;
+const ENV = ["COMM_ACCOUNTS_ENABLED", "LINE_CONVERSATION_ENABLED", "LINE_CONVERSATION_ORG_IDS", "COMM_ACCOUNTS_ORG_IDS", "NOTIFICATION_CONFIG_ENCRYPTION_KEY", "NEXT_PUBLIC_SUPABASE_URL", "COMM_CONVERSATION_TOKEN_SECRET", "COMM_CONVERSATION_TOKEN_SECRET_PREVIOUS"] as const;
 const saved = Object.fromEntries(ENV.map((k) => [k, process.env[k]]));
 const ORG = "ec000000-0000-4000-8000-000000000001";
 const EMP = "ec100000-0000-4000-8000-000000000001";
@@ -254,6 +254,45 @@ describe("emergency stop / leave at wake, with the real hold check", () => {
     }
     __setHoldReaderForTests(null);
     expect(dispatched).toEqual([]);
+  });
+});
+
+describe("U-06 same OA / U-19 hold: approval postback vs wake", () => {
+  test("postback is dispatched even when the employee is held; wake is not", async () => {
+    const approvals: Array<{ kind: string; type?: string }> = [];
+    hold = { ok: false, code: "employee_on_hold", holdId: "h1", kind: "stopped" };
+    const d = {
+      ...deps(),
+      dispatchApproval: async (_a: CommAccount, ev: { type?: string }, kind: string) => {
+        approvals.push({ kind, type: ev.type });
+        return true;
+      },
+    };
+    const raw = body([ev({
+      type: "postback",
+      message: undefined,
+      postback: { data: "a:aprvref01" },
+      webhookEventId: "01HZZZZZZZZZZZZZZZZZZPOST",
+    })]);
+    expect((await handleLineAccountWebhook({ ref: account.webhookRef, rawBody: new TextEncoder().encode(raw), signature: sig(raw) }, d)).status).toBe(200);
+    expect(approvals).toEqual([{ kind: "postback", type: "postback" }]);
+    expect(dispatched).toEqual([]);
+    expect(holdCalls).toEqual([]);
+  });
+
+  test("1:1 text on hold is not woken and is not treated as a postback", async () => {
+    hold = { ok: false, code: "employee_on_hold", holdId: "h1", kind: "stopped" };
+    const raw = body([ev()]);
+    expect((await call(raw)).status).toBe(200);
+    expect(dispatched).toEqual([]);
+  });
+
+  test("U-09: org not on LINE_CONVERSATION_ORG_IDS → 404, no dispatch", async () => {
+    process.env.LINE_CONVERSATION_ORG_IDS = "aaaaaaaa-0000-4000-8000-000000000307";
+    const raw = body([ev()]);
+    expect((await call(raw)).status).toBe(404);
+    expect(dispatched).toEqual([]);
+    delete process.env.LINE_CONVERSATION_ORG_IDS;
   });
 });
 

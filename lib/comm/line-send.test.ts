@@ -8,10 +8,10 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { createCommAccount, resetDemoCommAccounts, setCommAccountSecrets, type CommAccount } from "@/lib/comm/accounts";
 import { issueConversationToken } from "@/lib/comm/conversation-token";
-import { sendLineConversationMessage, __resetLineSendForTests, type LineSendDeps } from "@/lib/comm/line-send";
+import { sendLineConversationMessage, __resetLineSendForTests, classifyLine429, type LineSendDeps } from "@/lib/comm/line-send";
 import type { PreSendResult } from "@/lib/comm/pre-send";
 
-const ENV = ["COMM_ACCOUNTS_ENABLED", "LINE_CONVERSATION_ENABLED", "NOTIFICATION_CONFIG_ENCRYPTION_KEY", "NEXT_PUBLIC_SUPABASE_URL", "COMM_CONVERSATION_TOKEN_SECRET"] as const;
+const ENV = ["COMM_ACCOUNTS_ENABLED", "LINE_CONVERSATION_ENABLED", "COMM_ACCOUNTS_ORG_IDS", "LINE_CONVERSATION_ORG_IDS", "NOTIFICATION_CONFIG_ENCRYPTION_KEY", "NEXT_PUBLIC_SUPABASE_URL", "COMM_CONVERSATION_TOKEN_SECRET"] as const;
 const saved = Object.fromEntries(ENV.map((k) => [k, process.env[k]]));
 const ORG = "ec000000-0000-4000-8000-000000000001";
 const EMP = "ec100000-0000-4000-8000-000000000001";
@@ -22,7 +22,7 @@ const NOW = 1_800_000_000_000;
 
 let account: CommAccount;
 let calls: Array<{ url: string; headers: Record<string, string>; body: Record<string, unknown> }>;
-let responses: Array<number | "throw">;
+let responses: Array<number | "throw" | { status: number; body: string }>;
 let link: { status: string } | null | "throw";
 let preSend: PreSendResult;
 let preSendArgs: unknown[];
@@ -52,6 +52,7 @@ beforeEach(async () => {
     calls.push({ url: String(url), headers: Object.fromEntries(Object.entries((init.headers || {}) as Record<string, string>)), body: JSON.parse(String(init.body)) });
     const r = responses.shift() ?? 200;
     if (r === "throw") throw new Error("network");
+    if (typeof r === "object") return new Response(r.body, { status: r.status });
     return new Response("{}", { status: r });
   }) as typeof fetch;
 });
@@ -80,7 +81,7 @@ describe("target and audience", () => {
   test("linked (internal) counterparty → Push to the pinned userId with the account's own token", async () => {
     link = { status: "active" };
     const r = await send();
-    expect(r).toMatchObject({ status: "sent", audience: "internal", mode: "push" });
+    expect(r).toMatchObject({ status: "accepted", audience: "internal", mode: "push", lineAccepted: true });
     expect(calls.length).toBe(1);
     expect(calls[0].url).toBe("https://api.line.me/v2/bot/message/push");
     expect(calls[0].body).toEqual({ to: USER, messages: [{ type: "text", text: "お世話になっております" }] });
@@ -94,7 +95,7 @@ describe("target and audience", () => {
     expect(r).toMatchObject({ status: "not_sent", reason: "external_send_needs_approval", audience: "external" });
     expect(calls).toEqual([]);
     const ok = await send({ externalSendAllowed: true });
-    expect(ok).toMatchObject({ status: "sent", audience: "external" });
+    expect(ok).toMatchObject({ status: "accepted", audience: "external", mode: "push", lineAccepted: true });
     expect(preSendArgs.at(-1)).toMatchObject({ requiresLink: false });
   });
 
@@ -137,7 +138,7 @@ describe("right-before-send check (checkLineSendAllowed)", () => {
       { ...d, readSecrets: async (o, a) => { order.push("secrets"); const { readCommAccountSecretsForServer } = await import("@/lib/comm/accounts"); return readCommAccountSecretsForServer(o, a); },
         checkLineSendAllowed: async () => { order.push("pre_send"); return { ok: true }; } }
     );
-    expect(r.status).toBe("sent");
+    expect(r.status).toBe("accepted");
     expect(order).toEqual(["secrets", "pre_send"]);
   });
 
@@ -206,7 +207,7 @@ describe("Reply first, then Push; sent / not_sent / unknown", () => {
     link = { status: "active" };
     const token = tok("rtok0123456789abcdef");
     now = NOW + 50_000;
-    expect(await send({ token })).toMatchObject({ status: "sent", mode: "push" });
+    expect(await send({ token })).toMatchObject({ status: "accepted", mode: "push", lineAccepted: true });
   });
 
   test("claim ok:false (ledger unavailable) → not_sent, never Push", async () => {
@@ -222,7 +223,7 @@ describe("Reply first, then Push; sent / not_sent / unknown", () => {
   test("Reply refused with 400 (token expired) → falls back to Push", async () => {
     link = { status: "active" };
     responses = [400, 200];
-    expect(await send({ token: tok("rtok0123456789abcdef") })).toMatchObject({ status: "sent", mode: "push" });
+    expect(await send({ token: tok("rtok0123456789abcdef") })).toMatchObject({ status: "accepted", mode: "push", lineAccepted: true });
     expect(calls.map((c) => c.url.split("/").pop())).toEqual(["reply", "push"]);
   });
 
@@ -237,17 +238,40 @@ describe("Reply first, then Push; sent / not_sent / unknown", () => {
     }
   });
 
-  test("Push: 409 with the retry key (already accepted) → sent; 429 → not_sent rate limited; 403 → not_sent; 5xx / network → unknown", async () => {
+  test("Push: 409 with the retry key (already accepted) → accepted, not 届いた; 429 classified by official body; 403 → not_sent; 5xx / network → unknown", async () => {
     link = { status: "active" };
-    const cases: Array<[number | "throw", string, string | undefined]> = [
-      [409, "sent", undefined], [429, "not_sent", "line_rate_limited"], [403, "not_sent", "line_http_4xx"], [503, "unknown", "line_http_5xx"], ["throw", "unknown", "line_network_error"],
+    const cases: Array<[number | "throw" | { status: number; body: string }, string, string | undefined]> = [
+      [409, "accepted", undefined],
+      [{ status: 429, body: JSON.stringify({ message: "You have reached your monthly limit." }) }, "not_sent", "line_monthly_quota_exceeded"],
+      [{ status: 429, body: JSON.stringify({ message: "The API rate limit has been exceeded. Try again later." }) }, "not_sent", "line_rate_limited"],
+      [429, "not_sent", "line_not_sent_429"],
+      [403, "not_sent", "line_http_4xx"],
+      [503, "unknown", "line_http_5xx"],
+      ["throw", "unknown", "line_network_error"],
     ];
     for (const [code, status, reason] of cases) {
       responses = [code];
       const r = await send();
       expect(r.status).toBe(status as never);
       if (reason) expect((r as { reason?: string }).reason).toBe(reason);
+      if (status === "accepted") expect((r as { lineAccepted?: boolean }).lineAccepted).toBe(true);
     }
+  });
+
+  test("U-03: Push 200 is LINE受付 — status accepted, never sent / 届いた", async () => {
+    link = { status: "active" };
+    const r = await send();
+    expect(r).toEqual({ status: "accepted", audience: "internal", mode: "push", lineAccepted: true });
+    expect(JSON.stringify(r)).not.toContain("届いた");
+    expect(r.status).not.toBe("sent");
+  });
+
+  test("U-04: official LINE 429 messages map to quota vs rate; unknown 429 is fail-closed not_sent", () => {
+    expect(classifyLine429('{"message":"You have reached your monthly limit."}')).toBe("line_monthly_quota_exceeded");
+    expect(classifyLine429("The API rate limit has been exceeded. Try again later.")).toBe("line_rate_limited");
+    expect(classifyLine429("{}")).toBe("line_not_sent_429");
+    expect(classifyLine429("")).toBe("line_not_sent_429");
+    expect(classifyLine429(undefined)).toBe("line_not_sent_429");
   });
 
   test("text: empty or over 5000 characters → not sent (never truncated silently)", async () => {

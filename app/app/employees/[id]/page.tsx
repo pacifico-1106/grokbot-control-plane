@@ -75,8 +75,8 @@ export default async function EmployeeDetailPage({
   // Slack / Google identity connect + disconnect: same gate as the APIs (hire_issue_credentials).
   const { canManageIdentityLinks } = identityLinkPermissions(session);
   const { canIssue: canIssueConversationLink } = commLinkCodePermissions(session);
-  const showConversationLink = isLineConversationEnabled() && isCommAccountsEnabled() && canIssueConversationLink;
-  const canConnectLineAccount = isLineWebhookAutoSetupEnabled() && (session.demo || isOrgAdminSession(session));
+  const showConversationLink = isLineConversationEnabled(orgId) && isCommAccountsEnabled(orgId) && canIssueConversationLink;
+  const canConnectLineAccount = isLineWebhookAutoSetupEnabled(orgId) && (session.demo || isOrgAdminSession(session));
   const members = await listMembers(orgId);
   const projects = await listOrgProjects(orgId);
   const sodWarnPolicy = await getOrgSodWarnPolicy(orgId);

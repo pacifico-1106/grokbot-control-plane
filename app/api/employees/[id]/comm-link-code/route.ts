@@ -25,6 +25,9 @@ async function gate(req: Request) {
   }
   const cap = await requireCapability(req, "view_employees");
   if (!cap.ok) return cap;
+  if (!isLineConversationEnabled(cap.actor.orgId) || !isCommAccountsEnabled(cap.actor.orgId)) {
+    return { ok: false as const, response: json({ ok: false, error: "feature_disabled" }, 404) };
+  }
   if (!memberCanIssueConversationLinkCode(cap.actor)) {
     return {
       ok: false as const,

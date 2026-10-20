@@ -243,7 +243,7 @@ export async function createCommAccount(input: {
   displayName?: string | null;
   createdByMemberId: string | null;
 }): Promise<{ ok: true; account: CommAccount } | { ok: false; reason: string }> {
-  if (!isCommAccountsEnabled()) return { ok: false, reason: "disabled" };
+  if (!isCommAccountsEnabled(input.orgId)) return { ok: false, reason: "disabled" };
   if (!SURFACES.has(input.surface)) return { ok: false, reason: "invalid_surface" };
   const ext = String(input.externalAccountId || "").trim();
   if (!EXTERNAL_ID_RE[input.surface].test(ext)) return { ok: false, reason: "invalid_external_account_id" };
@@ -291,7 +291,7 @@ export async function setCommAccountSecrets(input: {
   memberId: string | null;
   verifiedAt?: string | null;
 }): Promise<{ ok: true; secretNames: string[] } | { ok: false; reason: string }> {
-  if (!isCommAccountsEnabled()) return { ok: false, reason: "disabled" };
+  if (!isCommAccountsEnabled(input.orgId)) return { ok: false, reason: "disabled" };
   const b = backend();
   if (!b) return { ok: false, reason: "storage_unavailable" };
   const account = await b.get(input.orgId, input.accountId).catch(() => null);
@@ -317,7 +317,7 @@ export async function readCommAccountSecretsForServer(
   orgId: string,
   accountId: string
 ): Promise<{ ok: true; secrets: LineSecrets } | { ok: false; reason: string }> {
-  if (!isCommAccountsEnabled()) return { ok: false, reason: "disabled" };
+  if (!isCommAccountsEnabled(orgId)) return { ok: false, reason: "disabled" };
   const b = backend();
   if (!b) return { ok: false, reason: "storage_unavailable" };
   const account = await b.get(orgId, accountId).catch(() => null);
@@ -345,7 +345,7 @@ export async function getActiveCommAccountByWebhookRef(ref: string): Promise<Com
 }
 
 export async function listCommAccounts(orgId: string): Promise<CommAccountView[]> {
-  if (!isCommAccountsEnabled()) return [];
+  if (!isCommAccountsEnabled(orgId)) return [];
   const b = backend();
   if (!b) return [];
   const rows = await b.list(orgId);
@@ -358,7 +358,7 @@ export async function listCommAccounts(orgId: string): Promise<CommAccountView[]
 }
 
 export async function disableCommAccount(orgId: string, accountId: string): Promise<{ ok: boolean }> {
-  if (!isCommAccountsEnabled()) return { ok: false };
+  if (!isCommAccountsEnabled(orgId)) return { ok: false };
   const b = backend();
   if (!b) return { ok: false };
   const a = await b.get(orgId, accountId).catch(() => null);
@@ -381,14 +381,14 @@ export async function recordInboundEvent(account: CommAccount, eventKey: string)
  */
 /** Owner/admin connect: the account as stored, including webhookRef. Same-org only. */
 export async function getCommAccountInOrg(orgId: string, accountId: string): Promise<CommAccount | null> {
-  if (!isCommAccountsEnabled()) return null;
+  if (!isCommAccountsEnabled(orgId)) return null;
   const b = backend();
   if (!b) return null;
   return b.get(orgId, accountId).catch(() => null);
 }
 
 export async function getCommAccountForSend(orgId: string, accountId: string): Promise<CommAccount | null> {
-  if (!isCommAccountsEnabled()) return null;
+  if (!isCommAccountsEnabled(orgId)) return null;
   const b = backend();
   if (!b) throw new Error("comm_accounts_unavailable");
   const a = await b.get(orgId, accountId);

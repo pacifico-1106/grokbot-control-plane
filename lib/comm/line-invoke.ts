@@ -12,8 +12,8 @@ import type { ConversationContext } from "@/lib/types";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-export function isLineConversationRequest(ctx: ConversationContext | null | undefined, body: { conversation?: unknown; args?: unknown }): boolean {
-  if (!isLineConversationEnabled()) return false;
+export function isLineConversationRequest(ctx: ConversationContext | null | undefined, body: { conversation?: unknown; args?: unknown }, orgId?: string | null): boolean {
+  if (!isLineConversationEnabled(orgId ?? ctx?.orgId)) return false;
   if ((ctx?.surface || "").toLowerCase() !== "line") return false;
   return Boolean(conversationTokenFromRequest(body));
 }
@@ -131,8 +131,14 @@ export function lineSendAsPosted(result: LineSendResult): {
   sendState: "sent" | "not_sent" | "unknown";
   error?: string;
   delivery?: "line";
+  lineAccepted?: true;
 } {
   if (result.status === "sent") return { ok: true, sendState: "sent", delivery: "line" };
+  // Push 200/409: LINE accepted. Dedup treats it as sent (do not retry) but
+  // callers must not write 届いた / sent:true (U-03).
+  if (result.status === "accepted") {
+    return { ok: true, sendState: "sent", delivery: "line", lineAccepted: true };
+  }
   if (result.status === "unknown") return { ok: false, sendState: "unknown", error: result.reason };
   return { ok: false, sendState: "not_sent", error: result.reason };
 }

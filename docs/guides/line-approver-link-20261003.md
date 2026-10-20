@@ -38,7 +38,7 @@
 
 - **本文は保存しない。** 承認 Webhook は通常の 1:1 テキストを無視する（連携コードと修正依頼だけを見る）。監査にも本文を残さない。
 - **画像・ファイルは取らない。** `message.type` が text / postback 以外なら何もしない。LINE のコンテンツ API は呼ばない。
-- **承認窓口と会話の公式アカウントは同じ。** PoC では AI 社員の公式アカウントが承認窓口を兼ねる。会話の受け口（`/api/webhooks/line/c/<ref>`、フラグ `LINE_CONVERSATION_ENABLED`）は別 URL なので、同じ OA にするときは LINE コンソールの Webhook は承認 URL のままにし、会話の振り分けは後続（L1）で足す。
+- **承認窓口と会話の公式アカウントは同じ。** PoC では AI 社員の公式アカウントが承認窓口を兼ねる。LINE Developers の Webhook は **`/api/webhooks/line/c/<ref>`**（会話アカウントの ref）に向ける。署名のあと postback / 承認連携コード / 修正依頼は承認経路へ、1対1 text は会話へ振り分ける。従来の `/api/webhooks/line/<ref>` は承認専用のまま残す（フラグ OFF / 既存テナント）。
 
 ## やっていないこと（後続）
 
