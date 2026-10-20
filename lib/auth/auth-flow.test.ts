@@ -11,6 +11,7 @@ import {
   setMaxBucketsForTest,
   peekRateLimit,
   releaseRateLimit,
+  reserveRateLimit,
   takeRateLimit,
   validateNewPassword,
 } from "./auth-flow";
@@ -111,14 +112,24 @@ describe("rate limit", () => {
 
   test("peek does not consume; release undoes a take in the same window", () => {
     expect(peekRateLimit("k", 2, 1000, 0)).toBe(true);
-    expect(takeRateLimit("k", 2, 1000, 0)).toBe(true);
+    const first = reserveRateLimit("k", 2, 1000, 0);
+    expect(first).not.toBeNull();
     expect(peekRateLimit("k", 2, 1000, 1)).toBe(true);
-    expect(takeRateLimit("k", 2, 1000, 1)).toBe(true);
+    const second = reserveRateLimit("k", 2, 1000, 1);
+    expect(second).not.toBeNull();
     expect(peekRateLimit("k", 2, 1000, 2)).toBe(false);
-    releaseRateLimit("k", 2);
+    releaseRateLimit("k", second!.resetAt, 2);
     expect(peekRateLimit("k", 2, 1000, 2)).toBe(true);
     expect(takeRateLimit("k", 2, 1000, 2)).toBe(true);
     expect(peekRateLimit("k", 2, 1000, 2)).toBe(false);
+  });
+
+  test("release after the window rolls over does not free the new window", () => {
+    const first = reserveRateLimit("k", 1, 1000, 0);
+    expect(first).not.toBeNull();
+    expect(reserveRateLimit("k", 1, 1000, 1001)).not.toBeNull();
+    releaseRateLimit("k", first!.resetAt, 1001);
+    expect(reserveRateLimit("k", 1, 1000, 1001)).toBeNull();
   });
 });
 

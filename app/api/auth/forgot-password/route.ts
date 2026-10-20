@@ -9,6 +9,7 @@ import {
   peekRateLimit,
   rateKey,
   releaseRateLimit,
+  reserveRateLimit,
   takeRateLimit,
 } from "@/lib/auth/auth-flow";
 import {
@@ -28,6 +29,7 @@ import {
   passwordResetEmailOptions,
   readAuthCaptchaFields,
 } from "@/lib/auth/supabase-auth-captcha";
+import { isGoTrueRecoverPreSendError } from "@/lib/auth/gotrue-recover";
 import { jsonUtf8 } from "@/lib/http/json-utf8";
 import { getClientIp, getTurnstileConfig, verifyTurnstileToken } from "@/lib/lp/turnstile";
 
@@ -56,9 +58,10 @@ function safeErrorId(value: unknown): string | null {
  * separate IP brake and never fall through to sent=1.
  *
  * AUTH_ENUMERATION_HARDENING_ENABLED (default OFF): peek those send quotas
- * (no consume), then reserve atomically and keep the reservation only when
- * resetPasswordForEmail succeeds. captcha_failed and other GoTrue errors
- * release the reservation. Flag OFF keeps consume-before-send.
+ * (no consume), then reserve atomically. Refund only GoTrue errors that are
+ * decided before SMTP (captcha_failed and an allowlisted 4xx). 5xx,
+ * unexpected_failure, timeouts, unknown codes, and throws keep the
+ * reservation. A throw answers 303 sent=1 (flag OFF still surfaces it).
  */
 export async function POST(req: Request) {
   if (!isSameOriginRequest(req.headers, req.url)) {
@@ -125,8 +128,13 @@ export async function POST(req: Request) {
   const ipKey = `forgot:ip:${rateKey(clientIp(req.headers))}`;
   const emailKey = `forgot:email:${rateKey(email)}`;
   const hardening = isAuthEnumerationHardeningEnabled();
-  let reservedIp = false;
-  let reservedEmail = false;
+  let reservedIp: { resetAt: number } | null = null;
+  let reservedEmail: { resetAt: number } | null = null;
+
+  const refundReservation = () => {
+    if (reservedIp) releaseRateLimit(ipKey, reservedIp.resetAt);
+    if (reservedEmail) releaseRateLimit(emailKey, reservedEmail.resetAt);
+  };
 
   if (hardening) {
     if (!peekRateLimit(ipKey, 5, 15 * 60_000)) {
@@ -134,14 +142,14 @@ export async function POST(req: Request) {
     }
     // Per-email limit is silent (same response) so it can't be used as an oracle.
     if (!peekRateLimit(emailKey, 3, 60 * 60_000) || isDemoMode()) return done;
-    reservedIp = takeRateLimit(ipKey, 5, 15 * 60_000);
-    reservedEmail = takeRateLimit(emailKey, 3, 60 * 60_000);
+    reservedIp = reserveRateLimit(ipKey, 5, 15 * 60_000);
+    reservedEmail = reserveRateLimit(emailKey, 3, 60 * 60_000);
     if (!reservedIp) {
-      if (reservedEmail) releaseRateLimit(emailKey);
+      if (reservedEmail) releaseRateLimit(emailKey, reservedEmail.resetAt);
       return NextResponse.redirect(new URL("/auth/forgot?error=rate_limited", req.url), 303);
     }
     if (!reservedEmail) {
-      releaseRateLimit(ipKey);
+      releaseRateLimit(ipKey, reservedIp.resetAt);
       return done;
     }
   } else {
@@ -156,34 +164,42 @@ export async function POST(req: Request) {
 
   const supabase = await createRouteSupabase();
   if (!supabase) {
-    if (hardening) {
-      if (reservedIp) releaseRateLimit(ipKey);
-      if (reservedEmail) releaseRateLimit(emailKey);
-    }
+    if (hardening) refundReservation();
     return done;
   }
 
   // PKCE client: with the token_hash Reset Password template the link is
   // /auth/confirm?token_hash=…&type=recovery; with the default template it is
   // /auth/confirm?code=… (verifier cookie set on this response; type defaults to recovery).
-  const { error } = await supabase.auth.resetPasswordForEmail(
-    email,
-    passwordResetEmailOptions(authConfirmUrl(), supabaseCaptcha.captchaToken)
-  );
-  if (error) {
+  try {
+    const { error } = await supabase.auth.resetPasswordForEmail(
+      email,
+      passwordResetEmailOptions(authConfirmUrl(), supabaseCaptcha.captchaToken)
+    );
+    if (error) {
+      if (hardening && isGoTrueRecoverPreSendError(error)) {
+        refundReservation();
+      }
+      // Ids only: never the email, token, link or error.message (which can echo them).
+      console.warn("[auth] resetPasswordForEmail failed", {
+        status: typeof error.status === "number" ? error.status : null,
+        code: safeErrorId((error as { code?: unknown }).code),
+        name: safeErrorId(error.name),
+      });
+      if (isGoTrueCaptchaFailed(error)) {
+        return NextResponse.redirect(new URL("/auth/forgot?error=turnstile_failed", req.url), 303);
+      }
+    }
+    return done;
+  } catch (e) {
     if (hardening) {
-      if (reservedIp) releaseRateLimit(ipKey);
-      if (reservedEmail) releaseRateLimit(emailKey);
+      console.warn("[auth] resetPasswordForEmail failed", {
+        status: null,
+        code: null,
+        name: "invalid",
+      });
+      return done;
     }
-    // Ids only: never the email, token, link or error.message (which can echo them).
-    console.warn("[auth] resetPasswordForEmail failed", {
-      status: typeof error.status === "number" ? error.status : null,
-      code: safeErrorId((error as { code?: unknown }).code),
-      name: safeErrorId(error.name),
-    });
-    if (isGoTrueCaptchaFailed(error)) {
-      return NextResponse.redirect(new URL("/auth/forgot?error=turnstile_failed", req.url), 303);
-    }
+    throw e;
   }
-  return done;
 }

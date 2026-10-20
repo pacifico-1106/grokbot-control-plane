@@ -1047,14 +1047,13 @@ export function isSupabaseAuthCaptchaEnabled(): boolean {
  *
  * When ON:
  * - POST /api/auth/forgot-password peeks the send quotas (IP 5/15m,
- *   email 3/1h) without consuming, then consumes only after GoTrue
- *   succeeds. captcha_failed and other resetPasswordForEmail errors
- *   do not consume. Responses stay 303 /auth/forgot?sent=1 except
- *   captcha_failed → turnstile_failed (same as main).
- * - Signup anti-enumeration (same status / destination / copy as a
- *   new signup) is deferred: current signup still signInWithPassword
- *   and lands on /app, so an existing mailbox cannot share that
- *   response without a session. See the PR for the options.
+ *   email 3/1h) without consuming, then reserves atomically. Refund
+ *   only captcha_failed and allowlisted pre-SMTP 4xx. 5xx,
+ *   unexpected_failure, timeouts, unknown codes, and throws keep the
+ *   reservation. A throw answers 303 sent=1. captcha_failed still
+ *   redirects to turnstile_failed (same as main).
+ * - Signup 409 / 「既に登録」 is unchanged (review: stay on option A;
+ *   next step would be B, not C).
  *
  * When OFF (default): today's consume-before-send and 409 email_exists
  * / duplicate_normalized copy are unchanged.

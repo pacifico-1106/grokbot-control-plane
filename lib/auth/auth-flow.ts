@@ -175,11 +175,30 @@ export function peekRateLimit(
   return b.count < limit;
 }
 
-/** Undo one takeRateLimit increment in the current window (no-op if expired). */
-export function releaseRateLimit(key: string, now: number = Date.now()): void {
+/** Same as takeRateLimit, but returns the window generation (resetAt). */
+export function reserveRateLimit(
+  key: string,
+  limit: number,
+  windowMs: number,
+  now: number = Date.now()
+): { resetAt: number } | null {
+  if (!takeRateLimit(key, limit, windowMs, now)) return null;
   const b = buckets.get(key);
-  if (!b || b.resetAt <= now) return;
-  if (b.count <= 1) {
+  return b ? { resetAt: b.resetAt } : null;
+}
+
+/**
+ * Undo one reserveRateLimit increment. No-op if the window generation
+ * (resetAt) no longer matches — a rolled-over bucket must not be freed.
+ */
+export function releaseRateLimit(
+  key: string,
+  reservedResetAt: number,
+  now: number = Date.now()
+): void {
+  const b = buckets.get(key);
+  if (!b || b.resetAt !== reservedResetAt) return;
+  if (b.resetAt <= now || b.count <= 1) {
     buckets.delete(key);
     return;
   }

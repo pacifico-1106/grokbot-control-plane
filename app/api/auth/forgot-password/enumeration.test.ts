@@ -4,7 +4,7 @@
  *
  * Flag OFF = main: takeRateLimit runs before resetPasswordForEmail, so
  * captcha_failed still consumes the per-email 3/hour budget.
- * Flag ON: peek before send, consume only after GoTrue success.
+ * Flag ON: peek before send, reserve atomically, refund only pre-SMTP 4xx.
  */
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { readFileSync } from "node:fs";
@@ -20,6 +20,7 @@ type FakeError = {
 let resetCalls: Array<{ email: string; opts: unknown }> = [];
 let resetError: FakeError = null;
 let resetHold: Promise<void> | null = null;
+let resetThrow: Error | null = null;
 
 mock.module("@/lib/mode", () => ({ isDemoMode: () => false }));
 mock.module("@/lib/auth/route-supabase", () => ({
@@ -28,6 +29,7 @@ mock.module("@/lib/auth/route-supabase", () => ({
       resetPasswordForEmail: async (email: string, opts: unknown) => {
         resetCalls.push({ email, opts });
         if (resetHold) await resetHold;
+        if (resetThrow) throw resetThrow;
         return { data: {}, error: resetError };
       },
     },
@@ -65,6 +67,7 @@ beforeEach(() => {
   resetCalls = [];
   resetError = null;
   resetHold = null;
+  resetThrow = null;
   resetRateLimitsForTest();
   resetPasswordResetTurnstileReplayForTest();
   delete process.env[FLAG];
@@ -91,6 +94,12 @@ describe("AUTH_ENUMERATION_HARDENING_ENABLED", () => {
 });
 
 describe("flag OFF (main): send quota is consumed before GoTrue", () => {
+  test("resetPasswordForEmail throw still propagates", async () => {
+    resetThrow = new Error("socket hang up");
+    await expect(POST(post(EMAIL))).rejects.toThrow("socket hang up");
+    expect(resetCalls).toHaveLength(1);
+  });
+
   test("captcha_failed burns the per-email 3/hour quota", async () => {
     resetError = { status: 400, code: "captcha_failed", name: "AuthApiError" };
     for (let i = 0; i < 3; i++) {
@@ -127,7 +136,7 @@ describe("flag ON: peek before send, consume only after GoTrue success", () => {
     expect(locationOf(fourth)).toBe(`${BASE}/auth/forgot?sent=1`);
   });
 
-  test("other GoTrue errors also do not consume, and still return sent=1", async () => {
+  test("unexpected_failure / 5xx keep the reservation consumed and still return sent=1", async () => {
     resetError = { status: 500, code: "unexpected_failure", name: "AuthApiError" };
     for (let i = 0; i < 3; i++) {
       const res = await POST(post(EMAIL));
@@ -137,7 +146,58 @@ describe("flag ON: peek before send, consume only after GoTrue success", () => {
     expect(resetCalls).toHaveLength(3);
     resetError = null;
     const fourth = await POST(post(EMAIL));
-    expect(resetCalls).toHaveLength(4);
+    expect(resetCalls).toHaveLength(3);
+    expect(locationOf(fourth)).toBe(`${BASE}/auth/forgot?sent=1`);
+  });
+
+  test("unknown or timeout codes keep the reservation consumed", async () => {
+    for (const err of [
+      { status: 500, code: "smtp_blew_up", name: "AuthApiError" },
+      { status: 408, code: "request_timeout", name: "AuthApiError" },
+      { status: 500, name: "AuthRetryableFetchError" },
+    ] as FakeError[]) {
+      resetRateLimitsForTest();
+      resetCalls = [];
+      resetError = err;
+      for (let i = 0; i < 3; i++) {
+        expect(locationOf(await POST(post(EMAIL)))).toBe(`${BASE}/auth/forgot?sent=1`);
+      }
+      resetError = null;
+      expect(resetCalls).toHaveLength(3);
+      expect(locationOf(await POST(post(EMAIL)))).toBe(`${BASE}/auth/forgot?sent=1`);
+      expect(resetCalls).toHaveLength(3);
+    }
+  });
+
+  test("pre-send 4xx (validation_failed, over_email_send_rate_limit) refund the reservation", async () => {
+    for (const err of [
+      { status: 400, code: "validation_failed", name: "AuthApiError" },
+      { status: 429, code: "over_email_send_rate_limit", name: "AuthApiError" },
+    ] as FakeError[]) {
+      resetRateLimitsForTest();
+      resetCalls = [];
+      resetError = err;
+      for (let i = 0; i < 3; i++) {
+        expect(locationOf(await POST(post(EMAIL)))).toBe(`${BASE}/auth/forgot?sent=1`);
+      }
+      expect(resetCalls).toHaveLength(3);
+      resetError = null;
+      expect(locationOf(await POST(post(EMAIL)))).toBe(`${BASE}/auth/forgot?sent=1`);
+      expect(resetCalls).toHaveLength(4);
+    }
+  });
+
+  test("resetPasswordForEmail throw → 303 sent=1 and keeps the reservation", async () => {
+    resetThrow = new Error("socket hang up");
+    for (let i = 0; i < 3; i++) {
+      const res = await POST(post(EMAIL));
+      expect(res.status).toBe(303);
+      expect(locationOf(res)).toBe(`${BASE}/auth/forgot?sent=1`);
+    }
+    expect(resetCalls).toHaveLength(3);
+    resetThrow = null;
+    const fourth = await POST(post(EMAIL));
+    expect(resetCalls).toHaveLength(3);
     expect(locationOf(fourth)).toBe(`${BASE}/auth/forgot?sent=1`);
   });
 
