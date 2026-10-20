@@ -61,6 +61,7 @@ export {
   verifyVoterBinding,
   verifyVoterBindingByNonce,
   revokeVoterBinding,
+  forgetRevokedVoterBinding,
   listVoterBindings,
   getVoterBinding,
   getVoterBindingByNonce,

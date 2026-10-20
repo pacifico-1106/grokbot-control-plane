@@ -7,13 +7,13 @@
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { createHmac } from "node:crypto";
-import { createCommAccount, resetDemoCommAccounts, setCommAccountSecrets, type CommAccount } from "@/lib/comm/accounts";
+import { createCommAccount, listCommAccounts, resetDemoCommAccounts, setCommAccountSecrets, type CommAccount } from "@/lib/comm/accounts";
 import { handleLineAccountWebhook, type NormalizedLineEvent } from "@/lib/comm/line-ingress";
 import type { OperableResult } from "@/lib/safety/hold";
 import { __resetHoldAuditThrottleForTests, __setHoldReaderForTests } from "@/lib/safety/hold";
 import { verifyConversationToken } from "@/lib/comm/conversation-token";
 
-const ENV = ["COMM_ACCOUNTS_ENABLED", "LINE_CONVERSATION_ENABLED", "NOTIFICATION_CONFIG_ENCRYPTION_KEY", "NEXT_PUBLIC_SUPABASE_URL", "COMM_CONVERSATION_TOKEN_SECRET", "COMM_CONVERSATION_TOKEN_SECRET_PREVIOUS"] as const;
+const ENV = ["COMM_ACCOUNTS_ENABLED", "LINE_CONVERSATION_ENABLED", "LINE_CONVERSATION_ORG_IDS", "COMM_ACCOUNTS_ORG_IDS", "NOTIFICATION_CONFIG_ENCRYPTION_KEY", "NEXT_PUBLIC_SUPABASE_URL", "COMM_CONVERSATION_TOKEN_SECRET", "COMM_CONVERSATION_TOKEN_SECRET_PREVIOUS"] as const;
 const saved = Object.fromEntries(ENV.map((k) => [k, process.env[k]]));
 const ORG = "ec000000-0000-4000-8000-000000000001";
 const EMP = "ec100000-0000-4000-8000-000000000001";
@@ -26,8 +26,10 @@ let account: CommAccount;
 let dispatched: NormalizedLineEvent[];
 let holdCalls: Array<{ orgId?: string | null; employeeId?: string | null; phase: string }>;
 let hold: OperableResult | "throw";
+const origFetch = globalThis.fetch;
 
 beforeEach(async () => {
+  globalThis.fetch = (async () => new Response("{}", { status: 200 })) as typeof fetch;
   process.env.COMM_ACCOUNTS_ENABLED = "true";
   process.env.LINE_CONVERSATION_ENABLED = "true";
   process.env.NOTIFICATION_CONFIG_ENCRYPTION_KEY = "k".repeat(40);
@@ -45,6 +47,7 @@ beforeEach(async () => {
   hold = { ok: true };
 });
 afterEach(() => {
+  globalThis.fetch = origFetch;
   for (const k of ENV) {
     if (saved[k] === undefined) delete process.env[k];
     else process.env[k] = saved[k];
@@ -109,10 +112,22 @@ describe("before any event is read", () => {
     expect(dispatched.length).toBe(1);
   });
 
-  test("signed body for another bot (destination mismatch) → 401", async () => {
+  test("signed body for another bot (destination mismatch) → 403 (U-12)", async () => {
     const raw = body([ev()], "U" + "9".repeat(32));
-    expect((await call(raw)).status).toBe(401);
+    const r = await call(raw);
+    expect(r).toEqual({ status: 403, body: { ok: false, error: "destination_mismatch" } });
     expect(dispatched).toEqual([]);
+  });
+
+  test("signed body with missing destination → 400 (U-12 / LP-UNK-07)", async () => {
+    const raw = JSON.stringify({ events: [ev()] });
+    const r = await call(raw);
+    expect(r).toEqual({ status: 400, body: { ok: false, error: "destination_missing" } });
+    expect(dispatched).toEqual([]);
+    const empty = JSON.stringify({ destination: "", events: [ev()] });
+    expect(await call(empty)).toEqual({ status: 400, body: { ok: false, error: "destination_missing" } });
+    const nul = JSON.stringify({ destination: null, events: [ev()] });
+    expect(await call(nul)).toEqual({ status: 400, body: { ok: false, error: "destination_missing" } });
   });
 
   test("invalid JSON after a valid signature → 400", async () => {
@@ -254,6 +269,99 @@ describe("emergency stop / leave at wake, with the real hold check", () => {
     }
     __setHoldReaderForTests(null);
     expect(dispatched).toEqual([]);
+  });
+});
+
+describe("U-06 same OA / U-19 hold: approval postback vs wake", () => {
+  test("postback is dispatched even when the employee is held; wake is not", async () => {
+    const approvals: Array<{ kind: string; type?: string }> = [];
+    hold = { ok: false, code: "employee_on_hold", holdId: "h1", kind: "stopped" };
+    const d = {
+      ...deps(),
+      dispatchApproval: async (_a: CommAccount, ev: { type?: string }, kind: string) => {
+        approvals.push({ kind, type: ev.type });
+        return true;
+      },
+    };
+    const raw = body([ev({
+      type: "postback",
+      message: undefined,
+      postback: { data: "a:aprvref01" },
+      webhookEventId: "01HZZZZZZZZZZZZZZZZZZPOST",
+    })]);
+    expect((await handleLineAccountWebhook({ ref: account.webhookRef, rawBody: new TextEncoder().encode(raw), signature: sig(raw) }, d)).status).toBe(200);
+    expect(approvals).toEqual([{ kind: "postback", type: "postback" }]);
+    expect(dispatched).toEqual([]);
+    expect(holdCalls).toEqual([]);
+  });
+
+  test("1:1 text on hold is not woken and is not treated as a postback", async () => {
+    hold = { ok: false, code: "employee_on_hold", holdId: "h1", kind: "stopped" };
+    const raw = body([ev()]);
+    expect((await call(raw)).status).toBe(200);
+    expect(dispatched).toEqual([]);
+  });
+
+  test("U-09: org not on LINE_CONVERSATION_ORG_IDS → 404, no dispatch", async () => {
+    process.env.LINE_CONVERSATION_ORG_IDS = "aaaaaaaa-0000-4000-8000-000000000307";
+    const raw = body([ev()]);
+    expect((await call(raw)).status).toBe(404);
+    expect(dispatched).toEqual([]);
+    delete process.env.LINE_CONVERSATION_ORG_IDS;
+  });
+});
+
+describe("U-02 unfollow unlink", () => {
+  test("unfollow revokes that user only, does not wake, account stays active (LP-UNF-01)", async () => {
+    const links = new Map<string, { status: string }>([[USER, { status: "active" }]]);
+    const d = {
+      ...deps(),
+      getLink: async (_o: string, _k: string, userId: string) => links.get(userId) ?? null,
+      revokeLink: async (_o: string, _k: string, userId: string) => {
+        links.set(userId, { status: "revoked" });
+      },
+      forgetRevokedLink: async (_o: string, _k: string, userId: string) => {
+        if (links.get(userId)?.status === "revoked") links.delete(userId);
+      },
+    };
+    const raw = body([ev({ type: "unfollow", message: undefined, webhookEventId: "01HZZZZZZZZZZZZZZZZZZUNF1" })]);
+    expect((await handleLineAccountWebhook({ ref: account.webhookRef, rawBody: new TextEncoder().encode(raw), signature: sig(raw) }, d)).status).toBe(200);
+    expect(dispatched).toEqual([]);
+    expect(links.get(USER)).toEqual({ status: "revoked" });
+    const rows = await listCommAccounts(ORG);
+    const after = rows.find((r) => r.id === account.id);
+    expect(after?.status).toBe("active");
+    expect(after?.status).not.toBe("disabled");
+  });
+
+  test("after unfollow, 1:1 text does not wake (LP-UNF-03)", async () => {
+    const links = new Map<string, { status: string }>([[USER, { status: "revoked" }]]);
+    const d = {
+      ...deps(),
+      getLink: async (_o: string, _k: string, userId: string) => links.get(userId) ?? null,
+    };
+    const raw = body([ev({ webhookEventId: "01HZZZZZZZZZZZZZZZZZZUNF2" })]);
+    expect((await handleLineAccountWebhook({ ref: account.webhookRef, rawBody: new TextEncoder().encode(raw), signature: sig(raw) }, d)).status).toBe(200);
+    expect(dispatched).toEqual([]);
+  });
+
+  test("re-follow does not restore the link; later text wakes as unlinked (LP-UNF-04)", async () => {
+    const links = new Map<string, { status: string }>([[USER, { status: "revoked" }]]);
+    const d = {
+      ...deps(),
+      getLink: async (_o: string, _k: string, userId: string) => links.get(userId) ?? null,
+      forgetRevokedLink: async (_o: string, _k: string, userId: string) => {
+        if (links.get(userId)?.status === "revoked") links.delete(userId);
+      },
+    };
+    const follow = body([ev({ type: "follow", message: undefined, webhookEventId: "01HZZZZZZZZZZZZZZZZZZFOL1" })]);
+    expect((await handleLineAccountWebhook({ ref: account.webhookRef, rawBody: new TextEncoder().encode(follow), signature: sig(follow) }, d)).status).toBe(200);
+    expect(dispatched).toEqual([]);
+    expect(links.has(USER)).toBe(false);
+    const text = body([ev({ webhookEventId: "01HZZZZZZZZZZZZZZZZZZFOL2" })]);
+    expect((await handleLineAccountWebhook({ ref: account.webhookRef, rawBody: new TextEncoder().encode(text), signature: sig(text) }, d)).status).toBe(200);
+    expect(dispatched.length).toBe(1);
+    expect(dispatched[0]?.senderId).toBe(USER);
   });
 });
 

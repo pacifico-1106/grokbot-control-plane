@@ -5,6 +5,7 @@
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import {
+  isLineConversationRequest,
   lineExternalNoApproval,
   lineExternalSendAllowed,
   lineForceExternalApproval,
@@ -115,5 +116,28 @@ describe("lineForceExternalApproval", () => {
       unclassified: true,
       employeeNoApproval: true,
     })).toBe(false);
+  });
+});
+
+describe("isLineConversationRequest (§6: Grok Bot must echo surface=line)", () => {
+  const tokenBody = { conversation: { token: "spc1.payload.sig" } };
+
+  test("flag OFF → false even with surface=line and a token", () => {
+    delete process.env.COMM_ACCOUNTS_ENABLED;
+    delete process.env.LINE_CONVERSATION_ENABLED;
+    expect(isLineConversationRequest({ surface: "line" } as never, tokenBody)).toBe(false);
+  });
+
+  test("flag ON: a token without surface=line is not a LINE conversation", () => {
+    process.env.COMM_ACCOUNTS_ENABLED = "true";
+    process.env.LINE_CONVERSATION_ENABLED = "true";
+    expect(isLineConversationRequest(null, tokenBody)).toBe(false);
+    expect(isLineConversationRequest({ surface: "slack" } as never, tokenBody)).toBe(false);
+  });
+
+  test("flag ON: surface=line + token → true (Grok Bot echoed the wake 札)", () => {
+    process.env.COMM_ACCOUNTS_ENABLED = "true";
+    process.env.LINE_CONVERSATION_ENABLED = "true";
+    expect(isLineConversationRequest({ surface: "line" } as never, tokenBody)).toBe(true);
   });
 });

@@ -2,11 +2,37 @@
  * LINE PoC flags (design line-lineworks-design-20261012.md). Every flag defaults
  * OFF; OFF = today's production behavior (no code path touches the new tables).
  * Kept out of lib/feature-flags.ts (many open PRs append to it).
+ *
+ * U-09 (木村): COMM_ACCOUNTS_ENABLED / LINE_CONVERSATION_ENABLED can be narrowed
+ * to an org allowlist. Default is all orgs OFF (flags unset). When a flag is ON
+ * and its `*_ORG_IDS` list is empty, every org is ON (dev / existing tests).
+ * Production sets the list to TOKYO307 only. Unknown / malformed ids are ignored;
+ * a list that contains no valid UUID is fail-closed (no org matches).
  */
+
+const ORG_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function parseFlag(value: string | undefined): boolean {
   const v = (value ?? "").trim().toLowerCase();
   return v === "true" || v === "1" || v === "on" || v === "enabled";
+}
+
+/** `null` = no restriction (flag ON applies to every org). Empty set = deny all. */
+export function parseOrgAllowlist(raw: string | undefined): Set<string> | null {
+  const items = (raw ?? "")
+    .split(/[,\s]+/)
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+  if (items.length === 0) return null;
+  return new Set(items.filter((id) => ORG_UUID_RE.test(id)));
+}
+
+function orgScopedOn(flagOn: boolean, allowlistEnv: string | undefined, orgId?: string | null): boolean {
+  if (!flagOn) return false;
+  const allowed = parseOrgAllowlist(allowlistEnv);
+  if (!allowed) return true;
+  if (!orgId) return true;
+  return allowed.has(orgId.trim().toLowerCase());
 }
 
 /**
@@ -14,17 +40,22 @@ function parseFlag(value: string | undefined): boolean {
  * encrypted secrets. Requires migration 20261013200000 and
  * NOTIFICATION_CONFIG_ENCRYPTION_KEY. OFF → create / set / read refuse with
  * "disabled" and webhook-ref lookups find nothing (the route answers 404).
+ * Pass orgId to apply COMM_ACCOUNTS_ORG_IDS (U-09).
  */
-export function isCommAccountsEnabled(): boolean {
-  return parseFlag(process.env.COMM_ACCOUNTS_ENABLED);
+export function isCommAccountsEnabled(orgId?: string | null): boolean {
+  return orgScopedOn(parseFlag(process.env.COMM_ACCOUNTS_ENABLED), process.env.COMM_ACCOUNTS_ORG_IDS, orgId);
 }
 
 /**
  * L1: LINE 1:1 conversation (wake from LINE, reply through comm.reply with a
  * server-signed conversation token). Needs COMM_ACCOUNTS_ENABLED as well.
+ * Pass orgId to apply LINE_CONVERSATION_ORG_IDS (U-09).
  */
-export function isLineConversationEnabled(): boolean {
-  return isCommAccountsEnabled() && parseFlag(process.env.LINE_CONVERSATION_ENABLED);
+export function isLineConversationEnabled(orgId?: string | null): boolean {
+  return (
+    isCommAccountsEnabled(orgId) &&
+    orgScopedOn(parseFlag(process.env.LINE_CONVERSATION_ENABLED), process.env.LINE_CONVERSATION_ORG_IDS, orgId)
+  );
 }
 
 /**
@@ -32,6 +63,6 @@ export function isLineConversationEnabled(): boolean {
  * URL, and POST /v2/bot/channel/webhook/test. Needs the conversation flags.
  * Default OFF. AI / Admin MCP never call this path.
  */
-export function isLineWebhookAutoSetupEnabled(): boolean {
-  return isLineConversationEnabled() && parseFlag(process.env.LINE_WEBHOOK_AUTO_SETUP_ENABLED);
+export function isLineWebhookAutoSetupEnabled(orgId?: string | null): boolean {
+  return isLineConversationEnabled(orgId) && parseFlag(process.env.LINE_WEBHOOK_AUTO_SETUP_ENABLED);
 }

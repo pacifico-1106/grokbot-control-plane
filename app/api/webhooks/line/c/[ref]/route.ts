@@ -28,6 +28,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ ref: string }>
     return jsonUtf8({ ok: false, error: "unavailable" }, { status: 503 });
   }
   if (!account) return jsonUtf8({ ok: false, error: "not_found" }, { status: 404 });
+  if (!isLineConversationEnabled(account.orgId)) return jsonUtf8({ ok: false, error: "not_found" }, { status: 404 });
   const body = await readBodyCapped(req, MAX_BODY_BYTES);
   if (!body.ok) {
     return body.reason === "too_large"

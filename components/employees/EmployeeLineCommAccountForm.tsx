@@ -1,6 +1,21 @@
 "use client";
 
 import { useState } from "react";
+import {
+  LINE_COMM_ACCOUNT_BOT_USER_LABEL_JA,
+  LINE_COMM_ACCOUNT_CONNECT_BUTTON_JA,
+  LINE_COMM_ACCOUNT_CONNECTING_JA,
+  LINE_COMM_ACCOUNT_FAIL_FALLBACK_JA,
+  LINE_COMM_ACCOUNT_HELP_JA,
+  LINE_COMM_ACCOUNT_REGISTERING_JA,
+  LINE_COMM_ACCOUNT_RETEST_BUTTON_JA,
+  LINE_COMM_ACCOUNT_SECRET_LABEL_JA,
+  LINE_COMM_ACCOUNT_SUCCESS_JA,
+  LINE_COMM_ACCOUNT_SUCCESS_WITH_URL_JA,
+  LINE_COMM_ACCOUNT_TOKEN_LABEL_JA,
+  LINE_COMM_ACCOUNT_UPDATE_BUTTON_JA,
+  LINE_COMM_ACCOUNT_WEBHOOK_LABEL_JA,
+} from "@/lib/comm/line-poc-copy";
 
 type Account = {
   id: string;
@@ -49,12 +64,12 @@ export function EmployeeLineCommAccountForm({
         account?: Account;
       };
       if (body.account) setAccount(body.account);
-      if (!res.ok || !body.ok) throw new Error(body.message || body.error || "接続に失敗しました");
+      if (!res.ok || !body.ok) throw new Error(body.message || body.error || LINE_COMM_ACCOUNT_FAIL_FALLBACK_JA);
       setToken("");
       setSecret("");
-      setOkMessage(body.webhookUrl ? `Webhook を登録しました: ${body.webhookUrl}` : "Webhook を登録しました");
+      setOkMessage(body.webhookUrl ? LINE_COMM_ACCOUNT_SUCCESS_WITH_URL_JA(body.webhookUrl) : LINE_COMM_ACCOUNT_SUCCESS_JA);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "接続に失敗しました");
+      setMessage(error instanceof Error ? error.message : LINE_COMM_ACCOUNT_FAIL_FALLBACK_JA);
     } finally {
       setBusy(false);
     }
@@ -63,16 +78,16 @@ export function EmployeeLineCommAccountForm({
   return (
     <div className="space-y-3">
       <p className="text-xs muted leading-relaxed">
-        この社員専用の LINE 公式アカウントを接続します。チャネルアクセストークンはサーバーだけが復号し、ログには残りません。AI は実行できません。
+        {LINE_COMM_ACCOUNT_HELP_JA}
       </p>
       {account ? (
         <dl className="text-sm space-y-2">
           <div>
-            <dt className="text-xs muted">ボット userId</dt>
+            <dt className="text-xs muted">{LINE_COMM_ACCOUNT_BOT_USER_LABEL_JA}</dt>
             <dd className="mt-1 font-mono text-xs">{account.botUserId}</dd>
           </div>
           <div>
-            <dt className="text-xs muted">会話 Webhook URL</dt>
+            <dt className="text-xs muted">{LINE_COMM_ACCOUNT_WEBHOOK_LABEL_JA}</dt>
             <dd className="mt-1 font-mono text-xs break-all">{account.webhookUrl || account.webhookPath}</dd>
           </div>
         </dl>
@@ -80,7 +95,7 @@ export function EmployeeLineCommAccountForm({
       {!account || token || secret ? (
         <div className="space-y-2">
           <label className="block text-xs">
-            チャネルアクセストークン
+            {LINE_COMM_ACCOUNT_TOKEN_LABEL_JA}
             <input
               type="password"
               autoComplete="off"
@@ -91,7 +106,7 @@ export function EmployeeLineCommAccountForm({
             />
           </label>
           <label className="block text-xs">
-            チャネルシークレット
+            {LINE_COMM_ACCOUNT_SECRET_LABEL_JA}
             <input
               type="password"
               autoComplete="off"
@@ -111,7 +126,7 @@ export function EmployeeLineCommAccountForm({
             disabled={busy || disabled || !token || !secret}
             onClick={() => void submit(true)}
           >
-            {busy ? "接続中…" : "接続して Webhook を登録"}
+            {busy ? LINE_COMM_ACCOUNT_CONNECTING_JA : LINE_COMM_ACCOUNT_CONNECT_BUTTON_JA}
           </button>
         ) : (
           <button
@@ -120,7 +135,7 @@ export function EmployeeLineCommAccountForm({
             disabled={busy || disabled}
             onClick={() => void submit(Boolean(token && secret))}
           >
-            {busy ? "登録中…" : token && secret ? "トークンを更新して Webhook を再登録" : "Webhook を再登録してテスト"}
+            {busy ? LINE_COMM_ACCOUNT_REGISTERING_JA : token && secret ? LINE_COMM_ACCOUNT_UPDATE_BUTTON_JA : LINE_COMM_ACCOUNT_RETEST_BUTTON_JA}
           </button>
         )}
       </div>

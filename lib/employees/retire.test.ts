@@ -150,7 +150,7 @@ describe("retireEmployee demo", () => {
     expect(again?.alreadyRetired).toBe(true);
   });
 
-  test("disables this employee's comm account only (same org)", async () => {
+  test("LP-RET-01: disables this employee's comm account only (same org)", async () => {
     const own = await createCommAccount({
       orgId: DEMO_ORG.id,
       employeeId: SALES,

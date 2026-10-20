@@ -1,6 +1,12 @@
 "use client";
 
 import { useState } from "react";
+import {
+  LINE_COMM_LINK_HELP_JA,
+  LINE_COMM_LINK_ISSUE_BUSY_JA,
+  LINE_COMM_LINK_ISSUE_BUTTON_JA,
+  LINE_COMM_LINK_ISSUE_FAIL_JA,
+} from "@/lib/comm/line-poc-copy";
 
 export function EmployeeLineLinkCodeForm({
   employeeId,
@@ -34,11 +40,11 @@ export function EmployeeLineLinkCodeForm({
         message?: string;
         error?: string;
       };
-      if (!res.ok) throw new Error(body.message || body.error || "発行に失敗しました");
+      if (!res.ok) throw new Error(body.message || body.error || LINE_COMM_LINK_ISSUE_FAIL_JA);
       setDisplay(body.display || "");
       setExpiresAt(body.expiresAt || "");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "発行に失敗しました");
+      setMessage(error instanceof Error ? error.message : LINE_COMM_LINK_ISSUE_FAIL_JA);
     } finally {
       setBusy(false);
     }
@@ -47,7 +53,7 @@ export function EmployeeLineLinkCodeForm({
   return (
     <div className="space-y-2">
       <p className="text-xs muted leading-relaxed">
-        発行した本人が、この社員の LINE に自分で送ると、あなたの社内メンバーと LINE が紐付きます。第三者に渡さないでください。本文はログに残りません。
+        {LINE_COMM_LINK_HELP_JA}
       </p>
       <button
         type="button"
@@ -55,7 +61,7 @@ export function EmployeeLineLinkCodeForm({
         disabled={busy || disabled}
         onClick={() => void issue()}
       >
-        {busy ? "発行中…" : "連携コードを発行"}
+        {busy ? LINE_COMM_LINK_ISSUE_BUSY_JA : LINE_COMM_LINK_ISSUE_BUTTON_JA}
       </button>
       {display ? (
         <p className="text-sm font-mono">

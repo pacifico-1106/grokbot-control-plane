@@ -286,3 +286,36 @@ describe("G7: resolve follow-up in the same Reply", () => {
     expect(texts[1]).toContain("✅ 承認済み");
   });
 });
+
+describe("§7: no conversation body stored, no image fetch", () => {
+  test("ordinary 1:1 text is ignored (no reply, no resolve, text not in audit)", async () => {
+    const body = "お客さまとの会話本文です";
+    await post([textEvent(body)]);
+    expect(lineCalls).toHaveLength(0);
+    expect(resolveCalls).toHaveLength(0);
+    expect(JSON.stringify(audits)).not.toContain(body);
+  });
+
+  test("image / file events never call the LINE content API", async () => {
+    const res = await post([
+      {
+        type: "message",
+        replyToken: "rt-img",
+        webhookEventId: "ev-img",
+        source: { type: "user", userId: DEST },
+        message: { type: "image", id: "325708", contentProvider: { type: "line" } },
+      },
+      {
+        type: "message",
+        replyToken: "rt-file",
+        webhookEventId: "ev-file",
+        source: { type: "user", userId: DEST },
+        message: { type: "file", fileName: "secret.pdf", fileSize: 12 },
+      },
+    ]);
+    expect(res.status).toBe(200);
+    expect(lineCalls).toHaveLength(0);
+    expect(resolveCalls).toHaveLength(0);
+    expect(lineCalls.some((c) => c.path.includes("/content"))).toBe(false);
+  });
+});

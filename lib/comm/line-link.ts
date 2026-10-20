@@ -10,10 +10,11 @@ import { redeemLineLinkCode } from "@/lib/line/link-code-limits";
 import { parseLineLinkCodeText } from "@/lib/line/link-code";
 import { appendAuditEvent } from "@/lib/data/audit";
 import { readCommAccountSecretsForServer } from "@/lib/comm/accounts";
+import { LINE_CONVERSATION_LINK_FAIL_JA, LINE_CONVERSATION_LINK_OK_JA } from "@/lib/comm/line-poc-copy";
 import { checkLineSendAllowed, type PreSendResult } from "@/lib/comm/pre-send";
 
 /** Short fixed Reply after a successful redeem. Never include the inbound body. */
-export const LINE_CONVERSATION_LINKED_REPLY = "✅ Staffpass の社内メンバーとして確認しました。";
+export const LINE_CONVERSATION_LINKED_REPLY = LINE_CONVERSATION_LINK_OK_JA;
 
 export type LineLinkRedeemDeps = {
   sendReply?: (input: { orgId: string; accountId: string; replyToken: string; text: string }) => Promise<void>;
@@ -33,6 +34,7 @@ export async function sendConversationLinkReply(
     employeeId: string;
     lineUserId: string;
     replyToken: string | null | undefined;
+    text?: string;
   },
   deps: Pick<LineLinkRedeemDeps, "checkLineSendAllowed"> = {}
 ): Promise<void> {
@@ -56,7 +58,7 @@ export async function sendConversationLinkReply(
     },
     body: JSON.stringify({
       replyToken,
-      messages: [{ type: "text", text: LINE_CONVERSATION_LINKED_REPLY }],
+      messages: [{ type: "text", text: input.text || LINE_CONVERSATION_LINKED_REPLY }],
     }),
     signal: AbortSignal.timeout(8_000),
   }).catch(() => undefined);
@@ -95,6 +97,28 @@ export async function redeemConversationLinkCode(
         reason: consumed.reason,
       },
     }).catch(() => undefined);
+    const replyToken = String(input.replyToken || "").trim();
+    if (replyToken) {
+      const send = deps.sendReply ?? (async ({ replyToken: token, text }) => {
+        await sendConversationLinkReply(
+          {
+            orgId: input.orgId,
+            accountId: input.accountId,
+            employeeId: input.employeeId,
+            lineUserId: input.lineUserId,
+            replyToken: token,
+            text,
+          },
+          { checkLineSendAllowed: deps.checkLineSendAllowed }
+        );
+      });
+      await send({
+        orgId: input.orgId,
+        accountId: input.accountId,
+        replyToken,
+        text: consumed.replyJa || LINE_CONVERSATION_LINK_FAIL_JA,
+      }).catch(() => undefined);
+    }
     return { handled: true, bound: false, reason: consumed.reason };
   }
   const bound = await upsertProofVerifiedVoterBinding({

@@ -8,6 +8,7 @@ import { jsonUtf8 } from "@/lib/http/json-utf8";
 import { getEmployee } from "@/lib/data";
 import { listCommAccounts } from "@/lib/comm/accounts";
 import { isCommAccountsEnabled, isLineConversationEnabled } from "@/lib/comm/flags";
+import { LINE_COMM_LINK_ISSUE_FORBIDDEN_JA } from "@/lib/comm/line-poc-copy";
 import { memberCanIssueConversationLinkCode } from "@/lib/employees/comm-link-code-permissions";
 import { getPendingLineLinkCode, issueLineLinkCode } from "@/lib/line/link-code";
 import { requireCapability } from "@/lib/team/demo-actor";
@@ -25,10 +26,13 @@ async function gate(req: Request) {
   }
   const cap = await requireCapability(req, "view_employees");
   if (!cap.ok) return cap;
+  if (!isLineConversationEnabled(cap.actor.orgId) || !isCommAccountsEnabled(cap.actor.orgId)) {
+    return { ok: false as const, response: json({ ok: false, error: "feature_disabled" }, 404) };
+  }
   if (!memberCanIssueConversationLinkCode(cap.actor)) {
     return {
       ok: false as const,
-      response: json({ ok: false, error: "approver_required", message: "オーナーまたは承認者だけが発行できます" }, 403),
+      response: json({ ok: false, error: "approver_required", message: LINE_COMM_LINK_ISSUE_FORBIDDEN_JA }, 403),
     };
   }
   return { ok: true as const, actor: cap.actor };

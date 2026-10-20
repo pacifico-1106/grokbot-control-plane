@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { isCommAccountsEnabled, isLineConversationEnabled, isLineWebhookAutoSetupEnabled } from "@/lib/comm/flags";
+import { isCommAccountsEnabled, isLineConversationEnabled, isLineWebhookAutoSetupEnabled, parseOrgAllowlist } from "@/lib/comm/flags";
 
-const KEYS = ["COMM_ACCOUNTS_ENABLED", "LINE_CONVERSATION_ENABLED", "LINE_WEBHOOK_AUTO_SETUP_ENABLED"] as const;
+const KEYS = ["COMM_ACCOUNTS_ENABLED", "LINE_CONVERSATION_ENABLED", "LINE_WEBHOOK_AUTO_SETUP_ENABLED", "COMM_ACCOUNTS_ORG_IDS", "LINE_CONVERSATION_ORG_IDS"] as const;
 const saved = Object.fromEntries(KEYS.map((k) => [k, process.env[k]]));
 afterEach(() => {
   for (const k of KEYS) {
@@ -48,5 +48,34 @@ describe("LINE PoC flags (default OFF)", () => {
     expect(isLineWebhookAutoSetupEnabled()).toBe(true);
     process.env.LINE_CONVERSATION_ENABLED = "";
     expect(isLineWebhookAutoSetupEnabled()).toBe(false);
+  });
+  test("U-09: empty allowlist + flag ON → every org; list restricts; default OFF", () => {
+    const tokyo = "aaaaaaaa-0000-4000-8000-000000000307";
+    const other = "bbbbbbbb-0000-4000-8000-000000000001";
+    process.env.COMM_ACCOUNTS_ENABLED = "true";
+    process.env.LINE_CONVERSATION_ENABLED = "true";
+    delete process.env.COMM_ACCOUNTS_ORG_IDS;
+    delete process.env.LINE_CONVERSATION_ORG_IDS;
+    expect(isCommAccountsEnabled(tokyo)).toBe(true);
+    expect(isLineConversationEnabled(other)).toBe(true);
+    process.env.COMM_ACCOUNTS_ORG_IDS = tokyo;
+    process.env.LINE_CONVERSATION_ORG_IDS = tokyo;
+    expect(isCommAccountsEnabled(tokyo)).toBe(true);
+    expect(isLineConversationEnabled(tokyo)).toBe(true);
+    expect(isCommAccountsEnabled(other)).toBe(false);
+    expect(isLineConversationEnabled(other)).toBe(false);
+    expect(isLineConversationEnabled()).toBe(true);
+    delete process.env.COMM_ACCOUNTS_ENABLED;
+    delete process.env.LINE_CONVERSATION_ENABLED;
+    expect(isCommAccountsEnabled(tokyo)).toBe(false);
+    expect(isLineConversationEnabled(tokyo)).toBe(false);
+  });
+  test("parseOrgAllowlist ignores junk and fail-closes when nothing valid remains", () => {
+    expect(parseOrgAllowlist(undefined)).toBeNull();
+    expect(parseOrgAllowlist("")).toBeNull();
+    expect(parseOrgAllowlist("not-a-uuid, also-bad")).toEqual(new Set());
+    expect(parseOrgAllowlist("AAAAAAAA-0000-4000-8000-000000000307, skip")).toEqual(
+      new Set(["aaaaaaaa-0000-4000-8000-000000000307"])
+    );
   });
 });

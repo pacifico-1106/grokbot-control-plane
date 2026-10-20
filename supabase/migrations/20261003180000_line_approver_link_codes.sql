@@ -40,3 +40,19 @@ comment on table public.line_approver_link_codes is
   'Single-use 15-minute LINE approver link codes (HMAC only). Server-only. Flag LINE_APPROVER_LINK_ENABLED.';
 
 commit;
+
+-- ROLLBACK (down) — refuse while an unused (not consumed, not invalidated) code
+-- exists so a live 15-minute code cannot silently vanish. Turn
+-- LINE_APPROVER_LINK_ENABLED off first. Standalone:
+-- supabase/verification/20261003180000_line_approver_link_codes_rollback.sql
+--   do $rb$ begin
+--     if to_regclass('public.line_approver_link_codes') is not null
+--        and exists (
+--          select 1 from public.line_approver_link_codes
+--          where consumed_at is null and invalidated_at is null
+--        ) then
+--       raise exception 'ROLLBACK_REFUSED: unused line_approver_link_codes exist; consume or invalidate them first';
+--     end if;
+--   end $rb$;
+--   drop table if exists public.line_approver_link_codes;
+-- END ROLLBACK

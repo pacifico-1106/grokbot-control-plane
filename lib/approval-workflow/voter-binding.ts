@@ -518,6 +518,44 @@ export async function revokeVoterBinding(
 }
 
 /**
+ * U-02: after a re-follow, drop a revoked conversation binding so the user is
+ * treated as never-linked (external). Does not restore status to active —
+ * a new link code must call upsertProofVerifiedVoterBinding.
+ */
+export async function forgetRevokedVoterBinding(
+  orgId: string,
+  provider: VoterBindingProvider,
+  channelKey: string,
+  externalUserId: string
+): Promise<{ ok: true; forgotten: boolean } | { ok: false; reason: string }> {
+  const existing = await getVoterBinding(orgId, provider, channelKey, externalUserId);
+  if (!existing || existing.status !== "revoked") return { ok: true, forgotten: false };
+  const key = bindingKey({ orgId, provider, channelKey, externalUserId });
+
+  if (isDemoMode()) {
+    const demo = demoBindings.get(key);
+    if (demo?.verificationNonce) demoNonceIndex.delete(demo.verificationNonce);
+    demoBindings.delete(key);
+    return { ok: true, forgotten: true };
+  }
+
+  const admin = createSupabaseAdminClient();
+  if (!admin) return { ok: false, reason: "supabase_unavailable" };
+
+  const { error } = await admin
+    .from("approval_workflow_voter_bindings")
+    .delete()
+    .eq("org_id", orgId)
+    .eq("provider", provider)
+    .eq("channel_key", channelKey)
+    .eq("external_user_id", externalUserId)
+    .not("revoked_at", "is", null);
+
+  if (error) return { ok: false, reason: "forget_failed" };
+  return { ok: true, forgotten: true };
+}
+
+/**
  * Create (or refresh) an ACTIVE binding from out-of-band proof that the same
  * person controls the Staffpass member session and the external account
  * (currently: a redeemed LINE link code, lib/line/link-code.ts).

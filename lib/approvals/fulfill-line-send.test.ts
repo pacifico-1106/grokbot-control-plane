@@ -7,12 +7,13 @@ import { mock } from "bun:test";
 
 type LineSendCall = { token?: string | null; externalSendAllowed: boolean; retryKey: string; text: unknown };
 type LineSendResult =
-  | { status: "sent"; audience: "internal" | "external"; mode: "reply" | "push" }
+  | { status: "sent"; audience: "internal" | "external"; mode: "reply" }
+  | { status: "accepted"; audience: "internal" | "external"; mode: "push"; lineAccepted: true }
   | { status: "not_sent"; reason: string }
   | { status: "unknown"; reason: string; audience: "internal" | "external"; mode: "reply" | "push" };
 
 const sends: LineSendCall[] = [];
-let nextSend: LineSendResult = { status: "sent", audience: "external", mode: "push" };
+let nextSend: LineSendResult = { status: "sent", audience: "external", mode: "reply" };
 mock.module("@/lib/comm/line-send", () => ({
   sendLineConversationMessage: async (input: LineSendCall) => {
     sends.push(input);
@@ -44,7 +45,7 @@ beforeAll(async () => {
 });
 beforeEach(() => {
   sends.length = 0;
-  nextSend = { status: "sent", audience: "external", mode: "push" };
+  nextSend = { status: "sent", audience: "external", mode: "reply" };
   posts = 0;
   process.env.COMM_ACCOUNTS_ENABLED = "true";
   process.env.LINE_CONVERSATION_ENABLED = "true";
@@ -142,6 +143,21 @@ describe("post-approval LINE send", () => {
     expect(approvalSendOutcome(row!).reasonCode).toBe("post_outcome_unknown");
     const second = await fulfillIfApproved(row as ApprovalRequest, "approved");
     expect(second?.error).toBe("post_outcome_unknown");
+    expect(sends).toHaveLength(1);
+  });
+
+  test("U-03: Push accepted → not sent:true, error line_accepted_not_delivered, no retry", async () => {
+    nextSend = { status: "accepted", audience: "external", mode: "push", lineAccepted: true };
+    const approved = await seedLineApproval();
+    const first = await fulfillApprovedInvoke(approved, { conversationToken: TOKEN });
+    expect(first?.ok).toBe(false);
+    expect(first?.error).toBe("line_accepted_not_delivered");
+    expect(sends).toHaveLength(1);
+    const row = await getApprovalById(approved.id, DEMO_ORG.id);
+    expect(approvalSendOutcome(row!).sent).toBe(false);
+    expect(approvalSendOutcome(row!).reasonCode).toBe("line_accepted_not_delivered");
+    const second = await fulfillIfApproved(row as ApprovalRequest, "approved");
+    expect(second?.error).toBe("line_accepted_not_delivered");
     expect(sends).toHaveLength(1);
   });
 });

@@ -90,7 +90,7 @@ describe("cards: 「緊急停止」 only with the flag, only on employee tickets
     for (const f of ["lib/notify/slack.ts", "lib/notify/telegram.ts", "lib/notify/line.ts"]) {
       expect(readFileSync(join(ROOT, f), "utf8")).toContain("showHoldStopButton(approval)");
     }
-    for (const f of ["app/api/webhooks/slack/interactivity/route.ts", "app/api/webhooks/line/[ref]/route.ts", "lib/notify/telegram-channel-webhook.ts"]) {
+    for (const f of ["app/api/webhooks/slack/interactivity/route.ts", "lib/line/approval-events.ts", "lib/notify/telegram-channel-webhook.ts"]) {
       const src = readFileSync(join(ROOT, f), "utf8");
       expect(src).toContain("stopFromInbox");
       expect(src).not.toMatch(/approveHoldRelease|requestHoldRelease/);

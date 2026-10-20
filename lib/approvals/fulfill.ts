@@ -241,7 +241,7 @@ export type ConversationDelivery =
   | { ok: true; delivery: "stub" }
   | { ok: true; delivery: "slack"; channel?: string; ts?: string; postedVia?: PostingAs }
   | { ok: true; delivery: "mail"; channel?: string; ts?: string }
-  | { ok: true; delivery: "line" };
+  | { ok: true; delivery: "line"; lineAccepted?: boolean };
 
 function jsonClone<T>(value: T): T | undefined {
   try {
@@ -563,6 +563,7 @@ async function fulfillLineConversation(
   const existing = parseFulfillment(approval.metadata);
   if (existing?.ok) return existing;
   if (existing?.error === POST_OUTCOME_UNKNOWN) return existing;
+  if (existing?.error === "line_accepted_not_delivered") return existing;
 
   const expectedHash =
     snapshot.conversation?.tokenHash ||
@@ -593,9 +594,11 @@ async function fulfillLineConversation(
   const fulfillment: ApprovalFulfillment =
     result.status === "sent"
       ? { ok: true, delivery: "line", at }
-      : result.status === "unknown"
-        ? { ok: false, error: POST_OUTCOME_UNKNOWN, at }
-        : { ok: false, error: result.reason || "line_not_sent", at };
+      : result.status === "accepted"
+        ? { ok: false, error: "line_accepted_not_delivered", at }
+        : result.status === "unknown"
+          ? { ok: false, error: POST_OUTCOME_UNKNOWN, at }
+          : { ok: false, error: result.reason || "line_not_sent", at };
   await persistFulfillment(approval, fulfillment);
   if (result.status === "sent") {
     await appendAuditEvent({
@@ -610,6 +613,23 @@ async function fulfillLineConversation(
         jobId: snapshot.jobId,
         approvalId: approval.id,
         delivery: "line",
+        phase: "approval.fulfill",
+      },
+    }).catch(() => undefined);
+  } else if (result.status === "accepted") {
+    await appendAuditEvent({
+      orgId: approval.orgId,
+      employeeId: approval.employeeId,
+      credentialId: approval.credentialId,
+      action: "line.post_accepted",
+      purpose: approval.purpose,
+      summary: "LINEが受け付けた（届いたとは限らない）",
+      metadata: {
+        tool: snapshot.tool,
+        jobId: snapshot.jobId,
+        approvalId: approval.id,
+        lineAccepted: true,
+        sent: false,
         phase: "approval.fulfill",
       },
     }).catch(() => undefined);
@@ -1135,7 +1155,7 @@ async function fulfillApprovedInvokeCore(
 
     // L-6: approved LINE reply → sendLineConversationMessage. An "unknown"
     // outcome is recorded and never retried automatically (Push would double-deliver).
-    if (isLineConversationEnabled() && (snapshot.conversation?.surface || "").toLowerCase() === "line") {
+    if (isLineConversationEnabled(approval.orgId) && (snapshot.conversation?.surface || "").toLowerCase() === "line") {
       return fulfillLineConversation(approval, snapshot, options.conversationToken);
     }
 
@@ -1509,6 +1529,8 @@ export async function fulfillApprovedInvoke(
   if (already?.ok) return already;
   // Unknown LINE / Slack outcome: never take the claim again (a retry would Push).
   if (already?.error === POST_OUTCOME_UNKNOWN) return already;
+  // U-03: Push was accepted by LINE; retrying would double-send.
+  if (already?.error === "line_accepted_not_delivered") return already;
   // Re-check tool settings / mail policy before taking the execution claim so
   // a stop is audited with its reason (the authority check would otherwise
   // throw a generic approval_authority_revoked) and the claim is not touched.
