@@ -171,6 +171,15 @@ ADDITIVE = [
      "to_regclass('public.mcp_auth_failures') is null"
      " and to_regprocedure('public.record_mcp_auth_failure(text,uuid,uuid,uuid,text)') is null"
      " and to_regprocedure('public.touch_credential_last_used(uuid)') is null"),
+    # Hold-denial MCP 403 audit (HOLD_DENIAL_AUDIT_ENABLED): child of 164.
+    # Listed after the parent so 164's rollback/re-apply can drop the table
+    # first; this row then re-applies the CHECK + hold_id + RPC.
+    ("20261020400000_", "tests/security/db-hold-denial-audit.sql",
+     "to_regprocedure('public.record_hold_mcp_denial(text,uuid,uuid,uuid,text)') is null"
+     " and not exists (select 1 from information_schema.columns where table_schema = 'public'"
+     " and table_name = 'mcp_auth_failures' and column_name = 'hold_id')"
+     " and to_regclass('public.mcp_auth_failures') is not null"
+     " and to_regprocedure('public.record_mcp_auth_failure(text,uuid,uuid,uuid,text)') is not null"),
     # Review follow-up child first: restore 191/201/202 functions before those rollbacks.
     ("20261020300000_", "tests/security/db-credential-auto-renew-review-followup.sql",
      "to_regprocedure('public.abort_minted_credential_renewal(uuid,uuid,text,uuid)') is null"
@@ -427,6 +436,13 @@ try:
             child = next((n for n in order if n.startswith("20261020300000_")), None)
             assert child, "auto-renew review-followup child migration missing"
             sql_text(rollback_block((MIGRATIONS / child).read_text()), single=False)
+        if prefix.startswith("20261016400000_"):
+            # 20261020400000 expands failure_kind + hold_id. Drop those first
+            # so the parent DROP TABLE is clean and the restored table is the
+            # original 3-kind shape before this child is re-applied.
+            child = next((n for n in order if n.startswith("20261020400000_")), None)
+            assert child, "hold-denial audit child migration missing"
+            sql_text(rollback_block((MIGRATIONS / child).read_text()), single=False)
         sql_text(rollback_block((MIGRATIONS / name).read_text()), single=False)
         if isinstance(tables, str):
             gone = query(f"select {tables};")
@@ -442,6 +458,9 @@ try:
             sql_file(MIGRATIONS / child)
         if prefix.startswith("20261012500000_"):
             child = next((n for n in order if n.startswith("20261020300000_")), None)
+            sql_file(MIGRATIONS / child)
+        if prefix.startswith("20261016400000_"):
+            child = next((n for n in order if n.startswith("20261020400000_")), None)
             sql_file(MIGRATIONS / child)
         sql_file(ROOT / test)
         dropped = "its RPC + column (previous state restored)" if isinstance(tables, str) else ", ".join(tables)

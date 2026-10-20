@@ -950,6 +950,22 @@ export function isMcpAuthFailureAuditEnabled(): boolean {
 }
 
 /**
+ * HOLD_DENIAL_AUDIT_ENABLED (default OFF): record two hold refusals that
+ * are otherwise silent.
+ *
+ * (1) self_approval_denied on hold-release approve → one audit_events row
+ *     (actor, holdId, org, member, reason). Never tokens / headers.
+ * (2) /api/mcp org_on_hold or employee_on_hold 403 → mcp_auth_failures
+ *     (existing unique throttle; 1 row / minute / org+employee, multi-instance
+ *     safe). Audit write failures must not change the refusal (fail-closed).
+ *
+ * Flag OFF: no read, no write. Denial status and body stay as today.
+ */
+export function isHoldDenialAuditEnabled(): boolean {
+  return parseFlag(process.env.HOLD_DENIAL_AUDIT_ENABLED);
+}
+
+/**
  * MCP_AUTH_401_NEXT_STEP_JA_ENABLED (default OFF): add Japanese nextStepJa
  * on /api/mcp 401 bodies for missing/empty vs expired vs invalid. Machine-
  * readable data.code is unchanged. Flag OFF: 401 body identical to today.

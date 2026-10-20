@@ -67,6 +67,7 @@ const HOLD_TRAIL_ACTIONS = new Set([
   "employee.hold.release_requested",
   "employee.hold.released",
   "employee.hold.release_refused",
+  "employee.hold.self_approval_denied",
 ]);
 
 function holdMeta(event: AuditEvent): Record<string, unknown> {
@@ -83,6 +84,9 @@ function holdTrailActorKey(action: string, meta: Record<string, unknown>): strin
     return released ?? started;
   }
   if (action === "employee.hold.release_requested") return requested ?? started;
+  if (action === "employee.hold.self_approval_denied") {
+    return asString(meta.actor) ?? requested ?? started;
+  }
   return started;
 }
 

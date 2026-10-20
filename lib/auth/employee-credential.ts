@@ -47,9 +47,11 @@ export type CredentialAuthFailure = {
   orgId?: string;
   employeeId?: string;
   credentialId?: string;
+  /** Hold id when the refusal is a hold 403. Never put in the HTTP body. */
+  holdId?: string;
 };
 
-type AuthFailureIdentity = Pick<CredentialAuthFailure, "orgId" | "employeeId" | "credentialId">;
+type AuthFailureIdentity = Pick<CredentialAuthFailure, "orgId" | "employeeId" | "credentialId" | "holdId">;
 
 export type CredentialAuthSuccess = {
   ok: true;
@@ -77,12 +79,14 @@ function isGbEmpSecret(raw: string): boolean {
 function identityFrom(
   orgId?: string | null,
   employeeId?: string | null,
-  credentialId?: string | null
+  credentialId?: string | null,
+  holdId?: string | null
 ): AuthFailureIdentity {
   return {
     ...(orgId ? { orgId } : {}),
     ...(employeeId ? { employeeId } : {}),
     ...(credentialId ? { credentialId } : {}),
+    ...(holdId ? { holdId } : {}),
   };
 }
 
@@ -327,7 +331,14 @@ export async function resolveEmployeeCredential(
   // S2 G1 (emergency stop, no flag): the badge stays valid, but a held employee / org
   // (or an unreadable hold state) is refused on every request. Fail-stop.
   const operable = await checkOperable({ orgId: resolved.orgId || employee.orgId, employeeId: resolved.employeeId, phase: "credential" });
-  if (!operable.ok) return holdRefusal(operable.code);
+  if (!operable.ok) {
+    return holdRefusal(operable.code, {
+      orgId: resolved.orgId || employee.orgId,
+      employeeId: resolved.employeeId,
+      credentialId: resolved.credentialId,
+      holdId: operable.holdId,
+    });
+  }
 
   if (opts?.touchLastUsed !== false) {
     void touchCredentialLastUsed(resolved.credentialId);
@@ -347,12 +358,21 @@ export async function resolveEmployeeCredential(
   return { ok: true, credential: resolved };
 }
 
-export function holdRefusal(code: HoldDenyCode): CredentialAuthFailure {
+export function holdRefusal(code: HoldDenyCode, identity?: AuthFailureIdentity): CredentialAuthFailure {
+  const ids = identity
+    ? identityFrom(identity.orgId, identity.employeeId, identity.credentialId, identity.holdId)
+    : {};
   if (code === "hold_state_unavailable") {
-    return { ok: false, code, message: "hold state unavailable; refused (fail-stop)", httpStatus: 503 };
+    return { ok: false, code, message: "hold state unavailable; refused (fail-stop)", httpStatus: 503, ...ids };
   }
   if (code === "employee_terminated") {
-    return { ok: false, code, message: "employee is retired (contract ended)", httpStatus: 403 };
+    return { ok: false, code, message: "employee is retired (contract ended)", httpStatus: 403, ...ids };
   }
-  return { ok: false, code, message: code === "org_on_hold" ? "organization is on emergency stop" : "employee is on hold (emergency stop / leave)", httpStatus: 403 };
+  return {
+    ok: false,
+    code,
+    message: code === "org_on_hold" ? "organization is on emergency stop" : "employee is on hold (emergency stop / leave)",
+    httpStatus: 403,
+    ...ids,
+  };
 }

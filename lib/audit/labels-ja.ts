@@ -155,6 +155,7 @@ export const AUDIT_ACTION_LABELS_JA: Record<AuditAction, string> = {
   "employee.hold.release_requested": "緊急停止の解除を申請",
   "employee.hold.released": "緊急停止を解除",
   "employee.hold.release_refused": "緊急停止の解除を拒否",
+  "employee.hold.self_approval_denied": "申請者本人の解除承認を拒否",
   "employee.hold.ai_refused": "停止中の操作を拒否",
   "comm.delete.succeeded": "自分の投稿を削除",
   "comm.delete.already_deleted": "投稿は既に削除済み",

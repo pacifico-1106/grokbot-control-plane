@@ -37,6 +37,7 @@ import { getHoldStore, HoldStoreError, type HoldRecord } from "@/lib/safety/hold
 import { readLiveHold, type HoldKind } from "@/lib/safety/hold";
 import { verifyReleaseAuthentication } from "@/lib/safety/hold-release-auth";
 import { notifyHold } from "@/lib/safety/hold-notify";
+import { recordSelfApprovalDenied } from "@/lib/safety/hold-denial-audit";
 
 export type HoldMemberSurface = "web" | "slack" | "line" | "telegram";
 export type HoldActor =
@@ -328,7 +329,17 @@ export async function approveHoldRelease(input: {
   if (!approvers.includes(actor.member.id)) return fail("release_approver_not_allowed", 403, "解除の承認はオーナーか指定管理者のみです。");
   const me = `member:${actor.member.id}`;
   if (me === hold.releaseRequestedBy && ticket.metadata?.singleOwnerSelfRelease !== true) {
-    return fail("self_approval_denied", 403, "申請した本人は承認できません。別の人が承認してください。");
+    const denied = fail("self_approval_denied", 403, "申請した本人は承認できません。別の人が承認してください。");
+    await recordSelfApprovalDenied({
+      orgId: input.orgId,
+      holdId: hold.id,
+      employeeId: hold.employeeId,
+      memberId: actor.member.id,
+      actorEmail: actor.member.email,
+      requestedBy: hold.releaseRequestedBy,
+      reason: "self_approval_denied",
+    }).catch(() => undefined);
+    return denied;
   }
   const patch = { releaseApprovedVia: actor.surface, releaseApprovedAt: now.toISOString(), releaseApproverMemberId: actor.member.id };
   const resumed = ticket.status === "approved" && ticket.resolvedBy === actor.member.id && ticket.metadata?.releaseApprovedVia === actor.surface;

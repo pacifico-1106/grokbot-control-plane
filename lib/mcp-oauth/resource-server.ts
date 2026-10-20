@@ -67,10 +67,32 @@ function shouldTouch(grantId: string, nowMs: number): boolean {
 
 // Same codes as the 社員証 path (lib/auth/employee-credential.ts holdRefusal); kept local
 // so this module does not depend on that one's internals.
-const holdRefusal = (code: HoldDenyCode): McpAuthResult =>
-  code === "hold_state_unavailable"
-    ? { ok: false, code, message: "hold state unavailable; refused (fail-stop)", httpStatus: 503 }
-    : { ok: false, code, message: code === "org_on_hold" ? "organization is on emergency stop" : code === "employee_terminated" ? "employee is retired (contract ended)" : "employee is on hold (emergency stop / leave)", httpStatus: 403 };
+const holdRefusal = (
+  code: HoldDenyCode,
+  identity?: { orgId?: string; employeeId?: string; credentialId?: string; holdId?: string | null }
+): McpAuthResult => {
+  const ids = {
+    ...(identity?.orgId ? { orgId: identity.orgId } : {}),
+    ...(identity?.employeeId ? { employeeId: identity.employeeId } : {}),
+    ...(identity?.credentialId ? { credentialId: identity.credentialId } : {}),
+    ...(identity?.holdId ? { holdId: identity.holdId } : {}),
+  };
+  if (code === "hold_state_unavailable") {
+    return { ok: false, code, message: "hold state unavailable; refused (fail-stop)", httpStatus: 503, ...ids };
+  }
+  return {
+    ok: false,
+    code,
+    message:
+      code === "org_on_hold"
+        ? "organization is on emergency stop"
+        : code === "employee_terminated"
+          ? "employee is retired (contract ended)"
+          : "employee is on hold (emergency stop / leave)",
+    httpStatus: 403,
+    ...ids,
+  };
+};
 
 const invalid = (message: string): McpAuthResult => ({
   ok: false,
@@ -117,7 +139,13 @@ export async function resolveOAuthAccessToken(raw: string, now = new Date()): Pr
   // S2 G2 (no flag): a held employee / org stops on the next request. 403 without
   // invalid_token — the grant and tokens are kept, so a release restores access.
   const operable = await checkOperable({ orgId: grant.orgId, employeeId: grant.employeeId, phase: "oauth" });
-  if (!operable.ok) return holdRefusal(operable.code);
+  if (!operable.ok) {
+    return holdRefusal(operable.code, {
+      orgId: grant.orgId,
+      employeeId: grant.employeeId,
+      holdId: operable.holdId,
+    });
+  }
   const current = await getCurrentEmployeeCredential(grant.employeeId);
   if (!current) return invalid("employee has no active credential (fail-closed)");
   if (current.expiresAt && Date.parse(current.expiresAt) <= now.getTime()) {

@@ -39,9 +39,14 @@ beforeEach(async () => {
     return new Response("ok", { status: 200 });
   }) as unknown as typeof fetch);
   notify.__resetHoldSlackThrottleForTests();
-  savedFlags = { E: process.env.EMPLOYEE_HOLD_ENABLED, O: process.env.ORG_HOLD_ENABLED };
+  savedFlags = {
+    E: process.env.EMPLOYEE_HOLD_ENABLED,
+    O: process.env.ORG_HOLD_ENABLED,
+    A: process.env.HOLD_DENIAL_AUDIT_ENABLED,
+  };
   process.env.EMPLOYEE_HOLD_ENABLED = "true";
   delete process.env.ORG_HOLD_ENABLED;
+  delete process.env.HOLD_DENIAL_AUDIT_ENABLED;
   sent = [];
   notify.__setHoldNotifierForTests({
     tenant: async (n) => { sent.push({ to: "tenant", n }); },
@@ -56,7 +61,11 @@ beforeEach(async () => {
 afterEach(async () => {
   notify.__setHoldSlackFetchForTests(null);
   notify.__resetHoldSlackThrottleForTests();
-  for (const [k, env] of [["E", "EMPLOYEE_HOLD_ENABLED"], ["O", "ORG_HOLD_ENABLED"]] as const) {
+  for (const [k, env] of [
+    ["E", "EMPLOYEE_HOLD_ENABLED"],
+    ["O", "ORG_HOLD_ENABLED"],
+    ["A", "HOLD_DENIAL_AUDIT_ENABLED"],
+  ] as const) {
     if (savedFlags[k] === undefined) delete process.env[env]; else process.env[env] = savedFlags[k];
   }
   notify.__setHoldNotifierForTests(null);
@@ -242,6 +251,44 @@ describe("release: web only, ONE authentication function, a different approver",
     expect(audit?.metadata?.releasedBy).toBe("member:mem_1");
     expect(audit?.metadata?.requestedBy).toBe("member:mem_2");
     expect(audit?.actorEmail).toBe(owner().email);
+  });
+  test("HOLD_DENIAL_AUDIT_ENABLED ON: requester self-approve writes one audit_events row", async () => {
+    process.env.HOLD_DENIAL_AUDIT_ENABLED = "1";
+    const holdId = await stopped();
+    const req = await actions.requestHoldRelease({ orgId: ORG, holdId, reason: "誤停止", actor: web(admin()) });
+    expect(req.ok).toBe(true);
+    const denied = await actions.approveHoldRelease({ orgId: ORG, holdId, actor: web(admin()) });
+    expect(denied).toMatchObject({
+      ok: false,
+      code: "self_approval_denied",
+      httpStatus: 403,
+      message: "申請した本人は承認できません。別の人が承認してください。",
+    });
+    const rows = (await listAuditEvents(ORG)).filter((e) => e.action === "employee.hold.self_approval_denied");
+    expect(rows).toHaveLength(1);
+    expect(rows[0].orgId).toBe(ORG);
+    expect(rows[0].actorEmail).toBe(admin().email);
+    expect(rows[0].metadata?.holdId).toBe(holdId);
+    expect(rows[0].metadata?.memberId).toBe("mem_2");
+    expect(rows[0].metadata?.actor).toBe("member:mem_2");
+    expect(rows[0].metadata?.reason).toBe("self_approval_denied");
+    expect((await operable()).ok).toBe(false);
+  });
+  test("HOLD_DENIAL_AUDIT_ENABLED OFF: self-approve still 403 and writes no denial audit", async () => {
+    delete process.env.HOLD_DENIAL_AUDIT_ENABLED;
+    const holdId = await stopped();
+    const req = await actions.requestHoldRelease({ orgId: ORG, holdId, reason: "誤停止", actor: web(admin()) });
+    expect(req.ok).toBe(true);
+    expect(await actions.approveHoldRelease({ orgId: ORG, holdId, actor: web(admin()) })).toMatchObject({
+      ok: false,
+      code: "self_approval_denied",
+      httpStatus: 403,
+    });
+    expect(
+      (await listAuditEvents(ORG)).filter(
+        (e) => e.action === "employee.hold.self_approval_denied" && e.metadata?.holdId === holdId
+      )
+    ).toEqual([]);
   });
   test("release audit actor_email is the approver, not a value the caller stuffed into metadata", async () => {
     const holdId = await stopped();

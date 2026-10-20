@@ -3,6 +3,7 @@ import { withHoldCallScope } from "@/lib/safety/hold";
 import { resolveEmployeeCredential } from "@/lib/auth/employee-credential";
 import { mcpAuthFailureErrorData, mcpAuthFailureKind } from "@/lib/auth/mcp-auth-failure";
 import { recordMcpAuthFailure } from "@/lib/data/mcp-auth-failures";
+import { recordMcpHoldDenied } from "@/lib/safety/hold-denial-audit";
 import { isConfigChangeRequestEnabled, isEmployeeBadgeMcpEnabled, isMcpEventsEnabled, isMcpOAuthLegacyUnauthInitialize } from "@/lib/feature-flags";
 import { isMcpOAuthEnabled } from "@/lib/mcp-oauth/config";
 import {
@@ -71,18 +72,32 @@ function jsonRpcResult(id: JsonRpcId, result: unknown, status = 200, surface: Em
 }
 
 async function auditMcpAuthFailure(
-  auth: { code: string; orgId?: string; employeeId?: string; credentialId?: string },
+  auth: { code: string; orgId?: string; employeeId?: string; credentialId?: string; holdId?: string },
   method: string
 ): Promise<void> {
-  const kind = mcpAuthFailureKind(auth.code);
-  if (!kind) return;
-  await recordMcpAuthFailure({
-    kind,
-    orgId: auth.orgId,
-    employeeId: auth.employeeId,
-    credentialId: auth.credentialId,
-    method,
-  });
+  try {
+    const kind = mcpAuthFailureKind(auth.code);
+    if (kind) {
+      await recordMcpAuthFailure({
+        kind,
+        orgId: auth.orgId,
+        employeeId: auth.employeeId,
+        credentialId: auth.credentialId,
+        method,
+      });
+      return;
+    }
+    await recordMcpHoldDenied({
+      kind: auth.code,
+      orgId: auth.orgId,
+      employeeId: auth.employeeId,
+      holdId: auth.holdId,
+      credentialId: auth.credentialId,
+      method,
+    });
+  } catch {
+    // observation only — the 401/403 already won
+  }
 }
 
 function jsonRpcError(
